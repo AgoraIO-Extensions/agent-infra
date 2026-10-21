@@ -743,10 +743,14 @@ export class PostgresWecomChannelV1
 					{ agentId: row.scope.agentId, actorId: row.actor_id },
 					"platform-worker",
 				);
+			// #3076：状态响应或恢复路径可能先把执行记为 completed，Runtime 事件稍后才排空入库。
+			// 答案只来自已落库的 text.delta，所以 completed 要等 Runtime 的终态事件落库（它之前的
+			// 正文与结果文件都已按序提交，同 #1524 关闭 outbox 的判据）；failed、cancelled 只发固定
+			// 文案，不必等待。过期回执照旧认领。
 			const [row] = await sql<
 				(Row & { execution_status: string | null })[]
 			>`select r.*,e.status as execution_status from platform.wecom_receipts r left join platform.conversation_executions e on e.execution_id=r.execution_id
-    where (r.connection_bot_id is null or r.expires_at<=now() or exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) and (r.delivery_status='pending' or (r.delivery_status='claimed' and r.lease_until<=now())) and (r.acceptance_status!='accepted' or e.status in ('completed','failed','cancelled') or r.expires_at<=now()) order by r.created_at limit 1 for update of r skip locked`;
+    where (r.connection_bot_id is null or r.expires_at<=now() or exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) and (r.delivery_status='pending' or (r.delivery_status='claimed' and r.lease_until<=now())) and (r.acceptance_status!='accepted' or e.status in ('failed','cancelled') or (e.status='completed' and exists (select 1 from platform.conversation_events t where t.conversation_id=e.conversation_id and t.execution_id=e.execution_id and t.source='runtime' and t.event_type='execution.status' and t.event_payload->>'status'='completed' and t.runtime_cursor is not null)) or r.expires_at<=now()) order by r.created_at limit 1 for update of r skip locked`;
 			if (!row) return null;
 			await sql`update platform.wecom_receipts set delivery_status='claimed',fence=fence+1,lease_until=now()+interval '30 seconds',updated_at=now() where id=${row.id}`;
 			const [size] = row.execution_id

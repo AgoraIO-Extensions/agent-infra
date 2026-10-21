@@ -21,6 +21,7 @@ import {
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
 import { PostgresWecomChannelV1 } from "./wecom-channel.ts";
+import { completeWecomExecutionFixture } from "./wecom-receipt.fixture.ts";
 
 let db: PostgresTestDatabase;
 let sql: ReturnType<typeof postgres>;
@@ -373,7 +374,7 @@ it("does not resend a reply after a worker crashes in the external send window",
 		eventId: "event_crash",
 	});
 	if (accepted.outcome !== "accepted") throw new Error("Expected receipt");
-	await sql`update platform.conversation_executions set status='completed' where execution_id=${accepted.receipt.executionId}`;
+	await completeWecomExecutionFixture(sql, accepted.receipt.executionId);
 	const claim = await store.claim();
 	expect(claim?.receiptId).toBe(accepted.receipt.receiptId);
 	if (!claim) throw new Error("Expected claim");
@@ -483,6 +484,7 @@ it("claims confirmed result files once per file and preserves event order", asyn
 					sizeBytes: file.descriptor.sizeBytes,
 				})},${String(sequence).repeat(64)},${`runtime-result-${sequence}`},now(),'runtime')`;
 	}
+	await completeWecomExecutionFixture(sql, executionId);
 	const claim = await store.claim();
 	expect(claim?.receiptId).toBe(accepted.receipt.receiptId);
 	expect(claim?.textDeltas).toEqual([]);
@@ -535,6 +537,8 @@ async function executionWithEvents(
 			 ${sql.json(payload)},${sequence.toString(16).padStart(64, "0")},
 			 ${`runtime-${senderId}-${sequence}`},now(),'runtime')`;
 	}
+	if (status === "completed")
+		await completeWecomExecutionFixture(sql, executionId);
 	return accepted.receipt;
 }
 it("claims the answer text and the thinking separately (#2979, #2982)", async () => {
@@ -555,6 +559,69 @@ it("claims the answer text and the thinking separately (#2979, #2982)", async ()
 		],
 		complete: true,
 	});
+});
+it("waits for the persisted terminal event before claiming a completed answer (#3076)", async () => {
+	await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+	const accepted = await channel().receive({
+		...message,
+		senderId: "drain_lag_sender",
+		eventId: "drain_lag_event",
+	});
+	if (accepted.outcome !== "accepted") throw new Error("Expected receipt");
+	const { executionId, conversationId } = accepted.receipt;
+	// 状态响应或恢复路径先把执行记为 completed，Runtime 事件还没有排空入库。
+	await sql`update platform.conversation_executions set status='completed' where execution_id=${executionId}`;
+	expect(await store.claim()).toBeNull();
+	for (const [index, text] of ["答案", "完整"].entries()) {
+		const sequence = index + 1;
+		await sql`insert into platform.conversation_events
+			(event_id,conversation_id,execution_id,adapter_event_key,sequence,
+			 conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,
+			 occurred_at,source)
+			values (${`drain-lag-${sequence}`},${conversationId},${executionId},
+			 ${`drain-lag-${sequence}`},${sequence},${sequence},'text.delta',
+			 ${sql.json({ type: "text.delta", text })},${sequence.toString(16).padStart(64, "0")},
+			 ${`runtime-drain-lag-${sequence}`},now(),'runtime')`;
+	}
+	// 部分正文已落库，但终态事件还没有：仍不能认领，否则会发出截断的答案。
+	expect(await store.claim()).toBeNull();
+	expect(
+		(
+			await sql<{ delivery_status: string }[]>`
+				select delivery_status from platform.wecom_receipts where id=${accepted.receipt.receiptId}`
+		)[0]?.delivery_status,
+	).toBe("pending");
+	await completeWecomExecutionFixture(sql, executionId);
+	const claim = await store.claim();
+	expect(claim?.receiptId).toBe(accepted.receipt.receiptId);
+	expect(claim?.executionStatus).toBe("completed");
+	expect(claim?.textDeltas).toEqual(["答案", "完整"]);
+});
+it("still claims expired and failed receipts without a terminal event (#3076)", async () => {
+	await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+	const expired = await channel().receive({
+		...message,
+		senderId: "drain_expired_sender",
+		eventId: "drain_expired_event",
+	});
+	if (expired.outcome !== "accepted") throw new Error("Expected receipt");
+	await sql`update platform.conversation_executions set status='completed' where execution_id=${expired.receipt.executionId}`;
+	expect(await store.claim()).toBeNull();
+	// 到期的回执照旧认领，由 Core 记为 expired。
+	await sql`update platform.wecom_receipts set expires_at=now()-interval '1 second' where id=${expired.receipt.receiptId}`;
+	expect((await store.claim())?.receiptId).toBe(expired.receipt.receiptId);
+	await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+	const failed = await channel().receive({
+		...message,
+		senderId: "drain_failed_sender",
+		eventId: "drain_failed_event",
+	});
+	if (failed.outcome !== "accepted") throw new Error("Expected receipt");
+	// failed 只发固定文案，不等待 Runtime 终态事件。
+	await sql`update platform.conversation_executions set status='failed' where execution_id=${failed.receipt.executionId}`;
+	const claim = await store.claim();
+	expect(claim?.receiptId).toBe(failed.receipt.receiptId);
+	expect(claim?.executionStatus).toBe("failed");
 });
 it("reads only a bounded thinking prefix and marks it incomplete (#2982)", async () => {
 	const receipt = await executionWithEvents("long_reasoning_sender", [
@@ -649,7 +716,7 @@ it("keeps an application reply sending through the bounded multipart window", as
 		};
 		const accepted = await channel().receive(appMessage);
 		if (accepted.outcome !== "accepted") throw new Error("Expected receipt");
-		await sql`update platform.conversation_executions set status='completed' where execution_id=${accepted.receipt.executionId}`;
+		await completeWecomExecutionFixture(sql, accepted.receipt.executionId);
 		const claim = await store.claim();
 		expect(claim?.receiptId).toBe(accepted.receipt.receiptId);
 		if (!claim) throw new Error("Expected claim");
@@ -707,7 +774,7 @@ it("uses current Owner defaults for the next WeCom Turn even while the previous 
 		eventId: "default_first",
 	});
 	if (first.outcome !== "accepted") throw new Error("Expected receipt");
-	await sql`update platform.conversation_executions set status='completed' where execution_id=${first.receipt.executionId}`;
+	await completeWecomExecutionFixture(sql, first.receipt.executionId);
 	const next = {
 		...configuration,
 		revision: 2,
@@ -817,7 +884,7 @@ it("fences WebSocket ingress inside the transaction and reserves replies for the
 		const accepted = await channel(owner).receive(event, fence);
 		if (accepted.outcome !== "accepted")
 			throw new Error("Expected WebSocket acceptance");
-		await sql`update platform.conversation_executions set status='completed' where execution_id=${accepted.receipt.executionId}`;
+		await completeWecomExecutionFixture(sql, accepted.receipt.executionId);
 		expect(
 			await channel().receive({ ...event, replyHandle: "callback-route" }),
 		).toEqual({ outcome: "conflict" });
@@ -924,7 +991,7 @@ it("keeps an unclaimed connection receipt pending after its connection lease exp
 		);
 		if (accepted.outcome !== "accepted")
 			throw new Error("Expected WebSocket acceptance");
-		await sql`update platform.conversation_executions set status='completed' where execution_id=${accepted.receipt.executionId}`;
+		await completeWecomExecutionFixture(sql, accepted.receipt.executionId);
 		await sql`update platform.wecom_connections set lease_until=now()-interval '1 second' where bot_id=${message.providerId}`;
 		expect(await owner.claim()).toBeNull();
 		expect(
@@ -965,7 +1032,7 @@ it("replays a claimed receipt after its connection lease expires before prepare"
 		});
 		if (accepted.outcome !== "accepted")
 			throw new Error("Expected WebSocket acceptance");
-		await sql`update platform.conversation_executions set status='completed' where execution_id=${accepted.receipt.executionId}`;
+		await completeWecomExecutionFixture(sql, accepted.receipt.executionId);
 		const stale = await owner.claim();
 		expect(stale?.receiptId).toBe(accepted.receipt.receiptId);
 		await sql`update platform.wecom_connections set lease_until=now()-interval '1 second' where bot_id=${message.providerId}`;

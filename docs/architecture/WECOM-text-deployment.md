@@ -107,7 +107,9 @@ API 仅持公钥，Worker 使用私钥 keyring，密文绑定 Agent、渠道、�
 回复沿当前有效绑定的协议发送；长连接使用其受支持的回复/发送命令，回调模式使用其获准回复路由。
 SDK 自动重连、重试或队列不能突破已持久化的发送状态：
 
-- `pending` / `claimed`：尚未开始外部发送，领取前重验授权与当前绑定。
+- `pending` / `claimed`：尚未开始外部发送，领取前重验授权与当前绑定。已受理消息的答案只取已落库的正文：
+  执行 `completed` 后，还要等 Runtime 的终态 `execution.status` 事件落库才领取（状态响应或恢复可能先写入终态）；
+  `failed`、`cancelled` 只发固定文案，不等待；回复过期时照常领取并记为 `expired`。
 - `sending`：发送意图已落库；ACK 丢失或 Worker 崩溃时转为 `unknown`。
 - `sent`：企微明确受理，不代表终端送达或已读。
 - `failed` / `expired` / `cancelled`：明确失败、失去有效回复上下文或权限失效。
