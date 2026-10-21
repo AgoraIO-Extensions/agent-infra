@@ -29,7 +29,6 @@ import {
 	EmptyTitle,
 } from "@/components/ui/empty";
 import { Field } from "@/components/ui/field";
-import { IdentifierText } from "@/components/ui/identifier-text";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
@@ -425,11 +424,9 @@ function AgentSkillBindings({
 	return (
 		<>
 			<Alert tone="info" icon={null} className="agent-skill-version-notice">
-				{/* 部署配置的 Agent Version 没有显示名：按内部标识的等宽短形式显示，title 为完整值（W-37）。 */}
-				<AlertTitle>
-					当前 Agent 版本：
-					<IdentifierText value={agentVersion} label="Agent 版本" />
-				</AlertTitle>
+				{/* 部署配置的 Agent Version 只有内部标识、没有显示名：按导出稿显示「当前配置版本」，
+				    不截断成「agent-ve…」（W-37、B2-07）；绑定读写仍使用服务端给出的完整版本。 */}
+				<AlertTitle>当前 Agent 版本：当前配置版本</AlertTitle>
 				<AlertDescription>
 					升级前需要确认；已受理的任务继续使用原版本。
 				</AlertDescription>
@@ -623,7 +620,6 @@ function SkillBindingCard({
 						variant="skill"
 						title="确认解除绑定"
 						subject={{ name: `${name} · v${binding.skillVersion.version}` }}
-						description="解除后，新的调用不再提供这个 Skill；现有执行保留原版本。"
 						confirmLabel="解除绑定"
 						disabled={writing}
 						onOpenChange={(open) => {
@@ -641,7 +637,13 @@ function SkillBindingCard({
 								解除绑定
 							</Button>
 						}
-					/>
+					>
+						{/* 设计 .form-hint：说明 12px / --muted-ink / 1.7 行高（B2-09）；作为块级正文传入，
+						    仍是弹窗的可访问描述。 */}
+						<p className="skill-form-hint">
+							解除后，新的调用不再提供这个 Skill；现有执行保留原版本。
+						</p>
+					</ConfirmDialog>
 				)}
 			</div>
 		</article>
@@ -713,7 +715,8 @@ function ChangeVersionDialog({
 							))}
 						</NativeSelect>
 					</Field>
-					<DialogDescription>
+					{/* 设计 .form-hint（B2-09）：12px / --muted-ink / 1.7 行高。 */}
+					<DialogDescription className="skill-form-hint">
 						现有执行保留原版本。新的调用要等同步和装配确认完成。
 					</DialogDescription>
 				</DialogBody>

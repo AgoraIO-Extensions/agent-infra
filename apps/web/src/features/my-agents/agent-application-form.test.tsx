@@ -1090,7 +1090,9 @@ resources:
 		await waitFor(() => expect(screen.getByText("Owner Two")).toBeTruthy());
 		fireEvent.keyDown(input, { key: "Escape" });
 		fireEvent.keyDown(input, { key: "Enter" });
-		expect(screen.queryByLabelText("移除 Owner Two")).toBeNull();
+		expect(
+			screen.queryByLabelText("从共同 Owner 用户移除 Owner Two"),
+		).toBeNull();
 	});
 
 	it("reopens advanced configuration when a collapsed row has errors", () => {

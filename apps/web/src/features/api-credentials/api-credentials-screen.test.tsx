@@ -207,7 +207,7 @@ describe("ApiCredentialsScreen", () => {
 		fireEvent.click(
 			within(screen.getByRole("form", { name: /收窄凭证/ })).getByRole(
 				"checkbox",
-				{ name: /^使用 Agent$/ },
+				{ name: `使用 Agent：${metadata.credentialId}` },
 			),
 		);
 		fireEvent.click(screen.getByRole("button", { name: "保存收窄" }));
@@ -256,8 +256,16 @@ describe("ApiCredentialsScreen", () => {
 			}),
 		);
 		const form = screen.getByRole("form", { name: /收窄凭证/ });
-		fireEvent.click(within(form).getByRole("checkbox", { name: "读取 Agent" }));
-		fireEvent.click(within(form).getByRole("checkbox", { name: "使用 Agent" }));
+		fireEvent.click(
+			within(form).getByRole("checkbox", {
+				name: `读取 Agent：${metadata.credentialId}`,
+			}),
+		);
+		fireEvent.click(
+			within(form).getByRole("checkbox", {
+				name: `使用 Agent：${metadata.credentialId}`,
+			}),
+		);
 		fireEvent.click(within(form).getByRole("button", { name: "保存收窄" }));
 		await waitFor(() => expect(onNarrow).toHaveBeenCalledOnce());
 
@@ -271,7 +279,9 @@ describe("ApiCredentialsScreen", () => {
 		await waitFor(() =>
 			expect(
 				within(screen.getByRole("form", { name: /收窄凭证/ }))
-					.getByRole("checkbox", { name: "读取 Agent" })
+					.getByRole("checkbox", {
+						name: `读取 Agent：${metadata.credentialId}`,
+					})
 					.getAttribute("aria-checked"),
 			).toBe("true"),
 		);

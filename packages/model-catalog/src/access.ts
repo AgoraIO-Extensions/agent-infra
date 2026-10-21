@@ -90,7 +90,9 @@ export type ResponsesModelProbeOutcomeV1 =
 /**
  * One bounded synthetic Responses request for one reasoning level; never contains an
  * Owner/User conversation or executes a tool. `strictEcho` additionally requires the
- * Relay to echo the requested model and reasoning effort (credentialed V2 path).
+ * Relay to echo the requested model and reasoning effort (credentialed V2 path) and
+ * forces the conformance tool. The save-time path (ADR-0029) keeps `tool_choice: "auto"`
+ * like the fixed Codex: thinking models such as DeepSeek reject a forced tool choice.
  */
 export async function probeResponsesModelV1(input: {
 	readonly endpoint: ModelEndpointV1;
@@ -136,9 +138,10 @@ export async function probeResponsesModelV1(input: {
 						strict: true,
 					},
 				],
+				// 保存时验证与固定 Codex 一致用 auto：DeepSeek 等思考模式模型拒绝强制的 tool_choice（#3115）。
 				tool_choice: input.strictEcho
 					? { type: "function", name: "agent_infra_conformance" }
-					: "required",
+					: "auto",
 				parallel_tool_calls: false,
 			}),
 		},

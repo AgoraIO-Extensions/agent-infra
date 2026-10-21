@@ -136,6 +136,16 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
   Web 以「多服务资源 YAML 内容」命名，与上方文件输入「多服务资源 YAML」区分（[#3119](https://github.com/AgoraIO-Extensions/agent-infra/issues/3119)），
   待后续设计回写同步。
 
+### 终验待回写设计稿
+
+以下结论来自 #2830 终验，导出稿尚未回写；实现与验收以这里为准。
+
+| 编号 | 位置 | 实现 | 依据 |
+| --- | --- | --- | --- |
+| B2-03 | 目录选择器 chip 的移除按钮（申请表单、Owner 配置、员工访问控制） | 可访问名称先写选择器标签、再写对象名，如「从可使用的用户移除 陈昊」「从共同 Owner 用户移除 陈昊」；按钮仍只显示图标 | 可访问性：同一人员同时选入「共同 Owner 用户」与「可使用的用户」时，同页不出现同名控件（[#3128](https://github.com/AgoraIO-Extensions/agent-infra/issues/3128)，原导出稿为「移除 陈昊」×2） |
+| C2-04 | `/admin/skill-reviews` 审阅弹窗「审核说明 · 驳回时必填」 | 标签为公共字段标签 12px / 650 / muted；与正文区相距 32px（窄屏 26px），已按导出稿 | 同 W-33：原导出稿 `label > span` 未套字段标签样式（[#3129](https://github.com/AgoraIO-Extensions/agent-infra/issues/3129)） |
+| C2-18 | `/skills/manage/new` 编辑与发布（V-18） | 左栏分区标题、说明与帮助文字沿用公共 `FormSection`；「项目状态」与「包名称」的标签、控件顶对齐；范围卡按公共单选指示器排版，「组织共享」不可选时置灰；SKILL.md 为空时错误在编辑框下方（12px `--danger-ink`），焦点回到编辑框。编辑框高度、版本号上距与「添加文本文件」图标已按导出稿 | 原导出稿缺陷：编辑器外层 `.surface.skill-section` 让 `.skill-section` 的标题与段落样式渗入表单，与公共分区（V-03）不一致；`.scope-option` 原生 radio 加间距挤窄文字列，且没有禁用样式；「项目状态」标签高 32.4px，下拉比输入框低 12.6px；发布错误被 `.skill-section p` 改成 `--muted`，`render()` 后焦点落到 body（[#3129](https://github.com/AgoraIO-Extensions/agent-infra/issues/3129)） |
+
 ### 申请详情进度
 
 [#2920](https://github.com/AgoraIO-Extensions/agent-infra/issues/2920) 已将 M-11 回写本版导出稿。

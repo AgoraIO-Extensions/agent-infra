@@ -34,7 +34,10 @@ import type {
 	V1ServiceAccount,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
-import { runtimeConnectionConsumerProjectionV1 } from "./connection-consumer-projection.js";
+import {
+	type RuntimeConnectionConsumerSnapshotsByAgentV1,
+	runtimeConnectionConsumerProjectionV1,
+} from "./connection-consumer-projection.js";
 import {
 	type WorkerKubernetesClientV1,
 	WorkloadKubernetesError,
@@ -136,6 +139,10 @@ function skillHubVolumeMountV1(value: AgentWorkloadDesiredV1): {
 export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	/** Validated deployment copy, never an Agent/request environment value. */
 	readonly connectionConsumerSnapshot?: string | null;
+	readonly connectionConsumerSnapshotsByAgent?: RuntimeConnectionConsumerSnapshotsByAgentV1;
+	readonly connectionInstallationRevisionsByAgent?: Readonly<
+		Record<string, string | null>
+	>;
 	/** Captured nonsecret supply ref/revision tuple; null keeps selection unavailable. */
 	readonly connectionInstallationRevision?: string | null;
 	readonly namespace: string;

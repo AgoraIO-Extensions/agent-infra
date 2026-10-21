@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { build, transform } from "esbuild";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 
@@ -336,7 +337,7 @@ export const connectionConsumerApproval = ${JSON.stringify(connectionConsumerApp
 		join(directory, "workload-deployment.js"),
 		`
 export const createWorkloadReadinessAuthorizationV1 = () => { globalThis.calls.push('readiness'); };
-export const createProductionWorkloadWorkerOptionsV1 = async (input) => { globalThis.calls.push('workload'); globalThis.snapshot = input.policy.connectionConsumerSnapshot; globalThis.installation = input.policy.connectionInstallationRevision; return input; };
+export const createProductionWorkloadWorkerOptionsV1 = async (input) => { globalThis.calls.push('workload'); globalThis.snapshot = input.policy.connectionConsumerSnapshot; globalThis.installation = input.policy.connectionInstallationRevision; globalThis.snapshots = input.policy.connectionConsumerSnapshotsByAgent; globalThis.installations = input.policy.connectionInstallationRevisionsByAgent; return input; };
 `,
 	);
 	await writeFile(
@@ -400,7 +401,7 @@ try {
 	 console.log(JSON.stringify({ control, business, snapshot: globalThis.snapshot, installation: globalThis.installation }));
 	 process.exit(0);
 	}
- console.log(JSON.stringify({ databases: [workload.databaseUrl, conversation.databaseUrl, globalThis.wecomDatabase], calls: globalThis.calls, connection: globalThis.connection, snapshot: JSON.parse(globalThis.snapshot), installation: globalThis.installation, installationConfigured: typeof conversation.connectionInstallation?.authorize === 'function' }));
+ console.log(JSON.stringify({ databases: [workload.databaseUrl, conversation.databaseUrl, globalThis.wecomDatabase], calls: globalThis.calls, connection: globalThis.connection, snapshot: globalThis.snapshot ? JSON.parse(globalThis.snapshot) : null, installation: globalThis.installation, snapshots: globalThis.snapshots, installations: globalThis.installations, installationConfigured: typeof conversation.connectionInstallation?.authorize === 'function' }));
 } catch (error) {
  console.log(JSON.stringify({ error: error.message, calls: globalThis.calls }));
  process.exitCode = 1;
@@ -446,6 +447,131 @@ it("uses the selected deployment database for all Worker consumers and prepares 
 		},
 		installationConfigured: false,
 	});
+});
+
+it("projects distinct approved consumers and installations by Agent", async () => {
+	const configurationPath = join(directory, "configuration.mjs");
+	const original = await readFile(configurationPath, "utf8");
+	const agentBProfile = {
+		...connectionConsumerProfile,
+		consumerId: "platform-worker-agent-b",
+		schemaVersion: 1 as const,
+	} as const;
+	const agentBApproval = {
+		...connectionConsumerApproval,
+		configFingerprint: connectionConsumerProfileFingerprintV1(agentBProfile),
+	};
+	const profiles = {
+		"agent-a": {
+			profile: connectionConsumerProfile,
+			approval: connectionConsumerApproval,
+		},
+		"agent-b": { profile: agentBProfile, approval: agentBApproval },
+	};
+	try {
+		await writeFile(
+			configurationPath,
+			`${original}\nexport const connectionConsumerProfilesByAgent = ${JSON.stringify(profiles)};\nexport const connectionInstallationSuppliesByAgent = ${JSON.stringify(
+				{
+					"agent-a": { ref: "installation-a", revision: "r1" },
+					"agent-b": { ref: "installation-b", revision: "r2" },
+				},
+			)};\n`,
+		);
+		const result = run();
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toMatchObject({
+			snapshot: null,
+			snapshots: {
+				"agent-a": expect.stringContaining('"consumerId":"platform-worker"'),
+				"agent-b": expect.stringContaining(
+					'"consumerId":"platform-worker-agent-b"',
+				),
+			},
+			installations: {
+				"agent-a": '["installation-a","r1"]',
+				"agent-b": '["installation-b","r2"]',
+			},
+		});
+	} finally {
+		await writeFile(configurationPath, original);
+	}
+});
+
+it("rejects a per-Agent consumer map without a matching installation map", async () => {
+	const configurationPath = join(directory, "configuration.mjs");
+	const original = await readFile(configurationPath, "utf8");
+	try {
+		await writeFile(
+			configurationPath,
+			`${original}\nexport const connectionConsumerProfilesByAgent = ${JSON.stringify(
+				{
+					"agent-a": {
+						profile: connectionConsumerProfile,
+						approval: connectionConsumerApproval,
+					},
+				},
+			)};\n`,
+		);
+		const result = run();
+		expect(result.status).toBe(1);
+		expect(JSON.parse(result.stdout)).toEqual({
+			error: "CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE",
+			calls: [],
+		});
+	} finally {
+		await writeFile(configurationPath, original);
+	}
+});
+
+it("loads each Agent binding through the deployment Connection resolver", async () => {
+	const configurationPath = join(directory, "configuration.mjs");
+	const original = await readFile(configurationPath, "utf8");
+	const agentBProfile = {
+		...connectionConsumerProfile,
+		consumerId: "platform-worker-agent-b",
+		schemaVersion: 1 as const,
+	} as const;
+	const agentBApproval = {
+		...connectionConsumerApproval,
+		configFingerprint: connectionConsumerProfileFingerprintV1(agentBProfile),
+	};
+	try {
+		await writeFile(
+			configurationPath,
+			`${original}\nexport const resolveConnectionConsumerBindingsByAgent = async (signal) => { signal.throwIfAborted(); return ${JSON.stringify(
+				{
+					"agent-a": {
+						profile: connectionConsumerProfile,
+						approval: connectionConsumerApproval,
+						installationSupply: { ref: "installation-a", revision: "r1" },
+					},
+					"agent-b": {
+						profile: agentBProfile,
+						approval: agentBApproval,
+						installationSupply: { ref: "installation-b", revision: "r2" },
+					},
+				},
+			)}; };\n`,
+		);
+		const result = run();
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toMatchObject({
+			snapshot: null,
+			snapshots: {
+				"agent-a": expect.stringContaining('"consumerId":"platform-worker"'),
+				"agent-b": expect.stringContaining(
+					'"consumerId":"platform-worker-agent-b"',
+				),
+			},
+			installations: {
+				"agent-a": '["installation-a","r1"]',
+				"agent-b": '["installation-b","r2"]',
+			},
+		});
+	} finally {
+		await writeFile(configurationPath, original);
+	}
 });
 
 it("fails closed when native metadata is enabled without runtime auth", () => {

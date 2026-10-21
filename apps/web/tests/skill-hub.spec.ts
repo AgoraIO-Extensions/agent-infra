@@ -850,6 +850,10 @@ test.describe("Skill version detail", () => {
 			0,
 		);
 		await expect(trigger).toHaveCount(0);
+		// C2-09：撤销后页头主操作换成 outline「编辑新版本」，按设计不带图标。
+		const editNew = page.getByRole("link", { name: "编辑新版本" });
+		await expect(editNew).toBeVisible();
+		await expect(editNew.locator("svg")).toHaveCount(0);
 	});
 
 	test("does not offer revoke for a Skill the user did not create", async ({

@@ -551,6 +551,11 @@ test("My Skill puts 已安装 with its Agent binding entry before 我创建的 (
 		"release-notes",
 		"draft",
 	]);
+	// C2-11：「我创建的」行标题行高同设计 h2（16px × 1.35）。
+	await expect(owned.locator("article.skill-row h3").first()).toHaveCSS(
+		"line-height",
+		"21.6px",
+	);
 	await expectNoDuplicateControls(page, "我的 Skill");
 	await expectCleanPage(page, errors);
 });
@@ -638,6 +643,18 @@ test("My Skill lists my installations, removes one and re-reads the list (K-03)"
 	await expect(digest).toContainText("v3.1.0");
 	await expect(digest).toContainText("内部市场");
 	await expect(digest).toContainText("有新版本");
+	// V-17、C2-10：说明行为「固定版本 v{版本} · {来源}」，其下是发布状态 chip 与「有新版本」，均取安装投影。
+	await expect(digest.locator(".skill-row-copy > p")).toHaveText(
+		"固定版本 v3.1.0 · 内部市场",
+	);
+	await expect(digest.locator(".skill-row-badges > *")).toHaveText([
+		"已发布",
+		"有新版本",
+	]);
+	// C2-11：行标题 h3 为 16px / 600，行高同设计 h2 的 1.35（21.6px）。
+	await expect(
+		digest.getByRole("heading", { name: "weekly-digest" }),
+	).toHaveCSS("line-height", "21.6px");
 	// V-17：已安装行的详情入口按设计为 ghost「查看」。
 	await expect(
 		digest.getByRole("link", { name: "查看：weekly-digest" }),
@@ -848,7 +865,7 @@ test("Create and publish follows the design's two columns with scope cards on th
 	});
 	await expect(asideHeading).toHaveCSS("font-size", "16px");
 	await expect(asideHeading).toHaveCSS("font-weight", "600");
-	// 设计 .field.section：版本字段距标题 32px。
+	// 设计 .field.section-tight：版本字段距标题 15px（C2-13；原按回写前的 .field.section 断言 32px）。
 	const [headingBox, versionLabelBox] = await Promise.all([
 		asideHeading.boundingBox(),
 		aside.getByText("版本号", { exact: true }).boundingBox(),
@@ -859,7 +876,30 @@ test("Create and publish follows the design's two columns with scope cards on th
 				(headingBox?.y ?? 0) -
 				(headingBox?.height ?? 0),
 		),
-	).toBe(32);
+	).toBe(15);
+	// 设计 textarea.skill-editor：SKILL.md 至少 280px，13px / 1.8 等宽（C2-12）；
+	// 配套文件的「文件内容」仍是 180px / 1.6。
+	const skillMd = main.getByLabel("SKILL.md（任务说明）");
+	expect(
+		await computed(skillMd, [
+			"minHeight",
+			"maxHeight",
+			"fontSize",
+			"lineHeight",
+			"resize",
+		]),
+	).toEqual({
+		minHeight: "280px",
+		maxHeight: "600px",
+		fontSize: "13px",
+		lineHeight: "23.4px",
+		resize: "vertical",
+	});
+	expect((await skillMd.boundingBox())?.height).toBeGreaterThanOrEqual(280);
+	// C2-14：「添加文本文件」用设计的 plus 图标。
+	await expect(
+		main.getByRole("button", { name: "添加文本文件" }).locator("svg"),
+	).toHaveClass(/lucide-plus\b/);
 	// 四张范围单选卡：两列（390 单列），圆角 10px、内边距 12px、最小高 60px，说明 11px。
 	const scope = aside.getByRole("radiogroup", { name: "发布范围" });
 	const cards = scope.locator(".skill-scope-option");
@@ -1058,6 +1098,18 @@ test("Skill review lists pending versions, reviews them and re-reads the queue (
 	);
 	await expect(pills.first()).toHaveCSS("font-size", "11px");
 	await expect(pills.first()).toHaveCSS("border-top-left-radius", "7px");
+	// C2-05：设计 .skill-row-meta 中版本号 strong 与状态 chip 紧贴，chip 不另加上距。
+	const meta = rows
+		.filter({ hasText: "incident-summary" })
+		.locator(".skill-row-meta");
+	const stateChip = meta.locator('[data-slot="badge"]');
+	await expect(stateChip).toHaveText("待审核");
+	await expect(stateChip).toHaveCSS("margin-top", "0px");
+	const versionBox = await box(meta.locator("strong"));
+	const chipBox = await box(stateChip);
+	expect(
+		Math.abs(chipBox.y - (versionBox.y + versionBox.height)),
+	).toBeLessThanOrEqual(1);
 	await expect(main).not.toContainText(
 		/pending_review|ORGANIZATION|org-release|user-other|aaaaaaaa/,
 	);
@@ -1188,6 +1240,40 @@ test("Skill review dialog shows the pending SKILL.md as plain text below the fac
 	expect(Math.abs(code.x - facts.x)).toBeLessThanOrEqual(1);
 	expect(Math.abs(code.width - facts.width)).toBeLessThanOrEqual(1);
 	expect(reason.y).toBeGreaterThan(code.y + code.height);
+	// C2-04：设计 label.field.section，「审核说明」距正文区 32px（窄屏 26px）。
+	const content = await box(dialog.locator(".skill-review-content"));
+	expect(
+		Math.abs(reason.y - (content.y + content.height) - (mobile ? 26 : 32)),
+	).toBeLessThanOrEqual(1);
+	// 设计 .skill-dialog .facts：桌面标签列 100px、gap 10px 18px（C2-03）；窄屏单列，
+	// dt 上距 8px、dd 下距 4px、gap 3px，与审批审阅弹窗一致（C2-02）。
+	const factList = dialog.locator("dl");
+	const factStyle = await computed(factList, [
+		"gridTemplateColumns",
+		"rowGap",
+		"columnGap",
+	]);
+	if (mobile) {
+		expect(factStyle.gridTemplateColumns.split(" ")).toHaveLength(1);
+		expect(factStyle.rowGap).toBe("3px");
+		expect(
+			await computed(factList.locator("dt").first(), ["marginTop"]),
+		).toEqual({ marginTop: "8px" });
+		expect(
+			await computed(factList.locator("dd").first(), ["marginBottom"]),
+		).toEqual({ marginBottom: "4px" });
+		// 单列：dd 在 dt 下方，左边缘对齐。
+		const term = await box(factList.locator("dt").first());
+		const detail = await box(factList.locator("dd").first());
+		expect(detail.y).toBeGreaterThanOrEqual(term.y + term.height);
+		expect(Math.abs(detail.x - term.x)).toBeLessThanOrEqual(1);
+	} else {
+		expect(factStyle.gridTemplateColumns.split(" ")[0]).toBe("100px");
+		expect(factStyle).toMatchObject({ rowGap: "10px", columnGap: "18px" });
+		const term = await box(factList.locator("dt").first());
+		const detail = await box(factList.locator("dd").first());
+		expect(Math.round(detail.x - term.x)).toBe(118);
+	}
 	expect(
 		await computed(region, [
 			"paddingTop",

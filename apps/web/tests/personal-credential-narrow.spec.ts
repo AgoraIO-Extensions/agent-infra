@@ -191,6 +191,20 @@ async function openForm(page: Page) {
 	await expect(
 		form.getByRole("checkbox", { name: "读取 Agent" }),
 	).toBeFocused();
+	// C2-19：收窄表单的复选框名称带凭证标识，与「签发个人凭证」区的同名权限区分。
+	await expect(
+		form.getByRole("checkbox", {
+			name: `读取 Agent：${initial.credentialId}`,
+			exact: true,
+		}),
+	).toBeFocused();
+	await expect(
+		form.getByRole("checkbox", {
+			name: `使用 Agent：${initial.credentialId}`,
+			exact: true,
+		}),
+	).toBeVisible();
+	await expectNoDuplicateControls(page, "API 凭证（收窄权限与有效期）");
 	return { form, action };
 }
 
@@ -444,6 +458,15 @@ test("revocation is confirmed with the credential and its consequence before one
 		}),
 	);
 	await expect(dialog).toContainText("撤销后不能恢复");
+	// C2-15：设计对象与权限行之后，说明段上距 10px。
+	const [scopesBox, descriptionBox] = await Promise.all([
+		scopes.boundingBox(),
+		dialog.getByText(/^撤销后，使用这张凭证/).boundingBox(),
+	]);
+	if (!scopesBox || !descriptionBox) throw new Error("revoke dialog missing");
+	expect(
+		Math.abs(descriptionBox.y - scopesBox.y - scopesBox.height - 10),
+	).toBeLessThanOrEqual(0.5);
 	expect(revocations).toHaveLength(0);
 	await dialog.getByRole("button", { name: "取消" }).click();
 	await expect(dialog).not.toBeVisible();

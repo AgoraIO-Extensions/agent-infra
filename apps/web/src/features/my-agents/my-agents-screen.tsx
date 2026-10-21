@@ -286,9 +286,13 @@ export function MyAgentsScreen({
 																{agentApplicationEditActionLabels[editAction]}
 															</Link>
 														) : null}
+														{/* 设计按钮体系没有 link 变体：同列次要操作统一为 outline（B2-01），
+														    --fg 文字在 --surface 上满足 WCAG AA。 */}
 														{hasCreatedAgent(application) ? (
 															<Link
-																className={buttonVariants({ variant: "link" })}
+																className={buttonVariants({
+																	variant: "outline",
+																})}
 																params={{ agentId: application.agentId }}
 																to="/agents/$agentId"
 																aria-label={withObjectName(
