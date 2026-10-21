@@ -2437,6 +2437,12 @@ body {
 	:focus-visible {
 		@apply outline-2 outline-ring outline-offset-3;
 	}
+	/* 设计稿全局 button{cursor:pointer}：Tailwind v4 preflight 不再给按钮设指针光标（B2-11）。
+	   禁用与 aria-disabled 的按钮不在此列，由 Button 的 not-allowed 与组件规则决定。 */
+	button:not(:disabled):not([aria-disabled="true"]),
+	[role="button"]:not(:disabled):not([aria-disabled="true"]) {
+		cursor: pointer;
+	}
 }
 
 /* Directory, workbench and administration use the shared content measure. */
@@ -4848,6 +4854,8 @@ body {
 	display: grid;
 	grid-template-columns: 100px minmax(0, 1fr);
 	gap: 10px 18px;
+	/* 设计 .facts margin-top 15px：与上方对象名相距 15px（B2-08）。 */
+	margin-top: 15px;
 	font-size: 13px;
 }
 .skill-binding-facts dt {

@@ -188,8 +188,9 @@ export function AgentApplicationSubmissionScreen(
 							tone="info"
 							ref={resultRef}
 							tabIndex={-1}
-							// 设计 .notice p：提交结果为常规字重（W-08）。
-							className="my-3"
+							// 设计 .notice p：提交结果为常规字重（W-08）；提示紧贴卡片内边距，
+							// 不加上外边距（B2-02），与下方操作的间距由 .card-actions 上距给出。
+							className="mb-3"
 							role="status"
 						>
 							<AlertDescription>

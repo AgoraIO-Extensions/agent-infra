@@ -23,6 +23,7 @@ import { expectNoDuplicateControls } from "./page-health";
 import {
 	computed,
 	expectCleanPage,
+	expectPointerButtons,
 	expectSkillDialog,
 	resolved,
 	trackPageErrors,
@@ -1208,9 +1209,11 @@ test("the Owner configuration links to the Agent's Skill page (O-02)", async ({
 		"Agent 的 Skill",
 	);
 	await expectNoDocumentNavigation(page, documents);
+	// B2-06：顶栏页面名按导出稿为「Owner 配置 / Skill 绑定」，h1 仍是「Agent 的 Skill」。
 	await expect(page.locator('[data-slot="breadcrumb-page"]')).toHaveText(
-		"Agent 的 Skill",
+		"Skill 绑定",
 	);
+	await expect(page).toHaveTitle("Skill 绑定 · Agora Agent");
 	await expect(main(page)).toContainText("Owner 配置 / Skill");
 	await expect(main(page)).toContainText(
 		"Release assistant · 固定 Skill 版本，完成同步后才能在对话中使用。",
@@ -1236,15 +1239,14 @@ test("an Owner lists, binds and unbinds Skill versions under the server's Agent 
 	});
 	await page.goto("/agents/agent-pilot-1/skills");
 	const region = main(page);
-	// W-37：部署配置的 Agent Version 没有显示名，按 IdentifierText 的等宽短形式显示，title 为完整值。
+	// W-37 / B2-07：部署配置的 Agent Version 只有内部标识、没有显示名：按导出稿显示「当前配置版本」，
+	// 不截断成「agent-ve…」，也不外露内部标识；绑定读写仍走服务端给出的完整版本（见下方请求路径）。
 	const versionTitle = region.locator(
 		'.agent-skill-version-notice [data-slot="alert-title"]',
 	);
-	await expect(versionTitle).toHaveText("当前 Agent 版本：agent-ve…");
-	await expect(versionTitle.locator("code")).toHaveAttribute(
-		"title",
-		"agent-version-7",
-	);
+	await expect(versionTitle).toHaveText("当前 Agent 版本：当前配置版本");
+	await expect(versionTitle.locator("code")).toHaveCount(0);
+	await expect(region).not.toContainText(/agent-ve|agent-version-7/);
 	await expect(region.getByText("还未绑定 Skill")).toBeVisible();
 	// 版本只来自服务端：页面没有可手填的版本字段。
 	await expect(page.getByLabel("Agent 版本")).toHaveCount(0);
@@ -1609,4 +1611,170 @@ test("Owner configuration and the Agent's Skill page have no overflow, console e
 	).toBeFocused();
 	await expectCleanPage(page, pageErrors);
 	await expectNoDuplicateControls(page, "Agent 的 Skill（已绑定）");
+});
+
+async function viewport(page: Page, mobile: boolean) {
+	await page.setViewportSize(
+		mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+	);
+}
+
+/** 两个盒子之间的竖直间距：next 的顶边减去 previous 的底边。 */
+async function verticalGap(previous: Locator, next: Locator) {
+	const [above, below] = await Promise.all([
+		previous.boundingBox(),
+		next.boundingBox(),
+	]);
+	if (!above || !below) throw new Error("Missing dialog geometry");
+	return below.y - (above.y + above.height);
+}
+
+// #3128 B2-03 / B2-05 / B2-11：Owner 配置「可使用的用户」的占位符与申请表单一致；同一人员同时在
+// 「共同 Owner 用户」与「可使用的用户」时，两个移除按钮带各自的选择器标签，同页没有同名控件；
+// 页面按钮（含企微卡片操作）悬停为指针。
+test("Owner configuration directory pickers keep distinct remove names and the design placeholder (B2-03 / B2-05 / B2-11)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await ownerConfigFixture(page);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const users = page.getByRole("combobox", {
+		name: "可使用的用户",
+		exact: true,
+	});
+	await expect(users).toHaveAttribute(
+		"placeholder",
+		"搜索姓名、邮箱或组织路径",
+	);
+	await expect(
+		page.getByRole("region", { name: "企微机器人", exact: true }),
+	).toBeVisible();
+	await expectPointerButtons(page.locator("body"), "Owner 配置");
+	await expect(
+		page.getByRole("button", {
+			name: "从共同 Owner 用户移除 当前 Owner",
+			exact: true,
+		}),
+	).toBeVisible();
+	await users.click();
+	await page.getByRole("option", { name: /当前 Owner/ }).click();
+	const fromUsers = page.getByRole("button", {
+		name: "从可使用的用户移除 当前 Owner",
+		exact: true,
+	});
+	await expect(fromUsers).toBeVisible();
+	await expect(users).toBeFocused();
+	await page.keyboard.press("Escape");
+	await expect(users).toHaveAttribute("aria-expanded", "false");
+	await expect(
+		page.getByRole("button", { name: /移除 当前 Owner$/ }),
+	).toHaveCount(2);
+	await expectCleanPage(page, pageErrors);
+	await expectNoDuplicateControls(page, "Owner 配置（同一人员在两个选择器）");
+	// 从「可使用的用户」移除不影响共同 Owner；焦点回到该选择器的输入框。
+	await fromUsers.click();
+	await expect(users).toBeFocused();
+	await expect(fromUsers).toHaveCount(0);
+	await expect(
+		page.getByRole("button", {
+			name: "从共同 Owner 用户移除 当前 Owner",
+			exact: true,
+		}),
+	).toBeVisible();
+});
+
+// #3128 B2-08 / B2-09 / B2-11：Skill 绑定确认弹窗的对象名与事实列表相距 15px；解除绑定与更换固定版本的
+// 说明按设计 .form-hint（12px、--muted-ink、行高 20.4px），仍是弹窗的可访问描述；页面与弹窗按钮悬停为指针。
+test("Skill binding dialogs follow the design spacing and hint text (B2-08 / B2-09 / B2-11)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await ownerConfigFixture(page, { agentVersion: "agent-version-7" });
+	await page.goto("/agents/agent-pilot-1/skills");
+	const region = main(page);
+	await expect(region.getByText("还未绑定 Skill")).toBeVisible();
+	await expectPointerButtons(page.locator("body"), "Agent 的 Skill");
+	await region
+		.getByLabel("固定版本", { exact: true })
+		.selectOption("workspace-summary-v1");
+	await region.getByRole("button", { name: "绑定固定版本" }).click();
+	const bind = page.getByRole("dialog", { name: "确认绑定固定版本" });
+	await expectBindingFacts(bind);
+	expect(
+		Math.abs(
+			(await verticalGap(
+				bind.locator('[data-slot="confirm-dialog-subject"]'),
+				bind.locator("dl.skill-binding-facts"),
+			)) - 15,
+		),
+	).toBeLessThanOrEqual(0.5);
+	await expectPointerButtons(bind, "确认绑定弹窗");
+	await bind.getByRole("button", { name: "确认绑定" }).click();
+	await expect(
+		region.getByRole("heading", { level: 2, name: "workspace-summary v1.0.0" }),
+	).toBeFocused();
+
+	const hintStyle = {
+		fontSize: "12px",
+		color: await resolved(page, "color", "var(--muted-ink)"),
+		lineHeight: "20.4px",
+	};
+	const changeTrigger = region.getByRole("button", {
+		name: "更换固定版本：workspace-summary",
+	});
+	await changeTrigger.click();
+	const change = page.getByRole("dialog", { name: "更换固定版本" });
+	const changeHint = change.locator('[data-slot="dialog-description"]');
+	await expect(changeHint).toHaveText(
+		"现有执行保留原版本。新的调用要等同步和装配确认完成。",
+	);
+	expect(
+		await computed(changeHint, ["fontSize", "color", "lineHeight"]),
+	).toEqual(hintStyle);
+	// 设计 .section-tight + .form-hint：说明与上方「目标版本」字段相距 15px。
+	expect(
+		Math.abs(
+			(await verticalGap(change.locator('[data-slot="field"]'), changeHint)) -
+				15,
+		),
+	).toBeLessThanOrEqual(0.5);
+	await expect(change).toHaveAccessibleDescription(
+		"现有执行保留原版本。新的调用要等同步和装配确认完成。",
+	);
+	await expectPointerButtons(change, "更换固定版本弹窗");
+	await page.keyboard.press("Escape");
+	await expect(change).toHaveCount(0);
+	await expect(changeTrigger).toBeFocused();
+
+	const unbindTrigger = region.getByRole("button", {
+		name: "解除绑定：workspace-summary",
+	});
+	await unbindTrigger.click();
+	const unbind = page.getByRole("dialog", { name: "确认解除绑定" });
+	const unbindHint = unbind.getByText(
+		"解除后，新的调用不再提供这个 Skill；现有执行保留原版本。",
+		{ exact: true },
+	);
+	expect(
+		await computed(unbindHint, ["fontSize", "color", "lineHeight"]),
+	).toEqual(hintStyle);
+	// 设计 .form-hint margin-top 8px：与上方对象名相距 8px。
+	expect(
+		Math.abs(
+			(await verticalGap(
+				unbind.locator('[data-slot="confirm-dialog-subject"]'),
+				unbindHint,
+			)) - 8,
+		),
+	).toBeLessThanOrEqual(0.5);
+	await expect(unbind).toHaveAccessibleDescription(
+		/解除后，新的调用不再提供这个 Skill；现有执行保留原版本。/,
+	);
+	await expectPointerButtons(unbind, "确认解除绑定弹窗");
+	await page.keyboard.press("Escape");
+	await expect(unbind).toHaveCount(0);
+	await expect(unbindTrigger).toBeFocused();
+	await expectCleanPage(page, pageErrors);
 });

@@ -23,8 +23,10 @@ import {
 	computed,
 	expectCleanPage,
 	expectPageHeadTop,
+	expectPointerButtons,
 	expectSectionHeadTopAligned,
 	resolved,
+	textContrast,
 	trackPageErrors,
 } from "./primitive-styles";
 
@@ -985,4 +987,139 @@ test("my Agent pages have no overflow, console errors or duplicate controls at t
 		await expectCleanPage(page, pageErrors);
 		await expectNoDuplicateControls(page, path);
 	}
+});
+
+const createdApplication = () =>
+	application({
+		applicationId: "application-browser-2",
+		agentId: "agent-pilot-1",
+		name: "Created request",
+		status: "available",
+		decision: { decidedAt: "2026-09-03T10:00:00Z", reason: null },
+	});
+
+// #3128 B2-01：申请行「查看 Agent」与同列的「修改申请」同为 outline 按钮（设计按钮体系没有 link 变体）：
+// --fg 文字、--border 描边、无下划线，13px / 650 文字对比度满足 WCAG AA 4.5:1（原 link 变体为 4.2:1）。
+test("the application row's 查看 Agent is an outline action with AA contrast (B2-01)", async ({
+	page,
+}) => {
+	await fixture(page, { applications: [application(), createdApplication()] });
+	await page.goto("/my-agents");
+	const view = page.getByRole("link", {
+		name: "查看 Agent：Created request",
+		exact: true,
+	});
+	await expect(view).toHaveAttribute("href", "/agents/agent-pilot-1");
+	const edit = page.getByRole("link", { name: /^修改申请：/ });
+	await expect(edit).toBeVisible();
+	const properties = [
+		"color",
+		"borderTopColor",
+		"borderTopWidth",
+		"backgroundColor",
+		"textDecorationLine",
+		"fontSize",
+		"fontWeight",
+		"minHeight",
+	] as const;
+	const viewStyle = await computed(view, properties);
+	expect(viewStyle).toEqual(await computed(edit, properties));
+	expect(viewStyle).toMatchObject({
+		color: await resolved(page, "color", "var(--foreground)"),
+		borderTopColor: await resolved(page, "color", "var(--border)"),
+		borderTopWidth: "1px",
+		textDecorationLine: "none",
+		fontSize: "13px",
+		fontWeight: "650",
+	});
+	expect(await textContrast(view)).toBeGreaterThanOrEqual(4.5);
+	// 悬停后仍满足 AA（outline 悬停为 --muted 背景、--fg 文字）。
+	await view.hover();
+	expect(await textContrast(view)).toBeGreaterThanOrEqual(4.5);
+});
+
+// #3128 B2-03：同一人员同时选入「共同 Owner 用户」与「可使用的用户」时，两个移除按钮的名称带各自的
+// 选择器标签，同页没有同名控件；从一个选择器移除不影响另一个，焦点回到该选择器的输入框。
+test("one person picked in two directory pickers gets distinct remove buttons (B2-03)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const pageErrors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/my-agents/new");
+	for (const label of ["共同 Owner 用户", "可使用的用户"]) {
+		const picker = page.getByRole("combobox", { name: label, exact: true });
+		await picker.fill("user.two");
+		await expect(
+			page.getByRole("option", { name: /验收用户二/ }),
+		).toBeVisible();
+		await picker.press("Enter");
+		await expect(
+			page.getByRole("button", {
+				name: `从${label}移除 验收用户二`,
+				exact: true,
+			}),
+		).toBeVisible();
+		await picker.press("Escape");
+		await expect(picker).toHaveAttribute("aria-expanded", "false");
+	}
+	await expect(
+		page.getByRole("button", { name: /移除 验收用户二$/ }),
+	).toHaveCount(2);
+	await expectCleanPage(page, pageErrors);
+	await expectNoDuplicateControls(
+		page,
+		"/my-agents/new（同一人员在两个选择器）",
+	);
+	await page
+		.getByRole("button", {
+			name: "从共同 Owner 用户移除 验收用户二",
+			exact: true,
+		})
+		.click();
+	await expect(
+		page.getByRole("combobox", { name: "共同 Owner 用户", exact: true }),
+	).toBeFocused();
+	await expect(
+		page.getByRole("button", { name: /移除 验收用户二$/ }),
+	).toHaveCount(1);
+	await expect(
+		page.getByRole("button", {
+			name: "从可使用的用户移除 验收用户二",
+			exact: true,
+		}),
+	).toBeVisible();
+	await expectCleanPage(page, pageErrors);
+});
+
+// #3128 B2-11：设计稿全局 button{cursor:pointer}。我的 Agent 各页与撤回弹窗的按钮悬停为指针，
+// 禁用按钮不是指针。
+test("buttons on my Agent pages use the pointer cursor (B2-11)", async ({
+	page,
+}) => {
+	await fixture(page, { applications: [application(), createdApplication()] });
+	for (const [path, ready] of [
+		["/my-agents", page.getByRole("list", { name: "我的申请" })],
+		["/my-agents?tab=owned", page.locator(".owned-agent-card").first()],
+		["/my-agents/new", page.getByLabel("Agent 名称")],
+		["/my-agents/application-browser-1/edit", page.getByLabel("Agent 名称")],
+		[
+			"/my-agents/application-browser-1",
+			page.getByRole("region", { name: "审批进度" }),
+		],
+	] as const) {
+		await page.goto(path);
+		await expect(ready).toBeVisible();
+		await expectPointerButtons(page.locator("body"), path);
+	}
+	await page.getByRole("button", { name: "撤回申请" }).click();
+	const dialog = page.getByRole("dialog", { name: "撤回这条申请？" });
+	await expect(dialog).toBeVisible();
+	await expectPointerButtons(dialog, "撤回弹窗");
+	await page.keyboard.press("Escape");
+	await expect(dialog).toHaveCount(0);
 });

@@ -136,10 +136,11 @@ const rules: readonly { pattern: RegExp; chrome: PageChrome }[] = [
 		pattern: new RegExp(`^/agents/${segment}/configuration$`),
 		chrome: chrome("Agent 目录", "Owner 配置", "agents"),
 	},
-	// 从 Owner 配置「管理 Skill 绑定」进入（O-02），上级为 Owner 配置。
+	// 从 Owner 配置「管理 Skill 绑定」进入（O-02），上级为 Owner 配置；
+	// 顶栏页面名按导出稿为「Skill 绑定」（B2-06），h1 仍是「Agent 的 Skill」。
 	{
 		pattern: new RegExp(`^/agents/${segment}/skills$`),
-		chrome: chrome("Owner 配置", "Agent 的 Skill", "agents"),
+		chrome: chrome("Owner 配置", "Skill 绑定", "agents"),
 	},
 	// 旧会话入口与 /chat 都会重定向到对话，过渡期间保持对话高亮。
 	{
