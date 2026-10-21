@@ -96,9 +96,15 @@ export function createProductionConversationRuntimeResolverV2(options: {
 		const perAgent = options.connectionConsumerProfilesByAgent?.[agentId];
 		if (options.connectionConsumerProfilesByAgent && !perAgent)
 			throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+		const profile = perAgent
+			? perAgent.profile
+			: options.connectionConsumerProfile;
+		const approval = perAgent
+			? perAgent.approval
+			: options.connectionConsumerApproval;
 		return approvedConnectionConsumerTarget(
-			perAgent?.profile ?? options.connectionConsumerProfile,
-			perAgent?.approval ?? options.connectionConsumerApproval,
+			profile,
+			approval,
 			options.requireConnectionConsumerProfile,
 		);
 	};
