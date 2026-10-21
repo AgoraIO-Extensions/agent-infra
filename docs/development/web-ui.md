@@ -84,7 +84,6 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | D-01 | Agent 详情「连接器」的「打开 Connection」 | 1440 与 390 视口都是 44px，与对话页 Z-11 共用同一条规则 | DESIGN.md：新操作至少 44px（触达下限）；「已回写导出设计的结论」`Button` 行的 40px 档不含 Connection 提示（[#3052](https://github.com/AgoraIO-Extensions/agent-infra/issues/3052)）。导出稿桌面为 40px |
 | V-01 | `/admin/approvals` 审阅弹窗事实 | 「申请人」取申请投影，缺失写「未提供」；来源按类型标为「模板 / 多服务清单 / 镜像」，范围标为「使用范围」，并列出说明、Owner、默认模型、默认推理强度、预设规格与预计资源占用 | 标签说明值是哪类引用；审批看来源、资源规格与准入（[PRD §5.1](../prd/PRD-agent-platform-M1.md#51-准入与部署)、[§6.2](../prd/PRD-agent-platform-M1.md#62-审批规则)） |
 | V-04 | `/admin/agents` 页头 | gray 计数 chip 后保留 44px ghost「刷新 Agent 列表」 | 列表的重读入口，形态与审计页头一致（#2820 AA-01） |
-| V-05 | `/admin/skill-reviews` 审阅弹窗 | 不显示 `SKILL.md` 正文 | 审核队列投影不含正文；版本详情只对已发布版本按范围、或对发布者本人可读（[工程 Spec §11.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配)），不为预览放宽权限；审核者读取待审正文的只读投影见 #3046，提供前不显示正文 |
 | V-07 | `/admin/skill-reviews` 本人发布的版本 | 不渲染禁用的「审阅」，改为文字「不能审核自己发布的版本」 | 禁用按钮不可聚焦，读屏得不到原因；创建者不能批准自己的共享发布（[PRD §11.5](../prd/PRD-agent-platform-M1.md#115-skill-hub)） |
 | V-08 | `/audit` 筛选与列表 | 外置三项筛选后保留「更多筛选 / 重置 / 查询」，表格后保留分页 | 按时间、主体、Agent、动作、结果和执行引用筛选并分页（[PRD §13.2](../prd/PRD-agent-platform-M1.md#132-查询与权限)），以提交为准 |
 | V-09 | `/audit` 记录详情 | 审计 V2 字段按「操作与身份 / 请求与执行关联 / 请求尝试结果 / 实际执行事实 / Connection 关联」分组，另有「刷新审计详情」 | 字段集合以审计 V2 投影为准（[工程 Spec §18.3](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#183-持久审计)），分组保持可读；刷新用于回读待核实结果（[PRD §13.3](../prd/PRD-agent-platform-M1.md#133-真实结果与可靠性)） |
