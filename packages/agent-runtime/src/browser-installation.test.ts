@@ -194,6 +194,7 @@ describe("Pinned Chromium installation", () => {
 		expect(launch).toHaveBeenCalledWith(
 			"/tmp/controlled-browser-session/browser-profile",
 			expect.objectContaining({
+				args: ["--disable-crashpad-for-testing"],
 				executablePath:
 					process.arch === "x64"
 						? "/opt/agent-infra/browser/chrome-linux64/chrome"

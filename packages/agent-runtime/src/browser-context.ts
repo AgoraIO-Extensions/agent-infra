@@ -140,6 +140,10 @@ export function createBrowserContextManagerV1(
 			.launchPersistentContext(profileRoot, {
 				headless: true,
 				acceptDownloads: true,
+				// Chrome for Testing still starts crashpad in the minimal Runtime image;
+				// without a writable crash database it exits with SIGTRAP before the
+				// Playwright context is created. Crash reports are not a product artifact.
+				args: ["--disable-crashpad-for-testing"],
 				...(options.executablePath
 					? { executablePath: options.executablePath }
 					: {}),
