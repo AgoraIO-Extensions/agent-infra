@@ -879,17 +879,85 @@ it("probes ACP initialization and Session creation without prompting", async () 
 		expect(await driver.getCapabilities()).toMatchObject({
 			connection: false,
 		});
-		await expect(
+		const checks = await Promise.all([
 			driver.probeReadiness?.(new AbortController().signal),
-		).resolves.toMatchObject({
+			driver.probeReadiness?.(new AbortController().signal),
+		]);
+		expect(checks[0]).toMatchObject({
 			modelSelection: true,
 			attachments: false,
 			resultFiles: true,
 			connection: false,
 			supplementaryInstruction: false,
 		});
+		expect(checks[1]).toEqual(checks[0]);
 		expect(launches).toBe(1);
+		await driver.probeReadiness?.(new AbortController().signal);
+		expect(launches).toBe(2);
 	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("reaps an interrupted readiness handshake before removing its private directory", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-readiness-abort-"));
+	const marker = join(path, "pid");
+	const controller = new AbortController();
+	let probeDirectory = "";
+	let pid: number | undefined;
+	const closed = vi.fn(async () => {});
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async (directory) => {
+			probeDirectory = directory;
+			return {
+				command: process.execPath,
+				args: [
+					"-e",
+					`require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid)); setInterval(() => {}, 1000);`,
+				],
+				env: {},
+				close: closed,
+			};
+		},
+	});
+	try {
+		const pending = Promise.allSettled([
+			driver.probeReadiness?.(controller.signal),
+			driver.probeReadiness?.(new AbortController().signal),
+		]);
+		await vi.waitFor(async () => {
+			pid = Number(await readFile(marker, "utf8"));
+			expect(pid).toBeGreaterThan(1);
+		});
+		controller.abort();
+		expect((await pending).map((result) => result.status)).toEqual([
+			"rejected",
+			"rejected",
+		]);
+		expect(closed).toHaveBeenCalledTimes(1);
+		expect(() => process.kill(pid as number, 0)).toThrow();
+		await expect(readdir(probeDirectory)).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+	} finally {
+		controller.abort();
+		if (pid) {
+			try {
+				process.kill(pid, "SIGKILL");
+			} catch {}
+		}
 		await driver.close();
 		await rm(path, { recursive: true, force: true });
 	}

@@ -1,4 +1,4 @@
-import { mkdir, realpath } from "node:fs/promises";
+import { chmod, mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	type BrowserCapabilityAvailableV1,
@@ -177,6 +177,13 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 					if ((await realpath(path)) !== path)
 						throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 				}
+				// Configuration is supplied below. A read-only native config directory
+				// prevents OpenCode from installing plugin dependencies on every launch.
+				const nativeConfig = join(directory, "config", "opencode");
+				await mkdir(nativeConfig, { recursive: true, mode: 0o500 });
+				if ((await realpath(nativeConfig)) !== nativeConfig)
+					throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+				await chmod(nativeConfig, 0o500);
 				if (
 					!(await workspacePathAllowed(
 						join(directory, "workspace"),

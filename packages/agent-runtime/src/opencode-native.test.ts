@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import {
+	access,
+	mkdtemp,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -133,6 +141,17 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 						authentication: "Bearer synthetic-native-credential",
 					},
 				]);
+				if (runtime === "OpenCode") {
+					await expect(
+						access(
+							join(path, accepted.nativeSessionRef, "config/opencode"),
+							constants.W_OK,
+						),
+					).rejects.toMatchObject({ code: "EACCES" });
+					await expect(
+						access(join(path, accepted.nativeSessionRef, "home/.npm/_cacache")),
+					).rejects.toMatchObject({ code: "ENOENT" });
+				}
 				await driver.close();
 				driver = await openNative(options);
 				expect(await driver.execute(command)).toEqual(accepted);

@@ -45,12 +45,18 @@ export async function openAcpSession(options: {
 	directory: string;
 	cwd: string;
 	nativeId?: string;
+	/** Cancel initialization before a native Session handle is available. */
+	signal?: AbortSignal;
 	update: (notification: SessionNotification) => Promise<void>;
 	recordOperationFact?: (fact: RuntimeOperationFactV2) => Promise<void>;
 	modelFact?: () =>
 		| Extract<RuntimeOperationFactV2, { kind: "model" }>["model"]
 		| undefined;
 }) {
+	if (options.signal?.aborted) {
+		await options.launch.close?.();
+		throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+	}
 	const native = await spawnAcpProcess(
 		options.directory,
 		options.cwd,
@@ -179,7 +185,11 @@ export async function openAcpSession(options: {
 		() => connection.close(new Error("RUNTIME_ACP_HANDSHAKE_TIMEOUT")),
 		30_000,
 	);
+	const abortHandshake = () =>
+		connection.close(new Error("RUNTIME_ACP_HANDSHAKE_INTERRUPTED"));
+	options.signal?.addEventListener("abort", abortHandshake, { once: true });
 	try {
+		if (options.signal?.aborted) throw new Error();
 		const initialized = await connection.agent.request("initialize", {
 			protocolVersion: PROTOCOL_VERSION,
 			clientCapabilities: {
@@ -208,6 +218,7 @@ export async function openAcpSession(options: {
 					cwd: options.cwd,
 					mcpServers: [...(options.launch.mcpServers ?? [])],
 				});
+		if (options.signal?.aborted) throw new Error();
 		const nativeId =
 			options.nativeId ??
 			("sessionId" in session ? session.sessionId : undefined);
@@ -477,6 +488,7 @@ export async function openAcpSession(options: {
 		throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 	} finally {
 		clearTimeout(handshakeDeadline);
+		options.signal?.removeEventListener("abort", abortHandshake);
 	}
 }
 
