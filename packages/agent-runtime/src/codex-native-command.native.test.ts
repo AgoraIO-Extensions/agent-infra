@@ -181,10 +181,10 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 						readAt: expect.any(String),
 					});
 					expect(JSON.stringify([catalog, status])).not.toContain(threadId);
+					// ADR-0029：不再用 model/list 核对模型选项。
 					expect(requests.map((request) => request.method)).toEqual([
 						"initialize",
 						"config/read",
-						"model/list",
 						"thread/read",
 						"thread/read",
 					]);
