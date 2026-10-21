@@ -129,8 +129,10 @@ export async function probeChromiumLaunchV1() {
 				"profile-resume",
 			],
 		};
-	} catch {
-		throw new Error("RUNTIME_BROWSER_LAUNCH_PROBE_FAILED");
+	} catch (error) {
+		throw new Error("RUNTIME_BROWSER_LAUNCH_PROBE_FAILED", {
+			cause: error,
+		});
 	} finally {
 		try {
 			await session.close();

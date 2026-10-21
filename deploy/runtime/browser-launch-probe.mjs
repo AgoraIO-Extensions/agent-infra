@@ -4,7 +4,7 @@ import { probeChromiumLaunchV1 } from "@agent-infra/agent-runtime";
 // certifies Session sandbox/security, Host/Driver invocation or conformance.
 try {
 	console.log(JSON.stringify(await probeChromiumLaunchV1()));
-} catch {
+} catch (error) {
 	process.exitCode = 1;
-	console.error("RUNTIME_BROWSER_LAUNCH_PROBE_FAILED");
+	console.error(error instanceof Error ? error.stack ?? error.message : error);
 }
