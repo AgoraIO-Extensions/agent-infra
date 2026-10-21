@@ -11,6 +11,7 @@ import {
 	render,
 	screen,
 	waitFor,
+	within,
 } from "@testing-library/react";
 import { type ReactNode, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -161,11 +162,12 @@ describe("SkillProjectContentEditor (#2906)", () => {
 		const text = document.body.textContent ?? "";
 		for (const internal of ["project-a", "dddd", "digest", "revision"])
 			expect(text).not.toContain(internal);
-		// 项目没有所属组织：组织共享不可选。
-		const scope = screen.getByLabelText("发布范围") as HTMLSelectElement;
+		// 项目没有所属组织：组织共享不可选（V-18 范围单选卡）。
+		const scope = screen.getByRole("radiogroup", { name: "发布范围" });
 		expect(
-			[...scope.options].find((option) => option.value === "ORGANIZATION")
-				?.disabled,
+			within(scope)
+				.getByRole("radio", { name: "组织共享" })
+				.hasAttribute("data-disabled"),
 		).toBe(true);
 		expect(screen.getByText(/项目没有所属组织/)).toBeTruthy();
 	});
@@ -191,7 +193,7 @@ describe("SkillProjectContentEditor (#2906)", () => {
 		fireEvent.change(screen.getAllByLabelText("目录")[2] as HTMLElement, {
 			target: { value: "references" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "保存内容" }));
+		fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
 		await screen.findByText(/内容已保存/);
 		expect(control.saveContent).toHaveBeenCalledWith(
 			"project-a",
@@ -220,7 +222,7 @@ describe("SkillProjectContentEditor (#2906)", () => {
 		fireEvent.change(screen.getByLabelText("SKILL.md（任务说明）"), {
 			target: { value: "# release-notes v3\n" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "保存内容" }));
+		fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
 		await waitFor(() => expect(control.saveContent).toHaveBeenCalledTimes(2));
 		expect(control.saveContent.mock.calls[1]?.[1]).toMatchObject({
 			baseRevision: 3,
@@ -262,7 +264,7 @@ describe("SkillProjectContentEditor (#2906)", () => {
 				target: { value: change.name },
 			});
 		}
-		fireEvent.click(screen.getByRole("button", { name: "保存内容" }));
+		fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
 		expect((await screen.findByRole("alert")).textContent).toBe(message);
 		expect(document.activeElement?.getAttribute("aria-invalid")).toBe("true");
 		expect(control.saveContent).not.toHaveBeenCalled();
@@ -295,11 +297,14 @@ describe("SkillProjectContentEditor (#2906)", () => {
 		fireEvent.change(screen.getByLabelText("版本号"), {
 			target: { value: "1.0.0" },
 		});
-		fireEvent.change(screen.getByLabelText("发布范围"), {
-			target: { value: "MEMBER" },
-		});
-		expect(screen.getByText(/共享范围需管理员审核/)).toBeTruthy();
-		fireEvent.click(screen.getByRole("button", { name: "保存并发布" }));
+		// 共享范围的主按钮按设计为「提交审核」，有未保存修改时先保存。
+		fireEvent.click(screen.getByRole("radio", { name: "全体成员" }));
+		expect(
+			screen
+				.getByRole("radio", { name: "全体成员" })
+				.getAttribute("aria-checked"),
+		).toBe("true");
+		fireEvent.click(screen.getByRole("button", { name: "保存并提交审核" }));
 		expect(
 			await screen.findByText("v1.0.0 已提交审核，审核通过前不能安装。"),
 		).toBeTruthy();
@@ -341,17 +346,17 @@ describe("SkillProjectContentEditor (#2906)", () => {
 		fireEvent.change(screen.getByLabelText("版本号"), {
 			target: { value: "1.0.0" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "发布版本" }));
+		fireEvent.click(screen.getByRole("button", { name: "发布固定版本" }));
 		expect((await screen.findByRole("alert")).textContent).toBe(
 			"这个版本号已被使用，或内容已在其他地方修改。已提交的版本不能换包，修改内容请使用新的版本号。",
 		);
 		// 未修改内容时不重复保存。
 		expect(control.saveContent).not.toHaveBeenCalled();
-		fireEvent.click(screen.getByRole("button", { name: "发布版本" }));
+		fireEvent.click(screen.getByRole("button", { name: "发布固定版本" }));
 		expect((await screen.findByRole("alert")).textContent).toBe(
 			"Skill 发布暂时不可用，可稍后重试。",
 		);
-		fireEvent.click(screen.getByRole("button", { name: "发布版本" }));
+		fireEvent.click(screen.getByRole("button", { name: "发布固定版本" }));
 		expect(
 			await screen.findByText("v1.0.0 已发布，可以在 Skill Hub 中查看。"),
 		).toBeTruthy();
@@ -390,7 +395,7 @@ describe("SkillProjectContentEditor (#2906)", () => {
 		fireEvent.change(screen.getByLabelText("SKILL.md（任务说明）"), {
 			target: { value: "# local\n" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "保存内容" }));
+		fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
 		expect((await screen.findByRole("alert")).textContent).toMatch(
 			/内容已在其他地方修改/,
 		);
@@ -402,6 +407,104 @@ describe("SkillProjectContentEditor (#2906)", () => {
 			).toBe("# edited elsewhere\n"),
 		);
 		expect(screen.queryAllByLabelText("文件名")).toHaveLength(0);
+		// 「重新读取内容」随冲突消失，焦点回到正文而不是 body。
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByLabelText("SKILL.md（任务说明）"),
+			),
+		);
+	});
+
+	it("lays out content on the left and version, scope cards and actions on the right (V-18)", async () => {
+		await renderWithRouter(
+			<SkillProjectContentEditor
+				project={{ ...project, organizationId: "org-a" }}
+				content={ready}
+				actions={actions()}
+				before={<section aria-label="项目信息" />}
+				after={<section aria-label="导入固定来源" />}
+				notice={<p>权限不会扩大</p>}
+			/>,
+		);
+		const layout = document.querySelector(
+			".skill-editor-layout",
+		) as HTMLElement;
+		const [main, aside] = [...layout.children] as [HTMLElement, HTMLElement];
+		// 左栏：项目信息 → Skill 内容 → 导入固定来源。
+		expect(
+			[...main.querySelectorAll("section")].map(
+				(section) =>
+					section.getAttribute("aria-label") ??
+					section.querySelector("h2")?.textContent,
+			),
+		).toEqual(["项目信息", "Skill 内容", "导入固定来源"]);
+		expect(within(main).getByLabelText("SKILL.md（任务说明）")).toBeTruthy();
+		// 右栏：标题、版本号、四张范围卡、说明、「保存草稿」与「发布固定版本」。
+		expect(aside.tagName).toBe("ASIDE");
+		expect(
+			within(layout).getByRole("complementary", { name: "版本与发布范围" }),
+		).toBe(aside);
+		expect(within(aside).getByLabelText("版本号")).toBeTruthy();
+		const scope = within(aside).getByRole("radiogroup", { name: "发布范围" });
+		expect(
+			within(scope)
+				.getAllByRole("radio")
+				.map((radio) => [
+					radio.getAttribute("aria-checked"),
+					radio.hasAttribute("data-disabled"),
+				]),
+		).toEqual([
+			["true", false],
+			["false", false],
+			["false", false],
+			["false", false],
+		]);
+		expect(
+			within(scope)
+				.getAllByRole("radio")
+				.map(
+					(radio) =>
+						document.getElementById(
+							radio.getAttribute("aria-describedby") ?? "",
+						)?.textContent,
+				),
+		).toEqual([
+			"自主创建内容可直接发布",
+			"需要独立审核后才可见",
+			"需要独立审核后才可见",
+			"需要独立审核后才可见",
+		]);
+		expect(within(aside).getByText("权限不会扩大")).toBeTruthy();
+		expect(
+			within(aside)
+				.getAllByRole("button")
+				.map((button) => button.textContent),
+		).toEqual(["保存草稿", "发布固定版本"]);
+		// 组织项目可以选择组织共享，主按钮随范围改为「提交审核」。
+		fireEvent.click(within(scope).getByRole("radio", { name: "组织共享" }));
+		expect(
+			within(aside).getByRole("button", { name: "提交审核" }),
+		).toBeTruthy();
+		expect(screen.queryByText(/项目没有所属组织/)).toBeNull();
+	});
+
+	it("moves focus to the add-file control after removing a file", async () => {
+		await renderWithRouter(
+			<SkillProjectContentEditor
+				project={project}
+				content={ready}
+				actions={actions()}
+			/>,
+		);
+		fireEvent.click(
+			screen.getByRole("button", { name: "移除文件：scripts/run.sh" }),
+		);
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByRole("button", { name: "添加文本文件" }),
+			),
+		);
+		expect(screen.getAllByLabelText("文件名")).toHaveLength(1);
 	});
 
 	it("shows loading and read failures without an editor", async () => {
@@ -424,6 +527,6 @@ describe("SkillProjectContentEditor (#2906)", () => {
 		);
 		fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
 		expect(retry).toHaveBeenCalledOnce();
-		expect(screen.queryByRole("button", { name: "发布版本" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "发布固定版本" })).toBeNull();
 	});
 });

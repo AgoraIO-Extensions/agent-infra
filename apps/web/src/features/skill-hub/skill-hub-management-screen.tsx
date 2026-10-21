@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Layers, Plus, Settings, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Layers, Plus } from "lucide-react";
 import { type FormEvent, type ReactNode, useId, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +44,7 @@ import {
 	SkillHubReadFailure,
 } from "./skill-hub-screen.js";
 import {
+	SkillEditorLayout,
 	type SkillProjectContentActions,
 	SkillProjectContentEditor,
 	type SkillProjectContentState,
@@ -122,9 +123,7 @@ export function MySkillsScreen({
 				<div>
 					<p className="page-eyebrow">我的管理 / 我的 Skill</p>
 					<h1 id={`${id}-heading`}>我的 Skill</h1>
-					<p>
-						管理自己创建的 Skill 项目和各状态的版本，以及加入我的库的固定版本。
-					</p>
+					<p>管理自己创建的 Skill 和已安装版本。</p>
 				</div>
 				<div className="skill-actions">
 					<Link className={buttonVariants()} to="/skills/manage/new">
@@ -134,63 +133,7 @@ export function MySkillsScreen({
 				</div>
 			</header>
 
-			<div className="section-heading">
-				<div>
-					<h2>我创建的</h2>
-					<p>新版本独立保存，旧版本和已有执行记录继续保留</p>
-				</div>
-			</div>
-			{projects.kind === "loading" ||
-			(projects.kind === "unavailable" && retrying) ? (
-				<SkillHubLoading>正在读取我的 Skill…</SkillHubLoading>
-			) : projects.kind === "unavailable" ? (
-				<SkillHubReadFailure
-					retryable={projects.retryable}
-					reason={projects.reason}
-					retryTitle="暂时无法读取我的 Skill"
-					retryDescription="已发布的版本和 Agent 绑定不受影响。"
-					deniedText="当前账号没有管理 Skill 项目的权限。"
-					unavailableText="Skill 项目暂时无法访问，请联系管理员。"
-					onRetry={onRetry}
-					retrying={retrying}
-				/>
-			) : projects.items.length === 0 ? (
-				<SkillHubEmpty
-					title="还没有创建 Skill"
-					description="创建项目，或从固定来源导入一个版本。"
-					action={
-						<Link
-							className={buttonVariants({ variant: "outline" })}
-							to="/skills/manage/new"
-						>
-							创建或导入
-						</Link>
-					}
-				/>
-			) : (
-				<>
-					{versions.kind === "unavailable" ? (
-						<Alert tone="warn" role="status" className="mb-4">
-							<AlertDescription>
-								版本状态暂时无法读取，项目列表不受影响。
-							</AlertDescription>
-						</Alert>
-					) : null}
-					<div className="skill-surface">
-						{projects.items.map((project) => (
-							<OwnedSkillRow
-								key={project.projectId}
-								project={project}
-								versions={versions.kind}
-								latest={latest.find(
-									(version) => version.skillId === project.projectId,
-								)}
-							/>
-						))}
-					</div>
-				</>
-			)}
-
+			{/* 设计 #my-skills：先「已安装」（区头带「Agent 绑定」），再「我创建的」（V-15）。 */}
 			<MyInstallationsSection
 				installations={installations}
 				onRetry={onInstallationsRetry}
@@ -199,32 +142,63 @@ export function MySkillsScreen({
 				{...(uninstall ? { uninstall } : {})}
 			/>
 
-			<section
-				className="skill-section-block"
-				aria-labelledby={`${id}-bindings`}
-			>
+			<section className="skill-section-block" aria-labelledby={`${id}-owned`}>
 				<div className="section-heading">
 					<div>
-						<h2 id={`${id}-bindings`}>Agent 绑定</h2>
-						<p>已安装版本不会自动变化，绑定和运行状态分开显示</p>
+						<h2 id={`${id}-owned`}>我创建的</h2>
+						<p>新版本独立保存，旧版本和已有执行记录继续保留</p>
 					</div>
-					<Link
-						className={buttonVariants({ variant: "outline" })}
-						to="/my-agents"
-						search={{ tab: "owned" }}
-					>
-						<Settings aria-hidden="true" />
-						Agent 绑定
-					</Link>
 				</div>
-				{/* 静态说明，不设 role。 */}
-				<Alert tone="info" icon={<ShieldCheck aria-hidden="true" />}>
-					<AlertTitle>在 Agent 的 Owner 配置中绑定</AlertTitle>
-					<AlertDescription>
-						先在版本详情把固定版本加入我的库，再到 Owner 配置绑定到 Agent
-						版本；同步完成后才能在对话中使用。
-					</AlertDescription>
-				</Alert>
+				{projects.kind === "loading" ||
+				(projects.kind === "unavailable" && retrying) ? (
+					<SkillHubLoading>正在读取我的 Skill…</SkillHubLoading>
+				) : projects.kind === "unavailable" ? (
+					<SkillHubReadFailure
+						retryable={projects.retryable}
+						reason={projects.reason}
+						retryTitle="暂时无法读取我的 Skill"
+						retryDescription="已发布的版本和 Agent 绑定不受影响。"
+						deniedText="当前账号没有管理 Skill 项目的权限。"
+						unavailableText="Skill 项目暂时无法访问，请联系管理员。"
+						onRetry={onRetry}
+						retrying={retrying}
+					/>
+				) : projects.items.length === 0 ? (
+					<SkillHubEmpty
+						title="还没有创建 Skill"
+						description="创建项目，或从固定来源导入一个版本。"
+						action={
+							<Link
+								className={buttonVariants({ variant: "outline" })}
+								to="/skills/manage/new"
+							>
+								创建或导入
+							</Link>
+						}
+					/>
+				) : (
+					<>
+						{versions.kind === "unavailable" ? (
+							<Alert tone="warn" role="status" className="mb-4">
+								<AlertDescription>
+									版本状态暂时无法读取，项目列表不受影响。
+								</AlertDescription>
+							</Alert>
+						) : null}
+						<div className="skill-surface">
+							{projects.items.map((project) => (
+								<OwnedSkillRow
+									key={project.projectId}
+									project={project}
+									versions={versions.kind}
+									latest={latest.find(
+										(version) => version.skillId === project.projectId,
+									)}
+								/>
+							))}
+						</div>
+					</>
+				)}
 			</section>
 		</section>
 	);
@@ -247,7 +221,7 @@ function OwnedSkillRow({
 				<Layers />
 			</span>
 			<div className="skill-row-copy">
-				<h2>{project.name}</h2>
+				<h3>{project.name}</h3>
 				<div className="skill-row-badges">
 					{disabled ? (
 						<Badge tone="red">已停用</Badge>
@@ -491,6 +465,176 @@ export function SkillEditorScreen({
 		}
 	}
 
+	const projectSection = (
+		<FormSection
+			title={project ? "项目信息" : "Skill 项目"}
+			description={
+				project
+					? "修改包名称或停用项目；已发布的版本和执行记录保持不变。"
+					: "项目是版本的归属；包名称会作为导入与发布的名称。"
+			}
+		>
+			<form className="skill-editor-form" onSubmit={submitProject} noValidate>
+				<div className="skill-editor-grid">
+					<Field>
+						<Label htmlFor={`${id}-project-name`}>包名称</Label>
+						<Input
+							ref={projectInput}
+							id={`${id}-project-name`}
+							value={projectName}
+							maxLength={63}
+							autoComplete="off"
+							spellCheck={false}
+							aria-invalid={projectError ? "true" : undefined}
+							aria-describedby={`${id}-project-name-help${projectError ? ` ${id}-project-name-error` : ""}`}
+							onChange={(event) => {
+								setProjectName(event.target.value);
+								setProjectError("");
+							}}
+						/>
+						<p id={`${id}-project-name-help`} className="skill-field-help">
+							小写字母、数字、点、短横线和下划线
+						</p>
+						{projectError ? (
+							<FieldErrorText id={`${id}-project-name-error`}>
+								{projectError}
+							</FieldErrorText>
+						) : null}
+					</Field>
+					{project ? (
+						<Field>
+							<Label htmlFor={`${id}-project-status`}>项目状态</Label>
+							<NativeSelect
+								id={`${id}-project-status`}
+								value={projectStatus}
+								onChange={(event) =>
+									setProjectStatus(event.target.value as "active" | "disabled")
+								}
+							>
+								<NativeSelectOption value="active">启用</NativeSelectOption>
+								<NativeSelectOption value="disabled">停用</NativeSelectOption>
+							</NativeSelect>
+						</Field>
+					) : null}
+				</div>
+				<div className="skill-actions skill-form-actions">
+					<Button type="submit" disabled={projectBusy} focusableWhenDisabled>
+						{projectBusy ? "正在保存…" : project ? "保存项目" : "创建项目"}
+					</Button>
+				</div>
+				<FeedbackText feedback={projectFeedback} />
+			</form>
+		</FormSection>
+	);
+	const importSection = (
+		<FormSection
+			title="导入固定来源"
+			description="来源由平台提供，外部包需完成检查与审核。"
+		>
+			<form className="skill-editor-form" onSubmit={submitImport} noValidate>
+				<div className="skill-editor-grid">
+					<Field>
+						<Label htmlFor={`${id}-import-provider`}>来源</Label>
+						<NativeSelect
+							id={`${id}-import-provider`}
+							value={importForm.provider}
+							onChange={(event) =>
+								setImportForm({
+									...importForm,
+									provider: event.target
+										.value as SkillHubProviderImportRequestV1["provider"],
+								})
+							}
+						>
+							{importProviders.map((provider) => (
+								<NativeSelectOption key={provider} value={provider}>
+									{skillHubProviderLabels[provider]}
+								</NativeSelectOption>
+							))}
+						</NativeSelect>
+					</Field>
+					<Field>
+						{/* 与项目的「包名称」区分，同一页面不出现同名控件。 */}
+						<Label htmlFor={`${id}-import-name`}>导入包名称</Label>
+						<Input
+							ref={importNameInput}
+							id={`${id}-import-name`}
+							value={importForm.name}
+							maxLength={63}
+							autoComplete="off"
+							spellCheck={false}
+							aria-invalid={importErrors.name ? "true" : undefined}
+							aria-describedby={
+								importErrors.name ? `${id}-import-name-error` : undefined
+							}
+							onChange={(event) => {
+								setImportForm({ ...importForm, name: event.target.value });
+								setImportErrors({ ...importErrors, name: undefined });
+							}}
+						/>
+						{importErrors.name ? (
+							<FieldErrorText id={`${id}-import-name-error`}>
+								{importErrors.name}
+							</FieldErrorText>
+						) : null}
+					</Field>
+					<Field className="skill-editor-full">
+						<Label htmlFor={`${id}-import-version`}>固定版本引用</Label>
+						<Input
+							ref={importVersionInput}
+							id={`${id}-import-version`}
+							value={importForm.version}
+							maxLength={256}
+							autoComplete="off"
+							spellCheck={false}
+							placeholder="包名称与固定版本，不使用 latest"
+							aria-invalid={importErrors.version ? "true" : undefined}
+							aria-describedby={
+								importErrors.version ? `${id}-import-version-error` : undefined
+							}
+							onChange={(event) => {
+								setImportForm({
+									...importForm,
+									version: event.target.value,
+								});
+								setImportErrors({ ...importErrors, version: undefined });
+							}}
+						/>
+						{importErrors.version ? (
+							<FieldErrorText id={`${id}-import-version-error`}>
+								{importErrors.version}
+							</FieldErrorText>
+						) : null}
+					</Field>
+				</div>
+				<div className="skill-actions skill-form-actions">
+					<Button
+						type="submit"
+						variant="outline"
+						disabled={importBusy}
+						focusableWhenDisabled
+					>
+						{importBusy ? "正在导入…" : "导入为待检查草稿"}
+					</Button>
+				</div>
+				<FeedbackText feedback={importFeedback}>
+					{importResult ? (
+						<SkillHubStateChip state={importResult.version.state} />
+					) : null}
+				</FeedbackText>
+			</form>
+		</FormSection>
+	);
+	// 设计右栏 .notice：静态说明，不设 role，也不带图标。
+	const permissionNotice = (
+		<Alert tone="info" icon={null} className="skill-editor-section">
+			<AlertTitle>权限不会扩大</AlertTitle>
+			<AlertDescription>
+				脚本保持禁用，Skill 只消费已授予 Agent 的文件、工具与 Connection 权限。
+			</AlertDescription>
+		</Alert>
+	);
+
 	return (
 		<section className="skill-page" aria-labelledby={`${id}-heading`}>
 			{/* exact：返回链接不是当前页，不让 Link 按前缀补 aria-current（N-21）。 */}
@@ -506,15 +650,12 @@ export function SkillEditorScreen({
 				<div>
 					<p className="page-eyebrow">我的管理 / 创建 Skill</p>
 					<h1 id={`${id}-heading`}>创建与发布 Skill</h1>
-					<p>
-						创建 Skill
-						项目，在网页上编辑内容并发布固定版本，或从固定来源导入版本。版本一经提交即固定，修改内容须发布新版本。
-					</p>
+					<p>填写说明和发布范围。发布后版本固定，修改时创建新版本。</p>
 				</div>
 			</header>
 
 			{projectMissing ? (
-				<Alert tone="warn" role="status">
+				<Alert tone="warn" role="status" className="mb-4">
 					<AlertTitle>找不到这个 Skill 项目</AlertTitle>
 					<AlertDescription>
 						它可能已被删除，或不属于当前账号。可以新建项目，或返回我的 Skill
@@ -523,192 +664,38 @@ export function SkillEditorScreen({
 				</Alert>
 			) : null}
 
-			<div className="skill-surface skill-editor-surface">
-				<FormSection
-					title={project ? "项目信息" : "Skill 项目"}
-					description={
-						project
-							? "修改包名称或停用项目；已发布的版本和执行记录保持不变。"
-							: "项目是版本的归属；包名称会作为导入与发布的名称。"
+			{project ? (
+				<SkillProjectContentEditor
+					project={project}
+					content={content}
+					onRetry={onContentRetry}
+					retrying={contentRetrying}
+					onPublished={onPublished}
+					{...(contentActions ? { actions: contentActions } : {})}
+					before={projectSection}
+					after={importSection}
+					notice={permissionNotice}
+				/>
+			) : (
+				// 新建时先创建项目：项目内容是该项目的草稿（Spec §11.6），创建后才出现内容与发布。
+				<SkillEditorLayout
+					main={
+						<>
+							{projectSection}
+							{importSection}
+						</>
 					}
-				>
-					<form
-						className="skill-editor-form"
-						onSubmit={submitProject}
-						noValidate
-					>
-						<div className="skill-editor-grid">
-							<Field>
-								<Label htmlFor={`${id}-project-name`}>包名称</Label>
-								<Input
-									ref={projectInput}
-									id={`${id}-project-name`}
-									value={projectName}
-									maxLength={63}
-									autoComplete="off"
-									spellCheck={false}
-									aria-invalid={projectError ? "true" : undefined}
-									aria-describedby={`${id}-project-name-help${projectError ? ` ${id}-project-name-error` : ""}`}
-									onChange={(event) => {
-										setProjectName(event.target.value);
-										setProjectError("");
-									}}
-								/>
-								<p id={`${id}-project-name-help`} className="skill-field-help">
-									小写字母、数字、点、短横线和下划线
-								</p>
-								{projectError ? (
-									<FieldErrorText id={`${id}-project-name-error`}>
-										{projectError}
-									</FieldErrorText>
-								) : null}
-							</Field>
-							{project ? (
-								<Field>
-									<Label htmlFor={`${id}-project-status`}>项目状态</Label>
-									<NativeSelect
-										id={`${id}-project-status`}
-										value={projectStatus}
-										onChange={(event) =>
-											setProjectStatus(
-												event.target.value as "active" | "disabled",
-											)
-										}
-									>
-										<NativeSelectOption value="active">启用</NativeSelectOption>
-										<NativeSelectOption value="disabled">
-											停用
-										</NativeSelectOption>
-									</NativeSelect>
-								</Field>
-							) : null}
-						</div>
-						<div className="skill-actions skill-form-actions">
-							<Button type="submit" disabled={projectBusy}>
-								{projectBusy ? "正在保存…" : project ? "保存项目" : "创建项目"}
-							</Button>
-						</div>
-						<FeedbackText feedback={projectFeedback} />
-					</form>
-				</FormSection>
-
-				{project ? (
-					<SkillProjectContentEditor
-						project={project}
-						content={content}
-						onRetry={onContentRetry}
-						retrying={contentRetrying}
-						onPublished={onPublished}
-						{...(contentActions ? { actions: contentActions } : {})}
-					/>
-				) : null}
-
-				<FormSection
-					title="导入固定来源"
-					description="来源由平台提供，外部包需完成检查与审核。"
-				>
-					<form
-						className="skill-editor-form"
-						onSubmit={submitImport}
-						noValidate
-					>
-						<div className="skill-editor-grid">
-							<Field>
-								<Label htmlFor={`${id}-import-provider`}>来源</Label>
-								<NativeSelect
-									id={`${id}-import-provider`}
-									value={importForm.provider}
-									onChange={(event) =>
-										setImportForm({
-											...importForm,
-											provider: event.target
-												.value as SkillHubProviderImportRequestV1["provider"],
-										})
-									}
-								>
-									{importProviders.map((provider) => (
-										<NativeSelectOption key={provider} value={provider}>
-											{skillHubProviderLabels[provider]}
-										</NativeSelectOption>
-									))}
-								</NativeSelect>
-							</Field>
-							<Field>
-								<Label htmlFor={`${id}-import-name`}>包名称</Label>
-								<Input
-									ref={importNameInput}
-									id={`${id}-import-name`}
-									value={importForm.name}
-									maxLength={63}
-									autoComplete="off"
-									spellCheck={false}
-									aria-invalid={importErrors.name ? "true" : undefined}
-									aria-describedby={
-										importErrors.name ? `${id}-import-name-error` : undefined
-									}
-									onChange={(event) => {
-										setImportForm({ ...importForm, name: event.target.value });
-										setImportErrors({ ...importErrors, name: undefined });
-									}}
-								/>
-								{importErrors.name ? (
-									<FieldErrorText id={`${id}-import-name-error`}>
-										{importErrors.name}
-									</FieldErrorText>
-								) : null}
-							</Field>
-							<Field className="skill-editor-full">
-								<Label htmlFor={`${id}-import-version`}>固定版本引用</Label>
-								<Input
-									ref={importVersionInput}
-									id={`${id}-import-version`}
-									value={importForm.version}
-									maxLength={256}
-									autoComplete="off"
-									spellCheck={false}
-									placeholder="包名称与固定版本，不使用 latest"
-									aria-invalid={importErrors.version ? "true" : undefined}
-									aria-describedby={
-										importErrors.version
-											? `${id}-import-version-error`
-											: undefined
-									}
-									onChange={(event) => {
-										setImportForm({
-											...importForm,
-											version: event.target.value,
-										});
-										setImportErrors({ ...importErrors, version: undefined });
-									}}
-								/>
-								{importErrors.version ? (
-									<FieldErrorText id={`${id}-import-version-error`}>
-										{importErrors.version}
-									</FieldErrorText>
-								) : null}
-							</Field>
-						</div>
-						<div className="skill-actions skill-form-actions">
-							<Button type="submit" variant="outline" disabled={importBusy}>
-								{importBusy ? "正在导入…" : "导入为待检查草稿"}
-							</Button>
-						</div>
-						<FeedbackText feedback={importFeedback}>
-							{importResult ? (
-								<SkillHubStateChip state={importResult.version.state} />
-							) : null}
-						</FeedbackText>
-					</form>
-				</FormSection>
-				{/* 静态说明，不设 role。 */}
-				<Alert tone="info" icon={<ShieldCheck aria-hidden="true" />}>
-					<AlertTitle>权限不会扩大</AlertTitle>
-					<AlertDescription>
-						脚本只随包分发，打包、检查与绑定时都不会执行；Skill 只消费已授予
-						Agent 的文件、工具与 Connection 权限。
-					</AlertDescription>
-				</Alert>
-			</div>
+					aside={
+						<>
+							<p className="skill-form-hint">
+								创建 Skill 项目后，可以编辑
+								SKILL.md，并在这里选择版本与发布范围。
+							</p>
+							{permissionNotice}
+						</>
+					}
+				/>
+			)}
 		</section>
 	);
 }

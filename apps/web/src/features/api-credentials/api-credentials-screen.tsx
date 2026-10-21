@@ -519,8 +519,20 @@ function CredentialRow({
 								}
 								title="撤销这张 API 凭证？"
 								subject={{
-									name: credential.credentialId,
-									detail: `权限：${credential.scopes.join("、")}`,
+									// 设计 strong.mono 短形式（V-20）：完整 ID 在 title 中，权限行为 11px field-help。
+									name: (
+										<strong
+											className="font-bold font-mono"
+											title={credential.credentialId}
+										>
+											{shortIdentifier(credential.credentialId)}
+										</strong>
+									),
+									detail: (
+										<p className="credential-revoke-scopes">
+											权限：{credential.scopes.join("、")}
+										</p>
+									),
 								}}
 								description="撤销后，使用这张凭证的 API 访问和结果流会立即终止，已受理的任务继续执行。撤销后不能恢复，需要时请签发新凭证。"
 								confirmLabel="撤销凭证"

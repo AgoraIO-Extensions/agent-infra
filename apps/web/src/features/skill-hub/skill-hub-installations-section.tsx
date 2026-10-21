@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Package } from "lucide-react";
+import { Package, Settings } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -34,8 +34,8 @@ function removalFailureMessage(error: unknown) {
 }
 
 /**
- * 「我的安装」（#2953）：只显示服务端按会话主体返回的本人安装。移出成功后先隐藏该行，
- * 再回读列表；回读到新列表后以服务端结果为准。
+ * 「已安装」（#2953，V-15）：只显示服务端按会话主体返回的本人安装。移出成功后先隐藏该行，
+ * 再回读列表；回读到新列表后以服务端结果为准。区头右侧是「Agent 绑定」入口。
  */
 export function MyInstallationsSection({
 	installations,
@@ -112,29 +112,35 @@ export function MyInstallationsSection({
 	}
 
 	return (
-		<section
-			className="skill-section-block"
-			aria-labelledby={`${id}-installations`}
-		>
+		<section aria-labelledby={`${id}-installations`}>
 			<div className="section-heading">
 				<div>
 					<h2 id={`${id}-installations`} ref={heading} tabIndex={-1}>
-						我的安装
+						已安装
 					</h2>
-					<p>加入我的库的固定版本，不会自动升级</p>
+					<p>已安装版本不会自动变化，绑定和运行状态分开显示</p>
 				</div>
+				{/* 绑定在 Agent 的 Owner 配置中进行，入口直达「已创建」标签页选择 Agent。 */}
+				<Link
+					className={buttonVariants({ variant: "outline" })}
+					to="/my-agents"
+					search={{ tab: "owned" }}
+				>
+					<Settings aria-hidden="true" />
+					Agent 绑定
+				</Link>
 			</div>
 			{installations.kind === "loading" ||
 			(installations.kind === "unavailable" && retrying) ? (
-				<SkillHubLoading>正在读取我的安装…</SkillHubLoading>
+				<SkillHubLoading>正在读取已安装的 Skill…</SkillHubLoading>
 			) : installations.kind === "unavailable" ? (
 				<SkillHubReadFailure
 					retryable={installations.retryable}
 					reason={installations.reason}
-					retryTitle="暂时无法读取我的安装"
+					retryTitle="暂时无法读取已安装的 Skill"
 					retryDescription="已安装的版本和 Agent 绑定不受影响。"
-					deniedText="当前账号没有读取我的安装的权限。"
-					unavailableText="我的安装暂时无法访问，请联系管理员。"
+					deniedText="当前账号没有读取已安装 Skill 的权限。"
+					unavailableText="已安装的 Skill 暂时无法访问，请联系管理员。"
 					onRetry={onRetry}
 					retrying={retrying}
 				/>
@@ -223,14 +229,15 @@ function InstallationRow({
 				)}
 			</div>
 			<div className="skill-actions">
+				{/* 设计已安装行的 ghost「查看」（V-17）。 */}
 				{version.access === "visible" ? (
 					<Link
 						className={buttonVariants({ variant: "ghost" })}
 						to="/skills/$skillVersionId"
 						params={{ skillVersionId: item.skillVersionId }}
-						aria-label={withObjectName("详情", name)}
+						aria-label={withObjectName("查看", name)}
 					>
-						详情
+						查看
 					</Link>
 				) : null}
 				<Button
