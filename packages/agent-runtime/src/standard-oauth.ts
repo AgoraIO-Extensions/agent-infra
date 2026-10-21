@@ -85,7 +85,8 @@ export async function registerStandardOAuthClient(options: {
 			record.client_name !== "Codex" ||
 			record.scope !== options.scope ||
 			record.token_endpoint_auth_method !== "none" ||
-			!registrationId.test(String(record.client_id)) ||
+			typeof record.client_id !== "string" ||
+			!registrationId.test(record.client_id) ||
 			!Number.isSafeInteger(record.client_id_issued_at) ||
 			!Array.isArray(record.grant_types) ||
 			!Array.isArray(record.response_types) ||
