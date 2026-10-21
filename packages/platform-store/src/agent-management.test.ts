@@ -1440,6 +1440,35 @@ describe("PostgreSQL Agent-management Adapter", () => {
 		}
 	});
 
+	// #3034：创建失败类别只读取 Workload 最近一次失败的有界原因码；未知值与缺失同为 null。
+	it("reads only a bounded Workload failure reason for the creation failure category", async () => {
+		const failed = stateFixture({
+			applicationId: "application_creation_failed",
+			agentId: "agent_creation_failed",
+			status: "creation_failed",
+			failureCode: "reconciliation_failed",
+		});
+		await seedStates([failed]);
+		const query = new PostgresAgentManagementQueryV1({ databaseUrl });
+		adapters.push(query);
+		expect(await query.getWorkloadFailureReason(failed.agentId)).toBeNull();
+		const write = (lastFailure: Record<string, unknown>) =>
+			adminClient`insert into platform.workload_reconciliations (agent_id, revision, state)
+				values (${failed.agentId}, 1, ${adminClient.json({ schemaVersion: 1, agentId: failed.agentId, revision: 1, lastFailure } as postgres.JSONValue)})
+				on conflict (agent_id) do update set state = excluded.state`;
+		await write({
+			schemaVersion: 1,
+			reason: "kubernetes_policy",
+			attempts: 1,
+		});
+		expect(await query.getWorkloadFailureReason(failed.agentId)).toBe(
+			"kubernetes_policy",
+		);
+		await write({ schemaVersion: 1, reason: "private detail", attempts: 1 });
+		expect(await query.getWorkloadFailureReason(failed.agentId)).toBeNull();
+		expect(await query.getWorkloadFailureReason("agent_missing")).toBeNull();
+	});
+
 	it("returns bounded Agent projections to an administrator with stable pagination", async () => {
 		const first = stateFixture({
 			applicationId: "application_admin_first",

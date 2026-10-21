@@ -34,6 +34,7 @@ import {
 	resolveCurrentPersonalApiUserV1,
 	snapshotAgentManagementWritePlanV1,
 	type TaskUserDirectoryV1,
+	type WorkloadFailureReasonCodeV1,
 	withAgentApiAuditContextV1,
 } from "@agent-infra/platform-core";
 import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
@@ -2087,6 +2088,23 @@ function applicationProjection(
 	};
 }
 
+/** 与 Workload 状态持久化校验相同的有界原因码；未知值按缺失处理。 */
+const workloadFailureReasonCodes: ReadonlySet<WorkloadFailureReasonCodeV1> =
+	new Set<WorkloadFailureReasonCodeV1>([
+		"kubernetes_unauthorized",
+		"kubernetes_forbidden",
+		"kubernetes_not_found",
+		"kubernetes_conflict",
+		"kubernetes_invalid",
+		"kubernetes_throttled",
+		"kubernetes_server_error",
+		"kubernetes_unreachable",
+		"kubernetes_policy",
+		"preflight_rejected",
+		"capabilities_unavailable",
+		"unexpected_error",
+	]);
+
 export class PostgresAgentManagementQueryV1 {
 	readonly #client;
 	readonly #database;
@@ -2275,6 +2293,30 @@ export class PostgresAgentManagementQueryV1 {
 		} catch {
 			throw new AgentManagementError("unavailable");
 		}
+	}
+
+	/**
+	 * 创建失败类别的输入（#3034）：只返回 Workload 最近一次失败的有界原因码，不返回次数、
+	 * Kubernetes 细节或其他状态。调用方必须先按 Owner/管理员范围读取并授权该 Agent。
+	 */
+	async getWorkloadFailureReason(
+		agentId: string,
+	): Promise<WorkloadFailureReasonCodeV1 | null> {
+		let reason: unknown;
+		try {
+			const [row] = await this.#database
+				.select({ state: workloadReconciliations.state })
+				.from(workloadReconciliations)
+				.where(eq(workloadReconciliations.agentId, agentId))
+				.limit(1);
+			reason = row?.state?.lastFailure?.reason;
+		} catch {
+			throw new AgentManagementError("unavailable");
+		}
+		return typeof reason === "string" &&
+			workloadFailureReasonCodes.has(reason as WorkloadFailureReasonCodeV1)
+			? (reason as WorkloadFailureReasonCodeV1)
+			: null;
 	}
 
 	async close(): Promise<void> {

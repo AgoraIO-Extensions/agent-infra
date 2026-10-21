@@ -5,6 +5,7 @@ import {
 	AgentApplicationProjectionV1Schema,
 	AgentApplicationProjectionV2Schema,
 	AgentApplicationUpdateRequestV2Schema,
+	AgentCreationFailureProjectionV1Schema,
 	AgentDetailProjectionV1Schema,
 	AgentLifecycleCommandRequestV1Schema,
 	AgentProjectionV1Schema,
@@ -23,8 +24,13 @@ import type {
 	CurrentTaskUserV1,
 	PendingSecretRecordAttachmentResolverV1,
 	PersonalApiAgentReadUseCaseV1,
+	WorkloadFailureReasonCodeV1,
 } from "@agent-infra/platform-core";
-import { isAdministratorAgentReadAllowedV1 } from "@agent-infra/platform-core";
+import {
+	agentCreationFailureCategoryV1,
+	isAdministratorAgentReadAllowedV1,
+	isAgentCreationFailureReadAllowedV1,
+} from "@agent-infra/platform-core";
 import type {
 	AgentManagementAgentProjectionV1,
 	AgentManagementAgentScopeV1,
@@ -154,6 +160,10 @@ export interface ManagementRouteDependencies {
 	readonly readAgentDetailProjection?: (
 		input: ProjectionInput<AgentManagementAgentProjectionV1>,
 	) => Promise<unknown>;
+	/** 创建失败类别（#3034）：Workload 最近一次失败的有界原因码；未装配时入口返回依赖不可用。 */
+	readonly readWorkloadFailureReason?: (
+		agentId: string,
+	) => Promise<WorkloadFailureReasonCodeV1 | null>;
 }
 
 function actor(identity: IdentityContext): AgentManagementActorContextV1 {
@@ -1238,6 +1248,53 @@ export function registerV2ManagementRoutes(
 					(agent) =>
 						projectAgentDetail(dependencies, agent, identity, metadata),
 				),
+			);
+		}),
+	);
+
+	// 创建失败类别（#3034）：只给当前 Owner 与系统管理员，且 Agent 必须处于创建失败。
+	// 只接受浏览器会话；其他主体、其他状态与不存在同为 RESOURCE_UNAVAILABLE。
+	app.get("/api/v2/agents/:agentId/creation-failure", (context) =>
+		boundary(context, async (metadata) => {
+			context.header("Cache-Control", "no-store");
+			const request = context.req.raw;
+			if (request.headers.has("authorization"))
+				fail("AUTHENTICATION_REQUIRED", metadata.traceId);
+			if (new URL(request.url).search)
+				fail("INVALID_REQUEST", metadata.traceId);
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				request,
+				metadata.traceId,
+			);
+			const readFailureReason = dependencies.readWorkloadFailureReason;
+			if (!readFailureReason) fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			const currentActor = actor(identity);
+			const scope = isAdministratorAgentReadAllowedV1(currentActor)
+				? ({ kind: "administrator" } as const)
+				: ownerScope(identity);
+			const agentId = context.req.param("agentId");
+			const agent = await agentOrUnavailable(
+				dependencies,
+				scope,
+				agentId,
+				metadata.traceId,
+			);
+			if (!isAgentCreationFailureReadAllowedV1(currentActor, agent.management))
+				fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+			const workloadFailureReason = await queryOrUnavailable(
+				() => readFailureReason(agent.agentId),
+				metadata.traceId,
+			);
+			return context.json(
+				AgentCreationFailureProjectionV1Schema.parse({
+					schemaVersion: 1,
+					agentId: agent.agentId,
+					category: agentCreationFailureCategoryV1({
+						failureCode: agent.management.failureCode,
+						workloadFailureReason,
+					}),
+				}),
 			);
 		}),
 	);

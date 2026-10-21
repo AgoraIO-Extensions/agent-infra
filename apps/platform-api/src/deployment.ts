@@ -401,9 +401,13 @@ export function createProductionPlatformApiAssemblyInputV1(
 	const apiCandidates =
 		input.agentApiCreation?.candidates ?? deploymentDefaultRelayKeyCandidates;
 	const apiModelAdmission = input.agentApiCreation?.keylessModelAdmission;
+	// 平台身份入口只在部署装配了 Auth Gateway 时可用；浏览器与 API 创建两条准入路径
+	// 使用同一个事实（#3034，工程 Spec §14.3）。
+	const platformIdentityEntryAvailable = input.customAgentGateway !== undefined;
 	const admissions = createDeploymentAdmissionsV1({
 		...input,
 		currentIdentity: identityScope.currentIdentity,
+		platformIdentityEntryAvailable,
 	});
 	const keylessModelAdmission = apiModelAdmission
 		? { admitModels: apiModelAdmission.admitModels.bind(apiModelAdmission) }
@@ -415,6 +419,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 	// Capture the same startup policy as browser admission; only the principal varies per request.
 	const apiAdmissionInput = {
 		imageRepository: input.imageRepository,
+		platformIdentityEntryAvailable,
 		registry: {
 			...input.registry,
 			policy: {

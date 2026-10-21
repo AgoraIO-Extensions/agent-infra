@@ -1121,6 +1121,8 @@ export function assemblePlatformApi(
 			readApplicationProjection: projections.readApplicationProjection,
 			readAgentProjection: projections.readManagementAgentProjection,
 			readAgentDetailProjection: projections.readAgentDetailProjection,
+			readWorkloadFailureReason: (agentId) =>
+				managementQuery.getWorkloadFailureReason(agentId),
 			personalApiAgentRead,
 			readApiAgentProjection: projections.readApiAgentProjection,
 			...(input.validateDefaultRelayKey

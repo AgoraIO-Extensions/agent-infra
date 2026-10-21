@@ -1,5 +1,6 @@
 export * from "./agent-api-lifecycle.ts";
 export * from "./agent-application-manager.ts";
+export * from "./agent-creation-failure.ts";
 export * from "./agent-default-relay-key.ts";
 export * from "./agent-detail.ts";
 export * from "./agent-user-manage-grants.ts";

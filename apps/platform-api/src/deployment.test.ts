@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import {
 	AgentApiCreationResponseV1Schema,
 	AgentApplicationProjectionV2Schema,
+	AgentCreationFailureProjectionV1Schema,
 	AgentDetailProjectionV1Schema,
 	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
@@ -1493,6 +1494,88 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			}
 		},
 	);
+	// #3034：平台身份入口是部署能力。未装配 Auth Gateway 时，「自有交互入口 + 平台校验」在镜像准入前
+	// 被明确拒绝，不创建申请，也不进入审批队列；装配后（AC-3）照常受理。
+	it("rejects a platform identity entry application without an Auth Gateway and accepts it with one", async () => {
+		const previous = fixture;
+		await createPlatformApiShutdown(running)();
+		fixture = deploymentInput(database.databaseUrl, "self-managed");
+		await openApi();
+		const imageReference = `registry.example.test/agents/codex@${fixture.imageDigest}`;
+		const body = {
+			...applicationBody,
+			modelConfiguration: undefined,
+			secrets: [],
+			source: {
+				kind: "custom",
+				imageReference,
+				interactionMode: "self-managed",
+				identityResponsibility: "platform-managed",
+			},
+		};
+		try {
+			const before = await snapshot();
+			const rejected = await request(
+				"/api/v2/agent-applications",
+				"alice",
+				body,
+				"platform-identity-unavailable",
+			);
+			expect(rejected.status).toBe(409);
+			expect(await rejected.json()).toMatchObject({
+				schemaVersion: 1,
+				code: "ACTION_UNAVAILABLE",
+				retryable: false,
+			});
+			expect(fixture.fetch).not.toHaveBeenCalled();
+			expect(fixture.authorize).not.toHaveBeenCalled();
+			expect(await snapshot()).toEqual(before);
+			const pending = await json(
+				await request("/api/v2/admin/agent-applications", "admin"),
+				200,
+			);
+			expect(JSON.stringify(pending)).not.toContain("platform-managed");
+
+			await createPlatformApiShutdown(running)();
+			fixture = {
+				...fixture,
+				input: {
+					...fixture.input,
+					customAgentGateway: {
+						path: "/custom-agents/*",
+						resolveDeployment: vi.fn(async () => null),
+						issuer: "platform-api",
+						keyVersion: "test-key-v1",
+						privateKey: generateKeyPairSync("ed25519").privateKey,
+					},
+				},
+			};
+			await openApi();
+			const created = AgentApplicationProjectionV2Schema.parse(
+				await json(
+					await request(
+						"/api/v2/agent-applications",
+						"alice",
+						body,
+						"platform-identity-available",
+					),
+					201,
+				),
+			);
+			expect(created).toMatchObject({
+				status: "pending_approval",
+				source: {
+					kind: "custom",
+					interactionMode: "self-managed",
+					identityResponsibility: "platform-managed",
+				},
+			});
+		} finally {
+			await createPlatformApiShutdown(running)();
+			fixture = previous;
+			await openApi();
+		}
+	});
 	// #2910：渠道状态来自本 Agent 当前绑定引用的连接事实；同一引用下其他 Agent 的连接不泄露。
 	it("projects real WeCom bot status per Agent without leaking another Agent's connection", async () => {
 		const createApproved = async (user: User, key: string) => {
@@ -1575,6 +1658,91 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			{ kind: "web", status: "available" },
 			{ kind: "wecom_bot", status: "failed" },
 		]);
+	});
+	// #3034：创建失败类别经真实装配、Store 与 PostgreSQL 读取。只有当前 Owner 与系统管理员能读到，
+	// 其他用户（含其他组织）、其他 Agent 的 Owner 与未处于创建失败的 Agent 一律 404。
+	it("serves the creation failure category only to the Owner and an administrator", async () => {
+		const createApproved = async (user: User, key: string) => {
+			const created = AgentApplicationProjectionV2Schema.parse(
+				await json(
+					await request(
+						"/api/v2/agent-applications",
+						user,
+						applicationBody,
+						key,
+					),
+					201,
+				),
+			);
+			await json(
+				await request(
+					`/api/v2/admin/agent-applications/${created.applicationId}/decision`,
+					"admin",
+					{ schemaVersion: 1, decision: "approve" },
+					`${key}-approve`,
+				),
+				200,
+			);
+			if (!created.agentId) throw new Error("Expected an approved Agent");
+			return created.agentId;
+		};
+		const failed = await createApproved("alice", "creation-failure-alice");
+		const creating = await createApproved("bob", "creation-failure-bob");
+		const read = (agentId: string, user: User) =>
+			fetch(`${origin}/api/v2/agents/${agentId}/creation-failure`, {
+				headers: { cookie: `synthetic-session=${sessionKeys[user]}` },
+			});
+		const unavailable = async (agentId: string, user: User) => {
+			const body = await json(await read(agentId, user), 404);
+			expect(body).toMatchObject({ code: "RESOURCE_UNAVAILABLE" });
+			expect(JSON.stringify(body)).not.toMatch(/kubernetes|policy|attempt/);
+		};
+		// 仍在创建中：Owner 与管理员都读不到。
+		await unavailable(failed, "alice");
+		await unavailable(failed, "admin");
+		await reader.unsafe(
+			`update platform.agent_applications set status = 'creation_failed', failure_code = 'reconciliation_failed' where agent_id = $1`,
+			[failed],
+		);
+		await reader.unsafe(
+			`insert into platform.workload_reconciliations (agent_id, revision, state)
+			values ($1, 1, $2::text::jsonb)
+			on conflict (agent_id) do update set state = excluded.state`,
+			[
+				failed,
+				JSON.stringify({
+					schemaVersion: 1,
+					agentId: failed,
+					revision: 1,
+					lastFailure: {
+						schemaVersion: 1,
+						reason: "kubernetes_policy",
+						attempts: 1,
+					},
+				}),
+			],
+		);
+		for (const user of ["alice", "admin"] as const) {
+			const response = await read(failed, user);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+			const body = await json(response, 200);
+			expect(AgentCreationFailureProjectionV1Schema.parse(body)).toEqual({
+				schemaVersion: 1,
+				agentId: failed,
+				category: "configuration_rejected",
+			});
+			expect(JSON.stringify(body)).not.toMatch(/kubernetes|policy|attempt/);
+		}
+		// bob 属于另一个组织，也是另一个 Agent 的 Owner：读不到 alice 的 Agent，自己的 Agent 未失败也读不到。
+		await unavailable(failed, "bob");
+		await unavailable(creating, "bob");
+		await unavailable(creating, "admin");
+		await unavailable("agent_missing_creation_failure", "alice");
+		// 只接受浏览器会话：同一主体改用 Authorization 也被拒绝。
+		expect(
+			(await request(`/api/v2/agents/${failed}/creation-failure`, "alice"))
+				.status,
+		).toBe(401);
 	});
 });
 
@@ -2114,5 +2282,91 @@ describe("production API creation with user and application Tokens", () => {
 		expect(await effects()).toEqual([
 			{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
 		]);
+	});
+	// #3034：API Token 创建与浏览器申请使用同一个平台身份入口事实。
+	it("rejects a platform identity entry API Token creation without an Auth Gateway and without effects", async () => {
+		const response = await create(
+			apiTokens.application,
+			"platform-identity-unavailable",
+			{
+				schemaVersion: 2,
+				name: apiBody.name,
+				description: apiBody.description,
+				source: {
+					kind: "custom",
+					imageReference: `registry.example.test/agents/codex@${fixture.imageDigest}`,
+					interactionMode: "self-managed",
+					identityResponsibility: "platform-managed",
+				},
+				coOwnerIds: [],
+				availability: [],
+				environment: [],
+				secrets: [],
+			},
+		);
+		expect(response.status).toBe(409);
+		expect(await response.json()).toMatchObject({
+			code: "ACTION_UNAVAILABLE",
+			retryable: false,
+		});
+		expect(fixture.fetch).not.toHaveBeenCalled();
+		expect(await effects()).toEqual([
+			{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+		]);
+	});
+	it("passes the Auth Gateway capability to API Token admissions", async () => {
+		const admitWith = (input: ProductionPlatformApiInputV1) => {
+			const admissions =
+				createProductionPlatformApiAssemblyInputV1(input).agentApiCreation
+					?.admissions;
+			if (typeof admissions !== "function")
+				throw new Error("Missing API Token admissions");
+			return admissions({
+				principal: { kind: "application", id: "alice" },
+				ownerId: "alice",
+				agentId: "agent-api-identity",
+				applicationId: "application-api-identity",
+				authorizationRevision: "authorization-api-identity",
+				authorizationAdmission: { authorize: vi.fn() },
+			}).imageAdmission.admitImage({
+				schemaVersion: 1,
+				agentId: "agent-api-identity",
+				requestId: "request-api-identity",
+				traceId: "trace-api-identity",
+				requested: {
+					kind: "custom",
+					imageReference: `registry.example.test/agents/codex@${fixture.imageDigest}`,
+					interactionMode: "self-managed",
+					identityResponsibility: "platform-managed",
+				},
+			});
+		};
+		await expect(admitWith(fixture.input)).resolves.toEqual({
+			schemaVersion: 1,
+			agentId: "agent-api-identity",
+			requestId: "request-api-identity",
+			status: "rejected",
+			reason: "platform_identity_entry_unavailable",
+		});
+		expect(fixture.fetch).not.toHaveBeenCalled();
+		// 对照：装配 Auth Gateway 后，同一请求继续走 Registry 准入（此镜像声明平台交互入口，因而按
+		// 交互入口不一致拒绝，且不再带平台身份入口原因）。
+		const admitted = await admitWith({
+			...fixture.input,
+			customAgentGateway: {
+				path: "/custom-agents/*",
+				resolveDeployment: vi.fn(async () => null),
+				issuer: "platform-api",
+				keyVersion: "test-key-v1",
+				privateKey: generateKeyPairSync("ed25519").privateKey,
+			},
+		});
+		expect(admitted).toEqual({
+			schemaVersion: 1,
+			agentId: "agent-api-identity",
+			requestId: "request-api-identity",
+			status: "rejected",
+		});
+		expect(fixture.fetch).toHaveBeenCalled();
 	});
 });

@@ -124,6 +124,14 @@ Worker 按它注入容器资源并在调谐时再次校验。
   调谐失败关闭，观测为 `unhealthy`，Worker 不会自动扩缩 PVC。因此给已有 Agent 使用的档位
   新增或修改 `storageSize` 前，需先迁移其 PVC。
 
+## 平台身份入口
+
+`workloadInput.policy.platformAuthAnnotations` 是平台身份入口（自有交互入口由平台校验身份）路由的
+可信集成，只在 Platform API 装配了 `customAgentGateway` 时配置，两侧必须一致；规则见
+[工程 Spec §14.3](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#143-自有交互入口)。
+该项为空时，Worker 在 preflight 开始、Registry 准入和任何 Kubernetes 写入之前，以
+`kubernetes_policy` 让这类 Agent 立即创建失败，不消耗重试预算。
+
 ## 调谐失败日志
 
 Workload 调谐的步骤抛出异常时，调谐只会让 `attempts` 加一后重试，预算耗尽后进入清理，原因不进入

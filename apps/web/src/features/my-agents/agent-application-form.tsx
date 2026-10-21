@@ -945,14 +945,27 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			!managedModelEdit
 		)
 			errors.configureModels = "服务端拒绝了模型配置，请开启修改模型配置。";
+		// 部署未提供平台身份入口时，服务端以 ACTION_UNAVAILABLE 拒绝「由平台校验」（#3034）。
+		// 只要仍选着它就保留提示并阻止再次提交；修改申请不能更改入口身份，提示新建申请。
+		if (
+			props.serverError?.code === "ACTION_UNAVAILABLE" &&
+			sourceKind === "custom-self-managed" &&
+			identityResponsibility === "platform-managed"
+		)
+			errors.identityResponsibility =
+				props.mode === "update"
+					? "当前部署未启用平台身份入口。已有申请不能更改入口身份校验，请新建申请并选择「由自有入口校验」。"
+					: "当前部署未启用平台身份入口，请改选「由自有入口校验」后再提交。";
 		return errors;
 	}, [
+		identityResponsibility,
 		managedModelEdit,
 		modelConfigurationVisible,
 		modelServerErrorIndexes,
 		props.mode,
 		props.serverError?.code,
 		serverValidationDismissed,
+		sourceKind,
 	]);
 	const serverFormError =
 		props.serverError?.code === "INVALID_REQUEST" && !serverValidationDismissed
@@ -1246,7 +1259,17 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							}
 						}}
 					>
-						<SelectTrigger id="application-identity-responsibility">
+						<SelectTrigger
+							aria-describedby={
+								fieldErrors.identityResponsibility
+									? errorId("identityResponsibility")
+									: undefined
+							}
+							aria-invalid={
+								fieldErrors.identityResponsibility ? true : undefined
+							}
+							id="application-identity-responsibility"
+						>
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
@@ -1254,6 +1277,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							<SelectItem value="self-managed">由自有入口校验</SelectItem>
 						</SelectContent>
 					</Select>
+					<FieldError
+						id={errorId("identityResponsibility")}
+						message={fieldErrors.identityResponsibility}
+					/>
 				</Field>
 			) : null}
 		</>

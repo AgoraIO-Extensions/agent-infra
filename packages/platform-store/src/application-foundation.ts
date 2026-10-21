@@ -892,9 +892,10 @@ export class PostgresApplicationFoundationTransactionV1
 				error instanceof PersonalApiCredentialErrorV1
 					? error
 					: error instanceof AgentConfigurationError
-						? error.code === "resource_cap_exceeded"
-							? // 多服务总量超限是终态业务拒绝：保留原错误，由 HTTP 映射为 409
-								// MULTI_SERVICE_RESOURCE_CAP_EXCEEDED，而不是可重试的依赖不可用（#2396）。
+						? error.code === "resource_cap_exceeded" ||
+							error.code === "platform_identity_entry_unavailable"
+							? // 多服务总量超限与部署未提供平台身份入口都是终态业务拒绝：保留原错误，
+								// 由 HTTP 映射为 409 的专用错误，而不是可重试的依赖不可用（#2396、#3034）。
 								error
 							: new PersonalApiCredentialErrorV1(
 									error.code === "not_authorized"

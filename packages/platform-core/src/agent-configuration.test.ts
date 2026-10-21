@@ -1079,6 +1079,57 @@ describe("Initial Agent configuration admission", () => {
 		expect(calls).toEqual(["image"]);
 	});
 
+	it("stops initial admission when the deployment has no platform identity entry (#3034)", async () => {
+		const { dependencies } = createInitialAdmissionDependencies();
+		const calls: string[] = [];
+		const { modelConfiguration: _model, ...customCommand } = initialCommand;
+		await expect(
+			completeInitialAgentConfiguration(
+				{
+					...customCommand,
+					source: {
+						kind: "custom",
+						imageReference: "registry.example.test/agents/custom:1.0.0",
+						interactionMode: "self-managed",
+						identityResponsibility: "platform-managed",
+					},
+					channels: [],
+				},
+				initialActor,
+				{
+					...dependencies,
+					imageAdmission: {
+						async admitImage(input) {
+							calls.push("image");
+							return {
+								schemaVersion: 1,
+								status: "rejected",
+								agentId: input.agentId,
+								requestId: input.requestId,
+								reason: "platform_identity_entry_unavailable",
+							};
+						},
+					},
+					modelAdmission: {
+						async admitModels(input) {
+							calls.push("model");
+							return dependencies.modelAdmission.admitModels(input);
+						},
+					},
+					secretAdmission: {
+						async admitSecrets(input) {
+							calls.push("secret");
+							return dependencies.secretAdmission.admitSecrets(input);
+						},
+					},
+				},
+			),
+		).rejects.toEqual(
+			expect.objectContaining({ code: "platform_identity_entry_unavailable" }),
+		);
+		expect(calls).toEqual(["image"]);
+	});
+
 	it("keeps an image rejection without a reason as not_admitted", async () => {
 		const { dependencies } = createInitialAdmissionDependencies();
 		await expect(
@@ -2446,6 +2497,50 @@ describe("Agent configuration policy", () => {
 			expect.objectContaining({ code: "resource_cap_exceeded" }),
 		);
 		expect(requested).toEqual([source]);
+		expect(harness.transaction.snapshot()).toMatchObject({
+			commitCount: 0,
+			configuration: { source: record.source },
+		});
+	});
+
+	it("rejects a platform identity entry source update before any write when the deployment lacks it (#3034)", async () => {
+		const record: AgentConfigurationRecordV2 = {
+			...agentConfigurationConformanceRecordV1,
+			source: {
+				kind: "custom",
+				imageDigest: `sha256:${"b".repeat(64)}`,
+				admissionRevision: "image_policy_1",
+				interactionMode: "self-managed",
+				identityResponsibility: "platform-managed",
+				connectionEnabled: false,
+			},
+			modelConfiguration: null,
+		};
+		const harness = createHarness({ record });
+		const useCase = harness.useCaseWithDependencies({
+			imageAdmission: {
+				async admitImage(input) {
+					return {
+						schemaVersion: 1,
+						status: "rejected",
+						agentId: input.agentId,
+						requestId: input.requestId,
+						reason: "platform_identity_entry_unavailable",
+					};
+				},
+			},
+		});
+		const source = {
+			kind: "custom" as const,
+			imageReference: "registry.example.test/agents/custom:2.0.0",
+			interactionMode: "self-managed" as const,
+			identityResponsibility: "platform-managed" as const,
+		};
+		await expect(
+			useCase.update({ ...command, changes: { source } }, actor),
+		).rejects.toEqual(
+			expect.objectContaining({ code: "platform_identity_entry_unavailable" }),
+		);
 		expect(harness.transaction.snapshot()).toMatchObject({
 			commitCount: 0,
 			configuration: { source: record.source },

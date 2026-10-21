@@ -470,6 +470,111 @@ resources:
 		);
 	});
 
+	// #3034：部署未提供平台身份入口时，服务端以 ACTION_UNAVAILABLE 拒绝「由平台校验」。
+	it("explains a missing platform identity entry at the identity field and blocks resubmission until it changes", async () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				serverError={{ code: "ACTION_UNAVAILABLE" }}
+				submitting={false}
+			/>,
+		);
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		// 标准模板不受影响：只有自有入口且选择由平台校验时才提示。
+		expect(screen.queryByText(/当前部署未启用平台身份入口/)).toBeNull();
+		fireEvent.click(screen.getByRole("combobox", { name: "Agent 来源" }));
+		const sourceOption = await screen.findByRole("option", {
+			name: "自定义 Agent · 自有交互入口",
+		});
+		fireEvent.pointerDown(sourceOption, { pointerType: "mouse" });
+		fireEvent.click(sourceOption, { detail: 1 });
+		fireEvent.change(await screen.findByLabelText("镜像地址"), {
+			target: { value: "registry.example/agents/release:v1" },
+		});
+		const identity = screen.getByRole("combobox", { name: "入口身份校验" });
+		expect(identity.textContent).toContain("由平台校验");
+		expect(identity.getAttribute("aria-invalid")).toBe("true");
+		const message = document.getElementById(
+			identity.getAttribute("aria-describedby") ?? "",
+		);
+		expect(message?.textContent).toBe(
+			"当前部署未启用平台身份入口，请改选「由自有入口校验」后再提交。",
+		);
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+
+		fireEvent.click(identity);
+		const selfManaged = await screen.findByRole("option", {
+			name: "由自有入口校验",
+		});
+		fireEvent.pointerDown(selfManaged, { pointerType: "mouse" });
+		fireEvent.click(selfManaged, { detail: 1 });
+		expect(identity.getAttribute("aria-invalid")).toBeNull();
+		expect(screen.queryByText(/当前部署未启用平台身份入口/)).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				source: {
+					kind: "custom",
+					imageReference: "registry.example/agents/release:v1",
+					interactionMode: "self-managed",
+					identityResponsibility: "self-managed",
+				},
+			}),
+		);
+	});
+
+	it("points an existing platform identity application to a new application because its entry cannot change", () => {
+		const onSubmit = vi.fn();
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			status: "rejected",
+			decision: {
+				decidedAt: "2026-09-02T00:00:00.000Z",
+				reason: "请调整后重提",
+			},
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/release:v1",
+				interactionMode: "self-managed",
+				identityResponsibility: "platform-managed",
+			},
+			configuration: {
+				...pendingApplication.configuration,
+				modelOptions: [],
+				defaultModelOptionId: null,
+				defaultReasoningLevel: null,
+			},
+		});
+		render(
+			<AgentApplicationForm
+				action="resubmit"
+				application={application}
+				mode="update"
+				onSubmit={onSubmit}
+				serverError={{ code: "ACTION_UNAVAILABLE" }}
+				submitting={false}
+			/>,
+		);
+		const identity = screen.getByRole("combobox", { name: "入口身份校验" });
+		expect(identity.getAttribute("aria-invalid")).toBe("true");
+		expect(
+			document.getElementById(identity.getAttribute("aria-describedby") ?? "")
+				?.textContent,
+		).toBe(
+			"当前部署未启用平台身份入口。已有申请不能更改入口身份校验，请新建申请并选择「由自有入口校验」。",
+		);
+		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("recomputes duplicate environment errors after row removal and edits", async () => {
 		const onSubmit = vi.fn();
 		render(

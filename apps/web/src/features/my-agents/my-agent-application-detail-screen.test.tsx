@@ -560,6 +560,32 @@ describe("MyAgentApplicationDetailScreen design alignment (M-11)", () => {
 		},
 	);
 
+	// #3034：失败类别由路由按服务端读取结果提供，只在创建失败时出现在进度区。
+	it.each([
+		["creation_failed", true],
+		["creating", false],
+		["available", false],
+	] as const)(
+		"shows the server creation failure notice for %s: %s",
+		async (status, shown) => {
+			const application = AgentApplicationProjectionV2Schema.parse({
+				...pendingApplication,
+				agentId: "agent-progress",
+				status,
+				decision: { decidedAt: "2026-09-03T10:00:00Z", reason: null },
+			});
+			await renderWithMyAgentsRouter(
+				<MyAgentApplicationDetailScreen
+					creationFailure={<p data-testid="creation-failure">失败原因</p>}
+					onWithdraw={vi.fn()}
+					state={{ kind: "ready", application }}
+					withdrawing={false}
+				/>,
+			);
+			expect(screen.queryByTestId("creation-failure") !== null).toBe(shown);
+		},
+	);
+
 	it.each(["rejected", "withdrawn"] as const)(
 		"does not wait for or fail creation when the application is %s",
 		async (status) => {

@@ -1505,6 +1505,73 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(f.state?.candidate.deployment).toBeNull();
 		expect(f.resources.size).toBe(0);
 	});
+	describe("platform identity entry deployment capability (#3034)", () => {
+		function platformManagedConfiguration() {
+			const configuration = configurationFixture();
+			if (configuration.source.kind !== "custom") throw new Error();
+			return {
+				...configuration,
+				source: {
+					...configuration.source,
+					interactionMode: "self-managed" as const,
+					identityResponsibility: "platform-managed" as const,
+				},
+			};
+		}
+
+		it("fails a platform-managed entry at once when the deployment has no platform-auth integration", async () => {
+			const registry = workloadRegistryFixture();
+			const admit = vi.fn(registry.admit);
+			const f = fixture(
+				{
+					registry: { admit },
+					policy: { ...workloadTestPolicy, platformAuthAnnotations: {} },
+				},
+				{ configuration: platformManagedConfiguration() },
+			);
+			await f.tick(2);
+			// 第一次 preflight 就进入失败处理：不消耗重试预算，也不访问 Registry 或 Kubernetes。
+			expect(f.state).toMatchObject({
+				phase: "cleaning",
+				failureCode: "reconciliation_failed",
+				lastFailure: {
+					schemaVersion: 1,
+					reason: "kubernetes_policy",
+					attempts: 1,
+				},
+			});
+			expect(admit).not.toHaveBeenCalled();
+			expect(f.writes).toHaveLength(0);
+			expect(f.resources.size).toBe(0);
+			await f.tick(1);
+			expect(f.state).toMatchObject({
+				phase: "failed",
+				lastFailure: { reason: "kubernetes_policy" },
+			});
+			expect(f.resources.size).toBe(0);
+		});
+
+		it("keeps publishing the platform-auth route when the deployment provides the integration", async () => {
+			const f = fixture(
+				{ registry: workloadRegistryFixture() },
+				{ configuration: platformManagedConfiguration() },
+			);
+			await f.tick(8);
+			expect(f.state?.phase).toBe("ready");
+			expect(f.state?.lastFailure).toBeUndefined();
+			const deployment = validateAgentWorkloadDesiredV1(
+				f.state?.candidate.deployment,
+			);
+			expect(deployment.route.exposure).toBe("platform-auth");
+			const route = await f.client.read<V1Ingress>(
+				"Ingress",
+				deployment.route.name,
+			);
+			expect(route?.metadata?.annotations).toMatchObject(
+				workloadTestPolicy.platformAuthAnnotations,
+			);
+		});
+	});
 	it("bounds registry admission and ignores a successful result after the deadline", async () => {
 		vi.useFakeTimers();
 		const gate = Promise.withResolvers<void>();

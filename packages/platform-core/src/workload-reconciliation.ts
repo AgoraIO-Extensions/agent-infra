@@ -791,8 +791,13 @@ export function createWorkloadReconciliationV1(dependencies: {
 						return next;
 					};
 					if (state.phase === "preflight") {
+						// 部署策略不匹配与 preflight 拒绝同为确定性结果（#3034）：立即进入既有失败
+						// 处理，不再消耗重试预算；临时异常仍在预算内重试。
+						const permanent =
+							error instanceof WorkloadPreflightRejectedErrorV1 ||
+							reason === "kubernetes_policy";
 						if (
-							!(error instanceof WorkloadPreflightRejectedErrorV1) &&
+							!permanent &&
 							state.attempts + 1 < maximumAttempts &&
 							!authorizationTerminal
 						)

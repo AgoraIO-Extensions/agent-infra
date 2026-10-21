@@ -935,7 +935,11 @@ describe("production deployment admissions", () => {
 
 	it("preserves self-managed identity responsibility and rejects interaction-mode mismatch", async () => {
 		const { input, authorize } = fixture("self-managed", true);
-		const admissions = createDeploymentAdmissionsV1(input);
+		// 平台身份入口只在部署提供时可用（#3034）；这里覆盖已提供的部署，行为保持不变。
+		const admissions = createDeploymentAdmissionsV1({
+			...input,
+			platformIdentityEntryAvailable: true,
+		});
 		const imageReference = input.templates[0]?.imageReference ?? "";
 		expect(
 			await admissions.imageAdmission.admitImage({
@@ -968,6 +972,99 @@ describe("production deployment admissions", () => {
 			expect(
 				await admissions.imageAdmission.admitImage({ ...request, requested }),
 			).toMatchObject({ status: "rejected" });
+	});
+
+	describe("platform identity entry deployment capability (#3034)", () => {
+		it.each([
+			["omitted", undefined],
+			["false", false],
+		] as const)(
+			"rejects a platform-managed self-managed entry before the registry when the capability is %s",
+			async (_label, platformIdentityEntryAvailable) => {
+				const { input, authorize, fetch } = fixture("self-managed");
+				const admissions = createDeploymentAdmissionsV1({
+					...input,
+					...(platformIdentityEntryAvailable === undefined
+						? {}
+						: { platformIdentityEntryAvailable }),
+				});
+				const imageReference = input.templates[0]?.imageReference ?? "";
+				expect(
+					await admissions.imageAdmission.admitImage({
+						...request,
+						requested: {
+							kind: "custom",
+							imageReference,
+							interactionMode: "self-managed",
+							identityResponsibility: "platform-managed",
+						},
+					}),
+				).toEqual({
+					schemaVersion: 1,
+					agentId: request.agentId,
+					requestId: request.requestId,
+					status: "rejected",
+					reason: "platform_identity_entry_unavailable",
+				});
+				expect(fetch).not.toHaveBeenCalled();
+				expect(authorize).not.toHaveBeenCalled();
+			},
+		);
+
+		it("still admits a self-validated entry and other sources without the capability", async () => {
+			const { input } = fixture("self-managed");
+			const admissions = createDeploymentAdmissionsV1(input);
+			const imageReference = input.templates[0]?.imageReference ?? "";
+			expect(
+				await admissions.imageAdmission.admitImage({
+					...request,
+					requested: {
+						kind: "custom",
+						imageReference,
+						interactionMode: "self-managed",
+						identityResponsibility: "self-managed",
+					},
+				}),
+			).toMatchObject({
+				status: "admitted",
+				source: {
+					interactionMode: "self-managed",
+					identityResponsibility: "self-managed",
+				},
+			});
+		});
+
+		it("still requires a current identity before reporting the capability", async () => {
+			const { input, fetch } = fixture("self-managed");
+			const admissions = createDeploymentAdmissionsV1({
+				...input,
+				currentIdentity: vi.fn(async () => {
+					throw new Error("identity unavailable");
+				}),
+			});
+			await expect(
+				admissions.imageAdmission.admitImage({
+					...request,
+					requested: {
+						kind: "custom",
+						imageReference: input.templates[0]?.imageReference ?? "",
+						interactionMode: "self-managed",
+						identityResponsibility: "platform-managed",
+					},
+				}),
+			).rejects.toThrow("PLATFORM_DEPLOYMENT_IDENTITY_UNAVAILABLE");
+			expect(fetch).not.toHaveBeenCalled();
+		});
+
+		it("rejects a non-boolean capability as invalid deployment configuration", () => {
+			const { input } = fixture("self-managed");
+			expect(() =>
+				createDeploymentAdmissionsV1({
+					...input,
+					platformIdentityEntryAvailable: "true" as never,
+				}),
+			).toThrow("PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID");
+		});
 	});
 
 	it("rejects absent templates, corrupt OCI content, registry denial and unsupported Connection claims", async () => {

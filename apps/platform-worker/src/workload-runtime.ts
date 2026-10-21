@@ -48,7 +48,10 @@ import {
 } from "@agent-infra/platform-core";
 import type { V1StatefulSet } from "@kubernetes/client-node";
 import { parseAllDocuments } from "yaml";
-import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
+import {
+	type WorkerKubernetesClientV1,
+	WorkloadKubernetesError,
+} from "./kubernetes-client.js";
 import {
 	createKubernetesRuntimeAdapterV1,
 	type KubernetesWorkloadPolicyV1,
@@ -1095,6 +1098,15 @@ export function createWorkloadRuntimeV1(
 		},
 		async preflight(input, state) {
 			const configuration = state.candidate.configuration;
+			// 平台身份入口需要部署提供可信的路由集成；没有时是确定性的策略拒绝（#3034）。
+			// 在 Registry 准入、模型投影和任何 Kubernetes 写入之前结束，不消耗重试预算。
+			if (
+				configuration.source.kind === "custom" &&
+				configuration.source.interactionMode === "self-managed" &&
+				configuration.source.identityResponsibility === "platform-managed" &&
+				Object.keys(options.policy.platformAuthAnnotations).length === 0
+			)
+				throw new WorkloadKubernetesError("policy");
 			const secretBindings = bindingsFor(state, input, candidateKeyless(state));
 			validateSecretDataKeys(configuration, secretBindings);
 			if ("manifest" in configuration.source) {

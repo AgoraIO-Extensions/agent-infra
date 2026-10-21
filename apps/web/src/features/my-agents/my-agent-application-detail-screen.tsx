@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, Settings2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -41,6 +41,8 @@ type MyAgentApplicationDetailScreenProps = {
 	withdrawing: boolean;
 	/** 模板显示名（部署配置）；未提供或读不到时显示「标准模板」（F-02）。 */
 	templateName?: TemplateNameLookup;
+	/** 创建失败类别（#3034）：由路由按服务端读取结果提供，只在创建失败时展示。 */
+	creationFailure?: ReactNode;
 };
 
 type ApplicationStatus = AgentApplicationProjectionV2["status"];
@@ -109,6 +111,7 @@ export function MyAgentApplicationDetailScreen({
 	withdrawalResult,
 	withdrawing,
 	templateName,
+	creationFailure,
 }: MyAgentApplicationDetailScreenProps) {
 	const [confirmationFor, setConfirmationFor] = useState<string | null>(null);
 	const [withdrawalLatched, setWithdrawalLatched] = useState(false);
@@ -312,6 +315,7 @@ export function MyAgentApplicationDetailScreen({
 							<AlertDescription>{application.decision.reason}</AlertDescription>
 						</Alert>
 					) : null}
+					{application.status === "creation_failed" ? creationFailure : null}
 				</section>
 				<aside className="application-detail-aside">
 					<section className="form-aside" aria-label="申请配置摘要">

@@ -104,6 +104,12 @@ export interface DeploymentAdmissionInputV1 {
 	 */
 	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
 	readonly multiServiceResourceCap?: MultiServiceResourceCapV1;
+	/**
+	 * 部署是否提供平台身份入口（自有交互入口由平台校验身份，#3034）。由部署装配按是否
+	 * 配置 Auth Gateway 推导，必须与 Worker 的 `platformAuthAnnotations` 一致；省略时视为
+	 * 未提供，相应申请在镜像准入前失败关闭。
+	 */
+	readonly platformIdentityEntryAvailable?: boolean;
 }
 
 function revision(prefix: string, value: unknown) {
@@ -364,7 +370,9 @@ export function createDeploymentAdmissionsV1(
 				typeof input.currentApiPrincipal !== "function") ||
 			(input.currentIdentity !== undefined &&
 				input.currentApiPrincipal !== undefined) ||
-			typeof input.modelCatalog.load !== "function"
+			typeof input.modelCatalog.load !== "function" ||
+			(input.platformIdentityEntryAvailable !== undefined &&
+				typeof input.platformIdentityEntryAvailable !== "boolean")
 		)
 			throw new Error();
 		templates = snapshotTemplates(input.templates);
@@ -465,6 +473,8 @@ export function createDeploymentAdmissionsV1(
 	const currentIdentity = input.currentIdentity;
 	const currentApiPrincipal = input.currentApiPrincipal;
 	const imageRepository = input.imageRepository;
+	const platformIdentityEntryAvailable =
+		input.platformIdentityEntryAvailable === true;
 	function codexModelProfilesFor(
 		source: AgentConfigurationSourceV1 | undefined,
 	): readonly CodexModelProfileV1[] | null | undefined {
@@ -668,6 +678,15 @@ export function createDeploymentAdmissionsV1(
 						},
 					};
 				}
+				// 部署没有平台身份入口时，「自有交互入口 + 平台校验」不能发布对应路由：在调用
+				// Registry 之前明确拒绝，不创建申请，也不进入审批队列（#3034）。
+				if (
+					selection.kind === "custom" &&
+					selection.interactionMode === "self-managed" &&
+					selection.identityResponsibility === "platform-managed" &&
+					!platformIdentityEntryAvailable
+				)
+					return { ...denied, reason: "platform_identity_entry_unavailable" };
 				const template =
 					selection.kind === "standard"
 						? templates.find((item) => item.templateId === selection.templateId)

@@ -386,6 +386,72 @@ describe("durable Workload reconciliation", () => {
 		expect(f.state?.phase).toBe("cleaning");
 		expect(f.runtime.preflight).toHaveBeenCalledOnce();
 	});
+	it("rejects a deployment policy mismatch in preflight without spending the retry budget (#3034)", async () => {
+		const failures: WorkloadStepFailureV1[] = [];
+		const f = fixture(undefined, (failure) => failures.push(failure));
+		vi.mocked(f.runtime.preflight).mockRejectedValue({
+			code: "policy",
+			details: {},
+		});
+		await f.tick(2);
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			failureCode: "reconciliation_failed",
+			lastFailure: {
+				schemaVersion: 1,
+				reason: "kubernetes_policy",
+				attempts: 1,
+			},
+		});
+		expect(f.runtime.preflight).toHaveBeenCalledOnce();
+		expect(f.runtime.closeRoute).not.toHaveBeenCalled();
+		expect(f.runtime.apply).not.toHaveBeenCalled();
+		expect(failures.map(({ phase, terminal }) => [phase, terminal])).toEqual([
+			["preflight", true],
+		]);
+	});
+	it("keeps the verified revision when an upgrade preflight hits a deployment policy mismatch (#3034)", async () => {
+		const f = fixture();
+		await f.tick(7);
+		expect(f.state?.phase).toBe("ready");
+		f.upgrade("image-b");
+		vi.mocked(f.runtime.closeRoute).mockClear();
+		vi.mocked(f.runtime.apply).mockClear();
+		vi.mocked(f.runtime.preflight).mockRejectedValue({
+			code: "policy",
+			details: {},
+		});
+		await f.tick(2);
+		expect(f.state).toMatchObject({
+			phase: "rejected",
+			failureCode: "reconciliation_failed",
+			lastFailure: { reason: "kubernetes_policy", attempts: 1 },
+			candidate: { configuration: { source: { imageDigest: "image-a" } } },
+		});
+		expect(f.runtime.closeRoute).not.toHaveBeenCalled();
+		expect(f.runtime.apply).not.toHaveBeenCalled();
+	});
+	it("keeps retrying a deployment policy error after preflight within the budget (#3034)", async () => {
+		const f = fixture();
+		await f.tick(3);
+		expect(f.state?.phase).toBe("applying");
+		vi.mocked(f.runtime.apply).mockRejectedValue({
+			code: "policy",
+			details: {},
+		});
+		await f.tick(2);
+		expect(f.state).toMatchObject({
+			phase: "applying",
+			attempts: 2,
+			lastFailure: { reason: "kubernetes_policy", attempts: 2 },
+		});
+		await f.tick();
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			failureCode: "reconciliation_failed",
+			lastFailure: { reason: "kubernetes_policy", attempts: 3 },
+		});
+	});
 	describe("swallowed step exceptions are observable (#2532)", () => {
 		it("persists bounded failure details and terminates repeated Kubernetes forbidden errors", async () => {
 			const failures: WorkloadStepFailureV1[] = [];
