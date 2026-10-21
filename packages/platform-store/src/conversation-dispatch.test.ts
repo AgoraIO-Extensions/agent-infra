@@ -3877,6 +3877,59 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			}
 		});
 
+		it("settles the blocked Execution's pending supplement and stop in the same finish", async () => {
+			const work = await seed();
+			const { store, decision } = await claim(work.itemId, "blocked-worker");
+			try {
+				if (decision.outcome !== "claimed")
+					throw new Error(`Expected claim: ${decision.outcome}`);
+				const owned = decision.claim;
+				expect(
+					await store.prepareRuntimeDispatch({
+						claim: owned,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				// 被拒绝的 Turn 投递期间到达的补充指令与 stop。
+				const messageId = await seedSupplement(work);
+				await seedStop(work);
+				expect(
+					await store.finish({
+						claim: owned,
+						status: "failed",
+						transition: blockedTransition,
+						errorCode: "RUNTIME_SESSION_BLOCKED",
+					}),
+				).toBe(true);
+				const outboxes = await client<{ id: string; status: string }[]>`
+					select id, status from platform.outbox_items
+					where scope_id = ${work.conversationId}
+						and operation in ('conversation.turn.supplement.v1', 'conversation.turn.stop.v1')
+					order by id
+				`;
+				expect(outboxes).toEqual([
+					{
+						id: `conversation:stop:${work.stopRequestId}`,
+						status: "succeeded",
+					},
+					{ id: `conversation:supplement:${messageId}`, status: "failed" },
+				]);
+				const [message] = await client<
+					{ status: string; failure_code: string | null }[]
+				>`select status, failure_code from platform.conversation_messages where message_id = ${messageId}`;
+				expect(message).toEqual({
+					status: "failed",
+					failure_code: "ORIGINAL_RESPONSE_NOT_STARTED",
+				});
+				const [stop] = await client<{ status: string }[]>`
+					select status from platform.conversation_stops where execution_id = ${work.executionId}
+				`;
+				expect(stop?.status).toBe("completed");
+			} finally {
+				await store.close();
+			}
+		});
+
 		it("converges a persisted V2 blocked rejection through Core without isolation", async () => {
 			const work = await seed();
 			const sibling = await seed();
