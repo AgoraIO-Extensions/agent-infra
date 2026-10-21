@@ -268,10 +268,14 @@ const workloadInput = {
 };
 
 // Both the Pod file and Runtime HTTP assertion consume this captured source.
-const connectionConsumerSnapshot = createRuntimeConnectionConsumerSnapshotV1(
-	connectionConsumerProfile,
-	connectionConsumerApproval,
-);
+const perAgentConsumerSelection =
+	connectionConsumerProfilesByAgent !== undefined;
+const connectionConsumerSnapshot = perAgentConsumerSelection
+	? undefined
+	: createRuntimeConnectionConsumerSnapshotV1(
+			connectionConsumerProfile,
+			connectionConsumerApproval,
+		);
 const connectionConsumerSnapshotsByAgent = connectionConsumerProfilesByAgent
 	? Object.fromEntries(
 			Object.entries(connectionConsumerProfilesByAgent).map(
@@ -293,8 +297,6 @@ if (Object.hasOwn(workloadInput.policy, "connectionConsumerSnapshot"))
 	throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 if (Object.hasOwn(workloadInput.policy, "connectionInstallationRevision"))
 	throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
-const perAgentConsumerSelection =
-	connectionConsumerProfilesByAgent !== undefined;
 if (
 	perAgentConsumerSelection !==
 	(connectionInstallationSuppliesByAgent !== undefined)
