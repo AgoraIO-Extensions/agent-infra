@@ -7,7 +7,7 @@ import {
 	within,
 } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Button } from "./button.js";
 import {
 	Dialog,
@@ -22,6 +22,10 @@ import {
 } from "./dialog.js";
 
 afterEach(cleanup);
+// 后注册的 afterEach 先执行：先换回真实定时器，再由 cleanup 卸载。
+afterEach(() => {
+	vi.useRealTimers();
+});
 
 function Example({
 	showCloseButton,
@@ -47,6 +51,57 @@ function Example({
 			</DialogContent>
 		</Dialog>
 	);
+}
+
+/**
+ * 页面标题与弹窗分两个根渲染：卸载弹窗（连同触发按钮）后页面标题仍在，焦点落到 body 时
+ * 仍在看护的话会被移到标题上。弹窗打开后改用假定时器，再点「取消」关闭，此时看护刚开始、
+ * 它的定时器都还挂起。
+ */
+async function closeDialogOverPage() {
+	render(
+		<main id="main-content" tabIndex={-1}>
+			<h1 tabIndex={-1}>审阅队列</h1>
+		</main>,
+	);
+	const view = render(<Example />);
+	const open = screen.getByRole("button", { name: "打开" });
+	open.focus();
+	fireEvent.click(open);
+	const dialog = await screen.findByRole("dialog");
+	vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+	fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+	expect(screen.queryByRole("dialog")).toBeNull();
+	return {
+		heading: screen.getByRole("heading", { name: "审阅队列" }),
+		unmountDialog: () => view.unmount(),
+	};
+}
+
+/** 模拟测试文件结束后 jsdom 环境卸载：从全局移除这些键，run 结束后原样恢复。 */
+function withoutBrowserGlobals(
+	keys: readonly ("document" | "location")[],
+	run: () => void,
+) {
+	const saved = keys.map(
+		(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+	);
+	for (const key of keys) Reflect.deleteProperty(globalThis, key);
+	try {
+		for (const key of keys) expect(key in globalThis).toBe(false);
+		run();
+	} finally {
+		for (const [key, descriptor] of saved)
+			if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+	}
+}
+
+/** 触发一次 DOM 改动并等观察器回调执行完。 */
+async function mutateDom() {
+	const node = document.createElement("p");
+	document.body.append(node);
+	await Promise.resolve();
+	node.remove();
 }
 
 describe("Dialog", () => {
@@ -220,6 +275,52 @@ describe("Dialog", () => {
 		} finally {
 			history.replaceState(null, "", before);
 		}
+	});
+
+	it("clears its pending timers and observer when the guard stops right after closing", async () => {
+		const { unmountDialog } = await closeDialogOverPage();
+		const pending = vi.getTimerCount();
+		// 用户按下指针：看护停止，它的 0ms 检查与 10 秒到期两个定时器一并清除。
+		fireEvent.pointerDown(document.body);
+		expect(vi.getTimerCount()).toBe(pending - 2);
+		// 触发按钮随后卸载、焦点落到 body：已停止的看护不再把焦点移到页面标题。
+		unmountDialog();
+		await mutateDom();
+		expect(() => vi.runAllTimers()).not.toThrow();
+		await mutateDom();
+		expect(document.activeElement).toBe(document.body);
+	});
+
+	it("ends the guard without reading location or document when the environment is torn down before its close check", async () => {
+		const { unmountDialog } = await closeDialogOverPage();
+		// 测试结束：cleanup 先卸载组件，jsdom 随后从全局移除 document 与 location，
+		// 挂起的 0ms 检查这时才执行（#3056 的 CI 失败）。
+		unmountDialog();
+		withoutBrowserGlobals(["document", "location"], () => {
+			expect(() => vi.advanceTimersByTime(0)).not.toThrow();
+		});
+		await Promise.resolve();
+		expect(document.activeElement).toBe(document.body);
+		// 看护已随环境卸载结束：之后的 DOM 改动与到期都不移动焦点。
+		await mutateDom();
+		expect(() => vi.runAllTimers()).not.toThrow();
+		expect(document.activeElement).toBe(document.body);
+	});
+
+	it("ends the guard without reading document when the environment is torn down before it expires", async () => {
+		const { heading, unmountDialog } = await closeDialogOverPage();
+		unmountDialog();
+		await Promise.resolve();
+		vi.advanceTimersByTime(0);
+		// 环境仍在时保持 #3048 的行为：触发按钮卸载后焦点移到页面标题。
+		expect(document.activeElement).toBe(heading);
+		withoutBrowserGlobals(["document", "location"], () => {
+			expect(() => vi.advanceTimersByTime(10_000)).not.toThrow();
+		});
+		// 看护已到期结束：焦点再落到 body 也不再移回标题。
+		heading.blur();
+		await mutateDom();
+		expect(document.activeElement).toBe(document.body);
 	});
 
 	it("uses the design surface without blur or animation on the backdrop", async () => {

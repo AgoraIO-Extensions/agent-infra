@@ -12,30 +12,64 @@ import { cn } from "@/lib/utils";
  * 读屏与 Tab 都从页首重来。看护期间焦点一旦落到 body，就移到页面标题（pageRecoveryTarget：
  * 主内容区 h1[tabindex]，否则 #main-content）。焦点被移到别处、用户按下指针、地址（含查询与
  * hash）变化、再次打开弹窗或 10 秒后停止看护；调用方传了 finalFocus 时不看护。
+ *
+ * 停止看护时一并清除它的两个定时器、观察器与监听（#3056）。测试文件结束后 jsdom 会从全局
+ * 移除 document 与 location，挂起的回调仍可能随后执行：回调开头先确认看护仍是当前这一次、
+ * 运行环境仍在，否则只结束看护，不再读取它们。
  */
-let closeFocusGuard: {
+type CloseFocusGuard = {
 	/** 开始看护时的完整地址：路由或查询参数变化后由页面自己的焦点管理接手。 */
 	address: string;
+	/** 注册监听的 document：停止时从这里移除，不读取全局 document。 */
+	document: Document;
 	observer: MutationObserver | null;
-	timer: ReturnType<typeof setTimeout>;
+	/** 关闭后下一轮任务检查一次焦点（Base UI 此时已归还焦点）。 */
+	settleTimer: ReturnType<typeof setTimeout> | undefined;
+	/** 10 秒后停止看护。 */
+	expiryTimer: ReturnType<typeof setTimeout> | undefined;
 	/** 关闭后第一次获得焦点的元素，通常是触发按钮。 */
 	restored: Element | null;
 	/** 看护移过去的页面标题，不算作用户移动焦点。 */
 	settled: HTMLElement | null;
-} | null = null;
+};
+
+let closeFocusGuard: CloseFocusGuard | null = null;
+
+function browserGlobalsAvailable() {
+	return typeof document !== "undefined" && typeof location !== "undefined";
+}
 
 function stopCloseFocusGuard() {
 	const current = closeFocusGuard;
 	if (!current) return;
 	closeFocusGuard = null;
 	current.observer?.disconnect();
-	clearTimeout(current.timer);
-	document.removeEventListener("focusin", onCloseFocusIn, true);
-	document.removeEventListener("pointerdown", stopCloseFocusGuard, true);
+	clearTimeout(current.settleTimer);
+	clearTimeout(current.expiryTimer);
+	current.document.removeEventListener("focusin", onCloseFocusIn, true);
+	current.document.removeEventListener(
+		"pointerdown",
+		stopCloseFocusGuard,
+		true,
+	);
+}
+
+/**
+ * 回调开头调用：看护已停止或已换成新的一次时返回 null；运行环境已卸载时停止看护并返回 null。
+ * expected 是回调所属的那一次看护，共用的事件监听不传。
+ */
+function liveCloseFocusGuard(expected?: CloseFocusGuard) {
+	const current = closeFocusGuard;
+	if (!current || (expected && current !== expected)) return null;
+	if (!browserGlobalsAvailable()) {
+		stopCloseFocusGuard();
+		return null;
+	}
+	return current;
 }
 
 function onCloseFocusIn(event: FocusEvent) {
-	const current = closeFocusGuard;
+	const current = liveCloseFocusGuard();
 	const target = event.target;
 	if (!current || !(target instanceof Element)) return;
 	if (target === document.body || target === current.settled) return;
@@ -43,8 +77,8 @@ function onCloseFocusIn(event: FocusEvent) {
 	else if (target !== current.restored) stopCloseFocusGuard();
 }
 
-function settleCloseFocus() {
-	const current = closeFocusGuard;
+function settleCloseFocus(guard: CloseFocusGuard) {
+	const current = liveCloseFocusGuard(guard);
 	if (!current) return;
 	if (current.address !== currentAddress()) {
 		stopCloseFocusGuard();
@@ -65,27 +99,34 @@ function currentAddress() {
 
 function startCloseFocusGuard() {
 	stopCloseFocusGuard();
-	const observer =
-		typeof MutationObserver === "undefined"
-			? null
-			: new MutationObserver(settleCloseFocus);
-	closeFocusGuard = {
+	if (!browserGlobalsAvailable()) return;
+	const guard: CloseFocusGuard = {
 		address: currentAddress(),
-		observer,
-		timer: setTimeout(stopCloseFocusGuard, 10_000),
+		document,
+		observer: null,
+		settleTimer: undefined,
+		expiryTimer: undefined,
 		restored: null,
 		settled: null,
 	};
-	// 弹窗卸载、触发按钮卸载或被禁用都会改动 DOM；每次改动后检查焦点是否落到 body。
-	observer?.observe(document.body, {
-		childList: true,
-		subtree: true,
-		attributes: true,
-		attributeFilter: ["disabled"],
-	});
+	closeFocusGuard = guard;
+	const settle = () => settleCloseFocus(guard);
+	if (typeof MutationObserver !== "undefined") {
+		guard.observer = new MutationObserver(settle);
+		// 弹窗卸载、触发按钮卸载或被禁用都会改动 DOM；每次改动后检查焦点是否落到 body。
+		guard.observer.observe(document.body, {
+			childList: true,
+			subtree: true,
+			attributes: true,
+			attributeFilter: ["disabled"],
+		});
+	}
 	document.addEventListener("focusin", onCloseFocusIn, true);
 	document.addEventListener("pointerdown", stopCloseFocusGuard, true);
-	setTimeout(settleCloseFocus, 0);
+	guard.settleTimer = setTimeout(settle, 0);
+	guard.expiryTimer = setTimeout(() => {
+		if (closeFocusGuard === guard) stopCloseFocusGuard();
+	}, 10_000);
 }
 
 // 设计 .modal-backdrop / .modal / .modal-head / .modal-body / .modal-actions。
