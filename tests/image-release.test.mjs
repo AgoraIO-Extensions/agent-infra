@@ -168,6 +168,14 @@ function build(
 }
 
 test("image build validates reproducibility and read-only non-root execution", async () => {
+	assert.match(
+		await readFile(
+			join(repositoryRoot, "apps/enterprise-directory-sync/Dockerfile"),
+			"utf8",
+		),
+		/LABEL org\.opencontainers\.image\.source="https:\/\/github\.com\/AgoraIO-Extensions\/agent-infra"/,
+		"Directory image must identify its source repository for GHCR package linking",
+	);
 	const directory = await mkdtemp(join(tmpdir(), "agent-infra-images-"));
 	const ignoredContextPath = resolve(
 		repositoryRoot,
