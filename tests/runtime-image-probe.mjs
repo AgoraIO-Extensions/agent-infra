@@ -36,6 +36,8 @@ const credentials = {
 	selected: `synthetic-${randomBytes(24).toString("hex")}`,
 };
 const serviceToken = `synthetic-${randomBytes(24).toString("hex")}`;
+// A Relay model absent from the pinned Codex catalog (ADR-0029).
+const unlistedModel = "synthetic-relay-model";
 // The in-cluster Service DNS the Worker uses; plaintext per ADR-0020.
 const runtimeServiceDnsName = `agent-${createHash("sha256").update("synthetic-agent").digest("hex").slice(0, 32)}.default.svc`;
 const failureMarker = `failure-${randomBytes(24).toString("hex")}`;
@@ -258,6 +260,13 @@ const model = createServer(async (request, response) => {
 			authenticated,
 			model: body.model,
 			effort: body.reasoning?.effort,
+			// ADR-0029：未内置的模型使用 Codex 默认指令，不能沿用 GPT 条目的身份声明。
+			instructions:
+				typeof body.instructions === "string" && body.instructions.length > 0
+					? /GPT-5/i.test(body.instructions)
+						? "claims-gpt-5"
+						: "default"
+					: "missing",
 			input: JSON.stringify(body.input).includes("synthetic-runtime-input"),
 			history: JSON.stringify(body.input).includes("synthetic runtime answer"),
 			closed: false,
@@ -617,7 +626,8 @@ function deployment(origin, directory) {
 				{
 					modelOptionId: "selected-option",
 					endpoint: `${origin}/approved-selected/v1`,
-					model: "gpt-5.6-sol",
+					// 不在固定 Codex 内置目录中：就绪检查不再按 model/list 拒绝（ADR-0029）。
+					model: unlistedModel,
 					reasoningLevels: ["high"],
 					credentialEnvironmentVariable:
 						"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_SELECTED",
@@ -1062,8 +1072,9 @@ async function runImageProbe() {
 			"native-execution-selection",
 			requests.length === 2 &&
 				requests[1].path === "/approved-selected/v1/responses" &&
-				requests[1].model === "gpt-5.6-sol" &&
+				requests[1].model === unlistedModel &&
 				requests[1].effort === "high" &&
+				requests[1].instructions === "default" &&
 				requests[1].authenticated,
 		);
 		const replayed = await request(
@@ -1151,7 +1162,7 @@ async function runImageProbe() {
 				requests.length === 3 &&
 				requests[2].history &&
 				requests[2].path === "/approved-selected/v1/responses" &&
-				requests[2].model === "gpt-5.6-sol" &&
+				requests[2].model === unlistedModel &&
 				requests[2].effort === "high" &&
 				requests[2].authenticated,
 		);
