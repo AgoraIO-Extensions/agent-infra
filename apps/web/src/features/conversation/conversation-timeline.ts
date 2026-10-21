@@ -141,6 +141,33 @@ function prependTimelineEvents(
 	return added.length === 0 ? current : [...added, ...current];
 }
 
+/**
+ * #3068：重新读取会话详情（命令受理、回复结束或 `timeline.reload`）时，首屏窗口可能比已显示的
+ * 时间线短。已加载的事件和新首屏都是连续的游标区间；两者按 eventId 有重叠时并集仍然连续，
+ * 保留重叠之前已加载的更早事件，以及新首屏之后已经收到的增量，已显示的回合不会消失。
+ * 没有重叠时无法确认中间没有缺口，按新首屏重建（工程 Spec §7.2）。
+ */
+function mergeHistoryEvents(
+	current: readonly ConversationTimelineEventV2[],
+	snapshot: readonly ConversationTimelineEventV2[],
+): {
+	readonly events: readonly ConversationTimelineEventV2[];
+	readonly keptEarlier: boolean;
+} {
+	const rebuilt = reduceTimelineEvents([], snapshot);
+	const snapshotIds = new Set(rebuilt.map((event) => event.eventId));
+	const overlap = current.findIndex((event) => snapshotIds.has(event.eventId));
+	if (overlap < 0) return { events: rebuilt, keptEarlier: false };
+	const earlier = current.slice(0, overlap);
+	const later = current
+		.slice(overlap)
+		.filter((event) => !snapshotIds.has(event.eventId));
+	return {
+		events: [...earlier, ...rebuilt, ...later],
+		keptEarlier: earlier.length > 0,
+	};
+}
+
 /** Read-only, per-page consumer. Abort on unmount or identity changes. A
  * transient stream end reconnects quickly a bounded number of times (#1606),
  * then keeps retrying slowly while the page is visible and at once on
@@ -313,6 +340,11 @@ export function createConversationTimeline({
 		}
 		const history = parsed.data;
 		const beforeCursor = history.eventWindow?.beforeCursor ?? null;
+		// 同一会话的重读与已加载事件合并；首次打开时 state 已是空时间线。
+		const merged = mergeHistoryEvents(
+			state.conversationId === session.conversationId ? state.events : [],
+			history.events,
+		);
 		session.cursor =
 			history.conversation.lastConversationCursor ??
 			history.events.at(-1)?.conversationCursor ??
@@ -327,11 +359,16 @@ export function createConversationTimeline({
 			...state,
 			status: "ready",
 			history,
-			events: reduceTimelineEvents([], history.events),
+			events: merged.events,
 			failure: null,
-			hasEarlier:
-				history.eventWindow?.hasEarlier === true && beforeCursor !== null,
-			beforeCursor,
+			// 保留了更早事件时，「加载更早内容」仍从其中最早的一页继续。
+			...(merged.keptEarlier
+				? {}
+				: {
+						hasEarlier:
+							history.eventWindow?.hasEarlier === true && beforeCursor !== null,
+						beforeCursor,
+					}),
 			earlierLoading: false,
 			earlierFailure: null,
 		});

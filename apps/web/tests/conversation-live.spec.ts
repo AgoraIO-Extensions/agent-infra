@@ -570,6 +570,324 @@ test("streams the thinking process above the reply and restores it folded after 
 	});
 });
 
+// #3068：新一轮流式输出期间重新读取时间线（补发窗口外的 timeline.reload、回复结束后的重读）时，
+// 服务端首屏窗口只剩最新一轮；前一轮的回复卡与思考过程不能从页面消失。
+test("keeps the previous reply and its thinking process while the next round streams", async ({
+	page,
+}) => {
+	const firstQuestion = "第一轮的问题";
+	const secondQuestion = "第二轮的问题";
+	const firstExecution = "execution-round-1";
+	const secondExecution = "execution-round-2";
+	type Fact =
+		| { type: "reasoning.delta"; text: string }
+		| { type: "text.delta"; text: string }
+		| { type: "execution.status"; status: "processing" | "completed" };
+	const persisted = (executionId: string, sequence: number, fact: Fact) => {
+		const position = (executionId === firstExecution ? 0 : 5) + sequence;
+		const base = {
+			kind: "event",
+			eventId: `round-event-${position}`,
+			conversationId,
+			executionId,
+			sequence,
+			conversationCursor: `round-cursor-${position}`,
+			occurredAt: timestamp,
+		};
+		if (fact.type === "reasoning.delta")
+			return ReasoningDeltaEventV2Schema.parse({
+				...base,
+				schemaVersion: 2,
+				type: fact.type,
+				payload: { kind: "raw", text: fact.text },
+			});
+		return PersistedConversationEventV2Schema.parse({
+			...base,
+			schemaVersion: 1,
+			type: fact.type,
+			payload:
+				fact.type === "text.delta"
+					? { text: fact.text }
+					: { status: fact.status },
+		});
+	};
+	const firstRound = [
+		persisted(firstExecution, 1, {
+			type: "execution.status",
+			status: "processing",
+		}),
+		persisted(firstExecution, 2, {
+			type: "reasoning.delta",
+			text: "先回顾题目，",
+		}),
+		persisted(firstExecution, 3, {
+			type: "reasoning.delta",
+			text: "再给出结论。",
+		}),
+		persisted(firstExecution, 4, {
+			type: "text.delta",
+			text: "第一轮的答案。",
+		}),
+		persisted(firstExecution, 5, {
+			type: "execution.status",
+			status: "completed",
+		}),
+	];
+	const secondRound = [
+		persisted(secondExecution, 1, {
+			type: "execution.status",
+			status: "processing",
+		}),
+		persisted(secondExecution, 2, {
+			type: "reasoning.delta",
+			text: "比较两种方案，",
+		}),
+		persisted(secondExecution, 3, {
+			type: "reasoning.delta",
+			text: "选择更稳妥的一种。",
+		}),
+		persisted(secondExecution, 4, {
+			type: "text.delta",
+			text: "第二轮的答案。",
+		}),
+		persisted(secondExecution, 5, {
+			type: "execution.status",
+			status: "completed",
+		}),
+	];
+	const message = (
+		messageId: string,
+		role: "user" | "assistant",
+		text: string,
+		status: "processing" | "completed",
+		executionId: string,
+		replyToMessageId: string | null = null,
+	) => ({
+		messageId,
+		role,
+		text,
+		status,
+		executionId,
+		replyToMessageId,
+		answerVersion: role === "assistant" ? 1 : null,
+		isCurrentAnswer: role === "assistant" ? true : null,
+		error: null,
+		createdAt: timestamp,
+	});
+	// initial：两轮都在首屏；streaming / completed：服务端窗口只含第 2 轮，第 1 轮的回答投影为空。
+	let phase: "initial" | "streaming" | "completed" = "initial";
+	await page.addInitScript(() => {
+		type FixtureWindow = Window & {
+			conversationStreams: () => number;
+			emitConversationFrame: (value: unknown, id?: string) => void;
+		};
+		const fixture = window as unknown as FixtureWindow;
+		const realFetch = window.fetch.bind(window);
+		const encoder = new TextEncoder();
+		let streams = 0;
+		let activeController:
+			| ReadableStreamDefaultController<Uint8Array>
+			| undefined;
+		fixture.conversationStreams = () => (activeController ? streams : 0);
+		fixture.emitConversationFrame = (value, id) => {
+			if (!activeController)
+				throw new Error("The conversation stream is not open");
+			activeController.enqueue(
+				encoder.encode(
+					`${id === undefined ? "" : `id: ${id}\n`}data: ${JSON.stringify(value)}\n\n`,
+				),
+			);
+		};
+		window.fetch = async (input, init) => {
+			const url = new URL(
+				typeof input === "string"
+					? input
+					: input instanceof Request
+						? input.url
+						: String(input),
+				window.location.href,
+			);
+			if (!url.pathname.endsWith("/events")) return realFetch(input, init);
+			let controllerForStream:
+				| ReadableStreamDefaultController<Uint8Array>
+				| undefined;
+			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controllerForStream = controller;
+					activeController = controller;
+					streams += 1;
+				},
+				cancel() {
+					if (activeController === controllerForStream)
+						activeController = undefined;
+				},
+			});
+			return new Response(body, {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+	});
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const request = route.request();
+		const path = new URL(request.url()).pathname;
+		if (isFileLimitsRequest(request.method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
+		if (path.endsWith("/session"))
+			return route.fulfill({ json: ownerSession() });
+		if (path === `/api/v2/agents/${agentId}`)
+			return route.fulfill({ json: activeAgent() });
+		if (path === `/api/v2/conversations/${conversationId}`) {
+			const events =
+				phase === "initial"
+					? [...firstRound, secondRound[0]]
+					: phase === "streaming"
+						? secondRound.slice(0, 3)
+						: secondRound;
+			return route.fulfill({
+				json: ConversationDetailProjectionV2Schema.parse({
+					schemaVersion: 2,
+					conversation: {
+						schemaVersion: 1,
+						conversationId,
+						agentId,
+						title: "多轮思考会话",
+						status: phase === "completed" ? "ready" : "active",
+						selectedModelOptionId: null,
+						selectedReasoningLevel: null,
+						lastConversationCursor: events.at(-1)?.conversationCursor ?? null,
+						createdAt: timestamp,
+						updatedAt: timestamp,
+					},
+					messages: [
+						message(
+							"question-1",
+							"user",
+							firstQuestion,
+							"completed",
+							firstExecution,
+						),
+						message(
+							"answer-1",
+							"assistant",
+							phase === "initial" ? "第一轮的答案。" : "",
+							"completed",
+							firstExecution,
+							"question-1",
+						),
+						message(
+							"question-2",
+							"user",
+							secondQuestion,
+							phase === "completed" ? "completed" : "processing",
+							secondExecution,
+						),
+						...(phase === "completed"
+							? [
+									message(
+										"answer-2",
+										"assistant",
+										"第二轮的答案。",
+										"completed",
+										secondExecution,
+										"question-2",
+									),
+								]
+							: []),
+					],
+					events,
+					eventWindow:
+						phase === "initial"
+							? { hasEarlier: false, beforeCursor: null }
+							: { hasEarlier: true, beforeCursor: "before-round-2" },
+				}),
+			});
+		}
+		await route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+
+	await page.goto(
+		`/agents/${agentId}/conversations?conversation=${conversationId}`,
+	);
+	const firstAnswer = page.getByText("第一轮的答案。", { exact: true });
+	const firstToggle = page.getByRole("button", {
+		name: `思考过程：${firstQuestion}`,
+	});
+	const secondToggle = page.getByRole("button", {
+		name: `思考过程：${secondQuestion}`,
+	});
+	const streamsOpened = () =>
+		page.evaluate(() =>
+			(
+				window as unknown as { conversationStreams: () => number }
+			).conversationStreams(),
+		);
+	const emit = (frame: unknown, id?: string) =>
+		page.evaluate(
+			([value, frameId]) =>
+				(
+					window as unknown as {
+						emitConversationFrame: (value: unknown, id?: string) => void;
+					}
+				).emitConversationFrame(value, frameId ?? undefined),
+			[frame, id ?? null] as const,
+		);
+	await expect(firstAnswer).toBeVisible();
+	await expect(firstToggle).toBeVisible();
+	await expect.poll(streamsOpened).toBeGreaterThan(0);
+	await emit(secondRound[1], secondRound[1].eventId);
+	await expect(secondToggle).toHaveAttribute("aria-expanded", "true");
+
+	// 一批思考增量超过补发窗口：服务端要求重新加载，新首屏只剩第 2 轮。
+	phase = "streaming";
+	const streamsBeforeReload = await streamsOpened();
+	await emit({
+		schemaVersion: 1,
+		kind: "control",
+		type: "timeline.reload",
+		reason: "cursor_expired",
+		resumeCursor: secondRound[2].conversationCursor,
+	});
+	await expect.poll(streamsOpened).toBeGreaterThan(streamsBeforeReload);
+	await emit(secondRound[3], secondRound[3].eventId);
+	await expect(page.getByText("第二轮的答案。", { exact: true })).toBeVisible();
+	await expect(firstAnswer).toBeVisible();
+	await expect(firstToggle).toBeVisible();
+	await expect(page.getByText("正文在更早的记录中")).toHaveCount(0);
+	await test.info().attach("conversation-previous-round-while-streaming", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+
+	// 回复结束后重读投影，窗口仍只含第 2 轮；两轮的回复卡与思考过程都还在。
+	phase = "completed";
+	await emit(secondRound[4], secondRound[4].eventId);
+	await expect(
+		page.getByRole("button", { name: `重新生成：${secondQuestion}` }),
+	).toBeVisible();
+	await expect(firstAnswer).toBeVisible();
+	await expect(page.getByText("第二轮的答案。", { exact: true })).toHaveCount(
+		1,
+	);
+	await expect(page.getByRole("button", { name: /^思考过程：/ })).toHaveCount(
+		2,
+	);
+	await expect(page.getByText("正文在更早的记录中")).toHaveCount(0);
+	await firstToggle.click();
+	await expect(firstToggle).toHaveAttribute("aria-expanded", "true");
+	await expect(
+		page.getByText("先回顾题目，再给出结论。", { exact: true }),
+	).toHaveCount(1);
+	await test.info().attach("conversation-previous-round-after-completion", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+});
+
 test("renders an authorization failure without retaining another subject's conversation", async ({
 	page,
 }) => {
