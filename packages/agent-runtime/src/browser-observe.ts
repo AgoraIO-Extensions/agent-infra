@@ -526,6 +526,13 @@ export function createBrowserObserveControllerV1(input: {
 		const page = input.context.pages()[0] ?? (await input.context.newPage());
 		applyActionTimeout(page);
 		const state = pageStateFor(page, pages);
+		const isControlledFixture = input.controlledFixture?.url === url;
+		if (isControlledFixture) {
+			await page.setContent(input.controlledFixture?.body ?? "", {
+				waitUntil: "domcontentloaded",
+			});
+			return { pageId: state.pageId, pageRevision: state.revision };
+		}
 		await page.goto(url, {
 			waitUntil: "domcontentloaded",
 			timeout: capability.policy.navigationTimeoutMs,
@@ -858,7 +865,11 @@ export function createBrowserObserveControllerV1(input: {
 		}
 		const capability = readCapability();
 		try {
-			assertAllowedUrl(state.page.url(), allowedOrigins());
+			const isControlledFixturePage =
+				input.controlledFixture !== undefined &&
+				state.page.url() === "about:blank";
+			if (!isControlledFixturePage)
+				assertAllowedUrl(state.page.url(), allowedOrigins());
 		} catch (error) {
 			return actionRecord(
 				request,

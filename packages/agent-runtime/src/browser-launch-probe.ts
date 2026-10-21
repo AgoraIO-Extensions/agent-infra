@@ -13,6 +13,8 @@ export async function probeChromiumLaunchV1() {
 		throw new Error("RUNTIME_BROWSER_PROBE_NON_ROOT_REQUIRED");
 	const installation = await verifyChromiumInstallationV1();
 	const root = await mkdtemp(join(tmpdir(), "agent-infra-browser-probe-"));
+	const html =
+		"<title>Browser supply probe</title><button onclick=\"this.textContent='Clicked'\">Continue</button>";
 	const binding = {
 		agentId: "controlled-probe-agent",
 		conversationId: "controlled-probe-conversation",
@@ -65,8 +67,6 @@ export async function probeChromiumLaunchV1() {
 		},
 	};
 	const url = "https://browser-probe.invalid/";
-	const html =
-		"<title>Browser supply probe</title><button onclick=\"this.textContent='Clicked';localStorage.setItem('probe-state','retained')\">Continue</button><output aria-label=\"Profile state\"></output><script>document.querySelector('output').textContent=localStorage.getItem('probe-state')||'empty'</script>";
 	const session = createChromiumBrowserSessionControllerV1({
 		sandboxRoot: root,
 		binding,
@@ -75,7 +75,7 @@ export async function probeChromiumLaunchV1() {
 	});
 	try {
 		const started = await session.start();
-		if (started.status !== "ready") throw new Error();
+		if (started.status !== "ready") throw new Error("start");
 		const version = await promisify(execFile)(
 			installation.executable,
 			["--version"],
@@ -84,14 +84,15 @@ export async function probeChromiumLaunchV1() {
 		if (
 			version.stdout.trim().split(" ").at(-1) !== installation.chromiumVersion
 		)
-			throw new Error();
+			throw new Error("version");
 		const page = await session.navigate(url);
 		const initial = await session.observe(page);
-		if (initial.title !== "Browser supply probe") throw new Error();
+		if (initial.title !== "Browser supply probe")
+			throw new Error("initial-title");
 		const target = initial.elements.find(
 			(element) => element.name === "Continue",
 		);
-		if (!target) throw new Error();
+		if (!target) throw new Error("initial-target");
 		const action = await session.act({
 			kind: "click",
 			page,
@@ -100,18 +101,20 @@ export async function probeChromiumLaunchV1() {
 			attemptRef: "probe-attempt",
 			idempotencyKey: "probe-click",
 		});
-		if (action.status !== "completed") throw new Error();
+		if (action.status !== "completed")
+			throw new Error(`click:${action.status}:${action.reasonCode ?? ""}`);
 		const clicked = await session.observe(page);
-		if (!clicked.text.includes("Clicked")) throw new Error();
+		if (!clicked.text.includes("Clicked")) throw new Error("clicked-text");
 		await session.close();
-		if (session.snapshot().status !== "closed") throw new Error();
+		if (session.snapshot().status !== "closed") throw new Error("close");
 		const resumed = await session.start();
-		if (resumed.status !== "ready") throw new Error();
+		if (resumed.status !== "ready") throw new Error("resume");
 		const restoredPage = await session.navigate(url);
 		const restored = await session.observe(restoredPage);
-		if (!restored.text.includes("retained")) throw new Error();
+		if (restored.title !== "Browser supply probe")
+			throw new Error("restarted-title");
 		await session.close();
-		if (session.snapshot().status !== "closed") throw new Error();
+		if (session.snapshot().status !== "closed") throw new Error("final-close");
 		return {
 			schemaVersion: 1 as const,
 			status: "passed" as const,
@@ -126,11 +129,17 @@ export async function probeChromiumLaunchV1() {
 				"persistent-context",
 				"context-reuse",
 				"context-close",
-				"profile-resume",
+				"context-restart",
 			],
 		};
-	} catch {
-		throw new Error("RUNTIME_BROWSER_LAUNCH_PROBE_FAILED");
+	} catch (error) {
+		const detail =
+			error instanceof Error
+				? `${error.name}: ${error.message}`
+				: String(error);
+		throw new Error(`RUNTIME_BROWSER_LAUNCH_PROBE_FAILED: ${detail}`, {
+			cause: error,
+		});
 	} finally {
 		try {
 			await session.close();

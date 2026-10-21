@@ -759,7 +759,8 @@ jobs:
           .ci-images/build.json "$RUNNER_TEMP/codex-runtime-probe.json"
 
       - name: Verify pinned Chromium supply and controlled launch
-        if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.web == 'true' }}
+        # Browser launch belongs to the Runtime image even when no Web source changed.
+        if: ${{ steps.images.outcome == 'success' && (needs.changes.outputs.web == 'true' || needs.changes.outputs.runtime == 'true') }}
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
