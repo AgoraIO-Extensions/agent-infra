@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import { RuntimeModelConfigurationV4Schema } from "@agent-infra/contracts/runtime";
+import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	decideSessionSandboxDrainObservationV1,
 	type SessionSandboxDeletionProgressV1,
@@ -55,6 +56,29 @@ export interface SessionSandboxRuntimeInputV1 {
 	readonly serviceToken: string;
 	/** Deployment-approved in-cluster Worker origin for native metadata callbacks. */
 	readonly nativeMetadataWorkerOrigin?: string;
+	/** Custom platform-adapter Secret references copied into this Session only. */
+	readonly custom?: {
+		readonly secretRefs: readonly AgentWorkloadDesiredV1["secretRefs"][number][];
+	};
+}
+
+export interface SessionSandboxCustomSecretMaterializationV1 {
+	/** Plaintext exists only during the Worker -> Session Secret write. */
+	readonly data: Readonly<Record<string, string>>;
+	readonly environmentNames: readonly string[];
+}
+
+const customSecretMaterializations = new WeakMap<
+	SessionSandboxAllocationV1,
+	SessionSandboxCustomSecretMaterializationV1
+>();
+
+/** Bind ephemeral custom Secret material to one in-memory allocation object. */
+export function bindSessionSandboxCustomSecretMaterializationV1(
+	allocation: SessionSandboxAllocationV1,
+	materialization: SessionSandboxCustomSecretMaterializationV1,
+): void {
+	customSecretMaterializations.set(allocation, materialization);
 }
 
 /**
@@ -372,13 +396,16 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 
 function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 	try {
+		const keys = Object.keys(runtime).sort().join(",");
 		if (
 			!runtime ||
 			typeof runtime !== "object" ||
 			![
 				"driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,serviceToken,workerId",
 				"driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,nativeMetadataWorkerOrigin,serviceToken,workerId",
-			].includes(Object.keys(runtime).sort().join(",")) ||
+				"custom,driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,serviceToken,workerId",
+				"custom,driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,nativeMetadataWorkerOrigin,serviceToken,workerId",
+			].includes(keys) ||
 			!["codex", "claude", "acp", "pi"].includes(runtime.driver) ||
 			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
 				(item) => typeof item === "string" && runtimeTextPattern.test(item),
@@ -393,6 +420,23 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 				!isNativeMetadataWorkerOriginV1(runtime.nativeMetadataWorkerOrigin))
 		)
 			throw new Error();
+		if (runtime.custom !== undefined) {
+			if (
+				!Array.isArray(runtime.custom.secretRefs) ||
+				runtime.custom.secretRefs.length === 0 ||
+				new Set(runtime.custom.secretRefs.map((ref) => ref.name)).size !==
+					runtime.custom.secretRefs.length ||
+				runtime.custom.secretRefs.some(
+					(ref) =>
+						ref.ownerType !== "agent-owner" ||
+						!ref.agentId ||
+						!ref.secretId ||
+						!ref.name,
+				)
+			)
+				throw new Error();
+			return;
+		}
 		// Keyless V4 only: static model credentials are never projected here.
 		const configuration = RuntimeModelConfigurationV4Schema.parse(
 			JSON.parse(runtime.modelConfiguration),
@@ -468,19 +512,15 @@ function validateNativeMetadataWorkerEgressV1(
 /** Runtime Host inputs; both credentials are references into this Sandbox's Secret. */
 function runtimeEnvironment(
 	allocation: SessionSandboxAllocationV1,
+	custom?: SessionSandboxCustomSecretMaterializationV1,
 ): V1EnvVar[] {
 	// 排空（drain-only）allocation 的 runtime 为 null：stopped 状态不创建资源，无需环境变量。
 	if (!allocation.runtime) return [];
 	const { runtime } = allocation;
-	const secretRef = (key: "model-config" | "token") => ({
+	const secretRef = (key: string) => ({
 		secretKeyRef: { name: allocation.secretName, key, optional: false },
 	});
-	return [
-		{
-			name: "AGENT_INFRA_RUNTIME_MODEL_CONFIG",
-			valueFrom: secretRef("model-config"),
-		},
-		{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtime.driver },
+	const platform = [
 		{ name: "AGENT_INFRA_RUNTIME_AGENT_ID", value: allocation.agentId },
 		{ name: "AGENT_INFRA_RUNTIME_WORKER_ID", value: runtime.workerId },
 		{
@@ -498,6 +538,36 @@ function runtimeEnvironment(
 			name: "AGENT_INFRA_RUNTIME_SERVICE_TOKEN",
 			valueFrom: secretRef("token"),
 		},
+	];
+	if (runtime.custom) {
+		return [
+			...platform,
+			...(runtime.nativeMetadataWorkerOrigin === undefined
+				? []
+				: [
+						{
+							name: "AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_ORIGIN",
+							value: runtime.nativeMetadataWorkerOrigin,
+						},
+						{
+							name: "AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN",
+							valueFrom: secretRef("token"),
+						},
+					]),
+			...(custom?.environmentNames ?? []).map((name) => ({
+				name,
+				valueFrom: secretRef(name),
+			})),
+		];
+	}
+	if (!runtime.modelConfiguration) throw new WorkloadKubernetesError("policy");
+	return [
+		{
+			name: "AGENT_INFRA_RUNTIME_MODEL_CONFIG",
+			valueFrom: secretRef("model-config"),
+		},
+		{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtime.driver },
+		...platform,
 		...(runtime.nativeMetadataWorkerOrigin === undefined
 			? []
 			: [
@@ -517,7 +587,28 @@ export function sessionSandboxResourcesV1(
 	allocation: SessionSandboxAllocationV1,
 ): SessionSandboxResourceSetV1 {
 	validateAllocation(allocation);
-	const runtimeEnv = runtimeEnvironment(allocation);
+	const custom = customSecretMaterializations.get(allocation);
+	if (
+		allocation.desiredState === "running" &&
+		allocation.runtime?.custom &&
+		!custom
+	)
+		throw new WorkloadKubernetesError("policy");
+	if (
+		custom &&
+		(Object.keys(custom.data).some(
+			(name) =>
+				!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ||
+				name.startsWith("AGENT_INFRA_") ||
+				["token", "model-config"].includes(name),
+		) ||
+			!custom.environmentNames.every((name) =>
+				Object.hasOwn(custom.data, name),
+			) ||
+			new Set(custom.environmentNames).size !== custom.environmentNames.length)
+	)
+		throw new WorkloadKubernetesError("policy");
+	const runtimeEnv = runtimeEnvironment(allocation, custom);
 	if (
 		allocation.desiredState === "running" &&
 		(allocation.connectionConsumerSnapshot === null ||
@@ -660,9 +751,21 @@ export function sessionSandboxResourcesV1(
 						token: Buffer.from(allocation.runtime.serviceToken).toString(
 							"base64",
 						),
-						"model-config": Buffer.from(
-							allocation.runtime.modelConfiguration,
-						).toString("base64"),
+						...(allocation.runtime.modelConfiguration
+							? {
+									"model-config": Buffer.from(
+										allocation.runtime.modelConfiguration,
+									).toString("base64"),
+								}
+							: {}),
+						...(custom
+							? Object.fromEntries(
+									Object.entries(custom.data).map(([name, value]) => [
+										name,
+										Buffer.from(value).toString("base64"),
+									]),
+								)
+							: {}),
 					},
 				}
 			: {}),

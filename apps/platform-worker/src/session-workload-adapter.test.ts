@@ -24,6 +24,7 @@ import type {
 } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import {
+	bindSessionSandboxCustomSecretMaterializationV1,
 	createSessionSandboxWorkloadAdapterV1,
 	hasSessionSandboxIdentityV1,
 	type SessionSandboxAllocationV1,
@@ -200,6 +201,68 @@ describe("Sandbox identity for resources created before the managed label (#2691
 			),
 		).toBe(false);
 	});
+});
+
+it("materializes custom Owner Secret values only into the Session Secret", () => {
+	const custom: SessionSandboxAllocationV1 = {
+		...allocation,
+		runtime: {
+			driver: "acp",
+			modelConfiguration: "",
+			workerId: "worker-a",
+			grantKeyId: "grant-a",
+			grantPublicKey: sessionSandboxRuntimeInputFixture({
+				agentId: "agent-a",
+				namespace: "workload-test",
+				sandboxId: "sandbox-a",
+			}).grantPublicKey,
+			grantIssuer: "issuer-a",
+			serviceToken: sessionSandboxRuntimeInputFixture({
+				agentId: "agent-a",
+				namespace: "workload-test",
+				sandboxId: "sandbox-a",
+			}).serviceToken,
+			custom: {
+				secretRefs: [
+					{
+						schemaVersion: 1,
+						ownerType: "agent-owner",
+						ownerId: "actor-a",
+						agentId: "agent-a",
+						secretId: "owner-secret",
+						secretVersion: 1,
+						configRevision: 1,
+						algorithmVersion: "aes-256-gcm:v1",
+						wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+						wrappingKeyVersion: "key-a",
+						name: "owner-secret-k8s",
+					},
+				],
+			},
+		},
+	};
+	bindSessionSandboxCustomSecretMaterializationV1(custom, {
+		data: { MODEL_API_KEY: "redacted-test-value" },
+		environmentNames: ["MODEL_API_KEY"],
+	});
+	const resources = sessionSandboxResourcesV1(custom);
+	const secret = resources.find(
+		(resource) => resource.kind === "Secret",
+	) as V1Secret;
+	const pod = resources.find((resource) => resource.kind === "Pod") as V1Pod;
+	expect(secret.data?.MODEL_API_KEY).toBe(
+		Buffer.from("redacted-test-value").toString("base64"),
+	);
+	expect(
+		pod.spec?.containers[0]?.env?.find(
+			(entry) => entry.name === "MODEL_API_KEY",
+		),
+	).toMatchObject({
+		valueFrom: {
+			secretKeyRef: { name: custom.secretName, key: "MODEL_API_KEY" },
+		},
+	});
+	expect(JSON.stringify(pod)).not.toContain("redacted-test-value");
 });
 
 describe("session sandbox workload adapter", () => {
