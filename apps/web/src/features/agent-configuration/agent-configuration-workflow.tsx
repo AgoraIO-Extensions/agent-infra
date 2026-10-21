@@ -35,6 +35,8 @@ type AgentConfigurationWorkflowProps = {
 	allowedSecretKeys?: readonly string[];
 	deploymentModelCandidates?: readonly KeylessModelCandidate[];
 	endpointNames?: KeylessEndpointNames;
+	/** 重新读取 Agent 详情；用户 API 授权变更后取最新管理修订号（#3070）。 */
+	onAgentChanged?: () => void;
 };
 
 function requestFailure(error: unknown) {
@@ -59,6 +61,7 @@ function AgentConfigurationWorkflowContent({
 	allowedSecretKeys,
 	deploymentModelCandidates,
 	endpointNames,
+	onAgentChanged,
 }: AgentConfigurationWorkflowProps) {
 	const session = useBrowserSession();
 	const submission = useAgentConfigurationSubmission(agent.agentId);
@@ -91,6 +94,8 @@ function AgentConfigurationWorkflowContent({
 		<AgentAuthorizationControls
 			agentId={agent.agentId}
 			enabled={isConfigurationOwner}
+			managementRevision={agent.managementRevision}
+			onChanged={onAgentChanged}
 		/>
 	);
 	const afterForm = (

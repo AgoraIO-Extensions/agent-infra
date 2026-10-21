@@ -487,6 +487,17 @@ export const AgentApplicationProjectionV2Schema =
 export const AgentProjectionV2Schema = AgentProjectionV1Schema.extend({
 	schemaVersion: z.literal(2),
 	configuration: AgentConfigurationProjectionV2Schema,
+	/**
+	 * Agent 当前管理修订号，只返回给该 Agent 的 Owner（#3070）。
+	 * 浏览器会话授予或撤销用户 API 使用权、管理权时，把它作为 expectedRevision 传入；
+	 * 非 Owner 的响应不含此字段。
+	 */
+	managementRevision: z
+		.number()
+		.int()
+		.min(0)
+		.max(Number.MAX_SAFE_INTEGER)
+		.optional(),
 });
 
 export const AgentLifecycleCommandRequestV1Schema = z.discriminatedUnion(

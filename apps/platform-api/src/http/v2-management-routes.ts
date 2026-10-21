@@ -309,10 +309,13 @@ async function projectAgent(
 	const parsed = AgentProjectionV1Schema.safeParse(value);
 	if (!parsed.success) fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 	const { actions: _actions, ...configuration } = parsed.data.configuration;
+	// 只有当前 Owner 能经浏览器会话授予或撤销用户 API 授权（工程 Spec），管理修订号也只给 Owner（#3070）。
+	const owner = agent.management.ownerIds.includes(identity.userId);
 	return AgentProjectionV2Schema.parse({
 		...parsed.data,
 		schemaVersion: 2,
 		configuration,
+		...(owner ? { managementRevision: agent.management.revision } : {}),
 	});
 }
 

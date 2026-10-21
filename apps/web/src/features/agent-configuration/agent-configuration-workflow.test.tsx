@@ -8,6 +8,7 @@ import {
 	fireEvent,
 	render as renderWithoutToast,
 	screen,
+	waitFor,
 	within,
 } from "@testing-library/react";
 import type { ReactElement } from "react";
@@ -15,7 +16,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAgentLifecycleCommand } from "../agent-administration/use-agent-lifecycle-command.js";
 import { useBrowserSession } from "../use-browser-session.js";
-import { grantApplicationManager } from "./agent-authorization.js";
+import {
+	grantApplicationManager,
+	grantUserApiUse,
+} from "./agent-authorization.js";
 import { AgentConfigurationWorkflow } from "./agent-configuration-workflow.js";
 import { ConfigurationTestProviders } from "./test-router-context.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
@@ -44,6 +48,7 @@ vi.mock("./agent-authorization.js", () => ({
 	revokeApplicationManager: vi.fn(),
 	revokeApplicationUse: vi.fn(),
 	revokeUserApiUse: vi.fn(),
+	grantUserApiUse: vi.fn(),
 }));
 
 const ownerSession = BrowserSessionProjectionV1Schema.parse({
@@ -216,6 +221,40 @@ describe("AgentConfigurationWorkflow", () => {
 		render(<AgentConfigurationWorkflow agent={firstAgent} />);
 
 		expect(screen.getByRole("region", { name: "Agent 授权控制" })).toBeTruthy();
+	});
+
+	it("grants user API use with the revision from the Owner's Agent detail and re-reads it (#3070)", async () => {
+		useSession(ownerSession);
+		vi.mocked(grantUserApiUse).mockResolvedValue({
+			schemaVersion: 1,
+			agentId: firstAgent.agentId,
+			userId: "user-2",
+			authorizationRevision: "use-2",
+			granted: true,
+			replayed: false,
+		});
+		const onAgentChanged = vi.fn();
+
+		render(
+			<AgentConfigurationWorkflow
+				agent={{ ...firstAgent, managementRevision: 5 }}
+				onAgentChanged={onAgentChanged}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /^用户$/ }));
+		fireEvent.change(screen.getByLabelText("用户 ID"), {
+			target: { value: "user-2" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "授权用户 API 使用" }));
+
+		await waitFor(() =>
+			expect(grantUserApiUse).toHaveBeenCalledWith(
+				firstAgent.agentId,
+				"user-2",
+				5,
+			),
+		);
+		await waitFor(() => expect(onAgentChanged).toHaveBeenCalledTimes(1));
 	});
 
 	it("keeps the employee unavailable view without any controls", () => {

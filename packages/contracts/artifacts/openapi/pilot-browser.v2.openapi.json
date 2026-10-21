@@ -2777,6 +2777,11 @@
               }
             ]
           },
+          "managementRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
           "managementStatus": {
             "enum": [
               "pending_approval",
@@ -3441,6 +3446,11 @@
                 "type": "null"
               }
             ]
+          },
+          "managementRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           },
           "managementStatus": {
             "enum": [

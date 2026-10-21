@@ -135,6 +135,7 @@ function AgentConfigurationRoute() {
 				allowedSecretKeys={template?.allowedSecretKeys}
 				deploymentModelCandidates={deploymentModelCandidates}
 				endpointNames={endpointNames}
+				onAgentChanged={() => void query.refetch()}
 			/>
 		</main>
 	);

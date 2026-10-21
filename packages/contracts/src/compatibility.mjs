@@ -2885,6 +2885,36 @@ function isAdministratorAgentDetailOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #3070 只给 Owner 读取的 Agent 投影增加可选的管理修订号（浏览器授予/撤销用户 API 授权的
+// expectedRevision）。字段必须可选、为 [0, MAX_SAFE_INTEGER] 的整数；其他字段与路径保持不变。
+const agentManagementRevisionProjection = {
+	maximum: Number.MAX_SAFE_INTEGER,
+	minimum: 0,
+	type: "integer",
+};
+function isAgentManagementRevisionOpenApiAddition(previous, current) {
+	const names = ["AgentProjectionV2", "AgentDetailProjectionV1"];
+	const normalized = structuredClone(current);
+	let changed = false;
+	for (const name of names) {
+		const before = previous.components?.schemas?.[name];
+		const schema = normalized.components?.schemas?.[name];
+		if (!before || !schema?.properties?.managementRevision) continue;
+		if (
+			before.properties?.managementRevision !== undefined ||
+			schema.required?.includes("managementRevision") ||
+			!sameValue(
+				schema.properties.managementRevision,
+				agentManagementRevisionProjection,
+			)
+		)
+			return false;
+		delete schema.properties.managementRevision;
+		changed = true;
+	}
+	return changed && sameValue(previous, normalized);
+}
+
 // #2911 新增带扫码可用性的企微机器人状态 V2 入口；V1 状态响应、配置会话响应和全部既有 schema 保持不变。
 // 新增路径与投影用写死的 SHA-256 固定，任何改动都会使门禁失败。
 function isWecomBotQrAvailabilityOpenApiAddition(previous, current) {
@@ -5434,7 +5464,8 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 				current,
 			) &&
 			!isFileLimitDeclarationOpenApiAddition(previous, current) &&
-			!isNativeCapabilityInvocationV2OpenApiAddition(previous, current)
+			!isNativeCapabilityInvocationV2OpenApiAddition(previous, current) &&
+			!isAgentManagementRevisionOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}
