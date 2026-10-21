@@ -93,6 +93,16 @@ function compare(current: string, previous = "base") {
 	return comparePaths(fixturePath(current), fixturePath(previous));
 }
 
+// #3070：Owner 读取的 Agent 投影新增可选管理修订号；还原历史契约时属于后加内容。
+function restorePreManagementRevisionContract(value: {
+	components: {
+		schemas: Record<string, { properties?: Record<string, unknown> }>;
+	};
+}) {
+	for (const name of ["AgentProjectionV2", "AgentDetailProjectionV1"])
+		delete value.components.schemas[name]?.properties?.managementRevision;
+}
+
 function restoreOldApiReadActions(input: unknown) {
 	if (!input || typeof input !== "object") return;
 	const value = input as Record<string, unknown>;
@@ -771,6 +781,63 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the exact optional Owner management revision (#3070)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const names = ["AgentProjectionV2", "AgentDetailProjectionV1"];
+		const previous = structuredClone(current);
+		for (const name of names)
+			delete previous.components.schemas[name].properties.managementRevision;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-management-revision-compat-"),
+		);
+		const before = resolve(directory, "previous.json");
+		const after = resolve(directory, "current.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const field = (value: typeof current, name: string) =>
+				value.components.schemas[name].properties.managementRevision;
+			for (const mutate of [
+				// 必须可选：老客户端与非 Owner 响应不带这个字段。
+				(value: typeof current) => {
+					value.components.schemas.AgentProjectionV2.required.push(
+						"managementRevision",
+					);
+				},
+				// 只能是有界的非负整数。
+				(value: typeof current) => {
+					field(value, "AgentProjectionV2").type = "string";
+				},
+				(value: typeof current) => {
+					field(value, "AgentDetailProjectionV1").minimum = -1;
+				},
+				(value: typeof current) => {
+					delete field(value, "AgentProjectionV2").maximum;
+				},
+				// 其他既有字段不能借这次改动变化。
+				(value: typeof current) => {
+					delete value.components.schemas.AgentProjectionV2.properties.name;
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the pinned Agent detail with Owner status (#2910)", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -781,6 +848,7 @@ describe("contract compatibility command", () => {
 				"utf8",
 			),
 		);
+		restorePreManagementRevisionContract(current);
 		const detailPath = "/api/v2/agents/{agentId}/detail";
 		const previous = structuredClone(current);
 		delete previous.paths[detailPath];
@@ -3801,6 +3869,7 @@ describe("contract compatibility command", () => {
 			),
 		);
 		restorePreAgentApiManagementContract(current);
+		restorePreManagementRevisionContract(current);
 		// Isolate lifecycle from later personal API/Relay Key and registration additions.
 		restorePreRelayKeyContract(current);
 		delete current.paths["/api/v2/agents/{agentId}/default-relay-key"];
