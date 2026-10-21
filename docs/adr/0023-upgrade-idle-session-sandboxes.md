@@ -2,7 +2,7 @@
 
 ## 状态
 
-已采纳，设计经 [#1581](https://github.com/AgoraIO-Extensions/agent-infra/pull/1581) 评审合入，实现归属 [#1523](https://github.com/AgoraIO-Extensions/agent-infra/issues/1523)。
+已采纳，设计经 [#1581](https://github.com/AgoraIO-Extensions/agent-infra/pull/1581) 评审合入，实现归属 [#1523](https://github.com/AgoraIO-Extensions/agent-infra/issues/1523)。policy 过期判定由 [ADR-0028](0028-separate-runtime-revision-from-configuration-revision.md) 修订：比较 Runtime 修订而不是配置修订，只改变渠道等非 Runtime 输入的配置修订不触发升级。
 
 ## 背景
 

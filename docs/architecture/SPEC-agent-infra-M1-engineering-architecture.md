@@ -546,7 +546,7 @@ Web 打开新会话先完成持久分配和实例准备，就绪前该会话只�
 修订验证通过不能覆盖实例失败，单个实例失败也不能将其他就绪会话判为不可用。
 
 Worker 只消费已提交分配，按 Sandbox 串行调谐并校验原 Agent 管理资格。资源名、selector、
-ownership、UID、配置/Workload 修订和租约/fence 必须绑定同一 Sandbox、Session 和代次；
+ownership、UID、Runtime/Workload 修订和租约/fence 必须绑定同一 Sandbox、Session 和代次；
 仅按 Agent ID 选择 Service、PVC 或清理集合不再足够。旧代次、外部同名对象和归属不明的资源
 均拒绝接管；部分创建失败从原分配幂等恢复，不删除其他 Sandbox。只有实例身份、路由、健康、
 Runtime readiness 和出站策略全部符合当前期望时才能投递业务；healthz 成功不单独证明隔离。
@@ -632,6 +632,8 @@ Sandbox 身份、ServiceAccount 或网络可达均不授予 Connection 权限。
 新的已验证 Workload 状态提交时，同一事务按 Agent → 会话 → Sandbox 分配 → 调谐 outbox 的
 加锁顺序，为 policy 已过期的空闲 Sandbox 写入升级意图：`resourceFence + 1`、目标保持运行，
 沿上文排空规则生成 `stopReceipt` 后，以新 policy 在同一 Sandbox ID、资源名和 PVC 上重新准备。
+policy 已过期指 Sandbox 记录的 Runtime 修订（§10.2）、管理 fence 或已验证部署（Workload revision、镜像
+Digest、资源配置）与当前不一致；只改变非 Runtime 输入的配置修订不使 policy 过期，也不阻止新 Sandbox 准备。
 存在 `processing`/`unknown` 执行、待确认代次 tombstone 或未完成生命周期的 Sandbox 不排空，
 在后续监测中空闲后再升级。`submitted`/`waiting` 任务尚未交给 Runtime（含证明未发送后退回的
 任务），不阻止排空或重新准备，保留原顺序并在就绪后投递；升级期间该会话的投递以
@@ -660,18 +662,18 @@ Platform DB 保存：
 
 - 管理状态与期望运行状态。
 - 模板或自定义镜像的不可变 Digest。
-- 配置修订号。
+- 配置修订号，以及每个配置修订对应的 Runtime 修订：最近一次改变 Runtime 输入的配置修订号。只改变渠道绑定等非 Runtime 输入时，推进配置修订并保留 Runtime 修订，不触发 Workload 调谐、Session Sandbox 升级或“更新中”。Workload、Secret 物化、Sandbox policy 与投递就绪比较 Runtime 修订；配置 CAS、渠道授权与配置展示比较配置修订。字段分类、比较归属与迁移见 [ADR-0028：区分 Runtime 修订与配置修订](../adr/0028-separate-runtime-revision-from-configuration-revision.md)。
 - 资源 Profile，以及 §10.1.1 的 Session/Sandbox 分配、代次、实例期望与恢复状态。
 - 交互模式、渠道和 Runtime 能力声明。
 - 普通 env、版本化 Secret 密文状态和 active/pending 配置修订。
 
 `platform-worker` 通过幂等调谐完成：
 
-1. 读取待处理修订号。
+1. 读取待处理的 Runtime 修订及其配置。
 2. 通过 ImageRegistryAdapter 解析并校验获准 OCI Digest、Runtime Manifest 和访问政策。
 3. 按已提交 Sandbox 分配生成或更新 §10.1.1 的六类资源和内部路由；实际使用 StatefulSet 时一并调谐并核验。自有入口与独立验证 Workload 保留原 StatefulSet 规则。
 4. 根据探针和 Workload 状态计算产品服务可用性。
-5. 写回已应用修订号、可用性和脱敏失败原因。
+5. 写回已应用的 Runtime 修订、可用性和脱敏失败原因。
 
 已提升的 Workload 仍按第 4 步周期复核。复核探测在期限内没有完成（超时或连接失败），或 Pod 以 5xx
 答复健康检查或 readiness（服务端暂时无法处理）时，连续未达阈值（默认 3 次，`platform-worker` 可配置）前
@@ -686,7 +688,7 @@ HTTP 请求只提交期望状态，不等待 Kubernetes 操作完成。
 Session Sandbox 的停止与资源缺失按 §10.1.1 核实，不能要求未使用的 StatefulSet 身份。
 既有自有入口与独立验证 Workload 的 Kubernetes 调谐结果在已停止、期望副本为 0、
 实际 StatefulSet 不存在且路由已关闭时返回
-`status: absent`，保留请求、Agent、配置修订、Workload 修订和 fence 的完整关联，固定
+`status: absent`，保留请求、Agent、Runtime 修订、Workload 修订和 fence 的完整关联，固定
 `replicas: 0`、`routeClosed: true`，不生成虚构的 Workload UID 或 generation。
 运行中期望不能接受该结果；资源期望身份、归属、fence 或路由关闭校验失败仍返回失败，
 不能以资源缺失掩盖拒绝或不完整操作。保留的持久卷不因该结果被删除。
@@ -697,9 +699,9 @@ Platform DB 的 outbox 保证状态变更和投递可恢复；outbox 写入事�
 
 - 多个 `platform-worker` 实例可以同时运行。
 - Agent 管理变更在原 Agent 锁内串行化；Sandbox 调谐按其分配与修订串行化，复核 Agent 当前资格，不以 Agent 全局运行实例代替会话隔离。
-- Agent Workload 调谐每个 Agent 同时只执行一个步骤：Worker 以会话级 advisory lock 取得该 Agent 的调谐权，连接断开即释放，其他 Worker 可接管。Agent 行锁只用于短事务：选择到期 Agent、读取管理状态、配置修订、Workload 状态与 Secret 绑定并认领 outbox 后立即提交。Kubernetes、Registry 与健康探针 I/O 在该事务之外执行，期间不持有 Agent 行锁或打开事务；Secret 激活与解密审计使用各自的短条件事务。
-- Workload 调谐写回在新的短事务中重新锁定 Agent，确认管理状态、配置修订和读取时的 Workload 状态均未变化后，才保存新状态、生命周期观测并完成 outbox。任一值变化即丢弃本步结果、交还 outbox 认领，并从已保存状态按新意图重新调谐；步骤内的 Kubernetes 操作因此必须幂等并携带所绑定的 fence。
-- 每次 apply 携带配置修订号，旧任务不能覆盖新状态。
+- Agent Workload 调谐每个 Agent 同时只执行一个步骤：Worker 以会话级 advisory lock 取得该 Agent 的调谐权，连接断开即释放，其他 Worker 可接管。Agent 行锁只用于短事务：选择到期 Agent、读取管理状态、Runtime 修订、Workload 状态与 Secret 绑定并认领 outbox 后立即提交。Kubernetes、Registry 与健康探针 I/O 在该事务之外执行，期间不持有 Agent 行锁或打开事务；Secret 激活与解密审计使用各自的短条件事务。
+- Workload 调谐写回在新的短事务中重新锁定 Agent，确认管理状态、Runtime 修订和读取时的 Workload 状态均未变化后，才保存新状态、生命周期观测并完成 outbox。任一值变化即丢弃本步结果、交还 outbox 认领，并从已保存状态按新意图重新调谐；只推进配置修订而 Runtime 修订不变时，本步结果仍有效。步骤内的 Kubernetes 操作因此必须幂等并携带所绑定的 fence。
+- 每次 apply 携带 Runtime 修订号，旧任务不能覆盖新状态。
 - 平台会话的 Kubernetes 资源使用稳定 label 和 annotation 关联 Agent、Session、Sandbox、代次与修订/fence。
 - M1 不创建 CRD；Platform DB 是产品期望状态的唯一来源。
 
@@ -767,8 +769,8 @@ Platform Secret 使用项目内置密文、部署加密公钥和 Worker-only 解
 - 普通 env 保存于 Platform DB。Agent 级 Secret `algorithmVersion = aes-256-gcm:v1` 要求每次加密（包括轮换和失败重试）都由 CSPRNG 新生成 256-bit DEK 和 96-bit nonce，同一 DEK 只允许加密一条记录且不得复用 nonce；`platform-api` 计算不泄露 DEK 的 SHA-256 fingerprint，并通过 Platform DB 唯一约束检测冲突，冲突时丢弃结果并重新生成 DEK/nonce。AEAD 使用 128-bit authentication tag 和版本化 canonical AAD；AAD 按固定顺序对 Secret ID、Owner 类型/ID、Agent ID、Secret 名称、Secret 版本和 `algorithmVersion` 做无歧义的长度前缀 UTF-8 编码。`platform-api` 用 DEK 加密明文，再用部署 active 公钥按 `wrappingAlgorithmVersion = rsa-oaep-sha256:v1` 和至少 3072-bit RSA key 封装 DEK。Platform DB 保存 DEK fingerprint、nonce、ciphertext、authentication tag、wrapped DEK、`algorithmVersion`、`wrappingAlgorithmVersion`、`wrappingKeyVersion` 和生命周期状态；任何字段或 AAD 绑定不一致都必须认证失败。
 - 部署只向 `platform-api` 注入版本化加密公钥，向 `platform-worker` 注入对应私钥 keyring；API 不持有可解密历史 Secret 的私钥。私钥不进入仓库、数据库、日志、错误、审计、模型上下文或 Agent Pod；缺少目标私钥、DEK 解封或 AEAD 认证失败、密文元数据非法时 fail closed。
 - 新 Secret 先保存为 pending 版本并产生配置修订。`platform-worker` 解封 DEK、受控解密，并以包含 Agent、Secret 版本和配置修订标识的不可变名称创建 Agent 专属 Kubernetes Secret；禁止原地修改已被任一 Workload 引用的 Secret，再调谐只引用该版本化名称的候选 Workload。
-- Secret record/reference 的 `configRevision` 表示该不可变 Secret 物化的来源配置修订，与后续 Workload 配置修订不同。后续配置保留完全相同的名称、Secret ID 和版本时，Core/Store 只能在 Agent 锁内从当前持久化配置派生已验证的 active 物化；Worker 沿用其原始 AAD、Kubernetes 名称和激活 fence，正常物化复用时不解密、复制、重新加密或重新激活；候选模型访问验证仅允许 10.7 的受控解密例外，物化丢失或 UID 变化时仅允许下述受控恢复。只有新引入或替换的引用才创建并激活新的 pending 版本。
-- Platform DB 与 Kubernetes 不共享事务。Worker 只有在观测到目标 Workload 已使用对应版本化 Secret、通过健康检查，且观测到的 Agent ID、Secret 版本、配置修订、Workload UID/generation 与当前 fence 全部匹配后，才能在同一条件更新中将 pending 版本提升为 active；任一值变化都拒绝激活并重新调谐。Worker 重启时幂等恢复 pending、applying、observed 和 active 中间状态。失败或状态不确定时旧 Workload 与旧 active Secret 继续有效，确认新版本生效、没有 Workload 引用旧名称且满足回滚保留策略前不得回收旧版本。
+- Secret record/reference 的 `configRevision` 表示该不可变 Secret 物化的来源配置修订，与后续 Workload 的 Runtime 修订不同。后续配置保留完全相同的名称、Secret ID 和版本时，Core/Store 只能在 Agent 锁内从当前 Runtime 修订的持久化配置派生已验证的 active 物化；Worker 沿用其原始 AAD、Kubernetes 名称和激活 fence，正常物化复用时不解密、复制、重新加密或重新激活；候选模型访问验证仅允许 10.7 的受控解密例外，物化丢失或 UID 变化时仅允许下述受控恢复。只有新引入或替换的引用才创建并激活新的 pending 版本。
+- Platform DB 与 Kubernetes 不共享事务。Worker 只有在观测到目标 Workload 已使用对应版本化 Secret、通过健康检查，且观测到的 Agent ID、Secret 版本、Runtime 修订、Workload UID/generation 与当前 fence 全部匹配后，才能在同一条件更新中将 pending 版本提升为 active；任一值变化都拒绝激活并重新调谐。Worker 重启时幂等恢复 pending、applying、observed 和 active 中间状态。失败或状态不确定时旧 Workload 与旧 active Secret 继续有效，确认新版本生效、没有 Workload 引用旧名称且满足回滚保留策略前不得回收旧版本。
 - Secret 只能替换，Owner/API 只能读取“已设置”、版本和状态。添加新 active 公钥/私钥版本后，由 Worker 执行幂等、可恢复的历史 Secret 重新加密或 DEK 重新封装；数据库不再引用旧 `wrappingKeyVersion` 后，部署才能移除旧私钥。
 - `platform-worker` 只把当前 Agent 运行所需的 active Secret 装配到其 Kubernetes Secret；值不进入 annotation、日志、错误或模型上下文，Agent Pod 不能访问解密私钥或其他 Agent Secret。
 - Worker 解封、解密、重新加密/封装和 keyVersion 退役都记录不含值的审计事件，至少关联 Secret ID、Agent ID、`wrappingKeyVersion`、操作、结果和 `traceId`；主体绑定或附加认证数据不匹配时拒绝并审计，不能返回明文。
@@ -1226,7 +1228,7 @@ Browser Capability 复用 Platform Conversation Contract、Session-owned Sandbox
 - `available` projection 必须绑定 Chromium/Playwright provenance、不可变镜像 Digest、操作类别、域/资源 policy 和 conformance receipt。`not_configured`、`probe_failed`、`unavailable`、`stale` 和版本不支持必须返回稳定脱敏错误码；调用方不能把缺少投影解释为可用。
 - `GET /internal/runtime/v1/browser-capability` 沿用 Runtime Host 的 Worker 服务身份认证，只接受 `schemaVersion` 和可选的 `minimumCapabilityVersion`。无效、重复或未知查询参数返回 `400/BROWSER_CAPABILITY_POLICY_DENIED`；高于实现版本的最低能力版本返回 `409/BROWSER_CAPABILITY_VERSION_UNSUPPORTED`。当前没有生产 Browser 装配时返回版本化 `not_configured`，不把固定二进制、受控镜像探针、客户端字段或环境开关解释为生产 `available`。
 - 生产接收路径复用 signed readiness binding：Worker 只从已准入 Runtime Manifest 注入可选 Browser declaration；RuntimeHost readiness 返回当前 Sandbox probe 的 provenance/receipt，并以同一 Agent、workload revision、fence 和 immutable image digest 交给 Host assembly。嵌套 declaration/evidence 必须按结构比较回读，不能按对象引用或调用方字段判断一致；任一 binding、声明、probe、receipt 或镜像不一致都 fail closed。
-- Platform/API projection 只读取 Worker 在 verified Workload reconciliation state 中持久化的 Browser projection；API 不直连 RuntimeHost，也不把客户端、Owner、env 或 prompt 字段作为能力来源。projection 必须随 Agent/configuration revision、Workload revision 和 fence 一起通过既有 presentation snapshot 校验，过期或缺失时返回明确不可用状态。
+- Platform/API projection 只读取 Worker 在 verified Workload reconciliation state 中持久化的 Browser projection；API 不直连 RuntimeHost，也不把客户端、Owner、env 或 prompt 字段作为能力来源。projection 必须随 Agent/Runtime 修订、Workload revision 和 fence 一起通过既有 presentation snapshot 校验，过期或缺失时返回明确不可用状态。
 - Browser Runtime 不把 Cookie、Storage、BrowserContext、页面原生标识、凭证或无关页面内容带出 RuntimeHost。浏览器动作继续绑定当前 Agent、Conversation、Execution、Session generation 和 fence。
 - Browser action request 与 terminal record 必须携带同一不可变 execution binding：Agent、Conversation、Execution、capability version、page revision、Session generation 和 resource fence；Runtime 的 readback 只接受与当前 binding 逐字段一致的记录，不能用 JSON 文本顺序或调用方重新推断替代核对。该 binding 透传与 record 归属见 [ADR-0021](ADR-0021-browser-action-record-binding.md)。
 - 导航和观察属于普通 Browser operation；提交、发布、删除、购买、权限变更等动作必须进入现有持久确认与审计协议。超时、连接中断、进程退出或 ACK 丢失时沿原 operation 查询，不自动重放副作用。
@@ -1852,6 +1854,7 @@ revoke 超时都不宣称已远端撤销，不替代 Connection 的逐次授权�
 
 智能机器人默认使用 WebSocket 长连接。Owner 扫码授权或手动提交 Bot ID、Secret，
 两者调用相同的 Core 配置用例；服务端生成渠道引用并复用 Agent 配置的版本、绑定和审计权威。
+渠道变更只推进配置修订，不改变 Runtime 修订（§10.2），因此不重建 Agent Workload，也不升级 Session Sandbox。
 浏览器表单不要求用户填写内部 `bindingReference`。扫码优先复用企微授权 SDK，手动配置作为独立入口；
 部署提供获准的 `source` 与固定官方授权 origin，不能由普通请求指定授权端点。
 扫码是否可用只由部署是否提供上述获准配置决定：机器人连接状态的 V2 入口（`GET /api/v2/agents/{agentId}/wecom-bot`）
@@ -1993,7 +1996,7 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 | 工程状态 | 产品表现 |
 | --- | --- |
 | Workload 未就绪 | 启动中 |
-| 正在应用新修订 | 更新中 |
+| 正在应用新的 Runtime 修订 | 更新中 |
 | 探针失败或 Adapter 不可达 | 暂时不可用 |
 | 单个 Runtime Session 恢复失败 | 对应 Conversation 显示“会话不可用”，历史只读且禁止继续发送；其他 Conversation 不受影响 |
 | API 等待容量已满 | 受理前拒绝，可稍后重试，不返回新任务标识 |
