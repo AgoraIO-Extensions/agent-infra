@@ -39,6 +39,7 @@ export * from "./standard-mcp-client.js";
 export {
 	exchangeStandardOAuthCode,
 	refreshStandardOAuthToken,
+	registerStandardOAuthClient,
 	revokeStandardOAuthToken,
 	standardOAuthUnavailable,
 } from "./standard-oauth.js";

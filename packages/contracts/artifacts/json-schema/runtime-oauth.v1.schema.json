@@ -710,121 +710,253 @@
       ]
     },
     "RuntimeOAuthConfigurationV1": {
-      "additionalProperties": false,
-      "properties": {
-        "authorizationEndpoint": {
-          "format": "uri",
-          "maxLength": 2048,
-          "type": "string"
-        },
-        "callbackUrl": {
-          "format": "uri",
-          "maxLength": 2048,
-          "type": "string"
-        },
-        "clientId": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "configFingerprint": {
-          "pattern": "^[a-f0-9]{64}$",
-          "type": "string"
-        },
-        "issuer": {
-          "format": "uri",
-          "maxLength": 2048,
-          "type": "string"
-        },
-        "patBinding": {
+      "anyOf": [
+        {
           "additionalProperties": false,
           "properties": {
-            "bindingEndpoint": {
+            "authorizationEndpoint": {
               "format": "uri",
               "maxLength": 2048,
               "type": "string"
             },
-            "consumerId": {
+            "callbackUrl": {
+              "format": "uri",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "clientId": {
               "minLength": 1,
               "type": "string"
-            }
-          },
-          "required": [
-            "consumerId",
-            "bindingEndpoint"
-          ],
-          "type": "object"
-        },
-        "ref": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "resource": {
-          "maxLength": 2048,
-          "type": "string"
-        },
-        "revision": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "revocationEndpoint": {
-          "format": "uri",
-          "maxLength": 2048,
-          "type": "string"
-        },
-        "runtimeOrigin": {
-          "format": "uri",
-          "maxLength": 2048,
-          "type": "string"
-        },
-        "schemaVersion": {
-          "const": 1,
-          "type": "number"
-        },
-        "scope": {
-          "const": "mcp",
-          "type": "string"
-        },
-        "source": {
-          "additionalProperties": false,
-          "properties": {
+            },
+            "configFingerprint": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "issuer": {
+              "format": "uri",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "patBinding": {
+              "additionalProperties": false,
+              "properties": {
+                "bindingEndpoint": {
+                  "format": "uri",
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                "consumerId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "consumerId",
+                "bindingEndpoint"
+              ],
+              "type": "object"
+            },
             "ref": {
               "minLength": 1,
+              "type": "string"
+            },
+            "resource": {
+              "maxLength": 2048,
               "type": "string"
             },
             "revision": {
               "minLength": 1,
               "type": "string"
+            },
+            "revocationEndpoint": {
+              "format": "uri",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "runtimeOrigin": {
+              "format": "uri",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "scope": {
+              "const": "mcp",
+              "type": "string"
+            },
+            "source": {
+              "additionalProperties": false,
+              "properties": {
+                "ref": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "revision": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ref",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "tokenEndpoint": {
+              "format": "uri",
+              "maxLength": 2048,
+              "type": "string"
             }
           },
           "required": [
+            "schemaVersion",
             "ref",
-            "revision"
+            "revision",
+            "clientId",
+            "issuer",
+            "authorizationEndpoint",
+            "tokenEndpoint",
+            "revocationEndpoint",
+            "callbackUrl",
+            "runtimeOrigin",
+            "resource",
+            "scope",
+            "configFingerprint",
+            "source"
           ],
           "type": "object"
         },
-        "tokenEndpoint": {
-          "format": "uri",
-          "maxLength": 2048,
-          "type": "string"
+        {
+          "additionalProperties": false,
+          "properties": {
+            "authorizationEndpoint": {
+              "format": "uri",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "callbackUrl": {
+              "format": "uri",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "clientId": {
+              "const": "dcr",
+              "type": "string"
+            },
+            "clientRegistration": {
+              "const": "dcr",
+              "type": "string"
+            },
+            "configFingerprint": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "issuer": {
+              "format": "uri",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "patBinding": {
+              "additionalProperties": false,
+              "properties": {
+                "bindingEndpoint": {
+                  "format": "uri",
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                "consumerId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "consumerId",
+                "bindingEndpoint"
+              ],
+              "type": "object"
+            },
+            "ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "registrationEndpoint": {
+              "format": "uri",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "resource": {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "revision": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "revocationEndpoint": {
+              "format": "uri",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "runtimeOrigin": {
+              "format": "uri",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "scope": {
+              "const": "mcp",
+              "type": "string"
+            },
+            "source": {
+              "additionalProperties": false,
+              "properties": {
+                "ref": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "revision": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ref",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "tokenEndpoint": {
+              "format": "uri",
+              "maxLength": 2048,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "ref",
+            "revision",
+            "clientId",
+            "issuer",
+            "authorizationEndpoint",
+            "tokenEndpoint",
+            "revocationEndpoint",
+            "callbackUrl",
+            "runtimeOrigin",
+            "resource",
+            "scope",
+            "configFingerprint",
+            "source",
+            "clientRegistration",
+            "registrationEndpoint"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "schemaVersion",
-        "ref",
-        "revision",
-        "clientId",
-        "issuer",
-        "authorizationEndpoint",
-        "tokenEndpoint",
-        "revocationEndpoint",
-        "callbackUrl",
-        "runtimeOrigin",
-        "resource",
-        "scope",
-        "configFingerprint",
-        "source"
-      ],
-      "type": "object"
+      ]
     },
     "RuntimeOAuthConfirmRequestV1": {
       "additionalProperties": false,

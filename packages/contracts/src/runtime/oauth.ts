@@ -21,11 +21,26 @@ const https = z
 			!url.search
 		);
 	});
+const callbackUrlSchema = z
+	.string()
+	.max(2048)
+	.url()
+	.refine((value) => {
+		const url = new URL(value);
+		if (url.username || url.password || url.search || url.hash) return false;
+		if (url.protocol === "https:") return true;
+		return (
+			url.protocol === "http:" &&
+			(url.hostname === "localhost" ||
+				url.hostname === "127.0.0.1" ||
+				url.hostname === "[::1]")
+		);
+	});
 const patBinding = z.strictObject({
 	consumerId: OpaqueIdV1Schema,
 	bindingEndpoint: https,
 });
-export const RuntimeOAuthConfigurationV1Schema = z.strictObject({
+const runtimeOAuthConfigurationBase = z.strictObject({
 	schemaVersion: z.literal(1),
 	ref: OpaqueIdV1Schema,
 	revision: OpaqueIdV1Schema,
@@ -34,7 +49,7 @@ export const RuntimeOAuthConfigurationV1Schema = z.strictObject({
 	authorizationEndpoint: https,
 	tokenEndpoint: https,
 	revocationEndpoint: https,
-	callbackUrl: https,
+	callbackUrl: callbackUrlSchema,
 	runtimeOrigin: https,
 	resource: z.string().max(2048),
 	scope: z.literal("mcp"),
@@ -43,6 +58,15 @@ export const RuntimeOAuthConfigurationV1Schema = z.strictObject({
 	/** Optional approved Connection PAT binding route; OAuth remains the default. */
 	patBinding: patBinding.optional(),
 });
+const runtimeOAuthDcrConfiguration = runtimeOAuthConfigurationBase.extend({
+	clientId: z.literal("dcr"),
+	clientRegistration: z.literal("dcr"),
+	registrationEndpoint: https,
+});
+export const RuntimeOAuthConfigurationV1Schema = z.union([
+	runtimeOAuthConfigurationBase,
+	runtimeOAuthDcrConfiguration,
+]);
 export type RuntimeOAuthConfigurationV1 = z.infer<
 	typeof RuntimeOAuthConfigurationV1Schema
 >;

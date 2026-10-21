@@ -4,6 +4,106 @@ import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { RuntimeHostError } from "./errors.js";
 import { validateStandardMcpToken } from "./standard-mcp-client.js";
 
+const registrationId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+/** Register one protected native OAuth client for one Agent installation. */
+export async function registerStandardOAuthClient(options: {
+	issuer: string;
+	registrationEndpoint: string;
+	redirectUri: string;
+	scope: "mcp";
+	signal: AbortSignal;
+	assertCurrent: () => void;
+	fetch?: FetchLike;
+}) {
+	const issuer = new URL(options.issuer);
+	const endpoint = new URL(options.registrationEndpoint);
+	const redirect = new URL(options.redirectUri);
+	if (
+		issuer.protocol !== "https:" ||
+		issuer.pathname !== "/" ||
+		issuer.search ||
+		issuer.hash ||
+		endpoint.origin !== issuer.origin ||
+		endpoint.search ||
+		endpoint.hash ||
+		redirect.username ||
+		redirect.password ||
+		redirect.search ||
+		redirect.hash ||
+		!(
+			redirect.protocol === "https:" ||
+			(redirect.protocol === "http:" &&
+				["localhost", "127.0.0.1", "[::1]"].includes(redirect.hostname))
+		)
+	)
+		standardOAuthUnavailable();
+	const signal = AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]);
+	try {
+		if (signal.aborted) standardOAuthUnavailable();
+		options.assertCurrent();
+		const response = await (options.fetch ?? fetch)(endpoint, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				client_name: "Codex",
+				redirect_uris: [options.redirectUri],
+				grant_types: ["authorization_code", "refresh_token"],
+				token_endpoint_auth_method: "none",
+				response_types: ["code"],
+				scope: options.scope,
+				application_type: "native",
+			}),
+			redirect: "error",
+			signal,
+		});
+		options.assertCurrent();
+		if (response.status !== 201 || response.redirected)
+			standardOAuthUnavailable();
+		const text = await response.text();
+		options.assertCurrent();
+		if (text.length > 16_384) standardOAuthUnavailable();
+		const value: unknown = JSON.parse(text);
+		if (!value || typeof value !== "object" || Array.isArray(value))
+			standardOAuthUnavailable();
+		const record = value as Record<string, unknown>;
+		const expectedKeys = [
+			"application_type",
+			"client_id",
+			"client_id_issued_at",
+			"client_name",
+			"grant_types",
+			"redirect_uris",
+			"response_types",
+			"scope",
+			"token_endpoint_auth_method",
+		].sort();
+		if (Object.keys(record).sort().join(",") !== expectedKeys.join(","))
+			standardOAuthUnavailable();
+		if (
+			record.application_type !== "native" ||
+			record.client_name !== "Codex" ||
+			record.scope !== options.scope ||
+			record.token_endpoint_auth_method !== "none" ||
+			typeof record.client_id !== "string" ||
+			!registrationId.test(record.client_id) ||
+			!Number.isSafeInteger(record.client_id_issued_at) ||
+			!Array.isArray(record.grant_types) ||
+			!Array.isArray(record.response_types) ||
+			!Array.isArray(record.redirect_uris) ||
+			JSON.stringify(record.grant_types) !==
+				JSON.stringify(["authorization_code", "refresh_token"]) ||
+			JSON.stringify(record.response_types) !== JSON.stringify(["code"]) ||
+			JSON.stringify(record.redirect_uris) !==
+				JSON.stringify([options.redirectUri])
+		)
+			standardOAuthUnavailable();
+		return String(record.client_id);
+	} catch {
+		standardOAuthUnavailable();
+	}
+}
+
 export function standardOAuthUnavailable(): never {
 	throw new RuntimeHostError(
 		"CONNECTION_OAUTH_UNAVAILABLE",
@@ -13,7 +113,7 @@ export function standardOAuthUnavailable(): never {
 	);
 }
 
-/** One fixed-target SDK token exchange. No discovery, registration or retry. */
+/** One fixed-target SDK token exchange. Registration is a separate bounded step. */
 export async function exchangeStandardOAuthCode(options: {
 	configuration: RuntimeOAuthConfigurationV1;
 	code: string;
