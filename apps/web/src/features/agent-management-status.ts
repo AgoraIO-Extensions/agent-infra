@@ -36,7 +36,8 @@ export function agentServiceAvailabilityLabel(
 /**
  * Agent 目录卡与详情页只显示一个可用性状态（设计 statusChip）：管理状态为可用且有服务
  * 可用性时取服务可用性，否则取管理状态。色调按设计：就绪 green，启动中 / 更新中 amber，
- * 其余 gray。这是两页唯一的派生规则，标签或色调调整只改这里。
+ * 创建失败 red（与 Owner 配置、Agent 管理表及申请详情「失败」一致，E3-05），其余 gray。
+ * 这是目录、详情与 Owner 配置页头唯一的派生规则，标签或色调调整只改这里。
  */
 export function agentAvailabilityStatus(
 	agent: Pick<AgentProjectionV2, "managementStatus" | "serviceAvailability">,
@@ -55,7 +56,12 @@ export function agentAvailabilityStatus(
 	}
 	return {
 		label: agentManagementStatusLabels[agent.managementStatus],
-		tone: agent.managementStatus === "available" ? "green" : "gray",
+		tone:
+			agent.managementStatus === "available"
+				? "green"
+				: agent.managementStatus === "creation_failed"
+					? "red"
+					: "gray",
 	};
 }
 

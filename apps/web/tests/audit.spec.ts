@@ -5,7 +5,7 @@ import {
 	ScopedPlatformAuditProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { expectNoDuplicateControls } from "./page-health";
@@ -951,6 +951,7 @@ test("audit list cells, detail facts and refresh icons follow the exported desig
 	);
 	await expect(panel.getByRole("heading", { level: 2 })).toHaveCount(1);
 	await expect(panel.locator("header [data-slot=badge]")).toHaveCount(0);
+	await expectAuditDetailHead(panel);
 	const close = panel.getByRole("button", { name: /^关闭/ });
 	expect(
 		await close
@@ -1026,6 +1027,32 @@ test("audit list cells, detail facts and refresh icons follow the exported desig
 	});
 });
 
+/**
+ * 记录详情（/audit 与 /admin/audit 共用）：「记录详情」eyebrow 到标题 9px（E3-08，设计 .eyebrow
+ * margin 4px 0 9px）；「可信操作主体」的 ID 次要行 11px / 18.15px 等宽，与列表 IdentifierText
+ * 相同（E3-09）。
+ */
+async function expectAuditDetailHead(panel: Locator) {
+	const eyebrow = panel.locator("header .page-eyebrow");
+	await expect(eyebrow).toHaveText("记录详情");
+	await expect(eyebrow).toHaveCSS("margin-bottom", "9px");
+	const [eyebrowBox, titleBox] = await Promise.all([
+		eyebrow.boundingBox(),
+		panel.getByRole("heading", { level: 2 }).boundingBox(),
+	]);
+	if (!eyebrowBox || !titleBox) throw new Error("Missing audit detail head");
+	expect(
+		Math.abs(titleBox.y - eyebrowBox.y - eyebrowBox.height - 9),
+	).toBeLessThanOrEqual(0.5);
+	const principalId = panel
+		.locator("dt", { hasText: /^可信操作主体$/ })
+		.locator("+ dd small.font-mono");
+	await expect(principalId).toHaveCount(1);
+	await expect(principalId).toHaveCSS("font-size", "11px");
+	await expect(principalId).toHaveCSS("line-height", "18.15px");
+	await expect(principalId).toHaveCSS("font-family", /^ui-monospace/);
+}
+
 test("platform audit shows only server-permitted names and keeps IDs as IdentifierText (#2909)", async ({
 	page,
 }) => {
@@ -1060,6 +1087,7 @@ test("platform audit shows only server-permitted names and keeps IDs as Identifi
 	await expect(fact("可信操作主体")).toHaveText(
 		`应用 · 运维机器人${applicationActorId}`,
 	);
+	await expectAuditDetailHead(detail);
 	await page.keyboard.press("Escape");
 	// AC-3：名称不可确认时只显示类型与 ID 短形式，也不说明原因。
 	await next.click();

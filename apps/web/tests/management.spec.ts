@@ -2651,6 +2651,19 @@ test("Agent catalog follows original IA card columns and keeps keyboard detail n
 	await page.goto("/agents");
 	const cards = page.locator(".agent-list > li");
 	await expect(cards).toHaveCount(3);
+	// E3-01：卡片 tag 行间距 6px（设计 .tag-row），与工作台卡片一致；第二个 tag 紧跟第一个 6px。
+	for (const row of await cards.locator(".directory-tags").all()) {
+		await expect(row).toHaveCSS("column-gap", "6px");
+		await expect(row).toHaveCSS("row-gap", "6px");
+		const [first, second] = await row
+			.locator('[data-slot="badge"]')
+			.evaluateAll((nodes) =>
+				nodes.map((node) => node.getBoundingClientRect().toJSON()),
+			);
+		if (!first || !second) throw new Error("Expected two directory tags");
+		expect(Math.abs(first.top - second.top)).toBeLessThanOrEqual(0.5);
+		expect(Math.abs(second.left - first.right - 6)).toBeLessThanOrEqual(0.5);
+	}
 	await capture(page, info, "agent-catalog");
 	for (const width of [390, 767, 768, 820, 1440]) {
 		await page.setViewportSize({ width, height: 1000 });
@@ -5095,6 +5108,23 @@ test("an Owner sees the creation failure category next to retry creation", async
 	const api = await fixture(page);
 	api.agentState("creation_failed");
 	await page.goto("/agents/agent-pilot-1/configuration");
+	// E3-05：页头「创建失败」chip 按设计为 red（statusChip('创建失败','red')）。
+	const headingChip = page.locator(
+		'main .page-heading .tag-row [data-slot="badge"][data-variant="chip"]',
+	);
+	await expect(headingChip).toHaveText(["创建失败"]);
+	await expect(headingChip).toHaveAttribute("data-tone", "red");
+	await expect(headingChip).toHaveCSS(
+		"color",
+		await resolvedColor(page, "var(--danger-ink)"),
+	);
+	await expect(headingChip).toHaveCSS(
+		"background-color",
+		await resolvedColor(
+			page,
+			"color-mix(in oklch, var(--danger) 8%, var(--surface))",
+		),
+	);
 	const footer = page.locator(".configuration-form-footer");
 	await expect(footer.getByRole("button", { name: "重试创建" })).toBeVisible();
 	// 没有可读类别时不显示任何原因。
@@ -5108,6 +5138,14 @@ test("an Owner sees the creation failure category next to retry creation", async
 	await expect(notice).toHaveAttribute("role", "status");
 	await expect(notice).toContainText("失败原因：配置与当前部署不兼容");
 	await expect(notice).toContainText("重试创建不会成功");
+	// E3-04：danger 提示的默认图标为设计 icon('alert') 三角形，17px、--danger 色。
+	const noticeIcon = notice.locator(":scope > svg");
+	await expect(noticeIcon).toHaveClass(/lucide-triangle-alert/);
+	await expect(noticeIcon).toHaveCSS("width", "17px");
+	await expect(noticeIcon).toHaveCSS(
+		"color",
+		await resolvedColor(page, "var(--danger)"),
+	);
 	await expect(page.locator("main")).not.toContainText(/kubernetes|policy/i);
 	expect(
 		await notice.evaluate(

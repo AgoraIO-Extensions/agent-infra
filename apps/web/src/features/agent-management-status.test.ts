@@ -32,7 +32,12 @@ describe("agentAvailabilityStatus", () => {
 						? serviceStatus[serviceAvailability]
 						: {
 								label: agentManagementStatusLabels[managementStatus],
-								tone: managementStatus === "available" ? "green" : "gray",
+								tone:
+									managementStatus === "available"
+										? "green"
+										: managementStatus === "creation_failed"
+											? "red"
+											: "gray",
 							};
 				expect(
 					agentAvailabilityStatus({ managementStatus, serviceAvailability }),
@@ -48,11 +53,12 @@ describe("agentAvailabilityStatus", () => {
 				serviceAvailability: "ready",
 			}),
 		).toEqual({ label: "已停止", tone: "gray" });
+		// E3-05：创建失败按设计为 red，与申请详情「失败」一致；服务可用性不覆盖它。
 		expect(
 			agentAvailabilityStatus({
 				managementStatus: "creation_failed",
 				serviceAvailability: null,
 			}),
-		).toEqual({ label: "创建失败", tone: "gray" });
+		).toEqual({ label: "创建失败", tone: "red" });
 	});
 });

@@ -3760,6 +3760,37 @@ describe("session context, command feedback and reply cards (design alignment)",
 		expect(input.closest("form")?.textContent).not.toContain("停止回复");
 	});
 
+	// E3-02：活跃回复期间不再启动新的命令任务或 Skill（PRD §11.3），「命令 / Skill」入口禁用；
+	// 输入框与「发送补充指令」不受影响，回复结束后入口恢复。
+	it("disables the command and Skill trigger during an active reply but keeps supplementary instructions (E3-02)", async () => {
+		const processing = PersistedConversationEventV2Schema.parse({
+			...event(1),
+			type: "execution.status",
+			payload: { status: "processing" },
+		});
+		setup(
+			withAgent(
+				{ supplementaryInstruction: true },
+				conversationWith([processing], [userMessage()], "active"),
+			),
+		);
+		const input = await composer();
+		await pendingReply("处理中");
+		const trigger = screen.getByRole("button", {
+			name: "选择命令或 Skill",
+		}) as HTMLButtonElement;
+		expect(trigger.disabled).toBe(true);
+		expect(input.disabled).toBe(false);
+		fireEvent.change(input, { target: { value: "补充一句" } });
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "发送补充指令",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(false);
+	});
+
 	it("collapses a failed reply into one status line with inline actions (R4-08, NI-07)", async () => {
 		const failed = PersistedConversationEventV2Schema.parse({
 			...event(1),

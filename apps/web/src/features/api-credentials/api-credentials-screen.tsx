@@ -405,7 +405,10 @@ function CredentialRow({
 	const [editing, setEditing] = useState(false);
 	const [notice, setNotice] = useState(false);
 	const narrowButton = useRef<HTMLButtonElement>(null);
-	// 撤销确认关闭时触发器已禁用、成功后会消失，焦点落到该行的凭证标识上。
+	// 撤销确认：取消、Escape 或点击外部关闭时焦点回到「撤销」触发按钮；确认撤销后触发器已禁用、
+	// 成功后会消失，焦点落到该行的凭证标识上（E3-15）。
+	const revokeTrigger = useRef<HTMLButtonElement>(null);
+	const revokeConfirmed = useRef(false);
 	const credentialLabel = useRef<HTMLElement>(null);
 	const restoreFocus = useRef(false);
 	const expiry = credential.expiresAt
@@ -507,6 +510,7 @@ function CredentialRow({
 								disabled={busy}
 								trigger={
 									<Button
+										ref={revokeTrigger}
 										type="button"
 										variant="outline"
 										aria-label={withObjectName(
@@ -536,8 +540,16 @@ function CredentialRow({
 								}}
 								description="撤销后，使用这张凭证的 API 访问和结果流会立即终止，已受理的任务继续执行。撤销后不能恢复，需要时请签发新凭证。"
 								confirmLabel="撤销凭证"
-								finalFocus={credentialLabel}
+								onOpenChange={(open) => {
+									if (open) revokeConfirmed.current = false;
+								}}
+								finalFocus={() =>
+									revokeConfirmed.current
+										? credentialLabel.current
+										: revokeTrigger.current
+								}
 								onConfirm={() => {
+									revokeConfirmed.current = true;
 									setEditing(false);
 									void onRevoke(credential.credentialId).catch(() => undefined);
 								}}

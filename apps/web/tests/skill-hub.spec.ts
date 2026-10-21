@@ -946,6 +946,32 @@ test.describe("Skill version detail", () => {
 		await expect(
 			summary.getByRole("button", { name: "移出我的库" }),
 		).toBeVisible();
+		// E3-10：事实列表到「安装后还不能直接使用…」12px（设计 .skill-summary .facts margin 15px 0 12px）。
+		const hint = summary.getByText(/^安装后还不能直接使用/);
+		const [factsBox, hintBox] = await Promise.all([
+			summary.locator("dl.skill-facts").boundingBox(),
+			hint.boundingBox(),
+		]);
+		if (!factsBox || !hintBox) throw new Error("Missing summary geometry");
+		expect(
+			Math.abs(hintBox.y - factsBox.y - factsBox.height - 12),
+		).toBeLessThanOrEqual(0.5);
+		// E3-11：侧栏操作区上距桌面 32px，≤767px 按设计 .section 为 26px。
+		const summaryActions = summary.locator(".skill-summary-actions");
+		await expect(summaryActions).toHaveCSS(
+			"margin-top",
+			test.info().project.name === "mobile" ? "26px" : "32px",
+		);
+		const actionsBox = await summaryActions.boundingBox();
+		if (!actionsBox) throw new Error("Missing summary actions");
+		expect(
+			Math.abs(
+				actionsBox.y -
+					hintBox.y -
+					hintBox.height -
+					(test.info().project.name === "mobile" ? 26 : 32),
+			),
+		).toBeLessThanOrEqual(0.5);
 		const headingTop = async () =>
 			(await page.getByRole("heading", { level: 1 }).boundingBox())?.y ?? 0;
 		const installedTop = await headingTop();

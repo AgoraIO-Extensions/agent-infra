@@ -4,6 +4,7 @@ import {
 } from "@agent-infra/contracts/pilot";
 import { expect, type Page, test } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
+import { expectNoDuplicateControls } from "./page-health";
 import { duplicateControlNames } from "./page-hygiene";
 import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
@@ -424,5 +425,26 @@ test("application summary follows the design facts, headings and plain disable b
 		await expect(
 			page.getByRole("group", { name: group, exact: true }),
 		).toHaveCount(1);
+	// E3-16：打开既有应用后，应用凭证表单的权限复选框名称带应用名（同 C2-19），与签发个人凭证区
+	// 的同名复选框区分；整页（含复选框）没有同名控件。
+	for (const label of [
+		"读取 Agent",
+		"使用 Agent",
+		"管理 Agent",
+		"创建 Agent",
+	]) {
+		await expect(
+			page
+				.getByRole("group", { name: "权限范围：应用凭证", exact: true })
+				.getByRole("checkbox", {
+					name: `${label}：${application.name}`,
+					exact: true,
+				}),
+		).toHaveCount(1);
+		await expect(
+			page.getByRole("checkbox", { name: label, exact: true }),
+		).toHaveCount(1);
+	}
+	await expectNoDuplicateControls(page, "API 凭证（打开既有应用）");
 	await expectCleanPage(page, errors);
 });

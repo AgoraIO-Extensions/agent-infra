@@ -711,7 +711,10 @@ export function SkillProjectContentEditor({
 									/>
 								</Field>
 							</div>
-							<p id={`${id}-limits`} className="skill-field-help">
+							<p
+								id={`${id}-limits`}
+								className="skill-field-help skill-file-limits"
+							>
 								共 {draft.files.length + 1} 个文件，{formatBytes(totalBytes)}
 								；最多 {limits.maxFiles} 个文件，单个 256 KB，合计 512 KB。
 							</p>

@@ -1529,6 +1529,21 @@ for (const mode of ["click", "keyboard"] as const) {
 		expect(
 			Math.abs(actionsBox.y - (status.y + status.height) - 16),
 		).toBeLessThanOrEqual(0.5);
+		// E3-02：处理中「命令 / Skill」入口按设计禁用（opacity .48、not-allowed），活跃回复期间
+		// 不再启动新的命令任务或 Skill（PRD §11.3）；输入框与「发送补充指令」不受影响。
+		const capabilityTrigger = page.getByRole("button", {
+			name: "选择命令或 Skill",
+		});
+		await expect(capabilityTrigger).toBeDisabled();
+		await expect(capabilityTrigger).toHaveCSS("opacity", "0.48");
+		await expect(capabilityTrigger).toHaveCSS("cursor", "not-allowed");
+		const message = page.getByRole("textbox", { name: "消息", exact: true });
+		await expect(message).toBeEnabled();
+		await message.fill("补充检查范围");
+		await expect(
+			page.getByRole("button", { name: "发送补充指令", exact: true }),
+		).toBeEnabled();
+		await message.fill("");
 		await expectCleanPage(page, errors);
 		if (mode === "click") await stop.click();
 		else {
@@ -1560,6 +1575,8 @@ for (const mode of ["click", "keyboard"] as const) {
 		await expect(
 			reply.getByRole("button", { name: /停止回复|正在停止/ }),
 		).toHaveCount(0);
+		// E3-02：回复结束后「命令 / Skill」入口恢复可用。
+		await expect(capabilityTrigger).toBeEnabled();
 		expect(stops).toEqual([
 			{ schemaVersion: 1, targetExecutionId: executionId },
 		]);

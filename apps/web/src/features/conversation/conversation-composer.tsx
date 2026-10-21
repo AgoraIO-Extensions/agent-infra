@@ -210,7 +210,12 @@ export function ConversationComposer({
 			)}
 			<div className="composer-controls">
 				<div className="composer-toolbar">
-					<CapabilityTrigger capability={capability} disabled={draftDisabled} />
+					{/* 活跃回复期间不再启动新的命令任务或 Skill（PRD §11.3），入口按设计禁用；
+					    只禁用入口，输入框与补充指令的发送不受影响（E3-02）。 */}
+					<CapabilityTrigger
+						capability={capability}
+						disabled={draftDisabled || !invokeReady}
+					/>
 					{model && <ComposerModelControls {...model} compact={compact} />}
 				</div>
 				<div className="composer-actions">

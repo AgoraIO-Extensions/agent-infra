@@ -53,17 +53,18 @@ describe("Alert", () => {
 		expect(element.getAttribute("role")).toBeNull();
 		expect(screen.queryByRole("alert")).toBeNull();
 		expect(element.dataset.tone).toBe("danger");
+		// E3-04：danger 与 warn 一样用设计 icon('alert') 的三角形。
 		expect(
 			element
 				.querySelector(":scope > svg")
-				?.classList.contains("lucide-circle-alert"),
+				?.classList.contains("lucide-triangle-alert"),
 		).toBe(true);
 	});
 
 	it.each([
 		["info", "lucide-info", "[&>svg]:text-(--accent)"],
 		["warn", "lucide-triangle-alert", "[&>svg]:text-(--warning)"],
-		["danger", "lucide-circle-alert", "[&>svg]:text-(--danger)"],
+		["danger", "lucide-triangle-alert", "[&>svg]:text-(--danger)"],
 	] as const)("renders the default %s icon", (tone, iconClass, color) => {
 		const { container } = render(
 			<Alert tone={tone}>

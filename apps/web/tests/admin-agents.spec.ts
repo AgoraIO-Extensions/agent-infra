@@ -856,6 +856,27 @@ test("disabling an employee is confirmed with the person before one request", as
 	await expect(dialog).toBeVisible();
 	await expect(dialog).toContainText("验收员工");
 	await expect(dialog).toContainText("employee@example.test");
+	// E3-06（D2-33）：对象为姓名（650）与邮箱两行，邮箱 13px / 400 / 1.65 muted，不继承姓名行的 650。
+	const subject = dialog.locator('[data-slot="confirm-dialog-subject"]');
+	await expect(subject.getByText("验收员工", { exact: true })).toHaveCSS(
+		"font-weight",
+		"650",
+	);
+	const email = subject.getByText("employee@example.test", { exact: true });
+	await expect(email).toHaveCSS("font-size", "13px");
+	await expect(email).toHaveCSS("font-weight", "400");
+	await expect(email).toHaveCSS("line-height", "21.45px");
+	await expect(email).toHaveCSS(
+		"color",
+		await page.evaluate(() => {
+			const probe = document.createElement("span");
+			probe.style.color = "var(--muted-foreground)";
+			document.body.append(probe);
+			const color = getComputedStyle(probe).color;
+			probe.remove();
+			return color;
+		}),
+	);
 	await expect(dialog).toContainText("立即不能登录平台");
 	expect(writes).toHaveLength(0);
 	await dialog.getByRole("button", { name: "取消" }).click();
