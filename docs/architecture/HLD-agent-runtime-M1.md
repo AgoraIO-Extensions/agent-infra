@@ -693,7 +693,7 @@ before hook 提供 callID 本身不证明其与实际请求的关联；同参数
 
 | Driver | 启用的原生工具 | 审批与权限应答 | 工具事实来源 |
 | --- | --- | --- | --- |
-| Codex | 官方 lane 放行原生工具的声明与事件：命令执行、补丁与文件变更、列举与搜索、原生 Skill；供应商托管的 `web_search` 不作为 Sandbox 原生工具，随模型请求执行时按平台中介调用路径保存 intent、授权及结果或 unknown | 部署配置固定为不发起审批；若仍收到审批类 server request，按 Spec §10.14 应答，不判为协议无效 | 原生 item 的开始与完成通知（命令执行、文件变更、搜索、MCP 调用等）；`web_search` 使用模型调用事实 |
+| Codex | 官方 lane 放行原生工具的声明与事件：命令执行、补丁与文件变更、列举与搜索、原生 Skill；供应商托管的 `web_search` 不作为 Sandbox 原生工具，随模型请求执行时按平台中介调用路径保存 intent、授权及结果或 unknown | 部署配置固定为不发起审批；若仍收到审批类 server request，只可能是越出 Sandbox 的提权请求，一律拒绝，不判为协议无效；`request_user_input` 回 JSON-RPC 错误 | 原生 item 的开始与完成通知（命令执行、文件变更、搜索、MCP 调用等）；`web_search` 使用模型调用事实 |
 | Claude | 固定 SDK 的 built-in 工具，包括 `Bash`、`Glob`、`Grep`、`Read`、`Write`、`Edit`；网络工具随出站策略与获准端点 | `canUseTool`/PreToolUse 只拒绝越出本 Conversation 文件边界的路径 | SDK 的工具调用与工具结果消息 |
 | OpenCode（ACP） | 固定 release 的 built-in 工具，在原生进程内执行；平台不提供 ACP `fs`/`terminal` client 能力 | `session/request_permission` 对 Sandbox 内操作选择一次性允许，越界拒绝 | ACP `tool_call` 与 `tool_call_update` 的开始与终态 |
 | Pi | 固定版本 `--tools` 中的 built-in 工具，包括 `read`、`write`、`edit`、`bash` | 工具策略只拒绝越出本 Conversation 文件边界的路径 | `tool_execution_start` 与 `tool_execution_end` 事件 |
