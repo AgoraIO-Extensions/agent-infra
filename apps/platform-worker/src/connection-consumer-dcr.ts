@@ -16,8 +16,10 @@ export interface ConnectionConsumerDcrResolverOptionsV1 {
 	readonly egressProfile: { readonly ref: string; readonly revision: string };
 	readonly approvalSource: { readonly ref: string; readonly revision: string };
 	readonly callbackUrlForAgent: (agentId: string) => string;
-	/** Approved Connection Consumer selected for the Agent; DCR client IDs are separate. */
+	/** Deployment-approved Connection Consumer mapping; DCR client IDs are separate. */
 	readonly consumerIdForAgent: (agentId: string) => string;
+	/** Deployment-approved DCR client mapping; registration must match it exactly. */
+	readonly approvedOAuthClientIdForAgent: (agentId: string) => string;
 	readonly installationSupplyForAgent: (agentId: string) => unknown;
 	readonly fetch?: typeof fetch;
 }
@@ -36,7 +38,6 @@ export function createConnectionConsumerDcrResolverV1(
 			string,
 			{
 				readonly profile: ConnectionConsumerProfileV1;
-				/** OAuth client registered for this Agent installation. */
 				readonly oauthClientId: string;
 				readonly approval: {
 					readonly schemaVersion: 1;
@@ -64,12 +65,13 @@ export function createConnectionConsumerDcrResolverV1(
 				assertCurrent: () => signal.throwIfAborted(),
 				...(options.fetch ? { fetch: options.fetch } : {}),
 			});
+			if (clientId !== options.approvedOAuthClientIdForAgent(agentId))
+				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 			const profile = {
 				schemaVersion: 1 as const,
 				publicOrigin: options.publicOrigin,
 				mcpPath: options.mcpPath,
 				consumerId,
-				oauthClientId: clientId,
 				audience: options.audience,
 				egressProfile: { ...options.egressProfile },
 			};

@@ -87,6 +87,7 @@ export function runtimeConnectionConsumerControlPodV1(pod: V1Pod): V1Pod {
 export function createRuntimeConnectionConsumerSnapshotV1(
 	profile: unknown,
 	approval: unknown,
+	oauthClientId?: unknown,
 ): string | null | undefined {
 	if (profile === undefined && approval === undefined) return undefined;
 	try {
@@ -96,9 +97,16 @@ export function createRuntimeConnectionConsumerSnapshotV1(
 			input.approval,
 		);
 		if (approved.status !== "available") throw new Error();
+		if (
+			oauthClientId !== undefined &&
+			(typeof oauthClientId !== "string" ||
+				!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(oauthClientId))
+		)
+			throw new Error();
 		const snapshot = JSON.stringify({
 			profile: approved.profile,
 			approval: input.approval,
+			...(oauthClientId === undefined ? {} : { oauthClientId }),
 		});
 		if (Buffer.byteLength(snapshot, "utf8") > maximumSnapshotBytes)
 			throw new Error();
@@ -177,13 +185,16 @@ export function runtimeConnectionConsumerProjectionV1(
 			!input ||
 			typeof input !== "object" ||
 			Array.isArray(input) ||
-			Object.keys(input).sort().join(",") !== "approval,profile"
+			!["approval,profile", "approval,oauthClientId,profile"].includes(
+				Object.keys(input).sort().join(","),
+			)
 		)
 			throw new Error();
 		if (
 			createRuntimeConnectionConsumerSnapshotV1(
 				input.profile,
 				input.approval,
+				input.oauthClientId,
 			) !== snapshot
 		)
 			throw new Error();

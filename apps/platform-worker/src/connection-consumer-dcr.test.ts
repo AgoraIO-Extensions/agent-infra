@@ -23,8 +23,10 @@ describe("per-Agent Connection DCR resolver", () => {
 				ref: agentId,
 				revision: "r1",
 			}),
-				consumerIdForAgent: (agentId) =>
-					agentId === "agent-a" ? "consumer-a" : "consumer-b",
+			consumerIdForAgent: (agentId) =>
+				agentId === "agent-a" ? "consumer-a" : "consumer-b",
+			approvedOAuthClientIdForAgent: (agentId) =>
+				agentId === "agent-a" ? "oauth-client-a" : "oauth-client-b",
 			fetch: async (_input, init) => {
 				const body = JSON.parse(String(init?.body));
 				calls.push(body.redirect_uris[0]);
@@ -54,8 +56,6 @@ describe("per-Agent Connection DCR resolver", () => {
 		]);
 		expect(result["agent-a"]?.profile.consumerId).toBe("consumer-a");
 		expect(result["agent-b"]?.profile.consumerId).toBe("consumer-b");
-		expect(result["agent-a"]?.profile.oauthClientId).toBe("oauth-client-a");
-		expect(result["agent-b"]?.profile.oauthClientId).toBe("oauth-client-b");
 		expect(result["agent-a"]?.oauthClientId).toBe("oauth-client-a");
 		expect(result["agent-b"]?.oauthClientId).toBe("oauth-client-b");
 		expect(result["agent-a"]?.installationSupply).toEqual({
@@ -74,6 +74,7 @@ describe("per-Agent Connection DCR resolver", () => {
 			callbackUrlForAgent: () => "http://127.0.0.1:3044/callback/agent-a",
 			installationSupplyForAgent: () => ({ ref: "a", revision: "r1" }),
 			consumerIdForAgent: () => "",
+			approvedOAuthClientIdForAgent: () => "oauth-client-a",
 			fetch: async () => {
 				throw new Error("fetch must not run");
 			},

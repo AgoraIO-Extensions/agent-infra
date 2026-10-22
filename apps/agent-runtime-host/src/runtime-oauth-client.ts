@@ -300,7 +300,9 @@ export async function createProtectedRuntimeOAuthClient(options: {
 	dataDirectory: string;
 	configuration: RuntimeOAuthConfigurationV1;
 	patBindingSecret?: string;
-	target: ApprovedConnectionConsumerTargetV1;
+	target: ApprovedConnectionConsumerTargetV1 & {
+		readonly oauthClientId?: string;
+	};
 	principal: RuntimePrincipalV1;
 	scope: import("@agent-infra/contracts/runtime").RuntimeOAuthScopeV1;
 	verifyGrant: ReturnType<typeof createRuntimeOAuthGrantVerifier>;
@@ -321,7 +323,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 		"clientRegistration" in parsedConfiguration &&
 		parsedConfiguration.clientRegistration === "dcr"
 			? (() => {
-					const oauthClientId = target.profile.oauthClientId;
+					const oauthClientId = target.oauthClientId;
 					if (!oauthClientId) unavailable();
 					const {
 						clientRegistration: _clientRegistration,

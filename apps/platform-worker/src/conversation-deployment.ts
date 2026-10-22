@@ -51,6 +51,9 @@ import {
 import { validateWorkloadRuntimeAuthV1 } from "./workload-runtime-auth.js";
 
 type ConnectionConsumerTargetV1 = ApprovedConnectionConsumerTargetV1;
+type ConnectionConsumerRuntimeTargetV1 = ConnectionConsumerTargetV1 & {
+	readonly oauthClientId?: string;
+};
 
 function approvedConnectionConsumerTarget(
 	profile: unknown,
@@ -151,15 +154,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(perAgent.oauthClientId)
 			)
 				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
-			if (target) {
-				return {
-					...target,
-					profile: {
-						...target.profile,
+			return target
+				? ({
+						...target,
 						oauthClientId: perAgent.oauthClientId,
-					},
-				};
-			}
+					} satisfies ConnectionConsumerRuntimeTargetV1)
+				: target;
 		}
 		return target;
 	};

@@ -369,6 +369,7 @@ async function createPrepared(signal: AbortSignal) {
 					createRuntimeConnectionConsumerSnapshotV1(
 						value.profile,
 						value.approval,
+						value.oauthClientId,
 					) ?? null,
 				]),
 			)

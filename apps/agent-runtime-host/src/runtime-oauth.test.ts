@@ -509,7 +509,7 @@ async function deployment(f: Awaited<ReturnType<typeof fixture>>) {
 	};
 }
 
-it("keeps the DCR OAuth client separate from the approved Consumer", async () => {
+it("uses the DCR client binding separately from the approved Consumer", async () => {
 	const f = await fixture();
 	const client = await createProtectedRuntimeOAuthClient({
 		dataDirectory: f.directory,
@@ -520,10 +520,7 @@ it("keeps the DCR OAuth client separate from the approved Consumer", async () =>
 			clientRegistration: "dcr",
 			registrationEndpoint: `${f.configuration.issuer}oauth/register`,
 		},
-		target: {
-			...f.target,
-			profile: { ...f.target.profile, oauthClientId: "registered-client" },
-		},
+		target: { ...f.target, oauthClientId: "registered-client" },
 		principal: f.principal,
 		scope: f.scope,
 		verifyGrant: f.verifyGrant,
@@ -531,10 +528,9 @@ it("keeps the DCR OAuth client separate from the approved Consumer", async () =>
 	});
 	closes.push(client.close);
 	const begun = await client.authorized(f.signed("begin"));
-	expect(begun.authorizationUrl).toBeDefined();
-	expect(new URL(String(begun.authorizationUrl)).searchParams.get("client_id")).toBe(
-		"registered-client",
-	);
+	expect(
+		new URL(String(begun.authorizationUrl)).searchParams.get("client_id"),
+	).toBe("registered-client");
 });
 
 it("keeps OAuth unavailable when callback authentication material is absent", async () => {

@@ -13,7 +13,7 @@ import {
 const maximumProfileBytes = 8192;
 
 export type RuntimeConnectionConsumerProfile =
-	| ApprovedConnectionConsumerTargetV1
+	| (ApprovedConnectionConsumerTargetV1 & { readonly oauthClientId?: string })
 	| Extract<ApprovedConnectionConsumerProfileV1, { status: "unavailable" }>;
 
 function invalidProfile(): RuntimeConnectionConsumerProfile {
@@ -71,10 +71,22 @@ export async function readRuntimeConnectionConsumerProfile(
 				!input ||
 				typeof input !== "object" ||
 				Array.isArray(input) ||
-				Object.keys(input).sort().join(",") !== "approval,profile"
+				!["approval,profile", "approval,oauthClientId,profile"].includes(
+					Object.keys(input).sort().join(","),
+				)
 			)
 				throw new Error();
-			const snapshot = input as { profile: unknown; approval: unknown };
+			const snapshot = input as {
+				profile: unknown;
+				approval: unknown;
+				oauthClientId?: unknown;
+			};
+			if (
+				snapshot.oauthClientId !== undefined &&
+				(typeof snapshot.oauthClientId !== "string" ||
+					!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(snapshot.oauthClientId))
+			)
+				return invalidProfile();
 			const approved = resolveApprovedConnectionConsumerProfileV1(
 				snapshot.profile,
 				snapshot.approval,
@@ -92,6 +104,9 @@ export async function readRuntimeConnectionConsumerProfile(
 			const target = {
 				...approved,
 				url: approved.profile.publicOrigin + approved.profile.mcpPath,
+				...(snapshot.oauthClientId === undefined
+					? {}
+					: { oauthClientId: snapshot.oauthClientId }),
 			};
 			if (
 				Buffer.byteLength(JSON.stringify(target), "utf8") > maximumProfileBytes
