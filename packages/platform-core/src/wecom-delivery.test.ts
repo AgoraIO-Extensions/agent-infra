@@ -466,3 +466,56 @@ it.each([
 		"sent",
 	);
 });
+
+// #3227：入站媒体不调用 Agent 时按原因回复固定说明，不附带思考过程，也不带结果文件。
+it.each([
+	[
+		{ reason: "too_large", maxBytes: 20 * 1024 * 1024 },
+		"文件超过 20 MB，未发送给 Agent",
+	],
+	[
+		{ reason: "too_large", maxBytes: 10_485_760 + 524_288 },
+		"文件超过 10.5 MB，未发送给 Agent",
+	],
+	[{ reason: "too_large", maxBytes: 4096 }, "文件超过 4 KB，未发送给 Agent"],
+	[
+		{ reason: "unsupported_type", maxBytes: null },
+		"不支持该文件类型，未发送给 Agent",
+	],
+	[
+		{ reason: "expired", maxBytes: null },
+		"文件下载地址已过期，未发送给 Agent，请重新发送",
+	],
+	[
+		{ reason: "failed", maxBytes: null },
+		"文件接收失败，未发送给 Agent，请重新发送",
+	],
+	[
+		{ reason: "unsupported_channel", maxBytes: null },
+		"当前渠道不支持接收图片、文件、语音或视频，未发送给 Agent",
+	],
+] as const)(
+	"replies %j with its fixed media rejection text (#3227)",
+	async (mediaRejection, text) => {
+		const f = fixture();
+		f.store.claim.mockResolvedValueOnce({
+			...claim,
+			acceptanceStatus: "media_rejected",
+			executionStatus: null,
+			textDeltas: [],
+			mediaRejection,
+			thinking: { parts: [{ kind: "raw", text: "never" }], complete: true },
+		});
+		await f.useCase.dispatch();
+		expect(f.sender.send).toHaveBeenCalledWith({
+			scope: claim.scope,
+			replyHandle: "encrypted",
+			text,
+			revalidate: expect.any(Function),
+		});
+		expect(f.store.finish).toHaveBeenCalledWith(
+			expect.objectContaining({ receiptId: claim.receiptId }),
+			"sent",
+		);
+	},
+);

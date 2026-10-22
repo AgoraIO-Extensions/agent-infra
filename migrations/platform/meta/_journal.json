@@ -407,6 +407,13 @@
       "when": 1792654639069,
       "tag": "0061_wecom_conversation_rotation",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1792692130719,
+      "tag": "0062_wecom_inbound_media",
+      "breakpoints": true
     }
   ]
 }

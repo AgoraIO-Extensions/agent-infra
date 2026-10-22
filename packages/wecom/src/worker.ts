@@ -1,4 +1,8 @@
 export { createWecomApplicationAccessV1 } from "./application.js";
+export {
+	downloadWecomMediaV1,
+	type WecomMediaDownloadResultV1,
+} from "./media.js";
 export { createWecomReplyDecryptorV1, createWecomSenderV1 } from "./reply.js";
 
 export {

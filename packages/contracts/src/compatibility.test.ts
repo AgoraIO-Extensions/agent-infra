@@ -76,9 +76,56 @@ function restorePreWecomNewConversationContract(value: {
 		if (index >= 0) values.splice(index, 1);
 	}
 }
+/** #3227 之前的企微回执状态枚举：去掉末尾追加的 `media_rejected`。 */
+function restorePreWecomMediaRejectionContract(value: {
+	paths: Record<string, Record<string, unknown>>;
+}) {
+	for (const values of wecomReceiptStatusEnums(value)) {
+		const index = values.indexOf("media_rejected");
+		if (index >= 0) values.splice(index, 1);
+	}
+}
+
+it("admits only the appended WeCom media-rejected receipt status (#3227)", async () => {
+	const current = JSON.parse(await readFile(pilotBrowserArtifactPath, "utf8"));
+	const previous = structuredClone(current);
+	restorePreWecomMediaRejectionContract(previous);
+	const directory = await mkdtemp(
+		resolve(tmpdir(), "agent-infra-wecom-media-rejected-compat-"),
+	);
+	const previousPath = resolve(directory, "previous.json");
+	const currentPath = resolve(directory, "current.json");
+	try {
+		await writeFile(previousPath, JSON.stringify(previous));
+		await writeFile(currentPath, JSON.stringify(current));
+		expect(comparePaths(currentPath, previousPath).status).toBe(0);
+		const mutations: Record<string, (value: typeof current) => void> = {
+			inventedStatus: (value) => {
+				for (const values of wecomReceiptStatusEnums(value))
+					values.push("media_failed");
+			},
+			reordered: (value) => {
+				for (const values of wecomReceiptStatusEnums(value)) values.reverse();
+			},
+			onlyOneResponse: (value) => {
+				wecomReceiptStatusEnums(value)[0]?.pop();
+			},
+		};
+		for (const mutate of Object.values(mutations)) {
+			const changed = structuredClone(current);
+			mutate(changed);
+			await writeFile(currentPath, JSON.stringify(changed));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
 
 it("admits only the appended WeCom new-conversation receipt status (#3184)", async () => {
 	const current = JSON.parse(await readFile(pilotBrowserArtifactPath, "utf8"));
+	// 基线取 #3227 追加 `media_rejected` 之前的契约，只比较 #3184 这一项追加。
+	restorePreWecomMediaRejectionContract(current);
 	const previous = structuredClone(current);
 	restorePreWecomNewConversationContract(previous);
 	const directory = await mkdtemp(
@@ -3865,6 +3912,7 @@ describe("contract compatibility command", () => {
 			await readFile(pilotBrowserArtifactPath, "utf8"),
 		);
 		// #440 的历史新增按 #3184 之前的回执状态枚举核对。
+		restorePreWecomMediaRejectionContract(current);
 		restorePreWecomNewConversationContract(current);
 		const paths = [
 			"/api/v1/wecom/receipts",

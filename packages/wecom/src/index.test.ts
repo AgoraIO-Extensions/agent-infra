@@ -86,35 +86,41 @@ describe("WeCom callback boundary", () => {
 });
 
 it.each(["image", "file", "voice", "video"] as const)(
-	"maps a bot %s callback to opaque media metadata",
+	"maps a bot %s callback to an unsupported media reference without provider locators (#3227)",
 	async (kind) => {
 		const payload = {
 			...message,
 			msgtype: kind,
 			[kind]:
 				kind === "file"
-					? { url: "https://provider.test/media/file-1", name: "report.pdf" }
-					: { url: `https://provider.test/media/${kind}-1` },
+					? {
+							url: "https://provider.test/media/file-1?SENTINEL-URL",
+							name: "report.pdf",
+						}
+					: { url: `https://provider.test/media/${kind}-1?SENTINEL-URL` },
 		};
 		const adapter = createWecomAdapterV1({
 			now: () => now,
 			protectReply: async () => "protected-handle",
 		});
-		await expect(
-			adapter.receive(config, request(payload)),
-		).resolves.toMatchObject({
+		const received = await adapter.receive(config, request(payload));
+		expect(received).toMatchObject({
 			type: "message",
 			message: {
 				text: "",
 				media: [
 					{
 						kind,
-						mediaId: `https://provider.test/media/${kind}-1`,
 						...(kind === "file" ? { name: "report.pdf" } : { name: null }),
 					},
 				],
 			},
 		});
+		// 回调模式不支持媒体：不携带下载地址，Core 据此回复固定说明。
+		expect(JSON.stringify(received)).not.toContain("SENTINEL-URL");
+		expect(
+			received.type === "message" ? received.message.media?.[0] : undefined,
+		).not.toHaveProperty("download");
 	},
 );
 
@@ -189,19 +195,12 @@ it("validates application XML identity and rejects DTD or duplicate fields", asy
 	const mediaXml = `<xml><ToUserName>corp-1</ToUserName><FromUserName>member-1</FromUserName><CreateTime>${now.getTime() / 1000}</CreateTime><MsgType>file</MsgType><MediaId>media-1</MediaId><FileName>report.pdf</FileName><MsgId>1235</MsgId><AgentID>42</AgentID></xml>`;
 	await expect(
 		adapter.receive(app, request(mediaXml, "corp-1")),
-	).resolves.toMatchObject({
+	).resolves.toEqual({
 		type: "message",
-		message: {
+		message: expect.objectContaining({
 			text: "",
-			media: [
-				{
-					kind: "file",
-					mediaId: "media-1",
-					name: "report.pdf",
-					mediaType: "application/octet-stream",
-				},
-			],
-		},
+			media: [{ kind: "file", name: "report.pdf" }],
+		}),
 	});
 	const outerRequest = async (fields: string) => {
 		const original = request(xml, "corp-1");

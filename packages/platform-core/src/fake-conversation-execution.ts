@@ -214,6 +214,11 @@ export class FakeConversationExecutionV1
 	seedFile(file: FileRecordV1) {
 		this.files.set(file.fileId, structuredClone(file));
 	}
+	/** 测试用：读取文件记录，核对附件绑定（#3227）。 */
+	readFile(fileId: string): FileRecordV1 | null {
+		const file = this.files.get(fileId);
+		return file ? structuredClone(file) : null;
+	}
 
 	readonly #executions: StoredExecution[] = [];
 	readonly #stops: StoredStop[] = [];

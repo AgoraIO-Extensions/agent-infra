@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
 	createConversationExecutionUseCaseV1,
 	createWecomAuthorizationV1,
+	isWecomMediaRejectionV1,
 	parseCurrentTaskUserV1,
 	parseTaskAuthorizationBoundaryV1,
 	sameWecomConnectionAuthorizationFactV1,
@@ -14,10 +15,12 @@ import {
 	type WecomChannelStorePortV1,
 	type WecomConnectionAuthorizationFactV1,
 	type WecomConnectionAuthorizationPortV1,
+	type WecomConversationPreparationV1,
 	type WecomDeliveryClaimV1,
 	type WecomDeliveryStatusV1,
 	type WecomDeliveryStorePortV1,
 	type WecomIdentityPortV1,
+	type WecomMediaRejectionV1,
 	type WecomReceiptStatusV1,
 	type WecomScopeV1,
 	wecomConversationKeyForRotationV1,
@@ -95,7 +98,8 @@ async function audit(
 	const outcome =
 		action === "denied" ||
 		action === "conflict" ||
-		action === "conversation_unavailable"
+		action === "conversation_unavailable" ||
+		action === "media_rejected"
 			? "rejected"
 			: ["failed", "unavailable", "unknown", "expired"].includes(action)
 				? "failed"
@@ -113,7 +117,12 @@ interface Row {
 	channel_revision: string;
 	authorization_revision: string;
 	connection_authorization_fact: WecomConnectionAuthorizationFactV1 | null;
-	acceptance_status: "accepted" | "busy" | "unavailable" | "new_conversation";
+	acceptance_status:
+		| "accepted"
+		| "busy"
+		| "unavailable"
+		| "new_conversation"
+		| "media_rejected";
 	conversation_id: string | null;
 	execution_id: string | null;
 	reply_handle: string;
@@ -122,6 +131,8 @@ interface Row {
 	connection_fence: string | null;
 	delivery_status: WecomDeliveryStatusV1;
 	fence: number;
+	media_rejection_reason: string | null;
+	media_rejection_max_bytes: string | null;
 }
 function receipt(row: Row) {
 	return {
@@ -130,6 +141,19 @@ function receipt(row: Row) {
 		conversationId: row.conversation_id,
 		executionId: row.execution_id,
 	};
+}
+/** #3227：媒体拒绝回执的原因；数据库约束之外再校验一次，不认识的值按接收失败说明。 */
+function mediaRejection(row: Row): WecomMediaRejectionV1 {
+	const value = {
+		reason: row.media_rejection_reason,
+		maxBytes:
+			row.media_rejection_max_bytes === null
+				? null
+				: Number(row.media_rejection_max_bytes),
+	};
+	return isWecomMediaRejectionV1(value)
+		? value
+		: { reason: "failed", maxBytes: null };
 }
 /** #2982：把有界读取的思考过程行转成 claim 字段；少读或不认识的行都按「没有读完」处理。 */
 function thinkingClaim(
@@ -364,6 +388,40 @@ export class PostgresWecomChannelV1
 		execute: Parameters<WecomChannelStorePortV1["accept"]>[1],
 		callerSignal?: AbortSignal,
 	): Promise<WecomAcceptanceV1> {
+		return (await this.#admit(
+			plan,
+			{ execute },
+			callerSignal,
+		)) as WecomAcceptanceV1;
+	}
+	/**
+	 * #3227：入站媒体在受理事务之外写入附件前，按与受理相同的授权复核、映射锁与当前轮次，
+	 * 经同一幂等 createConversation 路径确定并提交当前 Conversation。不写回执，也不能轮换映射。
+	 */
+	async prepareConversation(
+		plan: WecomAcceptancePlanV1,
+		prepare: Parameters<
+			NonNullable<WecomChannelStorePortV1["prepareConversation"]>
+		>[1],
+		callerSignal?: AbortSignal,
+	): Promise<WecomConversationPreparationV1> {
+		return (await this.#admit(
+			plan,
+			{ prepare },
+			callerSignal,
+		)) as WecomConversationPreparationV1;
+	}
+	async #admit(
+		plan: WecomAcceptancePlanV1,
+		work:
+			| { readonly execute: Parameters<WecomChannelStorePortV1["accept"]>[1] }
+			| {
+					readonly prepare: Parameters<
+						NonNullable<WecomChannelStorePortV1["prepareConversation"]>
+					>[1];
+			  },
+		callerSignal?: AbortSignal,
+	): Promise<WecomAcceptanceV1 | WecomConversationPreparationV1> {
 		if (this.#closed) throw new TaskAuthorizationStoreError();
 		const deadlineAt = Date.now() + 10_000;
 		const deadline = AbortSignal.timeout(10_000);
@@ -519,6 +577,110 @@ export class PostgresWecomChannelV1
 				return readyToCommit({ outcome: "denied" as const });
 			}
 			if (current.outcome !== "allowed") return reject(current.outcome);
+			const conversationUseCase = (business: postgres.TransactionSql) =>
+				createConversationExecutionUseCaseV1({
+					transaction: new PostgresConversationExecutionTransactionV1({
+						transaction: business,
+						userDirectory: this.#userDirectory,
+						signal,
+					}),
+					authorization: {
+						async authorize() {
+							return {
+								outcome: "allowed",
+								authority: plan.authority.actor,
+							};
+						},
+					},
+				});
+			// #3184：同一映射的消息与 `/new` 在事务内串行，轮次读写与 Conversation 创建原子提交。
+			const lockMapping = async (business: postgres.TransactionSql) => {
+				await run(
+					business`select pg_advisory_xact_lock(hashtextextended(${`wecom-conversation:${plan.conversationKey}`},0))`,
+				);
+				const [stored] = await run(
+					business<
+						{ rotation: number }[]
+					>`select rotation from platform.wecom_conversation_rotations where mapping_key=${plan.conversationKey}`,
+				);
+				return stored?.rotation ?? 0;
+			};
+			const requireFinalAuthority = async (
+				business: postgres.TransactionSql,
+			) => {
+				const final = await this.#currentAuthorityInTransaction(
+					business,
+					plan,
+					boundary,
+					signal,
+				);
+				if (final.outcome === "revoked") throw new WecomAuthorizationRevoked();
+				if (final.outcome === "denied") throw new WecomAuthorizationDenied();
+				if (final.outcome !== "allowed")
+					throw new TaskAuthorizationStoreError();
+			};
+			if ("prepare" in work) {
+				// 已有回执时由受理路径重放，这里不再创建或读取会话。
+				const [received] = await run(
+					sql<
+						{ id: string }[]
+					>`select id from platform.wecom_receipts where id=${plan.eventKey}`,
+				);
+				if (received) return readyToCommit({ outcome: "received" as const });
+				let prepared: { conversationId: string; unavailable: boolean } | null =
+					null;
+				try {
+					await sql.savepoint(async (business) => {
+						const rotation = await lockMapping(business);
+						const result = await awaitTaskAuthorizationDependencyV1(
+							() =>
+								work.prepare(conversationUseCase(business), {
+									conversationKey: wecomConversationKeyForRotationV1(
+										plan.conversationKey,
+										rotation,
+									),
+									// 映射只在受理事务里轮换。
+									startNewConversation: async () => {
+										throw new TaskAuthorizationStoreError();
+									},
+								}),
+							signal,
+						);
+						if (
+							typeof result?.conversationId !== "string" ||
+							!result.conversationId ||
+							typeof result.unavailable !== "boolean"
+						)
+							throw new TaskAuthorizationStoreError();
+						prepared = {
+							conversationId: result.conversationId,
+							unavailable: result.unavailable,
+						};
+						await requireFinalAuthority(business);
+					});
+				} catch (error) {
+					if (error instanceof WecomAuthorizationDenied)
+						return reject("denied");
+					if (!(error instanceof WecomAuthorizationRevoked)) throw error;
+					await revokeUserTasksInTransaction(
+						sql,
+						plan.authority.actor.actorId,
+						{
+							workerId: this.#connectionHolderId ?? "platform-api",
+							traceId: plan.eventKey,
+							requestId: plan.eventKey,
+						},
+						signal,
+					);
+					return readyToCommit({ outcome: "denied" as const });
+				}
+				if (!prepared) throw new TaskAuthorizationStoreError();
+				return readyToCommit({
+					outcome: "prepared" as const,
+					...(prepared as { conversationId: string; unavailable: boolean }),
+				});
+			}
+			const execute = work.execute;
 			const [old] = await run(
 				sql<
 					Row[]
@@ -582,65 +744,48 @@ export class PostgresWecomChannelV1
 				| undefined;
 			try {
 				await sql.savepoint(async (business) => {
-					const transaction = new PostgresConversationExecutionTransactionV1({
-						transaction: business,
-						userDirectory: this.#userDirectory,
-						signal,
-					});
-					// #3184：同一映射的消息与 `/new` 在受理事务内串行，轮次读写与 Conversation 创建原子提交。
-					await run(
-						business`select pg_advisory_xact_lock(hashtextextended(${`wecom-conversation:${plan.conversationKey}`},0))`,
-					);
-					const [stored] = await run(
-						business<
-							{ rotation: number }[]
-						>`select rotation from platform.wecom_conversation_rotations where mapping_key=${plan.conversationKey}`,
-					);
-					const rotation = stored?.rotation ?? 0;
+					const rotation = await lockMapping(business);
 					let rotated = false;
 					const executionResult = await awaitTaskAuthorizationDependencyV1(
 						() =>
-							execute(
-								createConversationExecutionUseCaseV1({
-									transaction,
-									authorization: {
-										async authorize() {
-											return {
-												outcome: "allowed",
-												authority: plan.authority.actor,
-											};
-										},
-									},
-								}),
-								{
-									conversationKey: wecomConversationKeyForRotationV1(
-										plan.conversationKey,
-										rotation,
-									),
-									startNewConversation: async () => {
-										if (rotated) throw new TaskAuthorizationStoreError();
-										rotated = true;
-										const changed = await run(
-											business<
-												{ rotation: number }[]
-											>`insert into platform.wecom_conversation_rotations (mapping_key,agent_id,rotation,created_at,updated_at) values (${plan.conversationKey},${plan.message.agentId},${rotation + 1},now(),now())
+							execute(conversationUseCase(business), {
+								conversationKey: wecomConversationKeyForRotationV1(
+									plan.conversationKey,
+									rotation,
+								),
+								startNewConversation: async () => {
+									if (rotated) throw new TaskAuthorizationStoreError();
+									rotated = true;
+									const changed = await run(
+										business<
+											{ rotation: number }[]
+										>`insert into platform.wecom_conversation_rotations (mapping_key,agent_id,rotation,created_at,updated_at) values (${plan.conversationKey},${plan.message.agentId},${rotation + 1},now(),now())
     on conflict (mapping_key) do update set rotation=${rotation + 1},updated_at=now() where platform.wecom_conversation_rotations.rotation=${rotation} returning rotation`,
-										);
-										// 映射锁之外有人改过轮次时失败关闭，不静默丢掉这次 /new。
-										if (changed.length !== 1)
-											throw new TaskAuthorizationStoreError();
-									},
+									);
+									// 映射锁之外有人改过轮次时失败关闭，不静默丢掉这次 /new。
+									if (changed.length !== 1)
+										throw new TaskAuthorizationStoreError();
 								},
-							),
+							}),
 						signal,
 					);
-					// 新会话回执不关联 Conversation；其余状态都必须关联映射到的 Conversation。
+					// 新会话与入站媒体拒绝（#3227）的回执不关联 Conversation；其余状态都必须关联映射到的
+					// Conversation。只有媒体拒绝带原因，且原因必须完整。
+					const mediaRejection = executionResult.mediaRejection;
 					if (
 						executionResult.status === "new_conversation"
 							? !rotated ||
 								executionResult.conversationId !== null ||
-								executionResult.executionId !== null
-							: rotated || !executionResult.conversationId
+								executionResult.executionId !== null ||
+								mediaRejection !== undefined
+							: executionResult.status === "media_rejected"
+								? rotated ||
+									executionResult.conversationId !== null ||
+									executionResult.executionId !== null ||
+									!isWecomMediaRejectionV1(mediaRejection)
+								: rotated ||
+									!executionResult.conversationId ||
+									mediaRejection !== undefined
 					)
 						throw new TaskAuthorizationStoreError();
 					acceptedResult = {
@@ -668,8 +813,9 @@ export class PostgresWecomChannelV1
 					};
 					const accepted = acceptedResult;
 					if (!accepted) throw new TaskAuthorizationStoreError();
-					await run(business`insert into platform.wecom_receipts (id,request_digest,scope,actor_id,task_boundary,channel_revision,authorization_revision,connection_authorization_fact,acceptance_status,conversation_id,execution_id,reply_handle,expires_at,created_at,updated_at,connection_bot_id,connection_fence)
-    values (${plan.eventKey},${plan.requestDigest},${business.json(scope)},${plan.authority.actor.actorId},${business.json(parseTaskAuthorizationBoundaryV1(plan.authority.actor.taskBoundary) as unknown as postgres.JSONValue)},${plan.authority.channelRevision},${plan.authority.actor.authorizationRevision},${plan.authority.connectionAuthorizationFact ? business.json(plan.authority.connectionAuthorizationFact as unknown as postgres.JSONValue) : null},${accepted.status},${accepted.conversationId},${accepted.executionId},${plan.message.replyHandle},${new Date(plan.message.replyExpiresAt)},now(),now(),${plan.connectionFence?.botId ?? null},${plan.connectionFence?.fence ?? null})`);
+					// 回执只保存拒绝原因与上限，不保存下载地址、aeskey 或媒体内容。
+					await run(business`insert into platform.wecom_receipts (id,request_digest,scope,actor_id,task_boundary,channel_revision,authorization_revision,connection_authorization_fact,acceptance_status,conversation_id,execution_id,reply_handle,expires_at,created_at,updated_at,connection_bot_id,connection_fence,media_rejection_reason,media_rejection_max_bytes)
+    values (${plan.eventKey},${plan.requestDigest},${business.json(scope)},${plan.authority.actor.actorId},${business.json(parseTaskAuthorizationBoundaryV1(plan.authority.actor.taskBoundary) as unknown as postgres.JSONValue)},${plan.authority.channelRevision},${plan.authority.actor.authorizationRevision},${plan.authority.connectionAuthorizationFact ? business.json(plan.authority.connectionAuthorizationFact as unknown as postgres.JSONValue) : null},${accepted.status},${accepted.conversationId},${accepted.executionId},${plan.message.replyHandle},${new Date(plan.message.replyExpiresAt)},now(),now(),${plan.connectionFence?.botId ?? null},${plan.connectionFence?.fence ?? null},${mediaRejection?.reason ?? null},${mediaRejection?.maxBytes ?? null})`);
 					await audit(
 						business,
 						plan.eventKey,
@@ -677,7 +823,9 @@ export class PostgresWecomChannelV1
 							? "conversation_unavailable"
 							: accepted.status === "new_conversation"
 								? "conversation_started"
-								: "accepted",
+								: accepted.status === "media_rejected"
+									? "media_rejected"
+									: "accepted",
 						{
 							agentId: plan.message.agentId,
 							actorId: plan.authority.actor.actorId,
@@ -685,17 +833,7 @@ export class PostgresWecomChannelV1
 						plan.connectionFence ? "platform-worker" : "platform-api",
 						signal,
 					);
-					const final = await this.#currentAuthorityInTransaction(
-						business,
-						plan,
-						boundary,
-						signal,
-					);
-					if (final.outcome === "revoked")
-						throw new WecomAuthorizationRevoked();
-					if (final.outcome === "denied") throw new WecomAuthorizationDenied();
-					if (final.outcome !== "allowed")
-						throw new TaskAuthorizationStoreError();
+					await requireFinalAuthority(business);
 				});
 			} catch (error) {
 				if (error instanceof WecomAuthorizationDenied) return reject("denied");
@@ -882,6 +1020,9 @@ export class PostgresWecomChannelV1
 					? { connectionAuthorizationFact: row.connection_authorization_fact }
 					: {}),
 				acceptanceStatus: row.acceptance_status,
+				...(row.acceptance_status === "media_rejected"
+					? { mediaRejection: mediaRejection(row) }
+					: {}),
 				executionStatus: row.execution_status,
 				answerReady: row.answer_ready,
 				// #3184：失败文案按回执所属会话的当前状态附带 /new 指引；代次隔离与

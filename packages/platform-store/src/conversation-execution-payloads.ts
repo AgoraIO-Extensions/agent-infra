@@ -59,7 +59,13 @@ export function parseExecution(value: unknown) {
 	};
 }
 
-export function parseMessage(value: unknown) {
+export function parseMessage(
+	value: unknown,
+	options: {
+		/** 只带附件的消息（#3227）正文可以为空；正文与附件至少有一项。 */
+		readonly withAttachments?: boolean;
+	} = {},
+) {
 	const input = exactRecord(value, [
 		"messageId",
 		"conversationId",
@@ -74,7 +80,10 @@ export function parseMessage(value: unknown) {
 		messageId: text(input.messageId),
 		conversationId: text(input.conversationId),
 		actorId: text(input.actorId),
-		text: text(input.text, 65_536),
+		text:
+			options.withAttachments && input.text === ""
+				? ""
+				: text(input.text, 65_536),
 		executionId: text(input.executionId),
 		status: "submitted" as const,
 		createdAt: date(input.createdAt),

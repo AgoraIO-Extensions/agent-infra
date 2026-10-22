@@ -195,7 +195,9 @@ export function validateMessagePlan(
 	);
 	if (input.schemaVersion !== 1 || !state.conversation) unavailable();
 	const conversation = parseConversation(input.conversation);
-	const message = parseMessage(input.message);
+	const message = parseMessage(input.message, {
+		withAttachments: (request.command.attachments?.length ?? 0) > 0,
+	});
 	const outbox = parseMessageOutbox(input.outboxIntent);
 	const audit = parseMessageAudit(input.auditEvent);
 	const modelSelectionFallback = parseModelSelectionFallback(

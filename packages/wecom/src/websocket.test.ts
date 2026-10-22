@@ -94,26 +94,87 @@ it("admits only authenticated text for the configured bot through the official S
 		threadId: null,
 	});
 });
-it("maps authenticated media callbacks to opaque media metadata", async () => {
+it("maps authenticated media callbacks to Worker-only download material (#3227)", async () => {
 	const s = await setup();
 	await s.authenticate();
 	s.push({
 		msgid: "media-event",
 		msgtype: "file",
-		file: { url: "https://provider.test/media/file-1", name: "report.pdf" },
+		file: { url: "https://provider.test/media/file-1", aeskey: "fixture-key" },
 	});
-	await expect.poll(() => s.messages.length).toBe(1);
-	expect(s.messages[0]).toMatchObject({
+	s.push({
+		msgid: "voice-event",
+		msgtype: "voice",
+		voice: { content: "语音转写的问题" },
+	});
+	s.push({
+		msgid: "mixed-event",
+		msgtype: "mixed",
+		mixed: {
+			msg_item: [
+				{ msgtype: "text", text: { content: "第一段" } },
+				{
+					msgtype: "image",
+					image: { url: "https://provider.test/media/image-1", aeskey: "k1" },
+				},
+				{ msgtype: "text", text: { content: "第二段" } },
+				{
+					msgtype: "image",
+					image: { url: "https://provider.test/media/image-2", aeskey: "k2" },
+				},
+			],
+		},
+	});
+	// 没有 aeskey 无法解密，按无效帧丢弃。
+	s.push({
+		msgid: "keyless-event",
+		msgtype: "image",
+		image: { url: "https://provider.test/media/image-3" },
+	});
+	await expect.poll(() => s.messages.length).toBe(3);
+	const byEvent = Object.fromEntries(
+		s.messages.map((received) => [received.eventId, received]),
+	);
+	const expiresAt = expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/);
+	expect(byEvent["media-event"]).toMatchObject({
 		text: "",
 		media: [
 			{
 				kind: "file",
-				mediaId: "https://provider.test/media/file-1",
-				name: "report.pdf",
-				mediaType: "application/octet-stream",
+				name: null,
+				download: {
+					url: "https://provider.test/media/file-1",
+					aesKey: "fixture-key",
+					expiresAt,
+				},
 			},
 		],
 	});
+	// voice 在长连接里只是转写文本，按普通文本受理。
+	expect(byEvent["voice-event"]?.text).toBe("语音转写的问题");
+	expect(byEvent["voice-event"]).not.toHaveProperty("media");
+	expect(byEvent["mixed-event"]).toMatchObject({
+		text: "第一段\n第二段",
+		media: [
+			{
+				kind: "image",
+				name: null,
+				download: { url: "https://provider.test/media/image-1", aesKey: "k1" },
+			},
+			{
+				kind: "image",
+				name: null,
+				download: { url: "https://provider.test/media/image-2", aesKey: "k2" },
+			},
+		],
+	});
+	expect(byEvent["keyless-event"]).toBeUndefined();
+	// 下载地址 5 分钟内有效，不晚于收到后 5 分钟。
+	const expiry = Date.parse(
+		byEvent["media-event"]?.media?.[0]?.download?.expiresAt ?? "",
+	);
+	expect(expiry - Date.now()).toBeLessThanOrEqual(300_000);
+	expect(expiry - Date.now()).toBeGreaterThan(290_000);
 });
 it("returns unknown on lost ACK and does not resend after reconnect", async () => {
 	const s = await setup();

@@ -3728,3 +3728,15 @@ describe("claim traceparent (#2473)", () => {
 		).toThrow();
 	});
 });
+
+// #3227：企微只带附件的消息正文为空；正文与附件至少有一项。
+describe("attachment-only claim input (#3227)", () => {
+	it("admits an empty body only together with attachments", () => {
+		expect(
+			parseClaim(claim({ input: { text: "", attachments: ["file-1"] } })).input,
+		).toEqual({ text: "", attachments: ["file-1"] });
+		expect(() =>
+			parseClaim(claim({ input: { text: "", attachments: [] } })),
+		).toThrow(expect.objectContaining({ code: "unavailable" }));
+	});
+});

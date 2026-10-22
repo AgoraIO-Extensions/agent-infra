@@ -895,7 +895,13 @@ export const CreateConversationRequestV1Schema = z.strictObject({
 
 export const WecomReceiptProjectionV1Schema = z.strictObject({
 	receiptId: OpaqueIdV1Schema,
-	status: z.enum(["accepted", "busy", "unavailable", "new_conversation"]),
+	status: z.enum([
+		"accepted",
+		"busy",
+		"unavailable",
+		"new_conversation",
+		"media_rejected",
+	]),
 	conversationId: OpaqueIdV1Schema.nullable(),
 	executionId: OpaqueIdV1Schema.nullable(),
 	deliveryStatus: z.enum([

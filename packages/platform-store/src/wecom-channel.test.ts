@@ -2366,3 +2366,101 @@ describe("WeCom /new and unavailable conversations (#3184)", () => {
 		);
 	});
 });
+
+describe("WeCom inbound media receipts (#3227)", () => {
+	const media = [
+		{
+			kind: "image" as const,
+			name: null,
+			download: {
+				url: "https://download.example.test/SENTINEL-URL-3227",
+				aesKey: "SENTINEL-AESKEY-3227",
+				expiresAt: "2099-01-01T00:00:00Z",
+			},
+		},
+	];
+
+	it("prepares the mapped conversation outside admission and persists a rejection receipt", async () => {
+		const sender = "media_sender_a";
+		const conversations: string[] = [];
+		const event = {
+			...message,
+			senderId: sender,
+			peerId: "media_group",
+			eventId: "media_rejected_1",
+			text: "",
+			media,
+		};
+		const resolve = async (input: { conversationId: string }) => {
+			conversations.push(input.conversationId);
+			return {
+				outcome: "rejected" as const,
+				reason: "too_large" as const,
+				maxBytes: 20_971_520,
+			};
+		};
+		const { media: _media, ...text } = event;
+		const seeded = await channel().receive({
+			...text,
+			eventId: "media_seed",
+			text: "seed",
+		});
+		if (seeded.outcome !== "accepted") throw new Error("Expected seed");
+		await completeWecomExecutionFixture(sql, seeded.receipt.executionId);
+		await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+		const rejected = await createWecomChannelV1({
+			store,
+			authorization: allowedAuthorization,
+			media: { resolve },
+		}).receive(event);
+		expect(rejected).toEqual({
+			outcome: "accepted",
+			receipt: {
+				receiptId: expect.any(String),
+				status: "media_rejected",
+				conversationId: null,
+				executionId: null,
+			},
+		});
+		if (rejected.outcome !== "accepted") throw new Error("Expected receipt");
+		// 附件写入前确定的就是这个发送者当前映射的会话，受理事务里不再创建另一条。
+		expect(conversations).toEqual([seeded.receipt.conversationId]);
+		expect(
+			await sql`select action, outcome from platform.audit_events where request_id=${rejected.receipt.receiptId}`,
+		).toEqual([{ action: "wecom.media_rejected", outcome: "rejected" }]);
+		expect(await store.claim()).toMatchObject({
+			receiptId: rejected.receipt.receiptId,
+			acceptanceStatus: "media_rejected",
+			mediaRejection: { reason: "too_large", maxBytes: 20_971_520 },
+			textDeltas: [],
+		});
+		// 同一事件重投直接走受理重放，不再确定会话或下载。
+		expect(
+			await createWecomChannelV1({
+				store,
+				authorization: allowedAuthorization,
+				media: { resolve },
+			}).receive(event),
+		).toEqual({ ...rejected, outcome: "replayed" });
+		expect(conversations).toHaveLength(1);
+		const [row] =
+			await sql`select row_to_json(r)::text as row from platform.wecom_receipts r where id=${rejected.receipt.receiptId}`;
+		expect(row?.row).not.toContain("SENTINEL");
+	});
+
+	it.each([
+		["a media_rejected receipt without a reason", "media_rejected", null, null],
+		["a reason on an accepted receipt", "accepted", "failed", null],
+		["too_large without its limit", "media_rejected", "too_large", null],
+		["a limit on another reason", "media_rejected", "expired", 1024],
+		["an unknown reason", "media_rejected", "virus", null],
+	] as const)(
+		"rejects %s at the database",
+		async (_name, status, reason, maxBytes) => {
+			await expect(
+				sql`insert into platform.wecom_receipts (id,request_digest,scope,actor_id,task_boundary,channel_revision,authorization_revision,acceptance_status,conversation_id,execution_id,reply_handle,expires_at,created_at,updated_at,media_rejection_reason,media_rejection_max_bytes)
+				values (${`constraint_${status}_${reason}_${maxBytes}`},'digest',${sql.json({})},'actor',${sql.json({})},'c','a',${status},${status === "accepted" ? "conversation" : null},null,'handle',now(),now(),now(),${reason},${maxBytes})`,
+			).rejects.toMatchObject({ constraint_name: "wecom_media_rejection" });
+		},
+	);
+});

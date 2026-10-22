@@ -9,10 +9,13 @@ const mocks = vi.hoisted(() => ({
 	channelOptions: undefined as
 		| {
 				readonly media?: {
-					resolve: (...args: never[]) => Promise<readonly string[]>;
+					resolve: (...args: never[]) => Promise<unknown>;
 				};
 		  }
 		| undefined,
+	mediaOptions: undefined as Record<string, unknown> | undefined,
+	mediaResolve: vi.fn(),
+	mediaClose: vi.fn(async () => {}),
 	sender: undefined as WecomSendPortV1 | undefined,
 	close: vi.fn(async () => {}),
 	connectionsTick: vi.fn(async () => {}),
@@ -68,26 +71,41 @@ vi.mock("./wecom-setup.js", () => ({
 		bindings: mocks.setupBindings,
 	}),
 }));
+vi.mock("./wecom-media.js", () => ({
+	createWecomInboundMediaResolverV1: (options: Record<string, unknown>) => {
+		mocks.mediaOptions = options;
+		return { resolve: mocks.mediaResolve, close: mocks.mediaClose };
+	},
+}));
 
 import { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
 
-afterEach(() => vi.resetAllMocks());
+afterEach(() => {
+	vi.resetAllMocks();
+	mocks.mediaOptions = undefined;
+});
 
-it("forwards the deployment-owned media resolver without creating a second file authority", async () => {
-	const resolve = vi.fn(async () => ["file-1"] as const);
-	const mediaResolver = { resolve };
+it("assembles the inbound media resolver from the deployment file surface (#3227)", async () => {
+	const storage = { upload: vi.fn(), inspect: vi.fn() };
 	const worker = createPlatformWecomWorkerV1({
 		databaseUrl: "postgres://fixture",
 		identity: { resolveSender: async () => null, activeUsers: async () => [] },
 		observe: () => {},
 		sender: { send: async () => "failed" },
-		mediaResolver,
+		media: { storage, downloadTimeoutMs: 30_000 },
 	});
 	try {
-		expect(mocks.channelOptions?.media).toBe(mediaResolver);
+		expect(mocks.mediaOptions).toMatchObject({
+			databaseUrl: "postgres://fixture",
+			storage,
+			downloadTimeoutMs: 30_000,
+			authorization: expect.any(Object),
+		});
+		expect(mocks.channelOptions?.media?.resolve).toBe(mocks.mediaResolve);
 	} finally {
 		await worker.close();
 	}
+	expect(mocks.mediaClose).toHaveBeenCalledTimes(1);
 });
 
 it("keeps the channel media resolver absent when deployment does not provide one", async () => {
@@ -99,6 +117,7 @@ it("keeps the channel media resolver absent when deployment does not provide one
 	});
 	try {
 		expect(mocks.channelOptions?.media).toBeUndefined();
+		expect(mocks.mediaOptions).toBeUndefined();
 	} finally {
 		await worker.close();
 	}
