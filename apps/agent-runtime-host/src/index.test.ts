@@ -1,10 +1,12 @@
 import { generateKeyPairSync } from "node:crypto";
 import {
+	cp,
 	mkdir,
 	mkdtemp,
 	readFile,
 	realpath,
 	rm,
+	stat,
 	writeFile,
 } from "node:fs/promises";
 import { request as httpsRequest } from "node:https";
@@ -94,6 +96,17 @@ runtimeAssemblyMocks.openPiRuntime.mockImplementation(
 runtimeAssemblyMocks.openClaudeRuntimeDriver.mockImplementation(
 	actualMessageRuntimes.ClaudeRuntimeDriver.open,
 );
+
+// 生产 Codex Driver，只有原生进程启动由测试控制：启动永不完成即 RuntimeHost 在
+// 原生存储创建之前被杀（#3174）。
+class PendingNativeLaunchCodexDriver extends actualMessageRuntimes.CodexRuntimeDriver {
+	static openPendingLaunch(
+		options: CodexRuntimeDriverOptions,
+		launch: () => Promise<never>,
+	) {
+		return PendingNativeLaunchCodexDriver.openWithBridge(options, launch);
+	}
+}
 
 import {
 	assembleRuntimeHost,
@@ -1596,6 +1609,234 @@ describe("RuntimeHost environment assembly", () => {
 			}
 		},
 	);
+
+	it("restarts a Codex Host killed before native storage existed and blocks the Session", async () => {
+		// #3174：首条 Turn 已在 Host 与 Driver 中持久化为 prepared，但原生进程尚未启动、
+		// `codex-driver.json.native` 尚未创建时进程被杀。重启后 RuntimeHost 必须能启动，
+		// 原 Execution 为 unknown，同会话的新 Turn 得到持久的 RUNTIME_SESSION_BLOCKED。
+		const values = await environment();
+		const killedDirectory = await realpath(values.AGENT_INFRA_RUNTIME_DATA_DIR);
+		const restartedRoot = await mkdtemp(join(tmpdir(), "runtime-restarted-"));
+		directories.push(restartedRoot);
+		const restartedDirectory = join(await realpath(restartedRoot), "data");
+		const configured = (dataDirectory: string) => ({
+			...values,
+			AGENT_INFRA_RUNTIME_DATA_DIR: dataDirectory,
+			AGENT_INFRA_RUNTIME_DRIVER: "codex",
+			AGENT_INFRA_RUNTIME_WORKER_ID: "synthetic-worker",
+			AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
+			AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+				schemaVersion: 4,
+				configVersion: "configuration-4-fingerprint",
+				defaultModelOptionId: "model-option-primary",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "model-option-primary",
+						protocol: "openai-responses-v1",
+						authentication: "bearer",
+						endpoint: "https://models.example.test/v1",
+						model: "gpt-5.3-codex",
+						reasoningLevels: ["high"],
+					},
+				],
+			}),
+		});
+		runtimeAssemblyMocks.verifyCodexPilotInstallation.mockResolvedValue({
+			protocolVersion: 2,
+			codexVersion: "synthetic-codex",
+			upstreamTag: "synthetic-tag",
+			upstreamCommit: "synthetic-commit",
+			schemaSha256: "synthetic-schema-sha256",
+		});
+		const signer = createWorkerRuntimeGrantSignerV4({
+			issuer: "synthetic-platform",
+			workerId: "synthetic-worker",
+			keyId: "synthetic-key",
+			privateKey,
+		});
+		const submission = (executionId: string) => {
+			const request = RuntimeSubmitTurnRequestV4Schema.parse({
+				schemaVersion: 4,
+				requestId: `${executionId}-request`,
+				traceId: `${executionId}-trace`,
+				principal: { kind: "user", id: "alice" },
+				executionSource: "web",
+				channelId: "web",
+				agentId: "synthetic-agent",
+				conversationId: "restart-conversation",
+				executionId,
+				turnId: `${executionId}-turn`,
+				sessionGeneration: 1,
+				hostSessionRef: null,
+				operation: {
+					kind: "execution",
+					id: executionId,
+					deliveryFence: 1,
+					executionDeliveryFence: 1,
+				},
+				grant: {
+					schemaVersion: 4,
+					format: "runtime-execution-jws",
+					token: "a.b.c",
+				},
+				keyBinding: {
+					purpose: "personal",
+					subjectId: "alice",
+					ciphertextRef: "key-1",
+					version: 1,
+				},
+				input: { text: "restart-input", attachments: [] },
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-option-primary",
+					reasoningLevel: "high",
+				},
+			});
+			return {
+				...request,
+				grant: signer.sign(request, "synthetic-authorization"),
+			};
+		};
+		const transport = async (
+			runtime: Awaited<ReturnType<typeof assembleRuntimeHost>>,
+			request: ReturnType<typeof submission>,
+		) => {
+			const verified = await runtime.verifyGrantV4?.(request);
+			if (!verified) throw new Error("Missing V4 Grant verifier");
+			return {
+				businessRequest: request,
+				privateKeyField: {
+					schemaVersion: 1 as const,
+					context: {
+						requestId: request.requestId,
+						grantId: verified.claims.grantId,
+						requestDigest: verified.claims.requestDigest,
+						traceId: request.traceId,
+						principal: request.principal,
+						executionSource: request.executionSource,
+						channelId: request.channelId,
+						agentId: request.agentId,
+						conversationId: request.conversationId,
+						executionId: request.executionId,
+						turnId: request.turnId,
+						sessionGeneration: request.sessionGeneration,
+						hostSessionRef: request.hostSessionRef,
+						operation: request.operation,
+						keyBinding: request.keyBinding,
+					},
+					keyDelivery: { relayKey: "synthetic-relay-key" },
+				},
+			};
+		};
+		const nativeStorageAbsent = (dataDirectory: string) =>
+			expect(
+				stat(join(dataDirectory, "codex-driver.json.native")),
+			).rejects.toMatchObject({ code: "ENOENT" });
+		const first = submission("execution-before-native");
+
+		const launch = Promise.withResolvers<never>();
+		let launches = 0;
+		runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(
+			(options: CodexRuntimeDriverOptions) =>
+				PendingNativeLaunchCodexDriver.openPendingLaunch(options, () => {
+					launches += 1;
+					return launch.promise;
+				}),
+		);
+		const killed = await assembleRuntimeHost(configured(killedDirectory));
+		try {
+			const pending = killed.host
+				.submitTurnV4(await transport(killed, first))
+				.catch(() => undefined);
+			await vi.waitFor(() => expect(launches).toBe(1));
+			await nativeStorageAbsent(killedDirectory);
+			// 进程被杀那一刻 PVC 上的全部文件；原进程之后的写入不可见。
+			await cp(killedDirectory, restartedDirectory, { recursive: true });
+			launch.reject(new Error("synthetic killed process"));
+			await pending;
+		} finally {
+			await killed.close();
+		}
+		const killedHost = JSON.parse(
+			await readFile(join(restartedDirectory, "host.json"), "utf8"),
+		);
+		const killedSessions = Object.values(killedHost.sessions) as {
+			hostSessionRef: string;
+			nativeSessionRef?: string;
+			operations: Record<string, { state: string }>;
+		}[];
+		expect(killedSessions).toHaveLength(1);
+		const [killedSession] = killedSessions;
+		expect(killedSession?.nativeSessionRef).toBeUndefined();
+		expect(killedSession?.operations["execution-before-native"]?.state).toBe(
+			"prepared",
+		);
+		expect(
+			Object.values(
+				JSON.parse(
+					await readFile(join(restartedDirectory, "codex-driver.json"), "utf8"),
+				).operations,
+			),
+		).toEqual([expect.objectContaining({ state: "prepared" })]);
+
+		runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(
+			(options: CodexRuntimeDriverOptions) =>
+				actualMessageRuntimes.CodexRuntimeDriver.open(options),
+		);
+		const restarted = await assembleRuntimeHost(configured(restartedDirectory));
+		try {
+			const hostSessionRef = killedSession?.hostSessionRef;
+			expect(
+				await restarted.host.submitTurnV4(await transport(restarted, first)),
+			).toEqual({
+				schemaVersion: 4,
+				hostSessionRef,
+				operationId: "execution-before-native",
+				result: {
+					outcome: "unknown",
+					code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+					message: "Runtime command acceptance could not be confirmed",
+				},
+			});
+			const next = submission("execution-after-restart");
+			const blocked = {
+				schemaVersion: 4,
+				hostSessionRef,
+				operationId: "execution-after-restart",
+				result: {
+					outcome: "rejected",
+					code: "RUNTIME_SESSION_BLOCKED",
+					message: "Runtime session is blocked by an unconfirmed turn",
+					retryable: false,
+				},
+			};
+			expect(
+				await restarted.host.submitTurnV4(await transport(restarted, next)),
+			).toEqual(blocked);
+			expect(
+				await restarted.host.submitTurnV4(await transport(restarted, next)),
+			).toEqual(blocked);
+			const restartedHost = JSON.parse(
+				await readFile(join(restartedDirectory, "host.json"), "utf8"),
+			);
+			expect(
+				restartedHost.sessions[hostSessionRef ?? ""]?.operations,
+			).toMatchObject({
+				"execution-before-native": {
+					state: "resolved",
+					result: { outcome: "unknown", code: "RUNTIME_ACCEPTANCE_UNKNOWN" },
+				},
+				"execution-after-restart": {
+					state: "resolved",
+					result: blocked.result,
+				},
+			});
+			await nativeStorageAbsent(restartedDirectory);
+		} finally {
+			await restarted.close();
+		}
+	});
 
 	it.each([false, true])(
 		"consumes fixed installed Skill deployment before Driver activation, invalid=%s",
