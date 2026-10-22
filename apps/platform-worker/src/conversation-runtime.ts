@@ -1464,7 +1464,24 @@ export function createConversationRuntimeV2(
 				authority.purpose === "control" &&
 				request.operation !== "turn.stop"
 			) {
-				await latch(prepared, active);
+				try {
+					await latch(prepared, active);
+				} catch (error) {
+					// 会话从未原生绑定、原执行也没有提交引用：latch 因未绑定被拒，但这次业务请求
+					// 确定没有发出。按未发送交还 Core，由已受理的 stop 收敛为取消，不判为失败（#3199）。
+					if (
+						error instanceof ConversationRuntimeHostError &&
+						error.code === "RUNTIME_SESSION_UNAVAILABLE" &&
+						state.hostSessionRef === null &&
+						state.originalSubmitHostSessionRef == null
+					)
+						throw new ConversationRuntimeHostError(
+							"AUTHORIZATION_REVOKED",
+							true,
+							{ notSent: true },
+						);
+					throw error;
+				}
 				denied();
 			}
 			if (request.operation === "native-capability.invoke") {
