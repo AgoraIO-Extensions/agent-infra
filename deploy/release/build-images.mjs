@@ -278,6 +278,9 @@ async function buildImage({
 	contextPath,
 	git,
 }) {
+	const phase = (name) =>
+		console.info(JSON.stringify({ phase: name, image: image.key, platform, imageTag }));
+	phase("build.start");
 	const docker = process.env.DOCKER_BIN ?? "docker";
 	const repository = `${prefix}/${image.name}`;
 	const reference = `${repository}:${imageTag}-${platformTag}`;
@@ -289,6 +292,7 @@ async function buildImage({
 	const archivePaths = [];
 	let archivePath;
 	for (const pass of [1, 2]) {
+		phase(`build.pass.${pass}.start`);
 		assertCheckout(git, commitSha);
 		const metadataPath = join(temp, `${image.name}-${pass}.json`);
 		archivePath = join(temp, `${image.name}-${pass}.oci.tar`);
@@ -329,6 +333,7 @@ async function buildImage({
 			},
 		);
 		assertCheckout(git, commitSha);
+		phase(`build.pass.${pass}.complete`);
 		let metadata;
 		try {
 			metadata = JSON.parse(await readFile(metadataPath, "utf8"));
@@ -357,6 +362,7 @@ async function buildImage({
 			timeoutMs: timeoutMs.load,
 		},
 	);
+	phase("load.complete");
 	const user = runCommand(
 		docker,
 		["image", "inspect", "--format", "{{.Config.User}}", reference],
@@ -407,6 +413,7 @@ async function buildImage({
 			timeoutMs: timeoutMs.probe,
 		},
 	);
+	phase("probe.complete");
 	const source = assertCheckout(git, commitSha);
 	const runtimeProbe =
 		(image.key === "runtimeHost" || image.key === "codex")
@@ -427,6 +434,7 @@ async function buildImage({
 }
 
 function publishImage({ image, builtImage, registryInsecure, git, commitSha }) {
+	console.info(JSON.stringify({ phase: "publish.start", image: image.key, reference: builtImage.reference }));
 	const docker = process.env.DOCKER_BIN ?? "docker";
 	assertCheckout(git, commitSha);
 	runCommand(docker, ["load", "--input", builtImage.archivePath], {
@@ -440,6 +448,7 @@ function publishImage({ image, builtImage, registryInsecure, git, commitSha }) {
 		name: `${image.key} image publication`,
 		timeoutMs: timeoutMs.publish,
 	});
+	console.info(JSON.stringify({ phase: "publish.push.complete", image: image.key, reference: builtImage.reference }));
 	assertCheckout(git, commitSha);
 	const output = runCommand(
 		docker,
