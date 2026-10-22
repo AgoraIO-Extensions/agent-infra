@@ -29,7 +29,11 @@ export type WecomOutboundMediaSkipReasonV1 =
 	| Exclude<WecomOutboundMediaPlanV1, "send">
 	| "unsupported_channel";
 /** 单个媒体的发送进度，按文件持久记录（工程 Spec §14.2.3）。 */
-export type WecomMediaProgressStatusV1 = "sending" | "sent" | "failed" | "unknown";
+export type WecomMediaProgressStatusV1 =
+	| "sending"
+	| "sent"
+	| "failed"
+	| "unknown";
 
 /**
  * 回答中按 CommonMark 解析出的一处 `sandbox:` 引用（与 Runtime 的解析一致：代码、原始 HTML、

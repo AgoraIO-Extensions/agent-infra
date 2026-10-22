@@ -33,10 +33,21 @@ const file = (fileId: string, workspaceReference: string | null) => ({
 	workspaceReference,
 });
 it("orders referenced files by first appearance and keeps the rest in event order (#3229)", () => {
-	const files = [file("c", null), file("b", "b"), file("x", "x"), file("a", "a")];
+	const files = [
+		file("c", null),
+		file("b", "b"),
+		file("x", "x"),
+		file("a", "a"),
+	];
 	const references = [
 		{ start: 0, end: 1, kind: "link", workspaceReference: "a", label: "" },
-		{ start: 2, end: 3, kind: "definition", workspaceReference: "x", label: "" },
+		{
+			start: 2,
+			end: 3,
+			kind: "definition",
+			workspaceReference: "x",
+			label: "",
+		},
 		{ start: 4, end: 5, kind: "image", workspaceReference: "b", label: "" },
 		{ start: 6, end: 7, kind: "link", workspaceReference: "a", label: "" },
 	] as const;
@@ -50,7 +61,13 @@ it("rewrites the outermost span of a nested reference and drops CRLF definitions
 		answer,
 		references: [
 			{ start: 0, end: 32, kind: "link", workspaceReference: "a", label: "" },
-			{ start: 1, end: 20, kind: "image", workspaceReference: "i.png", label: "i" },
+			{
+				start: 1,
+				end: 20,
+				kind: "image",
+				workspaceReference: "i.png",
+				label: "i",
+			},
 			{
 				start: 34,
 				end: 48,

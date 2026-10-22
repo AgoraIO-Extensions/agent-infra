@@ -773,9 +773,9 @@ it("AC-2: does not send files beyond WeCom limits and names the reason without s
 	expect(text.replace("`[代码](sandbox:out/code.txt)`", "")).not.toContain(
 		"sandbox:",
 	);
-	expect(f.sender.sendMedia.mock.calls.map(([input]) => input.file.fileId)).toEqual(
-		["file-large-image", "result-file-1"],
-	);
+	expect(
+		f.sender.sendMedia.mock.calls.map(([input]) => input.file.fileId),
+	).toEqual(["file-large-image", "result-file-1"]);
 	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
 });
 
@@ -920,42 +920,48 @@ it("leaves the reply claimable when media planning is temporarily unavailable (#
 it.each([
 	["a planner without a sender", { planMedia: true, sendMedia: false }],
 	["a claim without its execution", { planMedia: true, sendMedia: true }],
-])(
-	"declares media unsupported for %s (#3229)",
-	async (name, capabilities) => {
-		const f = mediaFixture();
-		const sender = {
-			send: f.sender.send,
-			...(capabilities.planMedia ? { planMedia: f.sender.planMedia } : {}),
-			...(capabilities.sendMedia ? { sendMedia: f.sender.sendMedia } : {}),
-		};
-		const useCase = createWecomDeliveryV1({
-			store: f.store,
-			authorization: f.authorization,
-			sender,
-			answerReferences,
-		});
-		f.store.claim.mockResolvedValueOnce(
-			name.includes("execution")
-				? { ...mediaClaim("[a](sandbox:out/chart.png)", [png]), executionId: null }
-				: mediaClaim("[a](sandbox:out/chart.png)", [png]),
-		);
-		await useCase.dispatch();
-		expect(f.sender.planMedia).not.toHaveBeenCalled();
-		expect(f.sender.send).toHaveBeenCalledWith(
-			expect.objectContaining({ text: "chart.png（当前渠道不支持发送文件）" }),
-		);
-		expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
-	},
-);
+])("declares media unsupported for %s (#3229)", async (name, capabilities) => {
+	const f = mediaFixture();
+	const sender = {
+		send: f.sender.send,
+		...(capabilities.planMedia ? { planMedia: f.sender.planMedia } : {}),
+		...(capabilities.sendMedia ? { sendMedia: f.sender.sendMedia } : {}),
+	};
+	const useCase = createWecomDeliveryV1({
+		store: f.store,
+		authorization: f.authorization,
+		sender,
+		answerReferences,
+	});
+	f.store.claim.mockResolvedValueOnce(
+		name.includes("execution")
+			? {
+					...mediaClaim("[a](sandbox:out/chart.png)", [png]),
+					executionId: null,
+				}
+			: mediaClaim("[a](sandbox:out/chart.png)", [png]),
+	);
+	await useCase.dispatch();
+	expect(f.sender.planMedia).not.toHaveBeenCalled();
+	expect(f.sender.send).toHaveBeenCalledWith(
+		expect.objectContaining({ text: "chart.png（当前渠道不支持发送文件）" }),
+	);
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
+});
 
 it.each([
-	["throws", () => {
-		throw new Error("parser");
-	}],
-	["returns an out-of-range span", () => [
-		{ start: 0, end: 999, kind: "link", workspaceReference: "x", label: "" },
-	]],
+	[
+		"throws",
+		() => {
+			throw new Error("parser");
+		},
+	],
+	[
+		"returns an out-of-range span",
+		() => [
+			{ start: 0, end: 999, kind: "link", workspaceReference: "x", label: "" },
+		],
+	],
 ] as const)(
 	"fails the reply when the reference parser %s (#3229)",
 	async (_name, parse) => {
