@@ -3915,6 +3915,20 @@ function reasoningCompletedNotification(frame: CodexAppServerFrame) {
 	};
 }
 
+/** 固定 0.153.0 schema 的 PatchChangeKind：`{ type: "add" | "delete" | "update", move_path? }`。 */
+function isPinnedPatchChangeKind(value: unknown) {
+	return (
+		isPlainRecord(value) &&
+		hasOnlyKeys(value, ["type", "move_path"]) &&
+		(value.type === "add" ||
+			value.type === "delete" ||
+			value.type === "update") &&
+		(value.move_path === undefined ||
+			value.move_path === null ||
+			(value.type === "update" && nonEmptyString(value.move_path)))
+	);
+}
+
 function fileChangeCompletedNotification(frame: CodexAppServerFrame) {
 	if (frame.method !== "item/completed") return undefined;
 	const params = frame.params;
@@ -3933,7 +3947,7 @@ function fileChangeCompletedNotification(frame: CodexAppServerFrame) {
 			(change: unknown) =>
 				isPlainRecord(change) &&
 				nonEmptyString(change.path) &&
-				typeof change.kind === "string" &&
+				isPinnedPatchChangeKind(change.kind) &&
 				typeof change.diff === "string",
 		) ||
 		(params.item.status !== undefined && typeof params.item.status !== "string")

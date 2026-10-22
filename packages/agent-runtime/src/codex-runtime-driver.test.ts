@@ -1310,7 +1310,10 @@ class TestCodexBridge {
 					item: {
 						type: "fileChange",
 						id: "codex-native-file-change-private",
-						changes: [{ path, kind: "update", diff: "@@" }],
+						// 固定 0.153.0 schema 的 PatchChangeKind 是对象。
+						changes: [
+							{ path, kind: { type: "update", move_path: null }, diff: "@@" },
+						],
 						status: "completed",
 					},
 				},
@@ -3617,12 +3620,12 @@ describe("Codex Runtime Driver", () => {
 				changes: [
 					{
 						path: "/private/conversation/workspace/a.txt",
-						kind: "add",
+						kind: { type: "add" },
 						diff: "+a",
 					},
 					{
 						path: "/private/conversation/workspace/b.txt",
-						kind: "add",
+						kind: { type: "add" },
 						diff: "+b",
 					},
 				],
