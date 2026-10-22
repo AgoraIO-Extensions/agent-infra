@@ -224,8 +224,10 @@ async function loopbackResponsesProvider(
 				'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_agent_infra_native"}}\n\n',
 			);
 			if (responseMode !== "active") {
+				// #3201：工具模式只在第一次请求返回工具调用，收到工具结果后的请求返回
+				// 普通回答，让原生 Turn 正常结束。
 				const item =
-					responseMode === "text"
+					responseMode === "text" || requestCount > 1
 						? {
 								type: "message",
 								id: "synthetic-message",
@@ -243,14 +245,14 @@ async function loopbackResponsesProvider(
 									name: "apply_patch",
 									call_id: "synthetic-tool-call",
 									input:
-										"*** Begin Patch\n*** Add File: unexpected-tool-effect\n+prohibited\n*** End Patch",
+										"*** Begin Patch\n*** Add File: native-tool-effect\n+allowed\n*** End Patch",
 								}
 							: {
 									type: "function_call",
 									name: "exec_command",
 									call_id: "synthetic-tool-call",
 									arguments: JSON.stringify({
-										cmd: "printf prohibited > unexpected-tool-effect",
+										cmd: "printf prohibited > ../outside-tool-effect; printf 'allowed\\n' > native-tool-effect",
 									}),
 								};
 				for (const event of [
@@ -581,9 +583,14 @@ afterEach(async () => {
 describe
 	.skipIf(!enabled)
 	.sequential("pinned Codex native process recovery", () => {
-		it.each(["tool", "custom-tool"] as const)(
-			"rejects model-generated %s before execution on the official lane",
-			async (mode) => {
+		// #3201：官方 lane 的原生工具在本 Conversation 工作区内真实执行；越出工作区的
+		// 写入被平台文件边界拒绝，工具事实来自 item 生命周期。
+		it.each([
+			["tool", "codex:commandExecution"],
+			["custom-tool", "codex:fileChange"],
+		] as const)(
+			"executes a model-generated %s inside the Conversation workspace on the official lane",
+			async (mode, toolId) => {
 				const root = await directory();
 				const path = join(root, "driver.json");
 				const provider = await loopbackResponsesProvider(root, mode);
@@ -599,33 +606,46 @@ describe
 				expect(sessions).toHaveLength(1);
 				expect(sessions[0]?.requiredRuntime.lane).toBe("official-model-only");
 				expect(sessions[0]?.requiredRuntime.barrier).toBeUndefined();
-				const facts = async () =>
-					(
-						await driver.replayEvents(
-							accepted.nativeSessionRef,
-							"synthetic-execution",
-						)
-					)
-						.filter((event) => event.type === "operation")
-						.map((event) => event.payload);
 				await expect
-					.poll(async () =>
-						(await facts()).some(
-							(fact) =>
-								fact.kind === "model" &&
-								fact.phase === "unknown" &&
-								fact.failureCode === "response_incomplete",
-						),
+					.poll(
+						() =>
+							driver.getStatus(
+								accepted.nativeSessionRef,
+								"synthetic-execution",
+							),
+						{ timeout: 60_000 },
 					)
-					.toBe(true);
-				expect((await facts()).some((fact) => fact.kind === "tool")).toBe(
-					false,
-				);
+					.toBe("completed");
+				const facts = (
+					await driver.replayEvents(
+						accepted.nativeSessionRef,
+						"synthetic-execution",
+					)
+				)
+					.filter((event) => event.type === "operation")
+					.map((event) => event.payload)
+					.filter((fact) => fact.kind === "tool");
+				expect(
+					facts.map((fact) => [
+						fact.kind === "tool" ? fact.toolId : undefined,
+						fact.phase,
+					]),
+				).toEqual([
+					[toolId, "intent"],
+					[toolId, "started"],
+					[toolId, "completed"],
+				]);
+				expect(
+					await readFile(
+						join(nativeWorkspace(path), "native-tool-effect"),
+						"utf8",
+					),
+				).toBe("allowed\n");
 				await expect(
-					access(join(nativeWorkspace(path), "unexpected-tool-effect")),
+					access(join(nativeWorkspace(path), "..", "outside-tool-effect")),
 				).rejects.toThrow();
 				await driver.close();
-				expect(provider.requestCount()).toBe(1);
+				expect(provider.requestCount()).toBe(2);
 			},
 			90_000,
 		);
