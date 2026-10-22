@@ -170,6 +170,7 @@ async function assertAcceptance(
 	conversationId,
 	events,
 	evidence,
+	preTerminalNativeMetadata,
 ) {
 	const required = input.acceptance ?? {};
 	const reasoningEvents = events.filter(
@@ -209,9 +210,9 @@ async function assertAcceptance(
 			),
 			`Expected tool operation ${required.requiredToolId}`,
 		);
-	let nativeMetadata;
+	let nativeMetadata = preTerminalNativeMetadata;
 	if (
-		required.requireSkillMetadata ||
+		(nativeMetadata === undefined && required.requireSkillMetadata) ||
 		required.requiredSkillName !== undefined
 	) {
 		const response = await owner.request.get(
@@ -392,6 +393,34 @@ async function run(input, evidence) {
 		assert(typeof receipt.executionId === "string" && receipt.executionId);
 		evidence.submitStatus = submitted.status();
 		evidence.executionHash = digest(receipt.executionId);
+		let preTerminalNativeMetadata;
+		const requiresNativeMetadata =
+			(input.acceptance?.requireSkillMetadata ?? false) ||
+			input.acceptance?.requiredSkillName !== undefined;
+		if (requiresNativeMetadata) {
+			await expect
+				.poll(
+					async () => {
+						const response = await owner.request.get(
+							`${input.origin}/api/v2/conversations/${encodeURIComponent(conversationId)}/executions/${encodeURIComponent(receipt.executionId)}/native-metadata?selector=skills`,
+						);
+						if (response.status() !== 200) return false;
+						const metadata = await response.json();
+						if (!Array.isArray(metadata.capabilities)) return false;
+						if (
+							input.acceptance?.requiredSkillName !== undefined &&
+							!metadata.capabilities.some(
+								(entry) => entry?.name === input.acceptance.requiredSkillName,
+							)
+						)
+							return false;
+						preTerminalNativeMetadata = metadata;
+						return true;
+					},
+					{ timeout: 180_000, intervals: [500, 1000, 2000] },
+				)
+				.toBe(true);
+		}
 		await expect
 			.poll(
 				() =>
@@ -449,7 +478,14 @@ async function run(input, evidence) {
 			events,
 			"Current-execution events must stay bound to this conversation and execution",
 		);
-		await assertAcceptance(input, owner, conversationId, events, evidence);
+		await assertAcceptance(
+			input,
+			owner,
+			conversationId,
+			events,
+			evidence,
+			preTerminalNativeMetadata,
+		);
 		const sseFrames = await page.evaluate(
 			() => window.__agentInfraSseFrames ?? [],
 		);
