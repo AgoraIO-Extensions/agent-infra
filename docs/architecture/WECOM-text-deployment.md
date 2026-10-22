@@ -163,7 +163,9 @@ SDK 自动重连、重试或队列不能突破已持久化的发送状态：
   以后要启用，需另行验证 `media/upload` 等接口，并更新工程 Spec。
 - 长连接入站媒体由 Worker 部署输入 `wecom.media` 装配：`storage` 是与 Platform API 文件面同一 bucket 和前缀的
   对象存储 Adapter（需要 `upload` 与 `inspect`），可选 `downloadTimeoutMs`（默认 60 秒）、`maxConcurrentDownloads`
-  （默认 4）、`intentTtlMs`、`accessTtlMs` 和出站 `fetch`。没有这一项时 Worker 不装配入站媒体，媒体消息按不支持回复。
+  （整个 Worker 进程，默认 4）、`allowedDownloadHosts`（批准的下载域名，初始地址与每一跳重定向都必须落在其中）、
+  `intentTtlMs`、`accessTtlMs` 和出站 `fetch`。不提供 `allowedDownloadHosts` 时只接受 HTTPS、不带凭据的公网 DNS 名称，
+  拒绝 IP 字面量与集群内部名称。没有 `wecom.media` 时 Worker 不装配入站媒体，媒体消息按不支持回复。
 
 入站回执（工程 Spec §14.2.3）：
 

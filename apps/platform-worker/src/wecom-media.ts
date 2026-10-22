@@ -34,8 +34,16 @@ export interface WecomInboundMediaDeploymentV1 {
 	readonly accessTtlMs?: number;
 	/** 单个媒体的下载时限，默认 60 秒，同时不超过下载地址的剩余有效期。 */
 	readonly downloadTimeoutMs?: number;
-	/** 同时下载的媒体数，默认 4，限制 Worker 内存中的媒体字节。 */
+	/**
+	 * 整个 Worker 进程同时下载的媒体数，默认 4，限制内存中的媒体字节。一条消息内的媒体逐个处理，
+	 * 总时长受下载地址 5 分钟有效期约束，短于回复有效期。
+	 */
 	readonly maxConcurrentDownloads?: number;
+	/**
+	 * 部署批准的企微下载域名（含子域名），初始地址与每一跳重定向都必须落在其中；不提供时只要求
+	 * HTTPS、不带凭据且是公网 DNS 名称。
+	 */
+	readonly allowedDownloadHosts?: readonly string[];
 	/** 部署可替换的出站 fetch（例如代理）；默认使用全局 fetch。 */
 	readonly fetch?: typeof fetch;
 }
@@ -166,6 +174,21 @@ export function createWecomInboundMediaResolverV1(
 		300_000,
 	);
 	const slots = createSlots(bounded(options.maxConcurrentDownloads, 4, 1, 16));
+	const allowedHosts = options.allowedDownloadHosts;
+	if (
+		allowedHosts !== undefined &&
+		(!Array.isArray(allowedHosts) ||
+			allowedHosts.length === 0 ||
+			allowedHosts.length > 32 ||
+			allowedHosts.some(
+				(host) =>
+					typeof host !== "string" ||
+					!/^\.?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(
+						host,
+					),
+			))
+	)
+		throw new Error("WeCom inbound media configuration is invalid");
 	const now = options.now ?? (() => new Date());
 	const fileStore =
 		options.files ?? new PostgresFileStoreV1(options.databaseUrl);
@@ -255,7 +278,7 @@ export function createWecomInboundMediaResolverV1(
 			if (!limits) return rejected("unsupported_channel");
 			const maxBytes = Math.min(limits.maxBytes, driverMaxBytes);
 			const attachments: string[] = [];
-			// 逐个处理，内存中同一时刻只保留一个媒体的字节。
+			// 逐个处理，内存中同一时刻只保留本消息一个媒体的字节；跨消息的并发由 slots 限制。
 			for (const [ordinal, media] of (message.media ?? []).entries()) {
 				const download = media.download;
 				if (!download) return rejected("unsupported_channel");
@@ -274,6 +297,7 @@ export function createWecomInboundMediaResolverV1(
 								maxBytes,
 								timeoutMs: downloadTimeoutMs,
 								now: () => now().getTime(),
+								...(allowedHosts ? { allowedHosts } : {}),
 								...(options.fetch ? { fetch: options.fetch } : {}),
 								...(signal ? { signal } : {}),
 							}),

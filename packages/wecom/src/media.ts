@@ -24,6 +24,40 @@ function dispositionFilename(header: string | null): string | null {
 	}
 }
 
+/** IPv4/IPv6 字面量或集群内部名称都不是企微下载地址；只接受公网 DNS 名称。 */
+function publicHostname(hostname: string): boolean {
+	const host = hostname.toLowerCase().replace(/\.$/, "");
+	return (
+		host.includes(".") &&
+		!host.startsWith("[") &&
+		!/^[\d.]+$/.test(host) &&
+		!/(?:^|\.)(?:localhost|local|internal|svc|cluster\.local|home\.arpa)$/.test(
+			host,
+		)
+	);
+}
+/**
+ * 每一跳（包括第一个地址）都要满足：HTTPS、不带凭据、公网 DNS 名称；部署声明了 `allowedHosts`
+ * 时还必须是其中某个域名或其子域名。
+ */
+export function isAllowedWecomMediaUrlV1(
+	url: URL,
+	allowedHosts?: readonly string[],
+): boolean {
+	const host = url.hostname.toLowerCase().replace(/\.$/, "");
+	return (
+		url.protocol === "https:" &&
+		!url.username &&
+		!url.password &&
+		publicHostname(host) &&
+		(allowedHosts === undefined ||
+			allowedHosts.some((allowed) => {
+				const suffix = allowed.toLowerCase().replace(/^\.+|\.$/g, "");
+				return host === suffix || host.endsWith(`.${suffix}`);
+			}))
+	);
+}
+
 /**
  * 企微智能机器人长连接的入站媒体下载（工程 Spec §14.2.3，#3227）。
  *
@@ -36,6 +70,8 @@ export async function downloadWecomMediaV1(input: {
 	readonly download: WecomMediaDownloadV1;
 	readonly maxBytes: number;
 	readonly timeoutMs: number;
+	/** 部署批准的下载域名（含子域名）；不提供时只做 HTTPS 与公网名称校验。 */
+	readonly allowedHosts?: readonly string[];
 	readonly fetch?: typeof fetch;
 	readonly now?: () => number;
 	readonly signal?: AbortSignal;
@@ -66,10 +102,10 @@ export async function downloadWecomMediaV1(input: {
 	let response: Response | undefined;
 	try {
 		let url = new URL(input.download.url);
-		// 只跟随有限次 HTTPS 重定向，不降级到明文，也不带凭据。
+		if (!isAllowedWecomMediaUrlV1(url, input.allowedHosts))
+			return { outcome: "failed" };
+		// 只跟随有限次重定向；每个目标在发出请求前按同一策略校验，不降级到明文，也不带凭据。
 		for (let hop = 0; ; hop++) {
-			if (url.protocol !== "https:" || url.username || url.password)
-				return { outcome: "failed" };
 			response = await request(url, {
 				method: "GET",
 				redirect: "manual",
@@ -80,7 +116,10 @@ export async function downloadWecomMediaV1(input: {
 			await response.body?.cancel().catch(() => undefined);
 			response = undefined;
 			if (!location || hop >= 3) return failure();
-			url = new URL(location, url);
+			const next = new URL(location, url);
+			if (!isAllowedWecomMediaUrlV1(next, input.allowedHosts))
+				return { outcome: "failed" };
+			url = next;
 		}
 		if (!response.ok || !response.body) {
 			await response.body?.cancel().catch(() => undefined);

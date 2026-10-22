@@ -205,3 +205,93 @@ it("follows a bounded number of HTTPS redirects and refuses a downgrade", async 
 	).resolves.toEqual({ outcome: "failed" });
 	expect(looping).toHaveBeenCalledTimes(4);
 });
+
+it.each([
+	["an IPv4 literal", "https://10.0.0.8/media"],
+	["an IPv6 literal", "https://[fd00::1]/media"],
+	["a cluster service", "https://platform-api.platform.svc/media"],
+	["a cluster FQDN", "https://platform-api.platform.svc.cluster.local/media"],
+	["localhost", "https://localhost/media"],
+	["a single-label host", "https://intranet/media"],
+	["credentials", "https://user:secret@download.example.test/media"],
+])(
+	"refuses %s as the first address or a redirect target",
+	async (_name, target) => {
+		const encrypted = encryptWecomMediaFixtureV1(plain, aesKey);
+		const direct = vi.fn(async () => new Response(new Uint8Array(encrypted)));
+		await expect(
+			downloadWecomMediaV1({
+				download: { ...download, url: target },
+				maxBytes: 1024,
+				timeoutMs: 5_000,
+				fetch: direct as unknown as typeof fetch,
+			}),
+		).resolves.toEqual({ outcome: "failed" });
+		expect(direct).not.toHaveBeenCalled();
+		const redirected = vi.fn(
+			async () =>
+				new Response(null, { status: 302, headers: { location: target } }),
+		);
+		await expect(
+			downloadWecomMediaV1({
+				download,
+				maxBytes: 1024,
+				timeoutMs: 5_000,
+				fetch: redirected as unknown as typeof fetch,
+			}),
+		).resolves.toEqual({ outcome: "failed" });
+		// 重定向目标在发出请求前就被拒绝。
+		expect(redirected).toHaveBeenCalledTimes(1);
+	},
+);
+
+it("keeps every hop inside the deployment-approved download hosts", async () => {
+	const encrypted = encryptWecomMediaFixtureV1(plain, aesKey);
+	const allowedHosts = ["example.test"];
+	const inside = vi
+		.fn()
+		.mockResolvedValueOnce(
+			new Response(null, {
+				status: 302,
+				headers: { location: "https://cdn.download.example.test/object" },
+			}),
+		)
+		.mockResolvedValueOnce(new Response(new Uint8Array(encrypted)));
+	await expect(
+		downloadWecomMediaV1({
+			download,
+			maxBytes: 1024,
+			timeoutMs: 5_000,
+			allowedHosts,
+			fetch: inside as unknown as typeof fetch,
+		}),
+	).resolves.toMatchObject({ outcome: "downloaded" });
+	const outside = vi.fn(
+		async () =>
+			new Response(null, {
+				status: 302,
+				headers: { location: "https://attacker.example.org/object" },
+			}),
+	);
+	await expect(
+		downloadWecomMediaV1({
+			download,
+			maxBytes: 1024,
+			timeoutMs: 5_000,
+			allowedHosts,
+			fetch: outside as unknown as typeof fetch,
+		}),
+	).resolves.toEqual({ outcome: "failed" });
+	expect(outside).toHaveBeenCalledTimes(1);
+	const lookalike = vi.fn();
+	await expect(
+		downloadWecomMediaV1({
+			download: { ...download, url: "https://notexample.test/media" },
+			maxBytes: 1024,
+			timeoutMs: 5_000,
+			allowedHosts,
+			fetch: lookalike as unknown as typeof fetch,
+		}),
+	).resolves.toEqual({ outcome: "failed" });
+	expect(lookalike).not.toHaveBeenCalled();
+});
