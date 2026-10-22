@@ -6,6 +6,7 @@ import {
 	type WecomAuthorizationPortV1,
 	type WecomChannelStorePortV1,
 	type WecomConnectionFenceV1,
+	type WecomDeliveryClaimV1,
 	type WecomIdentityPortV1,
 	type WecomMessageV1,
 	type WecomSendPortV1,
@@ -494,8 +495,264 @@ it("claims confirmed result files once per file and preserves event order", asyn
 			name: file.descriptor.name,
 			mediaType: file.descriptor.mediaType,
 			sizeBytes: file.descriptor.sizeBytes,
+			workspaceReference: null,
 		},
 	]);
+	expect(claim).toMatchObject({ conversationId, executionId });
+});
+
+/** #3229：一条已完成的企微执行，带按给定顺序发布的结果文件（V2 事件带工作区引用）。 */
+async function completedWithResults(
+	senderId: string,
+	files: readonly {
+		readonly fileId: string;
+		readonly name: string;
+		readonly recordReference: string | null;
+		readonly eventReference: string | null;
+	}[],
+) {
+	await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+	const accepted = await channel().receive({
+		...message,
+		senderId,
+		eventId: `${senderId}_event`,
+	});
+	if (accepted.outcome !== "accepted") throw new Error("Expected receipt");
+	const { executionId, conversationId } = accepted.receipt;
+	if (!executionId || !conversationId) throw new Error("Expected execution");
+	await sql`update platform.conversation_executions
+		set status='completed',last_event_sequence=${files.length},last_runtime_cursor=${`runtime-${senderId}-${files.length}`}
+		where execution_id=${executionId}`;
+	await sql`update platform.conversations
+		set last_conversation_cursor=${files.length} where id=${conversationId}`;
+	for (const [index, entry] of files.entries()) {
+		const sequence = index + 1;
+		const record = {
+			fileId: entry.fileId,
+			objectRef: `${entry.fileId}-object`,
+			kind: "result" as const,
+			idempotencyKey: `${entry.fileId}-idempotency`,
+			actorId: senderId,
+			agentId: message.agentId,
+			channelId: wecomChannelIdV1(message),
+			conversationId,
+			executionId,
+			messageId: null,
+			sessionGeneration: 1,
+			status: "available" as const,
+			descriptor: {
+				name: entry.name,
+				mediaType: "application/pdf",
+				sizeBytes: 64,
+				sha256: "e".repeat(64),
+			},
+			objectVersion: `${entry.fileId}-version`,
+			etag: `${entry.fileId}-etag`,
+			createdAt: "2026-10-10T00:00:00.000Z",
+			updatedAt: "2026-10-10T00:00:00.000Z",
+			expiresAt: "2099-01-01T00:00:00.000Z",
+			revision: 1,
+			workspaceReference: entry.recordReference,
+		};
+		await sql`insert into platform.files
+			(file_id,actor_id,conversation_id,idempotency_key,record,updated_at)
+			values (${record.fileId},${senderId},${conversationId},${record.idempotencyKey},${sql.json(record)},now())`;
+		await sql`insert into platform.conversation_events
+			(event_id,conversation_id,execution_id,adapter_event_key,sequence,
+			 conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,
+			 occurred_at,source)
+			values (${`${entry.fileId}-event`},${conversationId},${executionId},
+			 ${`${entry.fileId}-adapter`},${sequence},${sequence},'result.file',
+			 ${sql.json({
+					type: "result.file",
+					fileId: record.fileId,
+					name: entry.name,
+					mediaType: "application/pdf",
+					sizeBytes: 64,
+					workspaceReference: entry.eventReference,
+				})},${`${sequence}`.padStart(64, "f")},${`runtime-${senderId}-${sequence}`},now(),'runtime')`;
+	}
+	await completeWecomExecutionFixture(sql, executionId);
+	const claim = await store.claim();
+	if (claim?.receiptId !== accepted.receipt.receiptId)
+		throw new Error("Expected claim");
+	return { claim, conversationId, executionId };
+}
+const outboundAuthority = (actorId: string, claim: WecomDeliveryClaimV1) => ({
+	managementRevision: 1,
+	channelRevision: "channels_1",
+	actor: {
+		schemaVersion: 1 as const,
+		agentId: message.agentId,
+		actorId,
+		taskBoundary: claim.taskBoundary,
+		channelId: wecomChannelIdV1(message),
+		authorizationRevision: "authorization_1",
+		supportsSupplementaryInstruction: false,
+	},
+});
+const mediaRows = (receiptId: string) =>
+	sql<
+		{ ordinal: number; file_id: string; kind: string; status: string }[]
+	>`select ordinal,file_id,kind,status from platform.wecom_receipt_media where receipt_id=${receiptId} order by ordinal`;
+
+describe("WeCom outbound media progress (#3229)", () => {
+	it("claims workspace references and records media progress per file without restarting it", async () => {
+		const { claim, conversationId, executionId } = await completedWithResults(
+			"outbound_sender",
+			[
+				{
+					fileId: "outbound-a",
+					name: "a.pdf",
+					recordReference: "out/a.pdf",
+					eventReference: "out/a.pdf",
+				},
+				{
+					fileId: "outbound-b",
+					name: "b.pdf",
+					recordReference: null,
+					eventReference: null,
+				},
+				// 事件与文件记录的工作区引用不一致：不是已确认的结果文件。
+				{
+					fileId: "outbound-mismatch",
+					name: "c.pdf",
+					recordReference: "out/c.pdf",
+					eventReference: "out/other.pdf",
+				},
+			],
+		);
+		expect(claim).toMatchObject({ conversationId, executionId });
+		expect(claim.media).toEqual([
+			{
+				fileId: "outbound-a",
+				name: "a.pdf",
+				mediaType: "application/pdf",
+				sizeBytes: 64,
+				workspaceReference: "out/a.pdf",
+			},
+			{
+				fileId: "outbound-b",
+				name: "b.pdf",
+				mediaType: "application/pdf",
+				sizeBytes: 64,
+				workspaceReference: null,
+			},
+		]);
+		const media = (claim.media ?? []).map((file) => ({
+			...file,
+			kind: "file" as const,
+		}));
+		// 只能记录本次领取给出的结果文件。
+		await expect(
+			store.prepare(claim, outboundAuthority("outbound_sender", claim), [
+				{ ...media[0], fileId: "outbound-mismatch" } as never,
+			]),
+		).rejects.toThrow();
+		expect(
+			await store.prepare(
+				claim,
+				outboundAuthority("outbound_sender", claim),
+				media,
+			),
+		).toBe(true);
+		expect(await mediaRows(claim.receiptId)).toEqual([
+			{ ordinal: 0, file_id: "outbound-a", kind: "file", status: "pending" },
+			{ ordinal: 1, file_id: "outbound-b", kind: "file", status: "pending" },
+		]);
+		// 结果只能跟在发送意图之后；旧 fence 不能推进进度。
+		expect(await store.progressMedia(claim, 0, "sent")).toBe(false);
+		expect(
+			await store.progressMedia(
+				{ ...claim, fence: claim.fence - 1 },
+				0,
+				"sending",
+			),
+		).toBe(false);
+		expect(await store.progressMedia(claim, 0, "sending")).toBe(true);
+		const [lease] = await sql<
+			{ seconds: string }[]
+		>`select extract(epoch from lease_until - clock_timestamp()) as seconds from platform.wecom_receipts where id=${claim.receiptId}`;
+		expect(Number(lease?.seconds)).toBeGreaterThan(120);
+		// 已开始的媒体不会再次开始。
+		expect(await store.progressMedia(claim, 0, "sending")).toBe(false);
+		expect(await store.progressMedia(claim, 0, "sent")).toBe(true);
+		expect(await store.progressMedia(claim, 0, "unknown")).toBe(false);
+		expect(await store.progressMedia(claim, 1, "sending")).toBe(true);
+		await store.finish(claim, "unknown");
+		expect((await mediaRows(claim.receiptId)).map((row) => row.status)).toEqual(
+			["sent", "unknown"],
+		);
+		expect(await store.progressMedia(claim, 1, "sent")).toBe(false);
+		expect(await store.read(claim.receiptId, "outbound_sender")).toMatchObject({
+			deliveryStatus: "unknown",
+		});
+		await expect(store.progressMedia(claim, 10, "sending")).rejects.toThrow();
+	});
+
+	it("keeps started media unconfirmed and never sends the rest after a crash (#3229 AC-3)", async () => {
+		const { claim } = await completedWithResults("outbound_crash", [
+			{
+				fileId: "crash-a",
+				name: "a.pdf",
+				recordReference: "out/a.pdf",
+				eventReference: "out/a.pdf",
+			},
+			{
+				fileId: "crash-b",
+				name: "b.pdf",
+				recordReference: "out/b.pdf",
+				eventReference: "out/b.pdf",
+			},
+		]);
+		const media = (claim.media ?? []).map((file) => ({
+			...file,
+			kind: "file" as const,
+		}));
+		expect(
+			await store.prepare(
+				claim,
+				outboundAuthority("outbound_crash", claim),
+				media,
+			),
+		).toBe(true);
+		expect(await store.progressMedia(claim, 0, "sending")).toBe(true);
+		await sql`update platform.wecom_receipts set lease_until=now()-interval '1 second' where id=${claim.receiptId}`;
+		// 租约到期后不再开始新的媒体。
+		expect(await store.progressMedia(claim, 1, "sending")).toBe(false);
+		const restarted = new PostgresWecomChannelV1({
+			...db,
+			userDirectory: fixtureUserDirectory,
+			identity: fixtureIdentity,
+		});
+		try {
+			expect(await restarted.claim()).toBeNull();
+			expect(
+				await restarted.read(claim.receiptId, "outbound_crash"),
+			).toMatchObject({ deliveryStatus: "unknown" });
+			expect(
+				(await mediaRows(claim.receiptId)).map((row) => row.status),
+			).toEqual(["unknown", "failed"]);
+			// 恢复时不重发：原领取与新的持有者都不能再开始这些媒体。
+			expect(await store.progressMedia(claim, 0, "sending")).toBe(false);
+			expect(await restarted.progressMedia(claim, 1, "sending")).toBe(false);
+		} finally {
+			await restarted.close();
+		}
+		// 回执与进度只有文件引用、类型和状态，没有 media_id、File Grant 或文件内容。
+		const [columns] = await sql<
+			{ names: string[] }[]
+		>`select array_agg(column_name::text order by column_name) as names from information_schema.columns where table_schema='platform' and table_name='wecom_receipt_media'`;
+		expect(columns?.names).toEqual([
+			"created_at",
+			"file_id",
+			"kind",
+			"ordinal",
+			"receipt_id",
+			"status",
+			"updated_at",
+		]);
+	});
 });
 type ExecutionEventRow =
 	| { readonly type: "text.delta"; readonly text: string }
@@ -697,6 +954,8 @@ it("sends a long-connection reply whose thinking is cut to the reply bound (#298
 	const delivery = createWecomDeliveryV1({
 		store,
 		authorization: allowedAuthorization,
+		// 文本回答不含 sandbox: 引用。
+		answerReferences: () => [],
 		sender: {
 			async send(input) {
 				sent.push(input);
@@ -2215,6 +2474,7 @@ it("pins the sender-to-Connection fact in the receipt and delivery claim", async
 		const delivery = createWecomDeliveryV1({
 			store: connectionStore,
 			authorization,
+			answerReferences: () => [],
 			sender: {
 				async send(input) {
 					revalidated = (await input.revalidate?.()) === true;

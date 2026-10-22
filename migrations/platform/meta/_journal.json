@@ -414,6 +414,13 @@
       "when": 1792692130719,
       "tag": "0062_wecom_inbound_media",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1792712447045,
+      "tag": "0063_wecom_outbound_media",
+      "breakpoints": true
     }
   ]
 }

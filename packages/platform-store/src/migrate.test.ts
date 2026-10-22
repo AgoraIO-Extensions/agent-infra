@@ -1994,6 +1994,7 @@ describe("published Relay authority migration", () => {
 			60,
 			61,
 			62,
+			63,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2059,9 +2060,13 @@ describe("published Relay authority migration", () => {
 			idx: 61,
 			tag: "0061_wecom_conversation_rotation",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 62)).toMatchObject({
 			idx: 62,
 			tag: "0062_wecom_inbound_media",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 63,
+			tag: "0063_wecom_outbound_media",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2415,6 +2420,15 @@ describe("published Relay authority migration", () => {
 					].map((name) => `wecom_conversation_rotations:${name}`),
 					"wecom_receipts:media_rejection_max_bytes",
 					"wecom_receipts:media_rejection_reason",
+					...[
+						"created_at",
+						"file_id",
+						"kind",
+						"ordinal",
+						"receipt_id",
+						"status",
+						"updated_at",
+					].map((name) => `wecom_receipt_media:${name}`),
 				].sort(),
 				checks: [
 					...expectedDelta.checks,
@@ -2461,6 +2475,9 @@ describe("published Relay authority migration", () => {
 					"wecom_conversation_rotations:wecom_conversation_rotation_positive",
 					"wecom_receipts:wecom_acceptance_status",
 					"wecom_receipts:wecom_media_rejection",
+					...["kind", "ordinal", "status"].map(
+						(name) => `wecom_receipt_media:wecom_receipt_media_${name}`,
+					),
 				].sort(),
 				indexes: [
 					...expectedDelta.indexes,
@@ -2479,6 +2496,8 @@ describe("published Relay authority migration", () => {
 					),
 					"file_limit_declarations:file_limit_declarations_scope_agent_id_channel_id_pk",
 					"wecom_conversation_rotations:wecom_conversation_rotations_pkey",
+					"wecom_receipt_media:wecom_receipt_media_file",
+					"wecom_receipt_media:wecom_receipt_media_receipt_id_ordinal_pk",
 				].sort(),
 			});
 			expect(

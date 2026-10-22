@@ -17,6 +17,7 @@ import {
 	platformFiles,
 	wecomConnections,
 	wecomConversationRotations,
+	wecomReceiptMedia,
 	wecomReceipts,
 	wecomSetupSessions,
 } from "./schema-channels-files";
@@ -84,6 +85,7 @@ export {
 	platformFiles,
 	wecomConnections,
 	wecomConversationRotations,
+	wecomReceiptMedia,
 	wecomReceipts,
 	wecomSetupSessions,
 } from "./schema-channels-files";
@@ -178,6 +180,7 @@ export const platformInfrastructureTables = [
 	idempotencyRecords,
 	persistedEvents,
 	wecomReceipts,
+	wecomReceiptMedia,
 	wecomConnections,
 	wecomConversationRotations,
 	wecomSetupSessions,
