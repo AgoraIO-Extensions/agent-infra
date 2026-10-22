@@ -91,13 +91,19 @@ export function startPlatformApi(options: StartOptions) {
 	);
 	const browserAuth = options.browserAuth;
 	const standardTemplateReleaseApp = options.standardTemplateReleaseApp;
+	// 保留的 release 命名空间不能回落到普通 API：未装配 release app 时显式 404，
+	// 避免部署漏装后被普通路由意外承接（fail closed，契约见 #3234）。
+	const releasePrefix = "/internal/ops/standard-template-releases/";
 	const fetch = async (request: Request) => {
 		const path = new URL(request.url).pathname;
-		if (
-			standardTemplateReleaseApp &&
-			path.startsWith("/internal/ops/standard-template-releases/")
-		)
-			return standardTemplateReleaseApp.fetch(request);
+		if (path.startsWith(releasePrefix)) {
+			if (standardTemplateReleaseApp)
+				return standardTemplateReleaseApp.fetch(request);
+			return new Response(null, {
+				status: 404,
+				headers: { "Cache-Control": "no-store" },
+			});
+		}
 		if (browserAuth && (path === "/auth/login" || path === "/auth/logout")) {
 			try {
 				const response = await browserAuth.handleRequest(request);

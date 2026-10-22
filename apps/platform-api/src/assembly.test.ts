@@ -436,6 +436,24 @@ describe("Platform API production assembly", () => {
 			);
 			expect(release.status).toBe(202);
 			expect(standardTemplateReleaseApp.fetch).toHaveBeenCalledOnce();
+			// 未装配 release app 时保留命名空间显式 404，不回落到普通 API。
+			const withoutReleaseApp = startPlatformApi({
+				dependencies: assembly.dependencies,
+				log: () => {},
+				port: 0,
+			});
+			servers.push(withoutReleaseApp);
+			const withoutAddress = withoutReleaseApp.address();
+			if (!withoutAddress || typeof withoutAddress === "string") {
+				throw new Error("Platform API without release app did not bind");
+			}
+			const unreleased = await fetch(
+				`http://127.0.0.1:${withoutAddress.port}/internal/ops/standard-template-releases/release/apply`,
+				{ method: "POST" },
+			);
+			expect(unreleased.status).toBe(404);
+			expect(unreleased.headers.get("cache-control")).toBe("no-store");
+			expect(await unreleased.text()).toBe("");
 			browserAuth.handleRequest.mockRejectedValueOnce(
 				new Error("private directory failure"),
 			);
