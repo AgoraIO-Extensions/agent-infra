@@ -59,6 +59,10 @@ export function createConnectionConsumerDcrResolverV1(
 			const consumerId = options.consumerIdForAgent(agentId);
 			if (!agentIdPattern.test(consumerId))
 				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+			const approvedOAuthClientId =
+				options.approvedOAuthClientIdForAgent(agentId);
+			if (!agentIdPattern.test(approvedOAuthClientId))
+				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 			const callbackUrl = options.callbackUrlForAgent(agentId);
 			const clientId = await registerStandardOAuthClient({
 				issuer: options.issuer,
@@ -69,7 +73,7 @@ export function createConnectionConsumerDcrResolverV1(
 				assertCurrent: () => signal.throwIfAborted(),
 				...(options.fetch ? { fetch: options.fetch } : {}),
 			});
-			if (clientId !== options.approvedOAuthClientIdForAgent(agentId))
+			if (clientId !== approvedOAuthClientId)
 				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 			const profile = {
 				schemaVersion: 1 as const,

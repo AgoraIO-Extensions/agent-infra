@@ -87,4 +87,27 @@ describe("per-Agent Connection DCR resolver", () => {
 			"CONNECTION_CONSUMER_PROFILE_UNAVAILABLE",
 		);
 	});
+
+	it("validates the approved OAuth client before registration", async () => {
+		let registrations = 0;
+		const resolve = createConnectionConsumerDcrResolverV1({
+			agentIds: ["agent-a"],
+			issuer: "https://connection.example.test/",
+			registrationEndpoint: "https://connection.example.test/oauth/register",
+			...profile,
+			approvalSource: { ref: "deployment", revision: "r1" },
+			callbackUrlForAgent: () => "http://127.0.0.1:3044/callback/agent-a",
+			consumerIdForAgent: () => "consumer-a",
+			approvedOAuthClientIdForAgent: () => "",
+			installationSupplyForAgent: () => ({ ref: "a", revision: "r1" }),
+			fetch: async () => {
+				registrations += 1;
+				throw new Error("unexpected registration");
+			},
+		});
+		await expect(resolve(new AbortController().signal)).rejects.toThrow(
+			"CONNECTION_CONSUMER_PROFILE_UNAVAILABLE",
+		);
+		expect(registrations).toBe(0);
+	});
 });
