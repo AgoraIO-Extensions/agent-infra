@@ -447,13 +447,19 @@ describe("Platform API production assembly", () => {
 			if (!withoutAddress || typeof withoutAddress === "string") {
 				throw new Error("Platform API without release app did not bind");
 			}
-			const unreleased = await fetch(
-				`http://127.0.0.1:${withoutAddress.port}/internal/ops/standard-template-releases/release/apply`,
-				{ method: "POST" },
-			);
-			expect(unreleased.status).toBe(404);
-			expect(unreleased.headers.get("cache-control")).toBe("no-store");
-			expect(await unreleased.text()).toBe("");
+			for (const path of [
+				"/internal/ops/standard-template-releases",
+				"/internal/ops/standard-template-releases/",
+				"/internal/ops/standard-template-releases/release/apply",
+			]) {
+				const unreleased = await fetch(
+					`http://127.0.0.1:${withoutAddress.port}${path}`,
+					{ method: "POST" },
+				);
+				expect(unreleased.status).toBe(404);
+				expect(unreleased.headers.get("cache-control")).toBe("no-store");
+				expect(await unreleased.text()).toBe("");
+			}
 			browserAuth.handleRequest.mockRejectedValueOnce(
 				new Error("private directory failure"),
 			);
