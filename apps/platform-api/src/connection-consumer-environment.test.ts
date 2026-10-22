@@ -1,11 +1,11 @@
-import { createHash } from "node:crypto";
+import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { describe, expect, it } from "vitest";
 
 import { readConnectionConsumerEnvironmentConfigurationV1 } from "./connection-consumer-environment.js";
 import { createConnectionCapability } from "./connection-consumer-profile.js";
 
 const profile = {
-	schemaVersion: 1,
+	schemaVersion: 1 as const,
 	publicOrigin: "https://agent-connector.agoralab.co",
 	mcpPath: "/mcp",
 	consumerId: "agent-a",
@@ -14,19 +14,7 @@ const profile = {
 };
 
 function fingerprint(value: typeof profile) {
-	return createHash("sha256")
-		.update(
-			JSON.stringify([
-				value.schemaVersion,
-				value.publicOrigin,
-				value.mcpPath,
-				value.consumerId,
-				value.audience,
-				value.egressProfile.ref,
-				value.egressProfile.revision,
-			]),
-		)
-		.digest("hex");
+	return connectionConsumerProfileFingerprintV1(value);
 }
 
 const environment = {
@@ -78,9 +66,13 @@ describe("Connection Consumer environment configuration", () => {
 			profile: undefined,
 			approval: {
 				schemaVersion: 1,
-				configFingerprint: "",
+				configFingerprint:
+					environment.AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT,
 				egressEnforced: true,
-				source: { ref: "", revision: "" },
+				source: {
+					ref: environment.AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF,
+					revision: environment.AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REVISION,
+				},
 			},
 			configVersion: undefined,
 		});

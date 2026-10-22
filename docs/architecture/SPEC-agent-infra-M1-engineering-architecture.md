@@ -1472,8 +1472,12 @@ Connection 的 LDAP、OAuth 客户端、MCP/API、Grant、凭证保护、Provide
    时拒绝启用，不能回退到 Helm values。
 2. 未选择外部引用时，使用目标环境的 Helm values 渲染完整非敏感 ConfigMap；ConfigMap 是
    该 values 的交付形式，不是另一层覆盖源。外部引用与内联快照同时配置时视为冲突并拒绝。
-3. 源码、镜像和前端包不内置环境 endpoint 或兜底值。普通环境变量、请求体、Agent 配置、
-   模型/工具参数和前端常量均不能覆盖快照；环境选择只发生在受控部署配置中。
+3. 对无法直接挂载该 ConfigMap 的第一方 Platform API，部署启动器可以把同一份完整快照
+   作为受控环境投影传入。该投影必须同时包含 profile、`1-<fingerprint>`、fingerprint、
+   approval source ref/revision；API 只在部署模块未提供 profile 时整体读取它，并按同一完整
+   快照校验，不能逐字段与模块导出合并。该环境投影是 ConfigMap/外部引用的运输方式，不是
+   新的配置来源或普通运行时覆盖入口。源码、镜像和前端包不内置 endpoint 或兜底值；请求体、
+   Agent 配置、模型/工具参数和前端常量均不能覆盖快照。
 
 #### 13.5.2 版本、指纹与失败行为
 
