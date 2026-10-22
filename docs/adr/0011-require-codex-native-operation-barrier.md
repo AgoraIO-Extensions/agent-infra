@@ -7,6 +7,8 @@
 [工程 Spec §10.11](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1011-codex-上游原生补丁与执行屏障)
 替代，不构成继续维护第三方源码补丁或 vendor builder 的批准。
 
+适用范围由 [ADR-0031](0031-enable-native-tools-inside-session-sandbox.md) 收窄：本 ADR 的执行前屏障只适用于平台中介的跨 Sandbox 调用。Session Sandbox 内的原生工具和部署批准的原生出网不再因缺少每次尝试接缝而被拒绝。
+
 ## 背景
 
 PRD 要求实际外部操作前持久保存意图，并区分真实结果与 unknown。普通审批和单向开始通知
