@@ -518,7 +518,8 @@ function waitingExecutionUnsent(
 	)
 		return false;
 	return execution.runtime_submit_protocol === null
-		? execution.original_operation_digest === null
+		? execution.original_operation_digest === null &&
+				execution.original_submit_host_session_ref === null
 		: (execution.runtime_submit_protocol === "v2" ||
 				execution.runtime_submit_protocol === "v4") &&
 				validText(execution.original_operation_digest);
