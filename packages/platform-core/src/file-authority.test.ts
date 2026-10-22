@@ -422,6 +422,7 @@ it("confirms a result.file only when its workspace reference matches the file re
 		executionId: "execution",
 		sessionGeneration: 1,
 		status: "available",
+		objectVersion: "version-1",
 		etag: "etag-1",
 		descriptor: {
 			name: "chart.png",
