@@ -44,6 +44,7 @@ import {
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	CODEX_MODEL_ONLY_CONFIG,
+	CodexAppServerBridge,
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 	type CodexModelAccess,
@@ -10581,6 +10582,259 @@ describe("Codex Runtime Driver", () => {
 				).result,
 			).toEqual(sessionBlockedResult);
 			expect(nativeSessionRequests(reopenedBridge)).toEqual([]);
+		},
+	);
+
+	// #3174：prepare() 先持久化会话与已准备的 submit，Bridge 在启动 app-server 之前才创建
+	// 原生持久存储 `${path}.native`。下列用例都经过生产 open() 的原生存储检查，而不是
+	// 绕过该检查的 openCodexRuntimeDriverForTest。
+	const nativeStorageAbsent = (path: string) =>
+		expect(stat(`${path}.native`)).rejects.toMatchObject({ code: "ENOENT" });
+	const spyNativeLaunch = () =>
+		vi
+			.spyOn(CodexAppServerBridge, "open")
+			.mockRejectedValue(new Error("unexpected native launch"));
+	/**
+	 * 生产 Driver 按需启动原生进程；启动永不完成即模拟 RuntimeHost 在创建 `.native`
+	 * 之前被杀，启动被拒绝即模拟原生启动在创建存储之前失败。返回被杀那一刻 PVC 上
+	 * 状态文件的副本，原进程之后的写入不可见。
+	 */
+	const killBeforeNativeStorage = async (
+		path: string,
+		failure: "killed-while-launching" | "launch-failed-before-storage",
+		first: RuntimeDriverSubmitTurnCommandV2,
+	) => {
+		const launch = Promise.withResolvers<never>();
+		let launches = 0;
+		const killed = await RuntimeBindingDriver.openBound(
+			driverOptions(path),
+			() => {
+				launches += 1;
+				return launch.promise;
+			},
+		);
+		drivers.push(killed);
+		const pending = killed.execute(first).catch(() => undefined);
+		await vi.waitFor(() => expect(launches).toBe(1));
+		if (failure === "launch-failed-before-storage") {
+			launch.reject(new Error("synthetic native launch failure"));
+			await pending;
+		}
+		const restartedPath = join(await runtimeDirectory(), "driver.json");
+		await copyFile(path, restartedPath);
+		launch.reject(new Error("synthetic killed process"));
+		await pending;
+		await killed.close();
+		return restartedPath;
+	};
+
+	it.each(["killed-while-launching", "launch-failed-before-storage"] as const)(
+		"opens a Driver whose first Turn was %s before native storage existed and blocks later V2 Turns",
+		async (failure) => {
+			const first = submitCommandV2();
+			const path = await killBeforeNativeStorage(
+				join(await runtimeDirectory(), "driver.json"),
+				failure,
+				first,
+			);
+			const saved = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			const [firstKey, firstOperation] =
+				Object.entries(saved.operations)[0] ?? [];
+			if (!firstKey || !firstOperation?.nativeSessionRef)
+				throw new Error("missing prepared submit operation");
+			const nativeSessionRef = firstOperation.nativeSessionRef;
+			// 与固定环境实测的 PVC 状态一致：会话只有创建时写入的字段（启动失败时另有
+			// 受理不明标记），没有原生线程、执行或事件；submit 停在 prepared。
+			expect(Object.keys(saved.sessions)).toEqual([nativeSessionRef]);
+			expect(
+				Object.keys(saved.sessions[nativeSessionRef] ?? {}).sort(),
+			).toEqual([
+				...(failure === "launch-failed-before-storage"
+					? ["acceptanceUncertainOperationKey"]
+					: []),
+				"agentId",
+				"conversationId",
+				"executions",
+				"nativeSessionRef",
+				"requiredRuntime",
+				"sessionGeneration",
+			]);
+			expect(saved.sessions[nativeSessionRef]?.executions).toEqual({});
+			expect(Object.keys(saved.operations)).toEqual([firstKey]);
+			expect(Object.keys(firstOperation).sort()).toEqual([
+				"configVersion",
+				"internalModel",
+				"nativeSessionRef",
+				"reasoningLevel",
+				"schemaVersion",
+				"state",
+			]);
+			expect(firstOperation.state).toBe("prepared");
+			await nativeStorageAbsent(path);
+
+			const launch = spyNativeLaunch();
+			const restarted = await CodexRuntimeDriver.open(driverOptions(path));
+			drivers.push(restarted);
+			expect(await restarted.lookupOperation(first)).toEqual({
+				state: "unknown",
+			});
+			const next = nextSubmitCommandV2();
+			expect(await restarted.lookupOperation(next)).toEqual({
+				state: "missing",
+			});
+			const blocked = await restarted.execute(next);
+			expect(blocked).toEqual({
+				schemaVersion: 2,
+				agentId: next.agentId,
+				conversationId: next.conversationId,
+				sessionGeneration: next.sessionGeneration,
+				kind: "submit-turn",
+				operationId: next.operationId,
+				nativeSessionRef,
+				result: sessionBlockedResult,
+			});
+			// 拒绝与该操作原子持久化；原会话与原已准备操作不变，也不新建会话。
+			const persisted = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			expect(persisted.sessions).toEqual(saved.sessions);
+			expect(persisted.operations[firstKey]).toEqual(firstOperation);
+			expect(Object.keys(persisted.operations)).toHaveLength(2);
+			await restarted.close();
+
+			// 带着持久拒绝再次重启，仍经过同一检查。
+			const reopened = await CodexRuntimeDriver.open(driverOptions(path));
+			drivers.push(reopened);
+			expect(await reopened.lookupOperation(next)).toEqual({
+				state: "found",
+				record: blocked,
+			});
+			expect(await reopened.execute(next)).toEqual(blocked);
+			expect((await reopened.execute(first)).result).toEqual({
+				outcome: "unknown",
+				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+				message: "Runtime command acceptance could not be confirmed",
+			});
+			expect(
+				(
+					await reopened.execute(
+						submitCommandV2({
+							operationId: "execution-codex-bound-next",
+							executionId: "execution-codex-bound-next",
+							turnId: "turn-codex-bound-next",
+							nativeSessionRef,
+						}),
+					)
+				).result,
+			).toEqual(sessionBlockedResult);
+			expect(launch).not.toHaveBeenCalled();
+			await nativeStorageAbsent(path);
+		},
+	);
+
+	const acceptNativeTurn = async (
+		path: string,
+		command: RuntimeDriverSubmitTurnCommandV2,
+	) => {
+		// 脚本化 Bridge 不创建 `.native`，因此这里留下的就是原生存储丢失后的状态。
+		const driver = await openDriver(path, new TestCodexBridge());
+		drivers.push(driver);
+		expect((await driver.execute(command)).result).toMatchObject({
+			outcome: "accepted",
+		});
+		await driver.close();
+	};
+	const mutateFirstSession = async (
+		path: string,
+		mutate: (session: Record<string, unknown>) => void,
+	) => {
+		const state = JSON.parse(await readFile(path, "utf8")) as {
+			sessions: Record<string, Record<string, unknown>>;
+		};
+		const session = Object.values(state.sessions)[0];
+		if (!session) throw new Error("missing session");
+		mutate(session);
+		await writeFile(path, JSON.stringify(state));
+	};
+
+	it.each([
+		[
+			"a bound native thread",
+			async (path: string) => {
+				const killed = await killBeforeNativeStorage(
+					path,
+					"killed-while-launching",
+					submitCommandV2(),
+				);
+				await mutateFirstSession(killed, (session) => {
+					session.threadId = "codex-native-thread-lost";
+					session.historyMode = "paginated";
+				});
+				return killed;
+			},
+		],
+		[
+			"an event journal record",
+			async (path: string) => {
+				const killed = await killBeforeNativeStorage(
+					path,
+					"killed-while-launching",
+					submitCommandV2(),
+				);
+				await mutateFirstSession(killed, (session) => {
+					session.journals = {};
+				});
+				return killed;
+			},
+		],
+		[
+			"an accepted native execution",
+			async (path: string) => {
+				await acceptNativeTurn(path, submitCommandV2());
+				return path;
+			},
+		],
+		[
+			"another Conversation's native execution",
+			async (path: string) => {
+				await acceptNativeTurn(
+					path,
+					submitCommandV2({ conversationId: "conversation-codex-lost" }),
+				);
+				return killBeforeNativeStorage(
+					path,
+					"killed-while-launching",
+					submitCommandV2(),
+				);
+			},
+		],
+	] as const)(
+		"keeps Driver open fail-closed when native storage is missing after %s",
+		async (_name, seed) => {
+			const path = await seed(join(await runtimeDirectory(), "driver.json"));
+			const saved = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			expect(Object.keys(saved.sessions).length).toBeGreaterThan(0);
+			await nativeStorageAbsent(path);
+			const before = await readFile(path);
+			const launch = spyNativeLaunch();
+
+			await expect(
+				CodexRuntimeDriver.open(driverOptions(path)),
+			).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+				httpStatus: 503,
+			});
+			expect(await readFile(path)).toEqual(before);
+			expect(launch).not.toHaveBeenCalled();
+			await nativeStorageAbsent(path);
+			// 对照：同一份状态在原生存储存在时可以打开，拒绝只来自原生存储缺失。
+			await mkdir(`${path}.native`, { mode: 0o700 });
+			drivers.push(await CodexRuntimeDriver.open(driverOptions(path)));
+			expect(launch).not.toHaveBeenCalled();
 		},
 	);
 

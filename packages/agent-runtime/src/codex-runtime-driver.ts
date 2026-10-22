@@ -3111,6 +3111,52 @@ function assertDriverState(value: unknown): asserts value is CodexDriverState {
 	}
 }
 
+// 会话创建时写入的字段。受理不明标记只说明原生启动或受理未被确认，不是原生回执。
+const sessionKeysBeforeNativeLaunch = [
+	"nativeSessionRef",
+	"agentId",
+	"conversationId",
+	"sessionGeneration",
+	"requiredRuntime",
+	"acceptanceUncertainOperationKey",
+	"executions",
+] as const;
+
+// 原生回执之前即可落盘的 submit 字段：已准备操作，或本地确定的拒绝结果。
+const operationKeysBeforeNativeLaunch = [
+	"schemaVersion",
+	"state",
+	"nativeSessionRef",
+	"configVersion",
+	"internalModel",
+	"reasoningLevel",
+	"record",
+] as const;
+
+/**
+ * #3174：prepare() 先持久化会话与已准备的 submit，Bridge 在启动 app-server 之前才创建
+ * 原生持久存储。状态里没有任何原生回执（原生线程、执行、事件日志、受理或繁忙结果，
+ * 以及只能针对原生线程创建的中断类或原生命令操作）时，原生存储缺失说明 app-server 从未
+ * 在该存储上启动，不存在可丢失的原生会话；残留的已准备 submit 由 prepare() 的会话阻塞
+ * （ADR-0029）收敛。只要有一项原生回执，缺失就是原生存储丢失，Driver 保持 fail closed。
+ */
+function predatesNativeLaunch(state: CodexDriverState) {
+	return (
+		Object.values(state.sessions).every(
+			(session) =>
+				hasOnlyKeys(session, sessionKeysBeforeNativeLaunch) &&
+				Object.keys(session.executions).length === 0,
+		) &&
+		Object.entries(state.operations).every(
+			([key, operation]) =>
+				isSubmitTurnOperationKey(key) &&
+				hasOnlyKeys(operation, operationKeysBeforeNativeLaunch) &&
+				(operation.record === undefined ||
+					operation.record.result.outcome === "rejected"),
+		)
+	);
+}
+
 function unavailableError() {
 	return new RuntimeHostError(
 		"RUNTIME_CODEX_UNAVAILABLE",
@@ -5345,6 +5391,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	static async open(options: CodexRuntimeDriverOptions) {
 		// The deployment's Driver file and its sibling native storage share one
 		// Agent PVC. Losing the mapping must never initialize replacement sessions.
+		// 状态早于原生进程启动时（#3174），缺失的存储不是丢失的映射。
 		try {
 			if (!isAbsolute(options.path) || resolve(options.path) !== options.path)
 				stateInvalid();
@@ -5365,7 +5412,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				const saved: unknown = JSON.parse(await readFile(options.path, "utf8"));
 				upgradeDriverState(saved);
 				assertDriverState(saved);
-				if (Object.keys(saved.sessions).length > 0) unavailable();
+				if (!predatesNativeLaunch(saved)) unavailable();
 			}
 		} catch (error) {
 			if (error instanceof RuntimeHostError) throw error;
