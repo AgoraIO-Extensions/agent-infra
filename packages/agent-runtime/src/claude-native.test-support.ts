@@ -32,6 +32,31 @@ export function completeClaudeResponse(
 	text = "OK",
 	reads: readonly string[] = [],
 ) {
+	completeClaudeToolUses(
+		response,
+		id,
+		model,
+		text,
+		reads.map((filePath, index) => ({
+			id: `read_${index}`,
+			name: "Read",
+			input: { file_path: filePath },
+		})),
+	);
+}
+
+/** #3217：按固定 Messages 流式格式返回任意原生工具调用。 */
+export function completeClaudeToolUses(
+	response: ServerResponse,
+	id: string,
+	model: string,
+	text: string,
+	uses: readonly {
+		readonly id: string;
+		readonly name: string;
+		readonly input: Record<string, unknown>;
+	}[],
+) {
 	response.writeHead(200, { "content-type": "text/event-stream" });
 	for (const event of [
 		{
@@ -47,15 +72,15 @@ export function completeClaudeResponse(
 				usage: { input_tokens: 10, output_tokens: 0 },
 			},
 		},
-		...(reads.length
-			? reads.flatMap((filePath, index) => [
+		...(uses.length
+			? uses.flatMap((use, index) => [
 					{
 						type: "content_block_start",
 						index,
 						content_block: {
 							type: "tool_use",
-							id: `read_${index}`,
-							name: "Read",
+							id: use.id,
+							name: use.name,
 							input: {},
 						},
 					},
@@ -64,7 +89,7 @@ export function completeClaudeResponse(
 						index,
 						delta: {
 							type: "input_json_delta",
-							partial_json: JSON.stringify({ file_path: filePath }),
+							partial_json: JSON.stringify(use.input),
 						},
 					},
 					{ type: "content_block_stop", index },
@@ -85,7 +110,7 @@ export function completeClaudeResponse(
 		{
 			type: "message_delta",
 			delta: {
-				stop_reason: reads.length ? "tool_use" : "end_turn",
+				stop_reason: uses.length ? "tool_use" : "end_turn",
 				stop_sequence: null,
 			},
 			usage: { output_tokens: 2 },

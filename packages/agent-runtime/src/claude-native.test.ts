@@ -14,6 +14,7 @@ import {
 	claudeCommand,
 	claudeNativeFixture,
 	completeClaudeResponse,
+	completeClaudeToolUses,
 } from "./claude-native.test-support.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
 
@@ -547,6 +548,106 @@ it("enforces real native tool isolation for direct paths and symlink escapes bef
 			),
 		).toHaveLength(4);
 	}
+}, 30000);
+
+// #3217：固定 Claude 的 Glob 与 Grep 只在本 Conversation 内生效，越界路径被拒绝。
+it("lists and searches only inside the owning Conversation through native Glob and Grep", async () => {
+	const f = await fixture();
+	const root = await realpath(f.path);
+	const own = await f.driver.execute(claudeCommand("search-own"));
+	await f.settled(own.nativeSessionRef, "execution-search-own");
+	const peer = await f.driver.execute({
+		...claudeCommand("search-peer"),
+		conversationId: "conversation-peer",
+	});
+	await f.settled(peer.nativeSessionRef, "execution-search-peer");
+	const ownWorkspace = join(root, own.nativeSessionRef, "workspace");
+	const peerWorkspace = join(root, peer.nativeSessionRef, "workspace");
+	await writeFile(join(ownWorkspace, "own-note.txt"), "synthetic-own-canary");
+	await writeFile(
+		join(peerWorkspace, "peer-note.txt"),
+		"synthetic-peer-canary",
+	);
+	f.hold();
+	const offset = f.calls.length;
+	const command = {
+		...claudeCommand("search"),
+		nativeSessionRef: own.nativeSessionRef,
+	};
+	const accepted = await f.driver.execute(command);
+	await vi.waitFor(() => expect(f.calls).toHaveLength(offset + 1));
+	const first = f.calls[offset];
+	if (!first) throw Error();
+	const uses = [
+		{ id: "glob_own", name: "Glob", input: { pattern: "*.txt" } },
+		{
+			id: "grep_own",
+			name: "Grep",
+			input: {
+				pattern: "synthetic-own-canary",
+				path: ownWorkspace,
+				output_mode: "content",
+			},
+		},
+		{
+			id: "glob_peer",
+			name: "Glob",
+			input: { pattern: "*.txt", path: peerWorkspace },
+		},
+		{
+			id: "grep_peer",
+			name: "Grep",
+			input: { pattern: "canary", path: root, output_mode: "content" },
+		},
+		{
+			id: "glob_escape",
+			name: "Glob",
+			input: { pattern: "../../*/workspace/*" },
+		},
+		{ id: "bash_denied", name: "Bash", input: { command: "ls" } },
+	];
+	completeClaudeToolUses(
+		first.response,
+		"msg_search",
+		String(first.body.model),
+		"",
+		uses,
+	);
+	await vi.waitFor(() => expect(f.calls).toHaveLength(offset + 2), {
+		timeout: 10000,
+	});
+	const messages = f.calls[offset + 1]?.body.messages as {
+		content: {
+			type: string;
+			tool_use_id?: string;
+			is_error?: boolean;
+			content?: unknown;
+		}[];
+	}[];
+	const results = new Map(
+		messages
+			.flatMap((message) =>
+				Array.isArray(message.content)
+					? message.content.filter((block) => block.type === "tool_result")
+					: [],
+			)
+			.map((result) => [result.tool_use_id, result]),
+	);
+	expect(results.get("glob_own")?.is_error).not.toBe(true);
+	expect(JSON.stringify(results.get("glob_own")?.content)).toContain(
+		"own-note.txt",
+	);
+	expect(results.get("grep_own")?.is_error).not.toBe(true);
+	expect(JSON.stringify(results.get("grep_own")?.content)).toContain(
+		"synthetic-own-canary",
+	);
+	for (const id of ["glob_peer", "grep_peer", "glob_escape", "bash_denied"])
+		expect(results.get(id)?.is_error).toBe(true);
+	const body = JSON.stringify(f.calls[offset + 1]?.body.messages);
+	expect(body).not.toContain("synthetic-peer-canary");
+	expect(body).not.toContain("peer-note.txt");
+	f.release();
+	await f.settled(accepted.nativeSessionRef, command.executionId);
 }, 30000);
 
 it("waits for native exit after a permission error on the retiring process group before resuming", async () => {

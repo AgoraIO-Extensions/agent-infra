@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	realpath,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -326,4 +333,93 @@ it("routes Applied Skill reads through a verified ephemeral file", async () => {
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
+});
+
+// #3217：列举与搜索类原生工具只在本 Conversation 的目录内可用，shell 与网络工具仍关闭。
+describe("Claude workspace list and search tools", () => {
+	async function fixture() {
+		const root = await realpath(
+			await mkdtemp(join(tmpdir(), "claude-workspace-search-")),
+		);
+		const workspace = join(root, "workspace");
+		const memory = join(root, "memory");
+		const skillRoot = join(root, "skills");
+		const outside = join(root, "outside");
+		await mkdir(join(workspace, "src"), { recursive: true });
+		await mkdir(memory);
+		await mkdir(skillRoot);
+		await mkdir(outside);
+		await symlink(outside, join(workspace, "escape"));
+		const tools = claudeWorkspaceTools(
+			workspace,
+			memory,
+			undefined,
+			undefined,
+			[skillRoot],
+		);
+		const decide = async (name: string, input: Record<string, unknown>) =>
+			(
+				await tools.canUseTool?.(name, input, {
+					signal: new AbortController().signal,
+					toolUseID: `${name}-use`,
+					requestId: "request",
+				})
+			)?.behavior;
+		return { root, workspace, memory, skillRoot, outside, tools, decide };
+	}
+
+	it("declares list and search tools but not shell, network or sub-agent tools", async () => {
+		const f = await fixture();
+		try {
+			expect(f.tools.tools).toEqual(
+				expect.arrayContaining(["Glob", "Grep", "TodoWrite"]),
+			);
+			for (const name of ["Bash", "WebFetch", "WebSearch", "Agent", "Task"]) {
+				expect(f.tools.tools).not.toContain(name);
+				expect(await f.decide(name, { command: "ls" })).toBe("deny");
+			}
+		} finally {
+			await rm(f.root, { recursive: true, force: true });
+		}
+	});
+
+	it("allows Glob and Grep inside the Conversation directories", async () => {
+		const f = await fixture();
+		try {
+			for (const [name, input] of [
+				["Glob", { pattern: "**/*.ts" }],
+				["Glob", { pattern: "*.md", path: join(f.workspace, "src") }],
+				["Glob", { pattern: "*", path: f.memory }],
+				["Grep", { pattern: "TODO", path: f.workspace, glob: "**/*.ts" }],
+				["Grep", { pattern: "name:", path: f.skillRoot }],
+				["TodoWrite", { todos: [] }],
+			] as const)
+				expect(await f.decide(name, input)).toBe("allow");
+		} finally {
+			await rm(f.root, { recursive: true, force: true });
+		}
+	});
+
+	it("denies list and search outside the Conversation directories", async () => {
+		const f = await fixture();
+		try {
+			for (const [name, input] of [
+				["Glob", { pattern: "*", path: f.outside }],
+				["Glob", { pattern: "*", path: f.root }],
+				["Glob", { pattern: "*", path: join(f.workspace, "..") }],
+				["Glob", { pattern: "*", path: join(f.workspace, "escape") }],
+				["Glob", { pattern: `${f.outside}/*` }],
+				["Glob", { pattern: "../outside/*" }],
+				["Glob", { pattern: "src/../../outside/*" }],
+				["Grep", { pattern: "x", path: f.outside }],
+				["Grep", { pattern: "x", glob: "../**" }],
+				["Grep", { pattern: "x", glob: "/etc/*" }],
+				["Grep", { pattern: "x", path: "/proc" }],
+				["Glob", { pattern: "*", path: "relative\0" }],
+			] as const)
+				expect(await f.decide(name, input)).toBe("deny");
+		} finally {
+			await rm(f.root, { recursive: true, force: true });
+		}
+	});
 });

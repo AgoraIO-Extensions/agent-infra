@@ -1,5 +1,5 @@
 import { chmod, mkdir, realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
 	type BrowserCapabilityAvailableV1,
 	RuntimeModelConfigurationV3Schema,
@@ -17,7 +17,11 @@ import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
-import { workspacePathAllowed } from "./workspace-path.js";
+import {
+	workspaceDirectoryAllowed,
+	workspaceGlobAllowed,
+	workspacePathAllowed,
+} from "./workspace-path.js";
 
 const nativeSkillPromptMaximumLength = 16 * 1024;
 const nativeSkillName = /^[a-z0-9][a-z0-9._-]{0,62}$/;
@@ -90,6 +94,33 @@ export interface OpenCodeRuntimeOptions {
 	readonly authorizeToolAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
+}
+
+/**
+ * #3217：OpenCode 的 glob 与 grep（ACP kind 为 search）。`path` 只能在本 Conversation
+ * 工作区内；glob 的 `pattern` 与 grep 的 `include` 不能是绝对路径或含 `..`。grep 的
+ * `pattern` 是正则表达式，只在含路径分隔符时按 glob 规则检查。
+ */
+export async function openCodeSearchAllowed(workspace: string, input: unknown) {
+	if (!input || typeof input !== "object" || Array.isArray(input)) return false;
+	const value = input as Record<string, unknown>;
+	if (typeof value.pattern !== "string" || value.pattern.includes("\0"))
+		return false;
+	if (/[\\/]/.test(value.pattern) && !workspaceGlobAllowed(value.pattern))
+		return false;
+	if (
+		value.include !== undefined &&
+		(typeof value.include !== "string" || !workspaceGlobAllowed(value.include))
+	)
+		return false;
+	return (
+		value.path === undefined ||
+		(typeof value.path === "string" &&
+			(await workspaceDirectoryAllowed(
+				[workspace],
+				resolve(workspace, value.path),
+			)))
+	);
 }
 
 export function resolveOpenCodeSkillHome(
@@ -219,7 +250,15 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 						},
 					},
 					instructions: [join(directory, "workspace/.memory/MEMORY.md")],
-					permission: { "*": "deny", read: "ask", edit: "ask" },
+					// #3217：列举与搜索类工具经 ACP 权限请求按本 Conversation 路径授权；
+					// bash 待 OS 级边界就绪后开放（#3218）。
+					permission: {
+						"*": "deny",
+						read: "ask",
+						edit: "ask",
+						glob: "ask",
+						grep: "ask",
+					},
 					autoupdate: false,
 					share: "disabled",
 					agent: { title: { disable: true }, summary: { disable: true } },
@@ -245,6 +284,11 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 						OPENCODE_DISABLE_PRUNE: "true",
 					},
 					authorize: async (tool) => {
+						if (tool.kind === "search")
+							return openCodeSearchAllowed(
+								join(directory, "workspace"),
+								tool.rawInput,
+							);
 						if (
 							!["read", "edit"].includes(tool.kind ?? "") ||
 							!tool.rawInput ||

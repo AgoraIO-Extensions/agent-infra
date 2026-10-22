@@ -1,7 +1,11 @@
+import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, it } from "vitest";
 import {
 	type OpenCodeRuntimeOptions,
 	openCodeNativeSkillPrompt,
+	openCodeSearchAllowed,
 	resolveOpenCodeSkillHome,
 	validateOpenCodeRuntimeOptions,
 } from "./opencode-bootstrap.js";
@@ -105,4 +109,41 @@ it("maps a verified Applied Skill to a bounded OpenCode slash prompt", () => {
 	expect(() =>
 		openCodeNativeSkillPrompt("workspace-summary", "x".repeat(16 * 1024)),
 	).toThrow("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
+});
+
+// #3217：OpenCode 的 glob 与 grep 只在本 Conversation 工作区内授权。
+it("authorizes OpenCode search only inside the Conversation workspace", async () => {
+	const root = await realpath(
+		await mkdtemp(join(tmpdir(), "opencode-search-")),
+	);
+	const workspace = join(root, "workspace");
+	const outside = join(root, "outside");
+	await mkdir(join(workspace, "src"), { recursive: true });
+	await mkdir(outside);
+	await symlink(outside, join(workspace, "escape"));
+	try {
+		for (const input of [
+			{ pattern: "**/*.ts" },
+			{ pattern: "*.md", path: "src" },
+			{ pattern: "*", path: workspace },
+			{ pattern: "TODO\\(", include: "*.ts", path: join(workspace, "src") },
+		])
+			expect(await openCodeSearchAllowed(workspace, input)).toBe(true);
+		for (const input of [
+			undefined,
+			{},
+			{ pattern: "*", path: outside },
+			{ pattern: "*", path: ".." },
+			{ pattern: "*", path: "escape" },
+			{ pattern: `${outside}/*` },
+			{ pattern: "../outside/*" },
+			{ pattern: "x", include: "../**" },
+			{ pattern: "x", include: "/etc/*" },
+			{ pattern: "x", path: "/proc" },
+			{ pattern: "a\0b" },
+		])
+			expect(await openCodeSearchAllowed(workspace, input)).toBe(false);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });

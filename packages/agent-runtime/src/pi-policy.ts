@@ -1,14 +1,30 @@
 import { constants } from "node:fs";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import {
+	access,
+	glob,
+	mkdir,
+	readdir,
+	readFile,
+	stat,
+	writeFile,
+} from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type { McpServerConfig } from "@earendil-works/pi-coding-agent";
 import {
 	createEditToolDefinition,
+	createFindToolDefinition,
+	createGrepToolDefinition,
+	createLsToolDefinition,
 	createReadToolDefinition,
 	createWriteToolDefinition,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { workspacePathAllowed } from "./workspace-path.js";
+import { piWorkspaceToolNames } from "./pi-tools.js";
+import {
+	workspaceDirectoryAllowed,
+	workspaceGlobAllowed,
+	workspacePathAllowed,
+} from "./workspace-path.js";
 
 export type PiFileDispatchOperationV1 = "read" | "write" | "access" | "mkdir";
 
@@ -109,6 +125,9 @@ export function createPiWorkspaceTools(
 	read: ReturnType<typeof createReadToolDefinition>;
 	write: ReturnType<typeof createWriteToolDefinition>;
 	edit: ReturnType<typeof createEditToolDefinition>;
+	find: ReturnType<typeof createFindToolDefinition>;
+	grep: ReturnType<typeof createGrepToolDefinition>;
+	ls: ReturnType<typeof createLsToolDefinition>;
 } {
 	const memory = join(workspace, ".memory");
 	const guard = async (path: string) => {
@@ -132,6 +151,18 @@ export function createPiWorkspaceTools(
 		await dispatch("access", path);
 		await access(path, constants.R_OK);
 	};
+	// 列举与搜索只在本 Conversation 工作区（含 .memory）内，路径上不能有符号链接。
+	const guardListing = async (path: string) => {
+		if (!(await workspaceDirectoryAllowed([workspace], path)))
+			throw new Error("RUNTIME_WORKSPACE_ACCESS_DENIED");
+	};
+	const exists = async (path: string) => {
+		await guardListing(path);
+		return access(path).then(
+			() => true,
+			() => false,
+		);
+	};
 	return {
 		read: createReadToolDefinition(workspace, {
 			operations: { readFile: read, access: check },
@@ -150,6 +181,58 @@ export function createPiWorkspaceTools(
 		edit: createEditToolDefinition(workspace, {
 			operations: { readFile: read, writeFile: write, access: check },
 		}),
+		find: createFindToolDefinition(workspace, {
+			operations: {
+				exists,
+				glob: async (pattern, cwd, options) => {
+					await guardListing(cwd);
+					if (!workspaceGlobAllowed(pattern))
+						throw new Error("RUNTIME_WORKSPACE_ACCESS_DENIED");
+					const ignored = (entry: string) =>
+						entry
+							.split(/[\\/]/)
+							.some((part) => ["node_modules", ".git"].includes(part));
+					const results: string[] = [];
+					for await (const entry of glob(pattern, {
+						cwd,
+						exclude: (path) => ignored(String(path)),
+					})) {
+						if (results.length >= options.limit) break;
+						const path = resolve(cwd, entry);
+						// 结果经过符号链接时丢弃，不能借链接列出工作区以外的文件。
+						if (
+							!ignored(entry) &&
+							(await workspaceDirectoryAllowed([workspace], path))
+						)
+							results.push(path);
+					}
+					return results;
+				},
+			},
+		}),
+		// ripgrep 只在已校验的搜索路径下遍历，默认不跟随符号链接。
+		grep: createGrepToolDefinition(workspace, {
+			operations: {
+				isDirectory: async (path) => {
+					await guardListing(path);
+					return (await stat(path)).isDirectory();
+				},
+				readFile: async (path) => (await read(path)).toString("utf8"),
+			},
+		}),
+		ls: createLsToolDefinition(workspace, {
+			operations: {
+				exists,
+				stat: async (path) => {
+					await guardListing(path);
+					return stat(path);
+				},
+				readdir: async (path) => {
+					await guardListing(path);
+					return readdir(path);
+				},
+			},
+		}),
 	};
 }
 
@@ -164,6 +247,9 @@ export default function piWorkspacePolicy(pi: ExtensionAPI) {
 	pi.registerTool(tools.read);
 	pi.registerTool(tools.write);
 	pi.registerTool(tools.edit);
+	pi.registerTool(tools.find);
+	pi.registerTool(tools.grep);
+	pi.registerTool(tools.ls);
 	if (connectionMcp)
 		pi.registerMcpServer("agent-infra-connection", connectionMcp);
 	if (browserMcp) pi.registerMcpServer("agent-infra-browser", browserMcp);
@@ -178,7 +264,7 @@ export default function piWorkspacePolicy(pi: ExtensionAPI) {
 			event.toolName,
 		);
 		if (
-			!["read", "write", "edit"].includes(event.toolName) &&
+			!piWorkspaceToolNames.includes(event.toolName) &&
 			!(connectionMcp && connectionTool) &&
 			!(browserMcp && browserTool)
 		)
