@@ -57,6 +57,11 @@ describe("Platform API production assembly", () => {
 				"data:text/javascript,export function createPlatformApiAssemblyInput() {}; export const browserAuth = { handleRequest: true }",
 			),
 		).rejects.toThrow("Platform API deployment module is invalid");
+		await expect(
+			loadPlatformApiAssembly(
+				"data:text/javascript,export function createPlatformApiAssemblyInput() { return {}; }; export const standardTemplateReleaseApp = { fetch: true }",
+			),
+		).rejects.toThrow("Platform API deployment module is invalid");
 	});
 
 	it.each([
@@ -397,9 +402,19 @@ describe("Platform API production assembly", () => {
 		const browserAuth = {
 			handleRequest: vi.fn(async () => new Response(null, { status: 204 })),
 		};
+		const standardTemplateReleaseApp = {
+			fetch: vi.fn(
+				async () =>
+					new Response(JSON.stringify({ status: "release-app" }), {
+						status: 202,
+						headers: { "content-type": "application/json" },
+					}),
+			),
+		};
 		const server = startPlatformApi({
 			dependencies: assembly.dependencies,
 			browserAuth,
+			standardTemplateReleaseApp,
 			log: () => {},
 			port: 0,
 		});
@@ -415,6 +430,36 @@ describe("Platform API production assembly", () => {
 			});
 			expect(login.status).toBe(204);
 			expect(browserAuth.handleRequest).toHaveBeenCalledOnce();
+			const release = await fetch(
+				`http://127.0.0.1:${address.port}/internal/ops/standard-template-releases/release/apply`,
+				{ method: "POST" },
+			);
+			expect(release.status).toBe(202);
+			expect(standardTemplateReleaseApp.fetch).toHaveBeenCalledOnce();
+			// 未装配 release app 时保留命名空间显式 404，不回落到普通 API。
+			const withoutReleaseApp = startPlatformApi({
+				dependencies: assembly.dependencies,
+				log: () => {},
+				port: 0,
+			});
+			servers.push(withoutReleaseApp);
+			const withoutAddress = withoutReleaseApp.address();
+			if (!withoutAddress || typeof withoutAddress === "string") {
+				throw new Error("Platform API without release app did not bind");
+			}
+			for (const path of [
+				"/internal/ops/standard-template-releases",
+				"/internal/ops/standard-template-releases/",
+				"/internal/ops/standard-template-releases/release/apply",
+			]) {
+				const unreleased = await fetch(
+					`http://127.0.0.1:${withoutAddress.port}${path}`,
+					{ method: "POST" },
+				);
+				expect(unreleased.status).toBe(404);
+				expect(unreleased.headers.get("cache-control")).toBe("no-store");
+				expect(await unreleased.text()).toBe("");
+			}
 			browserAuth.handleRequest.mockRejectedValueOnce(
 				new Error("private directory failure"),
 			);
