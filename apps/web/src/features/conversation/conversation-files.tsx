@@ -5,6 +5,8 @@ import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
 import type { Client } from "../../pilot/generated/client/index.js";
+import { readAgentFileLimitsV2 } from "../../pilot/generated-v2/sdk.gen.js";
+import type { Client as ClientV2 } from "../../pilot/generated-v2/client/index.js";
 import { client as defaultClient } from "../../pilot/generated/client.gen.js";
 import type {
 	FileDescriptorV1,
@@ -41,11 +43,13 @@ export type ResultFile = Extract<
 >["payload"] & { executionId: string };
 
 export function useConversationFiles({
+	agentId,
 	conversationId,
 	attachmentsEnabled,
 	resultFilesEnabled,
 	client = defaultClient,
 }: {
+	agentId: string;
 	conversationId: string;
 	attachmentsEnabled: boolean;
 	resultFilesEnabled: boolean;
@@ -69,9 +73,9 @@ export function useConversationFiles({
 				return undefined;
 			};
 			try {
-				const result = await readFileLimits({
-					client,
-					path: { conversationId },
+				const result = await readAgentFileLimitsV2({
+					client: client as unknown as ClientV2,
+					path: { agentId },
 					responseStyle: "fields",
 					throwOnError: false,
 					signal,
@@ -79,7 +83,7 @@ export function useConversationFiles({
 				if (signal?.aborted) return undefined;
 				if (!result.data || result.response?.status !== 200)
 					return failClosed();
-				const parsed = FileLimitsV1Schema.safeParse(result.data);
+				const parsed = FileLimitsV1Schema.safeParse(result.data.declaration);
 				if (!parsed.success) return failClosed();
 				setLimits(parsed.data);
 				setLimitsError(false);
@@ -89,7 +93,7 @@ export function useConversationFiles({
 				return failClosed();
 			}
 		},
-		[attachmentsEnabled, client, conversationId],
+		[agentId, attachmentsEnabled, client, conversationId],
 	);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset transfer state when the conversation scope changes
