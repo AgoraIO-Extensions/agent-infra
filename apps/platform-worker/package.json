@@ -9,6 +9,7 @@
 	"dependencies": {
 		"@agent-infra/agent-runtime": "workspace:*",
 		"@agent-infra/contracts": "workspace:*",
+		"@agent-infra/enterprise-directory": "workspace:*",
 		"@agent-infra/identity": "workspace:*",
 		"@agent-infra/image-registry": "workspace:*",
 		"@agent-infra/model-catalog": "workspace:*",
