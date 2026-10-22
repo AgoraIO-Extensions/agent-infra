@@ -380,10 +380,11 @@ export function registerFileRoutesV1(
 				request,
 				port,
 			);
+			const contentLength = context.req.header("Content-Length");
 			if (
 				context.req.header("Content-Type") !== file.descriptor.mediaType ||
-				context.req.header("Content-Length") !==
-					String(file.descriptor.sizeBytes) ||
+				(contentLength !== undefined &&
+					contentLength !== String(file.descriptor.sizeBytes)) ||
 				!context.req.raw.body
 			)
 				throw new HttpProtocolError(

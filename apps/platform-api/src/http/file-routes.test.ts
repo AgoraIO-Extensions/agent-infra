@@ -104,7 +104,6 @@ it("authenticates the same data URL for every use and never returns a storage be
 		"test-actor": "alice",
 		"X-Platform-File-Grant": access.grant.token,
 		"Content-Type": "text/plain",
-		"Content-Length": "5",
 	};
 	expect(
 		(
