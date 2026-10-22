@@ -50,6 +50,27 @@ describe("classifyWorkloadStepFailureV1 (#2532)", () => {
 		});
 	});
 
+	it("prioritizes the bounded quota marker over generic HTTP status", () => {
+		expect(
+			classifyWorkloadStepFailureV1(
+				new WorkloadKubernetesError("unavailable", {
+					status: 403,
+					quota: true,
+					kind: "PersistentVolumeClaim",
+					verb: "create",
+				}),
+			),
+		).toEqual({
+			reason: "kubernetes_quota",
+			kubernetes: {
+				status: 403,
+				quota: true,
+				kind: "PersistentVolumeClaim",
+				verb: "create",
+			},
+		});
+	});
+
 	it("separates conflicts, policy refusals and calls without an HTTP response", () => {
 		expect(
 			classifyWorkloadStepFailureV1(new WorkloadKubernetesError("conflict")),

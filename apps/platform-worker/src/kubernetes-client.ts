@@ -53,6 +53,8 @@ export type WorkloadKubernetesVerb =
 export interface WorkloadKubernetesFailureDetailsV1 {
 	/** HTTP status of the API response; absent when the call never got one. */
 	readonly status?: number;
+	/** Kubernetes admission rejected the object because a ResourceQuota was exceeded. */
+	readonly quota?: true;
 	readonly kind?: WorkloadResourceKind;
 	readonly verb?: WorkloadKubernetesVerb;
 }
@@ -80,13 +82,26 @@ export function workloadKubernetesFailureV1(
 ): WorkloadKubernetesError {
 	if (error instanceof WorkloadKubernetesError) return error;
 	const httpStatus = status(error);
+	const quota = quotaRejection(error);
 	return new WorkloadKubernetesError(
 		httpStatus === 409 ? "conflict" : "unavailable",
 		{
 			...(httpStatus === undefined ? {} : { status: httpStatus }),
+			...(quota ? { quota: true as const } : {}),
 			kind: context.kind,
 			verb: context.verb,
 		},
+	);
+}
+
+/** Inspect only the bounded admission marker; never retain or emit the body. */
+function quotaRejection(error: unknown): boolean {
+	if (typeof error !== "object" || error === null || !("body" in error))
+		return false;
+	const body = (error as { readonly body?: unknown }).body;
+	if (typeof body !== "string" || body.length > 16_384) return false;
+	return /(?:exceeded|exceeds)[\s\S]{0,80}quota|quota[\s\S]{0,80}(?:exceeded|exceeds)/i.test(
+		body,
 	);
 }
 
