@@ -1644,3 +1644,54 @@ it("rejects unconfirmed, forged metadata and cross-scope result files before adv
 		await runtime.close();
 	}
 });
+
+it("persists result.file V2 only when its workspace reference matches the file record (#3226)", async () => {
+	await seedConformanceConversation();
+	const [fileRow] = await client<
+		{ record: FileRecordV1 }[]
+	>`select record from platform.files where file_id = 'file_fixture'`;
+	if (!fileRow) throw new Error("Missing result fixture");
+	const original = fileRow.record;
+	const runtime = openEvents("file_event_workspace_reference");
+	const base = eventInput(conformanceConversationId, conformanceExecutionId);
+	const event = {
+		type: "result.file" as const,
+		fileId: "file_fixture",
+		name: "fixture.txt",
+		mediaType: "text/plain",
+		sizeBytes: 16,
+	};
+	try {
+		// 记录在分配结果意图时写入了工作区引用：V1 事件、null 与其他路径都与记录不一致。
+		await client`update platform.files set record = ${client.json({ ...original, workspaceReference: "out/fixture.txt" } as unknown as Parameters<typeof client.json>[0])} where file_id = 'file_fixture'`;
+		for (const change of [
+			{},
+			{ workspaceReference: null },
+			{ workspaceReference: "out/other.txt" },
+		]) {
+			await expect(
+				runtime.events.persist({ ...base, event: { ...event, ...change } }),
+			).rejects.toMatchObject({ code: "unavailable" });
+		}
+		const [state] =
+			await client`select last_conversation_cursor from platform.conversations where id = ${conformanceConversationId}`;
+		expect(Number(state?.last_conversation_cursor)).toBe(0);
+		const command = {
+			...base,
+			event: { ...event, workspaceReference: "out/fixture.txt" },
+		};
+		expect((await runtime.events.persist(command)).outcome).toBe("accepted");
+		expect((await runtime.events.persist(command)).outcome).toBe("replayed");
+		const [stored] = await client`
+			select event_payload from platform.conversation_events
+			where execution_id = ${conformanceExecutionId} and event_type = 'result.file'
+		`;
+		expect(stored?.event_payload).toMatchObject({
+			fileId: "file_fixture",
+			workspaceReference: "out/fixture.txt",
+		});
+	} finally {
+		await client`update platform.files set record = ${client.json(original as unknown as Parameters<typeof client.json>[0])} where file_id = 'file_fixture'`;
+		await runtime.close();
+	}
+});

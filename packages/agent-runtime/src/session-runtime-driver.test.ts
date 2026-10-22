@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
@@ -83,62 +83,108 @@ function fileBridge(onRevalidate?: (call: number) => void): {
 	};
 }
 
-it("publishes one request-scoped native result file", async () => {
-	const path = await mkdtemp(join(tmpdir(), "session-result-file-"));
-	let publishAfterTerminal: (() => Promise<void>) | undefined;
-	const writeResult = vi.fn(
-		async (descriptor: Parameters<RuntimeFileBridgePortV1["writeResult"]>[0]) =>
-			createRuntimeFileResultReceiptV1(
-				{
-					actorId: "actor-a",
-					channelId: "web",
-					agentId: "agent-a",
-					conversationId: "conversation-a",
-					executionId: "execution-a",
-					sessionGeneration: 1,
-					grantId: "grant-a",
-					expiresAt: Date.now() + 60_000,
-					inputFileIds: [],
-				},
+const pngBytes = Buffer.from(
+	"89504e470d0a1a0a0000000d4948445200000001000000010806000000" +
+		"1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082",
+	"hex",
+);
+const pdfBytes = Buffer.from(
+	"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<<>>\nendobj\n",
+);
+const resultBinding = {
+	actorId: "actor-a",
+	channelId: "web",
+	agentId: "agent-a",
+	conversationId: "conversation-a",
+	executionId: "execution-a",
+	sessionGeneration: 1,
+	grantId: "grant-a",
+	expiresAt: Date.now() + 60_000,
+	inputFileIds: [],
+};
+function resultWriter(onWrite?: () => Promise<void>) {
+	let count = 0;
+	return vi.fn(
+		async (
+			descriptor: Parameters<RuntimeFileBridgePortV1["writeResult"]>[0],
+			body: Parameters<RuntimeFileBridgePortV1["writeResult"]>[1],
+			options?: Parameters<RuntimeFileBridgePortV1["writeResult"]>[2],
+		) => {
+			for await (const _chunk of body);
+			await onWrite?.();
+			count += 1;
+			return createRuntimeFileResultReceiptV1(
+				resultBinding,
 				{
 					schemaVersion: 1,
-					fileId: "result-file-session",
+					fileId: `result-file-${count}`,
 					kind: "result",
 					descriptor,
 					status: "available",
 					createdAt: new Date().toISOString(),
 					expiresAt: new Date(Date.now() + 60_000).toISOString(),
 				},
-			),
+				options,
+			);
+		},
 	);
-	const openSession = vi.fn(async (options: NativeSessionOptions) => ({
+}
+function referenceSession(answer: string, stopReason = "completed") {
+	return vi.fn(async (options: NativeSessionOptions) => ({
 		nativeId: "native-a",
 		select: async () => {},
 		prompt: async () => {
-			await options.resultFile?.({
-				path: join(tmpdir(), "outside-result.txt"),
-				content: "outside",
-			});
-			await options.resultFile?.({
-				path: join(options.cwd, "result.txt"),
-				content: "session result",
-			});
-			await options.resultFile?.({
-				path: join(options.cwd, "second-result.txt"),
-				content: "duplicate",
-			});
-			publishAfterTerminal = async () => {
-				await options.resultFile?.({
-					path: join(options.cwd, "late-result.txt"),
-					content: "late",
-				});
-			};
-			return { stopReason: "completed" };
+			await mkdir(join(options.cwd, "out"), { recursive: true });
+			await writeFile(join(options.cwd, "out", "chart.png"), pngBytes);
+			await writeFile(join(options.cwd, "out", "report.pdf"), pdfBytes);
+			await options.update({ type: "text", payload: { delta: answer } });
+			return { stopReason };
 		},
 		cancel: async () => {},
 		close: async () => {},
 	}));
-	const runtime = await driver(path, openSession);
+}
+async function turnState(path: string) {
+	const index = JSON.parse(
+		await readFile(join(path, "index.json"), "utf8"),
+	) as {
+		sessions: { ref: string }[];
+	};
+	const ref = index.sessions[0]?.ref ?? "";
+	const state = JSON.parse(
+		await readFile(join(path, ref, "state.json"), "utf8"),
+	) as {
+		turns: {
+			status: string;
+			operationFacts?: {
+				toolId?: string;
+				phase: string;
+				failureCode?: string;
+				resultRef?: string;
+			}[];
+			resultPublication?: {
+				plan: { settled?: true; entries: { phase: string }[] };
+			};
+		}[];
+	};
+	return state.turns[0];
+}
+const referenceAnswer = [
+	"Report: [report](sandbox:out/report.pdf) and ![chart](sandbox:/out/chart.png).",
+	"",
+	"```",
+	"[code](sandbox:out/code.png)",
+	"```",
+	"",
+	"Source `[x](sandbox:out/inline.png)` and [app.ts](src/app.ts).",
+].join("\n");
+
+it("publishes sandbox: references from the final answer before the terminal event (#3226)", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-result-file-"));
+	const writeResult = resultWriter();
+	const runtime = await driver(path, referenceSession(referenceAnswer), {
+		sandboxReferences: true,
+	});
 	try {
 		const accepted = await runtime.execute(command([]), {
 			fileBridge: {
@@ -149,21 +195,172 @@ it("publishes one request-scoped native result file", async () => {
 				revalidate: () => {},
 			},
 		});
-		await vi.waitFor(async () =>
-			expect(
-				await runtime.getStatus(accepted.nativeSessionRef, "execution-a"),
-			).toBe("completed"),
+		await vi.waitFor(
+			async () =>
+				expect(
+					await runtime.getStatus(accepted.nativeSessionRef, "execution-a"),
+				).toBe("completed"),
+			{ timeout: 10_000 },
 		);
-		await publishAfterTerminal?.();
-		expect(writeResult).toHaveBeenCalledOnce();
-		expect(
-			(
-				await runtime.replayEvents(accepted.nativeSessionRef, "execution-a")
-			).some((event) => event.type === "file"),
-		).toBe(true);
+		expect(writeResult.mock.calls.map((call) => call[2])).toEqual([
+			{ workspaceReference: "out/report.pdf" },
+			{ workspaceReference: "out/chart.png" },
+		]);
+		expect(writeResult.mock.calls.map((call) => call[0].mediaType)).toEqual([
+			"application/pdf",
+			"image/png",
+		]);
+		const events = await runtime.replayEvents(
+			accepted.nativeSessionRef,
+			"execution-a",
+		);
+		const files = events.filter((event) => event.type === "file");
+		expect(files.map((event) => [event.schemaVersion, event.payload])).toEqual([
+			[
+				2,
+				{
+					fileId: "result-file-1",
+					name: "report.pdf",
+					mimeType: "application/pdf",
+					sizeBytes: pdfBytes.byteLength,
+					workspaceReference: "out/report.pdf",
+				},
+			],
+			[
+				2,
+				{
+					fileId: "result-file-2",
+					name: "chart.png",
+					mimeType: "image/png",
+					sizeBytes: pngBytes.byteLength,
+					workspaceReference: "out/chart.png",
+				},
+			],
+		]);
+		// 结果文件事件都在终态事件之前。
+		expect(events.at(-1)?.type).toBe("completed");
+		const turn = await turnState(path);
+		const facts = turn?.operationFacts?.filter(
+			(fact) => fact.toolId === "workspace.publish_result_file",
+		);
+		expect(facts?.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"completed",
+			"intent",
+			"started",
+			"completed",
+		]);
+		expect(turn?.resultPublication?.plan.settled).toBe(true);
 	} finally {
 		await runtime.close();
 		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("does not publish for failed Turns or for adapters without the reference protocol (#3226)", async () => {
+	for (const [stopReason, sandboxReferences] of [
+		["failed", true],
+		["completed", false],
+	] as const) {
+		const path = await mkdtemp(join(tmpdir(), "session-result-skip-"));
+		const writeResult = resultWriter();
+		const runtime = await driver(
+			path,
+			referenceSession(referenceAnswer, stopReason),
+			{
+				sandboxReferences,
+				completionStatus: (reason) =>
+					reason === "completed" ? "completed" : "failed",
+			},
+		);
+		try {
+			const accepted = await runtime.execute(command([]), {
+				fileBridge: {
+					readInput: async () => {
+						throw new Error("unused");
+					},
+					writeResult,
+					revalidate: () => {},
+				},
+			});
+			await vi.waitFor(
+				async () =>
+					expect(
+						await runtime.getStatus(accepted.nativeSessionRef, "execution-a"),
+					).toBe(stopReason === "completed" ? "completed" : "failed"),
+				{ timeout: 10_000 },
+			);
+			expect(writeResult).not.toHaveBeenCalled();
+			expect((await turnState(path))?.resultPublication).toBeUndefined();
+		} finally {
+			await runtime.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	}
+});
+
+it("settles an interrupted publication on restart without republishing (#3226)", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-result-restart-"));
+	const restarted = await mkdtemp(join(tmpdir(), "session-result-restored-"));
+	const writing = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const writeResult = resultWriter(async () => {
+		writing.resolve();
+		await release.promise;
+	});
+	const runtime = await driver(path, referenceSession(referenceAnswer), {
+		sandboxReferences: true,
+	});
+	try {
+		const accepted = await runtime.execute(command([]), {
+			fileBridge: {
+				readInput: async () => {
+					throw new Error("unused");
+				},
+				writeResult,
+				revalidate: () => {},
+			},
+		});
+		await writing.promise;
+		// 第一份 writeResult 已开始时的持久状态，相当于此刻 Driver 崩溃。
+		await cp(path, restarted, { recursive: true });
+		const recovered = await driver(
+			restarted,
+			vi.fn(async () => {
+				throw new Error("native recovery is not needed");
+			}),
+			{ sandboxReferences: true },
+		);
+		try {
+			expect(
+				await recovered.getStatus(accepted.nativeSessionRef, "execution-a"),
+			).toBe("completed");
+			const events = await recovered.replayEvents(
+				accepted.nativeSessionRef,
+				"execution-a",
+			);
+			expect(events.some((event) => event.type === "file")).toBe(false);
+			const facts = (await turnState(restarted))?.operationFacts?.filter(
+				(fact) => fact.toolId === "workspace.publish_result_file",
+			);
+			expect(
+				facts
+					?.filter((fact) => !["intent", "started"].includes(fact.phase))
+					.map((fact) => [fact.phase, fact.failureCode]),
+			).toEqual([
+				["unknown", "recovery_unconfirmed"],
+				["failed", "dependency_unavailable"],
+			]);
+		} finally {
+			await recovered.close();
+		}
+		expect(writeResult).toHaveBeenCalledOnce();
+	} finally {
+		release.resolve();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+		await rm(restarted, { recursive: true, force: true });
 	}
 });
 
@@ -176,6 +373,8 @@ async function driver(
 		skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 		nativeSkillPrompt?: (name: string, parameters: string) => string;
 		authorizeModelAction?: SessionRuntimeDriverOptions["authorizeModelAction"];
+		sandboxReferences?: boolean;
+		completionStatus?: SessionRuntimeDriverOptions["completionStatus"];
 	} = {},
 ): Promise<SessionRuntimeDriver> {
 	return SessionRuntimeDriver.open({
@@ -202,7 +401,8 @@ async function driver(
 			: {}),
 		cursorPrefix: "test",
 		retireSession: async () => {},
-		completionStatus: () => "completed",
+		completionStatus: options.completionStatus ?? (() => "completed"),
+		...(options.sandboxReferences ? { sandboxReferences: true } : {}),
 		...(options.authorizeModelAction
 			? { authorizeModelAction: options.authorizeModelAction }
 			: {}),

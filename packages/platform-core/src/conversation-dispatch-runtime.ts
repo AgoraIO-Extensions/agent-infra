@@ -16,6 +16,7 @@ import {
 	unavailable,
 } from "./conversation-dispatch-values.js";
 import { parseConversationOperationFactV2 } from "./conversation-operation-facts.js";
+import { isWorkspaceReferenceV1 } from "./file-authority.js";
 
 function runtimeOperation(
 	claim: ConversationDispatchClaimV1,
@@ -348,6 +349,36 @@ export function parseRuntimeEvent(
 				schemaVersion: 2,
 				type: "reasoning",
 				payload: { kind: payload.kind, delta: text(payload.delta, 65_536) },
+			};
+		}
+		if (input.type === "file") {
+			// #3226：结果文件 V2 只比 V1 多一个规范化工作区路径，可为 null。
+			const payload = exactObject(input.payload, [
+				"fileId",
+				"name",
+				"mimeType",
+				"sizeBytes",
+				"workspaceReference",
+			]);
+			if (
+				typeof payload.sizeBytes !== "number" ||
+				!Number.isSafeInteger(payload.sizeBytes) ||
+				payload.sizeBytes < 0 ||
+				(payload.workspaceReference !== null &&
+					!isWorkspaceReferenceV1(payload.workspaceReference))
+			)
+				return unavailable();
+			return {
+				...base,
+				schemaVersion: 2,
+				type: "file",
+				payload: {
+					fileId: text(payload.fileId),
+					name: text(payload.name),
+					mimeType: text(payload.mimeType, 255),
+					sizeBytes: payload.sizeBytes,
+					workspaceReference: payload.workspaceReference,
+				},
 			};
 		}
 		if (input.type !== "operation") return unavailable();

@@ -49,6 +49,11 @@ export interface GenericAcpRuntimeDriverOptions {
 	readonly modelOptions: readonly AcpRuntimeModelOption[];
 	/** OpenCode supports multiple prompts on one ACP Session with refreshed Keys. */
 	readonly reuseNativeSession?: boolean;
+	/**
+	 * #3226：标准模板（OpenCode）解析最终回答中的 `sandbox:` 引用；未经验证的 ACP 自定义
+	 * Agent 只适用 image/resource_link 块映射。
+	 */
+	readonly sandboxReferences?: boolean;
 	readonly authorizeModelAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
@@ -115,6 +120,7 @@ export const GenericAcpRuntimeDriver = {
 				const callbacks = {
 					admit,
 					update,
+					resultBlock: session.resultBlock,
 					resolveModelCredential: session.resolveModelCredential,
 					recordOperationFact: session.recordOperationFact,
 					modelFact: {
@@ -226,28 +232,31 @@ export const GenericAcpRuntimeDriver = {
 					recordOperationFact: callbacks.recordOperationFact,
 					modelFact: () => callbacks.modelFact,
 					update: async ({ update: event }) => {
-						if (
-							event.sessionUpdate === "agent_message_chunk" &&
-							event.content.type === "text" &&
-							event.content.text
-						) {
-							await callbacks.update({
-								type: "text",
-								payload: { delta: event.content.text },
-							});
+						if (event.sessionUpdate === "agent_message_chunk") {
+							if (event.content.type === "text" && event.content.text) {
+								await callbacks.update({
+									type: "text",
+									payload: { delta: event.content.text },
+								});
+								return;
+							}
+							// #3226：image 块直接发布，resource_link 按工作区引用处理；Turn 正常结束时
+							// 与回答内引用一并处理。
+							if (event.content.type === "image")
+								callbacks.resultBlock?.({
+									type: "image",
+									data: event.content.data,
+								});
+							else if (event.content.type === "resource_link")
+								callbacks.resultBlock?.({
+									type: "resource_link",
+									uri: event.content.uri,
+								});
+							await callbacks.update();
 						} else if (
 							event.sessionUpdate === "tool_call" ||
 							event.sessionUpdate === "tool_call_update"
 						) {
-							if (event.status !== "failed") {
-								for (const content of event.content ?? []) {
-									if (content.type !== "diff") continue;
-									await session.resultFile?.({
-										path: content.path,
-										content: content.newText,
-									});
-								}
-							}
 							const phase =
 								event.status === "completed"
 									? "completed"
@@ -300,6 +309,7 @@ export const GenericAcpRuntimeDriver = {
 								native.startTurn?.(next);
 								callbacks.admit = next.admit;
 								callbacks.update = next.update;
+								callbacks.resultBlock = next.resultBlock;
 								callbacks.resolveModelCredential = next.resolveModelCredential;
 								callbacks.recordOperationFact = next.recordOperationFact;
 								const nextOption = options.modelOptions.find(

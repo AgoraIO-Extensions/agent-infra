@@ -2713,6 +2713,169 @@ function normalizeReasoningEventOpenApiAddition(previous, current) {
 	return normalized;
 }
 
+// #3226 回答内 `sandbox:` 引用发布的结果文件：浏览器 V2 `result.file` 与 Runtime V2 `file`
+// 事件在 V1 字段之外携带规范化的 `workspaceReference`，运行期文件交换的结果请求新增同名可选
+// 字段，三者都只做加法。事件 Schema 与请求字段的内容按摘要固定，宿主逐一固定：基线已有该新增、
+// 内容与摘要不符、缺少宿主，或新增出现在其他位置时原样返回，让差异按破坏性变更判定。
+const sandboxResultFileEventAdditions = [
+	{
+		name: "ResultFileEventV2",
+		type: "result.file",
+		digest: "eae25b13ff52289ec244c706cacb8c493b00e97205bafe97e95f9e9545d843e0",
+		hosts: [
+			"PersistedConversationEventV2",
+			"TaskProjectionV1",
+			"TaskSseMessageV1",
+		],
+	},
+	{
+		name: "RuntimeFileEventV2",
+		type: "file",
+		digest: "1c602f5601c8cbea17dc7b127f7d754d1ee9b115bd469f0d31f0ee6480954e49",
+		hosts: ["RuntimeEvent", "RuntimeEventReplayResponseV4"],
+	},
+];
+const sandboxWorkspaceReferenceRequestDigest =
+	"189af9901c0e9522547c3683cc4e47334c116f0f2def29f40007ad232a9f1136";
+
+function sandboxDigest(value) {
+	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function isSandboxResultFileEventOption(value, addition) {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		!Array.isArray(value) &&
+		(value.$ref === `#/components/schemas/${addition.name}` ||
+			(value.properties?.type?.const === addition.type &&
+				value.properties?.schemaVersion?.const === 2 &&
+				value.properties?.payload?.properties?.workspaceReference !==
+					undefined))
+	);
+}
+
+function sandboxResultFileEventOptions(value, addition, found = []) {
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			if (isSandboxResultFileEventOption(item, addition)) found.push(item);
+			else sandboxResultFileEventOptions(item, addition, found);
+		}
+	} else if (value !== null && typeof value === "object") {
+		for (const item of Object.values(value))
+			sandboxResultFileEventOptions(item, addition, found);
+	}
+	return found;
+}
+
+function stripSandboxResultFileEventOptions(value, addition) {
+	if (Array.isArray(value))
+		return value
+			.filter((item) => !isSandboxResultFileEventOption(item, addition))
+			.map((item) => stripSandboxResultFileEventOptions(item, addition));
+	if (value !== null && typeof value === "object")
+		return Object.fromEntries(
+			Object.entries(value).map(([key, item]) => [
+				key,
+				stripSandboxResultFileEventOptions(item, addition),
+			]),
+		);
+	return value;
+}
+
+function isSandboxResultExchangeRequest(value) {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		!Array.isArray(value) &&
+		value.properties?.operation?.const === "result" &&
+		value.properties?.schemaVersion?.const === 2 &&
+		value.properties?.executionGrant !== undefined &&
+		value.properties?.workspaceReference !== undefined
+	);
+}
+
+function stripSandboxResultExchangeRequestField(value, found) {
+	if (Array.isArray(value))
+		return value.map((item) =>
+			stripSandboxResultExchangeRequestField(item, found),
+		);
+	if (value === null || typeof value !== "object") return value;
+	if (isSandboxResultExchangeRequest(value)) {
+		found.push(value.properties.workspaceReference);
+		if (value.required?.includes("workspaceReference")) found.required = true;
+		const properties = { ...value.properties };
+		delete properties.workspaceReference;
+		return { ...value, properties };
+	}
+	return Object.fromEntries(
+		Object.entries(value).map(([key, item]) => [
+			key,
+			stripSandboxResultExchangeRequestField(item, found),
+		]),
+	);
+}
+
+/**
+ * 基线没有 #3226 新增时，去掉当前文档中与摘要一致、且只出现在既定宿主里的事件选项，以及
+ * 运行期文件交换结果请求上与摘要一致的可选 `workspaceReference`。
+ */
+function normalizeSandboxResultFileOpenApiAddition(previous, current) {
+	let normalized = current;
+	for (const addition of sandboxResultFileEventAdditions) {
+		const previousSchemas = previous.components?.schemas ?? {};
+		if (
+			previousSchemas[addition.name] !== undefined ||
+			sandboxResultFileEventOptions(previousSchemas, addition).length > 0
+		)
+			continue;
+		const schemas = normalized.components?.schemas ?? {};
+		const allOptions = sandboxResultFileEventOptions(schemas, addition);
+		const component = schemas[addition.name];
+		if (component === undefined && allOptions.length === 0) continue;
+		if (component !== undefined && sandboxDigest(component) !== addition.digest)
+			return current;
+		const hosted = addition.hosts.flatMap((name) =>
+			sandboxResultFileEventOptions(schemas[name], addition),
+		);
+		if (
+			hosted.length === 0 ||
+			hosted.length !== allOptions.length ||
+			!hosted.every((option) =>
+				option.$ref === `#/components/schemas/${addition.name}`
+					? component !== undefined
+					: sandboxDigest(option) === addition.digest,
+			)
+		)
+			return current;
+		const candidate = structuredClone(normalized);
+		for (const name of addition.hosts) {
+			if (candidate.components.schemas[name] !== undefined)
+				candidate.components.schemas[name] = stripSandboxResultFileEventOptions(
+					candidate.components.schemas[name],
+					addition,
+				);
+		}
+		delete candidate.components.schemas[addition.name];
+		normalized = candidate;
+	}
+	const previousFields = [];
+	stripSandboxResultExchangeRequestField(previous, previousFields);
+	if (previousFields.length > 0) return normalized;
+	const fields = [];
+	const stripped = stripSandboxResultExchangeRequestField(normalized, fields);
+	if (fields.length === 0) return normalized;
+	if (
+		fields.required ||
+		!fields.every(
+			(field) =>
+				sandboxDigest(field) === sandboxWorkspaceReferenceRequestDigest,
+		)
+	)
+		return current;
+	return stripped;
+}
+
 const preparingSessionAvailability = {
 	enum: ["preparing", "ready", "unavailable"],
 	type: "string",
@@ -5559,6 +5722,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			current,
 		);
 		current = normalizeReasoningEventOpenApiAddition(previous, current);
+		current = normalizeSandboxResultFileOpenApiAddition(previous, current);
 		if (!hasSelectedBrowserSideEffectEventOpenApiOption(previous)) {
 			const sideEffectNormalized =
 				stripBrowserSideEffectOpenApiAdditions(current);

@@ -5,9 +5,13 @@ import type {
 	RuntimeFileBridgeFactoryV1,
 	RuntimeFileExchangeEvidenceV1,
 	RuntimeFileInputV1,
+	RuntimeFileResultOptionsV1,
 	RuntimeFileResultV1,
 } from "@agent-infra/agent-runtime";
-import { createRuntimeFileBridgeV1 } from "@agent-infra/agent-runtime";
+import {
+	createRuntimeFileBridgeV1,
+	RuntimeFileResultUnconfirmedError,
+} from "@agent-infra/agent-runtime";
 import {
 	FileAccessResponseV1Schema,
 	type FileDescriptorV1,
@@ -32,11 +36,20 @@ function idempotency(
 	binding: RuntimeFileBridgeBindingV1,
 	operation: "read" | "result",
 	value: string | FileDescriptorV1,
+	options?: RuntimeFileResultOptionsV1,
 ) {
+	// #3226：同一执行中内容相同、工作区引用不同的结果是不同的意图；未给出引用的旧调用方
+	// 保持原有的键。
 	const normalizedValue =
 		typeof value === "string"
 			? value
-			: [value.name, value.mediaType, value.sizeBytes, value.sha256];
+			: [
+					value.name,
+					value.mediaType,
+					value.sizeBytes,
+					value.sha256,
+					...(options ? [options.workspaceReference] : []),
+				];
 	return createHash("sha256")
 		.update(
 			JSON.stringify([
@@ -270,8 +283,9 @@ export function createRuntimeFileBridgeFactoryV1(
 			async writeResult(
 				descriptor: FileDescriptorV1,
 				body: ReadableStream<Uint8Array>,
+				options?: RuntimeFileResultOptionsV1,
 			): Promise<RuntimeFileResultV1> {
-				const key = idempotency(binding, "result", descriptor);
+				const key = idempotency(binding, "result", descriptor, options);
 				let bounded: ReturnType<typeof boundedUpload> | undefined;
 				try {
 					const access = await exchange(
@@ -280,6 +294,9 @@ export function createRuntimeFileBridgeFactoryV1(
 							executionGrant: evidence.executionGrant,
 							operation: "result",
 							descriptor,
+							...(options
+								? { workspaceReference: options.workspaceReference }
+								: {}),
 							idempotencyKey: key,
 						},
 						key,
@@ -313,30 +330,44 @@ export function createRuntimeFileBridgeFactoryV1(
 					const completePath = target(
 						access.path.replace(/\/content$/, "/complete"),
 					);
-					const response = await send(completePath, {
-						method: "POST",
-						redirect: "error",
-						signal: AbortSignal.timeout(timeoutMs),
-						headers: {
-							"X-Platform-File-Grant": access.grant.token,
-							"Content-Type": "application/json",
-						},
-						body: JSON.stringify({
-							schemaVersion: 1,
-							accessId: access.accessId,
-						}),
-					});
-					if (!response.ok)
-						throw new Error("RUNTIME_FILE_RESULT_COMPLETE_FAILED");
-					const file = FileProjectionV1Schema.parse(
-						await boundedJson(response),
-					);
+					// #3226：完成请求一旦发出，对象可能已被确认。只有平台明确拒绝（4xx）才是失败；
+					// 传输中断、5xx 或无法解析的响应都无法确认结果，交给调用方记为 unknown。
+					let response: Response;
+					try {
+						response = await send(completePath, {
+							method: "POST",
+							redirect: "error",
+							signal: AbortSignal.timeout(timeoutMs),
+							headers: {
+								"X-Platform-File-Grant": access.grant.token,
+								"Content-Type": "application/json",
+							},
+							body: JSON.stringify({
+								schemaVersion: 1,
+								accessId: access.accessId,
+							}),
+						});
+					} catch (error) {
+						throw new RuntimeFileResultUnconfirmedError({ cause: error });
+					}
+					if (!response.ok) {
+						await response.body?.cancel().catch(() => undefined);
+						if (response.status >= 400 && response.status < 500)
+							throw new Error("RUNTIME_FILE_RESULT_COMPLETE_FAILED");
+						throw new RuntimeFileResultUnconfirmedError();
+					}
+					let file: RuntimeFileResultV1;
+					try {
+						file = FileProjectionV1Schema.parse(await boundedJson(response));
+					} catch (error) {
+						throw new RuntimeFileResultUnconfirmedError({ cause: error });
+					}
 					if (
 						file.fileId !== access.file.fileId ||
 						file.status !== "available" ||
 						!sameDescriptor(file.descriptor, descriptor)
 					)
-						throw new Error("RUNTIME_FILE_RESULT_INVALID");
+						throw new RuntimeFileResultUnconfirmedError();
 					return file;
 				} catch (error) {
 					await bounded?.cancel().catch(() => undefined);
@@ -348,7 +379,8 @@ export function createRuntimeFileBridgeFactoryV1(
 		return createRuntimeFileBridgeV1({
 			binding,
 			readInput: (context) => rawPort.readInput(context.fileId),
-			writeResult: (descriptor, body) => rawPort.writeResult(descriptor, body),
+			writeResult: (descriptor, body, _context, options) =>
+				rawPort.writeResult(descriptor, body, options),
 			now: () => Date.now(),
 			isRevoked: () => false,
 			isCurrent: () => true,

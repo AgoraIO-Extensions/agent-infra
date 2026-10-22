@@ -6,12 +6,6 @@ import {
 	workspacePathAllowed,
 } from "./workspace-path.js";
 
-export type ClaudeFileWriteOutput = Readonly<{
-	filePath: string;
-	content?: string;
-	structuredPatch?: readonly unknown[];
-}>;
-
 export type ClaudeToolOperationCallbacks = Readonly<{
 	onIntent?: (toolUseId: string, toolName: string) => Promise<void>;
 	onStarted?: (toolUseId: string, toolName: string) => Promise<void>;
@@ -42,12 +36,11 @@ export const claudeWorkspaceToolNames: readonly string[] = Object.freeze([
 /**
  * Fixed core tools. 文件读写、列举与搜索只在本 Conversation 的工作区、memory 与只读 Skill
  * 根内可用（#3217）；Bash、子 Agent、网络工具和任意文件根仍不开放，Bash 待 OS 级边界
- * 就绪后开放（#3218）。
+ * 就绪后开放（#3218）。#3226：Write/Edit 不再隐式发布结果文件，PostToolUse 只记录工具事实。
  */
 export function claudeWorkspaceTools(
 	workspace: string,
 	memory: string,
-	onResultFile?: (output: ClaudeFileWriteOutput) => Promise<void>,
 	onToolOperation?: ClaudeToolOperationCallbacks,
 	readOnlyRoots: readonly string[] = [],
 ): Pick<Options, "tools" | "hooks" | "canUseTool" | "settings"> {
@@ -215,7 +208,7 @@ export function claudeWorkspaceTools(
 					],
 				},
 			],
-			...(onResultFile || onToolOperation
+			...(onToolOperation
 				? {
 						PostToolUse: [
 							{
@@ -224,46 +217,18 @@ export function claudeWorkspaceTools(
 										const toolUseId =
 											"tool_use_id" in input ? input.tool_use_id : undefined;
 										try {
-											if (
-												onToolOperation &&
-												input.hook_event_name === "PostToolUse"
-											)
+											if (input.hook_event_name === "PostToolUse") {
 												await onToolOperation.onStarted?.(
 													typeof toolUseId === "string"
 														? toolUseId
 														: "unknown-tool-use",
 													input.tool_name,
 												);
-											if (
-												onToolOperation &&
-												input.hook_event_name === "PostToolUse"
-											)
 												await onToolOperation.onCompleted?.(
 													typeof toolUseId === "string"
 														? toolUseId
 														: "unknown-tool-use",
 													input.tool_name,
-												);
-											if (
-												onResultFile &&
-												input.hook_event_name === "PostToolUse" &&
-												["Write", "Edit"].includes(input.tool_name) &&
-												input.tool_response &&
-												typeof input.tool_response === "object" &&
-												(input.tool_response as { filePath?: unknown })
-													.filePath &&
-												(typeof (input.tool_response as { content?: unknown })
-													.content === "string" ||
-													Array.isArray(
-														(
-															input.tool_response as {
-																structuredPatch?: unknown;
-															}
-														).structuredPatch,
-													))
-											) {
-												await onResultFile(
-													input.tool_response as ClaudeFileWriteOutput,
 												);
 											}
 											return {};

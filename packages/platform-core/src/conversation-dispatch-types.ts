@@ -134,7 +134,27 @@ export type ConversationRuntimeReasoningEventV2 = Omit<
 export type ConversationRuntimeEvent =
 	| ConversationRuntimeEventV1
 	| ConversationRuntimeOperationEventV2
-	| ConversationRuntimeReasoningEventV2;
+	| ConversationRuntimeReasoningEventV2
+	| ConversationRuntimeFileEventV2;
+
+/**
+ * #3226：结果文件事件 V2 在 V1 字段之外携带规范化工作区路径（回答内 `sandbox:` 引用）；
+ * 其他来源为 null。持久化前与结果文件记录核对。
+ */
+export type ConversationRuntimeFileEventV2 = Omit<
+	ConversationRuntimeEventBaseV1,
+	"schemaVersion"
+> & {
+	readonly schemaVersion: 2;
+	readonly type: "file";
+	readonly payload: {
+		readonly fileId: string;
+		readonly name: string;
+		readonly mimeType: string;
+		readonly sizeBytes: number;
+		readonly workspaceReference: string | null;
+	};
+};
 
 export interface ConversationMetadataRecoveryV1 {
 	readonly id: string;

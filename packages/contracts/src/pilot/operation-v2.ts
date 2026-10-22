@@ -10,6 +10,7 @@ import {
 	RuntimeOperationFactV2Schema,
 	RuntimeOperationFailureV2Schema,
 } from "../runtime/events-v2.ts";
+import { SandboxWorkspaceReferenceV1Schema } from "../workspace-reference.ts";
 import {
 	ConversationDetailProjectionV1Schema,
 	ExecutionDetailProjectionV1Schema,
@@ -21,6 +22,7 @@ import {
 	PersistedConversationEventV1Schema,
 	pilotBrowserSseOpenApiPathsV1,
 	pilotSseSchemasV1,
+	ResultFileEventV1Schema,
 	SseEventIdV1Schema,
 	TimelineReloadSignalV1Schema,
 } from "./sse.ts";
@@ -174,6 +176,26 @@ export const ModelSelectionFallbackEventV2Schema = z.strictObject({
 	}),
 });
 
+/**
+ * #3226：结果文件事件 V2 在 V1 payload 之外携带规范化的工作区相对路径
+ * `workspaceReference`：由回答内 `sandbox:` 引用发布的文件为该路径，其他来源为 null。
+ * 该值与结果文件记录一致；V1 读取方仍收到不含该字段的 V1 事件，旧事件保持 V1。
+ */
+export const ResultFileEventV2Schema = z.strictObject({
+	schemaVersion: z.literal(2),
+	kind: z.literal("event"),
+	eventId: SseEventIdV1Schema,
+	conversationId: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+	sequence: z.number().int().positive().safe(),
+	conversationCursor: OpaqueCursorV1Schema,
+	occurredAt: Rfc3339TimestampV1Schema,
+	type: z.literal("result.file"),
+	payload: ResultFileEventV1Schema.shape.payload.extend({
+		workspaceReference: SandboxWorkspaceReferenceV1Schema.nullable(),
+	}),
+});
+
 /** Mixed history preserves each original event version and stable reference. */
 export const PersistedConversationEventV2Schema = z.union([
 	PersistedConversationEventV1Schema,
@@ -181,6 +203,7 @@ export const PersistedConversationEventV2Schema = z.union([
 	BrowserHandoffEventV2Schema,
 	BrowserSideEffectEventV2Schema,
 	ModelSelectionFallbackEventV2Schema,
+	ResultFileEventV2Schema,
 ]);
 
 /**
@@ -352,6 +375,7 @@ export const pilotOperationSseSchemasV2 = {
 	BrowserHandoffEventV2: BrowserHandoffEventV2Schema,
 	BrowserSideEffectEventV2: BrowserSideEffectEventV2Schema,
 	ModelSelectionFallbackEventV2: ModelSelectionFallbackEventV2Schema,
+	ResultFileEventV2: ResultFileEventV2Schema,
 	PersistedConversationEventV2: PersistedConversationEventV2Schema,
 	ReasoningDeltaEventV2: ReasoningDeltaEventV2Schema,
 	ConversationSseMessageV2: ConversationSseMessageV2Schema,
@@ -374,6 +398,7 @@ export type BrowserSideEffectEventV2 = z.infer<
 export type ModelSelectionFallbackEventV2 = z.infer<
 	typeof ModelSelectionFallbackEventV2Schema
 >;
+export type ResultFileEventV2 = z.infer<typeof ResultFileEventV2Schema>;
 export type PersistedConversationEventV2 = z.infer<
 	typeof PersistedConversationEventV2Schema
 >;

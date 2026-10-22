@@ -6,6 +6,9 @@ import {
 } from "./index.ts";
 import { ExecutionGrantV1Schema } from "./pilot/delegated.ts";
 import { RuntimeExecutionGrantV4Schema } from "./runtime/host-v4.ts";
+import { SandboxWorkspaceReferenceV1Schema } from "./workspace-reference.ts";
+
+export * from "./workspace-reference.ts";
 
 export const FileDescriptorV1Schema = z.strictObject({
 	name: z
@@ -201,6 +204,12 @@ export const RuntimeFileExchangeRequestV2Schema = z.discriminatedUnion(
 			...runtimeFileExchangeGrantV2,
 			operation: z.literal("result"),
 			descriptor: FileDescriptorV1Schema,
+			/**
+			 * #3226：回答内 `sandbox:` 引用对应的规范化工作区相对路径；其他来源为 null 或省略。
+			 * 平台在分配结果意图时写入文件记录，持久化 `result.file` 前与事件核对。
+			 */
+			workspaceReference:
+				SandboxWorkspaceReferenceV1Schema.nullable().optional(),
 		}),
 	],
 );

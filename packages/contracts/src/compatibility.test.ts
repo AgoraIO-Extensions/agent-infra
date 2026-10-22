@@ -3626,6 +3626,181 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the pinned sandbox result-file additions in their reviewed hosts (#3226)", async () => {
+		type Schema = Record<string, unknown> & {
+			$ref?: string;
+			properties?: Record<string, Schema>;
+			required?: string[];
+			additionalProperties?: boolean;
+			anyOf?: Schema[];
+			oneOf?: Schema[];
+			const?: unknown;
+		};
+		type Document = { components: { schemas: Record<string, Schema> } };
+		const events = [
+			{ name: "ResultFileEventV2", type: "result.file" },
+			{ name: "RuntimeFileEventV2", type: "file" },
+		];
+		const isEvent = (value: Schema) =>
+			events.some(
+				({ name, type }) =>
+					value.$ref === `#/components/schemas/${name}` ||
+					(value.properties?.type?.const === type &&
+						value.properties?.schemaVersion?.const === 2 &&
+						value.properties?.payload?.properties?.workspaceReference !==
+							undefined),
+			);
+		const isResultExchange = (value: Schema) =>
+			value.properties?.operation?.const === "result" &&
+			value.properties?.schemaVersion?.const === 2 &&
+			value.properties?.executionGrant !== undefined;
+		// 独立实现的反向变换：去掉新增事件与结果请求上的新字段，得到基线形状。
+		const strip = (value: unknown): unknown => {
+			if (Array.isArray(value))
+				return value
+					.filter((item) => !isEvent(item as Schema))
+					.map((item) => strip(item));
+			if (value === null || typeof value !== "object") return value;
+			const copy = Object.fromEntries(
+				Object.entries(value).map(([key, item]) => [key, strip(item)]),
+			) as Schema;
+			if (isResultExchange(copy) && copy.properties)
+				delete copy.properties.workspaceReference;
+			return copy;
+		};
+		const find = (
+			value: unknown,
+			predicate: (schema: Schema) => boolean,
+		): Schema | undefined => {
+			if (value === null || typeof value !== "object") return undefined;
+			if (!Array.isArray(value) && predicate(value as Schema))
+				return value as Schema;
+			for (const item of Object.values(value)) {
+				const found = find(item, predicate);
+				if (found) return found;
+			}
+			return undefined;
+		};
+		const event = (document: Document) =>
+			find(
+				document.components.schemas,
+				(schema) => schema.$ref === undefined && isEvent(schema),
+			);
+		const exchange = (document: Document) =>
+			find(document.components.schemas, isResultExchange);
+		const payload = (document: Document) => {
+			const value = event(document)?.properties?.payload;
+			if (!value) throw new Error("result-file event missing");
+			return value as Schema & {
+				properties: Record<string, Schema>;
+				required: string[];
+			};
+		};
+		const directory = await mkdtemp(resolve(tmpdir(), "agent-infra-3226-"));
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			for (const artifact of [
+				"files.v1",
+				"pilot-browser.v1",
+				"pilot-browser.v2",
+				"runtime-host.v3",
+				"runtime-host.v4",
+			]) {
+				const current = JSON.parse(
+					await readFile(
+						new URL(
+							`../artifacts/openapi/${artifact}.openapi.json`,
+							import.meta.url,
+						),
+						"utf8",
+					),
+				) as Document;
+				const previous = strip(current) as Document;
+				for (const { name } of events) delete previous.components.schemas[name];
+				// 基线确实缺少新增，反向变换后不再出现工作区引用。
+				expect(JSON.stringify(previous), artifact).not.toContain(
+					"workspaceReference",
+				);
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status, artifact).toBe(
+					0,
+				);
+				const mutations: ((document: Document) => void)[] = [];
+				if (event(current))
+					mutations.push(
+						(document) => {
+							payload(document).properties.path = { type: "string" };
+						},
+						(document) => {
+							payload(document).additionalProperties = true;
+						},
+						(document) => {
+							payload(document).required = payload(document).required.filter(
+								(field) => field !== "workspaceReference",
+							);
+						},
+						(document) => {
+							const reference = payload(document).properties
+								.workspaceReference as { anyOf: Schema[] };
+							delete reference.anyOf[0]?.pattern;
+						},
+						(document) => {
+							// 新增事件不能借道其他 Schema 出现。
+							const clone = structuredClone(event(document));
+							const other =
+								document.components.schemas.SseEventIdV1 !== undefined
+									? "SseEventIdV1"
+									: "OpaqueIdV1";
+							document.components.schemas[other] = {
+								anyOf: [
+									document.components.schemas[other] ?? { type: "string" },
+									clone as Schema,
+								],
+							};
+						},
+					);
+				if (exchange(current))
+					mutations.push(
+						(document) => {
+							exchange(document)?.required?.push("workspaceReference");
+						},
+						(document) => {
+							const reference = exchange(document)?.properties
+								?.workspaceReference as { anyOf: Schema[] };
+							delete reference.anyOf[0]?.maxLength;
+						},
+						(document) => {
+							// 新字段只属于结果请求，不能出现在读取请求上。
+							const read = find(
+								document.components.schemas,
+								(schema) =>
+									schema.properties?.operation?.const === "read" &&
+									schema.properties?.schemaVersion?.const === 2,
+							);
+							if (!read?.properties) throw new Error("read request missing");
+							read.properties.workspaceReference = structuredClone(
+								exchange(document)?.properties?.workspaceReference,
+							) as Schema;
+						},
+					);
+				expect(mutations.length, artifact).toBeGreaterThan(0);
+				for (const [index, mutate] of mutations.entries()) {
+					const changed = structuredClone(current);
+					mutate(changed);
+					await writeFile(currentPath, JSON.stringify(changed));
+					expect(
+						comparePaths(currentPath, previousPath).status,
+						`${artifact} mutation ${index}`,
+					).toBe(1);
+				}
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	}, 30_000);
+
 	it("accepts only the reviewed custom Agent model selection additions", async () => {
 		type OpenApiDocument = {
 			components: {
@@ -4716,6 +4891,8 @@ describe("contract compatibility command", () => {
 			"NativeCapabilityInvocationResultV1",
 			// 该基线早于 #2979 的思考过程事件。
 			"ReasoningDeltaEventV2",
+			// 该基线早于 #3226 的结果文件事件 V2。
+			"ResultFileEventV2",
 		])
 			delete previous.components.schemas[name];
 		const directory = await mkdtemp(

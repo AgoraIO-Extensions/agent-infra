@@ -107,20 +107,40 @@ function sessionNotification(value: unknown) {
 		return;
 	if (update.sessionUpdate === "agent_message_chunk" && "content" in update) {
 		const content = update.content;
-		if (
-			!content ||
-			typeof content !== "object" ||
-			!("type" in content) ||
-			content.type !== "text" ||
-			!("text" in content) ||
-			typeof content.text !== "string"
-		)
-			return;
+		if (!content || typeof content !== "object" || !("type" in content)) return;
+		// #3226：image 与 resource_link 块映射到结果文件发布；只转发所需字段，其他块丢弃。
+		const forwarded =
+			content.type === "text" &&
+			"text" in content &&
+			typeof content.text === "string"
+				? { type: "text" as const, text: content.text }
+				: content.type === "image" &&
+						"data" in content &&
+						typeof content.data === "string" &&
+						"mimeType" in content &&
+						typeof content.mimeType === "string"
+					? {
+							type: "image" as const,
+							data: content.data,
+							mimeType: content.mimeType,
+						}
+					: content.type === "resource_link" &&
+							"uri" in content &&
+							typeof content.uri === "string" &&
+							"name" in content &&
+							typeof content.name === "string"
+						? {
+								type: "resource_link" as const,
+								uri: content.uri,
+								name: content.name,
+							}
+						: undefined;
+		if (!forwarded) return;
 		return {
 			sessionId: value.sessionId,
 			update: {
 				sessionUpdate: "agent_message_chunk",
-				content: { type: "text", text: content.text },
+				content: forwarded,
 			},
 		};
 	}
@@ -129,29 +149,7 @@ function sessionNotification(value: unknown) {
 		"toolCallId" in update &&
 		typeof update.toolCallId === "string"
 	) {
-		const content =
-			"content" in update && Array.isArray(update.content)
-				? update.content.flatMap((entry) => {
-						if (
-							!entry ||
-							typeof entry !== "object" ||
-							!("type" in entry) ||
-							entry.type !== "diff" ||
-							!("path" in entry) ||
-							!("newText" in entry) ||
-							typeof entry.path !== "string" ||
-							typeof entry.newText !== "string"
-						)
-							return [];
-						return [
-							{
-								type: "diff" as const,
-								path: entry.path,
-								newText: entry.newText,
-							},
-						];
-					})
-				: undefined;
+		// #3226：diff 不再隐式发布结果文件，工具通知不再转发其内容。
 		const kind =
 			"kind" in update &&
 			[
@@ -183,7 +181,6 @@ function sessionNotification(value: unknown) {
 				title: "Runtime tool",
 				...(kind ? { kind } : {}),
 				...(status ? { status } : {}),
-				...(content && content.length > 0 ? { content } : {}),
 				...("rawInput" in update ? { rawInput: update.rawInput } : {}),
 			},
 		};

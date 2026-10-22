@@ -41,6 +41,10 @@ export function normalizedEvent(
 			name: event.payload.name,
 			mediaType: event.payload.mimeType,
 			sizeBytes: event.payload.sizeBytes,
+			// #3226：V2 文件事件保留工作区引用（可为 null），持久事件据此按 V2 投影。
+			...(event.schemaVersion === 2
+				? { workspaceReference: event.payload.workspaceReference }
+				: {}),
 		};
 	}
 	if (event.type === "tool") {

@@ -77,6 +77,27 @@ export interface FileRecordV1 extends FileScopeV1 {
 	readonly expiresAt: string;
 	readonly updatedAt: string;
 	readonly revision: number;
+	/**
+	 * #3226：分配结果意图时写入的规范化工作区相对路径（回答内 `sandbox:` 引用）。
+	 * 其他来源为 null；旧记录与附件没有该字段，按 null 处理。
+	 */
+	readonly workspaceReference?: string | null;
+}
+/**
+ * #3226：规范化的工作区相对路径：1–1024 字符，以 `/` 分隔的非空段，不含 `.`/`..` 段、
+ * NUL 与反斜杠（工程 Spec §15.4.4）。
+ */
+export function isWorkspaceReferenceV1(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.length > 0 &&
+		value.length <= 1024 &&
+		!value.includes("\0") &&
+		!value.includes("\\") &&
+		value
+			.split("/")
+			.every((segment) => segment !== "" && segment !== "." && segment !== "..")
+	);
 }
 export interface StoredFileObjectV1 {
 	readonly sizeBytes: number;
@@ -359,11 +380,19 @@ export function createFileAuthorityV1(options: {
 			conversationId: string;
 			idempotencyKey: string;
 			descriptor: FileDescriptorV1;
+			workspaceReference?: string | null;
 		},
 		authorization: FileAuthorizationPortV1,
 	) {
 		const value = descriptor(request.descriptor);
 		if (!/^[A-Za-z0-9._~-]{1,128}$/.test(request.idempotencyKey)) invalid();
+		// #3226：只有结果意图可以携带工作区引用；省略与 null 都表示没有引用。
+		const workspaceReference = request.workspaceReference ?? null;
+		if (
+			workspaceReference !== null &&
+			(kind !== "result" || !isWorkspaceReferenceV1(workspaceReference))
+		)
+			invalid();
 		return options.store.transaction(request.conversationId, async (tx) => {
 			const authority = await authorization.authorize(
 				request.conversationId,
@@ -394,7 +423,8 @@ export function createFileAuthorityV1(options: {
 						(authority.execution?.sessionGeneration ?? null) ||
 					(["name", "mediaType", "sizeBytes", "sha256"] as const).some(
 						(key) => existing.descriptor[key] !== value[key],
-					)
+					) ||
+					(existing.workspaceReference ?? null) !== workspaceReference
 				)
 					throw new FileAuthorityError("conflict");
 				return existing;
@@ -421,6 +451,9 @@ export function createFileAuthorityV1(options: {
 				).toISOString(),
 				updatedAt: instant.toISOString(),
 				revision: 0,
+				...(kind === "result" && request.workspaceReference !== undefined
+					? { workspaceReference }
+					: {}),
 			};
 			await tx.putFile(file);
 			return file;
@@ -651,6 +684,8 @@ export function createFileAuthorityV1(options: {
 				conversationId: string;
 				idempotencyKey: string;
 				descriptor: FileDescriptorV1;
+				/** #3226：回答内 `sandbox:` 引用的规范化路径；其他来源为 null 或省略。 */
+				workspaceReference?: string | null;
 			},
 			authorization: FileAuthorizationPortV1,
 		) => createIntent("result", request, authorization),
@@ -658,10 +693,17 @@ export function createFileAuthorityV1(options: {
 }
 
 // Called inside the event transaction, with the current execution scope read under lock.
+// #3226：事件省略 `workspaceReference`（V1）与 null 等价，必须与记录中的值一致。
 export function isConfirmedResultFileV1(
 	file: FileRecordV1 | null,
 	execution: FileScopeV1 & { executionId: string; sessionGeneration: number },
-	event: { fileId: string; name: string; mediaType: string; sizeBytes: number },
+	event: {
+		fileId: string;
+		name: string;
+		mediaType: string;
+		sizeBytes: number;
+		workspaceReference?: string | null;
+	},
 ): boolean {
 	return (
 		!!file &&
@@ -675,7 +717,8 @@ export function isConfirmedResultFileV1(
 		!!file.etag &&
 		file.descriptor.name === event.name &&
 		file.descriptor.mediaType === event.mediaType &&
-		file.descriptor.sizeBytes === event.sizeBytes
+		file.descriptor.sizeBytes === event.sizeBytes &&
+		(file.workspaceReference ?? null) === (event.workspaceReference ?? null)
 	);
 }
 

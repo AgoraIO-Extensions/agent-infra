@@ -347,6 +347,86 @@ describe("Pilot mixed-version operation contracts", () => {
 		);
 	});
 
+	it("adds result.file V2 with a workspace reference to V2 histories and tasks and keeps V1 strict (#3226)", () => {
+		const legacyResult = {
+			...original,
+			eventId: "result-event",
+			type: "result.file",
+			payload: {
+				fileId: "file-1",
+				name: "chart.png",
+				mediaType: "image/png",
+				sizeBytes: 2,
+			},
+		} as const;
+		const referenced = {
+			...legacyResult,
+			schemaVersion: 2,
+			payload: { ...legacyResult.payload, workspaceReference: "out/chart.png" },
+		} as const;
+		const unreferenced = {
+			...referenced,
+			payload: { ...referenced.payload, workspaceReference: null },
+		} as const;
+		for (const event of [legacyResult, referenced, unreferenced]) {
+			expect(PersistedConversationEventV2Schema.parse(event)).toEqual(event);
+			expect(ConversationSseMessageV2Schema.parse(event)).toEqual(event);
+			expect(TaskSseMessageV1Schema.parse(event)).toEqual(event);
+			expect(framePilotSseMessageV2(event)).toEqual({
+				id: event.eventId,
+				data: event,
+			});
+		}
+		expect(
+			TaskProjectionV1Schema.parse({
+				schemaVersion: 1,
+				conversationId: "conversation-1",
+				executionId: "execution-1",
+				status: "completed",
+				output: "",
+				events: [legacyResult, referenced],
+			}).events,
+		).toEqual([legacyResult, referenced]);
+		// 旧的 V1 读取方只接受不含工作区引用的 V1 结果事件。
+		expect(ConversationSseMessageV1Schema.parse(legacyResult)).toEqual(
+			legacyResult,
+		);
+		for (const event of [
+			referenced,
+			unreferenced,
+			{ ...referenced, schemaVersion: 1 },
+			{ ...legacyResult, schemaVersion: 2 },
+		])
+			expect(ConversationSseMessageV1Schema.safeParse(event).success).toBe(
+				false,
+			);
+		for (const workspaceReference of [
+			"",
+			"/out/chart.png",
+			"out/chart.png/",
+			"out//chart.png",
+			"../chart.png",
+			"out/./chart.png",
+			"out\\chart.png",
+			"out/\u0000.png",
+			"a".repeat(1025),
+		])
+			expect(
+				PersistedConversationEventV2Schema.safeParse({
+					...referenced,
+					payload: { ...referenced.payload, workspaceReference },
+				}).success,
+				workspaceReference,
+			).toBe(false);
+		expect(
+			PersistedConversationEventV2Schema.safeParse({
+				...referenced,
+				payload: { ...referenced.payload, path: "/workspace/out/chart.png" },
+			}).success,
+		).toBe(false);
+		expect(pilotOperationSchemasV2).toHaveProperty("ResultFileEventV2");
+	});
+
 	it("adds complete events to V2 execution detail without changing V1 detail", () => {
 		const legacy = {
 			schemaVersion: 1,

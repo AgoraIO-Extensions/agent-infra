@@ -195,6 +195,11 @@ export function registerFileRoutesV1(
 								conversationId: trusted.conversationId,
 								idempotencyKey,
 								descriptor: value.descriptor,
+								// #3226：回答内 sandbox: 引用的工作区路径随结果意图写入文件记录。
+								...("workspaceReference" in value &&
+								value.workspaceReference !== undefined
+									? { workspaceReference: value.workspaceReference }
+									: {}),
 							},
 							trusted.authorization,
 						)

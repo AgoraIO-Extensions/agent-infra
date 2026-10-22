@@ -1,7 +1,20 @@
 import { createHash } from "node:crypto";
 import { fileTypeFromBuffer } from "file-type";
 
+/**
+ * 按实际字节识别文件内容的唯一实现（工程 Spec §15.4.1、§15.4.4）。
+ *
+ * ObjectStorage Adapter 在写入完成时、Runtime Driver 在发布回答内 `sandbox:` 引用前都用它
+ * 计算大小、SHA-256 与媒体类型，两边的识别规则因此完全一致：文件头由固定版本的 file-type
+ * 识别，识别不出且整体是不含控制字符的 UTF-8 时为 `text/plain`，否则无法确认并拒绝。
+ */
 export type ObjectContentPolicyV1 = "file" | "skill-package";
+
+export interface FileContentFactsV1 {
+	readonly sizeBytes: number;
+	readonly mediaType: string;
+	readonly sha256: string;
+}
 
 export function createContentProbe(
 	maxBytes: number,
@@ -100,4 +113,16 @@ export function createContentProbe(
 			return { sizeBytes, mediaType, sha256: hash.digest("hex") };
 		},
 	};
+}
+
+/**
+ * 对已在内存中的完整内容执行同一识别：超过 `maxBytes` 或格式无法确认时抛错。
+ */
+export async function inspectFileContentV1(
+	bytes: Uint8Array,
+	maxBytes: number,
+): Promise<FileContentFactsV1> {
+	const probe = createContentProbe(maxBytes);
+	probe.write(bytes);
+	return probe.finish();
 }

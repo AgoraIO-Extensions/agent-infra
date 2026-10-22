@@ -1195,6 +1195,19 @@
                 "schemaVersion": {
                   "const": 2,
                   "type": "number"
+                },
+                "workspaceReference": {
+                  "anyOf": [
+                    {
+                      "maxLength": 1024,
+                      "minLength": 1,
+                      "pattern": "^(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000]+)*$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -1515,6 +1528,19 @@
             "schemaVersion": {
               "const": 2,
               "type": "number"
+            },
+            "workspaceReference": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "minLength": 1,
+                  "pattern": "^(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000]+)*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [

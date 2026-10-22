@@ -581,16 +581,24 @@ export function eventProjection(
 			},
 		});
 	} else if (persisted.type === "result.file") {
-		projected = {
-			...base,
-			type: "result.file",
-			payload: {
-				fileId: persisted.fileId,
-				name: persisted.name,
-				mediaType: persisted.mediaType,
-				sizeBytes: persisted.sizeBytes,
-			},
+		const payload = {
+			fileId: persisted.fileId,
+			name: persisted.name,
+			mediaType: persisted.mediaType,
+			sizeBytes: persisted.sizeBytes,
 		};
+		// #3226：携带工作区引用（可为 null）的结果文件按 V2 进入混合版本历史；旧事件保持 V1。
+		if (persisted.workspaceReference !== undefined)
+			return PersistedConversationEventV2Schema.parse({
+				...base,
+				schemaVersion: 2,
+				type: "result.file",
+				payload: {
+					...payload,
+					workspaceReference: persisted.workspaceReference,
+				},
+			});
+		projected = { ...base, type: "result.file", payload };
 	} else if (persisted.type === "conversation.error") {
 		projected = {
 			...base,
@@ -634,14 +642,24 @@ export function eventProjection(
 }
 
 /**
- * V1 SSE 只能表示 V1 事件：带原选项的回退事件降为原 V1 形状，让旧读取方照旧看到回退；
- * 其他 V2 事实返回 undefined，由调用方跳过但推进持久游标（G-07）。
+ * V1 SSE 只能表示 V1 事件：带原选项的回退事件与带工作区引用的结果文件降为原 V1 形状，
+ * 让旧读取方照旧看到它们；其他 V2 事实返回 undefined，由调用方跳过但推进持久游标
+ * （G-07、#3226）。
  */
 export function eventProjectionV1(
 	input: ConversationQueryEventV1,
 ): SseMessage | undefined {
 	const message = eventProjection(input);
 	if (message.schemaVersion === 1) return message;
+	if (message.type === "result.file") {
+		const { workspaceReference: _workspaceReference, ...payload } =
+			message.payload;
+		return ConversationSseMessageV1Schema.parse({
+			...message,
+			schemaVersion: 1,
+			payload,
+		});
+	}
 	if (message.type !== "model.selection.fell_back") return undefined;
 	const {
 		requestedModelOptionId: _requestedModelOptionId,

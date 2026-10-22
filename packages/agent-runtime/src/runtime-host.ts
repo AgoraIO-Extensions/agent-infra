@@ -148,6 +148,7 @@ import {
 	type RuntimeFileBridgeFactoryV1,
 	type RuntimeFileBridgePortV1,
 	type RuntimeFileBridgeWithNativeTextInputV1,
+	RuntimeFileResultUnconfirmedError,
 	type RuntimeNativeTextInputExecutionContextV1,
 	type RuntimeNativeTextInputPortV1,
 } from "./runtime-file-bridge.js";
@@ -961,19 +962,32 @@ export class RuntimeHost {
 		});
 		const port = fileBridge(binding, evidence);
 		const operationId = request.operation.id;
+		const assertOperationCurrent = () =>
+			this.options.store.assertOperationAuthorityCurrent(
+				operationId,
+				binding.executionId,
+				binding.sessionGeneration,
+				this.options.grantValidationV2?.now ?? Date.now,
+			);
 		return {
 			readInput: (fileId, signal) => port.readInput(fileId, signal),
-			writeResult: (descriptor, body) => port.writeResult(descriptor, body),
+			writeResult: async (descriptor, body, options) => {
+				// #3226：结果写入以当前可续期的执行授权为准，而不是签名 Grant 的窗口；
+				// 停止、撤权或代次变化后不再发起写入。
+				assertOperationCurrent();
+				const receipt = await port.writeResult(descriptor, body, options);
+				try {
+					assertOperationCurrent();
+				} catch (error) {
+					throw new RuntimeFileResultUnconfirmedError({ cause: error });
+				}
+				return receipt;
+			},
 			revalidate: () => {
 				// A deployment port holds the binding, not Runtime authority: re-check
 				// that this exact operation is still current before bytes that were
 				// already materialized cross the native submission boundary.
-				this.options.store.assertOperationAuthorityCurrent(
-					operationId,
-					binding.executionId,
-					binding.sessionGeneration,
-					this.options.grantValidationV2?.now ?? Date.now,
-				);
+				assertOperationCurrent();
 				port.revalidate();
 			},
 		};
@@ -1461,16 +1475,28 @@ export class RuntimeHost {
 			executionGrant: Object.freeze({ ...input.request.grant }),
 		});
 		const port = fileBridge(binding, evidence);
+		const assertOperationCurrent = () =>
+			this.options.store.assertOperationAuthorityCurrent(
+				input.operationId,
+				input.executionId,
+				input.sessionGeneration,
+				input.now,
+			);
 		const authorityBridge: RuntimeFileBridgePortV1 = {
 			readInput: (fileId, signal) => port.readInput(fileId, signal),
-			writeResult: (descriptor, body) => port.writeResult(descriptor, body),
+			writeResult: async (descriptor, body, options) => {
+				// #3226：与 V4 相同，结果写入以当前执行授权为准。
+				assertOperationCurrent();
+				const receipt = await port.writeResult(descriptor, body, options);
+				try {
+					assertOperationCurrent();
+				} catch (error) {
+					throw new RuntimeFileResultUnconfirmedError({ cause: error });
+				}
+				return receipt;
+			},
 			revalidate: () => {
-				this.options.store.assertOperationAuthorityCurrent(
-					input.operationId,
-					input.executionId,
-					input.sessionGeneration,
-					input.now,
-				);
+				assertOperationCurrent();
 				port.revalidate();
 			},
 		};
@@ -3140,12 +3166,23 @@ export class RuntimeHost {
 										RuntimeFileBridgePortV1["writeResult"]
 									>[0],
 									body: Parameters<RuntimeFileBridgePortV1["writeResult"]>[1],
+									options?: Parameters<
+										RuntimeFileBridgePortV1["writeResult"]
+									>[2],
 								) {
 									const result = await originalFileBridge.writeResult(
 										descriptor,
 										body,
+										options,
 									);
-									await recordResultFile(operation.command, result);
+									try {
+										await recordResultFile(operation.command, result);
+									} catch (error) {
+										// #3226：平台已确认对象但本地记账失败，结果只能是 unknown。
+										throw new RuntimeFileResultUnconfirmedError({
+											cause: error,
+										});
+									}
 									return result;
 								},
 							},

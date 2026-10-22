@@ -1,4 +1,12 @@
-import { chmod, mkdir, realpath } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import {
+	chmod,
+	mkdir,
+	realpath,
+	rename,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
 	type BrowserCapabilityAvailableV1,
@@ -15,6 +23,7 @@ import type {
 } from "./driver.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
+import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
 import {
@@ -22,6 +31,34 @@ import {
 	workspaceGlobAllowed,
 	workspacePathAllowed,
 } from "./workspace-path.js";
+
+/**
+ * #3226：把平台固定的文件交换说明写到 Conversation 目录 `config/agent-infra/` 下。该目录在
+ * 工作区之外，OpenCode 的读写工具只能访问工作区，模型与 Owner 都不能改写。每次启动都在同一
+ * 目录先排他写入只读临时文件，再以 rename 原子替换；目录逐级拒绝链接。
+ */
+export async function writeOpenCodePlatformInstructions(
+	configDirectory: string,
+) {
+	const root = join(configDirectory, "agent-infra");
+	await mkdir(root, { recursive: true, mode: 0o700 });
+	if ((await realpath(root)) !== root)
+		throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+	await chmod(root, 0o700);
+	const target = join(root, "instructions.md");
+	const temporary = join(root, `.instructions-${randomUUID()}.tmp`);
+	try {
+		await writeFile(temporary, `${SANDBOX_FILE_INSTRUCTIONS_V1}\n`, {
+			flag: "wx",
+			mode: 0o400,
+		});
+		await rename(temporary, target);
+	} catch (error) {
+		await rm(temporary, { force: true }).catch(() => {});
+		throw error;
+	}
+	return target;
+}
 
 const nativeSkillPromptMaximumLength = 16 * 1024;
 const nativeSkillName = /^[a-z0-9][a-z0-9._-]{0,62}$/;
@@ -173,6 +210,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 		...options,
 		nativeSkillPrompt: openCodeNativeSkillPrompt,
 		reuseNativeSession: !options.standardConnectionClient,
+		sandboxReferences: true,
 		modelOptions: options.modelOptions.map((option) => ({
 			modelOptionId: option.modelOptionId,
 			nativeModelId: `anthropic/${option.model}`,
@@ -223,6 +261,10 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 					))
 				)
 					throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+				// #3226：平台固定的文件交换说明放在工作区外、仅本进程可读的平台目录。
+				const platformInstructions = await writeOpenCodePlatformInstructions(
+					join(directory, "config"),
+				);
 				const nativeModel = `anthropic/${option.model}`;
 				const config = {
 					model: nativeModel,
@@ -249,7 +291,10 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 							},
 						},
 					},
-					instructions: [join(directory, "workspace/.memory/MEMORY.md")],
+					instructions: [
+						platformInstructions,
+						join(directory, "workspace/.memory/MEMORY.md"),
+					],
 					// #3217：列举与搜索类工具经 ACP 权限请求按本 Conversation 路径授权；
 					// bash 待 OS 级边界就绪后开放（#3218）。
 					permission: {

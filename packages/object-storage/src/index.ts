@@ -6,7 +6,10 @@ import type {
 
 export * from "./types.js";
 
-import { createContentProbe, type ObjectContentPolicyV1 } from "./content.js";
+import {
+	createContentProbe,
+	type ObjectContentPolicyV1,
+} from "@agent-infra/file-content";
 import {
 	type ObjectDownloadV1,
 	type ObjectStorageDataV1,
@@ -168,7 +171,7 @@ export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
  * 按实际字节识别媒体类型并计算大小与 SHA-256，与 Fake、S3 Adapter 写入时的识别方式一致；
  * 服务端内部写入（例如企微入站媒体，#3227）据此在创建上传意图前得到可被确认的描述。
  */
-export { createContentProbe as createObjectContentProbeV1 } from "./content.js";
+export { createContentProbe as createObjectContentProbeV1 } from "@agent-infra/file-content";
 export {
 	createS3ObjectStorageV1,
 	type S3ObjectStorageOptionsV1,

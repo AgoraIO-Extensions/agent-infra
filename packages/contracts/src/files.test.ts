@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
 	FileAccessClaimsV1Schema,
 	FileDescriptorV1Schema,
+	parseSandboxReferenceUrlV1,
 	RuntimeFileExchangeRequestSchema,
 	RuntimeFileExchangeRequestV1Schema,
 	RuntimeFileExchangeRequestV2Schema,
+	SandboxWorkspaceReferenceV1Schema,
 } from "./files.ts";
 
 describe("file authority wire boundary", () => {
@@ -224,5 +226,105 @@ describe("file authority wire boundary", () => {
 				fileId: "file_1",
 			}).success,
 		).toBe(false);
+	});
+
+	it("carries an optional normalized workspace reference only on result exchanges (#3226)", () => {
+		const base = {
+			schemaVersion: 2,
+			executionGrant: {
+				schemaVersion: 4,
+				format: "runtime-execution-jws",
+				token: "header.payload.signature",
+			},
+			idempotencyKey: "runtime-result-1",
+			operation: "result" as const,
+			descriptor: {
+				name: "chart.png",
+				mediaType: "image/png",
+				sizeBytes: 1,
+				sha256: "a".repeat(64),
+			},
+		};
+		for (const workspaceReference of ["out/chart.png", "chart.png", null]) {
+			const request = { ...base, workspaceReference };
+			expect(RuntimeFileExchangeRequestV2Schema.parse(request)).toEqual(
+				request,
+			);
+		}
+		for (const workspaceReference of [
+			"",
+			"/out/chart.png",
+			"out/../chart.png",
+			"./chart.png",
+			"out\\chart.png",
+			"sandbox:out/chart.png/",
+			"a".repeat(1025),
+		])
+			expect(
+				RuntimeFileExchangeRequestV2Schema.safeParse({
+					...base,
+					workspaceReference,
+				}).success,
+				workspaceReference,
+			).toBe(false);
+		expect(
+			RuntimeFileExchangeRequestV2Schema.safeParse({
+				...base,
+				operation: "read",
+				fileId: "file_1",
+				descriptor: undefined,
+				workspaceReference: "out/chart.png",
+			}).success,
+		).toBe(false);
+		expect(
+			RuntimeFileExchangeRequestV1Schema.safeParse({
+				schemaVersion: 1,
+				operation: "result",
+				workspaceReference: "out/chart.png",
+			}).success,
+		).toBe(false);
+	});
+
+	it("normalizes sandbox reference URLs to workspace-relative paths (#3226)", () => {
+		for (const [url, workspaceReference] of [
+			["sandbox:out/report.pdf", "out/report.pdf"],
+			["sandbox:/out/report.pdf", "out/report.pdf"],
+			["sandbox:./out//chart.png", "out/chart.png"],
+			["sandbox:out/tmp/../chart.png", "out/chart.png"],
+			["sandbox:out/my%20chart.png", "out/my chart.png"],
+			["sandbox:%E6%8A%A5%E5%91%8A.pdf", "报告.pdf"],
+		] as const) {
+			expect(parseSandboxReferenceUrlV1(url)).toEqual({
+				kind: "reference",
+				workspaceReference,
+			});
+			expect(SandboxWorkspaceReferenceV1Schema.parse(workspaceReference)).toBe(
+				workspaceReference,
+			);
+		}
+		for (const url of [
+			"out/report.pdf",
+			"./out/report.pdf",
+			"https://example.test/report.pdf",
+			"file:///workspace/report.pdf",
+			"SANDBOX:out/report.pdf",
+		])
+			expect(parseSandboxReferenceUrlV1(url)).toEqual({ kind: "none" });
+		for (const url of [
+			"sandbox:",
+			"sandbox:/",
+			"sandbox:.",
+			"sandbox:../secret",
+			"sandbox:out/../../secret",
+			"sandbox:%2E%2E/secret",
+			"sandbox:out%5Csecret",
+			"sandbox:out\\secret",
+			"sandbox:out/%00.png",
+			"sandbox:%E0%A4%A",
+			`sandbox:${"a".repeat(1025)}`,
+		])
+			expect(parseSandboxReferenceUrlV1(url), url).toEqual({
+				kind: "invalid",
+			});
 	});
 });

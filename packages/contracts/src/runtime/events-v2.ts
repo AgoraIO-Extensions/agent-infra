@@ -5,6 +5,7 @@ import {
 	OpaqueIdV1Schema,
 	Rfc3339TimestampV1Schema,
 } from "../index.ts";
+import { SandboxWorkspaceReferenceV1Schema } from "../workspace-reference.ts";
 import { RuntimeEventV1Schema } from "./events.ts";
 
 const count = z.number().int().safe().nonnegative();
@@ -149,11 +150,33 @@ export const RuntimeReasoningEventV2Schema = z.strictObject({
 	}),
 });
 
+/**
+ * #3226：结果文件事件 V2 在 V1 `file` payload 之外携带规范化的工作区相对路径
+ * `workspaceReference`；回答内 `sandbox:` 引用发布的文件为该路径，ACP image 块等其他来源为
+ * null。V1 `file` 事件保持不变。
+ */
+export const RuntimeFileEventV2Schema = z.strictObject({
+	schemaVersion: z.literal(2),
+	adapterEventKey: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+	cursor: OpaqueCursorV1Schema,
+	occurredAt: Rfc3339TimestampV1Schema,
+	type: z.literal("file"),
+	payload: z.strictObject({
+		fileId: OpaqueIdV1Schema,
+		name: z.string().min(1),
+		mimeType: z.string().min(1),
+		sizeBytes: z.number().int().nonnegative(),
+		workspaceReference: SandboxWorkspaceReferenceV1Schema.nullable(),
+	}),
+});
+
 /** V3 transport and durable Driver journals preserve each event's original version. */
 export const RuntimeEventSchema = z.union([
 	RuntimeEventV1Schema,
 	RuntimeEventV2Schema,
 	RuntimeReasoningEventV2Schema,
+	RuntimeFileEventV2Schema,
 ]);
 export type RuntimeOperationFactV2 = z.infer<
 	typeof RuntimeOperationFactV2Schema
@@ -162,6 +185,7 @@ export type RuntimeEventV2 = z.infer<typeof RuntimeEventV2Schema>;
 export type RuntimeReasoningEventV2 = z.infer<
 	typeof RuntimeReasoningEventV2Schema
 >;
+export type RuntimeFileEventV2 = z.infer<typeof RuntimeFileEventV2Schema>;
 export type RuntimeEvent = z.infer<typeof RuntimeEventSchema>;
 
 export const RuntimeEventV2SchemaDefinitions = {
@@ -171,5 +195,6 @@ export const RuntimeEventV2SchemaDefinitions = {
 	RuntimeOperationFactV2: RuntimeOperationFactV2Schema,
 	RuntimeEventV2: RuntimeEventV2Schema,
 	RuntimeReasoningEventV2: RuntimeReasoningEventV2Schema,
+	RuntimeFileEventV2: RuntimeFileEventV2Schema,
 	RuntimeEvent: RuntimeEventSchema,
 };

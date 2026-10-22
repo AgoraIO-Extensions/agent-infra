@@ -1407,6 +1407,73 @@ describe("Conversation persisted SSE", () => {
 		expect(body).not.toContain("gpt-removed");
 	});
 
+	it("keeps result.file V2 workspace references out of V1 streams (#3226)", async () => {
+		const resultFile = {
+			...persistedEvent,
+			eventType: "result.file",
+			eventPayload: {
+				type: "result.file",
+				fileId: "file-1",
+				name: "chart.png",
+				mediaType: "image/png",
+				sizeBytes: 2,
+				workspaceReference: "out/chart.png",
+			},
+		};
+		// V2 混合版本读取携带工作区引用。
+		expect(eventProjection(resultFile)).toMatchObject({
+			schemaVersion: 2,
+			type: "result.file",
+			payload: {
+				fileId: "file-1",
+				name: "chart.png",
+				mediaType: "image/png",
+				sizeBytes: 2,
+				workspaceReference: "out/chart.png",
+			},
+		});
+		const input = dependencies();
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [resultFile],
+				resumeCursor: "cursor-1",
+			})
+			.mockResolvedValue({
+				outcome: "reload",
+				reason: "cursor_expired",
+				resumeCursor: "cursor-1",
+			});
+		const v1 = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		const body = await v1.text();
+		expect(v1.status).toBe(200);
+		const events = body
+			.split("\n")
+			.filter((line) => line.startsWith("data: "))
+			.map((line) =>
+				ConversationSseMessageV1Schema.parse(JSON.parse(line.slice(6))),
+			)
+			.filter((message) => message.kind === "event");
+		// V1 读取方仍收到原有 V1 事件，看不到 V2 字段。
+		expect(events).toEqual([
+			expect.objectContaining({
+				schemaVersion: 1,
+				type: "result.file",
+				payload: {
+					fileId: "file-1",
+					name: "chart.png",
+					mediaType: "image/png",
+					sizeBytes: 2,
+				},
+			}),
+		]);
+		expect(body).not.toContain("workspaceReference");
+		expect(body).not.toContain("out/chart.png");
+	});
+
 	it("publishes the requested model only through V2 mixed-version reads (G-07)", async () => {
 		const requested = {
 			...persistedEvent,

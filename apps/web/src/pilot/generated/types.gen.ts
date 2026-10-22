@@ -881,6 +881,7 @@ export type RuntimeFileExchangeRequestV2 = {
     idempotencyKey: string;
     operation: 'result';
     schemaVersion: 2;
+    workspaceReference?: string | null;
 };
 
 export type ScopedPlatformAuditActionV1 = 'skill.version.register' | 'skill.version.review' | 'skill.version.revoke' | 'skill.version.read' | 'skill.version.refused' | 'connection.installation.begin' | 'connection.installation.confirm' | 'agent.application.submitted' | 'agent.application.updated' | 'agent.application.resubmitted' | 'agent.application.withdrawn' | 'agent.application.approved' | 'agent.application.rejected' | 'agent.lifecycle.stopped' | 'agent.lifecycle.restarted' | 'agent.lifecycle.creation_retried' | 'agent.lifecycle.disabled' | 'agent.workload.creation_succeeded' | 'agent.workload.creation_failed' | 'agent.workload.service_starting' | 'agent.workload.service_ready' | 'agent.workload.service_updating' | 'agent.workload.service_unavailable' | 'agent.configuration.revised' | 'agent.access.updated' | 'api.access.rejected' | 'api.application.created' | 'api.credential.issued' | 'api.credential.revoked' | 'api.credential.narrowed' | 'api.credential.metadata.read' | 'api.credential.delivery.granted' | 'api.credential.delivery.revoked' | 'api.agent.grant.granted' | 'api.agent.grant.revoked' | 'api.agent.metadata.read' | 'api.agent.state.read' | 'api.agent.manager.granted' | 'api.agent.manager.revoked' | 'api.agent.manager.replayed' | 'api.agent.lifecycle.refused' | 'api.agent.manager.refused' | 'api.agent.use.granted' | 'api.agent.use.revoked' | 'api.agent.use.replayed' | 'api.agent.use.refused' | 'api.agent.state.refused' | 'platform.user.disabled' | 'platform.user.reenabled' | 'relay_key.personal.read' | 'relay_key.personal.replace' | 'relay_key.personal.revoke' | 'task.api.access' | 'task.api.subscription.started' | 'task.api.subscription.ended' | 'task.authorization.accepted' | 'task.status.changed' | 'task.control.created' | 'execution.operation.observed' | 'conversation.task.accepted' | 'conversation.message.accepted' | 'conversation.regeneration.accepted' | 'conversation.stop.accepted' | 'conversation.model_selection.updated' | 'conversation.model_selection.fell_back' | 'conversation.task.status' | 'secret.decrypt' | 'secret.activate' | 'secret.rewrap' | 'secret.retire-key' | 'audit.query.completed' | 'audit.query.failed' | 'wecom.setup_started' | 'wecom.credentials_submitted' | 'wecom.setup_cancelled' | 'wecom.setup_expired' | 'wecom.setup_failed' | 'wecom.callback_verified' | 'wecom.setup_activated' | 'wecom.connection_verifying' | 'wecom.connection_connected' | 'wecom.connection_disconnected' | 'wecom.connection_auth_failed' | 'wecom.denied' | 'wecom.unavailable' | 'wecom.conflict' | 'wecom.accepted' | 'wecom.unknown' | 'wecom.sending' | 'wecom.sent' | 'wecom.failed' | 'wecom.cancelled' | 'wecom.expired' | 'wecom.abandoned' | 'api.agent.create.accepted' | 'api.agent.create.replayed' | 'api.agent.create.refused' | 'relay_key.agent_default.replace' | 'skill.project.create' | 'skill.project.update' | 'skill.project.list' | 'skill.project.read' | 'relay_key.agent_default.read' | 'relay_key.agent_default.candidates';
@@ -1285,6 +1286,23 @@ export type TaskProjectionV1 = {
         schemaVersion: 2;
         sequence: number;
         type: 'model.selection.fell_back';
+    } | {
+        conversationCursor: string;
+        conversationId: string;
+        eventId: SseEventIdV1;
+        executionId: string;
+        kind: 'event';
+        occurredAt: string;
+        payload: {
+            fileId: string;
+            mediaType: string;
+            name: string;
+            sizeBytes: number;
+            workspaceReference: string | null;
+        };
+        schemaVersion: 2;
+        sequence: number;
+        type: 'result.file';
     } | TaskStatusEventV1>;
     executionId: string;
     output: string;
@@ -1449,6 +1467,23 @@ export type TaskSseMessageV1 = PersistedConversationEventV1 | {
     schemaVersion: 2;
     sequence: number;
     type: 'model.selection.fell_back';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        fileId: string;
+        mediaType: string;
+        name: string;
+        sizeBytes: number;
+        workspaceReference: string | null;
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'result.file';
 } | TaskStatusEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
 
 export type TaskStatusEventV1 = {

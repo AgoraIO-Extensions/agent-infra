@@ -20,6 +20,7 @@ import {
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { piWorkspaceToolNames } from "./pi-tools.js";
+import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
 import {
 	workspaceDirectoryAllowed,
 	workspaceGlobAllowed,
@@ -281,8 +282,9 @@ export default function piWorkspacePolicy(pi: ExtensionAPI) {
 				return "";
 			},
 		);
+		// #3226：平台固定的文件交换说明随扩展发布，工作区文件不能改写。
 		return {
-			systemPrompt: `${event.systemPrompt}\nPersonal memory is in .memory/MEMORY.md inside your workspace.\n${content}`,
+			systemPrompt: `${event.systemPrompt}\n${SANDBOX_FILE_INSTRUCTIONS_V1}\nPersonal memory is in .memory/MEMORY.md inside your workspace.\n${content}`,
 		};
 	});
 }

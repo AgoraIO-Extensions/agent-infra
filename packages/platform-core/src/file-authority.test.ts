@@ -7,6 +7,7 @@ import {
 	type FileLimitsV1,
 	type FileRecordV1,
 	type FileScopeV1,
+	isConfirmedResultFileV1,
 	nativeTextInputLimitV1,
 	resolveNativeTextInputsV1,
 } from "./file-authority.ts";
@@ -263,6 +264,209 @@ it("allocates one result for the trusted execution and denies stale generation a
 			authorization,
 		),
 	).rejects.toMatchObject({ code: "denied" });
+});
+
+it("records the result workspace reference once and rejects a replay with another reference (#3226)", async () => {
+	const store = new FakeFileStoreV1();
+	const scope = {
+		actorId: "alice",
+		agentId: "agent",
+		conversationId: "conversation",
+		channelId: "web",
+	};
+	store.seedConversation(scope);
+	store.seedExecution({
+		...scope,
+		executionId: "execution",
+		sessionGeneration: 1,
+		deliveryFence: 1,
+		authorizationRevision: "auth-1",
+		status: "processing",
+		stopPending: false,
+	});
+	const service = createFileAuthorityV1({
+		store,
+		now: () => new Date("2026-09-15T00:00:00Z"),
+		intentTtlMs: 60000,
+		accessTtlMs: 10000,
+		issuer: "platform",
+		keyVersion: "key-1",
+		storage: { inspect: async () => null },
+	});
+	const authorization = {
+		authorize: async () => ({
+			...scope,
+			execution: {
+				executionId: "execution",
+				sessionGeneration: 1,
+				grantId: "grant",
+				attachments: [],
+				expiresAt: "2026-09-15T00:00:05Z",
+			},
+			limits: {
+				revision: "verified-1",
+				expiresAt: "2026-09-15T01:00:00Z",
+				mediaTypes: ["text/plain"],
+				maxBytes: 20,
+			},
+		}),
+	};
+	const descriptor = {
+		name: "hello.txt",
+		mediaType: "text/plain",
+		sizeBytes: 5,
+		sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+	};
+	const referenced = await service.createResult(
+		{
+			conversationId: scope.conversationId,
+			idempotencyKey: "result-referenced",
+			descriptor,
+			workspaceReference: "out/hello.txt",
+		},
+		authorization,
+	);
+	expect(referenced.workspaceReference).toBe("out/hello.txt");
+	expect(
+		await service.createResult(
+			{
+				conversationId: scope.conversationId,
+				idempotencyKey: "result-referenced",
+				descriptor,
+				workspaceReference: "out/hello.txt",
+			},
+			authorization,
+		),
+	).toEqual(referenced);
+	for (const workspaceReference of ["out/other.txt", null, undefined])
+		await expect(
+			service.createResult(
+				{
+					conversationId: scope.conversationId,
+					idempotencyKey: "result-referenced",
+					descriptor,
+					...(workspaceReference === undefined ? {} : { workspaceReference }),
+				},
+				authorization,
+			),
+		).rejects.toMatchObject({ code: "conflict" });
+	const unreferenced = await service.createResult(
+		{
+			conversationId: scope.conversationId,
+			idempotencyKey: "result-null",
+			descriptor,
+			workspaceReference: null,
+		},
+		authorization,
+	);
+	expect(unreferenced.workspaceReference).toBeNull();
+	// 旧调用方省略该字段时记录保持原形状。
+	const legacy = await service.createResult(
+		{
+			conversationId: scope.conversationId,
+			idempotencyKey: "result-legacy",
+			descriptor,
+		},
+		authorization,
+	);
+	expect(legacy).not.toHaveProperty("workspaceReference");
+	for (const workspaceReference of [
+		"",
+		"/out/hello.txt",
+		"out/../hello.txt",
+		"out//hello.txt",
+		"out\\hello.txt",
+		"a".repeat(1025),
+	])
+		await expect(
+			service.createResult(
+				{
+					conversationId: scope.conversationId,
+					idempotencyKey: "result-invalid",
+					descriptor,
+					workspaceReference,
+				},
+				authorization,
+			),
+		).rejects.toMatchObject({ code: "invalid" });
+	// 附件意图不能携带工作区引用。
+	await expect(
+		service.createUpload(
+			{
+				conversationId: scope.conversationId,
+				idempotencyKey: "upload-referenced",
+				descriptor,
+				workspaceReference: "out/hello.txt",
+			} as Parameters<typeof service.createUpload>[0],
+			authorization,
+		),
+	).rejects.toMatchObject({ code: "invalid" });
+});
+
+it("confirms a result.file only when its workspace reference matches the file record (#3226)", () => {
+	const scope = {
+		actorId: "alice",
+		agentId: "agent",
+		conversationId: "conversation",
+		channelId: "web",
+	};
+	const execution = {
+		...scope,
+		executionId: "execution",
+		sessionGeneration: 1,
+	};
+	const record = {
+		...scope,
+		fileId: "file-1",
+		kind: "result",
+		executionId: "execution",
+		sessionGeneration: 1,
+		status: "available",
+		objectVersion: "version-1",
+		etag: "etag-1",
+		descriptor: {
+			name: "chart.png",
+			mediaType: "image/png",
+			sizeBytes: 2,
+			sha256: "a".repeat(64),
+		},
+	} as unknown as FileRecordV1;
+	const event = {
+		fileId: "file-1",
+		name: "chart.png",
+		mediaType: "image/png",
+		sizeBytes: 2,
+	};
+	const referenced = { ...record, workspaceReference: "out/chart.png" };
+	expect(
+		isConfirmedResultFileV1(referenced, execution, {
+			...event,
+			workspaceReference: "out/chart.png",
+		}),
+	).toBe(true);
+	for (const workspaceReference of ["out/other.png", null, undefined])
+		expect(
+			isConfirmedResultFileV1(referenced, execution, {
+				...event,
+				...(workspaceReference === undefined ? {} : { workspaceReference }),
+			}),
+		).toBe(false);
+	// 旧记录、null 记录与 V1 事件及 null 事件互相等价。
+	for (const file of [record, { ...record, workspaceReference: null }]) {
+		expect(isConfirmedResultFileV1(file, execution, event)).toBe(true);
+		expect(
+			isConfirmedResultFileV1(file, execution, {
+				...event,
+				workspaceReference: null,
+			}),
+		).toBe(true);
+		expect(
+			isConfirmedResultFileV1(file, execution, {
+				...event,
+				workspaceReference: "out/chart.png",
+			}),
+		).toBe(false);
+	}
 });
 
 it("does not permit another actor, Agent, Channel or Conversation to use a file access reference", async () => {

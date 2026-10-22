@@ -87,8 +87,13 @@ async function fixture(mode = "normal", withExecutionKeys = false) {
 
 function resultFileBridge() {
 	const writeResult = vi.fn(
-		async (descriptor: FileDescriptorV1, _body: ReadableStream<Uint8Array>) =>
-			createRuntimeFileResultReceiptV1(
+		async (
+			descriptor: FileDescriptorV1,
+			body: ReadableStream<Uint8Array>,
+			options?: { workspaceReference: string | null },
+		) => {
+			for await (const _chunk of body);
+			return createRuntimeFileResultReceiptV1(
 				{
 					actorId: "actor-a",
 					channelId: "web",
@@ -109,7 +114,9 @@ function resultFileBridge() {
 					createdAt: new Date().toISOString(),
 					expiresAt: new Date(Date.now() + 60_000).toISOString(),
 				},
-			),
+				options,
+			);
+		},
 	);
 	return {
 		writeResult,
@@ -136,7 +143,7 @@ it("keeps protected Connection MCP unavailable", async () => {
 });
 
 it.each(["result-file", "result-file-edit"] as const)(
-	"publishes one completed Pi %s as a result file",
+	"does not publish a completed Pi %s implicitly while its tool events stay (#3226)",
 	async (mode) => {
 		const f = await fixture(mode);
 		const { writeResult, fileBridge } = resultFileBridge();
@@ -152,25 +159,64 @@ it.each(["result-file", "result-file-edit"] as const)(
 					).toBe("completed"),
 				{ timeout: 10_000 },
 			);
-			expect(writeResult).toHaveBeenCalledOnce();
-			expect(writeResult.mock.calls[0]?.[0]).toMatchObject({
-				name: "result.txt",
-				mediaType: "text/plain",
-				sizeBytes: Buffer.byteLength("synthetic Pi result\n", "utf8"),
-				sha256: createHash("sha256")
-					.update("synthetic Pi result\n", "utf8")
-					.digest("hex"),
-			});
+			expect(writeResult).not.toHaveBeenCalled();
 			const events = await f.driver.replayEvents(
 				accepted.nativeSessionRef,
 				command.executionId,
 			);
-			expect(events.filter((event) => event.type === "file")).toHaveLength(1);
+			expect(events.filter((event) => event.type === "file")).toHaveLength(0);
+			expect(
+				events
+					.filter((event) => event.type === "tool")
+					.map((event) => event.payload.phase),
+			).toEqual(["started", "completed"]);
 		} finally {
 			await f.close();
 		}
 	},
+	15_000,
 );
+
+it("publishes a Pi answer reference to a file produced by the write tool (#3226)", async () => {
+	const f = await fixture("result-reference");
+	const { writeResult, fileBridge } = resultFileBridge();
+	try {
+		const accepted = await f.driver.execute(command, { fileBridge });
+		await vi.waitFor(
+			async () =>
+				expect(
+					await f.driver.getStatus(
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("completed"),
+			{ timeout: 10_000 },
+		);
+		expect(writeResult).toHaveBeenCalledOnce();
+		expect(writeResult.mock.calls[0]?.[0]).toMatchObject({
+			name: "chart.png",
+			mediaType: "image/png",
+		});
+		expect(writeResult.mock.calls[0]?.[2]).toEqual({
+			workspaceReference: "out/chart.png",
+		});
+		const files = (
+			await f.driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			)
+		).filter((event) => event.type === "file");
+		expect(
+			files.map((event) =>
+				event.schemaVersion === 2 && event.type === "file"
+					? event.payload.workspaceReference
+					: undefined,
+			),
+		).toEqual(["out/chart.png"]);
+	} finally {
+		await f.close();
+	}
+}, 15_000);
 
 it("ignores failed, unknown, duplicate, outside, symlink, oversized and late Pi tool completions", async () => {
 	const f = await fixture("result-file-negative");
@@ -199,10 +245,10 @@ it("ignores failed, unknown, duplicate, outside, symlink, oversized and late Pi 
 	} finally {
 		await f.close();
 	}
-});
+}, 15_000);
 
 it("does not publish Pi result files without a request File Bridge", async () => {
-	const f = await fixture("result-file");
+	const f = await fixture("result-reference");
 	try {
 		const accepted = await f.driver.execute(command);
 		await vi.waitFor(
@@ -226,7 +272,7 @@ it("does not publish Pi result files without a request File Bridge", async () =>
 	} finally {
 		await f.close();
 	}
-});
+}, 15_000);
 
 const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 const imageCommand = {

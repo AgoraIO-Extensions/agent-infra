@@ -420,6 +420,70 @@ it("carries plain reasoning deltas as V2 events without widening V1 (#2979)", ()
 		);
 });
 
+it("carries result-file workspace references as V2 file events without widening V1 (#3226)", () => {
+	const legacyFile = {
+		schemaVersion: 1,
+		adapterEventKey: "event-file-1",
+		executionId: "execution-1",
+		cursor: "cursor-3",
+		occurredAt: "2026-09-28T00:00:02.000Z",
+		type: "file",
+		payload: {
+			fileId: "file-1",
+			name: "chart.png",
+			mimeType: "image/png",
+			sizeBytes: 2,
+		},
+	};
+	const referenced = {
+		...legacyFile,
+		schemaVersion: 2,
+		adapterEventKey: "event-file-2",
+		cursor: "cursor-4",
+		payload: { ...legacyFile.payload, workspaceReference: "out/chart.png" },
+	};
+	const unreferenced = {
+		...referenced,
+		adapterEventKey: "event-file-3",
+		cursor: "cursor-5",
+		payload: { ...referenced.payload, workspaceReference: null },
+	};
+	for (const event of [legacyFile, referenced, unreferenced])
+		expect(validateRuntimeLiveEventV4(event, "execution-1")).toEqual(event);
+	const replay = {
+		schemaVersion: 4,
+		hostSessionRef: "session-1",
+		executionId: "execution-1",
+		events: [textEvent, legacyFile, referenced, unreferenced],
+	};
+	expect(validateRuntimeReplayResponseV4(replay, readRequest)).toEqual(replay);
+	expect(
+		RuntimeReplayResponseV1Schema.safeParse({
+			schemaVersion: 1,
+			events: [textEvent, referenced],
+		}).success,
+	).toBe(false);
+	for (const changed of [
+		{ ...referenced, schemaVersion: 1 },
+		{ ...legacyFile, schemaVersion: 2 },
+		{
+			...referenced,
+			payload: { ...referenced.payload, workspaceReference: "/out/chart.png" },
+		},
+		{
+			...referenced,
+			payload: { ...referenced.payload, workspaceReference: "../chart.png" },
+		},
+		{
+			...referenced,
+			payload: { ...referenced.payload, path: "/workspace/out/chart.png" },
+		},
+	])
+		expect(() => validateRuntimeLiveEventV4(changed, "execution-1")).toThrow(
+			"RuntimeHostV4 event is invalid",
+		);
+});
+
 it("names the failed event access check in a fixed cause (#1888)", async () => {
 	const readVerification = await verified(readRequest);
 	const cause = (
