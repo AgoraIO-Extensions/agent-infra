@@ -136,7 +136,8 @@ export async function lockExecution(
 			model_configuration_revision::text, model_option_id, reasoning_level,
 			execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id,
 			relay_key_version::text, runtime_submit_protocol, original_operation_digest,
-			original_submit_host_session_ref, task_wait_order::text, task_wait_deadline
+			original_submit_host_session_ref, accepted_original_host_session_ref,
+			task_wait_order::text, task_wait_deadline
 		from platform.conversation_executions
 		where execution_id = ${executionId} and conversation_id = ${conversationId}
 		for update
@@ -491,6 +492,39 @@ async function insertPlatformExecutionStatus(
 	`;
 }
 
+/**
+ * 等待收敛（到期失败、撤权或取消）只处理确认尚未交给 Runtime 的等待任务。等待中的
+ * Execution 有两种合法形态：
+ * - 受理后从未准备投递，没有原操作 pin；
+ * - 首次投递前已写入 pin，Worker 证明请求没有发出后由 releaseUnsentDispatch 退回原等待
+ *   位置（HLD §8.4）。pin 继续作为下一次尝试的原操作（#1522），本身不表示请求已发出（#3173）。
+ * 这里选择接受后一种形态，而不是在退回时清除 pin：清除后下一次投递会从可变的消息/附件
+ * 重建摘要，与 #1522 让 pin 保持权威的约束相冲突。
+ * 续接已有 Host 会话时，pin 在发送前就记录了目标 Host 会话（等于会话当前的
+ * host_session_ref），这只说明请求将发往哪里，不说明已经发出。
+ * 已受理原操作 Host、Runtime 游标，或目标 Host 会话与会话当前引用不一致的执行，
+ * 可能已经到达 Runtime，仍不在本地收敛。
+ */
+function waitingExecutionUnsent(
+	execution: ExecutionRow,
+	conversation: ConversationRow,
+) {
+	if (
+		(execution.original_submit_host_session_ref !== null &&
+			execution.original_submit_host_session_ref !==
+				conversation.host_session_ref) ||
+		execution.accepted_original_host_session_ref !== null ||
+		execution.last_runtime_cursor !== null
+	)
+		return false;
+	return execution.runtime_submit_protocol === null
+		? execution.original_operation_digest === null &&
+				execution.original_submit_host_session_ref === null
+		: (execution.runtime_submit_protocol === "v2" ||
+				execution.runtime_submit_protocol === "v4") &&
+				validText(execution.original_operation_digest);
+}
+
 export function bindingMatches(
 	outbox: OutboxRow,
 	payload: ConversationPayload,
@@ -510,10 +544,7 @@ export function bindingMatches(
 			safeCounter(execution.delivery_fence) === undefined ||
 			safeCounter(execution.delivery_fence) !==
 				safeCounter(outbox.delivery_fence) ||
-			execution.runtime_submit_protocol !== null ||
-			execution.original_operation_digest !== null ||
-			execution.original_submit_host_session_ref !== null ||
-			execution.last_runtime_cursor !== null ||
+			!waitingExecutionUnsent(execution, conversation) ||
 			outbox.operation !== "conversation.turn.submit.v1" ||
 			payload.metadataRecovery !== undefined ||
 			payload.turnId !== execution.turn_id)

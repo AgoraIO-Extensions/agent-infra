@@ -48,7 +48,10 @@ import {
 } from "./session-sandbox.ts";
 import type { SessionSandboxClaimWaitReasonV1 } from "./session-sandbox-reconciliation.ts";
 import { persistSessionSandboxUpgradeIntents } from "./session-sandbox-upgrade.ts";
-import { PostgresTaskAuthorizationStoreV1 } from "./task-authorization.ts";
+import {
+	PostgresTaskAuthorizationStoreV1,
+	TaskAuthorizationStoreError,
+} from "./task-authorization.ts";
 import { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.ts";
 
 let databaseUrl = "";
@@ -8104,6 +8107,477 @@ describe("waiting Task original Store promotion", () => {
 			},
 		);
 	}
+});
+
+// API 等待任务首次投递前写入原操作 pin，Worker 证明请求没有发出后退回原等待位置。
+// 退回后的任务必须仍能再次投递、到期失败或被撤权取消，不能被认领永久判为 stale（#3173）。
+describe("unsent first dispatch returned to waiting (#3173)", () => {
+	const openTaskStore = () =>
+		new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			userDirectory: {
+				resolveUser: async (userId) => ({
+					schemaVersion: 1,
+					userId,
+					accountStatus: "active",
+					organizationIds: [],
+					authorizationRevision: "identity-dispatch",
+				}),
+			},
+		});
+	const controlAuthorization: ConversationDispatchAuthorizationPortV1 = {
+		async authorize({ claim }) {
+			// 撤权后真实授权只给出控制用途（record.revokedAt -> authorization_revoked）。
+			return {
+				outcome: "allowed",
+				authority: {
+					schemaVersion: 1,
+					agentId: claim.agentId,
+					actorId: claim.actorId,
+					channelId: claim.channelId,
+					conversationId: claim.conversationId,
+					executionId: claim.executionId,
+					turnId: claim.turnId,
+					sessionGeneration: claim.sessionGeneration,
+					authorizationRevision: claim.authorizationRevision,
+					runtimeGrant: "control",
+					controlOnly: true,
+				},
+			};
+		},
+	};
+
+	function claimTask(
+		store: PostgresConversationDispatchStoreV1,
+		itemId: string,
+		workerId: string,
+	) {
+		return store.claim({
+			schemaVersion: 1,
+			itemId,
+			workerId,
+			leaseDurationMs: 30_000,
+		});
+	}
+
+	async function waitingTask() {
+		const work = await acceptedKeyWork("api:user");
+		await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent-dispatch', 'user', 'actor-dispatch', 'use', 'use-dispatch')`;
+		await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent-dispatch', 'owner-a', now()) on conflict do nothing`;
+		await client`update platform.conversation_executions set status='waiting', task_wait_order=1, task_wait_deadline=clock_timestamp()+interval '60 seconds' where execution_id=${work.executionId}`;
+		await client`update platform.outbox_items set available_at='infinity' where id=${work.itemId}`;
+		return work;
+	}
+
+	/** 首次认领并写入 unknown 与原操作 pin，相当于 Runtime 请求发出前的 write-ahead。 */
+	async function prepareFirstDispatch(
+		store: PostgresConversationDispatchStoreV1,
+		work: Awaited<ReturnType<typeof seed>>,
+	) {
+		const decision = await claimTask(store, work.itemId, "first-worker");
+		if (decision.outcome !== "claimed")
+			throw new Error("Expected waiting claim");
+		expect(decision.claim).toMatchObject({
+			executionStatus: "waiting",
+			taskWaitOrder: 1,
+			hostSessionRef: null,
+		});
+		expect(
+			await store.prepareRuntimeDispatch({
+				claim: decision.claim,
+				leaseDurationMs: 30_000,
+			}),
+		).toBe(true);
+		return decision.claim;
+	}
+
+	/** Worker 证明请求没有发出（如 RUNTIME_ROUTE_STALE），任务退回原等待位置。 */
+	async function releaseUnsent(
+		store: PostgresConversationDispatchStoreV1,
+		claim: ConversationDispatchClaimV1,
+	) {
+		expect(
+			await store.releaseUnsentDispatch({
+				claim,
+				retryDelayMs: 0,
+				errorCode: "RUNTIME_ROUTE_STALE",
+			}),
+		).toBe(true);
+		await waitForAvailableItem(claim.itemId);
+	}
+
+	async function taskState(work: Awaited<ReturnType<typeof seed>>) {
+		const [row] = await client`
+			select e.status, e.task_wait_order::int as wait_order,
+				e.task_wait_deadline as wait_deadline,
+				e.delivery_fence::int as execution_fence,
+				e.runtime_submit_protocol, e.original_operation_digest,
+				e.original_submit_host_session_ref, e.last_runtime_cursor,
+				o.status as outbox_status, o.delivery_fence::int as outbox_fence,
+				m.status as message_status, m.failure_code
+			from platform.conversation_executions e
+			join platform.outbox_items o on o.id = ${work.itemId}
+			join platform.conversation_messages m on m.message_id = ${work.messageId}
+			where e.execution_id = ${work.executionId}
+		`;
+		return row;
+	}
+
+	async function lastTaskStatus(executionId: string) {
+		const [row] = await client<{ event_payload: { status: string } }[]>`
+			select event_payload from platform.conversation_events
+			where execution_id = ${executionId} and event_type = 'task.status'
+			order by sequence desc limit 1
+		`;
+		return row?.event_payload.status;
+	}
+
+	/** 会话占用：非终态执行或未完成 stop（与 waitingDecision 的 occupied 口径一致）。 */
+	async function occupyingWork(conversationId: string) {
+		const [row] = await client<{ count: number }[]>`
+			select count(*)::int as count from platform.conversation_executions e
+			where e.conversation_id = ${conversationId}
+				and (e.status in ('waiting', 'submitted', 'processing', 'unknown')
+					or exists (select 1 from platform.conversation_stops s
+						where s.execution_id = e.execution_id and s.status = 'submitted'))
+		`;
+		return row?.count;
+	}
+
+	async function dispatchableItems(store: PostgresConversationDispatchStoreV1) {
+		return (await store.findDispatchable({ limit: 256 })).map(
+			(item) => item.itemId,
+		);
+	}
+
+	function recordControl(
+		authorization: PostgresTaskAuthorizationStoreV1,
+		work: Awaited<ReturnType<typeof seed>>,
+		reason: "authorization_revoked" | "stop",
+	) {
+		return authorization.recordControl({
+			executionId: work.executionId,
+			authorizationRecordId: `authorization-${work.executionId}`,
+			reason,
+			workerId: "api-owner-revoke:owner-a",
+			traceId: "trace-3173-control",
+			requestId: "request-3173-control",
+		});
+	}
+
+	/** Owner 撤销 API 使用授权：与 agent-management 的撤销事务写入相同事实。 */
+	async function revokeApiUse(
+		authorization: PostgresTaskAuthorizationStoreV1,
+		work: Awaited<ReturnType<typeof seed>>,
+	) {
+		await client`update platform.agent_principal_grants set revoked_at = now(), authorization_revision = 'use-revoked'
+			where agent_id = 'agent-dispatch' and principal_type = 'user' and principal_id = 'actor-dispatch' and grant_type = 'use'`;
+		return recordControl(authorization, work, "authorization_revoked");
+	}
+
+	it("dispatches the returned waiting Task again with its original pin, order and deadline (AC-1)", async () => {
+		const work = await waitingTask();
+		const store = openTaskStore();
+		try {
+			const first = await prepareFirstDispatch(store, work);
+			const prepared = await taskState(work);
+			expect(prepared).toMatchObject({
+				status: "unknown",
+				runtime_submit_protocol: "v4",
+				original_operation_digest: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+				original_submit_host_session_ref: null,
+				last_runtime_cursor: null,
+				outbox_status: "processing",
+			});
+			await releaseUnsent(store, first);
+			// 退回原等待位置：顺序、期限、fence 与原操作 pin 都不变。
+			expect(await taskState(work)).toEqual({
+				...prepared,
+				status: "waiting",
+				outbox_status: "retry_scheduled",
+			});
+			expect(await dispatchableItems(store)).toContain(work.itemId);
+			const next = await claimTask(store, work.itemId, "second-worker");
+			expect(next.outcome).toBe("claimed");
+			if (next.outcome !== "claimed")
+				throw new Error("Expected the returned Task to be claimable");
+			expect(next.claim).toMatchObject({
+				executionStatus: "waiting",
+				taskWaitOrder: 1,
+				hostSessionRef: null,
+				runtimeCursor: null,
+				stopPending: false,
+			});
+			expect(
+				await store.prepareRuntimeDispatch({
+					claim: next.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			// 再次投递沿用原 pin，不从可变的消息/附件重建。
+			expect(await taskState(work)).toMatchObject({
+				status: "unknown",
+				wait_order: 1,
+				wait_deadline: prepared?.wait_deadline,
+				runtime_submit_protocol: prepared?.runtime_submit_protocol,
+				original_operation_digest: prepared?.original_operation_digest,
+				original_submit_host_session_ref: null,
+				outbox_status: "processing",
+			});
+			expect(
+				await store.recordRuntimeResponse({
+					claim: next.claim,
+					hostSessionRef: "host-after-unsent-release",
+					originalOperationAccepted: true,
+					transition: {
+						executionStatus: "processing",
+						conversationStatus: "active",
+					},
+				}),
+			).toBe(true);
+			expect((await taskState(work))?.status).toBe("processing");
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("fails the returned waiting Task at its original deadline and frees the Conversation (AC-2)", async () => {
+		const work = await waitingTask();
+		const store = openTaskStore();
+		try {
+			await releaseUnsent(store, await prepareFirstDispatch(store, work));
+			await client`update platform.conversation_executions set created_at=clock_timestamp()-interval '2 minutes', task_wait_deadline=clock_timestamp()-interval '1 minute' where execution_id=${work.executionId}`;
+			expect(await claimTask(store, work.itemId, "deadline-worker")).toEqual({
+				outcome: "failed",
+			});
+			expect(await taskState(work)).toMatchObject({
+				status: "failed",
+				outbox_status: "failed",
+				message_status: "failed",
+				failure_code: "TASK_WAIT_TIMEOUT",
+			});
+			expect(await lastTaskStatus(work.executionId)).toBe("failed");
+			expect(await occupyingWork(work.conversationId)).toBe(0);
+			// 终结后不再被反复认领。
+			expect(await claimTask(store, work.itemId, "deadline-worker")).toEqual({
+				outcome: "failed",
+			});
+			expect(await dispatchableItems(store)).not.toContain(work.itemId);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("cancels the returned waiting Task revoked before release and settles its stop (AC-3)", async () => {
+		const work = await waitingTask();
+		const store = openTaskStore();
+		const authorization = new PostgresTaskAuthorizationStoreV1({
+			databaseUrl,
+		});
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		try {
+			const first = await prepareFirstDispatch(store, work);
+			// 投递前占位（unknown）期间 Owner 撤销 API 使用授权：执行可能在途，按原规则创建 stop。
+			await revokeApiUse(authorization, work);
+			const [stop] = await client<
+				{ stop_request_id: string; status: string }[]
+			>`select stop_request_id, status from platform.conversation_stops where execution_id = ${work.executionId}`;
+			expect(stop?.status).toBe("submitted");
+			if (!stop) throw new Error("Expected revocation stop");
+			const stopItem = `conversation:stop:${stop.stop_request_id}`;
+			// Runtime 随后证明请求没有发出，任务退回原等待位置。
+			await releaseUnsent(store, first);
+			expect((await taskState(work))?.status).toBe("waiting");
+			await waitForAvailableItem(stopItem);
+			// stop 不推进等待中的执行，只能等提交条目先收敛。
+			expect(await claimTask(store, stopItem, "stop-worker")).toEqual({
+				outcome: "stale",
+			});
+			expect(await claimTask(store, work.itemId, "second-worker")).toEqual({
+				outcome: "failed",
+			});
+			expect(await taskState(work)).toMatchObject({
+				status: "cancelled",
+				outbox_status: "failed",
+				message_status: "failed",
+				failure_code: "AUTHORIZATION_REVOKED",
+			});
+			expect(await lastTaskStatus(work.executionId)).toBe("cancelled");
+			// 原 stop 按既有终态路径在本地完成，不调用 Runtime。
+			const stopOutcome = await createConversationDispatchUseCaseV1(
+				{
+					store,
+					runtimeHost,
+					authorization: controlAuthorization,
+					events: {
+						async persist() {
+							throw new Error("The unsent Task has no Runtime events");
+						},
+					},
+				},
+				{ retryDelayMs: 0 },
+			).dispatch({
+				schemaVersion: 1,
+				itemId: stopItem,
+				workerId: "stop-worker",
+			});
+			expect(stopOutcome).toMatchObject({ outcome: "already_completed" });
+			expect(runtimeHost.sideEffectCount()).toBe(0);
+			const [settled] = await client`
+				select request.status, outbox.status as outbox_status
+				from platform.conversation_stops request
+				join platform.outbox_items outbox on outbox.id = ${stopItem}
+				where request.execution_id = ${work.executionId}
+			`;
+			expect(settled).toEqual({
+				status: "completed",
+				outbox_status: "succeeded",
+			});
+			expect(await occupyingWork(work.conversationId)).toBe(0);
+			expect(await claimTask(store, work.itemId, "later-worker")).toEqual({
+				outcome: "failed",
+			});
+			expect(await claimTask(store, stopItem, "later-worker")).toEqual({
+				outcome: "succeeded",
+			});
+			const remaining = await dispatchableItems(store);
+			expect(remaining).not.toContain(work.itemId);
+			expect(remaining).not.toContain(stopItem);
+		} finally {
+			await authorization.close();
+			await store.close();
+		}
+	});
+
+	it.each([
+		["authorization_revoked", "AUTHORIZATION_REVOKED"],
+		["stop", "TASK_CANCELLED"],
+	] as const)(
+		"settles %s control on the returned waiting Task in the control transaction (AC-3)",
+		async (reason, failureCode) => {
+			const work = await waitingTask();
+			const store = openTaskStore();
+			const authorization = new PostgresTaskAuthorizationStoreV1({
+				databaseUrl,
+			});
+			try {
+				await releaseUnsent(store, await prepareFirstDispatch(store, work));
+				await expect(
+					reason === "authorization_revoked"
+						? revokeApiUse(authorization, work)
+						: recordControl(authorization, work, reason),
+				).resolves.toMatchObject({ controlRecordId: expect.any(String) });
+				expect(await taskState(work)).toMatchObject({
+					status: "cancelled",
+					outbox_status: "failed",
+					message_status: "failed",
+					failure_code: failureCode,
+				});
+				// 已退回等待的任务没有在途投递，不需要 stop。
+				expect(
+					await client`select status from platform.conversation_stops where execution_id = ${work.executionId}`,
+				).toEqual([]);
+				expect(await occupyingWork(work.conversationId)).toBe(0);
+				expect(await claimTask(store, work.itemId, "later-worker")).toEqual({
+					outcome: "failed",
+				});
+			} finally {
+				await authorization.close();
+				await store.close();
+			}
+		},
+	);
+
+	it.each(["dispatch", "deadline"] as const)(
+		"settles a returned waiting Task that continues an existing Host Session (%s)",
+		async (mode) => {
+			const work = await waitingTask();
+			// 续接已有会话：pin 在发送前就记录了会话当前的 Host 会话。
+			await client`update platform.conversations set host_session_ref = 'host-existing' where id = ${work.conversationId}`;
+			const store = openTaskStore();
+			try {
+				const first = await claimTask(store, work.itemId, "first-worker");
+				if (first.outcome !== "claimed")
+					throw new Error("Expected waiting claim");
+				expect(first.claim.hostSessionRef).toBe("host-existing");
+				expect(
+					await store.prepareRuntimeDispatch({
+						claim: first.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				expect((await taskState(work))?.original_submit_host_session_ref).toBe(
+					"host-existing",
+				);
+				await releaseUnsent(store, first.claim);
+				if (mode === "dispatch") {
+					const next = await claimTask(store, work.itemId, "second-worker");
+					expect(next.outcome).toBe("claimed");
+				} else {
+					await client`update platform.conversation_executions set created_at=clock_timestamp()-interval '2 minutes', task_wait_deadline=clock_timestamp()-interval '1 minute' where execution_id=${work.executionId}`;
+					expect(
+						await claimTask(store, work.itemId, "deadline-worker"),
+					).toEqual({ outcome: "failed" });
+					expect(await taskState(work)).toMatchObject({
+						status: "failed",
+						failure_code: "TASK_WAIT_TIMEOUT",
+					});
+				}
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
+	it.each([
+		"original_submit_host_session_ref",
+		"last_runtime_cursor",
+		"accepted_original_host_session_ref",
+	] as const)(
+		"keeps a waiting Task whose pin carries %s out of local waiting settlement (AC-4)",
+		async (column) => {
+			const work = await waitingTask();
+			const store = openTaskStore();
+			const authorization = new PostgresTaskAuthorizationStoreV1({
+				databaseUrl,
+			});
+			try {
+				await releaseUnsent(store, await prepareFirstDispatch(store, work));
+				await client`update platform.conversation_executions
+					set ${client(column)} = ${`${column}-evidence`}
+					where execution_id = ${work.executionId}`;
+				await client`update platform.conversation_executions set created_at=clock_timestamp()-interval '2 minutes', task_wait_deadline=clock_timestamp()-interval '1 minute' where execution_id=${work.executionId}`;
+				const snapshot = async () => ({
+					executions:
+						await client`select * from platform.conversation_executions where execution_id = ${work.executionId}`,
+					outboxes:
+						await client`select * from platform.outbox_items where scope_id = ${work.conversationId} order by id`,
+					messages:
+						await client`select * from platform.conversation_messages where message_id = ${work.messageId}`,
+					stops:
+						await client`select * from platform.conversation_stops where execution_id = ${work.executionId}`,
+					events:
+						await client`select event_id from platform.conversation_events where execution_id = ${work.executionId} order by sequence`,
+					controls:
+						await client`select id from platform.task_control_records where execution_id = ${work.executionId}`,
+					authorizations:
+						await client`select revoked_at from platform.task_authorization_records where execution_id = ${work.executionId}`,
+				});
+				const before = await snapshot();
+				// 可能已发送的执行不在本地按等待到期或撤权收敛，保持原有的 stale。
+				expect(await claimTask(store, work.itemId, "negative-worker")).toEqual({
+					outcome: "stale",
+				});
+				await expect(
+					recordControl(authorization, work, "authorization_revoked"),
+				).rejects.toBeInstanceOf(TaskAuthorizationStoreError);
+				expect(await snapshot()).toEqual(before);
+			} finally {
+				await authorization.close();
+				await store.close();
+			}
+		},
+	);
 });
 
 describe("idle Session Sandbox upgrade (#1523)", () => {

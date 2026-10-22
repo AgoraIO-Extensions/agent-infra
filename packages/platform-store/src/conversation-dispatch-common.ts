@@ -98,6 +98,7 @@ export interface ExecutionRow {
 	runtime_submit_protocol: string | null;
 	original_operation_digest: string | null;
 	original_submit_host_session_ref: string | null;
+	accepted_original_host_session_ref: string | null;
 }
 
 /** The existing typed Execution column is the only namespace source. */
