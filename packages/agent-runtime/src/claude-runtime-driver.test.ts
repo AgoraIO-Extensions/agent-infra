@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import {
 	access,
+	chmod,
 	mkdir,
 	mkdtemp,
+	readdir,
 	readFile,
 	realpath,
 	rm,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -1210,144 +1213,248 @@ it("keeps two Claude Session workspace and memory roots disjoint", async () => {
 	}
 }, 30000);
 
-it("maps an authorized image attachment into Claude native content", async () => {
-	const path = await mkdtemp(join(tmpdir(), "claude-driver-files-"));
-	const bytes = Buffer.from(
-		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-		"base64",
-	);
-	const encoded = bytes.toString("base64");
-	let requestBody = "";
-	const server = createServer((req, res) => {
-		if (req.method !== "POST") {
-			res.writeHead(404).end();
-			return;
-		}
-		req.on("data", (chunk) => (requestBody += chunk));
-		req.on("end", () => {
-			res.writeHead(200, { "content-type": "text/event-stream" });
-			for (const event of [
-				{
-					type: "message_start",
-					message: {
-						id: "msg-file",
-						model: "claude-opus-5",
-						content: [],
-						usage: { input_tokens: 1, output_tokens: 0 },
-					},
-				},
-				{
-					type: "content_block_start",
-					index: 0,
-					content_block: { type: "text", text: "" },
-				},
-				{
-					type: "content_block_delta",
-					index: 0,
-					delta: { type: "text_delta", text: "OK" },
-				},
-				{ type: "content_block_stop", index: 0 },
-				{
-					type: "message_delta",
-					delta: { stop_reason: "end_turn", stop_sequence: null },
-					usage: { output_tokens: 1 },
-				},
-				{ type: "message_stop" },
-			])
-				res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-			res.end();
-		});
-	});
-	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-	const address = server.address();
-	if (!address || typeof address === "string") throw new Error();
-	const driver = await ClaudeRuntimeDriver.open({
-		path,
-		configVersion: "claude-files",
-		defaultModelOptionId: "primary",
-		defaultReasoningLevel: "high",
-		modelOptions: [
-			{
-				modelOptionId: "primary",
-				model: "claude-opus-5",
-				reasoningLevels: ["high"],
-				authentication: "bearer",
-				endpoint: `http://127.0.0.1:${address.port}`,
-				credential: "synthetic-model-credential",
-			},
-		],
-	});
-	try {
-		const command = {
-			schemaVersion: 2 as const,
-			kind: "submit-turn" as const,
-			agentId: "agent-file",
-			conversationId: "conversation-file",
-			sessionGeneration: 1,
-			executionId: "execution-file",
-			turnId: "turn-file",
-			operationId: "operation-file",
-			selection: {
-				schemaVersion: 1 as const,
-				modelOptionId: "primary",
-				reasoningLevel: "high",
-			},
-			input: { text: "inspect", attachments: ["file-1"] },
-		};
-		const fileBridge: RuntimeFileBridgePortV1 = {
-			readInput: async () => ({
-				fileId: "file-1",
+// #3225：附件物化到会话 Sandbox 工作区并附清单，图片另外作为 SDK image 块。
+const claudeAttachmentFixtures: Record<
+	string,
+	{ name: string; mediaType: string; bytes: Buffer }
+> = {
+	"file-pdf": {
+		name: "report.pdf",
+		mediaType: "application/pdf",
+		bytes: Buffer.from("%PDF-1.4\n%claude-attachment-pdf\n"),
+	},
+	"file-csv": {
+		name: "table.csv",
+		mediaType: "text/csv",
+		bytes: Buffer.from("name,value\nclaude-attachment-csv,1\n"),
+	},
+	"file-txt": {
+		name: "notes.txt",
+		mediaType: "text/plain",
+		bytes: Buffer.from("claude-attachment-text\n"),
+	},
+	"file-png": {
+		name: "image.png",
+		mediaType: "image/png",
+		bytes: Buffer.from(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+			"base64",
+		),
+	},
+};
+
+function claudeAttachmentBridge(
+	reads: string[] = [],
+	fixtures = claudeAttachmentFixtures,
+): RuntimeFileBridgePortV1 {
+	return {
+		readInput: async (fileId) => {
+			reads.push(fileId);
+			const fixture = fixtures[fileId];
+			if (!fixture) throw new Error("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
+			return {
+				fileId,
 				descriptor: {
-					name: "image.png",
-					mediaType: "image/png",
-					sizeBytes: bytes.byteLength,
-					sha256: createHash("sha256").update(bytes).digest("hex"),
+					name: fixture.name,
+					mediaType: fixture.mediaType,
+					sizeBytes: fixture.bytes.byteLength,
+					sha256: createHash("sha256").update(fixture.bytes).digest("hex"),
 				},
-				body: new ReadableStream({
+				body: new ReadableStream<Uint8Array>({
 					start(controller) {
-						controller.enqueue(bytes);
+						controller.enqueue(new Uint8Array(fixture.bytes));
 						controller.close();
 					},
 				}),
-			}),
-			writeResult: async () => {
-				throw new Error("unused");
-			},
-			revalidate: () => {},
+			};
+		},
+		writeResult: async () => {
+			throw new Error("unused");
+		},
+		revalidate: () => {},
+	};
+}
+
+const claudeAttachmentRef = (fileId: string) =>
+	createHash("sha256").update(fileId).digest("hex").slice(0, 16);
+
+it("materializes PDF, CSV, TXT and PNG into the Claude workspace with a manifest and an SDK image block (#3225)", async () => {
+	const f = await claudeNativeFixture();
+	try {
+		const fileIds = ["file-pdf", "file-csv", "file-txt", "file-png"];
+		const command = {
+			...claudeCommand("files"),
+			input: { text: "inspect", attachments: fileIds },
 		};
-		const accepted = await driver.execute(command, { fileBridge });
-		expect(accepted.result).toEqual({ outcome: "accepted", status: "running" });
-		await vi.waitFor(() => expect(requestBody).toContain(encoded), {
-			timeout: 10000,
+		const accepted = await f.driver.execute(command, {
+			fileBridge: claudeAttachmentBridge(),
 		});
-		expect(requestBody).toContain(encoded);
-		expect(requestBody).toContain("image/png");
-		expect(await driver.getCapabilities()).toMatchObject({ attachments: true });
+		expect(accepted.result).toEqual({ outcome: "accepted", status: "running" });
+		await f.settled(accepted.nativeSessionRef, command.executionId);
+		const body = JSON.stringify(f.calls[0]?.body);
+		const workspace = join(f.path, accepted.nativeSessionRef, "workspace");
+		for (const fileId of fileIds) {
+			const fixture = claudeAttachmentFixtures[fileId];
+			if (!fixture) throw new Error();
+			const relative = `.agent-infra/attachments/${claudeAttachmentRef(fileId)}/${fixture.name}`;
+			// 工作区内的副本与上传对象的 SHA-256 一致。
+			expect(
+				createHash("sha256")
+					.update(await readFile(join(workspace, relative)))
+					.digest("hex"),
+			).toBe(createHash("sha256").update(fixture.bytes).digest("hex"));
+			// 原生输入里的清单列出名称、媒体类型、字节数和工作区相对路径。
+			expect(body).toContain(
+				`media type: ${fixture.mediaType}, size: ${fixture.bytes.byteLength} bytes, path: \\"${relative}\\"`,
+			);
+		}
+		expect(body).toContain("inspect\\n\\nAttachments (saved in your workspace");
+		const png = claudeAttachmentFixtures["file-png"]?.bytes ?? Buffer.alloc(0);
+		// 图片同时作为 SDK image 块交给模型；其他类型只在工作区与清单中。
+		expect(body).toContain(png.toString("base64"));
+		expect(body).toContain('"media_type":"image/png"');
+		expect(body).not.toContain("claude-attachment-csv");
+		expect(body).not.toContain('"media_type":"application/pdf"');
+		expect(await f.driver.getCapabilities()).toMatchObject({
+			attachments: true,
+		});
+		// Driver 状态与事件不含工作区路径、附件内容。
+		const persisted = [
+			await readFile(join(f.path, "index.json"), "utf8"),
+			await readFile(
+				join(f.path, accepted.nativeSessionRef, "state.json"),
+				"utf8",
+			),
+			JSON.stringify(
+				await f.driver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			),
+		].join("\n");
+		for (const forbidden of [
+			workspace,
+			".agent-infra/attachments",
+			"claude-attachment-text",
+			png.toString("base64"),
+		])
+			expect(persisted).not.toContain(forbidden);
 	} finally {
-		await driver.close();
-		server.closeAllConnections();
-		await new Promise<void>((resolve) => server.close(() => resolve()));
-		await rm(path, { recursive: true, force: true });
+		await f.close();
 	}
 }, 30000);
 
-it("rejects an attachment outside the Claude image allowlist before native submission", async () => {
-	const path = await mkdtemp(join(tmpdir(), "claude-driver-files-media-"));
-	const driver = await openAttachmentDriver(path);
-	const bytes = new TextEncoder().encode("<svg></svg>");
+it("submits an attachment-only Claude message as the manifest plus native image and restores the copy on the next execution (#3225)", async () => {
+	const f = await claudeNativeFixture();
 	try {
+		const command = {
+			...claudeCommand("only"),
+			input: { attachments: ["file-png", "file-txt"] },
+		};
+		const accepted = await f.driver.execute(command, {
+			fileBridge: claudeAttachmentBridge(),
+		});
+		expect(accepted.result).toEqual({ outcome: "accepted", status: "running" });
+		await f.settled(accepted.nativeSessionRef, command.executionId);
+		const body = JSON.stringify(f.calls[0]?.body);
+		expect(body).toContain(
+			'"text":"Attachments (saved in your workspace; paths are relative to your workspace root):',
+		);
+		expect(body).toContain(
+			claudeAttachmentFixtures["file-png"]?.bytes.toString("base64"),
+		);
+		// 重新生成：同一附件复用同一路径；被改写的副本恢复为原内容。
+		const target = join(
+			f.path,
+			accepted.nativeSessionRef,
+			"workspace",
+			".agent-infra/attachments",
+			claudeAttachmentRef("file-txt"),
+			"notes.txt",
+		);
+		await chmod(target, 0o600);
+		await writeFile(target, "tampered");
+		const regenerated = await f.driver.execute(
+			{ ...claudeCommand("again"), input: command.input },
+			{ fileBridge: claudeAttachmentBridge() },
+		);
+		expect(regenerated.result).toMatchObject({ outcome: "accepted" });
+		expect(regenerated.nativeSessionRef).toBe(accepted.nativeSessionRef);
+		expect(await readFile(target)).toEqual(
+			claudeAttachmentFixtures["file-txt"]?.bytes,
+		);
+		await f.settled(accepted.nativeSessionRef, "execution-again");
+		expect(JSON.stringify(f.calls.at(-1)?.body)).toContain(
+			`.agent-infra/attachments/${claudeAttachmentRef("file-txt")}/notes.txt`,
+		);
+	} finally {
+		await f.close();
+	}
+}, 30000);
+
+it("rejects Claude attachments beyond the Driver bounds, a planted link or a foreign fileId before native submission (#3225)", async () => {
+	const path = await mkdtemp(join(tmpdir(), "claude-driver-files-bounds-"));
+	const driver = await openAttachmentDriver(path);
+	try {
+		const reads: string[] = [];
+		// 单条消息超过 32 个：在任何读取之前拒绝。
+		await expect(
+			driver.execute(
+				{
+					...attachmentCommand,
+					input: {
+						text: "inspect",
+						attachments: Array.from({ length: 33 }, (_, i) => `file-${i}`),
+					},
+				},
+				{ fileBridge: claudeAttachmentBridge(reads) },
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		expect(reads).toEqual([]);
+		// 单文件超过 50 MiB：不传输、不落盘。
 		await expect(
 			driver.execute(attachmentCommand, {
 				fileBridge: attachmentBridge(
 					{
-						mediaType: "image/svg+xml",
-						sizeBytes: bytes.byteLength,
-						sha256: createHash("sha256").update(bytes).digest("hex"),
+						mediaType: "application/pdf",
+						sizeBytes: 50 * 1024 * 1024 + 1,
+						sha256: "a".repeat(64),
 					},
-					bytes,
+					new Uint8Array(1),
 				),
 			}),
 		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		// 不在本次 Grant 中的 fileId（跨会话、跨执行）读不到。
+		await expect(
+			driver.execute(
+				{
+					...attachmentCommand,
+					input: { text: "inspect", attachments: ["file-foreign"] },
+				},
+				{ fileBridge: claudeAttachmentBridge() },
+			),
+		).rejects.toThrow("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
+		const [ref] = await readdir(path).then((entries) =>
+			entries.filter((entry) => entry !== "index.json"),
+		);
+		if (!ref) throw new Error("missing session directory");
+		const workspace = join(path, ref, "workspace");
+		const outside = join(path, "outside");
+		await mkdir(outside, { mode: 0o700 });
+		await mkdir(workspace, { recursive: true, mode: 0o700 });
+		await rm(join(workspace, ".agent-infra"), { recursive: true, force: true });
+		await symlink(outside, join(workspace, ".agent-infra"));
+		// 平台目录中预先放置的符号链接导致拒绝，平台目录之外不受影响。
+		await expect(
+			driver.execute(
+				{
+					...attachmentCommand,
+					input: { text: "inspect", attachments: ["file-txt"] },
+				},
+				{ fileBridge: claudeAttachmentBridge() },
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		expect(await readdir(outside)).toEqual([]);
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });
