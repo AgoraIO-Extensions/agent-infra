@@ -13899,6 +13899,8 @@ describe("Codex structured Skill input", () => {
 		["parent traversal", { path: "notes/../proof.txt" }],
 		["extra argument", { path: "proof.txt", encoding: "utf8" }],
 		["non-string path", { path: 7 }],
+		["null arguments", null],
+		["string arguments", "proof.txt"],
 	] as const)(
 		"answers a workspace read with rejected model arguments as a tool failure: %s",
 		async (_case, args) => {
