@@ -1,6 +1,7 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
-// 同页同名控件检查（#3040 AC-2）；控制台错误与横向溢出用 primitive-styles 的 expectCleanPage。
+// 同页同名控件检查（#3040 AC-2）与动作后的焦点采样（#3235）；控制台错误与横向溢出用
+// primitive-styles 的 expectCleanPage。
 
 const controlRoles = [
 	"button",
@@ -34,4 +35,36 @@ export async function expectNoDuplicateControls(page: Page, context: string) {
 	}
 	const duplicates = [...counts].filter(([, count]) => count > 1);
 	expect(duplicates, `${context} 同名控件`).toEqual([]);
+}
+
+/**
+ * 动作后的焦点采样（D2-59、#3235 I6-01）：从调用时刻起，在每个延时（ms）读取一次
+ * document.activeElement。是 target 本身记为 "target"，落到 body 记为 "body"，其余记为
+ * 「标签:名称」，失败信息能直接看出焦点去了哪里。target 换成新元素也算失败。
+ */
+export async function expectFocusHeld(
+	target: Locator,
+	delays: readonly number[],
+	context: string,
+) {
+	const samples = await target.evaluate(async (element, delays) => {
+		const start = performance.now();
+		const result: string[] = [];
+		for (const delay of delays) {
+			const wait = start + delay - performance.now();
+			if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+			const active = document.activeElement;
+			result.push(
+				active === element
+					? "target"
+					: !active || active === document.body
+						? "body"
+						: `${active.tagName.toLowerCase()}:${active.getAttribute("aria-label") ?? active.textContent?.trim() ?? ""}`,
+			);
+		}
+		return result;
+	}, delays);
+	expect(samples, `${context} 焦点采样（${delays.join(" / ")}ms）`).toEqual(
+		delays.map(() => "target"),
+	);
 }

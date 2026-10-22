@@ -9,7 +9,10 @@ import {
 	X,
 } from "lucide-react";
 import {
+	type ComponentProps,
 	type FormEvent,
+	type RefObject,
+	useEffect,
 	useId,
 	useLayoutEffect,
 	useRef,
@@ -88,6 +91,39 @@ const moreFilterNames = [
 ] as const;
 type FilterName = keyof AuditFilters;
 
+/**
+ * 详情区域内的重读按钮（「刷新审计详情」「重试详情」）。重读失败或恢复后按钮随内容卸载、
+ * 焦点已落到 body 时，把焦点交给详情区域：Escape 由区域的 onKeyDown 处理，仍能关闭详情（D2-59）。
+ * 详情区域同时卸载（关闭详情、权限撤销）时 ref 已清空，不移动焦点。
+ */
+function AuditDetailReadButton({
+	panel,
+	onRead,
+	...props
+}: Omit<ComponentProps<typeof Button>, "onClick"> & {
+	panel: RefObject<HTMLElement | null>;
+	onRead: () => void;
+}) {
+	const armed = useRef(false);
+	useEffect(
+		() => () => {
+			if (!armed.current) return;
+			const active = document.activeElement;
+			if (!active || active === document.body) panel.current?.focus();
+		},
+		[panel],
+	);
+	return (
+		<Button
+			{...props}
+			onClick={() => {
+				armed.current = true;
+				onRead();
+			}}
+		/>
+	);
+}
+
 function AuditScreen({ scope }: { scope: AuditScope }) {
 	const { identityKey, session } = useApplicationSession();
 	const [filters, setFilters] = useState<AuditFilters>({});
@@ -121,6 +157,8 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 	const query = useAuditQuery({ identityKey, scope, filters, auditId });
 	const busy = query.status === "loading" || query.isFetching;
 	const denied = query.status === "denied";
+	const detailReading =
+		query.detailStatus === "loading" || query.isDetailFetching || busy;
 	const items = busy || formFailure ? [] : query.items;
 	const administrator = scope === "administrator";
 	// 列表与详情中的用户主体合并读取一次目录；后台组件与应用主体不是目录记录。
@@ -216,12 +254,14 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 							: "只显示当前账号的记录；长标识可以展开查看。"}
 					</p>
 				</div>
+				{/* 读取中保持可聚焦（aria-disabled），焦点留在按钮上，不落到 body（D2-59）。 */}
 				<Button
 					variant="ghost"
 					size="icon"
 					aria-label="刷新审计记录"
 					title="刷新审计记录"
 					disabled={busy || denied}
+					focusableWhenDisabled
 					onClick={() => {
 						setFormFailure(null);
 						void query.refresh();
@@ -571,36 +611,47 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 								审计详情读取失败，请稍后重试。
 							</AlertDescription>
 							<AlertAction>
-								<Button
+								<AuditDetailReadButton
 									variant="outline"
-									onClick={() => void query.retryDetail()}
+									panel={detailPanel}
+									onRead={() => void query.retryDetail()}
 								>
 									重试详情
-								</Button>
+								</AuditDetailReadButton>
 							</AlertAction>
 						</Alert>
-					) : query.detailStatus === "loading" ||
-						query.isDetailFetching ||
-						busy ? (
-						<LoadingLine>正在读取审计详情…</LoadingLine>
 					) : query.detail ? (
 						<>
+							{/* 重读期间刷新按钮留在原处并保持可聚焦（aria-disabled），焦点不离开详情区域，
+							    Escape 仍能关闭详情；只把下方内容换成读取提示（D2-59）。 */}
 							<div className="mb-4 flex justify-end">
-								<Button
+								<AuditDetailReadButton
 									variant="ghost"
 									size="icon"
 									aria-label="刷新审计详情"
 									title="刷新审计详情"
-									onClick={() => void query.retryDetail()}
+									disabled={detailReading}
+									focusableWhenDisabled
+									panel={detailPanel}
+									onRead={() => void query.retryDetail()}
 								>
 									<RefreshCw aria-hidden="true" />
-								</Button>
+								</AuditDetailReadButton>
 							</div>
-							<AuditRecordDetail record={query.detail} names={userNames} />
-							<p className="page-note">
-								只展示可审计元数据；不返回会话正文、Secret 值或模型内部思考。
-							</p>
+							{detailReading ? (
+								<LoadingLine>正在读取审计详情…</LoadingLine>
+							) : (
+								<>
+									<AuditRecordDetail record={query.detail} names={userNames} />
+									<p className="page-note">
+										只展示可审计元数据；不返回会话正文、Secret
+										值或模型内部思考。
+									</p>
+								</>
+							)}
 						</>
+					) : detailReading ? (
+						<LoadingLine>正在读取审计详情…</LoadingLine>
 					) : null}
 				</section>
 			)}

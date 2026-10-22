@@ -5,6 +5,7 @@ import {
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { recordApiRequests } from "./generated-client-paths";
+import { expectFocusHeld } from "./page-health";
 import {
 	computed,
 	expectCleanPage,
@@ -557,6 +558,69 @@ test("unavailable uses the shared state card and retry returns focus as the read
 	).toBeFocused();
 	expect(api.writes()).toEqual([]);
 });
+
+// #3235 I6-01：页头「刷新运维状态」读取中为可聚焦的禁用（aria-disabled），键盘与点击触发后焦点
+// 在读取中、读取后都留在按钮上；读取失败、刷新随之收起时焦点移到 h1，不落到 body（D2-59）。
+for (const mode of ["keyboard", "click"] as const) {
+	test(`page-head refresh keeps focus on the button while and after reading (${mode}, I6-01)`, async ({
+		page,
+	}, info) => {
+		const mobile = info.project.name === "mobile";
+		await page.setViewportSize(
+			mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+		);
+		const pageErrors = trackPageErrors(page);
+		const api = await fixture(page);
+		await page.goto("/ops");
+		const main = page.locator("main");
+		await expect(main.locator('[data-slot="card"]')).toHaveCount(4);
+		const refresh = main
+			.locator("header.page-heading")
+			.getByRole("button", { name: "刷新运维状态" });
+		const trigger = async () => {
+			if (mode === "keyboard") {
+				await refresh.focus();
+				await page.keyboard.press("Enter");
+			} else {
+				// 先把焦点放到 h1，确认是点击本身把焦点交给按钮。
+				await main.getByRole("heading", { level: 1 }).focus();
+				await refresh.click();
+			}
+		};
+		api.pause();
+		await trigger();
+		await expect(main.locator('[data-slot="loading-line"]')).toBeVisible();
+		await expect(refresh).toHaveAttribute("aria-disabled", "true");
+		expect(
+			await refresh.evaluate((node) => (node as HTMLButtonElement).disabled),
+		).toBe(false);
+		await expectFocusHeld(refresh, [50, 300], `${mode} 读取中`);
+		// 读取中再按 Enter 被忽略，不发出第二次读取。
+		await page.keyboard.press("Enter");
+		api.resume();
+		await expect(main.locator('[data-slot="card"]')).toHaveCount(4);
+		await expect(refresh).toBeEnabled();
+		await expectFocusHeld(refresh, [50, 300, 1000, 1500], `${mode} 读取后`);
+		expect(api.observabilityReads()).toBe(2);
+		await expectNoHorizontalOverflow(page);
+		await expectCleanPage(page, pageErrors);
+
+		// 读取失败：页头刷新收起、只剩失败卡的重试，焦点移到 h1。
+		api.reply({ status: 503 });
+		await trigger();
+		await expect(main.getByRole("alert")).toHaveAttribute(
+			"data-kind",
+			"unavailable",
+		);
+		const heading = main.getByRole("heading", {
+			level: 1,
+			name: "先确认平台状态，再定位故障。",
+		});
+		await expect(heading).toBeFocused();
+		await expectFocusHeld(heading, [50, 300, 1000], `${mode} 读取失败后`);
+		expect(api.writes()).toEqual([]);
+	});
+}
 
 test("a non-administrator sees the unauthorized card and never requests observability", async ({
 	page,
