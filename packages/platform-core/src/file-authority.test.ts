@@ -7,6 +7,7 @@ import {
 	type FileLimitsV1,
 	type FileRecordV1,
 	type FileScopeV1,
+	isConfirmedResultFileV1,
 	nativeTextInputLimitV1,
 	resolveNativeTextInputsV1,
 } from "./file-authority.ts";
