@@ -913,7 +913,7 @@ describe("functional conversation screen", () => {
 				.disabled,
 		).toBe(false);
 		const limits = requests.filter((request) =>
-			new URL(request.url).pathname.endsWith("/files/limits"),
+			new URL(request.url).pathname.endsWith("/file-limits"),
 		);
 		expect(limits).toHaveLength(1);
 		expect(limits[0]?.method).toBe("GET");
