@@ -52,7 +52,7 @@ FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca92
 ARG SOURCE_COMMIT=unknown
 ARG SOURCE_DATE_EPOCH=0
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
-LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"platform-adapter","protocol":"acp","service":{"port":3003},"health":{"path":"/healthz"}}'
+LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"platform-adapter","protocol":"acp","service":{"port":3003},"health":{"path":"/healthz"},"capabilities":{"modelSelection":true,"attachments":true,"resultFiles":true,"connection":false,"supplementaryInstruction":false}}'
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates util-linux tini ripgrep \
 	&& rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache \
 	&& npm install --global npm@11.19.1 --logs-max=0 \
