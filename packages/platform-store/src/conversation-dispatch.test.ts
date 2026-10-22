@@ -8488,6 +8488,47 @@ describe("unsent first dispatch returned to waiting (#3173)", () => {
 		},
 	);
 
+	it.each(["dispatch", "deadline"] as const)(
+		"settles a returned waiting Task that continues an existing Host Session (%s)",
+		async (mode) => {
+			const work = await waitingTask();
+			// 续接已有会话：pin 在发送前就记录了会话当前的 Host 会话。
+			await client`update platform.conversations set host_session_ref = 'host-existing' where id = ${work.conversationId}`;
+			const store = openTaskStore();
+			try {
+				const first = await claimTask(store, work.itemId, "first-worker");
+				if (first.outcome !== "claimed")
+					throw new Error("Expected waiting claim");
+				expect(first.claim.hostSessionRef).toBe("host-existing");
+				expect(
+					await store.prepareRuntimeDispatch({
+						claim: first.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				expect((await taskState(work))?.original_submit_host_session_ref).toBe(
+					"host-existing",
+				);
+				await releaseUnsent(store, first.claim);
+				if (mode === "dispatch") {
+					const next = await claimTask(store, work.itemId, "second-worker");
+					expect(next.outcome).toBe("claimed");
+				} else {
+					await client`update platform.conversation_executions set created_at=clock_timestamp()-interval '2 minutes', task_wait_deadline=clock_timestamp()-interval '1 minute' where execution_id=${work.executionId}`;
+					expect(
+						await claimTask(store, work.itemId, "deadline-worker"),
+					).toEqual({ outcome: "failed" });
+					expect(await taskState(work)).toMatchObject({
+						status: "failed",
+						failure_code: "TASK_WAIT_TIMEOUT",
+					});
+				}
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
 	it.each([
 		"original_submit_host_session_ref",
 		"last_runtime_cursor",

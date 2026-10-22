@@ -500,12 +500,19 @@ async function insertPlatformExecutionStatus(
  *   位置（HLD §8.4）。pin 继续作为下一次尝试的原操作（#1522），本身不表示请求已发出（#3173）。
  * 这里选择接受后一种形态，而不是在退回时清除 pin：清除后下一次投递会从可变的消息/附件
  * 重建摘要，与 #1522 让 pin 保持权威的约束相冲突。
- * 带原始提交 Host 会话、已受理原操作 Host 或 Runtime 游标的执行可能已经到达 Runtime，
- * 仍不在本地收敛。
+ * 续接已有 Host 会话时，pin 在发送前就记录了目标 Host 会话（等于会话当前的
+ * host_session_ref），这只说明请求将发往哪里，不说明已经发出。
+ * 已受理原操作 Host、Runtime 游标，或目标 Host 会话与会话当前引用不一致的执行，
+ * 可能已经到达 Runtime，仍不在本地收敛。
  */
-function waitingExecutionUnsent(execution: ExecutionRow) {
+function waitingExecutionUnsent(
+	execution: ExecutionRow,
+	conversation: ConversationRow,
+) {
 	if (
-		execution.original_submit_host_session_ref !== null ||
+		(execution.original_submit_host_session_ref !== null &&
+			execution.original_submit_host_session_ref !==
+				conversation.host_session_ref) ||
 		execution.accepted_original_host_session_ref !== null ||
 		execution.last_runtime_cursor !== null
 	)
@@ -536,7 +543,7 @@ export function bindingMatches(
 			safeCounter(execution.delivery_fence) === undefined ||
 			safeCounter(execution.delivery_fence) !==
 				safeCounter(outbox.delivery_fence) ||
-			!waitingExecutionUnsent(execution) ||
+			!waitingExecutionUnsent(execution, conversation) ||
 			outbox.operation !== "conversation.turn.submit.v1" ||
 			payload.metadataRecovery !== undefined ||
 			payload.turnId !== execution.turn_id)
