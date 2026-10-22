@@ -13,7 +13,7 @@ import {
 const maximumProfileBytes = 8192;
 
 export type RuntimeConnectionConsumerProfile =
-	| ApprovedConnectionConsumerTargetV1
+	| (ApprovedConnectionConsumerTargetV1 & { readonly oauthClientId?: string })
 	| Extract<ApprovedConnectionConsumerProfileV1, { status: "unavailable" }>;
 
 function invalidProfile(): RuntimeConnectionConsumerProfile {
@@ -71,10 +71,25 @@ export async function readRuntimeConnectionConsumerProfile(
 				!input ||
 				typeof input !== "object" ||
 				Array.isArray(input) ||
-				Object.keys(input).sort().join(",") !== "approval,profile"
+				!["approval,profile", "approval,oauthClientBinding,profile"].includes(
+					Object.keys(input).sort().join(","),
+				)
 			)
 				throw new Error();
-			const snapshot = input as { profile: unknown; approval: unknown };
+			const snapshot = input as {
+				profile: unknown;
+				approval: unknown;
+				oauthClientBinding?: unknown;
+			};
+			if (
+				snapshot.oauthClientBinding !== undefined &&
+				(!snapshot.oauthClientBinding ||
+					typeof snapshot.oauthClientBinding !== "object" ||
+					Array.isArray(snapshot.oauthClientBinding) ||
+					Object.keys(snapshot.oauthClientBinding).sort().join(",") !==
+						"clientId,profileFingerprint,source")
+			)
+				return invalidProfile();
 			const approved = resolveApprovedConnectionConsumerProfileV1(
 				snapshot.profile,
 				snapshot.approval,
@@ -92,6 +107,23 @@ export async function readRuntimeConnectionConsumerProfile(
 			const target = {
 				...approved,
 				url: approved.profile.publicOrigin + approved.profile.mcpPath,
+				...(snapshot.oauthClientBinding === undefined
+					? {}
+					: (() => {
+							const binding = snapshot.oauthClientBinding as Record<
+								string,
+								unknown
+							>;
+							if (
+								typeof binding.clientId !== "string" ||
+								!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(binding.clientId) ||
+								binding.profileFingerprint !== approved.configFingerprint ||
+								JSON.stringify(binding.source) !==
+									JSON.stringify(approved.source)
+							)
+								throw new Error();
+							return { oauthClientId: binding.clientId };
+						})()),
 			};
 			if (
 				Buffer.byteLength(JSON.stringify(target), "utf8") > maximumProfileBytes

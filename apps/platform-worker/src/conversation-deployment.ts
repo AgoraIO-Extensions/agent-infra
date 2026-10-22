@@ -51,6 +51,9 @@ import {
 import { validateWorkloadRuntimeAuthV1 } from "./workload-runtime-auth.js";
 
 type ConnectionConsumerTargetV1 = ApprovedConnectionConsumerTargetV1;
+type ConnectionConsumerRuntimeTargetV1 = ConnectionConsumerTargetV1 & {
+	readonly oauthClientId?: string;
+};
 
 function approvedConnectionConsumerTarget(
 	profile: unknown,
@@ -90,7 +93,14 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionConsumerApproval?: unknown;
 	readonly connectionConsumerProfilesByAgent?: Readonly<
-		Record<string, { readonly profile: unknown; readonly approval: unknown }>
+		Record<
+			string,
+			{
+				readonly profile: unknown;
+				readonly approval: unknown;
+				readonly oauthClientBinding?: unknown;
+			}
+		>
 	>;
 	readonly requireConnectionConsumerProfile?: boolean;
 }): ConversationRuntimeOptionsV2["resolveRuntimeHost"] {
@@ -133,11 +143,40 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			profile = staticProfile;
 			approval = staticApproval;
 		}
-		return approvedConnectionConsumerTarget(
+		const target = approvedConnectionConsumerTarget(
 			profile,
 			approval,
 			options.requireConnectionConsumerProfile,
 		);
+		if (perAgent?.oauthClientBinding !== undefined) {
+			const binding = perAgent.oauthClientBinding;
+			if (
+				!binding ||
+				typeof binding !== "object" ||
+				Array.isArray(binding) ||
+				Object.keys(binding).sort().join(",") !==
+					"clientId,profileFingerprint,source"
+			)
+				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+			const value = binding as Record<string, unknown>;
+			const source = value.source;
+			if (
+				!target ||
+				typeof value.clientId !== "string" ||
+				!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value.clientId) ||
+				value.profileFingerprint !== target.configFingerprint ||
+				!source ||
+				typeof source !== "object" ||
+				Array.isArray(source) ||
+				JSON.stringify(source) !== JSON.stringify(target.source)
+			)
+				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+			return {
+				...target,
+				oauthClientId: value.clientId,
+			} satisfies ConnectionConsumerRuntimeTargetV1;
+		}
+		return target;
 	};
 	const auth = workload.policy?.runtimeAuth;
 	try {

@@ -23,13 +23,16 @@ describe("per-Agent Connection DCR resolver", () => {
 				ref: agentId,
 				revision: "r1",
 			}),
-			dcrClientIdIsConsumerId: true,
+			consumerIdForAgent: (agentId) =>
+				agentId === "agent-a" ? "consumer-a" : "consumer-b",
+			approvedOAuthClientIdForAgent: (agentId) =>
+				agentId === "agent-a" ? "oauth-client-a" : "oauth-client-b",
 			fetch: async (_input, init) => {
 				const body = JSON.parse(String(init?.body));
 				calls.push(body.redirect_uris[0]);
 				const clientId = body.redirect_uris[0].includes("agent-a")
-					? "consumer-a"
-					: "consumer-b";
+					? "oauth-client-a"
+					: "oauth-client-b";
 				return new Response(
 					JSON.stringify({
 						application_type: "native",
@@ -53,13 +56,19 @@ describe("per-Agent Connection DCR resolver", () => {
 		]);
 		expect(result["agent-a"]?.profile.consumerId).toBe("consumer-a");
 		expect(result["agent-b"]?.profile.consumerId).toBe("consumer-b");
+		expect(result["agent-a"]?.oauthClientBinding.clientId).toBe(
+			"oauth-client-a",
+		);
+		expect(result["agent-b"]?.oauthClientBinding.clientId).toBe(
+			"oauth-client-b",
+		);
 		expect(result["agent-a"]?.installationSupply).toEqual({
 			ref: "agent-a",
 			revision: "r1",
 		});
 	});
 
-	it("requires explicit deployment approval for client-id mapping", async () => {
+	it("requires an approved Consumer mapping for every Agent", async () => {
 		const resolve = createConnectionConsumerDcrResolverV1({
 			agentIds: ["agent-a"],
 			issuer: "https://connection.example.test/",
@@ -68,10 +77,37 @@ describe("per-Agent Connection DCR resolver", () => {
 			approvalSource: { ref: "deployment", revision: "r1" },
 			callbackUrlForAgent: () => "http://127.0.0.1:3044/callback/agent-a",
 			installationSupplyForAgent: () => ({ ref: "a", revision: "r1" }),
-			dcrClientIdIsConsumerId: false,
+			consumerIdForAgent: () => "",
+			approvedOAuthClientIdForAgent: () => "oauth-client-a",
+			fetch: async () => {
+				throw new Error("fetch must not run");
+			},
 		});
 		await expect(resolve(new AbortController().signal)).rejects.toThrow(
 			"CONNECTION_CONSUMER_PROFILE_UNAVAILABLE",
 		);
+	});
+
+	it("validates the approved OAuth client before registration", async () => {
+		let registrations = 0;
+		const resolve = createConnectionConsumerDcrResolverV1({
+			agentIds: ["agent-a"],
+			issuer: "https://connection.example.test/",
+			registrationEndpoint: "https://connection.example.test/oauth/register",
+			...profile,
+			approvalSource: { ref: "deployment", revision: "r1" },
+			callbackUrlForAgent: () => "http://127.0.0.1:3044/callback/agent-a",
+			consumerIdForAgent: () => "consumer-a",
+			approvedOAuthClientIdForAgent: () => "",
+			installationSupplyForAgent: () => ({ ref: "a", revision: "r1" }),
+			fetch: async () => {
+				registrations += 1;
+				throw new Error("unexpected registration");
+			},
+		});
+		await expect(resolve(new AbortController().signal)).rejects.toThrow(
+			"CONNECTION_CONSUMER_PROFILE_UNAVAILABLE",
+		);
+		expect(registrations).toBe(0);
 	});
 });

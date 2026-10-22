@@ -58,7 +58,11 @@ type DeploymentConfiguration = {
 	/** Deployment-owned approved profile per Agent. Missing Agent IDs fail closed. */
 	readonly connectionConsumerProfilesByAgent?: Record<
 		string,
-		{ readonly profile: unknown; readonly approval: unknown }
+		{
+			readonly profile: unknown;
+			readonly approval: unknown;
+			readonly oauthClientBinding?: unknown;
+		}
 	>;
 	/**
 	 * Deployment adapter hook for the real per-Agent Connection registration
@@ -342,10 +346,7 @@ async function createPrepared(signal: AbortSignal) {
 				Object.entries(resolvedBindings).map(([agentId, binding]) => {
 					if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
 						throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
-					return [
-						agentId,
-						{ profile: binding.profile, approval: binding.approval },
-					];
+					return [agentId, binding];
 				}),
 			)
 		: connectionConsumerProfilesByAgent;
@@ -372,6 +373,7 @@ async function createPrepared(signal: AbortSignal) {
 					createRuntimeConnectionConsumerSnapshotV1(
 						value.profile,
 						value.approval,
+						value.oauthClientBinding,
 					) ?? null,
 				]),
 			)
