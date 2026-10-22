@@ -30,6 +30,14 @@ services:
       PLATFORM_API_CONFIGURATION_MODULE: file:///app/deployment/configuration.mjs
       PLATFORM_API_PROXY_TOKEN_FILE: /run/secrets/platform_proxy_token
       PLATFORM_PUBLIC_ORIGIN: ${PLATFORM_PUBLIC_ORIGIN:-https://localhost:3001}
+      # Optional deployment-owned non-secret Connection profile. When the API
+      # module does not export one, the API validates this env projection and
+      # exposes the approved target to the Web Connection tab.
+      AGENT_INFRA_CONNECTION_PROFILE: ${AGENT_INFRA_CONNECTION_PROFILE:-}
+      AGENT_INFRA_CONNECTION_CONFIG_VERSION: ${AGENT_INFRA_CONNECTION_CONFIG_VERSION:-}
+      AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT: ${AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT:-}
+      AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF: ${AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF:-}
+      AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REVISION: ${AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REVISION:-}
       NODE_EXTRA_CA_CERTS: /run/secrets/directory_ca
       PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN: ${PLATFORM_LOCAL_NATIVE_METADATA_WORKER_ORIGIN:-}
       PLATFORM_API_NATIVE_METADATA_WORKER_SERVICE_TOKEN_FILE: /run/secrets/platform_native_metadata_worker_token
