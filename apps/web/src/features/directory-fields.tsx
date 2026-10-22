@@ -26,9 +26,12 @@ import {
 export function DirectoryRecords({
 	targets,
 	empty = "未提供范围信息",
+	layout = "list",
 }: {
 	targets: readonly DirectoryTarget[];
 	empty?: string;
+	/** list：每项一行并附组织路径；inline：一行「、」分隔的名称。 */
+	layout?: "inline" | "list";
 }) {
 	const names = useAvailabilityNames(targets);
 	return (
@@ -37,7 +40,7 @@ export function DirectoryRecords({
 			<AvailabilityNameList
 				targets={targets}
 				names={names}
-				layout="list"
+				layout={layout}
 				empty={empty}
 			/>
 		</div>

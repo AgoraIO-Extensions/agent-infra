@@ -24,6 +24,7 @@ import { createContext, type ReactNode, useContext } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClockProvider } from "@/lib/clock";
 import { createClient } from "../../pilot/generated-v2/client/index.js";
+import { agentAvailabilityStatus } from "../agent-management-status.js";
 import { pendingApplication } from "../my-agents/test-fixtures.js";
 import { useWorkbenchCollections } from "./use-workbench-collections.js";
 import {
@@ -125,6 +126,39 @@ const conversation = ConversationProjectionV1Schema.parse({
 });
 
 describe("OpenDesign workbench presentation", () => {
+	it("derives available Agent chips from the directory availability rule (G4-01)", async () => {
+		const starting = {
+			...available,
+			agentId: "starting-agent",
+			name: "启动中的助手",
+			serviceAvailability: "starting" as const,
+		};
+		await showWorkbench(
+			<WorkbenchScreen
+				{...empty}
+				agents={{ kind: "ready", agents: [available, starting, stopped] }}
+			/>,
+		);
+		const region = screen.getByRole("region", { name: "可用 Agent" });
+		// 与 /agents 卡、详情和 Owner 配置页头同一条规则（agentAvailabilityStatus）：就绪 green，
+		// 不再对可开始对话的 Agent 固定写「可用」。
+		for (const [agent, label, tone] of [
+			[available, "就绪", "green"],
+			[starting, "启动中", "amber"],
+			[stopped, "已停止", "gray"],
+		] as const) {
+			const card = within(region)
+				.getByRole("heading", { level: 3, name: agent.name })
+				.closest(".workbench-card") as HTMLElement;
+			const chip = within(card).getByText(label, {
+				selector: '[data-slot="badge"][data-variant="chip"]',
+			});
+			expect(chip.dataset.tone).toBe(tone);
+			expect(chip.dataset.tone).toBe(agentAvailabilityStatus(agent).tone);
+		}
+		expect(within(region).queryByText("可用", { exact: true })).toBeNull();
+	});
+
 	it("keeps all responsibility regions and safe empty-state navigation", async () => {
 		await showWorkbench(<WorkbenchScreen {...empty} />);
 		// W-06：页头文案按设计稿 #workbench。

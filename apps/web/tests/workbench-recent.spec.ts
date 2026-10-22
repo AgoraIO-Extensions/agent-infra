@@ -2429,3 +2429,50 @@ test.describe("workbench design alignment", () => {
 		});
 	});
 });
+
+// #3179 G4-01：工作台「可用 Agent」卡的状态 chip 与 /agents 卡、详情用同一条派生规则
+// （agentAvailabilityStatus）：可开始对话的 Agent 显示「就绪」green，不再固定写「可用」。
+test("available Agent chips use the directory availability labels and tones (G4-01)", async ({
+	page,
+}) => {
+	const errors = trackPageErrors(page);
+	await workbenchFixture(page, {
+		managementStatus: "available",
+		serviceAvailability: "starting",
+	});
+	await page.goto("/");
+	const region = page.getByRole("region", { name: "可用 Agent", exact: true });
+	const chip = (name: string) =>
+		region
+			.locator(".workbench-card")
+			.filter({
+				has: page.getByRole("heading", { level: 3, name, exact: true }),
+			})
+			.locator('.workbench-agent-top [data-slot="badge"]');
+	const expected = [
+		["受控助手 agent-b", "就绪", "green", "var(--success-ink)"],
+		["受控助手 agent-a", "启动中", "amber", "var(--warning-ink)"],
+	] as const;
+	for (const [name, label, tone, color] of expected) {
+		await expect(chip(name)).toHaveText(label);
+		await expect(chip(name)).toHaveAttribute("data-tone", tone);
+		await expect(chip(name)).toHaveCSS(
+			"color",
+			await resolvedColor(page, color),
+		);
+	}
+	await expect(region.getByText("可用", { exact: true })).toHaveCount(0);
+	// 同一 Agent 在 /agents 目录卡上是同一个 chip。
+	await region.getByRole("link", { name: "查看目录", exact: true }).click();
+	await expect(page).toHaveURL(/\/agents$/);
+	for (const [name, label, tone] of expected) {
+		const directoryChip = page
+			.locator(".agent-list > li")
+			.filter({ has: page.getByRole("heading", { name, exact: true }) })
+			.locator('[data-slot="badge"][data-variant="chip"]');
+		await expect(directoryChip).toHaveText([label]);
+		await expect(directoryChip).toHaveAttribute("data-tone", tone);
+	}
+	expect(await duplicateControlNames(page)).toEqual([]);
+	await expectCleanPage(page, errors);
+});

@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, Settings2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Settings } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -225,7 +225,8 @@ export function MyAgentApplicationDetailScreen({
 								params={{ applicationId: application.applicationId }}
 								to="/my-agents/$applicationId/edit"
 							>
-								<Settings2 aria-hidden="true" data-icon="inline-start" />
+								{/* 设计 icon('settings') 齿轮，与企微「改用手动配置」一致（G4-10）。 */}
+								<Settings aria-hidden="true" data-icon="inline-start" />
 								{agentApplicationEditActionLabels[editAction]}
 							</Link>
 						) : null}
@@ -328,7 +329,8 @@ export function MyAgentApplicationDetailScreen({
 							{application.source.kind === "custom" ? (
 								<>
 									<dt>镜像地址</dt>
-									<dd>
+									{/* 设计 dd.mono：镜像引用等宽（G4-15，同 Owner 配置的镜像引用）；按字符折行沿 .metadata-facts dd。 */}
+									<dd className="font-mono">
 										{agentSourceReferenceLabel(application, templateName)}
 									</dd>
 								</>
@@ -352,8 +354,10 @@ export function MyAgentApplicationDetailScreen({
 							</dd>
 							<dt>使用范围</dt>
 							<dd>
+								{/* 设计只写名称，与 Owner 行一样是一行「、」分隔的名称，不列组织路径（G4-16）。 */}
 								<DirectoryRecords
 									targets={configuration.availability}
+									layout="inline"
 									empty="未额外指定"
 								/>
 							</dd>

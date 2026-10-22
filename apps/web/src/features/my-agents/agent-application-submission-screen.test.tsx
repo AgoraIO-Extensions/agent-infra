@@ -1,12 +1,37 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { ToastProvider } from "@/components/ui/toast";
 
 import { AgentApplicationSubmissionScreen as AgentApplicationSubmissionScreenView } from "./agent-application-submission-screen.js";
 import {
 	deploymentConfiguration,
 	pendingApplication,
 } from "./test-fixtures.js";
-import { renderWithMyAgentsRouter } from "./test-router.js";
+import { renderWithMyAgentsRouter as renderInRouter } from "./test-router.js";
+
+// 提交结果用 Toast 补充确认（G4-14）：与根布局一样包一层 Toast 宿主。
+function renderWithMyAgentsRouter(content: ReactNode) {
+	return renderInRouter(<ToastProvider>{content}</ToastProvider>);
+}
+
+/** 页内提交结果获得焦点（读屏读出），Toast 是唯一的 live 播报（G4-14）。 */
+async function expectSubmittedFeedback() {
+	const notice = screen
+		.getByText("申请已提交：待审批。")
+		.closest('[data-slot="alert"]');
+	await waitFor(() => expect(document.activeElement).toBe(notice));
+	expect(notice?.getAttribute("role")).toBeNull();
+	const toast = document.querySelector('[data-slot="toast"]');
+	await waitFor(() =>
+		expect(toast?.textContent).toBe("申请已提交，已进入系统管理员审批队列"),
+	);
+	expect(
+		screen
+			.getAllByRole("status")
+			.filter((node) => node.textContent?.includes("申请已提交")),
+	).toEqual([toast]);
+}
 
 const rejectedApplication = {
 	...pendingApplication,
@@ -73,7 +98,7 @@ describe("AgentApplicationSubmissionScreen", () => {
 		);
 
 		expect(screen.getByRole("heading", { name: "申请已提交" })).toBeTruthy();
-		expect(screen.getByRole("status").textContent).toBe("申请已提交：待审批。");
+		await expectSubmittedFeedback();
 		expect(
 			screen.getByRole("link", { name: "查看申请详情" }).getAttribute("href"),
 		).toBe("/my-agents/application%3Atenant%2F01%3Fdraft%23one%25");
@@ -267,7 +292,7 @@ describe("AgentApplicationSubmissionScreen", () => {
 				submitting={false}
 			/>,
 		);
-		expect(screen.getByRole("status").textContent).toBe("申请已提交：待审批。");
+		await expectSubmittedFeedback();
 		expect(
 			screen.getByRole("link", { name: "查看申请详情" }).getAttribute("href"),
 		).toBe("/my-agents/application%3Atenant%2F01%3Fdraft%23one%25");

@@ -288,12 +288,15 @@ export function AvailabilityNameList({
 	names,
 	layout = "inline",
 	identifier = false,
+	separator = "、",
 	empty,
 }: {
 	targets: readonly DirectoryTarget[];
 	names: AvailabilityNames;
 	layout?: "inline" | "list";
 	identifier?: boolean;
+	/** 行内名称之间的分隔符；默认顿号。 */
+	separator?: string;
 	empty: string;
 }) {
 	if (!targets.length) return <>{empty}</>;
@@ -316,7 +319,7 @@ export function AvailabilityNameList({
 		<span className="directory-name-list">
 			{targets.map((target, index) => (
 				<span key={`${target.kind}:${targetId(target)}`}>
-					{index ? "、" : null}
+					{index ? separator : null}
 					<DirectoryNameText
 						name={names.resolve(target)}
 						status={names.status}

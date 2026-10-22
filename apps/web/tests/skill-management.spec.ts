@@ -1508,3 +1508,37 @@ test("employees see no Skill review entry and a no-permission page on deep links
 		control.reads.filter((path) => path.startsWith("/api/v2/skills/reviews/")),
 	).toEqual([]);
 });
+
+// #3179 G4-25：配套文件卡（fieldset.skill-content-file）卡顶边到首行字段标签「目录 / 文件名」12px
+// （设计 .skill-content-file .form-grid{margin-top:12px}），两个视口一致。
+test("a companion file card starts its first field row 12px below the card edge (G4-25)", async ({
+	page,
+}, info) => {
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/skills/manage/new?project=release-notes");
+	const main = page.locator("#main-content");
+	await expect(
+		main.getByRole("heading", { level: 2, name: "Skill 内容" }),
+	).toBeVisible();
+	await designViewport(page, info.project.name === "mobile");
+	await main.getByRole("button", { name: "添加文本文件" }).click();
+	await expect(main.getByLabel("文件名")).toBeFocused();
+	const card = main.locator("fieldset.skill-content-file").first();
+	const [cardBox, directoryLabel, nameLabel] = await Promise.all([
+		card.boundingBox(),
+		card.getByText("目录", { exact: true }).boundingBox(),
+		card.getByText("文件名", { exact: true }).boundingBox(),
+	]);
+	if (!cardBox || !directoryLabel || !nameLabel)
+		throw new Error("Missing file card geometry");
+	const borderTop = await card.evaluate((element) =>
+		Number.parseFloat(getComputedStyle(element).borderTopWidth),
+	);
+	const firstRow = Math.min(directoryLabel.y, nameLabel.y);
+	expect(Math.abs(firstRow - (cardBox.y + borderTop) - 12)).toBeLessThanOrEqual(
+		0.5,
+	);
+	await expectNoDuplicateControls(page, "创建与发布（配套文件，G4-25）");
+	await expectCleanPage(page, errors);
+});

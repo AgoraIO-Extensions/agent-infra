@@ -367,8 +367,9 @@ export function ConversationMessages({
 				isTerminal(message.status) ? undefined : message.status,
 			);
 		}
+		// 提问与回复的间距由 .chat-layout .exchange 给出，与轮次之间等距（设计 .messages gap，G4-03）。
 		return (
-			<div className="exchange space-y-6" key={message.messageId}>
+			<div className="exchange" key={message.messageId}>
 				<MessageFrame
 					name={userName}
 					user

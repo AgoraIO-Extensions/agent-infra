@@ -50,6 +50,13 @@ function toastHost(page: Page) {
 	return page.locator('[data-slot="toast"]');
 }
 
+/** 申请提交结果：页内提示获得焦点由读屏读出，不再设 role="status"；补充确认只由 Toast 播报（G4-14）。 */
+function submissionResult(page: Page) {
+	return page
+		.locator('#main-content [data-slot="alert"]')
+		.filter({ hasText: /^申请已提交：/ });
+}
+
 const deploymentConfiguration: DeploymentConfigurationProjectionV2 = {
 	modelCatalog: {
 		endpoints: [
@@ -943,15 +950,21 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	expect(api.commands[0]?.key).toMatch(/^[0-9a-f-]{36}$/);
 	await capture(page, info, "application-pending");
 	api.release();
-	await expect(pageStatus(page)).toBeFocused();
+	await expect(submissionResult(page)).toBeFocused();
+	// G4-14：设计提交后另有 Toast「申请已提交，已进入系统管理员审批队列」；页内提示不再是 live region，
+	// 主内容里没有第二个播报提交结果的 status。
+	await expect(toastHost(page)).toHaveText(
+		"申请已提交，已进入系统管理员审批队列",
+	);
+	await expect(pageStatus(page)).toHaveCount(0);
 	// W-08：设计 .notice p 为常规字重，提交结果不再加粗。
-	await expect(pageStatus(page)).toHaveCSS("font-weight", "400");
+	await expect(submissionResult(page)).toHaveCSS("font-weight", "400");
 	// B2-02：提交结果提示紧贴卡片内边距（上外边距 0），与下方操作相距 .card-actions 的 16px。
-	await expect(pageStatus(page)).toHaveCSS("margin-top", "0px");
+	await expect(submissionResult(page)).toHaveCSS("margin-top", "0px");
 	const resultCard = page.locator("main .application-form-card");
 	const [cardBox, statusBox, actionsBox] = await Promise.all([
 		resultCard.boundingBox(),
-		pageStatus(page).boundingBox(),
+		submissionResult(page).boundingBox(),
 		resultCard.locator(".application-submitted-actions").boundingBox(),
 	]);
 	const cardInset = await resultCard.evaluate((element) => {
@@ -994,7 +1007,7 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 		.getByLabel("用途说明", { exact: true })
 		.fill("Updated release workflow");
 	await page.getByRole("button", { name: "修改申请", exact: true }).click();
-	await expect(pageStatus(page)).toContainText("申请已提交");
+	await expect(submissionResult(page)).toContainText("申请已提交");
 	api.rejectApplication();
 	await page.goto("/my-agents/application-browser-1/edit");
 	await expect(page.getByText("退出创建", { exact: true })).toHaveCount(0);
@@ -1007,7 +1020,11 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await page
 		.getByRole("button", { name: "修改并重新提交", exact: true })
 		.click();
-	await expect(pageStatus(page)).toContainText("待审批");
+	await expect(submissionResult(page)).toContainText("待审批");
+	// G4-14：修改并重新提交同样用 Toast 补充确认。
+	await expect(toastHost(page)).toHaveText(
+		"申请已提交，已进入系统管理员审批队列",
+	);
 	await page.getByRole("link", { name: "查看申请" }).click();
 	const withdraw = page.getByRole("button", { name: "撤回申请" });
 	api.rejectNextWithdrawal();
@@ -1073,7 +1090,7 @@ test("directory search and transient submission recover on desktop and mobile", 
 	await page.getByLabel("替换值").fill("synthetic-retry-value");
 	await submit.focus();
 	await page.keyboard.press("Enter");
-	await expect(pageStatus(page)).toBeFocused();
+	await expect(submissionResult(page)).toBeFocused();
 	expect(api.commands).toHaveLength(2);
 	expect(api.commands[1]?.body).toMatchObject({
 		name: "中文发布 Agent",
@@ -1128,7 +1145,7 @@ test("a missing platform identity entry is explained at the identity field and t
 	).toHaveCount(0);
 	await expect(identity).not.toHaveAttribute("aria-invalid", "true");
 	await submit.click();
-	await expect(pageStatus(page)).toBeFocused();
+	await expect(submissionResult(page)).toBeFocused();
 	expect(api.commands).toHaveLength(2);
 	expect(api.commands[1]?.body).toMatchObject({
 		source: {
@@ -1339,7 +1356,7 @@ test("administrator rejection, approval, empty queue and pending controls", asyn
 	await page
 		.getByRole("button", { name: "修改并重新提交", exact: true })
 		.click();
-	await expect(pageStatus(page)).toBeVisible();
+	await expect(submissionResult(page)).toBeVisible();
 	await page.goto("/admin/approvals");
 	await page.getByRole("button", { name: /^审阅：/ }).click();
 	await page.getByRole("button", { name: "批准申请" }).click();
@@ -6179,6 +6196,38 @@ test.describe("Agent detail design alignment", () => {
 				.filter({ hasText: /^渠道$/ })
 				.locator("xpath=following-sibling::dd[1]"),
 		).toHaveText("Web · 企微机器人");
+		// #3179 G4-02：事实列表 13px / 21.45px（设计 .facts 行高沿正文 1.65），h2 下 15px；≤767 单列
+		// dt 上距 8px、dd 下距 4px：h2 底到首个 dt 23px，dd 到下一 dt 15px。
+		const facts = about.locator("dl").first();
+		await expect(facts.locator("dt").first()).toHaveCSS("font-size", "13px");
+		await expect(facts.locator("dt").first()).toHaveCSS(
+			"line-height",
+			"21.45px",
+		);
+		await expect(facts.locator("dd").first()).toHaveCSS(
+			"line-height",
+			"21.45px",
+		);
+		const [aboutHeading, firstTerm, firstDetail, secondTerm] =
+			await Promise.all([
+				about.getByRole("heading", { level: 2 }).boundingBox(),
+				facts.locator("dt").first().boundingBox(),
+				facts.locator("dd").first().boundingBox(),
+				facts.locator("dt").nth(1).boundingBox(),
+			]);
+		if (!aboutHeading || !firstTerm || !firstDetail || !secondTerm)
+			throw new Error("Expected facts geometry");
+		expect(
+			Math.abs(
+				firstTerm.y -
+					(aboutHeading.y + aboutHeading.height) -
+					(mobile ? 23 : 15),
+			),
+		).toBeLessThanOrEqual(0.5);
+		if (mobile)
+			expect(
+				Math.abs(secondTerm.y - (firstDetail.y + firstDetail.height) - 15),
+			).toBeLessThanOrEqual(0.5);
 		// Y-17：页头副标题 14px / 23.1px（设计 .page-head-copy p）。
 		const subtitle = page.locator(
 			"main .page-heading .agent-detail-heading h1 + p",

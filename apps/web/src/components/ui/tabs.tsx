@@ -22,12 +22,13 @@ function Tabs({
 }
 
 // 设计稿只有一种 Tab 样式（.tabs / .tab）：下划线标签，底边 1px 分隔线。
+// 不设 items-center：同行 Tab 按默认 stretch 等高，选中下划线贴在分隔线上（G4-09）。
 function TabsList({ className, ...props }: TabsPrimitive.List.Props) {
 	return (
 		<TabsPrimitive.List
 			data-slot="tabs-list"
 			className={cn(
-				"group/tabs-list mb-5 flex w-full max-w-full flex-wrap items-center gap-1 border-border border-b group-data-[orientation=vertical]/tabs:w-fit group-data-[orientation=vertical]/tabs:flex-col group-data-[orientation=vertical]/tabs:border-b-0",
+				"group/tabs-list mb-5 flex w-full max-w-full flex-wrap gap-1 border-border border-b group-data-[orientation=vertical]/tabs:w-fit group-data-[orientation=vertical]/tabs:flex-col group-data-[orientation=vertical]/tabs:border-b-0",
 				className,
 			)}
 			{...props}
@@ -36,13 +37,14 @@ function TabsList({ className, ...props }: TabsPrimitive.List.Props) {
 }
 
 // 选中与未选中同为 13px / 650；选中下划线为 --accent-ink，悬停文字变前景色。
+// 文字与计数 chip 之间 0.25em，与设计的一个空格等宽（G4-09）。
 // 焦点环走全局 :focus-visible（2px、offset 3px），不再叠加 1px outline 与 ring；过渡不含 outline。
 function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
 	return (
 		<TabsPrimitive.Tab
 			data-slot="tabs-trigger"
 			className={cn(
-				"relative mr-[18px] inline-flex min-h-11 min-w-0 flex-none cursor-pointer items-center justify-center gap-1.5 whitespace-normal border-0 border-transparent border-b-2 bg-transparent px-[2px] py-[9px] font-[650] text-[13px] text-muted-foreground leading-[1.65] transition-[color,background-color,border-color] [overflow-wrap:anywhere] hover:text-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-selected:border-b-[var(--accent-ink)] aria-selected:text-foreground [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+				"relative mr-[18px] inline-flex min-h-11 min-w-0 flex-none cursor-pointer items-center justify-center gap-[0.25em] whitespace-normal border-0 border-transparent border-b-2 bg-transparent px-[2px] py-[9px] font-[650] text-[13px] text-muted-foreground leading-[1.65] transition-[color,background-color,border-color] [overflow-wrap:anywhere] hover:text-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-selected:border-b-[var(--accent-ink)] aria-selected:text-foreground [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
 				className,
 			)}
 			{...props}

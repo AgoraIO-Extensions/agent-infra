@@ -1918,3 +1918,214 @@ for (const mode of ["click", "keyboard"] as const)
 		});
 		await expectCleanPage(page, pageErrors);
 	});
+
+// #3179 G4-17：「Agent 默认 Relay Key」区头的「已设置」chip 在两个视口都留在 h2 右侧、与 h2 顶对齐，
+// 不折到说明下方；X-06 的「管理 Skill 绑定」仍在窄屏换到说明下方。
+test("the default Relay Key chip stays beside its heading at both viewports (G4-17)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	await viewport(page, mobile);
+	const pageErrors = trackPageErrors(page);
+	await ownerConfigFixture(page, { keySet: true });
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const section = page.locator('[data-od-id="owner-default-relay-key"]');
+	const head = section.locator(".configuration-section-head");
+	const chip = head.locator(':scope > [data-slot="badge"]');
+	await expect(chip).toHaveText("已设置");
+	const [title, description, chipBox] = await Promise.all([
+		head.locator("h2").boundingBox(),
+		head.locator('[data-slot="form-section-description"]').boundingBox(),
+		chip.boundingBox(),
+	]);
+	if (!title || !description || !chipBox)
+		throw new Error("Missing section head geometry");
+	// chip 在文字列右侧；窄屏与 h2 顶对齐（设计 ≤767 .section-head{align-items:flex-start}），
+	// 桌面沿区头底对齐，都在区头第一列之外，不折到说明下方。
+	expect(chipBox.x).toBeGreaterThanOrEqual(description.x + description.width);
+	if (mobile) expect(Math.abs(chipBox.y - title.y)).toBeLessThanOrEqual(0.5);
+	else expect(chipBox.y).toBeLessThan(description.y + description.height);
+	// Skill 分区的入口按钮：窄屏在说明下方，桌面在标题右侧（X-06 不变）。
+	const skillHead = page.locator(
+		'[data-od-id="owner-skill-entry"] .configuration-section-head',
+	);
+	const [skillCopy, skillLink] = await Promise.all([
+		skillHead.locator(":scope > div").first().boundingBox(),
+		skillHead.getByRole("link", { name: "管理 Skill 绑定" }).boundingBox(),
+	]);
+	if (!skillCopy || !skillLink) throw new Error("Missing Skill head geometry");
+	if (mobile)
+		expect(skillLink.y).toBeGreaterThanOrEqual(skillCopy.y + skillCopy.height);
+	else
+		expect(skillLink.x).toBeGreaterThanOrEqual(skillCopy.x + skillCopy.width);
+	await expectNoDuplicateControls(page, "Owner 配置（G4-17）");
+	await expectCleanPage(page, pageErrors);
+});
+
+// #3179 G4-18：已停用 Agent 的配置表单整体禁用时，输入框、文本框与下拉一样只降透明度到 .5，
+// 背景仍为 --surface，不再叠加 --input 灰底。
+test("disabled inputs keep the surface background like disabled selects (G4-18)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await ownerConfigFixture(page);
+	const base = AgentProjectionV2Schema.parse(
+		pilotFakeScenariosV2.starting.response.body,
+	);
+	await page.route("**/api/v2/agents/agent-pilot-1", (route) =>
+		route.request().method() === "GET"
+			? route.fulfill({
+					json: AgentProjectionV2Schema.parse({
+						...base,
+						managementStatus: "disabled",
+						serviceAvailability: null,
+						configuration: {
+							...base.configuration,
+							environment: [{ name: "AGENT_WORKSPACE", value: "platform" }],
+						},
+					}),
+				})
+			: route.fallback(),
+	);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const form = main(page);
+	await expect(
+		form.getByText("运行资格已撤销，Owner 无法恢复。"),
+	).toBeVisible();
+	const surface = await resolved(page, "backgroundColor", "var(--surface)");
+	// 目录选择器的输入框嵌在带 --surface 底的 .directory-control 里，本身透明无边框，不在此列。
+	const controls = form.locator(
+		'input[data-slot="input"]:disabled:not(.directory-input), textarea[data-slot="textarea"]:disabled',
+	);
+	expect(await controls.count()).toBeGreaterThan(0);
+	for (const control of await controls.all())
+		expect(await computed(control, ["backgroundColor", "opacity"])).toEqual({
+			backgroundColor: surface,
+			opacity: "0.5",
+		});
+	await expectNoDuplicateControls(page, "已停用 Agent 的 Owner 配置（G4-18）");
+	await expectCleanPage(page, pageErrors);
+});
+
+// #3179 G4-20 / G4-21 / G4-22：空态图标为 Search；同步失败卡阶段到错误 12px、错误到操作 0，
+// 失败阶段文字为 --danger；「确认绑定固定版本」事实列表在窄屏按单列 .facts（gap 3、dt 上距 8、dd 下距 4）。
+test("Skill binding empty state, failed sync card and narrow bind facts follow the design (G4-20 / G4-21 / G4-22)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	await viewport(page, mobile);
+	const pageErrors = trackPageErrors(page);
+	await ownerConfigFixture(page, { agentVersion: "agent-version-7" });
+	await page.goto("/agents/agent-pilot-1/skills");
+	const region = main(page);
+	const empty = region.locator(".agent-skill-empty");
+	await expect(empty).toContainText("还未绑定 Skill");
+	expect(
+		(await empty.locator("svg").getAttribute("class"))?.split(/\s+/),
+	).toContain("lucide-search");
+
+	// 服务端回报 code-review 内容同步失败。
+	const metadata = skillDirectory.find(
+		(version) => version.skillVersionId === "code-review-v1",
+	);
+	if (!metadata) throw new Error("Missing Skill fixture");
+	await page.route(
+		"**/api/v2/agents/agent-pilot-1/versions/agent-version-7/skills",
+		(route) =>
+			route.request().method() !== "GET"
+				? route.fallback()
+				: route.fulfill({
+						json: SkillHubAgentBindingStatusResponseV1Schema.parse({
+							schemaVersion: 1,
+							agentId: "agent-pilot-1",
+							agentVersion: "agent-version-7",
+							configurationRevision: 8,
+							bindings: [
+								{
+									schemaVersion: 1,
+									agentId: "agent-pilot-1",
+									agentVersion: "agent-version-7",
+									skillName: metadata.name,
+									skillVersion: {
+										schemaVersion: 1,
+										skillId: metadata.skillId,
+										skillVersionId: metadata.skillVersionId,
+										provider: metadata.provider,
+										version: metadata.version,
+										packageDigest: metadata.packageDigest,
+										manifestDigest: metadata.manifestDigest,
+										signatureDigest: metadata.signatureDigest,
+									},
+									grant: {
+										schemaVersion: 1,
+										tools: [],
+										connections: [],
+										fileRoots: [],
+										networkOrigins: [],
+										scripts: false,
+									},
+									configurationRevision: 8,
+									syncRevision: 1,
+									state: "failed",
+									failureReason: "content sync failed",
+									appliedReceipt: null,
+								},
+							],
+						}),
+					}),
+	);
+	await page.reload();
+	const card = region.getByRole("article", { name: /code-review/ });
+	const error = card.locator(".skill-binding-error");
+	await expect(error).toHaveText("内容同步失败，这个版本不会在对话中提供。");
+	const stages = card.locator(".sync-stages");
+	const actions = card.locator(".skill-actions");
+	expect(Math.abs((await verticalGap(stages, error)) - 12)).toBeLessThanOrEqual(
+		0.5,
+	);
+	expect(Math.abs(await verticalGap(error, actions))).toBeLessThanOrEqual(0.5);
+	await expect(card.locator(".sync-stage[data-failed]")).toHaveCSS(
+		"color",
+		await resolved(page, "color", "var(--danger)"),
+	);
+
+	await region
+		.getByLabel("固定版本", { exact: true })
+		.selectOption("workspace-summary-v1");
+	await region.getByRole("button", { name: "绑定固定版本" }).click();
+	const bind = page.getByRole("dialog", { name: "确认绑定固定版本" });
+	const facts = bind.locator("dl.skill-binding-facts");
+	await expect(facts).toBeVisible();
+	if (mobile) {
+		await expect(facts).toHaveCSS("row-gap", "3px");
+		await expect(facts.locator("dt").first()).toHaveCSS("margin-top", "8px");
+		await expect(facts.locator("dd").first()).toHaveCSS("margin-bottom", "4px");
+		// 对象行到首个 dt 23px（facts 上距 15 + dt 上距 8），dt→dd 3px，组间 15px。
+		const subject = bind.locator('[data-slot="confirm-dialog-subject"]');
+		expect(
+			Math.abs((await verticalGap(subject, facts.locator("dt").first())) - 23),
+		).toBeLessThanOrEqual(0.5);
+		expect(
+			Math.abs(
+				(await verticalGap(
+					facts.locator("dt").first(),
+					facts.locator("dd").first(),
+				)) - 3,
+			),
+		).toBeLessThanOrEqual(0.5);
+		expect(
+			Math.abs(
+				(await verticalGap(
+					facts.locator("dd").first(),
+					facts.locator("dt").nth(1),
+				)) - 15,
+			),
+		).toBeLessThanOrEqual(0.5);
+	} else
+		await expect(facts.locator("dt").first()).toHaveCSS("margin-top", "0px");
+	await page.keyboard.press("Escape");
+	await expect(bind).toHaveCount(0);
+	await expectNoDuplicateControls(page, "Agent 的 Skill（同步失败，G4-21）");
+	await expectCleanPage(page, pageErrors);
+});

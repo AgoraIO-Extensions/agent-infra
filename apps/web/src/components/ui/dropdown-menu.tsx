@@ -89,7 +89,7 @@ function DropdownMenuRadioGroup(props: Menu.RadioGroup.Props) {
 	return <Menu.RadioGroup data-slot="dropdown-menu-radio-group" {...props} />;
 }
 
-/** 设计 .chat-setting-option：命中 44px，选中项右侧 16px 勾。选择后默认关闭菜单。 */
+/** 设计 .chat-setting-option：命中 44px，选中项右侧 16px 勾，button 指针（禁用项 not-allowed，G4-07）。选择后默认关闭菜单。 */
 function DropdownMenuRadioItem({
 	className,
 	children,
@@ -101,7 +101,7 @@ function DropdownMenuRadioItem({
 			data-slot="dropdown-menu-radio-item"
 			closeOnClick={closeOnClick}
 			className={cn(
-				"flex min-h-[44px] w-full cursor-default select-none items-center justify-between gap-[12px] rounded-[8px] border border-transparent p-[9px] text-left text-(--fg) text-[13px] outline-none data-disabled:pointer-events-none data-highlighted:border-border data-highlighted:bg-(--surface-raised) data-disabled:opacity-50",
+				"flex min-h-[44px] w-full cursor-pointer select-none items-center justify-between gap-[12px] rounded-[8px] border border-transparent p-[9px] text-left text-(--fg) text-[13px] outline-none data-disabled:pointer-events-none data-disabled:cursor-not-allowed data-highlighted:border-border data-highlighted:bg-(--surface-raised) data-disabled:opacity-50",
 				className,
 			)}
 			{...props}

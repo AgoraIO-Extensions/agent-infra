@@ -251,8 +251,9 @@ export function SkillHubDirectoryScreen({
 					className={buttonVariants({ variant: "ghost" })}
 					to="/skills/manage"
 				>
-					我的 Skill
+					{/* 设计 skButton icon:'arrow'：箭头在文字前（G4-24，同 Y-05 / Y-12）。 */}
 					<ArrowRight aria-hidden="true" />
+					我的 Skill
 				</Link>
 			</div>
 
@@ -331,8 +332,9 @@ function SkillCatalogRow({ version }: { version: SkillHubVersionMetadataV1 }) {
 					params={{ skillVersionId: version.skillVersionId }}
 					aria-label={withObjectName("查看详情", version.name)}
 				>
-					查看详情
+					{/* 箭头在文字前（G4-24）。 */}
 					<ArrowRight aria-hidden="true" />
+					查看详情
 				</Link>
 			</div>
 		</article>

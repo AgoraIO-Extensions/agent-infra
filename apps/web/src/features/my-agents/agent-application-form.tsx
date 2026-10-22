@@ -1191,26 +1191,29 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								void file.text().then(updateManifest);
 							}}
 						/>
-						<p className="text-muted-foreground text-sm">
+						{/* 设计 span.field-help：公共字段帮助（11px --muted-ink），与文本框同在一个字段内、相距 7px（G4-12）。 */}
+						<span className="field-help">
 							上传受限 Kubernetes 资源清单，或直接粘贴 YAML；最多 262,144
 							bytes。
-						</p>
+						</span>
+						{/* 上方「多服务资源 YAML」标签绑定的是文件输入；文本框另给可访问名称以便区分（#3119）。
+						    占位符用 JSX 表达式字符串，属性字符串不处理 \n 转义，会把反斜杠原样显示。 */}
+						<Textarea
+							aria-describedby={
+								fieldErrors.manifest ? errorId("manifest") : undefined
+							}
+							aria-invalid={fieldErrors.manifest ? true : undefined}
+							aria-label="多服务资源 YAML 内容"
+							className="min-h-56 font-mono text-sm"
+							disabled={props.mode === "update"}
+							id="application-multi-service-manifest"
+							onChange={(event) => updateManifest(event.target.value)}
+							placeholder={
+								"schemaVersion: 1\nentryServiceName: api\nresources:"
+							}
+							value={manifest}
+						/>
 					</Field>
-					{/* 上方「多服务资源 YAML」标签绑定的是文件输入；文本框另给可访问名称以便区分（#3119）。
-					    占位符用 JSX 表达式字符串，属性字符串不处理 \n 转义，会把反斜杠原样显示。 */}
-					<Textarea
-						aria-describedby={
-							fieldErrors.manifest ? errorId("manifest") : undefined
-						}
-						aria-invalid={fieldErrors.manifest ? true : undefined}
-						aria-label="多服务资源 YAML 内容"
-						className="min-h-56 font-mono text-sm"
-						disabled={props.mode === "update"}
-						id="application-multi-service-manifest"
-						onChange={(event) => updateManifest(event.target.value)}
-						placeholder={"schemaVersion: 1\nentryServiceName: api\nresources:"}
-						value={manifest}
-					/>
 					<FieldError id={errorId("manifest")} message={fieldErrors.manifest} />
 					{manifestSummary ? (
 						<p className="text-muted-foreground text-sm" role="status">

@@ -846,10 +846,14 @@ test("application detail puts actions in the heading, shows three progress rows 
 	await expect(facts.locator("dt", { hasText: /^入口模式$/ })).toHaveCount(0);
 	await expect(facts.locator("dt", { hasText: /^标准模板$/ })).toHaveCount(0);
 	await expect(facts).not.toContainText("codex");
-	// M-04：使用范围按目录显示姓名、邮箱、组织名与路径，不出现内部 ID。
+	// M-04：使用范围按目录显示名称，不出现内部 ID。G4-16：与 Owner 行一样只写名称（「、」分隔），
+	// 不再附邮箱与组织路径（导出稿 #application-detail 只写「支持中心」）。
 	await expect(facts).toContainText("验收用户二");
-	await expect(facts).toContainText("user.two@example.test");
-	await expect(facts).toContainText("研发 / 平台工程");
+	await expect(
+		facts.locator("dt", { hasText: /^使用范围$/ }).locator("+ dd"),
+	).toHaveText("验收用户二、平台工程");
+	await expect(facts).not.toContainText("user.two@example.test");
+	await expect(facts).not.toContainText("研发 / 平台工程");
 	await expect(page.locator("main")).not.toContainText(/user-2\b|org-platform/);
 	// E3-03：「资源预设」卡按设计 .application-resource p{margin:12px 0 0}，末段到卡底只有
 	// 20px 内边距 + 1px 边框；`.form-aside p` 的 12px 下外边距不再叠加。
@@ -1312,4 +1316,212 @@ test("buttons on my Agent pages use the pointer cursor (B2-11)", async ({
 	await expectPointerButtons(dialog, "撤回弹窗");
 	await page.keyboard.press("Escape");
 	await expect(dialog).toHaveCount(0);
+});
+
+async function viewportFor(page: Page, mobile: boolean) {
+	await page.setViewportSize(
+		mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+	);
+}
+
+// #3179 G4-09 / G4-10 / G4-11：公共 Tab 同行等高，选中下划线贴在 1px 分隔线上，「申请」与计数 chip
+// 相距一个空格宽（0.25em）；已创建卡「配置与生命周期」为齿轮图标，可用范围用「 · 」分隔（同 W-04）。
+test("my Agent tabs share one height and a space-wide count gap; owned cards use the gear and a middle-dot scope (G4-09 / G4-10 / G4-11)", async ({
+	page,
+}, info) => {
+	await viewportFor(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const agent = AgentProjectionV2Schema.parse({
+		...ownedAgent,
+		configuration: {
+			...ownedAgent.configuration,
+			availability: [
+				{ kind: "organization", organizationId: "org-platform" },
+				{ kind: "user", userId: "user-2" },
+			],
+		},
+	});
+	await fixture(page, { agents: [agent] });
+	for (const path of ["/my-agents", "/my-agents?tab=owned"]) {
+		await page.goto(path);
+		const list = page.getByRole("tablist", { name: "我的 Agent 视图" });
+		const tabs = list.getByRole("tab");
+		await expect(tabs.first().locator('[data-slot="badge"]')).toHaveText("1");
+		const [listBox, first, second, selected] = await Promise.all([
+			list.boundingBox(),
+			tabs.nth(0).boundingBox(),
+			tabs.nth(1).boundingBox(),
+			list.locator('[role="tab"][aria-selected="true"]').boundingBox(),
+		]);
+		if (!listBox || !first || !second || !selected)
+			throw new Error("Missing tab geometry");
+		expect(Math.abs(first.height - second.height)).toBeLessThanOrEqual(0.5);
+		// 选中 Tab 的 2px 下划线底边贴在分隔线（列表 1px 下边框）上，没有缝。
+		expect(
+			Math.abs(selected.y + selected.height - (listBox.y + listBox.height - 1)),
+		).toBeLessThanOrEqual(0.5);
+	}
+	const applications = page.getByRole("tab", { name: /^申请/ });
+	await expect(applications).toHaveCSS("column-gap", "3.25px");
+	const gap = await applications.evaluate((tab) => {
+		const text = [...tab.childNodes].find(
+			(node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
+		);
+		const chip = tab.querySelector('[data-slot="badge"]');
+		if (!text || !chip) return Number.NaN;
+		const range = document.createRange();
+		range.selectNodeContents(text);
+		return (
+			chip.getBoundingClientRect().left - range.getBoundingClientRect().right
+		);
+	});
+	expect(Math.abs(gap - 3.25)).toBeLessThanOrEqual(0.5);
+
+	const card = page.locator(".owned-agent-card").first();
+	const configure = card.getByRole("link", { name: /^配置与生命周期：/ });
+	const icon =
+		(await configure.locator("svg").getAttribute("class"))?.split(/\s+/) ?? [];
+	expect(icon).toContain("lucide-settings");
+	expect(icon).not.toContain("lucide-settings-2");
+	await expect(
+		card
+			.locator(".metadata-facts dt", { hasText: /^可用范围$/ })
+			.locator("+ dd"),
+	).toHaveText("平台工程 · 验收用户二");
+	await expectNoDuplicateControls(
+		page,
+		"/my-agents?tab=owned（G4-09 ~ G4-11）",
+	);
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
+});
+
+// #3179 G4-12 / G4-13：多服务来源的文件输入帮助按公共字段帮助（11px / 1.65 / --muted-ink），与 YAML
+// 文本框同在一个字段内、相距 7px；目录选择器结果项的「人 / 组」标记顶对齐，邮箱与组织路径 400。
+test("multi-service YAML help and directory results follow the design field styles (G4-12 / G4-13)", async ({
+	page,
+}, info) => {
+	await viewportFor(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/my-agents/new");
+	await page.getByRole("combobox", { name: "Agent 来源" }).click();
+	await page
+		.getByRole("option", { name: "多服务 Agent · 自有交互入口" })
+		.click();
+	const help = page.getByText(
+		"上传受限 Kubernetes 资源清单，或直接粘贴 YAML；最多 262,144 bytes。",
+		{ exact: true },
+	);
+	expect(await computed(help, ["fontSize", "lineHeight", "color"])).toEqual({
+		fontSize: "11px",
+		lineHeight: "18.15px",
+		color: await resolved(page, "color", "var(--muted-ink)"),
+	});
+	const manifest = page.getByRole("textbox", { name: "多服务资源 YAML 内容" });
+	const [helpBox, manifestBox] = await Promise.all([
+		help.boundingBox(),
+		manifest.boundingBox(),
+	]);
+	if (!helpBox || !manifestBox) throw new Error("Missing field geometry");
+	expect(
+		Math.abs(manifestBox.y - (helpBox.y + helpBox.height) - 7),
+	).toBeLessThanOrEqual(0.5);
+
+	const picker = page.getByRole("combobox", {
+		name: "共同 Owner 用户",
+		exact: true,
+	});
+	await picker.fill("user.two");
+	const option = page.getByRole("option", { name: /验收用户二/ });
+	await expect(option).toBeVisible();
+	const [optionBox, markBox] = await Promise.all([
+		option.boundingBox(),
+		option.locator(".directory-result-mark").boundingBox(),
+	]);
+	if (!optionBox || !markBox) throw new Error("Missing option geometry");
+	// 项顶 1px 边框 + 9px 内边距：标记距项顶 10px，不随两行文字垂直居中。
+	expect(Math.abs(markBox.y - optionBox.y - 10)).toBeLessThanOrEqual(0.5);
+	await expect(option.locator(".directory-result-name")).toHaveCSS(
+		"font-weight",
+		"650",
+	);
+	for (const meta of await option.locator(".directory-result-meta").all())
+		await expect(meta).toHaveCSS("font-weight", "400");
+	await picker.press("Escape");
+	await expectNoDuplicateControls(
+		page,
+		"/my-agents/new 多服务来源（G4-12 / G4-13）",
+	);
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
+});
+
+// #3179 G4-15 / G4-16：申请详情「申请配置」的镜像地址等宽；使用范围与 Owner 行一样只写名称，
+// 不再逐项附组织路径。
+test("application detail shows the image in monospace and the scope as one line of names (G4-15 / G4-16)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	await viewportFor(page, mobile);
+	const pageErrors = trackPageErrors(page);
+	await fixture(page, {
+		applications: [
+			application({
+				source: {
+					kind: "custom",
+					imageReference: "registry.example/agents/release:v1",
+					interactionMode: "platform-adapter",
+				},
+				configuration: {
+					...pendingApplication.configuration,
+					availability: [
+						{ kind: "organization", organizationId: "org-platform" },
+					],
+				},
+			}),
+		],
+	});
+	await page.goto("/my-agents/application-browser-1");
+	const summary = page.getByRole("region", { name: "申请配置摘要" });
+	const fact = (label: string) =>
+		summary
+			.locator(".metadata-facts dt", { hasText: new RegExp(`^${label}$`) })
+			.locator("+ dd");
+	await expect(fact("镜像地址")).toHaveText(
+		"registry.example/agents/release:v1",
+	);
+	const fonts = await fact("镜像地址").evaluate((element) => {
+		const probe = document.createElement("span");
+		probe.style.fontFamily = "var(--font-mono)";
+		document.body.append(probe);
+		const mono = getComputedStyle(probe).fontFamily;
+		probe.remove();
+		return { actual: getComputedStyle(element).fontFamily, mono };
+	});
+	expect(fonts.actual).toBe(fonts.mono);
+	await expect(fact("使用范围")).toHaveText("平台工程");
+	await expect(fact("使用范围").locator("li")).toHaveCount(0);
+	await expect(summary).not.toContainText("研发 / 平台工程");
+	if (mobile) {
+		// 单列事实列表：使用范围与 Owner 行的 dt→dd 间距相同（设计 3px）。
+		const dtToDd = async (label: string) => {
+			const [dt, dd] = await Promise.all([
+				summary
+					.locator(".metadata-facts dt", { hasText: new RegExp(`^${label}$`) })
+					.boundingBox(),
+				fact(label).boundingBox(),
+			]);
+			if (!dt || !dd) throw new Error("Missing fact geometry");
+			return dd.y - (dt.y + dt.height);
+		};
+		expect(Math.abs((await dtToDd("使用范围")) - 3)).toBeLessThanOrEqual(0.5);
+		expect(Math.abs((await dtToDd("Owner")) - 3)).toBeLessThanOrEqual(0.5);
+	}
+	await expectNoDuplicateControls(
+		page,
+		"/my-agents/:id 申请详情（G4-15 / G4-16）",
+	);
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
 });

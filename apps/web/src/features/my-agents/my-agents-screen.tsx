@@ -5,7 +5,7 @@ import {
 	Inbox,
 	Plus,
 	RefreshCw,
-	Settings2,
+	Settings,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import {
@@ -410,9 +410,11 @@ export function MyAgentsScreen({
 											<dl className="metadata-facts">
 												<dt>可用范围</dt>
 												<dd>
+													{/* 设计「研发一部 · 支持中心」：中点分隔，与「渠道」一致（G4-11、W-04）。 */}
 													<AvailabilityNameList
 														targets={agent.configuration.availability}
 														names={names}
+														separator=" · "
 														empty="未额外指定"
 													/>
 												</dd>
@@ -442,7 +444,8 @@ export function MyAgentsScreen({
 														agent.name,
 													)}
 												>
-													<Settings2
+													{/* 设计 icon('settings') 齿轮（G4-10）。 */}
+													<Settings
 														aria-hidden="true"
 														data-icon="inline-start"
 													/>

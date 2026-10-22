@@ -1002,8 +1002,20 @@
 	scroll-padding-block: 24px;
 	padding: 20px 4px;
 }
+/* 设计 .messages{gap:22px}（≤767 16px）：提问→回复与轮次之间等距（G4-03）。 */
 .chat-layout .exchange {
 	margin: 0 0 22px;
+}
+.chat-layout .exchange > * + * {
+	margin-top: 22px;
+}
+@media (max-width: 767px) {
+	.chat-layout .exchange {
+		margin-bottom: 16px;
+	}
+	.chat-layout .exchange > * + * {
+		margin-top: 16px;
+	}
 }
 /* 设计 .chat-history-actions：时间线顶部的 ghost「加载更早内容」（G-04）。 */
 .chat-history-actions {
@@ -1416,13 +1428,13 @@
 	height: 15px;
 }
 /* 设计 #chat-toolbar-controls [data-od-id=chat-open-capabilities]。 */
+/* 字距沿用按钮的 .02em（设计 .btn，G4-05）。 */
 .composer-toolbar .capability-trigger {
 	flex: none;
 	gap: 6px;
 	min-height: 44px;
 	padding: 8px;
 	font-weight: 400;
-	letter-spacing: 0;
 }
 .composer-toolbar .capability-trigger svg {
 	width: 16px;
@@ -1708,6 +1720,10 @@
 .conversation-history-panel:focus-visible {
 	outline: 2px solid var(--ring);
 	outline-offset: -2px;
+}
+/* 设计 .history-scope-actions：列表下的「此 Agent 的全部历史 / 最近对话」上距 12px（G4-04）。 */
+.conversation-history-panel .history-scope-actions {
+	margin-top: 12px;
 }
 /* 设计 .history-panel .section-head：h2 15px + 13px 说明 + 计数 chip。 */
 .conversation-history-head {
@@ -2856,11 +2872,15 @@ body {
 	margin-top: 20px;
 	border-top: 1px solid var(--border);
 }
+/* 设计 .facts：13px，行高与正文同为 1.65（21.45px），压过 dl 上 text-sm 的行高；h2 下 15px（G4-02）。 */
 .agent-detail dl {
 	grid-template-columns: 150px minmax(0, 1fr);
 	gap: 10px 18px;
 	font-size: 13px;
-	line-height: 1.7;
+	line-height: 1.65;
+}
+.agent-detail .detail-section h2 + dl {
+	margin-top: 15px;
 }
 .agent-detail .agent-detail-panel > p {
 	color: var(--muted-foreground);
@@ -3041,8 +3061,12 @@ body {
 		grid-template-columns: minmax(0, 1fr);
 		gap: 6px;
 	}
+	/* 设计 ≤767 单列 .facts：dt 上距 8px、dd 下距 4px（与 gap 3px 合计 dd→dt 15px，G4-02、V-14）。 */
+	.agent-detail dt {
+		margin-top: 8px;
+	}
 	.agent-detail dd {
-		margin-bottom: 10px;
+		margin-bottom: 4px;
 	}
 }
 
@@ -3586,6 +3610,10 @@ body {
 	padding: 0 16px 16px;
 	border: 1px solid var(--border);
 	border-radius: 12px;
+}
+/* 设计 .skill-content-file .form-grid{margin-top:12px}：卡顶边到首行字段标签 12px（G4-25）。 */
+.skill-content-file .skill-editor-grid {
+	margin-top: 12px;
 }
 .skill-field-help {
 	color: var(--muted-ink);
@@ -4738,6 +4766,11 @@ body {
 	justify-content: space-between;
 	gap: 18px;
 }
+/* 右侧是状态 chip 时（「Agent 默认 Relay Key」）：文字列占满剩余宽度，chip 在任何宽度下都留在标题右侧、
+   与 h2 顶对齐，不折到说明下方；只有 X-06 的「管理 Skill 绑定」按钮在窄屏换到说明下方（G4-17）。 */
+.configuration-section-head:has(> [data-slot="badge"]) > :first-child {
+	flex: 1 1 0%;
+}
 /* 设计 .section-head 下方 14px；分区只有标题行（Skill）时用内边距，保持分区之间只有一条线的节奏。 */
 .configuration-section-head:last-child {
 	padding-bottom: 14px;
@@ -4904,11 +4937,12 @@ body {
 	vertical-align: middle;
 	overflow-wrap: anywhere;
 }
+/* 设计 .sync-stages{margin:18px 0 12px}：与错误的 6px 上距折叠后阶段到错误 12px（G4-21）。 */
 .sync-stages {
 	display: grid;
 	grid-template-columns: repeat(4, minmax(0, 1fr));
 	gap: 7px;
-	margin: 18px 0 0;
+	margin: 18px 0 12px;
 	padding: 0;
 	list-style: none;
 }
@@ -4924,9 +4958,10 @@ body {
 .sync-stage[data-current] {
 	border-color: var(--muted-foreground);
 }
+/* 设计 .sync-stage.failed：边框与文字都用 --danger（对比度 4.57，G4-21）。 */
 .sync-stage[data-failed] {
 	border-color: var(--danger);
-	color: var(--danger-ink);
+	color: var(--danger);
 }
 .sync-stage strong {
 	display: block;
@@ -4947,6 +4982,10 @@ body {
 	align-items: center;
 	gap: 8px;
 	margin-top: 12px;
+}
+/* 设计 .skill-actions 没有上外边距：错误之后紧接操作区，不再叠加 12px（G4-21）。 */
+.skill-binding-card .skill-binding-error + .skill-actions {
+	margin-top: 0;
 }
 .skill-bind-grid {
 	display: grid;
@@ -4996,6 +5035,16 @@ body {
 	.skill-bind-grid,
 	.skill-binding-facts {
 		grid-template-columns: minmax(0, 1fr);
+	}
+	/* 设计 ≤767 单列 .facts：gap 3px、dt 上距 8px、dd 下距 4px（同 .configuration-facts，G4-22、V-14）。 */
+	.skill-binding-facts {
+		gap: 3px;
+	}
+	.skill-binding-facts dt {
+		margin-top: 8px;
+	}
+	.skill-binding-facts dd {
+		margin-bottom: 4px;
 	}
 }
 @media (max-width: 767px) {
@@ -5160,9 +5209,12 @@ body {
 	box-shadow: 0 16px 38px
 		color-mix(in oklch, var(--foreground) 14%, transparent);
 }
+/* 设计 .directory-result：网格默认 stretch，「人 / 组」标记顶对齐；邮箱与组织路径 400，只有姓名 650。
+   结果项套公共 Button（居中、650），这里还原（G4-13）。 */
 .directory-result {
 	display: grid;
 	grid-template-columns: 32px minmax(0, 1fr);
+	align-items: start;
 	gap: 9px;
 	width: 100%;
 	min-height: 58px;
@@ -5171,6 +5223,7 @@ body {
 	border-radius: 9px;
 	background: transparent;
 	color: var(--foreground);
+	font-weight: 400;
 	text-align: left;
 }
 .directory-result:hover,
