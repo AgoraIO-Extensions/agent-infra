@@ -879,6 +879,270 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		});
 	});
 
+	describe("a stop accepted while a submit to an unbound Session is prepared (#3199)", () => {
+		// 与 Runtime assertOpen 一致：没有 hostSessionRef 的 stop 控制状态查询判为会话未绑定。
+		const unbound = (traceId: string) =>
+			Response.json(
+				{
+					schemaVersion: 1,
+					code: "RUNTIME_SESSION_UNAVAILABLE",
+					message: "Runtime session could not be recovered",
+					retryable: false,
+					traceId,
+				},
+				{ status: 503 },
+			);
+		const paths = (h: ReturnType<typeof runtimeV4Harness>) =>
+			h.fetcher.mock.calls.map(([url]) => new URL(String(url)).pathname);
+
+		it.each([
+			["submit", "turn", "conversation.turn.submit.v1"],
+			["submit", "stop", "conversation.turn.submit.v1"],
+			["regenerate", "turn", "conversation.turn.regenerate.v1"],
+			["regenerate", "stop", "conversation.turn.regenerate.v1"],
+		] as const)(
+			"cancels the unsent %s instead of failing it when the %s work item is claimed next",
+			async (_name, next, operation) => {
+				const h = runtimeV4Harness();
+				// 会话从未原生绑定：此前的提交都在发送前被停止，Conversation 没有 hostSessionRef。
+				Object.assign(h.claim, {
+					operation,
+					executionStatus: "submitted",
+					hostSessionRef: null,
+				});
+				Object.assign(h.state, {
+					executionStatus: "submitted",
+					hostSessionRef: null,
+				});
+				h.fetcher.mockImplementation(async (url, init) => {
+					const body = JSON.parse(init?.body as string);
+					if (String(url).endsWith("/status") && body.hostSessionRef === null)
+						return unbound(body.traceId);
+					throw new Error(`Unexpected Runtime request: ${String(url)}`);
+				});
+				// 只模拟这条路径用到的 PG Store 语义（见 platform-store 的 #2534/#2674 用例）。
+				const outbox: Record<string, string> = {
+					item: "pending",
+					"stop-item": "pending",
+				};
+				let stop: "none" | "submitted" | "completed" = "none";
+				const failures: string[] = [];
+				const cancelStoppedTurn = () => {
+					Object.assign(h.state, {
+						executionStatus: "cancelled",
+						stopPending: false,
+					});
+					outbox.item = "succeeded";
+					outbox["stop-item"] = "succeeded";
+					stop = "completed";
+				};
+				const store: ConversationDispatchStorePortV1 = {
+					async claim({ itemId }) {
+						const status = outbox[itemId];
+						if (status === "succeeded" || status === "failed")
+							return { outcome: status };
+						if (
+							itemId === "item" &&
+							stop === "submitted" &&
+							h.state.executionStatus === "submitted"
+						) {
+							// 认领看到 stop：在与认领互斥的事务里直接取消未投递的 Turn。
+							cancelStoppedTurn();
+							return { outcome: "succeeded" };
+						}
+						outbox[itemId] = "processing";
+						const current = {
+							executionStatus: h.state.executionStatus,
+							stopPending: stop === "submitted",
+						};
+						return {
+							outcome: "claimed",
+							claim:
+								itemId === "item"
+									? { ...h.claim, ...current }
+									: {
+											...h.claim,
+											...current,
+											itemId,
+											operation: "conversation.turn.stop.v1",
+											messageId: null,
+											stopRequestId: "stop",
+											input: null,
+											deliveryFence: 1,
+										},
+						};
+					},
+					renew: async () => true,
+					async prepareRuntimeDispatch({ claim }) {
+						if (claim.operation !== "conversation.turn.stop.v1") {
+							// 发送前的 write-ahead 提交之后 stop 才被受理：Worker 准备时读到控制用途。
+							Object.assign(h.state, {
+								executionStatus: "unknown",
+								stopPending: true,
+							});
+							stop = "submitted";
+						}
+						return true;
+					},
+					async releaseUnsentDispatch({ claim }) {
+						Object.assign(h.state, { executionStatus: claim.executionStatus });
+						outbox[claim.itemId] = "retry_scheduled";
+						return true;
+					},
+					async cancelUnaccepted() {
+						cancelStoppedTurn();
+						return true;
+					},
+					async recordRuntimeResponse() {
+						throw new Error("The Runtime never accepted this submit");
+					},
+					async retry({ claim, transition }) {
+						if (transition.executionStatus)
+							Object.assign(h.state, {
+								executionStatus: transition.executionStatus,
+							});
+						outbox[claim.itemId] = "retry_scheduled";
+						return true;
+					},
+					async finish({ claim, status, transition, errorCode }) {
+						if (errorCode) failures.push(errorCode);
+						if (transition.executionStatus)
+							Object.assign(h.state, {
+								executionStatus: transition.executionStatus,
+							});
+						if (
+							claim.operation === "conversation.turn.stop.v1" &&
+							status === "succeeded"
+						)
+							stop = "completed";
+						outbox[claim.itemId] = status;
+						return true;
+					},
+				};
+				const useCase = createConversationDispatchUseCaseV1(
+					{
+						store,
+						authorization: h.runtime.authorization,
+						runtimeHost: h.runtime.runtimeHost,
+						events: {
+							async persist() {
+								throw new Error("An unsent submit has no Runtime events");
+							},
+						},
+					},
+					{ retryDelayMs: 0 },
+				);
+				const dispatch = async (itemId: string) =>
+					(
+						await useCase.dispatch({
+							schemaVersion: 1,
+							itemId,
+							workerId: "instance",
+						})
+					).outcome;
+				try {
+					const first = await dispatch("item");
+					const later: string[] = [];
+					for (const itemId of next === "turn"
+						? ["item", "stop-item"]
+						: ["stop-item", "item"])
+						later.push(await dispatch(itemId));
+					expect({
+						first,
+						later,
+						execution: h.state.executionStatus,
+						stop,
+						outbox,
+						failures,
+						paths: paths(h),
+					}).toEqual({
+						first: "retry",
+						later: ["already_completed", "already_completed"],
+						execution: "cancelled",
+						stop: "completed",
+						outbox: { item: "succeeded", "stop-item": "succeeded" },
+						failures: [],
+						// 只有发送前的 latch 状态查询，Runtime 没有收到任何 turns 请求。
+						paths: ["/internal/runtime/v3/status"],
+					});
+				} finally {
+					h.runtime.close();
+				}
+			},
+		);
+
+		it.each([
+			["a bound Session", { hostSessionRef: "host" }],
+			[
+				"an original submit reference",
+				{ hostSessionRef: null, originalSubmitHostSessionRef: "host" },
+			],
+		] as const)(
+			"keeps a latch failure on %s for the existing recovery",
+			async (_name, refs) => {
+				const h = runtimeV4Harness();
+				Object.assign(h.claim, {
+					executionStatus: "submitted",
+					hostSessionRef: refs.hostSessionRef,
+				});
+				Object.assign(h.state, { executionStatus: "submitted", ...refs });
+				h.fetcher.mockImplementation(async (url, init) => {
+					const body = JSON.parse(init?.body as string);
+					if (String(url).endsWith("/status")) return unbound(body.traceId);
+					throw new Error(`Unexpected Runtime request: ${String(url)}`);
+				});
+				try {
+					const reference = await h.authorize();
+					Object.assign(h.state, {
+						executionStatus: "unknown",
+						stopPending: true,
+					});
+					// 可能已发送：不改成「确定未发送」，交给 Core 现有的核实与恢复。
+					await expect(
+						h.runtime.runtimeHost.dispatch(h.request(reference)),
+					).rejects.toMatchObject({
+						code: "RUNTIME_SESSION_UNAVAILABLE",
+						retryable: false,
+						notSent: false,
+					});
+					expect(paths(h)).toEqual(["/internal/runtime/v3/status"]);
+				} finally {
+					h.runtime.close();
+				}
+			},
+		);
+
+		it("keeps the latched denial when the bound Session latch succeeds", async () => {
+			const h = runtimeV4Harness();
+			Object.assign(h.claim, { executionStatus: "submitted" });
+			Object.assign(h.state, { executionStatus: "submitted" });
+			try {
+				const reference = await h.authorize();
+				Object.assign(h.state, {
+					executionStatus: "unknown",
+					stopPending: true,
+				});
+				await expect(
+					h.runtime.runtimeHost.dispatch(h.request(reference)),
+				).rejects.toMatchObject({
+					code: "AUTHORIZATION_REVOKED",
+					retryable: true,
+					notSent: false,
+				});
+				expect(paths(h)).toEqual(["/internal/runtime/v3/status"]);
+				const latch = h.sent().body;
+				expect(latch.hostSessionRef).toBe("host");
+				expect(verifyControl(latch.grant).claims).toMatchObject({
+					purpose: "control",
+					reason: "stop",
+					allowedCommands: ["session.status"],
+				});
+			} finally {
+				h.runtime.close();
+			}
+		});
+	});
+
 	it.each([
 		"absent version",
 		"historical protocol",
