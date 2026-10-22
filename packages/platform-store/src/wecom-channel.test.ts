@@ -2292,6 +2292,37 @@ describe("WeCom /new and unavailable conversations (#3184)", () => {
 		).toEqual([{ rotation: 2 }]);
 	});
 
+	it("treats a generation-isolated conversation as unavailable in the failed reply", async () => {
+		await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+		const sender = "isolation_sender";
+		const first = await receiptOf(scoped(sender, "isolation_1"));
+		await sql`update platform.conversation_executions set status='failed' where execution_id=${first.receipt.executionId}`;
+		const conversations =
+			await sql`select status, session_generation from platform.conversations where id=${first.receipt.conversationId}`;
+		const conversation = conversations[0];
+		if (!conversation) throw new Error("Expected mapped conversation");
+		// 会话仍是 ready，只有待确认的代次隔离墓碑：提交判据同样拒绝后续消息。
+		const authorizations =
+			await sql`select id from platform.task_authorization_records where execution_id=${first.receipt.executionId}`;
+		const authorization = authorizations[0];
+		if (!authorization) throw new Error("Expected accepted authority");
+		await sql`insert into platform.task_control_records (id, execution_id, authorization_record_id, reason)
+			values ('isolation-control', ${first.receipt.executionId}, ${authorization.id}, 'generation_isolation')`;
+		await sql`insert into platform.conversation_generation_tombstones
+			(operation_id, conversation_id, session_generation, execution_id, item_id,
+			 control_record_id, control_source_id, original_principal, host_session_ref, failure_code)
+			values ('isolation-operation', ${first.receipt.conversationId}, ${conversation.session_generation},
+				${first.receipt.executionId}, 'isolation-item', 'isolation-control', 'isolation-source',
+				${sql.json({ kind: "user", id: "isolation-user" })}, 'isolation-host-session',
+				'RUNTIME_SESSION_RECOVERY_FAILED')`;
+		expect(conversation.status).not.toBe("unavailable");
+		expect(await store.claim()).toMatchObject({
+			receiptId: first.receipt.receiptId,
+			executionStatus: "failed",
+			conversationUnavailable: true,
+		});
+	});
+
 	it("records an unavailable conversation as a rejected receipt and guides recovery with /new", async () => {
 		await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
 		const sender = "unavailable_sender";

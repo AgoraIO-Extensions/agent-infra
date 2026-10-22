@@ -794,8 +794,9 @@ export class PostgresWecomChannelV1
 					execution_status: string | null;
 					answer_ready: boolean;
 					conversation_status: string | null;
+					conversation_isolation_pending: boolean;
 				})[]
-			>`select r.*,e.status as execution_status,ready.answer_ready,c.status as conversation_status from platform.wecom_receipts r left join platform.conversation_executions e on e.execution_id=r.execution_id left join platform.conversations c on c.id=r.conversation_id
+			>`select r.*,e.status as execution_status,ready.answer_ready,c.status as conversation_status,exists (select 1 from platform.conversation_generation_tombstones t where t.conversation_id=r.conversation_id and t.status='pending') as conversation_isolation_pending from platform.wecom_receipts r left join platform.conversation_executions e on e.execution_id=r.execution_id left join platform.conversations c on c.id=r.conversation_id
     cross join lateral (select coalesce(e.status in ('failed','cancelled') or (e.status='completed' and exists (select 1 from platform.conversation_events t where t.conversation_id=e.conversation_id and t.execution_id=e.execution_id and t.source='runtime' and t.event_type='execution.status' and t.event_payload->>'status'='completed' and t.runtime_cursor is not null)),false) as answer_ready) ready
     where (r.connection_bot_id is null or r.expires_at<=now() or exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) and (r.delivery_status='pending' or (r.delivery_status='claimed' and r.lease_until<=now())) and (r.acceptance_status!='accepted' or ready.answer_ready or r.expires_at<=now()+(${wecomReplyTimeoutNoticeLeadMsV1}::bigint*interval '1 millisecond')) order by r.created_at limit 1 for update of r skip locked`;
 			if (!row) return null;
@@ -883,8 +884,11 @@ export class PostgresWecomChannelV1
 				acceptanceStatus: row.acceptance_status,
 				executionStatus: row.execution_status,
 				answerReady: row.answer_ready,
-				// #3184：失败文案按回执所属会话的当前状态附带 /new 指引。
-				...(row.conversation_status === "unavailable"
+				// #3184：失败文案按回执所属会话的当前状态附带 /new 指引；代次隔离与
+				// status=unavailable 一样拒绝后续消息（ConversationExecutionTask 的提交判据），
+				// 所以同样算作会话不可用。
+				...(row.conversation_status === "unavailable" ||
+				row.conversation_isolation_pending
 					? { conversationUnavailable: true }
 					: {}),
 				textDeltas: deltas.map((d) => d.event_payload.text ?? ""),
