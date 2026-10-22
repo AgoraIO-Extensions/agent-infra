@@ -83,7 +83,14 @@ export function useConversationFiles({
 				if (signal?.aborted) return undefined;
 				if (!result.data || result.response?.status !== 200)
 					return failClosed();
-				const parsed = FileLimitsV1Schema.safeParse(result.data.declaration);
+				const declaration = result.data.declaration;
+				const parsed = FileLimitsV1Schema.safeParse({
+					schemaVersion: declaration.schemaVersion,
+					revision: String(declaration.revision),
+					expiresAt: declaration.expiresAt,
+					mediaTypes: declaration.mediaTypes,
+					maxBytes: declaration.maxBytes,
+				});
 				if (!parsed.success) return failClosed();
 				setLimits(parsed.data);
 				setLimitsError(false);
