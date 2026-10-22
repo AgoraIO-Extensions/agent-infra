@@ -14,12 +14,12 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `index.html` | `640d27b6899023b21c1148d366c0874eff248cb4472347b753f38142c9dcd62a` |
+| `index.html` | `b7d5bcfe7c18dcee8db213df8f87d6a3f224146d181545d46e2ed54c8e12b417` |
 | `login.html` | `aa0a2737e7bc76f56c2552abfb503879a3c9f5c0919adfd7b65decd27b3ba6a7` |
 | `DESIGN.md` | `fa953264eafe4e0bd05adaa86387a9d90ad7af51d4e79f0a67620bfa31596d65` |
 | `IMPLEMENTATION.md` | `ae3e592272933f65a0f7fc34363142a4471a724f7a75db76affe6ae12d640600` |
 | `DESIGN-HANDOFF.md` | `3f2313d6d72bf3d7263d1e864730278217836ccdd5730d4b83460518bd2d3396` |
-| `DESIGN-MANIFEST.json` | `082fd76e5eb5c42f24d64974683fcb264c93b045824b3bb00a909f7d2b66fe1a` |
+| `DESIGN-MANIFEST.json` | `ee8348a366afc740df0aa11a3bbb36bb0071d5e7f50112f8311b29f3378c6566` |
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量，并提供设计同名别名（`--bg`、`--fg`、`--surface-raised`、`--accent`、
@@ -184,7 +184,7 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | H5-05 | 创建、修改申请「标准模板」下的模板就绪列表 | 与下拉相距 8px，列表下方不留外边距 | 原导出稿 `.template-readiness` 只设上外边距，`ul` 保留 UA 默认 14px 下外边距（同 D2-11） |
 | H5-06 | 创建、修改申请「高级配置」的「展开高级配置 / 收起高级配置」（≤767px） | 保持 44px 单行按钮，说明在左侧换行 | 同 X-06（原导出稿按钮被挤成 96.7px 宽，折成两行、高 55.6px） |
 | H5-07 | 目录选择器结果列表下的「清空搜索」 | 只在有关键词时显示，选中结果后关键词清空、不再显示；命中区至少 44px，字重 400 | 「清空搜索」位于结果列表之外，按 DESIGN.md 触达下限（`directory-fields.tsx`、`index.css` `.directory-clear`）；原导出稿 32px 且在关键词为空时常驻 |
-| H5-08 / H5-10 / H5-12 | 禁用的表单控件：修改申请锁定的「来源」「标准模板」、企微机器人「扫码已完成，确认后绑定」与验证期间的 Bot ID / Secret、已停用 Agent 的 Owner 配置 | 输入框、下拉、文本框与目录选择器输入框不透明度 .5、`not-allowed`；目录 chip 的移除按钮同禁用按钮 .48；复选框为不透明度 .5 的公共复选框（勾选时 `--accent` 底与白色勾），选项文字不变淡 | 与公共 `Input`、`NativeSelect`、`Textarea`、`Checkbox` 的禁用态及 D2-07 一致；原导出稿只有 `.owner-config-fieldset:disabled` 下的部分控件变淡，原生下拉取 UA 默认 .7，复选框由 UA 画成灰底 |
+| H5-08 / H5-10 / H5-12 / I6-02 | 禁用的表单控件：修改申请锁定的「来源」「标准模板」、企微机器人「扫码已完成，确认后绑定」与验证期间的 Bot ID / Secret、已停用 Agent 的 Owner 配置（含企微机器人「我已知悉可能断开其他连接」、企微应用「我已知悉可能影响现有回调」） | 输入框、下拉、文本框与目录选择器输入框不透明度 .5、`not-allowed`；目录 chip 的移除按钮同禁用按钮 .48；复选框为不透明度 .5 的公共复选框（勾选时 `--accent` 底与白色勾），选项文字不变淡 | 与公共 `Input`、`NativeSelect`、`Textarea`、`Checkbox` 的禁用态及 D2-07 一致；公共 `Checkbox` 不受 `<fieldset disabled>` 影响，企微确认复选框显式接收表单禁用（`wecom-bot-setup.tsx`、`wecom-app-setup.tsx`，I6-02）；原导出稿只有 `.owner-config-fieldset:disabled` 下的部分控件变淡，原生下拉取 UA 默认 .7，复选框由 UA 画成灰底 |
 | H5-13 | Owner 配置企微应用卡「EncodingAESKey」「应用 ID」 | 「EncodingAESKey」标签与输入框关联；「应用 ID」名称为「应用 ID：企微应用」 | 与「应用 ID：Agent 授权控制」（H4-16）区分（N-12）；原导出稿标签指向不存在的 id，输入框只能回落到占位符 |
 | H5-15 | `/admin/agents`「运行状态」筛选 | 全部状态、创建中、可用、已停止、创建失败、已停用 | 列表按管理状态筛选（[PRD §6.3](../prd/PRD-agent-platform-M1.md#63-管理状态)），与 Y-09 的 `status=creation_failed` 同一组值；原导出稿为「就绪」（服务可用性）且缺「创建中」「已停用」 |
 | H5-16 | `/admin/agents` 员工访问控制「禁用员工」 | 选中员工后可访问名称为「禁用员工：{姓名}」，未选员工时为「禁用员工」 | 取消或 Escape 关闭确认后的焦点目标（D2-59），与 `withObjectName` 一致 |
