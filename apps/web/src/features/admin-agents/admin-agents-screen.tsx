@@ -173,16 +173,19 @@ export function AdminAgentsScreen({
 						{state.kind === "ready" ? (
 							<Badge tone="gray">{agents.length} 个 Agent</Badge>
 						) : null}
-						<Button
+						{/* 读取中保持可聚焦（aria-disabled），焦点留在按钮上；读取失败、页头工具随之
+						    收起时焦点移到 h1，不落到 body（D2-59）。 */}
+						<RecoveryButton
 							variant="ghost"
 							size="icon"
+							recoveryKey="刷新 Agent 列表"
 							aria-label="刷新 Agent 列表"
 							title="刷新 Agent 列表"
-							disabled={refreshing || state.kind === "loading"}
+							busy={refreshing || state.kind === "loading"}
 							onClick={onRefresh}
 						>
 							<RefreshCw aria-hidden="true" />
-						</Button>
+						</RecoveryButton>
 					</div>
 				)}
 			</header>

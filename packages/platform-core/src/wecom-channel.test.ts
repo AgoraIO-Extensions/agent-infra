@@ -5,6 +5,7 @@ import {
 	createWecomChannelV1,
 	type WecomAuthorizationPortV1,
 	type WecomChannelStorePortV1,
+	type WecomMediaRejectionV1,
 	type WecomMediaResolverV1,
 	type WecomMessageV1,
 	type WecomReceiptV1,
@@ -34,46 +35,76 @@ function fixture(
 	let nextId = 0;
 	const receipts = new Map<
 		string,
-		{ digest: string; receipt: WecomReceiptV1 }
+		{
+			digest: string;
+			receipt: WecomReceiptV1;
+			mediaRejection?: WecomMediaRejectionV1;
+		}
 	>();
 	const conversations = new Map<string, FakeConversationExecutionV1>();
 	// 映射键 → 当前会话轮次；Postgres 在同一受理事务里串行化这一步（#3184）。
 	const rotations = new Map<string, number>();
+	const plans: Parameters<WecomChannelStorePortV1["accept"]>[0][] = [];
+	const conversationFor = (
+		plan: Parameters<WecomChannelStorePortV1["accept"]>[0],
+	) => {
+		const id = JSON.stringify([
+			plan.authority.actor.actorId,
+			plan.authority.actor.channelId,
+		]);
+		let conversation = conversations.get(id);
+		if (!conversation) {
+			conversation = new FakeConversationExecutionV1({
+				authority: plan.authority.actor,
+				newId: () => `channel_fixture_${++nextId}`,
+			});
+			conversations.set(id, conversation);
+		}
+		return conversation;
+	};
 	const store: WecomChannelStorePortV1 = {
 		async reject() {},
 		async accept(plan, execute) {
+			plans.push(plan);
 			const old = receipts.get(plan.eventKey);
 			if (old)
 				return old.digest === plan.requestDigest
 					? { outcome: "replayed", receipt: old.receipt }
 					: { outcome: "conflict" };
-			const id = JSON.stringify([
-				plan.authority.actor.actorId,
-				plan.authority.actor.channelId,
-			]);
-			let conversation = conversations.get(id);
-			if (!conversation) {
-				conversation = new FakeConversationExecutionV1({
-					authority: plan.authority.actor,
-					newId: () => `channel_fixture_${++nextId}`,
-				});
-				conversations.set(id, conversation);
-			}
+			const conversation = conversationFor(plan);
 			const rotation = rotations.get(plan.conversationKey) ?? 0;
-			const receipt = {
-				...(await execute(conversation, {
-					conversationKey: wecomConversationKeyForRotationV1(
-						plan.conversationKey,
-						rotation,
-					),
-					async startNewConversation() {
-						rotations.set(plan.conversationKey, rotation + 1);
-					},
-				})),
-				receiptId: plan.eventKey,
-			};
-			receipts.set(plan.eventKey, { digest: plan.requestDigest, receipt });
+			const { mediaRejection, ...result } = await execute(conversation, {
+				conversationKey: wecomConversationKeyForRotationV1(
+					plan.conversationKey,
+					rotation,
+				),
+				async startNewConversation() {
+					rotations.set(plan.conversationKey, rotation + 1);
+				},
+			});
+			const receipt = { ...result, receiptId: plan.eventKey };
+			receipts.set(plan.eventKey, {
+				digest: plan.requestDigest,
+				receipt,
+				...(mediaRejection ? { mediaRejection } : {}),
+			});
 			return { outcome: "accepted", receipt };
+		},
+		// #3227：与受理相同的映射与轮次，单独确定会话；已有回执时交给受理重放。
+		async prepareConversation(plan, prepare) {
+			plans.push(plan);
+			if (receipts.has(plan.eventKey)) return { outcome: "received" };
+			const rotation = rotations.get(plan.conversationKey) ?? 0;
+			const prepared = await prepare(conversationFor(plan), {
+				conversationKey: wecomConversationKeyForRotationV1(
+					plan.conversationKey,
+					rotation,
+				),
+				async startNewConversation() {
+					throw new Error("Mapping rotates only during acceptance");
+				},
+			});
+			return { outcome: "prepared", ...prepared };
 		},
 	};
 	const useCase = createWecomChannelV1({
@@ -115,6 +146,8 @@ function fixture(
 		useCase,
 		receipts,
 		conversations,
+		plans,
+		rotations,
 		revoke: () => {
 			allowed = false;
 		},
@@ -388,22 +421,330 @@ describe("WeCom /new and unavailable conversations (#3184)", () => {
 	});
 });
 
-it("fails closed when a callback carries media without an authority resolver", async () => {
-	const f = fixture();
-	await expect(
-		f.useCase.receive({
+describe("WeCom inbound media (#3227)", () => {
+	const download = (ordinal = 0) => ({
+		url: `https://download.example.test/media-${ordinal}?token=SENTINEL-URL-3227`,
+		aesKey: "SENTINEL-AESKEY-3227",
+		expiresAt: "2026-09-15T00:05:00Z",
+	});
+	const image = (ordinal = 0) => ({
+		kind: "image" as const,
+		name: null,
+		download: download(ordinal),
+	});
+	function mediaFixture(
+		handler?: (
+			input: Parameters<WecomMediaResolverV1["resolve"]>[0],
+			seed: WecomMediaResolverV1["resolve"],
+		) => ReturnType<WecomMediaResolverV1["resolve"]>,
+	): ReturnType<typeof fixture> & {
+		readonly calls: Parameters<WecomMediaResolverV1["resolve"]>[0][];
+		readonly conversationOf: (actorId: string) => FakeConversationExecutionV1;
+	} {
+		const calls: Parameters<WecomMediaResolverV1["resolve"]>[0][] = [];
+		let f: ReturnType<typeof fixture> | undefined;
+		const conversationOf = (actorId: string) => {
+			const conversation = [...(f?.conversations.entries() ?? [])].find(
+				([key]) => JSON.parse(key)[0] === actorId,
+			)?.[1];
+			if (!conversation) throw new Error("Missing fixture conversation");
+			return conversation;
+		};
+		// 默认替身把已确认的 attachment 写到发送者自己的会话，绑定服务端解析的主体与会话。
+		const seed: WecomMediaResolverV1["resolve"] = async (input) => {
+			const conversation = conversationOf(input.authority.actor.actorId);
+			const attachments = (input.message.media ?? []).map((_, ordinal) => {
+				const fileId = `${input.conversationId}:${input.message.eventId}:${ordinal}`;
+				conversation.seedFile({
+					actorId: input.authority.actor.actorId,
+					agentId: input.authority.actor.agentId,
+					channelId: input.authority.actor.channelId,
+					conversationId: input.conversationId,
+					fileId,
+					objectRef: `object-${fileId}`,
+					kind: "attachment",
+					idempotencyKey: `wecom-${ordinal}`,
+					descriptor: {
+						name: `image-${ordinal + 1}.png`,
+						mediaType: "image/png",
+						sizeBytes: 8,
+						sha256: "a".repeat(64),
+					},
+					status: "available",
+					executionId: null,
+					messageId: null,
+					sessionGeneration: null,
+					objectVersion: "version-1",
+					etag: "etag-1",
+					createdAt: "2026-09-15T00:00:00.000Z",
+					expiresAt: "2026-09-16T00:00:00.000Z",
+					updatedAt: "2026-09-15T00:00:00.000Z",
+					revision: 0,
+				});
+				return fileId;
+			});
+			return { outcome: "resolved", attachments };
+		};
+		f = fixture(undefined, {
+			async resolve(input) {
+				calls.push(input);
+				return handler ? handler(input, seed) : seed(input);
+			},
+		});
+		return Object.assign(f, { calls, conversationOf });
+	}
+
+	it("binds confirmed attachments to the sender's Message and Execution", async () => {
+		const f = mediaFixture();
+		const result = await f.useCase.receive({
+			...message,
+			text: "看看这两张图",
+			media: [image(0), image(1)],
+		});
+		if (result.outcome !== "accepted") throw new Error("Expected acceptance");
+		expect(result.receipt).toMatchObject({ status: "accepted" });
+		expect(f.calls).toHaveLength(1);
+		expect(f.calls[0]).toMatchObject({
+			conversationId: result.receipt.conversationId,
+			authority: { actor: { actorId: message.senderId } },
+		});
+		const conversation = f.conversationOf(message.senderId);
+		const snapshot = conversation.snapshot();
+		expect(snapshot.executions).toHaveLength(1);
+		const [first, second] = f.calls[0]?.message.media ?? [];
+		expect(first?.download).toBeDefined();
+		expect(second?.download).toBeDefined();
+		for (const ordinal of [0, 1]) {
+			const file = conversation.readFile(
+				`${result.receipt.conversationId}:${message.eventId}:${ordinal}`,
+			);
+			expect(file).toMatchObject({
+				messageId: snapshot.messages[0]?.messageId,
+				executionId: result.receipt.executionId,
+				sessionGeneration: 1,
+			});
+		}
+	});
+
+	it("replays the same message ID without downloading or writing again", async () => {
+		const f = mediaFixture();
+		const first = await f.useCase.receive({ ...message, media: [image()] });
+		// 重投的下载地址与 aeskey 不同也不影响摘要：它们不是请求事实。
+		const replay = await f.useCase.receive({
 			...message,
 			media: [
 				{
-					kind: "image",
-					mediaId: "provider-media-1",
-					name: null,
-					mediaType: "image/jpeg",
+					...image(),
+					download: {
+						...download(),
+						url: "https://download.example.test/other",
+						aesKey: "OTHER-KEY",
+					},
 				},
 			],
-		}),
-	).rejects.toThrow("WeCom media resolver unavailable");
-	expect(f.receipts.size).toBe(0);
+		});
+		expect(replay).toEqual({ ...first, outcome: "replayed" });
+		expect(f.calls).toHaveLength(1);
+		expect(
+			f.conversationOf(message.senderId).snapshot().executions,
+		).toHaveLength(1);
+	});
+
+	it("keeps the download URL and aeskey out of digests and receipts", async () => {
+		const f = mediaFixture();
+		await f.useCase.receive({ ...message, media: [image()] });
+		await f.useCase.receive({
+			...message,
+			eventId: "event-rejected",
+			media: [image()],
+		});
+		const persisted = JSON.stringify({
+			receipts: [...f.receipts.values()],
+			plans: f.plans.map(({ message: _message, ...plan }) => plan),
+		});
+		expect(persisted).not.toContain("SENTINEL-URL-3227");
+		expect(persisted).not.toContain("SENTINEL-AESKEY-3227");
+		expect(persisted).not.toContain("download.example.test");
+	});
+
+	it.each([
+		{ outcome: "rejected", reason: "too_large", maxBytes: 20_971_520 },
+		{ outcome: "rejected", reason: "unsupported_type", maxBytes: null },
+		{ outcome: "rejected", reason: "expired", maxBytes: null },
+		{ outcome: "rejected", reason: "failed", maxBytes: null },
+	] as const)(
+		"writes a media_rejected receipt without calling the Agent: %j",
+		async (resolution) => {
+			const f = mediaFixture(async () => resolution);
+			const result = await f.useCase.receive({ ...message, media: [image()] });
+			expect(result).toEqual({
+				outcome: "accepted",
+				receipt: {
+					receiptId: expect.any(String),
+					status: "media_rejected",
+					conversationId: null,
+					executionId: null,
+				},
+			});
+			expect([...f.receipts.values()][0]?.mediaRejection).toEqual({
+				reason: resolution.reason,
+				maxBytes: resolution.maxBytes,
+			});
+			expect(
+				f.conversationOf(message.senderId).snapshot().executions,
+			).toHaveLength(0);
+		},
+	);
+
+	it("rejects media when the resolver fails unexpectedly", async () => {
+		const f = mediaFixture(async () => {
+			throw new Error("SENTINEL-URL-3227");
+		});
+		const result = await f.useCase.receive({ ...message, media: [image()] });
+		if (result.outcome !== "accepted") throw new Error("Expected receipt");
+		expect(result.receipt.status).toBe("media_rejected");
+		expect([...f.receipts.values()][0]?.mediaRejection).toEqual({
+			reason: "failed",
+			maxBytes: null,
+		});
+	});
+
+	it.each([
+		["without a file surface", undefined, message.kind, true],
+		["for a callback-mode reference", "resolver", "wecom_bot", false],
+		["for a self-built application", "resolver", "wecom_app", false],
+	] as const)(
+		"replies unsupported %s",
+		async (_name, resolver, kind, withDownload) => {
+			const f = resolver ? mediaFixture() : fixture();
+			const result = await f.useCase.receive({
+				...message,
+				kind,
+				media: [withDownload ? image() : { kind: "file", name: "report.pdf" }],
+			});
+			if (result.outcome !== "accepted") throw new Error("Expected receipt");
+			expect(result.receipt).toMatchObject({
+				status: "media_rejected",
+				conversationId: null,
+				executionId: null,
+			});
+			expect([...f.receipts.values()][0]?.mediaRejection).toEqual({
+				reason: "unsupported_channel",
+				maxBytes: null,
+			});
+			if ("calls" in f) expect(f.calls).toHaveLength(0);
+			// 不调用 Agent，也不为被拒绝的媒体创建会话。
+			for (const conversation of f.conversations.values())
+				expect(conversation.snapshot().conversations).toHaveLength(0);
+		},
+	);
+
+	it("does not accept attachments into an unavailable conversation", async () => {
+		const f = mediaFixture();
+		const first = await f.useCase.receive({ ...message, text: "first" });
+		if (first.outcome !== "accepted" || !first.receipt.conversationId)
+			throw new Error("Expected acceptance");
+		f.conversationOf(message.senderId).markConversationUnavailable(
+			first.receipt.conversationId,
+		);
+		const result = await f.useCase.receive({
+			...message,
+			eventId: "event-media",
+			media: [image()],
+		});
+		if (result.outcome !== "accepted") throw new Error("Expected receipt");
+		expect(result.receipt).toMatchObject({
+			status: "unavailable",
+			conversationId: first.receipt.conversationId,
+		});
+		expect(f.calls).toHaveLength(0);
+	});
+
+	it("retries once when /new rotates the mapping after attachments were written", async () => {
+		let rotate = true;
+		let f: ReturnType<typeof mediaFixture> | undefined;
+		f = mediaFixture(
+			async (
+				input: Parameters<WecomMediaResolverV1["resolve"]>[0],
+				seed: WecomMediaResolverV1["resolve"],
+			) => {
+				if (rotate && f) {
+					rotate = false;
+					await f.useCase.receive({ ...message, eventId: "new", text: "/new" });
+				}
+				return seed(input);
+			},
+		);
+		const result = await f.useCase.receive({ ...message, media: [image()] });
+		const [before, after] = f.calls.map((call) => call.conversationId);
+		expect(f.calls).toHaveLength(2);
+		expect(before).not.toBe(after);
+		// 附件只绑定到受理时映射到的新会话，旧会话里写入的附件保持未绑定。
+		expect(result).toMatchObject({
+			outcome: "accepted",
+			receipt: { status: "accepted", conversationId: after },
+		});
+		const conversation = f.conversationOf(message.senderId);
+		expect(
+			conversation.readFile(`${before}:${message.eventId}:0`)?.messageId,
+		).toBeNull();
+		expect(
+			conversation.readFile(`${after}:${message.eventId}:0`)?.messageId,
+		).toEqual(expect.any(String));
+	});
+
+	it("keeps group senders in separate conversations with their own authority", async () => {
+		const f = mediaFixture();
+		const alice = await f.useCase.receive({ ...message, media: [image()] });
+		const bob = await f.useCase.receive({
+			...message,
+			senderId: "sender-2",
+			eventId: "event-bob",
+			media: [image()],
+		});
+		if (alice.outcome !== "accepted" || bob.outcome !== "accepted")
+			throw new Error("Expected acceptance");
+		expect(alice.receipt.conversationId).not.toBe(bob.receipt.conversationId);
+		expect(
+			f.calls.map((call) => [
+				call.authority.actor.actorId,
+				call.conversationId,
+			]),
+		).toEqual([
+			[message.senderId, alice.receipt.conversationId],
+			["sender-2", bob.receipt.conversationId],
+		]);
+		// 另一发送者的会话里读不到这条附件。
+		expect(
+			f
+				.conversationOf("sender-2")
+				.readFile(`${alice.receipt.conversationId}:${message.eventId}:0`),
+		).toBeNull();
+	});
+
+	it.each([
+		[
+			"plain HTTP download",
+			{
+				...image(),
+				download: { ...download(), url: "http://download.example.test/x" },
+			},
+		],
+		[
+			"missing expiry",
+			{ ...image(), download: { url: download().url, aesKey: "key" } },
+		],
+		["declared media type", { ...image(), mediaType: "image/png" }],
+	])("rejects an invalid media reference: %s", async (_name, entry) => {
+		const f = mediaFixture();
+		await expect(
+			f.useCase.receive({
+				...message,
+				media: [entry as never],
+			}),
+		).rejects.toThrow("Invalid WeCom message");
+		expect(f.receipts.size).toBe(0);
+	});
 });
 
 it("requires the current company identity, active Owner, binding and Agent availability", async () => {

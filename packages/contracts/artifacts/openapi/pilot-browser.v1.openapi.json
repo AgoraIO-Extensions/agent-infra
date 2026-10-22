@@ -14662,7 +14662,8 @@
                               "accepted",
                               "busy",
                               "unavailable",
-                              "new_conversation"
+                              "new_conversation",
+                              "media_rejected"
                             ],
                             "type": "string"
                           }
@@ -14843,7 +14844,8 @@
                         "accepted",
                         "busy",
                         "unavailable",
-                        "new_conversation"
+                        "new_conversation",
+                        "media_rejected"
                       ],
                       "type": "string"
                     }

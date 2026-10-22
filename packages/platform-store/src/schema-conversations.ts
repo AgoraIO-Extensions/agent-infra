@@ -360,10 +360,8 @@ export const conversationMessages = platformSchema.table(
 			sql`char_length(${table.actorId}) > 0`,
 		),
 		check("conversation_message_role_user", sql`${table.role} = 'user'`),
-		check(
-			"conversation_message_text_non_empty",
-			sql`char_length(${table.text}) > 0`,
-		),
+		// #3227：只带附件的企微媒体消息正文为空。正文与附件至少有一项，由 Core 受理与 Store 写入时
+		// 同时校验（附件绑定在另一张表，数据库约束无法表达），这里不再要求非空。
 		check(
 			"conversation_message_failure_binding",
 			sql`(${table.status}::text = 'failed') = (${table.failureCode} is not null)`,

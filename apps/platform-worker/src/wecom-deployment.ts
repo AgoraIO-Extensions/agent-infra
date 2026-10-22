@@ -32,9 +32,10 @@ function requireWecomConfiguration(value: unknown): WecomConfiguration {
 		)
 			throw new Error();
 		if (
-			configuration.mediaResolver !== undefined &&
-			(!configuration.mediaResolver ||
-				typeof configuration.mediaResolver.resolve !== "function")
+			configuration.media !== undefined &&
+			(!configuration.media ||
+				typeof configuration.media.storage?.upload !== "function" ||
+				typeof configuration.media.storage.inspect !== "function")
 		)
 			throw new Error();
 		return configuration;

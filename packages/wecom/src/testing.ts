@@ -42,3 +42,21 @@ export function wecomCallbackFixtureV1(
 		},
 	);
 }
+
+/**
+ * #3227：与固定版本 SDK `decryptFile` 互逆的入站媒体加密替身（AES-256-CBC，IV 取密钥前 16 字节，
+ * PKCS#7 按 32 字节填充）。只用于测试，不含真实凭证。
+ */
+export function encryptWecomMediaFixtureV1(
+	plain: Uint8Array,
+	aesKey: string,
+): Buffer {
+	const key = Buffer.from(aesKey, "base64");
+	const pad = 32 - (plain.length % 32);
+	const cipher = createCipheriv("aes-256-cbc", key, key.subarray(0, 16));
+	cipher.setAutoPadding(false);
+	return Buffer.concat([
+		cipher.update(Buffer.concat([plain, Buffer.alloc(pad, pad)])),
+		cipher.final(),
+	]);
+}

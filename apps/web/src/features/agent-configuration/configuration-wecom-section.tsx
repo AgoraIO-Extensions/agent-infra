@@ -11,9 +11,12 @@ export type WecomChannelKind = "wecom_bot" | "wecom_app";
  */
 export function ConfigurationWecomSection({
 	agentId,
+	disabled = false,
 	onUnbindChannel,
 }: {
 	agentId: string;
+	/** 整页表单禁用（提交中或 Agent 已停用），传给卡片内不受 fieldset 影响的复选框。 */
+	disabled?: boolean;
 	onUnbindChannel?: (kind: WecomChannelKind) => Promise<void>;
 }) {
 	return (
@@ -31,6 +34,7 @@ export function ConfigurationWecomSection({
 				<WecomBotSetup
 					key={`${agentId}:wecom_bot`}
 					agentId={agentId}
+					disabled={disabled}
 					unbindChannel={
 						onUnbindChannel ? () => onUnbindChannel("wecom_bot") : undefined
 					}
@@ -38,6 +42,7 @@ export function ConfigurationWecomSection({
 				<WecomAppSetup
 					key={`${agentId}:wecom_app`}
 					agentId={agentId}
+					disabled={disabled}
 					unbindChannel={
 						onUnbindChannel ? () => onUnbindChannel("wecom_app") : undefined
 					}

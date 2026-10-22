@@ -4144,7 +4144,7 @@ export type ListWecomReceiptsResponses = {
             deliveryStatus: 'pending' | 'claimed' | 'sending' | 'sent' | 'failed' | 'unknown' | 'cancelled' | 'expired' | 'abandoned';
             executionId: string | null;
             receiptId: string;
-            status: 'accepted' | 'busy' | 'unavailable' | 'new_conversation';
+            status: 'accepted' | 'busy' | 'unavailable' | 'new_conversation' | 'media_rejected';
         }>;
         nextCursor: string | null;
     };
@@ -4204,7 +4204,7 @@ export type GetWecomReceiptResponses = {
         executionId: string | null;
         receiptId: string;
         schemaVersion: 1;
-        status: 'accepted' | 'busy' | 'unavailable' | 'new_conversation';
+        status: 'accepted' | 'busy' | 'unavailable' | 'new_conversation' | 'media_rejected';
     };
 };
 

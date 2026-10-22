@@ -46,29 +46,33 @@ afterEach(() => {
 	vi.clearAllMocks();
 });
 
-it("passes a valid deployment media resolver through unchanged", async () => {
-	const mediaResolver = { resolve: async () => ["file-1"] as const };
+it("passes the deployment inbound media file surface through unchanged (#3227)", async () => {
+	const media = {
+		storage: { upload: async () => {}, inspect: async () => null },
+	};
 	const coordinator = createWecomDeploymentCoordinatorV1({
 		databaseUrl: "postgres://fixture",
-		configuration: configuration({ mediaResolver }),
+		configuration: configuration({ media }),
 	});
 	const worker = coordinator.start(new AbortController().signal);
 	try {
-		expect(mocks.options?.mediaResolver).toBe(mediaResolver);
+		expect(mocks.options?.media).toBe(media);
 	} finally {
 		await worker.close();
 	}
 });
 
-it.each([{ mediaResolver: {} }, { mediaResolver: { resolve: "invalid" } }])(
-	"rejects malformed deployment media resolver: %j",
-	(overrides) => {
-		const coordinator = createWecomDeploymentCoordinatorV1({
-			databaseUrl: "postgres://fixture",
-			configuration: configuration(overrides),
-		});
-		expect(() => coordinator.start(new AbortController().signal)).toThrow(
-			"WeCom Worker deployment dependencies are unavailable",
-		);
-	},
-);
+it.each([
+	{ media: null },
+	{ media: {} },
+	{ media: { storage: { upload: async () => {} } } },
+	{ media: { storage: { inspect: async () => null, upload: "invalid" } } },
+])("rejects a malformed inbound media file surface: %j", (overrides) => {
+	const coordinator = createWecomDeploymentCoordinatorV1({
+		databaseUrl: "postgres://fixture",
+		configuration: configuration(overrides),
+	});
+	expect(() => coordinator.start(new AbortController().signal)).toThrow(
+		"WeCom Worker deployment dependencies are unavailable",
+	);
+});

@@ -1,12 +1,12 @@
 import { RefreshCw } from "lucide-react";
 import { type ReactNode, useId } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { LoadingLine } from "@/components/ui/spinner";
 import { Timestamp } from "@/components/ui/timestamp";
 import type { ChipTone } from "@/lib/status-tone";
 import { PageStateCard } from "../page-state-card.js";
+import { RecoveryButton } from "../recovery-button.js";
 
 export type OperationsStatus =
 	| "unknown"
@@ -236,17 +236,19 @@ export function OperationsEntry({
 					</p>
 				</div>
 				{refreshable ? (
-					<Button
-						type="button"
+					// 读取中保持可聚焦（aria-disabled），焦点留在按钮上；读取失败、刷新随之收起时
+					// 焦点移到 h1，不落到 body（D2-59）。
+					<RecoveryButton
 						variant="ghost"
 						size="icon"
+						recoveryKey="刷新运维状态"
 						aria-label="刷新运维状态"
 						title="刷新运维状态"
-						disabled={isRefreshing || shown.kind === "loading"}
+						busy={isRefreshing || shown.kind === "loading"}
 						onClick={onRefresh}
 					>
 						<RefreshCw aria-hidden="true" />
-					</Button>
+					</RecoveryButton>
 				) : null}
 			</header>
 			<OperationsBody

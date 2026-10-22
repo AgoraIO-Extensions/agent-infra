@@ -8,7 +8,7 @@ import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import { captureDesignContract, designViewports } from "./design-contract";
-import { expectNoDuplicateControls } from "./page-health";
+import { expectFocusHeld, expectNoDuplicateControls } from "./page-health";
 import {
 	computed,
 	expectCardTable,
@@ -1333,3 +1333,158 @@ for (const administrator of [false, true]) {
 		await expectNoDuplicateControls(page, `${route}（G5-09）`);
 	});
 }
+
+// 在 fixture 之前拦下匹配的审计读取，pause() 后挂起、resume() 后交回 fixture 应答。
+async function holdReads(page: Page, pattern: RegExp) {
+	let hold: Promise<void> | undefined;
+	let release = () => {};
+	await page.route(pattern, async (route) => {
+		if (hold) await hold;
+		await route.fallback();
+	});
+	return {
+		pause() {
+			hold = new Promise<void>((resolve) => {
+				release = () => {
+					hold = undefined;
+					resolve();
+				};
+			});
+		},
+		resume: () => release(),
+	};
+}
+
+// #3235 I6-01：页头「刷新审计记录」与详情「刷新审计详情」读取中为可聚焦的禁用（aria-disabled），
+// 键盘与点击触发后焦点在读取中、读取后都留在按钮上；详情刷新后 Escape 仍关闭详情并回到
+// 「详情：{事件} · {时间}」；详情重读失败或「重试详情」恢复时焦点交给详情区域（D2-59）。
+for (const [route, role] of [
+	["/audit", "employee"],
+	["/admin/audit", "admin"],
+] as const)
+	for (const mode of ["keyboard", "click"] as const)
+		test(`${route} refresh buttons keep focus and Escape still closes a refreshed detail (${mode}, I6-01)`, async ({
+			page,
+		}, info) => {
+			const mobile = info.project.name === "mobile";
+			await page.setViewportSize(
+				mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+			);
+			const pageErrors = trackPageErrors(page);
+			const api = await fixture(page, role);
+			const list = await holdReads(
+				page,
+				/\/api\/(v2\/audit|v4\/admin\/audit)(?:\?.*)?$/,
+			);
+			const detailReads = await holdReads(
+				page,
+				/\/api\/(v2\/audit|v4\/admin\/audit)\/[^/?]+(?:\?.*)?$/,
+			);
+			await page.goto(route);
+			const main = page.locator("main");
+			const detailTrigger = main.getByRole("button", { name: /^详情：/ });
+			await expect(detailTrigger).toHaveCount(1);
+			const press = async (button: Locator, elsewhere: Locator) => {
+				if (mode === "keyboard") {
+					await button.focus();
+					await page.keyboard.press("Enter");
+				} else {
+					// 先把焦点放到别处，确认是点击本身把焦点交给按钮。
+					await elsewhere.focus();
+					await button.click();
+				}
+			};
+			const reads = (detail: boolean) =>
+				api.requests.filter(
+					(request) =>
+						/\/(v2\/audit|v4\/admin\/audit)(\/|$)/.test(request.path) &&
+						/\/audit\/[^/]+$/.test(request.path) === detail,
+				).length;
+
+			// 页头刷新。
+			const refresh = main.getByRole("button", { name: "刷新审计记录" });
+			const listReads = reads(false);
+			list.pause();
+			await press(
+				refresh,
+				main.getByRole("button", { name: "查询", exact: true }),
+			);
+			await expect(refresh).toHaveAttribute("aria-disabled", "true");
+			expect(
+				await refresh.evaluate((node) => (node as HTMLButtonElement).disabled),
+			).toBe(false);
+			await expectFocusHeld(refresh, [50, 300], `${route} 页头刷新读取中`);
+			await page.keyboard.press("Enter");
+			list.resume();
+			await expect(detailTrigger).toHaveCount(1);
+			await expect(refresh).toBeEnabled();
+			await expectFocusHeld(
+				refresh,
+				[50, 300, 1000, 1500],
+				`${route} 页头刷新读取后`,
+			);
+			expect(reads(false) - listReads).toBe(1);
+
+			// 详情刷新。
+			await detailTrigger.click();
+			const panel = page.getByRole("region", { name: "审计详情", exact: true });
+			await expect(panel).toBeFocused();
+			const detailRefresh = panel.getByRole("button", { name: "刷新审计详情" });
+			await expect(detailRefresh).toBeEnabled();
+			const heading = panel.getByRole("heading", { level: 2 });
+			const title = await heading.textContent();
+			expect(title).not.toBe("审计详情");
+			const before = reads(true);
+			detailReads.pause();
+			await press(detailRefresh, panel);
+			await expect(panel.getByText("正在读取审计详情…")).toBeVisible();
+			await expect(detailRefresh).toHaveAttribute("aria-disabled", "true");
+			await expectFocusHeld(
+				detailRefresh,
+				[50, 300],
+				`${route} 详情刷新读取中`,
+			);
+			await page.keyboard.press("Enter");
+			detailReads.resume();
+			await expect(heading).toHaveText(title ?? "");
+			await expect(detailRefresh).toBeEnabled();
+			await expectFocusHeld(
+				detailRefresh,
+				[50, 300, 1000, 1500],
+				`${route} 详情刷新读取后`,
+			);
+			expect(reads(true) - before).toBe(1);
+			await expectNoDuplicateControls(page, `${route}（I6-01）`);
+			await expectCleanPage(page, pageErrors);
+			// 详情刷新后 Escape 仍关闭详情，焦点回到触发它的「详情：{事件} · {时间}」。
+			await page.keyboard.press("Escape");
+			await expect(panel).toHaveCount(0);
+			await expect(detailTrigger).toBeFocused();
+			await expectFocusHeld(
+				detailTrigger,
+				[50, 300],
+				`${route} 详情刷新后 Escape`,
+			);
+
+			// 详情重读失败：刷新按钮随内容卸载，焦点交给详情区域，Escape 仍可关闭。
+			await detailTrigger.click();
+			await expect(detailRefresh).toBeEnabled();
+			api.failNext();
+			await press(detailRefresh, panel);
+			const failure = panel
+				.getByRole("alert")
+				.filter({ hasText: "审计详情读取失败" });
+			await expect(failure).toBeVisible();
+			await expect(panel).toBeFocused();
+			await expectFocusHeld(panel, [50, 300, 1000], `${route} 详情刷新失败后`);
+			// 「重试详情」恢复后按钮随失败提示卸载，焦点同样交给详情区域。
+			await press(failure.getByRole("button", { name: "重试详情" }), panel);
+			await expect(failure).toHaveCount(0);
+			await expect(detailRefresh).toBeEnabled();
+			await expect(panel).toBeFocused();
+			await expectFocusHeld(panel, [50, 300, 1000], `${route} 重试详情恢复后`);
+			await page.keyboard.press("Escape");
+			await expect(panel).toHaveCount(0);
+			await expect(detailTrigger).toBeFocused();
+			await expect(page.getByText("private fixture error")).toHaveCount(0);
+		});

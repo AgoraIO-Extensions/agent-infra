@@ -1993,6 +1993,7 @@ describe("published Relay authority migration", () => {
 			59,
 			60,
 			61,
+			62,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2054,9 +2055,13 @@ describe("published Relay authority migration", () => {
 			idx: 59,
 			tag: "0059_skill_project_content",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 61)).toMatchObject({
 			idx: 61,
 			tag: "0061_wecom_conversation_rotation",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 62,
+			tag: "0062_wecom_inbound_media",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2408,6 +2413,8 @@ describe("published Relay authority migration", () => {
 						"rotation",
 						"updated_at",
 					].map((name) => `wecom_conversation_rotations:${name}`),
+					"wecom_receipts:media_rejection_max_bytes",
+					"wecom_receipts:media_rejection_reason",
 				].sort(),
 				checks: [
 					...expectedDelta.checks,
@@ -2453,6 +2460,7 @@ describe("published Relay authority migration", () => {
 					),
 					"wecom_conversation_rotations:wecom_conversation_rotation_positive",
 					"wecom_receipts:wecom_acceptance_status",
+					"wecom_receipts:wecom_media_rejection",
 				].sort(),
 				indexes: [
 					...expectedDelta.indexes,

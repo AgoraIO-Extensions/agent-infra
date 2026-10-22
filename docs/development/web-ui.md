@@ -14,12 +14,12 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `index.html` | `6038af44b4a8a36cf88175615885dabc1a6d01c9c81983d7495c3b9135397ff7` |
+| `index.html` | `b7d5bcfe7c18dcee8db213df8f87d6a3f224146d181545d46e2ed54c8e12b417` |
 | `login.html` | `aa0a2737e7bc76f56c2552abfb503879a3c9f5c0919adfd7b65decd27b3ba6a7` |
 | `DESIGN.md` | `fa953264eafe4e0bd05adaa86387a9d90ad7af51d4e79f0a67620bfa31596d65` |
 | `IMPLEMENTATION.md` | `ae3e592272933f65a0f7fc34363142a4471a724f7a75db76affe6ae12d640600` |
 | `DESIGN-HANDOFF.md` | `3f2313d6d72bf3d7263d1e864730278217836ccdd5730d4b83460518bd2d3396` |
-| `DESIGN-MANIFEST.json` | `6adb33bf68fe9b520a58a14efa0944d8ce059274309adad0fed297098ad1740f` |
+| `DESIGN-MANIFEST.json` | `ee8348a366afc740df0aa11a3bbb36bb0071d5e7f50112f8311b29f3378c6566` |
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量，并提供设计同名别名（`--bg`、`--fg`、`--surface-raised`、`--accent`、
@@ -53,13 +53,14 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 
 ### 已回写导出设计的结论
 
-以下结论已在 #2862、#2863、#2903、#2996 与 #2830 终验（#3037–#3041、#3046、#3052，第二轮 #3127–#3130，第三轮 #3160、#3161，第四轮 #3179、#3180，第五轮 #3215、#3216）确认，
+以下结论已在 #2862、#2863、#2903、#2996 与 #2830 终验（#3037–#3041、#3046、#3052，第二轮 #3127–#3130，第三轮 #3160、#3161，第四轮 #3179、#3180，第五轮 #3215、#3216，第六轮 #3235、#3236）确认，
 并由 [#2863](https://github.com/AgoraIO-Extensions/agent-infra/issues/2863)、
 [#3107](https://github.com/AgoraIO-Extensions/agent-infra/issues/3107)、
 [#3130](https://github.com/AgoraIO-Extensions/agent-infra/issues/3130)、
 [#3161](https://github.com/AgoraIO-Extensions/agent-infra/issues/3161)、
-[#3180](https://github.com/AgoraIO-Extensions/agent-infra/issues/3180) 与
-[#3216](https://github.com/AgoraIO-Extensions/agent-infra/issues/3216) 回写本版导出稿；实现与验收以这里为准：
+[#3180](https://github.com/AgoraIO-Extensions/agent-infra/issues/3180)、
+[#3216](https://github.com/AgoraIO-Extensions/agent-infra/issues/3216) 与
+[#3236](https://github.com/AgoraIO-Extensions/agent-infra/issues/3236) 回写本版导出稿；实现与验收以这里为准：
 
 | 编号 | 位置 | 实现 | 依据 |
 | --- | --- | --- | --- |
@@ -110,7 +111,7 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | X-12 | 审计 390 卡片表格的「对象」（名称 / ID 短形式） | 同 X-08 | 同 X-08 |
 | X-13 | Skill Hub 读取失败、无匹配空态 | 图标下方 11px，其余高度按网格行均分 | 图标不作为行内元素放进文字块（原导出稿 `skillEmpty` 基线下多出约 6.8px，图标到标题 17.8px） |
 | Y-03 | 窄屏导航 Sheet 头部 | 保留右上角 44px ghost 图标按钮「关闭导航」，品牌块让出 48px，两者命中区不重叠；遮罩与 Esc 仍可关闭，关闭后焦点回到「打开导航」 | 可访问性：模态导航提供可见、可触达的关闭控件，不只依赖 Esc 或遮罩 |
-| Y-04 / H4-19 / H4-25 / H5-14 / H5-19 | 侧栏「个人 Relay Key」「API 凭证」「我的 Connection」图标；企微「扫码授权」与配置类入口的图标；刷新与重试图标；Agent 图标 | 沿用 lucide `KeyRound`（17px）；「扫码授权」为 lucide `Scan`（只有四角）；Agent 详情「Owner 配置」、已创建卡「配置与生命周期」、申请详情「修改申请」、思考强度入口、`/admin/agents`「配置」、`/skills/manage`「Agent 绑定」与「改用手动配置」为 lucide `Settings` 齿轮；刷新、重试、重新读取（`/admin/agents`「刷新 Agent 列表」与行内「重试」、`/ops`、`/audit`、`/admin/audit`、「重启 Agent」、状态卡「重新加载…」）为 lucide `RefreshCw`（顺时针，箭头在右上与左下）；侧栏「Agent 目录」、回复卡头像、模型入口与 404「前往 Agent 目录」为 lucide `Bot`（折线天线、两侧耳朵、两道竖眼） | 全站 key 语义（侧栏、连接器提示、对话上下文条、Connection 安装面板、Secret、Relay Key、API 凭证空态）统一为同一字形；只换侧栏会让同页出现两种 key 图标；scan、settings、refresh、bot 同理，全站同一语义只用一种 lucide 字形（G4-06、G4-10；原导出稿 `scan` 带中心方块，`settings` 为圆加四段短弧，`refresh` 为逆时针自绘字形，`bot` 为圆角框、竖直天线与带嘴的两点眼睛） |
+| Y-04 / H4-19 / H4-25 / H5-14 / H5-19 / J6-01 / J6-02 | 侧栏「个人 Relay Key」「API 凭证」「我的 Connection」「Skill 审核」「评测」「我的执行审计」「平台审计」「运维观测」图标；企微「扫码授权」与配置类入口的图标；刷新与重试图标；Agent 图标；停止与执行中图标 | 沿用 lucide `KeyRound`（17px）；「扫码授权」为 lucide `Scan`（只有四角）；Agent 详情「Owner 配置」、已创建卡「配置与生命周期」、申请详情「修改申请」、思考强度入口、`/admin/agents`「配置」、`/skills/manage`「Agent 绑定」与「改用手动配置」为 lucide `Settings` 齿轮；刷新、重试、重新读取（`/admin/agents`「刷新 Agent 列表」与行内「重试」、`/ops`、`/audit`、`/admin/audit`、「重启 Agent」、状态卡「重新加载…」）为 lucide `RefreshCw`（顺时针，箭头在右上与左下）；侧栏「Agent 目录」、回复卡头像、模型入口与 404「前往 Agent 目录」为 lucide `Bot`（折线天线、两侧耳朵、两道竖眼）；侧栏「Skill 审核」、个人 Relay Key 与 API 凭证页提示、Skill 审核行为 lucide `Shield`（无对勾），Owner 配置「权限边界」为 `ShieldCheck`；侧栏「评测」为 `FlaskConical`；侧栏「运维观测」、Agent 详情「运行与渠道」、浏览器卡「执行中」卡头与「正在校验默认 Key」为 `Activity`（17px 下约 13.9px 高）；侧栏「我的执行审计」「平台审计」为 `ClipboardMinus`（一道横线）；「停止回复」「停止操作」「停止 Agent」与浏览器卡「已停止」「工具调用失败」卡头为 `Square`（16px 下 12px 方块）；导出稿 path 逐段取自 lucide-react 1.41.0 的 shield、shield-check、flask-conical、activity、clipboard-minus、square | 全站 key 语义（侧栏、连接器提示、对话上下文条、Connection 安装面板、Secret、Relay Key、API 凭证空态）统一为同一字形；只换侧栏会让同页出现两种 key 图标；scan、settings、refresh、bot、shield、activity、clipboard、stop 同理，全站同一语义只用一种 lucide 字形（G4-06、G4-10；原导出稿 `scan` 带中心方块，`settings` 为圆加四段短弧，`refresh` 为逆时针自绘字形，`bot` 为圆角框、竖直天线与带嘴的两点眼睛；J6-01、J6-02：`shield` 为自绘带勾盾牌，「评测」与「运维观测」共用纵向 5–19 的自绘 `activity`（17px 下约 9.9px 高），`clipboard` 为两道横线，`stop` 为 12×12 方块（16px 下 8px）） |
 | Y-09 | 工作台「待处理」管理员行 | 系统管理员另有一行「运行状态 / N 个 Agent 创建失败 / 查看失败清单」，进入 `/admin/agents?status=creation_failed`；Owner 行按导出稿对齐 | 系统管理员可代替 Owner 重试创建失败的 Agent（[PRD §2.3](../prd/PRD-agent-platform-M1.md#23-系统管理员)、[§6.3](../prd/PRD-agent-platform-M1.md#63-管理状态)） |
 | Z-02 | 对话 composer 的发送按钮 | 草稿为空且没有选中命令或 Skill 时禁用 | 消息命令 `MessageCommandRequestV1.text` 必须非空；禁用比无反馈的点击更清楚 |
 | Z-04 | 已完成回答的状态行 | 「已完成 · 重新生成 · 查看执行详情」：已完成、失败与已停止的回答都可重新生成；不显示「n 步」 | [PRD §11.2](../prd/PRD-agent-platform-M1.md#112-对话能力)：重新生成基于同一条用户消息产生新回答，服务端只要求会话没有活跃回复。会话投影没有步数，过程摘要在执行详情 |
@@ -153,7 +154,7 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | D2-56 / F3-03 | 对话页短视口（高度不超过 600px） | 页头只留 h1（44px），隐藏 eyebrow 与副标题，折叠条省略「按需查看」；会话上下文、时间线、会话文件与输入框之间统一 6px；仍只有时间线滚动 | 见[OpenDesign 视觉版本](#opendesign-视觉版本)短视口规则；原导出稿短视口仍用常规间距（10 / 0 / 18px） |
 | D2-57 / F3-07 | 申请表单多服务 YAML 文本框（`#app-manifest`） | 可访问名称「多服务资源 YAML 内容」，占位符三行；最小高 224px，等宽 14px / 20px | 与上方文件输入「多服务资源 YAML」区分（[#3119](https://github.com/AgoraIO-Extensions/agent-infra/issues/3119)）；尺寸同 `agent-application-form.tsx`，原导出稿沿用公共文本框的 110px、15px |
 | D2-58（D2-01、D2-02、D2-08、D2-10、D2-16、D2-20） | 同页重复的行内与卡内操作 | 可访问名称为「{可见文字}：{对象名}」：工作台最近对话、待处理、可用 Agent 与我的申请，我的 Agent 已创建卡，企微卡片（「验证并绑定：企微机器人」等），审批「审阅」，Agent 管理行操作，审计「详情：{事件} · {时间}」，Skill Hub 与我的 Skill 行操作；Agent 目录为「查看 {名称} 详情」；回复卡用提问摘要（超过 20 字截断，重复时按出现顺序加「（第 N 次）」）；申请表单可重复的行（模型选项、环境变量、Secret）内的字段、推理档位复选框与「移除」按钮以所在行 legend 为对象名（「模型端点：模型选项 2」「均衡：模型选项 1」「移除 Secret：Secret 1」）；按模型勾选的推理档位复选框（Owner 配置「模型与凭证」、修改申请的 Key 候选）以所属模型为对象名（「均衡：Relay · Internal · gpt-5」）；Owner 配置「环境变量与 Secret」的环境变量行以行序号为对象名（「环境变量名：环境变量 1」「值：环境变量 1」「移除：环境变量 1」，两行选了同一变量名时仍可区分），Secret 行的只读字段以 Secret 名称为对象名（「Secret 名称：RELEASE_KEY」「当前状态：RELEASE_KEY」） | 可访问性：同页不出现同名控件，与 `withObjectName`、`distinctObjectNames` 一致（N-12） |
-| D2-59（D2-17、D2-19、D2-24、D2-25、D2-28、D2-34、D2-36、D2-38、D2-39、D2-43、D2-48、D2-50、D2-51）/ F3-13 | 演示动作完成后的焦点 | 弹窗（含 Skill 弹窗）打开时聚焦弹窗容器，只含一个输入框的表单弹窗（「替换 Secret」「替换 Agent 默认 Relay Key」）聚焦该输入框；扫码面板打开后焦点留在「扫码授权」；确认解绑企微后到卡片标题；Skill 绑定或更换固定版本后到该绑定卡标题，解除后到下一张卡标题，没有时到 h1；审批驳回空原因时到「驳回原因」，Escape 关闭后回到「审阅：{申请名}」；申请提交或重新提交后到「申请已提交：待审批。」提示（H4-13）；确认撤回申请后到 h1（H4-15）；Owner 配置确认停止 Agent 后到 h1（H4-21）；确认禁用员工后到「员工访问控制」，取消或 Escape 关闭禁用确认回到「禁用员工：{姓名}」；审计详情打开后到「审计详情」区域，Escape 或「关闭」回到触发按钮；加入我的库后到「配置 Agent 绑定」，撤销版本后到 h1；Relay Key 保存后到「替换 Key」，撤销后到 Relay Key 输入框（H4-27）；确认撤销 API 凭证后到该行凭证标识，取消或 Escape 关闭撤销确认回到「撤销：{凭证}」；签发或轮换应用凭证后到「应用凭证结果」；停止回复后到该回复卡的「重新生成」；浏览器卡「停止操作」受理后到该回复卡的「正在停止」，停止确认后到浏览器卡「查看操作记录」（没有时同停止回复）；浏览器卡其余命令处理中按钮保持可聚焦（`aria-disabled`），受理并回读到下一阶段后到新卡的下一步操作：允许后到「接管浏览器」（下一阶段为执行中时到「停止操作」），接管后到「交还给 Agent」，交还后到「停止操作」，拒绝与停止接管后到「查看操作记录」（都没有时到输入框，再没有时到 h1）；停用 Agent 与重试创建见 D2-22、D2-12；重绘不收起已展开的折叠条，焦点留在折叠条内的同一控件 | 与 Web 一致：动作完成后焦点在触发按钮、结果标题或 h1，不因整页重绘落到 body（N-06）；单输入框弹窗的初始焦点同 `secret-replace-dialog.tsx`、`default-relay-key-dialog.tsx` |
+| D2-59（D2-17、D2-19、D2-24、D2-25、D2-28、D2-34、D2-36、D2-38、D2-39、D2-43、D2-48、D2-50、D2-51）/ F3-13 / I6-01 | 演示动作完成后的焦点 | 弹窗（含 Skill 弹窗）打开时聚焦弹窗容器，只含一个输入框的表单弹窗（「替换 Secret」「替换 Agent 默认 Relay Key」）聚焦该输入框；扫码面板打开后焦点留在「扫码授权」；确认解绑企微后到卡片标题；Skill 绑定或更换固定版本后到该绑定卡标题，解除后到下一张卡标题，没有时到 h1；审批驳回空原因时到「驳回原因」，Escape 关闭后回到「审阅：{申请名}」；申请提交或重新提交后到「申请已提交：待审批。」提示（H4-13）；确认撤回申请后到 h1（H4-15）；Owner 配置确认停止 Agent 后到 h1（H4-21）；确认禁用员工后到「员工访问控制」，取消或 Escape 关闭禁用确认回到「禁用员工：{姓名}」；审计详情打开后到「审计详情」区域，Escape 或「关闭」回到触发按钮；页头刷新（「刷新 Agent 列表」「刷新运维状态」「刷新审计记录」）与「刷新审计详情」读取中保持可聚焦（`aria-disabled`），完成后焦点留在刷新按钮，详情刷新后 Escape 仍关闭详情并回到触发按钮；页头刷新失败、刷新按钮随页头工具收起时到 h1，详情重读失败或「重试详情」恢复后到「审计详情」区域；加入我的库后到「配置 Agent 绑定」，撤销版本后到 h1；Relay Key 保存后到「替换 Key」，撤销后到 Relay Key 输入框（H4-27）；确认撤销 API 凭证后到该行凭证标识，取消或 Escape 关闭撤销确认回到「撤销：{凭证}」；签发或轮换应用凭证后到「应用凭证结果」；停止回复后到该回复卡的「重新生成」；浏览器卡「停止操作」受理后到该回复卡的「正在停止」，停止确认后到浏览器卡「查看操作记录」（没有时同停止回复）；浏览器卡其余命令处理中按钮保持可聚焦（`aria-disabled`），受理并回读到下一阶段后到新卡的下一步操作：允许后到「接管浏览器」（下一阶段为执行中时到「停止操作」），接管后到「交还给 Agent」，交还后到「停止操作」，拒绝与停止接管后到「查看操作记录」（都没有时到输入框，再没有时到 h1）；停用 Agent 与重试创建见 D2-22、D2-12；重绘不收起已展开的折叠条，焦点留在折叠条内的同一控件 | 与 Web 一致：动作完成后焦点在触发按钮、结果标题或 h1，不因整页重绘落到 body（N-06）；单输入框弹窗的初始焦点同 `secret-replace-dialog.tsx`、`default-relay-key-dialog.tsx` |
 | F3-02 | 对话页处理中与停止后的回复卡 | 每条提问只有一张回复卡：发送后处理中卡跟在该提问之后，重新生成时在原回答的位置显示处理中卡；停止后在同一位置显示已停止的回答，重新生成被停止时作为该回答的新版本（版本行 x/y）；处理中卡的「查看执行详情」带所答提问的摘要 | 与 Web 一致：回复按提问归组（`conversation-screen-messages.tsx`），同页不出现同名控件（D2-58）；原导出稿处理中卡追加在时间线末尾，与上一条回答指向同一提问 |
 | F3-04 | 对话页浏览器卡「工具调用失败」 | 与「已停止」相同：danger 24% 混色边框、红色图标、red「已停止」chip | 失败与停止都需要重新核实页面（Z-10），Web 按已停止阶段呈现（`browser-card.ts`）；原导出稿 `failed` 阶段漏挂 danger 样式 |
 | F3-06 | 对话页处理中的 composer | 输入框仍可编辑，发送按钮为「发送补充指令」，草稿为空时禁用；「命令 / Skill」入口禁用（opacity .48、not-allowed） | [PRD §11.2](../prd/PRD-agent-platform-M1.md#112-对话能力)：活跃回复期间按 Runtime 能力接收补充指令或提示繁忙；[§11.3](../prd/PRD-agent-platform-M1.md#113-原生命令与已安装-skill)：活跃回复期间不再启动新的命令任务或 Skill |
@@ -183,13 +184,16 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | H5-05 | 创建、修改申请「标准模板」下的模板就绪列表 | 与下拉相距 8px，列表下方不留外边距 | 原导出稿 `.template-readiness` 只设上外边距，`ul` 保留 UA 默认 14px 下外边距（同 D2-11） |
 | H5-06 | 创建、修改申请「高级配置」的「展开高级配置 / 收起高级配置」（≤767px） | 保持 44px 单行按钮，说明在左侧换行 | 同 X-06（原导出稿按钮被挤成 96.7px 宽，折成两行、高 55.6px） |
 | H5-07 | 目录选择器结果列表下的「清空搜索」 | 只在有关键词时显示，选中结果后关键词清空、不再显示；命中区至少 44px，字重 400 | 「清空搜索」位于结果列表之外，按 DESIGN.md 触达下限（`directory-fields.tsx`、`index.css` `.directory-clear`）；原导出稿 32px 且在关键词为空时常驻 |
-| H5-08 / H5-10 / H5-12 | 禁用的表单控件：修改申请锁定的「来源」「标准模板」、企微机器人「扫码已完成，确认后绑定」与验证期间的 Bot ID / Secret、已停用 Agent 的 Owner 配置 | 输入框、下拉、文本框与目录选择器输入框不透明度 .5、`not-allowed`；目录 chip 的移除按钮同禁用按钮 .48；复选框为不透明度 .5 的公共复选框（勾选时 `--accent` 底与白色勾），选项文字不变淡 | 与公共 `Input`、`NativeSelect`、`Textarea`、`Checkbox` 的禁用态及 D2-07 一致；原导出稿只有 `.owner-config-fieldset:disabled` 下的部分控件变淡，原生下拉取 UA 默认 .7，复选框由 UA 画成灰底 |
+| H5-08 / H5-10 / H5-12 / I6-02 | 禁用的表单控件：修改申请锁定的「来源」「标准模板」、企微机器人「扫码已完成，确认后绑定」与验证期间的 Bot ID / Secret、已停用 Agent 的 Owner 配置（含企微机器人「我已知悉可能断开其他连接」、企微应用「我已知悉可能影响现有回调」） | 输入框、下拉、文本框与目录选择器输入框不透明度 .5、`not-allowed`；目录 chip 的移除按钮同禁用按钮 .48；复选框为不透明度 .5 的公共复选框（勾选时 `--accent` 底与白色勾），选项文字不变淡 | 与公共 `Input`、`NativeSelect`、`Textarea`、`Checkbox` 的禁用态及 D2-07 一致；公共 `Checkbox` 不受 `<fieldset disabled>` 影响，企微确认复选框显式接收表单禁用（`wecom-bot-setup.tsx`、`wecom-app-setup.tsx`，I6-02）；原导出稿只有 `.owner-config-fieldset:disabled` 下的部分控件变淡，原生下拉取 UA 默认 .7，复选框由 UA 画成灰底 |
 | H5-13 | Owner 配置企微应用卡「EncodingAESKey」「应用 ID」 | 「EncodingAESKey」标签与输入框关联；「应用 ID」名称为「应用 ID：企微应用」 | 与「应用 ID：Agent 授权控制」（H4-16）区分（N-12）；原导出稿标签指向不存在的 id，输入框只能回落到占位符 |
 | H5-15 | `/admin/agents`「运行状态」筛选 | 全部状态、创建中、可用、已停止、创建失败、已停用 | 列表按管理状态筛选（[PRD §6.3](../prd/PRD-agent-platform-M1.md#63-管理状态)），与 Y-09 的 `status=creation_failed` 同一组值；原导出稿为「就绪」（服务可用性）且缺「创建中」「已停用」 |
 | H5-16 | `/admin/agents` 员工访问控制「禁用员工」 | 选中员工后可访问名称为「禁用员工：{姓名}」，未选员工时为「禁用员工」 | 取消或 Escape 关闭确认后的焦点目标（D2-59），与 `withObjectName` 一致 |
 | H5-17 | 登录页（`login.html`）提交中的「显示密码」 | 与账号、密码一起禁用：不透明度 .48、`not-allowed` | 与公共 `Button` 禁用态一致；原导出稿按钮已禁用但没有禁用样式 |
 | H5-18 | 公共状态卡的「重新登录」「重新加载…」 | 文字前分别为 16px lucide `LogIn`、`RefreshCw` | `page-state-card.tsx` 的默认 `RecoveryButton`；与运维页「重新读取观测状态」带刷新图标一致 |
 | G5-09 | `/audit`、`/admin/audit`「结果」筛选 | 「全部结果」之后按审计结果列出：成功、已拒绝、失败、已受理、操作意图、已开始、已提交、等待中、处理中、已完成、已取消、结果待核实 | 选项取 `auditResultLabels`，同一控件内不出现同名选项（#3215 G5-09）；原导出稿为「成功 / 失败 / 待处理」示例 |
+| J6-03 | `/my-agents`「申请 N / 已创建」Tab；`/skills/:id`「用途与内容 / 版本与变更」Tab | tablist（「我的 Agent 视图」「Skill 详情」）内为 tab：选中项 `aria-selected="true"`、`tabindex="0"`，`aria-controls` 指向唯一渲染的 tabpanel（`aria-labelledby` 指回该 Tab、`tabindex="0"`），未选中项 `tabindex="-1"`；左右方向键循环移动焦点并同时切换，Home / End 到首尾，Tab 键从选中项进入面板 | 公共 `Tabs`（Base UI，`activateOnFocus`）的语义与键盘行为（`my-agents-screen.tsx`、`skill-hub-version-screen.tsx`）；原导出稿「我的 Agent」为普通按钮、没有 Tab 语义，方向键不切换；「Skill 详情」只有 role 与 `aria-selected` |
+| J6-04 | 目录选择器结果列表（≤767px：申请表单、修改申请、Owner 配置、员工访问控制） | 列表在选择框下方 6px；列表到提示行仍为 13px | `index.css` ≤767px 的 `.directory-menu{margin-top:6px}`；原导出稿列表是 `.field`（gap 7px 的 grid）的直接子项，叠加后为 13px |
+| J6-05 | `/agents/:agentId/skills` 绑定卡标题后的版本胶囊 | 胶囊垂直居中（`vertical-align: middle`） | `index.css` `.quiet-pill`；原导出稿按基线对齐，1440 下比 Web 低 3.5px |
 
 导出稿中以下内容仍与 Web 不同，不作为实现依据：
 

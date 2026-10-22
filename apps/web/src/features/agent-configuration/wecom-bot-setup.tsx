@@ -91,9 +91,15 @@ function qrUnavailableCopy(
 
 export function WecomBotSetup({
 	agentId,
+	disabled = false,
 	unbindChannel,
 }: {
 	agentId: string;
+	/**
+	 * 整页配置表单的禁用（提交中或 Agent 已停用）。原生控件由外层 <fieldset disabled> 禁用，
+	 * Base UI 复选框不受 fieldset 影响，需要显式接收（同「模型与凭证」复选框）。
+	 */
+	disabled?: boolean;
 	/** 独立的解绑请求（只含 wecom_bot disabled）；未提供时不显示解绑入口。 */
 	unbindChannel?: () => Promise<void>;
 }) {
@@ -562,7 +568,7 @@ export function WecomBotSetup({
 			<Label variant="option">
 				<Checkbox
 					checked={confirmed}
-					disabled={busy || qrConfirming}
+					disabled={disabled || busy || qrConfirming}
 					onCheckedChange={(value) => setConfirmed(value)}
 				/>
 				<span className="min-w-0">我已知悉可能断开其他连接</span>

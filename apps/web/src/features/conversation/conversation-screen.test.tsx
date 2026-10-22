@@ -95,13 +95,19 @@ function setup(
 				revision: "c".repeat(64),
 				capabilities: [],
 			});
-		if (path === "/api/v1/conversations/conversation-1/files/limits")
+		if (path === "/api/v2/agents/agent-1/file-limits")
 			return Response.json({
 				schemaVersion: 1,
-				revision: "test-files-v1",
-				expiresAt: "2027-01-01T00:00:00Z",
-				mediaTypes: ["text/plain", "application/pdf"],
-				maxBytes: 10 * 1024 * 1024,
+				declaration: {
+					schemaVersion: 1,
+					scope: "agent",
+					revision: 1,
+					expiresAt: "2027-01-01T00:00:00Z",
+					mediaTypes: ["text/plain", "application/pdf"],
+					maxBytes: 10 * 1024 * 1024,
+					updatedAt: "2026-01-01T00:00:00Z",
+					updatedBy: "user-chat",
+				},
 			});
 		if (path.endsWith("/events")) {
 			const stream = sse();
@@ -883,8 +889,7 @@ describe("functional conversation screen", () => {
 
 	it("closes the attachment entry when the limits response is not the contract shape", async () => {
 		setup((request) =>
-			new URL(request.url).pathname ===
-			"/api/v1/conversations/conversation-1/files/limits"
+			new URL(request.url).pathname === "/api/v2/agents/agent-1/file-limits"
 				? Response.json({ items: [], nextCursor: null })
 				: undefined,
 		);
@@ -910,7 +915,7 @@ describe("functional conversation screen", () => {
 				.disabled,
 		).toBe(false);
 		const limits = requests.filter((request) =>
-			new URL(request.url).pathname.endsWith("/files/limits"),
+			new URL(request.url).pathname.endsWith("/file-limits"),
 		);
 		expect(limits).toHaveLength(1);
 		expect(limits[0]?.method).toBe("GET");

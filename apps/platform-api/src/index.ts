@@ -28,6 +28,7 @@ import { SseResourceTracker } from "./sse-resource-tracker.js";
 interface StartOptions {
 	dependencies: PlatformAppDependencies;
 	browserAuth?: BrowserAuthHandler;
+	standardTemplateReleaseApp?: StandardTemplateReleaseApp;
 	observability?: ReturnType<typeof startObservability>;
 	log?: (message: string) => void;
 	port?: number;
@@ -36,6 +37,12 @@ interface StartOptions {
 
 interface BrowserAuthHandler {
 	handleRequest(request: Request): Response | null | Promise<Response | null>;
+	close?(): Promise<void>;
+}
+
+/** Deployment-owned, independently authenticated internal release surface. */
+export interface StandardTemplateReleaseApp {
+	fetch(request: Request): Response | Promise<Response>;
 	close?(): Promise<void>;
 }
 
@@ -51,10 +58,12 @@ interface PlatformApiDeploymentModule {
 		| PlatformApiAssemblyInput
 		| Promise<PlatformApiAssemblyInput>;
 	browserAuth?: BrowserAuthHandler;
+	standardTemplateReleaseApp?: StandardTemplateReleaseApp;
 }
 
 interface LoadedPlatformApiAssembly extends PlatformApiAssembly {
 	browserAuth?: BrowserAuthHandler;
+	standardTemplateReleaseApp?: StandardTemplateReleaseApp;
 }
 
 function runtimePort(value: string | undefined, fallback: number) {
@@ -81,24 +90,34 @@ export function startPlatformApi(options: StartOptions) {
 		options.sseResources,
 	);
 	const browserAuth = options.browserAuth;
+	const standardTemplateReleaseApp = options.standardTemplateReleaseApp;
+	// 保留的 release 命名空间不能回落到普通 API：未装配 release app 时显式 404，
+	// 避免部署漏装后被普通路由意外承接（fail closed，契约见 #3234）。
+	const releaseNamespace = "/internal/ops/standard-template-releases";
+	const releasePrefix = `${releaseNamespace}/`;
+	const fetch = async (request: Request) => {
+		const path = new URL(request.url).pathname;
+		if (path === releaseNamespace || path.startsWith(releasePrefix)) {
+			if (standardTemplateReleaseApp)
+				return standardTemplateReleaseApp.fetch(request);
+			return new Response(null, {
+				status: 404,
+				headers: { "Cache-Control": "no-store" },
+			});
+		}
+		if (browserAuth && (path === "/auth/login" || path === "/auth/logout")) {
+			try {
+				const response = await browserAuth.handleRequest(request);
+				return response instanceof Response ? response : authUnavailable();
+			} catch {
+				return authUnavailable();
+			}
+		}
+		return app.fetch(request);
+	};
 	return serve(
 		{
-			fetch: browserAuth
-				? async (request) => {
-						const path = new URL(request.url).pathname;
-						if (path !== "/auth/login" && path !== "/auth/logout") {
-							return app.fetch(request);
-						}
-						try {
-							const response = await browserAuth.handleRequest(request);
-							return response instanceof Response
-								? response
-								: authUnavailable();
-						} catch {
-							return authUnavailable();
-						}
-					}
-				: app.fetch,
+			fetch,
 			port,
 		},
 		(info) =>
@@ -128,7 +147,11 @@ export async function loadPlatformApiAssembly(
 			(imported.browserAuth !== undefined &&
 				(typeof imported.browserAuth?.handleRequest !== "function" ||
 					(imported.browserAuth.close !== undefined &&
-						typeof imported.browserAuth.close !== "function")))
+						typeof imported.browserAuth.close !== "function"))) ||
+			(imported.standardTemplateReleaseApp !== undefined &&
+				(typeof imported.standardTemplateReleaseApp?.fetch !== "function" ||
+					(imported.standardTemplateReleaseApp.close !== undefined &&
+						typeof imported.standardTemplateReleaseApp.close !== "function")))
 		) {
 			throw new Error();
 		}
@@ -152,7 +175,11 @@ export async function loadPlatformApiAssembly(
 		assembly = assemblePlatformApi(input);
 	} catch (error) {
 		try {
-			await deployment.browserAuth?.close?.();
+			try {
+				await deployment.standardTemplateReleaseApp?.close?.();
+			} finally {
+				await deployment.browserAuth?.close?.();
+			}
 		} catch {
 			// Keep the startup failure; cleanup errors may contain private material.
 		}
@@ -162,11 +189,16 @@ export async function loadPlatformApiAssembly(
 		dependencies: assembly.dependencies,
 		readResourceSnapshot: assembly.readResourceSnapshot,
 		browserAuth: deployment.browserAuth,
+		standardTemplateReleaseApp: deployment.standardTemplateReleaseApp,
 		async close() {
 			try {
 				await assembly.close();
 			} finally {
-				await deployment.browserAuth?.close?.();
+				try {
+					await deployment.standardTemplateReleaseApp?.close?.();
+				} finally {
+					await deployment.browserAuth?.close?.();
+				}
 			}
 		},
 	};
@@ -211,6 +243,7 @@ export async function startPlatformApiFromDeployment(
 		server = startPlatformApi({
 			dependencies: assembly.dependencies,
 			browserAuth: assembly.browserAuth,
+			standardTemplateReleaseApp: assembly.standardTemplateReleaseApp,
 			observability,
 			sseResources,
 			log: options.log,

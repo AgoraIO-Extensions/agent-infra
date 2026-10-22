@@ -2021,6 +2021,76 @@ test("disabled inputs keep the surface background like disabled selects (G4-18)"
 	await expectCleanPage(page, pageErrors);
 });
 
+// #3235 I6-02：Base UI 复选框不受 <fieldset disabled> 影响。已停用 Agent 的整页表单禁用时，企微机器人
+// 与企微应用的确认复选框显式随表单禁用：禁用态、有效不透明度 .5、not-allowed，点击复选框或其文字
+// 都不改变 aria-checked；与同一表单的「模型与凭证」复选框一致。
+test("WeCom acknowledgements are disabled with the disabled form (I6-02)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await ownerConfigFixture(page);
+	const base = AgentProjectionV2Schema.parse(
+		pilotFakeScenariosV2.starting.response.body,
+	);
+	await page.route("**/api/v2/agents/agent-pilot-1", (route) =>
+		route.request().method() === "GET"
+			? route.fulfill({
+					json: AgentProjectionV2Schema.parse({
+						...base,
+						managementStatus: "disabled",
+						serviceAvailability: null,
+					}),
+				})
+			: route.fallback(),
+	);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const form = main(page);
+	await expect(
+		form.getByText("运行资格已撤销，Owner 无法恢复。"),
+	).toBeVisible();
+	// 有效不透明度：自身与全部祖先 opacity 的乘积。
+	const effectiveOpacity = (locator: Locator) =>
+		locator.evaluate((element) => {
+			let opacity = 1;
+			for (let node: Element | null = element; node; node = node.parentElement)
+				opacity *= Number(getComputedStyle(node).opacity);
+			return Math.round(opacity * 1000) / 1000;
+		});
+	for (const [card, name] of [
+		["企微机器人", "我已知悉可能断开其他连接"],
+		["企微应用", "我已知悉可能影响现有回调"],
+	] as const) {
+		const region = form.getByRole("region", { name: card, exact: true });
+		const box = region.getByRole("checkbox", { name, exact: true });
+		await expect(box).toBeVisible();
+		await expect(box).toBeDisabled();
+		await expect(box).toHaveAttribute("aria-disabled", "true");
+		await expect(box).toHaveAttribute("aria-checked", "false");
+		await expect(box).toHaveCSS("cursor", "not-allowed");
+		expect(await effectiveOpacity(box), `${name} 有效不透明度`).toBe(0.5);
+		// 同卡的原生控件由 fieldset 禁用，作为对照。
+		await expect(
+			region.getByRole("button", { name: `验证并绑定：${card}` }),
+		).toBeDisabled();
+		await box.click({ force: true });
+		await expect(box).toHaveAttribute("aria-checked", "false");
+		await region.getByText(name, { exact: true }).click({ force: true });
+		await expect(box).toHaveAttribute("aria-checked", "false");
+	}
+	// 整页表单里的复选框（含「模型与凭证」）全部禁用，有效不透明度都是 .5。
+	const checkboxes = form
+		.getByRole("group", { name: "Agent 配置" })
+		.getByRole("checkbox");
+	expect(await checkboxes.count()).toBeGreaterThan(2);
+	for (const box of await checkboxes.all()) {
+		await expect(box).toBeDisabled();
+		expect(await effectiveOpacity(box)).toBe(0.5);
+	}
+	await expectNoDuplicateControls(page, "已停用 Agent 的企微确认（I6-02）");
+	await expectCleanPage(page, pageErrors);
+});
+
 // #3179 G4-20 / G4-21 / G4-22：空态图标为 Search；同步失败卡阶段到错误 12px、错误到操作 0，
 // 失败阶段文字为 --danger；「确认绑定固定版本」事实列表在窄屏按单列 .facts（gap 3、dt 上距 8、dd 下距 4）。
 test("Skill binding empty state, failed sync card and narrow bind facts follow the design (G4-20 / G4-21 / G4-22)", async ({
