@@ -3764,6 +3764,53 @@ describe("Codex Runtime Driver", () => {
 		]);
 	});
 
+	it("records references of a Turn completed after restart as unpublished failures (#3226)", async () => {
+		const f = await codexReferenceFixture();
+		await f.driver.close();
+		const recoveredBridge = new TestCodexBridge(
+			f.bridge.nativeThreadId,
+			f.bridge.nativeTurnId,
+		);
+		const reopened = await openDriver(f.path, recoveredBridge);
+		drivers.push(reopened);
+		// 重启后的进程没有该执行的文件交换上下文：只记录失败事实，不发布、不延迟终态。
+		await reopened.getStatus(
+			f.accepted.nativeSessionRef,
+			f.command.executionId,
+		);
+		await recoveredBridge.emitAgentMessageCompleted(
+			"![chart](sandbox:out/chart.png)",
+		);
+		await recoveredBridge.emitTurnCompleted("completed");
+		await vi.waitFor(async () =>
+			expect(
+				await persistedExecutionStatus(
+					f.path,
+					f.accepted.nativeSessionRef,
+					f.command.executionId,
+				),
+			).toBe("completed"),
+		);
+		expect(f.writeResult).not.toHaveBeenCalled();
+		const events = await reopened.replayEvents(
+			f.accepted.nativeSessionRef,
+			f.command.executionId,
+		);
+		expect(events.some((event) => event.type === "file")).toBe(false);
+		expect(
+			events.flatMap((event) =>
+				event.type === "operation" &&
+				event.payload.kind === "tool" &&
+				event.payload.toolId === "workspace.publish_result_file"
+					? [[event.payload.phase, event.payload.failureCode]]
+					: [],
+			),
+		).toEqual([
+			["intent", undefined],
+			["failed", "dependency_unavailable"],
+		]);
+	});
+
 	// #3201：官方 lane 的原生工具在 Session Sandbox 内执行，Driver 从 item 生命周期记录
 	// 工具事实；命令、输出与路径不进入事实，工具失败不使 Turn 失败。
 	it("records native tool facts from item lifecycle in the official lane", async () => {

@@ -12270,15 +12270,23 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const execution = Object.values(session.executions).find(
 			(candidate) => candidate.nativeTurnId === journal.nativeTurnId,
 		);
-		if (
-			!execution ||
-			!this.resultPublicationContexts.has(execution.executionId)
-		)
-			return false;
+		if (!execution) return false;
 		const { plan } = planSandboxResultsV1({
 			text: sandboxResultAnswerText(journal.events),
 		});
 		if (!plan) return false;
+		if (!this.resultPublicationContexts.has(execution.executionId)) {
+			// #3226：重启后才确认的终态没有执行期文件交换上下文：引用只记录为未发布的失败事实，
+			// 不延迟终态，也不发布。
+			const settled = settleSandboxResultsWithoutBridgeV1(
+				plan,
+				() => undefined,
+			);
+			for (const fact of settled.facts)
+				this.appendOperationFact(session, journal, fact);
+			journal.resultPublication = settled.plan;
+			return false;
+		}
 		journal.resultPublication = plan;
 		this.scheduleResultPublication(
 			session.nativeSessionRef,
