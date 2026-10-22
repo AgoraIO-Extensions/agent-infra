@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldLegend } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
@@ -6,6 +6,7 @@ import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
+import { withObjectName } from "@/lib/accessible-name";
 
 import {
 	candidateKey,
@@ -86,9 +87,10 @@ export function KeylessModelPicker({
 				<p className="text-muted-foreground text-sm">
 					只列出该 Key 可见、且模板支持的模型。勾选后可调整推理档位和默认项。
 				</p>
-				{candidates.map((candidate) => {
+				{candidates.map((candidate, candidateIndex) => {
 					const key = candidateKey(candidate);
 					const row = rows[key] ?? { checked: false, levels: [] };
+					const label = `${candidate.endpointId} · ${candidate.modelId}`;
 					return (
 						<div className="space-y-2" key={key}>
 							<Label variant="option">
@@ -106,29 +108,40 @@ export function KeylessModelPicker({
 										})
 									}
 								/>
-								{candidate.endpointId} · {candidate.modelId}
+								{label}
 							</Label>
 							{row.checked ? (
 								<fieldset className="flex min-w-0 flex-wrap gap-4 pl-7">
 									<legend className="sr-only">
 										{candidate.modelId} 的推理档位
 									</legend>
-									{candidate.reasoningLevels.map((level) => (
-										<Label variant="option" key={level}>
-											<Checkbox
-												checked={row.levels.includes(level)}
-												disabled={disabled}
-												onCheckedChange={(checked) =>
-													setRow(key, {
-														levels: checked
-															? [...row.levels, level]
-															: row.levels.filter((item) => item !== level),
-													})
-												}
-											/>
-											{level}
-										</Label>
-									))}
+									{candidate.reasoningLevels.map((level, levelIndex) => {
+										// 多个模型同时展开档位时，名称带上所属模型（D2-58）。base-ui 复选框默认取
+										// 外层 label 作 aria-labelledby，所以与 E3-16 相同，名称取自旁边的隐藏文本。
+										const nameId = `${idPrefix}-level-${candidateIndex}-${levelIndex}-name`;
+										return (
+											<Fragment key={level}>
+												<Label variant="option">
+													<Checkbox
+														aria-labelledby={nameId}
+														checked={row.levels.includes(level)}
+														disabled={disabled}
+														onCheckedChange={(checked) =>
+															setRow(key, {
+																levels: checked
+																	? [...row.levels, level]
+																	: row.levels.filter((item) => item !== level),
+															})
+														}
+													/>
+													{level}
+												</Label>
+												<span id={nameId} hidden>
+													{withObjectName(level, label)}
+												</span>
+											</Fragment>
+										);
+									})}
 								</fieldset>
 							) : null}
 						</div>
