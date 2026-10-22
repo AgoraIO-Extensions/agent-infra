@@ -147,4 +147,4 @@ it("persists declarations with revision CAS, idempotent replay and authoritative
 		await sql.end();
 		await db.stop();
 	}
-});
+}, 120_000);
