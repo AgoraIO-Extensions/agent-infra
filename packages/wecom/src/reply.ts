@@ -9,11 +9,7 @@ import {
 	publicEncrypt,
 	randomBytes,
 } from "node:crypto";
-import type {
-	WecomResultFileReferenceV1,
-	WecomScopeV1,
-	WecomSendPortV1,
-} from "@agent-infra/platform-core";
+import type { WecomScopeV1, WecomSendPortV1 } from "@agent-infra/platform-core";
 import type { WecomConfigurationV1 } from "./index.js";
 export interface WecomReplyRouteV1 {
 	readonly bindingReference: string;
@@ -304,51 +300,22 @@ export function createWecomSenderV1(options: {
 	readonly getApplicationAccessToken: (
 		config: WecomConfigurationV1,
 	) => Promise<string>;
-	/** Sends File Authority-backed result files through the provider adapter. */
-	readonly sendMedia?: (input: {
-		readonly config: WecomConfigurationV1;
-		readonly route: WecomReplyRouteV1;
-		readonly scope: WecomScopeV1;
-		readonly files: readonly WecomResultFileReferenceV1[];
-		readonly revalidate: () => Promise<boolean>;
-	}) => Promise<"sent" | "failed" | "unknown">;
 	readonly fetch?: typeof fetch;
 	readonly now?: () => Date;
 }): WecomSendPortV1 {
+	// #3229：自建应用与显式机器人回调声明为不支持媒体（工程 Spec §14.2.3）。Core 在交给本 sender
+	// 之前去掉结果文件并在文本中说明，这里只发送文本；不实现 planMedia/sendMedia。
 	return {
 		async send(input) {
 			let url: string;
 			let bodies: unknown[];
 			let replyExpiresAt: number;
 			let config: WecomConfigurationV1;
-			let route!: WecomReplyRouteV1;
-			const sendMedia = options.sendMedia;
 			try {
-				if (
-					(input.text.length === 0 && !(input.media?.length ?? 0)) ||
-					!input.text.isWellFormed()
-				)
+				if (input.text.length === 0 || !input.text.isWellFormed())
 					return "failed";
-				if (
-					input.media?.some(
-						(file) =>
-							!file ||
-							!boundedText(file.fileId, 1024) ||
-							!boundedText(file.name, 255) ||
-							!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(
-								file.mediaType,
-							) ||
-							!Number.isSafeInteger(file.sizeBytes) ||
-							file.sizeBytes < 0,
-					) ||
-					(input.media?.length ?? 0) > 32
-				)
-					return "failed";
-				// Media support is a deterministic deployment capability. Reject before
-				// any text effect so a missing transfer cannot create a partial reply.
-				if (input.media?.length && !sendMedia) return "failed";
 				const resolved = await options.resolveConfiguration(input.scope);
-				route = await options.revealReply(input.replyHandle);
+				const route = await options.revealReply(input.replyHandle);
 				if (
 					!resolved ||
 					resolved.bindingReference !== input.scope.bindingReference ||
@@ -378,9 +345,7 @@ export function createWecomSenderV1(options: {
 					)
 						return "failed";
 					url = target.href;
-					bodies = input.text
-						? [{ msgtype: "markdown", markdown: { content: input.text } }]
-						: [];
+					bodies = [{ msgtype: "markdown", markdown: { content: input.text } }];
 				} else {
 					if (
 						!config.applicationId ||
@@ -391,14 +356,12 @@ export function createWecomSenderV1(options: {
 					)
 						return "failed";
 					url = "";
-					bodies = input.text
-						? applicationTextParts(input.text).map((content) => ({
-								touser: route.recipientId,
-								msgtype: "text",
-								agentid: Number(config.applicationId),
-								text: { content },
-							}))
-						: [];
+					bodies = applicationTextParts(input.text).map((content) => ({
+						touser: route.recipientId,
+						msgtype: "text",
+						agentid: Number(config.applicationId),
+						text: { content },
+					}));
 				}
 			} catch {
 				return "failed";
@@ -444,26 +407,6 @@ export function createWecomSenderV1(options: {
 				);
 				if (status !== "sent")
 					return index > 0 && status === "failed" ? "unknown" : status;
-			}
-			if (input.media?.length) {
-				if (!sendMedia) return "failed";
-				if (replyExpiresAt <= (options.now?.() ?? new Date()).getTime())
-					return bodies.length ? "unknown" : "failed";
-				let status: "sent" | "failed" | "unknown";
-				try {
-					if (!input.revalidate || !(await input.revalidate()))
-						return bodies.length ? "unknown" : "failed";
-					status = await sendMedia({
-						config,
-						route,
-						scope: input.scope,
-						files: input.media,
-						revalidate: input.revalidate,
-					});
-				} catch {
-					status = "unknown";
-				}
-				return bodies.length && status !== "sent" ? "unknown" : status;
 			}
 			return "sent";
 		},

@@ -26,8 +26,10 @@
 		"test": "pnpm build && vitest run src"
 	},
 	"dependencies": {
+		"@agent-infra/contracts": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",
 		"@wecom/aibot-node-sdk": "1.0.7",
+		"mdast-util-from-markdown": "2.0.3",
 		"saxes": "6.0.0"
 	},
 	"devDependencies": {

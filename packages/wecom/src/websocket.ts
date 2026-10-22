@@ -120,6 +120,83 @@ function parseContent(
 			return { content: object(body.text).content };
 	}
 }
+/** #3229：企微官方频率限制（WECOM-text-deployment.md「媒体」）。 */
+const ratePerMinute = 30;
+const ratePerHour = 1000;
+/** 滑动窗口计数：返回一分钟与一小时内都还剩下的额度。 */
+function createRateWindow() {
+	const stamps: number[] = [];
+	const prune = (instant: number) => {
+		while (stamps.length && (stamps[0] ?? 0) <= instant - 3_600_000)
+			stamps.shift();
+	};
+	return {
+		available(instant: number) {
+			prune(instant);
+			const minute = stamps.filter((stamp) => stamp > instant - 60_000).length;
+			return Math.max(
+				0,
+				Math.min(ratePerMinute - minute, ratePerHour - stamps.length),
+			);
+		},
+		take(instant: number) {
+			stamps.push(instant);
+		},
+		idle(instant: number) {
+			prune(instant);
+			return stamps.length === 0;
+		},
+	};
+}
+/** #3229：单个媒体的读取与上传时限；超时不再回复，已上传的临时素材不被使用。 */
+const mediaUploadTimeoutMs = 90_000;
+const mediaMaximumBytes = 20 * 1024 * 1024;
+/**
+ * 长连接发送一个结果文件的输入。`read` 由 Worker 提供，读取已确认结果文件的固定版本字节，
+ * 只在路由与授权核对之后调用；字节不进入日志、错误或返回值。
+ */
+export type WecomWebSocketMediaInputV1 = Parameters<
+	NonNullable<WecomSendPortV1["sendMedia"]>
+>[0] & {
+	readonly read: (signal: AbortSignal) => Promise<Uint8Array>;
+};
+/** 长连接回复端口：文本 stream 与 #3229 的媒体被动回复。 */
+export interface WecomWebSocketSenderV1 {
+	send: WecomSendPortV1["send"];
+	planMedia: NonNullable<WecomSendPortV1["planMedia"]>;
+	sendMedia(
+		input: WecomWebSocketMediaInputV1,
+	): Promise<"sent" | "failed" | "unknown">;
+}
+function providerRejected(error: unknown) {
+	return (
+		!!error &&
+		typeof error === "object" &&
+		"errcode" in error &&
+		typeof error.errcode === "number" &&
+		error.errcode !== 0
+	);
+}
+async function withinDeadline<T>(
+	work: Promise<T>,
+	signal: AbortSignal,
+): Promise<T> {
+	let abort: (() => void) | undefined;
+	try {
+		return await Promise.race([
+			work,
+			new Promise<never>((_, reject) => {
+				abort = () => reject(new Error("WeCom media deadline"));
+				if (signal.aborted) abort();
+				else signal.addEventListener("abort", abort, { once: true });
+			}),
+		]);
+	} finally {
+		if (abort) signal.removeEventListener("abort", abort);
+		// 超时后仍在进行的工作只会被丢弃，不能产生未处理的拒绝。
+		work.catch(() => {});
+	}
+}
 /** Transport only. The caller owns durable connection fencing and the shared Core ingress. */
 export function createWecomWebSocketV1(options: {
 	readonly configuration: WecomWebSocketConfigurationV1;
@@ -183,6 +260,22 @@ export function createWecomWebSocketV1(options: {
 	}, 500);
 	ownershipTimer.unref();
 	const sending = new Set<string>();
+	// #3229：企微频率限制。本连接持有者内存中按滑动窗口计数：每个会话的回复合计 30 条/分钟、
+	// 1000 条/小时，每个机器人上传 30 次/分钟、1000 次/小时。规划媒体时占用额度。
+	const uploads = createRateWindow();
+	const conversations = new Map<string, ReturnType<typeof createRateWindow>>();
+	function conversationWindow(scope: WecomScopeV1) {
+		const key = JSON.stringify([scope.conversationType, scope.peerId]);
+		const instant = now().getTime();
+		for (const [other, window] of conversations)
+			if (window.idle(instant)) conversations.delete(other);
+		let window = conversations.get(key);
+		if (!window) {
+			window = createRateWindow();
+			conversations.set(key, window);
+		}
+		return window;
+	}
 	// #3077：处理中提示仍在等待 ACK 的请求。最终回复先等它结束（SDK 回复队列长度为 1），
 	// 已开始最终回复的请求不再发处理中提示，避免它落在已结束的 stream 之后。只保留最近的请求。
 	const acknowledging = new Map<string, Promise<unknown>>();
@@ -210,10 +303,10 @@ export function createWecomWebSocketV1(options: {
 			clearTimeout(timer);
 		}
 	}
-	/** 揭开回复路由并核对它仍属于当前连接、绑定和会话，且未过期。 */
+	/** 揭开回复路由并核对它仍属于当前连接、绑定和会话，且未过期；有正文时同时核对正文。 */
 	async function currentRoute(
 		input: { readonly scope: WecomScopeV1; readonly replyHandle: string },
-		content: string,
+		content?: string,
 	) {
 		const route = await options.revealReply(input.replyHandle);
 		const ws = route.websocket;
@@ -231,7 +324,7 @@ export function createWecomWebSocketV1(options: {
 			scopeKey(route.scope) !== scopeKey(input.scope) ||
 			!Number.isFinite(Date.parse(route.expiresAt)) ||
 			Date.parse(route.expiresAt) <= now().getTime() ||
-			!text(content, 20480)
+			(content !== undefined && !text(content, 20480))
 		)
 			return null;
 		return { route, ws };
@@ -429,7 +522,7 @@ export function createWecomWebSocketV1(options: {
 	client.on("message.text", receiveMessageFrame);
 	for (const kind of ["image", "file", "voice", "video", "mixed"] as const)
 		client.on(`message.${kind}`, receiveMessageFrame);
-	const sender: WecomSendPortV1 = {
+	const sender: WecomWebSocketSenderV1 = {
 		async send(input) {
 			// #2982：stream 回复按企微思考过程样式渲染 `<think>`；带思考的文本不合规时退回只发答案，
 			// 思考过程不会让答案发送失败。
@@ -471,6 +564,7 @@ export function createWecomWebSocketV1(options: {
 					return "failed";
 				}
 				if (!authorized) return "failed";
+				conversationWindow(route.scope).take(now().getTime());
 				const ack = await client.replyStream(
 					{ headers: { req_id: ws.requestId } },
 					ws.streamId,
@@ -479,15 +573,113 @@ export function createWecomWebSocketV1(options: {
 				);
 				return ack.errcode === 0 ? "sent" : "unknown";
 			} catch (error) {
+				return providerRejected(error) ? "failed" : "unknown";
+			} finally {
+				sending.delete(ws.requestId);
+			}
+		},
+		/**
+		 * #3229：发送文本前规划媒体。回复路由不属于当前连接时按不支持处理；按会话与机器人的剩余
+		 * 频率额度依次占用，文本本身占会话的一条。
+		 */
+		async planMedia(input) {
+			try {
+				const resolved = await currentRoute(input);
+				if (!resolved || !(await current())) return null;
+				const instant = now().getTime();
+				const conversation = conversationWindow(resolved.route.scope);
+				let room = Math.min(
+					uploads.available(instant),
+					conversation.available(instant) - 1,
+				);
+				return input.files.map(() => {
+					if (room <= 0) return "rate_limited";
+					room--;
+					uploads.take(instant);
+					conversation.take(instant);
+					return "send";
+				});
+			} catch {
+				return null;
+			}
+		},
+		/**
+		 * #3229：文本 stream 结束后被动回复一个结果文件：核对路由与当前授权，读取固定版本，分片上传
+		 * 临时素材，再次核对后 `replyMedia`。上传没有用户可见的效果，失败一律为 failed；回复被企微
+		 * 拒绝为 failed，ACK 丢失或断连为 unknown，不重发。`media_id` 与字节只在本次调用内使用。
+		 */
+		async sendMedia(input) {
+			const file = input.file;
+			if (
+				!["image", "video", "file"].includes(file.kind) ||
+				!text(file.name, 255) ||
+				!Number.isSafeInteger(file.sizeBytes) ||
+				file.sizeBytes < 5 ||
+				file.sizeBytes > mediaMaximumBytes
+			)
+				return "failed";
+			let route: WecomReplyRouteV1;
+			let ws: NonNullable<WecomReplyRouteV1["websocket"]>;
+			try {
+				const resolved = await currentRoute(input);
 				if (
-					error &&
-					typeof error === "object" &&
-					"errcode" in error &&
-					typeof error.errcode === "number" &&
-					error.errcode !== 0
+					!resolved ||
+					sending.has(resolved.ws.requestId) ||
+					!(await current())
 				)
 					return "failed";
-				return "unknown";
+				({ route, ws } = resolved);
+			} catch {
+				return "failed";
+			}
+			if (!authenticated || ws.connectionId !== connectionId || closed)
+				return "failed";
+			sending.add(ws.requestId);
+			const usable = async () => {
+				try {
+					return (
+						(await input.revalidate()) &&
+						(await current()) &&
+						authenticated &&
+						!closed &&
+						ws.connectionId === connectionId &&
+						Date.parse(route.expiresAt) > now().getTime()
+					);
+				} catch {
+					return false;
+				}
+			};
+			try {
+				if (!(await usable())) return "failed";
+				const deadline = AbortSignal.timeout(mediaUploadTimeoutMs);
+				let mediaId: string;
+				try {
+					const read = await withinDeadline(input.read(deadline), deadline);
+					if (read.byteLength !== file.sizeBytes) return "failed";
+					const uploaded = await withinDeadline(
+						client.uploadMedia(
+							Buffer.from(read.buffer, read.byteOffset, read.byteLength),
+							{ type: file.kind, filename: file.name },
+						),
+						deadline,
+					);
+					if (!text(uploaded?.media_id, 1024)) return "failed";
+					mediaId = uploaded.media_id;
+				} catch {
+					return "failed";
+				}
+				// 上传可能耗时：被动回复前再核对一次授权、连接与回复有效期。
+				if (!(await usable())) return "failed";
+				try {
+					const ack = await client.replyMedia(
+						{ headers: { req_id: ws.requestId } },
+						file.kind,
+						mediaId,
+					);
+					return ack.errcode === 0 ? "sent" : "unknown";
+				} catch (error) {
+					return providerRejected(error) ? "failed" : "unknown";
+				}
 			} finally {
 				sending.delete(ws.requestId);
 			}
