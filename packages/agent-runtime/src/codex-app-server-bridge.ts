@@ -206,11 +206,13 @@ export const CODEX_MODEL_CATALOG_PATH = "/opt/codex/share/models.json";
 /**
  * 官方 lane 的固定部署策略，模型、Owner 和工作区都不能覆盖（工程 Spec §10.14）。
  * 原生工具在 Session Sandbox 内默认可用，审批策略固定为不发起审批；工具子进程的
- * 环境排除 `AGENT_INFRA_*`，模型传输凭证不进入 shell。供应商托管的 web search、
+ * 环境只保留最小白名单并排除 `AGENT_INFRA_*`，模型传输凭证不进入 shell。供应商托管的 web search、
  * 图片生成，以及需要额外平台中介调用归属的原生子 Agent、apps 等功能保持关闭。
  */
 export const CODEX_OFFICIAL_LANE_CONFIG = Object.freeze({
 	approval_policy: "never",
+	// 工具子进程只继承最小环境（HOME、PATH、TMPDIR 等），再显式排除 `AGENT_INFRA_*`。
+	"shell_environment_policy.inherit": "core",
 	"shell_environment_policy.exclude": Object.freeze(["AGENT_INFRA_*"]),
 	web_search: "disabled",
 	// #2980：请会隐藏推理的模型返回明文推理摘要，作为思考过程展示；
