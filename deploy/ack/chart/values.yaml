@@ -72,6 +72,24 @@ resources:
   postgres:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {cpu: 500m, memory: 512Mi}
+quota:
+  # Session PVCs are retained for resume and therefore consume namespace
+  # budget after a Sandbox stops. Keep the budget explicit in deployment input.
+  enabled: true
+  hard:
+    count/configmaps: "100"
+    count/jobs.batch: "10"
+    count/secrets: "50"
+    limits.cpu: "20"
+    limits.ephemeral-storage: 20Gi
+    limits.memory: 40Gi
+    persistentvolumeclaims: "25"
+    pods: "30"
+    requests.cpu: "3"
+    requests.ephemeral-storage: 6Gi
+    requests.memory: 4Gi
+    requests.storage: 500Gi
+    services: "50"
 postgres:
   enabled: false
   storageClass: alicloud-disk-essd

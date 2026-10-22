@@ -19,6 +19,7 @@ export class WorkloadStepErrorV1 extends Error {
 
 /** 有界的失败原因，只能是这些取值，不携带任何外部文本。 */
 export type WorkloadStepFailureReasonV1 =
+	| "kubernetes_quota"
 	| "kubernetes_unauthorized"
 	| "kubernetes_forbidden"
 	| "kubernetes_not_found"
@@ -45,6 +46,7 @@ function kubernetesReason(
 ): WorkloadStepFailureReasonV1 {
 	if (error.code === "policy") return "kubernetes_policy";
 	if (error.code === "conflict") return "kubernetes_conflict";
+	if (error.details.quota === true) return "kubernetes_quota";
 	const status = error.details.status;
 	if (status === undefined) return "kubernetes_unreachable";
 	if (status === 401) return "kubernetes_unauthorized";
@@ -67,6 +69,7 @@ export function classifyWorkloadStepFailureV1(
 			reason: kubernetesReason(error),
 			kubernetes: {
 				...(status === undefined ? {} : { status }),
+				...(error.details.quota === true ? { quota: true as const } : {}),
 				...(kind === undefined ? {} : { kind }),
 				...(verb === undefined ? {} : { verb }),
 			},

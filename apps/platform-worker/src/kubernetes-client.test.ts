@@ -44,6 +44,23 @@ describe("Kubernetes failure details (#2532)", () => {
 		expect(failure.details).toEqual({ kind: "Deployment", verb: "create" });
 	});
 
+	it("classifies a ResourceQuota admission rejection without retaining its body", () => {
+		const failure = workloadKubernetesFailureV1(
+			Object.assign(new Error("forbidden"), {
+				code: 403,
+				body: 'persistentvolumeclaims "sandbox" exceeded quota: requested: requests.storage=20Gi, used: 400Gi, limited: 400Gi',
+			}),
+			{ kind: "PersistentVolumeClaim", verb: "create" },
+		);
+		expect(failure.details).toEqual({
+			status: 403,
+			quota: true,
+			kind: "PersistentVolumeClaim",
+			verb: "create",
+		});
+		expect(JSON.stringify(failure.details)).not.toContain("400Gi");
+	});
+
 	it("passes through an error that is already bounded", () => {
 		const policy = new WorkloadKubernetesError("policy");
 		expect(
