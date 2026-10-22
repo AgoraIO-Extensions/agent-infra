@@ -10793,8 +10793,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 								file ?? {
 									reason:
 										workspacePath !== undefined
-										? "workspace_file_unavailable"
-										: "workspace_path_invalid",
+											? "workspace_file_unavailable"
+											: "workspace_path_invalid",
 								},
 							),
 						},
