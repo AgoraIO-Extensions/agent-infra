@@ -67,6 +67,8 @@ export const PiRuntimeDriver = {
 				`/skill:${name}${parameters.length > 0 ? ` ${parameters}` : ""}`,
 			browserCapability: options.browserCapability,
 			supportsAttachments: true,
+			// #3225：附件物化到 Conversation 工作区并追加清单，图片另外作为 RPC image 块。
+			workspaceAttachments: true,
 			supportsResultFiles: true,
 			sandboxReferences: true,
 			supportsConnection: options.standardConnectionClient !== undefined,

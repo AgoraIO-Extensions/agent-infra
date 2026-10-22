@@ -60,6 +60,12 @@ import {
 } from "./runtime-authorization.js";
 import { readRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
 import {
+	isSandboxAttachmentNativeImageV1,
+	materializeSandboxAttachmentsV1,
+	sandboxAttachmentIdsV1,
+	sandboxAttachmentPromptTextV1,
+} from "./sandbox-attachments.js";
+import {
 	planSandboxResultsV1,
 	publishSandboxResultsV1,
 	SANDBOX_RESULT_MAX_REFERENCES_V1,
@@ -132,6 +138,13 @@ export interface SessionRuntimeDriverOptions {
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly SessionRuntimeModelOption[];
 	readonly supportsAttachments?: boolean;
+	/**
+	 * #3225：标准模板（Pi、OpenCode）把附件物化到 Conversation 工作区并在原生输入后追加清单；
+	 * 可接受类型以 FileLimits 交集为准，图片另外作为原生 image 块（ACP 需协商
+	 * `promptCapabilities.image`，未协商时只给清单）。未设置时（ACP 自定义 Agent）附件仍只按
+	 * 协商的原生图片输入传递。
+	 */
+	readonly workspaceAttachments?: boolean;
 	/** Set only when the native adapter supplies a confirmed result-file callback. */
 	readonly supportsResultFiles?: boolean;
 	/**
@@ -1331,6 +1344,42 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		return record;
 	}
 	/**
+	 * #3225：标准模板把附件物化到本 Conversation 工作区并追加清单；原生图片类型另外作为
+	 * image 块。Session 未协商图片输入时，打开后只保留文本块。
+	 */
+	private async materializeWorkspaceAttachmentInput(
+		workspace: string,
+		text: string,
+		attachments: readonly string[],
+		fileBridge?: import("./runtime-file-bridge.js").RuntimeFileBridgePortV1,
+	): Promise<readonly NativePromptContentV1[]> {
+		if (!fileBridge) unavailable();
+		const fileIds = sandboxAttachmentIdsV1(attachments, unavailable);
+		await mkdir(workspace, { recursive: true, mode: 0o700 });
+		if ((await realpath(workspace)) !== workspace) unavailable();
+		const placed = await materializeSandboxAttachmentsV1({
+			workspace,
+			fileIds,
+			read: (fileId) => fileBridge.readInput(fileId),
+			invalid: unavailable,
+			imageBytes: true,
+		});
+		return [
+			{ type: "text", text: sandboxAttachmentPromptTextV1(text, placed) },
+			...placed.flatMap((attachment) =>
+				attachment.imageBytes && isSandboxAttachmentNativeImageV1(attachment)
+					? [
+							{
+								type: "image" as const,
+								data: Buffer.from(attachment.imageBytes).toString("base64"),
+								mimeType: attachment.mediaType,
+							},
+						]
+					: [],
+			),
+		];
+	}
+	/**
 	 * Read request-scoped bridge attachments into native prompt content. Callers
 	 * confirm native image support first, so unsupported input never reaches the
 	 * bridge and never consumes file authority.
@@ -1439,29 +1488,48 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			)
 		)
 			conflict();
-		if (!("text" in command.input)) unavailable();
+		const workspaceAttachments = this.options.workspaceAttachments === true;
+		// #3225：标准模板接受只含附件的消息；ACP 自定义 Agent 仍需正文。
+		if (!("text" in command.input) && !workspaceAttachments) unavailable();
+		const text = "text" in command.input ? command.input.text : "";
 		const hasAttachments = command.input.attachments.length > 0;
+		if (!text && !hasAttachments) unavailable();
 		// Attachment input needs both a wired bridge and a Driver that consumes
 		// it; neither decision may wait for a Session or a bridge read.
 		if (hasAttachments && (!this.options.supportsAttachments || !fileBridge))
 			unavailable();
 		// A Driver whose native protocol negotiates image input per peer settles
 		// that before a Session exists, so unsupported input is rejected before
-		// the bridge is read and before any native Session side effect.
-		if (hasAttachments && this.options.attachmentsNegotiated?.() === false)
+		// the bridge is read and before any native Session side effect. Workspace
+		// attachments do not depend on image input: without it only the manifest
+		// reaches the native Turn.
+		if (
+			hasAttachments &&
+			!workspaceAttachments &&
+			this.options.attachmentsNegotiated?.() === false
+		)
 			unavailable();
-		let input: NativePromptV1 = command.input.text;
+		let input: NativePromptV1 = text;
 		// Attachment bytes were read under the File Grant of this request; they must
 		// not cross into a native Turn once that authority has lapsed.
 		const revalidateInput = () => {
 			if (hasAttachments) fileBridge?.revalidate();
 		};
+		const directory = join(this.options.path, ref);
+		const workspace = join(directory, "workspace");
 		if (hasAttachments) {
-			input = await this.materializeAttachmentInput(
-				command.input.text,
-				command.input.attachments,
-				fileBridge,
-			);
+			input = workspaceAttachments
+				? await this.materializeWorkspaceAttachmentInput(
+						workspace,
+						text,
+						command.input.attachments,
+						fileBridge,
+					)
+				: await this.materializeAttachmentInput(
+						text,
+						command.input.attachments,
+						fileBridge,
+					);
 			revalidateInput();
 		}
 		const previousHandle = this.handles.get(ref);
@@ -1473,8 +1541,6 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				? previousHandle
 				: undefined;
 		if (!reuse) await this.retire(ref);
-		const directory = join(this.options.path, ref);
-		const workspace = join(directory, "workspace");
 		await mkdir(workspace, { recursive: true, mode: 0o700 });
 		if ((await realpath(workspace)) !== workspace) unavailable();
 		// #3226：ACP 回答中的 image/resource_link 块只在内存中暂存，Turn 正常结束时一并处理。
@@ -1674,10 +1740,16 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			unavailable();
 		}
 		// The opened Session has the last word on negotiated image input: a Session
-		// that refuses image content must never reach the native Turn.
+		// that refuses image content must never reach the native Turn. Workspace
+		// attachments stay in the workspace and the manifest; only the native image
+		// blocks are dropped.
 		if (hasAttachments && native.supportsImagePrompt === false) {
-			if (!reuse) await native.close().catch(() => {});
-			unavailable();
+			if (workspaceAttachments && typeof input !== "string")
+				input = input.filter((block) => block.type === "text");
+			else {
+				if (!reuse) await native.close().catch(() => {});
+				unavailable();
+			}
 		}
 		try {
 			await file.update((state) => {

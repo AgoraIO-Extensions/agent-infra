@@ -1647,3 +1647,251 @@ it("rejects cross-Agent, Conversation, generation, native-reference and executio
 		await rm(path, { recursive: true, force: true });
 	}
 });
+
+// #3225：OpenCode 标准模板把附件物化到工作区并附清单；ACP image 块只在协商后另外发送。
+const openCodeAttachments: Record<
+	string,
+	{ name: string; mediaType: string; bytes: Buffer }
+> = {
+	"file-pdf": {
+		name: "report.pdf",
+		mediaType: "application/pdf",
+		bytes: Buffer.from("%PDF-1.4\n%opencode-attachment-pdf\n"),
+	},
+	"file-csv": {
+		name: "table.csv",
+		mediaType: "text/csv",
+		bytes: Buffer.from("name,value\nopencode-attachment-csv,1\n"),
+	},
+	"file-txt": {
+		name: "notes.txt",
+		mediaType: "text/plain",
+		bytes: Buffer.from("opencode-attachment-text\n"),
+	},
+	"file-png": {
+		name: "screen.png",
+		mediaType: "image/png",
+		bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+	},
+};
+
+const openCodeAttachmentRef = (fileId: string) =>
+	createHash("sha256").update(fileId).digest("hex").slice(0, 16);
+
+function openCodeAttachmentBridge(reads: string[] = []) {
+	return {
+		readInput: async (fileId: string) => {
+			reads.push(fileId);
+			const fixture = openCodeAttachments[fileId];
+			if (!fixture) throw new Error("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
+			return {
+				fileId,
+				descriptor: {
+					name: fixture.name,
+					mediaType: fixture.mediaType,
+					sizeBytes: fixture.bytes.byteLength,
+					sha256: createHash("sha256").update(fixture.bytes).digest("hex"),
+				},
+				body: new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new Uint8Array(fixture.bytes));
+						controller.close();
+					},
+				}),
+			};
+		},
+		revalidate: () => {},
+		writeResult: async () => {
+			throw new Error("unused");
+		},
+	};
+}
+
+function openCodeManifest(fileIds: readonly string[]) {
+	return [
+		"Attachments (saved in your workspace; paths are relative to your workspace root):",
+		...fileIds.map((fileId) => {
+			const fixture = openCodeAttachments[fileId];
+			if (!fixture) throw new Error();
+			return `- name: "${fixture.name}", media type: ${fixture.mediaType}, size: ${fixture.bytes.byteLength} bytes, path: ".agent-infra/attachments/${openCodeAttachmentRef(fileId)}/${fixture.name}"`;
+		}),
+	].join("\n");
+}
+
+async function openCodeAttachmentDriver(path: string, mode: string) {
+	return GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		reuseNativeSession: true,
+		sandboxReferences: true,
+		workspaceAttachments: true,
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: mode, ACP_TEST_RECORD_PROMPT: "1" },
+		}),
+	});
+}
+
+const openCodeCommand = (
+	input: { text: string; attachments: string[] } | { attachments: string[] },
+	id = "a",
+) => ({
+	schemaVersion: 2 as const,
+	kind: "submit-turn" as const,
+	agentId: "agent-a",
+	conversationId: "conversation-a",
+	sessionGeneration: 1,
+	executionId: `execution-${id}`,
+	turnId: `turn-${id}`,
+	operationId: `operation-${id}`,
+	input,
+	selection: {
+		schemaVersion: 1 as const,
+		modelOptionId: "primary",
+		reasoningLevel: "high",
+	},
+});
+
+it("materializes OpenCode attachments with a manifest and a negotiated ACP image block (#3225)", async () => {
+	const path = await mkdtemp(join(tmpdir(), "opencode-attachments-image-"));
+	const driver = await openCodeAttachmentDriver(path, "image-prompt");
+	try {
+		await expect(
+			driver.probeReadiness?.(new AbortController().signal),
+		).resolves.toMatchObject({ attachments: true });
+		const fileIds = ["file-pdf", "file-csv", "file-txt", "file-png"];
+		// 正文为空：只发清单与协商后的 image 块。
+		const command = openCodeCommand({ attachments: fileIds });
+		const accepted = await driver.execute(command, {
+			fileBridge: openCodeAttachmentBridge(),
+		});
+		expect(accepted.result).toMatchObject({ outcome: "accepted" });
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+			).toBe("completed"),
+		);
+		const workspace = join(path, accepted.nativeSessionRef, "workspace");
+		expect(JSON.parse(await readFile(join(workspace, "prompt.json"), "utf8"))).toEqual([
+			{ type: "text", text: openCodeManifest(fileIds) },
+			{
+				type: "image",
+				data: openCodeAttachments["file-png"]?.bytes.toString("base64"),
+				mimeType: "image/png",
+			},
+		]);
+		for (const fileId of fileIds) {
+			const fixture = openCodeAttachments[fileId];
+			if (!fixture) throw new Error();
+			expect(
+				createHash("sha256")
+					.update(
+						await readFile(
+							join(
+								workspace,
+								".agent-infra/attachments",
+								openCodeAttachmentRef(fileId),
+								fixture.name,
+							),
+						),
+					)
+					.digest("hex"),
+			).toBe(createHash("sha256").update(fixture.bytes).digest("hex"));
+		}
+		// Driver 状态与事件不含工作区路径与附件内容。
+		const persisted = (
+			await Promise.all(
+				(await readdir(path, { recursive: true }))
+					.filter(
+						(entry) =>
+							entry.endsWith(".json") &&
+							!entry.split("/").includes("workspace"),
+					)
+					.map((entry) => readFile(join(path, entry), "utf8")),
+			)
+		).join("\n");
+		const events = JSON.stringify(
+			await driver.replayEvents(accepted.nativeSessionRef, command.executionId),
+		);
+		for (const forbidden of [
+			workspace,
+			".agent-infra/attachments",
+			"opencode-attachment-text",
+		]) {
+			expect(persisted).not.toContain(forbidden);
+			expect(events).not.toContain(forbidden);
+		}
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("gives an OpenCode peer without image input only the manifest and keeps the workspace copies (#3225)", async () => {
+	const path = await mkdtemp(join(tmpdir(), "opencode-attachments-text-"));
+	const driver = await openCodeAttachmentDriver(path, "grouped-models");
+	try {
+		// 工作区附件不依赖图片协商。
+		await expect(
+			driver.probeReadiness?.(new AbortController().signal),
+		).resolves.toMatchObject({ attachments: true });
+		const fileIds = ["file-png", "file-txt"];
+		const command = openCodeCommand({ text: "inspect", attachments: fileIds });
+		const accepted = await driver.execute(command, {
+			fileBridge: openCodeAttachmentBridge(),
+		});
+		expect(accepted.result).toMatchObject({ outcome: "accepted" });
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+			).toBe("completed"),
+		);
+		const workspace = join(path, accepted.nativeSessionRef, "workspace");
+		expect(JSON.parse(await readFile(join(workspace, "prompt.json"), "utf8"))).toEqual([
+			{ type: "text", text: `inspect\n\n${openCodeManifest(fileIds)}` },
+		]);
+		const png = join(
+			workspace,
+			".agent-infra/attachments",
+			openCodeAttachmentRef("file-png"),
+			"screen.png",
+		);
+		expect(await readFile(png)).toEqual(openCodeAttachments["file-png"]?.bytes);
+		// 不在本次 Grant 中的 fileId 读不到；超过 32 个在任何读取之前拒绝。
+		const reads: string[] = [];
+		await expect(
+			driver.execute(
+				openCodeCommand({ text: "inspect", attachments: ["file-foreign"] }, "b"),
+				{ fileBridge: openCodeAttachmentBridge(reads) },
+			),
+		).rejects.toThrow("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
+		await expect(
+			driver.execute(
+				openCodeCommand(
+					{
+						text: "inspect",
+						attachments: Array.from({ length: 33 }, (_, i) => `file-${i}`),
+					},
+					"c",
+				),
+				{ fileBridge: openCodeAttachmentBridge(reads) },
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		expect(reads).toEqual(["file-foreign"]);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
