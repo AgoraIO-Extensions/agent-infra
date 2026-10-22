@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
+	WecomMediaDownloadV1,
 	WecomMediaReferenceV1,
 	WecomMessageV1,
 	WecomScopeV1,
@@ -50,6 +51,74 @@ function scopeKey(scope: WecomMessageV1 | WecomReplyRouteV1["scope"]) {
 		scope.conversationType,
 		scope.threadId,
 	]);
+}
+/** 加密媒体的下载材料只在 Worker 内存中短暂存在（工程 Spec §14.2.3）。 */
+function mediaDownload(
+	value: unknown,
+	expiresAt: string,
+): WecomMediaDownloadV1 {
+	const item = object(value);
+	const url = item.url;
+	const aesKey = item.aeskey;
+	if (!text(url, 4096) || !text(aesKey, 256))
+		throw new Error("Invalid WeCom media");
+	const parsed = new URL(url);
+	if (parsed.protocol !== "https:" || parsed.username || parsed.password)
+		throw new Error("Invalid WeCom media");
+	return { url, aesKey, expiresAt };
+}
+/**
+ * #3227：长连接正文与媒体。image、file、video 取下载地址与 aeskey（文件名来自下载响应）；
+ * voice 只有转写文本，按普通文本受理；mixed 的文本项按顺序拼成正文，图片项作为附件。
+ */
+function parseContent(
+	body: Record<string, unknown>,
+	downloadExpiresAt: string,
+): { readonly content: unknown; readonly media?: WecomMediaReferenceV1[] } {
+	switch (body.msgtype) {
+		case "image":
+		case "file":
+		case "video":
+			return {
+				content: "",
+				media: [
+					{
+						kind: body.msgtype,
+						name: null,
+						download: mediaDownload(body[body.msgtype], downloadExpiresAt),
+					},
+				],
+			};
+		case "voice":
+			return { content: object(body.voice).content };
+		case "mixed": {
+			const items = object(body.mixed).msg_item;
+			if (!Array.isArray(items) || items.length === 0 || items.length > 64)
+				throw new Error("Invalid WeCom mixed message");
+			const texts: string[] = [];
+			const media: WecomMediaReferenceV1[] = [];
+			for (const entry of items) {
+				const item = object(entry);
+				if (item.msgtype === "text") {
+					const value = object(item.text).content;
+					if (typeof value !== "string")
+						throw new Error("Invalid WeCom mixed message");
+					texts.push(value);
+				} else if (item.msgtype === "image")
+					media.push({
+						kind: "image",
+						name: null,
+						download: mediaDownload(item.image, downloadExpiresAt),
+					});
+				else throw new Error("Invalid WeCom mixed message");
+			}
+			if (media.length > 32) throw new Error("Invalid WeCom mixed message");
+			const content = texts.join("\n").trim();
+			return media.length ? { content, media } : { content };
+		}
+		default:
+			return { content: object(body.text).content };
+	}
 }
 /** Transport only. The caller owns durable connection fencing and the shared Core ingress. */
 export function createWecomWebSocketV1(options: {
@@ -263,7 +332,7 @@ export function createWecomWebSocketV1(options: {
 			if (
 				!text(headers.req_id) ||
 				body.aibotid !== config.botId ||
-				!["text", "image", "file", "voice", "video"].includes(
+				!["text", "image", "file", "voice", "video", "mixed"].includes(
 					body.msgtype as string,
 				) ||
 				!text(body.msgid) ||
@@ -271,47 +340,6 @@ export function createWecomWebSocketV1(options: {
 			)
 				return observeIngress("invalid");
 			const senderId = object(body.from).userid;
-			const kind =
-				body.msgtype === "image" ||
-				body.msgtype === "file" ||
-				body.msgtype === "voice" ||
-				body.msgtype === "video"
-					? body.msgtype
-					: null;
-			const content = kind === null ? object(body.text).content : "";
-			const media: WecomMediaReferenceV1[] | undefined = kind
-				? (() => {
-						const value = object(body[kind]);
-						const mediaId = value.media_id ?? value.mediaid ?? value.url;
-						if (!text(mediaId, 4096)) throw new Error("Invalid WeCom media");
-						const name =
-							kind === "file" ? (value.name ?? value.filename ?? null) : null;
-						if (name !== null && !text(name, 255))
-							throw new Error("Invalid WeCom media");
-						return [
-							{
-								kind,
-								mediaId,
-								name,
-								mediaType:
-									kind === "image"
-										? "image/jpeg"
-										: kind === "file"
-											? "application/octet-stream"
-											: kind === "voice"
-												? "audio/amr"
-												: "video/mp4",
-							},
-						];
-					})()
-				: undefined;
-			const peerId = body.chattype === "single" ? senderId : body.chatid;
-			if (
-				!text(senderId) ||
-				!text(peerId) ||
-				(kind === null && !text(content, 32768))
-			)
-				return observeIngress("invalid");
 			const receivedAt = now().getTime();
 			// create_time is optional in the official protocol. Without it, use the authenticated receipt lifetime.
 			if (
@@ -319,6 +347,27 @@ export function createWecomWebSocketV1(options: {
 				(typeof body.create_time !== "number" ||
 					!Number.isSafeInteger(body.create_time) ||
 					Math.abs(receivedAt / 1000 - body.create_time) > 300)
+			)
+				return observeIngress("invalid");
+			const { content, media } = parseContent(
+				body,
+				// #3227：官方下载地址 5 分钟内有效，从消息产生与收到中较早的一个起算。
+				new Date(
+					Math.min(
+						typeof body.create_time === "number"
+							? body.create_time * 1000
+							: receivedAt,
+						receivedAt,
+					) + 300_000,
+				).toISOString(),
+			);
+			const peerId = body.chattype === "single" ? senderId : body.chatid;
+			if (
+				!text(senderId) ||
+				!text(peerId) ||
+				(media === undefined
+					? !text(content, 32768)
+					: content !== "" && !text(content, 32768))
 			)
 				return observeIngress("invalid");
 			if (!(await current()) || !authenticated || generation !== connectionId)
@@ -378,7 +427,7 @@ export function createWecomWebSocketV1(options: {
 		});
 	};
 	client.on("message.text", receiveMessageFrame);
-	for (const kind of ["image", "file", "voice", "video"] as const)
+	for (const kind of ["image", "file", "voice", "video", "mixed"] as const)
 		client.on(`message.${kind}`, receiveMessageFrame);
 	const sender: WecomSendPortV1 = {
 		async send(input) {

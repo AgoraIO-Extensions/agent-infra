@@ -52,27 +52,17 @@ function record(value: unknown): Record<string, unknown> {
 		return invalid();
 	return value as Record<string, unknown>;
 }
-function mediaType(kind: WecomMediaReferenceV1["kind"]): string {
-	return kind === "image"
-		? "image/jpeg"
-		: kind === "file"
-			? "application/octet-stream"
-			: kind === "voice"
-				? "audio/amr"
-				: "video/mp4";
-}
+/**
+ * 回调模式不支持媒体（工程 Spec §14.2.3）：只保留类型与协议文件名，不携带 MediaId 或下载地址，
+ * Core 据此回复固定说明，不调用 Agent。
+ */
 function mediaReference(
 	kind: WecomMediaReferenceV1["kind"],
-	mediaId: unknown,
 	name: unknown = null,
 ): WecomMediaReferenceV1 {
-	const normalizedName =
-		name === undefined || name === null ? null : field(name, 255);
 	return {
 		kind,
-		mediaId: field(mediaId, 4096),
-		name: normalizedName,
-		mediaType: mediaType(kind),
+		name: name === undefined || name === null ? null : field(name, 255),
 	};
 }
 function exactRecord(value: unknown, keys: readonly string[]) {
@@ -295,13 +285,7 @@ export function createWecomAdapterV1(options: {
 						kind === null ? field(payload.Content, 32 * 1024) : "";
 					const eventId = field(payload.MsgId);
 					const media = kind
-						? [
-								mediaReference(
-									kind,
-									payload.MediaId,
-									kind === "file" ? payload.FileName : null,
-								),
-							]
+						? [mediaReference(kind, kind === "file" ? payload.FileName : null)]
 						: undefined;
 					const expiresAt = new Date(
 						Number(timestamp) * 1000 + 3600_000,
@@ -383,7 +367,6 @@ export function createWecomAdapterV1(options: {
 							return [
 								mediaReference(
 									kind,
-									value.media_id ?? value.mediaid ?? value.url,
 									kind === "file" ? (value.name ?? value.filename) : null,
 								),
 							];

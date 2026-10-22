@@ -226,6 +226,18 @@ const eventRouteProofMaxAgeMs = 2_000;
 const eventCommands: readonly Command[] = ["events.persist", "events.ack"];
 /** 一次事件读取或 ACK 在停止翻转后最多准备几次（首次 + 2 次重试，#2712）。 */
 const eventPreparationAttempts = 3;
+/**
+ * #3227：只带附件的消息（例如企微图片、文件、视频）正文为空，按 Runtime 输入契约只发送附件；
+ * 其他消息照旧发送正文与附件。
+ */
+function runtimeInputV1(input: {
+	readonly text: string;
+	readonly attachments: readonly string[];
+}) {
+	return input.text === "" && input.attachments.length > 0
+		? { attachments: [...input.attachments] }
+		: { text: input.text, attachments: [...input.attachments] };
+}
 
 function unavailable(code = "AUTHORIZATION_UNAVAILABLE"): never {
 	throw new ConversationRuntimeHostError(code, true);
@@ -1020,7 +1032,7 @@ export function createConversationRuntimeV2(
 					schemaVersion: 4,
 					...identity,
 					hostSessionRef: state.originalSubmitHostSessionRef as string | null,
-					input: { ...claim.input, attachments: [...claim.input.attachments] },
+					input: runtimeInputV1(claim.input),
 					selection: {
 						schemaVersion: 1,
 						modelOptionId: claim.modelOptionId,
@@ -1043,7 +1055,7 @@ export function createConversationRuntimeV2(
 						deliveryFence: claim.deliveryFence,
 						executionDeliveryFence: claim.executionDeliveryFence,
 					},
-					input: { ...claim.input, attachments: [...claim.input.attachments] },
+					input: runtimeInputV1(claim.input),
 					grant: {
 						schemaVersion: 4,
 						format: "runtime-execution-jws",
@@ -1296,10 +1308,7 @@ export function createConversationRuntimeV2(
 				) {
 					originalRequest = {
 						...common(),
-						input: {
-							...claim.input,
-							attachments: [...claim.input.attachments],
-						},
+						input: runtimeInputV1(claim.input),
 						selection: {
 							schemaVersion: 1,
 							modelOptionId: claim.modelOptionId,
@@ -1528,10 +1537,7 @@ export function createConversationRuntimeV2(
 				if (!context.claim.input) unavailable("RUNTIME_REQUEST_INVALID");
 				const body = {
 					...base,
-					input: {
-						...context.claim.input,
-						attachments: [...context.claim.input.attachments],
-					},
+					input: runtimeInputV1(context.claim.input),
 					...(context.claim.modelOptionId && context.claim.reasoningLevel
 						? {
 								selection: {
@@ -1567,10 +1573,7 @@ export function createConversationRuntimeV2(
 						deliveryFence: context.claim.deliveryFence,
 						executionDeliveryFence: context.claim.executionDeliveryFence,
 					},
-					input: {
-						...context.claim.input,
-						attachments: [...context.claim.input.attachments],
-					},
+					input: runtimeInputV1(context.claim.input),
 				};
 				return {
 					...(await client.supplement(

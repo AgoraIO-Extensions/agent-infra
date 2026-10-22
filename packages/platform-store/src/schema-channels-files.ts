@@ -38,11 +38,21 @@ export const wecomReceipts = platformSchema.table(
 		connectionBotId: text("connection_bot_id"),
 		connectionFence: bigint("connection_fence", { mode: "number" }),
 		connectionAuthorizationFact: jsonb("connection_authorization_fact"),
+		// #3227：入站媒体拒绝的原因与生效上限；不保存下载地址、aeskey 或媒体内容。
+		mediaRejectionReason: text("media_rejection_reason"),
+		mediaRejectionMaxBytes: bigint("media_rejection_max_bytes", {
+			mode: "number",
+		}),
 	},
 	(table) => [
 		check(
 			"wecom_acceptance_status",
-			sql`${table.acceptanceStatus} in ('accepted','busy','unavailable','new_conversation')`,
+			sql`${table.acceptanceStatus} in ('accepted','busy','unavailable','new_conversation','media_rejected')`,
+		),
+		// 只有媒体拒绝回执带原因；只有超限带正的字节上限。
+		check(
+			"wecom_media_rejection",
+			sql`(${table.acceptanceStatus} = 'media_rejected') = (${table.mediaRejectionReason} is not null) and (${table.mediaRejectionReason} is null or ${table.mediaRejectionReason} in ('unsupported_channel','unsupported_type','too_large','expired','failed')) and (${table.mediaRejectionReason} is not distinct from 'too_large') = (${table.mediaRejectionMaxBytes} is not null) and (${table.mediaRejectionMaxBytes} is null or ${table.mediaRejectionMaxBytes} between 1 and 9007199254740991)`,
 		),
 		check(
 			"wecom_delivery_status",

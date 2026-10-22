@@ -3547,7 +3547,7 @@ function wecomReceiptStatusEnums(document) {
 		single?.properties?.status?.enum,
 	];
 }
-function isWecomNewConversationReceiptOpenApiAddition(previous, current) {
+function isWecomReceiptStatusOpenApiAddition(previous, current, status) {
 	const before = wecomReceiptStatusEnums(previous);
 	const normalized = structuredClone(current);
 	const after = wecomReceiptStatusEnums(normalized);
@@ -3556,13 +3556,28 @@ function isWecomNewConversationReceiptOpenApiAddition(previous, current) {
 		if (
 			!Array.isArray(values) ||
 			!Array.isArray(old) ||
-			old.includes("new_conversation") ||
-			!sameValue(values, [...old, "new_conversation"])
+			old.includes(status) ||
+			!sameValue(values, [...old, status])
 		)
 			return false;
 		values.pop();
 	}
 	return sameValue(previous, normalized);
+}
+function isWecomNewConversationReceiptOpenApiAddition(previous, current) {
+	return isWecomReceiptStatusOpenApiAddition(
+		previous,
+		current,
+		"new_conversation",
+	);
+}
+// #3227：入站媒体不调用 Agent 时回执状态在末尾追加 `media_rejected`，规则与上面相同。
+function isWecomMediaRejectedReceiptOpenApiAddition(previous, current) {
+	return isWecomReceiptStatusOpenApiAddition(
+		previous,
+		current,
+		"media_rejected",
+	);
 }
 
 // #440 publishes Owner-managed application setup on the existing browser API.
@@ -5653,6 +5668,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isNativeCapabilityInvocationOpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomNewConversationReceiptOpenApiAddition(previous, current) &&
+			!isWecomMediaRejectedReceiptOpenApiAddition(previous, current) &&
 			!isWecomQrAuthorizationOpenApiAddition(previous, current) &&
 			!isWecomBotQrAvailabilityOpenApiAddition(previous, current) &&
 			!isDirectorySearchV2OpenApiAddition(previous, current) &&

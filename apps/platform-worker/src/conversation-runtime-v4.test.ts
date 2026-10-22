@@ -574,6 +574,22 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		},
 	);
 
+	it("sends an attachment-only message without an empty body (#3227)", async () => {
+		const h = runtimeV4Harness("submit");
+		try {
+			Object.assign(h.claim, {
+				input: { text: "", attachments: ["file-input-1"] },
+			});
+			const reference = await h.authorize();
+			await h.runtime.runtimeHost.dispatch(h.request(reference));
+			expect(h.sent().body.businessRequest.input).toEqual({
+				attachments: ["file-input-1"],
+			});
+		} finally {
+			await h.runtime.close();
+		}
+	});
+
 	it("reports a stop-pending key race without sending the business request", async () => {
 		const h = runtimeV4Harness();
 		try {

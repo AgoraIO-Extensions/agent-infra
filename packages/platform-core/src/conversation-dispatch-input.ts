@@ -378,9 +378,14 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		if (input.input === null) return null;
 		const value = exactObject(input.input, ["text", "attachments"]);
 		if (!Array.isArray(value.attachments)) return unavailable();
+		const attachments = value.attachments.map((entry) => text(entry));
 		return {
-			text: text(value.text, 65_536),
-			attachments: value.attachments.map((entry) => text(entry)),
+			// #3227：只带附件的消息正文为空，正文与附件至少有一项。
+			text:
+				value.text === "" && attachments.length > 0
+					? ""
+					: text(value.text, 65_536),
+			attachments,
 		};
 	})();
 	let generationIsolation: ConversationGenerationIsolationV1 | undefined;

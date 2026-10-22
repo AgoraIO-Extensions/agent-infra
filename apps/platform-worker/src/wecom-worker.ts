@@ -9,7 +9,6 @@ import {
 	type WecomConnectionAuthorizationPortV1,
 	type WecomDeliveryStatusV1,
 	type WecomIdentityPortV1,
-	type WecomMediaResolverV1,
 	type WecomSendPortV1,
 } from "@agent-infra/platform-core";
 import { PostgresWecomChannelV1 } from "@agent-infra/platform-store";
@@ -17,6 +16,10 @@ import {
 	createPlatformWecomConnectionsV1,
 	type WecomConnectionsDeploymentV1,
 } from "./wecom-connections.js";
+import {
+	createWecomInboundMediaResolverV1,
+	type WecomInboundMediaDeploymentV1,
+} from "./wecom-media.js";
 import {
 	createWecomSetupWorkerV1,
 	type WecomSetupWorkerDeploymentV1,
@@ -28,8 +31,10 @@ export interface WecomWorkerDeploymentV1 {
 	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly observe: (status: WecomDeliveryStatusV1) => void;
 	readonly sender: WecomSendPortV1;
-	/** Deployment-owned resolver; bytes and file authority stay outside this seam. */
-	readonly mediaResolver?: WecomMediaResolverV1;
+	/**
+	 * 智能机器人长连接入站媒体的文件面装配（#3227）。没有时 Core 对入站媒体回复不支持，不调用 Agent。
+	 */
+	readonly media?: WecomInboundMediaDeploymentV1;
 	readonly connections?: WecomConnectionsDeploymentV1;
 	readonly setup?: WecomSetupWorkerDeploymentV1;
 }
@@ -54,10 +59,17 @@ export function createPlatformWecomWorkerV1(
 		state: store,
 		connectionAuthorization: options.connectionAuthorization,
 	});
+	const media = options.media
+		? createWecomInboundMediaResolverV1({
+				...options.media,
+				databaseUrl: options.databaseUrl,
+				authorization,
+			})
+		: undefined;
 	const channel = createWecomChannelV1({
 		authorization,
 		store,
-		...(options.mediaResolver ? { media: options.mediaResolver } : {}),
+		...(media ? { media } : {}),
 	});
 	const setup =
 		options.setup && options.connections
@@ -162,11 +174,12 @@ export function createPlatformWecomWorkerV1(
 				connections?.close(),
 			]);
 			// Keep business pools open until setup and connection shutdown settle.
-			try {
-				await store.close();
-			} catch (reason) {
-				results.push({ status: "rejected", reason });
-			}
+			for (const close of [() => store.close(), () => media?.close()])
+				try {
+					await close();
+				} catch (reason) {
+					results.push({ status: "rejected", reason });
+				}
 			const failure = results.find((result) => result.status === "rejected");
 			if (failure?.status === "rejected") throw failure.reason;
 		},
