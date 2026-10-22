@@ -448,3 +448,63 @@ test("application summary follows the design facts, headings and plain disable b
 	await expectNoDuplicateControls(page, "API 凭证（打开既有应用）");
 	await expectCleanPage(page, errors);
 });
+
+// #3179 G4-26：签发 / 轮换应用凭证提交后，按钮在提交中用 aria-disabled 保持焦点，结果出现后焦点交给
+// 「应用凭证结果」标题；全程不落到 body。键盘 Enter 与点击两种方式都覆盖，两个视口都运行。
+for (const mode of ["keyboard", "click"] as const)
+	test(`issuing an application credential by ${mode} keeps focus off the body (G4-26)`, async ({
+		page,
+	}, info) => {
+		const errors = trackPageErrors(page);
+		await page.setViewportSize(
+			info.project.name === "mobile"
+				? { width: 390, height: 844 }
+				: { width: 1440, height: 900 },
+		);
+		const api = await fixture(page);
+		await page.goto(
+			`/my-settings/api-credentials?applicationId=${application.applicationId}`,
+		);
+		await page.getByLabel("接收主体 ID").fill("browser-recipient-1");
+		const activeElement = () =>
+			page.evaluate(() => {
+				const active = document.activeElement;
+				return !active || active === document.body
+					? "body"
+					: `${active.tagName.toLowerCase()}:${active.textContent?.trim()}`;
+			});
+		const submit = async (name: string) => {
+			const button = page.getByRole("button", { name, exact: true });
+			api.pauseCredential();
+			if (mode === "keyboard") {
+				await button.focus();
+				await page.keyboard.press("Enter");
+			} else await button.click();
+			// 提交中：按钮改为「正在提交…」，aria-disabled 仍可聚焦，焦点留在按钮上。
+			const pending = page.getByRole("button", {
+				name: "正在提交…",
+				exact: true,
+			});
+			await expect(pending).toBeFocused();
+			await expect(pending).toHaveAttribute("aria-disabled", "true");
+			// 提交中再按 Enter 不会发出第二个请求。
+			await page.keyboard.press("Enter");
+			api.releaseCredential();
+			const heading = page
+				.getByRole("region", { name: "应用凭证结果" })
+				.getByRole("heading", { name: "应用凭证结果" });
+			await expect(heading).toBeFocused();
+			for (let sample = 0; sample < 5; sample += 1) {
+				await page.waitForTimeout(300);
+				expect(await activeElement()).toBe("h3:应用凭证结果");
+			}
+		};
+		await submit("签发应用凭证");
+		expect(api.commands).toHaveLength(1);
+		await page.getByRole("button", { name: "使用此凭证 ID 轮换" }).click();
+		await submit("轮换应用凭证");
+		expect(api.commands).toHaveLength(2);
+		expect(api.commands[1]?.body).toMatchObject({ operation: "rotate" });
+		await expectCleanPage(page, errors);
+		expect(await duplicateControlNames(page)).toEqual([]);
+	});

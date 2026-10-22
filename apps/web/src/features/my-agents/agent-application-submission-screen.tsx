@@ -1,6 +1,8 @@
 import { Link } from "@tanstack/react-router";
+import { useEffect, useRef } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
 import { useResultFocus } from "@/hooks/use-result-focus";
 
 import type {
@@ -61,6 +63,17 @@ export function AgentApplicationSubmissionScreen(
 	props: AgentApplicationSubmissionScreenProps,
 ) {
 	const resultRef = useResultFocus(props.result);
+	// G4-14（同 W-15）：提交或修改并重新提交受理后，用 Toast 补充确认已进入审批队列；每个结果只提示一次。
+	// 页内提示获得焦点后由读屏读出，不再另设 role="status"，避免与 Toast 两个 live region 重复播报。
+	const toast = useToast();
+	const announced = useRef<AgentApplicationProjectionV2 | undefined>(undefined);
+	useEffect(() => {
+		const result = props.result;
+		if (!result || announced.current === result) return;
+		announced.current = result;
+		if (result.status === "pending_approval")
+			toast("申请已提交，已进入系统管理员审批队列");
+	}, [props.result, toast]);
 	const heading =
 		props.mode === "create"
 			? createApplicationHeading
@@ -191,7 +204,6 @@ export function AgentApplicationSubmissionScreen(
 							// 设计 .notice p：提交结果为常规字重（W-08）；提示紧贴卡片内边距，
 							// 不加上外边距（B2-02），与下方操作的间距由 .card-actions 上距给出。
 							className="mb-3"
-							role="status"
 						>
 							<AlertDescription>
 								申请已提交：{agentManagementStatusLabels[props.result.status]}。

@@ -1,4 +1,4 @@
-import { Bot, ChevronDown, RefreshCw, Settings2 } from "lucide-react";
+import { Bot, ChevronDown, RefreshCw, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -142,8 +142,9 @@ export function ComposerModelControls({
 						aria-label={`选择思考强度，当前${level}`}
 						title={`思考强度：${level} · 下一条消息生效`}
 					>
+						{/* 齿轮与 Agent 详情「Owner 配置」同一字形（设计 icon('settings')，G4-06）。 */}
 						<span className="control-face">
-							<Settings2 aria-hidden="true" className="control-glyph" />
+							<Settings aria-hidden="true" className="control-glyph" />
 							<span className="control-value">{level}</span>
 							<ChevronDown aria-hidden="true" className="control-caret" />
 						</span>

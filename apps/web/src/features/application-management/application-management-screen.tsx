@@ -290,6 +290,14 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 	const [credentialResult, setCredentialResult] =
 		useState<ApplicationCredentialResponse | null>(null);
 	const [submitting, setSubmitting] = useState(false);
+	// G4-26：签发或轮换成功后焦点交给「应用凭证结果」标题，不随提交按钮的禁用落到 body。
+	const resultHeading = useRef<HTMLHeadingElement>(null);
+	const focusResult = useRef(false);
+	useEffect(() => {
+		if (!credentialResult || !focusResult.current) return;
+		focusResult.current = false;
+		resultHeading.current?.focus();
+	}, [credentialResult]);
 	// 负责人与凭证接收用户合并读取一次目录，页面不显示用户 ID。
 	const recipient = credentialResult?.delivery.recipient;
 	const userNames = useDirectoryNames("user", [
@@ -339,6 +347,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 				active.current &&
 				result.metadata.applicationId === application.applicationId
 			) {
+				focusResult.current = true;
 				setCredentialResult(result);
 			}
 		} catch {
@@ -453,6 +462,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 			<DirectoryReadAlert names={[userNames]} />
 			{credentialResult ? (
 				<ApplicationCredentialResult
+					headingRef={resultHeading}
 					names={userNames}
 					result={credentialResult}
 					onPrepareRotation={
@@ -598,6 +608,8 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 							onChange={(event) => setExpiresAt(event.target.value)}
 						/>
 					</Field>
+					{/* 提交中用 aria-disabled 保持可聚焦（同 RecoveryButton），焦点不在提交期间落到 body（G4-26）；
+					    表单 onSubmit 另有 pending 守卫，不会重复提交。 */}
 					<Button
 						type="submit"
 						disabled={
@@ -608,6 +620,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 							props.isIssuingCredential ||
 							submitting
 						}
+						focusableWhenDisabled={props.isIssuingCredential || submitting}
 					>
 						{props.isIssuingCredential || submitting
 							? "正在提交…"

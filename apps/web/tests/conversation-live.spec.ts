@@ -2195,3 +2195,154 @@ test("explains a model fallback with the requested and actual model (G-07)", asy
 	});
 	await expect(dialog).not.toContainText("model-removed");
 });
+
+// #3179 G4-03 ~ G4-07：时间线提问→回复与轮次之间等距（设计 .messages gap：1440 22px、≤767 16px）；
+// 个人历史面板「此 Agent 的全部历史」上距 12px；「命令 / Skill」沿用按钮字距 .02em；思考强度入口为齿轮；
+// 模型与思考菜单选项为指针。
+test("conversation timeline, history scope switch and composer toolbar follow the design (G4-03 ~ G4-07)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	await page.setViewportSize(
+		mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	const agent = activeAgent();
+	const secondExecution = "execution-live-2";
+	const completedEvent = (sequence: number, id: string) =>
+		PersistedConversationEventV2Schema.parse({
+			schemaVersion: 1,
+			kind: "event",
+			eventId: `live-event-${sequence}`,
+			conversationId,
+			executionId: id,
+			sequence,
+			conversationCursor: `live-cursor-${sequence}`,
+			occurredAt: timestamp,
+			type: "execution.status",
+			payload: { status: "completed" },
+		});
+	const exchange = (index: number, id: string) => [
+		{
+			messageId: `question-live-${index}`,
+			role: "user" as const,
+			text: `第 ${index} 个问题`,
+			status: "completed" as const,
+			executionId: id,
+			replyToMessageId: null,
+			answerVersion: null,
+			isCurrentAnswer: null,
+			error: null,
+			createdAt: timestamp,
+		},
+		{
+			messageId: `answer-live-${index}`,
+			role: "assistant" as const,
+			text: `第 ${index} 个回答。`,
+			status: "completed" as const,
+			executionId: id,
+			replyToMessageId: `question-live-${index}`,
+			answerVersion: 1,
+			isCurrentAnswer: true,
+			error: null,
+			createdAt: timestamp,
+		},
+	];
+	const detail = ConversationDetailProjectionV2Schema.parse({
+		...history(conversationId, [
+			completedEvent(1, executionId),
+			completedEvent(2, secondExecution),
+		]),
+		conversation: {
+			...history(conversationId, []).conversation,
+			status: "ready",
+			selectedModelOptionId: "model-primary",
+			selectedReasoningLevel: "medium",
+		},
+		messages: [...exchange(1, executionId), ...exchange(2, secondExecution)],
+	});
+	await keepConversationStreamOpen(page);
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const request = route.request();
+		const path = new URL(request.url()).pathname;
+		if (isFileLimitsRequest(request.method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
+		if (path.endsWith("/events"))
+			return route.fulfill({
+				status: 200,
+				contentType: "text/event-stream",
+				body: ": heartbeat\n\n",
+			});
+		if (path.endsWith("/session"))
+			return route.fulfill({ json: ownerSession() });
+		if (path === `/api/v2/agents/${agentId}`)
+			return route.fulfill({ json: agent });
+		if (path === `/api/v2/conversations/${conversationId}`)
+			return route.fulfill({ json: detail });
+		return route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+	await page.goto(`/chat/${agentId}/${conversationId}`);
+	const exchanges = page.locator(".timeline .exchange");
+	await expect(exchanges).toHaveCount(2);
+	await expect(page.getByText("第 2 个回答。", { exact: true })).toBeVisible();
+	const gap = mobile ? 16 : 22;
+	const box = async (locator: ReturnType<typeof page.locator>) => {
+		const value = await locator.boundingBox();
+		if (!value) throw new Error("Expected timeline geometry");
+		return value;
+	};
+	for (const index of [0, 1]) {
+		const [question, answer] = await Promise.all([
+			box(exchanges.nth(index).locator(":scope > *").first()),
+			box(exchanges.nth(index).locator(":scope > *").nth(1)),
+		]);
+		expect(
+			Math.abs(answer.y - (question.y + question.height) - gap),
+		).toBeLessThanOrEqual(0.5);
+	}
+	const [firstAnswer, secondQuestion] = await Promise.all([
+		box(exchanges.first().locator(":scope > *").nth(1)),
+		box(exchanges.nth(1).locator(":scope > *").first()),
+	]);
+	expect(
+		Math.abs(secondQuestion.y - (firstAnswer.y + firstAnswer.height) - gap),
+	).toBeLessThanOrEqual(0.5);
+	// G4-04：个人历史面板列表下的范围切换上距 12px。
+	await expect(page.locator(".history-scope-actions")).toHaveCSS(
+		"margin-top",
+		"12px",
+	);
+	// G4-05：「命令 / Skill」沿用按钮字距 .02em（13px → 0.26px）。
+	await expect(
+		page.getByRole("button", { name: "选择命令或 Skill" }),
+	).toHaveCSS("letter-spacing", "0.26px");
+	// G4-06：思考强度入口与「Owner 配置」同为 lucide Settings 齿轮，不是 Settings2 滑杆。
+	const effort = page.locator(
+		"form.composer-zone .composer-setting-trigger[aria-label^='选择思考强度']",
+	);
+	if (await effort.count()) {
+		const classes =
+			(await effort.locator("svg.control-glyph").getAttribute("class"))?.split(
+				/\s+/,
+			) ?? [];
+		expect(classes).toContain("lucide-settings");
+		expect(classes).not.toContain("lucide-settings-2");
+	} else expect(mobile).toBe(true);
+	// G4-07：模型与思考菜单选项为指针。
+	await page
+		.locator("form.composer-zone .composer-setting-trigger")
+		.first()
+		.click();
+	const menu = page.getByRole("menu", { name: "模型与思考设置" });
+	await expect(menu).toBeVisible();
+	for (const option of await menu.getByRole("menuitemradio").all())
+		await expect(option).toHaveCSS("cursor", "pointer");
+	await page.keyboard.press("Escape");
+	await expect(menu).toBeHidden();
+	await expectCleanPage(page, errors);
+	expect(await duplicateControlNames(page)).toEqual([]);
+});

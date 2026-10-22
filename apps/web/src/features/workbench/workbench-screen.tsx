@@ -34,8 +34,8 @@ import {
 } from "../agent-discovery/agent-discovery.js";
 import { agentChannelSummary } from "../agent-discovery/agent-discovery-screen.js";
 import {
+	agentAvailabilityStatus,
 	agentManagementStatusLabels,
-	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
 import { AgentMark } from "../agent-mark.js";
 import type {
@@ -179,23 +179,10 @@ function ReadNotice({
 	);
 }
 
+/** 与 /agents 卡、详情和 Owner 配置页头同一条派生规则：就绪 green（设计 a.availability，G4-01）。 */
 function AgentStatus({ agent }: { agent: AgentProjectionV2 }) {
-	const available = canStartPlatformConversation(agent);
-	const status = available
-		? "ready"
-		: agent.managementStatus === "available"
-			? (agent.serviceAvailability ?? "unavailable")
-			: agent.managementStatus;
-	return (
-		<Badge tone={statusTone(status)}>
-			{available
-				? "可用"
-				: agent.managementStatus === "available" &&
-						agent.serviceAvailability !== null
-					? agentServiceAvailabilityLabel(agent.serviceAvailability)
-					: agentManagementStatusLabels[agent.managementStatus]}
-		</Badge>
-	);
+	const status = agentAvailabilityStatus(agent);
+	return <Badge tone={status.tone}>{status.label}</Badge>;
 }
 
 function RecentConversations({

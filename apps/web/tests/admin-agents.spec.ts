@@ -882,6 +882,19 @@ test("disabling an employee is confirmed with the person before one request", as
 	await dialog.getByRole("button", { name: "取消" }).click();
 	await expect(dialog).not.toBeVisible();
 	expect(writes).toHaveLength(0);
+	// G4-23（同 E3-15）：取消、Escape 与点击外部关闭后焦点回到触发按钮，不到分区标题、不落到 body。
+	await expect(trigger).toBeFocused();
+	await trigger.click();
+	await expect(dialog).toBeVisible();
+	await page.keyboard.press("Escape");
+	await expect(dialog).not.toBeVisible();
+	await expect(trigger).toBeFocused();
+	await trigger.click();
+	await expect(dialog).toBeVisible();
+	await page.mouse.click(4, 4);
+	await expect(dialog).not.toBeVisible();
+	await expect(trigger).toBeFocused();
+	expect(writes).toHaveLength(0);
 	await trigger.click();
 	await dialog.getByRole("button", { name: "禁用员工", exact: true }).click();
 	await expect

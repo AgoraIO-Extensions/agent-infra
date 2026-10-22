@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Plus, RefreshCw, ShieldAlert } from "lucide-react";
+import { ArrowLeft, Plus, RefreshCw, Search, ShieldAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import {
 	Alert,
@@ -335,8 +335,19 @@ function AgentSkillBindings({
 		const result = confirmResult.current;
 		// 取消、Esc 或写入失败：回到触发按钮。
 		if (!result || result.state === "failed") return true;
-		if (result.state === "done")
-			return focusTargetElement(result.target) ?? false;
+		if (result.state === "done") {
+			const { skillVersionId } = result.target;
+			if (skillVersionId === null)
+				return focusTargetElement(result.target) ?? false;
+			// G4-19：更换固定版本后，旧卡连同弹窗先于新版本卡片卸载，此时新卡标题还不在页面上。
+			// 不在这里回落到 h1：弹窗稍后归还焦点会盖过 focusRequest 交给新卡标题的焦点；
+			// 先暂留在本卡标题（仍在页面时），新卡挂载后由 focusRequest 移过去。
+			return (
+				document.getElementById(bindingTitleId(skillVersionId)) ??
+				interim?.() ??
+				false
+			);
+		}
 		return interim?.() ?? false;
 	};
 	const idempotencyKey = useStableIdempotencyKey();
@@ -446,8 +457,9 @@ function AgentSkillBindings({
 			{views.length === 0 ? (
 				<Empty className="agent-skill-empty">
 					<EmptyHeader>
+						{/* 设计 skillEmpty：icon('search')，与 Skill 其他空态一致（G4-20）。 */}
 						<EmptyMedia>
-							<Plus aria-hidden="true" />
+							<Search aria-hidden="true" />
 						</EmptyMedia>
 						<EmptyTitle>还未绑定 Skill</EmptyTitle>
 						<EmptyDescription>

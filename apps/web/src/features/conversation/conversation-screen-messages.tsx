@@ -367,8 +367,9 @@ export function ConversationMessages({
 				isTerminal(message.status) ? undefined : message.status,
 			);
 		}
+		// 提问与回复的间距由 .chat-layout .exchange 给出，与轮次之间等距（设计 .messages gap，G4-03）。
 		return (
-			<div className="exchange space-y-6" key={message.messageId}>
+			<div className="exchange" key={message.messageId}>
 				<MessageFrame
 					name={userName}
 					user
@@ -631,12 +632,14 @@ function AssistantReply({
 			{files}
 			{stop && (
 				<div className="card-actions">
-					{/* 「正在停止」期间用 aria-disabled 保持可聚焦，焦点不在受理后落到 body（A2-09）。 */}
+					{/* 「正在停止」期间用 aria-disabled 保持可聚焦，焦点不在受理后落到 body（A2-09）。
+					    data-stop-execution：从浏览器卡「停止操作」停止时，页面按 Execution 把焦点交给这里（G4-08）。 */}
 					<Button
 						type="button"
 						variant="outline"
 						disabled={stop.disabled}
 						focusableWhenDisabled
+						data-stop-execution={stop.executionId}
 						onClick={stop.onStop}
 					>
 						<Square aria-hidden="true" />

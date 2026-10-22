@@ -1062,3 +1062,40 @@ test.describe("Skill version detail", () => {
 		expect(control.requests.writes).toEqual([]);
 	});
 });
+
+// #3179 G4-24：区头「我的 Skill」与行内「查看详情」ghost 链接的箭头在文字前（设计 skButton icon:'arrow'，
+// 同工作台 Y-05、Agent 目录 Y-12）。
+test("Skill Hub ghost links put the arrow before the text (G4-24)", async ({
+	page,
+}) => {
+	const pageErrors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/skills");
+	await expect(page.locator("article.skill-row")).toHaveCount(3);
+	const main = page.locator("#main-content");
+	const links = [
+		main.getByRole("link", { name: "我的 Skill", exact: true }),
+		...(await main.getByRole("link", { name: /^查看详情：/ }).all()),
+	];
+	expect(links).toHaveLength(4);
+	for (const link of links)
+		expect(
+			await link.evaluate((element) => {
+				const icon = element.querySelector("svg");
+				const text = [...element.childNodes].find(
+					(node) =>
+						node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
+				);
+				if (!icon || !text) return false;
+				const range = document.createRange();
+				range.selectNodeContents(text);
+				return (
+					element.firstElementChild === icon &&
+					icon.getBoundingClientRect().right <=
+						range.getBoundingClientRect().left
+				);
+			}),
+		).toBe(true);
+	await expectNoDuplicateControls(page, "Skill Hub（G4-24）");
+	await expectCleanPage(page, pageErrors);
+});

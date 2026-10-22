@@ -253,7 +253,11 @@ export function BrowserOperationRecordDialog({
 	const unknown = entries.some((entry) => entry.status === "unknown");
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
-			<DialogTrigger render={<Button type="button" variant="outline" />}>
+			{/* data-browser-records：从浏览器卡停止并确认后，焦点交给这里（G4-08）。 */}
+			<DialogTrigger
+				render={<Button type="button" variant="outline" />}
+				data-browser-records=""
+			>
 				查看操作记录
 			</DialogTrigger>
 			<DialogContent>

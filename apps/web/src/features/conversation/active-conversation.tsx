@@ -267,7 +267,10 @@ export function ActiveConversation({
 	// 进行中（停止确认、原回复已结束或已换成新的回复）时，若焦点已落到 body，就移到该回复卡状态行的
 	// 「重新生成」，没有可用的「重新生成」时移到输入框，再没有就交给页面标题（与弹窗焦点看护同一兜底）。
 	// 用户按下指针或把焦点移到别处后不再代管。
+	// G4-08：从浏览器卡「停止操作」（或接管卡「停止」）停止时，该按钮随停止受理卸载：先把焦点交给对应
+	// 回复卡的「正在停止」（aria-disabled 仍可聚焦），停止确认后优先交给浏览器卡「查看操作记录」。
 	const [stopFocus, setStopFocus] = useState<string>();
+	const stopFromBrowser = useRef(false);
 	useEffect(() => {
 		if (!stopFocus) return;
 		const release = () => setStopFocus(undefined);
@@ -278,8 +281,15 @@ export function ActiveConversation({
 		if (!stopFocus || (stopFocus === latestExecution && !isTerminal(status)))
 			return;
 		setStopFocus(undefined);
+		const fromBrowser = stopFromBrowser.current;
+		stopFromBrowser.current = false;
 		const focused = document.activeElement;
 		if (focused && focused !== document.body) return;
+		const records = fromBrowser
+			? document.querySelector<HTMLButtonElement>(
+					"section.browser-capability [data-browser-records]",
+				)
+			: null;
 		const regenerate = [
 			...document.querySelectorAll<HTMLButtonElement>(
 				"[data-regenerate-execution]",
@@ -289,7 +299,7 @@ export function ActiveConversation({
 				button.dataset.regenerateExecution === stopFocus && !button.disabled,
 		);
 		const input = composer.current?.disabled ? null : composer.current;
-		(regenerate ?? input ?? pageRecoveryTarget())?.focus();
+		(records ?? regenerate ?? input ?? pageRecoveryTarget())?.focus();
 	}, [stopFocus, latestExecution, status]);
 	const uncertainExecution = active && status === "unknown";
 	const command = useConversationCommands({
@@ -678,12 +688,27 @@ export function ActiveConversation({
 					onStop: () => {
 						if (command.stop()) {
 							action.current = "stop";
+							stopFromBrowser.current = false;
 							setStopNotice(undefined);
 							setStopFocus(latestExecution);
 						}
 					},
 				}
 			: undefined;
+	// G4-08：浏览器卡的停止走同一条停止命令；受理前浏览器卡按钮先被禁用、随后卸载，所以在发出时就把
+	// 焦点交给回复卡（或调用回执后）的停止按钮，它在「正在停止」期间仍可聚焦。
+	const stopFromBrowserCard = () => {
+		if (!stopControl || !command.stop()) return;
+		action.current = "stop";
+		stopFromBrowser.current = true;
+		setStopNotice(undefined);
+		setStopFocus(stopControl.executionId);
+		[...document.querySelectorAll<HTMLButtonElement>("[data-stop-execution]")]
+			.find(
+				(button) => button.dataset.stopExecution === stopControl.executionId,
+			)
+			?.focus();
+	};
 	// 同一命令 / Skill 调用多次时回执按钮仍可区分（N-12）。
 	const receiptNames = distinctObjectNames(
 		invocations.map((invocation) => invocation.name),
@@ -704,7 +729,7 @@ export function ActiveConversation({
 		})?.phase === "idle";
 	const onBrowserCommand = (browserCommand: BrowserCardCommand) => {
 		// 「停止操作」走与「停止回复」相同的停止命令。
-		if (browserCommand.kind === "stop_execution") stopControl?.onStop();
+		if (browserCommand.kind === "stop_execution") stopFromBrowserCard();
 		else command.invokeBrowser(browserCommandBody(browserCommand));
 	};
 	const browserCardProps = {
@@ -827,6 +852,7 @@ export function ActiveConversation({
 											variant="outline"
 											disabled={stopControl.disabled}
 											focusableWhenDisabled
+											data-stop-execution={stopControl.executionId}
 											onClick={stopControl.onStop}
 										>
 											<Square aria-hidden="true" />

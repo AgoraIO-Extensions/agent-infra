@@ -755,7 +755,11 @@ describe("MyAgentApplicationDetailScreen design alignment (M-11)", () => {
 		expect(await screen.findByText(/目录暂时无法读取/)).toBeTruthy();
 		const scope = screen.getByText("使用范围")
 			.nextElementSibling as HTMLElement;
-		expect(within(scope).getAllByRole("listitem")).toHaveLength(2);
+		// G4-16：使用范围与 Owner 行一样是一行「、」分隔的名称，不再逐项列出组织路径；两项仍都在。
+		expect(within(scope).queryAllByRole("listitem")).toHaveLength(0);
+		expect(scope.querySelector(".directory-name-list")?.textContent).toBe(
+			"未识别的用户、未识别的组织",
+		);
 		expect(within(scope).getByText("未识别的用户")).toBeTruthy();
 		expect(within(scope).getByText("未识别的组织")).toBeTruthy();
 		// 模型范围写「显示名 · 档位」，不外露 modelId。
