@@ -254,10 +254,12 @@ async function run(input, evidence) {
 	try {
 		const owner = await browser.newContext({
 			storageState: input.owner.stateFile,
+			ignoreHTTPSErrors: true,
 			viewport: { width: 1440, height: 1000 },
 		});
 		const other = await browser.newContext({
 			storageState: input.other.stateFile,
+			ignoreHTTPSErrors: true,
 			viewport: { width: 390, height: 844 },
 		});
 		evidence.sessions = {
