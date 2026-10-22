@@ -3152,10 +3152,20 @@ function predatesNativeLaunch(state: CodexDriverState) {
 				isSubmitTurnOperationKey(key) &&
 				hasOnlyKeys(operation, operationKeysBeforeNativeLaunch) &&
 				(operation.record === undefined ||
-					operation.record.result.outcome === "rejected"),
+					(operation.record.result.outcome === "rejected" &&
+						localRejectionCodesBeforeNativeLaunch.has(
+							operation.record.result.code,
+						))),
 		)
 	);
 }
+
+// prepare() 在任何原生调用之前就地持久化的拒绝结果。原生 turn/start 也可能返回模型选择
+// 拒绝，但那时会话已有 threadId，会先被会话白名单排除。
+const localRejectionCodesBeforeNativeLaunch: ReadonlySet<string> = new Set([
+	"RUNTIME_SESSION_BLOCKED",
+	"RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+]);
 
 function unavailableError() {
 	return new RuntimeHostError(
