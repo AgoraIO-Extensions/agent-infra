@@ -1017,6 +1017,13 @@
 		margin-top: 16px;
 	}
 }
+/*
+ * 设计 .messages 是 grid gap：最后一条消息之后只有时间线下内边距（G5-03）。只在 exchange 是时间线
+ * 最后一个子元素时去掉下外边距；后面跟着回执或浏览器卡时仍保留 22px / 16px 作为两者之间的间距。
+ */
+.chat-layout .exchange:last-child {
+	margin-bottom: 0;
+}
 /* 设计 .chat-history-actions：时间线顶部的 ghost「加载更早内容」（G-04）。 */
 .chat-history-actions {
 	display: flex;
@@ -5295,6 +5302,8 @@ body {
 	background: transparent;
 	color: var(--primary);
 	font-size: 11px;
+	/* 设计 .directory-clear 不是 .btn：字重 400，不继承公共按钮的 650（G5-07）。 */
+	font-weight: 400;
 }
 .directory-clear:hover {
 	background: color-mix(in oklch, var(--primary) 11%, var(--surface));

@@ -424,8 +424,11 @@ export function AgentDetailScreen({
 							<dt className="text-muted-foreground">可用范围</dt>
 							<dd className="break-words">
 								{agent.configuration.availability.length ? (
+									// 与 Owner 行、申请详情「使用范围」（G4-16）一致：一行「、」分隔的目录名称，
+									// 不附组织路径（设计 #agent-detail，G5-02）。
 									<DirectoryRecords
 										targets={agent.configuration.availability}
+										layout="inline"
 									/>
 								) : (
 									"未提供范围信息"

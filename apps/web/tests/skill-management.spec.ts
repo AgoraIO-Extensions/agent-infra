@@ -1542,3 +1542,33 @@ test("a companion file card starts its first field row 12px below the card edge 
 	await expectNoDuplicateControls(page, "创建与发布（配套文件，G4-25）");
 	await expectCleanPage(page, errors);
 });
+
+// #3215 G5-10：配套文件卡的 ghost「移除」用叉号（设计 icon('x')，16px），不是垃圾桶；名称仍为
+// 「移除文件：{目录}/{文件名}」。
+test("the companion file remove action uses the design's x icon (G5-10)", async ({
+	page,
+}, info) => {
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/skills/manage/new?project=release-notes");
+	const main = page.locator("#main-content");
+	await expect(
+		main.getByRole("heading", { level: 2, name: "Skill 内容" }),
+	).toBeVisible();
+	await designViewport(page, info.project.name === "mobile");
+	await main.getByRole("button", { name: "添加文本文件" }).click();
+	await expect(main.getByLabel("文件名")).toBeFocused();
+	const remove = main
+		.locator("fieldset.skill-content-file")
+		.first()
+		.getByRole("button", { name: /^移除文件：/ });
+	await expect(remove).toHaveText("移除");
+	const icon = remove.locator("svg");
+	await expect(icon).toHaveCount(1);
+	const classes = ((await icon.getAttribute("class")) ?? "").split(/\s+/);
+	expect(classes).toContain("lucide-x");
+	expect(classes.some((name) => name.startsWith("lucide-trash"))).toBe(false);
+	expect(await icon.boundingBox()).toMatchObject({ width: 16, height: 16 });
+	await expectNoDuplicateControls(page, "创建与发布（配套文件，G5-10）");
+	await expectCleanPage(page, errors);
+});

@@ -114,10 +114,13 @@ export const auditResultLabels: Record<AuditRecord["result"], string> = {
 	failed: "失败",
 	accepted: "已受理",
 	intent: "操作意图",
-	started: "执行中",
+	// G5-09：两个值语义不同、在「结果」筛选里不能同名。started 是单次模型 / 工具操作已实际开始
+	// （execution.operation.observed 的 fact.phase，完成与失败另有记录），与执行详情的操作阶段同为
+	// 「已开始」；processing 是任务 / Execution 状态（task.status.changed），与对话页同为「处理中」。
+	started: "已开始",
 	submitted: "已提交",
 	waiting: "等待中",
-	processing: "执行中",
+	processing: "处理中",
 	completed: "已完成",
 	cancelled: "已取消",
 	unknown: "结果待核实",

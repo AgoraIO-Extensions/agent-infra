@@ -98,7 +98,9 @@ export function ConfigurationSecretsSection({
 								]),
 							]
 						: undefined;
-					const rowLabel = entry.name.trim() || `第 ${index + 1} 行`;
+					// 多行环境变量同屏时，行内控件的可访问名称以行序号为对象名（D2-58、#3211）：名称不随
+					// 输入变化，两行选了同一变量名时仍可区分；可见文字不变。
+					const rowName = `环境变量 ${index + 1}`;
 					return (
 						<div className="configuration-field-row" key={index}>
 							<Field>
@@ -106,6 +108,7 @@ export function ConfigurationSecretsSection({
 								{nameOptions ? (
 									<NativeSelect
 										id={nameId}
+										aria-label={withObjectName("环境变量名", rowName)}
 										disabled={disabled}
 										value={entry.name}
 										aria-invalid={error ? "true" : undefined}
@@ -130,6 +133,7 @@ export function ConfigurationSecretsSection({
 								) : (
 									<Input
 										id={nameId}
+										aria-label={withObjectName("环境变量名", rowName)}
 										disabled={disabled}
 										value={entry.name}
 										autoComplete="off"
@@ -153,6 +157,7 @@ export function ConfigurationSecretsSection({
 								<Label htmlFor={valueId}>值</Label>
 								<Input
 									id={valueId}
+									aria-label={withObjectName("值", rowName)}
 									disabled={disabled}
 									value={entry.value}
 									autoComplete="off"
@@ -172,7 +177,7 @@ export function ConfigurationSecretsSection({
 								type="button"
 								variant="ghost"
 								disabled={disabled}
-								aria-label={withObjectName("移除", rowLabel)}
+								aria-label={withObjectName("移除", rowName)}
 								onClick={() =>
 									onEnvironmentChange((rows) =>
 										rows.filter((_, rowIndex) => rowIndex !== index),
@@ -210,12 +215,19 @@ export function ConfigurationSecretsSection({
 						<div className="configuration-field-row" key={secret.name}>
 							<Field>
 								<Label htmlFor={nameId}>Secret 名称</Label>
-								<Input id={nameId} readOnly value={secret.name} />
+								{/* 多个 Secret 同屏时以 Secret 名称为对象名（D2-58），同页不出现同名控件。 */}
+								<Input
+									id={nameId}
+									aria-label={withObjectName("Secret 名称", secret.name)}
+									readOnly
+									value={secret.name}
+								/>
 							</Field>
 							<Field>
 								<Label htmlFor={statusId}>当前状态</Label>
 								<Input
 									id={statusId}
+									aria-label={withObjectName("当前状态", secret.name)}
 									readOnly
 									value={secretStatusText(secret)}
 								/>

@@ -210,15 +210,21 @@ describe("BrowserActivityCard", () => {
 		).toBeTruthy();
 	});
 
-	it("disables actions while a command is pending", () => {
-		renderCard([sideEffectEvent(1, "pending")], { busy: true });
-		expect(
-			(
-				screen.getByRole("button", {
-					name: /允许这次操作/,
-				}) as HTMLButtonElement
-			).disabled,
-		).toBe(true);
+	it("disables actions while a command is pending but keeps them focusable (G5-04)", () => {
+		const { onCommand } = renderCard([sideEffectEvent(1, "pending")], {
+			busy: true,
+		});
+		const allow = screen.getByRole("button", {
+			name: /允许这次操作/,
+		}) as HTMLButtonElement;
+		// 需求变化（#3215 G5-04）：命令处理中改用 aria-disabled（focusableWhenDisabled），按钮仍可聚焦，
+		// 焦点不随原生 disabled 落到 body；仍不可操作。
+		expect(allow.getAttribute("aria-disabled")).toBe("true");
+		expect(allow.disabled).toBe(false);
+		allow.focus();
+		expect(document.activeElement).toBe(allow);
+		fireEvent.click(allow);
+		expect(onCommand).not.toHaveBeenCalled();
 	});
 
 	it("keeps the idle card out of the thread unless asked", () => {

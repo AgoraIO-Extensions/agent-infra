@@ -36,6 +36,7 @@ import { agentChannelSummary } from "../agent-discovery/agent-discovery-screen.j
 import {
 	agentAvailabilityStatus,
 	agentManagementStatusLabels,
+	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
 import { AgentMark } from "../agent-mark.js";
 import type {
@@ -185,6 +186,33 @@ function AgentStatus({ agent }: { agent: AgentProjectionV2 }) {
 	return <Badge tone={status.tone}>{status.label}</Badge>;
 }
 
+/**
+ * 最近对话行的会话可用性（设计 renderWorkbench recent、H4-03）：可开始对话写「可用」green，
+ * 其余沿用服务状态或管理状态的标签。只用于最近对话行；「可用 Agent」卡仍是 AgentStatus（G5-01）。
+ */
+function ConversationAvailabilityStatus({
+	agent,
+}: {
+	agent: AgentProjectionV2;
+}) {
+	const available = canStartPlatformConversation(agent);
+	const status = available
+		? "ready"
+		: agent.managementStatus === "available"
+			? (agent.serviceAvailability ?? "unavailable")
+			: agent.managementStatus;
+	return (
+		<Badge tone={statusTone(status)}>
+			{available
+				? "可用"
+				: agent.managementStatus === "available" &&
+						agent.serviceAvailability !== null
+					? agentServiceAvailabilityLabel(agent.serviceAvailability)
+					: agentManagementStatusLabels[agent.managementStatus]}
+		</Badge>
+	);
+}
+
 function RecentConversations({
 	agents,
 	recent,
@@ -245,7 +273,7 @@ function RecentConversations({
 									{conversationUnavailable ? (
 										<Badge tone="red">会话不可用</Badge>
 									) : agent ? (
-										<AgentStatus agent={agent} />
+										<ConversationAvailabilityStatus agent={agent} />
 									) : agentsLoading ? (
 										<span
 											className="workbench-chip-placeholder"

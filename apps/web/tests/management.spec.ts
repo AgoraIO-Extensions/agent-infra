@@ -1605,7 +1605,9 @@ test("Owner configuration save, lifecycle and custom image upgrade", async ({
 	await expect(replaceModels).not.toBeChecked();
 	// Secret 只读显示、经只写弹窗单独替换（O-10），整页保存只提交普通值。
 	await expect(page.getByLabel("新 Secret 值")).toHaveCount(0);
-	await page.getByLabel("值", { exact: true }).fill("synthetic-browser-value");
+	await page
+		.getByLabel("值：环境变量 1", { exact: true })
+		.fill("synthetic-browser-value");
 	await expect(page.getByText(/群消息和 Agent 回复对群成员可见/)).toBeVisible();
 	// 企微卡片按设计标题命名区域（O-07）。
 	await expect(
@@ -3218,9 +3220,11 @@ test("Agent detail and configuration use readable directory records with canonic
 	const api = await fixture(page);
 	await page.goto("/agents/agent-pilot-1");
 	await expect(page.getByText("平台工程", { exact: true })).toBeVisible();
-	await expect(
-		page.getByText("研发 / 平台工程", { exact: true }),
-	).toBeVisible();
+	// 需求变化（#3215 G5-02）：Agent 详情「可用范围」改为一行目录名称（设计 #agent-detail），不再在
+	// 名称下附组织路径；名称可读、不出现 ID 的断言保留。
+	await expect(page.getByText("研发 / 平台工程", { exact: true })).toHaveCount(
+		0,
+	);
 	await expect(page.locator("main")).not.toContainText("org-platform");
 	await capture(page, info, "directory-detail-readable");
 	await page.getByRole("link", { name: "Owner 配置" }).click();
@@ -3704,7 +3708,9 @@ test("Agent detail directory failure stays readable and configuration preserves 
 	// 没有任何改动时保存不可用（#2560）：先做一次与 Owner、范围无关的真实改动，
 	// 再确认目录读取失败时未解析的选择仍随请求原样提交。
 	await expect(page.getByRole("button", { name: "保存配置" })).toBeDisabled();
-	await page.getByLabel("值", { exact: true }).fill("changed-value");
+	await page
+		.getByLabel("值：环境变量 1", { exact: true })
+		.fill("changed-value");
 	await page.getByRole("button", { name: "保存配置" }).click();
 	await expect(toastHost(page)).toHaveText("配置已保存，Secret 值不会回显");
 	expect(api.commands.at(-1)?.body).toMatchObject({
@@ -4847,7 +4853,9 @@ test("Owner configuration puts restart in the footer and stop in a standalone da
 		).toBe(8);
 	}
 	// 保存可用时，Tab 从保存移到重启；重启只打开确认，不发配置保存请求。
-	await page.getByLabel("值", { exact: true }).fill("synthetic-tab-value");
+	await page
+		.getByLabel("值：环境变量 1", { exact: true })
+		.fill("synthetic-tab-value");
 	await save.focus();
 	await page.keyboard.press("Tab");
 	await expect(restart).toBeFocused();
@@ -6170,6 +6178,11 @@ test.describe("Agent detail design alignment", () => {
 					serviceAvailability: "ready",
 					configuration: {
 						...base.configuration,
+						// G5-02：一名用户 + 一个组织，二者在目录里都有组织路径。
+						availability: [
+							{ kind: "user", userId: "user-2" },
+							{ kind: "organization", organizationId: "org-platform" },
+						],
 						channels: [
 							{ kind: "web", status: "available" },
 							{ kind: "wecom_bot", status: "bound" },
@@ -6185,6 +6198,20 @@ test.describe("Agent detail design alignment", () => {
 			"Agent 信息",
 		);
 		await expect(page.getByText("关于此 Agent")).toHaveCount(0);
+		// #3215 G5-02：「可用范围」与 Owner 行、申请详情「使用范围」（G4-16）一样只写目录名称，
+		// 以「、」分隔、单行（设计 dd 21.45px），不附组织路径、不出现 ID。
+		const scope = about
+			.getByRole("term")
+			.filter({ hasText: /^可用范围$/ })
+			.locator("xpath=following-sibling::dd[1]");
+		await expect(scope).toHaveText("验收用户二、平台工程");
+		await expect(scope.getByRole("listitem")).toHaveCount(0);
+		await expect(scope).not.toContainText("研发 / 平台工程");
+		await expect(scope).not.toContainText("user-2");
+		await expect(scope).not.toContainText("org-platform");
+		const scopeBox = await scope.boundingBox();
+		if (!scopeBox) throw new Error("Expected availability geometry");
+		expect(Math.abs(scopeBox.height - 21.45)).toBeLessThanOrEqual(0.5);
 		// Y-14：「可用范围」后是「渠道 Web · 企微机器人」。
 		const terms = await about.locator("dt").allTextContents();
 		expect(

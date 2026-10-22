@@ -7,15 +7,18 @@ import {
 	NativeSelectOption,
 } from "@/components/ui/native-select";
 import { withObjectName } from "@/lib/accessible-name";
+import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 
 import {
 	candidateKey,
 	initialKeylessModelRows,
 	type KeylessCurrentModelOption,
+	type KeylessEndpointNames,
 	type KeylessModelCandidate,
 	type KeylessModelRows,
 	type KeylessModelSelection,
 	type KeylessModelSelectionProblem,
+	keylessCandidateLabels,
 	keylessModelSelection,
 	normalizedKeylessDefaults,
 	selectedKeylessCandidates,
@@ -34,6 +37,8 @@ type KeylessModelPickerProps = {
 	current: readonly KeylessCurrentModelOption[];
 	currentDefault: { optionId: string; level: string };
 	disabled?: boolean;
+	/** 端点 ID → 部署目录显示名；页面不显示原始端点 ID（RK2-01、G5-12）。 */
+	endpointNames?: KeylessEndpointNames;
 	idPrefix?: string;
 	/** 选择完整有效时给出模型选择，否则为 null。 */
 	onChange: (selection: KeylessModelSelection | null) => void;
@@ -44,9 +49,16 @@ export function KeylessModelPicker({
 	current,
 	currentDefault,
 	disabled = false,
+	endpointNames,
 	idPrefix = "keyless-model",
 	onChange,
 }: KeylessModelPickerProps) {
+	// 与 Owner 配置的 ConfigurationModelPicker 同一套显示规则（H4-12、H4-17、#3212）：模型为
+	// 「{端点显示名} · {模型}」，推理档位只显示中文名；选项 ID、端点、模型与档位仍按原始值提交。
+	const labels = useMemo(
+		() => keylessCandidateLabels(candidates, endpointNames),
+		[candidates, endpointNames],
+	);
 	const [rows, setRows] = useState<KeylessModelRows>(() =>
 		initialKeylessModelRows(candidates, current),
 	);
@@ -90,7 +102,7 @@ export function KeylessModelPicker({
 				{candidates.map((candidate, candidateIndex) => {
 					const key = candidateKey(candidate);
 					const row = rows[key] ?? { checked: false, levels: [] };
-					const label = `${candidate.endpointId} · ${candidate.modelId}`;
+					const label = labels.get(key) ?? candidate.modelId;
 					return (
 						<div className="space-y-2" key={key}>
 							<Label variant="option">
@@ -112,9 +124,7 @@ export function KeylessModelPicker({
 							</Label>
 							{row.checked ? (
 								<fieldset className="flex min-w-0 flex-wrap gap-4 pl-7">
-									<legend className="sr-only">
-										{candidate.modelId} 的推理档位
-									</legend>
+									<legend className="sr-only">{label} 的推理档位</legend>
 									{candidate.reasoningLevels.map((level, levelIndex) => {
 										// 多个模型同时展开档位时，名称带上所属模型（D2-58）。base-ui 复选框默认取
 										// 外层 label 作 aria-labelledby，所以与 E3-16 相同，名称取自旁边的隐藏文本。
@@ -134,10 +144,10 @@ export function KeylessModelPicker({
 															})
 														}
 													/>
-													{level}
+													{reasoningLevelLabel(level)}
 												</Label>
 												<span id={nameId} hidden>
-													{withObjectName(level, label)}
+													{withObjectName(reasoningLevelLabel(level), label)}
 												</span>
 											</Fragment>
 										);
@@ -169,7 +179,7 @@ export function KeylessModelPicker({
 									key={candidateKey(candidate)}
 									value={candidateKey(candidate)}
 								>
-									{candidate.endpointId} · {candidate.modelId}
+									{labels.get(candidateKey(candidate)) ?? candidate.modelId}
 								</NativeSelectOption>
 							))}
 						</NativeSelect>
@@ -194,7 +204,7 @@ export function KeylessModelPicker({
 							) : null}
 							{defaultLevels.map((level) => (
 								<NativeSelectOption key={level} value={level}>
-									{level}
+									{reasoningLevelLabel(level)}
 								</NativeSelectOption>
 							))}
 						</NativeSelect>

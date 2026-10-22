@@ -159,6 +159,66 @@ describe("OpenDesign workbench presentation", () => {
 		expect(within(region).queryByText("可用", { exact: true })).toBeNull();
 	});
 
+	it("keeps conversation availability labels on recent rows (G5-01)", async () => {
+		const starting = {
+			...available,
+			agentId: "starting-agent",
+			name: "启动中的助手",
+			serviceAvailability: "starting" as const,
+		};
+		await showWorkbench(
+			<WorkbenchScreen
+				{...empty}
+				agents={{ kind: "ready", agents: [available, starting, stopped] }}
+				recent={{
+					kind: "ready",
+					conversations: [
+						conversation,
+						{
+							...conversation,
+							conversationId: "conversation-starting",
+							agentId: starting.agentId,
+							title: "启动中助手的对话",
+						},
+						{
+							...conversation,
+							conversationId: "conversation-stopped",
+							agentId: stopped.agentId,
+							title: "已停止助手的对话",
+						},
+					],
+					nextCursor: null,
+				}}
+			/>,
+		);
+		const recent = screen.getByRole("region", { name: "最近对话" });
+		// 最近对话行是会话可用性（设计 renderWorkbench recent、H4-03）：可开始对话写「可用」green，
+		// 其余沿用服务状态或管理状态；「可用 Agent」卡仍按 G4-01 写「就绪」。
+		for (const [title, label, tone] of [
+			["较后 ID 的最近对话", "可用", "green"],
+			["启动中助手的对话", "启动中", "amber"],
+			["已停止助手的对话", "已停止", "gray"],
+		] as const) {
+			const row = within(recent)
+				.getByRole("heading", { level: 3, name: title })
+				.closest(".workbench-recent-row") as HTMLElement;
+			const chip = within(row).getByText(label, {
+				selector: '[data-slot="badge"][data-variant="chip"]',
+			});
+			expect(chip.dataset.tone).toBe(tone);
+		}
+		expect(within(recent).queryByText("就绪", { exact: true })).toBeNull();
+		const agents = screen.getByRole("region", { name: "可用 Agent" });
+		const card = within(agents)
+			.getByRole("heading", { level: 3, name: available.name })
+			.closest(".workbench-card") as HTMLElement;
+		expect(
+			within(card).getByText("就绪", {
+				selector: '[data-slot="badge"][data-variant="chip"]',
+			}).dataset.tone,
+		).toBe("green");
+	});
+
 	it("keeps all responsibility regions and safe empty-state navigation", async () => {
 		await showWorkbench(<WorkbenchScreen {...empty} />);
 		// W-06：页头文案按设计稿 #workbench。

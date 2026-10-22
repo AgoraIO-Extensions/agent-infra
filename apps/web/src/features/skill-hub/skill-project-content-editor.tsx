@@ -1,6 +1,6 @@
 import { skillHubProjectContentLimitsV1 } from "@agent-infra/contracts/pilot";
 import { Link } from "@tanstack/react-router";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import {
 	type FormEvent,
 	type ReactNode,
@@ -667,7 +667,8 @@ export function SkillProjectContentEditor({
 														);
 													}}
 												>
-													<Trash2 aria-hidden="true" />
+													{/* 设计 icon('x')：ghost「移除」用叉号，不是垃圾桶（G5-10）。 */}
+													<X aria-hidden="true" />
 													移除
 												</Button>
 											</div>

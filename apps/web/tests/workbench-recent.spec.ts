@@ -2476,3 +2476,82 @@ test("available Agent chips use the directory availability labels and tones (G4-
 	expect(await duplicateControlNames(page)).toEqual([]);
 	await expectCleanPage(page, errors);
 });
+
+// #3215 G5-01：最近对话行的 chip 是会话可用性（设计 renderWorkbench recent status:'可用' tone:'green'、
+// H4-03）：可开始对话写「可用」green，其余沿用服务状态或管理状态的标签与色调；「可用 Agent」卡仍为
+// G4-01 的「就绪」。#3188 曾让两处共用 agentAvailabilityStatus()，最近对话行随之变成「就绪」。
+for (const state of [
+	{
+		managementStatus: "available",
+		serviceAvailability: "starting",
+		label: "启动中",
+		tone: "amber",
+		color: "var(--warning-ink)",
+	},
+	{
+		managementStatus: "stopped",
+		serviceAvailability: null,
+		label: "已停止",
+		tone: "gray",
+		color: "var(--muted-foreground)",
+	},
+] as const) {
+	test(`recent Conversation chips show conversation availability while Agent cards stay on the directory rule (${state.label}, G5-01)`, async ({
+		page,
+	}, info) => {
+		await page.setViewportSize(
+			info.project.name === "mobile"
+				? { width: 390, height: 844 }
+				: { width: 1440, height: 900 },
+		);
+		const errors = trackPageErrors(page);
+		const fixture = await workbenchFixture(page, {
+			managementStatus: state.managementStatus,
+			serviceAvailability: state.serviceAvailability,
+		});
+		await page.goto("/");
+		const recent = recentRegion(page);
+		const recentChip = (conversationId: string) =>
+			recent
+				.locator(".workbench-recent-row")
+				.filter({
+					has: page.getByRole("heading", {
+						level: 3,
+						name: `受控最近对话 ${conversationId}`,
+						exact: true,
+					}),
+				})
+				.locator('.workbench-tag-row [data-slot="badge"]');
+		// fixture 首页两行：第一行属于可开始对话的 agent-b，第二行属于 agent-a（启动中或已停止）。
+		await expect(recent.locator(".workbench-recent-row")).toHaveCount(2);
+		const expected = [
+			["conversation-z", "可用", "green", "var(--success-ink)"],
+			["conversation-a", state.label, state.tone, state.color],
+		] as const;
+		for (const [conversationId, label, tone, color] of expected) {
+			const chip = recentChip(conversationId);
+			await expect(chip).toHaveText(label);
+			await expect(chip).toHaveAttribute("data-variant", "chip");
+			await expect(chip).toHaveAttribute("data-tone", tone);
+			await expect(chip).toHaveCSS("color", await resolvedColor(page, color));
+		}
+		await expect(recent.getByText("就绪", { exact: true })).toHaveCount(0);
+		// 同一 Agent 在「可用 Agent」卡上仍是目录派生规则的「就绪」green（G4-01 不回退）。
+		const agentChip = page
+			.getByRole("region", { name: "可用 Agent", exact: true })
+			.locator(".workbench-card")
+			.filter({
+				has: page.getByRole("heading", {
+					level: 3,
+					name: "受控助手 agent-b",
+					exact: true,
+				}),
+			})
+			.locator('.workbench-agent-top [data-slot="badge"]');
+		await expect(agentChip).toHaveText("就绪");
+		await expect(agentChip).toHaveAttribute("data-tone", "green");
+		expect(await duplicateControlNames(page)).toEqual([]);
+		await expectCleanPage(page, errors);
+		expect(fixture.unexpected).toEqual([]);
+	});
+}

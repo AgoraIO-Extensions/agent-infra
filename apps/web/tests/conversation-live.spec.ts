@@ -2346,3 +2346,134 @@ test("conversation timeline, history scope switch and composer toolbar follow th
 	await expectCleanPage(page, errors);
 	expect(await duplicateControlNames(page)).toEqual([]);
 });
+
+// #3215 G5-03：设计 .messages 是 grid gap，滚到底时最后一条消息之后只有时间线下内边距
+// （1440 20px、≤767 16px），最后一轮 .exchange 不再叠加 22px / 16px 下外边距。
+test("the last timeline exchange ends at the timeline bottom padding when scrolled to the end (G5-03)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	await page.setViewportSize(
+		mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	const agent = activeAgent();
+	const rounds = 8;
+	const ids = Array.from({ length: rounds }, (_, index) =>
+		index ? `execution-tail-${index}` : executionId,
+	);
+	const completedEvent = (sequence: number, id: string) =>
+		PersistedConversationEventV2Schema.parse({
+			schemaVersion: 1,
+			kind: "event",
+			eventId: `tail-event-${sequence}`,
+			conversationId,
+			executionId: id,
+			sequence,
+			conversationCursor: `tail-cursor-${sequence}`,
+			occurredAt: timestamp,
+			type: "execution.status",
+			payload: { status: "completed" },
+		});
+	const exchange = (index: number, id: string) => [
+		{
+			messageId: `question-tail-${index}`,
+			role: "user" as const,
+			text: `第 ${index} 个问题`,
+			status: "completed" as const,
+			executionId: id,
+			replyToMessageId: null,
+			answerVersion: null,
+			isCurrentAnswer: null,
+			error: null,
+			createdAt: timestamp,
+		},
+		{
+			messageId: `answer-tail-${index}`,
+			role: "assistant" as const,
+			text: `第 ${index} 个回答。${"这是一段受控的较长回答正文。".repeat(6)}`,
+			status: "completed" as const,
+			executionId: id,
+			replyToMessageId: `question-tail-${index}`,
+			answerVersion: 1,
+			isCurrentAnswer: true,
+			error: null,
+			createdAt: timestamp,
+		},
+	];
+	const detail = ConversationDetailProjectionV2Schema.parse({
+		...history(
+			conversationId,
+			ids.map((id, index) => completedEvent(index + 1, id)),
+		),
+		conversation: {
+			...history(conversationId, []).conversation,
+			status: "ready",
+			selectedModelOptionId: "model-primary",
+			selectedReasoningLevel: "medium",
+		},
+		messages: ids.flatMap((id, index) => exchange(index + 1, id)),
+	});
+	await keepConversationStreamOpen(page);
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const request = route.request();
+		const path = new URL(request.url()).pathname;
+		if (isFileLimitsRequest(request.method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
+		if (path.endsWith("/events"))
+			return route.fulfill({
+				status: 200,
+				contentType: "text/event-stream",
+				body: ": heartbeat\n\n",
+			});
+		if (path.endsWith("/session"))
+			return route.fulfill({ json: ownerSession() });
+		if (path === `/api/v2/agents/${agentId}`)
+			return route.fulfill({ json: agent });
+		if (path === `/api/v2/conversations/${conversationId}`)
+			return route.fulfill({ json: detail });
+		return route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+	await page.goto(`/chat/${agentId}/${conversationId}`);
+	const timeline = page.getByRole("region", { name: "会话时间线" });
+	const exchanges = timeline.locator(".exchange");
+	await expect(exchanges).toHaveCount(rounds);
+	await expect(
+		page.getByText(/^第 8 个回答。/, { exact: false }),
+	).toBeVisible();
+	const gap = mobile ? 16 : 22;
+	// 轮次之间仍是 G4-03 的等距；只有最后一轮去掉下外边距。
+	await expect(exchanges.first()).toHaveCSS("margin-bottom", `${gap}px`);
+	await expect(exchanges.last()).toHaveCSS("margin-bottom", "0px");
+	const tail = await timeline.evaluate((element) => {
+		element.scrollTop = element.scrollHeight;
+		const last = element.lastElementChild;
+		if (!last) throw new Error("Expected a timeline child");
+		const style = getComputedStyle(element);
+		return {
+			lastIsExchange: last.classList.contains("exchange"),
+			scrollable: element.scrollHeight > element.clientHeight,
+			atEnd:
+				Math.abs(
+					element.scrollHeight - element.clientHeight - element.scrollTop,
+				) <= 1,
+			paddingBottom: Number.parseFloat(style.paddingBottom),
+			distance:
+				element.getBoundingClientRect().bottom -
+				Number.parseFloat(style.borderBottomWidth) -
+				last.getBoundingClientRect().bottom,
+		};
+	});
+	expect(tail.lastIsExchange).toBe(true);
+	expect(tail.scrollable).toBe(true);
+	expect(tail.atEnd).toBe(true);
+	expect(tail.paddingBottom).toBe(mobile ? 16 : 20);
+	// 设计 1440 20px、390 15.3px：最后一条消息到时间线底只剩下内边距（允许亚像素滚动取整）。
+	expect(Math.abs(tail.distance - tail.paddingBottom)).toBeLessThanOrEqual(1);
+	await expectCleanPage(page, errors);
+	expect(await duplicateControlNames(page)).toEqual([]);
+});

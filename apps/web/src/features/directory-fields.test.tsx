@@ -139,8 +139,15 @@ describe("Agent detail and Owner configuration directory fields", () => {
 			<AgentDetailScreen state={{ kind: "ready", agent: detailAgent }} />,
 		);
 		expect(await screen.findByText("Directory User")).toBeTruthy();
-		expect(await screen.findByText("Engineering / Platform")).toBeTruthy();
-		expect(screen.getByText("user@example.test")).toBeTruthy();
+		// 需求变化（#3215 G5-02）：Agent 详情「可用范围」与 Owner 行一样只写一行目录名称（设计
+		// #agent-detail），不再附邮箱与组织路径；名称可读、不显示 ID 的断言保留。
+		expect(await screen.findByText("Platform")).toBeTruthy();
+		const scope = screen.getByText("可用范围", { selector: "dt" })
+			.nextElementSibling as HTMLElement;
+		expect(scope.textContent).toBe("Directory User、Platform");
+		expect(scope.querySelector("li")).toBeNull();
+		expect(screen.queryByText("Engineering / Platform")).toBeNull();
+		expect(screen.queryByText("user@example.test")).toBeNull();
 		expect(document.body.textContent).not.toContain("user-2");
 		expect(document.body.textContent).not.toContain("org-1");
 		expect(
