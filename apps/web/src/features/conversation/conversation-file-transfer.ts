@@ -96,6 +96,7 @@ export async function uploadConversationFile({
 		path: { conversationId, fileId: created.data.fileId },
 		headers: {
 			"X-Platform-File-Grant": access.data.grant.token,
+			"Content-Type": descriptor.mediaType,
 			"Content-Length": descriptor.sizeBytes,
 		},
 		body: file,
