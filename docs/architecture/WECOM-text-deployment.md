@@ -138,6 +138,30 @@ SDK 自动重连、重试或队列不能突破已持久化的发送状态：
 具体长度、时效和可恢复能力按固定 SDK/协议版本验证，超过限制明确失败，不静默截断或盲目重发；
 思考过程的截短规则见下节。
 
+## 媒体
+
+收发规则以[工程 Spec §14.2.3](SPEC-agent-infra-M1-engineering-architecture.md#1423-媒体)为准，决策见
+[ADR-0032](../adr/0032-sandbox-file-exchange-and-wecom-media.md)。本节列出企微官方限额和部署要求。
+
+只有智能机器人长连接支持媒体。下表依据[智能机器人长连接](https://developer.work.weixin.qq.com/document/path/101463)，
+核对日期为 2026-10-22，SDK 为 `@wecom/aibot-node-sdk@1.0.7`：
+
+| 项目 | 官方限制 |
+| --- | --- |
+| 入站图片、文件、视频 | 消息中的下载地址 5 分钟内有效，内容已加密；每个地址带独立 `aeskey`，用 SDK `downloadFile` 解密 |
+| 入站语音 | 长连接下只提供转写文本 |
+| 出站临时素材 | 分片上传，每片不超过 512KB，最多 100 片；素材 3 天内有效 |
+| 出站大小与格式 | 图片不超过 10MB（png、jpg、gif）；视频不超过 10MB（mp4）；语音不超过 2MB（amr）；普通文件不超过 20MB；最小 5 字节 |
+| 频率 | 每个会话的回复与主动推送合计 30 条/分钟、1000 条/小时；每个机器人上传 30 次/分钟、1000 次/小时 |
+| 回复窗口 | 收到消息后 24 小时内可以回复；stream 回复仍受上文 10 分钟时限约束 |
+
+部署要求：
+
+- 为企微 Channel 声明 FileLimits，媒体类型和大小不超过上表限额。没有声明时，按工程 Spec §15.4.1 拒绝收发媒体。
+- Worker 需要能访问企微下载与上传所用的官方域名。下载地址、`aeskey`、`media_id` 和文件内容不进入日志、指标或 Trace。
+- 自建应用和显式机器人回调目前不支持媒体：结果文件改为在文本中说明，入站媒体回复固定说明。
+  以后要启用，需另行验证 `media/upload` 等接口，并更新工程 Spec。
+
 ## 思考过程
 
 回答带有思考过程（[平台 PRD §10.3](../prd/PRD-agent-platform-M1.md#103-企微会话)）时，回复按以下规则组合；
@@ -176,4 +200,5 @@ SDK 自动重连、重试或队列不能突破已持久化的发送状态：
 思考过程另验长连接单聊与群聊的展示、答案完整、过长截短提示，以及固定文案和自建应用文本不附带。
 协议不提供独立线程时明确记录，不伪造线程支持。
 证据绑定 source SHA、SDK 版本、镜像、配置版本、传输模式与实际 Runtime。
-Fake、协议 fixture、仅获取 Token 或受控 Runtime transport 不能替代真实收发；文件/媒体与 Connection 未在本票验收。
+Fake、协议 fixture、仅获取 Token 或受控 Runtime transport 不能替代真实收发。长连接文件与媒体的真实收发由
+[#3230](https://github.com/AgoraIO-Extensions/agent-infra/issues/3230) 验收；Connection 不在本票验收范围内。

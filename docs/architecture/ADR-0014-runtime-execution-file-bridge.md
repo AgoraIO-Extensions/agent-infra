@@ -2,6 +2,8 @@
 
 状态：Draft for Review（#1725）
 
+修订：在标准模板 Session Sandbox 中，业务附件的物化位置与保留期（§3、§6）、媒体类型来源（§5）以及结果文件的发布方式，均由 [ADR-0032](../adr/0032-sandbox-file-exchange-and-wecom-media.md) 修订。§1、§2、§4 和 V4 文件交换保持不变。
+
 关联：工程 Spec §15.4、[文件存储部署与验收](FILE-storage-deployment.md)、Issue #442、Issue #445
 
 ## 背景
