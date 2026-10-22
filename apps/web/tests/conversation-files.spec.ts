@@ -12,7 +12,7 @@ import { keepConversationStreamOpen } from "./conversation-stream";
 import { controlledFileLimits } from "./file-limits";
 
 const conversationId = "conversation-1";
-const limitsPath = `/api/v1/conversations/${conversationId}/files/limits`;
+const limitsPath = "/api/v2/agents/agent-1/file-limits";
 const attachment = {
 	schemaVersion: 1,
 	fileId: "file-1",
@@ -180,7 +180,7 @@ test("reads the read-only limits, uploads one attachment and keeps narrow layout
 		.poll(() => fixture.submitted())
 		.toEqual({ schemaVersion: 1, text: "请查看附件", attachments: ["file-1"] });
 	expect(
-		fixture.requests.filter((request) => request.endsWith("/files/limits")),
+		fixture.requests.filter((request) => request.endsWith("/file-limits")),
 	).toEqual([`GET ${limitsPath}`]);
 });
 
@@ -200,6 +200,6 @@ test("closes the attachment entry when the read-only limits request fails", asyn
 		page.locator('button[data-slot="button"]', { hasText: "添加附件" }),
 	).toBeDisabled();
 	expect(
-		fixture.requests.filter((request) => request.endsWith("/files/limits")),
+		fixture.requests.filter((request) => request.endsWith("/file-limits")),
 	).toEqual([`GET ${limitsPath}`]);
 });

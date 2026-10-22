@@ -71,19 +71,24 @@ test("previews a diff artifact, keeps safe links clickable and shows an image up
 			resultFiles: true,
 		},
 	});
+	const imageFileLimits = {
+		schemaVersion: 1,
+		declaration: {
+			schemaVersion: 1,
+			scope: "agent" as const,
+			revision: 1,
+			expiresAt: "2099-01-01T00:00:00Z",
+			mediaTypes: ["image/png", "text/plain"] as const,
+			maxBytes: 10 * 1024 * 1024,
+			updatedAt: "2026-01-01T00:00:00Z",
+			updatedBy: "controlled-employee",
+		},
+	};
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
-		if (path.endsWith("/files/limits"))
-			return route.fulfill({
-				json: {
-					schemaVersion: 1,
-					revision: "files-v1",
-					expiresAt: "2099-01-01T00:00:00Z",
-					mediaTypes: ["image/png", "text/plain"],
-					maxBytes: 10 * 1024 * 1024,
-				},
-			});
+		if (path.endsWith("/file-limits"))
+			return route.fulfill({ json: imageFileLimits });
 		if (path === "/api/v1/session")
 			return route.fulfill({
 				json: {
