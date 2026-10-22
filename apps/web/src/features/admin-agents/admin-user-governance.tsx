@@ -34,6 +34,10 @@ export function AdminUserGovernance() {
 	const generation = useRef(0);
 	// 确认后触发器会因提交中而禁用，焦点回到本区块标题而不是 body。
 	const heading = useRef<HTMLHeadingElement>(null);
+	// G4-23（同 E3-15）：只有确认禁用后才把焦点交给区块标题；取消、Escape 或点击外部关闭时
+	// 触发按钮仍可用，焦点回到「禁用员工：{姓名}」。
+	const disableTrigger = useRef<HTMLButtonElement>(null);
+	const disableConfirmed = useRef(false);
 
 	useEffect(() => {
 		const attempt = ++generation.current;
@@ -140,6 +144,7 @@ export function AdminUserGovernance() {
 					disabled={busy || status === "loading" || !userId}
 					trigger={
 						<Button
+							ref={disableTrigger}
 							variant="outline"
 							aria-label={withObjectName(
 								busy ? "提交中…" : "禁用员工",
@@ -163,8 +168,16 @@ export function AdminUserGovernance() {
 					}}
 					description="禁用后对方立即不能登录平台，也不能通过平台入口使用或管理 Agent；进行中的任务会收到取消请求。之后可以「解除禁用」恢复资格，已取消的任务不会恢复。"
 					confirmLabel="禁用员工"
-					finalFocus={heading}
-					onConfirm={() => void updateDisabled(true)}
+					onOpenChange={(open) => {
+						if (open) disableConfirmed.current = false;
+					}}
+					finalFocus={() =>
+						disableConfirmed.current ? heading.current : disableTrigger.current
+					}
+					onConfirm={() => {
+						disableConfirmed.current = true;
+						void updateDisabled(true);
+					}}
 				/>
 				<Button
 					disabled={busy || status === "loading" || !userId}

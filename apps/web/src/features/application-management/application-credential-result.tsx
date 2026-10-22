@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { type Ref, useId } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,10 +28,13 @@ function dateLabel(
 }
 
 export function ApplicationCredentialResult({
+	headingRef,
 	result,
 	names,
 	onPrepareRotation,
 }: {
+	/** 签发或轮换成功后的焦点目标（G4-26）。 */
+	headingRef?: Ref<HTMLHeadingElement>;
 	result: ApplicationCredentialResponse;
 	/** 页面级目录读取结果，用于把接收用户显示为姓名。 */
 	names: DirectoryNames;
@@ -45,7 +48,12 @@ export function ApplicationCredentialResult({
 			className="space-y-4 rounded-[12px] border bg-card p-5"
 		>
 			<div className="flex flex-wrap items-center justify-between gap-3">
-				<h3 id={headingId} className="font-semibold text-base">
+				<h3
+					id={headingId}
+					ref={headingRef}
+					tabIndex={-1}
+					className="font-semibold text-base"
+				>
 					应用凭证结果
 				</h3>
 				<Badge

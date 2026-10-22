@@ -1841,3 +1841,80 @@ test("Skill binding dialogs follow the design spacing and hint text (B2-08 / B2-
 	await expect(unbindTrigger).toBeFocused();
 	await expectCleanPage(page, pageErrors);
 });
+
+// #3179 G4-19：「更换固定版本」确认后，焦点交给新版本绑定卡的标题（D2-59、W-30）。旧卡随新版本卸载、
+// 弹窗一并消失，之后的回读也不能把焦点挪到 body 或页面 h1。点击与键盘 Enter 两种方式都覆盖。
+for (const mode of ["click", "keyboard"] as const)
+	test(`changing a fixed version by ${mode} focuses the replacement binding title (G4-19)`, async ({
+		page,
+	}, info) => {
+		await viewport(page, info.project.name === "mobile");
+		const pageErrors = trackPageErrors(page);
+		const api = await ownerConfigFixture(page, {
+			agentVersion: "agent-version-7",
+		});
+		await page.goto("/agents/agent-pilot-1/skills");
+		const region = main(page);
+		await region
+			.getByLabel("固定版本", { exact: true })
+			.selectOption("workspace-summary-v1");
+		await region.getByRole("button", { name: "绑定固定版本" }).click();
+		await page
+			.getByRole("dialog", { name: "确认绑定固定版本" })
+			.getByRole("button", { name: "确认绑定" })
+			.click();
+		await expect(
+			region.getByRole("heading", {
+				level: 2,
+				name: "workspace-summary v1.0.0",
+			}),
+		).toBeFocused();
+		await region
+			.getByRole("button", { name: "更换固定版本：workspace-summary" })
+			.click();
+		const change = page.getByRole("dialog", { name: "更换固定版本" });
+		await expect(change).toContainText("workspace-summary · v1.0.0 → v1.1.0");
+		const confirm = change.getByRole("button", { name: "确认版本变更" });
+		if (mode === "click") await confirm.click();
+		else {
+			await confirm.focus();
+			await page.keyboard.press("Enter");
+		}
+		await expect(change).toHaveCount(0);
+		const replacement = region.getByRole("heading", {
+			level: 2,
+			name: "workspace-summary v1.1.0",
+		});
+		await expect(replacement).toBeFocused();
+		await expect(region.getByRole("article")).toHaveCount(1);
+		// 之后 1.5s 内多次采样：焦点一直在新卡标题上，不被回读挪到 body 或 h1。
+		for (let sample = 0; sample < 5; sample += 1) {
+			await page.waitForTimeout(300);
+			expect(
+				await page.evaluate(() => {
+					const active = document.activeElement;
+					return active === document.body
+						? "body"
+						: `${active?.tagName.toLowerCase()}#${active?.id}`;
+				}),
+			).toBe("h2#skill-binding-title-workspace-summary-v2");
+		}
+		expect(api.commands.at(-1)?.body).toEqual({
+			schemaVersion: 1,
+			expectedConfigurationRevision: 8,
+			bindings: [
+				{
+					skillVersionId: "workspace-summary-v2",
+					grant: {
+						schemaVersion: 1,
+						tools: [],
+						connections: [],
+						fileRoots: [],
+						networkOrigins: [],
+						scripts: false,
+					},
+				},
+			],
+		});
+		await expectCleanPage(page, pageErrors);
+	});

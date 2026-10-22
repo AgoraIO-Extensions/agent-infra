@@ -9,6 +9,7 @@ import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { keepConversationStreamOpen } from "./conversation-stream";
 import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
+import { duplicateControlNames } from "./page-hygiene";
 import {
 	computed,
 	expectCleanPage,
@@ -55,7 +56,7 @@ function envelope(sequence: number, execution = executionId) {
 
 const status = (
 	sequence: number,
-	value: "processing" | "completed",
+	value: "processing" | "completed" | "cancelled",
 	execution = executionId,
 ) =>
 	PersistedConversationEventV2Schema.parse({
@@ -67,7 +68,7 @@ const status = (
 
 const operation = (
 	sequence: number,
-	phase: "intent" | "started" | "completed",
+	phase: "intent" | "started" | "completed" | "failed",
 	{ ref = "operation-1", execution = executionId } = {},
 ) =>
 	PersistedConversationEventV2Schema.parse({
@@ -178,10 +179,27 @@ type Fixture = {
 	unexpected: string[];
 };
 
+/** 会话投影的可变部分：默认是传入的事件、没有消息、会话进行中。 */
+type ConversationSnapshot = {
+	events: ReturnType<typeof status>[];
+	messages: unknown[];
+	status: "active" | "ready";
+};
+
 async function openBrowserConversation(
 	page: Page,
 	events: ReturnType<typeof status>[],
-	{ detailEvents }: { detailEvents?: ReturnType<typeof status>[] } = {},
+	{
+		detailEvents,
+		snapshot,
+		onStop,
+	}: {
+		detailEvents?: ReturnType<typeof status>[];
+		/** 每次读取会话投影时调用，可以挂起以停在中间状态。 */
+		snapshot?: () => Promise<ConversationSnapshot>;
+		/** 提供时停止命令返回契约内的受理回执。 */
+		onStop?: () => void;
+	} = {},
 ): Promise<Fixture> {
 	const fixture: Fixture = { posts: [], unexpected: [] };
 	await keepConversationStreamOpen(page);
@@ -190,6 +208,18 @@ async function openBrowserConversation(
 		const path = new URL(request.url()).pathname;
 		if (request.method() === "POST") {
 			fixture.posts.push({ path, body: request.postDataJSON() });
+			if (onStop && path.endsWith("/stops")) {
+				onStop();
+				return route.fulfill({
+					status: 202,
+					json: {
+						schemaVersion: 1,
+						status: "submitted",
+						messageId: null,
+						executionId,
+					},
+				});
+			}
 			if (path.endsWith("/browser/commands")) {
 				const body = request.postDataJSON() as Record<string, string>;
 				return route.fulfill({
@@ -245,7 +275,10 @@ async function openBrowserConversation(
 					},
 				}),
 			});
-		if (path === `/api/v2/conversations/${conversationId}`)
+		if (path === `/api/v2/conversations/${conversationId}`) {
+			const current = snapshot
+				? await snapshot()
+				: { events, messages: [], status: "active" as const };
 			return route.fulfill({
 				json: ConversationDetailProjectionV2Schema.parse({
 					schemaVersion: 2,
@@ -254,17 +287,19 @@ async function openBrowserConversation(
 						conversationId,
 						agentId,
 						title: "浏览器验收会话",
-						status: "active",
+						status: current.status,
 						selectedModelOptionId: null,
 						selectedReasoningLevel: null,
-						lastConversationCursor: events.at(-1)?.conversationCursor ?? null,
+						lastConversationCursor:
+							current.events.at(-1)?.conversationCursor ?? null,
 						createdAt: occurredAt,
 						updatedAt: occurredAt,
 					},
-					messages: [],
-					events,
+					messages: current.messages,
+					events: current.events,
 				}),
 			});
+		}
 		if (path.includes(`/conversations/${conversationId}/executions/`)) {
 			const id = path.split("/").at(-1) ?? executionId;
 			return route.fulfill({
@@ -527,6 +562,121 @@ test("shows the running timeline and stops through the current execution", async
 		targetExecutionId: executionId,
 	});
 });
+
+// #3179 G4-08：从浏览器卡「停止操作」停止时，该按钮随停止受理卸载；焦点先交给对应回复卡的「正在停止」
+// （aria-disabled 仍可聚焦），停止确认后交给浏览器卡「查看操作记录」（设计），任何时候都不落到 body。
+for (const mode of ["click", "keyboard"] as const)
+	test(`stopping from the browser card by ${mode} keeps focus off the body (G4-08)`, async ({
+		page,
+	}, info) => {
+		const errors = trackPageErrors(page);
+		await page.setViewportSize(
+			info.project.name === "mobile"
+				? { width: 390, height: 844 }
+				: { width: 1440, height: 900 },
+		);
+		const userMessage = {
+			messageId: "message-browser-1",
+			role: "user" as const,
+			text: "打开公开页面并整理结果",
+			status: "processing" as const,
+			executionId,
+			replyToMessageId: null,
+			answerVersion: null,
+			isCurrentAnswer: null,
+			error: null,
+			createdAt: occurredAt,
+		};
+		const running = [status(1, "processing"), operation(2, "started")];
+		// 停止后的投影：操作尝试以失败收尾、Execution 已取消，浏览器卡进入终态并有操作记录。
+		const stopped = [
+			...running,
+			operation(3, "failed"),
+			status(4, "cancelled"),
+		];
+		let phase: "running" | "stopped" = "running";
+		// 停止受理后的回读先挂起：页面停在「正在停止」，再放行到已取消的投影。
+		let releaseStopped = () => {};
+		const stoppedGate = new Promise<void>((resolve) => {
+			releaseStopped = resolve;
+		});
+		const fixture = await openBrowserConversation(page, running, {
+			onStop: () => {
+				phase = "stopped";
+			},
+			snapshot: async () => {
+				if (phase === "running")
+					return {
+						events: running,
+						messages: [userMessage],
+						status: "active",
+					};
+				await stoppedGate;
+				return {
+					events: stopped,
+					messages: [
+						{ ...userMessage, status: "cancelled" },
+						{
+							...userMessage,
+							messageId: `assistant:${executionId}`,
+							role: "assistant",
+							text: "",
+							status: "cancelled",
+							replyToMessageId: userMessage.messageId,
+							answerVersion: 1,
+							isCurrentAnswer: true,
+						},
+					],
+					status: "ready",
+				};
+			},
+		});
+		const activeElement = () =>
+			page.evaluate(() => {
+				const active = document.activeElement;
+				return !active || active === document.body
+					? "body"
+					: `${active.tagName.toLowerCase()}:${active.textContent?.trim()}`;
+			});
+		const card = page.getByRole("region", { name: "浏览器操作进行中" });
+		await expectCardInTimeline(page, card);
+		const stop = card.getByRole("button", { name: "停止操作" });
+		if (mode === "click") await stop.click();
+		else {
+			await stop.focus();
+			await page.keyboard.press("Enter");
+		}
+		const stopping = page.getByRole("button", {
+			name: "正在停止",
+			exact: true,
+		});
+		await expect(stopping).toBeFocused();
+		await expect(stopping).toHaveAttribute("aria-disabled", "true");
+		// 卡片仍为执行中，「停止操作」已随停止受理卸载；等待确认期间焦点一直在「正在停止」。
+		await expect(card.getByRole("button", { name: "停止操作" })).toHaveCount(0);
+		for (let sample = 0; sample < 3; sample += 1) {
+			await page.waitForTimeout(250);
+			expect(await activeElement()).toBe("button:正在停止");
+		}
+		releaseStopped();
+		const records = page
+			.locator("section.browser-capability")
+			.getByRole("button", { name: "查看操作记录" });
+		await expect(records).toBeFocused();
+		await expect(stopping).toHaveCount(0);
+		for (let sample = 0; sample < 4; sample += 1) {
+			await page.waitForTimeout(300);
+			expect(await activeElement()).toBe("button:查看操作记录");
+		}
+		expect(fixture.posts).toEqual([
+			{
+				path: `/api/v1/conversations/${conversationId}/stops`,
+				body: { schemaVersion: 1, targetExecutionId: executionId },
+			},
+		]);
+		await expectCleanPage(page, errors);
+		expect(await duplicateControlNames(page)).toEqual([]);
+	});
 
 test("offers takeover with a stop instead of allow on a handoff request (NI-94)", async ({
 	page,
