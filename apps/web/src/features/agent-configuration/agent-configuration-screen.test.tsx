@@ -290,7 +290,11 @@ describe("AgentConfigurationScreen", () => {
 				name: "Approved endpoint · release-model",
 			}),
 		);
-		expect(screen.getByRole("checkbox", { name: "高" })).toBeTruthy();
+		expect(
+			screen.getByRole("checkbox", {
+				name: "高：Approved endpoint · release-model",
+			}),
+		).toBeTruthy();
 		fireEvent.click(saveButton());
 		expect(onSave).toHaveBeenCalledExactlyOnceWith(
 			expect.objectContaining({
@@ -960,9 +964,13 @@ describe("models managed by the saved default Relay Key (RK2-01～RK2-07)", () =
 		const levels = screen.getByRole("group", {
 			name: "Relay · Internal · model-a 的推理档位",
 		});
-		fireEvent.click(within(levels).getByRole("checkbox", { name: "高" }));
+		const high = () =>
+			within(levels).getByRole("checkbox", {
+				name: "高：Relay · Internal · model-a",
+			});
+		fireEvent.click(high());
 		expect(saveButton().hasAttribute("disabled")).toBe(false);
-		fireEvent.click(within(levels).getByRole("checkbox", { name: "高" }));
+		fireEvent.click(high());
 		expect(saveButton().hasAttribute("disabled")).toBe(true);
 		expect(screen.getByText("没有需要保存的变更。")).toBeTruthy();
 	});

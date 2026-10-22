@@ -1,5 +1,12 @@
 import { ArrowRightIcon, PlusIcon, Trash2Icon } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+	Fragment,
+	type ReactNode,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldLegend } from "@/components/ui/field";
@@ -14,6 +21,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { withObjectName } from "@/lib/accessible-name";
 import { cjkSpaced } from "@/lib/cjk-spacing";
 import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 import type {
@@ -357,12 +365,15 @@ function ModelRows({
 				const modelOptions = [
 					...new Set(endpoint?.models.map((item) => item.modelId) ?? []),
 				].map((modelId) => ({ value: modelId, label: modelId }));
+				// 多个模型选项同屏时，行内控件的可访问名称带上本行 legend「模型选项 N」（D2-58）；
+				// 不用所选模型命名：两行可能选了同一模型，且名称不应随选择变化。
+				const rowName = `模型选项 ${index + 1}`;
 				return (
 					<fieldset
 						className="model-option-fieldset grid min-w-0 gap-3 sm:grid-cols-2"
 						key={`model-${index}`}
 					>
-						<FieldLegend className="mb-3">模型选项 {index + 1}</FieldLegend>
+						<FieldLegend className="mb-3">{rowName}</FieldLegend>
 						<Field className="model-option-endpoint">
 							<Label htmlFor={`application-model-option-endpoint-${index}`}>
 								模型端点
@@ -380,6 +391,7 @@ function ModelRows({
 							>
 								<SelectTrigger
 									id={`application-model-option-endpoint-${index}`}
+									aria-label={withObjectName("模型端点", rowName)}
 									aria-describedby={
 										errors[`model.${index}.endpointId`]
 											? errorId(`model.${index}.endpointId`)
@@ -421,6 +433,7 @@ function ModelRows({
 							>
 								<SelectTrigger
 									id={`application-model-option-model-${index}`}
+									aria-label={withObjectName("模型", rowName)}
 									aria-describedby={
 										errors[`model.${index}.modelId`]
 											? errorId(`model.${index}.modelId`)
@@ -472,31 +485,44 @@ function ModelRows({
 										选择模型后显示可用档位。
 									</p>
 								)}
-								{(selectedModel?.reasoningLevels ?? []).map((level) => {
-									const selected = model.reasoningLevels
-										.split("\n")
-										.includes(level);
-									return (
-										<Label variant="option" key={level}>
-											<Checkbox
-												checked={selected}
-												onCheckedChange={(checked) => {
-													const levels = new Set(
-														model.reasoningLevels.split("\n").filter(Boolean),
-													);
-													if (checked) levels.add(level);
-													else levels.delete(level);
-													onChange(
-														index,
-														"reasoningLevels",
-														[...levels].join("\n"),
-													);
-												}}
-											/>
-											{reasoningLevelLabel(level)}
-										</Label>
-									);
-								})}
+								{(selectedModel?.reasoningLevels ?? []).map(
+									(level, levelIndex) => {
+										const selected = model.reasoningLevels
+											.split("\n")
+											.includes(level);
+										// base-ui 复选框默认取外层 label 作 aria-labelledby，aria-label 不生效；
+										// 与 E3-16 相同，名称取自旁边的隐藏文本，可见文字与点击标签切换不变。
+										const nameId = `application-model-option-reasoning-${index}-level-${levelIndex}-name`;
+										return (
+											<Fragment key={level}>
+												<Label variant="option">
+													<Checkbox
+														aria-labelledby={nameId}
+														checked={selected}
+														onCheckedChange={(checked) => {
+															const levels = new Set(
+																model.reasoningLevels
+																	.split("\n")
+																	.filter(Boolean),
+															);
+															if (checked) levels.add(level);
+															else levels.delete(level);
+															onChange(
+																index,
+																"reasoningLevels",
+																[...levels].join("\n"),
+															);
+														}}
+													/>
+													{reasoningLevelLabel(level)}
+												</Label>
+												<span id={nameId} hidden>
+													{withObjectName(reasoningLevelLabel(level), rowName)}
+												</span>
+											</Fragment>
+										);
+									},
+								)}
 							</fieldset>
 							<FieldError
 								id={errorId(`model.${index}.reasoningLevels`)}
@@ -506,6 +532,7 @@ function ModelRows({
 						{models.length > 1 ? (
 							<Button
 								variant="outline"
+								aria-label={withObjectName("移除模型选项", rowName)}
 								className="model-remove self-end"
 								onClick={() => onRemove(index)}
 								type="button"
@@ -533,91 +560,102 @@ function DraftRows<T extends string>({
 }: DraftRowsProps<T>) {
 	return (
 		<>
-			{rows.map((row, index) => (
-				<fieldset
-					className="grid min-w-0 gap-3 sm:grid-cols-2"
-					key={`${label}-${index}`}
-				>
-					<FieldLegend className="mb-3">
-						{label} {index + 1}
-					</FieldLegend>
-					{fields.map((field) => (
-						<Field key={field.key}>
-							{(() => {
-								const key = `${idPrefix}.${index}.${field.key}`;
-								const id = fieldId(key);
-								const message = errorFor?.(index, field.key);
-								return (
-									<>
-										<Label htmlFor={id}>{field.label}</Label>
-										{field.options ? (
-											<Select
-												disabled={field.options.length === 0}
-												value={row[field.key]}
-												itemToStringLabel={(value) =>
-													field.options?.find(
-														(option) => option.value === value,
-													)?.label ?? String(value)
-												}
-												onValueChange={(value) =>
-													value && onChange(index, field.key, value)
-												}
-											>
-												<SelectTrigger
-													id={id}
+			{rows.map((row, index) => {
+				// 多行同屏时，行内控件的可访问名称带上本行 legend（「环境变量 N」「Secret N」，D2-58）；
+				// 不用填写的名称：名称可能重复或为空，且输入框名称不应随输入变化。
+				const rowName = `${label} ${index + 1}`;
+				return (
+					<fieldset
+						className="grid min-w-0 gap-3 sm:grid-cols-2"
+						key={`${label}-${index}`}
+					>
+						<FieldLegend className="mb-3">{rowName}</FieldLegend>
+						{fields.map((field) => (
+							<Field key={field.key}>
+								{(() => {
+									const key = `${idPrefix}.${index}.${field.key}`;
+									const id = fieldId(key);
+									const message = errorFor?.(index, field.key);
+									const accessibleName = withObjectName(field.label, rowName);
+									return (
+										<>
+											<Label htmlFor={id}>{field.label}</Label>
+											{field.options ? (
+												<Select
+													disabled={field.options.length === 0}
+													value={row[field.key]}
+													itemToStringLabel={(value) =>
+														field.options?.find(
+															(option) => option.value === value,
+														)?.label ?? String(value)
+													}
+													onValueChange={(value) =>
+														value && onChange(index, field.key, value)
+													}
+												>
+													<SelectTrigger
+														id={id}
+														aria-label={accessibleName}
+														aria-describedby={
+															message ? errorId(key) : undefined
+														}
+														aria-invalid={message ? true : undefined}
+													>
+														<SelectValue placeholder="选择一项" />
+													</SelectTrigger>
+													<SelectContent>
+														{field.options.map((option) => (
+															<SelectItem
+																key={option.value}
+																value={option.value}
+																disabled={option.disabled}
+															>
+																{option.label}
+															</SelectItem>
+														))}
+													</SelectContent>
+												</Select>
+											) : (
+												<Input
+													aria-label={accessibleName}
 													aria-describedby={message ? errorId(key) : undefined}
 													aria-invalid={message ? true : undefined}
-												>
-													<SelectValue placeholder="选择一项" />
-												</SelectTrigger>
-												<SelectContent>
-													{field.options.map((option) => (
-														<SelectItem
-															key={option.value}
-															value={option.value}
-															disabled={option.disabled}
-														>
-															{option.label}
-														</SelectItem>
-													))}
-												</SelectContent>
-											</Select>
-										) : (
-											<Input
-												aria-describedby={message ? errorId(key) : undefined}
-												aria-invalid={message ? true : undefined}
-												autoComplete={
-													field.type === "password" ? "new-password" : undefined
-												}
-												id={id}
-												onChange={(event) =>
-													onChange(index, field.key, event.target.value)
-												}
-												required={field.required}
-												type={field.type ?? "text"}
-												value={row[field.key]}
-											/>
-										)}
-										<FieldError id={errorId(key)} message={message} />
-									</>
-								);
-							})()}
-						</Field>
-					))}
-					{rows.length > minimumRows ? (
-						<Button
-							variant="outline"
-							className="self-end"
-							onClick={() => onRemove(index)}
-							type="button"
-						>
-							<Trash2Icon aria-hidden="true" data-icon="inline-start" />
-							{/* label 以拉丁字母开头时补空格：「移除 Secret」「移除环境变量」。 */}
-							{cjkSpaced`移除${label}`}
-						</Button>
-					) : null}
-				</fieldset>
-			))}
+													autoComplete={
+														field.type === "password"
+															? "new-password"
+															: undefined
+													}
+													id={id}
+													onChange={(event) =>
+														onChange(index, field.key, event.target.value)
+													}
+													required={field.required}
+													type={field.type ?? "text"}
+													value={row[field.key]}
+												/>
+											)}
+											<FieldError id={errorId(key)} message={message} />
+										</>
+									);
+								})()}
+							</Field>
+						))}
+						{rows.length > minimumRows ? (
+							<Button
+								variant="outline"
+								aria-label={withObjectName(cjkSpaced`移除${label}`, rowName)}
+								className="self-end"
+								onClick={() => onRemove(index)}
+								type="button"
+							>
+								<Trash2Icon aria-hidden="true" data-icon="inline-start" />
+								{/* label 以拉丁字母开头时补空格：「移除 Secret」「移除环境变量」。 */}
+								{cjkSpaced`移除${label}`}
+							</Button>
+						) : null}
+					</fieldset>
+				);
+			})}
 		</>
 	);
 }

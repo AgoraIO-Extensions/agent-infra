@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldError } from "@/components/ui/field";
@@ -7,6 +7,7 @@ import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
+import { withObjectName } from "@/lib/accessible-name";
 import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 import {
 	candidateKey,
@@ -196,7 +197,7 @@ export function ConfigurationModelPicker({
 				aria-describedby={errorVisible ? errorId : undefined}
 				className="keyless-model-list"
 			>
-				{candidates.map((candidate) => {
+				{candidates.map((candidate, candidateIndex) => {
 					const key = candidateKey(candidate);
 					const label = labels.get(key) ?? candidate.modelId;
 					const row = rows[key] ?? { checked: false, levels: [] };
@@ -224,22 +225,34 @@ export function ConfigurationModelPicker({
 									aria-label={`${label} 的推理档位`}
 									className="keyless-level-row"
 								>
-									{candidate.reasoningLevels.map((level) => (
-										<Label variant="option" key={level}>
-											<Checkbox
-												checked={row.levels.includes(level)}
-												disabled={disabled}
-												onCheckedChange={(checked) =>
-													setRow(key, {
-														levels: checked
-															? [...row.levels, level]
-															: row.levels.filter((item) => item !== level),
-													})
-												}
-											/>
-											{reasoningLevelLabel(level)}
-										</Label>
-									))}
+									{candidate.reasoningLevels.map((level, levelIndex) => {
+										// 多个模型同时展开档位时，名称带上所属模型（「均衡：{模型}」，D2-58）。
+										// base-ui 复选框默认取外层 label 作 aria-labelledby，所以与 E3-16 相同，
+										// 名称取自旁边的隐藏文本；可见文字与点击标签切换不变。
+										const nameId = `${idPrefix}-level-${candidateIndex}-${levelIndex}-name`;
+										return (
+											<Fragment key={level}>
+												<Label variant="option">
+													<Checkbox
+														aria-labelledby={nameId}
+														checked={row.levels.includes(level)}
+														disabled={disabled}
+														onCheckedChange={(checked) =>
+															setRow(key, {
+																levels: checked
+																	? [...row.levels, level]
+																	: row.levels.filter((item) => item !== level),
+															})
+														}
+													/>
+													{reasoningLevelLabel(level)}
+												</Label>
+												<span id={nameId} hidden>
+													{withObjectName(reasoningLevelLabel(level), label)}
+												</span>
+											</Fragment>
+										);
+									})}
 								</fieldset>
 							) : null}
 						</div>

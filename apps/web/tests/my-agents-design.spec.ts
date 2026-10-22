@@ -1,8 +1,10 @@
 import {
 	AgentApplicationProjectionV2Schema,
+	AgentDefaultRelayKeyDisplayCandidatesV2Schema,
 	AgentProjectionV2Schema,
 	ConnectionCapabilityProjectionV1Schema,
 	ConversationPageV1Schema,
+	DeploymentConfigurationProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import {
 	createPilotAgentMockServerV2,
@@ -18,6 +20,7 @@ import type {
 	AgentApplicationProjectionV2,
 	AgentCreationFailureCategoryV1,
 	AgentProjectionV2,
+	DeploymentConfigurationProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
 import { expectNoDuplicateControls } from "./page-health";
 import {
@@ -77,11 +80,20 @@ async function fixture(
 		agents?: AgentProjectionV2[];
 		/** 服务端给出的创建失败类别（#3034）；未设置时接口按不可读处理。 */
 		creationFailure?: AgentCreationFailureCategoryV1;
+		/** 部署选项；未设置时用单端点、单模型的 test-fixtures 投影。 */
+		deployment?: DeploymentConfigurationProjectionV2;
+		/** 设置时 Agent 已有默认 Relay Key，「检查可用模型」返回这些候选（#2421）。 */
+		defaultRelayKeyCandidates?: {
+			endpointId: string;
+			modelId: string;
+			displayName: string;
+			reasoningLevels: string[];
+		}[];
 	} = {},
 ) {
 	const applications = input.applications ?? [application()];
 	const agents = input.agents ?? [ownedAgent];
-	const { creationFailure } = input;
+	const { creationFailure, defaultRelayKeyCandidates } = input;
 	const commands: string[] = [];
 	const server = createPilotAgentMockServerV2({
 		getCurrentSession: {
@@ -95,7 +107,23 @@ async function fixture(
 				},
 			},
 		},
-		getDeploymentConfiguration: { status: 200, body: deploymentConfiguration },
+		getDeploymentConfiguration: {
+			status: 200,
+			body: input.deployment ?? deploymentConfiguration,
+		},
+		...(defaultRelayKeyCandidates
+			? {
+					getAgentDefaultRelayKey: {
+						status: 200,
+						body: {
+							schemaVersion: 1,
+							isSet: true,
+							keyVersion: 2,
+							configurationRevision: 7,
+						},
+					},
+				}
+			: {}),
 		listAgents: () => ({
 			status: 200,
 			body: { items: agents, nextCursor: null },
@@ -162,6 +190,18 @@ async function fixture(
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const url = new URL(request.url());
+		if (
+			defaultRelayKeyCandidates &&
+			request.method() === "POST" &&
+			url.pathname.endsWith("/default-relay-key/display-candidates")
+		)
+			return route.fulfill({
+				json: AgentDefaultRelayKeyDisplayCandidatesV2Schema.parse({
+					schemaVersion: 2,
+					configurationRevision: 7,
+					candidates: defaultRelayKeyCandidates,
+				}),
+			});
 		if (request.method() !== "GET") {
 			commands.push(url.pathname);
 			return route.fulfill({ status: 409, json: {} });
@@ -659,7 +699,9 @@ test("application form footer, field errors, legends and option labels follow th
 	const muted = await resolved(page, "color", "var(--muted-foreground)");
 	await page.getByRole("combobox", { name: "模型端点" }).click();
 	await page.getByRole("option", { name: "Primary endpoint" }).click();
-	await page.getByRole("combobox", { name: "模型", exact: true }).click();
+	await page
+		.getByRole("combobox", { name: "模型：模型选项 1", exact: true })
+		.click();
 	await page.getByRole("option", { name: "gpt-5" }).click();
 	for (const legend of ["模型选项 1", "允许的推理档位"])
 		expect(
@@ -1523,5 +1565,190 @@ test("application detail shows the image in monospace and the scope as one line 
 		"/my-agents/:id 申请详情（G4-15 / G4-16）",
 	);
 	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
+});
+
+// #3206：两个端点各一个模型、档位相同，第二行可选与第一行不同的模型，档位复选框仍同名。
+const twoEndpointDeployment = DeploymentConfigurationProjectionV2Schema.parse({
+	...deploymentConfiguration,
+	modelCatalog: {
+		...deploymentConfiguration.modelCatalog,
+		endpoints: [
+			...deploymentConfiguration.modelCatalog.endpoints,
+			{
+				endpointId: "endpoint-secondary",
+				displayName: "Secondary endpoint",
+				models: [
+					{ modelId: "gpt-5-mini", reasoningLevels: ["medium", "high"] },
+				],
+			},
+		],
+	},
+});
+
+async function pick(page: Page, combobox: string, option: string) {
+	await page.getByRole("combobox", { name: combobox, exact: true }).click();
+	await page.getByRole("option", { name: option, exact: true }).click();
+}
+
+// #3206 AC-1 / AC-3：创建与修改申请添加多个模型选项、多行环境变量与 Secret 后，行内控件的可访问名称
+// 带上所在行的 legend（「{可见文字}：模型选项 N」「{可见文字}：环境变量 N」「{可见文字}：Secret N」，
+// D2-58），可见文字不变，#main-content 没有同角色同名控件。
+for (const path of [
+	"/my-agents/new",
+	"/my-agents/application-browser-1/edit",
+] as const) {
+	test(`multiple model options, environment rows and Secret rows have distinct control names on ${path} (#3206 AC-1)`, async ({
+		page,
+	}, info) => {
+		await viewportFor(page, info.project.name === "mobile");
+		const pageErrors = trackPageErrors(page);
+		await fixture(page, { deployment: twoEndpointDeployment });
+		await page.goto(path);
+		await expect(page.getByLabel("Agent 名称")).toBeVisible();
+		if (path === "/my-agents/new") await pick(page, "标准模板", "Codex");
+		else await page.getByRole("checkbox", { name: "修改模型配置" }).click();
+
+		await pick(page, "模型端点：模型选项 1", "Primary endpoint");
+		await pick(page, "模型：模型选项 1", "gpt-5");
+		await page.getByRole("button", { name: "添加模型选项" }).click();
+		await pick(page, "模型端点：模型选项 2", "Secondary endpoint");
+		await pick(page, "模型：模型选项 2", "gpt-5-mini");
+		for (const row of ["模型选项 1", "模型选项 2"])
+			for (const level of ["均衡", "高"]) {
+				const checkbox = page.getByRole("checkbox", {
+					name: `${level}：${row}`,
+					exact: true,
+				});
+				await checkbox.click();
+				await expect(checkbox).toBeChecked();
+			}
+		// 可见文字不变：档位仍只显示中文名，移除按钮仍为「移除模型选项」。
+		const secondRow = page.locator(".model-option-fieldset").nth(1);
+		await expect(
+			secondRow.locator('.model-reasoning label[data-variant="option"]'),
+		).toHaveText(["均衡", "高"]);
+		const removeModel = page.getByRole("button", {
+			name: "移除模型选项：模型选项 2",
+			exact: true,
+		});
+		await expect(removeModel).toHaveText("移除模型选项");
+		await expect(
+			page.getByRole("button", {
+				name: "移除模型选项：模型选项 1",
+				exact: true,
+			}),
+		).toBeVisible();
+
+		await page.getByRole("button", { name: "展开高级配置" }).click();
+		for (let index = 0; index < 2; index += 1) {
+			await page.getByRole("button", { name: "添加环境变量" }).click();
+			await page.getByRole("button", { name: "添加 Secret" }).click();
+		}
+		for (const row of [1, 2]) {
+			await page
+				.getByRole("textbox", {
+					name: `变量名称：环境变量 ${row}`,
+					exact: true,
+				})
+				.fill(`SYNTHETIC_${row}`);
+			await page
+				.getByRole("textbox", { name: `变量值：环境变量 ${row}`, exact: true })
+				.fill("synthetic-value");
+			await expect(
+				page.getByRole("button", {
+					name: `移除环境变量：环境变量 ${row}`,
+					exact: true,
+				}),
+			).toHaveText("移除环境变量");
+			await pick(page, `Secret 名称：Secret ${row}`, "MODEL_API_KEY");
+			await expect(
+				page.getByLabel(`替换值：Secret ${row}`, { exact: true }),
+			).toHaveAttribute("type", "password");
+			await expect(
+				page.getByRole("button", {
+					name: `移除 Secret：Secret ${row}`,
+					exact: true,
+				}),
+			).toHaveText("移除 Secret");
+		}
+		// 字段标签的可见文字不变。
+		await expect(page.locator("label", { hasText: /^变量名称$/ })).toHaveCount(
+			2,
+		);
+		await expect(
+			page.locator("label", { hasText: /^Secret 名称$/ }),
+		).toHaveCount(2);
+
+		await expectCleanPage(page, pageErrors);
+		await expectNoDuplicateControls(page, `${path}（多行，#3206）`);
+		await noHorizontalOverflow(page);
+
+		// 移除第二个模型选项后只剩一行，不再有「移除模型选项」；移除第一行环境变量后，原第二行
+		// 重新编号为「环境变量 1」，名称随 legend 更新，仍不重名。
+		await removeModel.click();
+		await expect(
+			page.getByRole("button", { name: /^移除模型选项/ }),
+		).toHaveCount(0);
+		await page
+			.getByRole("button", { name: "移除环境变量：环境变量 1", exact: true })
+			.click();
+		await expect(
+			page.getByRole("textbox", { name: "变量名称：环境变量 1", exact: true }),
+		).toHaveValue("SYNTHETIC_2");
+		await expectNoDuplicateControls(page, `${path}（移除后，#3206）`);
+	});
+}
+
+// #3206 AC-1：由默认 Key 管理模型的修改申请里，「检查可用模型」后勾选两个模型，各自的档位复选框
+// 名称带上所属模型，没有同名控件。
+test("checked Key candidates in an application edit have distinct level names (#3206 AC-1)", async ({
+	page,
+}, info) => {
+	await viewportFor(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await fixture(page, {
+		applications: [application({ agentId: "agent-pilot-1" })],
+		defaultRelayKeyCandidates: [
+			{
+				endpointId: "endpoint-primary",
+				modelId: "gpt-5",
+				displayName: "gpt-5",
+				reasoningLevels: ["medium", "high"],
+			},
+			{
+				endpointId: "endpoint-primary",
+				modelId: "gpt-5-mini",
+				displayName: "gpt-5-mini",
+				reasoningLevels: ["medium", "high"],
+			},
+		],
+	});
+	await page.goto("/my-agents/application-browser-1/edit");
+	await page.getByRole("checkbox", { name: "修改模型配置" }).click();
+	await page
+		.getByLabel("Agent 默认 Relay Key", { exact: true })
+		.fill("synthetic-relay-key");
+	await page.getByRole("button", { name: "检查可用模型" }).click();
+	for (const model of ["gpt-5", "gpt-5-mini"])
+		await page
+			.getByRole("checkbox", {
+				name: `endpoint-primary · ${model}`,
+				exact: true,
+			})
+			.click();
+	for (const model of ["gpt-5", "gpt-5-mini"])
+		for (const level of ["medium", "high"])
+			await expect(
+				page.getByRole("checkbox", {
+					name: `${level}：endpoint-primary · ${model}`,
+					exact: true,
+				}),
+			).toBeChecked();
+	await expectCleanPage(page, pageErrors);
+	await expectNoDuplicateControls(
+		page,
+		"/my-agents/:id/edit（默认 Key 候选，#3206）",
+	);
 	await noHorizontalOverflow(page);
 });

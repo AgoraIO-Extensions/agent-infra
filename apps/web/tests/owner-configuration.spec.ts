@@ -870,6 +870,7 @@ test("the default Relay Key has its own section and a verified replacement (G-08
 	// RK2-08：先勾选一个模型（不保存），替换流程中保留并禁用。
 	const mini = models.getByRole("checkbox", {
 		name: "Relay · Internal · gpt-5-mini",
+		exact: true,
 	});
 	await mini.click();
 	await expect(mini).toBeChecked();
@@ -1087,6 +1088,7 @@ test("subset, empty and failed candidate reads never block other fields (RK2-03,
 	await expect(page.getByRole("button", { name: "保存配置" })).toBeDisabled();
 	const mini = models.getByRole("checkbox", {
 		name: "Relay · Internal · gpt-5-mini",
+		exact: true,
 	});
 	// 改动选择会移除当前模型：保存前先列出来。
 	await mini.click();
@@ -2129,3 +2131,58 @@ test("Skill binding empty state, failed sync card and narrow bind facts follow t
 	await expectNoDuplicateControls(page, "Agent 的 Skill（同步失败，G4-21）");
 	await expectCleanPage(page, pageErrors);
 });
+
+// #3206 AC-2 / AC-3：「模型与凭证」勾选两个候选模型后，各自展开的推理档位复选框名称带上所属模型
+// （「均衡：{模型}」，D2-58），可见文字仍是中文档位名，#main-content 没有同角色同名控件。
+for (const mode of ["saved-key", "catalog"] as const)
+	test(`checking two ${mode} candidates keeps their reasoning level names distinct (#3206 AC-2)`, async ({
+		page,
+	}, info) => {
+		await viewport(page, info.project.name === "mobile");
+		const pageErrors = trackPageErrors(page);
+		await ownerConfigFixture(page, { keySet: mode === "saved-key" });
+		await page.goto("/agents/agent-pilot-1/configuration");
+		const models = page.getByRole("region", {
+			name: "模型与凭证",
+			exact: true,
+		});
+		if (mode === "catalog")
+			await models.getByRole("checkbox", { name: "替换模型配置" }).click();
+		const gpt5 = models.getByRole("checkbox", {
+			name: "Relay · Internal · gpt-5",
+			exact: true,
+		});
+		await expect(gpt5).toBeChecked();
+		const mini = models.getByRole("checkbox", {
+			name: "Relay · Internal · gpt-5-mini",
+			exact: true,
+		});
+		await mini.click();
+		await expect(mini).toBeChecked();
+		for (const [model, levels] of [
+			["gpt-5", ["均衡", "高"]],
+			["gpt-5-mini", ["均衡"]],
+		] as const) {
+			const group = models.getByRole("group", {
+				name: `Relay · Internal · ${model} 的推理档位`,
+				exact: true,
+			});
+			// 可见文字不变，复选框名称为「{档位}：{模型}」。
+			await expect(group.locator('label[data-variant="option"]')).toHaveText([
+				...levels,
+			]);
+			for (const level of levels)
+				await expect(
+					group.getByRole("checkbox", {
+						name: `${level}：Relay · Internal · ${model}`,
+						exact: true,
+					}),
+				).toBeChecked();
+		}
+		await expectCleanPage(page, pageErrors);
+		await expectNoDuplicateControls(
+			page,
+			`Owner 配置（${mode} 两个模型，#3206）`,
+		);
+		await noHorizontalOverflow(page);
+	});

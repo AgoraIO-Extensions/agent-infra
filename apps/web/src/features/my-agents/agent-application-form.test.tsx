@@ -62,20 +62,8 @@ function choose(label: string, option: string) {
 	fireEvent.click(item);
 }
 
-function chooseAt(label: string, option: string, index: number) {
-	fireEvent.click(at(screen.getAllByRole("combobox", { name: label }), index));
-	const item = screen.getByRole("option", { name: option });
-	fireEvent.pointerDown(item);
-	fireEvent.pointerUp(item);
-	fireEvent.click(item);
-}
-
 function check(label: string) {
 	fireEvent.click(screen.getByRole("checkbox", { name: label }));
-}
-
-function checkAt(label: string, index: number) {
-	fireEvent.click(at(screen.getAllByRole("checkbox", { name: label }), index));
 }
 
 function stubDirectorySearch() {
@@ -337,8 +325,8 @@ resources:
 		);
 
 		choose("标准模板", "Codex");
-		choose("模型端点", "Primary endpoint");
-		fireEvent.click(screen.getByRole("combobox", { name: "模型" }));
+		choose("模型端点：模型选项 1", "Primary endpoint");
+		fireEvent.click(screen.getByRole("combobox", { name: "模型：模型选项 1" }));
 		expect(screen.getAllByRole("option", { name: "gpt-5" })).toHaveLength(1);
 	});
 
@@ -359,10 +347,10 @@ resources:
 			target: { value: "Helps the release team" },
 		});
 		choose("标准模板", "Codex");
-		choose("模型端点", "Primary endpoint");
-		choose("模型", "gpt-5");
-		check("均衡");
-		check("高");
+		choose("模型端点：模型选项 1", "Primary endpoint");
+		choose("模型：模型选项 1", "gpt-5");
+		check("均衡：模型选项 1");
+		check("高：模型选项 1");
 		choose("默认模型", "Primary endpoint · gpt-5");
 		choose("默认推理档位", "均衡");
 		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
@@ -651,7 +639,7 @@ resources:
 		expect(screen.getAllByText("名称不能重复。")).toHaveLength(2);
 
 		fireEvent.click(
-			at(screen.getAllByRole("button", { name: "移除环境变量" }), 2),
+			screen.getByRole("button", { name: "移除环境变量：环境变量 3" }),
 		);
 		expect(screen.getAllByText("名称不能重复。")).toHaveLength(2);
 
@@ -682,8 +670,8 @@ resources:
 		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
 		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
-		chooseAt("Secret 名称", "MODEL_API_KEY", 0);
-		chooseAt("Secret 名称", "MODEL_API_KEY", 1);
+		choose("Secret 名称：Secret 1", "MODEL_API_KEY");
+		choose("Secret 名称：Secret 2", "MODEL_API_KEY");
 		fireEvent.change(at(screen.getAllByLabelText("替换值"), 0), {
 			target: { value: "secret-one" },
 		});
@@ -694,7 +682,7 @@ resources:
 		expect(screen.getAllByText("名称不能重复。")).toHaveLength(2);
 
 		fireEvent.click(
-			at(screen.getAllByRole("button", { name: "移除 Secret" }), 1),
+			screen.getByRole("button", { name: "移除 Secret：Secret 2" }),
 		);
 		expect(screen.queryByText("名称不能重复。")).toBeNull();
 	});
@@ -726,7 +714,7 @@ resources:
 		choose("标准模板", "Codex");
 		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
-		choose("Secret 名称", "MODEL_API_KEY");
+		choose("Secret 名称：Secret 1", "MODEL_API_KEY");
 		fireEvent.change(screen.getByLabelText("替换值"), {
 			target: { value: "old-secret" },
 		});
@@ -736,7 +724,7 @@ resources:
 				"",
 			),
 		);
-		choose("Secret 名称", "OTHER_SECRET");
+		choose("Secret 名称：Secret 1", "OTHER_SECRET");
 		expect((screen.getByLabelText("替换值") as HTMLInputElement).value).toBe(
 			"",
 		);
@@ -775,20 +763,20 @@ resources:
 			target: { value: "Helps the release team" },
 		});
 		choose("标准模板", "Codex");
-		chooseAt("模型端点", "Primary endpoint", 0);
-		chooseAt("模型", "gpt-5", 0);
-		checkAt("均衡", 0);
+		choose("模型端点：模型选项 1", "Primary endpoint");
+		choose("模型：模型选项 1", "gpt-5");
+		check("均衡：模型选项 1");
 		fireEvent.click(screen.getByRole("button", { name: "添加模型选项" }));
-		chooseAt("模型端点", "Primary endpoint", 1);
-		chooseAt("模型", "gpt-5", 1);
-		checkAt("均衡", 1);
+		choose("模型端点：模型选项 2", "Primary endpoint");
+		choose("模型：模型选项 2", "gpt-5");
+		check("均衡：模型选项 2");
 		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
 			target: { value: "agent-relay-key-value" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		expect(screen.getAllByText("模型选项不能重复。")).toHaveLength(2);
 
-		chooseAt("模型端点", "Secondary endpoint", 0);
+		choose("模型端点：模型选项 1", "Secondary endpoint");
 		await waitFor(() =>
 			expect(screen.queryAllByText("模型选项不能重复。")).toHaveLength(0),
 		);
@@ -811,18 +799,18 @@ resources:
 			target: { value: "Helps the release team" },
 		});
 		choose("标准模板", "Codex");
-		chooseAt("模型端点", "Primary endpoint", 0);
-		chooseAt("模型", "gpt-5", 0);
-		checkAt("均衡", 0);
+		choose("模型端点：模型选项 1", "Primary endpoint");
+		choose("模型：模型选项 1", "gpt-5");
+		check("均衡：模型选项 1");
 		fireEvent.click(screen.getByRole("button", { name: "添加模型选项" }));
-		chooseAt("模型端点", "Primary endpoint", 1);
-		chooseAt("模型", "gpt-5", 1);
-		checkAt("均衡", 1);
+		choose("模型端点：模型选项 2", "Primary endpoint");
+		choose("模型：模型选项 2", "gpt-5");
+		check("均衡：模型选项 2");
 		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		expect(screen.getAllByText("模型选项不能重复。")).toHaveLength(2);
 
 		fireEvent.click(
-			at(screen.getAllByRole("button", { name: "移除模型选项" }), 1),
+			screen.getByRole("button", { name: "移除模型选项：模型选项 2" }),
 		);
 		expect(screen.queryByText("模型选项不能重复。")).toBeNull();
 	});
@@ -864,14 +852,14 @@ resources:
 		});
 		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
-		choose("Secret 名称", "MODEL_API_KEY");
+		choose("Secret 名称：Secret 1", "MODEL_API_KEY");
 		fireEvent.change(screen.getByLabelText("替换值"), {
 			target: { value: "never-echo" },
 		});
-		choose("模型端点", "Primary endpoint");
-		choose("模型", "gpt-5");
-		check("均衡");
-		check("高");
+		choose("模型端点：模型选项 1", "Primary endpoint");
+		choose("模型：模型选项 1", "gpt-5");
+		check("均衡：模型选项 1");
+		check("高：模型选项 1");
 		choose("默认模型", "Primary endpoint · gpt-5");
 		choose("默认推理档位", "均衡");
 		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
@@ -939,9 +927,9 @@ resources:
 			target: { value: "Helps the release team" },
 		});
 		choose("标准模板", "Codex");
-		choose("模型端点", "Colon endpoint");
-		choose("模型", "model:primary");
-		check("均衡");
+		choose("模型端点：模型选项 1", "Colon endpoint");
+		choose("模型：模型选项 1", "model:primary");
+		check("均衡：模型选项 1");
 		choose("默认模型", "Colon endpoint · model:primary");
 		choose("默认推理档位", "均衡");
 		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
@@ -1236,7 +1224,8 @@ resources:
 
 		await waitFor(() =>
 			expect(
-				screen.getByRole("combobox", { name: "模型端点" }).textContent,
+				screen.getByRole("combobox", { name: "模型端点：模型选项 1" })
+					.textContent,
 			).toContain("Secondary endpoint"),
 		);
 	});
@@ -1270,7 +1259,8 @@ resources:
 		);
 		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
 		expect(
-			screen.getByRole("combobox", { name: "模型端点" }).textContent,
+			screen.getByRole("combobox", { name: "模型端点：模型选项 1" })
+				.textContent,
 		).toContain("选择模型端点");
 		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
 		expect(screen.getByText("模型选项已移除，请重新选择。")).toBeTruthy();
@@ -1326,7 +1316,8 @@ resources:
 
 		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
 		expect(
-			screen.getByRole("combobox", { name: "模型端点" }).textContent,
+			screen.getByRole("combobox", { name: "模型端点：模型选项 1" })
+				.textContent,
 		).toContain("选择模型端点");
 		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
 		expect(screen.getByText("模型选项已移除，请重新选择。")).toBeTruthy();
@@ -1509,7 +1500,7 @@ resources:
 		expect(screen.getByLabelText("默认模型").getAttribute("aria-invalid")).toBe(
 			"true",
 		);
-		choose("模型端点", "Primary endpoint");
+		choose("模型端点：模型选项 1", "Primary endpoint");
 		expect(
 			screen.getByLabelText("默认模型").getAttribute("aria-invalid"),
 		).toBeNull();
@@ -1551,7 +1542,7 @@ resources:
 		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
 		choose("默认推理档位", "高");
 		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
-		check("高");
+		check("高：模型选项 1");
 		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
 	});
 
@@ -1587,7 +1578,9 @@ resources:
 		expect(screen.getByRole("option", { name: "均衡" })).toBeTruthy();
 		expect(screen.queryByRole("option", { name: "高" })).toBeNull();
 		// 推理档位只显示中文：复选框与默认档位都不出现原始枚举。
-		expect(screen.getByRole("checkbox", { name: "均衡" })).toBeTruthy();
+		expect(
+			screen.getByRole("checkbox", { name: "均衡：模型选项 1" }),
+		).toBeTruthy();
 		expect(screen.queryByText("medium")).toBeNull();
 	});
 
@@ -1607,8 +1600,8 @@ resources:
 			target: { value: "Helps the release team" },
 		});
 		choose("标准模板", "Codex");
-		choose("模型端点", "Primary endpoint");
-		choose("模型", "gpt-5");
+		choose("模型端点：模型选项 1", "Primary endpoint");
+		choose("模型：模型选项 1", "gpt-5");
 		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
 			target: { value: "agent-relay-key-value" },
 		});
@@ -1835,7 +1828,9 @@ resources:
 
 		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
 		expect(onSubmit).not.toHaveBeenCalled();
-		fireEvent.click(screen.getByRole("button", { name: "移除环境变量" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "移除环境变量：环境变量 1" }),
+		);
 		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
 		expect(onSubmit).toHaveBeenCalledWith(
 			expect.objectContaining({ environment: [] }),
@@ -1995,9 +1990,9 @@ resources:
 			target: { value: "Helps the release team" },
 		});
 		choose("标准模板", "Codex");
-		choose("模型端点", "Primary endpoint");
-		choose("模型", "gpt-5");
-		check("均衡");
+		choose("模型端点：模型选项 1", "Primary endpoint");
+		choose("模型：模型选项 1", "gpt-5");
+		check("均衡：模型选项 1");
 		choose("默认模型", "Primary endpoint · gpt-5");
 		choose("默认推理档位", "均衡");
 		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
@@ -2187,8 +2182,8 @@ describe("AgentApplicationForm editing the models of a default-Key application (
 		expect(
 			screen.getByLabelText<HTMLInputElement>("Agent 默认 Relay Key").type,
 		).toBe("password");
-		// 目录里的逐行模型编辑被候选选择取代。
-		expect(screen.queryByRole("combobox", { name: "模型端点" })).toBeNull();
+		// 目录里的逐行模型编辑被候选选择取代：任何一行的「模型端点」都不出现。
+		expect(screen.queryByRole("combobox", { name: /^模型端点/ })).toBeNull();
 		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
 			target: { value: key },
 		});
@@ -2273,7 +2268,9 @@ describe("AgentApplicationForm editing the models of a default-Key application (
 		);
 		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
 		expect(screen.queryByLabelText("Agent 默认 Relay Key")).toBeNull();
-		expect(screen.getByRole("combobox", { name: "模型端点" })).toBeTruthy();
+		expect(
+			screen.getByRole("combobox", { name: "模型端点：模型选项 1" }),
+		).toBeTruthy();
 	});
 });
 
