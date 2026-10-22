@@ -15,7 +15,10 @@ NetworkPolicy 的出站规则；部署未批准目标时出站为空，即全部
 `modelEgress` 与 `connectionEgress` 也可以使用部署批准的 bounded CIDR（`cidr` + 端口）。仅接受
 规范网络地址，IPv4 不宽于 `/16`、IPv6 不宽于 `/48`，并拒绝全网、私网、回环、链路本地/元数据、
 组播和保留网段；`dnsEgress` 仍只接受精确 IP 或集群内 namespace/Pod selector。CIDR 不是开放公网
-的通用配置，必须对应已批准的模型或 Connection 网关目标。
+的通用配置，必须对应已批准的模型或 Connection 网关目标。供标准模板原生工具直接出网的通用目标
+（[工程 Spec §10.14](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1014-标准模板-session-sandbox-原生工具)）
+是独立的策略类别，由 [#3203](https://github.com/AgoraIO-Extensions/agent-infra/issues/3203) 落实；
+在此之前，不能把模型或 Connection 目标当作通用出网使用。
 
 下文的 `createSessionSandboxEgressV1` 是另一种独立策略的 Worker 内部 enforcement seam，不是新的
 分配、授权、Store 事务或调度入口；当前未接入 Session 生命周期，以下接线要求仅在启用该 seam 时适用。

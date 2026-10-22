@@ -21,6 +21,8 @@ Agent 级 Pod/PVC 加目录或原生 thread 分离，不能提供跨 Runtime、�
   进程/文件隔离历史交付；保留原证据，不重开旧票，不将其通过外推为 Sandbox 完整验收。
 - 原生文件/进程防护、当前授权、原执行 Key、必要审计、unknown 不重放和停止确认不因 Pod
   独立而取消。Sandbox 不成为 Connection Principal、ConsumerInstance 或 Grant 的替代品。
+  原生文件/进程防护承担跨 Conversation 隔离与凭证保护，不限制 Sandbox 内原生工具的种类，见
+  [ADR-0031](0031-enable-native-tools-inside-session-sandbox.md)。
 
 ## 实施交接与验收
 

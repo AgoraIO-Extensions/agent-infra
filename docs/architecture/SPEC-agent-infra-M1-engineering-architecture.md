@@ -634,11 +634,12 @@ intent 重试。每次 progress 写回必须重新取得并校验当前 outbox l
 静默改变既有 V1/V2/V4 wire 含义或兼容性放行无 Sandbox 的新业务调用。readiness 不创建
 业务 Execution；只对已分配实例作只读检查，不能用其授权读取会话或调用模型/工具。
 
-部署批准的出站策略由 Worker 按 Sandbox 落实，默认拒绝未批准目标；允许集群 DNS、获准模型
-和独立 Connection endpoint。Connection 目标和策略修订消费 [§13.5](#135-platform-外部-connection-consumer-配置契约)
+部署批准的出站策略由 Worker 按 Sandbox 落实，默认拒绝未批准目标；始终允许集群 DNS、获准模型
+和独立 Connection endpoint，部署还可以批准供标准模板原生工具直接出网的通用目标
+（[§10.14](#1014-标准模板-session-sandbox-原生工具)）。Connection 目标和策略修订消费 [§13.5](#135-platform-外部-connection-consumer-配置契约)
 的完整 Consumer 配置，不另建 endpoint 或授权来源。Runtime、镜像、模型参数和调用方不能扩大
 目的地。Connection 安装凭据仍按 Principal/ConsumerInstance/Actor 隔离并经受保护客户端交付；
-Sandbox 身份、ServiceAccount 或网络可达均不授予 Connection 权限。
+Sandbox 身份、ServiceAccount、通用出网或网络可达均不授予 Connection 权限。
 
 | 触发 | 必须保持的边界 |
 | --- | --- |
@@ -1037,6 +1038,7 @@ Darwin 的 profile 使本人 `workspace` 可写、`home` 只读，因此原生�
 拦截该入口。原生进程的环境仍是白名单，不继承宿主代理变量或凭证。
 
 上述 Codex 进程/文件边界是 Sandbox 内的防护，不再充当 Agent 共享 Pod/PVC 的隔离依据。
+它约束跨 Conversation 访问与凭证读取，不限制本 Conversation 内原生工具的种类（§10.14）。
 资源与版本化 Grant 绑定遵循 §10.1.1，§10.8 的模型传输与凭据保护继续有效。
 验收必须使用真实 pinned Codex 与正式 Host/Driver/Bridge，覆盖并发、进程重启与原 Session 恢复；
 本人访问必须成功，工具普遍不可用或平台能力关闭都不构成隔离通过。取舍见
@@ -1070,24 +1072,27 @@ M1 的标准 Codex 路径使用固定的官方 upstream release。现有
 版本来源，至少固定上游 tag/commit、协议与 Schema、每个 target 的 archive/executable hash、
 许可证和 NOTICE。安装阶段校验声明与精确字节、Linux sandbox、原生协议以及已声明的 built-in
 能力覆盖；运行时不下载依赖、不编译源码，也不把官方发行物描述为包含不存在的私有 barrier。
-官方 release 未提供可验证的每次尝试 callback 时，标准路径不宣称 Codex 原生屏障 conformance；
-无法观察或控制的隐藏尝试必须记录为能力缺口，不能用日志、普通 approval 或缓存补足。无论
-发行路径如何，PRD 要求的每次实际外部动作持久 intent、当前授权、结果或 unknown 确认仍是
-准入前置；官方路径无法在该边界可靠控制的操作必须拒绝或标记未支持，不能作为正式 conformance。
+官方 release 未提供可验证的每次尝试 callback 时，标准路径不宣称 Codex 原生屏障 conformance。
+PRD 的外部操作只指 [§10.14](#1014-标准模板-session-sandbox-原生工具) 的平台中介调用。无论发行路径
+如何，这类调用的持久 intent、当前授权、结果或 unknown 确认仍是准入前置；其中无法观察或控制的
+隐藏尝试必须记录为能力缺口，不能用日志、普通 approval 或缓存补足。官方路径无法在该边界可靠
+控制的平台中介调用必须拒绝或标记未支持，不能作为正式 conformance。Sandbox 内的原生工具与获准的
+原生出网按 §10.14 默认启用，不以缺少该 callback 为由拒绝。
 
 Runtime Driver 直接执行的标准 MCP 路径按 [§13.5.4](#1354-runtime-driver-直接消费标准-mcp)
 使用官方工具请求/结果接缝：网络动作与秘密读取留在受保护 Driver 内，在原生工具响应前完成
 持久确认。此覆盖仅适用于该 Driver 执行的 MCP 操作，不授予其他原生工具 native barrier
-conformance，也不改变下述私有 lane 的前置。
+conformance，也不改变下述私有 lane 的前置；Sandbox 内原生工具本身不需要该 conformance（§10.14）。
 
 首方 `workspace-summary` 使用 Driver 直接执行的受控 `workspace.read_text_file` client tool，
-不调用原生 shell。工具根目录由已验证的原生进程与当前 Conversation 绑定派生；模型只能提供
+不依赖原生 shell。工具根目录由已验证的原生进程与当前 Conversation 绑定派生；模型只能提供
 相对文本路径，每次最多返回 4096 字节、每个 Execution 最多四次新读取。绝对路径、父路径、
 符号链接、非普通文件或无法确认归属的目标拒绝读取。新 Thread 固定工具版本；既有 Thread
 不能因部署更新静默增加工具。读取前保存原 Execution 的操作意图并等待确认，实际读取及
 结果交付分别重验 Host 当前授权；结果或 unknown 仍沿原 journal、游标与 ACK 交付。路径、
 文件正文和凭据不进入操作事实。该本地只读能力使用独立 namespace，不复用 Connection
-身份，也不授予原生文件、进程、网络工具或私有 native barrier conformance；详细约束见
+身份，也不授予私有 native barrier conformance；原生文件、进程与网络工具按 §10.14 另行启用。
+详细约束见
 [Runtime HLD 8.5.1](HLD-agent-runtime-M1.md#851-codex-原生执行屏障)。
 
 带附件的原生 Skill 使用独立的浏览器 Invocation V2 与 Worker→Host Native V5 契约；既有
@@ -1101,7 +1106,7 @@ Codex 只通过现有 FileAuthority/FileBridge 将有界文本准备到当前 Co
 
 需要私有 FD callback、Connection bootstrap/recovery 或等价 native lane 的能力，只有在部署
 provenance 明确声明该 lane、协议/Schema 与工具覆盖，并实际验证不可关闭的 native barrier 后
-才能启用。该 barrier 在每个真实外部动作前等待 Driver 的持久 intent 与 Host 当前授权，在
+才能启用。私有 lane 只服务于平台中介调用，不是 Sandbox 内原生工具的启用前置。该 barrier 在每个真实外部动作前等待 Driver 的持久 intent 与 Host 当前授权，在
 结果或 unknown 可靠保存前不得交付原生推理循环；缺失、错配、断连、过期或被模型/Owner
 配置关闭时 fail closed。专用 FD 必须由 native 接管后设置 close-on-exec，工具子进程不能继承
 或重开控制端。普通官方路径与私有 lane 的 capability 必须分别声明和验收。
@@ -1112,8 +1117,8 @@ provenance 明确声明该 lane、协议/Schema 与工具覆盖，并实际验�
 vendor 方案。Platform、Connection、Host 和 Driver 继续使用 TypeScript，不新增自有 Rust
 crate、推理循环、服务、插件平台或统一 Sandbox。
 
-PRD 的外部操作持久意图、当前授权和真实结果要求不变；官方 release 的协议可用或部分
-能力通过不能被解释为完整 M1 验收。尚不能满足的实际操作必须标记未通过，不能以本节豁免
+PRD 的外部操作持久意图、当前授权和真实结果要求不变，适用范围是 §10.14 的平台中介调用；官方 release 的协议可用或部分
+能力通过不能被解释为完整 M1 验收。尚不能满足的平台中介调用必须标记未通过，不能以本节豁免
 产品门禁。原生字段和私有协议留在 Driver 内部，事实沿现有版本化公共 Schema 和原事务/游标交付。详细状态、attempt 覆盖和确认顺序只在
 [Runtime HLD 8.5.1](HLD-agent-runtime-M1.md#851-codex-原生执行屏障)维护；接缝验收和
 Connection prep 边界见 [Runtime HLD 11.2](HLD-agent-runtime-M1.md#112-codex-与-connection-接缝验收)。
@@ -1129,7 +1134,8 @@ Connection prep 边界见 [Runtime HLD 11.2](HLD-agent-runtime-M1.md#112-codex-�
 官方 release、私有接缝声明和 native contract 须先完成适用架构/安全/维护评审，随后才更新
 pin。真实 target 产物、built-ins 正向能力、隔离、故障与恢复均按 Runtime HLD 第 11 节验证；
 官方路径与私有 lane 的证明不能互相转移。长期维护及 barrier 替代的取舍见
-[ADR: Codex 原生操作必须经过持久执行屏障](../adr/0011-require-codex-native-operation-barrier.md)及
+[ADR: Codex 原生操作必须经过持久执行屏障](../adr/0011-require-codex-native-operation-barrier.md)（适用范围由
+[ADR-0031](../adr/0031-enable-native-tools-inside-session-sandbox.md) 收窄为平台中介调用）及
 [ADR: Codex 模型切换压缩使用当前有效选择](../adr/0014-use-current-selection-for-codex-switch-compaction.md)。
 原执行屏障的既有评审不代表新增压缩策略已获评审；差额的文档和 Issue 范围先完成独立架构、
 安全及维护评审，再修改 native/code/pin，沿同一 primary Issue 与实现 PR 交付。
@@ -1152,7 +1158,10 @@ Builder 的部署前评估和运行后检查必须以真实资源和批准的镜
 
 标准 OpenCode 路径使用固定官方 release，版本和 target 字节以
 [OpenCode release 声明](../../packages/agent-runtime/src/opencode-release.json)为唯一来源。
-ACP 权限请求和进度通知只按各自协议含义消费。实际工具能力须逐项证明每次外部动作的
+ACP 权限请求和进度通知只按各自协议含义消费。Sandbox 内的 OpenCode 原生工具按
+[§10.14](#1014-标准模板-session-sandbox-原生工具) 默认启用：ACP 权限请求由 Driver 按部署固定策略
+应答，工具事实取自 ACP 工具调用的开始与终态通知。本节其余的逐 attempt 回执、受控扩展与
+fail closed 前置，只适用于需要承担平台中介调用的工具路径。这类路径须逐项证明每次外部动作的
 持久 intent、当前授权、可信开始及结果或 unknown；权限通过、Plugin before/after hook
 或某个工具通过不能补足未观察到的实际尝试与失败终态。
 
@@ -1211,6 +1220,47 @@ OpenCode 模型传输与 Execution Key 版本、原 Session 和 Connection 独�
 升级和回滚继续执行 10.4 的恢复流程。[Runtime HLD 11.1](HLD-agent-runtime-M1.md#111-通用-runtime-与-driver-验证)
 记录原生矩阵；文档决策、Fixture 或共享 Host 通过均不证明四模板真实模型/工具验收完成。
 
+### 10.14 标准模板 Session Sandbox 原生工具
+
+产品范围见 [平台 PRD 第 4 节](../prd/PRD-agent-platform-M1.md#4-标准模板)与
+[§13.3](../prd/PRD-agent-platform-M1.md#133-真实结果与可靠性)，决策与取舍见
+[ADR-0031](../adr/0031-enable-native-tools-inside-session-sandbox.md)。本节是原生工具准入范围的
+唯一工程权威；各 Driver 的映射与验收只在
+[Runtime HLD 8.5.4](HLD-agent-runtime-M1.md#854-session-sandbox-原生工具)维护。
+
+四个标准模板在 Session Sandbox 内默认启用固定版本的原生工具：shell 与进程、文件读写、编辑与
+补丁、目录列举与搜索、原生 Skill 及其脚本，以及该版本自带的网络工具。隔离依据是 §10.1.1 的
+Session Sandbox，以及 §10.9 等各 Driver 的 Conversation 文件边界。原生工具不以缺少每次尝试的
+执行前回调为由拒绝，Driver 也不能为此退回只允许模型输出的模式。自定义 Agent 不受本节约束。
+
+| 类别 | 范围 | 准入与事实 |
+| --- | --- | --- |
+| Sandbox 内本地操作 | 命令、脚本、后台进程、文件读写/编辑/补丁、列举与搜索 | 默认放行；同时受 Conversation 文件边界、独立进程/挂载/IPC namespace、设备与 syscall 限制及资源配额约束，不得访问其他 Conversation 或宿主控制面。Driver 从原生开始与终态事件记录工具事实（§18.1），不保存执行前 intent，也不逐次重验 Host 授权 |
+| 原生直接出网 | 命令行网络访问、包管理器、原生网络工具 | 由部署批准的出站策略（§10.1.1）在网络层预先授权；Runtime 只记录工具事实，不逐请求拦截。策略外目标由网络层拒绝 |
+| 平台中介调用 | 模型请求（§10.8、§10.10）、Driver 执行的标准 MCP 与 Connection 调用（§13.5.4）、Driver 执行的受控工具、平台文件与接口操作、Browser 外部副作用（§11.5） | 这就是 PRD §13.3 所说的外部操作，保留持久 intent、当前授权、结果或 unknown 的执行前屏障（§18.3） |
+
+模型供应商托管的工具（例如 Codex `web_search`）随模型请求执行，属于平台中介调用，是否可用取决于
+获准模型端点。原生功能中需要额外平台中介调用的部分，例如需要归属额外模型请求的原生子 Agent，按
+该类调用的规则单独验证后启用。
+
+- **凭证。** Relay Key、模型传输 loopback token、Connection、MCP 与 Browser token 和平台服务凭证
+  只留在受保护 Driver 的内存或不向工具子进程开放的通道。原生工具子进程使用最小环境白名单，
+  不继承宿主环境、代理变量或任意 `AGENT_INFRA_*` 变量；不挂载凭证类 Secret 或凭证文件，并在启动
+  前关闭非必要的继承 FD。仅排除已知变量名不构成证明：部署须用负向验收证明上述凭证不能经环境、
+  `/proc`、挂载文件或继承的 FD 读取。某模板做不到时，只关闭受影响的工具并记录缺口（fail closed），
+  不关闭其余原生工具。
+- **审批与配置。** 原生审批或权限请求由 Driver 按部署固定的策略应答：Sandbox 内本地操作批准，越出
+  Conversation 文件边界的请求拒绝。模型、Owner、工作区文件或 Skill 都不能改写该策略，也不能关闭
+  文件边界。
+- **事实。** 工具事实记录实际工具标识、开始、终态、耗时和受限的结果引用。命令行、参数、
+  stdin/stdout 和文件内容不进入事实、审计或遥测，原生合法输出仍走既有业务路径。
+- **恢复与停止。** 原生进程或 Driver 崩溃后，原 Turn 按 [Runtime HLD 7.3](HLD-agent-runtime-M1.md#73-重启恢复)
+  收敛为真实终态或 unknown，不自动重放 Turn 或工具。停止以原生 Turn 中断确认为准。Turn 结束后，
+  残留的后台进程只能作用于本 Sandbox 和获准出网，不延长 Execution 占用，也不能取得平台中介调用的
+  新准入；这些进程随 Session 关闭或空闲回收清理。
+- **不变。** 跨 Conversation 与跨 Session 隔离及其负向验收、§10.8 的模型错误脱敏、Connection 授权，
+  以及 §10.11 对私有 lane 的要求（只用于平台中介调用）均保持不变。
+
 ## 11. Agent Runtime 边界
 
 ### 11.1 Platform Conversation Contract
@@ -1237,10 +1287,10 @@ Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的�
 
 产品范围见 [平台 PRD §11.3](../prd/PRD-agent-platform-M1.md#113-原生命令与已安装-skill)；目录、调用、固定官方版本及验证矩阵只在 [Runtime HLD §5.1–5.4](HLD-agent-runtime-M1.md#51-命令与-skill-目录及调用) 维护。该能力扩展现有 Platform Conversation Contract，复用公共 Schema、生成 Client、HTTP/SSE 和固定 Driver，不创建插件框架、第二任务调度器或独立聊天应用。
 
-- 部署维护者负责审核并固定命令映射、Skill 包来源、版本及内容摘要，与 Runtime 镜像和配置修订共同验证、升级和回滚。部署只装配获准的目录及资源，排除个人 HOME、祖先目录、全局配置和未经批准的自动发现来源；不把放开一个禁用开关视为完成装配。Skill 包不得夹带凭据、自动安装依赖或扩大工具/网络权限，运行时不能改写已选择版本。
+- 部署维护者负责审核并固定命令映射、Skill 包来源、版本及内容摘要，与 Runtime 镜像和配置修订共同验证、升级和回滚。部署只装配获准的目录及资源，排除个人 HOME、祖先目录、全局配置和未经批准的自动发现来源；不把放开一个禁用开关视为完成装配。Skill 包不得夹带凭据、自动安装依赖或扩大 §10.14 之外的工具/网络权限，运行时不能改写已选择版本。
 - Platform Core 解析当前主体、Agent 与 Conversation 归属，校验参数、能力修订及调用权限；Store 继续保存权威受理和结果，Worker 仍是唯一投递方。Host 只在已认证的内部接口上消费当前授权及冻结绑定，Driver 将获准能力映射到该固定版本真实公开接口；原生 ID、文件路径、配置和协议帧不透传 Web。
 - 能力目录不是授权凭据。新业务调用取当前权限与原受理范围的交集，并保持原模型选择、Key 版本、文件授权和 Connection 独立身份边界；目录读取不获得执行权限。只读命令不创建业务 Turn；产生 Turn 或改变原生状态的操作必须先持久受理，复用原 outbox、串行占用、操作事实和恢复路径。
-- 原生 CLI 支持不等于 SDK/API 支持。公开接口缺少所需绑定、事实或恢复接缝时，按具体能力拒绝并记录差额；不能用普通提示、模型自报、私有协议或修改上游产物补齐。尤其不能以 Skill 作为绕过 §10.8–10.13 或文件、隔离、授权门禁的入口。
+- 原生 CLI 支持不等于 SDK/API 支持。公开接口缺少所需绑定、事实或恢复接缝时，按具体能力拒绝并记录差额；不能用普通提示、模型自报、私有协议或修改上游产物补齐。尤其不能以 Skill 作为绕过 §10.8–10.14 或文件、隔离、授权门禁的入口。
 - 新契约采用显式版本协商；旧 Driver/Host 缺少命令或 Skill 语义时返回不支持，不把新输入降级为旧文本 submit。旧消息、控制、任务与恢复语义保持；新增能力不能迫使旧任务重建或重放。
 - 目录只在已有原 Execution 时读取（[§9.3.1](#931-原生元数据读取授权)、[Runtime HLD §5.1](HLD-agent-runtime-M1.md#51-命令与-skill-目录及调用)）。尚无原 Execution 的会话，包括首条消息前的新会话，不读取原生目录，也不为读取目录创建 Runtime Session 或 Execution（[Runtime HLD §7.1](HLD-agent-runtime-M1.md#71-session-生命周期)）；Web 在输入框说明发送首条消息后才能使用命令与 Skill。这是 M1 的确定行为，不属于能力缺口。
 
@@ -2093,7 +2143,8 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 - 平台、Connection 和 Agent 使用不同运行身份与数据库账号。
 - Agent Pod 不能访问 Platform DB、Connection DB、部署解密私钥或 Kubernetes API。
 - Agent/客户端使用 Connection 自己的访问凭据直连其 MCP/API；Platform 不充当代理或授权签发方，原始外部凭证始终留在 Connection。
-- 平台会话的 Sandbox 出站遵循 §10.1.1；标准模板只使用获准模型端点，自定义 `platform-adapter` 的模型端点同样须获部署批准。`self-managed` 的其他出站沿部署网络策略，不从其声明推导平台会话的出站权限。
+- 平台会话的 Sandbox 出站遵循 §10.1.1；标准模板的模型请求只使用获准模型端点，原生工具直接出网只能到达部署批准的目标（§10.14），自定义 `platform-adapter` 的模型端点同样须获部署批准。`self-managed` 的其他出站沿部署网络策略，不从其声明推导平台会话的出站权限。
+- 标准模板原生工具在 Session Sandbox 内运行，工具子进程不能读取 Relay Key、模型传输 token、Connection、MCP 与 Browser token 或平台服务凭证（§10.14）。
 - 自定义镜像必须通过 ImageRegistryAdapter 准入，并使用不可变 Digest。
 - 容器以非 root 用户运行，根文件系统默认只读；需要写入的数据挂载到明确卷。
 - 个人与 Agent 默认 Relay Key、Owner Secret 和企微凭证按各自用途加密保存、不回显，只能替换。旧 Key 密文只在仍有已受理 Execution 引用时保留。
@@ -2133,7 +2184,7 @@ Core 定义 [平台审计 PRD](../prd/PRD-agent-platform-M1.md#13-平台操作�
 
 每条记录保存可信主体类型/引用、原始发起人、实际后台执行组件、时间、动作、受控对象、授权与操作结果及请求/执行/操作关联；身份或对象无法确认时明确未知，只记录受限原因，不回显任意自报字段。覆盖治理、应用/凭证/授权、配置/生命周期、API 访问及拒绝、任务全过程、实际模型/工具操作和 Eval 管理/评分/复核。订阅按建立与结束记录；审计查询记录主体、受控筛选范围与结果，不把审计写入递归当作新查询。
 
-API/Worker 的外部操作在调用前保存意图；RuntimeHost/Driver 的实际模型/工具操作须在执行侧可靠记录原操作意图及结果，再按稳定引用投递平台必要审计。只有已持久确认的意图才允许开始操作，记录失败时阻止尚未发生的操作并报告故障。响应或结果保存失败只能记录未确认并沿原操作核实，不能重发有副作用的请求制造结果；Connection 的外部意图/效果始终由 Connection 自己记录。
+API/Worker 的外部操作在调用前保存意图；RuntimeHost/Driver 的平台中介调用（§10.14：模型请求、Driver 执行的 MCP、Connection 与受控工具、平台文件与 Browser 外部副作用）须在执行侧可靠记录原操作意图及结果，再按稳定引用投递平台必要审计。Session Sandbox 内的原生工具操作和获准的原生出网只记录实际工具事实（§18.1），不保存执行前意图。只有已持久确认的意图才允许开始操作，记录失败时阻止尚未发生的操作并报告故障。响应或结果保存失败只能记录未确认并沿原操作核实，不能重发有副作用的请求制造结果；Connection 的外部意图/效果始终由 Connection 自己记录。
 
 请求尝试与业务幂等操作、受理与完成、取消请求与停止确认、工具结果与外部效果分别表达。必要审计无法可靠保存时不返回虚假成功；已经发生的效果不能抹去，授权拒绝不能变成放行。审计 API/页面按时间、主体、Agent、动作、结果和执行引用筛选、分页并查看详情；查询故障明确报错，不返回伪空列表。
 
@@ -2311,7 +2362,7 @@ CI 仍验证构建出的镜像、不可变 image ID、Runtime probe、Web smoke�
 - TypeScript Kubernetes 调谐器的测试与值班责任是否可接受，部署是否提供受支持的现代 Kubernetes capability baseline。
 - OpenConnector 固定 allowlist Kernel 的维护归属、来源验证和必要时建立最小 Fork 的批准方式。
 - 部署的 IdentityAdapter、ImageRegistryAdapter、ModelCatalogAdapter、对象存储、加密公钥/Worker-only 解密 keyring 注入和企微 Adapter 是否满足本文 conformance。
-- Codex 采用官方 upstream release provenance；普通官方路径不强制假设私有 vendor barrier。需要私有 FD callback、Connection bootstrap/recovery 或等价 native lane 时，必须有不可关闭且可回读的 barrier，并在缺失时 fail closed；不恢复第三方源码补丁、vendor builder、派生二进制或下载编译流程。该纠偏以 [#678](https://github.com/AgoraIO-Extensions/agent-infra/issues/678) 的已确认架构方向为依据，具体实现仍须走独立评审。
+- Codex 采用官方 upstream release provenance；普通官方路径不强制假设私有 vendor barrier。Sandbox 内原生工具与部署批准的原生出网按 [§10.14](#1014-标准模板-session-sandbox-原生工具) 默认启用，执行前屏障只用于平台中介调用（[ADR-0031](../adr/0031-enable-native-tools-inside-session-sandbox.md)）。需要私有 FD callback、Connection bootstrap/recovery 或等价 native lane 时，必须有不可关闭且可回读的 barrier，并在缺失时 fail closed；不恢复第三方源码补丁、vendor builder、派生二进制或下载编译流程。该纠偏以 [#678](https://github.com/AgoraIO-Extensions/agent-infra/issues/678) 的已确认架构方向为依据，具体实现仍须走独立评审。
 - Runtime callback/client 的准备契约与真实 Connection 接入按 [§13.2](#132-调用与审计关联) 分别验收；不得以准备层通过替代 Connection HLD 的独立授权门禁。
 
 产品行为或 M1 范围变化先更新 PRD。任何改变部署单元、权威数据归属、身份传递、Secret 模型、Kubernetes Workload Plane、Connection 授权、RuntimeHost 或 Agent Runtime Contract 的修改先更新工程 Spec；同时满足难以逆转、存在真实权衡、未来读者会疑惑时新增 ADR。OpenAPI/SSE breaking change 必须版本化并通过兼容评审。数据库表、索引、UI 结构和 Adapter 内部算法通过普通 Issue/PR、migration 与测试演进，不默认创建 ADR。
