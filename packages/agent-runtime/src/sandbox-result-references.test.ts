@@ -257,6 +257,8 @@ describe("sandbox: file validation (#3226)", () => {
 			join(workspace, "out", "link.png"),
 		);
 		await symlink(outside, join(workspace, "escape"));
+		// 指回工作区内的链接目录也不是合法的父目录。
+		await symlink(join(workspace, "out"), join(workspace, "alias"));
 		await writeFile(
 			join(workspace, "out", "blob.bin"),
 			Buffer.from([0, 1, 2, 255]),
@@ -264,6 +266,7 @@ describe("sandbox: file validation (#3226)", () => {
 		for (const reference of [
 			"out/link.png",
 			"escape/secret.png",
+			"alias/chart.png",
 			"out",
 			"out/missing.png",
 			"out/blob.bin",

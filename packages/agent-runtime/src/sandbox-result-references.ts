@@ -387,10 +387,12 @@ export async function readSandboxResultFileV1(
 	const segments = workspaceReference.split("/");
 	const name = segments.at(-1);
 	if (!name) return undefined;
-	const parent = await realpath(
-		[root, ...segments.slice(0, -1)].join(sep),
-	).catch(() => undefined);
-	if (!parent || !within(root, parent)) return undefined;
+	// 父目录逐级不得是链接：解析结果必须与工作区内的字面路径完全一致，指回工作区内的
+	// 链接目录同样拒绝。
+	const lexicalParent = [root, ...segments.slice(0, -1)].join(sep);
+	const parent = await realpath(lexicalParent).catch(() => undefined);
+	if (!parent || parent !== lexicalParent || !within(root, parent))
+		return undefined;
 	const target = `${parent}${sep}${name}`;
 	const handle = await open(
 		target,
@@ -403,12 +405,12 @@ export async function readSandboxResultFileV1(
 	try {
 		const stat = await handle.stat();
 		if (!stat.isFile() || stat.size > maxBytes) return undefined;
-		// 打开之后再确认描述符仍指向工作区内的同一文件，防止父目录在核对后被替换。
+		// 打开之后再确认描述符仍指向同一路径上的同一文件，防止父目录在核对后被替换。
 		if (process.platform === "linux") {
 			const opened = await readlink(`/proc/self/fd/${handle.fd}`).catch(
 				() => undefined,
 			);
-			if (!opened || !within(root, opened)) return undefined;
+			if (opened !== target) return undefined;
 		} else {
 			const current = await lstat(target).catch(() => undefined);
 			const currentParent = await realpath(parent).catch(() => undefined);
