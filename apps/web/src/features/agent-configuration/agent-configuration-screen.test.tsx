@@ -550,6 +550,31 @@ describe("AgentConfigurationScreen", () => {
 		expect(screen.getByRole("region", { name: "企微应用" })).toBeTruthy();
 		expect(screen.getByLabelText("企业 ID")).toBeTruthy();
 	});
+
+	// #3235 I6-02：Base UI 复选框不受 <fieldset disabled> 影响，两张企微卡的确认复选框显式随表单禁用。
+	it("disables both WeCom acknowledgements with the disabled form (I6-02)", () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => Response.json({ status: "not_configured" })),
+		);
+		renderScreen({
+			agent: {
+				...agent,
+				managementStatus: "disabled",
+				serviceAvailability: null,
+			},
+		});
+		for (const name of [
+			"我已知悉可能断开其他连接",
+			"我已知悉可能影响现有回调",
+		]) {
+			const box = screen.getByRole("checkbox", { name });
+			expect(box.getAttribute("aria-disabled")).toBe("true");
+			expect(box.hasAttribute("data-disabled")).toBe(true);
+			fireEvent.click(box);
+			expect(box.getAttribute("aria-checked")).toBe("false");
+		}
+	});
 });
 
 describe("Secrets (O-10, N-08)", () => {

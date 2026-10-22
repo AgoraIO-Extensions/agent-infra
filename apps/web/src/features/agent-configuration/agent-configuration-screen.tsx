@@ -439,6 +439,7 @@ export function AgentConfigurationScreen({
 						) ? (
 							<ConfigurationWecomSection
 								agentId={agent.agentId}
+								disabled={isDisabled}
 								onUnbindChannel={onUnbindChannel}
 							/>
 						) : null}

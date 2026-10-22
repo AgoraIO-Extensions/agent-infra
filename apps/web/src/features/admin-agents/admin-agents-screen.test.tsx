@@ -642,11 +642,16 @@ describe("Administrator inventory presentation", () => {
 		expect(screen.getByText("当前无权访问 Agent 管理。")).toBeTruthy();
 		expect(screen.queryByRole("link")).toBeNull();
 		view.rerender(<AdminAgentsScreen {...props} state={{ kind: "loading" }} />);
-		expect(
-			screen
-				.getByRole("button", { name: "刷新 Agent 列表" })
-				.hasAttribute("disabled"),
-		).toBe(true);
+		// 需求变化（#3235 I6-01）：读取中改为可聚焦的禁用（aria-disabled），不再用原生 disabled，
+		// 否则获得焦点的按钮被禁用后焦点落到 body。
+		const loadingRefresh = screen.getByRole("button", {
+			name: "刷新 Agent 列表",
+		});
+		expect(loadingRefresh.getAttribute("aria-disabled")).toBe("true");
+		expect(loadingRefresh.hasAttribute("disabled")).toBe(false);
+		fireEvent.click(loadingRefresh);
+		// 读取中的点击被忽略：onRefresh 仍只有上面「重新加载」那一次。
+		expect(props.onRefresh).toHaveBeenCalledOnce();
 		expect(screen.queryByText(/个 Agent$/)).toBeNull();
 		view.rerender(
 			<AdminAgentsScreen {...props} state={{ kind: "ready", agents: [] }} />,

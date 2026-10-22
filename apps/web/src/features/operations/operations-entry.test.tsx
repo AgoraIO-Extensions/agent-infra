@@ -160,13 +160,13 @@ describe("OperationsEntry", () => {
 		await show({ kind: "loading" }, { isRefreshing: true });
 		expect(screen.getByRole("status").textContent).toBe("正在读取观测状态…");
 		expect(regions()).toHaveLength(0);
-		expect(
-			(
-				screen.getByRole("button", {
-					name: "刷新运维状态",
-				}) as HTMLButtonElement
-			).disabled,
-		).toBe(true);
+		// 需求变化（#3235 I6-01）：读取中改为可聚焦的禁用（aria-disabled），不再用原生 disabled，
+		// 否则获得焦点的按钮被禁用后焦点落到 body。
+		const refresh = screen.getByRole("button", {
+			name: "刷新运维状态",
+		}) as HTMLButtonElement;
+		expect(refresh.getAttribute("aria-disabled")).toBe("true");
+		expect(refresh.disabled).toBe(false);
 	});
 
 	it("uses the shared unavailable card with one retry and no domains", async () => {

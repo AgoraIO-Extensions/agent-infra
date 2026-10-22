@@ -5,7 +5,7 @@ import { directorySearchResponse } from "../src/features/directory-test-fixtures
 import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { recordApiRequests } from "./generated-client-paths";
-import { expectNoDuplicateControls } from "./page-health";
+import { expectFocusHeld, expectNoDuplicateControls } from "./page-health";
 import {
 	expectCardTable,
 	expectCleanPage,
@@ -394,6 +394,73 @@ test("refresh second-page failure collapses the page to the heading and one retr
 	await expect(page.getByRole("table")).toHaveCount(0);
 	await capture(page, info, "admin-inventory-revoked");
 });
+
+// #3235 I6-01：页头「刷新 Agent 列表」读取中为可聚焦的禁用（aria-disabled），键盘与点击触发后
+// 焦点在读取中、读取后都留在按钮上；读取失败、页头工具收起时焦点移到 h1，不落到 body（D2-59）。
+for (const mode of ["keyboard", "click"] as const) {
+	test(`page-head refresh keeps focus on the button while and after reading (${mode}, I6-01)`, async ({
+		page,
+	}, info) => {
+		const mobile = info.project.name === "mobile";
+		await page.setViewportSize(
+			mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+		);
+		const pageErrors = trackPageErrors(page);
+		const data = await fixture(page);
+		await page.goto("/admin/agents");
+		const main = page.locator("main");
+		await expect(
+			main.getByRole("table", { name: "已创建 Agent" }),
+		).toBeVisible();
+		const refresh = main
+			.locator("header.page-heading")
+			.getByRole("button", { name: "刷新 Agent 列表" });
+		const trigger = async () => {
+			if (mode === "keyboard") {
+				await refresh.focus();
+				await page.keyboard.press("Enter");
+			} else {
+				// 先把焦点放到别处，确认是点击本身把焦点交给按钮。
+				await main.getByRole("searchbox", { name: "搜索 Agent" }).focus();
+				await refresh.click();
+			}
+		};
+		const reads = () =>
+			data.requests.filter((request) => request.path === "/api/v2/admin/agents")
+				.length;
+		const before = reads();
+		data.pause();
+		await trigger();
+		await expect(refresh).toHaveAttribute("aria-disabled", "true");
+		expect(
+			await refresh.evaluate((node) => (node as HTMLButtonElement).disabled),
+		).toBe(false);
+		await expectFocusHeld(refresh, [50, 300], `${mode} 读取中`);
+		// 读取中再按 Enter 被忽略，不发出第二次读取。
+		await page.keyboard.press("Enter");
+		data.resume();
+		await expect(refresh).toBeEnabled();
+		await expect(main.getByText("12 个 Agent", { exact: true })).toBeVisible();
+		await expectFocusHeld(refresh, [50, 300, 1000, 1500], `${mode} 读取后`);
+		// 一次刷新读两页（第二页由 cursor 续读）。
+		expect(reads() - before).toBe(2);
+		await expectNoDuplicateControls(page, "Agent 管理（I6-01）");
+		await expectCleanPage(page, pageErrors);
+
+		// 读取失败：页头工具与刷新按钮一起收起，焦点移到 h1。
+		data.failSecond();
+		await trigger();
+		await expect(main.getByRole("alert")).toContainText(
+			"暂时无法读取 Agent 列表，请稍后重试。",
+		);
+		const heading = main.getByRole("heading", {
+			level: 1,
+			name: "查看 Agent 状态",
+		});
+		await expect(heading).toBeFocused();
+		await expectFocusHeld(heading, [50, 300, 1000], `${mode} 读取失败后`);
+	});
+}
 
 test("non-admin deep link never requests or exposes administrator inventory", async ({
 	page,
