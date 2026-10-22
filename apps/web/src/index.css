@@ -3059,7 +3059,7 @@ body {
 	}
 	.agent-detail dl {
 		grid-template-columns: minmax(0, 1fr);
-		gap: 6px;
+		gap: 3px;
 	}
 	/* 设计 ≤767 单列 .facts：dt 上距 8px、dd 下距 4px（与 gap 3px 合计 dd→dt 15px，G4-02、V-14）。 */
 	.agent-detail dt {
