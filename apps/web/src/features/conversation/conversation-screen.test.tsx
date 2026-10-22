@@ -1025,10 +1025,10 @@ describe("functional conversation screen", () => {
 			value: createObjectUrl,
 		});
 		try {
-			fireEvent.click(await screen.findByRole("button", { name: "预览" }));
+			fireEvent.click(await screen.findByRole("button", { name: "预览：report.txt" }));
 			await waitFor(() => expect(screen.getByText("hello")).toBeTruthy());
 			fireEvent.click(screen.getByRole("button", { name: "关闭" }));
-			fireEvent.click(await screen.findByRole("button", { name: "下载" }));
+			fireEvent.click(await screen.findByRole("button", { name: "下载：report.txt" }));
 			await waitFor(() => expect(createObjectUrl).toHaveBeenCalled());
 			expect(
 				requests.some((request) =>

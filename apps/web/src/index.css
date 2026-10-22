@@ -2243,6 +2243,77 @@
 	outline: 2px solid var(--ring);
 	outline-offset: 3px;
 }
+/* #3228：回答内 sandbox: 引用。图片与文件卡都限制在消息宽度内，桌面与移动端不横向溢出。 */
+.assistant-markdown .sandbox-image {
+	display: inline-block;
+	max-width: min(100%, 480px);
+	padding: 0;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--muted);
+	overflow: hidden;
+	vertical-align: middle;
+}
+.assistant-markdown button.sandbox-image {
+	cursor: zoom-in;
+}
+.assistant-markdown button.sandbox-image:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: 3px;
+}
+.assistant-markdown .sandbox-image-content {
+	display: block;
+	max-width: 100%;
+	max-height: min(320px, 50dvh);
+	width: auto;
+	height: auto;
+	object-fit: contain;
+}
+.assistant-markdown .sandbox-file-card {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 12px;
+	box-sizing: border-box;
+	max-width: 100%;
+	margin: 8px 0;
+	padding: 8px 12px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--card);
+	line-height: 1.5;
+}
+.assistant-markdown .sandbox-file-card-icon {
+	flex: none;
+	width: 20px;
+	height: 20px;
+	color: var(--muted-foreground);
+}
+.assistant-markdown .sandbox-file-card-body {
+	display: flex;
+	flex: 1 1 160px;
+	flex-direction: column;
+	min-width: 0;
+}
+.assistant-markdown .sandbox-file-card-name {
+	overflow: hidden;
+	font-weight: 600;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.assistant-markdown :is(.sandbox-file-card-caption, .sandbox-file-card-meta) {
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+.assistant-markdown .sandbox-file-card-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.assistant-markdown
+	:is(.sandbox-reference-missing, .sandbox-reference-loading) {
+	color: var(--muted-foreground);
+}
 .artifact-preview-dialog {
 	max-width: min(900px, calc(100% - 40px));
 }

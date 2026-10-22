@@ -3,6 +3,7 @@ import {
 	Fragment,
 	memo,
 	type ReactNode,
+	useCallback,
 	useEffect,
 	useId,
 	useMemo,
@@ -23,10 +24,7 @@ import {
 	withObjectName,
 } from "../../lib/accessible-name.js";
 import type { PilotProtocolErrorV1 } from "../../pilot/generated/types.gen.js";
-import type {
-	ConversationDetailProjectionV2,
-	PersistedConversationEventV2,
-} from "../../pilot/generated-v2/types.gen.js";
+import type { ConversationDetailProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { AssistantMarkdown } from "./assistant-markdown.js";
 import {
 	ArtifactPreviewDialog,
@@ -52,6 +50,14 @@ import {
 	reasoningTexts,
 } from "./conversation-screen-state.js";
 import type { ConversationTimelineEventV2 } from "./conversation-timeline.js";
+import type { SandboxReferences } from "./sandbox-reference-views.js";
+import {
+	executionResultFiles,
+	sandboxReferenceIndex,
+} from "./sandbox-references.js";
+
+/** 一条时间线中缓存的内联图片读取结果上限（每项不超过预览上限）。 */
+const maxCachedInlineImages = 32;
 
 /** 进行中回复的停止入口：只渲染在该 Execution 的回复卡内（R4-07）。 */
 export type ConversationStopControl = Readonly<{
@@ -85,6 +91,7 @@ export function ConversationMessages({
 	onResend,
 	onDownloadFile,
 	onPreviewFile,
+	onReadInlineFile,
 	downloadingFileId,
 	previewingFileId,
 	hasEarlier,
@@ -112,6 +119,8 @@ export function ConversationMessages({
 	onResend: (text: string) => void;
 	onDownloadFile?: (file: ResultFile) => Promise<boolean>;
 	onPreviewFile?: (file: ResultFile) => Promise<Blob | null>;
+	/** #3228：回答内联图片经当前 File Grant 读取内存 Blob；不占用预览/下载的进行中状态。 */
+	onReadInlineFile?: (file: Pick<ResultFile, "fileId">) => Promise<Blob | null>;
 	downloadingFileId?: string;
 	previewingFileId?: string;
 	hasEarlier: boolean;
@@ -134,6 +143,32 @@ export function ConversationMessages({
 	// 从回复卡就地加载更早内容后，正文出现时把焦点移到该回复（NW-15）。
 	const [focusAfterLoad, setFocusAfterLoad] = useState<string>();
 	const articles = useRef(new Map<string, HTMLElement>());
+	// #3228：内联图片按 fileId 共享一次读取，回复卡重建（实时卡换成历史回答）时不重复签发；
+	// 只缓存成功结果且有上限。缓存随时间线卸载（撤权、换身份或换会话）一起释放。
+	const inlineReads = useRef(new Map<string, Promise<Blob | null>>());
+	const readInline = useCallback(
+		(file: Pick<ResultFile, "fileId">) => {
+			const cached = inlineReads.current.get(file.fileId);
+			if (cached) return cached;
+			const request = (onReadInlineFile?.(file) ?? Promise.resolve(null)).then(
+				(content) => {
+					if (!content) inlineReads.current.delete(file.fileId);
+					return content;
+				},
+				() => {
+					inlineReads.current.delete(file.fileId);
+					return null;
+				},
+			);
+			inlineReads.current.set(file.fileId, request);
+			for (const key of inlineReads.current.keys()) {
+				if (inlineReads.current.size <= maxCachedInlineImages) break;
+				inlineReads.current.delete(key);
+			}
+			return request;
+		},
+		[onReadInlineFile],
+	);
 	const userMessages = history.messages.filter((item) => item.role === "user");
 	const answers = history.messages.filter((item) => item.role === "assistant");
 	const renderedExecutions = new Set(answers.map((item) => item.executionId));
@@ -238,16 +273,16 @@ export function ConversationMessages({
 					: undefined
 			}
 			files={
-				onDownloadFile && executionId ? (
-					<ResultFiles
-						events={events}
-						executionId={executionId}
-						onDownloadFile={onDownloadFile}
-						onPreviewFile={onPreviewFile}
-						downloadingFileId={downloadingFileId}
-						previewingFileId={previewingFileId}
-					/>
-				) : null
+				onDownloadFile && executionId
+					? {
+							files: executionResultFiles(events, executionId),
+							onDownloadFile,
+							onPreviewFile,
+							readInlineFile: onReadInlineFile ? readInline : undefined,
+							downloadingFileId,
+							previewingFileId,
+						}
+					: undefined
 			}
 		/>
 	);
@@ -501,10 +536,22 @@ function AssistantReply({
 		open: boolean | undefined;
 		onOpenChange: (open: boolean) => void;
 	};
-	files?: ReactNode;
+	files?: ReplyResultFiles;
 }) {
 	const pending = status === "submitted" || status === "processing";
 	const answered = bodyKind === "text" && Boolean(text);
+	const preview = useResultFilePreview(files);
+	const references: SandboxReferences | undefined = files
+		? {
+				files: sandboxReferenceIndex(files.files),
+				settled: !pending,
+				readImage: files.readInlineFile,
+				onPreview: files.onPreviewFile ? preview.open : undefined,
+				onDownload: (file) => void files.onDownloadFile(file),
+				previewingFileId: files.previewingFileId,
+				downloadingFileId: files.downloadingFileId,
+			}
+		: undefined;
 	const meta = pending ? (
 		<LoadingLine className="message-loading">
 			{executionStatusLabels[status]}
@@ -603,7 +650,7 @@ function AssistantReply({
 			)}
 			{/* 失败与已停止且无正文时只用状态行说明，不再写「尚未输出正文。」（R4-08）。 */}
 			{answered ? (
-				<AssistantMarkdown>{text}</AssistantMarkdown>
+				<AssistantMarkdown references={references}>{text}</AssistantMarkdown>
 			) : pending ? (
 				<p className="message-pending">正在整理结果…</p>
 			) : bodyKind !== "not_loaded" && status === "completed" ? (
@@ -629,7 +676,13 @@ function AssistantReply({
 					/>
 				</p>
 			)}
-			{files}
+			{files && files.files.length > 0 && (
+				<ResultFileList
+					files={files}
+					onPreview={files.onPreviewFile ? preview.open : undefined}
+				/>
+			)}
+			{preview.dialog}
 			{stop && (
 				<div className="card-actions">
 					{/* 「正在停止」期间用 aria-disabled 保持可聚焦，焦点不在受理后落到 body（A2-09）。
@@ -708,98 +761,126 @@ const ThinkingText = memo(function ThinkingText({ text }: { text: string }) {
 	);
 });
 
-function ResultFiles({
-	events,
-	executionId,
-	onDownloadFile,
-	onPreviewFile,
-	downloadingFileId,
-	previewingFileId,
-}: {
-	events: readonly ConversationTimelineEventV2[];
-	executionId: string;
+/** 一张回复卡的结果文件：同一执行的已确认文件与预览、下载、内联读取入口。 */
+type ReplyResultFiles = Readonly<{
+	files: readonly ResultFile[];
 	onDownloadFile: (file: ResultFile) => Promise<boolean>;
 	onPreviewFile?: (file: ResultFile) => Promise<Blob | null>;
+	readInlineFile?: (file: Pick<ResultFile, "fileId">) => Promise<Blob | null>;
 	downloadingFileId?: string;
 	previewingFileId?: string;
-}) {
+}>;
+
+/**
+ * 回复卡共用的结果文件预览：回答内文件卡、内联图片与下方结果文件列表打开同一个预览对话框。
+ * 未给出内容时经当前 File Grant 重新读取；内联图片已读到的 Blob 直接复用，不再请求。
+ */
+function useResultFilePreview(files: ReplyResultFiles | undefined) {
 	const [selected, setSelected] = useState<ResultFile>();
 	const [content, setContent] = useState<Blob | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string>();
 	const previewRequest = useRef(0);
-	const files = events
-		.filter(
-			(
-				event,
-			): event is Extract<
-				PersistedConversationEventV2,
-				{ type: "result.file" }
-			> => event.type === "result.file" && event.executionId === executionId,
-		)
-		.map((event) => ({ ...event.payload, executionId: event.executionId }));
-	if (!files.length) return null;
-	async function preview(file: ResultFile) {
+	const latest = useRef(files);
+	latest.current = files;
+	const open = useCallback(async (file: ResultFile, loaded?: Blob) => {
+		const onPreviewFile = latest.current?.onPreviewFile;
 		if (!onPreviewFile || !artifactCanPreview(file)) return;
 		const request = ++previewRequest.current;
 		setSelected(file);
-		setContent(null);
 		setError(undefined);
+		if (loaded) {
+			setContent(loaded);
+			setLoading(false);
+			return;
+		}
+		setContent(null);
 		setLoading(true);
 		const result = await onPreviewFile(file);
 		if (request !== previewRequest.current) return;
 		setLoading(false);
 		if (result) setContent(result);
 		else setError("文件读取失败，请重试。");
-	}
+	}, []);
+	const preview = useCallback(
+		(file: ResultFile, loaded?: Blob) => void open(file, loaded),
+		[open],
+	);
+	const dialog = files ? (
+		<ArtifactPreviewDialog
+			file={selected}
+			content={content}
+			open={selected !== undefined}
+			loading={loading}
+			error={error}
+			onOpenChange={(value) => {
+				if (!value) {
+					previewRequest.current += 1;
+					setSelected(undefined);
+					setContent(null);
+					setError(undefined);
+				}
+			}}
+			onRetry={() => selected && preview(selected)}
+			onDownload={() => selected && void files.onDownloadFile(selected)}
+		/>
+	) : null;
+	return { open: preview, dialog };
+}
+
+/**
+ * 回答下方的结果文件列表：同一执行的全部已确认文件各列一次（按 fileId 去重），包括已在回答中
+ * 内联或显示为文件卡的文件，以及没有 `workspaceReference` 的文件（V1 事件、ACP image 块）。
+ * 回答中未发送的引用只在原位置显示占位，不进入本列表。
+ */
+function ResultFileList({
+	files,
+	onPreview,
+}: {
+	files: ReplyResultFiles;
+	onPreview?: (file: ResultFile) => void;
+}) {
 	return (
-		<>
-			<div className="message-files space-y-2">
-				<p className="font-medium text-sm">结果文件</p>
-				{files.map((file) => (
+		<div className="message-files space-y-2">
+			<p className="font-medium text-sm">结果文件</p>
+			{files.files.map((file) => {
+				const previewing = files.previewingFileId === file.fileId;
+				const downloading = files.downloadingFileId === file.fileId;
+				return (
 					<div key={file.fileId} className="flex items-center gap-2 text-sm">
 						<span className="min-w-0 flex-1 truncate" title={file.name}>
 							{file.name} ({formatResultSize(file.sizeBytes)})
 						</span>
-						{onPreviewFile && artifactCanPreview(file) && (
+						{onPreview && artifactCanPreview(file) && (
 							<Button
 								variant="ghost"
 								size="sm"
-								disabled={previewingFileId === file.fileId}
-								onClick={() => void preview(file)}
+								disabled={previewing}
+								aria-label={withObjectName(
+									previewing ? "准备预览…" : "预览",
+									file.name,
+								)}
+								onClick={() => onPreview(file)}
 							>
-								{previewingFileId === file.fileId ? "准备预览…" : "预览"}
+								{previewing ? "准备预览…" : "预览"}
 							</Button>
 						)}
 						<Button
 							variant="outline"
 							size="sm"
-							disabled={downloadingFileId === file.fileId}
-							onClick={() => void onDownloadFile(file)}
+							disabled={downloading}
+							aria-label={withObjectName(
+								downloading ? "准备下载…" : "下载",
+								file.name,
+							)}
+							onClick={() => void files.onDownloadFile(file)}
 						>
-							{downloadingFileId === file.fileId ? "准备下载…" : "下载"}
+							{downloading ? "准备下载…" : "下载"}
 						</Button>
 					</div>
-				))}
-			</div>
-			<ArtifactPreviewDialog
-				file={selected}
-				content={content}
-				open={selected !== undefined}
-				loading={loading}
-				error={error}
-				onOpenChange={(open) => {
-					if (!open) {
-						previewRequest.current += 1;
-						setSelected(undefined);
-						setContent(null);
-						setError(undefined);
-					}
-				}}
-				onRetry={() => selected && void preview(selected)}
-				onDownload={() => selected && void onDownloadFile(selected)}
-			/>
-		</>
+				);
+			})}
+		</div>
 	);
 }
 

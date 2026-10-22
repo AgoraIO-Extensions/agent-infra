@@ -121,7 +121,8 @@ export function parseUnifiedDiff(value: string) {
 	return { additions, deletions, rows };
 }
 
-function useObjectUrl(value: Blob | null) {
+/** 内存 Blob 的临时对象 URL：内容变化或卸载时撤销，不进入持久状态。 */
+export function useObjectUrl(value: Blob | null) {
 	const [url, setUrl] = useState<string>();
 	useEffect(() => {
 		if (!value) {
