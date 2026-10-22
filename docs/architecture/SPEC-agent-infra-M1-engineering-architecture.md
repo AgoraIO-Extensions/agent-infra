@@ -1951,6 +1951,10 @@ API 不因此获得 Bot Secret、应用发送 Secret 或历史回复路由的解
 3. 通过受认证的企微目录快照与 LDAP 唯一邮箱关联，把企微发送者映射为公司稳定用户 ID；校验当前 LDAP 状态、管理员禁用、目录有效期、组织、Agent 可用范围和绑定。无法唯一关联或依赖不可用时拒绝，不按显示名或请求字段猜测。
 4. 按单聊、群聊和协议支持的线程生成稳定的 Conversation 映射，键包含 Agent、绑定、渠道及服务端发送者；
    同群不同发送者保持独立 Runtime Session，协议无独立线程标识时不伪造线程支持。
+   每个映射键在 Platform DB 中有一个当前会话轮次，默认为 0，表示沿用原有映射。
+   发送者单独发送 `/new` 时，同一受理事务按映射键串行化，把轮次加一。之后的消息按新轮次创建新的 Conversation；
+   旧 Conversation 不再受理消息，已受理执行的回复照常投递。`/new` 和普通消息一样按稳定事件 ID 去重，同一事件重放不会再次轮换。
+   映射到的 Conversation 不可用或处于代次隔离时，不受理消息，写回执与审计并回复固定提示。
 5. 标准模板按发送者个人 Relay Key 版本复用同一事务保存消息、Execution、授权边界、outbox 与回复意图，由共享 Worker 通过 RuntimeHost Client
    投递 Agent Pod 内的固定 Driver。重投/重连按稳定事件 ID 去重，变更同 ID 的内容、主体或绑定则拒绝。
 6. 回复前再次校验当前身份、绑定和权限，沿获准协议发送。长连接回复不依赖 HTTP `response_url`；
@@ -2059,8 +2063,8 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 | Workload 未就绪 | 启动中 |
 | 正在应用新的 Runtime 修订 | 更新中 |
 | 探针失败或 Adapter 不可达 | 暂时不可用 |
-| 单个 Runtime Session 恢复失败 | 对应 Conversation 显示“会话不可用”，历史只读且禁止继续发送；其他 Conversation 不受影响 |
-| 原生会话被受理不明的 Turn 阻塞（Runtime 返回 `RUNTIME_SESSION_BLOCKED`） | 本次执行失败；对应 Conversation 显示“会话不可用”，历史只读且禁止继续发送，可明确新建会话；其他 Conversation 不受影响 |
+| 单个 Runtime Session 恢复失败 | 对应 Conversation 显示“会话不可用”，历史只读且禁止继续发送；其他 Conversation 不受影响；企微回复“当前会话不可用，发送 /new 开始新会话” |
+| 原生会话被受理不明的 Turn 阻塞（Runtime 返回 `RUNTIME_SESSION_BLOCKED`） | 本次执行失败；对应 Conversation 显示“会话不可用”，历史只读且禁止继续发送，可明确新建会话；其他 Conversation 不受影响；企微的失败提示附带 `/new` 指引 |
 | API 等待容量已满 | 受理前拒绝，可稍后重试，不返回新任务标识 |
 | 已受理任务等待到期 | 原执行明确失败，保留失败原因 |
 | 取消已请求但停止未确认 | 取消处理中，同 Conversation 后续任务继续等待 |

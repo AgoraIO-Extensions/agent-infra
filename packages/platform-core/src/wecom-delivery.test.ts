@@ -425,3 +425,44 @@ it("still records an expired unready reply as expired without sending (#3077)", 
 	expect(f.sender.send).not.toHaveBeenCalled();
 	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "expired");
 });
+
+// #3184：新建会话与会话不可用的固定文案，不调用 Agent，也不附带思考过程。
+it.each([
+	[
+		"starts a new conversation",
+		{
+			acceptanceStatus: "new_conversation",
+			executionStatus: null,
+			textDeltas: [],
+		},
+		"已开始新会话",
+	],
+	[
+		"rejects a message to an unavailable conversation",
+		{ acceptanceStatus: "unavailable", executionStatus: null, textDeltas: [] },
+		"当前会话不可用，发送 /new 开始新会话",
+	],
+	[
+		"guides a failed execution whose conversation became unavailable",
+		{
+			executionStatus: "failed",
+			textDeltas: [],
+			conversationUnavailable: true,
+		},
+		"本次任务执行失败，当前会话不可用，发送 /new 开始新会话",
+	],
+	[
+		"keeps the ordinary failure text while the conversation is usable",
+		{ executionStatus: "failed", textDeltas: [] },
+		"本次任务执行失败，请稍后重试",
+	],
+] as const)("%s with its fixed reply (#3184)", async (_name, change, text) => {
+	const f = fixture();
+	f.store.claim.mockResolvedValueOnce({ ...claim, ...change });
+	await f.useCase.dispatch();
+	expect(f.sender.send).toHaveBeenCalledWith(expect.objectContaining({ text }));
+	expect(f.store.finish).toHaveBeenCalledWith(
+		expect.objectContaining({ receiptId: claim.receiptId }),
+		"sent",
+	);
+});

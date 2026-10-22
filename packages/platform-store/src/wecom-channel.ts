@@ -18,7 +18,9 @@ import {
 	type WecomDeliveryStatusV1,
 	type WecomDeliveryStorePortV1,
 	type WecomIdentityPortV1,
+	type WecomReceiptStatusV1,
 	type WecomScopeV1,
+	wecomConversationKeyForRotationV1,
 	wecomReplyTimeoutNoticeLeadMsV1,
 } from "@agent-infra/platform-core";
 import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
@@ -91,7 +93,9 @@ async function audit(
 		? { kind: "user", id: metadata.actorId }
 		: { kind: "unknown", id: "unknown" };
 	const outcome =
-		action === "denied" || action === "conflict"
+		action === "denied" ||
+		action === "conflict" ||
+		action === "conversation_unavailable"
 			? "rejected"
 			: ["failed", "unavailable", "unknown", "expired"].includes(action)
 				? "failed"
@@ -109,7 +113,7 @@ interface Row {
 	channel_revision: string;
 	authorization_revision: string;
 	connection_authorization_fact: WecomConnectionAuthorizationFactV1 | null;
-	acceptance_status: "accepted" | "busy" | "unavailable";
+	acceptance_status: "accepted" | "busy" | "unavailable" | "new_conversation";
 	conversation_id: string | null;
 	execution_id: string | null;
 	reply_handle: string;
@@ -571,8 +575,8 @@ export class PostgresWecomChannelV1
 			}
 			let acceptedResult:
 				| {
-						status: "accepted" | "busy";
-						conversationId: string;
+						status: WecomReceiptStatusV1;
+						conversationId: string | null;
 						executionId: string | null;
 				  }
 				| undefined;
@@ -583,6 +587,17 @@ export class PostgresWecomChannelV1
 						userDirectory: this.#userDirectory,
 						signal,
 					});
+					// #3184：同一映射的消息与 `/new` 在受理事务内串行，轮次读写与 Conversation 创建原子提交。
+					await run(
+						business`select pg_advisory_xact_lock(hashtextextended(${`wecom-conversation:${plan.conversationKey}`},0))`,
+					);
+					const [stored] = await run(
+						business<
+							{ rotation: number }[]
+						>`select rotation from platform.wecom_conversation_rotations where mapping_key=${plan.conversationKey}`,
+					);
+					const rotation = stored?.rotation ?? 0;
+					let rotated = false;
 					const executionResult = await awaitTaskAuthorizationDependencyV1(
 						() =>
 							execute(
@@ -597,15 +612,36 @@ export class PostgresWecomChannelV1
 										},
 									},
 								}),
+								{
+									conversationKey: wecomConversationKeyForRotationV1(
+										plan.conversationKey,
+										rotation,
+									),
+									startNewConversation: async () => {
+										if (rotated) throw new TaskAuthorizationStoreError();
+										rotated = true;
+										const changed = await run(
+											business<
+												{ rotation: number }[]
+											>`insert into platform.wecom_conversation_rotations (mapping_key,agent_id,rotation,created_at,updated_at) values (${plan.conversationKey},${plan.message.agentId},${rotation + 1},now(),now())
+    on conflict (mapping_key) do update set rotation=${rotation + 1},updated_at=now() where platform.wecom_conversation_rotations.rotation=${rotation} returning rotation`,
+										);
+										// 映射锁之外有人改过轮次时失败关闭，不静默丢掉这次 /new。
+										if (changed.length !== 1)
+											throw new TaskAuthorizationStoreError();
+									},
+								},
 							),
 						signal,
 					);
+					// 新会话回执不关联 Conversation；其余状态都必须关联映射到的 Conversation。
 					if (
-						executionResult.status !== "accepted" &&
-						executionResult.status !== "busy"
+						executionResult.status === "new_conversation"
+							? !rotated ||
+								executionResult.conversationId !== null ||
+								executionResult.executionId !== null
+							: rotated || !executionResult.conversationId
 					)
-						throw new TaskAuthorizationStoreError();
-					if (!executionResult.conversationId)
 						throw new TaskAuthorizationStoreError();
 					acceptedResult = {
 						status: executionResult.status,
@@ -637,7 +673,11 @@ export class PostgresWecomChannelV1
 					await audit(
 						business,
 						plan.eventKey,
-						"accepted",
+						accepted.status === "unavailable"
+							? "conversation_unavailable"
+							: accepted.status === "new_conversation"
+								? "conversation_started"
+								: "accepted",
 						{
 							agentId: plan.message.agentId,
 							actorId: plan.authority.actor.actorId,
@@ -750,8 +790,13 @@ export class PostgresWecomChannelV1
 			// 文案，不必等待。
 			// #3077：回答未就绪的已受理回执在有效期最后 30 秒内领取，由 Core 发送超时提示；已过期的照旧领取。
 			const [row] = await sql<
-				(Row & { execution_status: string | null; answer_ready: boolean })[]
-			>`select r.*,e.status as execution_status,ready.answer_ready from platform.wecom_receipts r left join platform.conversation_executions e on e.execution_id=r.execution_id
+				(Row & {
+					execution_status: string | null;
+					answer_ready: boolean;
+					conversation_status: string | null;
+					conversation_isolation_pending: boolean;
+				})[]
+			>`select r.*,e.status as execution_status,ready.answer_ready,c.status as conversation_status,exists (select 1 from platform.conversation_generation_tombstones t where t.conversation_id=r.conversation_id and t.status='pending') as conversation_isolation_pending from platform.wecom_receipts r left join platform.conversation_executions e on e.execution_id=r.execution_id left join platform.conversations c on c.id=r.conversation_id
     cross join lateral (select coalesce(e.status in ('failed','cancelled') or (e.status='completed' and exists (select 1 from platform.conversation_events t where t.conversation_id=e.conversation_id and t.execution_id=e.execution_id and t.source='runtime' and t.event_type='execution.status' and t.event_payload->>'status'='completed' and t.runtime_cursor is not null)),false) as answer_ready) ready
     where (r.connection_bot_id is null or r.expires_at<=now() or exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) and (r.delivery_status='pending' or (r.delivery_status='claimed' and r.lease_until<=now())) and (r.acceptance_status!='accepted' or ready.answer_ready or r.expires_at<=now()+(${wecomReplyTimeoutNoticeLeadMsV1}::bigint*interval '1 millisecond')) order by r.created_at limit 1 for update of r skip locked`;
 			if (!row) return null;
@@ -839,6 +884,13 @@ export class PostgresWecomChannelV1
 				acceptanceStatus: row.acceptance_status,
 				executionStatus: row.execution_status,
 				answerReady: row.answer_ready,
+				// #3184：失败文案按回执所属会话的当前状态附带 /new 指引；代次隔离与
+				// status=unavailable 一样拒绝后续消息（ConversationExecutionTask 的提交判据），
+				// 所以同样算作会话不可用。
+				...(row.conversation_status === "unavailable" ||
+				row.conversation_isolation_pending
+					? { conversationUnavailable: true }
+					: {}),
 				textDeltas: deltas.map((d) => d.event_payload.text ?? ""),
 				media: resultFiles.flatMap((file) => {
 					const sizeBytes = Number(file.size_bytes);

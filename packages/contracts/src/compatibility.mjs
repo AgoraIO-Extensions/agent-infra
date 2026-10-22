@@ -3530,6 +3530,41 @@ function isWecomReceiptOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #3184：企微回执的受理状态在末尾追加 `new_conversation`（发送者发送 /new）。只允许
+// 回执列表与单条回执两个响应里的 status 枚举各追加这一个值，删除后须与基线逐字节一致。
+function wecomReceiptStatusEnums(document) {
+	const responses = [
+		document.paths?.["/api/v1/wecom/receipts"]?.get?.responses?.["200"],
+		document.paths?.["/api/v1/wecom/receipts/{receiptId}"]?.get?.responses?.[
+			"200"
+		],
+	];
+	const [list, single] = responses.map(
+		(response) => response?.content?.["application/json"]?.schema,
+	);
+	return [
+		list?.properties?.items?.items?.properties?.status?.enum,
+		single?.properties?.status?.enum,
+	];
+}
+function isWecomNewConversationReceiptOpenApiAddition(previous, current) {
+	const before = wecomReceiptStatusEnums(previous);
+	const normalized = structuredClone(current);
+	const after = wecomReceiptStatusEnums(normalized);
+	for (const [index, values] of after.entries()) {
+		const old = before[index];
+		if (
+			!Array.isArray(values) ||
+			!Array.isArray(old) ||
+			old.includes("new_conversation") ||
+			!sameValue(values, [...old, "new_conversation"])
+		)
+			return false;
+		values.pop();
+	}
+	return sameValue(previous, normalized);
+}
+
 // #440 publishes Owner-managed application setup on the existing browser API.
 function isWecomApplicationOpenApiAddition(previous, current) {
 	const paths = [
@@ -5617,6 +5652,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isNativeMetadataOpenApiAddition(previous, current) &&
 			!isNativeCapabilityInvocationOpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
+			!isWecomNewConversationReceiptOpenApiAddition(previous, current) &&
 			!isWecomQrAuthorizationOpenApiAddition(previous, current) &&
 			!isWecomBotQrAvailabilityOpenApiAddition(previous, current) &&
 			!isDirectorySearchV2OpenApiAddition(previous, current) &&

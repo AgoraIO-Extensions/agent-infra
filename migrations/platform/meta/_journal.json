@@ -400,6 +400,13 @@
       "when": 1792531766985,
       "tag": "0060_file_limit_declarations",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1792654639069,
+      "tag": "0061_wecom_conversation_rotation",
+      "breakpoints": true
     }
   ]
 }

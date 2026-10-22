@@ -1992,6 +1992,7 @@ describe("published Relay authority migration", () => {
 			58,
 			59,
 			60,
+			61,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2054,8 +2055,8 @@ describe("published Relay authority migration", () => {
 			tag: "0059_skill_project_content",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 60,
-			tag: "0060_file_limit_declarations",
+			idx: 61,
+			tag: "0061_wecom_conversation_rotation",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2400,6 +2401,13 @@ describe("published Relay authority migration", () => {
 						"updated_at",
 						"updated_by",
 					].map((name) => `file_limit_declarations:${name}`),
+					...[
+						"agent_id",
+						"created_at",
+						"mapping_key",
+						"rotation",
+						"updated_at",
+					].map((name) => `wecom_conversation_rotations:${name}`),
 				].sort(),
 				checks: [
 					...expectedDelta.checks,
@@ -2443,6 +2451,8 @@ describe("published Relay authority migration", () => {
 					].map(
 						(name) => `file_limit_declarations:file_limit_declaration_${name}`,
 					),
+					"wecom_conversation_rotations:wecom_conversation_rotation_positive",
+					"wecom_receipts:wecom_acceptance_status",
 				].sort(),
 				indexes: [
 					...expectedDelta.indexes,
@@ -2460,6 +2470,7 @@ describe("published Relay authority migration", () => {
 						(name) => `session_sandbox_allocations:session_sandbox_${name}`,
 					),
 					"file_limit_declarations:file_limit_declarations_scope_agent_id_channel_id_pk",
+					"wecom_conversation_rotations:wecom_conversation_rotations_pkey",
 				].sort(),
 			});
 			expect(

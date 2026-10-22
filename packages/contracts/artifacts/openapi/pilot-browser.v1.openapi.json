@@ -14452,7 +14452,8 @@
                             "enum": [
                               "accepted",
                               "busy",
-                              "unavailable"
+                              "unavailable",
+                              "new_conversation"
                             ],
                             "type": "string"
                           }
@@ -14632,7 +14633,8 @@
                       "enum": [
                         "accepted",
                         "busy",
-                        "unavailable"
+                        "unavailable",
+                        "new_conversation"
                       ],
                       "type": "string"
                     }

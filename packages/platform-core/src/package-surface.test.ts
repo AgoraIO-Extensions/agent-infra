@@ -330,6 +330,7 @@ describe("platform-core package surface", () => {
 			"uninstallSkillHubInstallationV1",
 			"validateSkillPackageEntriesV1",
 			"wecomChannelIdV1",
+			"wecomConversationKeyForRotationV1",
 			"wecomProcessingTextV1",
 			"wecomReplyTimeoutNoticeLeadMsV1",
 			"wecomReplyTimeoutTextV1",
