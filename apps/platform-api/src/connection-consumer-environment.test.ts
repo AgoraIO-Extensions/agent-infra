@@ -6,10 +6,10 @@ import { createConnectionCapability } from "./connection-consumer-profile.js";
 
 const profile = {
 	schemaVersion: 1 as const,
-	publicOrigin: "https://agent-connector.agoralab.co",
+	publicOrigin: "https://connection.example.test",
 	mcpPath: "/mcp",
 	consumerId: "agent-a",
-	audience: "https://agent-connector.agoralab.co/mcp",
+	audience: "https://connection.example.test/mcp",
 	egressProfile: { ref: "connection-egress", revision: "r1" },
 };
 
