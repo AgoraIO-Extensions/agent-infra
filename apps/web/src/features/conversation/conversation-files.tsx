@@ -5,8 +5,6 @@ import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
 import type { Client } from "../../pilot/generated/client/index.js";
-import { readAgentFileLimitsV2 } from "../../pilot/generated-v2/sdk.gen.js";
-import type { Client as ClientV2 } from "../../pilot/generated-v2/client/index.js";
 import { client as defaultClient } from "../../pilot/generated/client.gen.js";
 import type {
 	FileDescriptorV1,
@@ -19,6 +17,8 @@ import {
 	issueFileAccess,
 	readFileLimits,
 } from "../../pilot/generated/sdk.gen.js";
+import type { Client as ClientV2 } from "../../pilot/generated-v2/client/index.js";
+import { readAgentFileLimitsV2 } from "../../pilot/generated-v2/sdk.gen.js";
 import {
 	ConversationFileTransferError,
 	describeConversationFile,
