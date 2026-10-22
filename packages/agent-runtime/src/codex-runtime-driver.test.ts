@@ -14118,15 +14118,39 @@ describe("Codex structured Skill input", () => {
 						expect(next.success).toBe(true);
 						(await next.beforeDelivery())();
 					}
-					await expect(
-						invoke.call(
-							fixture.driver,
-							launch.conversationKey,
-							{ ...body, callId: "workspace-call-5" },
-							new AbortController().signal,
-						),
-					).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+					// #3196：超过每次执行 4 次读取的上限只是一次失败的工具调用，不读文件，也不断开连接。
+					const overLimit = await invoke.call(
+						fixture.driver,
+						launch.conversationKey,
+						{ ...body, callId: "workspace-call-5" },
+						new AbortController().signal,
+					);
+					expect(overLimit.success).toBe(false);
+					expect(JSON.parse(overLimit.contentItems[0]?.text ?? "null")).toEqual(
+						{ reason: "workspace_read_limit_reached" },
+					);
+					(await overLimit.beforeDelivery())();
 					expect(read).toHaveBeenCalledTimes(4);
+					const toolFacts = (
+						await fixture.driver.replayEvents(
+							accepted.nativeSessionRef,
+							command.executionId,
+						)
+					)
+						.filter((event) => event.type === "operation")
+						.map((event) => event.payload)
+						.filter(
+							(fact) =>
+								fact.kind === "tool" &&
+								(fact.phase === "completed" || fact.phase === "failed"),
+						);
+					expect(toolFacts.map((fact) => fact.phase)).toEqual([
+						"completed",
+						"completed",
+						"completed",
+						"completed",
+						"failed",
+					]);
 					await expect(
 						invoke.call(
 							fixture.driver,
