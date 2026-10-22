@@ -14,12 +14,12 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `index.html` | `e6241006943a8426d93db5cc80fbe626c284b07ea78f8155924a3eb7e041f1f5` |
-| `login.html` | `6e04830eb0aac86e7ffea6dc6f3db0faab7942e2379c6230efe0512519d0c0a7` |
+| `index.html` | `de85a1d3fb32b088d64a0140a433e627fd4184b7ca91174efad0b5218bc66c80` |
+| `login.html` | `70c4baca10f6a8ba462021293ee2a88dd004cbcbf97b96046cbe3ce1cb9a3c30` |
 | `DESIGN.md` | `fa953264eafe4e0bd05adaa86387a9d90ad7af51d4e79f0a67620bfa31596d65` |
 | `IMPLEMENTATION.md` | `ae3e592272933f65a0f7fc34363142a4471a724f7a75db76affe6ae12d640600` |
 | `DESIGN-HANDOFF.md` | `3f2313d6d72bf3d7263d1e864730278217836ccdd5730d4b83460518bd2d3396` |
-| `DESIGN-MANIFEST.json` | `f3292d11046d4de62f2514a3761a037d186d13edea9c803c2ec654e103d1fb31` |
+| `DESIGN-MANIFEST.json` | `5a00972b736bd13d248a83df6dce8057f3a8a1e3af0aafa25f5320ebd0cdc334` |
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量，并提供设计同名别名（`--bg`、`--fg`、`--surface-raised`、`--accent`、
@@ -53,10 +53,11 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 
 ### 已回写导出设计的结论
 
-以下结论已在 #2862、#2863、#2903、#2996 与 #2830 终验（#3037–#3041、#3046、#3052，第二轮 #3127–#3130）确认，
+以下结论已在 #2862、#2863、#2903、#2996 与 #2830 终验（#3037–#3041、#3046、#3052，第二轮 #3127–#3130，第三轮 #3160、#3161）确认，
 并由 [#2863](https://github.com/AgoraIO-Extensions/agent-infra/issues/2863)、
-[#3107](https://github.com/AgoraIO-Extensions/agent-infra/issues/3107) 与
-[#3130](https://github.com/AgoraIO-Extensions/agent-infra/issues/3130) 回写本版导出稿；实现与验收以这里为准：
+[#3107](https://github.com/AgoraIO-Extensions/agent-infra/issues/3107)、
+[#3130](https://github.com/AgoraIO-Extensions/agent-infra/issues/3130) 与
+[#3161](https://github.com/AgoraIO-Extensions/agent-infra/issues/3161) 回写本版导出稿；实现与验收以这里为准：
 
 | 编号 | 位置 | 实现 | 依据 |
 | --- | --- | --- | --- |
@@ -120,21 +121,21 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | Z-14 | 停止回复后的回复卡 | 显示实际已生成的正文；没有正文时只有状态行「已停止 · 可重新生成 · 重新生成 · 查看执行详情」，并用 Toast「回复已停止」补充确认 | R4-08：失败与停止只用一行状态说明；「回复已停止，已保留当前已生成内容。」式演示正文在没有生成内容时与事实不符 |
 | B2-03 | 目录选择器 chip 的移除按钮（申请表单、Owner 配置、员工访问控制） | 可访问名称先写选择器标签、再写对象名，如「从可使用的用户移除 陈昊」「从共同 Owner 用户移除 陈昊」；按钮仍只显示图标 | 可访问性：同一人员同时选入「共同 Owner 用户」与「可使用的用户」时，同页不出现同名控件（[#3128](https://github.com/AgoraIO-Extensions/agent-infra/issues/3128)，原导出稿为「移除 陈昊」×2） |
 | C2-04 / D2-35 | `/admin/skill-reviews` 审阅弹窗「审核说明 · 驳回时必填」 | 标签为公共字段标签 12px / 650 / muted；与正文区相距 32px（窄屏 26px） | 同 W-33：原导出稿 `label > span` 未套字段标签样式（[#3129](https://github.com/AgoraIO-Extensions/agent-infra/issues/3129)） |
-| C2-18 / D2-45 / D2-46 / D2-47 / D2-48 / D2-54 | `/skills/manage/new` 编辑与发布（V-18） | 左栏分区标题、说明与帮助文字沿用公共 `FormSection`（标题 620 / 1.35，说明 13px，帮助 11px `--muted-ink`），右栏提示 12px / 1.7 `--muted-ink`；「项目状态」与「包名称」的标签、控件顶对齐；范围卡按公共单选指示器排版（13px、无额外外边距），「组织共享」不可选时置灰；SKILL.md 为空时错误在编辑框下方（12px `--danger-ink`），版本号错误在版本号下方，焦点回到出错字段。编辑框高度、版本号上距与「添加文本文件」图标按导出稿 | 原导出稿缺陷：编辑器外层 `.surface.skill-section` 让 `.skill-section` 的标题与段落样式渗入表单，与公共分区（V-03）不一致；`.scope-option` 原生 radio 带 UA 外边距挤窄文字列，且没有禁用样式；「项目状态」标签被网格行高拉伸到 32.4px，下拉比输入框低 12.6px；发布错误被 `.skill-section p` 改成 `--muted`，`render()` 后焦点落到 body（[#3129](https://github.com/AgoraIO-Extensions/agent-infra/issues/3129)） |
-| D2-03 | Agent 详情「连接器」 | 说明与 Connection 提示卡相距 12px，卡片下方不再另留外边距 | 原导出稿说明贴着卡片边框（`.connection-notice` 的 14px 只在卡片下方） |
+| C2-18 / D2-45 / D2-46 / D2-47 / D2-48 / D2-54 / F3-14 | `/skills/manage/new` 编辑与发布（V-18） | 左栏分区标题、说明与帮助文字沿用公共 `FormSection`（标题 620 / 1.35，说明 13px，帮助 11px `--muted-ink`，「共 N 个文件…」统计行同为帮助文字），右栏提示 12px / 1.7 `--muted-ink`；「项目状态」与「包名称」的标签、控件顶对齐；范围卡按公共单选指示器排版（13px、无额外外边距），「组织共享」不可选时置灰；SKILL.md 为空时错误在编辑框下方（12px `--danger-ink`），版本号错误在版本号下方，焦点回到出错字段；「上传文件到 assets/」的文件选择按钮为公共 `Input` 样式（12px / 500、无边框、透明底，申请表单的「多服务资源 YAML」文件输入相同）。编辑框高度、版本号上距与「添加文本文件」图标按导出稿 | 原导出稿缺陷：编辑器外层 `.surface.skill-section` 让 `.skill-section` 的标题与段落样式渗入表单，与公共分区（V-03）不一致；`.scope-option` 原生 radio 带 UA 外边距挤窄文字列，且没有禁用样式；「项目状态」标签被网格行高拉伸到 32.4px，下拉比输入框低 12.6px；发布错误被 `.skill-section p` 改成 `--muted`，`render()` 后焦点落到 body（[#3129](https://github.com/AgoraIO-Extensions/agent-infra/issues/3129)）；统计行被 `.form-section > p` 改成 13px `--muted`，文件选择按钮为 UA 默认外观（[#3161](https://github.com/AgoraIO-Extensions/agent-infra/issues/3161)） |
+| D2-03 / F3-01 | Agent 详情「连接器」 | 说明与 Connection 提示卡相距 12px，卡片下方不再另留外边距；连接器是左栏最后一个分区，不留下内边距，提示卡底到左栏卡片底 21px | 原导出稿说明贴着卡片边框（`.connection-notice` 的 14px 只在卡片下方），最后一个分区保留 `.detail-section` 的 20px 下内边距，提示卡底到左栏卡片底为 41px |
 | D2-04 | 新会话（尚未发送第一条消息） | 不显示「会话文件」折叠条 | 会话文件属于已创建的会话；新会话还没有会话 |
 | D2-05 | 对话页浏览器卡的人工接管 | 分两态：「等待接管」正文「请接管浏览器完成 MFA 验证，然后把控制权交还给 Agent。接管期间 Agent 不会操作页面。」，操作「接管浏览器」「停止」；「已接管」正文「请在浏览器中完成 MFA 验证，然后把控制权交还给 Agent。」，操作「交还给 Agent」「停止」。「停止」的可访问名称为「停止接管」；两态都不显示域名、操作与范围 | 接管事件不带域名与操作；原导出稿「等待接管」却给出「交还给 Agent」，状态与操作自相矛盾（[PRD §11.4](../prd/PRD-agent-platform-M1.md#114-浏览器能力)） |
-| D2-06 | 浏览器操作记录弹窗 | 五项事实之后另有「操作步骤」列表：每步名称、说明、时间与状态 chip | 记录按操作尝试、人工接管与副作用确认逐条回读，用户可核对实际发生的步骤（[PRD §11.4](../prd/PRD-agent-platform-M1.md#114-浏览器能力)、[§13.3](../prd/PRD-agent-platform-M1.md#133-真实结果与可靠性)） |
+| D2-06 / F3-05 | 浏览器操作记录弹窗 | 五项事实之后另有「操作步骤」列表：每步名称、说明、时间与状态 chip；「操作步骤」标题 13px / 650，行高 1.65 | 记录按操作尝试、人工接管与副作用确认逐条回读，用户可核对实际发生的步骤（[PRD §11.4](../prd/PRD-agent-platform-M1.md#114-浏览器能力)、[§13.3](../prd/PRD-agent-platform-M1.md#133-真实结果与可靠性)）；原导出稿标题沿用 h3 行高 1.4 |
 | D2-07 | Agent 已停止时的 composer 输入框（Z-12） | 禁用态透明度 .5 | 禁用态应可辨认 |
 | D2-09 | `/my-agents` 申请行 | 「查看申请」之外，待审批行有「修改申请」、已驳回行有「修改并重新提交」，已有 Agent 的申请（含创建失败）有 outline「查看 Agent」；行内操作的可访问名称带申请名 | 动作名同 W-09（[PRD §6.3](../prd/PRD-agent-platform-M1.md#63-管理状态)）；同列次要操作为 outline（B2-01）；同页不出现同名控件 |
 | D2-11 | 申请详情「申请配置」卡 | 事实列表不留 UA 默认下外边距，卡片上下内边距对称 20px | 原导出稿 `dl.facts` 沿用 UA 默认 13px 下外边距 |
-| D2-12 | 创建失败类别（申请详情、Owner 配置页脚、纯管理员视图） | `danger` 提示（`role="status"`）「失败原因：{类别}」与下一步说明，只向 Owner 与系统管理员显示：申请详情在进度列表下方（相距 18px，同驳回原因），Owner 视图在页脚按钮下方，纯管理员视图在「权限边界」之后（相距 12px）、「管理员操作」上方。申请详情与纯管理员视图的这两处间距 main 目前为 0，由 [#3152](https://github.com/AgoraIO-Extensions/agent-infra/issues/3152) 对齐 | 失败类别取 creation-failure 投影，不展示原因码（[工程 Spec §10.5](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#105-自定义-agent-runtime-manifest)、#3034） |
+| D2-12 / F3-08 / F3-09 / F3-10 | 创建失败类别（申请详情、Owner 配置页脚、纯管理员视图）与「重试创建」 | `danger` 提示（`role="status"`）「失败原因：{类别}」与下一步说明，只向 Owner 与系统管理员显示：申请详情在进度列表下方（相距 18px，同驳回原因；进度末步不画分隔线、没有下内边距），Owner 视图在页脚按钮下方，纯管理员视图在「权限边界」之后（相距 12px）、「管理员操作」上方。Owner 视图页脚与纯管理员「管理员操作」区的「重试创建」先确认：「重试创建 Agent？」、Agent 名（对象行后 8px）、「将重新尝试创建 Agent，请在创建完成后确认服务状态。」与主按钮「确认重试创建」；受理后 Toast「已提交重试创建请求」，焦点从页脚回到 h1，从「管理员操作」回到该区标题。`/admin/agents` 行内「重试」直接提交（D2-31） | 失败类别取 creation-failure 投影，不展示原因码（[工程 Spec §10.5](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#105-自定义-agent-runtime-manifest)、#3034）；确认文案取 `agent-lifecycle-commands.ts` 的 `retry_creation`，焦点去处同 `configuration-lifecycle.tsx`；原导出稿进度末步后紧跟提示时不命中 `:last-child`，多出 15px 下内边距与分隔线，「重试创建」直接 Toast |
 | D2-13 / D2-27 | Owner 配置「渠道」群聊可见性提示（W-17） | 12px、上距 15px、行高 1.65 | 原导出稿 `.form-section > p` 的特异性高于 `.wecom-visibility-note`，提示被渲染为 13px / 上距 5px |
 | D2-14 | Owner 配置「可用范围」帮助文字 | 「可选；用于补充个人范围」「可选；组织范围会与用户范围合并」，与申请表单一致 | 不外露「服务端稳定标识」内部术语（同 W-07、W-25） |
 | D2-15 | 表单复选框（企微卡片确认勾选、模型档位等） | 复选框不带 UA 外边距 | 原导出稿原生 checkbox 的 UA 外边距让起点右移 4px |
 | D2-18 | 企微机器人「扫码授权暂不可用」说明 | 「填写已有机器人的 Bot ID 和 Secret 后」，中英文之间留空格 | CJK 排版 |
 | D2-21 | 「替换 Agent 默认 Relay Key」弹窗 | 错误行只在出错时渲染，出错时输入框 `aria-invalid` 并获得焦点 | 与公共 `FieldError` 一致，空的 live region 不常驻 |
-| D2-22 / D2-23 | Owner 配置「管理员操作」区与纯管理员视图 | 系统管理员可见中性卡「管理员操作 / 以下操作仅对系统管理员显示。」，40px 档 outline「停用 Agent」（纯管理员且创建失败时另有「重试创建」）；确认弹窗「停用 Agent？」、Agent 名、「停用将撤销运行资格。Owner 不能恢复，个人历史仍保留。」与「确认停用」，完成后焦点到「管理员操作」标题。系统管理员不是 Owner 时只显示页头、权限边界与管理员操作；从 Agent 管理进入且不在使用范围内时返回链接为「返回 Agent 管理」 | [PRD §2.3](../prd/PRD-agent-platform-M1.md#23-系统管理员)、[§6.3](../prd/PRD-agent-platform-M1.md#63-管理状态)；B-15 的 40px 档；见[返回链接与管理区布局](#返回链接与管理区布局)（#3033） |
+| D2-22 / D2-23 / F3-11 | Owner 配置「管理员操作」区与纯管理员视图 | 系统管理员可见中性卡「管理员操作 / 以下操作仅对系统管理员显示。」，40px 档 outline「停用 Agent」（纯管理员且创建失败时另有「重试创建」，确认见 D2-12）；确认弹窗「停用 Agent？」、Agent 名（对象行后 8px）、「停用将撤销运行资格。Owner 不能恢复，个人历史仍保留。」与「确认停用」。停用后页头 chip 为「已停用」（gray），停止危险区、页脚「重启 Agent」与管理员操作区随可用命令消失，「权限边界」之前显示 warn 提示「已停用 / 运行资格已撤销，Owner 无法恢复。」（两条提示相距 12px），配置表单整体禁用，Toast「Agent 已停用」，焦点到 h1。系统管理员不是 Owner 时只显示页头、权限边界与管理员操作；从 Agent 管理进入且不在使用范围内时返回链接为「返回 Agent 管理」 | [PRD §2.3](../prd/PRD-agent-platform-M1.md#23-系统管理员)、[§6.3](../prd/PRD-agent-platform-M1.md#63-管理状态)；B-15 的 40px 档；已停用的 Agent 没有生命周期命令，区域卸载时焦点交给 h1（`configuration-lifecycle.tsx`、`configuration-page-heading.tsx`）；见[返回链接与管理区布局](#返回链接与管理区布局)（#3033） |
 | D2-26 | Skill 弹窗的对象名（确认绑定、解除绑定、更换版本、撤销版本） | 统一 650 字重 | 与 `ConfirmDialog` 的 subject 一致（原导出稿分别为 400、700、650） |
 | D2-29 / D2-37 | 驳回原因（创建审批的驳回弹窗、Skill 审阅弹窗） | 错误行只在出错时渲染；无错误时文本框到操作区 24px；原因为空时提交，焦点移到对应文本框（创建审批为「驳回原因」，Skill 审阅为「审核说明」） | 空的 live region 不常驻（原导出稿常驻空的 `p.field-error[role=alert]`）；出错后焦点停在需要修改的字段（N-06） |
 | D2-30 | 公共弹窗页眉的图标关闭钮（X-04） | 图标 18px | 原导出稿 `icon('x',18)` 被 `.btn svg{width:16px}` 覆盖 |
@@ -147,10 +148,15 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | D2-44 | `/skills/manage`「已安装」区头（≤767px） | 「Agent 绑定」保持 44px 单行，不折行 | 同 X-06：按钮不挤在标题右侧折成两行 |
 | D2-49 | `/my-settings/relay-key`「Relay Key」 | 公共字段标签 12px / 650 / muted | 同 W-33：原导出稿 `label > span` 未套字段标签样式 |
 | D2-55 | 对话页回答上方「思考过程」 | 有思考内容时显示，默认收起；摘要 44px、12px muted，「展开 / 收起」11px `--accent-ink`；正文 13px / 1.7 muted。执行详情页脚为「这里展示可审计的执行事实，不包含思考过程；模型提供的思考过程显示在回答上方。」 | [PRD §11.2](../prd/PRD-agent-platform-M1.md#112-对话能力)：思考过程显示在回答上方并可折叠（#3012） |
-| D2-56 | 对话页短视口（高度不超过 600px） | 页头只留 h1（44px），隐藏 eyebrow 与副标题，折叠条省略「按需查看」；仍只有时间线滚动 | 见[OpenDesign 视觉版本](#opendesign-视觉版本)短视口规则 |
-| D2-57 | 申请表单多服务 YAML 文本框（`#app-manifest`） | 可访问名称「多服务资源 YAML 内容」，占位符三行 | 与上方文件输入「多服务资源 YAML」区分（[#3119](https://github.com/AgoraIO-Extensions/agent-infra/issues/3119)） |
+| D2-56 / F3-03 | 对话页短视口（高度不超过 600px） | 页头只留 h1（44px），隐藏 eyebrow 与副标题，折叠条省略「按需查看」；会话上下文、时间线、会话文件与输入框之间统一 6px；仍只有时间线滚动 | 见[OpenDesign 视觉版本](#opendesign-视觉版本)短视口规则；原导出稿短视口仍用常规间距（10 / 0 / 18px） |
+| D2-57 / F3-07 | 申请表单多服务 YAML 文本框（`#app-manifest`） | 可访问名称「多服务资源 YAML 内容」，占位符三行；最小高 224px，等宽 14px / 20px | 与上方文件输入「多服务资源 YAML」区分（[#3119](https://github.com/AgoraIO-Extensions/agent-infra/issues/3119)）；尺寸同 `agent-application-form.tsx`，原导出稿沿用公共文本框的 110px、15px |
 | D2-58（D2-01、D2-02、D2-08、D2-10、D2-16、D2-20） | 同页重复的行内与卡内操作 | 可访问名称为「{可见文字}：{对象名}」：工作台最近对话、待处理、可用 Agent 与我的申请，我的 Agent 已创建卡，企微卡片（「验证并绑定：企微机器人」等），审批「审阅」，Agent 管理行操作，审计「详情：{事件} · {时间}」，Skill Hub 与我的 Skill 行操作；Agent 目录为「查看 {名称} 详情」；回复卡用提问摘要（超过 20 字截断，重复时按出现顺序加「（第 N 次）」） | 可访问性：同页不出现同名控件，与 `withObjectName`、`distinctObjectNames` 一致（N-12） |
-| D2-59（D2-17、D2-19、D2-24、D2-25、D2-28、D2-34、D2-36、D2-38、D2-39、D2-43、D2-48、D2-50、D2-51） | 演示动作完成后的焦点 | 弹窗（含 Skill 弹窗）打开时聚焦弹窗容器；扫码面板打开后焦点留在「扫码授权」；确认解绑企微后到卡片标题；Skill 绑定后到该绑定卡标题，解除后到下一张卡标题，没有时到 h1；审批驳回空原因时到「驳回原因」，Escape 关闭后回到「审阅：{申请名}」；禁用员工后到「员工访问控制」；审计详情打开后到「审计详情」区域，Escape 或「关闭」回到触发按钮；加入我的库后到「配置 Agent 绑定」，撤销版本后到 h1；Relay Key 保存后到「替换 Key」；确认撤销 API 凭证后到该行凭证标识，取消或 Escape 关闭撤销确认回到「撤销：{凭证}」；停止回复后到该回复卡的「重新生成」 | 与 Web 一致：动作完成后焦点在触发按钮、结果标题或 h1，不因整页重绘落到 body（N-06） |
+| D2-59（D2-17、D2-19、D2-24、D2-25、D2-28、D2-34、D2-36、D2-38、D2-39、D2-43、D2-48、D2-50、D2-51）/ F3-13 | 演示动作完成后的焦点 | 弹窗（含 Skill 弹窗）打开时聚焦弹窗容器，只含一个输入框的表单弹窗（「替换 Secret」「替换 Agent 默认 Relay Key」）聚焦该输入框；扫码面板打开后焦点留在「扫码授权」；确认解绑企微后到卡片标题；Skill 绑定后到该绑定卡标题，解除后到下一张卡标题，没有时到 h1；审批驳回空原因时到「驳回原因」，Escape 关闭后回到「审阅：{申请名}」；禁用员工后到「员工访问控制」；审计详情打开后到「审计详情」区域，Escape 或「关闭」回到触发按钮；加入我的库后到「配置 Agent 绑定」，撤销版本后到 h1；Relay Key 保存后到「替换 Key」；确认撤销 API 凭证后到该行凭证标识，取消或 Escape 关闭撤销确认回到「撤销：{凭证}」；停止回复后到该回复卡的「重新生成」；停用 Agent 与重试创建见 D2-22、D2-12；重绘不收起已展开的折叠条，焦点留在折叠条内的同一控件 | 与 Web 一致：动作完成后焦点在触发按钮、结果标题或 h1，不因整页重绘落到 body（N-06）；单输入框弹窗的初始焦点同 `secret-replace-dialog.tsx`、`default-relay-key-dialog.tsx` |
+| F3-02 | 对话页处理中与停止后的回复卡 | 每条提问只有一张回复卡：发送后处理中卡跟在该提问之后，重新生成时在原回答的位置显示处理中卡；停止后在同一位置显示已停止的回答，重新生成被停止时作为该回答的新版本（版本行 x/y）；处理中卡的「查看执行详情」带所答提问的摘要 | 与 Web 一致：回复按提问归组（`conversation-screen-messages.tsx`），同页不出现同名控件（D2-58）；原导出稿处理中卡追加在时间线末尾，与上一条回答指向同一提问 |
+| F3-04 | 对话页浏览器卡「工具调用失败」 | 与「已停止」相同：danger 24% 混色边框、红色图标、red「已停止」chip | 失败与停止都需要重新核实页面（Z-10），Web 按已停止阶段呈现（`browser-card.ts`）；原导出稿 `failed` 阶段漏挂 danger 样式 |
+| F3-06 | 对话页处理中的 composer | 输入框仍可编辑，发送按钮为「发送补充指令」，草稿为空时禁用；「命令 / Skill」入口禁用（opacity .48、not-allowed） | [PRD §11.2](../prd/PRD-agent-platform-M1.md#112-对话能力)：活跃回复期间按 Runtime 能力接收补充指令或提示繁忙；[§11.3](../prd/PRD-agent-platform-M1.md#113-原生命令与已安装-skill)：活跃回复期间不再启动新的命令任务或 Skill |
+| F3-12 | 确认弹窗的对象行（Owner 配置与 `/admin/agents` 的「停用 Agent？」、「重试创建 Agent？」、「撤销这个 Skill 版本？」、「禁用这名员工？」） | 对象名（650）与下方说明相距 8px | 与 `ConfirmDialog` 的 subject 一致；原导出稿前三个弹窗的对象行紧贴说明 |
+| F3-15 | 登录页（`login.html`）输入框焦点 | 与 `index.html` 及基础组件相同：2px 焦点环为 26% `--accent`、偏移 3px，聚焦时边框为 `--accent`（字段出错时也是） | 焦点环在基础组件中统一维护（见[组件与调用方](#组件与调用方)）；原导出稿为 2px 实色 accent、偏移 2px，出错字段聚焦时边框仍为红色 |
 
 导出稿中以下内容仍与 Web 不同，不作为实现依据：
 
@@ -170,6 +176,8 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
   Owner 兼系统管理员与创建失败类别可从「原型状态」页的「创建失败类别」入口查看，示例失败类别为合成值。
   Web 由会话角色、Owner 关系与服务端失败类别投影决定。
 - 浏览器操作记录的「操作步骤」与回复卡的思考过程正文是合成示例；Web 只显示时间线中实际回读的记录与模型提供的思考内容。
+- 处理中发送的补充指令只加入时间线，不演示投递失败等结果；Owner 配置的停用只改变原型的 Owner 配置与 Agent 管理，
+  Agent 目录、详情与对话不随之变化，重试创建也不改变示例的创建失败状态。Web 以服务端结果与投影为准。
 
 ### 申请详情进度
 
