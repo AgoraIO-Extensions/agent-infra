@@ -1784,7 +1784,9 @@ it("materializes OpenCode attachments with a manifest and a negotiated ACP image
 			).toBe("completed"),
 		);
 		const workspace = join(path, accepted.nativeSessionRef, "workspace");
-		expect(JSON.parse(await readFile(join(workspace, "prompt.json"), "utf8"))).toEqual([
+		expect(
+			JSON.parse(await readFile(join(workspace, "prompt.json"), "utf8")),
+		).toEqual([
 			{ type: "text", text: openCodeManifest(fileIds) },
 			{
 				type: "image",
@@ -1813,7 +1815,9 @@ it("materializes OpenCode attachments with a manifest and a negotiated ACP image
 		// Driver 状态与事件不含工作区路径与附件内容。
 		const persisted = (
 			await Promise.all(
-				(await readdir(path, { recursive: true }))
+				(
+					await readdir(path, { recursive: true })
+				)
 					.filter(
 						(entry) =>
 							entry.endsWith(".json") &&
@@ -1859,7 +1863,9 @@ it("gives an OpenCode peer without image input only the manifest and keeps the w
 			).toBe("completed"),
 		);
 		const workspace = join(path, accepted.nativeSessionRef, "workspace");
-		expect(JSON.parse(await readFile(join(workspace, "prompt.json"), "utf8"))).toEqual([
+		expect(
+			JSON.parse(await readFile(join(workspace, "prompt.json"), "utf8")),
+		).toEqual([
 			{ type: "text", text: `inspect\n\n${openCodeManifest(fileIds)}` },
 		]);
 		const png = join(
@@ -1873,7 +1879,10 @@ it("gives an OpenCode peer without image input only the manifest and keeps the w
 		const reads: string[] = [];
 		await expect(
 			driver.execute(
-				openCodeCommand({ text: "inspect", attachments: ["file-foreign"] }, "b"),
+				openCodeCommand(
+					{ text: "inspect", attachments: ["file-foreign"] },
+					"b",
+				),
 				{ fileBridge: openCodeAttachmentBridge(reads) },
 			),
 		).rejects.toThrow("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");

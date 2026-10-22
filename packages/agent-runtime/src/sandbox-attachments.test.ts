@@ -220,9 +220,9 @@ describe("materializeSandboxAttachmentsV1 (#3225)", () => {
 			});
 			const onDisk = await readFile(join(workspace, attachment.workspacePath));
 			expect(sha256(onDisk)).toBe(sha256(fixture.bytes));
-			expect((await stat(join(workspace, attachment.workspacePath))).mode & 0o777).toBe(
-				0o400,
-			);
+			expect(
+				(await stat(join(workspace, attachment.workspacePath))).mode & 0o777,
+			).toBe(0o400);
 		}
 		// 只有原生图片类型携带字节，其余只落盘。
 		expect(Buffer.from(attachments[3]?.imageBytes ?? [])).toEqual(png);
@@ -294,30 +294,35 @@ describe("materializeSandboxAttachmentsV1 (#3225)", () => {
 		[
 			`.agent-infra/attachments/${sandboxAttachmentRefV1("file-txt")}/notes.txt`,
 		],
-	])("rejects a planted symbolic link at %s without touching the outside", async (link) => {
-		const { directory, workspace } = await workspaceRoot();
-		const outside = join(directory, "outside");
-		await mkdir(outside, { mode: 0o700 });
-		await writeFile(join(outside, "notes.txt"), "outside");
-		const parent = join(workspace, link, "..");
-		await mkdir(parent, { recursive: true, mode: 0o700 });
-		await symlink(
-			link.endsWith("notes.txt") ? join(outside, "notes.txt") : outside,
-			join(workspace, link),
-		);
-		const cancelled: string[] = [];
-		await expect(
-			materializeSandboxAttachmentsV1({
-				workspace,
-				fileIds: ["file-txt"],
-				read: reader(cancelled),
-				invalid,
-			}),
-		).rejects.toBeInstanceOf(InvalidAttachment);
-		expect(cancelled).toEqual(["file-txt"]);
-		expect(await readdir(outside)).toEqual(["notes.txt"]);
-		expect(await readFile(join(outside, "notes.txt"), "utf8")).toBe("outside");
-	});
+	])(
+		"rejects a planted symbolic link at %s without touching the outside",
+		async (link) => {
+			const { directory, workspace } = await workspaceRoot();
+			const outside = join(directory, "outside");
+			await mkdir(outside, { mode: 0o700 });
+			await writeFile(join(outside, "notes.txt"), "outside");
+			const parent = join(workspace, link, "..");
+			await mkdir(parent, { recursive: true, mode: 0o700 });
+			await symlink(
+				link.endsWith("notes.txt") ? join(outside, "notes.txt") : outside,
+				join(workspace, link),
+			);
+			const cancelled: string[] = [];
+			await expect(
+				materializeSandboxAttachmentsV1({
+					workspace,
+					fileIds: ["file-txt"],
+					read: reader(cancelled),
+					invalid,
+				}),
+			).rejects.toBeInstanceOf(InvalidAttachment);
+			expect(cancelled).toEqual(["file-txt"]);
+			expect(await readdir(outside)).toEqual(["notes.txt"]);
+			expect(await readFile(join(outside, "notes.txt"), "utf8")).toBe(
+				"outside",
+			);
+		},
+	);
 
 	it("rejects oversized or mismatched attachments before anything is written", async () => {
 		const { workspace } = await workspaceRoot();

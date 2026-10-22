@@ -947,7 +947,9 @@ it("dispatches an authorized image as native Pi prompt content", async () => {
 			},
 		]);
 		expect(
-			await readFile(join(f.path, result.nativeSessionRef, "workspace", relative)),
+			await readFile(
+				join(f.path, result.nativeSessionRef, "workspace", relative),
+			),
 		).toEqual(Buffer.from(imageBytes));
 	} finally {
 		await f.close();
@@ -1219,7 +1221,9 @@ it("rejects Pi attachments with a planted link, beyond 32 or outside the Grant b
 				{ fileBridge: piAttachmentBridge() },
 			),
 		).rejects.toThrow("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
-		const index = JSON.parse(await readFile(join(f.path, "index.json"), "utf8"));
+		const index = JSON.parse(
+			await readFile(join(f.path, "index.json"), "utf8"),
+		);
 		const ref = index.sessions[0]?.ref as string | undefined;
 		if (!ref) throw new Error("missing session");
 		const workspace = join(f.path, ref, "workspace");
