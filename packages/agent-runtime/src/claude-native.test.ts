@@ -17,6 +17,10 @@ import {
 	completeClaudeToolUses,
 } from "./claude-native.test-support.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
+import {
+	createRuntimeFileResultReceiptV1,
+	type RuntimeFileBridgePortV1,
+} from "./runtime-file-bridge.js";
 
 // These integration cases start pinned Native processes and read SDK history.
 vi.setConfig({ testTimeout: 30_000 });
@@ -778,3 +782,114 @@ it.each(["exists", "permission-denied"])(
 	},
 	30000,
 );
+
+it("publishes a Claude answer reference written by the Write tool after the SDK result (#3226)", async () => {
+	const f = await fixture();
+	const root = await realpath(f.path);
+	f.hold();
+	let count = 0;
+	const writeResult = vi.fn(
+		async (
+			descriptor: Parameters<RuntimeFileBridgePortV1["writeResult"]>[0],
+			body: Parameters<RuntimeFileBridgePortV1["writeResult"]>[1],
+			options?: Parameters<RuntimeFileBridgePortV1["writeResult"]>[2],
+		) => {
+			for await (const _chunk of body);
+			count += 1;
+			return createRuntimeFileResultReceiptV1(
+				{
+					actorId: "actor-one",
+					channelId: "web",
+					agentId: "agent-one",
+					conversationId: "conversation-one",
+					executionId: "execution-reference",
+					sessionGeneration: 1,
+					grantId: "grant-one",
+					expiresAt: Date.now() + 60_000,
+					inputFileIds: [],
+				},
+				{
+					schemaVersion: 1,
+					fileId: `result-claude-${count}`,
+					kind: "result",
+					descriptor,
+					status: "available",
+					createdAt: new Date().toISOString(),
+					expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				},
+				options,
+			);
+		},
+	);
+	const command = claudeCommand("reference");
+	const accepted = await f.driver.execute(command, {
+		fileBridge: {
+			readInput: async () => {
+				throw new Error("unused");
+			},
+			writeResult,
+			revalidate: () => {},
+		},
+	});
+	await vi.waitFor(() => expect(f.calls).toHaveLength(1), { timeout: 10000 });
+	const workspace = join(root, accepted.nativeSessionRef, "workspace");
+	const first = f.calls[0];
+	if (!first) throw Error();
+	completeClaudeToolUses(
+		first.response,
+		"msg_write",
+		String(first.body.model),
+		"",
+		[
+			{
+				id: "write_report",
+				name: "Write",
+				input: {
+					file_path: join(workspace, "report.txt"),
+					content: "report\n",
+				},
+			},
+		],
+	);
+	await vi.waitFor(() => expect(f.calls).toHaveLength(2), { timeout: 10000 });
+	const second = f.calls[1];
+	if (!second) throw Error();
+	completeClaudeToolUses(
+		second.response,
+		"msg_answer",
+		String(second.body.model),
+		"Done: [report](sandbox:report.txt) and `[code](sandbox:code.txt)`.",
+		[],
+	);
+	f.release();
+	await f.settled(accepted.nativeSessionRef, command.executionId);
+	// Write 本身不发布结果文件，只有最终回答中的引用发布一次。
+	expect(writeResult).toHaveBeenCalledOnce();
+	expect(writeResult.mock.calls[0]?.[0]).toMatchObject({
+		name: "report.txt",
+		mediaType: "text/plain",
+	});
+	expect(writeResult.mock.calls[0]?.[2]).toEqual({
+		workspaceReference: "report.txt",
+	});
+	const events = await f.driver.replayEvents(
+		accepted.nativeSessionRef,
+		command.executionId,
+	);
+	const file = events.findIndex((event) => event.type === "file");
+	expect(events[file]).toMatchObject({
+		schemaVersion: 2,
+		payload: { fileId: "result-claude-1", workspaceReference: "report.txt" },
+	});
+	expect(file).toBeLessThan(
+		events.findIndex((event) => event.type === "completed"),
+	);
+	expect(
+		events.some(
+			(event) =>
+				event.type === "tool" &&
+				event.payload.name === "Write" &&
+				event.payload.phase === "completed",
+		),
+	).toBe(true);
+}, 30000);

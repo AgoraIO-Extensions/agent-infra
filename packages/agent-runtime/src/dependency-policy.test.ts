@@ -20,17 +20,24 @@ describe("agent-runtime dependency direction", () => {
 
 		expect(Object.keys(packageJson.dependencies ?? {})).toEqual([
 			"@agent-infra/contracts",
+			// #3226：与 ObjectStorage Adapter 共用按实际字节识别媒体类型的唯一实现。
+			"@agent-infra/file-content",
 			"@agentclientprotocol/sdk",
 			"@anthropic-ai/claude-agent-sdk",
 			"@earendil-works/pi-coding-agent",
 			"@modelcontextprotocol/sdk",
 			"ajv",
 			"eventsource-parser",
+			// #3226：按 CommonMark 解析最终回答中的 sandbox: 引用，与 Web 渲染同一版本。
+			"mdast-util-from-markdown",
 			"playwright-core",
 			"zod",
 		]);
 		expect(packageJson.dependencies?.["@modelcontextprotocol/sdk"]).toBe(
 			"1.30.0",
+		);
+		expect(packageJson.dependencies?.["mdast-util-from-markdown"]).toBe(
+			"2.0.3",
 		);
 	});
 

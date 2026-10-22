@@ -7,22 +7,17 @@ import {
 	mkdtemp,
 	open,
 	readFile,
-	realpath,
 	rm,
 	rmdir,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import {
-	basename,
-	dirname,
-	isAbsolute,
-	join,
-	relative,
-	resolve,
-} from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
+import {
+	FileProjectionV1Schema,
+	SandboxWorkspaceReferenceV1Schema,
+} from "@agent-infra/contracts/files";
 import type {
 	NativeMetadataProjectionV1,
 	NativeMetadataSelectorV1,
@@ -163,10 +158,40 @@ import type {
 	RuntimeFileResultV1,
 } from "./runtime-file-bridge.js";
 import { readRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
+import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
+import {
+	isSandboxResultPlanV1,
+	planSandboxResultsV1,
+	publishSandboxResultsV1,
+	type SandboxResultEntryV1,
+	type SandboxResultPlanV1,
+	sandboxResultAnswerText,
+	settleSandboxResultsWithoutBridgeV1,
+} from "./sandbox-result-references.js";
 import type {
 	RuntimeFilesystemSkillDirectoryV1,
 	RuntimeSkillDirectoryEntryV1,
 } from "./skill-hub-directory.js";
+
+/** #3226：journal 中同一引用、同一 descriptor 的已确认结果文件事件。 */
+function confirmedJournalResultFileId(
+	journal: { readonly events: readonly CodexJournalEvent[] },
+	entry: SandboxResultEntryV1,
+) {
+	const descriptor = entry.descriptor;
+	if (!descriptor) return undefined;
+	for (const event of journal.events)
+		if (
+			event.type === "file" &&
+			event.payload.workspaceReference !== undefined &&
+			event.payload.workspaceReference === entry.workspaceReference &&
+			event.payload.name === descriptor.name &&
+			event.payload.mimeType === descriptor.mediaType &&
+			event.payload.sizeBytes === descriptor.sizeBytes
+		)
+			return event.payload.fileId;
+	return undefined;
+}
 
 const runtimeSkillHubMountRootV1 = "/opt/agent-infra-skill-hub";
 
@@ -682,6 +707,8 @@ interface CodexJournalFileEvent {
 		name: string;
 		mimeType: string;
 		sizeBytes: number;
+		/** #3226：存在时按 Runtime `file` V2 发布；回答内引用为规范化路径，其他来源为 null。 */
+		workspaceReference?: string | null;
 	};
 }
 
@@ -824,6 +851,11 @@ interface CodexEventJournal {
 	standardMcpCalls?: Record<string, CodexStandardMcpCall>;
 	nativeSources?: Record<string, CodexNativeSourceRecord>;
 	nativeCompletionStatus?: "completed" | "failed" | "cancelled";
+	/**
+	 * #3226：原生 Turn 以 completed 结束、最终回答已确认后保存的发布计划；计划收敛前
+	 * 不写终态事件，重启时沿已保存的进度继续。
+	 */
+	resultPublication?: SandboxResultPlanV1;
 	events: CodexJournalEvent[];
 }
 
@@ -1056,12 +1088,11 @@ type CodexNativeCommandCommand = Extract<
 	{ kind: "native-command" }
 >;
 
-interface NativeResultFileContext {
+/** #3226：本进程提交的执行；发布回答内引用时使用其请求级 FileBridge（可能未装配）。 */
+interface ResultPublicationContext {
 	readonly command: CodexSubmitTurnCommand;
-	readonly bridge: RuntimeFileBridgePortV1;
+	readonly bridge?: RuntimeFileBridgePortV1;
 }
-
-const maximumNativeResultFileBytes = 10 * 1024 * 1024;
 
 export type CodexNativeInputItem =
 	| { readonly type: "text"; readonly text: string }
@@ -1739,7 +1770,18 @@ function isCodexJournalEvent(value: unknown): value is CodexJournalEvent {
 		nonEmptyString(value.occurredAt) &&
 		value.type === "file" &&
 		isPlainRecord(value.payload) &&
-		hasOnlyKeys(value.payload, ["fileId", "name", "mimeType", "sizeBytes"]) &&
+		hasOnlyKeys(value.payload, [
+			"fileId",
+			"name",
+			"mimeType",
+			"sizeBytes",
+			"workspaceReference",
+		]) &&
+		(value.payload.workspaceReference === undefined ||
+			value.payload.workspaceReference === null ||
+			SandboxWorkspaceReferenceV1Schema.safeParse(
+				value.payload.workspaceReference,
+			).success) &&
 		nonEmptyString(value.payload.fileId) &&
 		nonEmptyString(value.payload.name) &&
 		nonEmptyString(value.payload.mimeType) &&
@@ -1840,9 +1882,12 @@ function isCodexEventJournal(
 			"standardMcpCalls",
 			"nativeSources",
 			"nativeCompletionStatus",
+			"resultPublication",
 			"events",
 		]) &&
 		value.nativeTurnId === nativeTurnId &&
+		(value.resultPublication === undefined ||
+			isSandboxResultPlanV1(value.resultPublication)) &&
 		(value.connectionRecoveryCursor === undefined ||
 			nonEmptyString(value.connectionRecoveryCursor)) &&
 		(value.connectionRecovery === undefined ||
@@ -4461,11 +4506,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		MaterializedCodexInput
 	>();
 	/** Request-local authority for one accepted Turn's native file changes. */
-	private readonly nativeResultFiles = new Map<
+	/** #3226：本进程提交、尚未完成发布的执行。 */
+	private readonly resultPublicationContexts = new Map<
 		string,
-		NativeResultFileContext
+		ResultPublicationContext
 	>();
-	private readonly nativeResultFileAttempts = new Set<string>();
+	/** #3226：正在发布回答内引用的执行，按 executionId 去重。 */
+	private readonly resultPublicationRuns = new Map<string, Promise<void>>();
 
 	private retainPendingSourceTurn(turnKey: string, requestId: string): void {
 		const requests =
@@ -5913,6 +5960,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		try {
 			await driver.loadArchivedJournals(codexJournalArchiveRoot(options.path));
+			// #3226：先沿已保存进度收敛中断的结果发布，再处理其他未确认操作。
+			await driver.recoverResultPublications();
 			await driver.recoverStandardMcpCalls();
 			await driver.recoverUnconfirmedModelOperations();
 			// Archives Turns finished before this open, including those of a state
@@ -7041,11 +7090,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (command.operationId !== command.executionId) stateInvalid();
 		const text = "text" in command.input ? command.input.text : undefined;
 		if (!text) unavailable();
-		if (fileBridge)
-			this.nativeResultFiles.set(command.executionId, {
-				command,
-				bridge: fileBridge,
-			});
+		this.resultPublicationContexts.set(command.executionId, {
+			command,
+			...(fileBridge ? { bridge: fileBridge } : {}),
+		});
 		const key = operationKey(command);
 		const leaked = this.pendingInputCleanups.get(key);
 		if (leaked) {
@@ -7095,7 +7143,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				retainInputUntilTerminal,
 			);
 		} catch (error) {
-			this.nativeResultFiles.delete(command.executionId);
+			this.resultPublicationContexts.delete(command.executionId);
 			throw error;
 		} finally {
 			await materialized?.cleanup();
@@ -8421,7 +8469,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		command: RuntimeDriverCommand,
 		result: RuntimeFileResultReceiptV1,
 	) {
-		const { binding, projection } = readRuntimeFileResultReceiptV1(result);
+		const { binding, projection, workspaceReference } =
+			readRuntimeFileResultReceiptV1(result);
 		if (
 			binding.agentId !== command.agentId ||
 			binding.conversationId !== command.conversationId ||
@@ -8486,6 +8535,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						name: projection.descriptor.name,
 						mimeType: projection.descriptor.mediaType,
 						sizeBytes: projection.descriptor.sizeBytes,
+						...(workspaceReference === undefined ? {} : { workspaceReference }),
 					})
 				)
 					protocolInvalid();
@@ -8495,7 +8545,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				);
 			}
 			this.assertJournalOpen(journal);
-			this.appendFileEvent(session, journal, projection);
+			this.appendFileEvent(session, journal, projection, workspaceReference);
 			return this.eventStreamKey(session.nativeSessionRef, command.executionId);
 		});
 		this.notifyEventStream(streamKey);
@@ -8576,8 +8626,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private async shutdown() {
 		this.closed = true;
-		this.nativeResultFiles.clear();
-		this.nativeResultFileAttempts.clear();
+		// #3226：关闭后发布的后续提交会失败并留给重启恢复收敛，不在此等待上传。
+		this.resultPublicationContexts.clear();
 		this.initialModelStatusPending.clear();
 		await this.drainConnectionRecoveries();
 		for (const client of this.connectionClients.values()) client.close();
@@ -11422,128 +11472,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return process.launch.cwd;
 	}
 
-	private async nativeResultFile(
-		conversationKey: string,
-		filePath: string,
-	): Promise<{ name: string; bytes: Buffer } | undefined> {
-		if (!filePath || filePath.includes("\0")) return undefined;
-		const workspace = this.nativeWorkspace(conversationKey);
-		if (!workspace) return undefined;
-		const root = await realpath(workspace).catch(() => undefined);
-		if (!root) return undefined;
-		const candidate = isAbsolute(filePath) ? filePath : resolve(root, filePath);
-		const actual = await realpath(candidate).catch(() => undefined);
-		if (!actual) return undefined;
-		const within = relative(root, actual);
-		if (!within || within.startsWith("..") || isAbsolute(within))
-			return undefined;
-		const noFollow = fsConstants.O_NOFOLLOW ?? 0;
-		const handle = await open(actual, fsConstants.O_RDONLY | noFollow).catch(
-			() => undefined,
-		);
-		if (!handle) return undefined;
-		try {
-			const openedPath = await realpath(actual).catch(() => undefined);
-			if (!openedPath) return undefined;
-			const openedWithin = relative(root, openedPath);
-			if (
-				!openedWithin ||
-				openedWithin.startsWith("..") ||
-				isAbsolute(openedWithin)
-			)
-				return undefined;
-			const metadata = await handle.stat();
-			if (!metadata.isFile()) return undefined;
-			const chunks: Buffer[] = [];
-			const buffer = Buffer.allocUnsafe(64 * 1024);
-			let total = 0;
-			let position = 0;
-			for (;;) {
-				const read = await handle.read(buffer, 0, buffer.length, position);
-				if (read.bytesRead === 0) break;
-				position += read.bytesRead;
-				total += read.bytesRead;
-				if (total > maximumNativeResultFileBytes) return undefined;
-				chunks.push(Buffer.from(buffer.subarray(0, read.bytesRead)));
-			}
-			const bytes = Buffer.concat(chunks, total);
-			try {
-				new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-			} catch {
-				return undefined;
-			}
-			return { name: basename(within), bytes };
-		} finally {
-			await handle.close().catch(() => {});
-		}
-	}
-
-	private async persistNativeFileChange(
-		frame: ReturnType<typeof fileChangeCompletedNotification>,
-		conversationKey: string | undefined,
-	) {
-		if (frame?.paths.length !== 1 || frame?.status === "failed") return;
-		const state = this.readState();
-		const resolved = this.resolveNotificationJournal(
-			state,
-			conversationKey,
-			frame.threadId,
-			frame.nativeTurnId,
-		);
-		if (!resolved?.execution) return;
-		const context = this.nativeResultFiles.get(resolved.execution.executionId);
-		if (
-			!context ||
-			context.command.conversationId !== resolved.session.conversationId
-		)
-			return;
-		const executionId = resolved.execution.executionId;
-		if (this.nativeResultFileAttempts.has(executionId)) return;
-		this.nativeResultFileAttempts.add(executionId);
-		const file = await this.nativeResultFile(
-			codexConversationKey(resolved.session),
-			frame.paths[0] as string,
-		);
-		if (!file) return;
-		const receipt = await context.bridge.writeResult(
-			{
-				name: file.name,
-				mediaType: "text/plain",
-				sizeBytes: file.bytes.byteLength,
-				sha256: createHash("sha256").update(file.bytes).digest("hex"),
-			},
-			new ReadableStream<Uint8Array>({
-				start(controller) {
-					controller.enqueue(file.bytes);
-					controller.close();
-				},
-			}),
-		);
-		const projection = FileProjectionV1Schema.parse(
-			readRuntimeFileResultReceiptV1(receipt).projection,
-		);
-		if (projection.kind !== "result" || projection.status !== "available")
-			return;
-		const streamKey = await this.update((next) => {
-			const target = this.resolveNotificationJournal(
-				next,
-				conversationKey,
-				frame.threadId,
-				frame.nativeTurnId,
-			);
-			if (!target?.execution || target.execution.executionId !== executionId)
-				return undefined;
-			if (target.journal.events.some((event) => event.type === "file"))
-				return undefined;
-			this.appendFileEvent(target.session, target.journal, projection);
-			return this.eventStreamKey(
-				target.nativeSessionRef,
-				target.execution.executionId,
-			);
-		});
-		if (streamKey) this.notifyEventStream(streamKey);
-	}
-
 	private appendOperationFact(
 		session: CodexSession,
 		journal: CodexEventJournal,
@@ -11816,12 +11744,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					threadId: completed.threadId,
 					turnId: completed.nativeTurnId,
 				});
-			if (resolvedCompleted?.execution) {
-				this.nativeResultFiles.delete(resolvedCompleted.execution.executionId);
-				this.nativeResultFileAttempts.delete(
+			// #3226：没有待发布引用的执行不再需要请求级上下文；有计划的由发布收尾时清理。
+			if (
+				resolvedCompleted?.execution &&
+				!this.resultPublicationRuns.has(resolvedCompleted.execution.executionId)
+			)
+				this.resultPublicationContexts.delete(
 					resolvedCompleted.execution.executionId,
 				);
-			}
 			if (streamKey) this.notifyEventStream(streamKey);
 			return;
 		}
@@ -11830,11 +11760,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (nativeTool)
 			await this.recordNativeToolFact(nativeTool, conversationKey);
 
-		const fileChange = fileChangeCompletedNotification(frame);
-		if (fileChange) {
-			await this.persistNativeFileChange(fileChange, conversationKey);
-			return;
-		}
+		// #3226：apply_patch 的 fileChange 只记录工具事实，不再隐式发布结果文件；
+		// 仍按固定 schema 校验其形状。
+		fileChangeCompletedNotification(frame);
 		if (nativeTool) return;
 
 		const message = agentMessageCompletedNotification(frame);
@@ -12308,6 +12236,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		session: CodexSession,
 		journal: CodexEventJournal,
 		projection: RuntimeFileResultV1,
+		workspaceReference?: string | null,
 	) {
 		const { cursor, adapterEventKey } = this.nextEventIdentity(session);
 		const event: CodexJournalFileEvent = {
@@ -12320,9 +12249,184 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				name: projection.descriptor.name,
 				mimeType: projection.descriptor.mediaType,
 				sizeBytes: projection.descriptor.sizeBytes,
+				...(workspaceReference === undefined ? {} : { workspaceReference }),
 			},
 		};
 		journal.events.push(event);
+	}
+
+	/**
+	 * #3226：原生 Turn 以 completed 结束时，若本进程提交了该执行，解析最终回答（本执行已确认的
+	 * 全部文本事件）并在同一提交中保存发布计划；计划收敛前延迟终态。返回 true 表示延迟。
+	 */
+	private deferForResultPublication(
+		session: CodexSession,
+		journal: CodexEventJournal,
+		status: Exclude<PersistedTurnStatus, "running">,
+	) {
+		const existing = journal.resultPublication;
+		if (existing) return !existing.settled;
+		if (status !== "completed") return false;
+		const execution = Object.values(session.executions).find(
+			(candidate) => candidate.nativeTurnId === journal.nativeTurnId,
+		);
+		if (
+			!execution ||
+			!this.resultPublicationContexts.has(execution.executionId)
+		)
+			return false;
+		const { plan } = planSandboxResultsV1({
+			text: sandboxResultAnswerText(journal.events),
+		});
+		if (!plan) return false;
+		journal.resultPublication = plan;
+		this.scheduleResultPublication(
+			session.nativeSessionRef,
+			execution.executionId,
+			journal.nativeTurnId,
+		);
+		return true;
+	}
+
+	private scheduleResultPublication(
+		nativeSessionRef: string,
+		executionId: string,
+		nativeTurnId: string,
+	) {
+		if (this.resultPublicationRuns.has(executionId)) return;
+		const run = this.runResultPublication(
+			nativeSessionRef,
+			executionId,
+			nativeTurnId,
+		)
+			.catch(() => {})
+			.finally(() => {
+				if (this.resultPublicationRuns.get(executionId) === run)
+					this.resultPublicationRuns.delete(executionId);
+			});
+		this.resultPublicationRuns.set(executionId, run);
+	}
+
+	/**
+	 * #3226：在保存计划的提交确认后逐个发布；每一步经 journal 持久化并推送。收尾时把未收敛的
+	 * 项按已保存进度收敛（不重发），再按原生终态完成执行。
+	 */
+	private async runResultPublication(
+		nativeSessionRef: string,
+		executionId: string,
+		nativeTurnId: string,
+	) {
+		// 计划由正在进行的提交写入，先等它确认。
+		await this.file.readCommitted();
+		const context = this.resultPublicationContexts.get(executionId);
+		const locate = (state: CodexDriverState) => {
+			const session = ownRecordValue(state.sessions, nativeSessionRef);
+			const journal = session
+				? ownRecordValue(session.journals ?? {}, nativeTurnId)
+				: undefined;
+			return session && journal ? { session, journal } : undefined;
+		};
+		const initial = locate(this.readState());
+		const streamKey = this.eventStreamKey(nativeSessionRef, executionId);
+		try {
+			// 没有请求级 FileBridge（重启后或部署未装配）时由收尾按已保存进度收敛。
+			if (!initial?.journal.resultPublication || !context?.bridge) return;
+			await publishSandboxResultsV1({
+				bridge: context.bridge,
+				workspaceRoot: this.nativeWorkspace(
+					codexConversationKey(initial.session),
+				),
+				ledger: {
+					read: () => locate(this.readState())?.journal.resultPublication,
+					commit: async ({ plan, facts, receipt }) => {
+						if (this.closed) unavailable();
+						if (receipt) {
+							if (!context) unavailable();
+							await this.recordResultFile(context.command, receipt);
+						}
+						await this.update((state) => {
+							const located = locate(state);
+							if (!located?.journal.resultPublication) stateInvalid();
+							for (const fact of facts)
+								this.appendOperationFact(
+									located.session,
+									located.journal,
+									fact,
+								);
+							located.journal.resultPublication = plan;
+						});
+						this.notifyEventStream(streamKey);
+					},
+				},
+			});
+		} finally {
+			const finished = await this.update((state) => {
+				const located = locate(state);
+				const plan = located?.journal.resultPublication;
+				if (!located || !plan) return false;
+				const { session, journal } = located;
+				if (journal.events.some((event) => event.type === "completed"))
+					return false;
+				if (!plan.settled) {
+					const settled = settleSandboxResultsWithoutBridgeV1(plan, (entry) =>
+						confirmedJournalResultFileId(journal, entry),
+					);
+					for (const fact of settled.facts)
+						this.appendOperationFact(session, journal, fact);
+					journal.resultPublication = settled.plan;
+				}
+				const execution = ownRecordValue(session.executions, executionId);
+				if (journal.nativeCompletionStatus && execution?.status === "running")
+					this.setExecutionStatus(
+						state,
+						nativeSessionRef,
+						executionId,
+						nativeTurnId,
+						journal.nativeCompletionStatus,
+					);
+				return true;
+			}).catch(() => false);
+			this.resultPublicationContexts.delete(executionId);
+			if (finished) this.notifyEventStream(streamKey);
+		}
+	}
+
+	/**
+	 * #3226：Driver 重启后没有执行期文件交换上下文。沿已保存进度收敛未完成的发布计划，
+	 * 然后按原生终态完成执行；不重发、不新建意图。
+	 */
+	private async recoverResultPublications() {
+		const pending: {
+			nativeSessionRef: string;
+			executionId: string;
+			nativeTurnId: string;
+		}[] = [];
+		for (const [nativeSessionRef, session] of Object.entries(
+			this.readState().sessions,
+		))
+			for (const journal of Object.values(session.journals ?? {})) {
+				if (
+					!journal.resultPublication ||
+					journal.resultPublication.settled ||
+					journal.events.some((event) => event.type === "completed")
+				)
+					continue;
+				const execution = Object.values(session.executions).find(
+					(candidate) => candidate.nativeTurnId === journal.nativeTurnId,
+				);
+				if (execution)
+					pending.push({
+						nativeSessionRef,
+						executionId: execution.executionId,
+						nativeTurnId: journal.nativeTurnId,
+					});
+			}
+		for (const item of pending)
+			await this.runResultPublication(
+				item.nativeSessionRef,
+				item.executionId,
+				item.nativeTurnId,
+			);
 	}
 
 	private appendCompletedEvent(
@@ -12361,6 +12465,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		)
 			protocolInvalid();
 		journal.nativeCompletionStatus = status;
+		// #3226：最终回答中的 sandbox: 引用发布完成前不写终态事件。
+		if (this.deferForResultPublication(session, journal, status)) return false;
 		if (
 			pendingNativeToolAttempts(journal).length > 0 ||
 			pendingNativeSources(journal).length > 0
@@ -12419,6 +12525,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			};
 		}
 		if (event.type === "file") {
+			// #3226：带工作区引用的结果文件按 V2 发布。
+			if (event.payload.workspaceReference !== undefined)
+				return {
+					...base,
+					schemaVersion: 2 as const,
+					type: "file" as const,
+					payload: {
+						fileId: event.payload.fileId,
+						name: event.payload.name,
+						mimeType: event.payload.mimeType,
+						sizeBytes: event.payload.sizeBytes,
+						workspaceReference: event.payload.workspaceReference,
+					},
+				};
 			return { ...base, type: "file" as const, payload: event.payload };
 		}
 		return { ...base, type: "completed" as const, payload: event.payload };
@@ -13508,6 +13628,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			"thread/start",
 			{
 				historyMode: "paginated",
+				// #3226：平台固定的文件交换说明（Codex 0.153 ThreadStartParams.developerInstructions）。
+				developerInstructions: SANDBOX_FILE_INSTRUCTIONS_V1,
 				...(standard ||
 				(this.installedSkill &&
 					this.requiredRuntime.lane === "official-model-only")

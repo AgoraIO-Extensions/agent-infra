@@ -77,6 +77,7 @@ export {
 	type ConversationRuntimeEvent,
 	type ConversationRuntimeEventRequestV1,
 	type ConversationRuntimeEventV1,
+	type ConversationRuntimeFileEventV2,
 	ConversationRuntimeHostError,
 	type ConversationRuntimeHostPortV1,
 	type ConversationRuntimeOperationEventV2,

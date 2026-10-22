@@ -8,6 +8,7 @@ import {
 	parseConversationOperationHistoryV2,
 	requireConversationOperationSuccessorV2,
 } from "./conversation-operation-facts.js";
+import { isWorkspaceReferenceV1 } from "./file-authority.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 
 export type ConversationEventStatusV1 =
@@ -122,6 +123,11 @@ export type ConversationNormalizedEventV1 =
 			readonly name: string;
 			readonly mediaType: string;
 			readonly sizeBytes: number;
+			/**
+			 * #3226：回答内 `sandbox:` 引用发布的文件携带规范化工作区路径，其他来源为 null；
+			 * 省略表示 V1 事件。存在该键时按 `result.file` V2 投影。
+			 */
+			readonly workspaceReference?: string | null;
 	  }
 	| {
 			readonly type: "conversation.error";
@@ -702,18 +708,20 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 		};
 	}
 	if (type === "result.file") {
-		const values = snapshotObject(input, [
-			"type",
-			"fileId",
-			"name",
-			"mediaType",
-			"sizeBytes",
-		]);
+		const values = snapshotObject(
+			input,
+			["type", "fileId", "name", "mediaType", "sizeBytes"],
+			["workspaceReference"],
+		);
+		const hasWorkspaceReference = Object.hasOwn(values, "workspaceReference");
 		if (
 			!isText(values.fileId) ||
 			!isText(values.name, 1024) ||
 			!isText(values.mediaType, 255) ||
-			!isNonNegativeSafeInteger(values.sizeBytes)
+			!isNonNegativeSafeInteger(values.sizeBytes) ||
+			(hasWorkspaceReference &&
+				values.workspaceReference !== null &&
+				!isWorkspaceReferenceV1(values.workspaceReference))
 		) {
 			invalidInput();
 		}
@@ -723,6 +731,11 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 			name: values.name,
 			mediaType: values.mediaType,
 			sizeBytes: values.sizeBytes,
+			...(hasWorkspaceReference
+				? {
+						workspaceReference: values.workspaceReference as string | null,
+					}
+				: {}),
 		};
 	}
 	if (type === "conversation.error") {

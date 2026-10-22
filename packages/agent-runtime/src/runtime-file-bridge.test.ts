@@ -25,6 +25,7 @@ import {
 	createRuntimeNativeTextInputPortV1,
 	type RuntimeFileBridgeBindingV1,
 	type RuntimeFileBridgeContextV1,
+	RuntimeFileResultUnconfirmedError,
 	readRuntimeFileResultReceiptV1,
 } from "./runtime-file-bridge.js";
 
@@ -248,7 +249,6 @@ describe("RuntimeHost execution file bridge", () => {
 	});
 
 	it.each([
-		["expired", { now: () => 20_000 }],
 		["revoked", { isRevoked: () => true }],
 		["stale generation", { isCurrent: () => false }],
 	] as const)(
@@ -278,16 +278,54 @@ describe("RuntimeHost execution file bridge", () => {
 		},
 	);
 
-	it("revalidates after an asynchronous result write", async () => {
-		let clock = 10_000;
+	it("bounds reads by the signed Grant window but writes results under current authority (#3226)", async () => {
+		const readInput = vi.fn(async (context: RuntimeFileBridgeContextV1) => ({
+			fileId: context.fileId,
+			descriptor,
+			body: new ReadableStream<Uint8Array>(),
+		}));
+		const writeResult = vi.fn(
+			async (
+				..._args: [
+					FileDescriptorV1,
+					ReadableStream<Uint8Array>,
+					RuntimeFileBridgeContextV1,
+					{ workspaceReference: string | null }?,
+				]
+			) => projection,
+		);
+		const port = bridge({ now: () => 20_000, readInput, writeResult });
+		await expect(port.readInput("input-1")).rejects.toThrow(
+			"RUNTIME_FILE_BRIDGE_CONTEXT_EXPIRED",
+		);
+		expect(() => port.revalidate()).toThrow(
+			"RUNTIME_FILE_BRIDGE_CONTEXT_EXPIRED",
+		);
+		// Turn 结束时的发布晚于 30 秒委托窗口，仍由当前授权决定。
+		const receipt = await port.writeResult(
+			descriptor,
+			new ReadableStream<Uint8Array>(),
+			{ workspaceReference: "out/report.pdf" },
+		);
+		expect(readInput).not.toHaveBeenCalled();
+		expect(writeResult.mock.calls[0]?.[3]).toEqual({
+			workspaceReference: "out/report.pdf",
+		});
+		expect(readRuntimeFileResultReceiptV1(receipt).workspaceReference).toBe(
+			"out/report.pdf",
+		);
+	});
+
+	it("reports a result as unconfirmed when authority lapses during the write", async () => {
+		let current = true;
 		const writeResult = vi.fn(async () => {
-			clock = 20_000;
+			current = false;
 			return projection;
 		});
-		const port = bridge({ now: () => clock, writeResult });
+		const port = bridge({ isCurrent: () => current, writeResult });
 		await expect(
 			port.writeResult(descriptor, new ReadableStream<Uint8Array>()),
-		).rejects.toThrow("RUNTIME_FILE_BRIDGE_CONTEXT_EXPIRED");
+		).rejects.toBeInstanceOf(RuntimeFileResultUnconfirmedError);
 		expect(writeResult).toHaveBeenCalledTimes(1);
 	});
 

@@ -1221,7 +1221,7 @@ export type PersistedConversationEventV1 = {
     type: 'conversation.error';
 } | ModelSelectionFallbackEventV1;
 
-export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2 | BrowserHandoffEventV2 | BrowserSideEffectEventV2 | ModelSelectionFallbackEventV2;
+export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2 | BrowserHandoffEventV2 | BrowserSideEffectEventV2 | ModelSelectionFallbackEventV2 | ResultFileEventV2;
 
 export type PersonalApiCredentialIssueRequestV1 = {
     expiresAt: string | null;
@@ -1378,6 +1378,25 @@ export type ReasoningDeltaEventV2 = {
     schemaVersion: 2;
     sequence: number;
     type: 'reasoning.delta';
+};
+
+export type ResultFileEventV2 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        fileId: string;
+        mediaType: string;
+        name: string;
+        sizeBytes: number;
+        workspaceReference: string | null;
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'result.file';
 };
 
 export type RuntimeConnectionAssociationV1 = {

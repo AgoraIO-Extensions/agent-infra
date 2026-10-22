@@ -1,3 +1,7 @@
+import {
+	createContentProbe,
+	type ObjectContentPolicyV1,
+} from "@agent-infra/file-content";
 import type { StoredFileObjectV1 } from "@agent-infra/platform-core";
 import {
 	DeleteObjectCommand,
@@ -10,7 +14,6 @@ import {
 	type S3ClientConfig,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { createContentProbe, type ObjectContentPolicyV1 } from "./content.js";
 import {
 	type ObjectDownloadV1,
 	type ObjectStorageDataV1,

@@ -21,6 +21,26 @@ export type RuntimeFileResultV1 = ReturnType<
 >;
 
 /**
+ * #3226：结果文件的工作区引用。回答内 `sandbox:` 引用为规范化的工作区相对路径，
+ * ACP image 块等其他来源为 null；平台在分配结果意图时写入文件记录。
+ */
+export interface RuntimeFileResultOptionsV1 {
+	readonly workspaceReference: string | null;
+}
+
+/**
+ * #3226：`writeResult` 可能已在平台生效、但结果无法确认（完成请求的响应丢失、确认后
+ * 授权失效或本地记账失败）。调用方必须把该次发布记为 unknown，沿原意图核实，不能新建
+ * 意图重发。其他错误表示结果文件没有被确认为可用。
+ */
+export class RuntimeFileResultUnconfirmedError extends Error {
+	constructor(options?: { cause?: unknown }) {
+		super("RUNTIME_FILE_RESULT_UNCONFIRMED", options);
+		this.name = "RuntimeFileResultUnconfirmedError";
+	}
+}
+
+/**
  * A confirmed result projection tied to the request-local bridge that produced
  * it. The binding is kept in a private WeakMap so a plain projection, or a
  * copied/edited receipt, cannot be accepted by the Driver.
@@ -32,6 +52,8 @@ export interface RuntimeFileResultReceiptV1 {
 type RuntimeFileResultReceiptMetadataV1 = Readonly<{
 	binding: RuntimeFileBridgeBindingV1;
 	projection: RuntimeFileResultV1;
+	/** #3226：请求结果意图时给出的工作区引用；旧调用方省略时为 undefined。 */
+	workspaceReference?: string | null;
 }>;
 
 const runtimeFileResultReceipts = new WeakMap<
@@ -139,6 +161,7 @@ export interface RuntimeFileBridgePortV1 {
 	writeResult(
 		descriptor: FileDescriptorV1,
 		body: ReadableStream<Uint8Array>,
+		options?: RuntimeFileResultOptionsV1,
 	): Promise<RuntimeFileResultReceiptV1>;
 	/**
 	 * Re-checks the current Session/Execution authority before bytes that were
@@ -160,6 +183,7 @@ function freezeProjection(value: RuntimeFileResultV1): RuntimeFileResultV1 {
 export function createRuntimeFileResultReceiptV1(
 	binding: RuntimeFileBridgeBindingV1,
 	projection: RuntimeFileResultV1,
+	options?: RuntimeFileResultOptionsV1,
 ): RuntimeFileResultReceiptV1 {
 	assertBinding(binding);
 	const frozenBinding = Object.freeze({
@@ -173,6 +197,7 @@ export function createRuntimeFileResultReceiptV1(
 		Object.freeze({
 			binding: frozenBinding,
 			projection: frozenProjection,
+			...(options ? { workspaceReference: options.workspaceReference } : {}),
 		}),
 	);
 	return receipt;
@@ -556,6 +581,7 @@ export function createRuntimeFileBridgeV1(options: {
 		descriptor: FileDescriptorV1,
 		body: ReadableStream<Uint8Array>,
 		context: RuntimeFileBridgeContextV1,
+		options?: RuntimeFileResultOptionsV1,
 	) => Promise<RuntimeFileResultV1>;
 	readonly now?: () => number;
 	readonly isRevoked?: (binding: RuntimeFileBridgeBindingV1) => boolean;
@@ -582,6 +608,9 @@ export function createRuntimeFileBridgeV1(options: {
 		const current = now();
 		if (!Number.isSafeInteger(current) || current >= binding.expiresAt)
 			throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_EXPIRED");
+		assertCurrent();
+	}
+	function assertCurrent(): void {
 		if (isRevoked(binding) === true)
 			throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_REVOKED");
 		if (!isCurrent(binding))
@@ -612,17 +641,30 @@ export function createRuntimeFileBridgeV1(options: {
 		revalidate() {
 			assertLive();
 		},
-		async writeResult(descriptor, body) {
-			assertLive();
+		async writeResult(descriptor, body, resultOptions) {
+			// #3226：结果在 Turn 正常结束时发布，通常已晚于签名 Grant 的 30 秒委托窗口。
+			// 该窗口只约束签发时的委托范围，写入以当前授权为准（工程 Spec §15.4.2、§15.4.4）：
+			// 这里核对撤权与当前性，Host 另行核对可续期的执行授权，平台交换核对持久状态。
+			assertCurrent();
 			const projection = await options.writeResult(
 				descriptor,
 				body,
 				// The execution binding carries the unique result owner; no file id exists
 				// until the authority allocates the confirmed result object.
 				context(binding, RUNTIME_FILE_BRIDGE_RESULT_FILE_ID_V1, "write"),
+				...(resultOptions ? [resultOptions] : []),
 			);
-			assertLive();
-			return createRuntimeFileResultReceiptV1(binding, projection);
+			try {
+				assertCurrent();
+				return createRuntimeFileResultReceiptV1(
+					binding,
+					projection,
+					resultOptions,
+				);
+			} catch (error) {
+				// 平台可能已确认该对象：不能当作未发布，也不能让调用方为它新建意图。
+				throw new RuntimeFileResultUnconfirmedError({ cause: error });
+			}
 		},
 	};
 }

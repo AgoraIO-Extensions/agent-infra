@@ -6,7 +6,6 @@ import {
 	mkdir,
 	mkdtemp,
 	readdir,
-	readFile,
 	realpath,
 	rm,
 	unlink,
@@ -23,8 +22,11 @@ import {
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
+	type RuntimeEvent,
+	RuntimeEventSchema,
 	type RuntimeEventV1,
 	RuntimeEventV1Schema,
+	RuntimeFileEventV2Schema,
 	RuntimeModelConfigurationV3Schema,
 	type RuntimeOperationFactV2,
 	RuntimeOperationFactV2Schema,
@@ -47,7 +49,6 @@ import { claudeQuery } from "./claude-query.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
 import { createClaudeStandardMcpServer } from "./claude-standard-mcp.js";
 import {
-	type ClaudeFileWriteOutput,
 	type ClaudeToolOperationCallbacks,
 	claudeWorkspaceToolNames,
 	claudeWorkspaceTools,
@@ -95,6 +96,12 @@ import {
 	type RuntimeFileBridgePortV1,
 	readRuntimeFileResultReceiptV1,
 } from "./runtime-file-bridge.js";
+import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
+import {
+	planSandboxResultsV1,
+	publishSandboxResultsV1,
+	sandboxResultAnswerText,
+} from "./sandbox-result-references.js";
 import {
 	boundedRuntimeSkillRead,
 	type RuntimeFilesystemSkillDirectoryV1,
@@ -105,6 +112,12 @@ import {
 	type StandardMcpClientOptions,
 	type StandardMcpOperation,
 } from "./standard-mcp-client.js";
+import {
+	appendTurnOperationFactV1,
+	isTurnResultPublicationV1,
+	settleTurnResultPublicationV1,
+	type TurnResultPublicationV1,
+} from "./turn-result-publication.js";
 
 export interface ClaudeRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -263,9 +276,15 @@ interface Turn {
 	status: RuntimeStatusV1;
 	/** An uncertain Connection operation permanently occupies this Turn after restart. */
 	unknownHold?: true;
-	events: RuntimeEventV1[];
+	/** V1 events plus #3226 V2 result-file events; each keeps its original version. */
+	events: RuntimeEvent[];
 	/** Durable metadata-only facts emitted at the Claude model/tool boundary. */
 	operationFacts?: RuntimeOperationFactV2[];
+	/**
+	 * #3226：SDK `result` 成功、最终回答已确认后保存的发布计划；计划收敛后才写终态，
+	 * 重启时沿已保存的进度继续。
+	 */
+	resultPublication?: TurnResultPublicationV1;
 	operationRef?: string;
 	attemptRef?: string;
 	connectionOperations?: ConnectionOperation[];
@@ -763,58 +782,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					"Runtime operation fact is no longer current",
 					409,
 				);
-			turn.operationFacts ??= [];
-			const previous = turn.operationFacts
-				.filter(
-					(entry) =>
-						entry.operationRef === fact.operationRef &&
-						entry.attemptRef === fact.attemptRef,
-				)
-				.at(-1);
-			const duplicate =
-				previous &&
-				previous.kind === fact.kind &&
-				JSON.stringify(previous) === JSON.stringify(fact);
-			if (duplicate) return;
-			if (!previous) {
-				if (fact.phase !== "intent")
-					throw new RuntimeHostError(
-						"RUNTIME_OPERATION_CONFLICT",
-						"Runtime operation must start with intent",
-						409,
-					);
-			} else if (
-				previous.kind !== fact.kind ||
-				(previous.phase !== "intent" && previous.phase !== "started") ||
-				fact.phase === "intent"
-			)
-				throw new RuntimeHostError(
-					"RUNTIME_OPERATION_CONFLICT",
-					"Runtime operation fact transition is invalid",
-					409,
-				);
-			const latestPhases = new Map<string, RuntimeOperationFactV2["phase"]>();
-			for (const entry of turn.operationFacts)
-				latestPhases.set(
-					JSON.stringify([entry.operationRef, entry.attemptRef]),
-					entry.phase,
-				);
-			latestPhases.set(
-				JSON.stringify([fact.operationRef, fact.attemptRef]),
-				fact.phase,
-			);
-			let reservedSlots = 0;
-			for (const phase of latestPhases.values()) {
-				if (phase === "intent") reservedSlots += 2;
-				else if (phase === "started") reservedSlots += 1;
-			}
-			if (turn.operationFacts.length + 1 + reservedSlots > 256)
-				throw new RuntimeHostError(
-					"RUNTIME_OPERATION_CONFLICT",
-					"Runtime operation fact journal is full",
-					409,
-				);
-			turn.operationFacts.push(fact);
+			appendTurnOperationFactV1(turn, fact);
 		});
 	}
 	private constructor(
@@ -1113,6 +1081,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					executions.add(turn.executionId);
 					turns.add(turn.turnId);
 					users.add(turn.userMessageId);
+					if (
+						turn.resultPublication !== undefined &&
+						!isTurnResultPublicationV1(turn.resultPublication)
+					)
+						unavailable();
 					let completed = false;
 					let corrected = false;
 					let previousCursor = 0;
@@ -1121,7 +1094,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						const cursorNumber = cursor ? Number(cursor[1]) : 0;
 						if (
 							(completed && !(event.type === "status" && !corrected)) ||
-							!RuntimeEventV1Schema.safeParse(event).success ||
+							!RuntimeEventSchema.safeParse(event).success ||
+							(event.schemaVersion === 2 &&
+								!RuntimeFileEventV2Schema.safeParse(event).success) ||
 							event.executionId !== turn.executionId ||
 							!Number.isSafeInteger(cursorNumber) ||
 							cursorNumber < 1 ||
@@ -1163,6 +1138,26 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				await file.update((state) => {
 					for (const turn of state.turns) {
 						normalizeClaudeUncertainConnectionOperations(turn);
+						// #3226：SDK result 已确认、发布中断的 Turn 沿已保存的进度收敛（不重发），
+						// 收敛后按原生 completed 写终态；其余未终结 Turn 仍按原规则处理。
+						if (!terminal(turn.status) && turn.resultPublication) {
+							settleTurnResultPublicationV1(turn);
+							if (turn.status === "running" && !turn.unknownHold) {
+								state.sequence++;
+								turn.events.push(
+									RuntimeEventV1Schema.parse({
+										schemaVersion: 1,
+										executionId: turn.executionId,
+										adapterEventKey: randomUUID(),
+										cursor: `claude-${state.sequence}`,
+										occurredAt: new Date().toISOString(),
+										type: "completed",
+										payload: { status: "completed" },
+									}),
+								);
+								turn.status = "completed";
+							}
+						}
 						if (turn.kind === "native-command" && !terminal(turn.status)) {
 							turn.unknownHold = true;
 							if (!hasUnknownStatusEvent(turn)) {
@@ -1841,47 +1836,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			await transport.close();
 			throw error;
 		}
-		let resultFileWritten = false;
-		let resultFileInFlight = false;
-		const onResultFile = async (output: ClaudeFileWriteOutput) => {
-			if (!fileBridge || resultFileWritten || resultFileInFlight) return;
-			resultFileInFlight = true;
-			try {
-				if (!isAbsolute(output.filePath)) return;
-				const root = await realpath(workspace).catch(() => undefined);
-				const actual = await realpath(output.filePath).catch(() => undefined);
-				if (!root || !actual) return;
-				const within = relative(root, actual);
-				if (!within || within.startsWith("..") || isAbsolute(within)) return;
-				const content =
-					typeof output.content === "string"
-						? output.content
-						: await readFile(actual, "utf8").catch(() => undefined);
-				if (content === undefined) return;
-				const bytes = Buffer.from(content, "utf8");
-				if (bytes.byteLength > 10 * 1024 * 1024) return;
-				const receipt = await fileBridge.writeResult(
-					{
-						name: basename(within),
-						mediaType: "text/plain",
-						sizeBytes: bytes.byteLength,
-						sha256: createHash("sha256").update(bytes).digest("hex"),
-					},
-					new ReadableStream<Uint8Array>({
-						start(controller) {
-							controller.enqueue(bytes);
-							controller.close();
-						},
-					}),
-				);
-				await this.recordResultFile(command, receipt);
-				resultFileWritten = true;
-			} catch {
-				// Result publication is fail-closed and must not corrupt the native Turn.
-			} finally {
-				resultFileInFlight = false;
-			}
-		};
 		const toolFacts = new Map<
 			string,
 			{
@@ -2042,7 +1996,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					...claudeWorkspaceTools(
 						workspace,
 						join(directory, "memory"),
-						onResultFile,
 						resolveReadOnlySkillFile
 							? {
 									...toolOperations,
@@ -2059,7 +2012,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						...(browserMcpServer ? { browser: browserMcpServer } : {}),
 					},
 					...skillLaunchOptions,
-					systemPrompt: `You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories. Read MEMORY.md there for saved user preferences when present.`,
+					systemPrompt: `You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories. Read MEMORY.md there for saved user preferences when present.\n${SANDBOX_FILE_INSTRUCTIONS_V1}`,
 					model: option.model,
 					effort: selection.reasoningLevel as EffortLevel,
 					thinking: { type: "adaptive" },
@@ -2234,14 +2187,20 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						});
 					if (message.type === "result") {
 						await settleToolFacts();
-						await this.status(
-							file,
-							command.executionId,
+						const status =
 							transport.failure() ??
-								(message.subtype === "success" && !message.is_error
-									? "completed"
-									: "failed"),
-						);
+							(message.subtype === "success" && !message.is_error
+								? "completed"
+								: "failed");
+						// #3226：SDK result 确认最终回答后、写终态前发布回答内 sandbox: 引用。
+						if (status === "completed" && !handle.retiring)
+							await this.publishTurnResults(
+								file,
+								command,
+								fileBridge,
+								workspace,
+							);
+						await this.status(file, command.executionId, status);
 						break;
 					}
 				}
@@ -2301,6 +2260,65 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			.operations.find((entry) => entry.key === operationKey(command))?.record;
 		if (!resolved) await this.retire(ref);
 		return resolved ?? result(command, ref, unknownResult);
+	}
+	/**
+	 * #3226：解析最终回答中的 `sandbox:` 引用，持久保存发布计划后逐个发布；计划与每一步
+	 * 进度都在 Turn 写终态之前进入同一持久状态。
+	 */
+	private async publishTurnResults(
+		file: DurableJsonFile<Session>,
+		command: RuntimeDriverCommand,
+		fileBridge:
+			| import("./runtime-file-bridge.js").RuntimeFileBridgePortV1
+			| undefined,
+		workspace: string,
+	) {
+		const current = () =>
+			file
+				.read()
+				.turns.find((turn) => turn.executionId === command.executionId);
+		const turn = current();
+		if (!turn || turn.status !== "running" || turn.unknownHold) return;
+		const { plan } = planSandboxResultsV1({
+			text: sandboxResultAnswerText(turn.events),
+		});
+		if (!plan) return;
+		await file.update((state) => {
+			const draft = state.turns.find(
+				(entry) => entry.executionId === command.executionId,
+			);
+			if (
+				!draft ||
+				draft.status !== "running" ||
+				draft.unknownHold ||
+				draft.resultPublication
+			)
+				unavailable();
+			draft.resultPublication = { plan };
+		});
+		await publishSandboxResultsV1({
+			bridge: fileBridge,
+			workspaceRoot: workspace,
+			ledger: {
+				read: () => current()?.resultPublication?.plan,
+				commit: async ({ plan: next, facts, receipt }) => {
+					if (receipt) await this.recordResultFile(command, receipt);
+					await file.update((state) => {
+						const draft = state.turns.find(
+							(entry) => entry.executionId === command.executionId,
+						);
+						if (!draft?.resultPublication || terminal(draft.status))
+							throw new RuntimeHostError(
+								"RUNTIME_OPERATION_CONFLICT",
+								"Runtime operation fact is no longer current",
+								409,
+							);
+						for (const fact of facts) appendTurnOperationFactV1(draft, fact);
+						draft.resultPublication.plan = next;
+					});
+				},
+			},
+		});
 	}
 	private async event(
 		file: DurableJsonFile<Session>,
@@ -2595,7 +2613,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		command: RuntimeDriverCommand,
 		result: import("./runtime-file-bridge.js").RuntimeFileResultReceiptV1,
 	) {
-		const { binding, projection } = readRuntimeFileResultReceiptV1(result);
+		const { binding, projection, workspaceReference } =
+			readRuntimeFileResultReceiptV1(result);
 		if (
 			binding.agentId !== command.agentId ||
 			binding.conversationId !== command.conversationId ||
@@ -2622,21 +2641,28 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			)
 				return;
 			state.sequence++;
+			const base = {
+				executionId: command.executionId,
+				adapterEventKey: randomUUID(),
+				cursor: `claude-${state.sequence}`,
+				occurredAt: new Date().toISOString(),
+				type: "file" as const,
+			};
+			const payload = {
+				fileId: parsed.fileId,
+				name: parsed.descriptor.name,
+				mimeType: parsed.descriptor.mediaType,
+				sizeBytes: parsed.descriptor.sizeBytes,
+			};
+			// #3226：带工作区引用（可为 null）的结果按 V2 记录，平台持久化前与文件记录核对。
 			turn.events.push(
-				RuntimeEventV1Schema.parse({
-					schemaVersion: 1,
-					executionId: command.executionId,
-					adapterEventKey: randomUUID(),
-					cursor: `claude-${state.sequence}`,
-					occurredAt: new Date().toISOString(),
-					type: "file",
-					payload: {
-						fileId: parsed.fileId,
-						name: parsed.descriptor.name,
-						mimeType: parsed.descriptor.mediaType,
-						sizeBytes: parsed.descriptor.sizeBytes,
-					},
-				}),
+				workspaceReference === undefined
+					? RuntimeEventV1Schema.parse({ ...base, schemaVersion: 1, payload })
+					: RuntimeFileEventV2Schema.parse({
+							...base,
+							schemaVersion: 2,
+							payload: { ...payload, workspaceReference },
+						}),
 			);
 		});
 		for (const wake of this.waiters.get(session.ref) ?? []) wake();
@@ -2896,7 +2922,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		afterCursor?: string,
 		signal?: AbortSignal,
-	): Promise<AsyncIterable<RuntimeEventV1>> {
+	): Promise<AsyncIterable<RuntimeEvent>> {
 		await this.replayEvents(ref, executionId, afterCursor);
 		const self = this;
 		return (async function* () {

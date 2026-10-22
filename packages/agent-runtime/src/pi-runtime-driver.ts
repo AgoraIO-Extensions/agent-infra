@@ -68,6 +68,7 @@ export const PiRuntimeDriver = {
 			browserCapability: options.browserCapability,
 			supportsAttachments: true,
 			supportsResultFiles: true,
+			sandboxReferences: true,
 			supportsConnection: options.standardConnectionClient !== undefined,
 			cursorPrefix: "pi",
 			nativeCommandSourceVersion: "0.99.0",

@@ -8,6 +8,7 @@ import {
 	readFile,
 	rm,
 	stat,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
 import { createServer, type IncomingMessage, Server } from "node:http";
@@ -94,6 +95,7 @@ import {
 	type RuntimeFileBridgePortV1,
 } from "./runtime-file-bridge.js";
 import { RuntimeHost } from "./runtime-host.js";
+import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 type CancelTurnTestHook = (
@@ -2722,7 +2724,11 @@ describe("Codex Runtime Driver", () => {
 			"thread/turns/list",
 		]);
 		expect(bridge.requests[1]?.params).toEqual({ includeLayers: false });
-		expect(bridge.requests[2]?.params).toEqual({ historyMode: "paginated" });
+		// 平台文件交换说明只随 thread/start 的 developer 指令进入新线程（#3226）。
+		expect(bridge.requests[2]?.params).toEqual({
+			historyMode: "paginated",
+			developerInstructions: SANDBOX_FILE_INSTRUCTIONS_V1,
+		});
 		expect(bridge.requests[4]?.params).toEqual({
 			threadId: bridge.nativeThreadId,
 			itemsView: "notLoaded",
@@ -3463,7 +3469,16 @@ describe("Codex Runtime Driver", () => {
 		);
 	});
 
-	it("persists one execution-bound result for a native fileChange", async () => {
+	// #3226：回答内 sandbox: 引用在 turn/completed 写终态前发布，apply_patch 不再隐式发布。
+	const codexPng = Buffer.from(
+		"89504e470d0a1a0a0000000d4948445200000001000000010806000000" +
+			"1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082",
+		"hex",
+	);
+	const codexPdf = Buffer.from(
+		"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<<>>\nendobj\n",
+	);
+	async function codexReferenceFixture(onWrite?: () => Promise<void>) {
 		const directory = await runtimeDirectory();
 		const path = join(directory, "driver.json");
 		const bridge = new TestCodexBridge();
@@ -3481,14 +3496,21 @@ describe("Codex Runtime Driver", () => {
 			conversationKey,
 			"workspace",
 		);
-		await mkdir(workspace, { recursive: true, mode: 0o700 });
-		const nativePath = join(workspace, "answer.txt");
-		await writeFile(nativePath, "native answer", { mode: 0o600 });
+		await mkdir(join(workspace, "out"), { recursive: true, mode: 0o700 });
+		// 模拟原生 shell 生成的二进制文件。
+		await writeFile(join(workspace, "out", "chart.png"), codexPng);
+		await writeFile(join(workspace, "out", "report.pdf"), codexPdf);
+		let count = 0;
 		const writeResult = vi.fn(
 			async (
 				descriptor: Parameters<RuntimeFileBridgePortV1["writeResult"]>[0],
-			) =>
-				createRuntimeFileResultReceiptV1(
+				body: Parameters<RuntimeFileBridgePortV1["writeResult"]>[1],
+				options?: Parameters<RuntimeFileBridgePortV1["writeResult"]>[2],
+			) => {
+				for await (const _chunk of body);
+				await onWrite?.();
+				count += 1;
+				return createRuntimeFileResultReceiptV1(
 					{
 						actorId: "actor-codex",
 						channelId: "web",
@@ -3502,14 +3524,16 @@ describe("Codex Runtime Driver", () => {
 					},
 					{
 						schemaVersion: 1 as const,
-						fileId: "result-file-codex-native",
+						fileId: `result-file-codex-${count}`,
 						kind: "result" as const,
 						descriptor,
 						status: "available" as const,
 						createdAt: new Date().toISOString(),
 						expiresAt: new Date(Date.now() + 60_000).toISOString(),
 					},
-				),
+					options,
+				);
+			},
 		);
 		const accepted = await driver.execute(command, {
 			fileBridge: {
@@ -3520,58 +3544,224 @@ describe("Codex Runtime Driver", () => {
 				revalidate: () => {},
 			},
 		});
-		await bridge.emitFileChangeCompleted(nativePath);
-		await bridge.emitFileChangeCompleted(nativePath);
-		await bridge.emitTurnCompleted("completed");
-		const events = await driver.replayEvents(
-			accepted.nativeSessionRef,
-			command.executionId,
+		return { path, bridge, driver, command, workspace, writeResult, accepted };
+	}
+
+	it("does not publish a native fileChange as a result file (#3226)", async () => {
+		const f = await codexReferenceFixture();
+		await f.bridge.emitFileChangeCompleted(
+			join(f.workspace, "out", "chart.png"),
 		);
-		expect(writeResult).toHaveBeenCalledOnce();
-		expect(writeResult.mock.calls[0]?.[0]).toMatchObject({
-			name: "answer.txt",
-			mediaType: "text/plain",
-			sizeBytes: Buffer.byteLength("native answer"),
-		});
-		expect(events.filter((event) => event.type === "file")).toHaveLength(1);
-		await bridge.emitFileChangeCompleted(nativePath);
-		expect(writeResult).toHaveBeenCalledOnce();
+		await f.bridge.emitTurnCompleted("completed");
+		await vi.waitFor(async () =>
+			expect(
+				await persistedExecutionStatus(
+					f.path,
+					f.accepted.nativeSessionRef,
+					f.command.executionId,
+				),
+			).toBe("completed"),
+		);
+		expect(f.writeResult).not.toHaveBeenCalled();
+		await expect(
+			f.driver.replayEvents(f.accepted.nativeSessionRef, f.command.executionId),
+		).resolves.not.toContainEqual(expect.objectContaining({ type: "file" }));
 	});
 
-	it("rejects a native fileChange outside the Conversation workspace", async () => {
-		const directory = await runtimeDirectory();
-		const path = join(directory, "driver.json");
-		const bridge = new TestCodexBridge();
-		const driver = await openDriver(path, bridge);
-		drivers.push(driver);
-		const command = submitCommand();
-		const conversationKey = codexConversationKey({
-			agentId: command.agentId,
-			conversationId: command.conversationId,
-			sessionGeneration: command.sessionGeneration,
-		});
-		await mkdir(
-			join(`${path}.native`, "conversations", conversationKey, "workspace"),
-			{ recursive: true, mode: 0o700 },
+	it("publishes sandbox: references from the final agentMessage before turn/completed (#3226)", async () => {
+		const f = await codexReferenceFixture();
+		await f.bridge.emitAgentMessageCompleted(
+			[
+				"Generated with the shell: ![chart](sandbox:out/chart.png)",
+				"and [report](sandbox:/out/report.pdf).",
+				"",
+				"    [indented](sandbox:out/ignored.png)",
+				"",
+				"Code: [driver.ts](src/driver.ts)",
+			].join("\n"),
 		);
-		const outside = join(directory, "outside.txt");
-		await writeFile(outside, "private", { mode: 0o600 });
-		const writeResult = vi.fn<RuntimeFileBridgePortV1["writeResult"]>();
-		const accepted = await driver.execute(command, {
-			fileBridge: {
-				readInput: async () => {
-					throw new Error("unused");
+		await f.bridge.emitTurnCompleted("completed");
+		await vi.waitFor(
+			async () =>
+				expect(
+					await persistedExecutionStatus(
+						f.path,
+						f.accepted.nativeSessionRef,
+						f.command.executionId,
+					),
+				).toBe("completed"),
+			{ timeout: 10_000 },
+		);
+		expect(
+			f.writeResult.mock.calls.map((call) => [
+				call[0].mediaType,
+				call[0].sha256,
+				call[2],
+			]),
+		).toEqual([
+			[
+				"image/png",
+				createHash("sha256").update(codexPng).digest("hex"),
+				{ workspaceReference: "out/chart.png" },
+			],
+			[
+				"application/pdf",
+				createHash("sha256").update(codexPdf).digest("hex"),
+				{ workspaceReference: "out/report.pdf" },
+			],
+		]);
+		const events = await f.driver.replayEvents(
+			f.accepted.nativeSessionRef,
+			f.command.executionId,
+		);
+		expect(
+			events
+				.filter((event) => event.type === "file")
+				.map((event) => [event.schemaVersion, event.payload]),
+		).toEqual([
+			[
+				2,
+				{
+					fileId: "result-file-codex-1",
+					name: "chart.png",
+					mimeType: "image/png",
+					sizeBytes: codexPng.byteLength,
+					workspaceReference: "out/chart.png",
 				},
-				writeResult,
-				revalidate: () => {},
-			},
+			],
+			[
+				2,
+				{
+					fileId: "result-file-codex-2",
+					name: "report.pdf",
+					mimeType: "application/pdf",
+					sizeBytes: codexPdf.byteLength,
+					workspaceReference: "out/report.pdf",
+				},
+			],
+		]);
+		expect(events.at(-1)).toMatchObject({
+			type: "completed",
+			payload: { status: "completed" },
 		});
-		await bridge.emitFileChangeCompleted(outside);
-		await bridge.emitTurnCompleted("completed");
-		expect(writeResult).not.toHaveBeenCalled();
-		await expect(
-			driver.replayEvents(accepted.nativeSessionRef, command.executionId),
-		).resolves.not.toContainEqual(expect.objectContaining({ type: "file" }));
+		const publication = events.flatMap((event) =>
+			event.type === "operation" &&
+			event.payload.kind === "tool" &&
+			event.payload.toolId === "workspace.publish_result_file"
+				? [event.payload]
+				: [],
+		);
+		expect(publication.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"completed",
+			"intent",
+			"started",
+			"completed",
+		]);
+		expect(JSON.stringify(publication)).not.toMatch(/chart|report|out\//);
+	});
+
+	it("fails references outside the workspace and keeps the Turn completed (#3226)", async () => {
+		const f = await codexReferenceFixture();
+		const outside = join(dirname(f.path), "outside.png");
+		await writeFile(outside, codexPng);
+		await symlink(outside, join(f.workspace, "out", "link.png"));
+		await f.bridge.emitAgentMessageCompleted(
+			"[link](sandbox:out/link.png) [escape](sandbox:../outside.png) [dir](sandbox:out)",
+		);
+		await f.bridge.emitTurnCompleted("completed");
+		await vi.waitFor(
+			async () =>
+				expect(
+					await persistedExecutionStatus(
+						f.path,
+						f.accepted.nativeSessionRef,
+						f.command.executionId,
+					),
+				).toBe("completed"),
+			{ timeout: 10_000 },
+		);
+		expect(f.writeResult).not.toHaveBeenCalled();
+		const failures = (
+			await f.driver.replayEvents(
+				f.accepted.nativeSessionRef,
+				f.command.executionId,
+			)
+		).flatMap((event) =>
+			event.type === "operation" &&
+			event.payload.kind === "tool" &&
+			event.payload.toolId === "workspace.publish_result_file" &&
+			event.payload.phase === "failed"
+				? [event.payload.failureCode]
+				: [],
+		);
+		expect(failures).toEqual([
+			"request_rejected",
+			"request_rejected",
+			"request_rejected",
+		]);
+	});
+
+	it("does not publish references of a failed native Turn (#3226)", async () => {
+		const f = await codexReferenceFixture();
+		await f.bridge.emitAgentMessageCompleted("![chart](sandbox:out/chart.png)");
+		await f.bridge.emitTurnCompleted("failed");
+		await vi.waitFor(async () =>
+			expect(
+				await persistedExecutionStatus(
+					f.path,
+					f.accepted.nativeSessionRef,
+					f.command.executionId,
+				),
+			).toBe("failed"),
+		);
+		expect(f.writeResult).not.toHaveBeenCalled();
+	});
+
+	it("settles an interrupted Codex publication on restart without republishing (#3226)", async () => {
+		const writing = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const f = await codexReferenceFixture(async () => {
+			writing.resolve();
+			await release.promise;
+		});
+		await f.bridge.emitAgentMessageCompleted(
+			"![chart](sandbox:out/chart.png) [report](sandbox:out/report.pdf)",
+		);
+		await f.bridge.emitTurnCompleted("completed");
+		await writing.promise;
+		// 第一份 writeResult 进行中时关闭 Driver，相当于进程退出。
+		await f.driver.close();
+		release.resolve();
+		const reopened = await openDriver(f.path, new TestCodexBridge());
+		drivers.push(reopened);
+		expect(
+			await persistedExecutionStatus(
+				f.path,
+				f.accepted.nativeSessionRef,
+				f.command.executionId,
+			),
+		).toBe("completed");
+		expect(f.writeResult).toHaveBeenCalledOnce();
+		const events = await reopened.replayEvents(
+			f.accepted.nativeSessionRef,
+			f.command.executionId,
+		);
+		expect(events.some((event) => event.type === "file")).toBe(false);
+		expect(
+			events.flatMap((event) =>
+				event.type === "operation" &&
+				event.payload.kind === "tool" &&
+				event.payload.toolId === "workspace.publish_result_file" &&
+				!["intent", "started"].includes(event.payload.phase)
+					? [[event.payload.phase, event.payload.failureCode]]
+					: [],
+			),
+		).toEqual([
+			["unknown", "recovery_unconfirmed"],
+			["failed", "dependency_unavailable"],
+		]);
 	});
 
 	// #3201：官方 lane 的原生工具在 Session Sandbox 内执行，Driver 从 item 生命周期记录

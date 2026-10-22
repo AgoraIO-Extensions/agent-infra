@@ -12,6 +12,7 @@ import {
 	type ConversationPersistedEventPayloadV1,
 	type FileRecordV1,
 	isConfirmedResultFileV1,
+	isWorkspaceReferenceV1,
 	type PersistedRuntimeConversationEventV1,
 	parseConversationOperationEventV2,
 	parseConversationOperationFactV2,
@@ -249,19 +250,28 @@ function normalizedEvent(value: unknown): ConversationNormalizedEventV1 {
 		};
 	}
 	if (type === "result.file") {
-		const input = exactRecord(value, [
-			"type",
-			"fileId",
-			"name",
-			"mediaType",
-			"sizeBytes",
-		]);
+		const input = exactRecord(
+			value,
+			["type", "fileId", "name", "mediaType", "sizeBytes"],
+			["workspaceReference"],
+		);
+		// #3226：V2 事件带工作区引用（可为 null）；省略表示 V1。
+		const hasWorkspaceReference = Object.hasOwn(input, "workspaceReference");
+		if (
+			hasWorkspaceReference &&
+			input.workspaceReference !== null &&
+			!isWorkspaceReferenceV1(input.workspaceReference)
+		)
+			return unavailable();
 		return {
 			type: "result.file",
 			fileId: text(input.fileId),
 			name: text(input.name, 1024),
 			mediaType: text(input.mediaType, 255),
 			sizeBytes: safeInteger(input.sizeBytes, 0),
+			...(hasWorkspaceReference
+				? { workspaceReference: input.workspaceReference as string | null }
+				: {}),
 		};
 	}
 	if (type === "conversation.error") {

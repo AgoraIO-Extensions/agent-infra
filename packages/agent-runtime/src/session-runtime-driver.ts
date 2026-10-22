@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import {
 	type BrowserCapabilityAvailableV1,
@@ -11,8 +11,11 @@ import {
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
+	type RuntimeEvent,
+	RuntimeEventSchema,
 	type RuntimeEventV1,
 	RuntimeEventV1Schema,
+	RuntimeFileEventV2Schema,
 	type RuntimeOperationFactV2,
 	RuntimeOperationFactV2Schema,
 	type RuntimeSelectionV1,
@@ -57,10 +60,25 @@ import {
 } from "./runtime-authorization.js";
 import { readRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
 import {
+	planSandboxResultsV1,
+	publishSandboxResultsV1,
+	SANDBOX_RESULT_MAX_REFERENCES_V1,
+	SANDBOX_RESULT_TOOL_ID_V1,
+	type SandboxResultBlockV1,
+	sandboxResultAnswerText,
+	settleSandboxResultsWithoutBridgeV1,
+} from "./sandbox-result-references.js";
+import {
 	boundedRuntimeSkillRead,
 	type RuntimeFilesystemSkillDirectoryV1,
 	RuntimeSkillDirectoryErrorV1,
 } from "./skill-hub-directory.js";
+import {
+	appendTurnOperationFactV1,
+	isTurnResultPublicationV1,
+	settleTurnResultPublicationV1,
+	type TurnResultPublicationV1,
+} from "./turn-result-publication.js";
 
 /**
  * Structured native prompt content. Drivers that keep a string-only native
@@ -116,6 +134,11 @@ export interface SessionRuntimeDriverOptions {
 	readonly supportsAttachments?: boolean;
 	/** Set only when the native adapter supplies a confirmed result-file callback. */
 	readonly supportsResultFiles?: boolean;
+	/**
+	 * #3226：标准模板（Pi、OpenCode）在 Turn 正常结束时解析最终回答中的 `sandbox:` 引用并
+	 * 发布为结果文件。ACP 块映射不受此开关影响。
+	 */
+	readonly sandboxReferences?: boolean;
 	/** Host-owned protected Connection client is available to this Driver. */
 	readonly supportsConnection?: boolean;
 	/**
@@ -172,10 +195,11 @@ export interface NativeSessionOptions {
 		phase: "started" | "completed" | "failed",
 	) => Promise<void>;
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
-	readonly resultFile?: (input: {
-		readonly path: string;
-		readonly content: string;
-	}) => Promise<void>;
+	/**
+	 * #3226：ACP `agent_message_chunk` 中的 `image`/`resource_link` 块，在流中暂存，
+	 * Turn 正常结束时与回答内引用一并处理。
+	 */
+	readonly resultBlock?: (block: SandboxResultBlockV1) => void;
 	update: (event?: Pick<RuntimeEventV1, "type" | "payload">) => Promise<void>;
 }
 export interface NativeSession {
@@ -258,11 +282,17 @@ interface Turn {
 	nativeStopReason?: string;
 	nativeCheckpoint?: string;
 	nativeTerminalCheckpoint?: string;
-	events: RuntimeEventV1[];
+	/** V1 events plus #3226 V2 result-file events; each keeps its original version. */
+	events: RuntimeEvent[];
 	/** Durable metadata-only facts emitted by shared non-Codex operation adapters. */
 	operationFacts?: RuntimeOperationFactV2[];
 	operationRef?: string;
 	attemptRef?: string;
+	/**
+	 * #3226：原生 Turn 已以 completed 结束、最终回答已确认后保存的发布计划与原生终态；
+	 * 计划收敛后才写终态事件，重启时沿已保存的进度继续。
+	 */
+	resultPublication?: TurnResultPublicationV1;
 }
 function uncertainOperationFacts(turn: Turn) {
 	const latest = new Map<string, RuntimeOperationFactV2>();
@@ -512,58 +542,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					"Runtime operation fact is no longer current",
 					409,
 				);
-			turn.operationFacts ??= [];
-			const previous = turn.operationFacts
-				.filter(
-					(entry) =>
-						entry.operationRef === fact.operationRef &&
-						entry.attemptRef === fact.attemptRef,
-				)
-				.at(-1);
-			const duplicate =
-				previous &&
-				previous.kind === fact.kind &&
-				JSON.stringify(previous) === JSON.stringify(fact);
-			if (duplicate) return;
-			if (!previous) {
-				if (fact.phase !== "intent")
-					throw new RuntimeHostError(
-						"RUNTIME_OPERATION_CONFLICT",
-						"Runtime operation must start with intent",
-						409,
-					);
-			} else if (
-				previous.kind !== fact.kind ||
-				(previous.phase !== "intent" && previous.phase !== "started") ||
-				fact.phase === "intent"
-			)
-				throw new RuntimeHostError(
-					"RUNTIME_OPERATION_CONFLICT",
-					"Runtime operation fact transition is invalid",
-					409,
-				);
-			const latestPhases = new Map<string, RuntimeOperationFactV2["phase"]>();
-			for (const entry of turn.operationFacts)
-				latestPhases.set(
-					JSON.stringify([entry.operationRef, entry.attemptRef]),
-					entry.phase,
-				);
-			latestPhases.set(
-				JSON.stringify([fact.operationRef, fact.attemptRef]),
-				fact.phase,
-			);
-			let reservedSlots = 0;
-			for (const phase of latestPhases.values()) {
-				if (phase === "intent") reservedSlots += 2;
-				else if (phase === "started") reservedSlots += 1;
-			}
-			if (turn.operationFacts.length + 1 + reservedSlots > 256)
-				throw new RuntimeHostError(
-					"RUNTIME_OPERATION_CONFLICT",
-					"Runtime operation fact journal is full",
-					409,
-				);
-			turn.operationFacts.push(fact);
+			appendTurnOperationFactV1(turn, fact);
 		});
 	}
 	static async open(options: SessionRuntimeDriverOptions) {
@@ -800,11 +779,19 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					turns.add(turn.turnId);
 					let completed = false;
 					let corrected = false;
+					if (
+						turn.resultPublication !== undefined &&
+						(!isTurnResultPublicationV1(turn.resultPublication) ||
+							turn.resultPublication.stopReason === undefined)
+					)
+						unavailable();
 					for (const event of turn.events) {
 						sequence++;
 						if (
 							(completed && !(event.type === "status" && !corrected)) ||
-							!RuntimeEventV1Schema.safeParse(event).success ||
+							!RuntimeEventSchema.safeParse(event).success ||
+							(event.schemaVersion === 2 &&
+								!RuntimeFileEventV2Schema.safeParse(event).success) ||
 							event.executionId !== turn.executionId ||
 							event.cursor !== `${this.options.cursorPrefix}-${sequence}` ||
 							eventKeys.has(event.adapterEventKey)
@@ -871,9 +858,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				await file.update((draft) => {
 					const sessionCancelled = this.cancelled(binding.ref);
 					for (const turn of draft.turns) {
+						// #3226：发布中断的引用先沿已保存进度收敛（不重发），再按原规则处理 Turn。
+						if (!terminal(turn.status)) settleTurnResultPublicationV1(turn);
 						const uncertainOperations = uncertainOperationFacts(turn);
+						// #3226：结果发布已沿原意图收敛，unknown 的发布不阻塞已完成的原生 Turn。
 						const uncertainTools = uncertainOperations.filter(
-							(fact) => fact.kind === "tool",
+							(fact) =>
+								fact.kind === "tool" &&
+								fact.toolId !== SANDBOX_RESULT_TOOL_ID_V1,
 						);
 						const hold =
 							turn.unknownHold || uncertainTools.length > 0 || sessionCancelled;
@@ -931,6 +923,25 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				});
 				state = file.read();
 				if (!recover) return file;
+				// #3226：原生 Turn 已正常结束、发布计划已收敛的 Turn，按保存的原生终态完成。
+				for (const turn of state.turns) {
+					const publication = turn.resultPublication;
+					if (
+						turn.status !== "running" ||
+						turn.unknownHold ||
+						!publication?.plan.settled ||
+						publication.stopReason === undefined
+					)
+						continue;
+					await this.status(
+						file,
+						turn.executionId,
+						this.options.completionStatus(publication.stopReason),
+						publication.stopReason,
+						publication.checkpoint,
+					);
+				}
+				state = file.read();
 				const active = state.turns.find((turn) => !terminal(turn.status));
 				if (active?.kind === "native-command") {
 					// A native command has no replay-safe provider receipt. Retain the
@@ -1037,6 +1048,19 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 										type: "text",
 										payload: { delta: recovered.text.slice(text.length) },
 									});
+								// #3226：重启后没有执行期文件交换上下文；回答内引用只记录为未发布。
+								if (
+									this.options.sandboxReferences &&
+									this.options.completionStatus(recovered.stopReason) ===
+										"completed"
+								)
+									await this.recordUnpublishedResults(
+										file,
+										recoverable.executionId,
+										recovered.text,
+										recovered.stopReason,
+										recovered.checkpoint,
+									);
 								await this.status(
 									file,
 									recoverable.executionId,
@@ -1453,55 +1477,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const workspace = join(directory, "workspace");
 		await mkdir(workspace, { recursive: true, mode: 0o700 });
 		if ((await realpath(workspace)) !== workspace) unavailable();
-		let resultFileWritten = false;
-		let resultFileInFlight = false;
-		const resultFile = fileBridge
-			? async (input: { path: string; content: string }) => {
-					if (resultFileWritten || !isAbsolute(input.path)) return;
-					const root = await realpath(workspace).catch(() => undefined);
-					if (!root) return;
-					const candidate = isAbsolute(input.path)
-						? resolve(input.path)
-						: resolve(root, input.path);
-					const within = relative(root, candidate);
-					if (!within || within.startsWith("..") || isAbsolute(within)) return;
-					const bytes = Buffer.from(input.content, "utf8");
-					if (bytes.byteLength > 10 * 1024 * 1024) return;
-					const bindingRecord = await this.binding(command, false).catch(
-						() => undefined,
-					);
-					if (!bindingRecord) return;
-					const state = await this.file(bindingRecord)
-						.then((current) => current.read())
-						.catch(() => undefined);
-					const turn = state?.turns.find(
-						(candidate) => candidate.executionId === command.executionId,
-					);
-					if (!turn || terminal(turn.status)) return;
-					if (resultFileInFlight) return;
-					resultFileInFlight = true;
-					try {
-						const receipt = await fileBridge.writeResult(
-							{
-								name: basename(within),
-								mediaType: "text/plain",
-								sizeBytes: bytes.byteLength,
-								sha256: createHash("sha256").update(bytes).digest("hex"),
-							},
-							new ReadableStream<Uint8Array>({
-								start(controller) {
-									controller.enqueue(bytes);
-									controller.close();
-								},
-							}),
-						);
-						await this.recordResultFile(command, receipt);
-						resultFileWritten = true;
-					} finally {
-						resultFileInFlight = false;
-					}
-				}
-			: undefined;
+		// #3226：ACP 回答中的 image/resource_link 块只在内存中暂存，Turn 正常结束时一并处理。
+		// 单帧受 ACP 流的 1 MiB 上限约束；超过发布上限的块只需要计入超出部分。
+		const resultBlocks: SandboxResultBlockV1[] = [];
+		const resultBlock = (block: SandboxResultBlockV1) => {
+			if (resultBlocks.length <= SANDBOX_RESULT_MAX_REFERENCES_V1 * 3)
+				resultBlocks.push(block);
+		};
 		let admitted: () => void = () => {};
 		const operationRef = randomUUID();
 		const attemptRef = randomUUID();
@@ -1659,7 +1641,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				cwd: workspace,
 				nativeId: before.nativeId,
 				skillDirectory: this.options.skillDirectory,
-				...(resultFile ? { resultFile } : {}),
+				resultBlock,
 				history: before.turns.at(-1)?.nativeTerminalCheckpoint
 					? {
 							checkpoint:
@@ -1782,13 +1764,25 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						outcome: "accepted",
 						status: "running",
 					});
-					await this.status(
-						file,
-						command.executionId,
-						this.options.completionStatus(response.stopReason),
-						response.stopReason,
-						response.checkpoint,
-					);
+					const status = this.options.completionStatus(response.stopReason);
+					// #3226：原生 Turn 以 completed 结束、最终回答已确认后，写终态前发布引用。
+					if (status === "completed")
+						await this.publishTurnResults(
+							file,
+							command,
+							fileBridge,
+							workspace,
+							resultBlocks,
+							response,
+						);
+					if (!unknownHold && !unknownMarking)
+						await this.status(
+							file,
+							command.executionId,
+							status,
+							response.stopReason,
+							response.checkpoint,
+						);
 					admitted();
 				}
 			} catch {
@@ -1901,6 +1895,100 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			await this.status(file, command.executionId, "unknown").catch(() => {});
 			return this.resolve(file, command, unknownResult);
 		}
+	}
+	/** #3226：没有文件交换上下文时，把回答内引用记录为未发布的失败事实。 */
+	private async recordUnpublishedResults(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		text: string,
+		stopReason: string,
+		checkpoint: string | undefined,
+	) {
+		const { plan } = planSandboxResultsV1({ text });
+		if (!plan) return;
+		const settled = settleSandboxResultsWithoutBridgeV1(plan, () => undefined);
+		await file.update((state) => {
+			const draft = state.turns.find(
+				(entry) => entry.executionId === executionId,
+			);
+			if (!draft || terminal(draft.status) || draft.resultPublication) return;
+			for (const fact of settled.facts) appendTurnOperationFactV1(draft, fact);
+			draft.resultPublication = {
+				plan: settled.plan,
+				stopReason,
+				...(checkpoint ? { checkpoint } : {}),
+			};
+		});
+	}
+	/**
+	 * #3226：解析最终回答（标准模板）与暂存的 ACP 块，持久保存发布计划后逐个发布。
+	 * 计划与每一步进度都在 Turn 写终态之前进入同一持久状态。
+	 */
+	private async publishTurnResults(
+		file: DurableJsonFile<Session>,
+		command: Submit,
+		fileBridge:
+			| import("./runtime-file-bridge.js").RuntimeFileBridgePortV1
+			| undefined,
+		workspace: string,
+		blocks: readonly SandboxResultBlockV1[],
+		response: { readonly stopReason: string; readonly checkpoint?: string },
+	) {
+		const current = () =>
+			file
+				.read()
+				.turns.find((turn) => turn.executionId === command.executionId);
+		const turn = current();
+		if (!turn || turn.status !== "running" || turn.unknownHold) return;
+		const { plan, images } = planSandboxResultsV1({
+			...(this.options.sandboxReferences
+				? { text: sandboxResultAnswerText(turn.events) }
+				: {}),
+			blocks,
+			workspaceRoot: workspace,
+		});
+		if (!plan) return;
+		await file.update((state) => {
+			const draft = state.turns.find(
+				(entry) => entry.executionId === command.executionId,
+			);
+			if (
+				!draft ||
+				draft.status !== "running" ||
+				draft.unknownHold ||
+				draft.resultPublication
+			)
+				unavailable();
+			draft.resultPublication = {
+				plan,
+				stopReason: response.stopReason,
+				...(response.checkpoint ? { checkpoint: response.checkpoint } : {}),
+			};
+		});
+		await publishSandboxResultsV1({
+			bridge: fileBridge,
+			workspaceRoot: workspace,
+			images,
+			ledger: {
+				read: () => current()?.resultPublication?.plan,
+				commit: async ({ plan: next, facts, receipt }) => {
+					if (receipt) await this.recordResultFile(command, receipt);
+					await file.update((state) => {
+						const draft = state.turns.find(
+							(entry) => entry.executionId === command.executionId,
+						);
+						if (
+							!draft?.resultPublication ||
+							terminal(draft.status) ||
+							draft.unknownHold
+						)
+							conflict();
+						for (const fact of facts) appendTurnOperationFactV1(draft, fact);
+						draft.resultPublication.plan = next;
+					});
+				},
+			},
+		});
 	}
 	private async event(
 		file: DurableJsonFile<Session>,
@@ -2374,7 +2462,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		command: RuntimeDriverCommand,
 		result: import("./runtime-file-bridge.js").RuntimeFileResultReceiptV1,
 	) {
-		const { binding, projection } = readRuntimeFileResultReceiptV1(result);
+		const { binding, projection, workspaceReference } =
+			readRuntimeFileResultReceiptV1(result);
 		if (
 			binding.agentId !== command.agentId ||
 			binding.conversationId !== command.conversationId ||
@@ -2401,21 +2490,28 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			)
 				return;
 			state.sequence++;
+			const base = {
+				executionId: command.executionId,
+				adapterEventKey: randomUUID(),
+				cursor: `${this.options.cursorPrefix}-${state.sequence}`,
+				occurredAt: new Date().toISOString(),
+				type: "file" as const,
+			};
+			const payload = {
+				fileId: parsed.fileId,
+				name: parsed.descriptor.name,
+				mimeType: parsed.descriptor.mediaType,
+				sizeBytes: parsed.descriptor.sizeBytes,
+			};
+			// #3226：带工作区引用（可为 null）的结果按 V2 记录，平台持久化前与文件记录核对。
 			turn.events.push(
-				RuntimeEventV1Schema.parse({
-					schemaVersion: 1,
-					executionId: command.executionId,
-					adapterEventKey: randomUUID(),
-					cursor: `${this.options.cursorPrefix}-${state.sequence}`,
-					occurredAt: new Date().toISOString(),
-					type: "file",
-					payload: {
-						fileId: parsed.fileId,
-						name: parsed.descriptor.name,
-						mimeType: parsed.descriptor.mediaType,
-						sizeBytes: parsed.descriptor.sizeBytes,
-					},
-				}),
+				workspaceReference === undefined
+					? RuntimeEventV1Schema.parse({ ...base, schemaVersion: 1, payload })
+					: RuntimeFileEventV2Schema.parse({
+							...base,
+							schemaVersion: 2,
+							payload: { ...payload, workspaceReference },
+						}),
 			);
 		});
 		for (const wake of this.waiters.get(bindingRecord.ref) ?? []) wake();
@@ -2640,7 +2736,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		afterCursor?: string,
 		signal?: AbortSignal,
-	): Promise<AsyncIterable<RuntimeEventV1>> {
+	): Promise<AsyncIterable<RuntimeEvent>> {
 		await this.replayEvents(ref, executionId, afterCursor);
 		const self = this;
 		return (async function* () {

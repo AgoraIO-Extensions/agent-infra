@@ -234,16 +234,22 @@ it("passes only a local bearer to an ACP protected MCP session", async () => {
 	}
 });
 
-it("persists the first ACP Diff as a confirmed result file event", async () => {
-	const path = await mkdtemp(join(tmpdir(), "acp-result-file-"));
-	const writeResult = vi.fn(
-		async (descriptor: {
-			name: string;
-			mediaType: string;
-			sizeBytes: number;
-			sha256: string;
-		}) =>
-			createRuntimeFileResultReceiptV1(
+function acpResultWriter() {
+	let count = 0;
+	return vi.fn(
+		async (
+			descriptor: {
+				name: string;
+				mediaType: string;
+				sizeBytes: number;
+				sha256: string;
+			},
+			body: ReadableStream<Uint8Array>,
+			options?: { workspaceReference: string | null },
+		) => {
+			for await (const _chunk of body);
+			count += 1;
+			return createRuntimeFileResultReceiptV1(
 				{
 					actorId: "actor-a",
 					channelId: "web",
@@ -257,15 +263,25 @@ it("persists the first ACP Diff as a confirmed result file event", async () => {
 				},
 				{
 					schemaVersion: 1,
-					fileId: "result-file-acp",
+					fileId: `result-file-acp-${count}`,
 					kind: "result",
 					descriptor,
 					status: "available",
 					createdAt: new Date().toISOString(),
 					expiresAt: new Date(Date.now() + 60_000).toISOString(),
 				},
-			),
+				options,
+			);
+		},
 	);
+}
+
+async function runAcpResultTurn(
+	mode: string,
+	options: { sandboxReferences?: boolean } = {},
+) {
+	const path = await mkdtemp(join(tmpdir(), "acp-result-file-"));
+	const writeResult = acpResultWriter();
 	const driver = await GenericAcpRuntimeDriver.open({
 		path,
 		configVersion: "configuration-a",
@@ -278,12 +294,13 @@ it("persists the first ACP Diff as a confirmed result file event", async () => {
 				reasoningLevels: ["high"],
 			},
 		],
+		...(options.sandboxReferences ? { sandboxReferences: true } : {}),
 		launch: async () => ({
 			command: process.execPath,
 			args: [
 				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
 			],
-			env: { ACP_TEST_MODE: "result-file" },
+			env: { ACP_TEST_MODE: mode },
 		}),
 	});
 	try {
@@ -314,28 +331,94 @@ it("persists the first ACP Diff as a confirmed result file event", async () => {
 				},
 			},
 		);
-		await vi.waitFor(async () =>
-			expect(
-				await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
-			).toBe("completed"),
+		await vi.waitFor(
+			async () =>
+				expect(
+					await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
+				).toBe("completed"),
+			{ timeout: 10_000 },
 		);
-		expect(writeResult).toHaveBeenCalledOnce();
-		expect(
-			(await driver.replayEvents(accepted.nativeSessionRef, "execution-a"))
-				.filter((event) => event.type === "file")
-				.map((event) => event.payload),
-		).toEqual([
-			{
-				fileId: "result-file-acp",
-				name: "acp-result.txt",
-				mimeType: "text/plain",
-				sizeBytes: "ACP result file".length,
-			},
-		]);
+		const events = await driver.replayEvents(
+			accepted.nativeSessionRef,
+			"execution-a",
+		);
+		const state = JSON.parse(
+			await readFile(
+				join(path, accepted.nativeSessionRef, "state.json"),
+				"utf8",
+			),
+		) as {
+			turns: {
+				operationFacts?: {
+					toolId?: string;
+					phase: string;
+					failureCode?: string;
+				}[];
+			}[];
+		};
+		return {
+			writeResult,
+			events,
+			publicationFacts: (state.turns[0]?.operationFacts ?? []).filter(
+				(fact) => fact.toolId === "workspace.publish_result_file",
+			),
+		};
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });
 	}
+}
+
+it("does not publish ACP diffs as result files while tool events stay (#3226)", async () => {
+	const { writeResult, events, publicationFacts } =
+		await runAcpResultTurn("result-file");
+	expect(writeResult).not.toHaveBeenCalled();
+	expect(events.some((event) => event.type === "file")).toBe(false);
+	expect(publicationFacts).toEqual([]);
+	expect(
+		events
+			.filter((event) => event.type === "tool")
+			.map((event) => event.payload),
+	).toContainEqual(
+		expect.objectContaining({ name: "Edit", phase: "completed" }),
+	);
+});
+
+it("publishes ACP image and workspace resource_link blocks and refuses other links (#3226)", async () => {
+	const { writeResult, events, publicationFacts } =
+		await runAcpResultTurn("result-blocks");
+	// 未经验证的 ACP 自定义 Agent 只映射协议块，不解析回答内的 sandbox: 引用。
+	expect(
+		writeResult.mock.calls.map((call) => [call[0].mediaType, call[2]]),
+	).toEqual([
+		["image/png", { workspaceReference: null }],
+		["image/png", { workspaceReference: "out/link.png" }],
+	]);
+	expect(
+		events
+			.filter((event) => event.type === "file")
+			.map((event) =>
+				event.schemaVersion === 2 && event.type === "file"
+					? event.payload.workspaceReference
+					: "v1",
+			),
+	).toEqual([null, "out/link.png"]);
+	expect(
+		publicationFacts
+			.filter((fact) => fact.phase === "failed")
+			.map((fact) => fact.failureCode),
+	).toEqual(["request_rejected"]);
+});
+
+it("also publishes answer references for the standard OpenCode template (#3226)", async () => {
+	const { writeResult } = await runAcpResultTurn("result-blocks", {
+		sandboxReferences: true,
+	});
+	expect(writeResult.mock.calls.map((call) => call[2])).toEqual([
+		{ workspaceReference: "out/text-only.png" },
+		{ workspaceReference: null },
+		{ workspaceReference: "out/link.png" },
+	]);
 });
 
 it("persists a confirmed ACP result and events, then resumes the same session without resubmitting", async () => {

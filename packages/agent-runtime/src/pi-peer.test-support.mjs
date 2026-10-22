@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 
 // Exercise native peers that remain alive after their Host closes stdin.
@@ -34,6 +34,31 @@ const messages = entries
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const finish = async (stopReason) => {
 	if (!isStreaming) return;
+	// #3226：write 工具生成二进制文件，最终回答用 sandbox: 引用交付。
+	if (mode === "result-reference") {
+		await mkdir(`${process.cwd()}/out`, { recursive: true });
+		await writeFile(
+			`${process.cwd()}/out/chart.png`,
+			Buffer.from(
+				"89504e470d0a1a0a0000000d4948445200000001000000010806000000" +
+					"1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082",
+				"hex",
+			),
+		);
+		send({
+			type: "tool_execution_start",
+			toolCallId: "reference-write",
+			toolName: "write",
+			args: { path: "out/chart.png", content: "png" },
+		});
+		send({
+			type: "tool_execution_end",
+			toolCallId: "reference-write",
+			toolName: "write",
+			result: { content: [{ type: "text", text: "ok" }] },
+			isError: false,
+		});
+	}
 	if (mode === "result-file" || mode === "result-file-edit") {
 		const path = `${process.cwd()}/result.txt`;
 		const toolName = mode === "result-file-edit" ? "edit" : "write";
@@ -124,13 +149,17 @@ const finish = async (stopReason) => {
 			args: { path: "result.txt", content: "late" },
 		});
 	}
+	const answer =
+		mode === "result-reference"
+			? "synthetic result ![chart](sandbox:out/chart.png)"
+			: "synthetic result";
 	send({
 		type: "message_update",
-		assistantMessageEvent: { type: "text_delta", delta: "synthetic result" },
+		assistantMessageEvent: { type: "text_delta", delta: answer },
 	});
 	messages.push({
 		role: "assistant",
-		content: [{ type: "text", text: "synthetic result" }],
+		content: [{ type: "text", text: answer }],
 		stopReason,
 	});
 	const persistedMessages = structuredClone(messages);

@@ -1,0 +1,30 @@
+{
+	"name": "@agent-infra/file-content",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsdown",
+		"check-types": "tsc --noEmit",
+		"test": "pnpm build && vitest run src"
+	},
+	"dependencies": {
+		"file-type": "22.1.0"
+	},
+	"devDependencies": {
+		"@agent-infra/config": "workspace:*",
+		"@types/node": "catalog:",
+		"tsdown": "0.22.14",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
+	}
+}

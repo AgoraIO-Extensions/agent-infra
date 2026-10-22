@@ -167,6 +167,7 @@ describe("platform-core package surface", () => {
 			"isTaskApplicationAuthorizationCurrentV1",
 			"isTaskAuthorizationCurrentV1",
 			"isTraceParentV1",
+			"isWorkspaceReferenceV1",
 			"markSkillHubInstallationUpgradeV1",
 			"markSkillHubUpgradeV1",
 			"modelOptionDisplayNameV1",

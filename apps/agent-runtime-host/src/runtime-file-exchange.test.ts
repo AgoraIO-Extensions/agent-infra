@@ -1,4 +1,7 @@
-import type { RuntimeFileExchangeEvidenceV1 } from "@agent-infra/agent-runtime";
+import {
+	type RuntimeFileExchangeEvidenceV1,
+	RuntimeFileResultUnconfirmedError,
+} from "@agent-infra/agent-runtime";
 import { expect, it, vi } from "vitest";
 import { createRuntimeFileBridgeFactoryV1 } from "./runtime-file-exchange.js";
 
@@ -256,4 +259,150 @@ it("bounds result upload streams before completing the file", async () => {
 		),
 	).rejects.toThrow("RUNTIME_FILE_RESULT_SIZE_MISMATCH");
 	expect(fetcher).toHaveBeenCalledTimes(2);
+});
+
+const referencedDescriptor = {
+	name: "chart.png",
+	mediaType: "image/png",
+	sizeBytes: 2,
+	sha256: "b".repeat(64),
+};
+
+const referencedFile = {
+	schemaVersion: 1,
+	fileId: "result-2",
+	kind: "result",
+	descriptor: referencedDescriptor,
+	status: "available",
+	createdAt: "2026-01-01T00:00:00Z",
+	expiresAt: "2099-01-01T00:00:00Z",
+};
+
+function twoBytes() {
+	return new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.enqueue(new Uint8Array([1, 2]));
+			controller.close();
+		},
+	});
+}
+
+function resultFetcher(complete: () => Promise<Response>) {
+	return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+		const url = String(input);
+		if (url.endsWith("runtime-exchange"))
+			return response(
+				{ ...referencedFile, status: "pending" },
+				"/api/v1/conversations/conversation-1/files/result-2/content",
+			);
+		if (url.endsWith("/content")) {
+			await new Response(init?.body).arrayBuffer();
+			return new Response(null, { status: 204 });
+		}
+		if (url.endsWith("/complete")) return complete();
+		throw new Error(`unexpected request ${url}`);
+	});
+}
+
+function resultBridge(fetcher: ReturnType<typeof resultFetcher>) {
+	return createRuntimeFileBridgeFactoryV1({
+		origin: "https://files.example.test",
+		serviceToken: "s".repeat(32),
+		fetch: fetcher,
+	})(binding, evidence);
+}
+
+it("sends the workspace reference with the result exchange and binds it into idempotency (#3226)", async () => {
+	const fetcher = resultFetcher(
+		async () => new Response(JSON.stringify(referencedFile), { status: 200 }),
+	);
+	const bridge = resultBridge(fetcher);
+	await expect(
+		bridge.writeResult(referencedDescriptor, twoBytes(), {
+			workspaceReference: "out/chart.png",
+		}),
+	).resolves.toMatchObject({
+		projection: { fileId: "result-2", status: "available" },
+	});
+	await bridge.writeResult(referencedDescriptor, twoBytes(), {
+		workspaceReference: "out/chart.png",
+	});
+	await bridge.writeResult(referencedDescriptor, twoBytes(), {
+		workspaceReference: "out/copy.png",
+	});
+	await bridge.writeResult(referencedDescriptor, twoBytes());
+	const exchanges = fetcher.mock.calls
+		.filter(([input]) => String(input).endsWith("runtime-exchange"))
+		.map(([, init]) => {
+			if (!init) throw new Error("missing exchange request init");
+			return {
+				key: (init.headers as Record<string, string>)["Idempotency-Key"],
+				body: JSON.parse(String(init.body)),
+			};
+		});
+	expect(exchanges.map(({ body }) => body.workspaceReference)).toEqual([
+		"out/chart.png",
+		"out/chart.png",
+		"out/copy.png",
+		undefined,
+	]);
+	expect(exchanges[0]?.body).toEqual({
+		schemaVersion: 2,
+		executionGrant: evidence.executionGrant,
+		operation: "result",
+		descriptor: referencedDescriptor,
+		workspaceReference: "out/chart.png",
+		idempotencyKey: exchanges[0]?.key,
+	});
+	expect(exchanges[3]?.body).not.toHaveProperty("workspaceReference");
+	expect(exchanges[0]?.key).toBe(exchanges[1]?.key);
+	expect(new Set(exchanges.map(({ key }) => key)).size).toBe(3);
+});
+
+it.each([
+	[
+		"a transport failure",
+		async (): Promise<Response> => {
+			throw new TypeError("fetch failed");
+		},
+	],
+	["a 5xx response", async () => new Response("unavailable", { status: 503 })],
+	[
+		"an unparseable response",
+		async () => new Response("not json", { status: 200 }),
+	],
+	[
+		"a different confirmed descriptor",
+		async () =>
+			new Response(
+				JSON.stringify({
+					...referencedFile,
+					descriptor: { ...referencedDescriptor, sizeBytes: 3 },
+				}),
+				{ status: 200 },
+			),
+	],
+])(
+	"reports an unconfirmed result after %s on completion (#3226)",
+	async (_name, complete) => {
+		const bridge = resultBridge(resultFetcher(complete));
+		await expect(
+			bridge.writeResult(referencedDescriptor, twoBytes(), {
+				workspaceReference: "out/chart.png",
+			}),
+		).rejects.toBeInstanceOf(RuntimeFileResultUnconfirmedError);
+	},
+);
+
+it("reports a platform rejection of completion as a definite failure (#3226)", async () => {
+	const bridge = resultBridge(
+		resultFetcher(async () => new Response("conflict", { status: 409 })),
+	);
+	const failure = bridge.writeResult(referencedDescriptor, twoBytes(), {
+		workspaceReference: "out/chart.png",
+	});
+	await expect(failure).rejects.toThrow("RUNTIME_FILE_RESULT_COMPLETE_FAILED");
+	await expect(failure).rejects.not.toBeInstanceOf(
+		RuntimeFileResultUnconfirmedError,
+	);
 });

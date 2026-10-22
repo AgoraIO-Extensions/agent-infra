@@ -12,71 +12,64 @@ import { describe, expect, it, vi } from "vitest";
 import { claudeWorkspaceTools } from "./claude-workspace.js";
 
 describe("Claude workspace result hook", () => {
-	it("forwards structured Write output and ignores other tools", async () => {
-		const onResultFile = vi.fn(async () => {});
+	it("records Write and Edit only as tool facts and publishes no result file (#3226)", async () => {
+		const onStarted = vi.fn(async () => {});
+		const onCompleted = vi.fn(async () => {});
 		const tools = claudeWorkspaceTools(
 			"/private/runtime/workspace",
 			"/private/runtime/memory",
-			onResultFile,
+			{ onStarted, onCompleted },
 		);
 		const matcher = tools.hooks?.PostToolUse?.[0];
 		if (!matcher) throw new Error("missing PostToolUse matcher");
 		const hook = matcher.hooks[0];
 		if (!hook) throw new Error("missing PostToolUse hook");
-		await hook(
-			{
-				hook_event_name: "PostToolUse",
-				tool_name: "Write",
-				tool_input: { file_path: "/private/runtime/workspace/out.txt" },
-				tool_response: {
+		for (const [toolUseId, toolName, response] of [
+			[
+				"tool-1",
+				"Write",
+				{
 					type: "create",
 					filePath: "/private/runtime/workspace/out.txt",
 					content: "result",
 				},
-				tool_use_id: "tool-1",
-			} as never,
-			"tool-1",
-			{ signal: new AbortController().signal },
-		);
-		await hook(
-			{
-				hook_event_name: "PostToolUse",
-				tool_name: "Read",
-				tool_input: { file_path: "/private/runtime/workspace/out.txt" },
-				tool_response: { type: "text", content: "result" },
-				tool_use_id: "tool-2",
-			} as never,
-			"tool-2",
-			{ signal: new AbortController().signal },
-		);
-		await hook(
-			{
-				hook_event_name: "PostToolUse",
-				tool_name: "Edit",
-				tool_input: { file_path: "/private/runtime/workspace/out.txt" },
-				tool_response: {
+			],
+			[
+				"tool-3",
+				"Edit",
+				{
 					filePath: "/private/runtime/workspace/out.txt",
 					oldString: "old",
 					newString: "new",
 					structuredPatch: [],
 				},
-				tool_use_id: "tool-3",
-			} as never,
-			"tool-3",
-			{ signal: new AbortController().signal },
-		);
-		expect(onResultFile).toHaveBeenCalledTimes(2);
-		expect(onResultFile).toHaveBeenNthCalledWith(1, {
-			type: "create",
-			filePath: "/private/runtime/workspace/out.txt",
-			content: "result",
-		});
-		expect(onResultFile).toHaveBeenNthCalledWith(2, {
-			filePath: "/private/runtime/workspace/out.txt",
-			oldString: "old",
-			newString: "new",
-			structuredPatch: [],
-		});
+			],
+		] as const)
+			await expect(
+				hook(
+					{
+						hook_event_name: "PostToolUse",
+						tool_name: toolName,
+						tool_input: { file_path: "/private/runtime/workspace/out.txt" },
+						tool_response: response,
+						tool_use_id: toolUseId,
+					} as never,
+					toolUseId,
+					{ signal: new AbortController().signal },
+				),
+			).resolves.toEqual({});
+		expect(onStarted.mock.calls).toEqual([
+			["tool-1", "Write"],
+			["tool-3", "Edit"],
+		]);
+		expect(onCompleted.mock.calls).toEqual(onStarted.mock.calls);
+		// 没有工具事实回调时不再注册 PostToolUse：写入工具不会触发任何结果文件路径。
+		expect(
+			claudeWorkspaceTools(
+				"/private/runtime/workspace",
+				"/private/runtime/memory",
+			).hooks?.PostToolUse,
+		).toBeUndefined();
 	});
 
 	it("reports the native tool dispatch boundary without forwarding tool input", async () => {
@@ -90,7 +83,7 @@ describe("Claude workspace result hook", () => {
 		const onIntent = vi.fn(async () => {});
 		const onStarted = vi.fn(async () => {});
 		const onCompleted = vi.fn(async () => {});
-		const tools = claudeWorkspaceTools(workspace, memory, undefined, {
+		const tools = claudeWorkspaceTools(workspace, memory, {
 			onIntent,
 			onStarted,
 			onCompleted,
@@ -140,7 +133,7 @@ describe("Claude workspace result hook", () => {
 		await mkdir(memory);
 		const onIntent = vi.fn(async () => {});
 		const onStarted = vi.fn(async () => {});
-		const tools = claudeWorkspaceTools(workspace, memory, undefined, {
+		const tools = claudeWorkspaceTools(workspace, memory, {
 			onIntent,
 			onStarted,
 		});
@@ -167,7 +160,6 @@ describe("Claude workspace result hook", () => {
 		const tools = claudeWorkspaceTools(
 			"/private/runtime/workspace",
 			"/private/runtime/memory",
-			undefined,
 			{ onStarted, onFailed },
 		);
 		const failure = tools.hooks?.PostToolUseFailure?.[0]?.hooks[0];
@@ -202,13 +194,9 @@ it("allows Read from the deployment-owned Skill root but never Write/Edit", asyn
 	const skillFile = join(skillRoot, "SKILL.md");
 	await writeFile(skillFile, "skill", "utf8");
 	try {
-		const tools = claudeWorkspaceTools(
-			workspace,
-			memory,
-			undefined,
-			undefined,
-			[skillRoot],
-		);
+		const tools = claudeWorkspaceTools(workspace, memory, undefined, [
+			skillRoot,
+		]);
 		const before = tools.hooks?.PreToolUse?.[0]?.hooks[0];
 		if (!before) throw new Error("missing PreToolUse hook");
 		await expect(
@@ -265,7 +253,6 @@ it("routes Applied Skill reads through a verified ephemeral file", async () => {
 		const tools = claudeWorkspaceTools(
 			workspace,
 			memory,
-			undefined,
 			{
 				resolveReadOnlyFile: async (filePath) =>
 					filePath === skillFile && verifiedReads++ === 0
@@ -350,13 +337,9 @@ describe("Claude workspace list and search tools", () => {
 		await mkdir(skillRoot);
 		await mkdir(outside);
 		await symlink(outside, join(workspace, "escape"));
-		const tools = claudeWorkspaceTools(
-			workspace,
-			memory,
-			undefined,
-			undefined,
-			[skillRoot],
-		);
+		const tools = claudeWorkspaceTools(workspace, memory, undefined, [
+			skillRoot,
+		]);
 		const decide = async (name: string, input: Record<string, unknown>) =>
 			(
 				await tools.canUseTool?.(name, input, {

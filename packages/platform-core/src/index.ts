@@ -111,6 +111,7 @@ export {
 	type FileTaskAuthorizationRecordV1,
 	type FileTransactionV1,
 	isConfirmedResultFileV1,
+	isWorkspaceReferenceV1,
 	type NativeTextInputV1,
 	nativeTextInputLimitV1,
 	type ObjectStoragePortV1,

@@ -6,7 +6,10 @@ import type {
 
 export * from "./types.js";
 
-import { createContentProbe, type ObjectContentPolicyV1 } from "./content.js";
+import {
+	createContentProbe,
+	type ObjectContentPolicyV1,
+} from "@agent-infra/file-content";
 import {
 	type ObjectDownloadV1,
 	type ObjectStorageDataV1,

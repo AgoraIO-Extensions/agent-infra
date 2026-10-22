@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
+import { pathToFileURL } from "node:url";
 import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
 
 let sessionId;
@@ -170,6 +171,40 @@ const connection = new AgentSideConnection(
 					},
 				},
 			});
+			if (process.env.ACP_TEST_MODE === "result-blocks") {
+				// #3226：image 与 resource_link 块，以及回答内的 sandbox: 引用。
+				const png = Buffer.from(
+					"89504e470d0a1a0a0000000d4948445200000001000000010806000000" +
+						"1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082",
+					"hex",
+				);
+				await mkdir(join(process.cwd(), "out"), { recursive: true });
+				await writeFile(join(process.cwd(), "out", "link.png"), png);
+				await writeFile(join(process.cwd(), "out", "text-only.png"), png);
+				for (const content of [
+					{
+						type: "image",
+						data: png.toString("base64"),
+						mimeType: "image/png",
+					},
+					{
+						type: "resource_link",
+						uri: pathToFileURL(join(process.cwd(), "out", "link.png")).href,
+						name: "link.png",
+					},
+					{ type: "resource_link", uri: "file:///etc/passwd", name: "passwd" },
+					{
+						type: "resource_link",
+						uri: "https://example.com/remote.png",
+						name: "remote",
+					},
+					{ type: "text", text: " ![only text](sandbox:out/text-only.png)" },
+				])
+					await connection.sessionUpdate({
+						sessionId,
+						update: { sessionUpdate: "agent_message_chunk", content },
+					});
+			}
 			if (process.env.ACP_TEST_MODE === "result-file") {
 				await connection.sessionUpdate({
 					sessionId,

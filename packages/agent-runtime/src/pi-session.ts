@@ -1,9 +1,8 @@
 // Pi lifecycle adapted from Paseo PiCliRuntimeSession/buildPiLaunch at d1b705a0cd91617a5707fae25d80cb0be3057950.
 // Copyright (c) 2025-present Mohamed Boudra. Apache-2.0; see THIRD_PARTY_NOTICES.md.
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
 import { lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join } from "node:path";
 import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
 import type { NativeProcessLaunch } from "./native-process.js";
@@ -14,7 +13,6 @@ import type {
 	NativePromptV1,
 	NativeSessionOptions,
 } from "./session-runtime-driver.js";
-import { workspacePathAllowed } from "./workspace-path.js";
 
 function historyCheckpoint(messages: unknown[]) {
 	return JSON.stringify({
@@ -136,80 +134,6 @@ function promptBinding(
 			JSON.stringify([nativeId, checkpoint, content.text, content.images]),
 		)
 		.digest("hex");
-}
-
-const piResultFileMaximumBytes = 10 * 1024 * 1024;
-
-function descriptorPath(fd: number): string | undefined {
-	if (process.platform === "linux") return `/proc/self/fd/${fd}`;
-}
-
-/** Resolve a completed Pi write/edit to an existing file under its workspace. */
-async function readPiResultFile(
-	workspace: string,
-	inputPath: unknown,
-): Promise<{ readonly path: string; readonly content: string } | undefined> {
-	if (typeof inputPath !== "string" || !inputPath) return;
-	const root = await realpath(workspace).catch(() => undefined);
-	if (!root) return;
-	const path = inputPath.startsWith("@") ? inputPath.slice(1) : inputPath;
-	const candidate = resolve(root, path);
-	const lexical = relative(root, candidate);
-	if (!lexical || lexical.startsWith("..") || isAbsolute(lexical)) return;
-	if (!(await workspacePathAllowed(root, join(root, ".memory"), candidate)))
-		return;
-	const actual = await realpath(candidate).catch(() => undefined);
-	if (!actual) return;
-	const resolved = relative(root, actual);
-	if (!resolved || resolved.startsWith("..") || isAbsolute(resolved)) return;
-	const noFollow = constants.O_NOFOLLOW ?? 0;
-	const file = await open(actual, constants.O_RDONLY | noFollow).catch(
-		() => undefined,
-	);
-	if (!file) return;
-	try {
-		const stat = await file.stat();
-		if (!stat.isFile() || stat.size > piResultFileMaximumBytes) return;
-		const opened = descriptorPath(file.fd);
-		if (opened) {
-			const openedPath = await realpath(opened).catch(() => undefined);
-			if (!openedPath) return;
-			const openedRelative = relative(root, openedPath);
-			if (
-				!openedRelative ||
-				openedRelative.startsWith("..") ||
-				isAbsolute(openedRelative)
-			)
-				return;
-		}
-		const bytes = Buffer.allocUnsafe(piResultFileMaximumBytes + 1);
-		let offset = 0;
-		while (offset < bytes.byteLength) {
-			const { bytesRead } = await file.read(
-				bytes,
-				offset,
-				bytes.byteLength - offset,
-				offset,
-			);
-			if (bytesRead === 0) break;
-			offset += bytesRead;
-		}
-		if (offset > piResultFileMaximumBytes) return;
-		let content: string;
-		try {
-			content = new TextDecoder("utf-8", { fatal: true }).decode(
-				bytes.subarray(0, offset),
-			);
-		} catch {
-			return;
-		}
-		return {
-			path: actual,
-			content,
-		};
-	} finally {
-		await file.close().catch(() => {});
-	}
 }
 
 /** Pi 0.86 may precede one text Turn with a structured system-prompt patch. */
@@ -365,7 +289,6 @@ export async function openPiSession(
 		  }
 		| undefined;
 	const phases = new Map<string, string>();
-	const toolCalls = new Map<string, { toolName: string; args: unknown }>();
 	const rpc = await openPiRpc(
 		options.directory,
 		options.cwd,
@@ -443,32 +366,6 @@ export async function openPiSession(
 									phase,
 								},
 							});
-						}
-					}
-					if (
-						frame.type === "tool_execution_start" &&
-						typeof frame.toolCallId === "string" &&
-						typeof frame.toolName === "string"
-					)
-						toolCalls.set(frame.toolCallId, {
-							toolName: frame.toolName,
-							args: frame.args,
-						});
-					if (
-						frame.type === "tool_execution_end" &&
-						typeof frame.toolCallId === "string"
-					) {
-						const call = toolCalls.get(frame.toolCallId);
-						toolCalls.delete(frame.toolCallId);
-						if (
-							call &&
-							call.toolName === frame.toolName &&
-							["write", "edit"].includes(call.toolName) &&
-							frame.isError === false
-						) {
-							const args = piRecord(call.args);
-							const result = await readPiResultFile(options.cwd, args?.path);
-							if (result) await options.resultFile?.(result);
 						}
 					}
 					if (frame.type === "agent_end") {
@@ -710,7 +607,6 @@ export async function openPiSession(
 				const checkpoint = currentCheckpoint;
 				started = false;
 				phases.clear();
-				toolCalls.clear();
 				const terminal = Promise.withResolvers<{
 					stopReason: string;
 					checkpoint: string;
@@ -838,7 +734,6 @@ export async function openPiSession(
 				};
 				started = false;
 				phases.clear();
-				toolCalls.clear();
 				const terminal = Promise.withResolvers<{
 					stopReason: string;
 					checkpoint: string;
