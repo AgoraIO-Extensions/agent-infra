@@ -14,12 +14,12 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `index.html` | `b7d5bcfe7c18dcee8db213df8f87d6a3f224146d181545d46e2ed54c8e12b417` |
-| `login.html` | `aa0a2737e7bc76f56c2552abfb503879a3c9f5c0919adfd7b65decd27b3ba6a7` |
+| `index.html` | `2bc32c99b00e5944d390327f06194d884ed157ed557139e0bd9f62d327771bd9` |
+| `login.html` | `0cb203d52c42f3c0cb4272c0a86c85d46c1d717e39bab293c26642bee35c2478` |
 | `DESIGN.md` | `fa953264eafe4e0bd05adaa86387a9d90ad7af51d4e79f0a67620bfa31596d65` |
 | `IMPLEMENTATION.md` | `ae3e592272933f65a0f7fc34363142a4471a724f7a75db76affe6ae12d640600` |
 | `DESIGN-HANDOFF.md` | `3f2313d6d72bf3d7263d1e864730278217836ccdd5730d4b83460518bd2d3396` |
-| `DESIGN-MANIFEST.json` | `ee8348a366afc740df0aa11a3bbb36bb0071d5e7f50112f8311b29f3378c6566` |
+| `DESIGN-MANIFEST.json` | `18f44ce227385669918bb8d94e4c70a9689940c848da4e2fc36bbb42d754a1e3` |
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量，并提供设计同名别名（`--bg`、`--fg`、`--surface-raised`、`--accent`、
@@ -53,14 +53,15 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 
 ### 已回写导出设计的结论
 
-以下结论已在 #2862、#2863、#2903、#2996 与 #2830 终验（#3037–#3041、#3046、#3052，第二轮 #3127–#3130，第三轮 #3160、#3161，第四轮 #3179、#3180，第五轮 #3215、#3216，第六轮 #3235、#3236）确认，
+以下结论已在 #2862、#2863、#2903、#2996 与 #2830 终验（#3037–#3041、#3046、#3052，第二轮 #3127–#3130，第三轮 #3160、#3161，第四轮 #3179、#3180，第五轮 #3215、#3216，第六轮 #3235、#3236，第七轮 #3242、#3243）确认，
 并由 [#2863](https://github.com/AgoraIO-Extensions/agent-infra/issues/2863)、
 [#3107](https://github.com/AgoraIO-Extensions/agent-infra/issues/3107)、
 [#3130](https://github.com/AgoraIO-Extensions/agent-infra/issues/3130)、
 [#3161](https://github.com/AgoraIO-Extensions/agent-infra/issues/3161)、
 [#3180](https://github.com/AgoraIO-Extensions/agent-infra/issues/3180)、
-[#3216](https://github.com/AgoraIO-Extensions/agent-infra/issues/3216) 与
-[#3236](https://github.com/AgoraIO-Extensions/agent-infra/issues/3236) 回写本版导出稿；实现与验收以这里为准：
+[#3216](https://github.com/AgoraIO-Extensions/agent-infra/issues/3216)、
+[#3236](https://github.com/AgoraIO-Extensions/agent-infra/issues/3236) 与
+[#3243](https://github.com/AgoraIO-Extensions/agent-infra/issues/3243) 回写本版导出稿；实现与验收以这里为准：
 
 | 编号 | 位置 | 实现 | 依据 |
 | --- | --- | --- | --- |
@@ -111,7 +112,7 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | X-12 | 审计 390 卡片表格的「对象」（名称 / ID 短形式） | 同 X-08 | 同 X-08 |
 | X-13 | Skill Hub 读取失败、无匹配空态 | 图标下方 11px，其余高度按网格行均分 | 图标不作为行内元素放进文字块（原导出稿 `skillEmpty` 基线下多出约 6.8px，图标到标题 17.8px） |
 | Y-03 | 窄屏导航 Sheet 头部 | 保留右上角 44px ghost 图标按钮「关闭导航」，品牌块让出 48px，两者命中区不重叠；遮罩与 Esc 仍可关闭，关闭后焦点回到「打开导航」 | 可访问性：模态导航提供可见、可触达的关闭控件，不只依赖 Esc 或遮罩 |
-| Y-04 / H4-19 / H4-25 / H5-14 / H5-19 / J6-01 / J6-02 | 侧栏「个人 Relay Key」「API 凭证」「我的 Connection」「Skill 审核」「评测」「我的执行审计」「平台审计」「运维观测」图标；企微「扫码授权」与配置类入口的图标；刷新与重试图标；Agent 图标；停止与执行中图标 | 沿用 lucide `KeyRound`（17px）；「扫码授权」为 lucide `Scan`（只有四角）；Agent 详情「Owner 配置」、已创建卡「配置与生命周期」、申请详情「修改申请」、思考强度入口、`/admin/agents`「配置」、`/skills/manage`「Agent 绑定」与「改用手动配置」为 lucide `Settings` 齿轮；刷新、重试、重新读取（`/admin/agents`「刷新 Agent 列表」与行内「重试」、`/ops`、`/audit`、`/admin/audit`、「重启 Agent」、状态卡「重新加载…」）为 lucide `RefreshCw`（顺时针，箭头在右上与左下）；侧栏「Agent 目录」、回复卡头像、模型入口与 404「前往 Agent 目录」为 lucide `Bot`（折线天线、两侧耳朵、两道竖眼）；侧栏「Skill 审核」、个人 Relay Key 与 API 凭证页提示、Skill 审核行为 lucide `Shield`（无对勾），Owner 配置「权限边界」为 `ShieldCheck`；侧栏「评测」为 `FlaskConical`；侧栏「运维观测」、Agent 详情「运行与渠道」、浏览器卡「执行中」卡头与「正在校验默认 Key」为 `Activity`（17px 下约 13.9px 高）；侧栏「我的执行审计」「平台审计」为 `ClipboardMinus`（一道横线）；「停止回复」「停止操作」「停止 Agent」与浏览器卡「已停止」「工具调用失败」卡头为 `Square`（16px 下 12px 方块）；导出稿 path 逐段取自 lucide-react 1.41.0 的 shield、shield-check、flask-conical、activity、clipboard-minus、square | 全站 key 语义（侧栏、连接器提示、对话上下文条、Connection 安装面板、Secret、Relay Key、API 凭证空态）统一为同一字形；只换侧栏会让同页出现两种 key 图标；scan、settings、refresh、bot、shield、activity、clipboard、stop 同理，全站同一语义只用一种 lucide 字形（G4-06、G4-10；原导出稿 `scan` 带中心方块，`settings` 为圆加四段短弧，`refresh` 为逆时针自绘字形，`bot` 为圆角框、竖直天线与带嘴的两点眼睛；J6-01、J6-02：`shield` 为自绘带勾盾牌，「评测」与「运维观测」共用纵向 5–19 的自绘 `activity`（17px 下约 9.9px 高），`clipboard` 为两道横线，`stop` 为 12×12 方块（16px 下 8px）） |
+| Y-04 / H4-19 / H4-25 / H5-14 / H5-19 / J6-01 / J6-02 / L7-01 | 全站图标：侧栏、顶栏、页头与按钮、提示、空态、卡头、头像、Skill 标记、对话工具栏、登录页 | 导出稿图标全部取自 lucide-react 1.41.0，与 Web 一一对应：`iconPaths` 每个 key 与登录页内联 svg 逐段取自 `apps/web` 依赖的源码，尺寸与 Web 同处一致（侧栏 17px，按钮 16px，提示 17px，空态 28px，Skill 标记 20px，窄屏「打开导航」16px，发送 15px，模型与思考入口的下拉箭头 12px）。对照（key → lucide）：home `House`、bot `Bot`、message `MessageCircle`、layers `Layers`、package `Package`、plus `Plus`、clipboard `ClipboardMinus`、check `Check`、list `List`、external `ExternalLink`、menu `Menu`、search `Search`、arrow `ArrowRight`、chevron `ChevronRight`、chevronLeft `ChevronLeft`、chevronDown `ChevronDown`、back `ArrowLeft`、settings `Settings`、history `History`、refresh `RefreshCw`、rotate `RotateCcw`、stop `Square`、send `Send`、eye `Eye`、key `KeyRound`、shield `Shield`、shieldCheck `ShieldCheck`、activity `Activity`、flask `FlaskConical`、info `Info`、alert `TriangleAlert`、x `X`、user `UserRound`、scan `Scan`、ban `Ban`、login `LogIn`；登录页过期提示为 `Clock`，密码隐藏 / 显示时为 `Eye` / `EyeOff`。同一位置 Web 用不同图标时按调用点区分：Skill Hub 目录与「我创建的」为 `Layers`、「已安装」为 `Package`、Skill 审核行为 `Shield`；Skill 空态读取失败为 `TriangleAlert`、待审核为空为 `Shield`、其余为 `Search`；Owner 配置「权限边界」为 `ShieldCheck`，其余盾牌为 `Shield`。线宽导出稿统一为 1.8（Web 侧栏与 Agent 详情区头为 1.8，其余为 lucide 默认 2，16px 下约差 0.13px）；原生下拉的箭头沿用 CSS 渐变，与 Web `NativeSelect` 相同 | 全站同一语义只用一种 lucide 字形（G4-06、G4-10）；逐个调用点对照 main 同处的 lucide 组件，1440 与 390 下墨迹差小于 1px（#3243）。此前逐轮只替换被点名的 key（`scan`、`settings`、`refresh`、`bot`、`shield`、`activity`、`clipboard`、`stop`）；L7-01 一次换完其余自绘或近似的 key（`home`、`message`、`layers`、`plus`、`check`、`list`、`external`、`menu`、`search`、`arrow`、`back`、`history`、`send`、`eye`、`info`、`alert`、`x`、`user`、`ban`），新增 `package`、`chevronDown`，删除没有调用点的 `filter`、`play`、`pause`、`more`；原导出稿窄屏「打开导航」为 19px，发送图标被按钮样式放大到 16px，Skill 标记按示例 Skill 取不同图标，下拉箭头为旋转 90° 的 chevron-right |
 | Y-09 | 工作台「待处理」管理员行 | 系统管理员另有一行「运行状态 / N 个 Agent 创建失败 / 查看失败清单」，进入 `/admin/agents?status=creation_failed`；Owner 行按导出稿对齐 | 系统管理员可代替 Owner 重试创建失败的 Agent（[PRD §2.3](../prd/PRD-agent-platform-M1.md#23-系统管理员)、[§6.3](../prd/PRD-agent-platform-M1.md#63-管理状态)） |
 | Z-02 | 对话 composer 的发送按钮 | 草稿为空且没有选中命令或 Skill 时禁用 | 消息命令 `MessageCommandRequestV1.text` 必须非空；禁用比无反馈的点击更清楚 |
 | Z-04 | 已完成回答的状态行 | 「已完成 · 重新生成 · 查看执行详情」：已完成、失败与已停止的回答都可重新生成；不显示「n 步」 | [PRD §11.2](../prd/PRD-agent-platform-M1.md#112-对话能力)：重新生成基于同一条用户消息产生新回答，服务端只要求会话没有活跃回复。会话投影没有步数，过程摘要在执行详情 |
@@ -194,9 +195,12 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | J6-03 | `/my-agents`「申请 N / 已创建」Tab；`/skills/:id`「用途与内容 / 版本与变更」Tab | tablist（「我的 Agent 视图」「Skill 详情」）内为 tab：选中项 `aria-selected="true"`、`tabindex="0"`，`aria-controls` 指向唯一渲染的 tabpanel（`aria-labelledby` 指回该 Tab、`tabindex="0"`），未选中项 `tabindex="-1"`；左右方向键循环移动焦点并同时切换，Home / End 到首尾，Tab 键从选中项进入面板 | 公共 `Tabs`（Base UI，`activateOnFocus`）的语义与键盘行为（`my-agents-screen.tsx`、`skill-hub-version-screen.tsx`）；原导出稿「我的 Agent」为普通按钮、没有 Tab 语义，方向键不切换；「Skill 详情」只有 role 与 `aria-selected` |
 | J6-04 | 目录选择器结果列表（≤767px：申请表单、修改申请、Owner 配置、员工访问控制） | 列表在选择框下方 6px；列表到提示行仍为 13px | `index.css` ≤767px 的 `.directory-menu{margin-top:6px}`；原导出稿列表是 `.field`（gap 7px 的 grid）的直接子项，叠加后为 13px |
 | J6-05 | `/agents/:agentId/skills` 绑定卡标题后的版本胶囊 | 胶囊垂直居中（`vertical-align: middle`） | `index.css` `.quiet-pill`；原导出稿按基线对齐，1440 下比 Web 低 3.5px |
+| L7-03 | `/skills/:id`「版本与变更」Tab 的版本行 | 每行只有「v{版本} + 状态」与右侧「正在查看 / 查看版本」，不显示版本说明，也不显示「有新版本可升级」；「查看版本」可访问名称为「查看版本：v{版本}」 | Skill 版本投影没有说明字段，详情页不读取绑定（W-35、V-17）；`skill-hub-version-screen.tsx` 用 `withObjectName`；原导出稿每行下有版本说明，绑定旧版本时列表下方另有升级提示 |
+| L7-04 | `/my-agents` 申请列表与「已创建」卡 | 申请行在列表「我的申请」内、行标题为 h2；已创建卡在列表「我管理的 Agent」内、卡片标题为 h2；可见字号、字重与位置不变 | `my-agents-screen.tsx` 的标题层级（页面只有 h1）；原导出稿申请行标题为 strong、已创建卡标题为 h3（跳过 h2），都不在列表内 |
 
 导出稿中以下内容仍与 Web 不同，不作为实现依据：
 
+- 结构语义以 Web 为准：分区地标（以标题命名的 region）、步骤条、审批进度与同步阶段的列表语义、以标题命名的 article，导出稿不逐页补齐；可见的标题文字与级别已与 Web 一致（L7-04、L7-05）。
 - 示例人员、模型、Agent 标识（如 `AG-042`）、计数、时间和 Skill 目录都是合成数据；Web 只显示服务端投影。
 - 「原型状态」页的演示身份（系统管理员、Agent Owner、员工），以及运维观测、会话确认、回复与提交结果、
   已停止 Agent 的对话、浏览器卡终态等演示入口，只用于切换原型状态；Web 由会话角色和服务端结果决定，不提供切换。
