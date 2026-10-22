@@ -10628,16 +10628,22 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (old) {
 				old.held = true;
 				resolved.journal.externalActionsBlocked = true;
-				return { ...resolved, repeated: true as const, call: old, cursor: "" };
+				return {
+					...resolved,
+					repeated: true as const,
+					call: old,
+					readLimitReached: false,
+					cursor: "",
+				};
 			}
 			const calls = Object.values(resolved.journal.standardMcpCalls ?? {});
-			if (
-				calls.length >= 1024 ||
-				(workspace &&
-					calls.filter((call) => call.toolAlias === "workspace.read_text_file")
-						.length >= 4)
-			)
-				unavailable();
+			if (calls.length >= 1024) unavailable();
+			// 每次执行最多实际读取 4 个文件。超出的调用由模型决定，只算一次失败的工具调用：
+			// 照常记录事实，但不读取文件，Codex 连接保持（#3196）。
+			const readLimitReached =
+				workspace &&
+				calls.filter((call) => call.toolAlias === "workspace.read_text_file")
+					.length >= 4;
 			const call: CodexStandardMcpCall = {
 				threadId: input.threadId,
 				turnId: input.turnId,
@@ -10675,6 +10681,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				...resolved,
 				repeated: false as const,
 				call,
+				readLimitReached,
 				cursor: resolved.journal.events.at(-1)?.cursor ?? "",
 			};
 		});
@@ -10814,7 +10821,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				let file:
 					| Awaited<ReturnType<typeof readCodexWorkspaceTextFile>>
 					| undefined;
-				if (workspacePath !== undefined)
+				if (workspacePath !== undefined && !prepared.readLimitReached)
 					try {
 						file = await readCodexWorkspaceTextFile(
 							root,
@@ -10848,8 +10855,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							type: "inputText",
 							text: JSON.stringify(
 								file ?? {
-									reason:
-										workspacePath !== undefined
+									reason: prepared.readLimitReached
+										? "workspace_read_limit_reached"
+										: workspacePath !== undefined
 											? "workspace_file_unavailable"
 											: "workspace_path_invalid",
 								},
