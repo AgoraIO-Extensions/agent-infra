@@ -148,7 +148,7 @@ SDK 自动重连、重试或队列不能突破已持久化的发送状态：
 
 | 项目 | 官方限制 |
 | --- | --- |
-| 入站图片、文件、视频 | 消息中的下载地址 5 分钟内有效，内容已加密；每个地址带独立 `aeskey`，用 SDK `downloadFile` 解密 |
+| 入站图片、文件、视频 | 消息中的下载地址 5 分钟内有效，内容已加密；每个地址带独立 `aeskey`。SDK `downloadFile` 不限制响应大小，Worker 自行有界下载，再用同一 SDK 的 `decryptFile` 解密；文件名取下载响应的 `Content-Disposition` |
 | 入站语音 | 长连接下只提供转写文本 |
 | 出站临时素材 | 分片上传，每片不超过 512KB，最多 100 片；素材 3 天内有效 |
 | 出站大小与格式 | 图片不超过 10MB（png、jpg、gif）；视频不超过 10MB（mp4）；语音不超过 2MB（amr）；普通文件不超过 20MB；最小 5 字节 |
@@ -161,6 +161,24 @@ SDK 自动重连、重试或队列不能突破已持久化的发送状态：
 - Worker 需要能访问企微下载与上传所用的官方域名。下载地址、`aeskey`、`media_id` 和文件内容不进入日志、指标或 Trace。
 - 自建应用和显式机器人回调目前不支持媒体：结果文件改为在文本中说明，入站媒体回复固定说明。
   以后要启用，需另行验证 `media/upload` 等接口，并更新工程 Spec。
+- 长连接入站媒体由 Worker 部署输入 `wecom.media` 装配：`storage` 是与 Platform API 文件面同一 bucket 和前缀的
+  对象存储 Adapter（需要 `upload` 与 `inspect`），可选 `downloadTimeoutMs`（默认 60 秒）、`maxConcurrentDownloads`
+  （默认 4）、`intentTtlMs`、`accessTtlMs` 和出站 `fetch`。没有这一项时 Worker 不装配入站媒体，媒体消息按不支持回复。
+
+入站回执（工程 Spec §14.2.3）：
+
+- 只带图片、文件或视频的消息正文为空，附件随 Message 与 Execution 交给 Agent；附件清单由 Runtime 追加到原生输入
+  （工程 Spec §15.4.4），不改写平台消息。
+- 不调用 Agent 时，回执受理状态为 `media_rejected`，回执只记录原因与生效上限，审计动作为 `wecom.media_rejected`，
+  并在同一 stream 上回复固定说明，不发处理中提示：
+
+| 原因 | 回复 |
+| --- | --- |
+| 超过 FileLimits 交集与 Driver 单文件上限中较小的一个 | 文件超过 {上限}，未发送给 Agent |
+| 按实际字节识别的类型不在 FileLimits 内，或无法确认格式 | 不支持该文件类型，未发送给 Agent |
+| 下载地址已过有效期 | 文件下载地址已过期，未发送给 Agent，请重新发送 |
+| 下载、解密或写入文件面失败 | 文件接收失败，未发送给 Agent，请重新发送 |
+| 当前模式不支持媒体、Worker 未装配文件面或未声明 FileLimits | 当前渠道不支持接收图片、文件、语音或视频，未发送给 Agent |
 
 ## 思考过程
 

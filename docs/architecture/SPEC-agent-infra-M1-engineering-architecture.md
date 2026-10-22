@@ -2041,9 +2041,9 @@ Agent 投影的 `channels[].status` 只列出当前配置修订已配置的企�
 - image、file、video 消息：取下载地址、`aeskey` 和文件名。
 - voice 消息：取转写文本，按普通文本受理。
 - mixed 消息：文本项拼成消息正文，图片项作为附件。
-- Worker 在受理事务之外，用固定版本 SDK 下载并解密。时间和大小都有上限：下载地址按官方说明 5 分钟内有效，大小取该企微 Channel 的 FileLimits 交集。
-- 媒体类型按实际字节识别，经 File Authority 写入 attachment，绑定服务端解析的发送者、Agent、Channel 和 Conversation；幂等键由绑定、稳定消息 ID 和序号派生。
-- 受理事务只绑定已确认的附件。
+- Worker 在受理事务之外有界下载，并用固定版本 SDK 的解密工具解密（SDK 自带的下载不限制大小，不直接使用）。时间和大小都有上限：下载地址按官方说明 5 分钟内有效，大小取该企微 Channel 的 FileLimits 交集。
+- 媒体类型按实际字节识别，经 File Authority 写入 attachment，绑定服务端解析的发送者、Agent、Channel 和 Conversation；幂等键由绑定、稳定消息 ID 和序号派生。附件写入前，按与受理相同的映射与轮次、经同一幂等创建路径确定并提交当前 Conversation；受理时映射已轮换的，重新确定会话后再写入。
+- 受理事务只绑定已确认的附件。只带媒体的消息正文为空。
 - 以下情况不调用 Agent，写回执与审计，并回复固定说明：类型不支持、超限、下载或解密失败、地址过期。
 - 下载地址和 `aeskey` 只在 Worker 内存中短暂使用，不进入请求摘要、回执、日志、审计或事件。
 
