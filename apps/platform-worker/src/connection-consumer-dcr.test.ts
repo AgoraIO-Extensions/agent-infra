@@ -56,8 +56,12 @@ describe("per-Agent Connection DCR resolver", () => {
 		]);
 		expect(result["agent-a"]?.profile.consumerId).toBe("consumer-a");
 		expect(result["agent-b"]?.profile.consumerId).toBe("consumer-b");
-		expect(result["agent-a"]?.oauthClientId).toBe("oauth-client-a");
-		expect(result["agent-b"]?.oauthClientId).toBe("oauth-client-b");
+		expect(result["agent-a"]?.oauthClientBinding.clientId).toBe(
+			"oauth-client-a",
+		);
+		expect(result["agent-b"]?.oauthClientBinding.clientId).toBe(
+			"oauth-client-b",
+		);
 		expect(result["agent-a"]?.installationSupply).toEqual({
 			ref: "agent-a",
 			revision: "r1",

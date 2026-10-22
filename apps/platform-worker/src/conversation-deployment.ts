@@ -98,7 +98,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			{
 				readonly profile: unknown;
 				readonly approval: unknown;
-				readonly oauthClientId?: unknown;
+				readonly oauthClientBinding?: unknown;
 			}
 		>
 	>;
@@ -148,18 +148,33 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			approval,
 			options.requireConnectionConsumerProfile,
 		);
-		if (perAgent?.oauthClientId !== undefined) {
+		if (perAgent?.oauthClientBinding !== undefined) {
+			const binding = perAgent.oauthClientBinding;
 			if (
-				typeof perAgent.oauthClientId !== "string" ||
-				!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(perAgent.oauthClientId)
+				!binding ||
+				typeof binding !== "object" ||
+				Array.isArray(binding) ||
+				Object.keys(binding).sort().join(",") !==
+					"clientId,profileFingerprint,source"
 			)
 				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
-			return target
-				? ({
-						...target,
-						oauthClientId: perAgent.oauthClientId,
-					} satisfies ConnectionConsumerRuntimeTargetV1)
-				: target;
+			const value = binding as Record<string, unknown>;
+			const source = value.source;
+			if (
+				!target ||
+				typeof value.clientId !== "string" ||
+				!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value.clientId) ||
+				value.profileFingerprint !== target.configFingerprint ||
+				!source ||
+				typeof source !== "object" ||
+				Array.isArray(source) ||
+				JSON.stringify(source) !== JSON.stringify(target.source)
+			)
+				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+			return {
+				...target,
+				oauthClientId: value.clientId,
+			} satisfies ConnectionConsumerRuntimeTargetV1;
 		}
 		return target;
 	};

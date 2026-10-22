@@ -87,7 +87,7 @@ export function runtimeConnectionConsumerControlPodV1(pod: V1Pod): V1Pod {
 export function createRuntimeConnectionConsumerSnapshotV1(
 	profile: unknown,
 	approval: unknown,
-	oauthClientId?: unknown,
+	oauthClientBinding?: unknown,
 ): string | null | undefined {
 	if (profile === undefined && approval === undefined) return undefined;
 	try {
@@ -98,15 +98,28 @@ export function createRuntimeConnectionConsumerSnapshotV1(
 		);
 		if (approved.status !== "available") throw new Error();
 		if (
-			oauthClientId !== undefined &&
-			(typeof oauthClientId !== "string" ||
-				!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(oauthClientId))
+			oauthClientBinding !== undefined &&
+			(!oauthClientBinding ||
+				typeof oauthClientBinding !== "object" ||
+				Array.isArray(oauthClientBinding) ||
+				Object.keys(oauthClientBinding).sort().join(",") !==
+					"clientId,profileFingerprint,source")
 		)
 			throw new Error();
+		if (oauthClientBinding !== undefined) {
+			const binding = oauthClientBinding as Record<string, unknown>;
+			if (
+				typeof binding.clientId !== "string" ||
+				!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(binding.clientId) ||
+				binding.profileFingerprint !== approved.configFingerprint ||
+				JSON.stringify(binding.source) !== JSON.stringify(approved.source)
+			)
+				throw new Error();
+		}
 		const snapshot = JSON.stringify({
 			profile: approved.profile,
 			approval: input.approval,
-			...(oauthClientId === undefined ? {} : { oauthClientId }),
+			...(oauthClientBinding === undefined ? {} : { oauthClientBinding }),
 		});
 		if (Buffer.byteLength(snapshot, "utf8") > maximumSnapshotBytes)
 			throw new Error();
@@ -185,7 +198,7 @@ export function runtimeConnectionConsumerProjectionV1(
 			!input ||
 			typeof input !== "object" ||
 			Array.isArray(input) ||
-			!["approval,profile", "approval,oauthClientId,profile"].includes(
+			!["approval,profile", "approval,oauthClientBinding,profile"].includes(
 				Object.keys(input).sort().join(","),
 			)
 		)
@@ -194,7 +207,7 @@ export function runtimeConnectionConsumerProjectionV1(
 			createRuntimeConnectionConsumerSnapshotV1(
 				input.profile,
 				input.approval,
-				input.oauthClientId,
+				input.oauthClientBinding,
 			) !== snapshot
 		)
 			throw new Error();

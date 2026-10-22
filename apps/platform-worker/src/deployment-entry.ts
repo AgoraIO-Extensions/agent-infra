@@ -61,7 +61,7 @@ type DeploymentConfiguration = {
 		{
 			readonly profile: unknown;
 			readonly approval: unknown;
-			readonly oauthClientId?: unknown;
+			readonly oauthClientBinding?: unknown;
 		}
 	>;
 	/**
@@ -373,7 +373,7 @@ async function createPrepared(signal: AbortSignal) {
 					createRuntimeConnectionConsumerSnapshotV1(
 						value.profile,
 						value.approval,
-						value.oauthClientId,
+						value.oauthClientBinding,
 					) ?? null,
 				]),
 			)

@@ -38,7 +38,11 @@ export function createConnectionConsumerDcrResolverV1(
 			string,
 			{
 				readonly profile: ConnectionConsumerProfileV1;
-				readonly oauthClientId: string;
+				readonly oauthClientBinding: {
+					readonly clientId: string;
+					readonly profileFingerprint: string;
+					readonly source: { readonly ref: string; readonly revision: string };
+				};
 				readonly approval: {
 					readonly schemaVersion: 1;
 					readonly configFingerprint: string;
@@ -77,7 +81,11 @@ export function createConnectionConsumerDcrResolverV1(
 			};
 			result[agentId] = {
 				profile,
-				oauthClientId: clientId,
+				oauthClientBinding: {
+					clientId,
+					profileFingerprint: connectionConsumerProfileFingerprintV1(profile),
+					source: { ...options.approvalSource },
+				},
 				approval: {
 					schemaVersion: 1,
 					configFingerprint: connectionConsumerProfileFingerprintV1(profile),
