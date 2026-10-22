@@ -321,6 +321,8 @@ export async function createProtectedRuntimeOAuthClient(options: {
 		"clientRegistration" in parsedConfiguration &&
 		parsedConfiguration.clientRegistration === "dcr"
 			? (() => {
+					const oauthClientId = target.profile.oauthClientId;
+					if (!oauthClientId) unavailable();
 					const {
 						clientRegistration: _clientRegistration,
 						registrationEndpoint: _registrationEndpoint,
@@ -328,7 +330,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 					} = parsedConfiguration;
 					return RuntimeOAuthConfigurationV1Schema.parse({
 						...staticConfiguration,
-						clientId: target.profile.consumerId,
+						clientId: oauthClientId,
 					});
 				})()
 			: parsedConfiguration;

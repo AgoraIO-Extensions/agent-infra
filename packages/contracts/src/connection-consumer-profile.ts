@@ -21,6 +21,11 @@ const profileSchema = z
 		publicOrigin: z.string(),
 		mcpPath: z.string(),
 		consumerId: z.string().min(1),
+		/** OAuth DCR client for this Agent installation; distinct from consumerId. */
+		oauthClientId: z
+			.string()
+			.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/)
+			.optional(),
 		audience: z.string().min(1),
 		egressProfile: sourceSchema,
 	})
@@ -88,19 +93,18 @@ function validPath(value: string): boolean {
 export function connectionConsumerProfileFingerprintV1(
 	profile: ConnectionConsumerProfileV1,
 ): string {
+	const tuple = [
+		profile.schemaVersion,
+		profile.publicOrigin,
+		profile.mcpPath,
+		profile.consumerId,
+		profile.audience,
+		profile.egressProfile.ref,
+		profile.egressProfile.revision,
+	];
+	if (profile.oauthClientId !== undefined) tuple.push(profile.oauthClientId);
 	return createHash("sha256")
-		.update(
-			JSON.stringify([
-				profile.schemaVersion,
-				profile.publicOrigin,
-				profile.mcpPath,
-				profile.consumerId,
-				profile.audience,
-				profile.egressProfile.ref,
-				profile.egressProfile.revision,
-			]),
-			"utf8",
-		)
+		.update(JSON.stringify(tuple), "utf8")
 		.digest("hex");
 }
 

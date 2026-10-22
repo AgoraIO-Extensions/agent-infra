@@ -90,7 +90,14 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionConsumerApproval?: unknown;
 	readonly connectionConsumerProfilesByAgent?: Readonly<
-		Record<string, { readonly profile: unknown; readonly approval: unknown }>
+		Record<
+			string,
+			{
+				readonly profile: unknown;
+				readonly approval: unknown;
+				readonly oauthClientId?: unknown;
+			}
+		>
 	>;
 	readonly requireConnectionConsumerProfile?: boolean;
 }): ConversationRuntimeOptionsV2["resolveRuntimeHost"] {
@@ -133,11 +140,28 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			profile = staticProfile;
 			approval = staticApproval;
 		}
-		return approvedConnectionConsumerTarget(
+		const target = approvedConnectionConsumerTarget(
 			profile,
 			approval,
 			options.requireConnectionConsumerProfile,
 		);
+		if (perAgent?.oauthClientId !== undefined) {
+			if (
+				typeof perAgent.oauthClientId !== "string" ||
+				!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(perAgent.oauthClientId)
+			)
+				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+			if (target) {
+				return {
+					...target,
+					profile: {
+						...target.profile,
+						oauthClientId: perAgent.oauthClientId,
+					},
+				};
+			}
+		}
+		return target;
 	};
 	const auth = workload.policy?.runtimeAuth;
 	try {

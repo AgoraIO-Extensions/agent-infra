@@ -16,9 +16,9 @@ export interface ConnectionConsumerDcrResolverOptionsV1 {
 	readonly egressProfile: { readonly ref: string; readonly revision: string };
 	readonly approvalSource: { readonly ref: string; readonly revision: string };
 	readonly callbackUrlForAgent: (agentId: string) => string;
+	/** Approved Connection Consumer selected for the Agent; DCR client IDs are separate. */
+	readonly consumerIdForAgent: (agentId: string) => string;
 	readonly installationSupplyForAgent: (agentId: string) => unknown;
-	/** Explicit deployment approval that DCR client_id is the Connection consumer id. */
-	readonly dcrClientIdIsConsumerId: boolean;
 	readonly fetch?: typeof fetch;
 }
 
@@ -30,12 +30,14 @@ export function createConnectionConsumerDcrResolverV1(
 			typeof options.agentIds === "function"
 				? options.agentIds()
 				: options.agentIds;
-		if (!options.dcrClientIdIsConsumerId || new Set(ids).size !== ids.length)
+		if (new Set(ids).size !== ids.length)
 			throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 		const result: Record<
 			string,
 			{
 				readonly profile: ConnectionConsumerProfileV1;
+				/** OAuth client registered for this Agent installation. */
+				readonly oauthClientId: string;
 				readonly approval: {
 					readonly schemaVersion: 1;
 					readonly configFingerprint: string;
@@ -48,6 +50,9 @@ export function createConnectionConsumerDcrResolverV1(
 		for (const agentId of ids) {
 			signal.throwIfAborted();
 			if (!agentIdPattern.test(agentId))
+				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+			const consumerId = options.consumerIdForAgent(agentId);
+			if (!agentIdPattern.test(consumerId))
 				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 			const callbackUrl = options.callbackUrlForAgent(agentId);
 			const clientId = await registerStandardOAuthClient({
@@ -63,12 +68,14 @@ export function createConnectionConsumerDcrResolverV1(
 				schemaVersion: 1 as const,
 				publicOrigin: options.publicOrigin,
 				mcpPath: options.mcpPath,
-				consumerId: clientId,
+				consumerId,
+				oauthClientId: clientId,
 				audience: options.audience,
 				egressProfile: { ...options.egressProfile },
 			};
 			result[agentId] = {
 				profile,
+				oauthClientId: clientId,
 				approval: {
 					schemaVersion: 1,
 					configFingerprint: connectionConsumerProfileFingerprintV1(profile),

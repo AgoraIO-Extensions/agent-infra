@@ -342,10 +342,7 @@ async function createPrepared(signal: AbortSignal) {
 				Object.entries(resolvedBindings).map(([agentId, binding]) => {
 					if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
 						throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
-					return [
-						agentId,
-						{ profile: binding.profile, approval: binding.approval },
-					];
+					return [agentId, binding];
 				}),
 			)
 		: connectionConsumerProfilesByAgent;
