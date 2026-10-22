@@ -203,8 +203,15 @@ const linuxNativeSandboxMode = "danger-full-access";
 /** 随 Runtime 镜像固定的模型目录（#2978），由 install-codex.mjs 生成并按摘要校验。 */
 export const CODEX_MODEL_CATALOG_PATH = "/opt/codex/share/models.json";
 
-/** Fixed deployment policy for the official lane, never native/user overrides. */
-export const CODEX_MODEL_ONLY_CONFIG = Object.freeze({
+/**
+ * 官方 lane 的固定部署策略，模型、Owner 和工作区都不能覆盖（工程 Spec §10.14）。
+ * 原生工具在 Session Sandbox 内默认可用，审批策略固定为不发起审批；工具子进程的
+ * 环境排除 `AGENT_INFRA_*`，模型传输凭证不进入 shell。供应商托管的 web search、
+ * 图片生成，以及需要额外平台中介调用归属的原生子 Agent、apps 等功能保持关闭。
+ */
+export const CODEX_OFFICIAL_LANE_CONFIG = Object.freeze({
+	approval_policy: "never",
+	"shell_environment_policy.exclude": Object.freeze(["AGENT_INFRA_*"]),
 	web_search: "disabled",
 	// #2980：请会隐藏推理的模型返回明文推理摘要，作为思考过程展示；
 	// 原始推理（DeepSeek）不需要额外配置也会流式返回。
@@ -246,9 +253,9 @@ export function codexConversationKey(binding: {
 }
 
 export interface CodexAppServerBridgeOptions {
-	/** Fixed installed-Skill launch policy, only for a new model-only process. */
+	/** Fixed installed-Skill launch policy, only for a new official-lane process. */
 	readonly disableBundledSkills?: true;
-	readonly modelOnly?: boolean;
+	readonly officialLane?: boolean;
 	readonly launchPath?: string;
 	// Deployment-owned storage on the current Agent PVC; never a wire input.
 	readonly dataDirectory: string;
@@ -517,7 +524,7 @@ export class CodexAppServerBridgeError extends Error {
 
 interface ValidatedOptions {
 	readonly disableBundledSkills: boolean;
-	modelOnly: boolean;
+	officialLane: boolean;
 	readonly launchPath?: string;
 	dataDirectory: string;
 	conversationKey: string;
@@ -699,7 +706,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 	if (!isPlainRecord(input)) configurationInvalid();
 	const allowedKeys = [
 		"disableBundledSkills",
-		"modelOnly",
+		"officialLane",
 		"launchPath",
 		"dataDirectory",
 		"conversationKey",
@@ -759,13 +766,14 @@ function validateOptions(input: unknown): ValidatedOptions {
 	if (
 		input.disableBundledSkills !== undefined &&
 		(input.disableBundledSkills !== true ||
-			input.modelOnly !== true ||
+			input.officialLane !== true ||
 			privateLane)
 	)
 		configurationInvalid();
 	if (
-		(input.modelOnly !== undefined && typeof input.modelOnly !== "boolean") ||
-		(input.modelOnly === true &&
+		(input.officialLane !== undefined &&
+			typeof input.officialLane !== "boolean") ||
+		(input.officialLane === true &&
 			(privateLane ||
 				input.nativeBarrierRequired === true ||
 				!input.modelAccess))
@@ -837,7 +845,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 		nativeBarrierRequired:
 			input.nativeBarrierRequired ??
 			(CODEX_NATIVE_BARRIER_REQUIRED || privateLane),
-		modelOnly: input.modelOnly === true,
+		officialLane: input.officialLane === true,
 		startupTimeoutMs: parseTimeout(input.startupTimeoutMs, defaultTimeoutMs),
 		shutdownTimeoutMs: parseTimeout(input.shutdownTimeoutMs, defaultTimeoutMs),
 	};
@@ -1615,8 +1623,8 @@ export class CodexAppServerBridge {
 					...(validated.disableBundledSkills
 						? ["--config", "skills.bundled.enabled=false"]
 						: []),
-					...(validated.modelOnly
-						? Object.entries(CODEX_MODEL_ONLY_CONFIG).flatMap(
+					...(validated.officialLane
+						? Object.entries(CODEX_OFFICIAL_LANE_CONFIG).flatMap(
 								([key, value]) => [
 									"--config",
 									`${key}=${JSON.stringify(value)}`,
@@ -1652,9 +1660,10 @@ export class CodexAppServerBridge {
 					],
 					cwd: nativeLaunchPolicy.directory,
 					env: {
+						// 白名单环境，不继承宿主的 CODEX_EXEC_SERVER_URL 等执行器覆盖；
+						// 不设置该变量时，原生工具在本 Conversation 进程内本地执行（#3201）。
 						...nativeLaunchPolicy.environment,
 						...loopbackProxyEnvironment(),
-						...(validated.modelOnly ? { CODEX_EXEC_SERVER_URL: "none" } : {}),
 						...(validated.modelAccess
 							? {
 									[modelCredentialEnvironmentKey]:

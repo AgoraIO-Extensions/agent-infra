@@ -90,11 +90,6 @@ export interface CodexModelRequestJournal {
 	readonly credential?: string;
 	/** Synchronous original Driver state check at the actual fetch boundary. */
 	readonly assertCurrent?: () => void;
-	/** Deployment-owned Driver tool selection for this original Conversation. */
-	readonly allowsClientTool?: (
-		name: string,
-		namespace: string | undefined,
-	) => boolean;
 	/** Durable dispatch barrier, awaited before the actual fetch is invoked. */
 	started(startedAt: string): Promise<void>;
 	/** Must commit before a terminal response can be published to native. */
@@ -111,8 +106,11 @@ function assertCurrentModelRequest(journal: CodexModelRequestJournal): void {
 }
 
 export interface CodexModelTransportObserver {
-	/** Official lane has no controlled native tool dispatch boundary. */
-	readonly modelOnly?: boolean;
+	/**
+	 * 官方 lane：放行 Session Sandbox 内执行的原生工具，只拒绝模型供应商托管的工具
+	 * （工程 Spec §10.14）。
+	 */
+	readonly officialLane?: boolean;
 	/** Persists intent and checks current authorization before permitting fetch. */
 	beforeRequest(
 		context: CodexModelRequestContext,
@@ -764,9 +762,7 @@ function semanticPayload(
 function encodeValidatedEvent(
 	event: EventSourceMessage,
 	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
-	modelOnly: boolean,
-	allowsClientTool?: CodexModelRequestJournal["allowsClientTool"],
-	clientToolItems = new Set<string>(),
+	officialLane: boolean,
 ) {
 	if (
 		event.id !== undefined ||
@@ -784,8 +780,7 @@ function encodeValidatedEvent(
 		!isPlainRecord(value) ||
 		typeof value.type !== "string" ||
 		(event.event !== undefined && event.event !== value.type) ||
-		(modelOnly &&
-			!isModelOnlyEvent(value, allowsClientTool, clientToolItems)) ||
+		(officialLane && !isOfficialLaneEvent(value)) ||
 		containsUnsafeModelData(value, credentialMatcher)
 	) {
 		return { state: "invalid" as const };
@@ -842,49 +837,37 @@ function encodeValidatedEvent(
 	};
 }
 
-function isModelOnlyEvent(
-	value: Record<string, unknown>,
-	allowsClientTool?: CodexModelRequestJournal["allowsClientTool"],
-	clientToolItems = new Set<string>(),
-) {
-	// Reject before projection, including tool data carried only in the terminal
-	// response. Native must never see a partial or complete tool invocation.
+// 官方 lane 放行的输出项：模型输出，以及在 Session Sandbox 内执行的原生工具调用。
+const officialLaneItemTypes = new Set([
+	"message",
+	"reasoning",
+	"compaction",
+	"compaction_summary",
+	"function_call",
+	"custom_tool_call",
+]);
+
+function isOfficialLaneEvent(value: Record<string, unknown>) {
+	// 投影前拒绝，包括只出现在终态响应里的托管工具数据。原生工具（function /
+	// custom）由原生进程在 Sandbox 内执行；模型供应商托管的工具（web search、
+	// image generation、tool search 等）不经过 Sandbox，官方 lane 不放行。
 	if (typeof value.type !== "string") return false;
-	if (/^response\.function_call_arguments\.(?:delta|done)$/.test(value.type))
-		return (
-			!!allowsClientTool &&
-			typeof value.item_id === "string" &&
-			clientToolItems.has(value.item_id)
-		);
+	if (
+		/^response\.(?:function_call_arguments|custom_tool_call_input)\.(?:delta|done)$/.test(
+			value.type,
+		)
+	)
+		return true;
 	if (/tool|function_call/.test(value.type)) return false;
 	const items = value.item === undefined ? [] : [value.item];
 	if (isPlainRecord(value.response) && value.response.output !== undefined) {
 		if (!Array.isArray(value.response.output)) return false;
 		items.push(...value.response.output);
 	}
-	return items.every((item) => {
-		if (!isPlainRecord(item)) return false;
-		if (
-			["message", "reasoning", "compaction", "compaction_summary"].includes(
-				String(item.type),
-			)
-		)
-			return true;
-		if (
-			item.type !== "function_call" ||
-			typeof item.name !== "string" ||
-			(item.namespace !== undefined &&
-				item.namespace !== null &&
-				typeof item.namespace !== "string") ||
-			!allowsClientTool?.(
-				item.name,
-				typeof item.namespace === "string" ? item.namespace : undefined,
-			)
-		)
-			return false;
-		if (typeof item.id === "string") clientToolItems.add(item.id);
-		return true;
-	});
+	return items.every(
+		(item) =>
+			isPlainRecord(item) && officialLaneItemTypes.has(String(item.type)),
+	);
 }
 
 // Matcher state retains only a possible credential prefix per semantic channel.
@@ -938,9 +921,8 @@ async function forwardValidatedStream(
 	controller: AbortController,
 	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
 	recordOutcome: (outcome: CodexModelRequestOutcome) => Promise<void>,
-	modelOnly: boolean,
+	officialLane: boolean,
 	idleTimeoutMs: number,
-	allowsClientTool?: CodexModelRequestJournal["allowsClientTool"],
 ) {
 	const decoder = new TextDecoder("utf-8", { fatal: true });
 	let failed = false;
@@ -956,7 +938,6 @@ async function forwardValidatedStream(
 	let pending: string[] = [];
 	let pendingBytes = 0;
 	const guard = credentialStreamGuard(credentialMatcher);
-	const clientToolItems = new Set<string>();
 	const parser = createParser({
 		maxBufferSize: maximumEventBytes,
 		onComment: () => {},
@@ -976,9 +957,7 @@ async function forwardValidatedStream(
 			const result = encodeValidatedEvent(
 				event,
 				credentialMatcher,
-				modelOnly,
-				allowsClientTool,
-				clientToolItems,
+				officialLane,
 			);
 			if (result.state === "invalid" || result.state === "failed") {
 				if (result.state === "failed") failure.code = "provider_error";
@@ -1174,7 +1153,7 @@ function routedRequest(
 	encoding: string | undefined,
 	routes: ReadonlyMap<string, ValidatedRoute>,
 	admittedModel: ModelTurnSelection,
-	modelOnly: boolean,
+	officialLane: boolean,
 ) {
 	const decoded = decodeRequestBody(bytes, encoding);
 	if (decoded.byteLength > maximumRequestBytes) throw new Error();
@@ -1183,7 +1162,8 @@ function routedRequest(
 		throw new Error();
 	}
 	if (value.model !== admittedModel.internalModel) return;
-	if (modelOnly && !onlyClientToolDeclarations(value.tools)) return;
+	// 官方 lane 只声明在 Sandbox 内执行的工具；托管工具声明在上游请求前拒绝。
+	if (officialLane && !onlyClientToolDeclarations(value.tools)) return;
 	const route = routes.get(admittedModel.internalModel);
 	if (!route) return;
 	if (value.reasoning !== undefined && !isPlainRecord(value.reasoning)) return;
@@ -1236,7 +1216,7 @@ export async function openCodexModelTransport(
 		responseHeaderTimeout > 2_147_483_647
 	)
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
-	const modelOnly = observer.modelOnly === true;
+	const officialLane = observer.officialLane === true;
 	const routes = validatedRoutes(input);
 	const keyed = [...routes.values()].every(
 		({ credential }) => credential === undefined,
@@ -1617,7 +1597,7 @@ export async function openCodexModelTransport(
 				contentEncoding,
 				routes,
 				admittedModel,
-				modelOnly,
+				officialLane,
 			);
 			if (!routed) {
 				reject(response, 400);
@@ -1739,9 +1719,8 @@ export async function openCodexModelTransport(
 				controller,
 				credentialMatcher,
 				recordOutcome,
-				modelOnly,
+				officialLane,
 				idleTimeout,
-				journal.allowsClientTool,
 			);
 		} catch {
 			responseFailed = outcomeReported || outcomeReport !== undefined;

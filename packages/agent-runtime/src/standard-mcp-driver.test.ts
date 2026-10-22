@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { RuntimeDriverSubmitTurnCommandV2 } from "@agent-infra/contracts/runtime";
 import { afterEach, expect, it } from "vitest";
 import {
-	CODEX_MODEL_ONLY_CONFIG,
+	CODEX_OFFICIAL_LANE_CONFIG,
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 } from "./codex-app-server-bridge.js";
@@ -58,17 +58,21 @@ class StandardToolNativeFixture {
 				features: { plugins: false },
 			};
 			const origins: Record<string, unknown> = {};
-			for (const key of [
-				"model",
-				"model_reasoning_effort",
-				"features.plugins",
-				...Object.keys(CODEX_MODEL_ONLY_CONFIG),
-			])
+			for (const key of ["model", "model_reasoning_effort", "features.plugins"])
 				origins[key] = { name: { type: "sessionFlags" }, version: "1" };
-			for (const [key, value] of Object.entries(CODEX_MODEL_ONLY_CONFIG)) {
-				if (key.startsWith("features."))
-					(config.features as Record<string, unknown>)[key.slice(9)] = value;
-				else config[key] = value;
+			// 按固定 Codex 的 config/read 形状：嵌套对象，数组按元素记录来源。
+			for (const [key, value] of Object.entries(CODEX_OFFICIAL_LANE_CONFIG)) {
+				const parts = key.split(".");
+				let container = config;
+				for (const part of parts.slice(0, -1)) {
+					container[part] ??= {};
+					container = container[part] as Record<string, unknown>;
+				}
+				container[parts.at(-1) as string] = structuredClone(value);
+				for (const originKey of Array.isArray(value)
+					? value.map((_, index) => `${key}.${index}`)
+					: [key])
+					origins[originKey] = { name: { type: "sessionFlags" }, version: "1" };
 			}
 			const provider = {
 				name: "Agent Infra Active Model",

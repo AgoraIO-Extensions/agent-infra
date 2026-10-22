@@ -160,7 +160,7 @@ function syntheticToolResponse(response, sequence) {
 		call_id: toolCallId,
 		name: "exec_command",
 		arguments: JSON.stringify({
-			cmd: `command -v truncate >/dev/null || exit 11; printf 'runtime-tool-ok\\n'; if printf 'unexpected\\n' > ${toolDeniedPath}; then exit 9; fi; truncate_output=$(truncate -s 0 ${toolExistingPath} 2>&1); truncate_status=$?; if test "$truncate_status" -eq 0; then exit 10; fi; case "$truncate_output" in *'Permission denied'*) printf 'runtime-truncate-denied\\n';; *) exit 12;; esac; test ! -e ${toolDeniedPath} && test -s ${toolExistingPath} || exit 13; printf 'runtime-own-control\\n' > ./runtime-own-control || exit 14; test "$(cat ./runtime-own-control)" = runtime-own-control || exit 15; if cat ${toolSiblingFile} >/dev/null 2>&1; then exit 16; fi; if ls ${toolSiblingRoot} >/dev/null 2>&1; then exit 17; fi; if ls ${toolBoundaryPath} >/dev/null 2>&1; then exit 18; fi; if printf 'unexpected\\n' > ${toolSiblingFile} 2>/dev/null; then exit 19; fi; if cat /proc/self/environ >/dev/null 2>&1; then exit 20; fi; printf 'runtime-sibling-denied\\n'`,
+			cmd: `command -v truncate >/dev/null || exit 11; printf 'runtime-tool-ok\\n'; if printf 'unexpected\\n' > ${toolDeniedPath}; then exit 9; fi; truncate_output=$(truncate -s 0 ${toolExistingPath} 2>&1); truncate_status=$?; if test "$truncate_status" -eq 0; then exit 10; fi; case "$truncate_output" in *'Permission denied'*) printf 'runtime-truncate-denied\\n';; *) exit 12;; esac; test ! -e ${toolDeniedPath} && test -s ${toolExistingPath} || exit 13; printf 'runtime-own-control\\n' > ./runtime-own-control || exit 14; test "$(cat ./runtime-own-control)" = runtime-own-control || exit 15; if cat ${toolSiblingFile} >/dev/null 2>&1; then exit 16; fi; if ls ${toolSiblingRoot} >/dev/null 2>&1; then exit 17; fi; if ls ${toolBoundaryPath} >/dev/null 2>&1; then exit 18; fi; if printf 'unexpected\\n' > ${toolSiblingFile} 2>/dev/null; then exit 19; fi; if cat /proc/self/environ >/dev/null 2>&1; then exit 20; fi; if env | grep -q '^AGENT_INFRA_'; then exit 21; fi; printf 'runtime-sibling-denied\\n'`,
 			max_output_tokens: 100,
 			yield_time_ms: 1000,
 		}),
@@ -284,15 +284,17 @@ const model = createServer(async (request, response) => {
 			case "/approved-default/v1/responses":
 			case "/approved-selected/v1/responses":
 				if (toolProbePending) {
-					// Inject an unsolicited invocation even when the official lane has
-					// correctly omitted that tool from its advertised capabilities.
+					// #3201：官方 lane 的原生工具在 Conversation 边界内真实执行；apply_patch
+					// 即使未在该模型的工具中声明，也照样注入，验证越界写入被拒绝。
 					toolProbePending = false;
 					syntheticToolResponse(response, requests.length);
 					return;
 				}
 				toolProbeOutput ??= body.input.find(
 					(item) =>
-						item.type === "function_call_output" && item.call_id === toolCallId,
+						(item.type === "function_call_output" ||
+							item.type === "custom_tool_call_output") &&
+						item.call_id === toolCallId,
 				)?.output;
 				syntheticResponse(response, requests.length);
 				return;
@@ -1434,7 +1436,7 @@ async function runImageProbe() {
 		);
 		await runtime.stop();
 
-		stage = "native-model-only-tool-rejection";
+		stage = "native-sandbox-tools";
 		await writeFile(toolDeniedPath, "owner-write-control");
 		await unlink(toolDeniedPath);
 		await writeFile(toolExistingPath, "owner-truncate-control");
@@ -1444,8 +1446,8 @@ async function runImageProbe() {
 		});
 		assert.equal(await readFile(toolExistingPath, "utf8"), "");
 		await writeFile(toolExistingPath, "owner-truncate-control");
-		// Keep controls writable to the image user: rejection must precede any tool
-		// execution, rather than attributing an unsupported action to sandbox success.
+		// Keep controls writable to the image user, so only the Conversation boundary
+		// (not file permissions) can deny the native tool's writes outside it.
 		await mkdir(`${toolSiblingRoot}/workspace`, {
 			recursive: true,
 			mode: 0o700,
@@ -1466,18 +1468,29 @@ async function runImageProbe() {
 			toolProbePending = true;
 			toolProbeOutput = undefined;
 			const beforeRequests = requests.length;
-			await turn(`tool-probe-${kind}`, undefined, "failed");
+			// 工具失败只是工具结果，不使 Turn 失败。
+			await turn(`tool-probe-${kind}`, undefined, "completed");
 			assert.equal(await readFile(toolSiblingFile, "utf8"), toolSiblingContent);
 			await assert.rejects(readFile(toolDeniedPath), { code: "ENOENT" });
 			assert.equal(
 				await readFile(toolExistingPath, "utf8"),
 				"owner-truncate-control",
 			);
+			const output = typeof toolProbeOutput === "string" ? toolProbeOutput : "";
 			check(
-				`native-${kind}-rejected-without-side-effects`,
+				kind === "shell"
+					? "native-shell-sandboxed-within-conversation"
+					: "native-apply-patch-no-outside-effects",
 				!toolProbePending &&
-					requests.length === beforeRequests + 1 &&
-					toolProbeOutput === undefined,
+					requests.length === beforeRequests + 2 &&
+					output.length > 0 &&
+					(kind !== "shell" ||
+						(/exited with code 0\b/.test(output) &&
+							[
+								"runtime-tool-ok",
+								"runtime-truncate-denied",
+								"runtime-sibling-denied",
+							].every((marker) => output.includes(marker)))),
 			);
 		}
 		await runtime.stop();

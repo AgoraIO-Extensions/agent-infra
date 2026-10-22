@@ -50,7 +50,7 @@ vi.mock("node:crypto", async (importOriginal) => {
 import { readCallbackCorpusBytes } from "../../../deploy/runtime/vendor/codex/callback-corpus.mjs";
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
-	CODEX_MODEL_ONLY_CONFIG,
+	CODEX_OFFICIAL_LANE_CONFIG,
 	CodexAppServerBridge,
 	runCodexConnectionRecovery,
 	validateModelAccess,
@@ -454,14 +454,14 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		await expectPathRemoved(capture.cwd);
 	});
 
-	it("fixes the official model-only launch policy without inheriting executor overrides", async () => {
+	it("fixes the official lane launch policy without inheriting executor overrides", async () => {
 		const { capturePath } = await installFakeCodex("barrier-missing");
 		const previous = process.env.CODEX_EXEC_SERVER_URL;
 		process.env.CODEX_EXEC_SERVER_URL = "ws://127.0.0.1:9999";
 		try {
 			const bridge = await CodexAppServerBridge.open(
 				options({
-					modelOnly: true,
+					officialLane: true,
 					nativeBarrierRequired: false,
 					model: "synthetic/gpt-5.6-sol",
 					modelAccess: {
@@ -478,9 +478,16 @@ describe.sequential("Codex app-server v2 bridge", () => {
 					),
 				).toBe(false);
 				const server = captures[2];
-				expect(server?.environment.execServerUrl).toBe("none");
-				for (const [key, value] of Object.entries(CODEX_MODEL_ONLY_CONFIG))
+				// #3201：设为 "none" 会让固定 Codex 关闭全部本地执行工具；不继承宿主的
+				// 执行器覆盖，也不设置该变量，原生工具在本进程内本地执行。
+				expect(server?.environment.execServerUrl).toBeUndefined();
+				for (const [key, value] of Object.entries(CODEX_OFFICIAL_LANE_CONFIG))
 					expect(server?.args).toContain(`${key}=${JSON.stringify(value)}`);
+				// #3201：原生工具不发起审批，工具子进程的环境排除模型传输凭证。
+				expect(server?.args).toContain('approval_policy="never"');
+				expect(server?.args).toContain(
+					'shell_environment_policy.exclude=["AGENT_INFRA_*"]',
+				);
 				// #2980：会总结推理的模型被要求返回明文摘要，作为思考过程展示；
 				// 原始推理不需要额外配置。
 				expect(server?.args).toContain('model_reasoning_summary="auto"');
@@ -501,12 +508,12 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		{ nativeCallback: async () => ({}) },
 		{ nativeBarrierRequired: true },
 		{ modelAccess: undefined },
-	])("rejects incompatible official model-only launch %j", async (override) => {
+	])("rejects incompatible official lane launch %j", async (override) => {
 		await installFakeCodex("echo");
 		await expect(
 			CodexAppServerBridge.open(
 				options({
-					modelOnly: true,
+					officialLane: true,
 					nativeBarrierRequired: false,
 					model: "synthetic/gpt-5.6-sol",
 					modelAccess: {
@@ -1900,7 +1907,7 @@ it.each([false, true])(
 		const { capturePath } = await installFakeCodex("barrier-missing");
 		const bridge = await CodexAppServerBridge.open(
 			options({
-				modelOnly: true,
+				officialLane: true,
 				nativeBarrierRequired: false,
 				model: "synthetic/gpt-5.6-sol",
 				modelAccess: {
@@ -1938,7 +1945,7 @@ it.each([false, true])(
 );
 
 it.each([false, "false", true])(
-	"rejects installed-Skill launch control %s outside the official model-only lane",
+	"rejects installed-Skill launch control %s outside the official lane",
 	async (value) => {
 		const { capturePath } = await installFakeCodex("echo");
 		await expect(

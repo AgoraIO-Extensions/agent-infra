@@ -90,32 +90,51 @@ const defaultNativeTurn = {
 } as const;
 const close: (() => Promise<void>)[] = [];
 
-describe("official model-only transport", () => {
-	it.each([true, false])(
-		"only admits the Driver-selected Connection tool (approved: %s)",
-		async (approved) => {
-			const item = {
-				type: "function_call",
-				id: "selected-item",
-				name: approved ? "mcp_selected" : "exec_command",
-				namespace: "connection",
-				call_id: "selected-call",
-				arguments: "{}",
-			};
+describe("official lane transport", () => {
+	// #3201：官方 lane 放行 Session Sandbox 内执行的原生工具（function / custom），
+	// 只拒绝由模型供应商托管的工具调用。
+	const nativeToolItems = [
+		{
+			type: "function_call",
+			id: "native-item",
+			name: "exec_command",
+			call_id: "native-call",
+			arguments: '{"cmd":"ls"}',
+		},
+		{
+			type: "custom_tool_call",
+			id: "native-item",
+			name: "apply_patch",
+			call_id: "native-call",
+			input: "*** Begin Patch",
+		},
+	];
+	it.each(nativeToolItems)(
+		"delivers the native $type $name to native",
+		async (item) => {
 			const target = await listen(
 				createServer((_request, response) => {
 					response.writeHead(200, { "content-type": "text/event-stream" });
 					response.end(
 						event({ type: "response.output_item.added", item }) +
-							event({
-								type: "response.function_call_arguments.delta",
-								item_id: "selected-item",
-								delta: "{}",
-							}) +
+							event(
+								item.type === "function_call"
+									? {
+											type: "response.function_call_arguments.delta",
+											item_id: "native-item",
+											delta: "{}",
+										}
+									: {
+											type: "response.custom_tool_call_input.delta",
+											item_id: "native-item",
+											delta: "*** Begin Patch",
+										},
+							) +
+							event({ type: "response.output_item.done", item }) +
 							event({
 								type: "response.completed",
 								response: {
-									id: "selected-response",
+									id: "native-response",
 									status: "completed",
 									output: [item],
 								},
@@ -124,40 +143,24 @@ describe("official model-only transport", () => {
 				}),
 			);
 			const value = await transport(target, true, {
-				modelOnly: true,
-				beforeRequest: async () => ({
-					started: async () => {},
-					finish: async () => {},
-					allowsClientTool: (name, namespace) =>
-						name === "mcp_selected" && namespace === "connection",
-				}),
+				...testObserver,
+				officialLane: true,
 			});
 			const response = await request(value.modelAccess);
-			expect(response.status).toBe(approved ? 200 : 502);
+			expect(response.status).toBe(200);
 			const body = await response.text();
-			if (approved) expect(body).toContain("selected-call");
-			else expect(body).not.toContain("exec_command");
+			expect(body).toContain("native-call");
+			expect(body).toContain(item.name);
 		},
 	);
-	const toolItems = [
-		{
-			type: "function_call",
-			name: "exec_command",
-			call_id: "synthetic-call",
-			arguments: '{"cmd":"synthetic-command"}',
-		},
-		{
-			type: "custom_tool_call",
-			name: "apply_patch",
-			call_id: "synthetic-call",
-			input: "synthetic-patch",
-		},
+
+	const hostedToolItems = [
 		{ type: "tool_search_call", execution: "client", arguments: {} },
 		{ type: "web_search_call", action: { type: "search", query: "synthetic" } },
 		{ type: "image_generation_call", status: "completed", result: "synthetic" },
 	];
 	it.each(
-		toolItems.flatMap((item) =>
+		hostedToolItems.flatMap((item) =>
 			[
 				"response.output_item.added",
 				"response.output_item.done",
@@ -165,7 +168,7 @@ describe("official model-only transport", () => {
 			].map((type) => ({ type, item })),
 		),
 	)(
-		"rejects $item.type in $type before native delivery",
+		"rejects hosted $item.type in $type before native delivery",
 		async ({ type, item }) => {
 			const target = await listen(
 				createServer((_request, response) => {
@@ -188,7 +191,7 @@ describe("official model-only transport", () => {
 			);
 			const value = await transport(target, true, {
 				...testObserver,
-				modelOnly: true,
+				officialLane: true,
 			});
 			const response = await request(value.modelAccess);
 			expect(response.status).toBe(502);
@@ -203,6 +206,26 @@ describe("official model-only transport", () => {
 		"response.function_call_arguments.done",
 		"response.custom_tool_call_input.delta",
 		"response.custom_tool_call_input.done",
+	])("accepts native tool input %s", async (type) => {
+		const target = await listen(
+			createServer((_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({ type, delta: "synthetic-tool-input", item_id: "native" }) +
+						completedEvent(),
+				);
+			}),
+		);
+		const value = await transport(target, true, {
+			...testObserver,
+			officialLane: true,
+		});
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(200);
+		await response.text();
+	});
+
+	it.each([
 		"response.web_search_call.in_progress",
 		"response.image_generation_call.in_progress",
 		"response.code_interpreter_call.in_progress",
@@ -218,7 +241,7 @@ describe("official model-only transport", () => {
 		);
 		const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
 		const value = await transport(target, true, {
-			modelOnly: true,
+			officialLane: true,
 			beforeRequest: async () => ({ started: async () => {}, finish }),
 		});
 		const response = await request(value.modelAccess);
@@ -230,6 +253,31 @@ describe("official model-only transport", () => {
 				failureCode: "invalid_response",
 			}),
 		);
+	});
+
+	it("still rejects a native tool argument that carries the model credential", async () => {
+		const item = {
+			type: "function_call",
+			id: "native-item",
+			name: "exec_command",
+			call_id: "native-call",
+			arguments: JSON.stringify({ cmd: `echo ${credential}` }),
+		};
+		const target = await listen(
+			createServer((_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(
+					event({ type: "response.output_item.done", item }) + completedEvent(),
+				);
+			}),
+		);
+		const value = await transport(target, true, {
+			...testObserver,
+			officialLane: true,
+		});
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(502);
+		expect(await response.text()).not.toContain(credential);
 	});
 
 	it.each([
@@ -249,7 +297,7 @@ describe("official model-only transport", () => {
 		);
 		const value = await transport(target, true, {
 			...testObserver,
-			modelOnly: true,
+			officialLane: true,
 		});
 		const response = await request(value.modelAccess, {
 			body: JSON.stringify({ model: selectedInternalModel, tools: [{ type }] }),
@@ -301,7 +349,7 @@ describe("official model-only transport", () => {
 		);
 		const value = await transport(target, true, {
 			...testObserver,
-			modelOnly: true,
+			officialLane: true,
 		});
 		const response = await request(value.modelAccess);
 		const body = await response.text();
@@ -325,7 +373,7 @@ describe("official model-only transport", () => {
 		);
 		const value = await transport(target, true, {
 			...testObserver,
-			modelOnly: true,
+			officialLane: true,
 		});
 		const response = await request(value.modelAccess, {
 			body: JSON.stringify({
@@ -1109,7 +1157,7 @@ describe("Codex model transport", () => {
 		);
 		const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
 		const value = await transport(target, true, {
-			modelOnly: true,
+			officialLane: true,
 			beforeRequest: async () => ({ started: async () => {}, finish }),
 		});
 		const response = await request(value.modelAccess);
@@ -1149,7 +1197,7 @@ describe("Codex model transport", () => {
 			);
 			const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
 			const value = await transport(target, true, {
-				modelOnly: true,
+				officialLane: true,
 				beforeRequest: async () => ({ started: async () => {}, finish }),
 			});
 			const response = await request(value.modelAccess);
@@ -1361,8 +1409,8 @@ describe("Codex model transport", () => {
 	});
 
 	it.each([false, true])(
-		"accepts a raw reasoning text completion without forwarding it (model-only: %s)",
-		async (modelOnly) => {
+		"accepts a raw reasoning text completion without forwarding it (official lane: %s)",
+		async (officialLane) => {
 			// #2969：流式输出原始推理的 Responses provider（例如 DeepSeek）在每段
 			// 推理结束时发送 response.reasoning_text.done。
 			const reasoningItem = {
@@ -1419,7 +1467,7 @@ describe("Codex model transport", () => {
 				}),
 			);
 			const value = await transport(target, true, {
-				...(modelOnly ? { modelOnly: true } : {}),
+				...(officialLane ? { officialLane: true } : {}),
 				beforeRequest: async () => ({
 					started: async () => {},
 					finish: async (outcome) => {
