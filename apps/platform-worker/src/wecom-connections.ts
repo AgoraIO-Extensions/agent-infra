@@ -2,7 +2,7 @@ import {
 	type WecomAcceptanceV1,
 	type WecomConnectionFenceV1,
 	type WecomMessageV1,
-	type WecomSendPortV1,
+	type WecomScopeV1,
 	wecomProcessingTextV1,
 } from "@agent-infra/platform-core";
 import {
@@ -13,6 +13,7 @@ import type { WecomReplyRouteV1 } from "@agent-infra/wecom";
 import {
 	createWecomWebSocketV1,
 	type WecomWebSocketConfigurationV1,
+	type WecomWebSocketSenderV1,
 } from "@agent-infra/wecom/worker";
 
 export interface WecomConnectionsDeploymentV1 {
@@ -200,16 +201,30 @@ export function createPlatformWecomConnectionsV1(
 			await connection.connect();
 		}
 	}
-	const sender: WecomSendPortV1 = {
+	const entryFor = async (scope: WecomScopeV1) => {
+		const entry = [...active.values()].find(
+			(e) =>
+				e.claim.agentId === scope.agentId &&
+				e.claim.bindingReference === scope.bindingReference &&
+				scope.kind === "wecom_bot",
+		);
+		return entry && (await leases.current(entry.claim)) ? entry : undefined;
+	};
+	const sender: WecomWebSocketSenderV1 = {
 		async send(input) {
-			const entry = [...active.values()].find(
-				(e) =>
-					e.claim.agentId === input.scope.agentId &&
-					e.claim.bindingReference === input.scope.bindingReference &&
-					input.scope.kind === "wecom_bot",
-			);
-			if (!entry || !(await leases.current(entry.claim))) return "failed";
+			const entry = await entryFor(input.scope);
+			if (!entry) return "failed";
 			return entry.connection.sender.send(input);
+		},
+		// #3229：只有本 Worker 持有当前租约的连接才规划与发送媒体。
+		async planMedia(input) {
+			const entry = await entryFor(input.scope);
+			return entry ? entry.connection.sender.planMedia(input) : null;
+		},
+		async sendMedia(input) {
+			const entry = await entryFor(input.scope);
+			if (!entry) return "failed";
+			return entry.connection.sender.sendMedia(input);
 		},
 	};
 	return {

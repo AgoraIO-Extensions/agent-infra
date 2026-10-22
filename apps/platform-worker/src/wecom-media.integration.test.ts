@@ -17,6 +17,7 @@ import {
 	PostgresWecomChannelV1,
 } from "@agent-infra/platform-store";
 import { encryptWecomMediaFixtureV1 } from "@agent-infra/wecom/testing";
+import { parseWecomAnswerReferencesV1 } from "@agent-infra/wecom/worker";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
@@ -444,6 +445,7 @@ describe("WeCom long-connection inbound media (#3227)", {
 			const delivery = createWecomDeliveryV1({
 				store,
 				authorization,
+				answerReferences: parseWecomAnswerReferencesV1,
 				sender: {
 					async send(input) {
 						sent.push(input);
