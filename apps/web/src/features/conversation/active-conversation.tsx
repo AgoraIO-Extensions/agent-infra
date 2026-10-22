@@ -351,6 +351,7 @@ export function ActiveConversation({
 		},
 	});
 	const files = useConversationFiles({
+		agentId,
 		conversationId,
 		attachmentsEnabled: agent.capabilities.attachments,
 		resultFilesEnabled: agent.capabilities.resultFiles,
