@@ -57,6 +57,11 @@ describe("Platform API production assembly", () => {
 				"data:text/javascript,export function createPlatformApiAssemblyInput() {}; export const browserAuth = { handleRequest: true }",
 			),
 		).rejects.toThrow("Platform API deployment module is invalid");
+		await expect(
+			loadPlatformApiAssembly(
+				"data:text/javascript,export function createPlatformApiAssemblyInput() { return {}; }; export const standardTemplateReleaseApp = { fetch: true }",
+			),
+		).rejects.toThrow("Platform API deployment module is invalid");
 	});
 
 	it.each([
@@ -397,9 +402,19 @@ describe("Platform API production assembly", () => {
 		const browserAuth = {
 			handleRequest: vi.fn(async () => new Response(null, { status: 204 })),
 		};
+		const standardTemplateReleaseApp = {
+			fetch: vi.fn(
+				async () =>
+					new Response(JSON.stringify({ status: "release-app" }), {
+						status: 202,
+						headers: { "content-type": "application/json" },
+					}),
+			),
+		};
 		const server = startPlatformApi({
 			dependencies: assembly.dependencies,
 			browserAuth,
+			standardTemplateReleaseApp,
 			log: () => {},
 			port: 0,
 		});
@@ -415,6 +430,12 @@ describe("Platform API production assembly", () => {
 			});
 			expect(login.status).toBe(204);
 			expect(browserAuth.handleRequest).toHaveBeenCalledOnce();
+			const release = await fetch(
+				`http://127.0.0.1:${address.port}/internal/ops/standard-template-releases/release/apply`,
+				{ method: "POST" },
+			);
+			expect(release.status).toBe(202);
+			expect(standardTemplateReleaseApp.fetch).toHaveBeenCalledOnce();
 			browserAuth.handleRequest.mockRejectedValueOnce(
 				new Error("private directory failure"),
 			);
