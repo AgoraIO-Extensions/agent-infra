@@ -14,12 +14,12 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `index.html` | `8221ac1a9a8114b369b2d17e63456654b5a2a2c7c523e934a5ac70f36ef0c846` |
-| `login.html` | `0f8c22fbc696ebea70222b8f754addbebcd1ccb121554234cb0cf9867a9e2619` |
+| `index.html` | `6038af44b4a8a36cf88175615885dabc1a6d01c9c81983d7495c3b9135397ff7` |
+| `login.html` | `aa0a2737e7bc76f56c2552abfb503879a3c9f5c0919adfd7b65decd27b3ba6a7` |
 | `DESIGN.md` | `fa953264eafe4e0bd05adaa86387a9d90ad7af51d4e79f0a67620bfa31596d65` |
 | `IMPLEMENTATION.md` | `ae3e592272933f65a0f7fc34363142a4471a724f7a75db76affe6ae12d640600` |
 | `DESIGN-HANDOFF.md` | `3f2313d6d72bf3d7263d1e864730278217836ccdd5730d4b83460518bd2d3396` |
-| `DESIGN-MANIFEST.json` | `2b0daf09052fb5a53d72d46d35bb06ea745557fb336d55dc5692b02b6bb910be` |
+| `DESIGN-MANIFEST.json` | `6adb33bf68fe9b520a58a14efa0944d8ce059274309adad0fed297098ad1740f` |
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量，并提供设计同名别名（`--bg`、`--fg`、`--surface-raised`、`--accent`、
@@ -53,12 +53,13 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 
 ### 已回写导出设计的结论
 
-以下结论已在 #2862、#2863、#2903、#2996 与 #2830 终验（#3037–#3041、#3046、#3052，第二轮 #3127–#3130，第三轮 #3160、#3161，第四轮 #3179、#3180）确认，
+以下结论已在 #2862、#2863、#2903、#2996 与 #2830 终验（#3037–#3041、#3046、#3052，第二轮 #3127–#3130，第三轮 #3160、#3161，第四轮 #3179、#3180，第五轮 #3215、#3216）确认，
 并由 [#2863](https://github.com/AgoraIO-Extensions/agent-infra/issues/2863)、
 [#3107](https://github.com/AgoraIO-Extensions/agent-infra/issues/3107)、
 [#3130](https://github.com/AgoraIO-Extensions/agent-infra/issues/3130)、
-[#3161](https://github.com/AgoraIO-Extensions/agent-infra/issues/3161) 与
-[#3180](https://github.com/AgoraIO-Extensions/agent-infra/issues/3180) 回写本版导出稿；实现与验收以这里为准：
+[#3161](https://github.com/AgoraIO-Extensions/agent-infra/issues/3161)、
+[#3180](https://github.com/AgoraIO-Extensions/agent-infra/issues/3180) 与
+[#3216](https://github.com/AgoraIO-Extensions/agent-infra/issues/3216) 回写本版导出稿；实现与验收以这里为准：
 
 | 编号 | 位置 | 实现 | 依据 |
 | --- | --- | --- | --- |
@@ -88,7 +89,7 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | V-19 | `/skills/manage/new` 新建首屏 | 先「Skill 项目」（包名称、创建项目）与导入区，右栏只有说明；创建后进入该项目，出现内容与发布 | 项目内容只属于已创建的项目，并按项目内容修订号 CAS（[工程 Spec §11.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配)），没有项目时不能保存内容或发布 |
 | W-06 | 创建、修改申请「基本信息」 | 字段依次为 Agent 名称、使用场景、来源；来源与标准模板（或镜像地址、多服务 YAML、入口身份校验）分两级选择 | [PRD §6.1](../prd/PRD-agent-platform-M1.md#61-创建申请)先列名称和说明，再列来源、镜像与交互入口归属；单个来源下拉无法表达交互入口归属与多服务 |
 | W-07 | 申请表单「使用场景」帮助文字 | 保留「不填写模型内部思考或外部凭证。」；分区说明与目录占位符已按导出稿 | 导出稿按 main 文案回写；`design-tokens.spec.ts` 的帮助文字断言锁定该文案 |
-| W-09 | 修改申请页头 | eyebrow「我的管理 / 编辑申请」，h1 为「修改申请」或「修改并重新提交」 | 动作名沿 [PRD §6.3](../prd/PRD-agent-platform-M1.md#63-管理状态) |
+| W-09 / H5-09 | 修改申请页头 | eyebrow「我的管理 / 编辑申请」，h1 为「修改申请」或「修改并重新提交」；重新提交后的结果页仍为「我的管理 / 编辑申请」，h1「申请已提交」 | 动作名沿 [PRD §6.3](../prd/PRD-agent-platform-M1.md#63-管理状态)；结果页仍在修改申请的地址上（`agent-application-submission-screen.tsx`），原导出稿提交后清空编辑语境、改成「创建申请」 |
 | W-10 | 修改申请表单 | 步骤条、分区说明与占位符同创建页；字段顺序与帮助文字同 W-06、W-07 | 同 W-06、W-07 |
 | W-13 | 申请详情审批进度 | 已有审批结果时第二步写「审批时间 …」；侧栏「下一步」按申请状态给出去向；副标题、首步「时间 · 申请人」与驳回标题已按导出稿 | 审批时间取服务端投影；已撤回、已驳回、创建失败等状态的去向不同（[PRD §6.2](../prd/PRD-agent-platform-M1.md#62-审批规则)、[§6.3](../prd/PRD-agent-platform-M1.md#63-管理状态)），不用固定文案 |
 | W-14 | 申请详情侧栏 | 「申请配置」列来源、镜像地址、入口身份责任、Owner、更新于、使用范围、模型范围、默认模型与默认推理档位，另有「资源预设」；申请人移到进度首步 | 申请人可核对已提交的全部内容（[PRD §6.1](../prd/PRD-agent-platform-M1.md#61-创建申请)）；资源预设即 [PRD §5.1](../prd/PRD-agent-platform-M1.md#51-准入与部署)的标准资源规格 |
@@ -109,7 +110,7 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | X-12 | 审计 390 卡片表格的「对象」（名称 / ID 短形式） | 同 X-08 | 同 X-08 |
 | X-13 | Skill Hub 读取失败、无匹配空态 | 图标下方 11px，其余高度按网格行均分 | 图标不作为行内元素放进文字块（原导出稿 `skillEmpty` 基线下多出约 6.8px，图标到标题 17.8px） |
 | Y-03 | 窄屏导航 Sheet 头部 | 保留右上角 44px ghost 图标按钮「关闭导航」，品牌块让出 48px，两者命中区不重叠；遮罩与 Esc 仍可关闭，关闭后焦点回到「打开导航」 | 可访问性：模态导航提供可见、可触达的关闭控件，不只依赖 Esc 或遮罩 |
-| Y-04 / H4-19 / H4-25 | 侧栏「个人 Relay Key」「API 凭证」「我的 Connection」图标；企微「扫码授权」与配置类入口的图标 | 沿用 lucide `KeyRound`（17px）；「扫码授权」为 lucide `Scan`（只有四角）；Agent 详情「Owner 配置」、已创建卡「配置与生命周期」、申请详情「修改申请」、思考强度入口、`/admin/agents`「配置」、`/skills/manage`「Agent 绑定」与「改用手动配置」为 lucide `Settings` 齿轮 | 全站 key 语义（侧栏、连接器提示、对话上下文条、Connection 安装面板、Secret、Relay Key、API 凭证空态）统一为同一字形；只换侧栏会让同页出现两种 key 图标；scan、settings 同理，全站同一语义只用一种 lucide 字形（G4-06、G4-10；原导出稿 `scan` 带中心方块，`settings` 为圆加四段短弧） |
+| Y-04 / H4-19 / H4-25 / H5-14 / H5-19 | 侧栏「个人 Relay Key」「API 凭证」「我的 Connection」图标；企微「扫码授权」与配置类入口的图标；刷新与重试图标；Agent 图标 | 沿用 lucide `KeyRound`（17px）；「扫码授权」为 lucide `Scan`（只有四角）；Agent 详情「Owner 配置」、已创建卡「配置与生命周期」、申请详情「修改申请」、思考强度入口、`/admin/agents`「配置」、`/skills/manage`「Agent 绑定」与「改用手动配置」为 lucide `Settings` 齿轮；刷新、重试、重新读取（`/admin/agents`「刷新 Agent 列表」与行内「重试」、`/ops`、`/audit`、`/admin/audit`、「重启 Agent」、状态卡「重新加载…」）为 lucide `RefreshCw`（顺时针，箭头在右上与左下）；侧栏「Agent 目录」、回复卡头像、模型入口与 404「前往 Agent 目录」为 lucide `Bot`（折线天线、两侧耳朵、两道竖眼） | 全站 key 语义（侧栏、连接器提示、对话上下文条、Connection 安装面板、Secret、Relay Key、API 凭证空态）统一为同一字形；只换侧栏会让同页出现两种 key 图标；scan、settings、refresh、bot 同理，全站同一语义只用一种 lucide 字形（G4-06、G4-10；原导出稿 `scan` 带中心方块，`settings` 为圆加四段短弧，`refresh` 为逆时针自绘字形，`bot` 为圆角框、竖直天线与带嘴的两点眼睛） |
 | Y-09 | 工作台「待处理」管理员行 | 系统管理员另有一行「运行状态 / N 个 Agent 创建失败 / 查看失败清单」，进入 `/admin/agents?status=creation_failed`；Owner 行按导出稿对齐 | 系统管理员可代替 Owner 重试创建失败的 Agent（[PRD §2.3](../prd/PRD-agent-platform-M1.md#23-系统管理员)、[§6.3](../prd/PRD-agent-platform-M1.md#63-管理状态)） |
 | Z-02 | 对话 composer 的发送按钮 | 草稿为空且没有选中命令或 Skill 时禁用 | 消息命令 `MessageCommandRequestV1.text` 必须非空；禁用比无反馈的点击更清楚 |
 | Z-04 | 已完成回答的状态行 | 「已完成 · 重新生成 · 查看执行详情」：已完成、失败与已停止的回答都可重新生成；不显示「n 步」 | [PRD §11.2](../prd/PRD-agent-platform-M1.md#112-对话能力)：重新生成基于同一条用户消息产生新回答，服务端只要求会话没有活跃回复。会话投影没有步数，过程摘要在执行详情 |
@@ -148,7 +149,7 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | D2-42 | `/skills/:id` 撤销确认弹窗 | 说明前显示「名称 · v版本」 | 同 W-29：弹窗写明操作对象 |
 | D2-44 | `/skills/manage`「已安装」区头（≤767px） | 「Agent 绑定」保持 44px 单行，不折行 | 同 X-06：按钮不挤在标题右侧折成两行 |
 | D2-49 | `/my-settings/relay-key`「Relay Key」 | 公共字段标签 12px / 650 / muted | 同 W-33：原导出稿 `label > span` 未套字段标签样式 |
-| D2-55 / H4-06 | 对话页回答上方「思考过程」 | 有思考内容时显示，默认收起；回复处理中且尚无正文时默认展开，正文出现或刷新后收起；摘要 44px、12px muted，「展开 / 收起」11px `--accent-ink`；正文 13px / 1.7 muted。执行详情页脚为「这里展示可审计的执行事实，不包含思考过程；模型提供的思考过程显示在回答上方。」 | [PRD §11.2](../prd/PRD-agent-platform-M1.md#112-对话能力)：思考过程显示在回答上方并可折叠（#3012） |
+| D2-55 / H4-06 / H5-03 | 对话页回答上方「思考过程」 | 有思考内容时显示，默认收起；回复处理中且尚无正文时默认展开，正文出现或刷新后收起；停止回复后，已收到的思考过程仍在已停止的回答上方并收起；摘要 44px、12px muted，「展开 / 收起」11px `--accent-ink`；正文 13px / 1.7 muted。执行详情页脚为「这里展示可审计的执行事实，不包含思考过程；模型提供的思考过程显示在回答上方。」 | [PRD §11.2](../prd/PRD-agent-platform-M1.md#112-对话能力)：思考过程显示在回答上方并可折叠（#3012）；原导出稿停止回复后丢掉已收到的思考过程（H5-03） |
 | D2-56 / F3-03 | 对话页短视口（高度不超过 600px） | 页头只留 h1（44px），隐藏 eyebrow 与副标题，折叠条省略「按需查看」；会话上下文、时间线、会话文件与输入框之间统一 6px；仍只有时间线滚动 | 见[OpenDesign 视觉版本](#opendesign-视觉版本)短视口规则；原导出稿短视口仍用常规间距（10 / 0 / 18px） |
 | D2-57 / F3-07 | 申请表单多服务 YAML 文本框（`#app-manifest`） | 可访问名称「多服务资源 YAML 内容」，占位符三行；最小高 224px，等宽 14px / 20px | 与上方文件输入「多服务资源 YAML」区分（[#3119](https://github.com/AgoraIO-Extensions/agent-infra/issues/3119)）；尺寸同 `agent-application-form.tsx`，原导出稿沿用公共文本框的 110px、15px |
 | D2-58（D2-01、D2-02、D2-08、D2-10、D2-16、D2-20） | 同页重复的行内与卡内操作 | 可访问名称为「{可见文字}：{对象名}」：工作台最近对话、待处理、可用 Agent 与我的申请，我的 Agent 已创建卡，企微卡片（「验证并绑定：企微机器人」等），审批「审阅」，Agent 管理行操作，审计「详情：{事件} · {时间}」，Skill Hub 与我的 Skill 行操作；Agent 目录为「查看 {名称} 详情」；回复卡用提问摘要（超过 20 字截断，重复时按出现顺序加「（第 N 次）」）；申请表单可重复的行（模型选项、环境变量、Secret）内的字段、推理档位复选框与「移除」按钮以所在行 legend 为对象名（「模型端点：模型选项 2」「均衡：模型选项 1」「移除 Secret：Secret 1」）；按模型勾选的推理档位复选框（Owner 配置「模型与凭证」、修改申请的 Key 候选）以所属模型为对象名（「均衡：Relay · Internal · gpt-5」）；Owner 配置「环境变量与 Secret」的环境变量行以行序号为对象名（「环境变量名：环境变量 1」「值：环境变量 1」「移除：环境变量 1」，两行选了同一变量名时仍可区分），Secret 行的只读字段以 Secret 名称为对象名（「Secret 名称：RELEASE_KEY」「当前状态：RELEASE_KEY」） | 可访问性：同页不出现同名控件，与 `withObjectName`、`distinctObjectNames` 一致（N-12） |
@@ -172,12 +173,23 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | H4-16 | Owner 配置「Agent 授权控制」（仅 Owner） | 配置卡首段、表单 fieldset 之前，与「共同 Owner」之间只有一条分隔线：目标类型「应用 / 用户」切换（选中为主按钮，`aria-pressed`），「应用 ID / 用户 ID」（名称带「：Agent 授权控制」）；应用为「授权管理 / 撤销管理 / 授权使用 / 撤销使用」，用户为「授权用户 API 使用 / 撤销用户 API 使用 / 授权用户 API 管理 / 撤销用户 API 管理」并附修订号说明；按钮都是 outline，未填目标时禁用；结果显示「服务端状态 / 授权版本 / 幂等重放」与 info 提示 | [PRD §7.3](../prd/PRD-agent-platform-M1.md#73-api-身份凭证与授权)、[工程 Spec §9.2](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#92-权限顺序)：API 与应用授权只由当前 Owner 治理，纯管理员视图不显示；页面唯一的主按钮是页脚保存 |
 | H4-17 | Owner 配置「模型与凭证」（默认 Key 管理） | 说明后为「只列出默认 Key 可见、且模板支持的模型。勾选后可调整推理档位和默认模型选项。」与模型复选列表（「{端点} · {模型}」，勾选后缩进展开中文推理档位），下方为「默认模型选项」（「{端点} · {模型} · {档位}」）；没有模型端点下拉、「移除模型」与「模型可见范围」；「Agent 默认 Relay Key」的可用模型 tag 为「{模型} · 均衡/高」 | [PRD §8.1](../prd/PRD-agent-platform-M1.md#81-owner-配置)：模型清单由默认 Key 校验回读（`configuration-model-picker.tsx`） |
 | H4-18 | Owner 配置「环境变量与 Secret」 | 环境变量名为下拉（模板允许的键，首项「请选择」），行尾 ghost「移除」（名称「移除：环境变量 N」，行内字段同样带「环境变量 N」，见 D2-58），下方「添加环境变量」；Secret 行为只读名称与状态和「替换 Secret」（名称「替换 Secret：{名称}」），下方「添加 Secret」 | [PRD §5.5](../prd/PRD-agent-platform-M1.md#55-环境变量与-secret)；同页不出现同名控件（D2-58） |
-| H4-20 | 企微机器人扫码可用与扫码完成确认 | 可用时「扫码授权」打开面板「扫码授权 / 在新窗口中用企业微信扫码；扫码完成后在这里确认连接影响，平台再提交凭证并轮询验证结果。」，outline「打开扫码窗口」（等待时禁用为「等待扫码…」）与 ghost「关闭」；扫码后为「扫码已完成，确认后绑定 / 连接此机器人可能断开它在其他服务中的现有连接。确认后平台提交凭证并轮询验证结果。」、主按钮「确认并绑定」（自动聚焦）与「取消」，期间禁用手动字段与卡片操作；确认后焦点到卡片标题，取消清空 Bot ID 并回到「扫码授权」 | CK-09、#2911；扫码能力由服务端判定（W-24、W-25），确认前先说明连接影响（[PRD §10.2](../prd/PRD-agent-platform-M1.md#102-渠道绑定)） |
+| H4-20 / H5-11 | 企微机器人扫码可用与扫码完成确认 | 可用时「扫码授权」打开面板「扫码授权 / 在新窗口中用企业微信扫码；扫码完成后在这里确认连接影响，平台再提交凭证并轮询验证结果。」，outline「打开扫码窗口」（等待时禁用为「等待扫码…」）与 ghost「关闭」；扫码后为「扫码已完成，确认后绑定 / 连接此机器人可能断开它在其他服务中的现有连接。确认后平台提交凭证并轮询验证结果。」、主按钮「确认并绑定」（自动聚焦）与「取消」，期间禁用手动字段与卡片操作；确认后焦点到卡片标题，验证完成、卡片变为「已连接」后仍在标题，取消清空 Bot ID 并回到「扫码授权」 | CK-09、#2911；扫码能力由服务端判定（W-24、W-25），确认前先说明连接影响（[PRD §10.2](../prd/PRD-agent-platform-M1.md#102-渠道绑定)）；标题为 `h3#wecom-bot-title`（`tabIndex=-1`），原导出稿标题没有 id，验证完成重绘后焦点落到 body |
 | H4-21 | Owner 配置「停止 Agent」确认后 | 页头 chip「已停止」（gray），危险区移除，页脚保留「重启 Agent」，Toast「Agent 已停止，历史会话转为只读」 | 停止后的可用命令只剩重启与管理员停用（`agent-lifecycle-commands.ts`）；危险区卸载时焦点交给 h1（同 F3-11） |
-| H4-23 | Owner 配置页头 Owner tag | 「Owner · 」后列出全部 Owner，以「、」分隔 | 与 Agent 详情的 Owner 投影一致；原导出稿只写第一名 Owner |
+| H4-23 / H5-04 | Owner 配置页头 Owner tag、`/my-agents?tab=owned` 已创建卡标题下的「Owner · …」 | 「Owner · 」后列出全部 Owner，以「、」分隔 | 与 Agent 详情的 Owner 投影一致；原导出稿只写第一名 Owner |
 | H4-24 | `/admin/approvals` 审阅弹窗「审批判断」warn 提示 | 默认三角警示图标 | 与其余 warn 提示及 `Alert` 默认图标一致（E3-04）；原导出稿为圆形 i |
 | H4-26 | `/skills` 搜索框 | 占位符「搜索名称、版本或来源」 | 目录投影只有名称、版本与来源可检索，没有用途与发布人 |
 | H4-29 | `/eval` 说明 | notice 正文「不会自动读取个人会话；评测样本、输出与评分理由按评测用途单独授权。」 | [PRD §15.3](../prd/PRD-agent-platform-M1.md#153-数据与执行权限) |
+| H5-01 / H5-02 | Agent 详情左栏「Agent 信息」的模型行；对话执行详情「模型」 | 平台交互入口的 Agent 列「模型范围」：每个模型选项为「{显示名} · {中文档位、…}」，多个选项以「；」分隔（没有时为「无可选择模型」），「默认推理档位」为中文名（没有时为「未提供」）；自有交互入口不列这两行。执行详情「模型」为「{显示名} · {中文档位}」，没有模型事实时为「未采集」 | 推理档位只显示中文名（H4-12，`reasoningLevelLabel()`），模型范围与申请详情（W-14）同格式；原导出稿模型范围只列名称，档位为 `Balanced` / `balanced` |
+| H5-05 | 创建、修改申请「标准模板」下的模板就绪列表 | 与下拉相距 8px，列表下方不留外边距 | 原导出稿 `.template-readiness` 只设上外边距，`ul` 保留 UA 默认 14px 下外边距（同 D2-11） |
+| H5-06 | 创建、修改申请「高级配置」的「展开高级配置 / 收起高级配置」（≤767px） | 保持 44px 单行按钮，说明在左侧换行 | 同 X-06（原导出稿按钮被挤成 96.7px 宽，折成两行、高 55.6px） |
+| H5-07 | 目录选择器结果列表下的「清空搜索」 | 只在有关键词时显示，选中结果后关键词清空、不再显示；命中区至少 44px，字重 400 | 「清空搜索」位于结果列表之外，按 DESIGN.md 触达下限（`directory-fields.tsx`、`index.css` `.directory-clear`）；原导出稿 32px 且在关键词为空时常驻 |
+| H5-08 / H5-10 / H5-12 | 禁用的表单控件：修改申请锁定的「来源」「标准模板」、企微机器人「扫码已完成，确认后绑定」与验证期间的 Bot ID / Secret、已停用 Agent 的 Owner 配置 | 输入框、下拉、文本框与目录选择器输入框不透明度 .5、`not-allowed`；目录 chip 的移除按钮同禁用按钮 .48；复选框为不透明度 .5 的公共复选框（勾选时 `--accent` 底与白色勾），选项文字不变淡 | 与公共 `Input`、`NativeSelect`、`Textarea`、`Checkbox` 的禁用态及 D2-07 一致；原导出稿只有 `.owner-config-fieldset:disabled` 下的部分控件变淡，原生下拉取 UA 默认 .7，复选框由 UA 画成灰底 |
+| H5-13 | Owner 配置企微应用卡「EncodingAESKey」「应用 ID」 | 「EncodingAESKey」标签与输入框关联；「应用 ID」名称为「应用 ID：企微应用」 | 与「应用 ID：Agent 授权控制」（H4-16）区分（N-12）；原导出稿标签指向不存在的 id，输入框只能回落到占位符 |
+| H5-15 | `/admin/agents`「运行状态」筛选 | 全部状态、创建中、可用、已停止、创建失败、已停用 | 列表按管理状态筛选（[PRD §6.3](../prd/PRD-agent-platform-M1.md#63-管理状态)），与 Y-09 的 `status=creation_failed` 同一组值；原导出稿为「就绪」（服务可用性）且缺「创建中」「已停用」 |
+| H5-16 | `/admin/agents` 员工访问控制「禁用员工」 | 选中员工后可访问名称为「禁用员工：{姓名}」，未选员工时为「禁用员工」 | 取消或 Escape 关闭确认后的焦点目标（D2-59），与 `withObjectName` 一致 |
+| H5-17 | 登录页（`login.html`）提交中的「显示密码」 | 与账号、密码一起禁用：不透明度 .48、`not-allowed` | 与公共 `Button` 禁用态一致；原导出稿按钮已禁用但没有禁用样式 |
+| H5-18 | 公共状态卡的「重新登录」「重新加载…」 | 文字前分别为 16px lucide `LogIn`、`RefreshCw` | `page-state-card.tsx` 的默认 `RecoveryButton`；与运维页「重新读取观测状态」带刷新图标一致 |
+| G5-09 | `/audit`、`/admin/audit`「结果」筛选 | 「全部结果」之后按审计结果列出：成功、已拒绝、失败、已受理、操作意图、已开始、已提交、等待中、处理中、已完成、已取消、结果待核实 | 选项取 `auditResultLabels`，同一控件内不出现同名选项（#3215 G5-09）；原导出稿为「成功 / 失败 / 待处理」示例 |
 
 导出稿中以下内容仍与 Web 不同，不作为实现依据：
 
