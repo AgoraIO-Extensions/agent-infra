@@ -4,9 +4,47 @@ import {
 	type WecomAuthorityV1,
 	type WecomAuthorizationPortV1,
 	type WecomDeliveryClaimV1,
+	type WecomDeliveryStorePortV1,
+	type WecomResultFileReferenceV1,
 	type WecomSendPortV1,
 	wecomReplyTimeoutTextV1,
 } from "./wecom-channel.ts";
+import type { WecomAnswerReferenceParserV1 } from "./wecom-reply-media.ts";
+
+/**
+ * Core 单元测试用的引用解析替身：识别 `[说明](sandbox:路径)`、`![说明](sandbox:路径)`、
+ * `[说明][标签]` 与独占一行的 `[标签]: sandbox:路径` 定义，跳过行内代码。真实的 CommonMark
+ * 解析在企微 Adapter 中测试。
+ */
+const answerReferences: WecomAnswerReferenceParserV1 = (markdown) => {
+	const normalize = (path: string) => {
+		const value = path.replace(/^\/+/, "");
+		return value && !value.includes("..") ? value : null;
+	};
+	const definitions = new Map<string, string>();
+	for (const match of markdown.matchAll(/^\[([^\]]+)\]: sandbox:(\S*)$/gmu))
+		definitions.set(match[1] ?? "", match[2] ?? "");
+	const found: ReturnType<WecomAnswerReferenceParserV1>[number][] = [];
+	for (const match of markdown.matchAll(
+		/`[^`]*`|(!?)\[([^\]]*)\](?:\(sandbox:([^)\s]*)\)|\[([^\]]+)\])|^\[[^\]]+\]: sandbox:(\S*)$/gmu,
+	)) {
+		if (match[0].startsWith("`")) continue;
+		const definition = match[5];
+		const label = match[4];
+		const path =
+			definition ?? match[3] ?? (label ? definitions.get(label) : undefined);
+		if (path === undefined) continue;
+		found.push({
+			start: match.index,
+			end: match.index + match[0].length,
+			kind:
+				definition !== undefined ? "definition" : match[1] ? "image" : "link",
+			workspaceReference: normalize(path),
+			label: match[2] ?? "",
+		});
+	}
+	return found;
+};
 
 const boundary = {
 	schemaVersion: 1 as const,
@@ -54,7 +92,10 @@ const authority: WecomAuthorityV1 = {
 function fixture() {
 	const store = {
 		claim: vi.fn(async () => claim),
-		prepare: vi.fn(async () => true),
+		prepare: vi.fn<WecomDeliveryStorePortV1["prepare"]>(async () => true),
+		progressMedia: vi.fn<WecomDeliveryStorePortV1["progressMedia"]>(
+			async () => true,
+		),
 		finish: vi.fn(async () => {}),
 	};
 	const authorization = {
@@ -68,26 +109,30 @@ function fixture() {
 		store,
 		authorization,
 		sender,
-		useCase: createWecomDeliveryV1({ store, authorization, sender }),
+		useCase: createWecomDeliveryV1({
+			store,
+			authorization,
+			sender,
+			answerReferences,
+		}),
 	};
 }
+const pdf: WecomResultFileReferenceV1 = {
+	fileId: "result-file-1",
+	name: "report.pdf",
+	mediaType: "application/pdf",
+	sizeBytes: 42,
+	workspaceReference: "out/report.pdf",
+};
 it("checks the original boundary and persists sending before producing the external effect", async () => {
 	const f = fixture();
-	const media = [
-		{
-			fileId: "result-file-1",
-			name: "report.pdf",
-			mediaType: "application/pdf",
-			sizeBytes: 42,
-		},
-	] as const;
-	f.store.claim.mockResolvedValueOnce({ ...claim, media });
 	await f.useCase.dispatch();
 	expect(f.authorization.authorize).toHaveBeenCalledWith(
 		claim.scope,
 		"use",
 		boundary,
 	);
+	expect(f.store.prepare).toHaveBeenCalledWith(claim, authority, []);
 	expect(f.store.prepare.mock.invocationCallOrder[0]).toBeLessThan(
 		f.sender.send.mock.invocationCallOrder[0] ?? 0,
 	);
@@ -95,7 +140,6 @@ it("checks the original boundary and persists sending before producing the exter
 		scope: claim.scope,
 		replyHandle: "encrypted",
 		text: "final reply",
-		media,
 		revalidate: expect.any(Function),
 	});
 	const revalidate = f.sender.send.mock.calls[0]?.[0]?.revalidate;
@@ -106,37 +150,47 @@ it("checks the original boundary and persists sending before producing the exter
 	});
 	expect(await revalidate?.()).toBe(false);
 	expect(f.store.finish).toHaveBeenCalledWith(
-		expect.objectContaining({ receiptId: claim.receiptId, media }),
+		expect.objectContaining({ receiptId: claim.receiptId }),
 		"sent",
 	);
 });
-it("passes confirmed result files and allows a media-only reply", async () => {
+it("strips result files for a reply method without media and still sends the text (#3229 AC-4)", async () => {
 	const f = fixture();
-	const media = [
-		{
-			fileId: "result-file-1",
-			name: "report.pdf",
-			mediaType: "application/pdf",
-			sizeBytes: 42,
-		},
-	] as const;
 	f.store.claim.mockResolvedValueOnce({
 		...claim,
-		textDeltas: [],
-		media,
+		conversationId: "conversation",
+		executionId: "execution",
+		textDeltas: ["报告见 [季度报告](sandbox:out/report.pdf)。"],
+		media: [pdf],
 	});
 	await f.useCase.dispatch();
+	expect(f.store.prepare).toHaveBeenCalledWith(
+		expect.any(Object),
+		authority,
+		[],
+	);
 	expect(f.sender.send).toHaveBeenCalledWith({
 		scope: claim.scope,
 		replyHandle: claim.replyHandle,
-		text: "",
-		media,
+		text: "报告见 report.pdf（当前渠道不支持发送文件）。",
 		revalidate: expect.any(Function),
 	});
-	expect(f.store.finish).toHaveBeenCalledWith(
-		expect.objectContaining({ media }),
-		"sent",
+	expect(JSON.stringify(f.sender.send.mock.calls)).not.toContain("sandbox:");
+	expect(f.store.progressMedia).not.toHaveBeenCalled();
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
+});
+it("lists unreferenced result files when the answer itself is empty (#3229)", async () => {
+	const f = fixture();
+	f.store.claim.mockResolvedValueOnce({
+		...claim,
+		textDeltas: [],
+		media: [{ ...pdf, workspaceReference: null }],
+	});
+	await f.useCase.dispatch();
+	expect(f.sender.send).toHaveBeenCalledWith(
+		expect.objectContaining({ text: "report.pdf（当前渠道不支持发送文件）" }),
 	);
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
 });
 it("cancels before sending when identity mapping or binding changes", async () => {
 	const f = fixture();
@@ -354,14 +408,7 @@ it.each([
 ])(
 	"never attaches thinking to a %s reply (#2982)",
 	async (_name, changes: Partial<WecomDeliveryClaimV1>) => {
-		const media = [
-			{
-				fileId: "result-file-1",
-				name: "report.pdf",
-				mediaType: "application/pdf",
-				sizeBytes: 42,
-			},
-		] as const;
+		const media = [pdf];
 		const { f, input } = await sentFor({
 			thinking: { parts: [raw("私密思考")], complete: true },
 			media,
@@ -375,14 +422,7 @@ it.each([
 
 // #3077：回答在有效期内没有就绪时，Store 在最后 30 秒领取，Core 发固定超时提示结束本次回复。
 it("ends an unready reply with the fixed timeout notice instead of expiring silently (#3077)", async () => {
-	const media = [
-		{
-			fileId: "result-file-1",
-			name: "report.pdf",
-			mediaType: "application/pdf",
-			sizeBytes: 42,
-		},
-	];
+	const media = [pdf];
 	const { f, input } = await sentFor({
 		answerReady: false,
 		executionStatus: "completed",
@@ -517,5 +557,417 @@ it.each([
 			expect.objectContaining({ receiptId: claim.receiptId }),
 			"sent",
 		);
+	},
+);
+
+// #3229：长连接出站媒体（工程 Spec §14.2.3「长连接出站」）。
+const mebibyte = 1024 * 1024;
+const png: WecomResultFileReferenceV1 = {
+	fileId: "file-png",
+	name: "chart.png",
+	mediaType: "image/png",
+	sizeBytes: 2048,
+	workspaceReference: "out/chart.png",
+};
+const mp4: WecomResultFileReferenceV1 = {
+	fileId: "file-mp4",
+	name: "demo.mp4",
+	mediaType: "video/mp4",
+	sizeBytes: 4 * mebibyte,
+	workspaceReference: "out/demo.mp4",
+};
+const acpImage: WecomResultFileReferenceV1 = {
+	fileId: "file-acp",
+	name: "image-1.gif",
+	mediaType: "image/gif",
+	sizeBytes: 64,
+	workspaceReference: null,
+};
+function mediaFixture(
+	plan: NonNullable<WecomSendPortV1["planMedia"]> = async ({ files }) =>
+		files.map(() => "send"),
+) {
+	const f = fixture();
+	const sender = {
+		send: f.sender.send,
+		planMedia: vi.fn<NonNullable<WecomSendPortV1["planMedia"]>>(plan),
+		sendMedia: vi.fn<NonNullable<WecomSendPortV1["sendMedia"]>>(
+			async () => "sent",
+		),
+	};
+	return {
+		...f,
+		sender,
+		useCase: createWecomDeliveryV1({
+			store: f.store,
+			authorization: f.authorization,
+			sender,
+			answerReferences,
+		}),
+	};
+}
+const mediaClaim = (
+	answer: string,
+	media: readonly WecomResultFileReferenceV1[],
+): WecomDeliveryClaimV1 => ({
+	...claim,
+	conversationId: "conversation-1",
+	executionId: "execution-1",
+	textDeltas: [answer],
+	media,
+});
+
+it("AC-1: sends PNG, PDF and MP4 after the text in reference order (#3229)", async () => {
+	const f = mediaFixture();
+	// 事件顺序与引用顺序不同；ACP image 没有引用顺序，排在后面。
+	f.store.claim.mockResolvedValueOnce({
+		...mediaClaim(
+			"视频 [演示](sandbox:out/demo.mp4)，图表 ![趋势](sandbox:/out/chart.png)，报告 [季度报告](sandbox:out/report.pdf)。",
+			[acpImage, pdf, png, mp4],
+		),
+		thinking: { parts: [raw("想一想")], complete: true },
+	});
+	await f.useCase.dispatch();
+	const kinds = [
+		{ ...mp4, kind: "video" },
+		{ ...png, kind: "image" },
+		{ ...pdf, kind: "file" },
+		{ ...acpImage, kind: "image" },
+	];
+	expect(f.sender.planMedia).toHaveBeenCalledWith({
+		scope: claim.scope,
+		replyHandle: claim.replyHandle,
+		files: kinds,
+	});
+	expect(f.store.prepare).toHaveBeenCalledWith(
+		expect.any(Object),
+		authority,
+		kinds,
+	);
+	const text =
+		"视频 demo.mp4（见下方文件），图表 chart.png（见下方文件），报告 report.pdf（见下方文件）。\n\nimage-1.gif（见下方文件）";
+	expect(f.sender.send).toHaveBeenCalledWith({
+		scope: claim.scope,
+		replyHandle: claim.replyHandle,
+		text,
+		textWithThinking: `<think>想一想</think>\n\n${text}`,
+		revalidate: expect.any(Function),
+	});
+	expect(f.sender.sendMedia.mock.calls.map(([input]) => input.file)).toEqual(
+		kinds,
+	);
+	expect(f.sender.sendMedia).toHaveBeenCalledWith({
+		scope: claim.scope,
+		replyHandle: claim.replyHandle,
+		file: kinds[0],
+		source: {
+			actorId: claim.actorId,
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+		},
+		revalidate: expect.any(Function),
+	});
+	// 文本先于媒体；每个媒体先记录发送意图，再发送，再记录结果。
+	const textOrder = f.sender.send.mock.invocationCallOrder[0] ?? 0;
+	expect(textOrder).toBeLessThan(
+		f.sender.sendMedia.mock.invocationCallOrder[0] ?? 0,
+	);
+	expect(f.store.progressMedia.mock.calls.map(([, i, s]) => [i, s])).toEqual([
+		[0, "sending"],
+		[0, "sent"],
+		[1, "sending"],
+		[1, "sent"],
+		[2, "sending"],
+		[2, "sent"],
+		[3, "sending"],
+		[3, "sent"],
+	]);
+	expect(f.store.progressMedia.mock.invocationCallOrder[0]).toBeLessThan(
+		f.sender.sendMedia.mock.invocationCallOrder[0] ?? 0,
+	);
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
+});
+
+it("AC-2: does not send files beyond WeCom limits and names the reason without sandbox: (#3229)", async () => {
+	const f = mediaFixture(async ({ files }) =>
+		files.map((file) =>
+			file.fileId === "file-type"
+				? "unsupported_type"
+				: file.fileId === "file-rate"
+					? "rate_limited"
+					: "send",
+		),
+	);
+	const big = {
+		...pdf,
+		fileId: "file-big",
+		name: "big.pdf",
+		sizeBytes: 20 * mebibyte + 1,
+		workspaceReference: "out/big.pdf",
+	};
+	const tiny = {
+		...pdf,
+		fileId: "file-tiny",
+		name: "tiny.txt",
+		mediaType: "text/plain",
+		sizeBytes: 4,
+		workspaceReference: "out/tiny.txt",
+	};
+	const typed = {
+		...pdf,
+		fileId: "file-type",
+		name: "app.exe",
+		mediaType: "application/x-msdownload",
+		workspaceReference: "out/app.exe",
+	};
+	const limited = {
+		...pdf,
+		fileId: "file-rate",
+		name: "late.pdf",
+		workspaceReference: "out/late.pdf",
+	};
+	// 超过 10MB 的 PNG 不能作为图片，按不超过 20MB 的普通文件发送。
+	const largeImage = {
+		...png,
+		fileId: "file-large-image",
+		name: "large.png",
+		sizeBytes: 12 * mebibyte,
+		workspaceReference: "out/large.png",
+	};
+	f.store.claim.mockResolvedValueOnce(
+		mediaClaim(
+			[
+				"[大](sandbox:out/big.pdf) [小](sandbox:out/tiny.txt) [类型](sandbox:out/app.exe)",
+				"[频率](sandbox:out/late.pdf) [大图](sandbox:out/large.png) [缺失](sandbox:out/missing.csv)",
+				"[越界](sandbox:../secret) 再看 [引用][r] 和 `[代码](sandbox:out/code.txt)`",
+				"",
+				"[r]: sandbox:out/report.pdf",
+				"",
+			].join("\n"),
+			[big, tiny, typed, limited, largeImage, pdf],
+		),
+	);
+	await f.useCase.dispatch();
+	expect(
+		f.sender.planMedia.mock.calls[0]?.[0].files.map((file) => [
+			file.fileId,
+			file.kind,
+		]),
+	).toEqual([
+		["file-type", "file"],
+		["file-rate", "file"],
+		["file-large-image", "file"],
+		["result-file-1", "file"],
+	]);
+	const text = f.sender.send.mock.calls[0]?.[0].text ?? "";
+	expect(text).toBe(
+		[
+			"big.pdf（超出企微限制，未发送） tiny.txt（超出企微限制，未发送） app.exe（类型不支持，未发送）",
+			"late.pdf（超出企微发送频率限制，未发送） large.png（见下方文件） missing.csv（未发布）",
+			"越界（未发布） 再看 report.pdf（见下方文件） 和 `[代码](sandbox:out/code.txt)`",
+			"",
+			"",
+		].join("\n"),
+	);
+	// 代码中的内容不是引用，保持原样；其余回答不再出现 sandbox:。
+	expect(text.replace("`[代码](sandbox:out/code.txt)`", "")).not.toContain(
+		"sandbox:",
+	);
+	expect(f.sender.sendMedia.mock.calls.map(([input]) => input.file.fileId)).toEqual(
+		["file-large-image", "result-file-1"],
+	);
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
+});
+
+it("AC-2: sends at most ten files per reply (#3229)", async () => {
+	const f = mediaFixture();
+	const files = Array.from({ length: 11 }, (_, index) => ({
+		...pdf,
+		fileId: `file-${index}`,
+		name: `f${index}.pdf`,
+		workspaceReference: null,
+	}));
+	f.store.claim.mockResolvedValueOnce(mediaClaim("见附件", files));
+	await f.useCase.dispatch();
+	expect(f.sender.planMedia.mock.calls[0]?.[0].files).toHaveLength(10);
+	expect(f.sender.send.mock.calls[0]?.[0].text).toContain(
+		"f10.pdf（超出企微限制，未发送）",
+	);
+	expect(f.sender.sendMedia).toHaveBeenCalledTimes(10);
+});
+
+it.each([
+	["fails", "failed" as const],
+	["loses the ACK", "unknown" as const],
+])(
+	"AC-3: records unknown when a media reply %s after the text was accepted (#3229)",
+	async (_name, outcome) => {
+		const f = mediaFixture();
+		f.sender.sendMedia
+			.mockResolvedValueOnce("sent")
+			.mockResolvedValueOnce(outcome);
+		f.store.claim.mockResolvedValueOnce(
+			mediaClaim("[a](sandbox:out/chart.png) [b](sandbox:out/report.pdf)", [
+				png,
+				pdf,
+			]),
+		);
+		await f.useCase.dispatch();
+		expect(f.store.progressMedia.mock.calls.map(([, i, s]) => [i, s])).toEqual([
+			[0, "sending"],
+			[0, "sent"],
+			[1, "sending"],
+			[1, outcome],
+		]);
+		expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "unknown");
+	},
+);
+
+it("AC-3: treats a thrown media send as unknown and keeps going (#3229)", async () => {
+	const f = mediaFixture();
+	f.sender.sendMedia.mockRejectedValueOnce(new Error("lost"));
+	f.store.claim.mockResolvedValueOnce(
+		mediaClaim("[a](sandbox:out/chart.png) [b](sandbox:out/report.pdf)", [
+			png,
+			pdf,
+		]),
+	);
+	await f.useCase.dispatch();
+	expect(f.sender.sendMedia).toHaveBeenCalledTimes(2);
+	expect(f.store.progressMedia).toHaveBeenCalledWith(
+		expect.any(Object),
+		0,
+		"unknown",
+	);
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "unknown");
+});
+
+it.each([
+	["failed", "failed"],
+	["unknown", "unknown"],
+] as const)(
+	"AC-3: does not send media when the text is %s (#3229)",
+	async (textStatus, finalStatus) => {
+		const f = mediaFixture();
+		f.sender.send.mockResolvedValueOnce(textStatus);
+		f.store.claim.mockResolvedValueOnce(
+			mediaClaim("[a](sandbox:out/chart.png)", [png]),
+		);
+		await f.useCase.dispatch();
+		expect(f.sender.sendMedia).not.toHaveBeenCalled();
+		expect(f.store.progressMedia).not.toHaveBeenCalled();
+		expect(f.store.finish).toHaveBeenCalledWith(
+			expect.any(Object),
+			finalStatus,
+		);
+	},
+);
+
+it("AC-3: never starts a media send the Store no longer allows (#3229)", async () => {
+	const f = mediaFixture();
+	f.store.progressMedia
+		.mockResolvedValueOnce(true)
+		.mockResolvedValueOnce(true)
+		.mockResolvedValueOnce(false);
+	f.store.claim.mockResolvedValueOnce(
+		mediaClaim("[a](sandbox:out/chart.png) [b](sandbox:out/report.pdf)", [
+			png,
+			pdf,
+		]),
+	);
+	await f.useCase.dispatch();
+	expect(f.sender.sendMedia).toHaveBeenCalledTimes(1);
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "unknown");
+});
+
+it("AC-5: stops sending media after authorization is revoked (#3229)", async () => {
+	const f = mediaFixture();
+	f.sender.sendMedia.mockImplementationOnce(async () => {
+		f.authorization.authorize.mockResolvedValue({
+			outcome: "denied",
+			actorId: "actor",
+		});
+		return "sent";
+	});
+	f.store.claim.mockResolvedValueOnce(
+		mediaClaim("[a](sandbox:out/chart.png) [b](sandbox:out/report.pdf)", [
+			png,
+			pdf,
+		]),
+	);
+	await f.useCase.dispatch();
+	expect(f.sender.sendMedia).toHaveBeenCalledTimes(1);
+	expect(f.store.progressMedia.mock.calls.map(([, i, s]) => [i, s])).toEqual([
+		[0, "sending"],
+		[0, "sent"],
+	]);
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "unknown");
+});
+
+it("leaves the reply claimable when media planning is temporarily unavailable (#3229)", async () => {
+	const f = mediaFixture(async () => {
+		throw new Error("limits unavailable");
+	});
+	f.store.claim.mockResolvedValueOnce(
+		mediaClaim("[a](sandbox:out/chart.png)", [png]),
+	);
+	expect(await f.useCase.dispatch()).toBe(true);
+	expect(f.store.prepare).not.toHaveBeenCalled();
+	expect(f.store.finish).not.toHaveBeenCalled();
+	expect(f.sender.send).not.toHaveBeenCalled();
+});
+
+it.each([
+	["a planner without a sender", { planMedia: true, sendMedia: false }],
+	["a claim without its execution", { planMedia: true, sendMedia: true }],
+])(
+	"declares media unsupported for %s (#3229)",
+	async (name, capabilities) => {
+		const f = mediaFixture();
+		const sender = {
+			send: f.sender.send,
+			...(capabilities.planMedia ? { planMedia: f.sender.planMedia } : {}),
+			...(capabilities.sendMedia ? { sendMedia: f.sender.sendMedia } : {}),
+		};
+		const useCase = createWecomDeliveryV1({
+			store: f.store,
+			authorization: f.authorization,
+			sender,
+			answerReferences,
+		});
+		f.store.claim.mockResolvedValueOnce(
+			name.includes("execution")
+				? { ...mediaClaim("[a](sandbox:out/chart.png)", [png]), executionId: null }
+				: mediaClaim("[a](sandbox:out/chart.png)", [png]),
+		);
+		await useCase.dispatch();
+		expect(f.sender.planMedia).not.toHaveBeenCalled();
+		expect(f.sender.send).toHaveBeenCalledWith(
+			expect.objectContaining({ text: "chart.png（当前渠道不支持发送文件）" }),
+		);
+		expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
+	},
+);
+
+it.each([
+	["throws", () => {
+		throw new Error("parser");
+	}],
+	["returns an out-of-range span", () => [
+		{ start: 0, end: 999, kind: "link", workspaceReference: "x", label: "" },
+	]],
+] as const)(
+	"fails the reply when the reference parser %s (#3229)",
+	async (_name, parse) => {
+		const f = fixture();
+		const useCase = createWecomDeliveryV1({
+			store: f.store,
+			authorization: f.authorization,
+			sender: f.sender,
+			answerReferences: parse as WecomAnswerReferenceParserV1,
+		});
+		await useCase.dispatch();
+		expect(f.sender.send).not.toHaveBeenCalled();
+		expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "failed");
 	},
 );
