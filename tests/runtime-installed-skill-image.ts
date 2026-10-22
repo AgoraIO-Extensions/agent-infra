@@ -57,9 +57,9 @@ assert.deepEqual(runtimeManifest, {
 	service: { port: 3003 },
 	health: { path: "/healthz" },
 	capabilities: {
-		modelSelection: false,
-		attachments: false,
-		resultFiles: false,
+		modelSelection: true,
+		attachments: true,
+		resultFiles: true,
 		connection: false,
 		supplementaryInstruction: false,
 	},
