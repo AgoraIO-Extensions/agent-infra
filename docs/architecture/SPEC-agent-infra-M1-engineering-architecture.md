@@ -2150,8 +2150,9 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 - 写入位置为当前 Conversation 工作区的 `.agent-infra/attachments/<ref>/<name>`：
   - `<ref>` 取 fileId 的 SHA-256 前 16 位十六进制。
   - `<name>` 只保留 basename，去掉控制字符、路径分隔符和开头的点，不超过 255 字节。
-  - 文件以只读权限排他创建，逐级拒绝链接和越界。
-  - 目标已存在时，SHA-256 一致则复用，不一致则拒绝。
+  - 文件以只读权限创建。只读权限只用来防止误改，不构成安全边界；平台目录中逐级拒绝链接和越界。
+  - 工作区副本不是权威数据：Agent 在本 Sandbox 内改写或删除副本属于本地操作，权威字节始终在 File Authority 中。
+  - 目标已存在且 SHA-256 一致时直接复用。内容不一致或文件缺失时，在同一目录写临时文件，再以 rename 恢复平台副本；不会写到平台目录之外。
 - 可接受的媒体类型和大小取 15.4.1 的 FileLimits 交集。Driver 自身的上限为单文件 50 MiB、单条消息 32 个；超限在 native side effect 之前拒绝。
 - 原生输入在用户消息之后附加平台生成的附件清单，列出名称、媒体类型、大小和工作区相对路径。清单不改写平台消息，也不进入事件、审计或遥测。
 - 图片仍按各 Runtime 的原生图片输入交给模型。
@@ -2173,9 +2174,11 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 - 引用按首次出现的顺序、以规范化路径去重，每次执行最多发布 10 个，超出部分记为失败。
 - 每个引用逐项校验：
   - 用 `O_NOFOLLOW` 打开，且必须是普通文件；
-  - 实际大小不超过 FileLimits 和单文件 50 MiB 上限；
+  - 打开之后，读取、类型识别、SHA-256 计算和上传都使用同一个文件描述符，不再按路径重新打开，避免校验之后文件被替换；
+  - 实际读到的大小不超过 FileLimits 和单文件 50 MiB 上限；
   - 媒体类型按实际字节识别，识别方式与 ObjectStorage Adapter 一致，且必须在 FileLimits 内；
   - 名称取 basename。
+- 结果意图的 descriptor 包含上述 SHA-256 与大小。恢复时重新打开文件并重新校验，内容与原意图不一致则记为失败，不改发新内容。
 - 发布属于 §10.14 的平台中介操作：
   - 每个引用先保存 intent，再经运行期文件交换核对当前授权，然后调用 `writeResult`，最后保存 completed、failed 或 unknown。
   - unknown 沿原结果意图核实，不新建意图重发。
@@ -2190,7 +2193,7 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
   - 15.4.3 中关于 `result.file` V1 的约束保持不变。
 - ACP 的 `agent_message_chunk` 中：
   - `image` 块按同样的限制直接发布，`workspaceReference` 为 null；
-  - `resource_link` 指向工作区内 `file://` 时按引用处理；
+  - `resource_link` 按引用处理须同时满足：URI 是 `file:` scheme，authority 为空，百分号解码后的绝对路径位于工作区根目录内，并通过与 `sandbox:` 相同的越界、链接和普通文件校验；带主机 authority、工作区外路径或其他 scheme 的一律不发布；
   - 其他块不发布。
 
 模板指令与隐式发布：
