@@ -11044,6 +11044,63 @@ describe("Codex Runtime Driver", () => {
 		).toHaveLength(1);
 	});
 
+	it("resumes the Thread on a replacement native process after its RPC fails", async () => {
+		// #3176：原生进程失败后换了新进程，新进程没有加载过原 Thread；
+		// 下一次提交必须先在新进程上 thread/resume，不能直接 turn/start 而落入受理不明。
+		const path = join(await runtimeDirectory(), "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const replacementBridge = new TestCodexBridge(firstBridge.nativeThreadId);
+		replacementBridge.continueAfterPersistedTurn();
+		// 测试替身让同一个进程服务所有 Conversation；原进程失败之后才交出替换进程。
+		let nativeFailed = false;
+		let replacements = 0;
+		const driver = await openCodexRuntimeDriverForTest(
+			driverOptions(path),
+			async () => {
+				if (!nativeFailed) return firstBridge;
+				replacements++;
+				return replacementBridge;
+			},
+		);
+		drivers.push(driver);
+		const first = await driver.execute(submitCommand());
+		await firstBridge.emitTurnCompleted("completed");
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(first.nativeSessionRef, "execution-codex"),
+			).toBe("completed"),
+		);
+		const conversationRpcs = Reflect.get(driver, "conversationRpcs") as Map<
+			string,
+			unknown
+		>;
+		const failedRpc = [...conversationRpcs.values()][0];
+		expect(failedRpc).toBeDefined();
+		nativeFailed = true;
+		await firstBridge.close();
+		// 失败的 RPC 必须先从缓存中退役；之后 Driver 可能已为后台读取换上了新进程。
+		await vi.waitFor(() =>
+			expect([...conversationRpcs.values()]).not.toContain(failedRpc),
+		);
+
+		const next = await driver.execute(
+			submitCommand({
+				operationId: "execution-codex-after-native-failure",
+				executionId: "execution-codex-after-native-failure",
+				turnId: "turn-codex-after-native-failure",
+				nativeSessionRef: first.nativeSessionRef,
+			}),
+		);
+
+		expect(next.result).toEqual({ outcome: "accepted", status: "running" });
+		expect(replacements).toBeGreaterThan(0);
+		const methods = replacementBridge.requests.map(({ method }) => method);
+		expect(methods).toContain("thread/resume");
+		expect(methods.indexOf("thread/resume")).toBeLessThan(
+			methods.indexOf("turn/start"),
+		);
+	});
+
 	it("keeps different frozen efforts separate across Turns using the same option", async () => {
 		const directory = await runtimeDirectory();
 		const path = join(directory, "driver.json");
@@ -14086,6 +14143,132 @@ describe("Codex structured Skill input", () => {
 			const durable = await readFile(path, "utf8");
 			expect(durable).not.toContain(text);
 			expect(durable).not.toContain("proof.txt");
+		},
+	);
+
+	it.each([
+		["current directory", { path: "." }],
+		["dot segment", { path: "./proof.txt" }],
+		["absolute path", { path: "/etc/passwd" }],
+		["parent traversal", { path: "notes/../proof.txt" }],
+		["extra argument", { path: "proof.txt", encoding: "utf8" }],
+		["non-string path", { path: 7 }],
+		["null arguments", null],
+		["string arguments", "proof.txt"],
+	] as const)(
+		"answers a workspace read with rejected model arguments as a tool failure: %s",
+		async (_case, args) => {
+			// #3176：模型给出的参数不合规只是一次失败的工具调用；不得读取文件，也不得断开 Codex 连接。
+			const { realpath } = await import("node:fs/promises");
+			const workspaceReader = await import("./codex-workspace-read-tool.js");
+			const directory = await realpath(await runtimeDirectory());
+			const root = join(directory, "workspace");
+			await mkdir(root, { mode: 0o700 });
+			await writeFile(
+				join(root, "proof.txt"),
+				"controlled-reader-payload-3176",
+			);
+			const path = join(directory, "driver.json");
+			const fixture = await skillDiscoveryFixture(
+				(bridge) => {
+					if (!bridge.launch) throw new Error("missing controlled launch");
+					bridge.launch = Object.freeze({ ...bridge.launch, cwd: root });
+				},
+				{
+					path,
+					authorizeExternalAction: async () => ({
+						revalidate: () => undefined,
+					}),
+				},
+			);
+			const command = submitCommand();
+			const accepted = await fixture.driver.execute(command);
+			const state = JSON.parse(await readFile(path, "utf8"));
+			const execution =
+				state.sessions[accepted.nativeSessionRef].executions[
+					command.executionId
+				];
+			const launch = fixture.bridge.launch;
+			if (!launch) throw new Error("missing verified controlled launch");
+			const read = vi.spyOn(workspaceReader, "readCodexWorkspaceTextFile");
+			const invoke = Reflect.get(fixture.driver, "handleStandardMcpTool") as (
+				key: string,
+				body: unknown,
+				signal: AbortSignal,
+			) => Promise<{
+				success: boolean;
+				contentItems: { text: string }[];
+				beforeDelivery: () => Promise<() => void>;
+			}>;
+			let finished = false;
+			const ack = (async () => {
+				while (!finished) {
+					const events = await fixture.driver.replayEvents(
+						accepted.nativeSessionRef,
+						command.executionId,
+					);
+					const cursor = events.at(-1)?.cursor;
+					if (cursor)
+						await fixture.driver.acknowledgeEvents(
+							accepted.nativeSessionRef,
+							command.executionId,
+							cursor,
+						);
+					await new Promise((resolve) => setTimeout(resolve, 5));
+				}
+			})();
+			try {
+				const body = {
+					threadId: fixture.bridge.nativeThreadId,
+					turnId: execution.nativeTurnId,
+					namespace: "workspace",
+					tool: "read_text_file",
+				};
+				const rejected = await invoke.call(
+					fixture.driver,
+					launch.conversationKey,
+					{ ...body, callId: "workspace-call-invalid", arguments: args },
+					new AbortController().signal,
+				);
+				expect(rejected.success).toBe(false);
+				expect(JSON.parse(rejected.contentItems[0]?.text ?? "null")).toEqual({
+					reason: "workspace_path_invalid",
+				});
+				(await rejected.beforeDelivery())();
+				expect(read).not.toHaveBeenCalled();
+				// 同一 Execution 仍可继续使用工具：说明没有把它当成协议违例。
+				const valid = await invoke.call(
+					fixture.driver,
+					launch.conversationKey,
+					{
+						...body,
+						callId: "workspace-call-valid",
+						arguments: { path: "proof.txt" },
+					},
+					new AbortController().signal,
+				);
+				expect(valid.success).toBe(true);
+				(await valid.beforeDelivery())();
+				const facts = (
+					await fixture.driver.replayEvents(
+						accepted.nativeSessionRef,
+						command.executionId,
+					)
+				)
+					.filter((event) => event.type === "operation")
+					.map((event) => event.payload);
+				expect(facts).toContainEqual(
+					expect.objectContaining({
+						kind: "tool",
+						toolId: "workspace.read_text_file",
+						phase: "failed",
+						failureCode: "operation_failed",
+					}),
+				);
+			} finally {
+				finished = true;
+				await ack;
+			}
 		},
 	);
 

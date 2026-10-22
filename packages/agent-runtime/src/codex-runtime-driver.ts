@@ -5322,6 +5322,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				for (const [key, cached] of this.conversationRpcs) {
 					if (cached === rpc) {
 						this.conversationRpcs.delete(key);
+						// #3176：替换进程没有加载过本会话的 Thread，下一次使用前必须重新 thread/resume。
+						this.forgetResumedSessions(key);
 						this.revokeConnectionClient(key);
 						this.revokeStandardMcpClients(key);
 						this.revokeModelConversation?.(this.modelConversationKey(key));
@@ -10498,7 +10500,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			!nonEmptyString(params.callId) ||
 			(params.namespace !== "connection" && params.namespace !== "workspace") ||
 			!nonEmptyString(params.tool) ||
-			!isPlainRecord(params.arguments)
+			// workspace 工具的参数来自模型，形状不对只是一次失败的工具调用（#3176）。
+			(params.namespace === "workspace"
+				? !("arguments" in params)
+				: !isPlainRecord(params.arguments))
 		)
 			return Promise.reject(protocolInvalidError());
 		const input = structuredClone(params) as {
@@ -10507,7 +10512,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			callId: string;
 			namespace: string;
 			tool: string;
-			arguments: Record<string, unknown>;
+			arguments: unknown;
 		};
 		const key = standardMcpDigest([
 			conversationKey,
@@ -10546,7 +10551,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			turnId: string;
 			callId: string;
 			tool: string;
-			arguments: Record<string, unknown>;
+			arguments: unknown;
 		},
 		fingerprint: string,
 		signal: AbortSignal,
@@ -10575,17 +10580,25 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			? this.workspaceReadRoot(initial.nativeSessionRef)
 			: undefined;
 		const cached = this.standardMcpClients.get(initial.nativeSessionRef);
+		const toolArguments = isPlainRecord(input.arguments)
+			? input.arguments
+			: undefined;
+		// 只有工具名不符才是协议违例；模型给出的参数不合规只是一次失败的工具调用，
+		// 不读取文件，回给模型 workspace_path_invalid，Codex 连接保持（#3176）。
+		const workspacePath =
+			workspace &&
+			toolArguments &&
+			Object.keys(toolArguments).join(",") === "path" &&
+			isCodexWorkspaceReadPath(toolArguments.path)
+				? toolArguments.path
+				: undefined;
 		if (workspace) {
-			if (
-				input.tool !== "read_text_file" ||
-				Object.keys(input.arguments).join(",") !== "path" ||
-				!isCodexWorkspaceReadPath(input.arguments.path)
-			)
-				protocolInvalid();
+			if (input.tool !== "read_text_file") protocolInvalid();
 		} else if (
 			!cached ||
+			!toolArguments ||
 			cached.executionId !== initial.execution.executionId ||
-			!cached.client.validateArguments(input.tool, input.arguments)
+			!cached.client.validateArguments(input.tool, toolArguments)
 		)
 			unavailable();
 		const client = workspace ? undefined : cached?.client;
@@ -10795,25 +10808,26 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				success: boolean;
 			};
 			if (workspace) {
-				if (!root || typeof input.arguments.path !== "string") unavailable();
+				if (!root) unavailable();
 				await save("started", { startedAt: new Date().toISOString() });
 				deliveryGuard?.();
 				let file:
 					| Awaited<ReturnType<typeof readCodexWorkspaceTextFile>>
 					| undefined;
-				try {
-					file = await readCodexWorkspaceTextFile(
-						root,
-						input.arguments.path,
-						signal,
-					);
-				} catch (error) {
-					if (
-						!(error instanceof Error) ||
-						error.message !== "WORKSPACE_FILE_UNAVAILABLE"
-					)
-						throw error;
-				}
+				if (workspacePath !== undefined)
+					try {
+						file = await readCodexWorkspaceTextFile(
+							root,
+							workspacePath,
+							signal,
+						);
+					} catch (error) {
+						if (
+							!(error instanceof Error) ||
+							error.message !== "WORKSPACE_FILE_UNAVAILABLE"
+						)
+							throw error;
+					}
 				(await assertCurrent())();
 				const phase = file ? "completed" : "failed";
 				const cursor = await save(phase, {
@@ -10833,16 +10847,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						{
 							type: "inputText",
 							text: JSON.stringify(
-								file ?? { reason: "workspace_file_unavailable" },
+								file ?? {
+									reason:
+										workspacePath !== undefined
+											? "workspace_file_unavailable"
+											: "workspace_path_invalid",
+								},
 							),
 						},
 					],
 				};
 			} else {
-				if (!client) unavailable();
+				if (!client || !toolArguments) unavailable();
 				result = await client.call(
 					input.tool,
-					input.arguments,
+					toolArguments,
 					{
 						assertCurrent,
 						block,
@@ -13364,6 +13383,23 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		});
 		this.resumedSessions.add(nativeSessionRef);
 		return this.session(nativeSessionRef);
+	}
+
+	/**
+	 * 原生 Thread 只加载在打开它的 app-server 进程里。该 RPC 退役后，本 Conversation 的
+	 * 每个 Session 都必须在替换进程上重新 resume，之后才能在那里开始 Turn（#3176）。
+	 */
+	private forgetResumedSessions(conversationKey: string) {
+		for (const nativeSessionRef of this.resumedSessions) {
+			let owner: string | undefined;
+			try {
+				owner = this.conversationKeyFor(nativeSessionRef);
+			} catch {
+				owner = undefined;
+			}
+			if (owner === undefined || owner === conversationKey)
+				this.resumedSessions.delete(nativeSessionRef);
+		}
 	}
 
 	private async resumeSession(nativeSessionRef: string) {
