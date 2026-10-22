@@ -27,8 +27,8 @@ export type SandboxReferences = Readonly<{
 	settled: boolean;
 	/** 经当前 File Grant 读取内存 Blob；拒绝或失败返回 null。 */
 	readImage?: (file: Pick<ResultFile, "fileId">) => Promise<Blob | null>;
-	/** 打开现有预览；内联图片已读到内容时直接复用该 Blob。 */
-	onPreview?: (file: ResultFile, content?: Blob) => void;
+	/** 打开现有预览：每次经当前 File Grant 重新读取。 */
+	onPreview?: (file: ResultFile) => void;
 	onDownload?: (file: ResultFile) => void;
 	previewingFileId?: string;
 	downloadingFileId?: string;
@@ -152,7 +152,7 @@ function InlineImage({
 			variant="ghost"
 			className="sandbox-image"
 			aria-label={withObjectName("预览图片", label)}
-			onClick={() => onPreview(file, content)}
+			onClick={() => onPreview(file)}
 		>
 			{image}
 		</Button>

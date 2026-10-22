@@ -144,30 +144,38 @@ export function ConversationMessages({
 	const [focusAfterLoad, setFocusAfterLoad] = useState<string>();
 	const articles = useRef(new Map<string, HTMLElement>());
 	// #3228：内联图片按 fileId 共享一次读取，回复卡重建（实时卡换成历史回答）时不重复签发；
-	// 只缓存成功结果且有上限。缓存随时间线卸载（撤权、换身份或换会话）一起释放。
+	// 只缓存成功结果且有上限。缓存绑定当前会话：会话变化或时间线卸载（撤权、换身份）时清空，
+	// 已显示的图片随之重新经当前 File Grant 读取。预览与下载不使用该缓存。
+	const conversationScope = history.conversation.conversationId;
 	const inlineReads = useRef(new Map<string, Promise<Blob | null>>());
+	useEffect(() => {
+		const reads = inlineReads.current;
+		return () => reads.clear();
+	}, [conversationScope]);
 	const readInline = useCallback(
 		(file: Pick<ResultFile, "fileId">) => {
-			const cached = inlineReads.current.get(file.fileId);
+			const key = `${conversationScope}\u0000${file.fileId}`;
+			const reads = inlineReads.current;
+			const cached = reads.get(key);
 			if (cached) return cached;
 			const request = (onReadInlineFile?.(file) ?? Promise.resolve(null)).then(
 				(content) => {
-					if (!content) inlineReads.current.delete(file.fileId);
+					if (!content) reads.delete(key);
 					return content;
 				},
 				() => {
-					inlineReads.current.delete(file.fileId);
+					reads.delete(key);
 					return null;
 				},
 			);
-			inlineReads.current.set(file.fileId, request);
-			for (const key of inlineReads.current.keys()) {
-				if (inlineReads.current.size <= maxCachedInlineImages) break;
-				inlineReads.current.delete(key);
+			reads.set(key, request);
+			for (const stale of reads.keys()) {
+				if (reads.size <= maxCachedInlineImages) break;
+				reads.delete(stale);
 			}
 			return request;
 		},
-		[onReadInlineFile],
+		[conversationScope, onReadInlineFile],
 	);
 	const userMessages = history.messages.filter((item) => item.role === "user");
 	const answers = history.messages.filter((item) => item.role === "assistant");
@@ -798,7 +806,7 @@ type ReplyResultFiles = Readonly<{
 
 /**
  * 回复卡共用的结果文件预览：回答内文件卡、内联图片与下方结果文件列表打开同一个预览对话框。
- * 未给出内容时经当前 File Grant 重新读取；内联图片已读到的 Blob 直接复用，不再请求。
+ * 每次打开都经当前 File Grant 重新读取（§15.4.3），不复用内联图片已读到的 Blob。
  */
 function useResultFilePreview(files: ReplyResultFiles | undefined) {
 	const [selected, setSelected] = useState<ResultFile>();
@@ -808,17 +816,12 @@ function useResultFilePreview(files: ReplyResultFiles | undefined) {
 	const previewRequest = useRef(0);
 	const latest = useRef(files);
 	latest.current = files;
-	const open = useCallback(async (file: ResultFile, loaded?: Blob) => {
+	const open = useCallback(async (file: ResultFile) => {
 		const onPreviewFile = latest.current?.onPreviewFile;
 		if (!onPreviewFile || !artifactCanPreview(file)) return;
 		const request = ++previewRequest.current;
 		setSelected(file);
 		setError(undefined);
-		if (loaded) {
-			setContent(loaded);
-			setLoading(false);
-			return;
-		}
 		setContent(null);
 		setLoading(true);
 		const result = await onPreviewFile(file);
@@ -827,10 +830,7 @@ function useResultFilePreview(files: ReplyResultFiles | undefined) {
 		if (result) setContent(result);
 		else setError("文件读取失败，请重试。");
 	}, []);
-	const preview = useCallback(
-		(file: ResultFile, loaded?: Blob) => void open(file, loaded),
-		[open],
-	);
+	const preview = useCallback((file: ResultFile) => void open(file), [open]);
 	const dialog = files ? (
 		<ArtifactPreviewDialog
 			file={selected}

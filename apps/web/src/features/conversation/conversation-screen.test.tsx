@@ -5027,8 +5027,10 @@ describe("sandbox: references and result files on the conversation page (#3228)"
 		expect(
 			within(dialog).getByRole<HTMLImageElement>("img", { name: "chart.png" }),
 		).toBeTruthy();
-		// 打开预览复用已读到的内联 Blob，不再签发读取。
-		expect(fileRequests(requests, "chart-1")).toHaveLength(2);
+		// 打开预览与其他预览一样重新签发读取授权，不复用内联 Blob（撤权后预览即被拒绝）。
+		expect(
+			fileRequests(requests, "chart-1").map((request) => request.method),
+		).toEqual(["POST", "GET", "POST", "GET"]);
 		fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 

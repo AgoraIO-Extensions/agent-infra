@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PersistedConversationEventV2Schema } from "@agent-infra/contracts/pilot";
+import {
+	ConversationDetailProjectionV2Schema,
+	PersistedConversationEventV2Schema,
+} from "@agent-infra/contracts/pilot";
 import {
 	cleanup,
 	fireEvent,
@@ -13,7 +16,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantMarkdown } from "./assistant-markdown.js";
 import type { ResultFile } from "./conversation-files.js";
-import { event } from "./conversation-test-fixtures.js";
+import { ConversationMessages } from "./conversation-screen-messages.js";
+import { event, history, timestamp } from "./conversation-test-fixtures.js";
 import type { SandboxReferences } from "./sandbox-reference-views.js";
 import {
 	executionResultFiles,
@@ -111,7 +115,7 @@ afterEach(() => {
 
 describe("sandbox: references in assistant answers (#3228)", () => {
 	it("shows a published image inline and a published file as a card, both previewable and downloadable (AC-1)", async () => {
-		const { value, readImage, onPreview, onDownload, content } = references();
+		const { value, readImage, onPreview, onDownload } = references();
 		render(
 			<AssistantMarkdown references={value}>
 				{
@@ -126,8 +130,8 @@ describe("sandbox: references in assistant answers (#3228)", () => {
 		expect(readImage).toHaveBeenCalledTimes(1);
 		expect(readImage).toHaveBeenCalledWith({ fileId: "file-chart" });
 		fireEvent.click(screen.getByRole("button", { name: "预览图片：销量图" }));
-		// 已读到的内存 Blob 直接交给现有预览，不再签发读取。
-		expect(onPreview).toHaveBeenCalledWith(chart, content);
+		// 点击打开现有预览；预览按原路径重新签发读取，不复用内联 Blob。
+		expect(onPreview).toHaveBeenCalledWith(chart);
 		expect(readImage).toHaveBeenCalledTimes(1);
 
 		const card = screen.getByRole("group", { name: "结果文件：r.pdf" });
@@ -411,5 +415,93 @@ describe("result files of one execution", () => {
 		const index = sandboxReferenceIndex(files);
 		expect([...index.keys()]).toEqual(["a.png"]);
 		expect(index.get("a.png")?.fileId).toBe("first");
+	});
+});
+
+describe("inline image reads in the timeline", () => {
+	function timeline(conversationId: string) {
+		const result = PersistedConversationEventV2Schema.parse({
+			...event(2, conversationId),
+			schemaVersion: 2,
+			type: "result.file",
+			payload: {
+				fileId: "file-chart",
+				name: "chart.png",
+				mediaType: "image/png",
+				sizeBytes: 3,
+				workspaceReference: "out/chart.png",
+			},
+		});
+		const completed = PersistedConversationEventV2Schema.parse({
+			...event(3, conversationId),
+			type: "execution.status",
+			payload: { status: "completed" },
+		});
+		const message = {
+			status: "completed",
+			executionId: "execution-1",
+			error: null,
+			createdAt: timestamp,
+		} as const;
+		return {
+			events: [result, completed],
+			history: ConversationDetailProjectionV2Schema.parse({
+				...history(conversationId, [result, completed]),
+				messages: [
+					{
+						...message,
+						messageId: "question-1",
+						role: "user",
+						text: "出图",
+						replyToMessageId: null,
+						answerVersion: null,
+						isCurrentAnswer: null,
+					},
+					{
+						...message,
+						messageId: "answer-1",
+						role: "assistant",
+						text: "![图](sandbox:out/chart.png)",
+						replyToMessageId: "question-1",
+						answerVersion: 1,
+						isCurrentAnswer: true,
+					},
+				],
+			}),
+		};
+	}
+
+	it("shares one read per conversation and reads again under another conversation", async () => {
+		const read = vi.fn(async () => new Blob(["png"], { type: "image/png" }));
+		const view = (conversationId: string) => {
+			const { events, history } = timeline(conversationId);
+			return (
+				<ConversationMessages
+					agentName="Agent"
+					userName="用户"
+					history={history}
+					events={events}
+					onExecution={vi.fn()}
+					onRegenerate={vi.fn()}
+					canRegenerate={false}
+					onResend={vi.fn()}
+					onDownloadFile={vi.fn(async () => true)}
+					onPreviewFile={vi.fn(async () => null)}
+					onReadInlineFile={read}
+					hasEarlier={false}
+					earlierLoading={false}
+					earlierFailure={false}
+					onLoadEarlier={vi.fn()}
+				/>
+			);
+		};
+		const { rerender } = render(view("conversation-1"));
+		expect(await screen.findByRole("img", { name: "图" })).toBeTruthy();
+		rerender(view("conversation-1"));
+		expect(read).toHaveBeenCalledTimes(1);
+		// 缓存绑定会话：换到另一个会话（即使 fileId 相同）不复用旧内容，经当前授权重新读取。
+		rerender(view("conversation-2"));
+		await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+		expect(await screen.findByRole("img", { name: "图" })).toBeTruthy();
 	});
 });

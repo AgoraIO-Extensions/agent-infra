@@ -287,13 +287,14 @@ test("shows sandbox: images inline and files as cards without overflow (#3228 AC
 		path: testInfo.outputPath("sandbox-file-cards.png"),
 	});
 
-	// 键盘可达：内联图片是带可读名称的按钮，回车打开现有预览，并复用已读到的 Blob。
+	// 键盘可达：内联图片是带可读名称的按钮，回车打开现有预览；预览重新签发读取授权。
 	const open = reply.getByRole("button", { name: "预览图片：销量图" });
 	await open.focus();
 	await page.keyboard.press("Enter");
 	const dialog = page.getByRole("dialog");
 	await expect(dialog.getByRole("img", { name: "chart.png" })).toBeVisible();
-	expect(fileRequests).toHaveLength(2);
+	await expect.poll(() => fileRequests.length).toBe(4);
+	expect(fileRequests.slice(2)).toEqual(fileRequests.slice(0, 2));
 	await dialog
 		.locator('[data-slot="dialog-footer"]')
 		.getByRole("button", { name: "关闭" })
@@ -304,7 +305,7 @@ test("shows sandbox: images inline and files as cards without overflow (#3228 AC
 		"title",
 		"r.pdf",
 	);
-	expect(fileRequests.slice(2)).toEqual([
+	expect(fileRequests.slice(4)).toEqual([
 		"POST /api/v1/conversations/conversation-1/files/report-1/access",
 		"GET /api/v1/conversations/conversation-1/files/report-1/content",
 	]);
