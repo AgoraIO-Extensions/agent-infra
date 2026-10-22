@@ -9,6 +9,7 @@ import {
 	type WecomMessageV1,
 	type WecomReceiptV1,
 	wecomChannelIdV1,
+	wecomConversationKeyForRotationV1,
 } from "./wecom-channel.ts";
 
 const message: WecomMessageV1 = {
@@ -36,6 +37,8 @@ function fixture(
 		{ digest: string; receipt: WecomReceiptV1 }
 	>();
 	const conversations = new Map<string, FakeConversationExecutionV1>();
+	// 映射键 → 当前会话轮次；Postgres 在同一受理事务里串行化这一步（#3184）。
+	const rotations = new Map<string, number>();
 	const store: WecomChannelStorePortV1 = {
 		async reject() {},
 		async accept(plan, execute) {
@@ -56,8 +59,17 @@ function fixture(
 				});
 				conversations.set(id, conversation);
 			}
+			const rotation = rotations.get(plan.conversationKey) ?? 0;
 			const receipt = {
-				...(await execute(conversation)),
+				...(await execute(conversation, {
+					conversationKey: wecomConversationKeyForRotationV1(
+						plan.conversationKey,
+						rotation,
+					),
+					async startNewConversation() {
+						rotations.set(plan.conversationKey, rotation + 1);
+					},
+				})),
 				receiptId: plan.eventKey,
 			};
 			receipts.set(plan.eventKey, { digest: plan.requestDigest, receipt });
@@ -288,6 +300,91 @@ describe("managed WeCom channel", () => {
 		expect(await f.useCase.receive(message)).toEqual({ outcome: "denied" });
 		expect(f.receipts.size).toBe(0);
 		expect(f.conversations.size).toBe(0);
+	});
+});
+
+describe("WeCom /new and unavailable conversations (#3184)", () => {
+	const accepted = async (
+		f: ReturnType<typeof fixture>,
+		input: Partial<WecomMessageV1>,
+	) => {
+		const result = await f.useCase.receive({ ...message, ...input });
+		if (result.outcome !== "accepted") throw new Error("Expected acceptance");
+		return result.receipt;
+	};
+	const executions = (f: ReturnType<typeof fixture>) =>
+		[...f.conversations.values()].flatMap(
+			(conversation) => conversation.snapshot().executions,
+		);
+
+	it("starts a new conversation for this sender only, without calling the Agent", async () => {
+		const f = fixture();
+		const first = await accepted(f, { eventId: "event-1" });
+		const other = await accepted(f, {
+			eventId: "event-2",
+			senderId: "sender-2",
+		});
+		const started = await accepted(f, { eventId: "event-3", text: "/new" });
+		expect(started).toMatchObject({
+			status: "new_conversation",
+			conversationId: null,
+			executionId: null,
+		});
+		expect(executions(f)).toHaveLength(2);
+		const next = await accepted(f, { eventId: "event-4", text: "hello again" });
+		expect(next.status).toBe("accepted");
+		expect(next.conversationId).not.toBe(first.conversationId);
+		// 群内其他发送者的会话不受影响：仍映射到原会话（处理中，所以是 busy）。
+		const otherAgain = await accepted(f, {
+			eventId: "event-5",
+			senderId: "sender-2",
+		});
+		expect(otherAgain).toMatchObject({
+			status: "busy",
+			conversationId: other.conversationId,
+		});
+	});
+
+	it.each(["/new", " /NEW ", "@Agent /new", "@Agent\u2005/new", "@a @b /New"])(
+		"recognizes %j as the new-conversation command",
+		async (text) => {
+			const f = fixture();
+			expect(await accepted(f, { text })).toMatchObject({
+				status: "new_conversation",
+			});
+			expect(executions(f)).toHaveLength(0);
+		},
+	);
+
+	it.each(["/new 你好", "/newer", "请 /new", "/ new"])(
+		"treats %j as an ordinary message",
+		async (text) => {
+			const f = fixture();
+			expect(await accepted(f, { text })).toMatchObject({ status: "accepted" });
+			expect(executions(f)).toHaveLength(1);
+		},
+	);
+
+	it("answers a message to an unavailable conversation with a receipt and recovers with /new", async () => {
+		const f = fixture();
+		const first = await accepted(f, { eventId: "event-1" });
+		const conversation = [...f.conversations.values()][0];
+		if (!conversation || !first.conversationId || !first.executionId)
+			throw new Error("Expected a conversation");
+		conversation.completeExecution(first.executionId);
+		conversation.markConversationUnavailable(first.conversationId);
+		const rejected = await accepted(f, { eventId: "event-2", text: "again" });
+		expect(rejected).toEqual({
+			receiptId: expect.any(String),
+			status: "unavailable",
+			conversationId: first.conversationId,
+			executionId: null,
+		});
+		expect(executions(f)).toHaveLength(1);
+		await accepted(f, { eventId: "event-3", text: "/new" });
+		const recovered = await accepted(f, { eventId: "event-4", text: "again" });
+		expect(recovered.status).toBe("accepted");
+		expect(recovered.conversationId).not.toBe(first.conversationId);
 	});
 });
 

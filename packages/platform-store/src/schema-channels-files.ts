@@ -42,13 +42,36 @@ export const wecomReceipts = platformSchema.table(
 	(table) => [
 		check(
 			"wecom_acceptance_status",
-			sql`${table.acceptanceStatus} in ('accepted','busy','unavailable')`,
+			sql`${table.acceptanceStatus} in ('accepted','busy','unavailable','new_conversation')`,
 		),
 		check(
 			"wecom_delivery_status",
 			sql`${table.deliveryStatus} in ('pending','claimed','sending','sent','failed','unknown','cancelled','expired','abandoned')`,
 		),
 		index("wecom_delivery_pending").on(table.deliveryStatus, table.createdAt),
+	],
+);
+
+/**
+ * 企微会话映射的当前轮次（#3184）。没有行即轮次 0，沿用原映射；发送者每发一次 `/new` 加一，
+ * 之后的消息按新轮次创建新的 Conversation。映射键是 Core 计算的不透明摘要，不含企微标识原文。
+ */
+export const wecomConversationRotations = platformSchema.table(
+	"wecom_conversation_rotations",
+	{
+		mappingKey: text("mapping_key").primaryKey(),
+		agentId: text("agent_id")
+			.notNull()
+			.references(() => agents.id),
+		rotation: integer("rotation").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		check(
+			"wecom_conversation_rotation_positive",
+			sql`${table.rotation} between 1 and 2147483647`,
+		),
 	],
 );
 

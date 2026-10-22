@@ -1491,9 +1491,9 @@ describe("existing WeCom transaction cancellation", () => {
 					await reached.waiting;
 					return store.accept(
 						plan,
-						(conversation) => {
+						(conversation, mapping) => {
 							supplied = conversation;
-							return execute(conversation);
+							return execute(conversation, mapping);
 						},
 						signal,
 					);
@@ -1698,9 +1698,9 @@ describe("existing WeCom transaction cancellation", () => {
 				key = plan.eventKey;
 				return store.accept(
 					plan,
-					async (conversation) => {
+					async (conversation, mapping) => {
 						supplied = conversation;
-						const result = await execute(conversation);
+						const result = await execute(conversation, mapping);
 						await observer`select pg_sleep(2)`;
 						return result;
 					},
@@ -1830,9 +1830,9 @@ describe("existing WeCom transaction cancellation", () => {
 					key = plan.eventKey;
 					return activeTarget.accept(
 						plan,
-						(conversation) => {
+						(conversation, mapping) => {
 							supplied = conversation;
-							return execute(conversation);
+							return execute(conversation, mapping);
 						},
 						signal,
 					);
@@ -1935,8 +1935,8 @@ describe("existing WeCom transaction cancellation", () => {
 					key = plan.eventKey;
 					return store.accept(
 						plan,
-						async (conversation) => {
-							const result = await execute(conversation);
+						async (conversation, mapping) => {
+							const result = await execute(conversation, mapping);
 							executeReached = true;
 							reached.open();
 							await resume.waiting;
@@ -2048,9 +2048,9 @@ describe("existing WeCom transaction cancellation", () => {
 						key = plan.eventKey;
 						return target.accept(
 							plan,
-							async (conversation) => {
+							async (conversation, mapping) => {
 								supplied = conversation;
-								const result = await execute(conversation);
+								const result = await execute(conversation, mapping);
 								transport.arm();
 								return result;
 							},
@@ -2230,4 +2230,108 @@ it("pins the sender-to-Connection fact in the receipt and delivery claim", async
 			where agent_id=${message.agentId} and revision=1`;
 		await connectionStore.close();
 	}
+});
+
+describe("WeCom /new and unavailable conversations (#3184)", () => {
+	const scoped = (sender: string, eventId: string, text = "fixture text") => ({
+		...message,
+		senderId: sender,
+		eventId,
+		text,
+	});
+	const receiptOf = async (input: WecomMessageV1) => {
+		const result = await channel().receive(input);
+		if (result.outcome !== "accepted" && result.outcome !== "replayed")
+			throw new Error("Expected a receipt");
+		return result;
+	};
+
+	it("rotates the sender mapping once per /new event and keeps replays from rotating again", async () => {
+		const sender = "rotation_sender";
+		const first = await receiptOf(scoped(sender, "rotation_1"));
+		const started = await receiptOf(scoped(sender, "rotation_2", "/new"));
+		expect(started).toMatchObject({
+			outcome: "accepted",
+			receipt: {
+				status: "new_conversation",
+				conversationId: null,
+				executionId: null,
+			},
+		});
+		const next = await receiptOf(scoped(sender, "rotation_3", "next"));
+		expect(next.receipt.status).toBe("accepted");
+		expect(next.receipt.conversationId).not.toBe(first.receipt.conversationId);
+		// 重放同一个 /new 事件不再轮换：下一条仍进入同一个新会话（处理中，所以是 busy）。
+		expect(await receiptOf(scoped(sender, "rotation_2", "/new"))).toEqual({
+			...started,
+			outcome: "replayed",
+		});
+		const again = await receiptOf(scoped(sender, "rotation_4", "again"));
+		expect(again.receipt).toMatchObject({
+			status: "busy",
+			conversationId: next.receipt.conversationId,
+		});
+		expect(
+			await sql`select action, outcome from platform.audit_events where request_id=${started.receipt.receiptId}`,
+		).toEqual([{ action: "wecom.conversation_started", outcome: "succeeded" }]);
+		// 另一位发送者在同一群里的映射不受影响。
+		const other = await receiptOf(scoped("rotation_other", "rotation_other_1"));
+		expect(other.receipt.conversationId).not.toBe(next.receipt.conversationId);
+	});
+
+	it("serializes concurrent /new events for one mapping into distinct rotations", async () => {
+		const sender = "rotation_concurrent";
+		await Promise.all([
+			receiptOf(scoped(sender, "concurrent_new_1", "/new")),
+			receiptOf(scoped(sender, "concurrent_new_2", "/new")),
+		]);
+		// 两次 /new 在映射锁下依次生效，轮次是 2，不会因竞争只记 1。
+		expect(
+			await sql`select rotation from platform.wecom_conversation_rotations
+				where agent_id=${message.agentId} and rotation >= 2`,
+		).toEqual([{ rotation: 2 }]);
+	});
+
+	it("records an unavailable conversation as a rejected receipt and guides recovery with /new", async () => {
+		await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+		const sender = "unavailable_sender";
+		const first = await receiptOf(scoped(sender, "unavailable_1"));
+		await sql`update platform.conversation_executions set status='failed' where execution_id=${first.receipt.executionId}`;
+		await sql`update platform.conversations set status='unavailable' where id=${first.receipt.conversationId}`;
+		const failedClaim = await store.claim();
+		expect(failedClaim).toMatchObject({
+			receiptId: first.receipt.receiptId,
+			executionStatus: "failed",
+			conversationUnavailable: true,
+		});
+		await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+		const rejected = await receiptOf(scoped(sender, "unavailable_2", "again"));
+		expect(rejected).toMatchObject({
+			outcome: "accepted",
+			receipt: {
+				status: "unavailable",
+				conversationId: first.receipt.conversationId,
+				executionId: null,
+			},
+		});
+		expect(
+			await sql`select count(*)::int as count from platform.conversation_executions where conversation_id=${first.receipt.conversationId}`,
+		).toEqual([{ count: 1 }]);
+		expect(
+			await sql`select action, outcome from platform.audit_events where request_id=${rejected.receipt.receiptId}`,
+		).toEqual([
+			{ action: "wecom.conversation_unavailable", outcome: "rejected" },
+		]);
+		expect(await store.claim()).toMatchObject({
+			receiptId: rejected.receipt.receiptId,
+			acceptanceStatus: "unavailable",
+		});
+		await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+		await receiptOf(scoped(sender, "unavailable_3", "/new"));
+		const recovered = await receiptOf(scoped(sender, "unavailable_4", "again"));
+		expect(recovered.receipt.status).toBe("accepted");
+		expect(recovered.receipt.conversationId).not.toBe(
+			first.receipt.conversationId,
+		);
+	});
 });

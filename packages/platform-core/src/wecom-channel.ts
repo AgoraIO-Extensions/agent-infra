@@ -127,7 +127,11 @@ export interface WecomAuthorizationPortV1 {
 		| { readonly outcome: "denied" | "unavailable"; readonly actorId?: string }
 	>;
 }
-export type WecomReceiptStatusV1 = "accepted" | "busy" | "unavailable";
+export type WecomReceiptStatusV1 =
+	| "accepted"
+	| "busy"
+	| "unavailable"
+	| "new_conversation";
 export interface WecomReceiptV1 {
 	readonly receiptId: string;
 	readonly status: WecomReceiptStatusV1;
@@ -150,8 +154,37 @@ export interface WecomAcceptancePlanV1 {
 	readonly message: WecomMessageV1;
 	readonly authority: WecomAuthorityV1;
 	readonly eventKey: string;
+	/** 稳定映射键（Agent、绑定、类型、群/线程、发送者）；当前会话由它和轮次共同决定（#3184）。 */
 	readonly conversationKey: string;
 	readonly requestDigest: string;
+}
+/** Store 在受理事务内按映射键串行化后给出的当前会话映射（#3184）。 */
+export interface WecomConversationMappingV1 {
+	/** 当前轮次对应的 Conversation 创建幂等键。 */
+	readonly conversationKey: string;
+	/** `/new`：把该映射的轮次加一，之后的消息进入新的 Conversation。 */
+	startNewConversation(): Promise<void>;
+}
+/** 轮次 0 沿用原映射键，存量映射不变；之后每一轮派生新的创建幂等键。 */
+export function wecomConversationKeyForRotationV1(
+	mappingKey: string,
+	rotation: number,
+): string {
+	if (!Number.isSafeInteger(rotation) || rotation < 0)
+		throw new Error("Invalid WeCom conversation rotation");
+	return rotation === 0
+		? mappingKey
+		: digest([mappingKey, "conversation-rotation", rotation]);
+}
+/**
+ * 去掉开头对机器人的 @ 提及和首尾空白后正好是 `/new`（ASCII 不区分大小写）且没有附件时，
+ * 表示发送者要开始新会话；其他文本照常作为消息（#3184）。
+ */
+function isWecomNewConversationCommandV1(
+	message: Pick<WecomMessageV1, "text" | "media">,
+): boolean {
+	if (message.media?.length) return false;
+	return /^(?:@\S+\s+)*\/new$/iu.test(message.text.trim());
 }
 export interface WecomChannelStorePortV1 {
 	reject(
@@ -164,6 +197,7 @@ export interface WecomChannelStorePortV1 {
 		plan: WecomAcceptancePlanV1,
 		execute: (
 			conversation: ConversationExecutionUseCaseV1,
+			mapping: WecomConversationMappingV1,
 		) => Promise<Omit<WecomReceiptV1, "receiptId">>,
 		signal?: AbortSignal,
 	): Promise<WecomAcceptanceV1>;
@@ -357,22 +391,52 @@ export function createWecomChannelV1(dependencies: {
 					requestDigest,
 					...(connectionFence ? { connectionFence } : {}),
 				},
-				async (conversation) => {
+				async (conversation, mapping) => {
 					if (Date.parse(message.replyExpiresAt) <= now().getTime())
 						throw new Error("Invalid WeCom message");
+					// `/new` 不调用 Agent：只轮换本发送者的映射，之后的消息进入新会话（#3184）。
+					if (isWecomNewConversationCommandV1(message)) {
+						await mapping.startNewConversation();
+						return {
+							status: "new_conversation",
+							conversationId: null,
+							executionId: null,
+						};
+					}
 					const created = await conversation.createConversation({
 						schemaVersion: 1,
 						agentId: message.agentId,
-						idempotencyKey: conversationKey,
+						idempotencyKey: mapping.conversationKey,
 						requestId: eventKey,
 						traceId: eventKey,
 					});
 					if (created.outcome !== "accepted" && created.outcome !== "replayed")
 						throw new Error("WeCom acceptance authorization changed");
+					const conversationId = created.result.conversationId;
+					// 会话不可用（恢复失败、受理不明阻塞或代次隔离中）时不受理，回执给出 /new 指引。
+					const unavailableConversation = async () => {
+						const current = await conversation.readConversation({
+							schemaVersion: 1,
+							conversationId,
+						});
+						return (
+							current.outcome === "found" &&
+							(current.result.conversation.status === "unavailable" ||
+								current.result.conversation.isolationPending === true)
+						);
+					};
+					const unavailable = {
+						status: "unavailable",
+						conversationId,
+						executionId: null,
+					} as const;
+					// 附件先于受理落到文件面；不可用的会话不再接收附件。
+					if (message.media?.length && (await unavailableConversation()))
+						return unavailable;
 					const attachments = message.media?.length
 						? await dependencies.media?.resolve({
 								message,
-								conversationId: created.result.conversationId,
+								conversationId,
 								signal,
 							})
 						: undefined;
@@ -389,7 +453,7 @@ export function createWecomChannelV1(dependencies: {
 					const decision = await conversation.accept({
 						schemaVersion: 1,
 						command: "message",
-						conversationId: created.result.conversationId,
+						conversationId,
 						text: message.text,
 						idempotencyKey: eventKey,
 						requestId: eventKey,
@@ -399,9 +463,14 @@ export function createWecomChannelV1(dependencies: {
 					if (decision.outcome === "busy")
 						return {
 							status: "busy",
-							conversationId: created.result.conversationId,
+							conversationId,
 							executionId: null,
 						};
+					if (
+						decision.outcome === "denied" &&
+						(await unavailableConversation())
+					)
+						return unavailable;
 					if (
 						decision.outcome !== "accepted" &&
 						decision.outcome !== "replayed"
@@ -409,7 +478,7 @@ export function createWecomChannelV1(dependencies: {
 						throw new Error("WeCom acceptance authorization changed");
 					return {
 						status: "accepted",
-						conversationId: created.result.conversationId,
+						conversationId,
 						executionId: decision.result.executionId,
 					};
 				},
@@ -446,6 +515,8 @@ export interface WecomDeliveryClaimV1 {
 	 * 只在回复有效期最后 {@link wecomReplyTimeoutNoticeLeadMsV1} 内领取，Core 发送固定超时提示。
 	 */
 	readonly answerReady?: boolean;
+	/** 回执所属的 Conversation 已不可用；失败文案据此附带 /new 指引（#3184）。 */
+	readonly conversationUnavailable?: boolean;
 	readonly textDeltas: readonly string[];
 	/** Result files already confirmed by File Authority for this execution. */
 	readonly media?: readonly WecomResultFileReferenceV1[];
@@ -535,8 +606,13 @@ export const wecomProcessingTextV1 = "已收到，正在处理…";
 /** #3077：回复有效期内回答仍未就绪时发送的固定超时提示。 */
 export const wecomReplyTimeoutTextV1 =
 	"回复超时，Agent 未能在企微回复时限内完成，请稍后重试";
-/** #3077：回复有效期结束前多久领取仍未就绪的回执，用来发送超时提示。 */
+/** 回复有效期结束前多久领取仍未就绪的回执，用来发送超时提示（#3077）。 */
 export const wecomReplyTimeoutNoticeLeadMsV1 = 30_000;
+/** 映射到的会话不可用时的固定提示（#3184）。 */
+const wecomConversationUnavailableTextV1 =
+	"当前会话不可用，发送 /new 开始新会话";
+/** 发送者用 `/new` 开始新会话后的固定回复（#3184）。 */
+const wecomNewConversationTextV1 = "已开始新会话";
 export function createWecomDeliveryV1(dependencies: {
 	readonly store: WecomDeliveryStorePortV1;
 	readonly authorization: WecomAuthorizationPortV1;
@@ -586,14 +662,18 @@ export function createWecomDeliveryV1(dependencies: {
 				claim.acceptanceStatus === "busy"
 					? "Agent 正忙，请稍后重试"
 					: claim.acceptanceStatus === "unavailable"
-						? "Agent 当前不可用，请稍后重试"
-						: timedOut
-							? wecomReplyTimeoutTextV1
-							: claim.executionStatus === "completed"
-								? claim.textDeltas.join("")
-								: claim.executionStatus === "cancelled"
-									? "本次任务已停止"
-									: "本次任务执行失败，请稍后重试";
+						? wecomConversationUnavailableTextV1
+						: claim.acceptanceStatus === "new_conversation"
+							? wecomNewConversationTextV1
+							: timedOut
+								? wecomReplyTimeoutTextV1
+								: claim.executionStatus === "completed"
+									? claim.textDeltas.join("")
+									: claim.executionStatus === "cancelled"
+										? "本次任务已停止"
+										: claim.conversationUnavailable
+											? `本次任务执行失败，${wecomConversationUnavailableTextV1}`
+											: "本次任务执行失败，请稍后重试";
 			const media = timedOut ? [] : (claim.media ?? []);
 			if (
 				(!text && media.length === 0) ||

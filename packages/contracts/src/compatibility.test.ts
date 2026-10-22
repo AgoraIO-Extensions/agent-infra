@@ -40,6 +40,79 @@ function comparePaths(current: string, previous: string) {
 	);
 }
 
+/** #3184 之前的企微回执状态枚举：去掉末尾追加的 `new_conversation`。 */
+function wecomReceiptStatusEnums(value: {
+	paths: Record<string, Record<string, unknown>>;
+}): unknown[][] {
+	const schemaOf = (path: string) =>
+		(
+			value.paths[path]?.get as {
+				responses: Record<
+					string,
+					{ content: Record<string, { schema: Record<string, unknown> }> }
+				>;
+			}
+		)?.responses?.["200"]?.content?.["application/json"]?.schema as
+			| {
+					properties: {
+						items?: { items: { properties: { status: { enum: unknown[] } } } };
+						status?: { enum: unknown[] };
+					};
+			  }
+			| undefined;
+	const list = schemaOf("/api/v1/wecom/receipts")?.properties.items?.items
+		.properties.status.enum;
+	const single = schemaOf("/api/v1/wecom/receipts/{receiptId}")?.properties
+		.status?.enum;
+	return [list, single].filter((values): values is unknown[] =>
+		Array.isArray(values),
+	);
+}
+function restorePreWecomNewConversationContract(value: {
+	paths: Record<string, Record<string, unknown>>;
+}) {
+	for (const values of wecomReceiptStatusEnums(value)) {
+		const index = values.indexOf("new_conversation");
+		if (index >= 0) values.splice(index, 1);
+	}
+}
+
+it("admits only the appended WeCom new-conversation receipt status (#3184)", async () => {
+	const current = JSON.parse(await readFile(pilotBrowserArtifactPath, "utf8"));
+	const previous = structuredClone(current);
+	restorePreWecomNewConversationContract(previous);
+	const directory = await mkdtemp(
+		resolve(tmpdir(), "agent-infra-wecom-new-conversation-compat-"),
+	);
+	const previousPath = resolve(directory, "previous.json");
+	const currentPath = resolve(directory, "current.json");
+	try {
+		await writeFile(previousPath, JSON.stringify(previous));
+		await writeFile(currentPath, JSON.stringify(current));
+		expect(comparePaths(currentPath, previousPath).status).toBe(0);
+		const mutations: Record<string, (value: typeof current) => void> = {
+			inventedStatus: (value) => {
+				for (const values of wecomReceiptStatusEnums(value))
+					values.push("rotated");
+			},
+			reordered: (value) => {
+				for (const values of wecomReceiptStatusEnums(value)) values.reverse();
+			},
+			onlyOneResponse: (value) => {
+				wecomReceiptStatusEnums(value)[0]?.pop();
+			},
+		};
+		for (const mutate of Object.values(mutations)) {
+			const changed = structuredClone(current);
+			mutate(changed);
+			await writeFile(currentPath, JSON.stringify(changed));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 it("admits only the reviewed installation paths, headers and restricted response", async () => {
 	const current = JSON.parse(
 		await readFile(
@@ -3791,6 +3864,8 @@ describe("contract compatibility command", () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),
 		);
+		// #440 的历史新增按 #3184 之前的回执状态枚举核对。
+		restorePreWecomNewConversationContract(current);
 		const paths = [
 			"/api/v1/wecom/receipts",
 			"/api/v1/wecom/receipts/{receiptId}",

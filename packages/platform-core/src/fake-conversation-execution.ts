@@ -963,6 +963,16 @@ export class FakeConversationExecutionV1
 		execution.status = "completed";
 	}
 
+	/** 测试用：把会话置为不可用，模拟 Session 恢复失败或 RUNTIME_SESSION_BLOCKED 收敛后的状态（#3184）。 */
+	markConversationUnavailable(conversationId: string) {
+		const conversation = this.#conversations.get(conversationId);
+		if (!conversation) throw new Error("Missing Fake conversation");
+		this.#conversations.set(conversationId, {
+			...conversation,
+			status: "unavailable",
+		});
+	}
+
 	snapshot() {
 		return structuredClone({
 			conversations: [...this.#conversations.values()],
