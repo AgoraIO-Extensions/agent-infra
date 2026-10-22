@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: agent-infra-pilot-quota
+  name: agent-infra-ack-quota
   labels: {{- include "ack.labels" . | nindent 4 }}
 spec:
   hard:
