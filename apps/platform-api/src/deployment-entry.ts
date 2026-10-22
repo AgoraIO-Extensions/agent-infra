@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createLdapIdentityDirectory } from "@agent-infra/identity";
 import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
+import { readConnectionConsumerEnvironmentConfigurationV1 } from "./connection-consumer-environment.js";
 import { createProtectedConnectionInstallationForwarder } from "./connection-installation-callback-forwarder.js";
 import {
 	createProductionNativeMetadataReaderFromWorkerV1,
@@ -49,6 +50,16 @@ const {
 	providerImport,
 	directorySearch,
 } = await import(configurationModule);
+
+const environmentConnectionConsumer =
+	connectionConsumerProfile === undefined &&
+	connectionConsumerProfileApproval === undefined
+		? readConnectionConsumerEnvironmentConfigurationV1(process.env)
+		: undefined;
+const resolvedConnectionConsumerProfile =
+	connectionConsumerProfile ?? environmentConnectionConsumer?.profile;
+const resolvedConnectionConsumerProfileApproval =
+	connectionConsumerProfileApproval ?? environmentConnectionConsumer?.approval;
 
 async function nativeMetadataWorkerFromEnvironment() {
 	const baseUrl = process.env.PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN;
@@ -246,8 +257,9 @@ export function createPlatformApiAssemblyInput() {
 
 		userGovernance,
 		directory: { identity: browser.identity, search: directorySearch },
-		connectionConsumerProfile,
-		connectionConsumerProfileApproval,
+		connectionConsumerProfile: resolvedConnectionConsumerProfile,
+		connectionConsumerProfileApproval:
+			resolvedConnectionConsumerProfileApproval,
 		...(connectionInstallationConfiguration
 			? {
 					connectionInstallation: {
