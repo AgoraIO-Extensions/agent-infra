@@ -147,14 +147,15 @@ function InlineImage({
 		);
 	const image = <img className="sandbox-image-content" src={url} alt={label} />;
 	return interactive && onPreview ? (
-		<button
+		<Button
 			type="button"
+			variant="ghost"
 			className="sandbox-image"
 			aria-label={withObjectName("预览图片", label)}
 			onClick={() => onPreview(file, content)}
 		>
 			{image}
-		</button>
+		</Button>
 	) : (
 		<span className="sandbox-image">{image}</span>
 	);

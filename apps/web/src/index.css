@@ -2255,6 +2255,8 @@
 	vertical-align: middle;
 }
 .assistant-markdown button.sandbox-image {
+	/* 覆盖 Button 的按钮内边距与圆角；保留 44px 最小点击区。 */
+	border-radius: 8px;
 	cursor: zoom-in;
 }
 .assistant-markdown button.sandbox-image:focus-visible {
