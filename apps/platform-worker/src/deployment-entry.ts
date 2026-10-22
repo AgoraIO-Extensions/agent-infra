@@ -58,7 +58,11 @@ type DeploymentConfiguration = {
 	/** Deployment-owned approved profile per Agent. Missing Agent IDs fail closed. */
 	readonly connectionConsumerProfilesByAgent?: Record<
 		string,
-		{ readonly profile: unknown; readonly approval: unknown }
+		{
+			readonly profile: unknown;
+			readonly approval: unknown;
+			readonly oauthClientId?: unknown;
+		}
 	>;
 	/**
 	 * Deployment adapter hook for the real per-Agent Connection registration
