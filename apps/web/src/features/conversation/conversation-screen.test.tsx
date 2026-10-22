@@ -99,11 +99,14 @@ function setup(
 			return Response.json({
 				schemaVersion: 1,
 				declaration: {
-					schemaVersion: 1, scope: "agent", revision: 1,
+					schemaVersion: 1,
+					scope: "agent",
+					revision: 1,
 					expiresAt: "2027-01-01T00:00:00Z",
 					mediaTypes: ["text/plain", "application/pdf"],
 					maxBytes: 10 * 1024 * 1024,
-					updatedAt: "2026-01-01T00:00:00Z", updatedBy: "user-chat",
+					updatedAt: "2026-01-01T00:00:00Z",
+					updatedBy: "user-chat",
 				},
 			});
 		if (path.endsWith("/events")) {
@@ -886,8 +889,7 @@ describe("functional conversation screen", () => {
 
 	it("closes the attachment entry when the limits response is not the contract shape", async () => {
 		setup((request) =>
-			new URL(request.url).pathname ===
-			"/api/v2/agents/agent-1/file-limits"
+			new URL(request.url).pathname === "/api/v2/agents/agent-1/file-limits"
 				? Response.json({ items: [], nextCursor: null })
 				: undefined,
 		);
