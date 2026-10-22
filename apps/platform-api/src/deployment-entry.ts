@@ -227,7 +227,7 @@ function assembleStandardTemplateReleaseApp() {
 		!("loadReleaseBinding" in standardTemplateReleaseInput) ||
 		typeof standardTemplateReleaseInput.loadReleaseBinding !== "function"
 	)
-		throw new Error("PLATFORM_STANDARD_TEMPLATE_RELEASE_CONFIGURATION_INVALID");
+		return undefined;
 	const input =
 		standardTemplateReleaseInput as DeploymentStandardTemplateReleaseInputV1;
 	return createProductionSingleAgentTemplateReleaseAppV1({
