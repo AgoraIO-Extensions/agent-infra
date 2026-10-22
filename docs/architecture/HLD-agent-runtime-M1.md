@@ -711,6 +711,30 @@ before hook 提供 callID 本身不证明其与实际请求的关联；同参数
 - 不变：8.5.1 的 `workspace.read_text_file`、Driver 执行的标准 MCP 与模型传输仍按平台中介调用处理；
   跨 Conversation 隔离沿用 10.2 与工程 Spec §10.9。
 
+#### 8.5.5 会话 Sandbox 文件交换
+
+附件物化、回答内 `sandbox:` 引用、`result.file` V2 与 ACP 块的规则以工程 Spec
+[§15.4.4](SPEC-agent-infra-M1-engineering-architecture.md#1544-会话-sandbox-文件交换)为准；
+本节只维护各 Driver 的接入点。
+
+| Driver | 附件的原生图片输入 | 平台指令注入点 | 最终回答确认点 | 移除的隐式发布 |
+| --- | --- | --- | --- | --- |
+| Codex | `local_image`，指向物化后的工作区文件 | thread/start 的 `developerInstructions` | `item/completed` 的 agentMessage 文本，在 `turn/completed` 写终态前解析 | apply_patch `fileChange` 的 `persistNativeFileChange` |
+| Claude | SDK image 内容块 | 平台固定的 `systemPrompt` | SDK `result` 消息，在写终态前解析 | PostToolUse 中 `Write`/`Edit` 的结果文件分支，工具事实保留 |
+| OpenCode（ACP） | ACP image 块，需协商 `promptCapabilities.image` | 平台只读的 `instructions` 文件，不放在工作区或可写位置 | `session/prompt` 返回 stopReason 后、写终态前；`agent_message_chunk` 的 `image`/`resource_link` 块在流中暂存，一并处理 | `tool_call` diff 的 `newText` |
+| Pi | RPC image 块 | 系统提示钩子 | `prompt` 返回 stopReason 后、写终态前 | `write`/`edit` 执行完成后的结果文件 |
+
+- 附件清单格式：原生用户输入之后追加一个平台块，每个附件一行，列出名称、媒体类型、字节数和工作区相对路径。
+  文本由平台固定，不含 fileId、对象引用或 Host 路径。
+- 平台指令只说明附件清单的位置，以及 `sandbox:` 引用的写法和上限。指令随 Driver 版本维护，
+  不进入事件、审计或遥测。
+- 最终回答取本次执行已确认的全部文本事件，按顺序拼接；只解析一次。解析结果和每个引用的发布进度
+  保存在 Driver 的持久状态中，重启后沿原进度继续。
+- 每个引用的工具事实使用平台工具标识，按 8.5 的操作类别、稳定引用和受限失败原因发布；
+  事实中不含路径和文件内容。
+- 能力声明：Driver 通过 conformance 之后，才把附件与结果文件 capability 设为可用。
+  conformance 须覆盖物化、引用发布、恢复、越界与符号链接负向用例。
+
 ### 8.6 Eval 复用
 
 Eval 在 Platform 管理数据集/标准版本、实验、规则/人工/模型评分、复核与反馈；Runtime 不保存另一份实验状态，也不负责汇总质量分。每个样本复用原发起主体获准的任务用例，默认使用独立 Conversation；模型调用和独立模型评分使用 Agent 默认 Relay Key，展示费用归属，Key 不可用时对应执行或评分失败而不重跑已完成样本。正常执行/查询/取消和实际模型/工具采集均遵守本 HLD。
