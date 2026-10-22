@@ -4,6 +4,7 @@ import {
 	type ReactNode,
 	useContext,
 	useEffect,
+	useLayoutEffect,
 	useState,
 } from "react";
 import { Button } from "../../components/ui/button.js";
@@ -31,12 +32,26 @@ export type SandboxReferences = Readonly<{
 	onDownload?: (file: ResultFile) => void;
 	previewingFileId?: string;
 	downloadingFileId?: string;
+	/**
+	 * 回答中以图片或文件卡渲染了某个结果文件时登记，返回注销函数；下方结果文件列表据此只列名称，
+	 * 不再重复渲染预览与下载入口。
+	 */
+	onRendered?: (fileId: string) => () => void;
 }>;
 
 const noReferences: SandboxReferences = { files: new Map(), settled: true };
 
 export const SandboxReferencesContext =
 	createContext<SandboxReferences>(noReferences);
+
+/** 回答中实际显示了该结果文件的图片或文件卡：登记给回复卡。 */
+function useRenderedFile(fileId: string | undefined) {
+	const { onRendered } = useContext(SandboxReferencesContext);
+	useLayoutEffect(
+		() => (fileId && onRendered ? onRendered(fileId) : undefined),
+		[fileId, onRendered],
+	);
+}
 
 /** 未命中、无效或读取失败的引用：纯文本占位，不加载任何 URL。 */
 function NotSent({ kind, label }: { kind: "image" | "file"; label?: string }) {
@@ -122,6 +137,8 @@ function InlineImage({
 	}, [fileId, read]);
 	const content = result?.fileId === fileId ? result.content : undefined;
 	const url = useObjectUrl(content ?? null);
+	// 读取失败时不登记：下方列表保留该文件的预览与下载入口，作为重试途径。
+	useRenderedFile(content === null ? undefined : fileId);
 	// 读取被拒绝（撤权、跨主体或跨会话、过期）与未发送显示同一占位，不区分原因。
 	if (content === null) return <NotSent kind="image" label={label} />;
 	if (!content || !url)
@@ -188,6 +205,7 @@ export function SandboxFileCard({
 		useContext(SandboxReferencesContext);
 	const previewing = previewingFileId === file.fileId;
 	const downloading = downloadingFileId === file.fileId;
+	useRenderedFile(file.fileId);
 	return (
 		// biome-ignore lint/a11y/useSemanticElements: 文件卡位于段落内，只能是短语内容，不能用 fieldset。
 		<span

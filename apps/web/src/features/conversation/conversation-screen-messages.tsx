@@ -541,6 +541,29 @@ function AssistantReply({
 	const pending = status === "submitted" || status === "processing";
 	const answered = bodyKind === "text" && Boolean(text);
 	const preview = useResultFilePreview(files);
+	// #3228：回答中已显示为图片或文件卡的结果文件（按 fileId 计数，StrictMode 重复挂载也成对）。
+	const renderedCounts = useRef(new Map<string, number>());
+	const [inAnswer, setInAnswer] = useState<ReadonlySet<string>>(
+		() => new Set(),
+	);
+	const onRendered = useCallback((fileId: string) => {
+		const counts = renderedCounts.current;
+		const sync = () =>
+			setInAnswer((previous) =>
+				previous.size === counts.size &&
+				[...counts.keys()].every((key) => previous.has(key))
+					? previous
+					: new Set(counts.keys()),
+			);
+		counts.set(fileId, (counts.get(fileId) ?? 0) + 1);
+		sync();
+		return () => {
+			const count = (counts.get(fileId) ?? 1) - 1;
+			if (count > 0) counts.set(fileId, count);
+			else counts.delete(fileId);
+			sync();
+		};
+	}, []);
 	const references: SandboxReferences | undefined = files
 		? {
 				files: sandboxReferenceIndex(files.files),
@@ -550,6 +573,7 @@ function AssistantReply({
 				onDownload: (file) => void files.onDownloadFile(file),
 				previewingFileId: files.previewingFileId,
 				downloadingFileId: files.downloadingFileId,
+				onRendered,
 			}
 		: undefined;
 	const meta = pending ? (
@@ -679,6 +703,7 @@ function AssistantReply({
 			{files && files.files.length > 0 && (
 				<ResultFileList
 					files={files}
+					inAnswer={answered ? inAnswer : undefined}
 					onPreview={files.onPreviewFile ? preview.open : undefined}
 				/>
 			)}
@@ -829,15 +854,18 @@ function useResultFilePreview(files: ReplyResultFiles | undefined) {
 }
 
 /**
- * 回答下方的结果文件列表：同一执行的全部已确认文件各列一次（按 fileId 去重），包括已在回答中
- * 内联或显示为文件卡的文件，以及没有 `workspaceReference` 的文件（V1 事件、ACP image 块）。
- * 回答中未发送的引用只在原位置显示占位，不进入本列表。
+ * 回答下方的结果文件列表：继续列出同一执行的全部已确认文件，每个文件一行（按 fileId 去重），
+ * 包括没有 `workspaceReference` 的文件（V1 事件、ACP image 块）。回答中已显示为图片或文件卡的
+ * 文件只列名称并注明位置，不重复渲染预览与下载入口；回答中未发送的引用只在原位置显示占位，
+ * 不进入本列表。
  */
 function ResultFileList({
 	files,
+	inAnswer,
 	onPreview,
 }: {
 	files: ReplyResultFiles;
+	inAnswer?: ReadonlySet<string>;
 	onPreview?: (file: ResultFile) => void;
 }) {
 	return (
@@ -846,37 +874,50 @@ function ResultFileList({
 			{files.files.map((file) => {
 				const previewing = files.previewingFileId === file.fileId;
 				const downloading = files.downloadingFileId === file.fileId;
+				const shown = inAnswer?.has(file.fileId) ?? false;
 				return (
-					<div key={file.fileId} className="flex items-center gap-2 text-sm">
+					<div
+						key={file.fileId}
+						className="flex items-center gap-2 text-sm"
+						data-in-answer={shown || undefined}
+					>
 						<span className="min-w-0 flex-1 truncate" title={file.name}>
 							{file.name} ({formatResultSize(file.sizeBytes)})
 						</span>
-						{onPreview && artifactCanPreview(file) && (
-							<Button
-								variant="ghost"
-								size="sm"
-								disabled={previewing}
-								aria-label={withObjectName(
-									previewing ? "准备预览…" : "预览",
-									file.name,
+						{shown ? (
+							<span className="text-muted-foreground text-xs">
+								已在回答中显示
+							</span>
+						) : (
+							<>
+								{onPreview && artifactCanPreview(file) && (
+									<Button
+										variant="ghost"
+										size="sm"
+										disabled={previewing}
+										aria-label={withObjectName(
+											previewing ? "准备预览…" : "预览",
+											file.name,
+										)}
+										onClick={() => onPreview(file)}
+									>
+										{previewing ? "准备预览…" : "预览"}
+									</Button>
 								)}
-								onClick={() => onPreview(file)}
-							>
-								{previewing ? "准备预览…" : "预览"}
-							</Button>
+								<Button
+									variant="outline"
+									size="sm"
+									disabled={downloading}
+									aria-label={withObjectName(
+										downloading ? "准备下载…" : "下载",
+										file.name,
+									)}
+									onClick={() => void files.onDownloadFile(file)}
+								>
+									{downloading ? "准备下载…" : "下载"}
+								</Button>
+							</>
 						)}
-						<Button
-							variant="outline"
-							size="sm"
-							disabled={downloading}
-							aria-label={withObjectName(
-								downloading ? "准备下载…" : "下载",
-								file.name,
-							)}
-							onClick={() => void files.onDownloadFile(file)}
-						>
-							{downloading ? "准备下载…" : "下载"}
-						</Button>
 					</div>
 				);
 			})}
