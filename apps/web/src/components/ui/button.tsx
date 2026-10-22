@@ -2,8 +2,10 @@ import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
+// 键盘焦点只由 index.css 的 2px 实色 outline（offset 3px）表达，边框保持各变体自身的颜色，
+// 不再叠一圈 --accent 边框（设计 :focus-visible，G5-08）。
 const buttonStyles = cva(
-	"group/button inline-flex shrink-0 select-none items-center justify-center whitespace-normal rounded-[10px] border border-transparent bg-clip-padding text-center font-[650] text-[13px] leading-[1.65] tracking-[.02em] outline-none [transition:background_.18s_ease,border-color_.18s_ease,color_.18s_ease,transform_.06s_ease] focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-[.48] aria-disabled:cursor-not-allowed aria-disabled:opacity-[.48] aria-invalid:border-destructive aria-invalid:ring-1 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 active:not-aria-[haspopup]:[transform:translateY(1px)] [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+	"group/button inline-flex shrink-0 select-none items-center justify-center whitespace-normal rounded-[10px] border border-transparent bg-clip-padding text-center font-[650] text-[13px] leading-[1.65] tracking-[.02em] outline-none [transition:background_.18s_ease,border-color_.18s_ease,color_.18s_ease,transform_.06s_ease] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-[.48] aria-disabled:cursor-not-allowed aria-disabled:opacity-[.48] aria-invalid:border-destructive aria-invalid:ring-1 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 active:not-aria-[haspopup]:[transform:translateY(1px)] [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
 	{
 		variants: {
 			variant: {
@@ -16,7 +18,7 @@ const buttonStyles = cva(
 				ghost:
 					"text-muted-foreground hover:bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
 				destructive:
-					"border-danger-ink bg-danger-ink text-primary-foreground hover:bg-[color-mix(in_oklch,var(--danger-ink)_84%,var(--foreground))] focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 dark:hover:bg-destructive/30",
+					"border-danger-ink bg-danger-ink text-primary-foreground hover:bg-[color-mix(in_oklch,var(--danger-ink)_84%,var(--foreground))] focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 dark:hover:bg-destructive/30",
 				link: "text-primary underline-offset-4 hover:underline",
 			},
 			size: {

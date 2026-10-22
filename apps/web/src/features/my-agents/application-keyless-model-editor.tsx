@@ -5,13 +5,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 import { KeylessModelPicker } from "../agent-configuration/keyless-model-picker.js";
-import type { KeylessCurrentModelOption } from "../agent-configuration/keyless-model-selection.js";
+import type {
+	KeylessCurrentModelOption,
+	KeylessEndpointNames,
+} from "../agent-configuration/keyless-model-selection.js";
 import type { useKeylessKeyCheck } from "../agent-configuration/use-keyless-key-check.js";
 
 type ApplicationKeylessModelEditorProps = {
 	current: readonly KeylessCurrentModelOption[];
 	currentDefault: { optionId: string; level: string };
 	disabled: boolean;
+	/** 端点 ID → 部署目录显示名，候选不显示原始端点 ID（G5-12）。 */
+	endpointNames?: KeylessEndpointNames;
 	/** 表单校验或保存被拦下时的提示。 */
 	error?: string | undefined;
 	errorId: string;
@@ -27,6 +32,7 @@ export function ApplicationKeylessModelEditor({
 	current,
 	currentDefault,
 	disabled,
+	endpointNames,
 	error,
 	errorId,
 	keyCheck,
@@ -85,6 +91,7 @@ export function ApplicationKeylessModelEditor({
 					current={current}
 					currentDefault={currentDefault}
 					disabled={disabled}
+					endpointNames={endpointNames}
 					idPrefix="application-keyless-model"
 					key={keyCheck.candidates
 						.map((candidate) => `${candidate.endpointId}/${candidate.modelId}`)

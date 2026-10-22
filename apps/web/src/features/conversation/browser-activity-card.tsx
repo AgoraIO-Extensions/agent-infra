@@ -160,12 +160,16 @@ export function BrowserActivityCard({
 			{(actions.length > 0 || records) && (
 				<div className="browser-capability-actions">
 					{actions.map((action) => (
+						// G5-04：命令处理中用 aria-disabled 保持可聚焦（同 RecoveryButton、G4-26），焦点不随禁用
+						// 落到 body；回读推进后由对话页把焦点交给新卡的第一个操作（data-browser-action）。
 						<Button
 							key={action.label}
 							type="button"
 							variant={action.variant}
 							aria-label={action.accessibleName}
 							disabled={busy}
+							focusableWhenDisabled
+							data-browser-action={action.command.kind}
 							onClick={() => invoke(action.command)}
 						>
 							{action.icon === "stop" && <Square aria-hidden="true" />}

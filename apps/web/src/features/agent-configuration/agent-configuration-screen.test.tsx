@@ -840,7 +840,8 @@ describe("environment variables (O-10)", () => {
 			"WORKSPACE_NAME",
 		);
 		expect(screen.getByLabelText<HTMLInputElement>("值").value).toBe("release");
-		const remove = screen.getByRole("button", { name: "移除：WORKSPACE_NAME" });
+		// 需求变化（#3215 G5-11 / #3211）：行尾「移除」以行序号为对象名，两行同名变量时仍可区分。
+		const remove = screen.getByRole("button", { name: "移除：环境变量 1" });
 		expect(remove.textContent).toBe("移除");
 		expect(screen.getByText("没有需要保存的变更。")).toBeTruthy();
 
@@ -853,9 +854,7 @@ describe("environment variables (O-10)", () => {
 		});
 		expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("secrets");
 
-		fireEvent.click(
-			screen.getByRole("button", { name: "移除：WORKSPACE_NAME" }),
-		);
+		fireEvent.click(screen.getByRole("button", { name: "移除：环境变量 1" }));
 		fireEvent.click(saveButton());
 		expect(onSave.mock.calls[1]?.[0].environment).toEqual([]);
 	});
@@ -888,6 +887,39 @@ describe("environment variables (O-10)", () => {
 			{ name: "WORKSPACE_NAME", value: "release" },
 			{ name: "LOG_LEVEL", value: "debug" },
 		]);
+	});
+
+	it("names every environment row control by its row, even when two rows pick the same key (G5-11)", () => {
+		renderScreen({ allowedEnvironmentKeys: ["LOG_LEVEL", "WORKSPACE_NAME"] });
+		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
+		fireEvent.change(screen.getAllByLabelText("环境变量名")[1] as HTMLElement, {
+			target: { value: "WORKSPACE_NAME" },
+		});
+		// 可见标签仍是「环境变量名」「值」「移除」；可访问名称带上「环境变量 N」（D2-58）。
+		for (const row of [1, 2]) {
+			const name = screen.getByRole("combobox", {
+				name: `环境变量名：环境变量 ${row}`,
+			}) as HTMLSelectElement;
+			expect(name.value).toBe("WORKSPACE_NAME");
+			expect(
+				screen.getByRole("textbox", { name: `值：环境变量 ${row}` }),
+			).toBeTruthy();
+			expect(
+				screen.getByRole("button", { name: `移除：环境变量 ${row}` })
+					.textContent,
+			).toBe("移除");
+		}
+		expect(
+			screen.getAllByText("环境变量名", { selector: "label" }),
+		).toHaveLength(2);
+		fireEvent.click(screen.getByRole("button", { name: "移除：环境变量 1" }));
+		// 移除后剩下的行重新编号，名称不随输入变化。
+		expect(
+			screen.getByRole("combobox", { name: "环境变量名：环境变量 1" }),
+		).toBeTruthy();
+		expect(
+			screen.queryByRole("combobox", { name: "环境变量名：环境变量 2" }),
+		).toBeNull();
 	});
 
 	it("validates free-text names for a custom Agent", () => {

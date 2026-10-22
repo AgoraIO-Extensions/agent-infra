@@ -5,6 +5,7 @@ import {
 	render,
 	screen,
 	waitFor,
+	within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { client as generatedClient } from "../../pilot/generated-v2/client.gen.js";
@@ -2191,14 +2192,15 @@ describe("AgentApplicationForm editing the models of a default-Key application (
 		await screen.findByText("选择允许的模型");
 		expect(check).toHaveBeenCalledWith(key);
 		// 当前模型预先勾选，Key 可见的另一个模型可选。
+		// 需求变化（#3215 G5-12 / #3212）：候选按部署目录写「{端点显示名} · {模型}」，不显示原始端点 ID。
 		expect(
 			screen
-				.getByRole("checkbox", { name: "endpoint-primary · gpt-5" })
+				.getByRole("checkbox", { name: "Primary endpoint · gpt-5" })
 				.getAttribute("aria-checked"),
 		).toBe("true");
 		expect(
 			screen
-				.getByRole("checkbox", { name: "endpoint-primary · gpt-5-mini" })
+				.getByRole("checkbox", { name: "Primary endpoint · gpt-5-mini" })
 				.getAttribute("aria-checked"),
 		).toBe("false");
 	});
@@ -2212,7 +2214,7 @@ describe("AgentApplicationForm editing the models of a default-Key application (
 		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
 		await screen.findByText("选择允许的模型");
 		fireEvent.click(
-			screen.getByRole("checkbox", { name: "endpoint-primary · gpt-5-mini" }),
+			screen.getByRole("checkbox", { name: "Primary endpoint · gpt-5-mini" }),
 		);
 		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
 		expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -2231,6 +2233,53 @@ describe("AgentApplicationForm editing the models of a default-Key application (
 		expect(body.modelConfiguration.defaultOptionId).toBe(
 			"endpoint-primary:gpt-5",
 		);
+		// G5-12：页面显示中文档位，请求仍提交原始档位与端点（#3212 AC-2）。
+		expect(
+			body.modelConfiguration.options.map(
+				(o: { endpointId: string; reasoningLevels: string[] }) => [
+					o.endpointId,
+					[...o.reasoningLevels].sort(),
+				],
+			),
+		).toEqual([
+			["endpoint-primary", ["high", "medium"]],
+			["endpoint-primary", ["low"]],
+		]);
+		expect(body.modelConfiguration.defaultReasoningLevel).toBe("medium");
+	});
+
+	it("shows endpoint display names and Chinese reasoning levels in the candidate picker (G5-12)", async () => {
+		renderManaged();
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
+			target: { value: key },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
+		await screen.findByText("选择允许的模型");
+		const picker = screen.getByRole("group", { name: "选择允许的模型" });
+		expect(
+			within(picker).getByRole("checkbox", {
+				name: "均衡：Primary endpoint · gpt-5",
+			}),
+		).toBeTruthy();
+		expect(
+			within(picker).getByRole("checkbox", {
+				name: "高：Primary endpoint · gpt-5",
+			}),
+		).toBeTruthy();
+		const defaultModel =
+			within(picker).getByLabelText<HTMLSelectElement>("默认模型");
+		expect(
+			[...defaultModel.options].map((option) => option.textContent),
+		).toEqual(["Primary endpoint · gpt-5"]);
+		expect(defaultModel.value).toBe("endpoint-primary:gpt-5");
+		const defaultLevel =
+			within(picker).getByLabelText<HTMLSelectElement>("默认推理档位");
+		expect(
+			[...defaultLevel.options].map((option) => option.textContent),
+		).toEqual(["高", "均衡"]);
+		expect(defaultLevel.value).toBe("medium");
+		expect(picker.textContent).not.toMatch(/endpoint-primary|medium|high/);
 	});
 
 	it("blocks the submission until the Key was checked and models were selected", async () => {

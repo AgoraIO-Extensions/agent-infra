@@ -19,7 +19,11 @@ import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { formatPerson } from "../directory-names.js";
 import { BrowserActivityCard } from "./browser-activity-card.js";
-import { type BrowserCardCommand, selectBrowserCard } from "./browser-card.js";
+import {
+	type BrowserCard,
+	type BrowserCardCommand,
+	selectBrowserCard,
+} from "./browser-card.js";
 import {
 	type CapabilityInvocation,
 	capabilityReceiptBusy,
@@ -82,6 +86,19 @@ export function browserCommandBody(
 		command: command.kind,
 		handoffId: command.handoffId,
 	};
+}
+
+/**
+ * 浏览器卡所处的阶段（阶段、状态与本阶段操作）。命令受理后回读到的卡片与发出命令时不同，
+ * 就是推进到了下一阶段（G5-04）。
+ */
+function browserCardStage(card: BrowserCard | undefined) {
+	if (!card) return "none";
+	return [
+		card.phase,
+		card.status,
+		...card.actions.map((action) => action.label),
+	].join("\u0000");
 }
 
 /**
@@ -665,6 +682,55 @@ export function ActiveConversation({
 			setNotice("");
 		}
 	}
+	// 对话页只有一张浏览器卡（BR-01）。空闲卡放在默认收起的会话上下文里；一旦当前 Execution
+	// 有浏览器活动（请求、接管、执行中与终态），卡片移到会话时间线末尾，不会被折叠隐藏（NI-83）。
+	// 空闲只取决于当前 Execution 有没有浏览器事件，与时间无关，两处判断不会错开。
+	const browserCapability = agent.capabilities.browser;
+	const browserAvailable = browserCapability?.status === "available";
+	const browserCard =
+		browserCapability === undefined
+			? undefined
+			: selectBrowserCard({
+					events: timeline.events,
+					conversationId,
+					executionId: latestExecution,
+					browserAvailable,
+					now: Date.now(),
+				});
+	const browserIdle = browserCard?.phase === "idle";
+	const browserStage = browserCardStage(browserCard);
+	// G5-04：「接管浏览器」「交还给 Agent」「允许这次操作」「拒绝」「停止接管」受理并回读到下一阶段后，
+	// 触发按钮随旧阶段卸载。发出命令时记下当时的阶段；回读到的卡片换了阶段时，若焦点在 body 或仍在
+	// 卡片内，按设计交给下一步操作：新卡的第一个操作（接管浏览器 / 交还给 Agent / 停止操作），终态
+	// 交给「查看操作记录」，都没有时同停止回复的兜底（输入框 → 页面标题）。命令没有受理、用户按下
+	// 指针或焦点已在卡片外时不再代管。
+	const [browserFocus, setBrowserFocus] = useState<string>();
+	useEffect(() => {
+		if (!browserFocus) return;
+		const release = () => setBrowserFocus(undefined);
+		document.addEventListener("pointerdown", release, true);
+		return () => document.removeEventListener("pointerdown", release, true);
+	}, [browserFocus]);
+	useEffect(() => {
+		const result = command.result;
+		if (result && result.kind !== "browser-accepted")
+			setBrowserFocus(undefined);
+	}, [command.result]);
+	useEffect(() => {
+		if (!browserFocus || browserFocus === browserStage) return;
+		setBrowserFocus(undefined);
+		const card = document.querySelector<HTMLElement>(
+			".chat-thread .timeline section.browser-capability",
+		);
+		const focused = document.activeElement;
+		if (focused && focused !== document.body && !card?.contains(focused))
+			return;
+		const next =
+			card?.querySelector<HTMLButtonElement>("[data-browser-action]") ??
+			card?.querySelector<HTMLButtonElement>("[data-browser-records]");
+		const input = composer.current?.disabled ? null : composer.current;
+		(next ?? input ?? pageRecoveryTarget())?.focus();
+	}, [browserFocus, browserStage]);
 	if (denied)
 		return (
 			<Alert tone="danger" role="alert">
@@ -713,24 +779,11 @@ export function ActiveConversation({
 	const receiptNames = distinctObjectNames(
 		invocations.map((invocation) => invocation.name),
 	);
-	// 对话页只有一张浏览器卡（BR-01）。空闲卡放在默认收起的会话上下文里；一旦当前 Execution
-	// 有浏览器活动（请求、接管、执行中与终态），卡片移到会话时间线末尾，不会被折叠隐藏（NI-83）。
-	// 空闲只取决于当前 Execution 有没有浏览器事件，与时间无关，两处判断不会错开。
-	const browserCapability = agent.capabilities.browser;
-	const browserAvailable = browserCapability?.status === "available";
-	const browserIdle =
-		browserCapability !== undefined &&
-		selectBrowserCard({
-			events: timeline.events,
-			conversationId,
-			executionId: latestExecution,
-			browserAvailable,
-			now: Date.now(),
-		})?.phase === "idle";
 	const onBrowserCommand = (browserCommand: BrowserCardCommand) => {
 		// 「停止操作」走与「停止回复」相同的停止命令。
 		if (browserCommand.kind === "stop_execution") stopFromBrowserCard();
-		else command.invokeBrowser(browserCommandBody(browserCommand));
+		else if (command.invokeBrowser(browserCommandBody(browserCommand)))
+			setBrowserFocus(browserStage);
 	};
 	const browserCardProps = {
 		events: timeline.events,

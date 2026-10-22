@@ -93,7 +93,7 @@ const operation = (
 
 const handoff = (
 	sequence: number,
-	value: "requested" | "active" | "completed",
+	value: "requested" | "active" | "returning" | "completed" | "revoked",
 	{ operatorId }: { operatorId?: string } = {},
 ) =>
 	PersistedConversationEventV2Schema.parse({
@@ -110,7 +110,10 @@ const handoff = (
 		},
 	});
 
-const sideEffect = (sequence: number, value: "pending" | "confirmed") =>
+const sideEffect = (
+	sequence: number,
+	value: "pending" | "confirmed" | "rejected",
+) =>
 	PersistedConversationEventV2Schema.parse({
 		...envelope(sequence),
 		type: "browser.side_effect",
@@ -193,12 +196,15 @@ async function openBrowserConversation(
 		detailEvents,
 		snapshot,
 		onStop,
+		onBrowserCommand,
 	}: {
 		detailEvents?: ReturnType<typeof status>[];
 		/** 每次读取会话投影时调用，可以挂起以停在中间状态。 */
 		snapshot?: () => Promise<ConversationSnapshot>;
 		/** 提供时停止命令返回契约内的受理回执。 */
 		onStop?: () => void;
+		/** 浏览器卡命令受理前调用（受理回执不变）。 */
+		onBrowserCommand?: (body: Record<string, string>) => void;
 	} = {},
 ): Promise<Fixture> {
 	const fixture: Fixture = { posts: [], unexpected: [] };
@@ -222,6 +228,7 @@ async function openBrowserConversation(
 			}
 			if (path.endsWith("/browser/commands")) {
 				const body = request.postDataJSON() as Record<string, string>;
+				onBrowserCommand?.(body);
 				return route.fulfill({
 					status: 202,
 					json: {
@@ -677,6 +684,155 @@ for (const mode of ["click", "keyboard"] as const)
 		await expectCleanPage(page, errors);
 		expect(await duplicateControlNames(page)).toEqual([]);
 	});
+
+// #3215 G5-04：浏览器卡命令受理并回读到下一阶段后，焦点按设计交给下一步操作（导出稿 browser-allow /
+// take-over / return / deny / stop 分支的 focusAfterRender）：允许 →「接管浏览器」、接管 →「交还给 Agent」、
+// 交还 →「停止操作」、拒绝 / 停止接管 →「查看操作记录」。命令处理中按钮为 aria-disabled、焦点留在按钮上，
+// 回读推进前后多次采样都不落到 body。
+const browserFlows = [
+	{
+		name: "allow",
+		trigger: /^允许这次操作：/,
+		triggerText: "允许这次操作",
+		before: [status(1, "processing"), sideEffect(2, "pending")],
+		after: [
+			status(1, "processing"),
+			sideEffect(2, "pending"),
+			sideEffect(3, "confirmed"),
+			handoff(4, "requested"),
+		],
+		body: { command: "confirm_side_effect", confirmationId: "confirmation-1" },
+		next: "接管浏览器",
+		phase: "handoff",
+	},
+	{
+		name: "take over",
+		trigger: /^接管浏览器$/,
+		triggerText: "接管浏览器",
+		before: [status(1, "processing"), handoff(2, "requested")],
+		after: [
+			status(1, "processing"),
+			handoff(2, "requested"),
+			handoff(3, "active"),
+		],
+		body: { command: "take_over", handoffId: "handoff-1" },
+		next: "交还给 Agent",
+		phase: "handoff",
+	},
+	{
+		name: "return",
+		trigger: /^交还给 Agent$/,
+		triggerText: "交还给 Agent",
+		before: [status(1, "processing"), handoff(2, "active")],
+		after: [
+			status(1, "processing"),
+			handoff(2, "active"),
+			handoff(3, "returning"),
+		],
+		body: { command: "return_to_agent", handoffId: "handoff-1" },
+		next: "停止操作",
+		phase: "running",
+	},
+	{
+		name: "deny",
+		trigger: /^拒绝：/,
+		triggerText: "拒绝",
+		before: [status(1, "processing"), sideEffect(2, "pending")],
+		after: [
+			status(1, "processing"),
+			sideEffect(2, "pending"),
+			sideEffect(3, "rejected"),
+		],
+		body: { command: "reject_side_effect", confirmationId: "confirmation-1" },
+		next: "查看操作记录",
+		phase: "denied",
+	},
+	{
+		name: "stop takeover",
+		trigger: /^停止接管$/,
+		triggerText: "停止",
+		before: [status(1, "processing"), handoff(2, "requested")],
+		after: [
+			status(1, "processing"),
+			handoff(2, "requested"),
+			handoff(3, "revoked"),
+		],
+		body: { command: "revoke", handoffId: "handoff-1" },
+		next: "查看操作记录",
+		phase: "stopped",
+	},
+] as const;
+
+for (const flow of browserFlows)
+	for (const mode of ["click", "keyboard"] as const)
+		test(`${flow.name} from the browser card by ${mode} hands focus to the next step after the read-back (G5-04)`, async ({
+			page,
+		}, info) => {
+			const errors = trackPageErrors(page);
+			await page.setViewportSize(
+				info.project.name === "mobile"
+					? { width: 390, height: 844 }
+					: { width: 1440, height: 900 },
+			);
+			let accepted = false;
+			// 命令受理后的回读先挂起：先确认处理中与受理后焦点仍在触发按钮上，再放行到下一阶段的投影。
+			let releaseAfter = () => {};
+			const afterGate = new Promise<void>((resolve) => {
+				releaseAfter = resolve;
+			});
+			const fixture = await openBrowserConversation(page, [...flow.before], {
+				onBrowserCommand: () => {
+					accepted = true;
+				},
+				snapshot: async () => {
+					if (!accepted)
+						return { events: [...flow.before], messages: [], status: "active" };
+					await afterGate;
+					return { events: [...flow.after], messages: [], status: "active" };
+				},
+			});
+			const activeElement = () =>
+				page.evaluate(() => {
+					const active = document.activeElement;
+					return !active || active === document.body
+						? "body"
+						: `${active.tagName.toLowerCase()}:${active.textContent?.trim()}`;
+				});
+			const card = page.locator(
+				".chat-thread .timeline section.browser-capability",
+			);
+			await expectCardInTimeline(page, card);
+			const trigger = card.getByRole("button", { name: flow.trigger });
+			await expect(trigger).toBeEnabled();
+			if (mode === "click") await trigger.click();
+			else {
+				await trigger.focus();
+				await page.keyboard.press("Enter");
+			}
+			await expect.poll(() => fixture.posts.length).toBe(1);
+			expect(fixture.posts[0]?.body).toEqual({
+				schemaVersion: 1,
+				...flow.body,
+			});
+			// 回读挂起期间卡片仍在原阶段：焦点一直在触发按钮上（命令处理中为 aria-disabled，不落到 body）。
+			for (let sample = 0; sample < 3; sample += 1) {
+				await page.waitForTimeout(250);
+				expect(await activeElement()).toBe(`button:${flow.triggerText}`);
+			}
+			releaseAfter();
+			await expect(card).toHaveAttribute("data-phase", flow.phase);
+			const next = card.getByRole("button", { name: flow.next, exact: true });
+			await expect(next).toBeFocused();
+			await expect(trigger).toHaveCount(0);
+			for (let sample = 0; sample < 4; sample += 1) {
+				await page.waitForTimeout(300);
+				expect(await activeElement()).toBe(`button:${flow.next}`);
+			}
+			expect(fixture.posts).toHaveLength(1);
+			expect(fixture.unexpected).toEqual([]);
+			await expectCleanPage(page, errors);
+			expect(await duplicateControlNames(page)).toEqual([]);
+		});
 
 test("offers takeover with a stop instead of allow on a handoff request (NI-94)", async ({
 	page,

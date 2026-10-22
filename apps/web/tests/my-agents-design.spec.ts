@@ -1730,18 +1730,20 @@ test("checked Key candidates in an application edit have distinct level names (#
 		.getByLabel("Agent 默认 Relay Key", { exact: true })
 		.fill("synthetic-relay-key");
 	await page.getByRole("button", { name: "检查可用模型" }).click();
+	// 需求变化（#3215 G5-12 / #3212）：候选按部署目录显示「{端点显示名} · {模型}」、档位只显示中文名，
+	// 原来的「endpoint-primary · …」「medium：…」不再出现；档位名称仍带所属模型（#3206 规则不变）。
 	for (const model of ["gpt-5", "gpt-5-mini"])
 		await page
 			.getByRole("checkbox", {
-				name: `endpoint-primary · ${model}`,
+				name: `Primary endpoint · ${model}`,
 				exact: true,
 			})
 			.click();
 	for (const model of ["gpt-5", "gpt-5-mini"])
-		for (const level of ["medium", "high"])
+		for (const level of ["均衡", "高"])
 			await expect(
 				page.getByRole("checkbox", {
-					name: `${level}：endpoint-primary · ${model}`,
+					name: `${level}：Primary endpoint · ${model}`,
 					exact: true,
 				}),
 			).toBeChecked();
@@ -1749,6 +1751,198 @@ test("checked Key candidates in an application edit have distinct level names (#
 	await expectNoDuplicateControls(
 		page,
 		"/my-agents/:id/edit（默认 Key 候选，#3206）",
+	);
+	await noHorizontalOverflow(page);
+});
+
+// #3215 G5-05 / G5-06 / G5-07：标准模板下的模板就绪列表上距 8px（下拉底到列表首行 15px，设计
+// .template-readiness）；目录选择器已选 chip 的移除图标 14px（icon('x',14)），命中区仍 44px；
+// 「清空搜索」字重 400（设计 .directory-clear 不是 .btn），仍为 11px、--primary。
+test("template readiness spacing, directory chip remove icon and clear-search weight follow the design (G5-05 / G5-06 / G5-07)", async ({
+	page,
+}, info) => {
+	await viewportFor(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/my-agents/new");
+	const readiness = page.getByRole("list", { name: "模板就绪状态" });
+	await expect(readiness).toBeVisible();
+	await expect(readiness).toHaveCSS("margin-top", "8px");
+	const [templateBox, readinessBox] = await Promise.all([
+		page.locator("#application-template-id").boundingBox(),
+		readiness.boundingBox(),
+	]);
+	if (!templateBox || !readinessBox)
+		throw new Error("Missing template geometry");
+	expect(
+		Math.abs(readinessBox.y - (templateBox.y + templateBox.height) - 15),
+	).toBeLessThanOrEqual(0.5);
+
+	const picker = page.getByRole("combobox", {
+		name: "共同 Owner 用户",
+		exact: true,
+	});
+	await picker.fill("user.two");
+	const clear = page.getByRole("button", { name: "清空搜索", exact: true });
+	await expect(clear).toBeVisible();
+	expect(
+		await computed(clear, ["fontWeight", "fontSize", "color", "minHeight"]),
+	).toEqual({
+		fontWeight: "400",
+		fontSize: "11px",
+		color: await resolved(page, "color", "var(--primary)"),
+		minHeight: "44px",
+	});
+	await page.getByRole("option", { name: /验收用户二/ }).click();
+	const remove = page.getByRole("button", {
+		name: "从共同 Owner 用户移除 验收用户二",
+		exact: true,
+	});
+	await expect(remove).toBeVisible();
+	const [removeBox, iconBox] = await Promise.all([
+		remove.boundingBox(),
+		remove.locator("svg").boundingBox(),
+	]);
+	if (!removeBox || !iconBox) throw new Error("Missing chip remove geometry");
+	expect(iconBox).toMatchObject({ width: 14, height: 14 });
+	expect(removeBox).toMatchObject({ width: 44, height: 44 });
+	await picker.press("Escape");
+	await expectNoDuplicateControls(
+		page,
+		"/my-agents/new 模板就绪、目录 chip 与清空搜索（G5-05 ~ G5-07）",
+	);
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
+});
+
+// #3215 G5-12（#3212）：修改申请「检查可用模型」后的候选与默认项按 H4-12 / RK2-01 显示：端点用部署目录
+// 显示名，推理档位与默认档位只显示中文名，页面不出现原始端点 ID 与档位枚举；提交的选项 ID、端点、
+// 模型与档位仍是原始值。
+test("default-Key candidates in an application edit show endpoint display names and Chinese levels (G5-12)", async ({
+	page,
+}, info) => {
+	await viewportFor(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await fixture(page, {
+		applications: [application({ agentId: "agent-pilot-1" })],
+		defaultRelayKeyCandidates: [
+			{
+				endpointId: "endpoint-primary",
+				modelId: "gpt-5",
+				displayName: "gpt-5",
+				reasoningLevels: ["medium", "high"],
+			},
+			{
+				endpointId: "endpoint-primary",
+				modelId: "gpt-5-mini",
+				displayName: "gpt-5-mini",
+				reasoningLevels: ["medium"],
+			},
+		],
+	});
+	// 记录修改申请的请求体（fixture 仍按 409 拒绝写入）。
+	const submitted: unknown[] = [];
+	await page.route(/\/api\/v2\/agent-applications\//, async (route) => {
+		if (route.request().method() !== "GET")
+			submitted.push(route.request().postDataJSON());
+		await route.fallback();
+	});
+	await page.goto("/my-agents/application-browser-1/edit");
+	await page.getByRole("checkbox", { name: "修改模型配置" }).click();
+	await page
+		.getByLabel("Agent 默认 Relay Key", { exact: true })
+		.fill("synthetic-relay-key");
+	await page.getByRole("button", { name: "检查可用模型" }).click();
+	const picker = page.getByRole("group", { name: "选择允许的模型" });
+	await expect(picker).toBeVisible();
+	const mini = picker.getByRole("checkbox", {
+		name: "Primary endpoint · gpt-5-mini",
+		exact: true,
+	});
+	await mini.click();
+	await expect(mini).toBeChecked();
+	await expect(
+		picker.getByRole("checkbox", {
+			name: "均衡：Primary endpoint · gpt-5-mini",
+			exact: true,
+		}),
+	).toBeChecked();
+	const gpt5 = picker.getByRole("checkbox", {
+		name: "Primary endpoint · gpt-5",
+		exact: true,
+	});
+	if (!(await gpt5.isChecked())) await gpt5.click();
+	await expect(
+		picker.getByRole("checkbox", {
+			name: "高：Primary endpoint · gpt-5",
+			exact: true,
+		}),
+	).toBeVisible();
+	const defaultModel = picker.getByLabel("默认模型", { exact: true });
+	const defaultLevel = picker.getByLabel("默认推理档位", { exact: true });
+	const optionTexts = (select: Locator) =>
+		select
+			.locator("option")
+			.evaluateAll((nodes) => nodes.map((node) => node.textContent?.trim()));
+	expect(await optionTexts(defaultModel)).toEqual([
+		"Primary endpoint · gpt-5",
+		"Primary endpoint · gpt-5-mini",
+	]);
+	await defaultModel.selectOption({ label: "Primary endpoint · gpt-5" });
+	expect(await optionTexts(defaultLevel)).toEqual(["高", "均衡"]);
+	// 原始端点 ID 与档位枚举不进入页面（可见文字与可访问名称）。
+	const text = await picker.innerText();
+	expect(text).not.toMatch(/endpoint-primary|\bmedium\b|\bhigh\b/);
+	expect(await picker.ariaSnapshot()).not.toMatch(
+		/endpoint-primary|\bmedium\b|\bhigh\b/,
+	);
+	await defaultLevel.selectOption({ label: "均衡" });
+	await page.getByRole("button", { name: "修改申请", exact: true }).click();
+	await expect.poll(() => submitted.length).toBe(1);
+	const body = submitted[0] as {
+		modelConfiguration: {
+			options: {
+				optionId: string;
+				endpointId: string;
+				modelId: string;
+				reasoningLevels: string[];
+			}[];
+			defaultOptionId: string;
+			defaultReasoningLevel: string;
+		};
+	};
+	expect(
+		body.modelConfiguration.options.map(
+			({ optionId, endpointId, modelId, reasoningLevels }) => ({
+				optionId,
+				endpointId,
+				modelId,
+				reasoningLevels: [...reasoningLevels].sort(),
+			}),
+		),
+	).toEqual([
+		{
+			optionId: "endpoint-primary:gpt-5",
+			endpointId: "endpoint-primary",
+			modelId: "gpt-5",
+			reasoningLevels: ["high", "medium"],
+		},
+		{
+			optionId: "endpoint-primary:gpt-5-mini",
+			endpointId: "endpoint-primary",
+			modelId: "gpt-5-mini",
+			reasoningLevels: ["medium"],
+		},
+	]);
+	expect(body.modelConfiguration.defaultOptionId).toBe(
+		"endpoint-primary:gpt-5",
+	);
+	expect(body.modelConfiguration.defaultReasoningLevel).toBe("medium");
+	expect(JSON.stringify(body)).not.toMatch(/Primary endpoint|均衡/);
+	await expectCleanPage(page, pageErrors);
+	await expectNoDuplicateControls(
+		page,
+		"/my-agents/:id/edit（默认 Key 候选显示名，G5-12）",
 	);
 	await noHorizontalOverflow(page);
 });

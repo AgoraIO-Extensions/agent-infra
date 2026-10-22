@@ -439,7 +439,8 @@ export function DirectoryPicker({
 								type="button"
 								variant="ghost"
 							>
-								<XIcon aria-hidden="true" size={14} />
+								{/* 设计 icon('x',14)：size-3.5 压过 Button size="icon" 的 16px 图标默认值（G5-06），命中区仍 44px。 */}
+								<XIcon aria-hidden="true" className="size-3.5" />
 							</Button>
 						</span>
 					))}

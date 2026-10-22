@@ -183,6 +183,7 @@ async function ownerConfigFixture(
 		saved = "same",
 		agentVersion = null,
 		creationFailure,
+		secrets = [{ name: "RELEASE_KEY", isSet: true, version: 3 }],
 	}: {
 		role?: Role;
 		keySet?: boolean;
@@ -191,6 +192,8 @@ async function ownerConfigFixture(
 		agentVersion?: string | null;
 		/** 设置时 Agent 处于创建失败，服务端给出该失败类别（#3034）。 */
 		creationFailure?: AgentCreationFailureCategoryV1;
+		/** Agent 已配置的 Secret；默认只有 RELEASE_KEY。 */
+		secrets?: { name: string; isSet: boolean; version: number }[];
 	} = {},
 ) {
 	const base = AgentProjectionV2Schema.parse(
@@ -204,7 +207,7 @@ async function ownerConfigFixture(
 		configuration: {
 			...base.configuration,
 			environment: [{ name: "AGENT_WORKSPACE", value: "platform" }],
-			secrets: [{ name: "RELEASE_KEY", isSet: true, version: 3 }],
+			secrets,
 		},
 	});
 	let keyVersion = 3;
@@ -620,8 +623,9 @@ test("Secrets are read-only rows replaced through a write-only modal (O-10, N-08
 	await expect(
 		section.getByText("Secret 只显示名称、版本和状态；替换后生成新版本。"),
 	).toBeVisible();
-	const name = section.getByLabel("Secret 名称", { exact: true });
-	const status = section.getByLabel("当前状态", { exact: true });
+	// 需求变化（#3215 G5-11）：Secret 行只读字段的可访问名称带上 Secret 名称（D2-58），定位改用完整名称。
+	const name = section.getByLabel("Secret 名称：RELEASE_KEY", { exact: true });
+	const status = section.getByLabel("当前状态：RELEASE_KEY", { exact: true });
 	await expect(name).toHaveValue("RELEASE_KEY");
 	await expect(name).toHaveAttribute("readonly", "");
 	await expect(status).toHaveValue("已设置 · version 3");
@@ -661,10 +665,12 @@ test("Secrets are read-only rows replaced through a write-only modal (O-10, N-08
 	await expect(
 		page.getByRole("combobox", { name: "可使用的组织", exact: true }),
 	).toBeFocused();
-	await section.getByLabel("值", { exact: true }).fill("unsaved-workspace");
-	await expect(section.getByLabel("值", { exact: true })).toHaveValue(
-		"unsaved-workspace",
-	);
+	await section
+		.getByLabel("值：环境变量 1", { exact: true })
+		.fill("unsaved-workspace");
+	await expect(
+		section.getByLabel("值：环境变量 1", { exact: true }),
+	).toHaveValue("unsaved-workspace");
 	await section.getByRole("button", { name: "添加环境变量" }).click();
 
 	// 取消、Esc、点遮罩都不发请求，焦点回到触发按钮。
@@ -752,9 +758,9 @@ test("Secrets are read-only rows replaced through a write-only modal (O-10, N-08
 	await expect(page.getByRole("button", { name: "移除 平台工程" })).toHaveCount(
 		0,
 	);
-	await expect(section.getByLabel("值", { exact: true }).first()).toHaveValue(
-		"unsaved-workspace",
-	);
+	await expect(
+		section.getByLabel("值：环境变量 1", { exact: true }),
+	).toHaveValue("unsaved-workspace");
 	await expect(page.getByRole("button", { name: "保存配置" })).toBeEnabled();
 	await expect(main(page)).not.toContainText("配置已提交");
 });
@@ -768,7 +774,9 @@ test("environment variables save as a full table and the page stays after saving
 		name: "环境变量与 Secret",
 		exact: true,
 	});
-	const name = section.getByLabel("环境变量名", { exact: true });
+	// 需求变化（#3215 G5-11）：环境变量行字段的可访问名称带上行序号（「环境变量名：环境变量 1」），
+	// 可见标签不变；定位改用完整名称，仍为精确匹配。
+	const name = section.getByLabel("环境变量名：环境变量 1", { exact: true });
 	await expect(name).toHaveValue("AGENT_WORKSPACE");
 	// 标准模板只能选模板开放的键。
 	expect(
@@ -776,12 +784,13 @@ test("environment variables save as a full table and the page stays after saving
 			[...(select as HTMLSelectElement).options].map((option) => option.value),
 		),
 	).toEqual(["", "AGENT_WORKSPACE", "LOG_LEVEL"]);
+	// 需求变化（#3215 G5-11 / #3211）：「移除」以行序号为对象名（「移除：环境变量 1」），两行同名变量时仍可区分。
 	await expect(
-		section.getByRole("button", { name: "移除：AGENT_WORKSPACE" }),
+		section.getByRole("button", { name: "移除：环境变量 1", exact: true }),
 	).toHaveText("移除");
 	const save = page.getByRole("button", { name: "保存配置" });
 	await expect(save).toBeDisabled();
-	await section.getByLabel("值", { exact: true }).fill("workspace");
+	await section.getByLabel("值：环境变量 1", { exact: true }).fill("workspace");
 	await expect(main(page).getByText("没有需要保存的变更。")).toHaveCount(0);
 	await save.click();
 	await expect(toast(page)).toHaveText("配置已保存，Secret 值不会回显");
@@ -795,7 +804,9 @@ test("environment variables save as a full table and the page stays after saving
 	await expect(main(page)).not.toContainText("配置已提交");
 	const hint = main(page).getByText("没有需要保存的变更。");
 	await expect(hint).toBeFocused();
-	await section.getByRole("button", { name: "移除：AGENT_WORKSPACE" }).click();
+	await section
+		.getByRole("button", { name: "移除：环境变量 1", exact: true })
+		.click();
 	await save.click();
 	await expect.poll(() => api.commands.length).toBe(2);
 	expect(api.commands.at(-1)?.body).toMatchObject({ environment: [] });
@@ -1066,7 +1077,7 @@ test("saved-Key candidates start unchanged and use readable names (RK2-01, RK2-0
 	// 只改环境变量并保存：schemaVersion 2，不带模型。
 	await page
 		.getByRole("region", { name: "环境变量与 Secret", exact: true })
-		.getByLabel("值", { exact: true })
+		.getByLabel("值：环境变量 1", { exact: true })
 		.fill("owner-only-change");
 	await page.getByRole("button", { name: "保存配置" }).click();
 	await expect(toast(page)).toHaveText("配置已保存，Secret 值不会回显");
@@ -1158,7 +1169,7 @@ test("subset, empty and failed candidate reads never block other fields (RK2-03,
 	).toHaveCount(0);
 	await page
 		.getByRole("region", { name: "环境变量与 Secret", exact: true })
-		.getByLabel("值", { exact: true })
+		.getByLabel("值：环境变量 1", { exact: true })
 		.fill("still-saves");
 	await page.getByRole("button", { name: "保存配置" }).click();
 	await expect.poll(() => api.commands.length).toBe(1);
@@ -2186,3 +2197,159 @@ for (const mode of ["saved-key", "catalog"] as const)
 		);
 		await noHorizontalOverflow(page);
 	});
+
+// #3215 G5-11（#3211）：「环境变量与 Secret」有两行及以上环境变量（含两行选了同一变量名）时，行内
+// 「环境变量名」「值」「移除」以行序号为对象名，多个 Secret 行的只读字段以 Secret 名称为对象名，
+// #main-content 没有同角色同名控件；可见文字不变。
+test("multiple environment rows and Secret rows keep distinct control names (G5-11)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const api = await ownerConfigFixture(page, {
+		secrets: [
+			{ name: "RELEASE_KEY", isSet: true, version: 3 },
+			{ name: "MODEL_API_KEY", isSet: true, version: 1 },
+		],
+	});
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const section = page.getByRole("region", {
+		name: "环境变量与 Secret",
+		exact: true,
+	});
+	await expect(
+		section.getByRole("combobox", {
+			name: "环境变量名：环境变量 1",
+			exact: true,
+		}),
+	).toHaveValue("AGENT_WORKSPACE");
+	await section.getByRole("button", { name: "添加环境变量" }).click();
+	const second = section.getByRole("combobox", {
+		name: "环境变量名：环境变量 2",
+		exact: true,
+	});
+	await expect(second).toBeVisible();
+	await expectNoDuplicateControls(page, "Owner 配置两行环境变量（G5-11）");
+	// 两行选了同一个变量名：名称不随输入变化，仍可区分（保存时由字段校验提示重复）。
+	await second.selectOption("AGENT_WORKSPACE");
+	for (const row of [1, 2]) {
+		await expect(
+			section.getByRole("textbox", {
+				name: `值：环境变量 ${row}`,
+				exact: true,
+			}),
+		).toBeVisible();
+		await expect(
+			section.getByRole("button", {
+				name: `移除：环境变量 ${row}`,
+				exact: true,
+			}),
+		).toHaveText("移除");
+	}
+	// 可见标签不变。
+	await expect(
+		section.locator("label").filter({ hasText: /^环境变量名$/ }),
+	).toHaveCount(2);
+	await expect(
+		section.locator("label").filter({ hasText: /^值$/ }),
+	).toHaveCount(2);
+	for (const secret of ["RELEASE_KEY", "MODEL_API_KEY"]) {
+		await expect(
+			section.getByRole("textbox", {
+				name: `Secret 名称：${secret}`,
+				exact: true,
+			}),
+		).toHaveValue(secret);
+		await expect(
+			section.getByRole("textbox", {
+				name: `当前状态：${secret}`,
+				exact: true,
+			}),
+		).toBeVisible();
+	}
+	await expectNoDuplicateControls(
+		page,
+		"Owner 配置两行同名环境变量与两个 Secret（G5-11）",
+	);
+	// 移除第一行后剩下的行重新编号。
+	await section
+		.getByRole("button", { name: "移除：环境变量 1", exact: true })
+		.click();
+	await expect(
+		section.getByRole("combobox", { name: /^环境变量名：环境变量 \d+$/ }),
+	).toHaveCount(1);
+	await expectNoDuplicateControls(page, "Owner 配置移除一行后（G5-11）");
+	expect(api.commands).toEqual([]);
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
+});
+
+// #3215 G5-08：公共 Button 的键盘焦点只由 2px --accent outline（offset 3px）表达，边框保持变体自身的
+// 颜色（outline 按钮为 --border，主按钮为 --accent-ink），不再叠一圈 --accent 边框；弹窗 Escape 后焦点
+// 回到触发按钮时同样如此。全站共用 components/ui/button.tsx。
+test("keyboard focus on shared buttons shows only the outline, not an accent border (G5-08)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await ownerConfigFixture(page, { keySet: true });
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const ring = async (button: Locator) => {
+		await expect(button).toBeFocused();
+		return button.evaluate((element) => {
+			const style = getComputedStyle(element);
+			return {
+				visible: element.matches(":focus-visible"),
+				outline: `${style.outlineStyle} ${style.outlineWidth}`,
+				outlineColor: style.outlineColor,
+				offset: style.outlineOffset,
+				border: style.borderTopColor,
+				shadow: style.boxShadow,
+			};
+		});
+	};
+	const accent = await resolved(page, "color", "var(--accent)");
+	const outlineBorder = await resolved(page, "color", "var(--border)");
+	const replaceKey = page.getByRole("button", {
+		name: "替换默认 Key",
+		exact: true,
+	});
+	await replaceKey.focus();
+	expect(await ring(replaceKey)).toEqual({
+		visible: true,
+		outline: "solid 2px",
+		outlineColor: accent,
+		offset: "3px",
+		border: outlineBorder,
+		shadow: "none",
+	});
+	// 弹窗 Escape 后焦点回到触发按钮：仍只有 outline。
+	await page.keyboard.press("Enter");
+	const dialog = page.getByRole("dialog", {
+		name: "替换 Agent 默认 Relay Key",
+	});
+	await expect(dialog).toBeVisible();
+	await page.keyboard.press("Escape");
+	await expect(dialog).toHaveCount(0);
+	expect((await ring(replaceKey)).border).toBe(outlineBorder);
+	const replaceSecret = page.getByRole("button", {
+		name: "替换 Secret：RELEASE_KEY",
+		exact: true,
+	});
+	await replaceSecret.focus();
+	expect((await ring(replaceSecret)).border).toBe(outlineBorder);
+	// 主按钮的边框保持 --accent-ink（与背景同色），焦点时不改成 --accent。
+	const save = page.getByRole("button", { name: "保存配置", exact: true });
+	const saveBorder = await save.evaluate(
+		(element) => getComputedStyle(element).borderTopColor,
+	);
+	await page
+		.getByRole("textbox", { name: "值：环境变量 1", exact: true })
+		.fill("workspace");
+	await save.focus();
+	const saveRing = await ring(save);
+	expect(saveRing.border).toBe(saveBorder);
+	expect(saveRing.border).not.toBe(accent);
+	expect(saveRing.outline).toBe("solid 2px");
+	await expectCleanPage(page, pageErrors);
+});

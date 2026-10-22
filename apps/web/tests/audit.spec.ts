@@ -1287,3 +1287,49 @@ async function expectAuditPagination(page: Page) {
 		).toBeLessThanOrEqual(0.5);
 	}
 }
+
+// #3215 G5-09：「结果」筛选的选项不重名。started（单次操作已实际开始）与 processing（任务 / Execution
+// 处理中）语义不同，分别为「已开始」「处理中」；查询仍提交原始枚举值。
+for (const administrator of [false, true]) {
+	test(`${administrator ? "platform" : "personal"} audit result options have distinct names (G5-09)`, async ({
+		page,
+	}, info) => {
+		await page.setViewportSize(
+			info.project.name === "mobile"
+				? { width: 390, height: 844 }
+				: { width: 1440, height: 900 },
+		);
+		await fixture(page, administrator ? "admin" : "employee");
+		const route = administrator ? "/admin/audit" : "/audit";
+		await page.goto(route);
+		await expect(page.locator("table.audit-table")).toBeVisible();
+		const result = page.getByLabel("结果", { exact: true });
+		const options = await result
+			.locator("option")
+			.evaluateAll((nodes) =>
+				nodes.map((node) => [
+					(node as HTMLOptionElement).value,
+					node.textContent?.trim() ?? "",
+				]),
+			);
+		const labels = options.map(([, label]) => label);
+		expect(new Set(labels).size).toBe(labels.length);
+		expect(Object.fromEntries(options)).toMatchObject({
+			"": "全部结果",
+			started: "已开始",
+			processing: "处理中",
+		});
+		expect(labels.filter((label) => label === "执行中")).toEqual([]);
+		const request = page.waitForRequest((candidate) => {
+			const url = new URL(candidate.url());
+			return (
+				url.pathname.endsWith(administrator ? "/admin/audit" : "/audit") &&
+				url.searchParams.get("result") === "processing"
+			);
+		});
+		await result.selectOption({ label: "处理中" });
+		await page.getByRole("button", { name: "查询", exact: true }).click();
+		await request;
+		await expectNoDuplicateControls(page, `${route}（G5-09）`);
+	});
+}

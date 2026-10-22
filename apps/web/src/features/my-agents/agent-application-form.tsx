@@ -682,6 +682,17 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const deploymentRetryable = props.deploymentConfigurationRetryable ?? false;
 	const showDeploymentStatus = props.showDeploymentStatus ?? true;
 	const modelEndpoints = deployment.modelCatalog.endpoints;
+	// 默认 Key 候选按部署目录显示端点名，不显示原始端点 ID（RK2-01、G5-12）。
+	const endpointNames = useMemo(
+		() =>
+			Object.fromEntries(
+				modelEndpoints.map((endpoint) => [
+					endpoint.endpointId,
+					endpoint.displayName,
+				]),
+			),
+		[modelEndpoints],
+	);
 	const [name, setName] = useState(application?.name ?? "");
 	const [description, setDescription] = useState(
 		application?.description ?? "",
@@ -1174,8 +1185,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							) : null}
 						</SelectContent>
 					</Select>
+					{/* 设计 .template-readiness{margin-top:8px}：下拉底到列表首行 15px（字段 gap 7 + 8，G5-05）。 */}
 					<ul
-						className="space-y-1 text-muted-foreground text-sm"
+						className="mt-2 space-y-1 text-muted-foreground text-sm"
 						aria-label="模板就绪状态"
 					>
 						{templates.map((template) => (
@@ -1611,6 +1623,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										level: configuration?.defaultReasoningLevel ?? "",
 									}}
 									disabled={props.submitting}
+									endpointNames={endpointNames}
 									error={fieldErrors.defaultRelayKey}
 									errorId={errorId("defaultRelayKey")}
 									keyCheck={keyCheck}
