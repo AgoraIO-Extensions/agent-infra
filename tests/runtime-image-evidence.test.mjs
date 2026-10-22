@@ -52,8 +52,8 @@ const evidence = {
 		"http-failures-redacted",
 		"stream-failures-redacted",
 		"cancellation-aborts-upstream",
-		"native-shell-rejected-without-side-effects",
-		"native-apply-patch-rejected-without-side-effects",
+		"native-shell-sandboxed-within-conversation",
+		"native-apply-patch-no-outside-effects",
 		"recursive-native-storage-redacted",
 		"personal-configuration-isolated",
 	],
@@ -73,7 +73,7 @@ test("runtime image evidence requires the complete pinned native probe", () => {
 		{
 			...evidence,
 			checks: evidence.checks.map((check) =>
-				check === "native-shell-rejected-without-side-effects"
+				check === "native-shell-sandboxed-within-conversation"
 					? "native-sandboxed-tool-execution"
 					: check,
 			),

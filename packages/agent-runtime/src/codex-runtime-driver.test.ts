@@ -43,7 +43,7 @@ import {
 } from "./browser-handoff.js";
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
-	CODEX_MODEL_ONLY_CONFIG,
+	CODEX_OFFICIAL_LANE_CONFIG,
 	CodexAppServerBridge,
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
@@ -691,6 +691,53 @@ function modelAccessConfigReadResult(
 	});
 }
 
+/** 按固定 Codex 的 config/read 形状写入官方 lane 配置：嵌套对象，数组按元素记录来源。 */
+function applyOfficialLaneConfig(result: {
+	config: Record<string, unknown>;
+	origins: Record<string, unknown>;
+}) {
+	for (const [key, value] of Object.entries(CODEX_OFFICIAL_LANE_CONFIG)) {
+		const parts = key.split(".");
+		let target = result.config;
+		for (const part of parts.slice(0, -1)) {
+			target[part] ??= {};
+			target = target[part] as Record<string, unknown>;
+		}
+		target[parts.at(-1) as string] = structuredClone(value);
+		if (Array.isArray(value))
+			for (const index of value.keys())
+				result.origins[`${key}.${index}`] = sessionFlagOrigin();
+		else result.origins[key] = sessionFlagOrigin();
+	}
+	return result;
+}
+
+function openOfficialLaneDriver(path: string, bridge: TestCodexBridge) {
+	return openCodexRuntimeDriverForTest(
+		{
+			...driverOptions(path),
+			nativeLane: "official-model-only",
+			authorizeExternalAction: async () => ({ revalidate: () => {} }),
+			modelOptions: driverOptions(path).modelOptions.map((option) => ({
+				...option,
+				...upstreamModelAccess,
+			})),
+		},
+		async (options) => {
+			if (!options.modelAccess) throw new Error("missing loopback access");
+			bridge.setConfigReadResult(
+				applyOfficialLaneConfig(
+					modelAccessConfigReadResult(options.modelAccess) as {
+						config: Record<string, unknown>;
+						origins: Record<string, unknown>;
+					},
+				),
+			);
+			return bridge;
+		},
+	);
+}
+
 function openDriverWithModelAccess(
 	path: string,
 	bridge: TestCodexBridge,
@@ -837,7 +884,7 @@ class TestCodexBridge {
 			(typeof id === "string" ||
 				(typeof id === "number" && Number.isSafeInteger(id))) &&
 			!("method" in frame) &&
-			"error" in frame
+			("error" in frame || "result" in frame)
 		) {
 			this.responses.push(frame);
 			return;
@@ -1263,7 +1310,10 @@ class TestCodexBridge {
 					item: {
 						type: "fileChange",
 						id: "codex-native-file-change-private",
-						changes: [{ path, kind: "update", diff: "@@" }],
+						// 固定 0.153.0 schema 的 PatchChangeKind 是对象。
+						changes: [
+							{ path, kind: { type: "update", move_path: null }, diff: "@@" },
+						],
 						status: "completed",
 					},
 				},
@@ -1275,6 +1325,24 @@ class TestCodexBridge {
 		return new Promise<void>((resolve) => {
 			this.notificationRead = resolve;
 			this.push(frame);
+		});
+	}
+
+	/** #3201：固定 0.153.0 schema 的 item 生命周期通知。 */
+	emitNativeItem(
+		method: "item/started" | "item/completed",
+		item: Record<string, unknown>,
+	) {
+		return this.emitFrame({
+			method,
+			params: {
+				threadId: this.nativeThreadId,
+				turnId: this.nativeTurnId,
+				...(method === "item/started"
+					? { startedAtMs: 1_000 }
+					: { completedAtMs: 1_250 }),
+				item,
+			},
 		});
 	}
 
@@ -3504,6 +3572,172 @@ describe("Codex Runtime Driver", () => {
 		await expect(
 			driver.replayEvents(accepted.nativeSessionRef, command.executionId),
 		).resolves.not.toContainEqual(expect.objectContaining({ type: "file" }));
+	});
+
+	// #3201：官方 lane 的原生工具在 Session Sandbox 内执行，Driver 从 item 生命周期记录
+	// 工具事实；命令、输出与路径不进入事实，工具失败不使 Turn 失败。
+	it("records native tool facts from item lifecycle in the official lane", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openOfficialLaneDriver(path, bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const lifecycle = async (
+			item: Record<string, unknown>,
+			completed: Record<string, unknown>,
+		) => {
+			await bridge.emitNativeItem("item/started", {
+				...item,
+				status: "inProgress",
+			});
+			await bridge.emitNativeItem("item/completed", { ...item, ...completed });
+		};
+		await lifecycle(
+			{
+				type: "commandExecution",
+				id: "native-command-ok",
+				command: "ls -la private-directory",
+				commandActions: [],
+				cwd: "/private/conversation/workspace",
+			},
+			{ status: "completed", exitCode: 0, aggregatedOutput: "private-output" },
+		);
+		await lifecycle(
+			{
+				type: "commandExecution",
+				id: "native-command-failed",
+				command: "false",
+				commandActions: [],
+				cwd: "/private/conversation/workspace",
+			},
+			{ status: "failed", exitCode: 1 },
+		);
+		await lifecycle(
+			{
+				type: "fileChange",
+				id: "native-patch",
+				changes: [
+					{
+						path: "/private/conversation/workspace/a.txt",
+						kind: { type: "add" },
+						diff: "+a",
+					},
+					{
+						path: "/private/conversation/workspace/b.txt",
+						kind: { type: "add" },
+						diff: "+b",
+					},
+				],
+			},
+			{ status: "completed" },
+		);
+		await bridge.emitTurnCompleted("completed");
+		const events = await driver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		const facts = events.flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "tool"
+				? [event.payload]
+				: [],
+		);
+		expect(
+			facts.map((fact) => [
+				fact.kind === "tool" ? fact.toolId : undefined,
+				fact.phase,
+				fact.failureCode,
+			]),
+		).toEqual([
+			["codex:commandExecution", "intent", undefined],
+			["codex:commandExecution", "started", undefined],
+			["codex:commandExecution", "completed", undefined],
+			["codex:commandExecution", "intent", undefined],
+			["codex:commandExecution", "started", undefined],
+			["codex:commandExecution", "failed", "operation_failed"],
+			["codex:fileChange", "intent", undefined],
+			["codex:fileChange", "started", undefined],
+			["codex:fileChange", "completed", undefined],
+		]);
+		expect(new Set(facts.map((fact) => fact.operationRef)).size).toBe(3);
+		const serialized = JSON.stringify(events);
+		for (const secret of [
+			"private-directory",
+			"private-output",
+			"/private/conversation",
+		])
+			expect(serialized).not.toContain(secret);
+		expect(bridge.isClosed()).toBe(false);
+		await vi.waitFor(async () => {
+			expect(
+				await persistedExecutionStatus(
+					path,
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toBe("completed");
+		});
+	});
+
+	it("records an interrupted native tool as unknown when its Turn ends first", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openOfficialLaneDriver(path, bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		await bridge.emitNativeItem("item/started", {
+			type: "commandExecution",
+			id: "native-command-open",
+			command: "sleep 600",
+			commandActions: [],
+			cwd: "/private/conversation/workspace",
+			status: "inProgress",
+		});
+		await bridge.emitTurnCompleted("interrupted");
+		await vi.waitFor(async () => {
+			const facts = (
+				await driver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				)
+			).flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload]
+					: [],
+			);
+			expect(facts.map((fact) => [fact.phase, fact.failureCode])).toEqual([
+				["intent", undefined],
+				["started", undefined],
+				["unknown", "recovery_unconfirmed"],
+			]);
+		});
+	});
+
+	it("leaves private-lane native items to the native barrier", async () => {
+		const path = join(await runtimeDirectory(), "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		await bridge.emitNativeItem("item/started", {
+			type: "commandExecution",
+			id: "private-lane-command",
+			command: "ls",
+			commandActions: [],
+			cwd: "/private",
+			status: "inProgress",
+		});
+		await bridge.emitTurnCompleted("completed");
+		expect(
+			(
+				await driver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				)
+			).filter((event) => event.type === "operation"),
+		).toEqual([]);
 	});
 
 	it("journals a Browser tool through the request-local execution port", async () => {
@@ -12155,6 +12389,55 @@ describe("Codex Runtime Driver", () => {
 		},
 	);
 
+	// #3201：官方 lane 固定不发起审批。仍收到的审批只可能是越出 Sandbox 的提权请求，
+	// 按固定策略拒绝；进程保持可用，不判为协议错误。
+	it.each([
+		["item/commandExecution/requestApproval", { decision: "decline" }],
+		["item/fileChange/requestApproval", { decision: "decline" }],
+		["item/permissions/requestApproval", { permissions: {} }],
+		["execCommandApproval", { decision: "denied" }],
+		["applyPatchApproval", { decision: "denied" }],
+	] as const)(
+		"declines a native %s without failing the native process",
+		async (method, result) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(join(directory, "driver.json"), bridge);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+
+			bridge.emitServerRequest(method, { threadId: "private" });
+			await vi.waitFor(() => {
+				expect(bridge.responses).toContainEqual({
+					id: "native-tool-request-private",
+					result,
+				});
+			});
+			expect(bridge.isClosed()).toBe(false);
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+			).toBe("running");
+		},
+	);
+
+	it("answers a native user input request with an error instead of failing", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		bridge.emitServerRequest("item/tool/requestUserInput", { questions: [] });
+		await vi.waitFor(() => {
+			expect(bridge.responses).toContainEqual(
+				expect.objectContaining({
+					id: "native-tool-request-private",
+					error: expect.objectContaining({ code: -32_001 }),
+				}),
+			);
+		});
+		expect(bridge.isClosed()).toBe(false);
+	});
+
 	it.each([
 		[
 			"schema version",
@@ -12992,7 +13275,7 @@ const runtimeRequirementMutations: RuntimeRequirementMutation[] = [
 
 describe("durable required runtime binding", () => {
 	it.each(["running", "unknown"] as const)(
-		"does not downgrade a private %s Session to the official model-only lane",
+		"does not downgrade a private %s Session to the official lane",
 		async (phase) => {
 			const path = join(await runtimeDirectory(), "driver.json");
 			const command = submitCommand();
@@ -15239,16 +15522,7 @@ async function skillDiscoveryFixture(
 					origins: Record<string, unknown>;
 				};
 				const config = result.config as Record<string, unknown>;
-				for (const [key, value] of Object.entries(CODEX_MODEL_ONLY_CONFIG)) {
-					const parts = key.split(".");
-					let target = config;
-					for (const part of parts.slice(0, -1)) {
-						target[part] ??= {};
-						target = target[part] as Record<string, unknown>;
-					}
-					target[parts.at(-1) as string] = value;
-					result.origins[key] = sessionFlagOrigin();
-				}
+				applyOfficialLaneConfig(result);
 				if (launch.disableBundledSkills) {
 					config.skills = { bundled: { enabled: false } };
 					result.origins["skills.bundled.enabled"] = sessionFlagOrigin();

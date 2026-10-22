@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-	CODEX_MODEL_ONLY_CONFIG,
+	CODEX_OFFICIAL_LANE_CONFIG,
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 } from "./codex-app-server-bridge.js";
@@ -56,15 +56,19 @@ class MetadataTransport {
 					{ name: { type: "sessionFlags" }, version: "1" },
 				]),
 			);
-			for (const [key, value] of Object.entries(CODEX_MODEL_ONLY_CONFIG)) {
+			for (const [key, value] of Object.entries(CODEX_OFFICIAL_LANE_CONFIG)) {
 				const parts = key.split(".");
 				let container = config;
 				for (const part of parts.slice(0, -1)) {
 					container[part] ??= {};
 					container = container[part] as Record<string, unknown>;
 				}
-				container[parts.at(-1) as string] = value;
-				origins[key] = { name: { type: "sessionFlags" }, version: "1" };
+				container[parts.at(-1) as string] = structuredClone(value);
+				// 固定 Codex 按元素记录数组配置的来源。
+				for (const originKey of Array.isArray(value)
+					? value.map((_, index) => `${key}.${index}`)
+					: [key])
+					origins[originKey] = { name: { type: "sessionFlags" }, version: "1" };
 			}
 			const provider = {
 				name: "Agent Infra Active Model",

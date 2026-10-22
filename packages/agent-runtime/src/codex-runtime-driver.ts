@@ -46,7 +46,7 @@ import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v
 import type { BrowserHandoffRecordV1 } from "./browser-handoff.js";
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
-	CODEX_MODEL_ONLY_CONFIG,
+	CODEX_OFFICIAL_LANE_CONFIG,
 	CodexAppServerBridge,
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
@@ -849,6 +849,8 @@ const officialRuntimeRequirements: CodexRuntimeRequirements = {
 	schemaVersion: 1,
 	provenance: CODEX_APP_SERVER_V2_PROVENANCE,
 	artifacts: release.artifacts,
+	// 持久化的 lane 标识沿用历史名称，已有 Session 按它匹配；原生工具已在 Session
+	// Sandbox 内默认可用（#3201，工程 Spec §10.14），不再表示“只允许模型输出”。
 	lane: "official-model-only",
 };
 
@@ -973,9 +975,24 @@ const maximumItemsListPages = 8;
 const turnsListPageSize = 100;
 const maximumTurnsListPages = 8;
 const rpcRequestTimeoutMs = 30_000;
+// #3201：官方 lane 固定 `approval_policy="never"`，Sandbox 内操作不需要审批。仍收到的
+// 审批只可能是越出 Session Sandbox 边界的提权请求，按部署固定策略拒绝；不把它判为
+// 协议错误，也不终止原生进程（工程 Spec §10.14）。
+const declinedNativeApprovals: Readonly<Record<string, unknown>> =
+	Object.freeze({
+		"item/commandExecution/requestApproval": { decision: "decline" },
+		"item/fileChange/requestApproval": { decision: "decline" },
+		"item/permissions/requestApproval": { permissions: {} },
+		execCommandApproval: { decision: "denied" },
+		applyPatchApproval: { decision: "denied" },
+	});
+
 const containedServerRequestMethods = new Set([
 	"item/tool/call",
 	"mcpServer/elicitation/request",
+	// 平台没有可回答原生提问的用户通道，回 JSON-RPC 错误，由原生继续推理。
+	"item/tool/requestUserInput",
+	...Object.keys(declinedNativeApprovals),
 ]);
 const delegatedToolUnavailableJsonRpcError = Object.freeze({
 	code: -32_001,
@@ -3479,7 +3496,7 @@ function assertContainedConfiguration(
 	value: unknown,
 	expected: {
 		disableBundledSkills?: boolean;
-		modelOnly?: boolean;
+		officialLane?: boolean;
 		model: string;
 		reasoningEffort: string;
 		modelAccess?: Pick<CodexModelAccess, "endpoint">;
@@ -3516,9 +3533,9 @@ function assertContainedConfiguration(
 		if (origin === undefined) configurationInvalid();
 		assertSessionFlagOrigin(origin);
 	}
-	if (expected.modelOnly) {
+	if (expected.officialLane) {
 		for (const [key, expectedValue] of Object.entries(
-			CODEX_MODEL_ONLY_CONFIG,
+			CODEX_OFFICIAL_LANE_CONFIG,
 		)) {
 			const actual = key
 				.split(".")
@@ -3527,14 +3544,20 @@ function assertContainedConfiguration(
 						isPlainRecord(current) ? current[part] : undefined,
 					value.config,
 				);
-			if (actual !== expectedValue) configurationInvalid();
+			if (!isDeepStrictEqual(actual, expectedValue)) configurationInvalid();
 			// Pinned structured feature flags serialize false while recording the
-			// session-flag origin under their canonical `.enabled` field.
-			const origin =
-				ownRecordValue(value.origins, key) ??
-				ownRecordValue(value.origins, `${key}.enabled`);
-			if (origin === undefined) configurationInvalid();
-			assertSessionFlagOrigin(origin);
+			// session-flag origin under their canonical `.enabled` field. 固定版本按
+			// 元素记录数组配置的来源（`key.0`、`key.1`……）。
+			const originKeys = Array.isArray(expectedValue)
+				? expectedValue.map((_, index) => `${key}.${index}`)
+				: [key];
+			for (const originKey of originKeys) {
+				const origin =
+					ownRecordValue(value.origins, originKey) ??
+					ownRecordValue(value.origins, `${originKey}.enabled`);
+				if (origin === undefined) configurationInvalid();
+				assertSessionFlagOrigin(origin);
+			}
 		}
 	} else if (
 		// #2978：只有官方 lane 加载随镜像固定的模型目录，其他 lane 沿用内置列表。
@@ -3892,6 +3915,20 @@ function reasoningCompletedNotification(frame: CodexAppServerFrame) {
 	};
 }
 
+/** 固定 0.153.0 schema 的 PatchChangeKind：`{ type: "add" | "delete" | "update", move_path? }`。 */
+function isPinnedPatchChangeKind(value: unknown) {
+	return (
+		isPlainRecord(value) &&
+		hasOnlyKeys(value, ["type", "move_path"]) &&
+		(value.type === "add" ||
+			value.type === "delete" ||
+			value.type === "update") &&
+		(value.move_path === undefined ||
+			value.move_path === null ||
+			(value.type === "update" && nonEmptyString(value.move_path)))
+	);
+}
+
 function fileChangeCompletedNotification(frame: CodexAppServerFrame) {
 	if (frame.method !== "item/completed") return undefined;
 	const params = frame.params;
@@ -3910,7 +3947,7 @@ function fileChangeCompletedNotification(frame: CodexAppServerFrame) {
 			(change: unknown) =>
 				isPlainRecord(change) &&
 				nonEmptyString(change.path) &&
-				typeof change.kind === "string" &&
+				isPinnedPatchChangeKind(change.kind) &&
 				typeof change.diff === "string",
 		) ||
 		(params.item.status !== undefined && typeof params.item.status !== "string")
@@ -3922,6 +3959,58 @@ function fileChangeCompletedNotification(frame: CodexAppServerFrame) {
 		nativeItemId: params.item.id,
 		paths: params.item.changes.map((change: { path: string }) => change.path),
 		status: params.item.status,
+	};
+}
+
+/**
+ * #3201：官方 lane 在 Session Sandbox 内执行的原生工具 item（固定 0.153.0 schema），
+ * 映射为不含命令、参数、输出或路径的工具标识。动态工具（平台 client tool）由 Driver
+ * 自己的执行路径记录事实，不在此列。
+ */
+const nativeToolItemIds: Readonly<Record<string, string>> = Object.freeze({
+	commandExecution: "codex:commandExecution",
+	fileChange: "codex:fileChange",
+	imageView: "codex:imageView",
+	mcpToolCall: "codex:mcpToolCall",
+	webSearch: "codex:webSearch",
+});
+
+function nativeToolItemNotification(frame: CodexAppServerFrame) {
+	if (frame.method !== "item/started" && frame.method !== "item/completed")
+		return undefined;
+	const params = frame.params;
+	if (
+		!isPlainRecord(params) ||
+		!nonEmptyString(params.threadId) ||
+		!nonEmptyString(params.turnId) ||
+		!isPlainRecord(params.item)
+	)
+		protocolInvalid();
+	const toolId =
+		typeof params.item.type === "string"
+			? ownRecordValue(nativeToolItemIds, params.item.type)
+			: undefined;
+	if (!toolId) return undefined;
+	if (
+		!nonEmptyString(params.item.id) ||
+		(params.item.status !== undefined &&
+			params.item.status !== null &&
+			typeof params.item.status !== "string")
+	)
+		protocolInvalid();
+	const started = frame.method === "item/started";
+	const at = started ? params.startedAtMs : params.completedAtMs;
+	return {
+		phase: started ? ("started" as const) : ("completed" as const),
+		threadId: params.threadId,
+		nativeTurnId: params.turnId,
+		nativeItemId: params.item.id,
+		toolId,
+		status: typeof params.item.status === "string" ? params.item.status : "",
+		at:
+			typeof at === "number" && Number.isSafeInteger(at) && at > 0
+				? at
+				: Date.now(),
 	};
 }
 
@@ -4182,6 +4271,21 @@ class CodexRpc {
 								},
 							});
 					})
+					.catch(() => this.fail(unavailableError()));
+				return;
+			}
+			const declined = ownRecordValue(declinedNativeApprovals, frame.method);
+			if (declined !== undefined) {
+				if (
+					!hasOnlyKeys(frame, ["id", "jsonrpc", "method", "params"]) ||
+					(frame.jsonrpc !== undefined && frame.jsonrpc !== "2.0")
+				) {
+					this.fail(protocolInvalidError());
+					return;
+				}
+				const id = frame.id;
+				void this.bridge
+					.send({ id, result: structuredClone(declined) })
 					.catch(() => this.fail(unavailableError()));
 				return;
 			}
@@ -5513,7 +5617,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const requiredBridgeOptions = {
 			provenance: CODEX_APP_SERVER_V2_PROVENANCE,
 			nativeBarrierRequired: privateLane,
-			...(!privateLane ? { modelOnly: true } : {}),
+			...(!privateLane ? { officialLane: true } : {}),
 		};
 		let connectionClient: CodexRuntimeDriverOptions["connectionClient"];
 		if (options.connectionClient !== undefined) {
@@ -5581,7 +5685,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			modelTransport =
 				routes.length > 0
 					? await openCodexModelTransport(routes, {
-							modelOnly: !privateLane,
+							officialLane: !privateLane,
 							beforeRequest: (context, signal) => {
 								if (!driver) unavailable();
 								return driver.prepareModelRequest(context, signal);
@@ -5595,7 +5699,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw error;
 		}
 		const containedConfiguration = {
-			modelOnly: !privateLane,
+			officialLane: !privateLane,
 			model: defaultSelection.model,
 			reasoningEffort: defaultSelection.effort,
 			...(modelTransport
@@ -11232,32 +11336,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw error;
 		}
 		return {
-			...(this.standardConnectionOptions || this.installedSkill
-				? {
-						allowsClientTool: (name: string, namespace: string | undefined) => {
-							if (namespace === "workspace") {
-								try {
-									this.workspaceReadRoot(prepared.nativeSessionRef);
-									const session = this.session(prepared.nativeSessionRef);
-									return (
-										name === "read_text_file" &&
-										session.activeExecutionId === prepared.executionId
-									);
-								} catch {
-									return false;
-								}
-							}
-							const client = this.standardMcpClients.get(
-								prepared.nativeSessionRef,
-							);
-							return (
-								namespace === "connection" &&
-								client?.executionId === prepared.executionId &&
-								client.client.toolName(name) !== undefined
-							);
-						},
-					}
-				: {}),
 			...(authorization?.relayKey === undefined
 				? {}
 				: { credential: authorization.relayKey }),
@@ -11490,6 +11568,95 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		});
 	}
 
+	/**
+	 * #3201：Session Sandbox 内的原生工具不经执行前屏障（工程 Spec §10.14），只按 item
+	 * 生命周期记录实际事实。intent 与 started 在观察到开始时一并写入，保持既有事实顺序；
+	 * 引用由原生 thread/Turn/item 派生，同一 item 的重复通知不产生新事实。
+	 */
+	private async recordNativeToolFact(
+		tool: NonNullable<ReturnType<typeof nativeToolItemNotification>>,
+		conversationKey: string | undefined,
+	) {
+		// 私有 lane 的原生工具由 native barrier 记录 attempt 与事实。
+		if (this.requiredRuntime.lane !== "official-model-only") return;
+		const streamKey = await this.update((state) => {
+			const resolved = this.resolveNotificationJournal(
+				state,
+				conversationKey,
+				tool.threadId,
+				tool.nativeTurnId,
+			);
+			if (
+				!resolved?.execution ||
+				resolved.journal.events.some((event) => event.type === "completed")
+			)
+				return;
+			const reference = createHash("sha256")
+				.update(
+					JSON.stringify([
+						"codex-native-tool",
+						tool.threadId,
+						tool.nativeTurnId,
+						tool.nativeItemId,
+					]),
+				)
+				.digest("hex");
+			const base = {
+				kind: "tool" as const,
+				operationRef: `native-tool-${reference}`,
+				attemptRef: `native-tool-attempt-${reference}`,
+				toolId: tool.toolId,
+			};
+			const latest = latestOperationAttemptFacts(resolved.journal.events).find(
+				(fact) => fact.operationRef === base.operationRef,
+			);
+			let startedAt = latest?.startedAt;
+			if (!latest) {
+				startedAt = new Date(
+					tool.phase === "started" ? tool.at : Date.now(),
+				).toISOString();
+				this.appendOperationFact(resolved.session, resolved.journal, {
+					...base,
+					phase: "intent",
+				});
+				this.appendOperationFact(resolved.session, resolved.journal, {
+					...base,
+					phase: "started",
+					startedAt,
+				});
+			} else if (tool.phase === "started" || latest.phase !== "started") return;
+			if (tool.phase === "completed") {
+				const startedMs = Date.parse(startedAt ?? "");
+				const finished = Number.isFinite(startedMs)
+					? Math.max(tool.at, startedMs)
+					: tool.at;
+				const failed = tool.status === "failed" || tool.status === "declined";
+				this.appendOperationFact(resolved.session, resolved.journal, {
+					...base,
+					phase: failed ? "failed" : "completed",
+					...(startedAt ? { startedAt } : {}),
+					finishedAt: new Date(finished).toISOString(),
+					...(Number.isFinite(startedMs)
+						? { durationMs: finished - startedMs }
+						: {}),
+					...(failed
+						? {
+								failureCode:
+									tool.status === "declined"
+										? ("authorization_denied" as const)
+										: ("operation_failed" as const),
+							}
+						: {}),
+				});
+			}
+			return this.eventStreamKey(
+				resolved.nativeSessionRef,
+				resolved.execution.executionId,
+			);
+		});
+		if (streamKey) this.notifyEventStream(streamKey);
+	}
+
 	private async recordNotification(
 		frame: CodexAppServerFrame,
 		conversationKey: string | undefined,
@@ -11659,11 +11826,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			return;
 		}
 
+		const nativeTool = nativeToolItemNotification(frame);
+		if (nativeTool)
+			await this.recordNativeToolFact(nativeTool, conversationKey);
+
 		const fileChange = fileChangeCompletedNotification(frame);
 		if (fileChange) {
 			await this.persistNativeFileChange(fileChange, conversationKey);
 			return;
 		}
+		if (nativeTool) return;
 
 		const message = agentMessageCompletedNotification(frame);
 		if (message) {
@@ -13319,7 +13491,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		)
 			unavailable();
 		// A persisted Thread retains the tool snapshot with which it started.
-		// Deployment of an installation cannot add tools to a model-only Thread.
+		// Deployment of an installation cannot add Connection tools to a Thread started without them.
 		if (session.threadId && !session.standardMcp) {
 			await this.resumeSession(nativeSessionRef);
 			return this.session(nativeSessionRef);
