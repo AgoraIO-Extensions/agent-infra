@@ -13,6 +13,7 @@ import { DurableJsonFile } from "./durable-json.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { PiRuntimeDriver } from "./pi-runtime-driver.js";
+import { piWorkspaceToolNames } from "./pi-tools.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
 
@@ -201,7 +202,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 						"--no-themes",
 						"--no-context-files",
 						"--tools",
-						"read,write,edit",
+						piWorkspaceToolNames.join(","),
 						"--extension",
 						fileURLToPath(new URL("../dist/pi-policy.mjs", import.meta.url)),
 					],

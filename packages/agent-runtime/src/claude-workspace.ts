@@ -1,5 +1,10 @@
+import { resolve } from "node:path";
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
-import { workspacePathAllowed } from "./workspace-path.js";
+import {
+	workspaceDirectoryAllowed,
+	workspaceGlobAllowed,
+	workspacePathAllowed,
+} from "./workspace-path.js";
 
 export type ClaudeFileWriteOutput = Readonly<{
 	filePath: string;
@@ -24,7 +29,21 @@ export type ClaudeToolOperationCallbacks = Readonly<{
 	cleanupReadOnlyFile?: (filePath: string) => Promise<void>;
 }>;
 
-/** Fixed core tools; Bash, subagents, MCP, network tools and arbitrary file roots remain unavailable. */
+/** #3217：Claude 标准模板开放的原生工具，Driver 的流式事件与恢复按同一清单识别。 */
+export const claudeWorkspaceToolNames: readonly string[] = Object.freeze([
+	"Read",
+	"Write",
+	"Edit",
+	"Glob",
+	"Grep",
+	"TodoWrite",
+]);
+
+/**
+ * Fixed core tools. 文件读写、列举与搜索只在本 Conversation 的工作区、memory 与只读 Skill
+ * 根内可用（#3217）；Bash、子 Agent、网络工具和任意文件根仍不开放，Bash 待 OS 级边界
+ * 就绪后开放（#3218）。
+ */
 export function claudeWorkspaceTools(
 	workspace: string,
 	memory: string,
@@ -51,6 +70,33 @@ export function claudeWorkspaceTools(
 		signal: AbortSignal,
 		toolUseId?: string,
 	): Promise<Record<string, unknown> | undefined> => {
+		if (!input || typeof input !== "object" || Array.isArray(input))
+			return undefined;
+		const record = input as Record<string, unknown>;
+		if (name === "TodoWrite") return record;
+		if (name === "Glob" || name === "Grep") {
+			// 未给出 path 时，原生工具在 cwd（本 Conversation 工作区）内搜索。
+			if (
+				record.path !== undefined &&
+				(typeof record.path !== "string" ||
+					!(await workspaceDirectoryAllowed(
+						[workspace, memory, ...readOnlyRoots],
+						resolve(workspace, record.path),
+					)))
+			)
+				return undefined;
+			if (
+				typeof record.pattern !== "string" ||
+				record.pattern.includes("\0") ||
+				(name === "Glob" && !workspaceGlobAllowed(record.pattern)) ||
+				(name === "Grep" &&
+					record.glob !== undefined &&
+					(typeof record.glob !== "string" ||
+						!workspaceGlobAllowed(record.glob)))
+			)
+				return undefined;
+			return record;
+		}
 		if (
 			!["Read", "Write", "Edit"].includes(name) ||
 			!input ||
@@ -97,7 +143,7 @@ export function claudeWorkspaceTools(
 		return undefined;
 	};
 	return {
-		tools: ["Read", "Write", "Edit"],
+		tools: [...claudeWorkspaceToolNames],
 		settings: {
 			autoMemoryEnabled: true,
 			autoMemoryDirectory: memory,

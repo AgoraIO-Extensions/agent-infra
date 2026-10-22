@@ -49,6 +49,7 @@ import { createClaudeStandardMcpServer } from "./claude-standard-mcp.js";
 import {
 	type ClaudeFileWriteOutput,
 	type ClaudeToolOperationCallbacks,
+	claudeWorkspaceToolNames,
 	claudeWorkspaceTools,
 } from "./claude-workspace.js";
 import {
@@ -1257,9 +1258,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							if (event.payload.phase === "started")
 								tools.set(
 									event.payload.id,
-									["Read", "Write", "Edit"].includes(
-										event.payload.name ?? "",
-									) ||
+									claudeWorkspaceToolNames.includes(event.payload.name ?? "") ||
 										(event.payload.name?.startsWith("mcp_") ?? false)
 										? (event.payload.name ?? unavailable())
 										: "unavailable",
@@ -2199,14 +2198,16 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					) {
 						if (tools.has(message.event.content_block.id)) unavailable();
 						const nativeToolName = message.event.content_block.name;
-						const name = nativeToolName.startsWith("mcp__connection__")
+						const requested = nativeToolName.startsWith("mcp__connection__")
 							? nativeToolName.slice("mcp__connection__".length)
 							: nativeToolName;
-						if (
-							!["Read", "Write", "Edit"].includes(name) &&
-							!name.startsWith("mcp_")
-						)
-							unavailable();
+						// #3217：模型调用未开放的工具时，原生 CLI 自己返回工具错误；这里只记为
+						// unavailable 工具，不让本轮失败。
+						const name =
+							claudeWorkspaceToolNames.includes(requested) ||
+							requested.startsWith("mcp_")
+								? requested
+								: "unavailable";
 						tools.set(message.event.content_block.id, name);
 						if (!name.startsWith("mcp_"))
 							await this.event(file, command.executionId, {

@@ -9,6 +9,7 @@ import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
 import type { NativeProcessLaunch } from "./native-process.js";
 import { readPiNativeCommandsV1 } from "./pi-native-command.js";
 import { openPiRpc, type PiFrame, piRecord } from "./pi-rpc.js";
+import { piToolId } from "./pi-tools.js";
 import type {
 	NativePromptV1,
 	NativeSessionOptions,
@@ -429,11 +430,7 @@ export async function openPiSession(
 							phases.set(frame.toolCallId, phase);
 							await options.recordToolOperation?.(
 								frame.toolCallId,
-								frame.toolName === "read"
-									? "Read"
-									: ["write", "edit"].includes(frame.toolName as string)
-										? "Edit"
-										: "unavailable",
+								piToolId(frame.toolName),
 								phase,
 							);
 							await options.update({
@@ -442,12 +439,7 @@ export async function openPiSession(
 									toolCallId: createHash("sha256")
 										.update(frame.toolCallId)
 										.digest("hex"),
-									name:
-										frame.toolName === "read"
-											? "Read"
-											: ["write", "edit"].includes(frame.toolName as string)
-												? "Edit"
-												: "unavailable",
+									name: piToolId(frame.toolName),
 									phase,
 								},
 							});

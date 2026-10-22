@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import {
 	mkdir,
 	mkdtemp,
@@ -160,6 +161,104 @@ it("reports Pi file dispatch after authorization and before filesystem I/O", asy
 		expect(await readFile(join(workspace, "created.txt"), "utf8")).toBe(
 			"dispatch",
 		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+// #3217：Pi 的 ls 与 find 只能列举本 Conversation 工作区，越界目录与符号链接被拒绝。
+it.each(["ls", "find"] as const)(
+	"confines the real Pi %s tool to the Conversation workspace",
+	async (name) => {
+		const root = await realpath(await mkdtemp(join(tmpdir(), "pi-list-")));
+		const workspace = join(root, "workspace");
+		const foreign = join(root, "foreign");
+		await mkdir(join(workspace, "src"), { recursive: true });
+		await mkdir(foreign);
+		await writeFile(join(workspace, "src", "owner-note.txt"), "owner");
+		await writeFile(join(foreign, "foreign-note.txt"), "foreign");
+		await symlink(foreign, join(workspace, "escape"));
+		const tool = createPiWorkspaceTools(workspace)[name];
+		const execute = (input: Record<string, unknown>) =>
+			tool.execute(
+				"synthetic-tool-call",
+				input as never,
+				undefined,
+				undefined,
+				{
+					cwd: workspace,
+					tools: [],
+					executeTool: async () => ({ isError: true, content: [] }),
+				} as unknown as ExtensionToolContext,
+			);
+		const text = (result: { content: { type: string; text?: string }[] }) =>
+			result.content.map((part) => part.text ?? "").join("\n");
+		try {
+			const owner = await execute(
+				name === "ls" ? { path: "src" } : { pattern: "**/*.txt" },
+			);
+			expect(text(owner)).toContain("owner-note.txt");
+			expect(text(owner)).not.toContain("foreign-note.txt");
+			const attempts =
+				name === "ls"
+					? [
+							{ path: foreign },
+							{ path: ".." },
+							{ path: "escape" },
+							{ path: root },
+						]
+					: [
+							{ pattern: "*", path: foreign },
+							{ pattern: "*", path: ".." },
+							{ pattern: "*", path: "escape" },
+							{ pattern: `${foreign}/*` },
+							{ pattern: "../foreign/*" },
+						];
+			for (const input of attempts) {
+				const result = await execute(input).catch((error: Error) => ({
+					content: [{ type: "text", text: `rejected ${error.message}` }],
+				}));
+				expect(text(result)).not.toContain("foreign-note.txt");
+			}
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+);
+
+// #3217：Pi 的 grep 只在本 Conversation 工作区内搜索（需要 ripgrep）。
+it.skipIf(
+	!process.env.PATH?.split(":").some((dir) => existsSync(join(dir, "rg"))),
+)("confines the real Pi grep tool to the Conversation workspace", async () => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "pi-grep-")));
+	const workspace = join(root, "workspace");
+	const foreign = join(root, "foreign");
+	await mkdir(join(workspace, "src"), { recursive: true });
+	await mkdir(foreign);
+	await writeFile(
+		join(workspace, "src", "owner.txt"),
+		"SYNTHETIC_OWNER_CANARY",
+	);
+	await writeFile(join(foreign, "foreign.txt"), "SYNTHETIC_FOREIGN_CANARY");
+	await symlink(foreign, join(workspace, "escape"));
+	const tool = createPiWorkspaceTools(workspace).grep;
+	const execute = (input: Record<string, unknown>) =>
+		tool.execute("synthetic-tool-call", input as never, undefined, undefined, {
+			cwd: workspace,
+			tools: [],
+			executeTool: async () => ({ isError: true, content: [] }),
+		} as unknown as ExtensionToolContext);
+	const text = (result: { content: { type: string; text?: string }[] }) =>
+		result.content.map((part) => part.text ?? "").join("\n");
+	try {
+		expect(text(await execute({ pattern: "SYNTHETIC_" }))).toContain(
+			"SYNTHETIC_OWNER_CANARY",
+		);
+		expect(text(await execute({ pattern: "SYNTHETIC_" }))).not.toContain(
+			"SYNTHETIC_FOREIGN_CANARY",
+		);
+		for (const path of [foreign, "..", "escape", root])
+			await expect(execute({ pattern: "SYNTHETIC_", path })).rejects.toThrow();
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
