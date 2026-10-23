@@ -1515,6 +1515,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			await mkdir(workspace, { recursive: true, mode: 0o700 });
 			if ((await lstat(workspace)).isSymbolicLink()) unavailable();
 			const attachments = await materializeSandboxAttachmentsV1({
+				root: this.options.path,
 				workspace,
 				fileIds: attachmentIds,
 				read: (fileId) => bridge.readInput(fileId),

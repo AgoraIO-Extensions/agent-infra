@@ -188,9 +188,10 @@ describe("sandbox attachment names, refs and manifest (#3225)", () => {
 
 describe("materializeSandboxAttachmentsV1 (#3225)", () => {
 	it("materializes PDF, CSV, TXT and PNG read-only with the admitted SHA-256", async () => {
-		const { workspace } = await workspaceRoot();
+		const { directory, workspace } = await workspaceRoot();
 		const read = reader();
 		const attachments = await materializeSandboxAttachmentsV1({
+			root: directory,
 			workspace,
 			fileIds: ["file-pdf", "file-csv", "file-txt", "file-png"],
 			read,
@@ -237,7 +238,7 @@ describe("materializeSandboxAttachmentsV1 (#3225)", () => {
 	});
 
 	it("reuses an unchanged copy and restores a rewritten or deleted one", async () => {
-		const { workspace } = await workspaceRoot();
+		const { directory, workspace } = await workspaceRoot();
 		const target = join(
 			workspace,
 			".agent-infra/attachments",
@@ -245,6 +246,7 @@ describe("materializeSandboxAttachmentsV1 (#3225)", () => {
 			"report.pdf",
 		);
 		await materializeSandboxAttachmentsV1({
+			root: directory,
 			workspace,
 			fileIds: ["file-pdf"],
 			read: reader(),
@@ -255,6 +257,7 @@ describe("materializeSandboxAttachmentsV1 (#3225)", () => {
 		// 内容一致：同一路径、同一文件，不重复写入，上游流被释放。
 		const cancelled: string[] = [];
 		const reused = await materializeSandboxAttachmentsV1({
+			root: directory,
 			workspace,
 			fileIds: ["file-pdf"],
 			read: reader(cancelled),
@@ -268,6 +271,7 @@ describe("materializeSandboxAttachmentsV1 (#3225)", () => {
 		await chmod(target, 0o600);
 		await writeFile(target, "tampered");
 		await materializeSandboxAttachmentsV1({
+			root: directory,
 			workspace,
 			fileIds: ["file-pdf"],
 			read: reader(),
@@ -279,6 +283,7 @@ describe("materializeSandboxAttachmentsV1 (#3225)", () => {
 		// Agent 删除了副本：恢复。
 		await rm(target);
 		await materializeSandboxAttachmentsV1({
+			root: directory,
 			workspace,
 			fileIds: ["file-pdf"],
 			read: reader(),
@@ -310,6 +315,7 @@ describe("materializeSandboxAttachmentsV1 (#3225)", () => {
 			const cancelled: string[] = [];
 			await expect(
 				materializeSandboxAttachmentsV1({
+					root: directory,
 					workspace,
 					fileIds: ["file-txt"],
 					read: reader(cancelled),
@@ -324,13 +330,43 @@ describe("materializeSandboxAttachmentsV1 (#3225)", () => {
 		},
 	);
 
+	it("rejects a workspace reached through a link below the deployment root", async () => {
+		const { directory } = await workspaceRoot();
+		const outside = join(directory, "outside");
+		await mkdir(join(outside, "workspace"), { recursive: true, mode: 0o700 });
+		// Conversation 目录被换成指向别处的链接：直接的 workspace 仍是普通目录，也必须拒绝。
+		await symlink(outside, join(directory, "conversation"));
+		await expect(
+			materializeSandboxAttachmentsV1({
+				root: directory,
+				workspace: join(directory, "conversation", "workspace"),
+				fileIds: ["file-txt"],
+				read: reader(),
+				invalid,
+			}),
+		).rejects.toBeInstanceOf(InvalidAttachment);
+		expect(await readdir(join(outside, "workspace"))).toEqual([]);
+		// 工作区不在部署根之下同样拒绝。
+		await expect(
+			materializeSandboxAttachmentsV1({
+				root: join(directory, "workspace"),
+				workspace: join(outside, "workspace"),
+				fileIds: ["file-txt"],
+				read: reader(),
+				invalid,
+			}),
+		).rejects.toBeInstanceOf(InvalidAttachment);
+		expect(await readdir(join(outside, "workspace"))).toEqual([]);
+	});
+
 	it("rejects oversized or mismatched attachments before anything is written", async () => {
-		const { workspace } = await workspaceRoot();
+		const { directory, workspace } = await workspaceRoot();
 		const cancelled: string[] = [];
 		const fixture = fixtures["file-txt"];
 		if (!fixture) throw new Error("missing fixture");
 		await expect(
 			materializeSandboxAttachmentsV1({
+				root: directory,
 				workspace,
 				fileIds: ["file-txt"],
 				read: async (fileId) =>
@@ -348,6 +384,7 @@ describe("materializeSandboxAttachmentsV1 (#3225)", () => {
 
 		await expect(
 			materializeSandboxAttachmentsV1({
+				root: directory,
 				workspace,
 				fileIds: ["file-txt"],
 				read: async (fileId) =>
@@ -365,10 +402,11 @@ describe("materializeSandboxAttachmentsV1 (#3225)", () => {
 	});
 
 	it("rejects more than 32 attachments before any read", async () => {
-		const { workspace } = await workspaceRoot();
+		const { directory, workspace } = await workspaceRoot();
 		const read = reader();
 		await expect(
 			materializeSandboxAttachmentsV1({
+				root: directory,
 				workspace,
 				fileIds: Array.from(
 					{ length: SANDBOX_ATTACHMENT_MAX_COUNT_V1 + 1 },
@@ -382,7 +420,7 @@ describe("materializeSandboxAttachmentsV1 (#3225)", () => {
 	});
 
 	it("cannot read a fileId outside the request Grant", async () => {
-		const { workspace } = await workspaceRoot();
+		const { directory, workspace } = await workspaceRoot();
 		const authority = vi.fn(async (context: { fileId: string }) => {
 			const fixture = fixtures[context.fileId];
 			if (!fixture) throw new Error("unused");
@@ -410,6 +448,7 @@ describe("materializeSandboxAttachmentsV1 (#3225)", () => {
 		// 另一会话或另一执行的附件不在本次 Grant 中：在对象访问前拒绝，不落盘。
 		await expect(
 			materializeSandboxAttachmentsV1({
+				root: directory,
 				workspace,
 				fileIds: ["file-pdf"],
 				read: (fileId) => bridge.readInput(fileId),

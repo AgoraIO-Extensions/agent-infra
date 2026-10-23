@@ -7364,8 +7364,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const sources = input.attachments;
 		if (!sources) stateInvalid();
 		const workspace = this.nativeWorkspace(codexConversationKey(session));
-		if (!workspace) unavailable();
+		if (!workspace || !this.recoveryDirectory) unavailable();
 		const placed = await materializeSandboxAttachmentsV1({
+			// 与原生进程启动一致：只解析部署父目录，数据根以下逐级不跟随链接。
+			root: dirname(this.recoveryDirectory),
 			workspace,
 			fileIds: sources.map(({ fileId }) => fileId),
 			read: async (fileId) => {

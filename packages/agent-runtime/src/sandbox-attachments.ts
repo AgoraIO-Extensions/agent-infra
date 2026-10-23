@@ -19,7 +19,7 @@ import {
 	rename,
 	unlink,
 } from "node:fs/promises";
-import { join, posix } from "node:path";
+import { isAbsolute, join, posix, relative, sep } from "node:path";
 import type { RuntimeFileInputV1 } from "./runtime-file-bridge.js";
 
 /** Driver 自身的单文件上限（沿用 50 MiB）；FileLimits 交集由平台在读取交换时核对。 */
@@ -220,25 +220,91 @@ async function cancelBody(
 }
 
 /**
- * 逐级创建或核对平台目录。工作区根先规范化；之下每一级都必须是真实目录、不能是链接，
- * 且解析结果与字面路径一致，否则拒绝。只在工作区内创建目录。
+ * Linux 上经 `/proc/self/fd/<fd>` 在已打开的目录内操作，等价于 openat：核对之后目录路径被
+ * 换成链接也不会改变写入位置。其他平台（本地开发）退回按路径操作，并逐级核对解析结果。
  */
-async function platformDirectory(workspace: string, ref: string) {
-	let current = await realpath(workspace);
-	if (!(await lstat(current)).isDirectory()) rejected();
-	for (const segment of [".agent-infra", "attachments", ref]) {
-		const next = join(current, segment);
-		try {
-			await mkdir(next, { mode: 0o700 });
-		} catch (error) {
-			if (errorCode(error) !== "EEXIST") rejected();
-		}
-		const info = await lstat(next);
-		if (info.isSymbolicLink() || !info.isDirectory()) rejected();
-		if ((await realpath(next)) !== next) rejected();
-		current = next;
+const directoryHandles = process.platform === "linux";
+
+interface DirectoryCursor {
+	/** 规范化后的字面路径，只用于返回给原生图片输入与非 Linux 平台的核对。 */
+	readonly path: string;
+	readonly handle: FileHandle;
+}
+
+/** 在目录内操作时使用的路径前缀。 */
+function inside(directory: DirectoryCursor) {
+	return directoryHandles
+		? `/proc/self/fd/${directory.handle.fd}`
+		: directory.path;
+}
+
+async function openDirectory(via: string, lexical: string) {
+	const handle = await open(
+		via,
+		fsConstants.O_RDONLY |
+			(fsConstants.O_DIRECTORY ?? 0) |
+			(fsConstants.O_NOFOLLOW ?? 0),
+	);
+	try {
+		if (!(await handle.stat()).isDirectory()) rejected();
+		if (!directoryHandles && (await realpath(lexical)) !== lexical) rejected();
+		return { path: lexical, handle };
+	} catch (error) {
+		await handle.close().catch(() => {});
+		throw error;
 	}
-	return current;
+}
+
+/** 打开（按需创建）下一级目录；链接、非目录或解析结果不一致时拒绝。 */
+async function openChild(
+	parent: DirectoryCursor,
+	segment: string,
+	create: boolean,
+): Promise<DirectoryCursor> {
+	const via = join(inside(parent), segment);
+	if (create)
+		try {
+			await mkdir(via, { mode: 0o700 });
+		} catch (error) {
+			if (errorCode(error) !== "EEXIST") throw error;
+		}
+	return openDirectory(via, join(parent.path, segment));
+}
+
+/**
+ * 逐级打开平台目录。部署根（如挂载的 PVC）先规范化；从根到工作区、再到
+ * `.agent-infra/attachments/<ref>` 的每一级都必须是真实目录、不能是链接，否则拒绝。
+ * 只在工作区内创建目录。
+ */
+async function platformDirectory(
+	root: string,
+	workspace: string,
+	ref: string,
+): Promise<DirectoryCursor> {
+	const parts = relative(root, workspace).split(sep);
+	if (
+		isAbsolute(relative(root, workspace)) ||
+		parts.some((part) => part === "" || part === "." || part === "..")
+	)
+		rejected();
+	const base = await realpath(root);
+	let current = await openDirectory(base, base);
+	try {
+		for (const [index, segment] of [
+			...parts,
+			".agent-infra",
+			"attachments",
+			ref,
+		].entries()) {
+			const next = await openChild(current, segment, index >= parts.length);
+			await current.handle.close().catch(() => {});
+			current = next;
+		}
+		return current;
+	} catch (error) {
+		await current.handle.close().catch(() => {});
+		throw error;
+	}
 }
 
 /**
@@ -319,13 +385,13 @@ async function writeFully(handle: FileHandle, chunk: Uint8Array) {
  * 只写这一目录；任何失败都删除临时文件，目标保持原样。
  */
 async function writeRestored(
-	directory: string,
+	directory: DirectoryCursor,
 	name: string,
 	body: ReadableStream<Uint8Array>,
 	expected: { readonly sizeBytes: number; readonly sha256: string },
 	keep: boolean,
 ): Promise<Uint8Array | undefined> {
-	const temporary = join(directory, `.${randomUUID()}.partial`);
+	const temporary = join(inside(directory), `.${randomUUID()}.partial`);
 	let handle: FileHandle | undefined = await open(
 		temporary,
 		fsConstants.O_WRONLY |
@@ -364,9 +430,13 @@ async function writeRestored(
 		await handle.sync();
 		await handle.close();
 		handle = undefined;
-		// rename 之前再次确认平台目录没有被替换。
-		if ((await realpath(directory)) !== directory) rejected();
-		await rename(temporary, join(directory, name));
+		// 非 Linux 平台按路径操作：rename 之前再次确认平台目录没有被替换。
+		if (
+			!directoryHandles &&
+			(await realpath(directory.path)) !== directory.path
+		)
+			rejected();
+		await rename(temporary, join(inside(directory), name));
 		renamed = true;
 		return keep ? Buffer.concat(chunks, total) : undefined;
 	} finally {
@@ -395,6 +465,12 @@ function validDescriptor(source: RuntimeFileInputV1, fileId: string) {
  * 返回顺序与去重后的 fileId 顺序一致。
  */
 export async function materializeSandboxAttachmentsV1(input: {
+	/**
+	 * 部署提供的 Driver 数据根（可以经挂载点等链接解析）；`workspace` 必须位于其下，
+	 * 两者之间的每一级都不能是链接。
+	 */
+	readonly root: string;
+	/** 当前 Conversation 的工作区。 */
 	readonly workspace: string;
 	readonly fileIds: readonly string[];
 	readonly read: (fileId: string) => Promise<RuntimeFileInputV1>;
@@ -406,6 +482,7 @@ export async function materializeSandboxAttachmentsV1(input: {
 	for (const fileId of fileIds) {
 		// FileBridge 的拒绝（未授权、过期、撤权）原样传播。
 		const source = await input.read(fileId);
+		let directory: DirectoryCursor | undefined;
 		try {
 			// 超限或不一致的附件不传输、不落盘。
 			if (!validDescriptor(source, fileId)) rejected();
@@ -418,9 +495,12 @@ export async function materializeSandboxAttachmentsV1(input: {
 			const keep =
 				input.imageBytes === true &&
 				SANDBOX_ATTACHMENT_NATIVE_IMAGE_TYPES_V1.has(descriptor.mediaType);
-			const directory = await platformDirectory(input.workspace, ref);
-			const target = join(directory, name);
-			const existing = await readExisting(target, descriptor, keep);
+			directory = await platformDirectory(input.root, input.workspace, ref);
+			const existing = await readExisting(
+				join(inside(directory), name),
+				descriptor,
+				keep,
+			);
 			let bytes = existing.bytes;
 			if (existing.matches)
 				// 内容一致：复用平台副本，不重复写入。
@@ -438,12 +518,14 @@ export async function materializeSandboxAttachmentsV1(input: {
 				mediaType: descriptor.mediaType,
 				sizeBytes: descriptor.sizeBytes,
 				workspacePath: posix.join(SANDBOX_ATTACHMENT_DIRECTORY_V1, ref, name),
-				path: target,
+				path: join(directory.path, name),
 				...(bytes ? { imageBytes: bytes } : {}),
 			});
 		} catch {
 			await cancelBody(source?.body);
 			input.invalid();
+		} finally {
+			await directory?.handle.close().catch(() => {});
 		}
 	}
 	return attachments;

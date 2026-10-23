@@ -1358,6 +1358,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		await mkdir(workspace, { recursive: true, mode: 0o700 });
 		if ((await realpath(workspace)) !== workspace) unavailable();
 		const placed = await materializeSandboxAttachmentsV1({
+			root: this.options.path,
 			workspace,
 			fileIds,
 			read: (fileId) => fileBridge.readInput(fileId),
