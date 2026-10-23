@@ -166,10 +166,13 @@ function AgentConfigurationWorkflowContent({
 			endpointNames={endpointNames}
 			footerActions={
 				// 页脚在整页 fieldset 之外（#3242 K7-02）：配置保存进行中与 Agent 已停用时仍原生禁用，
-				// 与原先随 fieldset 禁用一致。
+				// 与原先随 fieldset 禁用一致。镜像升级进行中不禁用：只有「镜像升级」分区暂停，页脚的
+				// 「重启 Agent」与危险区、管理员区的生命周期命令一样保持可用，同一 Agent 的管理变更由
+				// 服务端串行处理（工程 Spec §10.3，#3291 N9-2-04）。
 				<ConfigurationFooterLifecycleActions
 					disabled={
-						submission.isPending || agent.managementStatus === "disabled"
+						pendingKind === "configuration" ||
+						agent.managementStatus === "disabled"
 					}
 					lifecycle={lifecycle}
 				/>

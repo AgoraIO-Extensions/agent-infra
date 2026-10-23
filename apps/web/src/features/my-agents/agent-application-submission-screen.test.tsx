@@ -208,6 +208,59 @@ describe("AgentApplicationSubmissionScreen", () => {
 		expectSingleFooterCancel("/my-agents");
 	});
 
+	// #3291 N9-2-03：修改申请不能更改入口身份。顶部提示不再引导「检查字段后重试」，而是提示新建申请，
+	// 焦点移到这条提示（只读的入口身份下拉无法获得焦点）；字段下的说明与之一致，再次提交仍被拦下。
+	it("points an existing platform identity application to a new application from the focused top alert", async () => {
+		const onSubmit = vi.fn();
+		await renderWithMyAgentsRouter(
+			<AgentApplicationSubmissionScreen
+				action="resubmit"
+				application={{
+					...rejectedApplication,
+					source: {
+						kind: "custom",
+						imageReference: "registry.example/agents/release:v1",
+						interactionMode: "self-managed",
+						identityResponsibility: "platform-managed",
+					},
+					configuration: {
+						...rejectedApplication.configuration,
+						modelOptions: [],
+						defaultModelOptionId: null,
+						defaultReasoningLevel: null,
+					},
+				}}
+				error={Object.assign(new Error("private deployment detail"), {
+					code: "ACTION_UNAVAILABLE",
+					retryable: false,
+				})}
+				mode="update"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		const alert = screen.getByRole("alert");
+		expect(alert.textContent).toBe(
+			"当前部署不支持此申请的入口身份校验，请新建申请。",
+		);
+		expect(screen.queryByText(/检查字段后重试/)).toBeNull();
+		expect(alert.getAttribute("tabindex")).toBe("-1");
+		await waitFor(() => expect(document.activeElement).toBe(alert));
+		const identity = screen.getByRole("combobox", { name: "入口身份校验" });
+		expect(
+			document.getElementById(identity.getAttribute("aria-describedby") ?? "")
+				?.textContent,
+		).toBe(
+			"当前部署未启用平台身份入口。已有申请不能更改入口身份校验，请新建申请并选择「由自有入口校验」。",
+		);
+		const submit = screen.getByRole("button", { name: "修改并重新提交" });
+		submit.focus();
+		fireEvent.click(submit);
+		expect(onSubmit).not.toHaveBeenCalled();
+		await waitFor(() => expect(document.activeElement).toBe(alert));
+		expect(screen.queryByText("private deployment detail")).toBeNull();
+	});
+
 	it("offers one ghost footer cancel and leaves without submitting", async () => {
 		const onSubmit = vi.fn();
 		await renderWithMyAgentsRouter(

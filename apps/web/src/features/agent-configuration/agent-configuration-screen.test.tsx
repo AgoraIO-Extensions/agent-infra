@@ -1569,6 +1569,14 @@ describe("Agent default Relay Key (G-08, G-09)", () => {
 				name: "Relay · Internal · model-b",
 			}),
 		);
+		// #3291 N9-2-05：重新选择后弹窗内只有上方这一条 warn，选择器不再追加「保存后会移除这些模型」。
+		expect(within(dialog).queryByText(/会移除这些模型/)).toBeNull();
+		expect(
+			[...dialog.querySelectorAll('[data-slot="alert"]')].map(
+				(alert) =>
+					alert.querySelector('[data-slot="alert-title"]')?.textContent,
+			),
+		).toEqual(["新的 Key 不能调用部分当前模型"]);
 		fireEvent.click(within(dialog).getByRole("button", { name: "校验并替换" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 		expect(actions.replaceKeyWithModels).toHaveBeenCalledOnce();

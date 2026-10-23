@@ -94,14 +94,25 @@ export const templateReadinessMessages = {
 	unavailable: "暂时无法读取验证结果，请刷新后重试。",
 } as const;
 
+/**
+ * 部署尚未登记任何标准模板时，就绪列表仍列出 M1 首发的四个模板并说明原因（PRD §4、§16
+ * 「未就绪项显示原因」）；显示名按 PRD 模板名，不外露模板 ID（#3291 N9-2-01）。
+ */
+const fallbackStandardTemplates = [
+	{ templateId: "codex", displayName: "Codex" },
+	{ templateId: "claude", displayName: "Claude" },
+	{ templateId: "opencode", displayName: "OpenCode" },
+	{ templateId: "pi", displayName: "Pi" },
+] as const;
+
 export function applicationTemplateChoices(
 	configuration: DeploymentConfigurationProjectionV2,
 ) {
 	return configuration.templates.length > 0
 		? configuration.templates
-		: ["codex", "claude", "opencode", "pi"].map((templateId) => ({
+		: fallbackStandardTemplates.map(({ templateId, displayName }) => ({
 				templateId,
-				displayName: templateId,
+				displayName,
 				connectionEnabled: false,
 				allowedEnvironmentKeys: [],
 				allowedSecretKeys: [],
