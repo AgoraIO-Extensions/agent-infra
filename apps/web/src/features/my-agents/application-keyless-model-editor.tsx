@@ -1,6 +1,6 @@
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Field } from "@/components/ui/field";
+import { Field, FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -81,10 +81,11 @@ export function ApplicationKeylessModelEditor({
 						</AlertDescription>
 					</Alert>
 				) : null}
+				{/* 拦截错误与表单其他字段错误同一套公共样式与播报方式（#3268 N8-2-02）。 */}
 				{error ? (
-					<p className="text-destructive text-sm" id={errorId}>
+					<FieldError announce="polite" className="field-error" id={errorId}>
 						{error}
-					</p>
+					</FieldError>
 				) : null}
 			</Field>
 			{keyCheck.candidates.length > 0 ? (

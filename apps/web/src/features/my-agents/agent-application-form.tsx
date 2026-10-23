@@ -9,7 +9,11 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Field, FieldLegend } from "@/components/ui/field";
+import {
+	Field,
+	FieldLegend,
+	FieldError as SharedFieldError,
+} from "@/components/ui/field";
 import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -253,17 +257,13 @@ function recomputeDuplicateModelErrors(
 	}
 }
 
-// 设计 .field-error：12px / 1.5 / --danger-ink，与上方控件之间是字段 gap 7px + 6px 外边距；
-// 校验结果礼貌播报，不打断读屏（焦点已移到首个错误字段）。
+// 设计 .field-error：样式取公共 FieldError（12px / 1.5 / --danger-ink，上距 6px，#3268 N8-2-02）；
+// 校验结果礼貌播报，不打断读屏（焦点已移到首个错误字段），所以不用默认的 role="alert"。
 function FieldError({ id, message }: { id: string; message?: string }) {
 	return message ? (
-		<p
-			aria-live="polite"
-			className="field-error mt-[6px] text-(--danger-ink) text-[12px] leading-[1.5]"
-			id={id}
-		>
+		<SharedFieldError announce="polite" className="field-error" id={id}>
 			{message}
-		</p>
+		</SharedFieldError>
 	) : null;
 }
 

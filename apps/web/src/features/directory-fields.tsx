@@ -7,6 +7,7 @@ import {
 	useState,
 } from "react";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Listbox, ListboxOption } from "@/components/ui/listbox";
@@ -594,14 +595,11 @@ export function DirectoryPicker({
 				<span>{help}</span>
 				<span>已选 {selected.length} 项 · Enter 添加</span>
 			</div>
+			{/* 公共 FieldError（12px / 1.5、--danger-ink，#3268 N8-2-02）；仍用 assertive 的 live region 播报，不改成 alert。 */}
 			{error ? (
-				<p
-					aria-live="assertive"
-					className="text-destructive text-sm"
-					id={validationErrorId}
-				>
+				<FieldError announce="assertive" id={validationErrorId}>
 					{error}
-				</p>
+				</FieldError>
 			) : null}
 		</div>
 	);

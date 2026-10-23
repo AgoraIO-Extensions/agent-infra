@@ -73,6 +73,24 @@ describe("FieldError", () => {
 				.getAttribute("aria-describedby"),
 		).toBe(error.id);
 	});
+
+	// #3268 N8-2-02：已有总提示播报或需要 aria-live 时，调用方去掉 role，样式仍是同一套。
+	it("keeps the shared style when a caller announces through a live region instead of an alert", () => {
+		render(
+			<FieldError announce="polite" id="name-error">
+				请输入名称。
+			</FieldError>,
+		);
+
+		const error = screen.getByText("请输入名称。");
+		expect(error.getAttribute("role")).toBeNull();
+		expect(error.getAttribute("aria-live")).toBe("polite");
+		expect(error.dataset.slot).toBe("field-error");
+		expect(error.className).toContain("text-[12px]");
+		expect(error.className).toContain("leading-[1.5]");
+		expect(error.className).toContain("text-(--danger-ink)");
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
 });
 
 describe("SearchInput", () => {

@@ -669,3 +669,70 @@ export async function expectPointerButtons(scope: Locator, context: string) {
 		`${context} 按钮光标`,
 	).toEqual([]);
 }
+
+/**
+ * #3268 N8-2-02：字段级错误为公共 FieldError——12px / 1.5（18px）、--danger-ink、上距 6px，
+ * 不带边框，也不在 Alert 框内。只读计算值，不断言类名。
+ */
+export async function expectPublicFieldError(page: Page, error: Locator) {
+	await expect(error).toBeVisible();
+	expect(
+		await computed(error, [
+			"fontSize",
+			"lineHeight",
+			"color",
+			"marginTop",
+			"borderTopWidth",
+		]),
+	).toEqual({
+		fontSize: "12px",
+		lineHeight: "18px",
+		color: await resolved(page, "color", "var(--danger-ink)"),
+		marginTop: "6px",
+		borderTopWidth: "0px",
+	});
+	expect(
+		await error.evaluate((element) =>
+			Boolean(element.closest('[data-slot="alert"]')),
+		),
+	).toBe(false);
+}
+
+/**
+ * #3268 N8-2-10：企微卡片内的错误为导出稿 .wecom-channel-error——单行 12px / 1.6（19.2px）、
+ * danger 78% 混 fg，无边框、无内边距、无图标，距上方 10px，role=alert。
+ */
+export async function expectWecomCardError(page: Page, error: Locator) {
+	await expect(error).toBeVisible();
+	await expect(error).toHaveAttribute("role", "alert");
+	expect(
+		await computed(error, [
+			"fontSize",
+			"lineHeight",
+			"color",
+			"marginTop",
+			"borderTopWidth",
+			"paddingTop",
+		]),
+	).toEqual({
+		fontSize: "12px",
+		lineHeight: "19.2px",
+		color: await resolved(
+			page,
+			"color",
+			"color-mix(in oklch, var(--danger) 78%, var(--fg))",
+		),
+		marginTop: "10px",
+		borderTopWidth: "0px",
+		paddingTop: "0px",
+	});
+	await expect(error.locator("svg")).toHaveCount(0);
+	expect(
+		await error.evaluate((element) =>
+			Boolean(element.closest('[data-slot="alert"]')),
+		),
+	).toBe(false);
+	// 单行：高度等于一行行高。
+	expect((await error.boundingBox())?.height ?? 0).toBeCloseTo(19.2, 0);
+}
+

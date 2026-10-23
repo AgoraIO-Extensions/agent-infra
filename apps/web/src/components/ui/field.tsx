@@ -28,11 +28,27 @@ function FieldLegend({ className, ...props }: React.ComponentProps<"legend">) {
 
 // 设计稿 p.field-error[role=alert]：字段下方 12px、--danger-ink 的校验错误，上距 6px。
 // 只在提交校验失败后渲染；控件用 aria-invalid 与 aria-describedby 指向它的 id。
-function FieldError({ className, ...props }: React.ComponentProps<"p">) {
+// 字段级错误的样式只在这里维护（#3268 N8-2-02），调用方只选择播报方式。
+type FieldErrorProps = Omit<React.ComponentProps<"p">, "role" | "aria-live"> & {
+	/**
+	 * 播报方式：默认 role="alert"；焦点已移到出错字段时可用 polite / assertive 的 live region；
+	 * 同一次校验已有一条总提示播报时用 none，字段错误只经 aria-describedby 读出。
+	 */
+	announce?: "alert" | "polite" | "assertive" | "none";
+};
+
+function FieldError({
+	announce = "alert",
+	className,
+	...props
+}: FieldErrorProps) {
 	return (
 		<p
 			data-slot="field-error"
-			role="alert"
+			role={announce === "alert" ? "alert" : undefined}
+			aria-live={
+				announce === "polite" || announce === "assertive" ? announce : undefined
+			}
 			className={cn(
 				"mt-[6px] text-(--danger-ink) text-[12px] leading-[1.5]",
 				className,

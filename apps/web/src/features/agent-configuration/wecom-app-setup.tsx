@@ -1,10 +1,9 @@
 import { WecomApplicationCredentialsV1Schema } from "@agent-infra/contracts/pilot";
 import { Layers } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Field } from "@/components/ui/field";
+import { Field, FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/toast";
@@ -19,6 +18,7 @@ import {
 import {
 	useWecomUnbind,
 	WecomChannelCard,
+	WecomChannelError,
 	type WecomChannelStatus,
 	WecomUnbindAction,
 	WecomUnbindFailure,
@@ -321,6 +321,8 @@ export function WecomAppSetup({
 				配置企业 ID、应用 ID 和回调材料。验证期间保留原绑定，Secret
 				类字段只保存密文状态。
 			</p>
+			{/* 逐字段错误用公共 FieldError（#3268 N8-2-02）；同一次校验由卡片错误行「请检查标出的字段…」
+			    统一播报，字段错误只经 aria-describedby 读出（announce="none"），不重复打断。 */}
 			<div className="wecom-channel-fields">
 				<Field>
 					<Label htmlFor="wecom-app-corporation-id">企业 ID</Label>
@@ -339,12 +341,9 @@ export function WecomAppSetup({
 						autoComplete="off"
 					/>
 					{fieldErrors.corporationId ? (
-						<p
-							id="wecom-app-corporation-id-error"
-							className="text-destructive text-sm"
-						>
+						<FieldError id="wecom-app-corporation-id-error" announce="none">
 							{fieldErrors.corporationId}
-						</p>
+						</FieldError>
 					) : null}
 				</Field>
 				<Field>
@@ -367,12 +366,9 @@ export function WecomAppSetup({
 						autoComplete="off"
 					/>
 					{fieldErrors.applicationId ? (
-						<p
-							id="wecom-app-application-id-error"
-							className="text-destructive text-sm"
-						>
+						<FieldError id="wecom-app-application-id-error" announce="none">
 							{fieldErrors.applicationId}
-						</p>
+						</FieldError>
 					) : null}
 				</Field>
 				<Field>
@@ -391,9 +387,9 @@ export function WecomAppSetup({
 						autoComplete="new-password"
 					/>
 					{fieldErrors.secret ? (
-						<p id="wecom-app-secret-error" className="text-destructive text-sm">
+						<FieldError id="wecom-app-secret-error" announce="none">
 							{fieldErrors.secret}
-						</p>
+						</FieldError>
 					) : null}
 				</Field>
 				<Field>
@@ -412,9 +408,9 @@ export function WecomAppSetup({
 						autoComplete="new-password"
 					/>
 					{fieldErrors.token ? (
-						<p id="wecom-app-token-error" className="text-destructive text-sm">
+						<FieldError id="wecom-app-token-error" announce="none">
 							{fieldErrors.token}
-						</p>
+						</FieldError>
 					) : null}
 				</Field>
 				<Field>
@@ -435,12 +431,9 @@ export function WecomAppSetup({
 						autoComplete="new-password"
 					/>
 					{fieldErrors.encodingAesKey ? (
-						<p
-							id="wecom-app-encoding-aes-key-error"
-							className="text-destructive text-sm"
-						>
+						<FieldError id="wecom-app-encoding-aes-key-error" announce="none">
 							{fieldErrors.encodingAesKey}
-						</p>
+						</FieldError>
 					) : null}
 				</Field>
 			</div>
@@ -461,9 +454,9 @@ export function WecomAppSetup({
 				<span className="min-w-0">我已知悉可能影响现有回调</span>
 			</Label>
 			{fieldErrors.takeoverConfirmed ? (
-				<p id="wecom-app-takeover-error" className="text-destructive text-sm">
+				<FieldError id="wecom-app-takeover-error" announce="none">
 					{fieldErrors.takeoverConfirmed}
-				</p>
+				</FieldError>
 			) : null}
 			{callbackUrl ? (
 				<p className="wecom-channel-callback">
@@ -471,11 +464,7 @@ export function WecomAppSetup({
 					{callbackUrl}
 				</p>
 			) : null}
-			{error ? (
-				<Alert tone="danger" role="alert">
-					<AlertDescription>{error}</AlertDescription>
-				</Alert>
-			) : null}
+			{error ? <WecomChannelError>{error}</WecomChannelError> : null}
 			<WecomUnbindFailure unbind={unbind} />
 			<div className="wecom-channel-actions">
 				{/* 验证期间是可聚焦的禁用（aria-disabled），焦点不落到 body（#3242 K7-03）。 */}

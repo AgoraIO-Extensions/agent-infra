@@ -50,7 +50,9 @@ import {
 	expectNativeSelectArrow,
 	expectNoLegendOnBorder,
 	expectPageHeadTop,
+	expectPublicFieldError,
 	expectSearchInput,
+	expectWecomCardError,
 	resolved,
 	trackPageErrors,
 } from "./primitive-styles";
@@ -6916,6 +6918,31 @@ for (const [kind, title] of [
 			await expectNoDuplicateControls(page, `${title} 验证结束（K7-03）`);
 			await expectCleanPage(page, errors);
 		});
+
+// #3268 N8-2-10：手动绑定认证失败的说明同样是导出稿的单行错误行，不是 Alert 框；两张卡片一致。
+for (const [kind, title] of [
+	["bot", "企微机器人"],
+	["app", "企微应用"],
+] as const)
+	test(`a failed manual WeCom ${kind} verification explains it in one error line (#3268 N8-2-10)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		await fixture(page);
+		const wecom = await wecomManualRoutes(page);
+		wecom.fail();
+		await page.goto("/agents/agent-pilot-1/configuration");
+		const card = page.getByRole("region", { name: title, exact: true });
+		await expect(card.getByText("未配置", { exact: true })).toBeVisible();
+		await fillWecomManual(card, kind);
+		await card.getByRole("button", { name: `验证并绑定：${title}` }).click();
+		const failure = card.getByRole("alert");
+		await expect(failure).toContainText("绑定未完成");
+		await expectWecomCardError(page, failure);
+		await expect(card.locator('[data-slot="alert"]')).toHaveCount(0);
+		await expectCleanPage(page, errors);
+	});
 
 // 「取消配置」随验证结束卸载：受理后焦点同样到卡片标题（D2-59）。
 for (const [kind, title] of [

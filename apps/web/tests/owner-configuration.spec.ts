@@ -25,7 +25,9 @@ import {
 	computed,
 	expectCleanPage,
 	expectPointerButtons,
+	expectPublicFieldError,
 	expectSkillDialog,
+	expectWecomCardError,
 	resolved,
 	trackPageErrors,
 } from "./primitive-styles";
@@ -2463,6 +2465,68 @@ test("re-reading saved-Key models keeps focus off body and returns it to the ret
 		page,
 		"Owner 配置（重新读取可用模型，K7-02）",
 	);
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
+});
+
+// #3268 N8-2-02 / N8-2-10：Owner 配置里目录选择器与企微应用逐字段的错误是同一套公共 FieldError；
+// 企微机器人、企微应用卡片的总提示是导出稿的单行错误行，不再是 Alert 框。两视口一致。
+test("directory and WeCom field errors share the public field error, WeCom card errors are one line (#3268 N8-2-02 / N8-2-10)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await ownerConfigFixture(page);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const form = main(page);
+
+	// 共同 Owner 目录选择器：移除唯一的 Owner 后保存，错误仍用 assertive 的 live region 播报。
+	await form
+		.getByRole("button", { name: /^从共同 Owner 用户移除 / })
+		.first()
+		.click();
+	await page.getByRole("button", { name: "保存配置", exact: true }).click();
+	const ownerError = form.getByText("请选择至少一名有效 Owner。", {
+		exact: true,
+	});
+	await expectPublicFieldError(page, ownerError);
+	await expect(ownerError).toHaveAttribute("aria-live", "assertive");
+	await expect(
+		form.getByRole("combobox", { name: "共同 Owner 用户" }),
+	).toHaveAttribute("aria-describedby", /\S/);
+
+	// 企微机器人：缺字段时只有一条单行错误。
+	const bot = form.getByRole("region", { name: "企微机器人", exact: true });
+	await bot
+		.getByRole("button", { name: "验证并绑定：企微机器人", exact: true })
+		.click();
+	const botError = bot.getByRole("alert");
+	await expect(botError).toHaveText("请填写 Bot ID、Secret，并确认连接影响。");
+	await expectWecomCardError(page, botError);
+
+	// 企微应用：逐字段错误为公共 FieldError（总提示已播报，字段错误不再另设 role），总提示为单行错误行。
+	const app = form.getByRole("region", { name: "企微应用", exact: true });
+	await app
+		.getByRole("button", { name: "验证并绑定：企微应用", exact: true })
+		.click();
+	const appError = app.getByRole("alert");
+	await expect(appError).toHaveText("请检查标出的字段并确认连接影响。");
+	await expectWecomCardError(page, appError);
+	for (const [id, text] of [
+		["wecom-app-corporation-id-error", "请填写符合格式的值。"],
+		["wecom-app-encoding-aes-key-error", "请填写符合格式的值。"],
+		["wecom-app-takeover-error", "请确认连接影响。"],
+	] as const) {
+		const fieldError = app.locator(`#${id}`);
+		await expect(fieldError).toHaveText(text);
+		await expectPublicFieldError(page, fieldError);
+		await expect(fieldError).not.toHaveAttribute("role", /.*/);
+	}
+	await expect(app.getByLabel("企业 ID", { exact: true })).toHaveAttribute(
+		"aria-describedby",
+		"wecom-app-corporation-id-error",
+	);
+	await expectNoDuplicateControls(page, "Owner 配置（字段错误，#3268）");
 	await expectCleanPage(page, pageErrors);
 	await noHorizontalOverflow(page);
 });
