@@ -2,9 +2,9 @@ import { expect, type Page, type TestInfo } from "@playwright/test";
 
 // OpenDesign 导出包（DESIGN-MANIFEST.json，决策 X-04，2026-10-23）SHA-256：
 // index.html（canonical）
-// 8189757351600f54156234fef69fb06329cc702069e9e847647e40ea09241bde
+// 524feb78ea9d888c816f9a6be0a863bb06419f0ddf8a4f357c9ddc44b231ba99
 // login.html（supporting，登录页）
-// 0cb203d52c42f3c0cb4272c0a86c85d46c1d717e39bab293c26642bee35c2478
+// 4a89c46bebb99b840b402b83b61280f3792a259a7ff37e167f7a298a66f505cf
 // DESIGN.md
 // fa953264eafe4e0bd05adaa86387a9d90ad7af51d4e79f0a67620bfa31596d65
 export const designViewports = [
