@@ -18,12 +18,93 @@ import {
 	FileProjectionV1Schema,
 	RuntimeFileExchangeRequestV2Schema,
 } from "@agent-infra/contracts/files";
+import { runtimeHostService } from "./app.js";
 
 export interface RuntimeFileExchangeOptionsV1 {
 	readonly origin: string;
 	readonly serviceToken: string;
 	readonly timeoutMs?: number;
 	readonly fetch?: typeof fetch;
+	/** #3289：失败诊断出口，默认写入 stderr；只接收下方的有界字段。 */
+	readonly logDiagnostic?: (entry: RuntimeFileExchangeDiagnosticV1) => void;
+}
+
+/**
+ * FileBridge 交换、读、写失败的稳定诊断（#3289）。只含固定错误码、阶段、有界原因、
+ * HTTP 状态与系统错误码；不含凭据、URL、路径、Grant 或文件内容。
+ */
+export interface RuntimeFileExchangeDiagnosticV1 {
+	readonly service: typeof runtimeHostService;
+	readonly code: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE";
+	/** exchange：换取 File Grant；read/write：数据面读写；complete：结果完成确认。 */
+	readonly operation: "exchange" | "read" | "write" | "complete";
+	readonly reason:
+		| "unreachable"
+		| "timeout"
+		| "rejected"
+		| "invalid_response"
+		| "unconfirmed"
+		| "failed";
+	/** 平台返回的 HTTP 状态（仅 rejected）。 */
+	readonly status?: number;
+	/** 本模块抛出的稳定错误码，例如 RUNTIME_FILE_INPUT_UNAVAILABLE。 */
+	readonly error?: string;
+	/** 传输层错误码，例如 UND_ERR_CONNECT_TIMEOUT、ECONNREFUSED。 */
+	readonly cause?: string;
+}
+
+type RuntimeFileExchangeTrackV1 = {
+	operation: RuntimeFileExchangeDiagnosticV1["operation"];
+	status?: number;
+};
+
+const stableErrorCode = /^RUNTIME_FILE_[A-Z_]{1,64}$/;
+const transportErrorCode = /^[A-Z][A-Z0-9_]{1,63}$/;
+
+/** 错误对象只输出固定形状的代码：自身 message 须是本模块的稳定错误码，cause 链只取系统错误码。 */
+function runtimeFileExchangeDiagnosticV1(
+	track: RuntimeFileExchangeTrackV1,
+	error: unknown,
+): RuntimeFileExchangeDiagnosticV1 {
+	const name = error instanceof Error ? error.name : undefined;
+	const message = error instanceof Error ? error.message : undefined;
+	let causeCode: unknown;
+	// undici 把 UND_ERR_CONNECT_TIMEOUT 等代码放在 cause（可能再嵌套一层）上。
+	let current: unknown = error instanceof Error ? error.cause : undefined;
+	for (
+		let depth = 0;
+		depth < 3 && typeof current === "object" && current !== null;
+		depth++
+	) {
+		if ("code" in current) {
+			causeCode = current.code;
+			break;
+		}
+		current = (current as { cause?: unknown }).cause;
+	}
+	const reason: RuntimeFileExchangeDiagnosticV1["reason"] =
+		error instanceof RuntimeFileResultUnconfirmedError
+			? "unconfirmed"
+			: track.status !== undefined
+				? "rejected"
+				: name === "TimeoutError" || name === "AbortError"
+					? "timeout"
+					: name === "ZodError" || error instanceof SyntaxError
+						? "invalid_response"
+						: error instanceof TypeError
+							? "unreachable"
+							: "failed";
+	return {
+		service: runtimeHostService,
+		code: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+		operation: track.operation,
+		reason,
+		...(track.status === undefined ? {} : { status: track.status }),
+		...(message && stableErrorCode.test(message) ? { error: message } : {}),
+		...(typeof causeCode === "string" && transportErrorCode.test(causeCode)
+			? { cause: causeCode }
+			: {}),
+	};
 }
 
 const maximumResponseBytes = 65_536;
@@ -203,6 +284,17 @@ export function createRuntimeFileBridgeFactoryV1(
 		invalid();
 	const send = options.fetch ?? fetch;
 	const timeoutMs = options.timeoutMs ?? 30_000;
+	const logDiagnostic =
+		options.logDiagnostic ??
+		((entry: RuntimeFileExchangeDiagnosticV1) =>
+			console.error(JSON.stringify(entry)));
+	function report(track: RuntimeFileExchangeTrackV1, error: unknown) {
+		try {
+			logDiagnostic(runtimeFileExchangeDiagnosticV1(track, error));
+		} catch {
+			// 诊断失败不能改变原错误。
+		}
+	}
 	const exchangeUrl = new URL("/internal/v1/files/runtime-exchange", origin);
 
 	/**
@@ -226,7 +318,11 @@ export function createRuntimeFileBridgeFactoryV1(
 		return url;
 	}
 
-	async function exchange(value: unknown, key: string) {
+	async function exchange(
+		value: unknown,
+		key: string,
+		track: RuntimeFileExchangeTrackV1,
+	) {
 		const request = RuntimeFileExchangeRequestV2Schema.parse(value);
 		const response = await send(exchangeUrl, {
 			method: "POST",
@@ -240,6 +336,7 @@ export function createRuntimeFileBridgeFactoryV1(
 			body: JSON.stringify(request),
 		});
 		if (!response.ok) {
+			track.status = response.status;
 			await response.body?.cancel();
 			throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
 		}
@@ -255,33 +352,44 @@ export function createRuntimeFileBridgeFactoryV1(
 			throw new Error("RUNTIME_FILE_EXCHANGE_EVIDENCE_INVALID");
 		const rawPort = {
 			async readInput(fileId: string): Promise<RuntimeFileInputV1> {
-				if (!binding.inputFileIds.includes(fileId))
-					throw new Error("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
-				const key = idempotency(binding, "read", fileId);
-				const access = await exchange(
-					{
-						schemaVersion: 2,
-						executionGrant: evidence.executionGrant,
-						operation: "read",
-						fileId,
-						idempotencyKey: key,
-					},
-					key,
-				);
-				if (
-					access.file.fileId !== fileId ||
-					access.file.kind !== "attachment" ||
-					access.file.status !== "available"
-				)
-					throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
-				const response = await send(target(access.path), {
-					redirect: "error",
-					signal: AbortSignal.timeout(timeoutMs),
-					headers: dataPlaneHeaders(access.grant.token),
-				});
-				if (!response.ok || !response.body) {
-					await response.body?.cancel();
-					throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
+				const track: RuntimeFileExchangeTrackV1 = { operation: "exchange" };
+				let response: Response;
+				let access: Awaited<ReturnType<typeof exchange>>;
+				try {
+					if (!binding.inputFileIds.includes(fileId))
+						throw new Error("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
+					const key = idempotency(binding, "read", fileId);
+					access = await exchange(
+						{
+							schemaVersion: 2,
+							executionGrant: evidence.executionGrant,
+							operation: "read",
+							fileId,
+							idempotencyKey: key,
+						},
+						key,
+						track,
+					);
+					if (
+						access.file.fileId !== fileId ||
+						access.file.kind !== "attachment" ||
+						access.file.status !== "available"
+					)
+						throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
+					track.operation = "read";
+					response = await send(target(access.path), {
+						redirect: "error",
+						signal: AbortSignal.timeout(timeoutMs),
+						headers: dataPlaneHeaders(access.grant.token),
+					});
+					if (!response.ok || !response.body) {
+						if (!response.ok) track.status = response.status;
+						await response.body?.cancel();
+						throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
+					}
+				} catch (error) {
+					report(track, error);
+					throw error;
 				}
 				const reader = response.body.getReader();
 				let bytes = 0;
@@ -300,6 +408,8 @@ export function createRuntimeFileBridgeFactoryV1(
 								throw new Error("RUNTIME_FILE_INPUT_SIZE_MISMATCH");
 							controller.enqueue(next.value);
 						} catch (error) {
+							// 读取过程中断（连接重置、超时或大小不符）同样记录诊断。
+							report({ operation: "read" }, error);
 							await reader.cancel().catch(() => undefined);
 							controller.error(error);
 						}
@@ -320,6 +430,7 @@ export function createRuntimeFileBridgeFactoryV1(
 				options?: RuntimeFileResultOptionsV1,
 			): Promise<RuntimeFileResultV1> {
 				const key = idempotency(binding, "result", descriptor, options);
+				const track: RuntimeFileExchangeTrackV1 = { operation: "exchange" };
 				let bounded: ReturnType<typeof boundedUpload> | undefined;
 				try {
 					const access = await exchange(
@@ -334,6 +445,7 @@ export function createRuntimeFileBridgeFactoryV1(
 							idempotencyKey: key,
 						},
 						key,
+						track,
 					);
 					if (
 						access.file.kind !== "result" ||
@@ -346,6 +458,7 @@ export function createRuntimeFileBridgeFactoryV1(
 						"Content-Length": String(descriptor.sizeBytes),
 					};
 					if (access.file.status === "pending") {
+						track.operation = "write";
 						bounded = boundedUpload(body, descriptor.sizeBytes);
 						const response = await send(target(access.path), {
 							method: "PUT",
@@ -356,11 +469,14 @@ export function createRuntimeFileBridgeFactoryV1(
 							body: bounded.stream,
 						} as RequestInit & { duplex: "half" });
 						await response.body?.cancel();
-						if (!response.ok)
+						if (!response.ok) {
+							track.status = response.status;
 							throw new Error("RUNTIME_FILE_RESULT_UPLOAD_FAILED");
+						}
 					} else {
 						await body.cancel();
 					}
+					track.operation = "complete";
 					const completePath = target(
 						access.path.replace(/\/content$/, "/complete"),
 					);
@@ -385,6 +501,7 @@ export function createRuntimeFileBridgeFactoryV1(
 						throw new RuntimeFileResultUnconfirmedError({ cause: error });
 					}
 					if (!response.ok) {
+						track.status = response.status;
 						await response.body?.cancel().catch(() => undefined);
 						if (response.status >= 400 && response.status < 500)
 							throw new Error("RUNTIME_FILE_RESULT_COMPLETE_FAILED");
@@ -404,6 +521,7 @@ export function createRuntimeFileBridgeFactoryV1(
 						throw new RuntimeFileResultUnconfirmedError();
 					return file;
 				} catch (error) {
+					report(track, error);
 					await bounded?.cancel().catch(() => undefined);
 					if (!body.locked) await body.cancel().catch(() => undefined);
 					throw error;
