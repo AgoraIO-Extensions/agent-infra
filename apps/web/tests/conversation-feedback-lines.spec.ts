@@ -391,10 +391,13 @@ for (const viewport of viewports)
 		});
 		expect(Math.abs(measured.dxForm)).toBeLessThanOrEqual(0.5);
 		expect(measured.right).toBeLessThanOrEqual(measured.viewport);
-		const gap = await line.evaluate((node, formNode) => {
-			const bottom = node.getBoundingClientRect().bottom;
-			return (formNode as Element).getBoundingClientRect().top - bottom;
-		}, await form.elementHandle());
+		const gap = await line.evaluate(
+			(node, formNode) => {
+				const bottom = node.getBoundingClientRect().bottom;
+				return (formNode as Element).getBoundingClientRect().top - bottom;
+			},
+			await form.elementHandle(),
+		);
 		expect(Math.abs(gap - 10), "说明行与输入框相距 10px").toBeLessThanOrEqual(
 			0.5,
 		);
