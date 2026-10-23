@@ -701,7 +701,10 @@ export function SkillEditorScreen({
 			<header className="page-heading">
 				<div>
 					<p className="page-eyebrow">我的管理 / 创建 Skill</p>
-					<h1 id={`${id}-heading`}>创建与发布 Skill</h1>
+					{/* tabIndex=-1：项目内容「重新读取」「重新登录」恢复后焦点落在这里（D2-59）。 */}
+					<h1 id={`${id}-heading`} tabIndex={-1}>
+						创建与发布 Skill
+					</h1>
 					<p>填写说明和发布范围。发布后版本固定，修改时创建新版本。</p>
 				</div>
 			</header>

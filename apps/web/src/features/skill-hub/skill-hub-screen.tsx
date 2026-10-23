@@ -228,7 +228,10 @@ export function SkillHubDirectoryScreen({
 			<header className="page-heading">
 				<div>
 					<p className="page-eyebrow">工作区 / Skill Hub</p>
-					<h1 id="skill-hub-heading">Skill Hub</h1>
+					{/* tabIndex=-1：「重新读取」「重新登录」恢复后焦点落在这里（D2-59）。 */}
+					<h1 id="skill-hub-heading" tabIndex={-1}>
+						Skill Hub
+					</h1>
 					<p>搜索可复用的 Skill，选定版本后加入自己的库。</p>
 				</div>
 				<div className="skill-actions">

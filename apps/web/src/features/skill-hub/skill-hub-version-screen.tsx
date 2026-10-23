@@ -140,7 +140,10 @@ export function SkillHubVersionScreen(props: SkillHubVersionScreenProps) {
 				<header className="page-heading">
 					<div>
 						<p className="page-eyebrow">Skill Hub</p>
-						<h1 id="skill-version-heading">Skill 详情</h1>
+						{/* tabIndex=-1：「重新读取」「重新登录」仍失败或读取中时的恢复目标（D2-59）。 */}
+						<h1 id="skill-version-heading" tabIndex={-1}>
+							Skill 详情
+						</h1>
 					</div>
 				</header>
 				<SkillHubReadFailure
