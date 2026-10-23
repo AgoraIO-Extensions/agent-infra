@@ -4,7 +4,10 @@ import {
 	startObservability,
 } from "@agent-infra/observability";
 import { recordHttpFailureContext } from "@agent-infra/observability/http";
-import { configureStoreQueryObservability } from "@agent-infra/platform-store";
+import {
+	configureStoreQueryObservability,
+	type StoreQueryObservability,
+} from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
 
 import {
@@ -24,6 +27,34 @@ import {
 } from "./deployment-diagnostic.js";
 import { startPlatformResourceSampling } from "./resource-sampler.js";
 import { SseResourceTracker } from "./sse-resource-tracker.js";
+
+/**
+ * Platform API 的 Store 查询观测：失败的查询或事务把 `store.query` 记为请求的失败步骤。
+ * 文件 Store 只有在事务回调内做出领域判定（拒绝、冲突）时，事务才以 FileAuthorityError
+ * 结束；驱动错误先以原始错误类结束事务，之后才在事务外映射为 FileAuthorityError。所以以
+ * FileAuthorityError 结束的事务不是依赖失败，不占用请求的失败步骤，由文件路由记录具体的
+ * 拒绝步骤（#3307）。事件本身照常记录。
+ */
+export function platformApiStoreQueryObservabilityV1(
+	observability: StoreQueryObservability | undefined,
+): StoreQueryObservability {
+	return {
+		record(event) {
+			observability?.record(event);
+			if (
+				event.outcome === "failed" &&
+				event.errorClass !== "FileAuthorityError"
+			)
+				recordHttpFailureContext({
+					failureStep: event.operationRef,
+					error: event.errorClass
+						? { constructor: { name: event.errorClass } }
+						: undefined,
+					sqlState: event.sqlState,
+				});
+		},
+	};
+}
 
 interface StartOptions {
 	dependencies: PlatformAppDependencies;
@@ -279,19 +310,7 @@ export async function startPlatformApiFromDeployment(
 			...options.observabilityOptions,
 		});
 		configureStoreQueryObservability({
-			observability: {
-				record(event) {
-					observability?.record(event);
-					if (event.outcome === "failed")
-						recordHttpFailureContext({
-							failureStep: event.operationRef,
-							error: event.errorClass
-								? { constructor: { name: event.errorClass } }
-								: undefined,
-							sqlState: event.sqlState,
-						});
-				},
-			},
+			observability: platformApiStoreQueryObservabilityV1(observability),
 		});
 		assembly = await loadPlatformApiAssembly(options.moduleSpecifier);
 		server = startPlatformApi({

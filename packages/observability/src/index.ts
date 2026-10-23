@@ -158,6 +158,19 @@ const operationalFailureSteps = new Set([
 	"sandbox.capacity_mismatch",
 	"sandbox.lease_ineligible",
 	"sandbox.policy_changed",
+	// Runtime 文件交换与执行期文件授权被拒绝的检查步骤（#3307）。对外仍是与对象不存在相同的 404。
+	"file_exchange.grant",
+	"file_exchange.service_identity",
+	"file_exchange.credential_scope",
+	"file_exchange.conversation",
+	"file_exchange.execution",
+	"file_exchange.delivery_fence",
+	"file_exchange.task_authorization",
+	"file_exchange.boundary",
+	"file_exchange.authorize",
+	"file_exchange.limits",
+	"file_exchange.file",
+	"file_exchange.store",
 ]);
 
 export function isOperationalFailureStep(value: unknown): value is string {

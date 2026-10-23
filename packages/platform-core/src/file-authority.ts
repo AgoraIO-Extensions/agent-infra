@@ -190,6 +190,12 @@ export class FileAuthorityError extends Error {
 function denied(): never {
 	throw new FileAuthorityError("denied");
 }
+/** 仍可进行执行期文件访问的非终态执行状态（工程 Spec §15.4.2，#3307）。 */
+const fileExecutionActiveStatuses: readonly string[] = [
+	"submitted",
+	"processing",
+	"unknown",
+];
 function invalid(): never {
 	throw new FileAuthorityError("invalid");
 }
@@ -267,12 +273,15 @@ export function createFileAuthorityV1(options: {
 		)
 			denied();
 		const execution = await tx.getExecution(grant.executionId);
+		// 工程 Spec §15.4.2：终态、取消（停止标记）、撤权、过期与代次变化拒绝。`unknown` 不是终态：
+		// Worker 在调用 Runtime 之前把执行 write-ahead 为 unknown，Driver 在原生受理前读取
+		// 附件时执行正处于该状态（#3307）；交换另以签名中的 delivery fence 约束本次投递。
 		if (
 			!execution ||
 			!sameScope(execution, authority) ||
 			execution.sessionGeneration !== grant.sessionGeneration ||
 			tx.conversation?.sessionGeneration !== grant.sessionGeneration ||
-			!["submitted", "processing"].includes(execution.status) ||
+			!fileExecutionActiveStatuses.includes(execution.status) ||
 			execution.stopPending
 		)
 			denied();

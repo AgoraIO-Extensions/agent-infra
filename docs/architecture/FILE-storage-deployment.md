@@ -110,6 +110,8 @@ Worker 只有同时拿到精确的 Platform API origin 与 runtime-auth service 
 
 FileBridge 的交换、数据面读写或完成确认失败时，Runtime Host 向 stderr 输出一条 JSON 诊断：`code` 固定为 `RUNTIME_FILE_EXCHANGE_UNAVAILABLE`，另含阶段 `operation`（`exchange`、`read`、`write`、`complete`）、有界原因 `reason`（`unreachable`、`timeout`、`rejected`、`invalid_response`、`unconfirmed`、`failed`），以及适用时的 HTTP `status`、本模块的稳定错误码 `error` 与传输层错误码 `cause`（例如 `UND_ERR_CONNECT_TIMEOUT`）。诊断不含凭据、URL、路径、File Grant 或 Execution Grant。出站规则缺失时，典型表现是 `operation=exchange`、`reason=unreachable`、`cause=UND_ERR_CONNECT_TIMEOUT`。
 
+Platform API 对执行期文件访问的拒绝一律返回与对象不存在相同的 404 `RESOURCE_UNAVAILABLE`，只在 HTTP 运行日志的 `failureStep` 中记录被拒绝的检查：`file_exchange.grant`（V4 Grant 验签、issuer 或签名 Worker 身份）、`service_identity`（服务凭据缺失或不匹配）、`credential_scope`（执行当前的 Sandbox 分配缺失、未就绪或不可读）、`conversation`、`execution`（终态或停止中）、`delivery_fence`、`task_authorization`、`boundary`、`authorize`（会话授权或主体不一致）、`limits`（已验证能力或三方限制声明不可用）、`file`（文件、allowlist 或执行状态的文件 Core 判定）与 `store`（均以 `file_exchange.` 为前缀）。Platform DB 驱动错误先记为 `store.query` 并带 `sqlState`。日志只含固定步骤名与错误类名，不含 token、Grant、URL 或对象引用。执行在 Worker 调用 Runtime 前已 write-ahead 为 `unknown`，该状态不是终态，附件读取与结果写入照常授权（#3307）。
+
 `createWorkerFileClientV1` 提供输入读取与结果写入。它使用 RuntimeHost 已验证的原始 V4 Execution Grant 调用 `RuntimeFileExchangeRequestV2` 交换入口（`schemaVersion=2`、`executionGrant`、操作、单一文件引用或结果描述、幂等键），随后携带文件 Grant 与服务身份传输字节；不接受调用者指定的对象键或存储地址。旧 V1 自报身份 wire 继续被拒绝。原 Grant 仅证明执行委托范围，交换后的当前授权由持久 Conversation、Execution、generation、delivery fence、停止/终态和 `task_authorization_records` 决定，File Grant 有效期取部署 `accessTtlMs`。实际 Driver 文件桥接不属于本模块。
 
 结果写入的 `idempotencyKey` 标识永久不变的写入意图。访问到期后，调用者可传入新的 `accessIdempotencyKey` 换取该意图的新临时权限；不要换一个意图键重试同一结果。已确认对象只允许重放完成确认，不能重新上传或覆盖字节。执行终态、撤权或代次变化仍拒绝执行授权。

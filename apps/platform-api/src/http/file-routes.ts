@@ -15,6 +15,7 @@ import {
 	type ObjectStorageDataV1,
 	ObjectStorageError,
 } from "@agent-infra/object-storage";
+import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import {
 	type createFileAuthorityV1,
 	FileAuthorityError,
@@ -58,6 +59,34 @@ export interface FileRoutesDependenciesV1 {
 		}>;
 	};
 }
+
+/** 执行期文件访问被拒绝时可记录的有界检查步骤（#3307）。 */
+export type FileExchangeDenialStepV1 =
+	| "grant"
+	| "service_identity"
+	| "credential_scope"
+	| "conversation"
+	| "execution"
+	| "delivery_fence"
+	| "task_authorization"
+	| "boundary"
+	| "authorize"
+	| "limits"
+	| "file"
+	| "store";
+
+/**
+ * 把执行期文件访问的拒绝步骤记入当前 HTTP 请求的运行日志（#3307）。只写固定步骤名与错误
+ * 类名，不写 token、Grant、URL 或对象引用；对外响应仍是与对象不存在相同的 404。同一请求
+ * 只保留最先记录的步骤。
+ */
+export function recordFileExchangeDenialV1(
+	step: FileExchangeDenialStepV1,
+	error?: unknown,
+) {
+	recordHttpFailureContext({ failureStep: `file_exchange.${step}`, error });
+}
+
 export function fileProjectionV1(file: FileRecordV1) {
 	return FileProjectionV1Schema.parse({
 		schemaVersion: 1,
@@ -172,7 +201,10 @@ export function registerFileRoutesV1(
 			if (idempotencyKey !== value.idempotencyKey) return denied(context);
 			// The self-reported V1 wire stays rejected; only the V2 proof may
 			// enter the positive exchange.
-			if (value.schemaVersion === 1) return denied(context);
+			if (value.schemaVersion === 1) {
+				recordFileExchangeDenialV1("grant");
+				return denied(context);
+			}
 			let trusted: Awaited<
 				ReturnType<
 					NonNullable<
@@ -186,36 +218,53 @@ export function registerFileRoutesV1(
 					value,
 				);
 			} catch {
+				// 认证内已记录具体的拒绝步骤。
 				return denied(context);
 			}
-			const file =
-				value.operation === "result"
-					? await dependencies.service.createResult(
-							{
-								conversationId: trusted.conversationId,
-								idempotencyKey,
-								descriptor: value.descriptor,
-								// #3226：回答内 sandbox: 引用的工作区路径随结果意图写入文件记录。
-								...("workspaceReference" in value &&
-								value.workspaceReference !== undefined
-									? { workspaceReference: value.workspaceReference }
-									: {}),
-							},
-							trusted.authorization,
-						)
-					: await dependencies.service.getFile(
-							{ conversationId: trusted.conversationId, fileId: value.fileId },
-							trusted.authorization,
-						);
-			const access = await dependencies.service.issueAccess(
-				{
-					conversationId: file.conversationId,
-					fileId: file.fileId,
-					operation: value.operation === "result" ? "write" : "read",
-					idempotencyKey,
-				},
-				trusted.authorization,
-			);
+			let file: FileRecordV1;
+			let access: Awaited<ReturnType<typeof dependencies.service.issueAccess>>;
+			try {
+				file =
+					value.operation === "result"
+						? await dependencies.service.createResult(
+								{
+									conversationId: trusted.conversationId,
+									idempotencyKey,
+									descriptor: value.descriptor,
+									// #3226：回答内 sandbox: 引用的工作区路径随结果意图写入文件记录。
+									...("workspaceReference" in value &&
+									value.workspaceReference !== undefined
+										? { workspaceReference: value.workspaceReference }
+										: {}),
+								},
+								trusted.authorization,
+							)
+						: await dependencies.service.getFile(
+								{
+									conversationId: trusted.conversationId,
+									fileId: value.fileId,
+								},
+								trusted.authorization,
+							);
+				access = await dependencies.service.issueAccess(
+					{
+						conversationId: file.conversationId,
+						fileId: file.fileId,
+						operation: value.operation === "result" ? "write" : "read",
+						idempotencyKey,
+					},
+					trusted.authorization,
+				);
+			} catch (error) {
+				// 授权端口内的拒绝已先记录；这里补上文件 Core 的判定（文件、allowlist、执行状态、
+				// 限制）与 Store 不可用（#3307）。
+				if (error instanceof FileAuthorityError)
+					recordFileExchangeDenialV1(
+						error.code === "unavailable" ? "store" : "file",
+						error,
+					);
+				throw error;
+			}
 			return context.json(
 				FileAccessResponseV1Schema.parse({
 					schemaVersion: 1,

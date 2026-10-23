@@ -185,6 +185,45 @@ it("keeps only the fixed Session Sandbox claim wait steps (#3089)", () => {
 	expect(lines.join("")).not.toContain("conversation-secret-id");
 });
 
+it("keeps only the fixed Runtime file exchange denial steps (#3307)", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-api",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	const known = [
+		"file_exchange.grant",
+		"file_exchange.service_identity",
+		"file_exchange.credential_scope",
+		"file_exchange.conversation",
+		"file_exchange.execution",
+		"file_exchange.delivery_fence",
+		"file_exchange.task_authorization",
+		"file_exchange.boundary",
+		"file_exchange.authorize",
+		"file_exchange.limits",
+		"file_exchange.file",
+		"file_exchange.store",
+	];
+	// 调用方拼出的步骤（例如带上 token 或对象引用）不在固定集合内，必须被丢弃。
+	for (const failureStep of [...known, "file_exchange.sk-private-token"])
+		telemetry.record({
+			stage: "http",
+			outcome: "rejected",
+			status: 404,
+			failureStep,
+		} as Parameters<typeof telemetry.record>[0]);
+	const steps = lines.map((line) => JSON.parse(line).failureStep);
+	expect(steps).toEqual([...known, undefined]);
+	expect(lines.join("")).not.toContain("sk-private-token");
+});
+
 it("accepts waiting as a non-error operational outcome", () => {
 	const lines: string[] = [];
 	const telemetry = startObservability({
