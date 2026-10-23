@@ -57,13 +57,15 @@ type ConfigurationModelPickerProps = {
 	showErrors?: boolean;
 	/** 以一次未保存的选择为起点（按新候选重建时保留用户勾选，RK2-08）。 */
 	startFrom?: KeylessModelSelection;
+	/** 改选后会移除当前模型时的提示标题；修改申请写「提交后…」（#3268 N8-2-05）。 */
+	removedTitle?: string;
 	onChange: (change: ConfigurationModelPickerChange) => void;
 };
 
 /**
- * Owner 配置「模型与凭证」分区里的模型选择（RK2-01、RK2-07）：勾选模型与推理档位，再从
- * 已选组合里选一个「默认模型选项」。根节点不画边线，也不嵌套 fieldset + legend。
- * 申请表单仍使用 KeylessModelPicker，两处的取值与请求格式相同。
+ * 由默认 Key 管理模型时的模型选择（RK2-01、RK2-07）：勾选模型与推理档位，再从已选组合里选一个
+ * 「默认模型选项」。根节点不画边线，也不嵌套 fieldset + legend。Owner 配置「模型与凭证」、替换默认
+ * Key 弹窗与修改申请的「默认 Key 管理模型」共用这一个选择器（#3268 N8-2-05），取值与请求格式相同。
  */
 export function ConfigurationModelPicker({
 	candidates,
@@ -75,6 +77,7 @@ export function ConfigurationModelPicker({
 	idPrefix = "configuration-model",
 	showErrors = false,
 	startFrom,
+	removedTitle = "保存后会移除这些模型",
 	onChange,
 }: ConfigurationModelPickerProps) {
 	const baselineRows = useMemo(
@@ -185,7 +188,7 @@ export function ConfigurationModelPicker({
 		>
 			{removed.length > 0 ? (
 				<Alert tone="warn" role="status">
-					<AlertTitle>保存后会移除这些模型</AlertTitle>
+					<AlertTitle>{removedTitle}</AlertTitle>
 					<AlertDescription>
 						{removed.map(currentLabel).join("、")}
 					</AlertDescription>

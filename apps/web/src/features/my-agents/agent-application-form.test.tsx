@@ -2232,7 +2232,8 @@ describe("AgentApplicationForm editing the models of a default-Key application (
 			target: { value: key },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
-		await screen.findByText("选择允许的模型");
+		// 需求变化（#3268 N8-2-05）：与 Owner 配置共用模型选择器，模型列表组名为「允许的模型」。
+		await screen.findByRole("group", { name: "允许的模型" });
 		expect(check).toHaveBeenCalledWith(key);
 		// 当前模型预先勾选，Key 可见的另一个模型可选。
 		// 需求变化（#3215 G5-12 / #3212）：候选按部署目录写「{端点显示名} · {模型}」，不显示原始端点 ID。
@@ -2255,7 +2256,8 @@ describe("AgentApplicationForm editing the models of a default-Key application (
 			target: { value: key },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
-		await screen.findByText("选择允许的模型");
+		// 需求变化（#3268 N8-2-05）：与 Owner 配置共用模型选择器，模型列表组名为「允许的模型」。
+		await screen.findByRole("group", { name: "允许的模型" });
 		fireEvent.click(
 			screen.getByRole("checkbox", { name: "Primary endpoint · gpt-5-mini" }),
 		);
@@ -2298,8 +2300,12 @@ describe("AgentApplicationForm editing the models of a default-Key application (
 			target: { value: key },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
-		await screen.findByText("选择允许的模型");
-		const picker = screen.getByRole("group", { name: "选择允许的模型" });
+		// 需求变化（#3268 N8-2-05）：修改申请与 Owner 配置共用同一个模型选择器——模型列表为
+		// 「允许的模型」组，默认项是单个「默认模型选项」（{模型} · {档位}），不再拆成两个下拉。
+		await screen.findByRole("group", { name: "允许的模型" });
+		const picker = screen.getByRole("group", { name: "允许的模型" });
+		const pickerRoot = document.getElementById("application-keyless-model");
+		if (!pickerRoot) throw new Error("model picker missing");
 		expect(
 			within(picker).getByRole("checkbox", {
 				name: "均衡：Primary endpoint · gpt-5",
@@ -2310,19 +2316,49 @@ describe("AgentApplicationForm editing the models of a default-Key application (
 				name: "高：Primary endpoint · gpt-5",
 			}),
 		).toBeTruthy();
-		const defaultModel =
-			within(picker).getByLabelText<HTMLSelectElement>("默认模型");
+		const defaultOption =
+			within(pickerRoot).getByLabelText<HTMLSelectElement>("默认模型选项");
 		expect(
-			[...defaultModel.options].map((option) => option.textContent),
-		).toEqual(["Primary endpoint · gpt-5"]);
-		expect(defaultModel.value).toBe("endpoint-primary:gpt-5");
-		const defaultLevel =
-			within(picker).getByLabelText<HTMLSelectElement>("默认推理档位");
+			[...defaultOption.options].map((option) => option.textContent),
+		).toEqual([
+			"Primary endpoint · gpt-5 · 高",
+			"Primary endpoint · gpt-5 · 均衡",
+		]);
+		expect(defaultOption.value).toBe("endpoint-primary:gpt-5|medium");
+		expect(within(pickerRoot).queryByLabelText("默认推理档位")).toBeNull();
+		expect(pickerRoot.textContent).not.toMatch(/endpoint-primary|medium|high/);
+		// 说明与 Owner 配置同级（.keyless-model-description，13px）。
 		expect(
-			[...defaultLevel.options].map((option) => option.textContent),
-		).toEqual(["高", "均衡"]);
-		expect(defaultLevel.value).toBe("medium");
-		expect(picker.textContent).not.toMatch(/endpoint-primary|medium|high/);
+			pickerRoot.querySelector(".keyless-model-description")?.textContent,
+		).toBe(
+			"只列出该 Key 可见、且模板支持的模型。勾选后可调整推理档位和默认模型选项。",
+		);
+	});
+
+	// #3268 N8-2-05：检查成功但没有可用模型时给出与 Owner 配置一致的 warn 提示，拦截文案说明的是
+	// 「没有可用模型」而不是「请先检查」。
+	it("explains a checked Key without usable models and blocks with a matching message", async () => {
+		const { onSubmit } = renderManaged(
+			vi.fn().mockResolvedValue({ ...candidates, candidates: [] }),
+		);
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
+			target: { value: key },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
+		const notice = await screen.findByText("该 Key 没有此模板可用的模型");
+		const alert = notice.closest('[data-slot="alert"]');
+		expect(alert?.getAttribute("data-tone")).toBe("warn");
+		expect(alert?.getAttribute("role")).toBe("status");
+		expect(screen.queryByRole("group", { name: "允许的模型" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		const error = screen.getByText(
+			"该 Key 没有此模板可用的模型，请换一个 Key 后重新检查。",
+		);
+		expect(error.getAttribute("data-slot")).toBe("field-error");
+		expect(error.getAttribute("aria-live")).toBe("polite");
+		expect(screen.queryByText(/请先点击「检查可用模型」/)).toBeNull();
+		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
 	it("blocks the submission until the Key was checked and models were selected", async () => {

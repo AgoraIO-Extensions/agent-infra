@@ -34,6 +34,7 @@ import {
 	expectCleanPage,
 	expectPageHeadTop,
 	expectPointerButtons,
+	expectPublicFieldError,
 	expectSectionHeadTopAligned,
 	resolved,
 	textContrast,
@@ -1916,8 +1917,11 @@ test("default-Key candidates in an application edit show endpoint display names 
 		.getByLabel("Agent 默认 Relay Key", { exact: true })
 		.fill("synthetic-relay-key");
 	await page.getByRole("button", { name: "检查可用模型" }).click();
-	const picker = page.getByRole("group", { name: "选择允许的模型" });
+	// 需求变化（#3268 N8-2-05）：与 Owner 配置共用模型选择器，模型列表组名为「允许的模型」，
+	// 默认项是单个「默认模型选项」（{模型} · {档位}），不再拆成「默认模型」「默认推理档位」两个下拉。
+	const picker = page.getByRole("group", { name: "允许的模型" });
 	await expect(picker).toBeVisible();
+	const pickerRoot = page.locator("#application-keyless-model");
 	const mini = picker.getByRole("checkbox", {
 		name: "Primary endpoint · gpt-5-mini",
 		exact: true,
@@ -1941,25 +1945,28 @@ test("default-Key candidates in an application edit show endpoint display names 
 			exact: true,
 		}),
 	).toBeVisible();
-	const defaultModel = picker.getByLabel("默认模型", { exact: true });
-	const defaultLevel = picker.getByLabel("默认推理档位", { exact: true });
+	const defaultOption = pickerRoot.getByLabel("默认模型选项", { exact: true });
+	await expect(
+		pickerRoot.getByLabel("默认推理档位", { exact: true }),
+	).toHaveCount(0);
 	const optionTexts = (select: Locator) =>
 		select
 			.locator("option")
 			.evaluateAll((nodes) => nodes.map((node) => node.textContent?.trim()));
-	expect(await optionTexts(defaultModel)).toEqual([
-		"Primary endpoint · gpt-5",
-		"Primary endpoint · gpt-5-mini",
+	expect(await optionTexts(defaultOption)).toEqual([
+		"Primary endpoint · gpt-5 · 高",
+		"Primary endpoint · gpt-5 · 均衡",
+		"Primary endpoint · gpt-5-mini · 均衡",
 	]);
-	await defaultModel.selectOption({ label: "Primary endpoint · gpt-5" });
-	expect(await optionTexts(defaultLevel)).toEqual(["高", "均衡"]);
 	// 原始端点 ID 与档位枚举不进入页面（可见文字与可访问名称）。
-	const text = await picker.innerText();
+	const text = await pickerRoot.innerText();
 	expect(text).not.toMatch(/endpoint-primary|\bmedium\b|\bhigh\b/);
-	expect(await picker.ariaSnapshot()).not.toMatch(
+	expect(await pickerRoot.ariaSnapshot()).not.toMatch(
 		/endpoint-primary|\bmedium\b|\bhigh\b/,
 	);
-	await defaultLevel.selectOption({ label: "均衡" });
+	await defaultOption.selectOption({
+		label: "Primary endpoint · gpt-5 · 均衡",
+	});
 	await page.getByRole("button", { name: "修改申请", exact: true }).click();
 	await expect.poll(() => submitted.length).toBe(1);
 	const body = submitted[0] as {
@@ -2006,6 +2013,111 @@ test("default-Key candidates in an application edit show endpoint display names 
 	await expectNoDuplicateControls(
 		page,
 		"/my-agents/:id/edit（默认 Key 候选显示名，G5-12）",
+	);
+	await noHorizontalOverflow(page);
+});
+
+// #3268 N8-2-05：修改申请「默认 Key 管理模型」检查成功但没有可用模型时，给出与 Owner 配置一致的 warn
+// 提示；拦截文案说明「没有可用模型」，不再要求用户「先点击检查」；拦截错误为公共 FieldError。
+// 有候选时选择器与 Owner 配置同一个：说明 13px、单个「默认模型选项」。两视口一致。
+test("a checked Key without usable models is explained and blocks with a matching message (#3268 N8-2-05)", async ({
+	page,
+}, info) => {
+	await viewportFor(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await fixture(page, {
+		applications: [application({ agentId: "agent-pilot-1" })],
+		defaultRelayKeyCandidates: [],
+	});
+	await page.goto("/my-agents/application-browser-1/edit");
+	await page.getByRole("checkbox", { name: "修改模型配置" }).click();
+	const keyInput = page.getByLabel("Agent 默认 Relay Key", { exact: true });
+	await keyInput.fill("synthetic-relay-key");
+	const check = page.getByRole("button", { name: "检查可用模型" });
+	await check.click();
+	const notice = page
+		.locator('#main-content [data-slot="alert"][data-tone="warn"]')
+		.filter({ hasText: "该 Key 没有此模板可用的模型" });
+	await expect(notice).toBeVisible();
+	await expect(notice).toHaveAttribute("role", "status");
+	await expect(page.getByRole("group", { name: "允许的模型" })).toHaveCount(0);
+	await expectFocusSettled(check, "检查可用模型（没有候选）");
+
+	await page.getByRole("button", { name: "修改申请", exact: true }).click();
+	const error = page.locator("#application-default-relay-key-error");
+	await expect(error).toHaveText(
+		"该 Key 没有此模板可用的模型，请换一个 Key 后重新检查。",
+	);
+	await expectPublicFieldError(page, error);
+	await expect(keyInput).toHaveAttribute("aria-invalid", "true");
+	await expect(page.getByText(/请先点击「检查可用模型」/)).toHaveCount(0);
+	await expectCleanPage(page, pageErrors);
+	await expectNoDuplicateControls(
+		page,
+		"/my-agents/:id/edit（没有可用模型，#3268）",
+	);
+	await noHorizontalOverflow(page);
+});
+
+test("the application edit uses the Owner configuration model picker for default-Key candidates (#3268 N8-2-05)", async ({
+	page,
+}, info) => {
+	await viewportFor(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await fixture(page, {
+		applications: [application({ agentId: "agent-pilot-1" })],
+		defaultRelayKeyCandidates: [
+			{
+				endpointId: "endpoint-primary",
+				modelId: "gpt-5",
+				displayName: "gpt-5",
+				reasoningLevels: ["medium", "high"],
+			},
+		],
+	});
+	await page.goto("/my-agents/application-browser-1/edit");
+	await page.getByRole("checkbox", { name: "修改模型配置" }).click();
+	await page
+		.getByLabel("Agent 默认 Relay Key", { exact: true })
+		.fill("synthetic-relay-key");
+	await page.getByRole("button", { name: "检查可用模型" }).click();
+	const picker = page.locator(
+		'#application-keyless-model[data-slot="keyless-model-picker"]',
+	);
+	await expect(picker).toBeVisible();
+	const description = picker.locator(".keyless-model-description");
+	await expect(description).toHaveText(
+		"只列出该 Key 可见、且模板支持的模型。勾选后可调整推理档位和默认模型选项。",
+	);
+	expect(await computed(description, ["fontSize", "color"])).toEqual({
+		fontSize: "13px",
+		color: await resolved(page, "color", "var(--muted-foreground)"),
+	});
+	await expect(
+		picker.getByLabel("默认模型选项", { exact: true }),
+	).toBeVisible();
+	await expect(picker.getByLabel("默认推理档位", { exact: true })).toHaveCount(
+		0,
+	);
+	// 勾选模型后取消它的全部档位：选择器内的错误是公共 FieldError，不是 14px 红字 role=status。
+	await picker
+		.getByRole("checkbox", { name: "Primary endpoint · gpt-5", exact: true })
+		.click();
+	for (const level of ["均衡", "高"])
+		await picker
+			.getByRole("checkbox", {
+				name: `${level}：Primary endpoint · gpt-5`,
+				exact: true,
+			})
+			.click();
+	const problem = picker.locator('[data-slot="field-error"]');
+	await expect(problem).toHaveText("每个已选模型至少保留一个推理档位。");
+	await expectPublicFieldError(page, problem);
+	await expect(picker.getByRole("status")).toHaveCount(0);
+	await expectCleanPage(page, pageErrors);
+	await expectNoDuplicateControls(
+		page,
+		"/my-agents/:id/edit（默认 Key 模型选择器，#3268）",
 	);
 	await noHorizontalOverflow(page);
 });

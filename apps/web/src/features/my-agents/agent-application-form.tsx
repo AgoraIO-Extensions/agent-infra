@@ -1446,10 +1446,15 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			const parsed = parseMultiServiceManifest(manifest);
 			if (!parsed.ok) errors.manifest = parsed.message;
 		}
+		// 拦截文案区分「还没检查」「检查过但没有可用模型」与「还没选好模型」（#3268 N8-2-05）。
 		if (managedModelEdit && !keyCheck.replacement)
-			errors.defaultRelayKey = keyCheck.typed
-				? "请先点击「检查可用模型」并选好模型（至少一个模型，每个模型至少一个推理档位）。"
-				: "请输入 Agent 默认 Relay Key。";
+			errors.defaultRelayKey = !keyCheck.typed
+				? "请输入 Agent 默认 Relay Key。"
+				: keyCheck.noCandidates
+					? "该 Key 没有此模板可用的模型，请换一个 Key 后重新检查。"
+					: keyCheck.checked
+						? "请在下方选好模型（至少一个模型，每个模型至少一个推理档位）。"
+						: "请先点击「检查可用模型」并选好模型（至少一个模型，每个模型至少一个推理档位）。";
 		setFieldErrors(errors);
 		setFocusRequest((current) => current + 1);
 		if (
