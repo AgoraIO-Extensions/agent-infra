@@ -2191,7 +2191,7 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
   - 上下文仍在时，已保存 intent、尚未 started 的引用在继续发布前重新打开文件并校验；内容与 intent 的 descriptor 不一致则记 failed，不改发新内容。
   - Driver 或 Host 重启后不重建该上下文，也不补发；部署未装配文件交换时同样没有上下文。此时未收敛的计划按已保存进度一次收敛，再按原生终态写终态事件：
     - 尚未 started 的引用记 failed；
-    - 已 started，且 journal 中已有同一 `workspaceReference`、同一 descriptor 的 `result.file` V2 事件的，记 completed；
+    - 已 started，且 journal 中已有 `workspaceReference`、名称、媒体类型和大小都与 intent 相同的 `result.file` V2 事件的，记 completed；
     - 已 started 但没有对应事件的，记 unknown。
   - 原生终态在重启后才确认的 Turn 同样没有上下文：回答内引用直接记 failed，不发布。
 

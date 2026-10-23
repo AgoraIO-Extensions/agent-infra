@@ -664,7 +664,12 @@ describe("contract compatibility command", () => {
 				(document) => {
 					const list = actions(document);
 					const index = list.indexOf("wecom.conversation_started");
-					list.splice(index, 2, list[index + 1], list[index]);
+					list.splice(
+						index,
+						2,
+						"wecom.conversation_unavailable",
+						"wecom.conversation_started",
+					);
 				},
 				// 新增动作夹带删除已有动作
 				(document) =>
