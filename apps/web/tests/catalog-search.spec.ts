@@ -15,6 +15,7 @@ import {
 	test,
 } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
+import { expectFocusSettled, expectNoDuplicateControls } from "./page-health";
 import {
 	expectCleanPage,
 	expectEmptyRows,
@@ -953,4 +954,34 @@ test.describe("Agent directory design alignment", () => {
 		).toBe("kept");
 		expect(api.commands).toEqual([]);
 	});
+});
+
+// #3269 N8-3-02：Agent 目录无匹配空态「清除筛选」清除后空态随之卸载，焦点回到「搜索 Agent」搜索框
+// （同 Skill Hub），30 / 150 / 400 / 1000ms 采样都不落到 body。
+test("clearing directory filters returns focus to the search box (N8-3-02)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const pageErrors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/agents");
+	const search = page.getByRole("searchbox", { name: "搜索 Agent" });
+	await search.fill("不存在");
+	const empty = page.locator('[data-slot="empty"]');
+	const clear = empty.getByRole("button", { name: "清除筛选" });
+	await clear.focus();
+	await page.keyboard.press("Enter");
+	await expect(page.locator(".agent-list > li")).toHaveCount(5);
+	await expect(search).toHaveValue("");
+	await expectFocusSettled(
+		search,
+		"Agent 目录清除筛选后",
+		[30, 150, 400, 1000],
+	);
+	await expectNoDuplicateControls(page, "Agent 目录（N8-3-02）");
+	await expectCleanPage(page, pageErrors);
 });
