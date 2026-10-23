@@ -264,7 +264,7 @@ describe("existing Agent default Relay Key HTTP and original PostgreSQL authorit
 					endpointId: "endpoint_01",
 					modelId: "gpt-5",
 					// 推理档位是平台固定集合，不取端点或模板配置（ADR-0029）。
-					reasoningLevels: ["low", "medium", "high"],
+					reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
 				},
 			],
 		});
@@ -465,7 +465,7 @@ describe("keyless (V3) Agent default Relay Key HTTP and PostgreSQL authority", (
 					endpointId: "endpoint_01",
 					modelId: "gpt-5",
 					// 推理档位是平台固定集合，不取端点或模板配置（ADR-0029）。
-					reasoningLevels: ["low", "medium", "high"],
+					reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
 				},
 			],
 		});
