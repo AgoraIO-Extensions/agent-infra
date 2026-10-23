@@ -428,9 +428,9 @@ describe("V2 configuration routes with a re-submitted default Relay Key (#2421)"
 				modelConfiguration: {
 					...modelConfiguration,
 					options: [
-						{ ...modelConfiguration.options[0], reasoningLevels: ["max"] },
+						{ ...modelConfiguration.options[0], reasoningLevels: ["extreme"] },
 					],
-					defaultReasoningLevel: "max",
+					defaultReasoningLevel: "extreme",
 				},
 			});
 			expect(response.status).toBe(400);

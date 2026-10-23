@@ -109,7 +109,7 @@ function fixture(
 	});
 	return { candidates: relay.candidates, verify: relay.verify, fetcher };
 }
-const fixedLevels = ["low", "medium", "high"];
+const fixedLevels = ["low", "medium", "high", "xhigh", "max"];
 describe("default Key visibility with controlled Relay responses", () => {
 	it("offers the fixed levels for every Key-visible model in the exact template protocol (ADR-0029)", async () => {
 		expect(await fixture().candidates(key, configuration)).toEqual([
