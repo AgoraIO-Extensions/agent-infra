@@ -19,6 +19,8 @@ export const standardTemplateReasoningLevelsV1 = Object.freeze([
 	"low",
 	"medium",
 	"high",
+	"xhigh",
+	"max",
 ] as const);
 
 export interface AgentDefaultRelayKeyCandidateV1 {
