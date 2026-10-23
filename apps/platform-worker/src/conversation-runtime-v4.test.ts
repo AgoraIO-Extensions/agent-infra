@@ -590,6 +590,58 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		}
 	});
 
+	// #3314：Host 持久化的附件拒绝原样交给 Core 收敛为失败终态；字段漂移时失败关闭。
+	it.each([
+		[
+			"passes the persisted file input rejection to Core",
+			"Runtime file input was rejected",
+			false,
+		],
+		[
+			"fails closed on a drifted file input rejection",
+			"Runtime file input was rejected for file-input-1",
+			false,
+		],
+		[
+			"fails closed on a retryable file input rejection",
+			"Runtime file input was rejected",
+			true,
+		],
+	] as const)("%s (#3314)", async (name, message, retryable) => {
+		const h = runtimeV4Harness("submit");
+		try {
+			Object.assign(h.claim, {
+				input: { text: "inspect", attachments: ["file-input-1"] },
+			});
+			const result = {
+				outcome: "rejected",
+				code: "RUNTIME_FILE_INPUT_REJECTED",
+				message,
+				retryable,
+			};
+			h.fetcher.mockImplementationOnce(async (_url, init) =>
+				Response.json({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					operationId: JSON.parse(init?.body as string).businessRequest
+						.operation.id,
+					result,
+				}),
+			);
+			const reference = await h.authorize();
+			const dispatched = h.runtime.runtimeHost.dispatch(h.request(reference));
+			if (name.startsWith("passes"))
+				await expect(dispatched).resolves.toMatchObject({ result });
+			else
+				await expect(dispatched).rejects.toMatchObject({
+					code: "RUNTIME_RESPONSE_INVALID",
+				});
+			expect(h.fetcher).toHaveBeenCalledTimes(1);
+		} finally {
+			await h.runtime.close();
+		}
+	});
+
 	it("reports a stop-pending key race without sending the business request", async () => {
 		const h = runtimeV4Harness();
 		try {

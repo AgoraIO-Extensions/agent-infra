@@ -170,6 +170,7 @@ describe("rejected Runtime result transition", () => {
 	it.each([
 		"RUNTIME_TURN_NOT_ACTIVE",
 		"RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+		"RUNTIME_FILE_INPUT_REJECTED",
 	] as const)("keeps the Conversation ready for %s", (code) => {
 		for (const operation of [
 			"conversation.turn.submit.v1",
@@ -198,69 +199,85 @@ describe("rejected Runtime result transition", () => {
 	);
 });
 
-describe("Runtime operation response parsing", () => {
-	const blocked = {
-		outcome: "rejected",
+describe.each([
+	{
 		code: "RUNTIME_SESSION_BLOCKED",
 		message: "Runtime session is blocked by an unconfirmed turn",
-		retryable: false,
-	} as const;
-	const response = (
-		result: Record<string, unknown>,
-		schemaVersion: 1 | 2 = 2,
-	) => ({
-		schemaVersion,
-		hostSessionRef: "host-session-conversation-1",
-		operationId: "execution-1",
-		result,
-	});
-
-	it("accepts the exact blocked rejection from a V2 submit response", () => {
-		for (const operation of [
-			"conversation.turn.submit.v1",
-			"conversation.turn.regenerate.v1",
-		] as const)
-			expect(
-				parseRuntimeResponse(response(blocked), claim({ operation })),
-			).toEqual({
-				schemaVersion: 2,
-				hostSessionRef: "host-session-conversation-1",
-				operationId: "execution-1",
-				result: blocked,
-			});
-	});
-
-	it.each([
-		["a different message", { ...blocked, message: "Runtime session blocked" }],
-		["a retryable flag", { ...blocked, retryable: true }],
-		["a missing retryable flag", { ...blocked, retryable: undefined }],
-		["an extra status", { ...blocked, status: "unknown" }],
-	])("fails closed on a V2 blocked rejection with %s", (_label, result) => {
-		const input = Object.fromEntries(
-			Object.entries(result).filter(([, value]) => value !== undefined),
-		);
-		expect(() => parseRuntimeResponse(response(input), claim())).toThrow(
-			expect.objectContaining({ code: "unavailable" }),
-		);
-	});
-
-	it("fails closed when a V1 response carries the blocked code", () => {
-		const v1Claim = claim({
-			modelConfigurationRevision: null,
-			modelOptionId: null,
-			reasoningLevel: null,
+	},
+	// #3314：附件读取在原生副作用前被平台明确拒绝。
+	{
+		code: "RUNTIME_FILE_INPUT_REJECTED",
+		message: "Runtime file input was rejected",
+	},
+] as const)(
+	"Runtime operation response parsing for $code",
+	({ code, message }) => {
+		const blocked = {
+			outcome: "rejected",
+			code,
+			message,
+			retryable: false,
+		} as const;
+		const response = (
+			result: Record<string, unknown>,
+			schemaVersion: 1 | 2 = 2,
+		) => ({
+			schemaVersion,
+			hostSessionRef: "host-session-conversation-1",
+			operationId: "execution-1",
+			result,
 		});
-		expect(() => parseRuntimeResponse(response(blocked, 1), v1Claim)).toThrow(
-			expect.objectContaining({ code: "unavailable" }),
-		);
-		expect(() =>
-			parseRuntimeResponse(
-				response(blocked, 1),
-				nativeParametersClaim("summary", "skill"),
-			),
-		).toThrow(expect.objectContaining({ code: "unavailable" }));
-	});
-});
+
+		it("accepts the exact blocked rejection from a V2 submit response", () => {
+			for (const operation of [
+				"conversation.turn.submit.v1",
+				"conversation.turn.regenerate.v1",
+			] as const)
+				expect(
+					parseRuntimeResponse(response(blocked), claim({ operation })),
+				).toEqual({
+					schemaVersion: 2,
+					hostSessionRef: "host-session-conversation-1",
+					operationId: "execution-1",
+					result: blocked,
+				});
+		});
+
+		it.each([
+			[
+				"a different message",
+				{ ...blocked, message: "Runtime session blocked" },
+			],
+			["a retryable flag", { ...blocked, retryable: true }],
+			["a missing retryable flag", { ...blocked, retryable: undefined }],
+			["an extra status", { ...blocked, status: "unknown" }],
+		])("fails closed on a V2 blocked rejection with %s", (_label, result) => {
+			const input = Object.fromEntries(
+				Object.entries(result).filter(([, value]) => value !== undefined),
+			);
+			expect(() => parseRuntimeResponse(response(input), claim())).toThrow(
+				expect.objectContaining({ code: "unavailable" }),
+			);
+		});
+
+		it("fails closed when a V1 response carries the blocked code", () => {
+			const v1Claim = claim({
+				modelConfigurationRevision: null,
+				modelOptionId: null,
+				reasoningLevel: null,
+			});
+			expect(() => parseRuntimeResponse(response(blocked, 1), v1Claim)).toThrow(
+				expect.objectContaining({ code: "unavailable" }),
+			);
+			expect(() =>
+				parseRuntimeResponse(
+					response(blocked, 1),
+					nativeParametersClaim("summary", "skill"),
+				),
+			).toThrow(expect.objectContaining({ code: "unavailable" }));
+		});
+	},
+);
 
 function claim(
 	overrides: Partial<ConversationDispatchClaimV1> = {},
@@ -2984,6 +3001,19 @@ describe("Conversation Worker dispatch", () => {
 			// ADR-0029：本次执行失败，同一事务把会话标记为不可用。
 			{ executionStatus: "failed", conversationStatus: "unavailable" },
 		],
+		[
+			{
+				outcome: "rejected" as const,
+				code: "RUNTIME_FILE_INPUT_REJECTED" as const,
+				message: "Runtime file input was rejected" as const,
+				retryable: false as const,
+			},
+			{ schemaVersion: 1, outcome: "rejected" },
+			"RUNTIME_FILE_INPUT_REJECTED",
+			"failed",
+			// #3314：附件在原生副作用前被平台明确拒绝：本次执行失败，会话保持可用。
+			{ executionStatus: "failed", conversationStatus: "ready" },
+		],
 	] as const)(
 		"maps Runtime result %# to one durable product state",
 		async (result, expected, code, status, transition) => {
@@ -3014,6 +3044,32 @@ describe("Conversation Worker dispatch", () => {
 		message: "Runtime session is blocked by an unconfirmed turn",
 		retryable: false,
 	} as const;
+
+	// #3314 AC-2：Host 无法确认附件读取是否被拒绝（交换超时、断连、5xx，或拒绝未经 Driver
+	// 声明）时返回可重试错误；执行保持 unknown 并重试，不推断为失败。
+	it.each([
+		"RUNTIME_DRIVER_INVALID",
+		"RUNTIME_UNAVAILABLE",
+		"RUNTIME_INTERRUPTED",
+	])(
+		"keeps the Turn unknown and retries when the Host reports %s (#3314)",
+		async (code) => {
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			runtimeHost.failNext(code, true);
+			const { useCase, store } = setup({ runtimeHost });
+			const finish = vi.spyOn(store, "finish");
+
+			await expect(dispatch(useCase)).resolves.toEqual({
+				schemaVersion: 1,
+				outcome: "retry",
+				retryScheduled: true,
+			});
+			expect(store.current.executionStatus).toBe("unknown");
+			expect(store.errorCode).toBe(code);
+			expect(store.outboxStatus).toBe("retry_scheduled");
+			expect(finish).not.toHaveBeenCalled();
+		},
+	);
 
 	it("fails a blocked regenerate and marks only its Conversation unavailable", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();

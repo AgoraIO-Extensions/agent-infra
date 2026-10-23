@@ -48,7 +48,7 @@ import {
 	readStop,
 	renewLease,
 	retryOutbox,
-	settleSessionBlockedExecutionWork,
+	settleUnacceptedExecutionWork,
 	transactionResult,
 } from "./conversation-dispatch-sql.js";
 import {
@@ -61,6 +61,7 @@ import {
 import {
 	exactPayload,
 	isExecutionOperation,
+	isTurn,
 	operation,
 	requireClaim,
 	requireCommand,
@@ -1420,7 +1421,15 @@ export class PostgresConversationDispatchStoreV1
 				input.errorCode === "RUNTIME_SESSION_BLOCKED" &&
 				input.transition.conversationStatus === "unavailable"
 			)
-				await settleSessionBlockedExecutionWork(transaction, input.claim);
+				await settleUnacceptedExecutionWork(transaction, input.claim);
+			// #3314：附件读取在原生副作用前被平台明确拒绝，初始 Turn 未被 Runtime 接受即失败
+			// （HLD §8.1）：同一事务终结本次 Execution 的待处理补充指令与 stop，会话保持可用。
+			if (
+				input.errorCode === "RUNTIME_FILE_INPUT_REJECTED" &&
+				isTurn(input.claim.operation) &&
+				input.transition.executionStatus === "failed"
+			)
+				await settleUnacceptedExecutionWork(transaction, input.claim);
 			if (
 				input.claim.operation === "conversation.turn.stop.v1" &&
 				input.status === "succeeded" &&

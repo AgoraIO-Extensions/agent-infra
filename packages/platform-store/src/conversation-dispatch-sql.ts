@@ -210,13 +210,17 @@ async function failPendingSupplements(
 }
 
 /**
- * Runtime 以 RUNTIME_SESSION_BLOCKED 明确拒绝本次 Turn 且会话转为不可用时（ADR-0029），
- * 在同一事务内收敛绑定本次 Execution 的待处理工作：会话不可用后认领会因绑定不匹配返回
- * stale，若不在此收敛，补充指令与 stop 会永久停在待处理。
+ * Runtime 明确拒绝本次初始 Turn、Execution 在被 Runtime 接受前失败时（HLD §8.1），在同一事务内
+ * 收敛绑定本次 Execution 的待处理工作：
+ * - RUNTIME_SESSION_BLOCKED 且会话转为不可用（ADR-0029）：之后的认领会因绑定不匹配返回 stale，
+ *   若不在此收敛，补充指令与 stop 会永久停在待处理；
+ * - RUNTIME_FILE_INPUT_REJECTED（#3314）：附件读取在原生副作用前被平台明确拒绝，会话保持可用，
+ *   在此收敛使补充指令得到正确的失败原因、stop 不必再绕一轮认领。
+ * 收敛内容：
  * - 补充指令：Runtime 未接受初始 Turn，按“投递失败：原回复未开始”终结；
  * - stop：目标 Execution 已失败且未被 Runtime 接受，stop 请求完成、outbox 置为成功终态。
  */
-export async function settleSessionBlockedExecutionWork(
+export async function settleUnacceptedExecutionWork(
 	transaction: Transaction,
 	claim: ConversationDispatchClaimV1,
 ) {
