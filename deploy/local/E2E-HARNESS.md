@@ -113,9 +113,14 @@ Agent 默认 Relay Key 的 `/models`，私有 API/Worker Model Catalog 的 `allo
    `PLATFORM_LOCAL_API_DIRECTORY`（该目录只读挂到 API 的 `/app/deployment`），并设置
    `PLATFORM_LOCAL_API_FILE_DEPLOYMENT_CONFIGURATION_FILE=/app/deployment/file-deployment.json`。
    配置形状见[文件存储部署与验收](../../docs/architecture/FILE-storage-deployment.md#生产部署装配)。
-2. 设置 `PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED=true`。`platform.sh` 会向 Worker values 写入
-   `platformWorker.fileExchangeOrigin=http://<release>-native-metadata-api:3000`；该 Service
-   只在 native metadata 路由启用时存在。origin 必须是精确值，不能带路径或尾斜杠。
+2. 设置 `PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED=true`，它是 `platform.sh` 的 Worker 侧文件面开关：
+   - 向 Worker values 写入 `platformWorker.fileExchangeOrigin=http://<release>-native-metadata-api:3000`；
+     该 Service 只在 native metadata 路由启用时存在。origin 必须是精确值，不能带路径或尾斜杠。
+   - 把 Compose `object-storage` 以随机别名接入 kind 网络，并创建带 ownership 标记的
+     `<release>-object-storage` Service 与 `<release>-object-storage-docker` EndpointSlice（端口 9000），
+     Worker Pod 通过 `http://<release>-object-storage:9000` 访问对象存储。未设置时不接入，`up` 会清理
+     本项目已有的接入；同名资源没有 ownership 标记，或容器已以其他别名接入 kind 时，`up`/`stop`
+     在停止任何服务前失败退出。
 3. `services[].tokenFile` 必须与 Worker 的 runtime-auth transport Secret（默认
    `platform-runtime-transport`／键 `token`，可用 `E2E_RUNTIME_TRANSPORT_SECRET` 覆盖）使用
    同一令牌，并登记允许的 Agent。Harness 不会把该令牌复制到 API 目录，避免隐式扩大 Secret 暴露面。
@@ -124,6 +129,50 @@ Agent 默认 Relay Key 的 `/models`，私有 API/Worker Model Catalog 的 `allo
 
 本地 kind 使用 kindnet，不强制执行 NetworkPolicy，因此本地文件往返通过不证明生产 egress 已配置。
 生产必须把 Platform API origin 端口加入 Agent NetworkPolicy 的 allow-list。
+
+### Worker 企微媒体装配
+
+企微长连接的入站与出站媒体需要 Worker 部署输入 `wecom.media`，字段与收发规则见
+[企微文本渠道部署「媒体」](../../docs/architecture/WECOM-text-deployment.md#媒体)。在上面的文件面之上：
+
+1. 在仓库外准备对象存储凭证文件，例如 `object-storage-credentials.json`，内容与 API
+   `storage.credentialsFile` 同形状（严格 JSON `{"accessKeyId","secretAccessKey","sessionToken"?}`），
+   可以是 API 使用的同一份访问密钥。使用部署私有的访问密钥，不要使用仓库 `docker-compose.yml`
+   中的 MinIO 本地默认值。
+2. 把该文件的绝对路径加入 `E2E_WORKER_DEPLOYMENT_FILES`。Harness 以文件名为键把它并入 Worker 配置模块
+   Secret，Worker 从 `/var/run/agent-infra/deployment/object-storage-credentials.json` 读取；凭证不写入
+   Helm values、Pod env、日志或 Git。这是本地固定环境的例外：
+   [Worker 部署模块](../platform-worker/README.md#配置模块形状)不允许把凭证放进代码 Secret，
+   生产对象存储凭证仍经部署凭证供应链提供。
+3. 私有 `configuration.mjs` 用 `createS3ObjectStorageV1` 创建 Adapter，并放进现有 `wecom` 导出：
+
+   ```javascript
+   import { readFile } from "node:fs/promises";
+   import { createS3ObjectStorageV1 } from "@agent-infra/object-storage";
+
+   const storage = createS3ObjectStorageV1({
+     endpoint: "http://agent-infra-e2e-object-storage:9000",
+     // region、bucket、prefix、maxObjectBytes 与 API file-deployment.json 的 storage 取相同值。
+     region: "us-east-1",
+     bucket: "agent-infra-files",
+     prefix: "e2e/",
+     maxObjectBytes: 26214400,
+     timeoutMs: 30000,
+     credentials: JSON.parse(
+       await readFile("/var/run/agent-infra/deployment/object-storage-credentials.json", "utf8"),
+     ),
+   });
+   export const wecom = { /* 现有身份、连接与 setup 输入 */ media: { storage } };
+   ```
+
+   `storage` 同时提供 `upload`、`inspect` 与 `download`，因此入站与出站媒体都会装配。bucket 和 prefix
+   必须与 API 一致：入站写入的文件要由 API 交给 Agent，出站读取的是 API 写入的结果文件。
+4. `maxObjectBytes` 是对象存储 Adapter 的硬上限：超过它的对象写入被拒绝，读取失败。
+   取与 API `storage.maxObjectBytes` 相同的值，并让企微 Channel 生效的 FileLimits 交集 `maxBytes`
+   不超过它。入站按 FileLimits 交集与 Driver 单文件上限（50 MiB）中较小的一个判断是否过大；
+   该值高于 `maxObjectBytes` 时，两者之间的媒体会按“文件接收失败”回复，而不是“文件超过 {上限}”。
+5. 为企微 Channel 声明 FileLimits 后执行 `deploy`：它先交付部署输入（变化时滚动 Worker），
+   再由 `platform.sh up` 在 Worker 升级前创建对象存储路由。只执行 `runtime` 不会创建该路由。
 
 ## 配置模块
 
