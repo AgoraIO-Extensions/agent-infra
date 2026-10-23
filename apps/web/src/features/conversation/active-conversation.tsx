@@ -202,6 +202,9 @@ export function ActiveConversation({
 		useState<ConnectionNoticeState>("needs-auth");
 	const [acceptedExecution, setAcceptedExecution] = useState<string>();
 	const [stopping, setStopping] = useState<string>();
+	// 「重新生成」请求进行中的提问与受理后的焦点交接（#3267 N8-1-09，见 regenerate()）。
+	const [regenerating, setRegenerating] = useState<string>();
+	const regenerateFocus = useRef<{ executionId?: string }>(undefined);
 	const [selectionDenied, setSelectionDenied] = useState(false);
 	// 本页内受理的命令 / Skill 调用；回执阶段由各自 Execution 的状态推导（CK-01）。
 	const [invocations, setInvocations] = useState<CapabilityInvocation[]>([]);
@@ -460,6 +463,16 @@ export function ActiveConversation({
 		const result = command.result;
 		if (!result || result === handled.current) return;
 		handled.current = result;
+		// 结果待核实时请求仍算进行中，「重新生成」继续保持可聚焦的禁用；其余结果结束进行中。
+		if (result.kind !== "unknown") setRegenerating(undefined);
+		if (action.current === "regenerate" && regenerateFocus.current) {
+			if (result.kind === "accepted")
+				regenerateFocus.current = {
+					executionId: result.receipt.executionId ?? undefined,
+				};
+			// 被拒绝：按钮一直挂载，焦点仍在「重新生成」上，不需要代管。
+			else if (result.kind !== "unknown") regenerateFocus.current = undefined;
+		}
 		if (
 			result.kind === "rejected" &&
 			(result.code === "AGENT_STARTING" || result.code === "AGENT_UPDATING")
@@ -679,10 +692,46 @@ export function ActiveConversation({
 		},
 		[command.invokeCapability, skillFiles.entries],
 	);
+	// #3267 N8-1-09：「重新生成」请求进行中，该提问的「重新生成」保持可聚焦的禁用（不随整页锁定卸载）；
+	// 受理后它随原回答换成处理中的回复卡而卸载，焦点交给新回复卡的「停止回复」（设计
+	// focusAfterRender），没有时交给输入框，再没有时交给页面标题。用户按下指针后不再代管。
+	useEffect(() => {
+		const release = () => {
+			regenerateFocus.current = undefined;
+		};
+		document.addEventListener("pointerdown", release, true);
+		return () => document.removeEventListener("pointerdown", release, true);
+	}, []);
+	useLayoutEffect(() => {
+		const target = regenerateFocus.current;
+		if (!target || !("executionId" in target)) return;
+		const focused = document.activeElement;
+		const lost = !focused || focused === document.body || !focused.isConnected;
+		const stop = [
+			...document.querySelectorAll<HTMLButtonElement>("[data-stop-execution]"),
+		].find((button) => button.dataset.stopExecution === target.executionId);
+		if (stop) {
+			regenerateFocus.current = undefined;
+			if (lost || focused?.hasAttribute("data-regenerate-execution"))
+				stop.focus();
+			return;
+		}
+		// 受理后「重新生成」还在（新回复卡尚未出现）时继续等；焦点已被移到别处时不抢。
+		if (!lost) {
+			if (!focused?.hasAttribute("data-regenerate-execution"))
+				regenerateFocus.current = undefined;
+			return;
+		}
+		regenerateFocus.current = undefined;
+		const input = composer.current?.disabled ? null : composer.current;
+		(input ?? pageRecoveryTarget())?.focus();
+	});
 	function regenerate(messageId: string) {
 		if (blocked || preparing || commandLocked || active) return;
 		if (command.regenerate(messageId)) {
 			action.current = "regenerate";
+			setRegenerating(messageId);
+			regenerateFocus.current = {};
 			setNotice("");
 		}
 	}
@@ -876,6 +925,7 @@ export function ActiveConversation({
 						onExecution={openExecution}
 						onRegenerate={regenerate}
 						canRegenerate={!blocked && !preparing && !commandLocked && !active}
+						regeneratingMessageId={commandLocked ? regenerating : undefined}
 						onResend={(text) => {
 							setDraft(text);
 							setNotice("请确认草稿后手动发送；不会自动提交。");

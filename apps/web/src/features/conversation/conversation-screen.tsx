@@ -371,10 +371,25 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		deniedCallback.current?.();
 	}, [denied, queryClient, queryKey]);
 	const agent = agentQuery.data;
+	// #3267 N8-1-10：页面在使用中（已显示 Agent 工作区）转为访问失效时，整块换成提示，原来的
+	// 焦点（发送按钮、输入框）随之卸载；焦点已落到 body 时交给页面 h1，不让读屏与 Tab 从页首重来。
+	const workspaceShown = useRef(false);
+	const deniedHeading = useRef<HTMLHeadingElement>(null);
+	useLayoutEffect(() => {
+		if (!denied) {
+			if (identityKey && agent) workspaceShown.current = true;
+			return;
+		}
+		if (!workspaceShown.current) return;
+		workspaceShown.current = false;
+		const focused = document.activeElement;
+		if (!focused || focused === document.body || !focused.isConnected)
+			deniedHeading.current?.focus();
+	}, [denied, identityKey, agent]);
 	if (denied || !identityKey || !agent)
 		return (
 			<section className="chat-layout">
-				<ConversationHeader title="对话" />
+				<ConversationHeader title="对话" headingRef={deniedHeading} />
 				{typeof denial === "object" ? (
 					// Agent 读取被拒（401/403）：与 Agent 详情同一套状态卡（P-01）。
 					<ReadFailureCard
