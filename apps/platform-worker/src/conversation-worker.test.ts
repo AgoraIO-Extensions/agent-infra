@@ -62,7 +62,10 @@ vi.mock("@agent-infra/platform-store", () => ({
 		close = mocks.wakeClose;
 	},
 }));
-vi.mock("@agent-infra/platform-core", () => ({
+vi.mock("@agent-infra/platform-core", async (importOriginal) => ({
+	ConversationRuntimeHostError: (
+		await importOriginal<typeof import("@agent-infra/platform-core")>()
+	).ConversationRuntimeHostError,
 	createConversationDispatchUseCaseV1: (dependencies: {
 		events: unknown;
 		authorization: unknown;
@@ -650,6 +653,16 @@ it("records bounded authorization and Runtime submit timings (#1561)", async () 
 	});
 	mocks.runtimeDispatch.mockRejectedValueOnce(new Error("submit lost"));
 	await expect(runtimeHost.dispatch(ids)).rejects.toThrow("submit lost");
+	// #3276：Runtime 返回的稳定错误码进入失败记录，消息不进入。
+	const { ConversationRuntimeHostError } = await import(
+		"@agent-infra/platform-core"
+	);
+	mocks.runtimeDispatch.mockRejectedValueOnce(
+		new ConversationRuntimeHostError("RUNTIME_CODEX_UNAVAILABLE", true),
+	);
+	await expect(runtimeHost.dispatch(ids)).rejects.toMatchObject({
+		code: "RUNTIME_CODEX_UNAVAILABLE",
+	});
 	expect(telemetry.record.mock.calls.map(([event]) => event)).toEqual([
 		{
 			stage: "authorization",
@@ -668,6 +681,13 @@ it("records bounded authorization and Runtime submit timings (#1561)", async () 
 			stage: "runtime",
 			outcome: "failed",
 			durationMs: expect.any(Number),
+			...ids,
+		},
+		{
+			stage: "runtime",
+			outcome: "failed",
+			durationMs: expect.any(Number),
+			protocolCode: "RUNTIME_CODEX_UNAVAILABLE",
 			...ids,
 		},
 	]);
