@@ -183,7 +183,8 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		const binding = templateBinding;
 		const runtimeDriver =
 			binding?.driver ??
-			(value.runtimeManifest.interactionMode === "platform-adapter" &&
+			(policy.runtimeAuth !== undefined &&
+			value.runtimeManifest.interactionMode === "platform-adapter" &&
 			value.runtimeManifest.protocol === "acp"
 				? "acp"
 				: undefined);
