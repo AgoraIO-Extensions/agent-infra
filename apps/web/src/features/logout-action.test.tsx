@@ -45,7 +45,10 @@ describe("LogoutAction", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
 
-		await screen.findByRole("status");
+		// #3267 N8-1-01：退出失败是操作结果，用 role="alert" 播报（原为 role="status"）。
+		expect((await screen.findByRole("alert")).textContent).toBe(
+			"退出登录失败，请重试。",
+		);
 		expect(onLoggedOut).not.toHaveBeenCalled();
 		expect(
 			(screen.getByRole("button", { name: "退出登录" }) as HTMLButtonElement)
@@ -66,7 +69,10 @@ describe("LogoutAction", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
 
-		await screen.findByRole("status");
+		// #3267 N8-1-01：退出失败是操作结果，用 role="alert" 播报（原为 role="status"）。
+		expect((await screen.findByRole("alert")).textContent).toBe(
+			"退出登录失败，请重试。",
+		);
 		expect(fetchMock).not.toHaveBeenCalled();
 		expect(onLoggedOut).not.toHaveBeenCalled();
 	});

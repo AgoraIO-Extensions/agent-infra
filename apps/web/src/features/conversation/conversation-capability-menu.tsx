@@ -371,29 +371,33 @@ export function CapabilityMenu({
 				<LoadingLine className="capability-menu-state">正在读取…</LoadingLine>
 			)}
 			{catalog.status === "error" && (
-				<div className="capability-menu-state">
-					<Alert
-						tone="danger"
-						role="alert"
-						icon={null}
-						className="capability-inline-alert"
-					>
-						目录读取失败
-					</Alert>
-					{/* 重读开始即换成读取行、按钮卸载：焦点先回到输入框（键盘触发时也不落到 body，
-					    #3269 N8-3-02）；鼠标按下时本就不离开输入框。 */}
+				<>
+					{/* 设计 .cap-picker-state + 同级 ghost「重试」：「重试」在状态行之后、左缘对齐菜单内容区，
+					    不放进带 12px 9px 内边距的状态行（#3267 N8-1-02）。 */}
+					<div className="capability-menu-state">
+						<Alert
+							tone="danger"
+							role="alert"
+							icon={null}
+							className="capability-inline-alert"
+						>
+							目录读取失败
+						</Alert>
+					</div>
 					<Button
 						type="button"
 						variant="ghost"
 						onMouseDown={(event) => event.preventDefault()}
 						onClick={() => {
+							// 重读开始即换成读取行、按钮卸载：焦点先回到输入框（键盘触发时也不落到 body，
+							// #3269 N8-3-02、#3267 N8-1-02）；鼠标按下时本就不离开输入框。
 							textarea.current?.focus();
 							catalog.retry();
 						}}
 					>
 						重试
 					</Button>
-				</div>
+				</>
 			)}
 			{(catalog.status === "unsupported" ||
 				catalog.status === "no-execution") && (

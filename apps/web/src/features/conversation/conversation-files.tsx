@@ -1,7 +1,14 @@
 import { FileLimitsV1Schema } from "@agent-infra/contracts/files";
-import { FileText, Paperclip, RotateCw, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, AlertDescription } from "../../components/ui/alert.js";
+import { Paperclip } from "lucide-react";
+import {
+	type RefObject,
+	useCallback,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
 import type { Client } from "../../pilot/generated/client/index.js";
@@ -20,10 +27,15 @@ import {
 import type { Client as ClientV2 } from "../../pilot/generated-v2/client/index.js";
 import { readAgentFileLimitsV2 } from "../../pilot/generated-v2/sdk.gen.js";
 import {
-	ConversationFileTransferError,
 	describeConversationFile,
 	uploadConversationFile,
 } from "./conversation-file-transfer.js";
+import {
+	UploadRowList,
+	uploadFailure,
+	uploadRowRetryable,
+	useUploadRows,
+} from "./conversation-upload-rows.js";
 
 type UploadStatus = "queued" | "uploading" | "available" | "failed" | "expired";
 
@@ -35,7 +47,21 @@ export type ConversationUpload = {
 	status: UploadStatus;
 	previewUrl?: string;
 	error?: string;
+	/** 失败能否原样重试；预检拒绝与内容不是 UTF-8 文本为 false（#3267）。 */
+	retryable?: boolean;
 };
+
+/** 上传前按当前会话限制拒绝的原因（PRD §12.1：上传前拒绝不符合要求的文件）。 */
+export function preflightRejection(
+	file: Pick<File, "size" | "type">,
+	limits: Pick<FileLimitsV1, "maxBytes" | "mediaTypes">,
+) {
+	if (file.size > limits.maxBytes)
+		return `文件超过 ${formatBytes(limits.maxBytes)} 限制。`;
+	if (!limits.mediaTypes.includes(file.type || "application/octet-stream"))
+		return "当前 Agent 不支持此文件类型。";
+	return undefined;
+}
 
 export type ResultFile = Extract<
 	PersistedConversationEventV1,
@@ -181,7 +207,11 @@ export function useConversationFiles({
 		async (item: ConversationUpload, fileLimits: FileLimitsV1) => {
 			const controller = new AbortController();
 			controllers.current.set(item.localId, controller);
-			updateUpload(item.localId, { status: "uploading", error: undefined });
+			updateUpload(item.localId, {
+				status: "uploading",
+				error: undefined,
+				retryable: undefined,
+			});
 			try {
 				const descriptor =
 					item.descriptor ??
@@ -201,19 +231,9 @@ export function useConversationFiles({
 				});
 			} catch (error) {
 				if (controller.signal.aborted) return;
-				const expired =
-					error instanceof ConversationFileTransferError && error.expired;
-				const content =
-					error instanceof ConversationFileTransferError &&
-					error.reason === "content";
-				updateUpload(item.localId, {
-					status: expired ? "expired" : "failed",
-					error: expired
-						? "上传授权已过期，请重试。"
-						: content
-							? "文件内容不是有效的 UTF-8 文本，与文件类型不符。"
-							: "上传失败，请重试。",
-				});
+				// 与 Skill 控制文件同一套失败分类（conversation-upload-rows）：内容不是 UTF-8 文本
+				// 是确定性失败，只给原因不给「重试」。
+				updateUpload(item.localId, uploadFailure(error));
 			} finally {
 				controllers.current.delete(item.localId);
 			}
@@ -241,32 +261,27 @@ export function useConversationFiles({
 					previewUrl,
 				};
 				setUploads((current) => [...current, item]);
-				if (
-					file.size > fileLimits.maxBytes ||
-					!fileLimits.mediaTypes.includes(
-						file.type || "application/octet-stream",
-					)
-				) {
-					setUploads((current) =>
-						current.map((entry) =>
-							entry.localId === localId
-								? {
-										...entry,
-										status: "failed",
-										error:
-											file.size > fileLimits.maxBytes
-												? `文件超过 ${formatBytes(fileLimits.maxBytes)} 限制。`
-												: "当前 Agent 不支持此文件类型。",
-									}
-								: entry,
-						),
-					);
+				const rejection = preflightRejection(file, fileLimits);
+				if (rejection) {
+					// 上传前按会话限制拒绝（PRD §12.1）：确定性失败，保留原因，不提供「重试」。
+					updateUpload(localId, {
+						status: "failed",
+						error: rejection,
+						retryable: false,
+					});
 					continue;
 				}
 				void transfer(item, fileLimits);
 			}
 		},
-		[attachmentsEnabled, conversationId, limits, refreshLimits, transfer],
+		[
+			attachmentsEnabled,
+			conversationId,
+			limits,
+			refreshLimits,
+			transfer,
+			updateUpload,
+		],
 	);
 
 	const remove = useCallback((localId: string) => {
@@ -281,17 +296,27 @@ export function useConversationFiles({
 	const retry = useCallback(
 		(localId: string) => {
 			const item = uploads.find((entry) => entry.localId === localId);
-			if (!item || (item.status !== "failed" && item.status !== "expired"))
-				return;
+			if (!item || !uploadRowRetryable(item)) return;
 			void (async () => {
 				const fileLimits =
 					item.status === "expired"
 						? await refreshLimits()
 						: (limits ?? (await refreshLimits()));
-				if (fileLimits) await transfer(item, fileLimits);
+				if (!fileLimits) return;
+				// 授权过期后重读的限制可能已经不接受这个文件：按预检原因停下，不再重试。
+				const rejection = preflightRejection(item.file, fileLimits);
+				if (rejection) {
+					updateUpload(localId, {
+						status: "failed",
+						error: rejection,
+						retryable: false,
+					});
+					return;
+				}
+				await transfer(item, fileLimits);
 			})();
 		},
-		[limits, refreshLimits, transfer, uploads],
+		[limits, refreshLimits, transfer, updateUpload, uploads],
 	);
 
 	const readResultFile = useCallback(
@@ -369,6 +394,12 @@ export function useConversationFiles({
 	};
 }
 
+/**
+ * 「会话文件」折叠条内的附件区（#3267）：导出稿只画了收起摘要与两行示例，限制、读取中、
+ * 不可用、拒绝原因与缩略图以 docs/development/web-ui.md「对话会话文件附件」为准。与 Skill
+ * 控制文件同一套规则：不能上传时只有一行说明；可上传时为「添加附件」与一行限制说明（静态，
+ * 不是 live region）；文件行、播报与动作后的焦点共用 conversation-upload-rows。
+ */
 export function ConversationFilePicker({
 	attachmentsEnabled,
 	limits,
@@ -377,6 +408,7 @@ export function ConversationFilePicker({
 	onSelect,
 	onRemove,
 	onRetry,
+	fallbackFocus,
 }: {
 	attachmentsEnabled: boolean;
 	limits?: FileLimitsV1;
@@ -385,106 +417,87 @@ export function ConversationFilePicker({
 	onSelect: (files: readonly File[]) => void;
 	onRemove: (localId: string) => void;
 	onRetry: (localId: string) => void;
+	/** 移除后「添加附件」不可用时的焦点去处（对话输入框），不让焦点落到 body。 */
+	fallbackFocus?: RefObject<HTMLElement | null>;
 }) {
 	const inputRef = useRef<HTMLInputElement>(null);
+	const addRef = useRef<HTMLButtonElement>(null);
+	const limitId = useId();
+	const rows = useMemo(
+		() =>
+			uploads.map((item) => ({
+				localId: item.localId,
+				name: item.file.name,
+				status: item.status,
+				error: item.error,
+				retryable: item.retryable,
+				thumbnail: item.previewUrl,
+			})),
+		[uploads],
+	);
+	const { names, announcement, announceRemoval } = useUploadRows(rows);
 	if (!attachmentsEnabled) return null;
-	const unavailable = !limits || limitsError;
+	// 不能上传时只保留一行说明：不显示禁用的入口，也不显示此时没有意义的限制（#3259 同一规则）。
+	const notice = limitsError
+		? "文件限制暂不可用，上传入口已关闭。"
+		: !limits
+			? "正在读取文件限制…"
+			: undefined;
 	return (
-		<div className="space-y-2" data-testid="conversation-file-picker">
-			<div className="flex flex-wrap items-center gap-2">
-				<Button
-					type="button"
-					variant="outline"
-					disabled={unavailable}
-					onClick={() => inputRef.current?.click()}
-				>
-					<Paperclip aria-hidden="true" /> 添加附件
-				</Button>
-				<span className="sr-only">
-					<Input
-						ref={inputRef}
-						type="file"
-						multiple
-						tabIndex={-1}
-						aria-label="添加附件"
-						accept={limits?.mediaTypes.join(",")}
-						disabled={unavailable}
-						onChange={(event) => {
-							if (event.currentTarget.files)
-								onSelect([...event.currentTarget.files]);
-							event.currentTarget.value = "";
-						}}
-					/>
-				</span>
-				{limits ? (
-					<p className="text-muted-foreground text-xs" role="status">
+		<div className="conversation-files" data-testid="conversation-file-picker">
+			{notice || !limits ? (
+				<p className="conversation-files-notice">{notice}</p>
+			) : (
+				<div className="conversation-files-head">
+					<Button
+						ref={addRef}
+						type="button"
+						variant="outline"
+						aria-describedby={limitId}
+						onClick={() => inputRef.current?.click()}
+					>
+						<Paperclip aria-hidden="true" /> 添加附件
+					</Button>
+					<span className="sr-only">
+						<Input
+							ref={inputRef}
+							type="file"
+							multiple
+							tabIndex={-1}
+							// 与可见的「添加附件」不同名：同页不出现同名控件（N-12）。
+							aria-label="选择附件文件"
+							accept={limits.mediaTypes.join(",")}
+							onChange={(event) => {
+								if (event.currentTarget.files)
+									onSelect([...event.currentTarget.files]);
+								event.currentTarget.value = "";
+							}}
+						/>
+					</span>
+					<small id={limitId}>
 						支持 {limits.mediaTypes.join(", ")}，单文件最大{" "}
 						{formatBytes(limits.maxBytes)}
-					</p>
-				) : limitsError ? (
-					<p className="text-muted-foreground text-xs" role="status">
-						文件限制暂不可用，上传入口已关闭。
-					</p>
-				) : (
-					<p className="text-muted-foreground text-xs" role="status">
-						正在读取文件类型和大小限制…
-					</p>
-				)}
-			</div>
-			{uploads.map((item) => (
-				<div
-					key={item.localId}
-					className="flex items-center gap-2 text-sm"
-					data-file-status={item.status}
-				>
-					{item.previewUrl ? (
-						<img
-							className="size-10 rounded border object-cover"
-							src={item.previewUrl}
-							alt=""
-							aria-hidden="true"
-						/>
-					) : (
-						<FileText
-							aria-hidden="true"
-							className="size-4 text-muted-foreground"
-						/>
-					)}
-					<span className="min-w-0 flex-1 truncate">{item.file.name}</span>
-					{item.status === "uploading" && <span role="status">上传中…</span>}
-					{item.status === "available" && <span role="status">已上传</span>}
-					{(item.status === "failed" || item.status === "expired") && (
-						<>
-							{/* 上传失败是操作结果：role="alert"；行内紧凑展示，不加图标（B-10）。 */}
-							<Alert
-								tone="danger"
-								role="alert"
-								icon={null}
-								className="max-w-sm py-1"
-							>
-								<AlertDescription>{item.error}</AlertDescription>
-							</Alert>
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
-								onClick={() => onRetry(item.localId)}
-							>
-								<RotateCw aria-hidden="true" /> 重试
-							</Button>
-						</>
-					)}
-					<Button
-						type="button"
-						variant="ghost"
-						size="sm"
-						aria-label={`移除附件 ${item.file.name}`}
-						onClick={() => onRemove(item.localId)}
-					>
-						<X aria-hidden="true" />
-					</Button>
+					</small>
 				</div>
-			))}
+			)}
+			{rows.length > 0 && (
+				<UploadRowList
+					rows={rows}
+					names={names}
+					variant="card"
+					removeLabel="移除附件"
+					onRetry={onRetry}
+					onRemove={(localId, name) => {
+						// 被移除的行随即卸载：先把焦点交给「添加附件」，入口不可用时交给输入框。
+						(addRef.current ?? fallbackFocus?.current)?.focus();
+						announceRemoval(name);
+						onRemove(localId);
+					}}
+				/>
+			)}
+			<p className="sr-only" role="status">
+				{announcement}
+			</p>
 		</div>
 	);
 }

@@ -21,6 +21,8 @@ export type SkillControlFileEntry = Readonly<{
 	status: SkillControlFileStatus;
 	fileId?: string;
 	error?: string;
+	/** 失败能否原样重试；内容不是 UTF-8 文本等确定性失败为 false（#3267）。 */
+	retryable?: boolean;
 }>;
 
 type SelectableFile = Pick<File, "type" | "size">;
