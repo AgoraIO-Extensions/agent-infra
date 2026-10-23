@@ -142,3 +142,84 @@ export async function expectFocusSettled(
 	await expect(target, `${context} 完成后焦点`).toBeFocused();
 	await expectFocusHeld(target, delays, `${context} 完成后`);
 }
+
+/** 吸顶顶栏下缘与视口高度，以及 locator 当前的上下缘（视口坐标）。 */
+export async function topbarClearance(target: Locator) {
+	return target.evaluate((element) => {
+		const bar = document
+			.querySelector(".platform-topbar")
+			?.getBoundingClientRect();
+		const rect = element.getBoundingClientRect();
+		return {
+			barTop: bar?.top ?? Number.NaN,
+			barBottom: bar?.bottom ?? Number.NaN,
+			top: rect.top,
+			bottom: rect.bottom,
+			innerHeight,
+		};
+	});
+}
+
+/**
+ * 吸顶顶栏与让位规则（#3329 N10-3-02）：顶栏 sticky、高 72px（1440 与 390 相同），根滚动容器的
+ * scroll-padding-top 为顶栏高度加 16px，顶栏里的控件的滚动目标区下移同样的距离。
+ */
+export async function expectStickyTopbarClearance(page: Page) {
+	expect(
+		await page.evaluate(() => {
+			const bar = document.querySelector(".platform-topbar");
+			const control = bar?.querySelector("a, button");
+			return {
+				position: bar ? getComputedStyle(bar).position : null,
+				height: bar?.getBoundingClientRect().height,
+				padding: getComputedStyle(document.documentElement).scrollPaddingTop,
+				controlMargin: control
+					? [
+							getComputedStyle(control).scrollMarginTop,
+							getComputedStyle(control).scrollMarginBottom,
+						]
+					: null,
+			};
+		}),
+	).toEqual({
+		position: "sticky",
+		height: 72,
+		padding: "88px",
+		controlMargin: ["-88px", "88px"],
+	});
+}
+
+/**
+ * 获得焦点的控件不被吸顶顶栏遮挡（WCAG 2.2 SC 2.4.11，#3329 N10-3-02）：target 是当前焦点，整框在
+ * 顶栏下缘与视口下缘之间。调用方先把 target 滚到顶栏之下（precondition），再触发程序聚焦或 Tab。
+ */
+export async function expectFocusUnobscured(target: Locator, context: string) {
+	await expect(target, `${context} 焦点`).toBeFocused();
+	// 浏览器在聚焦的同一帧滚动；等一帧再量，不读到滚动前的位置。
+	await target.evaluate(
+		() => new Promise((resolve) => requestAnimationFrame(resolve)),
+	);
+	const box = await topbarClearance(target);
+	// 顶栏吸顶在视口顶端，没有随页面滚走。
+	expect(box.barTop, `${context} 顶栏位置`).toBe(0);
+	expect(box.top, `${context} 焦点目标上缘在顶栏之下`).toBeGreaterThanOrEqual(
+		box.barBottom - 0.5,
+	);
+	expect(box.bottom, `${context} 焦点目标下缘在视口内`).toBeLessThanOrEqual(
+		box.innerHeight + 0.5,
+	);
+}
+
+/**
+ * 不经焦点移动地滚动页面，让 target 的上缘停在视口 y 处（#3329 N10-3-02 的前置状态：把触发按钮滚到
+ * 顶栏附近，上方的字段因此在顶栏之下）。返回滚动后的位置，调用方断言前置状态确实成立。
+ */
+export async function scrollTopTo(target: Locator, y: number) {
+	await target.evaluate((element, y) => {
+		window.scrollBy({
+			top: element.getBoundingClientRect().top - y,
+			behavior: "instant",
+		});
+	}, y);
+	return topbarClearance(target);
+}

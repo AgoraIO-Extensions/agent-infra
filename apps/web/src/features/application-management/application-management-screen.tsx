@@ -215,9 +215,11 @@ export function ApplicationManagementScreen({
 					    交给「应用管理」标题而不是页面 h1，仍失败时留在按钮上（RecoveryButton，#3269 N8-3-02）。 */}
 					{state.retryable && onRetry ? (
 						<AlertAction>
+							{/* 与上方个人凭证列表的「重新加载」可能同时出现：名称带分区名，可见文字不变（D2-58，#3329 N10-3-01）。 */}
 							<RecoveryButton
 								variant="outline"
-								recoveryKey="重新加载应用"
+								recoveryKey={withObjectName("重新加载", "应用管理")}
+								aria-label={withObjectName("重新加载", "应用管理")}
 								recoveryTarget={() => document.getElementById(headingId)}
 								busy={retrying}
 								onClick={onRetry}
