@@ -64,6 +64,42 @@ describe("Platform API production assembly", () => {
 		).rejects.toThrow("Platform API deployment module is invalid");
 	});
 
+	it("accepts the deployment-owned wrapped release app contract", async () => {
+		const fixture = new URL(
+			"../../../tests/fixtures/platform-api-deployment.mjs",
+			import.meta.url,
+		).href;
+		const source = `
+			import { createPlatformApiAssemblyInput } from ${JSON.stringify(fixture)};
+			export { createPlatformApiAssemblyInput };
+			export let closeCalls = 0;
+			export const standardTemplateReleaseApp = {
+				app: {
+					fetch() { return new Response(String(this === standardTemplateReleaseApp.app), { status: 202 }); }
+				},
+				async close() { if (this !== standardTemplateReleaseApp) throw new Error(); closeCalls++; }
+			};
+		`;
+		const moduleSpecifier = `data:text/javascript,${encodeURIComponent(source)}`;
+		const deployment = await import(moduleSpecifier);
+
+		const running = await startPlatformApiFromDeployment({
+			moduleSpecifier,
+			port: 0,
+			log: () => {},
+		});
+		const address = running.server.address();
+		if (!address || typeof address === "string")
+			throw new Error("Platform API did not bind a TCP port");
+		const response = await fetch(
+			`http://127.0.0.1:${address.port}/internal/ops/standard-template-releases/test`,
+		);
+		expect(response.status).toBe(202);
+		expect(await response.text()).toBe("true");
+		await createPlatformApiShutdown(running)();
+		expect(deployment.closeCalls).toBe(1);
+	});
+
 	it.each([
 		["factory", false],
 		["factory", true],

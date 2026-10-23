@@ -58,12 +58,65 @@ interface PlatformApiDeploymentModule {
 		| PlatformApiAssemblyInput
 		| Promise<PlatformApiAssemblyInput>;
 	browserAuth?: BrowserAuthHandler;
-	standardTemplateReleaseApp?: StandardTemplateReleaseApp;
+	standardTemplateReleaseApp?:
+		| StandardTemplateReleaseApp
+		| {
+				readonly app: StandardTemplateReleaseApp;
+				readonly close?: () => Promise<void>;
+		  };
 }
 
 interface LoadedPlatformApiAssembly extends PlatformApiAssembly {
 	browserAuth?: BrowserAuthHandler;
 	standardTemplateReleaseApp?: StandardTemplateReleaseApp;
+}
+
+/**
+ * Deployment entrypoints historically returned the Hono app together with a
+ * close hook. Keep that resource owner shape at the deployment boundary while
+ * the HTTP process consumes the stable fetch/close contract.
+ */
+function normalizeStandardTemplateReleaseAppV1(
+	value: PlatformApiDeploymentModule["standardTemplateReleaseApp"],
+): StandardTemplateReleaseApp | undefined {
+	if (value === undefined) return undefined;
+	const object =
+		typeof value === "object" && value !== null
+			? (value as Record<string, unknown>)
+			: undefined;
+	const wrapped = object && "app" in object ? object : undefined;
+	const app = wrapped ? wrapped.app : value;
+	if (!app || typeof app !== "object")
+		throw new Error("Invalid standard-template release app");
+	const fetch = (app as { readonly fetch?: unknown }).fetch;
+	const appClose = (app as { readonly close?: unknown }).close;
+	const wrapperClose = wrapped?.close;
+	if (
+		typeof fetch !== "function" ||
+		(appClose !== undefined && typeof appClose !== "function") ||
+		(wrapperClose !== undefined && typeof wrapperClose !== "function")
+	)
+		throw new Error("Invalid standard-template release app");
+	return {
+		fetch: (request) =>
+			(
+				fetch as (
+					this: unknown,
+					request: Request,
+				) => Response | Promise<Response>
+			).call(app, request),
+		...(typeof wrapperClose === "function"
+			? {
+					close: () =>
+						(wrapperClose as (this: unknown) => Promise<void>).call(wrapped),
+				}
+			: typeof appClose === "function"
+				? {
+						close: () =>
+							(appClose as (this: unknown) => Promise<void>).call(app),
+					}
+				: {}),
+	};
 }
 
 function runtimePort(value: string | undefined, fallback: number) {
@@ -138,6 +191,7 @@ export async function loadPlatformApiAssembly(
 		throw new Error("PLATFORM_API_DEPLOYMENT_MODULE is required");
 	}
 	let deployment: PlatformApiDeploymentModule;
+	let standardTemplateReleaseApp: StandardTemplateReleaseApp | undefined;
 	try {
 		const imported = (await import(
 			moduleSpecifier
@@ -147,15 +201,15 @@ export async function loadPlatformApiAssembly(
 			(imported.browserAuth !== undefined &&
 				(typeof imported.browserAuth?.handleRequest !== "function" ||
 					(imported.browserAuth.close !== undefined &&
-						typeof imported.browserAuth.close !== "function"))) ||
-			(imported.standardTemplateReleaseApp !== undefined &&
-				(typeof imported.standardTemplateReleaseApp?.fetch !== "function" ||
-					(imported.standardTemplateReleaseApp.close !== undefined &&
-						typeof imported.standardTemplateReleaseApp.close !== "function")))
+						typeof imported.browserAuth.close !== "function")))
 		) {
 			throw new Error();
 		}
 		deployment = imported as PlatformApiDeploymentModule;
+		standardTemplateReleaseApp = normalizeStandardTemplateReleaseAppV1(
+			deployment.standardTemplateReleaseApp,
+		);
+		deployment = { ...deployment, standardTemplateReleaseApp };
 	} catch {
 		throw new Error("Platform API deployment module is invalid");
 	}
@@ -189,7 +243,7 @@ export async function loadPlatformApiAssembly(
 		dependencies: assembly.dependencies,
 		readResourceSnapshot: assembly.readResourceSnapshot,
 		browserAuth: deployment.browserAuth,
-		standardTemplateReleaseApp: deployment.standardTemplateReleaseApp,
+		standardTemplateReleaseApp,
 		async close() {
 			try {
 				await assembly.close();
