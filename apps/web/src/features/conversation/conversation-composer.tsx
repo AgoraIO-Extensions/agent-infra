@@ -163,7 +163,7 @@ export function ConversationComposer({
 			/>
 			<CapabilitySelection capability={capability} />
 			{skillSelected && skillControlFiles && (
-				<SkillControlFilePicker {...skillControlFiles} />
+				<SkillControlFilePicker {...skillControlFiles} textarea={textarea} />
 			)}
 			<Label className="sr-only" htmlFor={composerId}>
 				消息

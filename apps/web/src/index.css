@@ -1689,6 +1689,76 @@
 	width: auto;
 	margin: 8px 12px 0;
 }
+/* Skill 控制文件（#3259）：导出稿暂无此区块（待设计回写），结构、尺寸与状态见 web-ui.md
+   「对话 Skill 控制文件」。与已选 Skill 卡、错误行同一套内缩，字号与 Skill 卡同级。 */
+.skill-control-files {
+	margin: 8px 12px 0;
+	font-size: 12px;
+	line-height: 1.5;
+}
+.skill-control-files-head,
+.skill-control-file {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+}
+.skill-control-files-head > div,
+.skill-control-file-copy {
+	flex: 1;
+	min-width: 0;
+}
+.skill-control-files strong {
+	display: block;
+	font-weight: 600;
+}
+.skill-control-files small,
+.skill-control-files-notice {
+	display: block;
+	color: var(--muted-ink);
+	font-size: 11px;
+	overflow-wrap: anywhere;
+}
+/* 不可上传、限制读取中或不可用时整块只有这一行说明，字号同 Skill 卡说明与错误行。 */
+.skill-control-files-notice {
+	font-size: 12px;
+}
+.skill-control-files-head [data-slot="button"] {
+	flex: none;
+}
+.skill-control-file-list {
+	margin: 4px 0 0;
+	padding: 0;
+	list-style: none;
+}
+.skill-control-file > svg {
+	flex: none;
+	width: 14px;
+	height: 14px;
+	color: var(--muted-foreground);
+}
+.skill-control-file-name {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.composer-zone .skill-control-file .capability-inline-alert {
+	font-size: 11px;
+	line-height: 1.5;
+}
+.skill-control-files > .capability-inline-alert {
+	margin-top: 4px;
+}
+.skill-control-file [data-slot="button"] {
+	flex: none;
+}
+/* ≤767px 与已选 Skill 卡（A2-07）同为 8px 内缩：错误行与控制文件区块跟随，三者左右边缘对齐。 */
+@media (max-width: 767px) {
+	.composer-zone .capability-error,
+	.skill-control-files {
+		margin: 8px 8px 0;
+	}
+}
 /* 设计 .cap-receipt：消息流内的调用回执。 */
 .capability-receipt {
 	max-width: 760px;
