@@ -7569,3 +7569,81 @@ for (const role of ["owner", "admin"] as const)
 		);
 		await expectCleanPage(page, errors);
 	});
+
+// #3291 N9-2-04：镜像升级进行中只有「镜像升级」分区暂停（web-ui「镜像升级进行中」：页脚不变、整页字段
+// 不禁用）。页脚「重启 Agent」与危险区「停止 Agent」、管理员区「停用 Agent」一致地保持可用：没有原生
+// disabled、aria-disabled，也没有禁用样式（不透明度 .48、not-allowed）；同一 Agent 的生命周期变更由服务端
+// 串行处理（工程 Spec §10.3），升级挂起期间确认重启照常提交，重启中按钮可聚焦、焦点不落到 body。两视口一致。
+test("an in-flight image upgrade leaves every lifecycle action available (#3291 N9-2-04)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const api = await fixture(page, "owner-admin");
+	api.customAgent();
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const section = page.getByRole("region", { name: "镜像升级", exact: true });
+	await section.getByLabel("新镜像引用").fill("registry.example/agent:v2");
+	const upgrade = await pinElement(
+		section.getByRole("button", { name: "升级镜像" }),
+		"upgrade-image-lifecycle",
+	);
+	api.holdNextCommand();
+	await upgrade.focus();
+	await page.keyboard.press("Enter");
+	await expect(upgrade).toHaveText("升级中…");
+	await expectFocusableBusy(upgrade, "升级镜像");
+
+	const footer = page.locator(".configuration-form-footer");
+	const restart = await pinElement(
+		footer.getByRole("button", { name: "重启 Agent", exact: true }),
+		"restart-during-upgrade",
+	);
+	const stop = page
+		.getByRole("region", { name: "停止 Agent", exact: true })
+		.getByRole("button", { name: "停止 Agent", exact: true });
+	const disable = page
+		.getByRole("region", { name: "管理员操作", exact: true })
+		.getByRole("button", { name: "停用 Agent", exact: true });
+	for (const [name, button] of [
+		["重启 Agent", restart],
+		["停止 Agent", stop],
+		["停用 Agent", disable],
+	] as const) {
+		await expect(button, name).toBeEnabled();
+		await expect(button, name).not.toHaveAttribute("aria-disabled", "true");
+		expect(
+			await computed(button, ["opacity", "cursor"]),
+			`${name} 不是禁用样式`,
+		).toEqual({ opacity: "1", cursor: "pointer" });
+	}
+	// 页脚文字不变：仍是「保存配置」，不显示「保存中…」。
+	await expect(
+		footer.getByRole("button", { name: "保存配置", exact: true }),
+	).toBeVisible();
+	await expect(footer.getByText("保存中…")).toHaveCount(0);
+
+	// 升级挂起期间确认重启：照常提交，重启进行中是可聚焦的禁用。
+	await restart.focus();
+	await page.keyboard.press("Enter");
+	await page
+		.getByRole("alertdialog")
+		.or(page.getByRole("dialog"))
+		.getByRole("button", { name: "确认重启" })
+		.click();
+	await expect(restart).toHaveText("重启中…");
+	await expectFocusableBusy(restart, "重启 Agent");
+	await expect
+		.poll(() =>
+			api.commands
+				.filter(({ path }) => path.endsWith("/lifecycle"))
+				.map(({ body }) => (body as { command: string }).command),
+		)
+		.toEqual(["upgrade_custom_image", "restart"]);
+	api.release();
+	await expect(restart).toHaveText("重启 Agent");
+	await expect(upgrade).toHaveText("升级镜像");
+	await expectFocusSettled(restart, "升级与重启受理");
+	await expectNoDuplicateControls(page, "Owner 配置（镜像升级中重启，#3291）");
+	await expectCleanPage(page, errors);
+});

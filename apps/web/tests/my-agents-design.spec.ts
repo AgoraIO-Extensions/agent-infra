@@ -2121,3 +2121,241 @@ test("the application edit uses the Owner configuration model picker for default
 	);
 	await noHorizontalOverflow(page);
 });
+
+/** 动作完成后焦点不落到 body（AC-2）：多次采样。 */
+async function expectFocusOffBody(page: Page, context: string) {
+	for (const delay of [50, 300, 1000]) {
+		await page.waitForTimeout(delay);
+		expect(
+			await page.evaluate(() => document.activeElement === document.body),
+			`${context}（${delay}ms）焦点落到 body`,
+		).toBe(false);
+	}
+}
+
+// #3291 N9-2-01：部署没有登记标准模板（templates=[]）时，模板就绪列表的回退项按 PRD §4 写模板显示名
+// （Codex、Claude、OpenCode、Pi）并说明原因，不外露小写模板 ID；下拉仍禁用，提交时由字段错误说明。两视口一致。
+test("template readiness fallback names the four standard templates when the deployment has none (#3291 N9-2-01)", async ({
+	page,
+}, info) => {
+	await viewportFor(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await fixture(page, {
+		deployment: DeploymentConfigurationProjectionV2Schema.parse({
+			...deploymentConfiguration,
+			templates: [],
+		}),
+	});
+	await page.goto("/my-agents/new");
+	const readiness = page.getByRole("list", { name: "模板就绪状态" });
+	await expect(readiness.getByRole("listitem")).toHaveText([
+		"Codex：尚未登记，请联系平台管理员。",
+		"Claude：尚未登记，请联系平台管理员。",
+		"OpenCode：尚未登记，请联系平台管理员。",
+		"Pi：尚未登记，请联系平台管理员。",
+	]);
+	await expect(readiness).not.toContainText(/\b(?:codex|claude|opencode|pi)：/);
+	const template = page.getByRole("combobox", { name: "标准模板" });
+	await expect(template).toBeDisabled();
+	await expect(template).toContainText("选择标准模板");
+	await page.getByLabel("Agent 名称", { exact: true }).fill("客户支持助理");
+	await page
+		.getByLabel("用途说明", { exact: true })
+		.fill("面向支持团队的内部知识问答。");
+	const submit = page.getByRole("button", { name: "提交审批", exact: true });
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	const error = page.locator("#application-template-id-error");
+	await expect(error).toHaveText(
+		"当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。",
+	);
+	await expectFocusOffBody(page, "没有标准模板时提交");
+	await expect(page.locator("#main-content")).not.toContainText(
+		/\b(?:codex|claude|opencode|pi)：/,
+	);
+	await expectCleanPage(page, pageErrors);
+	await expectNoDuplicateControls(
+		page,
+		"/my-agents/new（没有标准模板，#3291）",
+	);
+	await noHorizontalOverflow(page);
+});
+
+// #3291 N9-2-02：修改申请「默认 Key 管理模型」的选择器字段错误与 Key 字段的拦截错误、申请表单其余字段
+// 一样是 polite（web-ui「申请与 Owner 配置的补充状态」），不是 role=alert；提交被拦下时页面没有 alert
+// 打断播报，焦点留在 Key 输入框。已选模型没有推理档位与没有选模型两种问题一致。两视口一致。
+for (const problem of ["no_model", "no_reasoning_level"] as const)
+	test(`an application edit announces the Key picker problem politely beside the Key error (${problem}, #3291 N9-2-02)`, async ({
+		page,
+	}, info) => {
+		await viewportFor(page, info.project.name === "mobile");
+		const pageErrors = trackPageErrors(page);
+		const base = application({ agentId: "agent-pilot-1" });
+		await fixture(page, {
+			// 当前模型就是 Key 可见的候选：选择器预先勾选它，取消后才是「改动过的」选择问题。
+			applications: [
+				application({
+					agentId: "agent-pilot-1",
+					configuration: {
+						...base.configuration,
+						modelOptions: [
+							{
+								optionId: "endpoint-primary:gpt-5",
+								modelId: "gpt-5",
+								displayName: "gpt-5",
+								reasoningLevels: ["medium", "high"],
+							},
+						],
+						defaultModelOptionId: "endpoint-primary:gpt-5",
+						defaultReasoningLevel: "medium",
+					},
+				}),
+			],
+			defaultRelayKeyCandidates: [
+				{
+					endpointId: "endpoint-primary",
+					modelId: "gpt-5",
+					displayName: "gpt-5",
+					reasoningLevels: ["medium", "high"],
+				},
+			],
+		});
+		await page.goto("/my-agents/application-browser-1/edit");
+		await page.getByRole("checkbox", { name: "修改模型配置" }).click();
+		const keyInput = page.getByLabel("Agent 默认 Relay Key", { exact: true });
+		await keyInput.fill("synthetic-relay-key");
+		await page.getByRole("button", { name: "检查可用模型" }).click();
+		const picker = page.locator(
+			'#application-keyless-model[data-slot="keyless-model-picker"]',
+		);
+		const model = picker.getByRole("checkbox", {
+			name: "Primary endpoint · gpt-5",
+			exact: true,
+		});
+		await expect(model).toHaveAttribute("aria-checked", "true");
+		if (problem === "no_model") await model.click();
+		else
+			for (const level of ["均衡", "高"])
+				await picker
+					.getByRole("checkbox", {
+						name: `${level}：Primary endpoint · gpt-5`,
+						exact: true,
+					})
+					.click();
+		const pickerError = picker.locator('[data-slot="field-error"]');
+		await expect(pickerError).toHaveText(
+			problem === "no_model"
+				? "至少选择一个模型。"
+				: "每个已选模型至少保留一个推理档位。",
+		);
+		await expect(pickerError).toHaveAttribute("aria-live", "polite");
+		await expect(pickerError).not.toHaveAttribute("role", /.*/);
+		await expectPublicFieldError(page, pickerError);
+
+		const submit = page.getByRole("button", { name: "修改申请", exact: true });
+		await submit.focus();
+		await page.keyboard.press("Enter");
+		const keyError = page.locator("#application-default-relay-key-error");
+		await expect(keyError).toHaveText(
+			"请在下方选好模型（至少一个模型，每个模型至少一个推理档位）。",
+		);
+		await expect(keyError).toHaveAttribute("aria-live", "polite");
+		await expect(page.locator("#main-content").getByRole("alert")).toHaveCount(
+			0,
+		);
+		await expectFocusSettled(keyInput, "修改申请模型选择拦截");
+		await expectCleanPage(page, pageErrors);
+		await expectNoDuplicateControls(
+			page,
+			`/my-agents/:id/edit（选择器字段错误 ${problem}，#3291）`,
+		);
+		await noHorizontalOverflow(page);
+	});
+
+// #3291 N9-2-03：修改「自有交互入口 · 由平台校验」的申请时部署未启用平台身份入口（ACTION_UNAVAILABLE）。
+// 已有申请不能更改入口身份：顶部提示不再引导「检查字段后重试」，改为提示新建申请，焦点移到这条提示
+// （只读的入口身份下拉不是焦点目标），字段下的说明与之一致；未修改时再次提交被拦下，焦点回到提示。
+// 创建申请仍按 #3034 聚焦入口身份下拉（management.spec.ts）。两视口一致。
+test("an edited platform identity application that the deployment cannot serve points to a new application (#3291 N9-2-03)", async ({
+	page,
+}, info) => {
+	await viewportFor(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const base = application({
+		status: "rejected",
+		decision: { decidedAt: "2026-09-07T00:00:00Z", reason: "请调整后重提" },
+	});
+	await fixture(page, {
+		applications: [
+			application({
+				status: "rejected",
+				decision: base.decision,
+				source: {
+					kind: "custom",
+					imageReference: "registry.example/agents/release:v1",
+					interactionMode: "self-managed",
+					identityResponsibility: "platform-managed",
+				},
+				configuration: {
+					...base.configuration,
+					modelOptions: [],
+					defaultModelOptionId: null,
+					defaultReasoningLevel: null,
+				},
+			}),
+		],
+	});
+	let rejected = 0;
+	await page.route(
+		"**/api/v2/agent-applications/application-browser-1",
+		async (route) => {
+			if (route.request().method() !== "PUT") return route.fallback();
+			rejected += 1;
+			await route.fulfill({
+				status: 409,
+				json: {
+					schemaVersion: 1,
+					code: "ACTION_UNAVAILABLE",
+					message: "Controlled identity entry rejection",
+					retryable: false,
+					traceId: "trace-identity-entry",
+				},
+			});
+		},
+	);
+	await page.goto("/my-agents/application-browser-1/edit");
+	const identity = page.getByRole("combobox", { name: "入口身份校验" });
+	await expect(identity).toContainText("由平台校验");
+	const submit = page.getByRole("button", {
+		name: "修改并重新提交",
+		exact: true,
+	});
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	const main = page.locator("#main-content");
+	const alert = main.locator(".application-form-alert");
+	await expect(alert).toHaveText(
+		"当前部署不支持此申请的入口身份校验，请新建申请。",
+	);
+	await expect(alert).toHaveAttribute("role", "alert");
+	await expect(main.getByText(/检查字段后重试/)).toHaveCount(0);
+	await expectFocusSettled(alert, "修改申请入口身份不可用");
+	await expect(
+		page.locator("#application-identity-responsibility-error"),
+	).toHaveText(
+		"当前部署未启用平台身份入口。已有申请不能更改入口身份校验，请新建申请并选择「由自有入口校验」。",
+	);
+	await expect(identity).toHaveAttribute("aria-invalid", "true");
+	await expect(identity).toBeDisabled();
+	// 未修改时再次提交不发请求，焦点回到顶部提示。
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusSettled(alert, "修改申请入口身份不可用（再次提交）");
+	expect(rejected).toBe(1);
+	await expectCleanPage(page, pageErrors);
+	await expectNoDuplicateControls(
+		page,
+		"/my-agents/:id/edit（入口身份不可用，#3291）",
+	);
+	await noHorizontalOverflow(page);
+});

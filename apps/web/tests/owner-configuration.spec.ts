@@ -2756,3 +2756,45 @@ test("template-limited name selects ask to choose a name instead of typing one (
 	expect(api.commands).toEqual([]);
 	await expectCleanPage(page, pageErrors);
 });
+
+// #3291 N9-2-05：替换默认 Key 弹窗里新 Key 不能调用部分当前模型时，上方 warn「新的 Key 不能调用部分当前
+// 模型」已列出会被移除的模型；重新选择模型后选择器不再追加「保存后会移除这些模型」（弹窗动作是「校验并
+// 替换」，也不是保存）。弹窗内只有这一条提示，焦点不落到 body。两视口一致。
+test("re-selecting models in the default Key dialog keeps only the dialog's own warning (#3291 N9-2-05)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const api = await ownerConfigFixture(page, { keySet: true });
+	api.checkReturns([candidates.mini]);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await page.getByRole("button", { name: "替换默认 Key" }).click();
+	const dialog = page.getByRole("dialog", {
+		name: "替换 Agent 默认 Relay Key",
+	});
+	await dialog.getByLabel("新的 Relay Key").fill("synthetic-new-key");
+	const submit = dialog.getByRole("button", { name: "校验并替换" });
+	await submit.click();
+	const warning = dialog.locator('[data-slot="alert"][data-tone="warn"]');
+	await expect(warning).toHaveCount(1);
+	await expect(warning).toContainText("新的 Key 不能调用部分当前模型");
+	await expect(warning).toContainText("Primary model");
+	const mini = dialog.getByRole("checkbox", {
+		name: "Relay · Internal · gpt-5-mini",
+		exact: true,
+	});
+	await mini.focus();
+	await page.keyboard.press("Space");
+	await expect(mini).toHaveAttribute("aria-checked", "true");
+	await expect(submit).not.toHaveAttribute("aria-disabled", "true");
+	await expect(dialog.getByText(/会移除这些模型/)).toHaveCount(0);
+	await expect(dialog.locator('[data-slot="alert"]')).toHaveCount(1);
+	await expect(dialog.getByRole("status")).toHaveCount(1);
+	await expectFocusSettled(mini, "替换默认 Key 弹窗重新选择模型");
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
+	// 确认后仍只提交 Key 与新选择（既有用例覆盖请求体），这里只确认没有额外写入。
+	expect(api.commands.map(({ path }) => path)).toEqual([
+		"/api/v2/agents/agent-pilot-1/default-relay-key/display-candidates",
+	]);
+});
