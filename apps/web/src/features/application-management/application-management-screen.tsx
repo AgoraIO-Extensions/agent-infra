@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LoadingLine } from "@/components/ui/spinner";
 import { Timestamp } from "@/components/ui/timestamp";
+import { revealAndFocus } from "@/hooks/use-result-focus";
 import { withObjectName } from "@/lib/accessible-name";
 import type { ApplicationMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -31,6 +32,7 @@ import {
 	DirectoryReadAlert,
 	useDirectoryNames,
 } from "../directory-names.js";
+import { RecoveryButton } from "../recovery-button.js";
 import { ApplicationCredentialResult } from "./application-credential-result.js";
 import type {
 	ApplicationCredentialRequest,
@@ -45,6 +47,8 @@ export type ApplicationManagementViewState =
 type ApplicationManagementScreenProps = {
 	state: ApplicationManagementViewState;
 	onRetry?: () => void;
+	/** 应用重读进行中：「重新加载」保持可聚焦的禁用（读取失败作为数据返回，提示在重读期间保留）。 */
+	retrying?: boolean;
 	onOpenApplication?: (applicationId: string) => void;
 	onRegister?: (name: string) => Promise<ApplicationMetadataV1>;
 	onDisable?: (applicationId: string) => Promise<ApplicationMetadataV1>;
@@ -84,6 +88,7 @@ function unavailableMessage(
 export function ApplicationManagementScreen({
 	state,
 	onRetry,
+	retrying = false,
 	onOpenApplication,
 	onRegister,
 	onDisable,
@@ -101,6 +106,24 @@ export function ApplicationManagementScreen({
 	// 注册进行中「注册应用」是可聚焦的禁用（#3242 K7-02）；注册成功后表单随状态切换卸载，
 	// 焦点交给新应用详情的应用名标题（D2-59），不落到 body。
 	const focusTitleAfterRegister = useRef(false);
+	// 「签发应用凭证」失败的 actionError 在分区顶部，表单与按钮在下方：失败提示出现后滚入视口并接过
+	// 焦点；staleError 是签发前已显示的失败（#3269 N8-3-09）。
+	const actionAlert = useRef<HTMLDivElement>(null);
+	const pendingIssueReveal = useRef<{ staleError: unknown } | null>(null);
+	useEffect(() => {
+		const pending = pendingIssueReveal.current;
+		if (!pending || !actionError || actionError === pending.staleError) return;
+		pendingIssueReveal.current = null;
+		revealAndFocus(actionAlert.current);
+	}, [actionError]);
+	const issueCredential: typeof onIssueCredential = onIssueCredential
+		? async (input) => {
+				pendingIssueReveal.current = { staleError: actionError };
+				const result = await onIssueCredential(input);
+				pendingIssueReveal.current = null;
+				return result;
+			}
+		: undefined;
 
 	async function submitRegistration(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -131,9 +154,12 @@ export function ApplicationManagementScreen({
 
 			{actionError ? (
 				<Alert
+					ref={actionAlert}
+					tabIndex={-1}
 					tone="danger"
 					role="alert"
 					icon={<AlertCircle aria-hidden="true" />}
+					className="action-reveal"
 				>
 					<AlertDescription>
 						{errorMessage(actionError, "应用操作失败，请稍后重试。")}
@@ -182,12 +208,20 @@ export function ApplicationManagementScreen({
 			{state.kind === "unavailable" ? (
 				<Alert tone="danger" role="alert">
 					<AlertDescription>{unavailableMessage(state)}</AlertDescription>
+					{/* 重读期间失败提示保留、按钮可聚焦地禁用；恢复后提示与按钮卸载：本分区在页面底部，焦点
+					    交给「应用管理」标题而不是页面 h1，仍失败时留在按钮上（RecoveryButton，#3269 N8-3-02）。 */}
 					{state.retryable && onRetry ? (
 						<AlertAction>
-							<Button variant="outline" type="button" onClick={onRetry}>
+							<RecoveryButton
+								variant="outline"
+								recoveryKey="重新加载应用"
+								recoveryTarget={() => document.getElementById(headingId)}
+								busy={retrying}
+								onClick={onRetry}
+							>
 								<RefreshCw aria-hidden="true" data-icon="inline-start" />
 								重新加载
-							</Button>
+							</RecoveryButton>
 						</AlertAction>
 					) : null}
 				</Alert>
@@ -260,7 +294,7 @@ export function ApplicationManagementScreen({
 						return pendingFocus;
 					}}
 					isDisabling={isDisabling}
-					onIssueCredential={onIssueCredential}
+					onIssueCredential={issueCredential}
 					isIssuingCredential={isIssuingCredential}
 				/>
 			) : null}
@@ -475,7 +509,10 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 					</dd>
 				</dl>
 			</div>
-			<DirectoryReadAlert names={[userNames]} />
+			<DirectoryReadAlert
+				names={[userNames]}
+				recoveryTarget={() => title.current}
+			/>
 			{credentialResult ? (
 				<ApplicationCredentialResult
 					headingRef={resultHeading}

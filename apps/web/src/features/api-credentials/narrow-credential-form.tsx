@@ -169,9 +169,11 @@ export function NarrowCredentialForm({
 				</p>
 				<div className="grid gap-2 sm:grid-cols-2">
 					{credential.scopes.map((scope) => (
+						// 与同页「签发个人凭证」的权限选项同一外观：10px 圆角、14px 文字、悬停 muted 底色，
+						// 右侧为权限码（#3269 N8-3-10）。
 						<div
 							key={scope}
-							className="flex min-h-11 items-center gap-2 rounded border px-3 py-2"
+							className="flex min-h-11 items-center gap-2 rounded-[10px] border px-3 py-2 text-sm hover:bg-muted"
 						>
 							{/* 签发区与其他已展开的收窄表单也有同名权限复选框：名称为「{权限}：{凭证标识}」
 							    （C2-19、N-12），取自下方隐藏文本，以可见标签文字开头；可见文字与点击标签切换不变。 */}
@@ -202,6 +204,9 @@ export function NarrowCredentialForm({
 									credential.credentialId,
 								)}
 							</span>
+							<code className="ml-auto text-[11px] text-muted-foreground">
+								{scope}
+							</code>
 						</div>
 					))}
 				</div>

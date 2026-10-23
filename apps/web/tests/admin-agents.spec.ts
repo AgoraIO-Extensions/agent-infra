@@ -1462,3 +1462,54 @@ test("row disable keeps focus on the pending trigger after confirmation, then on
 	await expectNoDuplicateControls(page, "Agent 管理（行内停用，K7-02）");
 	await expectCleanPage(page, errors);
 });
+
+// #3269 N8-3-02：无匹配空态「清除筛选」清除后空态随之卸载，焦点回到「搜索 Agent」搜索框（同 Skill Hub）；
+// 公共「重新读取目录」是 RecoveryButton，恢复后提示卸载，焦点到页面 h1。采样都不落到 body。
+test("clearing filters returns focus to the search box and rereading the directory lands on the h1 (N8-3-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	let failedDirectoryReads = 1;
+	await page.route("**/api/v2/directory/search?**", (route) => {
+		if (failedDirectoryReads === 0) return route.fallback();
+		failedDirectoryReads -= 1;
+		return route.fulfill({
+			status: 503,
+			json: {
+				schemaVersion: 1,
+				code: "DEPENDENCY_UNAVAILABLE",
+				message: "Controlled directory failure",
+				retryable: true,
+				traceId: "trace-admin-directory",
+			},
+		});
+	});
+	await page.goto("/admin/agents?q=no-such-agent");
+	const main = page.locator("main");
+	await expect(main.getByText("未找到匹配的 Agent。")).toBeVisible();
+	const clear = main.getByRole("button", { name: "清除筛选" });
+	await clear.focus();
+	await page.keyboard.press("Enter");
+	await expect(main.getByText("未找到匹配的 Agent。")).toHaveCount(0);
+	const search = main.getByRole("searchbox", { name: "搜索 Agent" });
+	await expect(search).toHaveValue("");
+	await expectFocusSettled(search, "清除筛选后", [30, 150, 400, 1000]);
+
+	const directoryAlert = main
+		.getByRole("alert")
+		.filter({ hasText: "目录暂时无法读取" });
+	await expect(directoryAlert).toBeVisible();
+	const reread = directoryAlert.getByRole("button", { name: "重新读取目录" });
+	await reread.focus();
+	await page.keyboard.press("Enter");
+	await expect(directoryAlert).toHaveCount(0);
+	await expectFocusSettled(
+		main.getByRole("heading", { level: 1 }),
+		"重新读取目录后",
+		[30, 150, 400, 1000],
+	);
+	await expectNoDuplicateControls(page, "Agent 管理（N8-3-02）");
+	await expectCleanPage(page, errors);
+});

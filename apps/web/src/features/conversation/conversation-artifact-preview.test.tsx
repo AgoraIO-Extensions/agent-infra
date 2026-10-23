@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	ArtifactPreviewDialog,
@@ -76,6 +76,42 @@ describe("conversation artifact preview", () => {
 		expect(screen.getByText("+1 新增")).toBeTruthy();
 		expect(screen.getByText("-1 删除")).toBeTruthy();
 		expect(screen.getByRole("button", { name: "下载" })).toBeTruthy();
+	});
+
+	// #3269 N8-3-02：「重新读取」随失败提示卸载后焦点交给预览弹窗，仍失败时回到按钮，不落到 body。
+	it("hands focus to the preview dialog while rereading and back to the retry on failure", async () => {
+		const onRetry = vi.fn();
+		const props = {
+			file: file(),
+			content: null,
+			open: true,
+			onOpenChange: vi.fn(),
+			onRetry,
+			onDownload: vi.fn(),
+		};
+		const view = render(
+			<ArtifactPreviewDialog
+				{...props}
+				loading={false}
+				error="文件读取失败，请重试。"
+			/>,
+		);
+		const retry = await screen.findByRole("button", { name: "重新读取" });
+		retry.focus();
+		fireEvent.click(retry);
+		expect(onRetry).toHaveBeenCalledOnce();
+		view.rerender(<ArtifactPreviewDialog {...props} loading />);
+		expect(document.activeElement).toBe(screen.getByRole("dialog"));
+		view.rerender(
+			<ArtifactPreviewDialog
+				{...props}
+				loading={false}
+				error="文件读取失败，请重试。"
+			/>,
+		);
+		expect(document.activeElement).toBe(
+			screen.getByRole("button", { name: "重新读取" }),
+		);
 	});
 
 	it("shows a local image thumbnail before upload completes", () => {

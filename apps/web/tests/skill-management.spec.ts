@@ -1685,3 +1685,169 @@ for (const decision of ["驳回", "批准发布"] as const)
 		}
 		await expectCleanPage(page, errors);
 	});
+
+// #3269 N8-3-04：「创建项目」受理后进入新项目，编辑器按项目重新挂载：进行中焦点在「正在保存…」，挂载后
+// 先到「项目信息」标题（内容读取中），读到内容后到 SKILL.md 文本框（导出稿 create-project），采样都不
+// 落到 body；就地反馈「Skill 项目已创建：…」随重挂载保留。
+test("creating a project keeps focus off body, lands on SKILL.md and keeps the in-place result (N8-3-04)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.route("**/api/v2/skills/projects", (route) =>
+		route.request().method() === "POST"
+			? route.fulfill({
+					status: 201,
+					json: { ...project, projectId: "draft", name: "draft" },
+				})
+			: route.fallback(),
+	);
+	await page.goto("/skills/manage/new");
+	const main = page.locator("#main-content");
+	await main.getByLabel("包名称", { exact: true }).fill("draft");
+	const create = await pinElement(
+		main.getByRole("button", { name: "创建项目" }),
+		"create-project",
+	);
+	const creating = await holdRequests(page, "POST", "/api/v2/skills/projects");
+	const reading = await holdRequests(
+		page,
+		"GET",
+		"/api/v2/skills/projects/draft/content",
+	);
+	await create.focus();
+	await page.keyboard.press("Enter");
+	await expect(create).toHaveText("正在保存…");
+	await expectFocusableBusy(create, "创建项目");
+	creating.release();
+	await expect(page).toHaveURL(/[?&]project=draft(?:&|$)/);
+	await expect(main.getByText("正在读取 Skill 内容…")).toBeVisible();
+	await expectFocusSettled(
+		main.getByRole("heading", { level: 2, name: "项目信息" }),
+		"创建项目后（内容读取中）",
+		[30, 150, 400, 1000],
+	);
+	reading.release();
+	await expectFocusSettled(
+		main.getByLabel("SKILL.md（任务说明）"),
+		"创建项目后",
+		[30, 150, 400, 1000, 2000],
+	);
+	await expect(
+		main.getByRole("status").filter({
+			hasText:
+				"Skill 项目已创建：draft。可以继续编辑内容并发布，或导入第一个版本。",
+		}),
+	).toBeVisible();
+	await expectNoDuplicateControls(page, "创建与发布（创建项目后，N8-3-04）");
+	await expectCleanPage(page, errors);
+});
+
+// #3269 N8-3-05 / N8-3-06 / N8-3-07：配套文件「文件内容」高度固定 180px、长内容框内滚动（导出稿
+// .skill-content-text）；多张文件卡的目录、文件名、文件内容与移除以文件路径为对象名，同路径按出现顺序
+// 加「（第 N 次）」，同页没有同名控件；合计超限错误在移除文件后随草稿重算清除，之后的版本号错误单独出现。
+test("companion files scroll inside a 180px box, carry their path in control names and clear stale total errors (N8-3-05, N8-3-06, N8-3-07)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/skills/manage/new?project=release-notes");
+	const main = page.locator("#main-content");
+	await expect(
+		main.getByRole("heading", { level: 2, name: "Skill 内容" }),
+	).toBeVisible();
+	await main.getByLabel("SKILL.md（任务说明）").fill("# release-notes\n");
+	const add = main.getByRole("button", { name: "添加文本文件" });
+	await add.click();
+	await add.click();
+	// 两张都未命名：同路径按出现顺序区分。
+	for (const order of [1, 2]) {
+		const label = `scripts/未命名（第 ${order} 次）`;
+		await expect(
+			main.getByRole("combobox", { name: `目录：${label}`, exact: true }),
+		).toHaveCount(1);
+		await expect(
+			main.getByRole("textbox", { name: `文件名：${label}`, exact: true }),
+		).toHaveCount(1);
+		await expect(
+			main.getByRole("textbox", { name: `文件内容：${label}`, exact: true }),
+		).toHaveCount(1);
+		await expect(
+			main.getByRole("button", { name: `移除文件：${label}`, exact: true }),
+		).toHaveCount(1);
+	}
+	await expectNoDuplicateControls(page, "两张未命名的配套文件（N8-3-06）");
+	const cards = main.locator("fieldset.skill-content-file");
+	await cards.nth(0).getByLabel("文件名").fill("run.sh");
+	await cards.nth(1).getByLabel("文件名").fill("collect.sh");
+	const content = main.getByRole("textbox", {
+		name: "文件内容：scripts/run.sh",
+		exact: true,
+	});
+	await expect(content).toBeVisible();
+	// 可见标签不变。
+	await expect(
+		cards.nth(0).getByText("文件内容", { exact: true }),
+	).toBeVisible();
+	await expectNoDuplicateControls(page, "两张已命名的配套文件（N8-3-06）");
+
+	// N8-3-05：40 行文本时仍为 180px，内容在框内滚动；可纵向拉伸。
+	await content.fill(
+		Array.from({ length: 40 }, (_, line) => `echo line ${line}`).join("\n"),
+	);
+	expect(
+		await content.evaluate((element) => {
+			const style = getComputedStyle(element);
+			return {
+				height: element.getBoundingClientRect().height,
+				scrolls: element.scrollHeight > element.clientHeight,
+				resize: style.resize,
+				overflowY: style.overflowY,
+			};
+		}),
+	).toEqual({
+		height: 180,
+		scrolls: true,
+		resize: "vertical",
+		overflowY: "auto",
+	});
+
+	// N8-3-07：三份 200 KB 文本使合计超过 512 KB；移除一份后限额行与错误一致，错误清除。
+	await main.getByLabel("上传文件到 assets/").setInputFiles(
+		[1, 2, 3].map((index) => ({
+			name: `notes-${index}.txt`,
+			mimeType: "text/plain",
+			buffer: Buffer.from("a".repeat(200 * 1024)),
+		})),
+	);
+	await expect(cards).toHaveCount(5);
+	const assetContent = main.getByRole("textbox", {
+		name: "文件内容：assets/notes-1.txt",
+		exact: true,
+	});
+	expect(
+		(await assetContent.boundingBox())?.height,
+		"200 KB 文本的文件内容框高度",
+	).toBe(180);
+	await main.getByRole("button", { name: "保存草稿" }).click();
+	const total = main.getByText("所有文件合计不能超过 512 KB。", {
+		exact: true,
+	});
+	await expect(total).toBeVisible();
+	await main
+		.getByRole("button", { name: "移除文件：assets/notes-3.txt", exact: true })
+		.click();
+	await expect(cards).toHaveCount(4);
+	await expect(total).toHaveCount(0);
+	await main.getByLabel("版本号").fill("-bad");
+	await main
+		.getByRole("button", { name: /^(保存并发布|发布固定版本)$/ })
+		.click();
+	await expect(main.getByRole("alert")).toHaveText([
+		"请填写版本号，例如 1.0.0；以字母或数字开头，最长 128 位。",
+	]);
+	await expectNoDuplicateControls(page, "创建与发布（N8-3-07）");
+	await expectCleanPage(page, errors);
+});

@@ -2,6 +2,7 @@ import { PersonalRelayKeyStateV1Schema } from "@agent-infra/contracts/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import {
 	expectFocusableBusy,
+	expectFocusHeld,
 	expectFocusSettled,
 	expectNoDuplicateControls,
 	holdRequests,
@@ -346,5 +347,88 @@ test("a failed save keeps focus on the disabled button instead of body (K7-02)",
 	await expect(input).toBeDisabled();
 	await expect(save).toHaveAttribute("aria-disabled", "true");
 	await expectFocusSettled(save, "替换 Key 失败");
+	await expectCleanPage(page, errors);
+});
+
+// #3269 N8-3-02：「重新读取状态」开始即清除失败提示、按钮卸载，是 RecoveryButton：读取中与恢复后焦点在
+// 页面 h1，仍失败时回到按钮，不落到 body。N8-3-08：状态未知（读取中、读取失败、写入被拒后清空投影）
+// 时分区为中性标题「个人 Key」与说明，不按未设置写「接入个人 Key」。
+test("rereading the status hands focus to the h1 and keeps a neutral section while the state is unknown (N8-3-02, N8-3-08)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	let failedReads = 1;
+	let rejectWrite = false;
+	const failure = (status: 403 | 503) => ({
+		status,
+		json: {
+			schemaVersion: 1,
+			code: status === 403 ? "AUTHORIZATION_REVOKED" : "DEPENDENCY_UNAVAILABLE",
+			message: "Controlled relay key failure",
+			retryable: status === 503,
+			traceId: "trace-relay-key-reread",
+		},
+	});
+	await page.route("**/api/v2/me/relay-key", (route) => {
+		const method = route.request().method();
+		if (method === "GET" && failedReads > 0) {
+			failedReads -= 1;
+			return route.fulfill(failure(503));
+		}
+		if (method === "PUT" && rejectWrite) return route.fulfill(failure(403));
+		return route.fallback();
+	});
+	await page.goto("/my-settings/relay-key");
+	const main = page.locator("#main-content");
+	const heading = main.getByRole("heading", {
+		level: 1,
+		name: "个人 Relay Key",
+	});
+	const form = main.getByTestId("personal-relay-key-form");
+	const title = form.getByRole("heading", { level: 2 });
+	const neutral = form.getByText("读取当前状态后才能设置、替换或撤销。");
+	const alert = form.getByRole("alert");
+	await expect(alert).toContainText("个人 Key 服务暂时不可用");
+	await expect(title).toHaveText("个人 Key");
+	await expect(neutral).toBeVisible();
+	await expect(main.getByTestId("personal-key-status")).toHaveCount(0);
+	await expect(form.getByText("接入个人 Key")).toHaveCount(0);
+
+	// 再次失败：读取中焦点在 h1，失败后回到重新出现的「重新读取状态」。
+	failedReads = 1;
+	const reread = form.getByRole("button", { name: "重新读取状态" });
+	let reading = await holdRequests(page, "GET", "/api/v2/me/relay-key");
+	await reread.focus();
+	await page.keyboard.press("Enter");
+	await expect(form.getByText("正在读取个人 Key 状态…")).toBeVisible();
+	await expect(title).toHaveText("个人 Key");
+	await expect(neutral).toBeVisible();
+	await expectFocusHeld(heading, [30, 150, 400, 1000], "重新读取状态读取中");
+	reading.release();
+	await expect(alert).toBeVisible();
+	await expectFocusSettled(reread, "重新读取状态仍失败");
+
+	// 恢复：分区回到「替换个人 Key」，焦点留在 h1。
+	reading = await holdRequests(page, "GET", "/api/v2/me/relay-key");
+	await page.keyboard.press("Enter");
+	await expectFocusHeld(heading, [30, 150, 400, 1000], "重新读取状态恢复中");
+	reading.release();
+	await expect(title).toHaveText("替换个人 Key");
+	await expect(form.getByText("当前状态：已设置 · version 3")).toBeVisible();
+	await expectFocusSettled(heading, "重新读取状态恢复后");
+
+	// 写入被拒（403）：投影清空，分区不再显示已设置，也不推断为「接入个人 Key」。
+	rejectWrite = true;
+	await page.getByLabel("Relay Key", { exact: true }).fill(syntheticKey);
+	await form.getByRole("button", { name: "替换 Key", exact: true }).click();
+	await expect(alert).toContainText("当前账号没有设置个人 Relay Key 的权限。");
+	await expect(title).toHaveText("个人 Key");
+	await expect(neutral).toBeVisible();
+	await expect(form.getByText("当前状态：已设置 · version 3")).toHaveCount(0);
+	await expect(form.getByText("接入个人 Key")).toHaveCount(0);
+	await expect(main.getByTestId("personal-key-status")).toHaveCount(0);
+	await expectNoDuplicateControls(page, "个人 Relay Key（N8-3-02）");
 	await expectCleanPage(page, errors);
 });

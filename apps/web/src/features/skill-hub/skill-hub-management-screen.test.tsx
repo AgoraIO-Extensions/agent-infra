@@ -338,7 +338,11 @@ describe("SkillEditorScreen", () => {
 			),
 		).toBeTruthy();
 		expect(onProjectsChanged).toHaveBeenCalledOnce();
-		expect(onProjectCreated).toHaveBeenCalledWith("release-notes");
+		// 进入新项目后编辑器按项目重新挂载，名称随回调交给路由以保留就地反馈（#3269 N8-3-04）。
+		expect(onProjectCreated).toHaveBeenCalledWith(
+			"release-notes",
+			"release-notes",
+		);
 	});
 
 	it("reuses the idempotency key when a write is retried", async () => {

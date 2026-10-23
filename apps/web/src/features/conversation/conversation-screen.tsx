@@ -29,6 +29,7 @@ import {
 	collectionReadFailure,
 } from "../collection-read-failure.js";
 import { ReadFailureCard } from "../page-state-card.js";
+import { RecoveryButton } from "../recovery-button.js";
 import {
 	ActiveConversation,
 	type FirstMessageHandoff,
@@ -191,9 +192,14 @@ function AgentUnavailableNotice({
 							进入 Owner 操作
 						</Link>
 					) : (
-						<Button variant="outline" onClick={onRefresh}>
+						// Agent 恢复可用后提示随之卸载：焦点交给页面 h1，不落到 body（#3269 N8-3-02）。
+						<RecoveryButton
+							variant="outline"
+							recoveryKey="刷新 Agent 状态"
+							onClick={onRefresh}
+						>
 							刷新 Agent 状态
-						</Button>
+						</RecoveryButton>
 					)}
 				</AlertAction>
 			)}

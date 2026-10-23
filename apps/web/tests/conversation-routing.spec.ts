@@ -25,6 +25,7 @@ import {
 	expectFocusableBusy,
 	expectFocusHeld,
 	expectFocusSettled,
+	expectNoDuplicateControls,
 	holdRequests,
 	pinElement,
 } from "./page-health";
@@ -2658,5 +2659,47 @@ test("loading earlier timeline content keeps focus on the pending button, then o
 		timeline.getByRole("article", { name: "受控员工的消息", exact: true }),
 		"加载更早内容",
 	);
+	await expectCleanPage(page, errors);
+});
+
+// #3269 N8-3-02：「暂时不可用」提示的「刷新 Agent 状态」是 RecoveryButton：Agent 恢复后提示随之卸载，焦点
+// 交给页面 h1；仍不可用时焦点留在按钮上。采样都不落到 body。
+test("refreshing an unavailable Agent hands focus to the h1 once it recovers (N8-3-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const fixture = await routingFixture(page);
+	await readyConversation(page, fixture.conversationId);
+	let service: "ready" | "unavailable" = "unavailable";
+	const agent = AgentProjectionV2Schema.parse({
+		...pilotFakeScenariosV2.starting.response.body,
+		agentId: fixture.agentId,
+		name: fixture.agentName,
+		managementStatus: "available",
+		serviceAvailability: "unavailable",
+	});
+	await page.route(`**/api/v2/agents/${fixture.agentId}`, (route) =>
+		route.request().method() === "GET"
+			? route.fulfill({ json: { ...agent, serviceAvailability: service } })
+			: route.fallback(),
+	);
+	await page.goto(canonical(fixture.agentId, fixture.conversationId));
+	const refresh = page.getByRole("button", { name: "刷新 Agent 状态" });
+	await expect(refresh).toBeVisible();
+	// 仍不可用：提示保留，焦点留在按钮上。
+	await refresh.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusSettled(refresh, "刷新 Agent 状态（仍不可用）");
+	// 恢复：提示与按钮卸载，焦点到 h1。
+	service = "ready";
+	await page.keyboard.press("Enter");
+	await expect(refresh).toHaveCount(0);
+	await expectFocusSettled(
+		page.getByRole("heading", { level: 1 }),
+		"刷新 Agent 状态（恢复后）",
+		[30, 150, 400, 1000],
+	);
+	await expectNoDuplicateControls(page, "对话（刷新 Agent 状态，N8-3-02）");
 	await expectCleanPage(page, errors);
 });

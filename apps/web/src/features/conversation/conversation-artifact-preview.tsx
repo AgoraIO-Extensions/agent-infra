@@ -1,5 +1,5 @@
 import { Download, FileText, Image as ImageIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
 import {
@@ -11,6 +11,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "../../components/ui/dialog.js";
+import { RecoveryButton } from "../recovery-button.js";
 import type { ResultFile } from "./conversation-files.js";
 
 const maxPreviewBytes = 1024 * 1024;
@@ -230,6 +231,7 @@ export function ArtifactPreviewDialog({
 }) {
 	const kind = file ? artifactPreviewKind(file) : "none";
 	const url = useObjectUrl(content);
+	const body = useRef<HTMLDivElement>(null);
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
@@ -246,14 +248,22 @@ export function ArtifactPreviewDialog({
 						{file?.name ?? "产物预览"}
 					</DialogTitle>
 				</DialogHeader>
-				<DialogBody>
+				<DialogBody ref={body}>
 					{loading && <p role="status">正在准备预览…</p>}
 					{error && (
 						<Alert tone="danger" className="space-y-2">
 							<AlertDescription>{error}</AlertDescription>
-							<Button variant="outline" onClick={onRetry}>
+							{/* 重读时失败提示卸载：焦点交给预览弹窗，仍失败时回到按钮（#3269 N8-3-02）。 */}
+							<RecoveryButton
+								variant="outline"
+								recoveryKey="重新读取预览"
+								recoveryTarget={() =>
+									body.current?.closest<HTMLElement>('[role="dialog"]') ?? null
+								}
+								onClick={onRetry}
+							>
 								重新读取
-							</Button>
+							</RecoveryButton>
 						</Alert>
 					)}
 					{!loading && !error && content && kind === "image" && (

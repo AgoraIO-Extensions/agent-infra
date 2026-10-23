@@ -1,4 +1,5 @@
 import { Bot, ChevronDown, RefreshCw, Settings } from "lucide-react";
+import { useRef } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -12,6 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Spinner } from "@/components/ui/spinner";
 import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
+import { RecoveryButton } from "../recovery-button.js";
 import type {
 	ModelAutosavePhase,
 	ModelSelectionValue,
@@ -52,6 +54,7 @@ export function ComposerModelControls({
 	onChoose,
 	onRetry,
 }: ComposerModelControlsProps & { compact: boolean }) {
+	const controls = useRef<HTMLDivElement>(null);
 	const option = options.find((item) => item.optionId === modelId);
 	const modelName =
 		option?.displayName ?? (modelId ? removedOption : "请选择模型");
@@ -102,6 +105,7 @@ export function ComposerModelControls({
 	);
 	return (
 		<div
+			ref={controls}
 			className="composer-model-controls"
 			data-compact={compact ? "true" : "false"}
 		>
@@ -163,17 +167,24 @@ export function ComposerModelControls({
 					<Spinner size="sm" />
 				</span>
 			) : phase === "error" ? (
-				<Button
-					type="button"
+				// 重试开始即换成保存中的 spinner、按钮卸载：焦点交给模型入口（保存中不禁用），仍失败时
+				// 回到按钮（RecoveryButton，#3269 N8-3-02）。
+				<RecoveryButton
 					variant="ghost"
 					className="model-preference-retry"
+					recoveryKey="设置未保存，点击重试"
+					recoveryTarget={() =>
+						controls.current?.querySelector<HTMLElement>(
+							".composer-setting-trigger:not(:disabled)",
+						) ?? null
+					}
 					aria-label="设置未保存，点击重试"
 					title="设置未保存，点击重试"
 					onClick={onRetry}
 				>
 					<RefreshCw aria-hidden="true" />
 					重试
-				</Button>
+				</RecoveryButton>
 			) : (
 				<span className="sr-only" role="status">
 					{saved ? "设置已保存，对下一条消息生效" : ""}

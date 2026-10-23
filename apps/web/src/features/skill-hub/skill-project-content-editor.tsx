@@ -23,7 +23,7 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
-import { withObjectName } from "@/lib/accessible-name";
+import { distinctObjectNames, withObjectName } from "@/lib/accessible-name";
 import type {
 	SkillHubProjectContentV1,
 	SkillHubProjectV1,
@@ -204,6 +204,7 @@ export function SkillProjectContentEditor({
 	before,
 	after,
 	notice,
+	consumeInitialFocus,
 }: {
 	project: SkillHubProjectV1;
 	content: SkillProjectContentState;
@@ -219,6 +220,8 @@ export function SkillProjectContentEditor({
 	after?: ReactNode;
 	/** 右栏范围选择之后的静态说明（权限不会扩大）。 */
 	notice?: ReactNode;
+	/** 内容读到、SKILL.md 文本框出现时调用一次；返回 true 时把焦点交给文本框（创建项目后进入）。 */
+	consumeInitialFocus?: () => boolean;
 }) {
 	const id = useId();
 	const toast = useToast();
@@ -257,6 +260,11 @@ export function SkillProjectContentEditor({
 		setErrors({});
 	}, [content, reload]);
 
+	useEffect(() => {
+		if (content.kind === "ready" && consumeInitialFocus?.())
+			skillMdInput.current?.focus();
+	}, [content.kind, consumeInitialFocus]);
+
 	function keyFor(scope: string, input: unknown) {
 		const fingerprint = JSON.stringify(input);
 		const previous = keys.current.get(scope);
@@ -272,6 +280,22 @@ export function SkillProjectContentEditor({
 	const totalBytes =
 		encoder.encode(draft.skillMd).byteLength +
 		draft.files.reduce((sum, file) => sum + bytesOf(file), 0);
+
+	// 数量与合计大小随草稿实时计算；已显示的错误在文件增删或内容变化后按当前草稿重算，不再满足时
+	// 清除，不留下与限额行矛盾的旧提示（#3269 N8-3-07）。
+	const totalError =
+		draft.files.length + 1 > limits.maxFiles
+			? `最多 ${limits.maxFiles} 个文件（含 SKILL.md）。`
+			: totalBytes > limits.maxTotalBytes
+				? "所有文件合计不能超过 512 KB。"
+				: undefined;
+	useEffect(() => {
+		setErrors((current) =>
+			!current.total || current.total === totalError
+				? current
+				: { ...current, total: totalError },
+		);
+	}, [totalError]);
 
 	function validateDraft() {
 		const next: typeof errors = {};
@@ -305,10 +329,7 @@ export function SkillProjectContentEditor({
 				fileErrors[file.id] = "文件不能与子目录同名。";
 		}
 		if (Object.keys(fileErrors).length) next.files = fileErrors;
-		if (draft.files.length + 1 > limits.maxFiles)
-			next.total = `最多 ${limits.maxFiles} 个文件（含 SKILL.md）。`;
-		else if (totalBytes > limits.maxTotalBytes)
-			next.total = "所有文件合计不能超过 512 KB。";
+		if (totalError) next.total = totalError;
 		setErrors((current) => ({ ...next, version: current.version }));
 		if (next.skillMd) {
 			skillMdInput.current?.focus();
@@ -502,6 +523,11 @@ export function SkillProjectContentEditor({
 		);
 
 	const fileError = (fileId: string) => errors.files?.[fileId];
+	const fileLabels = distinctObjectNames(
+		draft.files.map(
+			(file) => `${file.directory}/${file.name.trim() || "未命名"}`,
+		),
+	);
 	const shared = visibility !== "PRIVATE";
 	// 设计主按钮：仅自己为「发布固定版本」，共享范围为「提交审核」；有未保存的修改时先保存。
 	const publishLabel =
@@ -565,7 +591,12 @@ export function SkillProjectContentEditor({
 									</p>
 								) : null}
 								{draft.files.map((file, index) => {
-									const label = `${file.directory}/${file.name.trim() || "未命名"}`;
+									const label = fileLabels[index];
+									// 每张文件卡的目录、文件名、文件内容与移除都以文件路径为对象名：多个配套文件时
+									// 同页不出现同名控件；同路径（含都未命名）按出现顺序加「（第 N 次）」（D2-58、
+									// #3269 N8-3-06）。可见标签不变。
+									const name = (visible: string) =>
+										withObjectName(visible, label);
 									return (
 										<fieldset key={file.id} className="skill-content-file">
 											<legend className="sr-only">
@@ -576,6 +607,7 @@ export function SkillProjectContentEditor({
 													<Label htmlFor={`${file.id}-directory`}>目录</Label>
 													<NativeSelect
 														id={`${file.id}-directory`}
+														aria-label={name("目录")}
 														value={file.directory}
 														onChange={(event) =>
 															updateFile(file.id, {
@@ -601,6 +633,7 @@ export function SkillProjectContentEditor({
 															else fileInputs.current.delete(file.id);
 														}}
 														id={`${file.id}-name`}
+														aria-label={name("文件名")}
 														value={file.name}
 														maxLength={500}
 														autoComplete="off"
@@ -631,7 +664,8 @@ export function SkillProjectContentEditor({
 														</Label>
 														<Textarea
 															id={`${file.id}-content`}
-															className="skill-content-text"
+															aria-label={name("文件内容")}
+															className="skill-content-text skill-file-text"
 															value={file.content}
 															spellCheck={false}
 															onChange={(event) =>
@@ -653,7 +687,7 @@ export function SkillProjectContentEditor({
 												<Button
 													type="button"
 													variant="ghost"
-													aria-label={withObjectName("移除文件", label)}
+													aria-label={name("移除文件")}
 													onClick={() => {
 														setDraft({
 															...draft,

@@ -1564,3 +1564,96 @@ test("audit query, reset and pagination keep focus on the pending button and han
 	await expectNoDuplicateControls(page, "我的执行审计（K7-02）");
 	await expectCleanPage(page, errors);
 });
+
+// #3269 N8-3-02：列表读取失败后的「重试」是 RecoveryButton。没有已读数据时重读先换成读取行、按钮卸载，
+// 焦点交给页面 h1，仍失败时回到重新出现的「重试」；已有数据时失败提示保留，「重试」是可聚焦的禁用，
+// 恢复后焦点到 h1。30 / 150 / 400 / 1000ms 采样都不落到 body。
+// N8-3-03：读取中页码不渲染，「上一页 / 下一页」仍靠右，横坐标与空闲时相同。
+for (const [route, role, listPath] of [
+	["/audit", "employee", "/api/v2/audit"],
+	["/admin/audit", "admin", "/api/v4/admin/audit"],
+] as const)
+	test(`${route} list retry hands focus to the h1, back on repeated failure, and pagination stays put while reading (N8-3-02, N8-3-03)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		const api = await fixture(page, role);
+		api.failNext();
+		await page.goto(route);
+		const main = page.locator("main");
+		const heading = main.getByRole("heading", { level: 1 });
+		const failure = main
+			.getByRole("alert")
+			.filter({ hasText: "审计查询失败，请稍后重试。" });
+		const table = main.locator("table.audit-table");
+		const retry = main.getByRole("button", { name: "重试", exact: true });
+		await expect(failure).toBeVisible();
+
+		// 首次读取就失败（没有已读数据）：重读时按钮卸载，焦点在 h1；再次失败回到「重试」。
+		api.failNext();
+		let reading = await holdRequests(page, "GET", listPath);
+		await retry.focus();
+		await page.keyboard.press("Enter");
+		await expect(main.getByText("正在读取审计记录…")).toBeVisible();
+		await expectFocusHeld(
+			heading,
+			[30, 150, 400, 1000],
+			`${route} 重试读取中（无数据）`,
+		);
+		reading.release();
+		await expect(failure).toBeVisible();
+		await expectFocusSettled(retry, `${route} 重试仍失败`);
+		// 恢复：失败提示与按钮卸载，焦点留在 h1。
+		reading = await holdRequests(page, "GET", listPath);
+		await page.keyboard.press("Enter");
+		await expectFocusHeld(
+			heading,
+			[30, 150, 400, 1000],
+			`${route} 重试恢复中（无数据）`,
+		);
+		reading.release();
+		await expect(table).toBeVisible();
+		await expectFocusSettled(heading, `${route} 重试恢复后（无数据）`);
+
+		// 已有数据时查询失败：重读期间失败提示保留，「重试」可聚焦地禁用，恢复后焦点到 h1。
+		api.failNext();
+		await main.getByRole("button", { name: "查询", exact: true }).click();
+		await expect(failure).toBeVisible();
+		const pinnedRetry = await pinElement(retry, "audit-retry");
+		reading = await holdRequests(page, "GET", listPath);
+		await pinnedRetry.focus();
+		await page.keyboard.press("Enter");
+		await expectFocusableBusy(pinnedRetry, `${route} 重试读取中（有数据）`);
+		reading.release();
+		await expect(table).toBeVisible();
+		await expect(failure).toHaveCount(0);
+		await expectFocusSettled(heading, `${route} 重试恢复后（有数据）`);
+
+		// N8-3-03：分页读取中按钮横坐标不变（空闲时页码在左、按钮在右）。
+		const previous = main.getByRole("button", { name: "上一页", exact: true });
+		const next = await pinElement(
+			main.getByRole("button", { name: "下一页", exact: true }),
+			"audit-next-geometry",
+		);
+		const left = async () => [
+			(await previous.boundingBox())?.x,
+			(await next.boundingBox())?.x,
+		];
+		const idle = await left();
+		reading = await holdRequests(page, "GET", listPath);
+		await next.focus();
+		await page.keyboard.press("Enter");
+		await expect(next).toHaveAttribute("aria-disabled", "true");
+		await expect(main.getByText(/^第 \d+ 页 · 本页 \d+ 条$/)).toHaveCount(0);
+		const busy = await left();
+		for (const [index, value] of busy.entries())
+			expect(
+				Math.abs((value ?? 0) - (idle[index] ?? 0)),
+				`${route} 读取中「${index ? "下一页" : "上一页"}」横坐标`,
+			).toBeLessThanOrEqual(0.5);
+		reading.release();
+		await expect(main.getByText(/^第 2 页 · 本页 1 条$/)).toBeVisible();
+		await expectNoDuplicateControls(page, `${route}（N8-3-02）`);
+		await expectCleanPage(page, errors);
+	});

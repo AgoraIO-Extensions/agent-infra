@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, Bot, Plus, Search } from "lucide-react";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -208,6 +208,7 @@ export function AgentDiscoveryScreen({
 		controlledQuery !== undefined && onQueryChange !== undefined;
 	const query = isControlled ? controlledQuery : localQuery;
 	const searchId = useId();
+	const searchRef = useRef<HTMLInputElement>(null);
 	const [statusFilter, setStatusFilter] = useState("all");
 	const [templateFilter, setTemplateFilter] = useState("all");
 	const [modelFilter, setModelFilter] = useState("all");
@@ -275,6 +276,7 @@ export function AgentDiscoveryScreen({
 			{state.kind === "ready" ? (
 				<div className="directory-filters">
 					<SearchInput
+						ref={searchRef}
 						wrapperClassName="directory-search w-full"
 						label="搜索 Agent"
 						id={searchId}
@@ -401,9 +403,11 @@ export function AgentDiscoveryScreen({
 								</EmptyDescription>
 							</EmptyHeader>
 							<EmptyContent>
+								{/* 清除后空态随之卸载：焦点回到搜索框（同 Skill Hub，#3269 N8-3-02）。 */}
 								<Button
 									variant="outline"
 									onClick={() => {
+										searchRef.current?.focus();
 										setLocalQuery("");
 										onQueryChange?.("");
 										setStatusFilter("all");

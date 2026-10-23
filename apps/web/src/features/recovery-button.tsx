@@ -10,6 +10,8 @@ type RecoveryButtonProps = Omit<
 	recoveryKey: string;
 	/** 请求进行中：保持可聚焦（aria-disabled）并忽略重复点击。 */
 	busy?: boolean;
+	/** 恢复成功、按钮卸载后的焦点目标（需可程序聚焦）；不传或取不到时为页面 h1。 */
+	recoveryTarget?: () => HTMLElement | null;
 	onClick: () => void;
 };
 
@@ -22,10 +24,11 @@ type RecoveryButtonProps = Omit<
 export function RecoveryButton({
 	recoveryKey,
 	busy = false,
+	recoveryTarget,
 	onClick,
 	...props
 }: RecoveryButtonProps) {
-	const trigger = useRecoveryTrigger(recoveryKey);
+	const trigger = useRecoveryTrigger(recoveryKey, recoveryTarget);
 	return (
 		<Button
 			{...props}

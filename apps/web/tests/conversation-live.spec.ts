@@ -19,6 +19,7 @@ import {
 } from "../src/features/conversation/conversation-test-fixtures";
 import { keepConversationStreamOpen } from "./conversation-stream";
 import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
+import { expectFocusSettled } from "./page-health";
 import { duplicateControlNames } from "./page-hygiene";
 import {
 	expectCleanPage,
@@ -1021,6 +1022,12 @@ test("recovers an ordinary conversation 404 through read-only reconnect", async 
 	// 会话标题行已按设计删除（CH-05）：以时间线重新出现确认读取恢复。
 	await expect(page.getByRole("region", { name: "会话时间线" })).toBeVisible();
 	await expect(page.getByRole("button", { name: "重新连接" })).toHaveCount(0);
+	// #3269 N8-3-02：「重新连接」随中断提示卸载后焦点交给页面 h1，不落到 body。
+	await expectFocusSettled(
+		page.getByRole("heading", { level: 1 }),
+		"重新连接后",
+		[30, 150, 400, 1000],
+	);
 	await expect.poll(() => historyReads).toBe(readsBeforeReconnect + 1);
 	await expect.poll(() => streamReads).toBe(1);
 	expect(writes).toBe(0);
@@ -1121,6 +1128,8 @@ test("clears a loaded execution after 404 and recovers without resending", async
 		.getByRole("button", { name: "重新读取详情", exact: true })
 		.click();
 	await expect(page.getByText(newSummary, { exact: true })).toBeVisible();
+	// #3269 N8-3-02：「重新读取详情」随失败提示卸载后焦点交给执行详情弹窗，不落到 body。
+	await expectFocusSettled(details, "重新读取详情后", [30, 150, 400, 1000]);
 	await expect(page.getByText(oldSummary, { exact: true })).toHaveCount(0);
 	await expect.poll(() => historyReads).toBe(readsBeforeReconnect + 1);
 	expect(streamCursors).toEqual(["live-cursor-1", "live-cursor-2"]);
