@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { LoadingLine } from "@/components/ui/spinner";
 import { useToast } from "@/components/ui/toast";
 import type { PersonalRelayKeyStateV1 } from "../../pilot/generated-v2/types.gen.js";
+import { RecoveryButton } from "../recovery-button.js";
 import {
 	loadPersonalRelayKey,
 	PersonalRelayKeyError,
@@ -210,7 +211,10 @@ export function PersonalRelayKeyScreen({
 				<header className="page-heading">
 					<div>
 						<p className="page-eyebrow">我的管理 / 个人凭证</p>
-						<h1 id="personal-relay-key-page-title">个人 Relay Key</h1>
+						{/* 恢复焦点目标：「重新读取状态」等恢复操作随失败提示卸载后焦点交到这里（D2-59）。 */}
+						<h1 id="personal-relay-key-page-title" tabIndex={-1}>
+							个人 Relay Key
+						</h1>
 						<p>用于 Web 对话和企微渠道。凭证值只在提交时使用，页面不会回显。</p>
 					</div>
 					{/* 读取完成前不显示状态，避免把「尚未读取」当成「未设置」。 */}
@@ -239,13 +243,21 @@ export function PersonalRelayKeyScreen({
 				>
 					<div className="section-heading">
 						<div>
+							{/* 状态未知（读取中、读取失败、写入被拒后清空投影）时用中性标题与说明，不按未设置
+							    推断「接入个人 Key」（与页头 chip 同一规则，#3269 N8-3-08）。 */}
 							<h2 id="personal-relay-key-section-title">
-								{isSet ? "替换个人 Key" : "接入个人 Key"}
+								{!projection
+									? "个人 Key"
+									: isSet
+										? "替换个人 Key"
+										: "接入个人 Key"}
 							</h2>
 							<p>
-								{isSet
-									? `当前状态：已设置 · version ${keyVersion}`
-									: "提交后只显示设置状态，后续可替换或撤销。"}
+								{!projection
+									? "读取当前状态后才能设置、替换或撤销。"
+									: isSet
+										? `当前状态：已设置 · version ${keyVersion}`
+										: "提交后只显示设置状态，后续可替换或撤销。"}
 							</p>
 						</div>
 						{projection ? (
@@ -264,24 +276,27 @@ export function PersonalRelayKeyScreen({
 							<AlertDescription>{errorMessage(failure)}</AlertDescription>
 							{canRecheckLogin || canReread ? (
 								<div className="settings-actions">
+									{/* 重读开始即清除失败提示、按钮随之卸载：焦点交给页面 h1，仍失败时回到按钮
+									    （RecoveryButton，#3269 N8-3-02）。 */}
 									{canRecheckLogin && onSessionExpired ? (
-										<Button
+										<RecoveryButton
 											variant="outline"
-											type="button"
+											recoveryKey="重新检查登录"
 											onClick={() => void onSessionExpired()}
 										>
 											重新检查登录
-										</Button>
+										</RecoveryButton>
 									) : null}
 									{canReread ? (
-										<Button
+										<RecoveryButton
 											variant="outline"
-											type="button"
+											recoveryKey="重新读取状态"
+											busy={state === "loading"}
 											onClick={() => void refresh()}
 										>
 											<RefreshCw aria-hidden="true" />
 											重新读取状态
-										</Button>
+										</RecoveryButton>
 									) : null}
 								</div>
 							) : null}

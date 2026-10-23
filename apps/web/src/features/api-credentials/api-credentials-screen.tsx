@@ -33,12 +33,14 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { Timestamp } from "@/components/ui/timestamp";
+import { revealAndFocus } from "@/hooks/use-result-focus";
 import { withObjectName } from "@/lib/accessible-name";
 import type {
 	IssuePersonalApiCredentialV2Responses,
 	PersonalApiCredentialIssueRequestV1,
 	PersonalApiCredentialMetadataV1,
 } from "../../pilot/generated-v2/types.gen.js";
+import { RecoveryButton } from "../recovery-button.js";
 import {
 	type ApiCredentialsState,
 	type PersonalApiCredentialScope,
@@ -117,10 +119,40 @@ export function ApiCredentialsScreen({
 	const [issuedCredential, setIssuedCredential] = useState<string | null>(null);
 	const [issueNotice, setIssueNotice] = useState<string | null>(null);
 	const [copyState, setCopyState] = useState(false);
+	const headingRef = useRef<HTMLHeadingElement>(null);
+	const issueButton = useRef<HTMLButtonElement>(null);
+	// 签发结果与失败提示在页顶，触发的「签发个人凭证」在页底：结果出现后滚入视口并接过焦点（一次性
+	// 凭证到提示标题，幂等重放与失败到提示本身），只对本次签发生效；staleError 是签发前已显示的
+	// 失败，不当作本次结果（#3269 N8-3-09）。
+	const pendingReveal = useRef<{ staleError: unknown } | null>(null);
+	const issuedAlert = useRef<HTMLDivElement>(null);
+	const issuedTitle = useRef<HTMLElement>(null);
+	const noticeAlert = useRef<HTMLDivElement>(null);
+	const issueErrorAlert = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		const pending = pendingReveal.current;
+		if (!pending) return;
+		if (issuedCredential)
+			revealAndFocus(issuedAlert.current, issuedTitle.current);
+		else if (issueNotice) revealAndFocus(noticeAlert.current);
+		else if (issueError && issueError !== pending.staleError)
+			revealAndFocus(issueErrorAlert.current);
+		else return;
+		pendingReveal.current = null;
+	}, [issuedCredential, issueNotice, issueError]);
+
+	// 关闭一次性凭证提示后提示整体卸载：焦点回到「签发个人凭证」，按钮不可用时到页面 h1，
+	// 不落到 body（#3269 N8-3-02）。
+	function closeIssuedCredential() {
+		const button = issueButton.current;
+		(button && !button.disabled ? button : headingRef.current)?.focus();
+		setIssuedCredential(null);
+	}
 
 	async function submitIssue(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (!onIssue || scopes.length === 0) return;
+		pendingReveal.current = { staleError: issueError };
 		setIssuedCredential(null);
 		setIssueNotice(null);
 		try {
@@ -163,7 +195,10 @@ export function ApiCredentialsScreen({
 			<header className="page-heading">
 				<div>
 					<p className="page-eyebrow">我的管理 / API 凭证</p>
-					<h1 id={headingId}>API 凭证</h1>
+					{/* 恢复焦点目标：列表「重新加载」恢复后焦点交到这里（D2-59）。 */}
+					<h1 id={headingId} ref={headingRef} tabIndex={-1}>
+						API 凭证
+					</h1>
 					<p>管理个人和应用凭证的范围、有效期与撤销状态。</p>
 				</div>
 				{onCreateApplicationCredential ? (
@@ -185,11 +220,14 @@ export function ApiCredentialsScreen({
 			{issuedCredential ? (
 				// 只让提示段落承担 status，避免读屏整段播报凭证明文。
 				<Alert
+					ref={issuedAlert}
 					tone="info"
 					icon={<KeyRound aria-hidden="true" />}
-					className="settings-surface"
+					className="settings-surface action-reveal"
 				>
-					<AlertTitle>已签发个人 API 凭证</AlertTitle>
+					<AlertTitle ref={issuedTitle} tabIndex={-1}>
+						已签发个人 API 凭证
+					</AlertTitle>
 					<AlertDescription className="space-y-3">
 						<p role="status">{issueNotice}</p>
 						<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -212,7 +250,7 @@ export function ApiCredentialsScreen({
 						<Button
 							type="button"
 							variant="ghost"
-							onClick={() => setIssuedCredential(null)}
+							onClick={closeIssuedCredential}
 						>
 							关闭一次性凭证提示
 						</Button>
@@ -220,16 +258,24 @@ export function ApiCredentialsScreen({
 				</Alert>
 			) : issueNotice ? (
 				<Alert
+					ref={noticeAlert}
+					tabIndex={-1}
 					tone="info"
 					role="status"
 					icon={<AlertCircle aria-hidden="true" />}
-					className="settings-surface"
+					className="settings-surface action-reveal"
 				>
 					<AlertDescription>{issueNotice}</AlertDescription>
 				</Alert>
 			) : null}
 			{issueError ? (
-				<Alert tone="danger" role="alert" className="settings-surface">
+				<Alert
+					ref={issueErrorAlert}
+					tabIndex={-1}
+					tone="danger"
+					role="alert"
+					className="settings-surface action-reveal"
+				>
 					<AlertDescription>
 						{errorMessage(issueError, "签发个人 API 凭证失败，请稍后重试。")}
 					</AlertDescription>
@@ -255,12 +301,18 @@ export function ApiCredentialsScreen({
 				{state.kind === "unavailable" ? (
 					<Alert tone="danger" role="alert">
 						<AlertDescription>{stateMessage(state)}</AlertDescription>
+						{/* 重读时先换成读取行、按钮随之卸载：焦点交给页面 h1，仍失败时回到按钮
+						    （RecoveryButton，#3269 N8-3-02）。 */}
 						{state.retryable && onRetry ? (
 							<AlertAction>
-								<Button variant="outline" type="button" onClick={onRetry}>
+								<RecoveryButton
+									variant="outline"
+									recoveryKey="重新加载个人凭证"
+									onClick={onRetry}
+								>
 									<RefreshCw aria-hidden="true" data-icon="inline-start" />
 									重新加载
-								</Button>
+								</RecoveryButton>
 							</AlertAction>
 						) : null}
 					</Alert>
@@ -374,6 +426,7 @@ export function ApiCredentialsScreen({
 					{/* 签发进行中是可聚焦的禁用（aria-disabled），焦点留在按钮上（#3242 K7-02）；
 					    结果由一次性凭证提示的 status 播报。 */}
 					<Button
+						ref={issueButton}
 						type="submit"
 						disabled={!onIssue || scopes.length === 0 || isIssuing}
 						focusableWhenDisabled={isIssuing}

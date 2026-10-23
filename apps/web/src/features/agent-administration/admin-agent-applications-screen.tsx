@@ -274,12 +274,25 @@ function ApplicationReview({
 	useEffect(() => {
 		if (resolved && open) close();
 	}, [close, open, resolved]);
+	// 决定失败提示在正文区、操作按钮之前（同 Skill 审阅弹窗）；出现时把提示与操作区一起滚入弹窗
+	// 可视区，焦点仍留在触发的按钮上（#3269 N8-3-01）。
+	const decisionAlert = useRef<HTMLDivElement>(null);
 	useEffect(() => {
 		const errorAdvanced =
 			decisionError !== null && decisionError !== lastDecisionError.current;
 		lastDecisionError.current = decisionError;
-		if (errorAdvanced) setLocalDecisionPending(false);
+		if (!errorAdvanced) return;
+		setLocalDecisionPending(false);
+		popup.current
+			?.querySelector('[data-slot="dialog-footer"]')
+			?.scrollIntoView?.({ block: "nearest" });
+		decisionAlert.current?.scrollIntoView?.({ block: "nearest" });
 	}, [decisionError]);
+	const decisionFailureAlert = decisionError ? (
+		<Alert ref={decisionAlert} tone="danger" role="alert" className="mt-3">
+			<AlertDescription>{decisionFailure(decisionError)}</AlertDescription>
+		</Alert>
+	) : null;
 	// 切到驳回视图后与设计 openModal 一致，焦点放在弹窗容器，不落到 body。
 	useEffect(() => {
 		if (rejecting) popup.current?.focus();
@@ -390,6 +403,7 @@ function ApplicationReview({
 									Agent；审批受理不表示服务已就绪。
 								</AlertDescription>
 							</Alert>
+							{decisionFailureAlert}
 						</DialogBody>
 						<DialogFooter>
 							<Button
@@ -463,6 +477,7 @@ function ApplicationReview({
 									</FieldError>
 								)}
 							</Field>
+							{decisionFailureAlert}
 						</DialogBody>
 						<DialogFooter>
 							<Button
@@ -484,13 +499,6 @@ function ApplicationReview({
 							</Button>
 						</DialogFooter>
 					</form>
-				)}
-				{decisionError && (
-					<Alert tone="danger" role="alert" className="mt-4">
-						<AlertDescription>
-							{decisionFailure(decisionError)}
-						</AlertDescription>
-					</Alert>
 				)}
 			</DialogContent>
 		</Dialog>

@@ -1,6 +1,14 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Layers, Plus } from "lucide-react";
-import { type FormEvent, type ReactNode, useId, useRef, useState } from "react";
+import {
+	type FormEvent,
+	type ReactNode,
+	useCallback,
+	useId,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -284,9 +292,17 @@ const defaultEditorActions: SkillEditorActions = {
 
 type Feedback = { tone: "status" | "alert"; text: string };
 
+function createdFeedback(name: string): Feedback {
+	return {
+		tone: "status",
+		text: `Skill 项目已创建：${name}。可以继续编辑内容并发布，或导入第一个版本。`,
+	};
+}
+
 export function SkillEditorScreen({
 	project,
 	projectMissing = false,
+	createdName,
 	actions = defaultEditorActions,
 	onProjectsChanged,
 	onProjectCreated,
@@ -300,10 +316,15 @@ export function SkillEditorScreen({
 	project?: SkillHubProjectV1;
 	/** 地址里的项目不在当前用户的项目列表中。 */
 	projectMissing?: boolean;
+	/**
+	 * 刚在新建页创建、随后进入的项目名称：进入项目时编辑器按项目重新挂载，由这里保留就地反馈，
+	 * 并把焦点交给 SKILL.md 文本框（#3269 N8-3-04）。
+	 */
+	createdName?: string;
 	actions?: SkillEditorActions;
 	onProjectsChanged?: () => void;
 	/** 新建项目后进入该项目，继续编辑内容并发布。 */
-	onProjectCreated?: (projectId: string) => void;
+	onProjectCreated?: (projectId: string, name: string) => void;
 	/** 已有项目的当前内容（#2906）。 */
 	content?: SkillProjectContentState;
 	onContentRetry?: () => unknown;
@@ -321,7 +342,9 @@ export function SkillEditorScreen({
 		project?.status ?? "active",
 	);
 	const [projectError, setProjectError] = useState("");
-	const [projectFeedback, setProjectFeedback] = useState<Feedback>();
+	const [projectFeedback, setProjectFeedback] = useState<Feedback | undefined>(
+		() => (project && createdName ? createdFeedback(createdName) : undefined),
+	);
 	const [projectBusy, setProjectBusy] = useState(false);
 	const [importForm, setImportForm] = useState({
 		name: project?.name ?? "",
@@ -339,6 +362,24 @@ export function SkillEditorScreen({
 	const projectInput = useRef<HTMLInputElement>(null);
 	const importNameInput = useRef<HTMLInputElement>(null);
 	const importVersionInput = useRef<HTMLInputElement>(null);
+	// 创建项目后进入该项目（D2-59、K7-02）：新建页的「创建项目」随编辑器重新挂载卸载，挂载时焦点先放
+	// 「项目信息」标题，内容读到后交给 SKILL.md 文本框（导出稿 create-project），不落到 body；用户已
+	// 把焦点移到别处时不抢。
+	const projectHeading = useRef<HTMLHeadingElement>(null);
+	const focusAfterCreate = useRef(Boolean(project && createdName));
+	useLayoutEffect(() => {
+		if (!focusAfterCreate.current) return;
+		const active = document.activeElement;
+		if (!active || active === document.body) projectHeading.current?.focus();
+	}, []);
+	const consumeCreatedFocus = useCallback(() => {
+		if (!focusAfterCreate.current) return false;
+		focusAfterCreate.current = false;
+		const active = document.activeElement;
+		return (
+			!active || active === document.body || active === projectHeading.current
+		);
+	}, []);
 
 	// 同一写操作在输入不变时重试复用幂等键；成功后丢弃。
 	function idempotencyKey(scope: string, input: unknown) {
@@ -390,13 +431,10 @@ export function SkillEditorScreen({
 					body,
 					idempotencyKey(scope, body),
 				);
-				setProjectFeedback({
-					tone: "status",
-					text: `Skill 项目已创建：${result.name}。可以继续编辑内容并发布，或导入第一个版本。`,
-				});
+				setProjectFeedback(createdFeedback(result.name));
 				setImportForm((current) => ({ ...current, name: result.name }));
 				toast("Skill 项目已创建");
-				onProjectCreated?.(result.projectId);
+				onProjectCreated?.(result.projectId, result.name);
 			}
 			operationKeys.current.delete(scope);
 			onProjectsChanged?.();
@@ -467,6 +505,7 @@ export function SkillEditorScreen({
 
 	const projectSection = (
 		<FormSection
+			headingRef={projectHeading}
 			title={project ? "项目信息" : "Skill 项目"}
 			description={
 				project
@@ -671,6 +710,7 @@ export function SkillEditorScreen({
 					onRetry={onContentRetry}
 					retrying={contentRetrying}
 					onPublished={onPublished}
+					consumeInitialFocus={consumeCreatedFocus}
 					{...(contentActions ? { actions: contentActions } : {})}
 					before={projectSection}
 					after={importSection}

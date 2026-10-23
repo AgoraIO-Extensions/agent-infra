@@ -177,6 +177,76 @@ describe("RecoveryButton on a page that shows a loading page while re-reading", 
 	});
 });
 
+// #3269 N8-3-02：按钮所在分区离页面标题很远时，恢复后焦点交给调用方指定的分区标题。
+function SectionPage({
+	state,
+	onRetry,
+	withTarget = true,
+}: {
+	state: State;
+	onRetry: () => void;
+	withTarget?: boolean;
+}) {
+	return (
+		<div id="main-content" tabIndex={-1}>
+			<h1 tabIndex={-1}>页面标题</h1>
+			<h2 id="section-title" tabIndex={-1}>
+				分区标题
+			</h2>
+			{state === "failed" ? (
+				<RecoveryButton
+					recoveryKey="重新加载分区"
+					recoveryTarget={
+						withTarget
+							? () => document.getElementById("section-title")
+							: () => null
+					}
+					onClick={onRetry}
+				>
+					重新加载
+				</RecoveryButton>
+			) : state === "loading" ? (
+				<p>正在读取…</p>
+			) : (
+				<p>内容</p>
+			)}
+		</div>
+	);
+}
+
+describe("RecoveryButton with a recovery target", () => {
+	it("moves focus to the given section heading while loading and after recovery", () => {
+		const onRetry = vi.fn();
+		const view = render(<SectionPage state="failed" onRetry={onRetry} />);
+		retry().focus();
+		fireEvent.click(retry());
+		expect(onRetry).toHaveBeenCalledOnce();
+		view.rerender(<SectionPage state="loading" onRetry={onRetry} />);
+		const section = screen.getByRole("heading", { name: "分区标题" });
+		expect(document.activeElement).toBe(section);
+		view.rerender(<SectionPage state="ready" onRetry={onRetry} />);
+		expect(document.activeElement).toBe(section);
+	});
+
+	it("returns focus to the retry when it fails again, and falls back to the h1 without a target", () => {
+		const onRetry = vi.fn();
+		const view = render(<SectionPage state="failed" onRetry={onRetry} />);
+		retry().focus();
+		fireEvent.click(retry());
+		view.rerender(<SectionPage state="loading" onRetry={onRetry} />);
+		view.rerender(<SectionPage state="failed" onRetry={onRetry} />);
+		expect(document.activeElement).toBe(retry());
+		view.rerender(
+			<SectionPage state="failed" onRetry={onRetry} withTarget={false} />,
+		);
+		fireEvent.click(retry());
+		view.rerender(
+			<SectionPage state="ready" onRetry={onRetry} withTarget={false} />,
+		);
+		expect(document.activeElement).toBe(heading());
+	});
+});
+
 describe("pageRecoveryTarget", () => {
 	it("prefers the focusable page h1 and falls back to #main-content", () => {
 		const view = render(<Page state="ready" onRetry={vi.fn()} />);

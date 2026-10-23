@@ -5,10 +5,10 @@ import {
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import { IdentifierText } from "@/components/ui/identifier-text";
 import { searchDirectoryV2 } from "../pilot/generated-v2/sdk.gen.js";
 import type { DirectorySearchItemV1 } from "../pilot/generated-v2/types.gen.js";
+import { RecoveryButton } from "./recovery-button.js";
 
 export type DirectoryKind = DirectorySearchItemV1["kind"];
 export type DirectoryOption = {
@@ -216,9 +216,12 @@ export function useAvailabilityNames(
 export function DirectoryReadAlert({
 	names,
 	className,
+	recoveryTarget,
 }: {
 	names: readonly Pick<DirectoryNames, "status" | "retry">[];
 	className?: string;
+	/** 重读成功、提示卸载后的焦点目标；不传时为页面 h1（RecoveryButton）。 */
+	recoveryTarget?: () => HTMLElement | null;
 }) {
 	const failed = names.filter((item) => item.status === "error");
 	if (!failed.length) return null;
@@ -228,16 +231,19 @@ export function DirectoryReadAlert({
 				目录暂时无法读取，人员和组织名称暂不显示。
 			</AlertDescription>
 			<AlertAction>
-				<Button
-					type="button"
+				{/* 重读开始即进入读取中、提示随之卸载：焦点交给页面 h1（或调用方指定的分区标题），
+				    仍失败时回到按钮（#3269 N8-3-02）。 */}
+				<RecoveryButton
 					variant="outline"
+					recoveryKey="重新读取目录"
+					recoveryTarget={recoveryTarget}
 					onClick={() => {
 						for (const item of failed) item.retry();
 					}}
 				>
 					<RefreshCw aria-hidden="true" data-icon="inline-start" />
 					重新读取目录
-				</Button>
+				</RecoveryButton>
 			</AlertAction>
 		</Alert>
 	);

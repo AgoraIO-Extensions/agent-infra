@@ -137,6 +137,7 @@ export function AdminAgentsScreen({
 	const toast = useToast();
 	const [actionFailure, setActionFailure] = useState<string | null>(null);
 	const heading = useRef<HTMLHeadingElement>(null);
+	const searchRef = useRef<HTMLInputElement>(null);
 	const agents = state.kind === "ready" ? state.agents : [];
 	const search = (filters.q ?? "").trim().toLocaleLowerCase();
 	// 只匹配页面上可见的文字：名称、说明、来源文案与 Owner 显示名。
@@ -218,6 +219,7 @@ export function AdminAgentsScreen({
 				<>
 					<div className="admin-agent-filters">
 						<SearchInput
+							ref={searchRef}
 							label="搜索 Agent"
 							id={`${id}-search`}
 							maxLength={adminAgentQueryMaxLength}
@@ -302,7 +304,14 @@ export function AdminAgentsScreen({
 						<Empty>
 							<EmptyDescription>未找到匹配的 Agent。</EmptyDescription>
 							<EmptyContent>
-								<Button variant="outline" onClick={() => onFiltersChange({})}>
+								{/* 清除后空态随之卸载：焦点回到搜索框（同 Skill Hub，#3269 N8-3-02）。 */}
+								<Button
+									variant="outline"
+									onClick={() => {
+										searchRef.current?.focus();
+										onFiltersChange({});
+									}}
+								>
 									清除筛选
 								</Button>
 							</EmptyContent>

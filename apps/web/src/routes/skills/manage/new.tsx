@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { useApplicationSession } from "../../../features/application-shell.js";
 import { collectionReadFailure } from "../../../features/collection-read-failure.js";
 import { PageLoadingState } from "../../../features/page-loading-state.js";
@@ -32,6 +33,13 @@ function SkillEditorRoute() {
 		enabled: Boolean(identityKey && project),
 		retry: false,
 	});
+	// 刚创建的项目：进入后编辑器按项目重新挂载，就地反馈与焦点交接由新编辑器接着做（#3269 N8-3-04）；
+	// 切到别的项目后不再显示。
+	const [created, setCreated] = useState<{ projectId: string; name: string }>();
+	useEffect(() => {
+		if (created && projectId && projectId !== created.projectId)
+			setCreated(undefined);
+	}, [created, projectId]);
 	const contentStatus = (content.error as { status?: number } | null)?.status;
 	const invalidateProjects = () =>
 		queryClient.invalidateQueries({
@@ -49,16 +57,22 @@ function SkillEditorRoute() {
 					key={project?.projectId ?? "new"}
 					project={project}
 					projectMissing={Boolean(projectId && !project)}
+					createdName={
+						created && created.projectId === project?.projectId
+							? created.name
+							: undefined
+					}
 					onProjectsChanged={() => void invalidateProjects()}
-					onProjectCreated={(createdId) =>
+					onProjectCreated={(createdId, name) => {
+						setCreated({ projectId: createdId, name });
 						// 项目列表刷新后再进入新项目，避免短暂显示「找不到项目」。
 						void invalidateProjects().then(() =>
 							navigate({
 								to: "/skills/manage/new",
 								search: { project: createdId },
 							}),
-						)
-					}
+						);
+					}}
 					content={
 						content.isPending
 							? { kind: "loading" }

@@ -50,6 +50,7 @@ import { withObjectName } from "@/lib/accessible-name";
 import { formatTimestamp } from "@/lib/format-time";
 import { useApplicationSession } from "../application-shell.js";
 import { DirectoryReadAlert, useDirectoryNames } from "../directory-names.js";
+import { RecoveryButton } from "../recovery-button.js";
 import {
 	type AuditAgentOption,
 	AuditAgentPicker,
@@ -265,7 +266,8 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					<p className="page-eyebrow">
 						{administrator ? "系统管理 / 平台审计" : "我的管理 / 我的执行审计"}
 					</p>
-					<h1>
+					{/* 恢复焦点目标（tabIndex=-1）：列表「重试」恢复、分页到边界时焦点交到这里（D2-59）。 */}
+					<h1 tabIndex={-1}>
 						{administrator ? "查看平台变更记录。" : "查看自己的执行记录。"}
 					</h1>
 					<p>
@@ -454,11 +456,18 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 				) : query.status === "error" ? (
 					<Alert tone="danger" role="alert">
 						<AlertDescription>审计查询失败，请稍后重试。</AlertDescription>
-						{query.canRetry && (
+						{/* 重读进行中保持可聚焦；没有已读数据时重读会先换成读取行、按钮随之卸载，焦点交给
+						    页面 h1，仍失败时回到按钮（RecoveryButton，#3269 N8-3-02）。 */}
+						{(query.canRetry || query.isFetching) && (
 							<AlertAction>
-								<Button variant="outline" onClick={() => void query.retry()}>
+								<RecoveryButton
+									variant="outline"
+									recoveryKey="重试"
+									busy={!query.canRetry}
+									onClick={() => void query.retry()}
+								>
 									重试
-								</Button>
+								</RecoveryButton>
 							</AlertAction>
 						)}
 					</Alert>

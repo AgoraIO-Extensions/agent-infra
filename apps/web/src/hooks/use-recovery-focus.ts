@@ -23,6 +23,8 @@ let pending: {
 	path: string;
 	focused: HTMLElement | null;
 	observer: MutationObserver | null;
+	/** 调用方指定的恢复目标（例如所在分区标题）；没有或取不到时用页面标题。 */
+	target?: () => HTMLElement | null;
 } | null = null;
 
 function isNeutral(element: Element | null) {
@@ -54,21 +56,21 @@ function settleFocus() {
 		return;
 	}
 	if (!isNeutral(document.activeElement)) return;
-	const target = pageRecoveryTarget();
+	const target = current.target?.() ?? pageRecoveryTarget();
 	if (!target || target === document.activeElement) return;
 	current.focused = target;
 	// #main-content 只是兜底，不为它把页面滚回顶部。
 	target.focus({ preventScroll: target.id === "main-content" });
 }
 
-function startPending(key: string) {
+function startPending(key: string, target?: () => HTMLElement | null) {
 	clearPending();
 	const main = document.getElementById("main-content") ?? document.body;
 	const observer =
 		typeof MutationObserver === "undefined"
 			? null
 			: new MutationObserver(settleFocus);
-	pending = { key, path: location.pathname, focused: null, observer };
+	pending = { key, path: location.pathname, focused: null, observer, target };
 	// 页面标题可能是新插入的，也可能是复用的元素补上了 tabindex。
 	observer?.observe(main, {
 		childList: true,
@@ -89,16 +91,21 @@ function startPending(key: string) {
  * - 请求进行中按钮保持可聚焦（调用方用 aria-disabled，不用原生 disabled），失败后焦点仍在
  *   按钮上；按钮在请求中卸载、又以同一个 key 重新挂载（仍然失败）时取回焦点。
  *
- * key 用按钮空闲时的名称；同一页面内不同的恢复操作 key 不同。
+ * key 用按钮空闲时的名称；同一页面内不同的恢复操作 key 不同。target 可选：按钮所在分区离页面
+ * 标题很远时（例如 API 凭证页底部的「应用管理」），恢复后焦点交给它返回的元素（需可程序聚焦），
+ * 取不到时仍用页面标题（#3269 N8-3-02）。
  */
 export function useRecoveryTrigger<T extends HTMLElement = HTMLButtonElement>(
 	key: string,
+	target?: () => HTMLElement | null,
 ) {
 	const ref = useRef<T>(null);
 	const armed = useRef(false);
 	const latestKey = useRef(key);
+	const latestTarget = useRef(target);
 	useEffect(() => {
 		latestKey.current = key;
+		latestTarget.current = target;
 	});
 	useEffect(() => {
 		const current = pending;
@@ -116,7 +123,7 @@ export function useRecoveryTrigger<T extends HTMLElement = HTMLButtonElement>(
 			armed.current = false;
 			const active = document.activeElement;
 			if (active && active !== document.body) return;
-			startPending(latestKey.current);
+			startPending(latestKey.current, latestTarget.current);
 		};
 	}, []);
 	const arm = useCallback(() => {

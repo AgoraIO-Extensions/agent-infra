@@ -117,8 +117,13 @@ describe("PersonalRelayKeyScreen", () => {
 				"用于 Web 对话和企微渠道。凭证值只在提交时使用，页面不会回显。",
 			),
 		).toBeTruthy();
-		// 读取完成前不显示状态 chip。
+		// 读取完成前不显示状态 chip，分区也只用中性标题与说明，不按未设置推断（#3269 N8-3-08）。
 		expect(screen.queryByTestId("personal-key-status")).toBeNull();
+		expect(
+			screen.getByRole("heading", { level: 2, name: "个人 Key" }),
+		).toBeTruthy();
+		expect(screen.getByText("读取当前状态后才能设置、替换或撤销。")).toBeTruthy();
+		expect(screen.queryByText("接入个人 Key")).toBeNull();
 		const notice = screen
 			.getByText("费用和权限跟随个人 Key")
 			.closest('[data-slot="alert"]') as HTMLElement;
@@ -224,6 +229,9 @@ describe("PersonalRelayKeyScreen", () => {
 			const alert = await screen.findByRole("alert");
 			expect(alert.textContent).toContain(message);
 			expect(screen.queryByTestId("personal-key-status")).toBeNull();
+			expect(
+				screen.getByRole("heading", { level: 2, name: "个人 Key" }),
+			).toBeTruthy();
 			if (status === 401) {
 				fireEvent.click(screen.getByRole("button", { name: "重新检查登录" }));
 				expect(onSessionExpired).toHaveBeenCalledOnce();
@@ -361,8 +369,15 @@ describe("PersonalRelayKeyScreen", () => {
 			fireEvent.click(write);
 			expect(api[operation]).toHaveBeenCalledTimes(1);
 			if (status === 401 || status === 403) {
-				// 身份或授权失效后清空投影：状态未知，撤销入口不再出现。
+				// 身份或授权失效后清空投影：状态未知，撤销入口不再出现，分区标题与说明为中性文案，
+				// 不再写「接入个人 Key」（#3269 N8-3-08）。
 				expect(screen.queryByTestId("personal-key-status")).toBeNull();
+				expect(
+					screen.getByRole("heading", { level: 2, name: "个人 Key" }),
+				).toBeTruthy();
+				expect(
+					screen.getByText("读取当前状态后才能设置、替换或撤销。"),
+				).toBeTruthy();
 				expect(screen.queryByRole("button", { name: "撤销 Key" })).toBeNull();
 				expect(
 					screen.queryByRole("button", { name: "重新读取状态" }),
