@@ -15,7 +15,16 @@ function fixture(
 		imageDigest: "image-a",
 	} as AgentConfigurationRecordV2["source"],
 	onStepFailure?: (failure: WorkloadStepFailureV1) => void,
+	budgets: {
+		maximumAttempts?: number;
+		maximumApplyAttempts?: number;
+		maximumObserveAttempts?: number;
+	} = {},
 ) {
+	const maximumAttempts = budgets.maximumAttempts ?? 3;
+	const maximumApplyAttempts = budgets.maximumApplyAttempts ?? maximumAttempts;
+	const maximumObserveAttempts =
+		budgets.maximumObserveAttempts ?? maximumAttempts;
 	let configuration = {
 		schemaVersion: 2,
 		agentId: "agent-a",
@@ -64,7 +73,9 @@ function fixture(
 	let worker = createWorkloadReconciliationV1({
 		store,
 		runtime,
-		maximumAttempts: 3,
+		maximumAttempts,
+		maximumApplyAttempts,
+		maximumObserveAttempts,
 		onStepFailure,
 	});
 	return {
@@ -79,7 +90,9 @@ function fixture(
 			worker = createWorkloadReconciliationV1({
 				store,
 				runtime,
-				maximumAttempts: 3,
+				maximumAttempts,
+				maximumApplyAttempts,
+				maximumObserveAttempts,
 				onStepFailure,
 			});
 		},
@@ -450,6 +463,38 @@ describe("durable Workload reconciliation", () => {
 			phase: "cleaning",
 			failureCode: "reconciliation_failed",
 			lastFailure: { reason: "kubernetes_policy", attempts: 3 },
+		});
+	});
+	it("uses a dedicated apply budget for slow image or PVC readiness", async () => {
+		const f = fixture(undefined, undefined, {
+			maximumAttempts: 1,
+			maximumApplyAttempts: 3,
+			maximumObserveAttempts: 1,
+		});
+		vi.mocked(f.runtime.apply).mockResolvedValue("pending");
+
+		await f.tick(6);
+
+		expect(f.runtime.apply).toHaveBeenCalledTimes(3);
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			failureCode: "reconciliation_failed",
+		});
+	});
+	it("uses a shorter dedicated observe budget after resources are applied", async () => {
+		const f = fixture(undefined, undefined, {
+			maximumAttempts: 5,
+			maximumApplyAttempts: 5,
+			maximumObserveAttempts: 2,
+		});
+		vi.mocked(f.runtime.observe).mockResolvedValue("unreachable");
+
+		await f.tick(6);
+
+		expect(f.runtime.observe).toHaveBeenCalledTimes(2);
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			failureCode: "health_check_failed",
 		});
 	});
 	describe("swallowed step exceptions are observable (#2532)", () => {

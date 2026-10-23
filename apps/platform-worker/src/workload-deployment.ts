@@ -87,6 +87,10 @@ export interface ProductionWorkloadWorkerInputV1 {
 	readonly runtimeFetch?: typeof fetch;
 	readonly pollIntervalMs?: number;
 	readonly maximumAttempts?: number;
+	/** Separate budget for resource creation and image/PVC readiness. */
+	readonly maximumApplyAttempts?: number;
+	/** Separate budget for health/readiness observation after apply. */
+	readonly maximumObserveAttempts?: number;
 	readonly probeFailureThreshold?: number;
 	/** Defaults to 30 minutes; null disables automatic idle reclaim. */
 	readonly idleSandboxReclaimAfterMs?: number | null;
@@ -134,6 +138,13 @@ export async function createProductionWorkloadWorkerOptionsV1(
 				input.runtimeModelVersion !== 4) ||
 			(input.runtimeModelVersion === 4 &&
 				process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") ||
+			(input.maximumApplyAttempts !== undefined &&
+				(!Number.isSafeInteger(input.maximumApplyAttempts) ||
+					input.maximumApplyAttempts < 1)) ||
+			(input.maximumObserveAttempts !== undefined &&
+				(!Number.isSafeInteger(input.maximumObserveAttempts) ||
+					input.maximumObserveAttempts < 1 ||
+					input.maximumObserveAttempts > 100)) ||
 			typeof input.modelCatalog?.load !== "function" ||
 			typeof input.runtimeProbe?.authorize !== "function" ||
 			!input.policy.runtimeAuth ||
@@ -248,6 +259,8 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			...(input.browserBinding ? { browserBinding: input.browserBinding } : {}),
 			pollIntervalMs: input.pollIntervalMs,
 			maximumAttempts: input.maximumAttempts,
+			maximumApplyAttempts: input.maximumApplyAttempts,
+			maximumObserveAttempts: input.maximumObserveAttempts,
 			probeFailureThreshold: input.probeFailureThreshold,
 			idleSandboxReclaimAfterMs: input.idleSandboxReclaimAfterMs,
 			log: input.log,

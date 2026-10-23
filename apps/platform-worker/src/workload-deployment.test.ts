@@ -227,6 +227,36 @@ describe("production Worker deployment", () => {
 		});
 		expect(options.files).toBe(files);
 	});
+	it("forwards separate apply and observe retry budgets", async () => {
+		const deployment = await input();
+		const options = await createProductionWorkloadWorkerOptionsV1({
+			...deployment,
+			maximumApplyAttempts: 600,
+			maximumObserveAttempts: 12,
+		});
+		expect(options).toMatchObject({
+			maximumApplyAttempts: 600,
+			maximumObserveAttempts: 12,
+		});
+	});
+	it.each([
+		["maximumApplyAttempts", 0],
+		["maximumObserveAttempts", 101],
+	] as const)(
+		"rejects invalid %s before Kubernetes access",
+		async (key, value) => {
+			const deployment = await input();
+			Object.defineProperty(deployment, key, { value });
+			Object.defineProperty(deployment, "kubernetes", {
+				get() {
+					throw new Error("Kubernetes credentials must not be read");
+				},
+			});
+			await expect(
+				createProductionWorkloadWorkerOptionsV1(deployment),
+			).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
+		},
+	);
 	it("rejects malformed file reconciliation configuration before Kubernetes access", async () => {
 		const deployment = await input();
 		Object.defineProperty(deployment, "files", {

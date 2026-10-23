@@ -23,6 +23,10 @@ export interface PlatformWorkloadWorkerOptionsV1
 	readonly workerId?: string;
 	readonly pollIntervalMs?: number;
 	readonly maximumAttempts?: number;
+	/** Separate budget for resource creation and image/PVC readiness. */
+	readonly maximumApplyAttempts?: number;
+	/** Separate budget for health/readiness observation after apply. */
+	readonly maximumObserveAttempts?: number;
 	/** Consecutive incomplete monitor probes a serving Workload tolerates (#2046). */
 	readonly probeFailureThreshold?: number;
 	/** Idle Session Sandbox reclaim threshold; defaults to 30 minutes. */
@@ -141,6 +145,8 @@ export function createPlatformWorkloadWorkerV1(
 			store: observedStore,
 			runtime,
 			maximumAttempts: options.maximumAttempts,
+			maximumApplyAttempts: options.maximumApplyAttempts,
+			maximumObserveAttempts: options.maximumObserveAttempts,
 			probeFailureThreshold: options.probeFailureThreshold,
 			// 步骤里的异常被调谐吞掉后只会重试或终止；这里记录有界原因（不含正文）。
 			onStepFailure: createWorkloadStepFailureLoggerV1({ log: logSafely }),
