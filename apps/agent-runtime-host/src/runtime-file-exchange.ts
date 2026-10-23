@@ -205,6 +205,17 @@ export function createRuntimeFileBridgeFactoryV1(
 	const timeoutMs = options.timeoutMs ?? 30_000;
 	const exchangeUrl = new URL("/internal/v1/files/runtime-exchange", origin);
 
+	/**
+	 * 执行数据面同时要求 File Grant 与部署服务身份（工程 Spec §15.4.2）：读取、写入与完成
+	 * 都带上与交换请求相同的服务凭据，会话 Sandbox 中即本 Sandbox 的派生凭据（#3281）。
+	 */
+	function dataPlaneHeaders(grant: string) {
+		return {
+			Authorization: `Bearer ${options.serviceToken}`,
+			"X-Platform-File-Grant": grant,
+		};
+	}
+
 	function target(path: string) {
 		const url = new URL(path, origin);
 		if (
@@ -266,7 +277,7 @@ export function createRuntimeFileBridgeFactoryV1(
 				const response = await send(target(access.path), {
 					redirect: "error",
 					signal: AbortSignal.timeout(timeoutMs),
-					headers: { "X-Platform-File-Grant": access.grant.token },
+					headers: dataPlaneHeaders(access.grant.token),
 				});
 				if (!response.ok || !response.body) {
 					await response.body?.cancel();
@@ -330,7 +341,7 @@ export function createRuntimeFileBridgeFactoryV1(
 					)
 						throw new Error("RUNTIME_FILE_RESULT_INVALID");
 					const headers = {
-						"X-Platform-File-Grant": access.grant.token,
+						...dataPlaneHeaders(access.grant.token),
 						"Content-Type": descriptor.mediaType,
 						"Content-Length": String(descriptor.sizeBytes),
 					};
@@ -362,7 +373,7 @@ export function createRuntimeFileBridgeFactoryV1(
 							redirect: "error",
 							signal: AbortSignal.timeout(timeoutMs),
 							headers: {
-								"X-Platform-File-Grant": access.grant.token,
+								...dataPlaneHeaders(access.grant.token),
 								"Content-Type": "application/json",
 							},
 							body: JSON.stringify({

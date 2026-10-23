@@ -476,3 +476,78 @@ it("shares one origin rule between configuration and the bridge (#3255)", () => 
 		).toThrow("RUNTIME_FILE_EXCHANGE_CONFIGURATION_INVALID");
 	}
 });
+
+it("authenticates every execution data-plane request with the service identity (#3281)", async () => {
+	// 执行数据面同时要求 File Grant 与服务身份（工程 Spec §15.4.2）；只带 Grant 会被平台以 404 拒绝。
+	const serviceToken = "s".repeat(32);
+	const dataPlane = (calls: [string | URL | Request, RequestInit?][]) =>
+		calls
+			.filter(([input]) => !String(input).endsWith("runtime-exchange"))
+			.map(([input, init]) => ({
+				path: new URL(String(input)).pathname,
+				headers: init?.headers as Record<string, string>,
+			}));
+	const inputFetcher = vi.fn(async (input: string | URL | Request) => {
+		const url = String(input);
+		if (url.endsWith("runtime-exchange"))
+			return response({
+				schemaVersion: 1,
+				fileId: "input-1",
+				kind: "attachment",
+				descriptor: {
+					name: "input.txt",
+					mediaType: "text/plain",
+					sizeBytes: 3,
+					sha256: "a".repeat(64),
+				},
+				status: "available",
+				createdAt: "2026-01-01T00:00:00Z",
+				expiresAt: "2099-01-01T00:00:00Z",
+			});
+		return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+	});
+	const input = await createRuntimeFileBridgeFactoryV1({
+		origin: "https://files.example.test",
+		serviceToken,
+		fetch: inputFetcher,
+	})(binding, evidence).readInput("input-1");
+	await new Response(input.body).arrayBuffer();
+	const resultFetch = resultFetcher(
+		async () => new Response(JSON.stringify(referencedFile), { status: 200 }),
+	);
+	await resultBridge(resultFetch).writeResult(
+		referencedDescriptor,
+		twoBytes(),
+		{
+			workspaceReference: "out/chart.png",
+		},
+	);
+	const requests = [
+		...dataPlane(inputFetcher.mock.calls),
+		...dataPlane(resultFetch.mock.calls),
+	];
+	expect(requests.map(({ path }) => path)).toEqual([
+		"/api/v1/conversations/conversation-1/files/file-1/content",
+		"/api/v1/conversations/conversation-1/files/result-2/content",
+		"/api/v1/conversations/conversation-1/files/result-2/complete",
+	]);
+	for (const { headers } of requests) {
+		expect(headers.Authorization).toBe(`Bearer ${serviceToken}`);
+		expect(headers["X-Platform-File-Grant"]).toBe(grant.token);
+	}
+});
+
+it("keeps the service token out of data-plane failures (#3281)", async () => {
+	const serviceToken = `sentinel-${"t".repeat(32)}`;
+	const bridge = createRuntimeFileBridgeFactoryV1({
+		origin: "https://files.example.test",
+		serviceToken,
+		fetch: resultFetcher(async () => new Response("denied", { status: 404 })),
+	})(binding, evidence);
+	const failure = await bridge
+		.writeResult(referencedDescriptor, twoBytes())
+		.catch((error: unknown) => error);
+	expect(failure).toBeInstanceOf(Error);
+	expect(String((failure as Error).message)).not.toContain(serviceToken);
+	expect(JSON.stringify(failure)).not.toContain(serviceToken);
+});

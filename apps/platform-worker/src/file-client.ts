@@ -235,7 +235,11 @@ export function createWorkerRuntimeFileBridgeFactoryV1(
 				const response = await send(target(access.path), {
 					redirect: "error",
 					signal: AbortSignal.timeout(timeoutMs),
-					headers: { "X-Platform-File-Grant": access.grant.token },
+					headers: {
+						// 执行数据面同时要求 File Grant 与服务身份（工程 Spec §15.4.2，#3281）。
+						Authorization: `Bearer ${options.serviceToken}`,
+						"X-Platform-File-Grant": access.grant.token,
+					},
 				});
 				if (!response.ok || !response.body) {
 					await response.body?.cancel();
@@ -303,6 +307,7 @@ export function createWorkerRuntimeFileBridgeFactoryV1(
 							redirect: "error",
 							signal: AbortSignal.timeout(timeoutMs),
 							headers: {
+								Authorization: `Bearer ${options.serviceToken}`,
 								"X-Platform-File-Grant": access.grant.token,
 								"Content-Type": descriptor.mediaType,
 								"Content-Length": String(descriptor.sizeBytes),
@@ -320,6 +325,7 @@ export function createWorkerRuntimeFileBridgeFactoryV1(
 							redirect: "error",
 							signal: AbortSignal.timeout(timeoutMs),
 							headers: {
+								Authorization: `Bearer ${options.serviceToken}`,
 								"X-Platform-File-Grant": access.grant.token,
 								"Content-Type": "application/json",
 							},

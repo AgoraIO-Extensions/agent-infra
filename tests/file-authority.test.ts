@@ -827,18 +827,9 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 				url.hostname = "127.0.0.1";
 				url.port = String(address.port);
 			}
-			const headers = new Headers(init?.headers);
-			if (url.pathname.startsWith("/api/v1/conversations/")) {
-				const conversationId = decodeURIComponent(
-					url.pathname.split("/")[4] ?? "",
-				);
-				headers.set(
-					"Authorization",
-					`Bearer ${sandboxTokens.get(conversationId) ?? serviceToken}`,
-				);
-			}
+			// #3281：数据面请求的服务身份由 FileBridge 自己携带，测试不再代为补头。
 			if (init?.method === "PUT") resultUploads += 1;
-			const response = await fetch(url, { ...init, headers });
+			const response = await fetch(url, init);
 			if (
 				loseCompleteReceipt &&
 				url.pathname.endsWith("/complete") &&
