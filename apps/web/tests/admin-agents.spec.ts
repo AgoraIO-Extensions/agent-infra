@@ -1254,7 +1254,7 @@ test("row retry keeps focus on the pending button, then on the row's configure l
 	await expectCleanPage(page, errors);
 });
 
-test("employee unban and application material grants keep focus on the pending button (K7-02)", async ({
+test("employee disable, unban and application material grants keep focus off body while pending (K7-02)", async ({
 	page,
 }, info) => {
 	await acceptanceViewport(page, info);
@@ -1273,19 +1273,25 @@ test("employee unban and application material grants keep focus on the pending b
 			]),
 		}),
 	);
-	await page.route(`**/api/v2/admin/users/${userId}/disable`, (route) =>
-		route.request().method() === "PUT"
-			? route.fulfill({
-					json: {
-						schemaVersion: 1,
-						userId,
-						disabled: false,
-						changed: true,
-						auditOutcome: "recorded",
-					},
-				})
-			: route.fulfill({ json: { schemaVersion: 1, userId, disabled: true } }),
-	);
+	await page.route(`**/api/v2/admin/users/${userId}/disable`, (route) => {
+		if (route.request().method() !== "PUT")
+			return route.fulfill({
+				json: { schemaVersion: 1, userId, disabled: true },
+			});
+		// 写入结果按请求体回显（解除禁用与禁用各一次）。
+		const { disabled } = route.request().postDataJSON() as {
+			disabled: boolean;
+		};
+		return route.fulfill({
+			json: {
+				schemaVersion: 1,
+				userId,
+				disabled,
+				changed: true,
+				auditOutcome: "recorded",
+			},
+		});
+	});
 	const metadata = (revokedAt: string | null) => ({
 		applicationId: "app-material",
 		authorizationRevision: revokedAt ? "rev-2" : "rev-1",
@@ -1343,6 +1349,39 @@ test("employee unban and application material grants keep focus on the pending b
 	unbanWrite.release();
 	await expect(users.getByRole("status")).toContainText("解除禁用已确认");
 	await expectFocusSettled(unban, "解除禁用");
+
+	// 员工访问控制「禁用员工」：确认后弹窗把焦点交给「员工访问控制」标题；提交进行中触发按钮是可聚焦的
+	// 禁用，多次采样焦点都在标题上，完成后仍在标题（D2-59）。
+	const usersHeading = users.getByRole("heading", { name: "员工访问控制" });
+	const ban = await pinElement(
+		users.getByRole("button", { name: "禁用员工：验收员工", exact: true }),
+		"ban",
+	);
+	await ban.focus();
+	await page.keyboard.press("Enter");
+	const banDialog = page.getByRole("dialog", { name: "禁用这名员工？" });
+	await expect(banDialog).toBeVisible();
+	const banWrite = await holdRequests(
+		page,
+		"PUT",
+		`/api/v2/admin/users/${userId}/disable`,
+	);
+	await banDialog
+		.getByRole("button", { name: "禁用员工", exact: true })
+		.focus();
+	await page.keyboard.press("Enter");
+	await expect(banDialog).toBeHidden();
+	await expect(ban).toHaveText("提交中…");
+	await expect(ban).toHaveAttribute("aria-disabled", "true");
+	expect(
+		await ban.evaluate((element) => (element as HTMLButtonElement).disabled),
+	).toBe(false);
+	await expectFocusHeld(usersHeading, [30, 150, 400, 1000], "禁用员工 进行中");
+	banWrite.release();
+	await expect(users.getByRole("status")).toContainText(
+		"禁用已确认；当前状态：已禁用",
+	);
+	await expectFocusSettled(usersHeading, "禁用员工");
 
 	// 应用凭证材料授权：「授权材料」完成后焦点留在按钮上；「撤销材料授权」完成后随状态禁用，
 	// 焦点交给「授权材料」（D2-59）。
