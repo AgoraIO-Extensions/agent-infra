@@ -806,7 +806,7 @@ describe("Agent runtime presentation after Workload drift recovery", () => {
 							state,
 							deployment: (change.candidateOnly
 								? current
-								: deployment) as typeof runtime.deployment,
+								: deployment) as unknown as typeof runtime.deployment,
 						},
 					},
 				}),
