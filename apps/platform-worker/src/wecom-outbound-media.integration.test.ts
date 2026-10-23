@@ -153,6 +153,8 @@ beforeAll(async () => {
 		databaseUrl: db.databaseUrl,
 		storage,
 		authorization,
+		identity,
+		state: store,
 	});
 	channel = createWecomChannelV1({ authorization, store });
 	await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values (${base.agentId},1,'authorization_1')`;

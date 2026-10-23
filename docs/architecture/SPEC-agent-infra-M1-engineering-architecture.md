@@ -2041,10 +2041,11 @@ Agent 投影的 `channels[].status` 只列出当前配置修订已配置的企�
 - image、file、video 消息：取下载地址、`aeskey` 和文件名。
 - voice 消息：取转写文本，按普通文本受理。
 - mixed 消息：文本项拼成消息正文，图片项作为附件。
+- 下载前按 §15.4.1 核对目标 Agent 当前配置已验证的附件能力，并读取同一配置修订的 FileLimits 交集；与 Web 上传使用同一读取。
 - Worker 在受理事务之外有界下载，并用固定版本 SDK 的解密工具解密（SDK 自带的下载不限制大小，不直接使用）。时间和大小都有上限：下载地址按官方说明 5 分钟内有效，大小取该企微 Channel 的 FileLimits 交集。
 - 媒体类型按实际字节识别，经 File Authority 写入 attachment，绑定服务端解析的发送者、Agent、Channel 和 Conversation；幂等键由绑定、稳定消息 ID 和序号派生。附件写入前，按与受理相同的映射与轮次、经同一幂等创建路径确定并提交当前 Conversation；受理时映射已轮换的，重新确定会话后再写入。
 - 受理事务只绑定已确认的附件。只带媒体的消息正文为空。
-- 以下情况不调用 Agent，写回执与审计，并回复固定说明：类型不支持、超限、下载或解密失败、地址过期。
+- 以下情况不调用 Agent，写回执与审计，并回复固定说明：Agent 未验证附件能力或未声明 FileLimits、类型不支持、超限、下载或解密失败、地址过期。
 - 下载地址和 `aeskey` 只在 Worker 内存中短暂使用，不进入请求摘要、回执、日志、审计或事件。
 
 长连接出站：
@@ -2173,19 +2174,26 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 解析与发布：
 
 - 解析时机：原生 Turn 以 completed 结束、最终回答已确认之后，写终态事件之前。失败、取消或 unknown 的 Turn 不发布。
-- 引用按首次出现的顺序、以规范化路径去重，每次执行最多发布 10 个，超出部分记为失败。
+- 引用按首次出现的顺序、以规范化路径去重，每次执行最多发布 10 个。超出的引用不逐个记录，合并为一次 failed 的发布操作。
 - 每个引用逐项校验：
   - 用 `O_NOFOLLOW` 打开，且必须是普通文件；
   - 打开之后，读取、类型识别、SHA-256 计算和上传都使用同一个文件描述符，不再按路径重新打开，避免校验之后文件被替换；
   - 实际读到的大小不超过 FileLimits 和单文件 50 MiB 上限；
   - 媒体类型按 15.4.1 的同一规则识别；结果发布不携带声明类型，因此记录字节识别结果（纯文本为 `text/plain`），且必须在 FileLimits 内；
   - 名称取 basename。
-- 结果意图的 descriptor 包含上述 SHA-256 与大小。恢复时重新打开文件并重新校验，内容与原意图不一致则记为失败，不改发新内容。
+- 结果意图的 descriptor 包含上述 SHA-256 与大小。
 - 发布属于 §10.14 的平台中介操作：
-  - 每个引用先保存 intent，再经运行期文件交换核对当前授权，然后调用 `writeResult`，最后保存 completed、failed 或 unknown。
-  - unknown 沿原结果意图核实，不新建意图重发。
+  - 发布计划（解析出的引用清单）与每个引用的发布进度保存在 Driver 持久状态中；计划收敛前不写终态事件。
+  - 每个引用先保存带 descriptor 的 intent，再保存 started，然后调用 `writeResult`（经运行期文件交换核对当前授权），最后保存 completed、failed 或 unknown。
+  - 已 started、但当前进程没有 `writeResult` 结论的引用记 unknown，沿原结果意图核实，不新建意图重发。
   - 事实中不含路径或内容。
-- Driver 重启后，从持久保存的引用清单和发布进度继续，不重复发布。
+- 执行期文件交换上下文只存在于本次投递的 Host 内存中（[ADR-0014](ADR-0014-runtime-execution-file-bridge.md) §6）：
+  - 上下文仍在时，已保存 intent、尚未 started 的引用在继续发布前重新打开文件并校验；内容与 intent 的 descriptor 不一致则记 failed，不改发新内容。
+  - Driver 或 Host 重启后不重建该上下文，也不补发；部署未装配文件交换时同样没有上下文。此时未收敛的计划按已保存进度一次收敛，再按原生终态写终态事件：
+    - 尚未 started 的引用记 failed；
+    - 已 started，且 journal 中已有 `workspaceReference`、名称、媒体类型和大小都与 intent 相同的 `result.file` V2 事件的，记 completed；
+    - 已 started 但没有对应事件的，记 unknown。
+  - 原生终态在重启后才确认的 Turn 同样没有上下文：回答内引用直接记 failed，不发布。
 
 契约与 ACP：
 

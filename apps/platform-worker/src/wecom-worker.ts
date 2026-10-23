@@ -66,6 +66,8 @@ export function createPlatformWecomWorkerV1(
 				...options.media,
 				databaseUrl: options.databaseUrl,
 				authorization,
+				identity: options.identity,
+				state: store,
 			})
 		: undefined;
 	const channel = createWecomChannelV1({

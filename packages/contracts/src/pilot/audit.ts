@@ -135,6 +135,10 @@ export const ScopedPlatformAuditActionV1Schema = z.enum([
 	"skill.project.read",
 	"relay_key.agent_default.read",
 	"relay_key.agent_default.candidates",
+	// #3258：企微 /new 开始新会话、会话不可用（#3184）与入站媒体被拒绝（#3241）
+	"wecom.conversation_started",
+	"wecom.conversation_unavailable",
+	"wecom.media_rejected",
 ]);
 
 export const ScopedPlatformAuditProjectionV1Schema = z.strictObject({

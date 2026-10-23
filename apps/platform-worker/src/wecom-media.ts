@@ -10,9 +10,12 @@ import {
 	type FileAuthorizationPortV1,
 	type FileLimitsV1,
 	type FileStoreV1,
+	parseCurrentTaskUserV1,
 	resolveFileLimitsV1,
 	sameWecomConnectionAuthorizationFactV1,
+	type WecomAuthorityStatePortV1,
 	type WecomAuthorizationPortV1,
+	type WecomIdentityPortV1,
 	type WecomMediaReferenceV1,
 	type WecomMediaResolutionV1,
 	type WecomMediaResolverV1,
@@ -21,6 +24,7 @@ import {
 	wecomChannelIdV1,
 } from "@agent-infra/platform-core";
 import {
+	PostgresAgentConfigurationQueryV1,
 	PostgresFileLimitDeclarationStoreV1,
 	PostgresFileStoreV1,
 } from "@agent-infra/platform-store";
@@ -150,7 +154,8 @@ function rejected(
 
 /**
  * 该企微 Channel 当前的 FileLimits 三方交集（工程 Spec §15.4.1）。读取器返回当前配置修订；
- * Agent 不存在时没有修订，按未声明处理，返回 null。
+ * Agent 不存在时没有修订，按未声明处理，返回 null。给出 `configurationRevision` 时，声明
+ * 必须属于这个配置修订（与 Web 上传一致），否则按过期快照拒绝。
  */
 export function createWecomChannelFileLimitsReaderV1(
 	store: PostgresFileLimitDeclarationStoreV1,
@@ -160,14 +165,70 @@ export function createWecomChannelFileLimitsReaderV1(
 	return async (scope: {
 		readonly agentId: string;
 		readonly channelId: string;
+		readonly configurationRevision?: number;
 	}): Promise<FileLimitsV1 | null> => {
 		const current = await read({
-			...scope,
-			configurationRevision: 0,
+			agentId: scope.agentId,
+			channelId: scope.channelId,
+			configurationRevision: scope.configurationRevision ?? 0,
 			kind: "attachment",
 		});
-		return current.configurationRevision >= 1
+		return current.configurationRevision >= 1 &&
+			(scope.configurationRevision === undefined ||
+				current.configurationRevision === scope.configurationRevision)
 			? resolveFileLimitsV1(current.declarations, now())
+			: null;
+	};
+}
+
+/**
+ * #3258：读取目标 Agent 当前是否已验证附件能力。返回能力所属的配置修订；未验证、不可见或
+ * 读取期间状态变化时返回 null。
+ */
+export type WecomAttachmentCapabilityReaderV1 = (input: {
+	readonly scope: WecomScopeV1;
+	/** 已通过企微授权的发送者；当前身份解析结果必须仍是同一用户。 */
+	readonly actorId: string;
+}) => Promise<{ readonly configurationRevision: number } | null>;
+
+/**
+ * #3258：与 Web 上传读取同一份 Runtime 展示投影（Store `readRuntimePresentation` 的
+ * `capabilities.attachments`），按发送者当前身份、当前配置修订与管理状态读取，不另设能力来源。
+ */
+export function createWecomAttachmentCapabilityReaderV1(input: {
+	readonly configuration: Pick<
+		PostgresAgentConfigurationQueryV1,
+		"readRuntimePresentation"
+	>;
+	readonly identity: Pick<WecomIdentityPortV1, "resolveSender">;
+	readonly state: WecomAuthorityStatePortV1;
+}): WecomAttachmentCapabilityReaderV1 {
+	return async ({ scope, actorId }) => {
+		const resolved = await input.identity.resolveSender(scope);
+		const actor = resolved ? parseCurrentTaskUserV1(resolved) : null;
+		if (actor?.accountStatus !== "active" || actor.userId !== actorId)
+			return null;
+		const state = await input.state.readAuthorityState(scope.agentId);
+		if (
+			!state ||
+			state.management.agentId !== scope.agentId ||
+			state.configuration.agentId !== scope.agentId
+		)
+			return null;
+		const runtime = await input.configuration.readRuntimePresentation({
+			agentId: scope.agentId,
+			actorId: actor.userId,
+			organizationIds: actor.organizationIds,
+			isAdministrator: false,
+			accountStatus: actor.accountStatus,
+			expected: {
+				configurationRevision: state.configuration.revision,
+				management: state.management,
+			},
+		});
+		return runtime.outcome === "found" &&
+			runtime.capabilities?.attachments === true
+			? { configurationRevision: state.configuration.revision }
 			: null;
 	};
 }
@@ -323,17 +384,28 @@ export function createWecomMediaV1(
 	options: WecomInboundMediaDeploymentV1 & {
 		readonly databaseUrl: string;
 		readonly authorization: WecomAuthorizationPortV1;
+		/** #3258：读取发送者当前身份与 Agent 当前状态，用于核对已验证的附件能力。 */
+		readonly identity: Pick<WecomIdentityPortV1, "resolveSender">;
+		readonly state: WecomAuthorityStatePortV1;
 	},
 ) {
 	const files = new PostgresFileStoreV1(options.databaseUrl);
 	const declarations = new PostgresFileLimitDeclarationStoreV1(
 		options.databaseUrl,
 	);
+	const configuration = new PostgresAgentConfigurationQueryV1({
+		databaseUrl: options.databaseUrl,
+	});
 	const readLimits = createWecomChannelFileLimitsReaderV1(declarations);
 	const inbound = createWecomInboundMediaResolverV1({
 		...options,
 		files,
 		readLimits,
+		readAttachmentCapability: createWecomAttachmentCapabilityReaderV1({
+			configuration,
+			identity: options.identity,
+			state: options.state,
+		}),
 	});
 	const storage = options.storage;
 	const outbound =
@@ -355,6 +427,7 @@ export function createWecomMediaV1(
 				inbound.close(),
 				files.close(),
 				declarations.close(),
+				configuration.close(),
 			]);
 			const failure = results.find((result) => result.status === "rejected");
 			if (failure?.status === "rejected") throw failure.reason;
@@ -367,25 +440,31 @@ export function createWecomMediaV1(
  * FileLimits 交集，经 File Authority 写入绑定发送者、Agent、Channel 与 Conversation 的 attachment。
  *
  * - 幂等键由绑定（actor、Agent、Channel、Conversation）、稳定消息 ID 与序号派生，重投不会重复写入。
- * - 每次文件操作都重新核对当前企微授权与 FileLimits，不信任受理前的快照。
+ * - 每次文件操作都重新核对当前企微授权、Agent 已验证的附件能力与 FileLimits，不信任受理前的快照。
  * - 下载地址、aeskey 与媒体字节只在本次调用的内存中，不进入日志、错误或返回值。
  */
 export function createWecomInboundMediaResolverV1(
 	options: WecomInboundMediaDeploymentV1 & {
 		readonly databaseUrl: string;
 		readonly authorization: WecomAuthorizationPortV1;
+		/**
+		 * #3258：目标 Agent 已验证的附件能力，与 Web 上传同一读取；未验证时不下载、不调用 Agent。
+		 */
+		readonly readAttachmentCapability: WecomAttachmentCapabilityReaderV1;
 		readonly now?: () => Date;
 		/** 测试替身；生产使用 PostgreSQL 文件记录与 FileLimits 声明。 */
 		readonly files?: FileStoreV1;
 		readonly readLimits?: (scope: {
 			readonly agentId: string;
 			readonly channelId: string;
+			readonly configurationRevision?: number;
 		}) => Promise<FileLimitsV1 | null>;
 	},
 ): WecomMediaResolverV1 & { close(): Promise<void> } {
 	if (
 		typeof options.storage?.upload !== "function" ||
-		typeof options.storage.inspect !== "function"
+		typeof options.storage.inspect !== "function" ||
+		typeof options.readAttachmentCapability !== "function"
 	)
 		throw new Error("WeCom inbound media configuration is invalid");
 	const intentTtlMs = bounded(options.intentTtlMs, 900_000, 60_000, 86_400_000);
@@ -421,12 +500,30 @@ export function createWecomInboundMediaResolverV1(
 	const readDeclarations = declarations
 		? createWecomChannelFileLimitsReaderV1(declarations, now)
 		: undefined;
-	async function currentLimits(scope: {
-		readonly agentId: string;
-		readonly channelId: string;
-	}): Promise<FileLimitsV1 | null> {
-		if (options.readLimits) return options.readLimits(scope);
-		return readDeclarations ? readDeclarations(scope) : null;
+	/**
+	 * #3258：与 Web 上传一致，先核对目标 Agent 已验证的附件能力，再读取该能力所属配置修订下的
+	 * FileLimits 交集；任何一项缺失都按不支持处理。
+	 */
+	async function currentLimits(
+		scope: {
+			readonly actorId: string;
+			readonly agentId: string;
+			readonly channelId: string;
+		},
+		messageScope: WecomScopeV1,
+	): Promise<FileLimitsV1 | null> {
+		const capability = await options.readAttachmentCapability({
+			scope: messageScope,
+			actorId: scope.actorId,
+		});
+		if (!capability) return null;
+		const limitsScope = {
+			agentId: scope.agentId,
+			channelId: scope.channelId,
+			configurationRevision: capability.configurationRevision,
+		};
+		if (options.readLimits) return options.readLimits(limitsScope);
+		return readDeclarations ? readDeclarations(limitsScope) : null;
 	}
 	const files = createFileAuthorityV1({
 		store: fileStore,
@@ -447,7 +544,7 @@ export function createWecomInboundMediaResolverV1(
 				conversationId,
 			};
 			// 只把会话范围交给授权端口，下载材料不离开本次调用。
-			const messageScope = {
+			const messageScope: WecomScopeV1 = {
 				agentId: message.agentId,
 				bindingReference: message.bindingReference,
 				kind: message.kind,
@@ -478,17 +575,18 @@ export function createWecomInboundMediaResolverV1(
 						)
 					)
 						return null;
-					const limits = await currentLimits(scope);
+					const limits = await currentLimits(scope, messageScope);
 					return limits ? { ...scope, execution: null, limits } : null;
 				},
 			};
 			let limits: FileLimitsV1 | null;
 			try {
-				limits = await currentLimits(scope);
+				limits = await currentLimits(scope, messageScope);
 			} catch {
 				return rejected("failed");
 			}
-			// 没有声明 FileLimits 时按工程 Spec §15.4.1 拒绝接收媒体。
+			// Agent 未验证附件能力或没有声明 FileLimits 时，按工程 Spec §14.2.3 与 §15.4.1
+			// 拒绝接收媒体：不下载、不调用 Agent。
 			if (!limits) return rejected("unsupported_channel");
 			const maxBytes = Math.min(limits.maxBytes, driverMaxBytes);
 			const attachments: string[] = [];

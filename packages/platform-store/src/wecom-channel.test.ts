@@ -21,6 +21,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import { PostgresScopedPlatformAuditQueryV1 } from "./scoped-audit-query.ts";
 import { PostgresWecomChannelV1 } from "./wecom-channel.ts";
 import { completeWecomExecutionFixture } from "./wecom-receipt.fixture.ts";
 
@@ -2738,4 +2739,174 @@ describe("WeCom inbound media receipts (#3227)", () => {
 			).rejects.toMatchObject({ constraint_name: "wecom_media_rejection" });
 		},
 	);
+});
+
+// #3258：#3184 与 #3241 新增的企微回执动作由真实写入方产生后，管理员审计能按动作筛到；
+// 普通用户仍看不到这些没有执行绑定的企微记录。
+describe("WeCom receipt actions in the administrator audit query (#3258)", () => {
+	const scoped = (sender: string, eventId: string, text = "fixture text") => ({
+		...message,
+		senderId: sender,
+		eventId,
+		text,
+	});
+	const receiptOf = async (input: WecomMessageV1) => {
+		const result = await channel().receive(input);
+		if (result.outcome !== "accepted" && result.outcome !== "replayed")
+			throw new Error("Expected a receipt");
+		return result;
+	};
+	const abandon = () =>
+		sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+	const request = () => ({
+		requestId: `audit-3258-${crypto.randomUUID()}`,
+		traceId: `audit-3258-${crypto.randomUUID()}`,
+	});
+
+	it("lists /new, unavailable conversation and rejected media by action for administrators only", async () => {
+		await abandon();
+		const started = await receiptOf(
+			scoped("audit3258_new", "audit3258_new_1", "/new"),
+		);
+		await abandon();
+		const first = await receiptOf(scoped("audit3258_gone", "audit3258_gone_1"));
+		await sql`update platform.conversation_executions set status='failed' where execution_id=${first.receipt.executionId}`;
+		await sql`update platform.conversations set status='unavailable' where id=${first.receipt.conversationId}`;
+		await abandon();
+		const unavailable = await receiptOf(
+			scoped("audit3258_gone", "audit3258_gone_2", "again"),
+		);
+		expect(unavailable.receipt.status).toBe("unavailable");
+		await abandon();
+		const media = await createWecomChannelV1({
+			store,
+			authorization: allowedAuthorization,
+			media: {
+				resolve: async () => ({
+					outcome: "rejected" as const,
+					reason: "unsupported_channel" as const,
+					maxBytes: null,
+				}),
+			},
+		}).receive({
+			...scoped("audit3258_media", "audit3258_media_1", ""),
+			media: [
+				{
+					kind: "image" as const,
+					name: null,
+					download: {
+						url: "https://download.example.test/SENTINEL-URL-3258",
+						aesKey: "SENTINEL-AESKEY-3258",
+						expiresAt: "2099-01-01T00:00:00Z",
+					},
+				},
+			],
+		});
+		if (media.outcome !== "accepted") throw new Error("Expected receipt");
+		expect(media.receipt.status).toBe("media_rejected");
+		await abandon();
+
+		const expected = [
+			["wecom.conversation_started", started.receipt.receiptId, "succeeded"],
+			[
+				"wecom.conversation_unavailable",
+				unavailable.receipt.receiptId,
+				"rejected",
+			],
+			["wecom.media_rejected", media.receipt.receiptId, "rejected"],
+		] as const;
+		const administrator = {
+			kind: "administrator" as const,
+			administratorId: "platform-admin",
+		};
+		const scopedQuery = new PostgresScopedPlatformAuditQueryV1(db);
+		const legacyQuery = new PostgresPlatformAuditQueryV1(db);
+		try {
+			for (const [action, receiptId, result] of expected) {
+				const [row] =
+					await sql`select id, details->'originalPrincipal'->>'id' as actor from platform.audit_events where request_id=${receiptId} and action=${action}`;
+				if (!row) throw new Error(`Missing ${action} audit`);
+				// V1 与 V2 管理员入口共用的受控查询：按动作筛选能查到，且不带出 details。
+				const page = await scopedQuery.listAudit(
+					administrator,
+					{ limit: 100, filters: { action } },
+					request(),
+				);
+				expect(page.items.map((item) => item.action)).toEqual(
+					page.items.map(() => action),
+				);
+				const item = page.items.find((entry) => entry.auditId === row.id);
+				expect(item).toMatchObject({
+					action,
+					result,
+					actor: { kind: "system", actorId: "platform-api" },
+					subject: { kind: "agent", subjectId: message.agentId },
+					summary: action,
+					requestId: receiptId,
+					agentId: message.agentId,
+				});
+				expect(JSON.stringify(item)).not.toMatch(/SENTINEL|receiptId/);
+				const named = await scopedQuery.listAuditWithDisplayNames(
+					administrator,
+					{ limit: 100, filters: { action } },
+					request(),
+				);
+				expect(named.items.some((entry) => entry.auditId === row.id)).toBe(
+					true,
+				);
+				expect(
+					await scopedQuery.getAudit(
+						administrator,
+						row.id,
+						{ limit: 1, filters: {} },
+						request(),
+					),
+				).toMatchObject({ auditId: row.id, action });
+				// 发送者本人不是管理员：列表筛不到，按 ID 读取同样拒绝。
+				const actorScope = {
+					kind: "execution" as const,
+					principal: { kind: "user" as const, id: row.actor as string },
+					user: {
+						schemaVersion: 1 as const,
+						userId: row.actor as string,
+						accountStatus: "active" as const,
+						organizationIds: ["controlled-org"],
+						authorizationRevision: "directory-current",
+					},
+				};
+				expect(
+					(
+						await scopedQuery.listAudit(
+							actorScope,
+							{ limit: 100, filters: { action } },
+							request(),
+						)
+					).items,
+				).toEqual([]);
+				await expect(
+					scopedQuery.getAudit(
+						actorScope,
+						row.id,
+						{ limit: 1, filters: {} },
+						request(),
+					),
+				).rejects.toMatchObject({ code: "access_denied" });
+			}
+			// 旧版管理员审计列表同样不再跳过这三个动作。
+			const legacy = await legacyQuery.listAudit(
+				{ schemaVersion: 1, kind: "administrator", administratorId: "admin" },
+				{ schemaVersion: 1, limit: 100 },
+			);
+			for (const [action, receiptId] of expected) {
+				const [row] =
+					await sql`select id from platform.audit_events where request_id=${receiptId} and action=${action}`;
+				expect(legacy.items).toContainEqual(
+					expect.objectContaining({ auditId: row?.id, action }),
+				);
+			}
+		} finally {
+			await scopedQuery.close();
+			await legacyQuery.close();
+		}
+	}, 60_000);
 });
