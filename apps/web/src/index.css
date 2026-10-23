@@ -610,7 +610,9 @@
 	color: var(--surface);
 	text-decoration: none;
 }
-.login-submit:disabled {
+/* login.html `.submit:disabled{opacity:.65;cursor:wait}`。提交中按钮是可聚焦的禁用（aria-disabled，
+   #3242 K7-02），原生 :disabled 不再命中，两种禁用都按设计取 .65 / wait（#3269 N8-3-11）。 */
+.login-submit:is(:disabled, [aria-disabled="true"]) {
 	opacity: 0.65;
 	cursor: wait;
 }

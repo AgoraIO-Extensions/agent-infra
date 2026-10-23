@@ -678,6 +678,15 @@ for (const via of ["button", "field"] as const)
 		await page.keyboard.press("Enter");
 		await expect(button).toHaveText("正在登录…");
 		await expectFocusableBusy(button, `${via} 登录`);
+		// login.html `.submit:disabled`：提交中不透明度 .65、光标 wait，不落到 Button 通用的
+		// aria-disabled .48 / not-allowed（#3269 N8-3-11）。
+		expect(
+			await button.evaluate((element) => {
+				const style = getComputedStyle(element);
+				return [style.opacity, style.cursor];
+			}),
+			`${via} 登录提交中的计算样式`,
+		).toEqual(["0.65", "wait"]);
 		await expect(password(page)).toBeDisabled();
 		login.release();
 		await expect(page.getByRole("alert")).toHaveText(credentialsMessage);
