@@ -1989,6 +1989,258 @@ resources:
 		);
 	});
 
+	// #3328 N10-2-02：修改申请不能更换模板。模板已从部署移除时下拉占位与字段错误不再引导重新选择或
+	// 重新加载；顶部提示说明请新建申请并获得焦点（只读的「标准模板」不是焦点目标），再次提交仍被拦下。
+	it("points an edited application whose template was removed to a new application from the top alert", () => {
+		const onSubmit = vi.fn();
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			source: { kind: "standard", templateId: "removed-template" },
+			status: "rejected",
+			decision: { decidedAt: "2026-09-04T00:00:00Z", reason: "Removed" },
+		});
+		render(
+			<AgentApplicationForm
+				application={application}
+				action="resubmit"
+				mode="update"
+				onSubmit={onSubmit}
+				showDeploymentStatus={false}
+				submitting={false}
+			/>,
+		);
+		const template = screen.getByRole("combobox", { name: "标准模板" });
+		expect(
+			template.querySelector('[data-slot="select-value"]')?.textContent,
+		).toBe("已移除模板");
+		expect(screen.queryByRole("alert")).toBeNull();
+
+		const submit = screen.getByRole("button", { name: "修改并重新提交" });
+		fireEvent.click(submit);
+		const alert = screen.getByRole("alert");
+		expect(alert.id).toBe("application-submission-error");
+		expect(alert.getAttribute("tabindex")).toBe("-1");
+		expect(alert.textContent).toBe("当前部署已移除此申请的模板，请新建申请。");
+		expect(document.activeElement).toBe(alert);
+		expect(template.getAttribute("aria-invalid")).toBe("true");
+		expect(
+			document.getElementById("application-template-id-error")?.textContent,
+		).toBe("该模板已从当前部署移除。已有申请不能更换模板，请新建申请。");
+		expect(screen.queryByText(/重新选择|重新加载/)).toBeNull();
+
+		submit.focus();
+		fireEvent.click(submit);
+		expect(document.activeElement).toBe(screen.getByRole("alert"));
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	// #3328 N10-2-01：修改申请的模板验证失败。字段错误沿用就绪原因（不再写「部署选项暂不可用。」），
+	// 出现后不再并列同义的就绪提示；顶部提示给出等待恢复或新建申请，并获得焦点。
+	it("explains an edited application's failed template at the top alert without a generic deployment error", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				application={pendingApplication}
+				action="edit"
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					templates: deploymentConfiguration.templates.map((template) => ({
+						...template,
+						readiness: { state: "failed" as const, revision: "codex-r1" },
+					})),
+				}}
+				mode="update"
+				onSubmit={onSubmit}
+				showDeploymentStatus={false}
+				submitting={false}
+			/>,
+		);
+		const notice = screen.getByText("验证失败，暂不可申请。", {
+			selector: "p",
+		});
+		expect(notice.getAttribute("aria-live")).toBe("polite");
+
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		const alert = screen.getByRole("alert");
+		expect(alert.textContent).toBe(
+			"此申请的模板暂不可申请，请等待模板恢复后再提交，或新建申请。",
+		);
+		expect(document.activeElement).toBe(alert);
+		expect(
+			document.getElementById("application-template-id-error")?.textContent,
+		).toBe(
+			"验证失败，暂不可申请。已有申请不能更换模板，请等待模板恢复后再提交，或新建申请。",
+		);
+		expect(
+			screen.queryByText("验证失败，暂不可申请。", { selector: "p" }),
+		).toBeNull();
+		expect(screen.queryByText(/部署选项暂不可用/)).toBeNull();
+		expect(
+			within(screen.getByRole("list", { name: "模板就绪状态" })).getByText(
+				"Codex：验证失败，暂不可申请。",
+			),
+		).toBeTruthy();
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	// #3328 N10-2-01：修改申请时模板验证 revision 在会话内变化。刷新页面就能确认，顶部提示只要求刷新；
+	// 模板恢复为同一 revision 后提示随之收起，申请可以提交。
+	it("asks an edited application to refresh after its template revision changes", () => {
+		const onSubmit = vi.fn();
+		const withRevision = (revision: string) => ({
+			...deploymentConfiguration,
+			templates: deploymentConfiguration.templates.map((template) => ({
+				...template,
+				readiness: { state: "ready" as const, revision },
+			})),
+		});
+		const { rerender } = render(
+			<AgentApplicationForm
+				application={pendingApplication}
+				action="edit"
+				deploymentConfiguration={withRevision("codex-r1")}
+				mode="update"
+				onSubmit={onSubmit}
+				showDeploymentStatus={false}
+				submitting={false}
+			/>,
+		);
+		const rerenderWith = (revision: string) =>
+			rerender(
+				<AgentApplicationForm
+					application={pendingApplication}
+					action="edit"
+					deploymentConfiguration={withRevision(revision)}
+					mode="update"
+					onSubmit={onSubmit}
+					showDeploymentStatus={false}
+					submitting={false}
+				/>,
+			);
+		rerenderWith("codex-r2");
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		const alert = screen.getByRole("alert");
+		expect(alert.textContent).toBe(
+			"此申请的模板需要重新确认，请刷新页面后再提交。",
+		);
+		expect(document.activeElement).toBe(alert);
+		expect(
+			document.getElementById("application-template-id-error")?.textContent,
+		).toBe("模板已更新，请刷新后确认。");
+		expect(onSubmit).not.toHaveBeenCalled();
+
+		rerenderWith("codex-r1");
+		expect(screen.queryByRole("alert")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+	});
+
+	// #3328：最近一次提交被模板拦下时，顶部唯一的提示说明模板，先前服务端错误的说明让位；
+	// 模板恢复后回到服务端错误的说明。
+	it("keeps a single top alert when a template block follows a server error", () => {
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			source: { kind: "standard", templateId: "removed-template" },
+		});
+		const props = {
+			application,
+			action: "edit" as const,
+			mode: "update" as const,
+			onSubmit: vi.fn(),
+			showDeploymentStatus: false,
+			submissionErrorMessage: "申请提交失败，部署依赖暂不可用，请稍后重试。",
+			submitting: false,
+		};
+		const { rerender } = render(<AgentApplicationForm {...props} />);
+		expect(screen.getByRole("alert").textContent).toBe(
+			"申请提交失败，部署依赖暂不可用，请稍后重试。",
+		);
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(screen.getAllByRole("alert")).toHaveLength(1);
+		expect(screen.getByRole("alert").textContent).toBe(
+			"当前部署已移除此申请的模板，请新建申请。",
+		);
+		rerender(
+			<AgentApplicationForm
+				{...props}
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					templates: [
+						...deploymentConfiguration.templates,
+						{
+							...at(deploymentConfiguration.templates, 0),
+							templateId: "removed-template",
+							displayName: "Restored",
+						},
+					],
+				}}
+			/>,
+		);
+		expect(screen.getAllByRole("alert")).toHaveLength(1);
+		expect(screen.getByRole("alert").textContent).toBe(
+			"申请提交失败，部署依赖暂不可用，请稍后重试。",
+		);
+	});
+
+	// #3328 N10-2-01：创建申请时所选模板在会话内更新。字段错误沿用「模板已更新，请刷新后确认。」，
+	// 不再并列同义提示，也不写「部署选项暂不可用。」；下拉可改选，焦点到它。未选模板时仍提示选择。
+	it("reuses the template readiness reason as the create field error", () => {
+		const onSubmit = vi.fn();
+		const withRevision = (revision: string) => ({
+			...deploymentConfiguration,
+			templates: deploymentConfiguration.templates.map((template) => ({
+				...template,
+				readiness: { state: "ready" as const, revision },
+			})),
+		});
+		const { rerender } = render(
+			<AgentApplicationForm
+				deploymentConfiguration={withRevision("codex-r1")}
+				mode="create"
+				onSubmit={onSubmit}
+				showDeploymentStatus={false}
+				submitting={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
+		expect(
+			document.getElementById("application-template-id-error")?.textContent,
+		).toBe("请选择标准模板。");
+
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		choose("标准模板", "Codex");
+		rerender(
+			<AgentApplicationForm
+				deploymentConfiguration={withRevision("codex-r2")}
+				mode="create"
+				onSubmit={onSubmit}
+				showDeploymentStatus={false}
+				submitting={false}
+			/>,
+		);
+		expect(
+			screen
+				.getByText("模板已更新，请刷新后确认。", { selector: "p" })
+				.getAttribute("aria-live"),
+		).toBe("polite");
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
+		const template = screen.getByRole("combobox", { name: "标准模板" });
+		expect(
+			document.getElementById("application-template-id-error")?.textContent,
+		).toBe("模板已更新，请刷新后确认。");
+		expect(screen.getAllByText("模板已更新，请刷新后确认。")).toHaveLength(1);
+		expect(screen.queryByText(/部署选项暂不可用/)).toBeNull();
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(template.getAttribute("aria-invalid")).toBe("true");
+		expect(document.activeElement).toBe(template);
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("blocks an unavailable model catalog without duplicate submission", () => {
 		const onSubmit = vi.fn();
 		render(

@@ -261,6 +261,35 @@ describe("AgentApplicationSubmissionScreen", () => {
 		expect(screen.queryByText("private deployment detail")).toBeNull();
 	});
 
+	// #3328 N10-2-02：修改申请的模板已从部署移除。顶部同一位置的提示说明请新建申请并获得焦点，
+	// 页面只有这一条 danger 提示，不发请求。
+	it("points an edited application whose template was removed to a new application from the single top alert", async () => {
+		const onSubmit = vi.fn();
+		await renderWithMyAgentsRouter(
+			<AgentApplicationSubmissionScreen
+				action="resubmit"
+				application={{
+					...rejectedApplication,
+					source: { kind: "standard", templateId: "removed-template" },
+				}}
+				mode="update"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		expect(screen.queryByRole("alert")).toBeNull();
+		const submit = screen.getByRole("button", { name: "修改并重新提交" });
+		submit.focus();
+		fireEvent.click(submit);
+		const alert = screen.getByRole("alert");
+		expect(screen.getAllByRole("alert")).toHaveLength(1);
+		expect(alert.className).toContain("application-form-alert");
+		expect(alert.textContent).toBe("当前部署已移除此申请的模板，请新建申请。");
+		await waitFor(() => expect(document.activeElement).toBe(alert));
+		expect(screen.queryByText(/重新选择|重新加载/)).toBeNull();
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("offers one ghost footer cancel and leaves without submitting", async () => {
 		const onSubmit = vi.fn();
 		await renderWithMyAgentsRouter(
