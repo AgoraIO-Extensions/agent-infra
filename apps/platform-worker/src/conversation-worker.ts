@@ -862,7 +862,13 @@ export function createPlatformConversationWorkerV2(
 		if (options.observability && !reconciliationFailed)
 			record(options.observability, {
 				stage: "workload",
-				outcome: observation.status === "unknown" ? "unknown" : "completed",
+				outcome:
+					observation.status === "unknown"
+						? "unknown"
+						: observation.status === "observed"
+							? "waiting"
+							: "completed",
+				// One reconciliation attempt; observed resources may still be starting.
 				durationMs: performance.now() - began,
 				conversationId: claim.sandbox?.sessionId,
 				operationRef:

@@ -232,6 +232,62 @@ describe("Conversation Worker discovery and shutdown", () => {
 			}),
 		);
 	});
+	it.each([
+		["prepare", "ready"],
+		["drain", "stopped"],
+	] as const)(
+		"reports %s as waiting until the receiver reaches %s",
+		async (purpose, terminalStatus) => {
+			const claim = {
+				schemaVersion: 1,
+				execution: null,
+				purpose,
+				sandbox: { sessionId: "conversation-a" },
+			} as never;
+			mocks.find.mockResolvedValue([
+				{ itemId: "sandbox-a", operation: "conversation.sandbox.reconcile.v1" },
+			]);
+			mocks.claimSandbox.mockResolvedValue(claim);
+			mocks.recordSandbox.mockResolvedValue(undefined);
+			const receiveSandbox = vi
+				.fn()
+				.mockResolvedValueOnce({ status: "observed", resources: [] })
+				.mockResolvedValueOnce({ status: terminalStatus, resources: [] });
+			const telemetry = { record: vi.fn() };
+			const worker = createPlatformConversationWorkerV2({
+				...options,
+				receiveSandbox,
+				observability: telemetry,
+			});
+			try {
+				for (const [index, status] of ["observed", terminalStatus].entries()) {
+					expect(await worker.tick()).toBe(1);
+					await vi.waitFor(() =>
+						expect(mocks.recordSandbox).toHaveBeenCalledTimes(index + 1),
+					);
+					expect(mocks.recordSandbox).toHaveBeenNthCalledWith(index + 1, {
+						claim,
+						observation: { status, resources: [] },
+					});
+					const events = telemetry.record.mock.calls
+						.map(([event]) => event)
+						.filter(
+							(event) => event.operationRef === `sandbox.reconcile.${purpose}`,
+						);
+					expect(events.map((event) => event.outcome)).toEqual(
+						index === 0 ? ["waiting"] : ["waiting", "completed"],
+					);
+					expect(events[index]).toMatchObject({
+						stage: "workload",
+						conversationId: "conversation-a",
+						durationMs: expect.any(Number),
+					});
+				}
+			} finally {
+				await worker.stop();
+			}
+		},
+	);
 	it("drains begin and persists the returned authorization URL", async () => {
 		mocks.find.mockResolvedValue([]);
 		mocks.installationDrain.mockResolvedValue({
