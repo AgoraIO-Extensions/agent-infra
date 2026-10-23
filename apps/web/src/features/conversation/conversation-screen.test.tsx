@@ -5153,6 +5153,10 @@ describe("sandbox: references and result files on the conversation page (#3228)"
 					files: [
 						new File(["%PDF-1.7"], "report.pdf", { type: "application/pdf" }),
 						new File(["a,b\n1,2"], "table.csv", { type: "text/csv" }),
+						// #3257：声明 text/csv 却不是 UTF-8 文本的内容在上传前拒绝。
+						new File([Uint8Array.from([0xc3, 0xfb, 0x2c, 0x0a])], "gbk.csv", {
+							type: "text/csv",
+						}),
 						new File(["notes"], "notes.txt", { type: "text/plain" }),
 						new File(["PK"], "bundle.zip", { type: "application/zip" }),
 						new File(["png"], "photo.png", { type: "image/png" }),
@@ -5164,6 +5168,9 @@ describe("sandbox: references and result files on the conversation page (#3228)"
 			});
 			await screen.findByText("当前 Agent 不支持此文件类型。");
 			await screen.findByText("文件超过 1 KB 限制。");
+			await screen.findByText(
+				"文件内容不是有效的 UTF-8 文本，与文件类型不符。",
+			);
 			await waitFor(() =>
 				expect(
 					requests.filter(

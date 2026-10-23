@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import {
 	objectCleanupConformanceV1,
 	objectStorageConformanceV1,
+	objectTextDeclarationConformanceV1,
 } from "./conformance.ts";
 import { FakeObjectStorageV1 } from "./index.ts";
 
@@ -116,6 +117,7 @@ it("writes a verified immutable object and refuses content changes under its ref
 it("satisfies the shared Fake/S3 object contract", async () => {
 	const storage = new FakeObjectStorageV1();
 	await objectStorageConformanceV1(storage);
+	await objectTextDeclarationConformanceV1(storage);
 	await objectCleanupConformanceV1(storage);
 });
 

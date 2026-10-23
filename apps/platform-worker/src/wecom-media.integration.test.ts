@@ -224,8 +224,16 @@ beforeAll(async () => {
 	await sql`insert into platform.agent_availability (agent_id,target_type,target_id) values (${base.agentId},'organization','controlled-org')`;
 	await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${base.agentId},1,'fixture',${sql.json(configuration)},now())`;
 	// 三方 FileLimits：Channel 声明不含 zip，交集即企微 Channel 可接收的类型与大小。
+	// #3257：同时含 text/plain 与 text/csv，用于证明没有声明类型的入站文本仍按字节识别。
 	const expiresAt = new Date(Date.now() + 86_400_000);
-	const types = ["application/pdf", "image/jpeg", "image/png", "video/mp4"];
+	const types = [
+		"application/pdf",
+		"image/jpeg",
+		"image/png",
+		"text/csv",
+		"text/plain",
+		"video/mp4",
+	];
 	for (const [scope, agentId, channel, mediaTypes] of [
 		["deployment", "", "", [...types, "application/zip"]],
 		["agent", base.agentId, "", [...types, "application/zip"]],
@@ -539,6 +547,31 @@ describe("WeCom long-connection inbound media (#3227)", {
 		} finally {
 			await files.close();
 		}
+	});
+
+	it("#3257: a CSV file without a declared type keeps the byte-identified text/plain type", async () => {
+		const result = await receive({
+			...base,
+			eventId: "text-csv",
+			media: [
+				{
+					kind: "file",
+					name: null,
+					download: serve(Buffer.from("名称,数量\n苹果,3\n"), {
+						"content-disposition": "attachment; filename=table.csv",
+					}),
+				},
+			],
+		});
+		if (result.outcome !== "accepted") throw new Error("Expected acceptance");
+		expect(result.receipt.status).toBe("accepted");
+		// FileLimits 同时允许 text/csv，但企微入站没有声明类型，文件名后缀也不是声明：记为 text/plain。
+		const [file] = await filesOf(result.receipt.executionId);
+		expect(file?.record).toMatchObject({
+			status: "available",
+			descriptor: { name: "table.csv", mediaType: "text/plain" },
+		});
+		await completeWecomExecutionFixture(sql, result.receipt.executionId);
 	});
 
 	it("AC-5: download URLs and aeskeys never reach Platform DB, logs or audit", async () => {

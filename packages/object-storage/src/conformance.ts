@@ -94,6 +94,59 @@ export async function objectStorageConformanceV1(storage: ObjectStorageDataV1) {
 	}
 }
 
+/**
+ * #3257：纯文本以平台白名单内的声明子类型为准，白名单之外或字节不符的声明不能成为可确认对象
+ * （工程 Spec §15.4.1）。Fake 与 S3 必须给出同一结论。
+ */
+export async function objectTextDeclarationConformanceV1(
+	storage: ObjectStorageDataV1,
+) {
+	const csv = Buffer.from("名称,数量\n苹果,3\n");
+	const png = Buffer.from(
+		"89504e470d0a1a0a0000000d4948445200000001000000010806000000" +
+			"1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082",
+		"hex",
+	);
+	// GBK 编码的 CSV 不是合法 UTF-8。
+	const gbk = Buffer.from("c3fbb3c62cbafd0a", "hex");
+	const upload = (bytes: Buffer, mediaType: string, objectRef = randomUUID()) =>
+		storage.upload({
+			objectRef,
+			expiresAt: new Date(Date.now() + 60000).toISOString(),
+			descriptor: {
+				name: "table.csv",
+				mediaType,
+				sizeBytes: bytes.length,
+				sha256: createHash("sha256").update(bytes).digest("hex"),
+			},
+			body: new ReadableStream<Uint8Array>({
+				start(c) {
+					c.enqueue(bytes.slice());
+					c.close();
+				},
+			}),
+		});
+	for (const mediaType of ["text/csv", "text/plain"]) {
+		const objectRef = randomUUID();
+		const stored = await upload(csv, mediaType, objectRef);
+		expect(stored.mediaType).toBe(mediaType);
+		expect(await storage.inspect(objectRef)).toEqual(stored);
+	}
+	for (const [bytes, mediaType] of [
+		[csv, "text/x-python"],
+		[png, "text/csv"],
+		[gbk, "text/csv"],
+	] as const) {
+		const objectRef = randomUUID();
+		await expect(upload(bytes, mediaType, objectRef)).rejects.toMatchObject({
+			code: expect.stringMatching(/^(conflict|unavailable)$/),
+		});
+		// 即使 S3 已留下对象，按实际字节重新核验也不能得到可确认的元数据。
+		const inspected = await storage.inspect(objectRef).catch((error) => error);
+		expect(inspected === null || inspected?.code === "conflict").toBe(true);
+	}
+}
+
 export async function objectCleanupConformanceV1(storage: ObjectStorageDataV1) {
 	const found: { objectRef: string; version: string }[] = [];
 	let cursor: string | null = null;
