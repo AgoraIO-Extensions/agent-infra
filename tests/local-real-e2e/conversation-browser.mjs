@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
 import {
+	assertAcceptance,
 	currentExecutionEvents,
 	currentExecutionFrames,
 	restoredHistoryPreservesEvents,
@@ -162,89 +163,6 @@ async function conversationStream(context, origin, conversationId) {
 		`${origin}/api/v2/conversations/${encodeURIComponent(conversationId)}/events`,
 		{ timeout: 30_000 },
 	);
-}
-
-async function assertAcceptance(
-	input,
-	owner,
-	conversationId,
-	events,
-	evidence,
-	preTerminalNativeMetadata,
-) {
-	const required = input.acceptance ?? {};
-	const reasoningEvents = events.filter(
-		(event) => event.type === "reasoning.delta",
-	);
-	const resultFiles = events.filter((event) => event.type === "result.file");
-	const toolOperations = events.filter(
-		(event) =>
-			event.type === "execution.operation" && event.payload?.kind === "tool",
-	);
-	const browserOperations = events.filter(
-		(event) =>
-			event.type === "execution.operation" &&
-			event.payload?.kind === "tool" &&
-			event.payload.browser !== undefined,
-	);
-	const browserHandoffs = events.filter(
-		(event) => event.type === "browser.handoff",
-	);
-	if (required.requireThinking)
-		assert(reasoningEvents.length > 0, "Expected real reasoning.delta events");
-	if (required.requireResultFile)
-		assert(resultFiles.length > 0, "Expected a real result.file event");
-	if (required.requireToolOperation)
-		assert(toolOperations.length > 0, "Expected a real tool operation event");
-	if (required.requireBrowserOperation)
-		assert(
-			browserOperations.length > 0,
-			"Expected a real Browser operation event",
-		);
-	if (required.requireBrowserHandoff)
-		assert(browserHandoffs.length > 0, "Expected a real browser.handoff event");
-	if (required.requiredToolId !== undefined)
-		assert(
-			toolOperations.some(
-				(event) => event.payload.toolId === required.requiredToolId,
-			),
-			`Expected tool operation ${required.requiredToolId}`,
-		);
-	let nativeMetadata = preTerminalNativeMetadata;
-	if (
-		(nativeMetadata === undefined && required.requireSkillMetadata) ||
-		required.requiredSkillName !== undefined
-	) {
-		const response = await owner.request.get(
-			`${input.origin}/api/v2/conversations/${encodeURIComponent(conversationId)}/executions/${encodeURIComponent(events[0]?.executionId ?? "")}/native-metadata?selector=skills`,
-		);
-		assert.equal(response.status(), 200, "Skill metadata must be readable");
-		nativeMetadata = await response.json();
-		assert(
-			Array.isArray(nativeMetadata.capabilities),
-			"Skill metadata must contain capabilities",
-		);
-		if (required.requiredSkillName !== undefined)
-			assert(
-				nativeMetadata.capabilities.some(
-					(entry) =>
-						entry &&
-						typeof entry === "object" &&
-						entry.name === required.requiredSkillName,
-				),
-				`Expected Skill ${required.requiredSkillName} in native metadata`,
-			);
-	}
-	evidence.acceptance = {
-		reasoningDeltaCount: reasoningEvents.length,
-		resultFileCount: resultFiles.length,
-		toolOperationCount: toolOperations.length,
-		browserOperationCount: browserOperations.length,
-		browserHandoffCount: browserHandoffs.length,
-		...(nativeMetadata === undefined
-			? {}
-			: { skillMetadataCount: nativeMetadata.capabilities.length }),
-	};
 }
 
 async function run(input, evidence) {
@@ -478,14 +396,7 @@ async function run(input, evidence) {
 			events,
 			"Current-execution events must stay bound to this conversation and execution",
 		);
-		await assertAcceptance(
-			input,
-			owner,
-			conversationId,
-			events,
-			evidence,
-			preTerminalNativeMetadata,
-		);
+		assertAcceptance(input, events, evidence, preTerminalNativeMetadata);
 		const sseFrames = await page.evaluate(
 			() => window.__agentInfraSseFrames ?? [],
 		);
