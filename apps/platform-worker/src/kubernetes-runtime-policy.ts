@@ -181,6 +181,13 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		if (Object.hasOwn(value.env, runtimeSkillHubBindingEnvironmentNameV1))
 			throw new WorkloadKubernetesError("policy");
 		const binding = templateBinding;
+		const runtimeDriver =
+			binding?.driver ??
+			(policy.runtimeAuth !== undefined &&
+			value.runtimeManifest.interactionMode === "platform-adapter" &&
+			value.runtimeManifest.protocol === "acp"
+				? "acp"
+				: undefined);
 		if (
 			injection &&
 			(!binding ||
@@ -220,8 +227,8 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 				)
 				.map(([name, value]) => ({ name, value })),
 			...(injection?.env ?? []),
-			...(injection && binding
-				? [{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: binding.driver }]
+			...(runtimeDriver
+				? [{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtimeDriver }]
 				: []),
 			...(skillHubRuntime ? [skillHubRuntime] : []),
 			...runtimeAuth,

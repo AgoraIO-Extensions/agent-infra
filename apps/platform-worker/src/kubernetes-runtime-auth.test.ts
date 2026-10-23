@@ -142,6 +142,9 @@ it("binds custom platform-adapter authentication without a standard-template mod
 		fence: 2,
 		imageDigest: desired.imageDigest,
 	});
+	expect(
+		env.find((entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER"),
+	).toEqual({ name: "AGENT_INFRA_RUNTIME_DRIVER", value: "acp" });
 });
 
 it("does not inject platform authentication into self-managed workloads", async () => {
