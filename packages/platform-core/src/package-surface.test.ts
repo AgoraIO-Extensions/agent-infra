@@ -310,6 +310,7 @@ describe("platform-core package surface", () => {
 			"revokeSkillHubVersionV1",
 			"runSkillProviderBatchV1",
 			"sameWecomConnectionAuthorizationFactV1",
+			"sessionSandboxFileExchangeTokenV1",
 			"sessionSandboxReconcileProgressV1",
 			"sessionSandboxRetryDelayMsV1",
 			"shouldContinueSessionSandboxPreparationV1",
