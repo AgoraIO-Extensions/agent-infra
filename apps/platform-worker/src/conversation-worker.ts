@@ -754,6 +754,7 @@ export function createPlatformConversationWorkerV2(
 			return;
 		let observation: SessionSandboxObservationV1;
 		let renewal: ReturnType<typeof setInterval> | undefined;
+		let reconciliationFailed = false;
 		const began = performance.now();
 		try {
 			// Renew the original Store lease immediately before and after the Kubernetes
@@ -817,6 +818,7 @@ export function createPlatformConversationWorkerV2(
 			)
 				return;
 		} catch (error) {
+			reconciliationFailed = true;
 			if (renewal) clearInterval(renewal);
 			// 只记录有界的类名与失败原因，不记录消息、栈或资源名（#2733）。之前这里静默吞掉，
 			// 调谐一直失败时 Worker 日志里一行都没有。
@@ -857,6 +859,17 @@ export function createPlatformConversationWorkerV2(
 		)
 			return;
 		await store.recordSandboxObservation({ claim, observation });
+		if (options.observability && !reconciliationFailed)
+			record(options.observability, {
+				stage: "workload",
+				outcome: observation.status === "unknown" ? "unknown" : "completed",
+				durationMs: performance.now() - began,
+				conversationId: claim.sandbox?.sessionId,
+				operationRef:
+					claim.purpose === "drain"
+						? "sandbox.reconcile.drain"
+						: "sandbox.reconcile.prepare",
+			});
 	}
 	async function dispatchItem(item: {
 		readonly itemId: string;

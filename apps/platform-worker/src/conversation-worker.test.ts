@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 	transaction: undefined as unknown,
 	observedEvents: { persist: vi.fn() },
 	observedFactory: vi.fn(),
+	telemetryRecord: vi.fn(),
 	dispatchEvents: undefined as unknown,
 	dispatchAuthorization: undefined as unknown,
 	dispatchRuntimeHost: undefined as unknown,
@@ -140,6 +141,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.signal = undefined;
 	mocks.dispatchAssemblyThrows = false;
+	mocks.telemetryRecord.mockReset();
 	mocks.claimSandbox.mockReset();
 	mocks.prepareSandbox.mockReset();
 	mocks.recordSandbox.mockReset();
@@ -152,7 +154,10 @@ beforeEach(() => {
 describe("Conversation Worker discovery and shutdown", () => {
 	it("exposes one poller lifecycle and logs each transition once", async () => {
 		mocks.find.mockResolvedValue([]);
-		const worker = createPlatformConversationWorkerV2(options);
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			observability: { record: mocks.telemetryRecord },
+		});
 		expect(worker.status()).toBe("not_started");
 		worker.start();
 		worker.start();
@@ -201,7 +206,11 @@ describe("Conversation Worker discovery and shutdown", () => {
 		]);
 		mocks.claimSandbox.mockResolvedValue(claim);
 		mocks.recordSandbox.mockResolvedValue(undefined);
-		const worker = createPlatformConversationWorkerV2(options);
+		const telemetry = { record: vi.fn() };
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			observability: telemetry,
+		});
 		expect(await worker.tick()).toBe(1);
 		await vi.waitFor(() => expect(mocks.recordSandbox).toHaveBeenCalled());
 		await worker.stop();
@@ -214,6 +223,14 @@ describe("Conversation Worker discovery and shutdown", () => {
 			claim,
 			observation: { status: "unknown", resources: [] },
 		});
+		expect(telemetry.record).toHaveBeenCalledWith(
+			expect.objectContaining({
+				stage: "workload",
+				outcome: "unknown",
+				operationRef: "sandbox.reconcile.prepare",
+				durationMs: expect.any(Number),
+			}),
+		);
 	});
 	it("drains begin and persists the returned authorization URL", async () => {
 		mocks.find.mockResolvedValue([]);
@@ -795,7 +812,9 @@ describe("conversation dispatch observability", () => {
 		}
 		const events = telemetry.record.mock.calls
 			.map(([event]) => event)
-			.filter((event) => event.stage === "workload");
+			.filter(
+				(event) => event.stage === "workload" && event.outcome === "waiting",
+			);
 		// 同一原因连续出现只记一次；原因变化或认领成功后再次等待都会重新记录。
 		expect(events).toEqual(
 			[
@@ -947,11 +966,14 @@ describe("conversation dispatch observability", () => {
 			} finally {
 				await worker.stop();
 			}
-			expect(
-				telemetry.record.mock.calls.some(
-					([event]) => event.stage === "workload",
-				),
-			).toBe(false);
+			expect(telemetry.record).toHaveBeenCalledWith(
+				expect.objectContaining({
+					stage: "workload",
+					outcome: "unknown",
+					operationRef: "sandbox.reconcile.prepare",
+					durationMs: expect.any(Number),
+				}),
+			);
 		});
 	});
 
