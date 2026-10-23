@@ -117,7 +117,13 @@ const connection = new AgentSideConnection(
 			}
 			return { configOptions: configOptions() };
 		},
-		prompt: async () => {
+		prompt: async (params) => {
+			// #3225：记录收到的原生 prompt 内容块，供附件清单与 image 块断言。
+			if (process.env.ACP_TEST_RECORD_PROMPT === "1")
+				await writeFile(
+					join(process.cwd(), "prompt.json"),
+					JSON.stringify(params.prompt),
+				);
 			count++;
 			if (process.env.ACP_TEST_MODE === "foreign-notifications") {
 				for (const update of [

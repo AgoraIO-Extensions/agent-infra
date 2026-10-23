@@ -54,6 +54,11 @@ export interface GenericAcpRuntimeDriverOptions {
 	 * Agent 只适用 image/resource_link 块映射。
 	 */
 	readonly sandboxReferences?: boolean;
+	/**
+	 * #3225：标准模板（OpenCode）把附件物化到 Conversation 工作区并追加清单，不依赖图片协商；
+	 * ACP 自定义 Agent 不设置，附件仍只按协商的 ACP image 输入传递。
+	 */
+	readonly workspaceAttachments?: boolean;
 	readonly authorizeModelAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
@@ -364,6 +369,9 @@ export const GenericAcpRuntimeDriver = {
 				negotiatedImageInput = capabilities.attachments;
 				return {
 					...capabilities,
+					// #3225：工作区附件不依赖图片协商；图片只在协商后另外作为 image 块。
+					attachments:
+						options.workspaceAttachments === true || capabilities.attachments,
 					connection: options.standardConnectionClient !== undefined,
 				};
 			},

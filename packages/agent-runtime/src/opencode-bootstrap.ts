@@ -211,6 +211,9 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 		nativeSkillPrompt: openCodeNativeSkillPrompt,
 		reuseNativeSession: !options.standardConnectionClient,
 		sandboxReferences: true,
+		// #3225：附件物化到 Conversation 工作区并追加清单；ACP image 块需协商
+		// promptCapabilities.image，未协商时只给清单。
+		workspaceAttachments: true,
 		modelOptions: options.modelOptions.map((option) => ({
 			modelOptionId: option.modelOptionId,
 			nativeModelId: `anthropic/${option.model}`,

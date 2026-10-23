@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	lstat,
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -318,6 +328,65 @@ function imageBridge(
 			writeResult: async () => {
 				throw new Error("unused");
 			},
+		},
+	};
+}
+
+const piAttachmentRef = (fileId: string) =>
+	createHash("sha256").update(fileId).digest("hex").slice(0, 16);
+
+/** #3225：四种常见附件；只有 PNG 另外作为原生图片。 */
+const piAttachments: Record<
+	string,
+	{ name: string; mediaType: string; bytes: Buffer }
+> = {
+	"file-pdf": {
+		name: "report.pdf",
+		mediaType: "application/pdf",
+		bytes: Buffer.from("%PDF-1.4\n%pi-attachment-pdf\n"),
+	},
+	"file-csv": {
+		name: "table.csv",
+		mediaType: "text/csv",
+		bytes: Buffer.from("name,value\npi-attachment-csv,1\n"),
+	},
+	"file-txt": {
+		name: "notes.txt",
+		mediaType: "text/plain",
+		bytes: Buffer.from("pi-attachment-text\n"),
+	},
+	"file-png": {
+		name: "screen.png",
+		mediaType: "image/png",
+		bytes: Buffer.from(imageBytes),
+	},
+};
+
+function piAttachmentBridge(reads: string[] = []) {
+	return {
+		readInput: async (fileId: string) => {
+			reads.push(fileId);
+			const fixture = piAttachments[fileId];
+			if (!fixture) throw new Error("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
+			return {
+				fileId,
+				descriptor: {
+					name: fixture.name,
+					mediaType: fixture.mediaType,
+					sizeBytes: fixture.bytes.byteLength,
+					sha256: createHash("sha256").update(fixture.bytes).digest("hex"),
+				},
+				body: new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new Uint8Array(fixture.bytes));
+						controller.close();
+					},
+				}),
+			};
+		},
+		revalidate: () => {},
+		writeResult: async () => {
+			throw new Error("unused");
 		},
 	};
 }
@@ -859,16 +928,29 @@ it("dispatches an authorized image as native Pi prompt content", async () => {
 		const user = (await nativeMessages(f.path, result.nativeSessionRef)).find(
 			(message) => message?.role === "user",
 		);
-		// The text stays exactly as submitted and the image travels as native
-		// content, never as an encoded data URL inside the prompt text.
+		// #3225：用户消息之后追加附件清单；图片仍作为原生 image 块，同时落到工作区。
+		const relative = `.agent-infra/attachments/${piAttachmentRef("file-1")}/screen.png`;
 		expect(user?.content).toEqual([
-			{ type: "text", text: "describe this image" },
+			{
+				type: "text",
+				text: [
+					"describe this image",
+					"",
+					"Attachments (saved in your workspace; paths are relative to your workspace root):",
+					`- name: "screen.png", media type: image/png, size: ${imageBytes.byteLength} bytes, path: "${relative}"`,
+				].join("\n"),
+			},
 			{
 				type: "image",
 				data: Buffer.from(imageBytes).toString("base64"),
 				mimeType: "image/png",
 			},
 		]);
+		expect(
+			await readFile(
+				join(f.path, result.nativeSessionRef, "workspace", relative),
+			),
+		).toEqual(Buffer.from(imageBytes));
 	} finally {
 		await f.close();
 	}
@@ -898,7 +980,6 @@ it("refuses native submission when the file authority lapses during Session init
 });
 
 it.each([
-	["an unsupported image media type", { mediaType: "image/svg+xml" }],
 	["a descriptor beyond the byte bound", { sizeBytes: 50 * 1024 * 1024 + 1 }],
 	["bytes that do not match the admitted digest", { sha256: "a".repeat(64) }],
 ])("rejects %s before any native Pi Turn", async (_name, overrides) => {
@@ -923,9 +1004,9 @@ it("releases the body of an attachment rejected before transfer", async () => {
 			readInput: async (fileId: string) => ({
 				fileId,
 				descriptor: {
-					name: "vector.svg",
-					mediaType: "image/svg+xml",
-					sizeBytes: imageBytes.byteLength,
+					name: "archive.zip",
+					mediaType: "application/zip",
+					sizeBytes: 50 * 1024 * 1024 + 1,
 					sha256: createHash("sha256").update(imageBytes).digest("hex"),
 				},
 				body: new ReadableStream<Uint8Array>({
@@ -1015,3 +1096,154 @@ it.each([false, true])(
 		}
 	},
 );
+
+it("materializes PDF, CSV, TXT and PNG for an attachment-only Pi message and reuses the copies (#3225)", async () => {
+	const f = await fixture();
+	try {
+		const fileIds = ["file-pdf", "file-csv", "file-txt", "file-png"];
+		const attachmentOnly = {
+			...command,
+			input: { attachments: fileIds },
+		};
+		const result = await f.driver.execute(attachmentOnly, {
+			fileBridge: piAttachmentBridge(),
+		});
+		expect(result.result).toEqual({ outcome: "accepted", status: "running" });
+		await vi.waitFor(async () =>
+			expect(
+				await f.driver.getStatus(result.nativeSessionRef, command.executionId),
+			).toBe("completed"),
+		);
+		const workspace = join(f.path, result.nativeSessionRef, "workspace");
+		const lines = [
+			"Attachments (saved in your workspace; paths are relative to your workspace root):",
+		];
+		for (const fileId of fileIds) {
+			const fixture = piAttachments[fileId];
+			if (!fixture) throw new Error();
+			const relative = `.agent-infra/attachments/${piAttachmentRef(fileId)}/${fixture.name}`;
+			lines.push(
+				`- name: "${fixture.name}", media type: ${fixture.mediaType}, size: ${fixture.bytes.byteLength} bytes, path: "${relative}"`,
+			);
+			expect(
+				createHash("sha256")
+					.update(await readFile(join(workspace, relative)))
+					.digest("hex"),
+			).toBe(createHash("sha256").update(fixture.bytes).digest("hex"));
+			expect((await lstat(join(workspace, relative))).mode & 0o777).toBe(0o400);
+		}
+		const user = (await nativeMessages(f.path, result.nativeSessionRef)).find(
+			(message) => message?.role === "user",
+		);
+		// 正文为空：只发清单与原生图片。
+		expect(user?.content).toEqual([
+			{ type: "text", text: lines.join("\n") },
+			{
+				type: "image",
+				data: Buffer.from(imageBytes).toString("base64"),
+				mimeType: "image/png",
+			},
+		]);
+		// Driver 状态与事件不含工作区路径与附件内容。
+		const persisted = [
+			await readFile(join(f.path, "index.json"), "utf8"),
+			...(await readdir(join(f.path, result.nativeSessionRef)))
+				.filter((name) => name.endsWith(".json"))
+				.map((name) =>
+					readFile(join(f.path, result.nativeSessionRef, name), "utf8"),
+				),
+			JSON.stringify(
+				await f.driver.replayEvents(
+					result.nativeSessionRef,
+					command.executionId,
+				),
+			),
+		];
+		const text = (await Promise.all(persisted)).join("\n");
+		for (const forbidden of [
+			workspace,
+			".agent-infra/attachments",
+			"pi-attachment-text",
+		])
+			expect(text).not.toContain(forbidden);
+
+		// 重新生成：内容一致的副本原样复用，被删除的副本恢复。
+		const pdf = join(
+			workspace,
+			`.agent-infra/attachments/${piAttachmentRef("file-pdf")}/report.pdf`,
+		);
+		const csv = join(
+			workspace,
+			`.agent-infra/attachments/${piAttachmentRef("file-csv")}/table.csv`,
+		);
+		const before = await lstat(pdf);
+		await rm(csv);
+		const regenerated = await f.driver.execute(
+			{
+				...attachmentOnly,
+				executionId: "execution-b",
+				turnId: "turn-b",
+				operationId: "operation-b",
+			},
+			{ fileBridge: piAttachmentBridge() },
+		);
+		expect(regenerated.result).toMatchObject({ outcome: "accepted" });
+		expect((await lstat(pdf)).ino).toBe(before.ino);
+		expect(await readFile(csv)).toEqual(piAttachments["file-csv"]?.bytes);
+	} finally {
+		await f.close();
+	}
+});
+
+it("rejects Pi attachments with a planted link, beyond 32 or outside the Grant before any native Turn (#3225)", async () => {
+	const f = await fixture();
+	try {
+		const reads: string[] = [];
+		await expect(
+			f.driver.execute(
+				{
+					...command,
+					input: {
+						text: "inspect",
+						attachments: Array.from({ length: 33 }, (_, i) => `file-${i}`),
+					},
+				},
+				{ fileBridge: piAttachmentBridge(reads) },
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		expect(reads).toEqual([]);
+		await expect(
+			f.driver.execute(
+				{
+					...command,
+					input: { text: "inspect", attachments: ["file-foreign"] },
+				},
+				{ fileBridge: piAttachmentBridge() },
+			),
+		).rejects.toThrow("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
+		const index = JSON.parse(
+			await readFile(join(f.path, "index.json"), "utf8"),
+		);
+		const ref = index.sessions[0]?.ref as string | undefined;
+		if (!ref) throw new Error("missing session");
+		const workspace = join(f.path, ref, "workspace");
+		const outside = join(f.path, "outside");
+		await mkdir(outside, { mode: 0o700 });
+		await mkdir(join(workspace, ".agent-infra"), {
+			recursive: true,
+			mode: 0o700,
+		});
+		await chmod(join(workspace, ".agent-infra"), 0o700);
+		await symlink(outside, join(workspace, ".agent-infra", "attachments"));
+		await expect(
+			f.driver.execute(
+				{ ...command, input: { text: "inspect", attachments: ["file-txt"] } },
+				{ fileBridge: piAttachmentBridge() },
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		expect(await readdir(outside)).toEqual([]);
+		expect(await attachedUserMessages(f.path)).toEqual([]);
+	} finally {
+		await f.close();
+	}
+});

@@ -96,6 +96,12 @@ import {
 	type RuntimeFileBridgePortV1,
 	readRuntimeFileResultReceiptV1,
 } from "./runtime-file-bridge.js";
+import {
+	isSandboxAttachmentNativeImageV1,
+	materializeSandboxAttachmentsV1,
+	sandboxAttachmentIdsV1,
+	sandboxAttachmentPromptTextV1,
+} from "./sandbox-attachments.js";
 import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
 import {
 	planSandboxResultsV1,
@@ -389,13 +395,6 @@ const maxNativeCommands = 150;
 const maxNativeCommandText = 4096;
 const maxNativeCommandArgumentHint = 512;
 const maxNativeCommandAliases = 32;
-const claudeAttachmentMaximumBytes = 50 * 1024 * 1024;
-const claudeAttachmentMediaTypes = new Set([
-	"image/png",
-	"image/jpeg",
-	"image/gif",
-	"image/webp",
-]);
 
 // Claude exposes commands and Skills through one flat supportedCommands() list.
 // Keep the fixed Paseo session-control set as commands and treat all other
@@ -1491,76 +1490,63 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						command.parameters.length > 0 ? ` ${command.parameters}` : ""
 					}`
 				: undefined;
-		if (command.kind === "submit-turn" && !("text" in command.input))
-			unavailable();
-		const content: Exclude<
+		const attachmentIds =
+			command.kind === "submit-turn"
+				? sandboxAttachmentIdsV1(command.input.attachments, unavailable)
+				: [];
+		const userText =
+			nativeCommandInput ??
+			(command.kind === "submit-turn" && "text" in command.input
+				? command.input.text
+				: "");
+		// #3225：只含附件的消息没有正文，原生输入只有附件清单与原生图片。
+		if (!userText && attachmentIds.length === 0) unavailable();
+		type ClaudeContent = Exclude<
 			NonNullable<Parameters<typeof claudeQuery>[1]>["message"]["content"],
 			string
-		> = [
-			{
-				type: "text",
-				text:
-					nativeCommandInput ??
-					(command.kind === "submit-turn" && "text" in command.input
-						? command.input.text
-						: unavailable()),
-			},
-		];
-		for (const fileId of command.kind === "submit-turn"
-			? command.input.attachments
-			: []) {
+		>;
+		const content: ClaudeContent = [];
+		const directory = join(this.options.path, ref);
+		const workspace = join(directory, "workspace");
+		if (attachmentIds.length > 0) {
 			if (!fileBridge) unavailable();
-			const input = await fileBridge.readInput(fileId);
-			if (
-				input.fileId !== fileId ||
-				!claudeAttachmentMediaTypes.has(input.descriptor.mediaType) ||
-				input.descriptor.sizeBytes > claudeAttachmentMaximumBytes
-			)
-				unavailable();
-			const reader = input.body.getReader();
-			const chunks: Uint8Array[] = [];
-			let size = 0;
-			try {
-				while (true) {
-					const next = await reader.read();
-					if (next.done) break;
-					if (!(next.value instanceof Uint8Array)) unavailable();
-					size += next.value.byteLength;
-					if (size > claudeAttachmentMaximumBytes) unavailable();
-					chunks.push(next.value);
-				}
-			} catch (error) {
-				await reader.cancel().catch(() => undefined);
-				throw error;
-			} finally {
-				reader.releaseLock();
-			}
-			const bytes = Buffer.concat(chunks);
-			if (
-				size !== input.descriptor.sizeBytes ||
-				createHash("sha256").update(bytes).digest("hex") !==
-					input.descriptor.sha256
-			)
-				unavailable();
+			const bridge = fileBridge;
+			// #3225：附件物化到本 Conversation 工作区的平台目录；图片另外作为 SDK image 块。
+			await mkdir(workspace, { recursive: true, mode: 0o700 });
+			if ((await lstat(workspace)).isSymbolicLink()) unavailable();
+			const attachments = await materializeSandboxAttachmentsV1({
+				root: this.options.path,
+				workspace,
+				fileIds: attachmentIds,
+				read: (fileId) => bridge.readInput(fileId),
+				invalid: unavailable,
+				imageBytes: true,
+			});
 			content.push({
-				type: "image",
-				source: {
-					type: "base64",
-					media_type: input.descriptor.mediaType,
-					data: bytes.toString("base64"),
-				},
-			} as Exclude<
-				NonNullable<Parameters<typeof claudeQuery>[1]>["message"]["content"],
-				string
-			>[number]);
-		}
+				type: "text",
+				text: sandboxAttachmentPromptTextV1(userText, attachments),
+			});
+			for (const attachment of attachments) {
+				if (
+					!attachment.imageBytes ||
+					!isSandboxAttachmentNativeImageV1(attachment)
+				)
+					continue;
+				content.push({
+					type: "image",
+					source: {
+						type: "base64",
+						media_type: attachment.mediaType,
+						data: Buffer.from(attachment.imageBytes).toString("base64"),
+					},
+				} as ClaudeContent[number]);
+			}
+		} else content.push({ type: "text", text: userText });
 		// A File Grant that lapsed while the attachments were acquired must not
 		// survive into retirement or the native request.
 		fileBridge?.revalidate();
 		// Paseo ensureQuery retirement order: detach old work, drain it, then resume the same native ID.
 		await this.retire(ref);
-		const directory = join(this.options.path, ref);
-		const workspace = join(directory, "workspace");
 		if (before.started) {
 			try {
 				const history = await readClaudeSessionHistory(

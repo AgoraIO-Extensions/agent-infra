@@ -158,6 +158,13 @@ import type {
 	RuntimeFileResultV1,
 } from "./runtime-file-bridge.js";
 import { readRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
+import {
+	isSandboxAttachmentNativeImageV1,
+	materializeSandboxAttachmentsV1,
+	SANDBOX_ATTACHMENT_MAX_BYTES_V1,
+	sandboxAttachmentIdsV1,
+	sandboxAttachmentPromptTextV1,
+} from "./sandbox-attachments.js";
 import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
 import {
 	isSandboxResultPlanV1,
@@ -1140,6 +1147,51 @@ export function createCodexNativeSkillInputV1(
 interface MaterializedCodexInput {
 	readonly items: readonly CodexNativeInputItem[];
 	readonly cleanup: () => Promise<void>;
+	/**
+	 * #3225：已核对的 Host 临时副本，等 Conversation 工作区就绪后再物化到工作区。
+	 * 路径只在进程内存中，不进入持久状态、事件或日志。
+	 */
+	readonly attachments?: readonly CodexHostAttachment[];
+}
+
+/** #3225：一份已按准入描述核对的 Host 临时副本。 */
+interface CodexHostAttachment {
+	readonly fileId: string;
+	readonly descriptor: RuntimeFileInputV1["descriptor"];
+	readonly path: string;
+}
+
+/** 以只读、不跟随链接的方式把 Host 临时副本作为流交给工作区物化。 */
+function codexHostAttachmentStream(path: string): ReadableStream<Uint8Array> {
+	let handle: Awaited<ReturnType<typeof open>> | undefined;
+	const release = async () => {
+		const current = handle;
+		handle = undefined;
+		await current?.close().catch(() => {});
+	};
+	return new ReadableStream<Uint8Array>({
+		async start() {
+			handle = await open(
+				path,
+				fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
+			);
+		},
+		async pull(controller) {
+			if (!handle) {
+				controller.close();
+				return;
+			}
+			const buffer = Buffer.allocUnsafe(64 * 1024);
+			const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+			if (bytesRead === 0) {
+				await release();
+				controller.close();
+				return;
+			}
+			controller.enqueue(new Uint8Array(buffer.subarray(0, bytesRead)));
+		},
+		cancel: release,
+	});
 }
 
 /** Server-resolved V5 facts paired with the exact admitted bytes. */
@@ -1177,16 +1229,10 @@ const codexNativeTextInputExecutionPattern =
 const codexNativeTextInputDigestPattern = /^[a-f0-9]{64}$/;
 
 /**
- * Image media types the pinned Codex `local_image` consumer accepts. Anything
- * else is rejected before the native Turn, never materialized or forwarded.
+ * #3225：可接受的附件类型以 FileLimits 交集为准，Driver 不再写死图片集合；只保留单文件
+ * 50 MiB 与单条消息 32 个的上限。原生 `local_image` 只用于其中的原生图片类型。
  */
-const codexInputImageMediaTypes = new Set([
-	"image/png",
-	"image/jpeg",
-	"image/gif",
-	"image/webp",
-]);
-const codexInputMaximumBytes = 50 * 1024 * 1024;
+const codexInputMaximumBytes = SANDBOX_ATTACHMENT_MAX_BYTES_V1;
 /** Bounds elapsed time so a stalled source cannot hold the execution open. */
 const codexInputTransferTimeoutMs = 30_000;
 /** Bounds the bridge exchange itself, before any transfer deadline exists. */
@@ -7088,8 +7134,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		fileBridge?: RuntimeFileBridgePortV1,
 	) {
 		if (command.operationId !== command.executionId) stateInvalid();
-		const text = "text" in command.input ? command.input.text : undefined;
-		if (!text) unavailable();
+		// #3225：只含附件的消息没有正文，原生输入只有附件清单与原生图片。Skill 仍需正文。
+		const text = "text" in command.input ? command.input.text : "";
+		if (
+			!text &&
+			(command.nativeSkill || command.input.attachments.length === 0)
+		)
+			unavailable();
 		this.resultPublicationContexts.set(command.executionId, {
 			command,
 			...(fileBridge ? { bridge: fileBridge } : {}),
@@ -7240,6 +7291,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		key: string,
 	): Promise<MaterializedCodexInput> {
 		if (!fileBridge) unavailable();
+		// 数量超限在任何读取与 native side effect 之前拒绝。
+		const fileIds = sandboxAttachmentIdsV1(
+			command.input.attachments,
+			unavailable,
+		);
 		if (this.codexInputRootPath) {
 			await mkdir(this.codexInputRootPath, { recursive: true, mode: 0o700 });
 		}
@@ -7249,28 +7305,28 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				: join(tmpdir(), "agent-infra-codex-input-"),
 		);
 		try {
-			const items: CodexNativeInputItem[] = [{ type: "text", text }];
-			for (const [index, fileId] of command.input.attachments.entries()) {
+			// #3225：先在 Host 临时目录取得并核对字节；Conversation 工作区就绪后再物化到
+			// 工作区（placeCodexAttachments），local_image 指向工作区内的文件。
+			const attachments: CodexHostAttachment[] = [];
+			for (const [index, fileId] of fileIds.entries()) {
 				const input = await acquireCodexInput(fileBridge, fileId);
-				if (
-					input.fileId !== fileId ||
-					!codexInputImageMediaTypes.has(input.descriptor.mediaType)
-				) {
+				if (input.fileId !== fileId) {
 					// The rejected body is never transferred, so it must not stay live.
 					await cancelCodexInputBody(input.body);
 					unavailable();
 				}
 				const bytes = await readCodexInputBytes(input);
-				const path = join(directory, `${String(index).padStart(2, "0")}.image`);
+				const path = join(directory, `${String(index).padStart(2, "0")}.input`);
 				await writeFile(path, bytes, {
 					flag: "wx",
 					mode: 0o600,
 				});
-				items.push({ type: "local_image", path });
+				attachments.push({ fileId, descriptor: input.descriptor, path });
 			}
 			let cleaned = false;
 			return {
-				items,
+				items: text ? [{ type: "text", text }] : [],
+				attachments,
 				cleanup: async () => {
 					if (cleaned) return;
 					try {
@@ -7293,6 +7349,47 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 			throw error;
 		}
+	}
+
+	/**
+	 * #3225：把已核对的 Host 临时副本物化到当前 Conversation 工作区的
+	 * `.agent-infra/attachments/<ref>/<name>`，并构造原生输入：用户消息之后追加附件清单，
+	 * 原生图片另外作为指向工作区文件的 `local_image`。Host 临时副本照常保留到终态后清理。
+	 */
+	private async placeCodexAttachments(
+		session: CodexSession,
+		text: string,
+		input: MaterializedCodexInput,
+	): Promise<MaterializedCodexInput> {
+		const sources = input.attachments;
+		if (!sources) stateInvalid();
+		const workspace = this.nativeWorkspace(codexConversationKey(session));
+		if (!workspace || !this.recoveryDirectory) unavailable();
+		const placed = await materializeSandboxAttachmentsV1({
+			// 与原生进程启动一致：只解析部署父目录，数据根以下逐级不跟随链接。
+			root: dirname(this.recoveryDirectory),
+			workspace,
+			fileIds: sources.map(({ fileId }) => fileId),
+			read: async (fileId) => {
+				const source = sources.find((entry) => entry.fileId === fileId);
+				if (!source) unavailable();
+				return {
+					fileId,
+					descriptor: source.descriptor,
+					body: codexHostAttachmentStream(source.path),
+				};
+			},
+			invalid: unavailable,
+		});
+		return {
+			items: [
+				{ type: "text", text: sandboxAttachmentPromptTextV1(text, placed) },
+				...placed
+					.filter(isSandboxAttachmentNativeImageV1)
+					.map(({ path }) => ({ type: "local_image" as const, path })),
+			],
+			cleanup: input.cleanup,
+		};
 	}
 
 	/**
@@ -7504,7 +7601,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					? await ensureInput(session.nativeSessionRef)
 					: await this.nativeSkillInput(command, text, session.nativeSessionRef)
 				: command.input.attachments.length > 0
-					? await ensureInput(session.nativeSessionRef)
+					? await this.placeCodexAttachments(
+							session,
+							text,
+							await ensureInput(session.nativeSessionRef),
+						)
 					: { items: [{ type: "text", text }], cleanup: async () => {} };
 		} catch (error) {
 			// Nothing crossed the native side; release the prepared operation so a

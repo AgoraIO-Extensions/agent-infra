@@ -2,10 +2,12 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import {
 	chmod,
 	copyFile,
+	lstat,
 	mkdir,
 	mkdtemp,
 	readdir,
 	readFile,
+	realpath,
 	rm,
 	stat,
 	symlink,
@@ -331,7 +333,7 @@ async function materializedInputDirectories(
 		for (const entry of await readdir(root).catch(() => [])) {
 			const directory = join(root, entry);
 			try {
-				const image = await readFile(join(directory, "00.image"));
+				const image = await readFile(join(directory, "00.input"));
 				if (image.toString("hex") === expected) directories.push(directory);
 			} catch {}
 		}
@@ -421,6 +423,105 @@ function submitCommand(
 		input: { text: "synthetic-input", attachments: [] },
 		...overrides,
 	};
+}
+
+/**
+ * #3225：附件物化到 Conversation 工作区。生产中工作区由原生进程启动时创建；脚本化测试桥
+ * 不启动进程，这里按同一路径预先创建。
+ */
+async function codexAttachmentWorkspace(
+	path: string,
+	command: Pick<
+		Extract<RuntimeDriverCommandV1, { kind: "submit-turn" }>,
+		"agentId" | "conversationId" | "sessionGeneration"
+	> = submitCommand(),
+) {
+	const workspace = join(
+		`${path}.native`,
+		"conversations",
+		codexConversationKey({
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			sessionGeneration: command.sessionGeneration,
+		}),
+		"workspace",
+	);
+	await mkdir(workspace, { recursive: true, mode: 0o700 });
+	return realpath(workspace);
+}
+
+const codexAttachmentRef = (fileId: string) =>
+	createHash("sha256").update(fileId).digest("hex").slice(0, 16);
+
+const codexAttachments: Record<
+	string,
+	{ name: string; mediaType: string; bytes: Buffer }
+> = {
+	"file-pdf": {
+		name: "report.pdf",
+		mediaType: "application/pdf",
+		bytes: Buffer.from("%PDF-1.4\n%codex-attachment-pdf\n"),
+	},
+	"file-csv": {
+		name: "table.csv",
+		mediaType: "text/csv",
+		bytes: Buffer.from("name,value\ncodex-attachment-csv,1\n"),
+	},
+	"file-txt": {
+		name: "notes.txt",
+		mediaType: "text/plain",
+		bytes: Buffer.from("codex-attachment-text\n"),
+	},
+	"file-png": {
+		name: "screen.png",
+		mediaType: "image/png",
+		bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+	},
+	"file-svg": {
+		name: "vector.svg",
+		mediaType: "image/svg+xml",
+		bytes: Buffer.from("<svg></svg>"),
+	},
+};
+
+function codexAttachmentBridge(reads: string[] = []) {
+	return {
+		readInput: async (fileId: string) => {
+			reads.push(fileId);
+			const fixture = codexAttachments[fileId];
+			if (!fixture) throw new Error("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
+			return {
+				fileId,
+				descriptor: {
+					name: fixture.name,
+					mediaType: fixture.mediaType,
+					sizeBytes: fixture.bytes.byteLength,
+					sha256: createHash("sha256").update(fixture.bytes).digest("hex"),
+				},
+				body: new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new Uint8Array(fixture.bytes));
+						controller.close();
+					},
+				}),
+			};
+		},
+		revalidate: () => {},
+		writeResult: async () => {
+			throw new Error("unused");
+		},
+	};
+}
+
+function codexManifest(fileIds: readonly string[]) {
+	return [
+		"Attachments (saved in your workspace; paths are relative to your workspace root):",
+		...fileIds.map((fileId) => {
+			const fixture = codexAttachments[fileId];
+			if (!fixture) throw new Error();
+			return `- name: "${fixture.name}", media type: ${fixture.mediaType}, size: ${fixture.bytes.byteLength} bytes, path: ".agent-infra/attachments/${codexAttachmentRef(fileId)}/${fixture.name}"`;
+		}),
+	].join("\n");
 }
 
 function submitCommandV2(
@@ -2784,114 +2885,273 @@ describe("Codex Runtime Driver", () => {
 		);
 	});
 
-	it("retains an authorized image until the native Turn terminates", async () => {
+	it("materializes PDF, CSV, TXT and PNG into the Conversation workspace and keeps local_image for the image (#3225)", async () => {
 		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
 		const bridge = new TestCodexBridge();
-		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		const driver = await openDriver(path, bridge);
 		drivers.push(driver);
-		const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-		const readInput = vi.fn(async (fileId: string) => ({
-			fileId,
-			descriptor: {
-				name: "screen.png",
-				mediaType: "image/png",
-				sizeBytes: bytes.byteLength,
-				sha256: createHash("sha256").update(bytes).digest("hex"),
-			},
-			body: new ReadableStream<Uint8Array>({
-				start(controller) {
-					controller.enqueue(bytes);
-					controller.close();
-				},
-			}),
-		}));
-		const fileBridge = {
-			readInput,
-			revalidate: () => {},
-			writeResult: async () => {
-				throw new Error("unused");
-			},
-		};
+		const workspace = await codexAttachmentWorkspace(path);
+		const fileIds = ["file-pdf", "file-csv", "file-txt", "file-png"];
+		const reads: string[] = [];
 
 		const result = await driver.execute(
 			submitCommand({
-				input: { text: "describe this image", attachments: ["file-1"] },
+				input: { text: "describe these files", attachments: fileIds },
 			}),
-			{ fileBridge },
+			{ fileBridge: codexAttachmentBridge(reads) },
 		);
-		const start = bridge.requests.find(({ method }) => method === "turn/start");
-		const input = (start?.params as { input?: unknown[] } | undefined)?.input;
-		expect(input).toHaveLength(2);
-		expect(input?.[0]).toEqual({ type: "text", text: "describe this image" });
-		expect(input?.[1]).toMatchObject({
-			type: "local_image",
-			path: expect.any(String),
-		});
-		expect(readInput).toHaveBeenCalledWith("file-1", expect.any(AbortSignal));
-		const localImage = input?.[1];
-		if (
-			!localImage ||
-			typeof localImage !== "object" ||
-			!("path" in localImage)
-		)
-			throw new Error("missing local image path");
-		const temporaryPath = String(localImage.path);
-		await expect(readFile(temporaryPath)).resolves.toEqual(Buffer.from(bytes));
 		expect(result.result).toMatchObject({ outcome: "accepted" });
+		expect(reads).toEqual(fileIds);
+		const start = bridge.requests.find(({ method }) => method === "turn/start");
+		const png = join(
+			workspace,
+			".agent-infra/attachments",
+			codexAttachmentRef("file-png"),
+			"screen.png",
+		);
+		// 用户消息之后追加清单；图片仍走 local_image，指向工作区内物化后的文件。
+		expect((start?.params as { input?: unknown[] } | undefined)?.input).toEqual(
+			[
+				{
+					type: "text",
+					text: `describe these files\n\n${codexManifest(fileIds)}`,
+				},
+				{ type: "local_image", path: png },
+			],
+		);
+		for (const fileId of fileIds) {
+			const fixture = codexAttachments[fileId];
+			if (!fixture) throw new Error();
+			const copy = join(
+				workspace,
+				".agent-infra/attachments",
+				codexAttachmentRef(fileId),
+				fixture.name,
+			);
+			expect(
+				createHash("sha256")
+					.update(await readFile(copy))
+					.digest("hex"),
+			).toBe(createHash("sha256").update(fixture.bytes).digest("hex"));
+			expect((await stat(copy)).mode & 0o777).toBe(0o400);
+		}
+		const pngBytes = codexAttachments["file-png"]?.bytes ?? Buffer.alloc(0);
+		expect(await materializedInputDirectories(pngBytes)).toEqual([]);
 		await bridge.emitTurnCompleted("completed");
+		// 终态后只清理 Host 自己的临时副本；工作区内的附件保留到会话结束。
 		await vi.waitFor(async () => {
-			await expect(readFile(temporaryPath)).rejects.toThrow();
+			const roots = (await readdir(tmpdir())).filter((name) =>
+				name.startsWith("agent-infra-codex-input-"),
+			);
+			for (const root of roots)
+				for (const entry of await readdir(join(tmpdir(), root)).catch(() => []))
+					await expect(
+						readFile(join(tmpdir(), root, entry, "03.input")),
+					).rejects.toThrow();
 		});
+		await expect(readFile(png)).resolves.toEqual(pngBytes);
+		// Driver 持久状态与事件不含工作区路径、Host 临时路径与附件内容。
+		const persisted = [
+			await readFile(path, "utf8"),
+			JSON.stringify(
+				await driver.replayEvents(result.nativeSessionRef, "execution-codex"),
+			),
+		].join("\n");
+		for (const forbidden of [
+			workspace,
+			".agent-infra/attachments",
+			"agent-infra-codex-input",
+			"codex-attachment-text",
+		])
+			expect(persisted).not.toContain(forbidden);
 	});
 
-	it("rejects an attachment outside the Codex image allowlist before native submission", async () => {
+	it("submits an attachment-only message as the manifest without local_image for a non-native image type (#3225)", async () => {
 		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
 		const bridge = new TestCodexBridge();
-		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		const driver = await openDriver(path, bridge);
 		drivers.push(driver);
-		const bytes = new Uint8Array([60, 115, 118, 103, 62]);
+		const workspace = await codexAttachmentWorkspace(path);
 
-		let cancelled = false;
-		const fileBridge = {
-			readInput: async (fileId: string) => ({
-				fileId,
-				descriptor: {
-					name: "vector.svg",
-					mediaType: "image/svg+xml",
-					sizeBytes: bytes.byteLength,
-					sha256: createHash("sha256").update(bytes).digest("hex"),
-				},
-				body: new ReadableStream<Uint8Array>({
-					start(controller) {
-						controller.enqueue(bytes);
-						controller.close();
-					},
+		const result = await driver.execute(
+			submitCommand({ input: { attachments: ["file-svg"] } }),
+			{ fileBridge: codexAttachmentBridge() },
+		);
+		expect(result.result).toMatchObject({ outcome: "accepted" });
+		const start = bridge.requests.find(({ method }) => method === "turn/start");
+		expect((start?.params as { input?: unknown[] } | undefined)?.input).toEqual(
+			[{ type: "text", text: codexManifest(["file-svg"]) }],
+		);
+		await expect(
+			readFile(
+				join(
+					workspace,
+					".agent-infra/attachments",
+					codexAttachmentRef("file-svg"),
+					"vector.svg",
+				),
+			),
+		).resolves.toEqual(codexAttachments["file-svg"]?.bytes);
+	});
 
-					cancel() {
-						cancelled = true;
-					},
-				}),
+	it("reuses and restores workspace copies on regenerate and rejects planted links before native submission (#3225)", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const workspace = await codexAttachmentWorkspace(path);
+		const fileIds = ["file-pdf", "file-txt"];
+		const first = await driver.execute(
+			submitCommand({ input: { text: "first", attachments: fileIds } }),
+			{ fileBridge: codexAttachmentBridge() },
+		);
+		expect(first.result).toMatchObject({ outcome: "accepted" });
+		await bridge.emitTurnCompleted("completed");
+		const pdf = join(
+			workspace,
+			".agent-infra/attachments",
+			codexAttachmentRef("file-pdf"),
+			"report.pdf",
+		);
+		const txt = join(
+			workspace,
+			".agent-infra/attachments",
+			codexAttachmentRef("file-txt"),
+			"notes.txt",
+		);
+		const unchanged = await lstat(pdf);
+		await chmod(txt, 0o600);
+		await writeFile(txt, "rewritten by the agent");
+		await vi.waitFor(async () =>
+			expect(
+				await persistedExecutionStatus(
+					path,
+					first.nativeSessionRef,
+					"execution-codex",
+				),
+			).toBe("completed"),
+		);
+
+		// 重新生成：同一路径；内容一致不重复写入，被改写的副本恢复为原内容。
+		const second = await driver.execute(
+			submitCommand({
+				operationId: "execution-codex-2",
+				executionId: "execution-codex-2",
+				turnId: "turn-codex-2",
+				input: { text: "second", attachments: fileIds },
 			}),
-			revalidate: () => {},
-
-			writeResult: async () => {
-				throw new Error("unused");
+			{ fileBridge: codexAttachmentBridge() },
+		);
+		expect(second.result).toMatchObject({ outcome: "accepted" });
+		expect((await lstat(pdf)).ino).toBe(unchanged.ino);
+		expect(await readFile(txt)).toEqual(codexAttachments["file-txt"]?.bytes);
+		const starts = bridge.requests.filter(
+			({ method }) => method === "turn/start",
+		);
+		expect(
+			(starts.at(-1)?.params as { input?: unknown[] } | undefined)?.input,
+		).toEqual([{ type: "text", text: `second\n\n${codexManifest(fileIds)}` }]);
+		await bridge.emitFrame({
+			method: "turn/completed",
+			params: {
+				threadId: bridge.nativeThreadId,
+				turn: {
+					id: `${bridge.nativeTurnId}-2`,
+					status: "completed",
+					items: [],
+				},
 			},
-		};
+		});
+		await vi.waitFor(async () =>
+			expect(
+				await persistedExecutionStatus(
+					path,
+					first.nativeSessionRef,
+					"execution-codex-2",
+				),
+			).toBe("completed"),
+		);
 
+		// 平台目录中预先放置的符号链接导致拒绝，平台目录之外的文件不受影响。
+		const outside = join(directory, "outside");
+		await mkdir(outside, { mode: 0o700 });
+		await writeFile(join(outside, "keep.txt"), "outside");
+		await rm(join(workspace, ".agent-infra"), { recursive: true, force: true });
+		await symlink(outside, join(workspace, ".agent-infra"));
 		await expect(
 			driver.execute(
 				submitCommand({
-					input: { text: "describe this image", attachments: ["file-1"] },
+					operationId: "execution-codex-3",
+					executionId: "execution-codex-3",
+					turnId: "turn-codex-3",
+					input: { text: "third", attachments: ["file-txt"] },
+				}),
+				{ fileBridge: codexAttachmentBridge() },
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(2);
+		expect(await readdir(outside)).toEqual(["keep.txt"]);
+		expect(await readFile(join(outside, "keep.txt"), "utf8")).toBe("outside");
+	});
+
+	it("rejects more than 32 attachments and a fileId outside the Grant before native submission (#3225)", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const workspace = await codexAttachmentWorkspace(path);
+		const reads: string[] = [];
+		await expect(
+			driver.execute(
+				submitCommand({
+					input: {
+						text: "too many",
+						attachments: Array.from({ length: 33 }, (_, i) => `file-${i}`),
+					},
+				}),
+				{ fileBridge: codexAttachmentBridge(reads) },
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(reads).toEqual([]);
+		// 另一会话或另一执行的附件不在本次 Grant 中：FileBridge 拒绝，不落盘。
+		const fileBridge = createRuntimeFileBridgeV1({
+			binding: {
+				actorId: "actor-codex",
+				channelId: "web",
+				agentId: "agent-codex",
+				conversationId: "conversation-codex",
+				executionId: "execution-codex",
+				sessionGeneration: 1,
+				grantId: "grant-codex",
+				expiresAt: Date.now() + 60_000,
+				inputFileIds: ["file-txt"],
+			},
+			readInput: async (context) =>
+				codexAttachmentBridge().readInput(context.fileId),
+			writeResult: async () => {
+				throw new Error("unused");
+			},
+			isRevoked: () => false,
+			isCurrent: () => true,
+		});
+		await expect(
+			driver.execute(
+				submitCommand({
+					input: { text: "foreign", attachments: ["file-pdf"] },
 				}),
 				{ fileBridge },
 			),
-		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		).rejects.toThrow("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
 		expect(bridge.requests.some(({ method }) => method === "turn/start")).toBe(
 			false,
 		);
-
-		expect(cancelled).toBe(true);
+		await expect(readdir(join(workspace, ".agent-infra"))).rejects.toThrow();
 	});
 
 	it("releases the body of an attachment whose descriptor exceeds the byte bound", async () => {
@@ -2941,6 +3201,7 @@ describe("Codex Runtime Driver", () => {
 		const bridge = new TestCodexBridge();
 		const driver = await openDriver(join(directory, "driver.json"), bridge);
 		drivers.push(driver);
+		await codexAttachmentWorkspace(join(directory, "driver.json"));
 		const bytes = new TextEncoder().encode(
 			"codex-lapsed-authority-probe-image",
 		);
@@ -3236,6 +3497,7 @@ describe("Codex Runtime Driver", () => {
 			const bridge = new TestCodexBridge();
 			const driver = await openDriver(join(directory, "driver.json"), bridge);
 			drivers.push(driver);
+			await codexAttachmentWorkspace(join(directory, "driver.json"));
 
 			const bytes = new TextEncoder().encode(
 				"codex-cleanup-replay-probe-image",
@@ -3319,14 +3581,17 @@ describe("Codex Runtime Driver", () => {
 				if (fileId === "file-2" && !blocked) {
 					blocked = await blockMaterializedInputDirectory(bytes);
 				}
-				const unsupported = fileId === "file-2";
+				// #3225：类型不再由 Driver 限制；第二个附件的字节与准入摘要不一致。
+				const mismatched = fileId === "file-2";
 				return {
 					fileId,
 					descriptor: {
-						name: unsupported ? "vector.svg" : "screen.png",
-						mediaType: unsupported ? "image/svg+xml" : "image/png",
+						name: "screen.png",
+						mediaType: "image/png",
 						sizeBytes: bytes.byteLength,
-						sha256: createHash("sha256").update(bytes).digest("hex"),
+						sha256: mismatched
+							? "a".repeat(64)
+							: createHash("sha256").update(bytes).digest("hex"),
 					},
 					body: new ReadableStream<Uint8Array>({
 						start(controller) {
@@ -3379,6 +3644,7 @@ describe("Codex Runtime Driver", () => {
 			const bridge = new TestCodexBridge();
 			const driver = await openDriver(path, bridge);
 			drivers.push(driver);
+			await codexAttachmentWorkspace(path);
 			const bytes = new TextEncoder().encode(
 				"codex-restart-reclaim-probe-image",
 			);
