@@ -30,8 +30,7 @@ import {
 	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
 import { AgentMark } from "../agent-mark.js";
-import { PageStateCard } from "../page-state-card.js";
-import { RecoveryButton } from "../recovery-button.js";
+import { PageStateCard, ReloginButton } from "../page-state-card.js";
 import {
 	type TemplateNameLookup,
 	templateDisplayName,
@@ -119,16 +118,11 @@ function DirectoryUnavailable({
 			<PageStateCard
 				kind="login"
 				title="登录已过期"
-				// 经壳层重读会话；会话仍有效时由目录页重新读取列表（useSessionRecheck）。
+				// 经壳层重读会话；会话仍有效时由目录页重新读取列表（useSessionRecheck）。按钮与 Agent 管理、
+				// 设计 #states 代表卡相同，带 LogIn 图标（#3327 N10-1-04）。
 				action={
 					onRelogin ? (
-						<RecoveryButton
-							recoveryKey="重新登录"
-							busy={retrying}
-							onClick={onRelogin}
-						>
-							重新登录
-						</RecoveryButton>
+						<ReloginButton busy={retrying} onClick={onRelogin} />
 					) : null
 				}
 			/>

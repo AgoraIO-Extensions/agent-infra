@@ -10,8 +10,11 @@ type LoginPageProps = {
 	development: boolean;
 	/** 已就绪的会话失效（非主动退出），或地址带 reason=expired。 */
 	expired: boolean;
-	/** 由用户主动退出进入：焦点随原页面卸载落到 body 时交给第一个登录控件。 */
-	focusAfterLogout?: boolean;
+	/**
+	 * 由同一文档内已就绪的会话进入：主动退出，或「重新登录」等重读确认会话已失效。焦点随原页面卸载
+	 * 落到 body 时交给第一个登录控件；没有登录控件（未配置登录入口）时交给「登录工作区」标题。
+	 */
+	focusOnEntry?: boolean;
 	onLoggedIn: () => Promise<unknown>;
 };
 
@@ -23,24 +26,30 @@ export function LoginPage({
 	loginUrl,
 	development,
 	expired,
-	focusAfterLogout = false,
+	focusOnEntry = false,
 	onLoggedIn,
 }: LoginPageProps) {
 	const main = useRef<HTMLElement>(null);
-	// 主动退出后「退出登录」（窄屏连同导航 Sheet）随壳层卸载，焦点会落到 body：交给「公司账号」，
-	// 开发模式为「选择开发测试身份」（#3242 K7-02）。直接打开登录页时不抢焦点，与设计稿一致。
+	const title = useRef<HTMLHeadingElement>(null);
+	// 主动退出后「退出登录」（窄屏连同导航 Sheet）、「重新登录」确认会话已失效后的触发按钮都随壳层卸载，
+	// 焦点会落到 body：交给「公司账号」，开发模式为「选择开发测试身份」（#3242 K7-02、#3327 N10-1-01）；
+	// 未配置登录入口时没有登录控件，交给页面标题（D2-59）。直接打开登录页时不抢焦点，与设计稿一致。
 	useEffect(() => {
-		if (!focusAfterLogout) return;
+		if (!focusOnEntry) return;
 		// 等原壳层离开 DOM、Sheet 归还焦点结束后再检查。
 		const timer = window.setTimeout(() => {
 			const active = document.activeElement;
-			if (active && active !== document.body) return;
-			main.current
-				?.querySelector<HTMLElement>("input:not([disabled]), a[href]")
-				?.focus();
+			// 读取恢复（RecoveryButton）可能已先把焦点放到页面标题，标题同 body 一样视为尚未落定。
+			if (active && active !== document.body && active !== title.current)
+				return;
+			(
+				main.current?.querySelector<HTMLElement>(
+					"input:not([disabled]), a[href]",
+				) ?? title.current
+			)?.focus();
 		});
 		return () => window.clearTimeout(timer);
-	}, [focusAfterLogout]);
+	}, [focusOnEntry]);
 	return (
 		<div className="login-page">
 			<header className="login-header">
@@ -56,7 +65,10 @@ export function LoginPage({
 				<section className="login-panel" aria-labelledby="login-title">
 					<div className="login-intro">
 						<p className="login-kicker">公司账号</p>
-						<h1 id="login-title">登录工作区</h1>
+						{/* tabIndex=-1：没有登录控件时进入登录页的焦点目标（focusOnEntry）。 */}
+						<h1 ref={title} id="login-title" tabIndex={-1}>
+							登录工作区
+						</h1>
 						<p className="login-lead">使用公司账号登录。</p>
 					</div>
 					{expired && (

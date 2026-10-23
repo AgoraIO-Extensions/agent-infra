@@ -1067,7 +1067,8 @@ export function ActiveConversation({
 					resendDisabled={!canSend}
 				/>
 				{agent.capabilities.modelSelection && !option && currentModelId && (
-					<p className="text-muted-foreground text-sm">
+					// 静态说明行，同区其余说明行为正文前景色、不设 role（web-ui「对话页状态说明行」，#3327 N10-1-03）。
+					<p className="text-sm">
 						原模型选项已移除；提交消息时，标准模板将使用 Owner
 						的默认选项。你也可以刷新并重新选择。
 					</p>
