@@ -13,6 +13,7 @@ import {
 	wecomChannelIdV1,
 } from "@agent-infra/platform-core";
 import {
+	PostgresAgentConfigurationQueryV1,
 	PostgresFileStoreV1,
 	PostgresWecomChannelV1,
 } from "@agent-infra/platform-store";
@@ -26,7 +27,11 @@ import {
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
 import { completeWecomExecutionFixture } from "../../../packages/platform-store/src/wecom-receipt.fixture.js";
-import { createWecomInboundMediaResolverV1 } from "./wecom-media.js";
+import { workloadDesiredFixture } from "./kubernetes.fixture.js";
+import {
+	createWecomAttachmentCapabilityReaderV1,
+	createWecomInboundMediaResolverV1,
+} from "./wecom-media.js";
 
 // 真实 PostgreSQL、受理事务与 File Authority；企微下载由与 SDK 加密格式一致的替身提供（#3227）。
 // 这不是固定环境的真实企微收发验收，那由 #3230 负责。
@@ -173,10 +178,68 @@ function serve(
 let db: PostgresTestDatabase;
 let sql: ReturnType<typeof postgres>;
 let store: PostgresWecomChannelV1;
+let configurationQuery: PostgresAgentConfigurationQueryV1;
 let resolver: ReturnType<typeof createWecomInboundMediaResolverV1>;
 let channel: ReturnType<typeof createWecomChannelV1>;
 const storage = new FakeObjectStorageV1();
 const maxBytes = 512 * 1024;
+
+/**
+ * #3258：写入 Agent 当前配置已验证的 Runtime 状态（与 Web 读取的同一份展示投影）。
+ * `attachments` 为 null 时删除该状态，表示 Runtime 尚未验证。
+ */
+async function persistRuntimeState(attachments: boolean | null) {
+	if (attachments === null) {
+		await sql`delete from platform.workload_reconciliations where agent_id=${base.agentId}`;
+		return;
+	}
+	const current = await store.readAuthorityState(base.agentId);
+	if (!current) throw new Error("Expected the fixture Agent");
+	const decoded = current.configuration as unknown as {
+		readonly revision: number;
+		readonly source: { readonly imageDigest: string };
+	};
+	const desired = workloadDesiredFixture(1, base.agentId, "internal-only");
+	const deployment = {
+		...desired,
+		configRevision: decoded.revision,
+		imageDigest: decoded.source.imageDigest,
+		registryAdmission: {
+			...desired.registryAdmission,
+			immutableDigest: decoded.source.imageDigest,
+			policyEvidence: {
+				...desired.registryAdmission.policyEvidence,
+				imageDigest: decoded.source.imageDigest,
+			},
+		},
+	};
+	const version = { configuration: current.configuration, deployment };
+	const state = {
+		schemaVersion: 1,
+		agentId: base.agentId,
+		sourceConfigurationRevision: decoded.revision,
+		sourceLifecycleRevision: 1,
+		revision: 1,
+		fence: 1,
+		phase: "ready",
+		candidate: version,
+		verified: version,
+		verifiedRevision: 1,
+		identity: { uid: "wecom-media", generation: 1 },
+		rollback: false,
+		failureCode: null,
+		attempts: 0,
+		capabilities: {
+			conversation: true,
+			attachments,
+			resultFiles: false,
+			supplementaryInstruction: false,
+		},
+	};
+	await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at)
+		values (${base.agentId}, 1, ${sql.json(state as never)}, now() + interval '1 hour')
+		on conflict (agent_id) do update set state = excluded.state, revision = excluded.revision`;
+}
 
 async function receive(message: WecomMessageV1) {
 	const keyId = `fixture-key:personal:${message.senderId}`;
@@ -210,19 +273,28 @@ beforeAll(async () => {
 	await migratePlatformDatabase(db);
 	sql = postgres(db.databaseUrl, { max: 2 });
 	store = new PostgresWecomChannelV1({ ...db, userDirectory, identity });
+	configurationQuery = new PostgresAgentConfigurationQueryV1({
+		databaseUrl: db.databaseUrl,
+	});
 	resolver = createWecomInboundMediaResolverV1({
 		databaseUrl: db.databaseUrl,
 		storage,
 		authorization,
 		fetch: fetchFixture,
 		downloadTimeoutMs: 5_000,
+		readAttachmentCapability: createWecomAttachmentCapabilityReaderV1({
+			configuration: configurationQuery,
+			identity,
+			state: store,
+		}),
 	});
 	channel = createWecomChannelV1({ authorization, store, media: resolver });
 	await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values (${base.agentId},1,'authorization_1')`;
 	await sql`insert into platform.agent_applications (id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values ('app_media',${base.agentId},'owner_1','Fixture','Fixture','available','trace_1','request_1',now(),1,1,'ready','running',1,1)`;
 	await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values (${base.agentId},'owner_1',now())`;
 	await sql`insert into platform.agent_availability (agent_id,target_type,target_id) values (${base.agentId},'organization','controlled-org')`;
-	await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${base.agentId},1,'fixture',${sql.json(configuration)},now())`;
+	// 标准模板的 source_reference 是模板 ID（与 Store 的规范化规则一致），Runtime 展示投影才可读。
+	await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${base.agentId},1,${configuration.source.templateId},${sql.json(configuration)},now())`;
 	// 三方 FileLimits：Channel 声明不含 zip，交集即企微 Channel 可接收的类型与大小。
 	// #3257：同时含 text/plain 与 text/csv，用于证明没有声明类型的入站文本仍按字节识别。
 	const expiresAt = new Date(Date.now() + 86_400_000);
@@ -240,9 +312,12 @@ beforeAll(async () => {
 		["channel", base.agentId, channelId, types],
 	] as const)
 		await sql`insert into platform.file_limit_declarations (scope,agent_id,channel_id,revision,expires_at,max_bytes,media_types,idempotency_key,request_digest,updated_at,updated_by) values (${scope},${agentId},${channel},1,${expiresAt},${maxBytes},${sql.json([...mediaTypes])},${`fixture-${scope}`},${"0".repeat(64)},now(),'system_admin')`;
+	// #3258：Agent 当前配置已验证附件能力，与 Web 上传的前置条件一致。
+	await persistRuntimeState(true);
 }, 120_000);
 afterAll(async () => {
 	await resolver?.close();
+	await configurationQuery?.close();
 	await store?.close();
 	await sql?.end();
 	await db?.stop();
@@ -464,6 +539,82 @@ describe("WeCom long-connection inbound media (#3227)", {
 			while (!sent.some((input) => input.text === text))
 				if (!(await delivery.dispatch())) break;
 			expect(sent.map((input) => input.text)).toContain(text);
+		},
+	);
+
+	it.each([
+		["has no verified Runtime state", null],
+		["has verified attachments as unsupported", false],
+	] as const)(
+		"#3258 AC-3: rejects media when the Agent %s, without downloading or calling the Agent",
+		async (label, attachments) => {
+			const text = "当前渠道不支持接收图片、文件、语音或视频，未发送给 Agent";
+			const eventId = `ac3-capability-${attachments === null ? "none" : "false"}`;
+			await persistRuntimeState(attachments);
+			try {
+				const download = serve(png);
+				const executions =
+					await sql`select count(*)::int as count from platform.conversation_executions`;
+				const files =
+					await sql`select count(*)::int as count from platform.files`;
+				const result = await receive({
+					...base,
+					eventId,
+					text: label,
+					media: [{ kind: "image", name: null, download }],
+				});
+				if (result.outcome !== "accepted") throw new Error("Expected receipt");
+				expect(result.receipt).toMatchObject({
+					status: "media_rejected",
+					conversationId: null,
+					executionId: null,
+				});
+				// 没有调用 Agent，也没有下载媒体或写入附件。
+				expect(
+					await sql`select count(*)::int as count from platform.conversation_executions`,
+				).toEqual(executions);
+				expect(fetchCalls).not.toContain(download.url);
+				expect(
+					await sql`select count(*)::int as count from platform.files`,
+				).toEqual(files);
+				expect(
+					await sql`select action, outcome from platform.audit_events where request_id=${result.receipt.receiptId}`,
+				).toEqual([{ action: "wecom.media_rejected", outcome: "rejected" }]);
+				expect(
+					await sql`select media_rejection_reason, media_rejection_max_bytes from platform.wecom_receipts where id=${result.receipt.receiptId}`,
+				).toEqual([
+					{
+						media_rejection_reason: "unsupported_channel",
+						media_rejection_max_bytes: null,
+					},
+				]);
+				const sent: Parameters<WecomSendPortV1["send"]>[0][] = [];
+				const delivery = createWecomDeliveryV1({
+					store,
+					authorization,
+					answerReferences: parseWecomAnswerReferencesV1,
+					sender: {
+						async send(input) {
+							sent.push(input);
+							return "sent";
+						},
+					},
+				});
+				while (!sent.some((input) => input.text === text))
+					if (!(await delivery.dispatch())) break;
+				expect(sent.map((input) => input.text)).toContain(text);
+			} finally {
+				await persistRuntimeState(true);
+			}
+			// 能力恢复为已验证后，同样的媒体正常受理，证明拒绝来自能力核对。
+			const accepted = await receive({
+				...base,
+				eventId: `${eventId}-verified`,
+				media: [{ kind: "image", name: null, download: serve(png) }],
+			});
+			if (accepted.outcome !== "accepted") throw new Error("Expected receipt");
+			expect(accepted.receipt.status).toBe("accepted");
+			await completeWecomExecutionFixture(sql, accepted.receipt.executionId);
 		},
 	);
 
