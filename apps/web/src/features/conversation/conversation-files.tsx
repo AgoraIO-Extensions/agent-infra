@@ -203,9 +203,16 @@ export function useConversationFiles({
 				if (controller.signal.aborted) return;
 				const expired =
 					error instanceof ConversationFileTransferError && error.expired;
+				const content =
+					error instanceof ConversationFileTransferError &&
+					error.reason === "content";
 				updateUpload(item.localId, {
 					status: expired ? "expired" : "failed",
-					error: expired ? "上传授权已过期，请重试。" : "上传失败，请重试。",
+					error: expired
+						? "上传授权已过期，请重试。"
+						: content
+							? "文件内容不是有效的 UTF-8 文本，与文件类型不符。"
+							: "上传失败，请重试。",
 				});
 			} finally {
 				controllers.current.delete(item.localId);
