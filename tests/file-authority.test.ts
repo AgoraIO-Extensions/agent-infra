@@ -19,6 +19,7 @@ import {
 import { RuntimeBusinessGrantClaimsV4Schema } from "../packages/contracts/src/runtime/index.ts";
 import { startMinioFileFixtureV1 } from "../packages/object-storage/src/minio.test-support.ts";
 import { createConversationExecutionUseCaseV1 } from "../packages/platform-core/src/conversation-execution.ts";
+import { sessionSandboxFileExchangeTokenV1 } from "../packages/platform-core/src/session-sandbox-credential.ts";
 import { parseTaskAuthorizationBoundaryV1 } from "../packages/platform-core/src/task-authorization.ts";
 import { PostgresConversationExecutionTransactionV1 } from "../packages/platform-store/src/conversation-execution.ts";
 import { migratePlatformDatabase } from "../packages/platform-store/src/migrate.ts";
@@ -41,6 +42,30 @@ const postgres = requireStore(
 function requireFixtureValue<T>(value: T | undefined, label: string): T {
 	if (value === undefined) throw new Error(`Missing fixture value: ${label}`);
 	return value;
+}
+
+/**
+ * #3276：会话 Sandbox 执行只接受按 Platform DB 当前分配派生的本 Sandbox 凭据。fixture 分配
+ * 没有 Worker 写入的资源策略，这里只补上 namespace，再按当前行重新计算派生值。
+ */
+async function sandboxFileExchangeTokenFixture(
+	sql: ReturnType<typeof postgres>,
+	conversationId: string,
+	deploymentToken: string,
+) {
+	await sql`update platform.session_sandbox_allocations
+		set resource_policy = coalesce(resource_policy, '{}'::jsonb) || jsonb_build_object('namespace', 'fixture-sandboxes')
+		where conversation_id = ${conversationId}`;
+	const [row] = await sql`select sandbox_id, session_generation, resource_fence,
+		resource_policy->>'namespace' as namespace
+		from platform.session_sandbox_allocations where conversation_id = ${conversationId}`;
+	if (!row) throw new Error(`Missing Sandbox allocation for ${conversationId}`);
+	return sessionSandboxFileExchangeTokenV1(deploymentToken, {
+		namespace: row.namespace,
+		sandboxId: row.sandbox_id,
+		generation: Number(row.session_generation),
+		resourceFence: Number(row.resource_fence),
+	});
 }
 
 it("runs authenticated upload, history and execution results over real HTTP, PostgreSQL and versioned S3", async () => {
@@ -290,7 +315,11 @@ it("runs authenticated upload, history and execution results over real HTTP, Pos
 		};
 		const worker = createWorkerFileClientV1({
 			origin,
-			serviceToken,
+			serviceToken: await sandboxFileExchangeTokenFixture(
+				sql,
+				"conversation",
+				serviceToken,
+			),
 			timeoutMs: 10000,
 		});
 		const body = () =>
@@ -300,6 +329,14 @@ it("runs authenticated upload, history and execution results over real HTTP, Pos
 					c.close();
 				},
 			});
+		// #3276：Sandbox 执行不接受部署登记的服务 token 本身。
+		await expect(
+			createWorkerFileClientV1({
+				origin,
+				serviceToken,
+				timeoutMs: 10000,
+			}).writeResult(grant, descriptor, body(), "deployment-token-result"),
+		).rejects.toThrow();
 		const result = await worker.writeResult(
 			grant,
 			descriptor,
@@ -498,6 +535,17 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 			await sql`insert into platform.conversation_executions (execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,created_at,updated_at) values (${session.executionId},${session.conversationId},'agent',${session.actorId},'web',${`${session.executionId}-turn`},'processing',1,1,'auth',now(),now())`;
 			await seedSessionSandboxFixture(sql, session.conversationId);
 		}
+		// #3276：每个会话 Sandbox 的文件交换凭据按当前分配派生；部署 token 只登记在 API。
+		const sandboxTokens = new Map<string, string>();
+		for (const session of Object.values(sessions))
+			sandboxTokens.set(
+				session.conversationId,
+				await sandboxFileExchangeTokenFixture(
+					sql,
+					session.conversationId,
+					serviceToken,
+				),
+			);
 		const assemblyInput: Parameters<typeof assemblePlatformFilesV1>[0] = {
 			databaseUrl: db.databaseUrl,
 			identity: {
@@ -780,8 +828,15 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 				url.port = String(address.port);
 			}
 			const headers = new Headers(init?.headers);
-			if (url.pathname.startsWith("/api/v1/conversations/"))
-				headers.set("Authorization", `Bearer ${serviceToken}`);
+			if (url.pathname.startsWith("/api/v1/conversations/")) {
+				const conversationId = decodeURIComponent(
+					url.pathname.split("/")[4] ?? "",
+				);
+				headers.set(
+					"Authorization",
+					`Bearer ${sandboxTokens.get(conversationId) ?? serviceToken}`,
+				);
+			}
 			if (init?.method === "PUT") resultUploads += 1;
 			const response = await fetch(url, { ...init, headers });
 			if (
@@ -804,13 +859,31 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 			}
 			return response;
 		};
-		const createBridgeFactory = () =>
-			createWorkerRuntimeFileBridgeFactoryV1({
-				origin: httpsOrigin,
-				serviceToken,
-				timeoutMs: 10000,
-				fetch: transfer as typeof fetch,
-			});
+		// 每个会话按自己的 Sandbox 凭据交换；绑定决定使用哪一个，与 Runtime Host 一致。
+		const createBridgeFactory = () => {
+			const factories = new Map<
+				string,
+				ReturnType<typeof createWorkerRuntimeFileBridgeFactoryV1>
+			>();
+			return (
+				...[binding, evidence]: Parameters<
+					ReturnType<typeof createWorkerRuntimeFileBridgeFactoryV1>
+				>
+			) => {
+				let factory = factories.get(binding.conversationId);
+				if (!factory) {
+					factory = createWorkerRuntimeFileBridgeFactoryV1({
+						origin: httpsOrigin,
+						serviceToken:
+							sandboxTokens.get(binding.conversationId) ?? serviceToken,
+						timeoutMs: 10000,
+						fetch: transfer as typeof fetch,
+					});
+					factories.set(binding.conversationId, factory);
+				}
+				return factory(binding, evidence);
+			};
+		};
 		let bridgeFactory = createBridgeFactory();
 		const evidenceFor = (name: keyof typeof sessions) => {
 			const evidence = grants.get(name);
@@ -1061,14 +1134,22 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 		).rejects.toThrow();
 		// Readable and non-allowlisted files are indistinguishable through the
 		// exchange when the signed allowlist does not name them.
-		const probe = async (fileId: string) => {
+		const firstToken = requireFixtureValue(
+			sandboxTokens.get(sessions.first.conversationId),
+			"first Sandbox token",
+		);
+		const secondToken = requireFixtureValue(
+			sandboxTokens.get(sessions.second.conversationId),
+			"second Sandbox token",
+		);
+		const probe = async (fileId: string, token = firstToken) => {
 			const key = `probe-${fileId}`;
 			const response = await fetch(
 				`${origin}/internal/v1/files/runtime-exchange`,
 				{
 					method: "POST",
 					headers: {
-						Authorization: `Bearer ${serviceToken}`,
+						Authorization: `Bearer ${token}`,
 						"Content-Type": "application/json",
 						"Idempotency-Key": key,
 					},
@@ -1087,6 +1168,35 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 		expect(await probe(firstFile.fileId)).toBe(200);
 		expect(await probe(secondFile.fileId)).toBe(404);
 		expect(await probe("file_missing_2968")).toBe(404);
+		// #3276 AC-5：会话 Sandbox 执行只接受本 Sandbox 按当前分配派生的凭据，拒绝与
+		// 不存在的文件一样返回 404。
+		const firstAllocation = sessions.first.conversationId;
+		expect(await probe(firstFile.fileId, serviceToken)).toBe(404);
+		expect(await probe(firstFile.fileId, secondToken)).toBe(404);
+		await sql`update platform.session_sandbox_allocations set resource_fence = resource_fence + 1 where conversation_id = ${firstAllocation}`;
+		expect(await probe(firstFile.fileId, firstToken)).toBe(404);
+		expect(
+			await probe(
+				firstFile.fileId,
+				await sandboxFileExchangeTokenFixture(
+					sql,
+					firstAllocation,
+					serviceToken,
+				),
+			),
+		).toBe(200);
+		await sql`update platform.session_sandbox_allocations set resource_fence = resource_fence - 1 where conversation_id = ${firstAllocation}`;
+		await sql`update platform.session_sandbox_allocations set status = 'unavailable' where conversation_id = ${firstAllocation}`;
+		expect(await probe(firstFile.fileId, firstToken)).toBe(404);
+		await sql`update platform.session_sandbox_allocations set status = 'ready' where conversation_id = ${firstAllocation}`;
+		// 未绑定 Sandbox 的 Agent 级执行继续使用部署登记的服务 token，派生值对它无效。
+		await sql`update platform.conversation_executions set sandbox_id = null where execution_id = ${firstExecution}`;
+		expect(await probe(firstFile.fileId, serviceToken)).toBe(200);
+		expect(await probe(firstFile.fileId, firstToken)).toBe(404);
+		await sql`update platform.conversation_executions e set sandbox_id = s.sandbox_id
+			from platform.session_sandbox_allocations s
+			where e.execution_id = ${firstExecution} and s.conversation_id = e.conversation_id`;
+		expect(await probe(firstFile.fileId, firstToken)).toBe(200);
 		const denyCurrent = async () =>
 			denyRead(firstBinding, firstGrant.grant, firstFile.fileId);
 		// Persisted authority, not the signed proof, decides the exchange.

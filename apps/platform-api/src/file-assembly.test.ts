@@ -1,5 +1,6 @@
 import { generateKeyPairSync, sign } from "node:crypto";
 import { FakeObjectStorageV1 } from "@agent-infra/object-storage";
+import { sessionSandboxFileExchangeTokenV1 } from "@agent-infra/platform-core";
 import { expect, it } from "vitest";
 import { assemblePlatformFilesV1 } from "./file-assembly.ts";
 import { verifyRuntimeExecutionGrantForFilesV4 } from "./file-grants.ts";
@@ -21,13 +22,42 @@ function createAssemblyFixture() {
 		maxBytes: 100,
 		mediaTypes: ["text/plain"],
 	};
-	const state = { revoked: false, channelId: "web", limitsUnavailable: false };
+	const state = {
+		revoked: false,
+		channelId: "web",
+		limitsUnavailable: false,
+		// #3276：执行当前的 Sandbox 分配；null 表示 Agent 级执行。
+		sandbox: null as
+			| null
+			| "missing"
+			| "unavailable"
+			| {
+					sandboxId: string;
+					namespace: string;
+					generation: number;
+					resourceFence: number;
+			  },
+	};
 	const mapping = {
 		token: "synthetic-service-token-442-123456789",
 		agentIds: ["agent"],
 	};
+	// 另一部署登记的服务身份，只映射到别的 Agent。
+	const otherMapping = {
+		token: "synthetic-other-service-token-3276-1234",
+		agentIds: ["other-agent"],
+	};
+	const credentialReads: unknown[] = [];
 	const assembled = assemblePlatformFilesV1({
 		databaseUrl: "postgres://unused:unused@127.0.0.1:1/unused",
+		sandboxCredentials: {
+			async readRuntimeFileExchangeCredentialScopeV1(request) {
+				credentialReads.push(request);
+				if (state.sandbox === "unavailable") throw new Error("unavailable");
+				if (state.sandbox === "missing") return undefined;
+				return { sandbox: state.sandbox };
+			},
+		},
 		identity: { resolve: async () => actor, hydrateUsers: async () => [] },
 		deployment: {
 			storage: new FakeObjectStorageV1(),
@@ -41,7 +71,7 @@ function createAssemblyFixture() {
 			intentTtlMs: 60000,
 			accessTtlMs: 10000,
 			maxConcurrentTransfers: 2,
-			services: [mapping],
+			services: [mapping, otherMapping],
 			resolveActor: async () => (state.revoked ? null : actor),
 			readLimits: async () => ({
 				configurationRevision: 1,
@@ -66,8 +96,177 @@ function createAssemblyFixture() {
 			}),
 		},
 	});
-	return { assembled, keys, mapping, state };
+	return { assembled, keys, mapping, otherMapping, state, credentialReads };
 }
+
+/** Legacy V1 Execution Grant used by `/internal/v1/files/exchange`. */
+function v1Grant(keys: ReturnType<typeof createAssemblyFixture>["keys"]) {
+	const claims = {
+		schemaVersion: 1,
+		issuer: "platform-runtime",
+		audience: ["runtime_host"],
+		issuedAt: new Date(Date.now() - 1000).toISOString(),
+		expiresAt: new Date(Date.now() + 60000).toISOString(),
+		grantId: "grant",
+		actorId: "alice",
+		agentId: "agent",
+		channelId: "web",
+		conversationId: "conversation",
+		executionId: "execution",
+		turnId: "turn",
+		sessionGeneration: 1,
+		allowedCommands: ["turn.submit"],
+		attachments: [{ attachmentId: "file-input", operations: ["read"] }],
+		actionSetVersion: "none",
+		actionIds: [],
+		traceId: "trace",
+	};
+	const data = `${Buffer.from(JSON.stringify({ alg: "EdDSA", kid: "runtime-key" })).toString("base64url")}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}`;
+	return {
+		schemaVersion: 1 as const,
+		format: "compact-jws" as const,
+		token: `${data}.${sign(null, Buffer.from(data), keys.privateKey).toString("base64url")}`,
+	};
+}
+
+const bearer = (token: string) =>
+	new Request("http://platform/internal/v1/files/exchange", {
+		headers: { Authorization: `Bearer ${token}` },
+	});
+
+it("accepts only this Sandbox's derived token for a Sandbox-bound execution (#3276)", async () => {
+	const { assembled, keys, mapping, otherMapping, state, credentialReads } =
+		createAssemblyFixture();
+	const allocation = {
+		sandboxId: "sandbox-a",
+		namespace: "agent-workloads",
+		generation: 1,
+		resourceFence: 4,
+	};
+	state.sandbox = allocation;
+	const derived = (token: string, value: Partial<typeof allocation> = {}) =>
+		sessionSandboxFileExchangeTokenV1(token, { ...allocation, ...value });
+	const grant = v1Grant(keys);
+	try {
+		const exchange = assembled.dependencies.exchange;
+		if (!exchange) throw new Error("Exchange missing");
+		const accepted = await exchange.authenticate(
+			bearer(derived(mapping.token)),
+			grant,
+		);
+		expect(
+			await accepted.authorization.authorize("conversation", "read"),
+		).toMatchObject({ execution: { executionId: "execution" } });
+		// 分配按已验证 Grant 的绑定重新读取，不取自请求。
+		expect(credentialReads.at(-1)).toMatchObject({
+			agentId: "agent",
+			actorId: "alice",
+			channelId: "web",
+			conversationId: "conversation",
+			executionId: "execution",
+			sessionGeneration: 1,
+		});
+		// AC-5：部署 token 本身、另一 Sandbox、另一 namespace、旧代次、旧 fence，以及
+		// 未映射该 Agent 的服务身份所派生的值，一律拒绝。
+		for (const token of [
+			mapping.token,
+			derived(mapping.token, { sandboxId: "sandbox-b" }),
+			derived(mapping.token, { namespace: "other-namespace" }),
+			derived(mapping.token, { generation: 2 }),
+			derived(mapping.token, { resourceFence: 3 }),
+			derived(otherMapping.token),
+			derived(`${mapping.token}-rotated`),
+		])
+			await expect(exchange.authenticate(bearer(token), grant)).rejects.toThrow(
+				"File exchange denied",
+			);
+		// 同一请求后续的授权检查重新读取分配：fence 前进后旧派生值立即失效。
+		state.sandbox = { ...allocation, resourceFence: 5 };
+		expect(
+			await accepted.authorization.authorize("conversation", "read"),
+		).toBeNull();
+		// 没有就绪分配或分配读取不可用时，任何凭据都不放行。
+		for (const unavailable of ["missing", "unavailable"] as const) {
+			state.sandbox = unavailable;
+			for (const token of [mapping.token, derived(mapping.token)])
+				await expect(
+					exchange.authenticate(bearer(token), grant),
+				).rejects.toThrow("File exchange denied");
+		}
+	} finally {
+		await assembled.close();
+	}
+});
+
+it("keeps the registered service token for Agent-level executions only (#3276)", async () => {
+	const { assembled, keys, mapping, state } = createAssemblyFixture();
+	state.sandbox = null;
+	const grant = v1Grant(keys);
+	try {
+		const exchange = assembled.dependencies.exchange;
+		if (!exchange) throw new Error("Exchange missing");
+		await expect(
+			exchange.authenticate(bearer(mapping.token), grant),
+		).resolves.toMatchObject({ conversationId: "conversation" });
+		// 没有 Sandbox 分配时派生值不是任何登记身份。
+		await expect(
+			exchange.authenticate(
+				bearer(
+					sessionSandboxFileExchangeTokenV1(mapping.token, {
+						sandboxId: "sandbox-a",
+						namespace: "agent-workloads",
+						generation: 1,
+						resourceFence: 1,
+					}),
+				),
+				grant,
+			),
+		).rejects.toThrow("File exchange denied");
+	} finally {
+		await assembled.close();
+	}
+});
+
+it("checks the V4 runtime exchange service identity against the signed binding before any persisted read (#3276)", async () => {
+	const { assembled, keys, mapping, state, credentialReads } =
+		createAssemblyFixture();
+	state.sandbox = {
+		sandboxId: "sandbox-a",
+		namespace: "agent-workloads",
+		generation: 1,
+		resourceFence: 4,
+	};
+	try {
+		const runtimeExchange = assembled.dependencies.runtimeExchange;
+		if (!runtimeExchange) throw new Error("Runtime exchange missing");
+		await expect(
+			runtimeExchange.authenticate(
+				new Request("http://platform/internal/v1/files/runtime-exchange", {
+					headers: { Authorization: `Bearer ${mapping.token}` },
+				}),
+				{
+					schemaVersion: 2,
+					executionGrant: v4Grant(keys, runtimeClaims()),
+					operation: "read",
+					fileId: "file-input",
+					idempotencyKey: "runtime-3276",
+				},
+			),
+		).rejects.toThrow("Runtime file exchange denied");
+		expect(credentialReads).toEqual([
+			expect.objectContaining({
+				agentId: "agent",
+				actorId: "alice",
+				channelId: "web",
+				conversationId: "conversation",
+				executionId: "execution",
+				sessionGeneration: 1,
+			}),
+		]);
+	} finally {
+		await assembled.close();
+	}
+});
 
 it("requires both a signed execution delegation and a mapped service, then rechecks its actor", async () => {
 	const { assembled, keys, mapping, state } = createAssemblyFixture();

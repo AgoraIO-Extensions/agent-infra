@@ -109,6 +109,8 @@ export {
 	type PostgresConversationQueryOptionsV1,
 	PostgresConversationQueryV1,
 	platformQueueResourceSnapshotTimeoutMs,
+	type RuntimeFileExchangeCredentialScopeRequestV1,
+	type RuntimeFileExchangeCredentialScopeResponseV1,
 	type RuntimeModelDirectoryDispatchRequestInputV1,
 	type RuntimeModelDirectoryDispatchRequestResponseV1,
 	readPlatformQueueResourceSnapshot,

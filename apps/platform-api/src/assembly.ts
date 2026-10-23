@@ -976,6 +976,8 @@ export function assemblePlatformApi(
 				identity: input.identity,
 				conversationAuthorization,
 				limitDeclarations: fileLimitStore,
+				// 与会话查询共用同一 Platform DB 读取（#3276）；连接池独立于文件 Store。
+				sandboxCredentials: conversationQuery,
 				async readCurrentLimits(identity, scope, kind) {
 					return readCurrentFileLimitDeclarations(identity, scope, kind);
 				},

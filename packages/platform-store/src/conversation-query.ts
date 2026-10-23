@@ -181,6 +181,35 @@ export interface NativeMetadataCallbackCredentialScopeResponseV1 {
 }
 
 /**
+ * Runtime 文件交换服务身份校验所需的执行 Sandbox 绑定（#3276）。字段全部来自已验证的
+ * V4 Execution Grant claims；Store 只按这些事实重新读取 Platform DB 的当前分配。
+ */
+export interface RuntimeFileExchangeCredentialScopeRequestV1 {
+	readonly agentId: string;
+	readonly actorId: string;
+	readonly channelId: string;
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly sessionGeneration: number;
+	readonly signal?: AbortSignal;
+}
+
+/**
+ * `sandbox: null` 表示该执行没有绑定会话 Sandbox（Agent 级执行，使用部署服务身份）；
+ * 否则是当前就绪分配的派生输入。Sandbox 标识、namespace 不进入任何公开投影。
+ */
+export type RuntimeFileExchangeCredentialScopeResponseV1 =
+	| { readonly sandbox: null }
+	| {
+			readonly sandbox: {
+				readonly sandboxId: string;
+				readonly namespace: string;
+				readonly generation: number;
+				readonly resourceFence: number;
+			};
+	  };
+
+/**
  * Read-only current Runtime target scope for the Worker native-metadata route.
  * The optional policy is deployment-owned and is required only for Session
  * Sandbox rows; it is never taken from the native metadata request.
@@ -370,6 +399,29 @@ interface NativeMetadataCallbackCredentialScopeRow {
 	readonly allocation_desired_state: string | null;
 	readonly allocation_observation_status: string | null;
 	readonly original_host_scope_ref: string | null;
+}
+
+interface RuntimeFileExchangeCredentialScopeRow {
+	readonly conversation_id: string;
+	readonly conversation_agent: string;
+	readonly conversation_actor: string;
+	readonly conversation_channel: string;
+	readonly conversation_principal_type: string;
+	readonly execution_id: string;
+	readonly execution_conversation: string;
+	readonly execution_agent: string;
+	readonly execution_actor: string;
+	readonly execution_channel: string;
+	readonly execution_principal_type: string;
+	readonly execution_generation: string | number;
+	readonly execution_sandbox_id: string | null;
+	readonly allocation_sandbox_id: string | null;
+	readonly allocation_generation: string | number | null;
+	readonly allocation_resource_fence: string | number | null;
+	readonly allocation_namespace: string | null;
+	readonly allocation_status: string | null;
+	readonly allocation_desired_state: string | null;
+	readonly allocation_observation_status: string | null;
 }
 
 interface NativeMetadataRuntimeTargetScopeRow {
@@ -1818,6 +1870,129 @@ export class PostgresConversationQueryV1 {
 								? null
 								: row.allocation_namespace,
 						originalHostScopeRef: row.original_host_scope_ref,
+					};
+				},
+				request.signal,
+			);
+		} catch (error) {
+			if (error instanceof ConversationQueryError) throw error;
+			return unavailable();
+		}
+	}
+
+	/**
+	 * #3276：Runtime 文件交换按执行重新读取当前 Session Sandbox 分配，供 Platform API
+	 * 重新计算本 Sandbox 的派生凭据。分配谓词与 native metadata 回调凭据范围相同
+	 * （同一 Conversation/Execution/代次、ready/running、观测 ready、namespace 来自
+	 * 资源策略），但不限渠道：文件交换服务 Web、API 与企微执行。范围无法唯一确认时返回
+	 * undefined，调用方据此拒绝。
+	 */
+	async readRuntimeFileExchangeCredentialScopeV1(
+		request: RuntimeFileExchangeCredentialScopeRequestV1,
+	): Promise<RuntimeFileExchangeCredentialScopeResponseV1 | undefined> {
+		const agentId = requestText(request.agentId);
+		const actorId = requestText(request.actorId, 1024 + "application:".length);
+		const channelId = requestText(request.channelId);
+		const conversationId = requestText(request.conversationId);
+		const executionId = requestText(request.executionId);
+		const sessionGeneration = request.sessionGeneration;
+		if (!Number.isSafeInteger(sessionGeneration) || sessionGeneration < 1)
+			return invalidRequest();
+		const counter = (value: string | number | null) => {
+			const parsed = Number(value);
+			return value !== null && Number.isSafeInteger(parsed) && parsed >= 1
+				? parsed
+				: undefined;
+		};
+		try {
+			return await repeatableRead(
+				this.#client,
+				async (transaction, run) => {
+					const rows = await run(
+						transaction<RuntimeFileExchangeCredentialScopeRow[]>`
+							/* runtime_file_exchange.current_sandbox_credential */
+							select
+								c.id as conversation_id,
+								c.agent_id as conversation_agent,
+								c.actor_id as conversation_actor,
+								c.channel_id as conversation_channel,
+								c.principal_type as conversation_principal_type,
+								e.execution_id,
+								e.conversation_id as execution_conversation,
+								e.agent_id as execution_agent,
+								e.actor_id as execution_actor,
+								e.channel_id as execution_channel,
+								e.principal_type as execution_principal_type,
+								e.session_generation as execution_generation,
+								e.sandbox_id as execution_sandbox_id,
+								s.sandbox_id as allocation_sandbox_id,
+								s.session_generation as allocation_generation,
+								s.resource_fence as allocation_resource_fence,
+								s.resource_policy->>'namespace' as allocation_namespace,
+								s.status as allocation_status,
+								s.desired_state as allocation_desired_state,
+								s.resource_observation->>'status' as allocation_observation_status
+							from platform.conversations c
+							join platform.conversation_executions e
+								on e.conversation_id = c.id
+								and e.agent_id = c.agent_id
+								and e.actor_id = c.actor_id
+								and e.channel_id = c.channel_id
+								and e.principal_type = c.principal_type
+								and e.execution_id = ${executionId}
+							left join platform.session_sandbox_allocations s
+								on s.sandbox_id = e.sandbox_id
+								and s.conversation_id = c.id
+								and s.agent_id = c.agent_id
+								and s.actor_id = c.actor_id
+								and s.channel_id = c.channel_id
+								and s.principal_type = c.principal_type
+								and s.session_generation = e.session_generation
+							where c.id = ${conversationId}
+								and c.agent_id = ${agentId}
+								and c.actor_id = ${actorId}
+								and c.channel_id = ${channelId}
+							limit 2
+						`,
+					);
+					if (rows.length !== 1) return undefined;
+					const row = rows[0];
+					if (
+						!row ||
+						row.conversation_id !== conversationId ||
+						row.execution_id !== executionId ||
+						row.execution_conversation !== conversationId ||
+						row.conversation_agent !== agentId ||
+						row.execution_agent !== agentId ||
+						row.conversation_actor !== actorId ||
+						row.execution_actor !== actorId ||
+						row.conversation_channel !== channelId ||
+						row.execution_channel !== channelId ||
+						row.conversation_principal_type !== row.execution_principal_type ||
+						counter(row.execution_generation) !== sessionGeneration
+					)
+						return undefined;
+					if (row.execution_sandbox_id === null) return { sandbox: null };
+					const generation = counter(row.allocation_generation);
+					const resourceFence = counter(row.allocation_resource_fence);
+					if (
+						row.allocation_sandbox_id !== row.execution_sandbox_id ||
+						generation !== sessionGeneration ||
+						resourceFence === undefined ||
+						row.allocation_namespace === null ||
+						row.allocation_namespace.length === 0 ||
+						row.allocation_status !== "ready" ||
+						row.allocation_desired_state !== "running" ||
+						row.allocation_observation_status !== "ready"
+					)
+						return undefined;
+					return {
+						sandbox: {
+							sandboxId: row.execution_sandbox_id,
+							namespace: row.allocation_namespace,
+							generation,
+							resourceFence,
+						},
 					};
 				},
 				request.signal,
