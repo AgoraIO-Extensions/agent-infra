@@ -7163,3 +7163,84 @@ test("danger-zone stop and administrator disable keep focus off body while pendi
 	await expectNoDuplicateControls(page, "Owner 配置（停用后，K7-02）");
 	await expectCleanPage(page, errors);
 });
+
+// #3269 N8-3-01：审阅弹窗的决定失败提示与 Skill 审阅弹窗一致，在正文区内、操作按钮之前（批准与驳回两个
+// 视图）；出现时提示在弹窗可视区与视口内（390 下不再只露出 3px），焦点仍在触发的按钮上。
+for (const decision of ["approve", "reject"] as const)
+	test(`a failed approval decision shows its alert before the dialog actions and in view (${decision}, N8-3-01)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		await fixture(page, "admin");
+		await page.route(/\/decision$/, (route) =>
+			route.request().method() === "POST"
+				? route.fulfill({
+						status: 503,
+						json: {
+							schemaVersion: 1,
+							code: "DEPENDENCY_UNAVAILABLE",
+							message: "Controlled decision failure",
+							retryable: true,
+							traceId: "trace-decision-failure",
+						},
+					})
+				: route.fallback(),
+		);
+		await page.goto("/admin/approvals");
+		await page.getByRole("button", { name: /^审阅：/ }).click();
+		let dialog = page.getByRole("dialog", { name: "审阅创建申请" });
+		await expect(dialog).toBeVisible();
+		let trigger: Locator;
+		if (decision === "approve") {
+			trigger = await pinElement(
+				dialog.getByRole("button", { name: "批准申请" }),
+				"approve-failure",
+			);
+		} else {
+			await dialog.getByRole("button", { name: "驳回并说明" }).click();
+			dialog = page.getByRole("dialog", { name: "填写驳回原因" });
+			await dialog
+				.getByLabel("驳回原因", { exact: true })
+				.fill("Capacity is unavailable");
+			trigger = await pinElement(
+				dialog.getByRole("button", { name: "确认驳回" }),
+				"reject-failure",
+			);
+		}
+		await trigger.focus();
+		await page.keyboard.press("Enter");
+		const failure = dialog.getByRole("alert");
+		await expect(failure).toHaveText("审批未能提交，请稍后重试。");
+		// 结构：提示在正文区内，紧跟在操作区之前。
+		expect(
+			await failure.evaluate((element) => ({
+				inBody: Boolean(element.closest('[data-slot="dialog-body"]')),
+				beforeFooter:
+					element
+						.closest('[data-slot="dialog-body"]')
+						?.nextElementSibling?.getAttribute("data-slot") === "dialog-footer",
+				last:
+					element.parentElement?.lastElementChild === element ||
+					element.closest('[data-slot="dialog-body"]')?.lastElementChild ===
+						element,
+			})),
+			`${decision} 失败提示位置`,
+		).toEqual({ inBody: true, beforeFooter: true, last: true });
+		// 可见性：提示整体在弹窗可视区与视口之内。
+		const visible = await failure.evaluate((element) => {
+			const box = element.getBoundingClientRect();
+			const popup = element.closest('[data-slot="dialog-content"]');
+			const frame = popup?.getBoundingClientRect();
+			return Boolean(
+				frame &&
+					box.top >= frame.top - 0.5 &&
+					box.bottom <= frame.bottom + 0.5 &&
+					box.top >= -0.5 &&
+					box.bottom <= innerHeight + 0.5,
+			);
+		});
+		expect(visible, `${decision} 失败提示在弹窗可视区内`).toBe(true);
+		await expectFocusSettled(trigger, `${decision} 审批失败后`);
+		await expectCleanPage(page, errors);
+	});
