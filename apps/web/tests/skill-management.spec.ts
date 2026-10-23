@@ -1958,11 +1958,14 @@ test("My Skill names both section rereads apart when both reads fail (N9-3-05)",
 		contentType: "image/png",
 	});
 
-	// 仍失败时焦点回到同一分区的按钮（恢复 key 按分区区分，不跳到另一分区）。
+	// 仍失败时焦点回到同一分区的按钮（恢复 key 按分区区分，不跳到另一分区）。重读期间分区换成读取中，
+	// 原按钮卸载；等它卸载后再看重新出现的按钮，避免请求先到、页面后重绘时采样到旧按钮。
 	const projectReads = reads.projects;
-	await ownedReread.focus();
+	const firstOwnedReread = await pinElement(ownedReread, "owned-reread");
+	await firstOwnedReread.focus();
 	await page.keyboard.press("Enter");
 	await expect.poll(() => reads.projects).toBeGreaterThan(projectReads);
+	await expect(firstOwnedReread).toHaveCount(0);
 	await expect(ownedReread).toBeVisible();
 	await expectFocusSettled(
 		ownedReread,

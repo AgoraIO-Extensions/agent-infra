@@ -193,6 +193,7 @@ const reloginPages = [
 		heading: "Skill Hub",
 		expired: ["/api/v2/skills"],
 		buttons: ["重新登录"],
+		busy: "loading",
 		recovered: "目录中还没有 Skill",
 	},
 	{
@@ -201,6 +202,7 @@ const reloginPages = [
 		heading: "Skill 详情",
 		expired: [`/api/v2/skills/versions/${skillVersion.skillVersionId}/detail`],
 		buttons: ["重新登录"],
+		busy: "loading",
 		recovered: "用途与内容",
 		recoveredHeading: skillVersion.name,
 	},
@@ -211,6 +213,7 @@ const reloginPages = [
 		expired: ["/api/v2/skills/installations", "/api/v2/skills/projects"],
 		// 两个分区同时 401：按钮名称带分区名，可见文字都是「重新登录」（N9-3-05）。
 		buttons: ["重新登录：已安装", "重新登录：我创建的"],
+		busy: "loading",
 		recovered: "我的库还是空的",
 	},
 	{
@@ -219,6 +222,7 @@ const reloginPages = [
 		heading: "个人 Relay Key",
 		expired: ["/api/v2/me/relay-key"],
 		buttons: ["重新登录"],
+		busy: "trigger",
 		recovered: "接入个人 Key",
 	},
 	{
@@ -231,6 +235,7 @@ const reloginPages = [
 		],
 		// 个人凭证列表与应用管理同时 401：应用管理的按钮带分区名。
 		buttons: ["重新登录", "重新登录：应用管理"],
+		busy: "trigger",
 		recovered: "暂无个人 API 凭证",
 	},
 ] as const;
@@ -304,22 +309,27 @@ for (const target of reloginPages) {
 		await trigger.focus();
 		await page.keyboard.press("Enter");
 		await expect.poll(() => hold.held()).toBeGreaterThanOrEqual(1);
-		// 失败提示在确认期间保留的页面（设置页），触发按钮是可聚焦的禁用；Skill Hub 确认期间换成读取中，
-		// 按钮卸载后焦点交给页面 h1（读取页的 h1 不可聚焦时为 #main-content）。
-		if ((await trigger.count()) === 1)
+		// 设置页确认期间失败提示保留，触发按钮是可聚焦的禁用；Skill Hub 确认期间换成读取中，按钮卸载后
+		// 焦点交给页面 h1（版本读取页的 h1 不可聚焦，为 #main-content）。按页面类型断言，不按当时的 DOM 分支。
+		if (target.busy === "trigger")
 			await expectFocusableBusy(
 				trigger,
 				`${target.name} 确认会话中`,
 				[30, 150],
 			);
-		else
-			expect(
-				await page.evaluate(() => {
-					const active = document.activeElement;
-					return active?.id === "main-content" || active?.tagName === "H1";
-				}),
-				`${target.name} 确认会话中的焦点`,
-			).toBe(true);
+		else {
+			await expect(trigger).toHaveCount(0);
+			await expect
+				.poll(
+					() =>
+						page.evaluate(() => {
+							const active = document.activeElement;
+							return active?.id === "main-content" || active?.tagName === "H1";
+						}),
+					{ message: `${target.name} 确认会话中的焦点` },
+				)
+				.toBe(true);
+		}
 		control.recover();
 		hold.release();
 		await expect
