@@ -92,8 +92,11 @@ type AgentConfigurationScreenProps = {
 	/** 页脚操作的反馈（例如生命周期命令失败）。 */
 	footerFeedback?: ReactNode;
 	onSave: (body: ConfigurationSaveRequest) => void;
-	/** 重新读取默认 Key 状态与已保存 Key 候选（保存冲突后，RK2-09）。 */
-	onReloadSavedRelayKey?: () => void;
+	/**
+	 * 重新读取默认 Key 状态与已保存 Key 候选（保存冲突后，RK2-09）；两项都读到时返回 true，
+	 * 页面据此收起冲突提示并给出完成反馈（#3268 N8-2-07）。
+	 */
+	onReloadSavedRelayKey?: () => Promise<boolean>;
 	/** 替换或添加单个 Secret 的独立请求（O-10）。 */
 	onReplaceSecret?: (name: string, value: string) => Promise<AgentProjectionV2>;
 	/** 企微渠道独立解绑请求；不经过整页保存（O-01）。 */
@@ -243,6 +246,14 @@ export function AgentConfigurationScreen({
 	// 保存成功后按新投影重建选择器。
 	const [resetCount, setResetCount] = useState(0);
 	const [focusUnchangedHint, setFocusUnchangedHint] = useState(false);
+	// 保存冲突（saved-model 409）后「重新读取可用模型」：读取中按钮可聚焦地禁用；读到后收起这条冲突
+	// 提示，改为「可用模型已更新，请确认后保存。」并把焦点交给模型选择器（没有时交给保存按钮）；
+	// 读取失败时提示保留、焦点留在按钮上（#3268 N8-2-07）。
+	const [reloadingSavedModels, setReloadingSavedModels] = useState(false);
+	const [resolvedConflict, setResolvedConflict] =
+		useState<AgentConfigurationRequestError | null>(null);
+	const [savedModelsReloaded, setSavedModelsReloaded] = useState(false);
+	const [focusAfterReload, setFocusAfterReload] = useState(false);
 	const fieldsetRef = useRef<HTMLFieldSetElement>(null);
 	const saveRef = useRef<HTMLButtonElement>(null);
 	const submittedResult =
@@ -279,6 +290,14 @@ export function AgentConfigurationScreen({
 		setFocusUnchangedHint(false);
 		document.getElementById("agent-configuration-unchanged")?.focus();
 	}, [focusUnchangedHint, submitting]);
+	useEffect(() => {
+		if (!focusAfterReload) return;
+		setFocusAfterReload(false);
+		const picker = document
+			.getElementById(savedModelPickerId)
+			?.querySelector<HTMLElement>('[role="checkbox"]');
+		(picker ?? saveRef.current)?.focus();
+	}, [focusAfterReload]);
 
 	if (!isOwner) return unavailableScreen();
 
@@ -296,6 +315,7 @@ export function AgentConfigurationScreen({
 	const submitConfiguration = () => {
 		// 镜像升级在途时整页保存暂停（同一个 mutation 一次只受理一个命令）。
 		if (isDisabled || !hasChanges || upgradingImage) return;
+		setSavedModelsReloaded(false);
 		const request = buildAgentConfigurationRequest(draft, agent);
 		if (!request.coOwnerIds?.length) {
 			setOwnerError("请选择至少一名有效 Owner。");
@@ -365,7 +385,26 @@ export function AgentConfigurationScreen({
 				: withoutModels,
 		);
 	};
-	const failure = commandError ? saveFailure(commandError, savePath) : null;
+	const failure =
+		commandError && commandError !== resolvedConflict
+			? saveFailure(commandError, savePath)
+			: null;
+	const reloadSavedModels = async () => {
+		if (!onReloadSavedRelayKey || reloadingSavedModels) return;
+		const conflict = commandError;
+		setReloadingSavedModels(true);
+		let reloaded = false;
+		try {
+			reloaded = (await onReloadSavedRelayKey()) === true;
+		} catch {
+			reloaded = false;
+		}
+		setReloadingSavedModels(false);
+		if (!reloaded) return;
+		setResolvedConflict(conflict);
+		setSavedModelsReloaded(true);
+		setFocusAfterReload(true);
+	};
 
 	return (
 		<section
@@ -506,15 +545,25 @@ export function AgentConfigurationScreen({
 										<Button
 											type="button"
 											variant="outline"
-											// 页脚在 fieldset 之外：保存进行中或 Agent 已停用时同样禁用。
-											disabled={isDisabled}
-											onClick={onReloadSavedRelayKey}
+											// 页脚在 fieldset 之外：保存进行中或 Agent 已停用时同样禁用；读取中是可聚焦的
+											// 禁用，焦点留在按钮上。
+											disabled={isDisabled || reloadingSavedModels}
+											focusableWhenDisabled={reloadingSavedModels}
+											onClick={() => void reloadSavedModels()}
 										>
 											<RefreshCw aria-hidden="true" data-icon="inline-start" />
-											重新读取可用模型
+											{reloadingSavedModels
+												? "正在重新读取…"
+												: "重新读取可用模型"}
 										</Button>
 									</AlertAction>
 								) : null}
+							</Alert>
+						) : savedModelsReloaded ? (
+							<Alert tone="info" role="status">
+								<AlertDescription>
+									可用模型已更新，请确认后保存。
+								</AlertDescription>
 							</Alert>
 						) : null}
 						{hasChanges || isDisabled ? null : (

@@ -202,9 +202,12 @@ function AgentConfigurationWorkflowContent({
 			onRetrySavedRelayKeyCandidates={() =>
 				void savedRelayKeyCandidates.refetch()
 			}
-			onReloadSavedRelayKey={() => {
-				void defaultRelayKey.refetch();
-				void savedRelayKeyCandidates.refetch();
+			onReloadSavedRelayKey={async () => {
+				const [keyState, candidates] = await Promise.all([
+					defaultRelayKey.refetch(),
+					savedRelayKeyCandidates.refetch(),
+				]);
+				return keyState.isSuccess && candidates.isSuccess;
 			}}
 			onReplaceSecret={submission.replaceSecret}
 			onSave={submission.saveConfiguration}

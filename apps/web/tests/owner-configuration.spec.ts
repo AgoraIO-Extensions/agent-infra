@@ -20,7 +20,12 @@ import type {
 	DeploymentConfigurationProjectionV2,
 	SkillHubAgentBindingStatusV1,
 } from "../src/pilot/generated-v2/types.gen";
-import { expectFocusSettled, expectNoDuplicateControls } from "./page-health";
+import {
+	expectFocusableBusy,
+	expectFocusSettled,
+	expectNoDuplicateControls,
+	pinElement,
+} from "./page-health";
 import {
 	computed,
 	expectCleanPage,
@@ -2573,6 +2578,87 @@ test("removing an environment row hands focus to the neighbouring remove button 
 	await expect(remove(1)).toHaveCount(0);
 	await expectFocusSettled(add, "移除最后一个环境变量");
 	await expectNoDuplicateControls(page, "Owner 配置（移除环境变量，#3268）");
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
+});
+
+// #3268 N8-2-07：保存时验证冲突（saved-model 409）后「重新读取可用模型」读取中保持可聚焦；读到后收起冲突
+// 提示，改为「可用模型已更新，请确认后保存。」（role=status），焦点交给模型选择器，之后多次采样仍在；
+// 再次保存成功。读取失败时冲突提示保留、焦点留在按钮上。两视口一致。
+test("re-reading models after a saved-model conflict collapses the conflict and focuses the picker (#3268 N8-2-07)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const api = await ownerConfigFixture(page, { keySet: true });
+	let conflicts = 0;
+	await page.route(
+		"**/api/v2/agents/agent-pilot-1/configuration/saved-model",
+		async (route) => {
+			if (route.request().method() !== "PUT" || conflicts > 0)
+				return route.fallback();
+			conflicts += 1;
+			await route.fulfill(unavailable(409, false));
+		},
+	);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const models = page.getByRole("region", { name: "模型与凭证", exact: true });
+	const picker = models.locator('[data-slot="keyless-model-picker"]');
+	await picker
+		.getByRole("checkbox", {
+			name: "Relay · Internal · gpt-5-mini",
+			exact: true,
+		})
+		.click();
+	const footer = page.locator(".configuration-form-footer");
+	const save = footer.getByRole("button", { name: "保存配置", exact: true });
+	await save.click();
+	const conflict = footer.getByRole("alert");
+	await expect(conflict).toHaveText(
+		/默认 Key 或配置已更新，请重新读取可用模型后再保存。/,
+	);
+	const reload = await pinElement(
+		conflict.getByRole("button", { name: "重新读取可用模型" }),
+		"reload-saved-models",
+	);
+
+	// 读取失败：冲突提示保留，焦点留在按钮上。
+	api.savedMode("error");
+	api.hold("saved-candidates");
+	await reload.focus();
+	await page.keyboard.press("Enter");
+	await expect(reload).toHaveText("正在重新读取…");
+	await expectFocusableBusy(reload, "重新读取可用模型");
+	api.release("saved-candidates");
+	await expect(reload).toHaveText("重新读取可用模型");
+	await expect(conflict).toBeVisible();
+	await expectFocusSettled(reload, "重新读取可用模型（失败）");
+
+	// 读取成功：冲突提示收起，完成反馈为 status，焦点到模型选择器。
+	api.savedMode("same");
+	await page.keyboard.press("Enter");
+	await expect(footer.getByRole("alert")).toHaveCount(0);
+	await expect(footer.getByRole("status")).toHaveText(
+		"可用模型已更新，请确认后保存。",
+	);
+	await expectFocusSettled(
+		picker.getByRole("checkbox").first(),
+		"重新读取可用模型（成功）",
+		[100, 500, 1500],
+	);
+
+	// 再次保存：完成后提示收起，焦点到「没有需要保存的变更。」。
+	await save.click();
+	await expect(toast(page)).toHaveText("配置已保存，Secret 值不会回显");
+	await expect(footer.getByRole("status")).toHaveCount(0);
+	await expect(page.locator("#agent-configuration-unchanged")).toBeFocused();
+	expect(conflicts).toBe(1);
+	expect(
+		api.commands.filter(({ path }) =>
+			path.endsWith("/configuration/saved-model"),
+		).length,
+	).toBe(1);
+	await expectNoDuplicateControls(page, "Owner 配置（保存冲突后重读，#3268）");
 	await expectCleanPage(page, pageErrors);
 	await noHorizontalOverflow(page);
 });

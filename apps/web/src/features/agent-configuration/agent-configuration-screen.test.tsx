@@ -1226,8 +1226,9 @@ describe("models managed by the saved default Relay Key (RK2-01～RK2-07)", () =
 		expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("modelConfiguration");
 	});
 
-	it("offers to reload candidates after a saved-model conflict (RK2-09)", () => {
-		const onReloadSavedRelayKey = vi.fn();
+	it("offers to reload candidates after a saved-model conflict (RK2-09)", async () => {
+		// 重新读取有自己的进行中状态（#3268 N8-2-07）：桩返回一次未读到的结果，点击后等它结束再继续。
+		const onReloadSavedRelayKey = vi.fn(async () => false);
 		const { rerender } = renderManaged({ onReloadSavedRelayKey });
 		fireEvent.click(
 			screen.getByRole("checkbox", { name: "Relay · Internal · model-b" }),
@@ -1249,6 +1250,7 @@ describe("models managed by the saved default Relay Key (RK2-01～RK2-07)", () =
 			within(alert).getByRole("button", { name: "重新读取可用模型" }),
 		);
 		expect(onReloadSavedRelayKey).toHaveBeenCalledOnce();
+		await act(async () => {});
 		// 页脚在 fieldset 之外（#3242 K7-02）：再次保存进行中，提示里的「重新读取可用模型」仍随表单禁用。
 		const conflict = Object.assign(new Error("conflict"), {
 			retryable: false,
@@ -1272,6 +1274,69 @@ describe("models managed by the saved default Relay Key (RK2-01～RK2-07)", () =
 			saveButton().closest(".form-footer")?.querySelector('[role="alert"]')
 				?.textContent,
 		).toBe("模型配置未能保存，请重试。");
+	});
+
+	// #3268 N8-2-07：重新读取成功后收起冲突提示，改为「可用模型已更新，请确认后保存。」（role=status），
+	// 焦点交给模型选择器；读取失败时冲突提示保留，焦点留在按钮上。
+	it("collapses the saved-model conflict after a successful reload and focuses the picker", async () => {
+		let succeed = false;
+		let release!: () => void;
+		const onReloadSavedRelayKey = vi.fn(
+			() =>
+				new Promise<boolean>((resolve) => {
+					release = () => resolve(succeed);
+				}),
+		);
+		const { rerender } = renderManaged({ onReloadSavedRelayKey });
+		fireEvent.click(
+			screen.getByRole("checkbox", { name: "Relay · Internal · model-b" }),
+		);
+		fireEvent.click(saveButton());
+		rerender({
+			commandError: Object.assign(new Error("conflict"), {
+				retryable: false,
+				status: 409,
+			}),
+		});
+		const footer = document.querySelector(
+			".configuration-form-footer",
+		) as HTMLElement;
+		const reload = within(footer).getByRole("button", {
+			name: "重新读取可用模型",
+		});
+		reload.focus();
+		fireEvent.click(reload);
+		// 读取中：可聚焦的禁用，焦点留在按钮上。
+		await waitFor(() => expect(reload.textContent).toContain("正在重新读取…"));
+		expect(reload.getAttribute("aria-disabled")).toBe("true");
+		expect(reload.hasAttribute("disabled")).toBe(false);
+		expect(document.activeElement).toBe(reload);
+		// 读取失败：冲突提示保留，按钮恢复。
+		await act(async () => release());
+		await waitFor(() =>
+			expect(reload.textContent).toContain("重新读取可用模型"),
+		);
+		expect(within(footer).getByRole("alert").textContent).toContain(
+			"默认 Key 或配置已更新",
+		);
+		expect(document.activeElement).toBe(reload);
+		// 读取成功：冲突提示收起，完成反馈为 role=status，焦点到模型选择器。
+		succeed = true;
+		fireEvent.click(reload);
+		await act(async () => release());
+		await waitFor(() => expect(within(footer).queryByRole("alert")).toBeNull());
+		expect(within(footer).getByRole("status").textContent).toBe(
+			"可用模型已更新，请确认后保存。",
+		);
+		const picker = document.getElementById(
+			"configuration-saved-key-model",
+		) as HTMLElement;
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				picker.querySelector('[role="checkbox"]'),
+			),
+		);
+		expect(onReloadSavedRelayKey).toHaveBeenCalledTimes(2);
 	});
 });
 
