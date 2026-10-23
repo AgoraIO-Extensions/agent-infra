@@ -63,6 +63,39 @@ export const wecomReceipts = platformSchema.table(
 );
 
 /**
+ * #3229：长连接回复中每个结果文件的发送进度（工程 Spec §14.2.3）。领取后推进到 sending 的同一事务
+ * 按发送顺序写入，之后只能 pending → sending → sent/failed/unknown 前进，已开始的媒体不会再次发送。
+ * 只保存文件引用、消息类型与进度，不保存 media_id、File Grant 或文件内容。
+ */
+export const wecomReceiptMedia = platformSchema.table(
+	"wecom_receipt_media",
+	{
+		receiptId: text("receipt_id")
+			.notNull()
+			.references(() => wecomReceipts.id),
+		ordinal: integer("ordinal").notNull(),
+		fileId: text("file_id").notNull(),
+		kind: text("kind").notNull(),
+		status: text("status").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.receiptId, table.ordinal] }),
+		uniqueIndex("wecom_receipt_media_file").on(table.receiptId, table.fileId),
+		check("wecom_receipt_media_ordinal", sql`${table.ordinal} between 0 and 9`),
+		check(
+			"wecom_receipt_media_kind",
+			sql`${table.kind} in ('image','video','file')`,
+		),
+		check(
+			"wecom_receipt_media_status",
+			sql`${table.status} in ('pending','sending','sent','failed','unknown')`,
+		),
+	],
+);
+
+/**
  * 企微会话映射的当前轮次（#3184）。没有行即轮次 0，沿用原映射；发送者每发一次 `/new` 加一，
  * 之后的消息按新轮次创建新的 Conversation。映射键是 Core 计算的不透明摘要，不含企微标识原文。
  */

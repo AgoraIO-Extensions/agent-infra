@@ -74,6 +74,31 @@ function exactRecord(value: unknown, keys: readonly string[]) {
 		return invalid();
 	return result;
 }
+/**
+ * #3229：回调模式的图文混排同样属于媒体：文本项拼成正文，图片项只保留类型，Core 据此回复不支持，
+ * 不调用 Agent；没有图片项时按普通文本处理。
+ */
+function callbackMixed(payload: Record<string, unknown>): {
+	readonly content: string;
+	readonly media?: WecomMediaReferenceV1[];
+} {
+	const items = record(payload.mixed).msg_item;
+	if (!Array.isArray(items) || items.length === 0 || items.length > 64)
+		return invalid();
+	const texts: string[] = [];
+	const media: WecomMediaReferenceV1[] = [];
+	for (const entry of items) {
+		const item = record(entry);
+		if (item.msgtype === "text")
+			texts.push(field(record(item.text).content, 32 * 1024));
+		else if (item.msgtype === "image") media.push(mediaReference("image"));
+		else return invalid();
+	}
+	if (media.length > 32) return invalid();
+	const content = texts.join("\n").trim();
+	if (media.length) return { content, media };
+	return { content: field(content, 32 * 1024) };
+}
 export function createWecomAdapterV1(options: {
 	readonly now?: () => Date;
 	readonly protectReply: (route: {
@@ -331,7 +356,7 @@ export function createWecomAdapterV1(options: {
 				if (
 					config.kind !== "wecom_bot" ||
 					payload.aibotid !== config.botId ||
-					!["text", "image", "file", "voice", "video"].includes(
+					!["text", "image", "file", "voice", "video", "mixed"].includes(
 						payload.msgtype as string,
 					)
 				)
@@ -359,19 +384,26 @@ export function createWecomAdapterV1(options: {
 					payload.msgtype === "video"
 						? payload.msgtype
 						: null;
-				const content =
-					kind === null ? field(record(payload.text).content, 32 * 1024) : "";
-				const media = kind
-					? (() => {
-							const value = record(payload[kind]);
-							return [
-								mediaReference(
-									kind,
-									kind === "file" ? (value.name ?? value.filename) : null,
-								),
-							];
-						})()
-					: undefined;
+				const mixed =
+					payload.msgtype === "mixed" ? callbackMixed(payload) : undefined;
+				const content = mixed
+					? mixed.content
+					: kind === null
+						? field(record(payload.text).content, 32 * 1024)
+						: "";
+				const media = mixed
+					? mixed.media
+					: kind
+						? (() => {
+								const value = record(payload[kind]);
+								return [
+									mediaReference(
+										kind,
+										kind === "file" ? (value.name ?? value.filename) : null,
+									),
+								];
+							})()
+						: undefined;
 				const eventId = field(payload.msgid);
 				const expiresAt = new Date(
 					Number(timestamp) * 1000 + 3600_000,

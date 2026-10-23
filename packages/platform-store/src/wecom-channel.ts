@@ -20,7 +20,9 @@ import {
 	type WecomDeliveryStatusV1,
 	type WecomDeliveryStorePortV1,
 	type WecomIdentityPortV1,
+	type WecomMediaProgressStatusV1,
 	type WecomMediaRejectionV1,
+	type WecomOutboundMediaV1,
 	type WecomReceiptStatusV1,
 	type WecomScopeV1,
 	wecomConversationKeyForRotationV1,
@@ -106,6 +108,17 @@ async function audit(
 				: "succeeded";
 	const query = sql`insert into platform.audit_events (id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,request_id,agent_id,details) values (${randomUUID()},${eventKey},'system',${component},${`wecom.${action}`},'agent',${metadata.agentId},${outcome},${eventKey},${metadata.agentId},${sql.json({ originalPrincipal: principal, component, receiptId: eventKey, status: action })})`;
 	await (signal ? awaitTaskAuthorizationQueryV1(query, signal) : query);
+}
+
+/**
+ * #3229：回执结束（或发送中断转为 unknown）时收拢媒体进度：已开始但没有结果的媒体保持未确认
+ * （unknown），尚未开始的媒体不再发送（failed）。
+ */
+async function settleReceiptMedia(
+	sql: postgres.Sql | postgres.TransactionSql,
+	receiptIds: readonly string[],
+) {
+	await sql`update platform.wecom_receipt_media set status=case when status='sending' then 'unknown' else 'failed' end,updated_at=now() where receipt_id in ${sql(receiptIds)} and status in ('pending','sending')`;
 }
 
 interface Row {
@@ -914,6 +927,12 @@ export class PostgresWecomChannelV1
 				{ id: string; actor_id: string; scope: WecomScopeV1 }[]
 			>`update platform.wecom_receipts set delivery_status='unknown',updated_at=now() where id in (select id from platform.wecom_receipts where delivery_status='sending' and lease_until<=now() order by created_at limit 25 for update skip locked) returning id,actor_id,scope`;
 			unknown = expired.length;
+			// #3229：发送中断的回执里，已开始的媒体保持未确认，尚未开始的媒体不再发送。
+			if (expired.length)
+				await settleReceiptMedia(
+					sql,
+					expired.map((row) => row.id),
+				);
 			for (const row of expired)
 				await audit(
 					sql,
@@ -953,6 +972,12 @@ export class PostgresWecomChannelV1
 							{ event_payload: { text?: string } }[]
 						>`select event_payload from platform.conversation_events where execution_id=${row.execution_id} and event_type='text.delta' order by sequence`
 					: [];
+			// #3229：正文超限时不读取，并明确告诉 Core，回复按原规则失败而不是只发结果文件。
+			const answerTooLong = Boolean(
+				row.execution_id &&
+					size &&
+					(Number(size.bytes) > 20480 || Number(size.count) > 10000),
+			);
 			const resultFiles =
 				row.execution_id && row.execution_status === "completed"
 					? await sql<
@@ -961,14 +986,16 @@ export class PostgresWecomChannelV1
 								name: string;
 								media_type: string;
 								size_bytes: string;
+								workspace_reference: string | null;
 								sequence: string;
 							}[]
-						>`select file_id,name,media_type,size_bytes,sequence from (
+						>`select file_id,name,media_type,size_bytes,workspace_reference,sequence from (
 							select distinct on (e.event_payload->>'fileId')
 								e.event_payload->>'fileId' as file_id,
 								e.event_payload->>'name' as name,
 								e.event_payload->>'mediaType' as media_type,
 								e.event_payload->>'sizeBytes' as size_bytes,
+								e.event_payload->>'workspaceReference' as workspace_reference,
 								e.sequence::text as sequence
 							from platform.conversation_events e
 							join platform.files f
@@ -982,6 +1009,7 @@ export class PostgresWecomChannelV1
 								and f.record->'descriptor'->>'name'=e.event_payload->>'name'
 								and f.record->'descriptor'->>'mediaType'=e.event_payload->>'mediaType'
 								and f.record->'descriptor'->>'sizeBytes'=e.event_payload->>'sizeBytes'
+								and coalesce(f.record->>'workspaceReference','')=coalesce(e.event_payload->>'workspaceReference','')
 							where e.execution_id=${row.execution_id}
 								and e.event_type='result.file'
 							order by e.event_payload->>'fileId',e.sequence
@@ -1033,6 +1061,9 @@ export class PostgresWecomChannelV1
 					? { conversationUnavailable: true }
 					: {}),
 				textDeltas: deltas.map((d) => d.event_payload.text ?? ""),
+				...(answerTooLong ? { answerTooLong: true } : {}),
+				conversationId: row.conversation_id,
+				executionId: row.execution_id,
 				media: resultFiles.flatMap((file) => {
 					const sizeBytes = Number(file.size_bytes);
 					return Number.isSafeInteger(sizeBytes) && sizeBytes >= 0
@@ -1042,6 +1073,7 @@ export class PostgresWecomChannelV1
 									name: file.name,
 									mediaType: file.media_type,
 									sizeBytes,
+									workspaceReference: file.workspace_reference ?? null,
 								},
 							]
 						: [];
@@ -1055,6 +1087,7 @@ export class PostgresWecomChannelV1
 	async prepare(
 		claim: WecomDeliveryClaimV1,
 		authority: WecomAuthorityV1,
+		media: readonly WecomOutboundMediaV1[] = [],
 	): Promise<boolean> {
 		if (
 			!sameWecomConnectionAuthorizationFactV1(
@@ -1063,6 +1096,18 @@ export class PostgresWecomChannelV1
 			)
 		)
 			return false;
+		// #3229：每次回复最多 10 个媒体，按发送顺序记录；文件引用必须是本次领取给出的结果文件。
+		const claimed = new Set((claim.media ?? []).map((file) => file.fileId));
+		if (
+			media.length > 10 ||
+			new Set(media.map((file) => file.fileId)).size !== media.length ||
+			media.some(
+				(file) =>
+					!claimed.has(file.fileId) ||
+					!["image", "video", "file"].includes(file.kind),
+			)
+		)
+			throw new TaskAuthorizationStoreError();
 		return this.#sql.begin(async (sql) => {
 			// 20,480 bytes can need eleven UTF-8 parts with 10-second sends.
 			const rows =
@@ -1070,7 +1115,9 @@ export class PostgresWecomChannelV1
     select 1 from platform.agents a join platform.agent_applications m on m.agent_id=a.id join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
     where a.id=${claim.scope.agentId} and a.authorization_revision=${authority.actor.authorizationRevision} and m.management_revision=${authority.managementRevision} and m.status='available' and m.service_availability='ready' and c.configuration->>'channelRevision'=${claim.channelRevision}
    ) returning id`;
-			if (rows.length)
+			if (rows.length) {
+				for (const [ordinal, file] of media.entries())
+					await sql`insert into platform.wecom_receipt_media (receipt_id,ordinal,file_id,kind,status,created_at,updated_at) values (${claim.receiptId},${ordinal},${file.fileId},${file.kind},'pending',now(),now())`;
 				await audit(
 					sql,
 					claim.receiptId,
@@ -1078,7 +1125,39 @@ export class PostgresWecomChannelV1
 					{ agentId: claim.scope.agentId, actorId: claim.actorId },
 					"platform-worker",
 				);
+			}
 			return rows.length === 1;
+		});
+	}
+	/**
+	 * #3229：按文件记录发送进度。`sending` 要求回执仍由本次领取持有（fence、发送中、租约与回复
+	 * 有效期、长连接持有者）且该文件尚未开始，同时延长发送租约，覆盖读取与分片上传；结果只能跟在
+	 * `sending` 之后。回执行锁与 claim 的租约到期处理互斥。
+	 */
+	async progressMedia(
+		claim: WecomDeliveryClaimV1,
+		ordinal: number,
+		status: WecomMediaProgressStatusV1,
+	): Promise<boolean> {
+		if (
+			!Number.isSafeInteger(ordinal) ||
+			ordinal < 0 ||
+			ordinal > 9 ||
+			!["sending", "sent", "failed", "unknown"].includes(status)
+		)
+			throw new TaskAuthorizationStoreError();
+		const starting = status === "sending";
+		return this.#sql.begin(async (sql) => {
+			const [receipt] = starting
+				? await sql`select id from platform.wecom_receipts where id=${claim.receiptId} and fence=${claim.fence} and delivery_status='sending' and lease_until>now() and expires_at>now() and (connection_bot_id is null or exists (select 1 from platform.wecom_connections w where w.bot_id=connection_bot_id and w.fence=connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) for update`
+				: await sql`select id from platform.wecom_receipts where id=${claim.receiptId} and fence=${claim.fence} and delivery_status='sending' for update`;
+			if (!receipt) return false;
+			const changed =
+				await sql`update platform.wecom_receipt_media set status=${status},updated_at=now() where receipt_id=${claim.receiptId} and ordinal=${ordinal} and status=${starting ? "pending" : "sending"} returning ordinal`;
+			if (changed.length !== 1) return false;
+			if (starting)
+				await sql`update platform.wecom_receipts set lease_until=greatest(lease_until,now()+interval '300 seconds'),updated_at=now() where id=${claim.receiptId}`;
+			return true;
 		});
 	}
 	async finish(
@@ -1088,7 +1167,8 @@ export class PostgresWecomChannelV1
 		const changed = await this.#sql.begin(async (sql) => {
 			const rows =
 				await sql`update platform.wecom_receipts set delivery_status=${status},updated_at=now() where id=${claim.receiptId} and fence=${claim.fence} and delivery_status in ('claimed','sending') returning id`;
-			if (rows.length)
+			if (rows.length) {
+				await settleReceiptMedia(sql, [claim.receiptId]);
 				await audit(
 					sql,
 					claim.receiptId,
@@ -1096,6 +1176,7 @@ export class PostgresWecomChannelV1
 					{ agentId: claim.scope.agentId, actorId: claim.actorId },
 					"platform-worker",
 				);
+			}
 			return rows.length > 0;
 		});
 		if (changed) this.#observe(status);

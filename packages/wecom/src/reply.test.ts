@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	createWecomReplyDecryptorV1,
 	createWecomReplyEncryptorV1,
@@ -40,7 +40,6 @@ function sender(
 	accessToken?: Parameters<
 		typeof createWecomSenderV1
 	>[0]["getApplicationAccessToken"],
-	sendMedia?: Parameters<typeof createWecomSenderV1>[0]["sendMedia"],
 ) {
 	const adapter = createWecomSenderV1({
 		resolveConfiguration:
@@ -58,7 +57,6 @@ function sender(
 		revealReply: reveal,
 		getApplicationAccessToken: accessToken ?? (async () => "fixture-token"),
 		fetch: fetcher,
-		...(sendMedia ? { sendMedia } : {}),
 		...(now ? { now } : {}),
 	});
 	return {
@@ -157,59 +155,42 @@ describe("reply protection and external send", () => {
 		).toBe("unknown");
 		expect(calls).toBe(1);
 	});
-	it("delegates File Authority result media after the text reply", async () => {
-		const sendMedia = vi.fn(async () => "sent" as const);
-		const adapter = sender(
-			async () => Response.json({ errcode: 0 }),
-			undefined,
-			undefined,
-			undefined,
-			sendMedia,
-		);
-		const result = await adapter.send({
-			scope,
-			replyHandle: await protect(route),
-			text: "reply",
-			media: [
-				{
-					fileId: "file-1",
-					name: "report.pdf",
-					mediaType: "application/pdf",
-					sizeBytes: 42,
-				},
-			],
-		});
-		expect(result).toBe("sent");
-		expect(sendMedia).toHaveBeenCalledWith(
-			expect.objectContaining({
-				files: expect.arrayContaining([
-					expect.objectContaining({ fileId: "file-1" }),
-				]),
+	it("declares no media support and sends the rewritten text as the whole reply (#3229 AC-4)", async () => {
+		const bodies: unknown[] = [];
+		const adapter = createWecomSenderV1({
+			resolveConfiguration: async (s) => ({
+				bindingReference: s.bindingReference,
+				agentId: s.agentId,
+				kind: s.kind,
+				credentialVersion: "v1",
+				token: "fixture",
+				encodingAesKey: "fixture",
+				botId: "bot-1",
 			}),
-		);
-	});
-	it("rejects unsupported result media before sending text", async () => {
-		let calls = 0;
-		const adapter = sender(async () => {
-			calls++;
-			return Response.json({ errcode: 0 });
+			revealReply: reveal,
+			getApplicationAccessToken: async () => "fixture-token",
+			fetch: async (_url, init) => {
+				bodies.push(JSON.parse(String(init?.body)));
+				return Response.json({ errcode: 0 });
+			},
 		});
+		// 不支持媒体的模式没有规划与媒体发送入口，Core 据此去掉结果文件并在文本中说明。
+		expect(adapter).not.toHaveProperty("planMedia");
+		expect(adapter).not.toHaveProperty("sendMedia");
 		expect(
 			await adapter.send({
 				scope,
 				replyHandle: await protect(route),
-				text: "reply",
-				media: [
-					{
-						fileId: "file-1",
-						name: "report.pdf",
-						mediaType: "application/pdf",
-						sizeBytes: 42,
-					},
-				],
+				text: "报告 report.pdf（当前渠道不支持发送文件）",
+				revalidate: async () => true,
 			}),
-		).toBe("failed");
-		expect(calls).toBe(0);
+		).toBe("sent");
+		expect(bodies).toEqual([
+			{
+				msgtype: "markdown",
+				markdown: { content: "报告 report.pdf（当前渠道不支持发送文件）" },
+			},
+		]);
 	});
 	it("requires a successful provider acknowledgment", async () => {
 		const handle = await protect(route);

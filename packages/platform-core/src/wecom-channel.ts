@@ -15,6 +15,18 @@ import {
 	parseCurrentTaskUserV1,
 	type TaskAuthorizationBoundaryV1,
 } from "./task-authorization.js";
+import {
+	orderWecomResultFilesV1,
+	parseWecomAnswerReferencesV1,
+	rewriteWecomAnswerV1,
+	type WecomAnswerReferenceParserV1,
+	type WecomMediaProgressStatusV1,
+	type WecomOutboundMediaPlanV1,
+	type WecomOutboundMediaSkipReasonV1,
+	type WecomOutboundMediaV1,
+	wecomOutboundMediaKindV1,
+	wecomReplyMediaMaxCountV1,
+} from "./wecom-reply-media.js";
 
 export interface WecomScopeV1 {
 	readonly agentId: string;
@@ -138,6 +150,11 @@ export interface WecomResultFileReferenceV1 {
 	readonly name: string;
 	readonly mediaType: string;
 	readonly sizeBytes: number;
+	/**
+	 * #3229：`result.file` V2 的规范化工作区引用，用来把回答中的 `sandbox:` 引用对应到文件；
+	 * V1 事件与 ACP image 块发布的文件为 null。
+	 */
+	readonly workspaceReference: string | null;
 }
 export interface WecomAuthorityV1 {
 	readonly actor: ConversationExecutionAuthorityV1 & {
@@ -775,8 +792,16 @@ export interface WecomDeliveryClaimV1 {
 	/** `media_rejected` 回执的拒绝原因，决定固定说明（#3227）。 */
 	readonly mediaRejection?: WecomMediaRejectionV1;
 	readonly textDeltas: readonly string[];
+	/**
+	 * #3229：回答正文超过企微单条回复上限（约 20480 字节或 10000 条增量），Store 没有读取 `textDeltas`。
+	 * 此时回复按原规则明确失败，不能只发结果文件而丢掉答案。
+	 */
+	readonly answerTooLong?: boolean;
 	/** Result files already confirmed by File Authority for this execution. */
 	readonly media?: readonly WecomResultFileReferenceV1[];
+	/** #3229：回执所属的会话与执行；Worker 据此读取已确认结果文件的固定版本。 */
+	readonly conversationId?: string | null;
+	readonly executionId?: string | null;
 	/**
 	 * #2982：执行完成时按顺序读取的思考过程有界前缀；`complete` 为 false 表示还有没读到的思考内容。
 	 * 只有完成的回答会带上它，回答正文仍只来自 `textDeltas`。
@@ -791,9 +816,24 @@ export interface WecomDeliveryClaimV1 {
 }
 export interface WecomDeliveryStorePortV1 {
 	claim(): Promise<WecomDeliveryClaimV1 | null>;
+	/**
+	 * 领取后、外部发送前把回执推进到 `sending`。#3229：同一事务按发送顺序记录本次回复要发送的
+	 * 媒体（进度为待发送），之后的进度经 {@link progressMedia} 逐个记录。
+	 */
 	prepare(
 		claim: WecomDeliveryClaimV1,
 		authority: WecomAuthorityV1,
+		media: readonly WecomOutboundMediaV1[],
+	): Promise<boolean>;
+	/**
+	 * #3229：按文件记录发送进度。`sending` 是发送前的意图：只有回执仍由本次领取持有、仍在发送中
+	 * 且该文件尚未开始时才成功，并延长发送租约；返回 false 时不得发出该媒体。`sent`、`failed`、
+	 * `unknown` 只能跟在 `sending` 之后，已受理或未确认的媒体不会再次开始，恢复时不重发。
+	 */
+	progressMedia(
+		claim: WecomDeliveryClaimV1,
+		ordinal: number,
+		status: WecomMediaProgressStatusV1,
 	): Promise<boolean>;
 	finish(
 		claim: WecomDeliveryClaimV1,
@@ -810,10 +850,34 @@ export interface WecomSendPortV1 {
 		 * 思考过程样式渲染的回复方式（智能机器人长连接 stream）使用它；其他方式只发送 `text`。
 		 */
 		readonly textWithThinking?: string;
-		/** Result files already confirmed by File Authority for this execution. */
-		readonly media?: readonly WecomResultFileReferenceV1[];
 		/** Rechecks the original actor, channel revision and task boundary before an external effect. */
 		readonly revalidate?: () => Promise<boolean>;
+	}): Promise<"sent" | "failed" | "unknown">;
+	/**
+	 * #3229：发送文本之前规划本次回复的媒体，按 `files` 的顺序逐个给出处理；返回 null 表示该回复
+	 * 方式不支持媒体（自建应用、显式机器人回调或部署未装配）。规划为 `send` 的文件占用频率额度。
+	 * 只有同时实现 {@link sendMedia} 时才会调用。
+	 */
+	planMedia?(input: {
+		readonly scope: WecomScopeV1;
+		readonly replyHandle: string;
+		readonly files: readonly WecomOutboundMediaV1[];
+	}): Promise<readonly WecomOutboundMediaPlanV1[] | null>;
+	/**
+	 * #3229：文本已受理后发送一个结果文件：重新核对授权与回复路由，读取已确认结果文件的固定版本，
+	 * 上传临时素材并被动回复。`failed` 表示没有产生外部可见的消息，`unknown` 表示回复 ACK 丢失。
+	 */
+	sendMedia?(input: {
+		readonly scope: WecomScopeV1;
+		readonly replyHandle: string;
+		readonly file: WecomOutboundMediaV1;
+		/** 结果文件所属的发送者、会话与执行，供 Worker 核对文件仍是该执行已确认的结果。 */
+		readonly source: {
+			readonly actorId: string;
+			readonly conversationId: string;
+			readonly executionId: string;
+		};
+		readonly revalidate: () => Promise<boolean>;
 	}): Promise<"sent" | "failed" | "unknown">;
 }
 /** #2982：企微单条回复的字节上限，答案与思考过程共用。 */
@@ -830,16 +894,20 @@ const wecomThinkingTruncatedNotice = "（思考过程较长，已截断）";
 function composeWecomThinkingReplyV1(
 	answer: string,
 	thinking: NonNullable<WecomDeliveryClaimV1["thinking"]>,
+	rewrite?: (content: string) => string | undefined,
 ) {
 	const joined = (kind: "raw" | "summary") =>
 		thinking.parts
 			.filter((part) => part.kind === kind)
 			.map((part) => part.text)
 			.join("");
-	const content = [joined("summary"), joined("raw")]
+	const combined = [joined("summary"), joined("raw")]
 		.filter(Boolean)
-		.join("\n\n")
-		.replace(/<(\s*\/?\s*think\b[^<>]*)>/gi, "＜$1＞");
+		.join("\n\n");
+	// #3229：思考过程中的 `sandbox:` 引用与答案按同样的规划改写；无法确认时不附带思考过程。
+	const rewritten = rewrite ? rewrite(combined) : combined;
+	if (rewritten === undefined) return undefined;
+	const content = rewritten.replace(/<(\s*\/?\s*think\b[^<>]*)>/gi, "＜$1＞");
 	if (!content.trim()) return undefined;
 	const budget =
 		wecomReplyMaximumBytes - Buffer.byteLength(`<think></think>\n\n${answer}`);
@@ -874,6 +942,11 @@ export function createWecomDeliveryV1(dependencies: {
 	readonly store: WecomDeliveryStorePortV1;
 	readonly authorization: WecomAuthorizationPortV1;
 	readonly sender: WecomSendPortV1;
+	/**
+	 * #3229：按 CommonMark 找出回答中的 `sandbox:` 引用，由企微 Adapter 提供（Core 不依赖 Markdown
+	 * 解析库，解析规则与 Runtime 一致）。
+	 */
+	readonly answerReferences: WecomAnswerReferenceParserV1;
 	readonly now?: () => Date;
 }) {
 	return {
@@ -915,7 +988,11 @@ export function createWecomDeliveryV1(dependencies: {
 			// #3077：回答在有效期内没有就绪时，结束本次回复并明确提示超时，不静默过期。
 			const timedOut =
 				claim.acceptanceStatus === "accepted" && claim.answerReady === false;
-			const text =
+			const answered =
+				claim.acceptanceStatus === "accepted" &&
+				!timedOut &&
+				claim.executionStatus === "completed";
+			let text =
 				claim.acceptanceStatus === "media_rejected"
 					? wecomMediaRejectionTextV1(claim.mediaRejection)
 					: claim.acceptanceStatus === "busy"
@@ -933,25 +1010,62 @@ export function createWecomDeliveryV1(dependencies: {
 											: claim.conversationUnavailable
 												? `本次任务执行失败，${wecomConversationUnavailableTextV1}`
 												: "本次任务执行失败，请稍后重试";
-			const media = timedOut ? [] : (claim.media ?? []);
-			if (
-				(!text && media.length === 0) ||
-				Buffer.byteLength(text) > wecomReplyMaximumBytes
-			) {
+			// #3229：只有完成的回答带结果文件。先规划哪些文件会发送（文本先于媒体），再把回答中的
+			// `sandbox:` 引用改写为文件名与说明；不支持媒体的回复方式去掉结果文件，文本照常发送。
+			let media: readonly WecomOutboundMediaV1[] = [];
+			let rewriteThinking:
+				| ((content: string) => string | undefined)
+				| undefined;
+			if (answered) {
+				// 答案本身超过单条回复上限时按原规则明确失败，不能只发结果文件。
+				if (claim.answerTooLong) {
+					await dependencies.store.finish(claim, "failed");
+					return true;
+				}
+				const planned = await planReplyMedia(claim, text);
+				if (planned === "retry") return true;
+				if (planned === "invalid") {
+					await dependencies.store.finish(claim, "failed");
+					return true;
+				}
+				text = planned.text;
+				media = planned.media;
+				rewriteThinking = planned.rewriteThinking;
+			}
+			if (!text || Buffer.byteLength(text) > wecomReplyMaximumBytes) {
 				await dependencies.store.finish(claim, "failed");
 				return true;
 			}
 			// #2982：只有完成且有答案的回复组合思考过程；固定文案与只有文件的回复不附带。
 			const textWithThinking =
-				claim.acceptanceStatus === "accepted" &&
-				!timedOut &&
-				claim.executionStatus === "completed" &&
-				text &&
-				claim.thinking
-					? composeWecomThinkingReplyV1(text, claim.thinking)
+				answered && claim.textDeltas.join("") && claim.thinking
+					? composeWecomThinkingReplyV1(text, claim.thinking, rewriteThinking)
 					: undefined;
-			if (!(await dependencies.store.prepare(claim, current.authority)))
+			if (!(await dependencies.store.prepare(claim, current.authority, media)))
 				return true;
+			const revalidate = async () => {
+				const latest = claim.connectionAuthorizationFact
+					? await dependencies.authorization.authorize(
+							claim.scope,
+							"use",
+							claim.taskBoundary,
+							claim.connectionAuthorizationFact.providerId,
+						)
+					: await dependencies.authorization.authorize(
+							claim.scope,
+							"use",
+							claim.taskBoundary,
+						);
+				return (
+					latest.outcome === "allowed" &&
+					latest.authority.actor.actorId === claim.actorId &&
+					latest.authority.channelRevision === claim.channelRevision &&
+					sameWecomConnectionAuthorizationFactV1(
+						latest.authority.connectionAuthorizationFact,
+						claim.connectionAuthorizationFact,
+					)
+				);
+			};
 			let status: "sent" | "failed" | "unknown";
 			try {
 				status = await dependencies.sender.send({
@@ -959,38 +1073,167 @@ export function createWecomDeliveryV1(dependencies: {
 					replyHandle: claim.replyHandle,
 					text,
 					...(textWithThinking ? { textWithThinking } : {}),
-					...(media.length ? { media } : {}),
-					revalidate: async () => {
-						const latest = claim.connectionAuthorizationFact
-							? await dependencies.authorization.authorize(
-									claim.scope,
-									"use",
-									claim.taskBoundary,
-									claim.connectionAuthorizationFact.providerId,
-								)
-							: await dependencies.authorization.authorize(
-									claim.scope,
-									"use",
-									claim.taskBoundary,
-								);
-						return (
-							latest.outcome === "allowed" &&
-							latest.authority.actor.actorId === claim.actorId &&
-							latest.authority.channelRevision === claim.channelRevision &&
-							sameWecomConnectionAuthorizationFactV1(
-								latest.authority.connectionAuthorizationFact,
-								claim.connectionAuthorizationFact,
-							)
-						);
-					},
+					revalidate,
 				});
 			} catch {
 				status = "unknown";
 			}
+			// 文本未明确受理时不发送媒体：什么都没发出为 failed，ACK 丢失保持 unknown。
+			if (status === "sent" && media.length)
+				status = await deliverMedia(claim, media, revalidate);
 			await dependencies.store.finish(claim, status);
 			return true;
 		},
 	};
+
+	/**
+	 * 规划本次回复的结果文件并改写回答。`retry` 表示规划依赖暂时不可用，留待重新领取；`invalid`
+	 * 表示无法确认回答中的引用，不发送。
+	 */
+	async function planReplyMedia(
+		claim: WecomDeliveryClaimV1,
+		answer: string,
+	): Promise<
+		| {
+				readonly text: string;
+				readonly media: readonly WecomOutboundMediaV1[];
+				/** 思考过程中的 `sandbox:` 引用按同样的规划改写；无法确认时返回 undefined，不附带思考过程。 */
+				readonly rewriteThinking: (content: string) => string | undefined;
+		  }
+		| "retry"
+		| "invalid"
+	> {
+		const files = claim.media ?? [];
+		const parse = (content: string) =>
+			parseWecomAnswerReferencesV1(content, dependencies.answerReferences);
+		let references: ReturnType<typeof parseWecomAnswerReferencesV1>;
+		try {
+			references = parse(answer);
+		} catch {
+			return "invalid";
+		}
+		const ordered = orderWecomResultFilesV1(files, references);
+		const skipped = new Map<string, WecomOutboundMediaSkipReasonV1>();
+		const rewriteThinking = (content: string) => {
+			try {
+				return rewriteWecomAnswerV1({
+					answer: content,
+					references: parse(content),
+					files: ordered,
+					skipped,
+					appendUnreferenced: false,
+				});
+			} catch {
+				return undefined;
+			}
+		};
+		if (files.length === 0 && references.length === 0)
+			return { text: answer, media: [], rewriteThinking };
+		const candidates: WecomOutboundMediaV1[] = [];
+		for (const file of ordered) {
+			const kind = wecomOutboundMediaKindV1(file);
+			if (!kind || candidates.length >= wecomReplyMediaMaxCountV1)
+				skipped.set(file.fileId, "exceeds_limit");
+			else candidates.push({ ...file, kind });
+		}
+		const sender = dependencies.sender;
+		let plans: readonly WecomOutboundMediaPlanV1[] | null = null;
+		if (
+			candidates.length &&
+			sender.planMedia &&
+			sender.sendMedia &&
+			claim.conversationId &&
+			claim.executionId
+		) {
+			try {
+				plans = await sender.planMedia({
+					scope: claim.scope,
+					replyHandle: claim.replyHandle,
+					files: candidates,
+				});
+			} catch {
+				return "retry";
+			}
+			if (
+				plans !== null &&
+				(!Array.isArray(plans) ||
+					plans.length !== candidates.length ||
+					plans.some(
+						(plan) =>
+							![
+								"send",
+								"unsupported_type",
+								"exceeds_limit",
+								"rate_limited",
+							].includes(plan),
+					))
+			)
+				return "invalid";
+		}
+		const media: WecomOutboundMediaV1[] = [];
+		for (const [index, file] of candidates.entries()) {
+			const plan = plans?.[index];
+			if (plan === "send") media.push(file);
+			else skipped.set(file.fileId, plan ?? "unsupported_channel");
+		}
+		return {
+			text: rewriteWecomAnswerV1({
+				answer,
+				references,
+				files: ordered,
+				skipped,
+				maxBytes: wecomReplyMaximumBytes,
+			}),
+			media,
+			rewriteThinking,
+		};
+	}
+
+	/**
+	 * 文本已受理后按顺序逐个发送媒体，每个文件先记录发送意图再产生外部效果。撤权、绑定变化或
+	 * 回执不再由本次领取持有时，未发送的媒体不再发出。全部受理为 sent，否则为 unknown。
+	 */
+	async function deliverMedia(
+		claim: WecomDeliveryClaimV1,
+		media: readonly WecomOutboundMediaV1[],
+		revalidate: () => Promise<boolean>,
+	): Promise<"sent" | "unknown"> {
+		const { conversationId, executionId } = claim;
+		const sendMedia = dependencies.sender.sendMedia;
+		if (!conversationId || !executionId || !sendMedia) return "unknown";
+		let complete = true;
+		for (const [ordinal, file] of media.entries()) {
+			try {
+				if (
+					!(await revalidate()) ||
+					!(await dependencies.store.progressMedia(claim, ordinal, "sending"))
+				)
+					return "unknown";
+			} catch {
+				return "unknown";
+			}
+			let outcome: "sent" | "failed" | "unknown";
+			try {
+				outcome = await sendMedia({
+					scope: claim.scope,
+					replyHandle: claim.replyHandle,
+					file,
+					source: { actorId: claim.actorId, conversationId, executionId },
+					revalidate,
+				});
+			} catch {
+				outcome = "unknown";
+			}
+			if (outcome !== "sent") complete = false;
+			try {
+				if (!(await dependencies.store.progressMedia(claim, ordinal, outcome)))
+					complete = false;
+			} catch {
+				complete = false;
+			}
+		}
+		return complete ? "sent" : "unknown";
+	}
 }
 
 export interface WecomIdentityPortV1 {

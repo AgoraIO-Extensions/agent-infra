@@ -1,8 +1,12 @@
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import type { WecomMessageV1 } from "@agent-infra/platform-core";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
-import { createWecomWebSocketV1 } from "./websocket.js";
+import {
+	createWecomWebSocketV1,
+	type WecomWebSocketMediaInputV1,
+} from "./websocket.js";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -562,4 +566,459 @@ it("allows eight distinct requests to await ACK on the same connection", async (
 	for (const frame of replies)
 		fixture.socket.send(JSON.stringify({ headers: frame.headers, errcode: 0 }));
 	expect(await Promise.all(sent)).toEqual(Array(8).fill("sent"));
+});
+
+// #3229：长连接出站媒体：分片上传临时素材后在同一 req_id 上被动回复（工程 Spec §14.2.3）。
+type ProviderFrame = {
+	cmd: string;
+	headers: { req_id: string };
+	body: Record<string, unknown> & {
+		upload_id?: string;
+		chunk_index?: number;
+		base64_data?: string;
+	};
+};
+/** 企微服务端替身：按帧类型回 ACK；`respond` 返回 null 表示不回 ACK。 */
+function provider(
+	socket: WebSocket,
+	respond: (frame: ProviderFrame) => Record<string, unknown> | null = () => ({
+		errcode: 0,
+	}),
+) {
+	const frames: ProviderFrame[] = [];
+	socket.on("message", (data) => {
+		const frame = JSON.parse(data.toString()) as ProviderFrame;
+		frames.push(frame);
+		const defaults: Record<string, Record<string, unknown>> = {
+			aibot_upload_media_init: { errcode: 0, body: { upload_id: "upload-1" } },
+			aibot_upload_media_finish: {
+				errcode: 0,
+				body: { media_id: "SENTINEL-MEDIA-ID", type: "file" },
+			},
+		};
+		const ack = respond(frame);
+		if (ack)
+			socket.send(
+				JSON.stringify({
+					headers: frame.headers,
+					...(defaults[frame.cmd] ?? {}),
+					...ack,
+				}),
+			);
+	});
+	return frames;
+}
+async function admitted() {
+	const s = await setup();
+	await s.authenticate();
+	s.push();
+	await expect.poll(() => s.messages.length).toBe(1);
+	const message = s.messages[0];
+	if (!message) throw new Error("Missing admitted message");
+	return { ...s, message };
+}
+const fileBytes = (size: number, seed = 7) =>
+	Uint8Array.from({ length: size }, (_, index) => (index * seed) % 251);
+function mediaInput(
+	message: WecomMessageV1,
+	file: { kind: "image" | "video" | "file"; name: string; bytes: Uint8Array },
+	overrides: Partial<WecomWebSocketMediaInputV1> = {},
+): WecomWebSocketMediaInputV1 {
+	return {
+		scope: message,
+		replyHandle: message.replyHandle,
+		file: {
+			fileId: `file-${file.name}`,
+			name: file.name,
+			mediaType: "application/octet-stream",
+			sizeBytes: file.bytes.byteLength,
+			workspaceReference: `out/${file.name}`,
+			kind: file.kind,
+		},
+		source: {
+			actorId: "actor",
+			conversationId: "conversation",
+			executionId: "execution",
+		},
+		revalidate: async () => true,
+		read: async () => file.bytes,
+		...overrides,
+	};
+}
+
+it("AC-1: uploads in 512KB chunks and replies image, file and video after the text stream", async () => {
+	const s = await admitted();
+	const frames = provider(s.socket);
+	const png = fileBytes(600 * 1024);
+	const pdf = fileBytes(64, 3);
+	const mp4 = fileBytes(2048, 5);
+	expect(
+		await s.adapter.sender.send({
+			scope: s.message,
+			replyHandle: s.message.replyHandle,
+			text: "chart.png（见下方文件）",
+		}),
+	).toBe("sent");
+	for (const [kind, name, bytes] of [
+		["image", "chart.png", png],
+		["file", "report.pdf", pdf],
+		["video", "demo.mp4", mp4],
+	] as const)
+		expect(
+			await s.adapter.sender.sendMedia(
+				mediaInput(s.message, { kind, name, bytes }),
+			),
+		).toBe("sent");
+	expect(frames.map((frame) => frame.cmd)).toEqual([
+		"aibot_respond_msg",
+		"aibot_upload_media_init",
+		"aibot_upload_media_chunk",
+		"aibot_upload_media_chunk",
+		"aibot_upload_media_finish",
+		"aibot_respond_msg",
+		"aibot_upload_media_init",
+		"aibot_upload_media_chunk",
+		"aibot_upload_media_finish",
+		"aibot_respond_msg",
+		"aibot_upload_media_init",
+		"aibot_upload_media_chunk",
+		"aibot_upload_media_finish",
+		"aibot_respond_msg",
+	]);
+	expect(frames[0]?.body).toMatchObject({
+		msgtype: "stream",
+		stream: { finish: true },
+	});
+	expect(frames[1]?.body).toEqual({
+		type: "image",
+		filename: "chart.png",
+		total_size: png.byteLength,
+		total_chunks: 2,
+		md5: createHash("md5").update(png).digest("hex"),
+	});
+	const chunks = frames
+		.slice(2, 4)
+		.sort(
+			(left, right) =>
+				(left.body.chunk_index ?? 0) - (right.body.chunk_index ?? 0),
+		);
+	expect(chunks.map((frame) => frame.body.chunk_index)).toEqual([0, 1]);
+	expect(
+		Buffer.concat(
+			chunks.map((frame) =>
+				Buffer.from(frame.body.base64_data ?? "", "base64"),
+			),
+		).equals(Buffer.from(png)),
+	).toBe(true);
+	expect(Buffer.from(chunks[0]?.body.base64_data ?? "", "base64")).toHaveLength(
+		512 * 1024,
+	);
+	const replies = frames.filter(
+		(frame) =>
+			frame.cmd === "aibot_respond_msg" && frame.body.msgtype !== "stream",
+	);
+	expect(replies).toEqual([
+		{
+			cmd: "aibot_respond_msg",
+			headers: { req_id: "request-1" },
+			body: { msgtype: "image", image: { media_id: "SENTINEL-MEDIA-ID" } },
+		},
+		{
+			cmd: "aibot_respond_msg",
+			headers: { req_id: "request-1" },
+			body: { msgtype: "file", file: { media_id: "SENTINEL-MEDIA-ID" } },
+		},
+		{
+			cmd: "aibot_respond_msg",
+			headers: { req_id: "request-1" },
+			body: { msgtype: "video", video: { media_id: "SENTINEL-MEDIA-ID" } },
+		},
+	]);
+});
+
+it.each([
+	[
+		"the upload init is rejected",
+		"aibot_upload_media_init",
+		{ errcode: 40008 },
+	],
+	["a chunk is rejected", "aibot_upload_media_chunk", { errcode: 45009 }],
+	["the upload returns no media_id", "aibot_upload_media_finish", { body: {} }],
+])("AC-3: fails without replying when %s", async (_name, cmd, ack) => {
+	const s = await admitted();
+	const frames = provider(s.socket, (frame) =>
+		frame.cmd === cmd ? ack : { errcode: 0 },
+	);
+	expect(
+		await s.adapter.sender.sendMedia(
+			mediaInput(s.message, {
+				kind: "file",
+				name: "report.pdf",
+				bytes: fileBytes(64),
+			}),
+		),
+	).toBe("failed");
+	expect(frames.some((frame) => frame.cmd === "aibot_respond_msg")).toBe(false);
+});
+
+it("AC-3: classifies a rejected media reply as failed", async () => {
+	const s = await admitted();
+	provider(s.socket, (frame) =>
+		frame.cmd === "aibot_respond_msg" ? { errcode: 40008 } : { errcode: 0 },
+	);
+	expect(
+		await s.adapter.sender.sendMedia(
+			mediaInput(s.message, {
+				kind: "image",
+				name: "chart.png",
+				bytes: fileBytes(64),
+			}),
+		),
+	).toBe("failed");
+});
+
+it("AC-3: keeps a media reply whose ACK is lost unknown and does not resend it after reconnect", async () => {
+	const s = await admitted();
+	const frames = provider(s.socket, (frame) =>
+		frame.cmd === "aibot_respond_msg" ? null : { errcode: 0 },
+	);
+	const reconnected = once(s.server, "connection");
+	const result = s.adapter.sender.sendMedia(
+		mediaInput(s.message, {
+			kind: "file",
+			name: "report.pdf",
+			bytes: fileBytes(64),
+		}),
+	);
+	await expect
+		.poll(() => frames.filter((frame) => frame.cmd === "aibot_respond_msg"))
+		.toHaveLength(1);
+	s.socket.terminate();
+	expect(await result).toBe("unknown");
+	const [next] = (await reconnected) as [WebSocket];
+	const [auth] = await once(next, "message");
+	const after: string[] = [];
+	next.on("message", (data) => after.push(data.toString()));
+	next.send(
+		JSON.stringify({
+			headers: JSON.parse(auth.toString()).headers,
+			errcode: 0,
+		}),
+	);
+	await expect
+		.poll(() => s.states.filter((status) => status === "connected").length)
+		.toBe(2);
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	expect(after).toEqual([]);
+	// 旧连接上的回复路由不再可用，同一媒体不会在新连接上发出。
+	expect(
+		await s.adapter.sender.sendMedia(
+			mediaInput(s.message, {
+				kind: "file",
+				name: "report.pdf",
+				bytes: fileBytes(64),
+			}),
+		),
+	).toBe("failed");
+	expect(after).toEqual([]);
+});
+
+it("AC-5: does not read or upload after authorization is revoked, and never exposes media_id", async () => {
+	const s = await admitted();
+	const frames = provider(s.socket);
+	const logs = [
+		vi.spyOn(console, "log"),
+		vi.spyOn(console, "info"),
+		vi.spyOn(console, "warn"),
+		vi.spyOn(console, "error"),
+		vi.spyOn(console, "debug"),
+	];
+	let reads = 0;
+	expect(
+		await s.adapter.sender.sendMedia(
+			mediaInput(
+				s.message,
+				{ kind: "file", name: "report.pdf", bytes: fileBytes(64) },
+				{
+					revalidate: async () => false,
+					read: async () => {
+						reads++;
+						return fileBytes(64);
+					},
+				},
+			),
+		),
+	).toBe("failed");
+	expect(reads).toBe(0);
+	expect(frames).toEqual([]);
+	// 读取期间撤权：文件不上传到企微。
+	let readChecks = 0;
+	expect(
+		await s.adapter.sender.sendMedia(
+			mediaInput(
+				s.message,
+				{ kind: "file", name: "report.pdf", bytes: fileBytes(64) },
+				{ revalidate: async () => ++readChecks === 1 },
+			),
+		),
+	).toBe("failed");
+	expect(readChecks).toBe(2);
+	expect(frames).toEqual([]);
+	// 上传完成后、被动回复前撤权：已上传的临时素材不被使用。
+	let checks = 0;
+	const result = await s.adapter.sender.sendMedia(
+		mediaInput(
+			s.message,
+			{ kind: "file", name: "report.pdf", bytes: fileBytes(64) },
+			{ revalidate: async () => ++checks <= 2 },
+		),
+	);
+	expect(result).toBe("failed");
+	expect(frames.map((frame) => frame.cmd)).toEqual([
+		"aibot_upload_media_init",
+		"aibot_upload_media_chunk",
+		"aibot_upload_media_finish",
+	]);
+	// 读取的字节与声明的大小不一致时不上传。
+	expect(
+		await s.adapter.sender.sendMedia(
+			mediaInput(
+				s.message,
+				{ kind: "file", name: "report.pdf", bytes: fileBytes(64) },
+				{ read: async () => fileBytes(63) },
+			),
+		),
+	).toBe("failed");
+	expect(frames).toHaveLength(3);
+	const printed = JSON.stringify(logs.map((spy) => spy.mock.calls));
+	expect(printed).not.toContain("SENTINEL-MEDIA-ID");
+	expect(JSON.stringify(result)).not.toContain("SENTINEL-MEDIA-ID");
+	for (const spy of logs) spy.mockRestore();
+});
+
+it("AC-2: plans media within the per-conversation and per-bot WeCom rate limits", async () => {
+	const s = await admitted();
+	provider(s.socket);
+	const file = mediaInput(s.message, {
+		kind: "file",
+		name: "a.pdf",
+		bytes: fileBytes(64),
+	}).file;
+	const first = await s.adapter.sender.planMedia({
+		scope: s.message,
+		replyHandle: s.message.replyHandle,
+		files: Array(40).fill(file),
+	});
+	// 文本占会话的一条：每会话 30 条/分钟，剩下 29 个媒体。
+	expect(first?.filter((plan) => plan === "send")).toHaveLength(29);
+	expect(first?.slice(29)).toEqual(Array(11).fill("rate_limited"));
+	// 同一会话的另一条消息：会话额度已用完。
+	s.socket.send(
+		JSON.stringify({
+			cmd: "aibot_msg_callback",
+			headers: { req_id: "request-same" },
+			body: {
+				aibotid: "bot-1",
+				msgid: "event-same",
+				chattype: "group",
+				chatid: "group-1",
+				from: { userid: "sender-2" },
+				msgtype: "text",
+				text: { content: "fixture question" },
+			},
+		}),
+	);
+	await expect
+		.poll(() => s.messages.some((entry) => entry.eventId === "event-same"))
+		.toBe(true);
+	const same = s.messages.find((entry) => entry.eventId === "event-same");
+	if (!same) throw new Error("Missing same-conversation message");
+	expect(
+		await s.adapter.sender.planMedia({
+			scope: same,
+			replyHandle: same.replyHandle,
+			files: [file],
+		}),
+	).toEqual(["rate_limited"]);
+	// 另一个会话：每个机器人上传 30 次/分钟，只剩 1 次。
+	s.socket.send(
+		JSON.stringify({
+			cmd: "aibot_msg_callback",
+			headers: { req_id: "request-other" },
+			body: {
+				aibotid: "bot-1",
+				msgid: "event-other",
+				chattype: "group",
+				chatid: "group-2",
+				from: { userid: "sender-1" },
+				msgtype: "text",
+				text: { content: "fixture question" },
+			},
+		}),
+	);
+	await expect
+		.poll(() => s.messages.some((entry) => entry.eventId === "event-other"))
+		.toBe(true);
+	const other = s.messages.find((entry) => entry.eventId === "event-other");
+	if (!other) throw new Error("Missing second message");
+	expect(
+		await s.adapter.sender.planMedia({
+			scope: other,
+			replyHandle: other.replyHandle,
+			files: [file, file],
+		}),
+	).toEqual(["send", "rate_limited"]);
+	// 不属于本连接或其他会话的路由不支持媒体。
+	expect(
+		await s.adapter.sender.planMedia({
+			scope: { ...s.message, senderId: "other-user" },
+			replyHandle: s.message.replyHandle,
+			files: [file],
+		}),
+	).toBeNull();
+});
+
+it("returns the planned media quota when the text is not accepted or the reply is planned again", async () => {
+	const s = await admitted();
+	provider(s.socket, (frame) =>
+		frame.cmd === "aibot_respond_msg" ? { errcode: 40008 } : { errcode: 0 },
+	);
+	const file = mediaInput(s.message, {
+		kind: "file",
+		name: "a.pdf",
+		bytes: fileBytes(64),
+	}).file;
+	const plan = () =>
+		s.adapter.sender.planMedia({
+			scope: s.message,
+			replyHandle: s.message.replyHandle,
+			files: Array(29).fill(file),
+		});
+	expect((await plan())?.every((entry) => entry === "send")).toBe(true);
+	// 同一回复重新规划：先归还上一次的占用，不会被自己的占用挤掉。
+	expect((await plan())?.every((entry) => entry === "send")).toBe(true);
+	// 文本被企微拒绝：媒体不会发送，额度归还（文本本身仍计一条）。
+	expect(
+		await s.adapter.sender.send({
+			scope: s.message,
+			replyHandle: s.message.replyHandle,
+			text: "fixture answer",
+		}),
+	).toBe("failed");
+	const again = await plan();
+	expect(again?.filter((entry) => entry === "send")).toHaveLength(28);
+});
+
+it("uploads a result file whose name is long in UTF-8 but within 255 characters", async () => {
+	const s = await admitted();
+	const frames = provider(s.socket);
+	const name = `${"季度经营分析报告".repeat(12)}.pdf`;
+	expect(name.length).toBeLessThanOrEqual(255);
+	expect(Buffer.byteLength(name)).toBeGreaterThan(255);
+	expect(
+		await s.adapter.sender.sendMedia(
+			mediaInput(s.message, { kind: "file", name, bytes: fileBytes(64) }),
+		),
+	).toBe("sent");
+	expect(frames[0]?.body).toMatchObject({ filename: name });
 });

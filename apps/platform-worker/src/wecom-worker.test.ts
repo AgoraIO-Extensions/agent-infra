@@ -16,6 +16,12 @@ const mocks = vi.hoisted(() => ({
 	mediaOptions: undefined as Record<string, unknown> | undefined,
 	mediaResolve: vi.fn(),
 	mediaClose: vi.fn(async () => {}),
+	outboundLimits: vi.fn(),
+	outboundRead: vi.fn(),
+	connectionsSend: vi.fn(),
+	connectionsPlanMedia: vi.fn(),
+	connectionsSendMedia: vi.fn(),
+	answerReferences: undefined as unknown,
 	sender: undefined as WecomSendPortV1 | undefined,
 	close: vi.fn(async () => {}),
 	connectionsTick: vi.fn(async () => {}),
@@ -47,8 +53,12 @@ vi.mock("@agent-infra/platform-core", () => ({
 		mocks.channelOptions = options;
 		return { receive: vi.fn() };
 	},
-	createWecomDeliveryV1: (options: { sender: WecomSendPortV1 }) => {
+	createWecomDeliveryV1: (options: {
+		sender: WecomSendPortV1;
+		answerReferences: unknown;
+	}) => {
 		mocks.sender = options.sender;
+		mocks.answerReferences = options.answerReferences;
 		return { dispatch: mocks.dispatch };
 	},
 }));
@@ -61,6 +71,11 @@ vi.mock("./wecom-connections.js", () => ({
 		return {
 			tick: mocks.connectionsTick,
 			close: mocks.connectionsClose,
+			sender: {
+				send: mocks.connectionsSend,
+				planMedia: mocks.connectionsPlanMedia,
+				sendMedia: mocks.connectionsSendMedia,
+			},
 		};
 	},
 }));
@@ -72,10 +87,22 @@ vi.mock("./wecom-setup.js", () => ({
 	}),
 }));
 vi.mock("./wecom-media.js", () => ({
-	createWecomInboundMediaResolverV1: (options: Record<string, unknown>) => {
+	createWecomMediaV1: (options: Record<string, unknown>) => {
 		mocks.mediaOptions = options;
-		return { resolve: mocks.mediaResolve, close: mocks.mediaClose };
+		const storage = options.storage as { download?: unknown };
+		return {
+			inbound: { resolve: mocks.mediaResolve },
+			outbound: storage.download
+				? {
+						limits: mocks.outboundLimits,
+						read: mocks.outboundRead,
+						withSlot: (work: () => Promise<unknown>) => work(),
+					}
+				: undefined,
+			close: mocks.mediaClose,
+		};
 	},
+	WecomOutboundMediaBusyError: class extends Error {},
 }));
 
 import { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
@@ -434,6 +461,188 @@ it.each(["success", "setup", "connections", "store"] as const)(
 			connections.resolve();
 			store.resolve();
 			await closing.catch(() => {});
+		}
+	},
+);
+
+// #3229：只有长连接回复路由且装配了出站文件面时支持媒体；类型与大小按 Channel 当前 FileLimits。
+const mediaScope = {
+	agentId: "agent",
+	bindingReference: "binding",
+	kind: "wecom_bot" as const,
+	senderId: "sender",
+	peerId: "peer",
+	conversationType: "single" as const,
+	threadId: null,
+};
+const mediaFile = (fileId: string, mediaType: string, sizeBytes: number) => ({
+	fileId,
+	name: `${fileId}.bin`,
+	mediaType,
+	sizeBytes,
+	workspaceReference: null,
+	kind: "file" as const,
+});
+function mediaWorker(
+	route: Record<string, unknown>,
+	storage: Record<string, unknown> = {
+		upload: vi.fn(),
+		inspect: vi.fn(),
+		download: vi.fn(),
+	},
+) {
+	const send = vi.fn(async () => "sent" as const);
+	const worker = createPlatformWecomWorkerV1({
+		databaseUrl: "postgres://fixture",
+		identity: { resolveSender: async () => null, activeUsers: async () => [] },
+		observe: () => {},
+		sender: { send },
+		media: { storage: storage as never },
+		connections: {
+			bindings: async () => [],
+			protectReply: async () => "fixture",
+			revealReply: async () => route as never,
+		},
+	});
+	return { worker, send };
+}
+
+it("wires the CommonMark reference parser into delivery (#3229)", async () => {
+	const { worker } = mediaWorker({ websocket: {} });
+	try {
+		const parse = mocks.answerReferences as (
+			text: string,
+		) => readonly { workspaceReference: string | null }[];
+		expect(parse("[r](sandbox:out/r.pdf) `[c](sandbox:c)`")).toEqual([
+			expect.objectContaining({ workspaceReference: "out/r.pdf" }),
+		]);
+	} finally {
+		await worker.close();
+	}
+});
+
+it("plans long-connection media against current FileLimits and the connection rate (#3229)", async () => {
+	const { worker } = mediaWorker({ websocket: {} });
+	try {
+		mocks.outboundLimits.mockResolvedValue({
+			revision: "r",
+			expiresAt: "2099-01-01T00:00:00Z",
+			mediaTypes: ["application/pdf", "image/png"],
+			maxBytes: 1000,
+		});
+		mocks.connectionsPlanMedia.mockResolvedValue(["send", "rate_limited"]);
+		const files = [
+			mediaFile("a", "application/pdf", 10),
+			mediaFile("b", "application/zip", 10),
+			mediaFile("c", "image/png", 5000),
+			mediaFile("d", "image/png", 10),
+		];
+		expect(
+			await mocks.sender?.planMedia?.({
+				scope: mediaScope,
+				replyHandle: "handle",
+				files,
+			}),
+		).toEqual(["send", "unsupported_type", "exceeds_limit", "rate_limited"]);
+		expect(mocks.connectionsPlanMedia).toHaveBeenCalledWith({
+			scope: mediaScope,
+			replyHandle: "handle",
+			files: [files[0], files[3]],
+		});
+		// 没有声明 FileLimits：不支持媒体。
+		mocks.outboundLimits.mockResolvedValueOnce(null);
+		expect(
+			await mocks.sender?.planMedia?.({
+				scope: mediaScope,
+				replyHandle: "handle",
+				files,
+			}),
+		).toBeNull();
+	} finally {
+		await worker.close();
+	}
+});
+
+it("sends one long-connection media through the outbound file client (#3229)", async () => {
+	const { worker } = mediaWorker({ websocket: {} });
+	try {
+		const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+		mocks.outboundRead.mockResolvedValue(bytes);
+		mocks.connectionsSendMedia.mockImplementation(
+			async (input: { read: (signal: AbortSignal) => Promise<Uint8Array> }) =>
+				(await input.read(AbortSignal.timeout(1000))) === bytes
+					? "sent"
+					: "failed",
+		);
+		const revalidate = async () => true;
+		const source = {
+			actorId: "actor",
+			conversationId: "conversation",
+			executionId: "execution",
+		};
+		const file = mediaFile("a", "application/pdf", 5);
+		expect(
+			await mocks.sender?.sendMedia?.({
+				scope: mediaScope,
+				replyHandle: "handle",
+				file,
+				source,
+				revalidate,
+			}),
+		).toBe("sent");
+		expect(mocks.outboundRead).toHaveBeenCalledWith({
+			scope: mediaScope,
+			source,
+			file,
+			revalidate,
+			signal: expect.any(AbortSignal),
+		});
+	} finally {
+		await worker.close();
+	}
+});
+
+it.each([
+	[
+		"a callback reply route",
+		{ responseUrl: "https://qyapi.weixin.qq.com" },
+		true,
+	],
+	["a deployment without object downloads", { websocket: {} }, false],
+])(
+	"declares media unsupported for %s (#3229 AC-4)",
+	async (_name, route, download) => {
+		const { worker } = mediaWorker(route, {
+			upload: vi.fn(),
+			inspect: vi.fn(),
+			...(download ? { download: vi.fn() } : {}),
+		});
+		try {
+			expect(
+				await mocks.sender?.planMedia?.({
+					scope: mediaScope,
+					replyHandle: "handle",
+					files: [mediaFile("a", "application/pdf", 10)],
+				}),
+			).toBeNull();
+			expect(
+				await mocks.sender?.sendMedia?.({
+					scope: mediaScope,
+					replyHandle: "handle",
+					file: mediaFile("a", "application/pdf", 10),
+					source: {
+						actorId: "actor",
+						conversationId: "conversation",
+						executionId: "execution",
+					},
+					revalidate: async () => true,
+				}),
+			).toBe("failed");
+			expect(mocks.outboundLimits).not.toHaveBeenCalled();
+			expect(mocks.connectionsPlanMedia).not.toHaveBeenCalled();
+			expect(mocks.connectionsSendMedia).not.toHaveBeenCalled();
+		} finally {
+			await worker.close();
 		}
 	},
 );

@@ -253,8 +253,8 @@ export const workloadInput = {
 // 启用 WeCom 时还须导出 wecom：可信发送者身份、发送端、观察端、
 // connections 的绑定与回复路由保护，以及 setup 的 Worker-only 解密和
 // 当前目录查询。setup 同时验证机器人和自建应用候选；应用回调的 API 接入
-// 仍须独立配置。长连接入站媒体另由 wecom.media 提供与 Platform API 文件面
-// 同一 bucket 的对象存储 Adapter（见 WECOM-text-deployment.md「媒体」）。
+// 仍须独立配置。长连接入站与出站媒体另由 wecom.media 提供与 Platform API 文件面
+// 同一 bucket 的对象存储 Adapter；出站还需要它的 download（见 WECOM-text-deployment.md「媒体」）。
 ```
 
 - `directory.resolveUser(userId)` 必须查询部署的当前身份事实；依赖失败应抛错，不能返回一个

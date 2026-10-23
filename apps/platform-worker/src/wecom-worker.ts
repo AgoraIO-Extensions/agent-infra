@@ -12,13 +12,15 @@ import {
 	type WecomSendPortV1,
 } from "@agent-infra/platform-core";
 import { PostgresWecomChannelV1 } from "@agent-infra/platform-store";
+import { parseWecomAnswerReferencesV1 } from "@agent-infra/wecom/worker";
 import {
 	createPlatformWecomConnectionsV1,
 	type WecomConnectionsDeploymentV1,
 } from "./wecom-connections.js";
 import {
-	createWecomInboundMediaResolverV1,
+	createWecomMediaV1,
 	type WecomInboundMediaDeploymentV1,
+	WecomOutboundMediaBusyError,
 } from "./wecom-media.js";
 import {
 	createWecomSetupWorkerV1,
@@ -60,7 +62,7 @@ export function createPlatformWecomWorkerV1(
 		connectionAuthorization: options.connectionAuthorization,
 	});
 	const media = options.media
-		? createWecomInboundMediaResolverV1({
+		? createWecomMediaV1({
 				...options.media,
 				databaseUrl: options.databaseUrl,
 				authorization,
@@ -69,7 +71,7 @@ export function createPlatformWecomWorkerV1(
 	const channel = createWecomChannelV1({
 		authorization,
 		store,
-		...(media ? { media } : {}),
+		...(media ? { media: media.inbound } : {}),
 	});
 	const setup =
 		options.setup && options.connections
@@ -100,9 +102,19 @@ export function createPlatformWecomWorkerV1(
 				receive: channel.receive,
 			})
 		: undefined;
+	const outbound = media?.outbound;
+	/** 只有长连接回复路由支持媒体；其他回复方式与未装配出站文件面时按不支持处理（#3229）。 */
+	const websocketRoute = async (replyHandle: string) => {
+		if (!connections || !options.connections) return false;
+		const route = await options.connections
+			.revealReply(replyHandle)
+			.catch(() => null);
+		return Boolean(route?.websocket);
+	};
 	const delivery = createWecomDeliveryV1({
 		store,
 		authorization,
+		answerReferences: parseWecomAnswerReferencesV1,
 		sender: {
 			async send(input) {
 				if (connections && options.connections) {
@@ -113,6 +125,63 @@ export function createPlatformWecomWorkerV1(
 					if (route.websocket) return connections.sender.send(input);
 				}
 				return options.sender.send(input);
+			},
+			async planMedia(input) {
+				if (
+					!outbound ||
+					!connections ||
+					!(await websocketRoute(input.replyHandle))
+				)
+					return null;
+				// 没有声明 FileLimits 时按工程 Spec §15.4.1 不发送媒体；类型与大小按当前声明核对。
+				const limits = await outbound.limits(input.scope);
+				if (!limits) return null;
+				const checked = input.files.map((file) =>
+					!limits.mediaTypes.includes(file.mediaType)
+						? ("unsupported_type" as const)
+						: file.sizeBytes > limits.maxBytes
+							? ("exceeds_limit" as const)
+							: ("send" as const),
+				);
+				const eligible = input.files.filter(
+					(_, index) => checked[index] === "send",
+				);
+				const reserved = eligible.length
+					? await connections.sender.planMedia({ ...input, files: eligible })
+					: [];
+				if (reserved === null) return null;
+				let next = 0;
+				return checked.map((plan) =>
+					plan === "send" ? (reserved[next++] ?? "rate_limited") : plan,
+				);
+			},
+			async sendMedia(input) {
+				if (
+					!outbound ||
+					!connections ||
+					!(await websocketRoute(input.replyHandle))
+				)
+					return "failed";
+				try {
+					return await outbound.withSlot(() =>
+						connections.sender.sendMedia({
+							...input,
+							read: (signal) =>
+								outbound.read({
+									scope: input.scope,
+									source: input.source,
+									file: input.file,
+									revalidate: input.revalidate,
+									signal,
+								}),
+						}),
+					);
+				} catch (error) {
+					// 等待发送槽位超时时还没有外部效果；其他异常无法确认是否已回复。
+					return error instanceof WecomOutboundMediaBusyError
+						? "failed"
+						: "unknown";
+				}
 			},
 		},
 	});

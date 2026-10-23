@@ -460,6 +460,7 @@ describe("WeCom sender-to-Connection authorization fact", () => {
 			const delivery = createWecomDeliveryV1({
 				store: restarted.store,
 				authorization: restarted.authorization,
+				answerReferences: () => [],
 				sender: {
 					async send(input) {
 						sends += 1;
@@ -503,6 +504,7 @@ describe("WeCom sender-to-Connection authorization fact", () => {
 			const delivery = createWecomDeliveryV1({
 				store: useCase.store,
 				authorization: useCase.authorization,
+				answerReferences: () => [],
 				sender: {
 					async send() {
 						sends += 1;
@@ -552,6 +554,7 @@ describe("WeCom sender-to-Connection authorization fact", () => {
 			const delivery = createWecomDeliveryV1({
 				store: useCase.store,
 				authorization: useCase.authorization,
+				answerReferences: () => [],
 				sender: {
 					async send() {
 						sends += 1;

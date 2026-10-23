@@ -120,6 +120,88 @@ function parseContent(
 			return { content: object(body.text).content };
 	}
 }
+/** #3229：企微官方频率限制（WECOM-text-deployment.md「媒体」）。 */
+const ratePerMinute = 30;
+const ratePerHour = 1000;
+/** 滑动窗口计数：返回一分钟与一小时内都还剩下的额度。 */
+function createRateWindow() {
+	const stamps: number[] = [];
+	const prune = (instant: number) => {
+		while (stamps.length && (stamps[0] ?? 0) <= instant - 3_600_000)
+			stamps.shift();
+	};
+	return {
+		available(instant: number) {
+			prune(instant);
+			const minute = stamps.filter((stamp) => stamp > instant - 60_000).length;
+			return Math.max(
+				0,
+				Math.min(ratePerMinute - minute, ratePerHour - stamps.length),
+			);
+		},
+		take(instant: number) {
+			stamps.push(instant);
+		},
+		/** 归还一次没有用上的占用。 */
+		release(instant: number) {
+			const index = stamps.lastIndexOf(instant);
+			if (index >= 0) stamps.splice(index, 1);
+		},
+		idle(instant: number) {
+			prune(instant);
+			return stamps.length === 0;
+		},
+	};
+}
+/** #3229：单个媒体的读取时限；上传由 SDK 按每帧 ACK 时限与有限重试结束，不提前放弃。 */
+const mediaReadTimeoutMs = 60_000;
+const mediaMaximumBytes = 20 * 1024 * 1024;
+/**
+ * 长连接发送一个结果文件的输入。`read` 由 Worker 提供，读取已确认结果文件的固定版本字节，
+ * 只在路由与授权核对之后调用；字节不进入日志、错误或返回值。
+ */
+export type WecomWebSocketMediaInputV1 = Parameters<
+	NonNullable<WecomSendPortV1["sendMedia"]>
+>[0] & {
+	readonly read: (signal: AbortSignal) => Promise<Uint8Array>;
+};
+/** 长连接回复端口：文本 stream 与 #3229 的媒体被动回复。 */
+export interface WecomWebSocketSenderV1 {
+	send: WecomSendPortV1["send"];
+	planMedia: NonNullable<WecomSendPortV1["planMedia"]>;
+	sendMedia(
+		input: WecomWebSocketMediaInputV1,
+	): Promise<"sent" | "failed" | "unknown">;
+}
+function providerRejected(error: unknown) {
+	return (
+		!!error &&
+		typeof error === "object" &&
+		"errcode" in error &&
+		typeof error.errcode === "number" &&
+		error.errcode !== 0
+	);
+}
+async function withinDeadline<T>(
+	work: Promise<T>,
+	signal: AbortSignal,
+): Promise<T> {
+	let abort: (() => void) | undefined;
+	try {
+		return await Promise.race([
+			work,
+			new Promise<never>((_, reject) => {
+				abort = () => reject(new Error("WeCom media deadline"));
+				if (signal.aborted) abort();
+				else signal.addEventListener("abort", abort, { once: true });
+			}),
+		]);
+	} finally {
+		if (abort) signal.removeEventListener("abort", abort);
+		// 超时后仍在进行的工作只会被丢弃，不能产生未处理的拒绝。
+		work.catch(() => {});
+	}
+}
 /** Transport only. The caller owns durable connection fencing and the shared Core ingress. */
 export function createWecomWebSocketV1(options: {
 	readonly configuration: WecomWebSocketConfigurationV1;
@@ -183,6 +265,41 @@ export function createWecomWebSocketV1(options: {
 	}, 500);
 	ownershipTimer.unref();
 	const sending = new Set<string>();
+	// #3229：企微频率限制。本连接持有者内存中按滑动窗口计数：每个会话的回复合计 30 条/分钟、
+	// 1000 条/小时，每个机器人上传 30 次/分钟、1000 次/小时。规划媒体时占用额度。
+	const uploads = createRateWindow();
+	const conversations = new Map<string, ReturnType<typeof createRateWindow>>();
+	function conversationWindow(scope: WecomScopeV1) {
+		const key = JSON.stringify([scope.conversationType, scope.peerId]);
+		const instant = now().getTime();
+		for (const [other, window] of conversations)
+			if (window.idle(instant)) conversations.delete(other);
+		let window = conversations.get(key);
+		if (!window) {
+			window = createRateWindow();
+			conversations.set(key, window);
+		}
+		return window;
+	}
+	// 规划时为每个请求占用的额度；同一回复重新规划或文本没有受理时归还，避免重复扣除。
+	const reservations = new Map<
+		string,
+		{
+			readonly instant: number;
+			readonly count: number;
+			readonly scope: WecomScopeV1;
+		}
+	>();
+	function releaseReservation(requestId: string) {
+		const reserved = reservations.get(requestId);
+		if (!reserved) return;
+		reservations.delete(requestId);
+		const conversation = conversationWindow(reserved.scope);
+		for (let index = 0; index < reserved.count; index++) {
+			uploads.release(reserved.instant);
+			conversation.release(reserved.instant);
+		}
+	}
 	// #3077：处理中提示仍在等待 ACK 的请求。最终回复先等它结束（SDK 回复队列长度为 1），
 	// 已开始最终回复的请求不再发处理中提示，避免它落在已结束的 stream 之后。只保留最近的请求。
 	const acknowledging = new Map<string, Promise<unknown>>();
@@ -210,10 +327,10 @@ export function createWecomWebSocketV1(options: {
 			clearTimeout(timer);
 		}
 	}
-	/** 揭开回复路由并核对它仍属于当前连接、绑定和会话，且未过期。 */
+	/** 揭开回复路由并核对它仍属于当前连接、绑定和会话，且未过期；有正文时同时核对正文。 */
 	async function currentRoute(
 		input: { readonly scope: WecomScopeV1; readonly replyHandle: string },
-		content: string,
+		content?: string,
 	) {
 		const route = await options.revealReply(input.replyHandle);
 		const ws = route.websocket;
@@ -231,7 +348,7 @@ export function createWecomWebSocketV1(options: {
 			scopeKey(route.scope) !== scopeKey(input.scope) ||
 			!Number.isFinite(Date.parse(route.expiresAt)) ||
 			Date.parse(route.expiresAt) <= now().getTime() ||
-			!text(content, 20480)
+			(content !== undefined && !text(content, 20480))
 		)
 			return null;
 		return { route, ws };
@@ -429,18 +546,132 @@ export function createWecomWebSocketV1(options: {
 	client.on("message.text", receiveMessageFrame);
 	for (const kind of ["image", "file", "voice", "video", "mixed"] as const)
 		client.on(`message.${kind}`, receiveMessageFrame);
-	const sender: WecomSendPortV1 = {
+	async function sendText(
+		input: Parameters<WecomSendPortV1["send"]>[0],
+		resolvedRequest: (requestId: string) => void,
+	): Promise<"sent" | "failed" | "unknown"> {
+		// #2982：stream 回复按企微思考过程样式渲染 `<think>`；带思考的文本不合规时退回只发答案，
+		// 思考过程不会让答案发送失败。
+		const content =
+			input.textWithThinking && text(input.textWithThinking, 20480)
+				? input.textWithThinking
+				: input.text;
+		let route: WecomReplyRouteV1;
+		let ws: NonNullable<WecomReplyRouteV1["websocket"]>;
+		try {
+			const resolved = await currentRoute(input, content);
+			if (resolved) resolvedRequest(resolved.ws.requestId);
+			if (!resolved || sending.has(resolved.ws.requestId) || !(await current()))
+				return "failed";
+			({ route, ws } = resolved);
+		} catch {
+			return "failed";
+		}
+		if (!authenticated || ws.connectionId !== connectionId || closed)
+			return "failed";
+		sending.add(ws.requestId);
+		markReplied(ws.requestId);
+		try {
+			// 标记之后不会再开始新的处理中提示；已经在途的先等它结束。
+			await settleAcknowledgement(ws.requestId);
+			let authorized = false;
+			try {
+				authorized =
+					(!input.revalidate || (await input.revalidate())) &&
+					(await current()) &&
+					authenticated &&
+					!closed &&
+					ws.connectionId === connectionId &&
+					Date.parse(route.expiresAt) > now().getTime();
+			} catch {
+				return "failed";
+			}
+			if (!authorized) return "failed";
+			conversationWindow(route.scope).take(now().getTime());
+			const ack = await client.replyStream(
+				{ headers: { req_id: ws.requestId } },
+				ws.streamId,
+				content,
+				true,
+			);
+			return ack.errcode === 0 ? "sent" : "unknown";
+		} catch (error) {
+			return providerRejected(error) ? "failed" : "unknown";
+		} finally {
+			sending.delete(ws.requestId);
+		}
+	}
+	const sender: WecomWebSocketSenderV1 = {
 		async send(input) {
-			// #2982：stream 回复按企微思考过程样式渲染 `<think>`；带思考的文本不合规时退回只发答案，
-			// 思考过程不会让答案发送失败。
-			const content =
-				input.textWithThinking && text(input.textWithThinking, 20480)
-					? input.textWithThinking
-					: input.text;
+			let requestId: string | undefined;
+			const status = await sendText(input, (id) => {
+				requestId = id;
+			});
+			// 文本没有受理时不会发送媒体，归还规划时为它占用的媒体额度。
+			if (status !== "sent" && requestId) releaseReservation(requestId);
+			return status;
+		},
+		/**
+		 * #3229：发送文本前规划媒体。回复路由不属于当前连接时按不支持处理；按会话与机器人的剩余
+		 * 频率额度依次占用，文本本身占会话的一条。同一回复重新规划时先归还上一次的占用。
+		 */
+		async planMedia(input) {
+			try {
+				const resolved = await currentRoute(input);
+				if (!resolved || !(await current())) return null;
+				releaseReservation(resolved.ws.requestId);
+				const instant = now().getTime();
+				const conversation = conversationWindow(resolved.route.scope);
+				let room = Math.min(
+					uploads.available(instant),
+					conversation.available(instant) - 1,
+				);
+				let count = 0;
+				const plans = input.files.map(() => {
+					if (room <= 0) return "rate_limited" as const;
+					room--;
+					count++;
+					uploads.take(instant);
+					conversation.take(instant);
+					return "send" as const;
+				});
+				if (count) {
+					reservations.set(resolved.ws.requestId, {
+						instant,
+						count,
+						scope: resolved.route.scope,
+					});
+					// 只保留最近的占用记录；更早的回复已经结束或会随时间窗口自然过期。
+					if (reservations.size > 256) {
+						const oldest = reservations.keys().next().value;
+						if (oldest !== undefined) reservations.delete(oldest);
+					}
+				}
+				return plans;
+			} catch {
+				return null;
+			}
+		},
+		/**
+		 * #3229：文本 stream 结束后被动回复一个结果文件：核对路由与当前授权，读取固定版本，分片上传
+		 * 临时素材，再次核对后 `replyMedia`。上传没有用户可见的效果，失败一律为 failed；回复被企微
+		 * 拒绝为 failed，ACK 丢失或断连为 unknown，不重发。`media_id` 与字节只在本次调用内使用。
+		 * 上传由 SDK 按每帧 ACK 时限与有限重试结束；这里等待它真正结束，调用方的并发上限才有效。
+		 */
+		async sendMedia(input) {
+			const file = input.file;
+			if (
+				!["image", "video", "file"].includes(file.kind) ||
+				!text(file.name, 1024) ||
+				!Number.isSafeInteger(file.sizeBytes) ||
+				file.sizeBytes < 5 ||
+				file.sizeBytes > mediaMaximumBytes
+			)
+				return "failed";
 			let route: WecomReplyRouteV1;
 			let ws: NonNullable<WecomReplyRouteV1["websocket"]>;
 			try {
-				const resolved = await currentRoute(input, content);
+				const resolved = await currentRoute(input);
 				if (
 					!resolved ||
 					sending.has(resolved.ws.requestId) ||
@@ -454,40 +685,51 @@ export function createWecomWebSocketV1(options: {
 			if (!authenticated || ws.connectionId !== connectionId || closed)
 				return "failed";
 			sending.add(ws.requestId);
-			markReplied(ws.requestId);
-			try {
-				// 标记之后不会再开始新的处理中提示；已经在途的先等它结束。
-				await settleAcknowledgement(ws.requestId);
-				let authorized = false;
+			reservations.delete(ws.requestId);
+			const usable = async () => {
 				try {
-					authorized =
-						(!input.revalidate || (await input.revalidate())) &&
+					return (
+						(await input.revalidate()) &&
 						(await current()) &&
 						authenticated &&
 						!closed &&
 						ws.connectionId === connectionId &&
-						Date.parse(route.expiresAt) > now().getTime();
+						Date.parse(route.expiresAt) > now().getTime()
+					);
+				} catch {
+					return false;
+				}
+			};
+			try {
+				if (!(await usable())) return "failed";
+				let mediaId: string;
+				try {
+					const deadline = AbortSignal.timeout(mediaReadTimeoutMs);
+					const read = await withinDeadline(input.read(deadline), deadline);
+					if (read.byteLength !== file.sizeBytes) return "failed";
+					// 读取可能耗时：上传前再核对一次授权、连接与回复有效期，撤权后文件不离开平台。
+					if (!(await usable())) return "failed";
+					const uploaded = await client.uploadMedia(
+						Buffer.from(read.buffer, read.byteOffset, read.byteLength),
+						{ type: file.kind, filename: file.name },
+					);
+					if (!text(uploaded?.media_id, 1024)) return "failed";
+					mediaId = uploaded.media_id;
 				} catch {
 					return "failed";
 				}
-				if (!authorized) return "failed";
-				const ack = await client.replyStream(
-					{ headers: { req_id: ws.requestId } },
-					ws.streamId,
-					content,
-					true,
-				);
-				return ack.errcode === 0 ? "sent" : "unknown";
-			} catch (error) {
-				if (
-					error &&
-					typeof error === "object" &&
-					"errcode" in error &&
-					typeof error.errcode === "number" &&
-					error.errcode !== 0
-				)
-					return "failed";
-				return "unknown";
+				// 上传可能耗时：被动回复前再核对一次授权、连接与回复有效期。
+				if (!(await usable())) return "failed";
+				try {
+					const ack = await client.replyMedia(
+						{ headers: { req_id: ws.requestId } },
+						file.kind,
+						mediaId,
+					);
+					return ack.errcode === 0 ? "sent" : "unknown";
+				} catch (error) {
+					return providerRejected(error) ? "failed" : "unknown";
+				}
 			} finally {
 				sending.delete(ws.requestId);
 			}

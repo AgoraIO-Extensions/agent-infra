@@ -123,6 +123,51 @@ it.each(["image", "file", "voice", "video"] as const)(
 		).not.toHaveProperty("download");
 	},
 );
+it("maps a bot mixed callback with images to unsupported media and plain mixed text to a message (#3229)", async () => {
+	const adapter = createWecomAdapterV1({
+		now: () => now,
+		protectReply: async () => "protected-handle",
+	});
+	const mixed = await adapter.receive(
+		config,
+		request({
+			...message,
+			msgtype: "mixed",
+			mixed: {
+				msg_item: [
+					{ msgtype: "text", text: { content: "看图" } },
+					{
+						msgtype: "image",
+						image: { url: "https://provider.test/media/i?SENTINEL-URL" },
+					},
+				],
+			},
+		}),
+	);
+	expect(mixed).toMatchObject({
+		type: "message",
+		message: { text: "看图", media: [{ kind: "image", name: null }] },
+	});
+	expect(JSON.stringify(mixed)).not.toContain("SENTINEL-URL");
+	const textOnly = await adapter.receive(
+		config,
+		request({
+			...message,
+			msgid: "message-2",
+			msgtype: "mixed",
+			mixed: {
+				msg_item: [{ msgtype: "text", text: { content: "只有文字" } }],
+			},
+		}),
+	);
+	expect(textOnly).toMatchObject({
+		type: "message",
+		message: { text: "只有文字" },
+	});
+	expect(
+		textOnly.type === "message" ? textOnly.message : undefined,
+	).not.toHaveProperty("media");
+});
 
 it.each([
 	["wrong robot", { ...message, aibotid: "bot-other" }],

@@ -6,6 +6,7 @@ import {
 import {
 	createFileAuthorityV1,
 	createFileLimitDeclarationReaderV1,
+	FileAuthorityError,
 	type FileAuthorizationPortV1,
 	type FileLimitsV1,
 	type FileStoreV1,
@@ -15,6 +16,9 @@ import {
 	type WecomMediaReferenceV1,
 	type WecomMediaResolutionV1,
 	type WecomMediaResolverV1,
+	type WecomOutboundMediaV1,
+	type WecomScopeV1,
+	wecomChannelIdV1,
 } from "@agent-infra/platform-core";
 import {
 	PostgresFileLimitDeclarationStoreV1,
@@ -27,7 +31,12 @@ import { downloadWecomMediaV1 } from "@agent-infra/wecom/worker";
  * 文件面使用同一部署装配的 Adapter；没有这一项时 Worker 不装配 resolver，入站媒体回复不支持。
  */
 export interface WecomInboundMediaDeploymentV1 {
-	readonly storage: Pick<ObjectStorageDataV1, "upload" | "inspect">;
+	/**
+	 * 与 Platform API 文件面同一 bucket 与前缀的对象存储 Adapter。入站写入需要 `upload` 与 `inspect`；
+	 * 同时提供 `download` 时装配长连接出站媒体（#3229），按文件记录的固定版本读取结果文件。
+	 */
+	readonly storage: Pick<ObjectStorageDataV1, "upload" | "inspect"> &
+		Partial<Pick<ObjectStorageDataV1, "download">>;
 	/** 上传意图有效期，默认 15 分钟。 */
 	readonly intentTtlMs?: number;
 	/** Worker 内部写入权限有效期，默认 5 分钟。 */
@@ -140,6 +149,220 @@ function rejected(
 }
 
 /**
+ * 该企微 Channel 当前的 FileLimits 三方交集（工程 Spec §15.4.1）。读取器返回当前配置修订；
+ * Agent 不存在时没有修订，按未声明处理，返回 null。
+ */
+export function createWecomChannelFileLimitsReaderV1(
+	store: PostgresFileLimitDeclarationStoreV1,
+	now: () => Date = () => new Date(),
+) {
+	const read = createFileLimitDeclarationReaderV1({ store });
+	return async (scope: {
+		readonly agentId: string;
+		readonly channelId: string;
+	}): Promise<FileLimitsV1 | null> => {
+		const current = await read({
+			...scope,
+			configurationRevision: 0,
+			kind: "attachment",
+		});
+		return current.configurationRevision >= 1
+			? resolveFileLimitsV1(current.declarations, now())
+			: null;
+	};
+}
+
+/** #3229：Worker 读取并发送已确认结果文件的进程内文件客户端。 */
+export interface WecomOutboundMediaFilesV1 {
+	/** 该企微 Channel 当前的 FileLimits；没有声明时为 null，按 §15.4.1 不发送媒体。 */
+	limits(scope: WecomScopeV1): Promise<FileLimitsV1 | null>;
+	/**
+	 * 读取结果文件的固定版本：经 File Authority 按当前授权读取文件记录，核对它仍是该执行已确认的
+	 * 结果文件（available、对象版本与 etag、名称、类型、大小与工作区引用一致），再按对象版本与
+	 * etag 有界下载，并核对实际大小与 SHA-256。不签发 File Grant。
+	 */
+	read(input: {
+		readonly scope: WecomScopeV1;
+		readonly source: {
+			readonly actorId: string;
+			readonly conversationId: string;
+			readonly executionId: string;
+		};
+		readonly file: WecomOutboundMediaV1;
+		readonly revalidate: () => Promise<boolean>;
+		readonly signal: AbortSignal;
+	}): Promise<Uint8Array>;
+	/** 在进程级并发上限内运行一次媒体发送，限制内存中同时存在的文件字节。 */
+	withSlot<T>(work: () => Promise<T>): Promise<T>;
+}
+/** 等待发送槽位超时：此时还没有任何外部效果。 */
+export class WecomOutboundMediaBusyError extends Error {
+	constructor() {
+		super("WeCom outbound media is busy");
+	}
+}
+
+export function createWecomOutboundMediaFilesV1(options: {
+	readonly storage: Pick<ObjectStorageDataV1, "download" | "inspect">;
+	readonly files: FileStoreV1;
+	readonly readLimits: (scope: {
+		readonly agentId: string;
+		readonly channelId: string;
+	}) => Promise<FileLimitsV1 | null>;
+	/** 整个 Worker 进程同时发送的媒体数，默认 2。 */
+	readonly maxConcurrentSends?: number;
+	readonly now?: () => Date;
+}): WecomOutboundMediaFilesV1 {
+	if (
+		typeof options.storage?.download !== "function" ||
+		typeof options.storage.inspect !== "function"
+	)
+		throw new Error("WeCom outbound media configuration is invalid");
+	const now = options.now ?? (() => new Date());
+	const slots = createSlots(bounded(options.maxConcurrentSends, 2, 1, 8));
+	const files = createFileAuthorityV1({
+		store: options.files,
+		storage: options.storage,
+		intentTtlMs: 60_000,
+		accessTtlMs: 300_000,
+		// 只读取已确认的文件记录，不签发 File Grant，也不写入访问记录。
+		issuer: "platform-worker",
+		keyVersion: "wecom-outbound-media",
+		now,
+	});
+	return {
+		limits: (scope) =>
+			options.readLimits({
+				agentId: scope.agentId,
+				channelId: wecomChannelIdV1(scope),
+			}),
+		async read({ scope, source, file, revalidate, signal }) {
+			const owner = {
+				actorId: source.actorId,
+				agentId: scope.agentId,
+				channelId: wecomChannelIdV1(scope),
+				conversationId: source.conversationId,
+			};
+			const port: FileAuthorizationPortV1 = {
+				async authorize(requested, operation) {
+					if (requested !== owner.conversationId || operation !== "read")
+						return null;
+					return (await revalidate())
+						? { ...owner, execution: null, limits: null }
+						: null;
+				},
+			};
+			const record = await files.getFile(
+				{ conversationId: owner.conversationId, fileId: file.fileId },
+				port,
+			);
+			if (
+				record.kind !== "result" ||
+				record.status !== "available" ||
+				record.executionId !== source.executionId ||
+				!record.objectVersion ||
+				!record.etag ||
+				record.descriptor.name !== file.name ||
+				record.descriptor.mediaType !== file.mediaType ||
+				record.descriptor.sizeBytes !== file.sizeBytes ||
+				(record.workspaceReference ?? null) !== file.workspaceReference
+			)
+				throw new FileAuthorityError("denied");
+			const body = await options.storage.download({
+				objectRef: record.objectRef,
+				version: record.objectVersion,
+				etag: record.etag,
+				expiresAt: new Date(now().getTime() + 300_000).toISOString(),
+				signal,
+			});
+			const reader = body.getReader();
+			const hash = createHash("sha256");
+			const chunks: Uint8Array[] = [];
+			let size = 0;
+			try {
+				for (;;) {
+					const part = await reader.read();
+					if (part.done) break;
+					size += part.value.byteLength;
+					if (size > record.descriptor.sizeBytes)
+						throw new FileAuthorityError("conflict");
+					hash.update(part.value);
+					chunks.push(part.value);
+				}
+			} finally {
+				await reader.cancel().catch(() => {});
+			}
+			if (
+				size !== record.descriptor.sizeBytes ||
+				hash.digest("hex") !== record.descriptor.sha256
+			)
+				throw new FileAuthorityError("conflict");
+			return Buffer.concat(chunks, size);
+		},
+		async withSlot(work) {
+			const queue = AbortSignal.timeout(60_000);
+			let acquired = false;
+			try {
+				return await slots(queue, () => {
+					acquired = true;
+					return work();
+				});
+			} catch (error) {
+				if (!acquired) throw new WecomOutboundMediaBusyError();
+				throw error;
+			}
+		},
+	};
+}
+
+/**
+ * #3229：装配企微媒体的文件面：入站 resolver 与（对象存储提供 `download` 时的）出站文件客户端
+ * 共用同一组文件记录与 FileLimits 连接池。
+ */
+export function createWecomMediaV1(
+	options: WecomInboundMediaDeploymentV1 & {
+		readonly databaseUrl: string;
+		readonly authorization: WecomAuthorizationPortV1;
+	},
+) {
+	const files = new PostgresFileStoreV1(options.databaseUrl);
+	const declarations = new PostgresFileLimitDeclarationStoreV1(
+		options.databaseUrl,
+	);
+	const readLimits = createWecomChannelFileLimitsReaderV1(declarations);
+	const inbound = createWecomInboundMediaResolverV1({
+		...options,
+		files,
+		readLimits,
+	});
+	const storage = options.storage;
+	const outbound =
+		typeof storage.download === "function"
+			? createWecomOutboundMediaFilesV1({
+					storage: {
+						download: storage.download.bind(storage),
+						inspect: storage.inspect.bind(storage),
+					},
+					files,
+					readLimits,
+				})
+			: undefined;
+	return {
+		inbound,
+		outbound,
+		async close() {
+			const results = await Promise.allSettled([
+				inbound.close(),
+				files.close(),
+				declarations.close(),
+			]);
+			const failure = results.find((result) => result.status === "rejected");
+			if (failure?.status === "rejected") throw failure.reason;
+		},
+	};
+}
+
+/**
  * 生产 resolver：在受理事务之外有界下载并解密，按实际字节识别类型，校验该企微 Channel 的
  * FileLimits 交集，经 File Authority 写入绑定发送者、Agent、Channel 与 Conversation 的 attachment。
  *
@@ -196,23 +419,14 @@ export function createWecomInboundMediaResolverV1(
 		? undefined
 		: new PostgresFileLimitDeclarationStoreV1(options.databaseUrl);
 	const readDeclarations = declarations
-		? createFileLimitDeclarationReaderV1({ store: declarations })
+		? createWecomChannelFileLimitsReaderV1(declarations, now)
 		: undefined;
 	async function currentLimits(scope: {
 		readonly agentId: string;
 		readonly channelId: string;
 	}): Promise<FileLimitsV1 | null> {
 		if (options.readLimits) return options.readLimits(scope);
-		if (!readDeclarations) return null;
-		// 读取器返回当前配置修订；Agent 不存在时没有修订，按未声明处理。
-		const current = await readDeclarations({
-			...scope,
-			configurationRevision: 0,
-			kind: "attachment",
-		});
-		return current.configurationRevision >= 1
-			? resolveFileLimitsV1(current.declarations, now())
-			: null;
+		return readDeclarations ? readDeclarations(scope) : null;
 	}
 	const files = createFileAuthorityV1({
 		store: fileStore,

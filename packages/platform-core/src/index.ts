@@ -194,6 +194,15 @@ export * from "./task-authorization.js";
 export * from "./task-runtime-authorization.js";
 export * from "./trace-context.js";
 export * from "./wecom-channel.js";
+export type {
+	WecomAnswerReferenceParserV1,
+	WecomAnswerReferenceV1,
+	WecomMediaProgressStatusV1,
+	WecomOutboundMediaKindV1,
+	WecomOutboundMediaPlanV1,
+	WecomOutboundMediaSkipReasonV1,
+	WecomOutboundMediaV1,
+} from "./wecom-reply-media.js";
 export * from "./wecom-setup.js";
 export * from "./wecom-setup-activation.js";
 export * from "./workload-reconciliation.js";

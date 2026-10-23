@@ -158,6 +158,7 @@ beforeAll(async () => {
 		{ idx: 60, tag: "0060_file_limit_declarations" },
 		{ idx: 61, tag: "0061_wecom_conversation_rotation" },
 		{ idx: 62, tag: "0062_wecom_inbound_media" },
+		{ idx: 63, tag: "0063_wecom_outbound_media" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
