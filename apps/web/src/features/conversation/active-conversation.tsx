@@ -946,6 +946,7 @@ export function ActiveConversation({
 							onSelect={(selected) => void files.addFiles(selected)}
 							onRemove={files.remove}
 							onRetry={files.retry}
+							fallbackFocus={composer}
 						/>
 					</ConversationFilesBar>
 				)}

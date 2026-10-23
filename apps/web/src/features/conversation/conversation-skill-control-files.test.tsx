@@ -126,6 +126,12 @@ describe("SkillControlFilePicker (#3259)", () => {
 			{ limits: undefined, limitsError: true },
 			"文件限制暂不可用，上传入口已关闭。",
 		],
+		[
+			// #3267 N8-1-03：会话限制不接受 text/plain 时同样不能上传，不显示入口与限制。
+			"the session limits do not accept text/plain",
+			{ limits: { ...limits, mediaTypes: ["application/pdf", "image/png"] } },
+			"当前会话不接受 text/plain 文件，只能提交任务说明。",
+		],
 	] as const) {
 		it(`keeps a single static line when ${name}`, () => {
 			const { container } = renderPicker(props);
@@ -182,6 +188,27 @@ describe("SkillControlFilePicker (#3259)", () => {
 			"重试：notes.txt（第 2 次）",
 			"移除控制文件 notes.txt（第 2 次）",
 		]);
+	});
+
+	it("keeps the non-UTF-8 reason and offers no retry for a deterministic failure (#3267 N8-1-04)", () => {
+		renderPicker({
+			entries: [
+				{
+					...entry("1", "latin1.txt", "failed"),
+					error: "文件内容不是有效的 UTF-8 文本，与文件类型不符。",
+					retryable: false,
+				},
+			],
+		});
+		expect(screen.getByRole("alert").textContent).toBe(
+			"文件内容不是有效的 UTF-8 文本，与文件类型不符。",
+		);
+		expect(
+			screen.queryByRole("button", { name: "重试：latin1.txt" }),
+		).toBeNull();
+		expect(
+			screen.getByRole("button", { name: "移除控制文件 latin1.txt" }),
+		).toBeTruthy();
 	});
 
 	it("announces upload status changes and removals only once they happen", () => {

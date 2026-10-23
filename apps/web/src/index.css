@@ -1766,6 +1766,99 @@
 		margin: 8px 8px 0;
 	}
 }
+/* 会话文件附件区（#3267）：导出稿只画了收起摘要与两行 `.chat-file-row` 示例，其余状态见 web-ui.md
+   「对话会话文件附件」。说明、文件名与行内状态的字号和颜色与 Skill 控制文件同一套规则：
+   单行说明 12px、限制说明与行内状态 11px `--muted-ink`、失败原因 11px `--danger-ink`。 */
+.conversation-files {
+	font-size: 12px;
+	line-height: 1.5;
+}
+.conversation-files-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px;
+}
+.conversation-files-head small,
+.conversation-files-notice {
+	display: block;
+	min-width: 0;
+	color: var(--muted-ink);
+	font-size: 11px;
+	overflow-wrap: anywhere;
+}
+.conversation-files-notice {
+	margin: 0;
+	font-size: 12px;
+}
+/* 设计 .chat-files-list / .chat-file-row：1px 边框、9px 圆角、8px 内边距、surface-raised 底的行卡。 */
+.conversation-file-list {
+	display: grid;
+	gap: 8px;
+	margin: 10px 0 0;
+	padding: 0;
+	list-style: none;
+}
+.conversation-file {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px;
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	background: var(--surface-raised);
+}
+.conversation-file > svg {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	color: var(--muted-foreground);
+}
+.upload-row-thumbnail {
+	flex: none;
+	width: 40px;
+	height: 40px;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	object-fit: cover;
+}
+/* 名称列占满操作之外的宽度，不被状态与按钮挤没；长名称按字符折行，整名可见。 */
+.conversation-file-copy {
+	flex: 1 1 0;
+	min-width: 0;
+}
+.conversation-file-name {
+	display: block;
+	font-size: 12px;
+	font-weight: 700;
+	overflow-wrap: anywhere;
+}
+.conversation-file-copy small {
+	display: block;
+	margin-top: 3px;
+	color: var(--muted-ink);
+	font-size: 11px;
+}
+.conversation-file .capability-inline-alert {
+	display: block;
+	margin-top: 3px;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	color: var(--danger-ink);
+	font-size: 11px;
+	line-height: 1.5;
+}
+.conversation-file [data-slot="button"] {
+	flex: none;
+}
+/* 设计 ≤767px `.chat-files .chat-file-row{align-items:flex-start}`：窄屏行卡顶对齐。 */
+@media (max-width: 767px) {
+	.conversation-file {
+		align-items: flex-start;
+	}
+}
 /* 设计 .cap-receipt：消息流内的调用回执。 */
 .capability-receipt {
 	max-width: 760px;

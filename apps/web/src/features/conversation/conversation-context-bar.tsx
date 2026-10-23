@@ -8,6 +8,10 @@ import {
 } from "../../components/ui/collapsible.js";
 import { connectionNeedsAuthDescription } from "../connection-copy.js";
 import type { ConversationUpload } from "./conversation-files.js";
+import {
+	uploadRowFailed,
+	uploadRowRetryable,
+} from "./conversation-upload-rows.js";
 
 /**
  * 设计 .chat-context / .chat-files（details + summary）：默认收起的 44px 摘要行，
@@ -103,19 +107,28 @@ export function ConversationFilesBar({
 	children: ReactNode;
 }) {
 	const [open, setOpen] = useState(false);
-	const failed = uploads.filter(
-		(item) => item.status === "failed" || item.status === "expired",
+	// 只有可以原样重试的失败计入「待重试」；预检拒绝与内容不是 UTF-8 文本没有「重试」，
+	// 另计为「无法上传」，收起时摘要同样反映（#3267 N8-1-07）。
+	const retryable = uploads.filter(uploadRowRetryable).length;
+	const rejected = uploads.filter(
+		(item) => uploadRowFailed(item) && !uploadRowRetryable(item),
 	).length;
 	const summary = limitsError
 		? `${uploads.length} 个文件 · 上传暂不可用`
-		: `${uploads.length} 个文件 · ${failed} 个待重试`;
+		: `${uploads.length} 个文件 · ${retryable} 个待重试${rejected ? ` · ${rejected} 个无法上传` : ""}`;
 	return (
 		<ChatDisclosure
 			className="chat-files"
 			title="会话文件"
 			summary={summary}
 			compact={
-				limitsError ? "上传暂不可用" : failed ? `${failed} 个待重试` : undefined
+				limitsError
+					? "上传暂不可用"
+					: retryable
+						? `${retryable} 个待重试`
+						: rejected
+							? `${rejected} 个无法上传`
+							: undefined
 			}
 			open={open}
 			onOpenChange={setOpen}

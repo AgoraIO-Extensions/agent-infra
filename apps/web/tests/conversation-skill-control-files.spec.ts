@@ -26,7 +26,7 @@ const viewports = [
 const limitCopy =
 	"仅支持 text/plain 文本文件，最多 4 个，单个文件不超过 4096 字节。";
 
-type LimitsMode = "ready" | "pending" | "error";
+type LimitsMode = "ready" | "pending" | "error" | "no-text";
 
 /**
  * 选中 Skill「workspace-summary」的对话页（#3259）。上传链按文件名受控：`hold` 的内容写入
@@ -97,6 +97,19 @@ async function skillControlFileFixture(
 			if (limits === "pending") {
 				await limitsHeld;
 				return route.fulfill({ json: controlledFileLimits() }).catch(() => {});
+			}
+			if (limits === "no-text") {
+				// #3267 N8-1-03：会话限制不接受 text/plain。
+				const body = controlledFileLimits();
+				return route.fulfill({
+					json: {
+						...body,
+						declaration: {
+							...body.declaration,
+							mediaTypes: ["application/pdf"],
+						},
+					},
+				});
 			}
 			return limits === "ready"
 				? route.fulfill({ json: controlledFileLimits() })
@@ -322,6 +335,13 @@ const noticeStates = [
 		attachments: true,
 		limits: "error",
 		copy: "文件限制暂不可用，上传入口已关闭。",
+	},
+	{
+		// #3267 N8-1-03：限制不含 text/plain 并入不可上传状态，不再先给入口、选了文件才报错。
+		name: "the session limits do not accept text/plain",
+		attachments: true,
+		limits: "no-text",
+		copy: "当前会话不接受 text/plain 文件，只能提交任务说明。",
 	},
 ] as const;
 
@@ -550,6 +570,56 @@ for (const viewport of viewports) {
 				(request) => request.startsWith("POST") && request.endsWith("/files"),
 			),
 		).toHaveLength(5);
+		expect(fixture.unexpected).toEqual([]);
+	});
+}
+
+// #3267 N8-1-04：控制文件内容不是 UTF-8 文本时与会话附件同一文案；这是确定性失败，只能移除。
+for (const viewport of viewports) {
+	test(`keeps the UTF-8 reason without a retry for a non-text control file at ${viewport.width} by ${viewport.height} (#3267 N8-1-04)`, async ({
+		page,
+	}, info) => {
+		test.skip(info.project.name !== "desktop", "Viewport list runs once.");
+		await page.setViewportSize(viewport);
+		const errors = trackPageErrors(page);
+		const fixture = await skillControlFileFixture(page, {
+			attachments: true,
+			limits: "ready",
+		});
+		const { picker } = fixture;
+		const add = page.getByRole("button", { name: "添加文本文件" });
+		const chooser = page.waitForEvent("filechooser");
+		await add.click();
+		await (await chooser).setFiles([
+			{
+				name: "latin1.txt",
+				mimeType: "text/plain",
+				buffer: Buffer.from([0x63, 0x61, 0x66, 0xe9]),
+			},
+		]);
+		const row = picker.getByRole("listitem").filter({ hasText: "latin1.txt" });
+		await expect(row).toHaveAttribute("data-file-status", "failed");
+		await expect(row.getByRole("alert")).toHaveText(
+			"文件内容不是有效的 UTF-8 文本，与文件类型不符。",
+		);
+		await expect(row.getByRole("button", { name: /^重试/ })).toHaveCount(0);
+		const remove = page.getByRole("button", {
+			name: "移除控制文件 latin1.txt",
+		});
+		await expect(remove).toBeVisible();
+		expect(await duplicateControlNames(page)).toEqual([]);
+		await expectCleanPage(page, errors);
+		await remove.focus();
+		await page.keyboard.press("Enter");
+		await expect(picker.getByRole("listitem")).toHaveCount(0);
+		await expect(add).toBeFocused();
+		await expectNotBodyFocus(page);
+		// 内容在浏览器侧就被拒绝，没有创建上传。
+		expect(
+			fixture.requests.filter(
+				(request) => request.startsWith("POST") && request.endsWith("/files"),
+			),
+		).toEqual([]);
 		expect(fixture.unexpected).toEqual([]);
 	});
 }
