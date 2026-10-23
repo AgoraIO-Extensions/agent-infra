@@ -879,8 +879,11 @@ export function ActiveConversation({
 				{timeline.status === "loading" && !timeline.history && (
 					<LoadingLine>正在读取会话…</LoadingLine>
 				)}
+				{/* 说明行与输入框上方同级说明同为 text-sm（14px / 20px），不继承正文 15px（#3293 N9-1-01）。 */}
 				{timeline.status === "reconnecting" && (
-					<p role="status">会话连接中断，正在自动重新连接，草稿会保留。</p>
+					<p role="status" className="text-sm">
+						会话连接中断，正在自动重新连接，草稿会保留。
+					</p>
 				)}
 				{(timeline.status === "disconnected" ||
 					timeline.status === "unavailable") && (
@@ -1003,9 +1006,10 @@ export function ActiveConversation({
 						/>
 					</ConversationFilesBar>
 				)}
-				{/* 命令反馈区：composer 上方、任何折叠条之外，默认可见（NI-83）。 */}
+				{/* 命令反馈区：composer 上方、任何折叠条之外，默认可见（NI-83）。
+				    这里的说明行统一为 text-sm（14px / 20px，#3293 N9-1-01）。 */}
 				{uncertainExecution && !capabilityExecution && (
-					<p role="status">
+					<p role="status" className="text-sm">
 						原执行结果待核实，同会话暂不能发送下一条消息。
 						<Button
 							variant="ghost"
@@ -1020,7 +1024,7 @@ export function ActiveConversation({
 					</p>
 				)}
 				{preparing && (
-					<p role="status">
+					<p role="status" className="text-sm">
 						{firstSendPending
 							? updating
 								? "会话更新中，完成后自动发送这条消息。"
