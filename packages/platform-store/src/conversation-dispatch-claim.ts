@@ -428,6 +428,15 @@ export async function claimWork(
 		modelOptionId: execution.model_option_id,
 		reasoningLevel: execution.reasoning_level,
 		hostSessionRef: conversation.host_session_ref,
+		...(selectedOperation === "conversation.turn.stop.v1" &&
+		stop?.status === "submitted" &&
+		execution.runtime_submit_protocol === "v4" &&
+		execution.accepted_original_host_session_ref !== null
+			? {
+					acceptedOriginalHostSessionRef:
+						execution.accepted_original_host_session_ref,
+				}
+			: {}),
 		runtimeCursor: execution.last_runtime_cursor,
 		...(terminalEvent?.seen ? { runtimeTerminalEventSeen: true as const } : {}),
 		...(payload.metadataRecovery

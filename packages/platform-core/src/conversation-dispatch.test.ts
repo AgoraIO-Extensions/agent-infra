@@ -660,6 +660,116 @@ function dispatch(
 	return useCase.dispatch({ schemaVersion: 1, itemId, workerId: "worker-1" });
 }
 
+describe("accepted unknown stop boundaries (#3315)", () => {
+	const acceptedStop = () =>
+		claim({
+			operation: "conversation.turn.stop.v1",
+			messageId: null,
+			stopRequestId: "stop-original",
+			input: null,
+			executionStatus: "unknown",
+			stopPending: true,
+			stopConfirmationTimedOut: true,
+			hostSessionRef: "host-original",
+			acceptedOriginalHostSessionRef: "host-original",
+		});
+
+	it.each([
+		{ acceptedOriginalHostSessionRef: "" },
+		{ acceptedOriginalHostSessionRef: "foreign-host" },
+		{ acceptedOriginalHostSessionRef: null },
+		{ hostSessionRef: null },
+		{ executionDeliveryFence: 0 },
+		{ stopPending: false },
+	])("rejects a mismatched or unbound receipt %j", (override) => {
+		expect(() => parseClaim({ ...acceptedStop(), ...override })).toThrow();
+	});
+
+	it("never promotes a current Conversation Host into an acceptance receipt", () => {
+		const { acceptedOriginalHostSessionRef: _receipt, ...unproven } =
+			acceptedStop();
+		expect(parseClaim(unproven)).not.toHaveProperty(
+			"acceptedOriginalHostSessionRef",
+		);
+		expect(() =>
+			parseClaim({
+				...claim(),
+				acceptedOriginalHostSessionRef: "host-original",
+				hostSessionRef: "host-original",
+			}),
+		).toThrow();
+	});
+
+	it.each([
+		"unconfirmed",
+		"not_found",
+		"recovery_failed",
+		"busy",
+		"foreign-execution",
+		"foreign-host",
+	] as const)("does not send stop on %s evidence", async (mode) => {
+		const original = acceptedStop();
+		const { acceptedOriginalHostSessionRef: _receipt, ...unproven } = original;
+		const store = new MemoryDispatchStore(
+			mode === "unconfirmed" ? unproven : original,
+		);
+		const runtimeHost: ConversationRuntimeHostPortV1 =
+			new FakeConversationRuntimeHostV1();
+		runtimeHost.recoverOriginalStatus = async () => {
+			const base = {
+				schemaVersion: 2 as const,
+				executionId: original.executionId,
+				hostSessionRef: "host-original",
+			};
+			if (mode === "not_found") return { ...base, outcome: "not_found" };
+			if (mode === "recovery_failed")
+				return {
+					...base,
+					outcome: "recovery_failed",
+					code: "RUNTIME_SESSION_RECOVERY_FAILED",
+				};
+			return {
+				...base,
+				outcome: "found",
+				status: "unknown",
+				...(mode === "busy" ? { operationOutcome: "busy" as const } : {}),
+				...(mode === "foreign-execution"
+					? { executionId: "other-execution" }
+					: {}),
+				...(mode === "foreign-host" ? { hostSessionRef: "other-host" } : {}),
+			};
+		};
+		const sent = vi.spyOn(runtimeHost, "dispatch");
+		const f = setup({ store, runtimeHost });
+		await dispatch(f.useCase);
+		expect(sent).not.toHaveBeenCalled();
+		expect(store.current.executionStatus).toBe("unknown");
+		expect(store.outboxStatus).toBe("retry_scheduled");
+	});
+
+	it.each([
+		"actorId",
+		"agentId",
+		"conversationId",
+		"authorizationRevision",
+	] as const)(
+		"an acceptance receipt never overrides current %s authorization",
+		async (field) => {
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			const sent = vi.spyOn(runtimeHost, "dispatch");
+			const store = new MemoryDispatchStore(acceptedStop());
+			const f = setup({
+				store,
+				runtimeHost,
+				authorization: authorization({ [field]: "other" }),
+			});
+			await expect(dispatch(f.useCase)).rejects.toThrow();
+			expect(sent).not.toHaveBeenCalled();
+			expect(store.current.executionStatus).toBe("unknown");
+		},
+	);
+});
+
 function nativeParametersClaim(parameters: string, kind: "command" | "skill") {
 	return claim({
 		operation: "conversation.native-capability.invoke.v1",

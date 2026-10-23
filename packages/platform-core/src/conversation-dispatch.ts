@@ -1120,9 +1120,15 @@ export function createConversationDispatchUseCaseV1(
 				(claim.executionStatus === "unknown" ||
 					claim.executionStatus === "processing") &&
 				dependencies.runtimeHost.recoverOriginalStatus !== undefined;
+			const acceptedStop =
+				claim.operation === "conversation.turn.stop.v1" &&
+				claim.stopPending &&
+				claim.acceptedOriginalHostSessionRef !== undefined &&
+				claim.acceptedOriginalHostSessionRef === claim.hostSessionRef;
 			const recoveringStop =
 				claim.operation === "conversation.turn.stop.v1" &&
-				claim.stopConfirmationTimedOut === true &&
+				(claim.stopConfirmationTimedOut === true ||
+					(acceptedStop && claim.executionStatus === "unknown")) &&
 				claim.hostSessionRef !== null &&
 				dependencies.runtimeHost.recoverOriginalStatus !== undefined;
 			if (
@@ -1392,7 +1398,16 @@ export function createConversationDispatchUseCaseV1(
 					if (status.status === "unavailable") {
 						throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
 					}
-					if (recoveringStop && status.status === "unknown") {
+					// 接受回执允许控制原执行；unknown 和 stop ACK 均不是终态（#3315）。
+					const stopAcceptedUnknown =
+						acceptedStop &&
+						status.status === "unknown" &&
+						status.operationOutcome !== "busy";
+					if (
+						recoveringStop &&
+						status.status === "unknown" &&
+						!stopAcceptedUnknown
+					) {
 						if (!(await dispatchHeartbeat.stop()))
 							return { schemaVersion: 1, outcome: "stale" };
 						return retry(
@@ -1404,7 +1419,10 @@ export function createConversationDispatchUseCaseV1(
 							{},
 						);
 					}
-					if (recoveringStop && status.status === "running") {
+					if (
+						recoveringStop &&
+						(status.status === "running" || stopAcceptedUnknown)
+					) {
 						response = parseRuntimeResponse(
 							await dependencies.runtimeHost.dispatch(
 								runtimeRequest(claim, authority),

@@ -237,6 +237,7 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"relayKeyBinding",
 			"taskWaitOrder",
 			"stopConfirmationTimedOut",
+			"acceptedOriginalHostSessionRef",
 			"nativeCapability",
 			"traceParent",
 			"browserHandoff",
@@ -408,6 +409,18 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		};
 	}
 	const isStop = parsedOperation === "conversation.turn.stop.v1";
+	const acceptedOriginalHostSessionRef =
+		input.acceptedOriginalHostSessionRef === undefined
+			? undefined
+			: text(input.acceptedOriginalHostSessionRef);
+	if (
+		acceptedOriginalHostSessionRef !== undefined &&
+		(!isStop ||
+			input.stopPending !== true ||
+			acceptedOriginalHostSessionRef !== input.hostSessionRef ||
+			nonNegativeInteger(input.executionDeliveryFence) < 1)
+	)
+		return unavailable();
 	const isNativeCapability =
 		parsedOperation === "conversation.native-capability.invoke.v1";
 	const isBrowserHandoff =
@@ -484,6 +497,9 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		modelOptionId,
 		reasoningLevel,
 		hostSessionRef: nullableText(input.hostSessionRef),
+		...(acceptedOriginalHostSessionRef === undefined
+			? {}
+			: { acceptedOriginalHostSessionRef }),
 		runtimeCursor: nullableText(input.runtimeCursor),
 		...(input.attemptCount === undefined
 			? {}
