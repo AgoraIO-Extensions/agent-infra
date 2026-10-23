@@ -23,16 +23,21 @@ import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 // the Web preview/link/upload experience; Runtime and File Core evidence remains separate.
 const conversationId = "conversation-1";
 
-/** 受控会话：一条带 diff 结果文件的回答，以及读取、上传结果文件的受控 File Grant 链路。 */
-async function artifactFixture(page: Page) {
+/**
+ * 受控会话：一条带 diff 结果文件的回答，以及读取、上传结果文件的受控 File Grant 链路。
+ * sandboxCard 时结果文件带 workspaceReference，回答以 `sandbox:` 引用它，显示为回答内文件卡（#3228）。
+ */
+async function artifactFixture(page: Page, { sandboxCard = false } = {}) {
 	const resultEvent = PersistedConversationEventV2Schema.parse({
 		...event(2, conversationId),
 		type: "result.file",
+		...(sandboxCard ? { schemaVersion: 2 } : {}),
 		payload: {
 			fileId: "result-1",
 			name: "changes.diff",
 			mediaType: "text/x-diff",
 			sizeBytes: 42,
+			...(sandboxCard ? { workspaceReference: "out/changes.diff" } : {}),
 		},
 	});
 	const detail = ConversationDetailProjectionV2Schema.parse({
@@ -57,7 +62,9 @@ async function artifactFixture(page: Page) {
 			{
 				messageId: "answer-1",
 				role: "assistant",
-				text: "[文档](https://example.com/docs?tab=api#auth)",
+				text: sandboxCard
+					? "变更见[本次变更](sandbox:out/changes.diff)。"
+					: "[文档](https://example.com/docs?tab=api#auth)",
 				status: "completed",
 				executionId: "execution-1",
 				replyToMessageId: "question-1",
@@ -304,5 +311,57 @@ test("result file preview and download keep focus on the pending button (K7-02)"
 	access.release();
 	await expect(download).toHaveText("下载");
 	await expectFocusSettled(download, "下载完成");
+	await expectCleanPage(page, errors);
+});
+
+// #3242 K7-02：回答内文件卡（#3228）的「预览」「下载」与结果文件列表同样是可聚焦的禁用：「预览」打开预览
+// 弹窗，准备期间焦点在弹窗上，关闭后回到文件卡的「预览」；「下载」挂起期间多次采样焦点都在按钮上。
+test("answer file card preview and download keep focus off body (K7-02)", async ({
+	page,
+}, info: TestInfo) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	await artifactFixture(page, { sandboxCard: true });
+	const card = page.getByRole("group", { name: "结果文件：changes.diff" });
+	await expect(card).toBeVisible();
+	const preview = await pinElement(
+		card.getByRole("button", { name: "预览：changes.diff" }),
+		"card-preview",
+	);
+	let access = await holdRequests(page, "POST", /\/files\/result-1\/access$/);
+	await preview.focus();
+	await page.keyboard.press("Enter");
+	// 预览弹窗打开后背景 inert，可访问名称算不出来，直接比对 aria-label。
+	await expect(preview).toHaveAttribute("aria-label", "准备预览…：changes.diff");
+	await expect(preview).toHaveAttribute("aria-disabled", "true");
+	expect(
+		await preview.evaluate(
+			(element) => (element as HTMLButtonElement).disabled,
+		),
+	).toBe(false);
+	const dialog = page.getByRole("dialog");
+	await expectFocusHeld(dialog, [30, 150, 400, 1000], "文件卡 准备预览");
+	access.release();
+	await expect(dialog.getByText("+1 新增")).toBeVisible();
+	await page.keyboard.press("Escape");
+	await expect(dialog).toHaveCount(0);
+	await expectFocusSettled(preview, "文件卡 预览关闭");
+
+	const download = await pinElement(
+		card.getByRole("button", { name: "下载：changes.diff" }),
+		"card-download",
+	);
+	access = await holdRequests(page, "POST", /\/files\/result-1\/access$/);
+	await download.focus();
+	await page.keyboard.press("Enter");
+	await expect(download).toHaveAccessibleName("准备下载…：changes.diff");
+	await expectFocusableBusy(download, "文件卡 准备下载");
+	access.release();
+	await expect(download).toHaveAccessibleName("下载：changes.diff");
+	await expectFocusSettled(download, "文件卡 下载完成");
 	await expectCleanPage(page, errors);
 });
