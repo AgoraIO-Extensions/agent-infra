@@ -100,6 +100,15 @@ describe("Agent creation failure category (#3034)", () => {
 		},
 	);
 
+	// #3268 N8-2-08：PRD §6.3 保留「重试创建」，configuration_rejected 的说明只在调整配置或部署之前
+	// 判定重试不会成功（工程 Spec §10.5），不再无条件地说「重试创建不会成功」。
+	it("conditions the configuration_rejected retry warning on adjusting the configuration or deployment", () => {
+		const { description } = agentCreationFailureMessages.configuration_rejected;
+		expect(description).toContain("调整配置或部署之前重试创建不会成功");
+		expect(description).toContain("调整部署后再重试创建");
+		expect(description).not.toMatch(/[，。]重试创建不会成功/);
+	});
+
 	it("renders nothing while the category is unavailable", async () => {
 		const { server } = clientWith(undefined);
 		defaultClient.setConfig({

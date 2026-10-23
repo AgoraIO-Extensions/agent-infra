@@ -8,12 +8,16 @@ import type { AgentCreationFailureCategoryV1 } from "../../pilot/generated-v2/ty
 /**
  * 创建失败类别的说明（#3034）。类别由服务端按工程 Spec §10.5 推导，只说明 Owner 或系统管理员
  * 下一步能做什么，不展示原因码或部署细节。
+ *
+ * 「重试创建」对所有类别都保留（PRD §6.3：创建失败后保留再次重试入口）；configuration_rejected
+ * 只在调整配置或部署之前重试不会成功（工程 Spec §10.5），说明按这个条件写，不与旁边的「重试创建」
+ * 自相矛盾（#3268 N8-2-08）。
  */
 export const agentCreationFailureMessages = {
 	configuration_rejected: {
 		title: "配置与当前部署不兼容",
 		description:
-			"当前部署不支持这个 Agent 的来源或入口配置（例如未启用平台身份入口），重试创建不会成功。请按部署支持的配置重新申请，或联系系统管理员。",
+			"当前部署不支持这个 Agent 的来源或入口配置（例如未启用平台身份入口），调整配置或部署之前重试创建不会成功。请按部署支持的配置重新申请，或联系系统管理员调整部署后再重试创建。",
 	},
 	health_check_failed: {
 		title: "健康检查未通过",
