@@ -216,13 +216,13 @@ export function createChromiumBrowserContextManagerV1(
 				const installation = await verifyChromiumInstallationV1();
 				return chromium.launchPersistentContext(profileRoot, {
 					...launchOptions,
-					// Chrome for Testing still starts crashpad in the minimal Runtime image;
-					// without a writable crash database it exits with SIGTRAP before the
-					// Playwright context is created. Crash reports are not a product artifact.
-					args: [
-						...(launchOptions?.args ?? []),
-						"--disable-crashpad-for-testing",
-					],
+					// Crashpad needs writable configuration even with a read-only HOME.
+					// Disabling it breaks Network Service FD ownership on pinned Chromium.
+					env: {
+						...process.env,
+						...launchOptions?.env,
+						XDG_CONFIG_HOME: join(profileRoot, ".config"),
+					},
 					executablePath: installation.executable,
 					timeout: 15_000,
 				});

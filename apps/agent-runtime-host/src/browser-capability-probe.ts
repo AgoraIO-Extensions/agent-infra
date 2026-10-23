@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:http";
 import { join } from "node:path";
 import {
-	createChromiumBrowserSessionControllerV1,
+	createBrowserSessionControllerV1,
+	createChromiumBrowserContextManagerV1,
 	verifyChromiumInstallationV1,
 } from "@agent-infra/agent-runtime";
 import type {
@@ -28,22 +28,13 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 	if (!input.declaration.operations.includes("observe")) return undefined;
 	input.signal.throwIfAborted();
 	const installation = await verifyChromiumInstallationV1();
-	const root = await mkdtemp(join(input.dataDirectory, ".browser-probe-"));
-	const server = createServer((_request, response) => {
-		response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-		response.end(
-			"<html><body><main>agent-infra-browser-readiness</main></body></html>",
-		);
-	});
-	await new Promise<void>((resolve, reject) => {
-		server.once("error", reject);
-		server.listen(0, "127.0.0.1", () => resolve());
-	});
-	const address = server.address();
-	if (!address || typeof address === "string")
-		throw new Error("BROWSER_PROBE_SERVER_UNAVAILABLE");
-	const probeOrigin = `http://127.0.0.1:${address.port}/`;
-	const operations = ["observe"] as const;
+	const probeOrigin = "https://runtime-readiness.invalid/";
+	const operations = input.declaration.operations.filter(
+		(operation) =>
+			operation === "navigate" ||
+			operation === "observe" ||
+			operation === "interact",
+	);
 	const verifiedAt = new Date().toISOString();
 	const evidenceHash = createHash("sha256")
 		.update(
@@ -81,38 +72,77 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 		...capability,
 		policy: { ...capability.policy, allowedOrigins: [probeOrigin] },
 	};
-	const session = createChromiumBrowserSessionControllerV1({
-		sandboxRoot: root,
-		binding: {
-			agentId: input.binding.agentId,
-			conversationId: input.binding.sessionId,
-			sessionGeneration: input.binding.sessionGeneration,
-			resourceFence: input.binding.resourceFence,
-			workloadRevision: input.binding.workloadRevision,
-			imageDigest: input.binding.imageDigest,
-		},
+	const sessionBinding = {
+		agentId: input.binding.agentId,
+		conversationId: input.binding.sessionId,
+		sessionGeneration: input.binding.sessionGeneration,
+		resourceFence: input.binding.resourceFence,
+		workloadRevision: input.binding.workloadRevision,
+		imageDigest: input.binding.imageDigest,
+	};
+	const root = await mkdtemp(join(input.dataDirectory, ".browser-probe-"));
+	const manager = createChromiumBrowserContextManagerV1({ sandboxRoot: root });
+	const session = createBrowserSessionControllerV1({
+		manager,
+		binding: sessionBinding,
 		capability: probeCapability,
 	});
+	let closing: Promise<void> | undefined;
+	const close = () => {
+		closing ??= manager.close(sessionBinding);
+		return closing;
+	};
+	const onAbort = () => {
+		void close().catch(() => undefined);
+	};
+	input.signal.addEventListener("abort", onAbort, { once: true });
 	try {
-		let onAbort: (() => void) | undefined;
-		const aborted = new Promise<never>((_resolve, reject) => {
-			onAbort = () => {
-				void session.close().catch(() => undefined);
-				reject(new Error("RUNTIME_BROWSER_PROBE_INTERRUPTED"));
-			};
-			input.signal.addEventListener("abort", onAbort, { once: true });
-		});
-		const snapshot = await Promise.race([session.start(), aborted]).finally(
-			() => {
-				if (onAbort) input.signal.removeEventListener("abort", onAbort);
-			},
-		);
 		input.signal.throwIfAborted();
-		if (snapshot.status !== "ready") return undefined;
+		const context = await manager.acquire(sessionBinding, probeCapability);
+		input.signal.throwIfAborted();
+		const probePage = context.pages()[0] ?? (await context.newPage());
+		// 固定页面只在此临时 Context 中由 Playwright 提供；正式私网拒绝策略不变。
+		await probePage.route("**/*", async (route) => {
+			const request = route.request();
+			if (request.url() === probeOrigin && request.method() === "GET")
+				await route.fulfill({
+					contentType: "text/html; charset=utf-8",
+					body: '<html><body><main>agent-infra-browser-readiness</main><button type="button" onclick="this.textContent=\'Clicked\'">Continue</button></body></html>',
+				});
+			else await route.abort("blockedbyclient");
+		});
+		input.signal.throwIfAborted();
+		const started = await session.start();
+		if (started.status !== "ready") return undefined;
+		input.signal.throwIfAborted();
 		const page = await session.navigate(probeOrigin);
+		input.signal.throwIfAborted();
 		const observation = await session.observe(page);
+		input.signal.throwIfAborted();
 		if (!observation.text.includes("agent-infra-browser-readiness"))
 			return undefined;
+		if (operations.includes("interact")) {
+			const target = observation.elements.find(
+				(element) => element.name === "Continue",
+			);
+			if (!target) return undefined;
+			const action = await session.act(
+				{
+					kind: "click",
+					page,
+					target,
+					operationRef: "probe-operation",
+					attemptRef: "probe-attempt",
+					idempotencyKey: "probe-click",
+				},
+				input.signal,
+			);
+			input.signal.throwIfAborted();
+			if (action.status !== "completed") return undefined;
+			const clicked = await session.observe(action.page);
+			input.signal.throwIfAborted();
+			if (!clicked.text.includes("Clicked")) return undefined;
+		}
 		return {
 			capabilityVersion: capability.capabilityVersion,
 			operations: [...operations],
@@ -121,8 +151,11 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 			binding: input.binding,
 		};
 	} finally {
-		await session.close().catch(() => undefined);
-		await new Promise<void>((resolve) => server.close(() => resolve()));
-		await rm(root, { recursive: true, force: true });
+		input.signal.removeEventListener("abort", onAbort);
+		try {
+			await close();
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	}
 }

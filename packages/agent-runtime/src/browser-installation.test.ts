@@ -194,12 +194,18 @@ describe("Pinned Chromium installation", () => {
 		expect(launch).toHaveBeenCalledWith(
 			"/tmp/controlled-browser-session/browser-profile",
 			expect.objectContaining({
-				args: ["--disable-crashpad-for-testing"],
+				env: expect.objectContaining({
+					XDG_CONFIG_HOME:
+						"/tmp/controlled-browser-session/browser-profile/.config",
+				}),
 				executablePath:
 					process.arch === "x64"
 						? "/opt/agent-infra/browser/chrome-linux64/chrome"
 						: "/opt/agent-infra/browser/chrome-linux-arm64/chrome",
 			}),
+		);
+		expect(launch.mock.calls[0]?.[1]?.args ?? []).not.toContain(
+			"--disable-crashpad-for-testing",
 		);
 		await expect(
 			manager.acquire({ ...binding, conversationId: "foreign" }, capability),

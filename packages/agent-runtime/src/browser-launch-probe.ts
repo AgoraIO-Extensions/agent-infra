@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { BrowserCapabilityAvailableV1 } from "@agent-infra/contracts/runtime";
+import { createChromiumBrowserContextManagerV1 } from "./browser-context.js";
 import { verifyChromiumInstallationV1 } from "./browser-installation.js";
-import { createChromiumBrowserSessionControllerV1 } from "./browser-session.js";
+import { createBrowserSessionControllerV1 } from "./browser-session.js";
 
 /** Controlled image test, never a Browser Capability conformance projection. */
 export async function probeChromiumLaunchV1() {
@@ -30,7 +31,7 @@ export async function probeChromiumLaunchV1() {
 		schemaVersion: 1,
 		capabilityVersion: 1,
 		status: "available",
-		operations: ["observe", "interact"],
+		operations: ["navigate", "observe", "interact"],
 		policy: {
 			allowedOrigins: ["https://browser-probe.invalid/"],
 			maxContexts: 1,
@@ -63,19 +64,30 @@ export async function probeChromiumLaunchV1() {
 			verifiedAt: "2026-10-09T00:00:00Z",
 			manifestDigest: `sha256:${"0".repeat(64)}`,
 			evidenceHash: "0".repeat(64),
-			operations: ["observe", "interact"],
+			operations: ["navigate", "observe", "interact"],
 		},
 	};
 	const url = "https://browser-probe.invalid/";
-	const session = createChromiumBrowserSessionControllerV1({
-		sandboxRoot: root,
+	const manager = createChromiumBrowserContextManagerV1({ sandboxRoot: root });
+	const session = createBrowserSessionControllerV1({
+		manager,
 		binding,
 		capability,
-		controlledFixture: { url, body: html },
 	});
+	async function installProbePage() {
+		const context = await manager.acquire(binding, capability);
+		const page = context.pages()[0] ?? (await context.newPage());
+		await page.route("**/*", async (route) => {
+			const request = route.request();
+			if (request.url() === url && request.method() === "GET")
+				await route.fulfill({ contentType: "text/html", body: html });
+			else await route.abort("blockedbyclient");
+		});
+	}
 	try {
 		const started = await session.start();
 		if (started.status !== "ready") throw new Error("start");
+		await installProbePage();
 		const version = await promisify(execFile)(
 			installation.executable,
 			["--version"],
@@ -103,12 +115,13 @@ export async function probeChromiumLaunchV1() {
 		});
 		if (action.status !== "completed")
 			throw new Error(`click:${action.status}:${action.reasonCode ?? ""}`);
-		const clicked = await session.observe(page);
+		const clicked = await session.observe(action.page);
 		if (!clicked.text.includes("Clicked")) throw new Error("clicked-text");
 		await session.close();
 		if (session.snapshot().status !== "closed") throw new Error("close");
 		const resumed = await session.start();
 		if (resumed.status !== "ready") throw new Error("resume");
+		await installProbePage();
 		const restoredPage = await session.navigate(url);
 		const restored = await session.observe(restoredPage);
 		if (restored.title !== "Browser supply probe")
@@ -124,6 +137,7 @@ export async function probeChromiumLaunchV1() {
 				"non-root",
 				"pinned-binary",
 				"browser-version",
+				"page-navigation",
 				"page-observation",
 				"page-interaction",
 				"persistent-context",
