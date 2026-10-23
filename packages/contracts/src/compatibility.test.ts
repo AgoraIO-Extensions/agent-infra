@@ -256,6 +256,26 @@ function restorePreAdminAuditActionsRegistration2879Contract(value: {
 		);
 }
 
+// #3258：从产物中移除企微 /new、会话不可用与入站媒体被拒绝三个动作，还原到 #3258 之前的契约。
+const wecomAuditActions3258 = [
+	"wecom.conversation_started",
+	"wecom.conversation_unavailable",
+	"wecom.media_rejected",
+] as const;
+
+function restorePreWecomAuditActionsRegistration3258Contract(value: {
+	components: { schemas: Record<string, unknown> };
+}) {
+	const actions = value.components.schemas.ScopedPlatformAuditActionV1 as
+		| { enum?: string[] }
+		| undefined;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) =>
+				!(wecomAuditActions3258 as readonly string[]).includes(action),
+		);
+}
+
 function restorePreSkillHubAuditContract(value: {
 	components: { schemas: Record<string, unknown> };
 }) {
@@ -381,6 +401,7 @@ function restorePreAgentApiManagementContract(value: {
 	paths: Record<string, unknown>;
 	components: { schemas: Record<string, unknown> };
 }) {
+	restorePreWecomAuditActionsRegistration3258Contract(value);
 	restorePreAdminAuditActionsRegistration2879Contract(value);
 	restorePreSkillHubAuditContract(value);
 	restorePreApplicationUseGrantContract(value);
@@ -514,7 +535,8 @@ describe("contract compatibility command", () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),
 		);
-		// 先还原 #2879 新增，再对比 #1574 的四个 Agent 创建动作
+		// 先还原 #3258 与 #2879 新增，再对比 #1574 的四个 Agent 创建动作
+		restorePreWecomAuditActionsRegistration3258Contract(current);
 		restorePreAdminAuditActionsRegistration2879Contract(current);
 		const previous = structuredClone(current);
 		restorePreAgentCreationAuditContract(previous);
@@ -568,6 +590,8 @@ describe("contract compatibility command", () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),
 		);
+		// 先还原 #3258 新增
+		restorePreWecomAuditActionsRegistration3258Contract(current);
 		// 恢复到 #2879 之前的契约（去掉这 6 个动作）
 		const previous = structuredClone(current);
 		restorePreAdminAuditActionsRegistration2879Contract(previous);
@@ -599,6 +623,56 @@ describe("contract compatibility command", () => {
 						),
 						1,
 					),
+			];
+			for (const mutate of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the three WeCom audit actions registered in #3258", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		// 恢复到 #3258 之前的契约（去掉这 3 个动作）
+		const previous = structuredClone(current);
+		restorePreWecomAuditActionsRegistration3258Contract(previous);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "wecom-audit-3258-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			// 绿灯：精确新增应该通过
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const actions = (document: typeof current) =>
+				document.components.schemas.ScopedPlatformAuditActionV1
+					.enum as string[];
+			// 变异测试：以下任何篡改都必须导致门禁失败
+			const mutations: ((document: typeof current) => void)[] = [
+				// 添加一个没有写入方的企微动作
+				(document) => actions(document).push("wecom.not_registered"),
+				// 少登记一个动作
+				(document) => actions(document).pop(),
+				// 调换新增动作的顺序
+				(document) => {
+					const list = actions(document);
+					const index = list.indexOf("wecom.conversation_started");
+					list.splice(index, 2, list[index + 1], list[index]);
+				},
+				// 新增动作夹带删除已有动作
+				(document) =>
+					actions(document).splice(actions(document).indexOf("wecom.sent"), 1),
+				// 新增动作夹带其他 schema 变化
+				(document) => {
+					document.components.schemas.ScopedPlatformAuditProjectionV1.additionalProperties = true;
+				},
 			];
 			for (const mutate of mutations) {
 				const changed = structuredClone(current);
@@ -2100,6 +2174,7 @@ describe("contract compatibility command", () => {
 					delete document.paths["/api/v2/agents"].post;
 				delete document.components.schemas.AgentApiCreationRequestV1;
 				delete document.components.schemas.AgentApiCreationResponseV1;
+				restorePreWecomAuditActionsRegistration3258Contract(document);
 				restorePreAdminAuditActionsRegistration2879Contract(document);
 				restorePreSkillHubAuditContract(document);
 				restorePreAgentCreationAuditContract(document);

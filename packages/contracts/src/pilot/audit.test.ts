@@ -261,11 +261,18 @@ describe("scoped public audit contract", () => {
 			"wecom.connection_connected",
 			"wecom.accepted",
 			"wecom.unknown",
+			// #3258：#3184 与 #3241 已有写入方的企微回执动作
+			"wecom.conversation_started",
+			"wecom.conversation_unavailable",
+			"wecom.media_rejected",
 		] as const) {
 			expect(
 				ScopedPlatformAuditProjectionV1Schema.shape.action.safeParse(action)
 					.success,
 			).toBe(true);
+			expect(ScopedPlatformAuditQueryV1Schema.parse({ action })).toEqual({
+				action,
+			});
 		}
 		expect(
 			ScopedPlatformAuditProjectionV1Schema.shape.action.safeParse(

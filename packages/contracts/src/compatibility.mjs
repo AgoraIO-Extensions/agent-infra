@@ -3863,6 +3863,37 @@ function isAdminAuditActionsRegistration2879OpenApiAddition(previous, current) {
 	return isDeepStrictEqual(previous, normalized);
 }
 
+// #3258 登记企微 /new 开始新会话、会话不可用（#3184）与入站媒体被拒绝（#3241）三个已有写入方的
+// 审计动作。新增枚举值追加在 #2879 的动作之后；用写死 SHA-256 确保任意篡改都会使此门禁失败。
+function isWecomAuditActionsRegistration3258OpenApiAddition(previous, current) {
+	const additions = [
+		"wecom.conversation_started",
+		"wecom.conversation_unavailable",
+		"wecom.media_rejected",
+	];
+	const additionsDigest = createHash("sha256")
+		.update(JSON.stringify(additions))
+		.digest("hex");
+	if (
+		additionsDigest !==
+		"657323ffb798475cc3bdb9c11349d0aa08e93034412735e9ef7a7d91b6c5d082"
+	)
+		return false;
+	const before = previous.components?.schemas?.ScopedPlatformAuditActionV1;
+	const after = current.components?.schemas?.ScopedPlatformAuditActionV1;
+	if (
+		!Array.isArray(before?.enum) ||
+		!Array.isArray(after?.enum) ||
+		additions.some((action) => before.enum.includes(action)) ||
+		!sameValue(after.enum, [...before.enum, ...additions])
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+		structuredClone(before.enum);
+	return isDeepStrictEqual(previous, normalized);
+}
+
 function isSkillHubAuditActionOpenApiAddition(previous, current) {
 	const additions = [
 		"skill.version.register",
@@ -5846,6 +5877,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isConnectionInstallationAuthorizationUrlAddition(previous, current) &&
 			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&
 			!isAdminAuditActionsRegistration2879OpenApiAddition(previous, current) &&
+			!isWecomAuditActionsRegistration3258OpenApiAddition(previous, current) &&
 			!isScopedAuditCredentialSecurityAddition(previous, current) &&
 			!isRuntimeFileExchangeOpenApiAddition(previous, current) &&
 			!isRuntimeFileExchangeV2OpenApiAddition(previous, current) &&

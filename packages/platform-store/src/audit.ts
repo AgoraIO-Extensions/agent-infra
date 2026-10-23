@@ -341,6 +341,10 @@ const platformAuditActionMetadata = {
 	"wecom.cancelled": wecomDeliveryAuditMetadata,
 	"wecom.expired": wecomDeliveryAuditMetadata,
 	"wecom.abandoned": wecomDeliveryAuditMetadata,
+	// #3258：#3184 与 #3241 新增的企微回执动作，details 与其他投递动作同形
+	"wecom.conversation_started": wecomDeliveryAuditMetadata,
+	"wecom.conversation_unavailable": wecomDeliveryAuditMetadata,
+	"wecom.media_rejected": wecomDeliveryAuditMetadata,
 } as const;
 
 const configurationChangedFields = [

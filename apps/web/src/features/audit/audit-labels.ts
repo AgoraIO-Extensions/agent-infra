@@ -106,6 +106,9 @@ export const auditActionLabels: Record<AuditRecord["action"], string> = {
 	"wecom.cancelled": "取消企业微信消息",
 	"wecom.expired": "企业微信消息过期",
 	"wecom.abandoned": "放弃企业微信消息",
+	"wecom.conversation_started": "企业微信开始新会话",
+	"wecom.conversation_unavailable": "企业微信会话不可用",
+	"wecom.media_rejected": "拒绝企业微信媒体消息",
 };
 
 export const auditResultLabels: Record<AuditRecord["result"], string> = {
