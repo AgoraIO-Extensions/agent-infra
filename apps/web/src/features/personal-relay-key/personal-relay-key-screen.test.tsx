@@ -220,8 +220,10 @@ describe("PersonalRelayKeyScreen", () => {
 		expect(document.body.textContent).not.toMatch(/移除 Key|已移除|正在移除/);
 	});
 
+	// 需求变化（#3292 N9-3-04）：401 文案与 API 凭证、Skill Hub 统一为「…后再试。」（原「…后重试。」），
+	// 恢复按钮与公共状态卡同名「重新登录」（原「重新检查登录」），行为仍是调用 onSessionExpired。
 	it.each([
-		[401, "登录状态已失效，请重新登录后重试。"],
+		[401, "登录状态已失效，请重新登录后再试。"],
 		[403, "当前账号没有设置个人 Relay Key 的权限。"],
 	])(
 		"surfaces an authorization failure without a default-key fallback",
@@ -235,11 +237,36 @@ describe("PersonalRelayKeyScreen", () => {
 				screen.getByRole("heading", { level: 2, name: "个人 Key" }),
 			).toBeTruthy();
 			if (status === 401) {
-				fireEvent.click(screen.getByRole("button", { name: "重新检查登录" }));
+				fireEvent.click(screen.getByRole("button", { name: "重新登录" }));
 				expect(onSessionExpired).toHaveBeenCalledOnce();
 			}
 		},
 	);
+
+	it("re-reads the state only when re-login finds the session still valid (N9-3-04, W-03)", async () => {
+		api.get.mockResolvedValue(rejected(401));
+		let stillValid = false;
+		const onSessionExpired = vi.fn(async () => stillValid);
+		render(screenFor("user-owner", onSessionExpired));
+		await screen.findByRole("alert");
+		expect(api.get).toHaveBeenCalledTimes(1);
+		// 会话已失效（壳层换登录页）：页面不再发起读取。
+		await act(async () => {
+			fireEvent.click(screen.getByRole("button", { name: "重新登录" }));
+		});
+		expect(onSessionExpired).toHaveBeenCalledTimes(1);
+		expect(api.get).toHaveBeenCalledTimes(1);
+		// 会话仍有效：重读一次状态并恢复，失败提示与按钮随之卸载。
+		stillValid = true;
+		api.get.mockResolvedValueOnce(configured(4));
+		await act(async () => {
+			fireEvent.click(screen.getByRole("button", { name: "重新登录" }));
+		});
+		await findConfigured(4);
+		expect(api.get).toHaveBeenCalledTimes(2);
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(screen.queryByRole("button", { name: "重新登录" })).toBeNull();
+	});
 
 	it.each([
 		[409, "个人 Key 状态已被其他请求更新，请重新读取后再操作。"],
@@ -385,7 +412,7 @@ describe("PersonalRelayKeyScreen", () => {
 					screen.queryByRole("button", { name: "重新读取状态" }),
 				).toBeNull();
 				if (status === 401) {
-					fireEvent.click(screen.getByRole("button", { name: "重新检查登录" }));
+					fireEvent.click(screen.getByRole("button", { name: "重新登录" }));
 					expect(onSessionExpired).toHaveBeenCalledOnce();
 				}
 				return;

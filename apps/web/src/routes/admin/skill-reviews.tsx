@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useApplicationSession } from "../../features/application-shell.js";
+import { useSessionRecheck } from "../../features/session-recheck.js";
 import { isRetryableSkillHubError } from "../../features/skill-hub/skill-hub.js";
 import { reviewSkillHubVersion } from "../../features/skill-hub/skill-hub-management.js";
 import { useSkillReviewQueue } from "../../features/skill-hub/skill-review-queue.js";
@@ -17,6 +18,8 @@ function SkillReviewsRoute() {
 		identityKey,
 		enabled: isAdministrator,
 	});
+	// 队列读取 401 时经壳层重新确认会话；仍有效则重读一次队列（W-03，#3292 N9-3-04）。
+	const relogin = useSessionRecheck(() => void query.refetch());
 	return (
 		<main className="platform-content management-content ia-skill-hub">
 			<SkillReviewsScreen
@@ -33,7 +36,8 @@ function SkillReviewsRoute() {
 							: query.data
 				}
 				onRetry={() => void query.refetch()}
-				retrying={query.isFetching}
+				onRelogin={() => void relogin.recheck()}
+				retrying={query.isFetching || relogin.checking}
 				review={reviewSkillHubVersion}
 				onReviewed={() => void query.refetch()}
 			/>

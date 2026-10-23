@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useApplicationSession } from "../../features/application-shell.js";
+import { useSessionRecheck } from "../../features/session-recheck.js";
 import { isRetryableSkillHubError } from "../../features/skill-hub/skill-hub.js";
 import {
 	installSkillHubVersion,
@@ -33,6 +34,13 @@ function SkillHubVersionRoute() {
 	const catalog = useSkillHubDirectory({ identityKey });
 	const ownedVersions = useOwnedSkillHubVersions({ identityKey });
 	const projects = useSkillHubProjects({ identityKey });
+	// 401 时经壳层重新确认会话；仍有效则解除不可重试锁定、重读版本与侧栏用到的目录（W-03，#3292 N9-3-04）。
+	const relogin = useSessionRecheck(() => {
+		void query.reload();
+		void catalog.reload();
+		void ownedVersions.reload();
+		void projects.refetch();
+	});
 	const retryable = query.isError
 		? isRetryableSkillHubError(query.error)
 		: query.data?.kind === "unavailable" && query.data.retryable;
@@ -54,7 +62,8 @@ function SkillHubVersionRoute() {
 							: query.data
 				}
 				onRetry={() => void query.refetch()}
-				retrying={query.isFetching}
+				onRelogin={() => void relogin.recheck()}
+				retrying={query.isFetching || relogin.checking}
 				catalog={
 					catalog.isPending
 						? { kind: "loading" }

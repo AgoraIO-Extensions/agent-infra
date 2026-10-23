@@ -50,6 +50,7 @@ import { withObjectName } from "@/lib/accessible-name";
 import { formatTimestamp } from "@/lib/format-time";
 import { useApplicationSession } from "../application-shell.js";
 import { DirectoryReadAlert, useDirectoryNames } from "../directory-names.js";
+import { PageStateCard } from "../page-state-card.js";
 import { RecoveryButton } from "../recovery-button.js";
 import {
 	type AuditAgentOption,
@@ -75,9 +76,20 @@ export function AuditWorkflow({ scope }: { scope: AuditScope }) {
 	const { identityKey, session } = useApplicationSession();
 	const admin = session.user.roles.includes("system_admin");
 	return scope === "administrator" && !admin ? (
-		<Alert tone="warn">
-			<AlertDescription>当前无权访问平台审计。</AlertDescription>
-		</Alert>
+		// 员工打开平台审计：保留页头（eyebrow 与 h1），下面只有公共「未授权」卡与「返回工作台」，
+		// 与其余系统管理页相同；静态边界不设 live region（#3292 N9-3-01）。
+		<>
+			<div className="page-heading">
+				<div className="min-w-0">
+					<p className="page-eyebrow">系统管理 / 平台审计</p>
+					<h1 tabIndex={-1}>查看平台变更记录。</h1>
+					<p>
+						可按关联信息查询请求和执行记录；不显示会话正文、凭证或模型思考。
+					</p>
+				</div>
+			</div>
+			<PageStateCard kind="unauthorized" description="当前无权访问平台审计。" />
+		</>
 	) : (
 		<AuditScreen key={`${identityKey}:${scope}`} scope={scope} />
 	);

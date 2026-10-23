@@ -55,6 +55,7 @@ import {
 	formatMultiServiceManifestSummary,
 	parseMultiServiceManifest,
 } from "../my-agents/multi-service-manifest.js";
+import { PageStateCard } from "../page-state-card.js";
 import { RecoveryButton } from "../recovery-button.js";
 import {
 	type TemplateNameLookup,
@@ -619,12 +620,8 @@ export function AdminAgentApplicationsScreen({
 	};
 	if (session.kind === "loading")
 		return <LoadingLine>正在读取审批申请…</LoadingLine>;
-	if (session.kind !== "ready" || !isSystemAdministrator(session.session))
-		return (
-			<Alert tone="warn">
-				<AlertDescription>当前无法访问审批。</AlertDescription>
-			</Alert>
-		);
+	const permitted =
+		session.kind === "ready" && isSystemAdministrator(session.session);
 	return (
 		<section aria-labelledby="agent-approvals-heading">
 			<header className="page-heading">
@@ -635,17 +632,24 @@ export function AdminAgentApplicationsScreen({
 					</h1>
 					<p>申请里列出来源、Owner、范围、模型和渠道。</p>
 				</div>
-				{state.kind === "ready" && (
+				{permitted && state.kind === "ready" && (
 					<div className="tag-row">
 						<Badge tone="amber">{pendingCount} 项待处理</Badge>
 						<Badge variant="tag">系统管理员 · 只读审计</Badge>
 					</div>
 				)}
 			</header>
-			{state.kind === "ready" ? (
+			{/* 员工打开系统管理页：页头之下只有公共「未授权」卡与「返回工作台」，四个系统管理页相同；
+			    无权访问是首屏静态边界，不设 live region（#3292 N9-3-01）。 */}
+			{!permitted ? (
+				<PageStateCard
+					kind="unauthorized"
+					description="当前无权访问创建审批。"
+				/>
+			) : state.kind === "ready" ? (
 				<DirectoryReadAlert names={[names]} className="mb-4" />
 			) : null}
-			{state.kind === "loading" ? (
+			{!permitted ? null : state.kind === "loading" ? (
 				<LoadingLine>正在读取审批申请…</LoadingLine>
 			) : state.kind === "unavailable" ? (
 				<Alert tone="danger" role="alert" className="mt-5">

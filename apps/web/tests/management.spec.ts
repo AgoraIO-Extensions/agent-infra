@@ -1727,7 +1727,12 @@ test("employee has no Owner or administrator controls, with loading and error st
 	await expect(page.locator("main")).not.toContainText("Agent 授权控制");
 	await expect(page.locator("main")).not.toContainText("权限边界");
 	await page.goto("/admin/approvals");
-	await expect(page.getByText("当前无法访问审批。")).toBeVisible();
+	// 需求变化（#3292 N9-3-01）：原为 warn 提示「当前无法访问审批。」（没有 h1），现保留页头，下面是与其余
+	// 系统管理页相同的公共「未授权」卡。
+	await expect(
+		page.getByRole("heading", { level: 1, name: "审批申请" }),
+	).toBeVisible();
+	await expect(page.getByText("当前无权访问创建审批。")).toBeVisible();
 	await expect(page.getByRole("alert")).toHaveCount(0);
 	let release: (() => void) | undefined;
 	const gate = new Promise<void>((resolve) => {

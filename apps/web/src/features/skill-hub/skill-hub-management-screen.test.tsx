@@ -282,7 +282,10 @@ describe("MySkillsScreen", () => {
 				onRetry={retry}
 			/>,
 		);
-		fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+		// 需求变化（#3292 N9-3-05）：与「已安装」同时失败时按钮可区分，名称带分区名，可见文字不变。
+		const reread = screen.getByRole("button", { name: "重新读取：我创建的" });
+		expect(reread.textContent).toBe("重新读取");
+		fireEvent.click(reread);
 		expect(retry).toHaveBeenCalledOnce();
 		cleanup();
 		await renderWithRouter(
@@ -295,7 +298,55 @@ describe("MySkillsScreen", () => {
 		expect(
 			screen.getByText("当前账号没有管理 Skill 项目的权限。"),
 		).toBeTruthy();
-		expect(screen.queryByRole("button", { name: "重新读取" })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^重新读取/ })).toBeNull();
+	});
+
+	it("names both section recoveries apart when installations and projects fail together (N9-3-05)", async () => {
+		const retryProjects = vi.fn();
+		const retryInstallations = vi.fn();
+		await renderWithRouter(
+			<MySkillsScreen
+				projects={{ kind: "unavailable", retryable: true }}
+				versions={{ kind: "loading" }}
+				installations={{ kind: "unavailable", retryable: true }}
+				onRetry={retryProjects}
+				onInstallationsRetry={retryInstallations}
+			/>,
+		);
+		const names = screen
+			.getAllByRole("button")
+			.map((button) => button.getAttribute("aria-label") ?? button.textContent);
+		expect(names).toEqual(["重新读取：已安装", "重新读取：我创建的"]);
+		fireEvent.click(screen.getByRole("button", { name: "重新读取：已安装" }));
+		expect(retryInstallations).toHaveBeenCalledOnce();
+		expect(retryProjects).not.toHaveBeenCalled();
+	});
+
+	it("offers one named re-login per section on 401 instead of contacting an administrator (N9-3-04)", async () => {
+		const relogin = vi.fn();
+		const expired = {
+			kind: "unavailable" as const,
+			retryable: false,
+			reason: "authentication-required" as const,
+		};
+		await renderWithRouter(
+			<MySkillsScreen
+				projects={expired}
+				versions={{ kind: "loading" }}
+				installations={expired}
+				onRelogin={relogin}
+			/>,
+		);
+		expect(screen.queryByText(/请联系管理员/)).toBeNull();
+		expect(
+			screen.getAllByRole("alert").map((alert) => alert.textContent),
+		).toEqual([
+			"登录已过期登录状态已失效，请重新登录后再试。",
+			"登录已过期登录状态已失效，请重新登录后再试。",
+		]);
+		fireEvent.click(screen.getByRole("button", { name: "重新登录：我创建的" }));
+		fireEvent.click(screen.getByRole("button", { name: "重新登录：已安装" }));
+		expect(relogin).toHaveBeenCalledTimes(2);
 	});
 });
 

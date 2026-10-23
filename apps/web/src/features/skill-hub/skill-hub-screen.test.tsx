@@ -245,5 +245,28 @@ describe("SkillHubDirectoryScreen", () => {
 			screen.getByText("当前账号没有读取 Skill 目录的权限。"),
 		).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "重新读取" })).toBeNull();
+		cleanup();
+
+		// 401 不再说成「暂时无法访问…请联系管理员」：「登录已过期」与「重新登录」（#3292 N9-3-04）。
+		const relogin = vi.fn();
+		await renderWithRouter(
+			<SkillHubDirectoryScreen
+				state={{
+					kind: "unavailable",
+					retryable: false,
+					reason: "authentication-required",
+				}}
+				onRetry={retry}
+				onRelogin={relogin}
+			/>,
+		);
+		expect(screen.getByRole("alert").textContent).toBe(
+			"登录已过期登录状态已失效，请重新登录后再试。",
+		);
+		expect(screen.queryByText(/请联系管理员/)).toBeNull();
+		expect(screen.queryByRole("button", { name: "重新读取" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "重新登录" }));
+		expect(relogin).toHaveBeenCalledOnce();
+		expect(retry).toHaveBeenCalledOnce();
 	});
 });

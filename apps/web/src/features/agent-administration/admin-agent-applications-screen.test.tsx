@@ -21,6 +21,23 @@ import {
 import { pendingApplication } from "../my-agents/test-fixtures.js";
 import { AdminAgentApplicationsScreen } from "./admin-agent-applications-screen.js";
 
+// 员工的无权限卡带「返回工作台」链接；本文件不挂路由，只替换 Link（#3292 N9-3-01）。
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@tanstack/react-router")>();
+	const { forwardRef } = await import("react");
+	return {
+		...actual,
+		Link: forwardRef<HTMLAnchorElement, { to: string; children: ReactNode }>(
+			({ to, children, ...props }, ref) => (
+				<a ref={ref} href={to} {...props}>
+					{children}
+				</a>
+			),
+		),
+	};
+});
+
 // 页面按需读取目录显示名：测试与生产一样提供 QueryClient，并以固定目录记录响应。
 const directoryRecords = [
 	{
@@ -703,8 +720,22 @@ describe("AdminAgentApplicationsScreen", () => {
 		);
 
 		// 无权访问是首屏静态边界，不再用 role="alert" 打断读屏。
-		expect(screen.getByText("当前无法访问审批。")).toBeTruthy();
+		// 需求变化（#3292 N9-3-01）：原为只有 warn 提示「当前无法访问审批。」、没有 h1；现保留页头，
+		// 下面是与其余系统管理页相同的公共「未授权」卡与「返回工作台」，文案同为「当前无权访问…」。
+		const page = screen
+			.getByRole("heading", { level: 1, name: "审批申请" })
+			.closest("section") as HTMLElement;
+		const card = page.querySelector('[data-slot="state-card"]');
+		expect(card?.getAttribute("data-kind")).toBe("unauthorized");
+		expect(card?.textContent).toBe("未授权当前无权访问创建审批。返回工作台");
+		expect(
+			screen.getByRole("link", { name: "返回工作台" }).getAttribute("href"),
+		).toBe("/");
+		expect(card?.hasAttribute("role")).toBe(false);
 		expect(screen.queryByRole("alert")).toBeNull();
+		expect(within(page).queryByRole("status")).toBeNull();
+		expect(screen.queryByText(/项待处理/)).toBeNull();
+		expect(screen.queryByRole("searchbox")).toBeNull();
 		expect(screen.queryByText("Release assistant request")).toBeNull();
 		expect(screen.queryByRole("button", { name: "批准申请" })).toBeNull();
 	});

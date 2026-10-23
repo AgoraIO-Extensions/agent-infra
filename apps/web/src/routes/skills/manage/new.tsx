@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useApplicationSession } from "../../../features/application-shell.js";
 import { collectionReadFailure } from "../../../features/collection-read-failure.js";
 import { PageLoadingState } from "../../../features/page-loading-state.js";
+import { useSessionRecheck } from "../../../features/session-recheck.js";
 import { readSkillHubProjectContent } from "../../../features/skill-hub/skill-hub-management.js";
 import { SkillEditorScreen } from "../../../features/skill-hub/skill-hub-management-screen.js";
 import { useSkillHubProjects } from "../../../features/skill-hub/use-skill-hub.js";
@@ -40,6 +41,8 @@ function SkillEditorRoute() {
 		if (created && projectId && projectId !== created.projectId)
 			setCreated(undefined);
 	}, [created, projectId]);
+	// 内容读取 401 时经壳层重新确认会话；仍有效则重读一次内容（W-03，#3292 N9-3-04）。
+	const relogin = useSessionRecheck(() => void content.refetch());
 	const contentStatus = (content.error as { status?: number } | null)?.status;
 	const invalidateProjects = () =>
 		queryClient.invalidateQueries({
@@ -81,7 +84,8 @@ function SkillEditorRoute() {
 								: { kind: "ready", content: content.data }
 					}
 					onContentRetry={() => content.refetch()}
-					contentRetrying={content.isFetching}
+					onContentRelogin={() => void relogin.recheck()}
+					contentRetrying={content.isFetching || relogin.checking}
 					onPublished={() =>
 						void queryClient.invalidateQueries({
 							queryKey: ["skill-hub", "owned-versions", identityKey],

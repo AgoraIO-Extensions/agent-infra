@@ -1,5 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowRight, Layers, Plus, Search, TriangleAlert } from "lucide-react";
+import {
+	ArrowRight,
+	Layers,
+	LogIn,
+	Plus,
+	Search,
+	TriangleAlert,
+} from "lucide-react";
 import { type ReactNode, useId, useMemo, useRef, useState } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -36,6 +43,8 @@ type Visibility = SkillHubVersionMetadataV1["visibility"];
 type SkillHubDirectoryScreenProps = {
 	state: SkillHubDirectoryState | { kind: "loading" };
 	onRetry?: () => void;
+	/** 目录读取 401 时的「重新登录」。 */
+	onRelogin?: () => void;
 	retrying?: boolean;
 };
 
@@ -76,7 +85,11 @@ export function SkillHubEmpty({
 	);
 }
 
-/** 读取失败：可重试时给「重新读取」，403 与不可重试失败只说明原因。 */
+/**
+ * 读取失败：可重试时给「重新读取」，401 给「重新登录」（经壳层确认会话，仍有效时由页面重读，
+ * W-03），403 与其余不可重试失败只说明原因。同一页有多个分区时传 objectName：按钮名称为
+ * 「{可见文字}：{分区}」，恢复 key 也按分区区分，可见文字不变（D2-58，#3292 N9-3-04、N9-3-05）。
+ */
 export function SkillHubReadFailure({
 	retryable,
 	reason,
@@ -85,7 +98,9 @@ export function SkillHubReadFailure({
 	deniedText,
 	unavailableText,
 	onRetry,
+	onRelogin,
 	retrying,
+	objectName,
 }: {
 	retryable: boolean;
 	reason?: string;
@@ -94,7 +109,11 @@ export function SkillHubReadFailure({
 	deniedText: string;
 	unavailableText: string;
 	onRetry?: () => void;
+	/** 401 的「重新登录」；未提供时只说明登录已过期。 */
+	onRelogin?: () => void;
 	retrying?: boolean;
+	/** 同页多个分区（如我的 Skill 的「已安装」「我创建的」）时区分按钮名称的分区名。 */
+	objectName?: string;
 }) {
 	if (retryable)
 		return (
@@ -107,11 +126,39 @@ export function SkillHubReadFailure({
 					onRetry ? (
 						<RecoveryButton
 							variant="outline"
-							recoveryKey="重新读取"
+							recoveryKey={withObjectName("重新读取", objectName)}
+							aria-label={
+								objectName ? withObjectName("重新读取", objectName) : undefined
+							}
 							busy={retrying}
 							onClick={onRetry}
 						>
 							重新读取
+						</RecoveryButton>
+					) : undefined
+				}
+			/>
+		);
+	if (reason === "authentication-required")
+		return (
+			<SkillHubEmpty
+				role="alert"
+				icon={<TriangleAlert aria-hidden="true" />}
+				title="登录已过期"
+				description="登录状态已失效，请重新登录后再试。"
+				action={
+					onRelogin ? (
+						<RecoveryButton
+							variant="outline"
+							recoveryKey={withObjectName("重新登录", objectName)}
+							aria-label={
+								objectName ? withObjectName("重新登录", objectName) : undefined
+							}
+							busy={retrying}
+							onClick={onRelogin}
+						>
+							<LogIn aria-hidden="true" data-icon="inline-start" />
+							重新登录
 						</RecoveryButton>
 					) : undefined
 				}
@@ -130,6 +177,7 @@ export function SkillHubReadFailure({
 export function SkillHubDirectoryScreen({
 	state,
 	onRetry,
+	onRelogin,
 	retrying = false,
 }: SkillHubDirectoryScreenProps) {
 	const searchId = useId();
@@ -180,7 +228,10 @@ export function SkillHubDirectoryScreen({
 			<header className="page-heading">
 				<div>
 					<p className="page-eyebrow">工作区 / Skill Hub</p>
-					<h1 id="skill-hub-heading">Skill Hub</h1>
+					{/* tabIndex=-1：「重新读取」「重新登录」恢复后焦点落在这里（D2-59）。 */}
+					<h1 id="skill-hub-heading" tabIndex={-1}>
+						Skill Hub
+					</h1>
 					<p>搜索可复用的 Skill，选定版本后加入自己的库。</p>
 				</div>
 				<div className="skill-actions">
@@ -268,6 +319,7 @@ export function SkillHubDirectoryScreen({
 					deniedText="当前账号没有读取 Skill 目录的权限。"
 					unavailableText="Skill 目录暂时无法访问，请联系管理员。"
 					onRetry={onRetry}
+					onRelogin={onRelogin}
 					retrying={retrying}
 				/>
 			) : (

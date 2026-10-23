@@ -1500,8 +1500,13 @@ test("employees see no Skill review entry and a no-permission page on deep links
 }) => {
 	const control = await fixture(page);
 	await page.goto("/admin/skill-reviews");
+	// 需求变化（#3292 N9-3-01）：原为 Skill 空态「没有访问权限」，现为页头 + 公共「未授权」卡。
 	await expect(
-		page.locator("#main-content").getByText("没有访问权限"),
+		page
+			.locator(
+				'#main-content [data-slot="state-card"][data-kind="unauthorized"]',
+			)
+			.getByText("当前无权访问 Skill 审核。"),
 	).toBeVisible();
 	await expect(
 		page.getByRole("navigation", { name: "系统管理", includeHidden: true }),
@@ -1849,5 +1854,143 @@ test("companion files scroll inside a 180px box, carry their path in control nam
 		"请填写版本号，例如 1.0.0；以字母或数字开头，最长 128 位。",
 	]);
 	await expectNoDuplicateControls(page, "创建与发布（N8-3-07）");
+	await expectCleanPage(page, errors);
+});
+
+// #3292 N9-3-03：Skill 审核页目录读取失败提示与审核列表之间留 16px，与其余 DirectoryReadAlert 调用方
+// 一致，两张卡的边框不贴在一起。
+test("the Skill review directory failure keeps 16px above the review list (N9-3-03)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	const errors = trackPageErrors(page);
+	await fixture(page, "admin");
+	await page.route("**/api/v2/directory/search**", (route) =>
+		route.fulfill({
+			status: 503,
+			json: {
+				schemaVersion: 1,
+				code: "DEPENDENCY_UNAVAILABLE",
+				message: "Controlled directory failure",
+				retryable: true,
+				traceId: "trace-skill-review-directory",
+			},
+		}),
+	);
+	await page.goto("/admin/skill-reviews");
+	const main = page.locator("#main-content");
+	const alert = main.getByRole("alert").filter({ hasText: "目录暂时无法读取" });
+	await expect(alert).toBeVisible();
+	await expect(main.locator("article.skill-row")).toHaveCount(3);
+	await designViewport(page, mobile);
+	const list = main.locator(".skill-surface").first();
+	const [alertBox, listBox] = await Promise.all([
+		alert.boundingBox(),
+		list.boundingBox(),
+	]);
+	expect(
+		Math.round(
+			((listBox?.y ?? 0) - (alertBox?.y ?? 0) - (alertBox?.height ?? 0)) * 10,
+		) / 10,
+	).toBe(16);
+	expect((await computed(alert, ["marginBottom"])).marginBottom).toBe("16px");
+	await info.attach("n9-3-03-skill-review-directory", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+	await expectNoDuplicateControls(page, "Skill 审核目录读取失败");
+	await expectCleanPage(page, errors);
+});
+
+// #3292 N9-3-05：「已安装」与「我创建的」同时读取失败时，两个「重新读取」名称带分区名（可见文字不变），
+// 同页不出现同名控件；各自只重读自己的分区，恢复后焦点到页面 h1。
+test("My Skill names both section rereads apart when both reads fail (N9-3-05)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	let failing = true;
+	const reads = { installations: 0, projects: 0 };
+	await page.route(
+		/\/api\/v2\/skills\/(installations|projects)$/,
+		async (route) => {
+			const request = route.request();
+			const path = new URL(request.url()).pathname;
+			if (request.method() !== "GET") return route.fallback();
+			reads[path.endsWith("projects") ? "projects" : "installations"] += 1;
+			if (!failing) return route.fallback();
+			return route.fulfill({
+				status: 503,
+				json: {
+					schemaVersion: 1,
+					code: "DEPENDENCY_UNAVAILABLE",
+					message: "Controlled My Skill failure",
+					retryable: true,
+					traceId: "trace-my-skill-reread",
+				},
+			});
+		},
+	);
+	await page.goto("/skills/manage");
+	await designViewport(page, mobile);
+	const main = page.locator("#main-content");
+	const installed = main.getByRole("region", { name: "已安装" });
+	const owned = main.getByRole("region", { name: "我创建的" });
+	const installedReread = installed.getByRole("button", {
+		name: "重新读取：已安装",
+		exact: true,
+	});
+	const ownedReread = owned.getByRole("button", {
+		name: "重新读取：我创建的",
+		exact: true,
+	});
+	await expect(installedReread).toBeVisible();
+	await expect(ownedReread).toBeVisible();
+	await expect(installedReread).toHaveText("重新读取");
+	await expect(ownedReread).toHaveText("重新读取");
+	await expect(
+		main.getByRole("button", { name: "重新读取", exact: true }),
+	).toHaveCount(0);
+	await expectNoDuplicateControls(page, "我的 Skill 两区读取失败");
+	await info.attach("n9-3-05-my-skill-both-failed", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+
+	// 仍失败时焦点回到同一分区的按钮（恢复 key 按分区区分，不跳到另一分区）。重读期间分区换成读取中，
+	// 原按钮卸载；等它卸载后再看重新出现的按钮，避免请求先到、页面后重绘时采样到旧按钮。
+	const projectReads = reads.projects;
+	const firstOwnedReread = await pinElement(ownedReread, "owned-reread");
+	await firstOwnedReread.focus();
+	await page.keyboard.press("Enter");
+	await expect.poll(() => reads.projects).toBeGreaterThan(projectReads);
+	await expect(firstOwnedReread).toHaveCount(0);
+	await expect(ownedReread).toBeVisible();
+	await expectFocusSettled(
+		ownedReread,
+		"「我创建的」仍失败后",
+		[50, 300, 1000],
+	);
+	await expect(installedReread).toBeVisible();
+
+	// 恢复：只重读「已安装」，恢复后焦点到页面 h1。
+	failing = false;
+	const installationReads = reads.installations;
+	await installedReread.focus();
+	await page.keyboard.press("Enter");
+	await expect
+		.poll(() => reads.installations)
+		.toBeGreaterThan(installationReads);
+	await expect(
+		installed.locator("article.skill-row, [data-slot='empty']").first(),
+	).toBeVisible();
+	await expect(installedReread).toHaveCount(0);
+	await expectFocusSettled(
+		main.getByRole("heading", { level: 1, name: "我的 Skill" }),
+		"「已安装」恢复后",
+		[50, 300, 1000],
+	);
+	await expect(ownedReread).toBeVisible();
 	await expectCleanPage(page, errors);
 });

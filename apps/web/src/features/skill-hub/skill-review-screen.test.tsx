@@ -7,6 +7,7 @@ import {
 	waitFor,
 	within,
 } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@/components/ui/toast";
 import { client as generatedClient } from "../../pilot/generated-v2/client.gen.js";
@@ -23,6 +24,23 @@ import {
 	SkillReviewsScreen,
 	skillReviewReasonMaxLength,
 } from "./skill-review-screen.js";
+
+// 员工的无权限卡带「返回工作台」链接；本文件不挂路由，只替换 Link（#3292 N9-3-01）。
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@tanstack/react-router")>();
+	const { forwardRef } = await import("react");
+	return {
+		...actual,
+		Link: forwardRef<HTMLAnchorElement, { to: string; children: ReactNode }>(
+			({ to, children, ...props }, ref) => (
+				<a ref={ref} href={to} {...props}>
+					{children}
+				</a>
+			),
+		),
+	};
+});
 
 // 发布者与组织名称由页面级目录读取解析：测试与生产一样经 QueryClient 读取固定目录记录。
 let directoryRecords: DirectorySearchItemV1[] = [];
@@ -156,12 +174,14 @@ function renderReviews({
 	review = vi.fn() as never,
 	onReviewed = vi.fn<() => void>(),
 	onRetry,
+	onRelogin,
 }: {
 	administrator?: boolean;
 	queue?: ScreenProps["queue"];
 	review?: ScreenProps["review"] & ReturnType<typeof vi.fn>;
 	onReviewed?: ReturnType<typeof vi.fn<() => void>>;
 	onRetry?: ReturnType<typeof vi.fn<() => void>>;
+	onRelogin?: ReturnType<typeof vi.fn<() => void>>;
 } = {}) {
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -176,6 +196,7 @@ function renderReviews({
 					review={review}
 					onReviewed={onReviewed}
 					onRetry={onRetry}
+					onRelogin={onRelogin}
 				/>
 			</ToastProvider>
 		</QueryClientProvider>,
@@ -244,6 +265,24 @@ describe("SkillReviewsScreen", () => {
 		expect(screen.queryByRole("button")).toBeNull();
 	});
 
+	it("asks to sign in again on a 401 queue read instead of contacting an administrator (N9-3-04)", () => {
+		const onRelogin = vi.fn<() => void>();
+		renderReviews({
+			queue: {
+				kind: "unavailable",
+				retryable: false,
+				reason: "authentication-required",
+			},
+			onRelogin,
+		});
+		expect(screen.getByRole("alert").textContent).toBe(
+			"登录已过期登录状态已失效，请重新登录后再试。",
+		);
+		expect(screen.queryByText(/请联系管理员/)).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "重新登录" }));
+		expect(onRelogin).toHaveBeenCalledOnce();
+	});
+
 	it("shows an empty queue without any review action", () => {
 		renderReviews({ queue: { kind: "ready", items: [] } });
 		expect(screen.getByText("当前没有待审核版本")).toBeTruthy();
@@ -252,7 +291,21 @@ describe("SkillReviewsScreen", () => {
 
 	it("shows employees a no-permission state without any review action", () => {
 		const { review } = renderReviews({ administrator: false });
-		expect(screen.getByText("没有访问权限")).toBeTruthy();
+		// 需求变化（#3292 N9-3-01）：四个系统管理页统一为页头 + 公共「未授权」卡与「返回工作台」，
+		// 原为 Skill 空态「没有访问权限 / Skill 审核只对系统管理员开放。」（role=status）。
+		const page = screen
+			.getByRole("heading", { level: 1, name: "Skill 发布审核" })
+			.closest("section") as HTMLElement;
+		const card = page.querySelector('[data-slot="state-card"]');
+		expect(card?.getAttribute("data-kind")).toBe("unauthorized");
+		expect(card?.textContent).toBe("未授权当前无权访问 Skill 审核。返回工作台");
+		expect(
+			screen.getByRole("link", { name: "返回工作台" }).getAttribute("href"),
+		).toBe("/");
+		// 无权访问是首屏静态边界，不设 live region。
+		expect(card?.hasAttribute("role")).toBe(false);
+		expect(within(page).queryByRole("status")).toBeNull();
+		expect(screen.queryByRole("alert")).toBeNull();
 		expect(screen.queryByRole("button")).toBeNull();
 		expect(review).not.toHaveBeenCalled();
 	});

@@ -19,6 +19,7 @@ import {
 	useRegisterOwnApplication,
 } from "../../features/application-management/use-application-management.js";
 import { useApplicationSession } from "../../features/application-shell.js";
+import { useSessionRecheck } from "../../features/session-recheck.js";
 
 export const Route = createFileRoute("/my-settings/api-credentials")({
 	component: ApiCredentialsRoute,
@@ -48,6 +49,11 @@ function ApiCredentialsRoute() {
 	const register = useRegisterOwnApplication();
 	const disable = useDisableOwnApplication();
 	const issueApplicationCredential = useIssueOrRotateApplicationCredential();
+	// 列表或应用读取 401 时经壳层重新确认会话；仍有效则解除锁定、重读两份读取（W-03，#3292 N9-3-04）。
+	const relogin = useSessionRecheck(() => {
+		void credentials.reload();
+		void application.refetch();
+	});
 
 	return (
 		<main className="platform-content management-content">
@@ -61,7 +67,8 @@ function ApiCredentialsRoute() {
 					heading?.focus({ preventScroll: true });
 				}}
 				onRetry={() => void credentials.refetch()}
-				retrying={credentials.isFetching}
+				onRelogin={() => void relogin.recheck()}
+				retrying={credentials.isFetching || relogin.checking}
 				onIssue={async (body) => {
 					const result = await issue.mutateAsync(body);
 					await credentials.refetch().catch(() => undefined);
@@ -113,7 +120,8 @@ function ApiCredentialsRoute() {
 				headingRef={applicationHeading}
 				state={application.state}
 				onRetry={() => void application.refetch()}
-				retrying={application.isFetching}
+				onRelogin={() => void relogin.recheck()}
+				retrying={application.isFetching || relogin.checking}
 				onOpenApplication={(applicationId) =>
 					router.history.push(
 						`/my-settings/api-credentials?applicationId=${encodeURIComponent(applicationId)}`,

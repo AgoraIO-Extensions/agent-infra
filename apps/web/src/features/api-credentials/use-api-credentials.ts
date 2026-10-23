@@ -76,7 +76,23 @@ export function useApiCredentials({
 			return undefined;
 		return query.refetch({ cancelRefetch: false });
 	}
-	return { state, isFetching: allowed && query.isFetching, refetch };
+	/**
+	 * 用户明确要求重读（「重新登录」后会话仍有效）：不可重试的结果（401 等）锁住 refetch，这里重置
+	 * 本次查询解除锁定后重读一次（W-03，同 Agent 目录）；未锁定时等同 refetch。
+	 */
+	async function reload() {
+		const current = queryClient.getQueryData<ApiCredentialsState>(
+			scope.queryKey,
+		);
+		if (!scope.active || !allowed) return undefined;
+		if (current?.kind === "unavailable" && !current.retryable)
+			return queryClient.resetQueries({
+				queryKey: scope.queryKey,
+				exact: true,
+			});
+		return query.refetch({ cancelRefetch: false });
+	}
+	return { state, isFetching: allowed && query.isFetching, refetch, reload };
 }
 
 type IssueAttempt = {
