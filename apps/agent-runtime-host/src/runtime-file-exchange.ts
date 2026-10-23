@@ -28,6 +28,38 @@ export interface RuntimeFileExchangeOptionsV1 {
 
 const maximumResponseBytes = 65_536;
 
+const DNS_NAME =
+	/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/i;
+const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+
+/**
+ * 文件交换 origin 的唯一校验规则，读取配置与组装 FileBridge 共用（#3255）。
+ * 必须是不含凭据、路径、查询和片段的精确 HTTP(S) origin；集群内明文只允许 DNS
+ * Service 名称（ADR-0020），TLS 可以使用部署批准的外部地址。
+ */
+export function isRuntimeFileExchangeOriginV1(value: string) {
+	let origin: URL;
+	try {
+		origin = new URL(value);
+	} catch {
+		return false;
+	}
+	return (
+		value.length <= 512 &&
+		(origin.protocol === "http:" || origin.protocol === "https:") &&
+		origin.origin === value &&
+		origin.username === "" &&
+		origin.password === "" &&
+		(origin.pathname === "/" || origin.pathname === "") &&
+		origin.search === "" &&
+		origin.hash === "" &&
+		(origin.protocol === "https:" ||
+			(DNS_NAME.test(origin.hostname) &&
+				!IPV4.test(origin.hostname) &&
+				!origin.hostname.startsWith("[")))
+	);
+}
+
 function invalid(): never {
 	throw new Error("RUNTIME_FILE_EXCHANGE_CONFIGURATION_INVALID");
 }
@@ -158,18 +190,9 @@ function boundedUpload(
 export function createRuntimeFileBridgeFactoryV1(
 	options: RuntimeFileExchangeOptionsV1,
 ): RuntimeFileBridgeFactoryV1 {
-	let origin: URL;
-	try {
-		origin = new URL(options.origin);
-	} catch {
-		invalid();
-	}
+	if (!isRuntimeFileExchangeOriginV1(options.origin)) invalid();
+	const origin = new URL(options.origin);
 	if (
-		origin.protocol !== "https:" ||
-		origin.username ||
-		origin.password ||
-		origin.search ||
-		origin.hash ||
 		!options.serviceToken ||
 		options.serviceToken.length < 32 ||
 		(options.timeoutMs !== undefined &&

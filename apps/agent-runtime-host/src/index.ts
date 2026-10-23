@@ -1008,6 +1008,8 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 						[
 							"RUNTIME_CONFIGURATION_INVALID",
 							"RUNTIME_CODEX_PROVENANCE_MISMATCH",
+							// #3255：文件交换配置无效时原样输出错误码，不再归为启动失败。
+							"RUNTIME_FILE_EXCHANGE_CONFIGURATION_INVALID",
 						].includes(error.message)
 					? error.message
 					: "RUNTIME_STARTUP_FAILED";
