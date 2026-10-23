@@ -95,6 +95,7 @@ import {
 	createRuntimeFileBridgeV1,
 	createRuntimeFileResultReceiptV1,
 	type RuntimeFileBridgePortV1,
+	RuntimeFileInputRejectedError,
 } from "./runtime-file-bridge.js";
 import { RuntimeHost } from "./runtime-host.js";
 import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
@@ -3152,6 +3153,76 @@ describe("Codex Runtime Driver", () => {
 			false,
 		);
 		await expect(readdir(join(workspace, ".agent-infra"))).rejects.toThrow();
+	});
+
+	it("declares a platform refusal of an attachment before any native call and keeps the Conversation usable (#3314)", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const workspace = await codexAttachmentWorkspace(path);
+		const refused = submitCommand({
+			input: { text: "refused", attachments: ["file-txt"] },
+		});
+		const refusing = {
+			...codexAttachmentBridge(),
+			readInput: async () => {
+				throw new RuntimeFileInputRejectedError();
+			},
+		};
+		const requestsBefore = bridge.requests.length;
+		await expect(
+			driver.execute(refused, { fileBridge: refusing }),
+		).rejects.toMatchObject({
+			code: "RUNTIME_FILE_INPUT_REJECTED",
+			retryable: false,
+			driverFailureKind: "file_input_rejected",
+		});
+		// 物化发生在 prepare 与任何原生调用之前：没有原生请求，也没有本操作的 Driver 记录。
+		expect(bridge.requests).toHaveLength(requestsBefore);
+		expect(await driver.lookupOperation(refused)).toEqual({ state: "missing" });
+		await expect(readdir(join(workspace, ".agent-infra"))).rejects.toThrow();
+
+		// 超时、断连等无法确认的读取失败不转换，保持原有的不确定语义。
+		const uncertain = submitCommand({
+			operationId: "execution-uncertain",
+			executionId: "execution-uncertain",
+			turnId: "turn-uncertain",
+			input: { text: "uncertain", attachments: ["file-txt"] },
+		});
+		const unavailable = await driver
+			.execute(uncertain, {
+				fileBridge: {
+					...codexAttachmentBridge(),
+					readInput: async () => {
+						throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
+					},
+				},
+			})
+			.catch((error: unknown) => error);
+		expect(unavailable).toMatchObject({
+			message: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+		});
+		expect(unavailable).not.toHaveProperty(
+			"driverFailureKind",
+			"file_input_rejected",
+		);
+
+		// 被拒绝的执行不阻塞同一 Conversation 的下一条消息。
+		const next = await driver.execute(
+			submitCommand({
+				operationId: "execution-next",
+				executionId: "execution-next",
+				turnId: "turn-next",
+				input: { text: "next", attachments: ["file-txt"] },
+			}),
+			{ fileBridge: codexAttachmentBridge() },
+		);
+		expect(next.result).toMatchObject({ outcome: "accepted" });
+		expect(
+			bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(1);
 	});
 
 	it("releases the body of an attachment whose descriptor exceeds the byte bound", async () => {

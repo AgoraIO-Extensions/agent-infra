@@ -31,6 +31,7 @@ import type {
 	RuntimeExternalActionAuthorization,
 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
+import { RuntimeHostError } from "./errors.js";
 import {
 	FakeRuntimeDriver,
 	fakeNativeCommandCapabilityId,
@@ -46,7 +47,11 @@ import {
 	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionKeyRecoveryValidatorV4,
 } from "./grant-v4.js";
-import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
+import {
+	type RuntimeFileBridgePortV1,
+	RuntimeFileInputRejectedError,
+	rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1,
+} from "./runtime-file-bridge.js";
 import {
 	type RuntimeBrowserExecutionContextFactoryInputV1,
 	RuntimeHost,
@@ -854,6 +859,124 @@ it("refuses the deployment bridge once its execution authority lapses", async ()
 	// A lapsed authority never reaches the deployment port.
 	expect(fileBridge.revalidate).not.toHaveBeenCalled();
 });
+
+// #3314：附件读取在原生副作用之前被平台明确拒绝时，Host 持久化不可重试的 rejected。
+const fileInputRejectedResult = {
+	outcome: "rejected",
+	code: "RUNTIME_FILE_INPUT_REJECTED",
+	message: "Runtime file input was rejected",
+	retryable: false,
+} as const;
+
+function rejectingFileBridge() {
+	return {
+		readInput: vi.fn(async () => {
+			throw new RuntimeFileInputRejectedError();
+		}),
+		writeResult: vi.fn(),
+		revalidate: vi.fn(),
+	} as unknown as RuntimeFileBridgePortV1;
+}
+
+it("persists a Driver-declared file input rejection and replays it without re-executing (#3314)", async () => {
+	const fileBridge = rejectingFileBridge();
+	const f = await setup(fileBridge);
+	const execute = vi
+		.spyOn(f.driver, "execute")
+		.mockImplementation(async (_command, context) => {
+			try {
+				await context?.fileBridge?.readInput("attachment-1");
+			} catch (error) {
+				rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1(error);
+			}
+			throw new Error("unreachable");
+		});
+	const lookup = vi.spyOn(f.driver, "lookupOperation");
+
+	const first = await f.host.submitTurnV4(f.transport);
+	expect(first.result).toEqual(fileInputRejectedResult);
+	// Host 先只读核实 Driver 没有该操作的记录，才持久化拒绝。
+	expect(lookup).toHaveBeenCalled();
+	expect(fileBridge.readInput).toHaveBeenCalledTimes(1);
+
+	const replay = await f.host.submitTurnV4(f.transport);
+	expect(replay).toEqual(first);
+	const reopened = await f.reopen();
+	expect(await reopened.submitTurnV4(f.transport)).toEqual(first);
+	// 重放与 Host 重启都返回已持久的拒绝，不再进入 Driver 或 FileBridge。
+	expect(execute).toHaveBeenCalledTimes(1);
+	expect(fileBridge.readInput).toHaveBeenCalledTimes(1);
+	const persisted = JSON.stringify(JSON.parse(await readFile(f.path, "utf8")));
+	expect(persisted).toContain("RUNTIME_FILE_INPUT_REJECTED");
+});
+
+it("keeps a FileBridge rejection that the Driver did not declare retryable (#3314)", async () => {
+	const fileBridge = rejectingFileBridge();
+	const f = await setup(fileBridge);
+	const execute = vi
+		.spyOn(f.driver, "execute")
+		.mockImplementation(async (_command, context) => {
+			// 未经 Driver 物化点转换的原始错误不能证明尚无原生副作用。
+			await context?.fileBridge?.readInput("attachment-1");
+			throw new Error("unreachable");
+		});
+
+	for (let attempt = 0; attempt < 2; attempt += 1)
+		await expect(f.host.submitTurnV4(f.transport)).rejects.toMatchObject({
+			code: "RUNTIME_DRIVER_INVALID",
+			retryable: true,
+		});
+	// 操作保持 prepared：下一次投递仍可进入 Driver，而不是被推断为失败。
+	expect(execute).toHaveBeenCalledTimes(2);
+	expect(await readFile(f.path, "utf8")).not.toContain(
+		"RUNTIME_FILE_INPUT_REJECTED",
+	);
+});
+
+it.each([
+	["holds a record for the operation", "found"],
+	["cannot confirm the operation", "unknown"],
+	["cannot be queried", "throws"],
+] as const)(
+	"does not persist a declared rejection when the Driver %s (#3314)",
+	async (_name, lookupState) => {
+		const f = await setup(rejectingFileBridge());
+		const execute = f.driver.execute.bind(f.driver);
+		vi.spyOn(f.driver, "execute").mockImplementation(
+			async (command, context) => {
+				// Driver 已经产生了该操作的记录（可能已有原生副作用）后才声明拒绝。
+				if (lookupState === "found") await execute(command, context);
+				rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1(
+					new RuntimeFileInputRejectedError(),
+				);
+			},
+		);
+		if (lookupState === "unknown")
+			vi.spyOn(f.driver, "lookupOperation")
+				.mockResolvedValueOnce({ state: "missing" })
+				.mockResolvedValue({ state: "unknown" });
+		if (lookupState === "throws")
+			vi.spyOn(f.driver, "lookupOperation")
+				.mockResolvedValueOnce({ state: "missing" })
+				.mockRejectedValue(
+					new RuntimeHostError(
+						"RUNTIME_DRIVER_RECOVERY_FAILED",
+						"Runtime operation recovery failed",
+						503,
+						false,
+						"unavailable",
+					),
+				);
+
+		await expect(f.host.submitTurnV4(f.transport)).rejects.toMatchObject({
+			code: "RUNTIME_DRIVER_INVALID",
+			retryable: true,
+		});
+		expect(await readFile(f.path, "utf8")).not.toContain(
+			"RUNTIME_FILE_INPUT_REJECTED",
+		);
+	},
+);
 
 it("decides bridge expiry on the injected grant clock instead of the wall clock", async () => {
 	const directory = await mkdtemp(

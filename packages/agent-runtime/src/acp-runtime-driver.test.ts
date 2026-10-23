@@ -7,7 +7,10 @@ import { RuntimeManifestV1Schema } from "@agent-infra/contracts/workload";
 import { expect, it, vi } from "vitest";
 import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
 import type { RuntimeNativeSkillCommandV1 } from "./driver.js";
-import { createRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
+import {
+	createRuntimeFileResultReceiptV1,
+	RuntimeFileInputRejectedError,
+} from "./runtime-file-bridge.js";
 import {
 	closeStandardMcpFixtures,
 	reference,
@@ -1763,6 +1766,119 @@ const openCodeCommand = (
 		reasoningLevel: "high",
 	},
 });
+
+// #3314：平台对附件的明确拒绝发生在打开原生 Session 与本操作的持久记录之前。
+it.each([
+	["OpenCode workspace attachments", "workspace"],
+	["custom ACP image attachments", "image"],
+] as const)(
+	"declares a platform refusal of %s before any native Turn and keeps the Conversation usable (#3314)",
+	async (_name, kind) => {
+		const path = await mkdtemp(
+			join(tmpdir(), `acp-attachment-refused-${kind}-`),
+		);
+		const driver =
+			kind === "workspace"
+				? await openCodeAttachmentDriver(path, "image-prompt")
+				: await GenericAcpRuntimeDriver.open({
+						path,
+						configVersion: "configuration-a",
+						defaultModelOptionId: "primary",
+						defaultReasoningLevel: "high",
+						modelOptions: [
+							{
+								modelOptionId: "primary",
+								nativeModelId: "provider/model",
+								reasoningLevels: ["high"],
+							},
+						],
+						launch: async () => ({
+							command: process.execPath,
+							args: [
+								fileURLToPath(
+									new URL("./acp-peer.test-support.mjs", import.meta.url),
+								),
+							],
+							env: { ACP_TEST_MODE: "image-prompt" },
+						}),
+					});
+		const sessions = async () =>
+			(await readdir(path, { recursive: true })).filter((entry) =>
+				entry.endsWith("session.json"),
+			);
+		try {
+			await expect(
+				driver.probeReadiness?.(new AbortController().signal),
+			).resolves.toMatchObject({ attachments: true });
+			const refused = openCodeCommand(
+				{ text: "inspect", attachments: ["file-png"] },
+				"refused",
+			);
+			await expect(
+				driver.execute(refused, {
+					fileBridge: {
+						...openCodeAttachmentBridge(),
+						readInput: async () => {
+							throw new RuntimeFileInputRejectedError();
+						},
+					},
+				}),
+			).rejects.toMatchObject({
+				code: "RUNTIME_FILE_INPUT_REJECTED",
+				retryable: false,
+				driverFailureKind: "file_input_rejected",
+			});
+			expect(await driver.lookupOperation(refused)).toEqual({
+				state: "missing",
+			});
+			expect(await sessions()).toEqual([]);
+
+			// 无法确认的读取失败不转换，保持原有的不确定语义。
+			const uncertain = await driver
+				.execute(
+					openCodeCommand(
+						{ text: "inspect", attachments: ["file-png"] },
+						"uncertain",
+					),
+					{
+						fileBridge: {
+							...openCodeAttachmentBridge(),
+							readInput: async () => {
+								throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
+							},
+						},
+					},
+				)
+				.catch((error: unknown) => error);
+			expect(uncertain).toMatchObject({
+				message: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+			});
+			expect(uncertain).not.toHaveProperty(
+				"driverFailureKind",
+				"file_input_rejected",
+			);
+
+			// 被拒绝的执行不占用该 Conversation：下一条消息正常受理。
+			const next = openCodeCommand(
+				{ text: "inspect", attachments: ["file-png"] },
+				"next",
+			);
+			const accepted = await driver.execute(next, {
+				fileBridge: openCodeAttachmentBridge(),
+			});
+			expect(accepted.result).toMatchObject({ outcome: "accepted" });
+			await vi.waitFor(async () =>
+				expect(
+					await driver.getStatus(accepted.nativeSessionRef, next.executionId),
+				).toBe("completed"),
+			);
+			expect(await sessions()).toHaveLength(1);
+		} finally {
+			await driver.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+);
 
 it("materializes OpenCode attachments with a manifest and a negotiated ACP image block (#3225)", async () => {
 	const path = await mkdtemp(join(tmpdir(), "opencode-attachments-image-"));

@@ -19,7 +19,10 @@ import {
 	PiRuntimeDriver,
 	type PiRuntimeDriverOptions,
 } from "./pi-runtime-driver.js";
-import { createRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
+import {
+	createRuntimeFileResultReceiptV1,
+	RuntimeFileInputRejectedError,
+} from "./runtime-file-bridge.js";
 import type { SessionNativeCommandReadContext } from "./session-runtime-driver.js";
 
 const command = {
@@ -1190,6 +1193,84 @@ it("materializes PDF, CSV, TXT and PNG for an attachment-only Pi message and reu
 		expect(regenerated.result).toMatchObject({ outcome: "accepted" });
 		expect((await lstat(pdf)).ino).toBe(before.ino);
 		expect(await readFile(csv)).toEqual(piAttachments["file-csv"]?.bytes);
+	} finally {
+		await f.close();
+	}
+});
+
+it("declares a platform refusal of a Pi attachment before any native Turn and keeps the Conversation usable (#3314)", async () => {
+	const f = await fixture();
+	try {
+		const refused = {
+			...command,
+			input: { text: "inspect", attachments: ["file-txt"] },
+		};
+		await expect(
+			f.driver.execute(refused, {
+				fileBridge: {
+					...piAttachmentBridge(),
+					readInput: async () => {
+						throw new RuntimeFileInputRejectedError();
+					},
+				},
+			}),
+		).rejects.toMatchObject({
+			code: "RUNTIME_FILE_INPUT_REJECTED",
+			retryable: false,
+			driverFailureKind: "file_input_rejected",
+		});
+		// 物化发生在打开原生 Session 与本操作的持久记录之前。
+		expect(await f.driver.lookupOperation(refused)).toEqual({
+			state: "missing",
+		});
+		expect(await attachedUserMessages(f.path)).toEqual([]);
+
+		// 无法确认的读取失败不转换，保持原有的不确定语义。
+		const uncertain = await f.driver
+			.execute(
+				{
+					...command,
+					executionId: "execution-uncertain",
+					turnId: "turn-uncertain",
+					operationId: "operation-uncertain",
+					input: { text: "inspect", attachments: ["file-txt"] },
+				},
+				{
+					fileBridge: {
+						...piAttachmentBridge(),
+						readInput: async () => {
+							throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
+						},
+					},
+				},
+			)
+			.catch((error: unknown) => error);
+		expect(uncertain).toMatchObject({
+			message: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+		});
+		expect(uncertain).not.toHaveProperty(
+			"driverFailureKind",
+			"file_input_rejected",
+		);
+
+		// 被拒绝的执行不占用该 Conversation：下一条消息正常受理并完成。
+		const next = {
+			...command,
+			executionId: "execution-next",
+			turnId: "turn-next",
+			operationId: "operation-next",
+			input: { text: "inspect", attachments: ["file-txt"] },
+		};
+		const accepted = await f.driver.execute(next, {
+			fileBridge: piAttachmentBridge(),
+		});
+		expect(accepted.result).toEqual({ outcome: "accepted", status: "running" });
+		await vi.waitFor(async () =>
+			expect(
+				await f.driver.getStatus(accepted.nativeSessionRef, next.executionId),
+			).toBe("completed"),
+		);
+		expect(await attachedUserMessages(f.path)).toHaveLength(1);
 	} finally {
 		await f.close();
 	}

@@ -432,7 +432,8 @@ function operationResponse(
 		result.outcome === "rejected" &&
 		(result.code === "RUNTIME_MODEL_SELECTION_UNSUPPORTED" ||
 			// submit V1 的结果枚举不扩展：会话阻塞拒绝对 V1 调用方保持失败关闭。
-			result.code === "RUNTIME_SESSION_BLOCKED")
+			result.code === "RUNTIME_SESSION_BLOCKED" ||
+			result.code === "RUNTIME_FILE_INPUT_REJECTED")
 	) {
 		driverInvalid();
 	}
@@ -616,6 +617,36 @@ async function callDriverWithUncertainty<T>(work: () => Promise<T>) {
 		if (isUncertainDriverFailure(error)) return driverUncertain;
 		driverInvalid();
 	}
+}
+
+const driverFileInputRejected = Symbol("driverFileInputRejected");
+
+/**
+ * #3314：`execute` 额外识别 Driver 声明的“附件读取在原生副作用前被平台明确拒绝”。
+ * 只有 Driver 在物化点主动转换的错误才算；FileBridge 的原始错误从别处逃逸时仍不可判定。
+ */
+async function callDriverExecute<T>(work: () => Promise<T>) {
+	try {
+		return await work();
+	} catch (error) {
+		if (
+			error instanceof RuntimeHostError &&
+			error.driverFailureKind === "file_input_rejected"
+		)
+			return driverFileInputRejected;
+		throwSessionRecoveryFailure(error);
+		if (isUncertainDriverFailure(error)) return driverUncertain;
+		driverInvalid();
+	}
+}
+
+function fileInputRejected() {
+	return {
+		outcome: "rejected" as const,
+		code: "RUNTIME_FILE_INPUT_REJECTED" as const,
+		message: "Runtime file input was rejected" as const,
+		retryable: false as const,
+	};
 }
 
 async function* validatedDriverEventStream(
@@ -3201,9 +3232,11 @@ export class RuntimeHost {
 			const executionContext = browser
 				? { ...(driverContext ?? {}), browser }
 				: driverContext;
-			const executed = await callDriverWithUncertainty(() =>
+			const executed = await callDriverExecute(() =>
 				this.options.driver.execute(operation.command, executionContext),
 			);
+			if (executed === driverFileInputRejected)
+				return this.resolveFileInputRejection(hostSessionRef, operation);
 			if (executed === driverUncertain) {
 				if (isInterruption(operation)) {
 					return unknownOperationResponse(hostSessionRef, operation);
@@ -3242,6 +3275,45 @@ export class RuntimeHost {
 			operation.operationId,
 			result,
 			driverRecord.nativeSessionRef,
+		);
+		this.clearFinishedExecutionKey(operation, result);
+		await this.options.afterOperationResolved?.(operation.operationId);
+		return operationResponse(hostSessionRef, operation, result);
+	}
+
+	/**
+	 * #3314：Driver 声明附件读取在任何原生副作用之前被平台明确拒绝。Host 先按同一操作只读
+	 * 核实 Driver 没有该操作的记录，再把不可重试的 rejected 与该操作持久化，重放直接返回原
+	 * 结果。只有 submit V2 及以上的结果枚举包含该成员；其他操作、或 Driver 已有记录、查询
+	 * 不确定时都无法排除副作用，仍按原有的可重试失败处理，不推断为失败。
+	 */
+	private async resolveFileInputRejection(
+		hostSessionRef: string,
+		operation: StoredOperation,
+	): Promise<RuntimeOperationResponse> {
+		if (
+			operation.kind !== "submit-turn" ||
+			operation.command.schemaVersion !== 2
+		)
+			driverInvalid();
+		const lookup = await callDriverWithUncertainty(() =>
+			this.options.driver.lookupOperation(operation.command),
+		);
+		if (
+			lookup === driverUncertain ||
+			parseDriverLookup(
+				lookup,
+				operation,
+				this.options.store.nativeSessionRef(hostSessionRef),
+			).state !== "missing"
+		)
+			driverInvalid();
+		await this.options.afterDriverResult?.(operation.operationId);
+		const result = fileInputRejected();
+		await this.options.store.resolveOperation(
+			hostSessionRef,
+			operation.operationId,
+			result,
 		);
 		this.clearFinishedExecutionKey(operation, result);
 		await this.options.afterOperationResolved?.(operation.operationId);

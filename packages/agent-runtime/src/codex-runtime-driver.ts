@@ -157,7 +157,10 @@ import type {
 	RuntimeFileResultReceiptV1,
 	RuntimeFileResultV1,
 } from "./runtime-file-bridge.js";
-import { readRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
+import {
+	readRuntimeFileResultReceiptV1,
+	rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1,
+} from "./runtime-file-bridge.js";
 import {
 	isSandboxAttachmentNativeImageV1,
 	materializeSandboxAttachmentsV1,
@@ -7183,7 +7186,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			) {
 				// A native Skill text input is materialized only after its Conversation
 				// process and cwd exist; it cannot use this pre-admission path.
-				await ensureInput();
+				try {
+					await ensureInput();
+				} catch (error) {
+					// #3314：此时既没有本操作的 Driver 记录，也没有任何原生调用；平台对附件的
+					// 明确拒绝可以由 Host 持久化为 rejected。清理失败等其他错误保持原语义。
+					rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1(error);
+				}
 				revalidateInput();
 			}
 			return await this.executePreparedSubmitTurn(

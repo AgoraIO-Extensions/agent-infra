@@ -1,5 +1,6 @@
 import {
 	type RuntimeFileExchangeEvidenceV1,
+	RuntimeFileInputRejectedError,
 	RuntimeFileResultUnconfirmedError,
 } from "@agent-infra/agent-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -785,5 +786,196 @@ describe("FileBridge failure diagnostics (#3289)", () => {
 		} finally {
 			error.mockRestore();
 		}
+	});
+});
+
+describe("FileBridge explicit input rejection (#3314)", () => {
+	// 哨兵值：拒绝错误与诊断都不能带出凭据、URL、Grant 或平台响应正文。
+	const origin = "https://sentinel-origin-3314.example.test";
+	const serviceToken = `sentinel-service-token-3314-${"s".repeat(16)}`;
+	const fileGrant = "sentinel.file.grant3314";
+	const sentinels = [
+		origin,
+		"sentinel-origin-3314",
+		serviceToken,
+		fileGrant,
+		evidence.executionGrant.token,
+		"/api/v1/conversations",
+		"runtime-exchange",
+		"platform-reason-3314",
+	];
+	const inputFile = {
+		schemaVersion: 1,
+		fileId: "input-1",
+		kind: "attachment",
+		descriptor: {
+			name: "input.png",
+			mediaType: "image/png",
+			sizeBytes: 3,
+			sha256: "a".repeat(64),
+		},
+		status: "available",
+		createdAt: "2026-01-01T00:00:00Z",
+		expiresAt: "2099-01-01T00:00:00Z",
+	};
+	const granted = () =>
+		new Response(
+			JSON.stringify({
+				schemaVersion: 1,
+				accessId: "access-1",
+				file: inputFile,
+				path: "/api/v1/conversations/conversation-1/files/input-1/content",
+				expiresAt: "2099-01-01T00:00:00Z",
+				grant: { ...grant, token: fileGrant },
+			}),
+			{ status: 200 },
+		);
+	const refusal = (status: number) =>
+		new Response(
+			JSON.stringify({
+				code: "RESOURCE_UNAVAILABLE",
+				detail: `platform-reason-3314 ${serviceToken} ${fileGrant}`,
+			}),
+			{ status },
+		);
+	function bridgeWith(
+		fetcher: (url: string, init?: RequestInit) => Promise<Response>,
+	) {
+		const entries: RuntimeFileExchangeDiagnosticV1[] = [];
+		const bridge = createRuntimeFileBridgeFactoryV1({
+			origin,
+			serviceToken,
+			fetch: vi.fn((input: string | URL | Request, init?: RequestInit) =>
+				fetcher(String(input), init),
+			),
+			logDiagnostic: (entry) => entries.push(entry),
+		})(binding, evidence);
+		return { bridge, entries };
+	}
+	async function readError(
+		fetcher: (url: string, init?: RequestInit) => Promise<Response>,
+	) {
+		const { bridge, entries } = bridgeWith(fetcher);
+		const error = await bridge.readInput("input-1").then(
+			() => {
+				throw new Error("readInput unexpectedly succeeded");
+			},
+			(caught: unknown) => caught,
+		);
+		const logged = JSON.stringify([entries, String(error), error]);
+		for (const sentinel of sentinels) expect(logged).not.toContain(sentinel);
+		return { error, entries };
+	}
+
+	it.each([400, 401, 403, 404, 409, 410, 422])(
+		"marks an exchange refusal %i as an explicit rejection",
+		async (status) => {
+			const { error, entries } = await readError(async () => refusal(status));
+			expect(error).toBeInstanceOf(RuntimeFileInputRejectedError);
+			expect((error as Error).message).toBe("RUNTIME_FILE_INPUT_REJECTED");
+			expect(entries).toEqual([
+				{
+					service: "agent-runtime-host",
+					code: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+					operation: "exchange",
+					reason: "rejected",
+					status,
+					error: "RUNTIME_FILE_INPUT_REJECTED",
+				},
+			]);
+		},
+	);
+
+	it.each([403, 404])(
+		"marks a data-plane refusal %i after a granted exchange as an explicit rejection",
+		async (status) => {
+			const { error, entries } = await readError(async (url) =>
+				url.endsWith("runtime-exchange") ? granted() : refusal(status),
+			);
+			expect(error).toBeInstanceOf(RuntimeFileInputRejectedError);
+			expect(entries).toEqual([
+				expect.objectContaining({
+					operation: "read",
+					reason: "rejected",
+					status,
+					error: "RUNTIME_FILE_INPUT_REJECTED",
+				}),
+			]);
+		},
+	);
+
+	it.each([408, 429, 500, 502, 503, 504])(
+		"keeps an exchange status %i that cannot be confirmed as unavailable",
+		async (status) => {
+			const { error } = await readError(async () => refusal(status));
+			expect(error).not.toBeInstanceOf(RuntimeFileInputRejectedError);
+			expect((error as Error).message).toBe(
+				"RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+			);
+		},
+	);
+
+	it.each([429, 500, 503])(
+		"keeps a data-plane status %i that cannot be confirmed as unavailable",
+		async (status) => {
+			const { error } = await readError(async (url) =>
+				url.endsWith("runtime-exchange") ? granted() : refusal(status),
+			);
+			expect(error).not.toBeInstanceOf(RuntimeFileInputRejectedError);
+			expect((error as Error).message).toBe("RUNTIME_FILE_INPUT_UNAVAILABLE");
+		},
+	);
+
+	it.each([
+		[
+			"a timeout",
+			async () => {
+				throw new DOMException("timed out", "TimeoutError");
+			},
+		],
+		[
+			"a disconnect",
+			async () => {
+				throw new TypeError("fetch failed");
+			},
+		],
+		[
+			"an unparsable exchange response",
+			async () => new Response("not-json", { status: 200 }),
+		],
+		[
+			"a data-plane disconnect",
+			async (url: string) => {
+				if (url.endsWith("runtime-exchange")) return granted();
+				throw new TypeError("fetch failed");
+			},
+		],
+	])("keeps %s uncertain", async (_name, fetcher) => {
+		const { error } = await readError(fetcher);
+		expect(error).not.toBeInstanceOf(RuntimeFileInputRejectedError);
+	});
+
+	it("keeps the result exchange refusal semantics unchanged", async () => {
+		const { bridge } = bridgeWith(async () => refusal(404));
+		const error = await bridge
+			.writeResult(
+				{
+					name: "x.png",
+					mediaType: "image/png",
+					sizeBytes: 2,
+					sha256: "b".repeat(64),
+				},
+				twoBytes(),
+				{ workspaceReference: "out/x.png" },
+			)
+			.then(
+				() => {
+					throw new Error("writeResult unexpectedly succeeded");
+				},
+				(caught: unknown) => caught,
+			);
+		expect(error).not.toBeInstanceOf(RuntimeFileInputRejectedError);
+		expect(error).not.toBeInstanceOf(RuntimeFileResultUnconfirmedError);
+		expect((error as Error).message).toBe("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
 	});
 });

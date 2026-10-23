@@ -15,6 +15,7 @@ import {
 	validateRuntimeBusinessBindingV4,
 	validateRuntimeBusinessBindingV5,
 } from "@agent-infra/contracts/runtime";
+import { RuntimeHostError } from "./errors.js";
 
 export type RuntimeFileResultV1 = ReturnType<
 	typeof FileProjectionV1Schema.parse
@@ -38,6 +39,37 @@ export class RuntimeFileResultUnconfirmedError extends Error {
 		super("RUNTIME_FILE_RESULT_UNCONFIRMED", options);
 		this.name = "RuntimeFileResultUnconfirmedError";
 	}
+}
+
+/**
+ * #3314：平台对一次附件读取作出了确定的拒绝（交换或数据面返回 4xx，408/429 除外），
+ * 例如撤权、停止、终态、fence 前进或附件不在签名清单内。该错误只说明“本次读取被拒绝”，
+ * 不含凭据、URL、Grant 或平台原因。超时、断连、5xx 或无法解析的响应不使用该错误。
+ */
+export class RuntimeFileInputRejectedError extends Error {
+	constructor() {
+		super("RUNTIME_FILE_INPUT_REJECTED");
+		this.name = "RuntimeFileInputRejectedError";
+	}
+}
+
+/**
+ * #3314：Driver 只在附件物化点调用：此时尚无任何原生副作用，Driver 也未为本操作持久化
+ * 记录。平台的明确拒绝转换为 Host 可判定的 `file_input_rejected`，其他错误原样抛出，
+ * 仍按原有的不确定语义处理。
+ */
+export function rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1(
+	error: unknown,
+): never {
+	if (error instanceof RuntimeFileInputRejectedError)
+		throw new RuntimeHostError(
+			"RUNTIME_FILE_INPUT_REJECTED",
+			"Runtime file input was rejected",
+			409,
+			false,
+			"file_input_rejected",
+		);
+	throw error;
 }
 
 /**
