@@ -16,7 +16,19 @@ import { createProductionPlatformFileDeploymentFromEnvironmentV1 } from "./file-
 import {
 	createPostgresLdapBrowserDeployment,
 	createProductionPlatformApiAssemblyInputV1,
+	createProductionSingleAgentTemplateReleaseAppV1,
+	type ProductionTemplateUpgradeInputV2,
 } from "./index.js";
+
+interface DeploymentStandardTemplateReleaseInputV1 {
+	readonly target: Parameters<
+		typeof createProductionSingleAgentTemplateReleaseAppV1
+	>[0]["target"];
+	readonly loadReleaseBinding: Parameters<
+		typeof createProductionSingleAgentTemplateReleaseAppV1
+	>[0]["loadReleaseBinding"];
+	readonly templateUpgrade?: ProductionTemplateUpgradeInputV2;
+}
 
 // The mounted module supplies current directory, policy, Registry and catalog facts.
 // Credentials remain in API-only files; the proxy token is a separate Compose Secret.
@@ -49,6 +61,7 @@ const {
 	browserCommands,
 	providerImport,
 	directorySearch,
+	standardTemplateReleaseInput,
 } = await import(configurationModule);
 
 const environmentConnectionConsumer =
@@ -205,7 +218,33 @@ const fileDeployment =
 		resolveActor: (actorId) => browser.resolveCurrentIdentity(actorId),
 	});
 
+function assembleStandardTemplateReleaseApp() {
+	if (standardTemplateReleaseInput === undefined) return undefined;
+	if (
+		typeof standardTemplateReleaseInput !== "object" ||
+		standardTemplateReleaseInput === null ||
+		!("target" in standardTemplateReleaseInput) ||
+		!("loadReleaseBinding" in standardTemplateReleaseInput) ||
+		typeof standardTemplateReleaseInput.loadReleaseBinding !== "function"
+	)
+		return undefined;
+	const input =
+		standardTemplateReleaseInput as DeploymentStandardTemplateReleaseInputV1;
+	return createProductionSingleAgentTemplateReleaseAppV1({
+		...apiInput,
+		databaseUrl: configuredDatabaseUrl,
+		identity: browser.identity,
+		loadAuthorityContext: apiInput.loadAuthorityContext,
+		target: input.target,
+		loadReleaseBinding: input.loadReleaseBinding,
+		...(input.templateUpgrade
+			? { templateUpgrade: input.templateUpgrade }
+			: {}),
+	});
+}
+
 export const browserAuth = browser.browserAuth;
+export const standardTemplateReleaseApp = assembleStandardTemplateReleaseApp();
 export function createPlatformApiAssemblyInput() {
 	const relayKeyPolicy = inspectProductionRelayKeyPolicyV1(apiInput);
 	if (relayKeyPolicy.missing.length > 0)
