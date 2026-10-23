@@ -2,6 +2,8 @@ import { generateKeyPairSync } from "node:crypto";
 import { expect, it } from "vitest";
 import { workloadDesiredFixture } from "./kubernetes.fixture.js";
 import {
+	fileExchangeOriginPortV1,
+	resolveWorkloadFileExchangeEgressV1,
 	resolveWorkloadFileExchangeOriginV1,
 	validateWorkloadRuntimeAuthV1,
 	workloadRuntimeAuthEnvironmentV1,
@@ -137,4 +139,111 @@ it("accepts only an exact HTTP(S) origin in deployment Runtime auth", () => {
 			}),
 		).toThrow();
 	}
+});
+
+it("derives the file exchange egress port from the exact origin (#3289)", () => {
+	expect(fileExchangeOriginPortV1("http://platform-api:3000")).toBe(3000);
+	expect(fileExchangeOriginPortV1("http://platform-api")).toBe(80);
+	expect(fileExchangeOriginPortV1("https://files.example.test")).toBe(443);
+	expect(
+		resolveWorkloadFileExchangeEgressV1({
+			origin: "https://files.example.test",
+			environment: JSON.stringify({ ip: "198.51.100.7" }),
+		}),
+	).toEqual([{ destination: { ip: "198.51.100.7" }, port: 443 }]);
+	const selector = {
+		namespace: "agent-infra",
+		podLabels: { "app.kubernetes.io/component": "platform-api" },
+	};
+	expect(
+		resolveWorkloadFileExchangeEgressV1({
+			origin: "http://platform-api:3000",
+			configured: [{ destination: selector, port: 3000 }],
+		}),
+	).toEqual([{ destination: selector, port: 3000 }]);
+	// 未配置文件交换时没有这条规则。
+	expect(resolveWorkloadFileExchangeEgressV1({})).toBeUndefined();
+	expect(resolveWorkloadFileExchangeEgressV1({ environment: "" })).toBe(
+		undefined,
+	);
+});
+
+it.each([
+	["an origin without egress", { origin: "http://platform-api:3000" }],
+	[
+		"an egress without origin",
+		{ environment: JSON.stringify({ ip: "198.51.100.7" }) },
+	],
+	[
+		"a configured egress without origin",
+		{ configured: [{ destination: { ip: "198.51.100.7" }, port: 3000 }] },
+	],
+	[
+		"a configured port other than the origin port",
+		{
+			origin: "http://platform-api:3000",
+			configured: [{ destination: { ip: "198.51.100.7" }, port: 3001 }],
+		},
+	],
+	[
+		"two configured destinations",
+		{
+			origin: "http://platform-api:3000",
+			configured: [
+				{ destination: { ip: "198.51.100.7" }, port: 3000 },
+				{ destination: { ip: "198.51.100.8" }, port: 3000 },
+			],
+		},
+	],
+	[
+		"a CIDR destination",
+		{
+			origin: "http://platform-api:3000",
+			environment: JSON.stringify({ cidr: "198.51.0.0/16" }),
+		},
+	],
+	[
+		"an empty Pod selector",
+		{
+			origin: "http://platform-api:3000",
+			environment: JSON.stringify({ namespace: "agent-infra", podLabels: {} }),
+		},
+	],
+	[
+		"a destination with an extra port",
+		{
+			origin: "http://platform-api:3000",
+			environment: JSON.stringify({ ip: "198.51.100.7", port: 9000 }),
+		},
+	],
+	[
+		"malformed JSON",
+		{ origin: "http://platform-api:3000", environment: "{ip:" },
+	],
+	[
+		"an invalid origin",
+		{
+			origin: "http://platform-api:3000/api",
+			environment: JSON.stringify({ ip: "198.51.100.7" }),
+		},
+	],
+] as const)(
+	"rejects %s as a configuration error (#3289 AC-2)",
+	(_name, input) => {
+		expect(() =>
+			resolveWorkloadFileExchangeEgressV1(
+				input as Parameters<typeof resolveWorkloadFileExchangeEgressV1>[0],
+			),
+		).toThrow("PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID");
+	},
+);
+
+it("rejects a file exchange egress from both the module and the environment", () => {
+	expect(() =>
+		resolveWorkloadFileExchangeEgressV1({
+			origin: "http://platform-api:3000",
+			configured: [{ destination: { ip: "198.51.100.7" }, port: 3000 }],
+			environment: JSON.stringify({ ip: "198.51.100.7" }),
+		}),
+	).toThrow("PLATFORM_WORKER_FILE_EXCHANGE_DUPLICATE");
 });

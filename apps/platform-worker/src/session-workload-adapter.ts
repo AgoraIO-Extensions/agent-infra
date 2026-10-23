@@ -38,7 +38,10 @@ import {
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
-import { isFileExchangeOriginV1 } from "./workload-runtime-auth.js";
+import {
+	isFileExchangeOriginV1,
+	isWorkloadFileExchangeEgressCurrentV1,
+} from "./workload-runtime-auth.js";
 
 /**
  * Runtime inputs for one Session Sandbox (#1466). `modelConfiguration` and
@@ -380,6 +383,7 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 					"modelEgress",
 					"connectionEgress",
 					"nativeMetadataWorkerEgress",
+					"fileExchangeEgress",
 					"dnsEgress",
 				].includes(key),
 		)
@@ -394,6 +398,16 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 		// 排空（drain-only）allocation 的 runtime 为 null，无需检查 nativeMetadata 原点。
 		value.runtime !== null &&
 		!isNativeMetadataWorkerOriginV1(value.runtime.nativeMetadataWorkerOrigin)
+	)
+		throw new WorkloadKubernetesError("policy");
+	// #3289：文件交换 egress 只随部署 origin 出现，只有一条且端口等于 origin 端口；
+	// Runtime 输入不能在没有该规则时注入 origin，也不能借另一个端口扩大规则。
+	if (
+		value.runtime !== null &&
+		!isWorkloadFileExchangeEgressCurrentV1(
+			value.runtime.fileExchange?.origin,
+			value.egress.fileExchangeEgress,
+		)
 	)
 		throw new WorkloadKubernetesError("policy");
 	// Rejects any destination the shared Agent-level compiler would reject.

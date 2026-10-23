@@ -337,7 +337,7 @@ export const connectionConsumerApproval = ${JSON.stringify(connectionConsumerApp
 		join(directory, "workload-deployment.js"),
 		`
 export const createWorkloadReadinessAuthorizationV1 = () => { globalThis.calls.push('readiness'); };
-export const createProductionWorkloadWorkerOptionsV1 = async (input) => { globalThis.calls.push('workload'); globalThis.snapshot = input.policy.connectionConsumerSnapshot; globalThis.installation = input.policy.connectionInstallationRevision; globalThis.snapshots = input.policy.connectionConsumerSnapshotsByAgent; globalThis.installations = input.policy.connectionInstallationRevisionsByAgent; return input; };
+export const createProductionWorkloadWorkerOptionsV1 = async (input) => { globalThis.calls.push('workload'); globalThis.fileExchange = { origin: input.policy.runtimeAuth?.fileExchangeOrigin ?? null, egress: input.policy.fileExchangeEgress ?? null }; globalThis.snapshot = input.policy.connectionConsumerSnapshot; globalThis.installation = input.policy.connectionInstallationRevision; globalThis.snapshots = input.policy.connectionConsumerSnapshotsByAgent; globalThis.installations = input.policy.connectionInstallationRevisionsByAgent; return input; };
 `,
 	);
 	await writeFile(
@@ -358,18 +358,17 @@ export const createProductionSessionSandboxReceiverV1 = () => { globalThis.calls
 export const createWecomDeploymentCoordinatorV1 = (input) => { globalThis.calls.push('wecom'); globalThis.wecomDatabase = input.databaseUrl; return {}; };
 `,
 	);
-	await writeFile(
-		join(directory, "workload-runtime-auth.js"),
-		`
-export const resolveWorkloadFileExchangeOriginV1 = (input) => {
-  const environment = input.environment === undefined || input.environment === "" ? undefined : input.environment;
-  if (input.configured !== undefined && environment !== undefined) throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_DUPLICATE");
-  if (environment === undefined) return input.configured;
-  if (!input.hasRuntimeAuth) throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID");
-  return environment;
-};
-`,
-	);
+	// #3289：使用真实的 origin/egress 解析，覆盖写入任何 Kubernetes 资源之前的配置拒绝。
+	await build({
+		entryPoints: [
+			new URL("./workload-runtime-auth.ts", import.meta.url).pathname,
+		],
+		bundle: true,
+		packages: "external",
+		platform: "node",
+		format: "esm",
+		outfile: join(directory, "workload-runtime-auth.js"),
+	});
 	await writeFile(
 		join(directory, "run.mjs"),
 		`
@@ -388,6 +387,10 @@ try {
    process.exit(0);
  }
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
+ if (process.env.RUN_FILE_EXCHANGE === 'true') {
+   console.log(JSON.stringify(globalThis.fileExchange));
+   process.exit(0);
+ }
 	const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
 	if (process.env.RUN_SKILL_CHECK === "true") {
 	 console.log(JSON.stringify({ skillMaterializer: typeof workload.skillMaterializer?.materialize }));
@@ -584,6 +587,87 @@ it("fails closed when native metadata is enabled without runtime auth", () => {
 		calls: [],
 	});
 });
+
+it("pairs the file exchange origin with exactly one declared egress at its port (#3289)", async () => {
+	const configurationPath = join(directory, "configuration.mjs");
+	const configuration = await readFile(configurationPath, "utf8");
+	const origin = "http://agent-infra-e2e-native-metadata-api:3000";
+	const egress = JSON.stringify({ ip: "172.18.0.44" });
+	try {
+		await writeFile(
+			configurationPath,
+			`${configuration}\nworkloadInput.policy.runtimeAuth = {};\n`,
+		);
+		const enabled = run({
+			RUN_FILE_EXCHANGE: "true",
+			PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN: origin,
+			PLATFORM_WORKER_FILE_EXCHANGE_EGRESS: egress,
+		});
+		expect(enabled.status, enabled.stderr).toBe(0);
+		expect(JSON.parse(enabled.stdout)).toEqual({
+			origin,
+			egress: [{ destination: { ip: "172.18.0.44" }, port: 3000 }],
+		});
+		// 未配置文件交换时不生成这条规则。
+		const disabled = run({ RUN_FILE_EXCHANGE: "true" });
+		expect(disabled.status, disabled.stderr).toBe(0);
+		expect(JSON.parse(disabled.stdout)).toEqual({ origin: null, egress: null });
+		for (const overrides of [
+			{ PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN: origin },
+			{
+				PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN: origin,
+				PLATFORM_WORKER_FILE_EXCHANGE_EGRESS: "not-json",
+			},
+			{
+				PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN: origin,
+				PLATFORM_WORKER_FILE_EXCHANGE_EGRESS: JSON.stringify({
+					cidr: "203.0.113.0/24",
+				}),
+			},
+			{
+				PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN: origin,
+				PLATFORM_WORKER_FILE_EXCHANGE_EGRESS: JSON.stringify({
+					ip: "not-an-ip",
+				}),
+			},
+			{
+				PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN: origin,
+				PLATFORM_WORKER_FILE_EXCHANGE_EGRESS: JSON.stringify({
+					ip: "172.18.0.44",
+					port: 9000,
+				}),
+			},
+			{ PLATFORM_WORKER_FILE_EXCHANGE_EGRESS: egress },
+		]) {
+			const result = run(overrides);
+			expect(result.status).toBe(1);
+			expect(JSON.parse(result.stdout)).toEqual({
+				error: "PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID",
+				calls: [],
+			});
+		}
+		// 部署模块声明的端口必须等于 origin 端口；模块与环境变量不能同时提供。
+		await writeFile(
+			configurationPath,
+			`${configuration}\nworkloadInput.policy.runtimeAuth = { fileExchangeOrigin: ${JSON.stringify(origin)} };\nworkloadInput.policy.fileExchangeEgress = [{ destination: { ip: "172.18.0.44" }, port: 3001 }];\n`,
+		);
+		const mismatched = run();
+		expect(mismatched.status).toBe(1);
+		expect(JSON.parse(mismatched.stdout)).toEqual({
+			error: "PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID",
+			calls: [],
+		});
+		const duplicate = run({ PLATFORM_WORKER_FILE_EXCHANGE_EGRESS: egress });
+		expect(duplicate.status).toBe(1);
+		expect(JSON.parse(duplicate.stdout)).toEqual({
+			error: "PLATFORM_WORKER_FILE_EXCHANGE_DUPLICATE",
+			calls: [],
+		});
+	} finally {
+		await writeFile(configurationPath, configuration);
+	}
+	// 每个场景都启动一次部署图，冷 CI 上单次约 1 秒。
+}, 60_000);
 
 it("wires the deployment API origin and keeps explicit current-confirmation ports", async () => {
 	const configurationPath = join(directory, "configuration.mjs");

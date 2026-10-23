@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type {
 	SessionSandboxDeletionProgressV1,
@@ -2243,8 +2244,19 @@ describe("Session Sandbox Runtime file exchange (#3276)", () => {
 		},
 	);
 	const runtime = allocation.runtime as SessionSandboxRuntimeInputV1;
+	// #3289：文件交换 origin 总是伴随部署声明的唯一 egress，端口等于 origin 端口。
+	const fileExchangeEgress = [
+		{
+			destination: {
+				namespace: "agent-infra",
+				podLabels: { "app.kubernetes.io/component": "platform-api" },
+			},
+			port: 3000,
+		},
+	];
 	const enabled: SessionSandboxAllocationV1 = {
 		...allocation,
+		egress: { ...allocation.egress, fileExchangeEgress },
 		runtime: { ...runtime, fileExchange: { origin, serviceToken: derived } },
 	};
 	const fileExchangeNames = [
@@ -2396,9 +2408,101 @@ describe("Session Sandbox Runtime file exchange (#3276)", () => {
 		});
 		await expect(
 			adapter.apply({
-				...allocation,
+				...enabled,
 				runtime: { ...runtime, fileExchange },
 			} as SessionSandboxAllocationV1),
+		).rejects.toMatchObject({ code: "policy" });
+		expect(writes).toBe(0);
+	});
+
+	it("adds exactly one egress rule to the declared origin port (#3289 AC-1)", () => {
+		const [, , disabledPolicy] = sessionSandboxResourcesV1(allocation);
+		const [, , enabledPolicy] = sessionSandboxResourcesV1(enabled);
+		const before = (disabledPolicy as V1NetworkPolicy).spec?.egress ?? [];
+		const after = (enabledPolicy as V1NetworkPolicy).spec?.egress ?? [];
+		expect(after).toHaveLength(before.length + 1);
+		expect(
+			after.filter(
+				(rule) => !before.some((old) => isDeepStrictEqual(old, rule)),
+			),
+		).toEqual([
+			{
+				to: [
+					{
+						namespaceSelector: {
+							matchLabels: { "kubernetes.io/metadata.name": "agent-infra" },
+						},
+						podSelector: {
+							matchLabels: { "app.kubernetes.io/component": "platform-api" },
+						},
+					},
+				],
+				ports: [{ protocol: "TCP", port: 3000 }],
+			},
+		]);
+		// 未配置文件交换时不生成该规则。
+		expect(JSON.stringify(before)).not.toContain("platform-api");
+	});
+
+	it.each([
+		[
+			"egress without a configured origin",
+			{ ...allocation, egress: enabled.egress },
+		],
+		[
+			"an origin without the declared egress",
+			{ ...enabled, egress: allocation.egress },
+		],
+		[
+			"a Runtime origin on another port",
+			{
+				...enabled,
+				runtime: {
+					...runtime,
+					fileExchange: {
+						origin: "http://platform-api.agent-infra.svc:9000",
+						serviceToken: derived,
+					},
+				},
+			},
+		],
+		[
+			"a second file exchange destination",
+			{
+				...enabled,
+				egress: {
+					fileExchangeEgress: [
+						...fileExchangeEgress,
+						{ destination: { ip: "203.0.113.10" }, port: 3000 },
+					],
+				},
+			},
+		],
+		[
+			"a CIDR file exchange destination",
+			{
+				...enabled,
+				egress: {
+					fileExchangeEgress: [
+						{ destination: { cidr: "203.0.113.0/24" }, port: 3000 },
+					],
+				},
+			},
+		],
+	])("rejects %s before any resource write (#3289)", async (_name, value) => {
+		const client = api();
+		let writes = 0;
+		const adapter = createSessionSandboxWorkloadAdapterV1({
+			client: {
+				...client,
+				async create(object) {
+					writes++;
+					return client.create(object);
+				},
+			},
+		});
+		await expect(
+			adapter.apply(value as SessionSandboxAllocationV1),
 		).rejects.toMatchObject({ code: "policy" });
 		expect(writes).toBe(0);
 	});

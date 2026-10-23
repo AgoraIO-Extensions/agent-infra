@@ -38,7 +38,10 @@ import {
 	createWorkloadReadinessLedgerV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
-import { resolveWorkloadFileExchangeOriginV1 } from "./workload-runtime-auth.js";
+import {
+	resolveWorkloadFileExchangeEgressV1,
+	resolveWorkloadFileExchangeOriginV1,
+} from "./workload-runtime-auth.js";
 
 type DeploymentConfiguration = {
 	readonly workloadInput: Omit<
@@ -255,6 +258,13 @@ const fileExchangeOrigin = resolveWorkloadFileExchangeOriginV1({
 	environment: process.env.PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN,
 	hasRuntimeAuth: configuredWorkloadInput.policy.runtimeAuth !== undefined,
 });
+// #3289：文件交换 origin 必须带有部署声明的出站目的地，端口取 origin 端口；缺失或无效时
+// 在任何 Kubernetes 写入之前拒绝，避免“变量已注入、网络却不通”。
+const fileExchangeEgress = resolveWorkloadFileExchangeEgressV1({
+	origin: fileExchangeOrigin,
+	configured: configuredWorkloadInput.policy.fileExchangeEgress,
+	environment: process.env.PLATFORM_WORKER_FILE_EXCHANGE_EGRESS,
+});
 const runtimeAuth =
 	configuredWorkloadInput.policy.runtimeAuth === undefined
 		? undefined
@@ -272,6 +282,7 @@ const workloadInput = {
 	policy: {
 		...configuredWorkloadInput.policy,
 		...(runtimeAuth ? { runtimeAuth } : {}),
+		...(fileExchangeEgress ? { fileExchangeEgress } : {}),
 		...(nativeMetadataGatewayPort !== undefined &&
 		configuredWorkloadInput.policy.nativeMetadataWorkerEgress === undefined
 			? {

@@ -40,6 +40,48 @@ function ruleParts(network: V1NetworkPolicy, index = 0) {
 }
 
 describe("deployment-owned Workload egress", () => {
+	it("compiles the declared file exchange destination as one exact TCP rule (#3289)", () => {
+		const fileExchangeEgress = [
+			{ destination: { ip: "172.18.0.44" }, port: 3000 },
+		] as const;
+		const base = workloadEgressRulesV1(egress);
+		const withFileExchange = workloadEgressRulesV1({
+			...egress,
+			fileExchangeEgress,
+		});
+		expect(withFileExchange).toHaveLength(base.length + 1);
+		// 模型规则在前、DNS 在后，文件交换规则插在两者之间，其他规则不变。
+		expect(withFileExchange.slice(0, egress.modelEgress?.length)).toEqual(
+			base.slice(0, egress.modelEgress?.length),
+		);
+		expect(withFileExchange.at(-1)).toEqual(base.at(-1));
+		expect(withFileExchange[egress.modelEgress?.length ?? 0]).toEqual({
+			to: [{ ipBlock: { cidr: "172.18.0.44/32" } }],
+			ports: [{ protocol: "TCP", port: 3000 }],
+		});
+	});
+	it.each([
+		[
+			"two destinations",
+			[
+				{ destination: { ip: "172.18.0.44" }, port: 3000 },
+				{ destination: { ip: "172.18.0.45" }, port: 3000 },
+			],
+		],
+		[
+			"a CIDR destination",
+			[{ destination: { cidr: "203.0.113.0/24" }, port: 3000 }],
+		],
+		["a missing port", [{ destination: { ip: "172.18.0.44" } }]],
+		["a non-array declaration", { destination: { ip: "172.18.0.44" } }],
+	])("rejects a file exchange egress with %s (#3289)", (_name, value) => {
+		expect(() =>
+			workloadEgressRulesV1({
+				fileExchangeEgress:
+					value as unknown as WorkloadEgressPolicyV1["fileExchangeEgress"],
+			}),
+		).toThrow(expect.objectContaining({ code: "policy" }));
+	});
 	it("compiles an approved Connection destination with an exact TCP port", () => {
 		expect(
 			workloadEgressRulesV1({
