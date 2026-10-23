@@ -561,15 +561,21 @@ StatefulSet 仅为可选 Pod 控制器，不是所有 Sandbox 就绪回执的必
 此可选性不改变 `self-managed` 部署、独立验证 Workload 及 §10.6 的既有 StatefulSet 规则。
 
 专属 Secret 是该 Sandbox 的受控 Secret materialization，与 Sandbox 同名且 `immutable`。
+Sandbox 只持有本 Sandbox 派生的凭据，部署级 service token 不进入其 Secret、env 或文件。
 所有 Session 都有独立的 `token`：部署级 service token 对 `session-sandbox-v1`、namespace 与
 Sandbox ID 的 HMAC-SHA256（base64url）。Worker 每次路由时重新计算，不另行存储；business 与
-control 路由只发送该值，部署 token 和其他 Sandbox 的 token 均被该 Host 拒绝。Agent 级路由
-不变，部署 token 轮换仍遵循下述受控停止与重建流程。
+control 路由只发送该值，部署 token 和其他 Sandbox 的 token 均被该 Host 拒绝。部署配置了
+Runtime 文件交换 origin 时，Secret 另含文件交换用途的 `file-exchange-token`：部署级 service
+token 对 `session-sandbox-file-exchange-v1`、namespace、Sandbox ID、Session 代次与
+`resourceFence` 的 HMAC-SHA256（base64url），由 Platform API 按 §15.4.2 重新计算校验；未配置
+时不写入。两种用途互不通用，代次或 `resourceFence` 前进后旧值失效。Agent 级路由不变，部署
+token 轮换仍遵循下述受控停止与重建流程。
 
 Session 输入按 Store 已验证的来源使用独立、版本化的辨别形状，标准模板与 custom ACP
 不得互相推断或回退；缺失、未知或与 verified 来源不一致的输入，在任何资源写入前拒绝。
 
-- 标准模板的专属 Secret 只含 `token` 和 `model-config`。`model-config` 只接受 Store 随
+- 标准模板的专属 Secret 只含 `token`、`model-config` 和适用的 `file-exchange-token`。
+  `model-config` 只接受 Store 随
   claim 交付的 verified V4 无 Key 模型投影；投影缺失或不是 V4、模板绑定不再受信，或标准模板
   verified 部署含 Agent 级 `secretRefs` 时，prepare 以 policy 失败。Worker 不自行推导投影，
   不挂载 Agent 级 Secret 或静态模型 Key；个人与 Agent 默认 Relay Key 仍按
@@ -2126,10 +2132,11 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 - 文件服务先持久保存对象/操作/主体/时间/限制绑定的 access 记录，再由部署可信签名器产生独立 `FileAccessGrantV1`（compact JWS、EdDSA、受信 key version）。签发方是配置固定的 Platform 文件授权服务，唯一 audience 为 `platform_files`；`purpose=file_access` 与 Execution Grant 用途显式分离。验证器只接受部署登记的签发方、key 和 audience。
 - Claims 绑定 `accessId`、`fileId`、actor、Agent、Channel、Conversation、`read`/`write`、签发/过期时间、最大字节数；执行用途另绑定 Execution、Session generation 和原 Execution Grant 引用。签名器仅消费 Core 已提交的 access 记录，不能接受 Runtime 自报 owner、对象键或任意 claims。数据库保存该记录及 key version，不保存 JWS 或可复用 URL。
 - 浏览器取得平台相对数据面路径和独立短期 Grant；Grant 只通过专用请求 Header 传输，不写入 URL、业务历史、日志或审计。每次实际使用同时解析当前用户会话/有效 API 凭证并比较持久主体和全部对象/操作绑定；同一 URL 或 Grant 被其他主体持有也不能使用。读写、完成确认和续签重新检查当前授权；Owner/应用责任人角色不授予内容读取权。Eval 文件另走独立用途授权。
-- 执行期访问生产者由可信 Worker 调用 Platform API 的 `POST /internal/v1/files/runtime-exchange`，且须通过部署服务身份认证；后续 RuntimeHost 文件桥接复用同一受认证客户端。请求只携带 `RuntimeFileExchangeRequestV2`：原 Execution Grant V4 签名原文、操作、单一 `fileId` 或结果描述及幂等键；旧的 V1 自报身份/过期时间/附件范围字段在同一路由继续拒绝，不得被解释为授权。请求不含可与签名原文竞争的 actor、Execution、generation、fence、allowlist 或 Grant 有效期，这些事实一律取自签名 claims 与持久记录。
-- Platform API 的文件授权服务是新 File Grant 的唯一签发边界。交换在对象 I/O 前依次校验：V4 JWS（`typ=runtime_execution+jws`，固定 `alg`/`kid`，配置 issuer 与签名 Worker identity）、授权的 `turn.submit`/`turn.supplement` 命令及 Execution/Message 操作绑定、部署服务身份允许的 Agent，然后在一个事务内读取持久 Conversation、Execution、Session generation、delivery fence、终态/停止标记和 `task_authorization_records`（存在、未撤销、主体/Agent/Channel 与 `agentAuthorizationRevision` 均匹配）。输入只能来自签名 claims 的附件 allowlist；结果先由文件 Core 分配 execution-bound 文件，再签发仅该对象的 `write` 权限。新 File Grant 的有效期取部署 `accessTtlMs`，不从请求或原 Grant 复制。
-- 原 Execution Grant 是“执行委托范围”的证明，不是持续有效的授权凭证；签名中的 30 秒窗口只约束签发时的委托范围，交换不因窗口自然流逝而放行，当前授权始终由上述持久状态决定（见 [ADR-0014](ADR-0014-runtime-execution-file-bridge.md)）。部署仅向受信 Worker/RuntimeHost 配置服务凭据并固定映射允许的 Agent；两类组件不具有不同的文件权限，请求 Header/Body 不能选择或扩大该映射。现有 `ExecutionGrantClaimsV1`、其 audience 和只读附件范围不变，不能用旧 Grant 直接调用文件数据面或凭服务身份签发写入。
-- RuntimeHost/Worker 消费新 File Grant；执行数据面还须通过部署提供的服务身份认证，身份绑定受信 RuntimeHost/Worker 与目标 Agent，不能仅凭 Grant bearer 请求访问。数据面重新验签并查询当前 Execution、主体授权及 generation；终态、取消、撤权、过期、代次变化或对象/操作不匹配拒绝。历史读取走当前主体的历史权限，不要求 Agent 正在运行，也不能用过期执行权限读取。控制用途 Grant 不允许文件操作。
+- 执行期访问生产者调用 Platform API 的 `POST /internal/v1/files/runtime-exchange`，且须通过执行期服务身份认证（见下）；RuntimeHost 文件桥接复用同一受认证客户端。请求只携带 `RuntimeFileExchangeRequestV2`：原 Execution Grant V4 签名原文、操作、单一 `fileId` 或结果描述及幂等键；旧的 V1 自报身份/过期时间/附件范围字段在同一路由继续拒绝，不得被解释为授权。请求不含可与签名原文竞争的 actor、Execution、generation、fence、allowlist 或 Grant 有效期，这些事实一律取自签名 claims 与持久记录。
+- Platform API 的文件授权服务是新 File Grant 的唯一签发边界。交换在对象 I/O 前依次校验：V4 JWS（`typ=runtime_execution+jws`，固定 `alg`/`kid`，配置 issuer 与签名 Worker identity）、授权的 `turn.submit`/`turn.supplement` 命令及 Execution/Message 操作绑定、执行期服务身份及其允许的 Agent，然后在一个事务内读取持久 Conversation、Execution、Session generation、delivery fence、终态/停止标记和 `task_authorization_records`（存在、未撤销、主体/Agent/Channel 与 `agentAuthorizationRevision` 均匹配）。输入只能来自签名 claims 的附件 allowlist；结果先由文件 Core 分配 execution-bound 文件，再签发仅该对象的 `write` 权限。新 File Grant 的有效期取部署 `accessTtlMs`，不从请求或原 Grant 复制。
+- 原 Execution Grant 是“执行委托范围”的证明，不是持续有效的授权凭证；签名中的 30 秒窗口只约束签发时的委托范围，交换不因窗口自然流逝而放行，当前授权始终由上述持久状态决定（见 [ADR-0014](ADR-0014-runtime-execution-file-bridge.md)）。现有 `ExecutionGrantClaimsV1`、其 audience 和只读附件范围不变，不能用旧 Grant 直接调用文件数据面或凭服务身份签发写入。
+- 执行期服务身份按执行的 Sandbox 绑定确定：未绑定 Sandbox 的执行（Agent Workload）使用部署登记的服务 token；绑定会话 Sandbox 的执行只接受该 Sandbox 的文件交换派生凭据（§10.1.1）。Platform API 从 Platform DB 读取该执行当前的 Sandbox 分配（同一 Conversation、Execution 与代次，`ready`/`running` 且观测就绪，含 Sandbox、namespace 与 `resourceFence`），用登记且映射到该 Agent 的服务 token 重新计算后恒定时间比较。分配缺失、未就绪或不匹配，部署 token 本身，另一 Sandbox 或旧代次、旧 fence 的派生值均拒绝，拒绝与对象不存在不可区分。部署仅向受信 Worker/RuntimeHost 配置服务凭据并固定映射允许的 Agent；两类组件不具有不同的文件权限，请求 Header/Body 不能选择或扩大该映射，凭据不进入日志或错误。
+- RuntimeHost/Worker 消费新 File Grant；执行数据面还须通过同一执行期服务身份认证，不能仅凭 Grant bearer 请求访问。数据面重新验签并查询当前 Execution、主体授权及 generation；终态、取消、撤权、过期、代次变化或对象/操作不匹配拒绝。历史读取走当前主体的历史权限，不要求 Agent 正在运行，也不能用过期执行权限读取。控制用途 Grant 不允许文件操作。
 - 数据面在授权后由服务端流式访问对象存储；S3 预签名能力只用于服务端内部请求，不返回或重定向到 S3 bearer URL。读取固定版本并检查 etag；写入完成前再次授权，过期/撤销的写入即使产生对象也不能成为可见文件。数据面依赖错误只返回受限代码，不暴露对象存在性、内部 URL、证明或凭证。
 
 #### 15.4.3 消费、恢复与清理
