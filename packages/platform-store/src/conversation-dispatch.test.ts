@@ -4304,6 +4304,39 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("keeps ordinary Turns visible when Sandbox retries fill a discovery page", async () => {
+		const work = await seed();
+		const sandboxIds = Array.from(
+			{ length: 300 },
+			(_, index) =>
+				`conversation:sandbox:fairness-${String(index).padStart(3, "0")}`,
+		);
+		await client`
+			insert into platform.outbox_items
+				(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+				 status, available_at, created_at, updated_at)
+			select id, 'conversation', ${work.conversationId},
+				'conversation.sandbox.reconcile.v1', '{}'::jsonb,
+				'fairness-trace', 'fairness-request', 'retry_scheduled', now(), now(), now()
+			from unnest(${sandboxIds}::text[]) as id
+		`;
+		const store = new PostgresConversationDispatchStoreV1({ databaseUrl });
+		try {
+			const page = await store.findDispatchable({ limit: 256 });
+			expect(page).toContainEqual({
+				itemId: work.itemId,
+				operation: "conversation.turn.submit.v1",
+			});
+			expect(
+				page.filter(
+					(item) => item.operation === "conversation.sandbox.reconcile.v1",
+				),
+			).toHaveLength(255);
+		} finally {
+			await store.close();
+		}
+	});
+
 	// #2919：#2951 之前写入的历史参数摘要让 native capability 条目永远认领不到。
 	it.each([
 		["cancelled", "failed"],
