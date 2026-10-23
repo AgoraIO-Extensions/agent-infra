@@ -1266,21 +1266,29 @@ function isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) {
 // #3017 只给 submit V2 及以上的 Runtime 操作结果联合新增一个稳定脱敏、不可重试的 rejected
 // 成员 RUNTIME_SESSION_BLOCKED。成员内容逐字段固定，且只允许出现在 V2 结果组件和
 // V3/V4/V5 响应的 result 联合中；V1 结果不扩展，删除新增成员后须与基线逐字节一致。
-const runtimeSessionBlockedResult = {
-	additionalProperties: false,
-	properties: {
-		code: { const: "RUNTIME_SESSION_BLOCKED", type: "string" },
-		message: {
-			const: "Runtime session is blocked by an unconfirmed turn",
-			type: "string",
+// #3314 以同一规则新增 RUNTIME_FILE_INPUT_REJECTED（附件读取在原生副作用前被平台明确拒绝）。
+function runtimeRejectedResult(code, message) {
+	return {
+		additionalProperties: false,
+		properties: {
+			code: { const: code, type: "string" },
+			message: { const: message, type: "string" },
+			outcome: { const: "rejected", type: "string" },
+			retryable: { const: false, type: "boolean" },
 		},
-		outcome: { const: "rejected", type: "string" },
-		retryable: { const: false, type: "boolean" },
-	},
-	required: ["outcome", "code", "message", "retryable"],
-	type: "object",
-};
-function runtimeSessionBlockedResultUnions(schemas) {
+		required: ["outcome", "code", "message", "retryable"],
+		type: "object",
+	};
+}
+const runtimeSessionBlockedResult = runtimeRejectedResult(
+	"RUNTIME_SESSION_BLOCKED",
+	"Runtime session is blocked by an unconfirmed turn",
+);
+const runtimeFileInputRejectedResult = runtimeRejectedResult(
+	"RUNTIME_FILE_INPUT_REJECTED",
+	"Runtime file input was rejected",
+);
+function runtimeRejectedResultUnions(schemas) {
 	return [
 		schemas?.RuntimeOperationResultV2?.anyOf,
 		...[
@@ -1291,33 +1299,47 @@ function runtimeSessionBlockedResultUnions(schemas) {
 	];
 }
 function isRuntimeSessionBlockedOpenApiAddition(previous, current) {
-	const isBlocked = (option) =>
-		option?.properties?.code?.const === "RUNTIME_SESSION_BLOCKED";
+	return isRuntimeRejectedResultOpenApiAddition(
+		previous,
+		current,
+		runtimeSessionBlockedResult,
+	);
+}
+function isRuntimeFileInputRejectedOpenApiAddition(previous, current) {
+	return isRuntimeRejectedResultOpenApiAddition(
+		previous,
+		current,
+		runtimeFileInputRejectedResult,
+	);
+}
+function isRuntimeRejectedResultOpenApiAddition(previous, current, member) {
+	const isMember = (option) =>
+		option?.properties?.code?.const === member.properties.code.const;
 	// 先在原文档上判断，避免对无关的大文档做整体复制。
 	if (
-		!runtimeSessionBlockedResultUnions(current.components?.schemas).some(
-			(union) => Array.isArray(union) && union.some(isBlocked),
+		!runtimeRejectedResultUnions(current.components?.schemas).some(
+			(union) => Array.isArray(union) && union.some(isMember),
 		)
 	)
 		return false;
 	const normalized = structuredClone(current);
-	const previousUnions = runtimeSessionBlockedResultUnions(
+	const previousUnions = runtimeRejectedResultUnions(
 		previous.components?.schemas,
 	);
-	const currentUnions = runtimeSessionBlockedResultUnions(
+	const currentUnions = runtimeRejectedResultUnions(
 		normalized.components?.schemas,
 	);
 	let changed = false;
 	for (const [index, union] of currentUnions.entries()) {
 		if (!Array.isArray(union)) continue;
-		const added = union.filter(isBlocked);
+		const added = union.filter(isMember);
 		if (added.length === 0) continue;
 		const before = previousUnions[index];
 		if (
 			added.length !== 1 ||
-			!sameValue(added[0], runtimeSessionBlockedResult) ||
+			!sameValue(added[0], member) ||
 			!Array.isArray(before) ||
-			before.some(isBlocked)
+			before.some(isMember)
 		)
 			return false;
 		union.splice(union.indexOf(added[0]), 1);
@@ -5797,6 +5819,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) &&
 			!isRuntimeSessionBlockedOpenApiAddition(previous, current) &&
+			!isRuntimeFileInputRejectedOpenApiAddition(previous, current) &&
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeSkillHostReadOpenApiAddition(previous, current) &&
 			!isRuntimeSkillReadGrantCommandOpenApiAddition(previous, current) &&

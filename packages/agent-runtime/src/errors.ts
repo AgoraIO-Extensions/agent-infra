@@ -1,6 +1,11 @@
 export type RuntimeDriverFailureKind =
 	| "unavailable"
-	| "session_recovery_failed";
+	| "session_recovery_failed"
+	/**
+	 * #3314：附件读取在任何原生副作用之前被平台明确拒绝，Driver 也未持有该操作的记录。
+	 * 只能由 Driver 在其原生副作用之前的物化点声明；Host 据此持久化不可重试的 rejected。
+	 */
+	| "file_input_rejected";
 
 export class RuntimeHostError extends Error {
 	readonly code: string;

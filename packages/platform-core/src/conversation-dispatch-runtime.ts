@@ -196,9 +196,17 @@ export function parseRuntimeResponse(
 			resultInput.code === "RUNTIME_SESSION_BLOCKED" &&
 			resultInput.message ===
 				"Runtime session is blocked by an unconfirmed turn";
+		// #3314：附件读取在原生副作用前被平台明确拒绝，同样只属于 submit V2 及以上的结果枚举。
+		const fileInputRejected =
+			expectedVersion === 2 &&
+			resultInput.code === "RUNTIME_FILE_INPUT_REJECTED" &&
+			resultInput.message === "Runtime file input was rejected";
 		if (
 			resultInput.status !== undefined ||
-			(!turnEnded && !unsupportedSelection && !sessionBlocked) ||
+			(!turnEnded &&
+				!unsupportedSelection &&
+				!sessionBlocked &&
+				!fileInputRejected) ||
 			resultInput.retryable !== false
 		) {
 			return unavailable();
@@ -208,11 +216,13 @@ export function parseRuntimeResponse(
 			code: resultInput.code as
 				| "RUNTIME_TURN_NOT_ACTIVE"
 				| "RUNTIME_MODEL_SELECTION_UNSUPPORTED"
-				| "RUNTIME_SESSION_BLOCKED",
+				| "RUNTIME_SESSION_BLOCKED"
+				| "RUNTIME_FILE_INPUT_REJECTED",
 			message: resultInput.message as
 				| "Runtime turn is no longer active"
 				| "Runtime model selection is unsupported"
-				| "Runtime session is blocked by an unconfirmed turn",
+				| "Runtime session is blocked by an unconfirmed turn"
+				| "Runtime file input was rejected",
 			retryable: false,
 		};
 	} else if (resultInput.outcome === "unknown") {

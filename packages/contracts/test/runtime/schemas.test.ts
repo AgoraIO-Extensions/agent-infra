@@ -286,12 +286,22 @@ describe("RuntimeHost V2 model selection schemas", () => {
 });
 
 // #3017：受理不明阻塞的原生会话以稳定脱敏、不可重试的 rejected 拒绝新 Turn；
-// 只有 submit V2 及以上的结果联合包含该成员，V1 结果保持不变。
-describe("RuntimeHost session blocked rejection", () => {
-	const blocked = {
-		outcome: "rejected",
+// #3314：附件读取在原生副作用前被平台明确拒绝时同样以固定成员拒绝。
+// 只有 submit V2 及以上的结果联合包含这些成员，V1 结果保持不变。
+describe.each([
+	{
 		code: "RUNTIME_SESSION_BLOCKED",
 		message: "Runtime session is blocked by an unconfirmed turn",
+	},
+	{
+		code: "RUNTIME_FILE_INPUT_REJECTED",
+		message: "Runtime file input was rejected",
+	},
+] as const)("RuntimeHost $code rejection", ({ code, message }) => {
+	const blocked = {
+		outcome: "rejected",
+		code,
+		message,
 		retryable: false,
 	} as const;
 	const response = {

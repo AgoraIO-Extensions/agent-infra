@@ -10,6 +10,7 @@ import type {
 } from "@agent-infra/agent-runtime";
 import {
 	createRuntimeFileBridgeV1,
+	RuntimeFileInputRejectedError,
 	RuntimeFileResultUnconfirmedError,
 } from "@agent-infra/agent-runtime";
 import {
@@ -108,6 +109,15 @@ function runtimeFileExchangeDiagnosticV1(
 }
 
 const maximumResponseBytes = 65_536;
+
+/**
+ * #3314：平台对本次请求作出的确定拒绝。4xx 表示平台已判定该请求不被允许（含 404
+ * RESOURCE_UNAVAILABLE 统一表达的撤权、停止、终态、fence 前进与附件不在签名清单内）；
+ * 408 与 429 只说明平台暂时没有处理，与超时、断连、5xx 一样无法确认，不算拒绝。
+ */
+function explicitlyRejected(status: number) {
+	return status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
 
 const DNS_NAME =
 	/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/i;
@@ -322,6 +332,8 @@ export function createRuntimeFileBridgeFactoryV1(
 		value: unknown,
 		key: string,
 		track: RuntimeFileExchangeTrackV1,
+		/** #3314：平台明确拒绝时抛出的错误；省略时保持原有的不可用错误。 */
+		rejected?: () => Error,
 	) {
 		const request = RuntimeFileExchangeRequestV2Schema.parse(value);
 		const response = await send(exchangeUrl, {
@@ -337,7 +349,9 @@ export function createRuntimeFileBridgeFactoryV1(
 		});
 		if (!response.ok) {
 			track.status = response.status;
-			await response.body?.cancel();
+			// 释放响应体失败不能改变平台已经给出的判定。
+			await response.body?.cancel().catch(() => undefined);
+			if (rejected && explicitlyRejected(response.status)) throw rejected();
 			throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
 		}
 		const access = FileAccessResponseV1Schema.parse(
@@ -369,6 +383,7 @@ export function createRuntimeFileBridgeFactoryV1(
 						},
 						key,
 						track,
+						() => new RuntimeFileInputRejectedError(),
 					);
 					if (
 						access.file.fileId !== fileId ||
@@ -384,7 +399,10 @@ export function createRuntimeFileBridgeFactoryV1(
 					});
 					if (!response.ok || !response.body) {
 						if (!response.ok) track.status = response.status;
-						await response.body?.cancel();
+						await response.body?.cancel().catch(() => undefined);
+						// #3314：数据面的 4xx 同样是平台对本次读取的明确拒绝。
+						if (!response.ok && explicitlyRejected(response.status))
+							throw new RuntimeFileInputRejectedError();
 						throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
 					}
 				} catch (error) {

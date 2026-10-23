@@ -33,7 +33,10 @@ import type {
 	RuntimeNativeMetadataReadContextV1,
 	RuntimeNativeSkillCommandV1,
 } from "./driver.js";
-import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
+import {
+	type RuntimeFileBridgePortV1,
+	RuntimeFileInputRejectedError,
+} from "./runtime-file-bridge.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 const commandRead = (
@@ -1387,6 +1390,74 @@ it("submits an attachment-only Claude message as the manifest plus native image 
 		expect(JSON.stringify(f.calls.at(-1)?.body)).toContain(
 			`.agent-infra/attachments/${claudeAttachmentRef("file-txt")}/notes.txt`,
 		);
+	} finally {
+		await f.close();
+	}
+}, 30000);
+
+it("declares a platform refusal of an attachment before the native query and keeps the Conversation usable (#3314)", async () => {
+	const f = await claudeNativeFixture();
+	try {
+		const refused = {
+			...claudeCommand("refused"),
+			input: { text: "inspect", attachments: ["file-png"] },
+		};
+		await expect(
+			f.driver.execute(refused, {
+				fileBridge: {
+					...claudeAttachmentBridge(),
+					readInput: async () => {
+						throw new RuntimeFileInputRejectedError();
+					},
+				},
+			}),
+		).rejects.toMatchObject({
+			code: "RUNTIME_FILE_INPUT_REJECTED",
+			retryable: false,
+			driverFailureKind: "file_input_rejected",
+		});
+		// 物化发生在 retire、原生 query 与本操作的持久记录之前。
+		expect(f.calls).toHaveLength(0);
+		expect(await f.driver.lookupOperation(refused)).toEqual({
+			state: "missing",
+		});
+
+		// 无法确认的读取失败不转换，保持原有的不确定语义。
+		const uncertain = await f.driver
+			.execute(
+				{
+					...claudeCommand("uncertain"),
+					input: { text: "inspect", attachments: ["file-png"] },
+				},
+				{
+					fileBridge: {
+						...claudeAttachmentBridge(),
+						readInput: async () => {
+							throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
+						},
+					},
+				},
+			)
+			.catch((error: unknown) => error);
+		expect(uncertain).toMatchObject({
+			message: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+		});
+		expect(uncertain).not.toHaveProperty(
+			"driverFailureKind",
+			"file_input_rejected",
+		);
+
+		// 被拒绝的执行不占用该 Conversation：下一条消息正常受理。
+		const next = {
+			...claudeCommand("next"),
+			input: { text: "inspect", attachments: ["file-png"] },
+		};
+		const accepted = await f.driver.execute(next, {
+			fileBridge: claudeAttachmentBridge(),
+		});
+		expect(accepted.result).toEqual({ outcome: "accepted", status: "running" });
+		await f.settled(accepted.nativeSessionRef, next.executionId);
+		expect(f.calls).toHaveLength(1);
 	} finally {
 		await f.close();
 	}

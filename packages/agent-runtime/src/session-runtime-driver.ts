@@ -58,7 +58,10 @@ import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
-import { readRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
+import {
+	readRuntimeFileResultReceiptV1,
+	rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1,
+} from "./runtime-file-bridge.js";
 import {
 	isSandboxAttachmentNativeImageV1,
 	materializeSandboxAttachmentsV1,
@@ -1519,18 +1522,23 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const directory = join(this.options.path, ref);
 		const workspace = join(directory, "workspace");
 		if (hasAttachments) {
-			input = workspaceAttachments
-				? await this.materializeWorkspaceAttachmentInput(
+			input = await (workspaceAttachments
+				? this.materializeWorkspaceAttachmentInput(
 						workspace,
 						text,
 						command.input.attachments,
 						fileBridge,
 					)
-				: await this.materializeAttachmentInput(
+				: this.materializeAttachmentInput(
 						text,
 						command.input.attachments,
 						fileBridge,
-					);
+					)
+			).catch(
+				// #3314：附件在打开原生 Session 与本操作的持久记录之前物化，平台的明确拒绝不会
+				// 留下任何原生副作用，可以由 Host 持久化为 rejected；其他错误保持原语义。
+				rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1,
+			);
 			revalidateInput();
 		}
 		const previousHandle = this.handles.get(ref);

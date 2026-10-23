@@ -95,6 +95,7 @@ import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 import {
 	type RuntimeFileBridgePortV1,
 	readRuntimeFileResultReceiptV1,
+	rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1,
 } from "./runtime-file-bridge.js";
 import {
 	isSandboxAttachmentNativeImageV1,
@@ -1521,7 +1522,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				read: (fileId) => bridge.readInput(fileId),
 				invalid: unavailable,
 				imageBytes: true,
-			});
+			}).catch(
+				// #3314：附件在 retire 与本操作的持久记录之前物化，平台的明确拒绝不会留下任何
+				// 原生副作用，可以由 Host 持久化为 rejected；其他错误保持原语义。
+				rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1,
+			);
 			content.push({
 				type: "text",
 				text: sandboxAttachmentPromptTextV1(userText, attachments),

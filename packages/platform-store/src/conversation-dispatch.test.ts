@@ -3973,6 +3973,250 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		});
 	});
 
+	// #3314：附件读取在原生副作用前被平台明确拒绝，Runtime 持久化 RUNTIME_FILE_INPUT_REJECTED。
+	describe("Runtime file input rejected before native side effects (#3314)", () => {
+		const fileInputRejected = {
+			outcome: "rejected",
+			code: "RUNTIME_FILE_INPUT_REJECTED",
+			message: "Runtime file input was rejected",
+			retryable: false,
+		} as const;
+		const rejectedEvents = {
+			async persist(): Promise<never> {
+				throw new Error("A rejected Turn has no runtime events");
+			},
+		};
+
+		async function expectRejectedOutcome(
+			work: Awaited<ReturnType<typeof seed>>,
+		) {
+			expect(await dispatchState(work)).toMatchObject({
+				status: "failed",
+				execution_status: "failed",
+			});
+			const [conversation] = await client<{ status: string }[]>`
+				select status from platform.conversations where id = ${work.conversationId}
+			`;
+			// 会话保持可用，不同于 RUNTIME_SESSION_BLOCKED。
+			expect(conversation?.status).toBe("ready");
+			const events = await client`
+				select event_type, event_payload, source, runtime_cursor
+				from platform.conversation_events
+				where execution_id = ${work.executionId}
+			`;
+			expect(events).toEqual([
+				{
+					event_type: "execution.status",
+					event_payload: { type: "execution.status", status: "failed" },
+					source: "platform",
+					runtime_cursor: null,
+				},
+			]);
+			const [attempt] = await client`
+				select payload->>'errorCode' as error_code from platform.persisted_events
+				where stream_id = ${`outbox:${work.itemId}`} and event_type = 'outbox.failed'
+			`;
+			expect(attempt?.error_code).toBe("RUNTIME_FILE_INPUT_REJECTED");
+		}
+
+		async function expectSettledWork(
+			work: Awaited<ReturnType<typeof seed>>,
+			messageId: string,
+		) {
+			const outboxes = await client<{ id: string; status: string }[]>`
+				select id, status from platform.outbox_items
+				where scope_id = ${work.conversationId}
+					and operation in ('conversation.turn.supplement.v1', 'conversation.turn.stop.v1')
+				order by id
+			`;
+			expect(outboxes).toEqual([
+				{
+					id: `conversation:stop:${work.stopRequestId}`,
+					status: "succeeded",
+				},
+				{ id: `conversation:supplement:${messageId}`, status: "failed" },
+			]);
+			const [message] = await client<
+				{ status: string; failure_code: string | null }[]
+			>`select status, failure_code from platform.conversation_messages where message_id = ${messageId}`;
+			expect(message).toEqual({
+				status: "failed",
+				failure_code: "ORIGINAL_RESPONSE_NOT_STARTED",
+			});
+			const [stop] = await client<{ status: string }[]>`
+				select status from platform.conversation_stops where execution_id = ${work.executionId}
+			`;
+			expect(stop?.status).toBe("completed");
+		}
+
+		it("fails the write-ahead Execution and settles its pending supplement and stop in one finish", async () => {
+			const work = await seed();
+			const { store, decision } = await claim(work.itemId, "rejected-worker");
+			try {
+				if (decision.outcome !== "claimed")
+					throw new Error(`Expected claim: ${decision.outcome}`);
+				const owned = decision.claim;
+				expect(
+					await store.prepareRuntimeDispatch({
+						claim: owned,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				expect((await dispatchState(work))?.execution_status).toBe("unknown");
+				// 附件读取期间到达的补充指令与 stop。
+				const messageId = await seedSupplement(work);
+				await seedStop(work);
+				expect(
+					await store.finish({
+						claim: owned,
+						status: "failed",
+						transition: {
+							executionStatus: "failed",
+							conversationStatus: "ready",
+						},
+						errorCode: "RUNTIME_FILE_INPUT_REJECTED",
+					}),
+				).toBe(true);
+				await expectRejectedOutcome(work);
+				await expectSettledWork(work, messageId);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("keeps other rejected codes on their original supplement and stop convergence", async () => {
+			const work = await seed();
+			const { store, decision } = await claim(work.itemId, "rejected-worker");
+			try {
+				if (decision.outcome !== "claimed")
+					throw new Error(`Expected claim: ${decision.outcome}`);
+				const owned = decision.claim;
+				await store.prepareRuntimeDispatch({
+					claim: owned,
+					leaseDurationMs: 30_000,
+				});
+				const messageId = await seedSupplement(work);
+				await seedStop(work);
+				// 其他失败原因沿用原有语义：补充指令与 stop 由各自的认领收敛。
+				expect(
+					await store.finish({
+						claim: owned,
+						status: "failed",
+						transition: {
+							executionStatus: "failed",
+							conversationStatus: "ready",
+						},
+						errorCode: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+					}),
+				).toBe(true);
+				const pending = await client<{ id: string; status: string }[]>`
+					select id, status from platform.outbox_items
+					where scope_id = ${work.conversationId}
+						and operation in ('conversation.turn.supplement.v1', 'conversation.turn.stop.v1')
+					order by id
+				`;
+				expect(pending).toEqual([
+					{ id: `conversation:stop:${work.stopRequestId}`, status: "pending" },
+					{ id: `conversation:supplement:${messageId}`, status: "pending" },
+				]);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("converges the rejected Turn through Core, releases Agent capacity and admits the next message (AC-1)", async () => {
+			await seedCapacityAgent("agent-dispatch", 1);
+			const work = await seed();
+			const next = await seed();
+			const store = open();
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			runtimeHost.setResult(fileInputRejected);
+			try {
+				const decision = await createConversationDispatchUseCaseV1(
+					{
+						store,
+						runtimeHost,
+						authorization: isolationAuthorization,
+						events: rejectedEvents,
+					},
+					{ retryDelayMs: 0 },
+				).dispatch({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "rejected-core-worker",
+				});
+				expect(decision).toEqual({ schemaVersion: 1, outcome: "rejected" });
+				expect(runtimeHost.sideEffectCount()).toBe(1);
+				await expectRejectedOutcome(work);
+				// maximumConcurrentExecutions=1：失败终态不再占用 Agent 执行容量。
+				const following = await claim(next.itemId, "next-worker");
+				try {
+					if (following.decision.outcome !== "claimed")
+						throw new Error(`Expected claim: ${following.decision.outcome}`);
+					expect(
+						await following.store.prepareRuntimeDispatch({
+							claim: following.decision.claim,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(true);
+				} finally {
+					await following.store.close();
+				}
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("settles a stop requested while the attachment was being read (AC-3)", async () => {
+			const work = await seed();
+			const store = open();
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			runtimeHost.setResult(fileInputRejected);
+			let messageId: string | undefined;
+			const dispatch = runtimeHost.dispatch.bind(runtimeHost);
+			// 用户在 Turn 投递期间停止并补充指令；平台随后拒绝附件读取，Runtime 持久化拒绝。
+			runtimeHost.dispatch = async (...args) => {
+				messageId = await seedSupplement(work);
+				await seedStop(work);
+				return dispatch(...args);
+			};
+			try {
+				const useCase = createConversationDispatchUseCaseV1(
+					{
+						store,
+						runtimeHost,
+						authorization: isolationAuthorization,
+						events: rejectedEvents,
+					},
+					{ retryDelayMs: 0 },
+				);
+				expect(
+					await useCase.dispatch({
+						schemaVersion: 1,
+						itemId: work.itemId,
+						workerId: "rejected-stop-worker",
+					}),
+				).toEqual({ schemaVersion: 1, outcome: "rejected" });
+				if (!messageId) throw new Error("missing supplement");
+				await expectRejectedOutcome(work);
+				await expectSettledWork(work, messageId);
+				// stop 已在同一事务收敛：不会再被认领，也不会重试或调用 Runtime。
+				const stop = await claim(
+					`conversation:stop:${work.stopRequestId}`,
+					"stop-worker",
+				);
+				try {
+					expect(stop.decision.outcome).not.toBe("claimed");
+				} finally {
+					await stop.store.close();
+				}
+				expect(runtimeHost.sideEffectCount()).toBe(1);
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
 	it("atomically admits verified Agent capacity across Workers and retains it through takeover and failed terminal commit", async () => {
 		await seedCapacityAgent("agent-dispatch", 1);
 		const first = await seed();

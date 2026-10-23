@@ -404,11 +404,13 @@ export type ConversationRuntimeOperationResultV1 =
 			readonly code:
 				| "RUNTIME_TURN_NOT_ACTIVE"
 				| "RUNTIME_MODEL_SELECTION_UNSUPPORTED"
-				| "RUNTIME_SESSION_BLOCKED";
+				| "RUNTIME_SESSION_BLOCKED"
+				| "RUNTIME_FILE_INPUT_REJECTED";
 			readonly message:
 				| "Runtime turn is no longer active"
 				| "Runtime model selection is unsupported"
-				| "Runtime session is blocked by an unconfirmed turn";
+				| "Runtime session is blocked by an unconfirmed turn"
+				| "Runtime file input was rejected";
 			readonly retryable: false;
 	  }
 	| {

@@ -181,6 +181,13 @@ export const RuntimeOperationResultV2Schema = z.union([
 		message: z.literal("Runtime session is blocked by an unconfirmed turn"),
 		retryable: z.literal(false),
 	}),
+	// #3314：附件读取在任何原生副作用之前被平台明确拒绝：稳定脱敏、不可重试，仅 submit V2 及以上可返回。
+	z.strictObject({
+		outcome: z.literal("rejected"),
+		code: z.literal("RUNTIME_FILE_INPUT_REJECTED"),
+		message: z.literal("Runtime file input was rejected"),
+		retryable: z.literal(false),
+	}),
 	z.strictObject({
 		outcome: z.literal("unknown"),
 		code: z.literal("RUNTIME_ACCEPTANCE_UNKNOWN"),

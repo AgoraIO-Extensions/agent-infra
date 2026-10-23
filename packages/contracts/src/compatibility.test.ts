@@ -4362,146 +4362,153 @@ describe("contract compatibility command", () => {
 		}
 	});
 
-	it("admits only the pinned RUNTIME_SESSION_BLOCKED rejected result in submit V2+ unions (#3017)", async () => {
-		type Union = Array<{ properties?: Record<string, { const?: unknown }> }>;
-		type Document = {
-			components: { schemas: Record<string, Record<string, unknown>> };
-		};
-		const blocked = (option: Union[number]) =>
-			option?.properties?.code?.const === "RUNTIME_SESSION_BLOCKED";
-		const unions = (value: Document) => {
-			const schemas = value.components.schemas as Record<
-				string,
-				{ anyOf?: Union; properties?: { result?: { anyOf?: Union } } }
-			>;
-			return [
-				schemas.RuntimeOperationResultV2?.anyOf,
-				schemas.RuntimeOperationResponseV3?.properties?.result?.anyOf,
-				schemas.RuntimeOperationResponseV4?.properties?.result?.anyOf,
-				schemas.RuntimeOperationResponseV5?.properties?.result?.anyOf,
-			].filter((union): union is Union => Array.isArray(union));
-		};
-		// 还原 #3017 之前的基线：从每个 V2+ 结果联合中删除新增成员。
-		const restorePreSessionBlockedContract = (value: Document) => {
-			for (const union of unions(value)) {
-				const index = union.findIndex(blocked);
-				if (index !== -1) union.splice(index, 1);
-			}
-		};
-		const directory = await mkdtemp(
-			resolve(tmpdir(), "agent-infra-runtime-session-blocked-"),
-		);
-		const previousPath = resolve(directory, "previous.json");
-		const currentPath = resolve(directory, "current.json");
-		try {
-			for (const version of ["v2", "v3", "v4", "v5"]) {
-				const current = JSON.parse(
+	it.each([
+		["RUNTIME_SESSION_BLOCKED", "#3017"],
+		["RUNTIME_FILE_INPUT_REJECTED", "#3314"],
+	])(
+		"admits only the pinned %s rejected result in submit V2+ unions (%s)",
+		async (code) => {
+			type Union = Array<{ properties?: Record<string, { const?: unknown }> }>;
+			type Document = {
+				components: { schemas: Record<string, Record<string, unknown>> };
+			};
+			const blocked = (option: Union[number]) =>
+				option?.properties?.code?.const === code;
+			const unions = (value: Document) => {
+				const schemas = value.components.schemas as Record<
+					string,
+					{ anyOf?: Union; properties?: { result?: { anyOf?: Union } } }
+				>;
+				return [
+					schemas.RuntimeOperationResultV2?.anyOf,
+					schemas.RuntimeOperationResponseV3?.properties?.result?.anyOf,
+					schemas.RuntimeOperationResponseV4?.properties?.result?.anyOf,
+					schemas.RuntimeOperationResponseV5?.properties?.result?.anyOf,
+				].filter((union): union is Union => Array.isArray(union));
+			};
+			// 还原新增该成员之前的基线：从每个 V2+ 结果联合中删除它。
+			const restorePreSessionBlockedContract = (value: Document) => {
+				for (const union of unions(value)) {
+					const index = union.findIndex(blocked);
+					if (index !== -1) union.splice(index, 1);
+				}
+			};
+			const directory = await mkdtemp(
+				resolve(tmpdir(), "agent-infra-runtime-session-blocked-"),
+			);
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			try {
+				for (const version of ["v2", "v3", "v4", "v5"]) {
+					const current = JSON.parse(
+						await readFile(
+							new URL(
+								`../artifacts/openapi/runtime-host.${version}.openapi.json`,
+								import.meta.url,
+							),
+							"utf8",
+						),
+					) as Document;
+					const [union] = unions(current);
+					expect(union?.filter(blocked)).toHaveLength(1);
+					const previous = structuredClone(current);
+					restorePreSessionBlockedContract(previous);
+					await Promise.all([
+						writeFile(previousPath, JSON.stringify(previous), "utf8"),
+						writeFile(currentPath, JSON.stringify(current), "utf8"),
+					]);
+					expect(comparePaths(currentPath, previousPath).status).toBe(0);
+					const member = (value: Document) => {
+						const found = unions(value)[0]?.find(blocked);
+						if (!found?.properties) throw new Error("blocked member missing");
+						return found as {
+							properties: {
+								message: { const: unknown };
+								retryable: { const: unknown };
+								detail?: unknown;
+							};
+							required: string[];
+						};
+					};
+					for (const mutate of [
+						// 消息与可重试性逐字段固定。
+						(value: Document) => {
+							member(value).properties.message.const = "Runtime is blocked";
+						},
+						(value: Document) => {
+							member(value).properties.retryable.const = true;
+						},
+						// 不能借机新增字段或放松必填。
+						(value: Document) => {
+							member(value).properties.detail = { type: "string" };
+						},
+						(value: Document) => {
+							member(value).required = ["outcome", "code"];
+						},
+						// 同一联合中只能新增一个成员。
+						(value: Document) => {
+							const target = unions(value)[0];
+							const found = target?.find(blocked);
+							if (found) target?.push(structuredClone(found));
+						},
+						// 其他既有成员不能同时变化。
+						(value: Document) => {
+							const target = unions(value)[0];
+							const index =
+								target?.findIndex(
+									(option) =>
+										option?.properties?.code?.const ===
+										"RUNTIME_TURN_NOT_ACTIVE",
+								) ?? -1;
+							target?.splice(index, 1);
+						},
+					]) {
+						const changed = structuredClone(current);
+						mutate(changed);
+						await writeFile(currentPath, JSON.stringify(changed), "utf8");
+						const result = comparePaths(currentPath, previousPath);
+						expect(result.status).toBe(1);
+						expect(result.stderr).toContain("changed OpenAPI contract");
+					}
+				}
+
+				// submit V1 的结果枚举不扩展：同一成员加入 V1 结果仍为 breaking。
+				const v1 = JSON.parse(
 					await readFile(
 						new URL(
-							`../artifacts/openapi/runtime-host.${version}.openapi.json`,
+							"../artifacts/openapi/runtime-host.v1.openapi.json",
 							import.meta.url,
 						),
 						"utf8",
 					),
 				) as Document;
-				const [union] = unions(current);
-				expect(union?.filter(blocked)).toHaveLength(1);
-				const previous = structuredClone(current);
-				restorePreSessionBlockedContract(previous);
+				const v2 = JSON.parse(
+					await readFile(runtimeHostV2ArtifactPath, "utf8"),
+				) as Document;
+				const v1Options = (
+					v1.components.schemas.RuntimeOperationResultV1 as { oneOf?: Union }
+				).oneOf;
+				const v2Member = unions(v2)[0]?.find(blocked);
+				if (!v1Options || !v2Member)
+					throw new Error("runtime host V1 result fixture missing");
+				const widenedV1 = structuredClone(v1);
+				(
+					widenedV1.components.schemas.RuntimeOperationResultV1 as {
+						oneOf: Union;
+					}
+				).oneOf.push(structuredClone(v2Member));
 				await Promise.all([
-					writeFile(previousPath, JSON.stringify(previous), "utf8"),
-					writeFile(currentPath, JSON.stringify(current), "utf8"),
+					writeFile(previousPath, JSON.stringify(v1), "utf8"),
+					writeFile(currentPath, JSON.stringify(widenedV1), "utf8"),
 				]);
-				expect(comparePaths(currentPath, previousPath).status).toBe(0);
-				const member = (value: Document) => {
-					const found = unions(value)[0]?.find(blocked);
-					if (!found?.properties) throw new Error("blocked member missing");
-					return found as {
-						properties: {
-							message: { const: unknown };
-							retryable: { const: unknown };
-							detail?: unknown;
-						};
-						required: string[];
-					};
-				};
-				for (const mutate of [
-					// 消息与可重试性逐字段固定。
-					(value: Document) => {
-						member(value).properties.message.const = "Runtime is blocked";
-					},
-					(value: Document) => {
-						member(value).properties.retryable.const = true;
-					},
-					// 不能借机新增字段或放松必填。
-					(value: Document) => {
-						member(value).properties.detail = { type: "string" };
-					},
-					(value: Document) => {
-						member(value).required = ["outcome", "code"];
-					},
-					// 同一联合中只能新增一个成员。
-					(value: Document) => {
-						const target = unions(value)[0];
-						const found = target?.find(blocked);
-						if (found) target?.push(structuredClone(found));
-					},
-					// 其他既有成员不能同时变化。
-					(value: Document) => {
-						const target = unions(value)[0];
-						const index =
-							target?.findIndex(
-								(option) =>
-									option?.properties?.code?.const === "RUNTIME_TURN_NOT_ACTIVE",
-							) ?? -1;
-						target?.splice(index, 1);
-					},
-				]) {
-					const changed = structuredClone(current);
-					mutate(changed);
-					await writeFile(currentPath, JSON.stringify(changed), "utf8");
-					const result = comparePaths(currentPath, previousPath);
-					expect(result.status).toBe(1);
-					expect(result.stderr).toContain("changed OpenAPI contract");
-				}
+				const widened = comparePaths(currentPath, previousPath);
+				expect(widened.status).toBe(1);
+				expect(widened.stderr).toContain("changed OpenAPI contract");
+			} finally {
+				await rm(directory, { recursive: true, force: true });
 			}
-
-			// submit V1 的结果枚举不扩展：同一成员加入 V1 结果仍为 breaking。
-			const v1 = JSON.parse(
-				await readFile(
-					new URL(
-						"../artifacts/openapi/runtime-host.v1.openapi.json",
-						import.meta.url,
-					),
-					"utf8",
-				),
-			) as Document;
-			const v2 = JSON.parse(
-				await readFile(runtimeHostV2ArtifactPath, "utf8"),
-			) as Document;
-			const v1Options = (
-				v1.components.schemas.RuntimeOperationResultV1 as { oneOf?: Union }
-			).oneOf;
-			const v2Member = unions(v2)[0]?.find(blocked);
-			if (!v1Options || !v2Member)
-				throw new Error("runtime host V1 result fixture missing");
-			const widenedV1 = structuredClone(v1);
-			(
-				widenedV1.components.schemas.RuntimeOperationResultV1 as {
-					oneOf: Union;
-				}
-			).oneOf.push(structuredClone(v2Member));
-			await Promise.all([
-				writeFile(previousPath, JSON.stringify(v1), "utf8"),
-				writeFile(currentPath, JSON.stringify(widenedV1), "utf8"),
-			]);
-			const widened = comparePaths(currentPath, previousPath);
-			expect(widened.status).toBe(1);
-			expect(widened.stderr).toContain("changed OpenAPI contract");
-		} finally {
-			await rm(directory, { recursive: true, force: true });
-		}
-	});
+		},
+	);
 
 	it("admits only the pinned administrator Agent read and preserves every existing contract", async () => {
 		const current = JSON.parse(
