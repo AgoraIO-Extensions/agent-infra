@@ -1,4 +1,5 @@
 import { Clock } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { buttonVariants } from "@/components/ui/button";
 import { LoginAction } from "./login-action";
 
@@ -9,6 +10,8 @@ type LoginPageProps = {
 	development: boolean;
 	/** 已就绪的会话失效（非主动退出），或地址带 reason=expired。 */
 	expired: boolean;
+	/** 由用户主动退出进入：焦点随原页面卸载落到 body 时交给第一个登录控件。 */
+	focusAfterLogout?: boolean;
 	onLoggedIn: () => Promise<unknown>;
 };
 
@@ -20,8 +23,24 @@ export function LoginPage({
 	loginUrl,
 	development,
 	expired,
+	focusAfterLogout = false,
 	onLoggedIn,
 }: LoginPageProps) {
+	const main = useRef<HTMLElement>(null);
+	// 主动退出后「退出登录」（窄屏连同导航 Sheet）随壳层卸载，焦点会落到 body：交给「公司账号」，
+	// 开发模式为「选择开发测试身份」（#3242 K7-02）。直接打开登录页时不抢焦点，与设计稿一致。
+	useEffect(() => {
+		if (!focusAfterLogout) return;
+		// 等原壳层离开 DOM、Sheet 归还焦点结束后再检查。
+		const timer = window.setTimeout(() => {
+			const active = document.activeElement;
+			if (active && active !== document.body) return;
+			main.current
+				?.querySelector<HTMLElement>("input:not([disabled]), a[href]")
+				?.focus();
+		});
+		return () => window.clearTimeout(timer);
+	}, [focusAfterLogout]);
 	return (
 		<div className="login-page">
 			<header className="login-header">
@@ -33,7 +52,7 @@ export function LoginPage({
 				</div>
 				<span className="login-context">企业内部工作区</span>
 			</header>
-			<main id="main-content" className="login-main">
+			<main ref={main} id="main-content" className="login-main">
 				<section className="login-panel" aria-labelledby="login-title">
 					<div className="login-intro">
 						<p className="login-kicker">公司账号</p>
