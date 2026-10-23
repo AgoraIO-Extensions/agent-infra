@@ -114,8 +114,15 @@ Agent 默认 Relay Key 的 `/models`，私有 API/Worker Model Catalog 的 `allo
    `PLATFORM_LOCAL_API_FILE_DEPLOYMENT_CONFIGURATION_FILE=/app/deployment/file-deployment.json`。
    配置形状见[文件存储部署与验收](../../docs/architecture/FILE-storage-deployment.md#生产部署装配)。
 2. 设置 `PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED=true`，它是 `platform.sh` 的 Worker 侧文件面开关：
-   - 向 Worker values 写入 `platformWorker.fileExchangeOrigin=http://<release>-native-metadata-api:3000`；
-     该 Service 只在 native metadata 路由启用时存在。origin 必须是精确值，不能带路径或尾斜杠。
+   - 向 Worker values 写入 `platformWorker.fileExchangeOrigin=http://<release>-native-metadata-api:3000`，
+     以及它的出站声明 `platformWorker.fileExchangeEgress.ip=<API 在 kind 网络上的地址>`。该 Service 与
+     EndpointSlice 只在 native metadata 路由启用时存在，未启用时 `up`/`validate` 在停止任何服务前失败。
+     origin 必须是精确值，不能带路径或尾斜杠。
+   - Platform API 在集群外：Sandbox 访问 origin 时经 Service 转发到 EndpointSlice 中的 API 地址，
+     NetworkPolicy 按这个地址和 3000 端口放行。`up` 先沿用上次 EndpointSlice 记录的地址升级 Worker；
+     API 重建并接入 kind 后地址不同（或首次 `up`、`stop` 之后尚无记录）时，再以新地址升级一次 Worker，
+     期间 Web 保持关闭。地址变化会使已有会话 Sandbox 的 NetworkPolicy 漂移，按
+     [文件存储部署](../../docs/architecture/FILE-storage-deployment.md#runtime-文件交换注入)的已有会话流程处理。
    - 把 Compose `object-storage` 以随机别名接入 kind 网络，并创建带 ownership 标记的
      `<release>-object-storage` Service 与 `<release>-object-storage-docker` EndpointSlice（端口 9000），
      Worker Pod 通过 `http://<release>-object-storage:9000` 访问对象存储。未设置时不接入，`up` 会清理
@@ -127,8 +134,9 @@ Agent 默认 Relay Key 的 `/models`，私有 API/Worker Model Catalog 的 `allo
 4. 准备可从 API 容器访问的 S3／MinIO bucket 和部署独占前缀；bucket 必须启用 versioning。
    未准备时不要启用文件入口，否则上传与交换会失败。
 
-本地 kind 使用 kindnet，不强制执行 NetworkPolicy，因此本地文件往返通过不证明生产 egress 已配置。
-生产必须把 Platform API origin 端口加入 Agent NetworkPolicy 的 allow-list。
+固定环境的 kindnet 会执行 NetworkPolicy：文件交换只为 Agent Pod 与会话 Sandbox 放行上述 API 地址的
+3000 端口，Worker 除 native metadata 端口外的其他端口和对象存储仍不可达。本地往返只证明本地声明可用，
+生产须按自己的 API 位置声明目的地。
 
 ### Worker 企微媒体装配
 
