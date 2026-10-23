@@ -48,6 +48,10 @@ const images = [
 		key: "web",
 		name: "web",
 		dockerfile: "apps/web/Dockerfile",
+		buildArgs: [
+			"VITE_PLATFORM_LOGIN_URL=/auth/login",
+			"VITE_PLATFORM_LOGOUT_URL=/auth/logout",
+		],
 		runOptions: [
 			"--tmpfs", "/tmp:size=16m,mode=1777",
 			"--add-host", "agent-infra-api:127.0.0.1",
@@ -308,6 +312,7 @@ async function buildImage({
 				platform,
 				"--build-arg",
 				`SOURCE_DATE_EPOCH=${epoch}`,
+				...(image.buildArgs ?? []).flatMap((value) => ["--build-arg", value]),
 				...(image.dockerfile === "apps/agent-runtime-host/Dockerfile"
 					? ["--build-arg", `SOURCE_COMMIT=${commitSha}`]
 					: []),

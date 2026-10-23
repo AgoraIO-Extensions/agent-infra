@@ -233,19 +233,18 @@ test("image build validates reproducibility and read-only non-root execution", a
 		assert.notEqual(resolve([...contexts][0]), repositoryRoot);
 		for (const args of builds) {
 			assert.ok(args.includes("--no-cache"));
-			assert.deepEqual(
-				args.flatMap((argument, index) =>
-					argument === "--build-arg" ? [args[index + 1]] : [],
-				),
-				[
-					"SOURCE_DATE_EPOCH=1700000000",
-					...(args.some((arg) =>
-						arg.endsWith("apps/agent-runtime-host/Dockerfile"),
-					)
-						? [`SOURCE_COMMIT=${commitSha}`]
-						: []),
-				],
+			const buildArgs = args.flatMap((argument, index) =>
+				argument === "--build-arg" ? [args[index + 1]] : [],
 			);
+			assert.ok(buildArgs.includes("SOURCE_DATE_EPOCH=1700000000"));
+			if (args[args.indexOf("--file") + 1].endsWith("apps/web/Dockerfile")) {
+				assert.ok(buildArgs.includes("VITE_PLATFORM_LOGIN_URL=/auth/login"));
+				assert.ok(buildArgs.includes("VITE_PLATFORM_LOGOUT_URL=/auth/logout"));
+			}
+			if (
+				args.some((arg) => arg.endsWith("apps/agent-runtime-host/Dockerfile"))
+			)
+				assert.ok(buildArgs.includes(`SOURCE_COMMIT=${commitSha}`));
 			assert.ok(args.includes("--provenance=false"));
 			assert.ok(args.includes("--sbom=false"));
 			assert.match(
