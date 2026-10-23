@@ -1952,6 +1952,8 @@ export class PostgresConversationQueryV1 {
 								and c.agent_id = ${agentId}
 								and c.actor_id = ${actorId}
 								and c.channel_id = ${channelId}
+								-- 会话代次已推进时，旧代次执行不再对应任何当前 Sandbox 凭据。
+								and c.session_generation = ${sessionGeneration}
 							limit 2
 						`,
 					);

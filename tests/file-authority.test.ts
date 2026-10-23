@@ -1220,6 +1220,8 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 		revoked.delete(sessions.first.actorId);
 		await sql`update platform.conversations set session_generation = 2 where id = ${sessions.first.conversationId}`;
 		await denyCurrent();
+		// 会话代次推进后，旧代次执行的 Sandbox 派生值同样被拒绝（#3276）。
+		expect(await probe(firstFile.fileId, firstToken)).toBe(404);
 		const expired = { ...bindingFor("second"), expiresAt: Date.now() - 1 };
 		await expect(
 			bridgeFactory(expired, evidenceFor("second")).readInput(
