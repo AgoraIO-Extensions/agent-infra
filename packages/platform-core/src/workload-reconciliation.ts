@@ -692,6 +692,8 @@ export function createWorkloadReconciliationV1(dependencies: {
 							if (servingProbeTolerated(state, health))
 								return { ...state, attempts: state.attempts + 1 };
 							await runtime.closeRoute(state);
+							// 漂移只推进 Workload revision，candidate 保留原 verified 部署及其 workloadRevision：
+							// Session Sandbox policy 绑定该值，改写会使已就绪 Sandbox 失效（#1480、#3304）。
 							return health === "drifted"
 								? advance("applying", {
 										revision: nextRevision(state.revision),

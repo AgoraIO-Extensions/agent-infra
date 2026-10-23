@@ -101,9 +101,8 @@ pnpm build
 pnpm smoke
 pnpm docker:build
 npx --yes markdownlint-cli2@0.23.2 README.md AGENTS.md ".github/**/*.md" "docs/**/*.md"
-find README.md AGENTS.md .github docs -type f -name '*.md' -print0 | while IFS= read -r -d '' file; do
-  npx --yes markdown-link-check@3.15.0 --config .markdown-link-check.json "$file"
-done
+npx --yes --package=markdown-link-check@3.15.0 -c \
+  "node .github/scripts/check-markdown-links.mjs \"\$(command -v markdown-link-check)\""
 node .github/scripts/verify-workflow-policy.mjs
 .github/scripts/run-actionlint.sh
 git diff --check
