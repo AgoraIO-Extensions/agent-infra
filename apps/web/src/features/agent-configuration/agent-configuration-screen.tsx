@@ -497,6 +497,8 @@ export function AgentConfigurationScreen({
 										<Button
 											type="button"
 											variant="outline"
+											// 页脚在 fieldset 之外：保存进行中或 Agent 已停用时同样禁用。
+											disabled={isDisabled}
 											onClick={onReloadSavedRelayKey}
 										>
 											<RefreshCw aria-hidden="true" data-icon="inline-start" />

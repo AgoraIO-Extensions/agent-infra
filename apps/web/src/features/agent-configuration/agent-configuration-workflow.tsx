@@ -155,8 +155,12 @@ function AgentConfigurationWorkflowContent({
 			defaultRelayKeyState={defaultRelayKey.data}
 			endpointNames={endpointNames}
 			footerActions={
+				// 页脚在整页 fieldset 之外（#3242 K7-02）：配置保存进行中与 Agent 已停用时仍原生禁用，
+				// 与原先随 fieldset 禁用一致。
 				<ConfigurationFooterLifecycleActions
-					disabled={submission.isPending}
+					disabled={
+						submission.isPending || agent.managementStatus === "disabled"
+					}
 					lifecycle={lifecycle}
 				/>
 			}

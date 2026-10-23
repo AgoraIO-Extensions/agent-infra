@@ -1249,6 +1249,19 @@ describe("models managed by the saved default Relay Key (RK2-01～RK2-07)", () =
 			within(alert).getByRole("button", { name: "重新读取可用模型" }),
 		);
 		expect(onReloadSavedRelayKey).toHaveBeenCalledOnce();
+		// 页脚在 fieldset 之外（#3242 K7-02）：再次保存进行中，提示里的「重新读取可用模型」仍随表单禁用。
+		const conflict = Object.assign(new Error("conflict"), {
+			retryable: false,
+			status: 409,
+		});
+		rerender({ commandError: conflict, submitting: true });
+		const busyReload = within(
+			document.querySelector(".configuration-form-footer") as HTMLElement,
+		).getByRole("button", { name: "重新读取可用模型" });
+		expect(busyReload.hasAttribute("disabled")).toBe(true);
+		fireEvent.click(busyReload);
+		expect(onReloadSavedRelayKey).toHaveBeenCalledOnce();
+		rerender({ commandError: conflict, submitting: false });
 		rerender({
 			commandError: Object.assign(new Error("unavailable"), {
 				retryable: true,
