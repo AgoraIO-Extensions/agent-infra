@@ -116,22 +116,28 @@ it.each([
 ] as const)(
 	"aborts a stalled download at %s",
 	async (_name, validMs, timeoutMs, outcome) => {
+		// 注入可控时钟：abort 时才把时间推进到计划的等待上限（超时或剩余有效期），
+		// 使 expired/failed 判定不依赖真实定时器在毫秒边界上的抖动。
+		const started = 1_750_000_000_000;
+		let elapsed = 0;
 		const stalled = vi.fn(
 			(_url: URL, init?: RequestInit) =>
 				new Promise<Response>((_resolve, reject) => {
-					init?.signal?.addEventListener("abort", () =>
-						reject(new Error("aborted")),
-					);
+					init?.signal?.addEventListener("abort", () => {
+						elapsed = Math.min(timeoutMs, validMs);
+						reject(new Error("aborted"));
+					});
 				}),
 		);
 		await expect(
 			downloadWecomMediaV1({
 				download: {
 					...download,
-					expiresAt: new Date(Date.now() + validMs).toISOString(),
+					expiresAt: new Date(started + validMs).toISOString(),
 				},
 				maxBytes: 1024,
 				timeoutMs,
+				now: () => started + elapsed,
 				fetch: stalled as unknown as typeof fetch,
 			}),
 		).resolves.toEqual({ outcome });
