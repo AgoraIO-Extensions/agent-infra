@@ -7,6 +7,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -70,6 +71,11 @@ import {
 type AgentApplicationFormProps = {
 	cancelAction?: ReactNode;
 	showDeploymentStatus?: boolean;
+	/**
+	 * 提交失败时页面顶部 danger 提示的文案（由提交页按服务端错误给出）。表单在顶部只放这一条提示；
+	 * 修改申请的模板不能更换又不可申请时，同一位置改为说明模板（#3328）。
+	 */
+	submissionErrorMessage?: string;
 } & (
 	| {
 			mode: "create";
@@ -120,7 +126,7 @@ type DraftRowsProps<T extends string> = {
 	rows: readonly Record<T, string>[];
 };
 
-/** 申请提交失败的页面提示（`agent-application-submission-screen.tsx`）：服务端整表校验失败时焦点到这里。 */
+/** 申请提交失败的页面顶部提示：服务端整表校验失败、修改申请入口身份或模板不可用时焦点到这里。 */
 export const applicationSubmissionErrorId = "application-submission-error";
 
 function fieldId(key: string) {
@@ -968,6 +974,52 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		deployment.status === "populated" &&
 		templateId.length > 0 &&
 		selectedTemplate === undefined;
+	// 所选模板不可申请的原因，与就绪列表同一套文案；就绪但验证 revision 在会话内变化时提示刷新确认。
+	// 提交被拦下时作为「标准模板」的字段错误，不另写笼统的「部署选项暂不可用」（#3328 N10-2-01）。
+	// 部署里已没有该模板时由「已移除模板」说明，不套用就绪原因。
+	const templateUnavailableMessage =
+		templateUnavailable && templateId && selectedTemplate
+			? templateReadiness?.state === "ready"
+				? "模板已更新，请刷新后确认。"
+				: templateReadinessMessages[templateReadiness?.state ?? "unverified"]
+			: undefined;
+	// 修改申请不能更换模板（来源只读、下拉禁用）：模板已从部署移除或当前不可申请时不引导改选或重新加载，
+	// 顶部提示说明下一步并获得焦点，字段下保留原因（同 #3291 N9-2-03；#3328 N10-2-01、N10-2-02）。
+	// 刷新页面能恢复的情况（验证 revision 变化、验证过期或暂时读不到）只提示刷新。
+	const templateLock: { alert: string; field: string } | undefined =
+		props.mode !== "update" ||
+		sourceKind !== "standard" ||
+		deployment.status !== "populated"
+			? undefined
+			: staleTemplate
+				? {
+						alert: "当前部署已移除此申请的模板，请新建申请。",
+						field: "该模板已从当前部署移除。已有申请不能更换模板，请新建申请。",
+					}
+				: templateUnavailableMessage === undefined
+					? undefined
+					: templateReadiness?.state === "ready" ||
+							templateReadiness?.state === "stale" ||
+							templateReadiness?.state === "unavailable"
+						? {
+								alert: "此申请的模板需要重新确认，请刷新页面后再提交。",
+								field: templateUnavailableMessage,
+							}
+						: {
+								alert:
+									"此申请的模板暂不可申请，请等待模板恢复后再提交，或新建申请。",
+								field: `${templateUnavailableMessage}已有申请不能更换模板，请等待模板恢复后再提交，或新建申请。`,
+							};
+	const [templateLockAttempted, setTemplateLockAttempted] = useState(false);
+	const templateLockShown = templateLock !== undefined && templateLockAttempted;
+	// 最近一次提交被模板拦下时，顶部提示说明模板，先前服务端错误的说明随之让位。
+	const topAlertMessage =
+		templateLockShown && templateLock
+			? templateLock.alert
+			: props.submissionErrorMessage;
+	// 修改申请里「已移除模板」恢复不了：重新加载也不会让部署重新提供它，占位不再写「请重新加载」。
+	const removedTemplateLabel =
+		props.mode === "update" ? "已移除模板" : "已移除模板（请重新加载）";
 	const staleModelIndexes = useMemo(
 		() =>
 			models.flatMap((model, index) => {
@@ -1172,7 +1224,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							deployment.templates.find(
 								(template) => template.templateId === value,
 							)?.displayName ??
-							(staleTemplate ? "已移除模板（请重新加载）" : String(value))
+							(staleTemplate ? removedTemplateLabel : String(value))
 						}
 						onValueChange={(value) => {
 							if (!value) return;
@@ -1212,7 +1264,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							))}
 							{staleTemplate ? (
 								<SelectItem disabled value={templateId}>
-									已移除模板（请重新加载）
+									{removedTemplateLabel}
 								</SelectItem>
 							) : null}
 						</SelectContent>
@@ -1233,13 +1285,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							</li>
 						))}
 					</ul>
-					{templateUnavailable && templateId ? (
+					{/* 所选模板不可申请的原因（动态出现，polite）；提交被拦下后由同一原因的字段错误说明，
+					    不再并列一条同义提示（#3328 N10-2-01）。 */}
+					{templateUnavailableMessage && !fieldErrors.templateId ? (
 						<p aria-live="polite" className="text-sm">
-							{templateReadiness?.state === "ready"
-								? "模板已更新，请刷新后确认。"
-								: templateReadinessMessages[
-										templateReadiness?.state ?? "unverified"
-									]}
+							{templateUnavailableMessage}
 						</p>
 					) : null}
 					<FieldError
@@ -1390,24 +1440,27 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			formError: serverFormError,
 			serverCode,
 		};
-		const summarizedAtTop = serverFormError || identityEntryLocked;
+		const summarizedAtTop =
+			serverFormError || identityEntryLocked || templateLockShown;
 		if (
 			!shouldFocus ||
 			(Object.keys(fieldErrors).length === 0 && !summarizedAtTop)
 		)
 			return;
-		// 只读的「入口身份校验」不作为焦点目标；其余字段错误仍先于顶部提示获得焦点。
-		const focusableErrors = identityEntryLocked
-			? Object.fromEntries(
-					Object.entries(fieldErrors).filter(
-						([key]) => key !== "identityResponsibility",
-					),
-				)
-			: fieldErrors;
+		// 只读的「入口身份校验」与修改申请里只读的「标准模板」不作为焦点目标；其余字段错误仍先于
+		// 顶部提示获得焦点（#3291 N9-2-03、#3328）。
+		const focusableErrors = Object.fromEntries(
+			Object.entries(fieldErrors).filter(
+				([key]) =>
+					!(identityEntryLocked && key === "identityResponsibility") &&
+					!(templateLockShown && key === "templateId"),
+			),
+		);
 		const first = firstFieldError(focusableErrors);
 		if (first instanceof HTMLElement) first.focus();
 		// 整表校验失败只由页面顶部的提交失败提示说明一次（role=alert），焦点交给它，不落到整张表单
-		// （#3268 N8-2-03）；修改申请的入口身份不可用时同样聚焦顶部提示（#3291 N9-2-03）。
+		// （#3268 N8-2-03）；修改申请的入口身份不可用（#3291 N9-2-03）或模板不能更换又不可申请
+		// （#3328）时同样聚焦顶部提示。
 		else if (summarizedAtTop)
 			document.getElementById(applicationSubmissionErrorId)?.focus();
 	}, [
@@ -1417,6 +1470,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		identityEntryLocked,
 		props.serverError?.code,
 		serverFormError,
+		templateLockShown,
 	]);
 
 	const submit = () => {
@@ -1456,6 +1510,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			staleModelIndexes,
 			staleTemplate,
 			standardChoicesBlocked,
+			templateUnavailableMessage,
+			lockedTemplateMessage: templateLock?.field,
 		});
 		if (sourceKind === "custom-multi-service") {
 			const parsed = parseMultiServiceManifest(manifest);
@@ -1471,6 +1527,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						? "请在下方选好模型（至少一个模型，每个模型至少一个推理档位）。"
 						: "请先点击「检查可用模型」并选好模型（至少一个模型，每个模型至少一个推理档位）。";
 		setFieldErrors(errors);
+		setTemplateLockAttempted(templateLock !== undefined);
 		setFocusRequest((current) => current + 1);
 		if (
 			Object.keys(errors).length > 0 ||
@@ -1503,6 +1560,20 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				submit();
 			}}
 		>
+			{topAlertMessage ? (
+				// 页面顶部唯一的提交失败提示（role=alert，tabIndex=-1）：服务端错误的文案由提交页给出；
+				// 整表校验失败与修改申请的入口身份不可用时焦点交给它（#3268 N8-2-03、#3291 N9-2-03），
+				// 修改申请的模板不能更换又不可申请时同一位置说明模板并获得焦点（#3328）。
+				<Alert
+					tone="danger"
+					role="alert"
+					className="application-form-alert"
+					id={applicationSubmissionErrorId}
+					tabIndex={-1}
+				>
+					<AlertDescription>{topAlertMessage}</AlertDescription>
+				</Alert>
+			) : null}
 			{/* 页脚在 fieldset 之外：提交进行中字段由 fieldset 禁用，提交按钮仍可聚焦（aria-disabled），
 			    焦点不落到 body（#3242 K7-02）。 */}
 			<fieldset
