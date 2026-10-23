@@ -196,7 +196,8 @@ export const environmentNamePattern = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
 /**
  * 环境变量名与 Secret 名的前端校验，返回字段错误文案；合法时返回 undefined。
- * `allowedNames` 存在时（标准模板）只允许模板开放的键。
+ * `allowedNames` 存在时（标准模板）只允许模板开放的键，页面上名称是下拉，未选时说「请选择」；
+ * 自由输入时说「请输入」（#3268 N8-2-11）。
  */
 export function configurationKeyError(
 	name: string,
@@ -208,7 +209,10 @@ export function configurationKeyError(
 	const trimmed = name.trim();
 	const label = kind === "environment" ? "环境变量名" : "Secret 名称";
 	// 「Secret 名称」以拉丁字母开头：与前面的中文之间补空格（「请输入 Secret 名称。」）。
-	if (!trimmed) return cjkSpaced`请输入${label}。`;
+	if (!trimmed)
+		return allowedNames
+			? cjkSpaced`请选择${label}。`
+			: cjkSpaced`请输入${label}。`;
 	if (trimmed.startsWith("AGENT_INFRA_"))
 		return cjkSpaced`${label}不能以 AGENT_INFRA_ 开头。`;
 	if (!environmentNamePattern.test(trimmed))

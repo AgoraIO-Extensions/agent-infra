@@ -2716,3 +2716,43 @@ test("a non-Owner employee gets the shared 无法访问 card on Owner configurat
 	expect(api.commands).toEqual([]);
 	await expectCleanPage(page, pageErrors);
 });
+
+// #3268 N8-2-11：「添加 Secret」弹窗的名称是模板限定的下拉，未选就提交时错误说「请选择 Secret 名称。」，
+// 焦点在下拉上，错误为公共 FieldError；环境变量名的下拉同一规则。两视口一致。
+test("template-limited name selects ask to choose a name instead of typing one (#3268 N8-2-11)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const api = await ownerConfigFixture(page);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const section = page.getByRole("region", {
+		name: "环境变量与 Secret",
+		exact: true,
+	});
+	await section.getByRole("button", { name: "添加 Secret" }).click();
+	const dialog = page.getByRole("dialog", { name: "添加 Secret" });
+	const name = dialog.getByRole("combobox", { name: "Secret 名称" });
+	await expect(name).toBeFocused();
+	await dialog.getByRole("button", { name: "保存 Secret" }).click();
+	const error = dialog.locator('[data-slot="field-error"]');
+	await expect(error).toHaveText("请选择 Secret 名称。");
+	await expectPublicFieldError(page, error);
+	await expect(name).toHaveAttribute("aria-invalid", "true");
+	await expectFocusSettled(name, "添加 Secret 未选名称");
+	await dialog.getByRole("button", { name: "取消" }).click();
+	await expect(dialog).toHaveCount(0);
+
+	await section.getByRole("button", { name: "添加环境变量" }).click();
+	await page.getByRole("textbox", { name: "值：环境变量 2" }).fill("debug");
+	await page.getByRole("button", { name: "保存配置", exact: true }).click();
+	const environmentError = section.locator(
+		"#configuration-environment-error-1",
+	);
+	await expect(environmentError).toHaveText("请选择环境变量名。");
+	await expect(
+		section.getByRole("combobox", { name: "环境变量名：环境变量 2" }),
+	).toBeFocused();
+	expect(api.commands).toEqual([]);
+	await expectCleanPage(page, pageErrors);
+});

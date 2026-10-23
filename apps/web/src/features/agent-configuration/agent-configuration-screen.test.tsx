@@ -826,8 +826,9 @@ describe("Secrets (O-10, N-08)", () => {
 		fireEvent.click(
 			within(dialog).getByRole("button", { name: "保存 Secret" }),
 		);
-		// 中文与「Secret」之间有一个空格。
-		expect(within(dialog).getByText("请输入 Secret 名称。")).toBeTruthy();
+		// 中文与「Secret」之间有一个空格。需求变化（#3268 N8-2-11）：名称是模板限定的下拉，
+		// 未选时说「请选择」（原为「请输入 Secret 名称。」）。
+		expect(within(dialog).getByText("请选择 Secret 名称。")).toBeTruthy();
 		fireEvent.change(name, { target: { value: "RELEASE_KEY" } });
 		typeWriteOnly(within(dialog).getByLabelText("新 Secret 值"), "new-value");
 		fireEvent.click(
@@ -911,8 +912,9 @@ describe("environment variables (O-10)", () => {
 		]);
 		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
 		fireEvent.click(saveButton());
-		// 新增的空白行未选名称：字段错误并聚焦，不发请求。
-		const error = screen.getByText("请输入环境变量名。");
+		// 新增的空白行未选名称：字段错误并聚焦，不发请求。需求变化（#3268 N8-2-11）：名称是模板
+		// 限定的下拉，未选时说「请选择」（原为「请输入环境变量名。」）。
+		const error = screen.getByText("请选择环境变量名。");
 		expect(error.getAttribute("data-slot")).toBe("field-error");
 		expect(document.activeElement?.id).toBe("configuration-environment-name-1");
 		expect(onSave).not.toHaveBeenCalled();
