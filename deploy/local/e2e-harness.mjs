@@ -568,7 +568,13 @@ async function provisionRuntimeMaterial() {
 	const bundle = await trustedCaBundle();
 	applyOwnedSecret(namespace, caRef.name, "Opaque", { [caRef.key]: bundle }, readKubeObject("secret", caRef.name, namespace));
 
-	const configuration = await readFile(requiredAbsoluteEnv("PLATFORM_LOCAL_WORKER_CONFIGURATION"), "utf8");
+	const configurationPath = requiredAbsoluteEnv("PLATFORM_LOCAL_WORKER_CONFIGURATION");
+	try {
+		command(process.execPath, ["--check", configurationPath]);
+	} catch {
+		fail("Worker configuration.mjs has invalid syntax");
+	}
+	const configuration = await readFile(configurationPath, "utf8");
 	// Private read-only adapter inputs (for example directory identity bindings)
 	// travel in the same reviewed module Secret; values never enter Git or argv.
 	const deploymentFiles = {};

@@ -477,6 +477,7 @@ prepare_native_metadata_forward() {
 
 validate_deployment_material() {
   : "${PLATFORM_LOCAL_API_DIRECTORY:?Set the API-only deployment directory}"
+  : "${PLATFORM_LOCAL_WORKER_CONFIGURATION:?Set the private Worker configuration.mjs path}"
   : "${PLATFORM_LOCAL_WORKER_VALUES:?Set an absolute local Worker values file}"
   [[ "$PLATFORM_LOCAL_API_DIRECTORY" = /* && -r "$PLATFORM_LOCAL_API_DIRECTORY/configuration.mjs" ]] || {
     echo "API configuration.mjs is missing or unreadable" >&2
@@ -488,6 +489,14 @@ validate_deployment_material() {
   }
   if ! node --check "$PLATFORM_LOCAL_API_DIRECTORY/configuration.mjs" >/dev/null 2>&1; then
     echo "Local API configuration.mjs has invalid syntax" >&2
+    return 1
+  fi
+  [[ "$PLATFORM_LOCAL_WORKER_CONFIGURATION" = /* && -r "$PLATFORM_LOCAL_WORKER_CONFIGURATION" ]] || {
+    echo "Local Worker configuration.mjs is missing or unreadable" >&2
+    return 1
+  }
+  if ! node --check "$PLATFORM_LOCAL_WORKER_CONFIGURATION" >/dev/null 2>&1; then
+    echo "Local Worker configuration.mjs has invalid syntax" >&2
     return 1
   fi
   worker_values
