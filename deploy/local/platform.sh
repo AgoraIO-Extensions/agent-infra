@@ -54,6 +54,9 @@ object_storage_compose_service="object-storage"
 object_storage_service="$worker_release-object-storage"
 object_storage_endpoint="$object_storage_service-docker"
 native_metadata_api_service="$worker_release-native-metadata-api"
+# #3289：Worker 文件交换 egress 指向的 Platform API kind 地址；空表示尚未知道。
+file_exchange_api_ip=
+native_metadata_api_ip=
 helm_target=(helm)
 
 worker_context() {
@@ -146,6 +149,23 @@ abort_stop() {
   exit 1
 }
 
+# 升级 Worker release，并按 release 配置的副本数等待滚动完成。
+upgrade_worker() {
+  "${helm_target[@]}" upgrade --install "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" --wait --timeout 5m || return 1
+  worker_replicas=$("${helm_target[@]}" get values "$worker_release" --all --output json | node -e '
+    try {
+      const replicas = JSON.parse(require("node:fs").readFileSync(0, "utf8")).platformWorker.replicas;
+      if (!Number.isInteger(replicas) || replicas < 1) throw new Error();
+      process.stdout.write(String(replicas));
+    } catch {
+      console.error("Local Worker replica count is invalid");
+      process.exitCode = 1;
+    }
+  ') || return 1
+  "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas="$worker_replicas" || return 1
+  "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m || return 1
+}
+
 worker_values() {
   : "${PLATFORM_LOCAL_WORKER_VALUES:?Set an absolute local Worker values file}"
   [[ "$PLATFORM_LOCAL_WORKER_VALUES" = /* && -r "$PLATFORM_LOCAL_WORKER_VALUES" ]] || {
@@ -169,14 +189,19 @@ worker_values() {
   # Optional staged file-plane E2E. The API Service already exists when the
   # native metadata route is enabled; the API still needs its own
   # file-deployment configuration and the same service token registered.
+  # #3289：Worker 同时拿到 origin 与它的 egress 目的地（Platform API 在 kind 网络上的地址）。
+  # 地址未知时（首次 up 或 stop 之后）先不装配文件交换，API 接入 kind 后再升级一次 Worker。
   if [[ -n "${PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED:-}" ]]; then
     [[ "$PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED" == "true" ]] || {
       echo "PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED must be true when set" >&2
       exit 1
     }
-    worker_options+=(
-      --set-string "platformWorker.fileExchangeOrigin=http://$native_metadata_api_service:3000"
-    )
+    if [[ -n "$file_exchange_api_ip" ]]; then
+      worker_options+=(
+        --set-string "platformWorker.fileExchangeOrigin=http://$native_metadata_api_service:3000"
+        --set-string "platformWorker.fileExchangeEgress.ip=$file_exchange_api_ip"
+      )
+    fi
   fi
   if [[ -n "${PLATFORM_LOCAL_HELM_POST_RENDERER:-}" ]]; then
     [[ "$PLATFORM_LOCAL_HELM_POST_RENDERER" = /* && -x "$PLATFORM_LOCAL_HELM_POST_RENDERER" ]] || {
@@ -505,6 +530,11 @@ validate_deployment_material() {
     return 1
   fi
   read_native_metadata_worker_route
+  # 文件交换 origin 是 native-metadata-api Service，只在 native metadata 路由启用时存在。
+  if [[ "${PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED:-}" == true && "$native_metadata_route_enabled" != true ]]; then
+    echo "PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED requires the native metadata API route" >&2
+    return 1
+  fi
 }
 
 check_worker_secret_material() {
@@ -644,6 +674,28 @@ check_native_metadata_api_ownership() {
   done
 }
 
+# #3289：读取本项目 native-metadata-api EndpointSlice 记录的 Platform API kind 地址，作为 Worker
+# 文件交换 egress 的预期目的地。不存在时输出空；归属不符或地址不是单个 IPv4 时失败。
+native_metadata_api_route_ip() {
+  "${kube_target[@]}" get "endpointslice/$native_metadata_api_service" --ignore-not-found -o json | node -e '
+    let input = "";
+    process.stdin.on("data", (chunk) => { input += chunk; });
+    process.stdin.on("end", () => {
+      if (!input.trim()) return;
+      try {
+        const resource = JSON.parse(input);
+        const labels = resource.metadata?.labels ?? {};
+        const addresses = (resource.endpoints ?? []).flatMap((endpoint) => endpoint.addresses ?? []);
+        if (labels["app.kubernetes.io/managed-by"] !== "agent-infra-local" ||
+            labels["agent-infra.agora.io/local-project"] !== process.argv[1] ||
+            addresses.length !== 1 ||
+            !/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/.test(addresses[0])) process.exitCode = 1;
+        else process.stdout.write(addresses[0]);
+      } catch { process.exitCode = 1; }
+    });
+  ' "$PLATFORM_LOCAL_PROJECT"
+}
+
 check_native_metadata_api_network_ownership() {
   local container aliases network_alias
   container=$("${compose[@]}" ps --all -q platform-api) || return 1
@@ -695,6 +747,7 @@ connect_native_metadata_api() {
     echo "Local Platform API has no IPv4 address on the kind network" >&2
     return 1
   }
+  native_metadata_api_ip=$api_ip
   "${kube_target[@]}" apply -f - <<EOF
 apiVersion: v1
 kind: Service
@@ -1274,6 +1327,13 @@ case "${1:-}" in
     check_database_network_ownership
     check_object_storage_resource_ownership
     check_object_storage_network_ownership
+    if [[ "${PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED:-}" == true ]]; then
+      # 上次 up 写入的 API kind 地址；API 重建后地址不变时 Worker 只升级一次。
+      file_exchange_api_ip=$(native_metadata_api_route_ip) || {
+        echo "Local native metadata API route has no owned IPv4 address" >&2
+        exit 1
+      }
+    fi
     validate_deployment_material
     check_native_metadata_api_ownership
     check_native_metadata_api_network_ownership
@@ -1285,19 +1345,7 @@ case "${1:-}" in
     connect_directory_sync
     connect_object_storage
     check_worker_secret_material
-    "${helm_target[@]}" upgrade --install "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" --wait --timeout 5m
-    worker_replicas=$("${helm_target[@]}" get values "$worker_release" --all --output json | node -e '
-      try {
-        const replicas = JSON.parse(require("node:fs").readFileSync(0, "utf8")).platformWorker.replicas;
-        if (!Number.isInteger(replicas) || replicas < 1) throw new Error();
-        process.stdout.write(String(replicas));
-      } catch {
-        console.error("Local Worker replica count is invalid");
-        process.exitCode = 1;
-      }
-    ')
-    "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas="$worker_replicas"
-    "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m
+    upgrade_worker
     prepare_native_metadata_forward
     if ! "${compose[@]}" up --detach --wait --force-recreate --no-deps platform-api; then
       stop_native_metadata_forward
@@ -1307,6 +1355,18 @@ case "${1:-}" in
       "${compose[@]}" stop platform-api
       stop_native_metadata_forward
       exit 1
+    fi
+    # #3289：Worker 的文件交换 egress 必须指向 API 当前的 kind 地址。地址未知或已变化时再升级
+    # 一次 Worker；已有会话 Sandbox 的 NetworkPolicy 随之按漂移处理（见 E2E-HARNESS.md）。
+    if [[ "${PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED:-}" == true && "$native_metadata_api_ip" != "$file_exchange_api_ip" ]]; then
+      file_exchange_api_ip=$native_metadata_api_ip
+      worker_values
+      if ! upgrade_worker; then
+        "${compose[@]}" stop platform-api
+        stop_native_metadata_forward
+        echo "Local Worker could not adopt the Platform API kind address; Web remains stopped" >&2
+        exit 1
+      fi
     fi
     if ! node deploy/local/check-api-auth.ts "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "${PLATFORM_LOCAL_API_PORT:-3000}" "${PLATFORM_LOCAL_WEB_PORT:-3001}"; then
       "${compose[@]}" stop platform-api

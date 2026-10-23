@@ -900,6 +900,74 @@ test("production Worker injects the optional file exchange origin (#3060)", () =
 	assert.match(invalid.stderr, /fileExchangeOrigin/);
 });
 
+test("production Worker renders the declared file exchange egress (#3289)", () => {
+	const production = [
+		"--set",
+		"workloadTopology.enabled=false",
+		"--set-string",
+		"platformWorker.deploymentModule=file:///app/dist/deployment.mjs",
+		"--set-string",
+		"platformWorker.configurationModuleSecretRef.name=worker-module",
+		"--set-string",
+		"platformWorker.configurationModuleSecretRef.key=configuration.mjs",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.name=worker-runtime-auth",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.privateKeyKey=grant.pem",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.serviceTokenKey=service-token",
+		"--set-string",
+		"platformWorker.fileExchangeOrigin=http://platform-api:3000",
+	];
+	const egressOf = (output) =>
+		resource(
+			objects(output),
+			"Deployment",
+			"topology-agent-infra-platform-worker",
+		).spec.template.spec.containers[0].env.find(
+			(entry) => entry.name === "PLATFORM_WORKER_FILE_EXCHANGE_EGRESS",
+		)?.value;
+	const ip = render(
+		...production,
+		"--set-string",
+		"platformWorker.fileExchangeEgress.ip=172.18.0.44",
+	);
+	assert.equal(ip.status, 0, ip.stderr);
+	assert.deepEqual(JSON.parse(egressOf(ip.stdout)), { ip: "172.18.0.44" });
+	const selector = render(
+		...production,
+		"--set-string",
+		"platformWorker.fileExchangeEgress.namespace=agent-infra",
+		"--set-string",
+		"platformWorker.fileExchangeEgress.podLabels.app\\.kubernetes\\.io/component=platform-api",
+	);
+	assert.equal(selector.status, 0, selector.stderr);
+	assert.deepEqual(JSON.parse(egressOf(selector.stdout)), {
+		namespace: "agent-infra",
+		podLabels: { "app.kubernetes.io/component": "platform-api" },
+	});
+	// 未声明时不渲染变量；Worker 启动时以配置错误拒绝只有 origin 的部署。
+	const absent = render(...production);
+	assert.equal(absent.status, 0, absent.stderr);
+	assert.equal(egressOf(absent.stdout), undefined);
+	for (const values of [
+		["platformWorker.fileExchangeEgress.cidr=203.0.113.0/24"],
+		[
+			"platformWorker.fileExchangeEgress.ip=172.18.0.44",
+			"platformWorker.fileExchangeEgress.namespace=agent-infra",
+		],
+		["platformWorker.fileExchangeEgress.namespace=agent-infra"],
+		["platformWorker.fileExchangeEgress.ip=not an ip"],
+	]) {
+		const invalid = render(
+			...production,
+			...values.flatMap((value) => ["--set-string", value]),
+		);
+		assert.notEqual(invalid.status, 0, values.join(" "));
+		assert.match(invalid.stderr, /fileExchangeEgress/);
+	}
+});
+
 test("one agentVersion value reaches both the in-cluster API and the production Worker (#2903)", () => {
 	const production = [
 		"--set",

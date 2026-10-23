@@ -267,6 +267,8 @@ elif [[ "$*" == *"uninstall"* && -n "$FAKE_HELM_UNINSTALL_EXIT" ]]; then
   exit "$FAKE_HELM_UNINSTALL_EXIT"
 elif [[ "$*" == *"upgrade --install"* && -n "$FAKE_HELM_UPGRADE_EXIT" ]]; then
   exit "$FAKE_HELM_UPGRADE_EXIT"
+elif [[ "$*" == *"upgrade --install"* && -n "\${FAKE_HELM_UPGRADE_FAIL_MATCH:-}" && "$*" == *"\${FAKE_HELM_UPGRADE_FAIL_MATCH:-}"* ]]; then
+  exit 1
 elif [[ "$*" == *"get values agent-infra-verify --all --output json"* ]]; then
   printf '{"platformWorker":{"replicas":%s}}\\n' "$FAKE_CONFIGURED_WORKER_REPLICAS"
 elif [[ "$*" == *"list --all --filter ^agent-infra-verify$ -q"* ]]; then
@@ -305,6 +307,8 @@ elif [[ "$*" == *"--ignore-not-found -o json" ]]; then
     cat "$FAKE_DIRECTORY_ROUTE_STATE"
   elif [[ "$*" == *"get endpointslice/agent-infra-verify-object-storage-docker "* && -f "$FAKE_OBJECT_STORAGE_ROUTE_STATE" ]]; then
     cat "$FAKE_OBJECT_STORAGE_ROUTE_STATE"
+  elif [[ "$*" == *"get endpointslice/agent-infra-verify-native-metadata-api "* && -f "$FAKE_API_ROUTE_STATE" ]]; then
+    cat "$FAKE_API_ROUTE_STATE"
   fi
 elif [[ "$*" == *"get deployment agent-infra-verify-agent-infra-platform-worker"*"-o jsonpath="* ]]; then
   printf '%s' "$FAKE_WORKER_REPLICAS"
@@ -343,6 +347,11 @@ else
     if [[ -n "$alias" ]]; then
       printf '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"agent-infra-local","agent-infra.agora.io/local-project":"agent-infra-verify"},"annotations":{"agent-infra.agora.io/local-network-alias":"%s"}}}' "$alias" > "$route_state"
     fi
+    # native-metadata-api 的 EndpointSlice 记录 API 的 kind 地址（#3289）。
+    if [[ "$payload" == *"kind: EndpointSlice"* && "$payload" == *"name: agent-infra-verify-native-metadata-api"* ]]; then
+      api_address=$(printf '%s\\n' "$payload" | sed -n 's/^  - addresses: \\["\\(.*\\)"\\]$/\\1/p')
+      printf '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"agent-infra-local","agent-infra.agora.io/local-project":"agent-infra-verify"}},"endpoints":[{"addresses":["%s"]}]}' "$api_address" > "$FAKE_API_ROUTE_STATE"
+    fi
   elif [[ "$*" == *"apply --server-side"* ]]; then
     cat >> "$MANIFEST_LOG"
   elif [[ "$*" == *"delete endpointslice/agent-infra-verify-postgres-docker"* ]]; then
@@ -351,6 +360,8 @@ else
     rm -f "$FAKE_DIRECTORY_ROUTE_STATE"
   elif [[ "$*" == *"delete endpointslice/agent-infra-verify-object-storage-docker"* ]]; then
     rm -f "$FAKE_OBJECT_STORAGE_ROUTE_STATE"
+  elif [[ "$*" == *"delete endpointslice/agent-infra-verify-native-metadata-api"* ]]; then
+    rm -f "$FAKE_API_ROUTE_STATE"
   fi
   if [[ "$*" == *"scale deployment/agent-infra-verify-agent-infra-platform-worker --replicas=1"* && -n "$FAKE_RESTORE_SCALE_EXIT" ]]; then
     exit "$FAKE_RESTORE_SCALE_EXIT"
@@ -371,6 +382,7 @@ fi`,
 		FAKE_DIRECTORY_ROUTE_STATE: directoryRouteState,
 		FAKE_OBJECT_STORAGE_NETWORK_STATE: objectStorageNetworkState,
 		FAKE_OBJECT_STORAGE_ROUTE_STATE: objectStorageRouteState,
+		FAKE_API_ROUTE_STATE: join(directory, "api-route.json"),
 		FAKE_OBJECT_STORAGE_PRECONNECTED_ALIASES: "",
 		FAKE_KUBE_SERVER: "https://127.0.0.1:6443",
 		FAKE_KIND_LABEL: "isolated",
@@ -418,6 +430,18 @@ fi`,
 		async close() {
 			await rm(directory, { recursive: true, force: true });
 		},
+	};
+}
+
+// 文件面的 origin 是 native-metadata-api Service，需要启用 native metadata 路由（#3289）。
+function fileExchangeEnv(f, overrides = {}) {
+	return {
+		...f.env,
+		FAKE_NATIVE_METADATA_ENABLED: "1",
+		PLATFORM_LOCAL_NATIVE_METADATA_WORKER_PORT: "3304",
+		PLATFORM_LOCAL_NATIVE_METADATA_WORKER_BIND_ADDRESS: f.nativeBindAddress,
+		PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED: "true",
+		...overrides,
 	};
 }
 
@@ -1170,7 +1194,7 @@ function appliedRoute(manifest, service) {
 test("enabled file plane routes object storage into kind with owned resources (#3261)", async () => {
 	const f = await fixture();
 	try {
-		const env = { ...f.env, PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED: "true" };
+		const env = fileExchangeEnv(f);
 		const started = run("up", env);
 		assert.equal(started.status, 0, started.stderr);
 		const commands = await readFile(f.log, "utf8");
@@ -1284,7 +1308,7 @@ test("enabled file plane routes object storage into kind with owned resources (#
 test("disabled file plane neither routes object storage nor keeps an owned route (#3261)", async () => {
 	const f = await fixture();
 	try {
-		const enabled = { ...f.env, PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED: "true" };
+		const enabled = fileExchangeEnv(f);
 		assert.equal(run("up", enabled).status, 0);
 
 		await writeFile(f.log, "");
@@ -1316,6 +1340,142 @@ test("disabled file plane neither routes object storage nor keeps an owned route
 		await writeFile(f.log, "");
 		assert.equal(run("status", f.env).status, 0);
 		assert.doesNotMatch(await readFile(f.log, "utf8"), /object-storage-docker/);
+	} finally {
+		await f.close();
+	}
+});
+
+test("file plane declares the Platform API kind address as the Worker egress (#3289)", async () => {
+	const f = await fixture();
+	const upgrades = (commands) =>
+		commands
+			.trim()
+			.split("\n")
+			.filter((line) => / upgrade --install /.test(line));
+	const declared = (line) => [
+		line.match(/platformWorker\.fileExchangeOrigin=(\S+)/)?.[1],
+		line.match(/platformWorker\.fileExchangeEgress\.ip=(\S+)/)?.[1],
+	];
+	try {
+		const env = fileExchangeEnv(f);
+		// 首次 up 还不知道 API 的 kind 地址：先不装配文件交换，API 接入 kind 后再升级 Worker。
+		const first = run("up", env);
+		assert.equal(first.status, 0, first.stderr);
+		let commands = await readFile(f.log, "utf8");
+		const steps = commands.trim().split("\n");
+		let upgraded = upgrades(commands);
+		assert.equal(upgraded.length, 2, commands);
+		assert.deepEqual(declared(upgraded[0]), [undefined, undefined]);
+		assert.deepEqual(declared(upgraded[1]), [
+			"http://agent-infra-verify-native-metadata-api:3000",
+			"172.18.0.44",
+		]);
+		// 端口由 Worker 从 origin 推导，platform.sh 不另写端口。
+		assert.doesNotMatch(upgraded[1], /fileExchangeEgress\.port/);
+		const connected = steps.findIndex((line) =>
+			/network connect --alias agent-infra-verify-native-metadata-api-fixture-api kind fixture-api/.test(
+				line,
+			),
+		);
+		const second = steps.indexOf(upgraded[1]);
+		assert.ok(connected > 0 && connected < second, commands);
+		assert.ok(
+			second < steps.findIndex((line) => /check-api-auth/.test(line)),
+			commands,
+		);
+		assert.ok(
+			second <
+				steps.findIndex((line) => /--force-recreate --no-deps web/.test(line)),
+			commands,
+		);
+
+		// 地址不变时只升级一次，并直接带上上次 EndpointSlice 的地址。
+		await writeFile(f.log, "");
+		assert.equal(run("up", env).status, 0);
+		upgraded = upgrades(await readFile(f.log, "utf8"));
+		assert.equal(upgraded.length, 1);
+		assert.deepEqual(declared(upgraded[0]), [
+			"http://agent-infra-verify-native-metadata-api:3000",
+			"172.18.0.44",
+		]);
+
+		// API 重建后地址变化：再升级一次 Worker，指向新的地址。
+		await writeFile(f.log, "");
+		const moved = run("up", { ...env, FAKE_API_IP: "172.18.0.46" });
+		assert.equal(moved.status, 0, moved.stderr);
+		commands = await readFile(f.log, "utf8");
+		upgraded = upgrades(commands);
+		assert.equal(upgraded.length, 2, commands);
+		assert.equal(declared(upgraded[0])[1], "172.18.0.44");
+		assert.equal(declared(upgraded[1])[1], "172.18.0.46");
+		assert.match(
+			await readFile(f.manifest, "utf8"),
+			/addresses: \["172\.18\.0\.46"\]/,
+		);
+
+		// 第二次升级失败时 API 关闭、Web 不启动。
+		await writeFile(f.log, "");
+		const failed = run("up", {
+			...env,
+			FAKE_API_IP: "172.18.0.47",
+			FAKE_HELM_UPGRADE_FAIL_MATCH: "fileExchangeEgress.ip=172.18.0.47",
+		});
+		assert.notEqual(failed.status, 0);
+		assert.match(
+			failed.stderr,
+			/could not adopt the Platform API kind address/,
+		);
+		commands = await readFile(f.log, "utf8");
+		assert.match(commands, /compose .* stop platform-api/);
+		assert.doesNotMatch(commands, /--force-recreate --no-deps web/);
+
+		await writeFile(f.log, "");
+		assert.equal(run("stop", env).status, 0);
+	} finally {
+		await f.close();
+	}
+});
+
+test("file plane requires the native metadata API route before stopping services (#3289)", async () => {
+	const f = await fixture();
+	try {
+		const result = run("up", {
+			...f.env,
+			PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED: "true",
+		});
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED requires the native metadata API route/,
+		);
+		const commands = await readFile(f.log, "utf8");
+		assert.doesNotMatch(commands, /stop web platform-api/);
+		assert.doesNotMatch(commands, / upgrade --install /);
+	} finally {
+		await f.close();
+	}
+});
+
+test("file plane refuses a foreign or malformed API route address (#3289)", async () => {
+	const f = await fixture();
+	try {
+		for (const route of [
+			'{"metadata":{"labels":{"app.kubernetes.io/managed-by":"another-owner"}},"endpoints":[{"addresses":["172.18.0.44"]}]}',
+			'{"metadata":{"labels":{"app.kubernetes.io/managed-by":"agent-infra-local","agent-infra.agora.io/local-project":"agent-infra-verify"}},"endpoints":[{"addresses":["172.18.0.44","172.18.0.45"]}]}',
+		]) {
+			await writeFile(f.env.FAKE_API_ROUTE_STATE, route);
+			await writeFile(f.log, "");
+			const result = run("up", fileExchangeEnv(f));
+			assert.notEqual(result.status, 0);
+			assert.match(
+				result.stderr,
+				/native metadata API route has no owned IPv4 address/,
+			);
+			assert.doesNotMatch(
+				await readFile(f.log, "utf8"),
+				/stop web platform-api/,
+			);
+		}
 	} finally {
 		await f.close();
 	}

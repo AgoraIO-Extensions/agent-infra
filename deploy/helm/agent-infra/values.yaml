@@ -104,10 +104,21 @@ platformWorker:
   replicas: 1
   wecomEnabled: false
   # 可选的 Platform API 精确 origin（不含路径、凭据、查询或片段）。非空时 Worker
-  # 向 Agent Workload 注入 Runtime 文件交换 origin，并复用 runtimeAuthSecretRef
-  # 的 service token；留空时 Runtime FileBridge 保持关闭。见
-  # docs/architecture/FILE-storage-deployment.md。
+  # 向 Agent Workload 与会话 Sandbox 注入 Runtime 文件交换 origin，并复用 runtimeAuthSecretRef
+  # 的 service token（Sandbox 只拿派生值），同时须声明下方 fileExchangeEgress；留空时
+  # Runtime FileBridge 保持关闭。见 docs/architecture/FILE-storage-deployment.md。
   fileExchangeOrigin: ""
+  # 文件交换 origin 的出站目的地（#3289）。fileExchangeOrigin 非空时必须提供，端口取
+  # origin 的端口；Worker 据此为 Agent Workload 与会话 Sandbox 的 NetworkPolicy 生成且只
+  # 生成一条 egress。二选一：集群外 Platform API 的精确地址 `ip`，或集群内 API Pod 的
+  # `namespace` 与 `podLabels`。不接受网段。
+  # 示例：
+  #   ip: 192.0.2.10
+  # 或：
+  #   namespace: agent-infra
+  #   podLabels:
+  #     app.kubernetes.io/component: platform-api
+  fileExchangeEgress: {}
   # 可选的容器资源配置。不设时 Pod 为 BestEffort，内存紧张时 OOM Killer 会优先杀掉。
   # 本地环境建议只设 requests 不设 limits，避免容器自身的 cgroup OOM；
   # 生产环境按实际负载评估后再补充 limits。
