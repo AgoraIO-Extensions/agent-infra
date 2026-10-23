@@ -23,10 +23,15 @@ import { markSessionSandboxReadyFixture } from "../../../packages/platform-store
 import { createRuntimeFileBridgeFactoryV1 } from "../../agent-runtime-host/src/runtime-file-exchange.ts";
 import { workloadDesiredFixture } from "../../platform-worker/src/kubernetes.fixture.js";
 import { createWorkerRuntimeGrantSignerV4 } from "../../platform-worker/src/runtime-grant-signer-v4.ts";
+import { createPlatformHealthApp } from "./app.js";
 import { assemblePlatformApi, type PlatformApiAssembly } from "./assembly.js";
 import { createDeploymentIdentityScope } from "./deployment-identity.js";
 import { createDeploymentPresentation } from "./deployment-presentation.js";
-import type { PlatformFileDeploymentV1 } from "./file-assembly.js";
+import {
+	assemblePlatformFilesV1,
+	type PlatformFileDeploymentV1,
+} from "./file-assembly.js";
+import { registerFileRoutesV1 } from "./http/file-routes.js";
 import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
 import {
 	platformApiStoreQueryObservabilityV1,
@@ -95,6 +100,26 @@ const signer = createWorkerRuntimeGrantSignerV4({
 	keyId: "runtime-key-3307",
 	privateKey: runtimeKeys.privateKey,
 });
+
+/** 部署的文件配置：Worker 的 V4 签名身份与 API 登记的服务 token。 */
+function filesDeployment(): PlatformFileDeploymentV1 {
+	return {
+		storage: new FakeObjectStorageV1(),
+		issuer: "platform-files-3307",
+		keyVersion: "file-key-3307",
+		privateKey: fileKeys.privateKey,
+		publicKeys: new Map([["file-key-3307", fileKeys.publicKey]]),
+		runtimeIssuer,
+		runtimeWorkerId,
+		runtimePublicKeys: new Map([["runtime-key-3307", runtimeKeys.publicKey]]),
+		intentTtlMs: 60_000,
+		accessTtlMs: 30_000,
+		maxConcurrentTransfers: 4,
+		services: [{ token: deploymentToken, agentIds: [agentId] }],
+		resolveActor: async (actorId) =>
+			actorId === identity.userId ? identity : null,
+	};
+}
 
 let database: PostgresTestDatabase;
 let db: postgres.Sql;
@@ -410,6 +435,7 @@ async function dispatchedTurn(name: string) {
 		attachment,
 		other,
 		grant,
+		unsigned,
 		claims,
 		sandboxToken,
 		recordId: record.id,
@@ -469,22 +495,7 @@ describe("Runtime file exchange over the production API assembly, HTTP and Postg
 			observability: platformApiStoreQueryObservabilityV1(observability),
 		});
 		const identityScope = createDeploymentIdentityScope(adapter);
-		const files: PlatformFileDeploymentV1 = {
-			storage: new FakeObjectStorageV1(),
-			issuer: "platform-files-3307",
-			keyVersion: "file-key-3307",
-			privateKey: fileKeys.privateKey,
-			publicKeys: new Map([["file-key-3307", fileKeys.publicKey]]),
-			runtimeIssuer,
-			runtimeWorkerId,
-			runtimePublicKeys: new Map([["runtime-key-3307", runtimeKeys.publicKey]]),
-			intentTtlMs: 60_000,
-			accessTtlMs: 30_000,
-			maxConcurrentTransfers: 4,
-			services: [{ token: deploymentToken, agentIds: [agentId] }],
-			resolveActor: async (actorId) =>
-				actorId === identity.userId ? identity : null,
-		};
+		const files = filesDeployment();
 		assembly = assemblePlatformApi({
 			taskAdmissionPolicy: {
 				maximumWaitingTasksPerAgent: 2,
@@ -582,4 +593,232 @@ describe("Runtime file exchange over the production API assembly, HTTP and Postg
 		expect(stored).toEqual({ kind: "result", status: "available" });
 		expect(diagnostics).toEqual([]);
 	}, 60_000);
+
+	it("AC-2: denies every failed check with the same 404 and records only a bounded failure step", async () => {
+		const turn = await dispatchedTurn("ac2");
+		const otherWorker = createWorkerRuntimeGrantSignerV4({
+			issuer: runtimeIssuer,
+			workerId: "other-worker",
+			keyId: "runtime-key-3307",
+			privateKey: runtimeKeys.privateKey,
+		});
+		// 签名 Worker 身份不是部署登记的那一个。
+		const foreignGrant = otherWorker.sign(turn.unsigned, turn.recordId);
+		async function exchange(
+			options: {
+				fileId?: string;
+				token?: string;
+				grant?: typeof turn.grant;
+			} = {},
+		) {
+			const idempotencyKey = `exchange-${randomUUID()}`;
+			const before = events.length;
+			const response = await fetch(
+				`${origin}/internal/v1/files/runtime-exchange`,
+				{
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${options.token ?? turn.sandboxToken}`,
+						"Content-Type": "application/json",
+						"Idempotency-Key": idempotencyKey,
+					},
+					body: JSON.stringify({
+						schemaVersion: 2,
+						executionGrant: options.grant ?? turn.grant,
+						operation: "read",
+						fileId: options.fileId ?? turn.attachment.fileId,
+						idempotencyKey,
+					}),
+				},
+			);
+			const body = (await response.json()) as { code?: string };
+			const event = events
+				.slice(before)
+				.find(
+					(entry) =>
+						entry.stage === "http" &&
+						(entry as { operationRef?: string }).operationRef ===
+							"POST.internal.v1.files.runtime-exchange",
+				) as { status?: number; failureStep?: string } | undefined;
+			return { status: response.status, code: body.code, event };
+		}
+		const expectDenied = async (
+			step: string,
+			options?: Parameters<typeof exchange>[0],
+		) => {
+			const result = await exchange(options);
+			expect({ ...result, event: undefined }).toEqual({
+				status: 404,
+				code: "RESOURCE_UNAVAILABLE",
+				event: undefined,
+			});
+			expect(result.event).toMatchObject({
+				status: 404,
+				failureStep: `file_exchange.${step}`,
+			});
+		};
+		// 基线：同一请求在全部条件满足时通过，下面每次只破坏一项。
+		expect((await exchange()).status).toBe(200);
+		await expectDenied("grant", { grant: foreignGrant });
+		await expectDenied("service_identity", { token: deploymentToken });
+		await db`update platform.session_sandbox_allocations
+			set resource_observation = jsonb_set(resource_observation, '{status}', '"observing"')
+			where sandbox_id = ${turn.sandboxId}`;
+		await expectDenied("credential_scope");
+		await db`update platform.session_sandbox_allocations
+			set resource_observation = jsonb_set(resource_observation, '{status}', '"ready"')
+			where sandbox_id = ${turn.sandboxId}`;
+		await db`insert into platform.conversation_stops
+			(execution_id, stop_request_id, status, created_at, updated_at)
+			values (${turn.executionId}, 'stop-ac2', 'submitted', now(), now())`;
+		await expectDenied("execution");
+		await db`delete from platform.conversation_stops where execution_id = ${turn.executionId}`;
+		await db`update platform.conversation_executions set delivery_fence = delivery_fence + 1
+			where execution_id = ${turn.executionId}`;
+		await expectDenied("delivery_fence");
+		await db`update platform.conversation_executions set delivery_fence = delivery_fence - 1
+			where execution_id = ${turn.executionId}`;
+		await db`update platform.task_authorization_records set revoked_at = now()
+			where id = ${turn.recordId}`;
+		await expectDenied("task_authorization");
+		await db`update platform.task_authorization_records set revoked_at = null
+			where id = ${turn.recordId}`;
+		const [boundary] = await db<{ boundary: unknown }[]>`
+			select boundary from platform.task_authorization_records where id = ${turn.recordId}`;
+		await db`update platform.task_authorization_records
+			set boundary = jsonb_set(boundary, '{agentAuthorizationRevision}', '"authorization_other"')
+			where id = ${turn.recordId}`;
+		await expectDenied("boundary");
+		await db`update platform.task_authorization_records
+			set boundary = ${db.json(boundary?.boundary as postgres.JSONValue)}
+			where id = ${turn.recordId}`;
+		await db`update platform.agent_applications set service_availability = 'updating'
+			where agent_id = ${agentId}`;
+		await expectDenied("authorize");
+		await db`update platform.agent_applications set service_availability = 'ready'
+			where agent_id = ${agentId}`;
+		await db`delete from platform.file_limit_declarations where scope = 'agent'`;
+		await expectDenied("limits");
+		await insertLimit("agent", agentId, "");
+		// 同一会话中可用、但不在签名 allowlist 内的附件：文件 Core 判定拒绝。
+		await expectDenied("file", { fileId: turn.other.fileId });
+		expect((await exchange()).status).toBe(200);
+		const objectRefs = await db<{ object_ref: string }[]>`
+			select record->>'objectRef' as object_ref from platform.files`;
+		const recorded = JSON.stringify({ events, logs });
+		for (const sentinel of [
+			deploymentToken,
+			turn.sandboxToken,
+			turn.grant.token,
+			turn.grant.token.split(".")[2] ?? "",
+			foreignGrant.token,
+			turn.attachment.fileId,
+			turn.other.fileId,
+			origin,
+			"runtime-exchange.test",
+			...objectRefs.map((row) => row.object_ref),
+		]) {
+			expect(sentinel.length).toBeGreaterThan(8);
+			expect(recorded).not.toContain(sentinel);
+		}
+	}, 120_000);
+
+	it("AC-2: records the conversation and store steps that the credential scope normally masks", async () => {
+		const turn = await dispatchedTurn("ac2-masked");
+		const observability = {
+			record: (event: OperationalEvent) => events.push(event),
+			status: () => ({}),
+		};
+		const assemble = (databaseUrl: string) =>
+			assemblePlatformFilesV1({
+				databaseUrl,
+				deployment: {
+					...filesDeployment(),
+					resolveActor: async () => identity,
+				},
+				identity: adapter,
+				// 凭据范围按当前分配读取时与会话检查同一谓词；这里固定返回该分配，只为够到其后的检查。
+				sandboxCredentials: {
+					async readRuntimeFileExchangeCredentialScopeV1() {
+						return {
+							sandbox: {
+								sandboxId: turn.sandboxId,
+								namespace: "fixture-sandboxes",
+								generation: turn.sessionGeneration,
+								resourceFence: Number(
+									(
+										await db<{ fence: string }[]>`
+											select resource_fence as fence from platform.session_sandbox_allocations
+											where sandbox_id = ${turn.sandboxId}`
+									)[0]?.fence,
+								),
+							},
+						};
+					},
+				},
+				readCurrentLimits: unavailable,
+				conversationAuthorization: { authorize: unavailable },
+			});
+		const request = async (
+			assembled: ReturnType<typeof assemblePlatformFilesV1>,
+		) => {
+			const app = createPlatformHealthApp(
+				observability as unknown as Parameters<
+					typeof createPlatformHealthApp
+				>[0],
+			);
+			registerFileRoutesV1(app, assembled.dependencies);
+			const before = events.length;
+			const response = await app.request(
+				"/internal/v1/files/runtime-exchange",
+				{
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${turn.sandboxToken}`,
+						"Content-Type": "application/json",
+						"Idempotency-Key": "masked-exchange",
+					},
+					body: JSON.stringify({
+						schemaVersion: 2,
+						executionGrant: turn.grant,
+						operation: "read",
+						fileId: turn.attachment.fileId,
+						idempotencyKey: "masked-exchange",
+					}),
+				},
+			);
+			return {
+				status: response.status,
+				event: events.slice(before).find((entry) => entry.stage === "http") as
+					| { failureStep?: string }
+					| undefined,
+			};
+		};
+		const current = assemble(database.databaseUrl);
+		try {
+			await db`update platform.conversations set session_generation = session_generation + 1
+				where id = ${turn.conversationId}`;
+			expect(await request(current)).toMatchObject({
+				status: 404,
+				event: { failureStep: "file_exchange.conversation" },
+			});
+		} finally {
+			await db`update platform.conversations set session_generation = session_generation - 1
+				where id = ${turn.conversationId}`;
+			await current.close();
+		}
+		// Platform DB 不可达：失败步骤是有界的 Store 步骤（驱动错误由查询观测先记录）。
+		const unreachable = assemble(
+			"postgres://unused:unused@127.0.0.1:1/unused?connect_timeout=2",
+		);
+		try {
+			const result = await request(unreachable);
+			expect(result.status).toBe(404);
+			expect(["store.query", "file_exchange.store"]).toContain(
+				result.event?.failureStep,
+			);
+		} finally {
+			await unreachable.close();
+		}
+	}, 120_000);
 });

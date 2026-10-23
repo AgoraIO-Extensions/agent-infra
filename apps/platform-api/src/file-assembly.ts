@@ -31,7 +31,11 @@ import {
 } from "./file-grants.js";
 import { requestMetadata } from "./http/common.js";
 import type { ConversationAuthorization } from "./http/conversation-routes.js";
-import type { FileRoutesDependenciesV1 } from "./http/file-routes.js";
+import {
+	type FileExchangeDenialStepV1,
+	type FileRoutesDependenciesV1,
+	recordFileExchangeDenialV1,
+} from "./http/file-routes.js";
 import {
 	type IdentityAdapter,
 	type IdentityContext,
@@ -140,21 +144,23 @@ export function assemblePlatformFilesV1(input: {
 	 * 服务 token；绑定 Sandbox 的执行只接受按该分配从登记 token 派生的本 Sandbox 凭据，
 	 * 部署 token 本身与其他 Sandbox、旧代次或旧 fence 的派生值都不匹配。两种情形都要求
 	 * 登记的 `agentIds` 包含该 Agent。读取在比较之前完成，token 对错走同一路径；比较对全部
-	 * 候选逐一执行 timingSafeEqual，不提前返回，也不记录 token。
+	 * 候选逐一执行 timingSafeEqual，不提前返回，也不记录 token。返回拒绝所在的有界步骤，
+	 * 通过时返回 null（#3307）。
 	 */
-	async function serviceIdentityAllowed(
+	async function serviceIdentityDenial(
 		request: Request,
 		binding: Omit<RuntimeFileExchangeCredentialScopeRequestV1, "signal">,
-	): Promise<boolean> {
+	): Promise<"service_identity" | "credential_scope" | null> {
 		const authorization = request.headers.get("Authorization");
 		if (!authorization?.startsWith("Bearer ") || authorization.length > 4096)
-			return false;
+			return "service_identity";
 		const presented = createHash("sha256")
 			.update(authorization.slice(7))
 			.digest();
+		let scope: RuntimeFileExchangeCredentialScopeResponseV1 | undefined;
 		try {
-			const scope =
-				await sandboxCredentials.readRuntimeFileExchangeCredentialScopeV1({
+			scope = await sandboxCredentials.readRuntimeFileExchangeCredentialScopeV1(
+				{
 					agentId: binding.agentId,
 					actorId: binding.actorId,
 					channelId: binding.channelId,
@@ -162,8 +168,14 @@ export function assemblePlatformFilesV1(input: {
 					executionId: binding.executionId,
 					sessionGeneration: binding.sessionGeneration,
 					signal: request.signal,
-				});
-			let matched = false;
+				},
+			);
+		} catch {
+			// 分配读取不可用时失败关闭，与“不存在”不可区分。
+			return "credential_scope";
+		}
+		let matched = false;
+		try {
 			for (const mapping of serviceMappings) {
 				if (!mapping.agentIds.includes(binding.agentId)) continue;
 				const expected = scope?.sandbox
@@ -175,11 +187,12 @@ export function assemblePlatformFilesV1(input: {
 					: mapping.digest;
 				matched = timingSafeEqual(presented, expected) || matched;
 			}
-			return scope !== undefined && matched;
 		} catch {
-			// 分配读取不可用或分配事实非法时失败关闭，与“不存在”不可区分。
-			return false;
+			// 分配事实非法（派生输入不合法）时失败关闭。
+			return "credential_scope";
 		}
+		if (scope === undefined) return "credential_scope";
+		return matched ? null : "service_identity";
 	}
 	function authorization(
 		request: Request,
@@ -187,12 +200,17 @@ export function assemblePlatformFilesV1(input: {
 	): FileAuthorizationPortV1 {
 		return {
 			async authorize(conversationId, operation) {
-				if (
-					execution &&
-					(execution.conversationId !== conversationId ||
-						!(await serviceIdentityAllowed(request, execution)))
-				)
+				// 执行期访问的每一处拒绝都记录有界步骤；浏览器访问不记录（#3307）。
+				const deny = (step: FileExchangeDenialStepV1, error?: unknown) => {
+					if (execution) recordFileExchangeDenialV1(step, error);
 					return null;
+				};
+				if (execution) {
+					if (execution.conversationId !== conversationId)
+						return deny("authorize");
+					const denial = await serviceIdentityDenial(request, execution);
+					if (denial) return deny(denial);
+				}
 				const identity = await resolveIdentity(
 					execution
 						? {
@@ -203,7 +221,8 @@ export function assemblePlatformFilesV1(input: {
 					request,
 					requestMetadata(request).traceId,
 				);
-				if (execution && identity.userId !== execution.actorId) return null;
+				if (execution && identity.userId !== execution.actorId)
+					return deny("authorize");
 				const allowed = await input.conversationAuthorization.authorize(
 					identity,
 					{
@@ -215,7 +234,7 @@ export function assemblePlatformFilesV1(input: {
 								: "conversation.read",
 					},
 				);
-				if (allowed.outcome !== "allowed") return null;
+				if (allowed.outcome !== "allowed") return deny("authorize");
 				const scope = {
 					actorId: allowed.authority.actorId,
 					agentId: allowed.authority.agentId,
@@ -228,25 +247,27 @@ export function assemblePlatformFilesV1(input: {
 						scope.actorId !== execution.actorId ||
 						scope.channelId !== execution.channelId)
 				)
-					return null;
+					return deny("authorize");
 				let limits = null;
 				if (operation === "write" || execution) {
 					let declarations: FileLimitDeclarationsV1 | null = null;
+					let failure: unknown;
 					try {
 						declarations = await input.readCurrentLimits(
 							identity,
 							scope,
 							execution && operation === "write" ? "result" : "attachment",
 						);
-					} catch {
+					} catch (error) {
 						// A declaration read failure denies the operation instead of
 						// falling back to a wider or synthetic limit.
 						declarations = null;
+						failure = error;
 					}
 					limits = declarations
 						? resolveFileLimitsV1(declarations, new Date())
 						: null;
-					if (!limits) return null;
+					if (!limits) return deny("limits", failure);
 				}
 				return { ...scope, execution: execution ?? null, limits };
 			},
@@ -275,13 +296,22 @@ export function assemblePlatformFilesV1(input: {
 		},
 		exchange: {
 			async authenticate(request: Request, grant: FileAccessGrantV1) {
-				const claims = verifyExecutionGrantForFilesV1(grant, {
-					issuer: deployment.runtimeIssuer,
-					publicKeys: deployment.runtimePublicKeys,
-					now: new Date().toISOString(),
-				});
-				if (!(await serviceIdentityAllowed(request, claims)))
+				let claims: ReturnType<typeof verifyExecutionGrantForFilesV1>;
+				try {
+					claims = verifyExecutionGrantForFilesV1(grant, {
+						issuer: deployment.runtimeIssuer,
+						publicKeys: deployment.runtimePublicKeys,
+						now: new Date().toISOString(),
+					});
+				} catch (error) {
+					recordFileExchangeDenialV1("grant", error);
+					throw error;
+				}
+				const denial = await serviceIdentityDenial(request, claims);
+				if (denial) {
+					recordFileExchangeDenialV1(denial);
 					throw new Error("File exchange denied");
+				}
 				return {
 					conversationId: claims.conversationId,
 					authorization: authorization(request, {
@@ -311,32 +341,40 @@ export function assemblePlatformFilesV1(input: {
 				conversationId: string;
 				authorization: FileAuthorizationPortV1;
 			}> {
-				const claims = verifyRuntimeExecutionGrantForFilesV4(
-					value.executionGrant,
-					{
+				let claims: ReturnType<typeof verifyRuntimeExecutionGrantForFilesV4>;
+				try {
+					claims = verifyRuntimeExecutionGrantForFilesV4(value.executionGrant, {
 						issuer: deployment.runtimeIssuer,
 						workerId: deployment.runtimeWorkerId,
 						publicKeys: deployment.runtimePublicKeys,
-					},
-				);
+					});
+				} catch (error) {
+					recordFileExchangeDenialV1("grant", error);
+					throw error;
+				}
 				// 服务身份在 Grant 验签之后、任何持久写入与对象 I/O 之前校验（#3276）。
-				if (
-					!(await serviceIdentityAllowed(request, {
-						agentId: claims.agentId,
-						actorId: claims.principal.id,
-						channelId: claims.channelId,
-						conversationId: claims.conversationId,
-						executionId: claims.executionId,
-						sessionGeneration: claims.sessionGeneration,
-					}))
-				)
+				const denial = await serviceIdentityDenial(request, {
+					agentId: claims.agentId,
+					actorId: claims.principal.id,
+					channelId: claims.channelId,
+					conversationId: claims.conversationId,
+					executionId: claims.executionId,
+					sessionGeneration: claims.sessionGeneration,
+				});
+				if (denial) {
+					recordFileExchangeDenialV1(denial);
 					throw new Error("Runtime file exchange denied");
+				}
 				// Read the current persisted authority inside one transaction before
 				// any object I/O. A missing, foreign, terminal, stopped, stale-fenced
-				// or revoked Execution is indistinguishable to the caller.
-				const current = await store.transaction(
-					claims.conversationId,
-					async (transaction) => {
+				// or revoked Execution is indistinguishable to the caller; the bounded
+				// step only reaches operational telemetry (#3307).
+				const deny = (step: FileExchangeDenialStepV1) => {
+					recordFileExchangeDenialV1(step);
+					return null;
+				};
+				const current = await store
+					.transaction(claims.conversationId, async (transaction) => {
 						const conversation = transaction.conversation;
 						if (
 							!conversation ||
@@ -345,7 +383,7 @@ export function assemblePlatformFilesV1(input: {
 							conversation.channelId !== claims.channelId ||
 							conversation.sessionGeneration !== claims.sessionGeneration
 						)
-							return null;
+							return deny("conversation");
 						const execution = await transaction.getExecution(
 							claims.executionId,
 						);
@@ -362,7 +400,7 @@ export function assemblePlatformFilesV1(input: {
 							) ||
 							execution.stopPending
 						)
-							return null;
+							return deny("execution");
 						// The execution-bound submit Grant names the persisted delivery
 						// fence. A supplement proof names its Message and has no comparable
 						// persisted Message fence in this milestone (OQ-3 in #2968).
@@ -371,7 +409,7 @@ export function assemblePlatformFilesV1(input: {
 							execution.deliveryFence !==
 								claims.operation.executionDeliveryFence
 						)
-							return null;
+							return deny("delivery_fence");
 						const record = await transaction.getTaskAuthorization(
 							claims.authorizationRecordId,
 							claims.executionId,
@@ -381,12 +419,12 @@ export function assemblePlatformFilesV1(input: {
 							record.revoked ||
 							record.executionId !== claims.executionId
 						)
-							return null;
+							return deny("task_authorization");
 						let boundary: ReturnType<typeof parseTaskAuthorizationBoundaryV1>;
 						try {
 							boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
 						} catch {
-							return null;
+							return deny("boundary");
 						}
 						if (
 							boundary.principal.kind !== claims.principal.kind ||
@@ -396,10 +434,13 @@ export function assemblePlatformFilesV1(input: {
 							boundary.agentAuthorizationRevision !==
 								execution.authorizationRevision
 						)
-							return null;
+							return deny("boundary");
 						return execution;
-					},
-				);
+					})
+					.catch((error: unknown) => {
+						recordFileExchangeDenialV1("store", error);
+						throw error;
+					});
 				if (!current) throw new Error("Runtime file exchange denied");
 				return {
 					conversationId: claims.conversationId,
