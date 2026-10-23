@@ -184,6 +184,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const authenticatedBefore = useRef(false);
 	const loggedOut = useRef(false);
 	// 主动退出后整页换成登录页，原焦点（「退出登录」或窄屏导航）随壳层卸载；登录页据此接过焦点（#3242 K7-02）。
+	// 会话在同一文档内确认失效（「重新登录」等重读，sessionExpired）时同样如此（#3327 N10-1-01）。
 	const [focusLoginAfterLogout, setFocusLoginAfterLogout] = useState(false);
 	useEffect(() => {
 		if (sessionKind === "ready") {
@@ -555,7 +556,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				loginUrl={loginUrl}
 				development={development}
 				expired={sessionExpired || expiredReason}
-				focusAfterLogout={focusLoginAfterLogout}
+				focusOnEntry={focusLoginAfterLogout || sessionExpired}
 				onLoggedIn={async () => {
 					const result = await session.refetch();
 					if (result.data?.kind !== "ready")

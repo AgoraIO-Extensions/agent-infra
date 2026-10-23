@@ -1558,10 +1558,18 @@
 	width: 13px;
 	height: 13px;
 }
+/* 模型设置失败行（导出稿缺失，见 web-ui.md O8-01）：与同 composer 的错误行同为 12px / 1.6 --danger-ink，
+   左右内缩随已选命令卡与错误行，≤767px 为 8px（#3327 N10-1-02）。 */
 .model-preference-failure {
 	margin: 4px 12px 0;
 	color: var(--danger-ink);
 	font-size: 12px;
+	line-height: 1.6;
+}
+@media (max-width: 767px) {
+	.model-preference-failure {
+		margin-inline: 8px;
+	}
 }
 /* 设计 #capability-options：composer 上方的 fixed 弹层，位置由脚本按 positionCapabilityPicker 计算。 */
 .capability-menu {
