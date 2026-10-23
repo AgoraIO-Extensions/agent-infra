@@ -452,12 +452,17 @@ for (const target of recoveryPages) {
 	}) => {
 		let reply: Reply = { status: 401 };
 		await platform(page, { [target.key]: () => reply });
-		const card = page.locator('#main-content [data-slot="state-card"]');
 		const heading = page.locator("#main-content h1");
 		for (const [status, name] of [
 			[401, "重新登录"],
 			[503, target.retry],
 		] as const) {
+			// 需求变化（#3268 N8-2-09）：本用例的会话是员工，Owner 配置与 Agent 的 Skill 页恢复后是公共
+			// 「无法访问」卡（同为 state-card）。所以只看被恢复的那张读取失败卡（login / unavailable）
+			// 是否卸载，原先断言主内容区没有任何 state-card。
+			const card = page.locator(
+				`#main-content [data-slot="state-card"][data-kind="${status === 401 ? "login" : "unavailable"}"]`,
+			);
 			reply = { status };
 			await page.goto(target.path);
 			const action = card.getByRole("button", { name, exact: true });
