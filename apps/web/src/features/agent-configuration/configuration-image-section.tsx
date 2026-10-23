@@ -41,7 +41,8 @@ export function ConfigurationImageSection({
 	const [focusInput, setFocusInput] = useState(false);
 	const upgrade = () => {
 		const reference = imageReference.trim();
-		if (!reference) return;
+		// 进行中按钮仍可聚焦：再次点击或按 Enter 不重复提交（提交 hook 另有同一时刻只受理一个命令的守卫）。
+		if (!reference || upgrading || disabled) return;
 		void Promise.resolve(onUpgradeImage(reference)).then((accepted) => {
 			if (!accepted) return;
 			setImageReference("");

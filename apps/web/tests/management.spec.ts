@@ -7480,6 +7480,15 @@ test("image upgrade keeps its pending and failure states inside the image sectio
 	await page.keyboard.press("Enter");
 	await expect(upgrade).toHaveText("升级中…");
 	await expectFocusableBusy(upgrade, "升级镜像");
+	// 进行中再按 Enter 或点击不会重复提交升级命令。
+	await page.keyboard.press("Enter");
+	await upgrade.click({ force: true });
+	await expect
+		.poll(
+			() =>
+				api.commands.filter(({ path }) => path.endsWith("/lifecycle")).length,
+		)
+		.toBe(1);
 	await expect(save).toHaveText("保存配置");
 	await expect(footer.getByText("保存中…")).toHaveCount(0);
 	await expect(save).not.toHaveAttribute("aria-disabled", "true");
@@ -7491,6 +7500,9 @@ test("image upgrade keeps its pending and failure states inside the image sectio
 	api.release();
 	await expect(toastHost(page)).toHaveText("已提交镜像升级请求");
 	await expectFocusSettled(input, "升级镜像受理");
+	expect(
+		api.commands.filter(({ path }) => path.endsWith("/lifecycle")),
+	).toHaveLength(1);
 
 	// 失败：说明在分区内，焦点留在「升级镜像」，页脚没有保存失败。
 	let failed = 0;
