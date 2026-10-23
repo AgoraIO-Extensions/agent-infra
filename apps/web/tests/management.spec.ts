@@ -6691,6 +6691,8 @@ test("upgrading a custom image keeps focus on 升级镜像 and then hands it to 
 test("Agent authorization controls keep focus on the pending grant or revoke button (K7-02)", async ({
 	page,
 }, info) => {
+	// 8 个按钮各做一次进行中与完成后的焦点采样（每次约 2s），高负载下会超过默认 30s。
+	test.setTimeout(60_000);
 	await acceptanceViewport(page, info);
 	const errors = trackPageErrors(page);
 	await fixture(page);
