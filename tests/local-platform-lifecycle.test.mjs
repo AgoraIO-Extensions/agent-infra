@@ -40,6 +40,7 @@ async function fixture() {
 	);
 	const bin = join(directory, "bin");
 	const api = join(directory, "api");
+	const workerConfiguration = join(directory, "worker-configuration.mjs");
 	await mkdir(bin);
 	await mkdir(api);
 	const log = join(directory, "commands.log");
@@ -80,6 +81,10 @@ async function fixture() {
 				'export const apiInput = { imageRepository: "registry.example/agent", loadAuthorityContext: async () => ({}), modelCatalog: { revision: "catalog-v1", load: async () => ({}) }, encryptionKeys: {}, resourceProfile: {} };',
 				"",
 			].join("\n"),
+		),
+		writeFile(
+			workerConfiguration,
+			"export const fixtureWorkerConfiguration = true;\n",
 		),
 		writeFile(cert, ""),
 		writeFile(key, ""),
@@ -402,6 +407,7 @@ fi`,
 		PLATFORM_LOCAL_KUBE_CONTEXT: "kind-isolated",
 		PLATFORM_LOCAL_NAMESPACE: "agent-infra-verify",
 		PLATFORM_LOCAL_WORKER_VALUES: values,
+		PLATFORM_LOCAL_WORKER_CONFIGURATION: workerConfiguration,
 	};
 	return {
 		env,
@@ -1640,6 +1646,25 @@ test("local up validates private API and Worker material before stopping service
 		assert.match(
 			result.stderr,
 			/Local API configuration.mjs has invalid syntax/,
+		);
+		assert.equal(await readFile(f.log, "utf8"), "");
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up rejects invalid Worker configuration syntax before stopping services", async () => {
+	const f = await fixture();
+	try {
+		await writeFile(
+			f.env.PLATFORM_LOCAL_WORKER_CONFIGURATION,
+			"export const worker = ;\n",
+		);
+		const result = run("up", f.env);
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/Local Worker configuration\.mjs has invalid syntax/,
 		);
 		assert.equal(await readFile(f.log, "utf8"), "");
 	} finally {
