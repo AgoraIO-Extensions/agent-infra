@@ -1131,3 +1131,194 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 		await db.stop();
 	}
 }, 120000);
+
+it("records whitelisted text declarations and rejects mismatched bytes over real HTTP, PostgreSQL and versioned S3 (#3257)", async () => {
+	const db = await startPostgresTestDatabase("3257-text-subtype");
+	const fixture = await startMinioFileFixtureV1();
+	const sql = postgres(db.databaseUrl);
+	let assembled: ReturnType<typeof assemblePlatformFilesV1> | undefined;
+	let server: ReturnType<typeof serve> | undefined;
+	try {
+		await migratePlatformDatabase(db);
+		await sql`insert into platform.conversations (id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision) values ('conversation','agent','alice','web','active',1,'auth')`;
+		const keys = generateKeyPairSync("ed25519");
+		// 三方 FileLimits 都含 text/csv，不含 text/markdown。
+		const limits = {
+			revision: "test-limits-3257",
+			expiresAt: "2099-01-01T00:00:00Z",
+			maxBytes: 1024,
+			mediaTypes: ["text/plain", "text/csv"],
+		};
+		const actor = (userId: string) => ({
+			schemaVersion: 1 as const,
+			userId,
+			displayName: userId,
+			accountStatus: "active" as const,
+			organizationIds: ["org"],
+			roles: ["employee" as const],
+			authorizationRevision: "auth",
+		});
+		assembled = assemblePlatformFilesV1({
+			databaseUrl: db.databaseUrl,
+			identity: {
+				resolve: async () => actor("alice"),
+				hydrateUsers: async () => [],
+			},
+			deployment: {
+				storage: fixture.storage,
+				issuer: "files",
+				keyVersion: "file-key",
+				privateKey: keys.privateKey,
+				publicKeys: new Map([["file-key", keys.publicKey]]),
+				runtimeIssuer: "runtime",
+				runtimeWorkerId: "runtime-worker",
+				runtimePublicKeys: new Map([["runtime-key", keys.publicKey]]),
+				intentTtlMs: 60000,
+				accessTtlMs: 60000,
+				maxConcurrentTransfers: 2,
+				services: [],
+				resolveActor: async (id) => actor(id),
+				readLimits: async () => ({
+					configurationRevision: 1,
+					declarations: { agent: limits, channel: limits, deployment: limits },
+				}),
+			},
+			readCurrentLimits: async () => ({
+				agent: limits,
+				channel: limits,
+				deployment: limits,
+			}),
+			conversationAuthorization: {
+				authorize: async () => ({
+					outcome: "allowed",
+					authority: {
+						schemaVersion: 1,
+						actorId: "alice",
+						agentId: "agent",
+						channelId: "web",
+						authorizationRevision: "auth",
+						supportsSupplementaryInstruction: false,
+					},
+				}),
+			},
+		});
+		const app = createPlatformHealthApp();
+		registerFileRoutesV1(app, assembled.dependencies);
+		server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 });
+		if (!server.listening) await once(server, "listening");
+		const address = server.address();
+		if (!address || typeof address === "string")
+			throw new Error("Missing HTTP fixture");
+		const origin = `http://127.0.0.1:${address.port}`;
+		const root = "/api/v1/conversations/conversation/files";
+		const post = (path: string, body: unknown, key: string, extra = {}) =>
+			fetch(origin + path, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"Idempotency-Key": key,
+					...extra,
+				},
+				body: JSON.stringify(body),
+			});
+		const upload = async (content: Buffer, mediaType: string, key: string) => {
+			const created = await post(
+				root,
+				{
+					schemaVersion: 1,
+					descriptor: {
+						name: "table.csv",
+						mediaType,
+						sizeBytes: content.length,
+						sha256: createHash("sha256").update(content).digest("hex"),
+					},
+				},
+				key,
+			);
+			if (created.status !== 201) return { created: created.status };
+			const file = FileProjectionV1Schema.parse(await created.json());
+			const access = FileAccessResponseV1Schema.parse(
+				await (
+					await post(
+						`${root}/${file.fileId}/access`,
+						{ schemaVersion: 1, operation: "write" },
+						`${key}-access`,
+					)
+				).json(),
+			);
+			const written = await fetch(origin + access.path, {
+				method: "PUT",
+				headers: {
+					"Content-Type": mediaType,
+					"Content-Length": String(content.length),
+					"X-Platform-File-Grant": access.grant.token,
+				},
+				body: content,
+			});
+			const completed = await post(
+				`${root}/${file.fileId}/complete`,
+				{ schemaVersion: 1, accessId: access.accessId },
+				`${key}-complete`,
+				{ "X-Platform-File-Grant": access.grant.token },
+			);
+			const [row] = await sql<
+				{ mediaType: string; status: string }[]
+			>`select record->'descriptor'->>'mediaType' as "mediaType", record->>'status' as status from platform.files where file_id = ${file.fileId}`;
+			return {
+				created: created.status,
+				written: written.status,
+				completed: completed.status,
+				projection:
+					completed.status === 200
+						? FileProjectionV1Schema.parse(await completed.json()).descriptor
+								.mediaType
+						: null,
+				row,
+			};
+		};
+		const csv = Buffer.from("名称,数量\n苹果,3\n");
+		const png = Buffer.from(
+			"89504e470d0a1a0a0000000d4948445200000001000000010806000000" +
+				"1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082",
+			"hex",
+		);
+		// AC-1：CSV 记录为 text/csv。
+		expect(await upload(csv, "text/csv", "csv")).toEqual({
+			created: 201,
+			written: 204,
+			completed: 200,
+			projection: "text/csv",
+			row: { mediaType: "text/csv", status: "available" },
+		});
+		// AC-1/AC-2：非 UTF-8 内容与 PNG 字节不能以 text/csv 确认。
+		for (const [content, key] of [
+			[Buffer.from("c3fbb3c62cbafd0a", "hex"), "csv-not-utf8"],
+			[png, "csv-over-png"],
+		] as const) {
+			const rejected = await upload(content, "text/csv", key);
+			expect(rejected).toMatchObject({
+				created: 201,
+				projection: null,
+				row: { mediaType: "text/csv", status: "pending" },
+			});
+			expect(rejected.written).not.toBe(204);
+			expect(rejected.completed).not.toBe(200);
+		}
+		// FileLimits 不含 text/markdown：规范化结果不在限制内，创建即拒绝。
+		expect(await upload(csv, "text/markdown", "markdown")).toEqual({
+			created: 404,
+		});
+	} finally {
+		if (server) {
+			const running = server;
+			running.closeAllConnections();
+			await new Promise<void>((resolve, reject) =>
+				running.close((error) => (error ? reject(error) : resolve())),
+			);
+		}
+		await assembled?.close();
+		await sql.end();
+		await fixture.close();
+		await db.stop();
+	}
+}, 120000);
