@@ -15,10 +15,14 @@ import {
 	type FileScopeV1,
 	parseTaskAuthorizationBoundaryV1,
 	resolveFileLimitsV1,
+	sessionSandboxFileExchangeTokenV1,
 } from "@agent-infra/platform-core";
 import {
+	PostgresConversationQueryV1,
 	PostgresFileLimitDeclarationStoreV1,
 	PostgresFileStoreV1,
+	type RuntimeFileExchangeCredentialScopeRequestV1,
+	type RuntimeFileExchangeCredentialScopeResponseV1,
 } from "@agent-infra/platform-store";
 import {
 	createFileGrantCodecV1,
@@ -64,6 +68,17 @@ export interface PlatformFileDeploymentV1 {
 		readonly declarations: FileLimitDeclarationsV1;
 	}>;
 }
+
+/**
+ * 读取执行当前的 Session Sandbox 分配（Platform DB 权威，#3276）。生产装配传入共用的
+ * `PostgresConversationQueryV1`；它的连接池独立于文件 Store，文件事务内调用不会互相等待。
+ */
+export interface RuntimeFileExchangeCredentialReaderV1 {
+	readRuntimeFileExchangeCredentialScopeV1(
+		request: RuntimeFileExchangeCredentialScopeRequestV1,
+	): Promise<RuntimeFileExchangeCredentialScopeResponseV1 | undefined>;
+}
+
 export function assemblePlatformFilesV1(input: {
 	databaseUrl: string;
 	deployment: PlatformFileDeploymentV1;
@@ -76,11 +91,20 @@ export function assemblePlatformFilesV1(input: {
 	): Promise<FileLimitDeclarationsV1 | null>;
 	/** Authoritative declaration store; defaults to a Platform DB reader. */
 	readonly limitDeclarations?: FileLimitDeclarationStoreV1;
+	/** Current Session Sandbox allocation reader; defaults to a Platform DB reader. */
+	readonly sandboxCredentials?: RuntimeFileExchangeCredentialReaderV1;
 }) {
 	const deployment = input.deployment;
 	if (!deployment.runtimeWorkerId?.trim())
 		throw new Error("File runtime worker identity configuration is invalid");
 	const store = new PostgresFileStoreV1(input.databaseUrl);
+	const ownedSandboxCredentials =
+		input.sandboxCredentials === undefined
+			? new PostgresConversationQueryV1({ databaseUrl: input.databaseUrl })
+			: undefined;
+	const sandboxCredentials: RuntimeFileExchangeCredentialReaderV1 =
+		input.sandboxCredentials ??
+		(ownedSandboxCredentials as RuntimeFileExchangeCredentialReaderV1);
 	const ownedLimitDeclarations =
 		deployment.readLimits === undefined && input.limitDeclarations === undefined
 			? new PostgresFileLimitDeclarationStoreV1(input.databaseUrl)
@@ -110,16 +134,52 @@ export function assemblePlatformFilesV1(input: {
 			digest: createHash("sha256").update(value.token).digest(),
 		};
 	});
-	function serviceAllowed(request: Request, agentId: string) {
+	/**
+	 * 执行期服务身份（工程 Spec §15.4.2，#3276）。先按执行重新读取 Platform DB 中的当前
+	 * Sandbox 分配，再决定唯一可接受的凭据：未绑定 Sandbox 的 Agent 级执行只接受部署登记的
+	 * 服务 token；绑定 Sandbox 的执行只接受按该分配从登记 token 派生的本 Sandbox 凭据，
+	 * 部署 token 本身与其他 Sandbox、旧代次或旧 fence 的派生值都不匹配。两种情形都要求
+	 * 登记的 `agentIds` 包含该 Agent。读取在比较之前完成，token 对错走同一路径；比较对全部
+	 * 候选逐一执行 timingSafeEqual，不提前返回，也不记录 token。
+	 */
+	async function serviceIdentityAllowed(
+		request: Request,
+		binding: Omit<RuntimeFileExchangeCredentialScopeRequestV1, "signal">,
+	): Promise<boolean> {
 		const authorization = request.headers.get("Authorization");
 		if (!authorization?.startsWith("Bearer ") || authorization.length > 4096)
 			return false;
-		const digest = createHash("sha256").update(authorization.slice(7)).digest();
-		return serviceMappings.some(
-			(mapping) =>
-				timingSafeEqual(digest, mapping.digest) &&
-				mapping.agentIds.includes(agentId),
-		);
+		const presented = createHash("sha256")
+			.update(authorization.slice(7))
+			.digest();
+		try {
+			const scope =
+				await sandboxCredentials.readRuntimeFileExchangeCredentialScopeV1({
+					agentId: binding.agentId,
+					actorId: binding.actorId,
+					channelId: binding.channelId,
+					conversationId: binding.conversationId,
+					executionId: binding.executionId,
+					sessionGeneration: binding.sessionGeneration,
+					signal: request.signal,
+				});
+			let matched = false;
+			for (const mapping of serviceMappings) {
+				if (!mapping.agentIds.includes(binding.agentId)) continue;
+				const expected = scope?.sandbox
+					? createHash("sha256")
+							.update(
+								sessionSandboxFileExchangeTokenV1(mapping.token, scope.sandbox),
+							)
+							.digest()
+					: mapping.digest;
+				matched = timingSafeEqual(presented, expected) || matched;
+			}
+			return scope !== undefined && matched;
+		} catch {
+			// 分配读取不可用或分配事实非法时失败关闭，与“不存在”不可区分。
+			return false;
+		}
 	}
 	function authorization(
 		request: Request,
@@ -129,8 +189,8 @@ export function assemblePlatformFilesV1(input: {
 			async authorize(conversationId, operation) {
 				if (
 					execution &&
-					(!serviceAllowed(request, execution.agentId) ||
-						execution.conversationId !== conversationId)
+					(execution.conversationId !== conversationId ||
+						!(await serviceIdentityAllowed(request, execution)))
 				)
 					return null;
 				const identity = await resolveIdentity(
@@ -220,7 +280,7 @@ export function assemblePlatformFilesV1(input: {
 					publicKeys: deployment.runtimePublicKeys,
 					now: new Date().toISOString(),
 				});
-				if (!serviceAllowed(request, claims.agentId))
+				if (!(await serviceIdentityAllowed(request, claims)))
 					throw new Error("File exchange denied");
 				return {
 					conversationId: claims.conversationId,
@@ -259,7 +319,17 @@ export function assemblePlatformFilesV1(input: {
 						publicKeys: deployment.runtimePublicKeys,
 					},
 				);
-				if (!serviceAllowed(request, claims.agentId))
+				// 服务身份在 Grant 验签之后、任何持久写入与对象 I/O 之前校验（#3276）。
+				if (
+					!(await serviceIdentityAllowed(request, {
+						agentId: claims.agentId,
+						actorId: claims.principal.id,
+						channelId: claims.channelId,
+						conversationId: claims.conversationId,
+						executionId: claims.executionId,
+						sessionGeneration: claims.sessionGeneration,
+					}))
+				)
 					throw new Error("Runtime file exchange denied");
 				// Read the current persisted authority inside one transaction before
 				// any object I/O. A missing, foreign, terminal, stopped, stale-fenced
@@ -358,6 +428,7 @@ export function assemblePlatformFilesV1(input: {
 		close: async () => {
 			await store.close();
 			await ownedLimitDeclarations?.close();
+			await ownedSandboxCredentials?.close();
 		},
 	};
 }

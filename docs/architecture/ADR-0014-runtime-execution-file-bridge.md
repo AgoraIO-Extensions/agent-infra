@@ -12,7 +12,7 @@ Platform 已有 `FileAuthority`、`FileAccessGrantV1`、Execution Grant 附件�
 
 ## 决策
 
-1. **签发方与认证边界。** Platform API 的文件授权服务是唯一 `FileAccessGrantV1` 签发方。Worker 继续签发和验证现有 Runtime Execution Grant；RuntimeHost 不自行签发 File Grant，也不把 Runtime Grant 直接当作文件数据面凭证。Worker 与 RuntimeHost 使用部署提供的服务身份访问 Platform API，服务身份固定绑定允许的 Agent 集合。
+1. **签发方与认证边界。** Platform API 的文件授权服务是唯一 `FileAccessGrantV1` 签发方。Worker 继续签发和验证现有 Runtime Execution Grant；RuntimeHost 不自行签发 File Grant，也不把 Runtime Grant 直接当作文件数据面凭证。Worker 与 RuntimeHost 使用部署提供的服务身份访问 Platform API，服务身份固定绑定允许的 Agent 集合；会话 Sandbox 内的 RuntimeHost 只持有按本 Sandbox 分配从该身份派生的凭据，校验规则见[工程 Spec §15.4.2](SPEC-agent-infra-M1-engineering-architecture.md#1542-认证数据面与短期授权)。
 
 2. **桥接上下文。** Worker 在一次业务投递期间向 RuntimeHost 提供短期、请求级文件桥接上下文；上下文只包含已验证的执行绑定、原 Grant 引用、允许的 `fileId + operation` 集合和过期时间，不写入 durable journal、文件 Store 或普通日志。RuntimeHost 在每次读写前校验 `agentId`、`actorId`、`channelId`、`conversationId`、`executionId`、`sessionGeneration`、`grantId`、`fileId` 和 operation，并要求当前 Runtime service identity 与目标 Agent 匹配。
 

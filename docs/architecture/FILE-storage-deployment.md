@@ -84,18 +84,20 @@ Agent 与 Channel 声明通过 `/api/v2/agents/{agentId}/file-limits`、`/api/v2
 
 ### Runtime 文件交换注入
 
-Worker 只有同时拿到精确的 Platform API origin 与 runtime-auth service token 引用时才向 Agent Pod 注入这两个变量：
+Worker 只有同时拿到精确的 Platform API origin 与 runtime-auth service token 引用时，才向 Agent Pod 和会话 Sandbox Pod 注入这两个变量：
 
-- `AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN=<exact origin>`
-- `AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN`：`secretKeyRef` 指向 `runtimeAuthSecretRef`，不是字面量。
+- `AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN=<exact origin>`：两类 Pod 取同一值。
+- `AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN`：`secretKeyRef`，不是字面量。Agent Pod 指向 `runtimeAuthSecretRef`；会话 Sandbox 指向本 Sandbox 专属 Secret 的 `file-exchange-token` 键，值是 Worker 按本 Sandbox 分配派生的凭据，部署 token 不进入 Sandbox。派生规则见[工程 Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定)，Platform API 的校验见 [§15.4.2](SPEC-agent-infra-M1-engineering-architecture.md#1542-认证数据面与短期授权)。
 
 来源为部署模块 `WorkloadRuntimeAuthV1.fileExchangeOrigin`，或固定环境的 `PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN`（Helm `platformWorker.fileExchangeOrigin`／本地私有环境）。两者同时提供返回 `PLATFORM_WORKER_FILE_EXCHANGE_DUPLICATE`；只给 origin 而没有 Runtime auth 返回 `PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID`；origin 不是精确的 `http(s)://host[:port]`（无路径、查询、片段、凭据；明文仅限集群 DNS 名称）同样拒绝。配置错误在写入任何 Kubernetes 资源之前发生。
 
 未提供 origin 时不注入两个变量，Runtime Host FileBridge 保持关闭，`capabilities.attachments` 为 false。只注入一个变量时 Runtime Host 以 `RUNTIME_CONFIGURATION_INVALID` 拒绝启动。Workload 不能通过自定义 `env` 添加 `AGENT_INFRA_RUNTIME_FILE_EXCHANGE_*`，命中即按 policy 拒绝。
 
-令牌轮换：更新 deployment-owned runtime-auth Secret，并重启 Worker 与 Agent Workload；Platform API 的 `services[].tokenFile` 必须同时登记该令牌和允许的 Agent。不得把令牌复制到 Pod env 字面量、Helm values、日志或错误。
+令牌轮换：更新 deployment-owned runtime-auth Secret，并重启 Worker 与 Agent Workload；Platform API 的 `services[].tokenFile` 必须同时登记该令牌和允许的 Agent。会话 Sandbox 的派生凭据随部署令牌变化，Platform API 用同一登记令牌重新计算，无需另行登记。不得把令牌复制到 Pod env 字面量、Helm values、日志或错误。
 
-生产 Agent NetworkPolicy 是 allow-list egress，当前文件交换不会自动追加规则。部署必须把该 Platform API origin 的端口加入 Agent egress；本地 kind（kindnet）不强制执行 NetworkPolicy，本地联调通过不证明生产可达。
+已有会话 Sandbox：开启、关闭或修改 origin 会改变 Sandbox Pod 的 env 与 Secret 键，按 Spec §10.1.1 判为漂移（unknown/conflict），不原地修复，也不会自动替换。新建会话直接使用新配置；已有会话需对所属 Agent 执行一次停止再启动（管理意图，在原 PVC 上重建），或等空闲回收后由下一条消息恢复。部署配置了 Connection 投递时，漂移的 Sandbox 在替换前拒绝新 Turn（可重试）；未配置时仍路由到旧 Pod，旧 Pod 的 FileBridge 保持关闭。部署令牌轮换同样沿 §10.1.1 的受控停止与重建流程更新 Sandbox。
+
+会话 Sandbox 的 NetworkPolicy 复用 Agent Workload 的 egress 声明（模型、Connection、native metadata 与 DNS），文件交换不会自动追加规则。生产 NetworkPolicy 是 allow-list egress，部署必须在 Agent egress 声明中放行该 Platform API origin 的端口，它同时作用于 Agent Pod 与会话 Sandbox；本地 kind（kindnet）不强制执行 NetworkPolicy，本地联调通过不证明生产可达。
 
 `createWorkerFileClientV1` 提供输入读取与结果写入。它使用 RuntimeHost 已验证的原始 V4 Execution Grant 调用 `RuntimeFileExchangeRequestV2` 交换入口（`schemaVersion=2`、`executionGrant`、操作、单一文件引用或结果描述、幂等键），随后携带文件 Grant 与服务身份传输字节；不接受调用者指定的对象键或存储地址。旧 V1 自报身份 wire 继续被拒绝。原 Grant 仅证明执行委托范围，交换后的当前授权由持久 Conversation、Execution、generation、delivery fence、停止/终态和 `task_authorization_records` 决定，File Grant 有效期取部署 `accessTtlMs`。实际 Driver 文件桥接不属于本模块。
 
@@ -114,3 +116,5 @@ Worker 只有同时拿到精确的 Platform API origin 与 runtime-auth service 
 发布验收记录只保留 source commit、配置版本、对象存储实现／镜像 digest、测试命令和结果。禁止记录文件正文、服务凭证、JWS 或内部签名 URL。测试通过不替代后续文件消费者整装与人工验收。
 
 本次（#3064）的自动化覆盖：builder 的合法装配、缺字段／未知字段／相对路径、非 Ed25519／公私钥不匹配／重复密钥、令牌与私钥脱敏、凭证文件严格解析；Worker 的 origin 注入、Secret 引用、半配置／重复／非法 origin、Workload 自带变量拒绝；Runtime Host 的双变量与精确 origin 校验；Helm 渲染与 schema。以下仍未执行，保留为 #3060 的验收项：四模板真实文件 E2E、固定环境浏览器上传／下载／结果写回、生产 S3 bucket 与 NetworkPolicy egress 装配。
+
+会话 Sandbox 注入（#3276）的自动化覆盖：Sandbox 的 origin 与 Secret 引用注入、未配置不注入、非法配置在写入前拒绝、Pod 与 Secret 中无部署 token、开关文件交换判为漂移并经管理停止/启动重建；Platform API 的 Sandbox 派生凭据接受，以及部署 token、另一 Sandbox、旧 fence、未就绪分配的拒绝（含 PostgreSQL 联测），Agent 级执行的登记令牌路径不回归。固定环境的带附件 Turn 与结果文件回传仍待 #3230 验收。

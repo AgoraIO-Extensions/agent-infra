@@ -22,6 +22,7 @@ import type {
 import {
 	ConversationRuntimeHostError,
 	type SessionSandboxReconciliationClaimV1,
+	sessionSandboxFileExchangeTokenV1,
 } from "@agent-infra/platform-core";
 import type { V1Secret, V1Service } from "@kubernetes/client-node";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
@@ -558,8 +559,34 @@ function createSessionSandboxAllocationResolverV1(
 		deployment: AgentWorkloadDesiredV1,
 		modelProjection: unknown,
 		requireCurrentTemplateTrust: boolean,
+		generation: number,
+		resourceFence: number,
 	): SessionSandboxRuntimeInputV1 | null => {
 		const auth = workload.policy.runtimeAuth;
+		// #3276：文件交换 origin 与 Agent Workload 同源（policy.runtimeAuth，已合并固定环境的
+		// PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN）。Sandbox 不拿部署 token，只拿按本分配
+		// （namespace、Sandbox、代次、resourceFence）派生的值；未配置 origin 时不注入。
+		const fileExchange = () => {
+			if (auth?.fileExchangeOrigin === undefined) return {};
+			try {
+				return {
+					fileExchange: {
+						origin: auth.fileExchangeOrigin,
+						serviceToken: sessionSandboxFileExchangeTokenV1(
+							options.serviceToken,
+							{
+								namespace: policy.namespace,
+								sandboxId: binding.sandboxId,
+								generation,
+								resourceFence,
+							},
+						),
+					},
+				};
+			} catch {
+				throw new WorkloadKubernetesError("policy");
+			}
+		};
 		// Custom platform-adapter runtimes deliberately have no standard V4 model
 		// projection. Their Owner secrets are copied by the Session adapter into a
 		// Session-specific Secret; the claim carries references only.
@@ -594,6 +621,7 @@ function createSessionSandboxAllocationResolverV1(
 					policy.namespace,
 					binding.sandboxId,
 				),
+				...fileExchange(),
 				custom: { secretRefs: deployment.secretRefs },
 			};
 		}
@@ -647,6 +675,7 @@ function createSessionSandboxAllocationResolverV1(
 				policy.namespace,
 				binding.sandboxId,
 			),
+			...fileExchange(),
 		};
 	};
 	const allocationFor = async (
@@ -682,6 +711,8 @@ function createSessionSandboxAllocationResolverV1(
 				deployment,
 				modelProjection,
 				requireCurrentTemplateTrust,
+				generation,
+				resourceFence,
 			),
 			connectionConsumerSnapshot,
 			connectionInstallationRevision,

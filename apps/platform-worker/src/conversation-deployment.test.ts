@@ -5,6 +5,7 @@ import {
 	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxReconciliationClaimV1,
+	sessionSandboxFileExchangeTokenV1,
 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
@@ -41,6 +42,9 @@ import {
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
+
+/** 与 Agent Workload 共用的部署文件交换 origin（#3276）。 */
+const fileExchangeOriginFixture = "http://platform-api.agent-infra.svc:3000";
 
 function fixture() {
 	const api = fakeKubernetesApi();
@@ -575,6 +579,117 @@ describe("production SessionSandbox resource receiver", () => {
 		);
 	});
 
+	describe("Runtime file exchange injection (#3276)", () => {
+		const withOrigin = (
+			f: ReturnType<typeof fixture>,
+			fileExchangeOrigin: string,
+		): WorkloadRuntimeOptionsV1 => ({
+			...f.options,
+			policy: {
+				...f.options.policy,
+				runtimeAuth: {
+					...sessionSandboxRuntimeAuthFixture,
+					fileExchangeOrigin,
+				},
+			},
+		});
+
+		it("injects the Agent Workload origin and a token derived from this allocation", async () => {
+			const f = fixture();
+			const receive = createProductionSessionSandboxReceiverV1(
+				withOrigin(f, fileExchangeOriginFixture),
+				{ serviceToken: sessionSandboxDeploymentTokenFixture },
+			);
+			await receive(f.claim, new AbortController().signal);
+			const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+			const secret = f.resources.get("Secret/sandbox-allocation-a") as V1Secret;
+			const env = pod.spec?.containers[0]?.env ?? [];
+			expect(
+				env.find(
+					({ name }) => name === "AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN",
+				),
+			).toEqual({
+				name: "AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN",
+				value: fileExchangeOriginFixture,
+			});
+			expect(
+				env.find(
+					({ name }) =>
+						name === "AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN",
+				),
+			).toEqual({
+				name: "AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN",
+				valueFrom: {
+					secretKeyRef: {
+						name: "sandbox-allocation-a",
+						key: "file-exchange-token",
+						optional: false,
+					},
+				},
+			});
+			const derived = sessionSandboxFileExchangeTokenV1(
+				sessionSandboxDeploymentTokenFixture,
+				{
+					namespace: f.claim.policy.namespace,
+					sandboxId: f.claim.sandbox.sandboxId,
+					generation: f.claim.sandbox.generation,
+					resourceFence: f.claim.resourceFence,
+				},
+			);
+			expect(
+				Buffer.from(
+					secret.data?.["file-exchange-token"] ?? "",
+					"base64",
+				).toString(),
+			).toBe(derived);
+			// AC-3：部署 token（哨兵）不出现在 Pod 或 Secret 的任何值中，Pod 也不引用部署 Secret。
+			const values = Object.values(secret.data ?? {}).map((value) =>
+				Buffer.from(value, "base64").toString(),
+			);
+			expect(JSON.stringify(values)).not.toContain(
+				sessionSandboxDeploymentTokenFixture,
+			);
+			expect(JSON.stringify(pod)).not.toContain(
+				sessionSandboxDeploymentTokenFixture,
+			);
+			expect(JSON.stringify(pod)).not.toContain(derived);
+			expect(JSON.stringify(pod)).not.toContain(
+				sessionSandboxRuntimeAuthFixture.serviceTokenSecret.name,
+			);
+		});
+
+		it("injects nothing when the deployment configures no origin", async () => {
+			const f = fixture();
+			await f.receive(f.claim, new AbortController().signal);
+			const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+			const secret = f.resources.get("Secret/sandbox-allocation-a") as V1Secret;
+			expect(
+				(pod.spec?.containers[0]?.env ?? []).filter(({ name }) =>
+					name.startsWith("AGENT_INFRA_RUNTIME_FILE_EXCHANGE_"),
+				),
+			).toEqual([]);
+			expect(Object.keys(secret.data ?? {})).not.toContain(
+				"file-exchange-token",
+			);
+		});
+
+		it.each([
+			"http://10.0.0.1:3000",
+			"https://platform-api.example.test/path",
+			"ftp://platform-api",
+		])("rejects origin %s before any Kubernetes write", async (origin) => {
+			const f = fixture();
+			const receive = createProductionSessionSandboxReceiverV1(
+				withOrigin(f, origin),
+				{ serviceToken: sessionSandboxDeploymentTokenFixture },
+			);
+			await expect(
+				receive(f.claim, new AbortController().signal),
+			).rejects.toMatchObject({ code: "policy" });
+			expect(f.writes).toHaveLength(0);
+		});
+	});
+
 	it.each([
 		["a missing projection", () => ({ modelProjection: null })],
 		[
@@ -655,7 +770,12 @@ describe("production SessionSandbox resource receiver", () => {
 		expect(f.writes).toHaveLength(0);
 	});
 
-	it.each(["template-revoked", "token-rotated", "both"] as const)(
+	it.each([
+		"template-revoked",
+		"token-rotated",
+		"both",
+		"file-exchange-enabled",
+	] as const)(
 		"drains the captured Sandbox under management authority after %s",
 		async (change) => {
 			const f = fixture();
@@ -677,14 +797,27 @@ describe("production SessionSandbox resource receiver", () => {
 				f.claim.sandbox.resourceName,
 			);
 			const rotatedToken =
-				change === "template-revoked"
+				change === "template-revoked" || change === "file-exchange-enabled"
 					? sessionSandboxDeploymentTokenFixture
 					: "synthetic-rotated-deployment-token";
+			// #3276：Worker 以新增的文件交换 origin 重新部署，已有 Sandbox 的 env 与 Secret 键不同。
 			const receive = createProductionSessionSandboxReceiverV1(
 				{
 					...f.options,
+					policy:
+						change === "file-exchange-enabled"
+							? {
+									...f.options.policy,
+									runtimeAuth: {
+										...sessionSandboxRuntimeAuthFixture,
+										fileExchangeOrigin: fileExchangeOriginFixture,
+									},
+								}
+							: f.options.policy,
 					templateModelBindings:
-						change === "token-rotated" ? f.options.templateModelBindings : [],
+						change === "token-rotated" || change === "file-exchange-enabled"
+							? f.options.templateModelBindings
+							: [],
 				},
 				{ serviceToken: rotatedToken },
 			);
@@ -693,7 +826,10 @@ describe("production SessionSandbox resource receiver", () => {
 			await expect(
 				receive({ ...f.claim, previousObservation: observation }, signal),
 			).rejects.toMatchObject({
-				code: change === "token-rotated" ? "conflict" : "policy",
+				code:
+					change === "token-rotated" || change === "file-exchange-enabled"
+						? "conflict"
+						: "policy",
 			});
 			expect(f.writes).toHaveLength(writes);
 			await expect(
@@ -731,7 +867,8 @@ describe("production SessionSandbox resource receiver", () => {
 				(resource) => resource.kind === "PersistentVolumeClaim",
 			);
 			expect(stopped.sourceStop.retainedPVC?.uid).toBe(sourcePVC?.uid);
-			if (change !== "token-rotated") return;
+			if (change !== "token-rotated" && change !== "file-exchange-enabled")
+				return;
 			const replacement: SessionSandboxReconciliationClaimV1 = {
 				...claim,
 				purpose: "prepare",
@@ -768,7 +905,6 @@ describe("production SessionSandbox resource receiver", () => {
 					),
 				).toString("base64"),
 			);
-			expect(secret?.data?.token).not.toBe(originalSecret?.data?.token);
 			const replacementPod = await f.client.read<V1Pod>(
 				"Pod",
 				f.claim.sandbox.resourceName,
@@ -782,6 +918,37 @@ describe("production SessionSandbox resource receiver", () => {
 					)
 				)?.metadata?.uid,
 			).toBe(sourcePVC?.uid);
+			if (change === "file-exchange-enabled") {
+				// AC-2：替换后的 Pod 带上文件交换变量，Secret 中是按新代次与 fence 派生的值。
+				const env = replacementPod?.spec?.containers[0]?.env ?? [];
+				expect(
+					env.find(
+						({ name }) => name === "AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN",
+					)?.value,
+				).toBe(fileExchangeOriginFixture);
+				expect(
+					env.find(
+						({ name }) =>
+							name === "AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN",
+					)?.valueFrom?.secretKeyRef?.key,
+				).toBe("file-exchange-token");
+				expect(
+					Buffer.from(
+						secret?.data?.["file-exchange-token"] ?? "",
+						"base64",
+					).toString(),
+				).toBe(
+					sessionSandboxFileExchangeTokenV1(rotatedToken, {
+						namespace: f.claim.policy.namespace,
+						sandboxId: f.claim.sandbox.sandboxId,
+						generation: replacement.sandbox.generation,
+						resourceFence: replacement.resourceFence,
+					}),
+				);
+				expect(originalSecret?.data?.["file-exchange-token"]).toBeUndefined();
+				return;
+			}
+			expect(secret?.data?.token).not.toBe(originalSecret?.data?.token);
 		},
 	);
 

@@ -6,6 +6,7 @@ import type {
 import { createObservedConversationEvents } from "@agent-infra/observability/worker";
 import {
 	type ConversationBrowserHandoffExecutorV1,
+	ConversationRuntimeHostError,
 	createConversationDispatchUseCaseV1,
 	createConversationEventUseCaseV1,
 	type SessionSandboxDeletionProgressV1,
@@ -160,10 +161,17 @@ function timedRuntimeSubmit(
 		async dispatch(request, signal) {
 			const began = performance.now();
 			let outcome: "completed" | "failed" = "failed";
+			let protocolCode: string | undefined;
 			try {
 				const response = await runtimeHost.dispatch(request, signal);
 				outcome = "completed";
 				return response;
+			} catch (error) {
+				// #3276：失败日志只带 Runtime 返回的稳定错误码，不带消息、正文或凭证；
+				// 观测层再按有界格式过滤。
+				if (error instanceof ConversationRuntimeHostError)
+					protocolCode = error.code;
+				throw error;
 			} finally {
 				record(telemetry, {
 					stage: "runtime",
@@ -171,6 +179,7 @@ function timedRuntimeSubmit(
 					durationMs: performance.now() - began,
 					conversationId: request.conversationId,
 					executionId: request.executionId,
+					...(protocolCode === undefined ? {} : { protocolCode }),
 				});
 			}
 		},

@@ -693,3 +693,36 @@ it("accepts a bounded HTTP status and protocol code only on the http stage (#256
 	}
 	expect(telemetry.status().invalidRecords).toBe(0);
 });
+
+it("keeps a bounded Runtime error code on the runtime stage without an HTTP status (#3276)", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-worker",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	telemetry.record({
+		stage: "runtime",
+		outcome: "failed",
+		status: 503,
+		protocolCode: "RUNTIME_CODEX_UNAVAILABLE",
+	});
+	telemetry.record({
+		stage: "runtime",
+		outcome: "failed",
+		protocolCode: "PRIVATE\nSENTINEL",
+	});
+	expect(lines).toHaveLength(2);
+	expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+		stage: "runtime",
+		protocolCode: "RUNTIME_CODEX_UNAVAILABLE",
+	});
+	expect(JSON.parse(lines[0] ?? "{}")).not.toHaveProperty("status");
+	expect(JSON.parse(lines[1] ?? "{}")).not.toHaveProperty("protocolCode");
+	expect(lines[1]).not.toContain("PRIVATE");
+});

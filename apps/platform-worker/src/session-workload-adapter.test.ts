@@ -3,6 +3,7 @@ import type {
 	SessionSandboxDeletionProgressV1,
 	SessionSandboxResourceIdentityV1,
 } from "@agent-infra/platform-core";
+import { sessionSandboxFileExchangeTokenV1 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
 	V1NetworkPolicy,
@@ -28,6 +29,7 @@ import {
 	createSessionSandboxWorkloadAdapterV1,
 	hasSessionSandboxIdentityV1,
 	type SessionSandboxAllocationV1,
+	type SessionSandboxRuntimeInputV1,
 	sessionSandboxIdentityAnnotationsV1,
 	sessionSandboxLabelsMatchV1,
 	sessionSandboxLabelsV1,
@@ -2227,4 +2229,218 @@ describe("drain of a source prepared before per-Sandbox Runtime inputs (#2885)",
 			}),
 		).rejects.toMatchObject({ code: "unavailable" });
 	});
+});
+
+describe("Session Sandbox Runtime file exchange (#3276)", () => {
+	const origin = "http://platform-api.agent-infra.svc:3000";
+	const derived = sessionSandboxFileExchangeTokenV1(
+		sessionSandboxDeploymentTokenFixture,
+		{
+			namespace: allocation.namespace,
+			sandboxId: allocation.sandboxId,
+			generation: allocation.generation,
+			resourceFence: allocation.resourceFence,
+		},
+	);
+	const runtime = allocation.runtime as SessionSandboxRuntimeInputV1;
+	const enabled: SessionSandboxAllocationV1 = {
+		...allocation,
+		runtime: { ...runtime, fileExchange: { origin, serviceToken: derived } },
+	};
+	const fileExchangeNames = [
+		"AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN",
+		"AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN",
+	];
+	const envOf = (pod: V1Pod) =>
+		new Map(
+			(pod.spec?.containers[0]?.env ?? []).map((entry) => [entry.name, entry]),
+		);
+	const decodedSecret = (secret: V1Secret) =>
+		Object.fromEntries(
+			Object.entries(secret.data ?? {}).map(([key, value]) => [
+				key,
+				Buffer.from(value, "base64").toString(),
+			]),
+		);
+
+	it("injects the origin literal and a Secret reference to this Sandbox's derived token", () => {
+		const [, , , , secret, pod] = sessionSandboxResourcesV1(enabled);
+		const env = envOf(pod);
+		expect(env.get("AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN")).toEqual({
+			name: "AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN",
+			value: origin,
+		});
+		expect(env.get("AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN")).toEqual({
+			name: "AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN",
+			valueFrom: {
+				secretKeyRef: {
+					name: enabled.secretName,
+					key: "file-exchange-token",
+					optional: false,
+				},
+			},
+		});
+		expect(Object.keys(secret.data ?? {}).sort()).toEqual([
+			"file-exchange-token",
+			"model-config",
+			"token",
+		]);
+		const values = decodedSecret(secret);
+		expect(values["file-exchange-token"]).toBe(derived);
+		// 文件交换 token 与传输 token 用途不同，取值也不同。
+		expect(values["file-exchange-token"]).not.toBe(values.token);
+		// AC-3：Pod env 不含任何 token 字面量，Secret 只含派生值，不含部署 token。
+		const podJson = JSON.stringify(pod);
+		expect(podJson).not.toContain(sessionSandboxDeploymentTokenFixture);
+		expect(podJson).not.toContain(derived);
+		expect(JSON.stringify(values)).not.toContain(
+			sessionSandboxDeploymentTokenFixture,
+		);
+	});
+
+	it("injects the same pair into a custom platform-adapter Sandbox", () => {
+		const custom: SessionSandboxAllocationV1 = {
+			...enabled,
+			runtime: {
+				...runtime,
+				driver: "acp",
+				modelConfiguration: "",
+				fileExchange: { origin, serviceToken: derived },
+				custom: {
+					secretRefs: [
+						{
+							schemaVersion: 1,
+							ownerType: "agent-owner",
+							ownerId: "actor-a",
+							agentId: "agent-a",
+							secretId: "owner-secret",
+							secretVersion: 1,
+							configRevision: 1,
+							algorithmVersion: "aes-256-gcm:v1",
+							wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+							wrappingKeyVersion: "key-a",
+							name: "owner-secret-k8s",
+						},
+					],
+				},
+			},
+		};
+		bindSessionSandboxCustomSecretMaterializationV1(custom, {
+			data: { MODEL_API_KEY: "redacted-test-value" },
+			environmentNames: ["MODEL_API_KEY"],
+		});
+		const [, , , , secret, pod] = sessionSandboxResourcesV1(custom);
+		const env = envOf(pod);
+		expect(env.get("AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN")?.value).toBe(
+			origin,
+		);
+		expect(
+			env.get("AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN")?.valueFrom,
+		).toEqual({
+			secretKeyRef: {
+				name: custom.secretName,
+				key: "file-exchange-token",
+				optional: false,
+			},
+		});
+		expect(decodedSecret(secret)["file-exchange-token"]).toBe(derived);
+	});
+
+	it("injects neither variable nor the Secret key without a configured origin", () => {
+		const [, , , , secret, pod] = sessionSandboxResourcesV1(allocation);
+		const env = envOf(pod);
+		for (const name of fileExchangeNames) expect(env.has(name)).toBe(false);
+		expect(Object.keys(secret.data ?? {})).not.toContain("file-exchange-token");
+	});
+
+	it.each([
+		[
+			"an origin with a path",
+			{ origin: `${origin}/api`, serviceToken: derived },
+		],
+		[
+			"an origin with credentials",
+			{
+				origin: "https://user:pass@platform-api.example.test",
+				serviceToken: derived,
+			},
+		],
+		[
+			"a cleartext IP origin",
+			{ origin: "http://10.0.0.1:3000", serviceToken: derived },
+		],
+		[
+			"the deployment token instead of a derived value",
+			{ origin, serviceToken: sessionSandboxDeploymentTokenFixture },
+		],
+		[
+			"the Sandbox transport token",
+			{ origin, serviceToken: runtime.serviceToken },
+		],
+		["a missing token", { origin }],
+		[
+			"an extra field",
+			{ origin, serviceToken: derived, secretName: "foreign" },
+		],
+	])("rejects %s before any resource write", async (_name, fileExchange) => {
+		const client = api();
+		let writes = 0;
+		const adapter = createSessionSandboxWorkloadAdapterV1({
+			client: {
+				...client,
+				async create(object) {
+					writes++;
+					return client.create(object);
+				},
+			},
+		});
+		await expect(
+			adapter.apply({
+				...allocation,
+				runtime: { ...runtime, fileExchange },
+			} as SessionSandboxAllocationV1),
+		).rejects.toMatchObject({ code: "policy" });
+		expect(writes).toBe(0);
+	});
+
+	it("rejects an Owner env that shadows a file exchange variable", () => {
+		for (const name of fileExchangeNames)
+			expect(() =>
+				sessionSandboxResourcesV1({
+					...enabled,
+					env: { [name]: "http://owner.example.test" },
+				}),
+			).toThrow(expect.objectContaining({ code: "policy" }));
+	});
+
+	it.each([
+		["enabling", allocation, enabled],
+		["disabling", enabled, allocation],
+	] as const)(
+		"treats %s file exchange as Pod and Secret drift, never an in-place update",
+		async (_change, before, after) => {
+			const client = api();
+			const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+			await adapter.apply(before);
+			const pod = await client.read<V1Pod>("Pod", before.podName);
+			if (!pod) throw new Error("Missing Pod");
+			pod.status = {
+				phase: "Running",
+				conditions: [{ type: "Ready", status: "True" }],
+			};
+			const observed = await adapter.observe(before);
+			expect(observed.status).toBe("ready");
+			// 现有 Pod 不会保留旧 env 继续被判为就绪：调谐必须走既有的受控替换。
+			expect((await adapter.observe(after, observed.resources)).status).toBe(
+				"unknown",
+			);
+			await expect(
+				adapter.apply(after, observed.resources),
+			).rejects.toMatchObject({ code: "conflict" });
+			const secret = await client.read<V1Secret>("Secret", before.secretName);
+			expect(
+				Object.keys(secret?.data ?? {}).includes("file-exchange-token"),
+			).toBe(before === enabled);
+		},
+	);
 });

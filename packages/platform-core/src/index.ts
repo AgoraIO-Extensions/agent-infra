@@ -156,6 +156,7 @@ export {
 	parseSessionSandboxBindingV1,
 	type SessionSandboxBindingV1,
 } from "./session-sandbox.js";
+export * from "./session-sandbox-credential.js";
 export * from "./session-sandbox-lifecycle.js";
 export * from "./session-sandbox-reconciliation.js";
 export * from "./skill-hub.js";
