@@ -12,7 +12,7 @@ import {
 } from "./projection.js";
 
 /**
- * 标准模板对每个模型提供的推理档位（ADR-0029）：平台固定，不按模型、端点或模板登记。
+ * 标准模板对每个模型提供的推理档位（ADR-0030）：平台固定，不按模型、端点或模板登记。
  * 模型是否支持某个档位，由保存时的真实请求判定。
  */
 export const standardTemplateReasoningLevelsV1 = Object.freeze([
@@ -43,7 +43,7 @@ export type AgentDefaultRelayKeyVerificationV1 =
 	| "unavailable";
 
 /**
- * 部署配置里的模板绑定可能仍带旧的 `reasoningLevels`（ADR-0029 之前要求填写），
+ * 部署配置里的模板绑定可能仍带旧的 `reasoningLevels`（ADR-0030 之前要求填写），
  * 读取时兼容并忽略，只把受信绑定字段交给 strict 的绑定校验。
  */
 type DeploymentTemplateBindingV1 = StandardTemplateModelBindingV1 & {
@@ -164,7 +164,7 @@ async function visibleModelIds(
 	return [...ids];
 }
 
-/** Resolve default-Key candidates: Relay `/models` ids, optionally narrowed by the deployment (ADR-0029). */
+/** Resolve default-Key candidates: Relay `/models` ids, optionally narrowed by the deployment (ADR-0030). */
 export function createAgentDefaultRelayKeyCandidateReaderV1(
 	input: RelayInputV1 & {
 		readonly validateKey: (
@@ -216,7 +216,7 @@ export function createAgentDefaultRelayKeyCandidateReaderV1(
 }
 
 /**
- * Save-time verification (ADR-0029): one bounded real request per (model, level)
+ * Save-time verification (ADR-0030): one bounded real request per (model, level)
  * with the default Key, through the template's protocol (Responses for Codex,
  * Messages for the Claude-profile Drivers).
  */

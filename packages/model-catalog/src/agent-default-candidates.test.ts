@@ -6,7 +6,7 @@ import {
 } from "./agent-default-candidates.js";
 import { messagesStreamFixture } from "./messages-stream.fixture.js";
 
-// ADR-0029：保存时按模板协议对每个模型与档位做一次真实请求。
+// ADR-0030：保存时按模板协议对每个模型与档位做一次真实请求。
 const source = {
 	kind: "standard" as const,
 	templateId: "template-claude",
@@ -84,7 +84,7 @@ function candidateReader(
 						capabilities: {
 							streaming: true,
 							tools: true,
-							reasoningLevels: [...standardTemplateReasoningLevelsV1],
+							reasoningLevels: ["high"],
 						},
 						allowedModels,
 						available: true,
@@ -100,7 +100,7 @@ function candidateReader(
 	});
 }
 
-describe("Agent default Relay Key model verification (ADR-0029)", () => {
+describe("Agent default Relay Key model verification (ADR-0030)", () => {
 	it("fixes the offered reasoning levels for every model", () => {
 		expect(standardTemplateReasoningLevelsV1).toEqual([
 			"low",
@@ -123,11 +123,14 @@ describe("Agent default Relay Key model verification (ADR-0029)", () => {
 			verifier(fetcher)(
 				"synthetic-key",
 				{ source },
-				[combo("low"), combo("medium")],
+				standardTemplateReasoningLevelsV1.map(combo),
 				AbortSignal.timeout(1000),
 			),
 		).resolves.toBe("verified");
 		expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+			"https://relay.example.test/anthropic/v1/messages?beta=true",
+			"https://relay.example.test/anthropic/v1/messages?beta=true",
+			"https://relay.example.test/anthropic/v1/messages?beta=true",
 			"https://relay.example.test/anthropic/v1/messages?beta=true",
 			"https://relay.example.test/anthropic/v1/messages?beta=true",
 		]);
@@ -135,8 +138,30 @@ describe("Agent default Relay Key model verification (ADR-0029)", () => {
 			fetcher.mock.calls.map(
 				([, init]) => JSON.parse(String(init?.body)).output_config.effort,
 			),
-		).toEqual(["low", "medium"]);
+		).toEqual(["low", "medium", "high", "xhigh", "max"]);
 	});
+
+	it.each(["xhigh", "max"])(
+		"rejects %s when the upstream rejects the model/effort pair",
+		async (level) => {
+			const fetcher = vi.fn<typeof fetch>(
+				async () => new Response(null, { status: 400 }),
+			);
+			await expect(
+				verifier(fetcher)(
+					"synthetic-key",
+					{ source },
+					[combo(level)],
+					AbortSignal.timeout(1000),
+				),
+			).resolves.toBe("incompatible");
+			expect(fetcher).toHaveBeenCalledOnce();
+			expect(
+				JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)).output_config
+					.effort,
+			).toBe(level);
+		},
+	);
 
 	it("keeps all upstream models and exposes the five standard effort levels", async () => {
 		const fetcher = vi.fn<typeof fetch>(
