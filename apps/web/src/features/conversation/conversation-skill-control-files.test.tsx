@@ -224,6 +224,16 @@ describe("SkillControlFilePicker (#3259)", () => {
 		expect(screen.getByRole("alert").textContent).toBe("上传失败，请重试。");
 	});
 
+	it("does not announce files that already exist when the block mounts again", () => {
+		renderPicker({
+			entries: [
+				entry("1", "a.txt", "available"),
+				entry("2", "b.txt", "uploading"),
+			],
+		});
+		expect(screen.getByRole("status").textContent).toBe("");
+	});
+
 	it("returns focus to 添加文本文件 after removing and keeps it on the row after retrying", () => {
 		render(
 			<StatefulPicker

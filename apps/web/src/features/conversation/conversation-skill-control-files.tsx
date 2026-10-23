@@ -201,16 +201,19 @@ function useUploadAnnouncement(
 	names: readonly string[],
 ) {
 	const [message, setMessage] = useState("");
-	const previous = useRef(new Map<string, SkillControlFileStatus>());
+	// 首次挂载只记下当前状态作为基线：重新挂载（例如窄屏切回对话）不把已有文件当作新变化播报。
+	const previous = useRef<Map<string, SkillControlFileStatus>>(undefined);
 	useEffect(() => {
+		const before = previous.current;
+		previous.current = new Map(
+			entries.map((entry) => [entry.localId, entry.status]),
+		);
+		if (!before) return;
 		const changes = entries.flatMap((entry, index) =>
-			previous.current.get(entry.localId) !== entry.status &&
+			before.get(entry.localId) !== entry.status &&
 			(entry.status === "uploading" || entry.status === "available")
 				? [`${names[index]} ${uploadStatusLabels[entry.status]}`]
 				: [],
-		);
-		previous.current = new Map(
-			entries.map((entry) => [entry.localId, entry.status]),
 		);
 		if (changes.length > 0) setMessage(changes.join("；"));
 	}, [entries, names]);
