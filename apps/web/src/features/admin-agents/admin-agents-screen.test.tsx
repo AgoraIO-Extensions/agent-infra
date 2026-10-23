@@ -679,6 +679,13 @@ describe("Administrator inventory presentation", () => {
 		expect(login?.getAttribute("data-kind")).toBe("login");
 		expect(login?.textContent).toContain("登录已过期");
 		expect(screen.queryByText("当前无权访问 Agent 管理。")).toBeNull();
+		// 与 Agent 目录共用带 LogIn 图标的「重新登录」（#3327 N10-1-04）。
+		expect(
+			within(section)
+				.getByRole("button", { name: "重新登录" })
+				.querySelector(":scope > svg")
+				?.getAttribute("class"),
+		).toContain("lucide-log-in");
 		fireEvent.click(within(section).getByRole("button", { name: "重新登录" }));
 		expect(relogin).toHaveBeenCalledOnce();
 		view.rerender(<AdminAgentsScreen {...props} state={{ kind: "loading" }} />);

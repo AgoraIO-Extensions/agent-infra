@@ -1,4 +1,4 @@
-import { LogIn, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -33,7 +33,7 @@ import {
 	formatPerson,
 	useAvailabilityNames,
 } from "../directory-names.js";
-import { PageStateCard } from "../page-state-card.js";
+import { PageStateCard, ReloginButton } from "../page-state-card.js";
 import { RecoveryButton } from "../recovery-button.js";
 import {
 	type TemplateNameLookup,
@@ -251,14 +251,7 @@ export function AdminAgentsScreen({
 						title="登录已过期"
 						action={
 							onRelogin ? (
-								<RecoveryButton
-									recoveryKey="重新登录"
-									busy={refreshing}
-									onClick={onRelogin}
-								>
-									<LogIn aria-hidden="true" data-icon="inline-start" />
-									重新登录
-								</RecoveryButton>
+								<ReloginButton busy={refreshing} onClick={onRelogin} />
 							) : null
 						}
 					/>

@@ -6,7 +6,13 @@ import {
 	PersistedConversationEventV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import {
+	expect,
+	type Locator,
+	type Page,
+	type Route,
+	test,
+} from "@playwright/test";
 import {
 	execution,
 	history,
@@ -78,7 +84,23 @@ const scenarios: readonly Scenario[] = [
 	},
 ];
 
-async function chatFixture(page: Page, scenario: Scenario) {
+async function chatFixture(
+	page: Page,
+	scenario: Scenario,
+	model: {
+		/** 覆盖 Agent 的模型清单（默认沿用 starting 场景的单一选项）。 */
+		options?: readonly {
+			optionId: string;
+			displayName: string;
+			modelId: string;
+			reasoningLevels: string[];
+		}[];
+		/** 会话已保存的模型选项；不在清单中时页面显示「原模型选项已移除」。 */
+		selectedModelOptionId?: string;
+		/** 保存模型选择（PUT model-selection）的受控响应。 */
+		onSelection?: (route: Route) => Promise<void>;
+	} = {},
+) {
 	const writes: string[] = [];
 	let openStream!: () => void;
 	const streamGate = new Promise<void>((resolve) => {
@@ -93,6 +115,15 @@ async function chatFixture(page: Page, scenario: Scenario) {
 		name: "受控说明行助手",
 		managementStatus: "available",
 		serviceAvailability: "ready",
+		...(model.options
+			? {
+					configuration: {
+						...pilotFakeScenariosV2.starting.response.body.configuration,
+						modelOptions: model.options,
+						defaultModelOptionId: model.options[0]?.optionId,
+					},
+				}
+			: {}),
 		capabilities: {
 			...pilotFakeScenariosV2.starting.response.body.capabilities,
 			attachments: false,
@@ -117,6 +148,9 @@ async function chatFixture(page: Page, scenario: Scenario) {
 		conversation: {
 			...history(conversationId, []).conversation,
 			status: completed ? "ready" : "active",
+			...(model.selectedModelOptionId
+				? { selectedModelOptionId: model.selectedModelOptionId }
+				: {}),
 		},
 		messages: [
 			{
@@ -158,6 +192,12 @@ async function chatFixture(page: Page, scenario: Scenario) {
 		const path = url.pathname;
 		const method = request.method();
 		if (method !== "GET") writes.push(`${method} ${path}`);
+		if (
+			method === "PUT" &&
+			path === `/api/v1/conversations/${conversationId}/model-selection` &&
+			model.onSelection
+		)
+			return model.onSelection(route);
 		if (path === "/api/v1/session")
 			return route.fulfill({
 				json: {
@@ -313,3 +353,152 @@ for (const viewport of viewports)
 			fixture.releaseStream();
 			expect(fixture.writes).toEqual([]);
 		});
+
+// #3327 N10-1-03：会话所选（或 Agent 默认）模型选项不在模型清单时，输入框上方的「原模型选项已移除」
+// 是同区静态说明行：与其余说明行同为 14px / 20px、400、正文前景色，左缘与输入框对齐、相距 10px，
+// 不设 role、不在 live region 内。导出稿没有这一状态，规格见 web-ui.md「对话页状态说明行」。
+const removedModelText =
+	"原模型选项已移除；提交消息时，标准模板将使用 Owner 的默认选项。你也可以刷新并重新选择。";
+for (const viewport of viewports)
+	test(`sizes the removed model option note like the other composer notes at ${viewport.width} by ${viewport.height} (#3327 N10-1-03)`, async ({
+		page,
+	}, info) => {
+		test.skip(info.project.name !== "desktop", "Viewport list runs once.");
+		await page.setViewportSize(viewport);
+		const errors = trackPageErrors(page);
+		const fixture = await chatFixture(
+			page,
+			{ name: "原模型选项已移除", text: "", executionStatus: "completed" },
+			{ selectedModelOptionId: "model-removed" },
+		);
+		const form = fixture.input.locator("xpath=ancestor::form[1]");
+		const line = page.getByText(removedModelText, { exact: true });
+		await expect(line).toBeVisible();
+		const measured = await measure(line, form);
+		expect(
+			{
+				fontSize: measured.fontSize,
+				lineHeight: measured.lineHeight,
+				fontWeight: measured.fontWeight,
+				color: measured.color,
+			},
+			"原模型选项已移除说明行字号与颜色",
+		).toEqual({
+			fontSize: "14px",
+			lineHeight: "20px",
+			fontWeight: "400",
+			color: await resolved(page, "color", "var(--foreground)"),
+		});
+		expect(Math.abs(measured.dxForm)).toBeLessThanOrEqual(0.5);
+		expect(measured.right).toBeLessThanOrEqual(measured.viewport);
+		const gap = await line.evaluate(
+			(node, formNode) => {
+				const bottom = node.getBoundingClientRect().bottom;
+				return (formNode as Element).getBoundingClientRect().top - bottom;
+			},
+			await form.elementHandle(),
+		);
+		expect(Math.abs(gap - 10), "说明行与输入框相距 10px").toBeLessThanOrEqual(
+			0.5,
+		);
+		// 静态说明：不设 role，也不嵌在 live region 里。
+		expect(measured.role).toBeNull();
+		expect(measured.live).toBe(false);
+		await expectNoDuplicateControls(page, "原模型选项已移除说明行");
+		await expectCleanPage(page, errors);
+		await info.attach(`n10-1-03-model-removed-${viewport.width}`, {
+			body: await page.screenshot(),
+			contentType: "image/png",
+		});
+		expect(fixture.writes).toEqual([]);
+	});
+
+// #3327 N10-1-02：保存模型选择得到不可重试的 409 MODEL_SELECTION_INVALID 后，composer 内的失败行与同
+// composer 的错误行（O8-01）同为 12px / 1.6 --danger-ink，左内缩随已选命令卡与错误行：≥768px 12px、
+// ≤767px 8px；选择回到已保存值，焦点留在模型入口。导出稿没有这一状态。
+for (const viewport of viewports)
+	test(`insets the non-retryable model setting failure like the composer error line at ${viewport.width} by ${viewport.height} (#3327 N10-1-02)`, async ({
+		page,
+	}, info) => {
+		test.skip(info.project.name !== "desktop", "Viewport list runs once.");
+		await page.setViewportSize(viewport);
+		const errors = trackPageErrors(page);
+		const fixture = await chatFixture(
+			page,
+			{ name: "模型设置失败", text: "", executionStatus: "completed" },
+			{
+				options: [
+					{
+						optionId: "model-primary",
+						displayName: "Primary model",
+						modelId: "gpt-5",
+						reasoningLevels: ["medium", "high"],
+					},
+					{
+						optionId: "model-secondary",
+						displayName: "Secondary model",
+						modelId: "claude",
+						reasoningLevels: ["high"],
+					},
+				],
+				onSelection: (route) =>
+					route.fulfill({
+						status: 409,
+						json: {
+							schemaVersion: 1,
+							code: "MODEL_SELECTION_INVALID",
+							message: "Controlled model selection rejection",
+							retryable: false,
+							traceId: "trace-feedback-model-selection",
+						},
+					}),
+			},
+		);
+		const form = fixture.input.locator("xpath=ancestor::form[1]");
+		const trigger = form.locator(".composer-setting-trigger").first();
+		await expect(trigger).toHaveAccessibleName(/当前 Primary model/);
+		await trigger.click();
+		const menu = page.getByRole("menu", { name: "模型与思考设置" });
+		await menu.getByRole("menuitemradio", { name: "Secondary model" }).click();
+		const failure = form.locator(".model-preference-failure");
+		await expect(failure).toHaveText(
+			"模型选项已变化，请刷新模型清单后重新选择。",
+		);
+		await expect(failure).toHaveAttribute("role", "status");
+		// 选择回到已保存的值，焦点留在模型入口（D2-59）。
+		await expect(trigger).toHaveAccessibleName(/当前 Primary model/);
+		await expectFocusSettled(trigger, "模型设置不可重试失败后");
+		const style = await computed(failure, ["fontSize", "lineHeight", "color"]);
+		expect(style).toEqual({
+			fontSize: "12px",
+			lineHeight: "19.2px",
+			color: await resolved(page, "color", "var(--danger-ink)"),
+		});
+		const inset = await failure.evaluate((node) => {
+			const form = node.closest("form");
+			if (!form) throw new Error("Missing composer form");
+			const content = form.getBoundingClientRect().left + form.clientLeft;
+			const rect = node.getBoundingClientRect();
+			return {
+				left: rect.left - content,
+				right: content + form.clientWidth - rect.right,
+			};
+		});
+		const expected = viewport.width <= 767 ? 8 : 12;
+		expect(Math.abs(inset.left - expected), "失败行左内缩").toBeLessThanOrEqual(
+			0.5,
+		);
+		expect(
+			Math.abs(inset.right - expected),
+			"失败行右内缩",
+		).toBeLessThanOrEqual(0.5);
+		await expectNoDuplicateControls(page, "模型设置不可重试失败");
+		await expectCleanPage(page, errors);
+		await info.attach(`n10-1-02-model-failure-${viewport.width}`, {
+			body: await page.screenshot(),
+			contentType: "image/png",
+		});
+		expect(fixture.writes).toEqual([
+			`PUT /api/v1/conversations/${conversationId}/model-selection`,
+		]);
+	});

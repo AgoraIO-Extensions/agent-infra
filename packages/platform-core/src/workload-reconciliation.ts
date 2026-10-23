@@ -553,7 +553,10 @@ export function createWorkloadReconciliationV1(dependencies: {
 							stopped && state
 								? state.candidate
 								: state?.rollback &&
+										state.verified !== null &&
 										state.sourceConfigurationRevision ===
+											configuration.revision &&
+										state.verified.configuration.revision ===
 											configuration.revision &&
 										state.verified
 									? state.verified
@@ -563,6 +566,8 @@ export function createWorkloadReconciliationV1(dependencies: {
 						identity: state?.identity ?? null,
 						rollback:
 							state?.sourceConfigurationRevision === configuration.revision &&
+							state?.verified?.configuration.revision ===
+								configuration.revision &&
 							state.rollback,
 						failureCode: null,
 						attempts: 0,

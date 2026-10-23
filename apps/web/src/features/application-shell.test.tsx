@@ -19,6 +19,7 @@ import {
 	safeDeploymentUrl,
 	useApplicationSession,
 } from "./application-shell";
+import { useSessionRecheck } from "./session-recheck";
 import { useBrowserSession } from "./use-browser-session";
 
 // 受控路由位置：useLocation 按 select 读取，useRouter 只暴露 history.replace。
@@ -567,6 +568,64 @@ describe("standalone login page", () => {
 		await waitFor(() =>
 			expect(router.history.replace).toHaveBeenCalledWith("/agents?tab=owned"),
 		);
+	});
+});
+
+// #3327 N10-1-01：页面的「重新登录」（useSessionRecheck）确认会话已失效后，壳层整页换成登录页，
+// 焦点同主动退出交给第一个登录控件：生产为「公司账号」，受控开发模式为「选择开发测试身份」，
+// 未配置登录入口时为「登录工作区」标题；直接打开登录页（新文档）时不抢焦点。
+describe("focus after a re-login finds the session expired", () => {
+	function Relogin() {
+		const relogin = useSessionRecheck(vi.fn());
+		return (
+			<button type="button" onClick={() => void relogin.recheck()}>
+				重新登录
+			</button>
+		);
+	}
+	it.each([
+		{
+			name: "production login entry",
+			env: { VITE_PLATFORM_LOGIN_URL: "/auth/login" },
+			target: () => screen.getByRole("textbox", { name: "公司账号" }),
+		},
+		{
+			name: "controlled development mode",
+			env: {
+				VITE_PLATFORM_LOGIN_URL: "/dev/login",
+				VITE_PLATFORM_DEVELOPMENT_MODE: "controlled",
+			},
+			target: () => screen.getByRole("link", { name: "选择开发测试身份" }),
+		},
+		{
+			name: "no login entry",
+			env: {},
+			target: () =>
+				screen.getByRole("heading", { level: 1, name: "登录工作区" }),
+		},
+	])("hands focus to the login page ($name)", async ({ env, target }) => {
+		for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+		stubSessionReads(async () => anonymous);
+		setup(identity("owner"), <Relogin />);
+		const button = await screen.findByRole("button", { name: "重新登录" });
+		button.focus();
+		fireEvent.click(button);
+		await screen.findByRole("heading", { level: 1, name: "登录工作区" });
+		expect(screen.getByRole("status").textContent).toContain(
+			"登录已过期，请重新登录",
+		);
+		await waitFor(() => expect(document.activeElement).toBe(target()));
+	});
+
+	it("does not take focus on a directly opened login page", async () => {
+		vi.stubEnv("VITE_PLATFORM_LOGIN_URL", "/auth/login");
+		setLocation({ reason: "expired" });
+		setup(anonymous);
+		await screen.findByRole("heading", { level: 1, name: "登录工作区" });
+		await act(async () => {
+			await new Promise((resolve) => window.setTimeout(resolve, 20));
+		});
+		expect(document.activeElement).toBe(document.body);
 	});
 });
 

@@ -1056,6 +1056,58 @@ test("401 re-login with a still-valid session re-reads every failed section and 
 	expect(fixture.unexpected).toEqual([]);
 });
 
+// #3327 N10-1-01：「重新登录」确认会话已失效、整页换成登录页后，焦点同主动退出交给登录页（未配置登录
+// 入口的构建没有登录控件，到「登录工作区」标题），确认中留在可聚焦的「重新登录」上，都不落到 body。
+// N10-1-04：按钮与状态卡、Agent 目录同为带 16px LogIn 图标的「重新登录」。
+test("a 401 re-login that finds the session expired hands focus to the login page, not body (#3327 N10-1-01)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
+	const errors = trackPageErrors(page);
+	const fixture = await workbenchFixture(page, {
+		administrator: true,
+		collectionStatus: 401,
+	});
+	await page.goto("/");
+	const main = page.locator("main");
+	const relogin = await pinElement(
+		main.getByRole("button", { name: "重新登录", exact: true }),
+		"workbench-relogin",
+	);
+	await expect(relogin).toHaveCount(1);
+	const icon = relogin.locator(":scope > svg");
+	await expect(icon).toHaveCount(1);
+	await expect(icon).toHaveAttribute("aria-hidden", "true");
+	await expect(icon).toHaveClass(/lucide-log-in/);
+	expect(await icon.boundingBox()).toMatchObject({ width: 16, height: 16 });
+	fixture.expireSession();
+	const hold = await holdRequests(page, "GET", "/api/v1/session");
+	await relogin.focus();
+	await page.keyboard.press("Enter");
+	await expect.poll(() => hold.held()).toBeGreaterThanOrEqual(1);
+	await expectFocusableBusy(relogin, "工作台确认会话中", [30, 150]);
+	hold.release();
+	await expect(
+		page.getByRole("heading", { level: 1, name: "登录工作区" }),
+	).toBeVisible();
+	await expect(page.locator(".login-expired")).toHaveAttribute(
+		"role",
+		"status",
+	);
+	await expectFocusSettled(
+		page.getByRole("heading", { level: 1, name: "登录工作区" }),
+		"工作台确认会话已失效后",
+		[30, 150, 400, 1200],
+	);
+	await expectCleanPage(page, errors);
+	await info.attach(`n10-1-01-workbench-expired-${mobile ? 390 : 1440}`, {
+		body: await page.screenshot(),
+		contentType: "image/png",
+	});
+	expect(fixture.unexpected).toEqual([]);
+});
+
 test("keyboard recovery from the 401 re-login moves focus to the workbench h1, not body", async ({
 	page,
 }) => {
