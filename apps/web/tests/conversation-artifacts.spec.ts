@@ -336,7 +336,10 @@ test("answer file card preview and download keep focus off body (K7-02)", async 
 	await preview.focus();
 	await page.keyboard.press("Enter");
 	// 预览弹窗打开后背景 inert，可访问名称算不出来，直接比对 aria-label。
-	await expect(preview).toHaveAttribute("aria-label", "准备预览…：changes.diff");
+	await expect(preview).toHaveAttribute(
+		"aria-label",
+		"准备预览…：changes.diff",
+	);
 	await expect(preview).toHaveAttribute("aria-disabled", "true");
 	expect(
 		await preview.evaluate(
