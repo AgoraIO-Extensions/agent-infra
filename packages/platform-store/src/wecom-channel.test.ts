@@ -924,6 +924,21 @@ it("reads only a bounded thinking prefix and marks it incomplete (#2982)", async
 	]);
 	expect(claim?.thinking?.complete).toBe(false);
 });
+it("marks an answer beyond the reply bound instead of returning it empty (#3229)", async () => {
+	const receipt = await executionWithEvents("long_answer_sender", [
+		{ type: "text.delta", text: "答".repeat(7_000) },
+	]);
+	const claim = await store.claim();
+	expect(claim?.receiptId).toBe(receipt.receiptId);
+	expect(claim?.textDeltas).toEqual([]);
+	expect(claim?.answerTooLong).toBe(true);
+	const short = await executionWithEvents("short_answer_sender", [
+		{ type: "text.delta", text: "答案" },
+	]);
+	const next = await store.claim();
+	expect(next?.receiptId).toBe(short.receiptId);
+	expect(next).not.toHaveProperty("answerTooLong");
+});
 it.each(["failed", "cancelled"] as const)(
 	"does not read thinking for a %s execution (#2982)",
 	async (status) => {

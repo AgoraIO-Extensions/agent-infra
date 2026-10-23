@@ -1003,3 +1003,76 @@ it.each([
 		expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "failed");
 	},
 );
+
+it("still fails an answer the Store marked beyond the bound even with result files (#3229)", async () => {
+	const f = mediaFixture();
+	f.store.claim.mockResolvedValueOnce({
+		...mediaClaim("", [png]),
+		textDeltas: [],
+		answerTooLong: true,
+	});
+	await f.useCase.dispatch();
+	expect(f.sender.planMedia).not.toHaveBeenCalled();
+	expect(f.sender.send).not.toHaveBeenCalled();
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "failed");
+});
+
+it("summarizes unreferenced files in one line when listing them would exceed the bound (#3229)", async () => {
+	const f = mediaFixture();
+	const answer = "x".repeat(20_480 - 100);
+	const files = Array.from({ length: 3 }, (_, index) => ({
+		...acpImage,
+		fileId: `file-acp-${index}`,
+		name: `image-${index}.gif`,
+	}));
+	f.store.claim.mockResolvedValueOnce(
+		mediaClaim(answer, [
+			...files,
+			{ ...pdf, sizeBytes: 21 * mebibyte, workspaceReference: null },
+		]),
+	);
+	await f.useCase.dispatch();
+	const text = f.sender.send.mock.calls[0]?.[0].text ?? "";
+	expect(text).toBe(`${answer}\n\n另有 3 个文件见下方，1 个文件未发送`);
+	expect(Buffer.byteLength(text)).toBeLessThanOrEqual(20_480);
+	expect(f.sender.sendMedia).toHaveBeenCalledTimes(3);
+});
+
+it("rewrites sandbox: references inside the thinking with the same plan (#3229)", async () => {
+	const f = mediaFixture();
+	f.store.claim.mockResolvedValueOnce({
+		...mediaClaim("见 [图](sandbox:out/chart.png)", [png]),
+		thinking: {
+			parts: [
+				raw("先画 ![草图](sandbox:out/chart.png) 再写 [x](sandbox:out/x.md)"),
+			],
+			complete: true,
+		},
+	});
+	await f.useCase.dispatch();
+	const input = f.sender.send.mock.calls[0]?.[0];
+	expect(input?.textWithThinking).toBe(
+		"<think>先画 chart.png（见下方文件） 再写 x.md（未发布）</think>\n\n见 chart.png（见下方文件）",
+	);
+	expect(input?.textWithThinking).not.toContain("sandbox:");
+});
+
+it("AC-5: stops sending media when the channel revision changes between files (#3229)", async () => {
+	const f = mediaFixture();
+	f.sender.sendMedia.mockImplementationOnce(async () => {
+		f.authorization.authorize.mockResolvedValue({
+			outcome: "allowed",
+			authority: { ...authority, channelRevision: "c2" },
+		});
+		return "sent";
+	});
+	f.store.claim.mockResolvedValueOnce(
+		mediaClaim("[a](sandbox:out/chart.png) [b](sandbox:out/report.pdf)", [
+			png,
+			pdf,
+		]),
+	);
+	await f.useCase.dispatch();
+	expect(f.sender.sendMedia).toHaveBeenCalledTimes(1);
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "unknown");
+});

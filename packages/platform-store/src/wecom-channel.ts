@@ -972,6 +972,12 @@ export class PostgresWecomChannelV1
 							{ event_payload: { text?: string } }[]
 						>`select event_payload from platform.conversation_events where execution_id=${row.execution_id} and event_type='text.delta' order by sequence`
 					: [];
+			// #3229：正文超限时不读取，并明确告诉 Core，回复按原规则失败而不是只发结果文件。
+			const answerTooLong = Boolean(
+				row.execution_id &&
+					size &&
+					(Number(size.bytes) > 20480 || Number(size.count) > 10000),
+			);
 			const resultFiles =
 				row.execution_id && row.execution_status === "completed"
 					? await sql<
@@ -1055,6 +1061,7 @@ export class PostgresWecomChannelV1
 					? { conversationUnavailable: true }
 					: {}),
 				textDeltas: deltas.map((d) => d.event_payload.text ?? ""),
+				...(answerTooLong ? { answerTooLong: true } : {}),
 				conversationId: row.conversation_id,
 				executionId: row.execution_id,
 				media: resultFiles.flatMap((file) => {
@@ -1149,7 +1156,7 @@ export class PostgresWecomChannelV1
 				await sql`update platform.wecom_receipt_media set status=${status},updated_at=now() where receipt_id=${claim.receiptId} and ordinal=${ordinal} and status=${starting ? "pending" : "sending"} returning ordinal`;
 			if (changed.length !== 1) return false;
 			if (starting)
-				await sql`update platform.wecom_receipts set lease_until=greatest(lease_until,now()+interval '180 seconds'),updated_at=now() where id=${claim.receiptId}`;
+				await sql`update platform.wecom_receipts set lease_until=greatest(lease_until,now()+interval '300 seconds'),updated_at=now() where id=${claim.receiptId}`;
 			return true;
 		});
 	}

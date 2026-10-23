@@ -155,6 +155,10 @@ export function rewriteWecomAnswerV1(input: {
 	readonly references: readonly WecomAnswerReferenceV1[];
 	readonly files: readonly WecomResultFileReferenceV1[];
 	readonly skipped: ReadonlyMap<string, WecomOutboundMediaSkipReasonV1>;
+	/** 没有出现在回答中的文件是否附在末尾；改写思考过程时为 false。 */
+	readonly appendUnreferenced?: boolean;
+	/** 附加的逐行说明会让回复超过该字节数时，改为一行数量汇总。 */
+	readonly maxBytes?: number;
 }): string {
 	const byReference = new Map<string, WecomResultFileReferenceV1>();
 	for (const file of input.files)
@@ -195,9 +199,20 @@ export function rewriteWecomAnswerV1(input: {
 			}（${unpublishedNote}）`;
 	}
 	text += input.answer.slice(cursor);
-	const rest = input.files
-		.filter((file) => !mentioned.has(file.fileId))
-		.map(describe);
-	if (rest.length === 0) return text;
-	return text.trim() ? `${text}\n\n${rest.join("\n")}` : rest.join("\n");
+	const rest = input.files.filter((file) => !mentioned.has(file.fileId));
+	if (rest.length === 0 || input.appendUnreferenced === false) return text;
+	const append = (lines: string) =>
+		text.trim() ? `${text}\n\n${lines}` : lines;
+	const listed = append(rest.map(describe).join("\n"));
+	if (
+		input.maxBytes === undefined ||
+		Buffer.byteLength(listed) <= input.maxBytes
+	)
+		return listed;
+	const sent = rest.filter((file) => !input.skipped.has(file.fileId)).length;
+	const parts = [
+		sent ? `${sent} 个文件见下方` : "",
+		rest.length - sent ? `${rest.length - sent} 个文件未发送` : "",
+	].filter(Boolean);
+	return append(`另有 ${parts.join("，")}`);
 }

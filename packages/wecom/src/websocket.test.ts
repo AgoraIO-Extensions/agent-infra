@@ -899,20 +899,54 @@ it("AC-2: plans media within the per-conversation and per-bot WeCom rate limits"
 	// 文本占会话的一条：每会话 30 条/分钟，剩下 29 个媒体。
 	expect(first?.filter((plan) => plan === "send")).toHaveLength(29);
 	expect(first?.slice(29)).toEqual(Array(11).fill("rate_limited"));
+	// 同一会话的另一条消息：会话额度已用完。
+	s.socket.send(
+		JSON.stringify({
+			cmd: "aibot_msg_callback",
+			headers: { req_id: "request-same" },
+			body: {
+				aibotid: "bot-1",
+				msgid: "event-same",
+				chattype: "group",
+				chatid: "group-1",
+				from: { userid: "sender-2" },
+				msgtype: "text",
+				text: { content: "fixture question" },
+			},
+		}),
+	);
+	await expect
+		.poll(() => s.messages.some((entry) => entry.eventId === "event-same"))
+		.toBe(true);
+	const same = s.messages.find((entry) => entry.eventId === "event-same");
+	if (!same) throw new Error("Missing same-conversation message");
 	expect(
 		await s.adapter.sender.planMedia({
-			scope: s.message,
-			replyHandle: s.message.replyHandle,
+			scope: same,
+			replyHandle: same.replyHandle,
 			files: [file],
 		}),
 	).toEqual(["rate_limited"]);
 	// 另一个会话：每个机器人上传 30 次/分钟，只剩 1 次。
-	s.push({
-		msgid: "event-other",
-		chatid: "group-2",
-	});
-	await expect.poll(() => s.messages.length).toBe(2);
-	const other = s.messages[1];
+	s.socket.send(
+		JSON.stringify({
+			cmd: "aibot_msg_callback",
+			headers: { req_id: "request-other" },
+			body: {
+				aibotid: "bot-1",
+				msgid: "event-other",
+				chattype: "group",
+				chatid: "group-2",
+				from: { userid: "sender-1" },
+				msgtype: "text",
+				text: { content: "fixture question" },
+			},
+		}),
+	);
+	await expect
+		.poll(() => s.messages.some((entry) => entry.eventId === "event-other"))
+		.toBe(true);
+	const other = s.messages.find((entry) => entry.eventId === "event-other");
 	if (!other) throw new Error("Missing second message");
 	expect(
 		await s.adapter.sender.planMedia({
@@ -929,4 +963,49 @@ it("AC-2: plans media within the per-conversation and per-bot WeCom rate limits"
 			files: [file],
 		}),
 	).toBeNull();
+});
+
+it("returns the planned media quota when the text is not accepted or the reply is planned again", async () => {
+	const s = await admitted();
+	provider(s.socket, (frame) =>
+		frame.cmd === "aibot_respond_msg" ? { errcode: 40008 } : { errcode: 0 },
+	);
+	const file = mediaInput(s.message, {
+		kind: "file",
+		name: "a.pdf",
+		bytes: fileBytes(64),
+	}).file;
+	const plan = () =>
+		s.adapter.sender.planMedia({
+			scope: s.message,
+			replyHandle: s.message.replyHandle,
+			files: Array(29).fill(file),
+		});
+	expect((await plan())?.every((entry) => entry === "send")).toBe(true);
+	// 同一回复重新规划：先归还上一次的占用，不会被自己的占用挤掉。
+	expect((await plan())?.every((entry) => entry === "send")).toBe(true);
+	// 文本被企微拒绝：媒体不会发送，额度归还（文本本身仍计一条）。
+	expect(
+		await s.adapter.sender.send({
+			scope: s.message,
+			replyHandle: s.message.replyHandle,
+			text: "fixture answer",
+		}),
+	).toBe("failed");
+	const again = await plan();
+	expect(again?.filter((entry) => entry === "send")).toHaveLength(28);
+});
+
+it("uploads a result file whose name is long in UTF-8 but within 255 characters", async () => {
+	const s = await admitted();
+	const frames = provider(s.socket);
+	const name = `${"季度经营分析报告".repeat(12)}.pdf`;
+	expect(name.length).toBeLessThanOrEqual(255);
+	expect(Buffer.byteLength(name)).toBeGreaterThan(255);
+	expect(
+		await s.adapter.sender.sendMedia(
+			mediaInput(s.message, { kind: "file", name, bytes: fileBytes(64) }),
+		),
+	).toBe("sent");
+	expect(frames[0]?.body).toMatchObject({ filename: name });
 });

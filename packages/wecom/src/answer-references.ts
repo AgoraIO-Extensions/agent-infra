@@ -33,7 +33,9 @@ export function parseWecomAnswerReferencesV1(
 	markdown: string,
 ): WecomAnswerReferenceV1[] {
 	if (!markdown) return [];
-	const root = fromMarkdown(markdown) as unknown as MarkdownNode;
+	// micromark 去掉开头的 BOM 后计算偏移；解析去掉 BOM 的正文，再把偏移换回原文。
+	const shift = markdown.startsWith("\uFEFF") ? 1 : 0;
+	const root = fromMarkdown(markdown.slice(shift)) as unknown as MarkdownNode;
 	const definitions = new Map<string, string>();
 	const collect = (node: MarkdownNode) => {
 		if (
@@ -65,8 +67,8 @@ export function parseWecomAnswerReferencesV1(
 				if (start === undefined || end === undefined)
 					throw new Error("WeCom answer reference has no position");
 				found.push({
-					start,
-					end,
+					start: start + shift,
+					end: end + shift,
 					kind:
 						node.type === "definition"
 							? "definition"

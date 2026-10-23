@@ -104,3 +104,14 @@ it("reports a nested image inside a link after its outer link (#3229)", () => {
 	]);
 	expect(parseWecomAnswerReferencesV1("")).toEqual([]);
 });
+
+it("keeps offsets on the original answer when it starts with a BOM (#3229)", () => {
+	expect(spans("\uFEFF[a](sandbox:x.png) tail")).toEqual([
+		{
+			text: "[a](sandbox:x.png)",
+			kind: "link",
+			workspaceReference: "x.png",
+			label: "a",
+		},
+	]);
+});

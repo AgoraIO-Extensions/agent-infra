@@ -792,6 +792,11 @@ export interface WecomDeliveryClaimV1 {
 	/** `media_rejected` 回执的拒绝原因，决定固定说明（#3227）。 */
 	readonly mediaRejection?: WecomMediaRejectionV1;
 	readonly textDeltas: readonly string[];
+	/**
+	 * #3229：回答正文超过企微单条回复上限（约 20480 字节或 10000 条增量），Store 没有读取 `textDeltas`。
+	 * 此时回复按原规则明确失败，不能只发结果文件而丢掉答案。
+	 */
+	readonly answerTooLong?: boolean;
 	/** Result files already confirmed by File Authority for this execution. */
 	readonly media?: readonly WecomResultFileReferenceV1[];
 	/** #3229：回执所属的会话与执行；Worker 据此读取已确认结果文件的固定版本。 */
@@ -889,16 +894,20 @@ const wecomThinkingTruncatedNotice = "（思考过程较长，已截断）";
 function composeWecomThinkingReplyV1(
 	answer: string,
 	thinking: NonNullable<WecomDeliveryClaimV1["thinking"]>,
+	rewrite?: (content: string) => string | undefined,
 ) {
 	const joined = (kind: "raw" | "summary") =>
 		thinking.parts
 			.filter((part) => part.kind === kind)
 			.map((part) => part.text)
 			.join("");
-	const content = [joined("summary"), joined("raw")]
+	const combined = [joined("summary"), joined("raw")]
 		.filter(Boolean)
-		.join("\n\n")
-		.replace(/<(\s*\/?\s*think\b[^<>]*)>/gi, "＜$1＞");
+		.join("\n\n");
+	// #3229：思考过程中的 `sandbox:` 引用与答案按同样的规划改写；无法确认时不附带思考过程。
+	const rewritten = rewrite ? rewrite(combined) : combined;
+	if (rewritten === undefined) return undefined;
+	const content = rewritten.replace(/<(\s*\/?\s*think\b[^<>]*)>/gi, "＜$1＞");
 	if (!content.trim()) return undefined;
 	const budget =
 		wecomReplyMaximumBytes - Buffer.byteLength(`<think></think>\n\n${answer}`);
@@ -1004,7 +1013,15 @@ export function createWecomDeliveryV1(dependencies: {
 			// #3229：只有完成的回答带结果文件。先规划哪些文件会发送（文本先于媒体），再把回答中的
 			// `sandbox:` 引用改写为文件名与说明；不支持媒体的回复方式去掉结果文件，文本照常发送。
 			let media: readonly WecomOutboundMediaV1[] = [];
+			let rewriteThinking:
+				| ((content: string) => string | undefined)
+				| undefined;
 			if (answered) {
+				// 答案本身超过单条回复上限时按原规则明确失败，不能只发结果文件。
+				if (claim.answerTooLong) {
+					await dependencies.store.finish(claim, "failed");
+					return true;
+				}
 				const planned = await planReplyMedia(claim, text);
 				if (planned === "retry") return true;
 				if (planned === "invalid") {
@@ -1013,6 +1030,7 @@ export function createWecomDeliveryV1(dependencies: {
 				}
 				text = planned.text;
 				media = planned.media;
+				rewriteThinking = planned.rewriteThinking;
 			}
 			if (!text || Buffer.byteLength(text) > wecomReplyMaximumBytes) {
 				await dependencies.store.finish(claim, "failed");
@@ -1021,7 +1039,7 @@ export function createWecomDeliveryV1(dependencies: {
 			// #2982：只有完成且有答案的回复组合思考过程；固定文案与只有文件的回复不附带。
 			const textWithThinking =
 				answered && claim.textDeltas.join("") && claim.thinking
-					? composeWecomThinkingReplyV1(text, claim.thinking)
+					? composeWecomThinkingReplyV1(text, claim.thinking, rewriteThinking)
 					: undefined;
 			if (!(await dependencies.store.prepare(claim, current.authority, media)))
 				return true;
@@ -1079,24 +1097,38 @@ export function createWecomDeliveryV1(dependencies: {
 		| {
 				readonly text: string;
 				readonly media: readonly WecomOutboundMediaV1[];
+				/** 思考过程中的 `sandbox:` 引用按同样的规划改写；无法确认时返回 undefined，不附带思考过程。 */
+				readonly rewriteThinking: (content: string) => string | undefined;
 		  }
 		| "retry"
 		| "invalid"
 	> {
 		const files = claim.media ?? [];
+		const parse = (content: string) =>
+			parseWecomAnswerReferencesV1(content, dependencies.answerReferences);
 		let references: ReturnType<typeof parseWecomAnswerReferencesV1>;
 		try {
-			references = parseWecomAnswerReferencesV1(
-				answer,
-				dependencies.answerReferences,
-			);
+			references = parse(answer);
 		} catch {
 			return "invalid";
 		}
-		if (files.length === 0 && references.length === 0)
-			return { text: answer, media: [] };
 		const ordered = orderWecomResultFilesV1(files, references);
 		const skipped = new Map<string, WecomOutboundMediaSkipReasonV1>();
+		const rewriteThinking = (content: string) => {
+			try {
+				return rewriteWecomAnswerV1({
+					answer: content,
+					references: parse(content),
+					files: ordered,
+					skipped,
+					appendUnreferenced: false,
+				});
+			} catch {
+				return undefined;
+			}
+		};
+		if (files.length === 0 && references.length === 0)
+			return { text: answer, media: [], rewriteThinking };
 		const candidates: WecomOutboundMediaV1[] = [];
 		for (const file of ordered) {
 			const kind = wecomOutboundMediaKindV1(file);
@@ -1150,8 +1182,10 @@ export function createWecomDeliveryV1(dependencies: {
 				references,
 				files: ordered,
 				skipped,
+				maxBytes: wecomReplyMaximumBytes,
 			}),
 			media,
+			rewriteThinking,
 		};
 	}
 
