@@ -2115,6 +2115,7 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 - 文件服务通过部署装配的可信 capability reader 获取目标 Agent 已验证能力、Channel 限制及部署允许类型/大小；以当前配置修订和探测版本绑定，取三者交集。缺失、过期、未验证或空交集拒绝上传/结果分配。独立 `FileLimitsV1` 契约返回该交集及版本，供后续 Web/Channel 在上传前展示并拒绝超限、Runtime 在接收前执行同一限制；本票不把配置布尔值当作类型/大小声明。历史读取不因当前上传 capability 关闭而失效。
 - Agent、Channel 与 deployment 三方文件限制声明保存在 Platform DB，包含单调修订、有效期、媒体类型与最大字节数。Agent 与 Channel 声明只能由当前 Owner/Co-owner 或 system_admin 经管理 API 写入，deployment 声明只能由 system_admin 写入；写入以 `Idempotency-Key` 和期望修订比较并交换。读取按当前配置修订绑定，缺失、过期或修订不一致拒绝，不能用部署常量或请求体代替权威声明。
 - 写入仅在当前 capability、媒体类型与大小限制内开放。数据面限制字节数、持续时间和并发量，流式计算 SHA-256；S3 写入使用条件创建，已存在对象不覆盖。完成确认读取实际对象的固定版本/etag，重新验证媒体类型、实际大小和内容 Hash 后才将记录变为 `available`。调用方声明或 S3 metadata 不能独立证明内容 Hash 或媒体类型；Adapter 根据实际字节核验允许格式，无法确认的格式拒绝，不提供任意二进制类型回退。
+- 媒体类型以规范化结果为准：字节只能确认为纯文本（合法 UTF-8，除制表符、换行和回车外不含控制字符）、无法确认子类型时，采用平台固定白名单内的声明类型，其他情况采用字节识别结果。白名单为 `text/csv`、`text/markdown`、`application/json`、`text/tab-separated-values`，由平台代码维护，调用方、FileLimits 声明和请求体都不能扩展。规范化结果须与声明一致，所以白名单之外的文本子类型、字节不是纯文本的白名单声明（例如声明 `text/csv` 而实际是 PNG）一律拒绝。FileLimits 匹配、完成确认和记录的媒体类型都使用规范化结果，FileLimits 只列 `text/plain` 时不接受其子类型；没有声明类型的写入（企微入站、15.4.4 的结果发布）记录字节识别结果。Web 上传前复用同一实现提前拒绝声明为文本却不是纯文本的内容，最终仍以 Adapter 核验为准。
 - 文件状态为 `pending`、`available`、`failed`、`expired`、`deleting`、`deleted`。对象已写但响应丢失或提交未知时保持原意图，沿同一对象核实；存储不可用不解释为对象缺失，不把 unknown 当成功。已确认文件的完成重放返回原结果；它不再授予写入权。对象版本不可确认或实际内容不匹配时不得引用。
 
 重新生成可通过当前 Execution 的新 Grant 读取原 Message 附件，不修改文件的原始绑定；旧 Grant 或旧 generation 不能因此恢复有效。
@@ -2177,7 +2178,7 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
   - 用 `O_NOFOLLOW` 打开，且必须是普通文件；
   - 打开之后，读取、类型识别、SHA-256 计算和上传都使用同一个文件描述符，不再按路径重新打开，避免校验之后文件被替换；
   - 实际读到的大小不超过 FileLimits 和单文件 50 MiB 上限；
-  - 媒体类型按实际字节识别，识别方式与 ObjectStorage Adapter 一致，且必须在 FileLimits 内；
+  - 媒体类型按 15.4.1 的同一规则识别；结果发布不携带声明类型，因此记录字节识别结果（纯文本为 `text/plain`），且必须在 FileLimits 内；
   - 名称取 basename。
 - 结果意图的 descriptor 包含上述 SHA-256 与大小。恢复时重新打开文件并重新校验，内容与原意图不一致则记为失败，不改发新内容。
 - 发布属于 §10.14 的平台中介操作：
