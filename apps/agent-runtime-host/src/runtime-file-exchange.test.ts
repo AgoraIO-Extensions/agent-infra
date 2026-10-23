@@ -955,6 +955,27 @@ describe("FileBridge explicit input rejection (#3314)", () => {
 		expect(error).not.toBeInstanceOf(RuntimeFileInputRejectedError);
 	});
 
+	it.each(["exchange", "data plane"] as const)(
+		"keeps a %s refusal explicit when releasing its body fails",
+		async (stage) => {
+			const failingBody = () =>
+				new Response(
+					new ReadableStream({
+						cancel() {
+							throw new Error(`cancel failed ${serviceToken}`);
+						},
+					}),
+					{ status: 404 },
+				);
+			const { error } = await readError(async (url) =>
+				stage === "exchange" || !url.endsWith("runtime-exchange")
+					? failingBody()
+					: granted(),
+			);
+			expect(error).toBeInstanceOf(RuntimeFileInputRejectedError);
+		},
+	);
+
 	it("keeps the result exchange refusal semantics unchanged", async () => {
 		const { bridge } = bridgeWith(async () => refusal(404));
 		const error = await bridge

@@ -349,7 +349,8 @@ export function createRuntimeFileBridgeFactoryV1(
 		});
 		if (!response.ok) {
 			track.status = response.status;
-			await response.body?.cancel();
+			// 释放响应体失败不能改变平台已经给出的判定。
+			await response.body?.cancel().catch(() => undefined);
 			if (rejected && explicitlyRejected(response.status)) throw rejected();
 			throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
 		}
@@ -398,7 +399,7 @@ export function createRuntimeFileBridgeFactoryV1(
 					});
 					if (!response.ok || !response.body) {
 						if (!response.ok) track.status = response.status;
-						await response.body?.cancel();
+						await response.body?.cancel().catch(() => undefined);
 						// #3314：数据面的 4xx 同样是平台对本次读取的明确拒绝。
 						if (!response.ok && explicitlyRejected(response.status))
 							throw new RuntimeFileInputRejectedError();
