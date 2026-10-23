@@ -4362,13 +4362,16 @@ describe("contract compatibility command", () => {
 		}
 	});
 
-	it("admits only the pinned RUNTIME_SESSION_BLOCKED rejected result in submit V2+ unions (#3017)", async () => {
+	it.each([
+		["RUNTIME_SESSION_BLOCKED", "#3017"],
+		["RUNTIME_FILE_INPUT_REJECTED", "#3314"],
+	])("admits only the pinned %s rejected result in submit V2+ unions (%s)", async (code) => {
 		type Union = Array<{ properties?: Record<string, { const?: unknown }> }>;
 		type Document = {
 			components: { schemas: Record<string, Record<string, unknown>> };
 		};
 		const blocked = (option: Union[number]) =>
-			option?.properties?.code?.const === "RUNTIME_SESSION_BLOCKED";
+			option?.properties?.code?.const === code;
 		const unions = (value: Document) => {
 			const schemas = value.components.schemas as Record<
 				string,
@@ -4381,7 +4384,7 @@ describe("contract compatibility command", () => {
 				schemas.RuntimeOperationResponseV5?.properties?.result?.anyOf,
 			].filter((union): union is Union => Array.isArray(union));
 		};
-		// 还原 #3017 之前的基线：从每个 V2+ 结果联合中删除新增成员。
+		// 还原新增该成员之前的基线：从每个 V2+ 结果联合中删除它。
 		const restorePreSessionBlockedContract = (value: Document) => {
 			for (const union of unions(value)) {
 				const index = union.findIndex(blocked);

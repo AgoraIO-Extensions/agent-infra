@@ -5184,6 +5184,34 @@
               "additionalProperties": false,
               "properties": {
                 "code": {
+                  "const": "RUNTIME_FILE_INPUT_REJECTED",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Runtime file input was rejected",
+                  "type": "string"
+                },
+                "outcome": {
+                  "const": "rejected",
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "outcome",
+                "code",
+                "message",
+                "retryable"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
                   "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
                   "type": "string"
                 },
