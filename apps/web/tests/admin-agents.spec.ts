@@ -1513,3 +1513,125 @@ test("clearing filters returns focus to the search box and rereading the directo
 	await expectNoDuplicateControls(page, "Agent 管理（N8-3-02）");
 	await expectCleanPage(page, errors);
 });
+
+// #3292 N9-3-02：前端分页翻到末页 / 首页、触发的按钮随之禁用时，焦点交给另一个分页按钮（同 /audit），
+// 不落到 body；翻页后新的一页在视口内（页面变短时表格不停在视口上方）。
+test("front-end paging hands focus to the other page button at the edges and keeps the new page in view (N9-3-02)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/admin/agents");
+	const main = page.locator("main");
+	const table = main.getByRole("table", { name: "已创建 Agent" });
+	await expect(main.getByText("第 1 / 2 页")).toBeVisible();
+	const previous = main.getByRole("button", { name: "上一页" });
+	const next = main.getByRole("button", { name: "下一页" });
+	// 首页的「上一页」与末页的「下一页」仍是原生禁用（不在 Tab 序列里）。
+	await expect(previous).toBeDisabled();
+	// 翻页后的位置规则：新的一页从表格顶端开始可见（不在吸顶顶栏之下或视口上方）；表格到分页条放得下时
+	// 整段可见、获得焦点的分页按钮完整可见，放不下时表格顶端贴着顶栏（让出 16px）。
+	async function expectPageInView(focused: typeof next, firstRow: string) {
+		const box = await page.evaluate(() => {
+			const rect = (selector: string) =>
+				document.querySelector(selector)?.getBoundingClientRect();
+			return {
+				topbar: rect(".platform-topbar")?.bottom ?? 0,
+				innerHeight,
+				tableTop: rect(".admin-agent-table")?.top ?? Number.NaN,
+				paginationBottom: rect(".admin-agent-pagination")?.bottom ?? Number.NaN,
+			};
+		});
+		expect(box.tableTop).toBeGreaterThanOrEqual(box.topbar + 15);
+		await expect(table.getByText(firstRow, { exact: true })).toBeInViewport();
+		const fits =
+			box.paginationBottom - box.tableTop <= box.innerHeight - box.topbar - 32;
+		if (fits) {
+			expect(box.paginationBottom).toBeLessThanOrEqual(box.innerHeight - 15);
+			await expect(focused).toBeInViewport({ ratio: 1 });
+		} else
+			expect(Math.abs(box.tableTop - box.topbar - 16)).toBeLessThanOrEqual(1);
+		return fits;
+	}
+
+	await next.scrollIntoViewIfNeeded();
+	await next.focus();
+	await page.keyboard.press("Enter");
+	await expect(page).toHaveURL(/page=2/);
+	await expect(main.getByText("第 2 / 2 页")).toBeVisible();
+	await expect(next).toBeDisabled();
+	await expectFocusSettled(previous, "翻到末页后", [30, 150, 400, 1000]);
+	// 第 2 页只有两行、页面变短：1440×900 下两行与「上一页」都可见（原表格顶在视口上方 340px）。
+	const lastFits = await expectPageInView(previous, "编程助手 10");
+	if (!mobile) {
+		expect(lastFits).toBe(true);
+		await expect(
+			table.getByText("较后页文档助手", { exact: true }),
+		).toBeInViewport();
+	}
+	await info.attach("n9-3-02-last-page", {
+		body: await page.screenshot(),
+		contentType: "image/png",
+	});
+
+	await page.keyboard.press("Enter");
+	await expect(main.getByText("第 1 / 2 页")).toBeVisible();
+	await expect(previous).toBeDisabled();
+	await expectFocusSettled(next, "回到首页后", [30, 150, 400, 1000]);
+	await expectPageInView(next, "编程助手 0");
+	await info.attach("n9-3-02-first-page", {
+		body: await page.screenshot(),
+		contentType: "image/png",
+	});
+	await expectNoDuplicateControls(page, "Agent 管理分页（N9-3-02）");
+	await expectCleanPage(page, errors);
+});
+
+// #3292 N9-3-04：列表读取 401 不说成无权访问：「登录已过期」卡与「重新登录」，会话仍有效时重读列表。
+test("a 401 inventory read asks to sign in again and re-reads once the session is still valid (N9-3-04)", async ({
+	page,
+}) => {
+	const errors = trackPageErrors(page);
+	const data = await fixture(page);
+	let expired = true;
+	await page.route("**/api/v2/admin/agents", (route) =>
+		expired
+			? route.fulfill({
+					status: 401,
+					json: {
+						schemaVersion: 1,
+						code: "AUTHENTICATION_REQUIRED",
+						message: "Controlled expired session",
+						retryable: false,
+						traceId: "trace-admin-agents-401",
+					},
+				})
+			: route.fallback(),
+	);
+	await page.goto("/admin/agents");
+	const main = page.locator("main");
+	const card = main.locator('[data-slot="state-card"]');
+	await expect(card).toHaveAttribute("data-kind", "login");
+	await expect(card.getByRole("heading", { level: 2 })).toHaveText(
+		"登录已过期",
+	);
+	await expect(main).not.toContainText("当前无权访问 Agent 管理。");
+	const relogin = card.getByRole("button", { name: "重新登录", exact: true });
+	const sessionReads = () =>
+		data.requests.filter((request) => request.path === "/api/v1/session")
+			.length;
+	const before = sessionReads();
+	expired = false;
+	await relogin.focus();
+	await page.keyboard.press("Enter");
+	await expect.poll(sessionReads).toBeGreaterThan(before);
+	await expect(main.getByRole("table", { name: "已创建 Agent" })).toBeVisible();
+	await expectFocusSettled(
+		main.getByRole("heading", { level: 1, name: "查看 Agent 状态" }),
+		"重新登录恢复后",
+		[50, 300, 1000],
+	);
+	await expectCleanPage(page, errors);
+});

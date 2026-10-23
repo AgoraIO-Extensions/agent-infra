@@ -651,7 +651,36 @@ describe("Administrator inventory presentation", () => {
 		expect(within(section).queryAllByRole("button")).toHaveLength(0);
 		view.rerender(<AdminAgentsScreen {...props} state={{ kind: "denied" }} />);
 		expect(screen.getByText("当前无权访问 Agent 管理。")).toBeTruthy();
-		expect(screen.queryByRole("link")).toBeNull();
+		// 需求变化（#3292 N9-3-01）：无权访问改为公共「未授权」卡，唯一的链接是「返回工作台」（原断言
+		// 没有任何链接）；仍没有进入 Agent 的配置链接、表格与治理区。
+		expect(
+			within(section)
+				.getAllByRole("link")
+				.map((link) => [link.textContent, link.getAttribute("href")]),
+		).toEqual([["返回工作台", "/"]]);
+		expect(
+			section
+				.querySelector('[data-slot="state-card"]')
+				?.getAttribute("data-kind"),
+		).toBe("unauthorized");
+		expect(within(section).queryByRole("table")).toBeNull();
+		expect(within(section).queryAllByRole("status")).toHaveLength(0);
+		expect(within(section).queryByRole("alert")).toBeNull();
+		// 读取 401 不说成无权访问：「登录已过期」卡与「重新登录」（#3292 N9-3-04）。
+		const relogin = vi.fn();
+		view.rerender(
+			<AdminAgentsScreen
+				{...props}
+				onRelogin={relogin}
+				state={{ kind: "denied", reason: "authentication-required" }}
+			/>,
+		);
+		const login = section.querySelector('[data-slot="state-card"]');
+		expect(login?.getAttribute("data-kind")).toBe("login");
+		expect(login?.textContent).toContain("登录已过期");
+		expect(screen.queryByText("当前无权访问 Agent 管理。")).toBeNull();
+		fireEvent.click(within(section).getByRole("button", { name: "重新登录" }));
+		expect(relogin).toHaveBeenCalledOnce();
 		view.rerender(<AdminAgentsScreen {...props} state={{ kind: "loading" }} />);
 		// 需求变化（#3235 I6-01）：读取中改为可聚焦的禁用（aria-disabled），不再用原生 disabled，
 		// 否则获得焦点的按钮被禁用后焦点落到 body。

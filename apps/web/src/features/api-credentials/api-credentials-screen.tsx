@@ -3,6 +3,7 @@ import {
 	Check,
 	Copy,
 	KeyRound,
+	LogIn,
 	Plus,
 	RefreshCw,
 	Shield,
@@ -61,6 +62,8 @@ export type PersonalApiCredentialIssueResponse =
 type ApiCredentialsScreenProps = {
 	state: ApiCredentialsViewState;
 	onRetry?: () => void;
+	/** 列表读取 401 时的「重新登录」：经壳层确认会话，仍有效时重读列表（W-03，#3292 N9-3-04）。 */
+	onRelogin?: () => void;
 	/** 列表重读进行中：「重新加载」保持可聚焦的禁用（读取失败作为数据返回，提示在重读期间保留）。 */
 	retrying?: boolean;
 	onIssue?: (
@@ -101,6 +104,7 @@ function errorMessage(error: unknown, fallback: string) {
 export function ApiCredentialsScreen({
 	state,
 	onRetry,
+	onRelogin,
 	retrying = false,
 	onIssue,
 	onRevoke,
@@ -316,6 +320,18 @@ export function ApiCredentialsScreen({
 								>
 									<RefreshCw aria-hidden="true" data-icon="inline-start" />
 									重新加载
+								</RecoveryButton>
+							</AlertAction>
+						) : state.reason === "authentication-required" && onRelogin ? (
+							<AlertAction>
+								<RecoveryButton
+									variant="outline"
+									recoveryKey="重新登录"
+									busy={retrying}
+									onClick={onRelogin}
+								>
+									<LogIn aria-hidden="true" data-icon="inline-start" />
+									重新登录
 								</RecoveryButton>
 							</AlertAction>
 						) : null}

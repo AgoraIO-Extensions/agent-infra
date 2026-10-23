@@ -100,6 +100,7 @@ export function MySkillsScreen({
 	versions,
 	installations,
 	onRetry,
+	onRelogin,
 	retrying = false,
 	onInstallationsRetry,
 	installationsRetrying = false,
@@ -112,6 +113,8 @@ export function MySkillsScreen({
 	/** 本人在我的库中的安装（#2953）。 */
 	installations: SkillHubInstallationsState | { kind: "loading" };
 	onRetry?: () => void;
+	/** 任一分区读取 401 时的「重新登录」：确认会话仍有效后重读失败的分区（W-03）。 */
+	onRelogin?: () => void;
 	retrying?: boolean;
 	onInstallationsRetry?: () => void;
 	installationsRetrying?: boolean;
@@ -130,7 +133,10 @@ export function MySkillsScreen({
 			<header className="page-heading">
 				<div>
 					<p className="page-eyebrow">我的管理 / 我的 Skill</p>
-					<h1 id={`${id}-heading`}>我的 Skill</h1>
+					{/* tabIndex=-1：分区「重新读取」「重新登录」恢复后焦点落在这里（D2-59）。 */}
+					<h1 id={`${id}-heading`} tabIndex={-1}>
+						我的 Skill
+					</h1>
 					<p>管理自己创建的 Skill 和已安装版本。</p>
 				</div>
 				<div className="skill-actions">
@@ -145,6 +151,7 @@ export function MySkillsScreen({
 			<MyInstallationsSection
 				installations={installations}
 				onRetry={onInstallationsRetry}
+				onRelogin={onRelogin}
 				retrying={installationsRetrying}
 				onChanged={onInstallationsChanged}
 				{...(uninstall ? { uninstall } : {})}
@@ -169,7 +176,10 @@ export function MySkillsScreen({
 						deniedText="当前账号没有管理 Skill 项目的权限。"
 						unavailableText="Skill 项目暂时无法访问，请联系管理员。"
 						onRetry={onRetry}
+						onRelogin={onRelogin}
 						retrying={retrying}
+						// 与「已安装」同时失败时按钮仍可区分（#3292 N9-3-05）。
+						objectName="我创建的"
 					/>
 				) : projects.items.length === 0 ? (
 					<SkillHubEmpty
@@ -308,6 +318,7 @@ export function SkillEditorScreen({
 	onProjectCreated,
 	content = { kind: "loading" },
 	onContentRetry,
+	onContentRelogin,
 	contentRetrying = false,
 	contentActions,
 	onPublished,
@@ -328,6 +339,8 @@ export function SkillEditorScreen({
 	/** 已有项目的当前内容（#2906）。 */
 	content?: SkillProjectContentState;
 	onContentRetry?: () => unknown;
+	/** 项目内容读取 401 时的「重新登录」。 */
+	onContentRelogin?: () => void;
 	contentRetrying?: boolean;
 	contentActions?: SkillProjectContentActions;
 	onPublished?: () => void;
@@ -688,7 +701,10 @@ export function SkillEditorScreen({
 			<header className="page-heading">
 				<div>
 					<p className="page-eyebrow">我的管理 / 创建 Skill</p>
-					<h1 id={`${id}-heading`}>创建与发布 Skill</h1>
+					{/* tabIndex=-1：项目内容「重新读取」「重新登录」恢复后焦点落在这里（D2-59）。 */}
+					<h1 id={`${id}-heading`} tabIndex={-1}>
+						创建与发布 Skill
+					</h1>
 					<p>填写说明和发布范围。发布后版本固定，修改时创建新版本。</p>
 				</div>
 			</header>
@@ -708,6 +724,7 @@ export function SkillEditorScreen({
 					project={project}
 					content={content}
 					onRetry={onContentRetry}
+					onRelogin={onContentRelogin}
 					retrying={contentRetrying}
 					onPublished={onPublished}
 					consumeInitialFocus={consumeCreatedFocus}

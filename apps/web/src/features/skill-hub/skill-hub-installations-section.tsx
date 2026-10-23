@@ -38,12 +38,15 @@ function removalFailureMessage(error: unknown) {
 export function MyInstallationsSection({
 	installations,
 	onRetry,
+	onRelogin,
 	retrying = false,
 	onChanged,
 	uninstall = uninstallSkillHubInstallation,
 }: {
 	installations: SkillHubInstallationsState | { kind: "loading" };
 	onRetry?: () => void;
+	/** 读取 401 时的「重新登录」。 */
+	onRelogin?: () => void;
 	retrying?: boolean;
 	/** 移出或发现状态变化后回读列表。 */
 	onChanged?: () => void;
@@ -140,7 +143,10 @@ export function MyInstallationsSection({
 					deniedText="当前账号没有读取已安装 Skill 的权限。"
 					unavailableText="已安装的 Skill 暂时无法访问，请联系管理员。"
 					onRetry={onRetry}
+					onRelogin={onRelogin}
 					retrying={retrying}
+					// 与「我创建的」同时失败时按钮仍可区分（#3292 N9-3-05）。
+					objectName="已安装"
 				/>
 			) : !visible || visible.length === 0 ? (
 				<SkillHubEmpty

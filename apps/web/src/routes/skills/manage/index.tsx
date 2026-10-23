@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useApplicationSession } from "../../../features/application-shell.js";
 import { collectionReadFailure } from "../../../features/collection-read-failure.js";
+import { useSessionRecheck } from "../../../features/session-recheck.js";
 import { MySkillsScreen } from "../../../features/skill-hub/skill-hub-management-screen.js";
 import {
 	useOwnedSkillHubVersions,
@@ -19,6 +20,12 @@ function MySkillsRoute() {
 	const versions = useOwnedSkillHubVersions({ identityKey });
 	// 「我的安装」只读服务端按会话主体返回的本人安装（#2953）。
 	const installations = useSkillHubInstallations({ identityKey });
+	// 401 时经壳层重新确认会话；仍有效则解除不可重试锁定、重读三份读取（W-03，#3292 N9-3-04）。
+	const relogin = useSessionRecheck(() => {
+		void projects.refetch();
+		void versions.reload();
+		void installations.reload();
+	});
 	const status = (projects.error as { status?: number } | null)?.status;
 	return (
 		<main className="platform-content management-content ia-skill-hub">
@@ -45,9 +52,10 @@ function MySkillsRoute() {
 							: installations.data
 				}
 				onRetry={() => void projects.refetch()}
-				retrying={projects.isFetching}
+				onRelogin={() => void relogin.recheck()}
+				retrying={projects.isFetching || relogin.checking}
 				onInstallationsRetry={() => void installations.refetch()}
-				installationsRetrying={installations.isFetching}
+				installationsRetrying={installations.isFetching || relogin.checking}
 				onInstallationsChanged={() => void installations.refetch()}
 			/>
 		</main>

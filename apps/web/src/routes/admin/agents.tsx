@@ -5,6 +5,7 @@ import {
 } from "../../features/admin-agents/admin-agents-screen.js";
 import { useAdminAgents } from "../../features/admin-agents/use-admin-agents.js";
 import { useApplicationSession } from "../../features/application-shell.js";
+import { useSessionRecheck } from "../../features/session-recheck.js";
 import { useTemplateNameLookup } from "../../features/template-display-name.js";
 
 export const Route = createFileRoute("/admin/agents")({
@@ -21,6 +22,8 @@ function AdminAgentsRoute() {
 		enabled: session.user.roles.includes("system_admin"),
 	});
 	const templateName = useTemplateNameLookup();
+	// 列表读取 401 时经壳层重新确认会话；仍有效则解除锁定、重读一次列表（W-03，#3292 N9-3-04）。
+	const relogin = useSessionRecheck(() => void query.reload());
 	return (
 		<main className="platform-content management-content ia-admin-agents">
 			<AdminAgentsScreen
@@ -32,7 +35,8 @@ function AdminAgentsRoute() {
 				onRefresh={() => {
 					void query.refetch();
 				}}
-				refreshing={query.isFetching}
+				onRelogin={() => void relogin.recheck()}
+				refreshing={query.isFetching || relogin.checking}
 				templateName={templateName}
 			/>
 		</main>

@@ -1,4 +1,4 @@
-import { AlertCircle, RefreshCw } from "lucide-react";
+import { AlertCircle, LogIn, RefreshCw } from "lucide-react";
 import {
 	type FormEvent,
 	type Ref,
@@ -47,6 +47,8 @@ export type ApplicationManagementViewState =
 type ApplicationManagementScreenProps = {
 	state: ApplicationManagementViewState;
 	onRetry?: () => void;
+	/** 应用读取 401 时的「重新登录」：经壳层确认会话，仍有效时重读（W-03，#3292 N9-3-04）。 */
+	onRelogin?: () => void;
 	/** 应用重读进行中：「重新加载」保持可聚焦的禁用（读取失败作为数据返回，提示在重读期间保留）。 */
 	retrying?: boolean;
 	onOpenApplication?: (applicationId: string) => void;
@@ -88,6 +90,7 @@ function unavailableMessage(
 export function ApplicationManagementScreen({
 	state,
 	onRetry,
+	onRelogin,
 	retrying = false,
 	onOpenApplication,
 	onRegister,
@@ -223,6 +226,21 @@ export function ApplicationManagementScreen({
 								重新加载
 							</RecoveryButton>
 						</AlertAction>
+					) : state.reason === "authentication-required" && onRelogin ? (
+						<AlertAction>
+							{/* 与上方个人凭证列表的「重新登录」可能同时出现：名称带分区名（D2-58）。 */}
+							<RecoveryButton
+								variant="outline"
+								recoveryKey={withObjectName("重新登录", "应用管理")}
+								aria-label={withObjectName("重新登录", "应用管理")}
+								recoveryTarget={() => document.getElementById(headingId)}
+								busy={retrying}
+								onClick={onRelogin}
+							>
+								<LogIn aria-hidden="true" data-icon="inline-start" />
+								重新登录
+							</RecoveryButton>
+						</AlertAction>
 					) : null}
 				</Alert>
 			) : null}
@@ -319,6 +337,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 	const id = useId();
 	const disabled = application.status === "disabled";
 	const title = useRef<HTMLHeadingElement>(null);
+	const disableTrigger = useRef<HTMLButtonElement>(null);
 	const { consumeRegisteredFocus, consumeTitleFocus } = props;
 	useEffect(() => {
 		if (disabled && consumeTitleFocus?.()) title.current?.focus();
@@ -464,9 +483,13 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 						<ConfirmDialog
 							disabled={props.isDisabling}
 							trigger={
+								// 停用进行中是可聚焦的禁用（aria-disabled）：确认后焦点回到这里、不落到 body，
+								// 停用成功、详情按新状态重新挂载后再交给应用名标题（D2-59，#3292 N9-3-06）。
 								<Button
+									ref={disableTrigger}
 									variant="outline"
 									type="button"
+									focusableWhenDisabled={props.isDisabling}
 									aria-label={withObjectName(
 										props.isDisabling ? "正在停用…" : "停用应用",
 										application.name,
@@ -480,7 +503,9 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 							subject={{ name: application.name }}
 							description="停用后平台拒绝该应用的新任务，并向进行中的任务发出取消请求；已发生的外部效果不会撤回。"
 							confirmLabel="停用应用"
-							finalFocus={title}
+							// 取消、Escape 与确认后都回到触发按钮（同撤销凭证、禁用员工）；成功后的标题焦点由
+							// consumeTitleFocus 在重新挂载时接手。
+							finalFocus={disableTrigger}
 							onConfirm={() =>
 								// 失败由 actionError 就地呈现。
 								void props

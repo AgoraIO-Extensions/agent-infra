@@ -1,4 +1,4 @@
-import { Shield, ShieldOff } from "lucide-react";
+import { Shield } from "lucide-react";
 import { type ReactNode, useId, useRef, useState } from "react";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,7 @@ import {
 	DirectoryReadAlert,
 	useDirectoryNames,
 } from "../directory-names.js";
+import { PageStateCard } from "../page-state-card.js";
 import {
 	type SkillHubVersionState,
 	skillHubProviderLabels,
@@ -120,6 +121,7 @@ export function SkillReviewsScreen({
 	queue,
 	review,
 	onRetry,
+	onRelogin,
 	retrying = false,
 	onReviewed,
 }: {
@@ -128,6 +130,8 @@ export function SkillReviewsScreen({
 	queue: SkillReviewQueueState;
 	review: ReviewAction;
 	onRetry?: () => void;
+	/** 队列读取 401 时的「重新登录」。 */
+	onRelogin?: () => void;
 	retrying?: boolean;
 	/** 审核成功或版本状态已变化后回读队列。 */
 	onReviewed?: () => void;
@@ -156,11 +160,11 @@ export function SkillReviewsScreen({
 				</div>
 			</header>
 			{!isAdministrator ? (
-				<SkillHubEmpty
-					role="status"
-					icon={<ShieldOff aria-hidden="true" />}
-					title="没有访问权限"
-					description="Skill 审核只对系统管理员开放。"
+				// 员工打开系统管理页：页头之下只有公共「未授权」卡与「返回工作台」，与其余系统管理页相同；
+				// 静态边界不设 live region（#3292 N9-3-01）。
+				<PageStateCard
+					kind="unauthorized"
+					description="当前无权访问 Skill 审核。"
 				/>
 			) : queue.kind === "loading" ? (
 				<SkillHubLoading>正在读取待审核版本…</SkillHubLoading>
@@ -173,6 +177,7 @@ export function SkillReviewsScreen({
 					deniedText="当前账号没有读取审核队列的权限。"
 					unavailableText="审核队列暂时无法访问，请联系管理员。"
 					onRetry={onRetry}
+					onRelogin={onRelogin}
 					retrying={retrying}
 				/>
 			) : items.length === 0 ? (
@@ -183,7 +188,8 @@ export function SkillReviewsScreen({
 				/>
 			) : (
 				<>
-					<DirectoryReadAlert names={[users, organizations]} />
+					{/* 与其他调用方相同，提示与下方列表相距 16px，两张卡的边框不贴在一起（#3292 N9-3-03）。 */}
+					<DirectoryReadAlert names={[users, organizations]} className="mb-4" />
 					<div className="skill-surface">
 						{items.map((item) => (
 							<SkillReviewRow

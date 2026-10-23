@@ -678,3 +678,69 @@ test("reloading the application hands focus to the 应用管理 heading and back
 	await expectCleanPage(page, errors);
 	expect(await duplicateControlNames(page)).toEqual([]);
 });
+
+// #3292 N9-3-06：「停用应用」确认弹窗取消或 Escape 后焦点回到触发按钮（同撤销凭证、禁用员工），
+// 不到应用名标题；确认后停用中触发按钮是可聚焦的禁用（aria-disabled），成功后焦点到应用名标题。
+test("disable application confirmation returns focus to its trigger and keeps it focusable while pending (N9-3-06)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	let disabled = false;
+	await page.route(/\/api\/v2\/applications\/[^/]+$/, async (route) => {
+		const request = route.request();
+		if (request.method() === "PATCH") {
+			disabled = true;
+			return route.fulfill({ json: { ...application, status: "disabled" } });
+		}
+		if (disabled)
+			return route.fulfill({ json: { ...application, status: "disabled" } });
+		return route.fallback();
+	});
+	await page.goto(
+		`/my-settings/api-credentials?applicationId=${application.applicationId}`,
+	);
+	const trigger = await pinElement(
+		page.getByRole("button", {
+			name: `停用应用：${application.name}`,
+			exact: true,
+		}),
+		"disable-application",
+	);
+	const dialog = page.getByRole("dialog", { name: "停用这个应用？" });
+	for (const close of ["取消", "Escape"] as const) {
+		await trigger.focus();
+		await page.keyboard.press("Enter");
+		await expect(dialog).toBeVisible();
+		if (close === "取消")
+			await dialog.getByRole("button", { name: "取消" }).click();
+		else await page.keyboard.press("Escape");
+		await expect(dialog).toHaveCount(0);
+		await expectFocusSettled(trigger, `停用应用${close}后`, [50, 300, 1000]);
+	}
+	const hold = await holdRequests(
+		page,
+		"PATCH",
+		`/api/v2/applications/${application.applicationId}`,
+	);
+	await page.keyboard.press("Enter");
+	await expect(dialog).toBeVisible();
+	await dialog.getByRole("button", { name: "停用应用", exact: true }).click();
+	await expect.poll(() => hold.held()).toBe(1);
+	await expect(trigger).toHaveAccessibleName(`正在停用…：${application.name}`);
+	await expectFocusableBusy(trigger, "停用应用进行中");
+	await info.attach("n9-3-06-disabling", {
+		body: await page.screenshot(),
+		contentType: "image/png",
+	});
+	hold.release();
+	await expect(page.getByText("应用已停用")).toBeVisible();
+	await expectFocusSettled(
+		page.getByRole("heading", { name: application.name }),
+		"停用成功后",
+		[50, 300, 1000],
+	);
+	await expectCleanPage(page, errors);
+});
