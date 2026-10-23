@@ -779,7 +779,7 @@ Manifest 字段、交互模式、Runtime 探测顺序和 capability 派生规则
 
 启动 Workload 后创建失败时，`platform-worker` 必须先关闭访问路由，再幂等清理本次创建的 Kubernetes Workload、访问资源、配置、Secret 和尚未进入“可用”的新 PVC；Platform DB 中的申请、Agent 配置、失败原因和审计保留，重试时重新创建运行资源。升级的候选修订、路由切换和失败恢复见 10.4。
 
-Workload 调谐区分永久配置或 admission 拒绝与可重试的基础设施异常。永久拒绝立即进入既有失败处理；临时 Registry、Kubernetes 或依赖异常使用持久化尝试次数，在 `maximumAttempts` 预算内保留步骤重试。预算耗尽后复用既有清理或候选拒绝路径，更新失败时保留已验证版本。
+Workload 调谐区分永久配置或 admission 拒绝与可重试的基础设施异常。永久拒绝立即进入既有失败处理；临时 Registry、Kubernetes 或依赖异常使用持久化尝试次数，在 `maximumAttempts` 预算内保留步骤重试。部署可以将资源申请/镜像与 PVC 等待配置为独立的 `maximumApplyAttempts`，将已创建资源的健康与 signed readiness 观察配置为独立的 `maximumObserveAttempts`；未配置时两者均沿用 `maximumAttempts`，由部署按冷拉取和 readiness 失败特征选择不同预算，避免两类等待共用不可解释的单一预算。预算耗尽后复用既有清理或候选拒绝路径，更新失败时保留已验证版本。
 
 步骤异常可以在 Workload 状态中保存一个可选的 `lastFailure`：只允许版本化的有界原因码、该原因的连续失败次数以及 Kubernetes HTTP status、资源 kind 和 verb；旧状态缺少该字段时必须继续解析，未知或越界字段必须拒绝。`lastFailure` 不能包含异常正文、堆栈、资源名、URL、Secret、凭证或用户内容；日志和 API 展示同样只能使用这些有界字段。任一步成功推进后清除该字段，终态 `reconciliation_failed` 保留最近一次失败原因供管理员与审计读取。
 

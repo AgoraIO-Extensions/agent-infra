@@ -413,6 +413,10 @@ export function createWorkloadReconciliationV1(dependencies: {
 	readonly store: WorkloadReconciliationStorePortV1;
 	readonly runtime: WorkloadRuntimePortV1;
 	readonly maximumAttempts?: number;
+	/** Maximum attempts while Kubernetes resources are being applied. */
+	readonly maximumApplyAttempts?: number;
+	/** Maximum attempts while an applied Workload is becoming healthy. */
+	readonly maximumObserveAttempts?: number;
 	/** Consecutive Kubernetes 401/403 failures before existing failure cleanup. */
 	readonly authorizationFailureThreshold?: number;
 	/**
@@ -431,6 +435,26 @@ export function createWorkloadReconciliationV1(dependencies: {
 	const maximumAttempts = dependencies.maximumAttempts ?? 60;
 	if (!Number.isSafeInteger(maximumAttempts) || maximumAttempts < 1)
 		throw new TypeError("Invalid Workload retry limit");
+	const maximumApplyAttempts =
+		dependencies.maximumApplyAttempts ?? maximumAttempts;
+	if (!Number.isSafeInteger(maximumApplyAttempts) || maximumApplyAttempts < 1)
+		throw new TypeError("Invalid Workload apply retry limit");
+	// A Workload that has reached the observe phase has already created its
+	// resources. Keep this budget independently configurable so a deterministic
+	// readiness failure can be bounded without changing existing deployments.
+	const maximumObserveAttempts =
+		dependencies.maximumObserveAttempts ?? maximumAttempts;
+	if (
+		!Number.isSafeInteger(maximumObserveAttempts) ||
+		maximumObserveAttempts < 1
+	)
+		throw new TypeError("Invalid Workload observe retry limit");
+	const attemptBudget = (phase: WorkloadPhaseV1) =>
+		phase === "applying"
+			? maximumApplyAttempts
+			: phase === "observing" || phase === "promoting"
+				? maximumObserveAttempts
+				: maximumAttempts;
 	const configuredAuthorizationFailureThreshold =
 		dependencies.authorizationFailureThreshold ?? 3;
 	if (
@@ -600,11 +624,11 @@ export function createWorkloadReconciliationV1(dependencies: {
 									identity: identity.identity,
 								});
 							if (identity === "pending") {
-								if (!stopped && state.attempts + 1 >= maximumAttempts)
+								if (!stopped && state.attempts + 1 >= maximumApplyAttempts)
 									return failed("reconciliation_failed");
 								return {
 									...state,
-									attempts: Math.min(state.attempts + 1, maximumAttempts),
+									attempts: Math.min(state.attempts + 1, maximumApplyAttempts),
 								};
 							}
 							if (!identity && !stopped) throw new Error();
@@ -621,10 +645,13 @@ export function createWorkloadReconciliationV1(dependencies: {
 							// ready, within the same budget; only an answer fails it (#2046).
 							if (
 								health === "unhealthy" ||
-								state.attempts + 1 >= maximumAttempts
+								state.attempts + 1 >= maximumObserveAttempts
 							)
 								return failed("health_check_failed");
-							return { ...state, attempts: state.attempts + 1 };
+							return {
+								...state,
+								attempts: Math.min(state.attempts + 1, maximumObserveAttempts),
+							};
 						}
 						case "activating": {
 							const activation = await runtime.activateSecrets(state, input);
@@ -643,7 +670,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 							if (health !== "healthy") {
 								if (
 									health === "unreachable" &&
-									state.attempts + 1 < maximumAttempts
+									state.attempts + 1 < maximumObserveAttempts
 								)
 									return { ...state, attempts: state.attempts + 1 };
 								return failed("health_check_failed");
@@ -758,7 +785,10 @@ export function createWorkloadReconciliationV1(dependencies: {
 					const previousFailure = state.lastFailure;
 					const consecutiveAttempts =
 						previousFailure?.reason === reason
-							? Math.min(previousFailure.attempts + 1, maximumAttempts)
+							? Math.min(
+									previousFailure.attempts + 1,
+									attemptBudget(state.phase),
+								)
 							: 1;
 					const lastFailure = classifyWorkloadFailureDetailsV1(
 						error,
@@ -771,7 +801,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 						consecutiveAttempts >= authorizationFailureThreshold;
 					const retrying = {
 						...state,
-						attempts: Math.min(state.attempts + 1, maximumAttempts),
+						attempts: Math.min(state.attempts + 1, attemptBudget(state.phase)),
 						lastFailure,
 					};
 					// 步骤里的异常被吞掉后只会让 attempts 加一或进入失败处理；这里把它交给
@@ -781,7 +811,10 @@ export function createWorkloadReconciliationV1(dependencies: {
 							dependencies.onStepFailure?.({
 								agentId: state.agentId,
 								phase: state.phase,
-								attempts: Math.min(state.attempts + 1, maximumAttempts),
+								attempts: Math.min(
+									state.attempts + 1,
+									attemptBudget(state.phase),
+								),
 								terminal: next.phase !== state.phase,
 								error,
 							});
@@ -821,7 +854,10 @@ export function createWorkloadReconciliationV1(dependencies: {
 						state.phase === "stopped"
 					)
 						return observe(retrying);
-					if (state.attempts + 1 >= maximumAttempts || authorizationTerminal)
+					if (
+						state.attempts + 1 >= attemptBudget(state.phase) ||
+						authorizationTerminal
+					)
 						return observe(failed("reconciliation_failed", lastFailure));
 					return observe(retrying);
 				}

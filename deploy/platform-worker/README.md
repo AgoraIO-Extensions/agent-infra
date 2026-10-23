@@ -55,6 +55,12 @@ Session Sandbox 的空闲计算回收属于同一 Worker 的会话生命周期�
 下一条消息会重新准备原 Sandbox。该策略与已验证 Workload 升级分开，
 不会改变 policy 或 Workload revision。
 
+Workload 调谐还可以分别配置 `workloadInput.maximumApplyAttempts` 和
+`workloadInput.maximumObserveAttempts`。前者覆盖资源申请、镜像拉取和 PVC 等待的重试预算；
+后者覆盖资源已创建后的健康检查与 signed readiness 观察预算。未设置时两者均沿用
+`maximumAttempts`；预算耗尽分别进入现有创建清理或健康检查失败路径，
+不会把确定性 readiness 错误继续当作慢镜像拉取等待。
+
 配置模块也可选导出 `savedKeyCandidates`，由部署实现
 `createWorkerSavedKeyCandidatesApp` 的 `reader`；该 reader 在 Worker-only keyring
 边界内短暂解密当前 Agent 默认 Key，只返回候选 metadata。API 通过固定
