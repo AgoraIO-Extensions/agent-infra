@@ -279,7 +279,12 @@ export function decideAgentRuntimePresentationV1(input: {
 		runtime.verifiedSourceReference !== facts.sourceReference ||
 		deployment.agentId !== input.agentId ||
 		deployment.configRevision !== configuration.revision ||
-		deployment.workloadRevision !== state.revision ||
+		// verified 部署保留产生它的 Workload 修订：漂移恢复与回滚重新提升同一部署时只推进
+		// state.revision（Spec §10.4、#1480），因此该值可以落后、不能超前于当前修订。
+		// 能力属于当前修订由 phase=ready 与 verifiedRevision === state.revision 证明（#3304）。
+		!Number.isSafeInteger(deployment.workloadRevision) ||
+		deployment.workloadRevision < 1 ||
+		deployment.workloadRevision > state.revision ||
 		deployment.fence !== state.fence ||
 		deployment.desiredState !== "running" ||
 		deployment.imageDigest !== configuration.source.imageDigest

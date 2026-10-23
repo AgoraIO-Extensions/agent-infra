@@ -11,7 +11,14 @@ import {
 	decideAgentRuntimePresentationV1,
 	snapshotAgentRuntimePresentationExpectationV1,
 } from "./agent-runtime-presentation.js";
-import type { WorkloadBrowserCapabilityProjectionV1 } from "./workload-reconciliation.js";
+import {
+	createWorkloadReconciliationV1,
+	type WorkloadBrowserCapabilityProjectionV1,
+	type WorkloadPhaseV1,
+	type WorkloadReconciliationStateV1,
+	type WorkloadRuntimePortV1,
+	type WorkloadVersionV1,
+} from "./workload-reconciliation.js";
 
 const management: AgentManagementStateV1 = {
 	schemaVersion: 1,
@@ -544,6 +551,274 @@ describe("Agent runtime presentation policy", () => {
 			interactionUrl: null,
 		});
 	});
+});
+
+// #3304：漂移恢复只推进 Workload revision，verified 部署保留产生它的修订（#1480）。
+describe("Agent runtime presentation after Workload drift recovery", () => {
+	const capabilities = {
+		modelSelection: true,
+		attachments: true,
+		resultFiles: true,
+		nativeMetadata: true,
+	};
+
+	/** 以真实调谐状态机驱动 Workload：先创建到 ready，再按 `health` 依次返回观测结果。 */
+	function reconciled() {
+		const input = fixture();
+		const configuration = input.facts.configuration;
+		const management = structuredClone(input.facts.management);
+		const health: ("healthy" | "drifted")[] = [];
+		const phases: WorkloadPhaseV1[] = [];
+		let state: WorkloadReconciliationStateV1 | null = null;
+		const runtime: WorkloadRuntimePortV1 = {
+			capabilities: async () => structuredClone(capabilities),
+			// 与 Worker 一致：部署契约在 preflight 时记录当时的 Workload 修订与 fence。
+			preflight: async (_input, current) => ({
+				configuration: current.candidate.configuration,
+				deployment: {
+					agentId: current.agentId,
+					configRevision: current.candidate.configuration.revision,
+					workloadRevision: current.revision,
+					fence: current.fence,
+					desiredState: "running",
+					imageDigest: current.candidate.configuration.source.imageDigest,
+					runtimeManifest: { interactionMode: "platform-adapter" },
+					route: { exposure: "internal-only" },
+				},
+			}),
+			closeRoute: async () => undefined,
+			apply: async () => ({ uid: "workload_01", generation: 1 }),
+			observe: async () => health.shift() ?? "healthy",
+			activateSecrets: async () => "active",
+			promote: async () => undefined,
+			discardUnactivatedSecrets: async () => true,
+			cleanup: async () => true,
+		};
+		const worker = createWorkloadReconciliationV1({
+			runtime,
+			store: {
+				async runNext(_workerId, step) {
+					state = await step({
+						management,
+						configuration,
+						state: structuredClone(state),
+						requestId: "request_01",
+						traceId: "trace_01",
+					});
+					phases.push(state.phase);
+					return "advanced";
+				},
+			},
+		});
+		const current = () => {
+			if (!state) throw new Error("Expected a Workload state");
+			return state;
+		};
+		return {
+			health,
+			phases,
+			get state() {
+				return current();
+			},
+			async tick(times: number) {
+				for (let i = 0; i < times; i++) await worker.tick("worker_01");
+			},
+			/** Store 从持久状态解出的事实：deployment 取自 verified 部署本身。 */
+			present() {
+				const runtimeFacts = input.facts.runtime;
+				const persisted = current();
+				if (!runtimeFacts || !persisted.verified) throw new Error();
+				return decideAgentRuntimePresentationV1({
+					...input,
+					facts: {
+						...input.facts,
+						runtime: {
+							...runtimeFacts,
+							revision: persisted.revision,
+							state: persisted,
+							deployment: persisted.verified
+								.deployment as typeof runtimeFacts.deployment,
+						},
+					},
+				});
+			},
+		};
+	}
+
+	async function recovered() {
+		const f = reconciled();
+		await f.tick(7);
+		expect(f.state).toMatchObject({ phase: "ready", revision: 1 });
+		expect(f.present()).toMatchObject({ outcome: "found", capabilities });
+		f.phases.length = 0;
+		f.health.push("drifted");
+		await f.tick(5);
+		return f;
+	}
+
+	it("keeps the verified capabilities after ready → drifted → applying → observing → promoting → ready", async () => {
+		const f = await recovered();
+		expect(f.phases).toEqual([
+			"applying",
+			"observing",
+			"activating",
+			"promoting",
+			"ready",
+		]);
+		// 漂移恢复的合法形态：修订推进到 2，verified 部署仍是修订 1 产生的同一部署。
+		expect(f.state).toMatchObject({
+			phase: "ready",
+			revision: 2,
+			verifiedRevision: 2,
+			verified: { deployment: { workloadRevision: 1, fence: 1 } },
+			capabilities,
+		});
+		expect(f.state.candidate).toEqual(f.state.verified);
+		expect(f.present()).toEqual({
+			outcome: "found",
+			sourceReference: "template_01",
+			channels: [],
+			capabilities,
+			interactionUrl: null,
+		});
+	});
+
+	it("projects an already persisted drift-recovered state without restarting the Agent", () => {
+		// 固定环境回读的形态：revision=verifiedRevision=3，verified 部署修订为 2。
+		const input = fixture();
+		const runtime = input.facts.runtime;
+		if (!runtime) throw new Error();
+		const deployment = { ...runtime.deployment, workloadRevision: 2 };
+		const version = {
+			configuration: input.facts.configuration,
+			deployment,
+		} as unknown as WorkloadVersionV1;
+		const facts = {
+			...input.facts,
+			runtime: {
+				...runtime,
+				revision: 3,
+				deployment,
+				state: {
+					...runtime.state,
+					revision: 3,
+					verifiedRevision: 3,
+					candidate: version,
+					verified: version,
+					capabilities,
+				},
+			},
+		};
+		expect(decideAgentRuntimePresentationV1({ ...input, facts })).toMatchObject(
+			{ outcome: "found", capabilities },
+		);
+	});
+
+	it.each<
+		[
+			string,
+			(
+				state: WorkloadReconciliationStateV1,
+				deployment: Record<string, unknown>,
+			) => {
+				state?: Partial<WorkloadReconciliationStateV1>;
+				deployment?: Record<string, unknown>;
+				candidateOnly?: boolean;
+				fence?: number;
+				rowRevision?: number;
+			},
+		]
+	>([
+		["a newer management fence", () => ({ fence: 2 })],
+		["a stale deployment fence", () => ({ deployment: { fence: 2 } })],
+		[
+			"a stale Workload configuration revision",
+			(s) => ({
+				state: {
+					sourceConfigurationRevision: s.sourceConfigurationRevision + 1,
+				},
+			}),
+		],
+		[
+			"a deployment of another configuration revision",
+			(_, d) => ({
+				deployment: { configRevision: (d.configRevision as number) + 1 },
+			}),
+		],
+		[
+			"a deployment of another image digest",
+			() => ({ deployment: { imageDigest: `sha256:${"f".repeat(64)}` } }),
+		],
+		[
+			"a candidate that differs from verified",
+			() => ({ deployment: { workloadRevision: 2 }, candidateOnly: true }),
+		],
+		[
+			"a deployment newer than the Workload revision",
+			(s) => ({ deployment: { workloadRevision: s.revision + 1 } }),
+		],
+		[
+			"an invalid deployment revision",
+			() => ({ deployment: { workloadRevision: 0 } }),
+		],
+		[
+			"a promotion of another Workload revision",
+			(s) => ({ state: { verifiedRevision: s.revision - 1 } }),
+		],
+		[
+			"a stale persisted row revision",
+			(s) => ({ rowRevision: s.revision + 1 }),
+		],
+	])(
+		"still withholds capabilities after drift recovery with %s",
+		async (_name, mutate) => {
+			const f = await recovered();
+			const recoveredState = f.state;
+			const verified = recoveredState.verified;
+			if (!verified) throw new Error();
+			const current = verified.deployment as Record<string, unknown>;
+			const change = mutate(recoveredState, current);
+			const deployment = { ...current, ...change.deployment };
+			const version = { ...verified, deployment };
+			const state: WorkloadReconciliationStateV1 = {
+				...recoveredState,
+				...change.state,
+				candidate: version,
+				verified: change.candidateOnly ? verified : version,
+			};
+			const input = fixture();
+			const runtime = input.facts.runtime;
+			if (!runtime) throw new Error();
+			const management = {
+				...input.facts.management,
+				fence: change.fence ?? input.facts.management.fence,
+			};
+			expect(
+				decideAgentRuntimePresentationV1({
+					...input,
+					expected: { ...input.expected, management },
+					facts: {
+						...input.facts,
+						management,
+						runtime: {
+							...runtime,
+							revision: change.rowRevision ?? state.revision,
+							state,
+							deployment: (change.candidateOnly
+								? current
+								: deployment) as typeof runtime.deployment,
+						},
+					},
+				}),
+			).toEqual({
+				outcome: "found",
+				sourceReference: "template_01",
+				channels: [],
+				capabilities: null,
+				interactionUrl: null,
+			});
+		},
+	);
 });
 
 describe("personal API runtime presentation purpose", () => {
