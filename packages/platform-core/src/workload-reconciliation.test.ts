@@ -861,7 +861,7 @@ describe("durable Workload reconciliation", () => {
 		vi.mocked(f.runtime.apply).mockClear();
 		vi.mocked(f.runtime.closeRoute).mockClear();
 		f.upgrade("image-c");
-		vi.mocked(f.runtime.preflight).mockRejectedValueOnce(
+		vi.mocked(f.runtime.preflight).mockRejectedValue(
 			new WorkloadPreflightRejectedErrorV1(),
 		);
 		await f.tick(3);
@@ -925,6 +925,34 @@ describe("durable Workload reconciliation", () => {
 				),
 		).toBe(false);
 		expect(f.runtime.cleanup).not.toHaveBeenCalled();
+	});
+	it("retries the current configuration after a rollback and lifecycle restart", async () => {
+		const f = fixture();
+		await f.tick(8);
+		f.upgrade("image-b");
+		vi.mocked(f.runtime.observe).mockImplementation(async (state) =>
+			state.candidate.configuration.source.imageDigest === "image-b"
+				? "unhealthy"
+				: "healthy",
+		);
+		await f.tick(12);
+		expect(f.state).toMatchObject({
+			phase: "ready",
+			rollback: true,
+			candidate: { configuration: { source: { imageDigest: "image-a" } } },
+		});
+
+		f.start();
+		await f.tick();
+
+		expect(f.state).toMatchObject({
+			phase: "preflight",
+			rollback: false,
+			candidate: {
+				configuration: { source: { imageDigest: "image-b" } },
+				deployment: null,
+			},
+		});
 	});
 	it("retries unactivated Secret discard before switching to the verified rollback", async () => {
 		const f = fixture();
