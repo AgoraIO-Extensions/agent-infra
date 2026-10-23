@@ -63,6 +63,9 @@ export function WecomAppSetup({
 		undefined,
 	);
 	const titleRef = useRef<HTMLHeadingElement>(null);
+	const submitRef = useRef<HTMLButtonElement>(null);
+	// 手动「验证并绑定」或「取消配置」结束后把焦点交给卡片标题（见下方 effect）。
+	const handOffToTitle = useRef(false);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: poll reads refs and stable props
 	const refresh = useCallback(async () => {
@@ -132,6 +135,16 @@ export function WecomAppSetup({
 			clearTimeout(connectionTimer.current);
 		};
 	}, [refresh]);
+	// 验证期间「验证并绑定」是可聚焦的禁用，焦点一直在按钮上；验证结束（已连接、验证失败或凭证
+	// 被拒绝）或「取消配置」受理、按钮随之卸载后，焦点交给卡片标题，与解绑一致（D2-59、#3242 K7-03）。
+	// 用户已把焦点移到别处时不抢。
+	useEffect(() => {
+		if (busy || !handOffToTitle.current) return;
+		handOffToTitle.current = false;
+		const active = document.activeElement;
+		if (!active || active === document.body || active === submitRef.current)
+			titleRef.current?.focus();
+	}, [busy]);
 
 	async function poll(attempt: number) {
 		const currentSession = session.current;
@@ -211,6 +224,7 @@ export function WecomAppSetup({
 		setEncodingAesKey("");
 		setError("");
 		setFieldErrors({});
+		handOffToTitle.current = true;
 		setBusy(true);
 		refreshSequence.current++;
 		clearTimeout(connectionTimer.current);
@@ -280,6 +294,8 @@ export function WecomAppSetup({
 			generation.current++;
 			clearTimeout(timer.current);
 			session.current = undefined;
+			// 「取消配置」随验证结束卸载：焦点交给卡片标题（同验证结束）。
+			handOffToTitle.current = true;
 			setBusy(false);
 			setError("");
 			await refresh();
@@ -462,9 +478,12 @@ export function WecomAppSetup({
 			) : null}
 			<WecomUnbindFailure unbind={unbind} />
 			<div className="wecom-channel-actions">
+				{/* 验证期间是可聚焦的禁用（aria-disabled），焦点不落到 body（#3242 K7-03）。 */}
 				<Button
+					ref={submitRef}
 					type="button"
 					disabled={locked}
+					focusableWhenDisabled={busy}
 					aria-label={withObjectName(submitLabel, setupTitle)}
 					onClick={() => void submit()}
 				>

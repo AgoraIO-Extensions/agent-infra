@@ -5,7 +5,14 @@ import { directorySearchResponse } from "../src/features/directory-test-fixtures
 import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { recordApiRequests } from "./generated-client-paths";
-import { expectFocusHeld, expectNoDuplicateControls } from "./page-health";
+import {
+	expectFocusableBusy,
+	expectFocusHeld,
+	expectFocusSettled,
+	expectNoDuplicateControls,
+	holdRequests,
+	pinElement,
+} from "./page-health";
 import {
 	expectCardTable,
 	expectCleanPage,
@@ -1205,5 +1212,253 @@ test("governance pickers and status lines follow the design spacing (V-02, V-03)
 	}
 	// AC-2：同一页面没有同名控件，没有控制台错误与横向溢出。
 	await expectNoDuplicateControls(page, "Agent 管理");
+	await expectCleanPage(page, errors);
+});
+
+// #3242 K7-02：Agent 管理页由用户触发的写请求进行中，触发按钮是可聚焦的禁用（aria-disabled），
+// 键盘 Enter 后挂起期间多次采样焦点都在按钮上；完成后按 D2-59 交出焦点，不落到 body。
+async function acceptanceViewport(page: Page, info: TestInfo) {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+}
+
+test("row retry keeps focus on the pending button, then on the row's configure link (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const data = await fixture(page);
+	await page.goto("/admin/agents");
+	const row = page.getByRole("row", { name: /编程助手 3/ });
+	const retry = await pinElement(
+		row.getByRole("button", { name: "重试：编程助手 3" }),
+		"row-retry",
+	);
+	data.holdCommands();
+	await retry.focus();
+	await page.keyboard.press("Enter");
+	await expect(retry).toHaveAccessibleName("重试中…：编程助手 3");
+	await expectFocusableBusy(retry, "行内重试");
+	// 进行中再按 Enter 不会重复提交。
+	await page.keyboard.press("Enter");
+	expect(data.commands).toHaveLength(1);
+	data.releaseCommands();
+	await expectFocusSettled(
+		row.getByRole("link", { name: "配置：编程助手 3" }),
+		"行内重试受理",
+	);
+	expect(data.commands).toHaveLength(1);
+	await expectCleanPage(page, errors);
+});
+
+test("employee disable, unban and application material grants keep focus off body while pending (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	const userId = "11111111-1111-4111-8111-111111111111";
+	await page.route("**/api/v2/directory/search?**", (route) =>
+		route.fulfill({
+			json: directorySearchResponse(new URL(route.request().url()), [
+				{
+					kind: "user",
+					canonicalId: userId,
+					displayName: "验收员工",
+					email: "employee@example.test",
+				},
+			]),
+		}),
+	);
+	await page.route(`**/api/v2/admin/users/${userId}/disable`, (route) => {
+		if (route.request().method() !== "PUT")
+			return route.fulfill({
+				json: { schemaVersion: 1, userId, disabled: true },
+			});
+		// 写入结果按请求体回显（解除禁用与禁用各一次）。
+		const { disabled } = route.request().postDataJSON() as {
+			disabled: boolean;
+		};
+		return route.fulfill({
+			json: {
+				schemaVersion: 1,
+				userId,
+				disabled,
+				changed: true,
+				auditOutcome: "recorded",
+			},
+		});
+	});
+	const metadata = (revokedAt: string | null) => ({
+		applicationId: "app-material",
+		authorizationRevision: revokedAt ? "rev-2" : "rev-1",
+		createdAt: "2026-10-01T00:00:00Z",
+		principalId: "user-receiver",
+		principalType: "user",
+		revokedAt,
+	});
+	let materialRevoked = false;
+	await page.route(
+		/\/api\/v2\/applications\/app-material\/material-grant/,
+		(route) => {
+			const method = route.request().method();
+			if (method === "POST") {
+				materialRevoked = false;
+				return route.fulfill({
+					status: 201,
+					json: { metadata: metadata(null), replayed: false },
+				});
+			}
+			if (method === "PATCH") {
+				materialRevoked = true;
+				return route.fulfill({
+					json: { metadata: metadata("2026-10-02T00:00:00Z"), replayed: false },
+				});
+			}
+			return route.fulfill({
+				json: {
+					metadata: metadata(materialRevoked ? "2026-10-02T00:00:00Z" : null),
+					replayed: false,
+				},
+			});
+		},
+	);
+	await page.goto("/admin/agents");
+	await expect(page.getByRole("table", { name: "已创建 Agent" })).toBeVisible();
+
+	// 员工访问控制「解除禁用」：完成后仍可用，焦点留在按钮上。
+	const users = page.getByRole("region", { name: "员工访问控制" });
+	await users.getByRole("combobox", { name: "员工" }).click();
+	await page.getByRole("option", { name: /验收员工/ }).click();
+	await expect(users.getByText("当前状态：已禁用")).toBeVisible();
+	const unban = await pinElement(
+		users.getByRole("button", { name: "解除禁用", exact: true }),
+		"unban",
+	);
+	const unbanWrite = await holdRequests(
+		page,
+		"PUT",
+		`/api/v2/admin/users/${userId}/disable`,
+	);
+	await unban.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusableBusy(unban, "解除禁用");
+	unbanWrite.release();
+	await expect(users.getByRole("status")).toContainText("解除禁用已确认");
+	await expectFocusSettled(unban, "解除禁用");
+
+	// 员工访问控制「禁用员工」：确认后弹窗把焦点交给「员工访问控制」标题；提交进行中触发按钮是可聚焦的
+	// 禁用，多次采样焦点都在标题上，完成后仍在标题（D2-59）。
+	const usersHeading = users.getByRole("heading", { name: "员工访问控制" });
+	const ban = await pinElement(
+		users.getByRole("button", { name: "禁用员工：验收员工", exact: true }),
+		"ban",
+	);
+	await ban.focus();
+	await page.keyboard.press("Enter");
+	const banDialog = page.getByRole("dialog", { name: "禁用这名员工？" });
+	await expect(banDialog).toBeVisible();
+	const banWrite = await holdRequests(
+		page,
+		"PUT",
+		`/api/v2/admin/users/${userId}/disable`,
+	);
+	await banDialog
+		.getByRole("button", { name: "禁用员工", exact: true })
+		.focus();
+	await page.keyboard.press("Enter");
+	await expect(banDialog).toBeHidden();
+	await expect(ban).toHaveText("提交中…");
+	await expect(ban).toHaveAttribute("aria-disabled", "true");
+	expect(
+		await ban.evaluate((element) => (element as HTMLButtonElement).disabled),
+	).toBe(false);
+	await expectFocusHeld(usersHeading, [30, 150, 400, 1000], "禁用员工 进行中");
+	banWrite.release();
+	await expect(users.getByRole("status")).toContainText(
+		"禁用已确认；当前状态：已禁用",
+	);
+	await expectFocusSettled(usersHeading, "禁用员工");
+
+	// 应用凭证材料授权：「授权材料」完成后焦点留在按钮上；「撤销材料授权」完成后随状态禁用，
+	// 焦点交给「授权材料」（D2-59）。
+	const material = page.getByRole("region", { name: "应用凭证材料授权" });
+	await material.getByLabel("应用 ID", { exact: true }).fill("app-material");
+	await material
+		.getByLabel("接收主体 ID", { exact: true })
+		.fill("user-receiver");
+	await expect(material.getByText("当前授权：有效")).toBeVisible();
+	const grant = await pinElement(
+		material.getByRole("button", { name: "授权材料", exact: true }),
+		"material-grant",
+	);
+	const revoke = await pinElement(
+		material.getByRole("button", { name: "撤销材料授权", exact: true }),
+		"material-revoke",
+	);
+	const grantWrite = await holdRequests(
+		page,
+		"POST",
+		"/api/v2/applications/app-material/material-grant",
+	);
+	await grant.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusableBusy(grant, "授权材料");
+	grantWrite.release();
+	await expect(material.getByRole("status")).toContainText("材料授权已确认");
+	await expectFocusSettled(grant, "授权材料");
+
+	const revokeWrite = await holdRequests(
+		page,
+		"PATCH",
+		/\/material-grant\/user\/user-receiver$/,
+	);
+	await revoke.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusableBusy(revoke, "撤销材料授权");
+	revokeWrite.release();
+	await expect(material.getByRole("status")).toContainText("材料授权已撤销");
+	await expect(revoke).toBeDisabled();
+	await expectFocusSettled(grant, "撤销材料授权");
+	await expectNoDuplicateControls(page, "Agent 管理治理区（K7-02）");
+	await expectCleanPage(page, errors);
+});
+
+// #3242 K7-02：行内「停用」确认后弹窗关闭、焦点回到触发按钮；停用请求进行中它是可聚焦的禁用
+// （「停用中…」，aria-disabled），挂起期间多次采样焦点都在按钮上；受理后该行只剩「—」，焦点到 h1（D2-31）。
+test("row disable keeps focus on the pending trigger after confirmation, then on the heading (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const data = await fixture(page);
+	await page.goto("/admin/agents");
+	const row = page.getByRole("row", { name: /编程助手 2/ });
+	const disable = await pinElement(
+		row.getByRole("button", { name: "停用：编程助手 2", exact: true }),
+		"row-disable",
+	);
+	await disable.focus();
+	await page.keyboard.press("Enter");
+	const dialog = page.getByRole("dialog", { name: "停用 Agent？" });
+	await expect(dialog).toBeVisible();
+	data.holdCommands();
+	await dialog.getByRole("button", { name: "确认停用" }).focus();
+	await page.keyboard.press("Enter");
+	await expect(dialog).toBeHidden();
+	await expect(disable).toHaveAccessibleName("停用中…：编程助手 2");
+	await expectFocusableBusy(disable, "行内停用");
+	expect(data.commands).toHaveLength(1);
+	data.releaseCommands();
+	await expect(row.getByRole("button")).toHaveCount(0);
+	await expectFocusSettled(
+		page.getByRole("heading", { level: 1 }),
+		"行内停用受理",
+	);
+	expect(data.commands).toHaveLength(1);
+	await expectNoDuplicateControls(page, "Agent 管理（行内停用，K7-02）");
 	await expectCleanPage(page, errors);
 });

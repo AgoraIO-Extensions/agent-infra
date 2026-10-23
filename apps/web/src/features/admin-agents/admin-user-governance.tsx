@@ -143,9 +143,12 @@ export function AdminUserGovernance() {
 				<ConfirmDialog
 					disabled={busy || status === "loading" || !userId}
 					trigger={
+						// 提交进行中是可聚焦的禁用（aria-disabled），与「解除禁用」一致；确认后焦点在「员工访问控制」
+						// 标题上（#3242 K7-02）。
 						<Button
 							ref={disableTrigger}
 							variant="outline"
+							focusableWhenDisabled={busy}
 							aria-label={withObjectName(
 								busy ? "提交中…" : "禁用员工",
 								userName,
@@ -179,8 +182,10 @@ export function AdminUserGovernance() {
 						void updateDisabled(true);
 					}}
 				/>
+				{/* 提交进行中是可聚焦的禁用（aria-disabled），焦点留在「解除禁用」上（#3242 K7-02）。 */}
 				<Button
 					disabled={busy || status === "loading" || !userId}
+					focusableWhenDisabled={busy}
 					onClick={() => void updateDisabled(false)}
 					variant="outline"
 				>

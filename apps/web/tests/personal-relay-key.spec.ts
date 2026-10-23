@@ -1,5 +1,13 @@
 import { PersonalRelayKeyStateV1Schema } from "@agent-infra/contracts/pilot";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, type TestInfo, test } from "@playwright/test";
+import {
+	expectFocusableBusy,
+	expectFocusSettled,
+	expectNoDuplicateControls,
+	holdRequests,
+	pinElement,
+} from "./page-health";
+import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
 // 个人 Relay Key 页（R-01、RK-01、RK-02 与防回归 NI-39、NI-78）。
 const syntheticKey = "synthetic-relay-key-0123456789";
@@ -262,4 +270,81 @@ test("stays within narrow viewports with stacked cards", async ({
 		const firstButton = await buttons.first().boundingBox();
 		expect((firstButton?.x ?? 0) - (formBox?.x ?? 0)).toBeLessThanOrEqual(22);
 	}
+});
+
+// #3242 K7-02：保存与撤销进行中按钮是可聚焦的禁用（aria-disabled），键盘 Enter 后挂起期间多次采样
+// 焦点都在按钮上；保存后到「替换 Key」，撤销后到 Relay Key 输入框（D2-59、H4-27），写入失败后焦点
+// 仍在按钮上，不落到 body。
+async function acceptanceViewport(page: Page, info: TestInfo) {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+}
+
+test("saving and revoking keep focus on the pending button and then follow D2-59 (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page, { initial: null });
+	await page.goto("/my-settings/relay-key");
+	const input = page.getByLabel("Relay Key", { exact: true });
+	await expect(input).toBeEnabled();
+	await input.fill(syntheticKey);
+	const save = await pinElement(
+		page.getByRole("button", { name: "保存 Key", exact: true }),
+		"save-key",
+	);
+	const saving = await holdRequests(page, "PUT", "/api/v2/me/relay-key");
+	await save.focus();
+	await page.keyboard.press("Enter");
+	await expect(save).toHaveText("保存中…");
+	await expectFocusableBusy(save, "保存 Key");
+	saving.release();
+	await expect(save).toHaveText("替换 Key");
+	await expectFocusSettled(save, "保存 Key");
+
+	const revoke = await pinElement(
+		page.getByRole("button", { name: "撤销 Key", exact: true }),
+		"revoke-key",
+	);
+	const revoking = await holdRequests(page, "DELETE", "/api/v2/me/relay-key");
+	await revoke.focus();
+	await page.keyboard.press("Enter");
+	await expect(revoke).toHaveText("撤销中…");
+	await expectFocusableBusy(revoke, "撤销 Key");
+	revoking.release();
+	await expect(revoke).toHaveCount(0);
+	await expectFocusSettled(input, "撤销 Key");
+	await expectNoDuplicateControls(page, "个人 Relay Key（K7-02）");
+	await expectCleanPage(page, errors);
+});
+
+test("a failed save keeps focus on the disabled button instead of body (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page, { writeStatus: 503 });
+	await page.goto("/my-settings/relay-key");
+	const input = page.getByLabel("Relay Key", { exact: true });
+	await expect(input).toBeEnabled();
+	await input.fill(syntheticKey);
+	const save = await pinElement(
+		page.getByRole("button", { name: "替换 Key", exact: true }),
+		"replace-key",
+	);
+	const saving = await holdRequests(page, "PUT", "/api/v2/me/relay-key");
+	await save.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusableBusy(save, "替换 Key");
+	saving.release();
+	await expect(page.getByRole("alert")).toBeVisible();
+	// 失败后表单保持禁用（需重新读取状态），按钮仍是可聚焦的禁用，焦点留在按钮上。
+	await expect(input).toBeDisabled();
+	await expect(save).toHaveAttribute("aria-disabled", "true");
+	await expectFocusSettled(save, "替换 Key 失败");
+	await expectCleanPage(page, errors);
 });

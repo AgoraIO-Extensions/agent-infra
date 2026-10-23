@@ -134,10 +134,13 @@ function RetryCreationButton({
 	if (accepted) return null;
 	const label = submitting ? "重试中…" : "重试";
 	return (
+		// 提交进行中是可聚焦的禁用（aria-disabled），焦点留在「重试」上（#3242 K7-02）；
+		// 受理后「重试」消失，焦点交给同行的「配置」。
 		<Button
 			ref={button}
 			variant="outline"
 			disabled={submitting || lifecycle.isPending}
+			focusableWhenDisabled={submitting}
 			aria-label={withObjectName(label, agent.name)}
 			onClick={() => {
 				if (submitting || lifecycle.isPending) return;
@@ -189,9 +192,11 @@ function DisableAgentButton({
 			disabled={submitting || lifecycle.isPending}
 			trigger={
 				// 与配置页管理员区相同：outline + Ban 图标，与 Owner 的「停止」区分（N-01）。
+				// 停用进行中是可聚焦的禁用：确认弹窗关闭后焦点回到这里，不落到 body（#3242 K7-02）。
 				<Button
 					ref={button}
 					variant="outline"
+					focusableWhenDisabled={submitting}
 					aria-label={withObjectName(label, agent.name)}
 				>
 					<Ban aria-hidden="true" />

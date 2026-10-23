@@ -260,7 +260,9 @@ describe("MyAgentApplicationDetailScreen", () => {
 			/>,
 		);
 		const button = screen.getByRole("button", { name: "正在撤回…" });
-		expect(button.hasAttribute("disabled")).toBe(true);
+		// #3242 K7-02：撤回进行中是可聚焦的禁用（aria-disabled），不再是原生 disabled；点击仍不打开确认。
+		expect(button.getAttribute("aria-disabled")).toBe("true");
+		expect(button.hasAttribute("disabled")).toBe(false);
 		fireEvent.click(button);
 		expect(screen.queryByRole("dialog")).toBeNull();
 		expect(onWithdraw).not.toHaveBeenCalled();
@@ -281,7 +283,9 @@ describe("MyAgentApplicationDetailScreen", () => {
 
 		expect(onWithdraw).toHaveBeenCalledOnce();
 		const withdraw = screen.getByRole("button", { name: "正在撤回…" });
-		expect(withdraw.hasAttribute("disabled")).toBe(true);
+		// #3242 K7-02：同上，可聚焦的禁用；再次点击不会重复撤回。
+		expect(withdraw.getAttribute("aria-disabled")).toBe("true");
+		expect(withdraw.hasAttribute("disabled")).toBe(false);
 		fireEvent.click(withdraw);
 		expect(onWithdraw).toHaveBeenCalledOnce();
 	});

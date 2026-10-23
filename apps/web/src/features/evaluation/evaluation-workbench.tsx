@@ -80,7 +80,13 @@ export function EvaluationWorkbench() {
 						))}
 					</TabsList>
 					{sections.map((item) => (
-						<TabsContent key={item.id} value={item.id}>
+						// 面板只包一张 14px 圆角的虚线空态：面板取同一圆角，键盘焦点环沿空态外框，
+						// 不在圆角外露出直角（#3242 K7-04，同 Skill 详情 tabpanel）。
+						<TabsContent
+							key={item.id}
+							value={item.id}
+							className="rounded-[14px]"
+						>
 							{/* 设计 eval-feedback-empty：标题、说明与操作直接作为空态的网格行（X-16）。 */}
 							<Empty>
 								<EmptyTitle>{item.emptyTitle}</EmptyTitle>

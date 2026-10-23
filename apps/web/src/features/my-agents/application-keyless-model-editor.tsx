@@ -59,8 +59,10 @@ export function ApplicationKeylessModelEditor({
 						type="password"
 						value={keyCheck.key}
 					/>
+					{/* 检查进行中是可聚焦的禁用（aria-disabled），焦点留在按钮上（#3242 K7-02）。 */}
 					<Button
 						disabled={disabled || keyCheck.checking || !keyCheck.typed}
+						focusableWhenDisabled={keyCheck.checking}
 						onClick={() => void keyCheck.runCheck()}
 						type="button"
 						variant="outline"

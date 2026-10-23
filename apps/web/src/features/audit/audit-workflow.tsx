@@ -45,6 +45,7 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { Timestamp } from "@/components/ui/timestamp";
+import { pageRecoveryTarget } from "@/hooks/use-recovery-focus";
 import { withObjectName } from "@/lib/accessible-name";
 import { formatTimestamp } from "@/lib/format-time";
 import { useApplicationSession } from "../application-shell.js";
@@ -160,6 +161,25 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 	const detailReading =
 		query.detailStatus === "loading" || query.isDetailFetching || busy;
 	const items = busy || formFailure ? [] : query.items;
+	// 「上一页」「下一页」读取中是可聚焦的禁用（#3242 K7-02）；读完后触发的按钮因到了首页或末页而
+	// 禁用时，焦点交给另一个分页按钮，两个都不可用时到页面 h1（D2-59），不落到 body。
+	const previousPageButton = useRef<HTMLButtonElement>(null);
+	const nextPageButton = useRef<HTMLButtonElement>(null);
+	const pageTrigger = useRef<"previous" | "next" | null>(null);
+	useEffect(() => {
+		const trigger = pageTrigger.current;
+		if (busy || !trigger) return;
+		pageTrigger.current = null;
+		const own = (trigger === "previous" ? previousPageButton : nextPageButton)
+			.current;
+		const other = (trigger === "previous" ? nextPageButton : previousPageButton)
+			.current;
+		const active = document.activeElement;
+		if (active && active !== document.body && active !== own) return;
+		if (own && !own.disabled) return;
+		if (other && !other.disabled) other.focus();
+		else pageRecoveryTarget()?.focus();
+	}, [busy]);
 	const administrator = scope === "administrator";
 	// 列表与详情中的用户主体合并读取一次目录；后台组件与应用主体不是目录记录。
 	const userNames = useDirectoryNames(
@@ -394,15 +414,17 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					</Button>
 					{/* 设计 .tag-row：「重置」「查询」间距 6px（C2-06）。 */}
 					<div className="tag-row">
+						{/* 读取中是可聚焦的禁用（aria-disabled），焦点留在「重置」「查询」上（#3242 K7-02）。 */}
 						<Button
 							type="button"
 							variant="outline"
 							onClick={reset}
 							disabled={busy}
+							focusableWhenDisabled
 						>
 							重置
 						</Button>
-						<Button type="submit" disabled={busy}>
+						<Button type="submit" disabled={busy} focusableWhenDisabled>
 							<Search aria-hidden="true" />
 							查询
 						</Button>
@@ -539,9 +561,12 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					)}
 					<div className="tag-row">
 						<Button
+							ref={previousPageButton}
 							variant="outline"
 							disabled={busy || formFailure !== null || !query.canPreviousPage}
+							focusableWhenDisabled={busy}
 							onClick={() => {
+								pageTrigger.current = "previous";
 								setAuditId(null);
 								query.previousPage();
 							}}
@@ -550,9 +575,12 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 							上一页
 						</Button>
 						<Button
+							ref={nextPageButton}
 							variant="outline"
 							disabled={busy || formFailure !== null || !query.hasNextPage}
+							focusableWhenDisabled={busy}
 							onClick={() => {
+								pageTrigger.current = "next";
 								setAuditId(null);
 								query.nextPage();
 							}}

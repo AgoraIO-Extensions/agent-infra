@@ -3,6 +3,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
+import { useSubmitFocus } from "@/hooks/use-submit-focus";
 
 import type {
 	AgentApiLifecycleAcceptedResponseV1,
@@ -83,7 +84,10 @@ type AgentConfigurationScreenProps = {
 	deploymentModelCandidates?: readonly KeylessModelCandidate[];
 	/** 端点 ID → 部署目录显示名（RK2-01）。 */
 	endpointNames?: KeylessEndpointNames;
-	/** 页脚保存按钮之后的操作（重启 Agent、重试创建）。 */
+	/**
+	 * 页脚保存按钮之后的操作（重启 Agent、重试创建）。页脚不在整页 fieldset 内，保存进行中由
+	 * 调用方自行禁用（ConfigurationFooterLifecycleActions 的 disabled）。
+	 */
 	footerActions?: ReactNode;
 	/** 页脚操作的反馈（例如生命周期命令失败）。 */
 	footerFeedback?: ReactNode;
@@ -232,6 +236,8 @@ export function AgentConfigurationScreen({
 	// 保存成功后按新投影重建选择器。
 	const [resetCount, setResetCount] = useState(0);
 	const [focusUnchangedHint, setFocusUnchangedHint] = useState(false);
+	const fieldsetRef = useRef<HTMLFieldSetElement>(null);
+	const saveRef = useRef<HTMLButtonElement>(null);
 	const submittedResult =
 		commandResult?.agentId === agent.agentId ? commandResult : undefined;
 	const handledResult = useRef(submittedResult);
@@ -257,7 +263,10 @@ export function AgentConfigurationScreen({
 	const isDisabled = submitting || agent.managementStatus === "disabled";
 	const hasChanges = isOwner && agentConfigurationDraftChanged(agent, draft);
 
-	// 保存期间按钮被禁用、焦点会离开；完成后落到「没有需要保存的变更」，不落在 body。
+	// 保存期间「保存配置」是可聚焦的禁用，焦点留在按钮上；在字段里按 Enter 提交时先交给按钮
+	// （字段随 fieldset 禁用）。保存成功后按钮因没有变更而禁用，焦点落到「没有需要保存的变更。」
+	// （D2-59、#3242 K7-02）；保存失败时按钮恢复可用，焦点仍在按钮上。
+	useSubmitFocus(submitting, fieldsetRef, saveRef);
 	useEffect(() => {
 		if (!focusUnchangedHint || submitting) return;
 		setFocusUnchangedHint(false);
@@ -365,7 +374,11 @@ export function AgentConfigurationScreen({
 						submitConfiguration();
 					}}
 				>
+					{/* 「镜像升级」与页脚在 fieldset 之外：保存或升级进行中，其余字段由 fieldset 禁用，
+					    触发按钮仍可聚焦（aria-disabled），焦点不落到 body（#3242 K7-02）。两者各自接收
+					    isDisabled，已停用的 Agent 仍整页禁用。 */}
 					<fieldset
+						ref={fieldsetRef}
 						disabled={isDisabled}
 						className="min-w-0"
 						aria-label="Agent 配置"
@@ -466,61 +479,63 @@ export function AgentConfigurationScreen({
 							}}
 							onReplaceSecret={onReplaceSecret}
 						/>
-						{agent.source.kind === "custom" ? (
-							<ConfigurationImageSection
-								agent={agent}
-								disabled={isDisabled}
-								onUpgradeImage={onUpgradeImage}
-								submitting={submitting}
-							/>
-						) : null}
-						<div className="form-footer configuration-form-footer">
-							{failure ? (
-								<Alert tone="danger" role="alert">
-									<AlertDescription>{failure.text}</AlertDescription>
-									{failure.reload && onReloadSavedRelayKey ? (
-										<AlertAction>
-											<Button
-												type="button"
-												variant="outline"
-												onClick={onReloadSavedRelayKey}
-											>
-												<RefreshCw
-													aria-hidden="true"
-													data-icon="inline-start"
-												/>
-												重新读取可用模型
-											</Button>
-										</AlertAction>
-									) : null}
-								</Alert>
-							) : null}
-							{hasChanges || isDisabled ? null : (
-								// 设计 .form-footer 左侧状态为 .field-help：11px、--muted-ink（W-23）。
-								<p
-									className="text-(--muted-ink) text-[11px] outline-none"
-									id="agent-configuration-unchanged"
-									tabIndex={-1}
-								>
-									没有需要保存的变更。
-								</p>
-							)}
-							<div className="configuration-footer-actions">
-								<Button
-									aria-describedby={
-										hasChanges ? undefined : "agent-configuration-unchanged"
-									}
-									disabled={isDisabled || !hasChanges}
-									type="submit"
-								>
-									<CheckIcon aria-hidden="true" data-icon="inline-start" />
-									{submitting ? "保存中…" : "保存配置"}
-								</Button>
-								{footerActions}
-							</div>
-							{footerFeedback}
-						</div>
 					</fieldset>
+					{agent.source.kind === "custom" ? (
+						<ConfigurationImageSection
+							agent={agent}
+							disabled={isDisabled}
+							onUpgradeImage={onUpgradeImage}
+							submitting={submitting}
+						/>
+					) : null}
+					<div className="form-footer configuration-form-footer">
+						{failure ? (
+							<Alert tone="danger" role="alert">
+								<AlertDescription>{failure.text}</AlertDescription>
+								{failure.reload && onReloadSavedRelayKey ? (
+									<AlertAction>
+										<Button
+											type="button"
+											variant="outline"
+											// 页脚在 fieldset 之外：保存进行中或 Agent 已停用时同样禁用。
+											disabled={isDisabled}
+											onClick={onReloadSavedRelayKey}
+										>
+											<RefreshCw aria-hidden="true" data-icon="inline-start" />
+											重新读取可用模型
+										</Button>
+									</AlertAction>
+								) : null}
+							</Alert>
+						) : null}
+						{hasChanges || isDisabled ? null : (
+							// 设计 .form-footer 左侧状态为 .field-help：11px、--muted-ink（W-23）。
+							<p
+								className="text-(--muted-ink) text-[11px] outline-none"
+								id="agent-configuration-unchanged"
+								tabIndex={-1}
+							>
+								没有需要保存的变更。
+							</p>
+						)}
+						<div className="configuration-footer-actions">
+							<Button
+								ref={saveRef}
+								aria-describedby={
+									hasChanges ? undefined : "agent-configuration-unchanged"
+								}
+								disabled={isDisabled || !hasChanges}
+								// 只有保存进行中是可聚焦的禁用；没有变更或 Agent 已停用时仍为原生禁用。
+								focusableWhenDisabled={submitting}
+								type="submit"
+							>
+								<CheckIcon aria-hidden="true" data-icon="inline-start" />
+								{submitting ? "保存中…" : "保存配置"}
+							</Button>
+							{footerActions}
+						</div>
+						{footerFeedback}
+					</div>
 				</form>
 			</div>
 			{afterForm}

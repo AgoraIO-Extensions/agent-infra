@@ -242,10 +242,13 @@ function InstallationRow({
 						查看
 					</Link>
 				) : null}
+				{/* 本行移出进行中是可聚焦的禁用（aria-disabled），焦点留在按钮上；成功后到「已安装」，
+				    失败时仍在按钮上（#3242 K7-02）。其余行在此期间为原生禁用。 */}
 				<Button
 					type="button"
 					variant="ghost"
 					disabled={disabled}
+					focusableWhenDisabled={removing}
 					onClick={onRemove}
 					aria-label={withObjectName(
 						removing ? "正在移出" : "移出我的库",

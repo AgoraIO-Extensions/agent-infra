@@ -98,14 +98,19 @@ export function ApplicationManagementScreen({
 	const [name, setName] = useState("");
 	const [applicationId, setApplicationId] = useState("");
 	const focusTitleAfterDisable = useRef(false);
+	// 注册进行中「注册应用」是可聚焦的禁用（#3242 K7-02）；注册成功后表单随状态切换卸载，
+	// 焦点交给新应用详情的应用名标题（D2-59），不落到 body。
+	const focusTitleAfterRegister = useRef(false);
 
 	async function submitRegistration(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!onRegister || !name.trim()) return;
+		if (!onRegister || !name.trim() || isRegistering) return;
 		try {
+			focusTitleAfterRegister.current = true;
 			await onRegister(name.trim());
 			setName("");
 		} catch {
+			focusTitleAfterRegister.current = false;
 			// The owner renders mutation errors through actionError.
 		}
 	}
@@ -218,6 +223,7 @@ export function ApplicationManagementScreen({
 					<Button
 						type="submit"
 						disabled={!onRegister || !name.trim() || isRegistering}
+						focusableWhenDisabled={isRegistering}
 					>
 						{isRegistering ? "正在注册…" : "注册应用"}
 					</Button>
@@ -248,6 +254,11 @@ export function ApplicationManagementScreen({
 						focusTitleAfterDisable.current = false;
 						return pendingFocus;
 					}}
+					consumeRegisteredFocus={() => {
+						const pendingFocus = focusTitleAfterRegister.current;
+						focusTitleAfterRegister.current = false;
+						return pendingFocus;
+					}}
 					isDisabling={isDisabling}
 					onIssueCredential={onIssueCredential}
 					isIssuingCredential={isIssuingCredential}
@@ -262,6 +273,8 @@ type ApplicationDetailsProps = {
 	onDisable?: (applicationId: string) => Promise<ApplicationMetadataV1>;
 	// 停用成功后详情会按新状态重新挂载，由它把焦点放回应用名标题。
 	consumeTitleFocus?: () => boolean;
+	// 注册成功后新应用的详情挂载，同样把焦点放到应用名标题。
+	consumeRegisteredFocus?: () => boolean;
 	isDisabling: boolean;
 	onIssueCredential?: ApplicationManagementScreenProps["onIssueCredential"];
 	isIssuingCredential: boolean;
@@ -272,10 +285,13 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 	const id = useId();
 	const disabled = application.status === "disabled";
 	const title = useRef<HTMLHeadingElement>(null);
-	const { consumeTitleFocus } = props;
+	const { consumeRegisteredFocus, consumeTitleFocus } = props;
 	useEffect(() => {
 		if (disabled && consumeTitleFocus?.()) title.current?.focus();
 	}, [consumeTitleFocus, disabled]);
+	useEffect(() => {
+		if (consumeRegisteredFocus?.()) title.current?.focus();
+	}, [consumeRegisteredFocus]);
 	const active = useRef(false);
 	const pending = useRef(false);
 	const [recipientType, setRecipientType] = useState<"user" | "application">(

@@ -1,9 +1,17 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef } from "react";
+import {
+	type RefObject,
+	useEffect,
+	useId,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+} from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { LoadingLine } from "@/components/ui/spinner";
 import { useToast } from "@/components/ui/toast";
+import { listLinks, useLoadMoreFocus } from "@/hooks/use-load-more-focus";
 import { Button } from "../../components/ui/button.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { RecoveryButton } from "../recovery-button.js";
@@ -40,6 +48,9 @@ export function PersonalHistory({
 	useLayoutEffect(() => {
 		if (history.status === "denied") onDenied();
 	}, [history.status, onDenied]);
+	const list = useRef<HTMLUListElement>(null);
+	// 「加载更多」读取中可聚焦，读完没有更多时焦点移到新加载的第一条（#3242 K7-02）。
+	const armLoadMore = useLoadMoreFocus(history.isFetching, listLinks(list));
 	return (
 		<section aria-label="个人历史" className="min-w-0 space-y-3">
 			<ConversationHistoryHeading
@@ -57,7 +68,7 @@ export function PersonalHistory({
 					<EmptyDescription>暂无 Web 会话。</EmptyDescription>
 				</Empty>
 			)}
-			<ul className="conversation-history-list">
+			<ul ref={list} className="conversation-history-list">
 				{history.items.map((item) => (
 					<li key={item.conversationId}>
 						<ConversationHistoryLink
@@ -88,7 +99,11 @@ export function PersonalHistory({
 				<Button
 					variant="outline"
 					disabled={history.isFetching}
-					onClick={() => void history.loadMore()}
+					focusableWhenDisabled
+					onClick={() => {
+						armLoadMore();
+						void history.loadMore();
+					}}
 				>
 					加载更多
 				</Button>
@@ -152,8 +167,11 @@ export type CreateConversation = ReturnType<typeof useCreateConversation>;
 /** 创建结果的反馈：受理中、待核实与被拒绝只在这里说明一次。 */
 export function CreateConversationNotice({
 	creation,
+	retryFocus,
 }: {
 	creation: CreateConversation;
+	/** 「核实原请求」「重试原请求」随提交开始卸载时接过焦点的控件（页头「新会话」）。 */
+	retryFocus?: RefObject<HTMLElement | null>;
 }) {
 	const { command } = creation;
 	return (
@@ -162,7 +180,15 @@ export function CreateConversationNotice({
 			result={command.result}
 			pending={command.isPending}
 			denial={creation.denial}
-			retry={command.canRetry ? () => command.retry() : undefined}
+			retry={
+				command.canRetry
+					? () => {
+							// 先交出焦点再提交，焦点不随按钮卸载落到 body（#3242 K7-02）。
+							retryFocus?.current?.focus();
+							command.retry();
+						}
+					: undefined
+			}
 		/>
 	);
 }
@@ -212,7 +238,8 @@ export function NewConversationComposer({
 	const agentTransitioning =
 		agent.serviceAvailability === "starting" ||
 		agent.serviceAvailability === "updating";
-	const draftDisabled = creation.busy || (!available && !agentTransitioning);
+	// 创建进行中输入框只读而不是禁用（见 ConversationComposer 的 draftBusy，#3242 K7-02）。
+	const draftLocked = !available && !agentTransitioning;
 	// 平台适配的自定义 Agent 由 Runtime 提供模型列表，需要会话才能读取；这里只给标准模板。
 	const customPlatformAdapter =
 		agent.source.kind === "custom" &&
@@ -233,7 +260,8 @@ export function NewConversationComposer({
 				composerId={composerId}
 				textarea={textarea}
 				draft={draft}
-				draftDisabled={draftDisabled}
+				draftDisabled={draftLocked}
+				draftBusy={creation.busy && !draftLocked}
 				submitReady={
 					available && !creation.busy && creation.denial !== "verifying"
 				}

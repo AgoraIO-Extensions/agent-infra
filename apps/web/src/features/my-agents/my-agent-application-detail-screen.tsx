@@ -238,7 +238,13 @@ export function MyAgentApplicationDetailScreen({
 								}
 								disabled={withdrawalPending}
 								trigger={
-									<Button variant="outline" ref={withdrawButtonRef}>
+									// 撤回进行中是可聚焦的禁用：确认弹窗关闭后焦点回到这里，不落到 body；
+									// 撤回后焦点到 h1（H4-15、#3242 K7-02）。
+									<Button
+										variant="outline"
+										ref={withdrawButtonRef}
+										focusableWhenDisabled={withdrawalPending}
+									>
 										{withdrawalPending ? "正在撤回…" : "撤回申请"}
 									</Button>
 								}

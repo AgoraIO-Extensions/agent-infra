@@ -21,6 +21,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { useSubmitFocus } from "@/hooks/use-submit-focus";
 import { withObjectName } from "@/lib/accessible-name";
 import { cjkSpaced } from "@/lib/cjk-spacing";
 import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
@@ -662,6 +663,12 @@ function DraftRows<T extends string>({
 
 export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const formRef = useRef<HTMLFormElement>(null);
+	const fieldsetRef = useRef<HTMLFieldSetElement>(null);
+	const submitRef = useRef<HTMLButtonElement>(null);
+	// 提交进行中「提交审批」「修改申请」「修改并重新提交」是可聚焦的禁用；在字段里按 Enter 提交时
+	// 先把焦点交给它（字段随 fieldset 禁用），受理后结果页聚焦「申请已提交：待审批。」（H4-13、
+	// D2-59、#3242 K7-02）。
+	useSubmitFocus(props.submitting, fieldsetRef, submitRef);
 	const [focusRequest, setFocusRequest] = useState(0);
 	const focusStateRef = useRef<{
 		focusRequest: number;
@@ -1465,7 +1472,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					{serverFormError}
 				</p>
 			) : null}
+			{/* 页脚在 fieldset 之外：提交进行中字段由 fieldset 禁用，提交按钮仍可聚焦（aria-disabled），
+			    焦点不落到 body（#3242 K7-02）。 */}
 			<fieldset
+				ref={fieldsetRef}
 				disabled={props.submitting}
 				className="application-form-fields min-w-0"
 				aria-label="Agent 申请"
@@ -2025,23 +2035,28 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						</FormSection>
 					</div>
 				</section>
-				<div className="form-footer">
-					{props.cancelAction}
-					<div className="form-footer-actions">
-						<Button disabled={props.submitting} type="submit">
-							{props.submitting
-								? "正在提交…"
-								: props.mode === "update"
-									? agentApplicationEditActionLabels[props.action]
-									: "提交审批"}
-							{/* 设计 .form-footer 主按钮「提交审批 →」：16px 箭头在文字后（M-10）。 */}
-							{props.submitting ? null : (
-								<ArrowRightIcon aria-hidden="true" data-icon="inline-end" />
-							)}
-						</Button>
-					</div>
-				</div>
 			</fieldset>
+			<div className="form-footer">
+				{props.cancelAction}
+				<div className="form-footer-actions">
+					<Button
+						ref={submitRef}
+						disabled={props.submitting}
+						focusableWhenDisabled
+						type="submit"
+					>
+						{props.submitting
+							? "正在提交…"
+							: props.mode === "update"
+								? agentApplicationEditActionLabels[props.action]
+								: "提交审批"}
+						{/* 设计 .form-footer 主按钮「提交审批 →」：16px 箭头在文字后（M-10）。 */}
+						{props.submitting ? null : (
+							<ArrowRightIcon aria-hidden="true" data-icon="inline-end" />
+						)}
+					</Button>
+				</div>
+			</div>
 		</form>
 	);
 }

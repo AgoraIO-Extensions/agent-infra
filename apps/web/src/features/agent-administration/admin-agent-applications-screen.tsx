@@ -399,8 +399,11 @@ function ApplicationReview({
 							>
 								驳回并说明
 							</Button>
+							{/* 审批提交中「批准申请」「确认驳回」是可聚焦的禁用（aria-disabled），焦点留在弹窗内的
+							    按钮上，不落到 body（#3242 K7-02）。 */}
 							<Button
 								disabled={decisionSubmitting || resolved}
+								focusableWhenDisabled={decisionSubmitting}
 								onClick={() => {
 									if (!decisionSubmitting && !resolved) {
 										setLocalDecisionPending(true);
@@ -470,7 +473,11 @@ function ApplicationReview({
 							>
 								取消
 							</Button>
-							<Button disabled={decisionSubmitting || resolved} type="submit">
+							<Button
+								disabled={decisionSubmitting || resolved}
+								focusableWhenDisabled={decisionSubmitting}
+								type="submit"
+							>
 								{currentDecision?.decision === "reject"
 									? "提交中…"
 									: "确认驳回"}

@@ -2089,10 +2089,13 @@ describe("functional conversation screen", () => {
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
 		const verify = await screen.findByRole("button", { name: "核实原请求" });
 		expect(input.value).toBe("one operation");
-		expect(
-			(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
-				.disabled,
-		).toBe(true);
+		// #3242 K7-02：提交结果未确认期间发送按钮是可聚焦的禁用（aria-disabled），不再是原生 disabled；
+		// 下方断言 POST 仍只有一次。
+		const send = screen.getByRole("button", {
+			name: "发送",
+		}) as HTMLButtonElement;
+		expect(send.getAttribute("aria-disabled")).toBe("true");
+		expect(send.disabled).toBe(false);
 		act(() => streams.at(-1)?.disconnect());
 		// The read reconnects by itself and never repeats the command (#1606).
 		await waitFor(() => expect(streams.length).toBe(2), { timeout: 3_000 });
@@ -3704,8 +3707,11 @@ describe("session context, command feedback and reply cards (design alignment)",
 			"alert",
 		);
 		expect(screen.getByRole("button", { name: "核实原请求" })).toBeTruthy();
-		// 输入框被锁时读屏仍能读到原因。
-		expect(input.disabled).toBe(true);
+		// 输入框被锁时读屏仍能读到原因。#3242 K7-02：提交未确认期间输入框只读并标为 aria-disabled，
+		// 不再是原生 disabled（焦点不落到 body）。
+		expect(input.readOnly).toBe(true);
+		expect(input.getAttribute("aria-disabled")).toBe("true");
+		expect(input.disabled).toBe(false);
 		expect(input.getAttribute("aria-describedby")).toBe(unknown.id);
 	});
 

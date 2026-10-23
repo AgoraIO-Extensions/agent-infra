@@ -122,8 +122,13 @@ export function WecomBotSetup({
 		undefined,
 	);
 	const titleRef = useRef<HTMLHeadingElement>(null);
+	const submitRef = useRef<HTMLButtonElement>(null);
 	const qrTriggerRef = useRef<HTMLButtonElement>(null);
 	const qrConfirmRef = useRef<HTMLButtonElement>(null);
+	// 手动「验证并绑定」或「取消配置」结束后把焦点交给卡片标题（见下方 effect）。
+	const handOffToTitle = useRef(false);
+	// 「打开扫码窗口」未完成、面板随之收起时把焦点交还「扫码授权」。
+	const handOffToQrTrigger = useRef(false);
 	// 扫码结果只放在内存里等待 Owner 确认，不进入 React 状态；提交、取消或卸载时清空 Secret。
 	const qrResult = useRef<WecomQrAuthorizationResultV1 | undefined>(undefined);
 	const discardQrResult = useCallback(() => {
@@ -200,6 +205,23 @@ export function WecomBotSetup({
 	useEffect(() => {
 		if (qr.phase === "confirming") qrConfirmRef.current?.focus();
 	}, [qr.phase]);
+	// 验证期间「验证并绑定」是可聚焦的禁用，焦点一直在按钮上；验证结束（已连接、验证失败或凭证
+	// 被拒绝）或「取消配置」受理、按钮随之卸载后，焦点交给卡片标题，与扫码确认、解绑一致
+	// （D2-59、#3242 K7-03）。用户已把焦点移到别处时不抢。
+	useEffect(() => {
+		if (busy || !handOffToTitle.current) return;
+		handOffToTitle.current = false;
+		const active = document.activeElement;
+		if (!active || active === document.body || active === submitRef.current)
+			titleRef.current?.focus();
+	}, [busy]);
+	// 「等待扫码…」期间按钮保持可聚焦；扫码未完成（窗口关闭、超时）面板收起后焦点回到「扫码授权」。
+	useEffect(() => {
+		if (qr.phase !== "closed" || !handOffToQrTrigger.current) return;
+		handOffToQrTrigger.current = false;
+		const active = document.activeElement;
+		if (!active || active === document.body) qrTriggerRef.current?.focus();
+	}, [qr.phase]);
 	async function poll(attempt: number) {
 		if (attempt !== generation.current || !session.current) return;
 		try {
@@ -244,6 +266,7 @@ export function WecomBotSetup({
 		let credential = secret;
 		setSecret("");
 		setError("");
+		handOffToTitle.current = true;
 		setBusy(true);
 		refreshSequence.current++;
 		clearTimeout(connectionTimer.current);
@@ -425,6 +448,7 @@ export function WecomBotSetup({
 			if (session.current) await releaseQrSession(session.current);
 			if (attempt !== generation.current) return;
 			setBusy(false);
+			handOffToQrTrigger.current = true;
 			setQr({ phase: "closed" });
 			setError("扫码授权未完成，请重试或使用下方手动配置。");
 		} finally {
@@ -502,6 +526,8 @@ export function WecomBotSetup({
 			if (invalidate) generation.current++;
 			clearTimeout(timer.current);
 			session.current = undefined;
+			// 「取消配置」随验证结束卸载：焦点交给卡片标题（同验证结束）。
+			handOffToTitle.current = true;
 			setBusy(false);
 			setQr({ phase: "closed" });
 			setSecret("");
@@ -580,9 +606,12 @@ export function WecomBotSetup({
 			) : null}
 			<WecomUnbindFailure unbind={unbind} />
 			<div className="wecom-channel-actions">
+				{/* 验证期间是可聚焦的禁用（aria-disabled），焦点不落到 body（#3242 K7-03）。 */}
 				<Button
+					ref={submitRef}
 					type="button"
 					disabled={locked || qr.phase === "checking"}
+					focusableWhenDisabled={busy}
 					aria-label={withObjectName(submitLabel, setupTitle)}
 					onClick={() => {
 						void submit();
@@ -733,7 +762,9 @@ export function WecomBotSetup({
 								<Button
 									type="button"
 									variant="outline"
+									// 等待扫码期间保持可聚焦（aria-disabled），焦点不落到 body（#3242 K7-02）。
 									disabled={qr.phase === "authorizing"}
+									focusableWhenDisabled
 									onClick={() => {
 										if (qr.phase === "available") void authorizeQr(qr.started);
 									}}

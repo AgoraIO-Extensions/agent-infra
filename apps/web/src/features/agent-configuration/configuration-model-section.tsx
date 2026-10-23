@@ -6,13 +6,13 @@ import {
 	AlertDescription,
 	AlertTitle,
 } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FormSection } from "@/components/ui/form-section";
 import { Label } from "@/components/ui/label";
 import { LoadingLine } from "@/components/ui/spinner";
 import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
+import { RecoveryButton } from "../recovery-button.js";
 import {
 	type AgentConfigurationRequestError,
 	isRetryableConfigurationError,
@@ -198,17 +198,19 @@ export function ConfigurationModelSection({
 						</AlertDescription>
 						{retryable && onRetrySavedRelayKeyCandidates ? (
 							<AlertAction>
-								<Button
-									disabled={savedRelayKeyCandidatesLoading}
+								{/* 公共恢复按钮（#3242 K7-02）：读取中可聚焦；没有已读到的候选时重读会先回到
+								    读取中、失败提示随之收起，焦点交给 h1，仍失败时回到这里，不落到 body。 */}
+								<RecoveryButton
+									busy={savedRelayKeyCandidatesLoading}
 									onClick={onRetrySavedRelayKeyCandidates}
-									type="button"
+									recoveryKey="重新读取可用模型"
 									variant="outline"
 								>
 									<RefreshCw aria-hidden="true" data-icon="inline-start" />
 									{savedRelayKeyCandidatesLoading
 										? "正在重新读取…"
 										: "重新读取可用模型"}
-								</Button>
+								</RecoveryButton>
 							</AlertAction>
 						) : null}
 					</Alert>

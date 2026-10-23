@@ -237,6 +237,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 	const historyPanel = useRef<HTMLElement>(null);
 	const historyToggle = useRef<HTMLButtonElement>(null);
 	const heading = useRef<HTMLHeadingElement>(null);
+	const newConversationButton = useRef<HTMLButtonElement>(null);
 	const showHistory =
 		props.view === undefined ? internalHistory : props.view === "history";
 	const historyExpanded = showHistory || recentOpen;
@@ -450,8 +451,11 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 							{historyExpanded ? "返回对话" : "个人历史"}
 						</Button>
 						<Button
+							ref={newConversationButton}
 							variant="outline"
 							disabled={!available || selfManaged || creation.busy}
+							// 创建进行中是可聚焦的禁用，焦点留在「新会话」上（#3242 K7-02）。
+							focusableWhenDisabled={creation.busy}
 							onClick={() => startCreate(false)}
 						>
 							<Plus aria-hidden="true" />
@@ -468,7 +472,10 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 				/>
 			)}
 			{conversationId && !selfManaged && (
-				<CreateConversationNotice creation={creation} />
+				<CreateConversationNotice
+					creation={creation}
+					retryFocus={newConversationButton}
+				/>
 			)}
 			<div className="conversation-columns" data-history-open={historyExpanded}>
 				<div className="chat-workspace">

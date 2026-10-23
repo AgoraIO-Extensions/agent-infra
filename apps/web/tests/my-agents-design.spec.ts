@@ -22,7 +22,13 @@ import type {
 	AgentProjectionV2,
 	DeploymentConfigurationProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
-import { expectNoDuplicateControls } from "./page-health";
+import {
+	expectFocusableBusy,
+	expectFocusSettled,
+	expectNoDuplicateControls,
+	holdRequests,
+	pinElement,
+} from "./page-health";
 import {
 	computed,
 	expectCleanPage,
@@ -560,9 +566,12 @@ for (const expanded of [false, true]) {
 			await toggle.click();
 			await expect(toggle).toHaveAttribute("aria-expanded", "true");
 		}
-		// 分区的视觉顺序与 DOM 顺序一致，且不靠 CSS order。
+		// 分区的视觉顺序与 DOM 顺序一致，且不靠 CSS order。#3242 K7-02：页脚移到 fieldset 之后
+		// （提交进行中字段由 fieldset 禁用，提交按钮仍可聚焦），仍紧跟在高级配置之后。
 		const sections = await page
-			.locator(".application-form-fields > *")
+			.locator(
+				".application-form-fields > *, .application-form-fields + .form-footer",
+			)
 			.evaluateAll((children) =>
 				children.map((child) => ({
 					order: getComputedStyle(child).order,
@@ -1752,6 +1761,60 @@ test("checked Key candidates in an application edit have distinct level names (#
 		page,
 		"/my-agents/:id/edit（默认 Key 候选，#3206）",
 	);
+	await noHorizontalOverflow(page);
+});
+
+// #3242 K7-02：修改申请「检查可用模型」读取中是可聚焦的禁用（aria-disabled），键盘 Enter 后挂起期间
+// 多次采样焦点都在按钮上；候选出现后焦点仍在按钮上，不落到 body。
+test("checking a Key's available models keeps focus on the pending button (K7-02)", async ({
+	page,
+}, info) => {
+	await viewportFor(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await fixture(page, {
+		applications: [application({ agentId: "agent-pilot-1" })],
+		defaultRelayKeyCandidates: [
+			{
+				endpointId: "endpoint-primary",
+				modelId: "gpt-5",
+				displayName: "gpt-5",
+				reasoningLevels: ["medium", "high"],
+			},
+		],
+	});
+	await page.goto("/my-agents/application-browser-1/edit");
+	await page.getByRole("checkbox", { name: "修改模型配置" }).click();
+	await page
+		.getByLabel("Agent 默认 Relay Key", { exact: true })
+		.fill("synthetic-relay-key");
+	const check = await pinElement(
+		page.getByRole("button", { name: "检查可用模型" }),
+		"check-models",
+	);
+	const checking = await holdRequests(
+		page,
+		"POST",
+		/\/default-relay-key\/display-candidates$/,
+	);
+	await check.focus();
+	await page.keyboard.press("Enter");
+	await expect(check).toHaveText("正在检查…");
+	await expectFocusableBusy(check, "检查可用模型");
+	expect(checking.held()).toBe(1);
+	checking.release();
+	await expect(
+		page.getByRole("checkbox", {
+			name: "Primary endpoint · gpt-5",
+			exact: true,
+		}),
+	).toBeVisible();
+	await expect(check).toHaveText("检查可用模型");
+	await expectFocusSettled(check, "检查可用模型");
+	await expectNoDuplicateControls(
+		page,
+		"/my-agents/:id/edit（检查可用模型，K7-02）",
+	);
+	await expectCleanPage(page, pageErrors);
 	await noHorizontalOverflow(page);
 });
 

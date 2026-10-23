@@ -4,7 +4,13 @@ import {
 } from "@agent-infra/contracts/pilot";
 import { expect, type Page, test } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
-import { expectNoDuplicateControls } from "./page-health";
+import {
+	expectFocusableBusy,
+	expectFocusSettled,
+	expectNoDuplicateControls,
+	holdRequests,
+	pinElement,
+} from "./page-health";
 import { duplicateControlNames } from "./page-hygiene";
 import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
@@ -508,3 +514,52 @@ for (const mode of ["keyboard", "click"] as const)
 		await expectCleanPage(page, errors);
 		expect(await duplicateControlNames(page)).toEqual([]);
 	});
+
+// #3242 K7-02：「注册应用」进行中是可聚焦的禁用（aria-disabled），键盘 Enter 后挂起期间多次采样焦点
+// 都在按钮上；注册成功后注册表单随状态切换卸载，焦点到新应用详情的应用名标题（D2-59）。
+test("registering an application keeps focus on the pending button, then on the new application title (K7-02)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.route("**/api/v2/applications", (route) =>
+		route.request().method() === "POST"
+			? route.fulfill({
+					status: 201,
+					json: {
+						metadata: {
+							...application,
+							applicationId: "application-registered",
+							name: "Browser second service",
+						},
+						replayed: false,
+					},
+				})
+			: route.fallback(),
+	);
+	const registering = await holdRequests(page, "POST", "/api/v2/applications");
+	await page.goto("/my-settings/api-credentials");
+	await page
+		.getByLabel("应用名称", { exact: true })
+		.fill("Browser second service");
+	const register = await pinElement(
+		page.getByRole("button", { name: "注册应用", exact: true }),
+		"register-application",
+	);
+	await register.focus();
+	await page.keyboard.press("Enter");
+	await expect(register).toHaveText("正在注册…");
+	await expectFocusableBusy(register, "注册应用");
+	registering.release();
+	await expect(page).toHaveURL(/applicationId=application-registered/);
+	await expectFocusSettled(
+		page.getByRole("heading", { level: 3, name: "Browser second service" }),
+		"注册应用",
+	);
+	await expectCleanPage(page, errors);
+});

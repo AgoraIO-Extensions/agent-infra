@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -34,6 +34,23 @@ export function ApplicationMaterialGovernance() {
 	const [status, setStatus] = useState<MaterialStatus>();
 	const [busy, setBusy] = useState(false);
 	const [message, setMessage] = useState("");
+	const grantButton = useRef<HTMLButtonElement>(null);
+	const revokeButton = useRef<HTMLButtonElement>(null);
+	const [focusGrant, setFocusGrant] = useState(false);
+	// 提交进行中两个按钮都是可聚焦的禁用，焦点留在触发的按钮上（#3242 K7-02）。撤销结束后
+	// 「撤销材料授权」随状态不再有效而禁用，焦点交给「授权材料」（D2-59）；用户已移走焦点时不抢。
+	useEffect(() => {
+		if (!focusGrant || busy) return;
+		setFocusGrant(false);
+		const active = document.activeElement;
+		if (
+			(!active ||
+				active === document.body ||
+				active === revokeButton.current) &&
+			revokeButton.current?.disabled
+		)
+			grantButton.current?.focus();
+	}, [focusGrant, busy]);
 
 	useEffect(() => {
 		const application = applicationId.trim();
@@ -127,6 +144,7 @@ export function ApplicationMaterialGovernance() {
 			setStatus("unavailable");
 			setMessage("撤销未确认，请重新读取当前授权后重试。 ");
 		} finally {
+			setFocusGrant(true);
 			setBusy(false);
 		}
 	}
@@ -185,19 +203,23 @@ export function ApplicationMaterialGovernance() {
 			</p>
 			<div className="governance-actions">
 				<Button
+					ref={grantButton}
 					disabled={
 						busy ||
 						status === "loading" ||
 						!applicationId.trim() ||
 						!principalId.trim()
 					}
+					focusableWhenDisabled={busy}
 					onClick={() => void grant()}
 				>
 					授权材料
 				</Button>
 				<Button
+					ref={revokeButton}
 					variant="outline"
 					disabled={busy || status !== "active"}
+					focusableWhenDisabled={busy}
 					onClick={() => void revoke()}
 				>
 					撤销材料授权

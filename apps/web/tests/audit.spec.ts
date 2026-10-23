@@ -5,10 +5,23 @@ import {
 	ScopedPlatformAuditProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import {
+	expect,
+	type Locator,
+	type Page,
+	type TestInfo,
+	test,
+} from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import { captureDesignContract, designViewports } from "./design-contract";
-import { expectFocusHeld, expectNoDuplicateControls } from "./page-health";
+import {
+	expectFocusableBusy,
+	expectFocusHeld,
+	expectFocusSettled,
+	expectNoDuplicateControls,
+	holdRequests,
+	pinElement,
+} from "./page-health";
 import {
 	computed,
 	expectCardTable,
@@ -1488,3 +1501,66 @@ for (const [route, role] of [
 			await expect(detailTrigger).toBeFocused();
 			await expect(page.getByText("private fixture error")).toHaveCount(0);
 		});
+
+// #3242 K7-02：「查询」「重置」「上一页」「下一页」读取中是可聚焦的禁用（aria-disabled），键盘 Enter 后
+// 挂起期间多次采样焦点都在按钮上；读完后焦点留在按钮上，翻到首页或末页、按钮随之禁用时交给另一个
+// 分页按钮（D2-59），不落到 body。
+async function acceptanceViewport(page: Page, info: TestInfo) {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+}
+
+test("audit query, reset and pagination keep focus on the pending button and hand it on at the edges (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/audit");
+	const main = page.locator("main");
+	await expect(main.getByText("第 1 页 · 本页 1 条")).toBeVisible();
+	const read = async (
+		button: Locator,
+		context: string,
+		settled: Locator,
+		pageText: string,
+	) => {
+		const reading = await holdRequests(page, "GET", "/api/v2/audit");
+		await button.focus();
+		await page.keyboard.press("Enter");
+		await expectFocusableBusy(button, context);
+		expect(reading.held()).toBe(1);
+		reading.release();
+		await expect(main.getByText(pageText)).toBeVisible();
+		await expectFocusSettled(settled, context);
+	};
+	const query = await pinElement(
+		main.getByRole("button", { name: "查询", exact: true }),
+		"audit-query",
+	);
+	const reset = await pinElement(
+		main.getByRole("button", { name: "重置", exact: true }),
+		"audit-reset",
+	);
+	const previous = await pinElement(
+		main.getByRole("button", { name: "上一页", exact: true }),
+		"audit-previous",
+	);
+	const next = await pinElement(
+		main.getByRole("button", { name: "下一页", exact: true }),
+		"audit-next",
+	);
+	await read(query, "查询", query, "第 1 页 · 本页 1 条");
+	await read(reset, "重置", reset, "第 1 页 · 本页 1 条");
+	// 两条记录、每页一条：翻到第 2 页即末页，「下一页」禁用，焦点交给「上一页」。
+	await read(next, "下一页（到末页）", previous, "第 2 页 · 本页 1 条");
+	await expect(next).toBeDisabled();
+	// 回到第 1 页，「上一页」禁用，焦点交给「下一页」。
+	await read(previous, "上一页（到首页）", next, "第 1 页 · 本页 1 条");
+	await expect(previous).toBeDisabled();
+	await expectNoDuplicateControls(page, "我的执行审计（K7-02）");
+	await expectCleanPage(page, errors);
+});

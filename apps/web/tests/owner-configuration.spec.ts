@@ -20,7 +20,7 @@ import type {
 	DeploymentConfigurationProjectionV2,
 	SkillHubAgentBindingStatusV1,
 } from "../src/pilot/generated-v2/types.gen";
-import { expectNoDuplicateControls } from "./page-health";
+import { expectFocusSettled, expectNoDuplicateControls } from "./page-health";
 import {
 	computed,
 	expectCleanPage,
@@ -2422,4 +2422,47 @@ test("keyboard focus on shared buttons shows only the outline, not an accent bor
 	expect(saveRing.border).not.toBe(accent);
 	expect(saveRing.outline).toBe("solid 2px");
 	await expectCleanPage(page, pageErrors);
+});
+
+// #3242 K7-02：「重新读取可用模型」改用公共 RecoveryButton。没有已读到的候选时重读会先回到读取中，失败提示
+// 连同按钮一起收起：焦点交给页面 h1，不落到 body；仍然失败、按钮重新出现时取回焦点；读取成功后留在 h1。
+test("re-reading saved-Key models keeps focus off body and returns it to the retry on another failure (K7-02)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const api = await ownerConfigFixture(page, { keySet: true, saved: "error" });
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const models = page.getByRole("region", { name: "模型与凭证", exact: true });
+	const heading = page.getByRole("heading", { level: 1 });
+	const retry = models.getByRole("button", { name: "重新读取可用模型" });
+	await expect(models.getByRole("alert")).toContainText("暂时无法读取可用模型");
+
+	// 再次失败：读取中焦点在 h1，失败提示重新出现后回到「重新读取可用模型」。
+	api.hold("saved-candidates");
+	await retry.focus();
+	await page.keyboard.press("Enter");
+	await expect(retry).toHaveCount(0);
+	await expectFocusSettled(heading, "重新读取可用模型 读取中");
+	api.release("saved-candidates");
+	await expect(models.getByRole("alert")).toContainText("暂时无法读取可用模型");
+	await expectFocusSettled(retry, "重新读取可用模型 仍失败");
+
+	// 恢复：读取中与读取成功后焦点都在 h1。
+	api.savedMode("same");
+	api.hold("saved-candidates");
+	await page.keyboard.press("Enter");
+	await expect(retry).toHaveCount(0);
+	await expectFocusSettled(heading, "重新读取可用模型 恢复读取中");
+	api.release("saved-candidates");
+	await expect(
+		models.locator('[data-slot="keyless-model-picker"]'),
+	).toBeVisible();
+	await expectFocusSettled(heading, "重新读取可用模型 恢复后");
+	await expectNoDuplicateControls(
+		page,
+		"Owner 配置（重新读取可用模型，K7-02）",
+	);
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
 });

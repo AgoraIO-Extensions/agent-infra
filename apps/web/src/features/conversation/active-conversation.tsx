@@ -564,9 +564,10 @@ export function ActiveConversation({
 		timeline.failure?.kind !== "network" &&
 		timeline.failure?.kind !== "service";
 	// 模型设置保存不进入 commandLocked：保存中草稿仍可编辑，只禁止发送（CK-06）。
-	const draftDisabled =
+	// 提交进行中（commandLocked）草稿同样不可编辑，但输入框只读而不是禁用，焦点不落到 body
+	// （#3242 K7-02）；其余原因仍为原生禁用。
+	const draftLocked =
 		denied ||
-		commandLocked ||
 		!timeline.history ||
 		conversation?.status === "unavailable" ||
 		readLocked ||
@@ -646,9 +647,10 @@ export function ActiveConversation({
 		void send();
 	});
 	// 从新会话页跳转过来时焦点留在 composer：输入框可编辑而焦点已丢失（落在 body）时聚焦。
-	// 自动发送期间输入框暂时禁用会失去焦点，提交有了结果后再放回；用户主动移走焦点时不抢回。
+	// 自动发送期间输入框只读而不是禁用（#3242 K7-02），同样可以接过焦点；提交有了结果后不再代管，
+	// 用户主动移走焦点时不抢回。
 	useEffect(() => {
-		if (!keepComposerFocus.current || draftDisabled) return;
+		if (!keepComposerFocus.current || draftLocked) return;
 		const focused = document.activeElement;
 		if (!focused || focused === document.body) composer.current?.focus();
 		if (
@@ -980,10 +982,23 @@ export function ActiveConversation({
 				<CommandNotice
 					result={command.result}
 					pending={command.isPending}
-					retry={command.canRetry ? () => command.retry() : undefined}
+					retry={
+						command.canRetry
+							? () => {
+									// 「核实原请求」「重试原请求」随提交开始卸载：先把焦点交给输入框（提交中只读），
+									// 不落到 body（#3242 K7-02）。
+									composer.current?.focus();
+									command.retry();
+								}
+							: undefined
+					}
 					denial={denialPhase}
 					unknownId={`${feedbackId}-unknown`}
-					onResend={() => void send({ resend: true })}
+					onResend={() => {
+						// 「重新发送」随提交开始卸载：先把焦点交给输入框（提交中只读），不落到 body（#3242 K7-02）。
+						composer.current?.focus();
+						void send({ resend: true });
+					}}
 					resendDisabled={!canSend}
 				/>
 				{agent.capabilities.modelSelection && !option && currentModelId && (
@@ -996,7 +1011,8 @@ export function ActiveConversation({
 					composerId={composerId}
 					textarea={composer}
 					draft={draft}
-					draftDisabled={draftDisabled}
+					draftDisabled={draftLocked}
+					draftBusy={commandLocked && !draftLocked}
 					submitReady={submitReady}
 					invokeReady={!active}
 					sendLabel={

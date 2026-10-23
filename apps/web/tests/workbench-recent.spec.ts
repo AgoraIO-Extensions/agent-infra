@@ -8,7 +8,7 @@ import {
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import {
 	event,
 	history,
@@ -24,6 +24,12 @@ import type {
 } from "../src/pilot/generated-v2/types.gen";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
+import {
+	expectFocusableBusy,
+	expectFocusSettled,
+	holdRequests,
+	pinElement,
+} from "./page-health";
 import { duplicateControlNames } from "./page-hygiene";
 import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
@@ -2555,3 +2561,42 @@ for (const state of [
 		expect(fixture.unexpected).toEqual([]);
 	});
 }
+
+// #3242 K7-02：对话页「最近对话」的「加载更多对话」读取中是可聚焦的禁用（aria-disabled），键盘 Enter 后
+// 挂起期间多次采样焦点都在按钮上；读完没有更多、按钮随之卸载后焦点到新加载的第一条，不落到 body。
+test("loading more recent conversations keeps focus on the pending button, then on the first new row (K7-02)", async ({
+	page,
+}, info: TestInfo) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	const fixture = await workbenchFixture(page);
+	await page.goto("/chat/agent-b/conversation-z");
+	const panel = await openRecentPanel(page);
+	await expect(panelTitles(panel)).toHaveCount(2);
+	const more = await pinElement(
+		panel.getByRole("button", { name: "加载更多对话" }),
+		"recent-more",
+	);
+	const reading = await holdRequests(
+		page,
+		"GET",
+		"/api/v2/me/conversations/recent",
+	);
+	await more.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusableBusy(more, "加载更多对话");
+	expect(reading.held()).toBe(1);
+	reading.release();
+	await expect(more).toHaveCount(0);
+	await expect(panelTitles(panel)).toHaveCount(3);
+	await expectFocusSettled(
+		panel.locator("a.conversation-history-item").nth(2),
+		"加载更多对话",
+	);
+	expect(fixture.unexpected).toEqual([]);
+	await expectCleanPage(page, errors);
+});

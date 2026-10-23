@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { expectNoDuplicateControls } from "./page-health";
 import {
 	computed,
 	expectCleanPage,
@@ -151,4 +152,68 @@ test("evaluation keeps the design heading, notice and in-card segments without s
 	await surface.getByRole("link", { name: "查看对话反馈" }).click();
 	await expect(page).toHaveURL(/\/agents\?mode=conversation$/);
 	expect(api.writes).toEqual([]);
+});
+
+// #3242 K7-04：分段面板只包一张 14px 圆角的虚线空态，面板取同一圆角：Tab 键从选中的分段进入面板后，
+// 键盘焦点环沿空态外框，不在圆角外露出直角；面板在评测卡片 20px 内边距内，焦点环不越过卡片圆角。
+test("evaluation segment panels take the empty state's 14px radius for the keyboard focus ring (K7-04)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const pageErrors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/eval");
+	const tablist = page.getByRole("tablist", { name: "评测区域" });
+	const tabs = tablist.getByRole("tab");
+	await expect(tabs).toHaveText(["评测集", "实验", "反馈"]);
+	for (const tab of await tabs.all()) {
+		const name = (await tab.textContent()) ?? "";
+		await tab.click();
+		await expect(tab).toHaveAttribute("aria-selected", "true");
+		await tab.focus();
+		await page.keyboard.press("Tab");
+		// 切换时上一面板在退出动画期间仍挂载（inert），按名称只取当前分段的面板。
+		const panel = page.getByRole("tabpanel", { name });
+		await expect(panel).toBeFocused();
+		const ring = await panel.evaluate((element) => {
+			const style = getComputedStyle(element);
+			const empty = element.querySelector<HTMLElement>('[data-slot="empty"]');
+			const card = element.closest<HTMLElement>(".evaluation-surface");
+			if (!empty || !card) throw new Error("Missing evaluation panel parts");
+			const panelBox = element.getBoundingClientRect();
+			const emptyBox = empty.getBoundingClientRect();
+			const cardBox = card.getBoundingClientRect();
+			const reach =
+				Number.parseFloat(style.outlineOffset) +
+				Number.parseFloat(style.outlineWidth);
+			return {
+				radius: style.borderTopLeftRadius,
+				emptyRadius: getComputedStyle(empty).borderTopLeftRadius,
+				// 面板与空态同一外框。
+				sameBox:
+					Math.abs(panelBox.width - emptyBox.width) < 0.5 &&
+					Math.abs(panelBox.height - emptyBox.height) < 0.5,
+				outline: [style.outlineStyle, style.outlineWidth, style.outlineOffset],
+				// 焦点环外缘仍在卡片的内边距之内。
+				insideCard:
+					panelBox.left - reach >= cardBox.left &&
+					panelBox.right + reach <= cardBox.right &&
+					panelBox.top - reach >= cardBox.top &&
+					panelBox.bottom + reach <= cardBox.bottom,
+			};
+		});
+		expect(ring, `${name} 面板`).toEqual({
+			radius: "14px",
+			emptyRadius: "14px",
+			sameBox: true,
+			outline: ["solid", "2px", "3px"],
+			insideCard: true,
+		});
+	}
+	await expectNoDuplicateControls(page, "评测（K7-04）");
+	await expectCleanPage(page, pageErrors);
 });

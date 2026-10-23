@@ -440,11 +440,14 @@ export function SkillReviewDialog({
 						</Alert>
 					) : null}
 				</DialogBody>
+				{/* 提交审核中「驳回」「批准发布」是可聚焦的禁用（aria-disabled），焦点留在弹窗内触发的
+				    按钮上，不落到 body（#3242 K7-02）。 */}
 				<DialogFooter>
 					<Button
 						variant="outline"
 						type="button"
 						disabled={busy}
+						focusableWhenDisabled
 						onClick={() => void submit("reject")}
 					>
 						驳回
@@ -452,6 +455,7 @@ export function SkillReviewDialog({
 					<Button
 						type="button"
 						disabled={busy}
+						focusableWhenDisabled
 						onClick={() => void submit("approve")}
 					>
 						批准发布

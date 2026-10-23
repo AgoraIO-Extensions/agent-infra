@@ -3,8 +3,20 @@ import {
 	pilotAgentDetailFromV2,
 	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
-import { expect, type Page, type Route, test } from "@playwright/test";
-import { expectNoDuplicateControls } from "./page-health";
+import {
+	expect,
+	type Page,
+	type Route,
+	type TestInfo,
+	test,
+} from "@playwright/test";
+import {
+	expectFocusableBusy,
+	expectFocusSettled,
+	expectNoDuplicateControls,
+	holdRequests,
+	pinElement,
+} from "./page-health";
 import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
 // 本文件在 auth-desktop / auth-mobile project 中运行：构建配置了同源登录入口（NI-113）。
@@ -638,4 +650,72 @@ test("shows the expiry notice only after a ready session expires and clears reas
 	await expect
 		.poll(() => new URL(page.url()).search)
 		.toBe("?mode=conversation");
+});
+
+// #3242 K7-02：登录与退出进行中按钮是可聚焦的禁用（aria-disabled）；在账号或密码框里按 Enter
+// 提交时焦点先交给「正在登录…」（输入框随提交禁用），挂起期间多次采样都在按钮上；失败后回到密码框。
+async function acceptanceViewport(page: Page, info: TestInfo) {
+	await page.setViewportSize(
+		info.project.name.endsWith("mobile")
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+}
+
+for (const via of ["button", "field"] as const)
+	test(`signing in keeps focus on the pending submit button and returns to the password on failure (${via}, K7-02)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		await platform(page);
+		await page.goto("/agents");
+		await account(page).fill("alice");
+		await password(page).fill("wrong-fixture-password");
+		const button = await pinElement(submit(page), "login-submit");
+		const login = await holdRequests(page, "POST", "/auth/login");
+		await (via === "button" ? button : password(page)).focus();
+		await page.keyboard.press("Enter");
+		await expect(button).toHaveText("正在登录…");
+		await expectFocusableBusy(button, `${via} 登录`);
+		await expect(password(page)).toBeDisabled();
+		login.release();
+		await expect(page.getByRole("alert")).toHaveText(credentialsMessage);
+		await expectFocusSettled(password(page), `${via} 登录失败`);
+		await expectCleanPage(page, errors);
+	});
+
+test("signing out keeps focus on the pending button (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const api = await platform(page);
+	api.authenticated = true;
+	await page.goto("/agents");
+	await expect(
+		page.getByRole("heading", { level: 1, name: "选择要使用的 Agent。" }),
+	).toBeVisible();
+	if (info.project.name.endsWith("mobile"))
+		await page.getByRole("button", { name: "打开导航", exact: true }).click();
+	const logout = await pinElement(
+		page.getByRole("button", { name: "退出登录", exact: true }),
+		"logout",
+	);
+	await page.route("**/auth/logout", (route) => {
+		api.authenticated = false;
+		return route.fulfill({ status: 204 });
+	});
+	const leaving = await holdRequests(page, "POST", "/auth/logout");
+	await logout.focus();
+	await page.keyboard.press("Enter");
+	await expect(logout).toHaveText("正在退出…");
+	await expectFocusableBusy(logout, "退出登录");
+	leaving.release();
+	// 退出后整页换成登录页，焦点在账号框（L-01），不落到 body。
+	await expect(
+		page.getByRole("heading", { name: "登录工作区", exact: true }),
+	).toBeVisible();
+	await expectFocusSettled(account(page), "退出登录后");
+	await expectCleanPage(page, errors);
 });

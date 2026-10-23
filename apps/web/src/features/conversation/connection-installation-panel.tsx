@@ -168,23 +168,26 @@ export function ConnectionInstallationPanel({
 						开始安装
 					</Button>
 				)}
-				{state.kind === "awaiting_confirmation" && (
+				{/* 「查询状态」与「重新开始」占同一个位置、复用同一个按钮元素（#3242 K7-02）：读取中是可聚焦的
+				    禁用，焦点留在按钮上；查到终态后按钮原地换成「重新开始」，焦点不随旧按钮卸载落到 body
+				    或被执行详情弹窗收回。 */}
+				{state.kind === "awaiting_confirmation" ? (
 					<Button
 						type="button"
 						variant="outline"
 						disabled={refreshing}
+						focusableWhenDisabled
 						onClick={() => void refreshStatus()}
 					>
 						<RefreshCw aria-hidden="true" />
 						{refreshing ? "查询中" : "查询状态"}
 					</Button>
-				)}
-				{terminal && (
+				) : terminal ? (
 					<Button type="button" variant="outline" onClick={() => void begin()}>
 						<KeyRound aria-hidden="true" />
 						重新开始
 					</Button>
-				)}
+				) : null}
 			</div>
 			{state.kind === "loading" && <p role="status">正在准备授权…</p>}
 			{state.kind !== "idle" &&

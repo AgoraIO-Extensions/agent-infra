@@ -228,12 +228,15 @@ export function SandboxFileCard({
 			</span>
 			{(onPreview || onDownload) && (
 				<span className="sandbox-file-card-actions">
+					{/* 准备预览、下载期间是可聚焦的禁用（#3242 K7-02）：焦点留在按钮上，不落到 body，
+					    预览弹窗关闭后也能回到这里。 */}
 					{onPreview && artifactCanPreview(file) && (
 						<Button
 							type="button"
 							variant="ghost"
 							size="sm"
 							disabled={previewing}
+							focusableWhenDisabled
 							aria-label={withObjectName(
 								previewing ? "准备预览…" : "预览",
 								file.name,
@@ -249,6 +252,7 @@ export function SandboxFileCard({
 							variant="outline"
 							size="sm"
 							disabled={downloading}
+							focusableWhenDisabled
 							aria-label={withObjectName(
 								downloading ? "准备下载…" : "下载",
 								file.name,

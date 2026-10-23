@@ -1,5 +1,11 @@
 import { Send } from "lucide-react";
-import { type RefObject, useLayoutEffect, useRef, useState } from "react";
+import {
+	type RefObject,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import { Button } from "../../components/ui/button.js";
 import { Label } from "../../components/ui/label.js";
 import { Textarea } from "../../components/ui/textarea.js";
@@ -48,6 +54,11 @@ export type ConversationComposerProps = {
 	textarea: RefObject<HTMLTextAreaElement | null>;
 	draft: string;
 	draftDisabled: boolean;
+	/**
+	 * 消息或命令提交进行中（#3242 K7-02）：输入框只读并标为 aria-disabled、发送按钮为可聚焦的禁用，
+	 * 焦点不随禁用落到 body；结束后焦点已落到 body 或停在禁用的发送按钮上时回到输入框。
+	 */
+	draftBusy?: boolean;
 	/** 普通消息与能力调用共同的发送前提（会话就绪、没有挂起命令、模型设置已保存等）。 */
 	submitReady: boolean;
 	/** 能力调用额外要求没有进行中的回复。 */
@@ -83,6 +94,7 @@ export function ConversationComposer({
 	textarea,
 	draft,
 	draftDisabled,
+	draftBusy = false,
 	submitReady,
 	invokeReady,
 	sendLabel,
@@ -97,6 +109,33 @@ export function ConversationComposer({
 	onInvokeCapability,
 }: ConversationComposerProps) {
 	const form = useRef<HTMLFormElement>(null);
+	const sendButton = useRef<HTMLButtonElement>(null);
+	const settleFocus = useRef(false);
+	// 提交结束后：输入框恢复可编辑，焦点已落到 body，或停在因草稿清空而禁用的发送按钮上时回到输入框。
+	// 草稿在受理结果处理后才清空、发送按钮随后才禁用，所以每次渲染都检查，直到焦点有了去处；
+	// 用户已把焦点移到别处时不抢。
+	useEffect(() => {
+		if (draftBusy) {
+			settleFocus.current = true;
+			return;
+		}
+		if (!settleFocus.current) return;
+		const input = textarea.current;
+		const send = sendButton.current;
+		const active = document.activeElement;
+		if (!input || input.disabled) {
+			settleFocus.current = false;
+			return;
+		}
+		if (
+			!active ||
+			active === document.body ||
+			(send !== null && active === send && send.disabled)
+		) {
+			settleFocus.current = false;
+			input.focus();
+		} else if (active !== send) settleFocus.current = false;
+	});
 	const composing = useRef(false);
 	const compact = useCompactComposer(form);
 	const { selected, catalog } = capability;
@@ -174,6 +213,10 @@ export function ConversationComposer({
 				rows={3}
 				value={draft}
 				disabled={draftDisabled}
+				// 提交进行中只读而不是禁用：焦点留在输入框，禁用外观不变（D2-07 的 .5）。
+				readOnly={draftBusy && !draftDisabled}
+				aria-disabled={(draftBusy && !draftDisabled) || undefined}
+				className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
 				aria-describedby={draftDescribedBy}
 				placeholder={placeholder}
 				{...capabilityComboboxProps(capability)}
@@ -214,16 +257,18 @@ export function ConversationComposer({
 					    只禁用入口，输入框与补充指令的发送不受影响（E3-02）。 */}
 					<CapabilityTrigger
 						capability={capability}
-						disabled={draftDisabled || !invokeReady}
+						disabled={draftDisabled || draftBusy || !invokeReady}
 					/>
 					{model && <ComposerModelControls {...model} compact={compact} />}
 				</div>
 				<div className="composer-actions">
 					<Button
+						ref={sendButton}
 						type="submit"
 						size="sm"
 						data-c02-send-button="send"
 						disabled={!canSubmit}
+						focusableWhenDisabled={draftBusy}
 						aria-describedby={sendDescribedBy}
 					>
 						<Send aria-hidden="true" />

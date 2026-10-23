@@ -1,5 +1,7 @@
+import { useRef } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { LoadingLine } from "@/components/ui/spinner";
+import { listLinks, useLoadMoreFocus } from "@/hooks/use-load-more-focus";
 import { Button } from "../../components/ui/button.js";
 import { RecoveryButton } from "../recovery-button.js";
 import { useRecentPersonalConversations } from "../workbench/use-recent-personal-conversations.js";
@@ -21,6 +23,9 @@ export function RecentConversationHistory({
 }) {
 	const recent = useRecentPersonalConversations({ identityKey });
 	const { state } = recent;
+	const list = useRef<HTMLUListElement>(null);
+	// 「加载更多对话」读取中可聚焦，读完没有更多时焦点移到新加载的第一条（#3242 K7-02）。
+	const armLoadMore = useLoadMoreFocus(recent.isFetching, listLinks(list));
 	return (
 		<section aria-label="最近对话" className="space-y-3">
 			<ConversationHistoryHeading
@@ -46,7 +51,7 @@ export function RecentConversationHistory({
 			{state.kind === "ready" && (
 				<>
 					{state.conversations.length === 0 && <p>暂无个人对话。</p>}
-					<ul className="conversation-history-list">
+					<ul ref={list} className="conversation-history-list">
 						{state.conversations.map((item) => {
 							const current =
 								item.agentId === agentId &&
@@ -76,7 +81,11 @@ export function RecentConversationHistory({
 						<Button
 							variant="outline"
 							disabled={recent.isFetching}
-							onClick={() => void recent.loadMore()}
+							focusableWhenDisabled
+							onClick={() => {
+								armLoadMore();
+								void recent.loadMore();
+							}}
 						>
 							加载更多对话
 						</Button>

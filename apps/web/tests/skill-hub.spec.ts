@@ -9,9 +9,15 @@ import {
 	SkillHubVersionDetailV1Schema,
 	SkillHubVersionMetadataV1Schema,
 } from "@agent-infra/contracts/pilot";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
-import { expectNoDuplicateControls } from "./page-health";
+import {
+	expectFocusableBusy,
+	expectFocusSettled,
+	expectNoDuplicateControls,
+	holdRequests,
+	pinElement,
+} from "./page-health";
 import {
 	expectCleanPage,
 	expectEmptyRows,
@@ -1098,4 +1104,154 @@ test("Skill Hub ghost links put the arrow before the text (G4-24)", async ({
 		).toBe(true);
 	await expectNoDuplicateControls(page, "Skill Hub（G4-24）");
 	await expectCleanPage(page, pageErrors);
+});
+
+async function acceptanceViewport(page: Page, info: TestInfo) {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+}
+
+// #3242 K7-02：「加入我的库」「移出我的库」进行中是可聚焦的禁用（aria-disabled），键盘 Enter 后挂起
+// 期间多次采样焦点都在按钮上；加入后到「配置 Agent 绑定」，移出后到「加入我的库」（D2-59）。
+test("adding to and removing from my library keep focus on the pending button (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/skills/release-notes-v2");
+	const summary = page.getByRole("complementary", { name: "版本与权限" });
+	const add = await pinElement(
+		page.getByRole("button", { name: "加入我的库" }),
+		"add-to-library",
+	);
+	const installing = await holdRequests(
+		page,
+		"POST",
+		"/api/v2/skills/installations",
+	);
+	await add.focus();
+	await page.keyboard.press("Enter");
+	await expect(add).toHaveText("正在校验包…");
+	await expectFocusableBusy(add, "加入我的库");
+	installing.release();
+	await expectFocusSettled(
+		page.getByRole("link", { name: "配置 Agent 绑定" }),
+		"加入我的库",
+	);
+
+	const remove = await pinElement(
+		summary.getByRole("button", { name: "移出我的库" }),
+		"remove-from-library",
+	);
+	const removing = await holdRequests(
+		page,
+		"DELETE",
+		/^\/api\/v2\/skills\/installations\/[^/]+$/,
+	);
+	await remove.focus();
+	await page.keyboard.press("Enter");
+	await expect(remove).toHaveText("正在移出…");
+	await expectFocusableBusy(remove, "移出我的库");
+	removing.release();
+	await expectFocusSettled(
+		page.getByRole("button", { name: "加入我的库" }),
+		"移出我的库",
+	);
+	await expectNoDuplicateControls(page, "Skill 详情（K7-02）");
+	await expectCleanPage(page, errors);
+});
+
+// #3242 K7-04：Skill 详情的 tabpanel 就是左侧卡片（设计 .surface[role=tabpanel]）：Tab 键从选中的 Tab
+// 进入面板后，键盘焦点环沿卡片 14px 圆角，不再是卡片内层直角 div 的矩形环越过圆角。
+test("Skill detail tabpanels are the rounded card so the keyboard focus ring follows its corners (K7-04)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/skills/release-notes-v2");
+	const tablist = page.getByRole("tablist", { name: "Skill 详情" });
+	for (const name of ["用途与内容", "版本与变更"]) {
+		const tab = tablist.getByRole("tab", { name });
+		await tab.click();
+		await expect(tab).toHaveAttribute("aria-selected", "true");
+		await tab.focus();
+		await page.keyboard.press("Tab");
+		const panel = page.getByRole("tabpanel", { name });
+		await expect(panel).toBeFocused();
+		const ring = await panel.evaluate((element) => {
+			const style = getComputedStyle(element);
+			const grid = element.parentElement;
+			return {
+				card: element.classList.contains("skill-surface"),
+				gridChild: grid?.classList.contains("skill-grid") ?? false,
+				radius: [
+					style.borderTopLeftRadius,
+					style.borderTopRightRadius,
+					style.borderBottomRightRadius,
+					style.borderBottomLeftRadius,
+				],
+				border: style.borderTopWidth,
+				outline: [style.outlineStyle, style.outlineWidth, style.outlineOffset],
+				// 面板外不再包一层同尺寸的圆角卡片。
+				parentRadius: grid ? getComputedStyle(grid).borderTopLeftRadius : "",
+			};
+		});
+		expect(ring, `${name} tabpanel`).toEqual({
+			card: true,
+			gridChild: true,
+			radius: ["14px", "14px", "14px", "14px"],
+			border: "1px",
+			outline: ["solid", "2px", "3px"],
+			parentRadius: "0px",
+		});
+	}
+	await expectNoDuplicateControls(page, "Skill 详情 Tab（K7-04）");
+	await expectCleanPage(page, errors);
+});
+
+// #3242 K7-02：确认「撤销此版本」后弹窗关闭、焦点回到触发按钮；撤销请求进行中它是可聚焦的禁用
+// （「正在撤销…」，aria-disabled），挂起期间多次采样焦点都在按钮上；撤销后按钮随之卸载，焦点到 h1（D2-59）。
+test("revoking a Skill version keeps focus on the pending trigger, then on the heading (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const control = await fixture(page);
+	await page.goto("/skills/release-notes-v2");
+	const trigger = await pinElement(
+		page.getByRole("button", { name: "撤销此版本" }),
+		"revoke-version",
+	);
+	await trigger.focus();
+	await page.keyboard.press("Enter");
+	const dialog = page.getByRole("dialog", { name: "撤销这个 Skill 版本？" });
+	await expect(dialog).toBeVisible();
+	const revoking = await holdRequests(
+		page,
+		"POST",
+		"/api/v2/skills/versions/release-notes-v2/revoke",
+	);
+	await dialog.getByRole("button", { name: "确认撤销" }).focus();
+	await page.keyboard.press("Enter");
+	await expect(dialog).toBeHidden();
+	await expect(trigger).toHaveText("正在撤销…");
+	await expectFocusableBusy(trigger, "撤销此版本");
+	expect(revoking.held()).toBe(1);
+	revoking.release();
+	await expect(page.locator('[data-slot="toast"]')).toHaveText(
+		"版本已撤销，新的调用已被阻止",
+	);
+	await expect(trigger).toHaveCount(0);
+	await expectFocusSettled(
+		page.getByRole("heading", { level: 1 }),
+		"撤销此版本",
+	);
+	expect(control.requests.revokes).toHaveLength(1);
+	await expectNoDuplicateControls(page, "Skill 详情（撤销版本，K7-02）");
+	await expectCleanPage(page, errors);
 });
