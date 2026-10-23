@@ -264,6 +264,9 @@ export function DefaultRelayKeyDialog({
 								disabled={busy}
 								endpointNames={endpointNames}
 								idPrefix="replace-default-relay-key-model"
+								// 上方 warn「新的 Key 不能调用部分当前模型」已列出会被移除的模型，
+								// 选择器不再追加「保存后会移除这些模型」（#3291 N9-2-05）。
+								removedTitle={null}
 								onChange={({
 									selection: next,
 								}: ConfigurationModelPickerChange) => setSelection(next)}

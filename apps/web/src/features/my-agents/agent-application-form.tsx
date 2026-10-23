@@ -1049,6 +1049,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	// 未修改的重复提交（#3268 N8-2-03）。
 	const serverFormError =
 		props.serverError?.code === "INVALID_REQUEST" && !serverValidationDismissed;
+	// 修改申请不能更改入口身份：ACTION_UNAVAILABLE 时只读的「入口身份校验」无法获得焦点，顶部提示
+	// 改为「请新建申请」，焦点交给它（#3291 N9-2-03）。
+	const identityEntryLocked =
+		props.mode === "update" &&
+		serverFieldErrors.identityResponsibility !== undefined;
 	const hasActiveServerValidationError =
 		props.serverError?.code === "MODEL_SELECTION_INVALID" &&
 		!serverValidationDismissed;
@@ -1385,21 +1390,31 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			formError: serverFormError,
 			serverCode,
 		};
+		const summarizedAtTop = serverFormError || identityEntryLocked;
 		if (
 			!shouldFocus ||
-			(Object.keys(fieldErrors).length === 0 && !serverFormError)
+			(Object.keys(fieldErrors).length === 0 && !summarizedAtTop)
 		)
 			return;
-		const first = firstFieldError(fieldErrors);
+		// 只读的「入口身份校验」不作为焦点目标；其余字段错误仍先于顶部提示获得焦点。
+		const focusableErrors = identityEntryLocked
+			? Object.fromEntries(
+					Object.entries(fieldErrors).filter(
+						([key]) => key !== "identityResponsibility",
+					),
+				)
+			: fieldErrors;
+		const first = firstFieldError(focusableErrors);
 		if (first instanceof HTMLElement) first.focus();
 		// 整表校验失败只由页面顶部的提交失败提示说明一次（role=alert），焦点交给它，不落到整张表单
-		// （#3268 N8-2-03）。
-		else if (serverFormError)
+		// （#3268 N8-2-03）；修改申请的入口身份不可用时同样聚焦顶部提示（#3291 N9-2-03）。
+		else if (summarizedAtTop)
 			document.getElementById(applicationSubmissionErrorId)?.focus();
 	}, [
 		advancedConfigurationOpen,
 		fieldErrors,
 		focusRequest,
+		identityEntryLocked,
 		props.serverError?.code,
 		serverFormError,
 	]);

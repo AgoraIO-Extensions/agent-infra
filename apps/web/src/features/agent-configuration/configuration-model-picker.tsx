@@ -57,8 +57,16 @@ type ConfigurationModelPickerProps = {
 	showErrors?: boolean;
 	/** 以一次未保存的选择为起点（按新候选重建时保留用户勾选，RK2-08）。 */
 	startFrom?: KeylessModelSelection;
-	/** 改选后会移除当前模型时的提示标题；修改申请写「提交后…」（#3268 N8-2-05）。 */
-	removedTitle?: string;
+	/**
+	 * 改选后会移除当前模型时的提示标题；修改申请写「提交后…」（#3268 N8-2-05）。为 null 时不显示：
+	 * 替换默认 Key 弹窗上方的 warn 已列出受影响的模型（#3291 N9-2-05）。
+	 */
+	removedTitle?: string | null;
+	/**
+	 * 选择问题（字段错误）的播报方式：Owner 配置默认 role="alert"；修改申请与申请表单其余字段一致
+	 * 用 polite，不与 Key 字段的拦截错误同时打断播报（#3291 N9-2-02）。
+	 */
+	errorAnnounce?: "alert" | "polite";
 	onChange: (change: ConfigurationModelPickerChange) => void;
 };
 
@@ -78,6 +86,7 @@ export function ConfigurationModelPicker({
 	showErrors = false,
 	startFrom,
 	removedTitle = "保存后会移除这些模型",
+	errorAnnounce = "alert",
 	onChange,
 }: ConfigurationModelPickerProps) {
 	const baselineRows = useMemo(
@@ -152,9 +161,10 @@ export function ConfigurationModelPicker({
 				label: `${labels.get(candidateKey(candidate)) ?? candidate.modelId} · ${reasoningLevelLabel(level)}`,
 			})),
 	);
-	const removed = changed
-		? removedCurrentOptions(candidates, rows, current)
-		: [];
+	const removed =
+		changed && removedTitle !== null
+			? removedCurrentOptions(candidates, rows, current)
+			: [];
 	const problem = result.problem;
 	// 改回初始选择时不显示错误：页面同时判定为未改动，保存也不会带上模型（acc-2 新问题 2）。
 	const errorVisible = Boolean(problem) && (changed || showErrors);
@@ -292,7 +302,9 @@ export function ConfigurationModelPicker({
 				</Field>
 			</div>
 			{errorVisible && problem ? (
-				<FieldError id={errorId}>{problemMessages[problem]}</FieldError>
+				<FieldError announce={errorAnnounce} id={errorId}>
+					{problemMessages[problem]}
+				</FieldError>
 			) : null}
 		</div>
 	);

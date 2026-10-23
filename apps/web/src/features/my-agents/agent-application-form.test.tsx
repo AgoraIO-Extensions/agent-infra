@@ -2374,6 +2374,35 @@ describe("AgentApplicationForm editing the models of a default-Key application (
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
+	// #3291 N9-2-02：修改申请里选择器的字段错误与 Key 字段的拦截错误、申请表单其余字段一样用 polite，
+	// 页面上没有 role=alert 打断播报；焦点在 Key 输入框。
+	it("announces the picker problem politely next to the Key field error", async () => {
+		const { onSubmit } = renderManaged();
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
+			target: { value: key },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
+		await screen.findByRole("group", { name: "允许的模型" });
+		fireEvent.click(
+			screen.getByRole("checkbox", { name: "Primary endpoint · gpt-5" }),
+		);
+		const problem = screen.getByText("至少选择一个模型。");
+		expect(problem.getAttribute("data-slot")).toBe("field-error");
+		expect(problem.getAttribute("aria-live")).toBe("polite");
+		expect(problem.getAttribute("role")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		const keyError = screen.getByText(
+			"请在下方选好模型（至少一个模型，每个模型至少一个推理档位）。",
+		);
+		expect(keyError.getAttribute("aria-live")).toBe("polite");
+		expect(screen.queryAllByRole("alert")).toEqual([]);
+		expect(document.activeElement).toBe(
+			screen.getByLabelText("Agent 默认 Relay Key"),
+		);
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("does not send the Key or versions when the models stay untouched", () => {
 		const { onSubmit } = renderManaged();
 		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));

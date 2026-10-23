@@ -378,6 +378,57 @@ describe("AgentConfigurationWorkflow", () => {
 		}
 	});
 
+	// #3291 N9-2-04：镜像升级进行中只有「镜像升级」分区暂停，页脚「重启 Agent」与危险区「停止 Agent」、
+	// 管理员区「停用 Agent」一样保持可用（web-ui「镜像升级进行中」：页脚不变）；配置保存进行中页脚仍原生禁用。
+	it("keeps every lifecycle action available while only the image upgrade is pending", () => {
+		useSession(ownerAdministratorSession);
+		const customAgent = AgentProjectionV2Schema.parse({
+			...firstAgent,
+			serviceAvailability: "ready",
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/release:v1",
+				interactionMode: "platform-adapter",
+			},
+		});
+		const pendingSubmission = (kind: "image" | "configuration") =>
+			vi.mocked(useAgentConfigurationSubmission).mockReturnValue({
+				isError: false,
+				error: null,
+				data: undefined,
+				isPending: true,
+				variables: { idempotencyKey: `pending-${kind}`, kind },
+				saveConfiguration: vi.fn(),
+				upgradeImage: vi.fn(),
+				replaceSecret: vi.fn(),
+				checkDefaultRelayKey: vi.fn(),
+				replaceDefaultRelayKey: vi.fn(),
+				replaceDefaultRelayKeyWithModels: vi.fn(),
+			} as never);
+
+		pendingSubmission("image");
+		const image = render(<AgentConfigurationWorkflow agent={customAgent} />);
+		const upgrading = screen.getByRole("button", { name: "升级中…" });
+		expect(upgrading.getAttribute("aria-disabled")).toBe("true");
+		for (const name of ["重启 Agent", "停止 Agent", "停用 Agent"]) {
+			const button = screen.getByRole("button", { name });
+			expect(button.hasAttribute("disabled"), name).toBe(false);
+			expect(button.getAttribute("aria-disabled"), name).toBeNull();
+		}
+		// 页脚文字不变：仍是「保存配置」（暂停保存，不显示「保存中…」）。
+		expect(screen.getByRole("button", { name: "保存配置" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "保存中…" })).toBeNull();
+		image.unmount();
+
+		pendingSubmission("configuration");
+		render(<AgentConfigurationWorkflow agent={customAgent} />);
+		expect(
+			screen
+				.getByRole("button", { name: "重启 Agent" })
+				.hasAttribute("disabled"),
+		).toBe(true);
+	});
+
 	it("drops an unsaved environment change when navigation changes the Agent", () => {
 		const { rerender } = render(
 			<AgentConfigurationWorkflow agent={firstAgent} />,

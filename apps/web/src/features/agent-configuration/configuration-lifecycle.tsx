@@ -290,8 +290,8 @@ function LifecycleFailure({ message }: { message?: string }) {
 
 /**
  * 页脚保存按钮之后的「重启 Agent」/「重试创建」（O-11）。页脚不在整页 fieldset 内（保存按钮在
- * 保存进行中要保持可聚焦，#3242 K7-02），配置保存或镜像升级进行中由 disabled 禁用，与原先随
- * fieldset 禁用一致。
+ * 保存进行中要保持可聚焦，#3242 K7-02），配置保存进行中由 disabled 禁用，与原先随 fieldset 禁用
+ * 一致；镜像升级进行中不禁用（#3291 N9-2-04）。
  */
 export function ConfigurationFooterLifecycleActions({
 	disabled = false,

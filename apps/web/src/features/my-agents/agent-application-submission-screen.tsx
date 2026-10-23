@@ -109,6 +109,14 @@ export function AgentApplicationSubmissionScreen(
 		props.error?.code === "INVALID_REQUEST" ||
 		props.error?.code === "MODEL_SELECTION_INVALID" ||
 		props.error?.code === "ACTION_UNAVAILABLE";
+	// 修改申请不能更改入口身份：不引导「检查字段后重试」，提示新建申请；表单把焦点交给这条提示
+	// （#3291 N9-2-03）。创建申请仍可改选「由自有入口校验」，沿用通用文案。
+	const identityEntryUnavailable =
+		props.mode === "update" &&
+		props.error?.code === "ACTION_UNAVAILABLE" &&
+		props.application.source.kind === "custom" &&
+		props.application.source.interactionMode === "self-managed" &&
+		props.application.source.identityResponsibility === "platform-managed";
 	const deploymentUnavailable =
 		props.deploymentConfiguration.status !== "populated" ||
 		props.deploymentConfiguration.modelCatalog.status !== "populated";
@@ -173,7 +181,8 @@ export function AgentApplicationSubmissionScreen(
 					) : null}
 					{props.error ? (
 						// 提交失败只在这里说明一次；服务端整表校验失败（INVALID_REQUEST）时表单把焦点交给
-						// 这条提示（tabIndex=-1），不再在表单内重复同一结论（#3268 N8-2-03）。
+						// 这条提示（tabIndex=-1），不再在表单内重复同一结论（#3268 N8-2-03）；修改申请的
+						// 入口身份不可用（ACTION_UNAVAILABLE）时同样聚焦这里（#3291 N9-2-03）。
 						<Alert
 							tone="danger"
 							role="alert"
@@ -182,11 +191,13 @@ export function AgentApplicationSubmissionScreen(
 							tabIndex={-1}
 						>
 							<AlertDescription>
-								{validationError
-									? "申请内容未通过服务端校验，请检查字段后重试。"
-									: props.error.retryable === false
-										? "申请已变更或当前不可用，请刷新页面后核对。"
-										: submissionFailureMessage}
+								{identityEntryUnavailable
+									? "当前部署不支持此申请的入口身份校验，请新建申请。"
+									: validationError
+										? "申请内容未通过服务端校验，请检查字段后重试。"
+										: props.error.retryable === false
+											? "申请已变更或当前不可用，请刷新页面后核对。"
+											: submissionFailureMessage}
 							</AlertDescription>
 						</Alert>
 					) : null}

@@ -112,6 +112,9 @@ export function ApplicationKeylessModelEditor({
 						.map((candidate) => `${candidate.endpointId}/${candidate.modelId}`)
 						.join("|")}
 					removedTitle="提交后会移除这些模型"
+					// 与 Key 字段的拦截错误及申请表单其余字段一样用 polite（焦点已在出错字段），
+					// 两条错误不会互相打断（#3291 N9-2-02）。
+					errorAnnounce="polite"
 					onChange={({ selection }) => keyCheck.setSelection(selection)}
 				/>
 			) : null}
