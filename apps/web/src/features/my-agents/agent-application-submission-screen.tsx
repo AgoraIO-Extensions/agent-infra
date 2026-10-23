@@ -14,7 +14,10 @@ import type {
 import type { AgentDefaultRelayKeyCheck } from "../agent-configuration/agent-configuration.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import { RecoveryButton } from "../recovery-button.js";
-import { AgentApplicationForm } from "./agent-application-form.js";
+import {
+	AgentApplicationForm,
+	applicationSubmissionErrorId,
+} from "./agent-application-form.js";
 import {
 	type AgentApplicationEditAction,
 	agentApplicationEditActionLabels,
@@ -169,10 +172,14 @@ export function AgentApplicationSubmissionScreen(
 						</div>
 					) : null}
 					{props.error ? (
+						// 提交失败只在这里说明一次；服务端整表校验失败（INVALID_REQUEST）时表单把焦点交给
+						// 这条提示（tabIndex=-1），不再在表单内重复同一结论（#3268 N8-2-03）。
 						<Alert
 							tone="danger"
 							role="alert"
 							className="application-form-alert"
+							id={applicationSubmissionErrorId}
+							tabIndex={-1}
 						>
 							<AlertDescription>
 								{validationError

@@ -735,4 +735,3 @@ export async function expectWecomCardError(page: Page, error: Locator) {
 	// 单行：高度等于一行行高。
 	expect((await error.boundingBox())?.height ?? 0).toBeCloseTo(19.2, 0);
 }
-

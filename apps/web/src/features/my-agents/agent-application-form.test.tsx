@@ -250,6 +250,45 @@ resources:
 		expect(screen.getByText(/多服务 YAML 不符合/)).toBeTruthy();
 	});
 
+	// #3268 N8-2-04：多服务 YAML 未填写或无效时，焦点移到出错的文本框，错误由 aria-describedby 关联。
+	it("focuses the multi-service YAML textarea when it is missing or invalid", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Payments" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Runs payment services" },
+		});
+		choose("Agent 来源", "多服务 Agent · 自有交互入口");
+		const manifestField = screen.getByRole("textbox", {
+			name: "多服务资源 YAML 内容",
+		});
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(document.activeElement).toBe(manifestField);
+		const errorId = manifestField.getAttribute("aria-describedby");
+		expect(errorId).toBe("application-multi-service-manifest-error");
+		expect(document.getElementById(errorId ?? "")?.textContent).toBe(
+			"请上传或粘贴多服务 YAML。",
+		);
+
+		fireEvent.change(manifestField, {
+			target: { value: "schemaVersion: [" },
+		});
+		(document.activeElement as HTMLElement | null)?.blur();
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(document.activeElement).toBe(manifestField);
+		expect(manifestField.getAttribute("aria-invalid")).toBe("true");
+	});
+
 	// #3119：文本框与上方文件输入各有名称，占位符是三行示例而不是字面量 \n。
 	it("names the multi-service YAML textarea apart from the file input with a three-line placeholder", () => {
 		render(
@@ -1766,7 +1805,10 @@ resources:
 		expect(document.activeElement).toBe(toggle);
 	});
 
-	it("focuses the form for a server invalid-request error", () => {
+	// 需求变化（#3268 N8-2-03）：整表校验失败的结论只在页面顶部的提交失败提示里说明一次，焦点交给
+	// 那条提示（见 agent-application-submission-screen.test.tsx）；表单内不再重复提示，也不再让整张
+	// 表单成为焦点目标。
+	it("does not repeat a server invalid-request error inside the form or focus the form", () => {
 		const onSubmit = vi.fn();
 		render(
 			<AgentApplicationForm
@@ -1779,10 +1821,10 @@ resources:
 
 		const form = document.querySelector("form");
 		if (!form) throw new Error("application form missing");
-		expect(
-			screen.getByText("申请内容未通过服务端校验，请检查表单后重试。"),
-		).toBeTruthy();
-		expect(document.activeElement).toBe(form);
+		expect(screen.queryByText(/未通过服务端校验/)).toBeNull();
+		expect(form.hasAttribute("tabindex")).toBe(false);
+		expect(form.hasAttribute("aria-describedby")).toBe(false);
+		expect(document.activeElement).not.toBe(form);
 	});
 
 	it("blocks an unchanged server invalid-request retry", () => {
@@ -1854,9 +1896,10 @@ resources:
 				serverError={{ code: "INVALID_REQUEST" }}
 			/>,
 		);
-		expect(
-			screen.getByText("申请内容未通过服务端校验，请检查表单后重试。"),
-		).toBeTruthy();
+		// 需求变化（#3268 N8-2-03）：表单内不再重复「未通过服务端校验」的提示；改为确认整表校验失败
+		// 仍在生效——未修改时再次提交被拦下。
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
+		expect(onSubmit).not.toHaveBeenCalled();
 
 		fireEvent.click(screen.getByRole("combobox", { name: "Agent 来源" }));
 		const sourceOption = await screen.findByRole("option", {

@@ -7271,3 +7271,99 @@ for (const decision of ["approve", "reject"] as const)
 		await expectFocusSettled(trigger, `${decision} 审批失败后`);
 		await expectCleanPage(page, errors);
 	});
+/** 自定义 Agent · 平台交互入口的最小申请（不需要默认 Relay Key 与模型）。 */
+async function fillCustomApplication(page: Page) {
+	await page.getByLabel("Agent 名称").fill("校验失败 Agent");
+	await page.getByLabel("用途说明", { exact: true }).fill("验证整表校验失败");
+	await page.getByRole("combobox", { name: "Agent 来源" }).click();
+	await page
+		.getByRole("option", { name: "自定义 Agent · 平台交互入口" })
+		.click();
+	await page.getByLabel("镜像地址").fill("registry.example/agents/check:v1");
+}
+
+// #3268 N8-2-03：服务端整表校验失败（INVALID_REQUEST）只在页面顶部说明一次（role=alert），焦点移到这条
+// 提示，不落到整张表单；表单内没有第二条措辞相近的提示。两视口一致。
+test("a server invalid-request rejection is explained once and focuses that alert (#3268 N8-2-03)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const api = await fixture(page);
+	let rejected = 0;
+	await page.route("**/api/v2/agent-applications", async (route) => {
+		if (route.request().method() !== "POST" || rejected > 0)
+			return route.fallback();
+		rejected += 1;
+		await route.fulfill({
+			status: 400,
+			json: {
+				schemaVersion: 1,
+				code: "INVALID_REQUEST",
+				message: "Controlled invalid request",
+				retryable: false,
+				traceId: "trace-invalid-request",
+			},
+		});
+	});
+	await page.goto("/my-agents/new");
+	await fillCustomApplication(page);
+	const submit = page.getByRole("button", { name: "提交审批", exact: true });
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	const main = page.locator("#main-content");
+	const alert = main.getByRole("alert");
+	await expect(alert).toHaveText(
+		"申请内容未通过服务端校验，请检查字段后重试。",
+	);
+	await expect(main.getByText(/未通过服务端校验/)).toHaveCount(1);
+	await expectFocusSettled(alert, "整表校验失败");
+	const form = main.locator("form.application-form");
+	await expect(form).not.toHaveAttribute("tabindex", /.*/);
+	await expect(form).not.toHaveAttribute("aria-describedby", /.*/);
+	// 未修改时再次提交仍被拦下，不发第二次请求。
+	await submit.click();
+	expect(rejected).toBe(1);
+	expect(api.commands).toHaveLength(0);
+	await expectNoDuplicateControls(page, "创建申请（整表校验失败，#3268）");
+	await expectCleanPage(page, errors);
+});
+
+// #3268 N8-2-04：多服务 YAML 未填写或语法错误时提交，焦点移到「多服务资源 YAML 内容」文本框（字段错误
+// 12px FieldError），之后多次采样仍在，不留在「提交审批」上。两视口一致。
+test("a missing or malformed multi-service YAML moves focus to the YAML textarea (#3268 N8-2-04)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const api = await fixture(page);
+	await page.goto("/my-agents/new");
+	await page.getByLabel("Agent 名称").fill("多服务 Agent");
+	await page.getByLabel("用途说明", { exact: true }).fill("验证多服务校验焦点");
+	await page.getByRole("combobox", { name: "Agent 来源" }).click();
+	await page
+		.getByRole("option", { name: "多服务 Agent · 自有交互入口" })
+		.click();
+	const manifest = page.getByRole("textbox", { name: "多服务资源 YAML 内容" });
+	const submit = page.getByRole("button", { name: "提交审批", exact: true });
+	const error = page.locator("#application-multi-service-manifest-error");
+
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	await expect(error).toHaveText("请上传或粘贴多服务 YAML。");
+	await expectPublicFieldError(page, error);
+	await expect(manifest).toHaveAttribute("aria-invalid", "true");
+	await expect(manifest).toHaveAttribute(
+		"aria-describedby",
+		"application-multi-service-manifest-error",
+	);
+	await expectFocusSettled(manifest, "多服务 YAML 未填写", [100, 400, 1000]);
+
+	await manifest.fill("schemaVersion: [");
+	await expect(error).toContainText("多服务 YAML");
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusSettled(manifest, "多服务 YAML 语法错误", [100, 400, 1000]);
+	expect(api.commands).toHaveLength(0);
+	await expectCleanPage(page, errors);
+});

@@ -163,6 +163,31 @@ describe("AgentApplicationSubmissionScreen", () => {
 		expectSingleFooterCancel("/my-agents");
 	});
 
+	// #3268 N8-2-03：服务端整表校验失败只说明一次（页面顶部的 role=alert），焦点移到这条提示，
+	// 不再落到整张表单，表单内也没有第二条措辞相近的提示。
+	it("focuses the single submission alert for a server invalid-request error", async () => {
+		await renderWithMyAgentsRouter(
+			<AgentApplicationSubmissionScreen
+				error={Object.assign(new Error("invalid request"), {
+					code: "INVALID_REQUEST",
+					retryable: false,
+				})}
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+		const alert = screen.getByRole("alert");
+		expect(alert.textContent).toBe(
+			"申请内容未通过服务端校验，请检查字段后重试。",
+		);
+		expect(screen.getAllByText(/未通过服务端校验/)).toHaveLength(1);
+		expect(alert.getAttribute("tabindex")).toBe("-1");
+		await waitFor(() => expect(document.activeElement).toBe(alert));
+		const form = document.querySelector("form");
+		expect(form?.hasAttribute("tabindex")).toBe(false);
+	});
+
 	// #3034：部署未提供平台身份入口的拒绝按字段校验处理，原因写在入口身份字段下。
 	it("treats a missing platform identity entry as a field validation rejection", async () => {
 		await renderWithMyAgentsRouter(

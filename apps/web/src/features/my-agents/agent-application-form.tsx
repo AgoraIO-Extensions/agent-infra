@@ -119,7 +119,12 @@ type DraftRowsProps<T extends string> = {
 	rows: readonly Record<T, string>[];
 };
 
+/** 申请提交失败的页面提示（`agent-application-submission-screen.tsx`）：服务端整表校验失败时焦点到这里。 */
+export const applicationSubmissionErrorId = "application-submission-error";
+
 function fieldId(key: string) {
+	// 多服务 YAML 的错误落在文本框上（#3268 N8-2-04）；上方文件输入另有自己的 id。
+	if (key === "manifest") return "application-multi-service-manifest";
 	if (key === "defaultModelOptionId") return "application-default-model-option";
 	if (key === "defaultReasoningLevel")
 		return "application-default-reasoning-level";
@@ -662,7 +667,6 @@ function DraftRows<T extends string>({
 }
 
 export function AgentApplicationForm(props: AgentApplicationFormProps) {
-	const formRef = useRef<HTMLFormElement>(null);
 	const fieldsetRef = useRef<HTMLFieldSetElement>(null);
 	const submitRef = useRef<HTMLButtonElement>(null);
 	// 提交进行中「提交审批」「修改申请」「修改并重新提交」是可聚焦的禁用；在字段里按 Enter 提交时
@@ -672,7 +676,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const [focusRequest, setFocusRequest] = useState(0);
 	const focusStateRef = useRef<{
 		focusRequest: number;
-		formError?: string;
+		formError?: boolean;
 		serverCode?: string;
 		advancedConfigurationOpen: boolean;
 	}>({ advancedConfigurationOpen: false, focusRequest: -1 });
@@ -1025,10 +1029,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		serverValidationDismissed,
 		sourceKind,
 	]);
+	// 服务端整表校验失败：说明只在页面顶部的提交失败提示里出现一次，这里只用来移交焦点并拦住
+	// 未修改的重复提交（#3268 N8-2-03）。
 	const serverFormError =
-		props.serverError?.code === "INVALID_REQUEST" && !serverValidationDismissed
-			? "申请内容未通过服务端校验，请检查表单后重试。"
-			: undefined;
+		props.serverError?.code === "INVALID_REQUEST" && !serverValidationDismissed;
 	const hasActiveServerValidationError =
 		props.serverError?.code === "MODEL_SELECTION_INVALID" &&
 		!serverValidationDismissed;
@@ -1372,7 +1376,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			return;
 		const first = firstFieldError(fieldErrors);
 		if (first instanceof HTMLElement) first.focus();
-		else if (serverFormError) formRef.current?.focus();
+		// 整表校验失败只由页面顶部的提交失败提示说明一次（role=alert），焦点交给它，不落到整张表单
+		// （#3268 N8-2-03）。
+		else if (serverFormError)
+			document.getElementById(applicationSubmissionErrorId)?.focus();
 	}, [
 		advancedConfigurationOpen,
 		fieldErrors,
@@ -1452,26 +1459,14 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 
 	return (
 		<form
-			ref={formRef}
 			noValidate
-			aria-describedby={serverFormError ? "application-form-error" : undefined}
 			className="application-form"
 			onSubmit={(event) => {
 				event.preventDefault();
 				if (props.submitting) return;
 				submit();
 			}}
-			tabIndex={serverFormError ? -1 : undefined}
 		>
-			{serverFormError ? (
-				<p
-					aria-live="assertive"
-					className="text-destructive text-sm"
-					id="application-form-error"
-				>
-					{serverFormError}
-				</p>
-			) : null}
 			{/* 页脚在 fieldset 之外：提交进行中字段由 fieldset 禁用，提交按钮仍可聚焦（aria-disabled），
 			    焦点不落到 body（#3242 K7-02）。 */}
 			<fieldset
