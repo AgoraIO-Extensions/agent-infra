@@ -251,6 +251,23 @@ describe("sandbox: file validation (#3226)", () => {
 		).resolves.toMatchObject({ descriptor: { mediaType: "application/pdf" } });
 	});
 
+	it("publishes text results as byte-identified text/plain regardless of the file extension (#3257)", async () => {
+		// 结果发布没有声明类型，平台文本子类型白名单不适用（工程 Spec §15.4.1、§15.4.4）。
+		for (const [name, content] of [
+			["table.csv", "名称,数量\n苹果,3\n"],
+			["notes.md", "# 标题\n"],
+			["data.json", '{"a":1}\n'],
+			["rows.tsv", "a\tb\n"],
+		] as const) {
+			await writeFile(join(workspace, "out", name), content);
+			await expect(
+				readSandboxResultFileV1(workspace, `out/${name}`),
+			).resolves.toMatchObject({
+				descriptor: { name, mediaType: "text/plain" },
+			});
+		}
+	});
+
 	it("rejects symlinks, escaping parents, directories, oversize and unverifiable content", async () => {
 		await symlink(
 			join(outside, "secret.png"),
