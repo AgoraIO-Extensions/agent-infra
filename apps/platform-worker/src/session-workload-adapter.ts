@@ -38,6 +38,7 @@ import {
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
+import { isFileExchangeOriginV1 } from "./workload-runtime-auth.js";
 
 /**
  * Runtime inputs for one Session Sandbox (#1466). `modelConfiguration` and
@@ -56,6 +57,15 @@ export interface SessionSandboxRuntimeInputV1 {
 	readonly serviceToken: string;
 	/** Deployment-approved in-cluster Worker origin for native metadata callbacks. */
 	readonly nativeMetadataWorkerOrigin?: string;
+	/**
+	 * Runtime 文件交换（#3276）：origin 与 Agent Workload 取同一部署配置；token 是
+	 * `sessionSandboxFileExchangeTokenV1` 按本分配派生的值，只写进本 Sandbox 的 Secret，
+	 * Pod 以 secretKeyRef 引用。缺失时两个变量都不注入，Runtime FileBridge 保持关闭。
+	 */
+	readonly fileExchange?: {
+		readonly origin: string;
+		readonly serviceToken: string;
+	};
 	/** Custom platform-adapter Secret references copied into this Session only. */
 	readonly custom?: {
 		readonly secretRefs: readonly AgentWorkloadDesiredV1["secretRefs"][number][];
@@ -99,6 +109,8 @@ export function sessionSandboxServiceTokenV1(
 }
 
 const sessionSandboxTokenPattern = /^[A-Za-z0-9_-]{43}$/;
+/** 本 Sandbox Secret 中文件交换派生 token 的键（#3276）。 */
+export const sessionSandboxFileExchangeSecretKey = "file-exchange-token";
 const runtimeTextPattern = /^[\x21-\x7e]{1,256}$/;
 export function isNativeMetadataWorkerOriginV1(
 	value: unknown,
@@ -394,18 +406,33 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 	}
 }
 
+const requiredRuntimeInputKeys = [
+	"driver",
+	"grantIssuer",
+	"grantKeyId",
+	"grantPublicKey",
+	"modelConfiguration",
+	"serviceToken",
+	"workerId",
+];
+const optionalRuntimeInputKeys = [
+	"custom",
+	"fileExchange",
+	"nativeMetadataWorkerOrigin",
+];
+
 function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 	try {
-		const keys = Object.keys(runtime).sort().join(",");
+		const keys = Object.keys(runtime);
 		if (
 			!runtime ||
 			typeof runtime !== "object" ||
-			![
-				"driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,serviceToken,workerId",
-				"driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,nativeMetadataWorkerOrigin,serviceToken,workerId",
-				"custom,driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,serviceToken,workerId",
-				"custom,driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,nativeMetadataWorkerOrigin,serviceToken,workerId",
-			].includes(keys) ||
+			!requiredRuntimeInputKeys.every((key) => keys.includes(key)) ||
+			keys.some(
+				(key) =>
+					!requiredRuntimeInputKeys.includes(key) &&
+					!optionalRuntimeInputKeys.includes(key),
+			) ||
 			!["codex", "claude", "acp", "pi"].includes(runtime.driver) ||
 			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
 				(item) => typeof item === "string" && runtimeTextPattern.test(item),
@@ -417,7 +444,17 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 			!sessionSandboxTokenPattern.test(runtime.serviceToken) ||
 			typeof runtime.modelConfiguration !== "string" ||
 			(runtime.nativeMetadataWorkerOrigin !== undefined &&
-				!isNativeMetadataWorkerOriginV1(runtime.nativeMetadataWorkerOrigin))
+				!isNativeMetadataWorkerOriginV1(runtime.nativeMetadataWorkerOrigin)) ||
+			(runtime.fileExchange !== undefined &&
+				(!runtime.fileExchange ||
+					typeof runtime.fileExchange !== "object" ||
+					Object.keys(runtime.fileExchange).sort().join(",") !==
+						"origin,serviceToken" ||
+					!isFileExchangeOriginV1(runtime.fileExchange.origin) ||
+					// 只接受本 Sandbox 派生值的形状（32 字节 HMAC，base64url），且不能复用传输 token。
+					typeof runtime.fileExchange.serviceToken !== "string" ||
+					!sessionSandboxTokenPattern.test(runtime.fileExchange.serviceToken) ||
+					runtime.fileExchange.serviceToken === runtime.serviceToken))
 		)
 			throw new Error();
 		if (runtime.custom !== undefined) {
@@ -538,6 +575,19 @@ function runtimeEnvironment(
 			name: "AGENT_INFRA_RUNTIME_SERVICE_TOKEN",
 			valueFrom: secretRef("token"),
 		},
+		// #3276：origin 是非敏感字面量；token 只引用本 Sandbox Secret 中的派生值。
+		...(runtime.fileExchange === undefined
+			? []
+			: [
+					{
+						name: "AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN",
+						value: runtime.fileExchange.origin,
+					},
+					{
+						name: "AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN",
+						valueFrom: secretRef(sessionSandboxFileExchangeSecretKey),
+					},
+				]),
 	];
 	if (runtime.custom) {
 		return [
@@ -600,7 +650,9 @@ export function sessionSandboxResourcesV1(
 			(name) =>
 				!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ||
 				name.startsWith("AGENT_INFRA_") ||
-				["token", "model-config"].includes(name),
+				["token", "model-config", sessionSandboxFileExchangeSecretKey].includes(
+					name,
+				),
 		) ||
 			!custom.environmentNames.every((name) =>
 				Object.hasOwn(custom.data, name),
@@ -755,6 +807,13 @@ export function sessionSandboxResourcesV1(
 							? {
 									"model-config": Buffer.from(
 										allocation.runtime.modelConfiguration,
+									).toString("base64"),
+								}
+							: {}),
+						...(allocation.runtime.fileExchange
+							? {
+									[sessionSandboxFileExchangeSecretKey]: Buffer.from(
+										allocation.runtime.fileExchange.serviceToken,
 									).toString("base64"),
 								}
 							: {}),
