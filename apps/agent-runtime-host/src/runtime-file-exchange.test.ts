@@ -3,7 +3,11 @@ import {
 	RuntimeFileResultUnconfirmedError,
 } from "@agent-infra/agent-runtime";
 import { expect, it, vi } from "vitest";
-import { createRuntimeFileBridgeFactoryV1 } from "./runtime-file-exchange.js";
+import { readRuntimeFileExchangeOptions } from "./configuration.js";
+import {
+	createRuntimeFileBridgeFactoryV1,
+	isRuntimeFileExchangeOriginV1,
+} from "./runtime-file-exchange.js";
 
 const binding = {
 	actorId: "actor-1",
@@ -405,4 +409,70 @@ it("reports a platform rejection of completion as a definite failure (#3226)", a
 	await expect(failure).rejects.not.toBeInstanceOf(
 		RuntimeFileResultUnconfirmedError,
 	);
+});
+
+it("assembles the bridge from parsed configuration with an in-cluster http origin (#3255)", async () => {
+	// 回归：配置读取放行的集群内 http origin，FileBridge 也必须接受，否则 Runtime 启动即退出。
+	const options = readRuntimeFileExchangeOptions({
+		AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN:
+			"http://agent-infra-e2e-native-metadata-api:3000",
+		AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN: "s".repeat(32),
+	});
+	if (!options) throw new Error("expected file exchange options");
+	const fetcher = vi.fn<typeof fetch>(async () => {
+		throw new Error("network");
+	});
+	const factory = createRuntimeFileBridgeFactoryV1({
+		...options,
+		fetch: fetcher,
+	});
+	await expect(
+		factory(binding, evidence).readInput("input-1"),
+	).rejects.toThrow();
+	expect(String(fetcher.mock.calls[0]?.[0])).toBe(
+		"http://agent-infra-e2e-native-metadata-api:3000/internal/v1/files/runtime-exchange",
+	);
+});
+
+it("shares one origin rule between configuration and the bridge (#3255)", () => {
+	const accepted = [
+		"https://files.example.test",
+		"https://10.0.0.1:8443",
+		"http://platform-api:3000",
+		"http://platform-api.agent-infra.svc.cluster.local:3000",
+	];
+	const rejected = [
+		"http://10.0.0.1:3000",
+		"http://[::1]:3000",
+		"https://user:pass@files.example.test",
+		"https://files.example.test/path",
+		"https://files.example.test?x=1",
+		"https://files.example.test#x",
+		"ftp://files.example.test",
+		"not a url",
+	];
+	for (const origin of accepted) {
+		expect(isRuntimeFileExchangeOriginV1(origin)).toBe(true);
+		expect(() =>
+			createRuntimeFileBridgeFactoryV1({
+				origin,
+				serviceToken: "s".repeat(32),
+			}),
+		).not.toThrow();
+	}
+	for (const origin of rejected) {
+		expect(isRuntimeFileExchangeOriginV1(origin)).toBe(false);
+		expect(() =>
+			readRuntimeFileExchangeOptions({
+				AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN: origin,
+				AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN: "s".repeat(32),
+			}),
+		).toThrow("RUNTIME_CONFIGURATION_INVALID");
+		expect(() =>
+			createRuntimeFileBridgeFactoryV1({
+				origin,
+				serviceToken: "s".repeat(32),
+			}),
+		).toThrow("RUNTIME_FILE_EXCHANGE_CONFIGURATION_INVALID");
+	}
 });
