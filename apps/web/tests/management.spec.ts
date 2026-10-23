@@ -7435,3 +7435,84 @@ test("removing application rows hands focus to the neighbouring remove button or
 	await expectNoDuplicateControls(page, "创建申请（移除行，#3268）");
 	await expectCleanPage(page, errors);
 });
+
+// #3268 N8-2-06：镜像升级与整页保存的进行中与失败状态分开。升级进行中页脚仍是「保存配置」（不是
+// 「保存中…」），整页字段不随之禁用；升级失败只在「镜像升级」分区内说明，焦点留在「升级镜像」，
+// 页脚不出现「配置未能保存」。「当前来源」是分区说明（13px）。两视口一致。
+test("image upgrade keeps its pending and failure states inside the image section (#3268 N8-2-06)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const api = await fixture(page);
+	api.customAgent();
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const section = page.getByRole("region", { name: "镜像升级", exact: true });
+	const source = section.getByText(/^当前来源：/);
+	await expect(source).toBeVisible();
+	expect(await computed(source, ["fontSize", "color"])).toEqual({
+		fontSize: "13px",
+		color: await resolved(page, "color", "var(--muted-foreground)"),
+	});
+	const input = section.getByLabel("新镜像引用");
+	const upgrade = await pinElement(
+		section.getByRole("button", { name: "升级镜像" }),
+		"upgrade-image-split",
+	);
+	const footer = page.locator(".configuration-form-footer");
+	const save = footer.getByRole("button", { name: "保存配置", exact: true });
+	const fields = page.getByRole("group", { name: "Agent 配置" });
+
+	// 进行中：分区按钮「升级中…」，页脚不显示「保存中…」，整页字段可编辑。
+	await input.fill("registry.example/agent:v2");
+	api.holdNextCommand();
+	await upgrade.focus();
+	await page.keyboard.press("Enter");
+	await expect(upgrade).toHaveText("升级中…");
+	await expectFocusableBusy(upgrade, "升级镜像");
+	await expect(save).toHaveText("保存配置");
+	await expect(footer.getByText("保存中…")).toHaveCount(0);
+	await expect(save).not.toHaveAttribute("aria-disabled", "true");
+	expect(
+		await fields.evaluate(
+			(element) => (element as HTMLFieldSetElement).disabled,
+		),
+	).toBe(false);
+	api.release();
+	await expect(toastHost(page)).toHaveText("已提交镜像升级请求");
+	await expectFocusSettled(input, "升级镜像受理");
+
+	// 失败：说明在分区内，焦点留在「升级镜像」，页脚没有保存失败。
+	let failed = 0;
+	await page.route(
+		"**/api/v2/agents/agent-pilot-1/lifecycle",
+		async (route) => {
+			if (route.request().method() !== "POST" || failed > 0)
+				return route.fallback();
+			failed += 1;
+			await route.fulfill({
+				status: 503,
+				json: {
+					schemaVersion: 1,
+					code: "DEPENDENCY_UNAVAILABLE",
+					message: "Controlled lifecycle failure",
+					retryable: true,
+					traceId: "trace-image-upgrade",
+				},
+			});
+		},
+	);
+	await input.fill("registry.example/agent:v3");
+	await upgrade.focus();
+	await page.keyboard.press("Enter");
+	const failure = section.getByRole("alert");
+	await expect(failure).toHaveText("镜像升级未能提交，请重试。");
+	await expectFocusSettled(upgrade, "升级镜像失败");
+	await expect(upgrade).toHaveText("升级镜像");
+	await expect(footer.getByRole("alert")).toHaveCount(0);
+	await expect(page.locator("#main-content")).not.toContainText("配置未能保存");
+	await expect(input).toHaveValue("registry.example/agent:v3");
+	expect(failed).toBe(1);
+	await expectNoDuplicateControls(page, "Owner 配置（镜像升级，#3268）");
+	await expectCleanPage(page, errors);
+});

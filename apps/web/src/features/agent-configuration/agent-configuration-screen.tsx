@@ -108,8 +108,13 @@ type AgentConfigurationScreenProps = {
 	onRetrySavedRelayKeyCandidates?: () => void;
 	/** 返回 true 表示镜像升级已被受理。 */
 	onUpgradeImage: (imageReference: string) => Promise<boolean> | undefined;
+	/** 镜像升级失败（只在「镜像升级」分区内说明，不写页脚的保存失败，#3268 N8-2-06）。 */
+	imageError?: AgentConfigurationRequestError | null;
 	session: ConfigurationSessionState;
+	/** 整页配置保存进行中。 */
 	submitting: boolean;
+	/** 镜像升级进行中：不显示「保存中…」、不禁用整页字段，只暂停整页保存。 */
+	upgradingImage?: boolean;
 };
 
 function unavailableScreen() {
@@ -219,8 +224,10 @@ export function AgentConfigurationScreen({
 	onRetrySavedRelayKeyCandidates,
 	onUnbindChannel,
 	onUpgradeImage,
+	imageError = null,
 	session,
 	submitting,
+	upgradingImage = false,
 }: AgentConfigurationScreenProps) {
 	const toast = useToast();
 	const [draft, setDraft] = useState(() => configurationDraftFromAgent(agent));
@@ -287,7 +294,8 @@ export function AgentConfigurationScreen({
 		savedRelayKeyCandidates !== undefined &&
 		savedRelayKeyCandidates.length > 0;
 	const submitConfiguration = () => {
-		if (isDisabled || !hasChanges) return;
+		// 镜像升级在途时整页保存暂停（同一个 mutation 一次只受理一个命令）。
+		if (isDisabled || !hasChanges || upgradingImage) return;
 		const request = buildAgentConfigurationRequest(draft, agent);
 		if (!request.coOwnerIds?.length) {
 			setOwnerError("请选择至少一名有效 Owner。");
@@ -374,9 +382,9 @@ export function AgentConfigurationScreen({
 						submitConfiguration();
 					}}
 				>
-					{/* 「镜像升级」与页脚在 fieldset 之外：保存或升级进行中，其余字段由 fieldset 禁用，
-					    触发按钮仍可聚焦（aria-disabled），焦点不落到 body（#3242 K7-02）。两者各自接收
-					    isDisabled，已停用的 Agent 仍整页禁用。 */}
+					{/* 「镜像升级」与页脚在 fieldset 之外：保存进行中其余字段由 fieldset 禁用，触发按钮仍可
+					    聚焦（aria-disabled），焦点不落到 body（#3242 K7-02）；镜像升级进行中只禁用本分区，
+					    不禁用整页字段（#3268 N8-2-06）。两者各自接收 isDisabled，已停用的 Agent 仍整页禁用。 */}
 					<fieldset
 						ref={fieldsetRef}
 						disabled={isDisabled}
@@ -484,8 +492,9 @@ export function AgentConfigurationScreen({
 						<ConfigurationImageSection
 							agent={agent}
 							disabled={isDisabled}
+							error={imageError}
 							onUpgradeImage={onUpgradeImage}
-							submitting={submitting}
+							upgrading={upgradingImage}
 						/>
 					) : null}
 					<div className="form-footer configuration-form-footer">
@@ -524,7 +533,8 @@ export function AgentConfigurationScreen({
 								aria-describedby={
 									hasChanges ? undefined : "agent-configuration-unchanged"
 								}
-								disabled={isDisabled || !hasChanges}
+								// 镜像升级在途时暂停保存，但不显示「保存中…」（#3268 N8-2-06）。
+								disabled={isDisabled || !hasChanges || upgradingImage}
 								// 只有保存进行中是可聚焦的禁用；没有变更或 Agent 已停用时仍为原生禁用。
 								focusableWhenDisabled={submitting}
 								type="submit"
