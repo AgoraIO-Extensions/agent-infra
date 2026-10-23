@@ -1025,10 +1025,14 @@ describe("functional conversation screen", () => {
 			value: createObjectUrl,
 		});
 		try {
-			fireEvent.click(await screen.findByRole("button", { name: "预览" }));
+			fireEvent.click(
+				await screen.findByRole("button", { name: "预览：report.txt" }),
+			);
 			await waitFor(() => expect(screen.getByText("hello")).toBeTruthy());
 			fireEvent.click(screen.getByRole("button", { name: "关闭" }));
-			fireEvent.click(await screen.findByRole("button", { name: "下载" }));
+			fireEvent.click(
+				await screen.findByRole("button", { name: "下载：report.txt" }),
+			);
 			await waitFor(() => expect(createObjectUrl).toHaveBeenCalled());
 			expect(
 				requests.some((request) =>
@@ -4826,5 +4830,373 @@ describe("thinking process above the answer (#2981)", () => {
 		expect(
 			screen.queryByRole("button", { name: "思考过程：new question" }),
 		).toBeNull();
+	});
+});
+
+describe("sandbox: references and result files on the conversation page (#3228)", () => {
+	const answerText =
+		"结果如下：\n\n![销量图](sandbox:out/chart.png)\n\n请查看[季度报告](sandbox:/out/r.pdf)。\n\n![未发布](sandbox:out/missing.png)";
+	function resultFile(
+		sequence: number,
+		payload: {
+			fileId: string;
+			name: string;
+			mediaType: string;
+			sizeBytes: number;
+			workspaceReference: string | null;
+		},
+	) {
+		return PersistedConversationEventV2Schema.parse({
+			...event(sequence),
+			schemaVersion: 2,
+			type: "result.file",
+			payload,
+		});
+	}
+	const chart = {
+		fileId: "chart-1",
+		name: "chart.png",
+		mediaType: "image/png",
+		sizeBytes: 4,
+		workspaceReference: "out/chart.png",
+	};
+	const report = {
+		fileId: "report-1",
+		name: "r.pdf",
+		mediaType: "application/pdf",
+		sizeBytes: 2048,
+		workspaceReference: "out/r.pdf",
+	};
+	const detail = ConversationDetailProjectionV2Schema.parse({
+		...history("conversation-1", [
+			resultFile(2, chart),
+			resultFile(3, report),
+			PersistedConversationEventV2Schema.parse({
+				...event(4),
+				type: "execution.status",
+				payload: { status: "completed" },
+			}),
+		]),
+		conversation: { ...history().conversation, status: "ready" },
+		messages: [
+			userMessage("请出图并给出报告"),
+			{
+				messageId: "answer-1",
+				role: "assistant",
+				text: answerText,
+				status: "completed",
+				executionId: "execution-1",
+				replyToMessageId: "message-1",
+				answerVersion: 1,
+				isCurrentAnswer: true,
+				error: null,
+				createdAt: timestamp,
+			},
+		],
+	});
+	function access(fileId: string, token: string) {
+		return Response.json({
+			schemaVersion: 1,
+			accessId: `access-${fileId}`,
+			file: { ...fileProjection(), fileId, kind: "result" },
+			path: `/api/v1/conversations/conversation-1/files/${fileId}/content`,
+			grant: { format: "compact-jws", schemaVersion: 1, token },
+			expiresAt: "2027-01-01T00:00:00Z",
+		});
+	}
+	function filesSetup(accessStatus = 200) {
+		return setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (path === "/api/v2/conversations/conversation-1")
+				return Response.json(detail);
+			const match = path.match(
+				/^\/api\/v1\/conversations\/conversation-1\/files\/([^/]+)\/(access|content)$/,
+			);
+			if (!match) return undefined;
+			const [, fileId, operation] = match;
+			if (operation === "access" && request.method === "POST")
+				return accessStatus === 200
+					? access(fileId ?? "", `${fileId}-grant`)
+					: Response.json(
+							{
+								schemaVersion: 1,
+								code: "NOT_FOUND",
+								message: "Not found",
+								retryable: false,
+								traceId: "trace-1",
+							},
+							{ status: accessStatus },
+						);
+			if (operation === "content" && request.method === "GET")
+				return new Response(new Uint8Array([137, 80, 78, 71]), {
+					headers: {
+						"content-type":
+							fileId === "chart-1" ? "image/png" : "application/pdf",
+					},
+				});
+			return undefined;
+		});
+	}
+	const fileRequests = (requests: Request[], fileId?: string) =>
+		requests.filter((request) =>
+			new URL(request.url).pathname.includes(
+				fileId ? `/files/${fileId}/` : "/files/",
+			),
+		);
+	const originalCreateObjectUrl = URL.createObjectURL;
+	const originalRevokeObjectUrl = URL.revokeObjectURL;
+	function stubObjectUrls() {
+		let next = 0;
+		const create = vi.fn(() => `blob:result-${++next}`);
+		Object.defineProperty(URL, "createObjectURL", {
+			configurable: true,
+			value: create,
+		});
+		Object.defineProperty(URL, "revokeObjectURL", {
+			configurable: true,
+			value: vi.fn(),
+		});
+		return create;
+	}
+	afterEach(() => {
+		for (const [key, value] of [
+			["createObjectURL", originalCreateObjectUrl as unknown],
+			["revokeObjectURL", originalRevokeObjectUrl as unknown],
+		] as const) {
+			if (value) Object.defineProperty(URL, key, { configurable: true, value });
+			else delete (URL as Partial<Record<typeof key, unknown>>)[key];
+		}
+	});
+
+	it("shows the image inline through a fresh read grant and the file as a previewable, downloadable card (AC-1)", async () => {
+		const createObjectUrl = stubObjectUrls();
+		const { requests } = filesSetup();
+		const reply = (await screen.findByText(/结果如下/)).closest("article");
+		if (!reply) throw new Error("reply card missing");
+		const image = await within(reply).findByRole<HTMLImageElement>("img", {
+			name: "销量图",
+		});
+		expect(image.getAttribute("src")).toMatch(/^blob:result-/);
+		const chartRequests = fileRequests(requests, "chart-1");
+		expect(
+			chartRequests.map((request) => [
+				request.method,
+				new URL(request.url).pathname,
+			]),
+		).toEqual([
+			["POST", "/api/v1/conversations/conversation-1/files/chart-1/access"],
+			["GET", "/api/v1/conversations/conversation-1/files/chart-1/content"],
+		]);
+		expect(await chartRequests[0]?.json()).toEqual({
+			schemaVersion: 1,
+			operation: "read",
+		});
+		// Grant 只在专用 Header 中，不进入 URL。
+		expect(chartRequests[1]?.headers.get("X-Platform-File-Grant")).toBe(
+			"chart-1-grant",
+		);
+		expect(requests.some((request) => request.url.includes("grant"))).toBe(
+			false,
+		);
+		// 未发布的引用只是纯文本占位；文件卡在用户操作前不读取内容。
+		expect(within(reply).getByText("图片未发送：未发布")).toBeTruthy();
+		expect(fileRequests(requests, "report-1")).toHaveLength(0);
+		expect(fileRequests(requests)).toHaveLength(2);
+
+		const card = within(reply).getByRole("group", {
+			name: "结果文件：r.pdf",
+		});
+		expect(within(card).getByText("季度报告")).toBeTruthy();
+		expect(within(card).getByText("application/pdf · 2 KB")).toBeTruthy();
+		// 下方结果文件列表继续列出全部结果文件，每个文件一行；已在回答中显示的只列名称，
+		// 不重复预览与下载入口，整张回复卡没有同名控件（N-12）。
+		const list = within(reply).getByText("结果文件", { selector: "p" })
+			.parentElement as HTMLElement;
+		expect(within(list).getAllByText(/chart\.png|r\.pdf/)).toHaveLength(2);
+		expect(within(list).getAllByText("已在回答中显示")).toHaveLength(2);
+		expect(within(list).queryByRole("button")).toBeNull();
+		const names = within(reply)
+			.getAllByRole("button")
+			.map((button) => button.getAttribute("aria-label") ?? button.textContent);
+		expect(new Set(names).size).toBe(names.length);
+
+		fireEvent.click(
+			within(reply).getByRole("button", { name: "预览图片：销量图" }),
+		);
+		const dialog = await screen.findByRole("dialog");
+		expect(
+			within(dialog).getByRole<HTMLImageElement>("img", { name: "chart.png" }),
+		).toBeTruthy();
+		// 打开预览与其他预览一样重新签发读取授权，不复用内联 Blob（撤权后预览即被拒绝）。
+		expect(
+			fileRequests(requests, "chart-1").map((request) => request.method),
+		).toEqual(["POST", "GET", "POST", "GET"]);
+		fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+		fireEvent.click(within(card).getByRole("button", { name: "预览：r.pdf" }));
+		const pdfDialog = await screen.findByRole("dialog");
+		const pdf = await within(pdfDialog).findByTitle("r.pdf");
+		expect(pdf.tagName).toBe("IFRAME");
+		expect(pdf.getAttribute("sandbox")).toBe("");
+		fireEvent.click(within(pdfDialog).getByRole("button", { name: "关闭" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		const downloads = createObjectUrl.mock.calls.length;
+		fireEvent.click(within(card).getByRole("button", { name: "下载：r.pdf" }));
+		await waitFor(() =>
+			expect(createObjectUrl.mock.calls.length).toBeGreaterThan(downloads),
+		);
+		// 预览与下载各自签发一次新的读取授权。
+		expect(
+			fileRequests(requests, "report-1").filter((request) =>
+				request.url.endsWith("/access"),
+			),
+		).toHaveLength(2);
+	});
+
+	it.each([401, 403, 404])(
+		"refuses a %s inline read like an unsent image without reading content (AC-5)",
+		async (status) => {
+			stubObjectUrls();
+			const { requests } = filesSetup(status);
+			const reply = (await screen.findByText(/结果如下/)).closest("article");
+			if (!reply) throw new Error("reply card missing");
+			await within(reply).findByText("图片未发送：销量图");
+			expect(within(reply).queryByRole("img")).toBeNull();
+			expect(
+				fileRequests(requests, "chart-1").map((request) => request.method),
+			).toEqual(["POST"]);
+			// 拒绝与未发布显示同一占位，页面不说明文件是否存在。
+			expect(within(reply).getByText("图片未发送：未发布")).toBeTruthy();
+			// 读取失败的图片不算已显示：下方列表保留它的下载入口；文件卡仍只渲染一次。
+			const list = within(reply).getByText("结果文件", { selector: "p" })
+				.parentElement as HTMLElement;
+			expect(
+				within(list).getByRole("button", { name: "下载：chart.png" }),
+			).toBeTruthy();
+			expect(
+				within(list).queryByRole("button", { name: "下载：r.pdf" }),
+			).toBeNull();
+		},
+	);
+
+	it("removes inline images when access is revoked and reads nothing afterwards (AC-5)", async () => {
+		stubObjectUrls();
+		const { requests, streams } = filesSetup();
+		await screen.findByRole("img", { name: "销量图" });
+		const before = fileRequests(requests).length;
+		act(() =>
+			streams.at(-1)?.send({
+				schemaVersion: 1,
+				kind: "control",
+				type: "authorization.revoked",
+				error: {
+					schemaVersion: 1,
+					code: "AUTHORIZATION_REVOKED",
+					message: "Denied",
+					retryable: false,
+					traceId: "trace-1",
+				},
+			}),
+		);
+		await screen.findByText(/当前登录或访问权限已失效/);
+		expect(screen.queryByRole("img", { name: "销量图" })).toBeNull();
+		expect(screen.queryByRole("group", { name: "结果文件：r.pdf" })).toBeNull();
+		expect(fileRequests(requests)).toHaveLength(before);
+	});
+
+	it("accepts non-image files allowed by FileLimits and rejects the rest before uploading, with the reason (AC-3)", async () => {
+		const originalCrypto = globalThis.crypto;
+		let next = 0;
+		vi.stubGlobal("crypto", {
+			...(originalCrypto ?? {}),
+			randomUUID: () => `upload-local-${++next}`,
+			subtle: { digest: async () => new ArrayBuffer(32) },
+		});
+		try {
+			const { requests } = setup((request) => {
+				const path = new URL(request.url).pathname;
+				if (path === "/api/v2/agents/agent-1/file-limits")
+					return Response.json({
+						schemaVersion: 1,
+						declaration: {
+							schemaVersion: 1,
+							scope: "agent",
+							revision: 2,
+							expiresAt: "2027-01-01T00:00:00Z",
+							mediaTypes: [
+								"application/pdf",
+								"text/csv",
+								"text/plain",
+								"application/zip",
+							],
+							maxBytes: 1024,
+							updatedAt: "2026-01-01T00:00:00Z",
+							updatedBy: "user-chat",
+						},
+					});
+				// 本用例只验证上传前的放行与拒绝；创建失败即结束传输。
+				if (request.method === "POST" && path.endsWith("/files"))
+					return new Response(null, { status: 503 });
+				return undefined;
+			});
+			await screen.findByText(
+				"支持 application/pdf, text/csv, text/plain, application/zip，单文件最大 1 KB",
+			);
+			openFiles();
+			const input = await screen.findByLabelText<HTMLInputElement>("添加附件");
+			expect(input.accept).toBe(
+				"application/pdf,text/csv,text/plain,application/zip",
+			);
+			fireEvent.change(input, {
+				target: {
+					files: [
+						new File(["%PDF-1.7"], "report.pdf", { type: "application/pdf" }),
+						new File(["a,b\n1,2"], "table.csv", { type: "text/csv" }),
+						new File(["notes"], "notes.txt", { type: "text/plain" }),
+						new File(["PK"], "bundle.zip", { type: "application/zip" }),
+						new File(["png"], "photo.png", { type: "image/png" }),
+						new File(["x".repeat(2048)], "huge.pdf", {
+							type: "application/pdf",
+						}),
+					],
+				},
+			});
+			await screen.findByText("当前 Agent 不支持此文件类型。");
+			await screen.findByText("文件超过 1 KB 限制。");
+			await waitFor(() =>
+				expect(
+					requests.filter(
+						(request) =>
+							request.method === "POST" &&
+							new URL(request.url).pathname.endsWith("/files"),
+					),
+				).toHaveLength(4),
+			);
+			const created = await Promise.all(
+				requests
+					.filter(
+						(request) =>
+							request.method === "POST" &&
+							new URL(request.url).pathname.endsWith("/files"),
+					)
+					.map(async (request) => (await request.json()).descriptor),
+			);
+			expect(
+				created
+					.map(
+						(descriptor: { name: string; mediaType: string }) =>
+							`${descriptor.name}:${descriptor.mediaType}`,
+					)
+					.sort(),
+			).toEqual([
+				"bundle.zip:application/zip",
+				"notes.txt:text/plain",
+				"report.pdf:application/pdf",
+				"table.csv:text/csv",
+			]);
+		} finally {
+			vi.stubGlobal("crypto", originalCrypto);
+		}
 	});
 });

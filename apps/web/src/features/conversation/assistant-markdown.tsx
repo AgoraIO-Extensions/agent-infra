@@ -1,4 +1,4 @@
-import Markdown from "react-markdown";
+import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
 	Table,
@@ -8,6 +8,19 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+import {
+	SandboxImageReference,
+	SandboxLinkReference,
+	type SandboxReferences,
+	SandboxReferencesContext,
+} from "./sandbox-reference-views.js";
+import {
+	hastText,
+	rehypeSandboxReferences,
+	sandboxNestedProperty,
+	sandboxReferenceProperty,
+	sandboxRepeatProperty,
+} from "./sandbox-references.js";
 
 function safeExternalUrl(href: string | undefined) {
 	if (!href) return undefined;
@@ -51,50 +64,103 @@ function safeExternalUrl(href: string | undefined) {
 	}
 }
 
+/** 组件表保持稳定引用：内联图片的读取状态不因回答重新渲染而重建。 */
+const remarkPlugins = [remarkGfm];
+const rehypePlugins = [rehypeSandboxReferences];
+
+function sandboxMarks(
+	node: { properties?: Record<string, unknown> } | undefined,
+) {
+	const reference = node?.properties?.[sandboxReferenceProperty];
+	if (typeof reference !== "string") return undefined;
+	return {
+		reference,
+		repeat: node?.properties?.[sandboxRepeatProperty] === "true",
+		nested: node?.properties?.[sandboxNestedProperty] === "true",
+	};
+}
+
+const components: Components = {
+	a: ({ node, href, children }) => {
+		const sandbox = sandboxMarks(node);
+		if (sandbox)
+			return (
+				<SandboxLinkReference
+					reference={sandbox.reference}
+					text={hastText(node)}
+					repeat={sandbox.repeat}
+				>
+					{children}
+				</SandboxLinkReference>
+			);
+		const safeHref = safeExternalUrl(href);
+		return safeHref ? (
+			<a href={safeHref} target="_blank" rel="noopener noreferrer">
+				{children}
+			</a>
+		) : (
+			<span>{children}</span>
+		);
+	},
+	// 模型给出的图片 URL 不进入浏览器加载路径；唯一例外是命中同一执行结果文件的 `sandbox:`
+	// 引用，经当前 File Grant 读取内存 Blob 后显示（工程 Spec §15.4.3）。
+	img: ({ node, alt }) => {
+		const sandbox = sandboxMarks(node);
+		return sandbox ? (
+			<SandboxImageReference
+				reference={sandbox.reference}
+				alt={alt}
+				repeat={sandbox.repeat}
+				nested={sandbox.nested}
+			/>
+		) : (
+			<span>[图片：{alt || "未提供说明"}]</span>
+		);
+	},
+	pre: ({ children }) => (
+		// biome-ignore lint/a11y/noNoninteractiveTabindex: Scrollable code must be reachable by keyboard.
+		<section className="markdown-code" tabIndex={0} aria-label="代码块">
+			<pre>{children}</pre>
+		</section>
+	),
+	table: ({ children }) => (
+		// biome-ignore lint/a11y/noNoninteractiveTabindex: Scrollable tables must be reachable by keyboard.
+		<section className="markdown-table" tabIndex={0} aria-label="表格">
+			<Table>{children}</Table>
+		</section>
+	),
+	thead: ({ children }) => <TableHeader>{children}</TableHeader>,
+	tbody: ({ children }) => <TableBody>{children}</TableBody>,
+	tr: ({ children }) => <TableRow>{children}</TableRow>,
+	th: ({ style, children }) => <TableHead style={style}>{children}</TableHead>,
+	td: ({ style, children }) => <TableCell style={style}>{children}</TableCell>,
+};
+
 /** Model output is untrusted text, including links and image destinations. */
-export function AssistantMarkdown({ children }: { children: string }) {
-	return (
+export function AssistantMarkdown({
+	children,
+	references,
+}: {
+	children: string;
+	/** #3228：同一执行的结果文件映射；缺省时所有 `sandbox:` 引用都按未发送显示。 */
+	references?: SandboxReferences;
+}) {
+	const markdown = (
 		<div className="assistant-markdown min-w-0 max-w-full">
 			<Markdown
-				remarkPlugins={[remarkGfm]}
-				components={{
-					a: ({ href, children }) => {
-						const safeHref = safeExternalUrl(href);
-						return safeHref ? (
-							<a href={safeHref} target="_blank" rel="noopener noreferrer">
-								{children}
-							</a>
-						) : (
-							<span>{children}</span>
-						);
-					},
-					// Text-only Pilot: do not fetch model-supplied image URLs.
-					img: ({ alt }) => <span>[图片：{alt || "未提供说明"}]</span>,
-					pre: ({ children }) => (
-						// biome-ignore lint/a11y/noNoninteractiveTabindex: Scrollable code must be reachable by keyboard.
-						<section className="markdown-code" tabIndex={0} aria-label="代码块">
-							<pre>{children}</pre>
-						</section>
-					),
-					table: ({ children }) => (
-						// biome-ignore lint/a11y/noNoninteractiveTabindex: Scrollable tables must be reachable by keyboard.
-						<section className="markdown-table" tabIndex={0} aria-label="表格">
-							<Table>{children}</Table>
-						</section>
-					),
-					thead: ({ children }) => <TableHeader>{children}</TableHeader>,
-					tbody: ({ children }) => <TableBody>{children}</TableBody>,
-					tr: ({ children }) => <TableRow>{children}</TableRow>,
-					th: ({ style, children }) => (
-						<TableHead style={style}>{children}</TableHead>
-					),
-					td: ({ style, children }) => (
-						<TableCell style={style}>{children}</TableCell>
-					),
-				}}
+				remarkPlugins={remarkPlugins}
+				rehypePlugins={rehypePlugins}
+				components={components}
 			>
 				{children}
 			</Markdown>
 		</div>
+	);
+	return references ? (
+		<SandboxReferencesContext.Provider value={references}>
+			{markdown}
+		</SandboxReferencesContext.Provider>
+	) : (
+		markdown
 	);
 }

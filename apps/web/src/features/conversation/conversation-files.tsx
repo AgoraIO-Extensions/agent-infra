@@ -40,7 +40,51 @@ export type ConversationUpload = {
 export type ResultFile = Extract<
 	PersistedConversationEventV1,
 	{ type: "result.file" }
->["payload"] & { executionId: string };
+>["payload"] & {
+	executionId: string;
+	/** `result.file` V2 的规范化工作区相对路径；V1 事件缺省，无引用的结果为 null。 */
+	workspaceReference?: string | null;
+};
+
+/**
+ * 经当前 File Grant 读取结果文件内容（工程 Spec §15.4.3）：每次先为当前会话主体签发新的
+ * 读取授权，Grant 只放在专用请求 Header 中，内容只作为内存 Blob 返回。任何拒绝（撤权、
+ * 跨主体或跨会话、过期）与依赖错误都返回 null，调用方不区分原因，不泄漏对象是否存在。
+ */
+async function readResultFileContent({
+	client,
+	conversationId,
+	fileId,
+}: {
+	client: Client;
+	conversationId: string;
+	fileId: string;
+}) {
+	try {
+		const key = `web-result-${crypto.randomUUID()}`;
+		const access = await issueFileAccess({
+			client,
+			path: { conversationId, fileId },
+			headers: { "Idempotency-Key": key },
+			body: { schemaVersion: 1, operation: "read" },
+			responseStyle: "fields",
+			throwOnError: false,
+		});
+		if (!access.data || access.response?.status !== 200) return null;
+		const response = await downloadFileContent({
+			client,
+			path: { conversationId, fileId },
+			headers: { "X-Platform-File-Grant": access.data.grant.token },
+			parseAs: "blob",
+			responseStyle: "fields",
+			throwOnError: false,
+		});
+		if (!response.data || response.response?.status !== 200) return null;
+		return response.data;
+	} catch {
+		return null;
+	}
+}
 
 export function useConversationFiles({
 	agentId,
@@ -248,33 +292,30 @@ export function useConversationFiles({
 			if (!resultFilesEnabled || !conversationId || reading) return null;
 			setReading(file.fileId);
 			try {
-				const key = `web-result-${crypto.randomUUID()}`;
-				const access = await issueFileAccess({
+				return await readResultFileContent({
 					client,
-					path: { conversationId, fileId: file.fileId },
-					headers: { "Idempotency-Key": key },
-					body: { schemaVersion: 1, operation: "read" },
-					responseStyle: "fields",
-					throwOnError: false,
+					conversationId,
+					fileId: file.fileId,
 				});
-				if (!access.data || access.response?.status !== 200) return null;
-				const response = await downloadFileContent({
-					client,
-					path: { conversationId, fileId: file.fileId },
-					headers: { "X-Platform-File-Grant": access.data.grant.token },
-					parseAs: "blob",
-					responseStyle: "fields",
-					throwOnError: false,
-				});
-				if (!response.data || response.response?.status !== 200) return null;
-				return response.data;
-			} catch {
-				return null;
 			} finally {
 				setReading(undefined);
 			}
 		},
 		[client, conversationId, reading, resultFilesEnabled],
+	);
+
+	// #3228：回答内联图片与预览、下载走同一读取路径，但不占用「准备预览/下载」的单文件状态，
+	// 一个回答中的多张图片可以并行读取。
+	const readInlineResultFile = useCallback(
+		async (file: Pick<ResultFile, "fileId">) => {
+			if (!resultFilesEnabled || !conversationId) return null;
+			return readResultFileContent({
+				client,
+				conversationId,
+				fileId: file.fileId,
+			});
+		},
+		[client, conversationId, resultFilesEnabled],
 	);
 
 	const download = useCallback(
@@ -314,6 +355,7 @@ export function useConversationFiles({
 		retry,
 		download,
 		readResultFile,
+		readInlineResultFile,
 		downloading,
 		reading,
 		refreshLimits,

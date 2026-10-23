@@ -874,6 +874,7 @@ export function ActiveConversation({
 						}}
 						onDownloadFile={files.download}
 						onPreviewFile={files.readResultFile}
+						onReadInlineFile={files.readInlineResultFile}
 						downloadingFileId={files.downloading}
 						previewingFileId={files.reading}
 						hasEarlier={timeline.hasEarlier}
