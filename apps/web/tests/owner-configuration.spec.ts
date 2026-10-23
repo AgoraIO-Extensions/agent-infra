@@ -2530,3 +2530,49 @@ test("directory and WeCom field errors share the public field error, WeCom card 
 	await expectCleanPage(page, pageErrors);
 	await noHorizontalOverflow(page);
 });
+
+// #3268 N8-2-01：移除环境变量的行后，焦点到同一位置下一行的「移除」，没有下一行时到上一行，没有行时到
+// 「添加环境变量」；之后多次采样仍在，不落到 body（D2-59）。两视口一致。
+test("removing an environment row hands focus to the neighbouring remove button or 添加环境变量 (#3268 N8-2-01)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await ownerConfigFixture(page);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const section = page.getByRole("region", {
+		name: "环境变量与 Secret",
+		exact: true,
+	});
+	const add = section.getByRole("button", { name: "添加环境变量" });
+	const remove = (row: number) =>
+		section.getByRole("button", { name: `移除：环境变量 ${row}`, exact: true });
+
+	// 删最后一行：到上一行的「移除」。
+	await add.click();
+	await expect(remove(2)).toBeVisible();
+	await remove(2).focus();
+	await page.keyboard.press("Enter");
+	await expect(remove(2)).toHaveCount(0);
+	await expectFocusSettled(remove(1), "移除：环境变量 2");
+
+	// 删第一行：下一行移到同一位置，焦点在它的「移除」上。
+	await add.click();
+	await section
+		.getByRole("combobox", { name: "环境变量名：环境变量 2" })
+		.selectOption("LOG_LEVEL");
+	await remove(1).click();
+	await expect(remove(2)).toHaveCount(0);
+	await expect(
+		section.getByRole("combobox", { name: "环境变量名：环境变量 1" }),
+	).toHaveValue("LOG_LEVEL");
+	await expectFocusSettled(remove(1), "移除：环境变量 1");
+
+	// 删唯一一行：到「添加环境变量」。
+	await page.keyboard.press("Enter");
+	await expect(remove(1)).toHaveCount(0);
+	await expectFocusSettled(add, "移除最后一个环境变量");
+	await expectNoDuplicateControls(page, "Owner 配置（移除环境变量，#3268）");
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
+});

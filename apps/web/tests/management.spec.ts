@@ -7367,3 +7367,71 @@ test("a missing or malformed multi-service YAML moves focus to the YAML textarea
 	expect(api.commands).toHaveLength(0);
 	await expectCleanPage(page, errors);
 });
+
+// #3268 N8-2-01：申请表单移除模型选项、环境变量或 Secret 的行后，焦点到同一位置下一行的「移除」，没有
+// 下一行时到上一行，该行没有「移除」或没有行时到对应的「添加…」；之后多次采样仍在，不落到 body
+// （D2-59）。两视口一致。
+test("removing application rows hands focus to the neighbouring remove button or the add button (#3268 N8-2-01)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/my-agents/new");
+	const button = (name: string) =>
+		page.getByRole("button", { name, exact: true });
+
+	// 模型选项：两行时删第 2 行，剩下一行没有「移除」，焦点到「添加模型选项」。
+	const addModel = button("添加模型选项");
+	await addModel.click();
+	await button("移除模型选项：模型选项 2").focus();
+	await page.keyboard.press("Enter");
+	await expect(button("移除模型选项：模型选项 1")).toHaveCount(0);
+	await expectFocusSettled(addModel, "移除模型选项：模型选项 2");
+	// 三行时删中间一行：下一行移到同一位置。
+	await addModel.click();
+	await addModel.click();
+	await button("移除模型选项：模型选项 2").click();
+	await expect(button("移除模型选项：模型选项 3")).toHaveCount(0);
+	await expectFocusSettled(
+		button("移除模型选项：模型选项 2"),
+		"移除模型选项（中间一行）",
+	);
+
+	// Secret：删最后一行到上一行，删唯一一行到「添加 Secret」。
+	await button("展开高级配置").click();
+	const addSecret = button("添加 Secret");
+	await addSecret.click();
+	await addSecret.click();
+	await button("移除 Secret：Secret 2").focus();
+	await page.keyboard.press("Enter");
+	await expect(button("移除 Secret：Secret 2")).toHaveCount(0);
+	await expectFocusSettled(
+		button("移除 Secret：Secret 1"),
+		"移除 Secret：Secret 2",
+	);
+	await page.keyboard.press("Enter");
+	await expect(button("移除 Secret：Secret 1")).toHaveCount(0);
+	await expectFocusSettled(addSecret, "移除最后一个 Secret");
+
+	// 环境变量：删第一行时下一行移到同一位置。
+	const addEnvironment = button("添加环境变量");
+	await addEnvironment.click();
+	await addEnvironment.click();
+	await page
+		.getByRole("textbox", { name: "变量名称：环境变量 2" })
+		.fill("LOG_LEVEL");
+	await button("移除环境变量：环境变量 1").click();
+	await expect(button("移除环境变量：环境变量 2")).toHaveCount(0);
+	await expect(
+		page.getByRole("textbox", { name: "变量名称：环境变量 1" }),
+	).toHaveValue("LOG_LEVEL");
+	await expectFocusSettled(
+		button("移除环境变量：环境变量 1"),
+		"移除环境变量：环境变量 1",
+	);
+	await page.keyboard.press("Enter");
+	await expectFocusSettled(addEnvironment, "移除最后一个环境变量");
+	await expectNoDuplicateControls(page, "创建申请（移除行，#3268）");
+	await expectCleanPage(page, errors);
+});

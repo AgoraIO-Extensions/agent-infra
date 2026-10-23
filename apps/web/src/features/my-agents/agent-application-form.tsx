@@ -25,6 +25,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { useRowRemovalFocus } from "@/hooks/use-row-removal-focus";
 import { useSubmitFocus } from "@/hooks/use-submit-focus";
 import { withObjectName } from "@/lib/accessible-name";
 import { cjkSpaced } from "@/lib/cjk-spacing";
@@ -110,7 +111,7 @@ type DraftField<T extends string> = {
 
 type DraftRowsProps<T extends string> = {
 	fields: readonly DraftField<T>[];
-	idPrefix: string;
+	idPrefix: "environment" | "secret";
 	label: string;
 	minimumRows?: number;
 	onChange: (index: number, key: T, value: string) => void;
@@ -151,6 +152,16 @@ function errorId(key: string) {
 	return `${fieldId(key)}-error`;
 }
 
+/** 可重复行的「移除」与「添加」按钮（移除后交出焦点的目标，D2-59、#3268 N8-2-01）。 */
+const rowRemoveId =
+	(prefix: "environment" | "secret" | "model") => (index: number) =>
+		`application-${prefix}-${index}-remove`;
+const rowAddId = {
+	environment: "application-add-environment",
+	secret: "application-add-secret",
+	model: "application-add-model-option",
+} as const;
+
 function describedBy(...ids: (string | undefined)[]) {
 	return ids.filter(Boolean).join(" ") || undefined;
 }
@@ -179,7 +190,7 @@ function firstFieldError(errors: AgentApplicationFieldErrors) {
 	};
 	const fallback =
 		document.getElementById("application-deployment-status") ??
-		document.getElementById("application-add-model-option");
+		document.getElementById(rowAddId.model);
 	return controls.find(isActionable) ?? fallback;
 }
 
@@ -540,6 +551,7 @@ function ModelRows({
 								variant="outline"
 								aria-label={withObjectName("移除模型选项", rowName)}
 								className="model-remove self-end"
+								id={rowRemoveId("model")(index)}
 								onClick={() => onRemove(index)}
 								type="button"
 							>
@@ -651,6 +663,7 @@ function DraftRows<T extends string>({
 								variant="outline"
 								aria-label={withObjectName(cjkSpaced`移除${label}`, rowName)}
 								className="self-end"
+								id={rowRemoveId(idPrefix)(index)}
 								onClick={() => onRemove(index)}
 								type="button"
 							>
@@ -673,6 +686,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	// 先把焦点交给它（字段随 fieldset 禁用），受理后结果页聚焦「申请已提交：待审批。」（H4-13、
 	// D2-59、#3242 K7-02）。
 	useSubmitFocus(props.submitting, fieldsetRef, submitRef);
+	// 移除模型选项、环境变量或 Secret 的行后，焦点到同一位置下一行的「移除」，没有时到上一行，
+	// 都没有时到对应的「添加…」（D2-59、#3268 N8-2-01）。
+	const focusAfterRemoval = useRowRemovalFocus();
 	const [focusRequest, setFocusRequest] = useState(0);
 	const focusStateRef = useRef<{
 		focusRequest: number;
@@ -1724,6 +1740,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 												(_, itemIndex) => itemIndex !== index,
 											);
 											setModels(next);
+											// 只剩一个模型选项时没有「移除」，焦点到「添加模型选项」。
+											focusAfterRemoval(
+												index,
+												rowRemoveId("model"),
+												rowAddId.model,
+											);
 											setFieldErrors((current) => {
 												const nextErrors = reindexRowErrors(
 													current,
@@ -1855,7 +1877,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									</div>
 									<Button
 										variant="outline"
-										id="application-add-model-option"
+										id={rowAddId.model}
 										onClick={() => {
 											dismissServerFormError();
 											setModels((current) => [...current, blankModel()]);
@@ -1932,6 +1954,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										(_, itemIndex) => itemIndex !== index,
 									);
 									setEnvironment(next);
+									focusAfterRemoval(
+										index,
+										rowRemoveId("environment"),
+										rowAddId.environment,
+									);
 									setFieldErrors((current) => {
 										const nextErrors = reindexRowErrors(
 											current,
@@ -1950,6 +1977,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							/>
 							<Button
 								variant="outline"
+								id={rowAddId.environment}
 								onClick={() => {
 									dismissServerFormError();
 									setEnvironment((current) => [...current, blankEnvironment()]);
@@ -2004,6 +2032,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										(_, itemIndex) => itemIndex !== index,
 									);
 									setSecrets(next);
+									focusAfterRemoval(
+										index,
+										rowRemoveId("secret"),
+										rowAddId.secret,
+									);
 									setFieldErrors((current) => {
 										const nextErrors = reindexRowErrors(
 											current,
@@ -2018,6 +2051,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							/>
 							<Button
 								variant="outline"
+								id={rowAddId.secret}
 								onClick={() => {
 									dismissServerFormError();
 									setSecrets((current) => [...current, blankEnvironment()]);

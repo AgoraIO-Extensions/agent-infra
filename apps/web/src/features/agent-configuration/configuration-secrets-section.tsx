@@ -10,6 +10,7 @@ import {
 	NativeSelectOption,
 } from "@/components/ui/native-select";
 import { useToast } from "@/components/ui/toast";
+import { useRowRemovalFocus } from "@/hooks/use-row-removal-focus";
 import { withObjectName } from "@/lib/accessible-name";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import type { AgentConfigurationEnvironmentDraft } from "./agent-configuration-draft.js";
@@ -36,6 +37,10 @@ type ConfigurationSecretsSectionProps = {
 	/** 替换或添加单个 Secret 的独立请求；未提供时不显示替换入口。 */
 	onReplaceSecret?: (name: string, value: string) => Promise<AgentProjectionV2>;
 };
+
+const environmentAddId = "configuration-environment-add";
+const environmentRemoveId = (index: number) =>
+	`configuration-environment-remove-${index}`;
 
 export function secretStatusText(secret: {
 	readonly isSet: boolean;
@@ -66,6 +71,9 @@ export function ConfigurationSecretsSection({
 		null,
 	);
 	const triggerRef = useRef<HTMLElement | null>(null);
+	// 移除环境变量后焦点到同一位置下一行的「移除」，没有时到上一行，都没有时到「添加环境变量」
+	// （D2-59、#3268 N8-2-01）。
+	const focusAfterRemoval = useRowRemovalFocus();
 	const secrets = agent.configuration.secrets;
 	const existingNames = secrets.map((secret) => secret.name);
 	const addableSecretKeys = allowedSecretKeys?.filter(
@@ -178,11 +186,17 @@ export function ConfigurationSecretsSection({
 								variant="ghost"
 								disabled={disabled}
 								aria-label={withObjectName("移除", rowName)}
-								onClick={() =>
+								id={environmentRemoveId(index)}
+								onClick={() => {
 									onEnvironmentChange((rows) =>
 										rows.filter((_, rowIndex) => rowIndex !== index),
-									)
-								}
+									);
+									focusAfterRemoval(
+										index,
+										environmentRemoveId,
+										environmentAddId,
+									);
+								}}
 							>
 								<XIcon aria-hidden="true" data-icon="inline-start" />
 								移除
@@ -196,6 +210,7 @@ export function ConfigurationSecretsSection({
 					type="button"
 					variant="outline"
 					disabled={disabled}
+					id={environmentAddId}
 					onClick={() =>
 						onEnvironmentChange((rows) => [...rows, { name: "", value: "" }])
 					}
