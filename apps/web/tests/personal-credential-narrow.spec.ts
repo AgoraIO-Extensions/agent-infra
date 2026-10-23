@@ -1,5 +1,11 @@
 import { pilotBrowserHttpOpenApiPathsV2 } from "@agent-infra/contracts/pilot";
-import { expect, type Page, type TestInfo, test } from "@playwright/test";
+import {
+	expect,
+	type Locator,
+	type Page,
+	type TestInfo,
+	test,
+} from "@playwright/test";
 import type {
 	PersonalApiCredentialMetadataV1,
 	PersonalApiCredentialNarrowRequestV1,
@@ -707,7 +713,8 @@ for (const via of ["button", "field"] as const)
 		await expectCleanPage(page, errors);
 	});
 
-// #3242 K7-02：「签发个人凭证」进行中是可聚焦的禁用；签发后一次性凭证提示以 status 播报，焦点仍在按钮上。
+// #3242 K7-02：「签发个人凭证」进行中是可聚焦的禁用；签发后一次性凭证提示以 status 播报。
+// #3269 N8-3-09：提示在页顶、按钮在页底，签发后提示滚入视口，焦点交给提示标题（原为留在按钮上）。
 test("issuing a personal credential keeps focus on the pending button (K7-02)", async ({
 	page,
 }, info) => {
@@ -744,10 +751,205 @@ test("issuing a personal credential keeps focus on the pending button (K7-02)", 
 	await expect(issue).toHaveText("正在签发…");
 	await expectFocusableBusy(issue, "签发个人凭证");
 	issuing.release();
-	await expect(
-		page.getByText("已签发个人 API 凭证", { exact: true }),
-	).toBeVisible();
-	await expectFocusSettled(issue, "签发个人凭证");
+	const title = page.getByText("已签发个人 API 凭证", { exact: true });
+	await expect(title).toBeVisible();
+	await expectFocusSettled(title, "签发个人凭证");
+	await expectInViewport(page, title, "一次性凭证提示标题");
 	await expectNoDuplicateControls(page, "API 凭证（K7-02）");
+	await expectCleanPage(page, errors);
+});
+
+/** 元素整体在吸顶顶栏之下、视口之内（#3269 N8-3-09）。 */
+async function expectInViewport(page: Page, target: Locator, context: string) {
+	const [box, topbar, height] = await Promise.all([
+		target.boundingBox(),
+		page.locator(".platform-topbar").boundingBox(),
+		page.evaluate(() => innerHeight),
+	]);
+	expect(box, `${context} 几何`).not.toBeNull();
+	expect(box?.y ?? 0, `${context} 顶边在顶栏之下`).toBeGreaterThanOrEqual(
+		(topbar?.y ?? 0) + (topbar?.height ?? 0) - 0.5,
+	);
+	expect(
+		(box?.y ?? 0) + (box?.height ?? 0),
+		`${context} 底边在视口内`,
+	).toBeLessThanOrEqual(height + 0.5);
+}
+
+// #3269 N8-3-09：签发结果与失败提示在页顶、「签发个人凭证」在页底。签发失败、幂等重放与一次性凭证
+// 提示出现后都滚入视口并接过焦点（凭证到提示标题，其余到提示本身），凭证明文在视口内；
+// N8-3-02：「关闭一次性凭证提示」后提示卸载，焦点回到「签发个人凭证」，不落到 body。
+test("issue results and failures come into view and take focus; closing the one-time notice returns to the issue button (N8-3-09, N8-3-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	let attempt = 0;
+	await page.route("**/api/v2/me/api-credentials", (route) => {
+		if (route.request().method() !== "POST") return route.fallback();
+		attempt += 1;
+		if (attempt === 1)
+			return route.fulfill({
+				status: 503,
+				json: {
+					schemaVersion: 1,
+					code: "DEPENDENCY_UNAVAILABLE",
+					message: "Controlled issue failure",
+					retryable: true,
+					traceId: "trace-credential-issue",
+				},
+			});
+		return route.fulfill({
+			status: attempt === 2 ? 200 : 201,
+			json: {
+				metadata: { ...initial, credentialId: `personal-issued-${attempt}` },
+				credential: attempt === 2 ? null : `papi_${"B".repeat(43)}`,
+				replayed: attempt === 2,
+			},
+		});
+	});
+	await page.goto("/my-settings/api-credentials");
+	await expect(
+		page.getByRole("table", { name: "个人 API 凭证" }),
+	).toBeVisible();
+	const issue = page.getByRole("button", { name: "签发个人凭证", exact: true });
+	const press = async () => {
+		await issue.focus();
+		await page.keyboard.press("Enter");
+	};
+
+	await press();
+	const failure = page
+		.getByRole("alert")
+		.filter({ hasText: "API 凭证请求暂时不可用" });
+	await expectFocusSettled(failure, "签发失败提示");
+	await expectInViewport(page, failure, "签发失败提示");
+
+	await press();
+	const replay = page.getByRole("status").filter({ hasText: "幂等重放" });
+	await expectFocusSettled(replay, "幂等重放提示");
+	await expectInViewport(page, replay, "幂等重放提示");
+	await expect(failure).toHaveCount(0);
+
+	await press();
+	const title = page.getByText("已签发个人 API 凭证", { exact: true });
+	await expectFocusSettled(title, "一次性凭证提示");
+	await expectInViewport(page, title, "一次性凭证提示标题");
+	await expectInViewport(
+		page,
+		page.locator("code", { hasText: /^papi_B+$/ }),
+		"一次性凭证明文",
+	);
+	await expectNoDuplicateControls(page, "API 凭证（N8-3-09）");
+
+	await page.getByRole("button", { name: "关闭一次性凭证提示" }).click();
+	await expect(title).toHaveCount(0);
+	await expectFocusSettled(issue, "关闭一次性凭证提示后");
+	await expectCleanPage(page, errors);
+});
+
+// #3269 N8-3-02：列表读取失败后的「重新加载」是 RecoveryButton。读取失败作为数据返回，重读期间提示保留、
+// 按钮可聚焦地禁用；再次失败焦点留在按钮上；恢复后提示与按钮卸载，焦点到页面 h1，不落到 body。
+test("reloading the personal credential list hands focus to the h1 and back on repeated failure (N8-3-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	let failedReads = 2;
+	await page.route("**/api/v2/me/api-credentials", (route) => {
+		if (route.request().method() !== "GET" || failedReads === 0)
+			return route.fallback();
+		failedReads -= 1;
+		return route.fulfill({
+			status: 503,
+			json: {
+				schemaVersion: 1,
+				code: "DEPENDENCY_UNAVAILABLE",
+				message: "Controlled list failure",
+				retryable: true,
+				traceId: "trace-credential-list",
+			},
+		});
+	});
+	await page.goto("/my-settings/api-credentials");
+	const heading = page.getByRole("heading", { level: 1, name: "API 凭证" });
+	const failure = page
+		.getByRole("alert")
+		.filter({ hasText: "暂时无法读取 API 凭证，请稍后重试。" });
+	await expect(failure).toBeVisible();
+	const reload = await pinElement(
+		failure.getByRole("button", { name: "重新加载" }),
+		"reload-personal",
+	);
+	let reading = await holdRequests(page, "GET", "/api/v2/me/api-credentials");
+	await reload.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusableBusy(reload, "重新加载读取中");
+	reading.release();
+	await expect(reload).not.toHaveAttribute("aria-disabled", "true");
+	await expect(failure).toBeVisible();
+	await expectFocusSettled(reload, "重新加载仍失败");
+	reading = await holdRequests(page, "GET", "/api/v2/me/api-credentials");
+	await page.keyboard.press("Enter");
+	await expectFocusableBusy(reload, "重新加载恢复中");
+	reading.release();
+	await expect(
+		page.getByRole("table", { name: "个人 API 凭证" }),
+	).toBeVisible();
+	await expectFocusSettled(heading, "重新加载恢复后");
+	await expectNoDuplicateControls(page, "API 凭证（重新加载）");
+	await expectCleanPage(page, errors);
+});
+
+// #3269 N8-3-10：行内收窄表单「保留的权限」选项与同页「签发个人凭证」的权限选项同一外观：10px 圆角、
+// 14px 文字、悬停 muted 底色，右侧为权限码；复选框名称仍为「{权限}：{凭证标识}」（C2-19）。
+test("narrow form scope options match the issue form options (N8-3-10)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	const { form } = await openForm(page);
+	const issueSection = page.getByRole("region", { name: "签发个人凭证" });
+	const option = (scope: Locator) =>
+		scope.locator("xpath=ancestor::div[contains(@class,'border')][1]");
+	const narrowOption = option(
+		form.getByRole("checkbox", {
+			name: `读取 Agent：${initial.credentialId}`,
+			exact: true,
+		}),
+	);
+	const issueOption = option(
+		issueSection.getByRole("checkbox", { name: "读取 Agent", exact: true }),
+	);
+	const style = (target: Locator) =>
+		target.evaluate((element) => {
+			const value = getComputedStyle(element);
+			return {
+				radius: value.borderTopLeftRadius,
+				fontSize: value.fontSize,
+				code: element.querySelector("code")?.textContent ?? null,
+			};
+		});
+	expect(await style(narrowOption)).toEqual({
+		radius: "10px",
+		fontSize: "14px",
+		code: "agent:read",
+	});
+	expect(await style(narrowOption)).toEqual(await style(issueOption));
+	const hovered = async (target: Locator) => {
+		await target.hover();
+		return target.evaluate(
+			(element) => getComputedStyle(element).backgroundColor,
+		);
+	};
+	const narrowHover = await hovered(narrowOption);
+	expect(narrowHover).toBe(await hovered(issueOption));
+	// 触屏视口没有 hover（Tailwind hover: 只在 (hover: hover) 下生效），只在桌面比较底色本身。
+	if (info.project.name !== "mobile")
+		expect(narrowHover).not.toBe("rgba(0, 0, 0, 0)");
+	await expectNoDuplicateControls(page, "API 凭证（N8-3-10）");
 	await expectCleanPage(page, errors);
 });

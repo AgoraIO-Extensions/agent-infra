@@ -61,6 +61,7 @@ function ApiCredentialsRoute() {
 					heading?.focus({ preventScroll: true });
 				}}
 				onRetry={() => void credentials.refetch()}
+				retrying={credentials.isFetching}
 				onIssue={async (body) => {
 					const result = await issue.mutateAsync(body);
 					await credentials.refetch().catch(() => undefined);
@@ -112,6 +113,7 @@ function ApiCredentialsRoute() {
 				headingRef={applicationHeading}
 				state={application.state}
 				onRetry={() => void application.refetch()}
+				retrying={application.isFetching}
 				onOpenApplication={(applicationId) =>
 					router.history.push(
 						`/my-settings/api-credentials?applicationId=${encodeURIComponent(applicationId)}`,

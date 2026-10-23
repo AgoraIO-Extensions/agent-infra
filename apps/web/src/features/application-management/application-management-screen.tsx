@@ -47,6 +47,8 @@ export type ApplicationManagementViewState =
 type ApplicationManagementScreenProps = {
 	state: ApplicationManagementViewState;
 	onRetry?: () => void;
+	/** 应用重读进行中：「重新加载」保持可聚焦的禁用（读取失败作为数据返回，提示在重读期间保留）。 */
+	retrying?: boolean;
 	onOpenApplication?: (applicationId: string) => void;
 	onRegister?: (name: string) => Promise<ApplicationMetadataV1>;
 	onDisable?: (applicationId: string) => Promise<ApplicationMetadataV1>;
@@ -86,6 +88,7 @@ function unavailableMessage(
 export function ApplicationManagementScreen({
 	state,
 	onRetry,
+	retrying = false,
 	onOpenApplication,
 	onRegister,
 	onDisable,
@@ -205,14 +208,15 @@ export function ApplicationManagementScreen({
 			{state.kind === "unavailable" ? (
 				<Alert tone="danger" role="alert">
 					<AlertDescription>{unavailableMessage(state)}</AlertDescription>
-					{/* 重读时先换成读取行、按钮随之卸载：本分区在页面底部，焦点交给「应用管理」标题而不是
-					    页面 h1，仍失败时回到按钮（RecoveryButton，#3269 N8-3-02）。 */}
+					{/* 重读期间失败提示保留、按钮可聚焦地禁用；恢复后提示与按钮卸载：本分区在页面底部，焦点
+					    交给「应用管理」标题而不是页面 h1，仍失败时留在按钮上（RecoveryButton，#3269 N8-3-02）。 */}
 					{state.retryable && onRetry ? (
 						<AlertAction>
 							<RecoveryButton
 								variant="outline"
 								recoveryKey="重新加载应用"
 								recoveryTarget={() => document.getElementById(headingId)}
+								busy={retrying}
 								onClick={onRetry}
 							>
 								<RefreshCw aria-hidden="true" data-icon="inline-start" />

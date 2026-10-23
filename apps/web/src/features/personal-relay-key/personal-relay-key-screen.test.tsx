@@ -122,7 +122,9 @@ describe("PersonalRelayKeyScreen", () => {
 		expect(
 			screen.getByRole("heading", { level: 2, name: "个人 Key" }),
 		).toBeTruthy();
-		expect(screen.getByText("读取当前状态后才能设置、替换或撤销。")).toBeTruthy();
+		expect(
+			screen.getByText("读取当前状态后才能设置、替换或撤销。"),
+		).toBeTruthy();
 		expect(screen.queryByText("接入个人 Key")).toBeNull();
 		const notice = screen
 			.getByText("费用和权限跟随个人 Key")

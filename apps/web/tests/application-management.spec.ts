@@ -563,3 +563,118 @@ test("registering an application keeps focus on the pending button, then on the 
 	);
 	await expectCleanPage(page, errors);
 });
+
+// #3269 N8-3-09：「签发应用凭证」失败的提示在「应用管理」分区顶部、按钮在表单底部：失败提示出现后
+// 滚入视口（在吸顶顶栏之下）并接过焦点，不让焦点留在页底按钮上看不到原因。
+test("a failed application credential issue brings its failure into view and focuses it (N8-3-09)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.route(/\/api\/v2\/applications\/[^/]+\/credentials$/, (route) =>
+		route.request().method() === "POST"
+			? route.fulfill({
+					status: 503,
+					json: {
+						schemaVersion: 1,
+						code: "DEPENDENCY_UNAVAILABLE",
+						message: "Controlled credential failure",
+						retryable: true,
+						traceId: "browser-credential-failure",
+					},
+				})
+			: route.fallback(),
+	);
+	await page.goto(
+		`/my-settings/api-credentials?applicationId=${application.applicationId}`,
+	);
+	await page.getByLabel("接收主体 ID").fill("browser-recipient-1");
+	const issue = page.getByRole("button", { name: "签发应用凭证", exact: true });
+	await issue.focus();
+	await page.keyboard.press("Enter");
+	const section = page.getByRole("region", { name: "应用管理" });
+	const failure = section.getByRole("alert").first();
+	await expectFocusSettled(failure, "签发应用凭证失败");
+	const [box, topbar, height] = await Promise.all([
+		failure.boundingBox(),
+		page.locator(".platform-topbar").boundingBox(),
+		page.evaluate(() => innerHeight),
+	]);
+	expect(box?.y ?? 0).toBeGreaterThanOrEqual(
+		(topbar?.y ?? 0) + (topbar?.height ?? 0) - 0.5,
+	);
+	expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(height + 0.5);
+	await expectCleanPage(page, errors);
+	expect(await duplicateControlNames(page)).toEqual([]);
+});
+
+// #3269 N8-3-02：应用读取失败后的「重新加载」是 RecoveryButton。读取失败作为数据返回，重读期间提示保留、
+// 按钮可聚焦地禁用，再次失败焦点留在按钮上；恢复后按钮卸载，本分区在页面底部，焦点交给「应用管理」
+// 标题（不是页顶 h1）。
+test("reloading the application hands focus to the 应用管理 heading and back on repeated failure (N8-3-02)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	let failedReads = 2;
+	const applicationPath = `/api/v2/applications/${application.applicationId}`;
+	await page.route(
+		(url) => url.pathname === applicationPath,
+		(route) => {
+			if (route.request().method() !== "GET" || failedReads === 0)
+				return route.fallback();
+			failedReads -= 1;
+			return route.fulfill({
+				status: 503,
+				json: {
+					schemaVersion: 1,
+					code: "DEPENDENCY_UNAVAILABLE",
+					message: "Controlled application failure",
+					retryable: true,
+					traceId: "browser-application-failure",
+				},
+			});
+		},
+	);
+	await page.goto(
+		`/my-settings/api-credentials?applicationId=${application.applicationId}`,
+	);
+	const section = page.getByRole("region", { name: "应用管理" });
+	const heading = section.getByRole("heading", { level: 2, name: "应用管理" });
+	const failure = section
+		.getByRole("alert")
+		.filter({ hasText: "暂时无法读取应用，请稍后重试。" });
+	await expect(failure).toBeVisible();
+	const reload = await pinElement(
+		failure.getByRole("button", { name: "重新加载" }),
+		"reload-application",
+	);
+	let reading = await holdRequests(page, "GET", applicationPath);
+	await reload.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusableBusy(reload, "重新加载应用读取中");
+	reading.release();
+	await expect(reload).not.toHaveAttribute("aria-disabled", "true");
+	await expect(failure).toBeVisible();
+	await expectFocusSettled(reload, "重新加载应用仍失败");
+	reading = await holdRequests(page, "GET", applicationPath);
+	await page.keyboard.press("Enter");
+	await expectFocusableBusy(reload, "重新加载应用恢复中");
+	reading.release();
+	await expect(
+		section.getByRole("heading", { level: 3, name: application.name }),
+	).toBeVisible();
+	await expectFocusSettled(heading, "重新加载应用恢复后");
+	await expectCleanPage(page, errors);
+	expect(await duplicateControlNames(page)).toEqual([]);
+});
