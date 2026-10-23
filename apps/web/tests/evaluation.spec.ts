@@ -171,11 +171,13 @@ test("evaluation segment panels take the empty state's 14px radius for the keybo
 	const tabs = tablist.getByRole("tab");
 	await expect(tabs).toHaveText(["评测集", "实验", "反馈"]);
 	for (const tab of await tabs.all()) {
+		const name = (await tab.textContent()) ?? "";
 		await tab.click();
 		await expect(tab).toHaveAttribute("aria-selected", "true");
 		await tab.focus();
 		await page.keyboard.press("Tab");
-		const panel = page.getByRole("tabpanel");
+		// 切换时上一面板在退出动画期间仍挂载（inert），按名称只取当前分段的面板。
+		const panel = page.getByRole("tabpanel", { name });
 		await expect(panel).toBeFocused();
 		const ring = await panel.evaluate((element) => {
 			const style = getComputedStyle(element);
@@ -204,7 +206,7 @@ test("evaluation segment panels take the empty state's 14px radius for the keybo
 					panelBox.bottom + reach <= cardBox.bottom,
 			};
 		});
-		expect(ring, `${await tab.textContent()} 面板`).toEqual({
+		expect(ring, `${name} 面板`).toEqual({
 			radius: "14px",
 			emptyRadius: "14px",
 			sameBox: true,

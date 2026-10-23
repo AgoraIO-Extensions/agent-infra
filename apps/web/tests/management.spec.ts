@@ -31,6 +31,7 @@ import { captureDesignContract, designViewports } from "./design-contract";
 import { recordApiRequests } from "./generated-client-paths";
 import {
 	expectFocusableBusy,
+	expectFocusHeld,
 	expectFocusSettled,
 	expectNoDuplicateControls,
 	holdRequests,
@@ -7081,5 +7082,82 @@ test("confirmed withdrawal and footer lifecycle commands keep focus on the pendi
 	await expect(retry).toHaveCount(0);
 	await expectFocusSettled(heading, "重试创建受理");
 	await expectNoDuplicateControls(page, "Owner 配置（重试创建后，K7-02）");
+	await expectCleanPage(page, errors);
+});
+
+// #3242 K7-02：危险区「停止 Agent」与「管理员操作」区「停用 Agent」与页脚共用同一触发按钮，确认后弹窗把
+// 焦点交给所在区域标题；命令挂起期间触发按钮是可聚焦的禁用，多次采样焦点都在区域标题上，不落到 body。
+// 受理后区域随可用命令卸载，焦点到 h1（H4-21、D2-22）。
+test("danger-zone stop and administrator disable keep focus off body while pending (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const api = await fixture(page, "owner-admin");
+	const heading = page.getByRole("heading", { level: 1 });
+	const confirmWith = async (dialogName: string, confirm: string) => {
+		const dialog = page.getByRole("dialog", { name: dialogName });
+		await expect(dialog).toBeVisible();
+		await dialog.getByRole("button", { name: confirm, exact: true }).focus();
+		await page.keyboard.press("Enter");
+		await expect(dialog).toBeHidden();
+	};
+	const busyTrigger = async (trigger: Locator, context: string) => {
+		await expect(trigger, `${context} aria-disabled`).toHaveAttribute(
+			"aria-disabled",
+			"true",
+		);
+		expect(
+			await trigger.evaluate(
+				(element) => (element as HTMLButtonElement).disabled,
+			),
+			`${context} 原生 disabled`,
+		).toBe(false);
+	};
+
+	api.agentState("available", "ready");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const danger = page.getByRole("region", { name: "停止 Agent", exact: true });
+	const stop = await pinElement(
+		danger.getByRole("button", { name: "停止 Agent" }),
+		"danger-stop",
+	);
+	await stop.focus();
+	await page.keyboard.press("Enter");
+	api.holdNextCommand();
+	await confirmWith("停止这个 Agent？", "停止 Agent");
+	await expect(stop).toHaveText("停止中…");
+	await busyTrigger(stop, "停止 Agent");
+	await expectFocusHeld(
+		danger.getByRole("heading", { level: 2, name: "停止 Agent" }),
+		[30, 150, 400, 1000],
+		"停止 Agent 进行中",
+	);
+	api.release();
+	await expect(toastHost(page)).toHaveText("Agent 已停止，历史会话转为只读");
+	await expect(danger).toHaveCount(0);
+	await expectFocusSettled(heading, "停止 Agent 受理");
+
+	const admin = page.getByRole("region", { name: "管理员操作", exact: true });
+	const disable = await pinElement(
+		admin.getByRole("button", { name: "停用 Agent" }),
+		"admin-disable",
+	);
+	await disable.focus();
+	await page.keyboard.press("Enter");
+	api.holdNextCommand();
+	await confirmWith("停用 Agent？", "确认停用");
+	await expect(disable).toHaveText("停用中…");
+	await busyTrigger(disable, "停用 Agent");
+	await expectFocusHeld(
+		admin.getByRole("heading", { level: 2, name: "管理员操作" }),
+		[30, 150, 400, 1000],
+		"停用 Agent 进行中",
+	);
+	api.release();
+	await expect(toastHost(page)).toHaveText(/已提交停用请求|Agent 已停用/);
+	await expect(admin).toHaveCount(0);
+	await expectFocusSettled(heading, "停用 Agent 受理");
+	await expectNoDuplicateControls(page, "Owner 配置（停用后，K7-02）");
 	await expectCleanPage(page, errors);
 });
