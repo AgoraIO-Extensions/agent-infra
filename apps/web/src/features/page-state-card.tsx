@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { LogIn, RefreshCw } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ComponentProps, type ReactNode, useState } from "react";
 import { buttonVariants } from "@/components/ui/button";
 import { StateCard } from "@/components/ui/state-card";
 import type { CollectionReadUnavailable } from "./collection-read-failure";
@@ -57,6 +57,25 @@ const announcedKinds = new Set<PageStateKind>([
 ]);
 
 /**
+ * 读取 401 的「重新登录」：与设计 #states state-login 代表卡相同，带 16px LogIn 图标。状态卡默认操作、
+ * Agent 目录、Agent 管理与工作台共用，不各自拼按钮内容（#3327 N10-1-04）。
+ */
+export function ReloginButton({
+	recoveryKey = "重新登录",
+	children = "重新登录",
+	...props
+}: Omit<ComponentProps<typeof RecoveryButton>, "recoveryKey"> & {
+	recoveryKey?: string;
+}) {
+	return (
+		<RecoveryButton recoveryKey={recoveryKey} {...props}>
+			<LogIn aria-hidden="true" data-icon="inline-start" />
+			{children}
+		</RecoveryButton>
+	);
+}
+
+/**
  * 重新读取服务端会话：会话已失效时由壳层切换到登录页，不整页刷新；会话仍有效时调用
  * onStillValid，由页面把失败的读取重做一次（W-03），否则页面会停在同一张卡上。
  */
@@ -72,8 +91,7 @@ function ReauthenticateAction({
 	// 只反映本次点击，不受挂载时的后台会话重读影响。
 	const [checking, setChecking] = useState(false);
 	return (
-		<RecoveryButton
-			recoveryKey="重新登录"
+		<ReloginButton
 			busy={checking || retrying}
 			onClick={async () => {
 				setChecking(true);
@@ -86,9 +104,8 @@ function ReauthenticateAction({
 				}
 			}}
 		>
-			<LogIn aria-hidden="true" data-icon="inline-start" />
 			{checking ? "正在检查…" : "重新登录"}
-		</RecoveryButton>
+		</ReloginButton>
 	);
 }
 

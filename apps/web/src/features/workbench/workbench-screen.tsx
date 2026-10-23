@@ -45,6 +45,7 @@ import type {
 } from "../collection-read-failure.js";
 import { conversationDisplayTitle } from "../conversation/conversation-display-title.js";
 import type { MyAgentApplicationsState } from "../my-agents/my-agent-applications.js";
+import { ReloginButton } from "../page-state-card.js";
 import { RecoveryButton } from "../recovery-button.js";
 import {
 	type TemplateNameLookup,
@@ -411,13 +412,8 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 					</AlertDescription>
 					{onRelogin && (
 						<AlertAction>
-							<RecoveryButton
-								recoveryKey="重新登录"
-								busy={refreshing}
-								onClick={onRelogin}
-							>
-								重新登录
-							</RecoveryButton>
+							{/* 与状态卡、Agent 目录的「重新登录」同一按钮，带 LogIn 图标（#3327 N10-1-04）。 */}
+							<ReloginButton busy={refreshing} onClick={onRelogin} />
 						</AlertAction>
 					)}
 				</Alert>

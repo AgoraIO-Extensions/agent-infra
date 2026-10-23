@@ -38,8 +38,8 @@ const failure = (status: number) => ({
 });
 
 /**
- * 受控平台：会话固定有效并记录读取次数；expired 中的路径在 recover() 前返回 401，之后按 ok 返回；
- * 其余 API 返回 404。请求记录只保留方法与路径。
+ * 受控平台：会话默认有效并记录读取次数，expireSession() 后会话读取返回 401；expired 中的路径在
+ * recover() 前返回 401，之后按 ok 返回；其余 API 返回 404。请求记录只保留方法与路径。
  */
 async function platform(
 	page: Page,
@@ -49,13 +49,16 @@ async function platform(
 	const reads: string[] = [];
 	let sessionReads = 0;
 	let recovered = false;
+	let sessionExpired = false;
 	await page.route("**/api/**", async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
 		if (request.method() === "GET") reads.push(path);
 		if (path === "/api/v1/session") {
 			sessionReads += 1;
-			return route.fulfill({ json: employee });
+			return sessionExpired
+				? route.fulfill({ status: 401, json: failure(401) })
+				: route.fulfill({ json: employee });
 		}
 		if (path === "/api/v1/connection/capability")
 			return route.fulfill({
@@ -72,6 +75,9 @@ async function platform(
 		sessionReads: () => sessionReads,
 		recover() {
 			recovered = true;
+		},
+		expireSession() {
+			sessionExpired = true;
 		},
 	};
 }
@@ -357,6 +363,72 @@ for (const target of reloginPages) {
 				`${path} 重读`,
 			).toBeGreaterThanOrEqual(2);
 		// 整页没有重新加载。
+		expect(
+			await page.evaluate(
+				() => performance.getEntriesByType("navigation").length,
+			),
+		).toBe(1);
+		await expectCleanPage(page, errors);
+	});
+}
+
+// #3327 N10-1-01：「重新登录」确认会话已失效时整页换成登录页，焦点同主动退出交给登录页（本构建未配置
+// 登录入口，没有登录控件，到「登录工作区」标题），确认中与完成后都不落到 body；整页没有重新加载。
+for (const target of reloginPages) {
+	test(`a 401 re-login on ${target.name} that finds the session expired hands focus to the login page, not body (#3327 N10-1-01)`, async ({
+		page,
+	}, info) => {
+		const mobile = info.project.name === "mobile";
+		await designViewport(page, mobile);
+		const errors = trackPageErrors(page);
+		const control = await platform(page, reloginResponses, target.expired);
+		await page.goto(target.path);
+		const main = page.locator("#main-content");
+		await expect(
+			main.getByRole("heading", { level: 1, name: target.heading }),
+		).toBeVisible();
+		const trigger = await pinElement(
+			main.getByRole("button", { name: target.buttons[0], exact: true }),
+			"relogin-expired",
+		);
+		// 每处「重新登录」都带 16px LogIn 图标（N10-1-04 顺带核对）。
+		const icon = trigger.locator(":scope > svg");
+		await expect(icon).toHaveClass(/lucide-log-in/);
+		expect(await icon.boundingBox()).toMatchObject({ width: 16, height: 16 });
+		control.expireSession();
+		const hold = await holdRequests(page, "GET", "/api/v1/session");
+		await trigger.focus();
+		await page.keyboard.press("Enter");
+		await expect.poll(() => hold.held()).toBeGreaterThanOrEqual(1);
+		if (target.busy === "trigger")
+			await expectFocusableBusy(
+				trigger,
+				`${target.name} 确认会话中`,
+				[30, 150],
+			);
+		else
+			await expect
+				.poll(
+					() =>
+						page.evaluate(() => {
+							const active = document.activeElement;
+							return active?.id === "main-content" || active?.tagName === "H1";
+						}),
+					{ message: `${target.name} 确认会话中的焦点` },
+				)
+				.toBe(true);
+		hold.release();
+		const title = page.getByRole("heading", { level: 1, name: "登录工作区" });
+		await expect(title).toBeVisible();
+		await expect(page.locator(".login-expired")).toHaveAttribute(
+			"role",
+			"status",
+		);
+		await expectFocusSettled(
+			title,
+			`${target.name} 确认会话已失效后`,
+			[30, 150, 400, 1200],
+		);
 		expect(
 			await page.evaluate(
 				() => performance.getEntriesByType("navigation").length,

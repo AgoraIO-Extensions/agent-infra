@@ -15,7 +15,13 @@ import {
 	test,
 } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
-import { expectFocusSettled, expectNoDuplicateControls } from "./page-health";
+import {
+	expectFocusableBusy,
+	expectFocusSettled,
+	expectNoDuplicateControls,
+	holdRequests,
+	pinElement,
+} from "./page-health";
 import {
 	expectCleanPage,
 	expectEmptyRows,
@@ -952,6 +958,57 @@ test.describe("Agent directory design alignment", () => {
 						.controlledNoReload,
 			),
 		).toBe("kept");
+		expect(api.commands).toEqual([]);
+	});
+
+	// #3327 N10-1-01：确认会话已失效、整页换成登录页后，焦点同主动退出交给登录页（本构建未配置登录入口，
+	// 到「登录工作区」标题），确认中留在可聚焦的「重新登录」上，30 / 150 / 400 / 1200ms 都不落到 body。
+	// N10-1-04：目录 401 卡的「重新登录」与 Agent 管理、设计 #states 代表卡相同，带 16px LogIn 图标。
+	test("a 401 re-login that finds the session expired hands focus to the login page, not body (#3327 N10-1-01, N10-1-04)", async ({
+		page,
+	}, info) => {
+		const mobile = info.project.name === "mobile";
+		if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
+		const errors = trackPageErrors(page);
+		const api = await fixture(page);
+		api.current.failure = 401;
+		await page.goto("/agents");
+		const card = page.locator('#main-content [data-slot="state-card"]');
+		await expect(card).toHaveAttribute("data-kind", "login");
+		const relogin = await pinElement(
+			card.getByRole("button", { name: "重新登录", exact: true }),
+			"directory-relogin",
+		);
+		await expect(relogin).toHaveText("重新登录");
+		const icon = relogin.locator(":scope > svg");
+		await expect(icon).toHaveCount(1);
+		await expect(icon).toHaveAttribute("aria-hidden", "true");
+		await expect(icon).toHaveAttribute("data-icon", "inline-start");
+		await expect(icon).toHaveClass(/lucide-log-in/);
+		expect(await icon.boundingBox()).toMatchObject({ width: 16, height: 16 });
+		await info.attach(`n10-1-04-agents-401-${mobile ? 390 : 1440}`, {
+			body: await card.screenshot(),
+			contentType: "image/png",
+		});
+		api.current.sessionExpired = true;
+		const hold = await holdRequests(page, "GET", "/api/v1/session");
+		await relogin.focus();
+		await page.keyboard.press("Enter");
+		await expect.poll(() => hold.held()).toBeGreaterThanOrEqual(1);
+		await expectFocusableBusy(relogin, "Agent 目录确认会话中", [30, 150]);
+		hold.release();
+		const title = page.getByRole("heading", { level: 1, name: "登录工作区" });
+		await expect(title).toBeVisible();
+		await expect(page.locator(".login-expired")).toHaveAttribute(
+			"role",
+			"status",
+		);
+		await expectFocusSettled(
+			title,
+			"Agent 目录确认会话已失效后",
+			[30, 150, 400, 1200],
+		);
+		await expectCleanPage(page, errors);
 		expect(api.commands).toEqual([]);
 	});
 });
