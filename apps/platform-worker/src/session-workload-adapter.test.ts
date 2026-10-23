@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type {
 	SessionSandboxDeletionProgressV1,
+	SessionSandboxLifecycleV1,
 	SessionSandboxResourceIdentityV1,
 } from "@agent-infra/platform-core";
 import { sessionSandboxFileExchangeTokenV1 } from "@agent-infra/platform-core";
@@ -206,8 +207,8 @@ describe("Sandbox identity for resources created before the managed label (#2691
 	});
 });
 
-it("materializes custom Owner Secret values only into the Session Secret", () => {
-	const custom: SessionSandboxAllocationV1 = {
+function customAllocation(): SessionSandboxAllocationV1 {
+	return {
 		...allocation,
 		runtime: {
 			driver: "acp",
@@ -244,6 +245,10 @@ it("materializes custom Owner Secret values only into the Session Secret", () =>
 			},
 		},
 	};
+}
+
+it("materializes custom Owner Secret values only into the Session Secret", () => {
+	const custom = customAllocation();
 	bindSessionSandboxCustomSecretMaterializationV1(custom, {
 		data: { MODEL_API_KEY: "redacted-test-value" },
 		environmentNames: ["MODEL_API_KEY"],
@@ -266,6 +271,131 @@ it("materializes custom Owner Secret values only into the Session Secret", () =>
 		},
 	});
 	expect(JSON.stringify(pod)).not.toContain("redacted-test-value");
+});
+
+async function retainedCustomPVCFixture(sourceStatus: "ready" | "stopped") {
+	const client = api();
+	const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+	const source = customAllocation();
+	const materialization = {
+		data: { MODEL_API_KEY: "synthetic-resume-secret" },
+		environmentNames: ["MODEL_API_KEY"],
+	};
+	bindSessionSandboxCustomSecretMaterializationV1(source, materialization);
+	await adapter.apply(source);
+	const observed = await adapter.observe(source);
+	const progress = new Map<string, SessionSandboxDeletionProgressV1>();
+	const target = { ...source, resourceFence: source.resourceFence + 1 };
+	const receipt = await adapter.cleanup(source, observed.resources, {
+		sourceGeneration: source.generation,
+		sourceResourceFence: source.resourceFence,
+		targetGeneration: target.generation,
+		targetResourceFence: target.resourceFence,
+		managementFence: 1,
+		async recordDeletionProgress(value) {
+			progress.set(value.resource.kind, value);
+			return "committed";
+		},
+	});
+	const pvc = receipt.retainedPVC;
+	if (!pvc) throw new Error("Expected retained PVC");
+	bindSessionSandboxCustomSecretMaterializationV1(target, materialization);
+	const lifecycle: SessionSandboxLifecycleV1 = {
+		schemaVersion: 1,
+		reason: "idle_reclaim",
+		resumeRequested: true,
+		authority: {
+			kind: "management",
+			applicationId: "application-a",
+			managementRevision: 1,
+			managementFence: 1,
+			workloadRevision: 1,
+			targetDesiredState: "running",
+		},
+		source: {
+			sandbox: {
+				schemaVersion: 1,
+				agentId: source.agentId,
+				sessionId: source.sessionId,
+				sandboxId: source.sandboxId,
+				principal: source.principal,
+				channelId: source.channelId,
+				generation: source.generation,
+				resourceName: source.resourceName,
+				workspaceScope: source.workspaceScope,
+			},
+			resourceFence: source.resourceFence,
+			policy: {
+				namespace: source.namespace,
+				resourceConfigurationHash: "policy",
+				configurationRevision: 1,
+				workloadRevision: 1,
+				managementFence: 1,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			observation: {
+				status: sourceStatus,
+				resources: sourceStatus === "ready" ? observed.resources : [pvc],
+			},
+		},
+		stopReceipt: {
+			...receipt,
+			removed: sourceStatus === "ready" ? receipt.removed : [],
+		},
+		deletionProgress: sourceStatus === "ready" ? [...progress.values()] : [],
+		preparation: {
+			generation: target.generation,
+			resourceFence: target.resourceFence,
+		},
+	};
+	return { client, adapter, source, target, lifecycle, pvc };
+}
+
+describe("custom retained PVC rebind (#3305)", () => {
+	it.each(["ready", "stopped"] as const)(
+		"resumes a %s source without rendering credentials for its copied allocation",
+		async (sourceStatus) => {
+			const { client, adapter, target, lifecycle, pvc } =
+				await retainedCustomPVCFixture(sourceStatus);
+			await expect(
+				adapter.prepareRetainedPVC(target, lifecycle, [pvc]),
+			).resolves.toBeUndefined();
+			const retained = await client.read("PersistentVolumeClaim", pvc.name);
+			if (!retained) throw new Error("Expected retained PVC");
+			expect(retained?.metadata).toMatchObject({
+				uid: pvc.uid,
+				resourceVersion: pvc.resourceVersion,
+				annotations: {
+					"agent-infra.agora.io/fence": String(target.resourceFence),
+				},
+			});
+			expect(hasSessionSandboxIdentityV1(retained, target)).toBe(true);
+			expect(JSON.stringify(lifecycle)).not.toContain(
+				"synthetic-resume-secret",
+			);
+			expect(JSON.stringify(retained)).not.toContain("synthetic-resume-secret");
+			// Rebinding a PVC must not make Secret material transferable to another object.
+			expect(() => sessionSandboxResourcesV1({ ...target })).toThrow();
+			await adapter.apply(target);
+			expect(
+				(await client.read("PersistentVolumeClaim", pvc.name))?.metadata?.uid,
+			).toBe(pvc.uid);
+		},
+	);
+
+	it("rejects a replaced retained PVC before rebinding it", async () => {
+		const { client, adapter, target, lifecycle, pvc } =
+			await retainedCustomPVCFixture("ready");
+		const retained = await client.read("PersistentVolumeClaim", pvc.name);
+		if (!retained?.metadata) throw new Error("Expected retained PVC");
+		retained.metadata.uid = "unrelated-pvc";
+		await expect(
+			adapter.prepareRetainedPVC(target, lifecycle, [pvc]),
+		).rejects.toMatchObject({ code: "conflict" });
+		expect(retained.metadata.annotations?.["agent-infra.agora.io/fence"]).toBe(
+			String(target.resourceFence - 1),
+		);
+	});
 });
 
 describe("session sandbox workload adapter", () => {

@@ -1114,6 +1114,7 @@ function ownedAtOrBefore(
 	current: KubernetesObject,
 	allocation: SessionSandboxAllocationV1,
 ) {
+	if (current.kind !== "PersistentVolumeClaim") return false;
 	const counter = (value: string | undefined) => {
 		const parsed = Number(value);
 		return value !== undefined &&
@@ -1137,10 +1138,11 @@ function ownedAtOrBefore(
 	)
 		return false;
 	const earlier = { ...allocation, generation, resourceFence };
-	const expected = sessionSandboxResourcesV1(earlier).find(
-		(resource) => resource.kind === current.kind,
+	return owned(
+		current,
+		{ metadata: metadata(earlier, earlier.pvcName) },
+		earlier,
 	);
-	return !!expected && owned(current, expected, earlier);
 }
 
 export function createSessionSandboxWorkloadAdapterV1(options: {
@@ -1280,11 +1282,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				generation: source.sandbox.generation,
 				resourceFence: source.resourceFence,
 			};
-			const sourceExpected = sessionSandboxResourcesV1(sourceAllocation).find(
-				(resource): resource is V1PersistentVolumeClaim =>
-					resource.kind === "PersistentVolumeClaim",
-			);
-			if (!sourceExpected) throw new WorkloadKubernetesError("policy");
+			// 来源 PVC 的身份校验不依赖已销毁的 Session Secret 物化（#3305）。
+			const sourceExpected = {
+				...expected,
+				metadata: metadata(sourceAllocation, sourceAllocation.pvcName),
+			};
 			// 来源已停止（#2917）时 PVC 的 fence 与 generation 停在最初准备时的值，UID 已被回执钉住。
 			if (
 				!(source.observation?.status === "stopped"
