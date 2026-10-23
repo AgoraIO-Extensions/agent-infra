@@ -464,14 +464,17 @@ export function ActiveConversation({
 		if (!result || result === handled.current) return;
 		handled.current = result;
 		// 结果待核实时请求仍算进行中，「重新生成」继续保持可聚焦的禁用；其余结果结束进行中。
-		if (result.kind !== "unknown") setRegenerating(undefined);
-		if (action.current === "regenerate" && regenerateFocus.current) {
-			if (result.kind === "accepted")
-				regenerateFocus.current = {
-					executionId: result.receipt.executionId ?? undefined,
-				};
-			// 被拒绝：按钮一直挂载，焦点仍在「重新生成」上，不需要代管。
-			else if (result.kind !== "unknown") regenerateFocus.current = undefined;
+		// 只处理重新生成自己的结果：同一时间只有一条命令在途，其他命令的结果不改变它。
+		if (action.current === "regenerate") {
+			if (result.kind !== "unknown") setRegenerating(undefined);
+			if (regenerateFocus.current) {
+				if (result.kind === "accepted")
+					regenerateFocus.current = {
+						executionId: result.receipt.executionId ?? undefined,
+					};
+				// 被拒绝：按钮一直挂载，焦点仍在「重新生成」上，不需要代管。
+				else if (result.kind !== "unknown") regenerateFocus.current = undefined;
+			}
 		}
 		if (
 			result.kind === "rejected" &&
