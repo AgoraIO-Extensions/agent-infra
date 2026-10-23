@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import {
 	objectCleanupConformanceV1,
 	objectStorageConformanceV1,
+	objectTextDeclarationConformanceV1,
 } from "./conformance.ts";
 import { startMinioFileFixtureV1 } from "./minio.test-support.ts";
 
@@ -11,6 +12,7 @@ it("uses actual versioned S3 bytes for immutable writes, confirmation and reads"
 	const storage = fixture.storage;
 	try {
 		await objectStorageConformanceV1(storage);
+		await objectTextDeclarationConformanceV1(storage);
 		const descriptor = {
 			name: "hello.txt",
 			mediaType: "text/plain",
