@@ -136,6 +136,8 @@ export function resolveWorkloadFileExchangeEgressV1(input: {
 			: input.environment;
 	if (input.configured !== undefined && environment !== undefined)
 		throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_DUPLICATE");
+	if (input.origin !== undefined && !isFileExchangeOriginV1(input.origin))
+		throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID");
 	let egress = input.configured;
 	if (environment !== undefined) {
 		if (input.origin === undefined || environment.length > 4096)

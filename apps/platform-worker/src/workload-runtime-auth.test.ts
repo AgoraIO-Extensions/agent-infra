@@ -227,6 +227,13 @@ it.each([
 			environment: JSON.stringify({ ip: "198.51.100.7" }),
 		},
 	],
+	[
+		"a malformed module origin",
+		{
+			origin: "not a url",
+			configured: [{ destination: { ip: "198.51.100.7" }, port: 3000 }],
+		},
+	],
 ] as const)(
 	"rejects %s as a configuration error (#3289 AC-2)",
 	(_name, input) => {
