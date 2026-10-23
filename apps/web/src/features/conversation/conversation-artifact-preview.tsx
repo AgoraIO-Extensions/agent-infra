@@ -11,6 +11,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "../../components/ui/dialog.js";
+import { LoadingLine } from "../../components/ui/spinner.js";
 import { RecoveryButton } from "../recovery-button.js";
 import type { ResultFile } from "./conversation-files.js";
 
@@ -194,13 +195,14 @@ function TextPreview({
 			active = false;
 		};
 	}, [content]);
+	// 读取失败是操作结果：role="alert"；读取中与其他读取态一样用 LoadingLine（#3267 N8-1-08）。
 	if (error)
 		return (
-			<Alert tone="danger">
+			<Alert tone="danger" role="alert">
 				<AlertDescription>文件内容无法读取。</AlertDescription>
 			</Alert>
 		);
-	if (text === undefined) return <p role="status">正在准备预览…</p>;
+	if (text === undefined) return <LoadingLine>正在准备预览…</LoadingLine>;
 	return kind === "diff" ? (
 		<DiffPreview text={text} />
 	) : (
@@ -249,9 +251,10 @@ export function ArtifactPreviewDialog({
 					</DialogTitle>
 				</DialogHeader>
 				<DialogBody ref={body}>
-					{loading && <p role="status">正在准备预览…</p>}
+					{/* 读取中用公共 LoadingLine，失败用 role="alert"（Alert 规则，#3267 N8-1-08）。 */}
+					{loading && <LoadingLine>正在准备预览…</LoadingLine>}
 					{error && (
-						<Alert tone="danger" className="space-y-2">
+						<Alert tone="danger" role="alert" className="space-y-2">
 							<AlertDescription>{error}</AlertDescription>
 							{/* 重读时失败提示卸载：焦点交给预览弹窗，仍失败时回到按钮（#3269 N8-3-02）。 */}
 							<RecoveryButton

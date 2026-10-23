@@ -94,6 +94,7 @@ export function ConversationMessages({
 	onExecution,
 	onRegenerate,
 	canRegenerate,
+	regeneratingMessageId,
 	onResend,
 	onDownloadFile,
 	onPreviewFile,
@@ -122,6 +123,11 @@ export function ConversationMessages({
 	onExecution: (id: string) => void;
 	onRegenerate: (messageId: string) => void;
 	canRegenerate: boolean;
+	/**
+	 * 「重新生成」请求进行中的提问（#3267 N8-1-09）：该提问的「重新生成」不随整页锁定卸载，
+	 * 保持可聚焦的禁用（aria-disabled），焦点不落到 body。
+	 */
+	regeneratingMessageId?: string;
 	onResend: (text: string) => void;
 	onDownloadFile?: (file: ResultFile) => Promise<boolean>;
 	onPreviewFile?: (file: ResultFile) => Promise<Blob | null>;
@@ -222,6 +228,7 @@ export function ConversationMessages({
 		error,
 		objectName,
 		regenerate,
+		regeneratePending,
 		versionControl,
 	}: {
 		key: string;
@@ -233,6 +240,7 @@ export function ConversationMessages({
 		error?: PilotProtocolErrorV1 | null;
 		objectName?: string;
 		regenerate?: () => void;
+		regeneratePending?: boolean;
 		versionControl?: ReactNode;
 	}) => (
 		<AssistantReply
@@ -247,6 +255,7 @@ export function ConversationMessages({
 			error={error}
 			objectName={objectName}
 			regenerate={regenerate}
+			regeneratePending={regeneratePending}
 			onExecution={onExecution}
 			stop={
 				stop && executionId && stop.executionId === executionId
@@ -368,9 +377,11 @@ export function ConversationMessages({
 				error: selected.error,
 				objectName,
 				regenerate:
-					canRegenerate && isTerminal(status)
+					(canRegenerate || regeneratingMessageId === message.messageId) &&
+					isTerminal(status)
 						? () => onRegenerate(message.messageId)
 						: undefined,
+				regeneratePending: regeneratingMessageId === message.messageId,
 				// 只有 2 个以上回答版本时才需要切换（CH-08 过渡；设计稿尚未画出版本切换）。
 				versionControl:
 					candidates.length > 1 ? (
@@ -539,6 +550,7 @@ function AssistantReply({
 	error,
 	objectName,
 	regenerate,
+	regeneratePending = false,
 	onExecution,
 	stop,
 	notice,
@@ -558,6 +570,8 @@ function AssistantReply({
 	error?: PilotProtocolErrorV1 | null;
 	objectName?: string;
 	regenerate?: () => void;
+	/** 重新生成请求进行中：「重新生成」保持可聚焦的禁用，不卸载（#3267 N8-1-09）。 */
+	regeneratePending?: boolean;
 	onExecution: (id: string) => void;
 	stop?: ConversationStopControl;
 	notice?: string;
@@ -672,6 +686,8 @@ function AssistantReply({
 				aria-label={withObjectName("重新生成", objectName)}
 				// 停止回复后的焦点落点（A2-09）：页面按 Execution 找到这张回复卡的「重新生成」。
 				data-regenerate-execution={executionId ?? undefined}
+				disabled={regeneratePending}
+				focusableWhenDisabled
 				onClick={regenerate}
 			>
 				重新生成

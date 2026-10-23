@@ -875,7 +875,7 @@ describe("functional conversation screen", () => {
 
 	it("rejects unsupported and oversized files before creating an upload", async () => {
 		const { requests } = setup();
-		const input = await screen.findByLabelText("添加附件");
+		const input = await screen.findByLabelText("选择附件文件");
 		fireEvent.change(input, {
 			target: {
 				files: [
@@ -904,10 +904,8 @@ describe("functional conversation screen", () => {
 		expect(summary.textContent).toContain("上传暂不可用");
 		expect(summary.textContent).not.toContain("0 个待重试");
 		openFiles();
-		expect(
-			(screen.getByRole("button", { name: "添加附件" }) as HTMLButtonElement)
-				.disabled,
-		).toBe(true);
+		// #3267 N8-1-06：不能上传时只留一行说明，不渲染禁用的入口（与 #3259 同一规则）。
+		expect(screen.queryByRole("button", { name: "添加附件" })).toBeNull();
 	});
 
 	it("reads the read-only file limits before the attachment entry opens", async () => {
@@ -958,7 +956,7 @@ describe("functional conversation screen", () => {
 			});
 			await composer();
 			openFiles();
-			fireEvent.change(await screen.findByLabelText("添加附件"), {
+			fireEvent.change(await screen.findByLabelText("选择附件文件"), {
 				target: {
 					files: [new File(["hello"], "notes.txt", { type: "text/plain" })],
 				},
@@ -5159,7 +5157,8 @@ describe("sandbox: references and result files on the conversation page (#3228)"
 				"支持 application/pdf, text/csv, text/plain, application/zip，单文件最大 1 KB",
 			);
 			openFiles();
-			const input = await screen.findByLabelText<HTMLInputElement>("添加附件");
+			const input =
+				await screen.findByLabelText<HTMLInputElement>("选择附件文件");
 			expect(input.accept).toBe(
 				"application/pdf,text/csv,text/plain,application/zip",
 			);
