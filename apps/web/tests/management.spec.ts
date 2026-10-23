@@ -1706,12 +1706,22 @@ test("employee has no Owner or administrator controls, with loading and error st
 	).toHaveCount(0);
 	await page.goto("/agents/agent-pilot-1/configuration");
 	// 无权访问是首屏静态边界（B-10 角色规则①），显示说明但不再用 role="alert" 打断读屏。
-	await expect(page.getByText("当前无法访问此配置。")).toBeVisible();
+	// 需求变化（#3268 N8-2-09）：改用公共「无法访问」卡（原为 h1「配置不可用」与「当前无法访问此配置。」），
+	// 页头同读取失败时的「Owner 配置」，只提供「返回 Agent 详情」。
+	await expect(
+		page.getByText("只有当前 Owner 可以修改这个 Agent 的配置。"),
+	).toBeVisible();
 	await expect(page.getByRole("alert")).toHaveCount(0);
 	// N-02 负向：员工仍是不可用页，主内容里没有按钮、输入框、授权控件与权限边界说明。
 	await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-		"配置不可用",
+		"Owner 配置",
 	);
+	await expect(
+		page.locator("main").getByRole("heading", { name: "无法访问" }),
+	).toBeVisible();
+	await expect(
+		page.locator("main").getByRole("link", { name: "返回 Agent 详情" }),
+	).toHaveAttribute("href", "/agents/agent-pilot-1");
 	await expect(page.locator("main").getByRole("button")).toHaveCount(0);
 	await expect(page.locator("main").getByRole("textbox")).toHaveCount(0);
 	await expect(page.locator("main")).not.toContainText("Agent 授权控制");
@@ -7516,3 +7526,34 @@ test("image upgrade keeps its pending and failure states inside the image sectio
 	await expectNoDuplicateControls(page, "Owner 配置（镜像升级，#3268）");
 	await expectCleanPage(page, errors);
 });
+
+// #3268 N8-2-08：PRD §6.3 保留「重试创建」入口；configuration_rejected 的说明写明「调整配置或部署之前」
+// 重试不会成功（工程 Spec §10.5），与紧邻的「重试创建」不再自相矛盾。Owner 视图与纯管理员视图一致。
+for (const role of ["owner", "admin"] as const)
+	test(`a configuration_rejected failure keeps the retry and conditions its warning (${role}, #3268 N8-2-08)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		const api = await fixture(page, role);
+		api.agentState("creation_failed", null);
+		api.creationFailure("configuration_rejected");
+		await page.goto("/agents/agent-pilot-1/configuration");
+		const notice = page.locator(
+			'[data-creation-failure="configuration_rejected"]',
+		);
+		await expect(notice).toContainText("失败原因：配置与当前部署不兼容");
+		await expect(notice).toContainText("调整配置或部署之前重试创建不会成功");
+		await expect(notice).toContainText("调整部署后再重试创建");
+		await expect(notice).not.toContainText(/[，。]重试创建不会成功/);
+		await expect(
+			page
+				.locator("#main-content")
+				.getByRole("button", { name: "重试创建", exact: true }),
+		).toBeVisible();
+		await expectNoDuplicateControls(
+			page,
+			`Owner 配置（configuration_rejected，${role}，#3268）`,
+		);
+		await expectCleanPage(page, errors);
+	});

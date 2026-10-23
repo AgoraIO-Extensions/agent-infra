@@ -397,7 +397,8 @@ it("does not read the directory for non-Owner configuration", () => {
 			submitting={false}
 		/>,
 	);
-	expect(screen.getByRole("heading", { name: "配置不可用" })).toBeTruthy();
+	// 需求变化（#3268 N8-2-09）：非 Owner 的配置页是公共「无法访问」卡（原 h1「配置不可用」）。
+	expect(screen.getByRole("heading", { name: "无法访问" })).toBeTruthy();
 	expect(fetch).not.toHaveBeenCalled();
 });
 

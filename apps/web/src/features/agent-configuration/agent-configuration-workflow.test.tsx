@@ -304,10 +304,20 @@ describe("AgentConfigurationWorkflow", () => {
 
 		render(<AgentConfigurationWorkflow agent={firstAgent} />);
 
+		// 需求变化（#3268 N8-2-09）：员工看到公共「无法访问」卡（原 h1「配置不可用」与「当前无法访问此配置。」），
+		// 唯一的操作是返回 Agent 详情的链接，仍没有按钮与输入框。
 		expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
-			"配置不可用",
+			"Owner 配置",
 		);
-		expect(screen.getByText("当前无法访问此配置。")).toBeTruthy();
+		expect(screen.getByRole("heading", { name: "无法访问" })).toBeTruthy();
+		expect(
+			screen.getByText("只有当前 Owner 可以修改这个 Agent 的配置。"),
+		).toBeTruthy();
+		expect(
+			screen
+				.getByRole("link", { name: "返回 Agent 详情" })
+				.getAttribute("href"),
+		).toBe(`/agents/${firstAgent.agentId}`);
 		expect(screen.queryAllByRole("button")).toEqual([]);
 		expect(screen.queryAllByRole("textbox")).toEqual([]);
 		expect(screen.queryByText("权限边界")).toBeNull();

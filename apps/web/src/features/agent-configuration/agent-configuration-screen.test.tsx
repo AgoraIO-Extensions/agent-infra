@@ -181,7 +181,17 @@ describe("AgentConfigurationScreen", () => {
 	it("does not render configuration data or controls for an ordinary-user projection", () => {
 		renderScreen({ session: { kind: "ready", session: ordinarySession } });
 
-		expect(screen.getByRole("heading", { name: "配置不可用" })).toBeTruthy();
+		// 需求变化（#3268 N8-2-09）：非 Owner 改用公共「无法访问」卡（原 h1「配置不可用」与 warn 提示），
+		// 页头同路由读取失败时的「Owner 配置」，并给出「返回 Agent 详情」。
+		expect(
+			screen.getByRole("heading", { level: 1, name: "Owner 配置" }),
+		).toBeTruthy();
+		expect(screen.getByRole("heading", { name: "无法访问" })).toBeTruthy();
+		expect(
+			screen
+				.getByRole("link", { name: "返回 Agent 详情" })
+				.getAttribute("href"),
+		).toBe(`/agents/${agent.agentId}`);
 		expect(screen.queryByRole("button", { name: "保存配置" })).toBeNull();
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
 	});

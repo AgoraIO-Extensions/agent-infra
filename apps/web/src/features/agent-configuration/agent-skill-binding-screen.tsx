@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Plus, RefreshCw, Search, ShieldAlert } from "lucide-react";
+import { ArrowLeft, Plus, RefreshCw, Search } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import {
 	Alert,
@@ -43,6 +43,7 @@ import type {
 	SkillHubVersionMetadataV1,
 } from "../../pilot/generated-v2/types.gen.js";
 import type { BrowserSessionState } from "../browser-session.js";
+import { AccessDeniedCard } from "../page-state-card.js";
 import { RecoveryButton } from "../recovery-button.js";
 import { loadSkillHubDirectory } from "../skill-hub/skill-hub.js";
 import {
@@ -129,15 +130,16 @@ function useStableIdempotencyKey() {
 	};
 }
 
+/**
+ * 不是当前 Owner：与 Owner 配置、读取失败的 403 / 404 一样用公共「无法访问」卡，只提供
+ * 「返回 Agent 详情」（P-01、#3268 N8-2-09）。
+ */
 function NoPermission({ agentId }: { agentId: string }) {
 	return (
-		<Alert tone="warn" icon={<ShieldAlert aria-hidden="true" />}>
-			<AlertTitle>没有权限</AlertTitle>
-			<AlertDescription>
-				只有当前 Owner 可以管理这个 Agent 的 Skill 绑定。
-			</AlertDescription>
-			<AlertAction>
-				{/* exact：/agents/$agentId 是当前地址的前缀，不让 Link 补 aria-current（N-21）。 */}
+		<AccessDeniedCard
+			description="只有当前 Owner 可以管理这个 Agent 的 Skill 绑定。"
+			back={
+				// exact：/agents/$agentId 是当前地址的前缀，不让 Link 补 aria-current（N-21）。
 				<Link
 					activeOptions={{ exact: true }}
 					className={buttonVariants({ variant: "outline" })}
@@ -146,8 +148,8 @@ function NoPermission({ agentId }: { agentId: string }) {
 				>
 					返回 Agent 详情
 				</Link>
-			</AlertAction>
-		</Alert>
+			}
+		/>
 	);
 }
 
@@ -168,6 +170,9 @@ export function AgentSkillBindingScreen({
 	const isOwner =
 		session.kind === "ready" &&
 		isAgentConfigurationOwner(agent, session.session);
+	// 确认不是 Owner 时只留页头文字与「无法访问」卡：「返回 Owner 配置」对非 Owner 是死路，
+	// 返回入口只有卡片里的「返回 Agent 详情」（#3268 N8-2-09）。
+	const denied = session.kind === "ready" && !isOwner;
 	return (
 		<section
 			aria-labelledby={agentSkillHeadingId}
@@ -175,15 +180,17 @@ export function AgentSkillBindingScreen({
 			data-od-id="agent-skill-bindings-page"
 		>
 			{/* 站内跳转用路由 Link，不整页重新加载（查询缓存与会话状态保留）。 */}
-			<Link
-				activeOptions={{ exact: true }}
-				className={buttonVariants({ variant: "ghost" })}
-				params={{ agentId: agent.agentId }}
-				to="/agents/$agentId/configuration"
-			>
-				<ArrowLeft aria-hidden="true" data-icon="inline-start" />
-				返回 Owner 配置
-			</Link>
+			{denied ? null : (
+				<Link
+					activeOptions={{ exact: true }}
+					className={buttonVariants({ variant: "ghost" })}
+					params={{ agentId: agent.agentId }}
+					to="/agents/$agentId/configuration"
+				>
+					<ArrowLeft aria-hidden="true" data-icon="inline-start" />
+					返回 Owner 配置
+				</Link>
+			)}
 			<header className="page-heading agent-skill-heading">
 				<div>
 					<p className="page-eyebrow">Owner 配置 / Skill</p>
@@ -192,12 +199,17 @@ export function AgentSkillBindingScreen({
 					</h1>
 					<p>{agent.name} · 固定 Skill 版本，完成同步后才能在对话中使用。</p>
 				</div>
-				<div className="agent-skill-heading-actions">
-					<Link className={buttonVariants({ variant: "outline" })} to="/skills">
-						<Plus aria-hidden="true" data-icon="inline-start" />
-						浏览 Skill Hub
-					</Link>
-				</div>
+				{denied ? null : (
+					<div className="agent-skill-heading-actions">
+						<Link
+							className={buttonVariants({ variant: "outline" })}
+							to="/skills"
+						>
+							<Plus aria-hidden="true" data-icon="inline-start" />
+							浏览 Skill Hub
+						</Link>
+					</div>
+				)}
 			</header>
 			{session.kind === "loading" ? (
 				<LoadingLine>正在确认权限…</LoadingLine>

@@ -1583,7 +1583,14 @@ for (const role of ["admin", "employee"] as const) {
 			page.getByRole("region", { name: "Skill", exact: true }),
 		).toHaveCount(0);
 		await page.goto("/agents/agent-pilot-1/skills");
-		await expect(main(page)).toContainText("没有权限");
+		// 需求变化（#3268 N8-2-09）：无权限改用公共「无法访问」卡（原为 warn 提示「没有权限」），页头不再
+		// 给对非 Owner 是死路的「返回 Owner 配置」。
+		await expect(
+			main(page).getByRole("heading", { name: "无法访问" }),
+		).toBeVisible();
+		await expect(
+			main(page).getByRole("link", { name: "返回 Owner 配置" }),
+		).toHaveCount(0);
 		const back = main(page).getByRole("link", { name: "返回 Agent 详情" });
 		await expect(back).toHaveAttribute("href", "/agents/agent-pilot-1");
 		// /agents/agent-pilot-1 是当前地址的前缀：返回链接不是当前页，且走路由跳转。
@@ -2661,4 +2668,51 @@ test("re-reading models after a saved-model conflict collapses the conflict and 
 	await expectNoDuplicateControls(page, "Owner 配置（保存冲突后重读，#3268）");
 	await expectCleanPage(page, pageErrors);
 	await noHorizontalOverflow(page);
+});
+
+// #3268 N8-2-09：在使用范围内但不是 Owner 的员工打开 Owner 配置与 Agent 的 Skill 页，都是公共「无法访问」卡
+// （与读取失败的 403 / 404 同一张卡），唯一的返回入口是「返回 Agent 详情」；Skill 页不再给指向死路的
+// 「返回 Owner 配置」。无权限是静态边界，不设 role=alert。两视口一致。
+test("a non-Owner employee gets the shared 无法访问 card on Owner configuration and Skill pages (#3268 N8-2-09)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const api = await ownerConfigFixture(page, { role: "employee" });
+	for (const [path, description] of [
+		[
+			"/agents/agent-pilot-1/configuration",
+			"只有当前 Owner 可以修改这个 Agent 的配置。",
+		],
+		[
+			"/agents/agent-pilot-1/skills",
+			"只有当前 Owner 可以管理这个 Agent 的 Skill 绑定。",
+		],
+	] as const) {
+		await page.goto(path);
+		const card = main(page).locator('[data-kind="unauthorized"]');
+		await expect(card.getByRole("heading", { name: "无法访问" })).toBeVisible();
+		await expect(card).toContainText(description);
+		await expect(main(page).getByRole("alert")).toHaveCount(0);
+		const links = main(page).getByRole("link");
+		await expect(links).toHaveText(["返回 Agent 详情"]);
+		await expect(links.first()).toHaveAttribute(
+			"href",
+			"/agents/agent-pilot-1",
+		);
+		await expect(links.first()).not.toHaveAttribute("aria-current", /.*/);
+		await expect(main(page).getByRole("button")).toHaveCount(0);
+		await expectNoDuplicateControls(page, `${path}（无法访问，#3268）`);
+		await noHorizontalOverflow(page);
+	}
+	// 返回入口走路由跳转，到达 Agent 详情。
+	const documents = await markSinglePageNavigation(page);
+	await main(page).getByRole("link", { name: "返回 Agent 详情" }).click();
+	await expect(page).toHaveURL(/\/agents\/agent-pilot-1$/);
+	await expect(
+		page.getByRole("heading", { level: 1, name: "Release assistant" }),
+	).toBeVisible();
+	await expectNoDocumentNavigation(page, documents);
+	expect(api.commands).toEqual([]);
+	await expectCleanPage(page, pageErrors);
 });

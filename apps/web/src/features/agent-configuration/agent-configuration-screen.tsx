@@ -1,7 +1,8 @@
+import { Link } from "@tanstack/react-router";
 import { CheckIcon, RefreshCw } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { useSubmitFocus } from "@/hooks/use-submit-focus";
 
@@ -11,6 +12,7 @@ import type {
 	AgentProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
 import type { BrowserSessionState } from "../browser-session.js";
+import { AccessDeniedCard } from "../page-state-card.js";
 import {
 	type AgentConfigurationRequestError,
 	type AgentDefaultRelayKeyState,
@@ -120,20 +122,35 @@ type AgentConfigurationScreenProps = {
 	upgradingImage?: boolean;
 };
 
-function unavailableScreen() {
+/**
+ * 读到了 Agent 但不是 Owner（也不是系统管理员）：与读取失败的 403 / 404 一样用公共「无法访问」卡，
+ * 页头同路由读取失败时的「Owner 配置」，只提供「返回 Agent 详情」（P-01、#3268 N8-2-09）。
+ */
+function unavailableScreen(agentId: string) {
 	return (
-		<section aria-labelledby={configurationHeadingId} className="space-y-4">
-			{/* tabIndex=-1：读取失败后「重新登录」「重新加载配置」恢复到此状态时焦点落在标题上。 */}
-			<h1
-				id={configurationHeadingId}
-				tabIndex={-1}
-				className="font-semibold text-[28px]"
-			>
-				配置不可用
-			</h1>
-			<Alert tone="warn">
-				<AlertDescription>当前无法访问此配置。</AlertDescription>
-			</Alert>
+		<section aria-labelledby={configurationHeadingId}>
+			<header className="page-heading">
+				<div>
+					{/* tabIndex=-1：读取失败后「重新登录」「重新加载配置」恢复到此状态时焦点落在标题上。 */}
+					<h1 id={configurationHeadingId} tabIndex={-1}>
+						Owner 配置
+					</h1>
+				</div>
+			</header>
+			<AccessDeniedCard
+				description="只有当前 Owner 可以修改这个 Agent 的配置。"
+				back={
+					// exact：/agents/$agentId 是当前地址的前缀，不让 Link 补 aria-current（N-21）。
+					<Link
+						activeOptions={{ exact: true }}
+						className={buttonVariants({ variant: "outline" })}
+						params={{ agentId }}
+						to="/agents/$agentId"
+					>
+						返回 Agent 详情
+					</Link>
+				}
+			/>
 		</section>
 	);
 }
@@ -299,7 +316,7 @@ export function AgentConfigurationScreen({
 		(picker ?? saveRef.current)?.focus();
 	}, [focusAfterReload]);
 
-	if (!isOwner) return unavailableScreen();
+	if (!isOwner) return unavailableScreen(agent.agentId);
 
 	// 目录缺少 Owner 记录或读取失败时，chip 仍显示 Agent 投影中的 Owner 显示名。
 	const ownerLabels = Object.fromEntries(
