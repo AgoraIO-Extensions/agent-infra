@@ -578,6 +578,7 @@ export class PostgresConversationDispatchStoreV1
 				order by
 					case when ${input.afterItemId ?? null}::text is null
 						or id > ${input.afterItemId ?? null} then 0 else 1 end,
+					case when operation = 'conversation.sandbox.reconcile.v1' then 1 else 0 end,
 					id
 				limit ${input.limit}
 			`;
