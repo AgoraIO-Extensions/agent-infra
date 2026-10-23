@@ -230,6 +230,22 @@
 .platform-nav-bottom {
 	margin-top: auto;
 }
+/* 侧栏底部「退出登录」（#3267 N8-1-01，导出稿暂无此入口）：与相邻导航项同为 13px / 400 / muted、
+   悬停为 --fg；公共 Button 的 650 字重、字距与行高不用于导航项。失败提示为 12px --danger-ink，
+   左缘与导航项文字对齐（1px 边框 + 11px 内边距）。 */
+.platform-nav-action {
+	font-weight: 400;
+	letter-spacing: normal;
+	line-height: inherit;
+	text-align: left;
+}
+.platform-nav-action-error {
+	margin: 0;
+	padding: 0 12px;
+	color: var(--danger-ink);
+	font-size: 12px;
+	line-height: 1.5;
+}
 .platform-identity {
 	display: flex;
 	align-items: center;

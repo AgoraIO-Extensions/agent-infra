@@ -728,3 +728,85 @@ test("signing out keeps focus on the pending button (K7-02)", async ({
 	await expectFocusSettled(account(page), "退出登录后");
 	await expectCleanPage(page, errors);
 });
+
+// #3267 N8-1-01：导出稿侧栏没有「退出登录」。入口与相邻导航项同为 13px / 400 / muted、44px、8px 11px；
+// 失败提示为 12px --danger-ink 的 role="alert"，左缘与入口文字对齐，焦点留在入口上。
+test("signing out matches the sidebar navigation items and reports a failure as an alert (#3267 N8-1-01)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const api = await platform(page);
+	api.authenticated = true;
+	await page.goto("/agents");
+	await expect(
+		page.getByRole("heading", { level: 1, name: "选择要使用的 Agent。" }),
+	).toBeVisible();
+	if (info.project.name.endsWith("mobile"))
+		await page.getByRole("button", { name: "打开导航", exact: true }).click();
+	const logout = page.getByRole("button", { name: "退出登录", exact: true });
+	await expect(logout).toBeVisible();
+	const navItem = page
+		.locator("a.platform-nav-item:not(.selected)")
+		.filter({ visible: true })
+		.first();
+	const typography = (target: typeof logout) =>
+		target.evaluate((node) => {
+			const style = getComputedStyle(node);
+			return {
+				fontSize: style.fontSize,
+				fontWeight: style.fontWeight,
+				color: style.color,
+				letterSpacing: style.letterSpacing,
+				lineHeight: style.lineHeight,
+				padding: style.padding,
+				height: node.getBoundingClientRect().height,
+				width: node.getBoundingClientRect().width,
+			};
+		});
+	const expected = await typography(navItem);
+	expect(expected).toMatchObject({
+		fontSize: "13px",
+		fontWeight: "400",
+		padding: "8px 11px",
+		height: 44,
+	});
+	expect(await typography(logout)).toEqual(expected);
+	await page.route("**/auth/logout", (route) =>
+		route.fulfill({ status: 500, body: "" }),
+	);
+	await logout.focus();
+	await page.keyboard.press("Enter");
+	const failure = page.getByRole("alert").filter({
+		hasText: "退出登录失败，请重试。",
+	});
+	await expect(failure).toBeVisible();
+	await expect(
+		page.getByRole("status").filter({ hasText: "退出登录失败" }),
+	).toHaveCount(0);
+	const failureStyle = await failure.evaluate((node) => {
+		const probe = document.createElement("span");
+		probe.style.color = "var(--danger-ink)";
+		document.body.append(probe);
+		const dangerInk = getComputedStyle(probe).color;
+		probe.remove();
+		const style = getComputedStyle(node);
+		return {
+			fontSize: style.fontSize,
+			dangerInk: style.color === dangerInk,
+		};
+	});
+	expect(failureStyle).toEqual({ fontSize: "12px", dangerInk: true });
+	const textLeft = (target: typeof logout) =>
+		target.evaluate((node) => {
+			const range = document.createRange();
+			range.selectNodeContents(node);
+			return range.getBoundingClientRect().left;
+		});
+	expect(
+		Math.abs((await textLeft(failure)) - (await textLeft(logout))),
+	).toBeLessThanOrEqual(0.5);
+	await expectFocusSettled(logout, "退出登录失败");
+	await expectNoDuplicateControls(page, "退出登录失败");
+	await expectCleanPage(page, errors);
+});
