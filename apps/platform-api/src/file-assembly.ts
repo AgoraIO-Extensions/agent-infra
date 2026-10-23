@@ -356,7 +356,10 @@ export function assemblePlatformFilesV1(input: {
 							execution.channelId !== claims.channelId ||
 							execution.conversationId !== claims.conversationId ||
 							execution.sessionGeneration !== claims.sessionGeneration ||
-							!["submitted", "processing"].includes(execution.status) ||
+							// 与 FileAuthority 相同的非终态集合：派发 write-ahead 的 unknown 仍可交换（#3307）。
+							!["submitted", "processing", "unknown"].includes(
+								execution.status,
+							) ||
 							execution.stopPending
 						)
 							return null;

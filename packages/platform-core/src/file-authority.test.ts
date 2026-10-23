@@ -1170,3 +1170,98 @@ it("authorizes Execution-scoped input reads only for the bound Execution and gen
 		).rejects.toMatchObject({ code: "denied" });
 	}
 });
+
+it("keeps execution-bound access open while a dispatch is write-ahead unknown and closes it at terminal or stopping states (#3307)", async () => {
+	const store = new FakeFileStoreV1();
+	const scope = {
+		actorId: "alice",
+		agentId: "agent",
+		conversationId: "conversation",
+		channelId: "web",
+	};
+	const execution = (
+		status: "waiting" | "unknown" | "completed" | "failed" | "cancelled",
+		stopPending = false,
+	) =>
+		store.seedExecution({
+			...scope,
+			executionId: "execution",
+			sessionGeneration: 1,
+			deliveryFence: 2,
+			authorizationRevision: "auth-1",
+			status,
+			stopPending,
+		});
+	store.seedConversation(scope);
+	// Worker 在调用 Runtime 之前把执行 write-ahead 为 unknown；Driver 在原生受理前读写文件。
+	execution("unknown");
+	const service = createFileAuthorityV1({
+		store,
+		now: () => new Date("2026-09-15T00:00:00Z"),
+		intentTtlMs: 60000,
+		accessTtlMs: 10000,
+		issuer: "platform",
+		keyVersion: "key-1",
+		storage: { inspect: async () => null },
+	});
+	const authorization = {
+		authorize: async () => ({
+			...scope,
+			execution: {
+				executionId: "execution",
+				sessionGeneration: 1,
+				grantId: "grant",
+				attachments: [],
+				expiresAt: "2026-09-15T00:00:05Z",
+			},
+			limits: {
+				revision: "verified-1",
+				expiresAt: "2026-09-15T01:00:00Z",
+				mediaTypes: ["text/plain"],
+				maxBytes: 20,
+			},
+		}),
+	};
+	const file = await service.createResult(
+		{
+			conversationId: scope.conversationId,
+			idempotencyKey: "result-unknown",
+			descriptor: {
+				name: "hello.txt",
+				mediaType: "text/plain",
+				sizeBytes: 5,
+				sha256:
+					"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+			},
+		},
+		authorization,
+	);
+	const access = (idempotencyKey: string) =>
+		service.issueAccess(
+			{
+				conversationId: scope.conversationId,
+				fileId: file.fileId,
+				operation: "write",
+				idempotencyKey,
+			},
+			authorization,
+		);
+	expect(await access("access-unknown")).toMatchObject({
+		execution: { executionId: "execution" },
+	});
+	execution("unknown", true);
+	await expect(access("access-stopping")).rejects.toMatchObject({
+		code: "denied",
+	});
+	for (const status of [
+		"waiting",
+		"completed",
+		"failed",
+		"cancelled",
+	] as const) {
+		execution(status);
+		await expect(access(`access-${status}`)).rejects.toMatchObject({
+			code: "denied",
+		});
+	}
+});

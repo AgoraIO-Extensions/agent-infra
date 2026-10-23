@@ -946,15 +946,26 @@ export function assemblePlatformApi(
 			scope.agentId,
 		);
 		if (!agent) return null;
-		const projection = await presentAgent({
+		// 已验证的 Runtime 能力直接取自可信 capability reader（工程 Spec §15.4.1），按本次
+		// 已授权的主体读取：浏览器请求是当前会话用户，执行期请求是服务端按持久执行解析的
+		// actor。不经浏览器展示投影，它会按当前 HTTP 请求重新解析浏览器会话，而 Runtime 的
+		// 执行期请求没有浏览器会话，附件读取与结果写入因此总被拒绝（#3307）。
+		const runtime = await configurationQuery.readRuntimePresentation({
 			agentId: scope.agentId,
-			configuration: configuration.configuration,
-			management: agent.management,
+			actorId: identity.userId,
+			organizationIds: identity.organizationIds,
+			accountStatus: identity.accountStatus,
+			isAdministrator: identity.roles.includes("system_admin"),
+			expected: {
+				configurationRevision: configuration.configuration.revision,
+				management: agent.management,
+			},
 		});
+		if (runtime.outcome !== "found") return null;
 		if (
-			!(kind === "attachment"
-				? projection.capabilities.attachments
-				: projection.capabilities.resultFiles)
+			(kind === "attachment"
+				? runtime.capabilities?.attachments
+				: runtime.capabilities?.resultFiles) !== true
 		)
 			return null;
 		if (!readFileLimits) return null;
