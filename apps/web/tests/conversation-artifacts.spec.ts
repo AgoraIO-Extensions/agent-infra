@@ -368,3 +368,55 @@ test("answer file card preview and download keep focus off body (K7-02)", async 
 	await expectFocusSettled(download, "文件卡 下载完成");
 	await expectCleanPage(page, errors);
 });
+
+// #3267 N8-1-08（导出稿缺失）：预览读取中用公共 LoadingLine（spinner + 文字，role="status"），读取失败的
+// Alert 为 role="alert"；「重新读取」随读取中卸载时焦点交给弹窗，仍失败时回到新的「重新读取」，
+// 成功后留在弹窗上，都不落到 body。
+test("preview read failure is an alert and loading uses LoadingLine with focus kept off body (#3267 N8-1-08)", async ({
+	page,
+}, info: TestInfo) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	await artifactFixture(page);
+	// 前两次读取授权被拒（读取失败），第三次放行；第一次重试挂起，用于采样读取中的焦点。
+	let attempts = 0;
+	await page.route(/\/files\/result-1\/access$/, (route) => {
+		attempts += 1;
+		return attempts <= 2
+			? route.fulfill({ status: 403, json: { message: "controlled denial" } })
+			: route.fallback();
+	});
+	const preview = page.getByRole("button", { name: "预览" });
+	await preview.focus();
+	await page.keyboard.press("Enter");
+	const dialog = page.getByRole("dialog");
+	const failure = dialog.getByRole("alert");
+	await expect(failure).toContainText("文件读取失败，请重试。");
+	const retry = dialog.getByRole("button", { name: "重新读取" });
+	await expect(retry).toBeVisible();
+	// 第一次重试：仍失败，焦点回到新的「重新读取」。
+	const held = await holdRequests(page, "POST", /\/files\/result-1\/access$/);
+	await retry.focus();
+	await page.keyboard.press("Enter");
+	const loading = dialog.locator('[data-slot="loading-line"]');
+	await expect(loading).toHaveText("正在准备预览…");
+	await expect(loading).toHaveAttribute("role", "status");
+	await expect(loading.locator('[data-slot="spinner"]')).toHaveCount(1);
+	await expectFocusHeld(dialog, [30, 150, 400], "重新读取 进行中");
+	held.release();
+	await expect(failure).toContainText("文件读取失败，请重试。");
+	await expectFocusSettled(retry, "重新读取仍失败");
+	// 第二次重试成功：焦点留在弹窗上。
+	await page.keyboard.press("Enter");
+	await expect(dialog.getByText("+1 新增")).toBeVisible();
+	await expect(dialog.getByRole("alert")).toHaveCount(0);
+	await expectFocusSettled(dialog, "重新读取成功");
+	await page.keyboard.press("Escape");
+	await expect(dialog).toHaveCount(0);
+	await expectFocusSettled(preview, "预览关闭");
+	await expectCleanPage(page, errors);
+});
