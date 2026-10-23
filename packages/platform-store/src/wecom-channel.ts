@@ -1149,7 +1149,7 @@ export class PostgresWecomChannelV1
 				await sql`update platform.wecom_receipt_media set status=${status},updated_at=now() where receipt_id=${claim.receiptId} and ordinal=${ordinal} and status=${starting ? "pending" : "sending"} returning ordinal`;
 			if (changed.length !== 1) return false;
 			if (starting)
-				await sql`update platform.wecom_receipts set lease_until=greatest(lease_until,now()+interval '150 seconds'),updated_at=now() where id=${claim.receiptId}`;
+				await sql`update platform.wecom_receipts set lease_until=greatest(lease_until,now()+interval '180 seconds'),updated_at=now() where id=${claim.receiptId}`;
 			return true;
 		});
 	}

@@ -796,6 +796,32 @@ it("AC-2: sends at most ten files per reply (#3229)", async () => {
 	expect(f.sender.sendMedia).toHaveBeenCalledTimes(10);
 });
 
+it("AC-2: counts only sendable files toward the ten-file limit (#3229)", async () => {
+	const f = mediaFixture();
+	const oversized = {
+		...pdf,
+		fileId: "file-big",
+		name: "big.pdf",
+		sizeBytes: 20 * mebibyte + 1,
+		workspaceReference: null,
+	};
+	const files = Array.from({ length: 10 }, (_, index) => ({
+		...pdf,
+		fileId: `file-${index}`,
+		name: `f${index}.pdf`,
+		workspaceReference: null,
+	}));
+	f.store.claim.mockResolvedValueOnce(
+		mediaClaim("见附件", [oversized, ...files]),
+	);
+	await f.useCase.dispatch();
+	expect(f.sender.planMedia.mock.calls[0]?.[0].files).toHaveLength(10);
+	expect(f.sender.sendMedia).toHaveBeenCalledTimes(10);
+	expect(f.sender.send.mock.calls[0]?.[0].text).toContain(
+		"big.pdf（超出企微限制，未发送）",
+	);
+});
+
 it.each([
 	["fails", "failed" as const],
 	["loses the ACK", "unknown" as const],

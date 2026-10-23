@@ -1098,9 +1098,9 @@ export function createWecomDeliveryV1(dependencies: {
 		const ordered = orderWecomResultFilesV1(files, references);
 		const skipped = new Map<string, WecomOutboundMediaSkipReasonV1>();
 		const candidates: WecomOutboundMediaV1[] = [];
-		for (const [index, file] of ordered.entries()) {
+		for (const file of ordered) {
 			const kind = wecomOutboundMediaKindV1(file);
-			if (!kind || index >= wecomReplyMediaMaxCountV1)
+			if (!kind || candidates.length >= wecomReplyMediaMaxCountV1)
 				skipped.set(file.fileId, "exceeds_limit");
 			else candidates.push({ ...file, kind });
 		}
