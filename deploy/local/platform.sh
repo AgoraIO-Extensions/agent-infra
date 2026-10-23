@@ -50,6 +50,9 @@ database_service="$worker_release-postgres"
 database_endpoint="$database_service-docker"
 directory_service="enterprise-directory-sync"
 directory_endpoint="enterprise-directory-sync-e2e"
+object_storage_compose_service="object-storage"
+object_storage_service="$worker_release-object-storage"
+object_storage_endpoint="$object_storage_service-docker"
 native_metadata_api_service="$worker_release-native-metadata-api"
 helm_target=(helm)
 
@@ -1011,6 +1014,162 @@ disconnect_directory_sync() {
   "${kube_target[@]}" delete "endpointslice/$directory_endpoint" "service/$directory_service" --ignore-not-found
 }
 
+# Worker 侧文件面开关与 fileExchangeOrigin 相同（PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED=true）。
+# 启用时 Worker 的 wecom.media 经 kind 内 Service 访问 Compose object-storage（#3261），
+# 做法与 Postgres、目录同步相同：随机别名接入 kind，EndpointSlice 注解记录本项目别名。
+object_storage_route_enabled() {
+  [[ "${PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED:-}" == true ]]
+}
+
+object_storage_network_aliases() {
+  "${docker_target[@]}" container inspect "$1" --format '{{with index .NetworkSettings.Networks "kind"}}{{join .Aliases " "}}{{end}}'
+}
+
+object_storage_route_alias() {
+  "${kube_target[@]}" get "endpointslice/$object_storage_endpoint" --ignore-not-found -o json | node -e '
+    let input = "";
+    process.stdin.on("data", (chunk) => { input += chunk; });
+    process.stdin.on("end", () => {
+      if (!input.trim()) return;
+      try {
+        const resource = JSON.parse(input);
+        const labels = resource.metadata?.labels ?? {};
+        const alias = resource.metadata?.annotations?.["agent-infra.agora.io/local-network-alias"];
+        if (labels["app.kubernetes.io/managed-by"] !== "agent-infra-local" ||
+            labels["agent-infra.agora.io/local-project"] !== process.argv[1] ||
+            typeof alias !== "string" ||
+            !new RegExp("^" + process.argv[2] + "-[0-9a-f]{16}$").test(alias)) process.exitCode = 1;
+        else process.stdout.write(alias);
+      } catch {
+        process.exitCode = 1;
+      }
+    });
+  ' "$PLATFORM_LOCAL_PROJECT" "$object_storage_service"
+}
+
+check_object_storage_resource_ownership() {
+  local resource name
+  for resource in service endpointslice; do
+    name="$object_storage_service"
+    [[ "$resource" == endpointslice ]] && name="$object_storage_endpoint"
+    if ! "${kube_target[@]}" get "$resource/$name" --ignore-not-found -o json |
+      node -e '
+        let input = "";
+        process.stdin.on("data", (chunk) => { input += chunk; });
+        process.stdin.on("end", () => {
+          if (!input.trim()) return;
+          try {
+            const labels = JSON.parse(input).metadata?.labels ?? {};
+            if (labels["app.kubernetes.io/managed-by"] !== "agent-infra-local" ||
+                labels["agent-infra.agora.io/local-project"] !== process.argv[1]) process.exitCode = 1;
+          } catch {
+            process.exitCode = 1;
+          }
+        });
+      ' "$PLATFORM_LOCAL_PROJECT"; then
+      echo "Local object storage $resource/$name is not owned by this project" >&2
+      return 1
+    fi
+  done
+}
+
+# 对象存储容器已接入 kind 时，别名必须正是本项目 EndpointSlice 注解记录的别名；否则拒绝，
+# 不断开也不覆盖其他项目的接入。
+check_object_storage_network_ownership() {
+  local container aliases owned_alias
+  container=$("${compose[@]}" ps --all -q "$object_storage_compose_service") || return 1
+  [[ -n "$container" ]] || return 0
+  aliases=$(object_storage_network_aliases "$container") || return 1
+  [[ -n "$aliases" ]] || return 0
+  owned_alias=$(object_storage_route_alias) || {
+    echo "Local object storage kind connection has no owned route marker" >&2
+    return 1
+  }
+  if [[ -z "$owned_alias" || "$aliases" != "$owned_alias" ]]; then
+    echo "Local object storage is connected to kind outside this project" >&2
+    return 1
+  fi
+}
+
+connect_object_storage() {
+  if ! object_storage_route_enabled; then
+    # 未启用文件面时不创建路由，并按 ownership 清理之前创建的接入。
+    disconnect_object_storage
+    return
+  fi
+  check_object_storage_resource_ownership || return 1
+  check_object_storage_network_ownership || return 1
+  local container aliases network_alias storage_ip
+  container=$("${compose[@]}" ps -q "$object_storage_compose_service") || return 1
+  [[ -n "$container" ]] || { echo "Local object storage container is missing" >&2; return 1; }
+  aliases=$(object_storage_network_aliases "$container") || return 1
+  if [[ -z "$aliases" ]]; then
+    network_alias="$object_storage_service-$(node -e 'process.stdout.write(require("node:crypto").randomBytes(8).toString("hex"))')"
+    "${docker_target[@]}" network connect --alias "$network_alias" kind "$container" || return 1
+  else
+    network_alias=$(object_storage_route_alias) || return 1
+    [[ "$aliases" == "$network_alias" ]] || {
+      echo "Local object storage is connected to kind outside this project" >&2
+      return 1
+    }
+  fi
+  storage_ip=$("${docker_target[@]}" container inspect "$container" --format '{{(index .NetworkSettings.Networks "kind").IPAddress}}') || return 1
+  [[ "$storage_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "Local object storage has no IPv4 address on the kind network" >&2
+    return 1
+  }
+  "${kube_target[@]}" apply -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: $object_storage_service
+  labels:
+    app.kubernetes.io/managed-by: agent-infra-local
+    agent-infra.agora.io/local-project: $PLATFORM_LOCAL_PROJECT
+spec:
+  ports:
+    - name: http
+      port: 9000
+      targetPort: 9000
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: $object_storage_endpoint
+  labels:
+    app.kubernetes.io/managed-by: agent-infra-local
+    agent-infra.agora.io/local-project: $PLATFORM_LOCAL_PROJECT
+    kubernetes.io/service-name: $object_storage_service
+    endpointslice.kubernetes.io/managed-by: agent-infra-local
+  annotations:
+    agent-infra.agora.io/local-network-alias: $network_alias
+addressType: IPv4
+ports:
+  - name: http
+    port: 9000
+    protocol: TCP
+endpoints:
+  - addresses: ["$storage_ip"]
+    conditions:
+      ready: true
+EOF
+}
+
+disconnect_object_storage() {
+  local container aliases
+  check_object_storage_resource_ownership || return 1
+  check_object_storage_network_ownership || return 1
+  container=$("${compose[@]}" ps --all -q "$object_storage_compose_service") || return 1
+  if [[ -n "$container" ]]; then
+    aliases=$(object_storage_network_aliases "$container") || return 1
+    if [[ -n "$aliases" ]]; then
+      "${docker_target[@]}" network disconnect kind "$container" || return 1
+    fi
+  fi
+  "${kube_target[@]}" delete "endpointslice/$object_storage_endpoint" "service/$object_storage_service" --ignore-not-found
+}
+
 delete_owned_agent_pvcs() {
   local names name pvc_json agent_identity agent_name agent_id
   [[ -n "${PLATFORM_LOCAL_AGENT_PVC_NAMES:-}" ]] || return 0
@@ -1104,6 +1263,8 @@ case "${1:-}" in
     worker_context
     check_database_resource_ownership
     check_database_network_ownership
+    check_object_storage_resource_ownership
+    check_object_storage_network_ownership
     validate_deployment_material
     check_native_metadata_api_ownership
     check_native_metadata_api_network_ownership
@@ -1113,6 +1274,7 @@ case "${1:-}" in
     connect_worker_database
     "${compose[@]}" up --detach --wait "$directory_service"
     connect_directory_sync
+    connect_object_storage
     check_worker_secret_material
     "${helm_target[@]}" upgrade --install "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" --wait --timeout 5m
     worker_replicas=$("${helm_target[@]}" get values "$worker_release" --all --output json | node -e '
@@ -1154,12 +1316,17 @@ case "${1:-}" in
     "${helm_target[@]}" status "$worker_release"
     "${kube_target[@]}" get deployment "$worker_deployment"
     "${kube_target[@]}" get "service/$database_service" "endpointslice/$database_endpoint" "secret/$database_service" "service/$directory_service" "endpointslice/$directory_endpoint"
+    if object_storage_route_enabled; then
+      "${kube_target[@]}" get "service/$object_storage_service" "endpointslice/$object_storage_endpoint"
+    fi
     ;;
   stop)
     stop_native_metadata_forward
     worker_context
     check_database_resource_ownership
     check_database_network_ownership
+    check_object_storage_resource_ownership
+    check_object_storage_network_ownership
     worker_replicas=$("${kube_target[@]}" get deployment "$worker_deployment" --ignore-not-found -o jsonpath='{.spec.replicas}')
     if [[ -z "$worker_replicas" ]]; then
       existing_release=$("${helm_target[@]}" list --all --filter "^${worker_release}$" -q)
@@ -1172,6 +1339,7 @@ case "${1:-}" in
       "${compose[@]}" stop enterprise-directory-sync
       disconnect_directory_sync
       disconnect_worker_database
+      disconnect_object_storage
       disconnect_native_metadata_api
       "${compose[@]}" stop object-storage postgres
       rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE"
@@ -1197,6 +1365,7 @@ case "${1:-}" in
     "${compose[@]}" stop enterprise-directory-sync
     disconnect_directory_sync
     disconnect_worker_database
+    disconnect_object_storage
     disconnect_native_metadata_api
     "${compose[@]}" stop object-storage postgres
     rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE"
@@ -1209,6 +1378,8 @@ case "${1:-}" in
     worker_context
     check_database_resource_ownership
     check_database_network_ownership
+    check_object_storage_resource_ownership
+    check_object_storage_network_ownership
     bash "$0" stop
     delete_owned_agent_pvcs
     "${compose[@]}" down --volumes --remove-orphans

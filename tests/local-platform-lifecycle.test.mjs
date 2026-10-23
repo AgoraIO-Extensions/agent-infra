@@ -13,6 +13,7 @@ import { createConnection } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { parseAllDocuments } from "yaml";
 
 const script = "deploy/local/platform.sh";
 const proxyTokenValue = Buffer.from("a".repeat(32)).toString("base64url");
@@ -49,6 +50,11 @@ async function fixture() {
 	const apiNetworkState = join(directory, "api-network-connected");
 	const directoryNetworkState = join(directory, "directory-network-connected");
 	const directoryRouteState = join(directory, "directory-route.json");
+	const objectStorageNetworkState = join(
+		directory,
+		"object-storage-network-connected",
+	);
+	const objectStorageRouteState = join(directory, "object-storage-route.json");
 	const kubeconfig = join(directory, "kubeconfig");
 	const values = join(directory, "worker.values.yaml");
 	const cert = join(directory, "tls.crt");
@@ -166,6 +172,21 @@ elif [[ "$*" == *"network connect --alias "*" kind fixture-directory"* ]]; then
 elif [[ "$*" == *"network disconnect kind fixture-directory"* ]]; then
   rm -f "$FAKE_DIRECTORY_NETWORK_STATE"
   printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
+elif [[ "$*" == *"compose"*"ps --all -q object-storage"* || "$*" == *"compose"*"ps -q object-storage"* ]]; then
+  printf 'fixture-object-storage\\n'
+elif [[ "$*" == *"container inspect fixture-object-storage"*"IPAddress"* ]]; then
+  printf '172.18.0.45\\n'
+elif [[ "$*" == *"container inspect fixture-object-storage"* ]]; then
+  if [[ -f "$FAKE_OBJECT_STORAGE_NETWORK_STATE" ]]; then cat "$FAKE_OBJECT_STORAGE_NETWORK_STATE"; else printf '%s' "\${FAKE_OBJECT_STORAGE_PRECONNECTED_ALIASES:-}"; fi
+elif [[ "$*" == *"network connect --alias "*" kind fixture-object-storage"* ]]; then
+  command="$*"
+  alias="\${command#*--alias }"
+  alias="\${alias%% kind fixture-object-storage*}"
+  printf '%s' "$alias" > "$FAKE_OBJECT_STORAGE_NETWORK_STATE"
+  printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
+elif [[ "$*" == *"network disconnect kind fixture-object-storage"* ]]; then
+  rm -f "$FAKE_OBJECT_STORAGE_NETWORK_STATE"
+  printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
 else
   printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
 fi`,
@@ -277,6 +298,8 @@ elif [[ "$*" == *"--ignore-not-found -o json" ]]; then
     cat "$FAKE_ROUTE_STATE"
   elif [[ "$*" == *"get endpointslice/enterprise-directory-sync-e2e "* && -f "$FAKE_DIRECTORY_ROUTE_STATE" ]]; then
     cat "$FAKE_DIRECTORY_ROUTE_STATE"
+  elif [[ "$*" == *"get endpointslice/agent-infra-verify-object-storage-docker "* && -f "$FAKE_OBJECT_STORAGE_ROUTE_STATE" ]]; then
+    cat "$FAKE_OBJECT_STORAGE_ROUTE_STATE"
   fi
 elif [[ "$*" == *"get deployment agent-infra-verify-agent-infra-platform-worker"*"-o jsonpath="* ]]; then
   printf '%s' "$FAKE_WORKER_REPLICAS"
@@ -311,6 +334,7 @@ else
     alias=$(printf '%s\\n' "$payload" | sed -n 's/^    agent-infra.agora.io\\/local-network-alias: //p')
     route_state="$FAKE_ROUTE_STATE"
     [[ "$payload" == *"name: enterprise-directory-sync-e2e"* ]] && route_state="$FAKE_DIRECTORY_ROUTE_STATE"
+    [[ "$payload" == *"name: agent-infra-verify-object-storage-docker"* ]] && route_state="$FAKE_OBJECT_STORAGE_ROUTE_STATE"
     if [[ -n "$alias" ]]; then
       printf '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"agent-infra-local","agent-infra.agora.io/local-project":"agent-infra-verify"},"annotations":{"agent-infra.agora.io/local-network-alias":"%s"}}}' "$alias" > "$route_state"
     fi
@@ -320,6 +344,8 @@ else
     rm -f "$FAKE_ROUTE_STATE"
   elif [[ "$*" == *"delete endpointslice/enterprise-directory-sync-e2e"* ]]; then
     rm -f "$FAKE_DIRECTORY_ROUTE_STATE"
+  elif [[ "$*" == *"delete endpointslice/agent-infra-verify-object-storage-docker"* ]]; then
+    rm -f "$FAKE_OBJECT_STORAGE_ROUTE_STATE"
   fi
   if [[ "$*" == *"scale deployment/agent-infra-verify-agent-infra-platform-worker --replicas=1"* && -n "$FAKE_RESTORE_SCALE_EXIT" ]]; then
     exit "$FAKE_RESTORE_SCALE_EXIT"
@@ -338,6 +364,9 @@ fi`,
 		FAKE_DIRECTORY_NETWORK_STATE: directoryNetworkState,
 		FAKE_API_NETWORK_STATE: apiNetworkState,
 		FAKE_DIRECTORY_ROUTE_STATE: directoryRouteState,
+		FAKE_OBJECT_STORAGE_NETWORK_STATE: objectStorageNetworkState,
+		FAKE_OBJECT_STORAGE_ROUTE_STATE: objectStorageRouteState,
+		FAKE_OBJECT_STORAGE_PRECONNECTED_ALIASES: "",
 		FAKE_KUBE_SERVER: "https://127.0.0.1:6443",
 		FAKE_KIND_LABEL: "isolated",
 		FAKE_KIND_PORT: "127.0.0.1:6443",
@@ -471,39 +500,45 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		assert.match(up[8], /^kubectl .* apply -f -$/);
 		assert.match(manifest, /name: enterprise-directory-sync-e2e/);
 		assert.match(manifest, /addresses: \["172\.18\.0\.43"\]/);
+		// 未启用文件面：不接入对象存储，只按 ownership 清理旧路由（#3261）。
 		assert.match(
-			up[12],
+			up[9],
+			/^kubectl .* delete endpointslice\/agent-infra-verify-object-storage-docker service\/agent-infra-verify-object-storage --ignore-not-found$/,
+		);
+		assert.doesNotMatch(manifest, /object-storage/);
+		assert.match(
+			up[13],
 			/^kubectl .* --context kind-isolated --namespace agent-infra-verify rollout status deployment\/agent-infra-verify-agent-infra-platform-worker/,
 		);
 		assert.match(
-			up[13],
+			up[14],
 			/^docker .* compose .* up --detach --wait --force-recreate --no-deps platform-api$/,
 		);
 		assert.match(
-			up[14],
+			up[15],
 			/delete endpointslice\/agent-infra-verify-native-metadata-api service\/agent-infra-verify-native-metadata-api --ignore-not-found/,
 		);
-		assert.match(up[15], /^node deploy\/local\/check-api-auth\.ts /);
+		assert.match(up[16], /^node deploy\/local\/check-api-auth\.ts /);
 		assert.match(
-			up[16],
+			up[17],
 			/^docker .* compose .* up --detach --wait --force-recreate --no-deps web$/,
 		);
 		assert.match(
 			up[5],
 			/apply --server-side --field-manager=agent-infra-local -f -/,
 		);
-		assert.match(up[9], /^helm .* upgrade --install agent-infra-verify /);
+		assert.match(up[10], /^helm .* upgrade --install agent-infra-verify /);
 		// 本地默认 values（Worker requests）排在私有 values 之前，私有 values 可以覆盖（#2883）。
 		assert.match(
-			up[9],
+			up[10],
 			/--values \S*\/deploy\/local\/platform-worker\.local-defaults\.values\.yaml --values \S+/,
 		);
 		assert.match(
-			up[10],
+			up[11],
 			/^helm .* get values agent-infra-verify --all --output json$/,
 		);
-		assert.match(up[11], /kubectl .* scale .* --replicas=1$/);
-		assert.equal(up.length, 17);
+		assert.match(up[12], /kubectl .* scale .* --replicas=1$/);
+		assert.equal(up.length, 18);
 
 		await writeFile(f.log, "");
 		assert.equal(run("up", f.env).status, 0);
@@ -565,9 +600,13 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		);
 		assert.match(
 			stopSteps[9],
+			/delete endpointslice\/agent-infra-verify-object-storage-docker service\/agent-infra-verify-object-storage --ignore-not-found/,
+		);
+		assert.match(
+			stopSteps[10],
 			/delete endpointslice\/agent-infra-verify-native-metadata-api service\/agent-infra-verify-native-metadata-api --ignore-not-found/,
 		);
-		assert.match(stopSteps[10], /compose .* stop object-storage postgres/);
+		assert.match(stopSteps[11], /compose .* stop object-storage postgres/);
 		assert.doesNotMatch(
 			stop,
 			/--volumes|compose .* down|delete (persistentvolumeclaim|pvc|namespace)/,
@@ -1005,8 +1044,12 @@ test("local up keeps API and Web closed when Worker upgrade fails", async () => 
 			/network connect --alias enterprise-directory-sync-[0-9a-f]{16} kind fixture-directory/,
 		);
 		assert.match(steps[8], /kubectl .* apply -f -/);
-		assert.match(steps[9], /helm .* upgrade --install/);
-		assert.equal(steps.length, 10);
+		assert.match(
+			steps[9],
+			/delete endpointslice\/agent-infra-verify-object-storage-docker service\/agent-infra-verify-object-storage --ignore-not-found/,
+		);
+		assert.match(steps[10], /helm .* upgrade --install/);
+		assert.equal(steps.length, 11);
 	} finally {
 		await f.close();
 	}
@@ -1103,6 +1146,216 @@ test("local commands refuse foreign database route resources and network links",
 			/connected to kind outside this project/,
 		);
 		assert.equal(await readFile(f.log, "utf8"), "");
+	} finally {
+		await f.close();
+	}
+});
+
+// 某个对象路由一次 apply 的 YAML 文档（每次 apply 以 Service 开头）。
+function appliedRoute(manifest, service) {
+	const chunk = manifest
+		.split(/(?=apiVersion: v1\nkind: Service\n)/)
+		.find((part) => part.includes(`\n  name: ${service}\n`));
+	return chunk
+		? parseAllDocuments(chunk).map((document) => document.toJS())
+		: [];
+}
+
+test("enabled file plane routes object storage into kind with owned resources (#3261)", async () => {
+	const f = await fixture();
+	try {
+		const env = { ...f.env, PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED: "true" };
+		const started = run("up", env);
+		assert.equal(started.status, 0, started.stderr);
+		const commands = await readFile(f.log, "utf8");
+		const steps = commands.trim().split("\n");
+		const connect = steps.findIndex((line) =>
+			/network connect --alias agent-infra-verify-object-storage-[0-9a-f]{16} kind fixture-object-storage$/.test(
+				line,
+			),
+		);
+		assert.ok(connect > 0, commands);
+		assert.match(steps[connect + 1], /^kubectl .* apply -f -$/);
+		// Worker 启动前路由已就绪。
+		assert.ok(
+			connect < steps.findIndex((line) => / upgrade --install /.test(line)),
+		);
+		assert.doesNotMatch(
+			commands,
+			/delete endpointslice\/agent-infra-verify-object-storage-docker/,
+		);
+		assert.match(
+			commands,
+			/platformWorker\.fileExchangeOrigin=http:\/\/agent-infra-verify-native-metadata-api:3000/,
+		);
+		// 凭证只经部署输入文件交付：platform.sh 不向 Helm 写任何对象存储参数。
+		for (const line of steps.filter((entry) => entry.startsWith("helm ")))
+			assert.doesNotMatch(
+				line,
+				/--set(-string)? \S*(objectStorage|object-storage|credential|secretAccessKey)/i,
+			);
+
+		const alias = await readFile(env.FAKE_OBJECT_STORAGE_NETWORK_STATE, "utf8");
+		const owned = {
+			"app.kubernetes.io/managed-by": "agent-infra-local",
+			"agent-infra.agora.io/local-project": "agent-infra-verify",
+		};
+		const [service, slice, ...rest] = appliedRoute(
+			await readFile(f.manifest, "utf8"),
+			"agent-infra-verify-object-storage",
+		);
+		assert.equal(rest.length, 0);
+		assert.deepEqual(service, {
+			apiVersion: "v1",
+			kind: "Service",
+			metadata: { name: "agent-infra-verify-object-storage", labels: owned },
+			spec: {
+				ports: [
+					{ name: "http", port: 9000, targetPort: 9000, protocol: "TCP" },
+				],
+			},
+		});
+		assert.deepEqual(slice, {
+			apiVersion: "discovery.k8s.io/v1",
+			kind: "EndpointSlice",
+			metadata: {
+				name: "agent-infra-verify-object-storage-docker",
+				labels: {
+					...owned,
+					"kubernetes.io/service-name": "agent-infra-verify-object-storage",
+					"endpointslice.kubernetes.io/managed-by": "agent-infra-local",
+				},
+				annotations: { "agent-infra.agora.io/local-network-alias": alias },
+			},
+			addressType: "IPv4",
+			ports: [{ name: "http", port: 9000, protocol: "TCP" }],
+			endpoints: [{ addresses: ["172.18.0.45"], conditions: { ready: true } }],
+		});
+
+		// 再次 up 复用本项目别名，不重复接入。
+		await writeFile(f.log, "");
+		assert.equal(run("up", env).status, 0);
+		assert.doesNotMatch(
+			await readFile(f.log, "utf8"),
+			/network connect .*fixture-object-storage/,
+		);
+		assert.equal(
+			await readFile(env.FAKE_OBJECT_STORAGE_NETWORK_STATE, "utf8"),
+			alias,
+		);
+
+		await writeFile(f.log, "");
+		assert.equal(run("status", env).status, 0);
+		assert.match(
+			await readFile(f.log, "utf8"),
+			/get service\/agent-infra-verify-object-storage endpointslice\/agent-infra-verify-object-storage-docker/,
+		);
+
+		await writeFile(f.log, "");
+		const stopped = run("stop", env);
+		assert.equal(stopped.status, 0, stopped.stderr);
+		const stop = await readFile(f.log, "utf8");
+		assert.match(stop, /network disconnect kind fixture-object-storage/);
+		assert.match(
+			stop,
+			/delete endpointslice\/agent-infra-verify-object-storage-docker service\/agent-infra-verify-object-storage --ignore-not-found/,
+		);
+		assert.ok(
+			stop.indexOf("network disconnect kind fixture-object-storage") <
+				stop.indexOf("stop object-storage postgres"),
+		);
+		await assert.rejects(readFile(env.FAKE_OBJECT_STORAGE_NETWORK_STATE), {
+			code: "ENOENT",
+		});
+		await assert.rejects(readFile(env.FAKE_OBJECT_STORAGE_ROUTE_STATE), {
+			code: "ENOENT",
+		});
+	} finally {
+		await f.close();
+	}
+});
+
+test("disabled file plane neither routes object storage nor keeps an owned route (#3261)", async () => {
+	const f = await fixture();
+	try {
+		const enabled = { ...f.env, PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED: "true" };
+		assert.equal(run("up", enabled).status, 0);
+
+		await writeFile(f.log, "");
+		await writeFile(f.manifest, "");
+		const result = run("up", f.env);
+		assert.equal(result.status, 0, result.stderr);
+		const commands = await readFile(f.log, "utf8");
+		assert.doesNotMatch(commands, /network connect .*fixture-object-storage/);
+		assert.doesNotMatch(commands, /fileExchangeOrigin/);
+		assert.match(commands, /network disconnect kind fixture-object-storage/);
+		assert.match(
+			commands,
+			/delete endpointslice\/agent-infra-verify-object-storage-docker service\/agent-infra-verify-object-storage --ignore-not-found/,
+		);
+		assert.deepEqual(
+			appliedRoute(
+				await readFile(f.manifest, "utf8"),
+				"agent-infra-verify-object-storage",
+			),
+			[],
+		);
+		await assert.rejects(readFile(f.env.FAKE_OBJECT_STORAGE_NETWORK_STATE), {
+			code: "ENOENT",
+		});
+		await assert.rejects(readFile(f.env.FAKE_OBJECT_STORAGE_ROUTE_STATE), {
+			code: "ENOENT",
+		});
+
+		await writeFile(f.log, "");
+		assert.equal(run("status", f.env).status, 0);
+		assert.doesNotMatch(await readFile(f.log, "utf8"), /object-storage-docker/);
+	} finally {
+		await f.close();
+	}
+});
+
+test("object storage route refuses foreign resources and kind aliases without overwriting (#3261)", async () => {
+	const f = await fixture();
+	try {
+		for (const enabled of ["", "true"]) {
+			const env = { ...f.env, PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED: enabled };
+			for (const [resource, name] of [
+				["service", "agent-infra-verify-object-storage"],
+				["endpointslice", "agent-infra-verify-object-storage-docker"],
+			]) {
+				for (const command of ["up", "stop"]) {
+					const result = run(command, {
+						...env,
+						FAKE_FOREIGN_RESOURCE: `${resource}/${name}`,
+					});
+					assert.notEqual(result.status, 0);
+					assert.equal(
+						result.stderr.trim(),
+						`Local object storage ${resource}/${name} is not owned by this project`,
+					);
+					assert.equal(await readFile(f.log, "utf8"), "");
+				}
+			}
+			for (const aliases of [
+				"another-owner-storage",
+				// 别名形状正确但没有本项目 EndpointSlice 记录，同样视为外部接入。
+				"agent-infra-verify-object-storage-1234567890abcdef",
+			]) {
+				for (const command of ["up", "stop"]) {
+					const result = run(command, {
+						...env,
+						FAKE_OBJECT_STORAGE_PRECONNECTED_ALIASES: aliases,
+					});
+					assert.notEqual(result.status, 0);
+					assert.equal(
+						result.stderr.trim(),
+						"Local object storage is connected to kind outside this project",
+					);
+					assert.equal(await readFile(f.log, "utf8"), "");
+				}
+			}
+		}
 	} finally {
 		await f.close();
 	}

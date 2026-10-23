@@ -261,7 +261,8 @@ export const workloadInput = {
   假造的 active 用户，也不能把临时故障当作账号删除。账号确认不存在时才返回 `null`。
 - 示例中的 `environment.mjs` 必须是同一个受审阅代码 Secret 的键；不用它时把真实
   `directory`、`registry`、`modelCatalog`、`policy` 和 keyring 加载逻辑写入
-  `configuration.mjs` 本身。私钥、数据库 URL 与 token 不得放进代码 Secret。
+  `configuration.mjs` 本身。私钥、数据库 URL 与 token 不得放进代码 Secret；本地固定 E2E 的对象存储凭证
+  例外见 [E2E Harness「Worker 企微媒体装配」](../local/E2E-HARNESS.md#worker-企微媒体装配)。
 - `loadReviewedKeyring()` 必须只读取 Worker 的
   `/var/run/agent-infra/keyring/keyring.pem`，按
   `AGENT_INFRA_WORKER_KEY_VERSIONS` 核对每个版本，并转成工厂要求的版本化 PKCS#8 DER
