@@ -19,6 +19,11 @@ const limits: FileLimitsV1 = {
 };
 const limitCopy =
 	"仅支持 text/plain 文本文件，最多 4 个，单个文件不超过 4096 字节。";
+/** 会话限制不接受 text/plain（#3267 N8-1-03）。 */
+const noTextLimits: FileLimitsV1 = {
+	...limits,
+	mediaTypes: ["application/pdf", "image/png"],
+};
 
 function entry(
 	localId: string,
@@ -129,7 +134,7 @@ describe("SkillControlFilePicker (#3259)", () => {
 		[
 			// #3267 N8-1-03：会话限制不接受 text/plain 时同样不能上传，不显示入口与限制。
 			"the session limits do not accept text/plain",
-			{ limits: { ...limits, mediaTypes: ["application/pdf", "image/png"] } },
+			{ limits: noTextLimits },
 			"当前会话不接受 text/plain 文件，只能提交任务说明。",
 		],
 	] as const) {
