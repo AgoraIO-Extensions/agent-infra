@@ -5,18 +5,26 @@ import {
 	PersistedConversationEventV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { expect, test } from "@playwright/test";
+import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import {
 	event,
 	history,
 } from "../src/features/conversation/conversation-test-fixtures";
+import {
+	expectFocusableBusy,
+	expectFocusHeld,
+	expectFocusSettled,
+	holdRequests,
+	pinElement,
+} from "./page-health";
+import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
 // This is a browser interaction contract test with bounded API fixtures. It proves
 // the Web preview/link/upload experience; Runtime and File Core evidence remains separate.
-test("previews a diff artifact, keeps safe links clickable and shows an image upload thumbnail", async ({
-	page,
-}) => {
-	const conversationId = "conversation-1";
+const conversationId = "conversation-1";
+
+/** 受控会话：一条带 diff 结果文件的回答，以及读取、上传结果文件的受控 File Grant 链路。 */
+async function artifactFixture(page: Page) {
 	const resultEvent = PersistedConversationEventV2Schema.parse({
 		...event(2, conversationId),
 		type: "result.file",
@@ -220,6 +228,12 @@ test("previews a diff artifact, keeps safe links clickable and shows an image up
 	await page.goto(
 		`/agents/agent-1/conversations?conversation=${conversationId}`,
 	);
+}
+
+test("previews a diff artifact, keeps safe links clickable and shows an image upload thumbnail", async ({
+	page,
+}) => {
+	await artifactFixture(page);
 	await expect(page.getByRole("link", { name: "文档" })).toHaveAttribute(
 		"href",
 		"https://example.com/docs?tab=api#auth",
@@ -240,4 +254,55 @@ test("previews a diff artifact, keeps safe links clickable and shows an image up
 		buffer: Buffer.from("png"),
 	});
 	await expect(page.locator('img[src^="blob:"]')).toHaveCount(1);
+});
+
+// #3242 K7-02：结果文件「预览」「下载」准备期间是可聚焦的禁用（aria-disabled）。「预览」随点击打开预览
+// 弹窗，准备期间焦点在弹窗上（D2-59：弹窗打开时聚焦弹窗容器），弹窗关闭后回到「预览」；「下载」挂起
+// 期间多次采样焦点都在按钮上，下载完成后留在「下载」，都不落到 body。
+test("result file preview and download keep focus on the pending button (K7-02)", async ({
+	page,
+}, info: TestInfo) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	await artifactFixture(page);
+	const preview = await pinElement(
+		page.getByRole("button", { name: "预览" }),
+		"preview-result",
+	);
+	let access = await holdRequests(page, "POST", /\/files\/result-1\/access$/);
+	await preview.focus();
+	await page.keyboard.press("Enter");
+	await expect(preview).toHaveText("准备预览…");
+	const dialog = page.getByRole("dialog");
+	await expect(dialog.getByText("正在准备预览…")).toBeVisible();
+	await expect(preview).toHaveAttribute("aria-disabled", "true");
+	expect(
+		await preview.evaluate(
+			(element) => (element as HTMLButtonElement).disabled,
+		),
+	).toBe(false);
+	await expectFocusHeld(dialog, [30, 150, 400, 1000], "准备预览 进行中");
+	access.release();
+	await expect(dialog.getByText("+1 新增")).toBeVisible();
+	await page.keyboard.press("Escape");
+	await expect(dialog).toHaveCount(0);
+	await expectFocusSettled(preview, "预览关闭");
+
+	const download = await pinElement(
+		page.getByRole("button", { name: "下载" }),
+		"download-result",
+	);
+	access = await holdRequests(page, "POST", /\/files\/result-1\/access$/);
+	await download.focus();
+	await page.keyboard.press("Enter");
+	await expect(download).toHaveText("准备下载…");
+	await expectFocusableBusy(download, "准备下载");
+	access.release();
+	await expect(download).toHaveText("下载");
+	await expectFocusSettled(download, "下载完成");
+	await expectCleanPage(page, errors);
 });

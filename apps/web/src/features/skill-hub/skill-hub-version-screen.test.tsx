@@ -395,11 +395,10 @@ describe("SkillHubVersionScreen", () => {
 		await renderDetail({ act: actions({ install }), onVersionChanged });
 		expect(screen.queryByRole("textbox")).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "加入我的库" }));
-		expect(
-			screen
-				.getByRole("button", { name: "正在校验包…" })
-				.hasAttribute("disabled"),
-		).toBe(true);
+		// #3242 K7-02：校验与安装进行中是可聚焦的禁用（aria-disabled），不再是原生 disabled。
+		const installing = screen.getByRole("button", { name: "正在校验包…" });
+		expect(installing.getAttribute("aria-disabled")).toBe("true");
+		expect(installing.hasAttribute("disabled")).toBe(false);
 		const alert = await screen.findByRole("alert");
 		expect(alert.textContent).toBe("暂时无法加入我的库，请稍后重试。");
 		fireEvent.click(screen.getByRole("button", { name: "加入我的库" }));

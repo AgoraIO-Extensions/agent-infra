@@ -54,7 +54,7 @@ function focusPageHeading() {
 	});
 }
 
-/** 区域卸载时若焦点在区域内，把焦点交给页面 h1（AC-10）。 */
+/** 区域或按钮卸载时若焦点在其中，把焦点交给页面 h1（AC-10）。 */
 function useFocusFallbackOnUnmount(root: RefObject<HTMLElement | null>) {
 	useLayoutEffect(() => {
 		const element = root.current;
@@ -214,16 +214,22 @@ const commandIcons = {
 function LifecycleCommandButton({
 	area,
 	command,
+	disabled = false,
 	finalFocus,
 	lifecycle,
 }: {
 	area: LifecycleArea;
 	command: AgentLifecycleCommand;
+	/** 生命周期命令之外的禁用（页脚：配置保存进行中）。 */
+	disabled?: boolean;
 	/** 确认后焦点的去处；未提供时回到触发按钮。 */
 	finalFocus?: RefObject<HTMLElement | null>;
 	lifecycle: ConfigurationLifecycle;
 }) {
 	const confirmed = useRef(false);
+	const trigger = useRef<HTMLButtonElement>(null);
+	// 受理后触发按钮随可用命令卸载（例如页脚「重试创建」在创建开始后消失）时焦点在它上面：交给 h1（D2-12）。
+	useFocusFallbackOnUnmount(trigger);
 	const copy = confirmationCopy[command];
 	const Icon = commandIcons[command];
 	// 只有 Owner 的「停止」是实心危险按钮；管理员「停用」用 outline + Ban 图标区分（N-01）。
@@ -234,9 +240,15 @@ function LifecycleCommandButton({
 			: commandLabels[command];
 	return (
 		<ConfirmDialog
-			disabled={lifecycle.pending}
+			disabled={lifecycle.pending || disabled}
 			trigger={
-				<Button variant={triggerVariant}>
+				// 命令进行中是可聚焦的禁用（aria-disabled）：确认弹窗关闭后焦点回到这里，不因原生禁用
+				// 落到 body（#3242 K7-02）；配置保存进行中（disabled）仍为原生禁用。
+				<Button
+					ref={trigger}
+					variant={triggerVariant}
+					focusableWhenDisabled={lifecycle.pending}
+				>
 					<Icon aria-hidden="true" data-icon="inline-start" />
 					{label}
 				</Button>
@@ -276,10 +288,16 @@ function LifecycleFailure({ message }: { message?: string }) {
 	) : null;
 }
 
-/** 页脚保存按钮之后的「重启 Agent」/「重试创建」（O-11）。 */
+/**
+ * 页脚保存按钮之后的「重启 Agent」/「重试创建」（O-11）。页脚不在整页 fieldset 内（保存按钮在
+ * 保存进行中要保持可聚焦，#3242 K7-02），配置保存或镜像升级进行中由 disabled 禁用，与原先随
+ * fieldset 禁用一致。
+ */
 export function ConfigurationFooterLifecycleActions({
+	disabled = false,
 	lifecycle,
 }: {
+	disabled?: boolean;
 	lifecycle: ConfigurationLifecycle;
 }) {
 	return (
@@ -288,6 +306,7 @@ export function ConfigurationFooterLifecycleActions({
 				<LifecycleCommandButton
 					area="footer"
 					command={command}
+					disabled={disabled}
 					key={command}
 					lifecycle={lifecycle}
 				/>

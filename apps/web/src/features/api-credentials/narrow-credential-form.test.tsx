@@ -294,14 +294,16 @@ describe("NarrowCredentialForm", () => {
 		fireEvent.submit(screen.getByRole("form"));
 		fireEvent.submit(screen.getByRole("form"));
 		expect(onNarrow).toHaveBeenCalledOnce();
-		expect(
-			screen
-				.getByRole("button", { name: "正在保存…" })
-				.hasAttribute("disabled"),
-		).toBe(true);
+		// #3242 K7-02：保存进行中「正在保存…」是可聚焦的禁用（aria-disabled），不再是原生 disabled；
+		// 再次提交仍不会重复调用（下方 submit() 后 onNarrow 仍只调用一次）。
+		const saving = screen.getByRole("button", { name: "正在保存…" });
+		expect(saving.getAttribute("aria-disabled")).toBe("true");
+		expect(saving.hasAttribute("disabled")).toBe(false);
 		expect(
 			screen.getByRole("button", { name: "取消" }).hasAttribute("disabled"),
 		).toBe(true);
+		fireEvent.submit(screen.getByRole("form"));
+		expect(onNarrow).toHaveBeenCalledOnce();
 		await act(async () => {
 			finish();
 		});

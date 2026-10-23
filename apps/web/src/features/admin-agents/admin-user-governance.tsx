@@ -179,8 +179,10 @@ export function AdminUserGovernance() {
 						void updateDisabled(true);
 					}}
 				/>
+				{/* 提交进行中是可聚焦的禁用（aria-disabled），焦点留在「解除禁用」上（#3242 K7-02）。 */}
 				<Button
 					disabled={busy || status === "loading" || !userId}
+					focusableWhenDisabled={busy}
 					onClick={() => void updateDisabled(false)}
 					variant="outline"
 				>

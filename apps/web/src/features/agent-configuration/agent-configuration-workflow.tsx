@@ -155,7 +155,10 @@ function AgentConfigurationWorkflowContent({
 			defaultRelayKeyState={defaultRelayKey.data}
 			endpointNames={endpointNames}
 			footerActions={
-				<ConfigurationFooterLifecycleActions lifecycle={lifecycle} />
+				<ConfigurationFooterLifecycleActions
+					disabled={submission.isPending}
+					lifecycle={lifecycle}
+				/>
 			}
 			footerFeedback={
 				<>

@@ -404,7 +404,10 @@ describe("Administrator inventory presentation", () => {
 		const pending = screen.getByRole("button", {
 			name: "重试中…：失败的 Agent",
 		});
-		expect(pending.hasAttribute("disabled")).toBe(true);
+		// #3242 K7-02：提交进行中是可聚焦的禁用（aria-disabled），焦点仍在按钮上；再次点击不重复提交。
+		expect(pending.getAttribute("aria-disabled")).toBe("true");
+		expect(pending.hasAttribute("disabled")).toBe(false);
+		expect(document.activeElement).toBe(pending);
 		fireEvent.click(pending);
 		await waitFor(() => expect(commandAgentLifecycle).toHaveBeenCalled());
 		expect(commandAgentLifecycle).toHaveBeenCalledExactlyOnceWith(
@@ -507,7 +510,13 @@ describe("Administrator inventory presentation", () => {
 		const pending = await screen.findByRole("button", {
 			name: "停用中…：范围外的 Agent",
 		});
-		expect(pending.hasAttribute("disabled")).toBe(true);
+		// #3242 K7-02：停用进行中触发按钮是可聚焦的禁用（aria-disabled），确认弹窗关闭后焦点回到它，
+		// 不再是原生 disabled；再次点击不会重复提交（下方仍只调用一次）。
+		expect(pending.getAttribute("aria-disabled")).toBe("true");
+		expect(pending.hasAttribute("disabled")).toBe(false);
+		fireEvent.click(pending);
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(commandAgentLifecycle).toHaveBeenCalledOnce();
 		expect(onRefresh).not.toHaveBeenCalled();
 		await act(async () => {
 			settle({
@@ -561,6 +570,8 @@ describe("Administrator inventory presentation", () => {
 		});
 		await waitFor(() => expect(document.activeElement).toBe(trigger));
 		expect(trigger.hasAttribute("disabled")).toBe(false);
+		// #3242 K7-02：失败后不再处于进行中，也没有 aria-disabled（可聚焦的禁用只在请求进行中）。
+		expect(trigger.getAttribute("aria-disabled")).toBeNull();
 		expect(onRefresh).not.toHaveBeenCalled();
 		expect(
 			document.querySelector('[data-slot="toast"]')?.textContent ?? "",

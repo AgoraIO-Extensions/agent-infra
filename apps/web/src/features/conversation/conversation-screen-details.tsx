@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -459,6 +459,18 @@ function ExecutionDetailBody({
 	onRetry: () => void;
 	viewer?: BrowserRecordViewer;
 }) {
+	// 「核实原执行状态」读取中是可聚焦的禁用（#3242 K7-02）；核实到终态、按钮随之卸载后焦点交给
+	// 执行详情弹窗本身，不落到 body，Escape 仍可关闭。
+	const verifyButton = useRef<HTMLButtonElement>(null);
+	const verifyDialog = useRef<HTMLElement | null>(null);
+	useEffect(() => {
+		const dialog = verifyDialog.current;
+		if (loading || !dialog) return;
+		verifyDialog.current = null;
+		const active = document.activeElement;
+		if (verifyButton.current || (active && active !== document.body)) return;
+		if (dialog.isConnected) dialog.focus();
+	}, [loading]);
 	return (
 		<>
 			<dl className="conversation-facts">
@@ -525,11 +537,17 @@ function ExecutionDetailBody({
 			)}
 			{!isTerminal(data.status) && (
 				<Button
+					ref={verifyButton}
 					type="button"
 					variant="outline"
 					className="execution-detail-section"
 					disabled={loading}
-					onClick={onRetry}
+					focusableWhenDisabled
+					onClick={(event) => {
+						verifyDialog.current =
+							event.currentTarget.closest<HTMLElement>('[role="dialog"]');
+						onRetry();
+					}}
 				>
 					核实原执行状态
 				</Button>

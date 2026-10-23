@@ -360,10 +360,12 @@ describe("AgentConfigurationWorkflow", () => {
 		expect(new Set(calls.map(([agentId]) => agentId))).toEqual(
 			new Set([firstAgent.agentId]),
 		);
-		for (const name of ["重启 Agent", "停止 Agent", "停用 Agent"])
-			expect(
-				screen.getByRole("button", { name }).hasAttribute("disabled"),
-			).toBe(true);
+		// #3242 K7-02：进行中三个区域的触发按钮都是可聚焦的禁用（aria-disabled），不再是原生 disabled。
+		for (const name of ["重启 Agent", "停止 Agent", "停用 Agent"]) {
+			const button = screen.getByRole("button", { name });
+			expect(button.getAttribute("aria-disabled")).toBe("true");
+			expect(button.hasAttribute("disabled")).toBe(false);
+		}
 	});
 
 	it("drops an unsaved environment change when navigation changes the Agent", () => {
@@ -473,14 +475,15 @@ describe("AgentConfigurationWorkflow", () => {
 			target: { value: "application-1" },
 		});
 		fireEvent.click(controls().getByRole("button", { name: "授权管理" }));
-		expect(controls().getByRole("button", { name: "授权管理" })).toHaveProperty(
-			"disabled",
-			true,
-		);
+		// #3242 K7-02：提交进行中是可聚焦的禁用（aria-disabled），不再是原生 disabled。
+		const pending = controls().getByRole("button", { name: "授权管理" });
+		expect(pending.getAttribute("aria-disabled")).toBe("true");
+		expect(pending).toHaveProperty("disabled", false);
 
 		rerender(<AgentConfigurationWorkflow agent={secondAgent} />);
 
 		expect(controls().getByLabelText("应用 ID")).toHaveProperty("value", "");
+		// 换到另一个 Agent 后不再处于进行中，未填目标时仍为原生禁用。
 		expect(controls().getByRole("button", { name: "授权管理" })).toHaveProperty(
 			"disabled",
 			true,

@@ -2335,7 +2335,12 @@ describe("AgentApplicationForm design alignment", () => {
 		);
 		const fields = document.querySelector(".application-form-fields");
 		if (!fields) throw new Error("application fields missing");
-		const order = Array.from(fields.children).map((child) =>
+		// #3242 K7-02：页脚移到 fieldset 之后（提交进行中字段由 fieldset 禁用，提交按钮仍可聚焦），
+		// 仍紧跟在高级配置之后。
+		const order = [
+			...Array.from(fields.children),
+			...(fields.nextElementSibling ? [fields.nextElementSibling] : []),
+		].map((child) =>
 			child.matches(".form-footer")
 				? "footer"
 				: (child.querySelector("h2")?.textContent ?? child.tagName),

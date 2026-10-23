@@ -107,12 +107,21 @@ export function PersonalRelayKeyScreen({
 		};
 	}, [clearValue, refresh, userId]);
 
-	// 按钮在请求期间禁用会丢失焦点，完成后按设计放回输入框或主按钮。
+	// 保存与撤销进行中按钮是可聚焦的禁用，焦点留在触发的按钮上（#3242 K7-02）；完成后按设计放回
+	// 输入框或主按钮（D2-59、H4-27）。失败后表单保持禁用、按钮仍可聚焦；「撤销 Key」随失败卸载、
+	// 焦点落到 body 时交给主按钮。
 	useEffect(() => {
 		if (state !== "ready" || !focusTarget) return;
 		(focusTarget === "input" ? inputRef : saveRef).current?.focus();
 		setFocusTarget(undefined);
 	}, [focusTarget, state]);
+	const writeFailed = useRef(false);
+	useEffect(() => {
+		if (state !== "error" || !writeFailed.current) return;
+		writeFailed.current = false;
+		const active = document.activeElement;
+		if (!active || active === document.body) saveRef.current?.focus();
+	}, [state]);
 
 	const submit = async () => {
 		if (state !== "ready" || !projection) return;
@@ -147,6 +156,7 @@ export function PersonalRelayKeyScreen({
 			if (request !== requestNumber.current) return;
 			if (["authentication", "authorization"].includes(errorKind(error)))
 				setProjection(undefined);
+			writeFailed.current = true;
 			setFailure(error);
 			setState("error");
 		}
@@ -171,6 +181,7 @@ export function PersonalRelayKeyScreen({
 			if (request !== requestNumber.current) return;
 			if (["authentication", "authorization"].includes(errorKind(error)))
 				setProjection(undefined);
+			writeFailed.current = true;
 			setFailure(error);
 			setState("error");
 		}
@@ -317,6 +328,7 @@ export function PersonalRelayKeyScreen({
 							ref={saveRef}
 							type="button"
 							disabled={state !== "ready" || !projection}
+							focusableWhenDisabled={state === "saving" || state === "error"}
 							onClick={() => void submit()}
 						>
 							{state === "saving" && operation === "replace"
@@ -331,6 +343,7 @@ export function PersonalRelayKeyScreen({
 								variant="destructive"
 								type="button"
 								disabled={state !== "ready"}
+								focusableWhenDisabled={state === "saving" || state === "error"}
 								onClick={() => void revoke()}
 							>
 								{state === "saving" && operation === "revoke"

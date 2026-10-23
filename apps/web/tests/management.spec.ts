@@ -10,7 +10,13 @@ import {
 	pilotAgentDetailFromV2,
 	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
-import { expect, type Page, type TestInfo, test } from "@playwright/test";
+import {
+	expect,
+	type Locator,
+	type Page,
+	type TestInfo,
+	test,
+} from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import { pendingApplication } from "../src/features/my-agents/test-fixtures";
 import type {
@@ -23,6 +29,13 @@ import type {
 } from "../src/pilot/generated-v2/types.gen";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { recordApiRequests } from "./generated-client-paths";
+import {
+	expectFocusableBusy,
+	expectFocusSettled,
+	expectNoDuplicateControls,
+	holdRequests,
+	pinElement,
+} from "./page-health";
 import { duplicateControlNames } from "./page-hygiene";
 import {
 	computed,
@@ -6495,4 +6508,578 @@ test.describe("final acceptance Y shell and directory", () => {
 			await capture(page, info, `final-acceptance-y-agents-${mode}`);
 		});
 	}
+});
+
+// #3242 K7-02 / K7-03：用户触发的写请求进行中，触发按钮是可聚焦的禁用（aria-disabled），键盘在按钮上
+// 按 Enter（或在字段里按 Enter 隐式提交）后，挂起期间 30～1000ms 多次采样焦点都在按钮上；完成后按
+// D2-59 交出焦点，不落到 body。视口为验收的 1440×900 与 390×844。
+async function acceptanceViewport(page: Page, info: TestInfo) {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+}
+
+for (const via of ["button", "field"] as const)
+	test(`application submit and resubmit keep focus on the pending submit button (${via}, K7-02)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		const api = await fixture(page);
+		await page.goto("/my-agents/new");
+		await page.getByLabel("Agent 名称").fill("Release assistant");
+		await page
+			.getByLabel("用途说明", { exact: true })
+			.fill("Helps the release team");
+		await page.getByRole("combobox", { name: "Agent 来源" }).click();
+		await page
+			.getByRole("option", { name: "自定义 Agent · 平台交互入口" })
+			.click();
+		const image = page.getByLabel("镜像地址");
+		await image.fill("registry.example/agents/release:v1");
+		const create = await pinElement(
+			page.getByRole("button", { name: "提交审批", exact: true }),
+			"create-submit",
+		);
+		api.holdNextCommand();
+		await (via === "button" ? create : image).focus();
+		await page.keyboard.press("Enter");
+		await expect(create).toHaveText("正在提交…");
+		await expectFocusableBusy(create, `${via} 提交审批`);
+		// 进行中再按 Enter 不会重复提交。
+		await page.keyboard.press("Enter");
+		await expect.poll(() => api.commands.length).toBe(1);
+		api.release();
+		await expectFocusSettled(submissionResult(page), `${via} 提交审批`);
+		expect(api.commands).toHaveLength(1);
+
+		api.rejectApplication();
+		await page.goto("/my-agents/application-browser-1/edit");
+		const name = page.getByLabel("Agent 名称");
+		await expect(name).toBeVisible();
+		const resubmit = await pinElement(
+			page.getByRole("button", { name: "修改并重新提交", exact: true }),
+			"resubmit",
+		);
+		api.holdNextCommand();
+		await (via === "button" ? resubmit : name).focus();
+		await page.keyboard.press("Enter");
+		await expect(resubmit).toHaveText("正在提交…");
+		await expectFocusableBusy(resubmit, `${via} 修改并重新提交`);
+		await expect(name).toBeDisabled();
+		api.release();
+		await expectFocusSettled(submissionResult(page), `${via} 修改并重新提交`);
+		expect(api.commands).toHaveLength(2);
+		await expectNoDuplicateControls(page, "修改并重新提交结果（K7-02）");
+		await expectCleanPage(page, errors);
+	});
+
+for (const decision of ["approve", "reject"] as const)
+	test(`approval decisions keep focus on the pending dialog button (${decision}, K7-02)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		const api = await fixture(page, "admin");
+		await page.goto("/admin/approvals");
+		await page.getByRole("button", { name: /^审阅：/ }).click();
+		const dialog = page.getByRole("dialog", { name: "审阅创建申请" });
+		await expect(dialog).toBeVisible();
+		let trigger: Locator;
+		if (decision === "approve") {
+			trigger = await pinElement(
+				dialog.getByRole("button", { name: "批准申请" }),
+				"approve",
+			);
+		} else {
+			await dialog.getByRole("button", { name: "驳回并说明" }).click();
+			const rejectDialog = page.getByRole("dialog", { name: "填写驳回原因" });
+			await rejectDialog
+				.getByLabel("驳回原因", { exact: true })
+				.fill("Capacity is unavailable");
+			trigger = await pinElement(
+				rejectDialog.getByRole("button", { name: "确认驳回" }),
+				"reject",
+			);
+		}
+		api.holdNextCommand();
+		await trigger.focus();
+		await page.keyboard.press("Enter");
+		await expectFocusableBusy(trigger, `${decision} 审批提交中`);
+		await expect.poll(() => api.commands.length).toBe(1);
+		api.release();
+		// 队列清空后焦点到页面 h1（NI-79），不落到 body。
+		await expectFocusSettled(
+			page.getByRole("heading", { level: 1 }),
+			`${decision} 审批后`,
+		);
+		await expectCleanPage(page, errors);
+	});
+
+for (const via of ["button", "field"] as const)
+	test(`saving the Owner configuration keeps focus on 保存配置 and lands on the unchanged hint (${via}, K7-02)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		const api = await fixture(page);
+		await page.goto("/agents/agent-pilot-1/configuration");
+		const value = page.getByLabel("值：环境变量 1", { exact: true });
+		await value.fill("synthetic-browser-value");
+		const save = await pinElement(
+			page.getByRole("button", { name: "保存配置", exact: true }),
+			"save-configuration",
+		);
+		const restart = page.getByRole("button", { name: "重启 Agent" });
+		await expect(restart).toBeEnabled();
+		api.holdNextCommand();
+		await (via === "button" ? save : value).focus();
+		await page.keyboard.press("Enter");
+		await expect(save).toHaveText("保存中…");
+		await expectFocusableBusy(save, `${via} 保存配置`);
+		// 其余字段仍随 fieldset 禁用，页脚「重启 Agent」同样禁用。
+		await expect(value).toBeDisabled();
+		await expect(restart).toBeDisabled();
+		await expect.poll(() => api.commands.length).toBe(1);
+		api.release();
+		await expect(toastHost(page)).toHaveText("配置已保存，Secret 值不会回显");
+		await expectFocusSettled(
+			page.locator("#agent-configuration-unchanged"),
+			`${via} 保存配置`,
+		);
+		await expect(page.locator("#agent-configuration-unchanged")).toHaveText(
+			"没有需要保存的变更。",
+		);
+		await expect(restart).toBeEnabled();
+		expect(api.commands).toHaveLength(1);
+		await expectNoDuplicateControls(page, "保存配置后（K7-02）");
+		await expectCleanPage(page, errors);
+	});
+
+test("upgrading a custom image keeps focus on 升级镜像 and then hands it to the reference input (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const api = await fixture(page);
+	api.customAgent();
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const input = page.getByLabel("新镜像引用");
+	await input.fill("registry.example/agent:v2");
+	const upgrade = await pinElement(
+		page.getByRole("button", { name: "升级镜像" }),
+		"upgrade-image",
+	);
+	api.holdNextCommand();
+	await upgrade.focus();
+	await page.keyboard.press("Enter");
+	await expect(upgrade).toHaveText("升级中…");
+	await expectFocusableBusy(upgrade, "升级镜像");
+	await expect(input).toBeDisabled();
+	api.release();
+	await expect(toastHost(page)).toHaveText("已提交镜像升级请求");
+	await expect(input).toHaveValue("");
+	// 受理后输入框清空、「升级镜像」随之禁用：焦点交给「新镜像引用」。
+	await expectFocusSettled(input, "升级镜像");
+	await expect(upgrade).toBeDisabled();
+	await expectCleanPage(page, errors);
+});
+
+test("Agent authorization controls keep focus on the pending grant or revoke button (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	// 用户 API 授权以 Agent 管理修订号作为 expectedRevision（#3070）：受控投影带上修订号。
+	const revisioned = AgentProjectionV2Schema.parse({
+		...pilotFakeScenariosV2.starting.response.body,
+		managementRevision: 3,
+	});
+	await page.route("**/api/v2/agents/agent-pilot-1", (route) =>
+		route.request().method() === "GET"
+			? route.fulfill({ json: revisioned })
+			: route.fallback(),
+	);
+	const authorizationPath =
+		/^\/api\/v2\/agents\/agent-pilot-1\/(application-[a-z-]+|api-[a-z-]+)\/[^/]+$/;
+	// 授权写入的受控结果：服务端确认（合成修订号），不含凭证。
+	await page.route(
+		(url) => authorizationPath.test(url.pathname),
+		(route) =>
+			route.fulfill({
+				json: {
+					schemaVersion: 1,
+					agentId: "agent-pilot-1",
+					authorizationRevision: "authorization-rev-1",
+					granted: route.request().method() === "PUT",
+					replayed: false,
+				},
+			}),
+	);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const controls = page.getByRole("region", { name: "Agent 授权控制" });
+	for (const [kind, label, buttons] of [
+		[
+			"应用",
+			"应用 ID：Agent 授权控制",
+			["授权管理", "撤销管理", "授权使用", "撤销使用"],
+		],
+		[
+			"用户",
+			"用户 ID：Agent 授权控制",
+			[
+				"授权用户 API 使用",
+				"撤销用户 API 使用",
+				"授权用户 API 管理",
+				"撤销用户 API 管理",
+			],
+		],
+	] as const) {
+		await controls.getByRole("button", { name: kind, exact: true }).click();
+		await controls.getByLabel(label, { exact: true }).fill("target-1");
+		for (const name of buttons) {
+			const button = await pinElement(
+				controls.getByRole("button", { name, exact: true }),
+				`authorization-${name}`,
+			);
+			await expect(button).toBeEnabled();
+			const grants = await holdRequests(page, "PUT", authorizationPath);
+			const revokes = await holdRequests(page, "DELETE", authorizationPath);
+			await button.focus();
+			await page.keyboard.press("Enter");
+			await expectFocusableBusy(button, `Agent 授权控制「${name}」`);
+			expect(grants.held() + revokes.held()).toBe(1);
+			grants.release();
+			revokes.release();
+			// 服务端确认后按钮恢复可用，焦点仍在按钮上。
+			await expect(controls.getByText(/结果已由服务端确认/)).toBeVisible();
+			await expect(button).toBeEnabled();
+			await expectFocusSettled(button, `Agent 授权控制「${name}」`);
+		}
+	}
+	await expectNoDuplicateControls(page, "Agent 授权控制（K7-02）");
+	await expectCleanPage(page, errors);
+});
+
+// 企微机器人与企微应用的手动配置会话（只含合成凭证）：验证结果由 outcome 决定，凭证提交可挂起。
+async function wecomManualRoutes(page: Page) {
+	const session = {
+		sessionId: "fixture-setup",
+		agentId: "agent-pilot-1",
+		configurationRevision: 1,
+		expiresAt: new Date(Date.now() + 300_000).toISOString(),
+	};
+	const connected = { bot: false, app: false };
+	let outcome: "active" | "auth_failed" = "active";
+	const cancels: string[] = [];
+	await page.route(/\/api\/v[12]\/agents\/[^/]+\/wecom-/, async (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (path.endsWith("/wecom-bot"))
+			return route.fulfill({
+				json: {
+					status: connected.bot ? "connected" : "not_configured",
+					qrAvailable: false,
+					qrUnavailableReason: "authorization_correlation_unverified",
+				},
+			});
+		if (path.endsWith("/wecom-app"))
+			return route.fulfill({
+				json: connected.app
+					? {
+							status: "connected",
+							callbackUrl: "https://callback.example.test/wecom",
+						}
+					: { status: "not_configured" },
+			});
+		const app = path.includes("/wecom-app-setup");
+		if (path.endsWith("/wecom-setup") || path.endsWith("/wecom-app-setup"))
+			return route.fulfill({
+				json: {
+					...session,
+					status: "awaiting_input",
+					state: "fixture-state",
+					...(app
+						? { callbackUrl: "https://callback.example.test/wecom" }
+						: {
+								qrAvailable: false,
+								qrUnavailableReason: "authorization_correlation_unverified",
+							}),
+				},
+			});
+		if (path.endsWith("/credentials"))
+			return route.fulfill({
+				json: {
+					...session,
+					status: "verifying",
+					state: "fixture-state",
+					...(app
+						? { callbackUrl: "https://callback.example.test/wecom" }
+						: {}),
+				},
+			});
+		if (path.endsWith("/cancel")) {
+			cancels.push(path);
+			return route.fulfill({
+				json: { ...session, status: "cancelled", state: "fixture-state" },
+			});
+		}
+		if (outcome === "active") connected[app ? "app" : "bot"] = true;
+		return route.fulfill({
+			json: {
+				...session,
+				status: outcome,
+				state: "fixture-state",
+				...(app ? { callbackUrl: "https://callback.example.test/wecom" } : {}),
+			},
+		});
+	});
+	return {
+		cancels,
+		fail() {
+			outcome = "auth_failed";
+		},
+	};
+}
+
+async function fillWecomManual(card: Locator, kind: "bot" | "app") {
+	if (kind === "bot") {
+		await card.getByLabel("Bot ID", { exact: true }).fill("fixture-bot");
+		await card
+			.getByLabel("Secret", { exact: true })
+			.fill("synthetic-bot-secret");
+		await card
+			.getByRole("checkbox", { name: "我已知悉可能断开其他连接" })
+			.check();
+		return;
+	}
+	await card.getByLabel("企业 ID", { exact: true }).fill("ww-fixture");
+	await card.getByLabel("应用 ID：企微应用", { exact: true }).fill("1000002");
+	await card
+		.getByLabel("应用 Secret", { exact: true })
+		.fill("synthetic-app-secret");
+	await card.getByLabel("回调 Token", { exact: true }).fill("synthetic-token");
+	await card.getByLabel("EncodingAESKey", { exact: true }).fill("a".repeat(43));
+	await card
+		.getByRole("checkbox", { name: "我已知悉可能影响现有回调" })
+		.check();
+}
+
+// #3242 K7-03：手动「验证并绑定」验证期间是可聚焦的禁用；验证结束（已连接或验证失败）后焦点到
+// 卡片标题 h3#wecom-*-title，与扫码确认、解绑一致（D2-59）。
+for (const [kind, title] of [
+	["bot", "企微机器人"],
+	["app", "企微应用"],
+] as const)
+	for (const outcome of ["active", "auth_failed"] as const)
+		test(`manual WeCom ${kind} verification keeps focus on the button and hands it to the card title (${outcome}, K7-03)`, async ({
+			page,
+		}, info) => {
+			await acceptanceViewport(page, info);
+			const errors = trackPageErrors(page);
+			await fixture(page);
+			const wecom = await wecomManualRoutes(page);
+			if (outcome === "auth_failed") wecom.fail();
+			const credentials = await holdRequests(page, "POST", /\/credentials$/);
+			await page.goto("/agents/agent-pilot-1/configuration");
+			const card = page.getByRole("region", { name: title, exact: true });
+			await expect(card.getByText("未配置", { exact: true })).toBeVisible();
+			await fillWecomManual(card, kind);
+			const verify = await pinElement(
+				card.getByRole("button", { name: `验证并绑定：${title}` }),
+				`verify-${kind}`,
+			);
+			await verify.focus();
+			await page.keyboard.press("Enter");
+			await expect(verify).toHaveAccessibleName(`验证中…：${title}`);
+			await expectFocusableBusy(verify, `${title} 验证中`);
+			expect(credentials.held()).toBe(1);
+			credentials.release();
+			if (outcome === "active") {
+				await expect(card.getByText("已连接", { exact: true })).toBeVisible();
+				await expect(toastHost(page)).toHaveText(`${title}已连接`);
+			} else {
+				await expect(card.getByRole("alert")).toContainText("绑定未完成");
+			}
+			const heading = page.locator(`h3#wecom-${kind}-title`);
+			await expect(heading).toHaveText(title);
+			await expectFocusSettled(
+				heading,
+				`${title} 验证结束（${outcome}）`,
+				[50, 300, 1000, 2500],
+			);
+			await expectNoDuplicateControls(page, `${title} 验证结束（K7-03）`);
+			await expectCleanPage(page, errors);
+		});
+
+// 「取消配置」随验证结束卸载：受理后焦点同样到卡片标题（D2-59）。
+for (const [kind, title] of [
+	["bot", "企微机器人"],
+	["app", "企微应用"],
+] as const)
+	test(`cancelling a manual WeCom ${kind} verification hands focus to the card title (K7-03)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		await fixture(page);
+		const wecom = await wecomManualRoutes(page);
+		const credentials = await holdRequests(page, "POST", /\/credentials$/);
+		await page.goto("/agents/agent-pilot-1/configuration");
+		const card = page.getByRole("region", { name: title, exact: true });
+		await expect(card.getByText("未配置", { exact: true })).toBeVisible();
+		await fillWecomManual(card, kind);
+		await card.getByRole("button", { name: `验证并绑定：${title}` }).click();
+		// 配置会话已建立、凭证提交挂起后再取消（取消作用于这次会话）。
+		await expect.poll(() => credentials.held()).toBe(1);
+		const cancel = card.getByRole("button", { name: `取消配置：${title}` });
+		await cancel.focus();
+		await page.keyboard.press("Enter");
+		await expect.poll(() => wecom.cancels.length).toBe(1);
+		await expect(cancel).toHaveCount(0);
+		const heading = page.locator(`h3#wecom-${kind}-title`);
+		await expectFocusSettled(heading, `${title} 取消配置`);
+		credentials.release();
+		await expectFocusSettled(heading, `${title} 取消配置后迟到的提交响应`);
+		await expectCleanPage(page, errors);
+	});
+
+// 「打开扫码窗口」等待扫码期间是可聚焦的禁用（「等待扫码…」），扫码窗口关闭、面板收起后焦点回到
+// 「扫码授权」（#3242 K7-02）。
+test("waiting for the QR scan keeps focus on the button and returns it to 扫码授权 when the window closes (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	const session = {
+		sessionId: "qr-setup",
+		agentId: "agent-pilot-1",
+		configurationRevision: 1,
+		expiresAt: new Date(Date.now() + 300_000).toISOString(),
+	};
+	const authOrigin = "https://wecom-auth.example.test";
+	await page.route(/\/api\/v[12]\/agents\/[^/]+\/wecom-/, async (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (path.endsWith("/wecom-bot"))
+			return route.fulfill({
+				json: { status: "not_configured", qrAvailable: true },
+			});
+		if (path.endsWith("/wecom-app"))
+			return route.fulfill({ json: { status: "not_configured" } });
+		if (path.endsWith("/wecom-setup"))
+			return route.fulfill({
+				json: {
+					...session,
+					status: "awaiting_input",
+					state: "qr-state",
+					qrAvailable: true,
+					qr: {
+						authorizationUrl: `${authOrigin}/authorize`,
+						authOrigin,
+						source: "agent-infra",
+						state: "qr-state",
+					},
+				},
+			});
+		return route.fulfill({ json: { ...session, status: "cancelled" } });
+	});
+	// 授权页不回传结果：一直停在等待扫码，直到用例关闭窗口。
+	await page
+		.context()
+		.route(`${authOrigin}/**`, (route) =>
+			route.fulfill({ contentType: "text/html", body: "<p>scan</p>" }),
+		);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const bot = page.getByRole("region", { name: "企微机器人", exact: true });
+	const qrTrigger = bot.getByRole("button", { name: "扫码授权" });
+	await qrTrigger.click();
+	const openWindow = await pinElement(
+		bot.getByRole("button", { name: "打开扫码窗口" }),
+		"open-qr-window",
+	);
+	await openWindow.focus();
+	const popupOpened = page.waitForEvent("popup");
+	await page.keyboard.press("Enter");
+	const popup = await popupOpened;
+	await expect(openWindow).toHaveText("等待扫码…");
+	await expectFocusableBusy(openWindow, "等待扫码");
+	await popup.close();
+	await expect(openWindow).toHaveCount(0);
+	await expect(bot.getByRole("alert")).toContainText("扫码授权未完成");
+	await expectFocusSettled(qrTrigger, "扫码窗口关闭");
+	await expectCleanPage(page, errors);
+});
+
+// #3242 K7-02：确认型写操作（撤回申请、页脚「重启 Agent」「重试创建」）确认后弹窗关闭、焦点回到触发按钮；
+// 请求进行中它是可聚焦的禁用（aria-disabled），挂起期间多次采样焦点都在按钮上，不落到 body。完成后：
+// 撤回到 h1（H4-15），重启留在「重启 Agent」，页脚「重试创建」随状态卸载后到 h1（D2-12）。
+test("confirmed withdrawal and footer lifecycle commands keep focus on the pending trigger (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const api = await fixture(page);
+	const confirmWith = async (dialogName: string | RegExp, confirm: string) => {
+		const dialog = page.getByRole("dialog", { name: dialogName });
+		await expect(dialog).toBeVisible();
+		await dialog.getByRole("button", { name: confirm, exact: true }).focus();
+		await page.keyboard.press("Enter");
+		await expect(dialog).toBeHidden();
+	};
+	const heading = page.getByRole("heading", { level: 1 });
+
+	await page.goto("/my-agents/application-browser-1");
+	const withdraw = await pinElement(
+		page.getByRole("button", { name: "撤回申请" }),
+		"withdraw-application",
+	);
+	await withdraw.focus();
+	await page.keyboard.press("Enter");
+	api.holdNextCommand();
+	await confirmWith("撤回这条申请？", "确认撤回");
+	await expect(withdraw).toHaveText("正在撤回…");
+	await expectFocusableBusy(withdraw, "撤回申请");
+	api.release();
+	await expect(toastHost(page)).toHaveText("申请已撤回");
+	await expectFocusSettled(heading, "撤回申请");
+
+	api.agentState("available", "ready");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const footer = page.locator(".configuration-form-footer");
+	const restart = await pinElement(
+		footer.getByRole("button", { name: "重启 Agent" }),
+		"footer-restart",
+	);
+	await restart.focus();
+	await page.keyboard.press("Enter");
+	api.holdNextCommand();
+	await confirmWith(/^重启.+？$/, "确认重启");
+	await expect(restart).toHaveText("重启中…");
+	await expectFocusableBusy(restart, "重启 Agent");
+	api.release();
+	await expect(toastHost(page)).toHaveText("Agent 正在重启…");
+	await expect(restart).toHaveText("重启 Agent");
+	await expectFocusSettled(restart, "重启 Agent");
+
+	api.agentState("creation_failed");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const retry = await pinElement(
+		footer.getByRole("button", { name: "重试创建" }),
+		"footer-retry-creation",
+	);
+	await retry.focus();
+	await page.keyboard.press("Enter");
+	api.holdNextCommand();
+	await confirmWith("重试创建 Agent？", "确认重试创建");
+	await expect(retry).toHaveText("重试创建中…");
+	await expectFocusableBusy(retry, "重试创建");
+	api.release();
+	await expect(toastHost(page)).toHaveText("已提交重试创建请求");
+	await expect(retry).toHaveCount(0);
+	await expectFocusSettled(heading, "重试创建受理");
+	await expectNoDuplicateControls(page, "Owner 配置（重试创建后，K7-02）");
+	await expectCleanPage(page, errors);
 });

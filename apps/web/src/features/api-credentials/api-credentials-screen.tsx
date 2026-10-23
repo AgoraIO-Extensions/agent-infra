@@ -371,9 +371,12 @@ export function ApiCredentialsScreen({
 							留空表示不过期；签发后只能进一步收窄权限或提前过期。
 						</p>
 					</Field>
+					{/* 签发进行中是可聚焦的禁用（aria-disabled），焦点留在按钮上（#3242 K7-02）；
+					    结果由一次性凭证提示的 status 播报。 */}
 					<Button
 						type="submit"
 						disabled={!onIssue || scopes.length === 0 || isIssuing}
+						focusableWhenDisabled={isIssuing}
 					>
 						{isIssuing ? "正在签发…" : "签发个人凭证"}
 					</Button>

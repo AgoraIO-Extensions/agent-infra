@@ -22,6 +22,13 @@ import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures
 import { captureDesignContract, designViewports } from "./design-contract";
 import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
 import {
+	expectFocusableBusy,
+	expectFocusHeld,
+	expectFocusSettled,
+	holdRequests,
+	pinElement,
+} from "./page-health";
+import {
 	expectCleanPage,
 	expectSectionHeadTopAligned,
 	trackPageErrors,
@@ -2234,3 +2241,422 @@ for (const viewport of [
 		expect(fixture.unexpected).toEqual([]);
 	});
 }
+
+// #3242 K7-01：对话页用户消息头像与浏览器接管卡头、Agent 详情 Owner 区头同为 lucide UserRound（人像，
+// Y-04），回复卡头像仍为 Bot；页面上不再出现 lucide User 字形。1440 与 390 下没有横向溢出与控制台错误。
+test("user message avatars use the UserRound portrait glyph (K7-01)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	const fixture = await routingFixture(page, { messageRoles: true });
+	await page.goto(canonical(fixture.agentId, fixture.conversationId));
+	await assertChat(page, fixture.agentName);
+	const users = page.getByRole("article", {
+		name: "受控员工的消息",
+		exact: true,
+	});
+	const assistants = page.getByRole("article", {
+		name: `${fixture.agentName}的消息`,
+		exact: true,
+	});
+	await expect(users).toHaveCount(2);
+	await expect(assistants).toHaveCount(2);
+	for (const [frames, glyph] of [
+		[users, /(?:^|\s)lucide-user-round(?:\s|$)/],
+		[assistants, /(?:^|\s)lucide-bot(?:\s|$)/],
+	] as const)
+		for (const frame of await frames.all())
+			await expect(frame.locator(".chat-message-avatar > svg")).toHaveClass(
+				glyph,
+			);
+	await expect(page.locator("svg.lucide-user")).toHaveCount(0);
+	await expectCleanPage(page, errors);
+});
+
+// #3242 K7-02：对话页由用户触发的读取与写入进行中，焦点不落到 body。发送消息、新会话首条消息、
+// 「核实原请求」「重新发送」提交中输入框只读（aria-disabled），焦点留在输入框或「发送」上，受理后回到
+// 输入框；页头「新会话」创建中是可聚焦的禁用；「加载更多」读完没有更多时到新加载的第一条；
+// 「加载更早内容」读完没有更早内容时到最早一条消息。视口为验收的 1440×900 与 390×844。
+async function acceptanceViewport(page: Page, info: TestInfo) {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+}
+
+const accepted = (messageId: string) => ({
+	status: 202,
+	json: {
+		schemaVersion: 1,
+		status: "submitted",
+		messageId,
+		executionId: `execution-${messageId}`,
+	},
+});
+
+/** 已就绪、没有进行中回复的会话详情（发送用的是普通消息，不是补充指令）。 */
+async function readyConversation(
+	page: Page,
+	conversationId: string,
+	eventWindow?: (beforeCursor: string | null) => {
+		hasEarlier: boolean;
+		beforeCursor: string | null;
+	},
+) {
+	await page.route(`**/api/v2/conversations/${conversationId}*`, (route) => {
+		const url = new URL(route.request().url());
+		if (
+			route.request().method() !== "GET" ||
+			url.pathname !== `/api/v2/conversations/${conversationId}`
+		)
+			return route.fallback();
+		const base = history(conversationId, []);
+		const question = {
+			messageId: "ready-question",
+			role: "user",
+			text: "受控问题",
+			status: "completed",
+			executionId: "execution-ready",
+			replyToMessageId: null,
+			answerVersion: null,
+			isCurrentAnswer: null,
+			error: null,
+			createdAt: base.conversation.createdAt,
+		};
+		return route.fulfill({
+			json: ConversationDetailProjectionV2Schema.parse({
+				...base,
+				conversation: {
+					...base.conversation,
+					title: `受控历史 ${conversationId}`,
+					status: "ready",
+				},
+				messages: [
+					question,
+					{
+						...question,
+						messageId: "ready-answer",
+						role: "assistant",
+						text: "受控回答",
+						replyToMessageId: question.messageId,
+						answerVersion: 1,
+						isCurrentAnswer: true,
+					},
+				],
+				...(eventWindow
+					? { eventWindow: eventWindow(url.searchParams.get("beforeCursor")) }
+					: {}),
+			}),
+		});
+	});
+}
+
+for (const via of ["field", "button"] as const)
+	test(`sending a message keeps focus in the composer while the command is pending (${via}, K7-02)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		const fixture = await routingFixture(page);
+		await readyConversation(page, fixture.conversationId);
+		const messages = `/api/v1/conversations/${fixture.conversationId}/messages`;
+		await page.route(`**${messages}`, (route) =>
+			route.fulfill(accepted("message-sent")),
+		);
+		await page.goto(canonical(fixture.agentId, fixture.conversationId));
+		await assertChat(page);
+		const message = page.getByLabel("消息", { exact: true });
+		await message.fill("受控任务");
+		const send = await pinElement(
+			page.getByRole("button", { name: "发送", exact: true }),
+			"send-message",
+		);
+		const sending = await holdRequests(page, "POST", messages);
+		await (via === "field" ? message : send).focus();
+		await page.keyboard.press("Enter");
+		await expect(message).toHaveAttribute("aria-disabled", "true");
+		await expect(message).toHaveJSProperty("readOnly", true);
+		await expect(message).toHaveJSProperty("disabled", false);
+		if (via === "button") await expectFocusableBusy(send, "发送（按钮）");
+		else await expectFocusHeld(message, [30, 150, 400, 1000], "发送（输入框）");
+		expect(sending.held()).toBe(1);
+		sending.release();
+		await expect(message).toHaveValue("");
+		await expectFocusSettled(message, `发送受理（${via}）`);
+		expect(fixture.unexpected).toEqual([]);
+		await expectCleanPage(page, errors);
+	});
+
+test("the first send from a new conversation keeps focus in the composer while creating and sending (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const fixture = await routingFixture(page);
+	const messages = "/api/v1/conversations/conversation-created/messages";
+	await page.route(`**${messages}`, (route) =>
+		route.fulfill(accepted("message-first")),
+	);
+	await page.goto(canonical(fixture.agentId));
+	const message = page.getByLabel("消息", { exact: true });
+	await message.fill("受控首条任务");
+	const creating = await holdRequests(
+		page,
+		"POST",
+		`/api/v1/agents/${fixture.agentId}/conversations`,
+	);
+	const sending = await holdRequests(page, "POST", messages);
+	await message.focus();
+	await page.keyboard.press("Enter");
+	await expect(message).toHaveAttribute("aria-disabled", "true");
+	await expectFocusHeld(message, [30, 150, 400, 1000], "创建会话进行中");
+	creating.release();
+	await expect(page).toHaveURL(/\/chat\/agent-1\/conversation-created$/);
+	await expect.poll(() => sending.held()).toBe(1);
+	await expect(message).toBeFocused();
+	await expectFocusHeld(message, [30, 150, 400, 1000], "首条消息提交中");
+	sending.release();
+	await expect(message).toHaveValue("");
+	await expectFocusSettled(message, "首条消息受理");
+	expect(fixture.unexpected).toEqual([]);
+	await expectCleanPage(page, errors);
+});
+
+test("verifying an unconfirmed send keeps focus in the composer (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const fixture = await routingFixture(page);
+	await readyConversation(page, fixture.conversationId);
+	const messages = `/api/v1/conversations/${fixture.conversationId}/messages`;
+	let attempts = 0;
+	await page.route(`**${messages}`, (route) => {
+		attempts += 1;
+		// 第一次提交结果不明（服务端 500、无协议响应），之后核实原请求时受理。
+		return attempts === 1
+			? route.fulfill({ status: 500, json: {} })
+			: route.fulfill(accepted("message-verified"));
+	});
+	await page.goto(canonical(fixture.agentId, fixture.conversationId));
+	await assertChat(page);
+	const message = page.getByLabel("消息", { exact: true });
+	await message.fill("受控待核实任务");
+	await message.focus();
+	await page.keyboard.press("Enter");
+	const verify = page.getByRole("button", { name: "核实原请求" });
+	await expect(verify).toBeVisible();
+	const retrying = await holdRequests(page, "POST", messages);
+	await verify.focus();
+	await page.keyboard.press("Enter");
+	await expect(verify).toHaveCount(0);
+	await expect(message).toHaveAttribute("aria-disabled", "true");
+	await expectFocusHeld(message, [30, 150, 400, 1000], "核实原请求进行中");
+	retrying.release();
+	await expect(message).toHaveValue("");
+	await expectFocusSettled(message, "核实原请求受理");
+	expect(attempts).toBe(2);
+	await expectCleanPage(page, errors);
+});
+
+test("resending after the Agent recovers keeps focus in the composer (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const fixture = await routingFixture(page);
+	await readyConversation(page, fixture.conversationId);
+	let service: "ready" | "starting" = "ready";
+	const agent = AgentProjectionV2Schema.parse({
+		...pilotFakeScenariosV2.starting.response.body,
+		agentId: fixture.agentId,
+		name: fixture.agentName,
+		managementStatus: "available",
+		serviceAvailability: "ready",
+	});
+	await page.route(`**/api/v2/agents/${fixture.agentId}`, (route) =>
+		route.request().method() === "GET"
+			? route.fulfill({ json: { ...agent, serviceAvailability: service } })
+			: route.fallback(),
+	);
+	const messages = `/api/v1/conversations/${fixture.conversationId}/messages`;
+	let attempts = 0;
+	await page.route(`**${messages}`, (route) => {
+		attempts += 1;
+		if (attempts > 1) return route.fulfill(accepted("message-resent"));
+		// 404 不区分失去访问与 Agent 不可用：复核读到 Agent 启动中，之后恢复（G-04）。
+		service = "starting";
+		return route.fulfill({
+			status: 404,
+			json: {
+				schemaVersion: 1,
+				code: "RESOURCE_UNAVAILABLE",
+				message: "Controlled unavailable",
+				retryable: false,
+				traceId: "controlled-resend-404",
+			},
+		});
+	});
+	await page.goto(canonical(fixture.agentId, fixture.conversationId));
+	await assertChat(page);
+	const message = page.getByLabel("消息", { exact: true });
+	await message.fill("受控重新发送任务");
+	await message.focus();
+	await page.keyboard.press("Enter");
+	await expect.poll(() => attempts).toBe(1);
+	// 复核读到 Agent 启动中、页面显示不可用之后才恢复（先看到不可用、再看到恢复才出现「重新发送」）。
+	await expect(
+		page.getByText("可以查看历史，草稿仍可编辑；启动完成后才能发送。"),
+	).toBeVisible();
+	service = "ready";
+	const resend = page.getByRole("button", { name: "重新发送" });
+	await expect(resend).toBeVisible({ timeout: 10_000 });
+	const resending = await holdRequests(page, "POST", messages);
+	await resend.focus();
+	await page.keyboard.press("Enter");
+	await expect(resend).toHaveCount(0);
+	await expect(message).toHaveAttribute("aria-disabled", "true");
+	await expectFocusHeld(message, [30, 150, 400, 1000], "重新发送进行中");
+	resending.release();
+	await expect(message).toHaveValue("");
+	await expectFocusSettled(message, "重新发送受理");
+	expect(attempts).toBe(2);
+	await expectCleanPage(page, errors);
+});
+
+test("the header 新会话 keeps focus while creating, including after verifying an unconfirmed creation (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const fixture = await routingFixture(page);
+	const create = `/api/v1/agents/${fixture.agentId}/conversations`;
+	let attempts = 0;
+	await page.route(`**${create}`, (route) => {
+		if (route.request().method() !== "POST") return route.fallback();
+		attempts += 1;
+		// 第一次创建结果不明，核实原请求时创建成功（回落到 fixture 的 201）。
+		return attempts === 1
+			? route.fulfill({ status: 500, json: {} })
+			: route.fallback();
+	});
+	await page.goto(canonical(fixture.agentId, fixture.conversationId));
+	await assertChat(page);
+	const newConversation = await pinElement(
+		page.getByRole("button", { name: "新会话", exact: true }),
+		"new-conversation",
+	);
+	let creating = await holdRequests(page, "POST", create);
+	await newConversation.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusableBusy(newConversation, "新会话创建中");
+	creating.release();
+	const verify = page.getByRole("button", { name: "核实原请求" });
+	await expect(verify).toBeVisible();
+	await expect(newConversation).toHaveAttribute("aria-disabled", "true");
+	creating = await holdRequests(page, "POST", create);
+	await verify.focus();
+	await page.keyboard.press("Enter");
+	await expect(verify).toHaveCount(0);
+	await expectFocusableBusy(newConversation, "核实原请求（新会话）");
+	creating.release();
+	await expect(page).toHaveURL(/\/chat\/agent-1\/conversation-created$/);
+	await expect(newConversation).not.toHaveAttribute("aria-disabled", "true");
+	await expectFocusSettled(newConversation, "新会话创建完成");
+	expect(attempts).toBe(2);
+	await expectCleanPage(page, errors);
+});
+
+test("loading more personal history keeps focus on the pending button, then on the first new row (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const fixture = await routingFixture(page);
+	const list = `/api/v1/agents/${fixture.agentId}/conversations`;
+	await page.route(`**${list}*`, (route) => {
+		const url = new URL(route.request().url());
+		if (route.request().method() !== "GET" || url.pathname !== list)
+			return route.fallback();
+		const more = url.searchParams.has("cursor");
+		return route.fulfill({
+			json: ConversationPageV1Schema.parse({
+				items: [
+					ConversationProjectionV1Schema.parse({
+						...history(more ? "conversation-second" : fixture.conversationId)
+							.conversation,
+						title: more ? "受控更早的历史" : "受控当前历史",
+					}),
+				],
+				nextCursor: more ? null : "controlled-next-page",
+			}),
+		});
+	});
+	await page.goto(canonical(fixture.agentId, fixture.conversationId));
+	await assertChat(page);
+	const panel = page.locator(".conversation-history-panel");
+	if ((page.viewportSize()?.width ?? 0) < 1024)
+		await page.getByRole("button", { name: "个人历史", exact: true }).click();
+	await panel.getByRole("button", { name: "此 Agent 的全部历史" }).click();
+	const personal = panel.getByRole("region", { name: "个人历史" });
+	await expect(personal.getByRole("link")).toHaveCount(1);
+	const more = await pinElement(
+		personal.getByRole("button", { name: "加载更多", exact: true }),
+		"history-more",
+	);
+	const reading = await holdRequests(page, "GET", list);
+	await more.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusableBusy(more, "加载更多（个人历史）");
+	expect(reading.held()).toBe(1);
+	reading.release();
+	await expect(more).toHaveCount(0);
+	await expectFocusSettled(
+		personal.getByRole("link", { name: /受控更早的历史/ }),
+		"加载更多（个人历史）",
+	);
+	await expectCleanPage(page, errors);
+});
+
+test("loading earlier timeline content keeps focus on the pending button, then on the earliest message (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const fixture = await routingFixture(page);
+	// 首次读取还有更早事件；按 beforeCursor 读取后没有更早内容。
+	await readyConversation(page, fixture.conversationId, (beforeCursor) =>
+		beforeCursor === null
+			? { hasEarlier: true, beforeCursor: "controlled-earlier" }
+			: { hasEarlier: false, beforeCursor: null },
+	);
+	await page.goto(canonical(fixture.agentId, fixture.conversationId));
+	await assertChat(page);
+	const timeline = page.getByRole("region", { name: "会话时间线" });
+	const earlier = await pinElement(
+		timeline.getByRole("button", { name: "加载更早内容" }),
+		"load-earlier",
+	);
+	const reading = await holdRequests(
+		page,
+		"GET",
+		`/api/v2/conversations/${fixture.conversationId}`,
+	);
+	await earlier.focus();
+	await page.keyboard.press("Enter");
+	await expect(earlier).toHaveText("正在加载更早内容…");
+	await expectFocusableBusy(earlier, "加载更早内容");
+	reading.release();
+	await expect(earlier).toHaveCount(0);
+	await expectFocusSettled(
+		timeline.getByRole("article", { name: "受控员工的消息", exact: true }),
+		"加载更早内容",
+	);
+	await expectCleanPage(page, errors);
+});

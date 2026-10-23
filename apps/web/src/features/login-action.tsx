@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
+import { useSubmitFocus } from "@/hooks/use-submit-focus";
 
 type LoginActionProps = {
 	endpoint: string;
@@ -90,6 +91,11 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 	const [failedAttempts, setFailedAttempts] = useState(0);
 	const loginRef = useRef<HTMLInputElement>(null);
 	const passwordRef = useRef<HTMLInputElement>(null);
+	const formRef = useRef<HTMLFormElement>(null);
+	const submitRef = useRef<HTMLButtonElement>(null);
+	// 登录进行中「正在登录…」是可聚焦的禁用；在账号或密码框里按 Enter 提交时先把焦点交给它
+	// （输入框随提交禁用），失败后再回到密码框（#3242 K7-02）。
+	useSubmitFocus(submitting, formRef, submitRef);
 
 	useEffect(() => {
 		if (failedAttempts > 0) passwordRef.current?.focus();
@@ -154,6 +160,7 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 
 	return (
 		<form
+			ref={formRef}
 			className="login-form"
 			noValidate
 			aria-busy={submitting || undefined}
@@ -251,7 +258,13 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 					{loginFailureMessages[failure]}
 				</Alert>
 			)}
-			<Button type="submit" className="login-submit" disabled={submitting}>
+			<Button
+				ref={submitRef}
+				type="submit"
+				className="login-submit"
+				disabled={submitting}
+				focusableWhenDisabled
+			>
 				{submitting && <Spinner className="login-submit-spinner" />}
 				{submitting ? "正在登录…" : "登录"}
 			</Button>

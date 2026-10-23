@@ -186,12 +186,14 @@ export function AgentAuthorizationControls({
 							: "未能读取 Agent 管理修订号，暂不能授予或撤销用户 API 授权。请刷新页面后重试。"}
 					</p>
 				) : null}
-				{/* 授权与撤销都用 outline：页面唯一的主按钮是页脚保存，未填写目标时不出现浅蓝实心禁用按钮（O-12）。 */}
+				{/* 授权与撤销都用 outline：页面唯一的主按钮是页脚保存，未填写目标时不出现浅蓝实心禁用按钮（O-12）。
+				    提交进行中是可聚焦的禁用（aria-disabled），焦点留在触发的按钮上（#3242 K7-02）。 */}
 				{targetKind === "application" ? (
 					<div className="flex flex-wrap gap-3">
 						<Button
 							variant="outline"
 							disabled={busy || !target}
+							focusableWhenDisabled={busy}
 							onClick={() => void run("manage", false)}
 						>
 							授权管理
@@ -199,6 +201,7 @@ export function AgentAuthorizationControls({
 						<Button
 							variant="outline"
 							disabled={busy || !target}
+							focusableWhenDisabled={busy}
 							onClick={() => void run("manage", true)}
 						>
 							撤销管理
@@ -206,6 +209,7 @@ export function AgentAuthorizationControls({
 						<Button
 							variant="outline"
 							disabled={busy || !target}
+							focusableWhenDisabled={busy}
 							onClick={() => void run("use", false)}
 						>
 							授权使用
@@ -213,6 +217,7 @@ export function AgentAuthorizationControls({
 						<Button
 							variant="outline"
 							disabled={busy || !target}
+							focusableWhenDisabled={busy}
 							onClick={() => void run("use", true)}
 						>
 							撤销使用
@@ -223,6 +228,7 @@ export function AgentAuthorizationControls({
 						<Button
 							variant="outline"
 							disabled={busy || !target || !validRevision}
+							focusableWhenDisabled={busy}
 							onClick={() => void run("api-use", false)}
 						>
 							授权用户 API 使用
@@ -230,6 +236,7 @@ export function AgentAuthorizationControls({
 						<Button
 							variant="outline"
 							disabled={busy || !target || !validRevision}
+							focusableWhenDisabled={busy}
 							onClick={() => void run("api-use", true)}
 						>
 							撤销用户 API 使用
@@ -237,6 +244,7 @@ export function AgentAuthorizationControls({
 						<Button
 							variant="outline"
 							disabled={busy || !target || !validRevision}
+							focusableWhenDisabled={busy}
 							onClick={() => void run("api-manage", false)}
 						>
 							授权用户 API 管理
@@ -244,6 +252,7 @@ export function AgentAuthorizationControls({
 						<Button
 							variant="outline"
 							disabled={busy || !target || !validRevision}
+							focusableWhenDisabled={busy}
 							onClick={() => void run("api-manage", true)}
 						>
 							撤销用户 API 管理

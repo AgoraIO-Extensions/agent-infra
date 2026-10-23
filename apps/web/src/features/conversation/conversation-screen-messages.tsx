@@ -1,4 +1,10 @@
-import { Bot, ChevronLeft, ChevronRight, Square, User } from "lucide-react";
+import {
+	Bot,
+	ChevronLeft,
+	ChevronRight,
+	Square,
+	UserRound,
+} from "lucide-react";
 import {
 	Fragment,
 	memo,
@@ -417,6 +423,7 @@ export function ConversationMessages({
 					name={userName}
 					user
 					meta={<Timestamp value={message.createdAt} />}
+					focusable
 				>
 					<p className="message-text whitespace-pre-wrap break-words">
 						{message.text}
@@ -450,6 +457,17 @@ export function ConversationMessages({
 		setFocusAfterLoad(undefined);
 		article?.focus();
 	}, [focusAfterLoad, notLoadedKey]);
+	// 时间线顶部「加载更早内容」读取中是可聚焦的禁用；读完已没有更早内容、按钮随之卸载时，焦点移到
+	// 时间线最早的一条消息（#3242 K7-02），不落到 body。
+	const timeline = useRef<HTMLElement>(null);
+	const earlierFromTop = useRef(false);
+	useEffect(() => {
+		if (earlierLoading || !earlierFromTop.current) return;
+		earlierFromTop.current = false;
+		const active = document.activeElement;
+		if (hasEarlier || (active && active !== document.body)) return;
+		timeline.current?.querySelector<HTMLElement>("article[tabindex]")?.focus();
+	}, [earlierLoading, hasEarlier]);
 	// 刚受理、还没有任何事件的当前回复（例如重新生成）也要有自己的回复卡，承载状态与停止入口。
 	const trailingExecutions = liveExecutions.filter(
 		(id) => !pendingReplies.has(id),
@@ -463,13 +481,21 @@ export function ConversationMessages({
 	)
 		trailingExecutions.push(current.executionId);
 	return (
-		<section className="timeline min-h-48 space-y-8" aria-label="会话时间线">
+		<section
+			ref={timeline}
+			className="timeline min-h-48 space-y-8"
+			aria-label="会话时间线"
+		>
 			{hasEarlier && (
 				<div className="chat-history-actions">
 					<Button
 						variant="ghost"
 						disabled={earlierLoading}
-						onClick={onLoadEarlier}
+						focusableWhenDisabled
+						onClick={() => {
+							earlierFromTop.current = true;
+							onLoadEarlier();
+						}}
 					>
 						{earlierLoading ? "正在加载更早内容…" : "加载更早内容"}
 						<ChevronRight aria-hidden="true" />
@@ -891,10 +917,13 @@ function ResultFileList({
 						) : (
 							<>
 								{onPreview && artifactCanPreview(file) && (
+									// 准备预览、下载期间是可聚焦的禁用（#3242 K7-02）：焦点留在按钮上，预览弹窗
+									// 关闭后也能回到这里。
 									<Button
 										variant="ghost"
 										size="sm"
 										disabled={previewing}
+										focusableWhenDisabled
 										aria-label={withObjectName(
 											previewing ? "准备预览…" : "预览",
 											file.name,
@@ -908,6 +937,7 @@ function ResultFileList({
 									variant="outline"
 									size="sm"
 									disabled={downloading}
+									focusableWhenDisabled
 									aria-label={withObjectName(
 										downloading ? "准备下载…" : "下载",
 										file.name,
@@ -956,8 +986,9 @@ function MessageFrame({
 			aria-label={`${name}的消息`}
 			tabIndex={focusable ? -1 : undefined}
 		>
+			{/* 人像与浏览器接管卡头、Agent 详情 Owner 区头同为 lucide UserRound（Y-04、#3242 K7-01）。 */}
 			<div className="chat-message-avatar" aria-hidden="true">
-				{user ? <User className="size-4" /> : <Bot className="size-4" />}
+				{user ? <UserRound className="size-4" /> : <Bot className="size-4" />}
 			</div>
 			<div className="chat-message-body">
 				<div className="message-meta">

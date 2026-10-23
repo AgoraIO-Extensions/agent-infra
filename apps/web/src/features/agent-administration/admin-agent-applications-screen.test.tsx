@@ -548,7 +548,10 @@ describe("AdminAgentApplicationsScreen", () => {
 			/>,
 		);
 		const approve = screen.getByRole("button", { name: "批准中…" });
-		expect(approve.getAttribute("disabled")).not.toBeNull();
+		// #3242 K7-02：提交中的「批准申请」是可聚焦的禁用（aria-disabled），不再是原生 disabled；
+		// 其余按钮仍为原生禁用。
+		expect(approve.getAttribute("aria-disabled")).toBe("true");
+		expect(approve.getAttribute("disabled")).toBeNull();
 		expect(
 			screen
 				.getByRole("button", { name: "驳回并说明" })

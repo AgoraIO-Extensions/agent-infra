@@ -376,10 +376,13 @@ function ReadyVersion({
 								配置 Agent 绑定
 							</Link>
 						) : published ? (
+							// 校验与安装进行中是可聚焦的禁用（aria-disabled），焦点留在按钮上；成功后到「配置
+							// Agent 绑定」，失败时仍在按钮上（D2-59、#3242 K7-02）。
 							<Button
 								ref={addButton}
 								type="button"
 								disabled={installing}
+								focusableWhenDisabled
 								onClick={() => void addToLibrary()}
 							>
 								{installing ? (
@@ -417,70 +420,70 @@ function ReadyVersion({
 					<TabsTrigger value="overview">用途与内容</TabsTrigger>
 					<TabsTrigger value="versions">版本与变更</TabsTrigger>
 				</TabsList>
+				{/* tabpanel 本身就是左侧卡片（设计 .surface[role=tabpanel]）：键盘焦点环沿卡片 14px 圆角，
+				    不再是卡片内层的直角矩形（#3242 K7-04）。只渲染选中的面板，栅格里始终只有一张左栏卡片。 */}
 				<div className="skill-grid">
-					<div className="skill-surface">
-						<TabsContent value="overview">
-							<section
-								className="skill-section"
-								aria-labelledby={`${id}-purpose`}
-							>
-								<h2 id={`${id}-purpose`}>适合什么工作</h2>
-								<ul>
-									<li>在当前已获授权的 Agent 与会话中使用。</li>
-									<li>不会增加模型、文件或 Connection 权限。</li>
-									<li>正文和配套资源在发起调用后按需加载。</li>
-								</ul>
-							</section>
-							<SkillContent id={id} content={version.content} />
-						</TabsContent>
-						<TabsContent value="versions">
-							<section
-								className="skill-section"
-								aria-labelledby={`${id}-versions`}
-							>
-								<h2 id={`${id}-versions`}>固定版本</h2>
-								<p>新版本不会自动替换 Agent 当前绑定。</p>
-								{catalog.kind === "loading" ? (
-									<LoadingLine className="mt-4">正在读取版本列表…</LoadingLine>
-								) : catalog.kind === "unavailable" ? (
-									<Alert tone="warn" role="status" className="mt-4">
-										<AlertDescription>
-											版本列表暂时无法读取，当前版本信息不受影响。
-										</AlertDescription>
-									</Alert>
-								) : (
-									<div className="skill-version-list">
-										{siblings.map((item) => (
-											<div className="version-line" key={item.skillVersionId}>
-												<div>
-													<strong>v{item.version}</strong>{" "}
-													<SkillHubStateChip state={item.state} />
-												</div>
-												{item.skillVersionId === version.skillVersionId ? (
-													<Button variant="ghost" type="button" disabled>
-														正在查看
-													</Button>
-												) : (
-													<Link
-														className={buttonVariants({ variant: "ghost" })}
-														to="/skills/$skillVersionId"
-														params={{ skillVersionId: item.skillVersionId }}
-														search={{ tab: "versions" }}
-														aria-label={withObjectName(
-															"查看版本",
-															`v${item.version}`,
-														)}
-													>
-														查看版本
-													</Link>
-												)}
+					<TabsContent value="overview" className="skill-surface">
+						<section
+							className="skill-section"
+							aria-labelledby={`${id}-purpose`}
+						>
+							<h2 id={`${id}-purpose`}>适合什么工作</h2>
+							<ul>
+								<li>在当前已获授权的 Agent 与会话中使用。</li>
+								<li>不会增加模型、文件或 Connection 权限。</li>
+								<li>正文和配套资源在发起调用后按需加载。</li>
+							</ul>
+						</section>
+						<SkillContent id={id} content={version.content} />
+					</TabsContent>
+					<TabsContent value="versions" className="skill-surface">
+						<section
+							className="skill-section"
+							aria-labelledby={`${id}-versions`}
+						>
+							<h2 id={`${id}-versions`}>固定版本</h2>
+							<p>新版本不会自动替换 Agent 当前绑定。</p>
+							{catalog.kind === "loading" ? (
+								<LoadingLine className="mt-4">正在读取版本列表…</LoadingLine>
+							) : catalog.kind === "unavailable" ? (
+								<Alert tone="warn" role="status" className="mt-4">
+									<AlertDescription>
+										版本列表暂时无法读取，当前版本信息不受影响。
+									</AlertDescription>
+								</Alert>
+							) : (
+								<div className="skill-version-list">
+									{siblings.map((item) => (
+										<div className="version-line" key={item.skillVersionId}>
+											<div>
+												<strong>v{item.version}</strong>{" "}
+												<SkillHubStateChip state={item.state} />
 											</div>
-										))}
-									</div>
-								)}
-							</section>
-						</TabsContent>
-					</div>
+											{item.skillVersionId === version.skillVersionId ? (
+												<Button variant="ghost" type="button" disabled>
+													正在查看
+												</Button>
+											) : (
+												<Link
+													className={buttonVariants({ variant: "ghost" })}
+													to="/skills/$skillVersionId"
+													params={{ skillVersionId: item.skillVersionId }}
+													search={{ tab: "versions" }}
+													aria-label={withObjectName(
+														"查看版本",
+														`v${item.version}`,
+													)}
+												>
+													查看版本
+												</Link>
+											)}
+										</div>
+									))}
+								</div>
+							)}
+						</section>
+					</TabsContent>
 					<aside
 						className="skill-surface skill-summary"
 						aria-labelledby={`${id}-summary`}
@@ -534,10 +537,12 @@ function ReadyVersion({
 						(owned && published) ? (
 							<div className="skill-actions skill-summary-actions">
 								{installed && library.installationId !== undefined ? (
+									// 移出进行中是可聚焦的禁用；成功后到「加入我的库」（已撤销时到 h1），失败时仍在按钮上。
 									<Button
 										type="button"
 										variant="ghost"
 										disabled={removing}
+										focusableWhenDisabled
 										onClick={() => void removeFromLibrary()}
 									>
 										{removing ? "正在移出…" : "移出我的库"}
@@ -548,7 +553,13 @@ function ReadyVersion({
 										variant="skill"
 										disabled={revoking}
 										trigger={
-											<Button variant="ghost" type="button">
+											// 撤销进行中是可聚焦的禁用：确认弹窗关闭后焦点回到这里，不落到 body；
+											// 撤销后焦点到 h1（D2-59、#3242 K7-02）。
+											<Button
+												variant="ghost"
+												type="button"
+												focusableWhenDisabled={revoking}
+											>
 												{revoking ? "正在撤销…" : "撤销此版本"}
 											</Button>
 										}

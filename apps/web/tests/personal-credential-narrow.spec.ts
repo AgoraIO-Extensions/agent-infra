@@ -1,10 +1,16 @@
 import { pilotBrowserHttpOpenApiPathsV2 } from "@agent-infra/contracts/pilot";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import type {
 	PersonalApiCredentialMetadataV1,
 	PersonalApiCredentialNarrowRequestV1,
 } from "../src/pilot/generated-v2/types.gen";
-import { expectNoDuplicateControls } from "./page-health";
+import {
+	expectFocusableBusy,
+	expectFocusSettled,
+	expectNoDuplicateControls,
+	holdRequests,
+	pinElement,
+} from "./page-health";
 import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
 const patch =
@@ -655,4 +661,93 @@ test("lays out the API credential page head, notice and credential table", async
 			actionsInside: true,
 		});
 	}
+});
+
+async function acceptanceViewport(page: Page, info: TestInfo) {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+}
+
+// #3242 K7-02：「保存收窄」进行中是可聚焦的禁用（aria-disabled），键盘在按钮上或在过期时间里按 Enter
+// 提交后，挂起期间多次采样焦点都在按钮上；成功后表单收起，焦点回到「收窄权限与有效期」。
+for (const via of ["button", "field"] as const)
+	test(`saving a narrowed credential keeps focus on the pending button (${via}, K7-02)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		const api = await fixture(page);
+		await page.goto("/my-settings/api-credentials");
+		const rows = page.getByRole("table", { name: "个人 API 凭证" });
+		const action = rows.getByRole("button", { name: "收窄权限与有效期" });
+		await action.click();
+		const form = page.getByRole("form", {
+			name: `收窄凭证 ${initial.credentialId}`,
+		});
+		await form
+			.getByRole("checkbox", { name: `使用 Agent：${initial.credentialId}` })
+			.click();
+		const expiry = form.getByLabel("提前到期时间（可选）");
+		const save = await pinElement(
+			form.getByRole("button", { name: "保存收窄" }),
+			"save-narrow",
+		);
+		await (via === "button" ? save : expiry).focus();
+		await page.keyboard.press("Enter");
+		await expect(save).toHaveText("正在保存…");
+		await expectFocusableBusy(save, `${via} 保存收窄`);
+		await expect(expiry).toBeDisabled();
+		api.release();
+		await expect(form).toHaveCount(0);
+		await expectFocusSettled(action, `${via} 保存收窄`);
+		expect(api.requests).toHaveLength(1);
+		await expectCleanPage(page, errors);
+	});
+
+// #3242 K7-02：「签发个人凭证」进行中是可聚焦的禁用；签发后一次性凭证提示以 status 播报，焦点仍在按钮上。
+test("issuing a personal credential keeps focus on the pending button (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.route("**/api/v2/me/api-credentials", (route) =>
+		route.request().method() === "POST"
+			? route.fulfill({
+					status: 201,
+					json: {
+						metadata: {
+							...initial,
+							credentialId: "personal-browser-issued",
+						},
+						credential: `papi_${"A".repeat(43)}`,
+						replayed: false,
+					},
+				})
+			: route.fallback(),
+	);
+	const issuing = await holdRequests(
+		page,
+		"POST",
+		"/api/v2/me/api-credentials",
+	);
+	await page.goto("/my-settings/api-credentials");
+	const issue = await pinElement(
+		page.getByRole("button", { name: "签发个人凭证", exact: true }),
+		"issue-personal",
+	);
+	await issue.focus();
+	await page.keyboard.press("Enter");
+	await expect(issue).toHaveText("正在签发…");
+	await expectFocusableBusy(issue, "签发个人凭证");
+	issuing.release();
+	await expect(
+		page.getByText("已签发个人 API 凭证", { exact: true }),
+	).toBeVisible();
+	await expectFocusSettled(issue, "签发个人凭证");
+	await expectNoDuplicateControls(page, "API 凭证（K7-02）");
+	await expectCleanPage(page, errors);
 });

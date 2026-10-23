@@ -15,9 +15,21 @@ import {
 	SkillHubReviewQueuePageV1Schema,
 	SkillHubReviewRequestV1Schema,
 } from "@agent-infra/contracts/pilot";
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import {
+	expect,
+	type Locator,
+	type Page,
+	type TestInfo,
+	test,
+} from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
-import { expectNoDuplicateControls } from "./page-health";
+import {
+	expectFocusableBusy,
+	expectFocusSettled,
+	expectNoDuplicateControls,
+	holdRequests,
+	pinElement,
+} from "./page-health";
 import {
 	computed,
 	expectCleanPage,
@@ -1572,3 +1584,104 @@ test("the companion file remove action uses the design's x icon (G5-10)", async 
 	await expectNoDuplicateControls(page, "创建与发布（配套文件，G5-10）");
 	await expectCleanPage(page, errors);
 });
+
+async function acceptanceViewport(page: Page, info: TestInfo) {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+}
+
+// #3242 K7-02：已安装行「移出我的库」进行中是可聚焦的禁用（aria-disabled），键盘 Enter 后挂起期间
+// 多次采样焦点都在按钮上；成功后该行离开列表，焦点到「已安装」（D2-59）。
+test("removing an installation keeps focus on the pending row button, then on 已安装 (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const installed = SkillHubInstallationListItemV1Schema.parse({
+		installationId: "installation-notes",
+		skillVersionId: "weekly-digest-v3",
+		needUpgrade: false,
+		installedAt: "2026-10-01T08:00:00Z",
+		updatedAt: "2026-10-01T08:00:00Z",
+		version: {
+			access: "visible",
+			skillId: "weekly-digest",
+			name: "weekly-digest",
+			version: "3.1.0",
+			provider: "market",
+			visibility: "MARKET",
+			state: "published",
+		},
+	});
+	await fixture(page, "employee", { installations: [installed] });
+	await page.goto("/skills/manage");
+	const section = page.getByRole("region", { name: "已安装" });
+	const remove = await pinElement(
+		section.getByRole("button", { name: "移出我的库：weekly-digest" }),
+		"remove-installation",
+	);
+	const removing = await holdRequests(
+		page,
+		"DELETE",
+		"/api/v2/skills/installations/installation-notes",
+	);
+	await remove.focus();
+	await page.keyboard.press("Enter");
+	await expect(remove).toHaveText("正在移出…");
+	await expectFocusableBusy(remove, "移出我的库（已安装行）");
+	removing.release();
+	await expect(page.locator('[data-slot="toast"]')).toHaveText("已移出我的库");
+	await expectFocusSettled(
+		section.getByRole("heading", { level: 2, name: "已安装" }),
+		"移出我的库（已安装行）",
+	);
+	await expectCleanPage(page, errors);
+});
+
+// #3242 K7-02：Skill 审阅弹窗的「驳回」「批准发布」提交中是可聚焦的禁用，挂起期间焦点留在弹窗内的
+// 按钮上；提交后弹窗关闭、该版本离开队列，焦点不落到 body（#3037 AC-2）。
+for (const decision of ["驳回", "批准发布"] as const)
+	test(`Skill review decisions keep focus on the pending dialog button (${decision}, K7-02)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		await fixture(page, "admin");
+		await page.goto("/admin/skill-reviews");
+		const main = page.locator("#main-content");
+		await main
+			.getByRole("button", { name: "审阅：incident-summary · v1.0.0" })
+			.click();
+		const dialog = page.getByRole("dialog", { name: "审阅发布申请" });
+		await expect(dialog).toBeVisible();
+		if (decision === "驳回")
+			await dialog.getByLabel("审核说明 · 驳回时必填").fill("缺少使用说明");
+		const trigger = await pinElement(
+			dialog.getByRole("button", { name: decision, exact: true }),
+			`skill-review-${decision}`,
+		);
+		const reviewing = await holdRequests(
+			page,
+			"POST",
+			"/api/v2/skills/versions/incident-summary-v1/review",
+		);
+		await trigger.focus();
+		await page.keyboard.press("Enter");
+		await expectFocusableBusy(trigger, `Skill 审阅「${decision}」`);
+		reviewing.release();
+		await expect(dialog).toBeHidden();
+		await expect
+			.poll(() => page.evaluate(() => document.activeElement === document.body))
+			.toBe(false);
+		for (const wait of [300, 1000]) {
+			await page.waitForTimeout(wait);
+			expect(
+				await page.evaluate(() => document.activeElement === document.body),
+				`Skill 审阅「${decision}」后 ${wait}ms`,
+			).toBe(false);
+		}
+		await expectCleanPage(page, errors);
+	});

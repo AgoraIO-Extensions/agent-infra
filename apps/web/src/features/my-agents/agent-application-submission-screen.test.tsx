@@ -252,11 +252,10 @@ describe("AgentApplicationSubmissionScreen", () => {
 		}
 		expect(creationHeader().queryByText("取消")).toBeNull();
 		expect(onSubmit).not.toHaveBeenCalled();
-		expect(
-			screen
-				.getByRole("button", { name: "正在提交…" })
-				.hasAttribute("disabled"),
-		).toBe(true);
+		// #3242 K7-02：提交进行中「正在提交…」是可聚焦的禁用（aria-disabled），不再是原生 disabled。
+		const submitting = screen.getByRole("button", { name: "正在提交…" });
+		expect(submitting.getAttribute("aria-disabled")).toBe("true");
+		expect(submitting.hasAttribute("disabled")).toBe(false);
 	});
 
 	it.each(["edit", "resubmit"] as const)(

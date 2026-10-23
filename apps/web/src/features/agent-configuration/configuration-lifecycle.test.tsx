@@ -239,20 +239,23 @@ describe("Owner configuration lifecycle commands", () => {
 		await waitFor(() =>
 			expect(screen.getByRole("button", { name: "停止中…" })).toBeTruthy(),
 		);
-		for (const name of ["停止中…", "重启 Agent", "停用 Agent"])
-			expect(
-				screen.getByRole("button", { name }).hasAttribute("disabled"),
-			).toBe(true);
+		// #3242 K7-02：命令进行中三个区域的触发按钮都是可聚焦的禁用（aria-disabled），确认弹窗关闭后
+		// 焦点不因原生禁用落到 body；仍不能再发起命令（下方只有一次调用）。
+		for (const name of ["停止中…", "重启 Agent", "停用 Agent"]) {
+			const button = screen.getByRole("button", { name });
+			expect(button.getAttribute("aria-disabled")).toBe("true");
+			expect(button.hasAttribute("disabled")).toBe(false);
+			fireEvent.click(button);
+			expect(screen.queryByRole("dialog")).toBeNull();
+		}
 		expect(vi.mocked(commandAgentLifecycle).mock.calls).toEqual([
 			["agent-pilot-1", "stop", expect.any(String)],
 		]);
 		stop.resolve(agentIn("stopped"));
 		await waitFor(() => expect(toastText()).toBe("已提交停止请求"));
-		expect(
-			screen
-				.getByRole("button", { name: "停用 Agent" })
-				.hasAttribute("disabled"),
-		).toBe(false);
+		const disable = screen.getByRole("button", { name: "停用 Agent" });
+		expect(disable.hasAttribute("disabled")).toBe(false);
+		expect(disable.getAttribute("aria-disabled")).toBeNull();
 		expect(document.body.textContent).not.toContain("操作已提交");
 	});
 

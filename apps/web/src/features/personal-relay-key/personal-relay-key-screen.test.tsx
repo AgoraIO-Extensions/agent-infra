@@ -353,7 +353,10 @@ describe("PersonalRelayKeyScreen", () => {
 			const write = screen.getByRole("button", {
 				name: /^(替换|保存) Key$/,
 			}) as HTMLButtonElement;
-			expect(write.disabled).toBe(true);
+			// #3242 K7-02：写入失败后表单仍禁用，按钮是可聚焦的禁用（aria-disabled），焦点不落到 body；
+			// 下方点击仍不会再次提交。
+			expect(write.getAttribute("aria-disabled")).toBe("true");
+			expect(write.disabled).toBe(false);
 			expect(keyInput().value).toBe("");
 			fireEvent.click(write);
 			expect(api[operation]).toHaveBeenCalledTimes(1);
@@ -370,10 +373,11 @@ describe("PersonalRelayKeyScreen", () => {
 				}
 				return;
 			}
-			expect(
-				(screen.getByRole("button", { name: "撤销 Key" }) as HTMLButtonElement)
-					.disabled,
-			).toBe(true);
+			const revokeButton = screen.getByRole("button", {
+				name: "撤销 Key",
+			}) as HTMLButtonElement;
+			expect(revokeButton.getAttribute("aria-disabled")).toBe("true");
+			expect(revokeButton.disabled).toBe(false);
 			api.get.mockResolvedValueOnce(configured(9));
 			fireEvent.click(screen.getByRole("button", { name: "重新读取状态" }));
 			await findConfigured(9);

@@ -397,7 +397,9 @@ describe("LoginAction submission state (L-06, NI-54)", () => {
 		const busy = await screen.findByRole("button", { name: "正在登录…" });
 		expect(busy.querySelector('[data-slot="spinner"]')).toBeTruthy();
 		expect(account().closest("form")?.getAttribute("aria-busy")).toBe("true");
-		expect((busy as HTMLButtonElement).disabled).toBe(true);
+		// #3242 K7-02：提交按钮在请求进行中是可聚焦的禁用（aria-disabled），不再是原生 disabled。
+		expect(busy.getAttribute("aria-disabled")).toBe("true");
+		expect((busy as HTMLButtonElement).disabled).toBe(false);
 		expect(account().disabled).toBe(true);
 		expect(password().disabled).toBe(true);
 		expect(

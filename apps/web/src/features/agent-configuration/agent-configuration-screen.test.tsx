@@ -515,9 +515,13 @@ describe("AgentConfigurationScreen", () => {
 		).not.toContain("配置已提交");
 	});
 
-	it.each(["pending", "disabled"] as const)(
-		"prevents saving a configuration that is %s",
-		(state) => {
+	it.each([
+		// #3242 K7-02：保存进行中「保存中…」是可聚焦的禁用（aria-disabled）；Agent 已停用时仍是原生禁用。
+		{ state: "pending", ariaDisabled: "true", nativeDisabled: false },
+		{ state: "disabled", ariaDisabled: null, nativeDisabled: true },
+	] as const)(
+		"prevents saving a configuration that is $state",
+		({ state, ariaDisabled, nativeDisabled }) => {
 			const { onSave } = renderScreen({
 				agent:
 					state === "disabled"
@@ -532,7 +536,8 @@ describe("AgentConfigurationScreen", () => {
 			const button = screen.getByRole("button", {
 				name: state === "pending" ? "保存中…" : "保存配置",
 			});
-			expect(button.getAttribute("disabled")).not.toBeNull();
+			expect(button.getAttribute("aria-disabled")).toBe(ariaDisabled);
+			expect((button as HTMLButtonElement).disabled).toBe(nativeDisabled);
 			fireEvent.click(button);
 			const form = button.closest("form");
 			if (form) fireEvent.submit(form);

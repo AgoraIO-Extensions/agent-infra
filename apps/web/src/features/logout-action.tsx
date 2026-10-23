@@ -39,7 +39,9 @@ export function LogoutAction({ endpoint, onLoggedOut }: LogoutActionProps) {
 				variant="ghost"
 				className="platform-nav-item w-full justify-start"
 				onClick={() => void submit()}
+				// 退出进行中是可聚焦的禁用（aria-disabled），焦点留在按钮上；失败后仍在按钮上（#3242 K7-02）。
 				disabled={state === "submitting"}
+				focusableWhenDisabled
 			>
 				{state === "submitting" ? "正在退出…" : "退出登录"}
 			</Button>

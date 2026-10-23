@@ -8,12 +8,19 @@ import {
 } from "@agent-infra/contracts/pilot";
 import { ConnectionInstallationProjectionV1Schema } from "@agent-infra/contracts/runtime";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import {
 	execution,
 	history,
 } from "../src/features/conversation/conversation-test-fixtures";
 import { keepConversationStreamOpen } from "./conversation-stream";
+import {
+	expectFocusableBusy,
+	expectFocusSettled,
+	holdRequests,
+	pinElement,
+} from "./page-health";
+import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
 const agentId = "agent-1";
 const conversationId = "conversation-1";
@@ -324,4 +331,80 @@ test("keeps Origin and Sec-Fetch-Site browser-owned on same-origin POSTs", async
 	} finally {
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	}
+});
+
+async function acceptanceViewport(page: Page, info: TestInfo) {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+}
+
+// #3242 K7-02：Connection「查询状态」读取中是可聚焦的禁用（aria-disabled），键盘 Enter 后挂起期间多次
+// 采样焦点都在按钮上；查到终态（已确认）后同一个按钮原地换成「重新开始」，焦点仍在它上面，不落到 body，
+// 也不被执行详情弹窗收回到弹窗本身。
+test("querying the installation status keeps focus on the pending button, then on 重新开始 (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await openExecutionDetails(page);
+	// 在 fixture 之后注册（后注册的路由先处理）：状态读取全部挂起。
+	const statusRead = await holdRequests(page, "POST", statusPath);
+	const details = page.getByRole("dialog", { name: "执行详情" });
+	await details.getByRole("button", { name: "开始安装", exact: true }).click();
+	const query = await pinElement(
+		details.getByRole("button", { name: "查询状态", exact: true }),
+		"connection-status",
+	);
+	await query.focus();
+	await page.keyboard.press("Enter");
+	await expect(query).toHaveText("查询中");
+	await expectFocusableBusy(query, "查询 Connection 状态");
+	statusRead.release();
+	await expect(details.getByText("已确认", { exact: true })).toBeVisible();
+	await expect(query).toHaveAccessibleName("重新开始");
+	await expect(query).not.toHaveAttribute("aria-disabled", "true");
+	await expectFocusSettled(query, "查询 Connection 状态");
+	await expectCleanPage(page, errors);
+});
+
+// #3242 K7-02：「核实原执行状态」读取中是可聚焦的禁用；核实到终态、按钮随之卸载后焦点交给执行详情
+// 弹窗本身，Escape 仍可关闭。
+test("verifying the original execution keeps focus on the pending button, then on the dialog (K7-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await openExecutionDetails(page);
+	const details = page.getByRole("dialog", { name: "执行详情" });
+	// 首次读取为待核实；之后的核实读取到已完成（终态）。
+	await page.route(new RegExp(`/executions/${executionId}$`), (route) =>
+		route.fulfill({
+			json: ExecutionDetailProjectionV2Schema.parse({
+				...authorizationNeededExecution(),
+				status: "completed",
+				finishedAt: authorizationNeededExecution().startedAt,
+			}),
+		}),
+	);
+	const verify = await pinElement(
+		details.getByRole("button", { name: "核实原执行状态" }),
+		"verify-execution",
+	);
+	const reading = await holdRequests(
+		page,
+		"GET",
+		new RegExp(`/executions/${executionId}$`),
+	);
+	await verify.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusableBusy(verify, "核实原执行状态");
+	reading.release();
+	await expect(verify).toHaveCount(0);
+	await expectFocusSettled(details, "核实原执行状态（终态）");
+	await page.keyboard.press("Escape");
+	await expect(details).toHaveCount(0);
+	await expectCleanPage(page, errors);
 });

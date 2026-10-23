@@ -12,6 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldLegend } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useSubmitFocus } from "@/hooks/use-submit-focus";
 import { withObjectName } from "@/lib/accessible-name";
 import type {
 	PersonalApiCredentialMetadataV1,
@@ -67,6 +68,10 @@ export function NarrowCredentialForm({
 	const [expiryError, setExpiryError] = useState<string | null>(null);
 	const [requestError, setRequestError] = useState<string | null>(null);
 	const busy = pending || disabled;
+	const submitRef = useRef<HTMLButtonElement>(null);
+	// 保存进行中「保存收窄」是可聚焦的禁用；在过期时间里按 Enter 提交时先把焦点交给它（字段随
+	// fieldset 禁用）。成功后表单收起，焦点回到「收窄权限与有效期」（#3242 K7-02）。
+	useSubmitFocus(pending, formRef, submitRef);
 	const scopesKey = JSON.stringify(credential.scopes);
 	const credentialSnapshot = useMemo(
 		() => ({
@@ -254,7 +259,12 @@ export function NarrowCredentialForm({
 				</Alert>
 			) : null}
 			<div className="flex flex-wrap gap-2">
-				<Button type="submit" disabled={busy}>
+				<Button
+					ref={submitRef}
+					type="submit"
+					disabled={busy}
+					focusableWhenDisabled={pending}
+				>
 					{busy ? "正在保存…" : "保存收窄"}
 				</Button>
 				<Button
