@@ -102,6 +102,7 @@ it("returns bound evidence only after navigation, observation and the verified c
 		binding,
 	});
 	expect(f.navigate).toHaveBeenCalledOnce();
+	expect(f.start).toHaveBeenCalledOnce();
 	expect(f.act).toHaveBeenCalledOnce();
 	expect(f.observe).toHaveBeenLastCalledWith(clickedPage);
 	expect(f.close).toHaveBeenCalled();

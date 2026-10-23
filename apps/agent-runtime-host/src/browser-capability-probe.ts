@@ -112,6 +112,9 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 			else await route.abort("blockedbyclient");
 		});
 		input.signal.throwIfAborted();
+		const started = await session.start();
+		if (started.status !== "ready") return undefined;
+		input.signal.throwIfAborted();
 		const page = await session.navigate(probeOrigin);
 		input.signal.throwIfAborted();
 		const observation = await session.observe(page);
