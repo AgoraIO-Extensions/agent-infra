@@ -662,6 +662,29 @@ describe("AgentDiscoveryScreen", () => {
 		},
 	);
 
+	// #3327 N10-1-04：目录 401 卡的「重新登录」与状态卡默认操作、Agent 管理同一按钮，带 LogIn 图标。
+	it("gives the 401 re-login the shared LogIn button", async () => {
+		const onRelogin = vi.fn();
+		await renderWithAgentRouter(
+			<AgentDiscoveryScreen
+				state={{
+					kind: "unavailable",
+					retryable: false,
+					reason: "authentication-required",
+				}}
+				onRelogin={onRelogin}
+			/>,
+		);
+		const relogin = screen.getByRole("button", { name: "重新登录" });
+		const svg = relogin.querySelector(":scope > svg");
+		expect(svg?.getAttribute("class")).toContain("lucide-log-in");
+		expect(svg?.getAttribute("aria-hidden")).toBe("true");
+		expect(svg?.getAttribute("data-icon")).toBe("inline-start");
+		expect(relogin.textContent).toBe("重新登录");
+		fireEvent.click(relogin);
+		expect(onRelogin).toHaveBeenCalledOnce();
+	});
+
 	it("renders an explicit loading state", async () => {
 		await renderWithAgentRouter(
 			<AgentDiscoveryScreen state={{ kind: "loading" }} />,

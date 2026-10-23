@@ -747,6 +747,10 @@ describe("OpenDesign workbench presentation", () => {
 		expect(relogins).toHaveLength(1);
 		expect(screen.getAllByRole("button")).toHaveLength(1);
 		expect(relogins[0]?.className).toContain("bg-accent-ink");
+		// 与状态卡、Agent 目录的「重新登录」同一按钮，带 LogIn 图标（#3327 N10-1-04）。
+		expect(
+			relogins[0]?.querySelector(":scope > svg")?.getAttribute("class"),
+		).toContain("lucide-log-in");
 		expect(screen.getByText("登录已过期")).toBeTruthy();
 		expect(
 			screen.getByText("当前会话已过期，需要重新登录后再进入工作区。"),

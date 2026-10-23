@@ -53,7 +53,13 @@ async function platform(
 	{
 		reply,
 		agentDetailStatus,
-	}: { reply?: LoginReply; agentDetailStatus?: () => number } = {},
+		agentsStatus,
+	}: {
+		reply?: LoginReply;
+		agentDetailStatus?: () => number;
+		/** Agent 目录读取的状态码（默认 200）。 */
+		agentsStatus?: () => number;
+	} = {},
 ) {
 	const state = { authenticated: false, loginBodies: [] as unknown[] };
 	await page.route("**/api/**", async (route) => {
@@ -66,8 +72,12 @@ async function platform(
 			return route.fulfill({
 				json: { schemaVersion: 1, status: "unavailable", reason: "missing" },
 			});
-		if (url.pathname === "/api/v2/agents")
-			return route.fulfill({ json: { items: [agent], nextCursor: null } });
+		if (url.pathname === "/api/v2/agents") {
+			const status = agentsStatus?.() ?? 200;
+			return status === 200
+				? route.fulfill({ json: { items: [agent], nextCursor: null } })
+				: route.fulfill({ status, json: anonymousBody });
+		}
 		if (url.pathname === `/api/v2/agents/${agent.agentId}`) {
 			const status = agentDetailStatus?.() ?? 200;
 			return status === 200
@@ -728,6 +738,67 @@ test("signing out keeps focus on the pending button (K7-02)", async ({
 	await expectFocusSettled(account(page), "退出登录后");
 	await expectCleanPage(page, errors);
 });
+
+// #3327 N10-1-01：「重新登录」确认会话已失效、整页换成登录页后，焦点同主动退出到「公司账号」（K7-02）；
+// 确认中留在可聚焦的「重新登录」上。覆盖 useSessionRecheck（Agent 目录）与状态卡默认操作（Agent 详情）
+// 两条路径，都在配置了登录入口的生产构建中运行。
+for (const target of [
+	{
+		name: "Agent directory",
+		path: "/agents",
+		busyText: "重新登录",
+	},
+	{
+		name: "Agent detail",
+		path: `/agents/${agent.agentId}`,
+		busyText: "正在检查…",
+	},
+] as const)
+	test(`a re-login on the ${target.name} that finds the session expired focuses 公司账号, not body (#3327 N10-1-01)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		const api = await platform(page, {
+			agentsStatus: () => 401,
+			agentDetailStatus: () => 401,
+		});
+		api.authenticated = true;
+		await page.goto(target.path);
+		const card = page.locator('#main-content [data-slot="state-card"]');
+		await expect(card).toHaveAttribute("data-kind", "login");
+		const relogin = await pinElement(
+			card.getByRole("button", { name: "重新登录", exact: true }),
+			"relogin",
+		);
+		await expect(relogin.locator(":scope > svg")).toHaveClass(/lucide-log-in/);
+		api.authenticated = false;
+		const hold = await holdRequests(page, "GET", "/api/v1/session");
+		await relogin.focus();
+		await page.keyboard.press("Enter");
+		await expect.poll(() => hold.held()).toBeGreaterThanOrEqual(1);
+		await expect(relogin).toHaveText(target.busyText);
+		await expectFocusableBusy(relogin, `${target.name} 确认会话中`, [30, 150]);
+		hold.release();
+		await expect(
+			page.getByRole("heading", { level: 1, name: "登录工作区" }),
+		).toBeVisible();
+		await expect(page.locator(".login-expired")).toHaveAttribute(
+			"role",
+			"status",
+		);
+		await expectFocusSettled(
+			account(page),
+			`${target.name} 确认会话已失效后`,
+			[30, 150, 400, 1200],
+		);
+		expect(
+			await page.evaluate(
+				() => performance.getEntriesByType("navigation").length,
+			),
+		).toBe(1);
+		await expectCleanPage(page, errors);
+	});
 
 // #3267 N8-1-01：导出稿侧栏没有「退出登录」。入口与相邻导航项同为 13px / 400 / muted、44px、8px 11px；
 // 失败提示为 12px --danger-ink 的 role="alert"，左缘与入口文字对齐，焦点留在入口上。
