@@ -7612,6 +7612,147 @@ async function savedPreparationPins(executionId: string) {
 }
 
 describe("accepted Task V4 preparation pins", () => {
+	it.each([false, true])(
+		"dispatches stop for accepted unknown execution before/after timeout (#3315, timedOut=%s)",
+		async (timedOut) => {
+			const work = await acceptedKeyWork("web");
+			const first = await claim(work.itemId);
+			const hostSessionRef = "accepted-unknown-host";
+			try {
+				if (first.decision.outcome !== "claimed")
+					throw new Error("Expected claim");
+				expect(
+					await first.store.prepareRuntimeDispatch({
+						claim: first.decision.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				expect(
+					await first.store.recordRuntimeResponse({
+						claim: first.decision.claim,
+						hostSessionRef,
+						originalOperationAccepted: true,
+						transition: {
+							executionStatus: "unknown",
+							conversationStatus: "active",
+						},
+					}),
+				).toBe(true);
+				expect(
+					await first.store.retry({
+						claim: first.decision.claim,
+						retryDelayMs: 60_000,
+						errorCode: "RUNTIME_ACCEPTANCE_UNKNOWN",
+						transition: {},
+					}),
+				).toBe(true);
+			} finally {
+				await first.store.close();
+			}
+			await seedStop(work);
+			if (timedOut)
+				await client`update platform.conversation_stops
+				set confirmation_deadline=clock_timestamp()-interval '1 second'
+				where execution_id=${work.executionId}`;
+			const store = open();
+			const sent: string[] = [];
+			let nativeStatus: "unknown" | "cancelled" = "unknown";
+			const runtimeHost: ConversationRuntimeHostPortV1 = {
+				async recoverStatus() {
+					throw new Error("Must read original scope");
+				},
+				async recoverOriginalStatus(request) {
+					expect(request).toMatchObject({
+						executionId: work.executionId,
+						hostSessionRef,
+					});
+					return {
+						schemaVersion: 2,
+						outcome: "found",
+						executionId: work.executionId,
+						hostSessionRef,
+						status: nativeStatus,
+					};
+				},
+				async dispatch(request) {
+					sent.push(request.operation);
+					expect(request).toMatchObject({
+						operation: "turn.stop",
+						executionId: work.executionId,
+						stopRequestId: work.stopRequestId,
+						hostSessionRef,
+					});
+					return {
+						schemaVersion: 1,
+						operationId: work.stopRequestId,
+						hostSessionRef,
+						result: {
+							outcome: "accepted",
+							status: nativeStatus === "cancelled" ? "cancelled" : "running",
+						},
+					};
+				},
+				events() {
+					throw new Error("Stop must not submit/read a new Turn");
+				},
+				async acknowledge() {
+					throw new Error("No event ACK expected");
+				},
+			};
+			const useCase = createConversationDispatchUseCaseV1(
+				{
+					store,
+					authorization: isolationAuthorization,
+					runtimeHost,
+					events: {
+						async persist() {
+							throw new Error("No new model events");
+						},
+					},
+				},
+				{ retryDelayMs: 0 },
+			);
+			const command = {
+				schemaVersion: 1 as const,
+				itemId: `conversation:stop:${work.stopRequestId}`,
+				workerId: "stop-regression",
+			};
+			try {
+				await useCase.dispatch(command);
+				expect(sent).toEqual(["turn.stop"]);
+				const [pending] =
+					await client`select status from platform.conversation_executions
+					where execution_id=${work.executionId}`;
+				expect(pending?.status).toBe(timedOut ? "unknown" : "processing");
+				const [pendingConversation] =
+					await client`select status from platform.conversations where id=${work.conversationId}`;
+				expect(pendingConversation?.status).toBe("active");
+				const [attempt] = await client`select payload->>'errorCode' as code
+					from platform.persisted_events where stream_id=${`outbox:${command.itemId}`}
+					order by sequence desc limit 1`;
+				expect(attempt?.code).toBe("STOP_CONFIRMATION_PENDING");
+				nativeStatus = "cancelled";
+				await waitForAvailableItem(command.itemId);
+				expect(await useCase.dispatch(command)).toMatchObject({
+					outcome: "accepted",
+				});
+				expect(sent).toEqual(
+					timedOut ? ["turn.stop"] : ["turn.stop", "turn.stop"],
+				);
+				const [final] =
+					await client`select c.status as conversation, e.status as execution
+					from platform.conversations c join platform.conversation_executions e on e.conversation_id=c.id
+					where e.execution_id=${work.executionId}`;
+				expect(final).toEqual({
+					conversation: "ready",
+					execution: "cancelled",
+				});
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
 	it("recovers a lost first-turn acceptance ACK using the original pins", async () => {
 		const work = await acceptedKeyWork("web");
 		const first = await claim(work.itemId);
