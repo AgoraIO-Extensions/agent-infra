@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
 type LogoutActionProps = {
@@ -48,9 +49,14 @@ export function LogoutAction({ endpoint, onLoggedOut }: LogoutActionProps) {
 			</Button>
 			{/* 退出失败是操作结果：role="alert"，12px --danger-ink，左缘与导航项文字对齐。 */}
 			{state === "error" && (
-				<p className="platform-nav-action-error" role="alert">
+				<Alert
+					tone="danger"
+					role="alert"
+					icon={null}
+					className="platform-nav-action-error"
+				>
 					退出登录失败，请重试。
-				</p>
+				</Alert>
 			)}
 		</div>
 	);

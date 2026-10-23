@@ -797,15 +797,26 @@ test("signing out matches the sidebar navigation items and reports a failure as 
 		};
 	});
 	expect(failureStyle).toEqual({ fontSize: "12px", dangerInk: true });
-	const textLeft = (target: typeof logout) =>
-		target.evaluate((node) => {
-			const range = document.createRange();
-			range.selectNodeContents(node);
-			return range.getBoundingClientRect().left;
-		});
-	expect(
-		Math.abs((await textLeft(failure)) - (await textLeft(logout))),
-	).toBeLessThanOrEqual(0.5);
+	// 两段文字在同一次求值里测量，窄屏导航 Sheet 的滑入动画不影响比较。
+	const [failureLeft, logoutLeft] = await page.evaluate(
+		(texts) =>
+			texts.map((text) => {
+				const node = [
+					...document.querySelectorAll<HTMLElement>(
+						'[role="alert"], button[data-slot="button"]',
+					),
+				].find(
+					(element) =>
+						element.checkVisibility() && element.textContent?.trim() === text,
+				);
+				if (!node) throw new Error(`Missing ${text}`);
+				const range = document.createRange();
+				range.selectNodeContents(node);
+				return range.getBoundingClientRect().left;
+			}),
+		["退出登录失败，请重试。", "退出登录"],
+	);
+	expect(Math.abs(failureLeft - logoutLeft)).toBeLessThanOrEqual(0.5);
 	await expectFocusSettled(logout, "退出登录失败");
 	await expectNoDuplicateControls(page, "退出登录失败");
 	await expectCleanPage(page, errors);

@@ -240,8 +240,12 @@
 	text-align: left;
 }
 .platform-nav-action-error {
+	display: block;
 	margin: 0;
 	padding: 0 12px;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
 	color: var(--danger-ink);
 	font-size: 12px;
 	line-height: 1.5;
