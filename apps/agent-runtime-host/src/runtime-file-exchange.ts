@@ -45,7 +45,7 @@ export interface RuntimeFileExchangeDiagnosticV1 {
 		| "invalid_response"
 		| "unconfirmed"
 		| "failed";
-	/** 平台返回的 HTTP 状态（仅 rejected）。 */
+	/** 平台返回的非成功 HTTP 状态：rejected，或完成确认返回 5xx 时的 unconfirmed。 */
 	readonly status?: number;
 	/** 本模块抛出的稳定错误码，例如 RUNTIME_FILE_INPUT_UNAVAILABLE。 */
 	readonly error?: string;

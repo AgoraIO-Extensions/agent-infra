@@ -738,6 +738,31 @@ describe("FileBridge failure diagnostics (#3289)", () => {
 		assertRedacted([...read.entries, ...write.entries]);
 	});
 
+	it("records an unconfirmed completion with its 5xx status (#3289)", async () => {
+		const entries: RuntimeFileExchangeDiagnosticV1[] = [];
+		const bridge = createRuntimeFileBridgeFactoryV1({
+			origin: "https://files.example.test",
+			serviceToken: "s".repeat(32),
+			fetch: resultFetcher(async () => new Response(null, { status: 503 })),
+			logDiagnostic: (entry) => entries.push(entry),
+		})(binding, evidence);
+		await expect(
+			bridge.writeResult(referencedDescriptor, twoBytes(), {
+				workspaceReference: "out/x.png",
+			}),
+		).rejects.toBeInstanceOf(RuntimeFileResultUnconfirmedError);
+		expect(entries).toEqual([
+			{
+				service: "agent-runtime-host",
+				code: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+				operation: "complete",
+				reason: "unconfirmed",
+				status: 503,
+				error: "RUNTIME_FILE_RESULT_UNCONFIRMED",
+			},
+		]);
+	});
+
 	it("writes the default diagnostic to stderr without the sentinels", async () => {
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});
 		try {
