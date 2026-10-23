@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { runtimeModelInjectionV4 } from "@agent-infra/model-catalog";
 import {
 	decideSessionSandboxDrainObservationV1,
@@ -45,6 +46,16 @@ import {
 
 /** 与 Agent Workload 共用的部署文件交换 origin（#3276）。 */
 const fileExchangeOriginFixture = "http://platform-api.agent-infra.svc:3000";
+// #3289：与 origin 成对的部署声明，端口等于 origin 端口。
+const fileExchangeEgressFixture = [
+	{
+		destination: {
+			namespace: "agent-infra",
+			podLabels: { "app.kubernetes.io/component": "platform-api" },
+		},
+		port: 3000,
+	},
+];
 
 function fixture() {
 	const api = fakeKubernetesApi();
@@ -591,7 +602,61 @@ describe("production SessionSandbox resource receiver", () => {
 					...sessionSandboxRuntimeAuthFixture,
 					fileExchangeOrigin,
 				},
+				fileExchangeEgress: fileExchangeEgressFixture,
 			},
+		});
+
+		it("adds exactly the declared file exchange egress to the Session NetworkPolicy (#3289 AC-1)", async () => {
+			const disabled = fixture();
+			await disabled.receive(disabled.claim, new AbortController().signal);
+			const f = fixture();
+			const options = withOrigin(f, fileExchangeOriginFixture);
+			await createProductionSessionSandboxReceiverV1(options, {
+				serviceToken: sessionSandboxDeploymentTokenFixture,
+			})(f.claim, new AbortController().signal);
+			const egressOf = (resources: typeof f.resources) =>
+				(resources.get("NetworkPolicy/sandbox-allocation-a") as V1NetworkPolicy)
+					.spec?.egress ?? [];
+			const before = egressOf(disabled.resources);
+			const after = egressOf(f.resources);
+			expect(after).toEqual(workloadEgressRulesV1(options.policy));
+			expect(after).toHaveLength(before.length + 1);
+			expect(
+				after.filter(
+					(rule) => !before.some((old) => isDeepStrictEqual(old, rule)),
+				),
+			).toEqual([
+				{
+					to: [
+						{
+							namespaceSelector: {
+								matchLabels: { "kubernetes.io/metadata.name": "agent-infra" },
+							},
+							podSelector: {
+								matchLabels: { "app.kubernetes.io/component": "platform-api" },
+							},
+						},
+					],
+					ports: [{ protocol: "TCP", port: 3000 }],
+				},
+			]);
+		});
+
+		it("rejects an origin without its declared egress before any write (#3289 AC-2)", async () => {
+			const f = fixture();
+			const options = withOrigin(f, fileExchangeOriginFixture);
+			const receive = createProductionSessionSandboxReceiverV1(
+				{
+					...options,
+					policy: { ...options.policy, fileExchangeEgress: undefined },
+				},
+				{ serviceToken: sessionSandboxDeploymentTokenFixture },
+			);
+			const writes = f.writes.length;
+			await expect(
+				receive(f.claim, new AbortController().signal),
+			).rejects.toMatchObject({ code: "policy" });
+			expect(f.writes.length).toBe(writes);
 		});
 
 		it("injects the Agent Workload origin and a token derived from this allocation", async () => {
@@ -812,6 +877,7 @@ describe("production SessionSandbox resource receiver", () => {
 										...sessionSandboxRuntimeAuthFixture,
 										fileExchangeOrigin: fileExchangeOriginFixture,
 									},
+									fileExchangeEgress: fileExchangeEgressFixture,
 								}
 							: f.options.policy,
 					templateModelBindings:

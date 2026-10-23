@@ -2,11 +2,12 @@ import {
 	type RuntimeFileExchangeEvidenceV1,
 	RuntimeFileResultUnconfirmedError,
 } from "@agent-infra/agent-runtime";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readRuntimeFileExchangeOptions } from "./configuration.js";
 import {
 	createRuntimeFileBridgeFactoryV1,
 	isRuntimeFileExchangeOriginV1,
+	type RuntimeFileExchangeDiagnosticV1,
 } from "./runtime-file-exchange.js";
 
 const binding = {
@@ -550,4 +551,239 @@ it("keeps the service token out of data-plane failures (#3281)", async () => {
 	expect(failure).toBeInstanceOf(Error);
 	expect(String((failure as Error).message)).not.toContain(serviceToken);
 	expect(JSON.stringify(failure)).not.toContain(serviceToken);
+});
+
+describe("FileBridge failure diagnostics (#3289)", () => {
+	// 哨兵值：任何一个出现在日志中都说明泄漏了凭据、URL 或 Grant。
+	const sentinelOrigin = "https://sentinel-origin-3289.example.test";
+	const sentinelToken = `sentinel-service-token-3289-${"s".repeat(16)}`;
+	const sentinelGrant = "sentinel.file.grant3289";
+	const sentinels = [
+		sentinelOrigin,
+		"sentinel-origin-3289",
+		sentinelToken,
+		sentinelGrant,
+		evidence.executionGrant.token,
+		"/api/v1/conversations",
+		"runtime-exchange",
+	];
+	function bridgeWith(fetcher: typeof fetch) {
+		const entries: RuntimeFileExchangeDiagnosticV1[] = [];
+		const bridge = createRuntimeFileBridgeFactoryV1({
+			origin: sentinelOrigin,
+			serviceToken: sentinelToken,
+			fetch: fetcher,
+			logDiagnostic: (entry) => entries.push(entry),
+		})(binding, evidence);
+		return { bridge, entries };
+	}
+	function assertRedacted(entries: unknown[]) {
+		const logged = JSON.stringify(entries);
+		for (const sentinel of sentinels) expect(logged).not.toContain(sentinel);
+	}
+	const connectTimeout = () =>
+		Object.assign(
+			new TypeError(`fetch failed ${sentinelOrigin} ${sentinelToken}`),
+			{
+				cause: Object.assign(
+					new Error(
+						`Connect Timeout Error (attempted address: ${sentinelOrigin}, Bearer ${sentinelToken})`,
+					),
+					{ code: "UND_ERR_CONNECT_TIMEOUT" },
+				),
+			},
+		);
+	const resultDescriptor = {
+		name: "x.png",
+		mediaType: "image/png",
+		sizeBytes: 2,
+		sha256: "b".repeat(64),
+	};
+	const grantedResponse = (file: Record<string, unknown>, path: string) =>
+		new Response(
+			JSON.stringify({
+				schemaVersion: 1,
+				accessId: "access-1",
+				file,
+				path,
+				expiresAt: "2099-01-01T00:00:00Z",
+				grant: { ...grant, token: sentinelGrant },
+			}),
+			{ status: 200 },
+		);
+
+	it("records RUNTIME_FILE_EXCHANGE_UNAVAILABLE when the origin is unreachable", async () => {
+		const { bridge, entries } = bridgeWith(
+			vi.fn(async () => {
+				throw connectTimeout();
+			}),
+		);
+		await expect(bridge.readInput("input-1")).rejects.toThrow("fetch failed");
+		await expect(
+			bridge.writeResult(resultDescriptor, twoBytes(), {
+				workspaceReference: "out/x.png",
+			}),
+		).rejects.toThrow("fetch failed");
+		expect(entries).toEqual([
+			{
+				service: "agent-runtime-host",
+				code: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+				operation: "exchange",
+				reason: "unreachable",
+				cause: "UND_ERR_CONNECT_TIMEOUT",
+			},
+			{
+				service: "agent-runtime-host",
+				code: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+				operation: "exchange",
+				reason: "unreachable",
+				cause: "UND_ERR_CONNECT_TIMEOUT",
+			},
+		]);
+		assertRedacted(entries);
+	});
+
+	it("records a timeout and a platform rejection with only bounded fields", async () => {
+		const timeout = bridgeWith(
+			vi.fn(async () => {
+				throw new DOMException(`timed out ${sentinelOrigin}`, "TimeoutError");
+			}),
+		);
+		await expect(timeout.bridge.readInput("input-1")).rejects.toThrow();
+		const rejected = bridgeWith(
+			vi.fn(
+				async () =>
+					new Response(`${sentinelToken} ${sentinelGrant}`, { status: 503 }),
+			),
+		);
+		await expect(rejected.bridge.readInput("input-1")).rejects.toThrow(
+			"RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+		);
+		expect([...timeout.entries, ...rejected.entries]).toEqual([
+			expect.objectContaining({ operation: "exchange", reason: "timeout" }),
+			{
+				service: "agent-runtime-host",
+				code: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+				operation: "exchange",
+				reason: "rejected",
+				status: 503,
+				error: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+			},
+		]);
+		assertRedacted([...timeout.entries, ...rejected.entries]);
+	});
+
+	it("records data-plane read and write failures after a granted exchange", async () => {
+		const read = bridgeWith(
+			vi.fn(async (input: string | URL | Request) => {
+				if (String(input).endsWith("runtime-exchange"))
+					return grantedResponse(
+						{
+							schemaVersion: 1,
+							fileId: "input-1",
+							kind: "attachment",
+							descriptor: resultDescriptor,
+							status: "available",
+							createdAt: "2026-01-01T00:00:00Z",
+							expiresAt: "2099-01-01T00:00:00Z",
+						},
+						"/api/v1/conversations/conversation-1/files/input-1/content",
+					);
+				throw connectTimeout();
+			}),
+		);
+		await expect(read.bridge.readInput("input-1")).rejects.toThrow();
+		const write = bridgeWith(
+			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input);
+				if (url.endsWith("runtime-exchange"))
+					return grantedResponse(
+						{
+							schemaVersion: 1,
+							fileId: "result-1",
+							kind: "result",
+							descriptor: resultDescriptor,
+							status: "pending",
+							createdAt: "2026-01-01T00:00:00Z",
+							expiresAt: "2099-01-01T00:00:00Z",
+						},
+						"/api/v1/conversations/conversation-1/files/result-1/content",
+					);
+				await new Response(init?.body).arrayBuffer();
+				return new Response(sentinelGrant, { status: 502 });
+			}),
+		);
+		await expect(
+			write.bridge.writeResult(resultDescriptor, twoBytes(), {
+				workspaceReference: "out/x.png",
+			}),
+		).rejects.toThrow("RUNTIME_FILE_RESULT_UPLOAD_FAILED");
+		expect([...read.entries, ...write.entries]).toEqual([
+			{
+				service: "agent-runtime-host",
+				code: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+				operation: "read",
+				reason: "unreachable",
+				cause: "UND_ERR_CONNECT_TIMEOUT",
+			},
+			{
+				service: "agent-runtime-host",
+				code: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+				operation: "write",
+				reason: "rejected",
+				status: 502,
+				error: "RUNTIME_FILE_RESULT_UPLOAD_FAILED",
+			},
+		]);
+		assertRedacted([...read.entries, ...write.entries]);
+	});
+
+	it("records an unconfirmed completion with its 5xx status (#3289)", async () => {
+		const entries: RuntimeFileExchangeDiagnosticV1[] = [];
+		const bridge = createRuntimeFileBridgeFactoryV1({
+			origin: "https://files.example.test",
+			serviceToken: "s".repeat(32),
+			fetch: resultFetcher(async () => new Response(null, { status: 503 })),
+			logDiagnostic: (entry) => entries.push(entry),
+		})(binding, evidence);
+		await expect(
+			bridge.writeResult(referencedDescriptor, twoBytes(), {
+				workspaceReference: "out/x.png",
+			}),
+		).rejects.toBeInstanceOf(RuntimeFileResultUnconfirmedError);
+		expect(entries).toEqual([
+			{
+				service: "agent-runtime-host",
+				code: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+				operation: "complete",
+				reason: "unconfirmed",
+				status: 503,
+				error: "RUNTIME_FILE_RESULT_UNCONFIRMED",
+			},
+		]);
+	});
+
+	it("writes the default diagnostic to stderr without the sentinels", async () => {
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const bridge = createRuntimeFileBridgeFactoryV1({
+				origin: sentinelOrigin,
+				serviceToken: sentinelToken,
+				fetch: vi.fn(async () => {
+					throw connectTimeout();
+				}),
+			})(binding, evidence);
+			await expect(bridge.readInput("input-1")).rejects.toThrow();
+			expect(error).toHaveBeenCalledOnce();
+			const [line] = error.mock.calls[0] ?? [];
+			expect(JSON.parse(String(line))).toMatchObject({
+				code: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+				cause: "UND_ERR_CONNECT_TIMEOUT",
+			});
+			for (const sentinel of sentinels)
+				expect(String(line)).not.toContain(sentinel);
+		} finally {
+			error.mockRestore();
+		}
+	});
 });

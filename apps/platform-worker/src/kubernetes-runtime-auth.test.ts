@@ -1,5 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
-import type { V1StatefulSet } from "@kubernetes/client-node";
+import { isDeepStrictEqual } from "node:util";
+import type { V1NetworkPolicy, V1StatefulSet } from "@kubernetes/client-node";
 import { expect, it } from "vitest";
 import {
 	fakeKubernetesApi,
@@ -197,24 +198,46 @@ it("rejects caller-provided platform identity on a custom platform-adapter", asy
 it("injects the file exchange origin and the existing runtime-auth token Secret", async () => {
 	const api = fakeKubernetesApi();
 	const { publicKey } = generateKeyPairSync("ed25519");
+	const runtimeAuth = {
+		workerId: "worker-a",
+		grantKeyId: "grant-a",
+		grantPublicKey: publicKey
+			.export({ format: "pem", type: "spki" })
+			.toString(),
+		grantIssuer: "platform-worker",
+		serviceTokenSecret: { name: "runtime-transport", key: "token" },
+	};
+	const desired = workloadDesiredFixture(2, "custom-agent", "internal-only");
+	const egressOf = async (
+		policy: Parameters<typeof createKubernetesRuntimeAdapterV1>[0]["policy"],
+	) => {
+		const client = fakeKubernetesApi().client;
+		await createKubernetesRuntimeAdapterV1({
+			client,
+			policy,
+			probe: async () => true,
+		}).apply(desired);
+		return (
+			(
+				await client.read<V1NetworkPolicy>(
+					"NetworkPolicy",
+					desired.service.name,
+				)
+			)?.spec?.egress ?? []
+		);
+	};
 	const adapter = createKubernetesRuntimeAdapterV1({
 		client: api.client,
 		policy: {
 			...workloadTestPolicy,
 			runtimeAuth: {
-				workerId: "worker-a",
-				grantKeyId: "grant-a",
-				grantPublicKey: publicKey
-					.export({ format: "pem", type: "spki" })
-					.toString(),
-				grantIssuer: "platform-worker",
-				serviceTokenSecret: { name: "runtime-transport", key: "token" },
+				...runtimeAuth,
 				fileExchangeOrigin: "http://platform-api:3000",
 			},
+			fileExchangeEgress: [{ destination: { ip: "172.18.0.44" }, port: 3000 }],
 		},
 		probe: async () => true,
 	});
-	const desired = workloadDesiredFixture(2, "custom-agent", "internal-only");
 	await adapter.apply(desired);
 	const workload = await api.client.read<V1StatefulSet>(
 		"StatefulSet",
@@ -242,7 +265,75 @@ it("injects the file exchange origin and the existing runtime-auth token Secret"
 		},
 	});
 	expect(JSON.stringify(env)).not.toContain("Bearer");
+	// #3289 AC-1：Agent Pod 的 NetworkPolicy 只多出一条到 origin 端口的 egress。
+	const before = await egressOf({ ...workloadTestPolicy, runtimeAuth });
+	const after =
+		(
+			await api.client.read<V1NetworkPolicy>(
+				"NetworkPolicy",
+				desired.service.name,
+			)
+		)?.spec?.egress ?? [];
+	expect(after).toHaveLength(before.length + 1);
+	expect(
+		after.filter((rule) => !before.some((old) => isDeepStrictEqual(old, rule))),
+	).toEqual([
+		{
+			to: [{ ipBlock: { cidr: "172.18.0.44/32" } }],
+			ports: [{ protocol: "TCP", port: 3000 }],
+		},
+	]);
+	expect(JSON.stringify(before)).not.toContain("172.18.0.44");
 });
+
+it.each([
+	[
+		"an origin without the declared egress",
+		"http://platform-api:3000",
+		undefined,
+	],
+	[
+		"an egress without an origin",
+		undefined,
+		[{ destination: { ip: "172.18.0.44" }, port: 3000 }],
+	],
+	[
+		"an egress on another port",
+		"http://platform-api:3000",
+		[{ destination: { ip: "172.18.0.44" }, port: 443 }],
+	],
+	[
+		"a CIDR egress",
+		"http://platform-api:3000",
+		[{ destination: { cidr: "203.0.113.0/24" }, port: 3000 }],
+	],
+] as const)(
+	"rejects %s before any Kubernetes write (#3289 AC-2)",
+	(_name, fileExchangeOrigin, fileExchangeEgress) => {
+		const { publicKey } = generateKeyPairSync("ed25519");
+		const api = fakeKubernetesApi();
+		expect(() =>
+			createKubernetesRuntimeAdapterV1({
+				client: api.client,
+				policy: {
+					...workloadTestPolicy,
+					runtimeAuth: {
+						workerId: "worker-a",
+						grantKeyId: "grant-a",
+						grantPublicKey: publicKey
+							.export({ format: "pem", type: "spki" })
+							.toString(),
+						grantIssuer: "platform-worker",
+						serviceTokenSecret: { name: "runtime-transport", key: "token" },
+						...(fileExchangeOrigin ? { fileExchangeOrigin } : {}),
+					},
+					...(fileExchangeEgress ? { fileExchangeEgress } : {}),
+				},
+				probe: async () => true,
+			}),
+		).toThrow(expect.objectContaining({ code: "policy" }));
+	},
+);
 
 it("rejects a caller-provided file exchange environment pair", async () => {
 	const { adapter } = fixture();

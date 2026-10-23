@@ -642,7 +642,11 @@ intent 重试。每次 progress 写回必须重新取得并校验当前 outbox l
 
 部署批准的出站策略由 Worker 按 Sandbox 落实，默认拒绝未批准目标；始终允许集群 DNS、获准模型
 和独立 Connection endpoint，部署还可以批准供标准模板原生工具直接出网的通用目标
-（[§10.14](#1014-标准模板-session-sandbox-原生工具)）。Connection 目标和策略修订消费 [§13.5](#135-platform-外部-connection-consumer-配置契约)
+（[§10.14](#1014-标准模板-session-sandbox-原生工具)）。部署配置了 Runtime 文件交换 origin 时，
+Agent Workload 与 Session Sandbox 还各有且只有一条到该 origin 的出站规则：目的地由部署为该
+origin 声明（精确 IP 或 namespace/Pod 选择器，不接受网段），端口取 origin 的端口；缺少或无效声明
+在任何资源写入前拒绝（装配见[文件存储部署](FILE-storage-deployment.md#runtime-文件交换注入)）。
+Connection 目标和策略修订消费 [§13.5](#135-platform-外部-connection-consumer-配置契约)
 的完整 Consumer 配置，不另建 endpoint 或授权来源。Runtime、镜像、模型参数和调用方不能扩大
 目的地。Connection 安装凭据仍按 Principal/ConsumerInstance/Actor 隔离并经受保护客户端交付；
 Sandbox 身份、ServiceAccount、通用出网或网络可达均不授予 Connection 权限。

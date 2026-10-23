@@ -108,6 +108,7 @@ import {
 } from "./workload-network.js";
 import { WorkloadProbeIncompleteErrorV1 } from "./workload-probe-failure.js";
 import {
+	isWorkloadFileExchangeEgressCurrentV1,
 	validateWorkloadRuntimeAuthV1,
 	type WorkloadRuntimeAuthV1,
 } from "./workload-runtime-auth.js";
@@ -203,6 +204,14 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	const connectionInstallationRevision = policy.connectionInstallationRevision;
 	const egress = workloadEgressRulesV1(policy);
 	if (policy.runtimeAuth) validateWorkloadRuntimeAuthV1(policy.runtimeAuth);
+	// #3289：注入文件交换 origin 时必须同时有到该 origin 端口的唯一 egress，反之亦然。
+	if (
+		!isWorkloadFileExchangeEgressCurrentV1(
+			policy.runtimeAuth?.fileExchangeOrigin,
+			policy.fileExchangeEgress,
+		)
+	)
+		throw new WorkloadKubernetesError("policy");
 	const modelProjection =
 		options.modelProjection === undefined
 			? undefined

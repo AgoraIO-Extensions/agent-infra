@@ -537,6 +537,10 @@ function sessionSandboxEgressPolicyV1(
 		...(policy.nativeMetadataWorkerEgress
 			? { nativeMetadataWorkerEgress: policy.nativeMetadataWorkerEgress }
 			: {}),
+		// #3289：与 Agent Workload 同一条部署声明；只在配置了文件交换 origin 时存在。
+		...(policy.fileExchangeEgress
+			? { fileExchangeEgress: policy.fileExchangeEgress }
+			: {}),
 		...(policy.dnsEgress ? { dnsEgress: policy.dnsEgress } : {}),
 	};
 }

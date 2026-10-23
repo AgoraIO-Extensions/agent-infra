@@ -208,7 +208,7 @@ Worker 向 Agent Workload 和会话 Sandbox 注入文件交换配置的前提是
 
 origin 必须是精确的 `http(s)://host[:port]`，不含路径、查询、片段或凭据；明文 HTTP 只接受集群 DNS 名称。缺失时两类 Pod 都不注入，Runtime FileBridge 关闭；存在时同时注入 `AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN` 和 `AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN`。后者都是 `secretKeyRef`：Agent Pod 引用 `runtimeAuthSecretRef`，会话 Sandbox 引用本 Sandbox Secret 中按本分配派生的 `file-exchange-token`，部署级 service token 永不写入 Sandbox。令牌不写入 Pod env、values、日志或错误。
 
-会话 Sandbox 的 NetworkPolicy 复用 Agent 的 egress 声明，Chart 不自动追加规则；生产必须在 Agent egress 中放行该 Platform API origin 的端口。本地 kind（kindnet）不强制执行 NetworkPolicy，本地通过不证明生产可达。
+配置 origin 时还必须声明它的出站目的地：部署模块 `workloadInput.policy.fileExchangeEgress`，或 Helm `platformWorker.fileExchangeEgress`（渲染为 `PLATFORM_WORKER_FILE_EXCHANGE_EGRESS`）。Worker 据此为 Agent Workload 与会话 Sandbox 的 NetworkPolicy 各生成一条到 origin 端口的规则；缺少或无效时启动即以 `PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID` 失败。目的地形状、端口规则与集群外 API 的写法见[文件存储部署与验收](../../docs/architecture/FILE-storage-deployment.md#runtime-文件交换注入)。
 
 令牌轮换：更新 runtime-auth Secret，重启 Worker 与 Agent Workload；同时确保 Platform API 的 `services` 登记同一令牌和允许的 Agent。已有会话 Sandbox 如何获得新配置、完整配置与失败语义见[文件存储部署与验收](../../docs/architecture/FILE-storage-deployment.md#runtime-文件交换注入)。
 

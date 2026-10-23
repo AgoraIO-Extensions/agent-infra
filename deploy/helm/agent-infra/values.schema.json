@@ -185,6 +185,25 @@
         "runtimeImageDigest": { "type": "string", "pattern": "^(?:|sha256:[a-f0-9]{64})$" },
         "wecomEnabled": { "type": "boolean" },
         "fileExchangeOrigin": { "type": "string", "maxLength": 512, "pattern": "^(?:$|https?://[A-Za-z0-9.-]+(?::[1-9][0-9]{0,4})?)$" },
+        "fileExchangeEgress": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ip": { "type": "string", "minLength": 2, "maxLength": 45, "pattern": "^[0-9A-Fa-f:.]+$" },
+            "namespace": { "$ref": "#/$defs/kubernetesName" },
+            "podLabels": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 16,
+              "additionalProperties": { "type": "string", "maxLength": 63 }
+            }
+          },
+          "oneOf": [
+            { "maxProperties": 0 },
+            { "required": ["ip"], "maxProperties": 1 },
+            { "required": ["namespace", "podLabels"], "maxProperties": 2 }
+          ]
+        },
         "nativeMetadataGateway": {
           "type": "object",
           "additionalProperties": false,

@@ -2,6 +2,11 @@ import { createPublicKey } from "node:crypto";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import type { V1EnvVar } from "@kubernetes/client-node";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
+import {
+	type WorkloadEgressDestinationV1,
+	type WorkloadEgressPolicyV1,
+	workloadEgressRulesV1,
+} from "./workload-network.js";
 
 /** Public verification material and a deployment-provisioned transport token reference only. */
 export interface WorkloadRuntimeAuthV1 {
@@ -76,6 +81,78 @@ export function resolveWorkloadFileExchangeOriginV1(input: {
 		return environment;
 	}
 	return input.configured;
+}
+
+/** TCP port an exact file exchange origin connects to (explicit or scheme default). */
+export function fileExchangeOriginPortV1(origin: string): number {
+	const url = new URL(origin);
+	return url.port === ""
+		? url.protocol === "https:"
+			? 443
+			: 80
+		: Number(url.port);
+}
+
+/**
+ * #3289：文件交换 egress 与 origin 必须同时存在或同时缺失；存在时只有一条、只到部署
+ * 声明的单一目的地（精确 IP 或 namespace/Pod 选择器），端口等于 origin 的端口。
+ */
+export function isWorkloadFileExchangeEgressCurrentV1(
+	origin: string | undefined,
+	egress: WorkloadEgressPolicyV1["fileExchangeEgress"],
+): boolean {
+	if (origin === undefined) return egress === undefined;
+	if (
+		!isFileExchangeOriginV1(origin) ||
+		!Array.isArray(egress) ||
+		egress.length !== 1 ||
+		egress[0]?.port !== fileExchangeOriginPortV1(origin)
+	)
+		return false;
+	try {
+		workloadEgressRulesV1({ fileExchangeEgress: egress });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Resolve the file exchange egress from the mounted deployment module
+ * (`policy.fileExchangeEgress`) or the fixed environment seam
+ * (`PLATFORM_WORKER_FILE_EXCHANGE_EGRESS`, a JSON destination). The port is
+ * always the origin's port. A duplicate source, an egress without origin, an
+ * origin without egress, or an invalid destination fails closed before any
+ * Kubernetes resource is written.
+ */
+export function resolveWorkloadFileExchangeEgressV1(input: {
+	readonly origin?: string;
+	readonly configured?: WorkloadEgressPolicyV1["fileExchangeEgress"];
+	readonly environment?: string;
+}): WorkloadEgressPolicyV1["fileExchangeEgress"] {
+	const environment =
+		input.environment === undefined || input.environment === ""
+			? undefined
+			: input.environment;
+	if (input.configured !== undefined && environment !== undefined)
+		throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_DUPLICATE");
+	if (input.origin !== undefined && !isFileExchangeOriginV1(input.origin))
+		throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID");
+	let egress = input.configured;
+	if (environment !== undefined) {
+		if (input.origin === undefined || environment.length > 4096)
+			throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID");
+		let destination: WorkloadEgressDestinationV1;
+		try {
+			destination = JSON.parse(environment);
+		} catch {
+			throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID");
+		}
+		egress = [{ destination, port: fileExchangeOriginPortV1(input.origin) }];
+	}
+	if (!isWorkloadFileExchangeEgressCurrentV1(input.origin, egress))
+		throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID");
+	return egress;
 }
 
 export function validateWorkloadRuntimeAuthV1(

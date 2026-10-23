@@ -163,6 +163,11 @@ spec:
             - name: PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN
               value: {{ . | quote }}
             {{- end }}
+            {{- with .Values.platformWorker.fileExchangeEgress }}
+            # 文件交换 origin 的部署声明目的地；Worker 校验后编译为唯一一条 egress（#3289）。
+            - name: PLATFORM_WORKER_FILE_EXCHANGE_EGRESS
+              value: {{ toJson . | quote }}
+            {{- end }}
             {{- if .Values.platformWorker.runtimeImageRepository }}
             - name: AGENT_INFRA_RUNTIME_IMAGE_REPOSITORY
               value: {{ .Values.platformWorker.runtimeImageRepository | quote }}

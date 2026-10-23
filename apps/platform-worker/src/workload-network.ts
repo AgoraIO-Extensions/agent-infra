@@ -23,6 +23,11 @@ export interface WorkloadEgressPolicyV1 {
 	readonly connectionEgress?: WorkloadEgressPolicyV1["modelEgress"];
 	/** Fixed Worker native metadata callback destination. */
 	readonly nativeMetadataWorkerEgress?: WorkloadEgressPolicyV1["modelEgress"];
+	/**
+	 * #3289：Runtime 文件交换 origin 的唯一出站目的地，由部署声明，端口取 origin 的端口。
+	 * 只接受精确 IP 或 namespace/Pod 选择器，不接受 CIDR；Runtime 输入与 Owner env 不参与。
+	 */
+	readonly fileExchangeEgress?: WorkloadEgressPolicyV1["modelEgress"];
 	readonly dnsEgress?: readonly WorkloadEgressDestinationV1[];
 }
 
@@ -272,20 +277,24 @@ export function workloadEgressRulesV1(
 	const models = policy.modelEgress ?? [];
 	const connections = policy.connectionEgress ?? [];
 	const nativeMetadata = policy.nativeMetadataWorkerEgress ?? [];
+	const fileExchange = policy.fileExchangeEgress ?? [];
 	const dns = policy.dnsEgress ?? [];
 	if (
 		!Array.isArray(models) ||
 		!Array.isArray(connections) ||
 		!Array.isArray(nativeMetadata) ||
+		!Array.isArray(fileExchange) ||
 		!Array.isArray(dns) ||
 		models.length > 128 ||
 		connections.length > 128 ||
 		nativeMetadata.length > 1 ||
+		fileExchange.length > 1 ||
 		dns.length > 16
 	)
 		throw new WorkloadKubernetesError("policy");
-	return [
-		...[...models, ...connections, ...nativeMetadata].map((entry) => {
+	const tcpRule =
+		(allowCidr: boolean) =>
+		(entry: NonNullable<WorkloadEgressPolicyV1["modelEgress"]>[number]) => {
 			if (
 				!entry ||
 				Object.keys(entry).sort().join(",") !== "destination,port" ||
@@ -295,10 +304,14 @@ export function workloadEgressRulesV1(
 			)
 				throw new WorkloadKubernetesError("policy");
 			return {
-				to: [destinationPeer(entry.destination, true)],
+				to: [destinationPeer(entry.destination, allowCidr)],
 				ports: [{ protocol: "TCP", port: entry.port }],
 			};
-		}),
+		};
+	return [
+		...[...models, ...connections, ...nativeMetadata].map(tcpRule(true)),
+		// 文件交换只到单一 origin，不接受网段。
+		...fileExchange.map(tcpRule(false)),
 		...dns.map((destination) => ({
 			to: [destinationPeer(destination, false)],
 			ports: [
