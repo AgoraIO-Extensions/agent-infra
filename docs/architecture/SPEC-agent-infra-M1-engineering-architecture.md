@@ -2173,19 +2173,26 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 解析与发布：
 
 - 解析时机：原生 Turn 以 completed 结束、最终回答已确认之后，写终态事件之前。失败、取消或 unknown 的 Turn 不发布。
-- 引用按首次出现的顺序、以规范化路径去重，每次执行最多发布 10 个，超出部分记为失败。
+- 引用按首次出现的顺序、以规范化路径去重，每次执行最多发布 10 个。超出的引用不逐个记录，合并为一次 failed 的发布操作。
 - 每个引用逐项校验：
   - 用 `O_NOFOLLOW` 打开，且必须是普通文件；
   - 打开之后，读取、类型识别、SHA-256 计算和上传都使用同一个文件描述符，不再按路径重新打开，避免校验之后文件被替换；
   - 实际读到的大小不超过 FileLimits 和单文件 50 MiB 上限；
   - 媒体类型按 15.4.1 的同一规则识别；结果发布不携带声明类型，因此记录字节识别结果（纯文本为 `text/plain`），且必须在 FileLimits 内；
   - 名称取 basename。
-- 结果意图的 descriptor 包含上述 SHA-256 与大小。恢复时重新打开文件并重新校验，内容与原意图不一致则记为失败，不改发新内容。
+- 结果意图的 descriptor 包含上述 SHA-256 与大小。
 - 发布属于 §10.14 的平台中介操作：
-  - 每个引用先保存 intent，再经运行期文件交换核对当前授权，然后调用 `writeResult`，最后保存 completed、failed 或 unknown。
-  - unknown 沿原结果意图核实，不新建意图重发。
+  - 发布计划（解析出的引用清单）与每个引用的发布进度保存在 Driver 持久状态中；计划收敛前不写终态事件。
+  - 每个引用先保存带 descriptor 的 intent，再保存 started，然后调用 `writeResult`（经运行期文件交换核对当前授权），最后保存 completed、failed 或 unknown。
+  - 已 started、但当前进程没有 `writeResult` 结论的引用记 unknown，沿原结果意图核实，不新建意图重发。
   - 事实中不含路径或内容。
-- Driver 重启后，从持久保存的引用清单和发布进度继续，不重复发布。
+- 执行期文件交换上下文只存在于本次投递的 Host 内存中（[ADR-0014](ADR-0014-runtime-execution-file-bridge.md) §6）：
+  - 上下文仍在时，已保存 intent、尚未 started 的引用在继续发布前重新打开文件并校验；内容与 intent 的 descriptor 不一致则记 failed，不改发新内容。
+  - Driver 或 Host 重启后不重建该上下文，也不补发；部署未装配文件交换时同样没有上下文。此时未收敛的计划按已保存进度一次收敛，再按原生终态写终态事件：
+    - 尚未 started 的引用记 failed；
+    - 已 started，且 journal 中已有同一 `workspaceReference`、同一 descriptor 的 `result.file` V2 事件的，记 completed；
+    - 已 started 但没有对应事件的，记 unknown。
+  - 原生终态在重启后才确认的 Turn 同样没有上下文：回答内引用直接记 failed，不发布。
 
 契约与 ACP：
 
