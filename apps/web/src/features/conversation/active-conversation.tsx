@@ -18,6 +18,7 @@ import { Button } from "../../components/ui/button.js";
 import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { formatPerson } from "../directory-names.js";
+import { RecoveryButton } from "../recovery-button.js";
 import { BrowserActivityCard } from "./browser-activity-card.js";
 import {
 	type BrowserCard,
@@ -838,9 +839,15 @@ export function ActiveConversation({
 								: "会话连接暂时中断，草稿已保留，恢复后会自动继续读取；也可手动重新连接。重新连接只恢复读取，不重新发送任务。"}
 						</AlertDescription>
 						<AlertAction>
-							<Button variant="outline" onClick={() => void reader.reconnect()}>
+							{/* 重连开始即换成「正在自动重新连接」状态行、按钮卸载：焦点交给页面 h1，仍断开时
+							    回到按钮（RecoveryButton，#3269 N8-3-02）。 */}
+							<RecoveryButton
+								variant="outline"
+								recoveryKey="重新连接"
+								onClick={() => void reader.reconnect()}
+							>
 								重新连接
-							</Button>
+							</RecoveryButton>
 						</AlertAction>
 					</Alert>
 				)}

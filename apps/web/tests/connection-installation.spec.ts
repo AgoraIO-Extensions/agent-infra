@@ -408,3 +408,30 @@ test("verifying the original execution keeps focus on the pending button, then o
 	await expect(details).toHaveCount(0);
 	await expectCleanPage(page, errors);
 });
+
+// #3269 N8-3-02：「开始安装」与「查询状态」「重新开始」占同一个位置、复用同一个按钮元素：准备授权期间是
+// 可聚焦的禁用，焦点留在按钮上；受理后同一个按钮原地换成「查询状态」，焦点仍在它上面，不落到 body。
+test("beginning an installation keeps focus on the same step button while preparing and after (N8-3-02)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await openExecutionDetails(page);
+	const details = page.getByRole("dialog", { name: "执行详情" });
+	const step = await pinElement(
+		details.getByRole("button", { name: "开始安装", exact: true }),
+		"connection-step",
+	);
+	const beginning = await holdRequests(page, "POST", beginPath);
+	// 状态读取也挂起，确认焦点停在「查询状态」而不是被轮询改变。
+	const statusRead = await holdRequests(page, "POST", statusPath);
+	await step.focus();
+	await page.keyboard.press("Enter");
+	await expect(details.getByText("正在准备授权…")).toBeVisible();
+	await expectFocusableBusy(step, "开始安装准备中");
+	beginning.release();
+	await expect(step).toHaveAccessibleName("查询状态");
+	await expectFocusSettled(step, "开始安装受理后");
+	statusRead.release();
+	await expectCleanPage(page, errors);
+});

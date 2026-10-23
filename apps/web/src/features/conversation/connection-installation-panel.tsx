@@ -47,6 +47,7 @@ export function ConnectionInstallationPanel({
 	const [refreshing, setRefreshing] = useState(false);
 	const beginKey = useRef<string | undefined>(undefined);
 	const request = useRef<AbortController | undefined>(undefined);
+	const stepButton = useRef<HTMLButtonElement>(null);
 
 	useEffect(() => () => request.current?.abort(), []);
 
@@ -162,17 +163,12 @@ export function ConnectionInstallationPanel({
 						只展示授权状态，不会在平台保存或显示凭据。
 					</p>
 				</div>
-				{["idle", "unavailable"].includes(state.kind) && (
-					<Button type="button" variant="outline" onClick={() => void begin()}>
-						<KeyRound aria-hidden="true" />
-						开始安装
-					</Button>
-				)}
-				{/* 「查询状态」与「重新开始」占同一个位置、复用同一个按钮元素（#3242 K7-02）：读取中是可聚焦的
-				    禁用，焦点留在按钮上；查到终态后按钮原地换成「重新开始」，焦点不随旧按钮卸载落到 body
-				    或被执行详情弹窗收回。 */}
+				{/* 「开始安装」「查询状态」「重新开始」占同一个位置、复用同一个按钮元素（#3242 K7-02、#3269
+				    N8-3-02）：准备授权与读取中是可聚焦的禁用，焦点留在按钮上；状态推进后按钮原地换成下一步，
+				    焦点不随旧按钮卸载落到 body 或被执行详情弹窗收回。 */}
 				{state.kind === "awaiting_confirmation" ? (
 					<Button
+						ref={stepButton}
 						type="button"
 						variant="outline"
 						disabled={refreshing}
@@ -182,12 +178,19 @@ export function ConnectionInstallationPanel({
 						<RefreshCw aria-hidden="true" />
 						{refreshing ? "查询中" : "查询状态"}
 					</Button>
-				) : terminal ? (
-					<Button type="button" variant="outline" onClick={() => void begin()}>
+				) : (
+					<Button
+						ref={stepButton}
+						type="button"
+						variant="outline"
+						disabled={state.kind === "loading"}
+						focusableWhenDisabled
+						onClick={() => void begin()}
+					>
 						<KeyRound aria-hidden="true" />
-						重新开始
+						{terminal ? "重新开始" : "开始安装"}
 					</Button>
-				) : null}
+				)}
 			</div>
 			{state.kind === "loading" && <p role="status">正在准备授权…</p>}
 			{state.kind !== "idle" &&
@@ -217,10 +220,14 @@ export function ConnectionInstallationPanel({
 					<AlertDescription>Connection 安装暂不可用。</AlertDescription>
 					{state.retryable && (
 						<AlertAction>
+							{/* 提示随重新开始卸载：焦点先交给同一位置的「开始安装」（准备期间可聚焦的禁用）。 */}
 							<Button
 								type="button"
 								variant="outline"
-								onClick={() => void begin()}
+								onClick={() => {
+									stepButton.current?.focus();
+									void begin();
+								}}
 							>
 								<RefreshCw aria-hidden="true" data-icon="inline-start" />
 								重新开始

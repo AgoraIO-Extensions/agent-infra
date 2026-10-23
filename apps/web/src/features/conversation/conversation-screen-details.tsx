@@ -23,6 +23,7 @@ import type {
 	PersistedConversationEventV2,
 	RuntimeOperationFailureV2,
 } from "../../pilot/generated-v2/types.gen.js";
+import { RecoveryButton } from "../recovery-button.js";
 import {
 	BrowserOperationRecordDialog,
 	type BrowserRecordViewer,
@@ -396,6 +397,7 @@ export function ConversationExecutionDetails({
 	/** 当前登录用户：嵌套的浏览器操作记录用它显示接管人姓名。 */
 	viewer?: BrowserRecordViewer;
 }) {
+	const body = useRef<HTMLDivElement>(null);
 	return (
 		<Dialog
 			open={open}
@@ -407,15 +409,25 @@ export function ConversationExecutionDetails({
 				<DialogHeader>
 					<DialogTitle>执行详情</DialogTitle>
 				</DialogHeader>
-				<DialogBody>
+				<DialogBody ref={body}>
 					{loading && <LoadingLine>正在读取执行记录…</LoadingLine>}
 					{failed && (
 						<Alert tone="danger" role="alert">
 							<AlertDescription>执行记录暂时无法读取。</AlertDescription>
 							<AlertAction>
-								<Button type="button" variant="outline" onClick={onRetry}>
+								{/* 重读时失败提示换成读取行、按钮卸载：焦点交给执行详情弹窗，Escape 仍可关闭；
+								    仍失败时回到按钮（#3269 N8-3-02）。 */}
+								<RecoveryButton
+									variant="outline"
+									recoveryKey="重新读取详情"
+									recoveryTarget={() =>
+										body.current?.closest<HTMLElement>('[role="dialog"]') ??
+										null
+									}
+									onClick={onRetry}
+								>
 									重新读取详情
-								</Button>
+								</RecoveryButton>
 							</AlertAction>
 						</Alert>
 					)}

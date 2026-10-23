@@ -799,7 +799,11 @@ describe("functional conversation screen", () => {
 				fireEvent.keyDown(input, { key: "Escape" });
 				expect(input.value).toBe("");
 			} else {
-				fireEvent.click(screen.getByRole("button", { name: "重试" }));
+				// #3269 N8-3-02：键盘焦点在「重试」上触发，重读时按钮卸载，焦点先回到输入框。
+				const retry = screen.getByRole("button", { name: "重试" });
+				retry.focus();
+				fireEvent.click(retry);
+				expect(document.activeElement).toBe(input);
 				await waitFor(() =>
 					expect(
 						requests.filter((request) =>
@@ -1905,8 +1909,13 @@ describe("functional conversation screen", () => {
 			expect(input.disabled).toBe(false);
 			expect(sendButton().disabled).toBe(true);
 			expect(screen.queryByText(/提交结果尚未确认/)).toBeNull();
+			retry.focus();
 			fireEvent.click(retry);
 			await waitFor(() => expect(sendButton().disabled).toBe(false));
+			// #3269 N8-3-02：重试开始即换成保存中的 spinner、按钮卸载，焦点交给模型入口，不落到 body。
+			expect(document.activeElement?.getAttribute("aria-label")).toMatch(
+				/^选择模型，当前 /,
+			);
 			expect(selections()).toHaveLength(2);
 			expect(selections()[1].headers.get("Idempotency-Key")).toBe(
 				selections()[0].headers.get("Idempotency-Key"),
