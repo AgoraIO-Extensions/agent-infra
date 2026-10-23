@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { ConversationDetailProjectionV2Schema } from "../../packages/contracts/src/pilot/operation-v2.ts";
 import {
+	assertAcceptance,
 	currentExecutionEvents,
 	currentExecutionFrames,
 	restoredHistoryPreservesEvents,
@@ -391,4 +392,78 @@ test("configuration-only smoke does not expose malformed config contents", async
 	} finally {
 		await rm(fixture.directory, { recursive: true, force: true });
 	}
+});
+
+test("terminal acceptance keeps the named Skill projection without a Sandbox request", () => {
+	const evidence = {};
+	assertAcceptance(
+		{
+			acceptance: {
+				requireSkillMetadata: true,
+				requiredSkillName: "workspace-summary",
+			},
+		},
+		[],
+		evidence,
+		{ capabilities: [{ name: "workspace-summary" }] },
+	);
+	assert.equal(evidence.acceptance.skillMetadataCount, 1);
+});
+
+for (const acceptance of [
+	{ requireSkillMetadata: true },
+	{ requiredSkillName: "workspace-summary" },
+]) {
+	test(`terminal acceptance rejects missing or invalid active Skill evidence: ${JSON.stringify(acceptance)}`, () => {
+		for (const metadata of [
+			undefined,
+			null,
+			{},
+			{ capabilities: null },
+			{ capabilities: {} },
+		]) {
+			assert.throws(
+				() => assertAcceptance({ acceptance }, [], {}, metadata),
+				/Expected Skill metadata from the active Execution/,
+			);
+		}
+	});
+}
+
+test("a cached projection must still contain the required Skill name", () => {
+	for (const capabilities of [
+		[],
+		[{ name: "other-skill" }],
+		[null, {}, "workspace-summary"],
+	]) {
+		assert.throws(
+			() =>
+				assertAcceptance(
+					{ acceptance: { requiredSkillName: "workspace-summary" } },
+					[],
+					{},
+					{ capabilities },
+				),
+			/Expected Skill workspace-summary/,
+		);
+	}
+});
+
+test("a journey without a Skill requirement does not need metadata", () => {
+	const evidence = {};
+	assertAcceptance({}, [], evidence, undefined);
+	assert.equal(evidence.acceptance.skillMetadataCount, undefined);
+});
+
+test("model operations cannot satisfy the real tool requirement", () => {
+	assert.throws(
+		() =>
+			assertAcceptance(
+				{ acceptance: { requireToolOperation: true } },
+				[{ type: "execution.operation", payload: { kind: "model" } }],
+				{},
+				undefined,
+			),
+		/Expected a real tool operation event/,
+	);
 });
