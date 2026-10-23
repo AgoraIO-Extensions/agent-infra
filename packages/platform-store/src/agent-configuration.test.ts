@@ -7,10 +7,12 @@ import type {
 	AgentConfigurationWritePlanV1,
 	AgentManagementStateV1,
 	WorkloadReconciliationStateV1,
+	WorkloadRuntimePortV1,
 } from "@agent-infra/platform-core";
 import {
 	createAgentConfigurationUseCaseV1,
 	createAgentManagementV1,
+	createWorkloadReconciliationV1,
 	immutableSecretNameV1,
 } from "@agent-infra/platform-core";
 import { FakeAgentConfigurationAdmissionsV1 } from "@agent-infra/platform-core/testing";
@@ -2275,6 +2277,134 @@ describe("PostgreSQL Agent configuration query", () => {
 		await expect(
 			query.readRuntimePresentation({ ...input, actorId: "viewer" }),
 		).resolves.toEqual({ outcome: "unavailable" });
+	});
+
+	// #3304：漂移恢复只推进 Workload revision，verified 部署保留产生它的修订（#1480）。
+	it("presents the pre-drift capabilities after the PostgreSQL Workload Store recovers a drift", async () => {
+		const { query, input, deployment, state, persist } =
+			await runtimePresentationFixture();
+		const capabilities = {
+			modelSelection: true,
+			attachments: true,
+			resultFiles: true,
+			nativeMetadata: true,
+		};
+		await persist({ ...state, capabilities });
+		const found = {
+			outcome: "found",
+			sourceReference: deployment.imageDigest,
+			channels: [],
+			capabilities,
+			interactionUrl: null,
+		};
+		await expect(query.readRuntimePresentation(input)).resolves.toEqual(found);
+		const store = openPostgresWorkloadReconciliationStoreV1({
+			databaseUrl,
+			retryDelayMs: 0,
+			monitorDelayMs: 0,
+		});
+		adapters.push(store);
+		const health: ("healthy" | "drifted")[] = ["drifted"];
+		const runtime: WorkloadRuntimePortV1 = {
+			capabilities: async () => structuredClone(capabilities),
+			preflight: async () => {
+				throw new Error("Drift recovery must not re-run preflight");
+			},
+			closeRoute: async () => undefined,
+			apply: async () => ({ uid: "observed-uid", generation: 2 }),
+			observe: async () => health.shift() ?? "healthy",
+			activateSecrets: async () => "active",
+			promote: async () => undefined,
+			discardUnactivatedSecrets: async () => true,
+			cleanup: async () => true,
+		};
+		const worker = createWorkloadReconciliationV1({ store, runtime });
+		const phases: string[] = [];
+		const read = async () => {
+			const [row] = await adminClient<
+				{ revision: string; state: WorkloadReconciliationStateV1 }[]
+			>`select revision::text, state from platform.workload_reconciliations where agent_id = 'agent_01'`;
+			if (!row) throw new Error("Expected a persisted Workload state");
+			return row;
+		};
+		for (let step = 0; step < 5; step++) {
+			await expect(worker.tick("test-worker")).resolves.toBe("advanced");
+			phases.push((await read()).state.phase);
+			if (step === 0) {
+				// 恢复期间管理可用性为 updating，投影按当前快照不给出能力。
+				input.expected = await runtimeExpectation(query);
+				await expect(query.readRuntimePresentation(input)).resolves.toEqual({
+					...found,
+					capabilities: null,
+				});
+			}
+		}
+		expect(phases).toEqual([
+			"applying",
+			"observing",
+			"activating",
+			"promoting",
+			"ready",
+		]);
+		const recovered = await read();
+		expect(recovered.revision).toBe("2");
+		expect(recovered.state).toMatchObject({
+			phase: "ready",
+			revision: 2,
+			verifiedRevision: 2,
+			verified: { deployment: { workloadRevision: 1, fence: 1 } },
+			capabilities,
+		});
+		input.expected = await runtimeExpectation(query);
+		expect(input.expected.management.serviceAvailability).toBe("ready");
+		await expect(query.readRuntimePresentation(input)).resolves.toEqual(found);
+	});
+
+	it("projects an already persisted drift-recovered Workload without restarting the Agent", async () => {
+		const { query, input, deployment, version, state } =
+			await runtimePresentationFixture();
+		// 固定环境回读的形态：revision=verifiedRevision=3，verified 部署修订仍为 2。
+		const persisted = (
+			workloadRevision: number,
+			changes: Partial<WorkloadReconciliationStateV1> = {},
+		) => {
+			const verified = {
+				...version,
+				deployment: { ...deployment, workloadRevision },
+			};
+			return {
+				...state,
+				revision: 3,
+				verifiedRevision: 3,
+				candidate: verified,
+				verified,
+				...changes,
+			};
+		};
+		const write = (value: unknown) =>
+			adminClient`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values ('agent_01', 3, ${adminClient.json(value as postgres.JSONValue)}, now()) on conflict (agent_id) do update set revision = excluded.revision, state = excluded.state`;
+		await write(persisted(2));
+		await expect(query.readRuntimePresentation(input)).resolves.toMatchObject({
+			outcome: "found",
+			capabilities: state.capabilities,
+		});
+		for (const invalid of [
+			persisted(4),
+			persisted(2, { verifiedRevision: 2 }),
+			persisted(2, { fence: 2 }),
+			{
+				...persisted(2),
+				candidate: {
+					...version,
+					deployment: { ...deployment, workloadRevision: 3 },
+				},
+			},
+		]) {
+			await write(invalid);
+			await expect(query.readRuntimePresentation(input)).resolves.toMatchObject(
+				{ outcome: "found", capabilities: null },
+			);
+		}
 	});
 
 	it("uses current user API grants for runtime presentation without Browser Owner/admin fallback", async () => {
