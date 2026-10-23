@@ -578,6 +578,63 @@ describe("Conversation Worker discovery and shutdown", () => {
 			await worker.stop();
 		}
 	});
+	it("reserves a dispatch slot for a Turn behind Sandbox retries", async () => {
+		const items = [
+			...Array.from({ length: 8 }, (_, index) => ({
+				itemId: `sandbox-${String.fromCharCode(97 + index)}`,
+				operation: "conversation.sandbox.reconcile.v1" as const,
+			})),
+			{ itemId: "turn-a", operation: "conversation.turn.submit.v1" as const },
+		];
+		const sandboxClaim = { schemaVersion: 1, execution: null } as never;
+		mocks.find.mockResolvedValue(items);
+		mocks.claimSandbox.mockResolvedValue(sandboxClaim);
+		mocks.recordSandbox.mockResolvedValue(undefined);
+		mocks.dispatch.mockResolvedValue(undefined);
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			maximumConcurrentDispatches: 8,
+			receiveSandbox: async (_claim, signal) =>
+				new Promise((resolve) => {
+					signal.addEventListener(
+						"abort",
+						() => resolve({ status: "unknown", resources: [] }),
+						{ once: true },
+					);
+				}),
+		});
+		try {
+			expect(await worker.tick()).toBe(8);
+			await vi.waitFor(() =>
+				expect(mocks.dispatch).toHaveBeenCalledWith(
+					expect.objectContaining({ itemId: "turn-a" }),
+				),
+			);
+			expect(mocks.claimSandbox).toHaveBeenCalledTimes(7);
+		} finally {
+			await worker.stop();
+		}
+	});
+	it("prioritizes a Turn when the worker has one dispatch slot", async () => {
+		mocks.find.mockResolvedValue([
+			{ itemId: "sandbox-a", operation: "conversation.sandbox.reconcile.v1" },
+			{ itemId: "turn-a", operation: "conversation.turn.submit.v1" },
+		]);
+		mocks.dispatch.mockResolvedValue(undefined);
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			maximumConcurrentDispatches: 1,
+		});
+		try {
+			expect(await worker.tick()).toBe(1);
+			expect(mocks.dispatch).toHaveBeenCalledWith(
+				expect.objectContaining({ itemId: "turn-a" }),
+			);
+			expect(mocks.claimSandbox).not.toHaveBeenCalled();
+		} finally {
+			await worker.stop();
+		}
+	});
 	it("keeps the cursor after a short page and lets the Store wrap", async () => {
 		mocks.find
 			.mockResolvedValueOnce([

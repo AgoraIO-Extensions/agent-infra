@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 
 export function currentExecutionEvents(detail, conversationId, executionId) {
@@ -54,4 +55,80 @@ export function restoredHistoryPreservesEvents(
 		after.events.slice(0, before.events.length),
 		before.events,
 	);
+}
+
+export function assertAcceptance(
+	input,
+	events,
+	evidence,
+	preTerminalNativeMetadata,
+) {
+	const required = input.acceptance ?? {};
+	const reasoningEvents = events.filter(
+		(event) => event.type === "reasoning.delta",
+	);
+	const resultFiles = events.filter((event) => event.type === "result.file");
+	const toolOperations = events.filter(
+		(event) =>
+			event.type === "execution.operation" && event.payload?.kind === "tool",
+	);
+	const browserOperations = events.filter(
+		(event) =>
+			event.type === "execution.operation" &&
+			event.payload?.kind === "tool" &&
+			event.payload.browser !== undefined,
+	);
+	const browserHandoffs = events.filter(
+		(event) => event.type === "browser.handoff",
+	);
+	if (required.requireThinking)
+		assert(reasoningEvents.length > 0, "Expected real reasoning.delta events");
+	if (required.requireResultFile)
+		assert(resultFiles.length > 0, "Expected a real result.file event");
+	if (required.requireToolOperation)
+		assert(toolOperations.length > 0, "Expected a real tool operation event");
+	if (required.requireBrowserOperation)
+		assert(
+			browserOperations.length > 0,
+			"Expected a real Browser operation event",
+		);
+	if (required.requireBrowserHandoff)
+		assert(browserHandoffs.length > 0, "Expected a real browser.handoff event");
+	if (required.requiredToolId !== undefined)
+		assert(
+			toolOperations.some(
+				(event) => event.payload.toolId === required.requiredToolId,
+			),
+			`Expected tool operation ${required.requiredToolId}`,
+		);
+	const nativeMetadata = preTerminalNativeMetadata;
+	if (
+		required.requireSkillMetadata ||
+		required.requiredSkillName !== undefined
+	) {
+		assert(
+			Array.isArray(nativeMetadata?.capabilities),
+			"Expected Skill metadata from the active Execution",
+		);
+		if (required.requiredSkillName !== undefined)
+			assert(
+				nativeMetadata.capabilities.some(
+					(entry) =>
+						entry &&
+						typeof entry === "object" &&
+						entry.name === required.requiredSkillName,
+				),
+				`Expected Skill ${required.requiredSkillName} in native metadata`,
+			);
+	}
+	evidence.acceptance = {
+		reasoningDeltaCount: reasoningEvents.length,
+		resultFileCount: resultFiles.length,
+		toolOperationCount: toolOperations.length,
+		browserOperationCount: browserOperations.length,
+		browserHandoffCount: browserHandoffs.length,
+		...(nativeMetadata === undefined
+			? {}
+			: { skillMetadataCount: nativeMetadata.capabilities.length }),
+	};
 }

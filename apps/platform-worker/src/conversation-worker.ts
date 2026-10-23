@@ -564,7 +564,7 @@ export function createPlatformConversationWorkerV2(
 	}
 	const running = new Map<
 		string,
-		{ control: boolean; promise: Promise<void> }
+		{ control: boolean; sandbox: boolean; promise: Promise<void> }
 	>();
 	// #3089：Session Sandbox 准备任务认领等待的最近原因。同一任务每轮轮询都会重试认领，
 	// 只在原因变化时记录一次；记录只有固定标签，不含任务或会话 ID。
@@ -1021,7 +1021,29 @@ export function createPlatformConversationWorkerV2(
 			});
 		let launched = 0;
 		let lastBusinessItemId: string | undefined;
-		for (const item of items) {
+		// Keep one business slot available while Sandbox reconciliation is busy.
+		// Sandbox retries can be continuously due, so filling every dispatch slot
+		// with them would make a newly submitted Turn wait indefinitely. A worker
+		// configured with one slot keeps its existing behavior because there is no
+		// spare slot to reserve.
+		const maximumConcurrentSandboxes = Math.max(1, maximum - 1);
+		const orderedItems = [
+			...items.filter(
+				(item) =>
+					item.operation !== "conversation.sandbox.reconcile.v1" &&
+					item.operation !== "conversation.turn.stop.v1" &&
+					item.operation !== "conversation.browser.handoff.v1",
+			),
+			...items.filter(
+				(item) =>
+					item.operation === "conversation.turn.stop.v1" ||
+					item.operation === "conversation.browser.handoff.v1",
+			),
+			...items.filter(
+				(item) => item.operation === "conversation.sandbox.reconcile.v1",
+			),
+		];
+		for (const item of orderedItems) {
 			if (stopped || signal.aborted) break;
 			// Advance after every scanned item; the Store wraps deferred work on the next lap.
 			afterItemId = item.itemId;
@@ -1029,9 +1051,16 @@ export function createPlatformConversationWorkerV2(
 			const control =
 				item.operation === "conversation.turn.stop.v1" ||
 				item.operation === "conversation.browser.handoff.v1";
+			const sandbox = item.operation === "conversation.sandbox.reconcile.v1";
 			const count = [...running.values()].filter(
 				(entry) => entry.control === control,
 			).length;
+			if (
+				sandbox &&
+				[...running.values()].filter((entry) => entry.sandbox).length >=
+					maximumConcurrentSandboxes
+			)
+				continue;
 			// A busy streaming Turn cannot consume the capacity needed to stop it.
 			if (count >= (control ? 2 : maximum)) {
 				continue;
@@ -1044,7 +1073,7 @@ export function createPlatformConversationWorkerV2(
 					},
 				)
 				.finally(() => running.delete(item.itemId));
-			running.set(item.itemId, { control, promise });
+			running.set(item.itemId, { control, sandbox, promise });
 			if (!control) lastBusinessItemId = item.itemId;
 			launched += 1;
 		}
