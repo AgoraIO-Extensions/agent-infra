@@ -707,9 +707,8 @@ export function createWecomWebSocketV1(options: {
 					const deadline = AbortSignal.timeout(mediaReadTimeoutMs);
 					const read = await withinDeadline(input.read(deadline), deadline);
 					if (read.byteLength !== file.sizeBytes) return "failed";
-					// 读取可能耗时：上传前确认连接仍可用，断开后不再开始上传。
-					if (!authenticated || closed || ws.connectionId !== connectionId)
-						return "failed";
+					// 读取可能耗时：上传前再核对一次授权、连接与回复有效期，撤权后文件不离开平台。
+					if (!(await usable())) return "failed";
 					const uploaded = await client.uploadMedia(
 						Buffer.from(read.buffer, read.byteOffset, read.byteLength),
 						{ type: file.kind, filename: file.name },

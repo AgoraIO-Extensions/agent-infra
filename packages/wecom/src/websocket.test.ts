@@ -851,13 +851,26 @@ it("AC-5: does not read or upload after authorization is revoked, and never expo
 	).toBe("failed");
 	expect(reads).toBe(0);
 	expect(frames).toEqual([]);
+	// 读取期间撤权：文件不上传到企微。
+	let readChecks = 0;
+	expect(
+		await s.adapter.sender.sendMedia(
+			mediaInput(
+				s.message,
+				{ kind: "file", name: "report.pdf", bytes: fileBytes(64) },
+				{ revalidate: async () => ++readChecks === 1 },
+			),
+		),
+	).toBe("failed");
+	expect(readChecks).toBe(2);
+	expect(frames).toEqual([]);
 	// 上传完成后、被动回复前撤权：已上传的临时素材不被使用。
 	let checks = 0;
 	const result = await s.adapter.sender.sendMedia(
 		mediaInput(
 			s.message,
 			{ kind: "file", name: "report.pdf", bytes: fileBytes(64) },
-			{ revalidate: async () => ++checks === 1 },
+			{ revalidate: async () => ++checks <= 2 },
 		),
 	);
 	expect(result).toBe("failed");
