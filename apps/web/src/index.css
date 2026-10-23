@@ -4963,9 +4963,15 @@ body {
 	font-size: 12px;
 	line-height: 1.65;
 }
-.wecom-channel-card > [data-slot="alert"],
-.wecom-channel-card > .text-destructive {
+.wecom-channel-card > [data-slot="alert"] {
 	margin-top: 10px;
+}
+/* 设计 .wecom-channel-error：卡片内的校验与验证错误为单行红字，无边框、无图标（#3268 N8-2-10）。 */
+.wecom-channel-error {
+	margin-top: 10px;
+	color: color-mix(in oklch, var(--danger) 78%, var(--fg));
+	font-size: 12px;
+	line-height: 1.6;
 }
 .wecom-channel-callback {
 	margin-top: 10px;

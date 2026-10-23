@@ -180,6 +180,25 @@ describe("Agent configuration draft", () => {
 		).toBeUndefined();
 	});
 
+	// #3268 N8-2-11：模板限定名称时页面上是下拉，未选时说「请选择」；自由输入仍说「请输入」。
+	it("asks to choose a name when the template limits names to a list", () => {
+		expect(
+			configurationKeyError("", {
+				kind: "secret",
+				allowedNames: ["MODEL_API_KEY"],
+			}),
+		).toBe("请选择 Secret 名称。");
+		expect(
+			configurationKeyError(" ", {
+				kind: "environment",
+				allowedNames: ["LOG_LEVEL"],
+			}),
+		).toBe("请选择环境变量名。");
+		expect(configurationKeyError("", { kind: "secret" })).toBe(
+			"请输入 Secret 名称。",
+		);
+	});
+
 	it("preserves an explicit empty channel replacement", () => {
 		const request = buildAgentConfigurationRequest(
 			{

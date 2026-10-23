@@ -173,6 +173,28 @@ export function readFailureStateKind(
 	return failure.retryable ? "unavailable" : "unauthorized";
 }
 
+/**
+ * 「无法访问」卡（P-01）：无权限与不存在用同一张卡，只提供返回上级，不重试。读取失败的 403 / 404
+ * 与「读取成功但不是 Owner」（Owner 配置、Agent 的 Skill 页，#3268 N8-2-09）共用。
+ */
+export function AccessDeniedCard({
+	back,
+	description,
+}: {
+	/** 返回上级的链接。 */
+	back: ReactNode;
+	description: string;
+}) {
+	return (
+		<PageStateCard
+			kind="unauthorized"
+			title="无法访问"
+			description={description}
+			action={back}
+		/>
+	);
+}
+
 /** Agent 详情、申请详情、Owner 配置、Agent 的 Skill 与对话页共用的读取失败卡。 */
 export function ReadFailureCard({
 	failure,
@@ -199,14 +221,7 @@ export function ReadFailureCard({
 }) {
 	const kind = readFailureStateKind(failure);
 	if (kind === "unauthorized")
-		return (
-			<PageStateCard
-				kind="unauthorized"
-				title="无法访问"
-				description={deniedDescription}
-				action={back}
-			/>
-		);
+		return <AccessDeniedCard back={back} description={deniedDescription} />;
 	if (kind === "unavailable")
 		return (
 			<PageStateCard

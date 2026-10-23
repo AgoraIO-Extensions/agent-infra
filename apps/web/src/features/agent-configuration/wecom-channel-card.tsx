@@ -6,10 +6,10 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { FieldError } from "@/components/ui/field";
 import { useToast } from "@/components/ui/toast";
 import { withObjectName } from "@/lib/accessible-name";
 import type { ChipTone } from "@/lib/status-tone";
@@ -94,6 +94,15 @@ export function WecomChannelCard({
 			{children}
 		</section>
 	);
+}
+
+/**
+ * 卡片内的校验与验证错误（设计 p.wecom-channel-error[role=alert]，#3268 N8-2-10）：单行 12px 红字，
+ * 无边框、无图标，距上方内容 10px。借公共 FieldError 的 role="alert" 段落，颜色、行高与上距按
+ * 设计由 index.css `.wecom-channel-error` 覆盖（不分层的样式优先于 Tailwind 工具类）。
+ */
+export function WecomChannelError({ children }: { children: ReactNode }) {
+	return <FieldError className="wecom-channel-error">{children}</FieldError>;
 }
 
 /**
@@ -183,8 +192,6 @@ export function WecomUnbindFailure({
 	unbind: ReturnType<typeof useWecomUnbind>;
 }) {
 	return unbind.failed ? (
-		<Alert tone="danger" role="alert">
-			<AlertDescription>解除绑定未完成，请重试。</AlertDescription>
-		</Alert>
+		<WecomChannelError>解除绑定未完成，请重试。</WecomChannelError>
 	) : null;
 }

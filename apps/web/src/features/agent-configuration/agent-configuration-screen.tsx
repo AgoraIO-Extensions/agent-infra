@@ -1,7 +1,8 @@
+import { Link } from "@tanstack/react-router";
 import { CheckIcon, RefreshCw } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { useSubmitFocus } from "@/hooks/use-submit-focus";
 
@@ -11,6 +12,7 @@ import type {
 	AgentProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
 import type { BrowserSessionState } from "../browser-session.js";
+import { AccessDeniedCard } from "../page-state-card.js";
 import {
 	type AgentConfigurationRequestError,
 	type AgentDefaultRelayKeyState,
@@ -92,8 +94,11 @@ type AgentConfigurationScreenProps = {
 	/** 页脚操作的反馈（例如生命周期命令失败）。 */
 	footerFeedback?: ReactNode;
 	onSave: (body: ConfigurationSaveRequest) => void;
-	/** 重新读取默认 Key 状态与已保存 Key 候选（保存冲突后，RK2-09）。 */
-	onReloadSavedRelayKey?: () => void;
+	/**
+	 * 重新读取默认 Key 状态与已保存 Key 候选（保存冲突后，RK2-09）；两项都读到时返回 true，
+	 * 页面据此收起冲突提示并给出完成反馈（#3268 N8-2-07）。
+	 */
+	onReloadSavedRelayKey?: () => Promise<boolean>;
 	/** 替换或添加单个 Secret 的独立请求（O-10）。 */
 	onReplaceSecret?: (name: string, value: string) => Promise<AgentProjectionV2>;
 	/** 企微渠道独立解绑请求；不经过整页保存（O-01）。 */
@@ -108,24 +113,44 @@ type AgentConfigurationScreenProps = {
 	onRetrySavedRelayKeyCandidates?: () => void;
 	/** 返回 true 表示镜像升级已被受理。 */
 	onUpgradeImage: (imageReference: string) => Promise<boolean> | undefined;
+	/** 镜像升级失败（只在「镜像升级」分区内说明，不写页脚的保存失败，#3268 N8-2-06）。 */
+	imageError?: AgentConfigurationRequestError | null;
 	session: ConfigurationSessionState;
+	/** 整页配置保存进行中。 */
 	submitting: boolean;
+	/** 镜像升级进行中：不显示「保存中…」、不禁用整页字段，只暂停整页保存。 */
+	upgradingImage?: boolean;
 };
 
-function unavailableScreen() {
+/**
+ * 读到了 Agent 但不是 Owner（也不是系统管理员）：与读取失败的 403 / 404 一样用公共「无法访问」卡，
+ * 页头同路由读取失败时的「Owner 配置」，只提供「返回 Agent 详情」（P-01、#3268 N8-2-09）。
+ */
+function unavailableScreen(agentId: string) {
 	return (
-		<section aria-labelledby={configurationHeadingId} className="space-y-4">
-			{/* tabIndex=-1：读取失败后「重新登录」「重新加载配置」恢复到此状态时焦点落在标题上。 */}
-			<h1
-				id={configurationHeadingId}
-				tabIndex={-1}
-				className="font-semibold text-[28px]"
-			>
-				配置不可用
-			</h1>
-			<Alert tone="warn">
-				<AlertDescription>当前无法访问此配置。</AlertDescription>
-			</Alert>
+		<section aria-labelledby={configurationHeadingId}>
+			<header className="page-heading">
+				<div>
+					{/* tabIndex=-1：读取失败后「重新登录」「重新加载配置」恢复到此状态时焦点落在标题上。 */}
+					<h1 id={configurationHeadingId} tabIndex={-1}>
+						Owner 配置
+					</h1>
+				</div>
+			</header>
+			<AccessDeniedCard
+				description="只有当前 Owner 可以修改这个 Agent 的配置。"
+				back={
+					// exact：/agents/$agentId 是当前地址的前缀，不让 Link 补 aria-current（N-21）。
+					<Link
+						activeOptions={{ exact: true }}
+						className={buttonVariants({ variant: "outline" })}
+						params={{ agentId }}
+						to="/agents/$agentId"
+					>
+						返回 Agent 详情
+					</Link>
+				}
+			/>
 		</section>
 	);
 }
@@ -219,8 +244,10 @@ export function AgentConfigurationScreen({
 	onRetrySavedRelayKeyCandidates,
 	onUnbindChannel,
 	onUpgradeImage,
+	imageError = null,
 	session,
 	submitting,
+	upgradingImage = false,
 }: AgentConfigurationScreenProps) {
 	const toast = useToast();
 	const [draft, setDraft] = useState(() => configurationDraftFromAgent(agent));
@@ -236,6 +263,14 @@ export function AgentConfigurationScreen({
 	// 保存成功后按新投影重建选择器。
 	const [resetCount, setResetCount] = useState(0);
 	const [focusUnchangedHint, setFocusUnchangedHint] = useState(false);
+	// 保存冲突（saved-model 409）后「重新读取可用模型」：读取中按钮可聚焦地禁用；读到后收起这条冲突
+	// 提示，改为「可用模型已更新，请确认后保存。」并把焦点交给模型选择器（没有时交给保存按钮）；
+	// 读取失败时提示保留、焦点留在按钮上（#3268 N8-2-07）。
+	const [reloadingSavedModels, setReloadingSavedModels] = useState(false);
+	const [resolvedConflict, setResolvedConflict] =
+		useState<AgentConfigurationRequestError | null>(null);
+	const [savedModelsReloaded, setSavedModelsReloaded] = useState(false);
+	const [focusAfterReload, setFocusAfterReload] = useState(false);
 	const fieldsetRef = useRef<HTMLFieldSetElement>(null);
 	const saveRef = useRef<HTMLButtonElement>(null);
 	const submittedResult =
@@ -272,8 +307,16 @@ export function AgentConfigurationScreen({
 		setFocusUnchangedHint(false);
 		document.getElementById("agent-configuration-unchanged")?.focus();
 	}, [focusUnchangedHint, submitting]);
+	useEffect(() => {
+		if (!focusAfterReload) return;
+		setFocusAfterReload(false);
+		const picker = document
+			.getElementById(savedModelPickerId)
+			?.querySelector<HTMLElement>('[role="checkbox"]');
+		(picker ?? saveRef.current)?.focus();
+	}, [focusAfterReload]);
 
-	if (!isOwner) return unavailableScreen();
+	if (!isOwner) return unavailableScreen(agent.agentId);
 
 	// 目录缺少 Owner 记录或读取失败时，chip 仍显示 Agent 投影中的 Owner 显示名。
 	const ownerLabels = Object.fromEntries(
@@ -287,7 +330,9 @@ export function AgentConfigurationScreen({
 		savedRelayKeyCandidates !== undefined &&
 		savedRelayKeyCandidates.length > 0;
 	const submitConfiguration = () => {
-		if (isDisabled || !hasChanges) return;
+		// 镜像升级在途时整页保存暂停（同一个 mutation 一次只受理一个命令）。
+		if (isDisabled || !hasChanges || upgradingImage) return;
+		setSavedModelsReloaded(false);
 		const request = buildAgentConfigurationRequest(draft, agent);
 		if (!request.coOwnerIds?.length) {
 			setOwnerError("请选择至少一名有效 Owner。");
@@ -357,7 +402,26 @@ export function AgentConfigurationScreen({
 				: withoutModels,
 		);
 	};
-	const failure = commandError ? saveFailure(commandError, savePath) : null;
+	const failure =
+		commandError && commandError !== resolvedConflict
+			? saveFailure(commandError, savePath)
+			: null;
+	const reloadSavedModels = async () => {
+		if (!onReloadSavedRelayKey || reloadingSavedModels) return;
+		const conflict = commandError;
+		setReloadingSavedModels(true);
+		let reloaded = false;
+		try {
+			reloaded = (await onReloadSavedRelayKey()) === true;
+		} catch {
+			reloaded = false;
+		}
+		setReloadingSavedModels(false);
+		if (!reloaded) return;
+		setResolvedConflict(conflict);
+		setSavedModelsReloaded(true);
+		setFocusAfterReload(true);
+	};
 
 	return (
 		<section
@@ -374,9 +438,9 @@ export function AgentConfigurationScreen({
 						submitConfiguration();
 					}}
 				>
-					{/* 「镜像升级」与页脚在 fieldset 之外：保存或升级进行中，其余字段由 fieldset 禁用，
-					    触发按钮仍可聚焦（aria-disabled），焦点不落到 body（#3242 K7-02）。两者各自接收
-					    isDisabled，已停用的 Agent 仍整页禁用。 */}
+					{/* 「镜像升级」与页脚在 fieldset 之外：保存进行中其余字段由 fieldset 禁用，触发按钮仍可
+					    聚焦（aria-disabled），焦点不落到 body（#3242 K7-02）；镜像升级进行中只禁用本分区，
+					    不禁用整页字段（#3268 N8-2-06）。两者各自接收 isDisabled，已停用的 Agent 仍整页禁用。 */}
 					<fieldset
 						ref={fieldsetRef}
 						disabled={isDisabled}
@@ -484,8 +548,9 @@ export function AgentConfigurationScreen({
 						<ConfigurationImageSection
 							agent={agent}
 							disabled={isDisabled}
+							error={imageError}
 							onUpgradeImage={onUpgradeImage}
-							submitting={submitting}
+							upgrading={upgradingImage}
 						/>
 					) : null}
 					<div className="form-footer configuration-form-footer">
@@ -497,15 +562,25 @@ export function AgentConfigurationScreen({
 										<Button
 											type="button"
 											variant="outline"
-											// 页脚在 fieldset 之外：保存进行中或 Agent 已停用时同样禁用。
-											disabled={isDisabled}
-											onClick={onReloadSavedRelayKey}
+											// 页脚在 fieldset 之外：保存进行中或 Agent 已停用时同样禁用；读取中是可聚焦的
+											// 禁用，焦点留在按钮上。
+											disabled={isDisabled || reloadingSavedModels}
+											focusableWhenDisabled={reloadingSavedModels}
+											onClick={() => void reloadSavedModels()}
 										>
 											<RefreshCw aria-hidden="true" data-icon="inline-start" />
-											重新读取可用模型
+											{reloadingSavedModels
+												? "正在重新读取…"
+												: "重新读取可用模型"}
 										</Button>
 									</AlertAction>
 								) : null}
+							</Alert>
+						) : savedModelsReloaded ? (
+							<Alert tone="info" role="status">
+								<AlertDescription>
+									可用模型已更新，请确认后保存。
+								</AlertDescription>
 							</Alert>
 						) : null}
 						{hasChanges || isDisabled ? null : (
@@ -524,7 +599,8 @@ export function AgentConfigurationScreen({
 								aria-describedby={
 									hasChanges ? undefined : "agent-configuration-unchanged"
 								}
-								disabled={isDisabled || !hasChanges}
+								// 镜像升级在途时暂停保存，但不显示「保存中…」（#3268 N8-2-06）。
+								disabled={isDisabled || !hasChanges || upgradingImage}
 								// 只有保存进行中是可聚焦的禁用；没有变更或 Agent 已停用时仍为原生禁用。
 								focusableWhenDisabled={submitting}
 								type="submit"

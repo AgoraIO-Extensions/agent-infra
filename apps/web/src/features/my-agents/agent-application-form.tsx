@@ -9,7 +9,11 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Field, FieldLegend } from "@/components/ui/field";
+import {
+	Field,
+	FieldLegend,
+	FieldError as SharedFieldError,
+} from "@/components/ui/field";
 import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,6 +25,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { useRowRemovalFocus } from "@/hooks/use-row-removal-focus";
 import { useSubmitFocus } from "@/hooks/use-submit-focus";
 import { withObjectName } from "@/lib/accessible-name";
 import { cjkSpaced } from "@/lib/cjk-spacing";
@@ -106,7 +111,7 @@ type DraftField<T extends string> = {
 
 type DraftRowsProps<T extends string> = {
 	fields: readonly DraftField<T>[];
-	idPrefix: string;
+	idPrefix: "environment" | "secret";
 	label: string;
 	minimumRows?: number;
 	onChange: (index: number, key: T, value: string) => void;
@@ -115,7 +120,12 @@ type DraftRowsProps<T extends string> = {
 	rows: readonly Record<T, string>[];
 };
 
+/** 申请提交失败的页面提示（`agent-application-submission-screen.tsx`）：服务端整表校验失败时焦点到这里。 */
+export const applicationSubmissionErrorId = "application-submission-error";
+
 function fieldId(key: string) {
+	// 多服务 YAML 的错误落在文本框上（#3268 N8-2-04）；上方文件输入另有自己的 id。
+	if (key === "manifest") return "application-multi-service-manifest";
 	if (key === "defaultModelOptionId") return "application-default-model-option";
 	if (key === "defaultReasoningLevel")
 		return "application-default-reasoning-level";
@@ -141,6 +151,16 @@ function fieldId(key: string) {
 function errorId(key: string) {
 	return `${fieldId(key)}-error`;
 }
+
+/** 可重复行的「移除」与「添加」按钮（移除后交出焦点的目标，D2-59、#3268 N8-2-01）。 */
+const rowRemoveId =
+	(prefix: "environment" | "secret" | "model") => (index: number) =>
+		`application-${prefix}-${index}-remove`;
+const rowAddId = {
+	environment: "application-add-environment",
+	secret: "application-add-secret",
+	model: "application-add-model-option",
+} as const;
 
 function describedBy(...ids: (string | undefined)[]) {
 	return ids.filter(Boolean).join(" ") || undefined;
@@ -170,7 +190,7 @@ function firstFieldError(errors: AgentApplicationFieldErrors) {
 	};
 	const fallback =
 		document.getElementById("application-deployment-status") ??
-		document.getElementById("application-add-model-option");
+		document.getElementById(rowAddId.model);
 	return controls.find(isActionable) ?? fallback;
 }
 
@@ -253,17 +273,13 @@ function recomputeDuplicateModelErrors(
 	}
 }
 
-// 设计 .field-error：12px / 1.5 / --danger-ink，与上方控件之间是字段 gap 7px + 6px 外边距；
-// 校验结果礼貌播报，不打断读屏（焦点已移到首个错误字段）。
+// 设计 .field-error：样式取公共 FieldError（12px / 1.5 / --danger-ink，上距 6px，#3268 N8-2-02）；
+// 校验结果礼貌播报，不打断读屏（焦点已移到首个错误字段），所以不用默认的 role="alert"。
 function FieldError({ id, message }: { id: string; message?: string }) {
 	return message ? (
-		<p
-			aria-live="polite"
-			className="field-error mt-[6px] text-(--danger-ink) text-[12px] leading-[1.5]"
-			id={id}
-		>
+		<SharedFieldError announce="polite" className="field-error" id={id}>
 			{message}
-		</p>
+		</SharedFieldError>
 	) : null;
 }
 
@@ -535,6 +551,7 @@ function ModelRows({
 								variant="outline"
 								aria-label={withObjectName("移除模型选项", rowName)}
 								className="model-remove self-end"
+								id={rowRemoveId("model")(index)}
 								onClick={() => onRemove(index)}
 								type="button"
 							>
@@ -646,6 +663,7 @@ function DraftRows<T extends string>({
 								variant="outline"
 								aria-label={withObjectName(cjkSpaced`移除${label}`, rowName)}
 								className="self-end"
+								id={rowRemoveId(idPrefix)(index)}
 								onClick={() => onRemove(index)}
 								type="button"
 							>
@@ -662,17 +680,19 @@ function DraftRows<T extends string>({
 }
 
 export function AgentApplicationForm(props: AgentApplicationFormProps) {
-	const formRef = useRef<HTMLFormElement>(null);
 	const fieldsetRef = useRef<HTMLFieldSetElement>(null);
 	const submitRef = useRef<HTMLButtonElement>(null);
 	// 提交进行中「提交审批」「修改申请」「修改并重新提交」是可聚焦的禁用；在字段里按 Enter 提交时
 	// 先把焦点交给它（字段随 fieldset 禁用），受理后结果页聚焦「申请已提交：待审批。」（H4-13、
 	// D2-59、#3242 K7-02）。
 	useSubmitFocus(props.submitting, fieldsetRef, submitRef);
+	// 移除模型选项、环境变量或 Secret 的行后，焦点到同一位置下一行的「移除」，没有时到上一行，
+	// 都没有时到对应的「添加…」（D2-59、#3268 N8-2-01）。
+	const focusAfterRemoval = useRowRemovalFocus();
 	const [focusRequest, setFocusRequest] = useState(0);
 	const focusStateRef = useRef<{
 		focusRequest: number;
-		formError?: string;
+		formError?: boolean;
 		serverCode?: string;
 		advancedConfigurationOpen: boolean;
 	}>({ advancedConfigurationOpen: false, focusRequest: -1 });
@@ -1025,10 +1045,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		serverValidationDismissed,
 		sourceKind,
 	]);
+	// 服务端整表校验失败：说明只在页面顶部的提交失败提示里出现一次，这里只用来移交焦点并拦住
+	// 未修改的重复提交（#3268 N8-2-03）。
 	const serverFormError =
-		props.serverError?.code === "INVALID_REQUEST" && !serverValidationDismissed
-			? "申请内容未通过服务端校验，请检查表单后重试。"
-			: undefined;
+		props.serverError?.code === "INVALID_REQUEST" && !serverValidationDismissed;
 	const hasActiveServerValidationError =
 		props.serverError?.code === "MODEL_SELECTION_INVALID" &&
 		!serverValidationDismissed;
@@ -1372,7 +1392,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			return;
 		const first = firstFieldError(fieldErrors);
 		if (first instanceof HTMLElement) first.focus();
-		else if (serverFormError) formRef.current?.focus();
+		// 整表校验失败只由页面顶部的提交失败提示说明一次（role=alert），焦点交给它，不落到整张表单
+		// （#3268 N8-2-03）。
+		else if (serverFormError)
+			document.getElementById(applicationSubmissionErrorId)?.focus();
 	}, [
 		advancedConfigurationOpen,
 		fieldErrors,
@@ -1423,10 +1446,15 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			const parsed = parseMultiServiceManifest(manifest);
 			if (!parsed.ok) errors.manifest = parsed.message;
 		}
+		// 拦截文案区分「还没检查」「检查过但没有可用模型」与「还没选好模型」（#3268 N8-2-05）。
 		if (managedModelEdit && !keyCheck.replacement)
-			errors.defaultRelayKey = keyCheck.typed
-				? "请先点击「检查可用模型」并选好模型（至少一个模型，每个模型至少一个推理档位）。"
-				: "请输入 Agent 默认 Relay Key。";
+			errors.defaultRelayKey = !keyCheck.typed
+				? "请输入 Agent 默认 Relay Key。"
+				: keyCheck.noCandidates
+					? "该 Key 没有此模板可用的模型，请换一个 Key 后重新检查。"
+					: keyCheck.checked
+						? "请在下方选好模型（至少一个模型，每个模型至少一个推理档位）。"
+						: "请先点击「检查可用模型」并选好模型（至少一个模型，每个模型至少一个推理档位）。";
 		setFieldErrors(errors);
 		setFocusRequest((current) => current + 1);
 		if (
@@ -1452,26 +1480,14 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 
 	return (
 		<form
-			ref={formRef}
 			noValidate
-			aria-describedby={serverFormError ? "application-form-error" : undefined}
 			className="application-form"
 			onSubmit={(event) => {
 				event.preventDefault();
 				if (props.submitting) return;
 				submit();
 			}}
-			tabIndex={serverFormError ? -1 : undefined}
 		>
-			{serverFormError ? (
-				<p
-					aria-live="assertive"
-					className="text-destructive text-sm"
-					id="application-form-error"
-				>
-					{serverFormError}
-				</p>
-			) : null}
 			{/* 页脚在 fieldset 之外：提交进行中字段由 fieldset 禁用，提交按钮仍可聚焦（aria-disabled），
 			    焦点不落到 body（#3242 K7-02）。 */}
 			<fieldset
@@ -1729,6 +1745,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 												(_, itemIndex) => itemIndex !== index,
 											);
 											setModels(next);
+											// 只剩一个模型选项时没有「移除」，焦点到「添加模型选项」。
+											focusAfterRemoval(
+												index,
+												rowRemoveId("model"),
+												rowAddId.model,
+											);
 											setFieldErrors((current) => {
 												const nextErrors = reindexRowErrors(
 													current,
@@ -1860,7 +1882,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									</div>
 									<Button
 										variant="outline"
-										id="application-add-model-option"
+										id={rowAddId.model}
 										onClick={() => {
 											dismissServerFormError();
 											setModels((current) => [...current, blankModel()]);
@@ -1937,6 +1959,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										(_, itemIndex) => itemIndex !== index,
 									);
 									setEnvironment(next);
+									focusAfterRemoval(
+										index,
+										rowRemoveId("environment"),
+										rowAddId.environment,
+									);
 									setFieldErrors((current) => {
 										const nextErrors = reindexRowErrors(
 											current,
@@ -1955,6 +1982,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							/>
 							<Button
 								variant="outline"
+								id={rowAddId.environment}
 								onClick={() => {
 									dismissServerFormError();
 									setEnvironment((current) => [...current, blankEnvironment()]);
@@ -2009,6 +2037,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										(_, itemIndex) => itemIndex !== index,
 									);
 									setSecrets(next);
+									focusAfterRemoval(
+										index,
+										rowRemoveId("secret"),
+										rowAddId.secret,
+									);
 									setFieldErrors((current) => {
 										const nextErrors = reindexRowErrors(
 											current,
@@ -2023,6 +2056,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							/>
 							<Button
 								variant="outline"
+								id={rowAddId.secret}
 								onClick={() => {
 									dismissServerFormError();
 									setSecrets((current) => [...current, blankEnvironment()]);

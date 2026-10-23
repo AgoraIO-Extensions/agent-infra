@@ -20,12 +20,19 @@ import type {
 	DeploymentConfigurationProjectionV2,
 	SkillHubAgentBindingStatusV1,
 } from "../src/pilot/generated-v2/types.gen";
-import { expectFocusSettled, expectNoDuplicateControls } from "./page-health";
+import {
+	expectFocusableBusy,
+	expectFocusSettled,
+	expectNoDuplicateControls,
+	pinElement,
+} from "./page-health";
 import {
 	computed,
 	expectCleanPage,
 	expectPointerButtons,
+	expectPublicFieldError,
 	expectSkillDialog,
+	expectWecomCardError,
 	resolved,
 	trackPageErrors,
 } from "./primitive-styles";
@@ -1576,7 +1583,14 @@ for (const role of ["admin", "employee"] as const) {
 			page.getByRole("region", { name: "Skill", exact: true }),
 		).toHaveCount(0);
 		await page.goto("/agents/agent-pilot-1/skills");
-		await expect(main(page)).toContainText("没有权限");
+		// 需求变化（#3268 N8-2-09）：无权限改用公共「无法访问」卡（原为 warn 提示「没有权限」），页头不再
+		// 给对非 Owner 是死路的「返回 Owner 配置」。
+		await expect(
+			main(page).getByRole("heading", { name: "无法访问" }),
+		).toBeVisible();
+		await expect(
+			main(page).getByRole("link", { name: "返回 Owner 配置" }),
+		).toHaveCount(0);
 		const back = main(page).getByRole("link", { name: "返回 Agent 详情" });
 		await expect(back).toHaveAttribute("href", "/agents/agent-pilot-1");
 		// /agents/agent-pilot-1 是当前地址的前缀：返回链接不是当前页，且走路由跳转。
@@ -2465,4 +2479,280 @@ test("re-reading saved-Key models keeps focus off body and returns it to the ret
 	);
 	await expectCleanPage(page, pageErrors);
 	await noHorizontalOverflow(page);
+});
+
+// #3268 N8-2-02 / N8-2-10：Owner 配置里目录选择器与企微应用逐字段的错误是同一套公共 FieldError；
+// 企微机器人、企微应用卡片的总提示是导出稿的单行错误行，不再是 Alert 框。两视口一致。
+test("directory and WeCom field errors share the public field error, WeCom card errors are one line (#3268 N8-2-02 / N8-2-10)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await ownerConfigFixture(page);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const form = main(page);
+
+	// 共同 Owner 目录选择器：移除唯一的 Owner 后保存，错误仍用 assertive 的 live region 播报。
+	await form
+		.getByRole("button", { name: /^从共同 Owner 用户移除 / })
+		.first()
+		.click();
+	await page.getByRole("button", { name: "保存配置", exact: true }).click();
+	const ownerError = form.getByText("请选择至少一名有效 Owner。", {
+		exact: true,
+	});
+	await expectPublicFieldError(page, ownerError);
+	await expect(ownerError).toHaveAttribute("aria-live", "assertive");
+	await expect(
+		form.getByRole("combobox", { name: "共同 Owner 用户" }),
+	).toHaveAttribute("aria-describedby", /\S/);
+
+	// 企微机器人：缺字段时只有一条单行错误。
+	const bot = form.getByRole("region", { name: "企微机器人", exact: true });
+	await bot
+		.getByRole("button", { name: "验证并绑定：企微机器人", exact: true })
+		.click();
+	const botError = bot.getByRole("alert");
+	await expect(botError).toHaveText("请填写 Bot ID、Secret，并确认连接影响。");
+	await expectWecomCardError(page, botError);
+
+	// 企微应用：逐字段错误为公共 FieldError（总提示已播报，字段错误不再另设 role），总提示为单行错误行。
+	const app = form.getByRole("region", { name: "企微应用", exact: true });
+	await app
+		.getByRole("button", { name: "验证并绑定：企微应用", exact: true })
+		.click();
+	const appError = app.getByRole("alert");
+	await expect(appError).toHaveText("请检查标出的字段并确认连接影响。");
+	await expectWecomCardError(page, appError);
+	for (const [id, text] of [
+		["wecom-app-corporation-id-error", "请填写符合格式的值。"],
+		["wecom-app-encoding-aes-key-error", "请填写符合格式的值。"],
+		["wecom-app-takeover-error", "请确认连接影响。"],
+	] as const) {
+		const fieldError = app.locator(`#${id}`);
+		await expect(fieldError).toHaveText(text);
+		await expectPublicFieldError(page, fieldError);
+		await expect(fieldError).not.toHaveAttribute("role", /.*/);
+	}
+	await expect(app.getByLabel("企业 ID", { exact: true })).toHaveAttribute(
+		"aria-describedby",
+		"wecom-app-corporation-id-error",
+	);
+	await expectNoDuplicateControls(page, "Owner 配置（字段错误，#3268）");
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
+});
+
+// #3268 N8-2-01：移除环境变量的行后，焦点到同一位置下一行的「移除」，没有下一行时到上一行，没有行时到
+// 「添加环境变量」；之后多次采样仍在，不落到 body（D2-59）。两视口一致。
+test("removing an environment row hands focus to the neighbouring remove button or 添加环境变量 (#3268 N8-2-01)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	await ownerConfigFixture(page);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const section = page.getByRole("region", {
+		name: "环境变量与 Secret",
+		exact: true,
+	});
+	const add = section.getByRole("button", { name: "添加环境变量" });
+	const remove = (row: number) =>
+		section.getByRole("button", { name: `移除：环境变量 ${row}`, exact: true });
+
+	// 删最后一行：到上一行的「移除」。
+	await add.click();
+	await expect(remove(2)).toBeVisible();
+	await remove(2).focus();
+	await page.keyboard.press("Enter");
+	await expect(remove(2)).toHaveCount(0);
+	await expectFocusSettled(remove(1), "移除：环境变量 2");
+
+	// 删第一行：下一行移到同一位置，焦点在它的「移除」上。
+	await add.click();
+	await section
+		.getByRole("combobox", { name: "环境变量名：环境变量 2" })
+		.selectOption("LOG_LEVEL");
+	await remove(1).click();
+	await expect(remove(2)).toHaveCount(0);
+	await expect(
+		section.getByRole("combobox", { name: "环境变量名：环境变量 1" }),
+	).toHaveValue("LOG_LEVEL");
+	await expectFocusSettled(remove(1), "移除：环境变量 1");
+
+	// 删唯一一行：到「添加环境变量」。
+	await page.keyboard.press("Enter");
+	await expect(remove(1)).toHaveCount(0);
+	await expectFocusSettled(add, "移除最后一个环境变量");
+	await expectNoDuplicateControls(page, "Owner 配置（移除环境变量，#3268）");
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
+});
+
+// #3268 N8-2-07：保存时验证冲突（saved-model 409）后「重新读取可用模型」读取中保持可聚焦；读到后收起冲突
+// 提示，改为「可用模型已更新，请确认后保存。」（role=status），焦点交给模型选择器，之后多次采样仍在；
+// 再次保存成功。读取失败时冲突提示保留、焦点留在按钮上。两视口一致。
+test("re-reading models after a saved-model conflict collapses the conflict and focuses the picker (#3268 N8-2-07)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const api = await ownerConfigFixture(page, { keySet: true });
+	let conflicts = 0;
+	await page.route(
+		"**/api/v2/agents/agent-pilot-1/configuration/saved-model",
+		async (route) => {
+			if (route.request().method() !== "PUT" || conflicts > 0)
+				return route.fallback();
+			conflicts += 1;
+			await route.fulfill(unavailable(409, false));
+		},
+	);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const models = page.getByRole("region", { name: "模型与凭证", exact: true });
+	const picker = models.locator('[data-slot="keyless-model-picker"]');
+	await picker
+		.getByRole("checkbox", {
+			name: "Relay · Internal · gpt-5-mini",
+			exact: true,
+		})
+		.click();
+	const footer = page.locator(".configuration-form-footer");
+	const save = footer.getByRole("button", { name: "保存配置", exact: true });
+	await save.click();
+	const conflict = footer.getByRole("alert");
+	await expect(conflict).toHaveText(
+		/默认 Key 或配置已更新，请重新读取可用模型后再保存。/,
+	);
+	const reload = await pinElement(
+		conflict.getByRole("button", { name: "重新读取可用模型" }),
+		"reload-saved-models",
+	);
+
+	// 读取失败：冲突提示保留，焦点留在按钮上。
+	api.savedMode("error");
+	api.hold("saved-candidates");
+	await reload.focus();
+	await page.keyboard.press("Enter");
+	await expect(reload).toHaveText("正在重新读取…");
+	await expectFocusableBusy(reload, "重新读取可用模型");
+	api.release("saved-candidates");
+	await expect(reload).toHaveText("重新读取可用模型");
+	await expect(conflict).toBeVisible();
+	await expectFocusSettled(reload, "重新读取可用模型（失败）");
+
+	// 读取成功：冲突提示收起，完成反馈为 status，焦点到模型选择器。
+	api.savedMode("same");
+	await page.keyboard.press("Enter");
+	await expect(footer.getByRole("alert")).toHaveCount(0);
+	await expect(footer.getByRole("status")).toHaveText(
+		"可用模型已更新，请确认后保存。",
+	);
+	await expectFocusSettled(
+		picker.getByRole("checkbox").first(),
+		"重新读取可用模型（成功）",
+		[100, 500, 1500],
+	);
+
+	// 再次保存：完成后提示收起，焦点到「没有需要保存的变更。」。
+	await save.click();
+	await expect(toast(page)).toHaveText("配置已保存，Secret 值不会回显");
+	await expect(footer.getByRole("status")).toHaveCount(0);
+	await expect(page.locator("#agent-configuration-unchanged")).toBeFocused();
+	expect(conflicts).toBe(1);
+	expect(
+		api.commands.filter(({ path }) =>
+			path.endsWith("/configuration/saved-model"),
+		).length,
+	).toBe(1);
+	await expectNoDuplicateControls(page, "Owner 配置（保存冲突后重读，#3268）");
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
+});
+
+// #3268 N8-2-09：在使用范围内但不是 Owner 的员工打开 Owner 配置与 Agent 的 Skill 页，都是公共「无法访问」卡
+// （与读取失败的 403 / 404 同一张卡），唯一的返回入口是「返回 Agent 详情」；Skill 页不再给指向死路的
+// 「返回 Owner 配置」。无权限是静态边界，不设 role=alert。两视口一致。
+test("a non-Owner employee gets the shared 无法访问 card on Owner configuration and Skill pages (#3268 N8-2-09)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const api = await ownerConfigFixture(page, { role: "employee" });
+	for (const [path, description] of [
+		[
+			"/agents/agent-pilot-1/configuration",
+			"只有当前 Owner 可以修改这个 Agent 的配置。",
+		],
+		[
+			"/agents/agent-pilot-1/skills",
+			"只有当前 Owner 可以管理这个 Agent 的 Skill 绑定。",
+		],
+	] as const) {
+		await page.goto(path);
+		const card = main(page).locator('[data-kind="unauthorized"]');
+		await expect(card.getByRole("heading", { name: "无法访问" })).toBeVisible();
+		await expect(card).toContainText(description);
+		await expect(main(page).getByRole("alert")).toHaveCount(0);
+		const links = main(page).getByRole("link");
+		await expect(links).toHaveText(["返回 Agent 详情"]);
+		await expect(links.first()).toHaveAttribute(
+			"href",
+			"/agents/agent-pilot-1",
+		);
+		await expect(links.first()).not.toHaveAttribute("aria-current", /.*/);
+		await expect(main(page).getByRole("button")).toHaveCount(0);
+		await expectNoDuplicateControls(page, `${path}（无法访问，#3268）`);
+		await noHorizontalOverflow(page);
+	}
+	// 返回入口走路由跳转，到达 Agent 详情。
+	const documents = await markSinglePageNavigation(page);
+	await main(page).getByRole("link", { name: "返回 Agent 详情" }).click();
+	await expect(page).toHaveURL(/\/agents\/agent-pilot-1$/);
+	await expect(
+		page.getByRole("heading", { level: 1, name: "Release assistant" }),
+	).toBeVisible();
+	await expectNoDocumentNavigation(page, documents);
+	expect(api.commands).toEqual([]);
+	await expectCleanPage(page, pageErrors);
+});
+
+// #3268 N8-2-11：「添加 Secret」弹窗的名称是模板限定的下拉，未选就提交时错误说「请选择 Secret 名称。」，
+// 焦点在下拉上，错误为公共 FieldError；环境变量名的下拉同一规则。两视口一致。
+test("template-limited name selects ask to choose a name instead of typing one (#3268 N8-2-11)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const api = await ownerConfigFixture(page);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const section = page.getByRole("region", {
+		name: "环境变量与 Secret",
+		exact: true,
+	});
+	await section.getByRole("button", { name: "添加 Secret" }).click();
+	const dialog = page.getByRole("dialog", { name: "添加 Secret" });
+	const name = dialog.getByRole("combobox", { name: "Secret 名称" });
+	await expect(name).toBeFocused();
+	await dialog.getByRole("button", { name: "保存 Secret" }).click();
+	const error = dialog.locator('[data-slot="field-error"]');
+	await expect(error).toHaveText("请选择 Secret 名称。");
+	await expectPublicFieldError(page, error);
+	await expect(name).toHaveAttribute("aria-invalid", "true");
+	await expectFocusSettled(name, "添加 Secret 未选名称");
+	await dialog.getByRole("button", { name: "取消" }).click();
+	await expect(dialog).toHaveCount(0);
+
+	await section.getByRole("button", { name: "添加环境变量" }).click();
+	await page.getByRole("textbox", { name: "值：环境变量 2" }).fill("debug");
+	await page.getByRole("button", { name: "保存配置", exact: true }).click();
+	const environmentError = section.locator(
+		"#configuration-environment-error-1",
+	);
+	await expect(environmentError).toHaveText("请选择环境变量名。");
+	await expect(
+		section.getByRole("combobox", { name: "环境变量名：环境变量 2" }),
+	).toBeFocused();
+	expect(api.commands).toEqual([]);
+	await expectCleanPage(page, pageErrors);
 });

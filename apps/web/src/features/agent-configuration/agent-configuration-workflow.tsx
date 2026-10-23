@@ -68,9 +68,19 @@ function AgentConfigurationWorkflowContent({
 	const submission = useAgentConfigurationSubmission(agent.agentId);
 	// 整页只有一个生命周期 mutation，页脚、危险区与管理员区共享进行中状态（NI-88）。
 	const lifecycle = useConfigurationLifecycle(agent, session.state);
-	const commandError = submission.isError
-		? requestFailure(submission.error)
-		: null;
+	// 整页保存与镜像升级共用一个 mutation（同一时刻只有一个在途），进行中与失败按命令种类分开：
+	// 「保存中…」与 fieldset 禁用只属于配置保存，镜像升级的进行中与失败只在「镜像升级」分区内
+	// （#3268 N8-2-06）。
+	const pendingKind = submission.isPending
+		? submission.variables?.kind
+		: undefined;
+	const failedKind = submission.isError
+		? submission.variables?.kind
+		: undefined;
+	const commandError =
+		failedKind === "configuration" ? requestFailure(submission.error) : null;
+	const imageError =
+		failedKind === "image" ? requestFailure(submission.error) : null;
 	const isConfigurationOwner =
 		session.state.kind === "ready" &&
 		isAgentConfigurationOwner(agent, session.state.session);
@@ -192,16 +202,21 @@ function AgentConfigurationWorkflowContent({
 			onRetrySavedRelayKeyCandidates={() =>
 				void savedRelayKeyCandidates.refetch()
 			}
-			onReloadSavedRelayKey={() => {
-				void defaultRelayKey.refetch();
-				void savedRelayKeyCandidates.refetch();
+			onReloadSavedRelayKey={async () => {
+				const [keyState, candidates] = await Promise.all([
+					defaultRelayKey.refetch(),
+					savedRelayKeyCandidates.refetch(),
+				]);
+				return keyState.isSuccess && candidates.isSuccess;
 			}}
 			onReplaceSecret={submission.replaceSecret}
 			onSave={submission.saveConfiguration}
 			onUnbindChannel={submission.unbindWecomChannel}
+			imageError={imageError}
 			onUpgradeImage={submission.upgradeImage}
 			session={session.state}
-			submitting={submission.isPending}
+			submitting={pendingKind === "configuration"}
+			upgradingImage={pendingKind === "image"}
 		/>
 	);
 }

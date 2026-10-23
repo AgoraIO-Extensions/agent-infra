@@ -50,7 +50,9 @@ import {
 	expectNativeSelectArrow,
 	expectNoLegendOnBorder,
 	expectPageHeadTop,
+	expectPublicFieldError,
 	expectSearchInput,
+	expectWecomCardError,
 	resolved,
 	trackPageErrors,
 } from "./primitive-styles";
@@ -1704,12 +1706,22 @@ test("employee has no Owner or administrator controls, with loading and error st
 	).toHaveCount(0);
 	await page.goto("/agents/agent-pilot-1/configuration");
 	// 无权访问是首屏静态边界（B-10 角色规则①），显示说明但不再用 role="alert" 打断读屏。
-	await expect(page.getByText("当前无法访问此配置。")).toBeVisible();
+	// 需求变化（#3268 N8-2-09）：改用公共「无法访问」卡（原为 h1「配置不可用」与「当前无法访问此配置。」），
+	// 页头同读取失败时的「Owner 配置」，只提供「返回 Agent 详情」。
+	await expect(
+		page.getByText("只有当前 Owner 可以修改这个 Agent 的配置。"),
+	).toBeVisible();
 	await expect(page.getByRole("alert")).toHaveCount(0);
 	// N-02 负向：员工仍是不可用页，主内容里没有按钮、输入框、授权控件与权限边界说明。
 	await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-		"配置不可用",
+		"Owner 配置",
 	);
+	await expect(
+		page.locator("main").getByRole("heading", { name: "无法访问" }),
+	).toBeVisible();
+	await expect(
+		page.locator("main").getByRole("link", { name: "返回 Agent 详情" }),
+	).toHaveAttribute("href", "/agents/agent-pilot-1");
 	await expect(page.locator("main").getByRole("button")).toHaveCount(0);
 	await expect(page.locator("main").getByRole("textbox")).toHaveCount(0);
 	await expect(page.locator("main")).not.toContainText("Agent 授权控制");
@@ -6917,6 +6929,31 @@ for (const [kind, title] of [
 			await expectCleanPage(page, errors);
 		});
 
+// #3268 N8-2-10：手动绑定认证失败的说明同样是导出稿的单行错误行，不是 Alert 框；两张卡片一致。
+for (const [kind, title] of [
+	["bot", "企微机器人"],
+	["app", "企微应用"],
+] as const)
+	test(`a failed manual WeCom ${kind} verification explains it in one error line (#3268 N8-2-10)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		await fixture(page);
+		const wecom = await wecomManualRoutes(page);
+		wecom.fail();
+		await page.goto("/agents/agent-pilot-1/configuration");
+		const card = page.getByRole("region", { name: title, exact: true });
+		await expect(card.getByText("未配置", { exact: true })).toBeVisible();
+		await fillWecomManual(card, kind);
+		await card.getByRole("button", { name: `验证并绑定：${title}` }).click();
+		const failure = card.getByRole("alert");
+		await expect(failure).toContainText("绑定未完成");
+		await expectWecomCardError(page, failure);
+		await expect(card.locator('[data-slot="alert"]')).toHaveCount(0);
+		await expectCleanPage(page, errors);
+	});
+
 // 「取消配置」随验证结束卸载：受理后焦点同样到卡片标题（D2-59）。
 for (const [kind, title] of [
 	["bot", "企微机器人"],
@@ -7242,5 +7279,293 @@ for (const decision of ["approve", "reject"] as const)
 		});
 		expect(visible, `${decision} 失败提示在弹窗可视区内`).toBe(true);
 		await expectFocusSettled(trigger, `${decision} 审批失败后`);
+		await expectCleanPage(page, errors);
+	});
+/** 自定义 Agent · 平台交互入口的最小申请（不需要默认 Relay Key 与模型）。 */
+async function fillCustomApplication(page: Page) {
+	await page.getByLabel("Agent 名称").fill("校验失败 Agent");
+	await page.getByLabel("用途说明", { exact: true }).fill("验证整表校验失败");
+	await page.getByRole("combobox", { name: "Agent 来源" }).click();
+	await page
+		.getByRole("option", { name: "自定义 Agent · 平台交互入口" })
+		.click();
+	await page.getByLabel("镜像地址").fill("registry.example/agents/check:v1");
+}
+
+// #3268 N8-2-03：服务端整表校验失败（INVALID_REQUEST）只在页面顶部说明一次（role=alert），焦点移到这条
+// 提示，不落到整张表单；表单内没有第二条措辞相近的提示。两视口一致。
+test("a server invalid-request rejection is explained once and focuses that alert (#3268 N8-2-03)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const api = await fixture(page);
+	let rejected = 0;
+	await page.route("**/api/v2/agent-applications", async (route) => {
+		if (route.request().method() !== "POST" || rejected > 0)
+			return route.fallback();
+		rejected += 1;
+		await route.fulfill({
+			status: 400,
+			json: {
+				schemaVersion: 1,
+				code: "INVALID_REQUEST",
+				message: "Controlled invalid request",
+				retryable: false,
+				traceId: "trace-invalid-request",
+			},
+		});
+	});
+	await page.goto("/my-agents/new");
+	await fillCustomApplication(page);
+	const submit = page.getByRole("button", { name: "提交审批", exact: true });
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	const main = page.locator("#main-content");
+	const alert = main.getByRole("alert");
+	await expect(alert).toHaveText(
+		"申请内容未通过服务端校验，请检查字段后重试。",
+	);
+	await expect(main.getByText(/未通过服务端校验/)).toHaveCount(1);
+	await expectFocusSettled(alert, "整表校验失败");
+	const form = main.locator("form.application-form");
+	await expect(form).not.toHaveAttribute("tabindex", /.*/);
+	await expect(form).not.toHaveAttribute("aria-describedby", /.*/);
+	// 未修改时再次提交仍被拦下，不发第二次请求。
+	await submit.click();
+	expect(rejected).toBe(1);
+	expect(api.commands).toHaveLength(0);
+	await expectNoDuplicateControls(page, "创建申请（整表校验失败，#3268）");
+	await expectCleanPage(page, errors);
+});
+
+// #3268 N8-2-04：多服务 YAML 未填写或语法错误时提交，焦点移到「多服务资源 YAML 内容」文本框（字段错误
+// 12px FieldError），之后多次采样仍在，不留在「提交审批」上。两视口一致。
+test("a missing or malformed multi-service YAML moves focus to the YAML textarea (#3268 N8-2-04)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const api = await fixture(page);
+	await page.goto("/my-agents/new");
+	await page.getByLabel("Agent 名称").fill("多服务 Agent");
+	await page.getByLabel("用途说明", { exact: true }).fill("验证多服务校验焦点");
+	await page.getByRole("combobox", { name: "Agent 来源" }).click();
+	await page
+		.getByRole("option", { name: "多服务 Agent · 自有交互入口" })
+		.click();
+	const manifest = page.getByRole("textbox", { name: "多服务资源 YAML 内容" });
+	const submit = page.getByRole("button", { name: "提交审批", exact: true });
+	const error = page.locator("#application-multi-service-manifest-error");
+
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	await expect(error).toHaveText("请上传或粘贴多服务 YAML。");
+	await expectPublicFieldError(page, error);
+	await expect(manifest).toHaveAttribute("aria-invalid", "true");
+	await expect(manifest).toHaveAttribute(
+		"aria-describedby",
+		"application-multi-service-manifest-error",
+	);
+	await expectFocusSettled(manifest, "多服务 YAML 未填写", [100, 400, 1000]);
+
+	await manifest.fill("schemaVersion: [");
+	await expect(error).toContainText("多服务 YAML");
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusSettled(manifest, "多服务 YAML 语法错误", [100, 400, 1000]);
+	expect(api.commands).toHaveLength(0);
+	await expectCleanPage(page, errors);
+});
+
+// #3268 N8-2-01：申请表单移除模型选项、环境变量或 Secret 的行后，焦点到同一位置下一行的「移除」，没有
+// 下一行时到上一行，该行没有「移除」或没有行时到对应的「添加…」；之后多次采样仍在，不落到 body
+// （D2-59）。两视口一致。
+test("removing application rows hands focus to the neighbouring remove button or the add button (#3268 N8-2-01)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/my-agents/new");
+	const button = (name: string) =>
+		page.getByRole("button", { name, exact: true });
+
+	// 模型选项：两行时删第 2 行，剩下一行没有「移除」，焦点到「添加模型选项」。
+	const addModel = button("添加模型选项");
+	await addModel.click();
+	await button("移除模型选项：模型选项 2").focus();
+	await page.keyboard.press("Enter");
+	await expect(button("移除模型选项：模型选项 1")).toHaveCount(0);
+	await expectFocusSettled(addModel, "移除模型选项：模型选项 2");
+	// 三行时删中间一行：下一行移到同一位置。
+	await addModel.click();
+	await addModel.click();
+	await button("移除模型选项：模型选项 2").click();
+	await expect(button("移除模型选项：模型选项 3")).toHaveCount(0);
+	await expectFocusSettled(
+		button("移除模型选项：模型选项 2"),
+		"移除模型选项（中间一行）",
+	);
+
+	// Secret：删最后一行到上一行，删唯一一行到「添加 Secret」。
+	await button("展开高级配置").click();
+	const addSecret = button("添加 Secret");
+	await addSecret.click();
+	await addSecret.click();
+	await button("移除 Secret：Secret 2").focus();
+	await page.keyboard.press("Enter");
+	await expect(button("移除 Secret：Secret 2")).toHaveCount(0);
+	await expectFocusSettled(
+		button("移除 Secret：Secret 1"),
+		"移除 Secret：Secret 2",
+	);
+	await page.keyboard.press("Enter");
+	await expect(button("移除 Secret：Secret 1")).toHaveCount(0);
+	await expectFocusSettled(addSecret, "移除最后一个 Secret");
+
+	// 环境变量：删第一行时下一行移到同一位置。
+	const addEnvironment = button("添加环境变量");
+	await addEnvironment.click();
+	await addEnvironment.click();
+	await page
+		.getByRole("textbox", { name: "变量名称：环境变量 2" })
+		.fill("LOG_LEVEL");
+	await button("移除环境变量：环境变量 1").click();
+	await expect(button("移除环境变量：环境变量 2")).toHaveCount(0);
+	await expect(
+		page.getByRole("textbox", { name: "变量名称：环境变量 1" }),
+	).toHaveValue("LOG_LEVEL");
+	await expectFocusSettled(
+		button("移除环境变量：环境变量 1"),
+		"移除环境变量：环境变量 1",
+	);
+	await page.keyboard.press("Enter");
+	await expectFocusSettled(addEnvironment, "移除最后一个环境变量");
+	await expectNoDuplicateControls(page, "创建申请（移除行，#3268）");
+	await expectCleanPage(page, errors);
+});
+
+// #3268 N8-2-06：镜像升级与整页保存的进行中与失败状态分开。升级进行中页脚仍是「保存配置」（不是
+// 「保存中…」），整页字段不随之禁用；升级失败只在「镜像升级」分区内说明，焦点留在「升级镜像」，
+// 页脚不出现「配置未能保存」。「当前来源」是分区说明（13px）。两视口一致。
+test("image upgrade keeps its pending and failure states inside the image section (#3268 N8-2-06)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const api = await fixture(page);
+	api.customAgent();
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const section = page.getByRole("region", { name: "镜像升级", exact: true });
+	const source = section.getByText(/^当前来源：/);
+	await expect(source).toBeVisible();
+	expect(await computed(source, ["fontSize", "color"])).toEqual({
+		fontSize: "13px",
+		color: await resolved(page, "color", "var(--muted-foreground)"),
+	});
+	const input = section.getByLabel("新镜像引用");
+	const upgrade = await pinElement(
+		section.getByRole("button", { name: "升级镜像" }),
+		"upgrade-image-split",
+	);
+	const footer = page.locator(".configuration-form-footer");
+	const save = footer.getByRole("button", { name: "保存配置", exact: true });
+	const fields = page.getByRole("group", { name: "Agent 配置" });
+
+	// 进行中：分区按钮「升级中…」，页脚不显示「保存中…」，整页字段可编辑。
+	await input.fill("registry.example/agent:v2");
+	api.holdNextCommand();
+	await upgrade.focus();
+	await page.keyboard.press("Enter");
+	await expect(upgrade).toHaveText("升级中…");
+	await expectFocusableBusy(upgrade, "升级镜像");
+	// 进行中再按 Enter 或点击不会重复提交升级命令。
+	await page.keyboard.press("Enter");
+	await upgrade.click({ force: true });
+	await expect
+		.poll(
+			() =>
+				api.commands.filter(({ path }) => path.endsWith("/lifecycle")).length,
+		)
+		.toBe(1);
+	await expect(save).toHaveText("保存配置");
+	await expect(footer.getByText("保存中…")).toHaveCount(0);
+	await expect(save).not.toHaveAttribute("aria-disabled", "true");
+	expect(
+		await fields.evaluate(
+			(element) => (element as HTMLFieldSetElement).disabled,
+		),
+	).toBe(false);
+	api.release();
+	await expect(toastHost(page)).toHaveText("已提交镜像升级请求");
+	await expectFocusSettled(input, "升级镜像受理");
+	expect(
+		api.commands.filter(({ path }) => path.endsWith("/lifecycle")),
+	).toHaveLength(1);
+
+	// 失败：说明在分区内，焦点留在「升级镜像」，页脚没有保存失败。
+	let failed = 0;
+	await page.route(
+		"**/api/v2/agents/agent-pilot-1/lifecycle",
+		async (route) => {
+			if (route.request().method() !== "POST" || failed > 0)
+				return route.fallback();
+			failed += 1;
+			await route.fulfill({
+				status: 503,
+				json: {
+					schemaVersion: 1,
+					code: "DEPENDENCY_UNAVAILABLE",
+					message: "Controlled lifecycle failure",
+					retryable: true,
+					traceId: "trace-image-upgrade",
+				},
+			});
+		},
+	);
+	await input.fill("registry.example/agent:v3");
+	await upgrade.focus();
+	await page.keyboard.press("Enter");
+	const failure = section.getByRole("alert");
+	await expect(failure).toHaveText("镜像升级未能提交，请重试。");
+	await expectFocusSettled(upgrade, "升级镜像失败");
+	await expect(upgrade).toHaveText("升级镜像");
+	await expect(footer.getByRole("alert")).toHaveCount(0);
+	await expect(page.locator("#main-content")).not.toContainText("配置未能保存");
+	await expect(input).toHaveValue("registry.example/agent:v3");
+	expect(failed).toBe(1);
+	await expectNoDuplicateControls(page, "Owner 配置（镜像升级，#3268）");
+	await expectCleanPage(page, errors);
+});
+
+// #3268 N8-2-08：PRD §6.3 保留「重试创建」入口；configuration_rejected 的说明写明「调整配置或部署之前」
+// 重试不会成功（工程 Spec §10.5），与紧邻的「重试创建」不再自相矛盾。Owner 视图与纯管理员视图一致。
+for (const role of ["owner", "admin"] as const)
+	test(`a configuration_rejected failure keeps the retry and conditions its warning (${role}, #3268 N8-2-08)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		const api = await fixture(page, role);
+		api.agentState("creation_failed", null);
+		api.creationFailure("configuration_rejected");
+		await page.goto("/agents/agent-pilot-1/configuration");
+		const notice = page.locator(
+			'[data-creation-failure="configuration_rejected"]',
+		);
+		await expect(notice).toContainText("失败原因：配置与当前部署不兼容");
+		await expect(notice).toContainText("调整配置或部署之前重试创建不会成功");
+		await expect(notice).toContainText("调整部署后再重试创建");
+		await expect(notice).not.toContainText(/[，。]重试创建不会成功/);
+		await expect(
+			page
+				.locator("#main-content")
+				.getByRole("button", { name: "重试创建", exact: true }),
+		).toBeVisible();
+		await expectNoDuplicateControls(
+			page,
+			`Owner 配置（configuration_rejected，${role}，#3268）`,
+		);
 		await expectCleanPage(page, errors);
 	});

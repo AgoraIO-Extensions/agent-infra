@@ -44,6 +44,8 @@ export function useKeylessKeyCheck(
 		setBlocked(false);
 	};
 	const typed = key.trim().length > 0;
+	// 检查成功后才有版本：据此区分「还没检查」与「检查过但没有可用模型」（#3268 N8-2-05）。
+	const checked = versions !== undefined;
 	const replacement: KeylessKeyReplacement | undefined =
 		typed && versions && selection
 			? {
@@ -57,9 +59,13 @@ export function useKeylessKeyCheck(
 	return {
 		blocked,
 		candidates,
+		/** 当前 Key 已检查成功（候选可能为空）。 */
+		checked,
 		checking,
 		error,
 		key,
+		/** 检查成功但该 Key 没有此模板可用的模型。 */
+		noCandidates: checked && candidates.length === 0,
 		/** 已填写 Key，但还没有可提交的检查结果与有效选择。 */
 		incomplete: typed && !replacement,
 		replacement,

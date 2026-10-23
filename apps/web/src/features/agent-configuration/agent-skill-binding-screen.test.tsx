@@ -158,12 +158,21 @@ describe("AgentSkillBindingScreen (O-02)", () => {
 			const { readBindings, bindVersion } = renderScreen({
 				session: { kind: "ready", session: other },
 			});
-			expect(screen.getByText("没有权限")).toBeTruthy();
+			// 需求变化（#3268 N8-2-09）：无权限改用公共「无法访问」卡（原为 warn 提示「没有权限」）；
+			// 页头不再给对非 Owner 是死路的「返回 Owner 配置」，唯一的返回入口是「返回 Agent 详情」。
+			expect(screen.getByRole("heading", { name: "无法访问" })).toBeTruthy();
+			expect(
+				screen.getByText("只有当前 Owner 可以管理这个 Agent 的 Skill 绑定。"),
+			).toBeTruthy();
 			expect(
 				screen
 					.getByRole("link", { name: "返回 Agent 详情" })
 					.getAttribute("href"),
 			).toBe("/agents/agent-pilot-1");
+			expect(
+				screen.queryByRole("link", { name: "返回 Owner 配置" }),
+			).toBeNull();
+			expect(screen.queryByRole("link", { name: "浏览 Skill Hub" })).toBeNull();
 			expect(screen.queryByRole("button", { name: "绑定固定版本" })).toBeNull();
 			expect(readBindings).not.toHaveBeenCalled();
 			expect(bindVersion).not.toHaveBeenCalled();

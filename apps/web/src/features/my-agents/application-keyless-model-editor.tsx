@@ -1,10 +1,10 @@
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Field } from "@/components/ui/field";
+import { Field, FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-import { KeylessModelPicker } from "../agent-configuration/keyless-model-picker.js";
+import { ConfigurationModelPicker } from "../agent-configuration/configuration-model-picker.js";
 import type {
 	KeylessCurrentModelOption,
 	KeylessEndpointNames,
@@ -26,7 +26,8 @@ type ApplicationKeylessModelEditorProps = {
 
 /**
  * 编辑由默认 Relay Key 管理模型的申请（#2421）：重新输入 Key，检查后只能从该 Key 可见的
- * 模型里选择；保存时 Key、模型集合和检查时看到的版本一起提交。
+ * 模型里选择；保存时 Key、模型集合和检查时看到的版本一起提交。模型选择与 Owner 配置
+ * 「模型与凭证」是同一个选择器（说明 13px、单个「默认模型选项」、公共字段错误，#3268 N8-2-05）。
  */
 export function ApplicationKeylessModelEditor({
 	current,
@@ -81,24 +82,37 @@ export function ApplicationKeylessModelEditor({
 						</AlertDescription>
 					</Alert>
 				) : null}
+				{/* 拦截错误与表单其他字段错误同一套公共样式与播报方式（#3268 N8-2-02）。 */}
 				{error ? (
-					<p className="text-destructive text-sm" id={errorId}>
+					<FieldError announce="polite" className="field-error" id={errorId}>
 						{error}
-					</p>
+					</FieldError>
 				) : null}
 			</Field>
+			{/* 检查成功但没有候选：与 Owner 配置「当前默认 Key 没有此模板可用的模型」、替换 Key 弹窗
+			    「新的 Key 没有此模板可用的模型」同一种 warn 提示（#3268 N8-2-05）。 */}
+			{keyCheck.noCandidates ? (
+				<Alert tone="warn" role="status">
+					<AlertTitle>该 Key 没有此模板可用的模型</AlertTitle>
+					<AlertDescription>
+						请换一个 Key 后重新检查；当前模型配置保持不变。
+					</AlertDescription>
+				</Alert>
+			) : null}
 			{keyCheck.candidates.length > 0 ? (
-				<KeylessModelPicker
+				<ConfigurationModelPicker
 					candidates={keyCheck.candidates}
 					current={current}
 					currentDefault={currentDefault}
+					description="只列出该 Key 可见、且模板支持的模型。勾选后可调整推理档位和默认模型选项。"
 					disabled={disabled}
 					endpointNames={endpointNames}
 					idPrefix="application-keyless-model"
 					key={keyCheck.candidates
 						.map((candidate) => `${candidate.endpointId}/${candidate.modelId}`)
 						.join("|")}
-					onChange={keyCheck.setSelection}
+					removedTitle="提交后会移除这些模型"
+					onChange={({ selection }) => keyCheck.setSelection(selection)}
 				/>
 			) : null}
 		</div>

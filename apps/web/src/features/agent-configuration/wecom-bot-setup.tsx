@@ -1,6 +1,5 @@
 import { Info, MessageCircle, Scan, Settings } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
@@ -22,6 +21,7 @@ import type {
 import {
 	useWecomUnbind,
 	WecomChannelCard,
+	WecomChannelError,
 	type WecomChannelStatus,
 	WecomUnbindAction,
 	WecomUnbindFailure,
@@ -599,11 +599,7 @@ export function WecomBotSetup({
 				/>
 				<span className="min-w-0">我已知悉可能断开其他连接</span>
 			</Label>
-			{error ? (
-				<Alert tone="danger" role="alert">
-					<AlertDescription>{error}</AlertDescription>
-				</Alert>
-			) : null}
+			{error ? <WecomChannelError>{error}</WecomChannelError> : null}
 			<WecomUnbindFailure unbind={unbind} />
 			<div className="wecom-channel-actions">
 				{/* 验证期间是可聚焦的禁用（aria-disabled），焦点不落到 body（#3242 K7-03）。 */}
