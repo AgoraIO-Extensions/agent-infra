@@ -82,7 +82,10 @@ async function fixture() {
 				"",
 			].join("\n"),
 		),
-		writeFile(workerConfiguration, "export const fixtureWorkerConfiguration = true;\n"),
+		writeFile(
+			workerConfiguration,
+			"export const fixtureWorkerConfiguration = true;\n",
+		),
 		writeFile(cert, ""),
 		writeFile(key, ""),
 		writeFile(proxyToken, proxyTokenValue, { mode: 0o600 }),
@@ -1653,10 +1656,16 @@ test("local up validates private API and Worker material before stopping service
 test("local up rejects invalid Worker configuration syntax before stopping services", async () => {
 	const f = await fixture();
 	try {
-		await writeFile(f.env.PLATFORM_LOCAL_WORKER_CONFIGURATION, "export const worker = ;\n");
+		await writeFile(
+			f.env.PLATFORM_LOCAL_WORKER_CONFIGURATION,
+			"export const worker = ;\n",
+		);
 		const result = run("up", f.env);
 		assert.notEqual(result.status, 0);
-		assert.match(result.stderr, /Local Worker configuration\.mjs has invalid syntax/);
+		assert.match(
+			result.stderr,
+			/Local Worker configuration\.mjs has invalid syntax/,
+		);
 		assert.equal(await readFile(f.log, "utf8"), "");
 	} finally {
 		await f.close();
