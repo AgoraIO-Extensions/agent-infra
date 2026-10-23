@@ -2161,6 +2161,7 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 附件物化：
 
 - Driver 只通过 FileBridge 的 `readInput` 读取本次 Grant 精确列出的附件。
+- 读取被平台明确拒绝时（交换或数据面返回 4xx，408、429 除外），若拒绝发生在原生副作用和该操作的 Driver 持久记录之前，RuntimeHost 持久化不可重试的 `RUNTIME_FILE_INPUT_REJECTED`，只有 submit V2 及以上返回该结果。Worker 按 [Runtime HLD 8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等) 中“初始 Execution 在 Runtime 明确接受前失败”的规则，把本次 Execution 收敛为失败，并在同一事务内终结其待处理的补充指令与 stop，会话保持可用。以下情况保持“接受结果不确定”，不推断为失败：超时、断连、5xx、响应无法解析，或无法排除已有副作用。
 - 写入位置为当前 Conversation 工作区的 `.agent-infra/attachments/<ref>/<name>`：
   - `<ref>` 取 fileId 的 SHA-256 前 16 位十六进制。
   - `<name>` 只保留 basename，去掉控制字符、路径分隔符和开头的点，不超过 255 字节。
