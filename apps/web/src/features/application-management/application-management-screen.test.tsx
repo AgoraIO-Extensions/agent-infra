@@ -210,7 +210,7 @@ describe("ApplicationManagementScreen", () => {
 		const onDisable = vi
 			.fn<(applicationId: string) => Promise<ApplicationMetadataV1>>()
 			.mockResolvedValue({ ...metadata, status: "disabled" });
-		render(
+		const view = render(
 			<ApplicationManagementScreen
 				state={{ kind: "ready", application: metadata }}
 				onDisable={onDisable}
@@ -230,10 +230,45 @@ describe("ApplicationManagementScreen", () => {
 		fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 		expect(onDisable).not.toHaveBeenCalled();
+		// #3292 N9-3-06：取消与 Escape 关闭后焦点回到触发按钮（同撤销凭证、禁用员工），不到应用名标题。
+		await waitFor(() => expect(document.activeElement).toBe(trigger));
+		fireEvent.click(trigger);
+		dialog = await screen.findByRole("dialog");
+		fireEvent.keyDown(dialog, { key: "Escape" });
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(onDisable).not.toHaveBeenCalled();
+		await waitFor(() => expect(document.activeElement).toBe(trigger));
 		fireEvent.click(trigger);
 		dialog = await screen.findByRole("dialog");
 		fireEvent.click(within(dialog).getByRole("button", { name: "停用应用" }));
 		expect(onDisable).toHaveBeenCalledExactlyOnceWith("application-1");
+		// 需求变化（#3292 N9-3-06）：原断言确认后焦点立即到应用名标题（finalFocus=标题）；现确认后先回到
+		// 触发按钮，停用中它是可聚焦的禁用（aria-disabled、无原生 disabled），停用成功、详情按新状态
+		// 重新挂载后再到应用名标题。
+		await waitFor(() => expect(document.activeElement).toBe(trigger));
+		view.rerender(
+			<ApplicationManagementScreen
+				state={{ kind: "ready", application: metadata }}
+				onDisable={onDisable}
+				isDisabling
+			/>,
+		);
+		const pending = screen.getByRole("button", {
+			name: "正在停用…：Build service",
+		}) as HTMLButtonElement;
+		expect(pending).toBe(trigger);
+		expect(pending.getAttribute("aria-disabled")).toBe("true");
+		expect(pending.disabled).toBe(false);
+		expect(document.activeElement).toBe(pending);
+		view.rerender(
+			<ApplicationManagementScreen
+				state={{
+					kind: "ready",
+					application: { ...metadata, status: "disabled" },
+				}}
+				onDisable={onDisable}
+			/>,
+		);
 		await waitFor(() =>
 			expect(document.activeElement).toBe(
 				screen.getByRole("heading", { name: "Build service" }),
@@ -292,6 +327,31 @@ describe("ApplicationManagementScreen", () => {
 			expect(screen.queryByRole("button", { name: "注册应用" })).toBeNull();
 		},
 	);
+
+	it("offers a section-named 重新登录 for a 401 application read (N9-3-04)", () => {
+		const onRelogin = vi.fn();
+		render(
+			<ApplicationManagementScreen
+				state={{
+					kind: "unavailable",
+					reason: "authentication-required",
+					retryable: false,
+				}}
+				onRelogin={onRelogin}
+			/>,
+		);
+		const alert = screen.getByRole("alert");
+		expect(alert.textContent).toBe(
+			"登录状态已失效，请重新登录后再试。重新登录",
+		);
+		// 与上方个人凭证列表的「重新登录」可能同时出现，名称带分区名，可见文字不变。
+		const relogin = within(alert).getByRole("button", {
+			name: "重新登录：应用管理",
+		});
+		expect(relogin.textContent).toBe("重新登录");
+		fireEvent.click(relogin);
+		expect(onRelogin).toHaveBeenCalledOnce();
+	});
 
 	it("retains safe response metadata and prepares an explicit rotation of its returned ID", async () => {
 		const rotated: ApplicationCredentialResponse = {

@@ -107,6 +107,8 @@ const resourceKindLabels = {
 type SkillHubVersionScreenProps = {
 	state: SkillHubVersionReadState | { kind: "loading" };
 	onRetry?: () => void;
+	/** 版本读取 401 时的「重新登录」。 */
+	onRelogin?: () => void;
 	retrying?: boolean;
 	/** 同一目录查询：版本列表取同一 skillId 的已发布版本。 */
 	catalog: SkillHubDirectoryState | { kind: "loading" };
@@ -149,6 +151,7 @@ export function SkillHubVersionScreen(props: SkillHubVersionScreenProps) {
 					deniedText="当前账号没有读取该 Skill 版本的权限。"
 					unavailableText="Skill 版本暂时无法访问，请联系管理员。"
 					onRetry={props.onRetry}
+					onRelogin={props.onRelogin}
 					retrying={props.retrying}
 				/>
 			</section>

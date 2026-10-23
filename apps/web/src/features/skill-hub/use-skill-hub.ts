@@ -76,9 +76,24 @@ function useIsolatedSkillHubRead<
 		query.error !== null
 			? isRetryableSkillHubError(query.error)
 			: query.data?.kind === "unavailable" && query.data.retryable;
+	/**
+	 * 用户明确要求重读（「重新登录」后会话仍有效）：不可重试的结果（401 等）锁住 refetch，这里重置
+	 * 本次查询解除锁定后重读一次（W-03，同 Agent 目录）；未锁定时等同 refetch。
+	 */
+	function reload() {
+		const current = selection.queryClient.getQueryData<T>(selection.queryKey);
+		if (!selection.active || !allowed) return Promise.resolve();
+		return current?.kind === "unavailable" && !current.retryable
+			? selection.queryClient.resetQueries({
+					queryKey: selection.queryKey,
+					exact: true,
+				})
+			: query.refetch({ cancelRefetch: false });
+	}
 	return {
 		...query,
 		refetch,
+		reload,
 		isFetching: allowed && query.isFetching,
 		retryable: Boolean(retryable),
 	};

@@ -239,8 +239,32 @@ describe("MyInstallationsSection (#2953)", () => {
 				onRetry={retry}
 			/>,
 		);
-		fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+		// 需求变化（#3292 N9-3-05）：与「我创建的」同时失败时按钮可区分，名称带分区名，可见文字不变。
+		const reread = screen.getByRole("button", { name: "重新读取：已安装" });
+		expect(reread.textContent).toBe("重新读取");
+		fireEvent.click(reread);
 		expect(retry).toHaveBeenCalledOnce();
+		cleanup();
+		// 401 不说成要找管理员：「登录已过期」与「重新登录：已安装」（#3292 N9-3-04）。
+		const relogin = vi.fn();
+		await renderWithRouter(
+			<MyInstallationsSection
+				installations={{
+					kind: "unavailable",
+					retryable: false,
+					reason: "authentication-required",
+				}}
+				onRelogin={relogin}
+			/>,
+		);
+		const expired = screen.getByRole("alert");
+		expect(expired.textContent).toContain("登录已过期");
+		expect(expired.textContent).toContain("登录状态已失效，请重新登录后再试。");
+		expect(screen.queryByText(/请联系管理员/)).toBeNull();
+		const login = screen.getByRole("button", { name: "重新登录：已安装" });
+		expect(login.textContent).toBe("重新登录");
+		fireEvent.click(login);
+		expect(relogin).toHaveBeenCalledOnce();
 		cleanup();
 		await renderWithRouter(
 			<MyInstallationsSection
@@ -254,6 +278,6 @@ describe("MyInstallationsSection (#2953)", () => {
 		expect(
 			screen.getByText("当前账号没有读取已安装 Skill 的权限。"),
 		).toBeTruthy();
-		expect(screen.queryByRole("button", { name: "重新读取" })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^重新读取/ })).toBeNull();
 	});
 });

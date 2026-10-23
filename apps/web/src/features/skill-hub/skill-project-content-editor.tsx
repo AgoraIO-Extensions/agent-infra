@@ -198,6 +198,7 @@ export function SkillProjectContentEditor({
 	project,
 	content,
 	onRetry,
+	onRelogin,
 	retrying = false,
 	onPublished,
 	actions = defaultActions,
@@ -210,6 +211,8 @@ export function SkillProjectContentEditor({
 	content: SkillProjectContentState;
 	/** 重新读取内容；返回的 Promise 完成后以服务端内容重新初始化草稿。 */
 	onRetry?: () => unknown;
+	/** 内容读取 401 时的「重新登录」：会话仍有效时由页面重读内容。 */
+	onRelogin?: () => void;
 	retrying?: boolean;
 	/** 发布成功后刷新本人版本等读取。 */
 	onPublished?: () => void;
@@ -512,6 +515,7 @@ export function SkillProjectContentEditor({
 								deniedText="当前账号不能编辑这个项目的内容。"
 								unavailableText="Skill 内容暂时无法访问，请联系管理员。"
 								onRetry={onRetry}
+								onRelogin={onRelogin}
 								retrying={retrying}
 							/>
 						</FormSection>

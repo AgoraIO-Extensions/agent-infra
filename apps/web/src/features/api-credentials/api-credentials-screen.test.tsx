@@ -37,6 +37,54 @@ describe("ApiCredentialsScreen", () => {
 		expect(screen.queryByText(/papi_/)).toBeNull();
 	});
 
+	it("offers 重新登录 for a 401 list read and no other recovery (N9-3-04)", () => {
+		const onRelogin = vi.fn();
+		const onRetry = vi.fn();
+		const view = render(
+			<ApiCredentialsScreen
+				state={{
+					kind: "unavailable",
+					retryable: false,
+					reason: "authentication-required",
+				}}
+				onRetry={onRetry}
+				onRelogin={onRelogin}
+			/>,
+		);
+		const alert = screen.getByRole("alert");
+		expect(alert.textContent).toBe(
+			"登录状态已失效，请重新登录后再试。重新登录",
+		);
+		const relogin = within(alert).getByRole("button", { name: "重新登录" });
+		fireEvent.click(relogin);
+		expect(onRelogin).toHaveBeenCalledOnce();
+		expect(onRetry).not.toHaveBeenCalled();
+		// 确认会话期间保持可聚焦的禁用（aria-disabled），不落到 body。
+		view.rerender(
+			<ApiCredentialsScreen
+				state={{
+					kind: "unavailable",
+					retryable: false,
+					reason: "authentication-required",
+				}}
+				onRetry={onRetry}
+				onRelogin={onRelogin}
+				retrying
+			/>,
+		);
+		expect(relogin.getAttribute("aria-disabled")).toBe("true");
+		expect((relogin as HTMLButtonElement).disabled).toBe(false);
+		// 403 等其余不可重试失败仍只说明原因。
+		view.rerender(
+			<ApiCredentialsScreen
+				state={{ kind: "unavailable", retryable: false, reason: "denied" }}
+				onRetry={onRetry}
+				onRelogin={onRelogin}
+			/>,
+		);
+		expect(within(screen.getByRole("alert")).queryByRole("button")).toBeNull();
+	});
+
 	it("confirms a revocation with the credential and its consequence before requesting it", async () => {
 		const second = { ...metadata, credentialId: "credential-2" };
 		const onRevoke = vi

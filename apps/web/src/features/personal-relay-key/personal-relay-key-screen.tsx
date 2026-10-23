@@ -1,5 +1,5 @@
 import { PersonalRelayKeyReplaceRequestV1Schema } from "@agent-infra/contracts/pilot";
-import { RefreshCw, Shield } from "lucide-react";
+import { LogIn, RefreshCw, Shield } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -21,13 +21,18 @@ import {
 
 type PersonalRelayKeyScreenProps = {
 	userId: string;
+	/**
+	 * 读取或写入 401 后的「重新登录」：经壳层重新确认会话（路由用 useSessionRecheck）。结果为 true
+	 * 表示会话仍有效，页面随即重读状态；会话已失效时壳层换成登录页（W-03，#3292 N9-3-04）。
+	 */
 	onSessionExpired?: () => Promise<unknown> | unknown;
 };
 
 type FormState = "idle" | "loading" | "ready" | "saving" | "error";
 
 const failureMessages = {
-	authentication: "登录状态已失效，请重新登录后重试。",
+	// 与 API 凭证、Skill Hub 的 401 同一句（#3292 N9-3-04）。
+	authentication: "登录状态已失效，请重新登录后再试。",
 	authorization: "当前账号没有设置个人 Relay Key 的权限。",
 	conflict: "个人 Key 状态已被其他请求更新，请重新读取后再操作。",
 	unavailable: "个人 Key 服务暂时不可用，请稍后重试。",
@@ -65,6 +70,7 @@ export function PersonalRelayKeyScreen({
 	const [state, setState] = useState<FormState>("idle");
 	const [operation, setOperation] = useState<"replace" | "revoke">();
 	const [focusTarget, setFocusTarget] = useState<"input" | "save">();
+	const [rechecking, setRechecking] = useState(false);
 	const requestNumber = useRef(0);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const saveRef = useRef<HTMLButtonElement>(null);
@@ -188,6 +194,16 @@ export function PersonalRelayKeyScreen({
 		}
 	};
 
+	const relogin = async () => {
+		if (!onSessionExpired || rechecking) return;
+		setRechecking(true);
+		try {
+			if ((await onSessionExpired()) === true) void refresh();
+		} finally {
+			setRechecking(false);
+		}
+	};
+
 	const kind = errorKind(failure);
 	const hasFailure = failure !== undefined;
 	const canRecheckLogin =
@@ -278,13 +294,15 @@ export function PersonalRelayKeyScreen({
 								<div className="settings-actions">
 									{/* 重读开始即清除失败提示、按钮随之卸载：焦点交给页面 h1，仍失败时回到按钮
 									    （RecoveryButton，#3269 N8-3-02）。 */}
-									{canRecheckLogin && onSessionExpired ? (
+									{canRecheckLogin ? (
 										<RecoveryButton
 											variant="outline"
-											recoveryKey="重新检查登录"
-											onClick={() => void onSessionExpired()}
+											recoveryKey="重新登录"
+											busy={rechecking}
+											onClick={() => void relogin()}
 										>
-											重新检查登录
+											<LogIn aria-hidden="true" />
+											重新登录
 										</RecoveryButton>
 									) : null}
 									{canReread ? (

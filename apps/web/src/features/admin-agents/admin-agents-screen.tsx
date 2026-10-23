@@ -1,5 +1,5 @@
-import { RefreshCw } from "lucide-react";
-import { useId, useRef, useState } from "react";
+import { LogIn, RefreshCw } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,7 @@ import {
 	formatPerson,
 	useAvailabilityNames,
 } from "../directory-names.js";
+import { PageStateCard } from "../page-state-card.js";
 import { RecoveryButton } from "../recovery-button.js";
 import {
 	type TemplateNameLookup,
@@ -117,11 +118,30 @@ function ownerNames(agent: AgentProjectionV2) {
 
 const columns = ["Agent", "Owner", "来源", "状态", "可用范围"] as const;
 
+/**
+ * 翻页后把新的一页滚入视口（#3292 N9-3-02）：表格到分页条放得下时整段可见，放不下时让表格顶端
+ * 贴着吸顶顶栏（`.action-reveal` 的 scroll-margin），不让新数据停在视口上方。
+ */
+function revealPage(table: HTMLElement | null, pagination: HTMLElement | null) {
+	if (!table || !pagination) return;
+	const visibleTop = Number.parseFloat(getComputedStyle(table).scrollMarginTop);
+	const visibleBottom =
+		window.innerHeight -
+		Number.parseFloat(getComputedStyle(pagination).scrollMarginBottom);
+	const top = table.getBoundingClientRect().top;
+	const bottom = pagination.getBoundingClientRect().bottom;
+	if (top < visibleTop || bottom - top > visibleBottom - visibleTop)
+		table.scrollIntoView?.({ block: "start" });
+	else if (bottom > visibleBottom)
+		pagination.scrollIntoView?.({ block: "end" });
+}
+
 export function AdminAgentsScreen({
 	state,
 	filters,
 	onFiltersChange,
 	onRefresh,
+	onRelogin,
 	refreshing = false,
 	templateName,
 }: {
@@ -129,6 +149,8 @@ export function AdminAgentsScreen({
 	filters: AdminAgentFilters;
 	onFiltersChange: (filters: AdminAgentFilters) => void;
 	onRefresh: () => void;
+	/** 列表读取 401 时的「重新登录」：经壳层确认会话，仍有效时重读列表（W-03）。 */
+	onRelogin?: () => void;
 	refreshing?: boolean;
 	/** 模板显示名（部署配置）；未提供或读不到时显示「标准模板」（F-02）。 */
 	templateName?: TemplateNameLookup;
@@ -138,6 +160,11 @@ export function AdminAgentsScreen({
 	const [actionFailure, setActionFailure] = useState<string | null>(null);
 	const heading = useRef<HTMLHeadingElement>(null);
 	const searchRef = useRef<HTMLInputElement>(null);
+	const tableRef = useRef<HTMLTableElement>(null);
+	const paginationRef = useRef<HTMLElement>(null);
+	const previousPageButton = useRef<HTMLButtonElement>(null);
+	const nextPageButton = useRef<HTMLButtonElement>(null);
+	const pageTrigger = useRef<"previous" | "next" | null>(null);
 	const agents = state.kind === "ready" ? state.agents : [];
 	const search = (filters.q ?? "").trim().toLocaleLowerCase();
 	// 只匹配页面上可见的文字：名称、说明、来源文案与 Owner 显示名。
@@ -152,6 +179,28 @@ export function AdminAgentsScreen({
 	const pageCount = Math.max(1, Math.ceil(matches.length / pageSize));
 	const page = Math.min(filters.page ?? 1, pageCount);
 	const rows = matches.slice((page - 1) * pageSize, page * pageSize);
+	// 前端分页（#3292 N9-3-02）：翻到首页或末页、触发的按钮随之禁用时焦点交给另一个分页按钮
+	// （同 /audit），两个都不可用时到页面 h1，不落到 body；随后把新的一页滚入视口。
+	const shownPage = useRef(page);
+	useEffect(() => {
+		if (shownPage.current === page) return;
+		shownPage.current = page;
+		const trigger = pageTrigger.current;
+		if (!trigger) return;
+		pageTrigger.current = null;
+		const own = (trigger === "previous" ? previousPageButton : nextPageButton)
+			.current;
+		const other = (trigger === "previous" ? nextPageButton : previousPageButton)
+			.current;
+		const active = document.activeElement;
+		if (!active || active === document.body || active === own) {
+			if (own?.disabled !== false) {
+				if (other && !other.disabled) other.focus({ preventScroll: true });
+				else heading.current?.focus({ preventScroll: true });
+			}
+		}
+		revealPage(tableRef.current, paginationRef.current);
+	}, [page]);
 	// 当前页的可用范围合并为员工、组织各一次目录读取。
 	const names = useAvailabilityNames(
 		rows.flatMap((agent) => agent.configuration.availability),
@@ -191,9 +240,33 @@ export function AdminAgentsScreen({
 				)}
 			</header>
 			{denied ? (
-				<Alert tone="warn">
-					<AlertDescription>当前无权访问 Agent 管理。</AlertDescription>
-				</Alert>
+				state.reason === "authentication-required" ? (
+					// 读取 401：与 Agent 目录相同的「登录已过期」卡，「重新登录」确认会话仍有效后重读列表
+					// （#3292 N9-3-04、W-03），不说成无权访问。
+					<PageStateCard
+						kind="login"
+						title="登录已过期"
+						action={
+							onRelogin ? (
+								<RecoveryButton
+									recoveryKey="重新登录"
+									busy={refreshing}
+									onClick={onRelogin}
+								>
+									<LogIn aria-hidden="true" data-icon="inline-start" />
+									重新登录
+								</RecoveryButton>
+							) : null
+						}
+					/>
+				) : (
+					// 员工或被服务端拒绝：页头之下只有公共「未授权」卡与「返回工作台」，与其余系统管理页
+					// 相同；静态边界不设 live region（#3292 N9-3-01）。
+					<PageStateCard
+						kind="unauthorized"
+						description="当前无权访问 Agent 管理。"
+					/>
+				)
 			) : failed ? (
 				// N-20：列表读取失败时只保留标题与一条失败提示，筛选、表格与治理区都收起。
 				<Alert tone="danger" role="alert">
@@ -319,7 +392,8 @@ export function AdminAgentsScreen({
 					) : (
 						<>
 							<Table
-								className="admin-agent-table"
+								ref={tableRef}
+								className="admin-agent-table action-reveal"
 								mobileLayout="cards"
 								aria-label="已创建 Agent"
 							>
@@ -387,15 +461,18 @@ export function AdminAgentsScreen({
 								</TableBody>
 							</Table>
 							<nav
-								className="admin-agent-pagination"
+								ref={paginationRef}
+								className="admin-agent-pagination action-reveal"
 								aria-label="Agent 列表分页"
 							>
 								<Button
+									ref={previousPageButton}
 									variant="outline"
 									disabled={page <= 1}
-									onClick={() =>
-										onFiltersChange({ ...filters, page: page - 1 })
-									}
+									onClick={() => {
+										pageTrigger.current = "previous";
+										onFiltersChange({ ...filters, page: page - 1 });
+									}}
 								>
 									上一页
 								</Button>
@@ -403,11 +480,13 @@ export function AdminAgentsScreen({
 									第 {page} / {pageCount} 页
 								</span>
 								<Button
+									ref={nextPageButton}
 									variant="outline"
 									disabled={page >= pageCount}
-									onClick={() =>
-										onFiltersChange({ ...filters, page: page + 1 })
-									}
+									onClick={() => {
+										pageTrigger.current = "next";
+										onFiltersChange({ ...filters, page: page + 1 });
+									}}
 								>
 									下一页
 								</Button>
