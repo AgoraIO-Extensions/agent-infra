@@ -19,21 +19,28 @@ import {
 	SandboxWorkspaceReferenceV1Schema,
 } from "@agent-infra/contracts/files";
 import type {
+	NativeMetadataCommandsProjectionV2,
 	NativeMetadataProjectionV1,
 	NativeMetadataSelectorV1,
 	RuntimeCapabilitiesV1,
 	RuntimeConnectionAssociationV1,
+	RuntimeDriverNativeCommandOperationRecordV2,
 	RuntimeDriverOperationRecordV1,
 	RuntimeEvent,
 	RuntimeOperationFactV2,
+	RuntimeRelayKeyBindingV1,
 	RuntimeSelectionV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
 import {
+	NativeMetadataCommandsProjectionV2Schema,
 	NativeMetadataProjectionV1Schema,
+	RuntimeDriverNativeCommandOperationRecordV2Schema,
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
 	RuntimeOperationFactV2Schema,
+	RuntimeRelayKeyBindingV1Schema,
+	RuntimeSelectionV1Schema,
 } from "@agent-infra/contracts/runtime";
 import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v1.json" with {
 	type: "json",
@@ -138,6 +145,7 @@ import type {
 	RuntimeExternalActionAuthorizer,
 	RuntimeModelDirectory,
 	RuntimeNativeCommandCommandV1,
+	RuntimeNativeCommandCommandV2,
 	RuntimeNativeMetadataReadContextV1,
 	RuntimeNativeSkillBindingRequestV1,
 	RuntimeNativeSkillCommandV1,
@@ -931,6 +939,7 @@ interface CodexOperation {
 	nativeSessionRef: string;
 	configVersion?: string;
 	internalModel?: string;
+	modelOptionId?: string;
 	reasoningLevel?: string;
 	// Durable admission confirmation has not returned successfully.
 	admissionPending?: true;
@@ -940,6 +949,12 @@ interface CodexOperation {
 	turnId?: string;
 	record?: RuntimeDriverOperationRecord;
 	nativeCommandResult?: CodexNativeCommandResult;
+	effect?: "state_changing";
+	selection?: RuntimeSelectionV1;
+	keyBinding?: RuntimeRelayKeyBindingV1;
+	authorizationRecordId?: string;
+	nativeTurnId?: string;
+	nativeCompactionItemId?: string;
 }
 
 interface CodexDriverState {
@@ -1625,10 +1640,17 @@ function operationMatchesCommand(
 ) {
 	if (operation.schemaVersion !== command.schemaVersion) return false;
 	if (command.kind === "native-command") {
-		return (
+		const identityMatches =
 			operation.nativeSessionRef === command.nativeSessionRef &&
 			operation.executionId === command.executionId &&
-			operation.turnId === command.turnId
+			operation.turnId === command.turnId;
+		if (!identityMatches) return false;
+		if (command.schemaVersion !== 2) return true;
+		return (
+			operation.effect === command.effect &&
+			isDeepStrictEqual(operation.selection, command.selection) &&
+			isDeepStrictEqual(operation.keyBinding, command.keyBinding) &&
+			operation.authorizationRecordId === command.authorizationRecordId
 		);
 	}
 	if (!isCodexInterruptionCommand(command)) {
@@ -2993,6 +3015,7 @@ function isCodexOperation(
 			"nativeSessionRef",
 			"configVersion",
 			"internalModel",
+			"modelOptionId",
 			"reasoningLevel",
 			"admissionPending",
 			"admissionRecoveryPending",
@@ -3000,6 +3023,12 @@ function isCodexOperation(
 			"turnId",
 			"record",
 			"nativeCommandResult",
+			"effect",
+			"selection",
+			"keyBinding",
+			"authorizationRecordId",
+			"nativeTurnId",
+			"nativeCompactionItemId",
 		]) ||
 		!nonEmptyString(value.nativeSessionRef) ||
 		(value.schemaVersion !== 1 && value.schemaVersion !== 2)
@@ -3033,9 +3062,34 @@ function isCodexOperation(
 	) {
 		return false;
 	}
-	if (value.schemaVersion === 2 && kind !== "submit-turn") return false;
+	if (
+		value.schemaVersion === 2 &&
+		kind !== "submit-turn" &&
+		kind !== "native-command"
+	)
+		return false;
 	const isInterruption = kind === "stop" || kind === "generation-cancel";
 	const isNativeCommand = kind === "native-command";
+	const isStatefulNativeCommand = isNativeCommand && value.schemaVersion === 2;
+	if (
+		(isStatefulNativeCommand &&
+			(!RuntimeSelectionV1Schema.safeParse(value.selection).success ||
+				!RuntimeRelayKeyBindingV1Schema.safeParse(value.keyBinding).success ||
+				value.effect !== "state_changing" ||
+				!nonEmptyString(value.authorizationRecordId))) ||
+		(!isStatefulNativeCommand &&
+			(value.effect !== undefined ||
+				value.selection !== undefined ||
+				value.keyBinding !== undefined ||
+				value.authorizationRecordId !== undefined))
+	)
+		return false;
+	if (
+		(value.nativeTurnId !== undefined && !nonEmptyString(value.nativeTurnId)) ||
+		(value.nativeCompactionItemId !== undefined &&
+			!nonEmptyString(value.nativeCompactionItemId))
+	)
+		return false;
 	if (value.nativeCommandResult !== undefined) {
 		const result = NativeMetadataProjectionV1Schema.safeParse(
 			value.nativeCommandResult,
@@ -3059,6 +3113,10 @@ function isCodexOperation(
 				!/^(?:[a-f0-9]{64}\/)?[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(
 					value.internalModel,
 				))) ||
+		(value.modelOptionId !== undefined &&
+			(isInterruption ||
+				typeof value.modelOptionId !== "string" ||
+				!codexModelPattern.test(value.modelOptionId))) ||
 		(value.reasoningLevel !== undefined &&
 			(isInterruption ||
 				typeof value.reasoningLevel !== "string" ||
@@ -3088,7 +3146,9 @@ function isCodexOperation(
 	if (value.state !== "resolved" || value.record === undefined) return false;
 	const record = (
 		value.schemaVersion === 2
-			? RuntimeDriverSubmitTurnOperationRecordV2Schema
+			? kind === "native-command"
+				? RuntimeDriverNativeCommandOperationRecordV2Schema
+				: RuntimeDriverSubmitTurnOperationRecordV2Schema
 			: RuntimeDriverOperationRecordV1Schema
 	).safeParse(value.record);
 	if (
@@ -3103,10 +3163,30 @@ function isCodexOperation(
 	) {
 		return false;
 	}
+	if (isStatefulNativeCommand) {
+		const nativeRecord =
+			record.data as RuntimeDriverNativeCommandOperationRecordV2;
+		if (
+			!nativeRecord ||
+			nativeRecord.effect !== value.effect ||
+			!isDeepStrictEqual(nativeRecord.selection, value.selection) ||
+			!isDeepStrictEqual(nativeRecord.keyBinding, value.keyBinding) ||
+			nativeRecord.authorizationRecordId !== value.authorizationRecordId
+		)
+			return false;
+	}
 	if (
 		value.nativeCommandResult !== undefined &&
 		(record.data.result.outcome !== "accepted" ||
 			record.data.result.status !== "completed")
+	)
+		return false;
+	if (
+		isStatefulNativeCommand &&
+		record.data.result.outcome === "accepted" &&
+		record.data.result.status === "completed" &&
+		(!nonEmptyString(value.nativeTurnId) ||
+			!nonEmptyString(value.nativeCompactionItemId))
 	)
 		return false;
 	if (record.data.result.outcome !== "accepted") {
@@ -3598,7 +3678,9 @@ function driverRecord(
 ): RuntimeDriverOperationRecord {
 	const parsed = (
 		command.schemaVersion === 2
-			? RuntimeDriverSubmitTurnOperationRecordV2Schema
+			? command.kind === "native-command"
+				? RuntimeDriverNativeCommandOperationRecordV2Schema
+				: RuntimeDriverSubmitTurnOperationRecordV2Schema
 			: RuntimeDriverOperationRecordV1Schema
 	).safeParse(value);
 	if (!parsed.success) stateInvalid();
@@ -4137,6 +4219,30 @@ function nativeToolItemNotification(frame: CodexAppServerFrame) {
 	};
 }
 
+function contextCompactionItemNotification(frame: CodexAppServerFrame) {
+	if (frame.method !== "item/started" && frame.method !== "item/completed")
+		return undefined;
+	const params = frame.params;
+	if (
+		!isPlainRecord(params) ||
+		!nonEmptyString(params.threadId) ||
+		!nonEmptyString(params.turnId) ||
+		!isPlainRecord(params.item)
+	)
+		protocolInvalid();
+	if (params.item.type !== "contextCompaction") return undefined;
+	if (!nonEmptyString(params.item.id)) protocolInvalid();
+	return {
+		phase:
+			frame.method === "item/started"
+				? ("started" as const)
+				: ("completed" as const),
+		threadId: params.threadId,
+		nativeTurnId: params.turnId,
+		nativeItemId: params.item.id,
+	};
+}
+
 function turnCompletedNotification(frame: CodexAppServerFrame) {
 	if (frame.method !== "turn/completed") return undefined;
 	const params = frame.params;
@@ -4591,6 +4697,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	>();
 	/** #3226：正在发布回答内引用的执行，按 executionId 去重。 */
 	private readonly resultPublicationRuns = new Map<string, Promise<void>>();
+	private readonly pendingNativeCompactions = new Map<
+		string,
+		{
+			readonly nativeSessionRef: string;
+			readonly executionId: string;
+			readonly threadId: string;
+			itemId?: string;
+			turnId?: string;
+			itemCompleted: boolean;
+			turnCompleted: boolean;
+			resolve: () => void;
+			reject: (error: unknown) => void;
+		}
+	>();
 
 	private retainPendingSourceTurn(turnKey: string, requestId: string): void {
 		const requests =
@@ -6708,6 +6828,56 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 	}
 
+	private nativeCommandDirectoryV2(binding: NativeCommandBinding) {
+		const base = this.nativeCommandDirectory(binding);
+		const revision = createHash("sha256")
+			.update(
+				JSON.stringify([
+					"codex-native-command-v2",
+					base.revision,
+					binding.requiredRuntime,
+				]),
+			)
+			.digest("hex");
+		const source = {
+			name: "Codex",
+			version: CODEX_APP_SERVER_V2_PROVENANCE.codexVersion,
+		};
+		return NativeMetadataCommandsProjectionV2Schema.parse({
+			schemaVersion: 1,
+			selector: "commands",
+			revision,
+			capabilities: [
+				{
+					schemaVersion: 2,
+					id: createHash("sha256")
+						.update(`thread/read:v2:${revision}`)
+						.digest("hex"),
+					kind: "command",
+					name: "查看原生会话状态",
+					description: "读取当前原生会话状态，不恢复会话或执行任务",
+					source,
+					parameters: [],
+					effect: "read_only",
+					availability: "available",
+				},
+				{
+					schemaVersion: 2,
+					id: createHash("sha256")
+						.update(`thread/compact/start:${revision}`)
+						.digest("hex"),
+					kind: "command",
+					name: "compact",
+					description: "通过 Codex 原生 thread/compact/start 压缩当前上下文",
+					source,
+					parameters: [],
+					effect: "state_changing",
+					availability: "available",
+				},
+			],
+		});
+	}
+
 	private async readBoundNativeStatus(
 		read: CodexNativeCommandReadContext,
 		binding: NativeCommandBinding,
@@ -6841,6 +7011,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return structuredClone(command);
 	}
 
+	createNativeCommandCommandV2(command: RuntimeNativeCommandCommandV2) {
+		if (
+			command.capabilityName !== "compact" ||
+			command.parameters.length !== 0 ||
+			createHash("sha256").update(command.parameters).digest("hex") !==
+				command.parametersDigest ||
+			!this.nativeSelection(command.selection)
+		)
+			nativeCommandUnsupported();
+		return structuredClone(command);
+	}
+
 	/** Read the authenticated V1 metadata projection without opening a Turn. */
 	async readNativeMetadataV1(
 		selector: NativeMetadataSelectorV1,
@@ -6871,6 +7053,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			selector,
 			...status,
 		});
+		await metadataRead.revalidate();
+		return projection;
+	}
+
+	async readNativeMetadataV2(
+		selector: "commands",
+		read: CodexNativeCommandReadContext,
+	): Promise<NativeMetadataCommandsProjectionV2> {
+		if (selector !== "commands") nativeCommandUnsupported();
+		const binding = this.nativeCommandBinding(read);
+		const metadataRead = this.nativeMetadataRead(read, binding);
+		await this.readBoundNativeStatus(read, binding, metadataRead);
+		const projection = this.nativeCommandDirectoryV2(binding);
 		await metadataRead.revalidate();
 		return projection;
 	}
@@ -7246,6 +7441,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!read) nativeCommandUnsupported();
 		read.assertCurrent();
 		const binding = this.nativeCommandBinding(read);
+		if (command.schemaVersion === 2) {
+			return this.executeStatefulNativeCommand(command, read, binding);
+		}
 		const directory = this.nativeCommandDirectory(binding);
 		const parameters = parseNativeCommandParameters(command.parameters);
 		const capability = directory.capabilities.find(
@@ -7279,6 +7477,123 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			selector: "status",
 			...observed,
 		});
+	}
+
+	private async executeStatefulNativeCommand(
+		command: Extract<CodexNativeCommandCommand, { schemaVersion: 2 }>,
+		read: RuntimeNativeMetadataReadContextV1,
+		binding: NativeCommandBinding,
+	) {
+		if (
+			command.effect !== "state_changing" ||
+			command.capabilityName !== "compact"
+		)
+			nativeCommandUnsupported();
+		if (command.parameters.length !== 0) nativeCommandUnsupported();
+		const directory = this.nativeCommandDirectoryV2(binding);
+		const capability = directory.capabilities.find(
+			(entry) =>
+				entry.id === command.capabilityId &&
+				entry.name === command.capabilityName &&
+				entry.source.version === command.capabilitySourceVersion &&
+				entry.effect === "state_changing",
+		);
+		if (!capability || directory.revision !== command.directoryRevision)
+			nativeCommandUnsupported();
+		const session = this.session(command.nativeSessionRef);
+		if (session.activeExecutionId !== undefined) nativeCommandUnsupported();
+		const state = this.readState();
+		const original = Object.entries(state.operations)
+			.filter(([key, candidate]) => {
+				let identity: unknown;
+				try {
+					identity = JSON.parse(key);
+				} catch {
+					return false;
+				}
+				return (
+					Array.isArray(identity) &&
+					identity[3] === "submit-turn" &&
+					candidate.nativeSessionRef === command.nativeSessionRef &&
+					candidate.schemaVersion === 2 &&
+					candidate.state === "resolved" &&
+					candidate.record?.result.outcome === "accepted"
+				);
+			})
+			.map(([, candidate]) => candidate)
+			.at(-1);
+		if (
+			!original ||
+			original.modelOptionId !== command.selection.modelOptionId ||
+			!original.internalModel ||
+			!original.reasoningLevel ||
+			!this.nativeSelection(command.selection) ||
+			this.nativeSelection(command.selection)?.model !==
+				original.internalModel ||
+			this.nativeSelection(command.selection)?.effort !==
+				original.reasoningLevel ||
+			original.configVersion !== this.configVersion
+		) {
+			nativeCommandUnsupported();
+		}
+		const prepared = await this.prepareNativeCommand(command);
+		if (prepared.operation.record) {
+			if (prepared.operation.state !== "resolved") stateInvalid();
+			return prepared.operation.record;
+		}
+		if (!prepared.created)
+			return this.unknown(command, command.nativeSessionRef);
+		read.assertCurrent();
+		const rpc = await this.rpc(command.nativeSessionRef, read.assertCurrent);
+		const operationKeyValue = operationKey(command);
+		const completion = new Promise<void>((resolve, reject) => {
+			this.pendingNativeCompactions.set(operationKeyValue, {
+				nativeSessionRef: command.nativeSessionRef,
+				executionId: command.executionId,
+				threadId: binding.threadId,
+				itemCompleted: false,
+				turnCompleted: false,
+				resolve,
+				reject,
+			});
+		});
+		let completionTimer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await rpc.request(
+				"thread/compact/start",
+				{ threadId: binding.threadId },
+				(value) => {
+					if (!isEmptyRecord(value)) protocolInvalid();
+					return value;
+				},
+				false,
+				false,
+				Date.now() + rpcRequestTimeoutMs,
+				read.signal,
+			);
+			await Promise.race([
+				completion,
+				new Promise<never>((_, reject) => {
+					completionTimer = setTimeout(
+						() => reject(unavailableError()),
+						rpcRequestTimeoutMs,
+					);
+				}),
+			]);
+			return this.resolveNativeCommand(command, command.nativeSessionRef, {
+				selector: "status",
+				...(await this.readBoundNativeStatus(
+					read,
+					binding,
+					this.nativeMetadataRead(read, binding),
+				)),
+			});
+		} catch {
+			return this.unknown(command, command.nativeSessionRef);
+		} finally {
+			if (completionTimer !== undefined) clearTimeout(completionTimer);
+			this.pendingNativeCompactions.delete(operationKeyValue);
+		}
 	}
 
 	private nativeCommandOperation(
@@ -7392,12 +7707,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			)
 				unavailable();
 			const operation: CodexOperation = {
-				schemaVersion: 1,
+				schemaVersion: command.schemaVersion,
 				state: "prepared",
 				nativeSessionRef: command.nativeSessionRef,
 				configVersion: this.configVersion,
 				executionId: command.executionId,
 				turnId: command.turnId,
+				...(command.schemaVersion === 2
+					? {
+							effect: command.effect,
+							selection: structuredClone(command.selection),
+							keyBinding: structuredClone(command.keyBinding),
+							authorizationRecordId: command.authorizationRecordId,
+						}
+					: {}),
 			};
 			state.operations[key] = operation;
 			return { operation, created: true };
@@ -11749,6 +12072,87 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		});
 	}
 
+	private async recordContextCompactionItem(
+		item: NonNullable<ReturnType<typeof contextCompactionItemNotification>>,
+	) {
+		const pending = [...this.pendingNativeCompactions.values()].find(
+			(candidate) =>
+				candidate.threadId === item.threadId &&
+				(candidate.turnId === undefined ||
+					candidate.turnId === item.nativeTurnId),
+		);
+		if (!pending) return false;
+		pending.turnId = item.nativeTurnId;
+		pending.itemId = item.nativeItemId;
+		if (item.phase === "completed") pending.itemCompleted = true;
+		await this.update((state) => {
+			const session = ownRecordValue(state.sessions, pending.nativeSessionRef);
+			const operation = session
+				? ownRecordValue(
+						state.operations,
+						operationKey({
+							agentId: session.agentId,
+							conversationId: session.conversationId,
+							sessionGeneration: session.sessionGeneration,
+							kind: "native-command",
+							operationId: pending.executionId,
+						}),
+					)
+				: undefined;
+			if (operation?.state !== "prepared") stateInvalid();
+			operation.nativeTurnId = pending.turnId;
+			operation.nativeCompactionItemId = pending.itemId;
+		});
+		if (pending.itemCompleted && pending.turnCompleted) pending.resolve();
+		return true;
+	}
+
+	private async recordContextCompactionTurnStarted(
+		turn: NonNullable<ReturnType<typeof turnStartedNotification>>,
+	) {
+		const pending = [...this.pendingNativeCompactions.values()].find(
+			(candidate) =>
+				candidate.threadId === turn.threadId && candidate.turnId === undefined,
+		);
+		if (!pending) return false;
+		pending.turnId = turn.nativeTurnId;
+		await this.update((state) => {
+			const session = ownRecordValue(state.sessions, pending.nativeSessionRef);
+			const operation = session
+				? ownRecordValue(
+						state.operations,
+						operationKey({
+							agentId: session.agentId,
+							conversationId: session.conversationId,
+							sessionGeneration: session.sessionGeneration,
+							kind: "native-command",
+							operationId: pending.executionId,
+						}),
+					)
+				: undefined;
+			if (operation?.state !== "prepared") stateInvalid();
+			operation.nativeTurnId = pending.turnId;
+		});
+		return true;
+	}
+
+	private recordContextCompactionTurn(
+		turn: NonNullable<ReturnType<typeof turnCompletedNotification>>,
+	) {
+		const pending = [...this.pendingNativeCompactions.values()].find(
+			(candidate) =>
+				candidate.threadId === turn.threadId &&
+				candidate.turnId === turn.nativeTurnId,
+		);
+		if (!pending) return false;
+		if (turn.status !== "completed") pending.reject(unavailableError());
+		else {
+			pending.turnCompleted = true;
+			if (pending.itemCompleted) pending.resolve();
+		}
+		return true;
+	}
+
 	/**
 	 * #3201：Session Sandbox 内的原生工具不经执行前屏障（工程 Spec §10.14），只按 item
 	 * 生命周期记录实际事实。intent 与 started 在观察到开始时一并写入，保持既有事实顺序；
@@ -11864,6 +12268,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		const started = turnStartedNotification(frame);
 		if (started) {
+			if (await this.recordContextCompactionTurnStarted(started)) return;
 			const recorded = await this.update((state) => {
 				const resolved = this.resolveNotificationJournal(
 					state,
@@ -11922,6 +12327,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 		const completed = turnCompletedNotification(frame);
 		if (completed) {
+			if (this.recordContextCompactionTurn(completed)) return;
 			// Every native terminal must join the actual provider handler and its
 			// durable outcome before publishing the original terminal event. Ordinary
 			// completion drains without aborting the native final response.
@@ -12010,6 +12416,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 
 		const nativeTool = nativeToolItemNotification(frame);
+		const compactionItem = contextCompactionItemNotification(frame);
+		if (compactionItem) {
+			await this.recordContextCompactionItem(compactionItem);
+			return;
+		}
 		if (nativeTool)
 			await this.recordNativeToolFact(nativeTool, conversationKey);
 
@@ -13609,6 +14020,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				nativeSessionRef,
 				configVersion: this.configVersion,
 				internalModel: selection?.model,
+				...(command.schemaVersion === 2
+					? { modelOptionId: command.selection.modelOptionId }
+					: {}),
 				reasoningLevel: selection?.effort,
 			};
 			// Persist deterministic local refusal atomically with the operation;
@@ -14107,7 +14521,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		result: CodexNativeCommandResult,
 	) {
 		const record = driverRecord(command, {
-			schemaVersion: 1,
+			schemaVersion: command.schemaVersion,
 			agentId: command.agentId,
 			conversationId: command.conversationId,
 			sessionGeneration: command.sessionGeneration,
@@ -14115,6 +14529,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			operationId: command.operationId,
 			nativeSessionRef,
 			result: { outcome: "accepted", status: "completed" },
+			...(command.schemaVersion === 2
+				? {
+						effect: command.effect,
+						selection: command.selection,
+						keyBinding: command.keyBinding,
+						authorizationRecordId: command.authorizationRecordId,
+					}
+				: {}),
 		});
 		return this.update((state) => {
 			const operation = ownRecordValue(state.operations, operationKey(command));
@@ -14185,6 +14607,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				code: "RUNTIME_ACCEPTANCE_UNKNOWN" as const,
 				message: "Runtime command acceptance could not be confirmed" as const,
 			},
+			...(command.schemaVersion === 2 && command.kind === "native-command"
+				? {
+						effect: command.effect,
+						selection: command.selection,
+						keyBinding: command.keyBinding,
+						authorizationRecordId: command.authorizationRecordId,
+					}
+				: {}),
 		});
 	}
 }

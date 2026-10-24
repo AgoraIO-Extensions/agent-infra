@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import release from "./codex-release.json" with { type: "json" };
@@ -6,6 +7,7 @@ import release from "./codex-release.json" with { type: "json" };
 export async function seedNativeCommandState(
 	directory: string,
 	threadId = "native-thread-private",
+	stateful = false,
 ) {
 	const path = join(directory, "driver.json");
 	const nativeSessionRef = "session-private";
@@ -55,12 +57,19 @@ export async function seedNativeCommandState(
 					"submit-turn",
 					"execution-1",
 				])]: {
-					schemaVersion: 1,
+					schemaVersion: stateful ? 2 : 1,
 					state: "resolved",
 					nativeSessionRef,
 					configVersion: "config-1",
+					...(stateful
+						? {
+								internalModel: `${createHash("sha256").update("primary").digest("hex")}/gpt-5.3-codex`,
+								modelOptionId: "primary",
+								reasoningLevel: "high",
+							}
+						: {}),
 					record: {
-						schemaVersion: 1,
+						schemaVersion: stateful ? 2 : 1,
 						agentId: binding.scope.agentId,
 						conversationId: binding.scope.conversationId,
 						sessionGeneration: 1,

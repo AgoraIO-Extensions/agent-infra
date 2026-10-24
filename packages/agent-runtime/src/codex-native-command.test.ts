@@ -34,6 +34,8 @@ class MetadataTransport {
 	modelPages = ["gpt-5.3-codex"];
 	readSendFailure?: () => Promise<void>;
 	beforeResponse?: () => void;
+	compactItemId = "context-compaction-item-1";
+	compactTurnId = "context-compaction-turn-1";
 	private readonly queue: CodexAppServerFrame[] = [];
 	private wake?: () => void;
 	private closed = false;
@@ -121,6 +123,38 @@ class MetadataTransport {
 				return;
 			}
 			this.releaseRead(frame);
+		} else if (frame.method === "thread/compact/start") {
+			this.respond(frame, {});
+			this.push({
+				method: "turn/started",
+				params: {
+					threadId: this.threadId,
+					turn: { id: this.compactTurnId, status: "inProgress", items: [] },
+				},
+			});
+			this.push({
+				method: "item/started",
+				params: {
+					threadId: this.threadId,
+					turnId: this.compactTurnId,
+					item: { type: "contextCompaction", id: this.compactItemId },
+				},
+			});
+			this.push({
+				method: "item/completed",
+				params: {
+					threadId: this.threadId,
+					turnId: this.compactTurnId,
+					item: { type: "contextCompaction", id: this.compactItemId },
+				},
+			});
+			this.push({
+				method: "turn/completed",
+				params: {
+					threadId: this.threadId,
+					turn: { id: this.compactTurnId, status: "completed", items: [] },
+				},
+			});
 		} else throw new Error(`Unexpected side effect: ${String(frame.method)}`);
 	}
 
@@ -227,10 +261,13 @@ interface MetadataState {
 	>;
 }
 
-async function fixture() {
+async function fixture(stateful = false) {
 	const directory = await mkdtemp(join(tmpdir(), "codex-metadata-unit-"));
-	const { path, nativeSessionRef, binding } =
-		await seedNativeCommandState(directory);
+	const { path, nativeSessionRef, binding } = await seedNativeCommandState(
+		directory,
+		undefined,
+		stateful,
+	);
 	const transport = new MetadataTransport();
 	const driver = await MetadataDriver.openFixture(path, transport);
 	fixtures.push({ directory, driver });
@@ -281,6 +318,144 @@ async function invokeNativeQuery(
 }
 
 describe("Codex native command result lifecycle", () => {
+	it("exposes compact only through the versioned state-changing directory", async () => {
+		const f = await fixture();
+		const projection = await f.driver.readNativeMetadataV2("commands", f.read);
+		expect(projection.capabilities).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					name: "compact",
+					effect: "state_changing",
+					schemaVersion: 2,
+				}),
+			]),
+		);
+		expect(projection.capabilities).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					name: "查看原生会话状态",
+					effect: "read_only",
+				}),
+			]),
+		);
+	});
+
+	it("fails closed before RPC when a stateful command lacks a V2 submit binding", async () => {
+		const f = await fixture();
+		const projection = await f.driver.readNativeMetadataV2("commands", f.read);
+		const compact = projection.capabilities.find(
+			(entry) => entry.name === "compact",
+		);
+		if (!compact) throw new Error("Missing compact capability");
+		const command = f.driver.createNativeCommandCommandV2({
+			schemaVersion: 2,
+			kind: "native-command",
+			operationId: "compact-1",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "compact-1",
+			turnId: "turn-compact-1",
+			sessionGeneration: 1,
+			nativeSessionRef: f.read.nativeSessionRef,
+			capabilityId: compact.id,
+			directoryRevision: projection.revision,
+			capabilityName: compact.name,
+			capabilitySourceVersion: compact.source.version,
+			parameters: "",
+			parametersDigest: createHash("sha256").update("").digest("hex"),
+			effect: "state_changing",
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+			keyBinding: {
+				purpose: "agent-default",
+				subjectId: "agent-1",
+				ciphertextRef: "relay-key-1",
+				version: 1,
+			},
+			authorizationRecordId: "authorization-1",
+		});
+		await expect(
+			f.driver.execute(command, { nativeCommand: f.read }),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED" });
+		expect(
+			f.transport.requests.some(
+				({ method }) => method === "thread/compact/start",
+			),
+		).toBe(false);
+	});
+
+	it("waits for both contextCompaction and turn completion after the compact ACK", async () => {
+		const f = await fixture(true);
+		const projection = await f.driver.readNativeMetadataV2("commands", f.read);
+		const compact = projection.capabilities.find(
+			(entry) => entry.name === "compact",
+		);
+		if (!compact) throw new Error("Missing compact capability");
+		const command = f.driver.createNativeCommandCommandV2({
+			schemaVersion: 2,
+			kind: "native-command",
+			operationId: "compact-1",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "compact-1",
+			turnId: "turn-compact-1",
+			sessionGeneration: 1,
+			nativeSessionRef: f.read.nativeSessionRef,
+			capabilityId: compact.id,
+			directoryRevision: projection.revision,
+			capabilityName: compact.name,
+			capabilitySourceVersion: compact.source.version,
+			parameters: "",
+			parametersDigest: createHash("sha256").update("").digest("hex"),
+			effect: "state_changing",
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+			keyBinding: {
+				purpose: "agent-default",
+				subjectId: "agent-1",
+				ciphertextRef: "relay-key-1",
+				version: 1,
+			},
+			authorizationRecordId: "authorization-1",
+		});
+		const record = await f.driver.execute(command, { nativeCommand: f.read });
+		expect(record.result).toEqual({ outcome: "accepted", status: "completed" });
+		expect(
+			f.transport.requests.filter(
+				(frame) => frame.method === "thread/compact/start",
+			),
+		).toHaveLength(1);
+		const persisted = JSON.parse(await readFile(f.path, "utf8")) as {
+			operations: Record<
+				string,
+				{ nativeTurnId?: string; nativeCompactionItemId?: string }
+			>;
+		};
+		expect(
+			persisted.operations[
+				JSON.stringify([
+					command.agentId,
+					command.conversationId,
+					command.sessionGeneration,
+					command.kind,
+					command.operationId,
+				])
+			],
+		).toMatchObject({
+			nativeTurnId: f.transport.compactTurnId,
+			nativeCompactionItemId: f.transport.compactItemId,
+		});
+		expect(await f.driver.execute(command, { nativeCommand: f.read })).toEqual(
+			record,
+		);
+	});
+
 	it.each([
 		[{ type: "notLoaded" }, "not_loaded"],
 		[{ type: "idle" }, "idle"],

@@ -8,6 +8,7 @@ import type {
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
 import {
+	RuntimeDriverNativeCommandOperationRecordV2Schema,
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
 } from "@agent-infra/contracts/runtime";
@@ -95,7 +96,9 @@ function driverRecord(
 ): RuntimeDriverOperationRecord {
 	const parsed = (
 		command.schemaVersion === 2
-			? RuntimeDriverSubmitTurnOperationRecordV2Schema
+			? command.kind === "native-command"
+				? RuntimeDriverNativeCommandOperationRecordV2Schema
+				: RuntimeDriverSubmitTurnOperationRecordV2Schema
 			: RuntimeDriverOperationRecordV1Schema
 	).safeParse(value);
 	if (!parsed.success) {
@@ -136,6 +139,12 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 
 	createNativeCommandCommand(
 		command: import("./driver.js").RuntimeNativeCommandCommandV1,
+	) {
+		return structuredClone(command);
+	}
+
+	createNativeCommandCommandV2(
+		command: import("./driver.js").RuntimeNativeCommandCommandV2,
 	) {
 		return structuredClone(command);
 	}
@@ -327,6 +336,14 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 				operationId: command.operationId,
 				nativeSessionRef,
 				result,
+				...(command.schemaVersion === 2 && command.kind === "native-command"
+					? {
+							effect: command.effect,
+							selection: command.selection,
+							keyBinding: command.keyBinding,
+							authorizationRecordId: command.authorizationRecordId,
+						}
+					: {}),
 			});
 			state.operations[key] = record;
 			return structuredClone(record);

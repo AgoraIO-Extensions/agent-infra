@@ -1,9 +1,12 @@
 import type {
+	NativeMetadataCommandsProjectionV2,
 	NativeMetadataProjectionV1,
 	NativeMetadataSelectorV1,
 	RuntimeCapabilitiesV1,
 	RuntimeDriverCommandV1,
+	RuntimeDriverNativeCommandOperationRecordV2,
 	RuntimeDriverNativeCommandV1,
+	RuntimeDriverNativeCommandV2,
 	RuntimeDriverOperationRecordV1,
 	RuntimeDriverSubmitTurnCommandV2,
 	RuntimeDriverSubmitTurnOperationRecordV2,
@@ -77,6 +80,7 @@ export type RuntimeNativeSkillBindingV1 = Readonly<{
 
 /** Request-local execution of one verified native command directory entry. */
 export type RuntimeNativeCommandCommandV1 = RuntimeDriverNativeCommandV1;
+export type RuntimeNativeCommandCommandV2 = RuntimeDriverNativeCommandV2;
 
 /** Request-local authority for one authenticated native metadata read. */
 export interface RuntimeNativeMetadataReadContextV1 {
@@ -96,6 +100,14 @@ export interface RuntimeNativeMetadataReaderV1 {
 		selector: NativeMetadataSelectorV1,
 		read: RuntimeNativeMetadataReadContextV1,
 	): Promise<NativeMetadataProjectionV1>;
+}
+
+/** Optional command-directory seam for versioned effects and parameters. */
+export interface RuntimeNativeMetadataReaderV2 {
+	readNativeMetadataV2(
+		selector: "commands",
+		read: RuntimeNativeMetadataReadContextV1,
+	): Promise<NativeMetadataCommandsProjectionV2>;
 }
 
 /** Verified Browser binding supplied only for one Runtime execution. */
@@ -238,6 +250,7 @@ export interface RuntimeModelDirectory {
 
 export type RuntimeDriverCommand =
 	| RuntimeDriverCommandV1
+	| RuntimeDriverNativeCommandV2
 	| RuntimeDriverSubmitTurnCommandV2;
 
 /** Request-local execution dependencies; never part of a durable command. */
@@ -257,6 +270,7 @@ export type RuntimeOperationFactInputV1 = Readonly<{
 }>;
 export type RuntimeDriverOperationRecord =
 	| RuntimeDriverOperationRecordV1
+	| RuntimeDriverNativeCommandOperationRecordV2
 	| RuntimeDriverSubmitTurnOperationRecordV2;
 export type RuntimeDriverLookup =
 	| { state: "found"; record: RuntimeDriverOperationRecord }
@@ -320,6 +334,11 @@ export interface RuntimeDriver {
 		selector: NativeMetadataSelectorV1,
 		read: RuntimeNativeMetadataReadContextV1,
 	): Promise<NativeMetadataProjectionV1>;
+	/** Read the versioned command directory; absence keeps legacy V1 semantics. */
+	readNativeMetadataV2?(
+		selector: "commands",
+		read: RuntimeNativeMetadataReadContextV1,
+	): Promise<NativeMetadataCommandsProjectionV2>;
 	/** Build the durable Driver command for one verified native Skill invocation. */
 	createNativeSkillCommand?(
 		command: RuntimeNativeSkillCommandV1,
@@ -331,6 +350,10 @@ export interface RuntimeDriver {
 	/** Build a durable native command operation without ordinary text fallback. */
 	createNativeCommandCommand?(
 		command: RuntimeNativeCommandCommandV1,
+	): Extract<RuntimeDriverCommand, { kind: "native-command" }>;
+	/** Build a durable state-changing native command; never downgrade to V1. */
+	createNativeCommandCommandV2?(
+		command: RuntimeNativeCommandCommandV2,
 	): Extract<RuntimeDriverCommand, { kind: "native-command" }>;
 	executeBrowserHandoff?(
 		nativeSessionRef: string,

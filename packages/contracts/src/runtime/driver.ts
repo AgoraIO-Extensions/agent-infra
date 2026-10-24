@@ -1,13 +1,13 @@
 import { z } from "zod";
 
 import { OpaqueIdV1Schema, SchemaVersionV1Schema } from "../index.ts";
-import { RuntimeRelayKeyBindingV1Schema } from "./host-v4.ts";
 import {
 	RuntimeInputV1Schema,
 	RuntimeOperationResultV1Schema,
 	RuntimeOperationResultV2Schema,
 	RuntimeSelectionV1Schema,
 } from "./host.ts";
+import { RuntimeRelayKeyBindingV1Schema } from "./host-v4.ts";
 
 const binding = {
 	agentId: OpaqueIdV1Schema,
@@ -124,8 +124,8 @@ export const RuntimeDriverOperationRecordV1Schema = z.strictObject({
 	result: RuntimeOperationResultV1Schema,
 });
 
-export const RuntimeDriverNativeCommandOperationRecordV2Schema =
-	z.strictObject({
+export const RuntimeDriverNativeCommandOperationRecordV2Schema = z.strictObject(
+	{
 		schemaVersion: z.literal(2),
 		...operationBinding,
 		kind: z.literal("native-command"),
@@ -135,7 +135,8 @@ export const RuntimeDriverNativeCommandOperationRecordV2Schema =
 		selection: RuntimeSelectionV1Schema,
 		keyBinding: RuntimeRelayKeyBindingV1Schema,
 		authorizationRecordId: OpaqueIdV1Schema,
-	});
+	},
+);
 
 export const RuntimeDriverLookupV1Schema = z.discriminatedUnion("state", [
 	z.strictObject({
@@ -168,6 +169,20 @@ export const RuntimeDriverSubmitTurnOperationRecordV2Schema = z.strictObject({
 	result: RuntimeOperationResultV2Schema,
 });
 
+/** Version 2 is a discriminated family: submit-turn and stateful native commands. */
+export const RuntimeDriverCommandV2Schema = z.discriminatedUnion("kind", [
+	RuntimeDriverNativeCommandV2Schema,
+	RuntimeDriverSubmitTurnCommandV2Schema,
+]);
+
+export const RuntimeDriverOperationRecordV2Schema = z.discriminatedUnion(
+	"kind",
+	[
+		RuntimeDriverNativeCommandOperationRecordV2Schema,
+		RuntimeDriverSubmitTurnOperationRecordV2Schema,
+	],
+);
+
 export const RuntimeDriverSubmitTurnLookupV2Schema = z.discriminatedUnion(
 	"state",
 	[
@@ -179,6 +194,15 @@ export const RuntimeDriverSubmitTurnLookupV2Schema = z.discriminatedUnion(
 		z.strictObject({ state: z.literal("unknown") }),
 	],
 );
+
+export const RuntimeDriverLookupV2Schema = z.discriminatedUnion("state", [
+	z.strictObject({
+		state: z.literal("found"),
+		record: RuntimeDriverOperationRecordV2Schema,
+	}),
+	z.strictObject({ state: z.literal("missing") }),
+	z.strictObject({ state: z.literal("unknown") }),
+]);
 
 export type RuntimeDriverCommandV1 = z.infer<
 	typeof RuntimeDriverCommandV1Schema
@@ -199,9 +223,16 @@ export type RuntimeDriverLookupV1 = z.infer<typeof RuntimeDriverLookupV1Schema>;
 export type RuntimeDriverSubmitTurnCommandV2 = z.infer<
 	typeof RuntimeDriverSubmitTurnCommandV2Schema
 >;
+export type RuntimeDriverCommandV2 = z.infer<
+	typeof RuntimeDriverCommandV2Schema
+>;
+export type RuntimeDriverOperationRecordV2 = z.infer<
+	typeof RuntimeDriverOperationRecordV2Schema
+>;
 export type RuntimeDriverSubmitTurnOperationRecordV2 = z.infer<
 	typeof RuntimeDriverSubmitTurnOperationRecordV2Schema
 >;
 export type RuntimeDriverSubmitTurnLookupV2 = z.infer<
 	typeof RuntimeDriverSubmitTurnLookupV2Schema
 >;
+export type RuntimeDriverLookupV2 = z.infer<typeof RuntimeDriverLookupV2Schema>;

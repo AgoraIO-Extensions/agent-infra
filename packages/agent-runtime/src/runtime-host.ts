@@ -66,8 +66,9 @@ import {
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverLookupV1Schema,
+	RuntimeDriverLookupV2Schema,
+	RuntimeDriverNativeCommandOperationRecordV2Schema,
 	RuntimeDriverOperationRecordV1Schema,
-	RuntimeDriverSubmitTurnLookupV2Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
 	RuntimeEventAckRequestV4Schema,
 	RuntimeEventAckResponseV4Schema,
@@ -690,7 +691,9 @@ function parseDriverRecord(
 ) {
 	const parsed = (
 		operation.command.schemaVersion === 2
-			? RuntimeDriverSubmitTurnOperationRecordV2Schema
+			? operation.command.kind === "native-command"
+				? RuntimeDriverNativeCommandOperationRecordV2Schema
+				: RuntimeDriverSubmitTurnOperationRecordV2Schema
 			: RuntimeDriverOperationRecordV1Schema
 	).safeParse(value);
 	const expectedNativeSessionRef =
@@ -719,7 +722,7 @@ function parseDriverLookup(
 ) {
 	const parsed = (
 		operation.command.schemaVersion === 2
-			? RuntimeDriverSubmitTurnLookupV2Schema
+			? RuntimeDriverLookupV2Schema
 			: RuntimeDriverLookupV1Schema
 	).safeParse(value);
 	if (!parsed.success) driverInvalid();

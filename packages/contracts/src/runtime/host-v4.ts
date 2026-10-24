@@ -241,6 +241,15 @@ function isNativeRequest(
 	return value !== null && typeof value === "object" && "capabilityId" in value;
 }
 
+function isSubmitRequest(value: unknown): value is RuntimeSubmitTurnRequestV4 {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		"selection" in value &&
+		"input" in value
+	);
+}
+
 export const RuntimePinnedExecutionKeyScopeV4Schema = z.object({
 	principal: RuntimePrincipalV1Schema,
 	executionSource: RuntimeExecutionSourceV1Schema,
@@ -270,8 +279,7 @@ export function validateRuntimePinnedExecutionKeyScopeV4(
 		const trustedSession = OpaqueIdV1Schema.nullable().parse(
 			trustedHostSessionRef,
 		);
-		const submit =
-			request !== null && typeof request === "object" && "selection" in request;
+		const submit = isSubmitRequest(request);
 		if (submit) RuntimeSubmitTurnRequestV4Schema.parse(request);
 		else if (isNativeRequest(request))
 			RuntimeNativeCapabilityRequestV4Schema.parse(request);
@@ -311,17 +319,16 @@ export async function validateRuntimeBusinessBindingV4(
 	let parsedRequest: RuntimeBusinessRequestV4;
 	let parsedClaims: RuntimeBusinessGrantClaimsV4;
 	try {
-		parsedRequest =
-			request !== null && typeof request === "object" && "selection" in request
-				? RuntimeSubmitTurnRequestV4Schema.parse(request)
-				: isNativeRequest(request)
-					? RuntimeNativeCapabilityRequestV4Schema.parse(request)
-					: RuntimeSupplementRequestV4Schema.parse(request);
+		parsedRequest = isSubmitRequest(request)
+			? RuntimeSubmitTurnRequestV4Schema.parse(request)
+			: isNativeRequest(request)
+				? RuntimeNativeCapabilityRequestV4Schema.parse(request)
+				: RuntimeSupplementRequestV4Schema.parse(request);
 		parsedClaims = RuntimeBusinessGrantClaimsV4Schema.parse(claims);
 	} catch {
 		throw new TypeError("RuntimeHostV4 binding is invalid");
 	}
-	const submit = "selection" in parsedRequest;
+	const submit = isSubmitRequest(parsedRequest);
 	const nativeRequest = isNativeRequest(parsedRequest)
 		? parsedRequest
 		: undefined;
@@ -414,12 +421,11 @@ export function validateRuntimePrivateRelayKeyFieldV1(
 	accepted: RuntimePrivateRelayKeyAcceptanceV1,
 ): RuntimePrivateRelayKeyFieldV1 {
 	try {
-		const acceptedRequest =
-			"selection" in accepted.request
-				? RuntimeSubmitTurnRequestV4Schema.parse(accepted.request)
-				: isNativeRequest(accepted.request)
-					? RuntimeNativeCapabilityRequestV4Schema.parse(accepted.request)
-					: RuntimeSupplementRequestV4Schema.parse(accepted.request);
+		const acceptedRequest = isSubmitRequest(accepted.request)
+			? RuntimeSubmitTurnRequestV4Schema.parse(accepted.request)
+			: isNativeRequest(accepted.request)
+				? RuntimeNativeCapabilityRequestV4Schema.parse(accepted.request)
+				: RuntimeSupplementRequestV4Schema.parse(accepted.request);
 		const expectedGrantId = OpaqueIdV1Schema.parse(accepted.grantId);
 		const expectedRequestDigest = z
 			.string()
@@ -480,12 +486,11 @@ export function runtimeRequestSigningPayloadV4(
 ): string {
 	let request: RuntimeBusinessRequestV4;
 	try {
-		request =
-			"selection" in input
-				? RuntimeSubmitTurnRequestV4Schema.parse(input)
-				: isNativeRequest(input)
-					? RuntimeNativeCapabilityRequestV4Schema.parse(input)
-					: RuntimeSupplementRequestV4Schema.parse(input);
+		request = isSubmitRequest(input)
+			? RuntimeSubmitTurnRequestV4Schema.parse(input)
+			: isNativeRequest(input)
+				? RuntimeNativeCapabilityRequestV4Schema.parse(input)
+				: RuntimeSupplementRequestV4Schema.parse(input);
 	} catch {
 		throw new TypeError("RuntimeHostV4 request is invalid");
 	}
@@ -512,12 +517,11 @@ export function runtimeRequestSigningPayloadV4(
 export function runtimeOperationDigestInputV4(input: RuntimeBusinessRequestV4) {
 	let request: RuntimeBusinessRequestV4;
 	try {
-		request =
-			"selection" in input
-				? RuntimeSubmitTurnRequestV4Schema.parse(input)
-				: isNativeRequest(input)
-					? RuntimeNativeCapabilityRequestV4Schema.parse(input)
-					: RuntimeSupplementRequestV4Schema.parse(input);
+		request = isSubmitRequest(input)
+			? RuntimeSubmitTurnRequestV4Schema.parse(input)
+			: isNativeRequest(input)
+				? RuntimeNativeCapabilityRequestV4Schema.parse(input)
+				: RuntimeSupplementRequestV4Schema.parse(input);
 	} catch {
 		throw new TypeError("RuntimeHostV4 request is invalid");
 	}
@@ -548,7 +552,7 @@ export function runtimeOperationDigestInputV4(input: RuntimeBusinessRequestV4) {
 		};
 	}
 	return {
-		kind: "selection" in request ? "submit-turn" : "supplement",
+		kind: isSubmitRequest(request) ? "submit-turn" : "supplement",
 		principal: request.principal,
 		channelId: request.channelId,
 		agentId: request.agentId,
@@ -561,6 +565,6 @@ export function runtimeOperationDigestInputV4(input: RuntimeBusinessRequestV4) {
 		executionSource: request.executionSource,
 		keyBinding: request.keyBinding,
 		input: request.input,
-		...("selection" in request ? { selection: request.selection } : {}),
+		...(isSubmitRequest(request) ? { selection: request.selection } : {}),
 	};
 }

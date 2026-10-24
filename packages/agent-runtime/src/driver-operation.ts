@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import {
 	RuntimeDriverCommandV1Schema,
+	RuntimeDriverCommandV2Schema,
+	RuntimeDriverNativeCommandOperationRecordV2Schema,
 	RuntimeDriverOperationRecordV1Schema,
-	RuntimeDriverSubmitTurnCommandV2Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
 } from "@agent-infra/contracts/runtime";
 import type {
@@ -17,7 +18,7 @@ export const driverRequestDigest = (command: RuntimeDriverCommand) =>
 		.update(
 			JSON.stringify(
 				(command.schemaVersion === 2
-					? RuntimeDriverSubmitTurnCommandV2Schema
+					? RuntimeDriverCommandV2Schema
 					: RuntimeDriverCommandV1Schema
 				).parse(command),
 			),
@@ -30,7 +31,9 @@ export function driverOperationResult(
 ): RuntimeDriverOperationRecord {
 	return (
 		command.schemaVersion === 2
-			? RuntimeDriverSubmitTurnOperationRecordV2Schema
+			? command.kind === "native-command"
+				? RuntimeDriverNativeCommandOperationRecordV2Schema
+				: RuntimeDriverSubmitTurnOperationRecordV2Schema
 			: RuntimeDriverOperationRecordV1Schema
 	).parse({
 		schemaVersion: command.schemaVersion,

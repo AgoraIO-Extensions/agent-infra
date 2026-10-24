@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import {
+	type NativeMetadataCommandsProjectionV2,
+	type NativeMetadataProjectionV1,
 	RuntimeBusinessGrantClaimsV2Schema,
 	type RuntimeBusinessGrantClaimsV4,
 	type RuntimeBusinessRequestV4,
@@ -208,13 +210,39 @@ export class RuntimeHostV4 {
 			read.assertCurrent();
 			const metadataReader = this.options.driver.readNativeMetadataV1;
 			if (!metadataReader) nativeUnsupported();
+			const metadataReaderV2 = this.options.driver.readNativeMetadataV2;
 			const selector =
 				request.capabilityKind === "command" ? "commands" : "skills";
-			const projection = await metadataReader.call(
+			const legacyProjection = await metadataReader.call(
 				this.options.driver,
 				selector,
 				read,
 			);
+			const versionedProjection =
+				request.capabilityKind === "command" && metadataReaderV2
+					? await metadataReaderV2.call(this.options.driver, "commands", read)
+					: undefined;
+			const projection = [legacyProjection, versionedProjection].find(
+				(candidate) =>
+					candidate !== undefined &&
+					"capabilities" in candidate &&
+					candidate.revision === request.directoryRevision &&
+					candidate.capabilities.some(
+						(entry) =>
+							entry.id === request.capabilityId &&
+							entry.kind === request.capabilityKind,
+					),
+			) as
+				| NativeMetadataProjectionV1
+				| NativeMetadataCommandsProjectionV2
+				| undefined;
+			if (!projection) {
+				throw new RuntimeHostError(
+					"RUNTIME_NATIVE_CAPABILITY_STALE",
+					"Native capability directory is no longer current",
+					409,
+				);
+			}
 			await read.revalidate();
 			if (
 				projection.selector !== selector ||
@@ -243,17 +271,44 @@ export class RuntimeHostV4 {
 					409,
 				);
 			const capabilityName = capability.name;
+			const stateChanging =
+				"schemaVersion" in capability &&
+				capability.schemaVersion === 2 &&
+				capability.effect === "state_changing";
 			const response = await this.options.serialize(
 				this.options.store.sessionQueueKey(request),
 				async () => {
 					this.options.assertOpen();
 					await this.options.validateGrant(request);
-					const latest = await metadataReader.call(
+					const latestLegacy = await metadataReader.call(
 						this.options.driver,
 						selector,
 						read,
 					);
+					const latestVersioned =
+						request.capabilityKind === "command" && metadataReaderV2
+							? await metadataReaderV2.call(
+									this.options.driver,
+									"commands",
+									read,
+								)
+							: undefined;
+					const latest = [latestLegacy, latestVersioned].find(
+						(candidate) =>
+							candidate !== undefined &&
+							"capabilities" in candidate &&
+							candidate.revision === request.directoryRevision &&
+							candidate.capabilities.some(
+								(entry) =>
+									entry.id === request.capabilityId &&
+									entry.kind === request.capabilityKind,
+							),
+					) as
+						| NativeMetadataProjectionV1
+						| NativeMetadataCommandsProjectionV2
+						| undefined;
 					if (
+						!latest ||
 						latest.selector !== selector ||
 						latest.revision !== request.directoryRevision
 					)
@@ -267,11 +322,18 @@ export class RuntimeHostV4 {
 							entry.id === request.capabilityId &&
 							entry.kind === request.capabilityKind,
 					);
+					const latestStateChanging =
+						latestCapability !== undefined &&
+						"schemaVersion" in latestCapability &&
+						latestCapability.schemaVersion === 2 &&
+						latestCapability.effect === "state_changing";
 					if (
 						!latestCapability ||
 						latestCapability.name !== capabilityName ||
 						latestCapability.availability !== expectedAvailability ||
-						latestCapability.source.version !== request.capabilitySourceVersion
+						latestCapability.source.version !==
+							request.capabilitySourceVersion ||
+						latestStateChanging !== stateChanging
 					)
 						throw new RuntimeHostError(
 							"RUNTIME_NATIVE_CAPABILITY_STALE",
@@ -298,6 +360,42 @@ export class RuntimeHostV4 {
 							if (commandNativeSessionRef !== nativeSessionRef)
 								nativeRequired();
 							if (request.capabilityKind === "command") {
+								if (stateChanging) {
+									const originalCommand =
+										this.options.store.readLatestAcceptedSubmitTurnV2(
+											request,
+											request.hostSessionRef,
+										);
+									const selection =
+										originalCommand?.schemaVersion === 2
+											? originalCommand.selection
+											: undefined;
+									if (!selection) nativeUnsupported();
+									const createV2 =
+										this.options.driver.createNativeCommandCommandV2;
+									if (!createV2) nativeUnsupported();
+									return createV2.call(this.options.driver, {
+										schemaVersion: 2,
+										kind: "native-command",
+										operationId: request.executionId,
+										agentId: request.agentId,
+										conversationId: request.conversationId,
+										executionId: request.executionId,
+										turnId: request.turnId,
+										sessionGeneration: request.sessionGeneration,
+										nativeSessionRef: commandNativeSessionRef,
+										capabilityId: request.capabilityId,
+										directoryRevision: request.directoryRevision,
+										parameters: request.parameters,
+										parametersDigest: request.parametersDigest,
+										capabilityName,
+										capabilitySourceVersion: request.capabilitySourceVersion,
+										effect: "state_changing",
+										selection: structuredClone(selection),
+										keyBinding: structuredClone(pinnedScope.keyBinding),
+										authorizationRecordId: claims.authorizationRecordId,
+									});
+								}
 								const commandCreate =
 									this.options.driver.createNativeCommandCommand;
 								if (!commandCreate) nativeUnsupported();

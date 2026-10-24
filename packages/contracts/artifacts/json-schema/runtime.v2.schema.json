@@ -1,5 +1,940 @@
 {
   "$defs": {
+    "RuntimeDriverCommandV2": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "authorizationRecordId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "capabilityId": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "capabilityName": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "capabilitySourceVersion": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "directoryRevision": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "effect": {
+              "const": "state_changing",
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "keyBinding": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ciphertextRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "purpose": {
+                      "const": "personal",
+                      "type": "string"
+                    },
+                    "subjectId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "purpose",
+                    "subjectId",
+                    "ciphertextRef",
+                    "version"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ciphertextRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "purpose": {
+                      "const": "agent-default",
+                      "type": "string"
+                    },
+                    "subjectId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "purpose",
+                    "subjectId",
+                    "ciphertextRef",
+                    "version"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "kind": {
+              "const": "native-command",
+              "type": "string"
+            },
+            "nativeSessionRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "operationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "parameters": {
+              "maxLength": 16384,
+              "type": "string"
+            },
+            "parametersDigest": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 2,
+              "type": "number"
+            },
+            "selection": {
+              "additionalProperties": false,
+              "properties": {
+                "modelOptionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "reasoningLevel": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "modelOptionId",
+                "reasoningLevel"
+              ],
+              "type": "object"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "turnId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "agentId",
+            "conversationId",
+            "executionId",
+            "turnId",
+            "sessionGeneration",
+            "schemaVersion",
+            "kind",
+            "operationId",
+            "nativeSessionRef",
+            "capabilityId",
+            "directoryRevision",
+            "capabilityName",
+            "capabilitySourceVersion",
+            "parameters",
+            "parametersDigest",
+            "effect",
+            "selection",
+            "keyBinding",
+            "authorizationRecordId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "attachments": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "text": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "attachments"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "attachments": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "attachments"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "kind": {
+              "const": "submit-turn",
+              "type": "string"
+            },
+            "nativeSessionRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "nativeSkill": {
+              "additionalProperties": false,
+              "properties": {
+                "capabilityId": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "directoryRevision": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "manifestDigest": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "name": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                },
+                "packageDigest": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "version": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "capabilityId",
+                "directoryRevision",
+                "name",
+                "version"
+              ],
+              "type": "object"
+            },
+            "operationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 2,
+              "type": "number"
+            },
+            "selection": {
+              "additionalProperties": false,
+              "properties": {
+                "modelOptionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "reasoningLevel": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "modelOptionId",
+                "reasoningLevel"
+              ],
+              "type": "object"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "turnId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "agentId",
+            "conversationId",
+            "executionId",
+            "turnId",
+            "sessionGeneration",
+            "schemaVersion",
+            "kind",
+            "operationId",
+            "input",
+            "selection"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RuntimeDriverLookupV2": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "record": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorizationRecordId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "conversationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "effect": {
+                      "const": "state_changing",
+                      "type": "string"
+                    },
+                    "keyBinding": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "ciphertextRef": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "purpose": {
+                              "const": "personal",
+                              "type": "string"
+                            },
+                            "subjectId": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "version": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "purpose",
+                            "subjectId",
+                            "ciphertextRef",
+                            "version"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "ciphertextRef": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "purpose": {
+                              "const": "agent-default",
+                              "type": "string"
+                            },
+                            "subjectId": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "version": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "purpose",
+                            "subjectId",
+                            "ciphertextRef",
+                            "version"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "kind": {
+                      "const": "native-command",
+                      "type": "string"
+                    },
+                    "nativeSessionRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "operationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "result": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "outcome": {
+                              "const": "accepted",
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "idle",
+                                "running",
+                                "completed",
+                                "failed",
+                                "cancelled",
+                                "unavailable",
+                                "unknown"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "status"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "outcome": {
+                              "const": "busy",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "outcome"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "const": "RUNTIME_TURN_NOT_ACTIVE",
+                              "type": "string"
+                            },
+                            "message": {
+                              "const": "Runtime turn is no longer active",
+                              "type": "string"
+                            },
+                            "outcome": {
+                              "const": "rejected",
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "code",
+                            "message",
+                            "retryable"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "const": "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+                              "type": "string"
+                            },
+                            "message": {
+                              "const": "Runtime model selection is unsupported",
+                              "type": "string"
+                            },
+                            "outcome": {
+                              "const": "rejected",
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "code",
+                            "message",
+                            "retryable"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "const": "RUNTIME_SESSION_BLOCKED",
+                              "type": "string"
+                            },
+                            "message": {
+                              "const": "Runtime session is blocked by an unconfirmed turn",
+                              "type": "string"
+                            },
+                            "outcome": {
+                              "const": "rejected",
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "code",
+                            "message",
+                            "retryable"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "const": "RUNTIME_FILE_INPUT_REJECTED",
+                              "type": "string"
+                            },
+                            "message": {
+                              "const": "Runtime file input was rejected",
+                              "type": "string"
+                            },
+                            "outcome": {
+                              "const": "rejected",
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "code",
+                            "message",
+                            "retryable"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
+                              "type": "string"
+                            },
+                            "message": {
+                              "const": "Runtime command acceptance could not be confirmed",
+                              "type": "string"
+                            },
+                            "outcome": {
+                              "const": "unknown",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "code",
+                            "message"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "schemaVersion": {
+                      "const": 2,
+                      "type": "number"
+                    },
+                    "selection": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "modelOptionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "reasoningLevel": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "modelOptionId",
+                        "reasoningLevel"
+                      ],
+                      "type": "object"
+                    },
+                    "sessionGeneration": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "agentId",
+                    "conversationId",
+                    "sessionGeneration",
+                    "kind",
+                    "operationId",
+                    "nativeSessionRef",
+                    "result",
+                    "effect",
+                    "selection",
+                    "keyBinding",
+                    "authorizationRecordId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "conversationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "submit-turn",
+                      "type": "string"
+                    },
+                    "nativeSessionRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "operationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "result": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "outcome": {
+                              "const": "accepted",
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "idle",
+                                "running",
+                                "completed",
+                                "failed",
+                                "cancelled",
+                                "unavailable",
+                                "unknown"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "status"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "outcome": {
+                              "const": "busy",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "outcome"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "const": "RUNTIME_TURN_NOT_ACTIVE",
+                              "type": "string"
+                            },
+                            "message": {
+                              "const": "Runtime turn is no longer active",
+                              "type": "string"
+                            },
+                            "outcome": {
+                              "const": "rejected",
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "code",
+                            "message",
+                            "retryable"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "const": "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+                              "type": "string"
+                            },
+                            "message": {
+                              "const": "Runtime model selection is unsupported",
+                              "type": "string"
+                            },
+                            "outcome": {
+                              "const": "rejected",
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "code",
+                            "message",
+                            "retryable"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "const": "RUNTIME_SESSION_BLOCKED",
+                              "type": "string"
+                            },
+                            "message": {
+                              "const": "Runtime session is blocked by an unconfirmed turn",
+                              "type": "string"
+                            },
+                            "outcome": {
+                              "const": "rejected",
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "code",
+                            "message",
+                            "retryable"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "const": "RUNTIME_FILE_INPUT_REJECTED",
+                              "type": "string"
+                            },
+                            "message": {
+                              "const": "Runtime file input was rejected",
+                              "type": "string"
+                            },
+                            "outcome": {
+                              "const": "rejected",
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "code",
+                            "message",
+                            "retryable"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
+                              "type": "string"
+                            },
+                            "message": {
+                              "const": "Runtime command acceptance could not be confirmed",
+                              "type": "string"
+                            },
+                            "outcome": {
+                              "const": "unknown",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "code",
+                            "message"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "schemaVersion": {
+                      "const": 2,
+                      "type": "number"
+                    },
+                    "sessionGeneration": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "agentId",
+                    "conversationId",
+                    "sessionGeneration",
+                    "kind",
+                    "operationId",
+                    "nativeSessionRef",
+                    "result"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "state": {
+              "const": "found",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "record"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "missing",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "RuntimeDriverNativeCommandOperationRecordV2": {
       "additionalProperties": false,
       "properties": {
@@ -502,6 +1437,553 @@
         "authorizationRecordId"
       ],
       "type": "object"
+    },
+    "RuntimeDriverOperationRecordV2": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "authorizationRecordId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "effect": {
+              "const": "state_changing",
+              "type": "string"
+            },
+            "keyBinding": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ciphertextRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "purpose": {
+                      "const": "personal",
+                      "type": "string"
+                    },
+                    "subjectId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "purpose",
+                    "subjectId",
+                    "ciphertextRef",
+                    "version"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ciphertextRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "purpose": {
+                      "const": "agent-default",
+                      "type": "string"
+                    },
+                    "subjectId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "purpose",
+                    "subjectId",
+                    "ciphertextRef",
+                    "version"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "kind": {
+              "const": "native-command",
+              "type": "string"
+            },
+            "nativeSessionRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "operationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "result": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcome": {
+                      "const": "accepted",
+                      "type": "string"
+                    },
+                    "status": {
+                      "enum": [
+                        "idle",
+                        "running",
+                        "completed",
+                        "failed",
+                        "cancelled",
+                        "unavailable",
+                        "unknown"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcome": {
+                      "const": "busy",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_TURN_NOT_ACTIVE",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime turn is no longer active",
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "const": "rejected",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime model selection is unsupported",
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "const": "rejected",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_SESSION_BLOCKED",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime session is blocked by an unconfirmed turn",
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "const": "rejected",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_FILE_INPUT_REJECTED",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime file input was rejected",
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "const": "rejected",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime command acceptance could not be confirmed",
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "const": "unknown",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "code",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "schemaVersion": {
+              "const": 2,
+              "type": "number"
+            },
+            "selection": {
+              "additionalProperties": false,
+              "properties": {
+                "modelOptionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "reasoningLevel": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "modelOptionId",
+                "reasoningLevel"
+              ],
+              "type": "object"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "agentId",
+            "conversationId",
+            "sessionGeneration",
+            "kind",
+            "operationId",
+            "nativeSessionRef",
+            "result",
+            "effect",
+            "selection",
+            "keyBinding",
+            "authorizationRecordId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "const": "submit-turn",
+              "type": "string"
+            },
+            "nativeSessionRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "operationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "result": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcome": {
+                      "const": "accepted",
+                      "type": "string"
+                    },
+                    "status": {
+                      "enum": [
+                        "idle",
+                        "running",
+                        "completed",
+                        "failed",
+                        "cancelled",
+                        "unavailable",
+                        "unknown"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcome": {
+                      "const": "busy",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_TURN_NOT_ACTIVE",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime turn is no longer active",
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "const": "rejected",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime model selection is unsupported",
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "const": "rejected",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_SESSION_BLOCKED",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime session is blocked by an unconfirmed turn",
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "const": "rejected",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_FILE_INPUT_REJECTED",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime file input was rejected",
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "const": "rejected",
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "code",
+                    "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime command acceptance could not be confirmed",
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "const": "unknown",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "code",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "schemaVersion": {
+              "const": 2,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "agentId",
+            "conversationId",
+            "sessionGeneration",
+            "kind",
+            "operationId",
+            "nativeSessionRef",
+            "result"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "RuntimeDriverSubmitTurnCommandV2": {
       "additionalProperties": false,

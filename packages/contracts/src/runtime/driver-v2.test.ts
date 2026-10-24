@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+	RuntimeDriverCommandV2Schema,
+	RuntimeDriverNativeCommandOperationRecordV2Schema,
 	RuntimeDriverNativeCommandV1Schema,
 	RuntimeDriverNativeCommandV2Schema,
-	RuntimeDriverNativeCommandOperationRecordV2Schema,
+	RuntimeDriverOperationRecordV2Schema,
 } from "./driver.ts";
 
 const digest = (value: string) =>
@@ -87,5 +89,25 @@ describe("stateful native command driver contract", () => {
 			authorizationRecordId: stateful.authorizationRecordId,
 		});
 		expect(parsed.schemaVersion).toBe(2);
+	});
+
+	it("keeps V2 native commands in the V2 family without widening submit V2", () => {
+		expect(RuntimeDriverCommandV2Schema.parse(stateful)).toEqual(stateful);
+		expect(
+			RuntimeDriverOperationRecordV2Schema.safeParse({
+				schemaVersion: 2,
+				agentId: stateful.agentId,
+				conversationId: stateful.conversationId,
+				sessionGeneration: stateful.sessionGeneration,
+				kind: "native-command",
+				operationId: stateful.operationId,
+				nativeSessionRef: stateful.nativeSessionRef,
+				result: { outcome: "accepted", status: "completed" },
+				effect: stateful.effect,
+				selection: stateful.selection,
+				keyBinding: stateful.keyBinding,
+				authorizationRecordId: stateful.authorizationRecordId,
+			}).success,
+		).toBe(true);
 	});
 });

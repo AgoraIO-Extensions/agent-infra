@@ -38,11 +38,14 @@ export * from "./skill-hub.ts";
 import { RuntimeBrowserCapabilityProbeEvidenceV1Schema } from "./browser-capability.ts";
 import {
 	RuntimeDriverCommandV1Schema,
+	RuntimeDriverCommandV2Schema,
 	RuntimeDriverLookupV1Schema,
+	RuntimeDriverLookupV2Schema,
+	RuntimeDriverNativeCommandOperationRecordV2Schema,
 	RuntimeDriverNativeCommandV1Schema,
 	RuntimeDriverNativeCommandV2Schema,
 	RuntimeDriverOperationRecordV1Schema,
-	RuntimeDriverNativeCommandOperationRecordV2Schema,
+	RuntimeDriverOperationRecordV2Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
 	RuntimeDriverSubmitTurnLookupV2Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
@@ -135,11 +138,14 @@ export const RuntimeDriverV1SchemaDefinitions = {
 };
 
 export const RuntimeDriverV2SchemaDefinitions = {
+	RuntimeDriverCommandV2: RuntimeDriverCommandV2Schema,
 	RuntimeDriverNativeCommandV2: RuntimeDriverNativeCommandV2Schema,
 	RuntimeDriverNativeCommandOperationRecordV2:
 		RuntimeDriverNativeCommandOperationRecordV2Schema,
+	RuntimeDriverOperationRecordV2: RuntimeDriverOperationRecordV2Schema,
 	RuntimeDriverSubmitTurnCommandV2: RuntimeDriverSubmitTurnCommandV2Schema,
 	RuntimeDriverSubmitTurnLookupV2: RuntimeDriverSubmitTurnLookupV2Schema,
+	RuntimeDriverLookupV2: RuntimeDriverLookupV2Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2:
 		RuntimeDriverSubmitTurnOperationRecordV2Schema,
 };
