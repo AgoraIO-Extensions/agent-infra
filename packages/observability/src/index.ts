@@ -643,9 +643,10 @@ export function startObservability(options: ObservabilityOptions) {
 				}
 				if (
 					(imageDigest !== undefined &&
-						!/^(?:sha256:[0-9a-f]{64}|[^@\s]+@sha256:[0-9a-f]{64})$/.test(
-							imageDigest,
-						)) ||
+						(imageDigest.length > 512 ||
+							!/^(?:sha256:[0-9a-f]{64}|[A-Za-z0-9./:_-]+@sha256:[0-9a-f]{64})$/.test(
+								imageDigest,
+							))) ||
 					(sandboxResourceUid !== undefined && !safeId(sandboxResourceUid))
 				) {
 					invalidRecords++;

@@ -561,7 +561,12 @@ it("records bounded Sandbox lifecycle identity and retry facts", () => {
 		outcome: "failed",
 		imageDigest: "PRIVATE_SENTINEL",
 	});
-	expect(telemetry.status().invalidRecords).toBe(1);
+	telemetry.record({
+		stage: "workload",
+		outcome: "failed",
+		imageDigest: `registry.example/${"a".repeat(513)}@sha256:${"a".repeat(64)}`,
+	});
+	expect(telemetry.status().invalidRecords).toBe(2);
 	expect(lines.join("")).not.toContain("PRIVATE_SENTINEL");
 });
 
