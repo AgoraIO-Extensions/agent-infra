@@ -24,6 +24,7 @@ import {
 	pilotSseSchemasV1,
 	ResultFileEventV1Schema,
 	SseEventIdV1Schema,
+	TaskStatusEventV1Schema,
 	TimelineReloadSignalV1Schema,
 } from "./sse.ts";
 
@@ -229,12 +230,17 @@ export const ReasoningDeltaEventV2Schema = z.strictObject({
 
 /** 会话读取方看到的事件：混合版本历史加上思考过程。 */
 const conversationEvents = z.array(
-	z.union([PersistedConversationEventV2Schema, ReasoningDeltaEventV2Schema]),
+	z.union([
+		PersistedConversationEventV2Schema,
+		ReasoningDeltaEventV2Schema,
+		TaskStatusEventV1Schema,
+	]),
 );
 
 export const ConversationSseMessageV2Schema = z.union([
 	PersistedConversationEventV2Schema,
 	ReasoningDeltaEventV2Schema,
+	TaskStatusEventV1Schema,
 	HeartbeatSignalV1Schema,
 	TimelineReloadSignalV1Schema,
 	AuthorizationRevokedSignalV1Schema,
@@ -378,6 +384,7 @@ export const pilotOperationSseSchemasV2 = {
 	ResultFileEventV2: ResultFileEventV2Schema,
 	PersistedConversationEventV2: PersistedConversationEventV2Schema,
 	ReasoningDeltaEventV2: ReasoningDeltaEventV2Schema,
+	TaskStatusEventV1: TaskStatusEventV1Schema,
 	ConversationSseMessageV2: ConversationSseMessageV2Schema,
 };
 

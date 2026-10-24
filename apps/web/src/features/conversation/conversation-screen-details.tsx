@@ -51,6 +51,7 @@ export type ExecutionModelOption = Readonly<{
 }>;
 
 const statusTones: Record<ExecutionStatus, ChipTone> = {
+	waiting: "blue",
 	submitted: "blue",
 	processing: "blue",
 	completed: "green",

@@ -409,7 +409,8 @@ export function ActiveConversation({
 		const event = timeline.events.findLast(
 			(item) =>
 				item.type === "conversation.error" ||
-				(item.type === "execution.status" && isTerminal(item.payload.status)),
+				((item.type === "execution.status" || item.type === "task.status") &&
+					isTerminal(item.payload.status)),
 		);
 		if (!event || lastRefreshEvent.current === event.eventId) return;
 		lastRefreshEvent.current = event.eventId;

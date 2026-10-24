@@ -40,6 +40,42 @@ function comparePaths(current: string, previous: string) {
 	);
 }
 
+/** Build a baseline before Platform task facts were published to Web readers. */
+function removeConversationTaskStatus(document: {
+	components: { schemas: Record<string, unknown> };
+}) {
+	const schemas = document.components.schemas;
+	if (schemas.TaskStatusEventV1 === undefined) return;
+	delete schemas.TaskStatusEventV1;
+	const reference = JSON.stringify({
+		$ref: "#/components/schemas/TaskStatusEventV1",
+	});
+	const remove = (value: unknown): unknown => {
+		if (Array.isArray(value)) return value.map(remove);
+		if (value === null || typeof value !== "object") return value;
+		const object = value as Record<string, unknown>;
+		if (Array.isArray(object.anyOf)) {
+			const options = object.anyOf.filter(
+				(option: unknown) => JSON.stringify(option) !== reference,
+			);
+			if (options.length !== object.anyOf.length) {
+				if (options.length === 1 && Object.keys(object).length === 1)
+					return remove(options[0]);
+				return { ...object, anyOf: options.map(remove) };
+			}
+		}
+		return Object.fromEntries(
+			Object.entries(object).map(([key, item]) => [key, remove(item)]),
+		);
+	};
+	for (const host of [
+		"ConversationSseMessageV2",
+		"ConversationDetailProjectionV2",
+		"ExecutionDetailProjectionV2",
+	])
+		if (schemas[host] !== undefined) schemas[host] = remove(schemas[host]);
+}
+
 /** #3184 之前的企微回执状态枚举：去掉末尾追加的 `new_conversation`。 */
 function wecomReceiptStatusEnums(value: {
 	paths: Record<string, Record<string, unknown>>;
@@ -3574,6 +3610,81 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only pinned Platform task facts in the three conversation hosts (#3336)", async () => {
+		type Schema = Record<string, unknown>;
+		type Document = {
+			components: {
+				schemas: Record<string, Schema> & {
+					TaskStatusEventV1: Schema;
+					ConversationSseMessageV2: Schema;
+					ExecutionDetailProjectionV2: Schema;
+					SseEventIdV1: Schema;
+				};
+			};
+		};
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		) as Document;
+		const previous = structuredClone(current);
+		removeConversationTaskStatus(previous);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-task-status-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			expect(comparePaths(previousPath, currentPath).status).toBe(1);
+			for (const mutate of [
+				(document: Document) => {
+					document.components.schemas.TaskStatusEventV1.additionalProperties = true;
+				},
+				(document: Document) => {
+					document.components.schemas.TaskStatusEventV1 = JSON.parse(
+						JSON.stringify(
+							document.components.schemas.TaskStatusEventV1,
+						).replace("STOP_CONFIRMATION_TIMEOUT", "UNBOUNDED_REASON"),
+					);
+				},
+				(document: Document) => {
+					document.components.schemas.ConversationSseMessageV2 =
+						structuredClone(
+							previous.components.schemas.ConversationSseMessageV2,
+						);
+				},
+				(document: Document) => {
+					document.components.schemas.ExecutionDetailProjectionV2 =
+						structuredClone(
+							previous.components.schemas.ExecutionDetailProjectionV2,
+						);
+				},
+				(document: Document) => {
+					document.components.schemas.SseEventIdV1 = {
+						anyOf: [
+							document.components.schemas.SseEventIdV1,
+							{ $ref: "#/components/schemas/TaskStatusEventV1" },
+						],
+					};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the pinned reasoning events in their reviewed hosts (#2979)", async () => {
 		type Schema = Record<string, unknown>;
 		type Document = { components: { schemas: Record<string, Schema> } };
@@ -3630,6 +3741,7 @@ describe("contract compatibility command", () => {
 					),
 				) as Document;
 				const previous = structuredClone(current);
+				removeConversationTaskStatus(previous);
 				const schemas = previous.components.schemas;
 				delete schemas[item.name];
 				for (const host of item.unionHosts) {
@@ -4978,6 +5090,8 @@ describe("contract compatibility command", () => {
 			"NativeCapabilityInvocationResultV1",
 			// 该基线早于 #2979 的思考过程事件。
 			"ReasoningDeltaEventV2",
+			// 该基线早于 #3336 的 Web 任务状态事实。
+			"TaskStatusEventV1",
 			// 该基线早于 #3226 的结果文件事件 V2。
 			"ResultFileEventV2",
 		])

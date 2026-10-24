@@ -17,6 +17,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	type ConversationRoutesDependencies,
 	eventProjection,
+	eventProjectionV1,
 	registerConversationRoutes,
 } from "./conversation-routes.js";
 
@@ -38,6 +39,39 @@ const authority = {
 	authorizationRevision: identity.authorizationRevision,
 	supportsSupplementaryInstruction: true,
 };
+
+it("preserves a Platform stop-confirmation event in V2 and advances past it for V1", () => {
+	const input = {
+		eventId: "stop-timeout-event",
+		conversationId: "conversation-1",
+		executionId: "execution-1",
+		sequence: 4,
+		conversationCursor: "198",
+		eventType: "task.status",
+		eventPayload: {
+			type: "task.status",
+			status: "unknown",
+			reason: "STOP_CONFIRMATION_TIMEOUT",
+		},
+		occurredAt: new Date("2026-10-23T18:35:01.078Z"),
+		traceId: "trace-stop",
+	};
+	const projected = eventProjection(input);
+	expect(ConversationSseMessageV2Schema.parse(projected)).toMatchObject({
+		eventId: input.eventId,
+		conversationCursor: "198",
+		sequence: 4,
+		type: "task.status",
+		payload: { status: "unknown", reason: "STOP_CONFIRMATION_TIMEOUT" },
+	});
+	expect(eventProjectionV1(input)).toBeUndefined();
+	expect(() =>
+		eventProjection({
+			...input,
+			eventPayload: { ...input.eventPayload, reason: "untrusted detail" },
+		}),
+	).toThrow();
+});
 
 it("projects an internal Browser handoff event to bounded execution detail SSE", () => {
 	const projected = eventProjection({
@@ -259,6 +293,67 @@ const commandHeaders = {
 };
 
 describe("Conversation HTTP routes", () => {
+	it("reads a stop-timeout fact and the subsequent terminal result from V2 history", async () => {
+		const input = dependencies();
+		const detail = await input.query.get(
+			{ actorId: identity.userId, channelId: "web" },
+			conversation.conversationId,
+		);
+		if (!detail) throw new Error("Missing detail fixture");
+		const events = [
+			{
+				...persistedEvent,
+				eventType: "task.status",
+				eventPayload: {
+					type: "task.status",
+					status: "unknown",
+					reason: "STOP_CONFIRMATION_TIMEOUT",
+				},
+			},
+			{
+				...persistedEvent,
+				eventId: "terminal-event",
+				sequence: 2,
+				conversationCursor: "cursor-2",
+				eventType: "execution.status",
+				eventPayload: { type: "execution.status", status: "failed" },
+			},
+		];
+		input.query.get = vi.fn().mockResolvedValue({ ...detail, events });
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events,
+				resumeCursor: "cursor-2",
+			})
+			.mockResolvedValue({
+				outcome: "reload",
+				reason: "cursor_expired",
+				resumeCursor: "cursor-2",
+			});
+		const { app } = testApp(input);
+		const response = await app.request("/api/v2/conversations/conversation-1");
+		expect(response.status).toBe(200);
+		const history = ConversationDetailProjectionV2Schema.parse(
+			await response.json(),
+		);
+		expect(history.events.map((event) => event.type)).toEqual([
+			"task.status",
+			"execution.status",
+		]);
+		const stream = await (
+			await app.request("/api/v2/conversations/conversation-1/events")
+		).text();
+		const streamed = stream
+			.split("\n")
+			.filter((line) => line.startsWith("data: "))
+			.map((line) =>
+				ConversationSseMessageV2Schema.parse(JSON.parse(line.slice(6))),
+			)
+			.filter((event) => event.kind === "event");
+		expect(streamed).toEqual(history.events);
+	});
 	it("serves V2 detail and execution projections with durable events", async () => {
 		const { app } = testApp();
 		const detail = await app.request("/api/v2/conversations/conversation-1");
@@ -1073,58 +1168,75 @@ describe("Conversation persisted SSE", () => {
 			expect.any(AbortSignal),
 		);
 	});
-	it("keeps V1 streaming after validated V2 facts using the original cursor", async () => {
-		const query = dependencies().query;
-		query.replay = vi
-			.fn()
-			.mockResolvedValueOnce({
-				outcome: "events",
-				events: [persistedEvent, operationEvent],
-				resumeCursor: "cursor-2",
-			})
-			.mockResolvedValueOnce({
-				outcome: "events",
-				events: [
-					{
-						...persistedEvent,
-						eventId: "event-3",
-						sequence: 3,
-						conversationCursor: "cursor-3",
-						eventPayload: { type: "text.delta", text: "after operation" },
-					},
-				],
-				resumeCursor: "cursor-3",
-			})
-			.mockResolvedValue({
-				outcome: "reload",
-				reason: "cursor_expired",
-				resumeCursor: "cursor-3",
-			});
-		const response = await testApp(dependencies({ query })).app.request(
-			"/api/v1/conversations/conversation-1/events",
-		);
-		expect(response.status).toBe(200);
-		const stream = await response.text();
-		const messages = stream
-			.split("\n")
-			.filter((line) => line.startsWith("data: "))
-			.map((line) =>
-				ConversationSseMessageV1Schema.parse(JSON.parse(line.slice(6))),
+	it.each([
+		operationEvent,
+		{
+			...persistedEvent,
+			eventId: "task-event-2",
+			sequence: 2,
+			conversationCursor: "cursor-2",
+			eventType: "task.status",
+			eventPayload: {
+				type: "task.status",
+				status: "unknown",
+				reason: "STOP_CONFIRMATION_TIMEOUT",
+			},
+		},
+	])(
+		"keeps V1 streaming after validated extended facts using the original cursor",
+		async (extendedEvent) => {
+			const query = dependencies().query;
+			query.replay = vi
+				.fn()
+				.mockResolvedValueOnce({
+					outcome: "events",
+					events: [persistedEvent, extendedEvent],
+					resumeCursor: "cursor-2",
+				})
+				.mockResolvedValueOnce({
+					outcome: "events",
+					events: [
+						{
+							...persistedEvent,
+							eventId: "event-3",
+							sequence: 3,
+							conversationCursor: "cursor-3",
+							eventPayload: { type: "text.delta", text: "after operation" },
+						},
+					],
+					resumeCursor: "cursor-3",
+				})
+				.mockResolvedValue({
+					outcome: "reload",
+					reason: "cursor_expired",
+					resumeCursor: "cursor-3",
+				});
+			const response = await testApp(dependencies({ query })).app.request(
+				"/api/v1/conversations/conversation-1/events",
 			);
-		expect(
-			messages
-				.filter((message) => message.kind === "event")
-				.map((message) => message.eventId),
-		).toEqual(["event-1", "event-3"]);
-		expect(stream).not.toContain("operation-event-2");
-		expect(query.replay).toHaveBeenNthCalledWith(
-			2,
-			{ actorId: identity.userId, channelId: "web" },
-			conversation.conversationId,
-			{ kind: "cursor", value: "cursor-2" },
-			expect.any(AbortSignal),
-		);
-	});
+			expect(response.status).toBe(200);
+			const stream = await response.text();
+			const messages = stream
+				.split("\n")
+				.filter((line) => line.startsWith("data: "))
+				.map((line) =>
+					ConversationSseMessageV1Schema.parse(JSON.parse(line.slice(6))),
+				);
+			expect(
+				messages
+					.filter((message) => message.kind === "event")
+					.map((message) => message.eventId),
+			).toEqual(["event-1", "event-3"]);
+			expect(stream).not.toContain(extendedEvent.eventId);
+			expect(query.replay).toHaveBeenNthCalledWith(
+				2,
+				{ actorId: identity.userId, channelId: "web" },
+				conversation.conversationId,
+				{ kind: "cursor", value: "cursor-2" },
+				expect.any(AbortSignal),
+			);
+		},
+	);
 	it.each([
 		{ eventSchemaVersion: undefined },
 		{

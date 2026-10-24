@@ -586,7 +586,8 @@ function AssistantReply({
 	};
 	files?: ReplyResultFiles;
 }) {
-	const pending = status === "submitted" || status === "processing";
+	const pending =
+		status === "waiting" || status === "submitted" || status === "processing";
 	const answered = bodyKind === "text" && Boolean(text);
 	const preview = useResultFilePreview(files);
 	// #3228：回答中已显示为图片或文件卡的结果文件（按 fileId 计数，StrictMode 重复挂载也成对）。

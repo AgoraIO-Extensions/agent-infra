@@ -2735,6 +2735,59 @@ function normalizeReasoningEventOpenApiAddition(previous, current) {
 	return normalized;
 }
 
+// #3336：已有 Task 状态事实只进入三个 V2 会话读取宿主；固定 Schema 摘要，不放宽事件内容。
+function normalizeConversationTaskStatusOpenApiAddition(previous, current) {
+	const name = "TaskStatusEventV1";
+	const ref = `#/components/schemas/${name}`;
+	const component = current.components?.schemas?.[name];
+	if (
+		previous.components?.schemas?.[name] !== undefined ||
+		component === undefined
+	)
+		return current;
+	if (
+		createHash("sha256").update(JSON.stringify(component)).digest("hex") !==
+		"95b3bd9ece3cc23b1878674d396299a744532f78f9e8a4195bd2b70c3ca6cc99"
+	)
+		return current;
+	const candidate = structuredClone(current);
+	const schemas = candidate.components.schemas;
+	const options = schemas.ConversationSseMessageV2?.anyOf;
+	if (
+		!Array.isArray(options) ||
+		options.filter((option) => sameValue(option, { $ref: ref })).length !== 1
+	)
+		return current;
+	schemas.ConversationSseMessageV2.anyOf = options.filter(
+		(option) => !sameValue(option, { $ref: ref }),
+	);
+	const previousItems = {
+		anyOf: [
+			{ $ref: persistedConversationEventV2Ref },
+			{ $ref: "#/components/schemas/ReasoningDeltaEventV2" },
+		],
+	};
+	const currentItems = { anyOf: [...previousItems.anyOf, { $ref: ref }] };
+	for (const [host, expectedCount] of [
+		["ConversationDetailProjectionV2", 1],
+		["ExecutionDetailProjectionV2", 2],
+	]) {
+		const found = { count: 0 };
+		if (schemas[host] === undefined) return current;
+		schemas[host] = replaceReasoningEventItems(
+			schemas[host],
+			currentItems,
+			previousItems,
+			found,
+		);
+		if (found.count !== expectedCount) return current;
+	}
+	delete schemas[name];
+	// 其他位置借用此事件仍然拒绝，不能借兼容例外扩大请求或其他读取接口。
+	if (JSON.stringify(candidate).includes(JSON.stringify(ref))) return current;
+	return candidate;
+}
+
 // #3226 回答内 `sandbox:` 引用发布的结果文件：浏览器 V2 `result.file` 与 Runtime V2 `file`
 // 事件在 V1 字段之外携带规范化的 `workspaceReference`，运行期文件交换的结果请求新增同名可选
 // 字段，三者都只做加法。事件 Schema 与请求字段的内容按摘要固定，宿主逐一固定：基线已有该新增、
@@ -5774,6 +5827,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			previous,
 			current,
 		);
+		current = normalizeConversationTaskStatusOpenApiAddition(previous, current);
 		current = normalizeReasoningEventOpenApiAddition(previous, current);
 		current = normalizeSandboxResultFileOpenApiAddition(previous, current);
 		if (!hasSelectedBrowserSideEffectEventOpenApiOption(previous)) {

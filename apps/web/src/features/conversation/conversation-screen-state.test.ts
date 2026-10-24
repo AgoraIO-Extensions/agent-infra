@@ -2,17 +2,50 @@ import {
 	ConversationDetailProjectionV2Schema,
 	PersistedConversationEventV1Schema,
 	ReasoningDeltaEventV2Schema,
+	TaskStatusEventV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 import {
 	answerText,
 	currentExecution,
 	emptyAnswerKind,
+	isTerminal,
 	reasoningTexts,
 } from "./conversation-screen-state.js";
 import { event, history, timestamp } from "./conversation-test-fixtures.js";
 
 describe("current conversation execution", () => {
+	it.each(["failed", "cancelled", "completed"] as const)(
+		"keeps stop timeout uncertain until a persisted %s event arrives",
+		(status) => {
+			const unknown = TaskStatusEventV1Schema.parse({
+				...event(1),
+				type: "task.status",
+				payload: { status: "unknown", reason: "STOP_CONFIRMATION_TIMEOUT" },
+			});
+			const before = currentExecution(null, [unknown]);
+			expect(before).toEqual({
+				executionId: unknown.executionId,
+				status: "unknown",
+			});
+			expect(isTerminal(before.status)).toBe(false);
+			const terminal = PersistedConversationEventV1Schema.parse({
+				...event(2),
+				type: "execution.status",
+				payload: { status },
+			});
+			const projection = ConversationDetailProjectionV2Schema.parse(
+				history("conversation-1", [unknown, terminal]),
+			);
+			expect(currentExecution(projection, projection.events)).toEqual({
+				executionId: terminal.executionId,
+				status,
+			});
+			expect(currentExecution(null, [unknown, terminal])).toEqual(
+				currentExecution(projection, projection.events),
+			);
+		},
+	);
 	it("keeps an accepted user execution selected until its status is persisted", () => {
 		const older = PersistedConversationEventV1Schema.parse({
 			...event(1),

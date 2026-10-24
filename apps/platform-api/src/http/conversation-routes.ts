@@ -24,6 +24,7 @@ import {
 	RegenerateCommandRequestV1Schema,
 	resolvePilotReplaySelectorV1,
 	StopCommandRequestV1Schema,
+	TaskStatusEventV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
 	type ConversationExecutionAuthorityV1,
@@ -530,6 +531,10 @@ export function eventProjection(
 		throw new Error("Invalid persisted event type");
 	}
 	let projected: unknown;
+	if (persisted.type === "task.status") {
+		const { type, ...payload } = persisted;
+		return TaskStatusEventV1Schema.parse({ ...base, type, payload });
+	}
 	if (persisted.type === "text.delta") {
 		projected = {
 			...base,
@@ -643,13 +648,14 @@ export function eventProjection(
 
 /**
  * V1 SSE 只能表示 V1 事件：带原选项的回退事件与带工作区引用的结果文件降为原 V1 形状，
- * 让旧读取方照旧看到它们；其他 V2 事实返回 undefined，由调用方跳过但推进持久游标
+ * 让旧读取方照旧看到它们；其他 V2 事实及 task.status 由调用方跳过但推进持久游标
  * （G-07、#3226）。
  */
 export function eventProjectionV1(
 	input: ConversationQueryEventV1,
 ): SseMessage | undefined {
 	const message = eventProjection(input);
+	if (message.type === "task.status") return undefined;
 	if (message.schemaVersion === 1) return message;
 	if (message.type === "result.file") {
 		const { workspaceReference: _workspaceReference, ...payload } =

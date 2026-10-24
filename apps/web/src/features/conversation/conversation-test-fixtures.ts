@@ -4,7 +4,7 @@ import {
 	ExecutionDetailProjectionV2Schema,
 	PersistedConversationEventV2Schema,
 } from "@agent-infra/contracts/pilot";
-import type { PersistedConversationEventV2 } from "../../pilot/generated-v2/types.gen.js";
+import type { ConversationDetailProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 
 export const timestamp = "2026-09-15T10:00:00Z";
 
@@ -25,7 +25,7 @@ export function event(sequence: number, conversationId = "conversation-1") {
 
 export function history(
 	conversationId = "conversation-1",
-	events: PersistedConversationEventV2[] = [event(1, conversationId)],
+	events: ConversationDetailProjectionV2["events"] = [event(1, conversationId)],
 ) {
 	return ConversationDetailProjectionV2Schema.parse({
 		schemaVersion: 2,

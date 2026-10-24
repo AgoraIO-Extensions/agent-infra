@@ -3,6 +3,7 @@ import type { ConversationDetailProjectionV2 } from "../../pilot/generated-v2/ty
 import type { ConversationTimelineEventV2 } from "./conversation-timeline.js";
 
 export const executionStatusLabels = {
+	waiting: "等待处理",
 	submitted: "已受理，等待处理",
 	processing: "处理中",
 	completed: "已完成",
@@ -23,9 +24,12 @@ export function executionStatus(
 ): ExecutionStatus | undefined {
 	const last = events.findLast(
 		(event) =>
-			event.executionId === executionId && event.type === "execution.status",
+			event.executionId === executionId &&
+			(event.type === "execution.status" || event.type === "task.status"),
 	);
-	return last?.type === "execution.status" ? last.payload.status : fallback;
+	return last?.type === "execution.status" || last?.type === "task.status"
+		? last.payload.status
+		: fallback;
 }
 
 /** A stored terminal answer result is final even when the timeline lacks its
@@ -61,7 +65,8 @@ export function currentExecution(
 			statuses.set(message.executionId, message.status);
 	}
 	for (const event of events) {
-		if (event.type !== "execution.status") continue;
+		if (event.type !== "execution.status" && event.type !== "task.status")
+			continue;
 		persistedStatuses.add(event.executionId);
 		eventStatuses.set(event.executionId, event.payload.status);
 		statuses.delete(event.executionId);
