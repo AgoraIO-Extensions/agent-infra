@@ -536,6 +536,7 @@ export async function claimSandboxReconciliation(
 		itemId: input.itemId,
 		leaseOwner: input.workerId,
 		deliveryFence,
+		attemptCount: Number(context.outbox.attempt_count) + 1,
 		sandbox,
 		resourceFence,
 		resourceStatus: allocation.status === "unknown" ? "unknown" : "applying",

@@ -13,6 +13,7 @@ import {
 	type SessionSandboxObservationV1,
 	type SessionSandboxPolicyV1,
 	type SessionSandboxReconciliationClaimV1,
+	sessionSandboxRetryDelayMsV1,
 } from "@agent-infra/platform-core";
 import {
 	openPostgresConversationDispatchStoreV1,
@@ -162,6 +163,7 @@ function timedRuntimeSubmit(
 			const began = performance.now();
 			let outcome: "completed" | "failed" = "failed";
 			let protocolCode: string | undefined;
+			let failureStep: "runtime.execution" | "model.execution" | undefined;
 			try {
 				const response = await runtimeHost.dispatch(request, signal);
 				outcome = "completed";
@@ -171,6 +173,9 @@ function timedRuntimeSubmit(
 				// 观测层再按有界格式过滤。
 				if (error instanceof ConversationRuntimeHostError)
 					protocolCode = error.code;
+				if (protocolCode?.startsWith("RUNTIME_MODEL_"))
+					failureStep = "model.execution";
+				else if (protocolCode !== undefined) failureStep = "runtime.execution";
 				throw error;
 			} finally {
 				record(telemetry, {
@@ -180,6 +185,7 @@ function timedRuntimeSubmit(
 					conversationId: request.conversationId,
 					executionId: request.executionId,
 					...(protocolCode === undefined ? {} : { protocolCode }),
+					...(failureStep === undefined ? {} : { failureStep }),
 				});
 			}
 		},
@@ -195,6 +201,67 @@ function record(
 	} catch {
 		// Timing is observational; it never changes dispatch.
 	}
+}
+
+function sandboxFailureStep(
+	error: unknown,
+):
+	| "workload.policy"
+	| "workload.conflict"
+	| "workload.unavailable"
+	| "workload.capacity"
+	| "workload.pod_create"
+	| "workload.pod_observe" {
+	if (!(error instanceof WorkloadKubernetesError))
+		return "workload.unavailable";
+	if (error.code === "policy") return "workload.policy";
+	if (error.code === "conflict") return "workload.conflict";
+	if (error.details.quota) return "workload.capacity";
+	if (error.details.kind === "Pod" && error.details.verb === "create")
+		return "workload.pod_create";
+	if (
+		error.details.kind === "Pod" &&
+		(error.details.verb === "get" || error.details.verb === "list")
+	)
+		return "workload.pod_observe";
+	return "workload.unavailable";
+}
+
+function sandboxTelemetryFields(claim: SessionSandboxReconciliationClaimV1): {
+	readonly sandboxId?: string;
+	readonly sandboxResourceUid?: string;
+	readonly sourceRevision?: number;
+	readonly desiredRevision?: number;
+	readonly configurationRevision?: number;
+	readonly imageDigest?: string;
+	readonly backoffMs?: number;
+} {
+	const source = claim.lifecycle?.source?.policy;
+	const podUid = claim.previousObservation?.resources.find(
+		(resource) => resource.kind === "Pod",
+	)?.uid;
+	const attempt = claim.attemptCount;
+	return {
+		...(claim.sandbox?.sandboxId === undefined
+			? {}
+			: { sandboxId: claim.sandbox.sandboxId }),
+		...(podUid === undefined ? {} : { sandboxResourceUid: podUid }),
+		...(source?.workloadRevision === undefined
+			? {}
+			: { sourceRevision: source.workloadRevision }),
+		...(claim.policy?.workloadRevision === undefined
+			? {}
+			: { desiredRevision: claim.policy.workloadRevision }),
+		...(claim.policy?.configurationRevision === undefined
+			? {}
+			: { configurationRevision: claim.policy.configurationRevision }),
+		...(claim.policy?.imageDigest === undefined
+			? {}
+			: { imageDigest: claim.policy.imageDigest }),
+		...(attempt === undefined || attempt < 1
+			? {}
+			: { backoffMs: sessionSandboxRetryDelayMsV1(attempt) }),
+	};
 }
 
 export type PlatformConversationWorkerLifecycleStatusV1 =
@@ -839,14 +906,16 @@ export function createPlatformConversationWorkerV2(
 						...(claim.sandbox?.sessionId
 							? { conversationId: claim.sandbox.sessionId }
 							: {}),
+						...sandboxTelemetryFields(claim),
+						...(item.traceParent === undefined
+							? {}
+							: { traceParent: item.traceParent }),
 						// Delivery fence is the bounded reconciliation attempt reference;
 						// item IDs and Kubernetes names stay out of telemetry.
 						...(Number.isSafeInteger(claim.deliveryFence)
 							? { attemptRef: String(claim.deliveryFence) }
 							: {}),
-						...(error instanceof WorkloadKubernetesError
-							? { failureStep: `workload.${error.code}` }
-							: {}),
+						failureStep: sandboxFailureStep(error),
 						// 与 recordHttpFailureContext 相同：只取类名，sink 再按有界模式过滤。
 						// JavaScript 允许抛出非 Error 值；用固定类别保留可聚合性，
 						// 不读取它的内容或调用方自定义的 toString。
@@ -888,6 +957,13 @@ export function createPlatformConversationWorkerV2(
 				durationMs: performance.now() - began,
 				agentId: claim.sandbox?.agentId,
 				conversationId: claim.sandbox?.sessionId,
+				...sandboxTelemetryFields(claim),
+				...(observation.failureCode === undefined
+					? {}
+					: { failureStep: observation.failureCode }),
+				...(item.traceParent === undefined
+					? {}
+					: { traceParent: item.traceParent }),
 				...(Number.isSafeInteger(claim.deliveryFence)
 					? { attemptRef: String(claim.deliveryFence) }
 					: {}),

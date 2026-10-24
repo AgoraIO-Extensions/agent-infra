@@ -1180,6 +1180,40 @@ describe("session sandbox workload adapter", () => {
 		expect((await adapter.observe(allocation)).status).toBe("unknown");
 	});
 
+	it("classifies bounded Pod startup evidence without retaining container messages", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const pod = await client.read<V1Pod>("Pod", allocation.podName);
+		if (!pod) throw new Error("Missing Session Pod");
+		pod.status = {
+			phase: "Pending",
+			containerStatuses: [
+				{
+					name: "agent",
+					ready: false,
+					restartCount: 0,
+					image: allocation.imageDigest,
+					imageID: "",
+					state: { waiting: { reason: "ImagePullBackOff", message: "secret" } },
+				},
+			],
+		};
+		const container = pod.status.containerStatuses?.[0];
+		if (!container) throw new Error("Missing Session Pod container status");
+		expect(await adapter.observe(allocation)).toMatchObject({
+			status: "observed",
+			failureCode: "eci.image_pull",
+		});
+		container.state = {
+			waiting: { reason: "CreateContainerConfigError", message: "private" },
+		};
+		expect(await adapter.observe(allocation)).toMatchObject({
+			status: "observed",
+			failureCode: "runtime.configuration",
+		});
+	});
+
 	it("records each resource identity and blocks UID drift before any mutation", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });

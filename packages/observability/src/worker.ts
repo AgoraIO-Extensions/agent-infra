@@ -91,11 +91,16 @@ function firstOperationOutcome(
 				: failureCodes[fact.failureCode];
 	const category =
 		fact.kind === "tool" && fact.browser ? browserCategory(fact) : undefined;
+	const failureStep =
+		fact.kind === "model" && outcome === "failed"
+			? ("model.execution" as const)
+			: undefined;
 	return {
 		stage: fact.kind === "tool" && fact.browser ? "browser" : fact.kind,
 		outcome,
 		...(code === undefined ? {} : { code }),
 		...(category === undefined ? {} : { browserCategory: category }),
+		...(failureStep === undefined ? {} : { failureStep }),
 		...(fact.durationMs === undefined ? {} : { durationMs: fact.durationMs }),
 		operationRef: fact.operationRef,
 		attemptRef: fact.attemptRef,
