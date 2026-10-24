@@ -3409,71 +3409,78 @@ for (const mode of ["update", "create"] as const)
 		await noHorizontalOverflow(page);
 	});
 
-// #3389 N13-08：「标准模板」下拉展开时部署选项重读：重读挂起时弹层照常展开、可用；重读失败、下拉随之禁用时
-// 弹层一起收起（aria-expanded=false，没有 listbox），不留一个展开却不能操作的菜单；焦点在弹层里，随之交给
-// 页面标题（不可聚焦时为 #main-content），不落到 body、不滚动页面。两视口一致。
-test("an open template menu closes when a deployment reread disables it (#3389 N13-08)", async ({
-	page,
-}, info) => {
-	await viewportFor(page, info.project.name === "mobile");
-	const pageErrors = trackPageErrors(page);
-	const { commands } = await fixture(page);
-	let failing = false;
-	await page.route(
-		(url) => url.pathname === deploymentPath,
-		(route) =>
-			failing
-				? route.fulfill({ status: 503, json: deploymentUnavailable })
-				: route.fulfill({
-						json: readinessDeployment({ state: "ready", revision: "codex-r1" }),
-					}),
-	);
-	await page.goto("/my-agents/new");
-	const template = page.getByRole("combobox", { name: "标准模板" });
-	await template.click();
-	const listbox = page.getByRole("listbox");
-	await expect(listbox).toBeVisible();
-	await expect(template).toHaveAttribute("aria-expanded", "true");
-	await expect
-		.poll(() =>
-			page.evaluate(
-				() =>
-					document.activeElement?.closest('[data-slot="select-content"]') !==
-					null,
-			),
-		)
-		.toBe(true);
-	const scrollBefore = await page.evaluate(() => window.scrollY);
+// #3389 N13-08：下拉展开时部署选项重读：重读挂起时弹层照常展开、可用；重读失败、下拉随之禁用时弹层一起收起
+// （aria-expanded=false，没有 listbox），不留一个展开却不能操作的菜单；焦点在弹层里，随之交给页面标题（不可
+// 聚焦时为 #main-content），不落到 body、不滚动页面。「标准模板」与同一表单里随目录读不到而禁用的「模型端点」
+// 一致。两视口一致。
+for (const menu of ["标准模板", "模型端点：模型选项 1"])
+	test(`an open ${menu} menu closes when a deployment reread disables it (#3389 N13-08)`, async ({
+		page,
+	}, info) => {
+		await viewportFor(page, info.project.name === "mobile");
+		const pageErrors = trackPageErrors(page);
+		const { commands } = await fixture(page);
+		let failing = false;
+		await page.route(
+			(url) => url.pathname === deploymentPath,
+			(route) =>
+				failing
+					? route.fulfill({ status: 503, json: deploymentUnavailable })
+					: route.fulfill({
+							json: readinessDeployment({
+								state: "ready",
+								revision: "codex-r1",
+							}),
+						}),
+		);
+		await page.goto("/my-agents/new");
+		const template = page.getByRole("combobox", { name: menu, exact: true });
+		await template.click();
+		const listbox = page.getByRole("listbox");
+		await expect(listbox).toBeVisible();
+		await expect(template).toHaveAttribute("aria-expanded", "true");
+		await expect
+			.poll(() =>
+				page.evaluate(
+					() =>
+						document.activeElement?.closest('[data-slot="select-content"]') !==
+						null,
+				),
+			)
+			.toBe(true);
+		// 不为交出焦点滚动页面：重读失败后上方插入部署状态说明、就绪列表变长，滚动锚定可能让 scrollY 增加；
+		// 交出焦点用 preventScroll，不把页面滚回页面标题。
+		const scrollBefore = await page.evaluate(() => window.scrollY);
 
-	const holding = await holdRequests(page, "GET", deploymentPath);
-	failing = true;
-	await rereadDeployment(page);
-	await expect.poll(() => holding.held()).toBe(1);
-	await expect(listbox).toBeVisible();
-	await expect(template).toBeEnabled();
-	await expect(template).toHaveAttribute("aria-expanded", "true");
-	holding.release();
+		const holding = await holdRequests(page, "GET", deploymentPath);
+		failing = true;
+		await rereadDeployment(page);
+		await expect.poll(() => holding.held()).toBe(1);
+		await expect(listbox).toBeVisible();
+		await expect(template).toBeEnabled();
+		await expect(template).toHaveAttribute("aria-expanded", "true");
+		holding.release();
 
-	await expect(template).toBeDisabled();
-	await expect(page.getByRole("listbox")).toHaveCount(0);
-	await expect(template).toHaveAttribute("aria-expanded", "false");
-	await expectFocusSettled(
-		page.locator("#main-content"),
-		"弹层随重读失败收起",
-		[50, 300, 1000],
-	);
-	expect(await page.evaluate(() => window.scrollY)).toBeCloseTo(
-		scrollBefore,
-		0,
-	);
-	await expect(
-		page.getByRole("list", { name: "模板就绪状态" }).getByRole("listitem"),
-	).toHaveText(unreadableReadiness);
-	expect(commands).toEqual([]);
-	await expectCleanPage(page, pageErrors);
-	await expectNoDuplicateControls(page, "下拉展开时重读失败（#3389）");
-	await noHorizontalOverflow(page);
-});
+		await expect(template).toBeDisabled();
+		await expect(page.getByRole("listbox")).toHaveCount(0);
+		await expect(template).toHaveAttribute("aria-expanded", "false");
+		await expectFocusSettled(
+			page.locator("#main-content"),
+			`${menu}弹层随重读失败收起`,
+			[50, 300, 1000],
+		);
+		expect(
+			await page.evaluate(() => window.scrollY),
+			"交出焦点没有把页面滚回标题",
+		).toBeGreaterThanOrEqual(scrollBefore);
+		await expect(
+			page.getByRole("list", { name: "模板就绪状态" }).getByRole("listitem"),
+		).toHaveText(unreadableReadiness);
+		expect(commands).toEqual([]);
+		await expectCleanPage(page, pageErrors);
+		await expectNoDuplicateControls(page, `${menu}展开时重读失败（#3389）`);
+		await noHorizontalOverflow(page);
+	});
 
 // #3389 N13-09 / N13-10：部署选项读取失败（可重试 503）时从页底提交标准模板申请，创建与修改都被拦下、不发请求
 // （修改申请含先被模板拦下、再重读失败的组合）。没有可操作的出错字段：「标准模板」与模型选择器都禁用，不对

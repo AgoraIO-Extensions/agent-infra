@@ -1261,8 +1261,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			setTemplateLockAttempted(false);
 	}, [templateLock, templateLockAttempted]);
 	// 创建申请时部署选项重读后「标准模板」下拉随之禁用（部署选项暂不可用、没有登记模板）：它若正握着
-	// 焦点，浏览器会在下一帧把焦点丢到 body。禁用生效的这次提交里焦点还在它上面，先交给页面标题（不可
-	// 聚焦时为 #main-content），不为此滚动页面（#3364）。
+	// 焦点（含展开的弹层），公共 Select 先把焦点交给页面标题（不可聚焦时为 #main-content），不为此滚动
+	// 页面（#3364、#3389 N13-08）。
 	const templateSelectDisabled =
 		props.mode === "update" || deployment.templates.length === 0;
 	// 没有一个模板可申请、也没有选过模板时，下拉为可聚焦的禁用（aria-disabled，不能展开，外观同禁用）：
@@ -1273,22 +1273,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		noApplicableTemplateMessage !== undefined &&
 		!templateId;
 	const [templateMenuOpen, setTemplateMenuOpen] = useState(false);
-	// 下拉展开时随重读禁用（部署选项读取失败）：弹层随之收起，不留一个展开却不能操作的菜单。焦点在弹层里
-	// 时同样交给页面标题，不为此滚动页面（#3389 N13-08）。浏览器在禁用的同一帧可能已把焦点丢到 body，
-	// 所以展开着的菜单按「握着焦点」处理。
-	useLayoutEffect(() => {
-		if (!templateSelectDisabled) return;
-		const trigger = document.getElementById(fieldId("templateId"));
-		const active = document.activeElement;
-		const menuHeldFocus =
-			templateMenuOpen &&
-			(!active ||
-				active === document.body ||
-				active.closest('[data-slot="select-content"]') !== null);
-		if ((trigger && active === trigger) || menuHeldFocus)
-			pageRecoveryTarget()?.focus({ preventScroll: true });
-		if (templateMenuOpen) setTemplateMenuOpen(false);
-	}, [templateMenuOpen, templateSelectDisabled]);
+	// 下拉随重读禁用时，公共 Select 收起弹层并把握着的焦点交给页面标题（#3364 N12-01、#3389 N13-08）；这里
+	// 同步收起受控的展开状态，恢复可用后不自行重新展开。
+	useEffect(() => {
+		if (templateSelectDisabled) setTemplateMenuOpen(false);
+	}, [templateSelectDisabled]);
 	const advancedConfigurationHasErrors = Object.keys(fieldErrors).some(
 		(key) => key.startsWith("environment.") || key.startsWith("secret."),
 	);
@@ -1377,15 +1366,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					<Label htmlFor="application-template-id">标准模板</Label>
 					<Select
 						disabled={templateSelectDisabled}
-						open={
-							templateMenuOpen &&
-							!templateSelectUnavailable &&
-							!templateSelectDisabled
-						}
+						open={templateMenuOpen && !templateSelectUnavailable}
 						onOpenChange={(open) =>
-							setTemplateMenuOpen(
-								open && !templateSelectUnavailable && !templateSelectDisabled,
-							)
+							setTemplateMenuOpen(open && !templateSelectUnavailable)
 						}
 						value={templateId}
 						// 显示名按部署登记取；部署选项读取失败（没有登记内容可查）时按 M1 标准模板的显示名映射，
