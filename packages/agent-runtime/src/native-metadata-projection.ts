@@ -1,9 +1,19 @@
 import { createHash } from "node:crypto";
 import {
+	type NativeMetadataCommandEffectV2,
+	type NativeMetadataCommandsProjectionV2,
+	NativeMetadataCommandsProjectionV2Schema,
 	type NativeMetadataProjectionV1,
 	NativeMetadataProjectionV1Schema,
 } from "@agent-infra/contracts/runtime";
 import { RuntimeHostError } from "./errors.js";
+
+// `localeCompare` depends on the host locale, so the same directory could sort
+// differently (and produce a different `revision` digest) on another host.
+const compareByName = (
+	left: { readonly name: string },
+	right: { readonly name: string },
+) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
 
 const maxCapabilities = 128;
 const maxIdentityText = 256;
@@ -174,7 +184,7 @@ export function projectNativeMetadataCommandsV1(input: {
 	const directory = commandDirectory(input.directory);
 	const commands = directory.commands
 		.map((command) => commandCapability(command, source))
-		.sort((left, right) => left.name.localeCompare(right.name));
+		.sort(compareByName);
 	if (new Set(commands.map((command) => command.name)).size !== commands.length)
 		invalid();
 	const revision = digest([
@@ -252,9 +262,7 @@ export function projectNativeMetadataSkillsV1(input: {
 	const sourceName = boundedText(input.sourceName, maxCapabilityText);
 	input.assertCurrent?.();
 	const { generationId, entries } = skillDirectory(input.directory);
-	const skills = entries
-		.map(skillCapability)
-		.sort((left, right) => left.name.localeCompare(right.name));
+	const skills = entries.map(skillCapability).sort(compareByName);
 	if (new Set(skills.map((skill) => skill.name)).size !== skills.length)
 		invalid();
 	const revision = digest([
@@ -283,6 +291,66 @@ export function projectNativeMetadataSkillsV1(input: {
 			source: { name: sourceName, version: skill.version },
 			availability: "discovered",
 		})),
+	});
+	input.assertCurrent?.();
+	return projection;
+}
+
+/** Versioned projection for effects and bounded text hints unavailable in V1. */
+export function projectNativeMetadataCommandsV2(input: {
+	readonly nativeSessionRef: string;
+	readonly configVersion: string;
+	readonly source: NativeMetadataProjectionSourceV1;
+	readonly directory: unknown;
+	readonly effect: NativeMetadataCommandEffectV2;
+	readonly argumentHint?: string;
+	readonly requiredParameter?: boolean;
+	readonly assertCurrent?: () => void;
+}): NativeMetadataCommandsProjectionV2 {
+	const nativeSessionRef = boundedText(input.nativeSessionRef, maxIdentityText);
+	const configVersion = boundedText(input.configVersion, maxIdentityText);
+	const source = projectionSource(input.source);
+	const argumentHint =
+		input.argumentHint === undefined
+			? ""
+			: boundedText(input.argumentHint, 1024, true);
+	const requiredParameter = input.requiredParameter ?? false;
+	input.assertCurrent?.();
+	const directory = commandDirectory(input.directory);
+	const commands = directory.commands
+		.map((command) => commandCapability(command, source))
+		.sort(compareByName);
+	if (new Set(commands.map((command) => command.name)).size !== commands.length)
+		invalid();
+	const revision = digest([
+		"native-metadata-commands-v2",
+		nativeSessionRef,
+		configVersion,
+		source,
+		directory.nativeId,
+		input.effect,
+		argumentHint,
+		requiredParameter,
+		commands.map(({ identity, ...command }) => ({ command, identity })),
+	]);
+	const projection = NativeMetadataCommandsProjectionV2Schema.parse({
+		schemaVersion: 1,
+		selector: "commands",
+		revision,
+		capabilities: commands.map(({ identity, ...command }) => {
+			const hint = input.argumentHint ?? identity.argumentHint;
+			return {
+				schemaVersion: 2,
+				id: digest(["native-metadata-command-v2", revision, identity, command]),
+				...command,
+				parameters:
+					hint.length > 0 || requiredParameter
+						? [{ kind: "text", required: requiredParameter, hint }]
+						: [],
+				effect: input.effect,
+				availability: "available",
+			};
+		}),
 	});
 	input.assertCurrent?.();
 	return projection;
