@@ -2048,3 +2048,141 @@ test("My Skill names both section rereads apart when both reads fail (N9-3-05)",
 	await expect(ownedReread).toBeVisible();
 	await expectCleanPage(page, errors);
 });
+
+// #3351 N11-03：保存 409 冲突后的「重新读取内容」。重读进行中按钮不先收起：保持可聚焦（aria-disabled，
+// 「正在重新读取…」）并留住焦点，不落到 body；读到内容后按钮随冲突收起，草稿换成别处保存的内容，焦点到
+// SKILL.md。重读 503 时页面换成读取失败区，焦点到其中的「重新读取」（同一恢复操作，在视口内、顶栏之下）；
+// 再次读取成功后按 D2-59 到页面 h1，草稿同样换成服务端内容。两视口一致。
+for (const outcome of ["reads", "fails"] as const)
+	test(`re-reading content after a save conflict keeps focus off body until it ${outcome === "reads" ? "lands on SKILL.md" : "returns to 重新读取"} (N11-03)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		await fixture(page);
+		const contentPath = "/api/v2/skills/projects/release-notes/content";
+		// 保存时发现内容已在别处修改（409）；之后的读取返回别处保存的修订，或暂时失败（503）。
+		let changedElsewhere = false;
+		let readFails = outcome === "fails";
+		await page.route(
+			(url) => url.pathname === contentPath,
+			(route) => {
+				const method = route.request().method();
+				if (method === "PUT") {
+					changedElsewhere = true;
+					return route.fulfill({
+						status: 409,
+						json: {
+							schemaVersion: 1,
+							code: "INVALID_REQUEST",
+							message: "Request conflicts with current state.",
+							retryable: false,
+							traceId: "trace-skill-management",
+						},
+					});
+				}
+				if (method !== "GET" || !changedElsewhere) return route.fallback();
+				if (readFails)
+					return route.fulfill({
+						status: 503,
+						json: {
+							schemaVersion: 1,
+							code: "DEPENDENCY_UNAVAILABLE",
+							message: "Controlled content read failure",
+							retryable: true,
+							traceId: "trace-skill-management",
+						},
+					});
+				return route.fulfill({
+					json: SkillHubProjectContentV1Schema.parse({
+						schemaVersion: 1,
+						projectId: "release-notes",
+						revision: 3,
+						contentDigest: "e".repeat(64),
+						fileCount: 1,
+						totalBytes: 19,
+						updatedAt: "2026-10-02T09:00:00Z",
+						files: [
+							{
+								path: "SKILL.md",
+								encoding: "utf8",
+								content: "# edited elsewhere\n",
+								sizeBytes: 19,
+							},
+						],
+					}),
+				});
+			},
+		);
+		await page.goto("/skills/manage/new?project=release-notes");
+		const main = page.locator("#main-content");
+		const skillMd = main.getByLabel("SKILL.md（任务说明）");
+		await skillMd.fill("# release-notes\n本地修改\n");
+		await main.getByRole("button", { name: "保存草稿" }).focus();
+		await page.keyboard.press("Enter");
+		await expect(
+			main.getByRole("alert").filter({ hasText: "内容已在其他地方修改" }),
+		).toBeVisible();
+		const reread = await pinElement(
+			main.getByRole("button", { name: "重新读取内容", exact: true }),
+			"content-reread",
+		);
+		await expectNoDuplicateControls(page, "创建与发布（保存冲突，N11-03）");
+
+		const reading = await holdRequests(page, "GET", contentPath);
+		await reread.focus();
+		await page.keyboard.press("Enter");
+		await expect.poll(() => reading.held()).toBe(1);
+		await expect(reread).toHaveText("正在重新读取…");
+		await expectFocusableBusy(
+			reread,
+			"重新读取内容",
+			[30, 150, 400, 1000, 2000],
+		);
+		await expectNoDuplicateControls(page, "创建与发布（重新读取中，N11-03）");
+		reading.release();
+
+		if (outcome === "reads") {
+			await expect(skillMd).toHaveValue("# edited elsewhere\n");
+			await expect(reread).toHaveCount(0);
+			await expect(
+				main.getByRole("alert").filter({ hasText: "内容已在其他地方修改" }),
+			).toHaveCount(0);
+			await expectFocusSettled(
+				skillMd,
+				"重新读取内容后",
+				[50, 300, 1000, 2000],
+			);
+			await expectNoDuplicateControls(page, "创建与发布（重新读取后，N11-03）");
+			await expectCleanPage(page, errors);
+			return;
+		}
+
+		const failure = main
+			.getByRole("alert")
+			.filter({ hasText: "暂时无法读取 Skill 内容" });
+		await expect(failure).toContainText("已发布的版本不受影响。");
+		const retry = failure.getByRole("button", {
+			name: "重新读取",
+			exact: true,
+		});
+		await expectFocusSettled(
+			retry,
+			"重新读取内容失败后",
+			[50, 300, 1000, 2000],
+		);
+		await expectFocusUnobscured(retry, "重新读取内容失败后");
+		await expect(reread).toHaveCount(0);
+		await expectNoDuplicateControls(page, "创建与发布（重新读取失败，N11-03）");
+
+		// 恢复后到页面 h1，草稿按服务端内容重新初始化。
+		readFails = false;
+		await retry.focus();
+		await page.keyboard.press("Enter");
+		await expect(skillMd).toHaveValue("# edited elsewhere\n");
+		await expectFocusSettled(
+			main.getByRole("heading", { level: 1, name: "创建与发布 Skill" }),
+			"重新读取恢复后",
+		);
+		await expectCleanPage(page, errors);
+	});

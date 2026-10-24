@@ -84,13 +84,18 @@ export async function loadDeploymentConfiguration(
 	return { kind: "ready", configuration: result.data };
 }
 
+/**
+ * 模板就绪原因（PRD §4、§16「未就绪项展示原因」）：就绪列表、所选模板提示与「标准模板」字段错误共用。
+ * 验证过期（验证证据与当前登记不符或超出有效期）刷新后仍是过期，要等平台重新验证，只说明原因、不引导
+ * 刷新；只有这次没能读到验证结果时刷新即可确认（#3351 N11-01）。
+ */
 export const templateReadinessMessages = {
 	ready: "可申请",
 	unregistered: "尚未登记，请联系平台管理员。",
 	unverified: "尚未完成真实运行与模型验证。",
 	failed: "验证失败，暂不可申请。",
 	disabled: "模板已停用。",
-	stale: "模板或验证已过期，请刷新后重试。",
+	stale: "模板验证已过期，需等待平台重新验证。",
 	unavailable: "暂时无法读取验证结果，请刷新后重试。",
 } as const;
 

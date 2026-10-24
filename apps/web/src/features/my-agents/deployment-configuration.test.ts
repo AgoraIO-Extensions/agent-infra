@@ -4,6 +4,7 @@ import {
 	applicationTemplateChoices,
 	type DeploymentConfigurationState,
 	projectDeploymentConfiguration,
+	templateReadinessMessages,
 	unavailableDeploymentConfiguration,
 } from "./deployment-configuration.js";
 import { deploymentConfiguration } from "./test-fixtures.js";
@@ -37,6 +38,21 @@ describe("applicationTemplateChoices", () => {
 		expect(applicationTemplateChoices(deploymentConfiguration)).toBe(
 			deploymentConfiguration.templates,
 		);
+	});
+});
+
+describe("templateReadinessMessages", () => {
+	// #3351 N11-01：只有暂时读不到验证结果时刷新能解决；验证过期（证据与当前登记不符或超出有效期）
+	// 刷新后仍是过期，与验证失败、停用、未验证、未登记一样只说明原因，不引导刷新。
+	it("only suggests a refresh when the verification result could not be read", () => {
+		expect(templateReadinessMessages.stale).toBe(
+			"模板验证已过期，需等待平台重新验证。",
+		);
+		expect(
+			Object.entries(templateReadinessMessages)
+				.filter(([, message]) => message.includes("刷新"))
+				.map(([state]) => state),
+		).toEqual(["unavailable"]);
 	});
 });
 

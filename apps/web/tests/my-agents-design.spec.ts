@@ -2570,7 +2570,8 @@ test("a create form whose selected template is updated in the session reuses the
 // 顶部同一位置的 danger 提示（role=alert、tabIndex=-1）给出等待恢复或新建申请并获得焦点；字段错误沿用
 // 就绪原因并写明不能更换模板，不再出现「部署选项暂不可用。」，同义提示随之收起，就绪列表仍显示原因
 // （PRD §4「未就绪项展示原因」）。再次提交焦点回到提示。验证过期（stale：验证证据与当前登记不符或超出
-// 有效期，刷新仍为过期）同样提示等待恢复或新建申请。两视口一致。
+// 有效期，刷新仍为过期）同样提示等待恢复或新建申请；就绪原因只说明要等平台重新验证，提交前的提示、就绪
+// 列表与字段错误都不引导刷新，前后两句不给出相反的下一步（#3351 N11-01）。两视口一致。
 for (const readiness of [
 	{
 		state: "failed",
@@ -2581,7 +2582,7 @@ for (const readiness of [
 	{
 		state: "stale",
 		title: "has a stale verification",
-		reason: "模板或验证已过期，请刷新后重试。",
+		reason: "模板验证已过期，需等待平台重新验证。",
 		label: "模板验证过期",
 	},
 ] as const)
@@ -2606,6 +2607,11 @@ for (const readiness of [
 			main.getByText(readiness.reason, { exact: true }),
 		).toHaveAttribute("aria-live", "polite");
 		await expect(main.locator(".application-form-alert")).toHaveCount(0);
+		await expect(
+			page.getByRole("list", { name: "模板就绪状态" }).getByRole("listitem"),
+		).toHaveText([`Codex：${readiness.reason}`, "Claude：可申请"]);
+		// 提交前的提示与就绪列表不引导刷新：验证失败或过期，刷新后仍不可申请（#3351 N11-01）。
+		await expect(main.getByText(/刷新/)).toHaveCount(0);
 
 		const submit = page.getByRole("button", {
 			name: "修改并重新提交",
@@ -2637,6 +2643,8 @@ for (const readiness of [
 			page.getByRole("list", { name: "模板就绪状态" }).getByRole("listitem"),
 		).toHaveText([`Codex：${readiness.reason}`, "Claude：可申请"]);
 		await expect(main.getByRole("alert")).toHaveCount(1);
+		// 顶部提示与字段错误给出同一个下一步（等待模板恢复或新建申请），整页不出现「刷新」（#3351 N11-01）。
+		await expect(main.getByText(/刷新/)).toHaveCount(0);
 
 		await submit.focus();
 		await page.keyboard.press("Enter");
@@ -2711,6 +2719,171 @@ for (const readiness of [false, true] as const)
 		await expectNoDuplicateControls(
 			page,
 			"/my-agents/:id/edit（模板已移除，#3328）",
+		);
+		await noHorizontalOverflow(page);
+	});
+
+// #3351 N11-02：非校验类提交失败（503 依赖不可用、500 未知或内部错误、不可重试的 409）的说明只在表单顶部
+// 唯一的 danger 提示里。从页底的提交按钮提交（提交前顶部已滚出视口）：请求进行中按钮保持可聚焦
+// （aria-disabled）并留住焦点；失败后顶部提示滚入视口、停在吸顶顶栏之下并接过焦点，与同表单的整表校验失败
+// （INVALID_REQUEST）一致，焦点不再留在页底按钮上、可见区域里看得到失败。创建与修改申请一致，两视口一致。
+const submissionFailures = [
+	{
+		mode: "create",
+		title: "503 dependency unavailable",
+		status: 503,
+		body: {
+			schemaVersion: 1,
+			code: "DEPENDENCY_UNAVAILABLE",
+			message: "Controlled submission failure",
+			retryable: true,
+			traceId: "trace-submission-failure",
+		},
+		text: "申请提交失败，部署依赖暂不可用，请稍后重试。",
+	},
+	{
+		mode: "create",
+		title: "500 unknown error",
+		status: 500,
+		body: {},
+		text: "申请提交失败，非敏感内容已保留。请重新填写 Secret 或模型凭证后再提交。",
+	},
+	{
+		mode: "create",
+		title: "409 not retryable",
+		status: 409,
+		body: {
+			schemaVersion: 1,
+			code: "RESOURCE_UNAVAILABLE",
+			message: "Controlled submission conflict",
+			retryable: false,
+			traceId: "trace-submission-failure",
+		},
+		text: "申请已变更或当前不可用，请刷新页面后核对。",
+	},
+	{
+		mode: "update",
+		title: "503 dependency unavailable",
+		status: 503,
+		body: {
+			schemaVersion: 1,
+			code: "DEPENDENCY_UNAVAILABLE",
+			message: "Controlled submission failure",
+			retryable: true,
+			traceId: "trace-submission-failure",
+		},
+		text: "申请提交失败，部署依赖暂不可用，请稍后重试。",
+	},
+	{
+		mode: "update",
+		title: "500 internal error",
+		status: 500,
+		body: {
+			schemaVersion: 1,
+			code: "INTERNAL_ERROR",
+			message: "Controlled submission failure",
+			retryable: true,
+			traceId: "trace-submission-failure",
+		},
+		text: "申请提交失败，部署依赖暂不可用，请稍后重试。",
+	},
+	{
+		mode: "update",
+		title: "409 not retryable",
+		status: 409,
+		body: {
+			schemaVersion: 1,
+			code: "RESOURCE_UNAVAILABLE",
+			message: "Controlled submission conflict",
+			retryable: false,
+			traceId: "trace-submission-failure",
+		},
+		text: "申请已变更或当前不可用，请刷新页面后核对。",
+	},
+] as const;
+
+for (const failure of submissionFailures)
+	test(`a ${failure.mode} submission ${failure.title} brings the top alert into view and focuses it (#3351 N11-02)`, async ({
+		page,
+	}, info) => {
+		await viewportFor(page, info.project.name === "mobile");
+		const pageErrors = trackPageErrors(page);
+		await fixture(page, { applications: [rejectedStandardApplication()] });
+		const method = failure.mode === "create" ? "POST" : "PUT";
+		const path =
+			failure.mode === "create"
+				? "/api/v2/agent-applications"
+				: "/api/v2/agent-applications/application-browser-1";
+		let submissions = 0;
+		await page.route(
+			(url) => url.pathname === path,
+			(route) => {
+				if (route.request().method() !== method) return route.fallback();
+				submissions += 1;
+				return route.fulfill({ status: failure.status, json: failure.body });
+			},
+		);
+		const main = page.locator("#main-content");
+		const name = page.getByLabel("Agent 名称", { exact: true });
+		if (failure.mode === "create") {
+			await page.goto("/my-agents/new");
+			await name.fill("客户支持助理");
+			await page
+				.getByLabel("用途说明", { exact: true })
+				.fill("面向支持团队的内部知识问答。");
+			await page
+				.getByLabel("Agent 默认 Relay Key", { exact: true })
+				.fill("synthetic-relay-key");
+			await pick(page, "标准模板", "Codex");
+			await pick(page, "模型端点：模型选项 1", "Primary endpoint");
+			await pick(page, "模型：模型选项 1", "gpt-5");
+			await page
+				.getByRole("checkbox", { name: "均衡：模型选项 1", exact: true })
+				.click();
+			await pick(page, "默认模型", "Primary endpoint · gpt-5");
+			await pick(page, "默认推理档位", "均衡");
+		} else {
+			await page.goto("/my-agents/application-browser-1/edit");
+			await expect(name).toHaveValue(rejectedStandardApplication().name);
+		}
+		const submit = await pinElement(
+			main.getByRole("button", {
+				name: failure.mode === "create" ? "提交审批" : "修改并重新提交",
+				exact: true,
+			}),
+			"application-submit",
+		);
+		// 前置状态：页底的提交按钮在视口内时，表单顶部（顶部提示所在的位置）已滚出视口。
+		await submit.focus();
+		const before = await topbarClearance(name);
+		expect(before.top, "提交前「Agent 名称」在顶栏之上").toBeLessThan(
+			before.barBottom,
+		);
+		await expect(main.locator(".application-form-alert")).toHaveCount(0);
+
+		const submitting = await holdRequests(page, method, path);
+		await page.keyboard.press("Enter");
+		await expect(submit).toHaveText("正在提交…");
+		await expectFocusableBusy(submit, `申请提交（${failure.title}）`);
+		submitting.release();
+
+		const alert = main.locator(".application-form-alert");
+		await expect(alert).toHaveText(failure.text);
+		await expect(alert).toHaveAttribute("role", "alert");
+		await expect(alert).toHaveAttribute("tabindex", "-1");
+		await expectFocusSettled(
+			alert,
+			`申请提交失败（${failure.title}）`,
+			[100, 400, 1000, 1600],
+		);
+		await expectFocusUnobscured(alert, `申请提交失败（${failure.title}）`);
+		await expect(main.getByRole("alert")).toHaveCount(1);
+		await expect(submit).not.toHaveAttribute("aria-disabled", "true");
+		expect(submissions).toBe(1);
+		await expectCleanPage(page, pageErrors);
+		await expectNoDuplicateControls(
+			page,
+			`申请提交失败（${failure.mode} ${failure.title}，#3351）`,
 		);
 		await noHorizontalOverflow(page);
 	});

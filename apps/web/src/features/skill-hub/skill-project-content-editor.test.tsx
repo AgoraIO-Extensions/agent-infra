@@ -415,6 +415,102 @@ describe("SkillProjectContentEditor (#2906)", () => {
 		);
 	});
 
+	// #3351 N11-03：重读进行中「重新读取内容」不先收起，保持可聚焦（aria-disabled）并留住焦点；页面读取
+	// 中（retrying）时也不收起。读到内容后才换成服务端内容、焦点到 SKILL.md；仍读取失败时页面换成读取失败区，
+	// 焦点到其中的「重新读取」（同一恢复操作），不落到 body。
+	it.each(["reads", "fails"] as const)(
+		"keeps 重新读取内容 focused while re-reading, then hands focus on (%s)",
+		async (outcome) => {
+			const saveContent = vi
+				.fn()
+				.mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
+			const newer: SkillHubProjectContentV1 = {
+				...stored,
+				revision: 5,
+				files: [
+					{
+						path: "SKILL.md",
+						encoding: "utf8",
+						content: "# edited elsewhere\n",
+						sizeBytes: 19,
+					},
+				],
+			};
+			let finish: (() => void) | undefined;
+			function Harness() {
+				const [content, setContent] = useState<SkillProjectContentState>(ready);
+				const [retrying, setRetrying] = useState(false);
+				return (
+					<SkillProjectContentEditor
+						project={project}
+						content={content}
+						retrying={retrying}
+						actions={actions({ saveContent })}
+						onRetry={() => {
+							setRetrying(true);
+							return new Promise<void>((resolve) => {
+								finish = () => {
+									setContent(
+										outcome === "reads"
+											? { kind: "ready", content: newer }
+											: { kind: "unavailable", retryable: true },
+									);
+									setRetrying(false);
+									resolve();
+								};
+							});
+						}}
+					/>
+				);
+			}
+			await renderWithRouter(<Harness />);
+			fireEvent.change(screen.getByLabelText("SKILL.md（任务说明）"), {
+				target: { value: "# local\n" },
+			});
+			fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+			expect((await screen.findByRole("alert")).textContent).toMatch(
+				/内容已在其他地方修改/,
+			);
+			const reread = screen.getByRole("button", { name: "重新读取内容" });
+			reread.focus();
+			fireEvent.click(reread);
+			await waitFor(() => expect(reread.textContent).toBe("正在重新读取…"));
+			expect(reread.isConnected).toBe(true);
+			expect(reread.getAttribute("aria-disabled")).toBe("true");
+			expect((reread as HTMLButtonElement).disabled).toBe(false);
+			expect(document.activeElement).toBe(reread);
+			// 进行中再次点击不重复读取。
+			fireEvent.click(reread);
+			expect(
+				(screen.getByLabelText("SKILL.md（任务说明）") as HTMLTextAreaElement)
+					.value,
+			).toBe("# local\n");
+
+			finish?.();
+			if (outcome === "reads") {
+				await waitFor(() =>
+					expect(
+						(
+							screen.getByLabelText(
+								"SKILL.md（任务说明）",
+							) as HTMLTextAreaElement
+						).value,
+					).toBe("# edited elsewhere\n"),
+				);
+				expect(screen.queryByRole("button", { name: /重新读取/ })).toBeNull();
+				await waitFor(() =>
+					expect(document.activeElement).toBe(
+						screen.getByLabelText("SKILL.md（任务说明）"),
+					),
+				);
+				return;
+			}
+			const retry = await screen.findByRole("button", { name: "重新读取" });
+			expect(screen.getByText("暂时无法读取 Skill 内容")).toBeTruthy();
+			await waitFor(() => expect(document.activeElement).toBe(retry));
+		},
+	);
+
 	it("lays out content on the left and version, scope cards and actions on the right (V-18)", async () => {
 		await renderWithRouter(
 			<SkillProjectContentEditor

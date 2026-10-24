@@ -125,7 +125,8 @@ export function AgentApplicationSubmissionScreen(
 			: "申请提交失败，非敏感内容已保留。请重新填写 Secret 或模型凭证后再提交。";
 	// 提交失败只在页面顶部说明一次（表单顶部的 danger 提示，tabIndex=-1）；服务端整表校验失败
 	// （INVALID_REQUEST）时表单把焦点交给这条提示，不再在表单内重复同一结论（#3268 N8-2-03）；修改申请的
-	// 入口身份不可用（ACTION_UNAVAILABLE）时同样聚焦这里（#3291 N9-2-03）。
+	// 入口身份不可用（ACTION_UNAVAILABLE）时同样聚焦这里（#3291 N9-2-03）；503、500 与不可重试的 409 等
+	// 非校验类失败也滚入视口并聚焦这里（#3351 N11-02）。
 	const submissionErrorMessage = props.error
 		? identityEntryUnavailable
 			? "当前部署不支持此申请的入口身份校验，请新建申请。"
