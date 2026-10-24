@@ -124,8 +124,8 @@ import type {
 import {
 	type NativeSessionUnavailableDiagnostic,
 	RuntimeHostError,
-	type RuntimeTurnNotSubmittedReason,
 	RuntimeTurnNotSubmittedError,
+	type RuntimeTurnNotSubmittedReason,
 } from "./errors.js";
 import {
 	type FileRuntimeStore,
