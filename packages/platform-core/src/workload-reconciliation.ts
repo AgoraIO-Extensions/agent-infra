@@ -249,8 +249,21 @@ export interface WorkloadReconciliationStorePortV1 {
 }
 
 export class WorkloadPreflightRejectedErrorV1 extends Error {
-	constructor() {
+	readonly stage:
+		| "secret-bindings"
+		| "registry-admission"
+		| "model-projection"
+		| "desired-workload"
+		| undefined;
+	constructor(
+		stage?:
+			| "secret-bindings"
+			| "registry-admission"
+			| "model-projection"
+			| "desired-workload",
+	) {
 		super("Workload preflight rejected");
+		this.stage = stage;
 	}
 }
 
