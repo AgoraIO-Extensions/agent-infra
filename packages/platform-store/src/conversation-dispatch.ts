@@ -530,7 +530,8 @@ export class PostgresConversationDispatchStoreV1
 										and s.resource_observation->>'status' = 'ready'
 								)
 								or (
-									-- #3373：只核实状态的恢复不以 Sandbox 就绪为前置。
+									-- #3373：只核实状态的恢复不以 Sandbox 就绪为前置。原生能力调用只有记录了
+									-- Host Session Ref 时才沿原操作查询。
 									operation in (
 										'conversation.turn.submit.v1',
 										'conversation.turn.regenerate.v1',
@@ -539,9 +540,14 @@ export class PostgresConversationDispatchStoreV1
 									and exists (
 										select 1
 										from platform.conversation_executions e
+										join platform.conversations c on c.id = e.conversation_id
 										where e.execution_id = outbox_items.payload->>'executionId'
 											and e.conversation_id = outbox_items.scope_id
 											and e.status in ('processing', 'unknown')
+											and (
+												outbox_items.operation <> 'conversation.native-capability.invoke.v1'
+												or c.host_session_ref is not null
+											)
 									)
 								)
 							)
@@ -987,7 +993,9 @@ export class PostgresConversationDispatchStoreV1
 					const statusRecovery =
 						isExecutionOperation(input.claim.operation) &&
 						(input.claim.executionStatus === "processing" ||
-							input.claim.executionStatus === "unknown");
+							input.claim.executionStatus === "unknown") &&
+						(isTurn(input.claim.operation) ||
+							state.conversation.host_session_ref !== null);
 					if (
 						!state.conversation.sandbox_ready &&
 						input.claim.operation !== "conversation.turn.stop.v1" &&

@@ -240,10 +240,12 @@ export async function claimWork(
 	}
 	// #3373：只核实状态的恢复认领（Execution 为 processing/unknown，沿原操作查询，不提交新 Turn）
 	// 不以 Sandbox 就绪为前置；Sandbox、Agent Pod 或 Owner 重启期间查询失败按可重试处理，
-	// 墙钟恢复预算继续计时（Runtime HLD §7.3）。首次投递与重提仍须 Sandbox 就绪。
+	// 墙钟恢复预算继续计时（Runtime HLD §7.3）。首次投递与重提仍须 Sandbox 就绪。原生能力调用
+	// 只有记录了 Host Session Ref 时才沿原操作查询，否则恢复会重放投递，仍须 Sandbox 就绪。
 	const statusRecovery =
 		isExecutionOperation(selectedOperation) &&
-		(execution.status === "processing" || execution.status === "unknown");
+		(execution.status === "processing" || execution.status === "unknown") &&
+		(isTurn(selectedOperation) || conversation.host_session_ref !== null);
 	if (
 		!conversation.sandbox_ready &&
 		!isolationWork &&

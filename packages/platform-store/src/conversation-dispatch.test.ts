@@ -4436,7 +4436,12 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				executionStatus: "processing",
 				hostSessionRef: "host-session-wake-processing",
 			});
-			for (const work of [unknown, processing])
+			// 另一 Conversation 中受理不明的 Execution：不能借别的 Conversation 唤醒。
+			const foreign = await seed("conversation.turn.submit.v1", {
+				executionStatus: "unknown",
+				hostSessionRef: "host-session-wake-foreign",
+			});
+			for (const work of [unknown, processing, foreign])
 				await client`update platform.outbox_items
 					set status = 'retry_scheduled', available_at = clock_timestamp() + interval '1 hour'
 					where id = ${work.itemId}`;
@@ -4449,13 +4454,18 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						conversationId: work.conversationId,
 						executionId: work.executionId,
 					});
+				await transaction.wakeUnknownExecutionRecovery({
+					conversationId: processing.conversationId,
+					executionId: foreign.executionId,
+				});
 			} finally {
 				await transaction.close();
 			}
 			const rows = await client<
 				{ id: string; status: string; available: boolean }[]
 			>`select id, status, available_at <= clock_timestamp() as available
-				from platform.outbox_items where id in (${unknown.itemId}, ${processing.itemId})
+				from platform.outbox_items
+				where id in (${unknown.itemId}, ${processing.itemId}, ${foreign.itemId})
 				order by id`;
 			expect(Object.fromEntries(rows.map((row) => [row.id, row]))).toEqual({
 				[unknown.itemId]: {
@@ -4465,6 +4475,11 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				},
 				[processing.itemId]: {
 					id: processing.itemId,
+					status: "retry_scheduled",
+					available: false,
+				},
+				[foreign.itemId]: {
+					id: foreign.itemId,
 					status: "retry_scheduled",
 					available: false,
 				},
@@ -5009,6 +5024,34 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			expect(await store.findDispatchable({ limit: 256 })).toContainEqual({
 				itemId: work.itemId,
 				operation: "conversation.turn.submit.v1",
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("keeps a native capability without a recorded Host Session Ref behind Sandbox readiness (#3373)", async () => {
+		// 没有 Host Session Ref 时 Core 只能重放投递，不是只核实状态的恢复。
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "unknown",
+			hostSessionRef: null,
+		});
+		const store = new PostgresConversationDispatchStoreV1({ databaseUrl });
+		try {
+			await client`update platform.session_sandbox_allocations
+				set status = 'unknown' where conversation_id = ${work.conversationId}`;
+			await client`update platform.outbox_items
+				set operation = 'conversation.native-capability.invoke.v1'
+				where id = ${work.itemId}`;
+			expect(await store.findDispatchable({ limit: 256 })).not.toContainEqual(
+				expect.objectContaining({ itemId: work.itemId }),
+			);
+			await client`update platform.conversations
+				set host_session_ref = 'host-session-native-recovery'
+				where id = ${work.conversationId}`;
+			expect(await store.findDispatchable({ limit: 256 })).toContainEqual({
+				itemId: work.itemId,
+				operation: "conversation.native-capability.invoke.v1",
 			});
 		} finally {
 			await store.close();
