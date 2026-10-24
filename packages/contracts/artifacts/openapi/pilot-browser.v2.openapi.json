@@ -4589,120 +4589,7 @@
                   "$ref": "#/components/schemas/ReasoningDeltaEventV2"
                 },
                 {
-                  "additionalProperties": false,
-                  "properties": {
-                    "conversationCursor": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "conversationId": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "eventId": {
-                      "$ref": "#/components/schemas/SseEventIdV1"
-                    },
-                    "executionId": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "kind": {
-                      "const": "event",
-                      "type": "string"
-                    },
-                    "occurredAt": {
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
-                      "type": "string"
-                    },
-                    "payload": {
-                      "anyOf": [
-                        {
-                          "additionalProperties": false,
-                          "properties": {
-                            "status": {
-                              "enum": [
-                                "waiting",
-                                "submitted",
-                                "processing",
-                                "completed",
-                                "cancelled"
-                              ],
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "status"
-                          ],
-                          "type": "object"
-                        },
-                        {
-                          "additionalProperties": false,
-                          "properties": {
-                            "reason": {
-                              "enum": [
-                                "TASK_WAIT_TIMEOUT",
-                                "AGENT_UNAVAILABLE",
-                                "CONVERSATION_UNAVAILABLE"
-                              ],
-                              "type": "string"
-                            },
-                            "status": {
-                              "const": "failed",
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "status"
-                          ],
-                          "type": "object"
-                        },
-                        {
-                          "additionalProperties": false,
-                          "properties": {
-                            "reason": {
-                              "const": "STOP_CONFIRMATION_TIMEOUT",
-                              "type": "string"
-                            },
-                            "status": {
-                              "const": "unknown",
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "status"
-                          ],
-                          "type": "object"
-                        }
-                      ]
-                    },
-                    "schemaVersion": {
-                      "const": 1,
-                      "type": "number"
-                    },
-                    "sequence": {
-                      "exclusiveMinimum": 0,
-                      "maximum": 9007199254740991,
-                      "type": "integer"
-                    },
-                    "type": {
-                      "const": "task.status",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "schemaVersion",
-                    "kind",
-                    "eventId",
-                    "conversationId",
-                    "executionId",
-                    "sequence",
-                    "conversationCursor",
-                    "occurredAt",
-                    "type",
-                    "payload"
-                  ],
-                  "type": "object"
+                  "$ref": "#/components/schemas/TaskStatusEventV1"
                 }
               ]
             },
@@ -4968,120 +4855,7 @@
             "$ref": "#/components/schemas/ReasoningDeltaEventV2"
           },
           {
-            "additionalProperties": false,
-            "properties": {
-              "conversationCursor": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "conversationId": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "eventId": {
-                "$ref": "#/components/schemas/SseEventIdV1"
-              },
-              "executionId": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "kind": {
-                "const": "event",
-                "type": "string"
-              },
-              "occurredAt": {
-                "format": "date-time",
-                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
-                "type": "string"
-              },
-              "payload": {
-                "anyOf": [
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "status": {
-                        "enum": [
-                          "waiting",
-                          "submitted",
-                          "processing",
-                          "completed",
-                          "cancelled"
-                        ],
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "status"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "reason": {
-                        "enum": [
-                          "TASK_WAIT_TIMEOUT",
-                          "AGENT_UNAVAILABLE",
-                          "CONVERSATION_UNAVAILABLE"
-                        ],
-                        "type": "string"
-                      },
-                      "status": {
-                        "const": "failed",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "status"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "reason": {
-                        "const": "STOP_CONFIRMATION_TIMEOUT",
-                        "type": "string"
-                      },
-                      "status": {
-                        "const": "unknown",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "status"
-                    ],
-                    "type": "object"
-                  }
-                ]
-              },
-              "schemaVersion": {
-                "const": 1,
-                "type": "number"
-              },
-              "sequence": {
-                "exclusiveMinimum": 0,
-                "maximum": 9007199254740991,
-                "type": "integer"
-              },
-              "type": {
-                "const": "task.status",
-                "type": "string"
-              }
-            },
-            "required": [
-              "schemaVersion",
-              "kind",
-              "eventId",
-              "conversationId",
-              "executionId",
-              "sequence",
-              "conversationCursor",
-              "occurredAt",
-              "type",
-              "payload"
-            ],
-            "type": "object"
+            "$ref": "#/components/schemas/TaskStatusEventV1"
           },
           {
             "$ref": "#/components/schemas/HeartbeatSignalV1"
@@ -5450,120 +5224,7 @@
                       "$ref": "#/components/schemas/ReasoningDeltaEventV2"
                     },
                     {
-                      "additionalProperties": false,
-                      "properties": {
-                        "conversationCursor": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "conversationId": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "eventId": {
-                          "$ref": "#/components/schemas/SseEventIdV1"
-                        },
-                        "executionId": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "kind": {
-                          "const": "event",
-                          "type": "string"
-                        },
-                        "occurredAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
-                          "type": "string"
-                        },
-                        "payload": {
-                          "anyOf": [
-                            {
-                              "additionalProperties": false,
-                              "properties": {
-                                "status": {
-                                  "enum": [
-                                    "waiting",
-                                    "submitted",
-                                    "processing",
-                                    "completed",
-                                    "cancelled"
-                                  ],
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "status"
-                              ],
-                              "type": "object"
-                            },
-                            {
-                              "additionalProperties": false,
-                              "properties": {
-                                "reason": {
-                                  "enum": [
-                                    "TASK_WAIT_TIMEOUT",
-                                    "AGENT_UNAVAILABLE",
-                                    "CONVERSATION_UNAVAILABLE"
-                                  ],
-                                  "type": "string"
-                                },
-                                "status": {
-                                  "const": "failed",
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "status"
-                              ],
-                              "type": "object"
-                            },
-                            {
-                              "additionalProperties": false,
-                              "properties": {
-                                "reason": {
-                                  "const": "STOP_CONFIRMATION_TIMEOUT",
-                                  "type": "string"
-                                },
-                                "status": {
-                                  "const": "unknown",
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "status"
-                              ],
-                              "type": "object"
-                            }
-                          ]
-                        },
-                        "schemaVersion": {
-                          "const": 1,
-                          "type": "number"
-                        },
-                        "sequence": {
-                          "exclusiveMinimum": 0,
-                          "maximum": 9007199254740991,
-                          "type": "integer"
-                        },
-                        "type": {
-                          "const": "task.status",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "schemaVersion",
-                        "kind",
-                        "eventId",
-                        "conversationId",
-                        "executionId",
-                        "sequence",
-                        "conversationCursor",
-                        "occurredAt",
-                        "type",
-                        "payload"
-                      ],
-                      "type": "object"
+                      "$ref": "#/components/schemas/TaskStatusEventV1"
                     }
                   ]
                 },
@@ -5832,120 +5493,7 @@
                       "$ref": "#/components/schemas/ReasoningDeltaEventV2"
                     },
                     {
-                      "additionalProperties": false,
-                      "properties": {
-                        "conversationCursor": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "conversationId": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "eventId": {
-                          "$ref": "#/components/schemas/SseEventIdV1"
-                        },
-                        "executionId": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "kind": {
-                          "const": "event",
-                          "type": "string"
-                        },
-                        "occurredAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
-                          "type": "string"
-                        },
-                        "payload": {
-                          "anyOf": [
-                            {
-                              "additionalProperties": false,
-                              "properties": {
-                                "status": {
-                                  "enum": [
-                                    "waiting",
-                                    "submitted",
-                                    "processing",
-                                    "completed",
-                                    "cancelled"
-                                  ],
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "status"
-                              ],
-                              "type": "object"
-                            },
-                            {
-                              "additionalProperties": false,
-                              "properties": {
-                                "reason": {
-                                  "enum": [
-                                    "TASK_WAIT_TIMEOUT",
-                                    "AGENT_UNAVAILABLE",
-                                    "CONVERSATION_UNAVAILABLE"
-                                  ],
-                                  "type": "string"
-                                },
-                                "status": {
-                                  "const": "failed",
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "status"
-                              ],
-                              "type": "object"
-                            },
-                            {
-                              "additionalProperties": false,
-                              "properties": {
-                                "reason": {
-                                  "const": "STOP_CONFIRMATION_TIMEOUT",
-                                  "type": "string"
-                                },
-                                "status": {
-                                  "const": "unknown",
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "status"
-                              ],
-                              "type": "object"
-                            }
-                          ]
-                        },
-                        "schemaVersion": {
-                          "const": 1,
-                          "type": "number"
-                        },
-                        "sequence": {
-                          "exclusiveMinimum": 0,
-                          "maximum": 9007199254740991,
-                          "type": "integer"
-                        },
-                        "type": {
-                          "const": "task.status",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "schemaVersion",
-                        "kind",
-                        "eventId",
-                        "conversationId",
-                        "executionId",
-                        "sequence",
-                        "conversationCursor",
-                        "occurredAt",
-                        "type",
-                        "payload"
-                      ],
-                      "type": "object"
+                      "$ref": "#/components/schemas/TaskStatusEventV1"
                     }
                   ]
                 },
@@ -11169,6 +10717,122 @@
       "SseEventIdV1": {
         "pattern": "^[^\u0000\\n\\r]+$",
         "type": "string"
+      },
+      "TaskStatusEventV1": {
+        "additionalProperties": false,
+        "properties": {
+          "conversationCursor": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "conversationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "eventId": {
+            "$ref": "#/components/schemas/SseEventIdV1"
+          },
+          "executionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "const": "event",
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+            "type": "string"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "waiting",
+                      "submitted",
+                      "processing",
+                      "completed",
+                      "cancelled"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "TASK_WAIT_TIMEOUT",
+                      "AGENT_UNAVAILABLE",
+                      "CONVERSATION_UNAVAILABLE"
+                    ],
+                    "type": "string"
+                  },
+                  "status": {
+                    "const": "failed",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "const": "STOP_CONFIRMATION_TIMEOUT",
+                    "type": "string"
+                  },
+                  "status": {
+                    "const": "unknown",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "sequence": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "type": {
+            "const": "task.status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "kind",
+          "eventId",
+          "conversationId",
+          "executionId",
+          "sequence",
+          "conversationCursor",
+          "occurredAt",
+          "type",
+          "payload"
+        ],
+        "type": "object"
       },
       "TimelineReloadSignalV1": {
         "additionalProperties": false,

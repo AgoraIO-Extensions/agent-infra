@@ -809,26 +809,7 @@ export type ConversationDetailProjectionV2 = {
         updatedAt: string;
     };
     eventWindow?: ConversationEventWindowV1;
-    events: Array<PersistedConversationEventV2 | ReasoningDeltaEventV2 | {
-        conversationCursor: string;
-        conversationId: string;
-        eventId: SseEventIdV1;
-        executionId: string;
-        kind: 'event';
-        occurredAt: string;
-        payload: {
-            status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'cancelled';
-        } | {
-            reason?: 'TASK_WAIT_TIMEOUT' | 'AGENT_UNAVAILABLE' | 'CONVERSATION_UNAVAILABLE';
-            status: 'failed';
-        } | {
-            reason?: 'STOP_CONFIRMATION_TIMEOUT';
-            status: 'unknown';
-        };
-        schemaVersion: 1;
-        sequence: number;
-        type: 'task.status';
-    }>;
+    events: Array<PersistedConversationEventV2 | ReasoningDeltaEventV2 | TaskStatusEventV1>;
     messages: Array<{
         answerVersion: number | null;
         createdAt: string;
@@ -863,26 +844,7 @@ export type ConversationEventWindowV1 = {
 
 export type ConversationSseMessageV1 = PersistedConversationEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
 
-export type ConversationSseMessageV2 = PersistedConversationEventV2 | ReasoningDeltaEventV2 | {
-    conversationCursor: string;
-    conversationId: string;
-    eventId: SseEventIdV1;
-    executionId: string;
-    kind: 'event';
-    occurredAt: string;
-    payload: {
-        status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'cancelled';
-    } | {
-        reason?: 'TASK_WAIT_TIMEOUT' | 'AGENT_UNAVAILABLE' | 'CONVERSATION_UNAVAILABLE';
-        status: 'failed';
-    } | {
-        reason?: 'STOP_CONFIRMATION_TIMEOUT';
-        status: 'unknown';
-    };
-    schemaVersion: 1;
-    sequence: number;
-    type: 'task.status';
-} | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
+export type ConversationSseMessageV2 = PersistedConversationEventV2 | ReasoningDeltaEventV2 | TaskStatusEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
 
 export type DeploymentConfigurationProjectionV2 = {
     modelCatalog: DeploymentModelCatalogProjectionV2;
@@ -956,26 +918,7 @@ export type DirectorySearchResponseV1 = {
 export type ExecutionDetailProjectionV2 = {
     conversationId: string;
     error: null;
-    events: Array<PersistedConversationEventV2 | ReasoningDeltaEventV2 | {
-        conversationCursor: string;
-        conversationId: string;
-        eventId: SseEventIdV1;
-        executionId: string;
-        kind: 'event';
-        occurredAt: string;
-        payload: {
-            status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'cancelled';
-        } | {
-            reason?: 'TASK_WAIT_TIMEOUT' | 'AGENT_UNAVAILABLE' | 'CONVERSATION_UNAVAILABLE';
-            status: 'failed';
-        } | {
-            reason?: 'STOP_CONFIRMATION_TIMEOUT';
-            status: 'unknown';
-        };
-        schemaVersion: 1;
-        sequence: number;
-        type: 'task.status';
-    }>;
+    events: Array<PersistedConversationEventV2 | ReasoningDeltaEventV2 | TaskStatusEventV1>;
     executionId: string;
     finishedAt: string | null;
     processSummary: Array<{
@@ -1013,26 +956,7 @@ export type ExecutionDetailProjectionV2 = {
 } | {
     conversationId: string;
     error: PilotProtocolErrorV1;
-    events: Array<PersistedConversationEventV2 | ReasoningDeltaEventV2 | {
-        conversationCursor: string;
-        conversationId: string;
-        eventId: SseEventIdV1;
-        executionId: string;
-        kind: 'event';
-        occurredAt: string;
-        payload: {
-            status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'cancelled';
-        } | {
-            reason?: 'TASK_WAIT_TIMEOUT' | 'AGENT_UNAVAILABLE' | 'CONVERSATION_UNAVAILABLE';
-            status: 'failed';
-        } | {
-            reason?: 'STOP_CONFIRMATION_TIMEOUT';
-            status: 'unknown';
-        };
-        schemaVersion: 1;
-        sequence: number;
-        type: 'task.status';
-    }>;
+    events: Array<PersistedConversationEventV2 | ReasoningDeltaEventV2 | TaskStatusEventV1>;
     executionId: string;
     finishedAt: string | null;
     processSummary: Array<{
@@ -2006,6 +1930,27 @@ export type SkillHubVersionMetadataV1 = {
 };
 
 export type SseEventIdV1 = string;
+
+export type TaskStatusEventV1 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'cancelled';
+    } | {
+        reason?: 'TASK_WAIT_TIMEOUT' | 'AGENT_UNAVAILABLE' | 'CONVERSATION_UNAVAILABLE';
+        status: 'failed';
+    } | {
+        reason?: 'STOP_CONFIRMATION_TIMEOUT';
+        status: 'unknown';
+    };
+    schemaVersion: 1;
+    sequence: number;
+    type: 'task.status';
+};
 
 export type TimelineReloadSignalV1 = {
     kind: 'control';

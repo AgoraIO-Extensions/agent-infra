@@ -384,6 +384,7 @@ export const pilotOperationSseSchemasV2 = {
 	ResultFileEventV2: ResultFileEventV2Schema,
 	PersistedConversationEventV2: PersistedConversationEventV2Schema,
 	ReasoningDeltaEventV2: ReasoningDeltaEventV2Schema,
+	TaskStatusEventV1: TaskStatusEventV1Schema,
 	ConversationSseMessageV2: ConversationSseMessageV2Schema,
 };
 
