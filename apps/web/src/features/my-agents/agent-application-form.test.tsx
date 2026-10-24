@@ -55,6 +55,19 @@ function at<T>(items: readonly T[], index: number) {
 	return item;
 }
 
+/** 部署选项读取失败（路由把可重试 503 投影成整份不可用，同 unavailableDeploymentConfiguration，#3389）。 */
+const unreadableDeployment: DeploymentConfigurationProjectionV2 = {
+	...deploymentConfiguration,
+	status: "unavailable",
+	templates: [],
+	modelCatalog: {
+		...deploymentConfiguration.modelCatalog,
+		status: "unavailable",
+		endpoints: [],
+		revision: null,
+	},
+};
+
 function choose(label: string, option: string) {
 	fireEvent.click(screen.getByRole("combobox", { name: label }));
 	const item = screen.getByRole("option", { name: option });
@@ -1961,20 +1974,21 @@ resources:
 				reason: "Unavailable",
 			},
 		});
-		render(
+		const unavailable = {
+			...deploymentConfiguration,
+			status: "unavailable" as const,
+			templates: [],
+			modelCatalog: {
+				...deploymentConfiguration.modelCatalog,
+				status: "unavailable" as const,
+				endpoints: [],
+			},
+		};
+		const { rerender } = render(
 			<AgentApplicationForm
 				application={application}
 				action="resubmit"
-				deploymentConfiguration={{
-					...deploymentConfiguration,
-					status: "unavailable",
-					templates: [],
-					modelCatalog: {
-						...deploymentConfiguration.modelCatalog,
-						status: "unavailable",
-						endpoints: [],
-					},
-				}}
+				deploymentConfiguration={unavailable}
 				mode="update"
 				onSubmit={onSubmit}
 				submitting={false}
@@ -1983,6 +1997,28 @@ resources:
 
 		expect(screen.getByRole("status").textContent).toContain("暂不可用");
 		expect(screen.getByRole("status").textContent).not.toContain("已移除");
+		// 部署选项不可用时修改标准模板申请同创建申请一样被拦下、不发请求，焦点交给部署状态说明（#3389 N13-09）。
+		// 修改申请不能更换模板：由部署状态说明接手，「标准模板」下不另写字段错误。
+		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(document.activeElement).toBe(screen.getByRole("status"));
+		expect(document.getElementById("application-template-id-error")).toBeNull();
+		expect(screen.queryByText(/已移除/)).toBeNull();
+		expect(
+			screen.getByRole("combobox", { name: "标准模板" }).textContent,
+		).toContain("Codex");
+
+		// 部署选项恢复后提交原申请的模板，不当作已移除。
+		rerender(
+			<AgentApplicationForm
+				application={application}
+				action="resubmit"
+				deploymentConfiguration={deploymentConfiguration}
+				mode="update"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
 		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
 		expect(onSubmit).toHaveBeenCalledWith(
 			expect.objectContaining({ source: application.source }),
@@ -2654,6 +2690,145 @@ resources:
 		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	// #3389 N13-08：部署选项读取失败（可重试 503 投影成整份不可用）时，就绪列表仍按 PRD §4 列出四个首发
+	// 模板，原因是读不到就绪状态，下一步与部署状态说明一致，不按「尚未登记」请联系平台管理员；不可重试时
+	// 请联系管理员。已选模板的下拉按显示名显示，不外露模板 ID。
+	for (const retryable of [true, false])
+		it(`explains an unreadable deployment in the readiness list (${retryable ? "retryable" : "not retryable"}, #3389 N13-08)`, () => {
+			render(
+				<AgentApplicationForm
+					deploymentConfiguration={unreadableDeployment}
+					deploymentConfigurationRetryable={retryable}
+					mode="create"
+					onSubmit={vi.fn()}
+					submitting={false}
+				/>,
+			);
+			const reason = retryable
+				? "暂时无法读取就绪状态，请重新加载部署选项。"
+				: "暂时无法读取就绪状态，请联系管理员。";
+			const list = screen.getByRole("list", { name: "模板就绪状态" });
+			expect(
+				within(list)
+					.getAllByRole("listitem")
+					.map((item) => item.textContent),
+			).toEqual(
+				["Codex", "Claude", "OpenCode", "Pi"].map(
+					(name) => `${name}：${reason}`,
+				),
+			);
+			expect(screen.queryByText(/尚未登记/)).toBeNull();
+			expect(screen.getByRole("status").textContent).toBe(
+				retryable
+					? "部署选项暂不可用，请重新加载；标准模板申请暂不能提交。"
+					: "部署选项暂不可用，请联系管理员。",
+			);
+		});
+
+	it("shows the display name of an edited application's template while the deployment is unreadable (#3389 N13-08)", () => {
+		render(
+			<AgentApplicationForm
+				action="edit"
+				application={pendingApplication}
+				deploymentConfiguration={unreadableDeployment}
+				deploymentConfigurationRetryable
+				mode="update"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+		const template = screen.getByRole("combobox", { name: "标准模板" });
+		expect(template.textContent).toContain("Codex");
+		expect(template.textContent).not.toContain("codex");
+		expect(screen.queryByText(/\bcodex\b/)).toBeNull();
+	});
+
+	it("names an unknown template neutrally instead of exposing its ID while the deployment is unreadable (#3389 N13-08)", () => {
+		render(
+			<AgentApplicationForm
+				action="edit"
+				application={AgentApplicationProjectionV2Schema.parse({
+					...pendingApplication,
+					source: { kind: "standard", templateId: "internal-template-7" },
+				})}
+				deploymentConfiguration={unreadableDeployment}
+				mode="update"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+		const template = screen.getByRole("combobox", { name: "标准模板" });
+		expect(template.textContent).toContain("标准模板");
+		expect(document.body.textContent).not.toContain("internal-template-7");
+	});
+
+	// #3389 N13-10：部署选项读取失败时提交标准模板申请：被拦下、不发请求；「标准模板」与模型选择器都禁用，
+	// 不对禁用的模型选择器列「请选择…」，焦点交给部署状态说明，不留在提交按钮上。
+	it("hands focus to the deployment status instead of disabled model choices while the deployment is unreadable (#3389 N13-10)", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				deploymentConfiguration={unreadableDeployment}
+				deploymentConfigurationRetryable
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Release assistant" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Helps the release team" },
+		});
+		const submit = screen.getByRole("button", { name: "提交审批" });
+		submit.focus();
+		fireEvent.click(submit);
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(
+			document.getElementById("application-template-id-error")?.textContent,
+		).toBe("部署选项暂不可用，请重新加载；标准模板申请暂不能提交。");
+		for (const message of [
+			"请选择模型端点。",
+			"请选择模型。",
+			"至少选择一个推理档位。",
+			"请选择默认模型。",
+			"请选择默认推理档位。",
+			"至少添加一个模型选项。",
+			"请输入 Agent 默认 Relay Key。",
+		])
+			expect(screen.queryByText(message)).toBeNull();
+		expect(document.activeElement).toBe(screen.getByRole("status"));
+	});
+
+	// #3389 N13-08：下拉展开时部署选项重读失败、下拉随之禁用：弹层一起收起，不留一个展开却不能操作的
+	// 菜单；焦点不落到 body。
+	it("closes an open template menu when a reread disables it (#3389 N13-08)", async () => {
+		const props = {
+			mode: "create" as const,
+			onSubmit: vi.fn(),
+			submitting: false,
+		};
+		const { rerender } = render(<AgentApplicationForm {...props} />);
+		const template = screen.getByRole("combobox", { name: "标准模板" });
+		fireEvent.click(template);
+		await waitFor(() => expect(screen.getByRole("listbox")).toBeTruthy());
+		expect(template.getAttribute("aria-expanded")).toBe("true");
+
+		rerender(
+			<AgentApplicationForm
+				{...props}
+				deploymentConfiguration={unreadableDeployment}
+				deploymentConfigurationRetryable
+			/>,
+		);
+		expect(template).toHaveProperty("disabled", true);
+		await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+		expect(template.getAttribute("aria-expanded")).toBe("false");
+		expect(document.activeElement).not.toBe(document.body);
 	});
 
 	it("blocks a stale deployment projection before submitting choices", () => {

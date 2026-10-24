@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
 	applicationTemplateChoices,
 	type DeploymentConfigurationState,
+	deploymentConfigurationUsable,
 	projectDeploymentConfiguration,
 	templateReadinessMessages,
 	unavailableDeploymentConfiguration,
+	unreadableTemplateReadinessMessage,
 } from "./deployment-configuration.js";
 import { deploymentConfiguration } from "./test-fixtures.js";
 
@@ -53,6 +55,42 @@ describe("templateReadinessMessages", () => {
 				.filter(([, message]) => message.includes("刷新"))
 				.map(([state]) => state),
 		).toEqual(["unavailable"]);
+	});
+
+	// #3389 N13-08：部署选项读取失败时读不到就绪状态，不按「尚未登记」说明；下一步与部署状态说明一致。
+	it("explains an unreadable deployment with the same next step as the deployment status", () => {
+		expect(unreadableTemplateReadinessMessage(true)).toBe(
+			"暂时无法读取就绪状态，请重新加载部署选项。",
+		);
+		expect(unreadableTemplateReadinessMessage(false)).toBe(
+			"暂时无法读取就绪状态，请联系管理员。",
+		);
+		for (const retryable of [true, false])
+			expect(unreadableTemplateReadinessMessage(retryable)).not.toContain(
+				"登记",
+			);
+	});
+});
+
+describe("deploymentConfigurationUsable", () => {
+	// #3389 N13-09：部署状态说明「部署选项需要刷新后才能提交标准模板申请。」出现的条件，创建与修改
+	// 标准模板申请都按它拦下。
+	it("needs both the deployment and its model catalog to be populated", () => {
+		expect(deploymentConfigurationUsable(deploymentConfiguration)).toBe(true);
+		expect(
+			deploymentConfigurationUsable(unavailableDeploymentConfiguration),
+		).toBe(false);
+		for (const status of ["empty", "stale", "unavailable"] as const) {
+			expect(
+				deploymentConfigurationUsable({ ...deploymentConfiguration, status }),
+			).toBe(false);
+			expect(
+				deploymentConfigurationUsable({
+					...deploymentConfiguration,
+					modelCatalog: { ...deploymentConfiguration.modelCatalog, status },
+				}),
+			).toBe(false);
+		}
 	});
 });
 

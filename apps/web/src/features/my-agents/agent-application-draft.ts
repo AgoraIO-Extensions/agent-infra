@@ -92,6 +92,11 @@ export type AgentApplicationValidationContext = {
 	lockedTemplateMessage?: string;
 	/** 创建申请时部署里没有一个模板可申请：未选模板时的字段错误，代替「请选择标准模板。」（#3364 N12-02）。 */
 	noApplicableTemplateMessage?: string;
+	/**
+	 * 部署选项读取失败、模型目录读不到：模型选择器都禁用，不对它们列「请选择…」「至少…」，由「标准模板」
+	 * 字段错误与部署状态说明原因（#3389 N13-10）。只在标准模板选择同时被拦下时生效，提交仍不会发出。
+	 */
+	modelChoicesUnavailable?: boolean;
 };
 
 /**
@@ -207,7 +212,10 @@ export function validateAgentApplicationDraft(
 		"secret",
 		draft.sourceKind === "standard" ? context.allowedSecretKeys : undefined,
 	);
-	if (context.modelConfigurationVisible) {
+	if (
+		context.modelConfigurationVisible &&
+		!(context.modelChoicesUnavailable && context.standardChoicesBlocked)
+	) {
 		if (
 			context.requiresDefaultRelayKey &&
 			!context.standardChoicesBlocked &&

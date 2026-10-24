@@ -45,6 +45,10 @@ import { useKeylessKeyCheck } from "../agent-configuration/use-keyless-key-check
 import { agentSourceReferenceLabel } from "../agent-management-status.js";
 import { DirectoryPicker } from "../directory-fields.js";
 import {
+	templateDisplayName,
+	templateNameLookup,
+} from "../template-display-name.js";
+import {
 	type AgentApplicationEnvironmentDraft,
 	type AgentApplicationFieldErrors,
 	type AgentApplicationModelDraft,
@@ -58,7 +62,9 @@ import {
 import { ApplicationKeylessModelEditor } from "./application-keyless-model-editor.js";
 import {
 	applicationTemplateChoices,
+	deploymentConfigurationUsable,
 	templateReadinessMessages,
+	unreadableTemplateReadinessMessage,
 } from "./deployment-configuration.js";
 import {
 	formatMultiServiceManifestSummary,
@@ -198,9 +204,18 @@ function firstFieldError(errors: AgentApplicationFieldErrors) {
 		);
 	};
 	const fallback =
-		document.getElementById("application-deployment-status") ??
-		document.getElementById(rowAddId.model);
+		deploymentStatusFocusTarget() ?? document.getElementById(rowAddId.model);
 	return controls.find(isActionable) ?? fallback;
+}
+
+/**
+ * 部署状态说明里的下一步：可重试时为「重新加载部署选项」，不可重试时为说明本身（tabIndex=-1）。出错的
+ * 字段都不可操作（部署选项读取失败时「标准模板」与模型选择器都禁用），或修改申请因部署选项不可用被拦下时
+ * 焦点交给它，浏览器把它滚入视口（根样式让出吸顶顶栏），不留在页底的提交按钮上（#3389 N13-09、N13-10）。
+ */
+function deploymentStatusFocusTarget() {
+	const status = document.getElementById("application-deployment-status");
+	return status?.querySelector<HTMLElement>("button") ?? status;
 }
 
 function reindexRowErrors(
@@ -987,6 +1002,18 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				(deployment.status !== "populated" ||
 					deployment.templates.length === 0 ||
 					!modelCatalogReady)));
+	// 部署选项不可用（读取失败、过期或没有登记内容）时标准模板申请不能提交，与页面顶部的部署状态说明
+	// 「部署选项需要刷新后才能提交标准模板申请。」一致：创建申请另由「标准模板」字段错误说明；修改申请不能
+	// 更换模板，由部署状态说明接手，不另写字段错误。两种模式都拦下、不发请求（#3389 N13-09）。
+	const deploymentBlocksStandard =
+		sourceKind === "standard" && !deploymentConfigurationUsable(deployment);
+	// 部署选项读取失败：就绪状态与模型目录都读不到。就绪列表不按「尚未登记」说明，模型选择器不列
+	// 「请选择…」（#3389 N13-08、N13-10）。
+	const deploymentUnreadable = deployment.status === "unavailable";
+	const modelChoicesUnavailable =
+		(deploymentUnreadable ||
+			deployment.modelCatalog.status === "unavailable") &&
+		modelEndpoints.length === 0;
 	useEffect(() => {
 		if (props.mode !== "update" || modelEndpoints.length === 0) return;
 		setModels((current) => {
@@ -1234,11 +1261,22 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		noApplicableTemplateMessage !== undefined &&
 		!templateId;
 	const [templateMenuOpen, setTemplateMenuOpen] = useState(false);
+	// 下拉展开时随重读禁用（部署选项读取失败）：弹层随之收起，不留一个展开却不能操作的菜单。焦点在弹层里
+	// 时同样交给页面标题，不为此滚动页面（#3389 N13-08）。浏览器在禁用的同一帧可能已把焦点丢到 body，
+	// 所以展开着的菜单按「握着焦点」处理。
 	useLayoutEffect(() => {
+		if (!templateSelectDisabled) return;
 		const trigger = document.getElementById(fieldId("templateId"));
-		if (templateSelectDisabled && trigger && document.activeElement === trigger)
+		const active = document.activeElement;
+		const menuHeldFocus =
+			templateMenuOpen &&
+			(!active ||
+				active === document.body ||
+				active.closest('[data-slot="select-content"]') !== null);
+		if ((trigger && active === trigger) || menuHeldFocus)
 			pageRecoveryTarget()?.focus({ preventScroll: true });
-	}, [templateSelectDisabled]);
+		if (templateMenuOpen) setTemplateMenuOpen(false);
+	}, [templateMenuOpen, templateSelectDisabled]);
 	const advancedConfigurationHasErrors = Object.keys(fieldErrors).some(
 		(key) => key.startsWith("environment.") || key.startsWith("secret."),
 	);
@@ -1327,16 +1365,27 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					<Label htmlFor="application-template-id">标准模板</Label>
 					<Select
 						disabled={templateSelectDisabled}
-						open={templateMenuOpen && !templateSelectUnavailable}
+						open={
+							templateMenuOpen &&
+							!templateSelectUnavailable &&
+							!templateSelectDisabled
+						}
 						onOpenChange={(open) =>
-							setTemplateMenuOpen(open && !templateSelectUnavailable)
+							setTemplateMenuOpen(
+								open && !templateSelectUnavailable && !templateSelectDisabled,
+							)
 						}
 						value={templateId}
+						// 显示名按部署登记取；部署选项读取失败（没有登记内容可查）时按 M1 标准模板的显示名映射，
+						// 查不到时为「标准模板」，不回退原始模板 ID（#3291 N9-2-01、#3389 N13-08）。
 						itemToStringLabel={(value) =>
-							deployment.templates.find(
-								(template) => template.templateId === value,
-							)?.displayName ??
-							(staleTemplate ? removedTemplateLabel : String(value))
+							templateNameLookup(deployment.templates)(String(value)) ??
+							(staleTemplate
+								? removedTemplateLabel
+								: templateDisplayName(
+										String(value),
+										templateNameLookup(templates),
+									))
 						}
 						onValueChange={(value) => {
 							if (!value) return;
@@ -1391,11 +1440,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						{templates.map((template) => (
 							<li key={template.templateId}>
 								{template.displayName}：
-								{
-									templateReadinessMessages[
-										template.readiness?.state ?? "unverified"
-									]
-								}
+								{deploymentUnreadable
+									? unreadableTemplateReadinessMessage(deploymentRetryable)
+									: templateReadinessMessages[
+											template.readiness?.state ?? "unverified"
+										]}
 							</li>
 						))}
 					</ul>
@@ -1568,9 +1617,16 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			identityEntryLocked ||
 			templateLockShown ||
 			serverErrorArrived;
+		// 这次提交因部署选项不可用被拦下（修改申请没有字段错误说明它；页面初次渲染不算提交）。
+		const deploymentBlocked =
+			focusRequest > 0 &&
+			focusRequest !== previous.focusRequest &&
+			deploymentBlocksStandard;
 		if (
 			!shouldFocus ||
-			(Object.keys(fieldErrors).length === 0 && !summarizedAtTop)
+			(Object.keys(fieldErrors).length === 0 &&
+				!summarizedAtTop &&
+				!deploymentBlocked)
 		)
 			return;
 		// 只读的「入口身份校验」与修改申请里只读的「标准模板」不作为焦点目标；其余字段错误仍先于
@@ -1589,8 +1645,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		// （#3328）与非校验类提交失败（#3351 N11-02）时同样聚焦顶部提示。聚焦时浏览器把它滚入视口。
 		else if (summarizedAtTop)
 			document.getElementById(applicationSubmissionErrorId)?.focus();
+		// 部署选项不可用时修改申请被拦下、没有其他出错字段：焦点交给部署状态的下一步（#3389 N13-09）。
+		else if (deploymentBlocked) deploymentStatusFocusTarget()?.focus();
 	}, [
 		advancedConfigurationOpen,
+		deploymentBlocksStandard,
 		fieldErrors,
 		focusRequest,
 		identityEntryLocked,
@@ -1628,6 +1687,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			defaultModelReasoningLevels: defaultModel?.reasoningLevels
 				?.split("\n")
 				.filter(Boolean),
+			modelChoicesUnavailable,
 			modelConfigurationVisible,
 			requiresDefaultRelayKey:
 				props.mode === "create" && sourceKind === "standard",
@@ -1654,7 +1714,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			Object.keys(errors).length > 0 ||
 			Object.keys(serverFieldErrors).length > 0 ||
 			hasActiveServerValidationError ||
-			serverFormError
+			serverFormError ||
+			deploymentBlocksStandard
 		)
 			return;
 		setSecrets([]);
