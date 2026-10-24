@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
 	chmod,
 	chown,
@@ -75,18 +74,19 @@ async function download(url, expected, path) {
 
 const [architecture, destination, ...extra] = process.argv.slice(2);
 const artifact = release.artifacts[architecture];
+const codeModeHostArtifact = release.codeModeHostArtifacts?.[architecture];
 if (!artifact || !destination || extra.length) {
 	throw new Error("usage: install-codex.mjs <amd64|arm64> <destination>");
 }
 if (release.schemaVersion !== undefined || release.distribution !== undefined) {
 	throw new Error("Unsupported Codex release manifest");
 }
-if (
-	typeof artifact.name !== "string" ||
-	!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(artifact.name)
-) {
-	throw new Error("Invalid Codex executable archive member");
-}
+for (const executable of [artifact, codeModeHostArtifact])
+	if (
+		typeof executable?.name !== "string" ||
+		!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(executable.name)
+	)
+		throw new Error("Invalid Codex executable archive member");
 const installRoot = resolve(destination);
 const installParent = dirname(installRoot);
 await mkdir(installParent, { recursive: true });
@@ -95,26 +95,6 @@ let committed = false;
 try {
 	const directory = await mkdtemp(join(tmpdir(), "codex-install-"));
 	try {
-		const archive = join(directory, "release.tar.gz");
-		await download(
-			`https://github.com/openai/codex/releases/download/${release.provenance.upstreamTag}/${artifact.name}.tar.gz`,
-			artifact.archiveSha256,
-			archive,
-		);
-		execFileSync("tar", ["-xzf", archive, "-C", directory, artifact.name], {
-			stdio: "ignore",
-		});
-		const binaryPath = join(directory, artifact.name);
-		const binaryInfo = await lstat(binaryPath);
-		if (!binaryInfo.isFile() || binaryInfo.isSymbolicLink())
-			throw new Error("Codex executable archive member is not a regular file");
-		const binary = await readFile(binaryPath);
-		if (
-			`sha256:${createHash("sha256").update(binary).digest("hex")}` !==
-			artifact.executableSha256
-		) {
-			throw new Error("Codex executable checksum mismatch");
-		}
 		const bin = resolve(stagingRoot, "bin");
 		const share = resolve(stagingRoot, "share");
 		await mkdir(bin, { recursive: true });
@@ -122,9 +102,29 @@ try {
 		await normalizeRootOwnership(stagingRoot);
 		await normalizeRootOwnership(bin);
 		await normalizeRootOwnership(share);
-		await copyFile(binaryPath, join(bin, "codex"));
-		await normalizeRootOwnership(join(bin, "codex"));
-		await chmod(join(bin, "codex"), 0o555);
+		for (const [executable, installedName] of [
+			[artifact, "codex"],
+			[codeModeHostArtifact, "codex-code-mode-host"],
+		]) {
+			const archive = join(directory, `${installedName}.tar.gz`);
+			await download(
+				`https://github.com/openai/codex/releases/download/${release.provenance.upstreamTag}/${executable.name}.tar.gz`,
+				executable.archiveSha256,
+				archive,
+			);
+			execFileSync("tar", ["-xzf", archive, "-C", directory, executable.name], {
+				stdio: "ignore",
+			});
+			const binaryPath = join(directory, executable.name);
+			const binaryInfo = await lstat(binaryPath);
+			if (!binaryInfo.isFile() || binaryInfo.isSymbolicLink())
+				throw new Error("Codex executable archive member is not a regular file");
+			if (sha256(await readFile(binaryPath)) !== executable.executableSha256)
+				throw new Error("Codex executable checksum mismatch");
+			await copyFile(binaryPath, join(bin, installedName));
+			await normalizeRootOwnership(join(bin, installedName));
+			await chmod(join(bin, installedName), 0o555);
+		}
 		await copyFile(releasePath, join(share, "release.json"));
 		await normalizeRootOwnership(join(share, "release.json"));
 		await chmod(join(share, "release.json"), 0o444);

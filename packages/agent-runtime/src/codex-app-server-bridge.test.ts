@@ -485,6 +485,7 @@ describe.sequential("Codex app-server v2 bridge", () => {
 					expect(server?.args).toContain(`${key}=${JSON.stringify(value)}`);
 				// #3201：原生工具不发起审批，工具子进程的环境排除模型传输凭证。
 				expect(server?.args).toContain('approval_policy="never"');
+				expect(server?.args).toContain("features.code_mode_host=true");
 				expect(server?.args).toContain(
 					'shell_environment_policy.inherit="core"',
 				);

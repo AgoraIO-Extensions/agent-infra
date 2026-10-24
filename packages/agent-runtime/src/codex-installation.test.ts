@@ -144,12 +144,17 @@ async function repin(arch = "arm64") {
 			arm64: { executableSha256: hash(executable) },
 			amd64: { executableSha256: hash(executable) },
 		},
+		codeModeHostArtifacts: {
+			arm64: { executableSha256: hash(executable) },
+			amd64: { executableSha256: hash(executable) },
+		},
 		legal: {
 			LICENSE: hash("upstream license"),
 			NOTICE: hash("upstream notice"),
 		},
 	};
 	await put("bin/codex", executable, 0o555);
+	await put("bin/codex-code-mode-host", executable, 0o555);
 	await put("share/release.json", JSON.stringify(fixture.release));
 }
 async function verify(layout?: "workspace-summary-v1") {
@@ -252,6 +257,7 @@ describe("fixed Skill layout preserves official provenance", () => {
 	});
 	it.each([
 		"bin/codex",
+		"bin/codex-code-mode-host",
 		"share/LICENSE",
 		"share/NOTICE",
 		"share/release.json",
@@ -260,7 +266,7 @@ describe("fixed Skill layout preserves official provenance", () => {
 		"retains official payload rejection with the new group: %s",
 		async (name) => {
 			await installSkillLayout();
-			await put(name, "tampered", name === "bin/codex" ? 0o555 : 0o444);
+			await put(name, "tampered", name.startsWith("bin/") ? 0o555 : 0o444);
 			await expect(verify("workspace-summary-v1")).rejects.toThrow(mismatch);
 		},
 	);
@@ -281,21 +287,23 @@ describe("fixed official Codex installation", () => {
 	);
 	it.each([
 		"bin/codex",
+		"bin/codex-code-mode-host",
 		"share/LICENSE",
 		"share/NOTICE",
 		"share/release.json",
 		"share/models.json",
 	])("rejects modified %s", async (name) => {
-		await put(name, "tampered", name === "bin/codex" ? 0o555 : 0o444);
+		await put(name, "tampered", name.startsWith("bin/") ? 0o555 : 0o444);
 		await expect(verify()).rejects.toThrow(mismatch);
 	});
-	it.each(["share/models.json", "share/release.json"])(
-		"rejects missing %s",
-		async (name) => {
-			await rm(installed(name));
-			await expect(verify()).rejects.toThrow(mismatch);
-		},
-	);
+	it.each([
+		"bin/codex-code-mode-host",
+		"share/models.json",
+		"share/release.json",
+	])("rejects missing %s", async (name) => {
+		await rm(installed(name));
+		await expect(verify()).rejects.toThrow(mismatch);
+	});
 	it("rejects a model catalog that no longer matches its pinned digest", async () => {
 		fixture.modelCatalog = {
 			...fixture.modelCatalog,
@@ -322,10 +330,10 @@ describe("fixed official Codex installation", () => {
 		fixture.runtimeUid = 0;
 		await expect(verify()).rejects.toThrow(mismatch);
 	});
-	it.each(["bin/codex", "share/release.json"])(
+	it.each(["bin/codex", "bin/codex-code-mode-host", "share/release.json"])(
 		"rejects writable/special bits at %s",
 		async (name) => {
-			await chmod(installed(name), name === "bin/codex" ? 0o4555 : 0o644);
+			await chmod(installed(name), name.startsWith("bin/") ? 0o4555 : 0o644);
 			await expect(verify()).rejects.toThrow(mismatch);
 		},
 	);
