@@ -224,7 +224,8 @@ export const CODEX_OFFICIAL_LANE_CONFIG = Object.freeze({
 	"features.image_generation": false,
 	"features.code_mode": false,
 	"features.code_mode_only": false,
-	"features.code_mode_host": false,
+	// 内置 code_mode_only 模型仍使用 exec；本地 Host 必须能调度已获准的原生工具。
+	"features.code_mode_host": true,
 	"features.hooks": false,
 	"features.memories": false,
 	"features.shell_snapshot": false,

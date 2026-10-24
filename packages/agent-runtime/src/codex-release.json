@@ -21,5 +21,17 @@
 	"legal": {
 		"LICENSE": "sha256:d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
 		"NOTICE": "sha256:9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915"
+	},
+	"codeModeHostArtifacts": {
+		"amd64": {
+			"name": "codex-code-mode-host-x86_64-unknown-linux-musl",
+			"archiveSha256": "sha256:2b817a495e35a53333e94b35af9ed879e180f9b28fd57ef15ace9a857ba86f2c",
+			"executableSha256": "sha256:fbd94fd3b69fea73462af6ad335e049daabd6bec3e32d7b743f74130b621741d"
+		},
+		"arm64": {
+			"name": "codex-code-mode-host-aarch64-unknown-linux-musl",
+			"archiveSha256": "sha256:269d6006fb55c95f876454fc03ed3755c367c1c376b77a985d0029395a5a7736",
+			"executableSha256": "sha256:3a8ccc97da8e294de3111fcf6f2d3ddff199e1d3da9c8b3f1f4df85bea19a19e"
+		}
 	}
 }

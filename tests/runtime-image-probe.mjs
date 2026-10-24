@@ -130,12 +130,16 @@ function syntheticResponse(response, sequence) {
 }
 
 function syntheticToolResponse(response, sequence) {
-	if (toolProbeKind === "apply-patch") {
+	const cmd = `command -v truncate >/dev/null || exit 11; printf 'runtime-tool-ok\\n'; if printf 'unexpected\\n' > ${toolDeniedPath}; then exit 9; fi; truncate_output=$(truncate -s 0 ${toolExistingPath} 2>&1); truncate_status=$?; if test "$truncate_status" -eq 0; then exit 10; fi; case "$truncate_output" in *'Permission denied'*) printf 'runtime-truncate-denied\\n';; *) exit 12;; esac; test ! -e ${toolDeniedPath} && test -s ${toolExistingPath} || exit 13; printf 'runtime-own-control\\n' > ./runtime-own-control || exit 14; test "$(cat ./runtime-own-control)" = runtime-own-control || exit 15; if cat ${toolSiblingFile} >/dev/null 2>&1; then exit 16; fi; if ls ${toolSiblingRoot} >/dev/null 2>&1; then exit 17; fi; if ls ${toolBoundaryPath} >/dev/null 2>&1; then exit 18; fi; if printf 'unexpected\\n' > ${toolSiblingFile} 2>/dev/null; then exit 19; fi; if cat /proc/self/environ >/dev/null 2>&1; then exit 20; fi; if env | grep -q '^AGENT_INFRA_'; then exit 21; fi; printf 'runtime-sibling-denied\\n'`;
+	if (toolProbeKind === "apply-patch" || toolProbeKind === "code-mode") {
 		const item = {
 			type: "custom_tool_call",
 			call_id: toolCallId,
-			name: "apply_patch",
-			input: `*** Begin Patch
+			name: toolProbeKind === "code-mode" ? "exec" : "apply_patch",
+			input:
+				toolProbeKind === "code-mode"
+					? `const result = await tools.exec_command(${JSON.stringify({ cmd, max_output_tokens: 100, yield_time_ms: 1000 })}); if (result.exit_code !== 0) throw new Error("native shell failed"); text(result.output);`
+					: `*** Begin Patch
 *** Add File: ${toolDeniedPath}
 +prohibited
 *** End Patch`,
@@ -160,7 +164,7 @@ function syntheticToolResponse(response, sequence) {
 		call_id: toolCallId,
 		name: "exec_command",
 		arguments: JSON.stringify({
-			cmd: `command -v truncate >/dev/null || exit 11; printf 'runtime-tool-ok\\n'; if printf 'unexpected\\n' > ${toolDeniedPath}; then exit 9; fi; truncate_output=$(truncate -s 0 ${toolExistingPath} 2>&1); truncate_status=$?; if test "$truncate_status" -eq 0; then exit 10; fi; case "$truncate_output" in *'Permission denied'*) printf 'runtime-truncate-denied\\n';; *) exit 12;; esac; test ! -e ${toolDeniedPath} && test -s ${toolExistingPath} || exit 13; printf 'runtime-own-control\\n' > ./runtime-own-control || exit 14; test "$(cat ./runtime-own-control)" = runtime-own-control || exit 15; if cat ${toolSiblingFile} >/dev/null 2>&1; then exit 16; fi; if ls ${toolSiblingRoot} >/dev/null 2>&1; then exit 17; fi; if ls ${toolBoundaryPath} >/dev/null 2>&1; then exit 18; fi; if printf 'unexpected\\n' > ${toolSiblingFile} 2>/dev/null; then exit 19; fi; if cat /proc/self/environ >/dev/null 2>&1; then exit 20; fi; if env | grep -q '^AGENT_INFRA_'; then exit 21; fi; printf 'runtime-sibling-denied\\n'`,
+			cmd,
 			max_output_tokens: 100,
 			yield_time_ms: 1000,
 		}),
@@ -1463,29 +1467,54 @@ async function runImageProbe() {
 		runtime = await launch(
 			deployment(origin, "/var/lib/agent-runtime/tool-probe"),
 		);
-		for (const kind of ["shell", "apply-patch"]) {
+		for (const kind of ["shell", "apply-patch", "code-mode"]) {
+			if (kind === "code-mode") {
+				await runtime.stop();
+				runtime = await launch(
+					deployment(origin, "/var/lib/agent-runtime/tool-probe"),
+				);
+			}
 			toolProbeKind = kind;
 			toolProbePending = true;
 			toolProbeOutput = undefined;
 			const beforeRequests = requests.length;
 			// 工具失败只是工具结果，不使 Turn 失败。
-			await turn(`tool-probe-${kind}`, undefined, "completed");
+			await turn(
+				`tool-probe-${kind}`,
+				kind === "code-mode"
+					? {
+							schemaVersion: 1,
+							modelOptionId: "selected-option",
+							reasoningLevel: "high",
+						}
+					: undefined,
+				"completed",
+			);
 			assert.equal(await readFile(toolSiblingFile, "utf8"), toolSiblingContent);
 			await assert.rejects(readFile(toolDeniedPath), { code: "ENOENT" });
 			assert.equal(
 				await readFile(toolExistingPath, "utf8"),
 				"owner-truncate-control",
 			);
-			const output = typeof toolProbeOutput === "string" ? toolProbeOutput : "";
+			const output =
+				typeof toolProbeOutput === "string"
+					? toolProbeOutput
+					: Array.isArray(toolProbeOutput)
+						? toolProbeOutput.map((item) => item.text ?? "").join("\n")
+						: "";
 			check(
-				kind === "shell"
-					? "native-shell-sandboxed-within-conversation"
-					: "native-apply-patch-no-outside-effects",
+				kind === "code-mode"
+					? "native-code-mode-sandboxed-within-conversation"
+					: kind === "shell"
+						? "native-shell-sandboxed-within-conversation"
+						: "native-apply-patch-no-outside-effects",
 				!toolProbePending &&
 					requests.length === beforeRequests + 2 &&
 					output.length > 0 &&
-					(kind !== "shell" ||
-						(/exited with code 0\b/.test(output) &&
+					(kind === "apply-patch" ||
+						((kind === "code-mode"
+							? requests[beforeRequests].model === "gpt-5.6-sol"
+							: /exited with code 0\b/.test(output)) &&
 							[
 								"runtime-tool-ok",
 								"runtime-truncate-denied",

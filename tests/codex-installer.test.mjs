@@ -103,6 +103,13 @@ for (const scenario of ["new", "replace", "rollback", "cleanup-failure"])
 							executableSha256: hash(binary),
 						},
 					},
+					codeModeHostArtifacts: {
+						amd64: {
+							name,
+							archiveSha256: hash(await readFile(archive)),
+							executableSha256: hash(binary),
+						},
+					},
 					legal: { LICENSE: hash("synthetic license") },
 				};
 				await writeFile(
@@ -201,6 +208,7 @@ globalThis.fetch = async (url) => ${catalogFetch} new Response(url.endsWith(".ta
 					["bin", 0o555],
 					["share", 0o555],
 					["bin/codex", 0o555],
+					["bin/codex-code-mode-host", 0o555],
 					["share/release.json", 0o444],
 					["share/LICENSE", 0o444],
 					["share/models.json", 0o444],
@@ -212,6 +220,10 @@ globalThis.fetch = async (url) => ${catalogFetch} new Response(url.endsWith(".ta
 				}
 				assert.deepEqual(
 					await readFile(join(destination, "bin/codex")),
+					binary,
+				);
+				assert.deepEqual(
+					await readFile(join(destination, "bin/codex-code-mode-host")),
 					binary,
 				);
 				assert.equal(
@@ -280,6 +292,7 @@ test("upstream installer keeps the previous install when staging validation fail
 						executableSha256: `sha256:${"1".repeat(64)}`,
 					},
 				},
+				codeModeHostArtifacts: { amd64: { name: "codex-host-test" } },
 				legal: {},
 			}),
 		);
@@ -305,6 +318,16 @@ test("upstream installer keeps the previous install when staging validation fail
 
 // #2978：目录摘要或内置目录任一不符时，安装失败且保留原安装。
 for (const [scenario, options, expected] of [
+	[
+		"code-mode host pin mismatch",
+		{ hostPin: digest("another host") },
+		/Codex executable checksum mismatch/,
+	],
+	[
+		"code-mode host archive mismatch",
+		{ hostArchivePin: digest("another archive") },
+		/Codex release asset checksum mismatch/,
+	],
 	[
 		"catalog pin mismatch",
 		{ catalogPin: digest("another catalog") },
@@ -334,6 +357,14 @@ for (const [scenario, options, expected] of [
 							name: "codex-test",
 							archiveSha256: digest(await readFile(archive)),
 							executableSha256: digest(binary),
+						},
+					},
+					codeModeHostArtifacts: {
+						amd64: {
+							name: "codex-test",
+							archiveSha256:
+								options.hostArchivePin ?? digest(await readFile(archive)),
+							executableSha256: options.hostPin ?? digest(binary),
 						},
 					},
 					legal: { LICENSE: digest("synthetic license") },

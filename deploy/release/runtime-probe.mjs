@@ -22,7 +22,7 @@ const hasKeys = (value, keys) =>
 function officialRelease(bytes) {
 	const release = JSON.parse(bytes);
 	if (
-		!hasKeys(release, "artifacts,legal,provenance") ||
+		!hasKeys(release, "artifacts,codeModeHostArtifacts,legal,provenance") ||
 		!hasKeys(
 			release.provenance,
 			"codexVersion,protocolVersion,schemaSha256,upstreamCommit,upstreamTag",
@@ -34,6 +34,7 @@ function officialRelease(bytes) {
 		!/^([a-f0-9]{40})$/.test(release.provenance.upstreamCommit) ||
 		!digestPattern.test(release.provenance.schemaSha256) ||
 		!hasKeys(release.artifacts, "amd64,arm64") ||
+		!hasKeys(release.codeModeHostArtifacts, "amd64,arm64") ||
 		!hasKeys(release.legal, "LICENSE,NOTICE") ||
 		!Object.values(release.legal).every((digest) => digestPattern.test(digest))
 	)
@@ -42,14 +43,17 @@ function officialRelease(bytes) {
 		["amd64", "x86_64"],
 		["arm64", "aarch64"],
 	]) {
-		const artifact = release.artifacts[architecture];
-		if (
-			!hasKeys(artifact, "archiveSha256,executableSha256,name") ||
-			artifact.name !== `codex-${target}-unknown-linux-musl` ||
-			!digestPattern.test(artifact.archiveSha256) ||
-			!digestPattern.test(artifact.executableSha256)
-		)
-			throw new Error();
+		for (const [artifact, name] of [
+			[release.artifacts[architecture], "codex"],
+			[release.codeModeHostArtifacts[architecture], "codex-code-mode-host"],
+		])
+			if (
+				!hasKeys(artifact, "archiveSha256,executableSha256,name") ||
+				artifact.name !== `${name}-${target}-unknown-linux-musl` ||
+				!digestPattern.test(artifact.archiveSha256) ||
+				!digestPattern.test(artifact.executableSha256)
+			)
+				throw new Error();
 	}
 	return release;
 }
@@ -65,6 +69,7 @@ const requiredChecks = [
 	"stream-failures-redacted",
 	"cancellation-aborts-upstream",
 	"native-shell-sandboxed-within-conversation",
+	"native-code-mode-sandboxed-within-conversation",
 	"native-apply-patch-no-outside-effects",
 	"recursive-native-storage-redacted",
 	"personal-configuration-isolated",

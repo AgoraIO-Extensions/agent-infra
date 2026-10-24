@@ -197,7 +197,12 @@ function shellQuote(value: string) {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-type LoopbackResponseMode = "active" | "tool" | "custom-tool" | "text";
+type LoopbackResponseMode =
+	| "active"
+	| "tool"
+	| "custom-tool"
+	| "code-mode"
+	| "text";
 
 async function loopbackResponsesProvider(
 	root: string,
@@ -239,22 +244,30 @@ async function loopbackResponsesProvider(
 									},
 								],
 							}
-						: responseMode === "custom-tool"
+						: responseMode === "code-mode"
 							? {
 									type: "custom_tool_call",
-									name: "apply_patch",
+									name: "exec",
 									call_id: "synthetic-tool-call",
 									input:
-										"*** Begin Patch\n*** Add File: native-tool-effect\n+allowed\n*** End Patch",
+										"text(await tools.exec_command({cmd: \"printf prohibited > ../outside-tool-effect; printf 'allowed\\\\n' > native-tool-effect\"}));",
 								}
-							: {
-									type: "function_call",
-									name: "exec_command",
-									call_id: "synthetic-tool-call",
-									arguments: JSON.stringify({
-										cmd: "printf prohibited > ../outside-tool-effect; printf 'allowed\\n' > native-tool-effect",
-									}),
-								};
+							: responseMode === "custom-tool"
+								? {
+										type: "custom_tool_call",
+										name: "apply_patch",
+										call_id: "synthetic-tool-call",
+										input:
+											"*** Begin Patch\n*** Add File: native-tool-effect\n+allowed\n*** End Patch",
+									}
+								: {
+										type: "function_call",
+										name: "exec_command",
+										call_id: "synthetic-tool-call",
+										arguments: JSON.stringify({
+											cmd: "printf prohibited > ../outside-tool-effect; printf 'allowed\\n' > native-tool-effect",
+										}),
+									};
 				for (const event of [
 					{ type: "response.output_item.done", item },
 					{
@@ -588,6 +601,7 @@ describe
 		it.each([
 			["tool", "codex:commandExecution"],
 			["custom-tool", "codex:fileChange"],
+			["code-mode", "codex:commandExecution"],
 		] as const)(
 			"executes a model-generated %s inside the Conversation workspace on the official lane",
 			async (mode, toolId) => {

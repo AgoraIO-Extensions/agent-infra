@@ -12,6 +12,7 @@ import modelCatalog from "./codex-models.json" with { type: "json" };
 import release from "./codex-release.json" with { type: "json" };
 
 export const CODEX_PILOT_EXECUTABLE = "/opt/codex/bin/codex";
+const codeModeHostExecutable = "/opt/codex/bin/codex-code-mode-host";
 
 const installationRoot = "/opt/codex";
 function requireValid(condition: unknown): asserts condition {
@@ -184,6 +185,11 @@ export async function verifyCodexPilotInstallation(
 					? artifacts.amd64
 					: undefined;
 		const official = record(artifact);
+		const codeModeHost = record(
+			record(pinned.codeModeHostArtifacts)[
+				arch === "arm64" ? "arm64" : "amd64"
+			],
+		);
 		const legal = record(pinned.legal);
 		const legalNames = Object.keys(legal);
 		requireValid(
@@ -193,6 +199,7 @@ export async function verifyCodexPilotInstallation(
 		);
 		await verifyLayout([
 			CODEX_PILOT_EXECUTABLE,
+			codeModeHostExecutable,
 			installedPath("release.json"),
 			CODEX_MODEL_CATALOG_PATH,
 			...legalNames.map(installedPath),
@@ -205,6 +212,7 @@ export async function verifyCodexPilotInstallation(
 		for (const path of skillFiles) await readProtectedFile(path);
 		for (const [path, expected] of [
 			[CODEX_PILOT_EXECUTABLE, official.executableSha256],
+			[codeModeHostExecutable, codeModeHost.executableSha256],
 			// #2978：目录由安装脚本按固定摘要生成，Runtime 只加载摘要一致的文件。
 			[CODEX_MODEL_CATALOG_PATH, modelCatalog.sha256],
 			...Object.entries(legal).map(([name, hash]) => [
@@ -215,7 +223,7 @@ export async function verifyCodexPilotInstallation(
 			await readProtectedFile(
 				path,
 				digest(expected),
-				path === CODEX_PILOT_EXECUTABLE,
+				path === CODEX_PILOT_EXECUTABLE || path === codeModeHostExecutable,
 			);
 		}
 		return release.provenance;
