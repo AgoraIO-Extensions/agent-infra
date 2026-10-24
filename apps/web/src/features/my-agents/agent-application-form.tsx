@@ -985,7 +985,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			: undefined;
 	// 修改申请不能更换模板（来源只读、下拉禁用）：模板已从部署移除或当前不可申请时不引导改选或重新加载，
 	// 顶部提示说明下一步并获得焦点，字段下保留原因（同 #3291 N9-2-03；#3328 N10-2-01、N10-2-02）。
-	// 刷新页面能恢复的情况（验证 revision 变化、验证过期或暂时读不到）只提示刷新。
+	// 刷新页面就能确认的情况（验证 revision 在会话内变化，或这次没能读到验证结果）只提示刷新；验证过期
+	// （与当前登记不符或超出有效期）要等平台重新验证，与验证失败、停用一样提示等待恢复或新建申请。
 	const templateLock: { alert: string; field: string } | undefined =
 		props.mode !== "update" ||
 		sourceKind !== "standard" ||
@@ -999,7 +1000,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				: templateUnavailableMessage === undefined
 					? undefined
 					: templateReadiness?.state === "ready" ||
-							templateReadiness?.state === "stale" ||
 							templateReadiness?.state === "unavailable"
 						? {
 								alert: "此申请的模板需要重新确认，请刷新页面后再提交。",

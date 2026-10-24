@@ -2083,6 +2083,54 @@ resources:
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
+	// #3328：验证过期（与当前登记不符或超出有效期）要等平台重新验证，与验证失败、停用一样提示等待恢复
+	// 或新建申请；这次没能读到验证结果时刷新即可确认，只提示刷新。
+	it.each([
+		[
+			"stale",
+			"此申请的模板暂不可申请，请等待模板恢复后再提交，或新建申请。",
+			"模板或验证已过期，请刷新后重试。已有申请不能更换模板，请等待模板恢复后再提交，或新建申请。",
+		],
+		[
+			"disabled",
+			"此申请的模板暂不可申请，请等待模板恢复后再提交，或新建申请。",
+			"模板已停用。已有申请不能更换模板，请等待模板恢复后再提交，或新建申请。",
+		],
+		[
+			"unavailable",
+			"此申请的模板需要重新确认，请刷新页面后再提交。",
+			"暂时无法读取验证结果，请刷新后重试。",
+		],
+	] as const)(
+		"explains an edited application's %s template at the focused top alert",
+		(state, alertText, fieldText) => {
+			render(
+				<AgentApplicationForm
+					application={pendingApplication}
+					action="edit"
+					deploymentConfiguration={{
+						...deploymentConfiguration,
+						templates: deploymentConfiguration.templates.map((template) => ({
+							...template,
+							readiness: { state, revision: null },
+						})),
+					}}
+					mode="update"
+					onSubmit={vi.fn()}
+					showDeploymentStatus={false}
+					submitting={false}
+				/>,
+			);
+			fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+			const alert = screen.getByRole("alert");
+			expect(alert.textContent).toBe(alertText);
+			expect(document.activeElement).toBe(alert);
+			expect(
+				document.getElementById("application-template-id-error")?.textContent,
+			).toBe(fieldText);
+		},
+	);
+
 	// #3328 N10-2-01：修改申请时模板验证 revision 在会话内变化。刷新页面就能确认，顶部提示只要求刷新；
 	// 模板恢复为同一 revision 后提示随之收起，申请可以提交。
 	it("asks an edited application to refresh after its template revision changes", () => {
