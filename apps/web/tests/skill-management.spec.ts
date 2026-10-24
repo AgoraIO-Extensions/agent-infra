@@ -2162,7 +2162,7 @@ for (const outcome of ["reads", "fails"] as const)
 			.getByRole("alert")
 			.filter({ hasText: "暂时无法读取 Skill 内容" });
 		await expect(failure).toContainText("已发布的版本不受影响。");
-		const retry = failure.getByRole("button", {
+		const retry = main.getByRole("button", {
 			name: "重新读取",
 			exact: true,
 		});
@@ -2172,6 +2172,14 @@ for (const outcome of ["reads", "fails"] as const)
 			[50, 300, 1000, 2000],
 		);
 		await expectFocusUnobscured(retry, "重新读取内容失败后");
+		// 失败说明与按钮一起在视口内、吸顶顶栏之下。
+		const explained = await topbarClearance(failure);
+		expect(explained.top, "读取失败说明上缘在顶栏之下").toBeGreaterThanOrEqual(
+			explained.barBottom - 0.5,
+		);
+		expect(explained.bottom, "读取失败说明下缘在视口内").toBeLessThanOrEqual(
+			explained.innerHeight + 0.5,
+		);
 		await expect(reread).toHaveCount(0);
 		await expectNoDuplicateControls(page, "创建与发布（重新读取失败，N11-03）");
 
