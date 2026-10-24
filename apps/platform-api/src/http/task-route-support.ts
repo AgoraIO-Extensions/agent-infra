@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-	TaskProjectionV1Schema,
-	TaskStatusEventV1Schema,
-} from "@agent-infra/contracts/pilot";
+import { TaskProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import type { OperationalEvent } from "@agent-infra/observability";
 import {
 	type ConversationExecutionAuthorityV1,
@@ -12,7 +9,6 @@ import {
 	type ConversationTaskSubmitDecisionV1,
 	PersonalApiCredentialErrorV1,
 	type PersonalApiTaskAdmissionAuthorityV1,
-	parseConversationPersistedEventPayloadV1,
 	parsePersonalApiTaskAdmissionAuthorityV1,
 	parseTaskAuthorizationBoundaryV1,
 	type TaskApiAuditRecordInputV1,
@@ -324,30 +320,8 @@ export function taskEventProjection(event: ConversationQueryEventV1) {
 		eventProjection(event);
 		return undefined;
 	}
-	if (event.eventType !== "task.status") {
-		const projected = eventProjection(event);
-		if (projected.kind !== "event" || projected.type === "reasoning.delta")
-			throw new Error("Task event projection is invalid");
-		return projected;
-	}
-	if (event.eventSchemaVersion !== undefined)
-		throw new Error("Task status schema is invalid");
-	const persisted = parseConversationPersistedEventPayloadV1(
-		event.eventPayload,
-	);
-	if (persisted.type !== "task.status")
-		throw new Error("Task status payload is inconsistent");
-	const { type, ...payload } = persisted;
-	return TaskStatusEventV1Schema.parse({
-		schemaVersion: 1,
-		kind: "event",
-		eventId: event.eventId,
-		conversationId: event.conversationId,
-		executionId: event.executionId,
-		sequence: event.sequence,
-		conversationCursor: event.conversationCursor,
-		occurredAt: event.occurredAt.toISOString(),
-		type,
-		payload,
-	});
+	const projected = eventProjection(event);
+	if (projected.kind !== "event" || projected.type === "reasoning.delta")
+		throw new Error("Task event projection is invalid");
+	return projected;
 }

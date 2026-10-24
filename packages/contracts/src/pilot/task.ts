@@ -3,7 +3,6 @@ import {
 	IdempotencyKeyV1Schema,
 	OpaqueCursorV1Schema,
 	OpaqueIdV1Schema,
-	Rfc3339TimestampV1Schema,
 	SchemaVersionV1Schema,
 } from "../index.ts";
 import { PilotProtocolErrorV1Schema } from "./errors.ts";
@@ -12,49 +11,12 @@ import {
 	AuthorizationRevokedSignalV1Schema,
 	HeartbeatSignalV1Schema,
 	SseEventIdV1Schema,
+	TaskStatusEventV1Schema,
+	TaskStatusV1Schema,
 	TimelineReloadSignalV1Schema,
 } from "./sse.ts";
 
-export const TaskStatusV1Schema = z.enum([
-	"waiting",
-	"submitted",
-	"processing",
-	"completed",
-	"failed",
-	"cancelled",
-	"unknown",
-]);
-const taskStatusPayload = z.union([
-	z.strictObject({
-		status: TaskStatusV1Schema.exclude(["failed", "unknown"]),
-	}),
-	z.strictObject({
-		status: z.literal("failed"),
-		reason: z
-			.enum([
-				"TASK_WAIT_TIMEOUT",
-				"AGENT_UNAVAILABLE",
-				"CONVERSATION_UNAVAILABLE",
-			])
-			.optional(),
-	}),
-	z.strictObject({
-		status: z.literal("unknown"),
-		reason: z.literal("STOP_CONFIRMATION_TIMEOUT").optional(),
-	}),
-]);
-export const TaskStatusEventV1Schema = z.strictObject({
-	schemaVersion: SchemaVersionV1Schema,
-	kind: z.literal("event"),
-	eventId: SseEventIdV1Schema,
-	conversationId: OpaqueIdV1Schema,
-	executionId: OpaqueIdV1Schema,
-	sequence: z.number().int().positive().safe(),
-	conversationCursor: OpaqueCursorV1Schema,
-	occurredAt: Rfc3339TimestampV1Schema,
-	type: z.literal("task.status"),
-	payload: taskStatusPayload,
-});
+export { TaskStatusEventV1Schema, TaskStatusV1Schema } from "./sse.ts";
 export const TaskPersistedEventV1Schema = z.union([
 	PersistedConversationEventV2Schema,
 	TaskStatusEventV1Schema,

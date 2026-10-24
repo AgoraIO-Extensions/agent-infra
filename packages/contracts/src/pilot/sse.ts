@@ -27,6 +27,43 @@ const eventShape = {
 	occurredAt: Rfc3339TimestampV1Schema,
 };
 
+export const TaskStatusV1Schema = z.enum([
+	"waiting",
+	"submitted",
+	"processing",
+	"completed",
+	"failed",
+	"cancelled",
+	"unknown",
+]);
+const taskStatusPayload = z.union([
+	z.strictObject({
+		status: TaskStatusV1Schema.exclude(["failed", "unknown"]),
+	}),
+	z.strictObject({
+		status: z.literal("failed"),
+		reason: z
+			.enum([
+				"TASK_WAIT_TIMEOUT",
+				"AGENT_UNAVAILABLE",
+				"CONVERSATION_UNAVAILABLE",
+			])
+			.optional(),
+	}),
+	z.strictObject({
+		status: z.literal("unknown"),
+		reason: z.literal("STOP_CONFIRMATION_TIMEOUT").optional(),
+	}),
+]);
+
+/** Platform status facts share the persisted timeline with Runtime events. */
+export const TaskStatusEventV1Schema = z.strictObject({
+	...eventShape,
+	sequence: z.number().int().positive().safe(),
+	type: z.literal("task.status"),
+	payload: taskStatusPayload,
+});
+
 export const TextDeltaEventV1Schema = z.strictObject({
 	...eventShape,
 	type: z.literal("text.delta"),

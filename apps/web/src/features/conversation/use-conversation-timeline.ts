@@ -77,6 +77,7 @@ export function useConversationTimeline({
 		(event) =>
 			event.executionId === executionId &&
 			(event.type === "execution.status" ||
+				event.type === "task.status" ||
 				event.type === "execution.operation" ||
 				event.type === "execution.detail" ||
 				event.type === "conversation.error"),

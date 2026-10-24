@@ -8,21 +8,16 @@ import {
 	getConversationV2,
 	streamConversationEventsV2,
 } from "../../pilot/generated-v2/sdk.gen.js";
-import type {
-	ConversationDetailProjectionV2,
-	PersistedConversationEventV2,
-	ReasoningDeltaEventV2,
-} from "../../pilot/generated-v2/types.gen.js";
+import type { ConversationDetailProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	ConversationReadError,
 	type ConversationReadFailure,
 	responseFailure,
 } from "./execution-detail.js";
 
-/** 会话时间线的事件：混合版本历史加上模型提供的思考过程（#2979）。 */
+/** Use the generated history union for both history and streamed events. */
 export type ConversationTimelineEventV2 =
-	| PersistedConversationEventV2
-	| ReasoningDeltaEventV2;
+	ConversationDetailProjectionV2["events"][number];
 
 export type ConversationTimelineState = {
 	conversationId: string | null;
