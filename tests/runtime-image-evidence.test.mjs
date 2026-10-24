@@ -53,6 +53,7 @@ const evidence = {
 		"stream-failures-redacted",
 		"cancellation-aborts-upstream",
 		"native-shell-sandboxed-within-conversation",
+		"native-code-mode-sandboxed-within-conversation",
 		"native-apply-patch-no-outside-effects",
 		"recursive-native-storage-redacted",
 		"personal-configuration-isolated",
@@ -81,6 +82,12 @@ test("runtime image evidence requires the complete pinned native probe", () => {
 		{ ...evidence, codexVersion: "other" },
 		{ ...evidence, configurationSchemaVersion: 1 },
 		{ ...evidence, checks: ["healthz"] },
+		{
+			...evidence,
+			checks: evidence.checks.filter(
+				(check) => check !== "native-code-mode-sandboxed-within-conversation",
+			),
+		},
 		{ ...evidence, checks: [...evidence.checks.slice(1), evidence.checks[1]] },
 		{ ...evidence, rawOutput: "synthetic-private-value" },
 	])
@@ -218,6 +225,17 @@ test("runtime evidence binds the exact official release bytes and installed arch
 	for (const invalid of [
 		"not-json",
 		JSON.stringify({ ...release, distribution: { kind: "derived" } }),
+		JSON.stringify({ ...release, codeModeHostArtifacts: undefined }),
+		JSON.stringify({
+			...release,
+			codeModeHostArtifacts: {
+				...release.codeModeHostArtifacts,
+				arm64: {
+					...release.codeModeHostArtifacts.arm64,
+					executableSha256: "untrusted",
+				},
+			},
+		}),
 		JSON.stringify({
 			...release,
 			provenance: {
