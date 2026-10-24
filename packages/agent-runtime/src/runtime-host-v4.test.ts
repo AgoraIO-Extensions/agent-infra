@@ -1103,6 +1103,54 @@ it("persists a Driver-declared unsubmitted Turn and re-executes it only under a 
 	expect(execute).toHaveBeenCalledTimes(2);
 });
 
+it("re-arms an unsubmitted Turn only for the same principal and content (#3373)", async () => {
+	const f = await setup();
+	const execute = vi
+		.spyOn(f.driver, "execute")
+		.mockRejectedValueOnce(
+			new RuntimeTurnNotSubmittedError("file_input_unavailable"),
+		);
+	const first = await f.host.submitTurnV4(f.transport);
+	expect(first.result).toEqual(turnNotSubmittedResult);
+	const resubmitted = (overrides: Record<string, unknown>) =>
+		delivery(
+			RuntimeSubmitTurnRequestV4Schema.parse({
+				...submission(),
+				requestId: "request-foreign",
+				operation: {
+					kind: "execution",
+					id: "execution-1",
+					deliveryFence: 2,
+					executionDeliveryFence: 2,
+				},
+				...overrides,
+			}),
+		);
+	// 另一主体即使持有更高 fence 的有效 Grant，也不能借重提进入该 Session。
+	await expect(
+		f.host.submitTurnV4(
+			resubmitted({
+				principal: { kind: "user", id: "bob" },
+				keyBinding: {
+					purpose: "personal",
+					subjectId: "bob",
+					ciphertextRef: "key-bob",
+					version: 1,
+				},
+			}),
+		),
+	).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+	// 同一主体改变请求内容时仍按冲突处理，不重新执行。
+	await expect(
+		f.host.submitTurnV4(
+			resubmitted({ input: { text: "different input", attachments: [] } }),
+		),
+	).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+	expect(execute).toHaveBeenCalledTimes(1);
+	// 原结果保持不变：相同 fence 的重放仍返回未提交。
+	expect(await f.host.submitTurnV4(f.transport)).toEqual(first);
+});
+
 it.each([
 	["holds a record for the operation", "found"],
 	["cannot confirm the operation", "unknown"],
