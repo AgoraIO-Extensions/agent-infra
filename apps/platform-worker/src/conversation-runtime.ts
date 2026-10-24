@@ -556,6 +556,7 @@ export function createConversationRuntimeV2(
 		);
 		if (finalTarget.workerId !== options.signing.workerId)
 			denied("RUNTIME_WORKER_BINDING_INVALID");
+		const finalTargetObservedAt = now();
 		state = await stateFor(context, signal);
 		const postTargetRoute = await current(context, state, command, signal);
 		if (postTargetRoute.authority.purpose !== finalRoute.authority.purpose) {
@@ -581,24 +582,35 @@ export function createConversationRuntimeV2(
 			await control(context, "stop", signal);
 			unavailable("RUNTIME_ROUTE_STALE");
 		}
-		const routeObservedAt = now();
-		const postTarget = await bounded(
-			options.resolveRuntimeHost({
-				agentId: context.claim.agentId,
-				conversationId: context.claim.conversationId,
-				actorId: context.claim.actorId,
-				channelId: context.claim.channelId,
-				principal: context.claim.principal,
-				sessionGeneration: context.claim.sessionGeneration,
-				deliveryFence: context.claim.deliveryFence,
+		let routeObservedAt = finalTargetObservedAt;
+		let postTarget = finalTarget;
+		const canReuseFinalTarget =
+			command === "turn.submit" ||
+			command === "turn.supplement" ||
+			command === "native-capability.invoke";
+		if (
+			!canReuseFinalTarget ||
+			now() - finalTargetObservedAt >= eventRouteProofMaxAgeMs
+		) {
+			routeObservedAt = now();
+			postTarget = await bounded(
+				options.resolveRuntimeHost({
+					agentId: context.claim.agentId,
+					conversationId: context.claim.conversationId,
+					actorId: context.claim.actorId,
+					channelId: context.claim.channelId,
+					principal: context.claim.principal,
+					sessionGeneration: context.claim.sessionGeneration,
+					deliveryFence: context.claim.deliveryFence,
+					signal,
+					workload: postTargetRoute.record.workload,
+					sandboxResource: state.sandboxResource,
+					purpose: postTargetRoute.authority.purpose,
+					command,
+				}),
 				signal,
-				workload: postTargetRoute.record.workload,
-				sandboxResource: state.sandboxResource,
-				purpose: postTargetRoute.authority.purpose,
-				command,
-			}),
-			signal,
-		);
+			);
+		}
 		if (
 			postTarget.workerId !== options.signing.workerId ||
 			!isDeepStrictEqual(postTarget, finalTarget)
