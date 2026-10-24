@@ -27,7 +27,7 @@ export function pageRecoveryTarget(): HTMLElement | null {
  */
 let pending: {
 	key: string;
-	/** 触发时的页面地址：页面换了（路由跳转、浏览器后退）就不再代管。 */
+	/** 触发时的页面地址（路径加查询串）：页面换了（路由跳转、浏览器后退）就不再代管。 */
 	path: string;
 	focused: HTMLElement | null;
 	/** 已把焦点交给恢复目标（调用方指定的目标，没有指定时为页面标题；#main-content 兜底不算）。 */
@@ -36,6 +36,13 @@ let pending: {
 	/** 调用方指定的恢复目标（例如所在分区标题）；没有或取不到时用页面标题。 */
 	target?: () => HTMLElement | null;
 } | null = null;
+
+/**
+ * 当前页面：路径加查询串。同一路径换了查询（例如编辑另一个 Skill 项目，?project=…）也是另一个页面。
+ */
+function currentPage() {
+	return location.pathname + location.search;
+}
 
 /** 用户自己的操作：结束代管，之后的重读与重绘不再移动焦点。 */
 const userActions = ["pointerdown", "keydown", "click"] as const;
@@ -64,7 +71,7 @@ function onFocusIn(event: FocusEvent) {
 function settleFocus() {
 	const current = pending;
 	if (!current) return;
-	if (current.path !== location.pathname) {
+	if (current.path !== currentPage()) {
 		clearPending();
 		return;
 	}
@@ -140,7 +147,7 @@ export function useRecoveryTrigger<T extends HTMLElement = HTMLButtonElement>(
 		if (current?.key === latestKey.current) {
 			// 同一页面、焦点仍在中性位置：读取仍然失败，把焦点还给重新出现的按钮。
 			const live =
-				current.path === location.pathname &&
+				current.path === currentPage() &&
 				(!current.focused || current.focused.isConnected);
 			const take = live && isNeutral(document.activeElement);
 			clearPending();
@@ -151,14 +158,14 @@ export function useRecoveryTrigger<T extends HTMLElement = HTMLButtonElement>(
 			if (path === null) return;
 			armed.current = null;
 			// 触发后已离开这个页面：新页面的焦点同普通导航，不把代管带过去。
-			if (path !== location.pathname) return;
+			if (path !== currentPage()) return;
 			const active = document.activeElement;
 			if (active && active !== document.body) return;
 			startPending(latestKey.current, path, latestTarget.current);
 		};
 	}, []);
 	const arm = useCallback(() => {
-		armed.current = location.pathname;
+		armed.current = currentPage();
 	}, []);
 	return { ref, arm };
 }

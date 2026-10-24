@@ -301,10 +301,14 @@ function SubmissionAlert({ id, message }: { id: string; message: string }) {
 	const ref = useRef<HTMLDivElement>(null);
 	useLayoutEffect(() => {
 		const element = ref.current;
+		const page = location.pathname + location.search;
+		const samePage = () => location.pathname + location.search === page;
 		return () => {
-			if (!element?.contains(document.activeElement)) return;
+			// 提示随页面离开（例如浏览器后退）卸载时不接管：新页面的焦点同普通导航。
+			if (!samePage() || !element?.contains(document.activeElement)) return;
 			// 等提示真正离开 DOM 后再看焦点：同一位置换成服务端错误说明时焦点仍在它上面。
 			window.setTimeout(() => {
+				if (!samePage()) return;
 				const active = document.activeElement;
 				if (active && active !== document.body) return;
 				pageRecoveryTarget()?.focus({ preventScroll: true });

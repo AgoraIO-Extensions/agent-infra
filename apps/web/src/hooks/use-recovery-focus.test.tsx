@@ -304,15 +304,18 @@ describe("RecoveryButton hands recovery focus over only once", () => {
 		expect(document.activeElement?.id).toBe("main-content");
 	});
 
-	it("does not take a recovery over to the next page", async () => {
+	it.each([
+		["another path", "/previous-page"],
+		["the same path with another query", "?project=other"],
+	])("does not take a recovery over to %s", async (_name, next) => {
 		const onRetry = vi.fn();
-		const start = location.pathname;
+		const start = location.pathname + location.search;
 		const view = render(<Page state="failed" onRetry={onRetry} />);
 		retry().focus();
 		fireEvent.click(retry());
 		view.rerender(<Page state="retrying" onRetry={onRetry} />);
 		// 重读进行中浏览器后退：地址先变，触发按钮随旧页面卸载。
-		history.pushState(null, "", "/previous-page");
+		history.pushState(null, "", next);
 		try {
 			view.rerender(<Page state="ready" onRetry={onRetry} />);
 			await Promise.resolve();
