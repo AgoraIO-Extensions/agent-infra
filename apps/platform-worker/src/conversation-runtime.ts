@@ -584,10 +584,13 @@ export function createConversationRuntimeV2(
 		}
 		let routeObservedAt = finalTargetObservedAt;
 		let postTarget = finalTarget;
+		// 仅当 post-route 记录与 final route 完全一致时才复用就绪证明：记录任一字段
+		// 变化都可能指向新的目标，必须重新观测（#3344 review）。
 		const canReuseFinalTarget =
-			command === "turn.submit" ||
-			command === "turn.supplement" ||
-			command === "native-capability.invoke";
+			(command === "turn.submit" ||
+				command === "turn.supplement" ||
+				command === "native-capability.invoke") &&
+			isDeepStrictEqual(postTargetRoute.record, finalRoute.record);
 		if (
 			!canReuseFinalTarget ||
 			now() - finalTargetObservedAt >= eventRouteProofMaxAgeMs
