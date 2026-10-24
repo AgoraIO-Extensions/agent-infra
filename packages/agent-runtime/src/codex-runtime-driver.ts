@@ -7317,11 +7317,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			executionId,
 		);
 		if (!operation) return undefined;
+		// 还没 settled（prepared/running）的原生命令没有可重放的结果；让调用方回到
+		// journal/wait 流，而不是把「正在执行」误报成不可用（#3359 review）。
+		if (operation.state !== "resolved") return undefined;
 		const result = operation.nativeCommandResult;
 		// Legacy receipts did not save the queried value. Never re-query it or
 		// invent a result while reading the original operation's history.
 		if (
-			operation.state !== "resolved" ||
 			operation.record?.result.outcome !== "accepted" ||
 			operation.record.result.status !== "completed" ||
 			!result
