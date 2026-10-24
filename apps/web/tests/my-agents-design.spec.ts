@@ -2887,3 +2887,405 @@ for (const failure of submissionFailures)
 		);
 		await noHorizontalOverflow(page);
 	});
+
+type TemplateReadiness = NonNullable<
+	DeploymentConfigurationProjectionV2["templates"][number]["readiness"]
+>;
+/** 部署选项重读（回到标签页触发 refetchOnWindowFocus，#3364）。 */
+async function rereadDeployment(page: Page) {
+	await page.evaluate(() =>
+		window.dispatchEvent(new Event("visibilitychange")),
+	);
+}
+const deploymentPath = "/api/v2/deployment/configuration";
+const deploymentUnavailable = {
+	schemaVersion: 1,
+	code: "DEPENDENCY_UNAVAILABLE",
+	message: "Controlled deployment failure",
+	retryable: true,
+	traceId: "trace-deployment-reread",
+};
+
+// #3364 N12-01：修改申请提交被模板拦下后，部署选项重读使模板就绪状态再变化（不再提交）。顶部提示与「标准
+// 模板」字段错误都按当前状态改写，给出同一个下一步，并与就绪列表一致；重读挂起时保持原样，焦点一直在顶部
+// 提示上。模板恢复为页面读到的同一 revision 时二者一起清除，焦点交给 #main-content（页面标题不可聚焦），
+// 不落到 body；重读失败时部署状态说明接手，模板提示与字段错误随之收起。两视口一致。
+test("an edited application's template lock and field error follow a deployment reread (#3364 N12-01)", async ({
+	page,
+}, info) => {
+	await viewportFor(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const { commands } = await fixture(page, {
+		applications: [rejectedStandardApplication()],
+	});
+	let codex: TemplateReadiness | null = {
+		state: "failed",
+		revision: "codex-r1",
+	};
+	let failing = false;
+	await page.route(
+		(url) => url.pathname === deploymentPath,
+		(route) => {
+			if (failing)
+				return route.fulfill({ status: 503, json: deploymentUnavailable });
+			const deployment = readinessDeployment(
+				codex ?? { state: "ready", revision: "codex-r1" },
+			);
+			return route.fulfill({
+				json: codex
+					? deployment
+					: {
+							...deployment,
+							templates: deployment.templates.filter(
+								(template) => template.templateId !== "codex",
+							),
+						},
+			});
+		},
+	);
+	await page.goto("/my-agents/application-browser-1/edit");
+	const main = page.locator("#main-content");
+	const readiness = page
+		.getByRole("list", { name: "模板就绪状态" })
+		.getByRole("listitem");
+	await expect(readiness).toHaveText([
+		"Codex：验证失败，暂不可申请。",
+		"Claude：可申请",
+	]);
+	const submit = page.getByRole("button", {
+		name: "修改并重新提交",
+		exact: true,
+	});
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	const alert = await pinElement(
+		main.locator(".application-form-alert"),
+		"template-lock",
+	);
+	const error = page.locator("#application-template-id-error");
+	await expect(alert).toHaveText(
+		"此申请的模板暂不可申请，请等待模板恢复后再提交，或新建申请。",
+	);
+	await expect(error).toHaveText(
+		"验证失败，暂不可申请。已有申请不能更换模板，请等待模板恢复后再提交，或新建申请。",
+	);
+	await expectFocusSettled(alert, "修改申请模板拦截");
+
+	// 重读挂起：页面保持原样，焦点留在顶部提示上。
+	const holding = await holdRequests(page, "GET", deploymentPath);
+	codex = { state: "ready", revision: "codex-r9" };
+	await rereadDeployment(page);
+	await expect.poll(() => holding.held()).toBe(1);
+	await expect(alert).toHaveText(
+		"此申请的模板暂不可申请，请等待模板恢复后再提交，或新建申请。",
+	);
+	await expectFocusSettled(alert, "部署选项重读挂起", [50, 300]);
+	holding.release();
+
+	const steps: [string, string, string[], () => void][] = [
+		[
+			"此申请的模板需要重新确认，请刷新页面后再提交。",
+			"模板已更新，请刷新后确认。",
+			["Codex：可申请", "Claude：可申请"],
+			() => {
+				codex = { state: "unavailable", revision: null };
+			},
+		],
+		[
+			"此申请的模板需要重新确认，请刷新页面后再提交。",
+			"暂时无法读取验证结果，请刷新后重试。",
+			["Codex：暂时无法读取验证结果，请刷新后重试。", "Claude：可申请"],
+			() => {
+				codex = null;
+			},
+		],
+		[
+			"当前部署已移除此申请的模板，请新建申请。",
+			"该模板已从当前部署移除。已有申请不能更换模板，请新建申请。",
+			["Claude：可申请"],
+			() => {
+				codex = { state: "ready", revision: "codex-r1" };
+			},
+		],
+	];
+	for (const [alertText, errorText, listed, next] of steps) {
+		await expect(alert).toHaveText(alertText);
+		await expect(error).toHaveText(errorText);
+		await expect(readiness).toHaveText(listed);
+		await expect(main.getByRole("alert")).toHaveCount(1);
+		await expect(alert).toBeFocused();
+		await expectNoDuplicateControls(page, `修改申请模板拦截（${alertText}）`);
+		await noHorizontalOverflow(page);
+		next();
+		await rereadDeployment(page);
+	}
+
+	// 恢复为页面读到的同一 revision：顶部提示与字段错误一起清除，焦点交给 #main-content。
+	await expect(alert).toHaveCount(0);
+	await expect(error).toHaveCount(0);
+	await expect(readiness).toHaveText(["Codex：可申请", "Claude：可申请"]);
+	await expect(
+		page.getByRole("combobox", { name: "标准模板" }),
+	).not.toHaveAttribute("aria-invalid", "true");
+	await expectFocusSettled(page.locator("#main-content"), "模板恢复后");
+	expect(commands).toEqual([]);
+
+	// 再次被拦下后重读失败：部署状态说明接手，模板提示与字段错误随之收起，焦点不落到 body。
+	codex = { state: "failed", revision: "codex-r1" };
+	await rereadDeployment(page);
+	await expect(
+		main.getByText("验证失败，暂不可申请。", { exact: true }),
+	).toBeVisible();
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	const relock = main.locator(".application-form-alert");
+	await expectFocusSettled(relock, "再次被模板拦下");
+	failing = true;
+	await rereadDeployment(page);
+	await expect(
+		main.getByText("部署选项需要刷新后才能提交标准模板申请。"),
+	).toBeVisible();
+	await expect(relock).toHaveCount(0);
+	await expect(error).toHaveCount(0);
+	await expectFocusOffBody(page, "部署选项重读失败后");
+	expect(commands).toEqual([]);
+	await expectCleanPage(page, pageErrors);
+	await expectNoDuplicateControls(page, "修改申请（部署选项重读失败，#3364）");
+	await noHorizontalOverflow(page);
+});
+
+// #3364 N12-01：创建申请提交被模板拦下后，部署选项重读使所选模板的就绪状态再变化：字段错误按当前原因改写，
+// 与就绪列表一致，不被旧原因挡住「模板已更新，请刷新后确认。」；重读挂起时保持原样，重读失败时改为说明
+// 部署，模板恢复且 revision 与所选时一致时清除。焦点一直在「标准模板」下拉上。两视口一致。
+test("a create form's template field error follows a deployment reread (#3364 N12-01)", async ({
+	page,
+}, info) => {
+	await viewportFor(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const { commands } = await fixture(page);
+	let codex: TemplateReadiness = { state: "ready", revision: "codex-r1" };
+	let failing = false;
+	await page.route(
+		(url) => url.pathname === deploymentPath,
+		(route) =>
+			failing
+				? route.fulfill({ status: 503, json: deploymentUnavailable })
+				: route.fulfill({ json: readinessDeployment(codex) }),
+	);
+	await page.goto("/my-agents/new");
+	await page.getByLabel("Agent 名称", { exact: true }).fill("客户支持助理");
+	await page
+		.getByLabel("用途说明", { exact: true })
+		.fill("面向支持团队的内部知识问答。");
+	await page
+		.getByLabel("Agent 默认 Relay Key", { exact: true })
+		.fill("synthetic-relay-key");
+	await pick(page, "标准模板", "Codex");
+	await pick(page, "模型端点：模型选项 1", "Primary endpoint");
+	await pick(page, "模型：模型选项 1", "gpt-5");
+	await page
+		.getByRole("checkbox", { name: "均衡：模型选项 1", exact: true })
+		.click();
+	await pick(page, "默认模型", "Primary endpoint · gpt-5");
+	await pick(page, "默认推理档位", "均衡");
+
+	const main = page.locator("#main-content");
+	const readiness = page
+		.getByRole("list", { name: "模板就绪状态" })
+		.getByRole("listitem");
+	codex = { state: "stale", revision: null };
+	await rereadDeployment(page);
+	await expect(readiness).toHaveText([
+		"Codex：模板验证已过期，需等待平台重新验证。",
+		"Claude：可申请",
+	]);
+	const submit = page.getByRole("button", { name: "提交审批", exact: true });
+	await submit.focus();
+	await page.keyboard.press("Enter");
+	const template = page.getByRole("combobox", { name: "标准模板" });
+	const error = page.locator("#application-template-id-error");
+	await expect(error).toHaveText("模板验证已过期，需等待平台重新验证。");
+	await expectFocusSettled(template, "创建申请模板拦截");
+
+	const holding = await holdRequests(page, "GET", deploymentPath);
+	codex = { state: "ready", revision: "codex-r2" };
+	await rereadDeployment(page);
+	await expect.poll(() => holding.held()).toBe(1);
+	await expect(error).toHaveText("模板验证已过期，需等待平台重新验证。");
+	holding.release();
+	await expect(error).toHaveText("模板已更新，请刷新后确认。");
+	await expect(error).toHaveAttribute("aria-live", "polite");
+	await expect(main.getByText("模板已更新，请刷新后确认。")).toHaveCount(1);
+	await expect(readiness).toHaveText(["Codex：可申请", "Claude：可申请"]);
+	await expect(template).toBeFocused();
+
+	codex = { state: "failed", revision: null };
+	await rereadDeployment(page);
+	await expect(error).toHaveText("验证失败，暂不可申请。");
+	await expect(
+		main.getByText("验证失败，暂不可申请。", { exact: true }),
+	).toHaveCount(1);
+	await expect(readiness).toHaveText([
+		"Codex：验证失败，暂不可申请。",
+		"Claude：可申请",
+	]);
+	await expectNoDuplicateControls(page, "创建申请模板拦截（#3364）");
+	await noHorizontalOverflow(page);
+
+	// 重读失败：字段错误改为说明部署，与页面上的部署状态给出同一个下一步。
+	failing = true;
+	await rereadDeployment(page);
+	await expect(
+		main.getByText("部署选项需要刷新后才能提交标准模板申请。"),
+	).toBeVisible();
+	await expect(error).toHaveText(
+		"部署选项暂不可用，请重新加载；标准模板申请暂不能提交。",
+	);
+	await expectFocusOffBody(page, "创建申请部署选项重读失败后");
+
+	// 模板恢复为所选时的 revision：字段错误清除，不再有模板提示。
+	failing = false;
+	codex = { state: "ready", revision: "codex-r1" };
+	await rereadDeployment(page);
+	await expect(error).toHaveCount(0);
+	await expect(template).not.toHaveAttribute("aria-invalid", "true");
+	await expect(main.getByText(/^(验证失败|模板已更新|部署选项)/)).toHaveCount(
+		0,
+	);
+	expect(commands).toEqual([]);
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
+});
+
+/** 四个标准模板都带就绪状态的部署选项（#3364 N12-02）。 */
+function standardTemplatesDeployment(states: readonly TemplateReadiness[]) {
+	const [base] = deploymentConfiguration.templates;
+	if (!base) throw new Error("Missing template fixture");
+	const names = [
+		["claude", "Claude"],
+		["codex", "Codex"],
+		["opencode", "OpenCode"],
+		["pi", "Pi"],
+	] as const;
+	return DeploymentConfigurationProjectionV2Schema.parse({
+		...deploymentConfiguration,
+		templates: names.map(([templateId, displayName], index) => ({
+			...base,
+			templateId,
+			displayName,
+			readiness: states[index],
+		})),
+	});
+}
+
+// #3364 N12-02：创建申请时部署的四个标准模板都不可申请（未接入验证时全部「尚未完成真实运行与模型验证。」，
+// 或各有原因）。同「部署没有标准模板」：下拉禁用（占位「选择标准模板」），就绪列表照常列出每项原因，提交
+// 被拦下、不发请求，字段错误说明没有可申请的模板，不再提示「请选择标准模板。」；其中有暂时读不到验证结果
+// 的模板时提示刷新。重读挂起时保持原样；之后有模板恢复可申请时下拉可用、字段错误改为提示选择。两视口一致。
+for (const variant of [
+	{
+		name: "all unverified",
+		states: Array.from({ length: 4 }, () => ({
+			state: "unverified" as const,
+			revision: null,
+		})),
+		reasons: Array.from({ length: 4 }, () => "尚未完成真实运行与模型验证。"),
+		message: "当前没有可申请的标准模板，请等待模板完成验证或联系平台管理员。",
+	},
+	{
+		name: "each with its own reason",
+		states: [
+			{ state: "unregistered", revision: null },
+			{ state: "failed", revision: null },
+			{ state: "disabled", revision: null },
+			{ state: "stale", revision: null },
+		] as const,
+		reasons: [
+			"尚未登记，请联系平台管理员。",
+			"验证失败，暂不可申请。",
+			"模板已停用。",
+			"模板验证已过期，需等待平台重新验证。",
+		],
+		message: "当前没有可申请的标准模板，请等待模板完成验证或联系平台管理员。",
+	},
+	{
+		name: "one unreadable",
+		states: [
+			{ state: "unverified", revision: null },
+			{ state: "unavailable", revision: null },
+			{ state: "failed", revision: null },
+			{ state: "unverified", revision: null },
+		] as const,
+		reasons: [
+			"尚未完成真实运行与模型验证。",
+			"暂时无法读取验证结果，请刷新后重试。",
+			"验证失败，暂不可申请。",
+			"尚未完成真实运行与模型验证。",
+		],
+		message: "当前没有可申请的标准模板，请刷新后重试。",
+	},
+] as const)
+	test(`a create form explains that no standard template can be applied for (${variant.name}, #3364 N12-02)`, async ({
+		page,
+	}, info) => {
+		await viewportFor(page, info.project.name === "mobile");
+		const pageErrors = trackPageErrors(page);
+		const { commands } = await fixture(page);
+		let states: readonly TemplateReadiness[] = variant.states;
+		await page.route(
+			(url) => url.pathname === deploymentPath,
+			(route) => route.fulfill({ json: standardTemplatesDeployment(states) }),
+		);
+		await page.goto("/my-agents/new");
+		const main = page.locator("#main-content");
+		const names = ["Claude", "Codex", "OpenCode", "Pi"];
+		const readiness = page
+			.getByRole("list", { name: "模板就绪状态" })
+			.getByRole("listitem");
+		await expect(readiness).toHaveText(
+			names.map((name, index) => `${name}：${variant.reasons[index]}`),
+		);
+		const template = page.getByRole("combobox", { name: "标准模板" });
+		await expect(template).toBeDisabled();
+		await expect(template).toContainText("选择标准模板");
+		await page.getByLabel("Agent 名称", { exact: true }).fill("客户支持助理");
+		await page
+			.getByLabel("用途说明", { exact: true })
+			.fill("面向支持团队的内部知识问答。");
+		await page
+			.getByLabel("Agent 默认 Relay Key", { exact: true })
+			.fill("synthetic-relay-key");
+		const submit = page.getByRole("button", { name: "提交审批", exact: true });
+		await submit.focus();
+		await page.keyboard.press("Enter");
+		const error = page.locator("#application-template-id-error");
+		await expect(error).toHaveText(variant.message);
+		await expectPublicFieldError(page, error);
+		await expect(template).toHaveAttribute("aria-invalid", "true");
+		await expect(main.getByText("请选择标准模板。")).toHaveCount(0);
+		await expect(readiness).toHaveText(
+			names.map((name, index) => `${name}：${variant.reasons[index]}`),
+		);
+		await expectFocusOffBody(page, "没有可申请的模板时提交");
+		expect(commands).toEqual([]);
+		await expectNoDuplicateControls(
+			page,
+			`/my-agents/new（没有可申请的模板，${variant.name}，#3364）`,
+		);
+		await noHorizontalOverflow(page);
+
+		// 重读挂起时保持原样；读到 Codex 可申请后下拉可用，字段错误改为提示选择。
+		const holding = await holdRequests(page, "GET", deploymentPath);
+		states = variant.states.map((state, index) =>
+			index === 1 ? { state: "ready" as const, revision: "codex-r1" } : state,
+		);
+		await rereadDeployment(page);
+		await expect.poll(() => holding.held()).toBe(1);
+		await expect(template).toBeDisabled();
+		await expect(error).toHaveText(variant.message);
+		holding.release();
+		await expect(template).toBeEnabled();
+		await expect(error).toHaveText("请选择标准模板。");
+		await expect(readiness.nth(1)).toHaveText("Codex：可申请");
+		await expectCleanPage(page, pageErrors);
+	});

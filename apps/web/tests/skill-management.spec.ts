@@ -2233,3 +2233,211 @@ for (const outcome of ["reads", "fails", "expires"] as const)
 		);
 		await expectCleanPage(page, errors);
 	});
+
+function installationItem(name: string) {
+	return SkillHubInstallationListItemV1Schema.parse({
+		installationId: `installation-${name}`,
+		skillVersionId: `${name}-v3`,
+		needUpgrade: false,
+		installedAt: "2026-10-01T08:00:00Z",
+		updatedAt: "2026-10-01T08:00:00Z",
+		version: {
+			access: "visible",
+			skillId: name,
+			name,
+			version: "3.1.0",
+			provider: "market",
+			visibility: "MARKET",
+			state: "published",
+		},
+	});
+}
+
+/** 采样期间焦点不在 target 上（#3364：恢复焦点交接一次后不再被拉回）。 */
+async function expectFocusNotOn(
+	target: Locator,
+	delays: readonly number[],
+	context: string,
+) {
+	const samples = await target.evaluate(async (element, delays) => {
+		const start = performance.now();
+		const result: boolean[] = [];
+		for (const delay of delays) {
+			const wait = start + delay - performance.now();
+			if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+			result.push(document.activeElement === element);
+		}
+		return result;
+	}, delays);
+	expect(samples, `${context} 焦点采样（${delays.join(" / ")}ms）`).toEqual(
+		delays.map(() => false),
+	);
+}
+
+// #3364 N12-3-01：恢复焦点只交接一次。「重新读取：已安装」读取挂起时焦点不落到 body，仍失败回到按钮，恢复后
+// 按 D2-59 到页面 h1；之后用户滚到下方、点主区空白处（焦点到 #main-content），回到标签页的重读带回一条新
+// 安装时，焦点与滚动位置都不变，不被拉回 h1、不滚回顶部。两视口一致。
+test("My Skill keeps focus where the user put it after a recovered reread (#3364 N12-3-01)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	let installations: InstallationItem[] | null = null;
+	const installationsPath = "/api/v2/skills/installations";
+	await page.route(
+		(url) => url.pathname === installationsPath,
+		(route) => {
+			if (route.request().method() !== "GET") return route.fallback();
+			if (!installations)
+				return route.fulfill({
+					status: 503,
+					json: {
+						schemaVersion: 1,
+						code: "DEPENDENCY_UNAVAILABLE",
+						message: "Controlled My Skill failure",
+						retryable: true,
+						traceId: "trace-my-skill-reread",
+					},
+				});
+			return route.fulfill({
+				json: SkillHubInstallationPageV1Schema.parse({
+					items: installations,
+					nextCursor: null,
+				}),
+			});
+		},
+	);
+	await page.goto("/skills/manage");
+	const main = page.locator("#main-content");
+	const installedSection = main.getByRole("region", { name: "已安装" });
+	const reread = installedSection.getByRole("button", {
+		name: "重新读取：已安装",
+		exact: true,
+	});
+	const heading = main.getByRole("heading", { level: 1, name: "我的 Skill" });
+	await expect(reread).toBeVisible();
+
+	// 读取挂起时焦点不落到 body；仍失败时回到重新出现的按钮。
+	const reading = await holdRequests(page, "GET", installationsPath);
+	await reread.focus();
+	await page.keyboard.press("Enter");
+	await expect.poll(() => reading.held()).toBe(1);
+	expect(
+		await page.evaluate(() => document.activeElement !== document.body),
+	).toBe(true);
+	reading.release();
+	await expectFocusSettled(reread, "「已安装」仍失败后");
+
+	// 恢复：焦点到页面 h1（D2-59）。
+	installations = [installationItem("weekly-digest")];
+	await reread.focus();
+	await page.keyboard.press("Enter");
+	await expect(installedSection.locator("article.skill-row")).toHaveCount(1);
+	await expectFocusSettled(heading, "「已安装」恢复后");
+
+	// 用户滚到下方，点主区空白处：浏览器把焦点交给 tabIndex=-1 的 #main-content。
+	await page.evaluate(() =>
+		window.scrollTo(0, document.documentElement.scrollHeight),
+	);
+	const scrolled = await page.evaluate(() => window.scrollY);
+	await main
+		.getByRole("heading", { level: 2, name: "我创建的" })
+		.click({ position: { x: 2, y: 2 } });
+	await expect(main).toBeFocused();
+
+	// 回到标签页：重读带回一条新安装，焦点与滚动位置都不变。
+	installations = [
+		installationItem("weekly-digest"),
+		installationItem("release-digest"),
+	];
+	await page.evaluate(() =>
+		window.dispatchEvent(new Event("visibilitychange")),
+	);
+	await expect(installedSection.locator("article.skill-row")).toHaveCount(2);
+	await expectFocusSettled(main, "恢复后点空白处再重读", [50, 300, 1000, 2000]);
+	await expectFocusNotOn(heading, [50, 300], "恢复后点空白处再重读");
+	expect(await page.evaluate(() => window.scrollY)).toBe(scrolled);
+	await expectNoDuplicateControls(page, "我的 Skill（恢复后重读，#3364）");
+	await expectCleanPage(page, errors);
+});
+
+// #3364 N12-3-01：保存 409 后「重新读取内容」进行中按浏览器后退。触发时的页面已经换了，代管不随之转到「我的
+// Skill」：读取挂起与放行（失败）后焦点都不被移到上一页的 h1，与不重读直接后退相同；之后回到标签页的重读
+// 也不把焦点拉回 h1、不滚动页面。两视口一致。
+test("going back while re-reading content leaves My Skill focus alone (#3364 N12-3-01)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	const contentPath = "/api/v2/skills/projects/release-notes/content";
+	let changedElsewhere = false;
+	await page.route(
+		(url) => url.pathname === contentPath,
+		(route) => {
+			const method = route.request().method();
+			if (method === "PUT") {
+				changedElsewhere = true;
+				return route.fulfill({
+					status: 409,
+					json: {
+						schemaVersion: 1,
+						code: "INVALID_REQUEST",
+						message: "Request conflicts with current state.",
+						retryable: false,
+						traceId: "trace-skill-management",
+					},
+				});
+			}
+			if (method !== "GET" || !changedElsewhere) return route.fallback();
+			return route.fulfill({
+				status: 503,
+				json: {
+					schemaVersion: 1,
+					code: "DEPENDENCY_UNAVAILABLE",
+					message: "Controlled content read failure",
+					retryable: true,
+					traceId: "trace-skill-management",
+				},
+			});
+		},
+	);
+	await page.goto("/skills/manage");
+	const main = page.locator("#main-content");
+	const heading = main.getByRole("heading", { level: 1, name: "我的 Skill" });
+	await main.getByRole("link", { name: "编辑新版本：release-notes" }).click();
+	const skillMd = main.getByLabel("SKILL.md（任务说明）");
+	await skillMd.fill("# release-notes\n本地修改\n");
+	await main.getByRole("button", { name: "保存草稿" }).focus();
+	await page.keyboard.press("Enter");
+	const reread = await pinElement(
+		main.getByRole("button", { name: "重新读取内容", exact: true }),
+		"content-reread",
+	);
+	await expect(reread).toBeVisible();
+
+	const reading = await holdRequests(page, "GET", contentPath);
+	await reread.focus();
+	await page.keyboard.press("Enter");
+	await expect.poll(() => reading.held()).toBe(1);
+	await expectFocusableBusy(reread, "重新读取内容", [30, 150]);
+	await page.goBack();
+	await expect(page).toHaveURL(/\/skills\/manage$/);
+	await expect(heading).toBeVisible();
+	await expectFocusNotOn(
+		heading,
+		[30, 150, 400, 1000, 2000],
+		"重新读取进行中后退",
+	);
+	reading.release();
+	await expectFocusNotOn(heading, [50, 300, 1000], "后退后读取结束");
+
+	const scrolled = await page.evaluate(() => window.scrollY);
+	await page.evaluate(() =>
+		window.dispatchEvent(new Event("visibilitychange")),
+	);
+	await expectFocusNotOn(heading, [50, 300, 1000], "后退后回到标签页重读");
+	expect(await page.evaluate(() => window.scrollY)).toBe(scrolled);
+	await expectCleanPage(page, errors);
+});

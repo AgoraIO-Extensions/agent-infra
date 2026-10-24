@@ -1217,6 +1217,18 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		if (templateLockAttempted && templateLock === undefined)
 			setTemplateLockAttempted(false);
 	}, [templateLock, templateLockAttempted]);
+	// 创建申请时部署选项重读后「标准模板」下拉随之禁用（部署选项暂不可用、没有可申请的模板）：它若正握着
+	// 焦点，浏览器会在下一帧把焦点丢到 body。禁用生效的这次提交里焦点还在它上面，先交给页面标题（不可
+	// 聚焦时为 #main-content），不为此滚动页面（#3364）。
+	const templateSelectDisabled =
+		props.mode === "update" ||
+		deployment.templates.length === 0 ||
+		(noApplicableTemplateMessage !== undefined && !templateId);
+	useLayoutEffect(() => {
+		const trigger = document.getElementById(fieldId("templateId"));
+		if (templateSelectDisabled && trigger && document.activeElement === trigger)
+			pageRecoveryTarget()?.focus({ preventScroll: true });
+	}, [templateSelectDisabled]);
 	const advancedConfigurationHasErrors = Object.keys(fieldErrors).some(
 		(key) => key.startsWith("environment.") || key.startsWith("secret."),
 	);
@@ -1304,11 +1316,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				<Field>
 					<Label htmlFor="application-template-id">标准模板</Label>
 					<Select
-						disabled={
-							props.mode === "update" ||
-							deployment.templates.length === 0 ||
-							(noApplicableTemplateMessage !== undefined && !templateId)
-						}
+						disabled={templateSelectDisabled}
 						value={templateId}
 						itemToStringLabel={(value) =>
 							deployment.templates.find(

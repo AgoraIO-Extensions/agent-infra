@@ -1635,3 +1635,63 @@ test("a 401 inventory read asks to sign in again and re-reads once the session i
 	);
 	await expectCleanPage(page, errors);
 });
+
+// #3364 N12-3-01：公共恢复按钮的根因对照。页头「刷新 Agent 列表」读取中按浏览器后退到「审批申请」：触发时的
+// 页面已经换了，代管不随之转到上一页，读取挂起与放行（失败）后焦点都不被移到「审批申请」的 h1，与不读取时
+// 直接后退相同。两视口一致。
+test("going back while refreshing leaves the previous page's focus alone (#3364 N12-3-01)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	await page.setViewportSize(
+		mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+	);
+	const pageErrors = trackPageErrors(page);
+	const data = await fixture(page);
+	await page.goto("/admin/approvals");
+	const main = page.locator("#main-content");
+	const previousHeading = main.getByRole("heading", { level: 1 });
+	await expect(previousHeading).toBeVisible();
+	if (mobile)
+		await page.getByRole("button", { name: "打开导航", exact: true }).click();
+	await page
+		.getByRole("navigation")
+		.getByRole("link", { name: "Agent 管理" })
+		.first()
+		.click();
+	await expect(page).toHaveURL(/\/admin\/agents$/);
+	await expect(main.getByRole("table", { name: "已创建 Agent" })).toBeVisible();
+	const refresh = main
+		.locator("header.page-heading")
+		.getByRole("button", { name: "刷新 Agent 列表" });
+	data.pause();
+	data.failSecond();
+	await refresh.focus();
+	await page.keyboard.press("Enter");
+	await expect(refresh).toHaveAttribute("aria-disabled", "true");
+	await expectFocusHeld(refresh, [50, 300], "刷新 Agent 列表读取中");
+
+	await page.goBack();
+	await expect(page).toHaveURL(/\/admin\/approvals$/);
+	await expect(previousHeading).toBeVisible();
+	const focusedHeading = () =>
+		page.evaluate(() => {
+			const active = document.activeElement;
+			return active instanceof HTMLElement && active.tagName === "H1";
+		});
+	for (const delay of [30, 150, 400, 1000, 2000]) {
+		await page.waitForTimeout(delay);
+		expect(await focusedHeading(), `后退后 ${delay}ms 焦点在上一页 h1`).toBe(
+			false,
+		);
+	}
+	data.resume();
+	for (const delay of [50, 300, 1000]) {
+		await page.waitForTimeout(delay);
+		expect(
+			await focusedHeading(),
+			`读取结束后 ${delay}ms 焦点在上一页 h1`,
+		).toBe(false);
+	}
+	await expectCleanPage(page, pageErrors);
+});
