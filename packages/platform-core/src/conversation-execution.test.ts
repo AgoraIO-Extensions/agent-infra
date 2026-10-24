@@ -886,8 +886,18 @@ describe("Conversation execution use case", () => {
 	});
 
 	it("wakes recovery of an unknown occupant without changing the busy outcome (#3373)", async () => {
+		const ownerAuthority = {
+			...authority,
+			supportsSupplementaryInstruction: false,
+		};
+		let currentAuthority = ownerAuthority;
 		const conversation = new FakeConversationExecutionV1({
-			authority: { ...authority, supportsSupplementaryInstruction: false },
+			authority: ownerAuthority,
+			authorization: {
+				async authorize() {
+					return { outcome: "allowed" as const, authority: currentAuthority };
+				},
+			},
 			newId: (() => {
 				let value = 1;
 				return () => `wake_${value++}`;
@@ -924,6 +934,11 @@ describe("Conversation execution use case", () => {
 		expect(conversation.wokenRecoveries).toEqual([]);
 		conversation.markExecutionUnknown(first.result.executionId);
 		const before = conversation.snapshot();
+		// 另一用户的消息被拒绝，不唤醒该 Conversation 的恢复。
+		currentAuthority = { ...ownerAuthority, actorId: "user_02" };
+		expect(await conversation.accept(second)).toEqual({ outcome: "denied" });
+		expect(conversation.wokenRecoveries).toEqual([]);
+		currentAuthority = ownerAuthority;
 		expect(await conversation.accept(second)).toEqual({ outcome: "busy" });
 		// 受理不明占用时先唤醒恢复核实，不释放占用，也不新增可见记录。
 		expect(conversation.wokenRecoveries).toEqual([

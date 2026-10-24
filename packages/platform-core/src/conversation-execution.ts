@@ -516,9 +516,11 @@ export function createConversationExecutionUseCaseV1(
 					parseMessageCommandResult,
 				);
 				// Waking is a best-effort nudge after the admission committed; the
-				// Worker still recovers on its own schedule if it fails.
+				// Worker still recovers on its own schedule if it fails. A denied
+				// command leaves no side effect, including this nudge.
 				if (
 					unknownOccupant &&
+					decision.outcome !== "denied" &&
 					dependencies.transaction.wakeUnknownExecutionRecovery
 				)
 					await dependencies.transaction
