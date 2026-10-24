@@ -432,9 +432,9 @@ describe("RuntimeHost RUNTIME_TURN_NOT_SUBMITTED result", () => {
 	});
 
 	it("keeps the submit V1 result closed", () => {
-		expect(
-			RuntimeOperationResultV1Schema.safeParse(notSubmitted).success,
-		).toBe(false);
+		expect(RuntimeOperationResultV1Schema.safeParse(notSubmitted).success).toBe(
+			false,
+		);
 		expect(
 			RuntimeOperationResponseV1Schema.safeParse({
 				...response,
