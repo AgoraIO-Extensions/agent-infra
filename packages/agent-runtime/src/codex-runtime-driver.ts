@@ -3349,6 +3349,7 @@ const operationKeysBeforeNativeLaunch = [
 	"nativeSessionRef",
 	"configVersion",
 	"internalModel",
+	"modelOptionId",
 	"reasoningLevel",
 	"record",
 ] as const;

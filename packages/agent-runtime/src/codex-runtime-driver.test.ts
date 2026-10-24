@@ -11508,6 +11508,7 @@ describe("Codex Runtime Driver", () => {
 			expect(Object.keys(firstOperation).sort()).toEqual([
 				"configVersion",
 				"internalModel",
+				"modelOptionId",
 				"nativeSessionRef",
 				"reasoningLevel",
 				"schemaVersion",
