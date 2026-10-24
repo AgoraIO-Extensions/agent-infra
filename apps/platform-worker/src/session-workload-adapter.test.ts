@@ -627,6 +627,31 @@ describe("session sandbox workload adapter", () => {
 		expect(maximum).toBeGreaterThan(1);
 	});
 
+	it("settles every parallel convergence before surfacing a failure", async () => {
+		const client = api();
+		const read = client.read.bind(client);
+		const create = client.create.bind(client);
+		const delay = () => new Promise((resolve) => setTimeout(resolve, 20));
+		let active = 0;
+		client.read = async (kind, name) => {
+			active++;
+			try {
+				await delay();
+				return await read(kind, name);
+			} finally {
+				active--;
+			}
+		};
+		client.create = async (object) => {
+			if (object.kind === "ServiceAccount") throw new Error("boom");
+			return create(object);
+		};
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+
+		await expect(adapter.apply(allocation)).rejects.toThrow("boom");
+		expect(active).toBe(0);
+	});
+
 	it("applies the same deployment-approved egress as the Agent Workload (#1445)", async () => {
 		const egress = {
 			dnsEgress: [

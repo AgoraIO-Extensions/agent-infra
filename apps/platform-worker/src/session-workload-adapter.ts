@@ -1424,11 +1424,18 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				// PVC, identity, policy, route and Secret are independent. The Pod
 				// is the only resource that consumes all of them, so keep it in a
 				// second wave while collapsing the control-plane round trips.
-				await Promise.all(
+				// 成功的兄弟资源已经收敛；失败时要等这一波全部结束再抛，重试不会与
+				// 仍在进行的 create / delete / replace 重叠（#3338 review）。
+				const settled = await Promise.allSettled(
 					resources
 						.filter((resource) => resource.kind !== "Pod")
 						.map((resource) => ensure(resource)),
 				);
+				const failure = settled.find(
+					(result): result is PromiseRejectedResult =>
+						result.status === "rejected",
+				);
+				if (failure) throw failure.reason;
 				await ensure(pod);
 			}
 			return {
