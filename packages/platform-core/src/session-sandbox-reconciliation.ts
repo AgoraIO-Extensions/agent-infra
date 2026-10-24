@@ -87,6 +87,8 @@ export interface SessionSandboxReconciliationClaimV1 {
 	readonly itemId: string;
 	readonly leaseOwner: string;
 	readonly deliveryFence: number;
+	/** Current durable outbox attempt (1-based); used only for bounded diagnostics. */
+	readonly attemptCount?: number;
 	readonly sandbox: SessionSandboxBindingV1;
 	readonly resourceFence: number;
 	readonly resourceStatus: "applying" | "unknown";
@@ -109,6 +111,11 @@ export interface SessionSandboxReconciliationClaimV1 {
 
 export interface SessionSandboxObservationV1 {
 	readonly status: "observed" | "ready" | "stopped" | "unknown";
+	/** Bounded startup evidence from the Pod status; never a log message. */
+	readonly failureCode?:
+		| "eci.image_pull"
+		| "runtime.startup"
+		| "runtime.configuration";
 	readonly sourceStop?: SessionSandboxStopReceiptV1;
 	readonly deletionProgress?: readonly SessionSandboxDeletionProgressV1[];
 	readonly resources: readonly SessionSandboxResourceIdentityV1[];
@@ -233,6 +240,10 @@ export function isSessionSandboxObservationValidV1(
 	if (
 		!observation ||
 		!["observed", "ready", "stopped", "unknown"].includes(observation.status) ||
+		(observation.failureCode !== undefined &&
+			!["eci.image_pull", "runtime.startup", "runtime.configuration"].includes(
+				observation.failureCode,
+			)) ||
 		!Array.isArray(observation.resources)
 	)
 		return false;

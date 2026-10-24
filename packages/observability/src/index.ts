@@ -128,6 +128,14 @@ export interface OperationalEvent {
 	readonly executionId?: string;
 	readonly operationRef?: string;
 	readonly attemptRef?: string;
+	/** Bounded Session Sandbox identity/configuration facts for lifecycle failures. */
+	readonly sandboxId?: string;
+	readonly sandboxResourceUid?: string;
+	readonly sourceRevision?: number;
+	readonly desiredRevision?: number;
+	readonly configurationRevision?: number;
+	readonly imageDigest?: string;
+	readonly backoffMs?: number;
 	/** A W3C parent retained only for a durable asynchronous operation. */
 	readonly traceParent?: string;
 	readonly browserCategory?: OperationalBrowserCategory;
@@ -148,6 +156,14 @@ const operationalFailureSteps = new Set([
 	"workload.policy",
 	"workload.conflict",
 	"workload.unavailable",
+	"workload.capacity",
+	"workload.pod_create",
+	"workload.pod_observe",
+	"eci.image_pull",
+	"runtime.startup",
+	"runtime.configuration",
+	"runtime.execution",
+	"model.execution",
 	// Session Sandbox 准备任务认领等待的原因（SessionSandboxClaimWaitReasonV1，#3089）。
 	"sandbox.intent_mismatch",
 	"sandbox.lifecycle_stale",
@@ -579,6 +595,13 @@ export function startObservability(options: ObservabilityOptions) {
 					executionId,
 					operationRef,
 					attemptRef,
+					sandboxId,
+					sandboxResourceUid,
+					sourceRevision,
+					desiredRevision,
+					configurationRevision,
+					imageDigest,
+					backoffMs,
 					traceParent,
 					browserCategory,
 				} = event;
@@ -598,6 +621,33 @@ export function startObservability(options: ObservabilityOptions) {
 					(!Number.isFinite(durationMs) ||
 						durationMs < 0 ||
 						durationMs > 86_400_000)
+				) {
+					invalidRecords++;
+					return;
+				}
+				const boundedRevisions = [
+					sourceRevision,
+					desiredRevision,
+					configurationRevision,
+					backoffMs,
+				];
+				if (
+					boundedRevisions.some(
+						(value) =>
+							value !== undefined &&
+							(!Number.isSafeInteger(value) || value < 0 || value > 86_400_000),
+					)
+				) {
+					invalidRecords++;
+					return;
+				}
+				if (
+					(imageDigest !== undefined &&
+						(imageDigest.length > 512 ||
+							!/^(?:sha256:[0-9a-f]{64}|[A-Za-z0-9./:_-]+@sha256:[0-9a-f]{64})$/.test(
+								imageDigest,
+							))) ||
+					(sandboxResourceUid !== undefined && !safeId(sandboxResourceUid))
 				) {
 					invalidRecords++;
 					return;
@@ -639,6 +689,15 @@ export function startObservability(options: ObservabilityOptions) {
 					...(safeId(executionId) ? { executionId } : {}),
 					...(safeOperationRef(operationRef) ? { operationRef } : {}),
 					...(safeOperationRef(attemptRef) ? { attemptRef } : {}),
+					...(safeId(sandboxId) ? { sandboxId } : {}),
+					...(safeId(sandboxResourceUid) ? { sandboxResourceUid } : {}),
+					...(sourceRevision === undefined ? {} : { sourceRevision }),
+					...(desiredRevision === undefined ? {} : { desiredRevision }),
+					...(configurationRevision === undefined
+						? {}
+						: { configurationRevision }),
+					...(imageDigest === undefined ? {} : { imageDigest }),
+					...(backoffMs === undefined ? {} : { backoffMs }),
 					...(parseTraceParent(eventTraceParent)
 						? { traceParent: eventTraceParent as string }
 						: {}),

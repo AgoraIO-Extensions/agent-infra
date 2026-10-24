@@ -1455,6 +1455,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			const resources: SessionSandboxResourceIdentityV1[] = [];
 			let status: SessionSandboxObservationV1["status"] =
 				allocation.desiredState === "stopped" ? "stopped" : "ready";
+			let failureCode: SessionSandboxObservationV1["failureCode"];
 			const expectedResources = sessionSandboxResourcesV1(
 				purpose === "control"
 					? { ...allocation, desiredState: "stopped" }
@@ -1533,11 +1534,33 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 							))
 					)
 						status = "observed";
+					if (status === "observed") {
+						const container = pod.status?.containerStatuses?.find(
+							(entry) => entry.name === "agent",
+						);
+						const waitingReason = container?.state?.waiting?.reason;
+						const terminatedReason = container?.lastState?.terminated?.reason;
+						if (
+							waitingReason === "ErrImagePull" ||
+							waitingReason === "ImagePullBackOff" ||
+							waitingReason === "InvalidImageName"
+						)
+							failureCode = "eci.image_pull";
+						else if (waitingReason === "CreateContainerConfigError")
+							failureCode = "runtime.configuration";
+						else if (
+							waitingReason ||
+							terminatedReason ||
+							pod.status?.phase === "Failed"
+						)
+							failureCode = "runtime.startup";
+					}
 				}
 			}
 			return {
 				status:
 					purpose === "control" && status === "ready" ? "observed" : status,
+				...(failureCode === undefined ? {} : { failureCode }),
 				resources,
 			};
 		},

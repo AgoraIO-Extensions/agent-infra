@@ -811,6 +811,7 @@ it("records bounded authorization and Runtime submit timings (#1561)", async () 
 			stage: "runtime",
 			outcome: "failed",
 			durationMs: expect.any(Number),
+			failureStep: "runtime.execution",
 			...ids,
 		},
 		{
@@ -818,6 +819,7 @@ it("records bounded authorization and Runtime submit timings (#1561)", async () 
 			outcome: "failed",
 			durationMs: expect.any(Number),
 			protocolCode: "RUNTIME_CODEX_UNAVAILABLE",
+			failureStep: "runtime.execution",
 			...ids,
 		},
 	]);
@@ -1001,6 +1003,7 @@ describe("conversation dispatch observability", () => {
 					stage: "workload",
 					outcome: "failed",
 					code: "WORKLOAD_RECONCILIATION_FAILED",
+					failureStep: "workload.unavailable",
 					errorClass: "TypeError",
 					operationRef: "conversation.sandbox.reconcile.v1",
 					durationMs: expect.any(Number),
@@ -1051,13 +1054,11 @@ describe("conversation dispatch observability", () => {
 			expect(event).toMatchObject({
 				agentId: "agent-3360",
 				conversationId: "11111111-1111-4111-8111-111111111111",
+				sandboxId: "22222222-2222-4222-8222-222222222222",
 				attemptRef: "7",
 				failureStep: "workload.conflict",
 			});
 			expect(JSON.stringify(event)).not.toContain("conversation:sandbox:");
-			expect(JSON.stringify(event)).not.toContain(
-				"22222222-2222-4222-8222-222222222222",
-			);
 		});
 
 		it("uses a fixed class for non-Error thrown values", async () => {
@@ -1069,6 +1070,7 @@ describe("conversation dispatch observability", () => {
 					stage: "workload",
 					outcome: "failed",
 					code: "WORKLOAD_RECONCILIATION_FAILED",
+					failureStep: "workload.unavailable",
 					errorClass: "NonErrorThrown",
 					operationRef: "conversation.sandbox.reconcile.v1",
 					durationMs: expect.any(Number),

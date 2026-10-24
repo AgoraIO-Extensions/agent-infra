@@ -522,6 +522,54 @@ it("keeps malformed operation references out of logs", () => {
 	expect(lines[0]).not.toContain("attemptRef");
 });
 
+it("records bounded Sandbox lifecycle identity and retry facts", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-worker",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	telemetry.record({
+		stage: "workload",
+		outcome: "failed",
+		failureStep: "runtime.configuration",
+		sandboxId: "123e4567-e89b-42d3-a456-426614174000",
+		sandboxResourceUid: "123e4567-e89b-42d3-a456-426614174001",
+		sourceRevision: 3,
+		desiredRevision: 4,
+		configurationRevision: 7,
+		imageDigest: `sha256:${"a".repeat(64)}`,
+		backoffMs: 60_000,
+	});
+	expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+		failureStep: "runtime.configuration",
+		sandboxId: "123e4567-e89b-42d3-a456-426614174000",
+		sandboxResourceUid: "123e4567-e89b-42d3-a456-426614174001",
+		sourceRevision: 3,
+		desiredRevision: 4,
+		configurationRevision: 7,
+		imageDigest: `sha256:${"a".repeat(64)}`,
+		backoffMs: 60_000,
+	});
+	telemetry.record({
+		stage: "workload",
+		outcome: "failed",
+		imageDigest: "PRIVATE_SENTINEL",
+	});
+	telemetry.record({
+		stage: "workload",
+		outcome: "failed",
+		imageDigest: `registry.example/${"a".repeat(513)}@sha256:${"a".repeat(64)}`,
+	});
+	expect(telemetry.status().invalidRecords).toBe(2);
+	expect(lines.join("")).not.toContain("PRIVATE_SENTINEL");
+});
+
 it("keeps invalid observational input out of business control flow", () => {
 	const telemetry = startObservability({
 		service: "platform-api",
