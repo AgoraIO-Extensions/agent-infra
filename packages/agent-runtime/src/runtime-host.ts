@@ -3345,6 +3345,18 @@ export class RuntimeHost {
 					// V3 native recovery needs a current query/control Grant. Even
 					// interruption lookup can query or stop native sources, so defer it.
 					if (this.v3 && isInterruption(operation)) return;
+					if (
+						operation.state === "prepared" &&
+						operation.kind === "native-command" &&
+						operation.command.schemaVersion === 2
+					) {
+						// Stateful native commands need a fresh business Grant/Key before
+						// the Driver can verify a persisted Turn/item pair. Keep the
+						// prepared operation recoverable instead of converting it to
+						// unknown during Host startup; the replay path is fail-closed and
+						// never sends a second compact request.
+						return;
+					}
 					if (operation.state === "prepared" && !this.v3) {
 						recoveredResult = (
 							await this.dispatch(session.hostSessionRef, operation, !this.v3)

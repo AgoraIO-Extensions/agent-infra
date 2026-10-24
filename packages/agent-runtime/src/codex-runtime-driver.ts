@@ -4290,6 +4290,38 @@ function parseNativeCommandStatus(value: unknown, threadId: string) {
 	protocolInvalid();
 }
 
+/** Recover a stateful native command only from the exact persisted Turn/item pair. */
+function hasCompletedNativeCompaction(
+	value: unknown,
+	threadId: string,
+	nativeTurnId: string,
+	nativeItemId: string,
+) {
+	const thread = isPlainRecord(value) ? value.thread : undefined;
+	if (
+		!isPlainRecord(thread) ||
+		thread.id !== threadId ||
+		!Array.isArray(thread.turns)
+	)
+		return false;
+	const turns = thread.turns.filter(
+		(turn): turn is Record<string, unknown> =>
+			isPlainRecord(turn) && turn.id === nativeTurnId,
+	);
+	if (turns.length !== 1) return false;
+	const turn = turns[0];
+	if (!turn) return false;
+	if (statusForTurn(turn.status) !== "completed" || !Array.isArray(turn.items))
+		return false;
+	const items = turn.items.filter(
+		(item): item is Record<string, unknown> =>
+			isPlainRecord(item) &&
+			item.type === "contextCompaction" &&
+			item.id === nativeItemId,
+	);
+	return items.length === 1;
+}
+
 type StandardToolReply = {
 	contentItems: { type: "inputText"; text: string }[];
 	success: boolean;
@@ -7542,8 +7574,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (prepared.operation.state !== "resolved") stateInvalid();
 			return prepared.operation.record;
 		}
-		if (!prepared.created)
-			return this.unknown(command, command.nativeSessionRef);
+		if (!prepared.created) {
+			if (
+				!prepared.operation.nativeTurnId ||
+				!prepared.operation.nativeCompactionItemId
+			)
+				return this.unknown(command, command.nativeSessionRef);
+			return this.recoverStatefulNativeCommand(
+				command,
+				read,
+				binding,
+				prepared.operation,
+			);
+		}
 		read.assertCurrent();
 		const rpc = await this.rpc(command.nativeSessionRef, read.assertCurrent);
 		const operationKeyValue = operationKey(command);
@@ -7579,6 +7622,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						() => reject(unavailableError()),
 						rpcRequestTimeoutMs,
 					);
+					completionTimer.unref?.();
 				}),
 			]);
 			return this.resolveNativeCommand(command, command.nativeSessionRef, {
@@ -7594,6 +7638,50 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		} finally {
 			if (completionTimer !== undefined) clearTimeout(completionTimer);
 			this.pendingNativeCompactions.delete(operationKeyValue);
+		}
+	}
+
+	private async recoverStatefulNativeCommand(
+		command: Extract<CodexNativeCommandCommand, { schemaVersion: 2 }>,
+		read: RuntimeNativeMetadataReadContextV1,
+		binding: NativeCommandBinding,
+		operation: CodexOperation,
+	) {
+		const nativeTurnId = operation.nativeTurnId;
+		const nativeItemId = operation.nativeCompactionItemId;
+		if (!nativeTurnId || !nativeItemId)
+			return this.unknown(command, command.nativeSessionRef);
+		try {
+			const rpc = await this.rpc(command.nativeSessionRef, read.assertCurrent);
+			const metadata = await rpc.request(
+				"thread/read",
+				{ threadId: binding.threadId, includeTurns: true },
+				(value) => value,
+				false,
+				false,
+				Math.min(read.expiresAt, Date.now() + rpcRequestTimeoutMs),
+				read.signal,
+			);
+			if (
+				!hasCompletedNativeCompaction(
+					metadata,
+					binding.threadId,
+					nativeTurnId,
+					nativeItemId,
+				)
+			)
+				return this.unknown(command, command.nativeSessionRef);
+			const observed = await this.readBoundNativeStatus(
+				read,
+				binding,
+				this.nativeMetadataRead(read, binding),
+			);
+			return this.resolveNativeCommand(command, command.nativeSessionRef, {
+				selector: "status",
+				...observed,
+			});
+		} catch {
+			return this.unknown(command, command.nativeSessionRef);
 		}
 	}
 
