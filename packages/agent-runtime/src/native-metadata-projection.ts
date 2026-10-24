@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import {
+	type NativeMetadataCommandEffectV2,
+	type NativeMetadataCommandsProjectionV2,
+	NativeMetadataCommandsProjectionV2Schema,
 	type NativeMetadataProjectionV1,
 	NativeMetadataProjectionV1Schema,
 } from "@agent-infra/contracts/runtime";
@@ -286,4 +289,62 @@ export function projectNativeMetadataSkillsV1(input: {
 	});
 	input.assertCurrent?.();
 	return projection;
+}
+
+/** Versioned projection for effects and bounded text hints unavailable in V1. */
+export function projectNativeMetadataCommandsV2(input: {
+	readonly nativeSessionRef: string;
+	readonly configVersion: string;
+	readonly source: NativeMetadataProjectionSourceV1;
+	readonly directory: unknown;
+	readonly effect: NativeMetadataCommandEffectV2;
+	readonly argumentHint?: string;
+	readonly requiredParameter?: boolean;
+	readonly assertCurrent?: () => void;
+}): NativeMetadataCommandsProjectionV2 {
+	const nativeSessionRef = boundedText(input.nativeSessionRef, maxIdentityText);
+	const configVersion = boundedText(input.configVersion, maxIdentityText);
+	const source = projectionSource(input.source);
+	const argumentHint =
+		input.argumentHint === undefined
+			? ""
+			: boundedText(input.argumentHint, 1024, true);
+	const requiredParameter = input.requiredParameter ?? false;
+	input.assertCurrent?.();
+	const directory = commandDirectory(input.directory);
+	const commands = directory.commands
+		.map((command) => commandCapability(command, source))
+		.sort((left, right) => left.name.localeCompare(right.name));
+	if (new Set(commands.map((command) => command.name)).size !== commands.length)
+		invalid();
+	const revision = digest([
+		"native-metadata-commands-v2",
+		nativeSessionRef,
+		configVersion,
+		source,
+		directory.nativeId,
+		input.effect,
+		argumentHint,
+		requiredParameter,
+		commands.map(({ identity, ...command }) => ({ command, identity })),
+	]);
+	return NativeMetadataCommandsProjectionV2Schema.parse({
+		schemaVersion: 1,
+		selector: "commands",
+		revision,
+		capabilities: commands.map(({ identity, ...command }) => {
+			const hint = input.argumentHint ?? identity.argumentHint;
+			return {
+				schemaVersion: 2,
+				id: digest(["native-metadata-command-v2", revision, identity, command]),
+				...command,
+				parameters:
+					hint.length > 0 || requiredParameter
+						? [{ kind: "text", required: requiredParameter, hint }]
+						: [],
+				effect: input.effect,
+				availability: "available",
+			};
+		}),
+	});
 }
