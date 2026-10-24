@@ -156,6 +156,16 @@ export const RuntimeOperationResultV1Schema = z.discriminatedUnion("outcome", [
 	}),
 ]);
 
+/**
+ * #3373：Driver 声明未提交时的失败阶段。附件读取失败但不是平台明确拒绝时为
+ * `file_input_unavailable`；物化、原生进程启动或会话恢复、提交前 Grant 复核等其他提交
+ * 准备失败为 `session_preparation_failed`。
+ */
+export const RuntimeTurnNotSubmittedReasonV1Schema = z.enum([
+	"file_input_unavailable",
+	"session_preparation_failed",
+]);
+
 export const RuntimeOperationResultV2Schema = z.union([
 	z.strictObject({
 		outcome: z.literal("accepted"),
@@ -187,6 +197,15 @@ export const RuntimeOperationResultV2Schema = z.union([
 		code: z.literal("RUNTIME_FILE_INPUT_REJECTED"),
 		message: z.literal("Runtime file input was rejected"),
 		retryable: z.literal(false),
+	}),
+	// #3373：Driver 在原生提交点之前声明本次 Turn 未提交，且没有该操作的 Driver 记录：稳定脱敏、
+	// 可重试（同一 Execution 以更高 fence 与新 Grant 重新投递），仅 submit V2 及以上可返回。
+	z.strictObject({
+		outcome: z.literal("rejected"),
+		code: z.literal("RUNTIME_TURN_NOT_SUBMITTED"),
+		message: z.literal("Runtime turn was not submitted"),
+		reason: RuntimeTurnNotSubmittedReasonV1Schema,
+		retryable: z.literal(true),
 	}),
 	z.strictObject({
 		outcome: z.literal("unknown"),

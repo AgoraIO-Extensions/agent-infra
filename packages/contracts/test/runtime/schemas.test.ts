@@ -374,3 +374,72 @@ describe.each([
 		).toBe(false);
 	});
 });
+
+// #3373：Driver 在原生提交点之前声明本次 Turn 未提交：稳定脱敏、可重试、带固定阶段，
+// 只有 submit V2 及以上的结果联合包含该成员，V1 结果保持不变。
+describe("RuntimeHost RUNTIME_TURN_NOT_SUBMITTED result", () => {
+	const notSubmitted = {
+		outcome: "rejected",
+		code: "RUNTIME_TURN_NOT_SUBMITTED",
+		message: "Runtime turn was not submitted",
+		reason: "file_input_unavailable",
+		retryable: true,
+	} as const;
+	const response = {
+		hostSessionRef: "host-session-1",
+		operationId: "operation-1",
+		result: notSubmitted,
+	} as const;
+
+	it("accepts both pinned reasons through V2 to V5 responses", () => {
+		for (const reason of [
+			"file_input_unavailable",
+			"session_preparation_failed",
+		] as const) {
+			expect(
+				RuntimeOperationResultV2Schema.parse({ ...notSubmitted, reason }),
+			).toEqual({ ...notSubmitted, reason });
+		}
+		for (const [schema, schemaVersion] of [
+			[RuntimeOperationResponseV2Schema, 2],
+			[RuntimeOperationResponseV3Schema, 3],
+			[RuntimeOperationResponseV4Schema, 4],
+			[RuntimeOperationResponseV5Schema, 5],
+		] as const) {
+			expect(schema.parse({ ...response, schemaVersion })).toEqual({
+				...response,
+				schemaVersion,
+			});
+		}
+	});
+
+	it.each([
+		{ ...notSubmitted, message: "Codex app-server is unreachable" },
+		{ ...notSubmitted, retryable: false },
+		{ ...notSubmitted, reason: "exchange_timeout" },
+		{
+			outcome: notSubmitted.outcome,
+			code: notSubmitted.code,
+			message: notSubmitted.message,
+			retryable: notSubmitted.retryable,
+		},
+		{ ...notSubmitted, detail: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE" },
+		{ ...notSubmitted, outcome: "unknown" },
+	])("rejects drifted not-submitted result %j", (candidate) => {
+		expect(RuntimeOperationResultV2Schema.safeParse(candidate).success).toBe(
+			false,
+		);
+	});
+
+	it("keeps the submit V1 result closed", () => {
+		expect(
+			RuntimeOperationResultV1Schema.safeParse(notSubmitted).success,
+		).toBe(false);
+		expect(
+			RuntimeOperationResponseV1Schema.safeParse({
+				...response,
+				schemaVersion: 1,
+			}).success,
+		).toBe(false);
+	});
+});
