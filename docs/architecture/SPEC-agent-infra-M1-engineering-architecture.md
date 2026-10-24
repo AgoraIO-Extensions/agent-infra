@@ -298,7 +298,7 @@ Connection 使用独立 `connection-web` 和独立浏览器会话，包含登录
 - 对话时间线使用独立 reducer 合并持久化消息、SSE 增量和重连补发事件。命令受理、回复结束或 `timeline.reload` 后重新读取会话详情时，新首屏与已加载事件按 `eventId` 有重叠，就保留重叠之前已加载的更早事件，已显示的回合不因首屏窗口收窄而消失；没有重叠时无法排除缺口，按新首屏重建。
 - 表单使用 Schema 校验；服务端重复执行同一校验，不能信任浏览器结果。
 - 不预装全局状态库。只有出现跨路由、非服务端且难以由 React Context 管理的状态后再引入。
-- Web 使用 OpenAPI 生成的 TypeScript Client，并通过同一 Contract Schema 校验的 Mock Server 和场景 fixture 独立开发。Mock 必须覆盖正常、无权限、启动中、繁忙、失败和 SSE 重连，不能维护另一套手写假接口。
+- Web 使用 OpenAPI 生成的 TypeScript Client，并通过同一 Contract Schema 校验的 Mock Server 和场景 fixture 独立开发。Mock 必须覆盖正常、无权限、启动中、繁忙、排队、失败和 SSE 重连，不能维护另一套手写假接口。
 
 ### 7.3 前端安全职责
 
@@ -332,6 +332,7 @@ Platform 的 `task.status` 事实与 Task API 共用状态和受限原因 Schema
 - 服务端先保存事件，再向在线连接推送；断线后按持久化序列补发。事件事务提交后，数据库发出只含 Conversation 标识的唤醒提示，在线连接据此立即从持久化游标读取；提示只用于缩短等待，丢失时按固定轮询送达，不改变持久化、排序和授权规则。
 - 心跳只用于保持连接，不进入业务时间线。
 - 同一事件可能被重复投递，消费者按 `eventId` 去重。订阅建立、续传和存续期间执行当前主体/凭证授权：每批事件写出前复核一次，空闲期间按固定间隔复核；失效后该批不写出并关闭流，审计订阅起止，不逐条审计输出。
+- Web/渠道排队消息的入队、开始处理、撤回、排队超时与取消按 [§12.5](#125-执行中消息的补充指令与排队) 写入平台来源的 `task.status` 事件，与其他事件共享排序、补发和授权规则。排队位次从持久等待顺序派生，不作为可变字段写入事件；浏览器收到队列变化后按同一规则更新位次。
 
 M1 不使用 WebSocket。用户发送消息、停止回复和补充指令都通过普通 HTTP 命令完成；只有出现必须由同一连接双向交换低延迟事件的需求后才重新评估。
 
@@ -426,7 +427,7 @@ Agent 元数据的 API 列表读取要求凭证包含 `agent:read`，并仅返�
 
 ### 9.3 服务端授权上下文
 
-Web 和企微仍按可信用户、当前 Agent 可用范围及渠道权限校验；API 按 9.2 校验。每次 Turn 或补充指令实际投递前，平台重验当前主体和 Agent 使用权，再生成短期、不可篡改且版本化的 Runtime Execution Grant。Grant 绑定签发方、RuntimeHost audience、签发/过期时间、唯一 `grantId`、Execution、Agent、提交主体及类型、渠道、Conversation/Turn、允许命令和附件操作；标准模板业务 Grant 还绑定该 Execution 已固化的 Relay Key 用途、引用与版本，但不含原值。执行范围受原受理授权边界约束，不能因后台 Worker 的服务权限而扩张；Platform API 凭证的后续失效按 9.2 处理，Relay Key 的执行期规则按 10.7 处理。
+Web 和企微仍按可信用户、当前 Agent 可用范围及渠道权限校验；API 按 9.2 校验。每次 Turn 或补充指令实际投递前，平台重验当前主体和 Agent 使用权，再生成短期、不可篡改且版本化的 Runtime Execution Grant；Web/渠道排队消息出队时同样在首次 Runtime 准备前重验（[§12.5](#125-执行中消息的补充指令与排队)）。Grant 绑定签发方、RuntimeHost audience、签发/过期时间、唯一 `grantId`、Execution、Agent、提交主体及类型、渠道、Conversation/Turn、允许命令和附件操作；标准模板业务 Grant 还绑定该 Execution 已固化的 Relay Key 用途、引用与版本，但不含原值。执行范围受原受理授权边界约束，不能因后台 Worker 的服务权限而扩张；Platform API 凭证的后续失效按 9.2 处理，Relay Key 的执行期规则按 10.7 处理。
 
 RuntimeHost 在读取附件或运行命令前校验签名、签发方、audience、有效期与全部对象绑定。服务身份、请求字段、Session Ref 或 Runtime 返回值不能单独作为授权依据。补充指令取原 Execution 边界与当前授权的交集；不匹配或过期时拒绝，日志和审计只保存 Grant 引用及受限原因，不保存原始证明。
 
@@ -1461,7 +1462,7 @@ sequenceDiagram
     P-->>W: 补发事件与最终结果
 ```
 
-上图描述没有活跃 Turn 的普通消息路径。补充指令、重新生成、停止命令和繁忙拒绝按 12.2 的独立事务分支处理。
+上图描述没有活跃 Turn 的普通消息路径。补充指令、重新生成、停止命令和繁忙拒绝按 12.2 的独立事务分支处理；会话被占用时普通消息的补充指令、排队与繁忙判定见 [12.5](#125-执行中消息的补充指令与排队)。
 
 ### 12.2 可靠性规则
 
@@ -1483,11 +1484,52 @@ API task 直接映射一个 Platform Execution，不另设与 Execution 竞争�
 
 - **受理事务：** Core 在 Agent 容量与 Conversation 锁定的用例级事务内检查当前资格和等待容量，保存幂等绑定、输入引用、Execution、受理顺序、等待期限、outbox 与必要审计。API 与 Web/渠道命令共用同一 Conversation 锁或等价条件更新边界，锁内按已提交顺序判定等待和占用，不能各自读取空闲快照后同时准入。重复请求先查原绑定，不重复消耗容量；容量满或停止/停用/故障未恢复时拒绝且不创建新任务。启动/更新中允许有界等待，任务提交不隐式启动 Agent。
 - **投递：** Worker 认领持久工作项；Dispatch 只允许同 Conversation 最早的可执行任务占用 Turn，并在 Agent 经验证的并发能力内调度不同 Conversation。准入须重新检查当前授权、能力、平台运行状态及对应 Workload 就绪事实；启动/更新中仍等待，停止/停用/故障则终结确认未投递的等待任务并记录原因。状态变更与准入的原子边界、已占位但未发送和已在途任务的收敛由 Runtime HLD §8.4 定义。认领租约、修订/fence 与事务条件防止双 Worker 重复投递。等待期限由平台配置，在重启后沿用；只对确认未投递的到期任务明确失败。RuntimeHost 管理原生 Turn，不再维护另一套用户排队状态。
-- **入口差异：** 等待中的 Execution 还没有活跃 Runtime Turn。API 后续任务排队不改变 Web 的补充指令/繁忙语义；Web 与 API 均通过同一 Conversation 串行准入，后续新 Turn 不能越过已受理任务或改写其他主体上下文；对当前活跃 Turn 的合法补充指令仍按 Web 规则处理。
+- **入口差异：** 等待中的 Execution 还没有活跃 Runtime Turn。API 后续任务与 Web/渠道排队消息共用同一等待结构、顺序和认领规则（[12.5](#125-执行中消息的补充指令与排队)），但 API 任务不转换为补充指令；Web 与 API 均通过同一 Conversation 串行准入，后续新 Turn 不能越过已受理任务或改写其他主体上下文；对当前活跃 Turn 的合法补充指令仍按 Web 规则处理。
 - **取消：** 未投递任务在与认领互斥的事务中终结，Worker 不能继续启动；投递或接受结果不确定时，先核实原操作。运行中持久保存取消请求、停止工作项和平台规定的停止确认期限，确认停止后才标记已取消。确认超时转为非终态的待核实，保留原操作并沿 Runtime HLD 的查询/屏障恢复；无法自动收敛时由运维按受控恢复流程处置，不能人工猜测完成或直接释放占用。未确认或待核实状态占住该 Conversation，下一任务不能启动；期限不因重复取消或 Worker 重启延长，也不是调用方可设的任务执行时限。
 - **恢复：** API/Worker 重启重新认领未开始工作，沿原执行查询 Runtime 接受状态与 Session。已运行任务能恢复则沿原身份继续，确认不可恢复则明确失败；无法确认时标记待核实并阻止受影响 Conversation，不能新建 Session 或重放可能有副作用的任务。结果与审计恢复均按原操作引用去重。
 
 RuntimeHost 命令、租约/fence、原生 Session 和事件字段继续由 [Runtime HLD](HLD-agent-runtime-M1.md) 细化；API 的持久等待属于 Platform Dispatch，不把排队义务下推到 Driver。
+
+### 12.5 执行中消息的补充指令与排队
+
+产品行为见[平台 PRD 10.5](../prd/PRD-agent-platform-M1.md#105-执行中消息与失败提示)，决策见 [ADR-0033](../adr/0033-in-flight-messages-wecom-ordering-and-streaming-progress.md)。本节是 Web 与托管渠道 `message` 命令在 Conversation 被占用时的工程权威。Conversation 锁内的事务写入与补充指令 outbox 见 [Runtime HLD §8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等)，补充指令 capability 与 Driver 映射见 [Runtime HLD §5](HLD-agent-runtime-M1.md#5-platform-conversation-contract)，企微侧的提示与更新见 [§14.2.4](#1424-入站保序附件合并与流式进度)。
+
+**范围。** Conversation 被占用指存在等待中、投递中、运行中、取消待确认或 `unknown` 的 Execution。本节只适用于 Web 与托管渠道的 `message` 命令；重新生成、原生命令和 Skill 在占用时仍返回繁忙，不进入排队；任务 API 的后续任务按 12.4 等待，不转换为补充指令。
+
+**判定顺序。** `platform-api`（企微长连接为 `platform-worker`）在同一 Conversation 锁内依次判定，判定与写入原子完成，并在判定前先完成幂等查询：
+
+1. 没有占用：按普通消息创建初始 Execution 与 Turn outbox（12.1）。
+2. 发送者 `actorId` 与当前活跃 Execution 相同，有效补充指令 capability 为真，当前 Execution 不处于 `unknown` 且没有待确认的 stop，该 Conversation 也没有等待中的 Web/渠道 Execution：作为补充指令处理。
+3. 占用或等待中的 Execution 都属于同一 `actorId`，且未达到下述容量：作为排队消息处理。
+4. 其他情况返回繁忙，不创建 Message、Execution 或 outbox：占用者属于其他 `actorId`、本 Conversation 排队已满或 Agent 等待容量已满。繁忙响应只返回本 Conversation 当前排队条数。
+
+**复用 Task 有界等待。** 排队不新增排队表、内存队列或 Driver 侧队列，也不形成第二套排队权威：
+
+- 排队消息与 API 等待任务使用同一持久结构：受理事务写入 Message、状态为 `waiting` 的 Execution、Turn outbox 与必要审计，Execution 保存 `task_wait_order` 与 `task_wait_deadline`。`task_wait_order` 与 API 任务共用 Agent 内单调分配的顺序空间；RuntimeHost 不感知排队。
+- 期限：`task_wait_deadline` 为进入排队时刻加 10 分钟，由平台固定，调用方不能设置；企微消息再与该消息回复有效期结束前 30 秒（§14.2.4）取较早者。重启、重复请求和位次变化都不重置期限。
+- 容量：同一 Conversation 的等待 Execution 最多 3 条，并与 API 任务共用 Agent 等待容量，任一已满即繁忙。
+- 出队：Worker 使用与 API 等待任务相同的认领决策（`waitingDecision`）。只准入同 Conversation 中 `task_wait_order` 最小的等待 Execution；存在占用（含取消待确认、`unknown` 和代次隔离中）或 Workload、Sandbox 尚未就绪时继续等待；到期以 `TASK_WAIT_TIMEOUT` 失败；Agent 已停止、停用或故障未恢复时以 `AGENT_UNAVAILABLE` 终结；Conversation 不可用时以 `CONVERSATION_UNAVAILABLE` 终结；Agent 启动或更新中继续等待。
+- 出队前重验：首次 Runtime 准备前，在同一次认领中按 [§9.2](#92-权限顺序) 重验发送者当前状态、Agent 可用范围与渠道权限；失效时以 `AUTHORIZATION_REVOKED` 取消且不投递。认领、撤回、到期与撤权在同一 Conversation 锁或条件更新边界内互斥。
+
+**补充指令转入排队。** 出现以下情况时，在记录该结果或状态变化的同一 Conversation 锁事务中，把补充指令消息转为排队消息：为它新建等待 Execution（新的 `task_wait_order` 与期限），将 Message 改为绑定该 Execution，原补充指令 outbox 以“已转排队”终结。同一 Execution 之后仍待投递的补充指令按原顺序一并转换；超出容量的部分将 Message 标记为“投递失败：排队已满”。
+
+- Runtime 对该补充指令持久返回明确拒绝，例如 Codex `turn/steer` 报告无活跃 Turn、`expectedTurnId` 不符或当前 Turn 不接受 steer（[Runtime HLD §5](HLD-agent-runtime-M1.md#5-platform-conversation-contract)）。
+- 绑定 Execution 已被 Runtime 接受，但在补充指令实际投递前进入终态、出现待确认的 stop 或转为 `unknown`。
+
+其他补充指令结果保持原规则：初始 Turn 在 Runtime 接受前终结时标记“投递失败：原回复未开始”；权限失效时标记“投递失败：权限已失效”；投递超时、断连或结果不明时保持 unknown，按原 `messageId` 恢复查询，不转入排队，也不重复投递。转换与触发它的状态变化在同一事务内完成，之后受理的消息因此排在转换结果之后；仍在投递中、结果未定的补充指令若之后被明确拒绝，其排队位置按转换时刻确定。
+
+**与停止、重启、待核实和撤权的关系。**
+
+- 停止：只针对目标 Execution，不终结等待 Execution。停止确认、占用释放后，下一条等待 Execution 按序准入；停止确认超时转为待核实期间继续等待，到期按 `TASK_WAIT_TIMEOUT` 终结。
+- 待核实：`unknown` 不释放占用，等待 Execution 不出队，直到原执行核实为终态或等待到期。代次隔离完成、Conversation 标记为会话不可用的事务（[Runtime HLD §7.3](HLD-agent-runtime-M1.md#73-重启恢复)）同时终结该 Conversation 的全部等待 Execution；`RUNTIME_SESSION_BLOCKED` 使会话不可用后，等待 Execution 在随后的认领中以 `CONVERSATION_UNAVAILABLE` 终结。
+- 重启：`platform-api`、`platform-worker` 或 Agent 重启后，等待 Execution 沿原顺序与期限继续（§16.3）。Agent 启动或更新中继续等待，停止或停用时终结。
+- 撤权：主体禁用、Agent 可用范围或渠道权限撤销时，按 §9.2 与 [Runtime HLD §8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等) 取消受影响的等待 Execution，原因为 `AUTHORIZATION_REVOKED`，不投递。
+- 撤回：Web 发送者撤回自己的排队消息，复用 12.4 未投递任务的取消路径。撤回与认领互斥：Execution 仍为 `waiting` 时以 `cancelled` 终结，记录撤回原因与必要审计；已离开 `waiting` 时返回已开始处理，不影响执行。撤回入口遵循 §8.1 的命令约定，校验可信主体与 Conversation 归属并支持幂等。企微不提供撤回入口。
+
+**位次与状态事件。**
+
+- 位次 N 等于同一 Conversation 中 `task_wait_order` 不大于本条的等待 Execution 数，前面还有 N−1 条排队消息。位次只从持久等待顺序派生，不另存可变计数。
+- 入队、开始处理、撤回、超时与取消在改变等待集合的同一事务中写入平台来源的 `task.status` 事件，Web/渠道 Execution 与 API 任务一样写入，原因使用受限枚举；Web 按 §8.2 更新，企微按 §14.2.4 更新受影响消息的回复。
 
 ## 13. Connection 架构
 
@@ -2060,9 +2102,9 @@ API 不因此获得 Bot Secret、应用发送 Secret 或历史回复路由的解
 6. 回复前再次校验当前身份、绑定和权限，沿获准协议发送。长连接回复不依赖 HTTP `response_url`；
    发送前记录意图，ACK 丢失或断连后保留 `unknown`，不得自动重发或将服务端受理宣称为终端送达。
    协议不支持可验证恢复时保留有界处置；失去有效回复上下文时明确失败/过期。
-   长连接受理后立即在该消息的 stream 上发送 `finish=false` 的固定处理中提示（不属于业务回复，不记发送意图，
-   失败不影响最终回复）；最终回复在同一 stream 上 `finish=true`。回复有效期留在官方 stream 时限
-   （首次发送起 10 分钟）之内；到期前回答仍未就绪时发送固定超时提示结束 stream，不静默过期。
+   长连接受理后立即在该消息的 stream 上发送 `finish=false` 的处理中提示（不属于业务回复，不记发送意图，
+   失败不影响最终回复），处理期间按 §14.2.4 覆盖更新进度；最终回复在同一 stream 上 `finish=true`。
+   回复有效期、超时定稿与失败提示送达见 §14.2.4，不静默过期。
 7. 需要外部操作时由 Agent/客户端直连 Connection；Connection 独立验证触发消息发送者已授予的调用权限，
    不能使用其他群成员的授权。渠道传输变化不得绕过既有授权或新增 Runtime 调度器。
 
@@ -2115,6 +2157,43 @@ Agent 投影的 `channels[].status` 只列出当前配置修订已配置的企�
 - Core 在交给 sender 之前去掉结果文件，并按出站规则改写文本，文本照常发送。
 - 收到入站媒体（含回调模式的图文混排）时回复固定说明，不调用 Agent。
 - sender 不再因为结果文件而整条失败，也不静默丢弃结果文件。
+
+#### 14.2.4 入站保序、附件合并与流式进度
+
+产品行为见[平台 PRD §10.3](../prd/PRD-agent-platform-M1.md#103-企微会话)与 [§10.5](../prd/PRD-agent-platform-M1.md#105-执行中消息与失败提示)，决策见 [ADR-0033](../adr/0033-in-flight-messages-wecom-ordering-and-streaming-progress.md)，固定文案见[企微部署](WECOM-text-deployment.md#共用执行与回复)。入站保序、附件合并和流式进度只适用于智能机器人长连接。自建应用和显式机器人回调不能覆盖更新已发送的回复，只发送终态回复（答案、排队超时、取消或失败说明），不发送位次与进度更新；失败提示送达规则对所有传输适用。
+
+入站保序：
+
+- 连接持有者按会话键串行处理入站帧。会话键由已认证连接的机器人与帧中的会话类型、单聊或群聊标识、发送者标识组成，在身份映射前即可确定，不使用显示名。同一会话键的帧按长连接收到的顺序逐条完成去重、身份映射、媒体下载与受理事务（或明确拒绝）后，才处理下一帧；不同会话键并行。
+- 媒体下载、解密与写入 File Authority 在该会话键的串行槽位内完成，受部署的下载超时约束；下载期间同一会话键后到的文字等待，不能先受理。
+- 每个会话键待处理的帧数有界，超出时按繁忙回复，不静默丢弃。
+- 串行只在当前连接持有者内保证。持有者切换后，新持有者对新连接收到的帧重新按会话键串行；重投帧仍按稳定事件 ID 去重（§14.2.2 第 5 项）。
+- 受理被拒（繁忙、无权限、会话不可用等）的消息已写入的附件不绑定任何 Message，同一处理流程把这些附件记录交给 §15.4.3 的对账有界清理，不留下长期无归属的附件。
+
+附件合并：
+
+- 只含附件的消息指 image、file、video，以及只有图片项的 mixed。它受理后新建的 Execution（直接投递或按 §12.5 排队）设合并窗口：Turn outbox 在受理后 3 秒内不可认领。作为补充指令受理的附件消息不设窗口。
+- 窗口内同一会话键受理的下一条文字消息（text、voice 转写或含文本的 mixed）在自己的受理事务中作为新 Message 绑定到该尚未认领的 Execution，与已有附件一起组成初始 Turn 输入（文字在前、附件清单在后），并立即结束窗口。窗口内再收到的只含附件的消息并入同一 Execution 并重新计时；一个 Execution 最多合并 10 个附件，超出时新消息不再并入，按 §12.5 处理。
+- 是否并入在 Conversation 锁内按 Platform DB 判定：目标 Execution 未被认领、窗口未到期且属于同一会话键与发送者。窗口状态不依赖进程内存；Worker 重启不丢失已受理的附件消息，窗口到期后按只含附件的消息执行。
+- 合并后的 Execution 由文字消息的回执承担进度与最终回复；被并入的附件消息回执以固定说明结束其 stream。
+- 附件接收失败的消息按 §14.2.3 回复固定说明（`media_rejected`），不建立 Execution，也不打开合并窗口；随后的文字按普通消息处理。
+- 合并结束后再收到的消息按 §12.5 作为补充指令、排队或繁忙处理。
+
+流式进度：
+
+- 每个 stream 只有一个发送者，覆盖式发送当前全量内容：收到上一帧 ACK 后才发送下一帧，相邻两帧至少间隔 1 秒，等待期间的新内容合并为最新全量。首次阶段变化与首段正文在间隔允许时立即发送；15 秒没有新内容时只刷新耗时。
+- 内容依次为阶段行、已持久化的回答正文前缀、按[企微部署](WECOM-text-deployment.md#思考过程)规则组合的思考过程（答案优先、截短提示）。阶段行显示阶段和自受理起的已用秒数，阶段包括排队中（第 N 位）、准备会话、执行中、调用工具（展示名）和模型重试。阶段只取自已持久化的平台状态事件与实际模型/工具事实（[Runtime HLD §8.5](HLD-agent-runtime-M1.md#85-实际模型工具事实与必要审计)），没有对应事实时不显示，不按时间推测；工具只显示展示名，不含参数或结果。
+- 进度帧与处理中提示一样不经回执状态机、不记发送意图；发送失败或 ACK 丢失不重发该帧，由后续帧覆盖，不影响终态回复。每帧发送前按 §8.2 的订阅复核规则重验当前发送者授权与绑定（每批复核、空闲时按固定间隔），失效后停止更新并按撤权规则结束。
+- 进度帧与媒体共用 §14.2.3 的频率额度规划；额度不足时降低更新频率，优先保留终态回复。
+- 只在终态发送 `finish=true`：完成时为最终答案；失败、取消和排队超时时为 [§16.1.1](#1611-用户可见失败分类) 的分类说明。终态回复沿用回执状态机和一次性发送语义。
+- 回复有效期为收到消息后 9 分钟，留在官方 stream 时限（首次发送起 10 分钟）之内；合并后的 Execution 按文字消息计算。有效期结束前 30 秒仍未到终态时，领取回执并在当前 stream 定稿：保留已有回答，附固定超时提示，以 `finish=true` 结束。Execution 继续运行，结果保留在平台历史中；之后以主动消息补发最终答案，须先核实长连接主动发送的能力与限额，核实前不承诺补发。
+- 排队与补充指令：入队时首帧为排队提示，位次变化后更新，出队时改为“开始处理”，随后按上述规则更新进度。补充指令消息的首帧说明正在补充，Runtime 接受后以“已补充到当前回复”结束；转入排队后按排队提示继续；投递失败时以对应失败说明结束。
+
+失败提示送达：
+
+- 终态回复领取前重验当前身份、绑定与权限。依赖暂时不可用时不放弃回执：在回复有效期内按有界指数退避重试（首次 1 秒、上限 15 秒）；有效期结束前 30 秒仍不能完成复核时，改发不含业务内容的固定失败说明（内部错误类，附 `traceId`）并结束 stream，不静默转为 `expired`。
+- 复核确认主体禁用、权限撤销，或绑定、配置修订不一致时，仍按原规则取消，不发送。
+- 已经到期的回执记为 `expired`；`sending`、`unknown` 与 `abandoned` 的语义不变。
 
 ### 14.3 自有交互入口
 
@@ -2275,12 +2354,35 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 | 单个 Runtime Session 恢复失败 | 对应 Conversation 显示“会话不可用”，历史只读且禁止继续发送；其他 Conversation 不受影响；企微回复“当前会话不可用，发送 /new 开始新会话” |
 | 原生会话被受理不明的 Turn 阻塞（Runtime 返回 `RUNTIME_SESSION_BLOCKED`） | 本次执行失败；对应 Conversation 显示“会话不可用”，历史只读且禁止继续发送，可明确新建会话；其他 Conversation 不受影响；企微的失败提示附带 `/new` 指引 |
 | API 等待容量已满 | 受理前拒绝，可稍后重试，不返回新任务标识 |
-| 已受理任务等待到期 | 原执行明确失败，保留失败原因 |
+| Web/渠道排队已满或 Agent 等待容量已满 | 繁忙，返回当前排队条数，不创建消息（§12.5） |
+| 已受理任务等待到期 | 原执行明确失败，保留失败原因；Web/渠道排队消息显示排队超时 |
 | 取消已请求但停止未确认 | 取消处理中，同 Conversation 后续任务继续等待 |
 | Runtime 接受或外部结果不确定 | 待核实，不能显示已取消或成功；相关 Conversation 禁止继续执行 |
 | Agent 明确拒绝新任务 | 繁忙，可重试 |
 | Provider 限流或短暂故障 | 明确提示稍后重试 |
 | Connection 失效 | 说明原因并提供重连入口 |
+
+#### 16.1.1 用户可见失败分类
+
+Web 与托管渠道的执行失败按下表归入渠道无关的用户可见分类，产品要求见[平台 PRD 10.5](../prd/PRD-agent-platform-M1.md#105-执行中消息与失败提示)。规则如下：
+
+- 只按已持久的受限原因映射：Runtime `protocolCode`、模型调用 `failureCode`、文件交换错误码和 Platform 任务原因。不解析错误正文、供应商消息或日志。
+- 每个码只映射一个分类，未知码归入内部错误。分类与文案模板由 Core 统一维护，Web 与企微读取同一结果；企微的具体文案见[企微部署](WECOM-text-deployment.md#共用执行与回复)。
+- 码到分类的完整对照随实现以 Contract 固定并测试。新增码先确定分类再发布。
+- 文案不含内部异常、SQL、Pod 名称、Token、凭证或供应商错误正文。
+- 待核实不是失败分类，仍按 §16.1 显示；停止与取消、繁忙、回复超时继续使用各自的提示。
+
+| 分类 | 主要来源（示例） | 用户说明与建议 |
+| --- | --- | --- |
+| 模型服务繁忙或超时 | 可重试的模型调用 `failureCode` 或 Runtime `protocolCode`：限流、超时、上游暂时故障、流中断 | 模型服务暂时繁忙或超时，请稍后重试 |
+| Agent 正在更新 | 正在应用新的 Runtime 修订，或 Workload 启动、更新中导致的 `AGENT_UNAVAILABLE` | Agent 正在更新，完成后重试；有可靠阶段信息时给出预计等待时间 |
+| 会话准备失败 | Session Sandbox 准备或恢复失败，Driver 物化或启动失败；已判定会话不可用的除外 | 会话准备失败，请重试，仍失败时新建会话 |
+| 附件读取失败 | `RUNTIME_FILE_INPUT_*`、`RUNTIME_FILE_BRIDGE_*` 等文件交换错误，附件过期或超限 | 附件无法读取，请重新发送附件 |
+| 权限已失效 | `AUTHORIZATION_REVOKED`、`RUNTIME_AUTHORIZATION_DENIED`、渠道权限撤销 | 当前没有使用该 Agent 的权限，请联系 Owner 或管理员 |
+| 个人 Relay Key 不可用 | 个人 Key 缺失、失效、额度不足或无权调用所选模型（§10.7） | 请到个人设置处理 Relay Key |
+| 排队超时 | `TASK_WAIT_TIMEOUT` | 排队超过等待时限，未处理，请稍后重新发送 |
+| 会话不可用 | `CONVERSATION_UNAVAILABLE`、`RUNTIME_SESSION_BLOCKED`、Runtime Session 恢复失败 | 当前会话不可用，请新建会话；企微发送 `/new` |
+| 内部错误 | 其他未分类的错误 | 平台内部错误，附 `traceId` 便于反馈 |
 
 ### 16.2 幂等
 
@@ -2410,6 +2512,7 @@ Playwright 覆盖：
 - Connection 独立 Web 的 LDAP 登录、GitHub OAuth、Grant 再确认、三项 Action、调用记录、管理员未知结果处理、换账号和撤销。
 - Alice/Bob 分别绑定专用 GitHub 账号；跨主体、客户端、Connection、Credential、OAuth transaction 和调用记录访问按资源不存在拒绝。
 - 企微身份映射、群聊和线程按发送者隔离 Platform Conversation/Runtime Session、按发送者使用 Connection，以及其他发送者不能向活跃 Turn 追加补充指令。
+- 执行中消息按 §12.5 与 §14.2.4 验证：Web 与企微在补充指令 capability 为真、为假两种 Runtime 下的补充、排队与繁忙；入队、位次变化、开始处理、撤回（Web）、排队超时和取消的提示；停止、待核实、重启、撤权和会话不可用后排队消息的收敛；企微先图后文合并、同一会话保序、流式进度、超时定稿，以及失败提示在复核依赖暂时不可用时仍在有效期内送达。
 
 ### 19.5 负载与故障测试
 
