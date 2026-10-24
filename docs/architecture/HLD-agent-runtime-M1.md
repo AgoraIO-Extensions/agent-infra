@@ -543,7 +543,7 @@ service token 或原对象引用；实际读取继续经过 8.5.1 的持久 inte
 
 此能力须在新旧契约消费者、FileAuthority/PostgreSQL/对象存储、Host/Driver 的当前授权、
 跨主体/Conversation、停止、重启/unknown、损坏字节与清理 conformance 通过后才启用。
-未实现或未验证时继续拒绝带文件调用；已有图片 `local_image` 路径及其他 Driver 的声明不被
+未实现或未验证时继续拒绝带文件调用；已有图片 `localImage` 路径及其他 Driver 的声明不被
 静默扩大。实际浏览器正例须核对上传 fileId/内容 hash、所选 Skill source/package/version、
 真实工具回执和终态；操作员直接向 Pod/cwd 写文件只属于读取机制 fixture。
 
@@ -719,7 +719,7 @@ before hook 提供 callID 本身不证明其与实际请求的关联；同参数
 
 | Driver | 附件的原生图片输入 | 平台指令注入点 | 最终回答确认点 | 移除的隐式发布 |
 | --- | --- | --- | --- | --- |
-| Codex | `local_image`，指向物化后的工作区文件 | thread/start 的 `developerInstructions` | `item/completed` 的 agentMessage 文本，在 `turn/completed` 写终态前解析 | apply_patch `fileChange` 的 `persistNativeFileChange` |
+| Codex | app-server v2 `UserInput` 的 `localImage`，指向物化后的工作区文件 | thread/start 的 `developerInstructions` | `item/completed` 的 agentMessage 文本，在 `turn/completed` 写终态前解析 | apply_patch `fileChange` 的 `persistNativeFileChange` |
 | Claude | SDK image 内容块 | 平台固定的 `systemPrompt` | SDK `result` 消息，在写终态前解析 | PostToolUse 中 `Write`/`Edit` 的结果文件分支，工具事实保留 |
 | OpenCode（ACP） | ACP image 块，需协商 `promptCapabilities.image` | 平台只读的 `instructions` 文件，不放在工作区或可写位置 | `session/prompt` 返回 stopReason 后、写终态前；`agent_message_chunk` 的 `image`/`resource_link` 块在流中暂存，一并处理 | `tool_call` diff 的 `newText` |
 | Pi | RPC image 块 | 系统提示钩子 | `prompt` 返回 stopReason 后、写终态前 | `write`/`edit` 执行完成后的结果文件 |
@@ -731,7 +731,7 @@ before hook 提供 callID 本身不证明其与实际请求的关联；同参数
 - 最终回答取本次执行已确认的全部文本事件，按顺序拼接；只解析一次。发布计划与进度的持久化、重启后的收敛
   以及超过 10 个引用时的记录方式，以工程 Spec [§15.4.4](SPEC-agent-infra-M1-engineering-architecture.md#1544-会话-sandbox-文件交换)
   的“解析与发布”为准。
-- Codex `local_image` 指向工作区内的物化文件，app-server 在处理 `turn/start` 时才按路径读取。物化完成到读取之间
+- Codex `localImage` 指向工作区内的物化文件，app-server 在处理 `turn/start` 时才按路径读取。物化完成到读取之间
   有毫秒级窗口，同一 Sandbox 内残留的后台进程（[ADR-0031](../adr/0031-enable-native-tools-inside-session-sandbox.md)）
   理论上可以在窗口内替换该文件。结论：接受，不改实现。理由：
   - 能写这个文件的只有本 Session Sandbox 内的进程，它们本来就能读写本会话工作区、影响本会话后续的模型输入；

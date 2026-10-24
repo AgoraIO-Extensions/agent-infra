@@ -17,7 +17,7 @@
 
 [平台 PRD §12.1](../prd/PRD-agent-platform-M1.md#121-附件和结果文件) 要求：四个标准模板在 Web 和平台托管企微都支持附件与结果文件；企微按 Channel 能力和企微接口限制收发文本、图片和文件。ADR-0031 之后，Agent 在 Session Sandbox 内用原生工具处理文件。实际行为与这些要求的差距如下：
 
-- **附件**：ADR-0014 §3 要求附件只物化到 Runtime 专属临时目录。Codex 只接受图片，作为临时 `local_image` 交给模型，其他类型直接拒绝；其余 Driver 也只接受图片。原生工具读不到工作区外的附件，PDF、表格这类文件到不了 Agent。
+- **附件**：ADR-0014 §3 要求附件只物化到 Runtime 专属临时目录。Codex 只接受图片，作为临时 `localImage` 交给模型，其他类型直接拒绝；其余 Driver 也只接受图片。原生工具读不到工作区外的附件，PDF、表格这类文件到不了 Agent。
 - **结果文件**：四个 Driver 只会把 apply_patch、Write/Edit 或 ACP diff 产生的单个 UTF-8 文本文件隐式发布为 `text/plain`，每次执行一个。shell 生成的图片和二进制文件发不出去，每改一次代码却会收到一个文件。
 - **原生协议**：固定 Codex 版本的最终回答 `agentMessage` 只有文本，Claude、Pi 也是如此。只有 ACP 的 `agent_message_chunk` 能携带 `image`、`resource_link` 块。
 - **企微**：长连接入站没有取下载解密所需的 `aeskey`，也没有 media resolver；出站会丢弃结果文件，却返回 `sent`。回调模式带结果文件时整条回复失败。固定版本的企微 SDK `@wecom/aibot-node-sdk@1.0.7` 已提供 `downloadFile`、`uploadMedia`、`replyMedia`。
