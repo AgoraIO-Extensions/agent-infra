@@ -227,7 +227,11 @@ async function lockedContext(
 				!source.policy ||
 				source.resourceFence < 1 ||
 				allocation.desired_state !== "stopped" ||
-				!isDeepStrictEqual(source.policy, allocation.resource_policy) ||
+				// A retained PVC may resume after the Agent configuration or Workload
+				// revision advances. The stop receipt pins the source policy and the
+				// adapter rechecks the current PVC spec, UID, ownership and fence before
+				// rebinding; requiring byte-identical policies here made every legitimate
+				// revision change permanently stale (#3340).
 				!isDeepStrictEqual(source.observation, allocation.resource_observation)
 			)
 				return waiting("lifecycle_stale");

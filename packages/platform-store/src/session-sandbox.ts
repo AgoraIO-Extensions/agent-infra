@@ -149,7 +149,8 @@ export async function readSessionSandboxRuntimeState(
 			!Number.isSafeInteger(resourceFence) ||
 			source.resourceFence >= resourceFence ||
 			source.policy.namespace !== workerPolicy.namespace ||
-			!isDeepStrictEqual(source.policy, policy) ||
+			(!isDeepStrictEqual(source.policy, policy) &&
+				!(lifecycle.stopReceipt && row.desired_state === "stopped")) ||
 			!isDeepStrictEqual(source.observation, row.resource_observation) ||
 			!isSessionSandboxObservationValidV1(
 				{ sandbox, policy: source.policy, desiredState: "running" },
