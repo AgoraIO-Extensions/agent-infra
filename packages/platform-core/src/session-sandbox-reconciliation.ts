@@ -432,8 +432,8 @@ export function sessionSandboxReconcileProgressV1(input: {
 /**
  * 记录一次观测后的重试决定。`previous` 是上一次“有变化”的审计行：它的进度指纹，以及
  * 写出该行时的 outbox 尝试次数（`attempt_count`）。指纹相同视为没有变化：不再写审计，
- * 并且只有 `unknown` 按停滞期间的连续重试序号退避（其余状态是在等待就绪或删除，保持
- * 基础延迟）。没有记录、或记录无法识别（例如旧版本写的审计行没有指纹或尝试次数），都按
+ * 并按停滞期间的连续重试序号退避，避免不可恢复配置或 CrashLoop 让 Worker 热循环。没有记录、
+ * 或记录无法识别（例如旧版本写的审计行没有指纹或尝试次数），都按
  * “有变化”处理。
  */
 export function decideSessionSandboxRetryV1(input: {
@@ -455,15 +455,11 @@ export function decideSessionSandboxRetryV1(input: {
 		(attemptCount as number) > (previous.attempt as number);
 	return {
 		changed: !unchanged,
-		delayMs:
-			unchanged && input.status === "unknown"
-				? sessionSandboxRetryDelayMsV1(
-						// 同一次停滞里的重试序号；乱序或异常的计数不会给出非法值。
-						Math.max(
-							1,
-							(attemptCount as number) - (previous.attempt as number),
-						),
-					)
-				: sessionSandboxRetryBaseDelayMsV1,
+		delayMs: unchanged
+			? sessionSandboxRetryDelayMsV1(
+					// 同一次停滞里的重试序号；乱序或异常的计数不会给出非法值。
+					Math.max(1, (attemptCount as number) - (previous.attempt as number)),
+				)
+			: sessionSandboxRetryBaseDelayMsV1,
 	};
 }
