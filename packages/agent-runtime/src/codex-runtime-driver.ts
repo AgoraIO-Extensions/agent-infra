@@ -166,8 +166,8 @@ import type {
 	RuntimeFileResultV1,
 } from "./runtime-file-bridge.js";
 import {
+	declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1,
 	readRuntimeFileResultReceiptV1,
-	rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1,
 } from "./runtime-file-bridge.js";
 import {
 	isSandboxAttachmentNativeImageV1,
@@ -7446,11 +7446,23 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				try {
 					await ensureInput();
 				} catch (error) {
-					// #3314：此时既没有本操作的 Driver 记录，也没有任何原生调用；平台对附件的
-					// 明确拒绝可以由 Host 持久化为 rejected。清理失败等其他错误保持原语义。
-					rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1(error);
+					// #3314/#3373：此时既没有本操作的 Driver 记录，也没有任何原生调用。平台对附件的
+					// 明确拒绝由 Host 持久化为 rejected；其他读取或物化失败声明本次 Turn 未提交。
+					declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+						error,
+						"file_input_unavailable",
+						command,
+					);
 				}
-				revalidateInput();
+				try {
+					revalidateInput();
+				} catch (error) {
+					declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+						error,
+						"session_preparation_failed",
+						command,
+					);
+				}
 			}
 			return await this.executePreparedSubmitTurn(
 				command,
@@ -8106,12 +8118,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					command,
 					prepared.operation.nativeSessionRef,
 				);
-			} else {
-				await this.markAcceptanceUncertain(
+				// #3373：恢复已有 thread 失败时没有发出 turn/start，本操作的记录也已删除；
+				// Session 恢复被明确拒绝时保持原错误，其他失败声明本次 Turn 未提交。
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					error,
+					"session_preparation_failed",
 					command,
-					prepared.operation.nativeSessionRef,
 				);
 			}
+			await this.markAcceptanceUncertain(
+				command,
+				prepared.operation.nativeSessionRef,
+			);
 			throw error;
 		}
 		if (
@@ -8141,11 +8159,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					: { items: [{ type: "text", text }], cleanup: async () => {} };
 		} catch (error) {
 			// Nothing crossed the native side; release the prepared operation so a
-			// corrected retry is not reported as unknown.
-			await this.discardUnsubmittedPreparedOperation(
-				command,
-				prepared.operation.nativeSessionRef,
-			);
+			// corrected retry is not reported as unknown. #3373: once released, the
+			// Host may persist this Turn as not submitted.
+			if (
+				await this.discardUnsubmittedPreparedOperation(
+					command,
+					prepared.operation.nativeSessionRef,
+				)
+			)
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					error,
+					"session_preparation_failed",
+					command,
+				);
 			throw error;
 		}
 		if (!nativeInput) stateInvalid();
@@ -8338,6 +8364,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					retryable: false,
 				});
 			}
+			// #3373：连接 app-server 或提交前的 Grant 复核失败时 turn/start 尚未发出。删除本操作的
+			// 已准备记录（否则会让原生会话永久阻塞）后声明本次 Turn 未提交。
+			if (
+				!submissionStarted &&
+				!pendingModelTurn &&
+				(await this.discardUnsubmittedPreparedOperation(
+					command,
+					session.nativeSessionRef,
+				))
+			)
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					error,
+					"session_preparation_failed",
+					command,
+				);
 			if (
 				submissionStarted &&
 				(modelTurnAdmitted || !this.hasPendingModelAdmission(command))
@@ -14351,11 +14392,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	/**
 	 * Releases a prepared submit operation that never reached the native side.
 	 * A concurrent uncertainty marker or active Execution keeps it in place.
+	 * Returns whether this operation now has no Driver record (#3373).
 	 */
 	private async discardUnsubmittedPreparedOperation(
 		command: CodexSubmitTurnCommand,
 		nativeSessionRef: string,
-	) {
+	): Promise<boolean> {
 		const key = operationKey(command);
 		try {
 			await this.update((state) => {
@@ -14374,7 +14416,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			});
 		} catch {
 			// The original materialization failure is the actionable error.
+			return false;
 		}
+		return ownRecordValue(this.readState().operations, key) === undefined;
 	}
 
 	private session(nativeSessionRef: string) {

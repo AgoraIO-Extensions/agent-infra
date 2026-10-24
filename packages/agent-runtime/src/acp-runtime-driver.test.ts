@@ -1833,30 +1833,30 @@ it.each([
 			});
 			expect(await sessions()).toEqual([]);
 
-			// 无法确认的读取失败不转换，保持原有的不确定语义。
+			// #3373：不是明确拒绝的读取失败发生在原生 Session 与本操作记录之前，声明未提交。
+			const uncertainCommand = openCodeCommand(
+				{ text: "inspect", attachments: ["file-png"] },
+				"uncertain",
+			);
 			const uncertain = await driver
-				.execute(
-					openCodeCommand(
-						{ text: "inspect", attachments: ["file-png"] },
-						"uncertain",
-					),
-					{
-						fileBridge: {
-							...openCodeAttachmentBridge(),
-							readInput: async () => {
-								throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
-							},
+				.execute(uncertainCommand, {
+					fileBridge: {
+						...openCodeAttachmentBridge(),
+						readInput: async () => {
+							throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
 						},
 					},
-				)
+				})
 				.catch((error: unknown) => error);
 			expect(uncertain).toMatchObject({
-				message: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+				code: "RUNTIME_TURN_NOT_SUBMITTED",
+				retryable: true,
+				driverFailureKind: "not_submitted",
+				reason: "file_input_unavailable",
 			});
-			expect(uncertain).not.toHaveProperty(
-				"driverFailureKind",
-				"file_input_rejected",
-			);
+			expect(await driver.lookupOperation(uncertainCommand)).toEqual({
+				state: "missing",
+			});
 
 			// 被拒绝的执行不占用该 Conversation：下一条消息正常受理。
 			const next = openCodeCommand(
@@ -2001,7 +2001,12 @@ it("gives an OpenCode peer without image input only the manifest and keeps the w
 				),
 				{ fileBridge: openCodeAttachmentBridge(reads) },
 			),
-		).rejects.toThrow("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			cause: expect.objectContaining({
+				message: "RUNTIME_FILE_INPUT_NOT_AUTHORIZED",
+			}),
+		});
 		await expect(
 			driver.execute(
 				openCodeCommand(
@@ -2013,7 +2018,10 @@ it("gives an OpenCode peer without image input only the manifest and keeps the w
 				),
 				{ fileBridge: openCodeAttachmentBridge(reads) },
 			),
-		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			reason: "file_input_unavailable",
+		});
 		expect(reads).toEqual(["file-foreign"]);
 	} finally {
 		await driver.close();

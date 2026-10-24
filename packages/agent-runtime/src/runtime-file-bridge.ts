@@ -15,7 +15,11 @@ import {
 	validateRuntimeBusinessBindingV4,
 	validateRuntimeBusinessBindingV5,
 } from "@agent-infra/contracts/runtime";
-import { RuntimeHostError } from "./errors.js";
+import {
+	RuntimeHostError,
+	type RuntimeTurnNotSubmittedReason,
+	RuntimeTurnNotSubmittedError,
+} from "./errors.js";
 
 export type RuntimeFileResultV1 = ReturnType<
 	typeof FileProjectionV1Schema.parse
@@ -70,6 +74,31 @@ export function rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1(
 			"file_input_rejected",
 		);
 	throw error;
+}
+
+/**
+ * #3373：Driver 只在原生提交点之前调用，且此时本操作没有 Driver 持久记录（从未写入，或已在
+ * 调用前删除并确认）。平台对附件的明确拒绝仍按 #3314 声明为 `file_input_rejected`；Session
+ * 恢复被原生 Runtime 明确拒绝时保持原错误，以便触发代次隔离；其他失败都声明本次 Turn 未提交，
+ * 由 Host 核实后持久化可重试的 `RUNTIME_TURN_NOT_SUBMITTED`。原始错误只作为进程内 `cause`。
+ */
+export function declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+	error: unknown,
+	reason: RuntimeTurnNotSubmittedReason,
+	command: { readonly schemaVersion: number },
+): never {
+	if (error instanceof RuntimeTurnNotSubmittedError) throw error;
+	if (
+		error instanceof RuntimeHostError &&
+		(error.driverFailureKind === "session_recovery_failed" ||
+			error.driverFailureKind === "file_input_rejected")
+	)
+		throw error;
+	if (error instanceof RuntimeFileInputRejectedError)
+		rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1(error);
+	// 只有 submit V2 及以上的结果枚举能表示未提交；旧 submit 与原生 Skill 命令保持原错误。
+	if (command.schemaVersion !== 2) throw error;
+	throw new RuntimeTurnNotSubmittedError(reason, { cause: error });
 }
 
 /**

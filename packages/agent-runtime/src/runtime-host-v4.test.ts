@@ -32,7 +32,7 @@ import type {
 	RuntimeExternalActionAuthorization,
 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
-import { RuntimeHostError } from "./errors.js";
+import { RuntimeHostError, RuntimeTurnNotSubmittedError } from "./errors.js";
 import {
 	FakeRuntimeDriver,
 	fakeNativeCommandCapabilityId,
@@ -1040,6 +1040,133 @@ it.each([
 		);
 	},
 );
+
+// #3373：Driver 在原生提交点之前声明本次 Turn 未提交时，Host 核实后持久化可重试的结果。
+const turnNotSubmittedResult = {
+	outcome: "rejected",
+	code: "RUNTIME_TURN_NOT_SUBMITTED",
+	message: "Runtime turn was not submitted",
+	reason: "file_input_unavailable",
+	retryable: true,
+} as const;
+
+/** 同一 Execution 的重新投递：更高的 fence 与新签发的 Grant。 */
+function resubmission(fence: number) {
+	return delivery(
+		RuntimeSubmitTurnRequestV4Schema.parse({
+			...submission(),
+			requestId: `request-${fence}`,
+			operation: {
+				kind: "execution",
+				id: "execution-1",
+				deliveryFence: fence,
+				executionDeliveryFence: fence,
+			},
+		}),
+	);
+}
+
+it("persists a Driver-declared unsubmitted Turn and re-executes it only under a higher fence (#3373)", async () => {
+	const f = await setup();
+	const execute = vi
+		.spyOn(f.driver, "execute")
+		.mockRejectedValueOnce(
+			new RuntimeTurnNotSubmittedError("file_input_unavailable"),
+		);
+	const lookup = vi.spyOn(f.driver, "lookupOperation");
+
+	const first = await f.host.submitTurnV4(f.transport);
+	expect(first.result).toEqual(turnNotSubmittedResult);
+	// Host 先只读核实 Driver 没有该操作的记录，才持久化未提交。
+	expect(lookup).toHaveBeenCalledTimes(2);
+	// 相同 fence 的重放与 Host 重启都返回原结果，不再进入 Driver。
+	expect(await f.host.submitTurnV4(f.transport)).toEqual(first);
+	const reopened = await f.reopen();
+	expect(await reopened.submitTurnV4(f.transport)).toEqual(first);
+	expect(execute).toHaveBeenCalledTimes(1);
+	expect(await readFile(f.path, "utf8")).toContain(
+		"RUNTIME_TURN_NOT_SUBMITTED",
+	);
+
+	// 更高 fence 与新 Grant 的同一操作重新执行，并取得真实的受理结果。
+	const resubmitted = await reopened.submitTurnV4(resubmission(2));
+	expect(resubmitted).toMatchObject({
+		hostSessionRef: first.hostSessionRef,
+		operationId: first.operationId,
+		result: { outcome: "accepted", status: "running" },
+	});
+	expect(execute).toHaveBeenCalledTimes(2);
+	// 旧 fence 的 Grant 不能再作用于已受理的重提，也不会再进入 Driver。
+	await expect(reopened.submitTurnV4(f.transport)).rejects.toMatchObject({
+		code: "RUNTIME_GRANT_INVALID",
+	});
+	expect(execute).toHaveBeenCalledTimes(2);
+});
+
+it.each([
+	["holds a record for the operation", "found"],
+	["cannot confirm the operation", "unknown"],
+	["cannot be queried", "throws"],
+] as const)(
+	"does not persist a declared unsubmitted Turn when the Driver %s (#3373)",
+	async (_name, lookupState) => {
+		const f = await setup();
+		const execute = f.driver.execute.bind(f.driver);
+		vi.spyOn(f.driver, "execute").mockImplementation(
+			async (command, context) => {
+				// Driver 已经产生了该操作的记录（可能已有原生副作用）后才声明未提交。
+				if (lookupState === "found") await execute(command, context);
+				throw new RuntimeTurnNotSubmittedError("session_preparation_failed");
+			},
+		);
+		if (lookupState === "unknown")
+			vi.spyOn(f.driver, "lookupOperation")
+				.mockResolvedValueOnce({ state: "missing" })
+				.mockResolvedValue({ state: "unknown" });
+		if (lookupState === "throws")
+			vi.spyOn(f.driver, "lookupOperation")
+				.mockResolvedValueOnce({ state: "missing" })
+				.mockRejectedValue(
+					new RuntimeHostError(
+						"RUNTIME_DRIVER_RECOVERY_FAILED",
+						"Runtime operation recovery failed",
+						503,
+						false,
+						"unavailable",
+					),
+				);
+
+		await expect(f.host.submitTurnV4(f.transport)).rejects.toMatchObject({
+			code: "RUNTIME_DRIVER_INVALID",
+			retryable: true,
+		});
+		expect(await readFile(f.path, "utf8")).not.toContain(
+			"RUNTIME_TURN_NOT_SUBMITTED",
+		);
+	},
+);
+
+it("refuses a Driver record that claims the Turn was not submitted (#3373)", async () => {
+	const f = await setup();
+	vi.spyOn(f.driver, "execute").mockImplementation(async (command) => ({
+		schemaVersion: 2,
+		agentId: command.agentId,
+		conversationId: command.conversationId,
+		sessionGeneration: command.sessionGeneration,
+		kind: "submit-turn",
+		operationId: command.operationId,
+		nativeSessionRef: "native-forged",
+		result: turnNotSubmittedResult,
+	}));
+
+	// 未提交只能由 Host 在核实 Driver 没有记录后写入，Driver 记录不能携带它。
+	await expect(f.host.submitTurnV4(f.transport)).rejects.toMatchObject({
+		code: "RUNTIME_DRIVER_INVALID",
+	});
+	expect(await readFile(f.path, "utf8")).not.toContain(
+		"RUNTIME_TURN_NOT_SUBMITTED",
+	);
+});
 
 it("decides bridge expiry on the injected grant clock instead of the wall clock", async () => {
 	const directory = await mkdtemp(
