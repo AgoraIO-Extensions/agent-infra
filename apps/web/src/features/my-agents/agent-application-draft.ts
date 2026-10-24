@@ -86,6 +86,10 @@ export type AgentApplicationValidationContext = {
 	staleModelIndexes?: readonly number[];
 	staleTemplate: boolean;
 	standardChoicesBlocked: boolean;
+	/** 所选模板不可申请的原因（与模板就绪列表同一套文案），作为「标准模板」的字段错误（#3328 N10-2-01）。 */
+	templateUnavailableMessage?: string;
+	/** 修改申请不能更换模板：模板已移除或不可申请时的字段错误，优先于其余模板错误（#3328）。 */
+	lockedTemplateMessage?: string;
 };
 
 export function validateAgentApplicationDraft(
@@ -100,8 +104,16 @@ export function validateAgentApplicationDraft(
 		if (context.requiresTemplateReadiness && !draft.templateRevision)
 			errors.templateId = "模板验证状态已过期，请刷新后重试。";
 		if (context.staleTemplate) errors.templateId = "该模板已移除，请重新选择。";
+		// 部署整体不可用时说明部署；只是所选模板不可申请时沿用就绪原因，不笼统写「部署选项暂不可用」，
+		// 未选模板时仍提示选择（#3328 N10-2-01）。
 		if (context.standardChoicesBlocked)
-			errors.templateId = context.configurationMessage ?? "部署选项暂不可用。";
+			errors.templateId =
+				context.configurationMessage ??
+				(draft.templateId
+					? (context.templateUnavailableMessage ?? "部署选项暂不可用。")
+					: "请选择标准模板。");
+		if (context.lockedTemplateMessage)
+			errors.templateId = context.lockedTemplateMessage;
 	} else if (draft.sourceKind === "custom-multi-service") {
 		if (!draft.manifest?.trim()) errors.manifest = "请上传或粘贴多服务 YAML。";
 	} else if (!draft.imageReference.trim()) {

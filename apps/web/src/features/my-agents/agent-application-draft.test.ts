@@ -268,6 +268,57 @@ describe("Agent application draft", () => {
 		expect(errors.templateId).toBe("模板验证状态已过期，请刷新后重试。");
 	});
 
+	// #3328 N10-2-01：所选模板不可申请时字段错误沿用就绪原因，部署整体的问题仍优先；未选模板时提示选择；
+	// 修改申请不能更换模板时的说明优先于其余模板错误。
+	it("explains a blocked template with its readiness reason instead of a generic deployment error", () => {
+		const blocked = {
+			modelConfigurationVisible: false,
+			requiresTemplateReadiness: true,
+			staleModel: false,
+			staleTemplate: false,
+			standardChoicesBlocked: true,
+			templateUnavailableMessage: "模板已更新，请刷新后确认。",
+		};
+		expect(
+			validateAgentApplicationDraft(standardCreateDraft, blocked).templateId,
+		).toBe("模板已更新，请刷新后确认。");
+		expect(
+			validateAgentApplicationDraft(
+				{ ...standardCreateDraft, templateId: "", templateRevision: "" },
+				{ ...blocked, templateUnavailableMessage: undefined },
+			).templateId,
+		).toBe("请选择标准模板。");
+		expect(
+			validateAgentApplicationDraft(standardCreateDraft, {
+				...blocked,
+				configurationMessage: "部署选项已过期，请重新加载后再提交。",
+			}).templateId,
+		).toBe("部署选项已过期，请重新加载后再提交。");
+		// 部署整体有问题（过期、不可用或没有标准模板）时改选模板也无法提交，未选模板同样说明部署，
+		// 不引导选择（同 #3291 N9-2-01「部署没有标准模板」的字段错误）。
+		expect(
+			validateAgentApplicationDraft(
+				{ ...standardCreateDraft, templateId: "", templateRevision: "" },
+				{
+					...blocked,
+					templateUnavailableMessage: undefined,
+					configurationMessage:
+						"当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。",
+				},
+			).templateId,
+		).toBe("当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。");
+		expect(
+			validateAgentApplicationDraft(standardCreateDraft, {
+				...blocked,
+				staleTemplate: true,
+				configurationMessage:
+					"当前申请包含已移除的部署选项，请重新加载并重新选择。",
+				lockedTemplateMessage:
+					"该模板已从当前部署移除。已有申请不能更换模板，请新建申请。",
+			}).templateId,
+		).toBe("该模板已从当前部署移除。已有申请不能更换模板，请新建申请。");
+	});
+
 	it("marks only repeated environment and Secret names", () => {
 		const errors = validateAgentApplicationDraft(
 			{

@@ -14,10 +14,7 @@ import type {
 import type { AgentDefaultRelayKeyCheck } from "../agent-configuration/agent-configuration.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import { RecoveryButton } from "../recovery-button.js";
-import {
-	AgentApplicationForm,
-	applicationSubmissionErrorId,
-} from "./agent-application-form.js";
+import { AgentApplicationForm } from "./agent-application-form.js";
 import {
 	type AgentApplicationEditAction,
 	agentApplicationEditActionLabels,
@@ -126,6 +123,18 @@ export function AgentApplicationSubmissionScreen(
 		props.error?.code === "INTERNAL_ERROR"
 			? "申请提交失败，部署依赖暂不可用，请稍后重试。"
 			: "申请提交失败，非敏感内容已保留。请重新填写 Secret 或模型凭证后再提交。";
+	// 提交失败只在页面顶部说明一次（表单顶部的 danger 提示，tabIndex=-1）；服务端整表校验失败
+	// （INVALID_REQUEST）时表单把焦点交给这条提示，不再在表单内重复同一结论（#3268 N8-2-03）；修改申请的
+	// 入口身份不可用（ACTION_UNAVAILABLE）时同样聚焦这里（#3291 N9-2-03）。
+	const submissionErrorMessage = props.error
+		? identityEntryUnavailable
+			? "当前部署不支持此申请的入口身份校验，请新建申请。"
+			: validationError
+				? "申请内容未通过服务端校验，请检查字段后重试。"
+				: props.error.retryable === false
+					? "申请已变更或当前不可用，请刷新页面后核对。"
+					: submissionFailureMessage
+		: undefined;
 
 	return (
 		<section aria-labelledby="agent-application-submission-heading">
@@ -179,28 +188,6 @@ export function AgentApplicationSubmissionScreen(
 							) : null}
 						</div>
 					) : null}
-					{props.error ? (
-						// 提交失败只在这里说明一次；服务端整表校验失败（INVALID_REQUEST）时表单把焦点交给
-						// 这条提示（tabIndex=-1），不再在表单内重复同一结论（#3268 N8-2-03）；修改申请的
-						// 入口身份不可用（ACTION_UNAVAILABLE）时同样聚焦这里（#3291 N9-2-03）。
-						<Alert
-							tone="danger"
-							role="alert"
-							className="application-form-alert"
-							id={applicationSubmissionErrorId}
-							tabIndex={-1}
-						>
-							<AlertDescription>
-								{identityEntryUnavailable
-									? "当前部署不支持此申请的入口身份校验，请新建申请。"
-									: validationError
-										? "申请内容未通过服务端校验，请检查字段后重试。"
-										: props.error.retryable === false
-											? "申请已变更或当前不可用，请刷新页面后核对。"
-											: submissionFailureMessage}
-							</AlertDescription>
-						</Alert>
-					) : null}
 					{props.result ? null : (
 						<AgentApplicationForm
 							key={
@@ -212,6 +199,7 @@ export function AgentApplicationSubmissionScreen(
 							cancelAction={cancelAction}
 							serverError={props.error}
 							showDeploymentStatus={false}
+							submissionErrorMessage={submissionErrorMessage}
 						/>
 					)}
 					{props.result ? (
