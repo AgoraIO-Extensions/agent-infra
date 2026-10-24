@@ -470,7 +470,7 @@ describe("Session Sandbox reconcile retry pacing (#2456)", () => {
 		).toEqual({ changed: true, delayMs: 1_000 });
 	});
 
-	it("never slows the wait for readiness or deletion, only the unknown retry", () => {
+	it("backs off stalled readiness and deletion instead of hot-looping", () => {
 		const progress = progressOf({ status: "observed" });
 		for (const status of ["observed", "applying", "ready", "stopped"])
 			expect(
@@ -480,7 +480,7 @@ describe("Session Sandbox reconcile retry pacing (#2456)", () => {
 					attemptCount: 100,
 					status,
 				}),
-			).toEqual({ changed: false, delayMs: 1_000 });
+			).toEqual({ changed: false, delayMs: 60_000 });
 	});
 
 	it("treats an unrecognized previous record as a change", () => {
