@@ -90,7 +90,48 @@ export type AgentApplicationValidationContext = {
 	templateUnavailableMessage?: string;
 	/** 修改申请不能更换模板：模板已移除或不可申请时的字段错误，优先于其余模板错误（#3328）。 */
 	lockedTemplateMessage?: string;
+	/** 创建申请时部署里没有一个模板可申请：未选模板时的字段错误，代替「请选择标准模板。」（#3364 N12-02）。 */
+	noApplicableTemplateMessage?: string;
 };
+
+/**
+ * 「标准模板」的字段错误。提交时校验与提交被拦下后按当前状态实时改写共用同一套规则，部署选项重读后
+ * 字段错误与顶部提示、就绪列表同源（#3364 N12-01）。来源不是标准模板时没有这项错误。
+ */
+export function templateFieldError(
+	draft: Pick<
+		AgentApplicationFormDraft,
+		"sourceKind" | "templateId" | "templateRevision"
+	>,
+	context: Pick<
+		AgentApplicationValidationContext,
+		| "configurationMessage"
+		| "lockedTemplateMessage"
+		| "noApplicableTemplateMessage"
+		| "requiresTemplateReadiness"
+		| "staleTemplate"
+		| "standardChoicesBlocked"
+		| "templateUnavailableMessage"
+	>,
+): string | undefined {
+	if (draft.sourceKind !== "standard") return undefined;
+	if (context.lockedTemplateMessage) return context.lockedTemplateMessage;
+	// 部署整体不可用时说明部署；只是所选模板不可申请时沿用就绪原因，不笼统写「部署选项暂不可用」
+	// （#3328 N10-2-01）。未选模板时提示选择；没有一个模板可申请时同「部署没有标准模板」说明没有可申请
+	// 的模板，不引导一个无法完成的选择（#3364 N12-02）。
+	if (context.standardChoicesBlocked)
+		return (
+			context.configurationMessage ??
+			(draft.templateId
+				? (context.templateUnavailableMessage ?? "部署选项暂不可用。")
+				: (context.noApplicableTemplateMessage ?? "请选择标准模板。"))
+		);
+	if (context.staleTemplate) return "该模板已移除，请重新选择。";
+	if (context.requiresTemplateReadiness && !draft.templateRevision)
+		return "模板验证状态已过期，请刷新后重试。";
+	if (!draft.templateId) return "请选择标准模板。";
+	return undefined;
+}
 
 export function validateAgentApplicationDraft(
 	draft: AgentApplicationFormDraft,
@@ -100,20 +141,8 @@ export function validateAgentApplicationDraft(
 	if (!draft.name.trim()) errors.name = "请输入 Agent 名称。";
 	if (!draft.description.trim()) errors.description = "请输入用途说明。";
 	if (draft.sourceKind === "standard") {
-		if (!draft.templateId) errors.templateId = "请选择标准模板。";
-		if (context.requiresTemplateReadiness && !draft.templateRevision)
-			errors.templateId = "模板验证状态已过期，请刷新后重试。";
-		if (context.staleTemplate) errors.templateId = "该模板已移除，请重新选择。";
-		// 部署整体不可用时说明部署；只是所选模板不可申请时沿用就绪原因，不笼统写「部署选项暂不可用」，
-		// 未选模板时仍提示选择（#3328 N10-2-01）。
-		if (context.standardChoicesBlocked)
-			errors.templateId =
-				context.configurationMessage ??
-				(draft.templateId
-					? (context.templateUnavailableMessage ?? "部署选项暂不可用。")
-					: "请选择标准模板。");
-		if (context.lockedTemplateMessage)
-			errors.templateId = context.lockedTemplateMessage;
+		const templateError = templateFieldError(draft, context);
+		if (templateError) errors.templateId = templateError;
 	} else if (draft.sourceKind === "custom-multi-service") {
 		if (!draft.manifest?.trim()) errors.manifest = "请上传或粘贴多服务 YAML。";
 	} else if (!draft.imageReference.trim()) {

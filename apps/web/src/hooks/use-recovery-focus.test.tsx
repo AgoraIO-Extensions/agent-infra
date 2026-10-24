@@ -247,6 +247,87 @@ describe("RecoveryButton with a recovery target", () => {
 	});
 });
 
+// #3364 N12-3-01：恢复焦点只交接一次。交给恢复目标后，用户点主区空白处（焦点到 #main-content）、按下
+// 指针、按键或点击后，之后的重读与重绘不再把焦点拉回标题；触发后离开页面也不把代管带到新页面。
+describe("RecoveryButton hands recovery focus over only once", () => {
+	function recoverToHeading(other = false) {
+		const onRetry = vi.fn();
+		const view = render(
+			<Page state="failed" onRetry={onRetry} other={other} />,
+		);
+		retry().focus();
+		fireEvent.click(retry());
+		view.rerender(<Page state="loading" onRetry={onRetry} other={other} />);
+		view.rerender(<Page state="ready" onRetry={onRetry} other={other} />);
+		expect(document.activeElement).toBe(heading());
+		return { view, onRetry };
+	}
+	const main = () => document.getElementById("main-content");
+
+	it("does not pull focus back after the user puts it on #main-content", async () => {
+		const { view, onRetry } = recoverToHeading();
+		// 点主区空白处：浏览器把焦点交给 tabIndex=-1 的 #main-content。
+		main()?.focus();
+		view.rerender(<Page state="loading" onRetry={onRetry} />);
+		view.rerender(<Page state="ready" onRetry={onRetry} />);
+		await Promise.resolve();
+		expect(document.activeElement).toBe(main());
+	});
+
+	it.each([
+		["pointerdown", () => fireEvent.pointerDown(document.body)],
+		["keydown", () => fireEvent.keyDown(document.body, { key: "PageDown" })],
+		["click", () => fireEvent.click(document.body)],
+	])("ends the handoff on a user %s", async (_name, act) => {
+		const { view, onRetry } = recoverToHeading();
+		act();
+		// 之后重绘把焦点丢到 body，也不再代管；同一个恢复操作重新出现时不抢焦点。
+		heading().blur();
+		view.rerender(<Page state="loading" onRetry={onRetry} />);
+		view.rerender(<Page state="ready" onRetry={onRetry} />);
+		await Promise.resolve();
+		expect(document.activeElement).toBe(document.body);
+		view.rerender(<Page state="failed" onRetry={onRetry} />);
+		expect(document.activeElement).toBe(document.body);
+	});
+
+	it("stops parking focus once the user acts while the re-read is still loading", async () => {
+		const onRetry = vi.fn();
+		const view = render(<DetailPage state="failed" onRetry={onRetry} />);
+		retry().focus();
+		fireEvent.click(retry());
+		view.rerender(<DetailPage state="loading" onRetry={onRetry} />);
+		expect(document.activeElement?.id).toBe("main-content");
+		fireEvent.keyDown(document.body, { key: "Tab" });
+		view.rerender(<DetailPage state="ready" onRetry={onRetry} />);
+		await Promise.resolve();
+		expect(document.activeElement?.id).toBe("main-content");
+	});
+
+	it.each([
+		["another path", "/previous-page"],
+		["the same path with another query", "?project=other"],
+	])("does not take a recovery over to %s", async (_name, next) => {
+		const onRetry = vi.fn();
+		const start = location.pathname + location.search;
+		const view = render(<Page state="failed" onRetry={onRetry} />);
+		retry().focus();
+		fireEvent.click(retry());
+		view.rerender(<Page state="retrying" onRetry={onRetry} />);
+		// 重读进行中浏览器后退：地址先变，触发按钮随旧页面卸载。
+		history.pushState(null, "", next);
+		try {
+			view.rerender(<Page state="ready" onRetry={onRetry} />);
+			await Promise.resolve();
+			expect(document.activeElement).toBe(document.body);
+			view.rerender(<Page state="failed" onRetry={onRetry} />);
+			expect(document.activeElement).toBe(document.body);
+		} finally {
+			history.replaceState(null, "", start);
+		}
+	});
+});
+
 describe("pageRecoveryTarget", () => {
 	it("prefers the focusable page h1 and falls back to #main-content", () => {
 		const view = render(<Page state="ready" onRetry={vi.fn()} />);
