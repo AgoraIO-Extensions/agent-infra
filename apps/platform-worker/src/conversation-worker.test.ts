@@ -1008,6 +1008,57 @@ describe("conversation dispatch observability", () => {
 			]);
 			expect(JSON.stringify(events)).not.toContain("sandbox-secret-name");
 		});
+		it("correlates a Sandbox failure without exposing item or resource names", async () => {
+			const claim = {
+				schemaVersion: 1,
+				execution: null,
+				deliveryFence: 7,
+				sandbox: {
+					agentId: "agent-3360",
+					sessionId: "11111111-1111-4111-8111-111111111111",
+					sandboxId: "22222222-2222-4222-8222-222222222222",
+				},
+			} as never;
+			mocks.find.mockResolvedValueOnce([
+				{
+					itemId: "conversation:sandbox:11111111-1111-4111-8111-111111111111:1",
+					operation: "conversation.sandbox.reconcile.v1",
+				},
+			]);
+			mocks.claimSandbox.mockResolvedValueOnce(claim);
+			mocks.recordSandbox.mockResolvedValueOnce(undefined);
+			const telemetry = { record: vi.fn() };
+			const worker = createPlatformConversationWorkerV2({
+				...options,
+				observability: telemetry,
+				receiveSandbox: async () => {
+					throw new WorkloadKubernetesError("conflict");
+				},
+			});
+			try {
+				expect(await worker.tick()).toBe(1);
+				await vi.waitFor(() => expect(mocks.recordSandbox).toHaveBeenCalled());
+			} finally {
+				await worker.stop();
+			}
+			const event = telemetry.record.mock.calls
+				.map(([value]) => value)
+				.find(
+					(value) =>
+						value.stage === "workload" &&
+						value.code === "WORKLOAD_RECONCILIATION_FAILED",
+				);
+			expect(event).toMatchObject({
+				agentId: "agent-3360",
+				conversationId: "11111111-1111-4111-8111-111111111111",
+				attemptRef: "7",
+				failureStep: "workload.conflict",
+			});
+			expect(JSON.stringify(event)).not.toContain("conversation:sandbox:");
+			expect(JSON.stringify(event)).not.toContain(
+				"22222222-2222-4222-8222-222222222222",
+			);
+		});
 
 		it("uses a fixed class for non-Error thrown values", async () => {
 			const events = await reconcileWith(async () => {

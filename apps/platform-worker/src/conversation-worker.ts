@@ -569,6 +569,8 @@ export function createPlatformConversationWorkerV2(
 	// #3089：Session Sandbox 准备任务认领等待的最近原因。同一任务每轮轮询都会重试认领，
 	// 只在原因变化时记录一次；记录只有固定标签，不含任务或会话 ID。
 	const sandboxWaits = new Map<string, SessionSandboxClaimWaitReasonV1>();
+	const sandboxConversationId = (itemId: string) =>
+		/^conversation:sandbox:([0-9a-f-]{36}):[0-9]+$/i.exec(itemId)?.[1];
 	function observeSandboxWait(
 		item: { readonly itemId: string; readonly operation: string },
 		reason: SessionSandboxClaimWaitReasonV1,
@@ -586,6 +588,9 @@ export function createPlatformConversationWorkerV2(
 				outcome: "waiting",
 				code: "WORKLOAD_UNAVAILABLE",
 				failureStep: `sandbox.${reason}`,
+				...(sandboxConversationId(item.itemId)
+					? { conversationId: sandboxConversationId(item.itemId) }
+					: {}),
 				operationRef: item.operation,
 			});
 	}
@@ -828,6 +833,17 @@ export function createPlatformConversationWorkerV2(
 						stage: "workload",
 						outcome: "failed",
 						code: "WORKLOAD_RECONCILIATION_FAILED",
+						...(claim.sandbox?.agentId
+							? { agentId: claim.sandbox.agentId }
+							: {}),
+						...(claim.sandbox?.sessionId
+							? { conversationId: claim.sandbox.sessionId }
+							: {}),
+						// Delivery fence is the bounded reconciliation attempt reference;
+						// item IDs and Kubernetes names stay out of telemetry.
+						...(Number.isSafeInteger(claim.deliveryFence)
+							? { attemptRef: String(claim.deliveryFence) }
+							: {}),
 						...(error instanceof WorkloadKubernetesError
 							? { failureStep: `workload.${error.code}` }
 							: {}),
@@ -870,7 +886,11 @@ export function createPlatformConversationWorkerV2(
 							: "completed",
 				// One reconciliation attempt; observed resources may still be starting.
 				durationMs: performance.now() - began,
+				agentId: claim.sandbox?.agentId,
 				conversationId: claim.sandbox?.sessionId,
+				...(Number.isSafeInteger(claim.deliveryFence)
+					? { attemptRef: String(claim.deliveryFence) }
+					: {}),
 				operationRef:
 					claim.purpose === "drain"
 						? "sandbox.reconcile.drain"
