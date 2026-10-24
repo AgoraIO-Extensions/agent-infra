@@ -2603,17 +2603,31 @@ resources:
 				/>
 			);
 			const { rerender } = render(renderForm());
+			fireEvent.change(screen.getByLabelText("Agent 名称"), {
+				target: { value: "Release assistant" },
+			});
+			fireEvent.change(screen.getByLabelText("用途说明"), {
+				target: { value: "Helps the release team" },
+			});
 			const template = screen.getByRole("combobox", { name: "标准模板" });
-			expect(template.hasAttribute("disabled")).toBe(true);
+			// 可聚焦的禁用：不能展开，提交被拦下时焦点到它（字段错误经 aria-describedby 说明）。
+			expect(template.getAttribute("aria-disabled")).toBe("true");
+			expect(template.hasAttribute("disabled")).toBe(false);
+			fireEvent.click(template);
+			expect(screen.queryByRole("listbox")).toBeNull();
 			expect(readinessItems()).toHaveLength(2);
 			expect(readinessItems()).not.toContain("Codex：可申请");
 			fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 			expect(templateError()).toBe(message);
 			expect(screen.queryByText("请选择标准模板。")).toBeNull();
+			expect(document.activeElement).toBe(template);
+			expect(template.getAttribute("aria-describedby")).toContain(
+				"application-template-id-error",
+			);
 			expect(onSubmit).not.toHaveBeenCalled();
 
 			rerender(renderForm(true));
-			expect(template.hasAttribute("disabled")).toBe(false);
+			expect(template.getAttribute("aria-disabled")).toBeNull();
 			expect(templateError()).toBe("请选择标准模板。");
 		},
 	);

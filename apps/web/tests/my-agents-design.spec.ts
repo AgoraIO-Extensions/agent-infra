@@ -3247,7 +3247,16 @@ for (const variant of [
 		);
 		const template = page.getByRole("combobox", { name: "标准模板" });
 		await expect(template).toBeDisabled();
+		await expect(template).toHaveAttribute("aria-disabled", "true");
+		await expect(template).toHaveCSS("opacity", "0.5");
+		await expect(template).toHaveCSS("cursor", "not-allowed");
 		await expect(template).toContainText("选择标准模板");
+		// 可聚焦的禁用：点按与键盘都不能展开（aria-disabled 让 Playwright 的可操作性检查拒绝点击，这里强制点按）。
+		await template.click({ force: true });
+		await page.keyboard.press("Enter");
+		await page.keyboard.press("ArrowDown");
+		await expect(page.getByRole("listbox")).toHaveCount(0);
+		await expect(template).toHaveAttribute("aria-expanded", "false");
 		await page.getByLabel("Agent 名称", { exact: true }).fill("客户支持助理");
 		await page
 			.getByLabel("用途说明", { exact: true })
@@ -3266,7 +3275,16 @@ for (const variant of [
 		await expect(readiness).toHaveText(
 			names.map((name, index) => `${name}：${variant.reasons[index]}`),
 		);
-		await expectFocusOffBody(page, "没有可申请的模板时提交");
+		// 焦点到出错的「标准模板」，字段错误在视口内、吸顶顶栏之下。
+		await expectFocusSettled(template, "没有可申请的模板时提交");
+		await expectFocusUnobscured(template, "没有可申请的模板时提交");
+		const explained = await topbarClearance(error);
+		expect(explained.top, "字段错误上缘在顶栏之下").toBeGreaterThanOrEqual(
+			explained.barBottom - 0.5,
+		);
+		expect(explained.bottom, "字段错误下缘在视口内").toBeLessThanOrEqual(
+			explained.innerHeight + 0.5,
+		);
 		expect(commands).toEqual([]);
 		await expectNoDuplicateControls(
 			page,

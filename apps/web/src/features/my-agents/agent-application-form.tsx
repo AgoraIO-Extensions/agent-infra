@@ -1217,13 +1217,19 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		if (templateLockAttempted && templateLock === undefined)
 			setTemplateLockAttempted(false);
 	}, [templateLock, templateLockAttempted]);
-	// 创建申请时部署选项重读后「标准模板」下拉随之禁用（部署选项暂不可用、没有可申请的模板）：它若正握着
+	// 创建申请时部署选项重读后「标准模板」下拉随之禁用（部署选项暂不可用、没有登记模板）：它若正握着
 	// 焦点，浏览器会在下一帧把焦点丢到 body。禁用生效的这次提交里焦点还在它上面，先交给页面标题（不可
 	// 聚焦时为 #main-content），不为此滚动页面（#3364）。
 	const templateSelectDisabled =
-		props.mode === "update" ||
-		deployment.templates.length === 0 ||
-		(noApplicableTemplateMessage !== undefined && !templateId);
+		props.mode === "update" || deployment.templates.length === 0;
+	// 没有一个模板可申请、也没有选过模板时，下拉为可聚焦的禁用（aria-disabled，不能展开，外观同禁用）：
+	// 与「部署没有标准模板」一样不能选择，提交被拦下时焦点仍到出错的「标准模板」，字段错误在它下方可见
+	// 并经 aria-describedby 说明，不跳到后面的字段（#3364 N12-02）。
+	const templateSelectUnavailable =
+		!templateSelectDisabled &&
+		noApplicableTemplateMessage !== undefined &&
+		!templateId;
+	const [templateMenuOpen, setTemplateMenuOpen] = useState(false);
 	useLayoutEffect(() => {
 		const trigger = document.getElementById(fieldId("templateId"));
 		if (templateSelectDisabled && trigger && document.activeElement === trigger)
@@ -1317,6 +1323,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					<Label htmlFor="application-template-id">标准模板</Label>
 					<Select
 						disabled={templateSelectDisabled}
+						open={templateMenuOpen && !templateSelectUnavailable}
+						onOpenChange={(open) =>
+							setTemplateMenuOpen(open && !templateSelectUnavailable)
+						}
 						value={templateId}
 						itemToStringLabel={(value) =>
 							deployment.templates.find(
@@ -1343,7 +1353,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								"application-source-help",
 								fieldErrors.templateId ? errorId("templateId") : undefined,
 							)}
+							aria-disabled={templateSelectUnavailable || undefined}
 							aria-invalid={fieldErrors.templateId ? true : undefined}
+							className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
 						>
 							<SelectValue placeholder="选择标准模板" />
 						</SelectTrigger>
