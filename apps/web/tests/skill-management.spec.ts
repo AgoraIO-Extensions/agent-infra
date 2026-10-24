@@ -2327,7 +2327,20 @@ test("My Skill keeps focus where the user put it after a recovered reread (#3364
 		await page.evaluate(() => document.activeElement !== document.body),
 	).toBe(true);
 	reading.release();
-	await expectFocusSettled(reread, "「已安装」仍失败后");
+	// 仍失败的按钮可能随分区重绘再挂载一次（新元素），按名称采样：焦点始终在「重新读取：已安装」上。
+	await expect(reread).toBeFocused();
+	const focusedNames = await page.evaluate(async () => {
+		const names: (string | null)[] = [];
+		for (const delay of [50, 250, 700]) {
+			await new Promise((resolve) => setTimeout(resolve, delay));
+			names.push(document.activeElement?.getAttribute("aria-label") ?? null);
+		}
+		return names;
+	});
+	expect(
+		focusedNames,
+		"「已安装」仍失败后焦点采样（50 / 300 / 1000ms）",
+	).toEqual(["重新读取：已安装", "重新读取：已安装", "重新读取：已安装"]);
 
 	// 恢复：焦点到页面 h1（D2-59）。
 	installations = [installationItem("weekly-digest")];
