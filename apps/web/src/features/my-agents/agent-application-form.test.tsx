@@ -2083,6 +2083,48 @@ resources:
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
+	// #3328：模板不能更换又不可申请，同时还有可编辑字段出错时，与修改申请入口身份不可用（#3291 N9-2-03）
+	// 一致：顶部提示照常出现（role=alert 自行播报），焦点先到第一个可编辑的出错字段；改好后再次提交，
+	// 只剩只读的「标准模板」出错，焦点到顶部提示。
+	it("focuses an editable field error before the template alert of an edited application", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				application={pendingApplication}
+				action="edit"
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					templates: deploymentConfiguration.templates.map((template) => ({
+						...template,
+						readiness: { state: "failed" as const, revision: "codex-r1" },
+					})),
+				}}
+				mode="update"
+				onSubmit={onSubmit}
+				showDeploymentStatus={false}
+				submitting={false}
+			/>,
+		);
+		const name = screen.getByLabelText("Agent 名称");
+		fireEvent.change(name, { target: { value: "" } });
+		const submit = screen.getByRole("button", { name: "修改申请" });
+		fireEvent.click(submit);
+		expect(screen.getByRole("alert").textContent).toBe(
+			"此申请的模板暂不可申请，请等待模板恢复后再提交，或新建申请。",
+		);
+		expect(document.getElementById("application-name-error")?.textContent).toBe(
+			"请输入 Agent 名称。",
+		);
+		expect(document.activeElement).toBe(name);
+
+		fireEvent.change(name, { target: { value: "客户支持助理" } });
+		submit.focus();
+		fireEvent.click(submit);
+		expect(document.getElementById("application-name-error")).toBeNull();
+		expect(document.activeElement).toBe(screen.getByRole("alert"));
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	// #3328：验证过期（与当前登记不符或超出有效期）要等平台重新验证，与验证失败、停用一样提示等待恢复
 	// 或新建申请；这次没能读到验证结果时刷新即可确认，只提示刷新。
 	it.each([

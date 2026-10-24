@@ -294,6 +294,19 @@ describe("Agent application draft", () => {
 				configurationMessage: "部署选项已过期，请重新加载后再提交。",
 			}).templateId,
 		).toBe("部署选项已过期，请重新加载后再提交。");
+		// 部署整体有问题（过期、不可用或没有标准模板）时改选模板也无法提交，未选模板同样说明部署，
+		// 不引导选择（同 #3291 N9-2-01「部署没有标准模板」的字段错误）。
+		expect(
+			validateAgentApplicationDraft(
+				{ ...standardCreateDraft, templateId: "", templateRevision: "" },
+				{
+					...blocked,
+					templateUnavailableMessage: undefined,
+					configurationMessage:
+						"当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。",
+				},
+			).templateId,
+		).toBe("当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。");
 		expect(
 			validateAgentApplicationDraft(standardCreateDraft, {
 				...blocked,
