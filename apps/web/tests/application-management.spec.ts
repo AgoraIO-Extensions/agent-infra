@@ -613,6 +613,87 @@ test("a failed application credential issue brings its failure into view and foc
 	expect(await duplicateControlNames(page)).toEqual([]);
 });
 
+// #3329 N10-3-01：个人凭证列表与应用管理同时 503 时各有一个「重新加载」。可见文字都是「重新加载」，应用管理的
+// 名称带分区名「重新加载：应用管理」（同 401 的「重新登录：应用管理」，D2-58 / N9-3-05），同页没有同名控件；
+// 应用重读仍失败时焦点回到应用管理自己的按钮，不跳到个人凭证列表的按钮。
+test("simultaneous 503 reads give the two 重新加载 buttons distinct names (N10-3-01)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	const applicationPath = `/api/v2/applications/${application.applicationId}`;
+	const unavailable = {
+		status: 503,
+		json: {
+			schemaVersion: 1,
+			code: "DEPENDENCY_UNAVAILABLE",
+			message: "Controlled read failure",
+			retryable: true,
+			traceId: "browser-read-failure",
+		},
+	};
+	await page.route(
+		(url) =>
+			url.pathname === "/api/v2/me/api-credentials" ||
+			url.pathname === applicationPath,
+		(route) =>
+			route.request().method() === "GET"
+				? route.fulfill(unavailable)
+				: route.fallback(),
+	);
+	await page.goto(
+		`/my-settings/api-credentials?applicationId=${application.applicationId}`,
+	);
+	const main = page.locator("#main-content");
+	const personal = main
+		.getByRole("alert")
+		.filter({ hasText: "暂时无法读取 API 凭证，请稍后重试。" });
+	const section = main.getByRole("region", { name: "应用管理" });
+	const applicationFailure = section
+		.getByRole("alert")
+		.filter({ hasText: "暂时无法读取应用，请稍后重试。" });
+	await expect(personal).toBeVisible();
+	await expect(applicationFailure).toBeVisible();
+	const buttons = main.getByRole("button", { name: /^重新加载/ });
+	await expect(buttons).toHaveCount(2);
+	await expect(
+		personal.getByRole("button", { name: "重新加载", exact: true }),
+	).toHaveText("重新加载");
+	const reload = applicationFailure.getByRole("button", {
+		name: "重新加载：应用管理",
+		exact: true,
+	});
+	await expect(reload).toHaveText("重新加载");
+	await expectNoDuplicateControls(page, "API 凭证页两处同时 503（N10-3-01）");
+	expect(await duplicateControlNames(page)).toEqual([]);
+
+	// 应用重读仍失败：焦点回到同一分区的按钮（恢复 key 带分区名）。
+	const pinned = await pinElement(reload, "reload-application-section");
+	const reading = await holdRequests(page, "GET", applicationPath);
+	await pinned.focus();
+	await page.keyboard.press("Enter");
+	await expectFocusableBusy(pinned, "重新加载：应用管理 读取中", [30, 150]);
+	reading.release();
+	await expect(pinned).not.toHaveAttribute("aria-disabled", "true");
+	await expectFocusSettled(
+		applicationFailure.getByRole("button", {
+			name: "重新加载：应用管理",
+			exact: true,
+		}),
+		"重新加载：应用管理 仍失败",
+	);
+	await expectCleanPage(page, errors);
+	await info.attach("n10-3-01-both-503", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+});
+
 // #3269 N8-3-02：应用读取失败后的「重新加载」是 RecoveryButton。读取失败作为数据返回，重读期间提示保留、
 // 按钮可聚焦地禁用，再次失败焦点留在按钮上；恢复后按钮卸载，本分区在页面底部，焦点交给「应用管理」
 // 标题（不是页顶 h1）。

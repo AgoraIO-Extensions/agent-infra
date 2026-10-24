@@ -25,9 +25,13 @@ import type {
 import {
 	expectFocusableBusy,
 	expectFocusSettled,
+	expectFocusUnobscured,
 	expectNoDuplicateControls,
+	expectStickyTopbarClearance,
 	holdRequests,
 	pinElement,
+	scrollTopTo,
+	topbarClearance,
 } from "./page-health";
 import {
 	computed,
@@ -800,6 +804,110 @@ for (const path of [
 		await noHorizontalOverflow(page);
 	});
 }
+
+// #3329 N10-3-02：申请表单整表校验失败后，焦点从页底「提交审批」到页顶「Agent 名称」。「Agent 名称」原本
+// 整框在 72px 吸顶顶栏之下时，浏览器把它当作可见、不再滚动，焦点目标被顶栏盖住；根样式 scroll-padding-top
+// 让出顶栏后它停在顶栏之下。从下一个控件 Shift+Tab 回到被顶栏遮住的「Agent 名称」同样如此。两档视口都
+// 覆盖（WCAG 2.2 SC 2.4.11）。
+test("application form field errors and Shift+Tab keep Agent 名称 below the sticky topbar (N10-3-02)", async ({
+	page,
+}, info) => {
+	await viewportFor(page, info.project.name === "mobile");
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/my-agents/new");
+	const name = page.getByLabel("Agent 名称");
+	const submit = page
+		.locator("main form .form-footer")
+		.getByRole("button", { name: "提交审批", exact: true });
+	await expect(name).toBeVisible();
+	// 前置状态：「Agent 名称」整框在顶栏之下（与 Skill「创建项目」证据相同，视口内但被顶栏盖住），焦点在
+	// 页底「提交审批」上（不滚动页面）。
+	const before = await scrollTopTo(name, 0);
+	expect(before.top, "「Agent 名称」先在顶栏之下").toBeGreaterThanOrEqual(-1);
+	expect(before.bottom, "「Agent 名称」先在顶栏之下").toBeLessThanOrEqual(
+		before.barBottom,
+	);
+	await submit.evaluate((element) =>
+		(element as HTMLElement).focus({ preventScroll: true }),
+	);
+	await page.keyboard.press("Enter");
+	await expect(name).toHaveAttribute("aria-invalid", "true");
+	await expectFocusUnobscured(name, "提交审批校验失败后");
+	await info.attach("n10-3-02-application-form", {
+		body: await page.screenshot(),
+		contentType: "image/png",
+	});
+
+	// 键盘：焦点移到下一个控件后把「Agent 名称」滚到顶栏之下（被盖住 30px），再 Shift+Tab 回来。
+	await page.keyboard.press("Tab");
+	await expect(name).not.toBeFocused();
+	const bar = await topbarClearance(name);
+	const at = await scrollTopTo(name, bar.barBottom - 30);
+	expect(at.top, "「Agent 名称」被顶栏遮住").toBeLessThan(at.barBottom);
+	await page.keyboard.press("Shift+Tab");
+	await expectFocusUnobscured(name, "Shift+Tab 回到 Agent 名称");
+	await expectStickyTopbarClearance(page);
+	await expectCleanPage(page, errors);
+});
+
+// #3329 N10-3-02：「跳至主要内容」（页内锚点）同样让出吸顶顶栏：激活后 #main-content 获得焦点、页面 h1 整行在
+// 顶栏之下（原先 #main-content 贴视口顶边，h1 被顶栏盖住）。顶栏里的控件随顶栏吸顶、始终可见，页面滚动后
+// 聚焦窄屏「打开导航」不滚动页面（让位规则不把它当作被顶栏挡住）。
+test("the skip link and topbar controls stay clear of the sticky topbar without moving the page (N10-3-02)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	await viewportFor(page, mobile);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/my-agents/new");
+	const main = page.locator("#main-content");
+	const heading = main.getByRole("heading", { level: 1 });
+	const skip = page.locator(".platform-skip-link");
+	await expect(heading).toBeVisible();
+	const scrollY = () => page.evaluate(() => Math.round(window.scrollY));
+	for (const scrolled of [0, 600]) {
+		await page.evaluate((top) => window.scrollTo(0, top), scrolled);
+		await expect.poll(scrollY).toBe(scrolled);
+		// 跳转链接是 fixed 定位，聚焦它不滚动页面。
+		await skip.focus();
+		await expect(skip).toBeFocused();
+		expect(await scrollY()).toBe(scrolled);
+		await page.keyboard.press("Enter");
+		await expect(main).toBeFocused();
+		await heading.evaluate(
+			() => new Promise((resolve) => requestAnimationFrame(resolve)),
+		);
+		const box = await topbarClearance(heading);
+		expect(box.barTop, `滚动 ${scrolled}px 后跳转：顶栏位置`).toBe(0);
+		expect(
+			box.top,
+			`滚动 ${scrolled}px 后跳转：h1 在顶栏之下`,
+		).toBeGreaterThanOrEqual(box.barBottom);
+		// #main-content 紧接顶栏，让出顶栏后就是页顶。
+		expect(await scrollY(), `滚动 ${scrolled}px 后跳转：回到页顶`).toBe(0);
+	}
+	if (mobile) {
+		const menu = page.getByRole("button", { name: "打开导航" });
+		for (const scrolled of [600, 1000]) {
+			await page.evaluate((top) => window.scrollTo(0, top), scrolled);
+			await expect.poll(scrollY).toBe(scrolled);
+			await menu.focus();
+			await expect(menu).toBeFocused();
+			await menu.evaluate(
+				() => new Promise((resolve) => requestAnimationFrame(resolve)),
+			);
+			expect(await scrollY(), `滚动 ${scrolled}px 后聚焦「打开导航」`).toBe(
+				scrolled,
+			);
+			const box = await topbarClearance(menu);
+			expect(box.top).toBeGreaterThanOrEqual(box.barTop);
+			expect(box.bottom).toBeLessThanOrEqual(box.barBottom);
+		}
+	}
+	await expectCleanPage(page, errors);
+});
 
 test("application detail puts actions in the heading, shows three progress rows and a next step (M-11 / M-12 / M-04)", async ({
 	page,

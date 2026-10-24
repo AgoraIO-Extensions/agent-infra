@@ -83,6 +83,21 @@
 	background: var(--background);
 }
 
+/* 吸顶顶栏让位（WCAG 2.2 SC 2.4.11，#3329 N10-3-02）：顶栏 sticky、72px（两档视口相同）且 92% 不透明，
+   根滚动容器上方让出顶栏与 16px，程序聚焦、Tab、锚点跳转与 scrollIntoView 的目标都停在顶栏之下。
+   顶部让位只在这里做一次：元素不再用 scroll-margin-top 让出顶栏，否则两者叠加成 2 × 88px。
+   对话页时间线等局部滚动容器各有自己的 scroll-padding，不受影响。 */
+html {
+	scroll-padding-top: calc(var(--platform-topbar-height) + 16px);
+}
+/* 顶栏里的控件随顶栏吸顶、始终可见：把它们的滚动目标区整体下移同样的 88px，落在让位后的可视区内。
+   否则窄屏页面滚动后聚焦「打开导航」，浏览器会把它当作被顶栏挡住而把页面往回滚约半屏。
+   用 :where() 保持零特异性，与其后的通配规则同级。 */
+:where(.platform-topbar *) {
+	scroll-margin-top: calc(-1 * (var(--platform-topbar-height) + 16px));
+	scroll-margin-bottom: calc(var(--platform-topbar-height) + 16px);
+}
+
 /* 设计 h1：-0.01em 字距、pretty 换行；放在组件类之前，对话页标题在组件类中显式取消字距。 */
 @layer base {
 	h1 {
@@ -4069,9 +4084,9 @@ body {
 .settings-status {
 	margin-bottom: 14px;
 }
-/* 动作结果或失败提示滚入视口时（revealAndFocus，#3269 N8-3-09）让出吸顶顶栏与 16px 间距。 */
+/* 动作结果或失败提示滚入视口时（revealAndFocus，#3269 N8-3-09）与视口下缘留 16px；上方让出吸顶顶栏由
+   根样式的 scroll-padding-top 统一处理（#3329 N10-3-02），这里不再设 scroll-margin-top，避免叠加。 */
 .action-reveal {
-	scroll-margin-top: calc(var(--platform-topbar-height) + 16px);
 	scroll-margin-bottom: 16px;
 }
 /* 评测分段（设计 .eval-tabs / .eval-tab，R-03）：分段在卡内，不是下划线 Tab。 */
