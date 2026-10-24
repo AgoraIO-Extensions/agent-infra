@@ -35,6 +35,8 @@ class MetadataTransport {
 	readSendFailure?: () => Promise<void>;
 	beforeResponse?: () => void;
 	compactItemId = "context-compaction-item-1";
+	compactStartedItemId?: string;
+	compactCompletedItemId?: string;
 	compactTurnId = "context-compaction-turn-1";
 	private readonly queue: CodexAppServerFrame[] = [];
 	private wake?: () => void;
@@ -137,7 +139,10 @@ class MetadataTransport {
 				params: {
 					threadId: this.threadId,
 					turnId: this.compactTurnId,
-					item: { type: "contextCompaction", id: this.compactItemId },
+					item: {
+						type: "contextCompaction",
+						id: this.compactStartedItemId ?? this.compactItemId,
+					},
 				},
 			});
 			this.push({
@@ -145,7 +150,10 @@ class MetadataTransport {
 				params: {
 					threadId: this.threadId,
 					turnId: this.compactTurnId,
-					item: { type: "contextCompaction", id: this.compactItemId },
+					item: {
+						type: "contextCompaction",
+						id: this.compactCompletedItemId ?? this.compactItemId,
+					},
 				},
 			});
 			this.push({
@@ -454,6 +462,55 @@ describe("Codex native command result lifecycle", () => {
 		expect(await f.driver.execute(command, { nativeCommand: f.read })).toEqual(
 			record,
 		);
+	});
+
+	it("keeps the command unknown when a completion never started for this item", async () => {
+		const f = await fixture(true);
+		f.transport.compactCompletedItemId = "unrelated-compaction-item";
+		const projection = await f.driver.readNativeMetadataV2("commands", f.read);
+		const compact = projection.capabilities.find(
+			(entry) => entry.name === "compact",
+		);
+		if (!compact) throw new Error("Missing compact capability");
+		const command = f.driver.createNativeCommandCommandV2({
+			schemaVersion: 2,
+			kind: "native-command",
+			operationId: "compact-1",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "compact-1",
+			turnId: "turn-compact-1",
+			sessionGeneration: 1,
+			nativeSessionRef: f.read.nativeSessionRef,
+			capabilityId: compact.id,
+			directoryRevision: projection.revision,
+			capabilityName: compact.name,
+			capabilitySourceVersion: compact.source.version,
+			parameters: "",
+			parametersDigest: createHash("sha256").update("").digest("hex"),
+			effect: "state_changing",
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+			keyBinding: {
+				purpose: "agent-default",
+				subjectId: "agent-1",
+				ciphertextRef: "relay-key-1",
+				version: 1,
+			},
+			authorizationRecordId: "authorization-1",
+		});
+		const record = await f.driver.execute(command, {
+			nativeCommand: f.read,
+		});
+		expect(record.result.outcome).toBe("unknown");
+		expect(
+			f.transport.requests.filter(
+				(frame) => frame.method === "thread/compact/start",
+			),
+		).toHaveLength(1);
 	});
 
 	it.each([

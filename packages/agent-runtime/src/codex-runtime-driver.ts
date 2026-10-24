@@ -12083,9 +12083,25 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					candidate.turnId === item.nativeTurnId),
 		);
 		if (!pending) return false;
+		// 一个 compaction 只有一个 item：completed 必须对应已见到的同一 item ID，
+		// 不能让同一 thread 上无关或乱序的完成通知把命令判成 accepted。
+		if (item.phase === "started") {
+			if (
+				pending.itemId !== undefined &&
+				pending.itemId !== item.nativeItemId
+			) {
+				pending.reject(unavailableError());
+				return true;
+			}
+			pending.itemId = item.nativeItemId;
+		} else {
+			if (pending.itemId !== item.nativeItemId) {
+				pending.reject(unavailableError());
+				return true;
+			}
+			pending.itemCompleted = true;
+		}
 		pending.turnId = item.nativeTurnId;
-		pending.itemId = item.nativeItemId;
-		if (item.phase === "completed") pending.itemCompleted = true;
 		await this.update((state) => {
 			const session = ownRecordValue(state.sessions, pending.nativeSessionRef);
 			const operation = session
