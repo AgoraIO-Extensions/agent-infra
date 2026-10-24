@@ -66,8 +66,9 @@ import {
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverLookupV1Schema,
+	RuntimeDriverLookupV2Schema,
+	RuntimeDriverNativeCommandOperationRecordV2Schema,
 	RuntimeDriverOperationRecordV1Schema,
-	RuntimeDriverSubmitTurnLookupV2Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
 	RuntimeEventAckRequestV4Schema,
 	RuntimeEventAckResponseV4Schema,
@@ -690,7 +691,9 @@ function parseDriverRecord(
 ) {
 	const parsed = (
 		operation.command.schemaVersion === 2
-			? RuntimeDriverSubmitTurnOperationRecordV2Schema
+			? operation.command.kind === "native-command"
+				? RuntimeDriverNativeCommandOperationRecordV2Schema
+				: RuntimeDriverSubmitTurnOperationRecordV2Schema
 			: RuntimeDriverOperationRecordV1Schema
 	).safeParse(value);
 	const expectedNativeSessionRef =
@@ -719,7 +722,7 @@ function parseDriverLookup(
 ) {
 	const parsed = (
 		operation.command.schemaVersion === 2
-			? RuntimeDriverSubmitTurnLookupV2Schema
+			? RuntimeDriverLookupV2Schema
 			: RuntimeDriverLookupV1Schema
 	).safeParse(value);
 	if (!parsed.success) driverInvalid();
@@ -3342,6 +3345,18 @@ export class RuntimeHost {
 					// V3 native recovery needs a current query/control Grant. Even
 					// interruption lookup can query or stop native sources, so defer it.
 					if (this.v3 && isInterruption(operation)) return;
+					if (
+						operation.state === "prepared" &&
+						operation.kind === "native-command" &&
+						operation.command.schemaVersion === 2
+					) {
+						// Stateful native commands need a fresh business Grant/Key before
+						// the Driver can verify a persisted Turn/item pair. Keep the
+						// prepared operation recoverable instead of converting it to
+						// unknown during Host startup; the replay path is fail-closed and
+						// never sends a second compact request.
+						return;
+					}
 					if (operation.state === "prepared" && !this.v3) {
 						recoveredResult = (
 							await this.dispatch(session.hostSessionRef, operation, !this.v3)

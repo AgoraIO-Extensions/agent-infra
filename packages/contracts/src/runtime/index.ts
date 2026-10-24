@@ -38,9 +38,14 @@ export * from "./skill-hub.ts";
 import { RuntimeBrowserCapabilityProbeEvidenceV1Schema } from "./browser-capability.ts";
 import {
 	RuntimeDriverCommandV1Schema,
+	RuntimeDriverCommandV2Schema,
 	RuntimeDriverLookupV1Schema,
+	RuntimeDriverLookupV2Schema,
+	RuntimeDriverNativeCommandOperationRecordV2Schema,
 	RuntimeDriverNativeCommandV1Schema,
+	RuntimeDriverNativeCommandV2Schema,
 	RuntimeDriverOperationRecordV1Schema,
+	RuntimeDriverOperationRecordV2Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
 	RuntimeDriverSubmitTurnLookupV2Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
@@ -132,6 +137,19 @@ export const RuntimeDriverV1SchemaDefinitions = {
 	RuntimeDriverOperationRecordV1: RuntimeDriverOperationRecordV1Schema,
 };
 
+export const RuntimeDriverV2SchemaDefinitions = {
+	RuntimeDriverCommandV2: RuntimeDriverCommandV2Schema,
+	RuntimeDriverNativeCommandV2: RuntimeDriverNativeCommandV2Schema,
+	RuntimeDriverNativeCommandOperationRecordV2:
+		RuntimeDriverNativeCommandOperationRecordV2Schema,
+	RuntimeDriverOperationRecordV2: RuntimeDriverOperationRecordV2Schema,
+	RuntimeDriverSubmitTurnCommandV2: RuntimeDriverSubmitTurnCommandV2Schema,
+	RuntimeDriverSubmitTurnLookupV2: RuntimeDriverSubmitTurnLookupV2Schema,
+	RuntimeDriverLookupV2: RuntimeDriverLookupV2Schema,
+	RuntimeDriverSubmitTurnOperationRecordV2:
+		RuntimeDriverSubmitTurnOperationRecordV2Schema,
+};
+
 export const RuntimeHostV2SchemaDefinitions = {
 	RuntimeOperationResponseV2: RuntimeOperationResponseV2Schema,
 	RuntimeOperationResultV2: RuntimeOperationResultV2Schema,
@@ -139,13 +157,6 @@ export const RuntimeHostV2SchemaDefinitions = {
 	RuntimeSubmitTurnRequestV2: RuntimeSubmitTurnRequestV2Schema,
 	RuntimeStatusRequestV2: RuntimeStatusRequestV2Schema,
 	RuntimeStatusResponseV2: RuntimeStatusResponseV2Schema,
-};
-
-export const RuntimeDriverV2SchemaDefinitions = {
-	RuntimeDriverSubmitTurnCommandV2: RuntimeDriverSubmitTurnCommandV2Schema,
-	RuntimeDriverSubmitTurnLookupV2: RuntimeDriverSubmitTurnLookupV2Schema,
-	RuntimeDriverSubmitTurnOperationRecordV2:
-		RuntimeDriverSubmitTurnOperationRecordV2Schema,
 };
 
 import {

@@ -5,8 +5,9 @@ import {
 	type NativeMetadataObjectScopeV1,
 	type RuntimeDriverCommandV1,
 	RuntimeDriverCommandV1Schema,
+	type RuntimeDriverCommandV2,
+	RuntimeDriverCommandV2Schema,
 	type RuntimeDriverSubmitTurnCommandV2,
-	RuntimeDriverSubmitTurnCommandV2Schema,
 	type RuntimeExecutionGrantClaimsV2,
 	type RuntimeOperationResultV1,
 	RuntimeOperationResultV1Schema,
@@ -61,7 +62,7 @@ export interface StoredOperation {
 	deliveryFence: number;
 	requestDigest: string;
 	keyScopeV4?: RuntimePinnedExecutionKeyScopeV4;
-	command: RuntimeDriverCommandV1 | RuntimeDriverSubmitTurnCommandV2;
+	command: RuntimeDriverCommandV1 | RuntimeDriverCommandV2;
 	state: "prepared" | "resolved";
 	result?: RuntimeOperationResultV1 | RuntimeOperationResultV2;
 }
@@ -108,7 +109,7 @@ interface PrepareOperation {
 	executionDeliveryFence?: number;
 	command: (
 		nativeSessionRef?: string,
-	) => RuntimeDriverCommandV1 | RuntimeDriverSubmitTurnCommandV2;
+	) => RuntimeDriverCommandV1 | RuntimeDriverCommandV2;
 }
 
 type RecoverOperation = Omit<PrepareOperation, "command"> & {
@@ -313,7 +314,7 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 						session.sessionGeneration)) ||
 			!(
 				operation.command.schemaVersion === 2
-					? RuntimeDriverSubmitTurnCommandV2Schema
+					? RuntimeDriverCommandV2Schema
 					: RuntimeDriverCommandV1Schema
 			).safeParse(operation.command).success ||
 			operation.command.operationId !== operation.operationId ||
@@ -604,6 +605,32 @@ export class FileRuntimeStore {
 			scope: original.keyScopeV4 ? structuredClone(original.keyScopeV4) : null,
 			operation: structuredClone(original),
 		};
+	}
+
+	readLatestAcceptedSubmitTurnV2(
+		binding: SessionBinding & { executionId: string; turnId: string },
+		hostSessionRef: string,
+	): RuntimeDriverSubmitTurnCommandV2 | null {
+		const state = this.file.read();
+		assertStoreState(state);
+		const session = sessionFor(state, hostSessionRef, binding);
+		const candidates = Object.values(session.operations)
+			.filter(
+				(
+					operation,
+				): operation is StoredOperation & {
+					command: RuntimeDriverSubmitTurnCommandV2;
+				} =>
+					operation.kind === "submit-turn" &&
+					operation.command.schemaVersion === 2 &&
+					operation.command.kind === "submit-turn" &&
+					operation.state === "resolved" &&
+					operation.result?.outcome === "accepted",
+			)
+			.sort((left, right) => right.deliveryFence - left.deliveryFence);
+		return candidates[0]?.command
+			? structuredClone(candidates[0].command)
+			: null;
 	}
 
 	/** Existing-only recovery: no Session, operation, or business dispatch is created. */

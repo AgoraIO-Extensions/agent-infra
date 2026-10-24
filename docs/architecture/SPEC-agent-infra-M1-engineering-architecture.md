@@ -1325,6 +1325,12 @@ Execution Key 绑定。能力类别及原生方法由服务端受控映射确定
 有状态来改变授权。旧版本缺少上述绑定时明确返回不支持；旧只读命令保持原义，存量计划
 不从当前 Conversation、默认模型或当前 Key 补值后重新投递。
 
+当前 Runtime Driver 的 authoring contract 为
+`RuntimeDriverNativeCommandV2Schema` 与
+`RuntimeDriverNativeCommandOperationRecordV2Schema`；它们以 `schemaVersion: 2`、
+`effect: "state_changing"`、冻结选择、Key binding 和授权记录 ID 固定该边界。V1
+`RuntimeDriverNativeCommandV1Schema` 仍只表示既有命令，不能接收或降级解析 V2 输入。
+
 Host 校验当前业务 Grant、原 Session、命令与冻结选择后，先持久准备原操作，再将同一
 Execution 的 Key 安装到受保护传输边界。Driver 在原生副作用前确认当前原生会话实际使用的
 模型、endpoint、reasoning 和 Key 与本次冻结绑定一致；原生接口不能显式设置这些值时，
