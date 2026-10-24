@@ -6,6 +6,7 @@ import { AgentConfigurationWorkflow } from "../../../features/agent-configuratio
 import { isRetryableAgentDiscoveryError } from "../../../features/agent-discovery/agent-discovery.js";
 import { useAgentDetail } from "../../../features/agent-discovery/use-agent-detail.js";
 import { useApplicationSession } from "../../../features/application-shell.js";
+import { readFailed } from "../../../features/background-read.js";
 import { projectDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
 import { useDeploymentConfiguration } from "../../../features/my-agents/use-deployment-configuration.js";
 import { PageLoadingState } from "../../../features/page-loading-state.js";
@@ -65,9 +66,11 @@ function AgentConfigurationRoute() {
 				])
 			: [],
 	);
-	if (query.isError || !query.data || query.data.kind !== "ready") {
+	// 后台重读（回到标签页、配置保存后的重取等）的可重试失败不替换页面：未保存的修改与焦点保留（#3387）。
+	const failed = readFailed(query, isRetryableAgentDiscoveryError);
+	if (failed || !query.data || query.data.kind !== "ready") {
 		const failure =
-			!query.isError && query.data?.kind === "unavailable"
+			!failed && query.data?.kind === "unavailable"
 				? query.data
 				: { retryable };
 		return (

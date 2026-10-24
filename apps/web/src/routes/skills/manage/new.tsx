@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useApplicationSession } from "../../../features/application-shell.js";
+import { readFailed } from "../../../features/background-read.js";
 import { collectionReadFailure } from "../../../features/collection-read-failure.js";
 import { PageLoadingState } from "../../../features/page-loading-state.js";
 import { useSessionRecheck } from "../../../features/session-recheck.js";
@@ -79,7 +80,14 @@ function SkillEditorRoute() {
 					content={
 						content.isPending
 							? { kind: "loading" }
-							: content.isError || !content.data
+							: // 后台重读的可重试失败不替换编辑器：SKILL.md 未保存的修改保留（#3387）。
+								readFailed(
+										content,
+										(error) =>
+											collectionReadFailure(
+												(error as { status?: number } | null)?.status,
+											).retryable,
+									) || !content.data
 								? collectionReadFailure(contentStatus)
 								: { kind: "ready", content: content.data }
 					}

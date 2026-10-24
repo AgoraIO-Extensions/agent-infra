@@ -1,11 +1,15 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLayoutEffect, useMemo } from "react";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
+import { markUserRead, readFailed } from "../background-read.js";
 import type {
 	AgentDiscoveryScope,
 	AgentDiscoveryState,
 } from "./agent-discovery.js";
-import { loadAgentDiscovery } from "./agent-discovery.js";
+import {
+	isRetryableAgentDiscoveryError,
+	loadAgentDiscovery,
+} from "./agent-discovery.js";
 
 export function useAgentDiscovery({
 	identityKey,
@@ -51,15 +55,19 @@ export function useAgentDiscovery({
 				current.state.data.retryable),
 		retry: false,
 	});
+	/** 页面发起的重读（恢复按钮、工作台「重新加载…」）：失败时按读取失败显示（D2-59）。 */
 	function refetch() {
 		const current = selection.queryClient.getQueryData<AgentDiscoveryState>(
 			selection.queryKey,
 		);
-		return selection.active &&
-			allowed &&
-			!(current?.kind === "unavailable" && !current.retryable)
-			? query.refetch({ cancelRefetch: false })
-			: Promise.resolve(undefined);
+		if (
+			!selection.active ||
+			!allowed ||
+			(current?.kind === "unavailable" && !current.retryable)
+		)
+			return Promise.resolve(undefined);
+		markUserRead(selection, query.dataUpdatedAt);
+		return query.refetch({ cancelRefetch: false });
 	}
 	/**
 	 * 用户明确要求重读（例如「重新登录」后会话仍有效）：不可重试的结果会锁住 refetch，
@@ -70,12 +78,20 @@ export function useAgentDiscovery({
 			selection.queryKey,
 		);
 		if (!selection.active || !allowed) return Promise.resolve();
-		return current?.kind === "unavailable" && !current.retryable
-			? selection.queryClient.resetQueries({
-					queryKey: selection.queryKey,
-					exact: true,
-				})
-			: query.refetch({ cancelRefetch: false });
+		if (current?.kind === "unavailable" && !current.retryable)
+			return selection.queryClient.resetQueries({
+				queryKey: selection.queryKey,
+				exact: true,
+			});
+		markUserRead(selection, query.dataUpdatedAt);
+		return query.refetch({ cancelRefetch: false });
 	}
-	return { ...query, refetch, reload, isFetching: allowed && query.isFetching };
+	return {
+		...query,
+		refetch,
+		reload,
+		isFetching: allowed && query.isFetching,
+		/** 是否按读取失败替换内容：后台重读的可重试失败保留已显示的 Agent（#3387）。 */
+		failed: readFailed(query, isRetryableAgentDiscoveryError, selection),
+	};
 }

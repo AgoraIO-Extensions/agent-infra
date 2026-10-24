@@ -169,10 +169,13 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 
 	const formId = useId();
 	const query = useAuditQuery({ identityKey, scope, filters, auditId });
-	const busy = query.status === "loading" || query.isFetching;
+	// 读取行只用于首次读取与用户发起的「查询」「重置」「刷新审计记录」「重试」、翻页（D2-59）；回到标签页等
+	// 后台重读期间保留已读记录，页面高度与滚动位置不变，只有页头「刷新审计记录」显示读取中（#3387 N13-02）。
+	const busy = query.status === "loading" || query.userReading;
+	const refreshing = busy || query.isFetching;
 	const denied = query.status === "denied";
 	const detailReading =
-		query.detailStatus === "loading" || query.isDetailFetching || busy;
+		query.detailStatus === "loading" || query.isDetailUserReading || busy;
 	const items = busy || formFailure ? [] : query.items;
 	// 「上一页」「下一页」读取中是可聚焦的禁用（#3242 K7-02）；读完后触发的按钮因到了首页或末页而
 	// 禁用时，焦点交给另一个分页按钮，两个都不可用时到页面 h1（D2-59），不落到 body。
@@ -294,7 +297,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					size="icon"
 					aria-label="刷新审计记录"
 					title="刷新审计记录"
-					disabled={busy || denied}
+					disabled={refreshing || denied}
 					focusableWhenDisabled
 					onClick={() => {
 						setFormFailure(null);
@@ -632,7 +635,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 							<h2>
 								{query.detail &&
 								query.detailStatus !== "loading" &&
-								!query.isDetailFetching
+								!query.isDetailUserReading
 									? auditDetailHeading(query.detail)
 									: "审计详情"}
 							</h2>
@@ -679,7 +682,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 									size="icon"
 									aria-label="刷新审计详情"
 									title="刷新审计详情"
-									disabled={detailReading}
+									disabled={detailReading || query.isDetailFetching}
 									focusableWhenDisabled
 									panel={detailPanel}
 									onRead={() => void query.retryDetail()}

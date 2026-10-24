@@ -1,6 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLayoutEffect, useMemo } from "react";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
+import {
+	markUserRead,
+	retainContent,
+	retainedContentAt,
+} from "../background-read.js";
 import { type AdminAgentsState, loadAdminAgents } from "./admin-agents.js";
 
 /** identityKey isolates a login generation; authorization remains server-owned. */
@@ -42,18 +47,28 @@ export function useAdminAgents({
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
 	});
+	const read: AdminAgentsState = query.isError
+		? { kind: "error", retryable: true }
+		: (query.data ?? { kind: "loading" });
+	// 读取函数把 503 等可重试失败作为结果写入缓存（旧行随之移出）：回到标签页等后台重读失败时页面继续
+	// 显示上一次的列表与筛选（#3387）；页头刷新、「重新加载」等用户发起的读取失败仍收起列表（D2-59）。
 	const state: AdminAgentsState = !allowed
 		? { kind: "denied" }
-		: query.isError
-			? { kind: "error", retryable: true }
-			: (query.data ?? { kind: "loading" });
+		: retainContent(scope, read, {
+				isContent: (current) => current.kind === "ready",
+				isRetryableFailure: (current) =>
+					current.kind === "error" && current.retryable,
+				updatedAt: query.isError ? query.errorUpdatedAt : query.dataUpdatedAt,
+			});
 
+	/** 用户发起的重读（页头刷新、「重新加载」、行内操作受理后的重读）。 */
 	function refetch() {
 		// Read the current cache so a callback retained before denial cannot retry.
 		const current = queryClient.getQueryData<AdminAgentsState>(scope.queryKey);
-		return scope.active && allowed && current?.kind !== "denied"
-			? query.refetch({ cancelRefetch: false })
-			: Promise.resolve(undefined);
+		if (!scope.active || !allowed || current?.kind === "denied")
+			return Promise.resolve(undefined);
+		markUserRead(scope, retainedContentAt(scope));
+		return query.refetch({ cancelRefetch: false });
 	}
 	/**
 	 * 用户明确要求重读（例如「重新登录」后会话仍有效）：denied（401/403）会锁住 refetch，
@@ -63,9 +78,13 @@ export function useAdminAgents({
 	function reload() {
 		const current = queryClient.getQueryData<AdminAgentsState>(scope.queryKey);
 		if (!scope.active || !allowed) return Promise.resolve();
-		return current?.kind === "denied"
-			? queryClient.resetQueries({ queryKey: scope.queryKey, exact: true })
-			: query.refetch({ cancelRefetch: false });
+		if (current?.kind === "denied")
+			return queryClient.resetQueries({
+				queryKey: scope.queryKey,
+				exact: true,
+			});
+		markUserRead(scope, retainedContentAt(scope));
+		return query.refetch({ cancelRefetch: false });
 	}
 	return { state, isFetching: allowed && query.isFetching, refetch, reload };
 }
