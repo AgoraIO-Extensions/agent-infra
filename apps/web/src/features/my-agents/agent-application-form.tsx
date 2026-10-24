@@ -126,7 +126,7 @@ type DraftRowsProps<T extends string> = {
 	rows: readonly Record<T, string>[];
 };
 
-/** 申请提交失败的页面顶部提示：服务端整表校验失败、修改申请入口身份或模板不可用时焦点到这里。 */
+/** 申请提交失败的页面顶部提示：服务端整表校验失败、非校验类提交失败、修改申请入口身份或模板不可用时焦点到这里。 */
 export const applicationSubmissionErrorId = "application-submission-error";
 
 function fieldId(key: string) {
@@ -700,6 +700,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		focusRequest: number;
 		formError?: boolean;
 		serverCode?: string;
+		/** 已处理过焦点的服务端错误：每次提交失败都是新的对象（提交开始时随之清空）。 */
+		serverError?: AgentApplicationServerError | null;
 		advancedConfigurationOpen: boolean;
 	}>({ advancedConfigurationOpen: false, focusRequest: -1 });
 	const application = props.mode === "update" ? props.application : undefined;
@@ -987,6 +989,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	// 顶部提示说明下一步并获得焦点，字段下保留原因（同 #3291 N9-2-03；#3328 N10-2-01、N10-2-02）。
 	// 刷新页面就能确认的情况（验证 revision 在会话内变化，或这次没能读到验证结果）只提示刷新；验证过期
 	// （与当前登记不符或超出有效期）要等平台重新验证，与验证失败、停用一样提示等待恢复或新建申请。
+	// 字段错误拼接的就绪原因本身也不引导刷新，前后两句给出同一个下一步（#3351 N11-01）。
 	const templateLock: { alert: string; field: string } | undefined =
 		props.mode !== "update" ||
 		sourceKind !== "standard" ||
@@ -1428,10 +1431,16 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 
 	useEffect(() => {
 		const serverCode = props.serverError?.code;
+		const serverError = props.serverError ?? null;
 		const previous = focusStateRef.current;
+		// 这次提交刚返回的服务端错误（只在出现的那一次移交焦点）：再次点提交时旧错误还在，不能把焦点从
+		// 提交按钮抢回顶部提示。
+		const serverErrorArrived =
+			serverError !== null && serverError !== (previous.serverError ?? null);
 		const shouldFocus =
 			focusRequest !== previous.focusRequest ||
 			serverCode !== previous.serverCode ||
+			serverErrorArrived ||
 			serverFormError !== previous.formError ||
 			advancedConfigurationOpen !== previous.advancedConfigurationOpen;
 		focusStateRef.current = {
@@ -1439,9 +1448,15 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			focusRequest,
 			formError: serverFormError,
 			serverCode,
+			serverError,
 		};
+		// 非校验类提交失败（503、500、不可重试的 409 等）没有字段错误，说明只在页面顶部；提示出现时同整表
+		// 校验失败一样滚入视口（根样式让出吸顶顶栏）并接过焦点，不让焦点留在页底的提交按钮上（#3351 N11-02）。
 		const summarizedAtTop =
-			serverFormError || identityEntryLocked || templateLockShown;
+			serverFormError ||
+			identityEntryLocked ||
+			templateLockShown ||
+			serverErrorArrived;
 		if (
 			!shouldFocus ||
 			(Object.keys(fieldErrors).length === 0 && !summarizedAtTop)
@@ -1459,8 +1474,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		const first = firstFieldError(focusableErrors);
 		if (first instanceof HTMLElement) first.focus();
 		// 整表校验失败只由页面顶部的提交失败提示说明一次（role=alert），焦点交给它，不落到整张表单
-		// （#3268 N8-2-03）；修改申请的入口身份不可用（#3291 N9-2-03）或模板不能更换又不可申请
-		// （#3328）时同样聚焦顶部提示。
+		// （#3268 N8-2-03）；修改申请的入口身份不可用（#3291 N9-2-03）、模板不能更换又不可申请
+		// （#3328）与非校验类提交失败（#3351 N11-02）时同样聚焦顶部提示。聚焦时浏览器把它滚入视口。
 		else if (summarizedAtTop)
 			document.getElementById(applicationSubmissionErrorId)?.focus();
 	}, [
@@ -1468,7 +1483,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		fieldErrors,
 		focusRequest,
 		identityEntryLocked,
-		props.serverError?.code,
+		props.serverError,
 		serverFormError,
 		templateLockShown,
 	]);
@@ -1562,8 +1577,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		>
 			{topAlertMessage ? (
 				// 页面顶部唯一的提交失败提示（role=alert，tabIndex=-1）：服务端错误的文案由提交页给出；
-				// 整表校验失败与修改申请的入口身份不可用时焦点交给它（#3268 N8-2-03、#3291 N9-2-03），
-				// 修改申请的模板不能更换又不可申请时同一位置说明模板并获得焦点（#3328）。
+				// 整表校验失败、非校验类提交失败与修改申请的入口身份不可用时焦点交给它（#3268 N8-2-03、
+				// #3351 N11-02、#3291 N9-2-03），修改申请的模板不能更换又不可申请时同一位置说明模板并获得焦点（#3328）。
 				<Alert
 					tone="danger"
 					role="alert"

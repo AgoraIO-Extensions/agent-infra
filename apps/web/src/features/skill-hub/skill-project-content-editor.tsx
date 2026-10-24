@@ -30,6 +30,7 @@ import type {
 	SkillHubPublicationResponseV1,
 } from "../../pilot/generated-v2/types.gen.js";
 import type { CollectionReadUnavailable } from "../collection-read-failure.js";
+import { RecoveryButton } from "../recovery-button.js";
 import { skillHubVisibilityLabels } from "./skill-hub-labels.js";
 import {
 	publishSkillHubProjectVersion,
@@ -239,6 +240,9 @@ export function SkillProjectContentEditor({
 	const [reload, setReload] = useState(0);
 	const initialized = useRef(-1);
 	const [conflict, setConflict] = useState(false);
+	// 保存冲突后的「重新读取内容」：pending 为请求进行中，settled 为请求已结束、等页面换上这次读取的结果
+	// （页面读取中 retrying 为 true）后再收起冲突并重新初始化草稿（#3351 N11-03）。
+	const [reread, setReread] = useState<"idle" | "pending" | "settled">("idle");
 	const [errors, setErrors] = useState<{
 		skillMd?: string;
 		files?: Record<string, string>;
@@ -262,6 +266,16 @@ export function SkillProjectContentEditor({
 		setSaved({ revision: content.content.revision, snapshot: serialize(next) });
 		setErrors({});
 	}, [content, reload]);
+
+	// 重读结束且页面已换上结果：收起冲突提示与「重新读取内容」，读到内容时按服务端内容重新初始化草稿，
+	// 按钮卸载后焦点到 SKILL.md；仍读取失败时页面换成读取失败区，焦点由其中的「重新读取」接过（D2-59）。
+	useEffect(() => {
+		if (reread !== "settled" || retrying) return;
+		setReread("idle");
+		setConflict(false);
+		setContentFeedback(undefined);
+		setReload((value) => value + 1);
+	}, [reread, retrying]);
 
 	useEffect(() => {
 		if (content.kind === "ready" && consumeInitialFocus?.())
@@ -862,21 +876,24 @@ export function SkillProjectContentEditor({
 					<SkillFeedback feedback={contentFeedback} />
 					{conflict ? (
 						<div className="skill-actions skill-form-actions">
-							<Button
-								type="button"
+							{/* 重读进行中按钮不先收起：保持可聚焦（aria-disabled）并留住焦点。读到内容后按钮随冲突
+							    收起，焦点到 SKILL.md（recoveryTarget）；仍读取失败时页面换成读取失败区，焦点回到其中
+							    的「重新读取」——两者是同一个恢复操作（重读项目内容），用同一个 recoveryKey（D2-59，
+							    #3351 N11-03）。 */}
+							<RecoveryButton
 								variant="outline"
+								recoveryKey="重新读取"
+								recoveryTarget={() => skillMdInput.current}
+								busy={reread !== "idle"}
 								onClick={() => {
-									setConflict(false);
-									setContentFeedback(undefined);
-									void Promise.resolve(onRetry?.()).then(() => {
-										setReload((value) => value + 1);
-										// 按钮随冲突消失，焦点回到正文，不落到 body。
-										requestAnimationFrame(() => skillMdInput.current?.focus());
-									});
+									if (reread !== "idle") return;
+									setReread("pending");
+									const settle = () => setReread("settled");
+									void Promise.resolve(onRetry?.()).then(settle, settle);
 								}}
 							>
-								重新读取内容
-							</Button>
+								{reread === "idle" ? "重新读取内容" : "正在重新读取…"}
+							</RecoveryButton>
 						</div>
 					) : null}
 					<SkillFeedback feedback={publishFeedback}>

@@ -2131,7 +2131,7 @@ resources:
 		[
 			"stale",
 			"此申请的模板暂不可申请，请等待模板恢复后再提交，或新建申请。",
-			"模板或验证已过期，请刷新后重试。已有申请不能更换模板，请等待模板恢复后再提交，或新建申请。",
+			"模板验证已过期，需等待平台重新验证。已有申请不能更换模板，请等待模板恢复后再提交，或新建申请。",
 		],
 		[
 			"disabled",
@@ -2271,6 +2271,65 @@ resources:
 			"申请提交失败，部署依赖暂不可用，请稍后重试。",
 		);
 	});
+
+	// #3351 N11-02：非校验类提交失败（503、500、不可重试的 409）没有字段错误，说明只在顶部唯一的提示里：
+	// 失败返回、提示出现时它接过焦点（与整表校验失败一致）；再次提交时旧错误还在、请求尚未开始，焦点留在
+	// 提交按钮上，不被抢回提示；同一类失败再次返回（新的错误对象）时提示再次接过焦点。
+	it.each([
+		["DEPENDENCY_UNAVAILABLE", "申请提交失败，部署依赖暂不可用，请稍后重试。"],
+		[
+			undefined,
+			"申请提交失败，非敏感内容已保留。请重新填写 Secret 或模型凭证后再提交。",
+		],
+		["RESOURCE_UNAVAILABLE", "申请已变更或当前不可用，请刷新页面后核对。"],
+	])(
+		"focuses the top alert when a %s submission failure arrives",
+		(code, message) => {
+			const onSubmit = vi.fn();
+			const props = {
+				application: pendingApplication,
+				action: "edit" as const,
+				deploymentConfiguration,
+				mode: "update" as const,
+				onSubmit,
+				showDeploymentStatus: false,
+				submitting: false,
+			};
+			const { rerender } = render(<AgentApplicationForm {...props} />);
+			const submit = screen.getByRole("button", { name: "修改申请" });
+			submit.focus();
+			fireEvent.click(submit);
+			expect(onSubmit).toHaveBeenCalledTimes(1);
+			rerender(<AgentApplicationForm {...props} submitting />);
+			expect(document.activeElement).toBe(submit);
+			rerender(
+				<AgentApplicationForm
+					{...props}
+					serverError={{ code }}
+					submissionErrorMessage={message}
+				/>,
+			);
+			const alert = screen.getByRole("alert");
+			expect(alert.textContent).toBe(message);
+			expect(document.activeElement).toBe(alert);
+
+			submit.focus();
+			fireEvent.click(submit);
+			expect(onSubmit).toHaveBeenCalledTimes(2);
+			expect(document.activeElement).toBe(submit);
+			rerender(<AgentApplicationForm {...props} submitting />);
+			expect(screen.queryByRole("alert")).toBeNull();
+			expect(document.activeElement).toBe(submit);
+			rerender(
+				<AgentApplicationForm
+					{...props}
+					serverError={{ code }}
+					submissionErrorMessage={message}
+				/>,
+			);
+			expect(document.activeElement).toBe(screen.getByRole("alert"));
+		},
+	);
 
 	// #3328 N10-2-01：创建申请时所选模板在会话内更新。字段错误沿用「模板已更新，请刷新后确认。」，
 	// 不再并列同义提示，也不写「部署选项暂不可用。」；下拉可改选，焦点到它。未选模板时仍提示选择。
