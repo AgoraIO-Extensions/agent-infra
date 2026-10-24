@@ -584,6 +584,74 @@ describe("session sandbox workload adapter", () => {
 		expect(resources[2].spec?.egress).toEqual([]);
 	});
 
+	it("converges independent resources concurrently and creates the Pod in the second wave", async () => {
+		const client = api();
+		const read = client.read.bind(client);
+		const create = client.create.bind(client);
+		let active = 0;
+		let maximum = 0;
+		const creates: string[] = [];
+		const delay = () => new Promise((resolve) => setTimeout(resolve, 5));
+		client.read = async (kind, name) => {
+			active++;
+			maximum = Math.max(maximum, active);
+			try {
+				await delay();
+				return await read(kind, name);
+			} finally {
+				active--;
+			}
+		};
+		client.create = async (object) => {
+			creates.push(object.kind ?? "");
+			await delay();
+			return create(object);
+		};
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+
+		await adapter.apply(allocation);
+		expect(maximum).toBeGreaterThan(1);
+		const podCreate = creates.indexOf("Pod");
+		expect(podCreate).toBeGreaterThan(-1);
+		for (const kind of [
+			"ServiceAccount",
+			"PersistentVolumeClaim",
+			"NetworkPolicy",
+			"Service",
+			"Secret",
+		])
+			expect(creates.indexOf(kind)).toBeLessThan(podCreate);
+
+		maximum = 0;
+		await adapter.observe(allocation);
+		expect(maximum).toBeGreaterThan(1);
+	});
+
+	it("settles every parallel convergence before surfacing a failure", async () => {
+		const client = api();
+		const read = client.read.bind(client);
+		const create = client.create.bind(client);
+		const delay = () => new Promise((resolve) => setTimeout(resolve, 20));
+		let active = 0;
+		client.read = async (kind, name) => {
+			active++;
+			try {
+				await delay();
+				return await read(kind, name);
+			} finally {
+				active--;
+			}
+		};
+		client.create = async (object) => {
+			if (object.kind === "ServiceAccount") throw new Error("boom");
+			return create(object);
+		};
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+
+		await expect(adapter.apply(allocation)).rejects.toThrow("boom");
+		expect(active).toBe(0);
+	});
+
 	it("applies the same deployment-approved egress as the Agent Workload (#1445)", async () => {
 		const egress = {
 			dnsEgress: [

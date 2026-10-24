@@ -1351,7 +1351,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				)
 					throw new WorkloadKubernetesError("conflict");
 			}
-			for (const expected of resources) {
+			const ensure = async (expected: KubernetesObject) => {
 				if (
 					allocation.desiredState === "stopped" &&
 					stoppedAbsentKinds.has(expected.kind ?? "")
@@ -1369,7 +1369,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						if (await options.client.read(kind, expected.metadata?.name ?? ""))
 							throw new WorkloadKubernetesError("unavailable");
 					}
-					continue;
+					return;
 				}
 				const kind = expected.kind as SessionSandboxResourceIdentityV1["kind"];
 				const current = await options.client.read(
@@ -1415,6 +1415,28 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 							uid: current.metadata?.uid,
 						},
 					});
+			};
+			if (allocation.desiredState === "stopped") {
+				for (const expected of resources) await ensure(expected);
+			} else {
+				const pod = resources.find((resource) => resource.kind === "Pod");
+				if (!pod) throw new WorkloadKubernetesError("policy");
+				// PVC, identity, policy, route and Secret are independent. The Pod
+				// is the only resource that consumes all of them, so keep it in a
+				// second wave while collapsing the control-plane round trips.
+				// 成功的兄弟资源已经收敛；失败时要等这一波全部结束再抛，重试不会与
+				// 仍在进行的 create / delete / replace 重叠（#3338 review）。
+				const settled = await Promise.allSettled(
+					resources
+						.filter((resource) => resource.kind !== "Pod")
+						.map((resource) => ensure(resource)),
+				);
+				const failure = settled.find(
+					(result): result is PromiseRejectedResult =>
+						result.status === "rejected",
+				);
+				if (failure) throw failure.reason;
+				await ensure(pod);
 			}
 			return {
 				sandboxId: allocation.sandboxId,
@@ -1443,10 +1465,16 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			// 复现不了。这类来源的 control 观测只按归属标记与 UID 识别（#2885）。
 			const preparedBeforeRuntimeInputs =
 				purpose === "control" && allocation.runtime === null;
-			for (const expected of expectedResources) {
-				const kind = expected.kind as SessionSandboxResourceIdentityV1["kind"];
-				const name = expected.metadata?.name ?? "";
-				const current = await options.client.read(kind, name);
+			const observed = await Promise.all(
+				expectedResources.map(async (expected) => {
+					const kind =
+						expected.kind as SessionSandboxResourceIdentityV1["kind"];
+					const name = expected.metadata?.name ?? "";
+					const current = await options.client.read(kind, name);
+					return { expected, kind, name, current };
+				}),
+			);
+			for (const { expected, kind, name, current } of observed) {
 				if (
 					allocation.desiredState === "stopped" &&
 					stoppedAbsentKinds.has(kind)
