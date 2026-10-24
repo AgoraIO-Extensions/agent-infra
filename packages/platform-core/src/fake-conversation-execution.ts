@@ -690,6 +690,9 @@ export class FakeConversationExecutionV1
 				});
 				return accepted;
 			},
+			wakeUnknownExecutionRecovery: async (input) => {
+				this.wokenRecoveries.push(structuredClone(input));
+			},
 			executeStop: async (request, decide) => {
 				if (
 					!isCurrentConversationBinding(
@@ -977,6 +980,22 @@ export class FakeConversationExecutionV1
 			status: "unavailable",
 		});
 	}
+
+	/** 测试用：把活跃 Execution 置为受理不明（#3373）。 */
+	markExecutionUnknown(executionId: string) {
+		const execution = this.#executions.find(
+			(candidate) => candidate.executionId === executionId,
+		);
+		if (!execution || !isActiveExecution(execution))
+			throw new Error("Execution is not active");
+		execution.status = "unknown";
+	}
+
+	/** #3373：新消息唤醒的受理不明 Execution 恢复。 */
+	readonly wokenRecoveries: {
+		readonly conversationId: string;
+		readonly executionId: string;
+	}[] = [];
 
 	snapshot() {
 		return structuredClone({

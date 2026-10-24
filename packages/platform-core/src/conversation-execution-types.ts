@@ -757,6 +757,15 @@ export interface ConversationExecutionTransactionPortV1 {
 					{ outcome: "accepted" | "replayed" | "denied" }
 			  >,
 	): Promise<ConversationStopDecisionV1>;
+	/**
+	 * #3373：新消息到达时 Conversation 被受理不明的 Execution 占用，立即唤醒该 Execution 的
+	 * 恢复工作项，让 Worker 先按 Host 的真实状态核实一次。只调整已排定恢复的可认领时间，
+	 * 不释放占用，也不改变 Execution 状态；Execution 已不是 unknown 时不做任何事。
+	 */
+	wakeUnknownExecutionRecovery?(input: {
+		readonly conversationId: string;
+		readonly executionId: string;
+	}): Promise<void>;
 }
 
 export interface ConversationExecutionUseCaseV1 {

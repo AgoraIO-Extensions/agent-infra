@@ -885,6 +885,53 @@ describe("Conversation execution use case", () => {
 		]);
 	});
 
+	it("wakes recovery of an unknown occupant without changing the busy outcome (#3373)", async () => {
+		const conversation = new FakeConversationExecutionV1({
+			authority: { ...authority, supportsSupplementaryInstruction: false },
+			newId: (() => {
+				let value = 1;
+				return () => `wake_${value++}`;
+			})(),
+		});
+		await conversation.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "create_wake",
+			requestId: "request_create_wake",
+			traceId: "trace_create_wake",
+		});
+		const first = await conversation.accept({
+			schemaVersion: 1,
+			command: "message",
+			conversationId: "wake_1",
+			text: "First",
+			idempotencyKey: "message_wake_first",
+			requestId: "request_message_wake_first",
+			traceId: "trace_message_wake_first",
+		});
+		if (first.outcome !== "accepted") throw new Error("Expected acceptance");
+		const second = {
+			schemaVersion: 1 as const,
+			command: "message" as const,
+			conversationId: "wake_1",
+			text: "Second",
+			idempotencyKey: "message_wake_second",
+			requestId: "request_message_wake_second",
+			traceId: "trace_message_wake_second",
+		};
+		// 活跃 Execution 已被 Runtime 处理（未受理不明）时不唤醒。
+		expect(await conversation.accept(second)).toEqual({ outcome: "busy" });
+		expect(conversation.wokenRecoveries).toEqual([]);
+		conversation.markExecutionUnknown(first.result.executionId);
+		const before = conversation.snapshot();
+		expect(await conversation.accept(second)).toEqual({ outcome: "busy" });
+		// 受理不明占用时先唤醒恢复核实，不释放占用，也不新增可见记录。
+		expect(conversation.wokenRecoveries).toEqual([
+			{ conversationId: "wake_1", executionId: first.result.executionId },
+		]);
+		expect(conversation.snapshot()).toEqual(before);
+	});
+
 	it("returns busy without a new visible side effect when the active execution cannot supplement", async () => {
 		const conversation = new FakeConversationExecutionV1({
 			authority: { ...authority, supportsSupplementaryInstruction: false },
