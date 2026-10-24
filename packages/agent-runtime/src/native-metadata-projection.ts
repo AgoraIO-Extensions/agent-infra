@@ -8,6 +8,13 @@ import {
 } from "@agent-infra/contracts/runtime";
 import { RuntimeHostError } from "./errors.js";
 
+// `localeCompare` depends on the host locale, so the same directory could sort
+// differently (and produce a different `revision` digest) on another host.
+const compareByName = (
+	left: { readonly name: string },
+	right: { readonly name: string },
+) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+
 const maxCapabilities = 128;
 const maxIdentityText = 256;
 const maxCapabilityText = 256;
@@ -177,7 +184,7 @@ export function projectNativeMetadataCommandsV1(input: {
 	const directory = commandDirectory(input.directory);
 	const commands = directory.commands
 		.map((command) => commandCapability(command, source))
-		.sort((left, right) => left.name.localeCompare(right.name));
+		.sort(compareByName);
 	if (new Set(commands.map((command) => command.name)).size !== commands.length)
 		invalid();
 	const revision = digest([
@@ -255,9 +262,7 @@ export function projectNativeMetadataSkillsV1(input: {
 	const sourceName = boundedText(input.sourceName, maxCapabilityText);
 	input.assertCurrent?.();
 	const { generationId, entries } = skillDirectory(input.directory);
-	const skills = entries
-		.map(skillCapability)
-		.sort((left, right) => left.name.localeCompare(right.name));
+	const skills = entries.map(skillCapability).sort(compareByName);
 	if (new Set(skills.map((skill) => skill.name)).size !== skills.length)
 		invalid();
 	const revision = digest([
@@ -314,7 +319,7 @@ export function projectNativeMetadataCommandsV2(input: {
 	const directory = commandDirectory(input.directory);
 	const commands = directory.commands
 		.map((command) => commandCapability(command, source))
-		.sort((left, right) => left.name.localeCompare(right.name));
+		.sort(compareByName);
 	if (new Set(commands.map((command) => command.name)).size !== commands.length)
 		invalid();
 	const revision = digest([
@@ -328,7 +333,7 @@ export function projectNativeMetadataCommandsV2(input: {
 		requiredParameter,
 		commands.map(({ identity, ...command }) => ({ command, identity })),
 	]);
-	return NativeMetadataCommandsProjectionV2Schema.parse({
+	const projection = NativeMetadataCommandsProjectionV2Schema.parse({
 		schemaVersion: 1,
 		selector: "commands",
 		revision,
@@ -347,4 +352,6 @@ export function projectNativeMetadataCommandsV2(input: {
 			};
 		}),
 	});
+	input.assertCurrent?.();
+	return projection;
 }
