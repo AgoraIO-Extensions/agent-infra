@@ -120,11 +120,14 @@ const columns = ["Agent", "Owner", "来源", "状态", "可用范围"] as const;
 
 /**
  * 翻页后把新的一页滚入视口（#3292 N9-3-02）：表格到分页条放得下时整段可见，放不下时让表格顶端
- * 贴着吸顶顶栏（`.action-reveal` 的 scroll-margin），不让新数据停在视口上方。
+ * 贴着吸顶顶栏（根样式的 scroll-padding-top 让出顶栏与 16px，#3329 N10-3-02；分页条下方的 16px 是
+ * `.action-reveal` 的 scroll-margin-bottom），不让新数据停在视口上方。
  */
 function revealPage(table: HTMLElement | null, pagination: HTMLElement | null) {
 	if (!table || !pagination) return;
-	const visibleTop = Number.parseFloat(getComputedStyle(table).scrollMarginTop);
+	const visibleTop = Number.parseFloat(
+		getComputedStyle(document.documentElement).scrollPaddingTop,
+	);
 	const visibleBottom =
 		window.innerHeight -
 		Number.parseFloat(getComputedStyle(pagination).scrollMarginBottom);

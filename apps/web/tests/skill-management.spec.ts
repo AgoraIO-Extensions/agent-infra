@@ -26,9 +26,13 @@ import { directorySearchResponse } from "../src/features/directory-test-fixtures
 import {
 	expectFocusableBusy,
 	expectFocusSettled,
+	expectFocusUnobscured,
 	expectNoDuplicateControls,
+	expectStickyTopbarClearance,
 	holdRequests,
 	pinElement,
+	scrollTopTo,
+	topbarClearance,
 } from "./page-health";
 import {
 	computed,
@@ -1746,6 +1750,56 @@ test("creating a project keeps focus off body, lands on SKILL.md and keeps the i
 		}),
 	).toBeVisible();
 	await expectNoDuplicateControls(page, "创建与发布（创建项目后，N8-3-04）");
+	await expectCleanPage(page, errors);
+});
+
+// #3329 N10-3-02：程序聚焦与 Tab 的目标不被 72px 吸顶顶栏遮挡（WCAG 2.2 SC 2.4.11）。把「创建项目」滚到
+// 顶栏下方 8px（「包名称」随之在顶栏之下），空名提交后焦点到「包名称」，整框在顶栏之下；从「创建项目」
+// Shift+Tab 回到「包名称」同样如此。根样式 scroll-padding-top 让出顶栏与 16px。
+test("an empty project name and Shift+Tab bring 包名称 into view below the sticky topbar (N10-3-02)", async ({
+	page,
+}, info) => {
+	// 1440×900 下新建页滚动范围不够把「包名称」滚到顶栏之下；桌面档由申请表单用例覆盖（my-agents-design）。
+	test.skip(info.project.name !== "mobile", "390×844 才能构造被顶栏遮住的状态");
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/skills/manage/new");
+	const main = page.locator("#main-content");
+	const name = main.getByLabel("包名称", { exact: true });
+	const create = main.getByRole("button", { name: "创建项目" });
+	await expect(create).toBeVisible();
+
+	const obscure = async () => {
+		const bar = await topbarClearance(create);
+		const at = await scrollTopTo(create, bar.barBottom + 8);
+		// 前置状态：「创建项目」在顶栏下方 8px，「包名称」在顶栏之下（不可见或被遮住）。
+		expect(Math.abs(at.top - at.barBottom - 8)).toBeLessThanOrEqual(1);
+		const field = await topbarClearance(name);
+		expect(field.top, "「包名称」先在顶栏之下").toBeLessThan(field.barBottom);
+	};
+
+	// 空名提交：FieldError 把焦点交给「包名称」（程序聚焦）。
+	await obscure();
+	await create.evaluate((element) =>
+		(element as HTMLElement).focus({ preventScroll: true }),
+	);
+	await page.keyboard.press("Enter");
+	await expect(name).toHaveAttribute("aria-invalid", "true");
+	await expectFocusUnobscured(name, "空名提交后");
+	await info.attach("n10-3-02-empty-name", {
+		body: await page.screenshot(),
+		contentType: "image/png",
+	});
+
+	// 键盘：从「创建项目」Shift+Tab 回到上方被顶栏遮住的「包名称」。
+	await obscure();
+	await create.evaluate((element) =>
+		(element as HTMLElement).focus({ preventScroll: true }),
+	);
+	await page.keyboard.press("Shift+Tab");
+	await expectFocusUnobscured(name, "Shift+Tab 回到包名称");
+	await expectStickyTopbarClearance(page);
 	await expectCleanPage(page, errors);
 });
 

@@ -353,6 +353,25 @@ describe("ApplicationManagementScreen", () => {
 		expect(onRelogin).toHaveBeenCalledOnce();
 	});
 
+	it("offers a section-named 重新加载 for a retryable application read (N10-3-01)", () => {
+		const onRetry = vi.fn();
+		render(
+			<ApplicationManagementScreen
+				state={{ kind: "unavailable", retryable: true }}
+				onRetry={onRetry}
+			/>,
+		);
+		const alert = screen.getByRole("alert");
+		expect(alert.textContent).toBe("暂时无法读取应用，请稍后重试。重新加载");
+		// 与上方个人凭证列表的「重新加载」可能同时出现（两处同时 503），名称带分区名，可见文字不变。
+		const reload = within(alert).getByRole("button", {
+			name: "重新加载：应用管理",
+		});
+		expect(reload.textContent).toBe("重新加载");
+		fireEvent.click(reload);
+		expect(onRetry).toHaveBeenCalledOnce();
+	});
+
 	it("retains safe response metadata and prepares an explicit rotation of its returned ID", async () => {
 		const rotated: ApplicationCredentialResponse = {
 			...response,
