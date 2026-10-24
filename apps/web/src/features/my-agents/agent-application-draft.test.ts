@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	type AgentApplicationFormDraft,
 	buildAgentApplicationRequest,
+	templateFieldError,
 	validateAgentApplicationDraft,
 } from "./agent-application-draft.js";
 
@@ -317,6 +318,64 @@ describe("Agent application draft", () => {
 					"该模板已从当前部署移除。已有申请不能更换模板，请新建申请。",
 			}).templateId,
 		).toBe("该模板已从当前部署移除。已有申请不能更换模板，请新建申请。");
+	});
+
+	// #3364 N12-02：部署给出就绪状态却没有一个模板可申请时，未选模板的字段错误说明没有可申请的模板，
+	// 不再提示一个无法完成的选择；部署整体的问题仍优先，已选模板时仍沿用它的就绪原因。
+	it("explains that no template can be applied for instead of asking to choose one", () => {
+		const noneApplicable = {
+			modelConfigurationVisible: false,
+			requiresTemplateReadiness: true,
+			staleModel: false,
+			staleTemplate: false,
+			standardChoicesBlocked: true,
+			noApplicableTemplateMessage:
+				"当前没有可申请的标准模板，请等待模板完成验证或联系平台管理员。",
+		};
+		const unselected = {
+			...standardCreateDraft,
+			templateId: "",
+			templateRevision: "",
+		};
+		expect(
+			validateAgentApplicationDraft(unselected, noneApplicable).templateId,
+		).toBe("当前没有可申请的标准模板，请等待模板完成验证或联系平台管理员。");
+		expect(
+			validateAgentApplicationDraft(unselected, {
+				...noneApplicable,
+				configurationMessage: "部署选项已过期，请重新加载后再提交。",
+			}).templateId,
+		).toBe("部署选项已过期，请重新加载后再提交。");
+		expect(
+			validateAgentApplicationDraft(standardCreateDraft, {
+				...noneApplicable,
+				templateUnavailableMessage: "模板验证已过期，需等待平台重新验证。",
+			}).templateId,
+		).toBe("模板验证已过期，需等待平台重新验证。");
+	});
+
+	// #3364 N12-01：提交后按当前状态改写字段错误时与提交时校验同一套规则；模板恢复后没有错误。
+	it("derives the template field error from the current state alone", () => {
+		const current = { ...standardCreateDraft, templateRevision: "codex-r1" };
+		const context = {
+			requiresTemplateReadiness: true,
+			staleTemplate: false,
+			standardChoicesBlocked: false,
+		};
+		expect(templateFieldError(current, context)).toBeUndefined();
+		expect(
+			templateFieldError(current, {
+				...context,
+				standardChoicesBlocked: true,
+				templateUnavailableMessage: "暂时无法读取验证结果，请刷新后重试。",
+			}),
+		).toBe("暂时无法读取验证结果，请刷新后重试。");
+		expect(
+			templateFieldError(
+				{ ...current, sourceKind: "custom-platform-adapter" },
+				{ ...context, lockedTemplateMessage: "不会出现" },
+			),
+		).toBeUndefined();
 	});
 
 	it("marks only repeated environment and Secret names", () => {

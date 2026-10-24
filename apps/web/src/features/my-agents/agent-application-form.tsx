@@ -3,6 +3,7 @@ import {
 	Fragment,
 	type ReactNode,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -26,6 +27,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { pageRecoveryTarget } from "@/hooks/use-recovery-focus";
 import { useRowRemovalFocus } from "@/hooks/use-row-removal-focus";
 import { useSubmitFocus } from "@/hooks/use-submit-focus";
 import { withObjectName } from "@/lib/accessible-name";
@@ -50,6 +52,7 @@ import {
 	buildAgentApplicationRequest,
 	showsModelConfiguration,
 	sourceKindFor,
+	templateFieldError,
 	validateAgentApplicationDraft,
 } from "./agent-application-draft.js";
 import { ApplicationKeylessModelEditor } from "./application-keyless-model-editor.js";
@@ -287,6 +290,39 @@ function FieldError({ id, message }: { id: string; message?: string }) {
 			{message}
 		</SharedFieldError>
 	) : null;
+}
+
+/**
+ * 页面顶部唯一的提交失败提示（role=alert，tabIndex=-1）。模板拦截提示会在部署选项重读、模板恢复后随之
+ * 收起，焦点可能还在它上面：卸载后交给页面标题（不可聚焦时为 #main-content），不落到 body，也不为此
+ * 滚动页面（#3364 N12-01）。
+ */
+function SubmissionAlert({ id, message }: { id: string; message: string }) {
+	const ref = useRef<HTMLDivElement>(null);
+	useLayoutEffect(() => {
+		const element = ref.current;
+		return () => {
+			if (!element?.contains(document.activeElement)) return;
+			// 等提示真正离开 DOM 后再看焦点：同一位置换成服务端错误说明时焦点仍在它上面。
+			window.setTimeout(() => {
+				const active = document.activeElement;
+				if (active && active !== document.body) return;
+				pageRecoveryTarget()?.focus({ preventScroll: true });
+			});
+		};
+	}, []);
+	return (
+		<Alert
+			tone="danger"
+			role="alert"
+			className="application-form-alert"
+			id={id}
+			ref={ref}
+			tabIndex={-1}
+		>
+			<AlertDescription>{message}</AlertDescription>
+		</Alert>
+	);
 }
 
 function blankEnvironment(): AgentApplicationEnvironmentDraft {
@@ -918,6 +954,22 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const readinessEnabled = deployment.templates.some(
 		(template) => template.readiness !== undefined,
 	);
+	// 创建申请时部署给出就绪状态，却没有一个模板可申请（例如未接入验证时全部「尚未完成真实运行与模型
+	// 验证。」）：同「部署没有标准模板」，未选模板时下拉禁用，字段错误说明没有可申请的模板；就绪列表照常
+	// 列出每项原因（PRD §4、§16）。其中有暂时读不到验证结果的模板时刷新即可确认，与它的就绪原因给出同一个
+	// 下一步（#3364 N12-02）。修改申请不能更换模板，由模板拦截说明。
+	const noApplicableTemplateMessage =
+		props.mode === "create" &&
+		readinessEnabled &&
+		!deployment.templates.some(
+			(template) => template.readiness?.state === "ready",
+		)
+			? deployment.templates.some(
+					(template) => template.readiness?.state === "unavailable",
+				)
+				? "当前没有可申请的标准模板，请刷新后重试。"
+				: "当前没有可申请的标准模板，请等待模板完成验证或联系平台管理员。"
+			: undefined;
 	const templateUnavailable =
 		readinessEnabled &&
 		sourceKind === "standard" &&
@@ -1112,10 +1164,59 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const hasActiveServerValidationError =
 		props.serverError?.code === "MODEL_SELECTION_INVALID" &&
 		!serverValidationDismissed;
-	const fieldErrors = useMemo(
-		() => ({ ...serverFieldErrors, ...localFieldErrors }),
-		[serverFieldErrors, localFieldErrors],
+	const configurationMessage =
+		deployment.status === "stale" || deployment.modelCatalog.status === "stale"
+			? "部署选项已过期，请重新加载后再提交。"
+			: deployment.status === "unavailable" ||
+					deployment.modelCatalog.status === "unavailable"
+				? deploymentRetryable
+					? "部署选项暂不可用，请重新加载；标准模板申请暂不能提交。"
+					: "部署选项暂不可用，请联系管理员。"
+				: deployment.status === "empty" ||
+						(deployment.templates.length === 0 && sourceKind === "standard") ||
+						(deployment.modelCatalog.status === "empty" &&
+							sourceKind === "standard")
+					? "当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。"
+					: staleTemplate || (modelConfigurationVisible && staleModel)
+						? "当前申请包含已移除的部署选项，请重新加载并重新选择。"
+						: undefined;
+	// 「标准模板」字段错误的校验上下文：提交时校验与之后按当前状态实时改写共用（#3364 N12-01）。
+	const templateValidation = {
+		configurationMessage,
+		lockedTemplateMessage: templateLock?.field,
+		noApplicableTemplateMessage,
+		requiresTemplateReadiness: readinessEnabled && sourceKind === "standard",
+		staleTemplate,
+		standardChoicesBlocked,
+		templateUnavailableMessage,
+	};
+	const currentTemplateError = templateFieldError(
+		{ sourceKind, templateId, templateRevision },
+		templateValidation,
 	);
+	// 提交被拦下后「标准模板」的字段错误不停在提交那一刻：部署选项重读（回到标签页、窗口重新聚焦）改变
+	// 就绪状态时，按当前状态改写，与顶部模板拦截提示（同样实时派生）、所选模板提示和就绪列表同源；模板
+	// 恢复且验证 revision 与页面一致时随之清除（#3364 N12-01）。
+	const fieldErrors = useMemo(() => {
+		const errors = { ...serverFieldErrors, ...localFieldErrors };
+		if (localFieldErrors.templateId !== undefined) {
+			if (currentTemplateError) errors.templateId = currentTemplateError;
+			else delete errors.templateId;
+		}
+		return errors;
+	}, [currentTemplateError, serverFieldErrors, localFieldErrors]);
+	// 恢复后的清除是这次拦截的结束：之后状态再变化只给出提交前的提示，再次提交才重新拦下。
+	useEffect(() => {
+		if (
+			localFieldErrors.templateId !== undefined &&
+			currentTemplateError === undefined
+		)
+			setFieldErrors(({ templateId: _cleared, ...rest }) => rest);
+	}, [currentTemplateError, localFieldErrors.templateId]);
+	useEffect(() => {
+		if (templateLockAttempted && templateLock === undefined)
+			setTemplateLockAttempted(false);
+	}, [templateLock, templateLockAttempted]);
 	const advancedConfigurationHasErrors = Object.keys(fieldErrors).some(
 		(key) => key.startsWith("environment.") || key.startsWith("secret."),
 	);
@@ -1134,22 +1235,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				defaultModel?.reasoningLevels.split("\n").includes(level),
 			)
 		: [];
-	const configurationMessage =
-		deployment.status === "stale" || deployment.modelCatalog.status === "stale"
-			? "部署选项已过期，请重新加载后再提交。"
-			: deployment.status === "unavailable" ||
-					deployment.modelCatalog.status === "unavailable"
-				? deploymentRetryable
-					? "部署选项暂不可用，请重新加载；标准模板申请暂不能提交。"
-					: "部署选项暂不可用，请联系管理员。"
-				: deployment.status === "empty" ||
-						(deployment.templates.length === 0 && sourceKind === "standard") ||
-						(deployment.modelCatalog.status === "empty" &&
-							sourceKind === "standard")
-					? "当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。"
-					: staleTemplate || (modelConfigurationVisible && staleModel)
-						? "当前申请包含已移除的部署选项，请重新加载并重新选择。"
-						: undefined;
 	const sourceFields = (
 		<>
 			<p className="sr-only" id="application-source-help">
@@ -1220,7 +1305,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					<Label htmlFor="application-template-id">标准模板</Label>
 					<Select
 						disabled={
-							props.mode === "update" || deployment.templates.length === 0
+							props.mode === "update" ||
+							deployment.templates.length === 0 ||
+							(noApplicableTemplateMessage !== undefined && !templateId)
 						}
 						value={templateId}
 						itemToStringLabel={(value) =>
@@ -1511,22 +1598,17 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			defaultReasoningLevel,
 		};
 		const errors = validateAgentApplicationDraft(draft, {
+			...templateValidation,
 			allowedEnvironmentKeys: selectedTemplate?.allowedEnvironmentKeys,
 			allowedSecretKeys: selectedTemplate?.allowedSecretKeys,
-			configurationMessage,
 			defaultModelReasoningLevels: defaultModel?.reasoningLevels
 				?.split("\n")
 				.filter(Boolean),
 			modelConfigurationVisible,
-			requiresTemplateReadiness: readinessEnabled && sourceKind === "standard",
 			requiresDefaultRelayKey:
 				props.mode === "create" && sourceKind === "standard",
 			staleModel,
 			staleModelIndexes,
-			staleTemplate,
-			standardChoicesBlocked,
-			templateUnavailableMessage,
-			lockedTemplateMessage: templateLock?.field,
 		});
 		if (sourceKind === "custom-multi-service") {
 			const parsed = parseMultiServiceManifest(manifest);
@@ -1579,15 +1661,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				// 页面顶部唯一的提交失败提示（role=alert，tabIndex=-1）：服务端错误的文案由提交页给出；
 				// 整表校验失败、非校验类提交失败与修改申请的入口身份不可用时焦点交给它（#3268 N8-2-03、
 				// #3351 N11-02、#3291 N9-2-03），修改申请的模板不能更换又不可申请时同一位置说明模板并获得焦点（#3328）。
-				<Alert
-					tone="danger"
-					role="alert"
-					className="application-form-alert"
+				<SubmissionAlert
 					id={applicationSubmissionErrorId}
-					tabIndex={-1}
-				>
-					<AlertDescription>{topAlertMessage}</AlertDescription>
-				</Alert>
+					message={topAlertMessage}
+				/>
 			) : null}
 			{/* 页脚在 fieldset 之外：提交进行中字段由 fieldset 禁用，提交按钮仍可聚焦（aria-disabled），
 			    焦点不落到 body（#3242 K7-02）。 */}
