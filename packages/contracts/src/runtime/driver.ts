@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { OpaqueIdV1Schema, SchemaVersionV1Schema } from "../index.ts";
+import { RuntimeRelayKeyBindingV1Schema } from "./host-v4.ts";
 import {
 	RuntimeInputV1Schema,
 	RuntimeOperationResultV1Schema,
@@ -47,6 +48,24 @@ export const RuntimeDriverNativeCommandV1Schema = z.strictObject({
 	operationId: OpaqueIdV1Schema,
 	nativeSessionRef: OpaqueIdV1Schema,
 	...nativeCommandInput.shape,
+});
+
+/**
+ * Stateful native commands (for example Codex context compaction) carry the
+ * model selection and relay-key binding that were frozen by the Platform
+ * execution Grant.  The native RPC itself cannot change either value.
+ */
+export const RuntimeDriverNativeCommandV2Schema = z.strictObject({
+	...binding,
+	schemaVersion: z.literal(2),
+	kind: z.literal("native-command"),
+	operationId: OpaqueIdV1Schema,
+	nativeSessionRef: OpaqueIdV1Schema,
+	...nativeCommandInput.shape,
+	effect: z.literal("state_changing"),
+	selection: RuntimeSelectionV1Schema,
+	keyBinding: RuntimeRelayKeyBindingV1Schema,
+	authorizationRecordId: OpaqueIdV1Schema,
 });
 
 const operationBinding = {
@@ -105,6 +124,19 @@ export const RuntimeDriverOperationRecordV1Schema = z.strictObject({
 	result: RuntimeOperationResultV1Schema,
 });
 
+export const RuntimeDriverNativeCommandOperationRecordV2Schema =
+	z.strictObject({
+		schemaVersion: z.literal(2),
+		...operationBinding,
+		kind: z.literal("native-command"),
+		nativeSessionRef: OpaqueIdV1Schema,
+		result: RuntimeOperationResultV2Schema,
+		effect: z.literal("state_changing"),
+		selection: RuntimeSelectionV1Schema,
+		keyBinding: RuntimeRelayKeyBindingV1Schema,
+		authorizationRecordId: OpaqueIdV1Schema,
+	});
+
 export const RuntimeDriverLookupV1Schema = z.discriminatedUnion("state", [
 	z.strictObject({
 		state: z.literal("found"),
@@ -154,8 +186,14 @@ export type RuntimeDriverCommandV1 = z.infer<
 export type RuntimeDriverNativeCommandV1 = z.infer<
 	typeof RuntimeDriverNativeCommandV1Schema
 >;
+export type RuntimeDriverNativeCommandV2 = z.infer<
+	typeof RuntimeDriverNativeCommandV2Schema
+>;
 export type RuntimeDriverOperationRecordV1 = z.infer<
 	typeof RuntimeDriverOperationRecordV1Schema
+>;
+export type RuntimeDriverNativeCommandOperationRecordV2 = z.infer<
+	typeof RuntimeDriverNativeCommandOperationRecordV2Schema
 >;
 export type RuntimeDriverLookupV1 = z.infer<typeof RuntimeDriverLookupV1Schema>;
 export type RuntimeDriverSubmitTurnCommandV2 = z.infer<

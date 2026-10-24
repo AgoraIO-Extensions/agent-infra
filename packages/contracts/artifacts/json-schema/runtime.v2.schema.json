@@ -1,5 +1,508 @@
 {
   "$defs": {
+    "RuntimeDriverNativeCommandOperationRecordV2": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "authorizationRecordId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "effect": {
+          "const": "state_changing",
+          "type": "string"
+        },
+        "keyBinding": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ciphertextRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "purpose": {
+                  "const": "personal",
+                  "type": "string"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "purpose",
+                "subjectId",
+                "ciphertextRef",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ciphertextRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "purpose": {
+                  "const": "agent-default",
+                  "type": "string"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "purpose",
+                "subjectId",
+                "ciphertextRef",
+                "version"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "kind": {
+          "const": "native-command",
+          "type": "string"
+        },
+        "nativeSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "operationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "outcome": {
+                  "const": "accepted",
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "idle",
+                    "running",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "unavailable",
+                    "unknown"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "outcome",
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "outcome": {
+                  "const": "busy",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "outcome"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "RUNTIME_TURN_NOT_ACTIVE",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Runtime turn is no longer active",
+                  "type": "string"
+                },
+                "outcome": {
+                  "const": "rejected",
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "outcome",
+                "code",
+                "message",
+                "retryable"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Runtime model selection is unsupported",
+                  "type": "string"
+                },
+                "outcome": {
+                  "const": "rejected",
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "outcome",
+                "code",
+                "message",
+                "retryable"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "RUNTIME_SESSION_BLOCKED",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Runtime session is blocked by an unconfirmed turn",
+                  "type": "string"
+                },
+                "outcome": {
+                  "const": "rejected",
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "outcome",
+                "code",
+                "message",
+                "retryable"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "RUNTIME_FILE_INPUT_REJECTED",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Runtime file input was rejected",
+                  "type": "string"
+                },
+                "outcome": {
+                  "const": "rejected",
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": false,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "outcome",
+                "code",
+                "message",
+                "retryable"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Runtime command acceptance could not be confirmed",
+                  "type": "string"
+                },
+                "outcome": {
+                  "const": "unknown",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "outcome",
+                "code",
+                "message"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "schemaVersion": {
+          "const": 2,
+          "type": "number"
+        },
+        "selection": {
+          "additionalProperties": false,
+          "properties": {
+            "modelOptionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "reasoningLevel": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "modelOptionId",
+            "reasoningLevel"
+          ],
+          "type": "object"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "agentId",
+        "conversationId",
+        "sessionGeneration",
+        "kind",
+        "operationId",
+        "nativeSessionRef",
+        "result",
+        "effect",
+        "selection",
+        "keyBinding",
+        "authorizationRecordId"
+      ],
+      "type": "object"
+    },
+    "RuntimeDriverNativeCommandV2": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "authorizationRecordId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "capabilityId": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "capabilityName": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "capabilitySourceVersion": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "directoryRevision": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "effect": {
+          "const": "state_changing",
+          "type": "string"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "keyBinding": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ciphertextRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "purpose": {
+                  "const": "personal",
+                  "type": "string"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "purpose",
+                "subjectId",
+                "ciphertextRef",
+                "version"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "ciphertextRef": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "purpose": {
+                  "const": "agent-default",
+                  "type": "string"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "purpose",
+                "subjectId",
+                "ciphertextRef",
+                "version"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "kind": {
+          "const": "native-command",
+          "type": "string"
+        },
+        "nativeSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "operationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "parameters": {
+          "maxLength": 16384,
+          "type": "string"
+        },
+        "parametersDigest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 2,
+          "type": "number"
+        },
+        "selection": {
+          "additionalProperties": false,
+          "properties": {
+            "modelOptionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "reasoningLevel": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "modelOptionId",
+            "reasoningLevel"
+          ],
+          "type": "object"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "agentId",
+        "conversationId",
+        "executionId",
+        "turnId",
+        "sessionGeneration",
+        "schemaVersion",
+        "kind",
+        "operationId",
+        "nativeSessionRef",
+        "capabilityId",
+        "directoryRevision",
+        "capabilityName",
+        "capabilitySourceVersion",
+        "parameters",
+        "parametersDigest",
+        "effect",
+        "selection",
+        "keyBinding",
+        "authorizationRecordId"
+      ],
+      "type": "object"
+    },
     "RuntimeDriverSubmitTurnCommandV2": {
       "additionalProperties": false,
       "properties": {

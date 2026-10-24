@@ -40,7 +40,9 @@ import {
 	RuntimeDriverCommandV1Schema,
 	RuntimeDriverLookupV1Schema,
 	RuntimeDriverNativeCommandV1Schema,
+	RuntimeDriverNativeCommandV2Schema,
 	RuntimeDriverOperationRecordV1Schema,
+	RuntimeDriverNativeCommandOperationRecordV2Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
 	RuntimeDriverSubmitTurnLookupV2Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
@@ -132,6 +134,16 @@ export const RuntimeDriverV1SchemaDefinitions = {
 	RuntimeDriverOperationRecordV1: RuntimeDriverOperationRecordV1Schema,
 };
 
+export const RuntimeDriverV2SchemaDefinitions = {
+	RuntimeDriverNativeCommandV2: RuntimeDriverNativeCommandV2Schema,
+	RuntimeDriverNativeCommandOperationRecordV2:
+		RuntimeDriverNativeCommandOperationRecordV2Schema,
+	RuntimeDriverSubmitTurnCommandV2: RuntimeDriverSubmitTurnCommandV2Schema,
+	RuntimeDriverSubmitTurnLookupV2: RuntimeDriverSubmitTurnLookupV2Schema,
+	RuntimeDriverSubmitTurnOperationRecordV2:
+		RuntimeDriverSubmitTurnOperationRecordV2Schema,
+};
+
 export const RuntimeHostV2SchemaDefinitions = {
 	RuntimeOperationResponseV2: RuntimeOperationResponseV2Schema,
 	RuntimeOperationResultV2: RuntimeOperationResultV2Schema,
@@ -139,13 +151,6 @@ export const RuntimeHostV2SchemaDefinitions = {
 	RuntimeSubmitTurnRequestV2: RuntimeSubmitTurnRequestV2Schema,
 	RuntimeStatusRequestV2: RuntimeStatusRequestV2Schema,
 	RuntimeStatusResponseV2: RuntimeStatusResponseV2Schema,
-};
-
-export const RuntimeDriverV2SchemaDefinitions = {
-	RuntimeDriverSubmitTurnCommandV2: RuntimeDriverSubmitTurnCommandV2Schema,
-	RuntimeDriverSubmitTurnLookupV2: RuntimeDriverSubmitTurnLookupV2Schema,
-	RuntimeDriverSubmitTurnOperationRecordV2:
-		RuntimeDriverSubmitTurnOperationRecordV2Schema,
 };
 
 import {
