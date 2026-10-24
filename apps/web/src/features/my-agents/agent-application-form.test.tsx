@@ -2025,6 +2025,61 @@ resources:
 		);
 	});
 
+	// #3389 N13-09：修改申请打开时部署选项读取失败、还没读到模板的验证 revision；「重新加载部署选项」读到后
+	// 以它为页面读到的 revision，可以直接提交，不再要求刷新页面。读到之后 revision 再变化仍要求确认。
+	it("takes the first readable template revision after the deployment was unreadable on open (#3389 N13-09)", () => {
+		const onSubmit = vi.fn();
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			status: "rejected",
+			decision: { decidedAt: "2026-09-04T00:00:00Z", reason: "Retry" },
+		});
+		const [codex] = deploymentConfiguration.templates;
+		if (!codex) throw new Error("Missing template fixture");
+		const withRevision = (revision: string) => ({
+			...deploymentConfiguration,
+			templates: [
+				{ ...codex, readiness: { state: "ready" as const, revision } },
+			],
+		});
+		const props = {
+			action: "resubmit" as const,
+			application,
+			deploymentConfigurationRetryable: true,
+			mode: "update" as const,
+			onSubmit,
+			submitting: false,
+		};
+		const { rerender } = render(
+			<AgentApplicationForm
+				{...props}
+				deploymentConfiguration={unreadableDeployment}
+			/>,
+		);
+		rerender(
+			<AgentApplicationForm
+				{...props}
+				deploymentConfiguration={withRevision("codex-r1")}
+			/>,
+		);
+		expect(screen.queryByText("模板已更新，请刷新后确认。")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(screen.queryByRole("alert")).toBeNull();
+
+		rerender(
+			<AgentApplicationForm
+				{...props}
+				deploymentConfiguration={withRevision("codex-r2")}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(screen.getByRole("alert").textContent).toBe(
+			"此申请的模板需要重新确认，请刷新页面后再提交。",
+		);
+	});
+
 	// #3328 N10-2-02：修改申请不能更换模板。模板已从部署移除时下拉占位与字段错误不再引导重新选择或
 	// 重新加载；顶部提示说明请新建申请并获得焦点（只读的「标准模板」不是焦点目标），再次提交仍被拦下。
 	it("points an edited application whose template was removed to a new application from the top alert", () => {

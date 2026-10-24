@@ -793,13 +793,25 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			? application.source.templateId
 			: "",
 	);
-	const [templateRevision, setTemplateRevision] = useState(
+	// 修改申请的模板验证 revision 以页面读到的为准。页面打开时部署选项读取失败、还没读到过（null）时，以之后
+	// 第一次读到的为准：「重新加载部署选项」成功后即可提交，不再要求刷新页面，与部署状态说明给出同一个下一步
+	// （#3389 N13-09）。读到过之后 revision 再变化仍按「模板已更新」处理（N12-01）。
+	const [templateRevisionRead, setTemplateRevision] = useState<string | null>(
 		application?.source.kind === "standard"
-			? (deployment.templates.find(
-					(template) => template.templateId === templateId,
-				)?.readiness?.revision ?? "")
+			? deployment.status === "unavailable"
+				? null
+				: (templateFor(deployment, templateId)?.readiness?.revision ?? "")
 			: "",
 	);
+	const templateRevision =
+		templateRevisionRead ??
+		(deployment.status === "unavailable"
+			? ""
+			: (templateFor(deployment, templateId)?.readiness?.revision ?? ""));
+	useEffect(() => {
+		if (templateRevisionRead === null && deployment.status !== "unavailable")
+			setTemplateRevision(templateRevision);
+	}, [deployment.status, templateRevision, templateRevisionRead]);
 	const [sourceKind, setSourceKind] = useState<AgentApplicationSourceKind>(() =>
 		sourceKindFor(application?.source),
 	);
