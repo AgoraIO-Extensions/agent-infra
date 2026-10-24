@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -243,6 +244,216 @@ async function fixture() {
 	};
 	return { path, driver, transport, binding, read, abort };
 }
+
+async function invokeNativeQuery(
+	f: Awaited<ReturnType<typeof fixture>>,
+	executionId = "native-query-1",
+) {
+	const directory = await f.driver.discoverNativeCommands(f.read);
+	const capability = directory.capabilities[0];
+	if (!capability) throw new Error("Missing native command fixture");
+	const authority = {
+		...f.binding,
+		scope: { ...f.binding.scope, executionId },
+	};
+	const read: CodexNativeCommandReadContext = {
+		...f.read,
+		allowUnboundExecution: true,
+		assertCurrent: () => authority,
+		revalidate: async () => authority,
+	};
+	const command = f.driver.createNativeCommandCommand({
+		schemaVersion: 1,
+		kind: "native-command",
+		operationId: executionId,
+		...authority.scope,
+		turnId: `turn-${executionId}`,
+		nativeSessionRef: f.read.nativeSessionRef,
+		capabilityId: capability.id,
+		directoryRevision: directory.revision,
+		capabilityName: capability.name,
+		capabilitySourceVersion: capability.source.version,
+		parameters: "",
+		parametersDigest: createHash("sha256").update("").digest("hex"),
+	});
+	const record = await f.driver.execute(command, { nativeCommand: read });
+	return { command, read, record };
+}
+
+describe("Codex native command result lifecycle", () => {
+	it.each([
+		[{ type: "notLoaded" }, "not_loaded"],
+		[{ type: "idle" }, "idle"],
+		[{ type: "active", activeFlags: ["waitingOnApproval"] }, "active"],
+		[{ type: "systemError" }, "system_error"],
+	] as const)(
+		"completes the query and replays its %s result",
+		async (status, expected) => {
+			const f = await fixture();
+			f.transport.status = status;
+			const { command, record } = await invokeNativeQuery(f);
+			expect(record.result).toEqual({
+				outcome: "accepted",
+				status: "completed",
+			});
+			expect(
+				await f.driver.getStatus(f.read.nativeSessionRef, command.executionId),
+			).toBe("completed");
+			const events = await f.driver.replayEvents(
+				f.read.nativeSessionRef,
+				command.executionId,
+			);
+			expect(events.map((event) => event.type)).toEqual(["text", "completed"]);
+			const result = events.find((event) => event.type === "text");
+			if (!result) throw new Error("Missing native result event");
+			expect(JSON.parse(result.payload.delta)).toEqual({
+				status: expected,
+				readAt: result.occurredAt,
+			});
+			expect(events.at(-1)).toMatchObject({
+				executionId: command.executionId,
+				payload: { status: "completed" },
+			});
+			expect(JSON.stringify(events)).not.toContain("native-thread-private");
+			expect(JSON.stringify(events)).not.toContain(f.read.nativeSessionRef);
+			expect(
+				f.transport.requests.every(({ method }) =>
+					["initialize", "config/read", "thread/read"].includes(
+						method as string,
+					),
+				),
+			).toBe(true);
+		},
+	);
+
+	it("keeps results and cursors stable across replay, ACK, subscription and restart", async () => {
+		const f = await fixture();
+		const { command, read, record } = await invokeNativeQuery(f);
+		const ref = f.read.nativeSessionRef;
+		const events = await f.driver.replayEvents(ref, command.executionId);
+		const first = events[0];
+		const last = events.at(-1);
+		if (!first || !last) throw new Error("Missing native command events");
+		const before = await readFile(f.path);
+		const requestCount = f.transport.requests.length;
+		expect(await f.driver.execute(command, { nativeCommand: read })).toEqual(
+			record,
+		);
+		expect(
+			await f.driver.replayEvents(ref, command.executionId, first.cursor),
+		).toEqual([last]);
+		await f.driver.acknowledgeEvents(ref, command.executionId, last.cursor);
+		await f.driver.acknowledgeEvents(ref, command.executionId, last.cursor);
+		const streamed = [];
+		for await (const event of await f.driver.subscribeEvents(
+			ref,
+			command.executionId,
+		))
+			streamed.push(event);
+		expect(streamed).toEqual(events);
+		expect(f.transport.requests).toHaveLength(requestCount);
+		expect(await readFile(f.path)).toEqual(before);
+		await f.driver.close();
+		const transport = new MetadataTransport();
+		const reopened = await MetadataDriver.openFixture(f.path, transport);
+		try {
+			expect(await reopened.getStatus(ref, command.executionId)).toBe(
+				"completed",
+			);
+			expect(await reopened.replayEvents(ref, command.executionId)).toEqual(
+				events,
+			);
+			await reopened.acknowledgeEvents(ref, command.executionId, last.cursor);
+			expect(await reopened.lookupOperation(command)).toEqual({
+				state: "found",
+				record,
+			});
+			expect(transport.requests).toEqual([]);
+			expect(await readFile(f.path)).toEqual(before);
+		} finally {
+			await reopened.close();
+		}
+	});
+
+	it("rejects another execution's cursor and unknown execution/session bindings", async () => {
+		const f = await fixture();
+		const first = await invokeNativeQuery(f);
+		const second = await invokeNativeQuery(f, "native-query-2");
+		const ref = f.read.nativeSessionRef;
+		const events = await f.driver.replayEvents(ref, first.command.executionId);
+		const cursor = events.at(-1)?.cursor;
+		if (!cursor) throw new Error("Missing native cursor");
+		await expect(
+			f.driver.replayEvents(ref, second.command.executionId, cursor),
+		).rejects.toThrow();
+		await expect(
+			f.driver.acknowledgeEvents(ref, second.command.executionId, cursor),
+		).rejects.toThrow();
+		await expect(
+			f.driver.getStatus("other-session", first.command.executionId),
+		).rejects.toThrow();
+		await expect(
+			f.driver.replayEvents(ref, "other-execution"),
+		).rejects.toThrow();
+	});
+
+	it.each([
+		"missing",
+		"invalid-status",
+		"extra-private-field",
+		"invalid-time",
+	] as const)(
+		"does not fabricate or accept a %s persisted result",
+		async (failure) => {
+			const f = await fixture();
+			const { command } = await invokeNativeQuery(f);
+			await f.driver.close();
+			const state = JSON.parse(await readFile(f.path, "utf8")) as {
+				operations: Record<
+					string,
+					{
+						executionId?: string;
+						nativeCommandResult?: Record<string, unknown>;
+					}
+				>;
+			};
+			const operation = Object.values(state.operations).find(
+				(value) => value.executionId === command.executionId,
+			);
+			if (!operation?.nativeCommandResult)
+				throw new Error("Missing persisted native result");
+			if (failure === "missing") delete operation.nativeCommandResult;
+			else if (failure === "invalid-status")
+				operation.nativeCommandResult.status = "invented";
+			else if (failure === "extra-private-field")
+				operation.nativeCommandResult.threadId = "private-thread";
+			else operation.nativeCommandResult.readAt = "not-a-time";
+			await writeFile(f.path, `${JSON.stringify(state)}\n`);
+			const transport = new MetadataTransport();
+			if (failure !== "missing") {
+				await expect(
+					MetadataDriver.openFixture(f.path, transport),
+				).rejects.toThrow();
+			} else {
+				const reopened = await MetadataDriver.openFixture(f.path, transport);
+				try {
+					expect(
+						await reopened.getStatus(
+							f.read.nativeSessionRef,
+							command.executionId,
+						),
+					).toBe("completed");
+					await expect(
+						reopened.replayEvents(f.read.nativeSessionRef, command.executionId),
+					).rejects.toThrow();
+				} finally {
+					await reopened.close();
+				}
+			}
+			expect(transport.requests).toEqual([]);
+		},
+	);
+});
 
 interface FixtureRpc {
 	readonly pending: Map<number, { abandonedRead?: true }>;

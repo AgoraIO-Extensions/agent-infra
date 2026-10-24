@@ -920,6 +920,11 @@ interface CodexSession {
 	executions: Record<string, CodexExecution>;
 }
 
+type CodexNativeCommandResult = Extract<
+	NativeMetadataProjectionV1,
+	{ selector: "status" }
+>;
+
 interface CodexOperation {
 	schemaVersion: 1 | 2;
 	state: "prepared" | "resolved";
@@ -934,6 +939,7 @@ interface CodexOperation {
 	executionId?: string;
 	turnId?: string;
 	record?: RuntimeDriverOperationRecord;
+	nativeCommandResult?: CodexNativeCommandResult;
 }
 
 interface CodexDriverState {
@@ -2993,6 +2999,7 @@ function isCodexOperation(
 			"executionId",
 			"turnId",
 			"record",
+			"nativeCommandResult",
 		]) ||
 		!nonEmptyString(value.nativeSessionRef) ||
 		(value.schemaVersion !== 1 && value.schemaVersion !== 2)
@@ -3029,6 +3036,18 @@ function isCodexOperation(
 	if (value.schemaVersion === 2 && kind !== "submit-turn") return false;
 	const isInterruption = kind === "stop" || kind === "generation-cancel";
 	const isNativeCommand = kind === "native-command";
+	if (value.nativeCommandResult !== undefined) {
+		const result = NativeMetadataProjectionV1Schema.safeParse(
+			value.nativeCommandResult,
+		);
+		if (
+			!isNativeCommand ||
+			value.state !== "resolved" ||
+			!result.success ||
+			result.data.selector !== "status"
+		)
+			return false;
+	}
 	if (
 		((kind === "submit-turn" || isNativeCommand) &&
 			value.configVersion !== undefined &&
@@ -3084,6 +3103,12 @@ function isCodexOperation(
 	) {
 		return false;
 	}
+	if (
+		value.nativeCommandResult !== undefined &&
+		(record.data.result.outcome !== "accepted" ||
+			record.data.result.status !== "completed")
+	)
+		return false;
 	if (record.data.result.outcome !== "accepted") {
 		return (
 			value.admissionPending === undefined &&
@@ -7250,11 +7275,93 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			},
 			read,
 		);
-		return this.resolveNativeCommand(
-			command,
-			command.nativeSessionRef,
-			observed.status === "active" ? "running" : "completed",
+		return this.resolveNativeCommand(command, command.nativeSessionRef, {
+			selector: "status",
+			...observed,
+		});
+	}
+
+	private nativeCommandOperation(
+		nativeSessionRef: string,
+		executionId: string,
+	) {
+		const state = this.readSnapshot();
+		const session = ownRecordValue(state.sessions, nativeSessionRef);
+		if (!session) unavailable();
+		const operation = ownRecordValue(
+			state.operations,
+			operationKey({
+				agentId: session.agentId,
+				conversationId: session.conversationId,
+				sessionGeneration: session.sessionGeneration,
+				kind: "native-command",
+				operationId: executionId,
+			}),
 		);
+		if (
+			operation &&
+			(operation.nativeSessionRef !== nativeSessionRef ||
+				operation.executionId !== executionId)
+		)
+			unavailable();
+		return operation;
+	}
+
+	private nativeCommandEvents(
+		nativeSessionRef: string,
+		executionId: string,
+		afterCursor?: string,
+	): RuntimeEvent[] | undefined {
+		const operation = this.nativeCommandOperation(
+			nativeSessionRef,
+			executionId,
+		);
+		if (!operation) return undefined;
+		// 还没 settled（prepared/running）的原生命令没有可重放的结果；让调用方回到
+		// journal/wait 流，而不是把「正在执行」误报成不可用（#3359 review）。
+		if (operation.state !== "resolved") return undefined;
+		const result = operation.nativeCommandResult;
+		// Legacy receipts did not save the queried value. Never re-query it or
+		// invent a result while reading the original operation's history.
+		if (
+			operation.record?.result.outcome !== "accepted" ||
+			operation.record.result.status !== "completed" ||
+			!result
+		)
+			unavailable();
+		const identity = createHash("sha256")
+			.update(JSON.stringify([nativeSessionRef, executionId, operation.turnId]))
+			.digest("hex");
+		const base = {
+			schemaVersion: 1 as const,
+			executionId,
+			occurredAt: result.readAt,
+		};
+		const events: RuntimeEvent[] = [
+			{
+				...base,
+				adapterEventKey: `codex-command-${identity}-result`,
+				cursor: `codex-command-${identity}-1`,
+				type: "text",
+				payload: {
+					delta: JSON.stringify({
+						status: result.status,
+						readAt: result.readAt,
+					}),
+				},
+			},
+			{
+				...base,
+				adapterEventKey: `codex-command-${identity}-completed`,
+				cursor: `codex-command-${identity}-2`,
+				type: "completed",
+				payload: { status: "completed" },
+			},
+		];
+		if (afterCursor === undefined) return events;
+		const index = events.findIndex((event) => event.cursor === afterCursor);
+		if (index === -1) unavailable();
+		return events.slice(index + 1);
 	}
 
 	private async prepareNativeCommand(command: CodexNativeCommandCommand) {
@@ -8132,6 +8239,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	async getStatus(nativeSessionRef: string, executionId: string) {
+		const command = this.nativeCommandOperation(nativeSessionRef, executionId);
+		if (command)
+			return command.record?.result.outcome === "accepted" &&
+				command.record.result.status === "completed"
+				? "completed"
+				: "unknown";
 		const original = this.session(nativeSessionRef);
 		const active = ownRecordValue(original.executions, executionId);
 		if (
@@ -8466,6 +8579,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		afterCursor?: string,
 	): Promise<RuntimeEvent[]> {
+		const native = this.nativeCommandEvents(
+			nativeSessionRef,
+			executionId,
+			afterCursor,
+		);
+		if (native) return native;
 		// The Host replays once per event page. Look values up in the committed
 		// snapshot rather than copying the whole Driver state for each check.
 		const existingState = this.readSnapshot();
@@ -8522,6 +8641,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		throughCursor: string,
 	) {
+		const native = this.nativeCommandEvents(nativeSessionRef, executionId);
+		if (native) {
+			if (!native.some((event) => event.cursor === throughCursor))
+				unavailable();
+			return;
+		}
 		const snapshot = this.readSnapshot();
 		const known = ownRecordValue(snapshot.sessions, nativeSessionRef);
 		const knownExecution =
@@ -8672,6 +8797,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		signal?: AbortSignal,
 	): Promise<AsyncIterable<RuntimeEvent>> {
 		const driver = this;
+		if (this.nativeCommandOperation(nativeSessionRef, executionId)) {
+			const initialEvents = this.nativeCommandEvents(
+				nativeSessionRef,
+				executionId,
+				afterCursor,
+			);
+			if (!initialEvents) unavailable();
+			return (async function* () {
+				for (const event of initialEvents) {
+					if (signal?.aborted) return;
+					yield event;
+				}
+			})();
+		}
 		const key = this.eventStreamKey(nativeSessionRef, executionId);
 		const initialWaiter = this.waitForEvent(key, signal);
 		let initialEvents: RuntimeEvent[];
@@ -13965,7 +14104,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async resolveNativeCommand(
 		command: CodexNativeCommandCommand,
 		nativeSessionRef: string,
-		status: "running" | "completed",
+		result: CodexNativeCommandResult,
 	) {
 		const record = driverRecord(command, {
 			schemaVersion: 1,
@@ -13975,7 +14114,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			kind: command.kind,
 			operationId: command.operationId,
 			nativeSessionRef,
-			result: { outcome: "accepted", status },
+			result: { outcome: "accepted", status: "completed" },
 		});
 		return this.update((state) => {
 			const operation = ownRecordValue(state.operations, operationKey(command));
@@ -13988,6 +14127,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (operation.state !== "prepared") stateInvalid();
 			operation.state = "resolved";
 			operation.record = record;
+			operation.nativeCommandResult = result;
 			return record;
 		});
 	}
