@@ -285,7 +285,17 @@ thread/read、skills/list 等等待边界同样受当前读取确认约束，不
 | OpenCode 官方 `1.18.30`，commit `3104c1428ec91f809e5ab86631300de41eb6952e`；ACP SDK `1.4.0` | [固定 ACP service](https://github.com/anomalyco/opencode/blob/3104c1428ec91f809e5ab86631300de41eb6952e/packages/opencode/src/acp/service.ts) 的 `available_commands_update` 合并命令/Skill；`session/prompt` 解析已知名称后调用原生 `session.command`，`compact` 使用原生 summarize | 原生目录含 Skill，但 ACP 展示未必携带完整来源/版本，须由受控装配核对。未知名称必须在平台拒绝；命令、Skill 真实 I/O 仍受 [Spec §10.13](SPEC-agent-infra-M1-engineering-architecture.md#1013-opencode-原生工具回执与来源) 与 [§10.14](SPEC-agent-infra-M1-engineering-architecture.md#1014-标准模板-session-sandbox-原生工具) 约束，目录通知不证明工具事实/执行屏障通过 |
 | Pi 官方 `@earendil-works/pi-coding-agent@0.86.0`，commit `ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc` | [固定 RPC 文档](https://github.com/earendil-works/pi/blob/ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc/packages/coding-agent/docs/rpc.md)：`get_commands` 返回来源；`prompt` 展开 `/skill:name`；`compact` 是独立 RPC。TUI-only 命令不在此目录 | 当前装配始终传 `--no-skills`；有已验证 Hub Skill 时按受控绝对路径追加 `--skill <path>`，并把 `enableSkillCommands` 设为 `true`；没有 Skill 时保持单独的 `--no-skills`。后续验证受控 Skill 根及实际展开；不开放任意 extension/包安装，不以 RPC response 或低层 `agent_end` 代替完整终态 |
 
-Codex 的首个只读原生命令定义为“查看原生会话状态”：目录显式绑定 `thread/read`，不假称 CLI `/status`。Driver 只用当前 Conversation 已持久绑定的 threadId，禁用历史正文投影，只返回映射后的状态及读取时间；原生未装载不触发 resume。它证明真实原生查询闭环，不代替产生 Turn 的命令验收。原生 `/compact` 作为独立有状态命令交付，返回空 ACK 后必须跟踪原 `contextCompaction` item 与 Turn 终态；不伪造普通 prompt 代跑，不绕过 §8.5.2 的当前模型和事实约束。
+Codex 的首个只读原生命令定义为“查看原生会话状态”：目录显式绑定 `thread/read`，不假称 CLI `/status`。Driver 只用当前 Conversation 已持久绑定的 threadId，禁用历史正文投影，只返回映射后的状态及读取时间；原生未装载不触发 resume。它证明真实原生查询闭环，不代替产生 Turn 的命令验收。
+
+原生 `/compact` 作为独立有状态命令，遵循
+[工程 Spec §11.4.1](SPEC-agent-infra-M1-engineering-architecture.md#1141-有状态原生命令)的
+版本化输入、有效模型选择、冻结 Key、业务授权与恢复合同。Driver 只向原已绑定 thread 发送
+`thread/compact/start`；该接口只有 threadId，不能通过这次 RPC 覆盖模型、reasoning 或 Key。
+无法证明原 Session 与本次冻结选择及 Key 一致时，在发送前拒绝；不以普通 prompt 代跑。
+返回空 ACK 后跟踪同一原生操作的 `contextCompaction` item 与 Turn 终态，两者尚不能确认时
+不发布完成；模型请求和原生内部 retry 的事实、授权与 unknown 处理沿 §8.5.2。
+旧 Host/Driver 只支持状态查询时继续明确表示压缩不可用；上述合同及真实调用未验收前，
+不能仅因官方存在该方法就把压缩列入可用命令目录。
 
 Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，但不再是 Skill Hub 的权威模型。Skill Hub 的运行时投影遵循工程 Spec §11.6：Platform DB 保存 Skill Version 与 Agent Version 绑定，Platform Worker 消费不可变包对象版本、manifest、digest/signature 和只读策略，异步 materialize 到 Agent project 的 `.agents/skills/<name>` 并维护 `.agents/SKILLS.md`，再随受控 workspace 挂载到 Sandbox。`.magic/skills` 不属于本平台规范路径。固定 `extraRoot` 与 Hub root 的共存、同名冲突和显式迁移以 [ADR-0019 的路径决策](ADR-0019-magic-aligned-skill-hub.md#固定-extraroot-与-hub-agentskills-共存) 为准。
 

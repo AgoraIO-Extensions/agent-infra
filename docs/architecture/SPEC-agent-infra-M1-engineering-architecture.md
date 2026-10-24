@@ -1310,6 +1310,35 @@ Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的�
 - 新契约采用显式版本协商；旧 Driver/Host 缺少命令或 Skill 语义时返回不支持，不把新输入降级为旧文本 submit。旧消息、控制、任务与恢复语义保持；新增能力不能迫使旧任务重建或重放。
 - 目录只在已有原 Execution 时读取（[§9.3.1](#931-原生元数据读取授权)、[Runtime HLD §5.1](HLD-agent-runtime-M1.md#51-命令与-skill-目录及调用)）。尚无原 Execution 的会话，包括首条消息前的新会话，不读取原生目录，也不为读取目录创建 Runtime Session 或 Execution（[Runtime HLD §7.1](HLD-agent-runtime-M1.md#71-session-生命周期)）；Web 在输入框说明发送首条消息后才能使用命令与 Skill。这是 M1 的确定行为，不属于能力缺口。
 
+#### 11.4.1 有状态原生命令
+
+本节定义 Codex 原生压缩的有状态命令合同，使用业务执行授权。命令发现及执行前的目录
+重验仍是只读操作；§9.3.1 的 metadata context、证明和期限不能授予压缩的执行权，也不能
+充当受理后执行的生命周期。已受理命令沿既有 Execution 租约、停止和恢复机制运行。
+
+该调用以新版本贯穿受理计划、Worker、Host 和 Driver，除既有命令标识、目录修订、来源
+版本、参数及其摘要外，还须在持久受理时冻结有效 `modelOptionId`、`reasoningLevel` 和
+Execution Key 绑定。能力类别及原生方法由服务端受控映射确定，调用方不能自行声明只读或
+有状态来改变授权。旧版本缺少上述绑定时明确返回不支持；旧只读命令保持原义，存量计划
+不从当前 Conversation、默认模型或当前 Key 补值后重新投递。
+
+Host 校验当前业务 Grant、原 Session、命令与冻结选择后，先持久准备原操作，再将同一
+Execution 的 Key 安装到受保护传输边界。Driver 在原生副作用前确认当前原生会话实际使用的
+模型、endpoint、reasoning 和 Key 与本次冻结绑定一致；原生接口不能显式设置这些值时，
+无法证明一致就拒绝，不能借普通提示、新建 Session 或静默回退模型来执行命令。每次模型
+请求继续经过 §10.8 的持久意图与当前授权屏障，原生内部重试同样适用。
+
+原生调用 ACK 只证明协议接收，不能释放会话占用或发布完成。Driver 必须将命令关联到原
+Session 的实际操作及终态；停止、响应丢失、Host/Worker 重启和 SSE 重连沿原操作核实。
+受理或副作用未知时保持 unknown，不重发有状态命令、不生成替代 Execution，也不通过
+再执行一次来补结果。协议不能提供可靠关联或恢复证据时，保留缺口并拒绝宣称成功。
+
+该新版本需要恢复内存 Key 时，只允许已持久 accepted/running 的原有状态命令；须核对原请求摘要、
+命令与目录绑定、有效选择、Key scope、配置及当前授权/fence，重交原 Key 版本。该恢复不
+重新发现同名命令、不再次 invoke，不适用于 unknown、终态、只读查询或停止；Key 不能写入
+命令、journal、环境、原生可见文件或日志。具体固定 Runtime 映射见
+[Runtime HLD §5.3](HLD-agent-runtime-M1.md#53-固定官方能力矩阵)。
+
 ### 11.5 Browser Capability 边界
 
 Browser Capability 复用 Platform Conversation Contract、Session-owned Sandbox、RuntimeHost、Execution 事件和 File Grant，不新增浏览器调度器、共享浏览器服务或第二套 Session 权威。共享契约位于 `packages/contracts/src/runtime/browser-capability.ts`，同时作为 Runtime Manifest declaration、Runtime capability projection 和 Platform/API projection 的唯一来源。
