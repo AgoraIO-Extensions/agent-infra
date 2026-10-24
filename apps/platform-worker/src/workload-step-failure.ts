@@ -35,6 +35,12 @@ export type WorkloadStepFailureReasonV1 =
 
 export interface WorkloadStepFailureClassV1 {
 	readonly reason: WorkloadStepFailureReasonV1;
+	/** Stable preflight boundary, present only for a rejected preflight. */
+	readonly preflightStage?:
+		| "secret-bindings"
+		| "registry-admission"
+		| "model-projection"
+		| "desired-workload";
 	/** 仅 Kubernetes 错误：HTTP 状态、资源种类与动词，不含响应体或资源名。 */
 	readonly kubernetes?: WorkloadKubernetesFailureDetailsV1;
 	/** 仅 `unexpected_error`：错误类名，已按标识符规则过滤。 */
@@ -76,7 +82,10 @@ export function classifyWorkloadStepFailureV1(
 		};
 	}
 	if (error instanceof WorkloadPreflightRejectedErrorV1)
-		return { reason: "preflight_rejected" };
+		return {
+			reason: "preflight_rejected",
+			...(error.stage ? { preflightStage: error.stage } : {}),
+		};
 	if (error instanceof WorkloadStepErrorV1) return { reason: error.reason };
 	const name =
 		typeof error === "object" && error !== null
@@ -107,7 +116,7 @@ export function createWorkloadStepFailureLoggerV1(options: {
 	return (failure: WorkloadStepFailureV1) => {
 		const at = now();
 		const classified = classifyWorkloadStepFailureV1(failure.error);
-		const key = `${failure.agentId}\0${failure.phase}\0${classified.reason}`;
+		const key = `${failure.agentId}\0${failure.phase}\0${classified.reason}\0${classified.preflightStage ?? ""}`;
 		const previous = seen.get(key);
 		if (
 			!failure.terminal &&
@@ -139,6 +148,9 @@ export function createWorkloadStepFailureLoggerV1(options: {
 				attempts: failure.attempts,
 				terminal: failure.terminal,
 				reason: classified.reason,
+				...(classified.preflightStage
+					? { preflightStage: classified.preflightStage }
+					: {}),
 				...(classified.kubernetes ? { kubernetes: classified.kubernetes } : {}),
 				...(classified.errorName ? { errorName: classified.errorName } : {}),
 				...(previous && previous.suppressed > 0

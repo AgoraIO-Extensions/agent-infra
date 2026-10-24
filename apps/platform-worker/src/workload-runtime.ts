@@ -1107,8 +1107,14 @@ export function createWorkloadRuntimeV1(
 				Object.keys(options.policy.platformAuthAnnotations).length === 0
 			)
 				throw new WorkloadKubernetesError("policy");
-			const secretBindings = bindingsFor(state, input, candidateKeyless(state));
-			validateSecretDataKeys(configuration, secretBindings);
+			let secretBindings: ResolvedWorkloadSecretBindingV1[];
+			try {
+				secretBindings = bindingsFor(state, input, candidateKeyless(state));
+				validateSecretDataKeys(configuration, secretBindings);
+			} catch (error) {
+				if (error instanceof WorkloadPreflightRejectedErrorV1) throw error;
+				throw new WorkloadPreflightRejectedErrorV1("secret-bindings");
+			}
 			if ("manifest" in configuration.source) {
 				try {
 					const multiServiceManifest = parseMultiServiceManifest(
@@ -1254,24 +1260,25 @@ export function createWorkloadRuntimeV1(
 			try {
 				admission = validateImageRegistryAdmissionResultV1(request, result);
 			} catch {
-				throw new WorkloadPreflightRejectedErrorV1();
+				throw new WorkloadPreflightRejectedErrorV1("registry-admission");
 			}
 			if (admission.status === "rejected") {
 				if (admission.error.retryable)
 					throw new Error("Workload admission is unavailable");
-				throw new WorkloadPreflightRejectedErrorV1();
+				throw new WorkloadPreflightRejectedErrorV1("registry-admission");
 			}
 			if (admission.immutableDigest !== configuration.source.imageDigest)
-				throw new WorkloadPreflightRejectedErrorV1();
+				throw new WorkloadPreflightRejectedErrorV1("registry-admission");
 			const mode =
 				configuration.source.kind === "standard"
 					? "platform-adapter"
 					: configuration.source.interactionMode;
 			if (admission.runtimeManifest.interactionMode !== mode)
-				throw new WorkloadPreflightRejectedErrorV1();
+				throw new WorkloadPreflightRejectedErrorV1("registry-admission");
 			let modelProjection: unknown;
 			if (configuration.source.kind === "standard") {
-				if (!options.modelCatalog) throw new WorkloadPreflightRejectedErrorV1();
+				if (!options.modelCatalog)
+					throw new WorkloadPreflightRejectedErrorV1("model-projection");
 				try {
 					if (candidateKeyless(state)) {
 						modelProjection = await projectRuntimeModelConfigurationV4({
@@ -1285,13 +1292,15 @@ export function createWorkloadRuntimeV1(
 						});
 					} else {
 						if (!options.modelAccess)
-							throw new WorkloadPreflightRejectedErrorV1();
+							throw new WorkloadPreflightRejectedErrorV1("model-projection");
 						modelProjection = await projectRuntimeModelConfigurationV1({
 							configuration:
 								configuration.schemaVersion === 2
 									? configuration
 									: (() => {
-											throw new WorkloadPreflightRejectedErrorV1();
+											throw new WorkloadPreflightRejectedErrorV1(
+												"model-projection",
+											);
 										})(),
 							standardTemplateBinding: standardTemplateModelBindingV1(
 								configuration.source,
@@ -1304,7 +1313,10 @@ export function createWorkloadRuntimeV1(
 								const binding = secretBindings.find(
 									({ record }) => record.name === `model:${option.optionId}`,
 								);
-								if (!binding) throw new WorkloadPreflightRejectedErrorV1();
+								if (!binding)
+									throw new WorkloadPreflightRejectedErrorV1(
+										"model-projection",
+									);
 								const { record } = binding;
 								const decrypted = await options.decryptor.decrypt({
 									encryptedRecord: record,
@@ -1316,7 +1328,9 @@ export function createWorkloadRuntimeV1(
 										record.crypto.wrappingKeyVersion,
 										"rejected",
 									);
-									throw new WorkloadPreflightRejectedErrorV1();
+									throw new WorkloadPreflightRejectedErrorV1(
+										"model-projection",
+									);
 								}
 								try {
 									await input.secrets?.auditDecryption(
@@ -1326,7 +1340,9 @@ export function createWorkloadRuntimeV1(
 									);
 								} catch {
 									decrypted.plaintext.fill(0);
-									throw new WorkloadPreflightRejectedErrorV1();
+									throw new WorkloadPreflightRejectedErrorV1(
+										"model-projection",
+									);
 								}
 								const ref = recordReference(record);
 								return {
@@ -1345,7 +1361,7 @@ export function createWorkloadRuntimeV1(
 				} catch (error) {
 					if (error instanceof ModelConfigurationErrorV1 && error.retryable)
 						throw new Error("Workload model configuration is unavailable");
-					throw new WorkloadPreflightRejectedErrorV1();
+					throw new WorkloadPreflightRejectedErrorV1("model-projection");
 				}
 			}
 			const name = workloadResourceNameV1(state.agentId);
@@ -1470,7 +1486,7 @@ export function createWorkloadRuntimeV1(
 					...(modelProjection ? { modelProjection } : {}),
 				};
 			} catch {
-				throw new WorkloadPreflightRejectedErrorV1();
+				throw new WorkloadPreflightRejectedErrorV1("desired-workload");
 			}
 		},
 		async closeRoute(state) {

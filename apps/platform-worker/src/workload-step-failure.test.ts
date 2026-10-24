@@ -105,6 +105,28 @@ describe("classifyWorkloadStepFailureV1 (#2532)", () => {
 		).toEqual({ reason: "capabilities_unavailable" });
 	});
 
+	it("keeps the preflight boundary in the sanitized record", () => {
+		const classified = classifyWorkloadStepFailureV1(
+			new WorkloadPreflightRejectedErrorV1("model-projection"),
+		);
+		expect(classified).toEqual({
+			reason: "preflight_rejected",
+			preflightStage: "model-projection",
+		});
+		const log = vi.fn();
+		createWorkloadStepFailureLoggerV1({ log })(
+			failure({
+				phase: "preflight",
+				error: new WorkloadPreflightRejectedErrorV1("registry-admission"),
+				terminal: true,
+			}),
+		);
+		expect(JSON.parse(log.mock.calls[0]?.[0])).toMatchObject({
+			reason: "preflight_rejected",
+			preflightStage: "registry-admission",
+		});
+	});
+
 	it("never reads the message of an unknown error, only a filtered class name", () => {
 		class RegistryTimeoutError extends Error {}
 		const classified = classifyWorkloadStepFailureV1(
