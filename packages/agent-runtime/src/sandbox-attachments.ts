@@ -49,7 +49,7 @@ export interface SandboxAttachmentV1 {
 	/** 工作区相对路径（POSIX 分隔符），只进入原生输入的附件清单。 */
 	readonly workspacePath: string;
 	/**
-	 * 工作区内文件的绝对路径，只交给原生图片输入（Codex `local_image`）；不进入持久状态、
+	 * 工作区内文件的绝对路径，只交给原生图片输入（Codex `localImage`）；不进入持久状态、
 	 * 事件、日志或清单。
 	 */
 	readonly path: string;

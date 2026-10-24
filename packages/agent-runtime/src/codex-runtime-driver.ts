@@ -1104,9 +1104,13 @@ interface ResultPublicationContext {
 	readonly bridge?: RuntimeFileBridgePortV1;
 }
 
+/**
+ * `turn/start` 的原生输入项，取固定 Codex 版本 app-server v2 `UserInput` 的变体（camelCase；
+ * #3349：图片必须写作 `localImage`，`local_image` 会被 app-server 以 -32600 拒绝）。
+ */
 export type CodexNativeInputItem =
 	| { readonly type: "text"; readonly text: string }
-	| { readonly type: "local_image"; readonly path: string }
+	| { readonly type: "localImage"; readonly path: string }
 	| { readonly type: "skill"; readonly name: string; readonly path: string };
 
 /** Build the pinned Codex structured Skill input from the verified mount. */
@@ -1233,7 +1237,7 @@ const codexNativeTextInputDigestPattern = /^[a-f0-9]{64}$/;
 
 /**
  * #3225：可接受的附件类型以 FileLimits 交集为准，Driver 不再写死图片集合；只保留单文件
- * 50 MiB 与单条消息 32 个的上限。原生 `local_image` 只用于其中的原生图片类型。
+ * 50 MiB 与单条消息 32 个的上限。原生 `localImage` 只用于其中的原生图片类型。
  */
 const codexInputMaximumBytes = SANDBOX_ATTACHMENT_MAX_BYTES_V1;
 /** Bounds elapsed time so a stalled source cannot hold the execution open. */
@@ -7315,7 +7319,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		);
 		try {
 			// #3225：先在 Host 临时目录取得并核对字节；Conversation 工作区就绪后再物化到
-			// 工作区（placeCodexAttachments），local_image 指向工作区内的文件。
+			// 工作区（placeCodexAttachments），localImage 指向工作区内的文件。
 			const attachments: CodexHostAttachment[] = [];
 			for (const [index, fileId] of fileIds.entries()) {
 				const input = await acquireCodexInput(fileBridge, fileId);
@@ -7363,7 +7367,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	/**
 	 * #3225：把已核对的 Host 临时副本物化到当前 Conversation 工作区的
 	 * `.agent-infra/attachments/<ref>/<name>`，并构造原生输入：用户消息之后追加附件清单，
-	 * 原生图片另外作为指向工作区文件的 `local_image`。Host 临时副本照常保留到终态后清理。
+	 * 原生图片另外作为指向工作区文件的 `localImage`。Host 临时副本照常保留到终态后清理。
 	 */
 	private async placeCodexAttachments(
 		session: CodexSession,
@@ -7395,7 +7399,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				{ type: "text", text: sandboxAttachmentPromptTextV1(text, placed) },
 				...placed
 					.filter(isSandboxAttachmentNativeImageV1)
-					.map(({ path }) => ({ type: "local_image" as const, path })),
+					.map(({ path }) => ({ type: "localImage" as const, path })),
 			],
 			cleanup: input.cleanup,
 		};

@@ -938,6 +938,20 @@ function completedEvent() {
 	})}\n\n`;
 }
 
+/**
+ * 固定 Codex 0.153.0 app-server v2 `UserInput` 的全部变体名（`TurnStartParams.input`）。
+ * 测试 bridge 用它像真实 app-server 一样拒绝未知变体（#3349）。
+ */
+const codexUserInputTypesV2: ReadonlySet<string> = new Set([
+	"text",
+	"image",
+	"localImage",
+	"audio",
+	"localAudio",
+	"skill",
+	"mention",
+]);
+
 class TestCodexBridge {
 	readonly requests: { method: string; params: unknown }[] = [];
 	readonly responses: CodexAppServerFrame[] = [];
@@ -1089,6 +1103,26 @@ class TestCodexBridge {
 			return;
 		}
 		if (method === "turn/start") {
+			// #3349：与固定 Codex app-server 一致，未知的 UserInput 变体按 -32600 拒绝。
+			const unknownInput = (
+				(params as { input?: unknown } | undefined)?.input as
+					| { type?: unknown }[]
+					| undefined
+			)?.find(
+				(item) =>
+					typeof item?.type !== "string" ||
+					!codexUserInputTypesV2.has(item.type),
+			);
+			if (unknownInput) {
+				this.push({
+					id,
+					error: {
+						code: -32_600,
+						message: `Invalid request: unknown variant \`${String(unknownInput.type)}\``,
+					},
+				});
+				return;
+			}
 			if (this.nextTurnStartError) {
 				const error = this.nextTurnStartError;
 				this.nextTurnStartError = undefined;
@@ -2886,7 +2920,7 @@ describe("Codex Runtime Driver", () => {
 		);
 	});
 
-	it("materializes PDF, CSV, TXT and PNG into the Conversation workspace and keeps local_image for the image (#3225)", async () => {
+	it("materializes PDF, CSV, TXT and PNG into the Conversation workspace and submits the image as localImage (#3225, #3349)", async () => {
 		const directory = await runtimeDirectory();
 		const path = join(directory, "driver.json");
 		const bridge = new TestCodexBridge();
@@ -2911,14 +2945,14 @@ describe("Codex Runtime Driver", () => {
 			codexAttachmentRef("file-png"),
 			"screen.png",
 		);
-		// 用户消息之后追加清单；图片仍走 local_image，指向工作区内物化后的文件。
+		// 用户消息之后追加清单；图片走 app-server v2 的 localImage，指向工作区内物化后的文件。
 		expect((start?.params as { input?: unknown[] } | undefined)?.input).toEqual(
 			[
 				{
 					type: "text",
 					text: `describe these files\n\n${codexManifest(fileIds)}`,
 				},
-				{ type: "local_image", path: png },
+				{ type: "localImage", path: png },
 			],
 		);
 		for (const fileId of fileIds) {
@@ -2968,7 +3002,7 @@ describe("Codex Runtime Driver", () => {
 			expect(persisted).not.toContain(forbidden);
 	});
 
-	it("submits an attachment-only message as the manifest without local_image for a non-native image type (#3225)", async () => {
+	it("submits an attachment-only message as the manifest without localImage for a non-native image type (#3225)", async () => {
 		const directory = await runtimeDirectory();
 		const path = join(directory, "driver.json");
 		const bridge = new TestCodexBridge();

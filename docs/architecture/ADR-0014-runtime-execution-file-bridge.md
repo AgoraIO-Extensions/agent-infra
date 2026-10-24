@@ -20,7 +20,7 @@ Platform 已有 `FileAuthority`、`FileAccessGrantV1`、Execution Grant 附件�
 
 4. **结果写入。** Driver 只能通过 Host 提供的 `writeResult(descriptor, body)` 写入结果。Host 通过既有文件 Core 分配 execution-bound `result` 意图并取得只写 File Grant；Driver 不能选择 owner、对象引用、execution 或对象键。完成确认重新校验当前执行和对象版本；只有 `available` 文件的元数据与 `result.file` 事件完全一致时，Platform Store 才持久化该事件。重复调用复用同一 idempotency intent，响应丢失、重启和 unknown 不创建第二对象或虚报成功。
 
-5. **Driver 适配。** 每个 Driver 单独声明支持的媒体类型和输入/结果映射。Codex 的图片输入使用协议定义的临时 `local_image` 形状，路径只在一次执行的临时目录有效；不支持的媒体类型在 native side effect 前拒绝。能力只有在该 Driver 的 bridge、清理、重启和负向 conformance 完成后才可从 `false` 改为 `true`。
+5. **Driver 适配。** 每个 Driver 单独声明支持的媒体类型和输入/结果映射。Codex 的图片输入使用 app-server v2 协议定义的临时 `localImage` 形状，路径只在一次执行的临时目录有效；不支持的媒体类型在 native side effect 前拒绝。能力只有在该 Driver 的 bridge、清理、重启和负向 conformance 完成后才可从 `false` 改为 `true`。
 
 6. **恢复与清理。** Host 重启后不恢复旧的临时路径或 File Grant；Worker 必须重新验证当前执行并发放新的短期上下文。临时文件在执行终态、取消、过期或恢复失败后有界清理；清理失败只保留受限诊断，不改变 Platform 文件记录的权威状态。
 
@@ -31,7 +31,7 @@ Platform 已有 `FileAuthority`、`FileAccessGrantV1`、Execution Grant 附件�
 - Worker → RuntimeHost 的短期桥接输入与绑定校验器；
 - RuntimeHost → Driver 的 `readInput`/`writeResult` ephemeral port；
 - Platform API origin、服务身份和允许 Agent 映射的 deployment-owned 配置；
-- Codex `local_image` 物化与清理实现；
+- Codex `localImage` 物化与清理实现；
 - `result.file` 写入/确认后的 Runtime event 投递与 Store 负向测试。
 
 ## V4 Worker ↔ File Authority exchange
