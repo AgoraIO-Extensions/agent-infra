@@ -43,6 +43,7 @@ import {
 	type ConversationRuntimeOperationResponseV1,
 	type ConversationRuntimeStatusResponseV2,
 	type ConversationRuntimeStatusV1,
+	type ConversationRuntimeTurnNotSubmittedReasonV1,
 } from "./conversation-dispatch-types.js";
 import { exactObject, unavailable } from "./conversation-dispatch-values.js";
 import type {
@@ -93,6 +94,12 @@ export {
 /** Far below the Host bound of 256 delivered but unacknowledged cursors. */
 const acknowledgementBatchSize = 32;
 
+/**
+ * #3373：Runtime 报告未提交后最多重提 3 次，且只在首次重提起 2 分钟内重提（Runtime HLD §7.3）。
+ */
+const notSubmittedResubmitLimit = 3;
+const notSubmittedResubmitWindowMs = 120_000;
+
 /** A standard tool call waits for its persisted fact to be acknowledged before
  * the Runtime calls the tool or reports its result. The terminal event closes
  * the batch, so acknowledging it costs no extra round trip. */
@@ -122,13 +129,19 @@ export function createConversationDispatchUseCaseV1(
 	options: {
 		readonly leaseDurationMs?: number;
 		readonly retryDelayMs?: number;
-		/** Maximum durable claims spent recovering an unknown Runtime execution. */
+		/** Maximum durable claims spent recovering terminal Execution metadata. */
 		readonly maxRecoveryAttempts?: number;
+		/**
+		 * #3373：Execution 处于 `unknown` 后恢复的墙钟预算（毫秒），用尽时以
+		 * `RUNTIME_RECOVERY_TIMEOUT` 收敛为失败。默认 5 分钟，由部署配置。
+		 */
+		readonly recoveryBudgetMs?: number;
 	} = {},
 ): ConversationDispatchUseCaseV1 {
 	const leaseDurationMs = options.leaseDurationMs ?? 30_000;
 	const retryDelayMs = options.retryDelayMs ?? 1_000;
 	const maxRecoveryAttempts = options.maxRecoveryAttempts ?? 120;
+	const recoveryBudgetMs = options.recoveryBudgetMs ?? 300_000;
 	if (
 		!Number.isSafeInteger(leaseDurationMs) ||
 		leaseDurationMs < 3 ||
@@ -138,18 +151,64 @@ export function createConversationDispatchUseCaseV1(
 		retryDelayMs > 86_400_000 ||
 		!Number.isSafeInteger(maxRecoveryAttempts) ||
 		maxRecoveryAttempts < 1 ||
-		maxRecoveryAttempts > 1_000_000
+		maxRecoveryAttempts > 1_000_000 ||
+		!Number.isSafeInteger(recoveryBudgetMs) ||
+		recoveryBudgetMs < 1 ||
+		recoveryBudgetMs > 86_400_000
 	) {
 		throw new ConversationDispatchError("invalid_input");
 	}
+	// 元数据恢复仍按认领次数；接受结果不确定的恢复按 Execution 进入 unknown 以来的墙钟时间
+	// （#3373，Runtime HLD §7.3）。
 	const recoveryExhausted = (claim: ConversationDispatchClaimV1) =>
-		claim.attemptCount !== undefined &&
-		claim.attemptCount >= maxRecoveryAttempts &&
-		(claim.executionStatus === "unknown" ||
-			claim.metadataRecovery !== undefined) &&
-		(isRuntimeEventOperation(claim.operation) ||
-			claim.operation === "conversation.turn.stop.v1" ||
-			claim.metadataRecovery !== undefined);
+		claim.metadataRecovery !== undefined
+			? claim.attemptCount !== undefined &&
+				claim.attemptCount >= maxRecoveryAttempts
+			: claim.executionStatus === "unknown" &&
+				claim.recoveryElapsedMs !== undefined &&
+				claim.recoveryElapsedMs >= recoveryBudgetMs &&
+				(isRuntimeEventOperation(claim.operation) ||
+					claim.operation === "conversation.turn.stop.v1");
+	/**
+	 * #3373：Runtime 已核实本次 Turn 在原生提交点之前未提交。2 分钟内最多重提 3 次：
+	 * Execution 退回投递前状态，下一次认领重新授权、提升 fence 并签发新的 Grant；
+	 * 次数或窗口用尽后按阶段明确失败（Runtime HLD §7.3）。
+	 */
+	async function settleUnsubmittedTurn(
+		claim: ConversationDispatchClaimV1,
+		hostSessionRef: string,
+		reason: ConversationRuntimeTurnNotSubmittedReasonV1,
+	): Promise<ConversationDispatchDecisionV1> {
+		const previous = claim.notSubmittedResubmissions;
+		const resubmissions = previous?.count ?? 0;
+		if (
+			resubmissions < notSubmittedResubmitLimit &&
+			(previous === undefined ||
+				previous.elapsedMs < notSubmittedResubmitWindowMs) &&
+			dependencies.store.releaseUnsentDispatch
+		) {
+			try {
+				return (await dependencies.store.releaseUnsentDispatch({
+					claim,
+					// 退避给暂时不可达的依赖留出恢复时间，总时长仍在窗口之内。
+					retryDelayMs: retryDelayMs * 3 ** resubmissions,
+					errorCode: "RUNTIME_TURN_NOT_SUBMITTED",
+					hostSessionRef,
+				}))
+					? { schemaVersion: 1, outcome: "retry", retryScheduled: true }
+					: { schemaVersion: 1, outcome: "stale" };
+			} catch {
+				return { schemaVersion: 1, outcome: "retry", retryScheduled: false };
+			}
+		}
+		return reject(
+			dependencies.store,
+			claim,
+			reason === "file_input_unavailable"
+				? "RUNTIME_FILE_INPUT_UNAVAILABLE"
+				: "RUNTIME_SESSION_PREPARATION_FAILED",
+		);
+	}
 	async function persistRuntimeEvents(
 		claim: ConversationDispatchClaimV1,
 		authority: ConversationDispatchAuthorityV1,
@@ -1574,6 +1633,17 @@ export function createConversationDispatchUseCaseV1(
 			if (!(await dispatchHeartbeat.stop())) {
 				return { schemaVersion: 1, outcome: "stale" };
 			}
+
+			if (
+				response.result.outcome === "rejected" &&
+				response.result.code === "RUNTIME_TURN_NOT_SUBMITTED"
+			)
+				// 解析只对普通 Turn 的 submit V2 结果接受该成员。
+				return settleUnsubmittedTurn(
+					claim,
+					response.hostSessionRef,
+					response.result.reason,
+				);
 
 			const responseTransition =
 				response.result.outcome === "accepted"
