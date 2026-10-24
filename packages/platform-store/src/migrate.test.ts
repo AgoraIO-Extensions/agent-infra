@@ -569,7 +569,15 @@ describe("Platform PostgreSQL migration foundation", () => {
 						acceptedHostIndex >= 0
 					) {
 						columns.splice(acceptedHostIndex, 1);
-						columns.push("accepted_original_host_session_ref");
+						const unknownSinceIndex = columns.indexOf("unknown_since");
+						// 0064 appends unknown_since after it (#3373).
+						if (unknownSinceIndex >= 0)
+							columns.splice(
+								unknownSinceIndex,
+								0,
+								"accepted_original_host_session_ref",
+							);
+						else columns.push("accepted_original_host_session_ref");
 					}
 					return [config.name, columns];
 				}),
@@ -1995,6 +2003,7 @@ describe("published Relay authority migration", () => {
 			61,
 			62,
 			63,
+			64,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2064,9 +2073,13 @@ describe("published Relay authority migration", () => {
 			idx: 62,
 			tag: "0062_wecom_inbound_media",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 63)).toMatchObject({
 			idx: 63,
 			tag: "0063_wecom_outbound_media",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 64,
+			tag: "0064_execution_unknown_since",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2299,6 +2312,7 @@ describe("published Relay authority migration", () => {
 					"wecom_receipts:connection_authorization_fact",
 					"outbox_items:trace_parent",
 					"conversation_executions:accepted_original_host_session_ref",
+					"conversation_executions:unknown_since",
 				],
 				checks: [
 					...(kind === "original27"
