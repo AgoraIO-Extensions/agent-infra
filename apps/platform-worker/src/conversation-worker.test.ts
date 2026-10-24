@@ -811,6 +811,7 @@ it("records bounded authorization and Runtime submit timings (#1561)", async () 
 			stage: "runtime",
 			outcome: "failed",
 			durationMs: expect.any(Number),
+			failureStep: "runtime.execution",
 			...ids,
 		},
 		{

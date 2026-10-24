@@ -175,7 +175,7 @@ function timedRuntimeSubmit(
 					protocolCode = error.code;
 				if (protocolCode?.startsWith("RUNTIME_MODEL_"))
 					failureStep = "model.execution";
-				else if (protocolCode !== undefined) failureStep = "runtime.execution";
+				else failureStep = "runtime.execution";
 				throw error;
 			} finally {
 				record(telemetry, {
