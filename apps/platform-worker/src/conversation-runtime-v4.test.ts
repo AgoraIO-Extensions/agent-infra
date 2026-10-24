@@ -710,9 +710,10 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			const calls = h.resolveRuntimeHost.mock.calls
 				.slice(before)
 				.map(([input]) => input);
-			// 准备阶段保留两次授权边界解析和一次最终 readiness；最终 post-route
-			// 校验在 2 秒 route window 内复用同一完整观测。
+			// Agent-level fixture 没有 Session Sandbox route，保留完整三次解析和
+			// 发送前复核；真实 Sandbox 路径单独复用最终 readiness proof。
 			expect(calls.map((input) => input.command)).toEqual([
+				"turn.submit",
 				"turn.submit",
 				"turn.submit",
 				"turn.submit",
@@ -720,6 +721,7 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			expect(calls.map((input) => input.reuseSignedReadiness)).toEqual([
 				true,
 				true,
+				undefined,
 				true,
 			]);
 		} finally {
@@ -2178,9 +2180,9 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			try {
 				const reference = await h.authorize();
 				await h.runtime.runtimeHost.dispatch(h.request(reference));
-				// Two route-boundary observations plus one final readiness observation;
-				// the immediate post-route check reuses the final proof.
-				expect(h.resolveRuntimeHost).toHaveBeenCalledTimes(3);
+				// Agent-level fixture retains the full route check; Session Sandbox
+				// preparation has the bounded proof reuse.
+				expect(h.resolveRuntimeHost).toHaveBeenCalledTimes(4);
 			} finally {
 				h.runtime.close();
 			}
