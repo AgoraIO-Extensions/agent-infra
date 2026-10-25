@@ -432,6 +432,14 @@ export async function readMessageState(
 	const stop = stopRows[0];
 	if (stop && stop.status !== "submitted" && stop.status !== "completed")
 		unavailable();
+	const attachmentMerge =
+		status === "submitted" && text(active.channel_id).startsWith("wecom_bot:")
+			? await readAttachmentMergeWindow(
+					transaction,
+					conversation.conversationId,
+					text(active.execution_id),
+				)
+			: undefined;
 	return {
 		conversation,
 		modelConfiguration,
@@ -459,8 +467,54 @@ export async function readMessageState(
 			lastEventSequence: safeInteger(active.last_event_sequence, 0),
 			stopPending: stop?.status === "submitted",
 			status: status as "submitted" | "processing" | "unknown",
+			...(attachmentMerge ? { attachmentMerge } : {}),
 		},
 	};
+}
+
+/**
+ * #3374：在 Conversation 锁内按 Platform DB 判定合并窗口（工程 Spec §14.2.4）。窗口打开要求
+ * Turn outbox 从未被认领且未到期，并且已绑定到该 Execution 的消息都只含附件；文字消息、普通
+ * 消息和已认领的 Turn 都没有窗口。返回已绑定的附件数，用于合并上限。
+ */
+async function readAttachmentMergeWindow(
+	transaction: Transaction,
+	conversationId: string,
+	executionId: string,
+): Promise<{ readonly attachmentCount: number } | undefined> {
+	const rows = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<{ attachment_count: string | number }[]>`
+		select (
+			select count(*) from platform.files f
+			where f.conversation_id = ${conversationId}
+				and f.record->>'executionId' = ${executionId}
+				and f.record->>'kind' = 'attachment'
+		) as attachment_count
+		from platform.outbox_items o
+		join platform.conversation_executions e
+			on e.execution_id = ${executionId} and e.conversation_id = ${conversationId}
+		where o.id = ${`conversation:turn:${executionId}`}
+			and o.scope_type = 'conversation' and o.scope_id = ${conversationId}
+			and o.operation = 'conversation.turn.submit.v1'
+			and o.status = 'pending' and o.attempt_count = 0 and o.delivery_fence = 0
+			and o.available_at > clock_timestamp()
+			and e.status = 'submitted' and e.delivery_fence = 0
+			and exists (
+				select 1 from platform.conversation_messages m
+				where m.conversation_id = ${conversationId} and m.execution_id = ${executionId}
+			)
+			and not exists (
+				select 1 from platform.conversation_messages m
+				where m.conversation_id = ${conversationId} and m.execution_id = ${executionId}
+					and coalesce(m.text, '') <> ''
+			)
+	`,
+	);
+	const row = rows[0];
+	return row
+		? { attachmentCount: safeInteger(Number(row.attachment_count), 0) }
+		: undefined;
 }
 
 export async function readModelSelectionState(

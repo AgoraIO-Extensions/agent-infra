@@ -1,0 +1,1 @@
+CREATE INDEX "wecom_receipt_execution" ON "platform"."wecom_receipts" USING btree ("execution_id");

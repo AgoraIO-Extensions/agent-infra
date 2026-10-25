@@ -1995,6 +1995,7 @@ describe("published Relay authority migration", () => {
 			61,
 			62,
 			63,
+			64,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2064,9 +2065,14 @@ describe("published Relay authority migration", () => {
 			idx: 62,
 			tag: "0062_wecom_inbound_media",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 63)).toMatchObject({
 			idx: 63,
 			tag: "0063_wecom_outbound_media",
+		});
+		// #3374：编号避开并行 PR 的 0064；按合入顺序可能需要重编号。
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 64,
+			tag: "0065_wecom_receipt_execution",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2498,6 +2504,7 @@ describe("published Relay authority migration", () => {
 					"wecom_conversation_rotations:wecom_conversation_rotations_pkey",
 					"wecom_receipt_media:wecom_receipt_media_file",
 					"wecom_receipt_media:wecom_receipt_media_receipt_id_ordinal_pk",
+					"wecom_receipts:wecom_receipt_execution",
 				].sort(),
 			});
 			expect(
