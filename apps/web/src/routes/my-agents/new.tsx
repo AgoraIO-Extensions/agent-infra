@@ -7,7 +7,7 @@ import {
 } from "../../features/my-agents/agent-application-submission-screen.js";
 import { projectDeploymentConfiguration } from "../../features/my-agents/deployment-configuration.js";
 import { useAgentApplicationSubmission } from "../../features/my-agents/use-agent-application-submission.js";
-import { useDeploymentConfiguration } from "../../features/my-agents/use-deployment-configuration.js";
+import { useShownDeploymentConfiguration } from "../../features/my-agents/use-deployment-configuration.js";
 import { PageLoadingState } from "../../features/page-loading-state.js";
 import { useBrowserSession } from "../../features/use-browser-session.js";
 
@@ -18,7 +18,10 @@ export const Route = createFileRoute("/my-agents/new")({
 function NewAgentApplicationRoute() {
 	const session = useBrowserSession();
 	const submission = useAgentApplicationSubmission();
-	const deployment = useDeploymentConfiguration();
+	// 部署状态说明与提交拦截按当前读取结果（N12-01）；读取失败时模型端点与模型的显示名沿用最近一次读到的
+	// 目录（#3418 N14-06）。
+	const { query: deployment, shown: shownDeployment } =
+		useShownDeploymentConfiguration();
 	if (deployment.isPending) {
 		return (
 			<main className="platform-content management-content">
@@ -57,6 +60,11 @@ function NewAgentApplicationRoute() {
 				submitting={submission.isPending}
 				deploymentConfiguration={deploymentConfiguration}
 				deploymentConfigurationRetryable={deploymentConfigurationRetryable}
+				lastReadModelEndpoints={
+					shownDeployment?.kind === "ready"
+						? shownDeployment.configuration.modelCatalog.endpoints
+						: undefined
+				}
 				onRefreshDeploymentConfiguration={() => void deployment.refetch()}
 				refreshingDeploymentConfiguration={deployment.isFetching}
 			/>

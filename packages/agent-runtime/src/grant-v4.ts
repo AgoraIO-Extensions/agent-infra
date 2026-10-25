@@ -6,6 +6,7 @@ import {
 	RuntimeExecutionGrantV5Schema,
 	RuntimeNativeCapabilityRequestV4Schema,
 	RuntimeNativeCapabilityRequestV5Schema,
+	RuntimeNativeCapabilityRequestV6Schema,
 	RuntimeNativeCapabilityTransportV4Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV5Schema,
@@ -18,10 +19,12 @@ import {
 	VerifiedRuntimeExecutionGrantV4Schema,
 	validateRuntimeBusinessBindingV4,
 	validateRuntimeBusinessBindingV5,
+	validateRuntimeBusinessBindingV6,
 	validateRuntimePrivateRelayKeyFieldV1,
 	validateRuntimeRestoreExecutionKeyBindingV4,
 	validateRuntimeRestoreExecutionKeyBindingV5,
 	validateVerifiedRuntimeExecutionGrantClaimsV4,
+	validateVerifiedRuntimeExecutionGrantClaimsV6,
 	validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV4,
 	validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV5,
 } from "@agent-infra/contracts/runtime";
@@ -29,6 +32,39 @@ import {
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 
 const utf8 = new TextDecoder("utf-8", { fatal: true });
+
+/** Verify the independently versioned V6 grant without projecting it to V4. */
+export function createRuntimeExecutionGrantValidatorV6(
+	publicKeys: ReadonlyMap<string, KeyObject>,
+	options: {
+		readonly expectedIssuer: string;
+		readonly expectedWorkerId: string;
+		readonly now?: () => number;
+	},
+) {
+	return async (value: unknown) => {
+		try {
+			const request = RuntimeNativeCapabilityRequestV6Schema.parse(value);
+			const context = {
+				expectedIssuer: options.expectedIssuer,
+				expectedWorkerId: options.expectedWorkerId,
+				now: (options.now ?? Date.now)(),
+			};
+			const claims = validateVerifiedRuntimeExecutionGrantClaimsV6(
+				verifySignedRuntimeToken(publicKeys, request.grant.token),
+				context,
+			);
+			await validateRuntimeBusinessBindingV6(request, claims);
+			validateVerifiedRuntimeExecutionGrantClaimsV6(claims, {
+				...context,
+				now: (options.now ?? Date.now)(),
+			});
+			return { request, claims };
+		} catch {
+			runtimeAuthorizationDenied();
+		}
+	};
+}
 
 function decode(segment: string): Buffer {
 	if (!/^[A-Za-z0-9_-]+$/.test(segment)) runtimeAuthorizationDenied();

@@ -9,6 +9,7 @@ import {
 
 import {
 	RuntimeBusinessGrantClaimsV4Schema,
+	RuntimeBusinessGrantClaimsV6Schema,
 	type RuntimeBusinessRequestV4,
 	type RuntimeEventAckRequestV4,
 	type RuntimeEventReadRequestV4,
@@ -16,18 +17,24 @@ import {
 	RuntimeExecutionGrantV2Schema,
 	RuntimeExecutionGrantV4Schema,
 	RuntimeExecutionGrantV5Schema,
+	RuntimeExecutionGrantV6Schema,
 	type RuntimeNativeCapabilityRequestV5,
+	type RuntimeNativeCapabilityRequestV6,
+	RuntimeNativeCapabilityRequestV6Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV5Schema,
 	type RuntimeRestoreExecutionKeyRequestV4,
 	type RuntimeRestoreExecutionKeyRequestV5,
 	runtimeEventRequestDigestV4,
 	runtimeRequestDigestV5,
+	runtimeRequestDigestV6,
 	runtimeRequestSigningPayloadV4,
 	runtimeRestoreExecutionKeyRequestDigestV4,
 	runtimeRestoreExecutionKeyRequestDigestV5,
+	validateRuntimeBusinessBindingV6,
 	validateVerifiedRuntimeExecutionGrantClaimsV2,
 	validateVerifiedRuntimeExecutionGrantClaimsV4,
+	validateVerifiedRuntimeExecutionGrantClaimsV6,
 	validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV4,
 	validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV5,
 } from "@agent-infra/contracts/runtime";
@@ -76,6 +83,78 @@ export function createWorkerRuntimeGrantSignerV4(options: SignerOptionsV4) {
 		return `${signingInput}.${sign(null, Buffer.from(signingInput, "ascii"), options.privateKey).toString("base64url")}`;
 	}
 	return {
+		async signV6(
+			value: RuntimeNativeCapabilityRequestV6,
+			authorizationRecordId: string,
+		) {
+			const request = RuntimeNativeCapabilityRequestV6Schema.parse(value);
+			const issuedAt = now();
+			const claims = RuntimeBusinessGrantClaimsV6Schema.parse({
+				schemaVersion: 6,
+				issuer: options.issuer,
+				audience: "runtime_host",
+				issuedAt,
+				expiresAt: issuedAt + 30_000,
+				grantId: (options.id ?? randomUUID)(),
+				workerId: options.workerId,
+				principal: request.principal,
+				executionSource: request.executionSource,
+				relayKeyBinding: request.keyBinding,
+				agentId: request.agentId,
+				channelId: request.channelId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				turnId: request.turnId,
+				sessionGeneration: request.sessionGeneration,
+				traceId: request.traceId,
+				hostSessionRef: request.hostSessionRef,
+				operation: request.operation,
+				allowedCommands: ["native-capability.invoke"],
+				purpose: "business",
+				authorizationRecordId,
+				attachments: [],
+				requestDigest: await runtimeRequestDigestV6(request),
+			});
+			validateVerifiedRuntimeExecutionGrantClaimsV6(claims, {
+				expectedIssuer: options.issuer,
+				expectedWorkerId: options.workerId,
+				now: now(),
+			});
+			await validateRuntimeBusinessBindingV6(request, claims);
+			return RuntimeExecutionGrantV6Schema.parse({
+				schemaVersion: 6,
+				format: "runtime-execution-jws",
+				token: tokenFor(claims),
+			});
+		},
+		verifyV6(value: RuntimeNativeCapabilityRequestV6["grant"]) {
+			try {
+				const grant = RuntimeExecutionGrantV6Schema.parse(value);
+				const [headerPart, payloadPart, signaturePart] = grant.token.split(".");
+				if (
+					headerPart !== header ||
+					!payloadPart ||
+					!signaturePart ||
+					!verify(
+						null,
+						Buffer.from(`${headerPart}.${payloadPart}`, "ascii"),
+						publicKey,
+						decode(signaturePart),
+					)
+				)
+					throw new Error();
+				return validateVerifiedRuntimeExecutionGrantClaimsV6(
+					JSON.parse(utf8.decode(decode(payloadPart))),
+					{
+						expectedIssuer: options.issuer,
+						expectedWorkerId: options.workerId,
+						now: now(),
+					},
+				);
+			} catch {
+				throw new TypeError("Runtime V6 grant is invalid");
+			}
+		},
 		async signRecovery(
 			originalRequest: RuntimeRestoreExecutionKeyRequestV4["originalRequest"],
 			acceptedHostSessionRef: string,
