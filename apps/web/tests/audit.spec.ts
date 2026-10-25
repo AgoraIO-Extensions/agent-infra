@@ -13,6 +13,7 @@ import {
 	test,
 } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
+import { expectBackgroundRereadKeeps } from "./background-reread";
 import { captureDesignContract, designViewports } from "./design-contract";
 import {
 	expectFocusableBusy,
@@ -1564,6 +1565,66 @@ test("audit query, reset and pagination keep focus on the pending button and han
 	await expectNoDuplicateControls(page, "我的执行审计（K7-02）");
 	await expectCleanPage(page, errors);
 });
+
+// #3387 N13-02（N13-3-05）：不经恢复动作，滚到页面底部、焦点在主区（点空白处）后回到标签页：后台重读挂起时
+// 已读记录保留，不换成读取行，只有页头「刷新审计记录」显示读取中（aria-disabled）；重读 503 失败时记录仍在、
+// 不显示查询失败，之后读到照常显示。页面高度与滚动位置一直不变，焦点留在主区、不落到 body。两视口一致。
+// 用户发起的「查询」「重置」「刷新审计记录」与翻页仍显示读取行（见上方 K7-02 与 N8-3-02 用例）。
+for (const [route, role, listPath] of [
+	["/audit", "employee", "/api/v2/audit"],
+	["/admin/audit", "admin", "/api/v4/admin/audit"],
+] as const)
+	test(`${route} keeps its records, height and scroll position through a background reread (#3387 N13-02)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		await fixture(page, role);
+		await page.goto(route);
+		const main = page.locator("main");
+		const table = await pinElement(
+			main.locator("table.audit-table"),
+			"audit-background-table",
+		);
+		await expect(table).toBeVisible();
+		const rows = await table.locator("tbody tr").count();
+		expect(rows).toBeGreaterThan(0);
+		const refresh = main.getByRole("button", {
+			name: "刷新审计记录",
+			exact: true,
+		});
+		await expect(refresh).not.toHaveAttribute("aria-disabled", "true");
+		// 焦点在主区（同点主区空白处），再滚到页面底部。
+		const mainContent = page.locator("#main-content");
+		await mainContent.evaluate((element) =>
+			(element as HTMLElement).focus({ preventScroll: true }),
+		);
+		await page.evaluate(() =>
+			window.scrollTo({
+				top: document.documentElement.scrollHeight,
+				behavior: "instant",
+			}),
+		);
+		await expectBackgroundRereadKeeps(page, {
+			path: listPath,
+			focus: mainContent,
+			context: `${route} 审计列表`,
+			expectKept: async () => {
+				await expect(table).toBeVisible();
+				await expect(table.locator("tbody tr")).toHaveCount(rows);
+				await expect(main.getByText("正在读取审计记录…")).toHaveCount(0);
+				await expect(main.getByText("审计查询失败，请稍后重试。")).toHaveCount(
+					0,
+				);
+			},
+			expectPending: async () => {
+				await expect(refresh).toHaveAttribute("aria-disabled", "true");
+			},
+		});
+		await expect(refresh).not.toHaveAttribute("aria-disabled", "true");
+		await expectNoDuplicateControls(page, `${route}（后台重读，#3387）`);
+		await expectCleanPage(page, errors);
+	});
 
 // #3269 N8-3-02：列表读取失败后的「重试」是 RecoveryButton。没有已读数据时重读先换成读取行、按钮卸载，
 // 焦点交给页面 h1，仍失败时回到重新出现的「重试」；已有数据时失败提示保留，「重试」是可聚焦的禁用，

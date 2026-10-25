@@ -22,6 +22,7 @@ import type {
 	AgentProjectionV2,
 	DeploymentConfigurationProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
+import { expectBackgroundRereadKeeps } from "./background-reread";
 import {
 	expectFocusableBusy,
 	expectFocusSettled,
@@ -1292,6 +1293,102 @@ test("the application row's 查看 Agent is an outline action with AA contrast (
 	await view.hover();
 	expect(await textContrast(view)).toBeGreaterThanOrEqual(4.5);
 });
+
+// #3387 N13-01（G13-2-02）：已读到数据的页面在后台重读（回到标签页触发 refetchOnWindowFocus）挂起与 503 失败时
+// 不换成读取失败卡：修改申请未保存的名称、列表与申请详情保留，焦点一直在原控件上、不落到 body，页面高度与
+// 滚动位置不变；之后读到时输入仍是用户留下的。两视口一致。
+for (const target of [
+	{
+		name: "修改申请保留未保存的名称",
+		route: "/my-agents/application-browser-1/edit",
+		read: "/api/v2/agent-applications/application-browser-1",
+		prepare: async (page: Page) => {
+			const field = page.getByLabel("Agent 名称", { exact: true });
+			await field.fill("未保存的新名称");
+			return field;
+		},
+		expectKept: async (page: Page) => {
+			await expect(page.getByLabel("Agent 名称", { exact: true })).toHaveValue(
+				"未保存的新名称",
+			);
+			await expect(
+				page.getByRole("button", { name: "修改申请", exact: true }),
+			).toBeVisible();
+		},
+	},
+	{
+		name: "申请详情保留",
+		route: "/my-agents/application-browser-1",
+		read: "/api/v2/agent-applications/application-browser-1",
+		prepare: async (page: Page) =>
+			page
+				.locator("main header.application-detail-heading")
+				.getByRole("link", { name: "修改申请" }),
+		expectKept: async (page: Page) => {
+			await expect(
+				page.getByRole("region", { name: "审批进度" }),
+			).toBeVisible();
+		},
+	},
+	{
+		name: "我的申请列表保留",
+		route: "/my-agents",
+		read: "/api/v2/agent-applications",
+		prepare: async (page: Page) =>
+			page.getByRole("link", {
+				name: `查看申请：${pendingApplication.name}`,
+				exact: true,
+			}),
+		expectKept: async (page: Page) => {
+			await expect(
+				page.getByRole("list", { name: "我的申请" }).getByRole("listitem"),
+			).toHaveCount(1);
+		},
+	},
+	{
+		name: "已创建 Agent 列表保留",
+		route: "/my-agents?tab=owned",
+		read: "/api/v2/agents",
+		prepare: async (page: Page) =>
+			page.getByRole("link", { name: `配置与生命周期：${ownedAgent.name}` }),
+		expectKept: async (page: Page) => {
+			await expect(page.locator(".owned-agent-card")).toHaveCount(1);
+		},
+	},
+] as const)
+	test(`a background reread keeps the shown page: ${target.name} (#3387 N13-01)`, async ({
+		page,
+	}, info) => {
+		await viewportFor(page, info.project.name === "mobile");
+		const pageErrors = trackPageErrors(page);
+		await fixture(page);
+		await page.goto(target.route);
+		// 先等页面读到内容（prepare 等到控件出现），再标记 h1，不标到读取中的标题。
+		const control = await pinElement(
+			await target.prepare(page),
+			"background-reread-control",
+		);
+		const heading = await pinElement(
+			page.getByRole("heading", { level: 1 }),
+			"background-reread-heading",
+		);
+		await control.focus();
+		await expectBackgroundRereadKeeps(page, {
+			path: target.read,
+			focus: control,
+			context: target.name,
+			expectKept: async () => {
+				await expect(heading).toHaveCount(1);
+				await expect(
+					page.getByText(/^(暂时无法读取|申请暂不可用|服务暂不可用)/),
+				).toHaveCount(0);
+				await target.expectKept(page);
+			},
+		});
+		await expectCleanPage(page, pageErrors);
+		await expectNoDuplicateControls(page, `${target.name}（#3387）`);
+		await noHorizontalOverflow(page);
+	});
 
 // #3128 B2-03：同一人员同时选入「共同 Owner 用户」与「可使用的用户」时，两个移除按钮的名称带各自的
 // 选择器标签，同页没有同名控件；从一个选择器移除不影响另一个，焦点回到该选择器的输入框。
