@@ -108,6 +108,34 @@ describe("WeCom queue notices (#3376)", () => {
 		expect(f.update).not.toHaveBeenCalled();
 	});
 
+	it("retries a position or start notice that was not confirmed as sent", async () => {
+		const f = fixture();
+		f.useCase.noted("one", 2);
+		f.update.mockResolvedValueOnce("failed");
+		f.set([notice("one", 1)]);
+		await f.useCase.tick();
+		// 位次更新未送达：下一轮重发同一位次。
+		await f.useCase.tick();
+		expect(f.update.mock.calls.map(([input]) => input.text)).toEqual([
+			wecomQueuedTextV1(1),
+			wecomQueuedTextV1(1),
+		]);
+		f.update.mockClear();
+		f.update.mockResolvedValueOnce("unknown");
+		f.update.mockRejectedValueOnce(new Error("socket closed"));
+		f.set([notice("one", null)]);
+		await f.useCase.tick();
+		await f.useCase.tick();
+		await f.useCase.tick();
+		// “开始处理”两次未确认后第三次送达，此后不再发送。
+		await f.useCase.tick();
+		expect(f.update.mock.calls.map(([input]) => input.text)).toEqual([
+			wecomQueueStartedTextV1,
+			wecomQueueStartedTextV1,
+			wecomQueueStartedTextV1,
+		]);
+	});
+
 	it("keeps going when one update fails and forgets finished receipts", async () => {
 		const f = fixture();
 		f.useCase.noted("one", 2);

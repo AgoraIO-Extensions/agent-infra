@@ -1104,12 +1104,15 @@ export function createWecomQueueNoticeV1(dependencies: {
 					notice.position === null ? "started" : `queued:${notice.position}`;
 				const last = shown.get(notice.receiptId);
 				if (last === key || last === "started") continue;
-				shown.set(notice.receiptId, key);
 				// 本进程没有提示过排队的回执不补发“开始处理”：重连后旧回复路由已失效。
-				if (notice.position === null && last === undefined) continue;
+				if (notice.position === null && last === undefined) {
+					shown.set(notice.receiptId, key);
+					continue;
+				}
 				updated = true;
+				let result: "sent" | "failed" | "unknown" = "failed";
 				try {
-					await dependencies.sender.update({
+					result = await dependencies.sender.update({
 						scope: notice.scope,
 						replyHandle: notice.replyHandle,
 						text:
@@ -1120,6 +1123,9 @@ export function createWecomQueueNoticeV1(dependencies: {
 				} catch {
 					/* 提示帧失败不影响执行与最终回复。 */
 				}
+				// 只有确认送达才记下已提示的状态；失败或无法确认时下一轮按当前状态重发同一 stream
+				// （覆盖式更新，重发不会产生重复消息）。
+				if (result === "sent") shown.set(notice.receiptId, key);
 			}
 			for (const receiptId of shown.keys())
 				if (!current.has(receiptId)) shown.delete(receiptId);
