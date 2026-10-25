@@ -119,6 +119,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		| ReturnType<typeof runtimeModelInjectionV4>
 		| undefined;
 	readonly egress: ReturnType<typeof workloadEgressRulesV1>;
+	/** Deployment-owned service token, retained in Worker memory only. */
 }) {
 	const {
 		policy,

@@ -46,6 +46,7 @@ import { probeRuntimeBrowserCapabilityV1 } from "./browser-capability-probe.js";
 import { createSessionBrowserExecutionContextV1 } from "./browser-session-provider.js";
 import {
 	readCodexInstalledSkillDeployment,
+	readCodexIsolationMode,
 	readCodexPilotConfiguration,
 	readRuntimeFileExchangeOptions,
 	readRuntimeModelConfigurationV3,
@@ -407,6 +408,10 @@ export async function assembleRuntimeHost(
 	}
 	const configuration =
 		binding === "codex" ? readCodexPilotConfiguration(environment) : undefined;
+	const codexIsolationMode =
+		binding === "codex"
+			? readCodexIsolationMode(environment, serviceToken)
+			: undefined;
 	const connectionProfile = readConnectionClientProfile(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_PROFILE,
 	);
@@ -560,6 +565,7 @@ export async function assembleRuntimeHost(
 				: undefined;
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
+					isolationMode: codexIsolationMode,
 					browserCapability: verifiedBrowserCapability,
 					...(skillDirectory ? { skillDirectory } : {}),
 					...(standardConnectionClient ? { standardConnectionClient } : {}),

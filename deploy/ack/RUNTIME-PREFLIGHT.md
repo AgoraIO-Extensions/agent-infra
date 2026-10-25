@@ -1,8 +1,11 @@
 # ACK Runtime 隔离预检
 
-Worker 可运行在 ECI。Runtime 的系统要求按 Driver 单独确认；Codex 需要镜像中包含新版
+Worker 可运行在 ECI。Runtime 的系统要求按 Driver 单独确认；Codex 默认需要镜像中包含新版
 `setpriv`，并由目标内核实际安装 Landlock ABI 5 的 `ioctl-dev` 规则。容器镜像不能补齐
-宿主内核缺失的能力。Pi 等 Messages Driver 不能替 Codex 通过此检查。
+宿主内核缺失的能力。经 ADR-0035 评审的标准 Runtime Pod 可使用 Worker-owned
+`container-boundary` 模式，由专属 Pod/PVC/NetworkPolicy 和 Codex `workspace-write` 承担
+边界；该模式必须单独做 Pod 安全上下文、跨 Session 负例和真实工具验收，不能用 Landlock
+预检结果冒充。Pi 等 Messages Driver 不能替 Codex 通过任一检查。
 
 镜像使用正式 `deploy/release/build-images.mjs` 或 `publish-images` workflow 的产物，
 从发布 receipt 选择节点架构对应的 OCI image manifest Digest。不要使用 tag、multi-arch

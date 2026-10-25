@@ -614,6 +614,8 @@ import {
 } from "./standard-mcp-client.js";
 
 export interface CodexRuntimeDriverOptions {
+	/** Deployment-owned native isolation boundary; defaults to Landlock. */
+	readonly isolationMode?: "landlock" | "container-boundary";
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
 	readonly browserCapability?:
 		| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
@@ -6094,6 +6096,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		// bridge owns the per-Conversation layout beneath it.
 		const openConversationBridge = (conversationKey: string) =>
 			openBridge({
+				isolationMode: options.isolationMode,
 				dataDirectory: `${options.path}.native`,
 				conversationKey,
 				...(options.launchPath === undefined
@@ -6198,6 +6201,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			try {
 				signal.throwIfAborted();
 				bridge = await openBridge({
+					isolationMode: options.isolationMode,
 					dataDirectory: directory,
 					conversationKey: probeKey,
 					...(options.launchPath ? { launchPath: options.launchPath } : {}),
