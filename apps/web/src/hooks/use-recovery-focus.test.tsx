@@ -11,12 +11,14 @@ import {
 	screen,
 	waitFor,
 } from "@testing-library/react";
+import { type ReactNode, useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RecoveryButton } from "../features/recovery-button.js";
 import {
 	focusLostFrom,
 	pageRecoveryTarget,
 	RecoveryPageParams,
+	useFocusLossFallback,
 	useRestoreLostFocus,
 } from "./use-recovery-focus.js";
 
@@ -789,5 +791,220 @@ describe("focus held by a control that a background re-render removes", () => {
 		// 用户把焦点移到别的控件：不是丢失。
 		screen.getByRole("button", { name: "上一页" }).focus();
 		expect(focusLostFrom(next)).toBe(false);
+	});
+});
+
+// #3419：壳层焦点丢失兜底。主内容区或弹窗里最近持有焦点的元素因非用户发起的重绘移除或变为原生禁用、焦点
+// 落到 body 时，交给仍打开的所在弹窗，否则页面 h1（不可聚焦时 #main-content），不滚动；用户点空白处、换了
+// 路径、紧接在用户激活操作之后的丢失不接手；页面自己的交接与恢复代管优先。
+function FallbackShell({ children }: { children: ReactNode }) {
+	useFocusLossFallback();
+	return <>{children}</>;
+}
+
+/** 审批队列式的页面：已有内容时后台重读读到不可重试的失败，整块换成一条不可用提示（不经 PageStateCard）。 */
+function QueuePage({
+	state,
+	versionsDisabled = false,
+	focusableHeading = true,
+	onRemoved,
+}: {
+	state: "ready" | "unavailable";
+	versionsDisabled?: boolean;
+	focusableHeading?: boolean;
+	/** 页面自己的交接：内容被换掉后把焦点交给它返回的元素。 */
+	onRemoved?: () => HTMLElement | null;
+}) {
+	return (
+		<FallbackShell>
+			<nav>
+				<button type="button">侧栏入口</button>
+			</nav>
+			<div id="main-content" tabIndex={-1}>
+				<h1 tabIndex={focusableHeading ? -1 : undefined}>页面标题</h1>
+				<button type="button">页头操作</button>
+				{state === "ready" ? (
+					<>
+						<button type="button">审阅：发布申请</button>
+						<textarea aria-label="驳回原因" />
+						<select aria-label="固定版本" disabled={versionsDisabled}>
+							<option>1.0.0</option>
+						</select>
+					</>
+				) : (
+					<Unavailable onRemoved={onRemoved} />
+				)}
+			</div>
+		</FallbackShell>
+	);
+}
+
+function Unavailable({ onRemoved }: { onRemoved?: () => HTMLElement | null }) {
+	useEffect(() => {
+		onRemoved?.()?.focus();
+	}, [onRemoved]);
+	return <p role="alert">审批列表不可用，请联系管理员。</p>;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** 兜底等页面自己的交接先处理（50ms）；不接手的用例等过这段时间再断言。 */
+const pastFallback = () => sleep(150);
+
+describe("focus loss fallback in the application shell (#3419)", () => {
+	it("hands focus to the h1 without scrolling when a background re-render removes the focused control", async () => {
+		const view = render(<QueuePage state="ready" />);
+		screen.getByRole("button", { name: "审阅：发布申请" }).focus();
+		const focus = vi.spyOn(HTMLElement.prototype, "focus");
+		view.rerender(<QueuePage state="unavailable" />);
+		await waitFor(() => expect(document.activeElement).toBe(heading()));
+		expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+		focus.mockRestore();
+	});
+
+	it("still hands focus over after the user typed into the removed field", async () => {
+		const view = render(<QueuePage state="ready" />);
+		const reason = screen.getByRole("textbox", { name: "驳回原因" });
+		reason.focus();
+		// 输入文字（含换行与空格）不是激活操作：之后回到标签页的后台重读换掉它，仍由兜底接手。
+		for (const key of ["a", "Enter", " "]) fireEvent.keyDown(reason, { key });
+		view.rerender(<QueuePage state="unavailable" />);
+		await waitFor(() => expect(document.activeElement).toBe(heading()));
+	});
+
+	it("hands focus to the h1 when the focused select becomes natively disabled", async () => {
+		const view = render(<QueuePage state="ready" />);
+		const versions = screen.getByRole("combobox", { name: "固定版本" });
+		versions.focus();
+		view.rerender(<QueuePage state="ready" versionsDisabled />);
+		await waitFor(() => expect(document.activeElement).toBe(heading()));
+	});
+
+	it("falls back to #main-content when the h1 is not focusable", async () => {
+		const view = render(<QueuePage state="ready" focusableHeading={false} />);
+		screen.getByRole("button", { name: "审阅：发布申请" }).focus();
+		view.rerender(<QueuePage state="unavailable" focusableHeading={false} />);
+		await waitFor(() =>
+			expect(document.activeElement?.id).toBe("main-content"),
+		);
+	});
+
+	it("keeps focus inside a dialog that stays open when its focused control is removed", async () => {
+		function DialogPage({ reading }: { reading: boolean }) {
+			return (
+				<FallbackShell>
+					<div id="main-content" tabIndex={-1}>
+						<h1 tabIndex={-1}>页面标题</h1>
+					</div>
+					<div data-slot="dialog-content" role="dialog" tabIndex={-1}>
+						{reading ? (
+							<p>正在读取…</p>
+						) : (
+							<button type="button">重新读取</button>
+						)}
+					</div>
+				</FallbackShell>
+			);
+		}
+		const view = render(<DialogPage reading={false} />);
+		screen.getByRole("button", { name: "重新读取" }).focus();
+		view.rerender(<DialogPage reading />);
+		await waitFor(() =>
+			expect(document.activeElement).toBe(screen.getByRole("dialog")),
+		);
+	});
+
+	it("leaves the page's own, more precise target alone", async () => {
+		const view = render(<QueuePage state="ready" />);
+		screen.getByRole("button", { name: "审阅：发布申请" }).focus();
+		const own = () => screen.getByRole("button", { name: "页头操作" });
+		view.rerender(<QueuePage state="unavailable" onRemoved={own} />);
+		await pastFallback();
+		expect(document.activeElement).toBe(own());
+	});
+
+	it("leaves a recovery handoff to its section target", async () => {
+		function Section({ state }: { state: State }) {
+			return (
+				<FallbackShell>
+					<SectionPage state={state} onRetry={vi.fn()} />
+				</FallbackShell>
+			);
+		}
+		const view = render(<Section state="failed" />);
+		retry().focus();
+		fireEvent.click(retry());
+		view.rerender(<Section state="loading" />);
+		await pastFallback();
+		expect(document.activeElement).toBe(
+			screen.getByRole("heading", { name: "分区标题" }),
+		);
+	});
+
+	it("does not take focus after the user clicked on a blank area", async () => {
+		const view = render(<QueuePage state="ready" />);
+		const review = screen.getByRole("button", { name: "审阅：发布申请" });
+		review.focus();
+		fireEvent.pointerDown(document.body);
+		review.blur();
+		view.rerender(<QueuePage state="unavailable" />);
+		await pastFallback();
+		expect(document.activeElement).toBe(document.body);
+	});
+
+	it("does not take focus when the control is removed by the user's own activation", async () => {
+		const view = render(<QueuePage state="ready" />);
+		const review = screen.getByRole("button", { name: "审阅：发布申请" });
+		review.focus();
+		// 例如按下后按钮随之禁用或卸载、结果出来后由页面交接：兜底不抢在页面之前。
+		fireEvent.keyDown(review, { key: "Enter" });
+		fireEvent.click(review);
+		view.rerender(<QueuePage state="unavailable" />);
+		await pastFallback();
+		expect(document.activeElement).toBe(document.body);
+	});
+
+	it("does not take focus after the path changed (leaving the page)", async () => {
+		const view = render(<QueuePage state="ready" />);
+		screen.getByRole("button", { name: "审阅：发布申请" }).focus();
+		await atAddress("/another-page", async () => {
+			view.rerender(<QueuePage state="unavailable" />);
+			await pastFallback();
+			expect(document.activeElement).toBe(document.body);
+		});
+	});
+
+	it("does not move focus held outside the replaced content", async () => {
+		const view = render(<QueuePage state="ready" />);
+		const nav = screen.getByRole("button", { name: "侧栏入口" });
+		nav.focus();
+		view.rerender(<QueuePage state="unavailable" />);
+		await pastFallback();
+		expect(document.activeElement).toBe(nav);
+	});
+
+	it("ignores controls outside the main content and dialogs", async () => {
+		function NavPage({ present }: { present: boolean }) {
+			return (
+				<FallbackShell>
+					<nav>{present ? <button type="button">侧栏入口</button> : null}</nav>
+					<div id="main-content" tabIndex={-1}>
+						<h1 tabIndex={-1}>页面标题</h1>
+					</div>
+				</FallbackShell>
+			);
+		}
+		const view = render(<NavPage present />);
+		screen.getByRole("button", { name: "侧栏入口" }).focus();
+		view.rerender(<NavPage present={false} />);
+		await pastFallback();
+		expect(document.activeElement).toBe(document.body);
+	});
+
+	it("does nothing once the shell is gone", async () => {
+		const view = render(<QueuePage state="ready" />);
+		screen.getByRole("button", { name: "审阅：发布申请" }).focus();
+		view.unmount();
+		await pastFallback();
+		expect(document.activeElement).toBe(document.body);
 	});
 });

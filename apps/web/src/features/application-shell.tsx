@@ -59,6 +59,7 @@ import {
 } from "@/components/ui/sheet";
 import { Sidebar } from "@/components/ui/sidebar";
 import { LoadingLine } from "@/components/ui/spinner";
+import { useFocusLossFallback } from "@/hooks/use-recovery-focus";
 import type { BrowserSessionProjectionV1 } from "../pilot/generated/types.gen";
 import { connectionEntryUrl } from "./connection-entry";
 import { LoginPage } from "./login-page";
@@ -167,6 +168,8 @@ function AuthenticatedContent({
 export function ApplicationShell({ children }: { children: ReactNode }) {
 	const session = useBrowserSession();
 	const [sheet, setSheet] = useState(false);
+	// 焦点丢失兜底（#3419）：持有焦点的控件被非用户发起的重绘移除或禁用、焦点落到 body 时交给页面 h1。
+	useFocusLossFallback();
 	const sessionKind = session.state.kind;
 	// 只有服务端确认未登录（401、retryable: false）才整页渲染登录页；
 	// 确认中与可重试失败都留在壳层骨架内，不出现登录标题与「尚未登录」（R4-02）。
