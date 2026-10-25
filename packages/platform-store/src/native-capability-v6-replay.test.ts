@@ -96,6 +96,23 @@ function validPlan() {
 		sessionGeneration: 1,
 		hostSessionRef: "session-1",
 	};
+	const taskAuthority = {
+		schemaVersion: 1 as const,
+		actorId: authority.actorId,
+		agentId: authority.agentId,
+		channelId: authority.channelId,
+		authorizationRevision: authority.authorizationRevision,
+		supportsSupplementaryInstruction: false,
+		taskBoundary: {
+			schemaVersion: 1 as const,
+			principal: authority.principal,
+			agentId: authority.agentId,
+			channelId: authority.channelId,
+			identityRevision: "identity-1",
+			agentAuthorizationRevision: authority.authorizationRevision,
+			accessSources: [{ kind: "user" as const, userId: authority.actorId }],
+		},
+	};
 	const requestDigest = nativeCapabilityAdmissionRequestDigestV6(parsed);
 	const operationDigest = nativeCapabilityOperationDigestV6(request);
 	const binding = {
@@ -112,6 +129,7 @@ function validPlan() {
 		turnId: "turn-1",
 		sessionGeneration: authority.sessionGeneration,
 		authorizationRevision: authority.authorizationRevision,
+		taskBoundary: taskAuthority.taskBoundary,
 		hostSessionRef: authority.hostSessionRef,
 		capabilityId: parsed.capabilityId,
 		directoryRevision: parsed.directoryRevision,
@@ -148,6 +166,7 @@ function validPlan() {
 		authority,
 		plan,
 		input: {
+			taskAuthority,
 			invocation: publicInvocation(runtimeRequest),
 			runtimeRequest,
 			keyBinding: structuredClone(binding.keyBinding),
@@ -179,11 +198,20 @@ function replayHarness() {
 	const transaction = vi.fn(async () => {
 		throw new Error("unexpected SQL mutation");
 	});
-	const store = new PostgresConversationExecutionTransactionV1({
+	const internalStore = new PostgresConversationExecutionTransactionV1({
 		transaction: transaction as unknown as Transaction,
 	});
+	const authorize = vi.fn(async () => true);
+	const store = {
+		admitNativeCapabilityV6: (
+			input: Parameters<
+				PostgresConversationExecutionTransactionV1["admitNativeCapabilityV6"]
+			>[0],
+		) => internalStore.admitNativeCapabilityV6(input, authorize),
+	};
 	return {
 		saved,
+		authorize,
 		store,
 		transaction,
 		input: {
@@ -203,6 +231,17 @@ it("returns the saved plan as an independent copy on a same-key replay", async (
 	expect(result.plan).not.toBe(h.saved);
 	expect(h.transaction).not.toHaveBeenCalled();
 	expect(sql.readMessageState).not.toHaveBeenCalled();
+});
+
+it("denies replay when the in-transaction authorization recheck is revoked", async () => {
+	const h = replayHarness();
+	h.authorize.mockResolvedValue(false);
+	expect(await h.store.admitNativeCapabilityV6(h.input)).toEqual({
+		outcome: "denied",
+		reason: "authorization_lost",
+	});
+	expect(sql.readIdempotency).not.toHaveBeenCalled();
+	expect(h.transaction).not.toHaveBeenCalled();
 });
 it.each(["keyVersion", "keyReference", "turn"])(
 	"replays the saved binding when a new candidate changes %s",

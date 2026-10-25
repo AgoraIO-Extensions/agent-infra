@@ -121,7 +121,6 @@ import {
 	resolvePersonalApiTaskAdmissionAuthorityV1,
 } from "./personal-api-task-authorization.js";
 import {
-	currentRelayKeyVersionInTransaction,
 	type RelayKeyVersionBindingV1,
 	type RelayKeyVersionCiphertextV1,
 	readRelayKeyVersionInTransaction,
@@ -561,6 +560,7 @@ export class PostgresConversationExecutionTransactionV1
 		candidate: Parameters<
 			NativeCapabilityAdmissionTransactionPortV6["admitNativeCapabilityV6"]
 		>[0],
+		isAuthorized: () => Promise<boolean>,
 	): Promise<NativeCapabilityAdmissionV6Decision> {
 		const input = structuredClone(candidate);
 		return this.#transaction(async (transaction) => {
@@ -591,6 +591,8 @@ export class PostgresConversationExecutionTransactionV1
 				conversation.hostSessionRef !== input.authority.hostSessionRef
 			)
 				return { outcome: "denied", reason: "authorization_lost" };
+			if (!(await isAuthorized()))
+				return { outcome: "denied", reason: "authorization_lost" };
 			const scope = {
 				scopeType: "conversation",
 				scopeId: input.request.conversationId,
@@ -615,6 +617,13 @@ export class PostgresConversationExecutionTransactionV1
 				)
 					return unavailable();
 				const saved = envelope.plan as NativeCapabilityInvocationPlanV6;
+				if (
+					!isDeepStrictEqual(
+						saved.taskBoundary,
+						input.taskAuthority.taskBoundary,
+					)
+				)
+					return { outcome: "denied", reason: "authorization_lost" };
 				const payload = saved.outbox?.payload;
 				if (
 					!payload ||
@@ -624,6 +633,7 @@ export class PostgresConversationExecutionTransactionV1
 					return unavailable();
 				validateNativeCapabilityReplayPlanV6(saved, {
 					invocation: input.invocation,
+					taskAuthority: input.taskAuthority,
 					authority: input.authority,
 					requestDigest: input.requestDigest,
 				});
@@ -644,14 +654,20 @@ export class PostgresConversationExecutionTransactionV1
 			if (occupied)
 				return { outcome: occupied.status === "unknown" ? "unknown" : "busy" };
 			// New operations require the current Key; replay retains its frozen tuple.
-			const currentKey = await currentRelayKeyVersionInTransaction(
-				transaction,
-				input.keyBinding,
-			);
+			const executionBinding =
+				await currentConversationExecutionRelayKeyBindingV1(transaction, {
+					authority: input.taskAuthority,
+					userDirectory: this.#userDirectory,
+					personalApiAdmissionAuthority:
+						input.taskAuthority.personalApiAdmissionAuthority,
+				});
+			const currentKey = executionBinding?.relayKeyBinding;
 			if (
 				!currentKey ||
+				executionBinding?.executionSource !== input.plan.executionSource ||
 				currentKey.keyId !== input.keyBinding.ciphertextRef ||
-				currentKey.keyVersion !== input.keyBinding.version
+				currentKey.keyVersion !== input.keyBinding.version ||
+				!(await isAuthorized())
 			)
 				return { outcome: "denied", reason: "authorization_lost" };
 			const occurredAt = new Date();
@@ -679,6 +695,12 @@ export class PostgresConversationExecutionTransactionV1
 					 ${input.keyBinding.ciphertextRef}, ${input.keyBinding.version},
 					 ${input.plan.principal.kind}, ${occurredAt}, ${occurredAt})
 			`;
+			await insertTaskAuthorization(transaction, {
+				executionId: input.plan.executionId,
+				boundary: input.plan.taskBoundary,
+				traceId: input.request.traceId,
+				requestId: input.request.requestId,
+			});
 			await transaction`
 				insert into platform.outbox_items
 					(id, scope_type, scope_id, operation, payload, trace_id, request_id,

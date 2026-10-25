@@ -131,7 +131,7 @@ function validPlan() {
 	const parsed = parseNativeCapabilityAdmissionRequestV6(request);
 	const authority = {
 		conversationId: request.conversationId,
-		principal: { ...request.principal },
+		principal: { ...request.principal, id: String(request.principal.id) },
 		executionSource: request.executionSource,
 		agentId: "agent-1",
 		actorId: "alice",
@@ -139,6 +139,23 @@ function validPlan() {
 		authorizationRevision: "auth-1",
 		sessionGeneration: 1,
 		hostSessionRef: "session-1",
+	};
+	const taskAuthority = {
+		schemaVersion: 1 as const,
+		actorId: authority.actorId,
+		agentId: authority.agentId,
+		channelId: authority.channelId,
+		authorizationRevision: authority.authorizationRevision,
+		supportsSupplementaryInstruction: false,
+		taskBoundary: {
+			schemaVersion: 1 as const,
+			principal: authority.principal,
+			agentId: authority.agentId,
+			channelId: authority.channelId,
+			identityRevision: "identity-1",
+			agentAuthorizationRevision: authority.authorizationRevision,
+			accessSources: [{ kind: "user" as const, userId: authority.actorId }],
+		},
 	};
 	const requestDigest = nativeCapabilityAdmissionRequestDigestV6(parsed);
 	const operationDigest = nativeCapabilityOperationDigestV6(request);
@@ -156,6 +173,7 @@ function validPlan() {
 		turnId: "turn-1",
 		sessionGeneration: authority.sessionGeneration,
 		authorizationRevision: authority.authorizationRevision,
+		taskBoundary: taskAuthority.taskBoundary,
 		hostSessionRef: authority.hostSessionRef,
 		capabilityId: parsed.capabilityId,
 		directoryRevision: parsed.directoryRevision,
@@ -192,6 +210,7 @@ function validPlan() {
 		authority,
 		plan,
 		input: {
+			taskAuthority,
 			invocation: publicInvocation(runtimeRequest),
 			runtimeRequest,
 			keyBinding: structuredClone(binding.keyBinding),
@@ -249,9 +268,11 @@ function admissionHarness() {
 			NativeCapabilityAdmissionTransactionPortV6["admitNativeCapabilityV6"]
 		>(async () => ({ outcome: "busy" as const })),
 	};
+	const taskAuthority = validPlan().input.taskAuthority;
 	const authorization = {
 		authorize: vi.fn(async () => ({
 			outcome: "allowed" as const,
+			taskAuthority,
 			authority,
 			keyBinding,
 		})),
@@ -264,6 +285,8 @@ function admissionHarness() {
 		authority,
 		keyBinding,
 		transaction,
+		taskAuthority,
+		authorization,
 		useCase: {
 			admit: (value: unknown, invocation = publicInvocation(value)) =>
 				internal.admit(value, invocation),
@@ -467,4 +490,46 @@ it("prepares an unsigned plan whose operation digest matches the signed Runtime 
 
 it("requires an explicit public invocation instead of deriving its idempotency key from an Execution", () => {
 	expect(() => parseProjection(request, undefined)).toThrow();
+});
+
+it("denies V6 admission without a typed Task authorization boundary", async () => {
+	const h = admissionHarness();
+	Reflect.deleteProperty(h.taskAuthority, "taskBoundary");
+	expect(await h.useCase.admit(request)).toEqual({
+		outcome: "denied",
+		reason: "authorization_lost",
+	});
+	expect(h.transaction.admitNativeCapabilityV6).not.toHaveBeenCalled();
+});
+
+it("denies a valid Task authority for another principal before transaction access", async () => {
+	const h = admissionHarness();
+	h.taskAuthority.actorId = "other-user";
+	h.taskAuthority.taskBoundary.principal.id = "other-user";
+	h.taskAuthority.taskBoundary.accessSources = [
+		{ kind: "user", userId: "other-user" },
+	];
+	expect(await h.useCase.admit(request)).toEqual({
+		outcome: "denied",
+		reason: "authorization_lost",
+	});
+	expect(h.transaction.admitNativeCapabilityV6).not.toHaveBeenCalled();
+});
+
+it("freezes the accepted Task boundary and revalidates current authority inside the Store callback", async () => {
+	const h = admissionHarness();
+	await h.useCase.admit(request);
+	const [sent, isAuthorized] =
+		h.transaction.admitNativeCapabilityV6.mock.calls[0] ?? [];
+	if (!sent || !isAuthorized)
+		throw new Error("missing transaction authorization");
+	expect(await isAuthorized()).toBe(true);
+	h.taskAuthority.taskBoundary.identityRevision = "revoked";
+	expect(await isAuthorized()).toBe(false);
+	expect(sent.plan.taskBoundary.identityRevision).toBe("identity-1");
+	expect(Object.isFrozen(sent.plan.taskBoundary)).toBe(true);
+	h.authorization.authorize.mockRejectedValueOnce(
+		new Error("authority unavailable"),
+	);
+	expect(await isAuthorized()).toBe(false);
 });

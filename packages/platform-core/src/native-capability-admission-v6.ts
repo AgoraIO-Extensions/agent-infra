@@ -5,11 +5,16 @@ import {
 	type RuntimeNativeCapabilityRequestV6,
 	RuntimeNativeCapabilityRequestV6Schema,
 } from "@agent-infra/contracts/runtime";
-import { conversationExecutionSourceV1 } from "./conversation-execution-types.js";
+import { parseAuthority } from "./conversation-execution-input.js";
+import {
+	type ConversationExecutionAuthorityV1,
+	conversationExecutionSourceV1,
+} from "./conversation-execution-types.js";
 import {
 	type NativeCapabilityAdmissionRequestV3,
 	parseNativeCapabilityAdmissionRequestV3,
 } from "./native-capability-admission.js";
+import type { TaskAuthorizationBoundaryV1 } from "./task-authorization.js";
 
 const digestPattern = /^[a-f0-9]{64}$/u;
 type NativeCapabilityRuntimeInputV6 = Omit<
@@ -66,6 +71,7 @@ type NativeCapabilityInvocationBindingV6 = Readonly<{
 	turnId: string;
 	sessionGeneration: number;
 	authorizationRevision: string;
+	taskBoundary: TaskAuthorizationBoundaryV1;
 	hostSessionRef: string;
 	capabilityId: string;
 	directoryRevision: string;
@@ -136,16 +142,20 @@ export type NativeCapabilityAdmissionV6Decision =
 	| { readonly outcome: "conflict"; readonly reason: "idempotency_conflict" };
 
 export interface NativeCapabilityAdmissionTransactionPortV6 {
-	admitNativeCapabilityV6(input: {
-		readonly runtimeRequest: NativeCapabilityRuntimeInputV6;
-		readonly invocation: NativeCapabilityAdmissionRequestV3;
-		readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
-		readonly request: NativeCapabilityAdmissionRequestV6;
-		readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
-		readonly plan: NativeCapabilityInvocationPlanV6;
-		readonly requestDigest: string;
-		readonly operationDigest: string;
-	}): Promise<NativeCapabilityAdmissionV6Decision>;
+	admitNativeCapabilityV6(
+		input: {
+			readonly runtimeRequest: NativeCapabilityRuntimeInputV6;
+			readonly invocation: NativeCapabilityAdmissionRequestV3;
+			readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
+			readonly request: NativeCapabilityAdmissionRequestV6;
+			readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
+			readonly taskAuthority: ConversationExecutionAuthorityV1;
+			readonly plan: NativeCapabilityInvocationPlanV6;
+			readonly requestDigest: string;
+			readonly operationDigest: string;
+		},
+		isAuthorized: () => Promise<boolean>,
+	): Promise<NativeCapabilityAdmissionV6Decision>;
 }
 
 export interface NativeCapabilityAdmissionV6AuthorizationPort {
@@ -153,6 +163,7 @@ export interface NativeCapabilityAdmissionV6AuthorizationPort {
 		| {
 				readonly outcome: "allowed";
 				readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
+				readonly taskAuthority: ConversationExecutionAuthorityV1;
 				readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
 		  }
 		| { readonly outcome: "denied" }
@@ -301,6 +312,24 @@ function runtimeAuthorityMatches(
 	);
 }
 
+function taskAuthorityMatches(
+	authority: NativeCapabilityAdmissionV6AuthorityBinding,
+	taskAuthority: ConversationExecutionAuthorityV1,
+): boolean {
+	const boundary = taskAuthority.taskBoundary;
+	return (
+		boundary !== undefined &&
+		taskAuthority.actorId === authority.actorId &&
+		taskAuthority.agentId === authority.agentId &&
+		taskAuthority.channelId === authority.channelId &&
+		taskAuthority.authorizationRevision === authority.authorizationRevision &&
+		isDeepStrictEqual(boundary.principal, authority.principal) &&
+		boundary.agentId === authority.agentId &&
+		boundary.channelId === authority.channelId &&
+		boundary.agentAuthorizationRevision === authority.authorizationRevision
+	);
+}
+
 function freezePlan<T>(value: T): T {
 	if (value !== null && typeof value === "object") {
 		for (const child of Object.values(value)) freezePlan(child);
@@ -314,7 +343,13 @@ function frozenPlanV6(
 	request: NativeCapabilityAdmissionRequestV6,
 	authority: NativeCapabilityAdmissionV6AuthorityBinding,
 	keyBinding: NativeCapabilityAdmissionV6KeyBinding,
+	taskAuthority: ConversationExecutionAuthorityV1,
 ): NativeCapabilityInvocationPlanV6 {
+	if (
+		!taskAuthority.taskBoundary ||
+		!taskAuthorityMatches(authority, taskAuthority)
+	)
+		throw new TypeError("Native V6 task authority is invalid");
 	const requestDigest = nativeCapabilityAdmissionRequestDigestV6(request);
 	const operationDigest = nativeCapabilityOperationDigestV6(runtimeRequest);
 	const binding: NativeCapabilityInvocationBindingV6 = {
@@ -331,6 +366,7 @@ function frozenPlanV6(
 		turnId: runtimeRequest.turnId,
 		sessionGeneration: runtimeRequest.sessionGeneration,
 		authorizationRevision: authority.authorizationRevision,
+		taskBoundary: structuredClone(taskAuthority.taskBoundary),
 		hostSessionRef: authority.hostSessionRef,
 		capabilityId: request.capabilityId,
 		directoryRevision: request.directoryRevision,
@@ -370,6 +406,7 @@ export function validateNativeCapabilityInvocationPlanV6(
 		readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
 		readonly request: NativeCapabilityAdmissionRequestV6;
 		readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
+		readonly taskAuthority: ConversationExecutionAuthorityV1;
 		readonly requestDigest: string;
 		readonly operationDigest: string;
 	},
@@ -381,6 +418,7 @@ export function validateNativeCapabilityInvocationPlanV6(
 		parseNativeCapabilityAdmissionRequestV6(runtimeRequest, input.invocation),
 		authority,
 		input.keyBinding,
+		parseAuthority(input.taskAuthority),
 	);
 	if (
 		!runtimeAuthorityMatches(runtimeRequest, authority, input.keyBinding) ||
@@ -401,6 +439,7 @@ export function validateNativeCapabilityReplayPlanV6(
 	input: {
 		readonly invocation: NativeCapabilityAdmissionRequestV3;
 		readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
+		readonly taskAuthority: ConversationExecutionAuthorityV1;
 		readonly requestDigest: string;
 	},
 ): void {
@@ -468,13 +507,24 @@ export function createNativeCapabilityAdmissionUseCaseV6(dependencies: {
 			if (authorization.outcome !== "allowed")
 				return { outcome: "denied", reason: "authorization_lost" };
 			const authority = structuredClone(authorization.authority);
+			const taskAuthority = parseAuthority(authorization.taskAuthority);
 			const keyBinding = structuredClone(authorization.keyBinding);
-			if (!runtimeAuthorityMatches(runtimeRequest, authority, keyBinding))
+			if (
+				!runtimeAuthorityMatches(runtimeRequest, authority, keyBinding) ||
+				!taskAuthorityMatches(authority, taskAuthority)
+			)
 				return { outcome: "denied", reason: "authorization_lost" };
-			const plan = frozenPlanV6(runtimeRequest, request, authority, keyBinding);
+			const plan = frozenPlanV6(
+				runtimeRequest,
+				request,
+				authority,
+				keyBinding,
+				taskAuthority,
+			);
 			const { requestDigest, operationDigest } = plan;
 			validateNativeCapabilityInvocationPlanV6(plan, {
 				invocation,
+				taskAuthority,
 				runtimeRequest,
 				keyBinding,
 				request,
@@ -485,6 +535,7 @@ export function createNativeCapabilityAdmissionUseCaseV6(dependencies: {
 			return dependencies.transaction.admitNativeCapabilityV6(
 				freezePlan({
 					invocation,
+					taskAuthority,
 					runtimeRequest,
 					request,
 					authority,
@@ -493,6 +544,23 @@ export function createNativeCapabilityAdmissionUseCaseV6(dependencies: {
 					requestDigest,
 					operationDigest,
 				}),
+				async () => {
+					try {
+						const current = await dependencies.authorization.authorize({
+							conversationId: request.conversationId,
+						});
+						return (
+							current.outcome === "allowed" &&
+							isDeepStrictEqual(current.authority, authority) &&
+							isDeepStrictEqual(
+								parseAuthority(current.taskAuthority),
+								taskAuthority,
+							)
+						);
+					} catch {
+						return false;
+					}
+				},
 			);
 		},
 	};

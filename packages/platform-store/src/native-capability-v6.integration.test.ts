@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
-import { createNativeCapabilityAdmissionUseCaseV6 } from "@agent-infra/platform-core";
+import {
+	type CurrentTaskUserV1,
+	createNativeCapabilityAdmissionUseCaseV6,
+} from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
+import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.js";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.js";
 import { migratePlatformDatabase } from "./migrate.js";
 import {
@@ -25,6 +29,42 @@ const authority = {
 	sessionGeneration: 1,
 	hostSessionRef: "native-v6-host",
 };
+const taskAuthority = {
+	schemaVersion: 1 as const,
+	actorId: authority.actorId,
+	agentId: authority.agentId,
+	channelId: authority.channelId,
+	authorizationRevision: authority.authorizationRevision,
+	supportsSupplementaryInstruction: false,
+	taskBoundary: {
+		schemaVersion: 1 as const,
+		principal: authority.principal,
+		agentId: authority.agentId,
+		channelId: authority.channelId,
+		identityRevision: "identity-v6",
+		agentAuthorizationRevision: authority.authorizationRevision,
+		accessSources: [{ kind: "user" as const, userId: authority.actorId }],
+	},
+};
+let currentUser: CurrentTaskUserV1;
+let authorizationReads = 0;
+let revokeOnAuthorizationRead = Number.POSITIVE_INFINITY;
+const userDirectory = { resolveUser: async () => currentUser };
+const model = agentConfigurationConformanceRecordV1.modelConfiguration;
+if (!model) throw new Error("missing model fixture");
+const configuration = {
+	...agentConfigurationConformanceRecordV1,
+	schemaVersion: 3,
+	agentId: authority.agentId,
+	revision: 1,
+	modelConfiguration: {
+		...model,
+		options: model.options.map(
+			({ credential: _credential, ...option }) => option,
+		),
+	},
+};
+
 const keyBinding = {
 	purpose: "personal" as const,
 	subjectId: authority.actorId,
@@ -91,11 +131,16 @@ function publicInvocation(
 function useCase(currentKey = keyBinding) {
 	const internal = createNativeCapabilityAdmissionUseCaseV6({
 		authorization: {
-			authorize: async () => ({
-				outcome: "allowed",
-				authority,
-				keyBinding: currentKey,
-			}),
+			authorize: async () => {
+				if (++authorizationReads >= revokeOnAuthorizationRead)
+					return { outcome: "denied" as const };
+				return {
+					outcome: "allowed" as const,
+					authority,
+					taskAuthority,
+					keyBinding: currentKey,
+				};
+			},
 		},
 		transaction: store,
 	});
@@ -122,7 +167,10 @@ beforeAll(async () => {
 	}
 	await migratePlatformDatabase({ databaseUrl });
 	client = postgres(databaseUrl, { max: 3 });
-	store = new PostgresConversationExecutionTransactionV1({ databaseUrl });
+	store = new PostgresConversationExecutionTransactionV1({
+		databaseUrl,
+		userDirectory,
+	});
 }, 120_000);
 afterAll(async () => {
 	await store?.close();
@@ -130,12 +178,23 @@ afterAll(async () => {
 	await database?.stop();
 });
 beforeEach(async () => {
+	currentUser = {
+		schemaVersion: 1,
+		userId: authority.actorId,
+		accountStatus: "active",
+		organizationIds: [],
+		authorizationRevision: "identity-v6",
+	};
+	authorizationReads = 0;
+	revokeOnAuthorizationRead = Number.POSITIVE_INFINITY;
 	await client`truncate platform.agents, platform.conversations, platform.conversation_executions,
- platform.outbox_items, platform.idempotency_records, platform.conversation_audit_events, platform.relay_key_subjects cascade`;
+ platform.outbox_items, platform.idempotency_records, platform.conversation_audit_events, platform.relay_key_subjects, platform.platform_user_disables, platform.audit_events cascade`;
 	await client`insert into platform.agents (id,current_configuration_revision,authorization_revision)
  values (${authority.agentId},1,${authority.authorizationRevision})`;
 	await client`insert into platform.conversations (id,agent_id,actor_id,principal_type,channel_id,status,session_generation,host_session_ref,authorization_revision,last_conversation_cursor)
  values (${authority.conversationId},${authority.agentId},${authority.actorId},'user','web','ready',1,${authority.hostSessionRef},${authority.authorizationRevision},0)`;
+	await client`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,created_at,configuration)
+ values (${authority.agentId},1,'native-v6-fixture',now(),${client.json(configuration as unknown as postgres.JSONValue)})`;
 	await seedSessionSandboxFixture(client, authority.conversationId);
 	await client`insert into platform.relay_key_subjects (purpose,subject_id,last_version,current_version) values ('personal',${authority.actorId},1,1)`;
 	await client`insert into platform.relay_key_versions (purpose,subject_id,key_version,key_id,ciphertext) values ('personal',${authority.actorId},1,${keyBinding.ciphertextRef},${client.json({ purpose: "personal", subjectId: authority.actorId, keyId: keyBinding.ciphertextRef, keyVersion: 1 })})`;
@@ -145,7 +204,9 @@ async function effects() {
  (select count(*)::int from platform.conversation_executions where execution_id <> 'occupied') as executions,
  (select count(*)::int from platform.outbox_items where operation='conversation.native-capability.invoke.v2') as outbox,
  (select count(*)::int from platform.idempotency_records) as idempotency,
- (select count(*)::int from platform.conversation_audit_events) as audit`;
+ (select count(*)::int from platform.conversation_audit_events) as audit,
+ (select count(*)::int from platform.task_authorization_records) as "taskAuthorization",
+ (select count(*)::int from platform.audit_events where action='task.authorization.accepted') as "authorizationAudit"`;
 	return row;
 }
 async function settledAdmissions<T>(pending: Promise<T>[]): Promise<T[]> {
@@ -155,7 +216,14 @@ async function settledAdmissions<T>(pending: Promise<T>[]): Promise<T[]> {
 		return result.value;
 	});
 }
-const noEffects = { executions: 0, outbox: 0, idempotency: 0, audit: 0 };
+const noEffects = {
+	executions: 0,
+	outbox: 0,
+	idempotency: 0,
+	audit: 0,
+	taskAuthorization: 0,
+	authorizationAudit: 0,
+};
 it.each(["waiting", "submitted", "processing", "unknown"] as const)(
 	"refuses %s occupancy before all durable writes",
 	async (status) => {
@@ -249,6 +317,8 @@ it("serializes same-key admissions and replays the original plan after reopening
 		outbox: 1,
 		idempotency: 1,
 		audit: 1,
+		taskAuthorization: 1,
+		authorizationAudit: 1,
 	});
 	const accepted = results.find((r) => r.outcome === "accepted");
 	if (accepted?.outcome !== "accepted") throw new Error("expected acceptance");
@@ -256,7 +326,10 @@ it("serializes same-key admissions and replays the original plan after reopening
 		await client`select payload from platform.outbox_items where id=${accepted.plan.outbox.id}`;
 	expect(outbox?.payload).toEqual(accepted.plan.outbox.payload);
 	await store.close();
-	store = new PostgresConversationExecutionTransactionV1({ databaseUrl });
+	store = new PostgresConversationExecutionTransactionV1({
+		databaseUrl,
+		userDirectory,
+	});
 	expect(
 		await useCase().admit({
 			...request(),
@@ -276,9 +349,21 @@ it("serializes different-key admissions into one Execution", async () => {
 		outbox: 1,
 		idempotency: 1,
 		audit: 1,
+		taskAuthorization: 1,
+		authorizationAudit: 1,
 	});
 });
 const failurePoints = [
+	{
+		stage: "task authorization",
+		table: "platform.task_authorization_records",
+		event: "insert",
+	},
+	{
+		stage: "authorization audit",
+		table: "platform.audit_events",
+		event: "insert",
+	},
 	{ stage: "outbox", table: "platform.outbox_items", event: "insert" },
 	{
 		stage: "audit",
@@ -347,6 +432,8 @@ it("serializes one public idempotency key even when retries allocate different o
 		outbox: 1,
 		idempotency: 1,
 		audit: 1,
+		taskAuthorization: 1,
+		authorizationAudit: 1,
 	});
 });
 
@@ -382,7 +469,52 @@ it("persists a prepared operation before any transport Grant is created", async 
 		outbox: 1,
 		idempotency: 1,
 		audit: 1,
+		taskAuthorization: 1,
+		authorizationAudit: 1,
 	});
+});
+
+it.each(["disabled identity", "identity revision", "platform disable"])(
+	"rejects %s using ordinary Execution authority checks",
+	async (change) => {
+		if (change === "disabled identity")
+			currentUser = { ...currentUser, accountStatus: "disabled" };
+		else if (change === "identity revision")
+			currentUser = { ...currentUser, authorizationRevision: "changed" };
+		else
+			await client`insert into platform.platform_user_disables(user_id) values (${authority.actorId})`;
+		expect(await useCase().admit(request())).toMatchObject({
+			outcome: "denied",
+		});
+		expect(await effects()).toEqual(noEffects);
+	},
+);
+
+it.each([2, 3])(
+	"rejects authorization revoked on read %s before durable writes",
+	async (read) => {
+		revokeOnAuthorizationRead = read;
+		expect(await useCase().admit(request())).toEqual({
+			outcome: "denied",
+			reason: "authorization_lost",
+		});
+		expect(authorizationReads).toBe(read);
+		expect(await effects()).toEqual(noEffects);
+	},
+);
+
+it("persists the exact Task boundary and refuses replay after a fresh authorization rejection", async () => {
+	expect((await useCase().admit(request())).outcome).toBe("accepted");
+	const [record] =
+		await client`select boundary from platform.task_authorization_records where execution_id=${request().executionId}`;
+	expect(record?.boundary).toEqual(taskAuthority.taskBoundary);
+	const before = await effects();
+	revokeOnAuthorizationRead = authorizationReads + 2;
+	expect(await useCase().admit(request())).toEqual({
+		outcome: "denied",
+		reason: "authorization_lost",
+	});
+	expect(await effects()).toEqual(before);
 });
 
 it.each(["parameters", "selection"] as const)(
