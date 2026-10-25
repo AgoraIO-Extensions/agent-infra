@@ -409,6 +409,10 @@ try {
 	 process.exit(0);
 	}
  if (process.env.RUN_CLOSE_INSTALLATION === "true") await conversation.closeDeployment?.();
+ if (process.env.RUN_INSTALLATION_MAP === "true") {
+   console.log(JSON.stringify({hasCommandStore:!!conversation.connectionInstallation?.commandStore,configurations:conversation.connectionInstallation?.configurationsByAgent ?? null,workloadReady:!!workload,shared:conversation.connectionInstallation?.configuration ?? null}));
+   process.exit(0);
+ }
 	if (process.env.RUN_INVALID_PROFILE === 'true') {
 	 const control = await conversation.resolveRuntimeHost({ purpose: 'control' });
 	 let business;
@@ -1017,6 +1021,90 @@ it("rejects the internal policy selector override before constructing dependenci
 		expect(JSON.parse(result.stdout)).toEqual({
 			error: "CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE",
 			calls: [],
+		});
+	} finally {
+		await writeFile(path, original);
+	}
+});
+
+it("assembles the command Store and independent OAuth configurations in per-Agent mode", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	const profileB = {
+		...connectionConsumerProfile,
+		schemaVersion: 1 as const,
+		consumerId: "consumer-b",
+	};
+	const approvalB = {
+		...connectionConsumerApproval,
+		configFingerprint: connectionConsumerProfileFingerprintV1(profileB),
+	};
+	const configurationFor = (clientId: string, fingerprint: string) => ({
+		schemaVersion: 1,
+		ref: clientId,
+		revision: "r1",
+		clientId,
+		callbackUrl: "https://platform.example.test/connection/callback",
+		issuer: "https://connection.example.test/",
+		authorizationEndpoint: "https://connection.example.test/oauth/authorize",
+		tokenEndpoint: "https://connection.example.test/oauth/token",
+		revocationEndpoint: "https://connection.example.test/oauth/revoke",
+		resource: "https://connection.example.test/mcp/v1",
+		scope: "mcp",
+		configFingerprint: fingerprint,
+		source: connectionConsumerApproval.source,
+		runtimeOrigin: "https://runtime.example.test:3443/",
+	});
+	const configurationsByAgent = {
+		"agent-a": configurationFor(
+			"client-a",
+			connectionConsumerApproval.configFingerprint,
+		),
+		"agent-b": configurationFor("client-b", approvalB.configFingerprint),
+	};
+	try {
+		await writeFile(
+			path,
+			`${original}
+export const connectionConsumerProfilesByAgent=${JSON.stringify({ "agent-a": { profile: connectionConsumerProfile, approval: connectionConsumerApproval }, "agent-b": { profile: profileB, approval: approvalB } })};
+export const connectionInstallationSuppliesByAgent=${JSON.stringify({ "agent-a": { ref: "installation-a", revision: "r1" }, "agent-b": { ref: "installation-b", revision: "r1" } })};
+export const connectionInstallation=${JSON.stringify({ configurationsByAgent })};
+`,
+		);
+		const result = run({
+			RUN_CLOSE_INSTALLATION: "true",
+			RUN_INSTALLATION_MAP: "true",
+		});
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			hasCommandStore: true,
+			configurations: configurationsByAgent,
+			workloadReady: true,
+			shared: null,
+		});
+	} finally {
+		await writeFile(path, original);
+	}
+});
+
+it("keeps ordinary Workload assembly but disables per-Agent OAuth without per-Agent profiles", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	try {
+		await writeFile(
+			path,
+			`${original}\nexport const connectionInstallation={configurationsByAgent:{},authorize:async(input)=>input};\n`,
+		);
+		const result = run({
+			RUN_CLOSE_INSTALLATION: "true",
+			RUN_INSTALLATION_MAP: "true",
+		});
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			hasCommandStore: false,
+			configurations: null,
+			workloadReady: true,
+			shared: null,
 		});
 	} finally {
 		await writeFile(path, original);
