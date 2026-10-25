@@ -48,6 +48,8 @@ export interface MultiServiceRuntimePolicyV1 {
 	readonly routeHostSuffix: string;
 	readonly ingressClassName: string;
 	readonly tlsSecretName: string;
+	/** Optional namespace of the ingress controller; omitted keeps same-namespace behavior. */
+	readonly routeNamespace?: string;
 	readonly routeSelector: Readonly<Record<string, string>>;
 	/** 必须与 API `apiInput` 中的同名配置一致；省略时使用合约默认值。 */
 	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
@@ -91,6 +93,20 @@ function serviceResourceName(agentId: string, name: string): string {
 
 function serviceLabel(name: string): string {
 	return name.length <= 63 ? name : name.slice(0, 63);
+}
+
+function routePeer(policy: MultiServiceRuntimePolicyV1) {
+	const podSelector = { podSelector: { matchLabels: policy.routeSelector } };
+	return policy.routeNamespace
+		? {
+				...podSelector,
+				namespaceSelector: {
+					matchLabels: {
+						"kubernetes.io/metadata.name": policy.routeNamespace,
+					},
+				},
+			}
+		: podSelector;
 }
 
 function fingerprint(value: unknown): string {
@@ -600,9 +616,7 @@ function networkPolicy(
 								},
 							},
 						},
-						...(entry
-							? [{ podSelector: { matchLabels: policy.routeSelector } }]
-							: []),
+						...(entry ? [routePeer(policy)] : []),
 					],
 				},
 			],
