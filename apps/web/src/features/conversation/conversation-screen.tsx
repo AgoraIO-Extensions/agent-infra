@@ -24,6 +24,7 @@ import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen
 import { getAgentV2 } from "../../pilot/generated-v2/sdk.gen.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { isAgentConfigurationOwner } from "../agent-configuration/agent-configuration.js";
+import { pollWhileShown } from "../background-read.js";
 import {
 	type CollectionReadUnavailable,
 	collectionReadFailure,
@@ -101,6 +102,15 @@ function ConversationHeader({
 			</div>
 			{actions && <div className="conversation-heading-actions">{actions}</div>}
 		</header>
+	);
+}
+
+/** Agent 读取失败可以重试：网络中断与服务失败（5xx）；无权、其余 HTTP 与响应无效不可重试。 */
+function retryableAgentRead(error: unknown) {
+	return (
+		!(error instanceof ConversationReadError) ||
+		error.failure.kind === "network" ||
+		error.failure.kind === "service"
 	);
 }
 
@@ -282,13 +292,16 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		},
 		// A starting or updating Agent keeps the page read-only; poll so it
 		// resumes on its own once ready (same cadence as the Agent page).
+		// 轮询按最近一次读到的 Agent 判断：一次可重试的失败（503、网络中断）之后继续按原节奏重读，就绪后横幅
+		// 随之收起；无权、不存在与响应无效停止（#3418 N14-05）。
 		refetchInterval: (query) =>
-			query.state.status === "success" &&
-			(query.state.data?.managementStatus === "creating" ||
-				query.state.data?.serviceAvailability === "starting" ||
-				query.state.data?.serviceAvailability === "updating")
-				? 2000
-				: false,
+			pollWhileShown(query, retryableAgentRead, (agent) =>
+				agent.managementStatus === "creating" ||
+				agent.serviceAvailability === "starting" ||
+				agent.serviceAvailability === "updating"
+					? 2000
+					: false,
+			),
 	});
 	// 历史面板只在展开（或切换最近对话 / 全部历史）时、以及首次读到 Agent 时聚焦一次；之后 Agent 数据
 	// 后台更新（回到标签页重读、「更新中」轮询转就绪）不移动焦点，输入框与历史链接上的焦点保留（#3388 N13-07）。
