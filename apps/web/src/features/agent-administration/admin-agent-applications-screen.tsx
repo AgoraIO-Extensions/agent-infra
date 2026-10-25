@@ -38,6 +38,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Timestamp } from "@/components/ui/timestamp";
 import { useToast } from "@/components/ui/toast";
+import { useRestoreLostFocus } from "@/hooks/use-recovery-focus";
 import { withObjectName } from "@/lib/accessible-name";
 import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
@@ -506,6 +507,15 @@ function ApplicationReview({
 	);
 }
 
+/**
+ * 不可重试的队列读取失败替换了列表与搜索框：焦点随之落到 body 的交给页面 h1，不滚动（同 PageStateCard 挂载时的
+ * 检查）。用户刚点击或按 Enter 后约 1 秒内的丢失壳层兜底不接手，由本页在结果出来后交接（#3433 N15-07）。
+ */
+function RestoreLostFocus() {
+	useRestoreLostFocus();
+	return null;
+}
+
 export function AdminAgentApplicationsScreen({
 	decisionError = null,
 	decisionResult,
@@ -658,6 +668,8 @@ export function AdminAgentApplicationsScreen({
 							? "审批列表暂时无法读取，请稍后重试。"
 							: "审批列表不可用，请联系管理员。"}
 					</AlertDescription>
+					{/* 可重试时「重新加载审批」挂载时检查焦点；不可重试时没有按钮，由这里接手（#3433 N15-07）。 */}
+					{state.retryable && onRetry ? null : <RestoreLostFocus />}
 					{state.retryable && onRetry ? (
 						<AlertAction>
 							<RecoveryButton

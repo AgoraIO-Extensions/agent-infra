@@ -7025,8 +7025,7 @@ for (const [kind, title] of [
 					sessionReads += 1;
 					// 第一次会话读取失败，之后按 fixture 读到 active。
 					if (sessionReads !== 1) return route.fallback();
-					if (failure === "network")
-						return route.abort("internetdisconnected");
+					if (failure === "network") return route.abort("internetdisconnected");
 					if (failure === "invalid")
 						return route.fulfill({ json: { sessionId: "fixture-setup" } });
 					return route.fulfill({
@@ -7073,7 +7072,10 @@ for (const [kind, title] of [
 				await expect.poll(() => sessionReads, { timeout: 6000 }).toBe(2);
 				await expect(chip).toHaveText("已连接");
 				await expect(toastHost(page)).toHaveText(`${title}已连接`);
-				await expectFocusSettled(heading, `${title} 会话轮询 ${failure} 后连接`);
+				await expectFocusSettled(
+					heading,
+					`${title} 会话轮询 ${failure} 后连接`,
+				);
 			} else {
 				await expect(card.getByRole("alert")).toHaveText(
 					"配置会话已失效，请重新配置。",
@@ -7139,8 +7141,7 @@ for (const [kind, title] of [
 							json: body(connected ? "connected" : "disconnected"),
 						});
 					connected = true;
-					if (failure === "network")
-						return route.abort("internetdisconnected");
+					if (failure === "network") return route.abort("internetdisconnected");
 					if (failure === "invalid")
 						return route.fulfill({ json: { status: "unknown-state" } });
 					return route.fulfill({
@@ -7945,3 +7946,53 @@ for (const target of [
 		await expectNoDuplicateControls(page, `审批（${target.name}，#3419）`);
 		await expectCleanPage(page, errors);
 	});
+
+// #3433 N15-07（A15-3-OBS）：用户点进「搜索申请」或在其中按 Enter 之后约 1 秒内恰好读到队列不可重试的失败（403、401）：
+// 这段丢失是用户操作的结果，壳层兜底按已登记规则不接手；审批页不可重试分支自己在结果出来后把焦点交给 h1「审批申请」
+// （同 PageStateCard 挂载时的检查），不落到 body、不滚动页面。两视口一致。
+for (const status of [403, 401] as const)
+	for (const activation of ["click", "Enter"] as const)
+		test(`a non-retryable queue read right after ${activation} in the approval search hands focus to the h1 (${status}, #3433 N15-07)`, async ({
+			page,
+		}, info) => {
+			await acceptanceViewport(page, info);
+			const errors = trackPageErrors(page);
+			await fixture(page, "admin");
+			await page.goto("/admin/approvals");
+			const main = page.locator("#main-content");
+			await expect(main.getByRole("button", { name: /^审阅：/ })).toBeVisible();
+			const search = await pinElement(
+				main.getByRole("searchbox", { name: "搜索申请" }),
+				"approval-search-activation",
+			);
+			// 点击：焦点先在「审阅：…」上，用户点进搜索框；Enter：焦点已在搜索框里，用户按 Enter。
+			const start =
+				activation === "click"
+					? await pinElement(
+							main.getByRole("button", { name: /^审阅：/ }),
+							"approval-review-before-search",
+						)
+					: search;
+			await start.focus();
+			await expectFatalRereadHandsFocus(page, {
+				path: approvalsQueue,
+				status,
+				focus: start,
+				target: main.getByRole("heading", { level: 1, name: "审批申请" }),
+				context: `审批（搜索框 ${activation}）`,
+				beforeReread: async () => {
+					if (activation === "click") await search.click();
+					else await page.keyboard.press("Enter");
+					await expect(search).toBeFocused();
+				},
+				expectReplaced: async () => {
+					await expect(
+						main.getByRole("alert").filter({
+							hasText: "审批列表不可用，请联系管理员。",
+						}),
+					).toBeVisible();
+					await expect(search).toHaveCount(0);
+				},
+			});
+			await expectCleanPage(page, errors);
+		});
