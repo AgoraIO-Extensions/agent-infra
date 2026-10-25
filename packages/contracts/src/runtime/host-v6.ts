@@ -301,6 +301,44 @@ export async function validateRuntimeBusinessBindingV6(
 	}
 }
 
+export function validateRuntimePrivateRelayKeyFieldV6(
+	field: unknown,
+	accepted: {
+		readonly request: RuntimeNativeCapabilityRequestV6;
+		readonly grantId: string;
+		readonly requestDigest: string;
+	},
+) {
+	const request = RuntimeNativeCapabilityRequestV6Schema.parse(
+		accepted.request,
+	);
+	const parsed = RuntimePrivateRelayKeyFieldV1Schema.parse(field);
+	const context = parsed.context;
+	const expected = {
+		requestId: request.requestId,
+		grantId: accepted.grantId,
+		requestDigest: accepted.requestDigest,
+		traceId: request.traceId,
+		principal: request.principal,
+		executionSource: request.executionSource,
+		channelId: request.channelId,
+		agentId: request.agentId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		hostSessionRef: request.hostSessionRef,
+		operation: request.operation,
+		keyBinding: request.keyBinding,
+	};
+	if (
+		JSON.stringify(canonical(context)) !==
+		JSON.stringify(canonical({ ...expected, keyBinding: expected.keyBinding }))
+	)
+		throw new TypeError("Runtime V6 private Key context is invalid");
+	return parsed;
+}
+
 /** Stable accepted-operation identity; grant renewal and fence takeover do not reselect input. */
 export function runtimeOperationDigestInputV6(
 	input: RuntimeNativeCapabilityRequestV6,

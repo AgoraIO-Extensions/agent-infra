@@ -452,6 +452,37 @@ it("uses the formal HTTP Host route with real V6 signatures and no legacy fallba
 		expect(calls).toEqual([
 			"http://runtime.test/internal/runtime/v6/native-capability",
 		]);
+		const signed = {
+			...f.unsigned,
+			grant: await f.signer.signV6(f.unsigned, "authorization-1"),
+		};
+		const transport = await createNativeCapabilityTransportV6({
+			request: signed,
+			claims: f.signer.verifyV6(signed.grant),
+			relayKey: "private-key-value-k1",
+		});
+		for (const changed of [
+			{ grantId: "another-grant" },
+			{ requestDigest: "a".repeat(64) },
+		]) {
+			const invalid = structuredClone(transport);
+			Object.assign(invalid.privateKeyField.context, changed);
+			const response = await app.request(
+				"http://runtime.test/internal/runtime/v6/native-capability",
+				{
+					method: "POST",
+					headers: {
+						authorization: "Bearer synthetic-service-token",
+						"content-type": "application/json",
+					},
+					body: JSON.stringify(invalid),
+				},
+			);
+			expect(response.status).toBe(403);
+			expect(await response.json()).toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
+		}
 		expect(execute).not.toHaveBeenCalled();
 		expect(await readFile(hostPath, "utf8")).toBe(before);
 	} finally {
