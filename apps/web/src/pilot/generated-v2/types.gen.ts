@@ -834,6 +834,7 @@ export type ConversationDetailProjectionV2 = {
         status: 'failed';
         text: string;
     }>;
+    queue?: Array<QueuedMessageStateV2>;
     schemaVersion: 2;
     sessionAvailability?: 'preparing' | 'ready' | 'unavailable' | 'updating';
 };
@@ -1385,6 +1386,26 @@ export type PlatformUserDisableStatusV1 = {
     disabled: boolean;
     schemaVersion: 1;
     userId: string;
+};
+
+export type QueuedMessageStateV2 = {
+    executionId: string;
+    messageId: string;
+    position: number;
+    status: 'waiting';
+} | {
+    executionId: string;
+    messageId: string;
+    status: 'withdrawn';
+} | {
+    executionId: string;
+    messageId: string;
+    status: 'timed_out';
+} | {
+    executionId: string;
+    messageId: string;
+    reason: 'AGENT_UNAVAILABLE' | 'CONVERSATION_UNAVAILABLE' | 'AUTHORIZATION_REVOKED';
+    status: 'cancelled';
 };
 
 export type ReasoningDeltaEventV2 = {
@@ -1969,6 +1990,9 @@ export type TaskStatusEventV1 = {
     } | {
         reason?: 'STOP_CONFIRMATION_TIMEOUT';
         status: 'unknown';
+    } | {
+        reason: 'WITHDRAWN' | 'AUTHORIZATION_REVOKED';
+        status: 'cancelled';
     };
     schemaVersion: 1;
     sequence: number;

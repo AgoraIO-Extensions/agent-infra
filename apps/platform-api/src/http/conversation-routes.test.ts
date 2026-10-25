@@ -2664,3 +2664,243 @@ describe("task boundary HTTP authorization", () => {
 		expect(deps.query.list).not.toHaveBeenCalled();
 	});
 });
+
+describe("bounded message queue routes (#3376)", () => {
+	const queuedDetail = (
+		messageStatus: string,
+		executionStatus: string,
+		failureCode: string | null = null,
+	) => ({
+		conversation,
+		messages: [
+			{
+				messageId: "message-1",
+				text: "Run it",
+				executionId: "execution-1",
+				status: "submitted",
+				createdAt: new Date("2026-09-06T00:00:01.000Z"),
+			},
+			{
+				messageId: "message-2",
+				text: "Then this",
+				executionId: "execution-2",
+				status: messageStatus,
+				failureCode,
+				createdAt: new Date("2026-09-06T00:00:02.000Z"),
+			},
+		],
+		executions: [
+			{
+				executionId: "execution-1",
+				conversationId: conversation.conversationId,
+				sourceMessageId: "message-1",
+				status: "processing",
+				createdAt: new Date("2026-09-06T00:00:01.000Z"),
+				updatedAt: new Date("2026-09-06T00:00:01.000Z"),
+				traceId: "trace-1",
+				taskWaitOrder: null,
+			},
+			{
+				executionId: "execution-2",
+				conversationId: conversation.conversationId,
+				sourceMessageId: "message-2",
+				status: executionStatus,
+				createdAt: new Date("2026-09-06T00:00:02.000Z"),
+				updatedAt: new Date("2026-09-06T00:00:02.000Z"),
+				traceId: "trace-2",
+				taskWaitOrder: 41,
+			},
+		],
+		events: [],
+	});
+
+	it("keeps the accepted message response shape for a queued message", async () => {
+		const input = dependencies();
+		const commands = input.commands(identity);
+		vi.mocked(commands.accept).mockResolvedValueOnce({
+			outcome: "accepted",
+			result: {
+				schemaVersion: 1,
+				status: "submitted",
+				messageId: "message-2",
+				executionId: "execution-2",
+				queuePosition: 1,
+			},
+		});
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1/messages",
+			{
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify({ schemaVersion: 1, text: "Then this" }),
+			},
+		);
+		expect(response.status).toBe(202);
+		expect(await response.json()).toEqual({
+			schemaVersion: 1,
+			status: "submitted",
+			messageId: "message-2",
+			executionId: "execution-2",
+		});
+	});
+
+	it("still answers 409 AGENT_BUSY when the queue is full", async () => {
+		const input = dependencies();
+		vi.mocked(input.commands(identity).accept).mockResolvedValueOnce({
+			outcome: "busy",
+			queuedCount: 3,
+		});
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1/messages",
+			{
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify({ schemaVersion: 1, text: "Fourth" }),
+			},
+		);
+		expect(response.status).toBe(409);
+		expect(await response.json()).toMatchObject({
+			code: "AGENT_BUSY",
+			retryable: true,
+		});
+	});
+
+	it.each([
+		["submitted", "waiting", null, { status: "waiting", position: 1 }],
+		["failed", "failed", "TASK_WAIT_TIMEOUT", { status: "timed_out" }],
+		["failed", "cancelled", "WITHDRAWN", { status: "withdrawn" }],
+		[
+			"failed",
+			"failed",
+			"AGENT_UNAVAILABLE",
+			{ status: "cancelled", reason: "AGENT_UNAVAILABLE" },
+		],
+	] as const)(
+		"projects a %s/%s queued message in V2 history only",
+		async (messageStatus, executionStatus, failureCode, queue) => {
+			const input = dependencies();
+			vi.mocked(input.query.get).mockResolvedValue(
+				queuedDetail(messageStatus, executionStatus, failureCode) as never,
+			);
+			const { app } = testApp(input);
+			const v2 = await app.request("/api/v2/conversations/conversation-1");
+			expect(v2.status).toBe(200);
+			const body = (await v2.json()) as {
+				queue: unknown;
+				messages: { role: string }[];
+			};
+			expect(body.queue).toEqual([
+				{ messageId: "message-2", executionId: "execution-2", ...queue },
+			]);
+			// 未开始即结束的排队消息没有回复。
+			expect(
+				body.messages.filter((message) => message.role === "assistant"),
+			).toEqual([]);
+			const v1 = await app.request("/api/v1/conversations/conversation-1");
+			expect(v1.status).toBe(200);
+			const legacy = (await v1.json()) as {
+				queue?: unknown;
+				messages: Record<string, unknown>[];
+			};
+			expect(legacy.queue).toBeUndefined();
+			expect(legacy.messages[1]).not.toHaveProperty("queue");
+		},
+	);
+
+	it.each([
+		[
+			{ outcome: "accepted", result: { status: "withdrawn" } },
+			202,
+			{ schemaVersion: 1, status: "withdrawn", executionId: "execution-2" },
+		],
+		[
+			{ outcome: "replayed", result: { status: "already_started" } },
+			202,
+			{
+				schemaVersion: 1,
+				status: "already_started",
+				executionId: "execution-2",
+			},
+		],
+		[{ outcome: "denied" }, 404, { code: "RESOURCE_UNAVAILABLE" }],
+		[
+			{ outcome: "conflict", reason: "idempotency_conflict" },
+			409,
+			{ code: "INVALID_REQUEST" },
+		],
+	] as const)(
+		"maps a withdrawal decision %j to HTTP",
+		async (decision, status, body) => {
+			const input = dependencies();
+			const withdraw = vi.fn().mockResolvedValue(
+				"result" in decision
+					? {
+							...decision,
+							result: {
+								schemaVersion: 1,
+								executionId: "execution-2",
+								...decision.result,
+							},
+						}
+					: decision,
+			);
+			vi.mocked(input.commands).mockReturnValue({
+				...input.commands(identity),
+				withdraw,
+			});
+			const response = await testApp(input).app.request(
+				"/api/v1/conversations/conversation-1/withdrawals",
+				{
+					method: "POST",
+					headers: commandHeaders,
+					body: JSON.stringify({
+						schemaVersion: 1,
+						targetExecutionId: "execution-2",
+					}),
+				},
+			);
+			expect(response.status).toBe(status);
+			expect(await response.json()).toMatchObject(body);
+			expect(withdraw).toHaveBeenCalledWith(
+				expect.objectContaining({
+					command: "withdraw",
+					conversationId: "conversation-1",
+					targetExecutionId: "execution-2",
+					idempotencyKey: "Command.Aa-01",
+				}),
+			);
+		},
+	);
+
+	it("rejects a withdrawal without an idempotency key or with extra fields", async () => {
+		const input = dependencies();
+		const withdraw = vi.fn();
+		vi.mocked(input.commands).mockReturnValue({
+			...input.commands(identity),
+			withdraw,
+		});
+		const { app } = testApp(input);
+		const missingKey = await app.request(
+			"/api/v1/conversations/conversation-1/withdrawals",
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ schemaVersion: 1, targetExecutionId: "e" }),
+			},
+		);
+		const extra = await app.request(
+			"/api/v1/conversations/conversation-1/withdrawals",
+			{
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					targetExecutionId: "e",
+					actorId: "someone-else",
+				}),
+			},
+		);
+		expect([missingKey.status, extra.status]).toEqual([400, 400]);
+		expect(withdraw).not.toHaveBeenCalled();
+	});
+});

@@ -75,7 +75,7 @@ export type ConversationComposerProps = {
 	modelFailure?: string;
 	/** 输入框的补充说明（例如「提交结果尚未确认」），被禁用时读屏仍能读到原因。 */
 	draftDescribedBy?: string;
-	/** 发送按钮的补充说明（例如「不支持补充指令」），只在发送因此禁用时提供。 */
+	/** 发送按钮的补充说明（例如发送后进入排队，#3376）。 */
 	sendDescribedBy?: string;
 	formAttributes: Record<`data-${string}`, string>;
 	onSendMessage: () => void;

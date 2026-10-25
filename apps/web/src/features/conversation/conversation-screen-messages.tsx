@@ -12,6 +12,7 @@ import {
 	useCallback,
 	useEffect,
 	useId,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -57,6 +58,9 @@ import {
 	executionStatus,
 	executionStatusLabels,
 	isTerminal,
+	type QueueDisplay,
+	queueStates,
+	queueStatusText,
 	reasoningTexts,
 } from "./conversation-screen-state.js";
 import type { ConversationTimelineEventV2 } from "./conversation-timeline.js";
@@ -81,6 +85,16 @@ export type ConversationStopControl = Readonly<{
 export type ConversationExecutionNotice = Readonly<{
 	executionId: string;
 	text: string;
+}>;
+
+/**
+ * 排队消息的撤回入口（#3376）：渲染在该条用户消息的排队状态行内。`pendingExecutionId` 是撤回请求
+ * 进行中的消息，它的「撤回」保持可聚焦的禁用。
+ */
+export type ConversationWithdrawControl = Readonly<{
+	onWithdraw: (executionId: string) => void;
+	pendingExecutionId?: string;
+	disabled: boolean;
 }>;
 
 /** 可访问名称里的对象名：回复所答问题的开头，区分同页多张回复卡上的同名链接。 */
@@ -111,6 +125,7 @@ export function ConversationMessages({
 	onLoadEarlier,
 	stop,
 	executionNotice,
+	withdraw,
 	modelOptions = [],
 	trailing,
 }: {
@@ -145,6 +160,8 @@ export function ConversationMessages({
 	onLoadEarlier: () => void;
 	stop?: ConversationStopControl;
 	executionNotice?: ConversationExecutionNotice;
+	/** 排队消息的撤回入口（PRD 10.5）；不提供时排队消息只显示状态。 */
+	withdraw?: ConversationWithdrawControl;
 	/** 当前模型清单，只用于把回退事件的选项映射为显示名（G-07）。 */
 	modelOptions?: readonly ModelOptionName[];
 	/** 消息流末尾的附加内容（例如命令 / Skill 调用回执），随时间线一起滚动。 */
@@ -197,10 +214,16 @@ export function ConversationMessages({
 	const answers = history.messages.filter((item) => item.role === "assistant");
 	const renderedExecutions = new Set(answers.map((item) => item.executionId));
 	const fallbacks = modelFallbacks(events, modelOptions);
+	// 排队消息（等待中或未开始即结束）的状态显示在用户消息上，不带回复卡（PRD 10.5）。
+	const queue = useMemo(() => queueStates(history, events), [history, events]);
 	const liveExecutions = [
 		...new Set(
 			events
-				.filter((item) => !renderedExecutions.has(item.executionId))
+				.filter(
+					(item) =>
+						!renderedExecutions.has(item.executionId) &&
+						!queue.has(item.executionId),
+				)
 				.map((item) => item.executionId),
 		),
 	];
@@ -211,12 +234,29 @@ export function ConversationMessages({
 				(message) =>
 					message.status !== "failed" &&
 					message.executionId &&
+					!queue.has(message.executionId) &&
 					!answers.some(
 						(answer) => answer.replyToMessageId === message.messageId,
 					),
 			)
 			.map((message) => message.executionId as string),
 	);
+	// 撤回受理后「撤回」随排队状态卸载：焦点已落到 body 时交给该条用户消息（不落到 body）。
+	const withdrawFocus = useRef<string>(undefined);
+	useLayoutEffect(() => {
+		const messageId = withdrawFocus.current;
+		if (!messageId) return;
+		const button = [
+			...document.querySelectorAll<HTMLButtonElement>(
+				"[data-withdraw-message]",
+			),
+		].find((item) => item.dataset.withdrawMessage === messageId);
+		if (button) return;
+		withdrawFocus.current = undefined;
+		const focused = document.activeElement;
+		if (focused && focused !== document.body && focused.isConnected) return;
+		articles.current.get(`user:${messageId}`)?.focus();
+	});
 	const notLoaded: string[] = [];
 	const registerArticle = (id: string) => (node: HTMLElement | null) => {
 		if (node) articles.current.set(id, node);
@@ -459,32 +499,58 @@ export function ConversationMessages({
 			);
 		}
 		// 提问与回复的间距由 .chat-layout .exchange 给出，与轮次之间等距（设计 .messages gap，G4-03）。
+		const queued = message.executionId
+			? queue.get(message.executionId)
+			: undefined;
 		return (
 			<div className="exchange" key={message.messageId}>
 				<MessageFrame
 					name={userName}
 					user
 					meta={<Timestamp value={message.createdAt} />}
+					articleRef={registerArticle(`user:${message.messageId}`)}
 					focusable
 				>
 					<p className="message-text whitespace-pre-wrap break-words">
 						{message.text}
 					</p>
-					{/* 时间线里的历史记录：与回复卡的失败状态行一样不设 live role（B-10）。 */}
-					{message.status === "failed" && (
-						<Alert tone="danger" className="supplement">
-							<AlertDescription>
-								{commandFailure(message.error.code)}
-							</AlertDescription>
-							<AlertAction>
-								<Button
-									variant="outline"
-									onClick={() => onResend(message.text)}
-								>
-									准备重新发送
-								</Button>
-							</AlertAction>
-						</Alert>
+					{queued ? (
+						<QueuedMessageStatus
+							state={queued}
+							objectName={objectName}
+							withdraw={
+								withdraw && queued.status === "waiting" && message.executionId
+									? {
+											messageId: message.messageId,
+											pending:
+												withdraw.pendingExecutionId === message.executionId,
+											disabled: withdraw.disabled,
+											onWithdraw: () => {
+												withdrawFocus.current = message.messageId;
+												withdraw.onWithdraw(message.executionId as string);
+											},
+										}
+									: undefined
+							}
+							onResend={() => onResend(message.text)}
+						/>
+					) : (
+						/* 时间线里的历史记录：与回复卡的失败状态行一样不设 live role（B-10）。 */
+						message.status === "failed" && (
+							<Alert tone="danger" className="supplement">
+								<AlertDescription>
+									{commandFailure(message.error.code)}
+								</AlertDescription>
+								<AlertAction>
+									<Button
+										variant="outline"
+										onClick={() => onResend(message.text)}
+									>
+										准备重新发送
+									</Button>
+								</AlertAction>
+							</Alert>
+						)
 					)}
 				</MessageFrame>
 				{reply}
@@ -562,6 +628,66 @@ export function ConversationMessages({
 			))}
 			{trailing}
 		</section>
+	);
+}
+
+/**
+ * 排队消息在用户消息上的状态（PRD 10.5 Web 列）：等待中显示位次与「撤回」；撤回、排队超时与取消
+ * 只说明结果，排队超时另给「准备重新发送」。与回复卡状态行一样是历史记录，不设 live role（B-10）。
+ */
+function QueuedMessageStatus({
+	state,
+	objectName,
+	withdraw,
+	onResend,
+}: {
+	state: QueueDisplay;
+	objectName?: string;
+	withdraw?: {
+		messageId: string;
+		pending: boolean;
+		disabled: boolean;
+		onWithdraw: () => void;
+	};
+	onResend: () => void;
+}) {
+	const text = queueStatusText(state);
+	if (state.status === "waiting" || state.status === "withdrawn") {
+		const label = withdraw?.pending ? "正在撤回" : "撤回";
+		return (
+			<p className="message-status" data-queue-status={state.status}>
+				<span className="message-status-label">{text}</span>
+				{withdraw && (
+					<>
+						{" · "}
+						{/* 撤回请求进行中保持可聚焦的禁用，焦点不落到 body（#3242 K7-02）。 */}
+						<Button
+							variant="link"
+							className="inline-link"
+							aria-label={withObjectName(label, objectName)}
+							data-withdraw-message={withdraw.messageId}
+							disabled={withdraw.pending || withdraw.disabled}
+							focusableWhenDisabled
+							onClick={withdraw.onWithdraw}
+						>
+							{label}
+						</Button>
+					</>
+				)}
+			</p>
+		);
+	}
+	return (
+		<Alert tone="warn" className="supplement" data-queue-status={state.status}>
+			<AlertDescription>{text}</AlertDescription>
+			{state.status === "timed_out" && (
+				<AlertAction>
+					<Button variant="outline" onClick={onResend}>
+						准备重新发送
+					</Button>
+				</AlertAction>
+			)}
+		</Alert>
 	);
 }
 

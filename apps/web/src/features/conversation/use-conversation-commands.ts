@@ -166,6 +166,12 @@ export function useConversationCommands({
 			}),
 		regenerate: (messageId: string) =>
 			start({ kind: "regenerate", body: { schemaVersion: 1, messageId } }),
+		/** 撤回自己仍在排队的消息（#3376）；目标是该消息的等待 Execution，不是当前回复。 */
+		withdraw: (targetExecutionId: string) =>
+			start({
+				kind: "withdraw",
+				body: { schemaVersion: 1, targetExecutionId },
+			}),
 		selectModel: (
 			selection: Omit<
 				Extract<ConversationCommand, { kind: "selection" }>["body"],

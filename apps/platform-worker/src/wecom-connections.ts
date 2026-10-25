@@ -3,7 +3,9 @@ import {
 	type WecomConnectionFenceV1,
 	type WecomMessageV1,
 	type WecomScopeV1,
+	type WecomStreamUpdatePortV1,
 	wecomProcessingTextV1,
+	wecomQueuedTextV1,
 } from "@agent-infra/platform-core";
 import {
 	PostgresWecomConnectionsV1,
@@ -51,6 +53,8 @@ export function createPlatformWecomConnectionsV1(
 			fence: WecomConnectionFenceV1,
 			signal?: AbortSignal,
 		) => Promise<WecomAcceptanceV1>;
+		/** 受理为排队消息、即将发送首帧排队提示时通知排队提示循环（#3376）。 */
+		readonly onQueued?: (receiptId: string, position: number) => void;
 	},
 ) {
 	const leases = new PostgresWecomConnectionsV1(options);
@@ -199,10 +203,17 @@ export function createPlatformWecomConnectionsV1(
 					result.receipt.status === "accepted"
 				) {
 					if (!(await leases.current(claim))) return;
+					// #3376：排队消息的首帧是排队提示（位次与前面的条数），之后由排队提示循环更新。
+					const position = result.receipt.queuePosition;
+					if (position !== undefined)
+						options.onQueued?.(result.receipt.receiptId, position);
 					await connection.acknowledge({
 						scope: message,
 						replyHandle: message.replyHandle,
-						text: wecomProcessingTextV1,
+						text:
+							position === undefined
+								? wecomProcessingTextV1
+								: wecomQueuedTextV1(position),
 					});
 					return;
 				}
@@ -254,8 +265,20 @@ export function createPlatformWecomConnectionsV1(
 			return entry.connection.sender.sendMedia(input);
 		},
 	};
+	/**
+	 * #3376：在该消息自己的 stream 上覆盖排队提示（`finish=false`）。只有本 Worker 持有当前
+	 * 租约且回复路由仍属于当前连接时才发送；最终回复开始后由传输拒绝。
+	 */
+	const updater: WecomStreamUpdatePortV1 = {
+		async update(input) {
+			const entry = await entryFor(input.scope);
+			if (!entry) return "failed";
+			return entry.connection.acknowledge(input);
+		},
+	};
 	return {
 		sender,
+		updater,
 		tick() {
 			if (closed) return Promise.resolve();
 			polling ??= reconcile()

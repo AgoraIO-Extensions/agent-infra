@@ -4787,6 +4787,12 @@
             },
             "type": "array"
           },
+          "queue": {
+            "items": {
+              "$ref": "#/components/schemas/QueuedMessageStateV2"
+            },
+            "type": "array"
+          },
           "schemaVersion": {
             "const": 2,
             "type": "number"
@@ -7760,6 +7766,118 @@
           "schemaVersion",
           "userId",
           "disabled"
+        ],
+        "type": "object"
+      },
+      "QueuedMessageStateV2": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "messageId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "position": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "status": {
+                "const": "waiting",
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageId",
+              "executionId",
+              "status",
+              "position"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "messageId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "const": "withdrawn",
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageId",
+              "executionId",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "messageId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "const": "timed_out",
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageId",
+              "executionId",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "messageId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "reason": {
+                "enum": [
+                  "AGENT_UNAVAILABLE",
+                  "CONVERSATION_UNAVAILABLE",
+                  "AUTHORIZATION_REVOKED"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "const": "cancelled",
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageId",
+              "executionId",
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          }
         ],
         "type": "object"
       },
@@ -10907,6 +11025,27 @@
                 },
                 "required": [
                   "status"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "WITHDRAWN",
+                      "AUTHORIZATION_REVOKED"
+                    ],
+                    "type": "string"
+                  },
+                  "status": {
+                    "const": "cancelled",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status",
+                  "reason"
                 ],
                 "type": "object"
               }

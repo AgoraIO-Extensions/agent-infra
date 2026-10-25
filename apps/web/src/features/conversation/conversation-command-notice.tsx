@@ -5,7 +5,7 @@ import {
 } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
 import type { ConversationCommandResult } from "./conversation-commands.js";
-import { commandFailure } from "./conversation-screen-state.js";
+import { commandFailure, queueFullText } from "./conversation-screen-state.js";
 import type { AmbiguousDenialPhase } from "./use-ambiguous-denial.js";
 
 /**
@@ -21,6 +21,7 @@ export function CommandNotice({
 	unknownId,
 	onResend,
 	resendDisabled = false,
+	queuedCount,
 }: {
 	result?: ConversationCommandResult;
 	pending: boolean;
@@ -34,6 +35,8 @@ export function CommandNotice({
 	/** Agent 恢复可用后，以当前草稿发起新的消息命令（G-04）。 */
 	onResend?: () => void;
 	resendDisabled?: boolean;
+	/** 本会话仍在排队的消息条数：繁忙（排队已满）时说明已有几条在排队（PRD 10.5）。 */
+	queuedCount?: number;
 }) {
 	if (pending) return <p role="status">正在提交，请勿重复操作…</p>;
 	if (result?.kind === "unknown")
@@ -77,7 +80,11 @@ export function CommandNotice({
 	if (result?.kind === "rejected")
 		return (
 			<Alert role="alert" tone="danger">
-				<AlertDescription>{commandFailure(result.code)}</AlertDescription>
+				<AlertDescription>
+					{result.code === "AGENT_BUSY"
+						? queueFullText(queuedCount)
+						: commandFailure(result.code)}
+				</AlertDescription>
 				{retry && (
 					<Button variant="outline" onClick={retry}>
 						重试原请求

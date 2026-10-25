@@ -668,7 +668,8 @@ export function assemblePlatformApi(
 		nativeMetadataAvailable: assembledNativeMetadata !== undefined,
 	});
 	const conversationAuthorization: ConversationAuthorization = {
-		async authorize(identity, request) {
+		// 浏览器与 API 只走 Web 渠道；执行期文件访问传入该执行已验签、已持久核对的渠道（#3432）。
+		async authorize(identity, request, channelId = "web") {
 			const currentUser = await resolveCurrentTaskUser(
 				input.identity,
 				identity.userId,
@@ -679,7 +680,7 @@ export function assemblePlatformApi(
 			let agentId = request.agentId;
 			if (request.conversationId !== undefined) {
 				const target = await conversationQuery.getAuthorizationTarget(
-					{ actorId: identity.userId, channelId: "web" },
+					{ actorId: identity.userId, channelId },
 					request.conversationId,
 				);
 				if (!target || (agentId !== undefined && target.agentId !== agentId)) {
@@ -738,7 +739,7 @@ export function assemblePlatformApi(
 			const taskBoundary = await taskAuthorization.captureUserBoundary({
 				user: currentUser,
 				agentId,
-				channelId: "web",
+				channelId,
 			});
 			if (!taskBoundary) return { outcome: "denied" };
 			return {
@@ -747,7 +748,7 @@ export function assemblePlatformApi(
 					schemaVersion: 1,
 					actorId: identity.userId,
 					agentId,
-					channelId: "web",
+					channelId,
 					authorizationRevision: taskBoundary.agentAuthorizationRevision,
 					taskBoundary,
 					supportsSupplementaryInstruction,
@@ -1193,21 +1194,28 @@ export function assemblePlatformApi(
 			browserCommands: browserCommandAdmission,
 			...(modelSelection ? { modelSelection } : {}),
 			commands: (identity) =>
-				createConversationExecutionUseCaseV1({
-					transaction: conversationTransaction,
-					authorization: {
-						async authorize(request) {
-							const decision = await conversationAuthorization.authorize(
-								identity,
-								request,
-							);
-							return decision.outcome === "unavailable" ||
-								decision.outcome === "revoked"
-								? { outcome: "denied" }
-								: decision;
+				createConversationExecutionUseCaseV1(
+					{
+						transaction: conversationTransaction,
+						authorization: {
+							async authorize(request) {
+								const decision = await conversationAuthorization.authorize(
+									identity,
+									request,
+								);
+								return decision.outcome === "unavailable" ||
+									decision.outcome === "revoked"
+									? { outcome: "denied" }
+									: decision;
+							},
 						},
 					},
-				}),
+					// Web 排队与任务 API 共用 Agent 等待容量（工程 Spec §12.5）。
+					{
+						maximumWaitingTasksPerAgent:
+							input.taskAdmissionPolicy.maximumWaitingTasksPerAgent,
+					},
+				),
 			query: conversationQuery,
 			eventWake: conversationEventWake,
 			recent: createRecentPersonalConversationsUseCaseV1({

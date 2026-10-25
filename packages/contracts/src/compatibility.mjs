@@ -2864,6 +2864,88 @@ function normalizeConversationTaskStatusOpenApiAddition(previous, current) {
 	return candidate;
 }
 
+// #3376 执行中消息有界排队：`task.status` 增加只用于 Web/渠道排队消息的取消原因分支，浏览器
+// V1 增加撤回排队消息的命令，V2 会话读取增加可选的排队状态。新增节点按摘要固定，且只能在
+// 基线没有它们时剥离；其他位置引用新 Schema 或改变已有节点仍然拒绝。
+function normalizeBoundedQueueOpenApiAddition(previous, current) {
+	const digestOf = (value) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	const candidate = structuredClone(current);
+	const schemas = candidate.components?.schemas;
+	const previousSchemas = previous.components?.schemas;
+	if (!schemas || !previousSchemas) return current;
+	const cancelReasonDigest =
+		"a26c5bf7a81686b018f70de5972879331331a47a51967c9413eeac0bba3723fa";
+	const options = schemas.TaskStatusEventV1?.properties?.payload?.anyOf;
+	const previousOptions =
+		previousSchemas.TaskStatusEventV1?.properties?.payload?.anyOf;
+	// 基线可能还没有 TaskStatusEventV1（#3336 之前）；先剥离本次分支，再交给 #3336 的摘要核对。
+	if (
+		Array.isArray(options) &&
+		digestOf(options.at(-1)) === cancelReasonDigest &&
+		(previousOptions === undefined ||
+			(Array.isArray(previousOptions) &&
+				options.length === previousOptions.length + 1 &&
+				!previousOptions.some(
+					(option) => digestOf(option) === cancelReasonDigest,
+				)))
+	)
+		schemas.TaskStatusEventV1.properties.payload.anyOf = options.slice(0, -1);
+	const withdrawalPath = "/api/v1/conversations/{conversationId}/withdrawals";
+	const additions = [
+		[
+			"WithdrawCommandRequestV1",
+			"f2d59d9a35496f0709bd7b32b075b527c303ede7178d52aaa012705c7e5e85b2",
+		],
+		[
+			"WithdrawalAcceptedProjectionV1",
+			"18fcd65b59e8d7e117b28af3908afe1de62b78539bc38a01f1796bb8abf71601",
+		],
+		[
+			"QueuedMessageStateV2",
+			"66055b269a3955e6a347d763ed7f69cf344fe5d5fede11657db9789b222110dd",
+		],
+	];
+	for (const [name, digest] of additions)
+		if (
+			previousSchemas[name] === undefined &&
+			schemas[name] !== undefined &&
+			digestOf(schemas[name]) === digest
+		)
+			delete schemas[name];
+	if (
+		previous.paths?.[withdrawalPath] === undefined &&
+		candidate.paths?.[withdrawalPath] !== undefined &&
+		digestOf(candidate.paths[withdrawalPath]) ===
+			"08de1a81b5575604513c0b8df082d3ce035c5d0215a0325634f32bd2e20ee85e"
+	)
+		delete candidate.paths[withdrawalPath];
+	const detail = schemas.ConversationDetailProjectionV2?.properties;
+	if (
+		detail?.queue !== undefined &&
+		previousSchemas.ConversationDetailProjectionV2?.properties?.queue ===
+			undefined &&
+		digestOf(detail.queue) ===
+			"ef60b5dfc6840b4a3c52c0ca167df17c8822c6cd4ef1b6fbb8967e2f81b2309a" &&
+		!schemas.ConversationDetailProjectionV2.required?.includes("queue")
+	)
+		delete detail.queue;
+	// 新 Schema 只能由上面固定的宿主引用。
+	for (const name of [
+		"WithdrawCommandRequestV1",
+		"WithdrawalAcceptedProjectionV1",
+		"QueuedMessageStateV2",
+	])
+		if (
+			previousSchemas[name] === undefined &&
+			JSON.stringify(candidate).includes(
+				JSON.stringify(`#/components/schemas/${name}`),
+			)
+		)
+			return current;
+	return candidate;
+}
+
 // #3226 回答内 `sandbox:` 引用发布的结果文件：浏览器 V2 `result.file` 与 Runtime V2 `file`
 // 事件在 V1 字段之外携带规范化的 `workspaceReference`，运行期文件交换的结果请求新增同名可选
 // 字段，三者都只做加法。事件 Schema 与请求字段的内容按摘要固定，宿主逐一固定：基线已有该新增、
@@ -6062,6 +6144,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			previous,
 			current,
 		);
+		current = normalizeBoundedQueueOpenApiAddition(previous, current);
 		current = normalizeExecutionFailureProjectionOpenApiAddition(
 			previous,
 			current,
