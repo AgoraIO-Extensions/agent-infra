@@ -136,8 +136,13 @@ USER 1000:1000
 
 # Template images share the verified RuntimeHost installation. Registry/Worker
 # supplies the required Driver; these artifact labels do not select a Driver.
+# The manifest capabilities are the template Registry declaration that the
+# Worker intersects with the Driver probe. #3375: only Codex has passed the
+# supplementary instruction (turn/steer) conformance; the other templates
+# inherit the runtime stage declaration with supplementaryInstruction=false.
 FROM runtime AS codex
 LABEL io.agora.agent.standard-template=codex
+LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"platform-adapter","protocol":"acp","service":{"port":3003},"health":{"path":"/healthz"},"capabilities":{"modelSelection":true,"attachments":true,"resultFiles":true,"connection":false,"supplementaryInstruction":true}}'
 
 FROM runtime AS claude
 LABEL io.agora.agent.standard-template=claude
