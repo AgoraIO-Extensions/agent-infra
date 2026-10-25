@@ -9,7 +9,7 @@ import {
 	useState,
 } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
 	Field,
@@ -79,6 +79,7 @@ import {
 
 type AgentApplicationFormProps = {
 	cancelAction?: ReactNode;
+	connectionUrl?: string;
 	showDeploymentStatus?: boolean;
 	/**
 	 * 提交失败时页面顶部 danger 提示的文案（由提交页按服务端错误给出）。表单在顶部只放这一条提示；
@@ -1801,6 +1802,37 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							/>
 						</Field>
 						{sourceFields}
+						<section
+							aria-labelledby="application-connection-heading"
+							className="space-y-3 rounded-lg border border-border bg-muted/20 p-4 sm:col-span-2"
+						>
+							<div>
+								<h2
+									className="font-semibold text-foreground text-base"
+									id="application-connection-heading"
+								>
+									Connection 授权
+								</h2>
+								<p className="mt-1 text-muted-foreground text-sm">
+									创建 Agent 不会自动取得外部账号权限。使用者需要在 Connection
+									中用自己的账号确认连接器授权，授权结果由 Connection 独立管理。
+								</p>
+							</div>
+							{props.connectionUrl ? (
+								<a
+									className={buttonVariants({ variant: "outline" })}
+									href={props.connectionUrl}
+									rel="noopener noreferrer"
+									target="_blank"
+								>
+									打开 Connection
+								</a>
+							) : (
+								<p className="text-muted-foreground text-sm">
+									Connection 入口当前不可用，请联系平台管理员配置部署 profile。
+								</p>
+							)}
+						</section>
 					</div>
 				</FormSection>
 				<FormSection
