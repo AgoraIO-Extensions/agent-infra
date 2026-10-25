@@ -54,14 +54,17 @@ export function userReadFailed(
 	);
 }
 
-/** 用户发起的读取是否还没有结果（既没有读到，也没有失败）；调用方再结合 isFetching。 */
+/**
+ * 用户发起的读取是否还没有结果（既没有读到，也没有失败）；调用方再结合 isFetching。
+ * 与发起同一毫秒的失败按发起前的那一次处理（后台重读刚失败就按「刷新」）：读取进行中时它不可能是这次的结果。
+ */
 export function userReadPending(
 	owner: object | undefined,
 	read: ReadTimeline,
 ): boolean {
 	const since = owner ? records.get(owner)?.userReadSince : undefined;
 	return (
-		since !== undefined && since > read.contentAt && since > read.failureAt
+		since !== undefined && since > read.contentAt && since >= read.failureAt
 	);
 }
 
