@@ -15,8 +15,13 @@ import {
 	ConversationDetailProjectionV1Schema,
 	ConversationPageV1Schema,
 	ExecutionDetailProjectionV1Schema,
+	MessageProjectionV1Schema,
 	pilotBrowserOpenApiPathsV1,
 } from "./browser.ts";
+import {
+	ExecutionFailureCategoryV1Schema,
+	ExecutionFailureProjectionV1Schema,
+} from "./execution-progress.ts";
 import {
 	AuthorizationRevokedSignalV1Schema,
 	HeartbeatSignalV1Schema,
@@ -257,9 +262,21 @@ export function framePilotSseMessageV2(input: unknown) {
 	return data.kind === "event" ? { id: data.eventId, data } : { data };
 }
 
+/**
+ * #3377：V2 会话读取中失败的回答带用户可见失败分类（工程 Spec §16.1.1）。分类与说明由 Core
+ * 按已持久的受限原因给出，与企微读取同一结果；旧服务端不返回该字段，用户消息也不带它。
+ */
+export const MessageProjectionV2Schema = z.discriminatedUnion("status", [
+	MessageProjectionV1Schema.options[0],
+	MessageProjectionV1Schema.options[1].extend({
+		failure: ExecutionFailureProjectionV1Schema.optional(),
+	}),
+]);
+
 export const ConversationDetailProjectionV2Schema =
 	ConversationDetailProjectionV1Schema.extend({
 		schemaVersion: z.literal(2),
+		messages: z.array(MessageProjectionV2Schema),
 		events: conversationEvents,
 		/** Present on current servers; omitted by older detail responses. */
 		eventWindow: ConversationEventWindowV1Schema.optional(),
@@ -417,6 +434,8 @@ export const pilotOperationSseSchemasV2 = {
 
 export const pilotOperationSchemasV2 = {
 	...pilotOperationSseSchemasV2,
+	ExecutionFailureCategoryV1: ExecutionFailureCategoryV1Schema,
+	ExecutionFailureProjectionV1: ExecutionFailureProjectionV1Schema,
 	ConversationEventWindowV1: ConversationEventWindowV1Schema,
 	ConversationDetailProjectionV2: ConversationDetailProjectionV2Schema,
 	ExecutionDetailProjectionV2: ExecutionDetailProjectionV2Schema,
@@ -443,3 +462,4 @@ export type ConversationSseMessageV2 = z.infer<
 export type ConversationEventWindowV1 = z.infer<
 	typeof ConversationEventWindowV1Schema
 >;
+export type MessageProjectionV2 = z.infer<typeof MessageProjectionV2Schema>;

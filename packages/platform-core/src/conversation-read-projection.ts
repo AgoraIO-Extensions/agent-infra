@@ -2,6 +2,12 @@ import {
 	type ConversationEventStatusV1,
 	parseConversationPersistedEventPayloadV1,
 } from "./conversation-events.js";
+import {
+	classifyExecutionFailureV1,
+	type ExecutionFailureCategoryV1,
+	type ExecutionFailureFactsV1,
+	executionFailureMessageV1,
+} from "./execution-failure.js";
 
 type VisibleMessageStatusV1 = Exclude<ConversationEventStatusV1, "unknown">;
 
@@ -22,6 +28,8 @@ export interface ConversationReadExecutionV1 {
 	readonly createdAt: Date;
 	readonly updatedAt: Date;
 	readonly traceId: string | null;
+	/** #3377：失败执行已持久的受限原因（工程 Spec §16.1.1）。 */
+	readonly failure?: Omit<ExecutionFailureFactsV1, "conversationUnavailable">;
 }
 
 export interface ConversationReadEventV1 {
@@ -54,6 +62,14 @@ export interface ConversationMessageProjectionV1 {
 		| "ORIGINAL_RESPONSE_NOT_STARTED"
 		| "ORIGINAL_RESPONSE_ALREADY_FINISHED"
 		| null;
+	/**
+	 * #3377：失败回答的用户可见分类与说明（工程 Spec §16.1.1），与企微读取同一结果；
+	 * 用户消息与其他状态为 null。
+	 */
+	readonly failure: {
+		readonly category: ExecutionFailureCategoryV1;
+		readonly message: string;
+	} | null;
 	readonly createdAt: Date;
 }
 
@@ -136,6 +152,19 @@ function failureTraceId(
 	return traceId;
 }
 
+/** #3377：失败回答按已持久的受限原因归类；内部错误的说明附追踪编号。 */
+function answerFailure(
+	status: ConversationEventStatusV1,
+	execution: ConversationReadExecutionV1,
+): ConversationMessageProjectionV1["failure"] {
+	if (status !== "failed") return null;
+	const category = classifyExecutionFailureV1(execution.failure ?? {});
+	return {
+		category,
+		message: executionFailureMessageV1(category, execution.traceId),
+	};
+}
+
 function eventPayload(input: ConversationReadEventV1) {
 	const payload = parseConversationPersistedEventPayloadV1(input.eventPayload);
 	if (payload.type !== input.eventType) return unavailable();
@@ -185,6 +214,7 @@ export function projectConversationMessagesV1(
 				traceByExecution.get(item.executionId) ?? null,
 			),
 			failureCode,
+			failure: null,
 			createdAt: date(item.createdAt),
 		};
 	});
@@ -238,6 +268,7 @@ export function projectConversationMessagesV1(
 					isCurrentAnswer: index === items.length - 1,
 					failureTraceId: failureTraceId(status, item.traceId),
 					failureCode: null,
+					failure: answerFailure(status, item),
 					createdAt: date(events[0]?.occurredAt ?? item.updatedAt),
 				},
 			];

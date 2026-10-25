@@ -435,6 +435,13 @@
       "when": 1792895341266,
       "tag": "0065_wecom_receipt_execution",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1792896673828,
+      "tag": "0066_wecom_stream_frame_seq",
+      "breakpoints": true
     }
   ]
 }

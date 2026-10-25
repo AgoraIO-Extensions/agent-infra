@@ -1,0 +1,2 @@
+ALTER TABLE "platform"."wecom_receipts" ADD COLUMN "stream_frame_seq" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "platform"."wecom_receipts" ADD CONSTRAINT "wecom_stream_frame_seq" CHECK ("platform"."wecom_receipts"."stream_frame_seq" >= 0);

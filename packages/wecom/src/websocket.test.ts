@@ -427,6 +427,158 @@ it("does not send a bot reply after the final actor authorization is revoked", a
 	expect(checks).toBe(1);
 	expect(sent).toEqual([]);
 });
+// #3377：同一 stream 只有一个发送者：上一帧 ACK 后才发下一帧，相邻两帧至少间隔 1 秒，
+// 等待期间只保留最新全量；最终回复先等在途的进度帧结束，之后不再有进度帧。
+it("streams progress as overwrites of one reply, gated by ACK and at most one frame per second (#3377)", async () => {
+	const s = await setup();
+	await s.authenticate();
+	s.push();
+	await expect.poll(() => s.messages.length).toBe(1);
+	const message = s.messages[0];
+	if (!message) throw new Error("Missing admitted message");
+	const frames: {
+		at: number;
+		frame: {
+			headers: { req_id: string };
+			body: { stream: { id: string; finish: boolean; content: string } };
+		};
+	}[] = [];
+	s.socket.on("message", (data) => {
+		const frame = JSON.parse(data.toString());
+		frames.push({ at: Date.now(), frame });
+		// ACK 都迟到：下一帧必须等上一帧的 ACK，最终回复也不能与在途的进度帧交错。
+		setTimeout(
+			() =>
+				s.socket.send(JSON.stringify({ headers: frame.headers, errcode: 0 })),
+			300,
+		);
+	});
+	const route = { scope: message, replyHandle: message.replyHandle };
+	const acknowledged = s.adapter.acknowledge({
+		...route,
+		text: "已收到，正在处理…",
+	});
+	await expect.poll(() => frames.length).toBe(1);
+	const prepared: string[] = [];
+	const prepare = (label: string) => async () => {
+		prepared.push(label);
+		return true;
+	};
+	expect(
+		await s.adapter.sender.update({
+			...route,
+			text: "准备会话 · 已用 0 秒",
+			prepare: prepare("a"),
+		}),
+	).toBe("queued");
+	expect(
+		await s.adapter.sender.update({
+			...route,
+			text: "执行中 · 已用 1 秒",
+			prepare: prepare("b"),
+		}),
+	).toBe("queued");
+	expect(await acknowledged).toBe("sent");
+	await expect.poll(() => frames.length, { timeout: 3_000 }).toBe(2);
+	// 中间的内容被最新全量合并，只复核并发送最后一帧。
+	expect(prepared).toEqual(["b"]);
+	const replied = s.adapter.sender.send({ ...route, text: "最终答案" });
+	expect(await replied).toBe("sent");
+	expect(
+		await s.adapter.sender.update({
+			...route,
+			text: "迟到的进度",
+			prepare: prepare("c"),
+		}),
+	).toBe("failed");
+	await new Promise((resolve) => setTimeout(resolve, 1_200));
+	const contents = frames.map(({ frame }) => [
+		frame.body.stream.content,
+		frame.body.stream.finish,
+	]);
+	expect(contents).toEqual([
+		["已收到，正在处理…", false],
+		["执行中 · 已用 1 秒", false],
+		["最终答案", true],
+	]);
+	expect(new Set(frames.map(({ frame }) => frame.body.stream.id)).size).toBe(1);
+	expect(new Set(frames.map(({ frame }) => frame.headers.req_id))).toEqual(
+		new Set(["request-1"]),
+	);
+	const [first, second, third] = frames;
+	expect((second?.at ?? 0) - (first?.at ?? 0)).toBeGreaterThanOrEqual(950);
+	// 最终回复在第二帧 ACK（延迟 300ms）之后才发出。
+	expect((third?.at ?? 0) - (second?.at ?? 0)).toBeGreaterThanOrEqual(280);
+	// 处理中提示是这个 stream 的第一帧，之后不再重复发送。
+	expect(
+		await s.adapter.acknowledge({ ...route, text: "已收到，正在处理…" }),
+	).toBe("failed");
+	expect(prepared).toEqual(["b"]);
+});
+it("drops a progress frame whose revalidation fails and refuses other routes (#3377)", async () => {
+	const s = await setup();
+	await s.authenticate();
+	s.push();
+	await expect.poll(() => s.messages.length).toBe(1);
+	const message = s.messages[0];
+	if (!message) throw new Error("Missing admitted message");
+	const frames: string[] = [];
+	s.socket.on("message", (data) => {
+		const frame = JSON.parse(data.toString());
+		frames.push(frame.body.stream.content);
+		s.socket.send(JSON.stringify({ headers: frame.headers, errcode: 0 }));
+	});
+	const route = { scope: message, replyHandle: message.replyHandle };
+	expect(
+		await s.adapter.sender.update({
+			...route,
+			text: "被拒的帧",
+			prepare: async () => false,
+		}),
+	).toBe("queued");
+	expect(
+		await s.adapter.sender.update({
+			...route,
+			text: "抛错的帧",
+			prepare: async () => {
+				throw new Error("db");
+			},
+		}),
+	).toBe("queued");
+	expect(
+		await s.adapter.sender.update({
+			scope: { ...message, senderId: "other-user" },
+			replyHandle: message.replyHandle,
+			text: "其他会话",
+			prepare: async () => true,
+		}),
+	).toBe("failed");
+	expect(
+		await s.adapter.sender.update({
+			...route,
+			text: "x".repeat(20481),
+			prepare: async () => true,
+		}),
+	).toBe("failed");
+	await new Promise((resolve) => setTimeout(resolve, 200));
+	expect(frames).toEqual([]);
+	expect(
+		await s.adapter.sender.update({
+			...route,
+			text: "通过复核的帧",
+			prepare: async () => true,
+		}),
+	).toBe("queued");
+	await expect.poll(() => frames).toEqual(["通过复核的帧"]);
+	s.adapter.close();
+	expect(
+		await s.adapter.sender.update({
+			...route,
+			text: "关闭之后",
+			prepare: async () => true,
+		}),
+	).toBe("failed");
+});
 it("rejects stale timestamps and stops ingress and replies after losing ownership", async () => {
 	const s = await setup();
 	await s.authenticate();
@@ -1028,6 +1180,40 @@ it("uploads a result file whose name is long in UTF-8 but within 255 characters"
 		),
 	).toBe("sent");
 	expect(frames[0]?.body).toMatchObject({ filename: name });
+});
+// #3377：进度帧与媒体共用频率额度：额度只够终态回复时不发进度帧，终态回复照常发送。
+it("keeps the remaining conversation quota for the final reply instead of progress (#3377)", async () => {
+	const s = await admitted();
+	const frames = provider(s.socket);
+	const file = mediaInput(s.message, {
+		kind: "file",
+		name: "a.pdf",
+		bytes: fileBytes(64),
+	}).file;
+	const route = { scope: s.message, replyHandle: s.message.replyHandle };
+	const planned = await s.adapter.sender.planMedia({
+		...route,
+		files: Array(29).fill(file),
+	});
+	expect(planned?.filter((plan) => plan === "send")).toHaveLength(29);
+	expect(
+		await s.adapter.sender.update({
+			...route,
+			text: "执行中 · 已用 3 秒",
+			prepare: async () => true,
+		}),
+	).toBe("queued");
+	await new Promise((resolve) => setTimeout(resolve, 200));
+	expect(frames).toHaveLength(0);
+	expect(await s.adapter.sender.send({ ...route, text: "最终答案" })).toBe(
+		"sent",
+	);
+	expect(
+		frames.map(
+			(frame) =>
+				(frame.body.stream as { finish?: boolean } | undefined)?.finish,
+		),
+	).toEqual([true]);
 });
 
 // #3374：同一会话键（机器人、会话类型、单聊或群聊标识、发送者）的帧按收到的顺序逐条受理，

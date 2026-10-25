@@ -826,6 +826,7 @@ export type ConversationDetailProjectionV2 = {
         createdAt: string;
         error: PilotProtocolErrorV1;
         executionId: string | null;
+        failure?: ExecutionFailureProjectionV1;
         isCurrentAnswer: boolean | null;
         messageId: string;
         replyToMessageId: string | null;
@@ -991,6 +992,13 @@ export type ExecutionDetailProjectionV2 = {
     schemaVersion: 2;
     startedAt: string | null;
     status: 'failed';
+};
+
+export type ExecutionFailureCategoryV1 = 'model_unavailable' | 'agent_updating' | 'session_preparation_failed' | 'attachment_unreadable' | 'authorization_revoked' | 'relay_key_unavailable' | 'queue_timeout' | 'conversation_unavailable' | 'internal_error';
+
+export type ExecutionFailureProjectionV1 = {
+    category: ExecutionFailureCategoryV1;
+    message: string;
 };
 
 export type ExecutionOperationEventV2 = {

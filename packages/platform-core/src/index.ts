@@ -92,6 +92,7 @@ export {
 export * from "./conversation-operation-facts.js";
 export * from "./conversation-read-projection.js";
 export * from "./conversation-recent.js";
+export * from "./execution-failure.js";
 export {
 	bindInputFileV1,
 	bindNativeTextInputFileV1,
@@ -197,6 +198,7 @@ export * from "./task-authorization.js";
 export * from "./task-runtime-authorization.js";
 export * from "./trace-context.js";
 export * from "./wecom-channel.js";
+export * from "./wecom-progress.js";
 export type {
 	WecomAnswerReferenceParserV1,
 	WecomAnswerReferenceV1,

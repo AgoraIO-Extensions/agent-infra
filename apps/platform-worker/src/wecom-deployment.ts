@@ -9,7 +9,8 @@ import {
 } from "./wecom-worker.js";
 
 type WecomWorker = ReturnType<typeof createPlatformWecomWorkerV1>;
-type WecomLoop = Pick<WecomWorker, "reconcile" | "dispatch" | "close">;
+type WecomLoop = Pick<WecomWorker, "reconcile" | "dispatch" | "close"> &
+	Partial<Pick<WecomWorker, "progress">>;
 type WecomConfiguration = WecomWorkerDeploymentV1 & {
 	readonly connections: NonNullable<WecomWorkerDeploymentV1["connections"]>;
 	readonly setup: NonNullable<WecomWorkerDeploymentV1["setup"]>;
@@ -82,6 +83,7 @@ export function createWecomDeploymentCoordinatorV1(options: {
 				return {
 					reconcile: started.reconcile,
 					dispatch: started.dispatch,
+					progress: started.progress,
 					async close() {
 						try {
 							await started.close();
@@ -115,8 +117,10 @@ export function startPlatformWecomPollingWorkerV1(
 	let closing: Promise<void> | undefined;
 	let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
 	let dispatchTimer: ReturnType<typeof setTimeout> | undefined;
+	let progressTimer: ReturnType<typeof setTimeout> | undefined;
 	let reconciling = Promise.resolve();
 	let dispatching = Promise.resolve();
+	let progressing = Promise.resolve();
 	const writeDiagnostic =
 		options.log ??
 		((code: string) =>
@@ -153,15 +157,28 @@ export function startPlatformWecomPollingWorkerV1(
 				if (!stopped) dispatchTimer = setTimeout(dispatch, intervalMs);
 			});
 	};
+	// #3377：进度帧单独轮询，较慢的终态回复或媒体发送不会让流式进度停下。
+	const progress = () => {
+		if (stopped || !worker.progress) return;
+		progressing = Promise.resolve()
+			.then(() => worker.progress?.())
+			.then(() => undefined)
+			.catch(() => log("WECOM_PROGRESS_UNAVAILABLE"))
+			.finally(() => {
+				if (!stopped) progressTimer = setTimeout(progress, intervalMs);
+			});
+	};
 	reconcileTimer = setTimeout(reconcile, 0);
 	dispatchTimer = setTimeout(dispatch, 0);
+	if (worker.progress) progressTimer = setTimeout(progress, 0);
 	return {
 		stop() {
 			closing ??= (async () => {
 				stopped = true;
 				clearTimeout(reconcileTimer);
 				clearTimeout(dispatchTimer);
-				await Promise.allSettled([reconciling, dispatching]);
+				clearTimeout(progressTimer);
+				await Promise.allSettled([reconciling, dispatching, progressing]);
 				await worker.close();
 			})();
 			return closing;
@@ -190,7 +207,9 @@ export async function startPlatformWecomWorkerFromDeploymentV1(
 		if (
 			typeof candidate?.reconcile !== "function" ||
 			typeof candidate.dispatch !== "function" ||
-			typeof candidate.close !== "function"
+			typeof candidate.close !== "function" ||
+			(candidate.progress !== undefined &&
+				typeof candidate.progress !== "function")
 		)
 			throw new Error();
 		worker = candidate as WecomLoop;
