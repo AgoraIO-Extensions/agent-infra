@@ -311,6 +311,12 @@ Codex 的首个只读原生命令定义为“查看原生会话状态”：目�
 旧 Host/Driver 只支持状态查询时继续明确表示压缩不可用；上述合同及真实调用未验收前，
 不能仅因官方存在该方法就把压缩列入可用命令目录。
 
+有状态命令的公开 Invocation V3、持久计划 V2、Native V6 及 Key restore 版本边界统一见
+[工程 Spec §11.4.1](SPEC-agent-infra-M1-engineering-architecture.md#1141-有状态原生命令)。
+实现按受理/持久化、Worker/Host 交付、Driver/模型传输、Web 发现与结果回读分别验证；
+只合入 Driver V2 不能证明其消费者已贯通。旧 V4 输入缺少冻结选择时明确拒绝，保留
+只读查询和既有 Skill；不得从上一条消息补造模型选择或借 metadata context 执行压缩。
+
 Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，但不再是 Skill Hub 的权威模型。Skill Hub 的运行时投影遵循工程 Spec §11.6：Platform DB 保存 Skill Version 与 Agent Version 绑定，Platform Worker 消费不可变包对象版本、manifest、digest/signature 和只读策略，异步 materialize 到 Agent project 的 `.agents/skills/<name>` 并维护 `.agents/SKILLS.md`，再随受控 workspace 挂载到 Sandbox。`.magic/skills` 不属于本平台规范路径。固定 `extraRoot` 与 Hub root 的共存、同名冲突和显式迁移以 [ADR-0019 的路径决策](ADR-0019-magic-aligned-skill-hub.md#固定-extraroot-与-hub-agentskills-共存) 为准。
 
 每个 Conversation 独立 Runtime 进程只接收当前 Agent Version 已批准且同步成功的 Skill 根；调用前以 Runtime 实际返回的目录修订、enabled 状态、来源/版本、包摘要和加载证据作为准入。Host 将能力 ID 解析为受控相对路径，向固定 Driver 传递已冻结版本与有界任务文本；路径不由 Web 提供，Runtime 不能静默下载、改写或替换 Skill。初始 Prompt 只包含有界 metadata，read_skills 按需读取正文和配套资源。受控工作区样本、真实包摘要、只读挂载、跨 Conversation 文件隔离、实际 Skill 加载和工具结果必须分别验证；上游接口存在不能证明本仓已完成装配或权限门禁。
@@ -323,6 +329,7 @@ Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，
 | --- | --- |
 | 发现与 UI | 固定四模板逐项核对目录、说明、来源/版本、搜索/键盘/输入法/参数/清除与移动布局；目录读取失败区别空目录。真实浏览器使用唯一会话输入框及时间线 |
 | Codex 正向 | 真实 `thread/read` 状态命令、原生压缩及一个确定版本 Skill 各有真实调用与结果；Skill 必含实际工具操作及加载证据。压缩模型/Key/屏障缺口单列未完成，不以只读命令通过抹去 |
+| 有状态命令版本链路 | 受理时冻结的模型/Key/配置与 Native V6、Driver V2、真实模型事实一致；旧 V4、同键异参、配置/Key 变化、跨主体和会话、过期授权及活跃占用在副作用前拒绝。命令超过 metadata 读取期限、HTTP 断开、原 ACK 丢失、停止和重启均回读原操作，不产生第二次压缩 |
 | 参数与变化 | 未知命令、缺参、旧目录、禁用/删除/同名替换包、协议不支持均明确拒绝且零新副作用；普通消息回归，不能静默降级 |
 | 授权与来源 | 两个独立主体、跨 Agent/Conversation/能力 ID 替换、撤权、依赖不可确认、Owner 越权、来源越界均拒绝；个人 HOME 不参与装配，目录/错误/遥测不泄露内容或凭据 |
 | 串行与恢复 | 活跃/等待/unknown 时不发新 Turn；同键重投/异参冲突、受理响应丢失、原生 ACK 后失败、停止竞态、重启和 SSE 重连保持原操作及结果；不重复模型/工具副作用，不提前释放占用 |
