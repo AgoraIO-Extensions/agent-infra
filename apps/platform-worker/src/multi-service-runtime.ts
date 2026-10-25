@@ -27,6 +27,8 @@ import type {
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import {
 	agentAnnotation,
+	agentContainerSecurityContext,
+	agentPodSecurityContext,
 	desiredAnnotation,
 	fingerprintAnnotation,
 	ownerLabel,
@@ -288,12 +290,14 @@ function deployment(
 				metadata: { labels },
 				spec: {
 					...resource.spec.template.spec,
+					securityContext: agentPodSecurityContext(),
 					...(volumes ? { volumes } : {}),
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
+							securityContext: agentContainerSecurityContext(),
 							ports: container.ports?.map((port) => ({
 								name: port.name,
 								containerPort: port.targetPort,
@@ -384,11 +388,13 @@ function statefulSet(
 				metadata: { labels },
 				spec: {
 					...resource.spec.template.spec,
+					securityContext: agentPodSecurityContext(),
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
+							securityContext: agentContainerSecurityContext(),
 							ports: container.ports?.map((port) => ({
 								name: port.name,
 								containerPort: port.targetPort,
@@ -492,6 +498,7 @@ function migrationJob(
 				metadata: { labels },
 				spec: {
 					...resource.spec.template.spec,
+					securityContext: agentPodSecurityContext(),
 					restartPolicy: "Never",
 					serviceAccountName: workloadResourceNameV1(value.agentId),
 					automountServiceAccountToken: false,
@@ -499,6 +506,7 @@ function migrationJob(
 						(container) => ({
 							...container,
 							resources: profile.resources,
+							securityContext: agentContainerSecurityContext(),
 							ports: container.ports?.map((port) => ({
 								name: port.name,
 								containerPort: port.targetPort,
