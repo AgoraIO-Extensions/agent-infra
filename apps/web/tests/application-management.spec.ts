@@ -825,3 +825,86 @@ test("disable application confirmation returns focus to its trigger and keeps it
 	);
 	await expectCleanPage(page, errors);
 });
+
+// #3388 N13-03：打开既有应用后地址带 ?applicationId=，个人凭证读取失败，按「重新加载」（读取挂起、可聚焦地禁用）
+// 后浏览器后退到不带应用的地址：同一页面、个人凭证分区不变，焦点仍在按钮上。读取成功、按钮卸载后焦点
+// 到 h1「API 凭证」，仍失败时留在按钮上，都不落到 body。两视口一致。
+for (const outcome of ["recovers", "fails again"] as const)
+	test(`going back from ?applicationId= while reloading personal credentials keeps the same-page handoff (${outcome}, #3388 N13-03)`, async ({
+		page,
+	}, info) => {
+		await page.setViewportSize(
+			info.project.name === "mobile"
+				? { width: 390, height: 844 }
+				: { width: 1440, height: 900 },
+		);
+		const errors = trackPageErrors(page);
+		await fixture(page);
+		let failing = true;
+		await page.route(
+			(url) => url.pathname === "/api/v2/me/api-credentials",
+			(route) =>
+				route.request().method() === "GET" && failing
+					? route.fulfill({
+							status: 503,
+							json: {
+								schemaVersion: 1,
+								code: "DEPENDENCY_UNAVAILABLE",
+								message: "Controlled read failure",
+								retryable: true,
+								traceId: "browser-personal-failure",
+							},
+						})
+					: route.fallback(),
+		);
+		await page.goto("/my-settings/api-credentials");
+		const main = page.locator("#main-content");
+		const personal = main
+			.getByRole("alert")
+			.filter({ hasText: "暂时无法读取 API 凭证，请稍后重试。" });
+		await expect(personal).toBeVisible();
+		const input = page.getByLabel("既有应用 ID");
+		await input.fill(application.applicationId);
+		await input.press("Enter");
+		await expect(page).toHaveURL(
+			new RegExp(`applicationId=${application.applicationId}`),
+		);
+		await expect(
+			page.getByRole("heading", { name: application.name }),
+		).toBeVisible();
+		const reload = personal.getByRole("button", {
+			name: "重新加载",
+			exact: true,
+		});
+		if (outcome === "recovers") failing = false;
+		const reading = await holdRequests(
+			page,
+			"GET",
+			"/api/v2/me/api-credentials",
+		);
+		await reload.focus();
+		await page.keyboard.press("Enter");
+		await expect.poll(() => reading.held()).toBe(1);
+		await expectFocusableBusy(reload, "个人凭证重新加载读取中", [30, 150]);
+		await page.goBack();
+		await expect(page).toHaveURL(/\/my-settings\/api-credentials$/);
+		await expectFocusableBusy(reload, "后退只改查询串后", [30, 150]);
+		reading.release();
+		if (outcome === "recovers") {
+			await expect(personal).toHaveCount(0);
+			await expectFocusSettled(
+				main.getByRole("heading", { level: 1, name: "API 凭证" }),
+				"后退后个人凭证恢复",
+				[50, 300, 1000, 2000],
+			);
+		} else {
+			await expect(reload).toHaveAttribute("aria-disabled", "false");
+			await expectFocusSettled(
+				reload,
+				"后退后个人凭证仍失败",
+				[50, 300, 1000, 2000],
+			);
+		}
+		await expectNoDuplicateControls(page, `API 凭证（后退，${outcome}）`);
+		await expectCleanPage(page, errors);
+	});

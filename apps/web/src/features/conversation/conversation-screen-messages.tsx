@@ -933,7 +933,7 @@ function useResultFilePreview(files: ReplyResultFiles | undefined) {
 					setError(undefined);
 				}
 			}}
-			onRetry={() => selected && preview(selected)}
+			onRetry={() => selected && open(selected)}
 			onDownload={() => selected && void files.onDownloadFile(selected)}
 		/>
 	) : null;

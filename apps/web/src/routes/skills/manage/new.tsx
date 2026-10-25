@@ -9,6 +9,7 @@ import { useSessionRecheck } from "../../../features/session-recheck.js";
 import { readSkillHubProjectContent } from "../../../features/skill-hub/skill-hub-management.js";
 import { SkillEditorScreen } from "../../../features/skill-hub/skill-hub-management-screen.js";
 import { useSkillHubProjects } from "../../../features/skill-hub/use-skill-hub.js";
+import { RecoveryPageParams } from "../../../hooks/use-recovery-focus.js";
 
 // ?project= 只用于从「编辑新版本」进入时选中自己的项目；项目必须在本人的项目列表中。
 export const Route = createFileRoute("/skills/manage/new")({
@@ -18,6 +19,8 @@ export const Route = createFileRoute("/skills/manage/new")({
 			: {},
 	component: SkillEditorRoute,
 });
+
+const projectParams = ["project"] as const;
 
 function SkillEditorRoute() {
 	const { project: projectId } = Route.useSearch();
@@ -61,57 +64,61 @@ function SkillEditorRoute() {
 		});
 	return (
 		<main className="platform-content management-content ia-skill-hub">
-			{projectId && projects.isPending ? (
-				<PageLoadingState
-					title="创建与发布 Skill"
-					message="正在读取 Skill 项目…"
-				/>
-			) : (
-				<SkillEditorScreen
-					key={project?.projectId ?? "new"}
-					project={project}
-					projectMissing={Boolean(projectId && !project)}
-					createdName={
-						created && created.projectId === project?.projectId
-							? created.name
-							: undefined
-					}
-					onProjectsChanged={() => void invalidateProjects()}
-					onProjectCreated={(createdId, name) => {
-						setCreated({ projectId: createdId, name });
-						// 项目列表刷新后再进入新项目，避免短暂显示「找不到项目」。
-						void invalidateProjects().then(() =>
-							navigate({
-								to: "/skills/manage/new",
-								search: { project: createdId },
-							}),
-						);
-					}}
-					content={
-						content.isPending
-							? { kind: "loading" }
-							: // 后台重读的可重试失败不替换编辑器：SKILL.md 未保存的修改保留（#3387）。
-								readFailed(
-										content,
-										(error) =>
-											collectionReadFailure(
-												(error as { status?: number } | null)?.status,
-											).retryable,
-										contentRead,
-									) || !content.data
-								? collectionReadFailure(contentStatus)
-								: { kind: "ready", content: content.data }
-					}
-					onContentRetry={rereadContent}
-					onContentRelogin={() => void relogin.recheck()}
-					contentRetrying={content.isFetching || relogin.checking}
-					onPublished={() =>
-						void queryClient.invalidateQueries({
-							queryKey: ["skill-hub", "owned-versions", identityKey],
-						})
-					}
-				/>
-			)}
+			{/* ?project= 换的是另一个项目（编辑器随之重挂载）：恢复进行中换了项目即离开页面，恢复焦点不带到
+			    新项目（#3388 N13-03）。 */}
+			<RecoveryPageParams value={projectParams}>
+				{projectId && projects.isPending ? (
+					<PageLoadingState
+						title="创建与发布 Skill"
+						message="正在读取 Skill 项目…"
+					/>
+				) : (
+					<SkillEditorScreen
+						key={project?.projectId ?? "new"}
+						project={project}
+						projectMissing={Boolean(projectId && !project)}
+						createdName={
+							created && created.projectId === project?.projectId
+								? created.name
+								: undefined
+						}
+						onProjectsChanged={() => void invalidateProjects()}
+						onProjectCreated={(createdId, name) => {
+							setCreated({ projectId: createdId, name });
+							// 项目列表刷新后再进入新项目，避免短暂显示「找不到项目」。
+							void invalidateProjects().then(() =>
+								navigate({
+									to: "/skills/manage/new",
+									search: { project: createdId },
+								}),
+							);
+						}}
+						content={
+							content.isPending
+								? { kind: "loading" }
+								: // 后台重读的可重试失败不替换编辑器：SKILL.md 未保存的修改保留（#3387）。
+									readFailed(
+											content,
+											(error) =>
+												collectionReadFailure(
+													(error as { status?: number } | null)?.status,
+												).retryable,
+											contentRead,
+										) || !content.data
+									? collectionReadFailure(contentStatus)
+									: { kind: "ready", content: content.data }
+						}
+						onContentRetry={rereadContent}
+						onContentRelogin={() => void relogin.recheck()}
+						contentRetrying={content.isFetching || relogin.checking}
+						onPublished={() =>
+							void queryClient.invalidateQueries({
+								queryKey: ["skill-hub", "owned-versions", identityKey],
+							})
+						}
+					/>
+				)}
+			</RecoveryPageParams>
 		</main>
 	);
 }
