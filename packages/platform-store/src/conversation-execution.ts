@@ -1085,7 +1085,7 @@ export class PostgresConversationExecutionTransactionV1
 								: // #3374：只含附件的企微消息打开合并窗口：Turn 在受理后 3 秒内不可认领。
 									plan.attachmentWindow === "open"
 									? transaction`clock_timestamp() + ${conversationAttachmentMergeWindowMsV1}::bigint * interval '1 millisecond'`
-								: plan.outboxIntent.occurredAt
+									: plan.outboxIntent.occurredAt
 },
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`,
