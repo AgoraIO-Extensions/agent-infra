@@ -372,7 +372,7 @@ it.each([
 	f.fetcher.mockImplementation(async () => {
 		if (change === "late-revocation")
 			vi.mocked(f.options.assertCurrentAuthorization).mockRejectedValue(
-				new Error("revoked"),
+				new ConversationRuntimeHostError("AUTHORIZATION_REVOKED", false),
 			);
 		if (change === "late-fence")
 			Object.assign(f.accepted, { deliveryFence: 999 });
@@ -384,11 +384,17 @@ it.each([
 			result: { outcome: "accepted", status: "running" },
 		});
 	});
-	await expect(f.client.nativeCapability(f.unsigned)).rejects.toMatchObject({
-		code: "RUNTIME_ACCEPTANCE_UNKNOWN",
-		retryable: true,
-		notSent: false,
-	});
+	if (change === "late-revocation") {
+		await expect(f.client.nativeCapability(f.unsigned)).rejects.toMatchObject({
+			code: "AUTHORIZATION_REVOKED",
+		});
+	} else {
+		await expect(f.client.nativeCapability(f.unsigned)).rejects.toMatchObject({
+			code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+			retryable: true,
+			notSent: false,
+		});
+	}
 	expect(f.fetcher).toHaveBeenCalledOnce();
 });
 

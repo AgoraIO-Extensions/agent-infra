@@ -1429,7 +1429,7 @@ export function createWorkerRuntimeHostClientV6(
 						result.operationId !== request.executionId ||
 						result.hostSessionRef !== request.hostSessionRef
 					)
-						return failure("RUNTIME_RESPONSE_INVALID", true);
+						return failure("RUNTIME_ACCEPTANCE_UNKNOWN", true);
 					await interruptedDependency(
 						options.assertCurrentAuthorization(),
 						signal,
@@ -1443,7 +1443,11 @@ export function createWorkerRuntimeHostClientV6(
 					signal?.throwIfAborted();
 					options.verifyGrant(request.grant);
 					return result;
-				} catch {
+				} catch (error) {
+					// Authorization revocation and cancellation are known local facts;
+					// only malformed or incomplete responses become unknown acceptance.
+					if (error instanceof ConversationRuntimeHostError || signal?.aborted)
+						throw error;
 					return failure("RUNTIME_ACCEPTANCE_UNKNOWN", true);
 				}
 			} catch (error) {
