@@ -187,8 +187,21 @@ export interface ConversationDispatchClaimV1 {
 	readonly stopRequestId: string | null;
 	readonly sessionGeneration: number;
 	readonly deliveryFence: number;
-	/** Durable outbox attempt number, used to bound unknown recovery. */
+	/** Durable outbox attempt number, used to bound metadata recovery. */
 	readonly attemptCount?: number;
+	/**
+	 * #3373：Execution 本次进入 `unknown` 以来经过的毫秒数（Store 按数据库时钟计算），
+	 * 只在 Execution 为 `unknown` 时投影，用于墙钟恢复预算。
+	 */
+	readonly recoveryElapsedMs?: number;
+	/**
+	 * #3373：本工作项已因 Runtime 报告未提交而重提的次数，以及自首次重提起经过的毫秒数
+	 * （Store 按数据库时钟计算）。没有重提时不投影。
+	 */
+	readonly notSubmittedResubmissions?: {
+		readonly count: number;
+		readonly elapsedMs: number;
+	};
 	readonly executionDeliveryFence: number;
 	readonly authorizationRevision: string;
 	readonly modelConfigurationRevision: number | null;
@@ -283,6 +296,11 @@ export interface ConversationDispatchStorePortV1 {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly retryDelayMs: number;
 		readonly errorCode: string;
+		/**
+		 * #3373：Runtime 在未提交结果中返回的 Host Session Ref；Conversation 尚未记录时一并保存，
+		 * 已记录时必须一致。
+		 */
+		readonly hostSessionRef?: string;
 	}): Promise<boolean>;
 	cancelUnaccepted(input: {
 		readonly claim: ConversationDispatchClaimV1;
@@ -414,10 +432,23 @@ export type ConversationRuntimeOperationResultV1 =
 			readonly retryable: false;
 	  }
 	| {
+			/** #3373：Host 核实 Driver 在原生提交点之前未提交本次 Turn，可以用新 Grant 重提。 */
+			readonly outcome: "rejected";
+			readonly code: "RUNTIME_TURN_NOT_SUBMITTED";
+			readonly message: "Runtime turn was not submitted";
+			readonly reason: ConversationRuntimeTurnNotSubmittedReasonV1;
+			readonly retryable: true;
+	  }
+	| {
 			readonly outcome: "unknown";
 			readonly code: "RUNTIME_ACCEPTANCE_UNKNOWN";
 			readonly message: "Runtime command acceptance could not be confirmed";
 	  };
+
+/** #3373：未提交的失败阶段。 */
+export type ConversationRuntimeTurnNotSubmittedReasonV1 =
+	| "file_input_unavailable"
+	| "session_preparation_failed";
 
 export interface ConversationRuntimeOperationResponseV1 {
 	readonly schemaVersion: 1 | 2;

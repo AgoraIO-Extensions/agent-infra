@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DurableJsonFile } from "./durable-json.js";
-import { RuntimeHostError } from "./errors.js";
+import { RuntimeHostError, RuntimeTurnNotSubmittedError } from "./errors.js";
 import {
 	FakeRuntimeDriver,
 	fakeNativeCommandCapabilityId,
@@ -488,6 +488,93 @@ describe("Runtime V3 durable authorization", () => {
 		await expect(authorized).rejects.toMatchObject({
 			code: "RUNTIME_GRANT_INVALID",
 		});
+	});
+
+	it("reports a Host-verified unsubmitted Turn as not found and re-executes it under a higher fence (#3373)", async () => {
+		const env = await setup();
+		const selection = {
+			schemaVersion: 1 as const,
+			modelOptionId: "model-option-primary",
+			reasoningLevel: "high",
+		};
+		const unsigned = { ...submitV3Fixture(), selection };
+		const execute = vi
+			.spyOn(env.driver, "execute")
+			.mockRejectedValueOnce(
+				new RuntimeTurnNotSubmittedError("session_preparation_failed"),
+			);
+		const request = signV3Fixture(unsigned, "turn.submit");
+		const first = await env.host.submitTurnV3(
+			request,
+			verifyRuntimeV2Fixture(request.grant),
+		);
+		expect(first.result).toEqual({
+			outcome: "rejected",
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			message: "Runtime turn was not submitted",
+			reason: "session_preparation_failed",
+			retryable: true,
+		});
+		// 状态核实按未投递报告，不进入 Driver，也不推断为受理不明。
+		const recovery = signV3Fixture(
+			{
+				...base(first.hostSessionRef),
+				originalOperationDigest: originalDigest(unsigned),
+			},
+			"session.status",
+		);
+		await expect(
+			env.host.recoverStatusV3(
+				recovery,
+				verifyRuntimeV2Fixture(recovery.grant),
+			),
+		).resolves.toEqual({
+			schemaVersion: 3,
+			hostSessionRef: first.hostSessionRef,
+			executionId: unsigned.executionId,
+			outcome: "not_found",
+		});
+		expect(execute).toHaveBeenCalledTimes(1);
+		// Worker 退回投递前状态后，以更高 fence 与新的业务 Grant 重新投递同一操作。
+		const operation = {
+			...unsigned.operation,
+			deliveryFence: 2,
+			executionDeliveryFence: 2,
+		};
+		const resubmission = signV3Fixture(
+			{
+				...unsigned,
+				requestId: "request-resubmitted",
+				hostSessionRef: first.hostSessionRef,
+				operation,
+			},
+			"turn.submit",
+		);
+		await expect(
+			env.host.submitTurnV3(
+				resubmission,
+				verifyRuntimeV2Fixture(resubmission.grant),
+			),
+		).resolves.toMatchObject({
+			hostSessionRef: first.hostSessionRef,
+			result: { outcome: "accepted" },
+		});
+		expect(execute).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps an unsubmitted declaration fail-closed for a submit without the V2 result enum (#3373)", async () => {
+		const env = await setup();
+		vi.spyOn(env.driver, "execute").mockRejectedValue(
+			new RuntimeTurnNotSubmittedError("file_input_unavailable"),
+		);
+		// 不带有效模型选择的 V3 submit 映射为 V1 命令，结果枚举不能表示未提交。
+		await expect(submit(env.host)).rejects.toMatchObject({
+			code: "RUNTIME_DRIVER_INVALID",
+			retryable: true,
+		});
+		expect(await readFile(env.storePath, "utf8")).not.toContain(
+			"RUNTIME_TURN_NOT_SUBMITTED",
+		);
 	});
 
 	it("replays a resolved submit while its execution is under recovery query authority", async () => {

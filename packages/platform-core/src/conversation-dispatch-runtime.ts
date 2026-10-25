@@ -159,9 +159,35 @@ export function parseRuntimeResponse(
 	const resultInput = exactObject(
 		input.result,
 		["outcome"],
-		["status", "code", "message", "retryable"],
+		["status", "code", "message", "reason", "retryable"],
 	);
 	let result: ConversationRuntimeOperationResultV1;
+	if (resultInput.reason !== undefined) {
+		// #3373：只有 submit V2 及以上的未提交结果带阶段，其他成员出现该字段都失败关闭。
+		if (
+			expectedVersion !== 2 ||
+			resultInput.outcome !== "rejected" ||
+			resultInput.code !== "RUNTIME_TURN_NOT_SUBMITTED" ||
+			resultInput.message !== "Runtime turn was not submitted" ||
+			resultInput.status !== undefined ||
+			resultInput.retryable !== true ||
+			(resultInput.reason !== "file_input_unavailable" &&
+				resultInput.reason !== "session_preparation_failed")
+		)
+			return unavailable();
+		return {
+			schemaVersion: expectedVersion,
+			hostSessionRef: text(input.hostSessionRef),
+			operationId: input.operationId,
+			result: {
+				outcome: "rejected",
+				code: "RUNTIME_TURN_NOT_SUBMITTED",
+				message: "Runtime turn was not submitted",
+				reason: resultInput.reason,
+				retryable: true,
+			},
+		};
+	}
 	if (resultInput.outcome === "accepted") {
 		if (
 			resultInput.code !== undefined ||

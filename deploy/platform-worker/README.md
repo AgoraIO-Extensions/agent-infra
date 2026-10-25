@@ -205,6 +205,13 @@ Worker 镜像中的对应目录是 `/app/dist`。部署模块与配置模块必�
 缺失、不合法或 namespace 不匹配时，在创建 Worker 依赖前返回固定脱敏错误。
 Workload、Conversation 和可选 WeCom 实例共同使用这一数据库绑定。
 
+## unknown 恢复预算
+
+接受结果不确定（`unknown`）的执行从进入 `unknown` 起按墙钟预算恢复，默认 5 分钟；用尽时以
+`RUNTIME_RECOVERY_TIMEOUT` 收敛为失败。部署可用 `PLATFORM_WORKER_RUNTIME_RECOVERY_BUDGET_MS`
+（1 到 86400000 的整数毫秒）调整，取值无效时 Worker 拒绝启动。规则见
+[Runtime HLD §7.3](../../docs/architecture/HLD-agent-runtime-M1.md#73-重启恢复)。
+
 ## Runtime 文件交换注入
 
 Worker 向 Agent Workload 和会话 Sandbox 注入文件交换配置的前提是 `policy.runtimeAuth` 存在，并且提供精确的 Platform API origin：

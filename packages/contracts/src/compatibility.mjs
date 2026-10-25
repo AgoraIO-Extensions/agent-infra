@@ -1288,6 +1288,23 @@ const runtimeFileInputRejectedResult = runtimeRejectedResult(
 	"RUNTIME_FILE_INPUT_REJECTED",
 	"Runtime file input was rejected",
 );
+// #3373 以同一规则新增可重试的 RUNTIME_TURN_NOT_SUBMITTED：Driver 在原生提交点之前声明本次
+// Turn 未提交。成员逐字段固定，阶段只允许两个固定值，retryable 固定为 true。
+const runtimeTurnNotSubmittedResult = {
+	additionalProperties: false,
+	properties: {
+		code: { const: "RUNTIME_TURN_NOT_SUBMITTED", type: "string" },
+		message: { const: "Runtime turn was not submitted", type: "string" },
+		outcome: { const: "rejected", type: "string" },
+		reason: {
+			enum: ["file_input_unavailable", "session_preparation_failed"],
+			type: "string",
+		},
+		retryable: { const: true, type: "boolean" },
+	},
+	required: ["outcome", "code", "message", "reason", "retryable"],
+	type: "object",
+};
 function runtimeRejectedResultUnions(schemas) {
 	return [
 		schemas?.RuntimeOperationResultV2?.anyOf,
@@ -1310,6 +1327,13 @@ function isRuntimeFileInputRejectedOpenApiAddition(previous, current) {
 		previous,
 		current,
 		runtimeFileInputRejectedResult,
+	);
+}
+function isRuntimeTurnNotSubmittedOpenApiAddition(previous, current) {
+	return isRuntimeRejectedResultOpenApiAddition(
+		previous,
+		current,
+		runtimeTurnNotSubmittedResult,
 	);
 }
 function isRuntimeRejectedResultOpenApiAddition(previous, current, member) {
@@ -5906,6 +5930,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) &&
 			!isRuntimeSessionBlockedOpenApiAddition(previous, current) &&
 			!isRuntimeFileInputRejectedOpenApiAddition(previous, current) &&
+			!isRuntimeTurnNotSubmittedOpenApiAddition(previous, current) &&
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeSkillHostReadOpenApiAddition(previous, current) &&
 			!isRuntimeSkillReadGrantCommandOpenApiAddition(previous, current) &&

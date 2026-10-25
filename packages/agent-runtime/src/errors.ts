@@ -5,7 +5,18 @@ export type RuntimeDriverFailureKind =
 	 * #3314：附件读取在任何原生副作用之前被平台明确拒绝，Driver 也未持有该操作的记录。
 	 * 只能由 Driver 在其原生副作用之前的物化点声明；Host 据此持久化不可重试的 rejected。
 	 */
-	| "file_input_rejected";
+	| "file_input_rejected"
+	/**
+	 * #3373：本次 Turn 在原生提交点之前失败，Driver 没有（或已删除）该操作的记录，也没有
+	 * 原生 Turn 副作用。只能由 Driver 在其原生提交点之前声明；Host 核实后持久化可重试的
+	 * `RUNTIME_TURN_NOT_SUBMITTED`。错误必须是 {@link RuntimeTurnNotSubmittedError}。
+	 */
+	| "not_submitted";
+
+/** #3373：未提交声明的失败阶段，与 Runtime 结果成员的 `reason` 一一对应。 */
+export type RuntimeTurnNotSubmittedReason =
+	| "file_input_unavailable"
+	| "session_preparation_failed";
 
 export class RuntimeHostError extends Error {
 	readonly code: string;
@@ -33,6 +44,27 @@ export class RuntimeHostError extends Error {
 		this.retryable = retryable;
 		this.driverFailureKind = driverFailureKind;
 		this.diagnostic = diagnostic;
+	}
+}
+
+/**
+ * #3373：Driver 在原生提交点之前声明本次 Turn 未提交。错误只携带固定阶段，不含原始错误、
+ * 凭据、URL、Grant 或平台响应正文；原始错误只作为 `cause` 留在进程内。
+ */
+export class RuntimeTurnNotSubmittedError extends RuntimeHostError {
+	readonly reason: RuntimeTurnNotSubmittedReason;
+
+	constructor(reason: RuntimeTurnNotSubmittedReason, options?: ErrorOptions) {
+		super(
+			"RUNTIME_TURN_NOT_SUBMITTED",
+			"Runtime turn was not submitted",
+			503,
+			true,
+			"not_submitted",
+		);
+		this.name = "RuntimeTurnNotSubmittedError";
+		this.reason = reason;
+		if (options && "cause" in options) this.cause = options.cause;
 	}
 }
 

@@ -290,6 +290,18 @@ export const isNativeMetadataWorkerOriginV1 = (value) => {
 		savedKeyCandidatesService.code,
 	);
 	await writeFile(
+		join(directory, "runtime-recovery-budget.js"),
+		(
+			await transform(
+				await readFile(
+					new URL("./runtime-recovery-budget.ts", import.meta.url),
+					"utf8",
+				),
+				{ loader: "ts", format: "esm", target: "node24" },
+			)
+		).code,
+	);
+	await writeFile(
 		join(directory, "runtime-model-directory-deployment.js"),
 		modelDirectoryDeployment.code,
 	);

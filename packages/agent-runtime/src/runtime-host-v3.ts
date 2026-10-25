@@ -45,6 +45,7 @@ import {
 } from "./errors.js";
 import {
 	type FileRuntimeStore,
+	isRuntimeTurnNotSubmittedResult,
 	requestDigest,
 	type StoredOperation,
 	type StoredSession,
@@ -965,6 +966,18 @@ export class RuntimeHostV3 {
 			};
 		const operation = session.operations[request.executionId];
 		if (!operation) invalidDriver();
+		// #3373：Host 已核实本次 Turn 在原生提交点之前未提交，没有可核实的原生执行。按未投递
+		// 报告，Worker 据此退回投递前状态，以更高 fence 与新 Grant 重新投递同一操作。
+		if (
+			operation.state === "resolved" &&
+			isRuntimeTurnNotSubmittedResult(operation.result)
+		)
+			return {
+				schemaVersion: 3,
+				hostSessionRef: session.hostSessionRef,
+				executionId: request.executionId,
+				outcome: "not_found",
+			};
 		// Lookup may retrieve a receipt but may never submit missing work under control authority.
 		let response: Awaited<ReturnType<Options["dispatch"]>>;
 		try {

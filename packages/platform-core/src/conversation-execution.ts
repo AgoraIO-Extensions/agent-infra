@@ -269,11 +269,22 @@ export function createConversationExecutionUseCaseV1(
 					: {}),
 			});
 			try {
-				return normalizeCommandDecision(
+				// #3373：受理决定时记下占用 Conversation 的受理不明 Execution，受理后唤醒其恢复。
+				let unknownOccupant:
+					| { readonly conversationId: string; readonly executionId: string }
+					| undefined;
+				const decision = normalizeCommandDecision(
 					await dependencies.transaction.executeMessage(
 						{ command, authority, requestDigest },
 						(stateInput) => {
 							const state = parseState(stateInput);
+							unknownOccupant =
+								state.activeExecution?.status === "unknown"
+									? {
+											conversationId: state.activeExecution.conversationId,
+											executionId: state.activeExecution.executionId,
+										}
+									: undefined;
 							const conversation = state.conversation;
 							if (
 								!conversation ||
@@ -504,6 +515,18 @@ export function createConversationExecutionUseCaseV1(
 					),
 					parseMessageCommandResult,
 				);
+				// Waking is a best-effort nudge after the admission committed; the
+				// Worker still recovers on its own schedule if it fails. A denied
+				// command leaves no side effect, including this nudge.
+				if (
+					unknownOccupant &&
+					decision.outcome !== "denied" &&
+					dependencies.transaction.wakeUnknownExecutionRecovery
+				)
+					await dependencies.transaction
+						.wakeUnknownExecutionRecovery(unknownOccupant)
+						.catch(() => undefined);
+				return decision;
 			} catch {
 				return unavailable();
 			}
