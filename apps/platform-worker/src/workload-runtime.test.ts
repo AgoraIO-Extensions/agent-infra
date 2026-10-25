@@ -3047,7 +3047,9 @@ describe("assembled Workload Runtime contracts", () => {
 			await expect(runtime.closeRoute(state)).rejects.toThrow();
 			await expect(runtime.cleanup(state, true, input)).rejects.toThrow();
 			await expect(runtime.apply(state, true, input)).rejects.toThrow();
-			await expect(runtime.discardUnactivatedSecrets(state, input)).rejects.toThrow();
+			await expect(
+				runtime.discardUnactivatedSecrets(state, input),
+			).rejects.toThrow();
 			expect([...f.resources.entries()]).toEqual(before);
 		},
 	);
