@@ -54,6 +54,11 @@ const taskStatusPayload = z.union([
 		status: z.literal("unknown"),
 		reason: z.literal("STOP_CONFIRMATION_TIMEOUT").optional(),
 	}),
+	// #3376：Web/渠道排队消息取消时带受限原因（发送者撤回、出队前权限失效）；任务 API 不带。
+	z.strictObject({
+		status: z.literal("cancelled"),
+		reason: z.enum(["WITHDRAWN", "AUTHORIZATION_REVOKED"]),
+	}),
 ]);
 
 /** Platform status facts share the persisted timeline with Runtime events. */

@@ -869,6 +869,8 @@ describe("WeCom attachment merge and orphan cleanup (#3374)", {
 		const image = await receiveMerged({
 			...sender,
 			eventId: "busy-image",
+			// #3376：回复有效期不足以排队时按繁忙处理（排队期限不晚于有效期前 30 秒）。
+			replyExpiresAt: new Date(Date.now() + 20_000).toISOString(),
 			media: [{ kind: "image", name: null, download: serve(png) }],
 		});
 		expect(image).toMatchObject({ status: "busy", executionId: null });

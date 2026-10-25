@@ -857,6 +857,55 @@ function isNativeCapabilityInvocationV2OpenApiAddition(previous, current) {
 	return replaced && isDeepStrictEqual(previous, normalized);
 }
 
+// SPEC §11.4 permits only the strict, explicit V3 stateful-command input.
+// Existing request variants, responses, security and other paths stay exact.
+function isNativeCapabilityInvocationV3OpenApiAddition(previous, current) {
+	const name = "NativeCapabilityInvocationRequestV3";
+	const path =
+		"/api/v2/conversations/{conversationId}/native-capability/invoke";
+	const base =
+		previous.components?.schemas?.NativeCapabilityInvocationRequestV1;
+	const added = current.components?.schemas?.[name];
+	if (!base || !added || previous.components?.schemas?.[name]) return false;
+	const selection = {
+		additionalProperties: false,
+		properties: {
+			schemaVersion: { const: 1, type: "number" },
+			modelOptionId: { minLength: 1, type: "string" },
+			reasoningLevel: { minLength: 1, type: "string" },
+		},
+		required: ["schemaVersion", "modelOptionId", "reasoningLevel"],
+		type: "object",
+	};
+	if (
+		!isDeepStrictEqual(added, {
+			...base,
+			properties: {
+				...base.properties,
+				schemaVersion: { const: 3, type: "number" },
+				selection,
+			},
+			required: [...base.required, "schemaVersion", "selection"],
+		})
+	)
+		return false;
+	const normalized = structuredClone(current);
+	const body =
+		normalized.paths?.[path]?.post?.requestBody?.content?.["application/json"];
+	const reference = (version) => ({
+		$ref: `#/components/schemas/NativeCapabilityInvocationRequestV${version}`,
+	});
+	if (
+		!isDeepStrictEqual(body?.schema, {
+			anyOf: [reference(1), reference(2), reference(3)],
+		})
+	)
+		return false;
+	body.schema = { anyOf: [reference(1), reference(2)] };
+	delete normalized.components.schemas[name];
+	return isDeepStrictEqual(previous, normalized);
+}
+
 // Browser handoff is an additive, authenticated V3 control route. Its request
 // and response schemas are new components; the existing Runtime routes remain
 // byte-compatible.
@@ -2812,6 +2861,88 @@ function normalizeConversationTaskStatusOpenApiAddition(previous, current) {
 	delete schemas[name];
 	// 其他位置借用此事件仍然拒绝，不能借兼容例外扩大请求或其他读取接口。
 	if (JSON.stringify(candidate).includes(JSON.stringify(ref))) return current;
+	return candidate;
+}
+
+// #3376 执行中消息有界排队：`task.status` 增加只用于 Web/渠道排队消息的取消原因分支，浏览器
+// V1 增加撤回排队消息的命令，V2 会话读取增加可选的排队状态。新增节点按摘要固定，且只能在
+// 基线没有它们时剥离；其他位置引用新 Schema 或改变已有节点仍然拒绝。
+function normalizeBoundedQueueOpenApiAddition(previous, current) {
+	const digestOf = (value) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	const candidate = structuredClone(current);
+	const schemas = candidate.components?.schemas;
+	const previousSchemas = previous.components?.schemas;
+	if (!schemas || !previousSchemas) return current;
+	const cancelReasonDigest =
+		"a26c5bf7a81686b018f70de5972879331331a47a51967c9413eeac0bba3723fa";
+	const options = schemas.TaskStatusEventV1?.properties?.payload?.anyOf;
+	const previousOptions =
+		previousSchemas.TaskStatusEventV1?.properties?.payload?.anyOf;
+	// 基线可能还没有 TaskStatusEventV1（#3336 之前）；先剥离本次分支，再交给 #3336 的摘要核对。
+	if (
+		Array.isArray(options) &&
+		digestOf(options.at(-1)) === cancelReasonDigest &&
+		(previousOptions === undefined ||
+			(Array.isArray(previousOptions) &&
+				options.length === previousOptions.length + 1 &&
+				!previousOptions.some(
+					(option) => digestOf(option) === cancelReasonDigest,
+				)))
+	)
+		schemas.TaskStatusEventV1.properties.payload.anyOf = options.slice(0, -1);
+	const withdrawalPath = "/api/v1/conversations/{conversationId}/withdrawals";
+	const additions = [
+		[
+			"WithdrawCommandRequestV1",
+			"f2d59d9a35496f0709bd7b32b075b527c303ede7178d52aaa012705c7e5e85b2",
+		],
+		[
+			"WithdrawalAcceptedProjectionV1",
+			"18fcd65b59e8d7e117b28af3908afe1de62b78539bc38a01f1796bb8abf71601",
+		],
+		[
+			"QueuedMessageStateV2",
+			"66055b269a3955e6a347d763ed7f69cf344fe5d5fede11657db9789b222110dd",
+		],
+	];
+	for (const [name, digest] of additions)
+		if (
+			previousSchemas[name] === undefined &&
+			schemas[name] !== undefined &&
+			digestOf(schemas[name]) === digest
+		)
+			delete schemas[name];
+	if (
+		previous.paths?.[withdrawalPath] === undefined &&
+		candidate.paths?.[withdrawalPath] !== undefined &&
+		digestOf(candidate.paths[withdrawalPath]) ===
+			"08de1a81b5575604513c0b8df082d3ce035c5d0215a0325634f32bd2e20ee85e"
+	)
+		delete candidate.paths[withdrawalPath];
+	const detail = schemas.ConversationDetailProjectionV2?.properties;
+	if (
+		detail?.queue !== undefined &&
+		previousSchemas.ConversationDetailProjectionV2?.properties?.queue ===
+			undefined &&
+		digestOf(detail.queue) ===
+			"ef60b5dfc6840b4a3c52c0ca167df17c8822c6cd4ef1b6fbb8967e2f81b2309a" &&
+		!schemas.ConversationDetailProjectionV2.required?.includes("queue")
+	)
+		delete detail.queue;
+	// 新 Schema 只能由上面固定的宿主引用。
+	for (const name of [
+		"WithdrawCommandRequestV1",
+		"WithdrawalAcceptedProjectionV1",
+		"QueuedMessageStateV2",
+	])
+		if (
+			previousSchemas[name] === undefined &&
+			JSON.stringify(candidate).includes(
+				JSON.stringify(`#/components/schemas/${name}`),
+			)
+		)
+			return current;
 	return candidate;
 }
 
@@ -5934,10 +6065,42 @@ function normalizeMultiServiceResourceCapErrorCodeAddition(previous, current) {
 			for (const child of value) visit(child);
 			return;
 		}
+		// #3375 之后 QUEUE_FULL 可以紧跟在它后面。
+		const at = Array.isArray(value.enum)
+			? value.enum.indexOf(multiServiceResourceCapErrorCode)
+			: -1;
+		if (
+			at > 0 &&
+			value.enum[at - 1] === "ORIGINAL_RESPONSE_ALREADY_FINISHED" &&
+			(at === value.enum.length - 1 ||
+				(at === value.enum.length - 2 && value.enum.at(-1) === "QUEUE_FULL"))
+		)
+			value.enum = value.enum.filter((_, index) => index !== at);
+		for (const child of Object.values(value)) visit(child);
+	};
+	visit(normalized);
+	return normalized;
+}
+
+// #3375 在公共终止错误码末尾追加 QUEUE_FULL（补充指令转入排队时排队已满）。只有基线完全
+// 没有该值、且它紧跟在 MULTI_SERVICE_RESOURCE_CAP_EXCEEDED 之后时才去掉，其余改动照常比较。
+const queueFullErrorCode = "QUEUE_FULL";
+function normalizeQueueFullErrorCodeAddition(previous, current) {
+	if (JSON.stringify(previous).includes(`"${queueFullErrorCode}"`))
+		return current;
+	if (!JSON.stringify(current).includes(`"${queueFullErrorCode}"`))
+		return current;
+	const normalized = structuredClone(current);
+	const visit = (value) => {
+		if (!value || typeof value !== "object") return;
+		if (Array.isArray(value)) {
+			for (const child of value) visit(child);
+			return;
+		}
 		if (
 			Array.isArray(value.enum) &&
-			value.enum.at(-1) === multiServiceResourceCapErrorCode &&
-			value.enum.at(-2) === "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+			value.enum.at(-1) === queueFullErrorCode &&
+			value.enum.at(-2) === multiServiceResourceCapErrorCode
 		)
 			value.enum = value.enum.slice(0, -1);
 		for (const child of Object.values(value)) visit(child);
@@ -5972,7 +6135,10 @@ function findBreakingChanges(previousValue, currentValue) {
 
 function evaluateBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
-	let current = currentValue;
+	let current = normalizeQueueFullErrorCodeAddition(
+		previousValue,
+		currentValue,
+	);
 	if (
 		previous.openapi !== undefined &&
 		(isBrowserHandoffEventV2Addition(previous, current) ||
@@ -6013,6 +6179,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			previous,
 			current,
 		);
+		current = normalizeBoundedQueueOpenApiAddition(previous, current);
 		current = normalizeExecutionFailureProjectionOpenApiAddition(
 			previous,
 			current,
@@ -6163,6 +6330,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			) &&
 			!isFileLimitDeclarationOpenApiAddition(previous, current) &&
 			!isNativeCapabilityInvocationV2OpenApiAddition(previous, current) &&
+			!isNativeCapabilityInvocationV3OpenApiAddition(previous, current) &&
 			!isAgentManagementRevisionOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");

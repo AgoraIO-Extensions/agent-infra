@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	dispatch: vi.fn(),
+	queueNoticeTick: vi.fn(async () => false),
 	storeOpen: vi.fn(),
 	scopeForExecution: vi.fn(),
 	channelOptions: undefined as
@@ -69,6 +70,10 @@ vi.mock("@agent-infra/platform-core", () => ({
 		mocks.answerReferences = options.answerReferences;
 		return { dispatch: mocks.dispatch };
 	},
+	createWecomQueueNoticeV1: () => ({
+		noted: vi.fn(),
+		tick: mocks.queueNoticeTick,
+	}),
 	createWecomProgressV1: (options: typeof mocks.progressOptions) => {
 		mocks.progressOptions = options;
 		return { tick: mocks.progressTick };
@@ -83,6 +88,7 @@ vi.mock("./wecom-connections.js", () => ({
 		return {
 			tick: mocks.connectionsTick,
 			close: mocks.connectionsClose,
+			updater: { update: vi.fn(async () => "sent") },
 			sender: {
 				send: mocks.connectionsSend,
 				update: mocks.connectionsUpdate,
@@ -660,6 +666,36 @@ it.each([
 		}
 	},
 );
+
+// #3376：排队提示与回复批次一起推进；提示失败不影响最终回复的投递结果。
+it("ticks long-connection queue notices with every reply batch", async () => {
+	const worker = createPlatformWecomWorkerV1({
+		databaseUrl: "postgres://fixture",
+		identity: {
+			resolveSender: async () => null,
+			activeUsers: async () => [],
+		},
+		observe: () => {},
+		sender: { send: async () => "failed" },
+		connections: {
+			bindings: async () => [],
+			protectReply: async () => "fixture",
+			revealReply: async () => {
+				throw new Error("unused");
+			},
+		},
+	});
+	try {
+		mocks.dispatch.mockResolvedValue(false);
+		mocks.queueNoticeTick.mockResolvedValueOnce(true);
+		expect(await worker.dispatch()).toBe(true);
+		mocks.queueNoticeTick.mockRejectedValueOnce(new Error("notice failed"));
+		expect(await worker.dispatch()).toBe(false);
+		expect(mocks.queueNoticeTick).toHaveBeenCalledTimes(2);
+	} finally {
+		await worker.close();
+	}
+});
 
 // #3377：流式进度只经长连接回复路由覆盖更新；回调模式只发送终态回复。
 it("drives streaming progress only through long-connection reply routes (#3377)", async () => {

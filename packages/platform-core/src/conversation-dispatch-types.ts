@@ -328,6 +328,14 @@ export interface ConversationDispatchStorePortV1 {
 		readonly errorCode: string;
 		readonly transition: ConversationDispatchStateTransitionV1;
 	}): Promise<boolean>;
+	/**
+	 * #3375：补充指令转入排队（工程 Spec §12.5）。在同一 Conversation 锁事务内，把本补充指令及
+	 * 同一 Execution 之后仍待投递的补充指令按原顺序转为排队消息；排队已满或期限不足的部分按投递
+	 * 失败终结。租约不再属于本次认领时返回 false。未装配时按原规则标记“原回复已结束”。
+	 */
+	queueSupplement?(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}): Promise<boolean>;
 }
 
 export interface ConversationDispatchAuthorityV1 {

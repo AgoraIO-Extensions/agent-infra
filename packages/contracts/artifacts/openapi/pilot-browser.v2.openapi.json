@@ -4787,6 +4787,12 @@
             },
             "type": "array"
           },
+          "queue": {
+            "items": {
+              "$ref": "#/components/schemas/QueuedMessageStateV2"
+            },
+            "type": "array"
+          },
           "schemaVersion": {
             "const": 2,
             "type": "number"
@@ -6271,6 +6277,77 @@
         ],
         "type": "object"
       },
+      "NativeCapabilityInvocationRequestV3": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilityId": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "directoryRevision": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "type": "string"
+          },
+          "parameters": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "requestId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 3,
+            "type": "number"
+          },
+          "selection": {
+            "additionalProperties": false,
+            "properties": {
+              "modelOptionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "reasoningLevel": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "modelOptionId",
+              "reasoningLevel"
+            ],
+            "type": "object"
+          },
+          "traceId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "capabilityId",
+          "directoryRevision",
+          "parameters",
+          "idempotencyKey",
+          "requestId",
+          "traceId",
+          "schemaVersion",
+          "selection"
+        ],
+        "type": "object"
+      },
       "NativeCapabilityInvocationResponseV1": {
         "anyOf": [
           {
@@ -7434,7 +7511,8 @@
                   "DELEGATED_RESULT_REJECTED",
                   "ORIGINAL_RESPONSE_NOT_STARTED",
                   "ORIGINAL_RESPONSE_ALREADY_FINISHED",
-                  "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED"
+                  "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
+                  "QUEUE_FULL"
                 ],
                 "type": "string"
               },
@@ -7689,6 +7767,118 @@
           "schemaVersion",
           "userId",
           "disabled"
+        ],
+        "type": "object"
+      },
+      "QueuedMessageStateV2": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "messageId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "position": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "status": {
+                "const": "waiting",
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageId",
+              "executionId",
+              "status",
+              "position"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "messageId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "const": "withdrawn",
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageId",
+              "executionId",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "messageId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "const": "timed_out",
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageId",
+              "executionId",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "messageId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "reason": {
+                "enum": [
+                  "AGENT_UNAVAILABLE",
+                  "CONVERSATION_UNAVAILABLE",
+                  "AUTHORIZATION_REVOKED"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "const": "cancelled",
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageId",
+              "executionId",
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          }
         ],
         "type": "object"
       },
@@ -10836,6 +11026,27 @@
                 },
                 "required": [
                   "status"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "WITHDRAWN",
+                      "AUTHORIZATION_REVOKED"
+                    ],
+                    "type": "string"
+                  },
+                  "status": {
+                    "const": "cancelled",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status",
+                  "reason"
                 ],
                 "type": "object"
               }
@@ -19107,6 +19318,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/NativeCapabilityInvocationRequestV2"
+                  },
+                  {
+                    "$ref": "#/components/schemas/NativeCapabilityInvocationRequestV3"
                   }
                 ]
               }

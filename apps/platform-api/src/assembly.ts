@@ -796,10 +796,11 @@ export function assemblePlatformApi(
 					identity: input.identity,
 					buildRequest: async ({ conversationId, body }) => ({
 						...body,
-						schemaVersion: 1 as const,
 						conversationId,
 					}),
 					admitWithIdentity: async ({ identity, request, requestContext }) => {
+						// The legacy metadata/admission pipeline cannot authorize V3.
+						if (request.schemaVersion === 3) return { outcome: "unsupported" };
 						const metadata =
 							nativeCapabilityMetadata ??
 							createDefaultNativeCapabilityMetadata?.(identity, requestContext);
@@ -1193,21 +1194,28 @@ export function assemblePlatformApi(
 			browserCommands: browserCommandAdmission,
 			...(modelSelection ? { modelSelection } : {}),
 			commands: (identity) =>
-				createConversationExecutionUseCaseV1({
-					transaction: conversationTransaction,
-					authorization: {
-						async authorize(request) {
-							const decision = await conversationAuthorization.authorize(
-								identity,
-								request,
-							);
-							return decision.outcome === "unavailable" ||
-								decision.outcome === "revoked"
-								? { outcome: "denied" }
-								: decision;
+				createConversationExecutionUseCaseV1(
+					{
+						transaction: conversationTransaction,
+						authorization: {
+							async authorize(request) {
+								const decision = await conversationAuthorization.authorize(
+									identity,
+									request,
+								);
+								return decision.outcome === "unavailable" ||
+									decision.outcome === "revoked"
+									? { outcome: "denied" }
+									: decision;
+							},
 						},
 					},
-				}),
+					// Web 排队与任务 API 共用 Agent 等待容量（工程 Spec §12.5）。
+					{
+						maximumWaitingTasksPerAgent:
+							input.taskAdmissionPolicy.maximumWaitingTasksPerAgent,
+					},
+				),
 			query: conversationQuery,
 			eventWake: conversationEventWake,
 			recent: createRecentPersonalConversationsUseCaseV1({

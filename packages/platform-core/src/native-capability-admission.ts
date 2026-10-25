@@ -72,6 +72,18 @@ export type NativeCapabilityAdmissionRequest =
 	| NativeCapabilityAdmissionRequestV1
 	| NativeCapabilityAdmissionRequestV2;
 
+/** Public V3 input; service-owned operation and Key bindings are absent. */
+export type NativeCapabilityAdmissionRequestV3 = Readonly<
+	Omit<NativeCapabilityAdmissionRequestV1, "schemaVersion"> & {
+		schemaVersion: 3;
+		selection: Readonly<{
+			schemaVersion: 1;
+			modelOptionId: string;
+			reasoningLevel: string;
+		}>;
+	}
+>;
+
 export interface NativeCapabilityAdmissionCapabilityV1
 	extends NativeCapabilityMetadataV1 {
 	readonly directoryRevision: string;
@@ -440,6 +452,43 @@ export function parseNativeCapabilityAdmissionRequestV2(
 		idempotencyKey: value.idempotencyKey,
 		requestId: text(value.requestId),
 		traceId: text(value.traceId),
+	});
+}
+
+export function parseNativeCapabilityAdmissionRequestV3(
+	input: unknown,
+): NativeCapabilityAdmissionRequestV3 {
+	const value = exactObject(input, [
+		"schemaVersion",
+		"conversationId",
+		"capabilityId",
+		"directoryRevision",
+		"parameters",
+		"selection",
+		"idempotencyKey",
+		"requestId",
+		"traceId",
+	]);
+	if (value.schemaVersion !== 3) invalidInput();
+	const { selection: selected, ...request } = value;
+	const base = parseNativeCapabilityAdmissionRequestV1({
+		...request,
+		schemaVersion: 1,
+	});
+	const selection = exactObject(selected, [
+		"schemaVersion",
+		"modelOptionId",
+		"reasoningLevel",
+	]);
+	if (selection.schemaVersion !== 1) invalidInput();
+	return Object.freeze({
+		...base,
+		schemaVersion: 3,
+		selection: Object.freeze({
+			schemaVersion: 1,
+			modelOptionId: text(selection.modelOptionId),
+			reasoningLevel: text(selection.reasoningLevel),
+		}),
 	});
 }
 

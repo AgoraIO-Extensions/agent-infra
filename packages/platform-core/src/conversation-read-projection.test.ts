@@ -263,3 +263,151 @@ describe("Conversation read projection", () => {
 		).toThrow();
 	});
 });
+
+describe("queued message projection (#3376)", () => {
+	const at = (minute: number) => new Date(`2026-10-25T00:0${minute}:00.000Z`);
+	const user = (
+		messageId: string,
+		executionId: string,
+		minute: number,
+		status = "submitted",
+		failureCode: string | null = null,
+	) => ({
+		messageId,
+		text: messageId,
+		executionId,
+		status,
+		failureCode,
+		createdAt: at(minute),
+	});
+	const execution = (
+		executionId: string,
+		status: string,
+		minute: number,
+		taskWaitOrder: number | null,
+	) => ({
+		executionId,
+		conversationId: "conversation",
+		sourceMessageId: `message_${executionId}`,
+		status,
+		createdAt: at(minute),
+		updatedAt: at(minute),
+		traceId: `trace_${executionId}`,
+		taskWaitOrder,
+	});
+
+	it("derives positions from the persisted wait order and omits queued replies", () => {
+		const projected = projectConversationMessagesV1({
+			messages: [
+				user("message_active", "active", 1),
+				user("message_second", "second", 2),
+				user("message_third", "third", 3),
+			],
+			executions: [
+				execution("active", "processing", 1, null),
+				// Agent 内共用的顺序空间：其他会话占用过的顺序不影响本会话位次。
+				execution("second", "waiting", 2, 41),
+				execution("third", "waiting", 3, 57),
+			],
+			events: [],
+		});
+		expect(
+			projected.map(({ messageId, role, status, queue }) => ({
+				messageId,
+				role,
+				status,
+				queue,
+			})),
+		).toEqual([
+			{
+				messageId: "message_active",
+				role: "user",
+				status: "submitted",
+				queue: undefined,
+			},
+			{
+				messageId: "message_second",
+				role: "user",
+				status: "submitted",
+				queue: { status: "waiting", position: 1 },
+			},
+			{
+				messageId: "message_third",
+				role: "user",
+				status: "submitted",
+				queue: { status: "waiting", position: 2 },
+			},
+		]);
+	});
+
+	it.each([
+		["TASK_WAIT_TIMEOUT", "failed", { status: "timed_out" }],
+		["WITHDRAWN", "cancelled", { status: "withdrawn" }],
+		["TASK_CANCELLED", "cancelled", { status: "withdrawn" }],
+		[
+			"AGENT_UNAVAILABLE",
+			"failed",
+			{ status: "cancelled", reason: "AGENT_UNAVAILABLE" },
+		],
+		[
+			"CONVERSATION_UNAVAILABLE",
+			"failed",
+			{ status: "cancelled", reason: "CONVERSATION_UNAVAILABLE" },
+		],
+		[
+			"AUTHORIZATION_REVOKED",
+			"failed",
+			{ status: "cancelled", reason: "AUTHORIZATION_REVOKED" },
+		],
+	])(
+		"projects a queued message ended by %s without an assistant reply",
+		(failureCode, status, queue) => {
+			const projected = projectConversationMessagesV1({
+				messages: [user("message_queued", "queued", 1, "failed", failureCode)],
+				executions: [
+					execution(
+						"queued",
+						failureCode === "WITHDRAWN" ||
+							failureCode === "TASK_CANCELLED" ||
+							failureCode === "AUTHORIZATION_REVOKED"
+							? "cancelled"
+							: "failed",
+						1,
+						7,
+					),
+				],
+				events: [],
+			});
+			expect(projected).toHaveLength(1);
+			expect(projected[0]).toMatchObject({
+				role: "user",
+				status,
+				queue,
+				failureCode:
+					status === "cancelled"
+						? null
+						: failureCode === "AUTHORIZATION_REVOKED"
+							? "AUTHORIZATION_REVOKED"
+							: "EXECUTION_FAILED",
+			});
+		},
+	);
+
+	it("drops the queue state once the queued message started", () => {
+		const [message] = projectConversationMessagesV1({
+			messages: [user("message_queued", "queued", 1)],
+			executions: [execution("queued", "processing", 1, 7)],
+			events: [],
+		});
+		expect(message?.queue).toBeUndefined();
+	});
+
+	it("projects a waiting execution detail as submitted", () => {
+		expect(
+			projectConversationExecutionV1({
+				execution: execution("queued", "waiting", 1, 7),
+				events: [],
+			}).status,
+		).toBe("submitted");
+	});
+});

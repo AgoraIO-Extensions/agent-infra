@@ -3685,6 +3685,113 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the pinned bounded queue additions in their reviewed hosts (#3376)", async () => {
+		type Schema = Record<string, unknown>;
+		type Document = {
+			paths: Record<string, unknown>;
+			components: { schemas: Record<string, Schema> };
+		};
+		const read = async (name: string) =>
+			JSON.parse(
+				await readFile(
+					new URL(`../artifacts/openapi/${name}`, import.meta.url),
+					"utf8",
+				),
+			) as Document;
+		const withdrawal = "/api/v1/conversations/{conversationId}/withdrawals";
+		const removeQueue = (document: Document) => {
+			const schemas = document.components.schemas;
+			const payload = (
+				schemas.TaskStatusEventV1 as {
+					properties: { payload: { anyOf: unknown[] } };
+				}
+			).properties.payload;
+			payload.anyOf = payload.anyOf.slice(0, -1);
+			delete schemas.WithdrawCommandRequestV1;
+			delete schemas.WithdrawalAcceptedProjectionV1;
+			delete schemas.QueuedMessageStateV2;
+			delete document.paths[withdrawal];
+			const detail = schemas.ConversationDetailProjectionV2 as
+				| { properties: Record<string, unknown> }
+				| undefined;
+			if (detail) delete detail.properties.queue;
+		};
+		const directory = await mkdtemp(resolve(tmpdir(), "agent-infra-queue-"));
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			for (const [name, mutations] of [
+				[
+					"pilot-browser.v1.openapi.json",
+					[
+						(document: Document) => {
+							(
+								document.components.schemas.WithdrawalAcceptedProjectionV1 as {
+									properties: { status: { enum: string[] } };
+								}
+							).properties.status.enum.push("unbounded");
+						},
+						(document: Document) => {
+							document.components.schemas.TaskStatusEventV1 = JSON.parse(
+								JSON.stringify(
+									document.components.schemas.TaskStatusEventV1,
+								).replace("WITHDRAWN", "UNBOUNDED_REASON"),
+							);
+						},
+						(document: Document) => {
+							(
+								document.paths[withdrawal] as {
+									post: { operationId: string };
+								}
+							).post.operationId = "unreviewed";
+						},
+					],
+				],
+				[
+					"pilot-browser.v2.openapi.json",
+					[
+						(document: Document) => {
+							document.components.schemas.QueuedMessageStateV2 = {
+								type: "object",
+							};
+						},
+						(document: Document) => {
+							(
+								document.components.schemas.ConversationDetailProjectionV2 as {
+									required: string[];
+								}
+							).required.push("queue");
+						},
+						(document: Document) => {
+							document.components.schemas.SseEventIdV1 = {
+								anyOf: [
+									document.components.schemas.SseEventIdV1,
+									{ $ref: "#/components/schemas/QueuedMessageStateV2" },
+								],
+							};
+						},
+					],
+				],
+			] as const) {
+				const current = await read(name);
+				const previous = structuredClone(current);
+				removeQueue(previous);
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				expect(comparePaths(previousPath, currentPath).status).toBe(1);
+				for (const mutate of mutations) {
+					const changed = structuredClone(current);
+					mutate(changed);
+					await writeFile(currentPath, JSON.stringify(changed));
+					expect(comparePaths(currentPath, previousPath).status).toBe(1);
+				}
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the pinned reasoning events in their reviewed hosts (#2979)", async () => {
 		type Schema = Record<string, unknown>;
 		type Document = { components: { schemas: Record<string, Schema> } };
@@ -5733,6 +5840,68 @@ it("admits only the appended multi-service resource cap error code (#2396)", asy
 	};
 	restore(previous);
 	const directory = await mkdtemp(resolve(tmpdir(), "cap-error-compat-"));
+	const before = resolve(directory, "previous.json");
+	const after = resolve(directory, "current.json");
+	try {
+		await writeFile(before, JSON.stringify(previous));
+		await writeFile(after, JSON.stringify(current));
+		expect(comparePaths(after, before).status).toBe(0);
+		// 同时删除既有错误码仍是破坏性变更。
+		const narrowed = structuredClone(current);
+		const removeExisting = (value: unknown) => {
+			if (!value || typeof value !== "object") return;
+			const object = value as Record<string, unknown>;
+			if (Array.isArray(object.enum) && object.enum.includes(code))
+				object.enum = object.enum.filter(
+					(entry) => entry !== "MODEL_SELECTION_INVALID",
+				);
+			for (const child of Object.values(object)) removeExisting(child);
+		};
+		removeExisting(narrowed);
+		await writeFile(after, JSON.stringify(narrowed));
+		expect(comparePaths(after, before).status).toBe(1);
+		// 基线已有该错误码时，删除它会被检测到。
+		await writeFile(before, JSON.stringify(current));
+		await writeFile(after, JSON.stringify(previous));
+		expect(comparePaths(after, before).status).toBe(1);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+it("admits only the appended queue-full error code (#3375)", async () => {
+	const code = "QUEUE_FULL";
+	const current = JSON.parse(
+		await readFile(
+			new URL(
+				"../artifacts/openapi/pilot-browser.v2.openapi.json",
+				import.meta.url,
+			),
+			"utf8",
+		),
+	);
+	const enums: string[][] = [];
+	const collect = (value: unknown) => {
+		if (!value || typeof value !== "object") return;
+		const object = value as Record<string, unknown>;
+		if (Array.isArray(object.enum) && object.enum.includes(code))
+			enums.push(object.enum as string[]);
+		for (const child of Object.values(object)) collect(child);
+	};
+	collect(current);
+	expect(enums.length).toBeGreaterThan(0);
+	const previous = structuredClone(current);
+	const restore = (value: unknown) => {
+		if (!value || typeof value !== "object") return;
+		const object = value as Record<string, unknown>;
+		if (Array.isArray(object.enum))
+			object.enum = object.enum.filter((entry) => entry !== code);
+		for (const child of Object.values(object)) restore(child);
+	};
+	restore(previous);
+	const directory = await mkdtemp(
+		resolve(tmpdir(), "queue-full-error-compat-"),
+	);
 	const before = resolve(directory, "previous.json");
 	const after = resolve(directory, "current.json");
 	try {

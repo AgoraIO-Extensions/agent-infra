@@ -834,6 +834,7 @@ export type ConversationDetailProjectionV2 = {
         status: 'failed';
         text: string;
     }>;
+    queue?: Array<QueuedMessageStateV2>;
     schemaVersion: 2;
     sessionAvailability?: 'preparing' | 'ready' | 'unavailable' | 'updating';
 };
@@ -1103,6 +1104,21 @@ export type NativeCapabilityInvocationRequestV2 = {
     traceId: string;
 };
 
+export type NativeCapabilityInvocationRequestV3 = {
+    capabilityId: string;
+    directoryRevision: string;
+    idempotencyKey: string;
+    parameters: string;
+    requestId: string;
+    schemaVersion: 3;
+    selection: {
+        modelOptionId: string;
+        reasoningLevel: string;
+        schemaVersion: 1;
+    };
+    traceId: string;
+};
+
 export type NativeCapabilityInvocationResponseV1 = {
     outcome: 'accepted' | 'replayed';
     result: NativeCapabilityInvocationResultV1;
@@ -1320,7 +1336,7 @@ export type PilotProtocolErrorV1 = {
     schemaVersion: 1;
     traceId: string;
 } | {
-    code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED' | 'MULTI_SERVICE_RESOURCE_CAP_EXCEEDED';
+    code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED' | 'MULTI_SERVICE_RESOURCE_CAP_EXCEEDED' | 'QUEUE_FULL';
     message: string;
     retryable: false;
     schemaVersion: 1;
@@ -1370,6 +1386,26 @@ export type PlatformUserDisableStatusV1 = {
     disabled: boolean;
     schemaVersion: 1;
     userId: string;
+};
+
+export type QueuedMessageStateV2 = {
+    executionId: string;
+    messageId: string;
+    position: number;
+    status: 'waiting';
+} | {
+    executionId: string;
+    messageId: string;
+    status: 'withdrawn';
+} | {
+    executionId: string;
+    messageId: string;
+    status: 'timed_out';
+} | {
+    executionId: string;
+    messageId: string;
+    reason: 'AGENT_UNAVAILABLE' | 'CONVERSATION_UNAVAILABLE' | 'AUTHORIZATION_REVOKED';
+    status: 'cancelled';
 };
 
 export type ReasoningDeltaEventV2 = {
@@ -1954,6 +1990,9 @@ export type TaskStatusEventV1 = {
     } | {
         reason?: 'STOP_CONFIRMATION_TIMEOUT';
         status: 'unknown';
+    } | {
+        reason: 'WITHDRAWN' | 'AUTHORIZATION_REVOKED';
+        status: 'cancelled';
     };
     schemaVersion: 1;
     sequence: number;
@@ -5448,7 +5487,7 @@ export type ReadConversationNativeMetadataV1Responses = {
 export type ReadConversationNativeMetadataV1Response = ReadConversationNativeMetadataV1Responses[keyof ReadConversationNativeMetadataV1Responses];
 
 export type InvokeNativeCapabilityV1Data = {
-    body: NativeCapabilityInvocationRequestV1 | NativeCapabilityInvocationRequestV2;
+    body: NativeCapabilityInvocationRequestV1 | NativeCapabilityInvocationRequestV2 | NativeCapabilityInvocationRequestV3;
     path: {
         conversationId: string;
     };

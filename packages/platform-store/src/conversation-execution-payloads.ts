@@ -36,6 +36,63 @@ export function parseExecution(value: unknown) {
 		"createdAt",
 	]);
 	if (input.status !== "submitted") unavailable();
+	return executionFields(input, "submitted");
+}
+
+/** 排队消息的等待 Execution：必须带 Agent 内等待顺序与期限（§12.5）。 */
+export function parseQueuedExecution(value: unknown) {
+	const input = exactRecord(value, [
+		"executionId",
+		"conversationId",
+		"agentId",
+		"actorId",
+		"channelId",
+		"turnId",
+		"status",
+		"sessionGeneration",
+		"deliveryFence",
+		"authorizationRevision",
+		"modelConfigurationRevision",
+		"modelOptionId",
+		"reasoningLevel",
+		"createdAt",
+		"taskWaitOrder",
+		"taskWaitDeadline",
+	]);
+	if (input.status !== "waiting") unavailable();
+	return {
+		...executionFields(input, "waiting"),
+		taskWaitOrder: safeInteger(input.taskWaitOrder, 1),
+		taskWaitDeadline: date(input.taskWaitDeadline),
+	};
+}
+
+export function parseQueueStatusEvent(value: unknown) {
+	const input = exactRecord(value, [
+		"eventId",
+		"sequence",
+		"conversationCursor",
+		"event",
+	]);
+	const event = exactRecord(input.event, ["type", "status"]);
+	if (
+		input.sequence !== 1 ||
+		event.type !== "task.status" ||
+		event.status !== "waiting"
+	)
+		unavailable();
+	return {
+		eventId: text(input.eventId),
+		sequence: 1 as const,
+		conversationCursor: safeInteger(input.conversationCursor, 1),
+		event: { type: "task.status" as const, status: "waiting" as const },
+	};
+}
+
+function executionFields<Status extends "submitted" | "waiting">(
+	input: Record<string, unknown>,
+	status: Status,
+) {
 	return {
 		executionId: text(input.executionId),
 		conversationId: text(input.conversationId),
@@ -43,7 +100,7 @@ export function parseExecution(value: unknown) {
 		actorId: text(input.actorId),
 		channelId: text(input.channelId),
 		turnId: text(input.turnId),
-		status: "submitted" as const,
+		status,
 		sessionGeneration: safeInteger(input.sessionGeneration, 1),
 		deliveryFence: safeInteger(input.deliveryFence, 0),
 		authorizationRevision: text(input.authorizationRevision),
@@ -150,7 +207,8 @@ export function parseMessageAudit(value: unknown) {
 	]);
 	if (
 		input.action !== "conversation.message.accepted" &&
-		input.action !== "conversation.message.supplemented"
+		input.action !== "conversation.message.supplemented" &&
+		input.action !== "conversation.message.queued"
 	) {
 		return unavailable();
 	}

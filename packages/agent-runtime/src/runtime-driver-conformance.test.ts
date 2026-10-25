@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,10 +6,12 @@ import type {
 	RuntimeSelectionV1,
 	RuntimeSubmitTurnRequestV1,
 	RuntimeSubmitTurnRequestV2,
+	RuntimeSupplementRequestV1,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openCodexRuntimeDriverConformanceFixture } from "./codex-runtime-driver.test-support.js";
 import type { RuntimeDriver } from "./driver.js";
+import { RuntimeHostError } from "./errors.js";
 import {
 	ingressVerifiedRuntimeHost,
 	runtimeGrantFixture,
@@ -50,7 +52,19 @@ interface ConformanceDriverFixture {
 	delegatedToolWasDeniedAndRedacted(
 		response?: "driver" | "unexpected-success",
 	): Promise<boolean>;
+	/** #3375：已提交到原生侧的补充指令次数；只有声明补充指令能力的 Driver 提供。 */
+	supplementCount?(): Promise<number>;
+	/** #3375：下一次补充指令已被原生侧接受，但结果在传输中丢失。 */
+	loseNextSupplementResponse?(): void;
 }
+
+/**
+ * #3375：通过补充指令 Conformance、可以声明 `supplementaryInstruction` 的 Driver。其他
+ * Driver 完成同等 Conformance 之前保持 false（Runtime HLD §4、§5）。
+ */
+const supplementDriverNames = ["Fake", "Codex"] as const;
+/** Fake 补充指令计数跨 restart 保留，与 Codex 原生侧状态一致。 */
+const fakeSupplementCounts = new Map<string, { value: number }>();
 
 async function openConformanceDriver(
 	name: (typeof driverNames)[number],
@@ -74,8 +88,31 @@ async function openConformanceDriver(
 		let signalPreStartEvent: (() => void) | undefined;
 		let releaseDriverResult: (() => void) | undefined;
 		const turnSelections: RuntimeSelectionV1[] = [];
-		driver.execute = async (command) => {
-			const record = await execute(command);
+		const supplements = fakeSupplementCounts.get(path) ?? { value: 0 };
+		fakeSupplementCounts.set(path, supplements);
+		let loseNextSupplement = false;
+		driver.execute = async (command, context) => {
+			const before =
+				command.kind === "supplement"
+					? await driver.lookupOperation(command)
+					: undefined;
+			const record = await execute(command, context);
+			if (command.kind === "supplement") {
+				if (before?.state === "missing" && record.result.outcome === "accepted")
+					supplements.value += 1;
+				if (loseNextSupplement) {
+					// 补充已在 Driver 生效，但结果在传输中丢失：之后只能查到结果不明。
+					loseNextSupplement = false;
+					await driver.makeOperationUnknown(command.operationId);
+					throw new RuntimeHostError(
+						"RUNTIME_FAKE_TRANSPORT_LOST",
+						"Fake Runtime response was lost",
+						503,
+						true,
+						"unavailable",
+					);
+				}
+			}
 			if (command.schemaVersion === 2 && record.result.outcome === "accepted") {
 				turnSelections.push(command.selection);
 			}
@@ -136,13 +173,19 @@ async function openConformanceDriver(
 			completeStopAsCancelled: () => undefined,
 			completeStopAsCompleted: (operationId) =>
 				driver.setOperationStatus(operationId, "completed"),
-			createdTurnCount: () => driver.sideEffectCount(),
+			// Fake 的副作用计数包含补充指令；Turn 数不计入它们。
+			createdTurnCount: async () =>
+				(await driver.sideEffectCount()) - supplements.value,
 			turnSelections: () => structuredClone(turnSelections),
 			rejectNextSelectedTurn: () => undefined,
 			restart: () => openConformanceDriver(name, path),
 			makeOperationUnknown: (operationId) =>
 				driver.makeOperationUnknown(operationId),
 			delegatedToolWasDeniedAndRedacted: async () => false,
+			supplementCount: async () => supplements.value,
+			loseNextSupplementResponse: () => {
+				loseNextSupplement = true;
+			},
 		};
 	}
 	const fixture = await openCodexRuntimeDriverConformanceFixture(
@@ -187,6 +230,8 @@ function wrapCodexFixture(
 		makeOperationUnknown: async () => undefined,
 		delegatedToolWasDeniedAndRedacted: (response) =>
 			fixture.delegatedToolWasDeniedAndRedacted(response),
+		supplementCount: async () => fixture.steerCount(),
+		loseNextSupplementResponse: () => fixture.loseNextSteerResponse(),
 	};
 }
 
@@ -278,6 +323,40 @@ function submitRequestV2(
 	};
 }
 
+/** #3375：绑定 submitRequest 原 Execution/Turn 的补充指令；messageId 即 Driver operationId。 */
+function supplementRequest(
+	request: RuntimeSubmitTurnRequestV1,
+	hostSessionRef: string,
+	requestId: string,
+	overrides: Partial<RuntimeSupplementRequestV1> = {},
+): RuntimeSupplementRequestV1 {
+	const context = requestContext(request, hostSessionRef, requestId);
+	return {
+		...context,
+		executionDeliveryFence: 1,
+		messageId: "message-conformance",
+		input: { text: "synthetic-conformance-supplement", attachments: [] },
+		grant: runtimeGrantFixture(context, ["turn.supplement"]),
+		...overrides,
+	};
+}
+
+const supplementNotActive = {
+	outcome: "rejected",
+	code: "RUNTIME_TURN_NOT_ACTIVE",
+	message: "Runtime turn is no longer active",
+	retryable: false,
+} as const;
+
+function requireSupplementFixture(fixture: ConformanceDriverFixture) {
+	const { supplementCount, loseNextSupplementResponse } = fixture;
+	if (!supplementCount || !loseNextSupplementResponse)
+		throw new Error("Driver fixture cannot observe supplementary instructions");
+	return {
+		supplementCount: supplementCount.bind(fixture),
+		loseNextSupplementResponse: loseNextSupplementResponse.bind(fixture),
+	};
+}
 afterEach(async () => {
 	await Promise.all(driverClosers.splice(0).map((close) => close()));
 	await Promise.all(
@@ -825,7 +904,259 @@ describe("Runtime Driver shared conformance", () => {
 	);
 });
 
+describe("Runtime Driver supplementary instruction conformance (#3375)", () => {
+	it.each(driverNames)(
+		"declares supplementary instructions only after this conformance through %s",
+		async (name) => {
+			const path = await directory();
+			const fixture = await openConformanceDriver(
+				name,
+				join(path, "driver.json"),
+			);
+			expect(
+				(await fixture.driver.getCapabilities()).supplementaryInstruction,
+			).toBe((supplementDriverNames as readonly string[]).includes(name));
+		},
+		30_000,
+	);
+
+	it.each(supplementDriverNames)(
+		"delivers one supplementary instruction into the running Turn through %s",
+		async (name) => {
+			const path = await directory();
+			const fixture = await openConformanceDriver(
+				name,
+				join(path, "driver.json"),
+			);
+			const { supplementCount } = requireSupplementFixture(fixture);
+			const host = await openConformanceHost(
+				join(path, "host.json"),
+				fixture.driver,
+			);
+			const request = submitRequest();
+			const submitted = await host.submitTurn(request);
+			const supplement = supplementRequest(
+				request,
+				submitted.hostSessionRef,
+				"request-conformance-supplement",
+			);
+
+			const accepted = await host.supplement(supplement);
+
+			expect(accepted).toEqual({
+				schemaVersion: 1,
+				hostSessionRef: submitted.hostSessionRef,
+				operationId: "message-conformance",
+				result: { outcome: "accepted", status: "running" },
+			});
+			// 同一 messageId 的重复投递与 fence 接管都返回原结果，不再追加。
+			expect(
+				await host.supplement({
+					...supplement,
+					requestId: "request-conformance-supplement-replay",
+				}),
+			).toEqual(accepted);
+			expect(
+				await host.supplement({
+					...supplement,
+					requestId: "request-conformance-supplement-takeover",
+					deliveryFence: 2,
+				}),
+			).toEqual(accepted);
+			expect(await supplementCount()).toBe(1);
+			expect(await fixture.createdTurnCount()).toBe(1);
+		},
+	);
+
+	it.each(supplementDriverNames)(
+		"rejects a supplementary instruction after the Turn was stopped through %s",
+		async (name) => {
+			const path = await directory();
+			const fixture = await openConformanceDriver(
+				name,
+				join(path, "driver.json"),
+			);
+			const { supplementCount } = requireSupplementFixture(fixture);
+			const host = await openConformanceHost(
+				join(path, "host.json"),
+				fixture.driver,
+			);
+			const request = submitRequest();
+			const submitted = await host.submitTurn(request);
+			const context = requestContext(
+				request,
+				submitted.hostSessionRef,
+				"request-conformance-supplement-stop",
+			);
+			fixture.completeStopAsCancelled();
+			expect(
+				await host.stop({
+					...context,
+					executionDeliveryFence: 1,
+					stopRequestId: "stop-conformance-supplement",
+					grant: runtimeGrantFixture(context, ["turn.stop"]),
+				}),
+			).toMatchObject({ result: { outcome: "accepted", status: "cancelled" } });
+			const supplement = supplementRequest(
+				request,
+				submitted.hostSessionRef,
+				"request-conformance-late-supplement",
+			);
+
+			const rejected = await host.supplement(supplement);
+
+			expect(rejected.result).toEqual(supplementNotActive);
+			expect(
+				await host.supplement({
+					...supplement,
+					requestId: "request-conformance-late-supplement-replay",
+				}),
+			).toEqual(rejected);
+			expect(await supplementCount()).toBe(0);
+		},
+	);
+
+	it.each(supplementDriverNames)(
+		"never resubmits a supplementary instruction whose acceptance was lost through %s",
+		async (name) => {
+			const path = await directory();
+			const hostPath = join(path, "host.json");
+			const fixture = await openConformanceDriver(
+				name,
+				join(path, "driver.json"),
+			);
+			const { supplementCount, loseNextSupplementResponse } =
+				requireSupplementFixture(fixture);
+			const host = await openConformanceHost(hostPath, fixture.driver);
+			const request = submitRequest();
+			const submitted = await host.submitTurn(request);
+			const supplement = supplementRequest(
+				request,
+				submitted.hostSessionRef,
+				"request-conformance-lost-supplement",
+			);
+			loseNextSupplementResponse();
+
+			const lost = await host.supplement(supplement).then(
+				(response) => response.result,
+				() => undefined,
+			);
+			expect(lost === undefined || lost.outcome === "unknown").toBe(true);
+			expect(
+				(
+					await host.supplement({
+						...supplement,
+						requestId: "request-conformance-lost-supplement-retry",
+						deliveryFence: 2,
+					})
+				).result,
+			).toEqual({
+				outcome: "unknown",
+				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+				message: "Runtime command acceptance could not be confirmed",
+			});
+			expect(await supplementCount()).toBe(1);
+
+			const restarted = await fixture.restart();
+			const restartedHost = await openConformanceHost(
+				hostPath,
+				restarted.driver,
+			);
+			const recovered = await restartedHost.supplement({
+				...supplement,
+				requestId: "request-conformance-lost-supplement-recovered",
+				deliveryFence: 3,
+			});
+			// 恢复只能凭原生证据确认 accepted；无法证明时保持 unknown，不推断为 rejected。
+			expect(["accepted", "unknown"]).toContain(recovered.result.outcome);
+			expect(await requireSupplementFixture(restarted).supplementCount()).toBe(
+				1,
+			);
+		},
+	);
+});
+
 describe("Codex Driver boundary conformance", () => {
+	it("maps a native steer refusal to one stable redacted rejection", async () => {
+		const path = await directory();
+		const driverPath = join(path, "driver.json");
+		const codex = await openCodexRuntimeDriverConformanceFixture(driverPath);
+		const fixture = wrapCodexFixture(codex);
+		const host = await openConformanceHost(
+			join(path, "host.json"),
+			fixture.driver,
+		);
+		const request = submitRequest();
+		const submitted = await host.submitTurn(request);
+		const supplement = supplementRequest(
+			request,
+			submitted.hostSessionRef,
+			"request-conformance-native-steer-refusal",
+		);
+		codex.rejectNextSteer();
+
+		const rejected = await host.supplement(supplement);
+
+		expect(rejected.result).toEqual(supplementNotActive);
+		expect(
+			await host.supplement({
+				...supplement,
+				requestId: "request-conformance-native-steer-refusal-replay",
+			}),
+		).toEqual(rejected);
+		expect(codex.steerCount()).toBe(1);
+		const persisted = `${JSON.stringify(rejected)}\n${await readFile(driverPath, "utf8")}`;
+		expect(persisted).not.toContain("cannot steer");
+		expect(persisted).not.toContain("redacted-steer-detail");
+		// 明确拒绝不影响原 Turn。
+		const context = requestContext(
+			request,
+			submitted.hostSessionRef,
+			"request-conformance-native-steer-refusal-status",
+		);
+		expect(
+			await host.status({
+				...context,
+				grant: runtimeGrantFixture(context, ["session.status"]),
+			}),
+		).toMatchObject({ status: "running" });
+	});
+
+	it("confirms a lost steer only from the native userMessage after restart", async () => {
+		const path = await directory();
+		const hostPath = join(path, "host.json");
+		const codex = await openCodexRuntimeDriverConformanceFixture(
+			join(path, "driver.json"),
+		);
+		const fixture = wrapCodexFixture(codex);
+		const host = await openConformanceHost(hostPath, fixture.driver);
+		const request = submitRequest();
+		const submitted = await host.submitTurn(request);
+		const supplement = supplementRequest(
+			request,
+			submitted.hostSessionRef,
+			"request-conformance-lost-steer",
+		);
+		codex.loseNextSteerResponse();
+		expect((await host.supplement(supplement)).result).toMatchObject({
+			outcome: "unknown",
+		});
+
+		const restarted = await fixture.restart();
+		const restartedHost = await openConformanceHost(hostPath, restarted.driver);
+
+		expect(
+			(
+				await restartedHost.supplement({
+					...supplement,
+					requestId: "request-conformance-lost-steer-recovered",
+					deliveryFence: 2,
+				})
+			).result,
+		).toEqual({ outcome: "accepted", status: "running" });
+		expect(codex.steerCount()).toBe(1);
+	});
+
 	it("maps a native selected-Turn refusal to one stable redacted rejection", async () => {
 		const path = await directory();
 		const fixture = await openConformanceDriver(

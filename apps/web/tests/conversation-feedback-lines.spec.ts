@@ -28,7 +28,7 @@ import {
 } from "./primitive-styles";
 
 // #3293 N9-1-01：对话页的状态说明行（会话准备中 / 更新中、原执行结果待核实、自动重新连接）与同区
-// 「不支持补充指令」说明同为 14px / 20px，不继承正文 15px。导出稿没有这些状态，规格见
+// 「发送后排队」说明同为 14px / 20px，不继承正文 15px。导出稿没有这些状态，规格见
 // web-ui.md「对话页状态说明行」。受控 fixture 只返回合成数据，不代表真实 Runtime。
 const agentId = "agent-1";
 const conversationId = "conversation-feedback-1";
@@ -66,7 +66,7 @@ const scenarios: readonly Scenario[] = [
 	},
 	{
 		name: "原执行结果待核实",
-		text: "原执行结果待核实，同会话暂不能发送下一条消息。",
+		text: "原执行结果待核实，核实前新消息只进入排队。",
 		executionStatus: "unknown",
 	},
 	{
@@ -76,8 +76,9 @@ const scenarios: readonly Scenario[] = [
 		streamFailure: true,
 	},
 	{
-		name: "不支持补充指令（同区参照）",
-		text: "当前回复仍在处理，不支持补充指令。草稿会保留。",
+		// #3376：不支持补充指令时，草稿发送后进入排队。
+		name: "发送后排队（同区参照）",
+		text: "当前回复仍在处理，这条消息发送后进入排队，按顺序处理。",
 		executionStatus: "processing",
 		supplementaryInstruction: false,
 		static: true,
@@ -303,7 +304,7 @@ for (const viewport of viewports)
 			await expect(line).toBeVisible();
 			const measured = await measure(line, form);
 			const foreground = await resolved(page, "color", "var(--foreground)");
-			// 同区说明（「不支持补充指令」、模型保存提示）为 text-sm：14px / 20px、400、正文前景色。
+			// 同区说明（发送后排队、模型保存提示）为 text-sm：14px / 20px、400、正文前景色。
 			expect(
 				{
 					fontSize: measured.fontSize,
@@ -326,7 +327,8 @@ for (const viewport of viewports)
 				expect(measured.role).toBeNull();
 				expect(measured.live).toBe(false);
 				const send = page.getByRole("button", { name: "发送", exact: true });
-				await expect(send).toBeDisabled();
+				// #3376：发送不再被拦截，说明告诉用户这条消息会进入排队。
+				await expect(send).toBeEnabled();
 				const id = await line.getAttribute("id");
 				expect(id).toBeTruthy();
 				await expect(send).toHaveAttribute("aria-describedby", id ?? "");

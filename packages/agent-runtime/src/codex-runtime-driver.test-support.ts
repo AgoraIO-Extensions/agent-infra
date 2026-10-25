@@ -28,6 +28,9 @@ type ConformanceTurnStatus =
 interface CodexRuntimeDriverConformanceState {
 	turnStarts: number;
 	turnSelections: { model: string; effort: string }[];
+	/** #3375：原生侧收到的 turn/steer 次数与已接受输入的 clientUserMessageId。 */
+	steers: number;
+	steeredClientIds: string[];
 }
 
 interface CodexRuntimeDriverConformanceFixture {
@@ -39,6 +42,9 @@ interface CodexRuntimeDriverConformanceFixture {
 	turnStartCount(): number;
 	turnSelections(): readonly { model: string; effort: string }[];
 	rejectNextSelectedTurn(): void;
+	steerCount(): number;
+	rejectNextSteer(): void;
+	loseNextSteerResponse(): void;
 	delegatedToolWasDeniedAndRedacted(
 		response?: "driver" | "unexpected-success",
 	): Promise<boolean>;
@@ -57,6 +63,8 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 	private signalTurnStartHeld?: () => void;
 	private delegatedToolResult?: (result: boolean) => void;
 	private rejectNextSelection = false;
+	private rejectNextSteering = false;
+	private loseNextSteering = false;
 
 	constructor(
 		private readonly path: string,
@@ -173,6 +181,42 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 				}
 				this.respond(frame.id, {});
 				return;
+			case "turn/steer": {
+				// #3375：按固定 app-server turn_steer 的 invalid request 语义拒绝或接受。
+				this.state.steers += 1;
+				const params = frame.params as
+					| { expectedTurnId?: unknown; clientUserMessageId?: unknown }
+					| undefined;
+				const refusal = this.rejectNextSteering
+					? "cannot steer a review turn"
+					: this.turnStatus !== "inProgress"
+						? "no active turn to steer"
+						: params?.expectedTurnId !== this.currentTurnId()
+							? `expected active turn id \`${String(params?.expectedTurnId)}\` but found \`${this.currentTurnId()}\``
+							: undefined;
+				this.rejectNextSteering = false;
+				if (refusal) {
+					this.push({
+						id: frame.id,
+						error: {
+							code: -32_600,
+							message: refusal,
+							data: { privateDetail: "redacted-steer-detail" },
+						},
+					});
+					return;
+				}
+				if (typeof params?.clientUserMessageId === "string")
+					this.state.steeredClientIds.push(params.clientUserMessageId);
+				if (this.loseNextSteering) {
+					// 原生侧已接受输入，但响应在传输断开时丢失。
+					this.loseNextSteering = false;
+					await this.close();
+					return;
+				}
+				this.respond(frame.id, { turnId: this.currentTurnId() });
+				return;
+			}
 			case "thread/turns/list":
 				this.respond(frame.id, {
 					data: [
@@ -180,9 +224,25 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 					],
 				});
 				return;
-			case "thread/items/list":
-				this.respond(frame.id, { data: [] });
+			case "thread/items/list": {
+				const params = frame.params as { turnId?: unknown } | undefined;
+				const turnId = this.currentTurnId();
+				this.respond(frame.id, {
+					data:
+						params?.turnId === turnId
+							? this.state.steeredClientIds.map((clientId, index) => ({
+									turnId,
+									item: {
+										id: `item-user-${index}`,
+										type: "userMessage",
+										clientId,
+										content: [],
+									},
+								}))
+							: [],
+				});
 				return;
+			}
 		}
 		throw new Error("Unexpected Codex conformance method");
 	}
@@ -227,6 +287,14 @@ class ConformanceCodexTransport implements TestCodexAppServerTransport {
 
 	rejectNextSelectedTurn() {
 		this.rejectNextSelection = true;
+	}
+
+	rejectNextSteer() {
+		this.rejectNextSteering = true;
+	}
+
+	loseNextSteerResponse() {
+		this.loseNextSteering = true;
 	}
 
 	private currentTurnId() {
@@ -406,6 +474,9 @@ async function openCodexRuntimeDriverConformanceFixtureWithState(
 		turnStartCount: () => state.turnStarts,
 		turnSelections: () => structuredClone(state.turnSelections),
 		rejectNextSelectedTurn: () => transport.rejectNextSelectedTurn(),
+		steerCount: () => state.steers,
+		rejectNextSteer: () => transport.rejectNextSteer(),
+		loseNextSteerResponse: () => transport.loseNextSteerResponse(),
 		delegatedToolWasDeniedAndRedacted: (response) =>
 			transport.delegatedToolWasDeniedAndRedacted(response),
 		close: async () => {
@@ -424,6 +495,6 @@ export function openCodexRuntimeDriverConformanceFixture(
 	return openCodexRuntimeDriverConformanceFixtureWithState(
 		path,
 		loseTurnStartResponse,
-		{ turnStarts: 0, turnSelections: [] },
+		{ turnStarts: 0, turnSelections: [], steers: 0, steeredClientIds: [] },
 	);
 }

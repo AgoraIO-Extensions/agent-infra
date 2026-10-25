@@ -13,7 +13,7 @@ import {
 } from "@agent-infra/platform-store";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-
+import { createPlatformApp } from "./app.js";
 import { assemblePlatformApi } from "./assembly.js";
 import {
 	deploymentDiagnosticV1,
@@ -223,6 +223,54 @@ describe("Platform API production assembly", () => {
 		});
 		expect(assembly.dependencies.nativeMetadataCurrent?.check).toBeDefined();
 		expect(assembly.dependencies.nativeCapabilityInvocation).toBeDefined();
+		const invocation = assembly.dependencies.nativeCapabilityInvocation;
+		if (!invocation) throw new Error("missing native invocation assembly");
+		const inputBody = {
+			capabilityId: "a".repeat(64),
+			directoryRevision: "b".repeat(64),
+			parameters: "",
+			idempotencyKey: "invoke-version",
+			requestId: "request-version",
+			traceId: "trace-version",
+		};
+		const withFiles = {
+			...inputBody,
+			schemaVersion: 2 as const,
+			attachments: ["file-1"],
+		};
+		expect(
+			await invocation.buildRequest({
+				identity,
+				conversationId: "conversation",
+				body: withFiles,
+			}),
+		).toEqual({ ...withFiles, conversationId: "conversation" });
+		const stateful = {
+			...inputBody,
+			schemaVersion: 3 as const,
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "model-1",
+				reasoningLevel: "high",
+			},
+		};
+		expect(
+			await invocation.buildRequest({
+				identity,
+				conversationId: "conversation",
+				body: stateful,
+			}),
+		).toEqual({ ...stateful, conversationId: "conversation" });
+		const response = await createPlatformApp(assembly.dependencies).request(
+			"/api/v2/conversations/conversation/native-capability/invoke",
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(stateful),
+			},
+		);
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ outcome: "unsupported" });
 		await assembly.close();
 		let override: ReturnType<typeof assemblePlatformApi> | undefined;
 		try {
