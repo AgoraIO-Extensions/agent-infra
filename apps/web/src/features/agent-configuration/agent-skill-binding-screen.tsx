@@ -274,9 +274,17 @@ function AgentSkillBindings({
 		)
 			? 2000
 			: false;
+	// 同步轮询的每一次绑定读取一并重读 Agent 详情：Runtime 装配摘要在 Agent 投影里。随绑定读取发起而不是另设
+	// 定时器，两者同一节奏，绑定轮询停止（全部进入终态，或不可重试地失败）时 Agent 重读随之停止。
+	const refreshAgent = useRef(onRefreshAgent);
+	refreshAgent.current = onRefreshAgent;
+	const settlingRef = useRef(false);
 	const bindings = useQuery({
 		queryKey,
-		queryFn: () => readBindings(agent.agentId, agentVersion),
+		queryFn: () => {
+			if (settlingRef.current) refreshAgent.current?.();
+			return readBindings(agent.agentId, agentVersion);
+		},
 		retry: false,
 		// 轮询以最近一次读到的绑定判断（#3418）：可重试的失败（503、网络中断）之后按原节奏继续，
 		// 不可重试的失败（401 / 403 / 404 / 409、响应无效）停止（#3433 N15-01）。
@@ -293,8 +301,8 @@ function AgentSkillBindings({
 		binding,
 		view: skillBindingView(binding, runtimeSkills),
 	}));
-	// 轮询时一并重读 Agent 详情：Runtime 装配摘要在 Agent 投影里。绑定读取不可重试地失败后两者一起停止。
-	const settling =
+	// 绑定仍在同步、轮询继续时（与 refetchInterval 同一判断），下一次绑定读取一并重读 Agent。
+	settlingRef.current =
 		pollWhileShown(
 			{
 				state: {
@@ -306,13 +314,6 @@ function AgentSkillBindings({
 			isRetryableSkillError,
 			settlingInterval,
 		) !== false;
-	const refreshAgent = useRef(onRefreshAgent);
-	refreshAgent.current = onRefreshAgent;
-	useEffect(() => {
-		if (!settling) return;
-		const timer = window.setInterval(() => refreshAgent.current?.(), 2000);
-		return () => window.clearInterval(timer);
-	}, [settling]);
 	// 某项首次变为对话可用时给一次 Toast。
 	const usable = new Set(
 		views
