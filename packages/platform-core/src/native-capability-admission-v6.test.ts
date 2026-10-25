@@ -67,9 +67,15 @@ it.each([
 	"capabilityId",
 	"directoryRevision",
 	"parametersDigest",
+	"parameters",
 ])("rejects a V6 request missing %s before Store admission", (field) => {
 	const value = { ...request } as Record<string, unknown>;
 	delete value[field];
+	expect(() => parseNativeCapabilityAdmissionRequestV6(value)).toThrow();
+});
+
+it("rejects a valid-looking but incorrect parameters digest", () => {
+	const value = { ...request, parametersDigest: "a".repeat(64) };
 	expect(() => parseNativeCapabilityAdmissionRequestV6(value)).toThrow();
 });
 

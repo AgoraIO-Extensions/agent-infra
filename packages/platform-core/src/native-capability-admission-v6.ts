@@ -77,11 +77,15 @@ export function parseNativeCapabilityAdmissionRequestV6(
 	input: unknown,
 ): NativeCapabilityAdmissionRequestV6 {
 	const request = RuntimeNativeCapabilityRequestV6Schema.parse(input);
+	const computedParametersDigest = createHash("sha256")
+		.update(request.parameters)
+		.digest("hex");
 	if (
 		request.capabilityKind !== "command" ||
 		!digestPattern.test(request.capabilityId) ||
 		!digestPattern.test(request.directoryRevision) ||
 		!digestPattern.test(request.parametersDigest) ||
+		request.parametersDigest !== computedParametersDigest ||
 		request.operation.kind !== "execution" ||
 		request.operation.id !== request.executionId ||
 		request.operation.deliveryFence !== request.operation.executionDeliveryFence
