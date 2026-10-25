@@ -9,6 +9,7 @@ import {
 	type SessionSandboxRuntimeInputV1,
 	sessionSandboxServiceTokenV1,
 } from "../session-workload-adapter.js";
+import { containerBoundaryAttestationV1 } from "../container-boundary-attestation.js";
 import type { WorkloadRuntimeAuthV1 } from "../workload-runtime-auth.js";
 
 /** Synthetic deployment token; Sandboxes only ever receive tokens derived from it. */
@@ -99,6 +100,7 @@ export function sessionSandboxRuntimeInputFixture(input: {
 	readonly agentId: string;
 	readonly namespace: string;
 	readonly sandboxId: string;
+	readonly sessionId?: string;
 	readonly imageDigest?: string;
 	readonly codexContainerBoundaryEnabled?: boolean;
 }): SessionSandboxRuntimeInputV1 {
@@ -110,7 +112,17 @@ export function sessionSandboxRuntimeInputFixture(input: {
 	return {
 		driver: "codex",
 		...(input.codexContainerBoundaryEnabled === true
-			? { codexContainerBoundaryEnabled: true }
+			? {
+					codexContainerBoundaryEnabled: true,
+					codexContainerBoundaryAttestation: containerBoundaryAttestationV1(
+						sessionSandboxServiceTokenV1(
+							sessionSandboxDeploymentTokenFixture,
+							input.namespace,
+							input.sandboxId,
+						),
+						`${input.agentId}\0${input.sessionId ?? "session-a"}`,
+					),
+				}
 			: {}),
 		modelConfiguration: runtimeModelInjectionV4(projection).configuration,
 		workerId: sessionSandboxRuntimeAuthFixture.workerId,

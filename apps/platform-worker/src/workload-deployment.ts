@@ -54,8 +54,6 @@ export interface WorkloadRuntimeProbeAuthorizationV1 {
 export interface ProductionWorkloadWorkerInputV1 {
 	readonly databaseUrl: string;
 	readonly workerId: string;
-	/** Deployment-owned service token used only to create Pod attestation values. */
-	readonly codexContainerBoundaryServiceToken?: string;
 	readonly kubernetes:
 		| { readonly mode: "in-cluster" }
 		| {
@@ -237,12 +235,6 @@ export async function createProductionWorkloadWorkerOptionsV1(
 		});
 		signal.throwIfAborted();
 		return {
-			...(input.codexContainerBoundaryServiceToken !== undefined
-				? {
-						codexContainerBoundaryServiceToken:
-							input.codexContainerBoundaryServiceToken,
-					}
-				: {}),
 			databaseUrl: input.databaseUrl,
 			workerId: input.workerId,
 			policy: structuredClone(input.policy),

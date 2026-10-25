@@ -1865,7 +1865,16 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 		);
 		expect(
 			env.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION")?.value,
-		).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		).toBeUndefined();
+		expect(
+			env.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION")?.valueFrom,
+		).toEqual({
+			secretKeyRef: {
+				name: allocation.secretName,
+				key: "container-boundary-attestation",
+				optional: false,
+			},
+		});
 		expect(env.get("PORT")?.value).toBe("8080");
 		for (const [name, key] of [
 			["AGENT_INFRA_RUNTIME_MODEL_CONFIG", "model-config"],
@@ -1896,6 +1905,7 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			},
 		});
 		expect(Object.keys(secret.data ?? {}).sort()).toEqual([
+			"container-boundary-attestation",
 			"model-config",
 			"token",
 		]);

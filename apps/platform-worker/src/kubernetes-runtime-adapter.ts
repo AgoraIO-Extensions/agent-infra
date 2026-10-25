@@ -300,7 +300,6 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		modelInjection,
 		standardTemplateBinding,
 		egress,
-		containerBoundaryServiceToken: options.containerBoundaryServiceToken,
 	});
 
 	async function put<T extends KubernetesObject>(

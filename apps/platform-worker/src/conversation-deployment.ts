@@ -27,6 +27,7 @@ import {
 import type { V1Secret, V1Service } from "@kubernetes/client-node";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
+import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import {
 	bindSessionSandboxCustomSecretMaterializationV1,
@@ -672,6 +673,19 @@ function createSessionSandboxAllocationResolverV1(
 				? {
 						codexContainerBoundaryEnabled:
 							workload.policy.codexContainerBoundaryEnabled === true,
+						...(workload.policy.codexContainerBoundaryEnabled === true
+							? {
+									codexContainerBoundaryAttestation:
+										containerBoundaryAttestationV1(
+											sessionSandboxServiceTokenV1(
+												options.serviceToken,
+												policy.namespace,
+												binding.sandboxId,
+											),
+											`${deployment.agentId}\0${binding.sessionId}`,
+										),
+								}
+							: {}),
 					}
 				: {}),
 			modelConfiguration: runtimeModelInjectionV4(projection).configuration,

@@ -31,7 +31,6 @@ import {
 	runtimeConnectionConsumerSnapshotForAgentV1,
 	runtimeConnectionInstallationRevisionForAgentV1,
 } from "./connection-consumer-projection.js";
-import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import type { KubernetesWorkloadPolicyV1 } from "./kubernetes-runtime-adapter.js";
 import {
@@ -121,7 +120,6 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		| undefined;
 	readonly egress: ReturnType<typeof workloadEgressRulesV1>;
 	/** Deployment-owned service token, retained in Worker memory only. */
-	readonly containerBoundaryServiceToken?: string;
 }) {
 	const {
 		policy,
@@ -232,30 +230,6 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 			...(injection?.env ?? []),
 			...(runtimeDriver
 				? [{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtimeDriver }]
-				: []),
-			...(runtimeDriver === "codex" &&
-			policy.codexContainerBoundaryEnabled === true
-				? [
-						{
-							name: "AGENT_INFRA_RUNTIME_ISOLATION_MODE",
-							value: "container-boundary",
-						},
-						{
-							name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED",
-							value: "worker-v1",
-						},
-						{
-							name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE",
-							value: value.agentId,
-						},
-						{
-							name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION",
-							value: containerBoundaryAttestationV1(
-								dependencies.containerBoundaryServiceToken ?? "",
-								value.agentId,
-							),
-						},
-					]
 				: []),
 			...(skillHubRuntime ? [skillHubRuntime] : []),
 			...runtimeAuth,
