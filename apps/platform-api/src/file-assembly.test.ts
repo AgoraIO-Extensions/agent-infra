@@ -25,6 +25,8 @@ function createAssemblyFixture() {
 	const state = {
 		revoked: false,
 		channelId: "web",
+		/** 会话实际所在渠道；未设置时不按渠道区分（#3432）。 */
+		conversationChannelId: undefined as string | undefined,
 		limitsUnavailable: false,
 		// #3276：执行当前的 Sandbox 分配；null 表示 Agent 级执行。
 		sandbox: null as
@@ -48,6 +50,7 @@ function createAssemblyFixture() {
 		agentIds: ["other-agent"],
 	};
 	const credentialReads: unknown[] = [];
+	const authorizedChannels: string[] = [];
 	const assembled = assemblePlatformFilesV1({
 		databaseUrl: "postgres://unused:unused@127.0.0.1:1/unused",
 		sandboxCredentials: {
@@ -83,24 +86,44 @@ function createAssemblyFixture() {
 			return { agent: limits, channel: limits, deployment: limits };
 		},
 		conversationAuthorization: {
-			authorize: async (identity) => ({
-				outcome: "allowed",
-				authority: {
-					schemaVersion: 1,
-					actorId: identity.userId,
-					agentId: "agent",
-					channelId: state.channelId,
-					authorizationRevision: "auth-1",
-					supportsSupplementaryInstruction: false,
-				},
-			}),
+			// 与生产装配一致：按调用方给出的渠道查找会话；渠道不符时找不到会话（#3432）。
+			authorize: async (identity, _request, channelId = "web") => {
+				authorizedChannels.push(channelId);
+				if (
+					state.conversationChannelId !== undefined &&
+					channelId !== state.conversationChannelId
+				)
+					return { outcome: "denied" };
+				return {
+					outcome: "allowed",
+					authority: {
+						schemaVersion: 1,
+						actorId: identity.userId,
+						agentId: "agent",
+						channelId: state.channelId,
+						authorizationRevision: "auth-1",
+						supportsSupplementaryInstruction: false,
+					},
+				};
+			},
 		},
 	});
-	return { assembled, keys, mapping, otherMapping, state, credentialReads };
+	return {
+		assembled,
+		keys,
+		mapping,
+		otherMapping,
+		state,
+		credentialReads,
+		authorizedChannels,
+	};
 }
 
 /** Legacy V1 Execution Grant used by `/internal/v1/files/exchange`. */
-function v1Grant(keys: ReturnType<typeof createAssemblyFixture>["keys"]) {
+function v1Grant(
+	keys: ReturnType<typeof createAssemblyFixture>["keys"],
+	channelId = "web",
+) {
 	const claims = {
 		schemaVersion: 1,
 		issuer: "platform-runtime",
@@ -110,7 +133,7 @@ function v1Grant(keys: ReturnType<typeof createAssemblyFixture>["keys"]) {
 		grantId: "grant",
 		actorId: "alice",
 		agentId: "agent",
-		channelId: "web",
+		channelId,
 		conversationId: "conversation",
 		executionId: "execution",
 		turnId: "turn",
@@ -193,6 +216,48 @@ it("accepts only this Sandbox's derived token for a Sandbox-bound execution (#32
 					exchange.authenticate(bearer(token), grant),
 				).rejects.toThrow("File exchange denied");
 		}
+	} finally {
+		await assembled.close();
+	}
+});
+
+it("authorizes execution-bound access in the execution's own channel and browser access only in Web (#3432)", async () => {
+	const { assembled, keys, mapping, state, authorizedChannels } =
+		createAssemblyFixture();
+	state.sandbox = null;
+	const wecom = "wecom_bot:bot";
+	try {
+		const exchange = assembled.dependencies.exchange;
+		if (!exchange) throw new Error("Exchange missing");
+		// 企微会话的执行按企微渠道核对，读取本执行允许的附件。
+		state.channelId = wecom;
+		state.conversationChannelId = wecom;
+		const accepted = await exchange.authenticate(
+			bearer(mapping.token),
+			v1Grant(keys, wecom),
+		);
+		expect(
+			await accepted.authorization.authorize("conversation", "read"),
+		).toMatchObject({
+			channelId: wecom,
+			execution: { executionId: "execution", channelId: wecom },
+		});
+		expect(authorizedChannels.at(-1)).toBe(wecom);
+		// 浏览器访问不能借执行期参数进入非 Web 会话：始终按 Web 渠道查找，找不到即拒绝。
+		const browser = assembled.dependencies.authorization(
+			new Request("http://platform/api/v1/conversations/conversation/files"),
+		);
+		expect(await browser.authorize("conversation", "read")).toBeNull();
+		expect(authorizedChannels.at(-1)).toBe("web");
+		// 执行声称的渠道与会话实际渠道不一致时拒绝。
+		state.conversationChannelId = "web";
+		const mismatched = await exchange.authenticate(
+			bearer(mapping.token),
+			v1Grant(keys, wecom),
+		);
+		expect(
+			await mismatched.authorization.authorize("conversation", "read"),
+		).toBeNull();
 	} finally {
 		await assembled.close();
 	}

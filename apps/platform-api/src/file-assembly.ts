@@ -223,6 +223,7 @@ export function assemblePlatformFilesV1(input: {
 				);
 				if (execution && identity.userId !== execution.actorId)
 					return deny("authorize");
+				// #3432：执行期访问按该执行的渠道核对当前授权（企微等非 Web 会话）；浏览器访问只走 Web。
 				const allowed = await input.conversationAuthorization.authorize(
 					identity,
 					{
@@ -233,6 +234,7 @@ export function assemblePlatformFilesV1(input: {
 								? "message"
 								: "conversation.read",
 					},
+					execution?.channelId ?? "web",
 				);
 				if (allowed.outcome !== "allowed") return deny("authorize");
 				const scope = {
