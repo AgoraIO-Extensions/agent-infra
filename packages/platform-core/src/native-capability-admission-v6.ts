@@ -4,11 +4,30 @@ import { isDeepStrictEqual } from "node:util";
 import {
 	type RuntimeNativeCapabilityRequestV6,
 	RuntimeNativeCapabilityRequestV6Schema,
-	runtimeOperationDigestInputV6,
 } from "@agent-infra/contracts/runtime";
 import { conversationExecutionSourceV1 } from "./conversation-execution-types.js";
+import {
+	type NativeCapabilityAdmissionRequestV3,
+	parseNativeCapabilityAdmissionRequestV3,
+} from "./native-capability-admission.js";
 
 const digestPattern = /^[a-f0-9]{64}$/u;
+type NativeCapabilityRuntimeInputV6 = Omit<
+	RuntimeNativeCapabilityRequestV6,
+	"grant"
+>;
+const runtimeInputSchema = RuntimeNativeCapabilityRequestV6Schema.omit({
+	grant: true,
+});
+
+function parseRuntimeInput(input: unknown): NativeCapabilityRuntimeInputV6 {
+	if (typeof input === "object" && input !== null && "grant" in input) {
+		const { grant: _grant, ...binding } =
+			RuntimeNativeCapabilityRequestV6Schema.parse(input);
+		return binding;
+	}
+	return runtimeInputSchema.parse(input);
+}
 
 /** Store-owned input for the V6 stateful command admission transaction. */
 export type NativeCapabilityAdmissionRequestV6 = Readonly<{
@@ -118,7 +137,8 @@ export type NativeCapabilityAdmissionV6Decision =
 
 export interface NativeCapabilityAdmissionTransactionPortV6 {
 	admitNativeCapabilityV6(input: {
-		readonly runtimeRequest: RuntimeNativeCapabilityRequestV6;
+		readonly runtimeRequest: NativeCapabilityRuntimeInputV6;
+		readonly invocation: NativeCapabilityAdmissionRequestV3;
 		readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
 		readonly request: NativeCapabilityAdmissionRequestV6;
 		readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
@@ -140,7 +160,10 @@ export interface NativeCapabilityAdmissionV6AuthorizationPort {
 }
 
 export interface NativeCapabilityAdmissionUseCaseV6 {
-	admit(input: unknown): Promise<NativeCapabilityAdmissionV6Decision>;
+	admit(
+		input: unknown,
+		invocation: unknown,
+	): Promise<NativeCapabilityAdmissionV6Decision>;
 }
 
 function canonical(value: unknown): unknown {
@@ -157,12 +180,21 @@ function canonical(value: unknown): unknown {
 
 export function parseNativeCapabilityAdmissionRequestV6(
 	input: unknown,
+	publicInput: unknown,
 ): NativeCapabilityAdmissionRequestV6 {
-	const request = RuntimeNativeCapabilityRequestV6Schema.parse(input);
+	const request = parseRuntimeInput(input);
+	const invocation = parseNativeCapabilityAdmissionRequestV3(publicInput);
 	const computedParametersDigest = createHash("sha256")
 		.update(request.parameters)
 		.digest("hex");
 	if (
+		invocation.conversationId !== request.conversationId ||
+		invocation.capabilityId !== request.capabilityId ||
+		invocation.directoryRevision !== request.directoryRevision ||
+		invocation.parameters !== request.parameters ||
+		!isDeepStrictEqual(invocation.selection, request.selection) ||
+		invocation.requestId !== request.requestId ||
+		invocation.traceId !== request.traceId ||
 		request.capabilityKind !== "command" ||
 		!digestPattern.test(request.capabilityId) ||
 		!digestPattern.test(request.directoryRevision) ||
@@ -190,7 +222,7 @@ export function parseNativeCapabilityAdmissionRequestV6(
 		modelOptionId: request.selection.modelOptionId,
 		reasoningLevel: request.selection.reasoningLevel,
 		configVersion: request.configVersion,
-		idempotencyKey: request.executionId,
+		idempotencyKey: invocation.idempotencyKey,
 		requestId: request.requestId,
 		traceId: request.traceId,
 	});
@@ -199,22 +231,45 @@ export function parseNativeCapabilityAdmissionRequestV6(
 export function nativeCapabilityAdmissionRequestDigestV6(
 	request: NativeCapabilityAdmissionRequestV6,
 ): string {
-	const { requestId: _requestId, traceId: _traceId, ...business } = request;
+	// Public input + authorization scope identify admission. Resolved config,
+	// Key and allocated operation IDs belong only to the frozen operation.
+	const {
+		requestId: _requestId,
+		traceId: _traceId,
+		capabilitySourceVersion: _sourceVersion,
+		parametersDigest: _parametersDigest,
+		configVersion: _configVersion,
+		...business
+	} = request;
 	return createHash("sha256")
-		.update(JSON.stringify(canonical(business)))
+		.update(JSON.stringify(canonical({ ...business, schemaVersion: 3 })))
 		.digest("hex");
 }
 
 export function nativeCapabilityOperationDigestV6(
-	request: RuntimeNativeCapabilityRequestV6,
+	input: NativeCapabilityRuntimeInputV6,
 ): string {
+	const {
+		requestId: _requestId,
+		traceId: _traceId,
+		parameters: _parameters,
+		operation,
+		...frozen
+	} = parseRuntimeInput(input);
 	return createHash("sha256")
-		.update(JSON.stringify(canonical(runtimeOperationDigestInputV6(request))))
+		.update(
+			JSON.stringify(
+				canonical({
+					...frozen,
+					operation: { kind: operation.kind, id: operation.id },
+				}),
+			),
+		)
 		.digest("hex");
 }
 
 function runtimeAuthorityMatches(
-	request: RuntimeNativeCapabilityRequestV6,
+	request: NativeCapabilityRuntimeInputV6,
 	authority: NativeCapabilityAdmissionV6AuthorityBinding,
 	keyBinding: NativeCapabilityAdmissionV6KeyBinding,
 ): boolean {
@@ -255,7 +310,7 @@ function freezePlan<T>(value: T): T {
 }
 
 function frozenPlanV6(
-	runtimeRequest: RuntimeNativeCapabilityRequestV6,
+	runtimeRequest: NativeCapabilityRuntimeInputV6,
 	request: NativeCapabilityAdmissionRequestV6,
 	authority: NativeCapabilityAdmissionV6AuthorityBinding,
 	keyBinding: NativeCapabilityAdmissionV6KeyBinding,
@@ -310,7 +365,8 @@ function frozenPlanV6(
 export function validateNativeCapabilityInvocationPlanV6(
 	plan: NativeCapabilityInvocationPlanV6,
 	input: {
-		readonly runtimeRequest: RuntimeNativeCapabilityRequestV6;
+		readonly runtimeRequest: NativeCapabilityRuntimeInputV6;
+		readonly invocation: NativeCapabilityAdmissionRequestV3;
 		readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
 		readonly request: NativeCapabilityAdmissionRequestV6;
 		readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
@@ -319,12 +375,10 @@ export function validateNativeCapabilityInvocationPlanV6(
 	},
 ): void {
 	const { request, authority } = input;
-	const runtimeRequest = RuntimeNativeCapabilityRequestV6Schema.parse(
-		input.runtimeRequest,
-	);
+	const runtimeRequest = parseRuntimeInput(input.runtimeRequest);
 	const expected = frozenPlanV6(
 		runtimeRequest,
-		parseNativeCapabilityAdmissionRequestV6(runtimeRequest),
+		parseNativeCapabilityAdmissionRequestV6(runtimeRequest, input.invocation),
 		authority,
 		input.keyBinding,
 	);
@@ -332,7 +386,7 @@ export function validateNativeCapabilityInvocationPlanV6(
 		!runtimeAuthorityMatches(runtimeRequest, authority, input.keyBinding) ||
 		!isDeepStrictEqual(
 			request,
-			parseNativeCapabilityAdmissionRequestV6(runtimeRequest),
+			parseNativeCapabilityAdmissionRequestV6(runtimeRequest, input.invocation),
 		) ||
 		input.requestDigest !== expected.requestDigest ||
 		input.operationDigest !== expected.operationDigest ||
@@ -341,15 +395,73 @@ export function validateNativeCapabilityInvocationPlanV6(
 		throw new TypeError("Native V6 admission plan is invalid");
 }
 
+/** Revalidate a saved operation against the public retry, never a new candidate. */
+export function validateNativeCapabilityReplayPlanV6(
+	plan: NativeCapabilityInvocationPlanV6,
+	input: {
+		readonly invocation: NativeCapabilityAdmissionRequestV3;
+		readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
+		readonly requestDigest: string;
+	},
+): void {
+	const runtimeRequest: NativeCapabilityRuntimeInputV6 = {
+		schemaVersion: 6,
+		requestId: plan.outbox.payload.requestId,
+		traceId: plan.outbox.payload.traceId,
+		principal: plan.principal,
+		executionSource: plan.executionSource,
+		channelId: plan.channelId,
+		agentId: plan.agentId,
+		conversationId: plan.conversationId,
+		executionId: plan.executionId,
+		turnId: plan.turnId,
+		sessionGeneration: plan.sessionGeneration,
+		hostSessionRef: plan.hostSessionRef,
+		operation: plan.operation,
+		keyBinding: plan.keyBinding,
+		capabilityId: plan.capabilityId,
+		capabilityKind: "command",
+		directoryRevision: plan.directoryRevision,
+		parameters: plan.parameters,
+		parametersDigest: plan.parametersDigest,
+		capabilitySourceVersion: plan.capabilitySourceVersion,
+		selection: {
+			schemaVersion: 1,
+			modelOptionId: plan.modelOptionId,
+			reasoningLevel: plan.reasoningLevel,
+		},
+		configVersion: plan.configVersion,
+	};
+	const invocation = {
+		...input.invocation,
+		requestId: runtimeRequest.requestId,
+		traceId: runtimeRequest.traceId,
+	};
+	validateNativeCapabilityInvocationPlanV6(plan, {
+		...input,
+		invocation,
+		runtimeRequest,
+		request: parseNativeCapabilityAdmissionRequestV6(
+			runtimeRequest,
+			invocation,
+		),
+		keyBinding: plan.keyBinding,
+		operationDigest: plan.operationDigest,
+	});
+}
+
 export function createNativeCapabilityAdmissionUseCaseV6(dependencies: {
 	readonly authorization: NativeCapabilityAdmissionV6AuthorizationPort;
 	readonly transaction: NativeCapabilityAdmissionTransactionPortV6;
 }): NativeCapabilityAdmissionUseCaseV6 {
 	return {
-		async admit(input) {
-			const runtimeRequest =
-				RuntimeNativeCapabilityRequestV6Schema.parse(input);
-			const request = parseNativeCapabilityAdmissionRequestV6(runtimeRequest);
+		async admit(input, publicInput) {
+			const invocation = parseNativeCapabilityAdmissionRequestV3(publicInput);
+			const runtimeRequest = parseRuntimeInput(input);
+			const request = parseNativeCapabilityAdmissionRequestV6(
+				runtimeRequest,
+				invocation,
+			);
 			const authorization = await dependencies.authorization.authorize({
 				conversationId: request.conversationId,
 			});
@@ -362,6 +474,7 @@ export function createNativeCapabilityAdmissionUseCaseV6(dependencies: {
 			const plan = frozenPlanV6(runtimeRequest, request, authority, keyBinding);
 			const { requestDigest, operationDigest } = plan;
 			validateNativeCapabilityInvocationPlanV6(plan, {
+				invocation,
 				runtimeRequest,
 				keyBinding,
 				request,
@@ -371,6 +484,7 @@ export function createNativeCapabilityAdmissionUseCaseV6(dependencies: {
 			});
 			return dependencies.transaction.admitNativeCapabilityV6(
 				freezePlan({
+					invocation,
 					runtimeRequest,
 					request,
 					authority,

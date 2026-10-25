@@ -455,6 +455,43 @@ export function parseNativeCapabilityAdmissionRequestV2(
 	});
 }
 
+export function parseNativeCapabilityAdmissionRequestV3(
+	input: unknown,
+): NativeCapabilityAdmissionRequestV3 {
+	const value = exactObject(input, [
+		"schemaVersion",
+		"conversationId",
+		"capabilityId",
+		"directoryRevision",
+		"parameters",
+		"selection",
+		"idempotencyKey",
+		"requestId",
+		"traceId",
+	]);
+	if (value.schemaVersion !== 3) invalidInput();
+	const { selection: selected, ...request } = value;
+	const base = parseNativeCapabilityAdmissionRequestV1({
+		...request,
+		schemaVersion: 1,
+	});
+	const selection = exactObject(selected, [
+		"schemaVersion",
+		"modelOptionId",
+		"reasoningLevel",
+	]);
+	if (selection.schemaVersion !== 1) invalidInput();
+	return Object.freeze({
+		...base,
+		schemaVersion: 3,
+		selection: Object.freeze({
+			schemaVersion: 1,
+			modelOptionId: text(selection.modelOptionId),
+			reasoningLevel: text(selection.reasoningLevel),
+		}),
+	});
+}
+
 export function parseNativeCapabilityAdmissionRequest(
 	input: unknown,
 ): NativeCapabilityAdmissionRequest {

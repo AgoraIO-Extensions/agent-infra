@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import type { RuntimeNativeCapabilityRequestV6 } from "@agent-infra/contracts/runtime";
+import {
+	type RuntimeNativeCapabilityRequestV6,
+	runtimeOperationDigestV6,
+} from "@agent-infra/contracts/runtime";
 
 import { expect, it, vi } from "vitest";
 
@@ -10,7 +13,7 @@ import {
 	type NativeCapabilityAdmissionV6KeyBinding,
 	nativeCapabilityAdmissionRequestDigestV6,
 	nativeCapabilityOperationDigestV6,
-	parseNativeCapabilityAdmissionRequestV6,
+	parseNativeCapabilityAdmissionRequestV6 as parseProjection,
 	validateNativeCapabilityInvocationPlanV6,
 } from "./native-capability-admission-v6.js";
 
@@ -101,6 +104,27 @@ it("changes operation identity when frozen selection or Key binding changes", ()
 	).not.toBe(first);
 });
 
+function publicInvocation(
+	input: unknown = request,
+	idempotencyKey = "public-invocation-1",
+) {
+	const value = input as RuntimeNativeCapabilityRequestV6;
+	return {
+		schemaVersion: 3 as const,
+		conversationId: value.conversationId,
+		capabilityId: value.capabilityId,
+		directoryRevision: value.directoryRevision,
+		parameters: value.parameters,
+		selection: value.selection,
+		idempotencyKey,
+		requestId: value.requestId,
+		traceId: value.traceId,
+	};
+}
+function parseNativeCapabilityAdmissionRequestV6(input: unknown) {
+	return parseProjection(input, publicInvocation(input));
+}
+
 function validPlan() {
 	const runtimeRequest: RuntimeNativeCapabilityRequestV6 =
 		structuredClone(request);
@@ -128,7 +152,7 @@ function validPlan() {
 		executionSource: request.executionSource,
 		operation: { ...request.operation },
 		channelId: authority.channelId,
-		executionId: parsed.idempotencyKey,
+		executionId: runtimeRequest.executionId,
 		turnId: "turn-1",
 		sessionGeneration: authority.sessionGeneration,
 		authorizationRevision: authority.authorizationRevision,
@@ -154,7 +178,7 @@ function validPlan() {
 	const plan = {
 		...binding,
 		outbox: {
-			id: `conversation:native-capability:${parsed.idempotencyKey}`,
+			id: `conversation:native-capability:${runtimeRequest.executionId}`,
 			operation: "conversation.native-capability.invoke.v2" as const,
 			payload: {
 				...binding,
@@ -168,6 +192,7 @@ function validPlan() {
 		authority,
 		plan,
 		input: {
+			invocation: publicInvocation(runtimeRequest),
 			runtimeRequest,
 			keyBinding: structuredClone(binding.keyBinding),
 			request: parsed,
@@ -231,14 +256,18 @@ function admissionHarness() {
 			keyBinding,
 		})),
 	};
+	const internal = createNativeCapabilityAdmissionUseCaseV6({
+		authorization,
+		transaction,
+	});
 	return {
 		authority,
 		keyBinding,
 		transaction,
-		useCase: createNativeCapabilityAdmissionUseCaseV6({
-			authorization,
-			transaction,
-		}),
+		useCase: {
+			admit: (value: unknown, invocation = publicInvocation(value)) =>
+				internal.admit(value, invocation),
+		},
 	};
 }
 it.each([
@@ -297,7 +326,7 @@ it("stores every frozen binding in the outbox without the transport Grant", asyn
 		...binding,
 		requestId: request.requestId,
 		traceId: request.traceId,
-		idempotencyKey: request.executionId,
+		idempotencyKey: publicInvocation().idempotencyKey,
 	});
 	expect(outbox.payload).toMatchObject({
 		principal: request.principal,
@@ -381,4 +410,61 @@ it("rejects undeclared plan fields even when duplicated into the outbox", () => 
 	expect(() =>
 		validateNativeCapabilityInvocationPlanV6(injected, h.input),
 	).toThrow();
+});
+
+it("binds admission to public input instead of newly allocated operation or resolved config", () => {
+	const retry = {
+		...request,
+		executionId: "retry-execution",
+		turnId: "retry-turn",
+		operation: { ...request.operation, id: "retry-execution" },
+		configVersion: "configuration-2",
+		capabilitySourceVersion: "0.154.0",
+		keyBinding: { ...request.keyBinding, version: 2 },
+	};
+	expect(
+		nativeCapabilityAdmissionRequestDigestV6(
+			parseNativeCapabilityAdmissionRequestV6(retry),
+		),
+	).toBe(
+		nativeCapabilityAdmissionRequestDigestV6(
+			parseNativeCapabilityAdmissionRequestV6(request),
+		),
+	);
+	expect(nativeCapabilityOperationDigestV6(retry)).not.toBe(
+		nativeCapabilityOperationDigestV6(request),
+	);
+});
+
+it.each([
+	{ conversationId: "other-conversation" },
+	{ capabilityId: "a".repeat(64) },
+	{ directoryRevision: "a".repeat(64) },
+	{ parameters: "different" },
+	{ selection: { ...request.selection, reasoningLevel: "low" } },
+	{ executionId: "caller-execution" },
+])(
+	"rejects public input that differs from the prepared binding %j",
+	async (change) => {
+		const h = admissionHarness();
+		await expect(
+			h.useCase.admit(request, { ...publicInvocation(), ...change }),
+		).rejects.toThrow();
+		expect(h.transaction.admitNativeCapabilityV6).not.toHaveBeenCalled();
+	},
+);
+
+it("prepares an unsigned plan whose operation digest matches the signed Runtime V6 contract", async () => {
+	const { grant: _grant, ...unsigned } = request;
+	const h = admissionHarness();
+	await h.useCase.admit(unsigned);
+	const sent = h.transaction.admitNativeCapabilityV6.mock.calls[0]?.[0];
+	expect(sent?.runtimeRequest).not.toHaveProperty("grant");
+	expect(sent?.plan.operationDigest).toBe(
+		await runtimeOperationDigestV6(request),
+	);
+});
+
+it("requires an explicit public invocation instead of deriving its idempotency key from an Execution", () => {
+	expect(() => parseProjection(request, undefined)).toThrow();
 });

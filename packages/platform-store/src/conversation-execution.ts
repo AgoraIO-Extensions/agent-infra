@@ -36,6 +36,7 @@ import {
 	type TaskApiChannelV1,
 	type TaskUserDirectoryV1,
 	validateNativeCapabilityInvocationPlanV6,
+	validateNativeCapabilityReplayPlanV6,
 } from "@agent-infra/platform-core";
 import {
 	lockConversation as lockDispatchConversation,
@@ -621,32 +622,10 @@ export class PostgresConversationExecutionTransactionV1
 					typeof payload.traceId !== "string"
 				)
 					return unavailable();
-				// Correlation may change on retry; all frozen business fields must match.
-				const expected = {
-					...input.plan,
-					outbox: {
-						...input.plan.outbox,
-						payload: {
-							...input.plan.outbox.payload,
-							requestId: payload.requestId,
-							traceId: payload.traceId,
-						},
-					},
-				};
-				if (!isDeepStrictEqual(saved, expected))
-					return { outcome: "conflict", reason: "idempotency_conflict" };
-				validateNativeCapabilityInvocationPlanV6(saved, {
-					...input,
-					request: {
-						...input.request,
-						requestId: payload.requestId,
-						traceId: payload.traceId,
-					},
-					runtimeRequest: {
-						...input.runtimeRequest,
-						requestId: payload.requestId,
-						traceId: payload.traceId,
-					},
+				validateNativeCapabilityReplayPlanV6(saved, {
+					invocation: input.invocation,
+					authority: input.authority,
+					requestDigest: input.requestDigest,
 				});
 				return { outcome: "replayed", plan: structuredClone(saved) };
 			}

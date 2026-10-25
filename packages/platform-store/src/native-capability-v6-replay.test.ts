@@ -3,7 +3,7 @@ import type { RuntimeNativeCapabilityRequestV6 } from "@agent-infra/contracts/ru
 import {
 	nativeCapabilityAdmissionRequestDigestV6,
 	nativeCapabilityOperationDigestV6,
-	parseNativeCapabilityAdmissionRequestV6,
+	parseNativeCapabilityAdmissionRequestV6 as parseProjection,
 } from "@agent-infra/platform-core";
 import { beforeEach, expect, it, vi } from "vitest";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.js";
@@ -60,6 +60,27 @@ const request = {
 	configVersion: "configuration-1",
 } as const;
 
+function publicInvocation(
+	input: unknown = request,
+	idempotencyKey = "public-invocation-1",
+) {
+	const value = input as RuntimeNativeCapabilityRequestV6;
+	return {
+		schemaVersion: 3 as const,
+		conversationId: value.conversationId,
+		capabilityId: value.capabilityId,
+		directoryRevision: value.directoryRevision,
+		parameters: value.parameters,
+		selection: value.selection,
+		idempotencyKey,
+		requestId: value.requestId,
+		traceId: value.traceId,
+	};
+}
+function parseNativeCapabilityAdmissionRequestV6(input: unknown) {
+	return parseProjection(input, publicInvocation(input));
+}
+
 function validPlan() {
 	const runtimeRequest: RuntimeNativeCapabilityRequestV6 =
 		structuredClone(request);
@@ -87,7 +108,7 @@ function validPlan() {
 		executionSource: request.executionSource,
 		operation: { ...request.operation },
 		channelId: authority.channelId,
-		executionId: parsed.idempotencyKey,
+		executionId: runtimeRequest.executionId,
 		turnId: "turn-1",
 		sessionGeneration: authority.sessionGeneration,
 		authorizationRevision: authority.authorizationRevision,
@@ -113,7 +134,7 @@ function validPlan() {
 	const plan = {
 		...binding,
 		outbox: {
-			id: `conversation:native-capability:${parsed.idempotencyKey}`,
+			id: `conversation:native-capability:${runtimeRequest.executionId}`,
 			operation: "conversation.native-capability.invoke.v2" as const,
 			payload: {
 				...binding,
@@ -127,6 +148,7 @@ function validPlan() {
 		authority,
 		plan,
 		input: {
+			invocation: publicInvocation(runtimeRequest),
 			runtimeRequest,
 			keyBinding: structuredClone(binding.keyBinding),
 			request: parsed,
@@ -183,7 +205,7 @@ it("returns the saved plan as an independent copy on a same-key replay", async (
 	expect(sql.readMessageState).not.toHaveBeenCalled();
 });
 it.each(["keyVersion", "keyReference", "turn"])(
-	"rejects same-key %s drift instead of returning a new plan",
+	"replays the saved binding when a new candidate changes %s",
 	async (drift) => {
 		const h = replayHarness();
 		if (drift === "keyVersion") {
@@ -218,8 +240,8 @@ it.each(["keyVersion", "keyReference", "turn"])(
 			operationDigest: h.input.operationDigest,
 		};
 		expect(await h.store.admitNativeCapabilityV6(h.input)).toEqual({
-			outcome: "conflict",
-			reason: "idempotency_conflict",
+			outcome: "replayed",
+			plan: h.saved,
 		});
 		expect(h.transaction).not.toHaveBeenCalled();
 	},
@@ -307,6 +329,7 @@ it("replays the original correlation IDs for a retry with fresh request and trac
 	const requestDigest = nativeCapabilityAdmissionRequestDigestV6(parsed);
 	const input = {
 		...h.input,
+		invocation: publicInvocation(runtimeRequest),
 		runtimeRequest,
 		request: parsed,
 		requestDigest,

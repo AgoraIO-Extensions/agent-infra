@@ -71,8 +71,25 @@ function request(executionId = "native-v6-execution") {
 		configVersion: "config-1",
 	};
 }
+type PreparedInput = Omit<ReturnType<typeof request>, "grant">;
+function publicInvocation(
+	input: PreparedInput = request(),
+	idempotencyKey = input.executionId,
+) {
+	return {
+		schemaVersion: 3 as const,
+		conversationId: input.conversationId,
+		capabilityId: input.capabilityId,
+		directoryRevision: input.directoryRevision,
+		parameters: input.parameters,
+		selection: input.selection,
+		idempotencyKey,
+		requestId: input.requestId,
+		traceId: input.traceId,
+	};
+}
 function useCase(currentKey = keyBinding) {
-	return createNativeCapabilityAdmissionUseCaseV6({
+	const internal = createNativeCapabilityAdmissionUseCaseV6({
 		authorization: {
 			authorize: async () => ({
 				outcome: "allowed",
@@ -82,6 +99,10 @@ function useCase(currentKey = keyBinding) {
 		},
 		transaction: store,
 	});
+	return {
+		admit: (input: PreparedInput, invocation = publicInvocation(input)) =>
+			internal.admit(input, invocation),
+	};
 }
 beforeAll(async () => {
 	const local = process.env.V6_ADMISSION_TEST_DATABASE_URL;
@@ -305,3 +326,89 @@ it("denies replay after the Agent authorization revision changes", async () => {
 	});
 	expect(await effects()).toEqual(before);
 });
+
+it("serializes one public idempotency key even when retries allocate different operation IDs", async () => {
+	const one = request("candidate-one");
+	const two = request("candidate-two");
+	const results = await settledAdmissions([
+		useCase().admit(one, publicInvocation(one, "same-public-key")),
+		useCase().admit(two, publicInvocation(two, "same-public-key")),
+	]);
+	expect(results.map((result) => result.outcome).sort()).toEqual([
+		"accepted",
+		"replayed",
+	]);
+	const plans = results.map((result) =>
+		"plan" in result ? result.plan : null,
+	);
+	expect(plans[0]).toEqual(plans[1]);
+	expect(await effects()).toEqual({
+		executions: 1,
+		outbox: 1,
+		idempotency: 1,
+		audit: 1,
+	});
+});
+
+it("returns the original accepted operation after current Key/config and candidate IDs change", async () => {
+	const accepted = await useCase().admit(request());
+	if (accepted.outcome !== "accepted") throw new Error("expected acceptance");
+	const before = await effects();
+	const next = await rotateKey();
+	const retry = {
+		...request("new-candidate"),
+		keyBinding: next,
+		configVersion: "config-2",
+	};
+	expect(
+		await useCase(next).admit(
+			retry,
+			publicInvocation(retry, request().executionId),
+		),
+	).toEqual({ outcome: "replayed", plan: accepted.plan });
+	expect(await effects()).toEqual(before);
+});
+
+it("persists a prepared operation before any transport Grant is created", async () => {
+	const { grant: _grant, ...prepared } = request();
+	const result = await useCase().admit(prepared);
+	expect(result.outcome).toBe("accepted");
+	const [row] =
+		await client`select payload from platform.outbox_items where operation='conversation.native-capability.invoke.v2'`;
+	expect(row?.payload).not.toHaveProperty("grant");
+	expect(JSON.stringify(row?.payload)).not.toContain("controlled.test.grant");
+	expect(await effects()).toEqual({
+		executions: 1,
+		outbox: 1,
+		idempotency: 1,
+		audit: 1,
+	});
+});
+
+it.each(["parameters", "selection"] as const)(
+	"rejects changed public %s under the original idempotency key",
+	async (field) => {
+		expect((await useCase().admit(request())).outcome).toBe("accepted");
+		const before = await effects();
+		const retry =
+			field === "parameters"
+				? {
+						...request("retry"),
+						parameters: "changed",
+						parametersDigest: createHash("sha256")
+							.update("changed")
+							.digest("hex"),
+					}
+				: {
+						...request("retry"),
+						selection: { ...request().selection, reasoningLevel: "low" },
+					};
+		expect(
+			await useCase().admit(
+				retry,
+				publicInvocation(retry, request().executionId),
+			),
+		).toEqual({ outcome: "conflict", reason: "idempotency_conflict" });
+		expect(await effects()).toEqual(before);
+	},
+);
