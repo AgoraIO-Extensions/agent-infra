@@ -2114,6 +2114,13 @@ revoke 超时都不宣称已远端撤销，不替代 Connection 的逐次授权�
 
 平台对话页统一经过 `platform-api`，使用公司登录态、Agent 可用范围和平台 Conversation。自定义 Agent 的自有交互入口不进入 Platform Conversation Contract，历史不互相合并。
 
+个人 Web 最近对话（`GET /api/v2/me/conversations/recent`）在全局 limit 之前，按 Agent 判定当前用户的使用范围和该 Agent 的平台对话渠道资格，只返回资格已确认的 Agent 下本人的 Web Conversation（[PRD §12.2](../prd/PRD-agent-platform-M1.md#122-会话历史)）。
+
+- 某个 Agent 的资格无法确认时，只省略该 Agent 的会话，不让整个列表失败；其余会话照常返回。无法确认的情形包括：缺少 Workload 状态或状态无法解析、Workload 修订与当前配置修订不一致、fence 非法，以及自定义平台入口缺少已验证修订。
+- 被省略的 Agent 必须仍在当前用户的使用范围内，且本人在当前位置之后还有 Web 会话。这些 Agent 的 ID 列在响应的 `unavailableAgentIds` 中，最多 100 个，不附带配置、修订或原因细节。没有被省略的 Agent 时不返回该字段。
+- 无法确认资格的 Agent 不能按已确认处理：它的会话不进入列表，cursor 只在已确认的集合内分页。
+- 当前身份、账号状态、查询或已返回记录校验失败时，整页仍按原错误失败。
+
 ### 14.2 企微
 
 企微 Adapter 位于平台侧，绑定体验以[平台 PRD §10.2](../prd/PRD-agent-platform-M1.md#102-渠道绑定)为准。
