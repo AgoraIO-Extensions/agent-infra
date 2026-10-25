@@ -54,6 +54,8 @@
 		"./json-schema/runtime-configuration.v3": "./artifacts/json-schema/runtime-configuration.v3.schema.json",
 		"./json-schema/runtime.v4": "./artifacts/json-schema/runtime.v4.schema.json",
 		"./json-schema/runtime.v5": "./artifacts/json-schema/runtime.v5.schema.json",
+		"./json-schema/runtime.v6": "./artifacts/json-schema/runtime.v6.schema.json",
+		"./openapi/runtime-host.v6": "./artifacts/openapi/runtime-host.v6.openapi.json",
 		"./json-schema/runtime-configuration.v4": "./artifacts/json-schema/runtime-configuration.v4.schema.json",
 		"./openapi/standard-template-release.v1": "./artifacts/openapi/standard-template-release.v1.openapi.json",
 		"./openapi/standard-template-release.v2": "./artifacts/openapi/standard-template-release.v2.openapi.json",
