@@ -244,7 +244,7 @@ describe("hand-written polls classify a failed read (#3433 N15-02, N15-03)", () 
 	});
 
 	it("stops after other HTTP failures, an explicit non-retryable error and an invalid 2xx response", () => {
-		for (const status of [200, 400, 401, 403, 404, 409])
+		for (const status of [200, 400, 401, 403, 404, 409, 600])
 			expect(retryablePollFailure({ status })).toBe(false);
 		expect(
 			retryablePollFailure({ status: 503, error: { retryable: false } }),

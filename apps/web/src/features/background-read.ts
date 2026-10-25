@@ -202,7 +202,7 @@ export type PollReadFailure = {
 /**
  * 手写轮询（企微配置会话与连接状态）的一次读取失败是否可重试，与 pollWhileShown 同一规则（#3418、#3433）：
  * 没有响应（网络中断）、408 / 429 与 5xx 之后按原节奏继续；服务端标明 `retryable: false`、其余 HTTP 失败
- * （401 / 403 / 404 / 409 等）与读到 2xx 但响应无效时停止。
+ * （401 / 403 / 404 / 409 等，以及 5xx 之外的非标准状态）与读到 2xx 但响应无效时停止。
  */
 export function retryablePollFailure({ status, error }: PollReadFailure) {
 	if (
@@ -212,6 +212,9 @@ export function retryablePollFailure({ status, error }: PollReadFailure) {
 	)
 		return false;
 	return (
-		status === undefined || status === 408 || status === 429 || status >= 500
+		status === undefined ||
+		status === 408 ||
+		status === 429 ||
+		(status >= 500 && status <= 599)
 	);
 }
