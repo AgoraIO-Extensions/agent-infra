@@ -140,6 +140,7 @@ export {
 export * from "./file-reconciliation.js";
 export * from "./idempotency.js";
 export * from "./native-capability-admission.js";
+export * from "./native-capability-admission-v6.js";
 export * from "./personal-api-agent-read.js";
 export * from "./personal-api-credentials.js";
 export * from "./personal-api-task-authorization.js";

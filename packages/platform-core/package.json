@@ -23,6 +23,9 @@
 		"check-types": "tsc --noEmit",
 		"test": "pnpm build && vitest run src"
 	},
+	"dependencies": {
+		"@agent-infra/contracts": "workspace:*"
+	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
 		"@types/node": "catalog:",
