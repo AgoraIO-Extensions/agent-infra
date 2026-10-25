@@ -78,7 +78,22 @@ export type QueryRead = {
 };
 
 /**
- * 查询结果是否按读取失败替换内容：没有结果、失败不可重试，或用户发起的读取失败。
+ * 上一次结果是否是可以继续显示的内容。读取函数把不可重试的失败（登录失效、无权、响应无效）写成
+ * `{ kind: "unavailable" }` 结果：它是读取失败而不是内容，之后的失败按最新一次显示。
+ */
+function shownContent(data: unknown): boolean {
+	return (
+		data !== undefined &&
+		!(
+			typeof data === "object" &&
+			data !== null &&
+			(data as { readonly kind?: unknown }).kind === "unavailable"
+		)
+	);
+}
+
+/**
+ * 查询结果是否按读取失败替换内容：没有可显示的结果、失败不可重试，或用户发起的读取失败。
  * TanStack Query 的重读失败保留上一次的 data（status 为 error），后台重读的可重试失败据此继续显示内容。
  */
 export function readFailed(
@@ -88,7 +103,7 @@ export function readFailed(
 ): boolean {
 	return (
 		query.isError &&
-		(query.data === undefined ||
+		(!shownContent(query.data) ||
 			!retryable(query.error) ||
 			userReadFailed(owner, {
 				contentAt: query.dataUpdatedAt,

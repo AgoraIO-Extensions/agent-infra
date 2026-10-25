@@ -41,6 +41,18 @@ describe("background reads keep shown content (#3387)", () => {
 		});
 		expect(readFailed(background, always)).toBe(false);
 		expect(readFailed(background, never)).toBe(true);
+		// 写成结果的不可重试失败（如 401）不是内容：之后的可重试失败按最新一次显示。
+		expect(
+			readFailed(
+				query({
+					data: { kind: "unavailable", retryable: false },
+					isError: true,
+					dataUpdatedAt: 10,
+					errorUpdatedAt: 20,
+				}),
+				always,
+			),
+		).toBe(true);
 	});
 
 	it("shows a user-initiated failure until content is read again", () => {
