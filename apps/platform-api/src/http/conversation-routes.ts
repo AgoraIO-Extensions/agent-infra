@@ -99,9 +99,14 @@ type AuthorizationDecision =
 	| { readonly outcome: "revoked" };
 
 export interface ConversationAuthorization {
+	/**
+	 * `channelId` 默认 `web`。只有执行期文件访问传入该执行的渠道（已由 Execution Grant 验签并与
+	 * 持久 Conversation、Execution、任务授权记录核对，#3432）；浏览器请求不能选择渠道。
+	 */
 	authorize(
 		identity: IdentityContext,
 		input: AuthorizationInput,
+		channelId?: string,
 	): Promise<AuthorizationDecision>;
 }
 
