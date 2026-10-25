@@ -1142,10 +1142,11 @@ describe("functional conversation screen", () => {
 		await pendingReply();
 		// The receipt re-read opens the stream that carries the persisted failure.
 		await waitFor(() => expect(streams.length).toBe(2));
+		// Runtime 尚未接受原回复时不创建补充指令（ADR-0033 决策 1），空草稿时「发送」禁用。
 		expect(
 			(
 				screen.getByRole("button", {
-					name: "发送补充指令",
+					name: "发送",
 				}) as HTMLButtonElement
 			).disabled,
 		).toBe(true);
@@ -1292,12 +1293,12 @@ describe("functional conversation screen", () => {
 		fireEvent.change(input, {
 			target: { value: "Cannot start a parallel reply" },
 		});
-		// 有进行中的回复时不提供「重新生成」（CH-08 过渡，AC-5）。
+		// 有进行中的回复时不提供「重新生成」（CH-08 过渡，AC-5）；普通消息可以发送并进入排队（PRD 10.5，#3376）。
 		expect(screen.queryByRole("button", { name: /^重新生成/ })).toBeNull();
 		expect(
 			(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
 				.disabled,
-		).toBe(true);
+		).toBe(false);
 		const stop = screen.getByRole("button", { name: "停止回复" });
 		// 「停止回复」在处理中的回复卡内，composer 工具栏里没有（R4-07）。
 		expect(stop.closest("article")?.getAttribute("aria-label")).toBe(
@@ -2835,7 +2836,7 @@ describe("functional conversation screen", () => {
 		const input = await composer();
 		fireEvent.change(input, { target: { value: "Busy draft" } });
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
-		await screen.findByText(/当前回复仍在处理，暂不支持补充指令/);
+		await screen.findByText(/当前会话排队已满，这条消息未发送，草稿已保留/);
 		expect(input.value).toBe("Busy draft");
 		expect(screen.queryByText("Do not render raw error")).toBeNull();
 	});
@@ -3755,7 +3756,7 @@ describe("session context, command feedback and reply cards (design alignment)",
 		expect(input.value).toBe("改写B");
 	});
 
-	it("explains unsupported supplementary instructions only when the draft is blocked by them (R4-07)", async () => {
+	it("explains that a draft sent during an unsupported-supplement reply joins the queue (R4-07, #3376)", async () => {
 		const processing = PersistedConversationEventV2Schema.parse({
 			...event(1),
 			type: "execution.status",
@@ -3770,13 +3771,13 @@ describe("session context, command feedback and reply cards (design alignment)",
 		const input = await composer();
 		await pendingReply("处理中");
 		expect(screen.getByText("正在整理结果…")).toBeTruthy();
-		const hint = "当前回复仍在处理，不支持补充指令。草稿会保留。";
+		const hint = "当前回复仍在处理，这条消息发送后进入排队，按顺序处理。";
 		expect(screen.queryByText(hint)).toBeNull();
 		const send = screen.getByRole("button", { name: "发送" });
 		expect(send.getAttribute("aria-describedby")).toBeNull();
 		fireEvent.change(input, { target: { value: "补充一句" } });
 		const note = screen.getByText(hint);
-		expect((send as HTMLButtonElement).disabled).toBe(true);
+		expect((send as HTMLButtonElement).disabled).toBe(false);
 		expect(send.getAttribute("aria-describedby")).toBe(note.id);
 		// 停止入口只在处理中的回复卡内；composer 内没有。
 		expect(input.closest("form")?.textContent).not.toContain("停止回复");

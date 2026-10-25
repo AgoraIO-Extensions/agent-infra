@@ -647,11 +647,7 @@ function QueuedMessageStatus({
 		);
 	}
 	return (
-		<Alert
-			tone="warn"
-			className="supplement"
-			data-queue-status={state.status}
-		>
+		<Alert tone="warn" className="supplement" data-queue-status={state.status}>
 			<AlertDescription>{text}</AlertDescription>
 			{state.status === "timed_out" && (
 				<AlertAction>

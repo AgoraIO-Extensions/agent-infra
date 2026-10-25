@@ -459,7 +459,10 @@ export function parseWithdrawResult(value: unknown, executionId: string) {
 		return unavailable();
 	return {
 		schemaVersion: 1 as const,
-		status: input.status as "withdrawn" | "already_started" | "already_finished",
+		status: input.status as
+			| "withdrawn"
+			| "already_started"
+			| "already_finished",
 		executionId,
 	};
 }

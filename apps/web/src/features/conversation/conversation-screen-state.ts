@@ -109,8 +109,11 @@ export function queueStates(
 	for (const entry of history?.queue ?? []) {
 		projected.add(entry.executionId);
 		if (entry.status !== "waiting") {
-			const { executionId: _executionId, messageId: _messageId, ...state } =
-				entry;
+			const {
+				executionId: _executionId,
+				messageId: _messageId,
+				...state
+			} = entry;
 			states.set(entry.executionId, state);
 			continue;
 		}

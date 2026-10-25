@@ -1055,7 +1055,7 @@ export class PostgresConversationExecutionTransactionV1
 							plan.kind === "queued"
 								? transaction`'infinity'::timestamptz`
 								: plan.outboxIntent.occurredAt
-						},
+},
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`,
 			);

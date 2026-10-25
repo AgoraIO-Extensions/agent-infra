@@ -3610,7 +3610,11 @@ describe("PostgreSQL bounded message queue (#3376)", () => {
 		traceId: `trace_${key}`,
 		...extra,
 	});
-	const withdrawal = (conversationId: string, executionId: string, key: string) => ({
+	const withdrawal = (
+		conversationId: string,
+		executionId: string,
+		key: string,
+	) => ({
 		schemaVersion: 1 as const,
 		command: "withdraw" as const,
 		conversationId,
@@ -3675,7 +3679,10 @@ describe("PostgreSQL bounded message queue (#3376)", () => {
 				traceId: `trace_${key}`,
 			});
 			if (created.outcome !== "accepted") throw new Error("Expected creation");
-			await markSessionSandboxReadyFixture(client, created.result.conversationId);
+			await markSessionSandboxReadyFixture(
+				client,
+				created.result.conversationId,
+			);
 			return created.result.conversationId;
 		};
 		const accept = async (
@@ -3683,7 +3690,9 @@ describe("PostgreSQL bounded message queue (#3376)", () => {
 			key: string,
 			extra?: { readonly queueDeadlineLimit?: string },
 		) => {
-			const decision = await useCase.accept(message(conversationId, key, extra));
+			const decision = await useCase.accept(
+				message(conversationId, key, extra),
+			);
 			if (decision.outcome !== "accepted") throw new Error("Expected accepted");
 			return decision.result;
 		};
@@ -3905,7 +3914,10 @@ describe("PostgreSQL bounded message queue (#3376)", () => {
 				await client`select status from platform.conversation_executions where execution_id = ${kept.executionId}`,
 			).toEqual([{ status: "unknown" }]);
 		} finally {
-			await Promise.all([queue.transaction.close(), foreign.transaction.close()]);
+			await Promise.all([
+				queue.transaction.close(),
+				foreign.transaction.close(),
+			]);
 		}
 	});
 });

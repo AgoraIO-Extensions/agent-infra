@@ -2954,12 +2954,13 @@ describe("WeCom bounded queue receipts (#3376)", () => {
 				await receive("queue_2"),
 				await receive("queue_3"),
 			];
-			expect(queued.map(({ status, queuePosition }) => [status, queuePosition]))
-				.toEqual([
-					["accepted", 1],
-					["accepted", 2],
-					["accepted", 3],
-				]);
+			expect(
+				queued.map(({ status, queuePosition }) => [status, queuePosition]),
+			).toEqual([
+				["accepted", 1],
+				["accepted", 2],
+				["accepted", 3],
+			]);
 			const busy = await receive("queue_4");
 			expect(busy).toMatchObject({
 				status: "busy",

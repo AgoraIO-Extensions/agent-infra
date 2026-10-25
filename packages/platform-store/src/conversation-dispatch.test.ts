@@ -9881,7 +9881,11 @@ describe("Web bounded queue dispatch (#3376)", () => {
 				message: "failed",
 				failure_code: "TASK_WAIT_TIMEOUT",
 				events: [
-					{ type: "task.status", status: "failed", reason: "TASK_WAIT_TIMEOUT" },
+					{
+						type: "task.status",
+						status: "failed",
+						reason: "TASK_WAIT_TIMEOUT",
+					},
 				],
 			});
 			expect(await dispatchState(queued)).toMatchObject({ status: "failed" });

@@ -446,8 +446,7 @@ export async function finishConversationWaitingTasks(
 					conversationId,
 					executionId,
 				);
-				if (!outbox || !conversation || execution?.status !== "waiting")
-					return;
+				if (!outbox || !conversation || execution?.status !== "waiting") return;
 				await finishWaitingTask(
 					savepoint,
 					{ outbox, conversation, execution },

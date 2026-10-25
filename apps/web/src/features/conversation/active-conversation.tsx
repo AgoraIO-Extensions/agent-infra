@@ -990,7 +990,11 @@ export function ActiveConversation({
 						onExecution={openExecution}
 						onRegenerate={regenerate}
 						canRegenerate={
-							!blocked && !preparing && !commandLocked && !active && !queueWaiting
+							!blocked &&
+							!preparing &&
+							!commandLocked &&
+							!active &&
+							!queueWaiting
 						}
 						regeneratingMessageId={commandLocked ? regenerating : undefined}
 						onResend={(text) => {
