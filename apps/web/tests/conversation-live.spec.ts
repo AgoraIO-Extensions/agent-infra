@@ -2488,3 +2488,95 @@ test("the last timeline exchange ends at the timeline bottom padding when scroll
 	await expectCleanPage(page, errors);
 	expect(await duplicateControlNames(page)).toEqual([]);
 });
+// #3419 N14-11（F14-5）：「重新连接」后事件流仍失败（503），自动重连用尽、连接中断提示与「重新连接」重新出现时，
+// 本次恢复请求仍在进行（reconnect() 等到事件流被接受或自动重连用尽才结束），焦点回到按钮；重连进行中焦点在
+// h1，事件流恢复后仍到 h1（D2-59）。两视口一致；不发送任何写请求。
+test("a reconnect whose stream keeps failing returns focus to 重新连接 when it reappears (#3419 N14-11)", async ({
+	page,
+}, info) => {
+	test.setTimeout(120_000);
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	const agent = AgentProjectionV2Schema.parse({
+		...pilotFakeScenariosV2.starting.response.body,
+		agentId,
+		managementStatus: "available",
+		serviceAvailability: "ready",
+	});
+	let missing = true;
+	let streamFailing = true;
+	let streamReads = 0;
+	let writes = 0;
+	await keepConversationStreamOpen(page);
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		if (route.request().method() !== "GET") writes += 1;
+		const path = new URL(route.request().url()).pathname;
+		if (isFileLimitsRequest(route.request().method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
+		if (path.endsWith("/session"))
+			return route.fulfill({ json: ownerSession() });
+		if (path === `/api/v2/agents/${agentId}`)
+			return route.fulfill({ json: agent });
+		if (path === `/api/v2/conversations/${conversationId}`)
+			return route.fulfill(
+				missing
+					? { status: 404, json: { message: "Synthetic route missing" } }
+					: { json: history(conversationId, []) },
+			);
+		if (path === `/api/v2/conversations/${conversationId}/events`) {
+			streamReads += 1;
+			return route.fulfill(
+				streamFailing
+					? {
+							status: 503,
+							json: {
+								schemaVersion: 1,
+								code: "DEPENDENCY_UNAVAILABLE",
+								message: "Controlled stream failure",
+								retryable: true,
+								traceId: "trace-stream-failure",
+							},
+						}
+					: { contentType: "text/event-stream", body: ": heartbeat\n\n" },
+			);
+		}
+		return route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+	await page.goto(
+		`/agents/${agentId}/conversations?conversation=${conversationId}`,
+	);
+	const reconnect = page.getByRole("button", { name: "重新连接" });
+	const heading = page.getByRole("heading", { level: 1 });
+	await expect(reconnect).toBeVisible();
+	missing = false;
+	await reconnect.focus();
+	await page.keyboard.press("Enter");
+	await expect(reconnect).toHaveCount(0);
+	await expectFocusSettled(heading, "重新连接后（重连进行中）", [30, 150, 400]);
+	await expect(
+		page.getByText("会话连接中断，正在自动重新连接，草稿会保留。"),
+	).toBeVisible();
+	// 自动重连（0.5 + 1 + 2 + 4 + 8 秒）用尽：中断提示与按钮重新出现，焦点回到按钮。
+	await expect(reconnect).toBeVisible({ timeout: 40_000 });
+	expect(streamReads).toBeGreaterThanOrEqual(6);
+	await expectFocusSettled(
+		reconnect,
+		"自动重连用尽、重新连接重新出现后",
+		[50, 300, 1000, 3000],
+	);
+	// 事件流恢复：按钮随提示卸载，焦点到 h1。
+	streamFailing = false;
+	await page.keyboard.press("Enter");
+	await expect(reconnect).toHaveCount(0);
+	await expectFocusSettled(heading, "重新连接成功后", [30, 150, 400, 1000]);
+	expect(writes).toBe(0);
+	await expectCleanPage(page, errors);
+});

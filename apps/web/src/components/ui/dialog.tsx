@@ -3,7 +3,10 @@ import { XIcon } from "lucide-react";
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
-import { pageRecoveryTarget } from "@/hooks/use-recovery-focus";
+import {
+	pageRecoveryTarget,
+	restoreFocusAfterDialogClose,
+} from "@/hooks/use-recovery-focus";
 import { cn } from "@/lib/utils";
 
 /**
@@ -11,7 +14,8 @@ import { cn } from "@/lib/utils";
  * 或已卸载，或之后随列表回读卸载（例如审阅、解除绑定后该行离开列表）时，焦点会落到 body，
  * 读屏与 Tab 都从页首重来。看护期间焦点一旦落到 body，就移到页面标题（pageRecoveryTarget：
  * 主内容区 h1[tabindex]，否则 #main-content）。焦点被移到别处、用户按下指针、地址（含查询与
- * hash）变化、再次打开弹窗或 10 秒后停止看护；调用方传了 finalFocus 时不看护。
+ * hash）变化、再次打开弹窗或 10 秒后停止看护；调用方传了 finalFocus 时不看护，只在关闭时 finalFocus
+ * 目标已不在文档、焦点落到 body 时交给壳层的焦点丢失兜底（restoreFocusAfterDialogClose，#3419）。
  *
  * 停止看护时一并清除它的两个定时器、观察器与监听（#3056）。测试文件结束后 jsdom 会从全局
  * 移除 document 与 location，挂起的回调仍可能随后执行：回调开头先确认看护仍是当前这一次、
@@ -210,8 +214,10 @@ function DialogContent({
 		(node: HTMLDivElement | null) => {
 			popupRef.current = node;
 			// 打开时停止上一次关闭的看护；弹窗卸载（关闭）时开始看护，焦点归还仍按 Base UI 默认规则。
+			// 调用方指定了 finalFocus 时不看护，只在目标已不在文档、焦点落到 body 时交给壳层兜底（#3419）。
 			if (node) stopCloseFocusGuard();
 			else if (!explicitFinalFocus.current) startCloseFocusGuard();
+			else restoreFocusAfterDialogClose();
 			if (typeof ref === "function") ref(node);
 			else if (ref) ref.current = node;
 		},

@@ -4604,6 +4604,7 @@ describe("contract compatibility command", () => {
 					schemas.RuntimeOperationResponseV3?.properties?.result?.anyOf,
 					schemas.RuntimeOperationResponseV4?.properties?.result?.anyOf,
 					schemas.RuntimeOperationResponseV5?.properties?.result?.anyOf,
+					schemas.RuntimeOperationResponseV6?.properties?.result?.anyOf,
 				].filter((union): union is Union => Array.isArray(union));
 			};
 			// 还原新增该成员之前的基线：从每个 V2+ 结果联合中删除它。
@@ -4619,7 +4620,7 @@ describe("contract compatibility command", () => {
 			const previousPath = resolve(directory, "previous.json");
 			const currentPath = resolve(directory, "current.json");
 			try {
-				for (const version of ["v2", "v3", "v4", "v5"]) {
+				for (const version of ["v2", "v3", "v4", "v5", "v6"]) {
 					const current = JSON.parse(
 						await readFile(
 							new URL(

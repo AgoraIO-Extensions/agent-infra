@@ -546,8 +546,12 @@ export function createProductionPlatformApiAssemblyInputV1(
 			? {
 					connectionInstallation: {
 						...input.connectionInstallation,
-						profile: input.connectionConsumerProfile,
-						approval: input.connectionConsumerProfileApproval,
+						...(input.connectionInstallation.bindingsByAgent !== undefined
+							? {}
+							: {
+									profile: input.connectionConsumerProfile,
+									approval: input.connectionConsumerProfileApproval,
+								}),
 					},
 				}
 			: {}),

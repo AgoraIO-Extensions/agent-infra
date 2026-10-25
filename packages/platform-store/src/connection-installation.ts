@@ -84,6 +84,45 @@ function decode(
 	};
 }
 
+export interface ConnectionInstallationBindingInputV1 {
+	readonly configuration: RuntimeOAuthConfigurationV1;
+	readonly profile: unknown;
+	readonly approval: unknown;
+}
+
+type InstallationBinding = {
+	readonly configuration: RuntimeOAuthConfigurationV1;
+	readonly target: ApprovedConnectionConsumerTargetV1;
+};
+
+function captureInstallationBinding(
+	input: ConnectionInstallationBindingInputV1,
+): InstallationBinding {
+	const configuration = RuntimeOAuthConfigurationV1Schema.parse(
+		structuredClone(input.configuration),
+	);
+	const approved = resolveApprovedConnectionConsumerProfileV1(
+		input.profile,
+		input.approval,
+	);
+	if (
+		approved.status !== "available" ||
+		approved.configFingerprint !== configuration.configFingerprint ||
+		!isDeepStrictEqual(approved.source, configuration.source) ||
+		approved.profile.publicOrigin + approved.profile.mcpPath !==
+			configuration.resource ||
+		new URL(configuration.issuer).origin !== approved.profile.publicOrigin
+	)
+		throw new ConnectionInstallationErrorV1("unavailable");
+	return {
+		configuration,
+		target: {
+			...approved,
+			url: approved.profile.publicOrigin + approved.profile.mcpPath,
+		},
+	};
+}
+
 /** Same Platform database and original Execution facts, with no credentials or parallel identity. */
 export class PostgresConnectionInstallationAuthorizationTransactionV1
 	implements
@@ -93,41 +132,85 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 	readonly #client: ReturnType<typeof postgres>;
 	readonly #database: ReturnType<typeof drizzle>;
 	readonly #directory: TaskUserDirectoryV1;
-	readonly #configuration: RuntimeOAuthConfigurationV1;
-	readonly #target: ApprovedConnectionConsumerTargetV1;
+	readonly #callbackConfiguration: RuntimeOAuthConfigurationV1 | undefined;
+	readonly #sharedBinding: InstallationBinding | undefined;
+	readonly #bindingsByAgent:
+		| ReadonlyMap<string, InstallationBinding | null>
+		| undefined;
 	constructor(options: {
 		databaseUrl: string;
 		directory: TaskUserDirectoryV1;
-		configuration: RuntimeOAuthConfigurationV1;
-		profile: unknown;
-		approval: unknown;
+		configuration?: RuntimeOAuthConfigurationV1;
+		profile?: unknown;
+		approval?: unknown;
+		bindingsByAgent?: Readonly<
+			Record<string, ConnectionInstallationBindingInputV1>
+		>;
 	}) {
 		this.#directory = options.directory;
-		this.#configuration = RuntimeOAuthConfigurationV1Schema.parse(
-			structuredClone(options.configuration),
-		);
-		const approved = resolveApprovedConnectionConsumerProfileV1(
-			options.profile,
-			options.approval,
-		);
+		if (options.bindingsByAgent !== undefined) {
+			if (
+				options.configuration !== undefined ||
+				options.profile !== undefined ||
+				options.approval !== undefined ||
+				!options.bindingsByAgent ||
+				typeof options.bindingsByAgent !== "object" ||
+				Array.isArray(options.bindingsByAgent)
+			)
+				throw new ConnectionInstallationErrorV1("unavailable");
+			const bindings = new Map<string, InstallationBinding | null>();
+			for (const [agentId, value] of Object.entries(options.bindingsByAgent)) {
+				if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
+					throw new ConnectionInstallationErrorV1("unavailable");
+				try {
+					bindings.set(agentId, captureInstallationBinding(value));
+				} catch {
+					bindings.set(agentId, null);
+				}
+			}
+			this.#bindingsByAgent = bindings;
+		} else {
+			if (!options.configuration)
+				throw new ConnectionInstallationErrorV1("unavailable");
+			this.#sharedBinding = captureInstallationBinding({
+				configuration: options.configuration,
+				profile: options.profile,
+				approval: options.approval,
+			});
+		}
+		const bindings = this.#bindingsByAgent
+			? [...this.#bindingsByAgent.values()].filter(
+					(binding): binding is InstallationBinding => binding !== null,
+				)
+			: this.#sharedBinding
+				? [this.#sharedBinding]
+				: [];
+		const first = bindings[0]?.configuration;
 		if (
-			approved.status !== "available" ||
-			approved.configFingerprint !== this.#configuration.configFingerprint ||
-			JSON.stringify(approved.source) !==
-				JSON.stringify(this.#configuration.source) ||
-			approved.profile.publicOrigin + approved.profile.mcpPath !==
-				this.#configuration.resource ||
-			new URL(this.#configuration.issuer).origin !==
-				approved.profile.publicOrigin
+			first &&
+			bindings.some(
+				({ configuration }) =>
+					configuration.callbackUrl !== first.callbackUrl ||
+					configuration.issuer !== first.issuer ||
+					Boolean(configuration.patBinding) !== Boolean(first.patBinding),
+			)
 		)
 			throw new ConnectionInstallationErrorV1("unavailable");
-		this.#target = {
-			...approved,
-			url: approved.profile.publicOrigin + approved.profile.mcpPath,
-		};
+		this.#callbackConfiguration = first;
 		this.#client = postgres(options.databaseUrl);
 		this.#database = drizzle(this.#client);
 	}
+	get callbackConfiguration(): RuntimeOAuthConfigurationV1 | undefined {
+		return this.#callbackConfiguration
+			? structuredClone(this.#callbackConfiguration)
+			: undefined;
+	}
+	#bindingForAgent(agentId: string): InstallationBinding | null {
+		return this.#bindingsByAgent === undefined
+			? (this.#sharedBinding ?? null)
+			: (this.#bindingsByAgent.get(agentId) ?? null);
+	}
+
 	async transaction<T>(
 		work: (tx: ConnectionInstallationTransactionV1) => Promise<T>,
 	): Promise<T> {
@@ -194,6 +277,8 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 						expiresAt: new Date(row.expires_at as string).getTime(),
 					},
 				);
+				const selected = this.#bindingForAgent(authorization.reference.agentId);
+				if (!selected) return null;
 				const current = await this.#operations(tx).current(
 					authorization.principal.id,
 					authorization.reference.executionId,
@@ -244,7 +329,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					callbackPath: "/internal/runtime/oauth/v1/callback",
 					attemptId,
 					expiresAt: callback.expiresAt,
-					issuer: this.#configuration.issuer,
+					issuer: selected.configuration.issuer,
 				};
 			},
 			settleCallback: async ({ stateHash, attemptId, now, status }) => {
@@ -363,6 +448,8 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					row.agent_id as string,
 				);
 				if (!agent) return null;
+				const selected = this.#bindingForAgent(row.agent_id as string);
+				if (!selected) return null;
 				const reference = {
 					agentId: row.agent_id as string,
 					conversationId: row.conversation_id as string,
@@ -380,11 +467,11 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 						sandboxId: row.sandbox_id as string,
 						podUid: pods[0].uid,
 						sessionGeneration: reference.sessionGeneration,
-						configFingerprint: this.#target.configFingerprint,
-						source: this.#target.source,
+						configFingerprint: selected.target.configFingerprint,
+						source: selected.target.source,
 						oauthConfiguration: {
-							ref: this.#configuration.ref,
-							revision: this.#configuration.revision,
+							ref: selected.configuration.ref,
+							revision: selected.configuration.revision,
 						},
 					},
 				};
@@ -616,13 +703,23 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				if (!command) return 0;
 				const binding = command.binding as Record<string, unknown>;
 				const scope = binding.scope as Record<string, unknown> | undefined;
+				const reference = binding.reference as
+					| Record<string, unknown>
+					| undefined;
+				const selected =
+					typeof reference?.agentId === "string"
+						? this.#bindingForAgent(reference.agentId)
+						: null;
+				if (!selected || scope?.agentId !== reference?.agentId)
+					throw new ConnectionInstallationErrorV1("invalid_input");
+				const configuration = selected.configuration;
 				if (
 					!scope ||
-					scope.configFingerprint !== this.#configuration.configFingerprint ||
-					!isDeepStrictEqual(scope.source, this.#configuration.source) ||
+					scope.configFingerprint !== configuration.configFingerprint ||
+					!isDeepStrictEqual(scope.source, configuration.source) ||
 					!isDeepStrictEqual(scope.oauthConfiguration, {
-						ref: this.#configuration.ref,
-						revision: this.#configuration.revision,
+						ref: configuration.ref,
+						revision: configuration.revision,
 					})
 				)
 					throw new ConnectionInstallationErrorV1("invalid_input");
@@ -640,14 +737,14 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					command.command === "begin"
 				) {
 					let callbackStateHash: string;
-					if (this.#configuration.patBinding) {
+					if (configuration.patBinding) {
 						if (
 							!input.callbackStateHash ||
 							!/^[a-f0-9]{64}$/.test(input.callbackStateHash)
 						)
 							throw new ConnectionInstallationErrorV1("invalid_input");
 						const authorizationUrl = new URL(input.authorizationUrl);
-						const issuer = new URL(this.#configuration.issuer);
+						const issuer = new URL(configuration.issuer);
 						if (
 							authorizationUrl.protocol !== "https:" ||
 							authorizationUrl.origin !== issuer.origin ||
@@ -661,7 +758,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					} else {
 						const state = parseAuthorizationRedirect(
 							input.authorizationUrl,
-							this.#configuration,
+							configuration,
 							input.authorizationExpiresAt,
 						);
 						if (input.callbackStateHash)
@@ -677,7 +774,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 						throw new ConnectionInstallationErrorV1("invalid_input");
 					const callback = {
 						stateHash: callbackStateHash,
-						runtimeOrigin: this.#configuration.runtimeOrigin,
+						runtimeOrigin: configuration.runtimeOrigin,
 						expiresAt: input.authorizationExpiresAt,
 						status: "pending" as const,
 					};

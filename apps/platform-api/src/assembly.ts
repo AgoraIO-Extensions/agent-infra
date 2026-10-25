@@ -129,9 +129,15 @@ interface AssemblyQueries {
 export interface PlatformApiAssemblyInput {
 	readonly connectionInstallation?: {
 		readonly publicOrigin: string;
-		readonly configuration: RuntimeOAuthConfigurationV1;
-		readonly profile: unknown;
-		readonly approval: unknown;
+		readonly configuration?: RuntimeOAuthConfigurationV1;
+		readonly profile?: unknown;
+		readonly approval?: unknown;
+		readonly bindingsByAgent?: Readonly<
+			Record<
+				string,
+				import("@agent-infra/platform-store").ConnectionInstallationBindingInputV1
+			>
+		>;
 	};
 	readonly connectionInstallationCallback?: {
 		readonly forward: import("./http/connection-installation-callback-routes.js").ConnectionInstallationCallbackRouteDependenciesV1["forward"];
@@ -370,13 +376,21 @@ export function assemblePlatformApi(
 	const taskAuthorization = new PostgresTaskAuthorizationStoreV1({
 		databaseUrl: input.databaseUrl,
 	});
-	const installationStore = input.connectionInstallation
-		? new PostgresConnectionInstallationAuthorizationTransactionV1({
+	const installationStore = (() => {
+		if (!input.connectionInstallation) return undefined;
+		try {
+			return new PostgresConnectionInstallationAuthorizationTransactionV1({
 				databaseUrl: input.databaseUrl,
 				directory: userDirectory,
 				...input.connectionInstallation,
-			})
-		: undefined;
+			});
+		} catch {
+			return undefined;
+		}
+	})();
+	const installationCallbackConfiguration =
+		installationStore?.callbackConfiguration;
+
 	const personalApiCredentialStore = new PostgresPersonalApiCredentialStoreV1({
 		databaseUrl: input.databaseUrl,
 	});
@@ -996,7 +1010,9 @@ export function assemblePlatformApi(
 		: undefined;
 	readFileLimits = files?.readLimits;
 	const dependencies: PlatformAppDependencies = {
-		...(installationStore && input.connectionInstallation
+		...(installationStore &&
+		installationCallbackConfiguration &&
+		input.connectionInstallation
 			? {
 					connectionInstallations: {
 						identity: input.identity,
@@ -1010,14 +1026,15 @@ export function assemblePlatformApi(
 				}
 			: {}),
 		...(installationStore &&
+		installationCallbackConfiguration &&
 		input.connectionInstallation &&
 		input.connectionInstallationCallback
 			? {
 					connectionInstallationCallback: {
 						publicOrigin: input.connectionInstallation.publicOrigin,
-						callbackUrl: input.connectionInstallation.configuration.callbackUrl,
-						issuer: input.connectionInstallation.configuration.issuer,
-						configuration: input.connectionInstallation.configuration,
+						callbackUrl: installationCallbackConfiguration.callbackUrl,
+						issuer: installationCallbackConfiguration.issuer,
+						configuration: installationCallbackConfiguration,
 						installation: createConnectionInstallationAuthorizationV1({
 							store: installationStore,
 						}),

@@ -92,9 +92,12 @@ type DeploymentConfiguration = {
 	readonly connectionInstallationSupply?: unknown;
 	readonly connectionInstallationSuppliesByAgent?: Record<string, unknown>;
 	readonly connectionInstallation?: {
-		readonly configuration: NonNullable<
+		readonly configuration?: NonNullable<
 			ConversationRuntimeOptionsV2["connectionInstallation"]
 		>["configuration"];
+		readonly configurationsByAgent?: NonNullable<
+			ConversationRuntimeOptionsV2["connectionInstallation"]
+		>["configurationsByAgent"];
 		readonly authorize?: NonNullable<
 			ConversationRuntimeOptionsV2["connectionInstallation"]
 		>["authorize"];
@@ -127,6 +130,46 @@ function resolveConnectionInstallation(
 	if (typeof value !== "object" || value === null || Array.isArray(value))
 		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
 	const candidate = value as Record<string, unknown>;
+	if (Object.hasOwn(candidate, "configurationsByAgent")) {
+		if (
+			Object.keys(candidate).some(
+				(key) => !["configurationsByAgent", "authorize"].includes(key),
+			) ||
+			(candidate.authorize !== undefined &&
+				typeof candidate.authorize !== "function") ||
+			!candidate.configurationsByAgent ||
+			typeof candidate.configurationsByAgent !== "object" ||
+			Array.isArray(candidate.configurationsByAgent)
+		)
+			return undefined;
+		const configurationsByAgent: Record<
+			string,
+			NonNullable<
+				DeploymentConfiguration["connectionInstallation"]
+			>["configuration"]
+		> = {};
+		for (const [agentId, configuration] of Object.entries(
+			candidate.configurationsByAgent,
+		)) {
+			if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
+				throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
+			const parsed = RuntimeOAuthConfigurationV1Schema.safeParse(configuration);
+			if (!parsed.success)
+				throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
+			Object.defineProperty(configurationsByAgent, agentId, {
+				value: parsed.data,
+				enumerable: true,
+			});
+		}
+		return {
+			configurationsByAgent: configurationsByAgent as NonNullable<
+				DeploymentConfiguration["connectionInstallation"]
+			>["configurationsByAgent"],
+			authorize: candidate.authorize as NonNullable<
+				DeploymentConfiguration["connectionInstallation"]
+			>["authorize"],
+		};
+	}
 	if (
 		!["configuration", "authorize,configuration"].includes(
 			Object.keys(candidate).sort().join(","),
@@ -498,9 +541,16 @@ async function createPrepared(signal: AbortSignal) {
 		| import("@agent-infra/platform-store").PostgresConnectionInstallationAuthorizationTransactionV1
 		| undefined;
 	let authorizedInstallation: ConversationRuntimeOptionsV2["connectionInstallation"];
-	if (connectionInstallation) {
+	if (
+		connectionInstallation &&
+		(connectionInstallation.configurationsByAgent === undefined ||
+			resolvedProfilesByAgent !== undefined)
+	) {
 		let authorize = connectionInstallation.authorize;
-		if (connectionConsumer) {
+		if (
+			connectionConsumer ||
+			connectionInstallation.configurationsByAgent !== undefined
+		) {
 			const { PostgresConnectionInstallationAuthorizationTransactionV1 } =
 				await import("@agent-infra/platform-store");
 			try {
@@ -508,12 +558,31 @@ async function createPrepared(signal: AbortSignal) {
 					new PostgresConnectionInstallationAuthorizationTransactionV1({
 						databaseUrl: workload.databaseUrl,
 						directory,
-						configuration: connectionInstallation.configuration,
-						profile: connectionConsumer.profile,
-						approval: connectionConsumer.approval,
+						...(connectionInstallation.configurationsByAgent !== undefined
+							? {
+									bindingsByAgent: Object.fromEntries(
+										Object.entries(
+											connectionInstallation.configurationsByAgent,
+										).map(([agentId, configuration]) => [
+											agentId,
+											{
+												configuration,
+												profile: resolvedProfilesByAgent?.[agentId]?.profile,
+												approval: resolvedProfilesByAgent?.[agentId]?.approval,
+											},
+										]),
+									),
+								}
+							: {
+									configuration: connectionInstallation.configuration,
+									profile: connectionConsumer?.profile,
+									approval: connectionConsumer?.approval,
+								}),
 					});
 			} catch {
 				installationStore = undefined;
+				if (connectionInstallation.configurationsByAgent !== undefined)
+					authorize = undefined;
 			}
 			if (!authorize && installationStore) {
 				const { createConnectionInstallationAuthorizationV1 } = await import(
@@ -526,6 +595,7 @@ async function createPrepared(signal: AbortSignal) {
 		}
 		authorizedInstallation = {
 			configuration: connectionInstallation.configuration,
+			configurationsByAgent: connectionInstallation.configurationsByAgent,
 			authorize: authorize ?? (async () => null),
 			...(installationStore ? { commandStore: installationStore } : {}),
 		};

@@ -11,6 +11,10 @@ import type {
 	PersonalApiCredentialNarrowRequestV1,
 } from "../src/pilot/generated-v2/types.gen";
 import {
+	expectBackgroundRereadKeeps,
+	expectFatalRereadHandsFocus,
+} from "./background-reread";
+import {
 	expectFocusableBusy,
 	expectFocusSettled,
 	expectNoDuplicateControls,
@@ -951,5 +955,56 @@ test("narrow form scope options match the issue form options (N8-3-10)", async (
 	if (info.project.name !== "mobile")
 		expect(narrowHover).not.toBe("rgba(0, 0, 0, 0)");
 	await expectNoDuplicateControls(page, "API 凭证（N8-3-10）");
+	await expectCleanPage(page, errors);
+});
+// #3419 N14-09（N14-3-02 ①）：「撤销这张 API 凭证？」确认弹窗打开时，回到标签页的个人凭证列表后台重读读到登录失效（401）：
+// 分区换成「登录状态已失效」与「重新登录」，弹窗随之卸载，finalFocus 指向的「撤销：{凭证}」已不在文档。公共 Dialog 把
+// 焦点交给壳层兜底的去处 h1「API 凭证」，不落到 body、不滚动页面。先覆盖挂起、可重试失败与恢复（弹窗保留），两视口一致。
+test("a revoke confirmation removed by a background 401 hands focus to the h1 (#3419 N14-09)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	// 列表读取的 staleTime 为 15 秒：每次回到标签页之前让上一次结果过期。
+	await page.clock.install();
+	const stale = () => page.clock.fastForward(16_000);
+	await page.goto("/my-settings/api-credentials");
+	const trigger = page
+		.getByRole("table", { name: "个人 API 凭证" })
+		.getByRole("button", {
+			name: `撤销：${initial.credentialId}`,
+			exact: true,
+		});
+	await trigger.focus();
+	await page.keyboard.press("Enter");
+	const dialog = page.getByRole("dialog", { name: "撤销这张 API 凭证？" });
+	await expect(dialog).toBeFocused();
+	await expectBackgroundRereadKeeps(page, {
+		path: "/api/v2/me/api-credentials",
+		focus: dialog,
+		beforeReread: stale,
+		context: "撤销个人凭证确认",
+		expectKept: async () => {
+			await expect(dialog).toBeVisible();
+		},
+	});
+	const main = page.locator("#main-content");
+	await expectFatalRereadHandsFocus(page, {
+		path: "/api/v2/me/api-credentials",
+		status: 401,
+		focus: dialog,
+		beforeReread: stale,
+		target: main.getByRole("heading", { level: 1, name: "API 凭证" }),
+		context: "撤销个人凭证确认",
+		expectReplaced: async () => {
+			await expect(
+				main.getByText("登录状态已失效，请重新登录后再试。"),
+			).toBeVisible();
+			await expect(dialog).toHaveCount(0);
+			await expect(trigger).toHaveCount(0);
+		},
+	});
+	await expectNoDuplicateControls(page, "API 凭证（#3419 N14-09）");
 	await expectCleanPage(page, errors);
 });

@@ -1957,6 +1957,30 @@ native client metadata，并把每个 Agent 的返回 `client_id` 绑定到该 A
 其他产品 Consumer 或 Portable PAT 作为自动 fallback。API/Worker/Web 不持有 Consumer
 secret、PKCE verifier、access/refresh Token，也不兑换授权码、刷新或代调用 MCP。
 
+**逐 Agent 安装配置。** 部署可为不同 Agent 提供完整的非敏感安装绑定，每项包含已有
+Consumer profile、approval 和 `RuntimeOAuthConfigurationV1`；复用现有 schema、指纹及
+source 校验，不创建另一种身份或凭据权威。API、Worker 与安装 Store 捕获同一批准修订。
+显式配置逐 Agent 绑定时，该映射是安装能力的唯一来源：缺少 Agent、条目无效、profile 与
+OAuth resource/source/指纹不一致时拒绝该安装，不回退到共享配置、Owner 或其他 Agent。
+原单份配置部署继续使用原路径；两种安装配置来源同时提供时拒绝安装能力装配。
+安装能力不可用不扩大为普通模型执行或原 stop/status、只读恢复不可用。
+
+API begin 只从已认证原主体的既有 Execution 和数据库 Agent 关系选择绑定。confirm、status、
+callback 及 Worker 命令领取沿原授权记录重新核对同一 Agent、主体、配置 ref/revision、
+profile/source、Pod 和代次。浏览器不能提交配置选择器。Worker 在已验证的原执行路由内选择
+相应 OAuth 配置，并在最后发送前核对它与目标 Consumer 快照一致。多个 Agent 继续共用现有
+持久安装命令表和事务，不新增调度器或逐 Agent 后台循环。
+
+一个 Platform callback 接收入口仍固定同一 HTTPS callback URL、Connection issuer 和
+callback 格式（标准 OAuth 或既有 PAT binding）；逐 Agent 配置必须与该入口一致，拒绝混用。
+回调中的 state/binding ID 只定位原持久记录，不能选择 Agent、Runtime 地址或凭据。
+Store 从原记录的 Agent 重新选择当前绑定；跨 Agent、配置漂移、过期或来源缺失均拒绝转交。
+既有一次性领取、callback-only 服务认证和 unknown 不重放规则保持不变。
+
+上述安装选择不创建 Consumer、不执行管理员注册，也不表示外部授权已成立。API/Worker
+只传非秘密配置和原安装命令；API 瞬时转交一次性授权码的窄通道仍遵循本节“浏览器与回跳”。
+授权码兑换及 access/refresh Token 仍由受保护 Host 执行和保管。
+
 **DCR metadata。** 受保护 Runtime 为每个 Agent/安装生成唯一短期 loopback callback 路径，
 并发送固定 metadata：`client_name="Codex"`、该 callback 的单元素 `redirect_uris`、
 `grant_types=["authorization_code","refresh_token"]`、`response_types=["code"]`、

@@ -311,6 +311,17 @@ export function createConversationRuntimeV2(
 	const installationConfiguration = installation
 		? RuntimeOAuthConfigurationV1Schema.safeParse(installation.configuration)
 		: undefined;
+	const installationConfigurationsByAgent =
+		installation?.configurationsByAgent === undefined
+			? undefined
+			: Object.fromEntries(
+					Object.entries(
+						structuredClone(installation.configurationsByAgent),
+					).map(([agentId, value]) => [
+						agentId,
+						RuntimeOAuthConfigurationV1Schema.safeParse(value),
+					]),
+				);
 	const combined = (signal?: AbortSignal) =>
 		signal ? AbortSignal.any([lifetime, signal]) : lifetime;
 	function recordDrainStage(
@@ -1986,7 +1997,10 @@ export function createConversationRuntimeV2(
 				if (
 					!installation ||
 					typeof installationAuthorize !== "function" ||
-					!installationConfiguration?.success
+					(installationConfigurationsByAgent === undefined &&
+						!installationConfiguration?.success) ||
+					(installation.configuration !== undefined &&
+						installationConfigurationsByAgent !== undefined)
 				)
 					installationUnavailable();
 				if (
@@ -1994,7 +2008,6 @@ export function createConversationRuntimeV2(
 					Boolean(input.attemptId) !== Boolean(input.attemptOwner)
 				)
 					installationUnavailable();
-				const configuration = installationConfiguration.data;
 				if (
 					typeof input.authorizationId !== "string" ||
 					!input.authorizationId ||
@@ -2035,6 +2048,18 @@ export function createConversationRuntimeV2(
 				);
 				const pod = pods?.[0];
 				const target = prepared.target.connectionConsumer;
+				if (context.kind !== "business") installationUnavailable();
+				const selectedConfiguration =
+					installationConfigurationsByAgent === undefined
+						? installationConfiguration
+						: Object.hasOwn(
+									installationConfigurationsByAgent,
+									context.claim.agentId,
+								)
+							? installationConfigurationsByAgent[context.claim.agentId]
+							: undefined;
+				if (!selectedConfiguration?.success) installationUnavailable();
+				const configuration = selectedConfiguration.data;
 				if (
 					context.kind !== "business" ||
 					context.principal.kind !== "user" ||

@@ -51,18 +51,53 @@ function currentHref() {
  * 落到 body、不会再触发 focusin，据此判断焦点是丢失而不是用户移走的（#3388 N13-05、N13-06）。
  * 用户按下指针（点空白处由用户决定焦点去处）或换了路径后清空。
  */
-let lastFocus: {
+type FocusRecord = {
 	element: Element;
 	pathname: string;
 	search: string;
 	inMain: boolean;
+	/** 获得焦点时所在的弹窗（公共 Dialog 的弹窗容器）；不在弹窗内为 null。 */
+	dialog: HTMLElement | null;
 	/** 获得焦点时的序号：大于 userActionSeq 表示获得焦点后用户还没有按键、按下指针或点击。 */
 	seq: number;
-} | null = null;
+};
+
+let lastFocus: FocusRecord | null = null;
 
 /** 焦点与用户操作共用的递增序号，比较先后不依赖时钟精度。 */
 let seq = 0;
 let userActionSeq = 0;
+/**
+ * 最近一次用户的激活操作（点击、Enter、Escape、非文本输入控件上的空格，以及浏览器前进后退）：紧接其后
+ * 发生的焦点丢失是用户操作的结果，由页面与弹窗自己交接焦点，壳层兜底不接手。
+ */
+let activation = { seq: 0, at: Number.NEGATIVE_INFINITY };
+
+/** 在文本输入控件里按 Enter（多行文本换行）或空格只是输入文字，不是激活。 */
+function textEntry(target: EventTarget | null) {
+	if (!(target instanceof HTMLElement)) return false;
+	if (target.isContentEditable || target instanceof HTMLTextAreaElement)
+		return "multiline";
+	return target instanceof HTMLInputElement &&
+		!["button", "checkbox", "radio", "reset", "submit", "image"].includes(
+			target.type,
+		)
+		? "line"
+		: false;
+}
+
+function isActivation(event: Event) {
+	if (event.type === "click" || event.type === "popstate") return true;
+	if (!(event instanceof KeyboardEvent)) return false;
+	const entry = textEntry(event.target);
+	if (event.key === "Escape") return true;
+	if (event.key === "Enter") return entry !== "multiline";
+	return event.key === " " && !entry;
+}
+
+function now() {
+	return typeof performance === "undefined" ? Date.now() : performance.now();
+}
 
 if (typeof document !== "undefined") {
 	document.addEventListener(
@@ -79,6 +114,7 @@ if (typeof document !== "undefined") {
 				inMain: Boolean(
 					document.getElementById("main-content")?.contains(element),
 				),
+				dialog: element.closest<HTMLElement>('[data-slot="dialog-content"]'),
 				seq,
 			};
 		},
@@ -87,13 +123,18 @@ if (typeof document !== "undefined") {
 	for (const type of ["keydown", "pointerdown", "click"] as const)
 		document.addEventListener(
 			type,
-			() => {
+			(event) => {
 				seq += 1;
 				userActionSeq = seq;
 				if (type === "pointerdown") lastFocus = null;
+				if (isActivation(event)) activation = { seq, at: now() };
 			},
 			true,
 		);
+	window.addEventListener("popstate", () => {
+		seq += 1;
+		activation = { seq, at: now() };
+	});
 }
 
 /**
@@ -388,6 +429,126 @@ export function useRestoreLostFocus() {
 	useEffect(() => {
 		if (!pending) restoreLostFocusSoon(latestParams.current);
 	}, []);
+}
+
+/**
+ * 壳层焦点丢失兜底（#3419）：等页面自己的交接（同一次提交的 effect、PageStateCard / RecoveryButton 挂载
+ * 时的检查、恢复代管）先处理，过这么久焦点仍落在 body 才接手。
+ */
+const fallbackDelayMs = 50;
+/** 激活操作之后这么久内发生的焦点丢失算作该操作的结果（例如点击后按钮随之禁用），兜底不接手。 */
+const activationWindowMs = 1_000;
+
+function browserReady() {
+	return typeof document !== "undefined" && typeof location !== "undefined";
+}
+
+/** 最近持有焦点的元素已从文档移除或变为原生禁用，焦点已落到 body（或浏览器还没把焦点从禁用的元素上移走）。 */
+function lostFocusRecord() {
+	const last = lastFocus;
+	if (!last || !(last.inMain || last.dialog)) return null;
+	const gone = !last.element.isConnected;
+	const disabled = !gone && last.element.matches(":disabled");
+	if (!gone && !disabled) return null;
+	const lost =
+		focusIsLost() || (disabled && document.activeElement === last.element);
+	return lost && last.pathname === location.pathname ? last : null;
+}
+
+/** 兜底的去处：仍打开的所在弹窗，否则页面 h1（不可聚焦时 #main-content）。 */
+function fallbackTarget(record: FocusRecord | null) {
+	if (record?.dialog?.isConnected) return record.dialog;
+	return pageRecoveryTarget();
+}
+
+/**
+ * 到点时再确认一次：没有新的焦点记录（用户按下指针会清空记录，焦点移到别处会换成新记录）、没有进行中的
+ * 恢复代管、仍在同一路径、焦点仍丢失，才把焦点交出去，且不滚动页面。
+ */
+function settleLostFocus(record: FocusRecord | null, pathname: string) {
+	if (!browserReady() || lastFocus !== record || pending) return;
+	if (location.pathname !== pathname) return;
+	if (!document.getElementById("main-content")) return;
+	const disabledHolder =
+		record &&
+		document.activeElement === record.element &&
+		record.element.matches(":disabled");
+	if (!focusIsLost() && !disabledHolder) return;
+	fallbackTarget(record)?.focus({ preventScroll: true });
+}
+
+let fallbackObserver: MutationObserver | null = null;
+let fallbackUsers = 0;
+let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+/** 已判定过的那次丢失：同一条焦点记录只判定一次，判定为用户操作的结果后之后的重绘也不接手。 */
+let judgedRecord: FocusRecord | null = null;
+
+function noteFocusLoss() {
+	const record = lostFocusRecord();
+	if (!record || record === judgedRecord) return;
+	judgedRecord = record;
+	if (activation.seq > record.seq && now() - activation.at < activationWindowMs)
+		return;
+	clearTimeout(fallbackTimer);
+	const pathname = location.pathname;
+	fallbackTimer = setTimeout(
+		() => settleLostFocus(record, pathname),
+		fallbackDelayMs,
+	);
+}
+
+/**
+ * 壳层焦点丢失兜底（#3419，D2-59）：主内容区或弹窗里最近持有焦点的元素因非用户发起的重绘（后台重读、
+ * 轮询、自动重连）从文档移除或变为原生禁用、焦点落到 body 时，把焦点交给仍打开的所在弹窗，否则页面
+ * h1（不可聚焦时 #main-content），不滚动页面。
+ *
+ * - 更精确的目标优先：页面自己的交接、PageStateCard / RecoveryButton 挂载时的检查与恢复代管先处理，
+ *   兜底稍后（fallbackDelayMs）只补它们没有覆盖的；
+ * - 不接手：用户按下指针（点空白处由用户决定焦点去处）、换了路径（含浏览器后退离开页面；直接打开页面
+ *   没有焦点记录）、紧接在用户激活操作之后的丢失（例如点击后按钮随之禁用，由页面在结果出来后交接）；
+ * - 弹窗关闭时 finalFocus 目标已不在文档由 restoreFocusAfterDialogClose 交给同一个去处。
+ *
+ * 由应用壳层调用一次；离开壳层（整页换成登录页）后停止。
+ */
+export function useFocusLossFallback() {
+	const router = usableRouter(useRouter({ warn: false }));
+	useEffect(() => {
+		if (router) trackNavigation(router);
+	}, [router]);
+	useEffect(() => {
+		if (typeof MutationObserver === "undefined" || !browserReady()) return;
+		fallbackUsers += 1;
+		if (!fallbackObserver) {
+			fallbackObserver = new MutationObserver(noteFocusLoss);
+			// 卸载与禁用（含 fieldset）都会改动 DOM；每次改动后检查一次焦点记录。
+			fallbackObserver.observe(document.body, {
+				childList: true,
+				subtree: true,
+				attributes: true,
+				attributeFilter: ["disabled"],
+			});
+		}
+		return () => {
+			fallbackUsers -= 1;
+			if (fallbackUsers > 0) return;
+			fallbackObserver?.disconnect();
+			fallbackObserver = null;
+			clearTimeout(fallbackTimer);
+			judgedRecord = null;
+		};
+	}, []);
+}
+
+/**
+ * 公共 Dialog 关闭（含随所在分区卸载）且调用方指定了 finalFocus 时调用：finalFocus 目标已不在文档或
+ * 已禁用、焦点因此落到 body 时，交给壳层兜底的同一个去处（页面 h1，不可聚焦时 #main-content），不滚动。
+ * 关闭可能由用户按 Escape、「取消」触发，不按激活操作排除；之后焦点有了新记录（落到目标或用户移走）则不接手。
+ */
+export function restoreFocusAfterDialogClose() {
+	if (!browserReady()) return;
+	const record = lastFocus;
+	const pathname = location.pathname;
+	setTimeout(() => settleLostFocus(record, pathname), fallbackDelayMs);
 }
 
 /**

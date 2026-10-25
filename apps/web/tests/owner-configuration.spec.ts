@@ -23,6 +23,7 @@ import type {
 import {
 	backgroundReread,
 	expectBackgroundRereadKeeps,
+	expectFatalRereadHandsFocus,
 } from "./background-reread";
 import {
 	expectFocusableBusy,
@@ -3244,3 +3245,86 @@ test("re-selecting models in the default Key dialog keeps only the dialog's own 
 		"/api/v2/agents/agent-pilot-1/default-relay-key/display-candidates",
 	]);
 });
+
+// #3419 N14-07（G14-2-05）：Agent 的 Skill 页已有绑定时，焦点在「固定版本」下拉上，回到标签页的后台重读读到不可重试的
+// 失败：绑定读取 401 / 404 时绑定区换成「无法读取 Skill 绑定」，下拉随之卸载；可绑定的版本读取 401 时下拉变为原生
+// 禁用（「暂时无法读取可绑定的版本」）。壳层焦点丢失兜底把焦点交给页面 h1，不落到 body、不滚动页面。先覆盖挂起、
+// 可重试失败与恢复（#3387），两视口一致。
+for (const target of [
+	{
+		name: "绑定读取 401",
+		path: "/api/v2/agents/agent-pilot-1/versions/agent-version-7/skills",
+		status: 401,
+		removes: true,
+	},
+	{
+		name: "绑定读取 404",
+		path: "/api/v2/agents/agent-pilot-1/versions/agent-version-7/skills",
+		status: 404,
+		removes: true,
+	},
+	{
+		name: "可绑定的版本读取 401",
+		path: "/api/v2/skills",
+		status: 401,
+		removes: false,
+	},
+] as const)
+	test(`a background reread that cannot be retried hands focus off the Agent's Skill version picker: ${target.name} (#3419 N14-07)`, async ({
+		page,
+	}, info) => {
+		await viewport(page, info.project.name === "mobile");
+		const pageErrors = trackPageErrors(page);
+		const api = await ownerConfigFixture(page, {
+			agentVersion: "agent-version-7",
+		});
+		await page.goto("/agents/agent-pilot-1/skills");
+		const region = main(page);
+		await expect(region.getByText("还未绑定 Skill")).toBeVisible();
+		const version = await pinElement(
+			region.getByLabel("固定版本", { exact: true }),
+			"agent-skill-version",
+		);
+		await version.selectOption("workspace-summary-v2");
+		await version.focus();
+		const heading = page.getByRole("heading", {
+			level: 1,
+			name: "Agent 的 Skill",
+		});
+		await expectBackgroundRereadKeeps(page, {
+			path: target.path,
+			focus: version,
+			context: `Agent 的 Skill（${target.name}）`,
+			expectKept: async () => {
+				await expect(version).toHaveValue("workspace-summary-v2");
+				await expect(version).toBeEnabled();
+				await expect(region.getByRole("alert")).toHaveCount(0);
+			},
+		});
+		await expectFatalRereadHandsFocus(page, {
+			path: target.path,
+			status: target.status,
+			focus: version,
+			target: heading,
+			context: `Agent 的 Skill（${target.name}）`,
+			expectReplaced: async () => {
+				if (target.removes) {
+					await expect(
+						region
+							.getByRole("alert")
+							.filter({ hasText: "无法读取 Skill 绑定" }),
+					).toBeVisible();
+					await expect(version).toHaveCount(0);
+				} else {
+					await expect(version).toBeDisabled();
+					await expect(version).toContainText("暂时无法读取可绑定的版本");
+				}
+			},
+		});
+		expect(api.commands).toEqual([]);
+		await expectCleanPage(page, pageErrors);
+		await expectNoDuplicateControls(
+			page,
+			`Agent 的 Skill（${target.name}，#3419）`,
+		);
+	});
