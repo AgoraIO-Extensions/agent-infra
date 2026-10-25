@@ -2552,6 +2552,7 @@ describe("Session Sandbox Runtime file exchange (#3276)", () => {
 			},
 		});
 		expect(Object.keys(secret.data ?? {}).sort()).toEqual([
+			"container-boundary-attestation",
 			"file-exchange-token",
 			"model-config",
 			"token",
