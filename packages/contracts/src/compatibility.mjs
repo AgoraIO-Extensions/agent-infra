@@ -1314,6 +1314,7 @@ function runtimeRejectedResultUnions(schemas) {
 			"RuntimeOperationResponseV3",
 			"RuntimeOperationResponseV4",
 			"RuntimeOperationResponseV5",
+			"RuntimeOperationResponseV6",
 		].map((name) => schemas?.[name]?.properties?.result?.anyOf),
 	];
 }
