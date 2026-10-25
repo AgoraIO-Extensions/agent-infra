@@ -3347,14 +3347,18 @@ function normalizeExecutionFailureProjectionOpenApiAddition(previous, current) {
 		if (previous.components?.schemas?.[name] === undefined)
 			delete candidate.components.schemas[name];
 	// 其他位置借用这两个组件仍然拒绝。
-	for (const name of names)
+	const removed = names.filter(
+		(name) => candidate.components.schemas[name] === undefined,
+	);
+	if (removed.length) {
+		const text = JSON.stringify(candidate);
 		if (
-			candidate.components.schemas[name] === undefined &&
-			JSON.stringify(candidate).includes(
-				JSON.stringify(`#/components/schemas/${name}`),
+			removed.some((name) =>
+				text.includes(JSON.stringify(`#/components/schemas/${name}`)),
 			)
 		)
 			return current;
+	}
 	return candidate;
 }
 
