@@ -289,6 +289,7 @@ describe("platform-core package surface", () => {
 			"publicTaskStatusEventV1",
 			"readAgentApiAuditContextV1",
 			"readFileLimitDeclarationV1",
+			"recentPersonalUnavailableAgentsMaximumV1",
 			"requestedModelDisplayNameV1",
 			"requireAgentApiCreatePermissionV1",
 			"requireAgentApplicationGrantAuthorityV1",

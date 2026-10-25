@@ -150,6 +150,23 @@ function openAdvancedConfiguration() {
 }
 
 describe("AgentApplicationForm", () => {
+	it("shows the server-resolved Connection entry without adding Connection form state", () => {
+		render(
+			<AgentApplicationForm
+				connectionUrl="https://connection.example.test/mcp"
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+		const link = screen.getByRole("link", { name: "打开 Connection" });
+		expect(link.getAttribute("href")).toBe(
+			"https://connection.example.test/mcp",
+		);
+		expect(link.getAttribute("target")).toBe("_blank");
+		expect(screen.queryByLabelText(/Connection ID|Consumer|Token/i)).toBeNull();
+	});
+
 	it("accepts an inline multi-service YAML and shows its semantic summary", () => {
 		const onSubmit = vi.fn();
 		render(

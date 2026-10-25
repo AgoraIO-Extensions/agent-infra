@@ -967,16 +967,28 @@ it("refuses native submission when the file authority lapses during Session init
 			revalidate() {
 				revalidations += 1;
 				// Authority lapses after the transfer but before the native Turn.
-				if (revalidations > 1)
+				if (revalidations === 2)
 					throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
 			},
 		});
 		await expect(
 			f.driver.execute(imageCommand, { fileBridge: bridge.fileBridge }),
-		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			driverFailureKind: "not_submitted",
+			reason: "session_preparation_failed",
+		});
 		// The last check runs at the native submission boundary.
 		expect(revalidations).toBe(2);
 		expect(await attachedUserMessages(f.path)).toEqual([]);
+		// #3373：没有写入本操作，Host 可以记为未提交；以新 Grant 重提时重新打开原生 Session 并受理。
+		expect(await f.driver.lookupOperation(imageCommand)).toEqual({
+			state: "missing",
+		});
+		const resubmitted = await f.driver.execute(imageCommand, {
+			fileBridge: bridge.fileBridge,
+		});
+		expect(resubmitted.result).toMatchObject({ outcome: "accepted" });
 	} finally {
 		await f.close();
 	}
@@ -991,7 +1003,10 @@ it.each([
 		const bridge = imageBridge(overrides);
 		await expect(
 			f.driver.execute(imageCommand, { fileBridge: bridge.fileBridge }),
-		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			reason: "file_input_unavailable",
+		});
 		expect(bridge.revalidate).not.toHaveBeenCalled();
 		expect(await attachedUserMessages(f.path)).toEqual([]);
 	} finally {
@@ -1025,7 +1040,10 @@ it("releases the body of an attachment rejected before transfer", async () => {
 		};
 		await expect(
 			f.driver.execute(imageCommand, { fileBridge }),
-		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			reason: "file_input_unavailable",
+		});
 		expect(cancelled).toBe(true);
 	} finally {
 		await f.close();
@@ -1225,33 +1243,33 @@ it("declares a platform refusal of a Pi attachment before any native Turn and ke
 		});
 		expect(await attachedUserMessages(f.path)).toEqual([]);
 
-		// 无法确认的读取失败不转换，保持原有的不确定语义。
+		// #3373：不是明确拒绝的读取失败发生在原生 Session 与本操作记录之前，声明未提交。
+		const uncertainCommand = {
+			...command,
+			executionId: "execution-uncertain",
+			turnId: "turn-uncertain",
+			operationId: "operation-uncertain",
+			input: { text: "inspect", attachments: ["file-txt"] },
+		};
 		const uncertain = await f.driver
-			.execute(
-				{
-					...command,
-					executionId: "execution-uncertain",
-					turnId: "turn-uncertain",
-					operationId: "operation-uncertain",
-					input: { text: "inspect", attachments: ["file-txt"] },
-				},
-				{
-					fileBridge: {
-						...piAttachmentBridge(),
-						readInput: async () => {
-							throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
-						},
+			.execute(uncertainCommand, {
+				fileBridge: {
+					...piAttachmentBridge(),
+					readInput: async () => {
+						throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
 					},
 				},
-			)
+			})
 			.catch((error: unknown) => error);
 		expect(uncertain).toMatchObject({
-			message: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			retryable: true,
+			driverFailureKind: "not_submitted",
+			reason: "file_input_unavailable",
 		});
-		expect(uncertain).not.toHaveProperty(
-			"driverFailureKind",
-			"file_input_rejected",
-		);
+		expect(await f.driver.lookupOperation(uncertainCommand)).toEqual({
+			state: "missing",
+		});
 
 		// 被拒绝的执行不占用该 Conversation：下一条消息正常受理并完成。
 		const next = {
@@ -1291,7 +1309,10 @@ it("rejects Pi attachments with a planted link, beyond 32 or outside the Grant b
 				},
 				{ fileBridge: piAttachmentBridge(reads) },
 			),
-		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			reason: "file_input_unavailable",
+		});
 		expect(reads).toEqual([]);
 		await expect(
 			f.driver.execute(
@@ -1301,7 +1322,12 @@ it("rejects Pi attachments with a planted link, beyond 32 or outside the Grant b
 				},
 				{ fileBridge: piAttachmentBridge() },
 			),
-		).rejects.toThrow("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			cause: expect.objectContaining({
+				message: "RUNTIME_FILE_INPUT_NOT_AUTHORIZED",
+			}),
+		});
 		const index = JSON.parse(
 			await readFile(join(f.path, "index.json"), "utf8"),
 		);
@@ -1321,7 +1347,10 @@ it("rejects Pi attachments with a planted link, beyond 32 or outside the Grant b
 				{ ...command, input: { text: "inspect", attachments: ["file-txt"] } },
 				{ fileBridge: piAttachmentBridge() },
 			),
-		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			reason: "file_input_unavailable",
+		});
 		expect(await readdir(outside)).toEqual([]);
 		expect(await attachedUserMessages(f.path)).toEqual([]);
 	} finally {

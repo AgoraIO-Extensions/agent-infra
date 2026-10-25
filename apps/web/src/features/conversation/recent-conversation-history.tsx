@@ -4,6 +4,7 @@ import { LoadingLine } from "@/components/ui/spinner";
 import { listLinks, useLoadMoreFocus } from "@/hooks/use-load-more-focus";
 import { Button } from "../../components/ui/button.js";
 import { RecoveryButton } from "../recovery-button.js";
+import { RecentUnavailableAgentsNotice } from "../workbench/recent-unavailable-agents-notice.js";
 import { useRecentPersonalConversations } from "../workbench/use-recent-personal-conversations.js";
 import {
 	ConversationHistoryHeading,
@@ -50,6 +51,7 @@ export function RecentConversationHistory({
 			)}
 			{state.kind === "ready" && (
 				<>
+					<RecentUnavailableAgentsNotice agentIds={state.unavailableAgentIds} />
 					{state.conversations.length === 0 && <p>暂无个人对话。</p>}
 					<ul ref={list} className="conversation-history-list">
 						{state.conversations.map((item) => {

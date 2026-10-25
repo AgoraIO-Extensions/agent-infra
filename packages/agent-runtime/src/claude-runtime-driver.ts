@@ -93,9 +93,9 @@ import {
 } from "./native-metadata-projection.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 import {
+	declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1,
 	type RuntimeFileBridgePortV1,
 	readRuntimeFileResultReceiptV1,
-	rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1,
 } from "./runtime-file-bridge.js";
 import {
 	isSandboxAttachmentNativeImageV1,
@@ -1522,10 +1522,14 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				read: (fileId) => bridge.readInput(fileId),
 				invalid: unavailable,
 				imageBytes: true,
-			}).catch(
-				// #3314：附件在 retire 与本操作的持久记录之前物化，平台的明确拒绝不会留下任何
-				// 原生副作用，可以由 Host 持久化为 rejected；其他错误保持原语义。
-				rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1,
+			}).catch((error: unknown) =>
+				// #3314/#3373：附件在 retire 与本操作的持久记录之前物化。平台的明确拒绝由 Host
+				// 持久化为 rejected；其他读取或物化失败声明本次 Turn 未提交。
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					error,
+					"file_input_unavailable",
+					command,
+				),
 			);
 			content.push({
 				type: "text",
@@ -1549,7 +1553,15 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		} else content.push({ type: "text", text: userText });
 		// A File Grant that lapsed while the attachments were acquired must not
 		// survive into retirement or the native request.
-		fileBridge?.revalidate();
+		try {
+			fileBridge?.revalidate();
+		} catch (error) {
+			declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+				error,
+				"session_preparation_failed",
+				command,
+			);
+		}
 		// Paseo ensureQuery retirement order: detach old work, drain it, then resume the same native ID.
 		await this.retire(ref);
 		if (before.started) {
@@ -1825,6 +1837,28 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			if (standardMcp) await standardMcp.close().catch(() => {});
 			browserAbortController.abort();
 			await transport.close();
+			// #3373：首条 Query 消息尚未发出。回滚本操作的记录与 Turn（同原生命令的失败路径）
+			// 后声明本次 Turn 未提交；回滚失败时保持原错误。
+			let discarded = false;
+			try {
+				await file.update((state) => {
+					state.operations = state.operations.filter(
+						(entry) => entry.key !== operationKey(command),
+					);
+					state.turns = state.turns.filter(
+						(entry) => entry.executionId !== command.executionId,
+					);
+				});
+				discarded = true;
+			} catch {
+				// The lapsed authority remains the actionable error.
+			}
+			if (discarded)
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					error,
+					"session_preparation_failed",
+					command,
+				);
 			throw error;
 		}
 		const toolFacts = new Map<

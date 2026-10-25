@@ -1288,6 +1288,23 @@ const runtimeFileInputRejectedResult = runtimeRejectedResult(
 	"RUNTIME_FILE_INPUT_REJECTED",
 	"Runtime file input was rejected",
 );
+// #3373 以同一规则新增可重试的 RUNTIME_TURN_NOT_SUBMITTED：Driver 在原生提交点之前声明本次
+// Turn 未提交。成员逐字段固定，阶段只允许两个固定值，retryable 固定为 true。
+const runtimeTurnNotSubmittedResult = {
+	additionalProperties: false,
+	properties: {
+		code: { const: "RUNTIME_TURN_NOT_SUBMITTED", type: "string" },
+		message: { const: "Runtime turn was not submitted", type: "string" },
+		outcome: { const: "rejected", type: "string" },
+		reason: {
+			enum: ["file_input_unavailable", "session_preparation_failed"],
+			type: "string",
+		},
+		retryable: { const: true, type: "boolean" },
+	},
+	required: ["outcome", "code", "message", "reason", "retryable"],
+	type: "object",
+};
 function runtimeRejectedResultUnions(schemas) {
 	return [
 		schemas?.RuntimeOperationResultV2?.anyOf,
@@ -1310,6 +1327,13 @@ function isRuntimeFileInputRejectedOpenApiAddition(previous, current) {
 		previous,
 		current,
 		runtimeFileInputRejectedResult,
+	);
+}
+function isRuntimeTurnNotSubmittedOpenApiAddition(previous, current) {
+	return isRuntimeRejectedResultOpenApiAddition(
+		previous,
+		current,
+		runtimeTurnNotSubmittedResult,
 	);
 }
 function isRuntimeRejectedResultOpenApiAddition(previous, current, member) {
@@ -3734,6 +3758,38 @@ function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #3379：最近对话按 Agent 降级，只允许 200 响应追加可选的 `unavailableAgentIds`
+// （渠道资格无法确认、被省略的 Agent）。删除该字段后须与基线逐字节一致。
+const recentUnavailableAgentIdsProperty = {
+	items: { minLength: 1, type: "string" },
+	maxItems: 100,
+	minItems: 1,
+	type: "array",
+};
+function recentPersonalConversationPageSchema(document) {
+	return document.paths?.["/api/v2/me/conversations/recent"]?.get?.responses?.[
+		"200"
+	]?.content?.["application/json"]?.schema;
+}
+function isRecentUnavailableAgentsOpenApiAddition(previous, current) {
+	const before = recentPersonalConversationPageSchema(previous);
+	const after = recentPersonalConversationPageSchema(current);
+	if (
+		!before?.properties ||
+		Object.hasOwn(before.properties, "unavailableAgentIds") ||
+		!sameValue(
+			after?.properties?.unavailableAgentIds,
+			recentUnavailableAgentIdsProperty,
+		) ||
+		after.required?.includes("unavailableAgentIds")
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete recentPersonalConversationPageSchema(normalized).properties
+		.unavailableAgentIds;
+	return sameValue(previous, normalized);
+}
+
 // #440 adds bounded receipt management and Owner-scoped bot setup.
 // Keep both hashes: the first is the historical #440 shape before #1935's QR
 // branch, while the second is the exact current route set after that addition.
@@ -5874,6 +5930,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) &&
 			!isRuntimeSessionBlockedOpenApiAddition(previous, current) &&
 			!isRuntimeFileInputRejectedOpenApiAddition(previous, current) &&
+			!isRuntimeTurnNotSubmittedOpenApiAddition(previous, current) &&
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeSkillHostReadOpenApiAddition(previous, current) &&
 			!isRuntimeSkillReadGrantCommandOpenApiAddition(previous, current) &&
@@ -5919,6 +5976,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isConversationSessionAvailabilityOpenApiAddition(previous, current) &&
 			!isConversationSessionUpdatingOpenApiAddition(previous, current) &&
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&
+			!isRecentUnavailableAgentsOpenApiAddition(previous, current) &&
 			!isSkillHubReadOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationOpenApiAddition(previous, current) &&
 			!isSkillHubPublicationOpenApiAddition(previous, current) &&

@@ -1,5 +1,5 @@
 import { OpaqueCursorV1Schema } from "@agent-infra/contracts";
-import { ConversationPageV1Schema } from "@agent-infra/contracts/pilot";
+import { RecentPersonalConversationPageV2Schema } from "@agent-infra/contracts/pilot";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
 import { listRecentPersonalConversationsV2 } from "../../pilot/generated-v2/sdk.gen.js";
 import type { ListRecentPersonalConversationsV2Response } from "../../pilot/generated-v2/types.gen.js";
@@ -59,7 +59,8 @@ export async function loadRecentPersonalConversationsPage({
 			throw new RecentPersonalConversationsError(
 				collectionReadFailure(result.response?.status),
 			);
-		const page = ConversationPageV1Schema.safeParse(result.data);
+		// 渠道资格无法确认的 Agent 只列在 unavailableAgentIds，不让整页失败（#3379）。
+		const page = RecentPersonalConversationPageV2Schema.safeParse(result.data);
 		if (
 			!page.success ||
 			page.data.items.length > limit ||

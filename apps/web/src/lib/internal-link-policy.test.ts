@@ -18,6 +18,10 @@ const allowedHrefs = new Map<string, string>([
 	["features/agent-discovery/connection-notice.tsx#href", "Connection 入口"],
 	["features/application-shell.tsx#connectionUrl", "Connection 入口"],
 	["features/conversation/conversation-context-bar.tsx#url", "Connection 入口"],
+	[
+		"features/my-agents/agent-application-form.tsx#props.connectionUrl",
+		"Connection 入口",
+	],
 	// 品牌链接：useLinkProps 生成的路由链接（去掉 aria-current 后展开到 <a>），不是原生跳转。
 	["features/application-shell.tsx#{...props}", "路由链接"],
 	// 跳到主内容的页内锚点（skip link）。

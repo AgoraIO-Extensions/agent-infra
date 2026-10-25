@@ -231,6 +231,8 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"runtimeTerminalEventSeen",
 			"metadataRecovery",
 			"attemptCount",
+			"recoveryElapsedMs",
+			"notSubmittedResubmissions",
 			"principal",
 			"sandbox",
 			"executionSource",
@@ -504,6 +506,23 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		...(input.attemptCount === undefined
 			? {}
 			: { attemptCount: nonNegativeInteger(input.attemptCount) }),
+		...(input.recoveryElapsedMs === undefined
+			? {}
+			: { recoveryElapsedMs: nonNegativeInteger(input.recoveryElapsedMs) }),
+		...(input.notSubmittedResubmissions === undefined
+			? {}
+			: {
+					notSubmittedResubmissions: (() => {
+						const resubmissions = exactObject(input.notSubmittedResubmissions, [
+							"count",
+							"elapsedMs",
+						]);
+						return {
+							count: nonNegativeInteger(resubmissions.count),
+							elapsedMs: nonNegativeInteger(resubmissions.elapsedMs),
+						};
+					})(),
+				}),
 		...(input.runtimeTerminalEventSeen === true
 			? { runtimeTerminalEventSeen: true as const }
 			: {}),

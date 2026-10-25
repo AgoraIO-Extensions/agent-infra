@@ -601,6 +601,42 @@
                           "additionalProperties": false,
                           "properties": {
                             "code": {
+                              "const": "RUNTIME_TURN_NOT_SUBMITTED",
+                              "type": "string"
+                            },
+                            "message": {
+                              "const": "Runtime turn was not submitted",
+                              "type": "string"
+                            },
+                            "outcome": {
+                              "const": "rejected",
+                              "type": "string"
+                            },
+                            "reason": {
+                              "enum": [
+                                "file_input_unavailable",
+                                "session_preparation_failed"
+                              ],
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": true,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "code",
+                            "message",
+                            "reason",
+                            "retryable"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
                               "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
                               "type": "string"
                             },
@@ -843,6 +879,42 @@
                             "outcome",
                             "code",
                             "message",
+                            "retryable"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "const": "RUNTIME_TURN_NOT_SUBMITTED",
+                              "type": "string"
+                            },
+                            "message": {
+                              "const": "Runtime turn was not submitted",
+                              "type": "string"
+                            },
+                            "outcome": {
+                              "const": "rejected",
+                              "type": "string"
+                            },
+                            "reason": {
+                              "enum": [
+                                "file_input_unavailable",
+                                "session_preparation_failed"
+                              ],
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": true,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "outcome",
+                            "code",
+                            "message",
+                            "reason",
                             "retryable"
                           ],
                           "type": "object"
@@ -1177,6 +1249,42 @@
                 "outcome",
                 "code",
                 "message",
+                "retryable"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "RUNTIME_TURN_NOT_SUBMITTED",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Runtime turn was not submitted",
+                  "type": "string"
+                },
+                "outcome": {
+                  "const": "rejected",
+                  "type": "string"
+                },
+                "reason": {
+                  "enum": [
+                    "file_input_unavailable",
+                    "session_preparation_failed"
+                  ],
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": true,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "outcome",
+                "code",
+                "message",
+                "reason",
                 "retryable"
               ],
               "type": "object"
@@ -1690,6 +1798,42 @@
                   "additionalProperties": false,
                   "properties": {
                     "code": {
+                      "const": "RUNTIME_TURN_NOT_SUBMITTED",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime turn was not submitted",
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "const": "rejected",
+                      "type": "string"
+                    },
+                    "reason": {
+                      "enum": [
+                        "file_input_unavailable",
+                        "session_preparation_failed"
+                      ],
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "code",
+                    "message",
+                    "reason",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
                       "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
                       "type": "string"
                     },
@@ -1932,6 +2076,42 @@
                     "outcome",
                     "code",
                     "message",
+                    "retryable"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "const": "RUNTIME_TURN_NOT_SUBMITTED",
+                      "type": "string"
+                    },
+                    "message": {
+                      "const": "Runtime turn was not submitted",
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "const": "rejected",
+                      "type": "string"
+                    },
+                    "reason": {
+                      "enum": [
+                        "file_input_unavailable",
+                        "session_preparation_failed"
+                      ],
+                      "type": "string"
+                    },
+                    "retryable": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "code",
+                    "message",
+                    "reason",
                     "retryable"
                   ],
                   "type": "object"
@@ -2327,6 +2507,42 @@
                       "additionalProperties": false,
                       "properties": {
                         "code": {
+                          "const": "RUNTIME_TURN_NOT_SUBMITTED",
+                          "type": "string"
+                        },
+                        "message": {
+                          "const": "Runtime turn was not submitted",
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "const": "rejected",
+                          "type": "string"
+                        },
+                        "reason": {
+                          "enum": [
+                            "file_input_unavailable",
+                            "session_preparation_failed"
+                          ],
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "code",
+                        "message",
+                        "reason",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
                           "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
                           "type": "string"
                         },
@@ -2589,6 +2805,42 @@
               "additionalProperties": false,
               "properties": {
                 "code": {
+                  "const": "RUNTIME_TURN_NOT_SUBMITTED",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Runtime turn was not submitted",
+                  "type": "string"
+                },
+                "outcome": {
+                  "const": "rejected",
+                  "type": "string"
+                },
+                "reason": {
+                  "enum": [
+                    "file_input_unavailable",
+                    "session_preparation_failed"
+                  ],
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": true,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "outcome",
+                "code",
+                "message",
+                "reason",
+                "retryable"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
                   "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
                   "type": "string"
                 },
@@ -2800,6 +3052,42 @@
               "additionalProperties": false,
               "properties": {
                 "code": {
+                  "const": "RUNTIME_TURN_NOT_SUBMITTED",
+                  "type": "string"
+                },
+                "message": {
+                  "const": "Runtime turn was not submitted",
+                  "type": "string"
+                },
+                "outcome": {
+                  "const": "rejected",
+                  "type": "string"
+                },
+                "reason": {
+                  "enum": [
+                    "file_input_unavailable",
+                    "session_preparation_failed"
+                  ],
+                  "type": "string"
+                },
+                "retryable": {
+                  "const": true,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "outcome",
+                "code",
+                "message",
+                "reason",
+                "retryable"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
                   "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
                   "type": "string"
                 },
@@ -2983,6 +3271,42 @@
             "outcome",
             "code",
             "message",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "const": "RUNTIME_TURN_NOT_SUBMITTED",
+              "type": "string"
+            },
+            "message": {
+              "const": "Runtime turn was not submitted",
+              "type": "string"
+            },
+            "outcome": {
+              "const": "rejected",
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "file_input_unavailable",
+                "session_preparation_failed"
+              ],
+              "type": "string"
+            },
+            "retryable": {
+              "const": true,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "outcome",
+            "code",
+            "message",
+            "reason",
             "retryable"
           ],
           "type": "object"

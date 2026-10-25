@@ -1,6 +1,6 @@
 {
   "id": "14bf3465-1e17-4d2a-9eb6-899fad59907e",
-  "prevId": "d859a8f2-f1c0-4ea3-9fdb-9b99b041238e",
+  "prevId": "538d3a37-4769-4757-ab38-7707408d86d1",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2150,6 +2150,12 @@
         "sandbox_id": {
           "name": "sandbox_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "unknown_since": {
+          "name": "unknown_since",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         }

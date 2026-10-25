@@ -27,6 +27,8 @@ import type {
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import {
 	agentAnnotation,
+	agentContainerSecurityContext,
+	agentPodSecurityContext,
 	desiredAnnotation,
 	fingerprintAnnotation,
 	ownerLabel,
@@ -46,6 +48,8 @@ export interface MultiServiceRuntimePolicyV1 {
 	readonly routeHostSuffix: string;
 	readonly ingressClassName: string;
 	readonly tlsSecretName: string;
+	/** Optional namespace of the ingress controller; omitted keeps same-namespace behavior. */
+	readonly routeNamespace?: string;
 	readonly routeSelector: Readonly<Record<string, string>>;
 	/** 必须与 API `apiInput` 中的同名配置一致；省略时使用合约默认值。 */
 	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
@@ -89,6 +93,20 @@ function serviceResourceName(agentId: string, name: string): string {
 
 function serviceLabel(name: string): string {
 	return name.length <= 63 ? name : name.slice(0, 63);
+}
+
+function routePeer(policy: MultiServiceRuntimePolicyV1) {
+	const podSelector = { podSelector: { matchLabels: policy.routeSelector } };
+	return policy.routeNamespace
+		? {
+				...podSelector,
+				namespaceSelector: {
+					matchLabels: {
+						"kubernetes.io/metadata.name": policy.routeNamespace,
+					},
+				},
+			}
+		: podSelector;
 }
 
 function fingerprint(value: unknown): string {
@@ -288,12 +306,14 @@ function deployment(
 				metadata: { labels },
 				spec: {
 					...resource.spec.template.spec,
+					securityContext: agentPodSecurityContext(),
 					...(volumes ? { volumes } : {}),
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
+							securityContext: agentContainerSecurityContext(),
 							ports: container.ports?.map((port) => ({
 								name: port.name,
 								containerPort: port.targetPort,
@@ -384,11 +404,13 @@ function statefulSet(
 				metadata: { labels },
 				spec: {
 					...resource.spec.template.spec,
+					securityContext: agentPodSecurityContext(),
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
+							securityContext: agentContainerSecurityContext(),
 							ports: container.ports?.map((port) => ({
 								name: port.name,
 								containerPort: port.targetPort,
@@ -492,6 +514,7 @@ function migrationJob(
 				metadata: { labels },
 				spec: {
 					...resource.spec.template.spec,
+					securityContext: agentPodSecurityContext(),
 					restartPolicy: "Never",
 					serviceAccountName: workloadResourceNameV1(value.agentId),
 					automountServiceAccountToken: false,
@@ -499,6 +522,7 @@ function migrationJob(
 						(container) => ({
 							...container,
 							resources: profile.resources,
+							securityContext: agentContainerSecurityContext(),
 							ports: container.ports?.map((port) => ({
 								name: port.name,
 								containerPort: port.targetPort,
@@ -592,9 +616,7 @@ function networkPolicy(
 								},
 							},
 						},
-						...(entry
-							? [{ podSelector: { matchLabels: policy.routeSelector } }]
-							: []),
+						...(entry ? [routePeer(policy)] : []),
 					],
 				},
 			],

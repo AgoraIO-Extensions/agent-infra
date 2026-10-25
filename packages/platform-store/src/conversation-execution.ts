@@ -1710,6 +1710,39 @@ export class PostgresConversationExecutionTransactionV1
 			unavailable();
 	}
 
+	/**
+	 * #3373：新消息到达时 Conversation 被受理不明的 Execution 占用，把该 Execution 已排定的
+	 * 恢复工作项提前到当前时刻（提交唤醒随之通知 Worker）。只在 Execution 仍为 unknown 时生效，
+	 * 不改变 Execution、占用或工作项状态。
+	 */
+	async wakeUnknownExecutionRecovery(input: {
+		readonly conversationId: string;
+		readonly executionId: string;
+	}): Promise<void> {
+		const conversationId = text(input.conversationId);
+		const executionId = text(input.executionId);
+		await this.#transaction(async (transaction) => {
+			await transaction`
+				update platform.outbox_items
+				set available_at = clock_timestamp(), updated_at = clock_timestamp()
+				where scope_type = 'conversation' and scope_id = ${conversationId}
+					and operation in (
+						'conversation.turn.submit.v1',
+						'conversation.turn.regenerate.v1',
+						'conversation.native-capability.invoke.v1'
+					)
+					and payload->>'executionId' = ${executionId}
+					and status = 'retry_scheduled' and available_at > clock_timestamp()
+					and exists (
+						select 1 from platform.conversation_executions e
+						where e.execution_id = ${executionId}
+							and e.conversation_id = ${conversationId}
+							and e.status = 'unknown'
+					)
+			`;
+		});
+	}
+
 	async #transaction<T>(
 		work: (transaction: Transaction) => Promise<T>,
 	): Promise<T> {

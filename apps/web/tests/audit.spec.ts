@@ -13,7 +13,10 @@ import {
 	test,
 } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
-import { expectBackgroundRereadKeeps } from "./background-reread";
+import {
+	backgroundReread,
+	expectBackgroundRereadKeeps,
+} from "./background-reread";
 import { captureDesignContract, designViewports } from "./design-contract";
 import {
 	expectFocusableBusy,
@@ -1716,5 +1719,71 @@ for (const [route, role, listPath] of [
 		reading.release();
 		await expect(main.getByText(/^第 2 页 · 本页 1 条$/)).toBeVisible();
 		await expectNoDuplicateControls(page, `${route}（N8-3-02）`);
+		await expectCleanPage(page, errors);
+	});
+
+// #3388 N13-06：持有焦点的分页按钮因不是本按钮触发的变化变为原生禁用（回到标签页的后台重读读到了末页）时，
+// 焦点交给另一个分页按钮，两个都不可用时到页面 h1，不落到 body、不滚动页面；后台重读挂起、可重试失败与
+// 读到同样的记录时记录保留（#3387），焦点留在「下一页」上。验收中「重试」进行中 Tab 到「下一页」的路径在
+// #3387 之后不再出现（重试期间失败提示保留，分页按钮为原生禁用、不在 Tab 序列中），这里覆盖同一条交接规则。
+// 平台审计有 4 条记录：先翻到第 2 页，「上一页」仍可用；我的执行审计有 2 条：停在第 1 页。两视口一致。
+for (const [route, role, listPath] of [
+	["/audit", "employee", "/api/v2/audit"],
+	["/admin/audit", "admin", "/api/v4/admin/audit"],
+] as const)
+	test(`${route} a focused page button that a background reread disables hands focus on (#3388 N13-06)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		const api = await fixture(page, role);
+		await page.goto(route);
+		const main = page.locator("main");
+		const previous = main.getByRole("button", { name: "上一页", exact: true });
+		const next = main.getByRole("button", { name: "下一页", exact: true });
+		await expect(main.getByText("第 1 页 · 本页 1 条")).toBeVisible();
+		const middle = role === "admin";
+		if (middle) {
+			await next.click();
+			await expect(main.getByText("第 2 页 · 本页 1 条")).toBeVisible();
+		}
+		await expect(next).toBeEnabled();
+		await next.focus();
+		const pageText = middle ? "第 2 页 · 本页 1 条" : "第 1 页 · 本页 1 条";
+		await expectBackgroundRereadKeeps(page, {
+			path: listPath,
+			focus: next,
+			expectKept: async () => {
+				await expect(main.getByText(pageText)).toBeVisible();
+				await expect(next).toBeEnabled();
+			},
+			context: `${route} 焦点在「下一页」`,
+		});
+
+		// 后台重读读到这一页之后没有记录：「下一页」变为原生禁用。
+		const scrolled = await page.evaluate(() => window.scrollY);
+		api.emptyNext();
+		await backgroundReread(page);
+		await expect(next).toBeDisabled();
+		await expectFocusSettled(
+			middle ? previous : main.getByRole("heading", { level: 1 }),
+			`${route} 「下一页」随后台重读禁用后`,
+			[50, 300, 1000, 2000],
+		);
+		// 列表变空后页面变短，滚动位置只会被收到新的最大值，不为交接焦点滚动。
+		expect(
+			await page.evaluate(() => window.scrollY),
+			`${route} 交接后的滚动位置`,
+		).toBe(
+			await page.evaluate(
+				(before) =>
+					Math.min(
+						before,
+						document.documentElement.scrollHeight - window.innerHeight,
+					),
+				scrolled,
+			),
+		);
+		await expectNoDuplicateControls(page, `${route}（#3388 N13-06）`);
 		await expectCleanPage(page, errors);
 	});

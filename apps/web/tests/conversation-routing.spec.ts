@@ -19,6 +19,7 @@ import {
 	history,
 } from "../src/features/conversation/conversation-test-fixtures";
 import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures";
+import { backgroundReread } from "./background-reread";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
 import {
@@ -2703,3 +2704,181 @@ test("refreshing an unavailable Agent hands focus to the h1 once it recovers (N8
 	await expectNoDuplicateControls(page, "对话（刷新 Agent 状态，N8-3-02）");
 	await expectCleanPage(page, errors);
 });
+
+type AgentProjection = ReturnType<typeof AgentProjectionV2Schema.parse>;
+
+/** 可变的 Agent 投影：后台重读读到的就是当前值（#3388）。 */
+async function mutableAgent(
+	page: Page,
+	fixture: { agentId: string; agentName: string },
+	initial: Partial<AgentProjection> = {},
+) {
+	let current = AgentProjectionV2Schema.parse({
+		...pilotFakeScenariosV2.starting.response.body,
+		agentId: fixture.agentId,
+		name: fixture.agentName,
+		managementStatus: "available",
+		serviceAvailability: "ready",
+		...initial,
+	});
+	let reads = 0;
+	await page.route(
+		(url) => url.pathname === `/api/v2/agents/${fixture.agentId}`,
+		(route) => {
+			if (route.request().method() !== "GET") return route.fallback();
+			reads += 1;
+			return route.fulfill({ json: current });
+		},
+	);
+	return {
+		reads: () => reads,
+		update(change: Partial<AgentProjection>) {
+			current = AgentProjectionV2Schema.parse({ ...current, ...change });
+		},
+	};
+}
+
+// #3388 N13-07：历史面板只在展开（由关到开）或首次读到 Agent 时聚焦一次。面板打开时 Agent 数据后台更新
+// （回到标签页重读读到变化的投影、「更新中」轮询转就绪），焦点留在输入框或历史链接上，继续键入的字不丢；
+// 1440 为 ?view=history 时的输入框与历史链接，390 为历史视图与「个人历史」展开的最近对话里的链接。
+test("background Agent updates keep focus where the user put it while the history panel is open (#3388 N13-07)", async ({
+	page,
+}, info) => {
+	test.setTimeout(60_000);
+	const mobile = info.project.name === "mobile";
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const fixture = await routingFixture(page, { recentAcrossAgents: true });
+	const agent = await mutableAgent(page, fixture);
+	await page.goto(
+		`${canonical(fixture.agentId, fixture.conversationId)}?view=history`,
+	);
+	// 窄屏历史视图收起对话列（输入框不可见），只看页头标题。
+	if (mobile)
+		await expect(
+			page.getByRole("heading", { level: 1, name: fixture.agentName }),
+		).toBeVisible();
+	else await assertChat(page);
+	const panel = page.getByRole("complementary", { name: "对话历史" });
+	// 对照：首次读到 Agent 时面板展开，焦点交给面板（既有行为）。
+	await expect(panel).toBeFocused();
+	const composer = page.getByLabel("消息", { exact: true });
+	const link = panel.locator(".conversation-history-item").first();
+	await expect(link).toBeVisible();
+	let revision = 0;
+	const rereadChanged = async (change: Partial<AgentProjection> = {}) => {
+		revision += 1;
+		agent.update({ description: `受控说明 ${revision}`, ...change });
+		const reads = agent.reads();
+		await backgroundReread(page);
+		await expect.poll(() => agent.reads()).toBeGreaterThan(reads);
+	};
+
+	if (!mobile) {
+		await composer.click();
+		await page.keyboard.type("草稿");
+		await rereadChanged();
+		await expectFocusHeld(
+			composer,
+			[150, 600, 1500],
+			"后台重读读到新投影（输入框）",
+		);
+		await page.keyboard.type("x");
+		await expect(composer).toHaveValue("草稿x");
+	}
+	await link.focus();
+	await rereadChanged();
+	await expectFocusHeld(
+		link,
+		[150, 600, 1500],
+		"后台重读读到新投影（历史链接）",
+	);
+
+	// 「更新中」时每 2s 轮询一次，转为就绪的那次读取同样不移动焦点。
+	await rereadChanged({ serviceAvailability: "updating" });
+	const focused = mobile ? link : composer;
+	await focused.focus();
+	if (!mobile) await page.keyboard.type("y");
+	const polls = agent.reads();
+	agent.update({ serviceAvailability: "ready" });
+	await expect
+		.poll(() => agent.reads(), { timeout: 6000 })
+		.toBeGreaterThan(polls);
+	await expectFocusHeld(focused, [150, 600, 1500], "「更新中」轮询转就绪");
+	if (!mobile) {
+		await page.keyboard.type("z");
+		await expect(composer).toHaveValue("草稿xyz");
+	}
+
+	if (mobile) {
+		// 390「个人历史」展开的最近对话：展开时聚焦面板（对照），之后焦点在链接上时后台重读不移走它。
+		await page.getByRole("button", { name: "返回对话", exact: true }).click();
+		await expect(page).not.toHaveURL(/view=history/);
+		await page.getByRole("button", { name: "个人历史", exact: true }).click();
+		await expect(panel).toBeFocused();
+		const recent = panel.locator(".conversation-history-item").first();
+		await recent.focus();
+		await rereadChanged();
+		await expectFocusHeld(recent, [150, 600, 1500], "最近对话链接后台重读");
+	}
+	await expectNoDuplicateControls(page, "对话历史面板（#3388 N13-07）");
+	await expectCleanPage(page, errors);
+	expect(fixture.unexpected).toEqual([]);
+});
+
+// #3388 N13-03：?view=history 下按「刷新 Agent 状态」（读取挂起，按钮保持可聚焦），浏览器后退只改了查询串、
+// 仍是同一个对话页：读到可用、横幅卸载后焦点到 h1，仍不可用时留在按钮上，都不落到 body。两视口一致。
+for (const outcome of ["ready", "unavailable"] as const)
+	test(`going back to the conversation view while refreshing the Agent keeps the same-page handoff (${outcome}, #3388 N13-03)`, async ({
+		page,
+	}, info) => {
+		const mobile = info.project.name === "mobile";
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		const fixture = await routingFixture(page);
+		await readyConversation(page, fixture.conversationId);
+		const agent = await mutableAgent(page, fixture, {
+			serviceAvailability: "unavailable",
+		});
+		await page.goto(canonical(fixture.agentId, fixture.conversationId));
+		const refresh = page.getByRole("button", { name: "刷新 Agent 状态" });
+		await expect(refresh).toBeVisible();
+		const panel = page.getByRole("complementary", { name: "对话历史" });
+		if (mobile)
+			await page.getByRole("button", { name: "个人历史", exact: true }).click();
+		await panel.getByRole("button", { name: "此 Agent 的全部历史" }).click();
+		await expect(page).toHaveURL(/\?view=history$/);
+		const reading = await holdRequests(
+			page,
+			"GET",
+			`/api/v2/agents/${fixture.agentId}`,
+		);
+		if (outcome === "ready") agent.update({ serviceAvailability: "ready" });
+		// 横幅在对话列之外：窄屏历史视图里同样可见。
+		await refresh.focus();
+		await page.keyboard.press("Enter");
+		await expect.poll(() => reading.held()).toBe(1);
+		// 「刷新 Agent 状态」读取中不改名、不禁用，焦点留在按钮上。
+		await expectFocusHeld(refresh, [30, 150], "刷新 Agent 状态读取中");
+		await page.goBack();
+		await expect(page).not.toHaveURL(/view=history/);
+		await expectFocusHeld(refresh, [30, 150], "后退只改查询串后（读取中）");
+		reading.release();
+		if (outcome === "ready") {
+			await expect(refresh).toHaveCount(0);
+			await expectFocusSettled(
+				page.getByRole("heading", { level: 1, name: fixture.agentName }),
+				"后退后读到可用",
+				[50, 300, 1000, 2000],
+			);
+		} else {
+			await expect(refresh).toHaveAttribute("aria-disabled", "false");
+			await expectFocusSettled(
+				refresh,
+				"后退后仍不可用",
+				[50, 300, 1000, 2000],
+			);
+		}
+		await expectNoDuplicateControls(page, `对话（后退，${outcome}，#3388）`);
+		await expectCleanPage(page, errors);
+	});

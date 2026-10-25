@@ -18,6 +18,7 @@ import {
 	type PlatformWorkerRuntimeModelDirectoryDeploymentPortsV1,
 } from "./runtime-model-directory-deployment.js";
 import type { PlatformWorkerInternalGatewayServerOptionsV1 } from "./runtime-native-metadata-server.js";
+import { runtimeRecoveryBudgetMs } from "./runtime-recovery-budget.js";
 import { createProductionSavedKeyCandidatesReaderV1 } from "./saved-key-candidates-production.js";
 import { createWorkerSavedKeyCandidatesApp } from "./saved-key-candidates-service.js";
 import { isNativeMetadataWorkerOriginV1 } from "./session-workload-adapter.js";
@@ -655,7 +656,13 @@ export async function createPlatformConversationWorkerOptionsV2(
 	signal: AbortSignal,
 ) {
 	conversationPrepared ??= createConversationPrepared(signal);
-	return conversationPrepared;
+	const options = await conversationPrepared;
+	const recoveryBudgetMs = runtimeRecoveryBudgetMs(
+		process.env.PLATFORM_WORKER_RUNTIME_RECOVERY_BUDGET_MS,
+	);
+	return recoveryBudgetMs === undefined
+		? options
+		: { ...options, recoveryBudgetMs };
 }
 
 export async function createPlatformWecomWorkerInstanceV1(signal: AbortSignal) {
