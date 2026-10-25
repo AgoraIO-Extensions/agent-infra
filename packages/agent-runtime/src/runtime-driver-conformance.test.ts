@@ -11,12 +11,12 @@ import type {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openCodexRuntimeDriverConformanceFixture } from "./codex-runtime-driver.test-support.js";
 import type { RuntimeDriver } from "./driver.js";
+import { RuntimeHostError } from "./errors.js";
 import {
 	ingressVerifiedRuntimeHost,
 	runtimeGrantFixture,
 } from "./grant-fixture.test-support.js";
 import { FakeRuntimeDriver, FileRuntimeStore, RuntimeHost } from "./index.js";
-import { RuntimeHostError } from "./errors.js";
 import { openMessagesRuntimeDriverConformanceFixture } from "./messages-runtime-driver.test-support.js";
 
 const directories: string[] = [];
@@ -98,10 +98,7 @@ async function openConformanceDriver(
 					: undefined;
 			const record = await execute(command, context);
 			if (command.kind === "supplement") {
-				if (
-					before?.state === "missing" &&
-					record.result.outcome === "accepted"
-				)
+				if (before?.state === "missing" && record.result.outcome === "accepted")
 					supplements.value += 1;
 				if (loseNextSupplement) {
 					// 补充已在 Driver 生效，但结果在传输中丢失：之后只能查到结果不明。
@@ -1146,10 +1143,7 @@ describe("Codex Driver boundary conformance", () => {
 		});
 
 		const restarted = await fixture.restart();
-		const restartedHost = await openConformanceHost(
-			hostPath,
-			restarted.driver,
-		);
+		const restartedHost = await openConformanceHost(hostPath, restarted.driver);
 
 		expect(
 			(

@@ -8681,7 +8681,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				session.activeExecutionId !== command.executionId ||
 				journal?.nativeCompletionStatus !== undefined ||
 				journal?.externalActionsBlocked === true ||
-				this.hasInterruption(command.nativeSessionRef, command.executionId, state)
+				this.hasInterruption(
+					command.nativeSessionRef,
+					command.executionId,
+					state,
+				)
 			) {
 				// 原 Turn 已结束、已封闭或已有停止：确定不能补充，在任何原生调用之前与操作
 				// 原子持久化稳定拒绝，同一 messageId 的重放返回该结果。
@@ -8761,10 +8765,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			return { state: "unknown" };
 		try {
 			const session = this.session(command.nativeSessionRef);
-			const execution = ownRecordValue(
-				session.executions,
-				command.executionId,
-			);
+			const execution = ownRecordValue(session.executions, command.executionId);
 			if (
 				!session.threadId ||
 				!execution ||
