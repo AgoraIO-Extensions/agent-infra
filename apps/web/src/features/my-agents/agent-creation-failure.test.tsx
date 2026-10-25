@@ -124,4 +124,63 @@ describe("Agent creation failure category (#3034)", () => {
 		expect(container.textContent).toBe("");
 		expect(screen.queryByRole("status")).toBeNull();
 	});
+
+	// #3387：暂时读取失败（503）时抛出，首次读取仍不展示原因；已显示的类别在后台重读失败时保留。
+	it("keeps a shown category when a background reread is temporarily unavailable (#3387)", async () => {
+		let available = true;
+		const { client, server } = clientWith((_request, agentId) =>
+			available
+				? {
+						status: 200,
+						body: {
+							schemaVersion: 1,
+							agentId,
+							category: "health_check_failed",
+						},
+					}
+				: {
+						status: 503,
+						body: {
+							schemaVersion: 1,
+							code: "DEPENDENCY_UNAVAILABLE",
+							message: "Controlled failure",
+							retryable: true,
+							traceId: "trace-creation-failure-unavailable",
+						},
+					},
+		);
+		available = false;
+		await expect(
+			loadAgentCreationFailure("agent-pilot-1", client),
+		).rejects.toMatchObject({ retryable: true });
+		available = true;
+		defaultClient.setConfig({
+			baseUrl: "https://platform.example.test",
+			fetch: server.fetch,
+		});
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		render(
+			<QueryClientProvider client={queryClient}>
+				<AgentCreationFailureNotice agentId="agent-pilot-1" />
+			</QueryClientProvider>,
+		);
+		const status = await screen.findByRole("status");
+		expect(status.textContent).toContain("失败原因：健康检查未通过");
+		available = false;
+		await queryClient.refetchQueries();
+		await waitFor(() =>
+			expect(
+				queryClient.getQueryState([
+					"agents",
+					"agent-pilot-1",
+					"creation-failure",
+				])?.status,
+			).toBe("error"),
+		);
+		expect(screen.getByRole("status").textContent).toContain(
+			"失败原因：健康检查未通过",
+		);
+	});
 });
