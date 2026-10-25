@@ -72,6 +72,18 @@ export type NativeCapabilityAdmissionRequest =
 	| NativeCapabilityAdmissionRequestV1
 	| NativeCapabilityAdmissionRequestV2;
 
+/** Public V3 input; service-owned operation and Key bindings are absent. */
+export type NativeCapabilityAdmissionRequestV3 = Readonly<
+	Omit<NativeCapabilityAdmissionRequestV1, "schemaVersion"> & {
+		schemaVersion: 3;
+		selection: Readonly<{
+			schemaVersion: 1;
+			modelOptionId: string;
+			reasoningLevel: string;
+		}>;
+	}
+>;
+
 export interface NativeCapabilityAdmissionCapabilityV1
 	extends NativeCapabilityMetadataV1 {
 	readonly directoryRevision: string;

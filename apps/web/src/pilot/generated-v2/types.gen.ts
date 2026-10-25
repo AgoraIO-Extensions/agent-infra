@@ -1103,6 +1103,21 @@ export type NativeCapabilityInvocationRequestV2 = {
     traceId: string;
 };
 
+export type NativeCapabilityInvocationRequestV3 = {
+    capabilityId: string;
+    directoryRevision: string;
+    idempotencyKey: string;
+    parameters: string;
+    requestId: string;
+    schemaVersion: 3;
+    selection: {
+        modelOptionId: string;
+        reasoningLevel: string;
+        schemaVersion: 1;
+    };
+    traceId: string;
+};
+
 export type NativeCapabilityInvocationResponseV1 = {
     outcome: 'accepted' | 'replayed';
     result: NativeCapabilityInvocationResultV1;
@@ -5448,7 +5463,7 @@ export type ReadConversationNativeMetadataV1Responses = {
 export type ReadConversationNativeMetadataV1Response = ReadConversationNativeMetadataV1Responses[keyof ReadConversationNativeMetadataV1Responses];
 
 export type InvokeNativeCapabilityV1Data = {
-    body: NativeCapabilityInvocationRequestV1 | NativeCapabilityInvocationRequestV2;
+    body: NativeCapabilityInvocationRequestV1 | NativeCapabilityInvocationRequestV2 | NativeCapabilityInvocationRequestV3;
     path: {
         conversationId: string;
     };

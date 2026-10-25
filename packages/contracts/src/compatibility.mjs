@@ -857,6 +857,55 @@ function isNativeCapabilityInvocationV2OpenApiAddition(previous, current) {
 	return replaced && isDeepStrictEqual(previous, normalized);
 }
 
+// SPEC §11.4 permits only the strict, explicit V3 stateful-command input.
+// Existing request variants, responses, security and other paths stay exact.
+function isNativeCapabilityInvocationV3OpenApiAddition(previous, current) {
+	const name = "NativeCapabilityInvocationRequestV3";
+	const path =
+		"/api/v2/conversations/{conversationId}/native-capability/invoke";
+	const base =
+		previous.components?.schemas?.NativeCapabilityInvocationRequestV1;
+	const added = current.components?.schemas?.[name];
+	if (!base || !added || previous.components?.schemas?.[name]) return false;
+	const selection = {
+		additionalProperties: false,
+		properties: {
+			schemaVersion: { const: 1, type: "number" },
+			modelOptionId: { minLength: 1, type: "string" },
+			reasoningLevel: { minLength: 1, type: "string" },
+		},
+		required: ["schemaVersion", "modelOptionId", "reasoningLevel"],
+		type: "object",
+	};
+	if (
+		!isDeepStrictEqual(added, {
+			...base,
+			properties: {
+				...base.properties,
+				schemaVersion: { const: 3, type: "number" },
+				selection,
+			},
+			required: [...base.required, "schemaVersion", "selection"],
+		})
+	)
+		return false;
+	const normalized = structuredClone(current);
+	const body =
+		normalized.paths?.[path]?.post?.requestBody?.content?.["application/json"];
+	const reference = (version) => ({
+		$ref: `#/components/schemas/NativeCapabilityInvocationRequestV${version}`,
+	});
+	if (
+		!isDeepStrictEqual(body?.schema, {
+			anyOf: [reference(1), reference(2), reference(3)],
+		})
+	)
+		return false;
+	body.schema = { anyOf: [reference(1), reference(2)] };
+	delete normalized.components.schemas[name];
+	return isDeepStrictEqual(previous, normalized);
+}
+
 // Browser handoff is an additive, authenticated V3 control route. Its request
 // and response schemas are new components; the existing Runtime routes remain
 // byte-compatible.
@@ -6163,6 +6212,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			) &&
 			!isFileLimitDeclarationOpenApiAddition(previous, current) &&
 			!isNativeCapabilityInvocationV2OpenApiAddition(previous, current) &&
+			!isNativeCapabilityInvocationV3OpenApiAddition(previous, current) &&
 			!isAgentManagementRevisionOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
