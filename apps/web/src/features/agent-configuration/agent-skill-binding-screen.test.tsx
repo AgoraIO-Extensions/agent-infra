@@ -831,4 +831,30 @@ describe("AgentSkillBindingScreen (O-02)", () => {
 		await new Promise((resolve) => setTimeout(resolve, 2300));
 		expect(readBindings.mock.calls.length).toBe(calls);
 	}, 10_000);
+
+	it("stops polling the bindings and the Agent after a non-retryable poll failure (#3433 N15-01)", async () => {
+		const readBindings = vi
+			.fn()
+			.mockResolvedValueOnce({
+				schemaVersion: 1 as const,
+				agentId: agent.agentId,
+				agentVersion: "agent-version-1",
+				configurationRevision: 3,
+				bindings: [skillBinding("pending_sync")],
+			})
+			.mockRejectedValue(requestError(404, false));
+		const onRefreshAgent = vi.fn();
+		renderScreen({ readBindings, onRefreshAgent });
+		await screen.findByText("内容同步");
+		expect(
+			await screen.findByText("无法读取 Skill 绑定", undefined, {
+				timeout: 4000,
+			}),
+		).toBeTruthy();
+		const reads = readBindings.mock.calls.length;
+		const agentReads = onRefreshAgent.mock.calls.length;
+		await new Promise((resolve) => setTimeout(resolve, 4300));
+		expect(readBindings.mock.calls.length).toBe(reads);
+		expect(onRefreshAgent.mock.calls.length).toBe(agentReads);
+	}, 12_000);
 });
