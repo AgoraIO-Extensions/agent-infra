@@ -599,6 +599,16 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 服务端没有返回名称时只显示类型与 ID 短形式，详情写「未提供」，不说明原因。
 Agent 筛选沿用目录选择器的交互按名称单选，候选在展开时从个人可见或管理员 Agent 列表读取，提交的仍是 Agent ID。
 
+后台重读（[#3387](https://github.com/AgoraIO-Extensions/agent-infra/issues/3387)）：回到标签页、窗口重新聚焦
+（TanStack Query 的 `refetchOnWindowFocus`）、轮询与写入后的失效重取都是后台重读。页面已显示过一次读取结果时，
+后台重读进行中或遇到可重试的失败（503、网络中断）都不替换已显示的内容：不换成读取中或读取失败卡，不收起列表、
+表单、筛选与提示，未保存的输入、焦点与滚动位置保留，也不另加提示（同目录名称批量读取）；下一次读到时按新结果更新。
+没有结果、失败不可重试（登录失效、无权、不存在、响应无效），或用户发起的读取（页头刷新、「查询」「重置」、翻页、
+恢复按钮、「重新登录」与「重新检查」确认会话）仍按 D2-59 显示读取中与读取失败，失败一直显示到下一次读到结果。
+审计列表后台重读期间只有页头「刷新审计记录」显示读取中（`aria-disabled`），表格不换成读取行。共用判断在
+`features/background-read.ts`。部署选项读取不在此列：重读失败由表单内的部署状态说明接手（N12-01），页面与其余字段不被替换。
+这些状态只用已有结构呈现，按[回写边界](#opendesign-视觉版本)不逐一画出，导出稿不画后台重读。
+
 `Card`、`Collapsible`、`ConfirmDialog`、`DropdownMenu`、`RadioGroup`、`Spinner`、`StateCard`、`Toast` 与 `features/agent-mark.tsx` 为手写组件，不由 CLI 生成。
 `Alert` 不设默认 role：首屏静态说明不设 role，异步结果用 `role="status"`，失败用 `role="alert"`；结果提示获得焦点、并已由 Toast 补充播报时（申请提交结果）不再设 role，避免同一结果播报两次。
 `Badge` 只有 `variant="chip"`（状态，显式传 `tone`）与 `variant="tag"` 两种，不从 `data-status` 推导色调。
