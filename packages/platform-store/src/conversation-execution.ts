@@ -16,6 +16,8 @@ import {
 	type ConversationStateDecisionV1,
 	type ConversationStopDecisionV1,
 	type ConversationTaskAdmissionTransactionPortV1,
+	type ConversationTaskExecutionStatusV1,
+	type ConversationWithdrawDecisionV1,
 	type CreateConversationDecisionV1,
 	type FileRecordV1,
 	type NativeCapabilityAdmissionDecisionV1,
@@ -64,6 +66,8 @@ import {
 	type Transaction,
 	text,
 	unavailable,
+	type WithdrawDecide,
+	type WithdrawRequest,
 } from "./conversation-execution-common.js";
 import { currentConversationExecutionRelayKeyBindingV1 } from "./conversation-execution-key.js";
 import {
@@ -82,6 +86,7 @@ import {
 	parseModelSelectionResult,
 	parseRegenerationResult,
 	parseStopResult,
+	parseWithdrawResult as parseWithdrawCommandResult,
 } from "./conversation-execution-records.js";
 import {
 	completeIdempotency,
@@ -389,6 +394,15 @@ export class PostgresConversationExecutionTransactionV1
 			}
 
 			const state = await readMessageState(transaction, conversation);
+			// 原生命令与 Skill 不进入排队：有排队消息时同样按占用处理（§12.5）。
+			const [waiting] =
+				state.activeExecution || (state.queue?.waitingCount ?? 0) === 0
+					? []
+					: await transaction<{ execution_id: string }[]>`
+							select execution_id from platform.conversation_executions
+							where conversation_id = ${conversation.conversationId} and status = 'waiting'
+							order by task_wait_order limit 1
+						`;
 			const inputFiles =
 				command.schemaVersion === 2
 					? {
@@ -404,7 +418,11 @@ export class PostgresConversationExecutionTransactionV1
 					: null;
 			const decision = await decide({
 				conversation,
-				activeExecution: state.activeExecution ?? null,
+				activeExecution:
+					state.activeExecution ??
+					(waiting
+						? { executionId: waiting.execution_id, status: "waiting" as const }
+						: null),
 				authorizationRevision: conversation.authorizationRevision,
 				inputFiles,
 			});
@@ -865,6 +883,7 @@ export class PostgresConversationExecutionTransactionV1
 				transaction,
 				conversation,
 				this.#readRequestedModelDisplayName,
+				{ queueAdmission: true },
 			);
 			const decision = decide(state);
 			if (!isMessagePlan(decision)) {
@@ -917,6 +936,7 @@ export class PostgresConversationExecutionTransactionV1
 						 authorization_revision, model_configuration_revision,
 						 model_option_id, reasoning_level, execution_source,
 						relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version,
+						task_wait_order, task_wait_deadline, last_event_sequence,
 						created_at, updated_at)
 					values
 						(${plan.execution.executionId}, ${plan.execution.conversationId}, ${conversation.sandbox?.sandboxId ?? null},
@@ -932,6 +952,9 @@ export class PostgresConversationExecutionTransactionV1
 						${executionBinding?.relayKeyBinding?.subjectId ?? null},
 						${executionBinding?.relayKeyBinding?.keyId ?? null},
 						${executionBinding?.relayKeyBinding?.keyVersion ?? null},
+						${plan.execution.taskWaitOrder ?? null},
+						${plan.execution.taskWaitDeadline ?? null},
+						${plan.statusEvent?.sequence ?? 0},
 						 ${plan.execution.createdAt},
 						 ${plan.execution.createdAt})
 				`,
@@ -942,6 +965,25 @@ export class PostgresConversationExecutionTransactionV1
 					traceId: request.command.traceId,
 					requestId: request.command.requestId,
 				});
+			}
+			if (plan.statusEvent) {
+				// 入队写平台来源的 task.status: waiting 事件，与 Execution 同事务（§12.5）。
+				const statusEvent = plan.statusEvent;
+				await awaitConversationExecutionQueryV1(
+					transaction,
+					transaction`
+					insert into platform.conversation_events
+						(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+						 conversation_cursor, event_type, event_payload, event_digest, source,
+						 runtime_cursor, occurred_at)
+					values (${statusEvent.eventId}, ${conversation.conversationId}, ${plan.message.executionId},
+						${`platform:${statusEvent.eventId}`}, ${statusEvent.sequence},
+						${statusEvent.conversationCursor}, ${statusEvent.event.type},
+						${transaction.json(statusEvent.event as unknown as JsonValue)},
+						${createHash("sha256").update(JSON.stringify(statusEvent.event)).digest("hex")},
+						'platform', null, ${plan.message.createdAt})
+				`,
+				);
 			}
 			for (const fileId of request.command.attachments ?? []) {
 				const [row] = await awaitConversationExecutionQueryV1(
@@ -1007,7 +1049,13 @@ export class PostgresConversationExecutionTransactionV1
 							modelOptionId: plan.outboxIntent.modelOptionId,
 							reasoningLevel: plan.outboxIntent.reasoningLevel,
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
-					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.traceParent ?? null}, ${plan.outboxIntent.occurredAt},
+					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.traceParent ?? null},
+					 ${
+							// 排队消息的 Turn 只能由认领的等待判定准入（与任务 API 相同）。
+							plan.kind === "queued"
+								? transaction`'infinity'::timestamptz`
+								: plan.outboxIntent.occurredAt
+						},
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`,
 			);
@@ -1501,6 +1549,126 @@ export class PostgresConversationExecutionTransactionV1
 			);
 			await this.#requireCurrentPersonalApiAdmission(transaction, authority);
 			return { outcome: "accepted", result: plan.result };
+		});
+	}
+
+	/**
+	 * 撤回排队消息（工程 Spec §12.5）。等待中的 Execution 与认领、到期和撤权一样先锁原 Turn
+	 * outbox（其内先锁 Conversation），在同一事务中以 `cancelled`/`WITHDRAWN` 终结并写入
+	 * task.status 事件；已离开等待的返回已开始或已结束，不影响执行。
+	 */
+	async executeWithdrawal(
+		request: WithdrawRequest,
+		decide: WithdrawDecide,
+	): Promise<ConversationWithdrawDecisionV1> {
+		return this.#transaction(async (transaction) => {
+			const authority = parseAuthority(request.authority);
+			await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
+			const executionId = text(request.command.targetExecutionId);
+			const [initialExecution] = await transaction<
+				{ status: string; conversation_id: string }[]
+			>`
+				select status, conversation_id from platform.conversation_executions
+				where execution_id = ${executionId}
+			`;
+			let originalOutbox: Awaited<ReturnType<typeof lockDispatchOutbox>>;
+			if (
+				initialExecution?.status === "waiting" &&
+				initialExecution.conversation_id === request.command.conversationId
+			)
+				originalOutbox = await lockDispatchOutbox(
+					transaction,
+					`conversation:turn:${executionId}`,
+				);
+			const conversation = await lockConversation(
+				transaction,
+				text(request.command.conversationId),
+			);
+			if (!conversation || !matchesBinding(conversation, authority))
+				return { outcome: "denied" };
+			const scope = {
+				scopeType: "conversation",
+				scopeId: conversation.conversationId,
+				actorId: authority.actorId,
+				commandType: "withdraw",
+				key: text(request.command.idempotencyKey, 128),
+			};
+			const existing = await readIdempotency(transaction, scope);
+			if (existing) {
+				if (existing.request_digest !== request.requestDigest)
+					return { outcome: "conflict", reason: "idempotency_conflict" };
+				if (existing.status !== "completed") unavailable();
+				const result = parseWithdrawCommandResult(existing.result, executionId);
+				return { outcome: "replayed", result };
+			}
+			const execution = await lockDispatchExecution(
+				transaction,
+				conversation.conversationId,
+				executionId,
+			);
+			const decision = decide({
+				conversation,
+				target:
+					execution && execution.actor_id === authority.actorId
+						? {
+								executionId: execution.execution_id,
+								conversationId: execution.conversation_id,
+								actorId: execution.actor_id,
+								status: execution.status as ConversationTaskExecutionStatusV1,
+								queued: execution.task_wait_order !== null,
+							}
+						: undefined,
+			});
+			if (!("result" in decision)) return { outcome: "denied" };
+			const result = parseWithdrawCommandResult(decision.result, executionId);
+			if (
+				decision.idempotency.scopeId !== conversation.conversationId ||
+				decision.idempotency.actorId !== authority.actorId ||
+				decision.idempotency.commandType !== "withdraw" ||
+				decision.idempotency.key !== request.command.idempotencyKey ||
+				decision.idempotency.requestDigest !== request.requestDigest
+			)
+				unavailable();
+			const occurredAt = new Date();
+			const reservationId = await reserveIdempotency(transaction, {
+				...scope,
+				requestDigest: request.requestDigest,
+				occurredAt,
+			});
+			if (!reservationId) unavailable();
+			if (result.status === "withdrawn") {
+				const dispatchConversation = await lockDispatchConversation(
+					transaction,
+					conversation.conversationId,
+				);
+				if (
+					!originalOutbox ||
+					!dispatchConversation ||
+					!execution ||
+					execution.status !== "waiting"
+				)
+					unavailable();
+				await finishWaitingTask(
+					transaction,
+					{
+						outbox: originalOutbox,
+						conversation: dispatchConversation,
+						execution,
+					},
+					"cancelled",
+					"WITHDRAWN",
+					"platform-api",
+				);
+				await transaction`
+					insert into platform.conversation_audit_events
+						(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at)
+					values (${randomUUID()}, ${conversation.conversationId}, ${executionId},
+						${authority.agentId}, ${authority.actorId}, 'conversation.message.withdrawn',
+						${request.command.traceId}, ${request.command.requestId}, ${occurredAt})
+				`;
+			}
+			await completeIdempotency(transaction, reservationId, result, occurredAt);
+			return { outcome: "accepted", result };
 		});
 	}
 

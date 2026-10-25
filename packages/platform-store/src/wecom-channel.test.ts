@@ -2480,7 +2480,8 @@ it("pins the sender-to-Connection fact in the receipt and delivery claim", async
 			select connection_authorization_fact from platform.wecom_receipts
 			where id=${accepted.receipt.receiptId}`;
 		expect(row?.connection_authorization_fact).toEqual(fact);
-		await sql`update platform.conversation_executions set status='completed'
+		// 该发送者的会话此前已有回复，本条进入排队；按失败结束即可领取，验证回执携带的事实。
+		await sql`update platform.conversation_executions set status='failed'
 			where execution_id=${accepted.receipt.executionId}`;
 		const claim = await connectionStore.claim();
 		expect(claim?.connectionAuthorizationFact).toEqual(fact);
@@ -2537,15 +2538,16 @@ describe("WeCom /new and unavailable conversations (#3184)", () => {
 		const next = await receiptOf(scoped(sender, "rotation_3", "next"));
 		expect(next.receipt.status).toBe("accepted");
 		expect(next.receipt.conversationId).not.toBe(first.receipt.conversationId);
-		// 重放同一个 /new 事件不再轮换：下一条仍进入同一个新会话（处理中，所以是 busy）。
+		// 重放同一个 /new 事件不再轮换：下一条仍进入同一个新会话（处理中，所以进入排队）。
 		expect(await receiptOf(scoped(sender, "rotation_2", "/new"))).toEqual({
 			...started,
 			outcome: "replayed",
 		});
 		const again = await receiptOf(scoped(sender, "rotation_4", "again"));
 		expect(again.receipt).toMatchObject({
-			status: "busy",
+			status: "accepted",
 			conversationId: next.receipt.conversationId,
+			queuePosition: 1,
 		});
 		expect(
 			await sql`select action, outcome from platform.audit_events where request_id=${started.receipt.receiptId}`,
@@ -2909,4 +2911,125 @@ describe("WeCom receipt actions in the administrator audit query (#3258)", () =>
 			await legacyQuery.close();
 		}
 	}, 60_000);
+});
+
+describe("WeCom bounded queue receipts (#3376)", () => {
+	it("queues in-flight messages within the reply window and exposes queue facts only to the connection holder", async () => {
+		await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+		const botId = "queue-provider";
+		await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status) values (${botId},${message.agentId},${message.bindingReference},'queue-worker',1,now()+interval '60 seconds','connected')`;
+		const owner = new PostgresWecomChannelV1({
+			...db,
+			userDirectory: fixtureUserDirectory,
+			identity: fixtureIdentity,
+			connectionHolderId: "queue-worker",
+		});
+		const other = new PostgresWecomChannelV1({
+			...db,
+			userDirectory: fixtureUserDirectory,
+			identity: fixtureIdentity,
+			connectionHolderId: "queue-other-worker",
+		});
+		const fence = { botId, holderId: "queue-worker", fence: 1 };
+		// 回复有效期短于 10 分钟：排队期限取有效期结束前 30 秒（§14.2.4）。
+		const replyExpiresAt = new Date(Date.now() + 300_000).toISOString();
+		const event = (eventId: string) => ({
+			...message,
+			providerId: botId,
+			senderId: "queue_sender",
+			eventId,
+			replyHandle: `handle-${eventId}`,
+			replyExpiresAt,
+		});
+		const receive = async (eventId: string) => {
+			const result = await channel(owner).receive(event(eventId), fence);
+			if (result.outcome !== "accepted") throw new Error("Expected receipt");
+			return result.receipt;
+		};
+		try {
+			const active = await receive("queue_active");
+			expect(active.queuePosition).toBeUndefined();
+			const queued = [
+				await receive("queue_1"),
+				await receive("queue_2"),
+				await receive("queue_3"),
+			];
+			expect(queued.map(({ status, queuePosition }) => [status, queuePosition]))
+				.toEqual([
+					["accepted", 1],
+					["accepted", 2],
+					["accepted", 3],
+				]);
+			const busy = await receive("queue_4");
+			expect(busy).toMatchObject({
+				status: "busy",
+				conversationId: active.conversationId,
+				executionId: null,
+			});
+			const deadlines = await sql<{ matches: boolean }[]>`
+				select e.task_wait_deadline = r.expires_at - interval '30 seconds' as matches
+				from platform.wecom_receipts r
+				join platform.conversation_executions e on e.execution_id = r.execution_id
+				where r.id in ${sql(queued.map(({ receiptId }) => receiptId))}
+			`;
+			expect(deadlines).toEqual([
+				{ matches: true },
+				{ matches: true },
+				{ matches: true },
+			]);
+			// 位次从持久等待顺序派生，只给持有该连接的 Worker。
+			expect(await owner.listQueueNotices()).toEqual(
+				queued.map((receipt, index) => ({
+					receiptId: receipt.receiptId,
+					scope: expect.objectContaining({ senderId: "queue_sender" }),
+					replyHandle: `handle-queue_${index + 1}`,
+					position: index + 1,
+				})),
+			);
+			expect(await other.listQueueNotices()).toEqual([]);
+
+			// 繁忙回执带当前排队条数，用于“排队已满”提示。
+			const busyClaim = await owner.claim();
+			expect(busyClaim).toMatchObject({
+				receiptId: busy.receiptId,
+				acceptanceStatus: "busy",
+				queuedCount: 3,
+			});
+			if (busyClaim) await owner.finish(busyClaim, "sent");
+
+			// 第一条开始处理（认领准入写 task.status: unknown），第二条排队超时。
+			const [first, second, third] = queued;
+			if (!first || !second || !third) throw new Error("Missing fixture");
+			await sql`update platform.conversation_executions set status='completed' where execution_id=${active.executionId}`;
+			await sql`update platform.conversation_executions set status='unknown' where execution_id=${first.executionId}`;
+			await sql`insert into platform.conversation_events
+				(event_id, conversation_id, execution_id, adapter_event_key, sequence, conversation_cursor,
+				 event_type, event_payload, event_digest, source, runtime_cursor, occurred_at)
+				select 'queue-started-event', e.conversation_id, e.execution_id, 'platform:queue-started-event',
+					e.last_event_sequence + 1, c.last_conversation_cursor + 1, 'task.status',
+					${sql.json({ type: "task.status", status: "unknown" })}, ${"a".repeat(64)}, 'platform', null, now()
+				from platform.conversation_executions e join platform.conversations c on c.id = e.conversation_id
+				where e.execution_id = ${first.executionId}`;
+			await sql`update platform.conversation_executions set status='failed' where execution_id=${second.executionId}`;
+			await sql`update platform.conversation_messages set status='failed', failure_code='TASK_WAIT_TIMEOUT' where execution_id=${second.executionId}`;
+			expect(
+				(await owner.listQueueNotices()).map(({ receiptId, position }) => [
+					receiptId,
+					position,
+				]),
+			).toEqual([
+				[first.receiptId, null],
+				[third.receiptId, 1],
+			]);
+			// 排队超时的回执立即可领取，并带上未开始即结束的原因。
+			const timedOut = await owner.claim();
+			expect(timedOut).toMatchObject({
+				receiptId: second.receiptId,
+				executionStatus: "failed",
+				queue: { failureCode: "TASK_WAIT_TIMEOUT" },
+			});
+		} finally {
+			await Promise.all([owner.close(), other.close()]);
+		}
+	});
 });

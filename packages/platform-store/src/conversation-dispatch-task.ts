@@ -26,7 +26,12 @@ import {
 	StaleDispatchLease,
 	type Transaction,
 } from "./conversation-dispatch-common.js";
-import { bindingMatches } from "./conversation-dispatch-sql.js";
+import {
+	bindingMatches,
+	lockConversation,
+	lockExecution,
+	lockOutbox,
+} from "./conversation-dispatch-sql.js";
 import { exactPayload } from "./conversation-dispatch-validation.js";
 import { persistTaskControl } from "./task-control-record.js";
 
@@ -237,13 +242,15 @@ export async function recordTaskStatus(
 			boundary.channelId !== state.execution.channel_id)
 	)
 		throw new StaleDispatchLease();
+	const apiTask =
+		boundary !== undefined &&
+		isTaskApiChannelV1(state.execution.channel_id, boundary.principal);
 	const event = publicTaskStatusEventV1({
-		isTask:
-			state.execution.task_wait_order !== null ||
-			(boundary !== undefined &&
-				isTaskApiChannelV1(state.execution.channel_id, boundary.principal)),
+		isTask: state.execution.task_wait_order !== null || apiTask,
 		status,
 		reason,
+		// Web/渠道排队消息的取消带受限原因（撤回、权限失效，§12.5）；任务 API 不变。
+		queuedMessage: state.execution.task_wait_order !== null && !apiTask,
 	});
 	if (!event) return;
 	const [execution] = await transaction<{ sequence: string }[]>`
@@ -404,4 +411,53 @@ export async function finishWaitingTask(
 	if (messages.length !== 1) throw new StaleDispatchLease();
 	await recordTaskStatus(transaction, state, status, workerId, reason);
 	state.execution.status = status;
+}
+
+/**
+ * 代次隔离完成、会话标记为不可用的同一事务中终结本会话尚未开始的等待 Execution（API 任务与
+ * Web/渠道排队消息，工程 Spec §12.5、Runtime HLD §7.3），原因为 `CONVERSATION_UNAVAILABLE`。
+ * 调用方已持有该 Conversation 锁；逐条按原 outbox → Execution 的顺序加锁。绑定已变化的等待项
+ * 留给认领路径收敛，不影响隔离确认。
+ */
+export async function finishConversationWaitingTasks(
+	transaction: Transaction,
+	conversationId: string,
+	sessionGeneration: number,
+	workerId: string,
+): Promise<void> {
+	const waiting = await transaction<{ execution_id: string }[]>`
+		select execution_id from platform.conversation_executions
+		where conversation_id = ${conversationId}
+			and session_generation = ${sessionGeneration}
+			and status = 'waiting'
+		order by task_wait_order, execution_id
+	`;
+	for (const { execution_id: executionId } of waiting) {
+		try {
+			await transaction.savepoint(async (savepoint) => {
+				const outbox = await lockOutbox(
+					savepoint,
+					`conversation:turn:${executionId}`,
+					conversationId,
+				);
+				const conversation = await lockConversation(savepoint, conversationId);
+				const execution = await lockExecution(
+					savepoint,
+					conversationId,
+					executionId,
+				);
+				if (!outbox || !conversation || execution?.status !== "waiting")
+					return;
+				await finishWaitingTask(
+					savepoint,
+					{ outbox, conversation, execution },
+					"failed",
+					"CONVERSATION_UNAVAILABLE",
+					workerId,
+				);
+			});
+		} catch (error) {
+			if (!(error instanceof StaleDispatchLease)) throw error;
+		}
+	}
 }

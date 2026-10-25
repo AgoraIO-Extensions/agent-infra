@@ -9708,3 +9708,268 @@ describe("aborted dispatch polls (#2664)", () => {
 		}
 	});
 });
+
+/** Web 排队消息：与写入路径相同的等待 Execution、来源消息、只能由认领准入的 Turn 与原任务授权。 */
+async function seedQueued(
+	work: Awaited<ReturnType<typeof seed>>,
+	deadlineMs = 60_000,
+) {
+	const suffix = fixture++;
+	const executionId = `execution-queued-${suffix}`;
+	const messageId = `message-queued-${suffix}`;
+	const turnId = `turn-queued-${suffix}`;
+	await client`
+		insert into platform.conversation_executions
+			(execution_id, conversation_id, sandbox_id, agent_id, actor_id, principal_type, channel_id, turn_id,
+			 status, task_wait_order, task_wait_deadline, session_generation, delivery_fence,
+			 authorization_revision, model_configuration_revision, model_option_id, reasoning_level,
+			 last_event_sequence, created_at, updated_at)
+		select ${executionId}, e.conversation_id, e.sandbox_id, e.agent_id, e.actor_id, e.principal_type,
+			e.channel_id, ${turnId}, 'waiting', 100000 + ${suffix},
+			clock_timestamp() + (${deadlineMs}::bigint * interval '1 millisecond'), 1, 0,
+			'authorization-dispatch', 4, 'model-option-dispatch', 'medium', 0, now(), now()
+		from platform.conversation_executions e where e.execution_id = ${work.executionId}
+	`;
+	await client`
+		insert into platform.conversation_messages
+			(message_id, conversation_id, actor_id, role, text, execution_id, status, created_at, updated_at)
+		values (${messageId}, ${work.conversationId}, 'actor-dispatch', 'user',
+			'queued dispatch fixture', ${executionId}, 'submitted', now(), now())
+	`;
+	await client`
+		insert into platform.outbox_items
+			(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+			 available_at, created_at, updated_at)
+		values (${`conversation:turn:${executionId}`}, 'conversation', ${work.conversationId},
+			'conversation.turn.submit.v1', ${client.json({
+				schemaVersion: 1,
+				conversationId: work.conversationId,
+				executionId,
+				messageId,
+				turnId,
+				sessionGeneration: 1,
+				modelConfigurationRevision: 4,
+				modelOptionId: "model-option-dispatch",
+				reasoningLevel: "medium",
+			})}, 'trace-queued', 'request-queued', 'infinity', now(), now())
+	`;
+	await client`insert into platform.agent_owners (agent_id, owner_id, created_at)
+		values ('agent-dispatch', 'actor-dispatch', now()) on conflict do nothing`;
+	await client`insert into platform.task_authorization_records(id, execution_id, boundary)
+		values (${`authorization-${executionId}`}, ${executionId}, ${client.json({
+			schemaVersion: 1,
+			principal: { kind: "user", id: "actor-dispatch" },
+			agentId: "agent-dispatch",
+			channelId: "web",
+			identityRevision: "identity-dispatch",
+			agentAuthorizationRevision: "authorization-dispatch",
+			// actor-dispatch 是 Owner：出队前重验的当前访问来源是 owner。
+			accessSources: [{ kind: "owner", userId: "actor-dispatch" }],
+		})})`;
+	return {
+		conversationId: work.conversationId,
+		executionId,
+		messageId,
+		itemId: `conversation:turn:${executionId}`,
+	};
+}
+
+async function queuedOutcome(queued: { executionId: string }) {
+	const [row] = await client`
+		select e.status as execution, m.status as message, m.failure_code
+		from platform.conversation_executions e
+		join platform.conversation_messages m on m.execution_id = e.execution_id
+		where e.execution_id = ${queued.executionId}
+	`;
+	const events = await client<{ event_payload: unknown }[]>`
+		select event_payload from platform.conversation_events
+		where execution_id = ${queued.executionId} and event_type = 'task.status'
+		order by sequence
+	`;
+	return { ...row, events: events.map(({ event_payload }) => event_payload) };
+}
+
+describe("Web bounded queue dispatch (#3376)", () => {
+	const queueStore = () =>
+		new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			userDirectory: {
+				resolveUser: async (userId: string) => ({
+					schemaVersion: 1 as const,
+					userId,
+					accountStatus: "active" as const,
+					organizationIds: [],
+					authorizationRevision: "identity-dispatch",
+				}),
+			},
+		});
+	const claim = async (itemId: string) => {
+		const store = queueStore();
+		const decision = await store.claim({
+			schemaVersion: 1,
+			itemId,
+			workerId: "queue-worker",
+			leaseDurationMs: 30_000,
+		});
+		return { store, decision };
+	};
+	it("admits queued messages one at a time in FIFO order after the current reply", async () => {
+		const active = await seed("conversation.turn.submit.v1");
+		const first = await seedQueued(active);
+		const second = await seedQueued(active);
+		const stores: PostgresConversationDispatchStoreV1[] = [];
+		const attempt = async (itemId: string) => {
+			const result = await claim(itemId);
+			stores.push(result.store);
+			return result.decision;
+		};
+		try {
+			// 当前回复占用会话：排队消息继续等待，不并发启动第二个回复。
+			expect(await attempt(first.itemId)).toEqual({ outcome: "busy" });
+			await client`update platform.conversation_executions set status = 'completed' where execution_id = ${active.executionId}`;
+			// 只准入同会话中等待顺序最小的一条。
+			expect(await attempt(second.itemId)).toEqual({ outcome: "busy" });
+			const admitted = await attempt(first.itemId);
+			expect(admitted).toMatchObject({
+				outcome: "claimed",
+				claim: {
+					executionId: first.executionId,
+					executionStatus: "waiting",
+				},
+			});
+			expect(await queuedOutcome(second)).toMatchObject({
+				execution: "waiting",
+				message: "submitted",
+			});
+		} finally {
+			await Promise.all(stores.map((store) => store.close()));
+		}
+	});
+
+	it("keeps the queue when the current reply is being stopped", async () => {
+		const active = await seed("conversation.turn.submit.v1", {
+			executionStatus: "processing",
+			hostSessionRef: "host-queue-stop",
+		});
+		await seedStop(active);
+		const queued = await seedQueued(active);
+		const { store, decision } = await claim(queued.itemId);
+		try {
+			// 停止只作用于当前回复：确认停止前排队消息等待，不被清空。
+			expect(decision).toEqual({ outcome: "busy" });
+			expect(await queuedOutcome(queued)).toMatchObject({
+				execution: "waiting",
+				message: "submitted",
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("ends an expired queued message with TASK_WAIT_TIMEOUT and a status event", async () => {
+		const active = await seed("conversation.turn.submit.v1");
+		const queued = await seedQueued(active, 1);
+		await client`update platform.conversation_executions
+			set created_at = clock_timestamp() - interval '2 seconds',
+				task_wait_deadline = clock_timestamp() - interval '1 second'
+			where execution_id = ${queued.executionId}`;
+		const { store, decision } = await claim(queued.itemId);
+		try {
+			expect(decision).toEqual({ outcome: "failed" });
+			expect(await queuedOutcome(queued)).toEqual({
+				execution: "failed",
+				message: "failed",
+				failure_code: "TASK_WAIT_TIMEOUT",
+				events: [
+					{ type: "task.status", status: "failed", reason: "TASK_WAIT_TIMEOUT" },
+				],
+			});
+			expect(await dispatchState(queued)).toMatchObject({ status: "failed" });
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("cancels a queued message whose sender lost access before it starts", async () => {
+		const active = await seed("conversation.turn.submit.v1");
+		const queued = await seedQueued(active);
+		const sibling = await seed("conversation.turn.submit.v1");
+		const unaffected = await seedQueued(sibling);
+		await client`insert into platform.platform_user_disables (user_id) values ('actor-dispatch') on conflict do nothing`;
+		const { store, decision } = await claim(queued.itemId);
+		try {
+			expect(decision).toEqual({ outcome: "failed" });
+			// 出队前重验发现权限失效：取消且不投递，取消事件带受限原因。
+			expect(await queuedOutcome(queued)).toEqual({
+				execution: "cancelled",
+				message: "failed",
+				failure_code: "AUTHORIZATION_REVOKED",
+				events: [
+					{
+						type: "task.status",
+						status: "cancelled",
+						reason: "AUTHORIZATION_REVOKED",
+					},
+				],
+			});
+			// 只作用于被认领的这一条；其他会话的排队消息由各自的认领重验。
+			expect(await queuedOutcome(unaffected)).toMatchObject({
+				execution: "waiting",
+			});
+		} finally {
+			await store.close();
+			await client`delete from platform.platform_user_disables where user_id = 'actor-dispatch'`;
+		}
+	});
+
+	it("fails the conversation's waiting queue when generation isolation makes it unavailable", async () => {
+		const work = await seedIsolation();
+		const queued = await seedQueued(work);
+		const store = open();
+		const transaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		const events = createConversationEventUseCaseV1({ transaction });
+		const useCase = createConversationDispatchUseCaseV1(
+			{
+				store,
+				authorization: isolationAuthorization,
+				runtimeHost: isolationHost(work),
+				events,
+			},
+			{ retryDelayMs: 0 },
+		);
+		try {
+			for (
+				let attempt = 0;
+				attempt < 6 &&
+				(await isolationState(work))?.isolation_status !== "confirmed";
+				attempt++
+			)
+				await useCase.dispatch({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "worker-queue-isolation",
+				});
+			expect(await isolationState(work)).toMatchObject({
+				status: "unavailable",
+				isolation_status: "confirmed",
+			});
+			expect(await queuedOutcome(queued)).toEqual({
+				execution: "failed",
+				message: "failed",
+				failure_code: "CONVERSATION_UNAVAILABLE",
+				events: [
+					{
+						type: "task.status",
+						status: "failed",
+						reason: "CONVERSATION_UNAVAILABLE",
+					},
+				],
+			});
+			expect(await dispatchState(queued)).toMatchObject({ status: "failed" });
+		} finally {
+			await Promise.all([store.close(), transaction.close()]);
+		}
+	});
+});

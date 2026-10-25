@@ -373,6 +373,7 @@ export async function readMessageState(
 	transaction: Transaction,
 	conversation: ConversationExecutionConversationStateV1,
 	readDisplayName?: RequestedModelDisplayNameResolverV1,
+	options: { readonly queueAdmission?: boolean } = {},
 ): Promise<ConversationExecutionStateV1> {
 	const agent = await lockAgentConfiguration(transaction, conversation.agentId);
 	// 回退时要记录原选项显示名，即使该选项已从当前配置删除（G-07）。
@@ -383,6 +384,40 @@ export async function readMessageState(
 		conversation.selectedModelOptionId,
 		readDisplayName,
 	);
+	// 本会话的排队在 Conversation 锁内变化（受理、认领、撤回、到期均先锁会话），计数稳定。
+	const [waiting] = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<{ waiting_count: string }[]>`
+		select count(*)::text as waiting_count
+		from platform.conversation_executions
+		where conversation_id = ${conversation.conversationId} and status = 'waiting'
+	`,
+	);
+	const waitingCount = safeInteger(waiting?.waiting_count ?? "0", 0);
+	const queueAgent = async (occupied: boolean) => {
+		if (!options.queueAdmission || !occupied) return { waitingCount };
+		// 与任务 API 共用 Agent 等待顺序与容量：同一 Agent 锁内分配顺序（§12.5）。
+		await awaitConversationExecutionQueryV1(
+			transaction,
+			transaction`select pg_advisory_xact_lock(pg_catalog.hashtextextended(${`task:agent:${conversation.agentId}`}, 0))`,
+		);
+		const [row] = await awaitConversationExecutionQueryV1(
+			transaction,
+			transaction<{ waiting_count: string; last_order: string | null }[]>`
+			select count(*) filter (where status = 'waiting')::text as waiting_count,
+				max(task_wait_order)::text as last_order
+			from platform.conversation_executions where agent_id = ${conversation.agentId}
+		`,
+		);
+		if (!row) unavailable();
+		return {
+			waitingCount,
+			agent: {
+				waitingCount: safeInteger(row.waiting_count, 0),
+				lastWaitOrder: safeInteger(row.last_order ?? "0", 0),
+			},
+		};
+	};
 	const activeRows = await awaitConversationExecutionQueryV1(
 		transaction,
 		transaction<ExecutionRow[]>`
@@ -406,6 +441,7 @@ export async function readMessageState(
 			targetExecution: undefined,
 			existingStop: undefined,
 			activeExecution: undefined,
+			queue: await queueAgent(waitingCount > 0),
 		};
 	}
 	const status = text(active.status);
@@ -432,12 +468,14 @@ export async function readMessageState(
 	const stop = stopRows[0];
 	if (stop && stop.status !== "submitted" && stop.status !== "completed")
 		unavailable();
+	const queue = await queueAgent(true);
 	return {
 		conversation,
 		modelConfiguration,
 		sourceMessage: undefined,
 		targetExecution: undefined,
 		existingStop: undefined,
+		queue,
 		activeExecution: {
 			executionId: text(active.execution_id),
 			conversationId: text(active.conversation_id),

@@ -6,6 +6,7 @@ import type {
 	ConversationRegenerateCommandV1,
 	ConversationStateQueryV1,
 	ConversationStopCommandV1,
+	ConversationWithdrawCommandV1,
 	CreateConversationCommandV1,
 } from "./conversation-execution-types.js";
 import {
@@ -66,7 +67,7 @@ export function parseMessageCommand(
 			"requestId",
 			"traceId",
 		],
-		["attachments", "traceParent"],
+		["attachments", "traceParent", "queueDeadlineLimit"],
 	);
 	if (
 		values.schemaVersion !== 1 ||
@@ -81,7 +82,10 @@ export function parseMessageCommand(
 		typeof values.idempotencyKey !== "string" ||
 		!idempotencyKeyPattern.test(values.idempotencyKey) ||
 		!isText(values.requestId) ||
-		!isText(values.traceId)
+		!isText(values.traceId) ||
+		(values.queueDeadlineLimit !== undefined &&
+			(typeof values.queueDeadlineLimit !== "string" ||
+				!Number.isFinite(Date.parse(values.queueDeadlineLimit))))
 	) {
 		invalidInput();
 	}
@@ -102,6 +106,51 @@ export function parseMessageCommand(
 		...(values.attachments === undefined
 			? {}
 			: { attachments: [...(values.attachments as string[])] }),
+		idempotencyKey: values.idempotencyKey,
+		requestId: values.requestId,
+		traceId: values.traceId,
+		...(isTraceParentV1(values.traceParent)
+			? { traceParent: values.traceParent }
+			: {}),
+		...(values.queueDeadlineLimit === undefined
+			? {}
+			: { queueDeadlineLimit: values.queueDeadlineLimit as string }),
+	};
+}
+
+export function parseWithdrawCommand(
+	input: unknown,
+): ConversationWithdrawCommandV1 {
+	const values = snapshotObject(
+		input,
+		[
+			"schemaVersion",
+			"command",
+			"conversationId",
+			"targetExecutionId",
+			"idempotencyKey",
+			"requestId",
+			"traceId",
+		],
+		["traceParent"],
+	);
+	if (
+		values.schemaVersion !== 1 ||
+		values.command !== "withdraw" ||
+		!isText(values.conversationId) ||
+		!isText(values.targetExecutionId) ||
+		typeof values.idempotencyKey !== "string" ||
+		!idempotencyKeyPattern.test(values.idempotencyKey) ||
+		!isText(values.requestId) ||
+		!isText(values.traceId)
+	) {
+		invalidInput();
+	}
+	return {
+		schemaVersion: 1,
+		command: "withdraw",
+		conversationId: values.conversationId,
+		targetExecutionId: values.targetExecutionId,
 		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
 		traceId: values.traceId,

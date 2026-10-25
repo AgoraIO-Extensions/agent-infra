@@ -8,6 +8,7 @@ import type {
 	ConversationExecutionAuthorityV1,
 	ConversationExecutionUseCaseV1,
 } from "./conversation-execution.js";
+import { conversationQueueDeadlineLimitV1 } from "./conversation-queue.js";
 import {
 	type CurrentTaskUserV1,
 	captureTaskAuthorizationBoundaryV1,
@@ -187,6 +188,11 @@ export interface WecomReceiptV1 {
 	readonly status: WecomReceiptStatusV1;
 	readonly conversationId: string | null;
 	readonly executionId: string | null;
+	/**
+	 * 受理为排队消息时的入队位次（工程 Spec §12.5）。只在本次受理的响应中出现、不持久化；
+	 * 之后的位次从持久等待顺序派生。长连接据此发送排队提示而不是处理中提示。
+	 */
+	readonly queuePosition?: number;
 }
 /** 受理回调交给 Store 持久化的回执内容；`media_rejected` 必须同时给出拒绝原因（#3227）。 */
 export type WecomAcceptanceResultV1 = Omit<WecomReceiptV1, "receiptId"> & {
@@ -606,6 +612,10 @@ export function createWecomChannelV1(dependencies: {
 						requestId: eventKey,
 						traceId: eventKey,
 						...(attachments ? { attachments } : {}),
+						// 排队期限不晚于该消息回复有效期结束前 30 秒（§14.2.4）。
+						queueDeadlineLimit: conversationQueueDeadlineLimitV1(
+							message.replyExpiresAt,
+						),
 					});
 					if (decision.outcome === "busy")
 						return {
@@ -627,6 +637,10 @@ export function createWecomChannelV1(dependencies: {
 						status: "accepted",
 						conversationId,
 						executionId: decision.result.executionId,
+						...(decision.outcome === "accepted" &&
+						decision.result.queuePosition !== undefined
+							? { queuePosition: decision.result.queuePosition }
+							: {}),
 					};
 				};
 			if (!message.media?.length)
@@ -783,6 +797,13 @@ export interface WecomDeliveryClaimV1 {
 	readonly acceptanceStatus: WecomReceiptStatusV1;
 	readonly executionStatus: string | null;
 	/**
+	 * 经排队受理的执行（工程 Spec §12.5）。`failureCode` 是排队消息未开始即结束时的原因
+	 * （例如 `TASK_WAIT_TIMEOUT`）；仍在排队或已开始处理时为 null。
+	 */
+	readonly queue?: { readonly failureCode: string | null };
+	/** `busy` 回执所在会话当前的排队条数，决定“排队已满”提示（§12.5）。 */
+	readonly queuedCount?: number;
+	/**
 	 * #3077：已受理执行的回复内容是否就绪（失败、停止，或完成且答案已完整落库）。为 false 时，Store
 	 * 只在回复有效期最后 {@link wecomReplyTimeoutNoticeLeadMsV1} 内领取，Core 发送固定超时提示。
 	 */
@@ -938,6 +959,117 @@ const wecomConversationUnavailableTextV1 =
 	"当前会话不可用，发送 /new 开始新会话";
 /** 发送者用 `/new` 开始新会话后的固定回复（#3184）。 */
 const wecomNewConversationTextV1 = "已开始新会话";
+/** 入队与位次变化时同一 stream 上的排队提示（企微部署固定文案，§12.5）。 */
+export function wecomQueuedTextV1(position: number): string {
+	if (!Number.isSafeInteger(position) || position < 1)
+		throw new TypeError("Queue position is invalid");
+	return `已排队：第 ${position} 位，前面还有 ${position - 1} 条消息，当前回复结束后按顺序处理`;
+}
+/** 排队消息出队时的提示，随后按进度更新。 */
+export const wecomQueueStartedTextV1 = "开始处理";
+export const wecomQueueTimeoutTextV1 =
+	"排队超时，等待超过时限仍未开始，本条消息未处理，请稍后重新发送";
+/** 排队已满时的繁忙提示；排队条数为 0 时沿用原有繁忙提示。 */
+export function wecomQueueFullTextV1(queuedCount: number): string {
+	return queuedCount > 0
+		? `当前会话已有 ${queuedCount} 条消息在排队，请等前面的消息处理后再发送`
+		: "Agent 正忙，请稍后重试";
+}
+/**
+ * 排队消息未开始即结束时的固定说明。会话不可用时附 `/new` 指引；仍在排队却已到回复时限的
+ * 消息按排队超时处理（企微排队期限不晚于回复有效期结束前 30 秒）。
+ */
+function wecomQueueOutcomeTextV1(
+	claim: WecomDeliveryClaimV1,
+): string | undefined {
+	if (!claim.queue || claim.acceptanceStatus !== "accepted") return undefined;
+	if (
+		claim.executionStatus === "waiting" ||
+		claim.queue.failureCode === "TASK_WAIT_TIMEOUT"
+	)
+		return wecomQueueTimeoutTextV1;
+	switch (claim.queue.failureCode) {
+		case "CONVERSATION_UNAVAILABLE":
+			return wecomConversationUnavailableTextV1;
+		case "AGENT_UNAVAILABLE":
+			return "已取消：Agent 当前不可用，本条消息未处理";
+		case "AUTHORIZATION_REVOKED":
+			return "已取消：权限已失效，本条消息未处理";
+		default:
+			return undefined;
+	}
+}
+/**
+ * 长连接排队消息在本连接持有者上仍待最终回复的回执（工程 Spec §12.5、§14.2.4）。`position`
+ * 从持久等待顺序派生；已开始处理（曾被认领准入）的为 null。
+ */
+export interface WecomQueueNoticeV1 {
+	readonly receiptId: string;
+	readonly scope: WecomScopeV1;
+	readonly replyHandle: string;
+	readonly position: number | null;
+}
+export interface WecomQueueNoticeStorePortV1 {
+	listQueueNotices(): Promise<readonly WecomQueueNoticeV1[]>;
+}
+/** 在该消息自己的 stream 上发送一帧 `finish=false` 的覆盖更新；最终回复开始后不再发送。 */
+export interface WecomStreamUpdatePortV1 {
+	update(input: {
+		readonly scope: WecomScopeV1;
+		readonly replyHandle: string;
+		readonly text: string;
+	}): Promise<"sent" | "failed" | "unknown">;
+}
+
+/**
+ * 排队提示：入队时由受理方发送首帧并记录（{@link noted}），之后位次变化时更新同一条回复，
+ * 出队时改为“开始处理”。提示帧与处理中提示一样不经回执状态机、发送失败不重发，由后续帧
+ * 覆盖；回执已进入最终回复后由传输拒绝。已提示开始处理的回执不再回到排队提示（例如未提交的
+ * 执行退回等待时保留原顺序，#3393）。企微流式进度（#3377）接管开始处理之后的更新。
+ */
+export function createWecomQueueNoticeV1(dependencies: {
+	readonly store: WecomQueueNoticeStorePortV1;
+	readonly sender: WecomStreamUpdatePortV1;
+}) {
+	const shown = new Map<string, string>();
+	return {
+		noted(receiptId: string, position: number) {
+			shown.set(receiptId, `queued:${position}`);
+		},
+		async tick(): Promise<boolean> {
+			const notices = await dependencies.store.listQueueNotices();
+			const current = new Set<string>();
+			let updated = false;
+			for (const notice of notices) {
+				current.add(notice.receiptId);
+				const key =
+					notice.position === null ? "started" : `queued:${notice.position}`;
+				const last = shown.get(notice.receiptId);
+				if (last === key || last === "started") continue;
+				shown.set(notice.receiptId, key);
+				// 本进程没有提示过排队的回执不补发“开始处理”：重连后旧回复路由已失效。
+				if (notice.position === null && last === undefined) continue;
+				updated = true;
+				try {
+					await dependencies.sender.update({
+						scope: notice.scope,
+						replyHandle: notice.replyHandle,
+						text:
+							notice.position === null
+								? wecomQueueStartedTextV1
+								: wecomQueuedTextV1(notice.position),
+					});
+				} catch {
+					/* 提示帧失败不影响执行与最终回复。 */
+				}
+			}
+			for (const receiptId of shown.keys())
+				if (!current.has(receiptId)) shown.delete(receiptId);
+			return updated;
+		},
+	};
+}
+
 export function createWecomDeliveryV1(dependencies: {
 	readonly store: WecomDeliveryStorePortV1;
 	readonly authorization: WecomAuthorizationPortV1;
@@ -986,30 +1118,37 @@ export function createWecomDeliveryV1(dependencies: {
 				return true;
 			}
 			// #3077：回答在有效期内没有就绪时，结束本次回复并明确提示超时，不静默过期。
+			// 排队消息未开始即结束（含排队到回复时限）时给出排队结果，不按回复超时处理（§12.5）。
+			const queueOutcome = wecomQueueOutcomeTextV1(claim);
 			const timedOut =
-				claim.acceptanceStatus === "accepted" && claim.answerReady === false;
+				claim.acceptanceStatus === "accepted" &&
+				claim.answerReady === false &&
+				queueOutcome === undefined;
 			const answered =
 				claim.acceptanceStatus === "accepted" &&
 				!timedOut &&
+				queueOutcome === undefined &&
 				claim.executionStatus === "completed";
 			let text =
 				claim.acceptanceStatus === "media_rejected"
 					? wecomMediaRejectionTextV1(claim.mediaRejection)
 					: claim.acceptanceStatus === "busy"
-						? "Agent 正忙，请稍后重试"
+						? wecomQueueFullTextV1(claim.queuedCount ?? 0)
 						: claim.acceptanceStatus === "unavailable"
 							? wecomConversationUnavailableTextV1
 							: claim.acceptanceStatus === "new_conversation"
 								? wecomNewConversationTextV1
-								: timedOut
-									? wecomReplyTimeoutTextV1
-									: claim.executionStatus === "completed"
-										? claim.textDeltas.join("")
-										: claim.executionStatus === "cancelled"
-											? "本次任务已停止"
-											: claim.conversationUnavailable
-												? `本次任务执行失败，${wecomConversationUnavailableTextV1}`
-												: "本次任务执行失败，请稍后重试";
+								: queueOutcome !== undefined
+									? queueOutcome
+									: timedOut
+										? wecomReplyTimeoutTextV1
+										: claim.executionStatus === "completed"
+											? claim.textDeltas.join("")
+											: claim.executionStatus === "cancelled"
+												? "本次任务已停止"
+												: claim.conversationUnavailable
+													? `本次任务执行失败，${wecomConversationUnavailableTextV1}`
+													: "本次任务执行失败，请稍后重试";
 			// #3229：只有完成的回答带结果文件。先规划哪些文件会发送（文本先于媒体），再把回答中的
 			// `sandbox:` 引用改写为文件名与说明；不支持媒体的回复方式去掉结果文件，文本照常发送。
 			let media: readonly WecomOutboundMediaV1[] = [];

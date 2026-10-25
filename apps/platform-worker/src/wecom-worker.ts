@@ -3,6 +3,7 @@ import {
 	createWecomAuthorizationV1,
 	createWecomChannelV1,
 	createWecomDeliveryV1,
+	createWecomQueueNoticeV1,
 	sameWecomConnectionAuthorizationFactV1,
 	type TaskRuntimeAuthorizationRecordV1,
 	type TaskUserDirectoryV1,
@@ -84,6 +85,8 @@ export function createPlatformWecomWorkerV1(
 				})
 			: undefined;
 	const deployment = options.connections;
+	// #3376：排队提示由持有长连接的 Worker 在该消息自己的 stream 上发送与更新。
+	let queueNotices: ReturnType<typeof createWecomQueueNoticeV1> | undefined;
 	const connections = deployment
 		? createPlatformWecomConnectionsV1({
 				...options.connections,
@@ -102,8 +105,15 @@ export function createPlatformWecomWorkerV1(
 				},
 				databaseUrl: options.databaseUrl,
 				receive: channel.receive,
+				onQueued: (receiptId, position) =>
+					queueNotices?.noted(receiptId, position),
 			})
 		: undefined;
+	if (connections)
+		queueNotices = createWecomQueueNoticeV1({
+			store,
+			sender: connections.updater,
+		});
 	const outbound = media?.outbound;
 	/** 只有长连接回复路由支持媒体；其他回复方式与未装配出站文件面时按不支持处理（#3229）。 */
 	const websocketRoute = async (replyHandle: string) => {
@@ -204,9 +214,11 @@ export function createPlatformWecomWorkerV1(
 		},
 		async dispatch() {
 			// Claim a bounded batch so one slow reply cannot serialize all bots.
-			const results = await Promise.allSettled(
-				Array.from({ length: 8 }, () => delivery.dispatch()),
-			);
+			const results = await Promise.allSettled([
+				...Array.from({ length: 8 }, () => delivery.dispatch()),
+				// 位次变化与开始处理的提示；失败只影响提示帧，不影响最终回复。
+				...(queueNotices ? [queueNotices.tick().catch(() => false)] : []),
+			]);
 			const failure = results.find((result) => result.status === "rejected");
 			if (failure?.status === "rejected") throw failure.reason;
 			return results.some(

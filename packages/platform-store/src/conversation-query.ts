@@ -83,6 +83,8 @@ export interface ConversationQueryExecutionV1 {
 	readonly createdAt: Date;
 	readonly updatedAt: Date;
 	readonly traceId: string | null;
+	/** 经排队受理的 Execution 的等待顺序（§12.5）；只用于派生同会话内位次，不对外暴露。 */
+	readonly taskWaitOrder?: number | null;
 }
 
 export interface ConversationQueryEventV1 {
@@ -329,6 +331,7 @@ interface ExecutionRow {
 	readonly created_at: Date;
 	readonly updated_at: Date;
 	readonly trace_id: string | null;
+	readonly task_wait_order: string | number | null;
 }
 
 interface EventRow {
@@ -748,6 +751,10 @@ function execution(row: ExecutionRow): ConversationQueryExecutionV1 {
 		createdAt: timestamp(row.created_at),
 		updatedAt: timestamp(row.updated_at),
 		traceId: row.trace_id === null ? null : text(row.trace_id),
+		taskWaitOrder:
+			row.task_wait_order === null || row.task_wait_order === undefined
+				? null
+				: safeInteger(row.task_wait_order, 1),
 	};
 }
 
@@ -878,6 +885,7 @@ async function readExecutions(
 ): Promise<ConversationQueryExecutionV1[]> {
 	const rows = await run(database<ExecutionRow[]>`
 		select e.execution_id, e.conversation_id, e.status, e.created_at, e.updated_at,
+			e.task_wait_order::text as task_wait_order,
 			(
 				select o.payload ->> 'messageId'
 				from platform.outbox_items o

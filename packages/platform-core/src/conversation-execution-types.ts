@@ -142,7 +142,8 @@ export interface ConversationExecutionAuthorizationPortV1 {
 			| "message"
 			| "model.select"
 			| "regenerate"
-			| "stop";
+			| "stop"
+			| "withdraw";
 		readonly agentId?: string;
 		readonly conversationId?: string;
 	}): Promise<
@@ -169,6 +170,23 @@ export interface ConversationMessageCommandV1 {
 	readonly conversationId: string;
 	readonly text: string;
 	readonly attachments?: readonly string[];
+	readonly idempotencyKey: string;
+	readonly requestId: string;
+	readonly traceId: string;
+	readonly traceParent?: string;
+	/**
+	 * 渠道回复时限给出的排队期限上限（RFC 3339，工程 Spec §12.5）。只由服务端渠道入口设置，
+	 * 例如企微取回复有效期结束前 30 秒；HTTP 请求不能提交它，也不进入幂等摘要。
+	 */
+	readonly queueDeadlineLimit?: string;
+}
+
+/** Web 发送者撤回自己仍在排队的消息（工程 Spec §12.5）；企微不提供撤回入口。 */
+export interface ConversationWithdrawCommandV1 {
+	readonly schemaVersion: 1;
+	readonly command: "withdraw";
+	readonly conversationId: string;
+	readonly targetExecutionId: string;
 	readonly idempotencyKey: string;
 	readonly requestId: string;
 	readonly traceId: string;
@@ -363,6 +381,67 @@ export interface ConversationExecutionStateV1 {
 				readonly status: "submitted" | "processing" | "unknown";
 		  }
 		| undefined;
+	/**
+	 * 本 Conversation 的排队（等待中的 Execution，工程 Spec §12.5）。`agent` 只在会话被占用、
+	 * 需要判定排队时于 Agent 等待顺序锁内读取：Agent 全部等待数与已分配的最大等待顺序。
+	 */
+	readonly queue?: {
+		readonly waitingCount: number;
+		readonly agent?: {
+			readonly waitingCount: number;
+			readonly lastWaitOrder: number;
+		};
+	};
+}
+
+export interface ConversationWithdrawStateV1 {
+	readonly conversation: ConversationExecutionConversationStateV1 | undefined;
+	readonly target:
+		| {
+				readonly executionId: string;
+				readonly conversationId: string;
+				readonly actorId: string;
+				readonly status: ConversationTaskExecutionStatusV1;
+				/** 该 Execution 是否经排队受理（持久等待顺序存在）。 */
+				readonly queued: boolean;
+		  }
+		| undefined;
+}
+
+export type ConversationTaskExecutionStatusV1 =
+	| "waiting"
+	| "submitted"
+	| "processing"
+	| "unknown"
+	| "completed"
+	| "failed"
+	| "cancelled";
+
+export interface ConversationWithdrawResultV1 {
+	readonly schemaVersion: 1;
+	readonly status: "withdrawn" | "already_started" | "already_finished";
+	readonly executionId: string;
+}
+
+export type ConversationWithdrawDecisionV1 =
+	| {
+			readonly outcome: "accepted" | "replayed";
+			readonly result: ConversationWithdrawResultV1;
+	  }
+	| { readonly outcome: "denied" }
+	| { readonly outcome: "conflict"; readonly reason: "idempotency_conflict" };
+
+export interface ConversationWithdrawPlanV1 {
+	readonly schemaVersion: 1;
+	readonly result: ConversationWithdrawResultV1;
+	readonly idempotency: {
+		readonly scopeType: "conversation";
+		readonly scopeId: string;
+		readonly actorId: string;
+		readonly commandType: "withdraw";
+		readonly key: string;
+		readonly requestDigest: string;
+	};
 }
 
 export interface ConversationCreatedResultV1 {
@@ -377,6 +456,8 @@ export interface ConversationCommandResultV1 {
 	readonly status: "submitted";
 	readonly messageId: string | null;
 	readonly executionId: string;
+	/** 受理为排队消息时的入队位次（第 N 位）；之后的位次从持久等待顺序派生。 */
+	readonly queuePosition?: number;
 }
 
 export interface ConversationStopResultV1 {
@@ -409,7 +490,8 @@ export type ConversationCommandDecisionV1 =
 			readonly outcome: "accepted" | "replayed";
 			readonly result: ConversationCommandResultV1;
 	  }
-	| { readonly outcome: "busy" }
+	/** 排队已满等原因不能接收；`queuedCount` 为本会话当前排队条数（§12.5）。 */
+	| { readonly outcome: "busy"; readonly queuedCount?: number }
 	/** The Web Conversation's own Session Sandbox is still preparing (#1534). */
 	| { readonly outcome: "starting" }
 	| { readonly outcome: "denied" }
@@ -453,7 +535,7 @@ export interface CreateConversationWritePlanV1 {
 
 export interface ConversationMessageWritePlanV1 {
 	readonly schemaVersion: 1;
-	readonly kind: "initial" | "supplement";
+	readonly kind: "initial" | "supplement" | "queued";
 	readonly conversation: ConversationExecutionConversationStateV1;
 	readonly message: {
 		readonly messageId: string;
@@ -471,7 +553,8 @@ export interface ConversationMessageWritePlanV1 {
 		readonly actorId: string;
 		readonly channelId: string;
 		readonly turnId: string;
-		readonly status: "submitted";
+		/** `waiting` 只用于排队消息，并且必须带等待顺序与期限。 */
+		readonly status: "submitted" | "waiting";
 		readonly sessionGeneration: number;
 		readonly deliveryFence: number;
 		readonly authorizationRevision: string;
@@ -479,6 +562,18 @@ export interface ConversationMessageWritePlanV1 {
 		readonly modelOptionId: string | null;
 		readonly reasoningLevel: string | null;
 		readonly createdAt: Date;
+		readonly taskWaitOrder?: number;
+		readonly taskWaitDeadline?: Date;
+	};
+	/** 排队消息入队时写入的平台来源 `task.status: waiting` 事件（§12.5）。 */
+	readonly statusEvent?: {
+		readonly eventId: string;
+		readonly sequence: 1;
+		readonly conversationCursor: number;
+		readonly event: {
+			readonly type: "task.status";
+			readonly status: "waiting";
+		};
 	};
 	readonly outboxIntent: {
 		readonly operation:
@@ -500,7 +595,8 @@ export interface ConversationMessageWritePlanV1 {
 	readonly auditEvent: {
 		readonly action:
 			| "conversation.message.accepted"
-			| "conversation.message.supplemented";
+			| "conversation.message.supplemented"
+			| "conversation.message.queued";
 		readonly actorId: string;
 		readonly agentId: string;
 		readonly conversationId: string;
@@ -757,6 +853,17 @@ export interface ConversationExecutionTransactionPortV1 {
 					{ outcome: "accepted" | "replayed" | "denied" }
 			  >,
 	): Promise<ConversationStopDecisionV1>;
+	/** 撤回排队消息；与认领、到期和撤权在同一 Conversation 锁与原 outbox 锁内互斥。 */
+	executeWithdrawal?(
+		request: {
+			readonly command: ConversationWithdrawCommandV1;
+			readonly authority: ConversationExecutionAuthorityV1;
+			readonly requestDigest: string;
+		},
+		decide: (
+			state: ConversationWithdrawStateV1,
+		) => ConversationWithdrawPlanV1 | { readonly outcome: "denied" },
+	): Promise<ConversationWithdrawDecisionV1>;
 }
 
 export interface ConversationExecutionUseCaseV1 {
@@ -779,6 +886,9 @@ export interface ConversationExecutionUseCaseV1 {
 		command: ConversationRegenerateCommandV1,
 	): Promise<ConversationCommandDecisionV1>;
 	stop(command: ConversationStopCommandV1): Promise<ConversationStopDecisionV1>;
+	withdraw(
+		command: ConversationWithdrawCommandV1,
+	): Promise<ConversationWithdrawDecisionV1>;
 }
 
 export interface ConversationExecutionUseCaseDependenciesV1 {
@@ -789,6 +899,11 @@ export interface ConversationExecutionUseCaseDependenciesV1 {
 export interface ConversationExecutionUseCaseOptionsV1 {
 	readonly now?: () => Date;
 	readonly newId?: () => string;
+	/**
+	 * 与任务 API 共用的 Agent 等待容量（`maximumWaitingTasksPerAgent`，§12.5）。缺省时只受
+	 * 每会话 3 条的上限约束。
+	 */
+	readonly maximumWaitingTasksPerAgent?: number;
 }
 
 export class ConversationExecutionError extends Error {

@@ -2830,6 +2830,27 @@
                     "status"
                   ],
                   "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "reason": {
+                      "enum": [
+                        "WITHDRAWN",
+                        "AUTHORIZATION_REVOKED"
+                      ],
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "cancelled",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "reason"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -6401,6 +6422,27 @@
               },
               "required": [
                 "status"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "WITHDRAWN",
+                    "AUTHORIZATION_REVOKED"
+                  ],
+                  "type": "string"
+                },
+                "status": {
+                  "const": "cancelled",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "reason"
               ],
               "type": "object"
             }

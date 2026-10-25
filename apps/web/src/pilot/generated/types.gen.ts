@@ -1501,6 +1501,9 @@ export type TaskStatusEventV1 = {
     } | {
         reason?: 'STOP_CONFIRMATION_TIMEOUT';
         status: 'unknown';
+    } | {
+        reason: 'WITHDRAWN' | 'AUTHORIZATION_REVOKED';
+        status: 'cancelled';
     };
     schemaVersion: 1;
     sequence: number;
@@ -1522,6 +1525,17 @@ export type WecomBotConnectionProjectionV2 = {
 } | {
     qrAvailable: true;
     status: 'not_configured' | 'callback' | 'verifying' | 'connected' | 'disconnected' | 'auth_failed';
+};
+
+export type WithdrawCommandRequestV1 = {
+    schemaVersion: 1;
+    targetExecutionId: string;
+};
+
+export type WithdrawalAcceptedProjectionV1 = {
+    executionId: string;
+    schemaVersion: 1;
+    status: 'withdrawn' | 'already_started' | 'already_finished';
 };
 
 export type AgentApplicationCreateRequestV1Writable = {
@@ -4005,6 +4019,60 @@ export type StreamAgentTaskEventsResponses = {
 };
 
 export type StreamAgentTaskEventsResponse = StreamAgentTaskEventsResponses[keyof StreamAgentTaskEventsResponses];
+
+export type WithdrawQueuedMessageData = {
+    body: WithdrawCommandRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        conversationId: string;
+    };
+    query?: never;
+    url: '/api/v1/conversations/{conversationId}/withdrawals';
+};
+
+export type WithdrawQueuedMessageErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type WithdrawQueuedMessageError = WithdrawQueuedMessageErrors[keyof WithdrawQueuedMessageErrors];
+
+export type WithdrawQueuedMessageResponses = {
+    /**
+     * Withdrawal accepted
+     */
+    202: WithdrawalAcceptedProjectionV1;
+};
+
+export type WithdrawQueuedMessageResponse = WithdrawQueuedMessageResponses[keyof WithdrawQueuedMessageResponses];
 
 export type GetObservabilityStatusData = {
     body?: never;

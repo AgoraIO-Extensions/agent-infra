@@ -23,6 +23,8 @@ import {
 	type WecomMediaProgressStatusV1,
 	type WecomMediaRejectionV1,
 	type WecomOutboundMediaV1,
+	type WecomQueueNoticeStorePortV1,
+	type WecomQueueNoticeV1,
 	type WecomReceiptStatusV1,
 	type WecomScopeV1,
 	wecomConversationKeyForRotationV1,
@@ -190,7 +192,10 @@ function thinkingClaim(
 		: {};
 }
 export class PostgresWecomChannelV1
-	implements WecomChannelStorePortV1, WecomDeliveryStorePortV1
+	implements
+		WecomChannelStorePortV1,
+		WecomDeliveryStorePortV1,
+		WecomQueueNoticeStorePortV1
 {
 	readonly #sql: ReturnType<typeof postgres>;
 	readonly #databaseUrl: string;
@@ -753,6 +758,7 @@ export class PostgresWecomChannelV1
 						status: WecomReceiptStatusV1;
 						conversationId: string | null;
 						executionId: string | null;
+						queuePosition?: number;
 				  }
 				| undefined;
 			try {
@@ -801,10 +807,21 @@ export class PostgresWecomChannelV1
 									mediaRejection !== undefined
 					)
 						throw new TaskAuthorizationStoreError();
+					// 排队位次只随本次受理响应返回，用于长连接首帧提示；不写入回执（§12.5）。
+					const queuePosition = executionResult.queuePosition;
+					if (
+						queuePosition !== undefined &&
+						(executionResult.status !== "accepted" ||
+							!executionResult.executionId ||
+							!Number.isSafeInteger(queuePosition) ||
+							queuePosition < 1)
+					)
+						throw new TaskAuthorizationStoreError();
 					acceptedResult = {
 						status: executionResult.status,
 						conversationId: executionResult.conversationId,
 						executionId: executionResult.executionId,
+						...(queuePosition === undefined ? {} : { queuePosition }),
 					};
 					const {
 						agentId,
@@ -952,8 +969,15 @@ export class PostgresWecomChannelV1
 					answer_ready: boolean;
 					conversation_status: string | null;
 					conversation_isolation_pending: boolean;
+					queued: boolean;
+					queue_failure_code: string | null;
+					queued_count: string | null;
 				})[]
-			>`select r.*,e.status as execution_status,ready.answer_ready,c.status as conversation_status,exists (select 1 from platform.conversation_generation_tombstones t where t.conversation_id=r.conversation_id and t.status='pending') as conversation_isolation_pending from platform.wecom_receipts r left join platform.conversation_executions e on e.execution_id=r.execution_id left join platform.conversations c on c.id=r.conversation_id
+			>`select r.*,e.status as execution_status,ready.answer_ready,c.status as conversation_status,exists (select 1 from platform.conversation_generation_tombstones t where t.conversation_id=r.conversation_id and t.status='pending') as conversation_isolation_pending,
+    coalesce(e.task_wait_order is not null,false) as queued,
+    (select m.failure_code from platform.conversation_messages m where m.execution_id=e.execution_id and m.conversation_id=e.conversation_id order by m.created_at,m.message_id limit 1) as queue_failure_code,
+    case when r.acceptance_status='busy' then (select count(*)::text from platform.conversation_executions q where q.conversation_id=r.conversation_id and q.status='waiting') end as queued_count
+    from platform.wecom_receipts r left join platform.conversation_executions e on e.execution_id=r.execution_id left join platform.conversations c on c.id=r.conversation_id
     cross join lateral (select coalesce(e.status in ('failed','cancelled') or (e.status='completed' and exists (select 1 from platform.conversation_events t where t.conversation_id=e.conversation_id and t.execution_id=e.execution_id and t.source='runtime' and t.event_type='execution.status' and t.event_payload->>'status'='completed' and t.runtime_cursor is not null)),false) as answer_ready) ready
     where (r.connection_bot_id is null or r.expires_at<=now() or exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) and (r.delivery_status='pending' or (r.delivery_status='claimed' and r.lease_until<=now())) and (r.acceptance_status!='accepted' or ready.answer_ready or r.expires_at<=now()+(${wecomReplyTimeoutNoticeLeadMsV1}::bigint*interval '1 millisecond')) order by r.created_at limit 1 for update of r skip locked`;
 			if (!row) return null;
@@ -1053,6 +1077,14 @@ export class PostgresWecomChannelV1
 					: {}),
 				executionStatus: row.execution_status,
 				answerReady: row.answer_ready,
+				// #3376：经排队受理的执行带上未开始即结束的原因，Core 据此给出排队结果；繁忙回执
+				// 带当前排队条数，用于“排队已满”提示。
+				...(row.queued && row.acceptance_status === "accepted"
+					? { queue: { failureCode: row.queue_failure_code } }
+					: {}),
+				...(row.acceptance_status === "busy" && row.queued_count !== null
+					? { queuedCount: Number(row.queued_count) }
+					: {}),
 				// #3184：失败文案按回执所属会话的当前状态附带 /new 指引；代次隔离与
 				// status=unavailable 一样拒绝后续消息（ConversationExecutionTask 的提交判据），
 				// 所以同样算作会话不可用。
@@ -1159,6 +1191,36 @@ export class PostgresWecomChannelV1
 				await sql`update platform.wecom_receipts set lease_until=greatest(lease_until,now()+interval '300 seconds'),updated_at=now() where id=${claim.receiptId}`;
 			return true;
 		});
+	}
+	/**
+	 * 本连接持有者上仍待最终回复、经排队受理的长连接回执（工程 Spec §12.5、§14.2.4）。位次从
+	 * 同一会话的持久等待顺序派生；曾被认领准入（写过 `task.status: unknown`）的执行视为已开始，
+	 * 即使之后退回等待也不再给出位次。只读，不改变回执状态机。
+	 */
+	async listQueueNotices(): Promise<WecomQueueNoticeV1[]> {
+		if (!this.#connectionHolderId) return [];
+		const rows = await this.#sql<
+			{
+				id: string;
+				scope: WecomScopeV1;
+				reply_handle: string;
+				position: string | null;
+			}[]
+		>`select r.id,r.scope,r.reply_handle,
+    case when e.status='waiting' and not exists (select 1 from platform.conversation_events t where t.execution_id=e.execution_id and t.source='platform' and t.event_type='task.status' and t.event_payload->>'status'='unknown')
+      then (select count(*)::text from platform.conversation_executions w where w.conversation_id=e.conversation_id and w.status='waiting' and w.task_wait_order<=e.task_wait_order)
+    end as position
+    from platform.wecom_receipts r join platform.conversation_executions e on e.execution_id=r.execution_id
+    where r.acceptance_status='accepted' and r.delivery_status='pending' and r.connection_bot_id is not null and r.expires_at>now()
+      and e.task_wait_order is not null and e.status in ('waiting','submitted','processing','unknown')
+      and exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())
+    order by r.created_at limit 200`;
+		return rows.map((row) => ({
+			receiptId: row.id,
+			scope: row.scope,
+			replyHandle: row.reply_handle,
+			position: row.position === null ? null : Number(row.position),
+		}));
 	}
 	async finish(
 		claim: WecomDeliveryClaimV1,

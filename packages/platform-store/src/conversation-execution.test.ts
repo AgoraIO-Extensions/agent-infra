@@ -329,6 +329,7 @@ const openPostgresConformanceHarness = async () => {
 		regenerate: (command) => inner.regenerate(command),
 		selectModel: (command) => inner.selectModel(command),
 		stop: (command) => inner.stop(command),
+		withdraw: (command) => inner.withdraw(command),
 	};
 	return {
 		useCase,
@@ -355,6 +356,14 @@ const openPostgresConformanceHarness = async () => {
 				update platform.conversation_executions
 				set status = 'completed'
 				where execution_id = ${executionId}
+			`;
+			if (updated.count !== 1) throw new Error("Expected one Execution");
+		},
+		async startExecution(executionId) {
+			const updated = await client`
+				update platform.conversation_executions
+				set status = 'processing'
+				where execution_id = ${executionId} and status in ('submitted', 'unknown')
 			`;
 			if (updated.count !== 1) throw new Error("Expected one Execution");
 		},
@@ -2350,6 +2359,11 @@ describe("PostgreSQL Conversation command transaction", () => {
 				requestId: "request_message_04_initial",
 				traceId: "trace_message_04_initial",
 			});
+			// 补充指令只给已被 Runtime 接受、仍在运行的回复（§12.5）。
+			await client`
+				update platform.conversation_executions set status = 'processing'
+				where conversation_id = 'conversation_id_1'
+			`;
 			const supplement = {
 				schemaVersion: 1 as const,
 				command: "message" as const,
@@ -2380,12 +2394,16 @@ describe("PostgreSQL Conversation command transaction", () => {
 					text: "changed content",
 				}),
 			).toEqual({ outcome: "conflict", reason: "idempotency_conflict" });
+			// 不能作为补充指令的消息进入排队，而不是繁忙。
 			expect(
 				await noSupplement.useCase.accept({
 					...supplement,
 					idempotencyKey: "message_04_busy",
 				}),
-			).toEqual({ outcome: "busy" });
+			).toMatchObject({
+				outcome: "accepted",
+				result: { queuePosition: 1 },
+			});
 			expect(
 				await foreign.useCase.accept({
 					...supplement,
@@ -2409,11 +2427,11 @@ describe("PostgreSQL Conversation command transaction", () => {
 				`,
 			).toEqual([
 				{
-					messages: 2,
-					executions: 1,
-					outbox: 3,
-					idempotency: 3,
-					audit: 3,
+					messages: 3,
+					executions: 2,
+					outbox: 4,
+					idempotency: 4,
+					audit: 4,
 				},
 			]);
 		} finally {
@@ -3455,6 +3473,9 @@ describe("PostgreSQL model fallback requested model (G-07)", () => {
 					throw new Error("Expected initial message");
 				if (command === "regenerate") {
 					await client`update platform.conversation_executions set status = 'completed' where execution_id = ${initial.result.executionId}`;
+				} else {
+					// 补充指令只给已被 Runtime 接受、仍在运行的回复（§12.5）。
+					await client`update platform.conversation_executions set status = 'processing' where execution_id = ${initial.result.executionId}`;
 				}
 				await persistRevision(requestedAuthority.agentId, 2, [
 					{ optionId: "model_primary", modelId: "relay-primary" },
@@ -3556,6 +3577,335 @@ describe("PostgreSQL model fallback requested model (G-07)", () => {
 			).toEqual([{ id: "model_foreign_only", name: null }]);
 		} finally {
 			await transaction.close();
+		}
+	});
+});
+
+describe("PostgreSQL bounded message queue (#3376)", () => {
+	const queueBoundary = {
+		schemaVersion: 1 as const,
+		principal: { kind: "user" as const, id: authority.actorId },
+		agentId: authority.agentId,
+		channelId: "web",
+		identityRevision: "identity-01",
+		agentAuthorizationRevision: authority.authorizationRevision,
+		accessSources: [{ kind: "user" as const, userId: authority.actorId }],
+	};
+	const queueAuthority: ConversationExecutionAuthorityV1 = {
+		...authority,
+		supportsSupplementaryInstruction: false,
+		taskBoundary: queueBoundary,
+	};
+	const message = (
+		conversationId: string,
+		key: string,
+		extra: { readonly queueDeadlineLimit?: string } = {},
+	) => ({
+		schemaVersion: 1 as const,
+		command: "message" as const,
+		conversationId,
+		text: `bounded ${key}`,
+		idempotencyKey: key,
+		requestId: `request_${key}`,
+		traceId: `trace_${key}`,
+		...extra,
+	});
+	const withdrawal = (conversationId: string, executionId: string, key: string) => ({
+		schemaVersion: 1 as const,
+		command: "withdraw" as const,
+		conversationId,
+		targetExecutionId: executionId,
+		idempotencyKey: key,
+		requestId: `request_${key}`,
+		traceId: `trace_${key}`,
+	});
+	const counts = async () =>
+		(
+			await client`
+				select
+					(select count(*)::int from platform.conversation_messages) as messages,
+					(select count(*)::int from platform.conversation_executions) as executions,
+					(select count(*)::int from platform.outbox_items where operation = 'conversation.turn.submit.v1') as turns
+			`
+		)[0];
+
+	async function openQueue(
+		resolved: ConversationExecutionAuthorityV1 = queueAuthority,
+		maximumWaitingTasksPerAgent?: number,
+	) {
+		await persistConformanceModelConfiguration(undefined, resolved);
+		let nextId = 1;
+		const transaction = new PostgresConversationExecutionTransactionV1({
+			databaseUrl,
+			userDirectory: {
+				async resolveUser(userId) {
+					return {
+						schemaVersion: 1,
+						userId,
+						accountStatus: "active",
+						organizationIds: [],
+						authorizationRevision: "identity-01",
+					};
+				},
+			},
+		});
+		const useCase = createConversationExecutionUseCaseV1(
+			{
+				authorization: {
+					async authorize() {
+						return { outcome: "allowed", authority: resolved };
+					},
+				},
+				transaction,
+			},
+			{
+				now: () => new Date("2026-10-25T00:00:00.000Z"),
+				newId: () => `queue_${resolved.actorId}_${nextId++}`,
+				...(maximumWaitingTasksPerAgent === undefined
+					? {}
+					: { maximumWaitingTasksPerAgent }),
+			},
+		);
+		const create = async (key: string) => {
+			const created = await useCase.createConversation({
+				schemaVersion: 1,
+				agentId: resolved.agentId,
+				idempotencyKey: key,
+				requestId: `request_${key}`,
+				traceId: `trace_${key}`,
+			});
+			if (created.outcome !== "accepted") throw new Error("Expected creation");
+			await markSessionSandboxReadyFixture(client, created.result.conversationId);
+			return created.result.conversationId;
+		};
+		const accept = async (
+			conversationId: string,
+			key: string,
+			extra?: { readonly queueDeadlineLimit?: string },
+		) => {
+			const decision = await useCase.accept(message(conversationId, key, extra));
+			if (decision.outcome !== "accepted") throw new Error("Expected accepted");
+			return decision.result;
+		};
+		return { transaction, useCase, create, accept };
+	}
+
+	it("queues three messages in the shared Agent wait order, then reports busy with the queued count", async () => {
+		const queue = await openQueue();
+		try {
+			const first = await queue.create("queue_create_first");
+			const second = await queue.create("queue_create_second");
+			await queue.accept(first, "first_active");
+			await queue.accept(second, "second_active");
+			const queued = [
+				await queue.accept(first, "first_queued_1"),
+				await queue.accept(second, "second_queued_1"),
+				await queue.accept(first, "first_queued_2", {
+					queueDeadlineLimit: "2026-10-25T00:08:30.000Z",
+				}),
+				await queue.accept(first, "first_queued_3"),
+			];
+			// 位次按会话计算，等待顺序与任务 API 共用 Agent 内的单调顺序空间。
+			expect(queued.map(({ queuePosition }) => queuePosition)).toEqual([
+				1, 1, 2, 3,
+			]);
+			const rows = await client<
+				{
+					execution_id: string;
+					status: string;
+					task_wait_order: string;
+					task_wait_deadline: Date;
+					last_event_sequence: string;
+					available_at: string;
+				}[]
+			>`
+				select e.execution_id, e.status, e.task_wait_order::text, e.task_wait_deadline,
+					e.last_event_sequence::text, o.available_at::text
+				from platform.conversation_executions e
+				join platform.outbox_items o on o.id = 'conversation:turn:' || e.execution_id
+				where e.task_wait_order is not null order by e.task_wait_order
+			`;
+			expect(rows.map((row) => row.execution_id)).toEqual(
+				queued.map(({ executionId }) => executionId),
+			);
+			expect(rows.map((row) => row.task_wait_order)).toEqual([
+				"1",
+				"2",
+				"3",
+				"4",
+			]);
+			expect(rows.map((row) => row.task_wait_deadline.toISOString())).toEqual([
+				"2026-10-25T00:10:00.000Z",
+				"2026-10-25T00:10:00.000Z",
+				// 渠道回复时限给出的上限更早时取较早者。
+				"2026-10-25T00:08:30.000Z",
+				"2026-10-25T00:10:00.000Z",
+			]);
+			expect(
+				rows.every(
+					(row) =>
+						row.status === "waiting" &&
+						row.available_at === "infinity" &&
+						row.last_event_sequence === "1",
+				),
+			).toBe(true);
+			expect(
+				await client`
+					select execution_id, sequence::int, event_payload, source
+					from platform.conversation_events
+					where execution_id = ${queued[0]?.executionId ?? ""}
+				`,
+			).toEqual([
+				{
+					execution_id: queued[0]?.executionId,
+					sequence: 1,
+					event_payload: { type: "task.status", status: "waiting" },
+					source: "platform",
+				},
+			]);
+			const before = await counts();
+			await expect(
+				queue.useCase.accept(message(first, "first_queued_4")),
+			).resolves.toEqual({ outcome: "busy", queuedCount: 3 });
+			expect(await counts()).toEqual(before);
+			// 另一会话仍可排队：上限按会话计算。
+			await expect(
+				queue.accept(second, "second_queued_2"),
+			).resolves.toMatchObject({ queuePosition: 2 });
+		} finally {
+			await queue.transaction.close();
+		}
+	});
+
+	it("shares the Agent waiting capacity with task API waiting work", async () => {
+		const queue = await openQueue(queueAuthority, 1);
+		try {
+			const first = await queue.create("capacity_first");
+			const second = await queue.create("capacity_second");
+			await queue.accept(first, "capacity_first_active");
+			await queue.accept(second, "capacity_second_active");
+			await expect(
+				queue.accept(first, "capacity_first_queued"),
+			).resolves.toMatchObject({ queuePosition: 1 });
+			await expect(
+				queue.useCase.accept(message(second, "capacity_second_queued")),
+			).resolves.toEqual({ outcome: "busy", queuedCount: 0 });
+		} finally {
+			await queue.transaction.close();
+		}
+	});
+
+	it("withdraws only the sender's own waiting message, idempotently, without affecting others", async () => {
+		const queue = await openQueue();
+		const foreignAuthority: ConversationExecutionAuthorityV1 = {
+			...queueAuthority,
+			actorId: "user_02",
+			taskBoundary: {
+				...queueBoundary,
+				principal: { kind: "user", id: "user_02" },
+				accessSources: [{ kind: "user", userId: "user_02" }],
+			},
+		};
+		const foreign = await openQueue(foreignAuthority);
+		try {
+			const conversationId = await queue.create("withdraw_create");
+			const otherConversation = await queue.create("withdraw_other_create");
+			const active = await queue.accept(conversationId, "withdraw_active");
+			const kept = await queue.accept(conversationId, "withdraw_kept");
+			const target = await queue.accept(conversationId, "withdraw_target");
+			const command = withdrawal(
+				conversationId,
+				target.executionId,
+				"withdraw_key",
+			);
+			// 跨用户与跨会话都不能撤回，也不能探知目标是否存在。
+			await expect(foreign.useCase.withdraw(command)).resolves.toEqual({
+				outcome: "denied",
+			});
+			await expect(
+				queue.useCase.withdraw({
+					...command,
+					conversationId: otherConversation,
+					idempotencyKey: "withdraw_cross_conversation",
+				}),
+			).resolves.toEqual({ outcome: "denied" });
+			// 当前回复不是排队消息，撤回不能用来停止它。
+			await expect(
+				queue.useCase.withdraw(
+					withdrawal(conversationId, active.executionId, "withdraw_active_key"),
+				),
+			).resolves.toEqual({ outcome: "denied" });
+			const result = {
+				schemaVersion: 1,
+				status: "withdrawn",
+				executionId: target.executionId,
+			};
+			await expect(queue.useCase.withdraw(command)).resolves.toEqual({
+				outcome: "accepted",
+				result,
+			});
+			await expect(queue.useCase.withdraw(command)).resolves.toEqual({
+				outcome: "replayed",
+				result,
+			});
+			expect(
+				await client`
+					select e.status as execution, m.status as message, m.failure_code, o.status as outbox
+					from platform.conversation_executions e
+					join platform.conversation_messages m on m.execution_id = e.execution_id
+					join platform.outbox_items o on o.id = 'conversation:turn:' || e.execution_id
+					where e.execution_id in (${target.executionId}, ${kept.executionId})
+					order by e.task_wait_order
+				`,
+			).toEqual([
+				{
+					execution: "waiting",
+					message: "submitted",
+					failure_code: null,
+					outbox: "pending",
+				},
+				{
+					execution: "cancelled",
+					message: "failed",
+					failure_code: "WITHDRAWN",
+					outbox: "failed",
+				},
+			]);
+			expect(
+				await client`
+					select event_payload from platform.conversation_events
+					where execution_id = ${target.executionId} order by sequence
+				`,
+			).toEqual([
+				{ event_payload: { type: "task.status", status: "waiting" } },
+				{
+					event_payload: {
+						type: "task.status",
+						status: "cancelled",
+						reason: "WITHDRAWN",
+					},
+				},
+			]);
+			// 已离开等待（例如被认领准入）的消息不能撤回，也不影响执行。
+			await client`update platform.conversation_executions set status = 'completed' where execution_id = ${active.executionId}`;
+			await client`update platform.conversation_executions set status = 'unknown' where execution_id = ${kept.executionId}`;
+			await expect(
+				queue.useCase.withdraw(
+					withdrawal(conversationId, kept.executionId, "withdraw_started"),
+				),
+			).resolves.toEqual({
+				outcome: "accepted",
+				result: {
+					schemaVersion: 1,
+					status: "already_started",
+					executionId: kept.executionId,
+				},
+			});
+			expect(
+				await client`select status from platform.conversation_executions where execution_id = ${kept.executionId}`,
+			).toEqual([{ status: "unknown" }]);
+		} finally {
+			await Promise.all([queue.transaction.close(), foreign.transaction.close()]);
 		}
 	});
 });

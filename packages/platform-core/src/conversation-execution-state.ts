@@ -33,21 +33,26 @@ export function parseState(
 	input: ConversationExecutionStateV1,
 ): ConversationExecutionStateV1 {
 	try {
-		const values = snapshotObject(input, [
-			"conversation",
-			"modelConfiguration",
-			"sourceMessage",
-			"targetExecution",
-			"existingStop",
-			"activeExecution",
-		]);
+		const values = snapshotObject(
+			input,
+			[
+				"conversation",
+				"modelConfiguration",
+				"sourceMessage",
+				"targetExecution",
+				"existingStop",
+				"activeExecution",
+			],
+			["queue"],
+		);
 		if (values.conversation === undefined) {
 			if (
 				values.modelConfiguration !== undefined ||
 				values.sourceMessage !== undefined ||
 				values.targetExecution !== undefined ||
 				values.existingStop !== undefined ||
-				values.activeExecution !== undefined
+				values.activeExecution !== undefined ||
+				values.queue !== undefined
 			) {
 				unavailable();
 			}
@@ -435,6 +440,34 @@ export function parseState(
 			conversation.lastConversationCursor as number;
 		const status =
 			conversation.status as ConversationExecutionConversationStateV1["status"];
+		const queue = (() => {
+			if (values.queue === undefined) return undefined;
+			const queueValues = snapshotObject(
+				values.queue,
+				["waitingCount"],
+				["agent"],
+			);
+			if (!isNonNegativeSafeInteger(queueValues.waitingCount)) unavailable();
+			if (queueValues.agent === undefined)
+				return { waitingCount: queueValues.waitingCount };
+			const agent = snapshotObject(queueValues.agent, [
+				"waitingCount",
+				"lastWaitOrder",
+			]);
+			if (
+				!isNonNegativeSafeInteger(agent.waitingCount) ||
+				!isNonNegativeSafeInteger(agent.lastWaitOrder) ||
+				agent.waitingCount < queueValues.waitingCount
+			)
+				unavailable();
+			return {
+				waitingCount: queueValues.waitingCount,
+				agent: {
+					waitingCount: agent.waitingCount,
+					lastWaitOrder: agent.lastWaitOrder,
+				},
+			};
+		})();
 		return {
 			conversation: {
 				schemaVersion: 1,
@@ -470,6 +503,7 @@ export function parseState(
 			targetExecution,
 			existingStop,
 			activeExecution,
+			...(queue ? { queue } : {}),
 		};
 	} catch {
 		return unavailable();
