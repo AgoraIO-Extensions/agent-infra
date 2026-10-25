@@ -164,6 +164,57 @@ it("bounds polling attempts after status failures", async () => {
 	}
 });
 
+// #3433：轮询读到不可重试的失败（404、响应无效）后停止并显示「Connection 安装暂不可用。」；可重试的失败
+// （503）之后继续且不另加提示。
+it.each([
+	["404", { response: { status: 404 }, error: { retryable: false } }],
+	["invalid", { response: { status: 200 }, data: { schemaVersion: 1 } }],
+] as const)(
+	"stops polling after a non-retryable status read (%s)",
+	async (_name, failure) => {
+		vi.useFakeTimers();
+		api.beginPlatformConnectionInstallationV1.mockResolvedValue({
+			response: { status: 202 },
+			data: {
+				schemaVersion: 1,
+				authorizationId: "authorization-1",
+				status: "awaiting_confirmation",
+				expiresAt: Date.now() + 60_000,
+				authorizationUrl: "https://connector.test/authorize?state=x",
+			},
+		});
+		api.readPlatformConnectionInstallationV1
+			.mockResolvedValueOnce({ response: { status: 503 }, error: {} })
+			.mockResolvedValue(failure);
+		try {
+			render(<ConnectionInstallationPanel executionId="execution-1" />);
+			fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
+			await act(async () => {
+				await Promise.resolve();
+			});
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(2_000);
+			});
+			expect(api.readPlatformConnectionInstallationV1).toHaveBeenCalledTimes(1);
+			expect(screen.getByText("等待 Connection 确认")).toBeTruthy();
+			expect(screen.queryByText("暂时无法读取安装状态。")).toBeNull();
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(2_000);
+			});
+			expect(api.readPlatformConnectionInstallationV1).toHaveBeenCalledTimes(2);
+			expect(screen.getByRole("alert").textContent).toContain(
+				"Connection 安装暂不可用。",
+			);
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(10_000);
+			});
+			expect(api.readPlatformConnectionInstallationV1).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	},
+);
+
 it.each(["confirmed", "revoked", "expired", "unknown"] as const)(
 	"renders terminal installation state %s",
 	async (status) => {
