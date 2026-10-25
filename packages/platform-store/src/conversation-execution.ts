@@ -20,12 +20,9 @@ import {
 	conversationAttachmentMergeWindowMsV1,
 	type FileRecordV1,
 	type NativeCapabilityAdmissionDecisionV1,
-	type NativeCapabilityAdmissionRequestV6,
 	type NativeCapabilityAdmissionTransactionPortV1,
 	type NativeCapabilityAdmissionTransactionPortV6,
-	type NativeCapabilityAdmissionV6AuthorityBinding,
 	type NativeCapabilityAdmissionV6Decision,
-	type NativeCapabilityAdmissionV6KeyBinding,
 	type NativeCapabilityInvocationPlanV1,
 	type NativeCapabilityInvocationPlanV6,
 	type NativeTextInputV1,
@@ -557,14 +554,12 @@ export class PostgresConversationExecutionTransactionV1
 	}
 
 	/** Persists a pre-validated V6 plan atomically with idempotency and outbox state. */
-	async admitNativeCapabilityV6(input: {
-		readonly request: NativeCapabilityAdmissionRequestV6;
-		readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
-		readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
-		readonly plan: NativeCapabilityInvocationPlanV6;
-		readonly requestDigest: string;
-		readonly operationDigest: string;
-	}): Promise<NativeCapabilityAdmissionV6Decision> {
+	async admitNativeCapabilityV6(
+		candidate: Parameters<
+			NativeCapabilityAdmissionTransactionPortV6["admitNativeCapabilityV6"]
+		>[0],
+	): Promise<NativeCapabilityAdmissionV6Decision> {
+		const input = structuredClone(candidate);
 		return this.#transaction(async (transaction) => {
 			validateNativeCapabilityInvocationPlanV6(input.plan, input);
 			const conversation = await lockConversation(
@@ -575,6 +570,7 @@ export class PostgresConversationExecutionTransactionV1
 				!conversation ||
 				conversation.agentId !== input.authority.agentId ||
 				conversation.actorId !== input.authority.actorId ||
+				!isDeepStrictEqual(conversation.principal, input.authority.principal) ||
 				conversation.channelId !== input.authority.channelId ||
 				conversation.authorizationRevision !==
 					input.authority.authorizationRevision ||
@@ -605,15 +601,42 @@ export class PostgresConversationExecutionTransactionV1
 					Array.isArray(envelope.plan)
 				)
 					return unavailable();
-				// The request digest alone does not bind Key, Turn or operation identity.
-				if (!isDeepStrictEqual(envelope.plan, input.plan))
-					return { outcome: "conflict", reason: "idempotency_conflict" };
-				return {
-					outcome: "replayed",
-					plan: structuredClone(
-						envelope.plan,
-					) as NativeCapabilityInvocationPlanV6,
+				const saved = envelope.plan as NativeCapabilityInvocationPlanV6;
+				const payload = saved.outbox?.payload;
+				if (
+					!payload ||
+					typeof payload.requestId !== "string" ||
+					typeof payload.traceId !== "string"
+				)
+					return unavailable();
+				// Correlation may change on retry; all frozen business fields must match.
+				const expected = {
+					...input.plan,
+					outbox: {
+						...input.plan.outbox,
+						payload: {
+							...input.plan.outbox.payload,
+							requestId: payload.requestId,
+							traceId: payload.traceId,
+						},
+					},
 				};
+				if (!isDeepStrictEqual(saved, expected))
+					return { outcome: "conflict", reason: "idempotency_conflict" };
+				validateNativeCapabilityInvocationPlanV6(saved, {
+					...input,
+					request: {
+						...input.request,
+						requestId: payload.requestId,
+						traceId: payload.traceId,
+					},
+					runtimeRequest: {
+						...input.runtimeRequest,
+						requestId: payload.requestId,
+						traceId: payload.traceId,
+					},
+				});
+				return { outcome: "replayed", plan: structuredClone(saved) };
 			}
 			const active = await readMessageState(transaction, conversation);
 			if (active.activeExecution)
@@ -641,10 +664,10 @@ export class PostgresConversationExecutionTransactionV1
 					 ${conversation.sandbox?.sandboxId ?? null}, ${input.plan.agentId},
 					 ${input.plan.actorId}, ${input.plan.channelId}, ${input.plan.turnId},
 					 'submitted', ${input.plan.sessionGeneration}, 0,
-					 ${input.plan.authorizationRevision}, ${input.plan.channelId === "web" ? "web" : null},
+					 ${input.plan.authorizationRevision}, ${input.plan.executionSource},
 					 ${input.keyBinding.purpose}, ${input.keyBinding.subjectId},
 					 ${input.keyBinding.ciphertextRef}, ${input.keyBinding.version},
-					 'user', ${occurredAt}, ${occurredAt})
+					 ${input.plan.principal.kind}, ${occurredAt}, ${occurredAt})
 			`;
 			await transaction`
 				insert into platform.outbox_items

@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto";
+import type { RuntimeNativeCapabilityRequestV6 } from "@agent-infra/contracts/runtime";
 
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 import {
+	createNativeCapabilityAdmissionUseCaseV6,
+	type NativeCapabilityAdmissionTransactionPortV6,
+	type NativeCapabilityAdmissionV6AuthorityBinding,
+	type NativeCapabilityAdmissionV6KeyBinding,
 	nativeCapabilityAdmissionRequestDigestV6,
 	nativeCapabilityOperationDigestV6,
 	parseNativeCapabilityAdmissionRequestV6,
@@ -97,8 +102,13 @@ it("changes operation identity when frozen selection or Key binding changes", ()
 });
 
 function validPlan() {
+	const runtimeRequest: RuntimeNativeCapabilityRequestV6 =
+		structuredClone(request);
 	const parsed = parseNativeCapabilityAdmissionRequestV6(request);
 	const authority = {
+		conversationId: request.conversationId,
+		principal: { ...request.principal },
+		executionSource: request.executionSource,
 		agentId: "agent-1",
 		actorId: "alice",
 		channelId: "web",
@@ -108,12 +118,15 @@ function validPlan() {
 	};
 	const requestDigest = nativeCapabilityAdmissionRequestDigestV6(parsed);
 	const operationDigest = nativeCapabilityOperationDigestV6(request);
-	const plan = {
+	const binding = {
 		schemaVersion: 2 as const,
 		kind: "native-capability" as const,
 		conversationId: parsed.conversationId,
 		agentId: authority.agentId,
 		actorId: authority.actorId,
+		principal: { ...request.principal },
+		executionSource: request.executionSource,
+		operation: { ...request.operation },
 		channelId: authority.channelId,
 		executionId: parsed.idempotencyKey,
 		turnId: "turn-1",
@@ -131,22 +144,37 @@ function validPlan() {
 		keyBinding: {
 			purpose: "personal" as const,
 			subjectId: authority.actorId,
-			ciphertextRef: "ciphertext-1",
+			ciphertextRef: request.keyBinding.ciphertextRef as string,
 			version: 1,
 		},
 		executionStatus: "submitted" as const,
+		requestDigest,
+		operationDigest,
+	};
+	const plan = {
+		...binding,
 		outbox: {
 			id: `conversation:native-capability:${parsed.idempotencyKey}`,
 			operation: "conversation.native-capability.invoke.v2" as const,
-			payload: parsed,
+			payload: {
+				...binding,
+				requestId: parsed.requestId,
+				traceId: parsed.traceId,
+				idempotencyKey: parsed.idempotencyKey,
+			},
 		},
-		requestDigest,
-		operationDigest,
 	};
 	return {
 		authority,
 		plan,
-		input: { request: parsed, authority, requestDigest, operationDigest },
+		input: {
+			runtimeRequest,
+			keyBinding: structuredClone(binding.keyBinding),
+			request: parsed,
+			authority,
+			requestDigest,
+			operationDigest,
+		},
 	};
 }
 
@@ -165,7 +193,7 @@ it.each(["selection", "configVersion", "keyBinding", "authority", "outbox"])(
 		if (field === "selection") changed.modelOptionId = "model-option-other";
 		if (field === "configVersion")
 			changed.configVersion = "configuration-other";
-		if (field === "keyBinding") changed.keyBinding.ciphertextRef = "";
+		if (field === "keyBinding") changed.keyBinding.version = 2;
 		if (field === "authority") changed.actorId = "bob";
 		if (field === "outbox")
 			changed.outbox.payload = {
@@ -177,3 +205,180 @@ it.each(["selection", "configVersion", "keyBinding", "authority", "outbox"])(
 		).toThrow("Native V6 admission plan is invalid");
 	},
 );
+
+type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+
+function admissionHarness() {
+	const authority: Mutable<NativeCapabilityAdmissionV6AuthorityBinding> = {
+		...validPlan().authority,
+		conversationId: request.conversationId,
+		principal: { ...request.principal },
+		executionSource: request.executionSource,
+	};
+	const keyBinding: Mutable<NativeCapabilityAdmissionV6KeyBinding> = {
+		...request.keyBinding,
+		version: Number(request.keyBinding.version),
+	};
+	const transaction = {
+		admitNativeCapabilityV6: vi.fn<
+			NativeCapabilityAdmissionTransactionPortV6["admitNativeCapabilityV6"]
+		>(async () => ({ outcome: "busy" as const })),
+	};
+	const authorization = {
+		authorize: vi.fn(async () => ({
+			outcome: "allowed" as const,
+			authority,
+			keyBinding,
+		})),
+	};
+	return {
+		authority,
+		keyBinding,
+		transaction,
+		useCase: createNativeCapabilityAdmissionUseCaseV6({
+			authorization,
+			transaction,
+		}),
+	};
+}
+it.each([
+	"principal",
+	"agentId",
+	"channelId",
+	"hostSessionRef",
+	"keyReference",
+	"keyVersion",
+	"executionSource",
+])("refuses %s request drift before calling the transaction", async (field) => {
+	const h = admissionHarness();
+	const changed = structuredClone(request) as Record<string, unknown>;
+	if (field === "principal") changed.principal = { kind: "user", id: "bob" };
+	else if (field === "keyReference")
+		changed.keyBinding = { ...request.keyBinding, ciphertextRef: "other-key" };
+	else if (field === "keyVersion")
+		changed.keyBinding = { ...request.keyBinding, version: 2 };
+	else if (field === "executionSource") changed.executionSource = "eval";
+	else changed[field] = "different-scope";
+	expect(await h.useCase.admit(changed)).toEqual({
+		outcome: "denied",
+		reason: "authorization_lost",
+	});
+	expect(h.transaction.admitNativeCapabilityV6).not.toHaveBeenCalled();
+});
+it("does not share mutable authorization Key objects with the transaction plan", async () => {
+	const h = admissionHarness();
+	await h.useCase.admit(request);
+	const sent = h.transaction.admitNativeCapabilityV6.mock.calls[0]?.[0];
+	expect(sent).toBeDefined();
+	h.keyBinding.version = 2;
+	expect(sent?.plan.keyBinding.version).toBe(1);
+	expect(Object.isFrozen(sent?.plan.keyBinding)).toBe(true);
+});
+
+it.each(["requestDigest", "operationDigest"] as const)(
+	"recomputes %s rather than trusting matching caller strings",
+	(field) => {
+		const h = validPlan();
+		h.plan[field] = "f".repeat(64);
+		h.input[field] = h.plan[field];
+		h.plan.outbox.payload[field] = h.plan[field];
+		expect(() =>
+			validateNativeCapabilityInvocationPlanV6(h.plan, h.input),
+		).toThrow();
+	},
+);
+it("stores every frozen binding in the outbox without the transport Grant", async () => {
+	const h = admissionHarness();
+	await h.useCase.admit(request);
+	const sent = h.transaction.admitNativeCapabilityV6.mock.calls[0]?.[0];
+	if (!sent) throw new Error("missing transaction input");
+	const { outbox, ...binding } = sent.plan;
+	expect(outbox.payload).toEqual({
+		...binding,
+		requestId: request.requestId,
+		traceId: request.traceId,
+		idempotencyKey: request.executionId,
+	});
+	expect(outbox.payload).toMatchObject({
+		principal: request.principal,
+		executionSource: "web",
+		operation: request.operation,
+		keyBinding: request.keyBinding,
+		turnId: request.turnId,
+		hostSessionRef: request.hostSessionRef,
+	});
+	expect(outbox.payload).not.toHaveProperty("grant");
+	expect(JSON.stringify(outbox.payload)).not.toContain(request.grant.token);
+	expect(Object.isFrozen(outbox.payload)).toBe(true);
+});
+
+it("denies a source inconsistent with the authorized channel even when the request agrees", async () => {
+	const h = admissionHarness();
+	h.authority.executionSource = "eval";
+	expect(
+		await h.useCase.admit({ ...request, executionSource: "eval" }),
+	).toEqual({ outcome: "denied", reason: "authorization_lost" });
+	expect(h.transaction.admitNativeCapabilityV6).not.toHaveBeenCalled();
+});
+it("does not charge a Web command to the Agent default Key", async () => {
+	const h = admissionHarness();
+	h.keyBinding.purpose = "agent-default";
+	h.keyBinding.subjectId = request.agentId;
+	expect(
+		await h.useCase.admit({ ...request, keyBinding: h.keyBinding }),
+	).toEqual({ outcome: "denied", reason: "authorization_lost" });
+	expect(h.transaction.admitNativeCapabilityV6).not.toHaveBeenCalled();
+});
+
+it("keeps V6 idempotency stable when only request/trace IDs change", () => {
+	const first = parseNativeCapabilityAdmissionRequestV6(request);
+	const retry = parseNativeCapabilityAdmissionRequestV6({
+		...request,
+		requestId: "retry-request",
+		traceId: "retry-trace",
+	});
+	expect(nativeCapabilityAdmissionRequestDigestV6(retry)).toBe(
+		nativeCapabilityAdmissionRequestDigestV6(first),
+	);
+});
+it.each(["agentId", "principal", "sessionGeneration"])(
+	"binds %s to the admission digest",
+	(field) => {
+		const changed = {
+			...request,
+			[field]:
+				field === "principal"
+					? { kind: "user", id: "bob" }
+					: field === "sessionGeneration"
+						? 2
+						: "other-agent",
+		};
+		expect(
+			nativeCapabilityAdmissionRequestDigestV6(
+				parseNativeCapabilityAdmissionRequestV6(changed),
+			),
+		).not.toBe(
+			nativeCapabilityAdmissionRequestDigestV6(
+				parseNativeCapabilityAdmissionRequestV6(request),
+			),
+		);
+	},
+);
+
+it("rejects undeclared plan fields even when duplicated into the outbox", () => {
+	const h = validPlan();
+	const injected = {
+		...h.plan,
+		grant: { token: "unwanted-transport-token" },
+		outbox: {
+			...h.plan.outbox,
+			payload: {
+				...h.plan.outbox.payload,
+				grant: { token: "unwanted-transport-token" },
+			},
+		},
+	};
+	expect(() =>
+		validateNativeCapabilityInvocationPlanV6(injected, h.input),
+	).toThrow();
+});

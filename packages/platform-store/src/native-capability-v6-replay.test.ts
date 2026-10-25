@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { RuntimeNativeCapabilityRequestV6 } from "@agent-infra/contracts/runtime";
 import {
 	nativeCapabilityAdmissionRequestDigestV6,
 	nativeCapabilityOperationDigestV6,
@@ -59,8 +60,13 @@ const request = {
 } as const;
 
 function validPlan() {
+	const runtimeRequest: RuntimeNativeCapabilityRequestV6 =
+		structuredClone(request);
 	const parsed = parseNativeCapabilityAdmissionRequestV6(request);
 	const authority = {
+		conversationId: request.conversationId,
+		principal: { ...request.principal },
+		executionSource: request.executionSource,
 		agentId: "agent-1",
 		actorId: "alice",
 		channelId: "web",
@@ -70,12 +76,15 @@ function validPlan() {
 	};
 	const requestDigest = nativeCapabilityAdmissionRequestDigestV6(parsed);
 	const operationDigest = nativeCapabilityOperationDigestV6(request);
-	const plan = {
+	const binding = {
 		schemaVersion: 2 as const,
 		kind: "native-capability" as const,
 		conversationId: parsed.conversationId,
 		agentId: authority.agentId,
 		actorId: authority.actorId,
+		principal: { ...request.principal },
+		executionSource: request.executionSource,
+		operation: { ...request.operation },
 		channelId: authority.channelId,
 		executionId: parsed.idempotencyKey,
 		turnId: "turn-1",
@@ -93,22 +102,37 @@ function validPlan() {
 		keyBinding: {
 			purpose: "personal" as const,
 			subjectId: authority.actorId,
-			ciphertextRef: "ciphertext-1",
+			ciphertextRef: request.keyBinding.ciphertextRef as string,
 			version: 1,
 		},
 		executionStatus: "submitted" as const,
+		requestDigest,
+		operationDigest,
+	};
+	const plan = {
+		...binding,
 		outbox: {
 			id: `conversation:native-capability:${parsed.idempotencyKey}`,
 			operation: "conversation.native-capability.invoke.v2" as const,
-			payload: parsed,
+			payload: {
+				...binding,
+				requestId: parsed.requestId,
+				traceId: parsed.traceId,
+				idempotencyKey: parsed.idempotencyKey,
+			},
 		},
-		requestDigest,
-		operationDigest,
 	};
 	return {
 		authority,
 		plan,
-		input: { request: parsed, authority, requestDigest, operationDigest },
+		input: {
+			runtimeRequest,
+			keyBinding: structuredClone(binding.keyBinding),
+			request: parsed,
+			authority,
+			requestDigest,
+			operationDigest,
+		},
 	};
 }
 
@@ -154,18 +178,41 @@ it("returns the saved plan as an independent copy on a same-key replay", async (
 	expect(h.transaction).not.toHaveBeenCalled();
 	expect(sql.readMessageState).not.toHaveBeenCalled();
 });
-it.each(["keyVersion", "keyReference", "turn", "operationDigest"])(
+it.each(["keyVersion", "keyReference", "turn"])(
 	"rejects same-key %s drift instead of returning a new plan",
 	async (drift) => {
 		const h = replayHarness();
-		if (drift === "keyVersion") h.input.plan.keyBinding.version += 1;
-		if (drift === "keyReference")
-			h.input.plan.keyBinding.ciphertextRef = "different-key";
-		if (drift === "turn") h.input.plan.turnId = "different-turn";
-		if (drift === "operationDigest") {
-			h.input.operationDigest = "f".repeat(64);
-			h.input.plan.operationDigest = h.input.operationDigest;
+		if (drift === "keyVersion") {
+			h.input.plan.keyBinding.version += 1;
+			h.input.runtimeRequest = {
+				...request,
+				keyBinding: h.input.plan.keyBinding,
+			};
 		}
+		if (drift === "keyReference") {
+			h.input.plan.keyBinding.ciphertextRef = "different-key";
+			h.input.runtimeRequest = {
+				...request,
+				keyBinding: h.input.plan.keyBinding,
+			};
+		}
+		if (drift === "turn") {
+			h.input.plan.turnId = "different-turn";
+			h.input.runtimeRequest = {
+				...request,
+				turnId: "different-turn",
+			};
+		}
+		h.input.operationDigest = nativeCapabilityOperationDigestV6(
+			h.input.runtimeRequest,
+		);
+		h.input.plan.operationDigest = h.input.operationDigest;
+		h.input.plan.outbox.payload = {
+			...h.input.plan.outbox.payload,
+			keyBinding: h.input.plan.keyBinding,
+			turnId: h.input.plan.turnId,
+			operationDigest: h.input.operationDigest,
+		};
 		expect(await h.store.admitNativeCapabilityV6(h.input)).toEqual({
 			outcome: "conflict",
 			reason: "idempotency_conflict",
@@ -215,6 +262,67 @@ it("keeps an unfinished reservation unavailable without writing or creating a pl
 	expect(await h.store.admitNativeCapabilityV6(h.input)).toEqual({
 		outcome: "unavailable",
 		reason: "idempotency_in_progress",
+	});
+	expect(h.transaction).not.toHaveBeenCalled();
+});
+
+it("rejects a forged operation digest before reading or mutating the database", async () => {
+	const h = replayHarness();
+	h.input.operationDigest = "f".repeat(64);
+	h.input.plan.operationDigest = h.input.operationDigest;
+	h.input.plan.outbox.payload.operationDigest = h.input.operationDigest;
+	await expect(h.store.admitNativeCapabilityV6(h.input)).rejects.toThrow();
+	expect(sql.lockConversation).not.toHaveBeenCalled();
+	expect(h.transaction).not.toHaveBeenCalled();
+});
+it("snapshots the plan before the Conversation lock awaits", async () => {
+	const h = replayHarness();
+	let release = () => {};
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	sql.lockConversation.mockImplementation(async () => {
+		await gate;
+		return { ...h.input.authority, conversationId: h.saved.conversationId };
+	});
+	const pending = h.store.admitNativeCapabilityV6(h.input);
+	h.input.plan.keyBinding.version = 3;
+	release();
+	expect(await pending).toEqual({ outcome: "replayed", plan: h.saved });
+	expect(h.transaction).not.toHaveBeenCalled();
+});
+
+it("replays the original correlation IDs for a retry with fresh request and trace IDs", async () => {
+	const h = replayHarness();
+	const runtimeRequest = {
+		...request,
+		requestId: "retry-request",
+		traceId: "retry-trace",
+	};
+	const parsed = parseNativeCapabilityAdmissionRequestV6(runtimeRequest);
+	const requestDigest = nativeCapabilityAdmissionRequestDigestV6(parsed);
+	const input = {
+		...h.input,
+		runtimeRequest,
+		request: parsed,
+		requestDigest,
+		plan: {
+			...h.input.plan,
+			requestDigest,
+			outbox: {
+				...h.input.plan.outbox,
+				payload: {
+					...h.input.plan.outbox.payload,
+					requestDigest,
+					requestId: parsed.requestId,
+					traceId: parsed.traceId,
+				},
+			},
+		},
+	};
+	expect(await h.store.admitNativeCapabilityV6(input)).toEqual({
+		outcome: "replayed",
+		plan: h.saved,
 	});
 	expect(h.transaction).not.toHaveBeenCalled();
 });
