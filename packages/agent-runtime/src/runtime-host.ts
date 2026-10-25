@@ -10,6 +10,7 @@ import type {
 	RuntimeBrowserCapabilityProbeEvidenceV1,
 	RuntimeBrowserHandoffRequestV3,
 	RuntimeBusinessGrantClaimsV4,
+	RuntimeBusinessGrantClaimsV6,
 	RuntimeBusinessRequestV4,
 	RuntimeCapabilitiesRequestV1,
 	RuntimeCapabilitiesResponseV1,
@@ -26,6 +27,7 @@ import type {
 	RuntimeNativeCapabilityRequestV3,
 	RuntimeNativeCapabilityRequestV5,
 	RuntimeNativeCapabilityTransportV5,
+	RuntimeNativeCapabilityTransportV6,
 	RuntimeNativeMetadataReadRequestV1,
 	RuntimeNativeMetadataReadResponseV1,
 	RuntimeOperationResponseV1,
@@ -79,6 +81,7 @@ import {
 	RuntimeModelDirectoryRequestV1Schema,
 	RuntimeModelDirectoryResponseV1Schema,
 	RuntimeNativeCapabilityTransportV5Schema,
+	RuntimeNativeCapabilityTransportV6Schema,
 	RuntimeNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataReadResponseV1Schema,
 	RuntimeOperationResponseV5Schema,
@@ -98,6 +101,7 @@ import {
 	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
 	runtimeOperationDigestInputV5,
+	runtimeRequestDigestV6,
 	VerifiedRuntimeExecutionGrantV2Schema,
 	validateRuntimeBusinessBindingV5,
 	validateRuntimeEventAccessV4,
@@ -175,6 +179,11 @@ export interface RuntimeHostOptions {
 	validateGrantV5?: (request: unknown) => Promise<{
 		readonly request: RuntimeNativeCapabilityRequestV5;
 		readonly claims: RuntimeBusinessGrantClaimsV4;
+	}>;
+	/** Deployment-owned JWS verification for the V6 stateful command request. */
+	validateGrantV6?: (request: unknown) => Promise<{
+		readonly request: import("@agent-infra/contracts/runtime").RuntimeNativeCapabilityRequestV6;
+		readonly claims: RuntimeBusinessGrantClaimsV6;
 	}>;
 	/** Deployment-owned JWS verification for the V5 existing-accepted recovery. */
 	validateRecoveryGrantV5?: (request: unknown) => Promise<{
@@ -286,6 +295,14 @@ function nativeTextInputUnsupported(): never {
 	throw new RuntimeHostError(
 		"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
 		"Native Skill text input execution is unavailable for this runtime",
+		409,
+	);
+}
+
+function nativeCapabilityUnsupported(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+		"Native stateful command execution is unavailable for this runtime",
 		409,
 	);
 }
@@ -1363,6 +1380,38 @@ export class RuntimeHost {
 			clearTimeout(timer);
 			controller.abort();
 		}
+	}
+
+	/**
+	 * V6 consumer admission gate. The execution Driver/Worker handoff is a
+	 * separate slice; until it is wired, this route validates every immutable
+	 * binding and fails closed before Store, Key or Driver side effects.
+	 */
+	async nativeCapabilityV6(value: RuntimeNativeCapabilityTransportV6) {
+		if (this.closed || !this.options.validateGrantV6)
+			runtimeAuthorizationDenied();
+		const parsed = RuntimeNativeCapabilityTransportV6Schema.parse(value);
+		const accepted = await this.options.validateGrantV6(parsed.businessRequest);
+		if (!isDeepStrictEqual(accepted.request, parsed.businessRequest))
+			runtimeAuthorizationDenied();
+		const request = accepted.request;
+		const claims = accepted.claims;
+		if (
+			claims.schemaVersion !== 6 ||
+			claims.purpose !== "business" ||
+			claims.allowedCommands[0] !== "native-capability.invoke" ||
+			claims.requestDigest !== (await runtimeRequestDigestV6(request)) ||
+			request.operation.kind !== "execution" ||
+			request.operation.id !== request.executionId ||
+			request.operation.deliveryFence !==
+				request.operation.executionDeliveryFence ||
+			createHash("sha256").update(request.parameters).digest("hex") !==
+				request.parametersDigest
+		)
+			runtimeAuthorizationDenied();
+		// Do not silently downgrade V6 to V4 or a normal prompt. The next
+		// consumer slice must add durable preparation and Driver dispatch here.
+		nativeCapabilityUnsupported();
 	}
 
 	/**
