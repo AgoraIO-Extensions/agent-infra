@@ -1351,6 +1351,73 @@ Host/Worker 重启和 SSE 重连沿该原操作核实。
 命令、journal、环境、原生可见文件或日志。具体固定 Runtime 映射见
 [Runtime HLD §5.3](HLD-agent-runtime-M1.md#53-固定官方能力矩阵)。
 
+##### 有状态命令的端到端版本与受理
+
+有状态命令使用独立的公开 Invocation V3、`NativeCapabilityInvocationPlanV2`、
+`conversation.native-capability.invoke.v2` outbox 和 Worker→Host Native V6。
+旧 Invocation V1、带 Skill 附件的 V2、Native V4/V5 及其签名和恢复语义保持不变。
+V3 只承载服务端受控目录认定的有状态 command，不接受附件、Skill、自由原生方法或路径；
+旧 native 请求缺少冻结选择时返回不支持，不能从上一条消息、当前默认配置或最新 Key 补值。
+
+浏览器以当前 V2 command metadata 选择确定能力及目录修订，提交参数和所选模型选项、
+推理强度；这些输入不是授权。Core 在既有受理事务中复用普通 Execution 的模型准入和 Key
+选择规则，验证当前主体、会话及无活跃/等待/unknown 占用，并重验当前目录和参数。
+服务端决定 `effect: state_changing`，不信任浏览器对副作用类别的声明。准备与提交之间
+目录、授权、配置或模型/Key 选择发生变化时拒绝受理，不换成其他能力或普通消息。
+
+新计划与 outbox 原子保存以下不可变绑定，Worker 只消费该版本的已持久值：
+
+| 绑定 | 权威来源与约束 |
+| --- | --- |
+| 主体、Agent、Conversation、Execution、Turn、Session 代次和渠道 | 当前服务端授权与同一受理事务；沿既有 Sandbox 归属与 fence 校验，不由目录或原生 ID 建立身份 |
+| capability ID、目录修订、来源版本、参数及摘要 | 当前受控目录和校验后的输入；名称不能代替确定版本，参数摘要不能代替完整调用摘要 |
+| selection 与 configVersion | 当前获准的有效 modelOptionId、reasoningLevel 和 Runtime 配置修订；不得在投递时重选或从旧消息推导 |
+| keyBinding | 原 Execution 的 Key 用途、主体、密文引用和版本；只保存引用，不保存明文或明文摘要 |
+
+受理幂等摘要覆盖公开 V3 输入、版本及主体、Agent、Conversation、Session 代次等授权范围；
+原操作摘要另覆盖完整冻结绑定。两者用途不同，重试同一公开输入应回读原受理结果，不能因
+当前模型或 Key 变化重新受理。同键异参、不同模型选择或附件注入在副作用前冲突/拒绝。
+检查活跃占用、创建计划和写入 outbox 必须在同一事务中完成，并由存储层唯一约束或条件写入
+保证并发请求最多产生一个原操作。旧计划保持旧版本；缺失字段不是可迁移的默认值。
+
+##### Native V6 的签名、执行与恢复
+
+Native V6 使用独立的 stateful-command request/transport、business Grant 和 Key restore
+Schema，固定 `schemaVersion: 6`；生成 JSON Schema、OpenAPI 与 Client 同步发布。
+请求携带上表冻结绑定、原 Host Session Ref、operation/fence、requestId/traceId，命令类别
+固定为 command。Grant 仅授权 `native-capability.invoke`，精确绑定同一请求、主体及范围；
+当前授权与原受理范围取交集。请求签名摘要覆盖版本和全部业务字段，排除 Grant token 与
+独立私有 Key 原值；持久原操作摘要按既有规则排除可换手的投递 fence，仍包含 selection、
+configVersion、keyBinding、能力修订及参数摘要。不能把 V6 请求降为 V4 验签或复用旧摘要。
+私有 Key 沿既有独立字段交付，绑定该次已验证 V6 请求摘要与同一 Key 引用/版本。
+
+Host 在当前目录重验后持久准备原操作，再安装原 Execution Key，并以独立的业务执行
+context 调用 Driver V2。metadata context 只用于前置目录读取，其固定 30 秒期限和 HTTP
+连接结束不终止已受理业务，也不能授予业务执行权。已受理命令沿原 Execution 租约、
+当前授权、停止和恢复机制运行，不保存回调、signal 或私有 Key。
+
+Driver 在发送压缩 RPC 前校验原 Session 实际模型、endpoint、reasoning、Key 绑定与冻结
+选择一致，持久保存完整命令摘要和原操作意图，并为本 Execution 建立带 fence 的短期受保护
+模型传输 admission。模型请求只有在原生 Turn 与该持久操作唯一绑定、当前授权通过且该
+admission 租约在发送时仍有效时才能出网；授权撤销、租约失效或冻结摘要变化必须在出网前
+原子拒绝；
+模型 intent/started/结果事实归属于该压缩 Execution，不沿用上一条消息的模型授权或 journal。
+所有异步通知同时核对所属进程/传输、Conversation、原 Session、原生 Turn/item 和原操作；
+仅 threadId 相同或收到第一条通知不足以建立关联。官方接口或装配不能证明这些条件时
+保持不支持，不以受控 transport 的成功代替真实进程证据。
+
+完成须同时具有原 `contextCompaction` item、Turn 终态及已持久的真实模型事实。
+空 RPC ACK 不建立完成事实；已唯一确认受理但仍执行时返回 accepted/running，未知时
+保留 unknown 和会话占用。重投必须先比较完整冻结摘要，再回读原操作；内存中已有 Promise
+也不能吞掉同键异参冲突。重启和停止只核实原 Turn/item，不发送第二次压缩。
+
+V6 Key restore 仅接受已持久 accepted/running 的原 V6 命令，Grant 仅授权
+`execution.key.restore`，固定 existing-accepted-only。它绑定原请求/操作摘要、原 Host
+Session、命令和目录、selection、configVersion、Key 引用/版本、当前权限和 fence；
+只恢复原执行的内存 Key，不创建意图、重读目录、再次 invoke 或授予新的业务副作用。
+unknown、终态、停止和只读查询不能取得该恢复权。历史事件仍沿原 journal、游标和 ACK
+回读，不因协议升级改绑或重放。
+
 ### 11.5 Browser Capability 边界
 
 Browser Capability 复用 Platform Conversation Contract、Session-owned Sandbox、RuntimeHost、Execution 事件和 File Grant，不新增浏览器调度器、共享浏览器服务或第二套 Session 权威。共享契约位于 `packages/contracts/src/runtime/browser-capability.ts`，同时作为 Runtime Manifest declaration、Runtime capability projection 和 Platform/API projection 的唯一来源。
