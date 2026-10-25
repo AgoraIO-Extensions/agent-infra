@@ -6,6 +6,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { checkAgentDefaultRelayKey } from "../../../features/agent-configuration/agent-configuration.js";
 import { useAgentDefaultRelayKeyState } from "../../../features/agent-configuration/use-agent-default-relay-key-state.js";
 import { readFailed } from "../../../features/background-read.js";
+import { connectionEntryUrl } from "../../../features/connection-entry.js";
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
 import { projectDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
 import {
@@ -18,12 +19,14 @@ import { useDeploymentConfiguration } from "../../../features/my-agents/use-depl
 import { useMyAgentApplication } from "../../../features/my-agents/use-my-agent-application.js";
 import { PageLoadingState } from "../../../features/page-loading-state.js";
 import { RecoveryButton } from "../../../features/recovery-button.js";
+import { useBrowserSession } from "../../../features/use-browser-session.js";
 
 export const Route = createFileRoute("/my-agents/$applicationId/edit")({
 	component: EditAgentApplicationRoute,
 });
 
 function EditAgentApplicationRoute() {
+	const session = useBrowserSession();
 	const { applicationId } = Route.useParams();
 	const query = useMyAgentApplication(applicationId);
 	const submission = useAgentApplicationSubmission(applicationId);
@@ -141,6 +144,11 @@ function EditAgentApplicationRoute() {
 	return (
 		<main className="platform-content management-content">
 			<AgentApplicationSubmissionScreen
+				connectionUrl={
+					session.state.kind === "ready"
+						? connectionEntryUrl(session.state.connection)
+						: undefined
+				}
 				action={action}
 				application={application}
 				defaultRelayKeyManaged={defaultRelayKey.data?.isSet === true}
