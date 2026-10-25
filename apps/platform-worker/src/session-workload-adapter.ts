@@ -28,6 +28,7 @@ import {
 	runtimeConnectionConsumerControlPodV1,
 	runtimeConnectionConsumerProjectionV1,
 } from "./connection-consumer-projection.js";
+import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import {
@@ -38,7 +39,6 @@ import {
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
-import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import {
 	isFileExchangeOriginV1,
 	isWorkloadFileExchangeEgressCurrentV1,

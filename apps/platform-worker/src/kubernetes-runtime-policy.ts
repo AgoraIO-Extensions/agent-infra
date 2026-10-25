@@ -31,6 +31,7 @@ import {
 	runtimeConnectionConsumerSnapshotForAgentV1,
 	runtimeConnectionInstallationRevisionForAgentV1,
 } from "./connection-consumer-projection.js";
+import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import type { KubernetesWorkloadPolicyV1 } from "./kubernetes-runtime-adapter.js";
 import {
@@ -49,7 +50,6 @@ import {
 import { createKubernetesPodValidationV1 } from "./kubernetes-runtime-pod-validation.js";
 import type { workloadEgressRulesV1 } from "./workload-network.js";
 import { workloadRuntimeAuthEnvironmentV1 } from "./workload-runtime-auth.js";
-import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 
 const routeHostSuffixPattern =
 	/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;

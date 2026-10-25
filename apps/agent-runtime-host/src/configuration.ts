@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import {
 	type CodexRuntimeModelOption,
 	validateCodexModelAccess,
@@ -7,7 +8,6 @@ import {
 	RuntimeModelConfigurationV4Schema,
 	WorkloadReadinessBindingV1Schema,
 } from "@agent-infra/contracts/runtime";
-import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { isRuntimeFileExchangeOriginV1 } from "./runtime-file-exchange.js";
 
