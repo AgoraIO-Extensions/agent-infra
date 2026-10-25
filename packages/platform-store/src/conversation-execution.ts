@@ -595,7 +595,25 @@ export class PostgresConversationExecutionTransactionV1
 					return { outcome: "conflict", reason: "idempotency_conflict" };
 				if (existing.status !== "completed" || existing.result === null)
 					return { outcome: "unavailable", reason: "idempotency_in_progress" };
-				return { outcome: "replayed", plan: input.plan };
+				const envelope = existing.result;
+				if (
+					typeof envelope !== "object" ||
+					Array.isArray(envelope) ||
+					!("plan" in envelope) ||
+					typeof envelope.plan !== "object" ||
+					envelope.plan === null ||
+					Array.isArray(envelope.plan)
+				)
+					return unavailable();
+				// The request digest alone does not bind Key, Turn or operation identity.
+				if (!isDeepStrictEqual(envelope.plan, input.plan))
+					return { outcome: "conflict", reason: "idempotency_conflict" };
+				return {
+					outcome: "replayed",
+					plan: structuredClone(
+						envelope.plan,
+					) as NativeCapabilityInvocationPlanV6,
+				};
 			}
 			const active = await readMessageState(transaction, conversation);
 			if (active.activeExecution)
