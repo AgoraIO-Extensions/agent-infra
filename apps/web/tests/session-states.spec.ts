@@ -8,6 +8,7 @@ import {
 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, test } from "@playwright/test";
 import { pendingApplication } from "../src/features/my-agents/test-fixtures";
+import { backgroundReread } from "./background-reread";
 import {
 	expectFocusableBusy,
 	expectFocusSettled,
@@ -57,6 +58,8 @@ async function platform(
 	page: Page,
 	replies: {
 		session?: () => Reply;
+		/** Agent 目录列表（#3388）；不传时返回 [agent]。 */
+		agents?: () => Reply;
 		agent?: () => Reply;
 		application?: () => Reply;
 	} = {},
@@ -87,7 +90,10 @@ async function platform(
 				json: { schemaVersion: 1, status: "unavailable", reason: "missing" },
 			});
 		if (url.pathname === "/api/v2/agents")
-			return route.fulfill({ json: { items: [agent], nextCursor: null } });
+			return fulfill(route, replies.agents?.() ?? { status: 200 }, {
+				items: [agent],
+				nextCursor: null,
+			});
 		if (url.pathname === `/api/v2/agents/${agent.agentId}`) {
 			counts.agent += 1;
 			return fulfill(route, replies.agent?.() ?? { status: 200 }, agent);
@@ -761,21 +767,15 @@ test("shows the not-found state card inside the usable shell (P-01, #2297)", asy
 	await expect(page.locator('main a[aria-current="page"]')).toHaveCount(0);
 });
 
-/** 回到标签页：TanStack Query 的聚焦重读只监听 window 上的 visibilitychange（#3388）。 */
-async function returnToTab(page: Page) {
-	await page.evaluate(() =>
-		window.dispatchEvent(new Event("visibilitychange")),
-	);
-}
-
 /**
- * 从工作台经侧栏到 Agent 目录，再让已就绪会话的后台重读重试用尽：壳层换成「暂时无法确认登录状态」卡
- * （#3388 F13-1 ④）。返回这张卡。
+ * 从工作台经侧栏到 Agent 目录；目录的后台重读读到 401（不可重试，整页换成「登录已过期」卡），用户按
+ * 「重新登录」确认会话，会话暂时确认不了（503，重试用尽）：壳层换成「暂时无法确认登录状态」卡（#3388
+ * F13-1 ④；已就绪会话自己的后台重读失败不再换卡，#3387）。返回这张卡。
  */
 async function sessionLostOnDirectory(
 	page: Page,
 	mobile: boolean,
-	setSession: (reply: Reply) => void,
+	set: { session: (reply: Reply) => void; agents: (reply: Reply) => void },
 ) {
 	await page.goto("/");
 	await expect(
@@ -792,8 +792,15 @@ async function sessionLostOnDirectory(
 	await expect(
 		page.getByRole("heading", { level: 1, name: "选择要使用的 Agent。" }),
 	).toBeVisible();
-	setSession({ status: 503 });
-	await returnToTab(page);
+	set.agents({ status: 401 });
+	await backgroundReread(page);
+	const login = page.locator(
+		'#main-content [data-slot="state-card"][data-kind="login"]',
+	);
+	await expect(login).toBeVisible();
+	set.session({ status: 503 });
+	set.agents({ status: 200 });
+	await login.getByRole("button", { name: "重新登录", exact: true }).click();
 	const card = page.locator('#main-content [data-slot="state-card"]');
 	await expect(card).toContainText("暂时无法确认登录状态，请稍后重试。", {
 		timeout: 30_000,
@@ -801,7 +808,7 @@ async function sessionLostOnDirectory(
 	return card;
 }
 
-// #3388 N13-03：壳层状态卡跨路由保留。已就绪会话后台重读重试用尽、壳层换成状态卡后按「重新检查」（挂起，
+// #3388 N13-03：壳层状态卡跨路由保留。确认会话暂时不可用、壳层换成状态卡后按「重新检查」（挂起，
 // 按钮可聚焦地禁用），浏览器后退到 /：按钮随壳层留在文档中，代管以后退后的页面为准。确认成功换成工作台后
 // 焦点到工作台 h1，仍无法确认时留在「重新检查」上，都不落到 body。两视口一致。
 for (const outcome of ["recovers", "fails again"] as const)
@@ -813,9 +820,18 @@ for (const outcome of ["recovers", "fails again"] as const)
 		if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
 		const errors = trackPageErrors(page);
 		let sessionReply: Reply = { status: 200 };
-		await platform(page, { session: () => sessionReply });
-		const card = await sessionLostOnDirectory(page, mobile, (reply) => {
-			sessionReply = reply;
+		let agentsReply: Reply = { status: 200 };
+		await platform(page, {
+			session: () => sessionReply,
+			agents: () => agentsReply,
+		});
+		const card = await sessionLostOnDirectory(page, mobile, {
+			session: (reply) => {
+				sessionReply = reply;
+			},
+			agents: (reply) => {
+				agentsReply = reply;
+			},
 		});
 		const recheck = await pinElement(
 			card.getByRole("button", { name: "重新检查", exact: true }),
@@ -860,16 +876,25 @@ test("a background session recheck that replaces the focused, unpressed recheck 
 	if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
 	const errors = trackPageErrors(page);
 	let sessionReply: Reply = { status: 200 };
-	await platform(page, { session: () => sessionReply });
-	const card = await sessionLostOnDirectory(page, mobile, (reply) => {
-		sessionReply = reply;
+	let agentsReply: Reply = { status: 200 };
+	await platform(page, {
+		session: () => sessionReply,
+		agents: () => agentsReply,
+	});
+	const card = await sessionLostOnDirectory(page, mobile, {
+		session: (reply) => {
+			sessionReply = reply;
+		},
+		agents: (reply) => {
+			agentsReply = reply;
+		},
 	});
 	const recheck = card.getByRole("button", { name: "重新检查", exact: true });
 	await recheck.focus();
 	await expect(recheck).toBeFocused();
 	const scrolled = await page.evaluate(() => window.scrollY);
 	sessionReply = { status: 200 };
-	await returnToTab(page);
+	await backgroundReread(page);
 	await expectFocusSettled(
 		page.getByRole("heading", { level: 1, name: "选择要使用的 Agent。" }),
 		"后台确认会话成功后",

@@ -19,6 +19,7 @@ import {
 	history,
 } from "../src/features/conversation/conversation-test-fixtures";
 import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures";
+import { backgroundReread } from "./background-reread";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
 import {
@@ -2704,13 +2705,6 @@ test("refreshing an unavailable Agent hands focus to the h1 once it recovers (N8
 	await expectCleanPage(page, errors);
 });
 
-/** 回到标签页：TanStack Query 的聚焦重读只监听 window 上的 visibilitychange（#3388）。 */
-async function returnToTab(page: Page) {
-	await page.evaluate(() =>
-		window.dispatchEvent(new Event("visibilitychange")),
-	);
-}
-
 type AgentProjection = ReturnType<typeof AgentProjectionV2Schema.parse>;
 
 /** 可变的 Agent 投影：后台重读读到的就是当前值（#3388）。 */
@@ -2776,7 +2770,7 @@ test("background Agent updates keep focus where the user put it while the histor
 		revision += 1;
 		agent.update({ description: `受控说明 ${revision}`, ...change });
 		const reads = agent.reads();
-		await returnToTab(page);
+		await backgroundReread(page);
 		await expect.poll(() => agent.reads()).toBeGreaterThan(reads);
 	};
 

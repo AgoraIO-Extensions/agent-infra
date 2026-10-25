@@ -15,6 +15,7 @@ import {
 	test,
 } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
+import { backgroundReread } from "./background-reread";
 import {
 	expectFocusableBusy,
 	expectFocusSettled,
@@ -1100,13 +1101,6 @@ for (const outcome of ["recovers", "fails again"] as const)
 		expect(api.commands).toEqual([]);
 	});
 
-/** 回到标签页：TanStack Query 的聚焦重读只监听 window 上的 visibilitychange（#3388）。 */
-async function returnToTab(page: Page) {
-	await page.evaluate(() =>
-		window.dispatchEvent(new Event("visibilitychange")),
-	);
-}
-
 // #3388 N13-05：目录读取 503 后焦点在未按下的「重新加载 Agent」上（Tab 到它），回到标签页的后台重读：成功、
 // 失败卡卸载后焦点交给 h1，不滚动页面；仍失败时失败卡与按钮重新出现，焦点回到按钮上；都不落到 body。
 // 对照：按下按钮的恢复同样到 h1（既有行为）。两视口一致。
@@ -1137,7 +1131,7 @@ for (const outcome of ["recovers", "fails again"] as const)
 		if (outcome === "recovers") api.current.failure = undefined;
 		const scrolled = await page.evaluate(() => window.scrollY);
 		const reading = await holdRequests(page, "GET", "/api/v2/agents");
-		await returnToTab(page);
+		await backgroundReread(page);
 		await expect.poll(() => reading.held()).toBeGreaterThanOrEqual(1);
 		// 没有数据的查询重读回到读取中：失败卡与按钮卸载，焦点先到 h1（D2-59），不落到 body。
 		await expectFocusSettled(heading, "后台重读挂起", [30, 150, 400]);
@@ -1162,3 +1156,55 @@ for (const outcome of ["recovers", "fails again"] as const)
 		await expectCleanPage(page, errors);
 		expect(api.commands).toEqual([]);
 	});
+
+// #3388 N13-04：目录读取 401，「重新登录」恢复后焦点交给 h1；用户之后只滚动、不按键不点击。回到标签页的后台
+// 重读又读到 401（不可重试，仍整页换成「登录已过期」卡，#3387）、同一个「重新登录」再次出现时不取回焦点、
+// 不滚动页面：「仍失败回到按钮」只指本次恢复请求本身失败（对照：本次请求仍 401 时回到按钮，见上方用例）。
+// 后台重读挂起时焦点同样留在 h1。两视口一致。
+test("a re-login handoff is not taken back when a later background reread is 401 again (#3388 N13-04)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
+	const errors = trackPageErrors(page);
+	const api = await fixture(page);
+	api.current.failure = 401;
+	await page.goto("/agents");
+	const main = page.locator("#main-content");
+	const card = main.locator('[data-slot="state-card"]');
+	const heading = main.getByRole("heading", {
+		level: 1,
+		name: "选择要使用的 Agent。",
+	});
+	const relogin = card.getByRole("button", { name: "重新登录", exact: true });
+	await expect(card).toHaveAttribute("data-kind", "login");
+	api.current.failure = undefined;
+	await relogin.focus();
+	await page.keyboard.press("Enter");
+	await expect(page.locator(".agent-list > li")).toHaveCount(5);
+	await expectFocusSettled(heading, "重新登录恢复后", [50, 300, 1000]);
+	await page.evaluate(() =>
+		window.scrollTo(0, document.documentElement.scrollHeight),
+	);
+	const scrolled = await page.evaluate(() => window.scrollY);
+
+	api.current.failure = 401;
+	const reading = await holdRequests(page, "GET", "/api/v2/agents");
+	await backgroundReread(page);
+	await expect.poll(() => reading.held()).toBeGreaterThanOrEqual(1);
+	await expectFocusSettled(heading, "后台重读挂起", [50, 300]);
+	reading.release();
+	await expect(card).toHaveAttribute("data-kind", "login");
+	await expect(relogin).toBeVisible();
+	await expectFocusSettled(
+		heading,
+		"后台重读又读到 401 后",
+		[50, 300, 1000, 2000],
+	);
+	expect(await page.evaluate(() => window.scrollY)).toBeLessThanOrEqual(
+		scrolled,
+	);
+	await expectNoDuplicateControls(page, "Agent 目录（交接后后台 401）");
+	await expectCleanPage(page, errors);
+	expect(api.commands).toEqual([]);
+});
