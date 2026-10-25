@@ -1575,6 +1575,74 @@ for (const status of [401, 404] as const)
 			await noHorizontalOverflow(page);
 		});
 
+// #3433 N15-05（G15-2-03）：未保存的修改只有模型选择时，已保存 Key 的可用模型后台重读不可重试地失败（401、404）
+// 撤回它，「保存配置」随之因没有变更而禁用；焦点原在按钮上的交给紧挨按钮的「没有需要保存的变更。」
+// （同保存完成，D2-59），不落到 body，也不被兜底送到视口外的 h1。
+for (const status of [401, 404] as const)
+	test(`withdrawing the only unsaved model choice hands focus from the save button to the unchanged hint: ${status} (#3433 N15-05)`, async ({
+		page,
+	}, info) => {
+		await viewport(page, info.project.name === "mobile");
+		const pageErrors = trackPageErrors(page);
+		const api = await ownerConfigFixture(page, { keySet: true });
+		await page.goto("/agents/agent-pilot-1/configuration");
+		const models = page.getByRole("region", {
+			name: "模型与凭证",
+			exact: true,
+		});
+		const mini = await pinElement(
+			models.getByRole("checkbox", {
+				name: "Relay · Internal · gpt-5-mini",
+				exact: true,
+			}),
+			"saved-key-mini",
+		);
+		await mini.click();
+		await expect(mini).toBeChecked();
+		const save = await pinElement(
+			page.getByRole("button", { name: "保存配置", exact: true }),
+			"saved-key-save",
+		);
+		await expect(save).toBeEnabled();
+		await save.focus();
+		const path =
+			"/api/v2/agents/agent-pilot-1/default-relay-key/display-candidates";
+		await page.route(
+			(url) => url.pathname === path,
+			(route) =>
+				route.request().method() === "GET"
+					? route.fulfill(unavailable(status, false))
+					: route.fallback(),
+		);
+		const failed = page.waitForResponse(
+			(response) =>
+				new URL(response.url()).pathname === path &&
+				response.status() === status,
+		);
+		await backgroundReread(page);
+		await failed;
+		await expect(models.getByRole("alert")).toContainText("无法读取可用模型");
+		await expect(models.getByRole("checkbox")).toHaveCount(0);
+		await expect(save).toBeDisabled();
+		await expect(save).toHaveAttribute(
+			"aria-describedby",
+			"agent-configuration-unchanged",
+		);
+		const hint = page.locator("#agent-configuration-unchanged");
+		await expect(hint).toHaveText("没有需要保存的变更。");
+		await expectFocusSettled(
+			hint,
+			`已保存 Key 可用模型（${status}，撤回唯一的模型修改）`,
+		);
+		await expect(hint).toBeInViewport({ ratio: 1 });
+		await expect(
+			page.locator("#agent-configuration-heading"),
+		).not.toBeFocused();
+		expect(api.commands).toEqual([]);
+		await expectCleanPage(page, pageErrors);
+		await noHorizontalOverflow(page);
+	});
+
 // #3418 N14-04（F14-3、G14-2-04）：Agent 启动中时每 2 秒轮询；一次轮询失败（503、网络中断）之后继续按原节奏
 // 轮询，挂起时页面不变，服务端转为就绪后不需要回到标签页就读到「就绪」。失败不可重试（403）时按 D2-59
 // 换成读取失败、停止轮询。Agent 详情读详情投影，Owner 配置读 V2 投影。
