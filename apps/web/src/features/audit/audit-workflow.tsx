@@ -179,36 +179,41 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 	const items = busy || formFailure ? [] : query.items;
 	// 「上一页」「下一页」读取中是可聚焦的禁用（#3242 K7-02）；读完后触发的按钮因到了首页或末页而
 	// 禁用时，焦点交给另一个分页按钮，两个都不可用时到页面 h1（D2-59），不落到 body。
-	// 不是分页按钮触发的读取（例如「重试」进行中 Tab 到「下一页」，重试仍失败）读完后持有焦点的分页按钮
-	// 变为原生禁用时同样交接，且不滚动页面（#3388 N13-06）。
 	const previousPageButton = useRef<HTMLButtonElement>(null);
 	const nextPageButton = useRef<HTMLButtonElement>(null);
 	const pageTrigger = useRef<"previous" | "next" | null>(null);
+	const previousDisabled =
+		busy || formFailure !== null || !query.canPreviousPage;
+	const nextDisabled = busy || formFailure !== null || !query.hasNextPage;
 	useEffect(() => {
-		if (busy) return;
-		const buttons = {
-			previous: previousPageButton.current,
-			next: nextPageButton.current,
-		};
 		const trigger = pageTrigger.current;
+		if (busy || !trigger) return;
 		pageTrigger.current = null;
-		const lost = trigger
-			? undefined
-			: (["previous", "next"] as const).find((name) => {
-					const button = buttons[name];
-					return button?.disabled && focusLostFrom(button);
-				});
-		const source = trigger ?? lost;
-		if (!source) return;
-		const own = buttons[source];
-		const other = buttons[source === "previous" ? "next" : "previous"];
+		const own = (trigger === "previous" ? previousPageButton : nextPageButton)
+			.current;
+		const other = (trigger === "previous" ? nextPageButton : previousPageButton)
+			.current;
 		const active = document.activeElement;
 		if (active && active !== document.body && active !== own) return;
 		if (own && !own.disabled) return;
-		const preventScroll = lost !== undefined;
-		if (other && !other.disabled) other.focus({ preventScroll });
-		else pageRecoveryTarget()?.focus({ preventScroll });
+		if (other && !other.disabled) other.focus();
+		else pageRecoveryTarget()?.focus();
 	}, [busy]);
+	// 不是分页按钮触发的变化（回到标签页的后台重读读到了末页、查询失败等）让持有焦点的分页按钮变为原生
+	// 禁用时同样交接：交给另一个分页按钮，两个都不可用时到页面 h1，不落到 body、不滚动页面（#3388 N13-06）。
+	useEffect(() => {
+		if (busy || pageTrigger.current || !(previousDisabled || nextDisabled))
+			return;
+		const previous = previousPageButton.current;
+		const next = nextPageButton.current;
+		const lost = [previous, next].find(
+			(button) => button?.disabled && focusLostFrom(button),
+		);
+		if (!lost) return;
+		const other = lost === previous ? next : previous;
+		if (other && !other.disabled) other.focus({ preventScroll: true });
+		else pageRecoveryTarget()?.focus({ preventScroll: true });
+	}, [busy, previousDisabled, nextDisabled]);
 	const administrator = scope === "administrator";
 	// 列表与详情中的用户主体合并读取一次目录；后台组件与应用主体不是目录记录。
 	const userNames = useDirectoryNames(
@@ -600,7 +605,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 						<Button
 							ref={previousPageButton}
 							variant="outline"
-							disabled={busy || formFailure !== null || !query.canPreviousPage}
+							disabled={previousDisabled}
 							focusableWhenDisabled={busy}
 							onClick={() => {
 								pageTrigger.current = "previous";
@@ -614,7 +619,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 						<Button
 							ref={nextPageButton}
 							variant="outline"
-							disabled={busy || formFailure !== null || !query.hasNextPage}
+							disabled={nextDisabled}
 							focusableWhenDisabled={busy}
 							onClick={() => {
 								pageTrigger.current = "next";

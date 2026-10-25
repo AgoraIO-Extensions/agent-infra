@@ -17,6 +17,7 @@ import {
 	focusLostFrom,
 	pageRecoveryTarget,
 	RecoveryPageParams,
+	useRestoreLostFocus,
 } from "./use-recovery-focus.js";
 
 // 恢复代管与焦点记录是模块级状态：每个用例结束时模拟一次用户按下指针，结束代管、清空焦点记录。
@@ -689,6 +690,28 @@ describe("focus held by a control that a background re-render removes", () => {
 		screen.getByRole("textbox", { name: "搜索" }).focus();
 		const focus = vi.spyOn(HTMLElement.prototype, "focus");
 		view.rerender(<FilterPage state="failed" onRetry={vi.fn()} />);
+		await waitFor(() => expect(document.activeElement).toBe(heading()));
+		expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+		focus.mockRestore();
+	});
+
+	it("moves focus to the h1 when a card without a recovery button replaces the focused filter", async () => {
+		function DeniedCard() {
+			useRestoreLostFocus();
+			return <p>当前无权访问。</p>;
+		}
+		function DeniablePage({ denied }: { denied: boolean }) {
+			return (
+				<div id="main-content" tabIndex={-1}>
+					<h1 tabIndex={-1}>页面标题</h1>
+					{denied ? <DeniedCard /> : <input aria-label="搜索" />}
+				</div>
+			);
+		}
+		const view = render(<DeniablePage denied={false} />);
+		screen.getByRole("textbox", { name: "搜索" }).focus();
+		const focus = vi.spyOn(HTMLElement.prototype, "focus");
+		view.rerender(<DeniablePage denied />);
 		await waitFor(() => expect(document.activeElement).toBe(heading()));
 		expect(focus).toHaveBeenCalledWith({ preventScroll: true });
 		focus.mockRestore();

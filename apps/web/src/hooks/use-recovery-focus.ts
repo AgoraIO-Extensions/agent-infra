@@ -377,6 +377,20 @@ function restoreLostFocusSoon(params: readonly string[]) {
 }
 
 /**
+ * 页面级状态卡（读取失败、登录失效、无权、不存在、响应无效）挂载时调用：它替换了主内容、卸载了持有焦点的
+ * 控件（例如回到标签页的后台重读读到无权，Agent 管理收起筛选）时，焦点交给页面 h1，不落到 body、不滚动
+ * （#3388 N13-05）。卡片里的恢复按钮挂载时同样会检查，没有恢复按钮的卡片（无法访问等）靠这里。
+ */
+export function useRestoreLostFocus() {
+	const params = useContext(RecoveryPageParams);
+	const latestParams = useRef(params);
+	latestParams.current = params;
+	useEffect(() => {
+		if (!pending) restoreLostFocusSoon(latestParams.current);
+	}, []);
+}
+
+/**
  * 读取失败后的恢复操作（「重新登录」「重新加载…」「重新读取」）与焦点。
  *
  * - 用户触发时调用 run(onClick)，跟踪本次恢复请求（onClick 返回的 Promise 与页面的 QueryClient）；
