@@ -2982,6 +2982,75 @@ describe("assembled Workload Runtime contracts", () => {
 		);
 		expect(resources.filter((item) => item.kind === "Ingress")).toHaveLength(1);
 	});
+	it("converges cleanup when multi-service preflight rejects before deployment materialization", async () => {
+		const f = fixture(
+			{ policy: { ...workloadTestPolicy, routeHostSuffix: "192.0.2.1" } },
+			{ configuration: multiServiceConfigurationFixture() },
+		);
+		await f.tick(2);
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			candidate: { deployment: null },
+		});
+		await f.tick(2);
+		expect(f.state?.phase).toBe("failed");
+		expect(f.resources.size).toBe(0);
+	});
+	it("stops a rejected initial multi-service workload without materializing resources", async () => {
+		const f = fixture(
+			{ policy: { ...workloadTestPolicy, routeHostSuffix: "192.0.2.1" } },
+			{ configuration: multiServiceConfigurationFixture() },
+		);
+		await f.tick(2);
+		f.setManagement({
+			...f.management,
+			status: "disabled",
+			desiredState: "stopped",
+			workloadRevision: 2,
+			revision: 2,
+			fence: 2,
+		});
+		await f.tick(6);
+		expect(f.state?.phase).toBe("stopped");
+		expect(f.resources.size).toBe(0);
+		expect(f.writes).toHaveLength(0);
+	});
+	it.each(["identity", "verified"] as const)(
+		"does not treat a missing multi-service deployment with %s as an empty initial workload",
+		async (retained) => {
+			const f = fixture(
+				{},
+				{ configuration: multiServiceConfigurationFixture() },
+			);
+			await f.tick(10);
+			const ready = f.state;
+			if (ready?.phase !== "ready") throw new Error();
+			const state = {
+				...ready,
+				phase: "cleaning" as const,
+				candidate: {
+					configuration: ready.candidate.configuration,
+					deployment: null,
+				},
+				identity: retained === "identity" ? ready.identity : null,
+				verified: retained === "verified" ? ready.verified : null,
+			};
+			const before = structuredClone([...f.resources.entries()]);
+			const runtime = createWorkloadRuntimeV1(f.options);
+			const input = {
+				state,
+				management: f.management,
+				configuration: state.candidate.configuration,
+				requestId: "cleanup",
+				traceId: "cleanup",
+			};
+			await expect(runtime.closeRoute(state)).rejects.toThrow();
+			await expect(runtime.cleanup(state, true, input)).rejects.toThrow();
+			await expect(runtime.apply(state, true, input)).rejects.toThrow();
+			await expect(runtime.discardUnactivatedSecrets(state, input)).rejects.toThrow();
+			expect([...f.resources.entries()]).toEqual(before);
+		},
+	);
 	it("retains multi-service capabilities only for the exact healthy promotion attempt", async () => {
 		const f = fixture(
 			{},
