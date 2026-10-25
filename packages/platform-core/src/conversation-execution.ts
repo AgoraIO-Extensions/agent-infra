@@ -32,6 +32,7 @@ import type {
 	ConversationModelSelectionResultV1,
 	ConversationStopResultV1,
 } from "./conversation-execution-types.js";
+import { conversationAttachmentMergeMaxCountV1 } from "./conversation-execution-types.js";
 import {
 	digest,
 	invalidInput,
@@ -85,6 +86,8 @@ export {
 	type CreateConversationCommandV1,
 	type CreateConversationDecisionV1,
 	type CreateConversationWritePlanV1,
+	conversationAttachmentMergeMaxCountV1,
+	conversationAttachmentMergeWindowMsV1,
 } from "./conversation-execution-types.js";
 
 /** Platform stop acknowledgement budget; callers cannot configure task runtime limits. */
@@ -322,10 +325,24 @@ export function createConversationExecutionUseCaseV1(
 								selectedReasoningLevel: modelSelection.reasoningLevel,
 							};
 							if (state.activeExecution) {
+								const active = state.activeExecution;
+								const attachmentCount = command.attachments?.length ?? 0;
+								// #3374：合并窗口内尚未认领的 Execution 接收同一发送者的消息，组成同一个初始 Turn。
+								// 文字消息结束窗口；只含附件的消息重新计时，并入后附件不超过上限。
+								const merge =
+									authority.attachmentMergeWindow === true &&
+									active.attachmentMerge !== undefined &&
+									active.status === "submitted" &&
+									!active.stopPending &&
+									active.actorId === authority.actorId &&
+									(attachmentCount === 0 ||
+										active.attachmentMerge.attachmentCount + attachmentCount <=
+											conversationAttachmentMergeMaxCountV1);
 								if (
-									state.activeExecution.stopPending ||
-									!authority.supportsSupplementaryInstruction ||
-									state.activeExecution.actorId !== authority.actorId
+									!merge &&
+									(active.stopPending ||
+										!authority.supportsSupplementaryInstruction ||
+										active.actorId !== authority.actorId)
 								) {
 									return { outcome: "busy" };
 								}
@@ -336,8 +353,8 @@ export function createConversationExecutionUseCaseV1(
 									state.modelConfiguration,
 									authority,
 									conversation.conversationId,
-									state.activeExecution.executionId,
-									state.activeExecution.lastEventSequence,
+									active.executionId,
+									active.lastEventSequence,
 									conversation.lastConversationCursor,
 									command.requestId,
 									command.traceId,
@@ -348,11 +365,17 @@ export function createConversationExecutionUseCaseV1(
 									schemaVersion: 1,
 									status: "submitted",
 									messageId,
-									executionId: state.activeExecution.executionId,
+									executionId: active.executionId,
 								};
 								return {
 									schemaVersion: 1,
-									kind: "supplement",
+									kind: merge ? "merge" : "supplement",
+									...(merge
+										? {
+												attachmentWindow:
+													command.text === "" ? "extend" : "close",
+											}
+										: {}),
 									conversation: {
 										...selectedConversation,
 										lastConversationCursor:
@@ -367,21 +390,24 @@ export function createConversationExecutionUseCaseV1(
 										conversationId: conversation.conversationId,
 										actorId: authority.actorId,
 										text: command.text,
-										executionId: state.activeExecution.executionId,
+										executionId: active.executionId,
 										status: "submitted",
 										createdAt: occurredAt,
 									},
 									outboxIntent: {
-										operation: "conversation.turn.supplement.v1",
+										// 合并不新建 outbox：意图描述被并入的原 Turn。
+										operation: merge
+											? "conversation.turn.submit.v1"
+											: "conversation.turn.supplement.v1",
 										conversationId: conversation.conversationId,
-										executionId: state.activeExecution.executionId,
+										executionId: active.executionId,
 										messageId,
-										turnId: state.activeExecution.turnId,
-										sessionGeneration: state.activeExecution.sessionGeneration,
+										turnId: active.turnId,
+										sessionGeneration: active.sessionGeneration,
 										modelConfigurationRevision:
-											state.activeExecution.modelConfigurationRevision,
-										modelOptionId: state.activeExecution.modelOptionId,
-										reasoningLevel: state.activeExecution.reasoningLevel,
+											active.modelConfigurationRevision,
+										modelOptionId: active.modelOptionId,
+										reasoningLevel: active.reasoningLevel,
 										traceId: command.traceId,
 										requestId: command.requestId,
 										...(command.traceParent === undefined
@@ -390,11 +416,13 @@ export function createConversationExecutionUseCaseV1(
 										occurredAt,
 									},
 									auditEvent: {
-										action: "conversation.message.supplemented",
+										action: merge
+											? "conversation.message.accepted"
+											: "conversation.message.supplemented",
 										actorId: authority.actorId,
 										agentId: authority.agentId,
 										conversationId: conversation.conversationId,
-										executionId: state.activeExecution.executionId,
+										executionId: active.executionId,
 										traceId: command.traceId,
 										requestId: command.requestId,
 										occurredAt,
@@ -437,6 +465,12 @@ export function createConversationExecutionUseCaseV1(
 							return {
 								schemaVersion: 1,
 								kind: "initial",
+								// #3374：只含附件的企微消息打开合并窗口，等待随后的文字组成同一个 Turn。
+								...(authority.attachmentMergeWindow === true &&
+								command.text === "" &&
+								(command.attachments?.length ?? 0) > 0
+									? { attachmentWindow: "open" as const }
+									: {}),
 								conversation: {
 									...selectedConversation,
 									status: "active",

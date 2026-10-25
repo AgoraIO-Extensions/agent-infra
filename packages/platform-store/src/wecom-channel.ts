@@ -946,40 +946,46 @@ export class PostgresWecomChannelV1
 			// 正文与结果文件都已按序提交，同 #1524 关闭 outbox 的判据）；failed、cancelled 只发固定
 			// 文案，不必等待。
 			// #3077：回答未就绪的已受理回执在有效期最后 30 秒内领取，由 Core 发送超时提示；已过期的照旧领取。
+			// #3374：同一 Execution 有更晚受理的回执时，这条附件消息已与随后的消息合并为一个任务，立即领取，
+			// 由 Core 以“已合并”说明结束它的 stream；回复只由最晚受理的回执承担。
 			const [row] = await sql<
 				(Row & {
 					execution_status: string | null;
 					answer_ready: boolean;
+					merged: boolean;
 					conversation_status: string | null;
 					conversation_isolation_pending: boolean;
 				})[]
-			>`select r.*,e.status as execution_status,ready.answer_ready,c.status as conversation_status,exists (select 1 from platform.conversation_generation_tombstones t where t.conversation_id=r.conversation_id and t.status='pending') as conversation_isolation_pending from platform.wecom_receipts r left join platform.conversation_executions e on e.execution_id=r.execution_id left join platform.conversations c on c.id=r.conversation_id
+			>`select r.*,e.status as execution_status,ready.answer_ready,merging.merged,c.status as conversation_status,exists (select 1 from platform.conversation_generation_tombstones t where t.conversation_id=r.conversation_id and t.status='pending') as conversation_isolation_pending from platform.wecom_receipts r left join platform.conversation_executions e on e.execution_id=r.execution_id left join platform.conversations c on c.id=r.conversation_id
     cross join lateral (select coalesce(e.status in ('failed','cancelled') or (e.status='completed' and exists (select 1 from platform.conversation_events t where t.conversation_id=e.conversation_id and t.execution_id=e.execution_id and t.source='runtime' and t.event_type='execution.status' and t.event_payload->>'status'='completed' and t.runtime_cursor is not null)),false) as answer_ready) ready
-    where (r.connection_bot_id is null or r.expires_at<=now() or exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) and (r.delivery_status='pending' or (r.delivery_status='claimed' and r.lease_until<=now())) and (r.acceptance_status!='accepted' or ready.answer_ready or r.expires_at<=now()+(${wecomReplyTimeoutNoticeLeadMsV1}::bigint*interval '1 millisecond')) order by r.created_at limit 1 for update of r skip locked`;
+    cross join lateral (select r.acceptance_status='accepted' and r.execution_id is not null and exists (select 1 from platform.wecom_receipts later where later.execution_id=r.execution_id and later.acceptance_status='accepted' and (later.created_at,later.id)>(r.created_at,r.id)) as merged) merging
+    where (r.connection_bot_id is null or r.expires_at<=now() or exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) and (r.delivery_status='pending' or (r.delivery_status='claimed' and r.lease_until<=now())) and (r.acceptance_status!='accepted' or merging.merged or ready.answer_ready or r.expires_at<=now()+(${wecomReplyTimeoutNoticeLeadMsV1}::bigint*interval '1 millisecond')) order by r.created_at limit 1 for update of r skip locked`;
 			if (!row) return null;
 			await sql`update platform.wecom_receipts set delivery_status='claimed',fence=fence+1,lease_until=now()+interval '30 seconds',updated_at=now() where id=${row.id}`;
-			const [size] = row.execution_id
+			// 已合并的回执只发固定说明，不读取答案、结果文件或思考过程。
+			const answerExecutionId = row.merged ? null : row.execution_id;
+			const [size] = answerExecutionId
 				? await sql<
 						{ bytes: string; count: string }[]
-					>`select coalesce(sum(octet_length(event_payload->>'text')),0) as bytes,count(*) as count from platform.conversation_events where execution_id=${row.execution_id} and event_type='text.delta'`
+					>`select coalesce(sum(octet_length(event_payload->>'text')),0) as bytes,count(*) as count from platform.conversation_events where execution_id=${answerExecutionId} and event_type='text.delta'`
 				: [];
 			const deltas =
-				row.execution_id &&
+				answerExecutionId &&
 				size &&
 				Number(size.bytes) <= 20480 &&
 				Number(size.count) <= 10000
 					? await sql<
 							{ event_payload: { text?: string } }[]
-						>`select event_payload from platform.conversation_events where execution_id=${row.execution_id} and event_type='text.delta' order by sequence`
+						>`select event_payload from platform.conversation_events where execution_id=${answerExecutionId} and event_type='text.delta' order by sequence`
 					: [];
 			// #3229：正文超限时不读取，并明确告诉 Core，回复按原规则失败而不是只发结果文件。
 			const answerTooLong = Boolean(
-				row.execution_id &&
+				answerExecutionId &&
 					size &&
 					(Number(size.bytes) > 20480 || Number(size.count) > 10000),
 			);
 			const resultFiles =
-				row.execution_id && row.execution_status === "completed"
+				answerExecutionId && row.execution_status === "completed"
 					? await sql<
 							{
 								file_id: string;
@@ -1018,7 +1024,7 @@ export class PostgresWecomChannelV1
 			// #2982：只有完成的回答读取思考过程。按顺序只取到累计约 20480 字节（最多 10000 条）的前缀，
 			// 读取量有界；没有读完时 Core 截短并附提示，答案照常发送。
 			const thinking =
-				row.execution_id &&
+				answerExecutionId &&
 				row.acceptance_status === "accepted" &&
 				row.execution_status === "completed"
 					? await sql<
@@ -1053,6 +1059,7 @@ export class PostgresWecomChannelV1
 					: {}),
 				executionStatus: row.execution_status,
 				answerReady: row.answer_ready,
+				...(row.merged ? { merged: true } : {}),
 				// #3184：失败文案按回执所属会话的当前状态附带 /new 指引；代次隔离与
 				// status=unavailable 一样拒绝后续消息（ConversationExecutionTask 的提交判据），
 				// 所以同样算作会话不可用。
@@ -1186,9 +1193,10 @@ export class PostgresWecomChannelV1
 		actorId: string,
 		channelId: string,
 	) {
+		// #3374：合并后的 Execution 有多条回执，取最晚受理的一条（承担回复的文字消息）。
 		const [row] = await this.#sql<
 			Row[]
-		>`select r.* from platform.wecom_receipts r join platform.conversation_executions e on e.execution_id=r.execution_id where r.execution_id=${executionId} and r.actor_id=${actorId} and e.channel_id=${channelId} limit 1`;
+		>`select r.* from platform.wecom_receipts r join platform.conversation_executions e on e.execution_id=r.execution_id where r.execution_id=${executionId} and r.actor_id=${actorId} and e.channel_id=${channelId} order by r.created_at desc, r.id desc limit 1`;
 		return row
 			? {
 					scope: row.scope,

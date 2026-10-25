@@ -21,6 +21,7 @@ import {
 	lockExecution,
 	lockOutbox,
 	readGenerationIsolation,
+	readInitialTurnInput,
 	readMessage,
 	readStop,
 } from "./conversation-dispatch-sql.js";
@@ -399,15 +400,26 @@ export async function claimWork(
 				and payload->>'errorCode' = 'RUNTIME_TURN_NOT_SUBMITTED'
 		`
 		: [];
-	const inputFiles = message
-		? await transaction<{ file_id: string }[]>`
+	// #3374：新消息 Turn 的输入包含合并窗口内并入同一 Execution 的消息；重新生成仍只读源消息。
+	const turnInput =
+		message && selectedOperation === "conversation.turn.submit.v1"
+			? await readInitialTurnInput(
+					transaction,
+					conversation.id,
+					execution.execution_id,
+					message,
+				)
+			: undefined;
+	const inputFiles =
+		message && !turnInput
+			? await transaction<{ file_id: string }[]>`
         select file_id from platform.files
         where conversation_id = ${conversation.id}
           and record->>'messageId' = ${payload.messageId}
           and record->>'kind' = 'attachment' and record->>'status' = 'available'
         order by file_id
     `
-		: [];
+			: [];
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
 		sandbox: conversation.sandbox,
@@ -469,12 +481,14 @@ export async function claimWork(
 		...(payload.metadataRecovery
 			? { metadataRecovery: payload.metadataRecovery }
 			: {}),
-		input: message
-			? {
-					text: message.text,
-					attachments: inputFiles.map((file) => file.file_id),
-				}
-			: null,
+		input: turnInput
+			? { text: turnInput.text, attachments: turnInput.attachments }
+			: message
+				? {
+						text: message.text,
+						attachments: inputFiles.map((file) => file.file_id),
+					}
+				: null,
 		...(payload.nativeCapability
 			? { nativeCapability: payload.nativeCapability }
 			: {}),
