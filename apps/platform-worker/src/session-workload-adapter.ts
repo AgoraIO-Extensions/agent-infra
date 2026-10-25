@@ -474,6 +474,11 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 					!/^[A-Za-z0-9_-]{43}$/.test(
 						runtime.codexContainerBoundaryAttestation,
 					))) ||
+			(runtime.codexContainerBoundaryEnabled === true &&
+				(typeof runtime.codexContainerBoundaryAttestation !== "string" ||
+					!/^[A-Za-z0-9_-]{43}$/.test(
+						runtime.codexContainerBoundaryAttestation,
+					))) ||
 			(runtime.fileExchange !== undefined &&
 				(!runtime.fileExchange ||
 					typeof runtime.fileExchange !== "object" ||
