@@ -113,6 +113,7 @@ import {
 	RuntimeHostV3SchemaDefinitions,
 	RuntimeHostV4SchemaDefinitions,
 	RuntimeHostV5SchemaDefinitions,
+	RuntimeHostV6SchemaDefinitions,
 	RuntimeLegacyMigrationV1SchemaDefinitions,
 	RuntimeModelConfigurationV3Schema,
 	RuntimeModelConfigurationV4Schema,
@@ -216,6 +217,14 @@ const artifactPaths = {
 	runtimeJsonSchemaV5: resolve(
 		artifactRoot,
 		"json-schema/runtime.v5.schema.json",
+	),
+	runtimeJsonSchemaV6: resolve(
+		artifactRoot,
+		"json-schema/runtime.v6.schema.json",
+	),
+	runtimeOpenapiV6: resolve(
+		artifactRoot,
+		"openapi/runtime-host.v6.openapi.json",
 	),
 	runtimeOpenapiV3: resolve(
 		artifactRoot,
@@ -818,6 +827,36 @@ function buildArtifacts() {
 		},
 	});
 
+	const runtimeJsonSchemaV6 = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime.v6.schema.json",
+		title: "Agent Infra Runtime Contracts V6",
+		definitions: { ...RuntimeHostV6SchemaDefinitions },
+	});
+	const runtimeOpenapiV6 = createDocument({
+		openapi: "3.1.0",
+		info: { title: "Agent Infra RuntimeHost Contract", version: "6.0.0" },
+		security: [{ RuntimeServiceBearer: [] }],
+		paths: {
+			"/internal/runtime/v6/native-capability": {
+				post: postOperation(
+					"invokeNativeCapabilityV6",
+					RuntimeHostV6SchemaDefinitions.RuntimeNativeCapabilityTransportV6,
+					RuntimeHostV6SchemaDefinitions.RuntimeOperationResponseV6,
+					"application/json",
+				),
+			},
+		},
+		components: {
+			securitySchemes: {
+				RuntimeServiceBearer: { type: "http", scheme: "bearer" },
+			},
+			schemas: {
+				ProtocolErrorV1: ProtocolErrorV1Schema,
+				...RuntimeHostV6SchemaDefinitions,
+			},
+		},
+	});
+
 	const pilotBrowserOpenapi = createDocument({
 		openapi: "3.1.0",
 		info: {
@@ -1163,9 +1202,11 @@ function buildArtifacts() {
 		runtimeJsonSchemaV3,
 		runtimeJsonSchemaV4,
 		runtimeJsonSchemaV5,
+		runtimeJsonSchemaV6,
 		runtimeOpenapiV3,
 		runtimeOpenapiV4,
 		runtimeOpenapiV5,
+		runtimeOpenapiV6,
 		runtimeJsonSchema,
 		runtimeNativeMetadataJsonSchema,
 		runtimeJsonSchemaV2,

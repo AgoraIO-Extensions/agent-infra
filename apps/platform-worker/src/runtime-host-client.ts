@@ -16,6 +16,7 @@ import {
 	RuntimeBrowserSideEffectConfirmationRequestV3Schema,
 	RuntimeBrowserSideEffectConfirmationResponseV3Schema,
 	type RuntimeBusinessGrantClaimsV4,
+	type RuntimeBusinessGrantClaimsV6,
 	type RuntimeBusinessRequestV4,
 	type RuntimeEvent,
 	type RuntimeEventAckRequestV3,
@@ -43,13 +44,17 @@ import {
 	RuntimeNativeCapabilityRequestV4Schema,
 	type RuntimeNativeCapabilityRequestV5,
 	RuntimeNativeCapabilityRequestV5Schema,
+	type RuntimeNativeCapabilityRequestV6,
+	RuntimeNativeCapabilityRequestV6Schema,
 	RuntimeNativeCapabilityTransportV4Schema,
 	RuntimeNativeCapabilityTransportV5Schema,
+	RuntimeNativeCapabilityTransportV6Schema,
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV3Schema,
 	RuntimeOperationResponseV4Schema,
 	RuntimeOperationResponseV5Schema,
+	RuntimeOperationResponseV6Schema,
 	RuntimeOriginalBindingResponseV3Schema,
 	type RuntimePinnedExecutionKeyScopeV4,
 	RuntimePrivateRelayKeyFieldV1Schema,
@@ -93,8 +98,11 @@ import {
 	RuntimeSupplementRequestV3Schema,
 	RuntimeSupplementRequestV4Schema,
 	RuntimeSupplementTransportV4Schema,
+	runtimeOperationDigestInputV6,
+	runtimeOperationDigestV6,
 	validateRuntimeBusinessBindingV4,
 	validateRuntimeBusinessBindingV5,
+	validateRuntimeBusinessBindingV6,
 	validateRuntimePinnedExecutionKeyScopeV4,
 	validateRuntimeReplayResponseV4,
 } from "@agent-infra/contracts/runtime";
@@ -125,6 +133,81 @@ export interface WorkerAcceptedExecutionV4 {
 	readonly authorizationRecordId: string;
 	readonly selection?: RuntimeSelectionV1;
 	readonly stopPending?: true;
+}
+
+/** Bind the private Key to verified V6 claims; callers verify signature and lifetime. */
+export async function createNativeCapabilityTransportV6(input: {
+	readonly request: RuntimeNativeCapabilityRequestV6;
+	readonly claims: RuntimeBusinessGrantClaimsV6;
+	readonly relayKey: string;
+}) {
+	const request = RuntimeNativeCapabilityRequestV6Schema.parse(input.request);
+	const claims = structuredClone(input.claims);
+	const relayKey = input.relayKey;
+	try {
+		await validateRuntimeBusinessBindingV6(request, claims);
+	} catch {
+		throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_AUTHENTICATION_FAILED");
+	}
+	const requestDigest = claims.requestDigest;
+	return RuntimeNativeCapabilityTransportV6Schema.parse({
+		businessRequest: request,
+		privateKeyField: {
+			schemaVersion: 1,
+			context: {
+				requestId: request.requestId,
+				grantId: claims.grantId,
+				requestDigest,
+				traceId: request.traceId,
+				principal: request.principal,
+				executionSource: request.executionSource,
+				channelId: request.channelId,
+				agentId: request.agentId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				turnId: request.turnId,
+				sessionGeneration: request.sessionGeneration,
+				hostSessionRef: request.hostSessionRef,
+				operation: request.operation,
+				keyBinding: request.keyBinding,
+			},
+			keyDelivery: { relayKey },
+		},
+	});
+}
+
+/** Frozen Store projection plus the current delivery claim; never reconstructed from defaults. */
+export interface WorkerAcceptedExecutionV6 {
+	readonly schemaVersion: 6;
+	readonly binding: ReturnType<typeof runtimeOperationDigestInputV6>;
+	readonly operationDigest: string;
+	readonly deliveryFence: number;
+	readonly executionDeliveryFence: number;
+	readonly authorizationRecordId: string;
+	readonly stopPending: boolean;
+	readonly dispatchState: "ready" | "unknown" | "accepted" | "terminal";
+}
+
+export interface WorkerExecutionKeyReaderV6 {
+	readAcceptedExecution(
+		request: RuntimeNativeCapabilityRequestV6,
+	): Promise<WorkerAcceptedExecutionV6 | null>;
+	readCiphertext: WorkerExecutionKeyReaderV4["readCiphertext"];
+}
+
+export interface WorkerRuntimeHostClientOptionsV6
+	extends WorkerRuntimeHostClientOptionsV1 {
+	readonly executionKeys: WorkerExecutionKeyReaderV6;
+	readonly decryptor: RelayKeyWorkerDecryptorV1;
+	readonly signGrant: (
+		request: RuntimeNativeCapabilityRequestV6,
+		authorizationRecordId: string,
+	) => Promise<RuntimeNativeCapabilityRequestV6["grant"]>;
+	readonly verifyGrant: (
+		grant: RuntimeNativeCapabilityRequestV6["grant"],
+	) => RuntimeBusinessGrantClaimsV6;
+	/** Revalidate the original frozen input and current delivery lease/fence, including revocation. */
+	readonly assertCurrentAuthorization: () => Promise<void>;
 }
 
 export interface WorkerExecutionKeyReaderV4 {
@@ -1203,6 +1286,183 @@ async function interruptedDependency<T>(
 	} finally {
 		if (abort) signal.removeEventListener("abort", abort);
 	}
+}
+
+/** Sends one admitted V6 operation once; an uncertain delivery must go to original-operation recovery. */
+export function createWorkerRuntimeHostClientV6(
+	options: WorkerRuntimeHostClientOptionsV6,
+) {
+	if (
+		!options.serviceToken ||
+		!options.executionKeys ||
+		!options.decryptor ||
+		!options.signGrant ||
+		!options.verifyGrant ||
+		!options.assertCurrentAuthorization
+	)
+		throw new TypeError("RuntimeHost V6 client options are invalid");
+	const base = endpoint(options.baseUrl, "/");
+	const fetcher = bindConnectionConsumer(
+		options.fetch ?? runtimeFetch,
+		options.connectionConsumer
+			? structuredClone(options.connectionConsumer)
+			: undefined,
+	);
+	const reader = options.executionKeys;
+	return {
+		async nativeCapability(
+			value: RuntimeNativeCapabilityRequestV6,
+			signal?: AbortSignal,
+		) {
+			let sending = false;
+			try {
+				signal?.throwIfAborted();
+				const request = RuntimeNativeCapabilityRequestV6Schema.parse(value);
+				await interruptedDependency(
+					options.assertCurrentAuthorization(),
+					signal,
+				);
+				const original = structuredClone(
+					await interruptedDependency(
+						reader.readAcceptedExecution(structuredClone(request)),
+						signal,
+					),
+				);
+				if (!original) return failure("RUNTIME_GRANT_INVALID", false);
+				if (original.dispatchState !== "ready")
+					return failure("RUNTIME_ACCEPTANCE_UNKNOWN", true);
+				if (original.stopPending) return failure("RUNTIME_STOP_PENDING", false);
+				const operationDigest = await runtimeOperationDigestV6(request);
+				if (
+					original.schemaVersion !== 6 ||
+					!original.authorizationRecordId ||
+					original.operationDigest !== operationDigest ||
+					original.deliveryFence !== request.operation.deliveryFence ||
+					original.executionDeliveryFence !==
+						request.operation.executionDeliveryFence ||
+					!isDeepStrictEqual(
+						original.binding,
+						runtimeOperationDigestInputV6(request),
+					)
+				)
+					return failure("RUNTIME_GRANT_INVALID", false);
+				request.grant = await interruptedDependency(
+					options.signGrant(
+						structuredClone(request),
+						original.authorizationRecordId,
+					),
+					signal,
+				);
+				const claims = structuredClone(options.verifyGrant(request.grant));
+				await validateRuntimeBusinessBindingV6(request, claims);
+				if (claims.authorizationRecordId !== original.authorizationRecordId)
+					return failure("RUNTIME_GRANT_INVALID", false);
+				const binding = {
+					purpose: request.keyBinding.purpose,
+					subjectId: request.keyBinding.subjectId,
+					keyId: request.keyBinding.ciphertextRef,
+					keyVersion: request.keyBinding.version,
+				};
+				const encryptedRecord = await interruptedDependency(
+					reader.readCiphertext(binding),
+					signal,
+				);
+				if (!encryptedRecord)
+					throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
+				const decryption = options.decryptor
+					.decrypt({ encryptedRecord, expectedBinding: binding })
+					.then((result) => {
+						if (signal?.aborted && result.outcome === "decrypted")
+							result.plaintext.fill(0);
+						return result;
+					});
+				const decrypted = await interruptedDependency(decryption, signal);
+				if (decrypted.outcome !== "decrypted")
+					throw new RuntimeRelayKeyDeliveryError(decrypted.code);
+				let relayKey: string;
+				try {
+					signal?.throwIfAborted();
+					relayKey = new TextDecoder("utf-8", { fatal: true }).decode(
+						decrypted.plaintext,
+					);
+					RuntimeRelayKeyDeliveryV1Schema.parse({ relayKey });
+				} finally {
+					decrypted.plaintext.fill(0);
+				}
+				const transport = await createNativeCapabilityTransportV6({
+					request,
+					claims,
+					relayKey,
+				});
+				const current = await interruptedDependency(
+					reader.readAcceptedExecution(structuredClone(request)),
+					signal,
+				);
+				if (!isDeepStrictEqual(current, original))
+					return failure("RUNTIME_FENCE_STALE", true);
+				await interruptedDependency(
+					options.assertCurrentAuthorization(),
+					signal,
+				);
+				signal?.throwIfAborted();
+				if (!isDeepStrictEqual(options.verifyGrant(request.grant), claims))
+					return failure("RUNTIME_GRANT_INVALID", false);
+				sending = true;
+				const response = await post(
+					fetcher,
+					new URL("internal/runtime/v6/native-capability", base),
+					options.serviceToken,
+					request.traceId,
+					transport,
+					signal,
+				);
+				try {
+					const result = RuntimeOperationResponseV6Schema.parse(
+						JSON.parse(
+							await interruptedDependency(
+								boundedResponseText(response),
+								signal,
+							),
+						),
+					);
+					if (
+						result.operationId !== request.executionId ||
+						result.hostSessionRef !== request.hostSessionRef
+					)
+						return failure("RUNTIME_ACCEPTANCE_UNKNOWN", true);
+					await interruptedDependency(
+						options.assertCurrentAuthorization(),
+						signal,
+					);
+					const after = await interruptedDependency(
+						reader.readAcceptedExecution(structuredClone(request)),
+						signal,
+					);
+					if (!isDeepStrictEqual(after, original))
+						return failure("RUNTIME_ACCEPTANCE_UNKNOWN", true);
+					signal?.throwIfAborted();
+					options.verifyGrant(request.grant);
+					return result;
+				} catch (error) {
+					// Authorization revocation and cancellation are known local facts;
+					// only malformed or incomplete responses become unknown acceptance.
+					if (error instanceof ConversationRuntimeHostError || signal?.aborted)
+						throw error;
+					return failure("RUNTIME_ACCEPTANCE_UNKNOWN", true);
+				}
+			} catch (error) {
+				if (error instanceof ConversationRuntimeHostError) {
+					if (sending || error.code === "RUNTIME_ACCEPTANCE_UNKNOWN")
+						throw error;
+					throw unsent(error);
+				}
+				return failure(
+					sending ? "RUNTIME_ACCEPTANCE_UNKNOWN" : "RUNTIME_REQUEST_INVALID",
+					sending,
+				);
+			}
+		},
+	};
 }
 
 /** V4 business and event consumers within the existing Worker loop. Control recovery stays Key-free. */

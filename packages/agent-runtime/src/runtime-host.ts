@@ -106,6 +106,7 @@ import {
 	validateRuntimeBusinessBindingV5,
 	validateRuntimeEventAccessV4,
 	validateRuntimePrivateRelayKeyFieldV5,
+	validateRuntimePrivateRelayKeyFieldV6,
 	validateRuntimeRestoreExecutionKeyBindingV5,
 	validateRuntimeRestoreExecutionKeyPrivateFieldV5,
 	WorkloadReadinessRequestV1Schema,
@@ -1423,6 +1424,15 @@ export class RuntimeHost {
 			runtimeAuthorizationDenied();
 		const request = accepted.request;
 		const claims = accepted.claims;
+		try {
+			validateRuntimePrivateRelayKeyFieldV6(parsed.privateKeyField, {
+				request,
+				grantId: claims.grantId,
+				requestDigest: claims.requestDigest,
+			});
+		} catch {
+			runtimeAuthorizationDenied();
+		}
 		if (
 			claims.schemaVersion !== 6 ||
 			claims.purpose !== "business" ||

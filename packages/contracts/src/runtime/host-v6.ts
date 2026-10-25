@@ -24,9 +24,11 @@ export const RuntimeBusinessGrantClaimsV6Schema =
 	RuntimeBusinessGrantClaimsV4Schema.omit({
 		schemaVersion: true,
 		allowedCommands: true,
+		eventAccess: true,
 	}).extend({
 		schemaVersion: z.literal(6),
 		allowedCommands: z.array(z.literal("native-capability.invoke")).length(1),
+		attachments: z.array(z.never()).length(0),
 	});
 export type RuntimeBusinessGrantClaimsV6 = z.infer<
 	typeof RuntimeBusinessGrantClaimsV6Schema
@@ -209,6 +211,160 @@ export async function runtimeRequestDigestV6(
 		new TextEncoder().encode(runtimeRequestSigningPayloadV6(input)),
 	);
 	return Array.from(new Uint8Array(digestBytes), (byte) =>
+		byte.toString(16).padStart(2, "0"),
+	).join("");
+}
+
+/** Signature verification and current business authorization remain consumer-owned. */
+export function validateVerifiedRuntimeExecutionGrantClaimsV6(
+	input: unknown,
+	context: { expectedIssuer: string; expectedWorkerId: string; now: number },
+) {
+	const claims = RuntimeBusinessGrantClaimsV6Schema.parse(input);
+	if (
+		claims.issuer !== context.expectedIssuer ||
+		claims.workerId !== context.expectedWorkerId ||
+		!Number.isSafeInteger(context.now) ||
+		claims.issuedAt > context.now ||
+		claims.expiresAt <= context.now ||
+		claims.expiresAt <= claims.issuedAt ||
+		claims.expiresAt - claims.issuedAt > 30_000 ||
+		claims.operation.kind !== "execution" ||
+		claims.operation.id !== claims.executionId ||
+		claims.operation.deliveryFence !== claims.operation.executionDeliveryFence
+	)
+		throw new TypeError("Runtime V6 grant claims are invalid");
+	return claims;
+}
+
+export async function validateRuntimeBusinessBindingV6(
+	input: unknown,
+	verification: unknown,
+): Promise<void> {
+	try {
+		const request = RuntimeNativeCapabilityRequestV6Schema.parse(input);
+		const claims = RuntimeBusinessGrantClaimsV6Schema.parse(verification);
+		const purpose =
+			request.executionSource === "web" || request.executionSource === "wecom"
+				? "personal"
+				: "agent-default";
+		const subject =
+			purpose === "personal"
+				? request.principal.kind === "user"
+					? request.principal.id
+					: null
+				: request.agentId;
+		const claimed = {
+			principal: claims.principal,
+			executionSource: claims.executionSource,
+			channelId: claims.channelId,
+			agentId: claims.agentId,
+			conversationId: claims.conversationId,
+			executionId: claims.executionId,
+			turnId: claims.turnId,
+			sessionGeneration: claims.sessionGeneration,
+			hostSessionRef: claims.hostSessionRef,
+			traceId: claims.traceId,
+			operation: claims.operation,
+			keyBinding: claims.relayKeyBinding,
+		};
+		const requested = Object.fromEntries(
+			Object.keys(claimed).map((key) => [
+				key,
+				request[key as keyof typeof claimed],
+			]),
+		);
+		const parametersHash = await globalThis.crypto.subtle.digest(
+			"SHA-256",
+			new TextEncoder().encode(request.parameters),
+		);
+		const parametersDigest = Array.from(
+			new Uint8Array(parametersHash),
+			(byte) => byte.toString(16).padStart(2, "0"),
+		).join("");
+		if (
+			JSON.stringify(canonical(claimed)) !==
+				JSON.stringify(canonical(requested)) ||
+			request.keyBinding.purpose !== purpose ||
+			subject === null ||
+			request.keyBinding.subjectId !== subject ||
+			request.operation.kind !== "execution" ||
+			request.operation.id !== request.executionId ||
+			request.operation.deliveryFence !==
+				request.operation.executionDeliveryFence ||
+			request.parametersDigest !== parametersDigest ||
+			claims.requestDigest !== (await runtimeRequestDigestV6(request))
+		)
+			throw new Error();
+	} catch {
+		throw new TypeError("Runtime V6 business binding is invalid");
+	}
+}
+
+export function validateRuntimePrivateRelayKeyFieldV6(
+	field: unknown,
+	accepted: {
+		readonly request: RuntimeNativeCapabilityRequestV6;
+		readonly grantId: string;
+		readonly requestDigest: string;
+	},
+) {
+	const request = RuntimeNativeCapabilityRequestV6Schema.parse(
+		accepted.request,
+	);
+	const parsed = RuntimePrivateRelayKeyFieldV1Schema.parse(field);
+	const context = parsed.context;
+	const expected = {
+		requestId: request.requestId,
+		grantId: accepted.grantId,
+		requestDigest: accepted.requestDigest,
+		traceId: request.traceId,
+		principal: request.principal,
+		executionSource: request.executionSource,
+		channelId: request.channelId,
+		agentId: request.agentId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		hostSessionRef: request.hostSessionRef,
+		operation: request.operation,
+		keyBinding: request.keyBinding,
+	};
+	if (
+		JSON.stringify(canonical(context)) !==
+		JSON.stringify(canonical({ ...expected, keyBinding: expected.keyBinding }))
+	)
+		throw new TypeError("Runtime V6 private Key context is invalid");
+	return parsed;
+}
+
+/** Stable accepted-operation identity; grant renewal and fence takeover do not reselect input. */
+export function runtimeOperationDigestInputV6(
+	input: RuntimeNativeCapabilityRequestV6,
+) {
+	const request = RuntimeNativeCapabilityRequestV6Schema.parse(input);
+	const {
+		grant: _grant,
+		requestId: _requestId,
+		traceId: _traceId,
+		operation,
+		parameters: _parameters,
+		...frozen
+	} = request;
+	return { ...frozen, operation: { kind: operation.kind, id: operation.id } };
+}
+
+export async function runtimeOperationDigestV6(
+	input: RuntimeNativeCapabilityRequestV6,
+) {
+	const bytes = await globalThis.crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(
+			JSON.stringify(canonical(runtimeOperationDigestInputV6(input))),
+		),
+	);
+	return Array.from(new Uint8Array(bytes), (byte) =>
 		byte.toString(16).padStart(2, "0"),
 	).join("");
 }
