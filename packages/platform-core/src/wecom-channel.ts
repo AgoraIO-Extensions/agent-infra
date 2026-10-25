@@ -5,6 +5,10 @@ import {
 	snapshotAgentManagementDataObject,
 } from "./agent-management-input.js";
 import type {
+	AgentRuntimePresentationDecisionV1,
+	AgentRuntimePresentationExpectationV1,
+} from "./agent-runtime-presentation.js";
+import type {
 	ConversationExecutionAuthorityV1,
 	ConversationExecutionUseCaseV1,
 } from "./conversation-execution.js";
@@ -216,6 +220,11 @@ export interface WecomReceiptV1 {
 	 * 之后的位次从持久等待顺序派生。长连接据此发送排队提示而不是处理中提示。
 	 */
 	readonly queuePosition?: number;
+	/**
+	 * #3437：本次受理是当前回复的补充指令。只在本次受理的响应中出现、不持久化；长连接据此发送
+	 * 补充指令首帧。
+	 */
+	readonly supplement?: true;
 }
 /** 受理回调交给 Store 持久化的回执内容；`media_rejected` 必须同时给出拒绝原因（#3227）。 */
 export type WecomAcceptanceResultV1 = Omit<WecomReceiptV1, "receiptId"> & {
@@ -430,6 +439,8 @@ export function createWecomChannelV1(dependencies: {
 	readonly authorization: WecomAuthorizationPortV1;
 	readonly store: WecomChannelStorePortV1;
 	readonly media?: WecomMediaResolverV1;
+	/** #3375：Runtime 实际的补充指令能力；未装配时按不支持。 */
+	readonly supplementaryInstruction?: WecomSupplementaryInstructionReaderV1;
 	readonly now?: () => Date;
 }) {
 	const now = dependencies.now ?? (() => new Date());
@@ -515,6 +526,19 @@ export function createWecomChannelV1(dependencies: {
 				);
 				return { outcome: "denied" };
 			}
+			// #3375：补充指令分支取 Runtime 实际能力（与 Web 一致）；读取失败按不支持，授权结论不变。
+			const supportsSupplementaryInstruction =
+				(await dependencies
+					.supplementaryInstruction?.({
+						scope: message,
+						actorId: authority.actor.actorId,
+					})
+					.catch(() => false)) === true;
+			if (signal?.aborted) return { outcome: "unavailable" };
+			const admittedAuthority: WecomAuthorityV1 = {
+				...authority,
+				actor: { ...authority.actor, supportsSupplementaryInstruction },
+			};
 			const eventKey = digest([
 				message.kind,
 				message.providerId,
@@ -550,7 +574,7 @@ export function createWecomChannelV1(dependencies: {
 			]);
 			const plan: WecomAcceptancePlanV1 = {
 				message,
-				authority,
+				authority: admittedAuthority,
 				eventKey,
 				conversationKey,
 				requestDigest,
@@ -868,6 +892,15 @@ export interface WecomDeliveryClaimV1 {
 	 * 回执）。它不等待答案，以 {@link wecomAttachmentMergedTextV1} 结束 stream，回复由最后一条承担。
 	 */
 	readonly merged?: boolean;
+	/**
+	 * #3437：该回执是仍绑定原 Execution 的补充指令。`accepted` 表示已补充到当前回复，`failed` 表示
+	 * 投递失败（`failureCode` 为消息的失败原因），`pending` 只在回复有效期即将结束时出现。它不读取
+	 * 答案，回复由原消息承担；转入排队后回执改绑新 Execution，不再带这个字段。
+	 */
+	readonly supplement?: {
+		readonly status: "pending" | "accepted" | "failed";
+		readonly failureCode: string | null;
+	};
 	/** 回执所属的 Conversation 已不可用；失败文案据此附带 /new 指引（#3184）。 */
 	readonly conversationUnavailable?: boolean;
 	/** `media_rejected` 回执的拒绝原因，决定固定说明（#3227）。 */
@@ -1017,6 +1050,35 @@ export function wecomRevalidationBackoffMsV1(fence: number): number {
 }
 /** 发送者用 `/new` 开始新会话后的固定回复（#3184）。 */
 const wecomNewConversationTextV1 = "已开始新会话";
+/** #3437：补充指令受理后的首帧（企微部署固定文案，§12.5）。 */
+export const wecomSupplementProcessingTextV1 = "已收到，正在补充到当前回复";
+/** #3437：补充指令被当前回复接受后，以这条固定说明结束它的 stream，答案由原消息的回复承担。 */
+export const wecomSupplementAcceptedTextV1 =
+	"已补充到当前回复，答案见原消息的回复";
+/** #3437：补充指令无法进入当前回复、转入排队时的首次排队提示。 */
+export function wecomSupplementQueuedTextV1(position: number): string {
+	if (!Number.isSafeInteger(position) || position < 1)
+		throw new TypeError("Queue position is invalid");
+	return `当前回复无法接收补充，已排队：第 ${position} 位，前面还有 ${position - 1} 条消息`;
+}
+/**
+ * #3437：补充指令投递失败的说明，原因取工程 Spec §12.5 的受限原因（权限已失效、排队已满、原回复
+ * 未开始）；其他原因不附带。
+ */
+export function wecomSupplementFailedTextV1(
+	failureCode: string | null,
+): string {
+	switch (failureCode) {
+		case "AUTHORIZATION_REVOKED":
+			return "投递失败：权限已失效，请重新发送";
+		case "QUEUE_FULL":
+			return "投递失败：排队已满，请重新发送";
+		case "ORIGINAL_RESPONSE_NOT_STARTED":
+			return "投递失败：原回复未开始，请重新发送";
+		default:
+			return "投递失败，请重新发送";
+	}
+}
 /** 入队与位次变化时同一 stream 上的排队提示（企微部署固定文案，§12.5）。 */
 export function wecomQueuedTextV1(position: number): string {
 	if (!Number.isSafeInteger(position) || position < 1)
@@ -1066,6 +1128,8 @@ export interface WecomQueueNoticeV1 {
 	readonly scope: WecomScopeV1;
 	readonly replyHandle: string;
 	readonly position: number | null;
+	/** #3437：由补充指令转入排队；首次排队提示说明当前回复无法接收补充。 */
+	readonly supplement?: true;
 }
 export interface WecomQueueNoticeStorePortV1 {
 	listQueueNotices(): Promise<readonly WecomQueueNoticeV1[]>;
@@ -1118,7 +1182,9 @@ export function createWecomQueueNoticeV1(dependencies: {
 						text:
 							notice.position === null
 								? wecomQueueStartedTextV1
-								: wecomQueuedTextV1(notice.position),
+								: notice.supplement && last === undefined
+									? wecomSupplementQueuedTextV1(notice.position)
+									: wecomQueuedTextV1(notice.position),
 					});
 				} catch {
 					/* 提示帧失败不影响执行与最终回复。 */
@@ -1274,27 +1340,43 @@ export function createWecomDeliveryV1(dependencies: {
 				await dependencies.store.finish(claim, "cancelled");
 				return true;
 			}
+			// #3437：仍绑定原 Execution 的补充指令只发补充结果，不读取答案；回复由原消息承担。
+			const supplement =
+				claim.acceptanceStatus === "accepted" ? claim.supplement : undefined;
+			const supplementText = !supplement
+				? undefined
+				: supplement.status === "accepted"
+					? wecomSupplementAcceptedTextV1
+					: supplement.status === "failed"
+						? wecomSupplementFailedTextV1(supplement.failureCode)
+						: wecomReplyTimeoutTextV1;
 			// #3374：附件消息已并入下一条消息的任务，以固定说明结束它的 stream，回复由下一条承担。
 			const merged =
-				claim.acceptanceStatus === "accepted" && claim.merged === true;
+				claim.acceptanceStatus === "accepted" &&
+				claim.merged === true &&
+				!supplement;
 			// #3077：回答在有效期内没有就绪时，结束本次回复并明确提示超时，不静默过期。
 			// 排队消息未开始即结束（含排队到回复时限）时给出排队结果，不按回复超时处理（§12.5）。
 			const queueOutcome = wecomQueueOutcomeTextV1(claim);
 			const timedOut =
 				claim.acceptanceStatus === "accepted" &&
+				!supplement &&
 				!merged &&
 				claim.answerReady === false &&
 				queueOutcome === undefined;
 			const answered =
 				claim.acceptanceStatus === "accepted" &&
+				!supplement &&
 				!merged &&
 				!timedOut &&
 				queueOutcome === undefined &&
 				claim.executionStatus === "completed";
-			// 合并说明与排队结果优先，其余按回执状态与执行结果组合（#3374、#3376、#3377）。
-			let text = merged
-				? wecomAttachmentMergedTextV1
-				: (queueOutcome ?? replyText(claim, timedOut));
+			// 补充指令结果、合并说明与排队结果优先，其余按回执状态与执行结果组合（#3437、#3374、#3376、#3377）。
+			let text =
+				supplementText ??
+				(merged
+					? wecomAttachmentMergedTextV1
+					: (queueOutcome ?? replyText(claim, timedOut)));
 			// #3229：只有完成的回答带结果文件。先规划哪些文件会发送（文本先于媒体），再把回答中的
 			// `sandbox:` 引用改写为文件名与说明；不支持媒体的回复方式去掉结果文件，文本照常发送。
 			let media: readonly WecomOutboundMediaV1[] = [];
@@ -1512,6 +1594,73 @@ export interface WecomAuthorityStateV1 {
 }
 export interface WecomAuthorityStatePortV1 {
 	readAuthorityState(agentId: string): Promise<WecomAuthorityStateV1 | null>;
+}
+
+/**
+ * #3375：企微入站准入时读取目标 Agent 当前 Runtime 已验证的补充指令能力。结果只决定 Core
+ * 是否进入补充指令分支，不改变授权结论；未验证、不可见、读取期间状态变化或读取失败都按
+ * 不支持处理。
+ */
+export type WecomSupplementaryInstructionReaderV1 = (input: {
+	readonly scope: WecomScopeV1;
+	/** 已通过企微授权的发送者；当前身份解析结果必须仍是同一用户。 */
+	readonly actorId: string;
+}) => Promise<boolean>;
+
+/** 与 Web 相同的 Runtime 展示投影读取；Store 的 `readRuntimePresentation` 直接满足。 */
+export interface WecomRuntimePresentationPortV1 {
+	readRuntimePresentation(input: {
+		readonly agentId: string;
+		readonly actorId: string;
+		readonly organizationIds: readonly string[];
+		readonly isAdministrator: boolean;
+		readonly accountStatus: "active" | "disabled" | "revoked";
+		readonly expected: AgentRuntimePresentationExpectationV1;
+	}): Promise<AgentRuntimePresentationDecisionV1>;
+}
+
+/**
+ * #3375：按发送者当前身份、Agent 当前配置修订与管理状态读取 Runtime 展示投影中的
+ * `capabilities.supplementaryInstruction`，与 Web（`apps/platform-api` 的会话授权）和企微附件
+ * 能力（#3258）读取同一份已验证投影，不另设能力来源。
+ */
+export function createWecomSupplementaryInstructionReaderV1(input: {
+	readonly runtime: WecomRuntimePresentationPortV1;
+	readonly identity: Pick<WecomIdentityPortV1, "resolveSender">;
+	readonly state: WecomAuthorityStatePortV1;
+}): WecomSupplementaryInstructionReaderV1 {
+	return async ({ scope, actorId }) => {
+		try {
+			const resolved = await input.identity.resolveSender(scope);
+			const actor = resolved ? parseCurrentTaskUserV1(resolved) : null;
+			if (actor?.accountStatus !== "active" || actor.userId !== actorId)
+				return false;
+			const state = await input.state.readAuthorityState(scope.agentId);
+			if (
+				!state ||
+				state.management.agentId !== scope.agentId ||
+				state.configuration.agentId !== scope.agentId
+			)
+				return false;
+			const runtime = await input.runtime.readRuntimePresentation({
+				agentId: scope.agentId,
+				actorId: actor.userId,
+				organizationIds: actor.organizationIds,
+				isAdministrator: false,
+				accountStatus: actor.accountStatus,
+				expected: {
+					configurationRevision: state.configuration.revision,
+					management: state.management,
+				},
+			});
+			return (
+				runtime.outcome === "found" &&
+				runtime.capabilities?.supplementaryInstruction === true
+			);
+		} catch {
+			return false;
+		}
+	};
 }
 function parseWecomConnectionAuthorizationFactV1(
 	value: unknown,

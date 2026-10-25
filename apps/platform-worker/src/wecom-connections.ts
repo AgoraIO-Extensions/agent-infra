@@ -6,6 +6,7 @@ import {
 	type WecomStreamUpdatePortV1,
 	wecomProcessingTextV1,
 	wecomQueuedTextV1,
+	wecomSupplementProcessingTextV1,
 } from "@agent-infra/platform-core";
 import {
 	PostgresWecomConnectionsV1,
@@ -204,6 +205,7 @@ export function createPlatformWecomConnectionsV1(
 				) {
 					if (!(await leases.current(claim))) return;
 					// #3376：排队消息的首帧是排队提示（位次与前面的条数），之后由排队提示循环更新。
+					// #3437：补充指令的首帧说明正在补充到当前回复。
 					const position = result.receipt.queuePosition;
 					if (position !== undefined)
 						options.onQueued?.(result.receipt.receiptId, position);
@@ -211,9 +213,11 @@ export function createPlatformWecomConnectionsV1(
 						scope: message,
 						replyHandle: message.replyHandle,
 						text:
-							position === undefined
-								? wecomProcessingTextV1
-								: wecomQueuedTextV1(position),
+							position !== undefined
+								? wecomQueuedTextV1(position)
+								: result.receipt.supplement
+									? wecomSupplementProcessingTextV1
+									: wecomProcessingTextV1,
 					});
 					return;
 				}

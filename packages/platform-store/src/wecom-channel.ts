@@ -800,6 +800,7 @@ export class PostgresWecomChannelV1
 						conversationId: string | null;
 						executionId: string | null;
 						queuePosition?: number;
+						supplement?: true;
 				  }
 				| undefined;
 			try {
@@ -858,11 +859,23 @@ export class PostgresWecomChannelV1
 							queuePosition < 1)
 					)
 						throw new TaskAuthorizationStoreError();
+					// #3437：本次受理写入的是绑定当前 Execution 的补充指令时，长连接首帧说明正在补充。
+					const [supplementRow] =
+						executionResult.status === "accepted" &&
+						executionResult.executionId &&
+						queuePosition === undefined
+							? await run(
+									business<
+										{ supplement: boolean }[]
+									>`select exists (select 1 from platform.outbox_items s where s.request_id=${plan.eventKey} and s.operation='conversation.turn.supplement.v1' and s.payload->>'executionId'=${executionResult.executionId}) as supplement`,
+								)
+							: [];
 					acceptedResult = {
 						status: executionResult.status,
 						conversationId: executionResult.conversationId,
 						executionId: executionResult.executionId,
 						...(queuePosition === undefined ? {} : { queuePosition }),
+						...(supplementRow?.supplement ? { supplement: true as const } : {}),
 					};
 					const {
 						agentId,
@@ -1006,12 +1019,17 @@ export class PostgresWecomChannelV1
 			// #3077：回答未就绪的已受理回执在有效期最后 30 秒内领取，由 Core 发送超时提示；已过期的照旧领取。
 			// #3374：同一 Execution 有更晚受理的回执时，这条附件消息已与随后的消息合并为一个任务，立即领取，
 			// 由 Core 以“已合并”说明结束它的 stream；回复只由最晚受理的回执承担。
+			// #3437：补充指令也绑定原 Execution，但不承担回复，也不让原消息算作已合并。它在被 Runtime
+			// 接受或失败后立即领取，由 Core 发补充指令说明；转入排队时回执已改绑新 Execution，按普通
+			// 排队消息处理。
 			const [row] = await sql<
 				(Row &
 					ExecutionFailureFactRowV1 & {
 						execution_status: string | null;
 						answer_ready: boolean;
 						merged: boolean;
+						supplement_state: "pending" | "accepted" | "failed" | null;
+						supplement_failure_code: string | null;
 						conversation_status: string | null;
 						conversation_isolation_pending: boolean;
 						trace_id: string | null;
@@ -1019,18 +1037,20 @@ export class PostgresWecomChannelV1
 						queue_failure_code: string | null;
 						queued_count: string | null;
 					})[]
-			>`select r.*,e.status as execution_status,ready.answer_ready,merging.merged,c.status as conversation_status,exists (select 1 from platform.conversation_generation_tombstones t where t.conversation_id=r.conversation_id and t.status='pending') as conversation_isolation_pending,(select a.trace_id from platform.conversation_audit_events a where a.execution_id=r.execution_id order by a.occurred_at,a.id limit 1) as trace_id,${executionFailureFactsSql(sql)},
+			>`select r.*,e.status as execution_status,ready.answer_ready,merging.merged,supplementing.supplement_state,supplementing.supplement_failure_code,c.status as conversation_status,exists (select 1 from platform.conversation_generation_tombstones t where t.conversation_id=r.conversation_id and t.status='pending') as conversation_isolation_pending,(select a.trace_id from platform.conversation_audit_events a where a.execution_id=r.execution_id order by a.occurred_at,a.id limit 1) as trace_id,${executionFailureFactsSql(sql)},
     coalesce(e.task_wait_order is not null,false) as queued,
     (select m.failure_code from platform.conversation_messages m where m.execution_id=e.execution_id and m.conversation_id=e.conversation_id order by m.created_at,m.message_id limit 1) as queue_failure_code,
     case when r.acceptance_status='busy' then (select count(*)::text from platform.conversation_executions q where q.conversation_id=r.conversation_id and q.status='waiting') end as queued_count
     from platform.wecom_receipts r left join platform.conversation_executions e on e.execution_id=r.execution_id left join platform.conversations c on c.id=r.conversation_id
     cross join lateral (select coalesce(e.status in ('failed','cancelled') or (e.status='completed' and exists (select 1 from platform.conversation_events t where t.conversation_id=e.conversation_id and t.execution_id=e.execution_id and t.source='runtime' and t.event_type='execution.status' and t.event_payload->>'status'='completed' and t.runtime_cursor is not null)),false) as answer_ready) ready
-    cross join lateral (select r.acceptance_status='accepted' and r.execution_id is not null and exists (select 1 from platform.wecom_receipts later where later.execution_id=r.execution_id and later.acceptance_status='accepted' and (later.created_at,later.id)>(r.created_at,r.id)) as merged) merging
-    where (r.connection_bot_id is null or r.expires_at<=now() or exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) and (r.delivery_status='pending' or (r.delivery_status='claimed' and r.lease_until<=now())) and (r.acceptance_status!='accepted' or merging.merged or ready.answer_ready or r.expires_at<=now()+(${wecomReplyTimeoutNoticeLeadMsV1}::bigint*interval '1 millisecond')) order by r.created_at limit 1 for update of r skip locked`;
+    cross join lateral (select r.acceptance_status='accepted' and r.execution_id is not null and exists (select 1 from platform.wecom_receipts later where later.execution_id=r.execution_id and later.acceptance_status='accepted' and (later.created_at,later.id)>(r.created_at,r.id) and not exists (select 1 from platform.outbox_items s where s.request_id=later.id and s.operation='conversation.turn.supplement.v1' and s.payload->>'executionId'=later.execution_id)) as merged) merging
+    left join lateral (select case when m.status='failed' or s.status='failed' then 'failed' when s.status='succeeded' then 'accepted' else 'pending' end as supplement_state,m.failure_code as supplement_failure_code from platform.outbox_items s left join platform.conversation_messages m on m.message_id=s.payload->>'messageId' and m.conversation_id=r.conversation_id where s.request_id=r.id and s.operation='conversation.turn.supplement.v1' and s.payload->>'executionId'=r.execution_id limit 1) supplementing on true
+    where (r.connection_bot_id is null or r.expires_at<=now() or exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) and (r.delivery_status='pending' or (r.delivery_status='claimed' and r.lease_until<=now())) and (r.acceptance_status!='accepted' or (supplementing.supplement_state is not null and supplementing.supplement_state<>'pending') or (supplementing.supplement_state is null and (merging.merged or ready.answer_ready)) or r.expires_at<=now()+(${wecomReplyTimeoutNoticeLeadMsV1}::bigint*interval '1 millisecond')) order by r.created_at limit 1 for update of r skip locked`;
 			if (!row) return null;
 			await sql`update platform.wecom_receipts set delivery_status='claimed',fence=fence+1,lease_until=now()+interval '30 seconds',updated_at=now() where id=${row.id}`;
 			// 已合并的回执只发固定说明，不读取答案、结果文件或思考过程。
-			const answerExecutionId = row.merged ? null : row.execution_id;
+			const answerExecutionId =
+				row.merged || row.supplement_state ? null : row.execution_id;
 			const [size] = answerExecutionId
 				? await sql<
 						{ bytes: string; count: string }[]
@@ -1130,6 +1150,14 @@ export class PostgresWecomChannelV1
 				executionStatus: row.execution_status,
 				answerReady: row.answer_ready,
 				...(row.merged ? { merged: true } : {}),
+				...(row.supplement_state
+					? {
+							supplement: {
+								status: row.supplement_state,
+								failureCode: row.supplement_failure_code,
+							},
+						}
+					: {}),
 				// #3376：经排队受理的执行带上未开始即结束的原因，Core 据此给出排队结果；繁忙回执
 				// 带当前排队条数，用于“排队已满”提示。
 				...(row.queued && row.acceptance_status === "accepted"
@@ -1236,7 +1264,9 @@ export class PostgresWecomChannelV1
       and r.expires_at>now()+(${wecomReplyTimeoutNoticeLeadMsV1}::bigint*interval '1 millisecond')
       and e.status in ('submitted','processing','unknown')
       -- #3376：排队中的回执由排队提示更新；#3374：已并入后续消息的回执只发合并说明。
-      and not exists (select 1 from platform.wecom_receipts later where later.execution_id=r.execution_id and later.acceptance_status='accepted' and (later.created_at,later.id)>(r.created_at,r.id))
+      and not exists (select 1 from platform.wecom_receipts later where later.execution_id=r.execution_id and later.acceptance_status='accepted' and (later.created_at,later.id)>(r.created_at,r.id) and not exists (select 1 from platform.outbox_items s where s.request_id=later.id and s.operation='conversation.turn.supplement.v1' and s.payload->>'executionId'=later.execution_id))
+      -- #3437：绑定原 Execution 的补充指令不显示原回复的进度，原消息的 stream 承担进度与回答。
+      and not exists (select 1 from platform.outbox_items s where s.request_id=r.id and s.operation='conversation.turn.supplement.v1' and s.payload->>'executionId'=r.execution_id)
       and exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())
     order by r.created_at limit 64`;
 		return rows.map((row) => ({
@@ -1406,8 +1436,10 @@ export class PostgresWecomChannelV1
 				scope: WecomScopeV1;
 				reply_handle: string;
 				position: string | null;
+				supplement: boolean;
 			}[]
 		>`select r.id,r.scope,r.reply_handle,
+    exists (select 1 from platform.outbox_items s where s.request_id=r.id and s.operation='conversation.turn.supplement.v1' and s.payload->>'executionId'<>r.execution_id) as supplement,
     case when e.status='waiting' and not exists (select 1 from platform.conversation_events t where t.execution_id=e.execution_id and t.source='platform' and t.event_type='task.status' and t.event_payload->>'status'='unknown')
       then (select count(*)::text from platform.conversation_executions w where w.conversation_id=e.conversation_id and w.status='waiting' and w.task_wait_order<=e.task_wait_order)
     end as position
@@ -1421,6 +1453,8 @@ export class PostgresWecomChannelV1
 			scope: row.scope,
 			replyHandle: row.reply_handle,
 			position: row.position === null ? null : Number(row.position),
+			// #3437：由补充指令转入排队的回执（回执已改绑新 Execution）。
+			...(row.supplement ? { supplement: true as const } : {}),
 		}));
 	}
 	async finish(
@@ -1449,10 +1483,10 @@ export class PostgresWecomChannelV1
 		actorId: string,
 		channelId: string,
 	) {
-		// #3374：合并后的 Execution 有多条回执，取最晚受理的一条（承担回复的文字消息）。
+		// #3374：合并后的 Execution 有多条回执，取最晚受理的一条（承担回复的文字消息）；#3437：补充指令不承担回复。
 		const [row] = await this.#sql<
 			Row[]
-		>`select r.* from platform.wecom_receipts r join platform.conversation_executions e on e.execution_id=r.execution_id where r.execution_id=${executionId} and r.actor_id=${actorId} and e.channel_id=${channelId} order by r.created_at desc, r.id desc limit 1`;
+		>`select r.* from platform.wecom_receipts r join platform.conversation_executions e on e.execution_id=r.execution_id where r.execution_id=${executionId} and r.actor_id=${actorId} and e.channel_id=${channelId} and not exists (select 1 from platform.outbox_items s where s.request_id=r.id and s.operation='conversation.turn.supplement.v1' and s.payload->>'executionId'=r.execution_id) order by r.created_at desc, r.id desc limit 1`;
 		return row
 			? {
 					scope: row.scope,

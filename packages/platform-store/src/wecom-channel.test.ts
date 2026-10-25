@@ -3648,6 +3648,113 @@ describe("WeCom attachment merge window (#3374)", () => {
 			await completeWecomExecutionFixture(sql, plain.executionId);
 		},
 	);
+
+	describe("supplementary instructions (#3437)", () => {
+		/** 当前 Runtime 支持补充指令的企微会话。 */
+		function supplementChannel() {
+			const base = createWecomChannelV1({
+				store,
+				authorization: allowedAuthorization,
+				supplementaryInstruction: async () => true,
+			});
+			return {
+				async receive(input: WecomMessageV1) {
+					const keyId = `fixture-key:personal:${input.senderId}`;
+					await sql`insert into platform.relay_key_subjects
+						(purpose, subject_id, last_version, current_version)
+						values ('personal', ${input.senderId}, 1, 1)
+						on conflict (purpose, subject_id) do nothing`;
+					await sql`insert into platform.relay_key_versions
+						(purpose, subject_id, key_version, key_id, ciphertext)
+						values ('personal', ${input.senderId}, 1, ${keyId},
+							${sql.json({ purpose: "personal", subjectId: input.senderId, keyId, keyVersion: 1 })})
+						on conflict do nothing`;
+					const result = await base.receive(input);
+					if (result.outcome !== "accepted" && result.outcome !== "replayed")
+						throw new Error(`Expected a receipt, got ${result.outcome}`);
+					return result.receipt;
+				},
+			};
+		}
+		/** 原消息正在执行时再发一条文字消息，作为补充指令绑定原 Execution。 */
+		async function supplementFixture(sender: string) {
+			const original = await supplementChannel().receive(
+				event(sender, `${sender}_original`, { text: "原问题", images: 0 }),
+			);
+			await sql`update platform.conversation_executions set status='processing'
+				where execution_id=${original.executionId}`;
+			const supplement = await supplementChannel().receive(
+				event(sender, `${sender}_supplement`, { text: "补充一句", images: 0 }),
+			);
+			const [message] = await sql<{ message_id: string }[]>`
+				select payload->>'messageId' as message_id from platform.outbox_items
+				where request_id=${supplement.receiptId} and operation='conversation.turn.supplement.v1'`;
+			if (!message) throw new Error("Expected the supplement outbox");
+			return { original, supplement, messageId: message.message_id };
+		}
+
+		it(
+			"keeps the original reply and ends the supplement once the Runtime accepts it",
+			mergeTimeout,
+			async () => {
+				await settleReceipts();
+				const { original, supplement, messageId } = await supplementFixture(
+					"supplement_accepted",
+				);
+				expect(supplement).toMatchObject({
+					status: "accepted",
+					executionId: original.executionId,
+					supplement: true,
+				});
+				expect(original).not.toHaveProperty("supplement");
+				// 投递前两条回执都不领取：原消息不算已合并，补充指令等待 Runtime 的结果。
+				expect(await store.claim()).toBeNull();
+				await sql`update platform.outbox_items set status='succeeded'
+					where id=${`conversation:supplement:${messageId}`}`;
+				const claimed = await store.claim();
+				expect(claimed).toMatchObject({
+					receiptId: supplement.receiptId,
+					supplement: { status: "accepted", failureCode: null },
+					textDeltas: [],
+				});
+				expect(claimed).not.toHaveProperty("merged");
+				if (!claimed) throw new Error("Expected the supplement receipt");
+				await store.finish(claimed, "sent");
+				expect(await store.claim()).toBeNull();
+				// 原消息的回执照常等待并承担答案。
+				await completeWecomExecutionFixture(sql, original.executionId);
+				const answer = await store.claim();
+				expect(answer).toMatchObject({ receiptId: original.receiptId });
+				expect(answer).not.toHaveProperty("merged");
+				expect(answer).not.toHaveProperty("supplement");
+				if (answer) await store.finish(answer, "sent");
+			},
+		);
+
+		it(
+			"ends a failed supplement with its failure code",
+			mergeTimeout,
+			async () => {
+				await settleReceipts();
+				const { original, supplement, messageId } =
+					await supplementFixture("supplement_failed");
+				await sql`update platform.outbox_items set status='failed'
+					where id=${`conversation:supplement:${messageId}`}`;
+				await sql`update platform.conversation_messages set status='failed', failure_code='QUEUE_FULL'
+					where message_id=${messageId}`;
+				const claimed = await store.claim();
+				expect(claimed).toMatchObject({
+					receiptId: supplement.receiptId,
+					supplement: { status: "failed", failureCode: "QUEUE_FULL" },
+				});
+				if (claimed) await store.finish(claimed, "sent");
+				await completeWecomExecutionFixture(sql, original.executionId);
+				const answer = await store.claim();
+				expect(answer).toMatchObject({ receiptId: original.receiptId });
+				if (answer) await store.finish(answer, "sent");
+			},
+		);
+	});
 });
 
 describe("WeCom bounded queue receipts (#3376)", () => {
