@@ -216,6 +216,12 @@ export function createPlatformWecomConnectionsV1(
 			if (!entry) return "failed";
 			return entry.connection.sender.send(input);
 		},
+		// #3377：进度帧只经本 Worker 持有当前租约的连接发送；每帧发送前另由 prepare 复核。
+		async update(input) {
+			const entry = await entryFor(input.scope);
+			if (!entry) return "failed";
+			return entry.connection.sender.update(input);
+		},
 		// #3229：只有本 Worker 持有当前租约的连接才规划与发送媒体。
 		async planMedia(input) {
 			const entry = await entryFor(input.scope);

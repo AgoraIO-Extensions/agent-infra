@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createConnection, createServer, type Socket } from "node:net";
 import {
 	createWecomAuthorizationV1,
@@ -16,6 +17,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import { PostgresPlatformAuditQueryV1 } from "./audit.ts";
+import { PostgresConversationQueryV1 } from "./conversation-query.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
 	type PostgresTestDatabase,
@@ -2909,4 +2911,302 @@ describe("WeCom receipt actions in the administrator audit query (#3258)", () =>
 			await legacyQuery.close();
 		}
 	}, 60_000);
+});
+
+// #3377：失败提示的分类事实、复核退避与兜底说明，以及长连接流式进度。
+describe("WeCom failure delivery and streaming progress (#3377)", () => {
+	type StoredEvent = { readonly type: string } & Record<string, unknown>;
+	async function append(
+		executionId: string,
+		conversationId: string,
+		rows: readonly StoredEvent[],
+		source: "runtime" | "platform" = "runtime",
+	) {
+		for (const payload of rows) {
+			const key = `${executionId}-${payload.type}-${Math.random()}`;
+			await sql`insert into platform.conversation_events
+				(event_id,conversation_id,execution_id,adapter_event_key,sequence,
+				 conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,
+				 occurred_at,source)
+				select ${key},${conversationId},${executionId},${key},
+					coalesce((select max(sequence) from platform.conversation_events where execution_id=${executionId}),0)+1,
+					coalesce((select max(conversation_cursor) from platform.conversation_events where conversation_id=${conversationId}),0)+1,
+					${payload.type},${sql.json(payload as never)},${createHash("sha256").update(key).digest("hex")},
+					${source === "runtime" ? `runtime-${key}` : null},now(),${source}`;
+		}
+	}
+	const operation = (fact: Record<string, unknown>) => ({
+		schemaVersion: 2,
+		type: "execution.operation",
+		fact: {
+			operationRef: "op-1",
+			attemptRef: "attempt-1",
+			...fact,
+		},
+	});
+	async function accepted(
+		senderId: string,
+		target = store,
+		fence?: WecomConnectionFenceV1,
+	) {
+		const result = await channel(target).receive(
+			{ ...message, senderId, eventId: `${senderId}_event` },
+			fence,
+		);
+		if (result.outcome !== "accepted") throw new Error("Expected receipt");
+		const { executionId, conversationId } = result.receipt;
+		if (!executionId || !conversationId) throw new Error("Expected execution");
+		return { ...result.receipt, executionId, conversationId };
+	}
+
+	it("claims a failure with its persisted codes and trace, and Web reads the same facts", async () => {
+		await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+		const receipt = await accepted("failure_facts_sender");
+		await append(receipt.executionId, receipt.conversationId, [
+			operation({
+				kind: "model",
+				phase: "started",
+				model: {
+					configVersion: "c",
+					modelOptionId: "model_1",
+					modelId: "model_1",
+				},
+			}),
+			operation({
+				kind: "model",
+				phase: "failed",
+				failureCode: "dependency_unavailable",
+				model: {
+					configVersion: "c",
+					modelOptionId: "model_1",
+					modelId: "model_1",
+				},
+			}),
+			{
+				type: "conversation.error",
+				code: "RUNTIME_FILE_INPUT_UNAVAILABLE",
+				message: "not exposed",
+				retryable: false,
+			},
+		]);
+		const [outbox] = await sql<
+			{ id: string; trace_id: string }[]
+		>`select id,trace_id from platform.outbox_items where scope_type='conversation' and scope_id=${receipt.conversationId} and payload->>'executionId'=${receipt.executionId}`;
+		if (!outbox) throw new Error("Expected Turn outbox");
+		await sql`insert into platform.persisted_events (event_id,stream_id,sequence,stream_cursor,event_type,payload,trace_id,occurred_at)
+			values (${`outbox:${outbox.id}:99`},${`outbox:${outbox.id}`},99,99,'outbox.failed',${sql.json({ attemptCount: 1, deliveryFence: "99", errorCode: "RUNTIME_SESSION_PREPARATION_FAILED" })},${outbox.trace_id},now())`;
+		await sql`update platform.conversation_executions set status='failed' where execution_id=${receipt.executionId}`;
+		const claim = await store.claim();
+		expect(claim?.receiptId).toBe(receipt.receiptId);
+		expect(claim?.failure).toEqual({
+			taskReason: null,
+			dispatchCode: "RUNTIME_SESSION_PREPARATION_FAILED",
+			runtimeCode: "RUNTIME_FILE_INPUT_UNAVAILABLE",
+			modelFailureCode: "dependency_unavailable",
+		});
+		expect(claim?.traceId).toEqual(expect.any(String));
+		expect(JSON.stringify(claim)).not.toContain("not exposed");
+		const query = new PostgresConversationQueryV1({
+			databaseUrl: db.databaseUrl,
+		});
+		try {
+			const detail = await query.get(
+				{
+					principal: { kind: "user", id: "failure_facts_sender" },
+					actorId: "failure_facts_sender",
+					channelId: wecomChannelIdV1(message),
+				},
+				receipt.conversationId,
+			);
+			expect(
+				detail?.executions.find(
+					(item) => item.executionId === receipt.executionId,
+				),
+			).toMatchObject({ failure: claim?.failure, traceId: claim?.traceId });
+		} finally {
+			await query.close();
+		}
+		// 其他状态的执行不读取失败原因。
+		await sql`update platform.conversation_executions set status='cancelled' where execution_id=${receipt.executionId}`;
+		await sql`update platform.wecom_receipts set delivery_status='pending',lease_until=null where id=${receipt.receiptId}`;
+		expect((await store.claim())?.failure).toBeUndefined();
+	});
+
+	it("finalizes an unready reply with a bounded answer prefix", async () => {
+		await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+		const receipt = await accepted("timeout_prefix_sender");
+		await append(receipt.executionId, receipt.conversationId, [
+			{ type: "text.delta", text: "答".repeat(5_000) },
+			{ type: "text.delta", text: "案".repeat(5_000) },
+		]);
+		await sql`update platform.conversation_executions set status='processing' where execution_id=${receipt.executionId}`;
+		await sql`update platform.wecom_receipts set expires_at=now()+interval '29 seconds' where id=${receipt.receiptId}`;
+		const claim = await store.claim();
+		expect(claim?.receiptId).toBe(receipt.receiptId);
+		expect(claim?.answerReady).toBe(false);
+		expect(claim?.answerTooLong).toBe(true);
+		// 第二条开始于 15000 字节之前，照常读取；Core 截短到单条回复上限。
+		expect(claim?.textDeltas).toEqual(["答".repeat(5_000), "案".repeat(5_000)]);
+	});
+
+	it("defers a claim during temporary unavailability and prepares a fixed notice without a ready Agent", async () => {
+		await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+		const receipt = await accepted("revalidation_notice_sender");
+		await sql`update platform.conversation_executions set status='failed' where execution_id=${receipt.executionId}`;
+		const first = await store.claim();
+		if (!first) throw new Error("Expected claim");
+		await expect(store.defer(first, 60_001)).rejects.toThrow();
+		await store.defer(first, 60_000);
+		expect(await store.claim()).toBeNull();
+		// 退避到期后重新领取，fence 推进；旧领取不能再推进状态。
+		await sql`update platform.wecom_receipts set lease_until=now()-interval '1 second' where id=${receipt.receiptId}`;
+		const second = await store.claim();
+		expect(second?.fence).toBe(first.fence + 1);
+		if (!second) throw new Error("Expected claim");
+		await store.defer(first, 0);
+		expect(await store.claim()).toBeNull();
+		expect(await store.prepareNotice(first)).toBe("stale");
+		// Agent 正在更新：固定说明不要求服务就绪。
+		await sql`update platform.agent_applications set service_availability='updating' where agent_id=${message.agentId}`;
+		try {
+			expect(await store.prepareNotice(second)).toBe("prepared");
+		} finally {
+			await sql`update platform.agent_applications set service_availability='ready' where agent_id=${message.agentId}`;
+		}
+		expect(
+			await store.read(receipt.receiptId, "revalidation_notice_sender"),
+		).toMatchObject({
+			deliveryStatus: "sending",
+		});
+		await store.finish(second, "sent");
+		expect(
+			await store.read(receipt.receiptId, "revalidation_notice_sender"),
+		).toMatchObject({
+			deliveryStatus: "sent",
+		});
+		// Agent 授权修订已变化：复核确认不一致，调用方取消。
+		const changed = await accepted("revalidation_changed_sender");
+		await sql`update platform.conversation_executions set status='failed' where execution_id=${changed.executionId}`;
+		const claim = await store.claim();
+		if (!claim) throw new Error("Expected claim");
+		await sql`update platform.agents set authorization_revision='authorization_changed' where id=${message.agentId}`;
+		try {
+			expect(await store.prepareNotice(claim)).toBe("changed");
+		} finally {
+			await sql`update platform.agents set authorization_revision='authorization_1' where id=${message.agentId}`;
+		}
+		expect(
+			await store.read(changed.receiptId, "revalidation_changed_sender"),
+		).toMatchObject({
+			deliveryStatus: "claimed",
+		});
+	});
+
+	it("lists progress only for the connection holder and persists the frame sequence under its fence (ADR-0033 decision 6)", async () => {
+		await sql`update platform.wecom_receipts set delivery_status='abandoned'`;
+		await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status)
+    values (${message.providerId},${message.agentId},${message.bindingReference},'progress-worker',30,now()+interval '30 seconds','connected')
+    on conflict (bot_id) do update set agent_id=excluded.agent_id,binding_reference=excluded.binding_reference,holder_id=excluded.holder_id,fence=excluded.fence,lease_until=excluded.lease_until,status=excluded.status`;
+		const open = (holder: string) =>
+			new PostgresWecomChannelV1({
+				...db,
+				userDirectory: fixtureUserDirectory,
+				identity: fixtureIdentity,
+				connectionHolderId: holder,
+			});
+		const owner = open("progress-worker");
+		const other = open("progress-other");
+		try {
+			const fence = {
+				botId: message.providerId,
+				holderId: "progress-worker",
+				fence: 30,
+			};
+			const receipt = await accepted("progress_sender", owner, fence);
+			expect(await other.progressCandidates()).toEqual([]);
+			expect(await store.progressCandidates()).toEqual([]);
+			const [candidate] = await owner.progressCandidates();
+			if (!candidate) throw new Error("Expected progress candidate");
+			expect(candidate).toMatchObject({
+				receiptId: receipt.receiptId,
+				executionId: receipt.executionId,
+				actorId: "progress_sender",
+				channelRevision: "channels_1",
+				replyHandle: message.replyHandle,
+			});
+			// 还没有任何 Runtime 事件：已受理的执行在准备会话。
+			expect(await owner.progressSnapshot(candidate)).toEqual({
+				phase: { kind: "preparing" },
+				textDeltas: [],
+				answerComplete: true,
+			});
+			await append(receipt.executionId, receipt.conversationId, [
+				{ type: "execution.status", status: "processing" },
+				operation({
+					kind: "tool",
+					phase: "started",
+					toolId: "browser_navigate",
+				}),
+				{ type: "reasoning.delta", kind: "summary", text: "先打开页面" },
+				{ type: "text.delta", text: "正在查" },
+			]);
+			const [changed] = await owner.progressCandidates();
+			expect(changed?.revision).not.toBe(candidate.revision);
+			if (!changed) throw new Error("Expected progress candidate");
+			expect(await owner.progressSnapshot(changed)).toEqual({
+				phase: { kind: "tool", toolName: "打开页面" },
+				textDeltas: ["正在查"],
+				answerComplete: true,
+				thinking: {
+					parts: [{ kind: "summary", text: "先打开页面" }],
+					complete: true,
+				},
+			});
+			expect(await owner.reserveStreamFrame(changed)).toBe(1);
+			expect(await owner.reserveStreamFrame(changed)).toBe(2);
+			// 其他 Worker、改绑前的回复路由都不能占用帧序号。
+			expect(await other.reserveStreamFrame(changed)).toBeNull();
+			expect(
+				await owner.reserveStreamFrame({
+					...changed,
+					replyHandle: "stale-route",
+				}),
+			).toBeNull();
+			// 有效期只剩最后 30 秒：交给终态回复定稿，不再列出。
+			await sql`update platform.wecom_receipts set expires_at=now()+interval '29 seconds' where id=${receipt.receiptId}`;
+			expect(await owner.progressCandidates()).toEqual([]);
+			await sql`update platform.wecom_receipts set expires_at=now()+interval '5 minutes' where id=${receipt.receiptId}`;
+			// 持有者切换：旧持有者的迟到帧不被采用，新持有者重投改绑后从已持久的序号之后继续。
+			await sql`update platform.wecom_connections set holder_id='progress-other',fence=31 where bot_id=${message.providerId}`;
+			expect(await owner.reserveStreamFrame(changed)).toBeNull();
+			expect(await owner.progressCandidates()).toEqual([]);
+			expect(
+				await channel(other).receive(
+					{
+						...message,
+						senderId: "progress_sender",
+						eventId: "progress_sender_event",
+						replyHandle: "rebound-route",
+					},
+					{ ...fence, holderId: "progress-other", fence: 31 },
+				),
+			).toMatchObject({ outcome: "replayed" });
+			const [rebound] = await other.progressCandidates();
+			expect(rebound?.replyHandle).toBe("rebound-route");
+			if (!rebound) throw new Error("Expected rebound candidate");
+			expect(await other.reserveStreamFrame(rebound)).toBe(3);
+			// 进入终态回复后不再发进度帧。
+			await completeWecomExecutionFixture(sql, receipt.executionId);
+			expect(await other.progressCandidates()).toEqual([]);
+			const terminal = await other.claim();
+			expect(terminal?.receiptId).toBe(receipt.receiptId);
+			expect(await other.reserveStreamFrame(rebound)).toBeNull();
+			const [persisted] =
+				await sql`select stream_frame_seq from platform.wecom_receipts where id=${receipt.receiptId}`;
+			expect(persisted?.stream_frame_seq).toBe(3);
+		} finally {
+			await owner.close();
+			await other.close();
+		}
+	});
 });

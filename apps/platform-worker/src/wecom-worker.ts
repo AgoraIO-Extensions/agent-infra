@@ -3,6 +3,7 @@ import {
 	createWecomAuthorizationV1,
 	createWecomChannelV1,
 	createWecomDeliveryV1,
+	createWecomProgressV1,
 	sameWecomConnectionAuthorizationFactV1,
 	type TaskRuntimeAuthorizationRecordV1,
 	type TaskUserDirectoryV1,
@@ -187,6 +188,21 @@ export function createPlatformWecomWorkerV1(
 			},
 		},
 	});
+	// #3377：长连接流式进度（工程 Spec §14.2.4）。只有长连接回复路由能覆盖更新已发送的回复；
+	// 自建应用与显式机器人回调只发送终态回复。
+	const progress = connections
+		? createWecomProgressV1({
+				store,
+				authorization,
+				answerReferences: parseWecomAnswerReferencesV1,
+				sender: {
+					async update(input) {
+						if (!(await websocketRoute(input.replyHandle))) return "failed";
+						return connections.sender.update(input);
+					},
+				},
+			})
+		: undefined;
 	return {
 		async reconcile() {
 			if (setup) {
@@ -212,6 +228,13 @@ export function createPlatformWecomWorkerV1(
 			return results.some(
 				(result) => result.status === "fulfilled" && result.value,
 			);
+		},
+		/**
+		 * #3377：刷新长连接回执的进度帧，返回交给发送者的帧数。由独立的轮询驱动，较慢的终态回复或
+		 * 媒体发送不会让进度停下；进度帧尽力而为，失败在下一轮重试，不影响终态回复。
+		 */
+		async progress() {
+			return (await progress?.tick()) ?? 0;
 		},
 		async channelAuthorizationCurrent(
 			record: TaskRuntimeAuthorizationRecordV1,

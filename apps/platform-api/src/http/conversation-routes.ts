@@ -17,6 +17,7 @@ import {
 	framePilotSseMessageV2,
 	MessageCommandRequestV1Schema,
 	MessageProjectionV1Schema,
+	MessageProjectionV2Schema,
 	ModelOptionProjectionV1Schema,
 	ModelSelectionUpdateRequestV1Schema,
 	PersistedConversationEventV2Schema,
@@ -702,19 +703,33 @@ function failure(
 	};
 }
 
+/**
+ * V1 消息投影不含失败分类；V2 会话读取在失败回答上附带 Core 给出的用户可见失败分类与说明
+ * （#3377，工程 Spec §16.1.1），与企微读取同一结果。
+ */
 function messageProjections(
 	input: ConversationQueryDetailV1,
-): ReturnType<typeof MessageProjectionV1Schema.parse>[] {
+	version: 1,
+): ReturnType<typeof MessageProjectionV1Schema.parse>[];
+function messageProjections(
+	input: ConversationQueryDetailV1,
+	version: 2,
+): ReturnType<typeof MessageProjectionV2Schema.parse>[];
+function messageProjections(input: ConversationQueryDetailV1, version: 1 | 2) {
 	return projectConversationMessagesV1(input).map(
-		({ failureTraceId, failureCode, ...item }) =>
-			MessageProjectionV1Schema.parse({
+		({ failureTraceId, failureCode, failure: classified, ...item }) => {
+			const projected = {
 				...item,
 				error:
 					failureTraceId === null
 						? null
 						: failure(failureTraceId, failureCode ?? "EXECUTION_FAILED"),
 				createdAt: item.createdAt.toISOString(),
-			}),
+			};
+			return version === 2 && classified && failureTraceId !== null
+				? MessageProjectionV2Schema.parse({ ...projected, failure: classified })
+				: MessageProjectionV1Schema.parse(projected);
+		},
 	);
 }
 
@@ -1134,7 +1149,7 @@ export function registerConversationRoutes(
 							return ConversationDetailProjectionV2Schema.parse({
 								schemaVersion: 2,
 								conversation,
-								messages: messageProjections(detail),
+								messages: messageProjections(detail, 2),
 								events: detail.events.map(eventProjection),
 								...(detail.eventWindow === undefined
 									? {}
@@ -1164,7 +1179,7 @@ export function registerConversationRoutes(
 									detail.conversation,
 									effective,
 								),
-								messages: messageProjections(detail),
+								messages: messageProjections(detail, 1),
 							}),
 						metadata.traceId,
 					),

@@ -43,6 +43,9 @@ export const wecomReceipts = platformSchema.table(
 		mediaRejectionMaxBytes: bigint("media_rejection_max_bytes", {
 			mode: "number",
 		}),
+		// #3377：长连接流式进度已持久化的最后一帧序号（工程 Spec §14.2.4）。每帧发送前在当前连接
+		// 持有者租约与隔离令牌下递增；持有者切换后新持有者从这里之后继续，旧持有者的迟到帧不被采用。
+		streamFrameSeq: integer("stream_frame_seq").notNull().default(0),
 	},
 	(table) => [
 		check(
@@ -54,6 +57,7 @@ export const wecomReceipts = platformSchema.table(
 			"wecom_media_rejection",
 			sql`(${table.acceptanceStatus} = 'media_rejected') = (${table.mediaRejectionReason} is not null) and (${table.mediaRejectionReason} is null or ${table.mediaRejectionReason} in ('unsupported_channel','unsupported_type','too_large','expired','failed')) and (${table.mediaRejectionReason} is not distinct from 'too_large') = (${table.mediaRejectionMaxBytes} is not null) and (${table.mediaRejectionMaxBytes} is null or ${table.mediaRejectionMaxBytes} between 1 and 9007199254740991)`,
 		),
+		check("wecom_stream_frame_seq", sql`${table.streamFrameSeq} >= 0`),
 		check(
 			"wecom_delivery_status",
 			sql`${table.deliveryStatus} in ('pending','claimed','sending','sent','failed','unknown','cancelled','expired','abandoned')`,

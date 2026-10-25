@@ -9,6 +9,10 @@ import type {
 	ConversationExecutionUseCaseV1,
 } from "./conversation-execution.js";
 import {
+	classifyExecutionFailureV1,
+	type ExecutionFailureFactsV1,
+} from "./execution-failure.js";
+import {
 	type CurrentTaskUserV1,
 	captureTaskAuthorizationBoundaryV1,
 	isTaskAuthorizationCurrentV1,
@@ -27,6 +31,15 @@ import {
 	wecomOutboundMediaKindV1,
 	wecomReplyMediaMaxCountV1,
 } from "./wecom-reply-media.js";
+import {
+	composeWecomBoundedTextV1,
+	composeWecomThinkingReplyV1,
+	partialWecomAnswerV1,
+	wecomConversationUnavailableTextV1,
+	wecomExecutionFailureTextV1,
+	wecomReplyMaximumBytesV1,
+	wecomReplyTimeoutTextV1,
+} from "./wecom-reply-text.js";
 
 export interface WecomScopeV1 {
 	readonly agentId: string;
@@ -813,6 +826,13 @@ export interface WecomDeliveryClaimV1 {
 		}[];
 		readonly complete: boolean;
 	};
+	/**
+	 * #3377：失败执行已持久的受限原因（任务原因、Dispatch 失败码、Runtime error 码、模型调用
+	 * failureCode），Core 据此给出工程 Spec §16.1.1 的分类说明。不含错误正文或供应商消息。
+	 */
+	readonly failure?: Omit<ExecutionFailureFactsV1, "conversationUnavailable">;
+	/** #3377：执行的追踪编号，内部错误说明附带；没有时用回执 ID。 */
+	readonly traceId?: string | null;
 }
 export interface WecomDeliveryStorePortV1 {
 	claim(): Promise<WecomDeliveryClaimV1 | null>;
@@ -839,6 +859,20 @@ export interface WecomDeliveryStorePortV1 {
 		claim: WecomDeliveryClaimV1,
 		status: "sent" | "failed" | "unknown" | "cancelled" | "expired",
 	): Promise<void>;
+	/**
+	 * #3377：投递前复核遇到依赖暂时不可用时，不放弃也不推进回执，只把这次领取留到 `delayMs`
+	 * 之后再被领取。只有回执仍由本次领取持有（fence、claimed）时生效。
+	 */
+	defer(claim: WecomDeliveryClaimV1, delayMs: number): Promise<void>;
+	/**
+	 * #3377：有效期将尽仍不能完成复核时，为不含业务内容的固定失败说明把回执推进到 `sending`。
+	 * 只按已持久的事实核对：回执仍由本次领取持有且未过期、长连接持有者未变，Agent 授权修订与
+	 * 渠道修订仍是受理时的值；不要求 Agent 服务就绪。修订已变化时返回 `changed`（调用方取消），
+	 * 回执不再由本次领取持有时返回 `stale`。
+	 */
+	prepareNotice(
+		claim: WecomDeliveryClaimV1,
+	): Promise<"prepared" | "changed" | "stale">;
 }
 export interface WecomSendPortV1 {
 	send(input: {
@@ -853,6 +887,20 @@ export interface WecomSendPortV1 {
 		/** Rechecks the original actor, channel revision and task boundary before an external effect. */
 		readonly revalidate?: () => Promise<boolean>;
 	}): Promise<"sent" | "failed" | "unknown">;
+	/**
+	 * #3377：覆盖式更新同一条回复（`finish=false`，工程 Spec §14.2.4）。每个 stream 只有一个发送者：
+	 * 上一帧收到 ACK 后才发送下一帧，相邻两帧至少间隔 1 秒，等待期间只保留最新的全量内容。
+	 * `prepare` 在每帧实际发送前调用（复核授权、持久化帧序号），返回 false 时丢弃该帧。
+	 * 终态回复开始后不再发送任何更新。进度帧、排队提示（#3376）与补充指令提示共用这一入口。
+	 * 返回 `queued` 表示已交给该 stream 的发送者；`failed` 表示回复方式不支持覆盖更新或路由已失效。
+	 * 没有实现时（自建应用、显式机器人回调）只发送终态回复。
+	 */
+	update?(input: {
+		readonly scope: WecomScopeV1;
+		readonly replyHandle: string;
+		readonly text: string;
+		readonly prepare: () => Promise<boolean>;
+	}): Promise<"queued" | "failed">;
 	/**
 	 * #3229：发送文本之前规划本次回复的媒体，按 `files` 的顺序逐个给出处理；返回 null 表示该回复
 	 * 方式不支持媒体（自建应用、显式机器人回调或部署未装配）。规划为 `send` 的文件占用频率额度。
@@ -880,62 +928,20 @@ export interface WecomSendPortV1 {
 		readonly revalidate: () => Promise<boolean>;
 	}): Promise<"sent" | "failed" | "unknown">;
 }
-/** #2982：企微单条回复的字节上限，答案与思考过程共用。 */
-const wecomReplyMaximumBytes = 20_480;
-const wecomThinkingTruncatedNotice = "（思考过程较长，已截断）";
-
-/**
- * #2982：按企微被动回复的思考过程样式组合 `<think>思考过程</think>`、空行与答案
- * （WECOM-text-deployment.md「思考过程」）。摘要与原始推理各自按顺序拼接，先摘要后原始推理，
- * 与 Web 一致。思考内容里的 `<think>`、`</think>` 字面量先换成全角尖括号，不能提前闭合或另起
- * 思考块。答案优先：思考过程只用答案之外的预算，放不下或没有读完时在码点边界截短并附提示；
- * 连提示都放不下时只发答案。
- */
-function composeWecomThinkingReplyV1(
-	answer: string,
-	thinking: NonNullable<WecomDeliveryClaimV1["thinking"]>,
-	rewrite?: (content: string) => string | undefined,
-) {
-	const joined = (kind: "raw" | "summary") =>
-		thinking.parts
-			.filter((part) => part.kind === kind)
-			.map((part) => part.text)
-			.join("");
-	const combined = [joined("summary"), joined("raw")]
-		.filter(Boolean)
-		.join("\n\n");
-	// #3229：思考过程中的 `sandbox:` 引用与答案按同样的规划改写；无法确认时不附带思考过程。
-	const rewritten = rewrite ? rewrite(combined) : combined;
-	if (rewritten === undefined) return undefined;
-	const content = rewritten.replace(/<(\s*\/?\s*think\b[^<>]*)>/gi, "＜$1＞");
-	if (!content.trim()) return undefined;
-	const budget =
-		wecomReplyMaximumBytes - Buffer.byteLength(`<think></think>\n\n${answer}`);
-	if (thinking.complete && Buffer.byteLength(content) <= budget)
-		return `<think>${content}</think>\n\n${answer}`;
-	const room = budget - Buffer.byteLength(wecomThinkingTruncatedNotice);
-	let bytes = 0;
-	let end = 0;
-	for (const point of content) {
-		const size = Buffer.byteLength(point);
-		if (bytes + size > room) break;
-		bytes += size;
-		end += point.length;
-	}
-	if (!content.slice(0, end).trim()) return undefined;
-	return `<think>${content.slice(0, end)}${wecomThinkingTruncatedNotice}</think>\n\n${answer}`;
-}
-
 /** #3077：长连接受理后立即发送的固定处理中提示，最终回复在同一 stream 上覆盖它。 */
 export const wecomProcessingTextV1 = "已收到，正在处理…";
-/** #3077：回复有效期内回答仍未就绪时发送的固定超时提示。 */
-export const wecomReplyTimeoutTextV1 =
-	"回复超时，Agent 未能在企微回复时限内完成，请稍后重试";
+/** #3077：回复有效期内回答仍未就绪时附在已有回答之后的固定超时提示。 */
+export { wecomReplyTimeoutTextV1 } from "./wecom-reply-text.js";
 /** 回复有效期结束前多久领取仍未就绪的回执，用来发送超时提示（#3077）。 */
 export const wecomReplyTimeoutNoticeLeadMsV1 = 30_000;
-/** 映射到的会话不可用时的固定提示（#3184）。 */
-const wecomConversationUnavailableTextV1 =
-	"当前会话不可用，发送 /new 开始新会话";
+/**
+ * #3377：投递前复核遇到依赖暂时不可用时的有界指数退避（工程 Spec §14.2.4）：首次 1 秒、上限
+ * 15 秒。回执每次领取都会推进 fence，因此按 fence 计算，进程重启也不会重新从头密集重试。
+ */
+export function wecomRevalidationBackoffMsV1(fence: number): number {
+	const attempt = Number.isSafeInteger(fence) && fence > 1 ? fence - 1 : 0;
+	return Math.min(15_000, 1_000 * 2 ** Math.min(attempt, 4));
+}
 /** 发送者用 `/new` 开始新会话后的固定回复（#3184）。 */
 const wecomNewConversationTextV1 = "已开始新会话";
 export function createWecomDeliveryV1(dependencies: {
@@ -949,18 +955,13 @@ export function createWecomDeliveryV1(dependencies: {
 	readonly answerReferences: WecomAnswerReferenceParserV1;
 	readonly now?: () => Date;
 }) {
-	return {
-		async dispatch(): Promise<boolean> {
-			const claim = await dependencies.store.claim();
-			if (!claim) return false;
-			if (
-				Date.parse(claim.replyExpiresAt) <=
-				(dependencies.now?.() ?? new Date()).getTime()
-			) {
-				await dependencies.store.finish(claim, "expired");
-				return true;
-			}
-			const current = claim.connectionAuthorizationFact
+	const clock = () => (dependencies.now?.() ?? new Date()).getTime();
+	/** 复核领取时绑定的发送者与修订；依赖异常与暂时不可用一样不作结论。 */
+	async function authorizeClaim(
+		claim: WecomDeliveryClaimV1,
+	): ReturnType<WecomAuthorizationPortV1["authorize"]> {
+		try {
+			return claim.connectionAuthorizationFact
 				? await dependencies.authorization.authorize(
 						claim.scope,
 						"use",
@@ -972,16 +973,113 @@ export function createWecomDeliveryV1(dependencies: {
 						"use",
 						claim.taskBoundary,
 					);
-			if (current.outcome === "unavailable") return true;
-			if (
-				current.outcome !== "allowed" ||
-				current.authority.actor.actorId !== claim.actorId ||
-				current.authority.channelRevision !== claim.channelRevision ||
-				!sameWecomConnectionAuthorizationFactV1(
-					current.authority.connectionAuthorizationFact,
-					claim.connectionAuthorizationFact,
-				)
-			) {
+		} catch {
+			return { outcome: "unavailable" };
+		}
+	}
+	/** 当前授权仍是领取时绑定的发送者、渠道修订与 Connection 事实。 */
+	function sameAuthority(
+		claim: WecomDeliveryClaimV1,
+		current: Awaited<ReturnType<WecomAuthorizationPortV1["authorize"]>>,
+	): current is Extract<typeof current, { readonly outcome: "allowed" }> {
+		return (
+			current.outcome === "allowed" &&
+			current.authority.actor.actorId === claim.actorId &&
+			current.authority.channelRevision === claim.channelRevision &&
+			sameWecomConnectionAuthorizationFactV1(
+				current.authority.connectionAuthorizationFact,
+				claim.connectionAuthorizationFact,
+			)
+		);
+	}
+	/** 回执的固定文案或答案；答案与超时定稿只取已落库的正文。 */
+	function replyText(claim: WecomDeliveryClaimV1, timedOut: boolean): string {
+		switch (claim.acceptanceStatus) {
+			case "media_rejected":
+				return wecomMediaRejectionTextV1(claim.mediaRejection);
+			case "busy":
+				return "Agent 正忙，请稍后重试";
+			case "unavailable":
+				return wecomConversationUnavailableTextV1;
+			case "new_conversation":
+				return wecomNewConversationTextV1;
+		}
+		// #3377：有效期结束前 30 秒仍未到终态时，在当前 stream 定稿：保留已有回答，附固定超时提示。
+		if (timedOut)
+			return composeWecomBoundedTextV1({
+				answer: partialWecomAnswerV1(
+					claim.textDeltas.join(""),
+					dependencies.answerReferences,
+				),
+				answerComplete: !claim.answerTooLong,
+				tail: wecomReplyTimeoutTextV1,
+			});
+		if (claim.executionStatus === "completed") return claim.textDeltas.join("");
+		if (claim.executionStatus === "cancelled") return "本次任务已停止";
+		// #3377：失败说明按已持久的受限原因归入 §16.1.1 的分类。
+		return wecomExecutionFailureTextV1(
+			classifyExecutionFailureV1({
+				...claim.failure,
+				conversationUnavailable: claim.conversationUnavailable === true,
+			}),
+			claim.traceId ?? claim.receiptId,
+		);
+	}
+	/**
+	 * #3377：有效期结束前 30 秒仍不能完成复核时，改发不含业务内容的固定失败说明（内部错误类，
+	 * 附追踪编号）并结束 stream，不静默过期。Store 只按已持久的事实核对回执、连接持有者与修订；
+	 * 复核确认主体禁用、权限撤销或修订变化时仍取消。
+	 */
+	async function deliverRevalidationNotice(claim: WecomDeliveryClaimV1) {
+		const prepared = await dependencies.store.prepareNotice(claim);
+		if (prepared === "changed") {
+			await dependencies.store.finish(claim, "cancelled");
+			return;
+		}
+		if (prepared !== "prepared") return;
+		let status: "sent" | "failed" | "unknown";
+		try {
+			status = await dependencies.sender.send({
+				scope: claim.scope,
+				replyHandle: claim.replyHandle,
+				text: wecomExecutionFailureTextV1(
+					"internal_error",
+					claim.traceId ?? claim.receiptId,
+				),
+				revalidate: async () => {
+					const latest = await authorizeClaim(claim);
+					return (
+						latest.outcome === "unavailable" || sameAuthority(claim, latest)
+					);
+				},
+			});
+		} catch {
+			status = "unknown";
+		}
+		await dependencies.store.finish(claim, status);
+	}
+	return {
+		async dispatch(): Promise<boolean> {
+			const claim = await dependencies.store.claim();
+			if (!claim) return false;
+			const expiresAt = Date.parse(claim.replyExpiresAt);
+			if (expiresAt <= clock()) {
+				await dependencies.store.finish(claim, "expired");
+				return true;
+			}
+			const current = await authorizeClaim(claim);
+			if (current.outcome === "unavailable") {
+				// #3377：依赖暂时不可用时不放弃回执：有效期内退避后重新领取复核，最后 30 秒改发固定说明。
+				const room = expiresAt - wecomReplyTimeoutNoticeLeadMsV1 - clock();
+				if (room > 0)
+					await dependencies.store.defer(
+						claim,
+						Math.min(wecomRevalidationBackoffMsV1(claim.fence), room),
+					);
+				else await deliverRevalidationNotice(claim);
+				return true;
+			}
+			if (!sameAuthority(claim, current)) {
 				await dependencies.store.finish(claim, "cancelled");
 				return true;
 			}
@@ -992,24 +1090,7 @@ export function createWecomDeliveryV1(dependencies: {
 				claim.acceptanceStatus === "accepted" &&
 				!timedOut &&
 				claim.executionStatus === "completed";
-			let text =
-				claim.acceptanceStatus === "media_rejected"
-					? wecomMediaRejectionTextV1(claim.mediaRejection)
-					: claim.acceptanceStatus === "busy"
-						? "Agent 正忙，请稍后重试"
-						: claim.acceptanceStatus === "unavailable"
-							? wecomConversationUnavailableTextV1
-							: claim.acceptanceStatus === "new_conversation"
-								? wecomNewConversationTextV1
-								: timedOut
-									? wecomReplyTimeoutTextV1
-									: claim.executionStatus === "completed"
-										? claim.textDeltas.join("")
-										: claim.executionStatus === "cancelled"
-											? "本次任务已停止"
-											: claim.conversationUnavailable
-												? `本次任务执行失败，${wecomConversationUnavailableTextV1}`
-												: "本次任务执行失败，请稍后重试";
+			let text = replyText(claim, timedOut);
 			// #3229：只有完成的回答带结果文件。先规划哪些文件会发送（文本先于媒体），再把回答中的
 			// `sandbox:` 引用改写为文件名与说明；不支持媒体的回复方式去掉结果文件，文本照常发送。
 			let media: readonly WecomOutboundMediaV1[] = [];
@@ -1032,7 +1113,7 @@ export function createWecomDeliveryV1(dependencies: {
 				media = planned.media;
 				rewriteThinking = planned.rewriteThinking;
 			}
-			if (!text || Buffer.byteLength(text) > wecomReplyMaximumBytes) {
+			if (!text || Buffer.byteLength(text) > wecomReplyMaximumBytesV1) {
 				await dependencies.store.finish(claim, "failed");
 				return true;
 			}
@@ -1043,29 +1124,8 @@ export function createWecomDeliveryV1(dependencies: {
 					: undefined;
 			if (!(await dependencies.store.prepare(claim, current.authority, media)))
 				return true;
-			const revalidate = async () => {
-				const latest = claim.connectionAuthorizationFact
-					? await dependencies.authorization.authorize(
-							claim.scope,
-							"use",
-							claim.taskBoundary,
-							claim.connectionAuthorizationFact.providerId,
-						)
-					: await dependencies.authorization.authorize(
-							claim.scope,
-							"use",
-							claim.taskBoundary,
-						);
-				return (
-					latest.outcome === "allowed" &&
-					latest.authority.actor.actorId === claim.actorId &&
-					latest.authority.channelRevision === claim.channelRevision &&
-					sameWecomConnectionAuthorizationFactV1(
-						latest.authority.connectionAuthorizationFact,
-						claim.connectionAuthorizationFact,
-					)
-				);
-			};
+			const revalidate = async () =>
+				sameAuthority(claim, await authorizeClaim(claim));
 			let status: "sent" | "failed" | "unknown";
 			try {
 				status = await dependencies.sender.send({
@@ -1182,7 +1242,7 @@ export function createWecomDeliveryV1(dependencies: {
 				references,
 				files: ordered,
 				skipped,
-				maxBytes: wecomReplyMaximumBytes,
+				maxBytes: wecomReplyMaximumBytesV1,
 			}),
 			media,
 			rewriteThinking,

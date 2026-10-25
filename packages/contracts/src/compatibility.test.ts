@@ -5340,6 +5340,63 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the optional failure category on failed V2 answers (#3377)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const failedAnswer = (document: typeof current) =>
+			document.components.schemas.ConversationDetailProjectionV2.properties.messages.items.oneOf.find(
+				(option: { properties: { status: { const?: string } } }) =>
+					option.properties.status.const === "failed",
+			);
+		const previous = structuredClone(current);
+		delete failedAnswer(previous).properties.failure;
+		delete previous.components.schemas.ExecutionFailureCategoryV1;
+		delete previous.components.schemas.ExecutionFailureProjectionV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-execution-failure-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					failedAnswer(document).required.push("failure");
+				},
+				(document: typeof current) => {
+					document.components.schemas.ExecutionFailureCategoryV1.enum.push(
+						"provider_secret",
+					);
+				},
+				(document: typeof current) => {
+					document.components.schemas.ExecutionFailureProjectionV1.properties.code =
+						{ type: "string" };
+				},
+				(document: typeof current) => {
+					// 新组件不能借兼容例外出现在其他读取接口。
+					document.components.schemas.ExecutionDetailProjectionV2.oneOf[1].properties.failure =
+						{ $ref: "#/components/schemas/ExecutionFailureProjectionV1" };
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the added updating Session availability (#1523)", async () => {
 		const current = JSON.parse(
 			await readFile(

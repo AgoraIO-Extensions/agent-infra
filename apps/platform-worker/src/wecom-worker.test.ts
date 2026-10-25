@@ -21,6 +21,14 @@ const mocks = vi.hoisted(() => ({
 	connectionsSend: vi.fn(),
 	connectionsPlanMedia: vi.fn(),
 	connectionsSendMedia: vi.fn(),
+	connectionsUpdate: vi.fn(),
+	progressTick: vi.fn(async () => 0),
+	progressOptions: undefined as
+		| {
+				readonly sender: Pick<WecomSendPortV1, "update">;
+				readonly answerReferences: unknown;
+		  }
+		| undefined,
 	answerReferences: undefined as unknown,
 	sender: undefined as WecomSendPortV1 | undefined,
 	close: vi.fn(async () => {}),
@@ -61,6 +69,10 @@ vi.mock("@agent-infra/platform-core", () => ({
 		mocks.answerReferences = options.answerReferences;
 		return { dispatch: mocks.dispatch };
 	},
+	createWecomProgressV1: (options: typeof mocks.progressOptions) => {
+		mocks.progressOptions = options;
+		return { tick: mocks.progressTick };
+	},
 }));
 
 vi.mock("./wecom-connections.js", () => ({
@@ -73,6 +85,7 @@ vi.mock("./wecom-connections.js", () => ({
 			close: mocks.connectionsClose,
 			sender: {
 				send: mocks.connectionsSend,
+				update: mocks.connectionsUpdate,
 				planMedia: mocks.connectionsPlanMedia,
 				sendMedia: mocks.connectionsSendMedia,
 			},
@@ -110,6 +123,7 @@ import { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
 afterEach(() => {
 	vi.resetAllMocks();
 	mocks.mediaOptions = undefined;
+	mocks.progressOptions = undefined;
 });
 
 it("assembles the inbound media resolver from the deployment file surface (#3227)", async () => {
@@ -646,3 +660,57 @@ it.each([
 		}
 	},
 );
+
+// #3377：流式进度只经长连接回复路由覆盖更新；回调模式只发送终态回复。
+it("drives streaming progress only through long-connection reply routes (#3377)", async () => {
+	const input = {
+		scope: {
+			agentId: "agent",
+			bindingReference: "binding",
+			kind: "wecom_bot" as const,
+			senderId: "sender",
+			peerId: "sender",
+			conversationType: "single" as const,
+			threadId: null,
+		},
+		replyHandle: "fixture",
+		text: "执行中 · 已用 3 秒",
+		prepare: async () => true,
+	};
+	const websocket = mediaWorker({ websocket: {} });
+	try {
+		const update = mocks.progressOptions?.sender.update;
+		if (!update) throw new Error("Missing progress sender");
+		expect(mocks.progressOptions?.answerReferences).toBe(
+			mocks.answerReferences,
+		);
+		mocks.connectionsUpdate.mockResolvedValueOnce("queued");
+		expect(await update(input)).toBe("queued");
+		expect(mocks.connectionsUpdate).toHaveBeenCalledWith(input);
+		mocks.progressTick.mockResolvedValueOnce(2);
+		expect(await websocket.worker.progress()).toBe(2);
+	} finally {
+		await websocket.worker.close();
+	}
+	mocks.connectionsUpdate.mockClear();
+	const callback = mediaWorker({ callback: {} });
+	try {
+		expect(await mocks.progressOptions?.sender.update?.(input)).toBe("failed");
+		expect(mocks.connectionsUpdate).not.toHaveBeenCalled();
+	} finally {
+		await callback.worker.close();
+	}
+	mocks.progressOptions = undefined;
+	const withoutConnections = createPlatformWecomWorkerV1({
+		databaseUrl: "postgres://fixture",
+		identity: { resolveSender: async () => null, activeUsers: async () => [] },
+		observe: () => {},
+		sender: { send: async () => "failed" },
+	});
+	try {
+		expect(mocks.progressOptions).toBeUndefined();
+		expect(await withoutConnections.progress()).toBe(0);
+	} finally {
+		await withoutConnections.close();
+	}
+});

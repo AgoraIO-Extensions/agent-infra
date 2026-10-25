@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
+	executionProgressPhaseV1,
+	executionToolDisplayNameV1,
+} from "@agent-infra/contracts/pilot";
+import {
 	createConversationExecutionUseCaseV1,
 	createWecomAuthorizationV1,
 	isWecomMediaRejectionV1,
@@ -23,6 +27,10 @@ import {
 	type WecomMediaProgressStatusV1,
 	type WecomMediaRejectionV1,
 	type WecomOutboundMediaV1,
+	type WecomProgressCandidateV1,
+	type WecomProgressPhaseV1,
+	type WecomProgressSnapshotV1,
+	type WecomProgressStorePortV1,
 	type WecomReceiptStatusV1,
 	type WecomScopeV1,
 	wecomConversationKeyForRotationV1,
@@ -32,6 +40,11 @@ import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-r
 import { PostgresAgentManagementTransactionV1 } from "./agent-management.js";
 import { agentManagementStateJsonSql } from "./agent-management-state-sql.js";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.js";
+import {
+	type ExecutionFailureFactRowV1,
+	executionFailureFactsSql,
+	executionFailureFactsV1,
+} from "./execution-failure-facts.js";
 import postgres from "./observed-postgres.js";
 import {
 	awaitTaskAuthorizationDependencyV1,
@@ -168,6 +181,33 @@ function mediaRejection(row: Row): WecomMediaRejectionV1 {
 		? value
 		: { reason: "failed", maxBytes: null };
 }
+/**
+ * #3377：按顺序只读到累计约 20480 字节（最多 10000 条）的回答正文前缀；`complete` 表示读完了全部
+ * 正文。尚未就绪的回复与进度帧只展示前缀，读取量有界。
+ */
+async function readTextPrefix(
+	sql: postgres.Sql | postgres.TransactionSql,
+	executionId: string,
+): Promise<{ readonly rows: string[]; readonly complete: boolean }> {
+	const rows = await sql<
+		{ text: string | null; total: string }[]
+	>`select text,total from (
+			select e.event_payload->>'text' as text,
+				e.sequence,
+				coalesce(sum(octet_length(e.event_payload->>'text')) over (order by e.sequence rows between unbounded preceding and 1 preceding),0) as before_bytes,
+				count(*) over () as total
+			from platform.conversation_events e
+			where e.execution_id=${executionId}
+				and e.event_type='text.delta'
+		) answer where before_bytes<20480 order by sequence limit 10000`;
+	const texts = rows.map((row) => row.text ?? "");
+	return {
+		rows: texts,
+		complete:
+			rows.length === Number(rows[0]?.total ?? 0) &&
+			Buffer.byteLength(texts.join("")) <= 20480,
+	};
+}
 /** #2982：把有界读取的思考过程行转成 claim 字段；少读或不认识的行都按「没有读完」处理。 */
 function thinkingClaim(
 	rows: readonly { kind: string | null; text: string | null; total: string }[],
@@ -190,7 +230,10 @@ function thinkingClaim(
 		: {};
 }
 export class PostgresWecomChannelV1
-	implements WecomChannelStorePortV1, WecomDeliveryStorePortV1
+	implements
+		WecomChannelStorePortV1,
+		WecomDeliveryStorePortV1,
+		WecomProgressStorePortV1
 {
 	readonly #sql: ReturnType<typeof postgres>;
 	readonly #databaseUrl: string;
@@ -947,13 +990,15 @@ export class PostgresWecomChannelV1
 			// 文案，不必等待。
 			// #3077：回答未就绪的已受理回执在有效期最后 30 秒内领取，由 Core 发送超时提示；已过期的照旧领取。
 			const [row] = await sql<
-				(Row & {
-					execution_status: string | null;
-					answer_ready: boolean;
-					conversation_status: string | null;
-					conversation_isolation_pending: boolean;
-				})[]
-			>`select r.*,e.status as execution_status,ready.answer_ready,c.status as conversation_status,exists (select 1 from platform.conversation_generation_tombstones t where t.conversation_id=r.conversation_id and t.status='pending') as conversation_isolation_pending from platform.wecom_receipts r left join platform.conversation_executions e on e.execution_id=r.execution_id left join platform.conversations c on c.id=r.conversation_id
+				(Row &
+					ExecutionFailureFactRowV1 & {
+						execution_status: string | null;
+						answer_ready: boolean;
+						conversation_status: string | null;
+						conversation_isolation_pending: boolean;
+						trace_id: string | null;
+					})[]
+			>`select r.*,e.status as execution_status,ready.answer_ready,c.status as conversation_status,exists (select 1 from platform.conversation_generation_tombstones t where t.conversation_id=r.conversation_id and t.status='pending') as conversation_isolation_pending,(select a.trace_id from platform.conversation_audit_events a where a.execution_id=r.execution_id order by a.occurred_at,a.id limit 1) as trace_id,${executionFailureFactsSql(sql)} from platform.wecom_receipts r left join platform.conversation_executions e on e.execution_id=r.execution_id left join platform.conversations c on c.id=r.conversation_id
     cross join lateral (select coalesce(e.status in ('failed','cancelled') or (e.status='completed' and exists (select 1 from platform.conversation_events t where t.conversation_id=e.conversation_id and t.execution_id=e.execution_id and t.source='runtime' and t.event_type='execution.status' and t.event_payload->>'status'='completed' and t.runtime_cursor is not null)),false) as answer_ready) ready
     where (r.connection_bot_id is null or r.expires_at<=now() or exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) and (r.delivery_status='pending' or (r.delivery_status='claimed' and r.lease_until<=now())) and (r.acceptance_status!='accepted' or ready.answer_ready or r.expires_at<=now()+(${wecomReplyTimeoutNoticeLeadMsV1}::bigint*interval '1 millisecond')) order by r.created_at limit 1 for update of r skip locked`;
 			if (!row) return null;
@@ -963,21 +1008,24 @@ export class PostgresWecomChannelV1
 						{ bytes: string; count: string }[]
 					>`select coalesce(sum(octet_length(event_payload->>'text')),0) as bytes,count(*) as count from platform.conversation_events where execution_id=${row.execution_id} and event_type='text.delta'`
 				: [];
-			const deltas =
-				row.execution_id &&
-				size &&
-				Number(size.bytes) <= 20480 &&
-				Number(size.count) <= 10000
-					? await sql<
-							{ event_payload: { text?: string } }[]
-						>`select event_payload from platform.conversation_events where execution_id=${row.execution_id} and event_type='text.delta' order by sequence`
-					: [];
 			// #3229：正文超限时不读取，并明确告诉 Core，回复按原规则失败而不是只发结果文件。
 			const answerTooLong = Boolean(
 				row.execution_id &&
 					size &&
 					(Number(size.bytes) > 20480 || Number(size.count) > 10000),
 			);
+			// #3377：尚未就绪就到期定稿的回复保留已有回答；正文超限时只读有界前缀，由 Core 截短。
+			const unready = row.acceptance_status === "accepted" && !row.answer_ready;
+			const deltas =
+				row.execution_id && size && (!answerTooLong || unready)
+					? answerTooLong
+						? (await readTextPrefix(sql, row.execution_id)).rows.map(
+								(text) => ({ event_payload: { text } }),
+							)
+						: await sql<
+								{ event_payload: { text?: string } }[]
+							>`select event_payload from platform.conversation_events where execution_id=${row.execution_id} and event_type='text.delta' order by sequence`
+					: [];
 			const resultFiles =
 				row.execution_id && row.execution_status === "completed"
 					? await sql<
@@ -1079,10 +1127,156 @@ export class PostgresWecomChannelV1
 						: [];
 				}),
 				...thinkingClaim(thinking),
+				// #3377：失败说明按已持久的受限原因分类；内部错误附执行的追踪编号。
+				...(row.execution_status === "failed"
+					? { failure: executionFailureFactsV1(row) }
+					: {}),
+				traceId: row.trace_id ?? null,
 			};
 		});
 		for (let i = 0; i < unknown; i++) this.#observe("unknown");
 		return claim;
+	}
+	/**
+	 * #3377：复核依赖暂时不可用时把这次领取留到 `delayMs` 之后再被领取；回执状态与发送意图不变。
+	 * 回执已不由本次领取持有时不做任何事。
+	 */
+	async defer(claim: WecomDeliveryClaimV1, delayMs: number): Promise<void> {
+		if (!Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > 60_000)
+			throw new TaskAuthorizationStoreError();
+		await this
+			.#sql`update platform.wecom_receipts set lease_until=now()+(${delayMs}::bigint*interval '1 millisecond'),updated_at=now() where id=${claim.receiptId} and fence=${claim.fence} and delivery_status='claimed'`;
+	}
+	/**
+	 * #3377：有效期将尽仍不能完成复核时，为不含业务内容的固定失败说明推进到 `sending`。只核对已持久
+	 * 的事实：本次领取仍持有回执、未过期且长连接持有者未变；Agent 授权修订与渠道修订仍是受理时的值。
+	 * 不要求 Agent 服务就绪，也不登记媒体。
+	 */
+	async prepareNotice(
+		claim: WecomDeliveryClaimV1,
+	): Promise<"prepared" | "changed" | "stale"> {
+		return this.#sql.begin(async (sql) => {
+			const [row] = await sql<{ current: boolean }[]>`select exists (
+    select 1 from platform.agents a join platform.agent_configuration_revisions c on c.agent_id=a.id and c.revision=a.current_configuration_revision
+    where a.id=r.scope->>'agentId' and a.authorization_revision=r.authorization_revision and c.configuration->>'channelRevision'=${claim.channelRevision} and r.channel_revision=${claim.channelRevision}
+   ) as current from platform.wecom_receipts r where r.id=${claim.receiptId} and r.fence=${claim.fence} and r.delivery_status='claimed' and r.lease_until>now() and r.expires_at>now() and (r.connection_bot_id is null or exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())) for update of r`;
+			if (!row) return "stale";
+			if (!row.current) return "changed";
+			await sql`update platform.wecom_receipts set delivery_status='sending',lease_until=now()+(case when scope->>'kind'='wecom_app' then interval '3 minutes' else interval '30 seconds' end),updated_at=now() where id=${claim.receiptId} and fence=${claim.fence} and delivery_status='claimed'`;
+			await audit(
+				sql,
+				claim.receiptId,
+				"sending",
+				{ agentId: claim.scope.agentId, actorId: claim.actorId },
+				"platform-worker",
+			);
+			return "prepared";
+		});
+	}
+	/**
+	 * #3377：当前连接持有者仍在处理、尚未进入终态回复、且距回复有效期结束超过 30 秒的长连接回执
+	 * （工程 Spec §14.2.4）。最后 30 秒由终态回复定稿，不再发进度帧。
+	 */
+	async progressCandidates(): Promise<WecomProgressCandidateV1[]> {
+		if (!this.#connectionHolderId) return [];
+		const rows = await this.#sql<
+			{
+				id: string;
+				execution_id: string;
+				scope: WecomScopeV1;
+				actor_id: string;
+				channel_revision: string;
+				task_boundary: TaskAuthorizationBoundaryV1;
+				connection_authorization_fact: WecomConnectionAuthorizationFactV1 | null;
+				reply_handle: string;
+				created_at: Date;
+				execution_status: string;
+				last_sequence: string | null;
+			}[]
+		>`select r.id,r.execution_id,r.scope,r.actor_id,r.channel_revision,r.task_boundary,r.connection_authorization_fact,r.reply_handle,r.created_at,e.status as execution_status,(select max(t.sequence) from platform.conversation_events t where t.execution_id=e.execution_id)::text as last_sequence
+    from platform.wecom_receipts r join platform.conversation_executions e on e.execution_id=r.execution_id
+    where r.delivery_status='pending' and r.acceptance_status='accepted' and r.connection_bot_id is not null
+      and r.expires_at>now()+(${wecomReplyTimeoutNoticeLeadMsV1}::bigint*interval '1 millisecond')
+      and e.status in ('waiting','submitted','processing','unknown')
+      and exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp())
+    order by r.created_at limit 64`;
+		return rows.map((row) => ({
+			receiptId: row.id,
+			executionId: row.execution_id,
+			scope: row.scope,
+			actorId: row.actor_id,
+			channelRevision: row.channel_revision,
+			taskBoundary: parseTaskAuthorizationBoundaryV1(row.task_boundary),
+			...(row.connection_authorization_fact
+				? { connectionAuthorizationFact: row.connection_authorization_fact }
+				: {}),
+			replyHandle: row.reply_handle,
+			acceptedAt: row.created_at.toISOString(),
+			revision: JSON.stringify([row.execution_status, row.last_sequence]),
+		}));
+	}
+	/**
+	 * #3377：一帧需要的已持久内容。阶段按 Contract 的推导从状态事件与最近 200 条调用事实得出
+	 * （与 Web 相同），正文与思考过程只读有界前缀。
+	 */
+	async progressSnapshot(
+		candidate: WecomProgressCandidateV1,
+	): Promise<WecomProgressSnapshotV1 | null> {
+		const executionId = candidate.executionId;
+		const [execution] = await this.#sql<
+			{ status: string }[]
+		>`select e.status from platform.conversation_executions e join platform.wecom_receipts r on r.execution_id=e.execution_id where r.id=${candidate.receiptId} and e.execution_id=${executionId}`;
+		if (!execution) return null;
+		const facts = await this.#sql<
+			{ event_type: string; event_payload: Record<string, unknown> }[]
+		>`select event_type,event_payload from platform.conversation_events where execution_id=${executionId} and event_type in ('execution.status','task.status','execution.operation') order by sequence desc limit 200`;
+		const phase = executionProgressPhaseV1(
+			facts.toReversed().map((row) => ({
+				type: row.event_type,
+				payload:
+					row.event_type === "execution.operation"
+						? row.event_payload.fact
+						: row.event_payload,
+			})),
+			execution.status,
+		);
+		const text = await readTextPrefix(this.#sql, executionId);
+		const thinking = await this.#sql<
+			{ kind: string | null; text: string | null; total: string }[]
+		>`select kind,text,total from (
+				select e.event_payload->>'kind' as kind,
+					e.event_payload->>'text' as text,
+					e.sequence,
+					coalesce(sum(octet_length(e.event_payload->>'text')) over (order by e.sequence rows between unbounded preceding and 1 preceding),0) as before_bytes,
+					count(*) over () as total
+				from platform.conversation_events e
+				where e.execution_id=${executionId}
+					and e.event_type='reasoning.delta'
+					and e.source='runtime'
+			) reasoning where before_bytes<20480 order by sequence limit 10000`;
+		const progressPhase: WecomProgressPhaseV1 | null =
+			phase?.kind === "tool"
+				? { kind: "tool", toolName: executionToolDisplayNameV1(phase.toolId) }
+				: phase;
+		return {
+			phase: progressPhase,
+			textDeltas: text.rows,
+			answerComplete: text.complete,
+			...thinkingClaim(thinking),
+		};
+	}
+	/**
+	 * #3377：发送一帧之前持久化下一个帧序号（工程 Spec §14.2.4）。回执仍未进入终态回复、未过期、
+	 * 回复路由未被重投改绑，且长连接持有者租约与隔离令牌仍属于当前 Worker 时才递增；否则返回 null。
+	 */
+	async reserveStreamFrame(
+		candidate: WecomProgressCandidateV1,
+	): Promise<number | null> {
+		if (!this.#connectionHolderId) return null;
+		const [row] = await this.#sql<
+			{ stream_frame_seq: number }[]
+		>`update platform.wecom_receipts r set stream_frame_seq=r.stream_frame_seq+1 where r.id=${candidate.receiptId} and r.delivery_status='pending' and r.reply_handle=${candidate.replyHandle} and r.expires_at>now() and r.connection_bot_id is not null and exists (select 1 from platform.wecom_connections w where w.bot_id=r.connection_bot_id and w.fence=r.connection_fence and w.holder_id=${this.#connectionHolderId} and w.lease_until>clock_timestamp()) returning r.stream_frame_seq`;
+		return row ? row.stream_frame_seq : null;
 	}
 	async prepare(
 		claim: WecomDeliveryClaimV1,

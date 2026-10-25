@@ -1301,6 +1301,19 @@ html {
 	color: var(--muted-foreground);
 	font-size: 12px;
 }
+/* #3377：处理中回复卡右侧为阶段 spinner 与实时耗时，两者同一行，窄屏可换行。 */
+.chat-message .message-progress {
+	display: inline-flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.chat-message .message-elapsed {
+	flex: none;
+	color: var(--muted-foreground);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+}
 /* 设计 .message-body .subtle：回答状态行 12px muted，正文之后 9px（CH-08、R4-08）。 */
 .chat-message .message-status {
 	margin-top: 9px;

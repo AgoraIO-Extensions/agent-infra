@@ -7,7 +7,10 @@ import {
 	type RuntimeModelDirectoryDispatchRequestV1,
 	RuntimeModelDirectoryDispatchRequestV1Schema,
 } from "@agent-infra/contracts/runtime";
-import type { RecentPersonalConversationsQueryV1 } from "@agent-infra/platform-core";
+import type {
+	ExecutionFailureFactsV1,
+	RecentPersonalConversationsQueryV1,
+} from "@agent-infra/platform-core";
 import {
 	isSessionSandboxReadyV1,
 	isTaskApiChannelV1,
@@ -22,6 +25,11 @@ import {
 } from "@agent-infra/platform-core";
 import { exactRecord } from "./conversation-execution-common.js";
 import { readRecentPersonalConversations } from "./conversation-recent-query.js";
+import {
+	type ExecutionFailureFactRowV1,
+	executionFailureFactsSql,
+	executionFailureFactsV1,
+} from "./execution-failure-facts.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import postgres from "./observed-postgres.js";
 import {
@@ -83,6 +91,8 @@ export interface ConversationQueryExecutionV1 {
 	readonly createdAt: Date;
 	readonly updatedAt: Date;
 	readonly traceId: string | null;
+	/** #3377：失败执行已持久的受限原因；其他状态为空。 */
+	readonly failure?: Omit<ExecutionFailureFactsV1, "conversationUnavailable">;
 }
 
 export interface ConversationQueryEventV1 {
@@ -321,7 +331,7 @@ interface MessageRow {
 	readonly created_at: Date;
 }
 
-interface ExecutionRow {
+interface ExecutionRow extends ExecutionFailureFactRowV1 {
 	readonly execution_id: string;
 	readonly conversation_id: string;
 	readonly source_message_id: string | null;
@@ -748,6 +758,9 @@ function execution(row: ExecutionRow): ConversationQueryExecutionV1 {
 		createdAt: timestamp(row.created_at),
 		updatedAt: timestamp(row.updated_at),
 		traceId: row.trace_id === null ? null : text(row.trace_id),
+		...(row.status === "failed"
+			? { failure: executionFailureFactsV1(row) }
+			: {}),
 	};
 }
 
@@ -897,7 +910,8 @@ async function readExecutions(
 				where a.execution_id = e.execution_id
 				order by a.occurred_at, a.id
 				limit 1
-			) as trace_id
+			) as trace_id,
+			${executionFailureFactsSql(database)}
 		from platform.conversation_executions e
 		join platform.conversations c on c.id = e.conversation_id
 			and c.agent_id = e.agent_id and c.actor_id = e.actor_id
