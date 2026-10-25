@@ -59,6 +59,8 @@ export const wecomReceipts = platformSchema.table(
 			sql`${table.deliveryStatus} in ('pending','claimed','sending','sent','failed','unknown','cancelled','expired','abandoned')`,
 		),
 		index("wecom_delivery_pending").on(table.deliveryStatus, table.createdAt),
+		// #3374：投递领取按 Execution 判定附件消息是否已与随后的消息合并（同一 Execution 的回执）。
+		index("wecom_receipt_execution").on(table.executionId),
 	],
 );
 

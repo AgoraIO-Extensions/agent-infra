@@ -27,7 +27,8 @@ function scrollState(page: Page) {
 }
 
 /**
- * 在用例自己的 fixture 之后调用：回到标签页触发 path 的 GET，先挂起、再以 503 失败、最后读到。
+ * 在用例自己的 fixture 之后调用：回到标签页触发 path 的 GET，先挂起、再以 503 失败（failure 为
+ * "network" 时为网络中断）、最后读到。
  * 每一步之后 expectKept 断言已显示的内容与未保存的输入仍在，焦点一直在 focus 上（采样，不落到 body），
  * 页面高度与滚动位置不变。path 为字符串时与 pathname 整段比较，也可传正则。
  */
@@ -39,6 +40,7 @@ export async function expectBackgroundRereadKeeps(
 		expectKept,
 		expectPending,
 		context,
+		failure = "503",
 	}: {
 		path: string | RegExp;
 		focus: Locator;
@@ -46,6 +48,8 @@ export async function expectBackgroundRereadKeeps(
 		/** 挂起时额外的断言（例如页头刷新显示读取中）。 */
 		expectPending?: () => Promise<void>;
 		context: string;
+		/** 可重试失败的形态：503（默认）或网络中断（#3418）。 */
+		failure?: "503" | "network";
 	},
 ) {
 	const matches = (url: URL) =>
@@ -53,7 +57,9 @@ export async function expectBackgroundRereadKeeps(
 	let failing = false;
 	await page.route(matches, (route) =>
 		failing && route.request().method() === "GET"
-			? route.fulfill({ status: 503, json: backgroundFailure })
+			? failure === "network"
+				? route.abort("internetdisconnected")
+				: route.fulfill({ status: 503, json: backgroundFailure })
 			: route.fallback(),
 	);
 	await expect(focus, `${context} 前置焦点`).toBeFocused();
@@ -75,14 +81,21 @@ export async function expectBackgroundRereadKeeps(
 	await check("后台重读挂起", [50, 300]);
 	await expectPending?.();
 
-	// 失败（503，可重试）。
+	// 失败（503 或网络中断，可重试）。
 	failing = true;
-	const failed = page.waitForResponse(
-		(response) =>
-			matches(new URL(response.url())) &&
-			response.request().method() === "GET" &&
-			response.status() === 503,
-	);
+	const failed =
+		failure === "network"
+			? page.waitForEvent(
+					"requestfailed",
+					(request) =>
+						matches(new URL(request.url())) && request.method() === "GET",
+				)
+			: page.waitForResponse(
+					(response) =>
+						matches(new URL(response.url())) &&
+						response.request().method() === "GET" &&
+						response.status() === 503,
+				);
 	holding.release();
 	await failed;
 	await check("后台重读失败", [50, 300, 1000]);

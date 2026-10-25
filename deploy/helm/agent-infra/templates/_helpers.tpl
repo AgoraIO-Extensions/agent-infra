@@ -57,6 +57,8 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- $consumer := .Values.connectionConsumer | default dict -}}
 {{- $source := required "connectionConsumer.source is required" $consumer.source -}}
+{{- $webPath := required "connectionConsumer.webPath is required" $consumer.webPath -}}
+{{- if or (not (hasPrefix "/" $webPath)) (hasPrefix "//" $webPath) (regexMatch `[?#\\\s]` $webPath) (regexMatch `(^|/)\.\.?(/|$)` $webPath) (regexMatch `(?i)%(?:2f|2e|5c)` $webPath) -}}{{- fail "connectionConsumer.webPath must be a safe absolute path" -}}{{- end -}}
 {{- if not (has $source (list "inline" "external")) -}}
 {{- fail "connectionConsumer.source must be inline or external" -}}
 {{- end -}}

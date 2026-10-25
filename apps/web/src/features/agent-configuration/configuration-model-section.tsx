@@ -1,5 +1,11 @@
 import { RefreshCw } from "lucide-react";
-import type { Dispatch, ReactNode, SetStateAction } from "react";
+import {
+	type Dispatch,
+	type ReactNode,
+	type SetStateAction,
+	useLayoutEffect,
+	useRef,
+} from "react";
 import {
 	Alert,
 	AlertAction,
@@ -136,6 +142,25 @@ export function ConfigurationModelSection({
 			</p>
 		</div>
 	);
+	// 已保存 Key 的选择器因读取不可重试地失败而收起时（#3418 N14-02），焦点原在选择器里的交给本分区标题，
+	// 不落到 body。渲染时记下焦点是否在本分区内容里（提交前 DOM 仍是上一次的选择器）。
+	const savedPickerShown =
+		defaultRelayKeyManaged && Boolean(savedRelayKeyCandidates?.length);
+	const contentRef = useRef<HTMLDivElement>(null);
+	const headingRef = useRef<HTMLHeadingElement>(null);
+	const focusInside = useRef(false);
+	const pickerWasShown = useRef(savedPickerShown);
+	focusInside.current =
+		typeof document !== "undefined" &&
+		Boolean(contentRef.current?.contains(document.activeElement));
+	useLayoutEffect(() => {
+		const hidden = pickerWasShown.current && !savedPickerShown;
+		pickerWasShown.current = savedPickerShown;
+		if (!hidden || !focusInside.current) return;
+		const active = document.activeElement;
+		if (!active || active === document.body || !active.isConnected)
+			headingRef.current?.focus();
+	}, [savedPickerShown]);
 	const startFrom = draftSelection(draft);
 	const pickerKey = (candidates: readonly KeylessModelCandidate[]) =>
 		candidates
@@ -229,8 +254,11 @@ export function ConfigurationModelSection({
 			<FormSection
 				title="模型与凭证"
 				description="Owner 可以设置默认模型和可用推理档位。"
+				headingRef={headingRef}
 			>
-				<div className="configuration-model-content">{content}</div>
+				<div className="configuration-model-content" ref={contentRef}>
+					{content}
+				</div>
 			</FormSection>
 		);
 	}

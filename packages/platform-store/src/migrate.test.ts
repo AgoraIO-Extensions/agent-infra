@@ -2004,6 +2004,7 @@ describe("published Relay authority migration", () => {
 			62,
 			63,
 			64,
+			65,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2078,8 +2079,8 @@ describe("published Relay authority migration", () => {
 			tag: "0063_wecom_outbound_media",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 64,
-			tag: "0064_execution_unknown_since",
+			idx: 65,
+			tag: "0065_wecom_receipt_execution",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2512,6 +2513,7 @@ describe("published Relay authority migration", () => {
 					"wecom_conversation_rotations:wecom_conversation_rotations_pkey",
 					"wecom_receipt_media:wecom_receipt_media_file",
 					"wecom_receipt_media:wecom_receipt_media_receipt_id_ordinal_pk",
+					"wecom_receipts:wecom_receipt_execution",
 				].sort(),
 			});
 			expect(

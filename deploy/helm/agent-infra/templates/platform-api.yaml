@@ -92,6 +92,8 @@ spec:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
           env:
+            - name: AGENT_INFRA_CONNECTION_WEB_PATH
+              value: {{ .Values.connectionConsumer.webPath | quote }}
             - name: PLATFORM_API_DEPLOYMENT_MODULE
               value: {{ .Values.platformApi.deploymentModule | quote }}
             {{- if $moduleRef.name }}

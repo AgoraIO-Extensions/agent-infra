@@ -27,6 +27,7 @@ function createApp(
 		schemaVersion: 1;
 		publicOrigin: string;
 		mcpPath: string;
+		webPath: string;
 		configFingerprint: string;
 	},
 	telemetry?: AuditTelemetry,
@@ -144,6 +145,7 @@ describe("session and audit routes", () => {
 			schemaVersion: 1,
 			publicOrigin: "https://connection.example.test",
 			mcpPath: "/mcp",
+			webPath: "/connection/connections",
 			configFingerprint:
 				"7821b88d0acd40836eed51877a2e959774434f72cc4672475f7da41c89359331",
 		});
@@ -154,6 +156,7 @@ describe("session and audit routes", () => {
 			schemaVersion: 1,
 			publicOrigin: "https://connection.example.test",
 			mcpPath: "/mcp",
+			webPath: "/connection/connections",
 			configFingerprint:
 				"7821b88d0acd40836eed51877a2e959774434f72cc4672475f7da41c89359331",
 		});
@@ -175,7 +178,11 @@ describe("session and audit routes", () => {
 			source: { ref: "platform-deployment", revision: "r1" },
 			egressEnforced: true,
 		};
-		const capability = createConnectionCapability(profile, approval);
+		const capability = createConnectionCapability(
+			profile,
+			approval,
+			"/connection/connections",
+		);
 		if (capability.status !== "available")
 			throw Error("fixture admission failed");
 		const { app } = createApp(activeIdentity, capability);

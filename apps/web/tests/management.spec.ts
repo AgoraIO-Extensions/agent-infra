@@ -2775,6 +2775,7 @@ for (const available of [true, false]) {
 						status: "available",
 						publicOrigin: "https://connection.example.test",
 						mcpPath: "/mcp",
+						webPath: "/connection/connections",
 						configFingerprint: "a".repeat(64),
 					}),
 				}),
@@ -2791,7 +2792,7 @@ for (const available of [true, false]) {
 			await expect(connection).toHaveAttribute("target", "_blank");
 			await expect(connection).toHaveAttribute(
 				"href",
-				"https://connection.example.test/mcp",
+				"https://connection.example.test/connection/connections",
 			);
 		} else {
 			await expect(connection).toHaveCount(0);
@@ -5709,12 +5710,13 @@ async function stubConnectionCapability(
 
 const availableCapability = (
 	publicOrigin: string = connectionOrigin,
-	mcpPath = "/mcp",
+	webPath = "/connection/connections",
 ) => ({
 	schemaVersion: 1,
 	status: "available",
 	publicOrigin,
-	mcpPath,
+	mcpPath: "/mcp",
+	webPath,
 	configFingerprint: "a".repeat(64),
 });
 
@@ -5754,7 +5756,10 @@ test.describe("Agent detail design alignment", () => {
 		])
 			await expect(notice.getByText(text, { exact: true })).toBeVisible();
 		const open = notice.getByRole("link", { name: "打开 Connection" });
-		await expect(open).toHaveAttribute("href", `${connectionOrigin}/mcp`);
+		await expect(open).toHaveAttribute(
+			"href",
+			`${connectionOrigin}/connection/connections`,
+		);
 		await expect(open).toHaveAttribute("target", "_blank");
 		await expect(open).toHaveAttribute("rel", /noopener/);
 		await expect(open).toHaveAttribute("rel", /noreferrer/);
@@ -5799,7 +5804,7 @@ test.describe("Agent detail design alignment", () => {
 		await expect(notice.getByText("等待 Connection 授权返回")).toBeVisible();
 		await expect(
 			notice.getByRole("link", { name: "返回查看授权状态" }),
-		).toHaveAttribute("href", `${connectionOrigin}/mcp`);
+		).toHaveAttribute("href", `${connectionOrigin}/connection/connections`);
 		await capture(page, info, "agent-detail-connection-handoff");
 		// Platform 不读取 Connection 的授权结果，也不发写请求。
 		expect(mainRequests).toEqual([]);
@@ -5921,7 +5926,7 @@ test.describe("Agent detail design alignment", () => {
 		test.setTimeout(120_000);
 		await fixture(page, "employee");
 		const inputs: [string, string][] = [
-			[connectionOrigin, "/mcp"],
+			[connectionOrigin, "/connection/connections"],
 			[connectionOrigin, "//evil.example/mcp"],
 			[connectionOrigin, "/\\evil.example/mcp"],
 			[connectionOrigin, "\\\\evil.example\\mcp"],
@@ -5977,8 +5982,8 @@ test.describe("Agent detail design alignment", () => {
 		});
 		// 合法输入两处都给出同一地址；其余每组两处都没有链接。
 		expect(results[0]).toMatchObject({
-			nav: `${connectionOrigin}/mcp`,
-			detail: `${connectionOrigin}/mcp`,
+			nav: `${connectionOrigin}/connection/connections`,
+			detail: `${connectionOrigin}/connection/connections`,
 		});
 		for (const result of results.slice(1))
 			expect(result, JSON.stringify(result.input)).toEqual({
