@@ -2026,6 +2026,7 @@ for (const viewport of [
 					status: "available",
 					publicOrigin: "https://connection.example.test",
 					mcpPath: "/mcp",
+					webPath: "/connection/connections",
 					configFingerprint: "a".repeat(64),
 				}),
 			}),
