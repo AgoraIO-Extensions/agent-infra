@@ -96,6 +96,7 @@ import {
 	isModelSelectionPlan,
 	isRegenerationPlan,
 	isStopPlan,
+	lockAgentConfiguration,
 	lockConversation,
 	lockConversationForRead,
 	outboxId,
@@ -562,6 +563,16 @@ export class PostgresConversationExecutionTransactionV1
 		const input = structuredClone(candidate);
 		return this.#transaction(async (transaction) => {
 			validateNativeCapabilityInvocationPlanV6(input.plan, input);
+			// Governance and ordinary execution admission lock Agent before Conversation.
+			const agent = await lockAgentConfiguration(
+				transaction,
+				input.authority.agentId,
+			);
+			if (
+				!agent ||
+				agent.authorizationRevision !== input.authority.authorizationRevision
+			)
+				return { outcome: "denied", reason: "authorization_lost" };
 			const conversation = await lockConversation(
 				transaction,
 				input.request.conversationId,
@@ -638,12 +649,20 @@ export class PostgresConversationExecutionTransactionV1
 				});
 				return { outcome: "replayed", plan: structuredClone(saved) };
 			}
-			const active = await readMessageState(transaction, conversation);
-			if (active.activeExecution)
-				return {
-					outcome:
-						active.activeExecution.status === "unknown" ? "unknown" : "busy",
-				};
+			if (conversation.status !== "ready" || conversation.isolationPending)
+				return { outcome: "denied", reason: "conversation_unavailable" };
+			if (conversation.sandboxReady !== true)
+				return { outcome: "unavailable", reason: "conversation_unavailable" };
+			// Waiting tasks also own the Conversation queue; they must not be overtaken.
+			const [occupied] = await transaction<{ status: string }[]>`
+    select status from platform.conversation_executions
+    where conversation_id = ${conversation.conversationId}
+     and status in ('waiting','submitted','processing','unknown')
+    order by (status = 'unknown') desc, execution_id
+    limit 1 for update
+   `;
+			if (occupied)
+				return { outcome: occupied.status === "unknown" ? "unknown" : "busy" };
 			const occurredAt = new Date();
 			const reservationId = await reserveIdempotency(transaction, {
 				...scope,

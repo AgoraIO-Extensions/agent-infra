@@ -110,6 +110,7 @@ export type NativeCapabilityAdmissionV6Decision =
 			readonly outcome: "busy" | "denied" | "stale" | "unknown" | "unavailable";
 			readonly reason?:
 				| "authorization_lost"
+				| "conversation_unavailable"
 				| "idempotency_in_progress"
 				| "metadata_unavailable";
 	  }

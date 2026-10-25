@@ -11,6 +11,7 @@ import type { Transaction } from "./conversation-execution-common.js";
 
 const sql = vi.hoisted(() => ({
 	lockConversation: vi.fn(),
+	lockAgentConfiguration: vi.fn(),
 	readIdempotency: vi.fn(),
 	readMessageState: vi.fn(),
 }));
@@ -141,6 +142,9 @@ beforeEach(() => vi.clearAllMocks());
 function replayHarness() {
 	const value = validPlan();
 	const saved = structuredClone(value.plan);
+	sql.lockAgentConfiguration.mockResolvedValue({
+		authorizationRevision: value.authority.authorizationRevision,
+	});
 	sql.lockConversation.mockResolvedValue({
 		...value.authority,
 		conversationId: value.plan.conversationId,
