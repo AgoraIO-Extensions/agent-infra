@@ -56,6 +56,9 @@ describe("AgentDetailScreen", () => {
 		expect(history.getAttribute("href")).toBe(
 			"/chat/agent%3Atenant%2F01%3Fdraft%23one%25?view=history",
 		);
+		const runtime = within(screen.getByRole("region", { name: "运行与渠道" }));
+		expect(runtime.getByText("可以发送消息并获得回复")).toBeTruthy();
+		expect(runtime.getByText("平台对话入口")).toBeTruthy();
 	});
 	it("preserves the history entry but disables new conversations while unavailable", async () => {
 		await renderWithAgentRouter(
@@ -317,6 +320,45 @@ describe("AgentDetailScreen", () => {
 	});
 
 	it.each([
+		["self-managed", null, "自有交互入口尚未就绪。"],
+		["self-managed", "https://agent.example.test", "自有交互入口已就绪。"],
+		["platform-managed", null, "平台身份入口尚未就绪。"],
+		["platform-managed", "https://agent.example.test", "平台身份入口已就绪。"],
+	] as const)(
+		"describes the %s entry with URL %s without promising platform conversations",
+		async (identityResponsibility, interactionUrl, readiness) => {
+			const agent = AgentDetailProjectionV1Schema.parse({
+				...startingAgent,
+				managementStatus: interactionUrl ? "available" : "creating",
+				serviceAvailability: interactionUrl ? "ready" : "starting",
+				interactionUrl,
+				source: {
+					kind: "custom",
+					imageReference: "registry.example/agents/pilot@sha256:abc",
+					interactionMode: "self-managed",
+					identityResponsibility,
+				},
+			});
+			await renderWithAgentRouter(
+				<AgentDetailScreen state={{ kind: "ready", agent }} />,
+			);
+			const runtime = within(
+				screen.getByRole("region", { name: "运行与渠道" }),
+			);
+			expect(runtime.queryByText(/历史只读|发送消息|平台对话入口/)).toBeNull();
+			expect(runtime.queryByText("暂无平台渠道")).toBeNull();
+			expect(runtime.getByText(readiness)).toBeTruthy();
+			if (interactionUrl) {
+				expect(
+					screen.getByRole("link", { name: "打开 Agent" }).getAttribute("href"),
+				).toBe(`${interactionUrl}/`);
+			} else {
+				expect(screen.queryByRole("link", { name: "打开 Agent" })).toBeNull();
+			}
+		},
+	);
+
+	it.each([
 		"javascript:alert(1)",
 		"https://user:password@agent.example.test",
 		"https://agent.example.test?access_token=secret",
@@ -425,7 +467,11 @@ describe("AgentDetailScreen", () => {
 			screen.getByRole("link", { name: "打开 Agent" }).getAttribute("href"),
 		).toBe("https://agent.example.test/");
 		expect(screen.getByText("由平台校验")).toBeTruthy();
-		expect(screen.getByText("平台身份入口已就绪。")).toBeTruthy();
+		expect(
+			within(screen.getByRole("region", { name: "Agent 信息" })).getByText(
+				"平台身份入口已就绪。",
+			),
+		).toBeTruthy();
 	});
 
 	it("keeps the identity rows for a platform-auth entry that is not ready without naming components", async () => {

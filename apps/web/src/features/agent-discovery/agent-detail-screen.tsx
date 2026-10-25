@@ -288,6 +288,7 @@ export function AgentDetailScreen({
 	const ready = canStartPlatformConversation(agent);
 	const availability = agentAvailabilityStatus(agent);
 	const entryStatus = interactionReadiness(agent, interactionUrl);
+	const platformChannels = selfManaged ? [] : agent.configuration.channels;
 	return (
 		<section aria-labelledby="agent-detail-heading" className="agent-detail">
 			<header className="page-heading">
@@ -533,13 +534,13 @@ export function AgentDetailScreen({
 							<li>
 								<div className="detail-list-main">
 									<strong>服务状态</strong>
-									<small>{serviceDescription(agent)}</small>
+									<small>{entryStatus ?? serviceDescription(agent)}</small>
 								</div>
 								<Badge variant="chip" tone={availability.tone}>
 									{availability.label}
 								</Badge>
 							</li>
-							{agent.configuration.channels.map((channel) => (
+							{platformChannels.map((channel) => (
 								<li key={channel.kind}>
 									<div className="detail-list-main">
 										<strong>{agentChannelKindLabels[channel.kind]}</strong>
@@ -554,7 +555,7 @@ export function AgentDetailScreen({
 									</Badge>
 								</li>
 							))}
-							{agent.configuration.channels.length === 0 && (
+							{!selfManaged && platformChannels.length === 0 && (
 								<li>暂无平台渠道</li>
 							)}
 						</ul>
