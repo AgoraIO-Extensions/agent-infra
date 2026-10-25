@@ -3286,6 +3286,93 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.errorCode).toBe("ORIGINAL_RESPONSE_ALREADY_FINISHED");
 	});
 
+	// #3375：补充指令无法进入原回复时转入排队（工程 Spec §12.5）。
+	class QueueingDispatchStore extends MemoryDispatchStore {
+		queued: ConversationDispatchClaimV1[] = [];
+		async queueSupplement(input: {
+			readonly claim: ConversationDispatchClaimV1;
+		}) {
+			this.queued.push(input.claim);
+			this.outboxStatus = "succeeded";
+			return true;
+		}
+	}
+	it.each([
+		[
+			"Runtime explicitly rejects the steer",
+			{ executionStatus: "processing" as const },
+			true,
+		],
+		[
+			"the original reply already finished",
+			{ executionStatus: "completed" as const },
+			false,
+		],
+		[
+			"the original reply has a pending stop",
+			{ executionStatus: "processing" as const, stopPending: true },
+			false,
+		],
+		[
+			"the original reply became unknown",
+			{ executionStatus: "unknown" as const },
+			false,
+		],
+	])(
+		"queues a supplement when %s (#3375)",
+		async (_name, state, reachesRuntime) => {
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			runtimeHost.setResult({
+				outcome: "rejected",
+				code: "RUNTIME_TURN_NOT_ACTIVE",
+				message: "Runtime turn is no longer active",
+				retryable: false,
+			});
+			const store = new QueueingDispatchStore(
+				claim({
+					operation: "conversation.turn.supplement.v1",
+					messageId: "message-supplement",
+					hostSessionRef: "host-session-conversation-1",
+					...state,
+				}),
+			);
+			const sent = vi.spyOn(runtimeHost, "dispatch");
+			const { useCase } = setup({ store, runtimeHost });
+
+			await expect(dispatch(useCase)).resolves.toMatchObject({
+				outcome: "rejected",
+			});
+			expect(store.queued).toHaveLength(1);
+			expect(store.queued[0]).toMatchObject({
+				messageId: "message-supplement",
+			});
+			// 不再按“原回复已结束”终结这条补充指令。
+			expect(store.errorCode).toBeUndefined();
+			expect(sent.mock.calls.length > 0).toBe(reachesRuntime);
+		},
+	);
+
+	it("keeps an unclear supplement result unknown instead of queueing it (#3375)", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.setResult({
+			outcome: "unknown",
+			code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+			message: "Runtime command acceptance could not be confirmed",
+		});
+		const store = new QueueingDispatchStore(
+			claim({
+				operation: "conversation.turn.supplement.v1",
+				messageId: "message-supplement",
+				executionStatus: "processing",
+				hostSessionRef: "host-session-conversation-1",
+			}),
+		);
+		const { useCase } = setup({ store, runtimeHost });
+
+		await dispatch(useCase);
+		expect(store.queued).toEqual([]);
+	});
+
 	it("completes a stop when Runtime reports the target already ended", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
 		runtimeHost.setResult({

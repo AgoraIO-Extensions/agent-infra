@@ -4,6 +4,7 @@ import type {
 	ConversationDispatchClaimV1,
 	ConversationDispatchStateTransitionV1,
 	ConversationGenerationIsolationV1,
+	TaskAuthorizationBoundaryV1,
 } from "@agent-infra/platform-core";
 import { decideConversationStopConfirmationStatusV1 } from "@agent-infra/platform-core";
 import {
@@ -34,6 +35,7 @@ import {
 	readSessionSandboxBinding,
 	readSessionSandboxReadiness,
 } from "./session-sandbox.js";
+import { insertTaskAuthorization } from "./task-authorization.js";
 
 export async function readGenerationIsolation(
 	transaction: Transaction,
@@ -980,4 +982,235 @@ export async function transactionResult(
 		if (error instanceof StaleDispatchLease) return false;
 		throw error;
 	}
+}
+
+/** #3375：数据库返回的计数与顺序；非法值按租约失效处理，不做猜测。 */
+function queueCount(value: string | number): number {
+	const count = Number(value);
+	if (!Number.isSafeInteger(count) || count < 0) throw new StaleDispatchLease();
+	return count;
+}
+
+/**
+ * #3375：补充指令转入排队（工程 Spec §12.5）。调用方已持有本次补充指令的租约、Conversation 与原
+ * Execution 锁（`ownedState`）。本 Execution 当前认领的补充指令与之后仍待投递的补充指令按受理顺序逐条
+ * 转换：为每条消息新建等待 Execution（新的等待顺序与期限，写入与受理排队消息相同），把 Message、附件
+ * 与企微回执改为绑定新 Execution，补充指令 outbox 以“已转排队”终结。排队已满、企微回复期限不足以
+ * 排队，或原任务授权已不是当前 Agent 授权的消息按“原回复已结束”投递失败。认领中的那一条不存在或
+ * 已不是 `submitted` 时视为租约失效。返回认领中的那一条是否进入了排队；它的 outbox 由调用方终结。
+ */
+export async function queueSupplementMessages(
+	transaction: Transaction,
+	state: DispatchState,
+	claim: ConversationDispatchClaimV1,
+	limits: {
+		readonly capacity: number;
+		readonly waitMs: number;
+		readonly replyLeadMs: number;
+	},
+): Promise<boolean> {
+	const original = state.execution;
+	const conversationId = original.conversation_id;
+	const sessionGeneration = queueCount(original.session_generation);
+	// 与受理排队消息相同的锁顺序：Conversation 锁之后取 Agent 等待顺序锁（§12.5）。
+	await transaction`select pg_advisory_xact_lock(pg_catalog.hashtextextended(${`task:agent:${original.agent_id}`}, 0))`;
+	const supplements = await transaction<
+		{
+			id: string;
+			trace_id: string;
+			request_id: string | null;
+			trace_parent: string | null;
+			message_id: string;
+		}[]
+	>`
+		select id, trace_id, request_id, trace_parent, payload->>'messageId' as message_id
+		from platform.outbox_items
+		where scope_type = 'conversation' and scope_id = ${conversationId}
+			and operation = 'conversation.turn.supplement.v1'
+			and payload->>'executionId' = ${original.execution_id}
+			and payload->>'sessionGeneration' = ${String(sessionGeneration)}
+			and (id = ${claim.itemId} or status in ('pending', 'retry_scheduled'))
+		order by created_at, id
+		for update
+	`;
+	if (!supplements.some((row) => row.id === claim.itemId))
+		throw new StaleDispatchLease();
+	const [authorization] = await transaction<
+		{ boundary: unknown; current: boolean }[]
+	>`
+		select record.boundary,
+			record.revoked_at is null
+				and record.boundary->>'agentAuthorizationRevision' = agent.authorization_revision
+				and record.boundary->>'agentAuthorizationRevision' = ${original.authorization_revision}
+				as current
+		from platform.task_authorization_records record
+		join platform.agents agent on agent.id = ${original.agent_id}
+		where record.execution_id = ${original.execution_id}
+		order by record.id limit 1
+	`;
+	const [waiting] = await transaction<{ count: string }[]>`
+		select count(*)::text as count from platform.conversation_executions
+		where conversation_id = ${conversationId} and status = 'waiting'
+	`;
+	let waitingCount = queueCount(waiting?.count ?? "0");
+	const [agentQueue] = await transaction<{ last_order: string | null }[]>`
+		select max(task_wait_order)::text as last_order
+		from platform.conversation_executions where agent_id = ${original.agent_id}
+	`;
+	let lastOrder = queueCount(agentQueue?.last_order ?? "0");
+	let claimedQueued = false;
+	for (const supplement of supplements) {
+		const claimed = supplement.id === claim.itemId;
+		const [message] = await transaction<{ message_id: string }[]>`
+			select message_id from platform.conversation_messages
+			where message_id = ${supplement.message_id}
+				and conversation_id = ${conversationId}
+				and execution_id = ${original.execution_id}
+				and status = 'submitted'
+			for update
+		`;
+		if (!message) {
+			if (claimed) throw new StaleDispatchLease();
+			continue;
+		}
+		// 企微消息的排队期限不晚于该消息回复有效期结束前 30 秒（§14.2.4）；其他渠道为 10 分钟。
+		const [deadline] = await transaction<{ value: Date; open: boolean }[]>`
+			select limit_at as value, limit_at > clock_timestamp() as open
+			from (select least(
+				clock_timestamp() + ${limits.waitMs}::bigint * interval '1 millisecond',
+				coalesce((select r.expires_at - ${limits.replyLeadMs}::bigint * interval '1 millisecond'
+					from platform.wecom_receipts r
+					where r.id = ${supplement.request_id ?? ""}
+						and r.execution_id = ${original.execution_id}), 'infinity'::timestamptz)
+			) as limit_at) bounded
+		`;
+		if (
+			authorization?.current !== true ||
+			waitingCount >= limits.capacity ||
+			deadline?.open !== true
+		) {
+			await transaction`
+				update platform.conversation_messages
+				set status = 'failed', failure_code = 'ORIGINAL_RESPONSE_ALREADY_FINISHED',
+					updated_at = clock_timestamp()
+				where message_id = ${message.message_id} and conversation_id = ${conversationId}
+			`;
+			if (!claimed)
+				await transaction`
+					update platform.outbox_items
+					set status = 'failed', lease_owner = null, lease_expires_at = null,
+						updated_at = clock_timestamp()
+					where id = ${supplement.id}
+				`;
+			continue;
+		}
+		const executionId = randomUUID();
+		const turnId = randomUUID();
+		lastOrder += 1;
+		waitingCount += 1;
+		const inserted = await transaction<{ execution_id: string }[]>`
+			insert into platform.conversation_executions
+				(execution_id, conversation_id, sandbox_id, agent_id, actor_id, principal_type,
+				 channel_id, turn_id, status, session_generation, delivery_fence,
+				 authorization_revision, model_configuration_revision, model_option_id,
+				 reasoning_level, execution_source, relay_key_purpose, relay_key_subject_id,
+				 relay_key_id, relay_key_version, task_wait_order, task_wait_deadline,
+				 last_event_sequence, created_at, updated_at)
+			select ${executionId}, conversation_id, sandbox_id, agent_id, actor_id, principal_type,
+				channel_id, ${turnId}, 'waiting', session_generation, 0,
+				authorization_revision, model_configuration_revision, model_option_id,
+				reasoning_level, execution_source, relay_key_purpose, relay_key_subject_id,
+				relay_key_id, relay_key_version, ${lastOrder}, ${deadline.value},
+				1, clock_timestamp(), clock_timestamp()
+			from platform.conversation_executions
+			where execution_id = ${original.execution_id}
+			returning execution_id
+		`;
+		if (inserted.length !== 1) throw new StaleDispatchLease();
+		// 与受理排队消息相同：新 Execution 带上原发送者已核对的任务授权边界与审计。
+		await insertTaskAuthorization(transaction, {
+			executionId,
+			boundary: authorization.boundary as TaskAuthorizationBoundaryV1,
+			traceId: supplement.trace_id,
+			requestId: supplement.request_id ?? supplement.trace_id,
+		});
+		const [cursor] = await transaction<{ value: string }[]>`
+			update platform.conversations
+			set last_conversation_cursor = last_conversation_cursor + 1,
+				updated_at = greatest(updated_at, clock_timestamp())
+			where id = ${conversationId}
+			returning last_conversation_cursor::text as value
+		`;
+		if (!cursor) throw new StaleDispatchLease();
+		const eventId = randomUUID();
+		const event = { type: "task.status", status: "waiting" } as const;
+		await transaction`
+			insert into platform.conversation_events
+				(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+				 conversation_cursor, event_type, event_payload, event_digest, source,
+				 runtime_cursor, occurred_at)
+			values (${eventId}, ${conversationId}, ${executionId}, ${`platform:${eventId}`},
+				1, ${cursor.value}, ${event.type}, ${transaction.json(event)},
+				${createHash("sha256").update(JSON.stringify(event)).digest("hex")},
+				'platform', null, clock_timestamp())
+		`;
+		await transaction`
+			update platform.conversation_messages
+			set execution_id = ${executionId}, updated_at = clock_timestamp()
+			where message_id = ${message.message_id} and conversation_id = ${conversationId}
+		`;
+		await transaction`
+			update platform.files
+			set record = jsonb_set(jsonb_set(record, '{executionId}', to_jsonb(${executionId}::text)),
+					'{revision}', to_jsonb((record->>'revision')::bigint + 1)),
+				updated_at = clock_timestamp()
+			where conversation_id = ${conversationId}
+				and record->>'messageId' = ${message.message_id}
+				and record->>'executionId' = ${original.execution_id}
+		`;
+		await transaction`
+			insert into platform.outbox_items
+				(id, scope_type, scope_id, operation, payload, trace_id, request_id, trace_parent,
+				 available_at, created_at, updated_at)
+			values (${`conversation:turn:${executionId}`}, 'conversation', ${conversationId},
+				'conversation.turn.submit.v1', ${transaction.json({
+					schemaVersion: 1,
+					conversationId,
+					executionId,
+					messageId: message.message_id,
+					turnId,
+					sessionGeneration,
+					modelConfigurationRevision:
+						original.model_configuration_revision === null
+							? null
+							: queueCount(original.model_configuration_revision),
+					modelOptionId: original.model_option_id,
+					reasoningLevel: original.reasoning_level,
+				})}, ${supplement.trace_id}, ${supplement.request_id}, ${supplement.trace_parent},
+				'infinity'::timestamptz, clock_timestamp(), clock_timestamp())
+		`;
+		await transaction`
+			insert into platform.conversation_audit_events
+				(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id,
+				 request_id, occurred_at)
+			values (${randomUUID()}, ${conversationId}, ${executionId},
+				${original.agent_id}, ${original.actor_id}, 'conversation.message.queued',
+				${supplement.trace_id}, ${supplement.request_id}, clock_timestamp())
+		`;
+		// 企微回执随消息改绑新 Execution：原消息的回执不再被视为已合并，各自承担自己的回复。
+		await transaction`
+			update platform.wecom_receipts
+			set execution_id = ${executionId}, updated_at = clock_timestamp()
+			where id = ${supplement.request_id ?? ""} and execution_id = ${original.execution_id}
+		`;
+		if (claimed) claimedQueued = true;
+		else
+			await transaction`
+				update platform.outbox_items
+				set status = 'succeeded', lease_owner = null, lease_expires_at = null,
+					updated_at = clock_timestamp()
+				where id = ${supplement.id}
+			`;
+	}
+	return claimedQueued;
 }

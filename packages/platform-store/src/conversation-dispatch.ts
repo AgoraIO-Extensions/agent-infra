@@ -6,6 +6,9 @@ import {
 	type ConversationDispatchOperationV1,
 	type ConversationDispatchStateTransitionV1,
 	type ConversationDispatchStorePortV1,
+	conversationQueueCapacityV1,
+	conversationQueueReplyLeadMsV1,
+	conversationQueueWaitMsV1,
 	decideConversationDispatchCapacityV1,
 	decideConversationDispatchRetryTransitionV1,
 	parseConversationPersistedEventPayloadV1,
@@ -44,6 +47,7 @@ import {
 	isolationProjection,
 	lockOutbox,
 	ownedState,
+	queueSupplementMessages,
 	readGenerationIsolation,
 	readStop,
 	renewLease,
@@ -1419,6 +1423,40 @@ export class PostgresConversationDispatchStoreV1
 				returning id
 			`;
 			if (rows.length !== 1) throw new StaleDispatchLease();
+		});
+	}
+
+	/**
+	 * #3375：补充指令转入排队（工程 Spec §12.5）。在本次补充指令的 Conversation 锁事务内转换它与
+	 * 同一 Execution 之后仍待投递的补充指令；进入排队时 outbox 以“已转排队”终结，否则按“原回复
+	 * 已结束”失败。
+	 */
+	async queueSupplement(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}): Promise<boolean> {
+		requireClaim(input.claim);
+		if (input.claim.operation !== "conversation.turn.supplement.v1")
+			throw new TypeError("Only a supplementary instruction can be queued");
+		return transactionResult(this.#client, async (transaction) => {
+			const state = await ownedState(transaction, input.claim, true);
+			if (!state) throw new StaleDispatchLease();
+			const queued = await queueSupplementMessages(
+				transaction,
+				state,
+				input.claim,
+				{
+					capacity: conversationQueueCapacityV1,
+					waitMs: conversationQueueWaitMsV1,
+					replyLeadMs: conversationQueueReplyLeadMsV1,
+				},
+			);
+			await closeOutbox(
+				transaction,
+				state,
+				input.claim,
+				queued ? "succeeded" : "failed",
+				queued ? "SUPPLEMENT_QUEUED" : "ORIGINAL_RESPONSE_ALREADY_FINISHED",
+			);
 		});
 	}
 
