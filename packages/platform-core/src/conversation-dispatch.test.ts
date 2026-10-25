@@ -2525,6 +2525,24 @@ describe("Conversation Worker dispatch", () => {
 				expect(inner.sideEffectCount()).toBe(1);
 			});
 
+			it("reports a failed batch before a non-retryable stream failure", async () => {
+				const { runtimeHost } = host(async function* () {
+					yield runtimeEvent(1, "running");
+					yield text(2);
+					throw new ConversationRuntimeHostError(
+						"RUNTIME_PROTOCOL_INVALID",
+						false,
+					);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				batchedEvents(h).failNextBatch = true;
+				// 增量没有提交，持久化失败可重试；不能按流错误拒绝这次执行。
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "retry",
+				});
+				expect(h.store.current.runtimeCursor).toBe("cursor-1");
+			});
+
 			it("commits deltas read before a stream failure", async () => {
 				const { runtimeHost, acknowledged } = host(async function* () {
 					yield runtimeEvent(1, "running");

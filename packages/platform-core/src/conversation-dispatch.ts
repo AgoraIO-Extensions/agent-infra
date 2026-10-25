@@ -538,10 +538,11 @@ export function createConversationDispatchUseCaseV1(
 										},
 									);
 					} catch (error) {
-						// 流中断前已读到的增量照常提交，恢复时从已提交游标继续。
+						// 流中断前已读到的增量照常提交，恢复时从已提交游标继续。提交失败或已失去
+						// 租约时以提交结果为准，不用流错误掩盖。
 						pending = undefined;
-						if (buffered.length > 0)
-							await flushBuffered().catch(() => undefined);
+						if ((await flushBuffered()) === "stale")
+							return { schemaVersion: 1, outcome: "stale" };
 						throw error;
 					}
 					if (step === "idle") {
