@@ -17559,6 +17559,150 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 	});
 });
 
+// #3373：submit V2 在原生提交点（turn/start）之前失败时，Driver 删除本操作的记录并声明未提交，
+// 同一 Execution 以新的 Grant 重提即被受理；原生会话不被残留的已准备操作阻塞。
+describe("Codex not-submitted declarations (#3373)", () => {
+	const attachmentCommandV2 = (id: string) =>
+		submitCommandV2({
+			operationId: `execution-${id}`,
+			executionId: `execution-${id}`,
+			turnId: `turn-${id}`,
+			input: { text: id, attachments: ["file-txt"] },
+		});
+	const turnStarts = (bridge: TestCodexBridge) =>
+		bridge.requests.filter(({ method }) => method === "turn/start");
+
+	it("declares an unreachable file exchange before any native call and accepts the resubmission", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		await codexAttachmentWorkspace(path);
+		const command = attachmentCommandV2("exchange");
+		const requestsBefore = bridge.requests.length;
+
+		await expect(
+			driver.execute(command, {
+				fileBridge: {
+					...codexAttachmentBridge(),
+					readInput: async () => {
+						throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
+					},
+				},
+			}),
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			retryable: true,
+			driverFailureKind: "not_submitted",
+			reason: "file_input_unavailable",
+		});
+		expect(bridge.requests).toHaveLength(requestsBefore);
+		expect(await driver.lookupOperation(command)).toEqual({ state: "missing" });
+
+		const resubmitted = await driver.execute(command, {
+			fileBridge: codexAttachmentBridge(),
+		});
+		expect(resubmitted.result).toEqual({
+			outcome: "accepted",
+			status: "running",
+		});
+		expect(turnStarts(bridge)).toHaveLength(1);
+	});
+
+	it("releases a failed workspace materialization so the Conversation keeps accepting Turns", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const workspace = await codexAttachmentWorkspace(path);
+		const outside = join(directory, "outside");
+		await mkdir(outside, { mode: 0o700 });
+		await symlink(outside, join(workspace, ".agent-infra"));
+		const failed = attachmentCommandV2("materialization");
+
+		// 物化在 thread 建立之后、turn/start 之前失败：已准备的提交操作被删除。
+		await expect(
+			driver.execute(failed, { fileBridge: codexAttachmentBridge() }),
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			reason: "session_preparation_failed",
+		});
+		expect(turnStarts(bridge)).toHaveLength(0);
+		expect(await driver.lookupOperation(failed)).toEqual({ state: "missing" });
+		expect(await readdir(outside)).toEqual([]);
+
+		// 同一 Conversation 的下一条消息不会被判为 RUNTIME_SESSION_BLOCKED。
+		await rm(join(workspace, ".agent-infra"));
+		const next = await driver.execute(attachmentCommandV2("after"), {
+			fileBridge: codexAttachmentBridge(),
+		});
+		expect(next.result).toEqual({ outcome: "accepted", status: "running" });
+		expect(turnStarts(bridge)).toHaveLength(1);
+	});
+
+	it("declares a Grant that lapses before turn/start and accepts the same Execution with a new Grant", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		await codexAttachmentWorkspace(path);
+		const command = attachmentCommandV2("grant");
+		let revalidations = 0;
+		const lapsing = {
+			...codexAttachmentBridge(),
+			revalidate() {
+				revalidations += 1;
+				// 第二次复核位于原生提交边界：Grant 在 thread 准备期间过期。
+				if (revalidations === 2)
+					throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_EXPIRED");
+			},
+		};
+
+		await expect(
+			driver.execute(command, { fileBridge: lapsing }),
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			reason: "session_preparation_failed",
+			cause: expect.objectContaining({
+				message: "RUNTIME_FILE_BRIDGE_CONTEXT_EXPIRED",
+			}),
+		});
+		expect(revalidations).toBe(2);
+		expect(turnStarts(bridge)).toHaveLength(0);
+		expect(await driver.lookupOperation(command)).toEqual({ state: "missing" });
+
+		const resubmitted = await driver.execute(command, {
+			fileBridge: codexAttachmentBridge(),
+		});
+		expect(resubmitted.result).toEqual({
+			outcome: "accepted",
+			status: "running",
+		});
+		expect(turnStarts(bridge)).toHaveLength(1);
+	});
+
+	it("keeps a V2 Turn unknown once the native Session start is uncertain", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		bridge.dropNextThreadStartResponse();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const command = submitCommandV2();
+
+		// 原生调用已经发出、结果无法确认：不声明未提交，保持受理不明。
+		const failure = await driver
+			.execute(command)
+			.catch((error: unknown) => error);
+		expect(failure).toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(failure).not.toHaveProperty("driverFailureKind", "not_submitted");
+		expect(await driver.lookupOperation(command)).toEqual({ state: "unknown" });
+	});
+});
+
 describe("Codex supplementary instructions through turn/steer (#3375)", () => {
 	const notActive = {
 		outcome: "rejected",
@@ -17687,53 +17831,58 @@ describe("Codex supplementary instructions through turn/steer (#3375)", () => {
 			"a different output schema",
 			{ code: -32_600, message: "active turn uses a different output schema" },
 		],
-	])("persists an explicit app-server refusal for %s as a stable rejection", async (_name, error) => {
-		const { path, bridge, driver, submitted, command } =
-			await steeringFixture();
-		bridge.rejectNextSteer(error);
+	])(
+		"persists an explicit app-server refusal for %s as a stable rejection",
+		async (_name, error) => {
+			const { path, bridge, driver, submitted, command } =
+				await steeringFixture();
+			bridge.rejectNextSteer(error);
 
-		const rejected = await driver.execute(command);
+			const rejected = await driver.execute(command);
 
-		expect(rejected).toEqual(
-			supplementRecord(submitted.nativeSessionRef, notActive),
-		);
-		// 明确拒绝不是协议故障：原生进程与原 Turn 保持可用。
-		expect(bridge.isClosed()).toBe(false);
-		expect(await driver.execute(command)).toEqual(rejected);
-		expect(await driver.lookupOperation(command)).toEqual({
-			state: "found",
-			record: rejected,
-		});
-		expect(bridge.steerRequests()).toHaveLength(1);
-		expect(await readFile(path, "utf8")).not.toContain(error.message);
-		expect(
-			await driver.getStatus(submitted.nativeSessionRef, "execution-codex"),
-		).toBe("running");
-	});
-
-	it.each([
-		"disconnected",
-		"unclassified",
-	] as const)("keeps a %s steer unknown and never resubmits it", async (failure) => {
-		const { bridge, driver, submitted, command } = await steeringFixture();
-		if (failure === "disconnected") bridge.dropNextSteerResponse();
-		else
-			bridge.rejectNextSteer({
-				code: -32_603,
-				message: "failed to steer turn: synthetic-private-detail",
+			expect(rejected).toEqual(
+				supplementRecord(submitted.nativeSessionRef, notActive),
+			);
+			// 明确拒绝不是协议故障：原生进程与原 Turn 保持可用。
+			expect(bridge.isClosed()).toBe(false);
+			expect(await driver.execute(command)).toEqual(rejected);
+			expect(await driver.lookupOperation(command)).toEqual({
+				state: "found",
+				record: rejected,
 			});
+			expect(bridge.steerRequests()).toHaveLength(1);
+			expect(await readFile(path, "utf8")).not.toContain(error.message);
+			expect(
+				await driver.getStatus(submitted.nativeSessionRef, "execution-codex"),
+			).toBe("running");
+		},
+	);
 
-		const unknown = await driver.execute(command);
+	it.each(["disconnected", "unclassified"] as const)(
+		"keeps a %s steer unknown and never resubmits it",
+		async (failure) => {
+			const { bridge, driver, submitted, command } = await steeringFixture();
+			if (failure === "disconnected") bridge.dropNextSteerResponse();
+			else
+				bridge.rejectNextSteer({
+					code: -32_603,
+					message: "failed to steer turn: synthetic-private-detail",
+				});
 
-		expect(unknown).toEqual(
-			supplementRecord(submitted.nativeSessionRef, acceptanceUnknown),
-		);
-		// 无法判定的 JSON-RPC 错误不终止原生进程；传输断开本身已经结束该进程。
-		expect(bridge.isClosed()).toBe(failure === "disconnected");
-		expect(await driver.execute(command)).toEqual(unknown);
-		expect(await driver.lookupOperation(command)).toEqual({ state: "unknown" });
-		expect(bridge.steerRequests()).toHaveLength(1);
-	});
+			const unknown = await driver.execute(command);
+
+			expect(unknown).toEqual(
+				supplementRecord(submitted.nativeSessionRef, acceptanceUnknown),
+			);
+			// 无法判定的 JSON-RPC 错误不终止原生进程；传输断开本身已经结束该进程。
+			expect(bridge.isClosed()).toBe(failure === "disconnected");
+			expect(await driver.execute(command)).toEqual(unknown);
+			expect(await driver.lookupOperation(command)).toEqual({
+				state: "unknown",
+			});
+			expect(bridge.steerRequests()).toHaveLength(1);
+		},
+	);
 
 	it("confirms an unknown steer only from a native userMessage that echoes the messageId", async () => {
 		const { bridge, driver, submitted, command } = await steeringFixture();

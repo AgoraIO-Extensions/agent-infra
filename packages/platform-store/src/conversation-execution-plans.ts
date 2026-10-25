@@ -11,6 +11,9 @@ import type {
 	CreateConversationWritePlanV1,
 } from "@agent-infra/platform-core";
 import {
+	conversationAttachmentMergeMaxCountV1,
+	conversationQueueCapacityV1,
+	conversationQueueWaitMsV1,
 	conversationStopConfirmationTimeoutMsV1,
 	parseSessionSandboxBindingV1,
 	requestedModelDisplayNameV1,
@@ -33,6 +36,8 @@ import {
 	parseMessageOutbox,
 	parseModelSelectionAudit,
 	parseModelSelectionFallback,
+	parseQueuedExecution,
+	parseQueueStatusEvent,
 	parseRegenerationAudit,
 	parseRegenerationOutbox,
 	parseStopAudit,
@@ -63,13 +68,17 @@ function validateModelSelectionFallback(
 		readonly occurredAt: Date;
 		readonly executionId: string;
 		readonly lastEventSequence: number;
+		/** 排队消息先写一条 task.status 事件，会话游标因此多推进一格。 */
+		readonly queuedStatusEvent?: boolean;
 	},
 ): void {
 	const current = input.state.conversation;
 	if (
 		!current ||
 		input.conversation.lastConversationCursor !==
-			current.lastConversationCursor + (fallback ? 1 : 0)
+			current.lastConversationCursor +
+				(fallback ? 1 : 0) +
+				(input.queuedStatusEvent ? 1 : 0)
 	) {
 		unavailable();
 	}
@@ -166,33 +175,30 @@ export function validateMessagePlan(
 	state: ConversationExecutionStateV1,
 ): ConversationMessageWritePlanV1 {
 	const authority = parseAuthority(request.authority);
-	const input = exactRecord(
-		value,
-		value && typeof value === "object" && Object.hasOwn(value, "execution")
-			? [
-					"schemaVersion",
-					"kind",
-					"conversation",
-					"message",
-					"execution",
-					"outboxIntent",
-					"auditEvent",
-					"modelSelectionFallback",
-					"result",
-					"idempotency",
-				]
-			: [
-					"schemaVersion",
-					"kind",
-					"conversation",
-					"message",
-					"outboxIntent",
-					"auditEvent",
-					"modelSelectionFallback",
-					"result",
-					"idempotency",
-				],
-	);
+	const hasExecution =
+		!!value && typeof value === "object" && Object.hasOwn(value, "execution");
+	const hasAttachmentWindow =
+		!!value &&
+		typeof value === "object" &&
+		Object.hasOwn(value, "attachmentWindow");
+	const queued =
+		!!value &&
+		typeof value === "object" &&
+		(value as { kind?: unknown }).kind === "queued";
+	const input = exactRecord(value, [
+		"schemaVersion",
+		"kind",
+		...(hasAttachmentWindow ? ["attachmentWindow"] : []),
+		"conversation",
+		"message",
+		...(hasExecution ? ["execution"] : []),
+		...(hasExecution && queued ? ["statusEvent"] : []),
+		"outboxIntent",
+		"auditEvent",
+		"modelSelectionFallback",
+		"result",
+		"idempotency",
+	]);
 	if (input.schemaVersion !== 1 || !state.conversation) unavailable();
 	const conversation = parseConversation(input.conversation);
 	const message = parseMessage(input.message, {
@@ -249,7 +255,20 @@ export function validateMessagePlan(
 		return unavailable();
 	}
 	if (input.kind === "initial") {
-		if (state.activeExecution || conversation.status !== "active")
+		if (
+			state.activeExecution ||
+			(state.queue?.waitingCount ?? 0) > 0 ||
+			conversation.status !== "active"
+		)
+			unavailable();
+		// #3374：只有企微智能机器人只含附件的消息打开合并窗口。
+		if (
+			hasAttachmentWindow &&
+			(input.attachmentWindow !== "open" ||
+				authority.attachmentMergeWindow !== true ||
+				request.command.text !== "" ||
+				(request.command.attachments?.length ?? 0) === 0)
+		)
 			unavailable();
 		const execution = parseExecution(input.execution);
 		if (
@@ -291,7 +310,12 @@ export function validateMessagePlan(
 	} else if (input.kind === "supplement") {
 		const active = state.activeExecution;
 		if (
+			hasAttachmentWindow ||
 			!active ||
+			// 补充指令只给已被 Runtime 接受、仍在运行且没有排队消息的回复（§12.5）。
+			active.status !== "processing" ||
+			active.stopPending ||
+			(state.queue?.waitingCount ?? 0) > 0 ||
 			current.status !== "active" ||
 			conversation.status !== "active" ||
 			message.executionId !== active.executionId ||
@@ -313,6 +337,98 @@ export function validateMessagePlan(
 			occurredAt: message.createdAt,
 			executionId: active.executionId,
 			lastEventSequence: active.lastEventSequence,
+		});
+	} else if (input.kind === "merge") {
+		// #3374：并入合并窗口内尚未认领的 Execution；Store 已在 Conversation 锁内判定窗口仍打开。
+		const active = state.activeExecution;
+		const added = request.command.attachments?.length ?? 0;
+		if (
+			hasExecution ||
+			!active?.attachmentMerge ||
+			(state.queue?.waitingCount ?? 0) > 0 ||
+			authority.attachmentMergeWindow !== true ||
+			active.status !== "submitted" ||
+			active.stopPending ||
+			active.actorId !== authority.actorId ||
+			(added > 0 &&
+				active.attachmentMerge.attachmentCount + added >
+					conversationAttachmentMergeMaxCountV1) ||
+			input.attachmentWindow !==
+				(request.command.text === "" ? "extend" : "close") ||
+			current.status !== "active" ||
+			conversation.status !== "active" ||
+			message.executionId !== active.executionId ||
+			result.executionId !== active.executionId ||
+			outbox.operation !== "conversation.turn.submit.v1" ||
+			outbox.turnId !== active.turnId ||
+			outbox.sessionGeneration !== active.sessionGeneration ||
+			!sameModelSelection(outbox, active) ||
+			audit.action !== "conversation.message.accepted"
+		) {
+			return unavailable();
+		}
+		validateModelSelectionFallback(modelSelectionFallback, {
+			state,
+			conversation,
+			authority,
+			requestId: request.command.requestId,
+			traceId: request.command.traceId,
+			occurredAt: message.createdAt,
+			executionId: active.executionId,
+			lastEventSequence: active.lastEventSequence,
+		});
+	} else if (input.kind === "queued") {
+		// 排队消息（§12.5）：会话被占用、尚有排队容量，写入等待 Execution 与 task.status 事件。
+		const queue = state.queue;
+		const execution = parseQueuedExecution(input.execution);
+		const statusEvent = parseQueueStatusEvent(input.statusEvent);
+		if (
+			hasAttachmentWindow ||
+			!queue?.agent ||
+			(!state.activeExecution && queue.waitingCount === 0) ||
+			queue.waitingCount >= conversationQueueCapacityV1 ||
+			conversation.status !== current.status ||
+			execution.executionId !== message.executionId ||
+			execution.executionId !== result.executionId ||
+			result.queuePosition !== queue.waitingCount + 1 ||
+			execution.conversationId !== current.conversationId ||
+			execution.agentId !== authority.agentId ||
+			execution.actorId !== authority.actorId ||
+			execution.channelId !== authority.channelId ||
+			execution.sessionGeneration !== current.sessionGeneration ||
+			execution.deliveryFence !== 0 ||
+			execution.authorizationRevision !== authority.authorizationRevision ||
+			execution.taskWaitOrder !== queue.agent.lastWaitOrder + 1 ||
+			execution.taskWaitDeadline.getTime() <= execution.createdAt.getTime() ||
+			execution.taskWaitDeadline.getTime() - execution.createdAt.getTime() >
+				conversationQueueWaitMsV1 ||
+			!modelSelectionMatchesConfigurationRevision(
+				execution,
+				state.modelConfiguration,
+			) ||
+			conversation.selectedModelOptionId !== execution.modelOptionId ||
+			conversation.selectedReasoningLevel !== execution.reasoningLevel ||
+			!sameModelSelection(outbox, execution) ||
+			outbox.operation !== "conversation.turn.submit.v1" ||
+			outbox.executionId !== execution.executionId ||
+			outbox.turnId !== execution.turnId ||
+			outbox.sessionGeneration !== execution.sessionGeneration ||
+			statusEvent.conversationCursor !== current.lastConversationCursor + 1 ||
+			!sameDate(message.createdAt, execution.createdAt) ||
+			audit.action !== "conversation.message.queued"
+		) {
+			return unavailable();
+		}
+		validateModelSelectionFallback(modelSelectionFallback, {
+			state,
+			conversation,
+			authority,
+			requestId: request.command.requestId,
+			traceId: request.command.traceId,
+			occurredAt: message.createdAt,
+			executionId: execution.executionId,
+			lastEventSequence: statusEvent.sequence,
+			queuedStatusEvent: true,
 		});
 	} else {
 		return unavailable();

@@ -27,6 +27,10 @@ import type {
 	AgentApplicationCreateRequestV2Writable,
 	DeploymentConfigurationProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
+import {
+	expectBackgroundRereadKeeps,
+	expectFatalRereadHandsFocus,
+} from "./background-reread";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { recordApiRequests } from "./generated-client-paths";
 import {
@@ -2775,6 +2779,7 @@ for (const available of [true, false]) {
 						status: "available",
 						publicOrigin: "https://connection.example.test",
 						mcpPath: "/mcp",
+						webPath: "/connection/connections",
 						configFingerprint: "a".repeat(64),
 					}),
 				}),
@@ -2791,7 +2796,7 @@ for (const available of [true, false]) {
 			await expect(connection).toHaveAttribute("target", "_blank");
 			await expect(connection).toHaveAttribute(
 				"href",
-				"https://connection.example.test/mcp",
+				"https://connection.example.test/connection/connections",
 			);
 		} else {
 			await expect(connection).toHaveCount(0);
@@ -5709,12 +5714,13 @@ async function stubConnectionCapability(
 
 const availableCapability = (
 	publicOrigin: string = connectionOrigin,
-	mcpPath = "/mcp",
+	webPath = "/connection/connections",
 ) => ({
 	schemaVersion: 1,
 	status: "available",
 	publicOrigin,
-	mcpPath,
+	mcpPath: "/mcp",
+	webPath,
 	configFingerprint: "a".repeat(64),
 });
 
@@ -5754,7 +5760,10 @@ test.describe("Agent detail design alignment", () => {
 		])
 			await expect(notice.getByText(text, { exact: true })).toBeVisible();
 		const open = notice.getByRole("link", { name: "打开 Connection" });
-		await expect(open).toHaveAttribute("href", `${connectionOrigin}/mcp`);
+		await expect(open).toHaveAttribute(
+			"href",
+			`${connectionOrigin}/connection/connections`,
+		);
 		await expect(open).toHaveAttribute("target", "_blank");
 		await expect(open).toHaveAttribute("rel", /noopener/);
 		await expect(open).toHaveAttribute("rel", /noreferrer/);
@@ -5799,7 +5808,7 @@ test.describe("Agent detail design alignment", () => {
 		await expect(notice.getByText("等待 Connection 授权返回")).toBeVisible();
 		await expect(
 			notice.getByRole("link", { name: "返回查看授权状态" }),
-		).toHaveAttribute("href", `${connectionOrigin}/mcp`);
+		).toHaveAttribute("href", `${connectionOrigin}/connection/connections`);
 		await capture(page, info, "agent-detail-connection-handoff");
 		// Platform 不读取 Connection 的授权结果，也不发写请求。
 		expect(mainRequests).toEqual([]);
@@ -5921,7 +5930,7 @@ test.describe("Agent detail design alignment", () => {
 		test.setTimeout(120_000);
 		await fixture(page, "employee");
 		const inputs: [string, string][] = [
-			[connectionOrigin, "/mcp"],
+			[connectionOrigin, "/connection/connections"],
 			[connectionOrigin, "//evil.example/mcp"],
 			[connectionOrigin, "/\\evil.example/mcp"],
 			[connectionOrigin, "\\\\evil.example\\mcp"],
@@ -5977,8 +5986,8 @@ test.describe("Agent detail design alignment", () => {
 		});
 		// 合法输入两处都给出同一地址；其余每组两处都没有链接。
 		expect(results[0]).toMatchObject({
-			nav: `${connectionOrigin}/mcp`,
-			detail: `${connectionOrigin}/mcp`,
+			nav: `${connectionOrigin}/connection/connections`,
+			detail: `${connectionOrigin}/connection/connections`,
 		});
 		for (const result of results.slice(1))
 			expect(result, JSON.stringify(result.input)).toEqual({
@@ -7652,3 +7661,93 @@ test("an in-flight image upgrade leaves every lifecycle action available (#3291 
 	await expectNoDuplicateControls(page, "Owner 配置（镜像升级中重启，#3291）");
 	await expectCleanPage(page, errors);
 });
+
+// #3419 N14-08（N14-3-01）：审批队列已有数据时，焦点在「审阅：…」、搜索框、审阅弹窗的「批准申请」或已填写未提交的
+// 驳回原因上，回到标签页的后台重读读到不可重试的失败（403，或 401 映射为不可用）：队列（连同弹窗与未提交的原因）
+// 换成「审批列表不可用，请联系管理员。」，壳层焦点丢失兜底把焦点交给 h1「审批申请」，不落到 body、不滚动页面。
+// 先覆盖挂起、可重试失败与恢复（#3387：内容、焦点与未提交的原因保留），两视口一致。
+const approvalsQueue = /^\/api\/v2\/admin\/agent-applications$/;
+for (const target of [
+	{ name: "审阅按钮", status: 403 },
+	{ name: "审阅按钮", status: 401 },
+	{ name: "搜索框", status: 403 },
+	{ name: "审阅弹窗", status: 403 },
+	{ name: "驳回原因", status: 403 },
+] as const)
+	test(`a background reread that cannot be retried (${target.status}) hands focus from the approval ${target.name} to the h1 (#3419 N14-08)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		await fixture(page, "admin");
+		await page.goto("/admin/approvals");
+		const main = page.locator("#main-content");
+		const review = main.getByRole("button", { name: /^审阅：/ });
+		await expect(review).toBeVisible();
+		let control: Locator;
+		let kept: () => Promise<void> = async () => {
+			await expect(review).toBeVisible();
+		};
+		if (target.name === "审阅按钮") {
+			control = await pinElement(review, "approval-review");
+		} else if (target.name === "搜索框") {
+			control = await pinElement(
+				main.getByRole("searchbox", { name: "搜索申请" }),
+				"approval-search",
+			);
+			await control.focus();
+			await page.keyboard.type("Rel");
+			kept = async () => {
+				await expect(control).toHaveValue("Rel");
+			};
+		} else {
+			await review.click();
+			let dialog = page.getByRole("dialog", { name: "审阅创建申请" });
+			await expect(dialog).toBeVisible();
+			if (target.name === "审阅弹窗") {
+				control = await pinElement(
+					dialog.getByRole("button", { name: "批准申请" }),
+					"approval-approve",
+				);
+				kept = async () => {
+					await expect(control).toBeVisible();
+				};
+			} else {
+				await dialog.getByRole("button", { name: "驳回并说明" }).click();
+				dialog = page.getByRole("dialog", { name: "填写驳回原因" });
+				control = await pinElement(
+					dialog.getByLabel("驳回原因", { exact: true }),
+					"approval-reason",
+				);
+				await control.fill("未提交的驳回原因");
+				kept = async () => {
+					await expect(control).toHaveValue("未提交的驳回原因");
+				};
+			}
+		}
+		await control.focus();
+		await expectBackgroundRereadKeeps(page, {
+			path: approvalsQueue,
+			focus: control,
+			context: `审批（${target.name}）`,
+			expectKept: kept,
+		});
+		await expectFatalRereadHandsFocus(page, {
+			path: approvalsQueue,
+			status: target.status,
+			focus: control,
+			target: main.getByRole("heading", { level: 1, name: "审批申请" }),
+			context: `审批（${target.name}）`,
+			expectReplaced: async () => {
+				await expect(
+					main.getByRole("alert").filter({
+						hasText: "审批列表不可用，请联系管理员。",
+					}),
+				).toBeVisible();
+				await expect(control).toHaveCount(0);
+				await expect(page.getByRole("dialog")).toHaveCount(0);
+			},
+		});
+		await expectNoDuplicateControls(page, `审批（${target.name}，#3419）`);
+		await expectCleanPage(page, errors);
+	});

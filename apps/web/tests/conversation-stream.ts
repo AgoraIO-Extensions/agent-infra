@@ -11,6 +11,8 @@ export async function keepConversationStreamOpen(page: Page) {
 			const request = new Request(input, init);
 			const response = await realFetch(request);
 			if (!new URL(request.url).pathname.endsWith("/events")) return response;
+			// 失败响应（503 等）原样返回：错误体照常读完，事件流按失败处理与重连（#3419 N14-11）。
+			if (!response.ok) return response;
 			void response.body?.cancel();
 			const body = new ReadableStream<Uint8Array>({
 				start(controller) {

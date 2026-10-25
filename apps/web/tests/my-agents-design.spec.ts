@@ -22,7 +22,10 @@ import type {
 	AgentProjectionV2,
 	DeploymentConfigurationProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
-import { expectBackgroundRereadKeeps } from "./background-reread";
+import {
+	expectBackgroundRereadKeeps,
+	expectFatalRereadHandsFocus,
+} from "./background-reread";
 import {
 	expectFocusableBusy,
 	expectFocusSettled,
@@ -3579,6 +3582,175 @@ for (const menu of ["标准模板", "模型端点：模型选项 1"])
 		await noHorizontalOverflow(page);
 	});
 
+// #3418 N14-06（G14-2-02）：部署选项读取失败时（N13-08）模型选择器禁用，但已显示的模型选项不自相矛盾：「模型端点」
+// 与「默认模型」按最近一次读到的显示名（「Primary endpoint」「Primary endpoint · gpt-5」），不显示原始端点 ID、
+// 不写「已移除模型」；「允许的推理档位」保留已选档位（禁用）并说明「部署选项读取后可调整。」，与仍显示的模型和
+// 默认推理档位一致；「添加模型选项」不再添加空行（aria-disabled，可聚焦）。打开页面就读取失败、没有读到过显示名时
+// 端点写「暂时无法读取端点名称」，默认模型只写模型名；失败不可重试（403）时同样不回退 ID。「重新加载部署选项」读到后
+// 恢复可编辑。两视口一致。
+const modelOptionApplication = () =>
+	application({
+		status: "rejected",
+		decision: { decidedAt: "2026-09-07T00:00:00Z", reason: "请调整后重提" },
+		configuration: {
+			...pendingApplication.configuration,
+			modelOptions: [
+				{
+					optionId: "endpoint-primary:gpt-5",
+					modelId: "gpt-5",
+					displayName: "gpt-5",
+					reasoningLevels: ["medium"],
+				},
+			],
+			defaultModelOptionId: "endpoint-primary:gpt-5",
+			defaultReasoningLevel: "medium",
+		},
+	});
+for (const scenario of [
+	{ name: "create 503", mode: "create", failure: "503" },
+	{ name: "create network", mode: "create", failure: "network" },
+	{ name: "create 403", mode: "create", failure: "403" },
+	{ name: "update 503", mode: "update", failure: "503" },
+	{ name: "update opened unreadable", mode: "update", failure: "open" },
+] as const)
+	test(`an unreadable deployment keeps the model option labels consistent: ${scenario.name} (#3418 N14-06)`, async ({
+		page,
+	}, info) => {
+		await viewportFor(page, info.project.name === "mobile");
+		const pageErrors = trackPageErrors(page);
+		const { commands } = await fixture(page, {
+			applications: [modelOptionApplication()],
+		});
+		let failing = scenario.failure === "open";
+		await page.route(
+			(url) => url.pathname === deploymentPath,
+			(route) => {
+				if (!failing) return route.fulfill({ json: deploymentConfiguration });
+				if (scenario.failure === "network")
+					return route.abort("internetdisconnected");
+				return route.fulfill(
+					scenario.failure === "403"
+						? {
+								status: 403,
+								json: {
+									...deploymentUnavailable,
+									code: "RESOURCE_UNAVAILABLE",
+									retryable: false,
+								},
+							}
+						: { status: 503, json: deploymentUnavailable },
+				);
+			},
+		);
+		await page.goto(
+			scenario.mode === "update"
+				? "/my-agents/application-browser-1/edit"
+				: "/my-agents/new",
+		);
+		const main = page.locator("#main-content");
+		const endpoint = page.getByRole("combobox", {
+			name: "模型端点：模型选项 1",
+			exact: true,
+		});
+		const model = page.getByRole("combobox", {
+			name: "模型：模型选项 1",
+			exact: true,
+		});
+		const defaultModel = page.getByRole("combobox", {
+			name: "默认模型",
+			exact: true,
+		});
+		const defaultLevel = page.getByRole("combobox", {
+			name: "默认推理档位",
+			exact: true,
+		});
+		const balanced = page.getByRole("checkbox", {
+			name: "均衡：模型选项 1",
+			exact: true,
+		});
+		const addModel = page.getByRole("button", {
+			name: "添加模型选项",
+			exact: true,
+		});
+		const value = (control: Locator) =>
+			control.locator('[data-slot="select-value"]');
+		if (scenario.mode === "update")
+			await page.getByRole("checkbox", { name: "修改模型配置" }).click();
+		if (scenario.failure !== "open") {
+			if (scenario.mode === "create") {
+				await pick(page, "标准模板", "Codex");
+				await pick(page, "模型端点：模型选项 1", "Primary endpoint");
+				await pick(page, "模型：模型选项 1", "gpt-5");
+				await balanced.click();
+				await pick(page, "默认模型", "Primary endpoint · gpt-5");
+				await pick(page, "默认推理档位", "均衡");
+			}
+			await expect(value(endpoint)).toHaveText("Primary endpoint");
+			await expect(value(defaultModel)).toHaveText("Primary endpoint · gpt-5");
+			await expect(balanced).toBeChecked();
+			await expect(balanced).toBeEnabled();
+			// 读取挂起时保持原样。
+			const holding = await holdRequests(page, "GET", deploymentPath);
+			failing = true;
+			await rereadDeployment(page);
+			await expect.poll(() => holding.held()).toBe(1);
+			await expect(endpoint).toBeEnabled();
+			await expect(balanced).toBeEnabled();
+			holding.release();
+		}
+		await expect(
+			main.getByText(
+				scenario.failure === "403"
+					? "部署选项暂不可用，请联系管理员。"
+					: "部署选项需要刷新后才能提交标准模板申请。",
+			),
+		).toBeVisible();
+		await expect(endpoint).toBeDisabled();
+		await expect(model).toBeDisabled();
+		await expect(defaultModel).toBeDisabled();
+		const named = scenario.failure !== "open" && scenario.failure !== "403";
+		await expect(value(endpoint)).toHaveText(
+			named ? "Primary endpoint" : "暂时无法读取端点名称",
+		);
+		await expect(value(model)).toHaveText("gpt-5");
+		await expect(value(defaultModel)).toHaveText(
+			named ? "Primary endpoint · gpt-5" : "gpt-5",
+		);
+		await expect(value(defaultLevel)).toHaveText("均衡");
+		await expect(balanced).toBeChecked();
+		await expect(balanced).toBeDisabled();
+		await expect(main.getByText("部署选项读取后可调整。")).toBeVisible();
+		await expect(main.getByText("选择模型后显示可用档位。")).toHaveCount(0);
+		await expect(main).not.toContainText("已移除模型");
+		await expect(main).not.toContainText("endpoint-primary");
+		await expect(addModel).toHaveAttribute("aria-disabled", "true");
+		await addModel.focus();
+		await page.keyboard.press("Enter");
+		await expect(
+			page.getByRole("combobox", { name: "模型端点：模型选项 2" }),
+		).toHaveCount(0);
+		await expect(addModel).toBeFocused();
+		if (scenario.failure !== "403") {
+			// 「重新加载部署选项」读到后恢复可编辑，显示名同读取正常时。
+			failing = false;
+			await main.getByRole("button", { name: "重新加载部署选项" }).click();
+			await expect(endpoint).toBeEnabled();
+			await expect(value(endpoint)).toHaveText("Primary endpoint");
+			await expect(value(defaultModel)).toHaveText("Primary endpoint · gpt-5");
+			await expect(balanced).toBeEnabled();
+			await expect(balanced).toBeChecked();
+			await expect(main.getByText("部署选项读取后可调整。")).toHaveCount(0);
+			await expect(addModel).not.toHaveAttribute("aria-disabled", "true");
+		}
+		expect(commands).toEqual([]);
+		await expectCleanPage(page, pageErrors);
+		await expectNoDuplicateControls(
+			page,
+			`部署选项读取失败的模型选项（${scenario.name}，#3418）`,
+		);
+		await noHorizontalOverflow(page);
+	});
+
 // #3389 N13-09 / N13-10：部署选项读取失败（可重试 503）时从页底提交标准模板申请，创建与修改都被拦下、不发请求
 // （修改申请含先被模板拦下、再重读失败的组合）。没有可操作的出错字段：「标准模板」与模型选择器都禁用，不对
 // 禁用的模型选择器列「请选择…」；焦点交给「重新加载部署选项」，它滚入视口、停在吸顶顶栏之下，经
@@ -3801,3 +3973,81 @@ test("a custom application submitted while the deployment is unreadable leaves n
 	await expectNoDuplicateControls(page, "自定义 Agent 结果页（#3389）");
 	await noHorizontalOverflow(page);
 });
+
+// #3419 N14-07（G14-2-05）：已有数据时回到标签页的后台重读读到不可重试的失败（401 / 404），我的申请、已创建 Agent
+// 列表与修改申请换成失败提示（不经 PageStateCard），原来持有焦点的链接或已修改的输入框随之卸载：壳层焦点丢失
+// 兜底把焦点交给 #main-content（这几页的 h1 不可程序聚焦），不落到 body、不滚动页面。先覆盖挂起、可重试失败与
+// 恢复（#3387），两视口一致。
+for (const status of [401, 404] as const)
+	for (const target of [
+		{
+			name: "我的申请列表",
+			route: "/my-agents",
+			read: "/api/v2/agent-applications",
+			prepare: async (page: Page) =>
+				page.getByRole("link", {
+					name: `查看申请：${pendingApplication.name}`,
+					exact: true,
+				}),
+			replaced: "当前无法查看申请，请联系管理员。",
+		},
+		{
+			name: "已创建 Agent 列表",
+			route: "/my-agents?tab=owned",
+			read: "/api/v2/agents",
+			prepare: async (page: Page) =>
+				page.getByRole("link", { name: `配置与生命周期：${ownedAgent.name}` }),
+			replaced: "当前无法查看你管理的 Agent，请联系管理员。",
+		},
+		{
+			name: "修改申请",
+			route: "/my-agents/application-browser-1/edit",
+			read: "/api/v2/agent-applications/application-browser-1",
+			prepare: async (page: Page) => {
+				const field = page.getByLabel("Agent 名称", { exact: true });
+				await field.fill("未保存的新名称");
+				return field;
+			},
+			replaced: "申请暂不可用",
+		},
+	] as const)
+		test(`a background reread that cannot be retried (${status}) hands focus off the replaced ${target.name} (#3419 N14-07)`, async ({
+			page,
+		}, info) => {
+			await viewportFor(page, info.project.name === "mobile");
+			const pageErrors = trackPageErrors(page);
+			await fixture(page);
+			await page.goto(target.route);
+			const control = await pinElement(
+				await target.prepare(page),
+				"fatal-reread-control",
+			);
+			await control.focus();
+			const main = page.locator("#main-content");
+			await expectBackgroundRereadKeeps(page, {
+				path: target.read,
+				focus: control,
+				context: target.name,
+				expectKept: async () => {
+					await expect(control).toHaveCount(1);
+					await expect(main.getByText(target.replaced)).toHaveCount(0);
+				},
+			});
+			await expectFatalRereadHandsFocus(page, {
+				path: target.read,
+				status,
+				focus: control,
+				target: main,
+				context: target.name,
+				expectReplaced: async () => {
+					await expect(main.getByText(target.replaced)).toBeVisible();
+					await expect(control).toHaveCount(0);
+				},
+			});
+			await expectCleanPage(page, pageErrors);
+			await expectNoDuplicateControls(
+				page,
+				`${target.name}（${status}，#3419）`,
+			);
+			await noHorizontalOverflow(page);
+		});

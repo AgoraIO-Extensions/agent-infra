@@ -23,9 +23,7 @@ function stageManifests(dockerfile) {
 		);
 		if (label && current) current.manifest = JSON.parse(label[1]);
 	}
-	return new Map(
-		[...stages].map(([name, stage]) => [name, stage.manifest]),
-	);
+	return new Map([...stages].map(([name, stage]) => [name, stage.manifest]));
 }
 
 test("standard templates declare supplementary instructions only after Driver conformance", async () => {

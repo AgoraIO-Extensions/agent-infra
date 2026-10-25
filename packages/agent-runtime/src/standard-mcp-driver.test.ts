@@ -298,11 +298,16 @@ it.each([false, true])(
 			operationId: "execution-b",
 			turnId: "turn-b",
 		};
-		if (previous)
+		if (previous) {
+			// #3373：Thread 的工具快照与当前部署不一致时没有发出任何原生调用，声明本次 Turn 未提交。
 			await expect(restored.execute(next)).rejects.toMatchObject({
-				code: "RUNTIME_CODEX_UNAVAILABLE",
+				code: "RUNTIME_TURN_NOT_SUBMITTED",
+				reason: "session_preparation_failed",
 			});
-		else
+			expect(await restored.lookupOperation(next)).toEqual({
+				state: "missing",
+			});
+		} else
 			expect((await restored.execute(next)).result).toMatchObject({
 				outcome: "accepted",
 				status: "running",

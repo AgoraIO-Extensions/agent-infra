@@ -2,6 +2,7 @@ import {
 	AgentProjectionV2Schema,
 	CommandAcceptedProjectionV1Schema,
 	ConversationDetailProjectionV2Schema,
+	ConversationSseMessageV2Schema,
 	PersistedConversationEventV2Schema,
 	PilotProtocolErrorV1Schema,
 	ReasoningDeltaEventV2Schema,
@@ -32,6 +33,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../components/ui/toast.js";
 import { client as v1 } from "../../pilot/generated/client.gen.js";
 import { client as v2 } from "../../pilot/generated-v2/client.gen.js";
+import { operationEvent } from "./browser-test-fixtures.js";
 import {
 	ConversationScreen,
 	type ConversationScreenProps,
@@ -170,8 +172,11 @@ async function composer() {
 		name: "消息",
 	})) as HTMLTextAreaElement;
 }
-/** 处理中的回复卡：meta 右侧 spinner + 状态文案（role=status），属于 Agent 的消息卡（R4-07）。 */
-async function pendingReply(label = "已受理，等待处理") {
+/**
+ * 处理中的回复卡：meta 右侧 spinner + 阶段（role=status），属于 Agent 的消息卡（R4-07）。
+ * #3377：阶段取自已持久的事实，刚受理还没有 Runtime 状态时为「准备会话」。
+ */
+async function pendingReply(label = "准备会话") {
 	const status = await screen.findByText(label, {
 		selector: '[data-slot="loading-line"]',
 	});
@@ -1142,10 +1147,11 @@ describe("functional conversation screen", () => {
 		await pendingReply();
 		// The receipt re-read opens the stream that carries the persisted failure.
 		await waitFor(() => expect(streams.length).toBe(2));
+		// Runtime 尚未接受原回复时不创建补充指令（ADR-0033 决策 1），空草稿时「发送」禁用。
 		expect(
 			(
 				screen.getByRole("button", {
-					name: "发送补充指令",
+					name: "发送",
 				}) as HTMLButtonElement
 			).disabled,
 		).toBe(true);
@@ -1292,12 +1298,12 @@ describe("functional conversation screen", () => {
 		fireEvent.change(input, {
 			target: { value: "Cannot start a parallel reply" },
 		});
-		// 有进行中的回复时不提供「重新生成」（CH-08 过渡，AC-5）。
+		// 有进行中的回复时不提供「重新生成」（CH-08 过渡，AC-5）；普通消息可以发送并进入排队（PRD 10.5，#3376）。
 		expect(screen.queryByRole("button", { name: /^重新生成/ })).toBeNull();
 		expect(
 			(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
 				.disabled,
-		).toBe(true);
+		).toBe(false);
 		const stop = screen.getByRole("button", { name: "停止回复" });
 		// 「停止回复」在处理中的回复卡内，composer 工具栏里没有（R4-07）。
 		expect(stop.closest("article")?.getAttribute("aria-label")).toBe(
@@ -1350,6 +1356,7 @@ describe("functional conversation screen", () => {
 		// 回复卡状态行也有「已完成」，这里只看执行详情。
 		await within(details).findByText("已完成");
 		expect(screen.queryByText("处理中")).toBeNull();
+		expect(screen.queryByText("执行中")).toBeNull();
 		expect(
 			requests.filter((request) =>
 				new URL(request.url).pathname.includes("/executions/"),
@@ -1741,6 +1748,7 @@ describe("functional conversation screen", () => {
 		await screen.findByText("Finished answer");
 		expect(screen.getByText("已完成")).toBeTruthy();
 		expect(screen.queryByText("处理中")).toBeNull();
+		expect(screen.queryByText("执行中")).toBeNull();
 		expect(screen.queryByRole("button", { name: "停止回复" })).toBeNull();
 	});
 	function modelScenario(
@@ -2334,6 +2342,29 @@ describe("functional conversation screen", () => {
 		},
 	);
 
+	it("lists the confirmed recent conversations and notes omitted Agents instead of a read failure (#3379)", async () => {
+		setup((request) =>
+			new URL(request.url).pathname === "/api/v2/me/conversations/recent"
+				? Response.json({
+						items: [history("conversation-1").conversation],
+						nextCursor: null,
+						unavailableAgentIds: ["stopped-agent"],
+					})
+				: undefined,
+		);
+		const notice = await screen.findByText(
+			"1 个 Agent 的对话暂时无法显示，其他对话不受影响。",
+		);
+		const alert = notice.closest('[data-slot="alert"]');
+		expect(alert?.getAttribute("role")).toBe("status");
+		expect(alert?.getAttribute("data-tone")).toBe("warn");
+		const region = screen.getByRole("region", { name: "最近对话" });
+		expect(within(region).queryByRole("alert")).toBeNull();
+		expect(within(region).queryByText("最近对话暂时无法读取。")).toBeNull();
+		expect(within(region).getAllByRole("link").length).toBeGreaterThan(0);
+		expect(region.textContent).not.toContain("stopped-agent");
+	});
+
 	it("keeps the page header to the Agent name and the design subtitle", async () => {
 		setup();
 		const heading = await screen.findByRole("heading", {
@@ -2835,7 +2866,7 @@ describe("functional conversation screen", () => {
 		const input = await composer();
 		fireEvent.change(input, { target: { value: "Busy draft" } });
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
-		await screen.findByText(/当前回复仍在处理，暂不支持补充指令/);
+		await screen.findByText(/当前会话排队已满，这条消息未发送，草稿已保留/);
 		expect(input.value).toBe("Busy draft");
 		expect(screen.queryByText("Do not render raw error")).toBeNull();
 	});
@@ -3364,7 +3395,7 @@ describe("answers outside the loaded event window (#2635)", () => {
 
 		expect(await screen.findByText("Newest answer")).toBeTruthy();
 		// 进行中的回复在卡内显示 spinner 与「正在整理结果…」（R4-07），不提示可加载。
-		await pendingReply("处理中");
+		await pendingReply("执行中");
 		expect(screen.getByText("正在整理结果…")).toBeTruthy();
 		expect(
 			screen.queryByRole("button", { name: /^加载更早内容：/ }),
@@ -3755,7 +3786,7 @@ describe("session context, command feedback and reply cards (design alignment)",
 		expect(input.value).toBe("改写B");
 	});
 
-	it("explains unsupported supplementary instructions only when the draft is blocked by them (R4-07)", async () => {
+	it("explains that a draft sent during an unsupported-supplement reply joins the queue (R4-07, #3376)", async () => {
 		const processing = PersistedConversationEventV2Schema.parse({
 			...event(1),
 			type: "execution.status",
@@ -3768,15 +3799,15 @@ describe("session context, command feedback and reply cards (design alignment)",
 			),
 		);
 		const input = await composer();
-		await pendingReply("处理中");
+		await pendingReply("执行中");
 		expect(screen.getByText("正在整理结果…")).toBeTruthy();
-		const hint = "当前回复仍在处理，不支持补充指令。草稿会保留。";
+		const hint = "当前回复仍在处理，这条消息发送后进入排队，按顺序处理。";
 		expect(screen.queryByText(hint)).toBeNull();
 		const send = screen.getByRole("button", { name: "发送" });
 		expect(send.getAttribute("aria-describedby")).toBeNull();
 		fireEvent.change(input, { target: { value: "补充一句" } });
 		const note = screen.getByText(hint);
-		expect((send as HTMLButtonElement).disabled).toBe(true);
+		expect((send as HTMLButtonElement).disabled).toBe(false);
 		expect(send.getAttribute("aria-describedby")).toBe(note.id);
 		// 停止入口只在处理中的回复卡内；composer 内没有。
 		expect(input.closest("form")?.textContent).not.toContain("停止回复");
@@ -3797,7 +3828,7 @@ describe("session context, command feedback and reply cards (design alignment)",
 			),
 		);
 		const input = await composer();
-		await pendingReply("处理中");
+		await pendingReply("执行中");
 		const trigger = screen.getByRole("button", {
 			name: "选择命令或 Skill",
 		}) as HTMLButtonElement;
@@ -3884,6 +3915,127 @@ describe("session context, command feedback and reply cards (design alignment)",
 				),
 			).toBe(true),
 		);
+	});
+
+	// #3377：失败回答显示 Core 给出的用户可见分类说明（工程 Spec §16.1.1），与企微同源。
+	it("explains a failed reply with its failure category instead of the generic code text (#3377 AC-2)", async () => {
+		const failed = PersistedConversationEventV2Schema.parse({
+			...event(1),
+			type: "execution.status",
+			payload: { status: "failed" },
+		});
+		setup(
+			conversationWith(
+				[failed],
+				[
+					userMessage(),
+					answer({
+						status: "failed",
+						error: PilotProtocolErrorV1Schema.parse({
+							schemaVersion: 1,
+							code: "EXECUTION_FAILED",
+							message: "Execution failed.",
+							retryable: false,
+							traceId: "trace-file",
+						}),
+						failure: {
+							category: "attachment_unreadable",
+							message: "附件无法读取，请重新发送附件",
+						},
+					}),
+				],
+			),
+		);
+		const reply = await screen.findByRole("article", {
+			name: `${agent.name}的消息`,
+		});
+		const line = (await within(reply).findByText("执行失败")).closest(
+			"p",
+		) as HTMLElement;
+		expect(line.textContent).toContain(
+			"执行失败 · 附件无法读取，请重新发送附件",
+		);
+		expect(line.textContent).not.toContain("请求未完成");
+	});
+
+	// #3377（PRD 11.2）：处理中的回复卡显示实际阶段与实时耗时，阶段只取已持久的事实。
+	it("shows the persisted phase and a live elapsed time on a pending reply (#3377 AC-1)", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(Date.parse(timestamp) + 12_000);
+		try {
+			let sequence = 1;
+			const next = (body: Record<string, unknown>) =>
+				ConversationSseMessageV2Schema.parse({
+					...event(++sequence),
+					...body,
+				});
+			const modelFact = (phase: string, attemptRef: string) =>
+				next({
+					schemaVersion: 2,
+					type: "execution.operation",
+					payload: {
+						kind: "model",
+						operationRef: "model-call-1",
+						attemptRef,
+						phase,
+						model: {
+							configVersion: "config-1",
+							modelOptionId: "model-1",
+							modelId: "model-1",
+						},
+					},
+				});
+			const { streams } = setup(
+				conversationWith(
+					[],
+					[{ ...userMessage(), status: "submitted" }],
+					"active",
+				),
+			);
+			const status = await pendingReply("准备会话");
+			const elapsed = await screen.findByText("已用 12 秒");
+			// 耗时每秒刷新，不放进读屏播报的状态区域。
+			expect(elapsed.closest('[role="status"]')).toBeNull();
+			expect(elapsed.closest("article")).toBe(status.closest("article"));
+			vi.setSystemTime(Date.parse(timestamp) + 15_000);
+			await screen.findByText("已用 15 秒", undefined, { timeout: 3_000 });
+			act(() =>
+				streams.at(-1)?.send(
+					next({
+						type: "execution.status",
+						payload: { status: "processing" },
+					}),
+				),
+			);
+			await pendingReply("执行中");
+			act(() =>
+				streams.at(-1)?.send(
+					ConversationSseMessageV2Schema.parse({
+						...operationEvent(++sequence, "started"),
+						conversationId: "conversation-1",
+						conversationCursor: `conversation-1-cursor-${sequence}`,
+					}),
+				),
+			);
+			await pendingReply("调用工具：打开页面");
+			act(() =>
+				streams.at(-1)?.send(
+					ConversationSseMessageV2Schema.parse({
+						...operationEvent(++sequence, "completed"),
+						conversationId: "conversation-1",
+						conversationCursor: `conversation-1-cursor-${sequence}`,
+					}),
+					modelFact("started", "attempt-1"),
+					modelFact("failed", "attempt-1"),
+					modelFact("intent", "attempt-2"),
+				),
+			);
+			await pendingReply("模型重试");
+			act(() => streams.at(-1)?.send(modelFact("completed", "attempt-2")));
+			await pendingReply("执行中");
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("says 已停止 · 可重新生成 for a stopped reply without body text", async () => {

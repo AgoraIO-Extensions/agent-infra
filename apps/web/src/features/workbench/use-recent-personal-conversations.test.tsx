@@ -174,6 +174,68 @@ describe("Personal recent login and continuation lifetime", () => {
 		});
 	});
 
+	it("unions omitted Agents across pages and drops them after a fresh first page (#3379)", async () => {
+		let fresh = false;
+		const hook = setup((request) => {
+			const cursor = new URL(request.url).searchParams.get("cursor");
+			return Response.json(
+				fresh
+					? page(["current-first"])
+					: cursor
+						? {
+								...page(["older"]),
+								unavailableAgentIds: ["agent-late", "agent-stopped"],
+							}
+						: {
+								...page(["newest"], "opaque-next"),
+								unavailableAgentIds: ["agent-stopped"],
+							},
+			);
+		});
+		await waitFor(() =>
+			expect(hook.result.current.state).toMatchObject({
+				kind: "ready",
+				conversations: [{ conversationId: "newest" }],
+				unavailableAgentIds: ["agent-stopped"],
+			}),
+		);
+		await act(async () => hook.result.current.loadMore());
+		await waitFor(() =>
+			expect(hook.result.current.state).toMatchObject({
+				kind: "ready",
+				conversations: [
+					{ conversationId: "newest" },
+					{ conversationId: "older" },
+				],
+				unavailableAgentIds: ["agent-stopped", "agent-late"],
+			}),
+		);
+		fresh = true;
+		await act(async () => hook.result.current.refresh());
+		await waitFor(() =>
+			expect(hook.result.current.state).toEqual({
+				kind: "ready",
+				conversations: [
+					expect.objectContaining({ conversationId: "current-first" }),
+				],
+				nextCursor: null,
+			}),
+		);
+	});
+
+	it("rejects a malformed omitted-Agent list as an invalid response", async () => {
+		const hook = setup(() =>
+			Response.json({ ...page(["row"]), unavailableAgentIds: [] }),
+		);
+		await waitFor(() =>
+			expect(hook.result.current.state).toEqual({
+				kind: "unavailable",
+				retryable: false,
+				reason: "invalid-response",
+			}),
+		);
+	});
+
 	it("keeps valid history beyond 100 user-requested pages without clearing rows or blocking continuation", async () => {
 		const hook = setup((request) => {
 			const cursor = new URL(request.url).searchParams.get("cursor");

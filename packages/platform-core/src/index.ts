@@ -92,10 +92,12 @@ export {
 export * from "./conversation-operation-facts.js";
 export * from "./conversation-read-projection.js";
 export * from "./conversation-recent.js";
+export * from "./execution-failure.js";
 export {
 	bindInputFileV1,
 	bindNativeTextInputFileV1,
 	createFileAuthorityV1,
+	discardUnboundInputFileV1,
 	type FileAccessRecordV1,
 	FileAuthorityError,
 	type FileAuthorityV1,
@@ -140,6 +142,7 @@ export {
 export * from "./file-reconciliation.js";
 export * from "./idempotency.js";
 export * from "./native-capability-admission.js";
+export * from "./native-capability-admission-v6.js";
 export * from "./personal-api-agent-read.js";
 export * from "./personal-api-credentials.js";
 export * from "./personal-api-task-authorization.js";
@@ -195,6 +198,7 @@ export * from "./task-authorization.js";
 export * from "./task-runtime-authorization.js";
 export * from "./trace-context.js";
 export * from "./wecom-channel.js";
+export * from "./wecom-progress.js";
 export type {
 	WecomAnswerReferenceParserV1,
 	WecomAnswerReferenceV1,

@@ -70,7 +70,10 @@ export {
 	outboxWakeChannelV1,
 	PostgresCommitWakeupListenerV1,
 } from "./commit-wakeups.ts";
-export { PostgresConnectionInstallationAuthorizationTransactionV1 } from "./connection-installation.js";
+export {
+	type ConnectionInstallationBindingInputV1,
+	PostgresConnectionInstallationAuthorizationTransactionV1,
+} from "./connection-installation.js";
 export {
 	ConversationDispatchStoreError,
 	openPostgresConversationDispatchStoreV1,

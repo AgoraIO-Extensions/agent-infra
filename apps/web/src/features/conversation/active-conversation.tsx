@@ -6,6 +6,7 @@ import {
 	useEffect,
 	useId,
 	useLayoutEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -60,7 +61,9 @@ import { ConversationMessages } from "./conversation-screen-messages.js";
 import {
 	currentExecution,
 	executionStatus,
+	hasWaitingMessages,
 	isTerminal,
+	queueStates,
 } from "./conversation-screen-state.js";
 import { useSkillControlFiles } from "./conversation-skill-control-files.js";
 import { ConversationReadError } from "./execution-detail.js";
@@ -220,6 +223,8 @@ export function ActiveConversation({
 		useState<ConnectionNoticeState>("needs-auth");
 	const [acceptedExecution, setAcceptedExecution] = useState<string>();
 	const [stopping, setStopping] = useState<string>();
+	// 撤回请求进行中的排队消息（#3376）：它的「撤回」保持可聚焦的禁用。
+	const [withdrawing, setWithdrawing] = useState<string>();
 	// 「重新生成」请求进行中的提问与受理后的焦点交接（#3267 N8-1-09，见 regenerate()）。
 	const [regenerating, setRegenerating] = useState<string>();
 	const regenerateFocus = useRef<{ executionId?: string }>(undefined);
@@ -231,9 +236,9 @@ export function ActiveConversation({
 	const composerId = useId();
 	const feedbackId = useId();
 	const composer = useRef<HTMLTextAreaElement>(null);
-	const action = useRef<"message" | "stop" | "regenerate" | "native">(
-		"message",
-	);
+	const action = useRef<
+		"message" | "stop" | "regenerate" | "native" | "withdraw"
+	>("message");
 	const handled = useRef<ConversationCommandResult | undefined>(undefined);
 	const conversation = timeline.history?.conversation;
 	// The Conversation stays read-only until its own Session Sandbox is ready
@@ -242,10 +247,17 @@ export function ActiveConversation({
 	const updating = timeline.history?.sessionAvailability === "updating";
 	const preparing =
 		updating || timeline.history?.sessionAvailability === "preparing";
+	// 排队消息（§12.5）不是当前回复；位次与结果显示在各自的用户消息上。
+	const queue = useMemo(
+		() => queueStates(timeline.history, timeline.events),
+		[timeline.history, timeline.events],
+	);
+	const queueWaiting = hasWaitingMessages(queue);
 	const { executionId: latestExecution, status } = currentExecution(
 		timeline.history,
 		timeline.events,
 		acceptedExecution,
+		queue,
 	);
 	const catalog = useConversationCapabilityCatalog({
 		identityKey,
@@ -424,11 +436,13 @@ export function ActiveConversation({
 	});
 	const lastRefreshEvent = useRef<string | undefined>(undefined);
 	useEffect(() => {
+		// 平台写入的 task.status 改变排队集合（入队、开始处理、撤回、超时与取消，§12.5）：
+		// 重读投影取得服务端位次与结果。
 		const event = timeline.events.findLast(
 			(item) =>
 				item.type === "conversation.error" ||
-				((item.type === "execution.status" || item.type === "task.status") &&
-					isTerminal(item.payload.status)),
+				item.type === "task.status" ||
+				(item.type === "execution.status" && isTerminal(item.payload.status)),
 		);
 		if (!event || lastRefreshEvent.current === event.eventId) return;
 		lastRefreshEvent.current = event.eventId;
@@ -495,6 +509,9 @@ export function ActiveConversation({
 				else if (result.kind !== "unknown") regenerateFocus.current = undefined;
 			}
 		}
+		// 撤回同样：结果待核实时「撤回」继续保持可聚焦的禁用，可核实原请求。
+		if (action.current === "withdraw" && result.kind !== "unknown")
+			setWithdrawing(undefined);
 		if (
 			result.kind === "rejected" &&
 			(result.code === "AGENT_STARTING" || result.code === "AGENT_UPDATING")
@@ -516,15 +533,30 @@ export function ActiveConversation({
 					else setNotice("原回复已结束。");
 				} else setStopping(result.receipt.executionId ?? undefined);
 			} else {
+				// 有当前回复或排队消息时受理的新 Execution 是排队消息（§12.5）：它不是当前回复，
+				// 位次由随后的投影给出；补充指令的回执就是当前回复本身。
+				const queued =
+					action.current === "message" &&
+					(active || queueWaiting) &&
+					result.receipt.executionId !== null &&
+					result.receipt.executionId !== latestExecution;
 				if (action.current === "message") {
 					const sent = sentText.current;
 					sentText.current = undefined;
 					setDraft((current) => (current === sent ? "" : current));
 					if (resending.current) toast("已重新发送，正在等待 Agent 确认");
 				}
-				setAcceptedExecution(result.receipt.executionId ?? undefined);
+				if (!queued)
+					setAcceptedExecution(result.receipt.executionId ?? undefined);
 			}
 			resending.current = false;
+			void reader.refresh();
+		} else if (result.kind === "withdrawal") {
+			// 撤回与认领互斥：已开始处理或已结束的消息不受影响，只说明原因（§12.5）。
+			if (result.receipt.status === "already_started")
+				toast("消息已开始处理，不能撤回");
+			else if (result.receipt.status === "already_finished")
+				toast("消息已结束，无需撤回");
 			void reader.refresh();
 		} else if (result.kind === "native-accepted") {
 			const selected = pendingInvocation.current;
@@ -556,6 +588,8 @@ export function ActiveConversation({
 		capabilityAccepted,
 		setCapabilityError,
 		latestExecution,
+		active,
+		queueWaiting,
 		toast,
 	]);
 	const options = customPlatformAdapter
@@ -608,14 +642,13 @@ export function ActiveConversation({
 		conversation?.status === "unavailable" ||
 		readLocked ||
 		(!available && !agentTransitioning);
+	// 当前回复处理中、正在停止或结果待核实时仍可发送：服务端在受理时原子地决定作为补充指令、
+	// 进入排队或繁忙（PRD 10.5、§12.5），页面不预先拦截。
 	const submitReady =
 		!blocked &&
 		!preparing &&
 		!commandLocked &&
 		modelSave.phase === "idle" &&
-		!uncertainExecution &&
-		!(active && stopping === latestExecution) &&
-		(!active || agent.capabilities.supplementaryInstruction) &&
 		!files.uploading &&
 		!capabilityBusy;
 	const canSend = submitReady && Boolean(draft.trim());
@@ -749,7 +782,7 @@ export function ActiveConversation({
 		(input ?? pageRecoveryTarget())?.focus();
 	});
 	function regenerate(messageId: string) {
-		if (blocked || preparing || commandLocked || active) return;
+		if (blocked || preparing || commandLocked || active || queueWaiting) return;
 		if (command.regenerate(messageId)) {
 			action.current = "regenerate";
 			setRegenerating(messageId);
@@ -815,11 +848,18 @@ export function ActiveConversation({
 	const modelSelectable =
 		agent.capabilities.modelSelection &&
 		(!customPlatformAdapter || runtimeSelection.data?.available);
-	// 补充指令提示只在草稿非空、发送因此禁用时作为发送按钮的说明出现（R4-07、AC-7）。
-	const supplementBlocked =
+	// 发送按钮文案与说明只按页面已知状态预告服务端的判定（§12.5）：原回复已开始处理、没有待确认的
+	// 停止、也没有排队消息时，支持补充指令的 Agent 接收补充指令；其余情况进入排队。
+	const supplementExpected =
 		active &&
-		!agent.capabilities.supplementaryInstruction &&
-		Boolean(draft.trim());
+		status === "processing" &&
+		agent.capabilities.supplementaryInstruction &&
+		!capabilityExecution &&
+		stopping !== latestExecution &&
+		!queueWaiting;
+	// 排队说明只在草稿非空时作为发送按钮的说明出现（R4-07、AC-7）。
+	const queueOnSend =
+		(active || queueWaiting) && !supplementExpected && Boolean(draft.trim());
 	const stopControl =
 		active && latestExecution
 			? {
@@ -949,7 +989,13 @@ export function ActiveConversation({
 						}
 						onExecution={openExecution}
 						onRegenerate={regenerate}
-						canRegenerate={!blocked && !preparing && !commandLocked && !active}
+						canRegenerate={
+							!blocked &&
+							!preparing &&
+							!commandLocked &&
+							!active &&
+							!queueWaiting
+						}
 						regeneratingMessageId={commandLocked ? regenerating : undefined}
 						onResend={(text) => {
 							setDraft(text);
@@ -967,6 +1013,18 @@ export function ActiveConversation({
 						onLoadEarlier={() => void reader.loadEarlier()}
 						stop={capabilityExecution ? undefined : stopControl}
 						executionNotice={executionNotice}
+						withdraw={{
+							onWithdraw: (executionId) => {
+								if (blocked || commandLocked) return;
+								if (command.withdraw(executionId)) {
+									action.current = "withdraw";
+									setWithdrawing(executionId);
+									setNotice("");
+								}
+							},
+							pendingExecutionId: commandLocked ? withdrawing : undefined,
+							disabled: blocked || commandLocked,
+						}}
 						modelOptions={options}
 						trailing={
 							<>
@@ -1029,7 +1087,7 @@ export function ActiveConversation({
 				    这里的说明行统一为 text-sm（14px / 20px，#3293 N9-1-01）。 */}
 				{uncertainExecution && !capabilityExecution && (
 					<p role="status" className="text-sm">
-						原执行结果待核实，同会话暂不能发送下一条消息。
+						原执行结果待核实，核实前新消息只进入排队。
 						<Button
 							variant="ghost"
 							data-c02-recover="recover-original"
@@ -1053,9 +1111,11 @@ export function ActiveConversation({
 								: "会话准备中，完成后即可发送。草稿会保留。"}
 					</p>
 				)}
-				{supplementBlocked && (
-					<p id={`${feedbackId}-supplement`} className="text-sm">
-						当前回复仍在处理，不支持补充指令。草稿会保留。
+				{queueOnSend && (
+					<p id={`${feedbackId}-queue`} className="text-sm">
+						{active
+							? "当前回复仍在处理，这条消息发送后进入排队，按顺序处理。"
+							: "会话中已有排队消息，这条消息发送后排在它们之后。"}
 					</p>
 				)}
 				{notice && (
@@ -1084,6 +1144,10 @@ export function ActiveConversation({
 						void send({ resend: true });
 					}}
 					resendDisabled={!canSend}
+					queuedCount={
+						[...queue.values()].filter((state) => state.status === "waiting")
+							.length
+					}
 				/>
 				{agent.capabilities.modelSelection && !option && currentModelId && (
 					// 静态说明行，同区其余说明行为正文前景色、不设 role（web-ui「对话页状态说明行」，#3327 N10-1-03）。
@@ -1100,13 +1164,7 @@ export function ActiveConversation({
 					draftBusy={commandLocked && !draftLocked}
 					submitReady={submitReady}
 					invokeReady={!active}
-					sendLabel={
-						active &&
-						agent.capabilities.supplementaryInstruction &&
-						!capabilityExecution
-							? "发送补充指令"
-							: "发送"
-					}
+					sendLabel={supplementExpected ? "发送补充指令" : "发送"}
 					capability={capability}
 					skillControlFiles={{
 						attachmentsEnabled: agent.capabilities.attachments,
@@ -1140,9 +1198,7 @@ export function ActiveConversation({
 							? `${feedbackId}-unknown`
 							: undefined
 					}
-					sendDescribedBy={
-						supplementBlocked ? `${feedbackId}-supplement` : undefined
-					}
+					sendDescribedBy={queueOnSend ? `${feedbackId}-queue` : undefined}
 					formAttributes={{
 						"data-c02-guard": "pending-submit",
 						"data-c02-session-id":

@@ -6,6 +6,7 @@ import {
 import type { AddressInfo } from "node:net";
 import { createRuntimeExecutionGrantVerifierV2 } from "@agent-infra/agent-runtime";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import type { RuntimeOAuthConfigurationV1 } from "@agent-infra/contracts/runtime";
 import type {
 	AgentConfigurationRecordV2,
 	AgentManagementStateV1,
@@ -42,6 +43,7 @@ function harness(
 		| ConversationRuntimeOptionsV2["channelAuthorizationCurrent"]
 		| null = async (record) => record.boundary.channelId === "web",
 	overrides: Partial<ConversationRuntimeOptionsV2> = {},
+	agentId = "agent",
 ) {
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
@@ -50,7 +52,7 @@ function harness(
 		operation: "conversation.turn.submit.v1",
 		requestId: "request",
 		traceId: "trace",
-		agentId: "agent",
+		agentId,
 		actorId: "user",
 		channelId: "web",
 		conversationId: "conversation",
@@ -74,7 +76,7 @@ function harness(
 	const agent: AgentManagementStateV1 = {
 		schemaVersion: 1,
 		applicationId: "application",
-		agentId: "agent",
+		agentId,
 		applicantId: "owner",
 		status: "available",
 		revision: 1,
@@ -91,7 +93,7 @@ function harness(
 	const boundary: TaskAuthorizationBoundaryV1 = {
 		schemaVersion: 1,
 		principal: { kind: "user", id: "user" },
-		agentId: "agent",
+		agentId,
 		channelId: "web",
 		identityRevision: "identity-7",
 		agentAuthorizationRevision: "agent-7",
@@ -113,13 +115,13 @@ function harness(
 	};
 	const configuration = {
 		schemaVersion: 2,
-		agentId: "agent",
+		agentId,
 		revision: 1,
 		source: { kind: "standard" },
 	} as AgentConfigurationRecordV2;
 	const workload: WorkloadReconciliationStateV1 = {
 		schemaVersion: 1,
-		agentId: "agent",
+		agentId,
 		sourceConfigurationRevision: 1,
 		sourceLifecycleRevision: 1,
 		revision: 3,
@@ -2130,12 +2132,19 @@ describe("explicit historical metadata delivery", () => {
 function installationHarness(
 	runtimeOrigin = "https://runtime.test:3443/",
 	patBinding = false,
+	select: (
+		configuration: RuntimeOAuthConfigurationV1,
+	) => Pick<
+		NonNullable<ConversationRuntimeOptionsV2["connectionInstallation"]>,
+		"configuration" | "configurationsByAgent"
+	> = (configuration) => ({ configuration }),
+	agentId = "agent",
 ) {
 	const profile = {
 		schemaVersion: 1 as const,
 		publicOrigin: "https://connection.test",
 		mcpPath: "/mcp",
-		consumerId: "platform",
+		consumerId: agentId === "agent" ? "platform" : agentId,
 		audience: "mcp",
 		egressProfile: { ref: "egress", revision: "r1" },
 	};
@@ -2148,9 +2157,9 @@ function installationHarness(
 	if (!approved) throw Error("Missing approved test profile");
 	const configuration = {
 		schemaVersion: 1 as const,
-		ref: "oauth",
+		ref: agentId === "agent" ? "oauth" : `oauth-${agentId}`,
 		revision: "r1",
-		clientId: "client",
+		clientId: agentId === "agent" ? "client" : `client-${agentId}`,
 		issuer: "https://connection.test/",
 		authorizationEndpoint: "https://connection.test/oauth/authorize",
 		tokenEndpoint: "https://connection.test/oauth/token",
@@ -2184,19 +2193,24 @@ function installationHarness(
 			...(patBinding ? { connectionPrincipalId: "connection-user" } : {}),
 		};
 	});
-	const h = harness(1, undefined, {
-		connectionInstallation: {
-			configuration,
-			authorize: installationAuthorize,
+	const h = harness(
+		1,
+		undefined,
+		{
+			connectionInstallation: {
+				...select(configuration),
+				authorize: installationAuthorize,
+			},
 		},
-	});
+		agentId,
+	);
 	Object.assign(h.state, { runtimeSubmitProtocol: "v4" });
 	Object.assign(h.state, {
 		sandboxResource: {
 			sandbox: {
 				schemaVersion: 1,
 				sandboxId: "sandbox",
-				agentId: "agent",
+				agentId,
 				sessionId: "conversation",
 				principal: { kind: "user", id: "user" },
 				channelId: "web",
@@ -2242,7 +2256,7 @@ function installationHarness(
 					}
 				: {
 						authorizationUrl:
-							"https://connection.test/oauth/authorize?response_type=code&client_id=client&redirect_uri=https%3A%2F%2Fplatform.test%2Fcallback&scope=mcp&resource=https%3A%2F%2Fconnection.test%2Fmcp&code_challenge_method=S256&state=" +
+							`https://connection.test/oauth/authorize?response_type=code&client_id=${configuration.clientId}&redirect_uri=https%3A%2F%2Fplatform.test%2Fcallback&scope=mcp&resource=https%3A%2F%2Fconnection.test%2Fmcp&code_challenge_method=S256&state=` +
 							"a".repeat(64) +
 							"&code_challenge=" +
 							"a".repeat(43),
@@ -2814,4 +2828,75 @@ describe("Platform API task authorization with the deployed channel authority (#
 		);
 		disabled.runtime.close();
 	});
+});
+
+it.each(["agent-a", "agent-b"])(
+	"signs installation commands with the verified %s configuration",
+	async (agentId) => {
+		const h = installationHarness(
+			"https://runtime.test:3443/",
+			false,
+			(c) => ({
+				configurationsByAgent: {
+					[agentId]: c,
+					other: { ...c, ref: "other-oauth", clientId: "other-client" },
+				},
+			}),
+			agentId,
+		);
+		try {
+			const runtimeGrant = await h.authorize();
+			await h.runtime.connectionInstallation.request({
+				execution: h.events(runtimeGrant),
+				authorizationId: "authorization-a",
+				command: "begin",
+			});
+			expect(h.fetcher).toHaveBeenCalledTimes(1);
+			const body = JSON.parse(String(h.fetcher.mock.calls[0]?.[1]?.body));
+			const verifyOAuth = createRuntimeOAuthGrantVerifier({
+				key: keys.publicKey,
+				keyId: "signing",
+				issuer: "platform",
+				workerId: "transport",
+				scope: {
+					agentId,
+					sandboxId: "sandbox",
+					podUid: "pod-current",
+					sessionGeneration: 1,
+					configFingerprint: h.approved.configFingerprint,
+					source: h.approved.source,
+					oauthConfiguration: { ref: `oauth-${agentId}`, revision: "r1" },
+				},
+				principal: { kind: "user", id: "user" },
+				now: () => now,
+			});
+			expect(verifyOAuth(body)).toMatchObject({
+				reference: { agentId },
+				oauthConfiguration: { ref: `oauth-${agentId}` },
+			});
+		} finally {
+			await h.runtime.close();
+		}
+	},
+);
+it("rejects missing per-Agent configuration instead of using another Agent or a shared configuration", async () => {
+	for (const mixed of [false, true]) {
+		const h = installationHarness("https://runtime.test:3443/", false, (c) => ({
+			...(mixed ? { configuration: c } : {}),
+			configurationsByAgent: { other: c },
+		}));
+		try {
+			const runtimeGrant = await h.authorize();
+			await expect(
+				h.runtime.connectionInstallation.request({
+					execution: h.events(runtimeGrant),
+					authorizationId: "authorization-a",
+					command: "begin",
+				}),
+			).rejects.toMatchObject({ code: "CONNECTION_INSTALLATION_UNAVAILABLE" });
+			expect(h.fetcher).not.toHaveBeenCalled();
+		} finally {
+			await h.runtime.close();
+		}
+	}
 });

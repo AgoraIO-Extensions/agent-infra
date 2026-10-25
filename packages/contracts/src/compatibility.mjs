@@ -25,6 +25,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/json-schema/runtime.v2.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime.v3.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime.v5.schema.json",
+	"packages/contracts/artifacts/json-schema/runtime.v6.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime-readiness.v1.schema.json",
 	"packages/contracts/artifacts/openapi/common.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/browser-capability.v1.openapi.json",
@@ -36,6 +37,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/openapi/runtime-host.v2.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v3.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v5.openapi.json",
+	"packages/contracts/artifacts/openapi/runtime-host.v6.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-readiness.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/standard-template-release.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/standard-template-release.v2.openapi.json",
@@ -1265,7 +1267,7 @@ function isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) {
 
 // #3017 只给 submit V2 及以上的 Runtime 操作结果联合新增一个稳定脱敏、不可重试的 rejected
 // 成员 RUNTIME_SESSION_BLOCKED。成员内容逐字段固定，且只允许出现在 V2 结果组件和
-// V3/V4/V5 响应的 result 联合中；V1 结果不扩展，删除新增成员后须与基线逐字节一致。
+// V3/V4/V5/V6 响应的 result 联合中；V1 结果不扩展，删除新增成员后须与基线逐字节一致。
 // #3314 以同一规则新增 RUNTIME_FILE_INPUT_REJECTED（附件读取在原生副作用前被平台明确拒绝）。
 function runtimeRejectedResult(code, message) {
 	return {
@@ -1288,6 +1290,23 @@ const runtimeFileInputRejectedResult = runtimeRejectedResult(
 	"RUNTIME_FILE_INPUT_REJECTED",
 	"Runtime file input was rejected",
 );
+// #3373 以同一规则新增可重试的 RUNTIME_TURN_NOT_SUBMITTED：Driver 在原生提交点之前声明本次
+// Turn 未提交。成员逐字段固定，阶段只允许两个固定值，retryable 固定为 true。
+const runtimeTurnNotSubmittedResult = {
+	additionalProperties: false,
+	properties: {
+		code: { const: "RUNTIME_TURN_NOT_SUBMITTED", type: "string" },
+		message: { const: "Runtime turn was not submitted", type: "string" },
+		outcome: { const: "rejected", type: "string" },
+		reason: {
+			enum: ["file_input_unavailable", "session_preparation_failed"],
+			type: "string",
+		},
+		retryable: { const: true, type: "boolean" },
+	},
+	required: ["outcome", "code", "message", "reason", "retryable"],
+	type: "object",
+};
 function runtimeRejectedResultUnions(schemas) {
 	return [
 		schemas?.RuntimeOperationResultV2?.anyOf,
@@ -1295,6 +1314,7 @@ function runtimeRejectedResultUnions(schemas) {
 			"RuntimeOperationResponseV3",
 			"RuntimeOperationResponseV4",
 			"RuntimeOperationResponseV5",
+			"RuntimeOperationResponseV6",
 		].map((name) => schemas?.[name]?.properties?.result?.anyOf),
 	];
 }
@@ -1310,6 +1330,13 @@ function isRuntimeFileInputRejectedOpenApiAddition(previous, current) {
 		previous,
 		current,
 		runtimeFileInputRejectedResult,
+	);
+}
+function isRuntimeTurnNotSubmittedOpenApiAddition(previous, current) {
+	return isRuntimeRejectedResultOpenApiAddition(
+		previous,
+		current,
+		runtimeTurnNotSubmittedResult,
 	);
 }
 function isRuntimeRejectedResultOpenApiAddition(previous, current, member) {
@@ -2788,6 +2815,88 @@ function normalizeConversationTaskStatusOpenApiAddition(previous, current) {
 	return candidate;
 }
 
+// #3376 执行中消息有界排队：`task.status` 增加只用于 Web/渠道排队消息的取消原因分支，浏览器
+// V1 增加撤回排队消息的命令，V2 会话读取增加可选的排队状态。新增节点按摘要固定，且只能在
+// 基线没有它们时剥离；其他位置引用新 Schema 或改变已有节点仍然拒绝。
+function normalizeBoundedQueueOpenApiAddition(previous, current) {
+	const digestOf = (value) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	const candidate = structuredClone(current);
+	const schemas = candidate.components?.schemas;
+	const previousSchemas = previous.components?.schemas;
+	if (!schemas || !previousSchemas) return current;
+	const cancelReasonDigest =
+		"a26c5bf7a81686b018f70de5972879331331a47a51967c9413eeac0bba3723fa";
+	const options = schemas.TaskStatusEventV1?.properties?.payload?.anyOf;
+	const previousOptions =
+		previousSchemas.TaskStatusEventV1?.properties?.payload?.anyOf;
+	// 基线可能还没有 TaskStatusEventV1（#3336 之前）；先剥离本次分支，再交给 #3336 的摘要核对。
+	if (
+		Array.isArray(options) &&
+		digestOf(options.at(-1)) === cancelReasonDigest &&
+		(previousOptions === undefined ||
+			(Array.isArray(previousOptions) &&
+				options.length === previousOptions.length + 1 &&
+				!previousOptions.some(
+					(option) => digestOf(option) === cancelReasonDigest,
+				)))
+	)
+		schemas.TaskStatusEventV1.properties.payload.anyOf = options.slice(0, -1);
+	const withdrawalPath = "/api/v1/conversations/{conversationId}/withdrawals";
+	const additions = [
+		[
+			"WithdrawCommandRequestV1",
+			"f2d59d9a35496f0709bd7b32b075b527c303ede7178d52aaa012705c7e5e85b2",
+		],
+		[
+			"WithdrawalAcceptedProjectionV1",
+			"18fcd65b59e8d7e117b28af3908afe1de62b78539bc38a01f1796bb8abf71601",
+		],
+		[
+			"QueuedMessageStateV2",
+			"66055b269a3955e6a347d763ed7f69cf344fe5d5fede11657db9789b222110dd",
+		],
+	];
+	for (const [name, digest] of additions)
+		if (
+			previousSchemas[name] === undefined &&
+			schemas[name] !== undefined &&
+			digestOf(schemas[name]) === digest
+		)
+			delete schemas[name];
+	if (
+		previous.paths?.[withdrawalPath] === undefined &&
+		candidate.paths?.[withdrawalPath] !== undefined &&
+		digestOf(candidate.paths[withdrawalPath]) ===
+			"08de1a81b5575604513c0b8df082d3ce035c5d0215a0325634f32bd2e20ee85e"
+	)
+		delete candidate.paths[withdrawalPath];
+	const detail = schemas.ConversationDetailProjectionV2?.properties;
+	if (
+		detail?.queue !== undefined &&
+		previousSchemas.ConversationDetailProjectionV2?.properties?.queue ===
+			undefined &&
+		digestOf(detail.queue) ===
+			"ef60b5dfc6840b4a3c52c0ca167df17c8822c6cd4ef1b6fbb8967e2f81b2309a" &&
+		!schemas.ConversationDetailProjectionV2.required?.includes("queue")
+	)
+		delete detail.queue;
+	// 新 Schema 只能由上面固定的宿主引用。
+	for (const name of [
+		"WithdrawCommandRequestV1",
+		"WithdrawalAcceptedProjectionV1",
+		"QueuedMessageStateV2",
+	])
+		if (
+			previousSchemas[name] === undefined &&
+			JSON.stringify(candidate).includes(
+				JSON.stringify(`#/components/schemas/${name}`),
+			)
+		)
+			return current;
+	return candidate;
+}
+
 // #3226 回答内 `sandbox:` 引用发布的结果文件：浏览器 V2 `result.file` 与 Runtime V2 `file`
 // 事件在 V1 字段之外携带规范化的 `workspaceReference`，运行期文件交换的结果请求新增同名可选
 // 字段，三者都只做加法。事件 Schema 与请求字段的内容按摘要固定，宿主逐一固定：基线已有该新增、
@@ -3274,6 +3383,94 @@ function isAgentManagementRevisionOpenApiAddition(previous, current) {
 	return changed && sameValue(previous, normalized);
 }
 
+// #3377：V2 会话读取中失败的回答新增可选的用户可见失败分类 `failure`（工程 Spec §16.1.1），
+// 同时发布分类枚举与 strict 投影。去掉该可选字段与两个新组件后须与基线逐字节一致。
+const executionFailureProjectionAddition = {
+	ExecutionFailureCategoryV1: {
+		enum: [
+			"model_unavailable",
+			"agent_updating",
+			"session_preparation_failed",
+			"attachment_unreadable",
+			"authorization_revoked",
+			"relay_key_unavailable",
+			"queue_timeout",
+			"conversation_unavailable",
+			"internal_error",
+		],
+		type: "string",
+	},
+	ExecutionFailureProjectionV1: {
+		additionalProperties: false,
+		properties: {
+			category: { $ref: "#/components/schemas/ExecutionFailureCategoryV1" },
+			message: { maxLength: 512, minLength: 1, type: "string" },
+		},
+		required: ["category", "message"],
+		type: "object",
+	},
+};
+/**
+ * 只做加法：基线的失败回答还没有 `failure` 时，去掉当前的该可选字段；基线没有两个新组件时一并
+ * 去掉。字段或组件内容不符、被设为必填，或组件出现在其他位置时原样返回，让差异按破坏性变更判定。
+ * 作为规范化步骤先于其他历史例外执行，早于 #3377 的基线仍按原摘要比较。
+ */
+function normalizeExecutionFailureProjectionOpenApiAddition(previous, current) {
+	const failedBranch = (document) => {
+		const options =
+			document?.components?.schemas?.ConversationDetailProjectionV2?.properties
+				?.messages?.items?.oneOf;
+		const failed = Array.isArray(options)
+			? options.filter(
+					(option) => option?.properties?.status?.const === "failed",
+				)
+			: [];
+		return failed.length === 1 ? failed[0] : undefined;
+	};
+	const branch = failedBranch(current);
+	if (branch?.properties?.failure === undefined) return current;
+	if (failedBranch(previous)?.properties?.failure !== undefined) return current;
+	const names = Object.keys(executionFailureProjectionAddition);
+	if (
+		!sameValue(branch.properties.failure, {
+			$ref: "#/components/schemas/ExecutionFailureProjectionV1",
+		}) ||
+		branch.required?.includes("failure") ||
+		names.some(
+			(name) =>
+				!sameValue(
+					current.components?.schemas?.[name],
+					executionFailureProjectionAddition[name],
+				) ||
+				(previous.components?.schemas?.[name] !== undefined &&
+					!sameValue(
+						previous.components.schemas[name],
+						executionFailureProjectionAddition[name],
+					)),
+		)
+	)
+		return current;
+	const candidate = structuredClone(current);
+	delete failedBranch(candidate).properties.failure;
+	for (const name of names)
+		if (previous.components?.schemas?.[name] === undefined)
+			delete candidate.components.schemas[name];
+	// 其他位置借用这两个组件仍然拒绝。
+	const removed = names.filter(
+		(name) => candidate.components.schemas[name] === undefined,
+	);
+	if (removed.length) {
+		const text = JSON.stringify(candidate);
+		if (
+			removed.some((name) =>
+				text.includes(JSON.stringify(`#/components/schemas/${name}`)),
+			)
+		)
+			return current;
+	}
+	return candidate;
+}
+
 // #3035 把既有的浏览器目录搜索 GET /api/v2/directory/search 纳入 V2 契约；
 // 新增路径与两个 strict 投影用写死的 SHA-256 固定，删除新增后须与基线逐字节一致。
 function isDirectorySearchV2OpenApiAddition(previous, current) {
@@ -3731,6 +3928,38 @@ function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
 		)
 			delete normalized.components.securitySchemes;
 	}
+	return sameValue(previous, normalized);
+}
+
+// #3379：最近对话按 Agent 降级，只允许 200 响应追加可选的 `unavailableAgentIds`
+// （渠道资格无法确认、被省略的 Agent）。删除该字段后须与基线逐字节一致。
+const recentUnavailableAgentIdsProperty = {
+	items: { minLength: 1, type: "string" },
+	maxItems: 100,
+	minItems: 1,
+	type: "array",
+};
+function recentPersonalConversationPageSchema(document) {
+	return document.paths?.["/api/v2/me/conversations/recent"]?.get?.responses?.[
+		"200"
+	]?.content?.["application/json"]?.schema;
+}
+function isRecentUnavailableAgentsOpenApiAddition(previous, current) {
+	const before = recentPersonalConversationPageSchema(previous);
+	const after = recentPersonalConversationPageSchema(current);
+	if (
+		!before?.properties ||
+		Object.hasOwn(before.properties, "unavailableAgentIds") ||
+		!sameValue(
+			after?.properties?.unavailableAgentIds,
+			recentUnavailableAgentIdsProperty,
+		) ||
+		after.required?.includes("unavailableAgentIds")
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete recentPersonalConversationPageSchema(normalized).properties
+		.unavailableAgentIds;
 	return sameValue(previous, normalized);
 }
 
@@ -4620,14 +4849,53 @@ function isConnectionCapabilityOpenApiAddition(previous, current) {
 		path: current.paths?.[path],
 		schema: current.components?.schemas?.[name],
 	};
+	const additionForHash = structuredClone(addition);
+	const available = additionForHash.schema?.oneOf?.find(
+		(option) => option.properties?.status?.const === "available",
+	);
+	delete available?.properties?.webPath;
+	if (Array.isArray(available?.required))
+		available.required = available.required.filter(
+			(field) => field !== "webPath",
+		);
 	if (
-		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		createHash("sha256")
+			.update(JSON.stringify(additionForHash))
+			.digest("hex") !==
 		"e1e46d38ed8749051748bbb54abfdd6674051907aa237dd38eae022ff63e9326"
 	)
 		return false;
 	const normalized = structuredClone(current);
 	delete normalized.paths[path];
 	delete normalized.components.schemas[name];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #851 keeps the existing MCP capability contract compatible while adding the
+// independently approved browser-console path used by Platform Web.
+function isConnectionCapabilityWebPathAddition(previous, current) {
+	const name = "ConnectionCapabilityProjectionV1";
+	const before = previous.components?.schemas?.[name];
+	const after = current.components?.schemas?.[name];
+	const available = (schema) =>
+		schema?.oneOf?.find(
+			(option) => option.properties?.status?.const === "available",
+		);
+	const beforeAvailable = available(before);
+	const afterAvailable = available(after);
+	if (
+		before === undefined ||
+		after === undefined ||
+		beforeAvailable?.properties?.webPath !== undefined ||
+		afterAvailable?.properties?.webPath === undefined
+	)
+		return false;
+	const normalized = structuredClone(current);
+	const normalizedAvailable = available(normalized.components.schemas[name]);
+	delete normalizedAvailable.properties.webPath;
+	normalizedAvailable.required = normalizedAvailable.required.filter(
+		(name) => name !== "webPath",
+	);
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
@@ -5827,6 +6095,11 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			previous,
 			current,
 		);
+		current = normalizeBoundedQueueOpenApiAddition(previous, current);
+		current = normalizeExecutionFailureProjectionOpenApiAddition(
+			previous,
+			current,
+		);
 		current = normalizeConversationTaskStatusOpenApiAddition(previous, current);
 		current = normalizeReasoningEventOpenApiAddition(previous, current);
 		current = normalizeSandboxResultFileOpenApiAddition(previous, current);
@@ -5874,6 +6147,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) &&
 			!isRuntimeSessionBlockedOpenApiAddition(previous, current) &&
 			!isRuntimeFileInputRejectedOpenApiAddition(previous, current) &&
+			!isRuntimeTurnNotSubmittedOpenApiAddition(previous, current) &&
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeSkillHostReadOpenApiAddition(previous, current) &&
 			!isRuntimeSkillReadGrantCommandOpenApiAddition(previous, current) &&
@@ -5919,6 +6193,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isConversationSessionAvailabilityOpenApiAddition(previous, current) &&
 			!isConversationSessionUpdatingOpenApiAddition(previous, current) &&
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&
+			!isRecentUnavailableAgentsOpenApiAddition(previous, current) &&
 			!isSkillHubReadOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationOpenApiAddition(previous, current) &&
 			!isSkillHubPublicationOpenApiAddition(previous, current) &&
@@ -5950,6 +6225,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isScopedAuditDisplayNameV2OpenApiAddition(previous, current) &&
 			!isSkillHubAuditActionOpenApiAddition(previous, current) &&
 			!isConnectionInstallationOpenApiAddition(previous, current) &&
+			!isConnectionCapabilityWebPathAddition(previous, current) &&
 			!isPlatformUserDisableOpenApiAddition(previous, current) &&
 			!isConnectionInstallationAuthorizationUrlAddition(previous, current) &&
 			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&

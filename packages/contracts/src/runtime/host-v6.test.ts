@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import Ajv2020 from "ajv/dist/2020.js";
 
 import { expect, it } from "vitest";
 
@@ -7,12 +9,15 @@ import {
 	RuntimePrivateRelayKeyFieldV1Schema,
 } from "./host-v4.ts";
 import {
+	RuntimeBusinessGrantClaimsV6Schema,
 	RuntimeNativeCapabilityRequestV6Schema,
 	RuntimeNativeCapabilityTransportV6Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV6Schema,
 	RuntimeRestoreExecutionKeyRequestV6Schema,
+	runtimeOperationDigestV6,
 	runtimeRequestDigestV6,
 	runtimeRequestSigningPayloadV6,
+	validateVerifiedRuntimeExecutionGrantClaimsV6,
 } from "./host-v6.ts";
 
 const parameters = "compact";
@@ -183,4 +188,154 @@ it("binds the digest to selection/config but excludes the Grant token", async ()
 			grant: { ...request.grant, token: "x.y.z" },
 		}),
 	).toBe(digest);
+});
+
+it("preserves the accepted digest across request renewal, but not frozen-input changes", async () => {
+	const original = await runtimeOperationDigestV6(request);
+	const renewed = {
+		...request,
+		requestId: "new-request",
+		traceId: "new-trace",
+		grant: { ...request.grant, token: "x.y.z" },
+		operation: {
+			...request.operation,
+			deliveryFence: 3,
+			executionDeliveryFence: 3,
+		},
+	};
+	expect(await runtimeOperationDigestV6(renewed)).toBe(original);
+	expect(await runtimeRequestDigestV6(renewed)).not.toBe(
+		await runtimeRequestDigestV6(request),
+	);
+	for (const changed of [
+		{ principal: { kind: "user" as const, id: "bob" } },
+		{ agentId: "agent-2" },
+		{ conversationId: "conversation-2" },
+		{ executionId: "execution-2" },
+		{ turnId: "turn-2" },
+		{ sessionGeneration: 2 },
+		{ hostSessionRef: "session-2" },
+		{ configVersion: "configuration-2" },
+		{ selection: { ...request.selection, modelOptionId: "other-model" } },
+		{ keyBinding: { ...request.keyBinding, version: 2 } },
+		{ directoryRevision: "a".repeat(64) },
+		{ parametersDigest: "f".repeat(64) },
+		{ capabilitySourceVersion: "other-release" },
+	])
+		expect(await runtimeOperationDigestV6({ ...request, ...changed })).not.toBe(
+			original,
+		);
+});
+
+it("bounds V6 grants to command execution without attachments or event access", () => {
+	const context = {
+		expectedIssuer: "platform-worker",
+		expectedWorkerId: "worker-1",
+		now: 1000,
+	};
+	const claims = {
+		schemaVersion: 6,
+		issuer: context.expectedIssuer,
+		audience: "runtime_host",
+		workerId: context.expectedWorkerId,
+		issuedAt: 1000,
+		expiresAt: 31000,
+		grantId: "grant-1",
+		principal: request.principal,
+		agentId: request.agentId,
+		channelId: request.channelId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		traceId: request.traceId,
+		hostSessionRef: request.hostSessionRef,
+		operation: request.operation,
+		executionSource: request.executionSource,
+		relayKeyBinding: request.keyBinding,
+		requestDigest: "a".repeat(64),
+		purpose: "business",
+		authorizationRecordId: "authorization-1",
+		allowedCommands: ["native-capability.invoke"],
+		attachments: [],
+	};
+	expect(
+		validateVerifiedRuntimeExecutionGrantClaimsV6(claims, context),
+	).toEqual(claims);
+	for (const changed of [
+		{ expiresAt: 1000 },
+		{ expiresAt: 31001 },
+		{ issuedAt: 1001 },
+		{ schemaVersion: 4 },
+		{ issuer: "foreign" },
+		{ workerId: "foreign" },
+		{ allowedCommands: ["turn.submit"] },
+		{ attachments: [{ attachmentId: "file", operations: ["read"] }] },
+		{
+			eventAccess: {
+				command: "events.persist",
+				consumer: "platform_worker_persistence",
+				afterCursor: null,
+			},
+		},
+		{ operation: { ...request.operation, kind: "message" } },
+	])
+		expect(() =>
+			validateVerifiedRuntimeExecutionGrantClaimsV6(
+				{ ...claims, ...changed },
+				context,
+			),
+		).toThrow();
+	expect(
+		RuntimeBusinessGrantClaimsV6Schema.safeParse({
+			...claims,
+			purpose: "control",
+		}).success,
+	).toBe(false);
+});
+
+it("publishes the strict V6 request and sender response in generated artifacts", async () => {
+	const schema = JSON.parse(
+		await readFile(
+			new URL(
+				"../../artifacts/json-schema/runtime.v6.schema.json",
+				import.meta.url,
+			),
+			"utf8",
+		),
+	);
+	const openapi = JSON.parse(
+		await readFile(
+			new URL(
+				"../../artifacts/openapi/runtime-host.v6.openapi.json",
+				import.meta.url,
+			),
+			"utf8",
+		),
+	);
+	const validate = new Ajv2020({
+		strictSchema: false,
+		strictTuples: false,
+		validateFormats: false,
+	}).compile({
+		$defs: schema.$defs,
+		$ref: "#/$defs/RuntimeNativeCapabilityRequestV6",
+	});
+	expect(validate(request)).toBe(true);
+	for (const changed of [
+		{ schemaVersion: 4 },
+		{ selection: undefined },
+		{ configVersion: undefined },
+		{ capabilityKind: "skill" },
+		{ attachments: [] },
+	])
+		expect(validate({ ...request, ...changed })).toBe(false);
+	const operation =
+		openapi.paths["/internal/runtime/v6/native-capability"].post;
+	expect(operation.requestBody.content["application/json"].schema.$ref).toBe(
+		"#/components/schemas/RuntimeNativeCapabilityTransportV6",
+	);
+	expect(
+		operation.responses["200"].content["application/json"].schema.$ref,
+	).toBe("#/components/schemas/RuntimeOperationResponseV6");
 });

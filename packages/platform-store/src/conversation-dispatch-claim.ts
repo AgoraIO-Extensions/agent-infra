@@ -21,6 +21,7 @@ import {
 	lockExecution,
 	lockOutbox,
 	readGenerationIsolation,
+	readInitialTurnInput,
 	readMessage,
 	readStop,
 } from "./conversation-dispatch-sql.js";
@@ -108,13 +109,8 @@ export async function claimWork(
 ): Promise<ConversationDispatchClaimDecisionV1> {
 	// Application/use governance precedes the original Agent -> Conversation -> Outbox locks.
 	await lockWaitingTaskAuthority(transaction, input.itemId);
-	const [agent] = await transaction<
-		{
-			status: string;
-			desired_state: string;
-			service_availability: string | null;
-		}[]
-	>`
+	// Holds the Agent and its application row in the established lock order.
+	await transaction`
 		select aa.status, aa.desired_state, aa.service_availability
 		from platform.agents a
 		join platform.conversations c on c.agent_id = a.id
@@ -243,19 +239,20 @@ export async function claimWork(
 		}
 		if (decision.outcome === "wait") return { outcome: "busy" };
 	}
-	const stoppedRecovery =
+	// #3373：只核实状态的恢复认领（Execution 为 processing/unknown，沿原操作查询，不提交新 Turn）
+	// 不以 Sandbox 就绪为前置；Sandbox、Agent Pod 或 Owner 重启期间查询失败按可重试处理，
+	// 墙钟恢复预算继续计时（Runtime HLD §7.3）。首次投递与重提仍须 Sandbox 就绪。原生能力调用
+	// 只有记录了 Host Session Ref 时才沿原操作查询，否则恢复会重放投递，仍须 Sandbox 就绪。
+	const statusRecovery =
 		isExecutionOperation(selectedOperation) &&
 		(execution.status === "processing" || execution.status === "unknown") &&
-		agent !== undefined &&
-		(agent.status !== "available" ||
-			agent.desired_state !== "running" ||
-			agent.service_availability !== "ready");
+		(isTurn(selectedOperation) || conversation.host_session_ref !== null);
 	if (
 		!conversation.sandbox_ready &&
 		!isolationWork &&
 		selectedOperation !== "conversation.turn.stop.v1" &&
 		!payload.metadataRecovery &&
-		!stoppedRecovery
+		!statusRecovery
 	)
 		return { outcome: "busy" };
 	if (
@@ -385,15 +382,44 @@ export async function claimWork(
 			) as seen
 		`
 			: [];
-	const inputFiles = message
-		? await transaction<{ file_id: string }[]>`
+	// #3373：墙钟恢复预算与未提交重提窗口都按数据库时钟计算，Core 只比较时长。
+	const [recovery] =
+		currentExecutionStatus === "unknown"
+			? await transaction<{ elapsed_ms: string | null }[]>`
+			select greatest(0, floor(extract(epoch from (clock_timestamp() - unknown_since)) * 1000))::bigint::text as elapsed_ms
+			from platform.conversation_executions
+			where execution_id = ${execution.execution_id} and conversation_id = ${conversation.id}
+		`
+			: [];
+	const [notSubmitted] = isTurn(selectedOperation)
+		? await transaction<{ count: number; elapsed_ms: string | null }[]>`
+			select count(*)::int as count,
+				greatest(0, floor(extract(epoch from (clock_timestamp() - min(occurred_at))) * 1000))::bigint::text as elapsed_ms
+			from platform.persisted_events
+			where stream_id = ${`outbox:${outbox.id}`} and event_type = 'outbox.retry_scheduled'
+				and payload->>'errorCode' = 'RUNTIME_TURN_NOT_SUBMITTED'
+		`
+		: [];
+	// #3374：新消息 Turn 的输入包含合并窗口内并入同一 Execution 的消息；重新生成仍只读源消息。
+	const turnInput =
+		message && selectedOperation === "conversation.turn.submit.v1"
+			? await readInitialTurnInput(
+					transaction,
+					conversation.id,
+					execution.execution_id,
+					message,
+				)
+			: undefined;
+	const inputFiles =
+		message && !turnInput
+			? await transaction<{ file_id: string }[]>`
         select file_id from platform.files
         where conversation_id = ${conversation.id}
           and record->>'messageId' = ${payload.messageId}
           and record->>'kind' = 'attachment' and record->>'status' = 'available'
         order by file_id
     `
-		: [];
+			: [];
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
 		sandbox: conversation.sandbox,
@@ -438,16 +464,31 @@ export async function claimWork(
 				}
 			: {}),
 		runtimeCursor: execution.last_runtime_cursor,
+		...(recovery?.elapsed_ms != null
+			? { recoveryElapsedMs: requireSafeCounter(recovery.elapsed_ms) }
+			: {}),
+		...(notSubmitted &&
+		notSubmitted.count > 0 &&
+		notSubmitted.elapsed_ms != null
+			? {
+					notSubmittedResubmissions: {
+						count: notSubmitted.count,
+						elapsedMs: requireSafeCounter(notSubmitted.elapsed_ms),
+					},
+				}
+			: {}),
 		...(terminalEvent?.seen ? { runtimeTerminalEventSeen: true as const } : {}),
 		...(payload.metadataRecovery
 			? { metadataRecovery: payload.metadataRecovery }
 			: {}),
-		input: message
-			? {
-					text: message.text,
-					attachments: inputFiles.map((file) => file.file_id),
-				}
-			: null,
+		input: turnInput
+			? { text: turnInput.text, attachments: turnInput.attachments }
+			: message
+				? {
+						text: message.text,
+						attachments: inputFiles.map((file) => file.file_id),
+					}
+				: null,
 		...(payload.nativeCapability
 			? { nativeCapability: payload.nativeCapability }
 			: {}),

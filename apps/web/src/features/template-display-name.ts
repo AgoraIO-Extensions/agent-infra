@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { DeploymentTemplateProjectionV2 } from "../pilot/generated-v2/types.gen.js";
-import { useDeploymentConfiguration } from "./my-agents/use-deployment-configuration.js";
+import { useShownDeploymentConfiguration } from "./my-agents/use-deployment-configuration.js";
 
 /** 读不到模板显示名（部署配置未返回、读取失败或模板已移除）时的中性文案。 */
 export const templateFallbackName = "标准模板";
@@ -40,14 +40,13 @@ export function standardTemplateLabel(
 }
 
 /**
- * 页面读取部署配置里的模板显示名（F-02）。与申请表单共用同一个部署配置读取；读取中或
- * 失败时所有模板都回落为「标准模板」。
+ * 页面读取部署配置里的模板显示名（F-02）。与申请表单共用同一个部署配置读取；首次读取中、没有读到过
+ * 或失败不可重试时所有模板都回落为「标准模板」。读到过之后，后台重读（回到标签页、窗口重新聚焦）的
+ * 可重试失败继续用最近一次读到的模板表，已显示的「Codex」等显示名与筛选项不回落（#3418 N14-03）。
  */
 export function useTemplateNameLookup(): TemplateNameLookup {
-	const deployment = useDeploymentConfiguration();
+	const { shown } = useShownDeploymentConfiguration();
 	const templates =
-		deployment.data?.kind === "ready"
-			? deployment.data.configuration.templates
-			: undefined;
+		shown?.kind === "ready" ? shown.configuration.templates : undefined;
 	return useMemo(() => templateNameLookup(templates), [templates]);
 }

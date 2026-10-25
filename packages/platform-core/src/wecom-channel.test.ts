@@ -322,15 +322,64 @@ describe("managed WeCom channel", () => {
 		if (one.outcome !== "accepted" || two.outcome !== "accepted")
 			throw new Error("Expected acceptance");
 		expect(one.receipt.conversationId).not.toBe(two.receipt.conversationId);
-		const busy = await f.useCase.receive({ ...message, eventId: "event-3" });
-		expect(busy).toMatchObject({
+		// 执行中再发的消息进入原发送者自己会话的排队，不进入另一发送者的会话（§12.5）。
+		const queued = await f.useCase.receive({ ...message, eventId: "event-3" });
+		expect(queued).toMatchObject({
+			outcome: "accepted",
+			receipt: {
+				status: "accepted",
+				conversationId: one.receipt.conversationId,
+				queuePosition: 1,
+			},
+		});
+		if (queued.outcome !== "accepted") throw new Error("Expected queued");
+		expect(queued.receipt.executionId).not.toBe(one.receipt.executionId);
+		expect(
+			await f.useCase.receive({
+				...message,
+				senderId: "sender-2",
+				eventId: "event-4",
+			}),
+		).toMatchObject({
+			receipt: {
+				conversationId: two.receipt.conversationId,
+				queuePosition: 1,
+			},
+		});
+	});
+	it("queues three in-flight messages in order and reports the fourth as busy", async () => {
+		const f = fixture();
+		const first = await f.useCase.receive(message);
+		if (first.outcome !== "accepted") throw new Error("Expected acceptance");
+		const positions = [];
+		for (const index of [2, 3, 4]) {
+			const queued = await f.useCase.receive({
+				...message,
+				eventId: `event-${index}`,
+			});
+			if (queued.outcome !== "accepted") throw new Error("Expected queued");
+			positions.push(queued.receipt.queuePosition);
+		}
+		expect(positions).toEqual([1, 2, 3]);
+		expect(
+			await f.useCase.receive({ ...message, eventId: "event-5" }),
+		).toMatchObject({
 			outcome: "accepted",
 			receipt: {
 				status: "busy",
-				conversationId: one.receipt.conversationId,
+				conversationId: first.receipt.conversationId,
 				executionId: null,
 			},
 		});
+		// 重放排队消息不重复入队，也不重新判定分支。
+		expect(
+			await f.useCase.receive({ ...message, eventId: "event-2" }),
+		).toMatchObject({ outcome: "replayed" });
+		expect(
+			[...f.conversations.values()][0]
+				?.snapshot()
+				.executions.map(({ status }) => status),
+		).toEqual(["submitted", "waiting", "waiting", "waiting"]);
 	});
 	it("rechecks authority even for duplicate callbacks and produces no work when revoked", async () => {
 		const f = fixture();
@@ -349,14 +398,19 @@ describe("WeCom supplementary instructions follow the Runtime capability (#3375)
 			return true;
 		});
 		const first = await f.useCase.receive(message);
+		expect(first.outcome).toBe("accepted");
+		if (first.outcome !== "accepted" || !first.receipt.executionId)
+			throw new Error("Expected acceptance");
+		// 补充指令只给已被 Runtime 接受、仍在运行的回复（§12.5）。
+		[...f.conversations.values()][0]?.markExecutionProcessing(
+			first.receipt.executionId,
+		);
 		const second = await f.useCase.receive({
 			...message,
 			eventId: "event-supplement",
 			text: "also include the summary",
 		});
 
-		expect(first.outcome).toBe("accepted");
-		if (first.outcome !== "accepted") throw new Error("Expected acceptance");
 		// 补充指令绑定当前活跃 Execution，不新建 Execution 或 Turn。
 		expect(second).toMatchObject({
 			outcome: "accepted",
@@ -368,10 +422,17 @@ describe("WeCom supplementary instructions follow the Runtime capability (#3375)
 		});
 		const conversation = [...f.conversations.values()][0]?.snapshot();
 		expect(conversation?.executions).toHaveLength(1);
-		expect(f.plans.at(-1)?.authority.actor.supportsSupplementaryInstruction).toBe(
-			true,
-		);
-		expect(reads.at(-1)).toEqual({ scope: { ...message, eventId: "event-supplement", text: "also include the summary" }, actorId: message.senderId });
+		expect(
+			f.plans.at(-1)?.authority.actor.supportsSupplementaryInstruction,
+		).toBe(true);
+		expect(reads.at(-1)).toEqual({
+			scope: {
+				...message,
+				eventId: "event-supplement",
+				text: "also include the summary",
+			},
+			actorId: message.senderId,
+		});
 	});
 
 	it.each([
@@ -382,24 +443,35 @@ describe("WeCom supplementary instructions follow the Runtime capability (#3375)
 				throw new Error("synthetic presentation failure");
 			},
 		],
-	] as const)("keeps the busy branch when the Runtime capability %s", async (_name, read) => {
-		const f = fixture(undefined, undefined, read);
-		const first = await f.useCase.receive(message);
-		const second = await f.useCase.receive({ ...message, eventId: "event-2" });
+	] as const)(
+		"queues instead of supplementing when the Runtime capability %s",
+		async (_name, read) => {
+			const f = fixture(undefined, undefined, read);
+			const first = await f.useCase.receive(message);
+			if (first.outcome !== "accepted" || !first.receipt.executionId)
+				throw new Error("Expected acceptance");
+			[...f.conversations.values()][0]?.markExecutionProcessing(
+				first.receipt.executionId,
+			);
+			const second = await f.useCase.receive({
+				...message,
+				eventId: "event-2",
+			});
 
-		if (first.outcome !== "accepted") throw new Error("Expected acceptance");
-		expect(second).toMatchObject({
-			outcome: "accepted",
-			receipt: {
-				status: "busy",
-				conversationId: first.receipt.conversationId,
-				executionId: null,
-			},
-		});
-		expect(f.plans.at(-1)?.authority.actor.supportsSupplementaryInstruction).toBe(
-			false,
-		);
-	});
+			// #3376：不支持补充指令时进入排队，不并入当前回复。
+			expect(second).toMatchObject({
+				outcome: "accepted",
+				receipt: {
+					status: "accepted",
+					conversationId: first.receipt.conversationId,
+					queuePosition: 1,
+				},
+			});
+			expect(
+				f.plans.at(-1)?.authority.actor.supportsSupplementaryInstruction,
+			).toBe(false);
+		},
+	);
 
 	it("never lets another sender supplement the active Turn", async () => {
 		const f = fixture(undefined, undefined, async () => true);
@@ -518,21 +590,32 @@ describe("createWecomSupplementaryInstructionReaderV1 (#3375)", () => {
 	});
 
 	it.each([
-		["the capability is false", async () => found({ supplementaryInstruction: false })],
+		[
+			"the capability is false",
+			async () => found({ supplementaryInstruction: false }),
+		],
 		["the capability is missing", async () => found({ attachments: true })],
 		["the Runtime is not verified", async () => found(null)],
 		["the presentation is stale", async () => ({ outcome: "stale" })],
-		["the presentation is unavailable", async () => ({ outcome: "unavailable" })],
+		[
+			"the presentation is unavailable",
+			async () => ({ outcome: "unavailable" }),
+		],
 		[
 			"the presentation read fails",
 			async (): Promise<unknown> => {
 				throw new Error("synthetic presentation failure");
 			},
 		],
-	] as const)("treats the capability as unsupported when %s", async (_name, runtime) => {
-		const { read } = reader({ runtime });
-		expect(await read({ scope: message, actorId: "company-user" })).toBe(false);
-	});
+	] as const)(
+		"treats the capability as unsupported when %s",
+		async (_name, runtime) => {
+			const { read } = reader({ runtime });
+			expect(await read({ scope: message, actorId: "company-user" })).toBe(
+				false,
+			);
+		},
+	);
 
 	it.each([
 		["a different current sender", { userId: "other-user" }],
@@ -578,14 +661,15 @@ describe("WeCom /new and unavailable conversations (#3184)", () => {
 		const next = await accepted(f, { eventId: "event-4", text: "hello again" });
 		expect(next.status).toBe("accepted");
 		expect(next.conversationId).not.toBe(first.conversationId);
-		// 群内其他发送者的会话不受影响：仍映射到原会话（处理中，所以是 busy）。
+		// 群内其他发送者的会话不受影响：仍映射到原会话（处理中，所以进入该会话的排队）。
 		const otherAgain = await accepted(f, {
 			eventId: "event-5",
 			senderId: "sender-2",
 		});
 		expect(otherAgain).toMatchObject({
-			status: "busy",
+			status: "accepted",
 			conversationId: other.conversationId,
+			queuePosition: 1,
 		});
 	});
 

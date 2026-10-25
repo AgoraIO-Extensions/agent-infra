@@ -98,6 +98,8 @@ export interface ProductionPlatformApiInputV1
 		>["verify"];
 	};
 	readonly connectionConsumerProfile?: unknown;
+	/** Server-resolved Connection Web console path; separate from the MCP endpoint. */
+	readonly connectionWebPath?: unknown;
 	readonly connectionInstallation?: Omit<
 		NonNullable<PlatformApiAssemblyInput["connectionInstallation"]>,
 		"profile" | "approval"
@@ -473,6 +475,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 	const connectionCapability = createConnectionCapability(
 		input.connectionConsumerProfile,
 		input.connectionConsumerProfileApproval,
+		input.connectionWebPath,
 	);
 	const secrets = createDeploymentSecretPreparation(
 		createSecretEncryptorV1({ encryptionKeys: input.encryptionKeys }),
@@ -543,8 +546,12 @@ export function createProductionPlatformApiAssemblyInputV1(
 			? {
 					connectionInstallation: {
 						...input.connectionInstallation,
-						profile: input.connectionConsumerProfile,
-						approval: input.connectionConsumerProfileApproval,
+						...(input.connectionInstallation.bindingsByAgent !== undefined
+							? {}
+							: {
+									profile: input.connectionConsumerProfile,
+									approval: input.connectionConsumerProfileApproval,
+								}),
 					},
 				}
 			: {}),

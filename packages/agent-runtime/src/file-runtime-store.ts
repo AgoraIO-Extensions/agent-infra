@@ -124,6 +124,19 @@ function storeCorrupted(): never {
 	);
 }
 
+/**
+ * #3373：Host 核实 Driver 在原生提交点之前未提交本次 Turn 后持久化的可重试结果。
+ * 只有 Host 能写入，Driver 操作记录不能携带它。
+ */
+export function isRuntimeTurnNotSubmittedResult(
+	result: RuntimeOperationResultV1 | RuntimeOperationResultV2 | undefined,
+) {
+	return (
+		result?.outcome === "rejected" &&
+		result.code === "RUNTIME_TURN_NOT_SUBMITTED"
+	);
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
 	return (
 		typeof value === "object" &&
@@ -1031,6 +1044,18 @@ export class FileRuntimeStore {
 			}
 
 			const operation = session.operations[input.operationId];
+			// #3373：已持久的未提交结果只对相同 fence 的重放返回原结果。携带更高 fence 的同一
+			// 操作（相同种类、请求摘要与 Key 范围）重新进入已准备状态，按新请求的授权与 fence
+			// 走完整的执行前核实；其他差异仍按冲突或重放处理。
+			const rearmUnsubmittedTurn =
+				operation?.state === "resolved" &&
+				operation.kind === "submit-turn" &&
+				input.kind === "submit-turn" &&
+				isRuntimeTurnNotSubmittedResult(operation.result) &&
+				operation.requestDigest === input.requestDigest &&
+				isDeepStrictEqual(operation.keyScopeV4, keyScopeV4) &&
+				input.deliveryFence > operation.deliveryFence &&
+				input.deliveryFence > (session.highestFences[input.scope] ?? 0);
 			if (
 				input.kind === "supplement" &&
 				!isDeepStrictEqual(
@@ -1043,7 +1068,8 @@ export class FileRuntimeStore {
 				assertSessionAuthority(session.authority, input.binding);
 				const resolvedReplay =
 					operation?.state === "resolved" &&
-					operation.requestDigest === input.requestDigest;
+					operation.requestDigest === input.requestDigest &&
+					!rearmUnsubmittedTurn;
 				// A retry of an already-resolved operation only reads its durable
 				// receipt. Recovery query authority must not turn that read into a
 				// fresh business authorization decision.
@@ -1105,6 +1131,10 @@ export class FileRuntimeStore {
 				if (input.deliveryFence > operation.deliveryFence) {
 					operation.deliveryFence = input.deliveryFence;
 					session.highestFences[input.scope] = input.deliveryFence;
+				}
+				if (rearmUnsubmittedTurn) {
+					operation.state = "prepared";
+					delete operation.result;
 				}
 				return {
 					session: structuredClone(session),

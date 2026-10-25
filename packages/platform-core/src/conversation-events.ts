@@ -165,7 +165,22 @@ export interface ConversationTaskStatusEventV1 {
 		| "STOP_CONFIRMATION_TIMEOUT"
 		| "TASK_WAIT_TIMEOUT"
 		| "AGENT_UNAVAILABLE"
-		| "CONVERSATION_UNAVAILABLE";
+		| "CONVERSATION_UNAVAILABLE"
+		| ConversationQueueCancelReasonV1;
+}
+
+/**
+ * Web/渠道排队消息取消时的受限原因（工程 Spec §12.5）：发送者撤回，或出队前重验发现权限失效。
+ * 任务 API 的取消事件不带原因。
+ */
+export type ConversationQueueCancelReasonV1 =
+	| "WITHDRAWN"
+	| "AUTHORIZATION_REVOKED";
+
+function isQueueCancelReasonV1(
+	reason: unknown,
+): reason is ConversationQueueCancelReasonV1 {
+	return reason === "WITHDRAWN" || reason === "AUTHORIZATION_REVOKED";
 }
 
 function isTaskFailureReasonV1(
@@ -185,6 +200,8 @@ export function publicTaskStatusEventV1(input: {
 	readonly isTask: boolean;
 	readonly status: ConversationTaskStatusEventV1["status"];
 	readonly reason?: string;
+	/** Web/渠道排队消息（非任务 API）；只有它的取消事件带受限原因。 */
+	readonly queuedMessage?: boolean;
 }): ConversationTaskStatusEventV1 | null {
 	if (
 		!input.isTask &&
@@ -198,7 +215,11 @@ export function publicTaskStatusEventV1(input: {
 			? input.reason
 			: input.status === "failed" && isTaskFailureReasonV1(input.reason)
 				? input.reason
-				: undefined;
+				: input.status === "cancelled" &&
+						input.queuedMessage === true &&
+						isQueueCancelReasonV1(input.reason)
+					? input.reason
+					: undefined;
 	return {
 		type: "task.status",
 		status: input.status,
@@ -772,7 +793,8 @@ export function parseConversationPersistedEventPayloadV1(
 			!(
 				(values.reason === "STOP_CONFIRMATION_TIMEOUT" &&
 					values.status === "unknown") ||
-				(values.status === "failed" && isTaskFailureReasonV1(values.reason))
+				(values.status === "failed" && isTaskFailureReasonV1(values.reason)) ||
+				(values.status === "cancelled" && isQueueCancelReasonV1(values.reason))
 			)
 		)
 			invalidInput();
@@ -790,7 +812,8 @@ export function parseConversationPersistedEventPayloadV1(
 			invalidInput();
 		const reason =
 			values.reason === "STOP_CONFIRMATION_TIMEOUT" ||
-			isTaskFailureReasonV1(values.reason)
+			isTaskFailureReasonV1(values.reason) ||
+			isQueueCancelReasonV1(values.reason)
 				? values.reason
 				: undefined;
 		return {

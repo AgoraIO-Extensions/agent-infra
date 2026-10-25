@@ -59,8 +59,8 @@ import {
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
 import {
+	declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1,
 	readRuntimeFileResultReceiptV1,
-	rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1,
 } from "./runtime-file-bridge.js";
 import {
 	isSandboxAttachmentNativeImageV1,
@@ -1534,12 +1534,24 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						command.input.attachments,
 						fileBridge,
 					)
-			).catch(
-				// #3314：附件在打开原生 Session 与本操作的持久记录之前物化，平台的明确拒绝不会
-				// 留下任何原生副作用，可以由 Host 持久化为 rejected；其他错误保持原语义。
-				rethrowRuntimeFileInputRejectionBeforeNativeSideEffectV1,
+			).catch((error: unknown) =>
+				// #3314/#3373：附件在打开原生 Session 与本操作的持久记录之前物化。平台的明确拒绝
+				// 由 Host 持久化为 rejected；其他读取或物化失败声明本次 Turn 未提交。
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					error,
+					"file_input_unavailable",
+					command,
+				),
 			);
-			revalidateInput();
+			try {
+				revalidateInput();
+			} catch (error) {
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					error,
+					"session_preparation_failed",
+					command,
+				);
+			}
 		}
 		const previousHandle = this.handles.get(ref);
 		const reuse =
@@ -1785,11 +1797,17 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			await native.close();
 			unavailable();
 		}
+		let revalidationFailure: { readonly error: unknown } | undefined;
 		try {
 			const nativeCheckpoint = await native.checkpoint?.();
 			// Native initialization is asynchronous; the File Grant must still hold
 			// immediately before validated bytes cross into the native Turn.
-			revalidateInput();
+			try {
+				revalidateInput();
+			} catch (error) {
+				revalidationFailure = { error };
+				throw error;
+			}
 			await file.update((state) => {
 				state.operations.push({
 					key: operationKey(command),
@@ -1812,23 +1830,32 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		} catch {
 			await native.close();
 			this.handles.delete(ref);
+			// #3373：Grant 复核失败时本操作尚未写入，原生 Session 也没有收到 prompt。
+			if (revalidationFailure)
+				declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+					revalidationFailure.error,
+					"session_preparation_failed",
+					command,
+				);
 			unavailable();
 		}
 		const handle: Handle = { native, selection, pump: Promise.resolve() };
 		this.handles.set(ref, handle);
 		let preDispatchFailure = false;
+		let preDispatchDiscarded: { readonly error: unknown } | undefined;
 		handle.pump = (async () => {
 			if (hasAttachments) {
 				try {
 					// Materialized bytes must never reach the native session under
 					// authority that lapsed during Session setup or model selection.
 					revalidateInput();
-				} catch {
+				} catch (error) {
 					// Nothing reached the native Session, so the admitted Turn is
 					// rolled back rather than retained as an unknown Turn that may or
 					// may not have been accepted.
 					preDispatchFailure = true;
 					await this.discardTurn(file, command);
+					preDispatchDiscarded = { error };
 					if (!reuse) {
 						await native.close().catch(() => {});
 						this.handles.delete(ref);
@@ -1883,6 +1910,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		} finally {
 			clearTimeout(timer);
 		}
+		// #3373：只有本操作的 Turn 与记录已经回滚，才能声明本次 Turn 未提交。
+		if (preDispatchDiscarded)
+			declareRuntimeTurnNotSubmittedBeforeNativeSubmitV1(
+				preDispatchDiscarded.error,
+				"session_preparation_failed",
+				command,
+			);
 		if (preDispatchFailure) unavailable();
 		if (unknownHold) return result(command, ref, unknownResult);
 		return (

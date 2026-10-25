@@ -4,11 +4,13 @@ const fingerprintEnvironment = "AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT";
 const sourceRefEnvironment = "AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF";
 const sourceRevisionEnvironment =
 	"AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REVISION";
+const webPathEnvironment = "AGENT_INFRA_CONNECTION_WEB_PATH";
 
 export interface ConnectionConsumerEnvironmentConfigurationV1 {
 	readonly profile: unknown;
 	readonly approval: unknown;
 	readonly configVersion: string | undefined;
+	readonly webPath: string | undefined;
 }
 
 /**
@@ -24,10 +26,16 @@ export function readConnectionConsumerEnvironmentConfigurationV1(
 	const fingerprint = environment[fingerprintEnvironment];
 	const sourceRef = environment[sourceRefEnvironment];
 	const sourceRevision = environment[sourceRevisionEnvironment];
+	const webPath = environment[webPathEnvironment];
 	if (
-		[rawProfile, configVersion, fingerprint, sourceRef, sourceRevision].every(
-			(value) => value === undefined || value === "",
-		)
+		[
+			rawProfile,
+			configVersion,
+			fingerprint,
+			sourceRef,
+			sourceRevision,
+			webPath,
+		].every((value) => value === undefined || value === "")
 	)
 		return undefined;
 	let profile: unknown;
@@ -49,5 +57,5 @@ export function readConnectionConsumerEnvironmentConfigurationV1(
 		configVersion !== `1-${String(fingerprint ?? "")}`
 	)
 		profile = undefined;
-	return { profile, approval, configVersion };
+	return { profile, approval, configVersion, webPath };
 }

@@ -6,6 +6,7 @@ import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures
 import {
 	backgroundReread,
 	expectBackgroundRereadKeeps,
+	expectFatalRereadHandsFocus,
 } from "./background-reread";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { recordApiRequests } from "./generated-client-paths";
@@ -2008,3 +2009,66 @@ for (const outcome of ["recovers", "fails again"] as const)
 		await expectNoDuplicateControls(page, `Agent 管理（${outcome}，#3388）`);
 		await expectCleanPage(page, pageErrors);
 	});
+// #3419 N14-09（N14-3-02 ③）：员工访问控制选中员工后「禁用这名员工？」确认弹窗打开时，回到标签页的 Agent 列表后台重读
+// 读到登录失效（401）：整页换成「登录已过期」状态卡，弹窗随之卸载，finalFocus 指向的「禁用员工：{姓名}」已不在文档。
+// 焦点交给 h1「查看 Agent 状态」，不落到 body、不滚动页面。先覆盖挂起、可重试失败与恢复（弹窗保留），两视口一致。
+test("an employee disable confirmation removed by a background 401 hands focus to the h1 (#3419 N14-09)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	const userId = "11111111-1111-4111-8111-111111111111";
+	await page.route("**/api/v2/directory/search?**", (route) =>
+		route.fulfill({
+			json: directorySearchResponse(new URL(route.request().url()), [
+				{
+					kind: "user",
+					canonicalId: userId,
+					displayName: "验收员工",
+					email: "employee@example.test",
+				},
+			]),
+		}),
+	);
+	await page.route(`**/api/v2/admin/users/${userId}/disable`, (route) =>
+		route.fulfill({ json: { schemaVersion: 1, userId, disabled: false } }),
+	);
+	await page.goto("/admin/agents");
+	await expect(page.getByRole("table", { name: "已创建 Agent" })).toBeVisible();
+	const users = page.getByRole("region", { name: "员工访问控制" });
+	await users.getByRole("combobox", { name: "员工" }).click();
+	await page.getByRole("option", { name: /验收员工/ }).click();
+	const ban = users.getByRole("button", {
+		name: "禁用员工：验收员工",
+		exact: true,
+	});
+	// 读到员工当前状态后才可禁用。
+	await expect(ban).toBeEnabled();
+	await ban.click();
+	const dialog = page.getByRole("dialog", { name: "禁用这名员工？" });
+	await expect(dialog).toBeFocused();
+	await expectBackgroundRereadKeeps(page, {
+		path: "/api/v2/admin/agents",
+		focus: dialog,
+		context: "禁用员工确认",
+		expectKept: async () => {
+			await expect(dialog).toBeVisible();
+		},
+	});
+	const main = page.locator("#main-content");
+	await expectFatalRereadHandsFocus(page, {
+		path: "/api/v2/admin/agents",
+		status: 401,
+		focus: dialog,
+		target: main.getByRole("heading", { level: 1, name: "查看 Agent 状态" }),
+		context: "禁用员工确认",
+		expectReplaced: async () => {
+			await expect(main.getByText("登录已过期")).toBeVisible();
+			await expect(dialog).toHaveCount(0);
+			await expect(ban).toHaveCount(0);
+		},
+	});
+	await expectNoDuplicateControls(page, "Agent 管理（#3419 N14-09）");
+	await expectCleanPage(page, errors);
+});

@@ -9,7 +9,7 @@ import {
 	useState,
 } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
 	Field,
@@ -79,6 +79,12 @@ import {
 
 type AgentApplicationFormProps = {
 	cancelAction?: ReactNode;
+	connectionUrl?: string;
+	/**
+	 * 最近一次读到的模型目录端点（#3418 N14-06）。部署选项读取失败时（N13-08）模型选择器禁用，端点与模型只按它
+	 * 显示名称和已选档位，不用于校验与提交。
+	 */
+	lastReadModelEndpoints?: readonly DeploymentModelEndpointProjectionV2[];
 	showDeploymentStatus?: boolean;
 	/**
 	 * 提交失败时页面顶部 danger 提示的文案（由提交页按服务端错误给出）。表单在顶部只放这一条提示；
@@ -405,6 +411,9 @@ function modelLabel(
 	return `${endpoint.displayName} · ${modelId}`;
 }
 
+/** 部署选项读取失败、也没有读到过端点显示名时「模型端点」的显示（不显示原始端点 ID，RK2-01、#3418 N14-06）。 */
+const unreadableEndpointLabel = "暂时无法读取端点名称";
+
 function templateFor(
 	configuration: DeploymentConfigurationProjectionV2,
 	templateId: string,
@@ -417,12 +426,18 @@ function templateFor(
 function ModelRows({
 	models,
 	endpoints,
+	displayEndpoints,
+	unreadable,
 	errors,
 	onChange,
 	onRemove,
 }: {
 	models: readonly AgentApplicationModelDraft[];
 	endpoints: readonly DeploymentModelEndpointProjectionV2[];
+	/** 显示名称与已选档位用的目录：部署选项读取失败时为最近一次读到的目录（#3418 N14-06）。 */
+	displayEndpoints: readonly DeploymentModelEndpointProjectionV2[];
+	/** 部署选项读取失败，模型目录读不到（N13-08）。 */
+	unreadable: boolean;
 	errors: AgentApplicationFieldErrors;
 	onChange: (
 		index: number,
@@ -440,6 +455,19 @@ function ModelRows({
 				const selectedModel = endpoint?.models.find(
 					(item) => item.modelId === model.modelId,
 				);
+				// 部署选项读取失败时只能看、不能改：端点按最近一次读到的显示名，已选档位照常列出（禁用），不回退
+				// 原始端点 ID，也不改说「选择模型后显示可用档位」（RK2-01、#3418 N14-06）。
+				const displayEndpoint = displayEndpoints.find(
+					(item) => item.endpointId === model.endpointId,
+				);
+				const selectedLevels = model.reasoningLevels
+					.split("\n")
+					.filter(Boolean);
+				const shownLevels = unreadable
+					? (displayEndpoint?.models.find(
+							(item) => item.modelId === model.modelId,
+						)?.reasoningLevels ?? selectedLevels)
+					: (selectedModel?.reasoningLevels ?? []);
 				const modelOptions = [
 					...new Set(endpoint?.models.map((item) => item.modelId) ?? []),
 				].map((modelId) => ({ value: modelId, label: modelId }));
@@ -460,8 +488,9 @@ function ModelRows({
 								value={model.endpointId}
 								disabled={endpoints.length === 0}
 								itemToStringLabel={(value) =>
-									endpoints.find((item) => item.endpointId === value)
-										?.displayName ?? String(value)
+									displayEndpoints.find((item) => item.endpointId === value)
+										?.displayName ??
+									(unreadable ? unreadableEndpointLabel : String(value))
 								}
 								onValueChange={(value) =>
 									value && onChange(index, "endpointId", value)
@@ -479,7 +508,14 @@ function ModelRows({
 										errors[`model.${index}.endpointId`] ? true : undefined
 									}
 								>
-									<SelectValue placeholder="选择模型端点" />
+									{/* 打开页面时就读不到目录：已有的模型选项认不出端点，不提示「选择」（#3418 N14-06）。 */}
+									<SelectValue
+										placeholder={
+											unreadable && model.modelId
+												? unreadableEndpointLabel
+												: "选择模型端点"
+										}
+									/>
 								</SelectTrigger>
 								<SelectContent>
 									{endpoints.map((item) => (
@@ -558,49 +594,50 @@ function ModelRows({
 								>
 									允许的推理档位
 								</FieldLegend>
-								{!selectedModel && (
+								{unreadable && model.modelId ? (
+									<p className="text-muted-foreground text-sm">
+										部署选项读取后可调整。
+									</p>
+								) : !selectedModel ? (
 									<p className="text-muted-foreground text-sm">
 										选择模型后显示可用档位。
 									</p>
-								)}
-								{(selectedModel?.reasoningLevels ?? []).map(
-									(level, levelIndex) => {
-										const selected = model.reasoningLevels
-											.split("\n")
-											.includes(level);
-										// base-ui 复选框默认取外层 label 作 aria-labelledby，aria-label 不生效；
-										// 与 E3-16 相同，名称取自旁边的隐藏文本，可见文字与点击标签切换不变。
-										const nameId = `application-model-option-reasoning-${index}-level-${levelIndex}-name`;
-										return (
-											<Fragment key={level}>
-												<Label variant="option">
-													<Checkbox
-														aria-labelledby={nameId}
-														checked={selected}
-														onCheckedChange={(checked) => {
-															const levels = new Set(
-																model.reasoningLevels
-																	.split("\n")
-																	.filter(Boolean),
-															);
-															if (checked) levels.add(level);
-															else levels.delete(level);
-															onChange(
-																index,
-																"reasoningLevels",
-																[...levels].join("\n"),
-															);
-														}}
-													/>
-													{reasoningLevelLabel(level)}
-												</Label>
-												<span id={nameId} hidden>
-													{withObjectName(reasoningLevelLabel(level), rowName)}
-												</span>
-											</Fragment>
-										);
-									},
-								)}
+								) : null}
+								{shownLevels.map((level, levelIndex) => {
+									const selected = model.reasoningLevels
+										.split("\n")
+										.includes(level);
+									// base-ui 复选框默认取外层 label 作 aria-labelledby，aria-label 不生效；
+									// 与 E3-16 相同，名称取自旁边的隐藏文本，可见文字与点击标签切换不变。
+									const nameId = `application-model-option-reasoning-${index}-level-${levelIndex}-name`;
+									return (
+										<Fragment key={level}>
+											<Label variant="option">
+												<Checkbox
+													aria-labelledby={nameId}
+													checked={selected}
+													disabled={unreadable}
+													onCheckedChange={(checked) => {
+														const levels = new Set(
+															model.reasoningLevels.split("\n").filter(Boolean),
+														);
+														if (checked) levels.add(level);
+														else levels.delete(level);
+														onChange(
+															index,
+															"reasoningLevels",
+															[...levels].join("\n"),
+														);
+													}}
+												/>
+												{reasoningLevelLabel(level)}
+											</Label>
+											<span id={nameId} hidden>
+												{withObjectName(reasoningLevelLabel(level), rowName)}
+											</span>
+										</Fragment>
+									);
+								})}
 							</fieldset>
 							<FieldError
 								id={errorId(`model.${index}.reasoningLevels`)}
@@ -772,16 +809,26 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const deploymentRetryable = props.deploymentConfigurationRetryable ?? false;
 	const showDeploymentStatus = props.showDeploymentStatus ?? true;
 	const modelEndpoints = deployment.modelCatalog.endpoints;
+	// 部署选项读取失败：就绪状态与模型目录都读不到，模型选择器不列「请选择…」（#3389 N13-08、N13-10）。
+	const modelChoicesUnavailable =
+		(deployment.status === "unavailable" ||
+			deployment.modelCatalog.status === "unavailable") &&
+		modelEndpoints.length === 0;
+	// 这时端点与模型的名称、已选档位按最近一次读到的目录显示，不回退原始 ID、不写「已移除模型」；选择与校验
+	// 仍只用当前目录（#3418 N14-06）。
+	const displayEndpoints = modelChoicesUnavailable
+		? (props.lastReadModelEndpoints ?? [])
+		: modelEndpoints;
 	// 默认 Key 候选按部署目录显示端点名，不显示原始端点 ID（RK2-01、G5-12）。
 	const endpointNames = useMemo(
 		() =>
 			Object.fromEntries(
-				modelEndpoints.map((endpoint) => [
+				displayEndpoints.map((endpoint) => [
 					endpoint.endpointId,
 					endpoint.displayName,
 				]),
 			),
-		[modelEndpoints],
+		[displayEndpoints],
 	);
 	const [name, setName] = useState(application?.name ?? "");
 	const [description, setDescription] = useState(
@@ -1019,13 +1066,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	// 更换模板，由部署状态说明接手，不另写字段错误。两种模式都拦下、不发请求（#3389 N13-09）。
 	const deploymentBlocksStandard =
 		sourceKind === "standard" && !deploymentConfigurationUsable(deployment);
-	// 部署选项读取失败：就绪状态与模型目录都读不到。就绪列表不按「尚未登记」说明，模型选择器不列
-	// 「请选择…」（#3389 N13-08、N13-10）。
+	// 部署选项读取失败：就绪状态与模型目录都读不到。就绪列表不按「尚未登记」说明（#3389 N13-08）。
 	const deploymentUnreadable = deployment.status === "unavailable";
-	const modelChoicesUnavailable =
-		(deploymentUnreadable ||
-			deployment.modelCatalog.status === "unavailable") &&
-		modelEndpoints.length === 0;
 	useEffect(() => {
 		if (props.mode !== "update" || modelEndpoints.length === 0) return;
 		setModels((current) => {
@@ -1288,6 +1330,20 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const defaultModel = models.find(
 		(model) => model.optionId === defaultModelOptionId,
 	);
+	// 「默认模型」的显示：端点按显示名；部署选项读取失败时按最近一次读到的端点名，没有时只写模型名，
+	// 不把读不到目录说成「已移除模型」（#3418 N14-06）。
+	const defaultModelLabel = (model: AgentApplicationModelDraft) => {
+		const endpoint = displayEndpoints.find(
+			(item) => item.endpointId === model.endpointId,
+		);
+		if (endpoint) return modelLabel(endpoint, model.modelId);
+		if (!modelChoicesUnavailable) return "已移除模型";
+		return (
+			persistedModelOptions?.find(
+				(option) => option.optionId === model.optionId,
+			)?.displayName || model.modelId
+		);
+	};
 	const defaultModelDefinition = modelEndpoints
 		.find((endpoint) => endpoint.endpointId === defaultModel?.endpointId)
 		?.models.find((model) => model.modelId === defaultModel?.modelId);
@@ -1801,6 +1857,37 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							/>
 						</Field>
 						{sourceFields}
+						<section
+							aria-labelledby="application-connection-heading"
+							className="space-y-3 rounded-lg border border-border bg-muted/20 p-4 sm:col-span-2"
+						>
+							<div>
+								<h2
+									className="font-semibold text-base text-foreground"
+									id="application-connection-heading"
+								>
+									Connection 授权
+								</h2>
+								<p className="mt-1 text-muted-foreground text-sm">
+									创建 Agent 不会自动取得外部账号权限。使用者需要在 Connection
+									中用自己的账号确认连接器授权，授权结果由 Connection 独立管理。
+								</p>
+							</div>
+							{props.connectionUrl ? (
+								<a
+									className={buttonVariants({ variant: "outline" })}
+									href={props.connectionUrl}
+									rel="noopener noreferrer"
+									target="_blank"
+								>
+									打开 Connection
+								</a>
+							) : (
+								<p className="text-muted-foreground text-sm">
+									Connection 入口暂不可用，请稍后再试。
+								</p>
+							)}
+						</section>
 					</div>
 				</FormSection>
 				<FormSection
@@ -1951,6 +2038,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									) : null}
 									<ModelRows
 										endpoints={modelEndpoints}
+										displayEndpoints={displayEndpoints}
+										unreadable={modelChoicesUnavailable}
 										errors={fieldErrors}
 										models={models}
 										onChange={(index, key, value) => {
@@ -2037,13 +2126,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 													const model = models.find(
 														(item) => item.optionId === value,
 													);
-													const endpoint = model
-														? modelEndpoints.find(
-																(item) => item.endpointId === model.endpointId,
-															)
-														: undefined;
-													return model && endpoint
-														? modelLabel(endpoint, model.modelId)
+													return model
+														? defaultModelLabel(model)
 														: "已移除模型";
 												}}
 												onValueChange={(value) => {
@@ -2072,21 +2156,14 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 												<SelectContent>
 													{models
 														.filter((model) => model.optionId)
-														.map((model) => {
-															const endpoint = modelEndpoints.find(
-																(item) => item.endpointId === model.endpointId,
-															);
-															return (
-																<SelectItem
-																	key={model.optionId}
-																	value={model.optionId}
-																>
-																	{endpoint
-																		? modelLabel(endpoint, model.modelId)
-																		: "已移除模型"}
-																</SelectItem>
-															);
-														})}
+														.map((model) => (
+															<SelectItem
+																key={model.optionId}
+																value={model.optionId}
+															>
+																{defaultModelLabel(model)}
+															</SelectItem>
+														))}
 												</SelectContent>
 											</Select>
 											<FieldError
@@ -2141,7 +2218,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									<Button
 										variant="outline"
 										id={rowAddId.model}
+										// 部署选项读取失败时模型选择器都已禁用，不再添加空的模型选项；保持可聚焦（aria-disabled），
+										// 焦点在它上面时随重读失败不落到 body（#3418 N14-06）。
+										aria-disabled={modelChoicesUnavailable || undefined}
 										onClick={() => {
+											if (modelChoicesUnavailable) return;
 											dismissServerFormError();
 											setModels((current) => [...current, blankModel()]);
 										}}

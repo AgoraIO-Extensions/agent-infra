@@ -376,3 +376,91 @@ describe("Dialog", () => {
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 	});
 });
+
+// #3419 N14-09：调用方指定了 finalFocus 的弹窗关闭（含随所在分区卸载）时，目标已不在文档、焦点落到 body，
+// 交给壳层兜底的同一个去处（页面 h1，不可聚焦时 #main-content），不滚动；目标仍在时照常回到目标。
+describe("Dialog with an explicit finalFocus", () => {
+	afterEach(() => {
+		fireEvent.pointerDown(document.body);
+	});
+
+	function Section({
+		present,
+		open,
+		onOpenChange,
+	}: {
+		present: boolean;
+		open: boolean;
+		onOpenChange: (open: boolean) => void;
+	}) {
+		const trigger = React.useRef<HTMLButtonElement>(null);
+		return (
+			<main id="main-content" tabIndex={-1}>
+				<h1 tabIndex={-1}>API 凭证</h1>
+				{present ? (
+					<section>
+						<Dialog open={open} onOpenChange={onOpenChange}>
+							<DialogTrigger
+								ref={trigger}
+								render={<Button variant="outline" />}
+							>
+								撤销：凭证
+							</DialogTrigger>
+							<DialogContent finalFocus={trigger}>
+								<DialogHeader>
+									<DialogTitle>撤销这张 API 凭证？</DialogTitle>
+								</DialogHeader>
+								<DialogFooter>
+									<DialogClose render={<Button variant="ghost" />}>
+										取消
+									</DialogClose>
+								</DialogFooter>
+							</DialogContent>
+						</Dialog>
+					</section>
+				) : (
+					<p role="alert">登录状态已失效，请重新登录后再试。</p>
+				)}
+			</main>
+		);
+	}
+
+	it("hands focus to the page heading without scrolling when the dialog unmounts with its section", async () => {
+		const view = render(
+			<Section present open={false} onOpenChange={() => undefined} />,
+		);
+		const trigger = screen.getByRole("button", { name: "撤销：凭证" });
+		trigger.focus();
+		view.rerender(<Section present open onOpenChange={() => undefined} />);
+		await screen.findByRole("dialog");
+		const focus = vi.spyOn(HTMLElement.prototype, "focus");
+		// 后台重读读到登录失效：分区连同弹窗与触发按钮一起换成提示。
+		view.rerender(
+			<Section present={false} open onOpenChange={() => undefined} />,
+		);
+		expect(screen.queryByRole("dialog")).toBeNull();
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByRole("heading", { name: "API 凭证" }),
+			),
+		);
+		expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+		focus.mockRestore();
+	});
+
+	it("still returns focus to a finalFocus target that is in the document", async () => {
+		function Controlled() {
+			const [open, setOpen] = React.useState(false);
+			return <Section present open={open} onOpenChange={setOpen} />;
+		}
+		render(<Controlled />);
+		const trigger = screen.getByRole("button", { name: "撤销：凭证" });
+		trigger.focus();
+		fireEvent.click(trigger);
+		const dialog = await screen.findByRole("dialog");
+		fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+		await waitFor(() => expect(document.activeElement).toBe(trigger));
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		expect(document.activeElement).toBe(trigger);
+	});
+});

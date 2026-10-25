@@ -737,6 +737,9 @@ importers:
 
   packages/platform-core:
     devDependencies:
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@agent-infra/config':
         specifier: workspace:*
         version: link:../config

@@ -780,6 +780,34 @@ export function bindInputFileV1(
 	};
 }
 
+/**
+ * #3374：受理被拒或被放弃的入站消息已写入、但没有绑定任何 Message 的附件，转为 `expired` 交给
+ * §15.4.3 的对账有界清理（工程 Spec §14.2.4）。只处理同一作用域内仍可用且未绑定的 attachment；
+ * 已绑定、已在清理或作用域不一致的记录返回 null，保持不变。
+ */
+export function discardUnboundInputFileV1(
+	input: FileRecordV1 | null,
+	scope: FileScopeV1,
+	now: Date,
+): FileRecordV1 | null {
+	if (
+		!input ||
+		!sameScope(input, scope) ||
+		input.kind !== "attachment" ||
+		input.status !== "available" ||
+		input.messageId !== null ||
+		input.executionId !== null ||
+		input.sessionGeneration !== null
+	)
+		return null;
+	return {
+		...input,
+		status: "expired",
+		revision: input.revision + 1,
+		updatedAt: now.toISOString(),
+	};
+}
+
 function nativeTextInputFile(
 	input: FileRecordV1 | null,
 	scope: FileScopeV1,

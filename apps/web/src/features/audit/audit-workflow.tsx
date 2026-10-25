@@ -108,28 +108,39 @@ type FilterName = keyof AuditFilters;
 /**
  * 详情区域内的重读按钮（「刷新审计详情」「重试详情」）。重读失败或恢复后按钮随内容卸载、
  * 焦点已落到 body 时，把焦点交给详情区域：Escape 由区域的 onKeyDown 处理，仍能关闭详情（D2-59）。
- * 详情区域同时卸载（关闭详情、权限撤销）时 ref 已清空，不移动焦点。
+ * 未按下但持有焦点的按钮被后台重读（读到无权、登录失效等）卸载时同样交给详情区域，不滚动页面；详情区域
+ * 也已卸载时交给页面 h1（#3419 N14-10）。按下后详情区域同时卸载（关闭详情、权限撤销）时不移动焦点。
  */
 function AuditDetailReadButton({
 	panel,
 	onRead,
 	...props
-}: Omit<ComponentProps<typeof Button>, "onClick"> & {
+}: Omit<ComponentProps<typeof Button>, "onClick" | "ref"> & {
 	panel: RefObject<HTMLElement | null>;
 	onRead: () => void;
 }) {
 	const armed = useRef(false);
-	useEffect(
-		() => () => {
-			if (!armed.current) return;
+	const button = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		const element = button.current;
+		return () => {
 			const active = document.activeElement;
-			if (!active || active === document.body) panel.current?.focus();
-		},
-		[panel],
-	);
+			if (armed.current) {
+				if (!active || active === document.body) panel.current?.focus();
+				return;
+			}
+			// 卸载前焦点就在这个按钮上、之后没有移到别处（不是用户移走的）。
+			if (!focusLostFrom(element)) return;
+			(panel.current?.isConnected
+				? panel.current
+				: pageRecoveryTarget()
+			)?.focus({ preventScroll: true });
+		};
+	}, [panel]);
 	return (
 		<Button
 			{...props}
+			ref={button}
 			onClick={() => {
 				armed.current = true;
 				onRead();

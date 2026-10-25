@@ -31,6 +31,11 @@ export function parseAuthority(
 		"supportsSupplementaryInstruction",
 		...(value !== null &&
 		typeof value === "object" &&
+		Object.hasOwn(value, "attachmentMergeWindow")
+			? ["attachmentMergeWindow"]
+			: []),
+		...(value !== null &&
+		typeof value === "object" &&
 		Object.hasOwn(value, "taskBoundary")
 			? ["taskBoundary"]
 			: []),
@@ -42,7 +47,11 @@ export function parseAuthority(
 	]);
 	if (
 		input.schemaVersion !== 1 ||
-		typeof input.supportsSupplementaryInstruction !== "boolean"
+		typeof input.supportsSupplementaryInstruction !== "boolean" ||
+		// #3374：附件合并窗口只属于企微智能机器人渠道。
+		(input.attachmentMergeWindow !== undefined &&
+			(input.attachmentMergeWindow !== true ||
+				!text(input.channelId).startsWith("wecom_bot:")))
 	) {
 		return unavailable();
 	}
@@ -87,6 +96,9 @@ export function parseAuthority(
 		channelId: text(input.channelId),
 		authorizationRevision: text(input.authorizationRevision),
 		supportsSupplementaryInstruction: input.supportsSupplementaryInstruction,
+		...(input.attachmentMergeWindow === true
+			? { attachmentMergeWindow: true as const }
+			: {}),
 		...(taskBoundary ? { taskBoundary } : {}),
 		...(personalApiAdmissionAuthority ? { personalApiAdmissionAuthority } : {}),
 	};
@@ -263,11 +275,16 @@ export function parseCreatedResult(value: unknown) {
 }
 
 export function parseMessageResult(value: unknown) {
+	const queued =
+		value !== null &&
+		typeof value === "object" &&
+		Object.hasOwn(value, "queuePosition");
 	const input = exactRecord(value, [
 		"schemaVersion",
 		"status",
 		"messageId",
 		"executionId",
+		...(queued ? ["queuePosition"] : []),
 	]);
 	if (
 		input.schemaVersion !== 1 ||
@@ -281,6 +298,7 @@ export function parseMessageResult(value: unknown) {
 		status: "submitted" as const,
 		messageId: text(input.messageId),
 		executionId: text(input.executionId),
+		...(queued ? { queuePosition: safeInteger(input.queuePosition, 1) } : {}),
 	};
 }
 
@@ -438,5 +456,25 @@ export function parseIdempotency(
 		commandType: input.commandType,
 		key: input.key,
 		requestDigest: input.requestDigest,
+	};
+}
+
+export function parseWithdrawResult(value: unknown, executionId: string) {
+	const input = exactRecord(value, ["schemaVersion", "status", "executionId"]);
+	if (
+		input.schemaVersion !== 1 ||
+		(input.status !== "withdrawn" &&
+			input.status !== "already_started" &&
+			input.status !== "already_finished") ||
+		input.executionId !== executionId
+	)
+		return unavailable();
+	return {
+		schemaVersion: 1 as const,
+		status: input.status as
+			| "withdrawn"
+			| "already_started"
+			| "already_finished",
+		executionId,
 	};
 }

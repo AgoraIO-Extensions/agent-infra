@@ -10,6 +10,7 @@ import type {
 	AgentApplicationProjectionV2,
 	AgentApplicationUpdateRequestV2Writable,
 	DeploymentConfigurationProjectionV2,
+	DeploymentModelEndpointProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
 import type { AgentDefaultRelayKeyCheck } from "../agent-configuration/agent-configuration.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
@@ -28,6 +29,7 @@ type RequestError = Error & {
 
 type AgentApplicationSubmissionScreenProps =
 	| {
+			connectionUrl?: string;
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			error?: RequestError | null;
 			mode: "create";
@@ -36,11 +38,14 @@ type AgentApplicationSubmissionScreenProps =
 			submitting: boolean;
 			onRefreshDeploymentConfiguration?: () => void;
 			deploymentConfigurationRetryable?: boolean;
+			/** 最近一次读到的模型目录端点：部署选项读取失败时只用于显示名称（#3418 N14-06）。 */
+			lastReadModelEndpoints?: readonly DeploymentModelEndpointProjectionV2[];
 			refreshingDeploymentConfiguration?: boolean;
 	  }
 	| {
 			action: AgentApplicationEditAction;
 			application: AgentApplicationProjectionV2;
+			connectionUrl?: string;
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			error?: RequestError | null;
 			mode: "update";
@@ -54,6 +59,8 @@ type AgentApplicationSubmissionScreenProps =
 			submitting: boolean;
 			onRefreshDeploymentConfiguration?: () => void;
 			deploymentConfigurationRetryable?: boolean;
+			/** 最近一次读到的模型目录端点：部署选项读取失败时只用于显示名称（#3418 N14-06）。 */
+			lastReadModelEndpoints?: readonly DeploymentModelEndpointProjectionV2[];
 			refreshingDeploymentConfiguration?: boolean;
 	  };
 

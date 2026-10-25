@@ -4725,6 +4725,9 @@
                         }
                       ]
                     },
+                    "failure": {
+                      "$ref": "#/components/schemas/ExecutionFailureProjectionV1"
+                    },
                     "isCurrentAnswer": {
                       "anyOf": [
                         {
@@ -4781,6 +4784,12 @@
                 }
               ],
               "type": "object"
+            },
+            "type": "array"
+          },
+          "queue": {
+            "items": {
+              "$ref": "#/components/schemas/QueuedMessageStateV2"
             },
             "type": "array"
           },
@@ -5736,6 +5745,38 @@
             ],
             "type": "object"
           }
+        ],
+        "type": "object"
+      },
+      "ExecutionFailureCategoryV1": {
+        "enum": [
+          "model_unavailable",
+          "agent_updating",
+          "session_preparation_failed",
+          "attachment_unreadable",
+          "authorization_revoked",
+          "relay_key_unavailable",
+          "queue_timeout",
+          "conversation_unavailable",
+          "internal_error"
+        ],
+        "type": "string"
+      },
+      "ExecutionFailureProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/ExecutionFailureCategoryV1"
+          },
+          "message": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "message"
         ],
         "type": "object"
       },
@@ -7654,6 +7695,118 @@
           "schemaVersion",
           "userId",
           "disabled"
+        ],
+        "type": "object"
+      },
+      "QueuedMessageStateV2": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "messageId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "position": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "status": {
+                "const": "waiting",
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageId",
+              "executionId",
+              "status",
+              "position"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "messageId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "const": "withdrawn",
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageId",
+              "executionId",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "messageId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "const": "timed_out",
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageId",
+              "executionId",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "executionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "messageId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "reason": {
+                "enum": [
+                  "AGENT_UNAVAILABLE",
+                  "CONVERSATION_UNAVAILABLE",
+                  "AUTHORIZATION_REVOKED"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "const": "cancelled",
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageId",
+              "executionId",
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          }
         ],
         "type": "object"
       },
@@ -10801,6 +10954,27 @@
                 },
                 "required": [
                   "status"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "enum": [
+                      "WITHDRAWN",
+                      "AUTHORIZATION_REVOKED"
+                    ],
+                    "type": "string"
+                  },
+                  "status": {
+                    "const": "cancelled",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status",
+                  "reason"
                 ],
                 "type": "object"
               }
@@ -20120,6 +20294,15 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "unavailableAgentIds": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 100,
+                      "minItems": 1,
+                      "type": "array"
                     }
                   },
                   "required": [

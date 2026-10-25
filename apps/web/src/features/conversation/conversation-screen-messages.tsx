@@ -12,6 +12,7 @@ import {
 	useCallback,
 	useEffect,
 	useId,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -29,6 +30,7 @@ import {
 	distinctObjectNames,
 	withObjectName,
 } from "../../lib/accessible-name.js";
+import { useNow } from "../../lib/clock.js";
 import type { PilotProtocolErrorV1 } from "../../pilot/generated/types.gen.js";
 import type { ConversationDetailProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { AssistantMarkdown } from "./assistant-markdown.js";
@@ -49,10 +51,16 @@ import {
 	answerText,
 	commandFailure,
 	type ExecutionStatus,
+	elapsedSecondsLabel,
 	emptyAnswerKind,
+	executionPhase,
+	executionPhaseLabel,
 	executionStatus,
 	executionStatusLabels,
 	isTerminal,
+	type QueueDisplay,
+	queueStates,
+	queueStatusText,
 	reasoningTexts,
 } from "./conversation-screen-state.js";
 import type { ConversationTimelineEventV2 } from "./conversation-timeline.js";
@@ -77,6 +85,16 @@ export type ConversationStopControl = Readonly<{
 export type ConversationExecutionNotice = Readonly<{
 	executionId: string;
 	text: string;
+}>;
+
+/**
+ * 排队消息的撤回入口（#3376）：渲染在该条用户消息的排队状态行内。`pendingExecutionId` 是撤回请求
+ * 进行中的消息，它的「撤回」保持可聚焦的禁用。
+ */
+export type ConversationWithdrawControl = Readonly<{
+	onWithdraw: (executionId: string) => void;
+	pendingExecutionId?: string;
+	disabled: boolean;
 }>;
 
 /** 可访问名称里的对象名：回复所答问题的开头，区分同页多张回复卡上的同名链接。 */
@@ -107,6 +125,7 @@ export function ConversationMessages({
 	onLoadEarlier,
 	stop,
 	executionNotice,
+	withdraw,
 	modelOptions = [],
 	trailing,
 }: {
@@ -141,6 +160,8 @@ export function ConversationMessages({
 	onLoadEarlier: () => void;
 	stop?: ConversationStopControl;
 	executionNotice?: ConversationExecutionNotice;
+	/** 排队消息的撤回入口（PRD 10.5）；不提供时排队消息只显示状态。 */
+	withdraw?: ConversationWithdrawControl;
 	/** 当前模型清单，只用于把回退事件的选项映射为显示名（G-07）。 */
 	modelOptions?: readonly ModelOptionName[];
 	/** 消息流末尾的附加内容（例如命令 / Skill 调用回执），随时间线一起滚动。 */
@@ -193,10 +214,16 @@ export function ConversationMessages({
 	const answers = history.messages.filter((item) => item.role === "assistant");
 	const renderedExecutions = new Set(answers.map((item) => item.executionId));
 	const fallbacks = modelFallbacks(events, modelOptions);
+	// 排队消息（等待中或未开始即结束）的状态显示在用户消息上，不带回复卡（PRD 10.5）。
+	const queue = useMemo(() => queueStates(history, events), [history, events]);
 	const liveExecutions = [
 		...new Set(
 			events
-				.filter((item) => !renderedExecutions.has(item.executionId))
+				.filter(
+					(item) =>
+						!renderedExecutions.has(item.executionId) &&
+						!queue.has(item.executionId),
+				)
 				.map((item) => item.executionId),
 		),
 	];
@@ -207,12 +234,29 @@ export function ConversationMessages({
 				(message) =>
 					message.status !== "failed" &&
 					message.executionId &&
+					!queue.has(message.executionId) &&
 					!answers.some(
 						(answer) => answer.replyToMessageId === message.messageId,
 					),
 			)
 			.map((message) => message.executionId as string),
 	);
+	// 撤回受理后「撤回」随排队状态卸载：焦点已落到 body 时交给该条用户消息（不落到 body）。
+	const withdrawFocus = useRef<string>(undefined);
+	useLayoutEffect(() => {
+		const messageId = withdrawFocus.current;
+		if (!messageId) return;
+		const button = [
+			...document.querySelectorAll<HTMLButtonElement>(
+				"[data-withdraw-message]",
+			),
+		].find((item) => item.dataset.withdrawMessage === messageId);
+		if (button) return;
+		withdrawFocus.current = undefined;
+		const focused = document.activeElement;
+		if (focused && focused !== document.body && focused.isConnected) return;
+		articles.current.get(`user:${messageId}`)?.focus();
+	});
 	const notLoaded: string[] = [];
 	const registerArticle = (id: string) => (node: HTMLElement | null) => {
 		if (node) articles.current.set(id, node);
@@ -225,7 +269,9 @@ export function ConversationMessages({
 		text,
 		bodyKind,
 		createdAt,
+		startedAt,
 		error,
+		failure,
 		objectName,
 		regenerate,
 		regeneratePending,
@@ -237,7 +283,10 @@ export function ConversationMessages({
 		text: string;
 		bodyKind: "text" | "empty" | "not_loaded";
 		createdAt?: string;
+		/** #3377：已用时长的起点（受理时间）；没有可靠起点时不显示。 */
+		startedAt?: string;
 		error?: PilotProtocolErrorV1 | null;
+		failure?: ReplyFailure | null;
 		objectName?: string;
 		regenerate?: () => void;
 		regeneratePending?: boolean;
@@ -252,7 +301,17 @@ export function ConversationMessages({
 			text={text}
 			bodyKind={bodyKind}
 			createdAt={createdAt}
+			startedAt={startedAt}
+			phase={
+				status && !isTerminal(status)
+					? (() => {
+							const phase = executionPhase(events, executionId, status);
+							return phase ? executionPhaseLabel(phase) : undefined;
+						})()
+					: undefined
+			}
 			error={error}
+			failure={failure}
 			objectName={objectName}
 			regenerate={regenerate}
 			regeneratePending={regeneratePending}
@@ -313,6 +372,7 @@ export function ConversationMessages({
 		id: string,
 		objectName?: string,
 		recorded?: ExecutionStatus,
+		acceptedAt?: string,
 	) => {
 		const fallback = id === current?.executionId ? current.status : recorded;
 		const status = executionStatus(events, id) ?? fallback;
@@ -328,6 +388,10 @@ export function ConversationMessages({
 				.join(""),
 			bodyKind: "text",
 			createdAt: events.find((event) => event.executionId === id)?.occurredAt,
+			// 用户消息的受理时间；没有对应提问（如重新生成）时取该执行最早的已持久事实。
+			startedAt:
+				acceptedAt ??
+				events.find((event) => event.executionId === id)?.occurredAt,
 			objectName,
 		});
 	};
@@ -374,7 +438,13 @@ export function ConversationMessages({
 				text,
 				bodyKind,
 				createdAt: selected.createdAt,
+				// 首个回答从提问受理起计时；重新生成的回答从它最早的已持久事实起计时。
+				startedAt:
+					(selected.answerVersion ?? 1) > 1
+						? selected.createdAt
+						: message.createdAt,
 				error: selected.error,
+				failure: selected.status === "failed" ? selected.failure : undefined,
 				objectName,
 				regenerate:
 					(canRegenerate || regeneratingMessageId === message.messageId) &&
@@ -425,35 +495,62 @@ export function ConversationMessages({
 				message.executionId,
 				objectName,
 				isTerminal(message.status) ? undefined : message.status,
+				message.createdAt,
 			);
 		}
 		// 提问与回复的间距由 .chat-layout .exchange 给出，与轮次之间等距（设计 .messages gap，G4-03）。
+		const queued = message.executionId
+			? queue.get(message.executionId)
+			: undefined;
 		return (
 			<div className="exchange" key={message.messageId}>
 				<MessageFrame
 					name={userName}
 					user
 					meta={<Timestamp value={message.createdAt} />}
+					articleRef={registerArticle(`user:${message.messageId}`)}
 					focusable
 				>
 					<p className="message-text whitespace-pre-wrap break-words">
 						{message.text}
 					</p>
-					{/* 时间线里的历史记录：与回复卡的失败状态行一样不设 live role（B-10）。 */}
-					{message.status === "failed" && (
-						<Alert tone="danger" className="supplement">
-							<AlertDescription>
-								{commandFailure(message.error.code)}
-							</AlertDescription>
-							<AlertAction>
-								<Button
-									variant="outline"
-									onClick={() => onResend(message.text)}
-								>
-									准备重新发送
-								</Button>
-							</AlertAction>
-						</Alert>
+					{queued ? (
+						<QueuedMessageStatus
+							state={queued}
+							objectName={objectName}
+							withdraw={
+								withdraw && queued.status === "waiting" && message.executionId
+									? {
+											messageId: message.messageId,
+											pending:
+												withdraw.pendingExecutionId === message.executionId,
+											disabled: withdraw.disabled,
+											onWithdraw: () => {
+												withdrawFocus.current = message.messageId;
+												withdraw.onWithdraw(message.executionId as string);
+											},
+										}
+									: undefined
+							}
+							onResend={() => onResend(message.text)}
+						/>
+					) : (
+						/* 时间线里的历史记录：与回复卡的失败状态行一样不设 live role（B-10）。 */
+						message.status === "failed" && (
+							<Alert tone="danger" className="supplement">
+								<AlertDescription>
+									{commandFailure(message.error.code)}
+								</AlertDescription>
+								<AlertAction>
+									<Button
+										variant="outline"
+										onClick={() => onResend(message.text)}
+									>
+										准备重新发送
+									</Button>
+								</AlertAction>
+							</Alert>
+						)
 					)}
 				</MessageFrame>
 				{reply}
@@ -535,6 +632,66 @@ export function ConversationMessages({
 }
 
 /**
+ * 排队消息在用户消息上的状态（PRD 10.5 Web 列）：等待中显示位次与「撤回」；撤回、排队超时与取消
+ * 只说明结果，排队超时另给「准备重新发送」。与回复卡状态行一样是历史记录，不设 live role（B-10）。
+ */
+function QueuedMessageStatus({
+	state,
+	objectName,
+	withdraw,
+	onResend,
+}: {
+	state: QueueDisplay;
+	objectName?: string;
+	withdraw?: {
+		messageId: string;
+		pending: boolean;
+		disabled: boolean;
+		onWithdraw: () => void;
+	};
+	onResend: () => void;
+}) {
+	const text = queueStatusText(state);
+	if (state.status === "waiting" || state.status === "withdrawn") {
+		const label = withdraw?.pending ? "正在撤回" : "撤回";
+		return (
+			<p className="message-status" data-queue-status={state.status}>
+				<span className="message-status-label">{text}</span>
+				{withdraw && (
+					<>
+						{" · "}
+						{/* 撤回请求进行中保持可聚焦的禁用，焦点不落到 body（#3242 K7-02）。 */}
+						<Button
+							variant="link"
+							className="inline-link"
+							aria-label={withObjectName(label, objectName)}
+							data-withdraw-message={withdraw.messageId}
+							disabled={withdraw.pending || withdraw.disabled}
+							focusableWhenDisabled
+							onClick={withdraw.onWithdraw}
+						>
+							{label}
+						</Button>
+					</>
+				)}
+			</p>
+		);
+	}
+	return (
+		<Alert tone="warn" className="supplement" data-queue-status={state.status}>
+			<AlertDescription>{text}</AlertDescription>
+			{state.status === "timed_out" && (
+				<AlertAction>
+					<Button variant="outline" onClick={onResend}>
+						准备重新发送
+					</Button>
+				</AlertAction>
+			)}
+		</Alert>
+	);
+}
+
+/**
  * 设计 .message（Agent 回复）：meta 行右侧在进行中时是 15px spinner +「处理中」，结束后是时间；
  * 回答状态是 12px muted 状态行加文字链接（查看执行详情 / 重新生成），没有常驻工具行（CH-08）。
  * 处理中卡内有「停止回复」（R4-07）；失败与停止只用一行状态说明（R4-08）。
@@ -547,7 +704,10 @@ function AssistantReply({
 	text,
 	bodyKind,
 	createdAt,
+	startedAt,
+	phase,
 	error,
+	failure,
 	objectName,
 	regenerate,
 	regeneratePending = false,
@@ -567,7 +727,13 @@ function AssistantReply({
 	text: string;
 	bodyKind: "text" | "empty" | "not_loaded";
 	createdAt?: string;
+	/** #3377：已用时长的起点。 */
+	startedAt?: string;
+	/** #3377：处理中的阶段名（PRD 11.2），没有阶段事实时显示执行状态。 */
+	phase?: string;
 	error?: PilotProtocolErrorV1 | null;
+	/** #3377：失败回答的用户可见分类说明，与企微同源（工程 Spec §16.1.1）。 */
+	failure?: ReplyFailure | null;
 	objectName?: string;
 	regenerate?: () => void;
 	/** 重新生成请求进行中：「重新生成」保持可聚焦的禁用，不卸载（#3267 N8-1-09）。 */
@@ -625,10 +791,14 @@ function AssistantReply({
 				onRendered,
 			}
 		: undefined;
+	// #3377：处理中显示阶段与实时耗时；耗时每秒刷新，不放进 live region，读屏只播报阶段变化。
 	const meta = pending ? (
-		<LoadingLine className="message-loading">
-			{executionStatusLabels[status]}
-		</LoadingLine>
+		<span className="message-progress">
+			<LoadingLine className="message-loading">
+				{phase ?? executionStatusLabels[status]}
+			</LoadingLine>
+			{startedAt ? <ElapsedTime since={startedAt} /> : null}
+		</span>
 	) : status === "unknown" ? (
 		<span className="message-meta-state">{executionStatusLabels.unknown}</span>
 	) : (
@@ -645,9 +815,9 @@ function AssistantReply({
 		segments.push(label(status));
 		if (bodyKind === "not_loaded") segments.push("正文在更早的记录中");
 	} else if (status === "failed") {
-		// 原因按错误码映射，不需要打开执行详情（R4-08、NI-07）。
+		// 原因按 Core 给出的失败分类说明（#3377），旧服务端没有分类时按错误码映射（R4-08、NI-07）。
 		segments.push(label(status));
-		segments.push(commandFailure(error?.code));
+		segments.push(failure?.message ?? commandFailure(error?.code));
 		if (regenerate) segments.push("可重新生成");
 	} else if (status === "cancelled") {
 		segments.push(label(status));
@@ -977,6 +1147,25 @@ function formatResultSize(value: number) {
 	if (value < 1024 ** 2) return `${Math.round(value / 1024)} KB`;
 	if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
 	return `${(value / 1024 ** 3).toFixed(1)} GB`;
+}
+
+type ReplyFailure = NonNullable<
+	Extract<
+		ConversationDetailProjectionV2["messages"][number],
+		{ status: "failed" }
+	>["failure"]
+>;
+
+/** #3377：处理中回复卡的实时耗时（“已用 N 秒”），每秒按当前时钟重算。 */
+function ElapsedTime({ since }: { since: string }) {
+	const now = useNow();
+	const [, tick] = useState(0);
+	useEffect(() => {
+		const timer = setInterval(() => tick((value) => value + 1), 1_000);
+		return () => clearInterval(timer);
+	}, []);
+	const label = elapsedSecondsLabel(since, now);
+	return label ? <span className="message-elapsed">{label}</span> : null;
 }
 
 /** 设计 .message-meta：左侧作者 12px/650，右侧时间（11px muted）或进行中状态，可换行。 */

@@ -72,6 +72,8 @@ export interface PlatformConversationWorkerOptionsV2
 	readonly maximumConcurrentDispatches?: number;
 	readonly leaseDurationMs?: number;
 	readonly retryDelayMs?: number;
+	/** #3373：unknown 恢复的墙钟预算（毫秒），缺省为 Core 默认的 5 分钟。 */
+	readonly recoveryBudgetMs?: number;
 	/** Deployment supplies only the current Browser binding snapshot; Runtime
 	 * grants and lease ownership remain Worker authorities. */
 	readonly resolveBrowserHandoff?: (
@@ -612,6 +614,7 @@ export function createPlatformConversationWorkerV2(
 			{
 				leaseDurationMs: options.leaseDurationMs,
 				retryDelayMs: options.retryDelayMs,
+				recoveryBudgetMs: options.recoveryBudgetMs,
 			},
 		);
 	} catch (error) {

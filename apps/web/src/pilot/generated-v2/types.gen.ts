@@ -826,6 +826,7 @@ export type ConversationDetailProjectionV2 = {
         createdAt: string;
         error: PilotProtocolErrorV1;
         executionId: string | null;
+        failure?: ExecutionFailureProjectionV1;
         isCurrentAnswer: boolean | null;
         messageId: string;
         replyToMessageId: string | null;
@@ -833,6 +834,7 @@ export type ConversationDetailProjectionV2 = {
         status: 'failed';
         text: string;
     }>;
+    queue?: Array<QueuedMessageStateV2>;
     schemaVersion: 2;
     sessionAvailability?: 'preparing' | 'ready' | 'unavailable' | 'updating';
 };
@@ -991,6 +993,13 @@ export type ExecutionDetailProjectionV2 = {
     schemaVersion: 2;
     startedAt: string | null;
     status: 'failed';
+};
+
+export type ExecutionFailureCategoryV1 = 'model_unavailable' | 'agent_updating' | 'session_preparation_failed' | 'attachment_unreadable' | 'authorization_revoked' | 'relay_key_unavailable' | 'queue_timeout' | 'conversation_unavailable' | 'internal_error';
+
+export type ExecutionFailureProjectionV1 = {
+    category: ExecutionFailureCategoryV1;
+    message: string;
 };
 
 export type ExecutionOperationEventV2 = {
@@ -1362,6 +1371,26 @@ export type PlatformUserDisableStatusV1 = {
     disabled: boolean;
     schemaVersion: 1;
     userId: string;
+};
+
+export type QueuedMessageStateV2 = {
+    executionId: string;
+    messageId: string;
+    position: number;
+    status: 'waiting';
+} | {
+    executionId: string;
+    messageId: string;
+    status: 'withdrawn';
+} | {
+    executionId: string;
+    messageId: string;
+    status: 'timed_out';
+} | {
+    executionId: string;
+    messageId: string;
+    reason: 'AGENT_UNAVAILABLE' | 'CONVERSATION_UNAVAILABLE' | 'AUTHORIZATION_REVOKED';
+    status: 'cancelled';
 };
 
 export type ReasoningDeltaEventV2 = {
@@ -1946,6 +1975,9 @@ export type TaskStatusEventV1 = {
     } | {
         reason?: 'STOP_CONFIRMATION_TIMEOUT';
         status: 'unknown';
+    } | {
+        reason: 'WITHDRAWN' | 'AUTHORIZATION_REVOKED';
+        status: 'cancelled';
     };
     schemaVersion: 1;
     sequence: number;
@@ -5872,6 +5904,7 @@ export type ListRecentPersonalConversationsV2Responses = {
             updatedAt: string;
         }>;
         nextCursor: string | null;
+        unavailableAgentIds?: Array<string>;
     };
 };
 

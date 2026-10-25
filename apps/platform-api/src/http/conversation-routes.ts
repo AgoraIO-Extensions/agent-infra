@@ -17,14 +17,18 @@ import {
 	framePilotSseMessageV2,
 	MessageCommandRequestV1Schema,
 	MessageProjectionV1Schema,
+	MessageProjectionV2Schema,
 	ModelOptionProjectionV1Schema,
 	ModelSelectionUpdateRequestV1Schema,
 	PersistedConversationEventV2Schema,
 	ReasoningDeltaEventV2Schema,
+	RecentPersonalConversationPageV2Schema,
 	RegenerateCommandRequestV1Schema,
 	resolvePilotReplaySelectorV1,
 	StopCommandRequestV1Schema,
 	TaskStatusEventV1Schema,
+	WithdrawalAcceptedProjectionV1Schema,
+	WithdrawCommandRequestV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
 	type ConversationExecutionAuthorityV1,
@@ -97,9 +101,14 @@ type AuthorizationDecision =
 	| { readonly outcome: "revoked" };
 
 export interface ConversationAuthorization {
+	/**
+	 * `channelId` 默认 `web`。只有执行期文件访问传入该执行的渠道（已由 Execution Grant 验签并与
+	 * 持久 Conversation、Execution、任务授权记录核对，#3432）；浏览器请求不能选择渠道。
+	 */
 	authorize(
 		identity: IdentityContext,
 		input: AuthorizationInput,
+		channelId?: string,
 	): Promise<AuthorizationDecision>;
 }
 
@@ -156,7 +165,8 @@ export interface ConversationRoutesDependencies {
 		| "regenerate"
 		| "selectModel"
 		| "stop"
-	>;
+	> &
+		Partial<Pick<ConversationExecutionUseCaseV1, "withdraw">>;
 	/** Deployment-owned Browser command bridge; the API remains the identity authority. */
 	readonly browserCommands?: ConversationBrowserCommandPortV1;
 	readonly query: ConversationQuery;
@@ -702,19 +712,53 @@ function failure(
 	};
 }
 
+/**
+ * V1 消息投影不含失败分类；V2 会话读取在失败回答上附带 Core 给出的用户可见失败分类与说明
+ * （#3377，工程 Spec §16.1.1），与企微读取同一结果。
+ */
 function messageProjections(
 	input: ConversationQueryDetailV1,
-): ReturnType<typeof MessageProjectionV1Schema.parse>[] {
+	version: 1,
+): ReturnType<typeof MessageProjectionV1Schema.parse>[];
+function messageProjections(
+	input: ConversationQueryDetailV1,
+	version: 2,
+): ReturnType<typeof MessageProjectionV2Schema.parse>[];
+function messageProjections(input: ConversationQueryDetailV1, version: 1 | 2) {
 	return projectConversationMessagesV1(input).map(
-		({ failureTraceId, failureCode, ...item }) =>
-			MessageProjectionV1Schema.parse({
+		({
+			failureTraceId,
+			failureCode,
+			failure: classified,
+			queue: _queue,
+			...item
+		}) => {
+			const projected = {
 				...item,
 				error:
 					failureTraceId === null
 						? null
 						: failure(failureTraceId, failureCode ?? "EXECUTION_FAILED"),
 				createdAt: item.createdAt.toISOString(),
-			}),
+			};
+			return version === 2 && classified && failureTraceId !== null
+				? MessageProjectionV2Schema.parse({ ...projected, failure: classified })
+				: MessageProjectionV1Schema.parse(projected);
+		},
+	);
+}
+
+function queueProjections(input: ConversationQueryDetailV1) {
+	return projectConversationMessagesV1(input).flatMap((item) =>
+		item.queue
+			? [
+					{
+						messageId: item.messageId,
+						executionId: item.executionId,
+						...item.queue,
+					},
+				]
+			: [],
 	);
 }
 
@@ -973,7 +1017,7 @@ export function registerConversationRoutes(
 			return context.json(
 				project(
 					() =>
-						ConversationPageV1Schema.parse({
+						RecentPersonalConversationPageV2Schema.parse({
 							items: result.items.map((item) =>
 								ConversationProjectionV1Schema.parse({
 									schemaVersion: 1,
@@ -989,6 +1033,10 @@ export function registerConversationRoutes(
 								}),
 							),
 							nextCursor: result.nextCursor,
+							// Omitted when every Agent's Web channel eligibility is confirmed.
+							...(result.unavailableAgentIds.length > 0
+								? { unavailableAgentIds: [...result.unavailableAgentIds] }
+								: {}),
 						}),
 					metadata.traceId,
 				),
@@ -1134,11 +1182,13 @@ export function registerConversationRoutes(
 							return ConversationDetailProjectionV2Schema.parse({
 								schemaVersion: 2,
 								conversation,
-								messages: messageProjections(detail),
+								messages: messageProjections(detail, 2),
 								events: detail.events.map(eventProjection),
 								...(detail.eventWindow === undefined
 									? {}
 									: { eventWindow: detail.eventWindow }),
+								// 排队消息的位次与结果（#3376），与 messages 按 messageId 关联。
+								queue: queueProjections(detail),
 								// Same readiness fact as the Web message gate (#1534); an
 								// upgrading Sandbox is shown as updating (ADR 0023). 空闲回收后
 								// 等待恢复的 Sandbox 可受理下一条消息并由它触发恢复（#2239）。
@@ -1164,7 +1214,7 @@ export function registerConversationRoutes(
 									detail.conversation,
 									effective,
 								),
-								messages: messageProjections(detail),
+								messages: messageProjections(detail, 1),
 							}),
 						metadata.traceId,
 					),
@@ -1338,8 +1388,10 @@ export function registerConversationRoutes(
 			}
 			if (decision.outcome === "conflict")
 				return fail("CONFLICT", metadata.traceId);
+			// 排队位次由会话读取按持久等待顺序给出（#3376），受理响应保持原形状。
+			const { queuePosition: _queuePosition, ...accepted } = decision.result;
 			return context.json(
-				CommandAcceptedProjectionV1Schema.parse(decision.result),
+				CommandAcceptedProjectionV1Schema.parse(accepted),
 				202,
 			);
 		}),
@@ -1423,6 +1475,44 @@ export function registerConversationRoutes(
 					...decision.result,
 					messageId: null,
 				}),
+				202,
+			);
+		}),
+	);
+
+	// #3376：发送者撤回自己仍在排队的消息；已开始处理的不受影响。
+	app.post("/api/v1/conversations/:conversationId/withdrawals", (context) =>
+		boundary(context, async (metadata) => {
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			const { value: body } = await parseJson(
+				context.req.raw,
+				WithdrawCommandRequestV1Schema,
+				metadata.traceId,
+			);
+			const withdraw = dependencies.commands(identity).withdraw;
+			if (!withdraw) return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			const decision = await withdraw({
+				schemaVersion: 1,
+				command: "withdraw",
+				conversationId: context.req.param("conversationId"),
+				targetExecutionId: body.targetExecutionId,
+				idempotencyKey: parseIdempotencyKey(context.req.raw, metadata.traceId),
+				requestId: metadata.requestId,
+				traceId: metadata.traceId,
+				...(metadata.traceParent === undefined
+					? {}
+					: { traceParent: metadata.traceParent }),
+			});
+			if (decision.outcome === "denied")
+				return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+			if (decision.outcome === "conflict")
+				return fail("CONFLICT", metadata.traceId);
+			return context.json(
+				WithdrawalAcceptedProjectionV1Schema.parse(decision.result),
 				202,
 			);
 		}),
