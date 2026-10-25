@@ -331,10 +331,17 @@ export function parseState(
 					"stopPending",
 					"status",
 				],
-				["principal"],
+				["principal", "attachmentMerge"],
 			);
 			const executionStatus = execution.status;
+			const attachmentMerge =
+				execution.attachmentMerge === undefined
+					? undefined
+					: snapshotObject(execution.attachmentMerge, ["attachmentCount"]);
 			if (
+				(attachmentMerge !== undefined &&
+					(executionStatus !== "submitted" ||
+						!isNonNegativeSafeInteger(attachmentMerge.attachmentCount))) ||
 				!isText(execution.executionId) ||
 				!isText(execution.conversationId) ||
 				!isText(execution.actorId) ||
@@ -374,6 +381,13 @@ export function parseState(
 				lastEventSequence: execution.lastEventSequence,
 				stopPending: execution.stopPending,
 				status: executionStatus as "submitted" | "processing" | "unknown",
+				...(attachmentMerge
+					? {
+							attachmentMerge: {
+								attachmentCount: attachmentMerge.attachmentCount as number,
+							},
+						}
+					: {}),
 			};
 		})();
 		for (const execution of [targetExecution, activeExecution]) {

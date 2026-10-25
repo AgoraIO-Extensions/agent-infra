@@ -8,7 +8,7 @@ import { useAgentDetail } from "../../../features/agent-discovery/use-agent-deta
 import { useApplicationSession } from "../../../features/application-shell.js";
 import { readFailed } from "../../../features/background-read.js";
 import { projectDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
-import { useDeploymentConfiguration } from "../../../features/my-agents/use-deployment-configuration.js";
+import { useShownDeploymentConfiguration } from "../../../features/my-agents/use-deployment-configuration.js";
 import { PageLoadingState } from "../../../features/page-loading-state.js";
 import { ReadFailureCard } from "../../../features/page-state-card.js";
 
@@ -30,7 +30,10 @@ function AgentConfigurationRoute() {
 		visible.data.reason === undefined;
 	const administrator = useAdminAgent(agentId, administratorProjection);
 	const query = administratorProjection ? administrator : visible;
-	const deployment = useDeploymentConfiguration();
+	// 部署选项的后台重读（回到标签页、保存后的失效重取）遇到可重试失败时继续用上一次读到的模型目录与
+	// 模板登记：模型区、环境变量名下拉、未保存的勾选与焦点保留（#3418 N14-01）。
+	const { query: deployment, shown: deploymentState } =
+		useShownDeploymentConfiguration();
 	const retryable = query.isError
 		? isRetryableAgentDiscoveryError(query.error)
 		: query.data?.kind === "unavailable" && query.data.retryable;
@@ -42,11 +45,7 @@ function AgentConfigurationRoute() {
 		);
 	}
 	const { configuration: deploymentConfiguration } =
-		projectDeploymentConfiguration(
-			deployment.data,
-			deployment.error,
-			deployment.isError,
-		);
+		projectDeploymentConfiguration(deploymentState, null, false);
 	const deploymentModelCandidates =
 		deploymentConfiguration.modelCatalog.status === "populated"
 			? deploymentConfiguration.modelCatalog.endpoints.flatMap((endpoint) =>

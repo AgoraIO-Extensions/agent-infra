@@ -22,24 +22,24 @@ function validPath(value: string) {
 /**
  * Platform Web 唯一的 Connection 入口地址：壳层「我的 Connection」与 Agent 详情共用。
  * 输入按 unknown 处理（浏览器会话读取 capability 时不做契约校验）：先分别校验原始
- * publicOrigin 与 mcpPath，再按工程 Spec §13.5.1 字符串拼接，最后断言拼接结果的 origin
+ * publicOrigin 与 webPath，再按工程 Spec §13.5.1 字符串拼接，最后断言拼接结果的 origin
  * 仍是 publicOrigin。任一步失败返回 undefined；不使用以 publicOrigin 为 base 的相对解析。
  */
 export function connectionEntryUrl(capability: unknown): string | undefined {
 	if (!capability || typeof capability !== "object") return undefined;
-	const { status, publicOrigin, mcpPath } = capability as Record<
+	const { status, publicOrigin, webPath } = capability as Record<
 		string,
 		unknown
 	>;
 	if (
 		status !== "available" ||
 		typeof publicOrigin !== "string" ||
-		typeof mcpPath !== "string" ||
+		typeof webPath !== "string" ||
 		!validOrigin(publicOrigin) ||
-		!validPath(mcpPath)
+		!validPath(webPath)
 	)
 		return undefined;
-	const href = publicOrigin + mcpPath;
+	const href = publicOrigin + webPath;
 	try {
 		return new URL(href).origin === publicOrigin ? href : undefined;
 	} catch {

@@ -315,6 +315,27 @@ export function AgentConfigurationScreen({
 			?.querySelector<HTMLElement>('[role="checkbox"]');
 		(picker ?? saveRef.current)?.focus();
 	}, [focusAfterReload]);
+	// 已保存 Key 的可用模型读取不可重试地失败、选择器随之收起时（#3418 N14-02），草稿里尚未保存的模型选择
+	// 不再有可核对的候选：撤回它，不随其他字段提交；其他未保存的修改保留。
+	const savedCandidatesWithdrawn =
+		defaultRelayKeyManaged &&
+		savedRelayKeyCandidatesError !== null &&
+		savedRelayKeyCandidates === undefined;
+	useEffect(() => {
+		if (!savedCandidatesWithdrawn) return;
+		setSavedSelectionError(false);
+		setDraft((current) =>
+			current.replaceModels
+				? {
+						...current,
+						replaceModels: false,
+						models: [],
+						defaultModelOptionId: "",
+						defaultReasoningLevel: "",
+					}
+				: current,
+		);
+	}, [savedCandidatesWithdrawn]);
 
 	if (!isOwner) return unavailableScreen(agent.agentId);
 

@@ -94,7 +94,7 @@ const identity = (
 		status: "available";
 		schemaVersion: 1;
 		publicOrigin: string;
-		mcpPath: string;
+		webPath: string;
 		configFingerprint: string;
 	},
 ) => ({
@@ -334,7 +334,7 @@ describe("deployment links", () => {
 				status: "available",
 				schemaVersion: 1,
 				publicOrigin: "https://connection.example.test",
-				mcpPath: "/mcp",
+				webPath: "/connection/connections",
 				configFingerprint: "a".repeat(64),
 			}),
 		);
@@ -342,7 +342,7 @@ describe("deployment links", () => {
 			screen
 				.getByRole("link", { name: /我的 Connection/ })
 				.getAttribute("href"),
-		).toBe("https://connection.example.test/mcp");
+		).toBe("https://connection.example.test/connection/connections");
 		// Y-01：key 与外链图标都按设计 .nav-item svg 统一为 17px。
 		const icons = screen
 			.getByRole("link", { name: /我的 Connection/ })
@@ -413,13 +413,13 @@ describe("deployment links", () => {
 		["https://connection.example.test", "/mcp?next=/evil"],
 	])(
 		"does not link the sidebar Connection entry for %j + %j (NI-68)",
-		(publicOrigin, mcpPath) => {
+		(publicOrigin, webPath) => {
 			setup(
 				identity("user-1", false, undefined, {
 					status: "available",
 					schemaVersion: 1,
 					publicOrigin,
-					mcpPath,
+					webPath,
 					configFingerprint: "a".repeat(64),
 				}),
 			);
@@ -433,13 +433,13 @@ describe("deployment links", () => {
 	);
 	it.each(["/\n/evil.test", "/\t/evil.test", "/\r/evil.test"])(
 		"does not normalize unsafe path %j into an external link",
-		(mcpPath) => {
+		(webPath) => {
 			setup(
 				identity("user-1", false, undefined, {
 					status: "available",
 					schemaVersion: 1,
 					publicOrigin: "https://connection.example.test",
-					mcpPath,
+					webPath,
 					configFingerprint: "a".repeat(64),
 				}),
 			);

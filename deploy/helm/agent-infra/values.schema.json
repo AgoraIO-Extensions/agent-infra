@@ -99,7 +99,7 @@
     "connectionConsumer": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source"],
+      "required": ["source", "webPath"],
       "oneOf": [
         {
           "properties": {
@@ -124,6 +124,7 @@
       ],
       "properties": {
         "source": { "type": "string", "enum": ["inline", "external"] },
+        "webPath": { "type": "string", "minLength": 1 },
         "inline": {
           "type": ["object", "null"],
           "additionalProperties": false,

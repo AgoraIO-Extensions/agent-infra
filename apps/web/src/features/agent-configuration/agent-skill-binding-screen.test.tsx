@@ -5,6 +5,7 @@ import {
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+	act,
 	cleanup,
 	fireEvent,
 	render,
@@ -103,6 +104,7 @@ function renderScreen(overrides: Partial<Props> = {}) {
 	return {
 		...view,
 		props,
+		queryClient,
 		readBindings: props.readBindings as typeof readBindings,
 		bindVersion: props.bindVersion as typeof bindVersion,
 	};
@@ -114,6 +116,51 @@ const toastText = () =>
 afterEach(cleanup);
 
 describe("AgentSkillBindingScreen (O-02)", () => {
+	it("keeps the empty directory note through a retryable background reread (#3418)", async () => {
+		let failure: Error | undefined;
+		const loadDirectory = vi.fn(async () => {
+			if (failure) throw failure;
+			return { kind: "ready" as const, versions: [] };
+		});
+		const { queryClient } = renderScreen({ loadDirectory });
+		const select = await screen.findByLabelText("固定版本");
+		await waitFor(() =>
+			expect(within(select).getByRole("option").textContent).toBe(
+				"没有可绑定的版本",
+			),
+		);
+		// 回到标签页等后台重读遇到可重试失败：仍按上一次读到的目录说明，不改说「暂时无法读取」。
+		failure = Object.assign(new Error("Skill Hub 暂时不可用"), {
+			retryable: true,
+		});
+		await act(async () => {
+			await queryClient.refetchQueries({
+				queryKey: ["skill-hub", "directory", "agent-binding"],
+			});
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		});
+		expect(loadDirectory).toHaveBeenCalledTimes(2);
+		expect(
+			queryClient.getQueryState(["skill-hub", "directory", "agent-binding"])
+				?.status,
+		).toBe("error");
+		expect(within(select).getByRole("option").textContent).toBe(
+			"没有可绑定的版本",
+		);
+		// 失败不可重试：按读取失败说明。
+		failure = Object.assign(new Error("Skill Hub 无权读取"), {
+			retryable: false,
+		});
+		await queryClient.refetchQueries({
+			queryKey: ["skill-hub", "directory", "agent-binding"],
+		});
+		await waitFor(() =>
+			expect(within(select).getByRole("option").textContent).toBe(
+				"暂时无法读取可绑定的版本",
+			),
+		);
+	});
+
 	it("shows the design heading and never asks for a hand-typed Agent version", () => {
 		const { readBindings } = renderScreen({ agentVersion: null });
 		expect(

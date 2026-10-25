@@ -22,6 +22,7 @@ import type {
 	AgentProjectionV2,
 	ConversationDetailProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
+import { expectBackgroundRereadKeeps } from "./background-reread";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
 import {
@@ -1279,6 +1280,42 @@ test("workbench page head eyebrow keeps the designed margin and the available Ag
 	await expect(page.locator('a[aria-current="page"]')).toHaveText(["工作台"]);
 	expect(fixture.unexpected).toEqual([]);
 });
+
+// #3418 N14-03（F14-2）：部署配置后台重读挂起或可重试失败（503、网络中断）时，「可用 Agent」卡的模板标签仍是
+// 上一次读到的「Codex」，不回落为「标准模板」；焦点、滚动位置不变。
+for (const failure of ["503", "network"] as const)
+	test(`a background reread of the deployment configuration keeps the available Agent template tag: ${failure} (#3418 N14-03)`, async ({
+		page,
+	}) => {
+		const pageErrors = trackPageErrors(page);
+		const fixture = await workbenchFixture(page);
+		await page.goto("/");
+		const agents = page.getByRole("region", {
+			name: "可用 Agent",
+			exact: true,
+		});
+		const tag = agents
+			.locator('[data-slot="badge"][data-variant="tag"]')
+			.first();
+		await expect(tag).toHaveText("Codex");
+		const focus = await pinElement(
+			page.getByRole("heading", { level: 1 }),
+			"workbench-template-focus",
+		);
+		await focus.focus();
+		await expectBackgroundRereadKeeps(page, {
+			path: "/api/v2/deployment/configuration",
+			focus,
+			failure,
+			context: `工作台（部署配置 ${failure}）`,
+			expectKept: async () => {
+				await expect(tag).toHaveText("Codex");
+				await expect(agents).not.toContainText("标准模板");
+			},
+		});
+		expect(fixture.unexpected).toEqual([]);
+		await expectCleanPage(page, pageErrors);
+	});
 
 test("chat recent panel continuation failure hides old rows and retry uses a new first page", async ({
 	page,

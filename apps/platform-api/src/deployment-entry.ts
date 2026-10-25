@@ -41,6 +41,7 @@ const {
 	organizationIds: configuredOrganizationIds,
 	directorySnapshot,
 	publicOrigin,
+	connectionWebPath,
 	connectionConsumerProfile,
 	connectionConsumerProfileApproval,
 	connectionInstallationConfiguration,
@@ -73,6 +74,8 @@ const resolvedConnectionConsumerProfile =
 	connectionConsumerProfile ?? environmentConnectionConsumer?.profile;
 const resolvedConnectionConsumerProfileApproval =
 	connectionConsumerProfileApproval ?? environmentConnectionConsumer?.approval;
+const resolvedConnectionWebPath =
+	connectionWebPath ?? environmentConnectionConsumer?.webPath;
 
 async function nativeMetadataWorkerFromEnvironment() {
 	const baseUrl = process.env.PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN;
@@ -299,6 +302,7 @@ export function createPlatformApiAssemblyInput() {
 		connectionConsumerProfile: resolvedConnectionConsumerProfile,
 		connectionConsumerProfileApproval:
 			resolvedConnectionConsumerProfileApproval,
+		connectionWebPath: resolvedConnectionWebPath,
 		...(connectionInstallationConfiguration
 			? {
 					connectionInstallation: {
