@@ -26,6 +26,11 @@ import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { isAgentConfigurationOwner } from "../agent-configuration/agent-configuration.js";
 import { pollWhileShown } from "../background-read.js";
 import {
+	markUserRead,
+	queryUserReading,
+	userReadFailed,
+} from "../background-read.js";
+import {
 	type CollectionReadUnavailable,
 	collectionReadFailure,
 } from "../collection-read-failure.js";
@@ -148,11 +153,17 @@ function BackToAgentDirectory() {
 function AgentUnavailableNotice({
 	agent,
 	canManage,
+	refreshing,
+	refreshFailed,
 	onRefresh,
 }: {
 	agent: AgentProjectionV2;
 	canManage: boolean;
-	onRefresh: () => void;
+	/** 用户按下「刷新 Agent 状态」后的读取进行中（后台重读不算）。 */
+	refreshing: boolean;
+	/** 用户发起的刷新失败（503、网络中断等），一直显示到下一次读到 Agent。 */
+	refreshFailed: boolean;
+	onRefresh: () => unknown;
 }) {
 	const readOnly = "可以查看历史，暂时不能发送消息。";
 	const notice: {
@@ -193,6 +204,14 @@ function AgentUnavailableNotice({
 		<Alert role="status" tone="warn" className="conversation-unavailable">
 			<AlertTitle>{notice.title}</AlertTitle>
 			<AlertDescription>{notice.description}</AlertDescription>
+			{/* 用户发起的刷新有可见的读取中与失败说明（#3419 N14-12）；后台重读不显示。 */}
+			{notice.action === "refresh" && refreshing ? (
+				<AlertDescription>正在刷新 Agent 状态…</AlertDescription>
+			) : notice.action === "refresh" && refreshFailed ? (
+				<AlertDescription role="alert">
+					暂时无法刷新 Agent 状态，请稍后重试。
+				</AlertDescription>
+			) : null}
 			{notice.action && (
 				<AlertAction>
 					{notice.action === "owner" ? (
@@ -204,10 +223,12 @@ function AgentUnavailableNotice({
 							进入 Owner 操作
 						</Link>
 					) : (
-						// Agent 恢复可用后提示随之卸载：焦点交给页面 h1，不落到 body（#3269 N8-3-02）。
+						// 读取中保持可聚焦（aria-disabled）并忽略重复按下；Agent 恢复可用后提示随之卸载：焦点交给
+						// 页面 h1，不落到 body，仍不可用或刷新失败时焦点留在按钮上（#3269 N8-3-02、#3419 N14-12）。
 						<RecoveryButton
 							variant="outline"
 							recoveryKey="刷新 Agent 状态"
+							busy={refreshing}
 							onClick={onRefresh}
 						>
 							刷新 Agent 状态
@@ -312,6 +333,20 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 	// 历史面板只在展开（或切换最近对话 / 全部历史）时、以及首次读到 Agent 时聚焦一次；之后 Agent 数据
 	// 后台更新（回到标签页重读、「更新中」轮询转就绪）不移动焦点，输入框与历史链接上的焦点保留（#3388 N13-07）。
 	const agentLoaded = agentQuery.data !== undefined;
+	// 「刷新 Agent 状态」是用户发起的读取（#3419 N14-12）：读取中按钮可聚焦地禁用并显示读取中，失败显示
+	// 一行说明直到下一次读到 Agent；回到标签页、轮询等后台重读不算。记录按 Agent 读取范围保存。
+	const agentRefresh = useMemo(() => ({ queryKey }), [queryKey]);
+	const agentRead = {
+		contentAt: agentQuery.dataUpdatedAt,
+		failureAt: agentQuery.errorUpdatedAt,
+	};
+	const refreshingAgent = queryUserReading(agentQuery, agentRefresh);
+	const agentRefreshFailed =
+		!refreshingAgent && userReadFailed(agentRefresh, agentRead);
+	const refreshAgentState = () => {
+		markUserRead(agentRefresh, agentQuery.dataUpdatedAt);
+		return agentQuery.refetch();
+	};
 	useLayoutEffect(() => {
 		if (agentLoaded && (showHistory || recentOpen))
 			historyPanel.current?.focus();
@@ -511,7 +546,9 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 				<AgentUnavailableNotice
 					agent={agent}
 					canManage={canManage}
-					onRefresh={() => void agentQuery.refetch()}
+					refreshing={refreshingAgent}
+					refreshFailed={agentRefreshFailed}
+					onRefresh={refreshAgentState}
 				/>
 			)}
 			{conversationId && !selfManaged && (
