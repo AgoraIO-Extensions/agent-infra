@@ -24,9 +24,9 @@ import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen
 import { getAgentV2 } from "../../pilot/generated-v2/sdk.gen.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { isAgentConfigurationOwner } from "../agent-configuration/agent-configuration.js";
-import { pollWhileShown } from "../background-read.js";
 import {
 	markUserRead,
+	pollWhileShown,
 	queryUserReading,
 	userReadFailed,
 } from "../background-read.js";
