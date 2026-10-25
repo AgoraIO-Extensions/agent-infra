@@ -45,7 +45,7 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { Timestamp } from "@/components/ui/timestamp";
-import { pageRecoveryTarget } from "@/hooks/use-recovery-focus";
+import { focusLostFrom, pageRecoveryTarget } from "@/hooks/use-recovery-focus";
 import { withObjectName } from "@/lib/accessible-name";
 import { formatTimestamp } from "@/lib/format-time";
 import { useApplicationSession } from "../application-shell.js";
@@ -182,6 +182,9 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 	const previousPageButton = useRef<HTMLButtonElement>(null);
 	const nextPageButton = useRef<HTMLButtonElement>(null);
 	const pageTrigger = useRef<"previous" | "next" | null>(null);
+	const previousDisabled =
+		busy || formFailure !== null || !query.canPreviousPage;
+	const nextDisabled = busy || formFailure !== null || !query.hasNextPage;
 	useEffect(() => {
 		const trigger = pageTrigger.current;
 		if (busy || !trigger) return;
@@ -196,6 +199,21 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 		if (other && !other.disabled) other.focus();
 		else pageRecoveryTarget()?.focus();
 	}, [busy]);
+	// 不是分页按钮触发的变化（回到标签页的后台重读读到了末页、查询失败等）让持有焦点的分页按钮变为原生
+	// 禁用时同样交接：交给另一个分页按钮，两个都不可用时到页面 h1，不落到 body、不滚动页面（#3388 N13-06）。
+	useEffect(() => {
+		if (busy || pageTrigger.current || !(previousDisabled || nextDisabled))
+			return;
+		const previous = previousPageButton.current;
+		const next = nextPageButton.current;
+		const lost = [previous, next].find(
+			(button) => button?.disabled && focusLostFrom(button),
+		);
+		if (!lost) return;
+		const other = lost === previous ? next : previous;
+		if (other && !other.disabled) other.focus({ preventScroll: true });
+		else pageRecoveryTarget()?.focus({ preventScroll: true });
+	}, [busy, previousDisabled, nextDisabled]);
 	const administrator = scope === "administrator";
 	// 列表与详情中的用户主体合并读取一次目录；后台组件与应用主体不是目录记录。
 	const userNames = useDirectoryNames(
@@ -587,7 +605,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 						<Button
 							ref={previousPageButton}
 							variant="outline"
-							disabled={busy || formFailure !== null || !query.canPreviousPage}
+							disabled={previousDisabled}
 							focusableWhenDisabled={busy}
 							onClick={() => {
 								pageTrigger.current = "previous";
@@ -601,7 +619,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 						<Button
 							ref={nextPageButton}
 							variant="outline"
-							disabled={busy || formFailure !== null || !query.hasNextPage}
+							disabled={nextDisabled}
 							focusableWhenDisabled={busy}
 							onClick={() => {
 								pageTrigger.current = "next";
