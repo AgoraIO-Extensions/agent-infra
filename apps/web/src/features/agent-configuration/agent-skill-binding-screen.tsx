@@ -46,7 +46,10 @@ import { readFailed } from "../background-read.js";
 import type { BrowserSessionState } from "../browser-session.js";
 import { AccessDeniedCard } from "../page-state-card.js";
 import { RecoveryButton } from "../recovery-button.js";
-import { loadSkillHubDirectory } from "../skill-hub/skill-hub.js";
+import {
+	isRetryableSkillHubError,
+	loadSkillHubDirectory,
+} from "../skill-hub/skill-hub.js";
 import {
 	bindSkillHubAgentVersion,
 	readSkillHubAgentBindings,
@@ -533,8 +536,10 @@ function AgentSkillBindings({
 					agentName={agent.name}
 					bindings={items}
 					candidates={published}
+					// 后台重读（回到标签页）的可重试失败继续按上一次读到的目录说明（#3387、#3418）。
 					directoryFailed={
-						directory.isError || directory.data?.kind === "unavailable"
+						readFailed(directory, isRetryableSkillHubError) ||
+						directory.data?.kind === "unavailable"
 					}
 					writing={writing}
 					finalFocus={finalFocus}
