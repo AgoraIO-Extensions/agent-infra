@@ -159,10 +159,13 @@ export async function readMessage(
 }
 
 /**
- * #3374：新消息 Turn 的初始输入（工程 Spec §14.2.4）。合并窗口内并入的消息与源消息绑定同一个
- * Execution（补充指令有自己的 outbox，不属于初始输入），文字按受理顺序拼接在前，附件按消息顺序
+ * #3374：新消息 Turn 的初始输入（工程 Spec §14.2.4）。文字按受理顺序拼接在前，附件按消息顺序
  * 排列，由 Runtime 在用户消息之后追加附件清单。只有源消息时结果与原先只读源消息完全相同，已固化的
  * 原始操作摘要不受影响。认领与首次分发的原始操作绑定必须共用这一读取。
+ *
+ * 把用户消息绑定到已有 Execution 的写入只有两种：补充指令（各自带 `conversation:supplement:` outbox，
+ * 不属于初始输入）与合并窗口内的并入（不建 outbox，且只在该 Turn 从未被认领时写入）。新增其他
+ * 绑定到已有 Execution 的写入时，必须给它自己的 outbox 或在这里显式排除。
  */
 export async function readInitialTurnInput(
 	transaction: Transaction,

@@ -3231,6 +3231,34 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		},
 	);
 
+	// #3374：初始 Turn 输入只包含源消息与合并窗口内并入的消息；补充指令有自己的 outbox，不进入。
+	it("builds the initial Turn input from merged Messages but never from supplements", async () => {
+		const work = await seed();
+		await seedSupplement(work);
+		await client`
+			insert into platform.conversation_messages
+				(message_id, conversation_id, actor_id, role, text, execution_id,
+				 status, created_at, updated_at)
+			values (${`merged-${work.messageId}`}, ${work.conversationId}, 'actor-dispatch', 'user',
+				'merged follow-up', ${work.executionId}, 'submitted',
+				now() + interval '1 second', now() + interval '1 second')
+		`;
+		const result = await claim(work.itemId);
+		try {
+			expect(result.decision).toMatchObject({
+				outcome: "claimed",
+				claim: {
+					input: {
+						text: "bounded dispatch fixture\n\nmerged follow-up",
+						attachments: [],
+					},
+				},
+			});
+		} finally {
+			await result.store.close();
+		}
+	});
+
 	it("reads Sandbox readiness after acquiring the Conversation lock", async () => {
 		const work = await seed();
 		const store = open();
