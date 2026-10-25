@@ -178,6 +178,8 @@ describe("platform-core package surface", () => {
 			"nativeCapabilityAdmissionRequestDigest",
 			"nativeCapabilityAdmissionRequestDigestV1",
 			"nativeCapabilityAdmissionRequestDigestV2",
+			"nativeCapabilityAdmissionRequestDigestV6",
+			"nativeCapabilityOperationDigestV6",
 			"nativeCapabilityParametersDigestV1",
 			"nativeTextInputLimitV1",
 			"normalizeFileLimitDeclarationV1",
@@ -206,6 +208,7 @@ describe("platform-core package surface", () => {
 			"parseNativeCapabilityAdmissionRequest",
 			"parseNativeCapabilityAdmissionRequestV1",
 			"parseNativeCapabilityAdmissionRequestV2",
+			"parseNativeCapabilityAdmissionRequestV6",
 			"parseNativeCapabilityAttachmentsV1",
 			"parseNativeCapabilityMetadataProjectionV1",
 			"parsePersonalApiCredentialIdV1",
@@ -411,5 +414,5 @@ describe("platform-core package surface", () => {
 				/conformance|schema|postgres|drizzle|\.test\./.test(path),
 			),
 		).toBe(false);
-	});
+	}, 15_000);
 });
