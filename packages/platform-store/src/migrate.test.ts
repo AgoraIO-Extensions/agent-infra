@@ -2071,7 +2071,7 @@ describe("published Relay authority migration", () => {
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
 			idx: 64,
-			tag: "0065_wecom_stream_frame_seq",
+			tag: "0066_wecom_stream_frame_seq",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
