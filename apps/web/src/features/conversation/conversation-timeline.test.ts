@@ -712,6 +712,52 @@ describe("Conversation generated-client data consumer", () => {
 		expect(opened).toBe(6);
 	});
 
+	// #3419 N14-11：手动重连返回的 Promise 等到本次重连有结果才结束，恢复焦点据此判断请求何时结束：
+	// 自动重连用尽、中断提示重新出现时才结束（之前在重新发起读取后立即结束）；事件流被接受时结束。
+	it("settles a manual reconnect only once the stream is accepted or the automatic attempts are spent (#3419)", async () => {
+		let failing = true;
+		let opened = 0;
+		const { reader } = setup(
+			(request) => {
+				if (route(request) !== "stream") return Response.json(history());
+				opened++;
+				if (failing)
+					return Response.json(
+						{ code: "DEPENDENCY_UNAVAILABLE", retryable: true },
+						{ status: 503 },
+					);
+				return sse().response;
+			},
+			undefined,
+			[200, 200],
+		);
+		await reader.open("conversation-1");
+		await vi.waitFor(
+			() => expect(reader.getSnapshot().status).toBe("unavailable"),
+			{ timeout: 3000 },
+		);
+		const before = opened;
+		let settled = false;
+		const reconnecting = reader.reconnect().then(() => {
+			settled = true;
+		});
+		// 第一次重读失败后进入自动重连：本次手动重连仍在进行。
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot().status).toBe("reconnecting"),
+		);
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		await reconnecting;
+		expect(opened).toBe(before + 3);
+		expect(reader.getSnapshot().status).toBe("unavailable");
+
+		// 事件流被接受：本次手动重连随之结束。
+		failing = false;
+		await reader.reconnect();
+		expect(reader.getSnapshot().status).toBe("ready");
+		expect(opened).toBe(before + 4);
+	});
+
 	it("spends the automatic attempts on reconnects that are slow to fail (#1606)", async () => {
 		let opened = 0;
 		const { reader } = setup(

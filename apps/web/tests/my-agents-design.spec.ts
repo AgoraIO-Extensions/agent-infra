@@ -22,7 +22,10 @@ import type {
 	AgentProjectionV2,
 	DeploymentConfigurationProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
-import { expectBackgroundRereadKeeps } from "./background-reread";
+import {
+	expectBackgroundRereadKeeps,
+	expectFatalRereadHandsFocus,
+} from "./background-reread";
 import {
 	expectFocusableBusy,
 	expectFocusSettled,
@@ -3970,3 +3973,81 @@ test("a custom application submitted while the deployment is unreadable leaves n
 	await expectNoDuplicateControls(page, "自定义 Agent 结果页（#3389）");
 	await noHorizontalOverflow(page);
 });
+
+// #3419 N14-07（G14-2-05）：已有数据时回到标签页的后台重读读到不可重试的失败（401 / 404），我的申请、已创建 Agent
+// 列表与修改申请换成失败提示（不经 PageStateCard），原来持有焦点的链接或已修改的输入框随之卸载：壳层焦点丢失
+// 兜底把焦点交给 #main-content（这几页的 h1 不可程序聚焦），不落到 body、不滚动页面。先覆盖挂起、可重试失败与
+// 恢复（#3387），两视口一致。
+for (const status of [401, 404] as const)
+	for (const target of [
+		{
+			name: "我的申请列表",
+			route: "/my-agents",
+			read: "/api/v2/agent-applications",
+			prepare: async (page: Page) =>
+				page.getByRole("link", {
+					name: `查看申请：${pendingApplication.name}`,
+					exact: true,
+				}),
+			replaced: "当前无法查看申请，请联系管理员。",
+		},
+		{
+			name: "已创建 Agent 列表",
+			route: "/my-agents?tab=owned",
+			read: "/api/v2/agents",
+			prepare: async (page: Page) =>
+				page.getByRole("link", { name: `配置与生命周期：${ownedAgent.name}` }),
+			replaced: "当前无法查看你管理的 Agent，请联系管理员。",
+		},
+		{
+			name: "修改申请",
+			route: "/my-agents/application-browser-1/edit",
+			read: "/api/v2/agent-applications/application-browser-1",
+			prepare: async (page: Page) => {
+				const field = page.getByLabel("Agent 名称", { exact: true });
+				await field.fill("未保存的新名称");
+				return field;
+			},
+			replaced: "申请暂不可用",
+		},
+	] as const)
+		test(`a background reread that cannot be retried (${status}) hands focus off the replaced ${target.name} (#3419 N14-07)`, async ({
+			page,
+		}, info) => {
+			await viewportFor(page, info.project.name === "mobile");
+			const pageErrors = trackPageErrors(page);
+			await fixture(page);
+			await page.goto(target.route);
+			const control = await pinElement(
+				await target.prepare(page),
+				"fatal-reread-control",
+			);
+			await control.focus();
+			const main = page.locator("#main-content");
+			await expectBackgroundRereadKeeps(page, {
+				path: target.read,
+				focus: control,
+				context: target.name,
+				expectKept: async () => {
+					await expect(control).toHaveCount(1);
+					await expect(main.getByText(target.replaced)).toHaveCount(0);
+				},
+			});
+			await expectFatalRereadHandsFocus(page, {
+				path: target.read,
+				status,
+				focus: control,
+				target: main,
+				context: target.name,
+				expectReplaced: async () => {
+					await expect(main.getByText(target.replaced)).toBeVisible();
+					await expect(control).toHaveCount(0);
+				},
+			});
+			await expectCleanPage(page, pageErrors);
+			await expectNoDuplicateControls(
+				page,
+				`${target.name}（${status}，#3419）`,
+			);
+			await noHorizontalOverflow(page);
+		});
