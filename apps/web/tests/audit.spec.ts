@@ -1718,3 +1718,78 @@ for (const [route, role, listPath] of [
 		await expectNoDuplicateControls(page, `${route}（N8-3-02）`);
 		await expectCleanPage(page, errors);
 	});
+
+// #3388 N13-06：已有数据时查询失败，按「重试」后焦点移到「下一页」（重读中是可聚焦的禁用）。重试仍失败、
+// 「下一页」随之变为原生禁用时焦点交给另一个分页按钮，两个都不可用时到页面 h1，不落到 body、不滚动页面；
+// 重试成功时焦点留在「下一页」上。两身份、两视口一致。
+for (const [route, role, listPath] of [
+	["/audit", "employee", "/api/v2/audit"],
+	["/admin/audit", "admin", "/api/v4/admin/audit"],
+] as const)
+	test(`${route} pagination focus survives a retry that fails again (#3388 N13-06)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		const api = await fixture(page, role);
+		await page.goto(route);
+		const main = page.locator("main");
+		const heading = main.getByRole("heading", { level: 1 });
+		const failure = main
+			.getByRole("alert")
+			.filter({ hasText: "审计查询失败，请稍后重试。" });
+		const table = main.locator("table.audit-table");
+		const retry = main.getByRole("button", { name: "重试", exact: true });
+		const next = await pinElement(
+			main.getByRole("button", { name: "下一页", exact: true }),
+			"audit-next-retry",
+		);
+		await expect(main.getByText("第 1 页 · 本页 1 条")).toBeVisible();
+
+		const failQuery = async () => {
+			api.failNext();
+			await main.getByRole("button", { name: "查询", exact: true }).click();
+			await expect(failure).toBeVisible();
+		};
+		const retryThenNext = async (outcome: "fails" | "recovers") => {
+			if (outcome === "fails") api.failNext();
+			const reading = await holdRequests(page, "GET", listPath);
+			await retry.focus();
+			await page.keyboard.press("Enter");
+			await expect.poll(() => reading.held()).toBe(1);
+			// 请求发出后页面才换成读取中：等「下一页」成为可聚焦的禁用再移过去（之前是原生禁用）。
+			await expect(next).toHaveAttribute("aria-disabled", "true");
+			await next.focus();
+			await expect(next).toBeFocused();
+			await expectFocusableBusy(
+				next,
+				`${route} 重试读取中焦点在「下一页」`,
+				[30, 150],
+			);
+			return reading;
+		};
+
+		// 重试仍失败：「下一页」变为原生禁用，焦点交给页面 h1（「上一页」也不可用），不滚动。
+		await failQuery();
+		let reading = await retryThenNext("fails");
+		const scrolled = await page.evaluate(() => window.scrollY);
+		reading.release();
+		await expect(failure).toBeVisible();
+		await expect(next).toBeDisabled();
+		await expectFocusSettled(
+			heading,
+			`${route} 重试仍失败后`,
+			[50, 300, 1000, 2000],
+		);
+		expect(await page.evaluate(() => window.scrollY)).toBe(scrolled);
+
+		// 重试成功：「下一页」恢复可用，焦点留在它上面。
+		reading = await retryThenNext("recovers");
+		reading.release();
+		await expect(table).toBeVisible();
+		await expect(failure).toHaveCount(0);
+		await expect(next).toBeEnabled();
+		await expectFocusSettled(next, `${route} 重试成功后`, [50, 300, 1000]);
+		await expectNoDuplicateControls(page, `${route}（#3388 N13-06）`);
+		await expectCleanPage(page, errors);
+	});
