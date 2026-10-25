@@ -71,6 +71,53 @@ export type NativeCapabilityAdmissionV6AuthorityBinding = Readonly<{
 	hostSessionRef: string;
 }>;
 
+export type NativeCapabilityAdmissionV6KeyBinding = Readonly<{
+	purpose: "personal" | "agent-default";
+	subjectId: string;
+	ciphertextRef: string;
+	version: number;
+}>;
+
+export type NativeCapabilityAdmissionV6Decision =
+	| {
+			readonly outcome: "accepted" | "replayed";
+			readonly plan: NativeCapabilityInvocationPlanV6;
+	  }
+	| {
+			readonly outcome: "busy" | "denied" | "stale" | "unknown" | "unavailable";
+			readonly reason?:
+				| "authorization_lost"
+				| "idempotency_in_progress"
+				| "metadata_unavailable";
+	  }
+	| { readonly outcome: "conflict"; readonly reason: "idempotency_conflict" };
+
+export interface NativeCapabilityAdmissionTransactionPortV6 {
+	admitNativeCapabilityV6(input: {
+		readonly request: NativeCapabilityAdmissionRequestV6;
+		readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
+		readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
+		readonly plan: NativeCapabilityInvocationPlanV6;
+		readonly requestDigest: string;
+		readonly operationDigest: string;
+	}): Promise<NativeCapabilityAdmissionV6Decision>;
+}
+
+export interface NativeCapabilityAdmissionV6AuthorizationPort {
+	authorize(input: { readonly conversationId: string }): Promise<
+		| {
+				readonly outcome: "allowed";
+				readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
+				readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
+		  }
+		| { readonly outcome: "denied" }
+	>;
+}
+
+export interface NativeCapabilityAdmissionUseCaseV6 {
+	admit(input: unknown): Promise<NativeCapabilityAdmissionV6Decision>;
+}
+
 function canonical(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(canonical);
 	if (value !== null && typeof value === "object") {
@@ -184,4 +231,68 @@ export function validateNativeCapabilityInvocationPlanV6(
 		!isDeepStrictEqual(plan.outbox.payload, request)
 	)
 		throw new TypeError("Native V6 admission plan is invalid");
+}
+
+export function createNativeCapabilityAdmissionUseCaseV6(dependencies: {
+	readonly authorization: NativeCapabilityAdmissionV6AuthorizationPort;
+	readonly transaction: NativeCapabilityAdmissionTransactionPortV6;
+}): NativeCapabilityAdmissionUseCaseV6 {
+	return {
+		async admit(input) {
+			const runtimeRequest =
+				RuntimeNativeCapabilityRequestV6Schema.parse(input);
+			const request = parseNativeCapabilityAdmissionRequestV6(runtimeRequest);
+			const authorization = await dependencies.authorization.authorize({
+				conversationId: request.conversationId,
+			});
+			if (authorization.outcome !== "allowed")
+				return { outcome: "denied", reason: "authorization_lost" };
+			const requestDigest = nativeCapabilityAdmissionRequestDigestV6(request);
+			const operationDigest = nativeCapabilityOperationDigestV6(runtimeRequest);
+			const plan: NativeCapabilityInvocationPlanV6 = {
+				schemaVersion: 2,
+				kind: "native-capability",
+				conversationId: request.conversationId,
+				agentId: authorization.authority.agentId,
+				actorId: authorization.authority.actorId,
+				channelId: authorization.authority.channelId,
+				executionId: runtimeRequest.executionId,
+				turnId: runtimeRequest.turnId,
+				sessionGeneration: runtimeRequest.sessionGeneration,
+				authorizationRevision: authorization.authority.authorizationRevision,
+				hostSessionRef: authorization.authority.hostSessionRef,
+				capabilityId: request.capabilityId,
+				directoryRevision: request.directoryRevision,
+				capabilitySourceVersion: request.capabilitySourceVersion,
+				parameters: request.parameters,
+				parametersDigest: request.parametersDigest,
+				modelOptionId: request.modelOptionId,
+				reasoningLevel: request.reasoningLevel,
+				configVersion: request.configVersion,
+				keyBinding: authorization.keyBinding,
+				executionStatus: "submitted",
+				outbox: {
+					id: `conversation:native-capability:${runtimeRequest.executionId}`,
+					operation: "conversation.native-capability.invoke.v2",
+					payload: request,
+				},
+				requestDigest,
+				operationDigest,
+			};
+			validateNativeCapabilityInvocationPlanV6(plan, {
+				request,
+				authority: authorization.authority,
+				requestDigest,
+				operationDigest,
+			});
+			return dependencies.transaction.admitNativeCapabilityV6({
+				request,
+				authority: authorization.authority,
+				keyBinding: authorization.keyBinding,
+				plan,
+				requestDigest,
+				operationDigest,
+			});
+		},
+	};
 }
