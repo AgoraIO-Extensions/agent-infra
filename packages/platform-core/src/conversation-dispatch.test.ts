@@ -4105,6 +4105,23 @@ describe("Runtime-reported unsubmitted Turns (#3373)", () => {
 		expect(store.current.notSubmittedResubmissions?.count).toBe(3);
 	});
 
+	it("keeps the resubmission backoff within the Store delay bound", async () => {
+		// 部署允许的最大重试间隔乘以退避系数后仍须是 Store 接受的延迟，否则退回投递前状态失败。
+		const store = new MemoryDispatchStore(
+			claim({ notSubmittedResubmissions: { count: 2, elapsedMs: 30_000 } }),
+		);
+		const { runtimeHost } = hostReturning([
+			notSubmitted("file_input_unavailable"),
+		]);
+		const h = setup({ store, runtimeHost, retryDelayMs: 86_400_000 });
+
+		await expect(dispatch(h.useCase)).resolves.toMatchObject({
+			outcome: "retry",
+			retryScheduled: true,
+		});
+		expect(store.releaseDelays).toEqual([86_400_000]);
+	});
+
 	it.each([
 		[
 			"three resubmissions are spent",

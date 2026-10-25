@@ -190,8 +190,9 @@ export function createConversationDispatchUseCaseV1(
 			try {
 				return (await dependencies.store.releaseUnsentDispatch({
 					claim,
-					// 退避给暂时不可达的依赖留出恢复时间，总时长仍在窗口之内。
-					retryDelayMs: retryDelayMs * 3 ** resubmissions,
+					// 退避给暂时不可达的依赖留出恢复时间，总时长仍在窗口之内；不超过 Store 接受的
+					// 最大延迟（部署配置的重试间隔可达 24 小时）。
+					retryDelayMs: Math.min(retryDelayMs * 3 ** resubmissions, 86_400_000),
 					errorCode: "RUNTIME_TURN_NOT_SUBMITTED",
 					hostSessionRef,
 				}))
