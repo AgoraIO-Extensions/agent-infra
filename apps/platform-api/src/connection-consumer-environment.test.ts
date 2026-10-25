@@ -17,12 +17,16 @@ function fingerprint(value: typeof profile) {
 	return connectionConsumerProfileFingerprintV1(value);
 }
 
+const connectionCapability = (input: unknown, approval: unknown) =>
+	createConnectionCapability(input, approval, "/connection/connections");
+
 const environment = {
 	AGENT_INFRA_CONNECTION_PROFILE: JSON.stringify(profile),
 	AGENT_INFRA_CONNECTION_CONFIG_VERSION: `1-${fingerprint(profile)}`,
 	AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT: fingerprint(profile),
 	AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REF: "connection-deployment",
 	AGENT_INFRA_CONNECTION_APPROVAL_SOURCE_REVISION: "r1",
+	AGENT_INFRA_CONNECTION_WEB_PATH: "/connection/connections",
 };
 
 describe("Connection Consumer environment configuration", () => {
@@ -31,10 +35,7 @@ describe("Connection Consumer environment configuration", () => {
 			readConnectionConsumerEnvironmentConfigurationV1(environment);
 		expect(configuration).toBeDefined();
 		expect(
-			createConnectionCapability(
-				configuration?.profile,
-				configuration?.approval,
-			),
+			connectionCapability(configuration?.profile, configuration?.approval),
 		).toMatchObject({ status: "available" });
 	});
 
@@ -45,10 +46,7 @@ describe("Connection Consumer environment configuration", () => {
 			AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT: "0".repeat(64),
 		});
 		expect(
-			createConnectionCapability(
-				configuration?.profile,
-				configuration?.approval,
-			),
+			connectionCapability(configuration?.profile, configuration?.approval),
 		).toMatchObject({ status: "unavailable" });
 
 		expect(
@@ -75,6 +73,7 @@ describe("Connection Consumer environment configuration", () => {
 				},
 			},
 			configVersion: undefined,
+			webPath: undefined,
 		});
 	});
 

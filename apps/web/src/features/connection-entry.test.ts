@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import { connectionEntryUrl } from "./connection-entry.js";
 
 const origin = "https://connection.example.test";
-const capability = (publicOrigin: unknown, mcpPath: unknown) => ({
+const capability = (publicOrigin: unknown, webPath: unknown) => ({
 	schemaVersion: 1,
 	status: "available",
 	publicOrigin,
-	mcpPath,
+	webPath,
 	configFingerprint: "f".repeat(64),
 });
 
@@ -49,9 +49,9 @@ describe("connectionEntryUrl", () => {
 		["empty path", origin, ""],
 		["non-string origin", 42, "/mcp"],
 		["non-string path", origin, ["/mcp"]],
-	])("rejects %s", (_name, publicOrigin, mcpPath) => {
+	])("rejects %s", (_name, publicOrigin, webPath) => {
 		expect(
-			connectionEntryUrl(capability(publicOrigin, mcpPath)),
+			connectionEntryUrl(capability(publicOrigin, webPath)),
 		).toBeUndefined();
 	});
 
@@ -74,7 +74,7 @@ describe("connectionEntryUrl", () => {
 			).toBe(origin);
 	});
 
-	it("is the only Connection URL builder and never resolves mcpPath against publicOrigin", () => {
+	it("is the only Connection URL builder and never resolves webPath against publicOrigin", () => {
 		for (const file of [
 			"./application-shell.tsx",
 			"./agent-discovery/agent-detail-screen.tsx",
@@ -82,7 +82,7 @@ describe("connectionEntryUrl", () => {
 			"../routes/agents/$agentId/index.tsx",
 		]) {
 			const source = readFileSync(new URL(file, import.meta.url), "utf8");
-			expect(source, file).not.toMatch(/new URL\(\s*[^,)]*mcpPath/);
+			expect(source, file).not.toMatch(/new URL\(\s*[^,)]*webPath/);
 			expect(source, file).not.toMatch(/publicOrigin\s*\+/);
 		}
 	});

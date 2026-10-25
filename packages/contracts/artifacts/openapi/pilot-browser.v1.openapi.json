@@ -2430,6 +2430,10 @@
               "status": {
                 "const": "available",
                 "type": "string"
+              },
+              "webPath": {
+                "pattern": "^\\/.*",
+                "type": "string"
               }
             },
             "required": [
@@ -2437,6 +2441,7 @@
               "schemaVersion",
               "publicOrigin",
               "mcpPath",
+              "webPath",
               "configFingerprint"
             ],
             "type": "object"
