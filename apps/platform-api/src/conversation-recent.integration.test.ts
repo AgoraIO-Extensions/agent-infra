@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { once } from "node:events";
-import { ConversationPageV1Schema } from "@agent-infra/contracts/pilot";
+import { RecentPersonalConversationPageV2Schema } from "@agent-infra/contracts/pilot";
 import type {
 	AgentConfigurationRecordV2,
 	WorkloadReconciliationStateV1,
@@ -185,7 +185,7 @@ async function page(limit?: number, cursor?: string, actor = "owner") {
 		result.response.status,
 		JSON.stringify({ limit: limit ?? 50, cursor, error: result.error }),
 	).toBe(200);
-	return ConversationPageV1Schema.parse(result.data);
+	return RecentPersonalConversationPageV2Schema.parse(result.data);
 }
 async function error(
 	url: string,
@@ -276,23 +276,26 @@ describe("recent generated client → production assembly/HTTP/Core → PostgreS
 			await sql`select id from platform.conversations order by updated_at desc, id desc`;
 		for (const limit of [undefined, 1, 100]) {
 			// The first read exercises this fresh Store pool's cold array binding.
-			const rows = await query.readRecentPersonalConversations({
-				user: {
-					schemaVersion: 1,
-					userId: "owner",
-					accountStatus: "active",
-					organizationIds: ["team"],
-					authorizationRevision: "current-directory",
-				},
-				limit: (limit ?? 50) + 1,
-			});
+			const { records: rows, unavailableAgents } =
+				await query.readRecentPersonalConversations({
+					user: {
+						schemaVersion: 1,
+						userId: "owner",
+						accountStatus: "active",
+						organizationIds: ["team"],
+						authorizationRevision: "current-directory",
+					},
+					limit: (limit ?? 50) + 1,
+				});
 			expect(rows.map((row) => row.projection.conversationId)).toEqual(
 				expected.slice(0, (limit ?? 50) + 1).map((row) => row.id),
 			);
+			expect(unavailableAgents).toEqual([]);
 			const result = await page(limit);
 			expect(result.items.map((item) => item.conversationId)).toEqual(
 				expected.slice(0, limit ?? 50).map((row) => row.id),
 			);
+			expect(result).not.toHaveProperty("unavailableAgentIds");
 			const core = await assembly.dependencies.conversation.recent?.list(
 				"owner",
 				limit === undefined ? {} : { limit },
@@ -352,20 +355,22 @@ describe("recent generated client → production assembly/HTTP/Core → PostgreS
 				"base64url",
 			).toString(),
 		).toContain(".000900Z");
-		const rows = await query.readRecentPersonalConversations({
-			user: {
-				schemaVersion: 1,
-				userId: "owner",
-				accountStatus: "active",
-				organizationIds: ["team"],
-				authorizationRevision: "now",
-			},
-			limit: 3,
-		});
+		const { records: rows, unavailableAgents } =
+			await query.readRecentPersonalConversations({
+				user: {
+					schemaVersion: 1,
+					userId: "owner",
+					accountStatus: "active",
+					organizationIds: ["team"],
+					authorizationRevision: "now",
+				},
+				limit: 3,
+			});
 		expect(rows.map((row) => row.position.updatedAt)).toEqual([
 			"2026-09-06T00:00:00.000900Z",
 			"2026-09-06T00:00:00.000100Z",
 		]);
+		expect(unavailableAgents).toEqual([]);
 	});
 
 	it("excludes >250 newer unauthorized/self-managed/foreign-channel rows before the global limit", async () => {
@@ -410,6 +415,8 @@ describe("recent generated client → production assembly/HTTP/Core → PostgreS
 			);
 		const first = await page();
 		expect(first.items).toHaveLength(50);
+		// Ungranted and self-managed Agents are neither listed nor named.
+		expect(first).not.toHaveProperty("unavailableAgentIds");
 		expect(first.items.map((item) => item.conversationId)).toEqual(
 			Array.from(
 				{ length: 50 },
@@ -497,7 +504,7 @@ describe("recent generated client → production assembly/HTTP/Core → PostgreS
 	});
 
 	it.each(["missing", "stale", "unverified"])(
-		"returns explicit unavailable for authorized %s channel facts without poisoning foreign subjects",
+		"omits only the authorized Agent with %s channel facts and names it without poisoning foreign subjects (#3379)",
 		async (kind) => {
 			await seedAgent("bad", "available", "ready", true);
 			if (kind === "missing")
@@ -512,11 +519,100 @@ describe("recent generated client → production assembly/HTTP/Core → PostgreS
 				"2026-09-06T00:00:00.000000Z",
 				"other",
 			);
-			expect((await page()).items).toEqual([]);
+			// Another subject's history on the unknown Agent is neither listed nor named.
+			expect(await page()).toEqual({ items: [], nextCursor: null });
 			await seedConversation("own-bad", "bad", "2026-09-06T00:00:00.000000Z");
-			await error(recentPath, 503, "DEPENDENCY_UNAVAILABLE");
+			await seedConversation("own-good", "a", "2026-09-05T00:00:00.000000Z");
+			const result = await page();
+			expect(result.items.map((item) => item.conversationId)).toEqual([
+				"own-good",
+			]);
+			expect(result.unavailableAgentIds).toEqual(["bad"]);
+			expect(JSON.stringify(result)).not.toMatch(
+				/own-bad|sourceConfiguration|imageDigest|platform-adapter/,
+			);
+			expect((await page(50, undefined, "other")).unavailableAgentIds).toEqual([
+				"bad",
+			]);
 		},
 	);
+
+	it("keeps the list available when a stopped Agent's configuration revision is ahead of its Workload (#3379)", async () => {
+		// Fixed-environment shape: the stopped Agent's WeCom unbind advanced the
+		// configuration revision to 3 while the stopped Workload kept candidate 2.
+		await seedAgent("stopped", "stopped");
+		await sql`update platform.agents set current_configuration_revision = 3 where id = 'stopped'`;
+		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, configuration, created_at)
+			select agent_id, 3, source_reference, jsonb_set(configuration, '{revision}', '3'), now()
+			from platform.agent_configuration_revisions where agent_id = 'stopped' and revision = 2`;
+		for (let index = 0; index < 16; index++)
+			await seedConversation(
+				`stopped-${String(index).padStart(2, "0")}`,
+				"stopped",
+				`2026-09-07T00:00:${String(index).padStart(2, "0")}.000000Z`,
+			);
+		for (let index = 0; index < 5; index++) {
+			await seedConversation(
+				`eligible-${index}`,
+				["a", "b", "c"][index % 3] ?? "a",
+				`2026-09-0${index % 2 === 0 ? 8 : 6}T00:00:0${index}.000000Z`,
+			);
+		}
+		const ordered = (
+			await sql`select id from platform.conversations where agent_id <> 'stopped'
+				order by updated_at desc, id desc`
+		).map((row) => row.id);
+		const first = await page();
+		expect(first.items.map((item) => item.conversationId)).toEqual(ordered);
+		expect(first.unavailableAgentIds).toEqual(["stopped"]);
+		// Keyset pagination stays over confirmed rows only and remains complete.
+		const seen: string[] = [];
+		let cursor: string | undefined;
+		do {
+			const result = await page(2, cursor);
+			seen.push(...result.items.map((item) => item.conversationId));
+			expect(result.items.every((item) => item.agentId !== "stopped")).toBe(
+				true,
+			);
+			cursor = result.nextCursor ?? undefined;
+		} while (cursor);
+		expect(seen).toEqual(ordered);
+		// The shared-scope user without own history on it is not told about it.
+		expect(await page(50, undefined, "other")).toEqual({
+			items: [],
+			nextCursor: null,
+		});
+		// Withdrawing the grant removes the hint as well as the rows.
+		await sql`delete from platform.agent_owners where agent_id = 'stopped'`;
+		await sql`delete from platform.agent_availability where agent_id = 'stopped'`;
+		expect(await page()).not.toHaveProperty("unavailableAgentIds");
+	});
+
+	it("re-reads an Agent whose Workload fails strict decoding as unavailable without truncating pages (#3379)", async () => {
+		// The SQL mirror accepts the row, the strict decoder rejects the extra key.
+		await sql`update platform.workload_reconciliations
+			set state = state || '{"unexpected":true}'::jsonb where agent_id = 'b'`;
+		for (let index = 0; index < 9; index++)
+			await seedConversation(
+				`row-${index}`,
+				["a", "b", "c"][index % 3] ?? "a",
+				`2026-09-06T00:00:0${index}.000000Z`,
+			);
+		const ordered = (
+			await sql`select id from platform.conversations where agent_id <> 'b'
+				order by updated_at desc, id desc`
+		).map((row) => row.id);
+		const seen: string[] = [];
+		let cursor: string | undefined;
+		do {
+			const result = await page(2, cursor);
+			seen.push(...result.items.map((item) => item.conversationId));
+			if (cursor === undefined)
+				expect(result.unavailableAgentIds).toEqual(["b"]);
+			cursor = result.nextCursor ?? undefined;
+		} while (cursor);
+		expect(seen).toEqual(ordered);
+	});
 
 	it("refreshes the first page after an update and returns dependency failures as errors", async () => {
 		await seedConversation("new", "a", "2026-09-06T00:01:00.000000Z");

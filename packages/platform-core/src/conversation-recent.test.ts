@@ -4,6 +4,8 @@ import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
 import {
 	createRecentPersonalConversationsUseCaseV1,
 	type RecentPersonalConversationRecordV1,
+	type RecentPersonalConversationsReadV1,
+	type RecentPersonalConversationUnavailableAgentV1,
 } from "./conversation-recent.js";
 import type { CurrentTaskUserV1 } from "./task-authorization.js";
 
@@ -70,7 +72,10 @@ function record(
 	};
 }
 
-function harness(records = [record("a"), record("z")]) {
+function harness(
+	records = [record("a"), record("z")],
+	unavailableAgents: RecentPersonalConversationUnavailableAgentV1[] = [],
+) {
 	let user: CurrentTaskUserV1 | null = {
 		schemaVersion: 1,
 		userId: "user",
@@ -79,7 +84,12 @@ function harness(records = [record("a"), record("z")]) {
 		authorizationRevision: "current-1",
 	};
 	const resolveCurrentUser = vi.fn(async () => user);
-	const readRecentPersonalConversations = vi.fn(async () => records);
+	const readRecentPersonalConversations = vi.fn(
+		async (): Promise<RecentPersonalConversationsReadV1> => ({
+			records,
+			unavailableAgents,
+		}),
+	);
 	return {
 		resolveCurrentUser,
 		readRecentPersonalConversations,
@@ -101,7 +111,11 @@ describe("recent personal Web conversations Core", () => {
 		]);
 		const first = await h.useCase.list("user", { limit: 1 });
 		expect(first.items.map((item) => item.conversationId)).toEqual(["a"]);
-		h.readRecentPersonalConversations.mockResolvedValueOnce([]);
+		expect(first.unavailableAgentIds).toEqual([]);
+		h.readRecentPersonalConversations.mockResolvedValueOnce({
+			records: [],
+			unavailableAgents: [],
+		});
 		await h.useCase.list("user", {
 			limit: 1,
 			cursor: first.nextCursor ?? undefined,
@@ -251,6 +265,139 @@ describe("recent personal Web conversations Core", () => {
 			).rejects.toMatchObject({ code: "unavailable" });
 		},
 	);
+
+	it("returns confirmed rows and names omitted unknown-channel Agents instead of failing the page (#3379)", async () => {
+		const h = harness(
+			[record("a"), record("m"), record("z")],
+			[
+				{
+					agent: {
+						...record("x").agent,
+						agentId: "stopped-agent",
+						status: "stopped",
+						serviceAvailability: null,
+						desiredState: "stopped",
+					},
+				},
+				{ agent: { ...record("x").agent, agentId: "other-agent" } },
+			],
+		);
+		const first = await h.useCase.list("user", { limit: 2 });
+		expect(first.items.map((item) => item.conversationId)).toEqual(["a", "m"]);
+		expect(first.unavailableAgentIds).toEqual(["other-agent", "stopped-agent"]);
+		// The cursor still binds only the last returned confirmed row.
+		h.readRecentPersonalConversations.mockResolvedValueOnce({
+			records: [record("z")],
+			unavailableAgents: [],
+		});
+		const second = await h.useCase.list("user", {
+			limit: 2,
+			cursor: first.nextCursor ?? undefined,
+		});
+		expect(h.readRecentPersonalConversations).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				limit: 3,
+				after: {
+					conversationId: "m",
+					updatedAt: "2026-09-06T00:00:00.000900Z",
+				},
+			}),
+		);
+		expect(second).toEqual({
+			items: [expect.objectContaining({ conversationId: "z" })],
+			nextCursor: null,
+			unavailableAgentIds: [],
+		});
+		// A page whose only Web history belongs to an unconfirmed Agent is empty, not failed.
+		const empty = harness(
+			[],
+			[{ agent: { ...record("x").agent, agentId: "only" } }],
+		);
+		expect(await empty.useCase.list("user", {})).toEqual({
+			items: [],
+			nextCursor: null,
+			unavailableAgentIds: ["only"],
+		});
+	});
+
+	it.each([
+		"foreign-grant",
+		"other-organization",
+		"non-history-status",
+		"duplicate",
+		"also-listed",
+		"over-limit",
+		"malformed",
+	])(
+		"fails closed instead of naming an ineligible omitted Agent (%s)",
+		async (kind) => {
+			const agent = { ...record("x").agent, agentId: "omitted" };
+			const unavailable: RecentPersonalConversationUnavailableAgentV1[] =
+				kind === "foreign-grant"
+					? [
+							{
+								agent: {
+									...agent,
+									ownerIds: ["owner"],
+									availability: [{ kind: "user", userId: "another-user" }],
+								},
+							},
+						]
+					: kind === "other-organization"
+						? [
+								{
+									agent: {
+										...agent,
+										availability: [
+											{ kind: "organization", organizationId: "another-team" },
+										],
+									},
+								},
+							]
+						: kind === "non-history-status"
+							? [
+									{
+										agent: {
+											...agent,
+											status: "pending_approval",
+											approvalRevision: null,
+											serviceAvailability: null,
+											desiredState: null,
+											workloadRevision: null,
+											fence: null,
+										} as never,
+									},
+								]
+							: kind === "duplicate"
+								? [{ agent }, { agent }]
+								: kind === "also-listed"
+									? [{ agent: record("x").agent }]
+									: kind === "over-limit"
+										? Array.from({ length: 101 }, (_, index) => ({
+												agent: { ...agent, agentId: `omitted-${index}` },
+											}))
+										: [{ agent: { ...agent, ownerIds: "owner" } as never }];
+			await expect(
+				harness([record("a")], unavailable).useCase.list("user", {}),
+			).rejects.toMatchObject({ code: "unavailable" });
+		},
+	);
+
+	it("rejects a Store read without the omitted-Agent list", async () => {
+		const h = harness();
+		h.readRecentPersonalConversations.mockResolvedValueOnce({
+			records: [record("a")],
+		} as never);
+		await expect(h.useCase.list("user", {})).rejects.toMatchObject({
+			code: "unavailable",
+		});
+		h.readRecentPersonalConversations.mockResolvedValueOnce([
+			record("a"),
+		] as never);
+		await expect(h.useCase.list("user", {})).rejects.toMatchObject({
+			code: "unavailable",
+		});
+	});
 
 	it("reports directory and query failures explicitly", async () => {
 		const h = harness();

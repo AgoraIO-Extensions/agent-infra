@@ -289,6 +289,9 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
     Agent 的 Skill、创建审批与 Agent 管理列表、Skill 审核队列、审计列表、个人 Relay Key 与 Skill 编辑内容；
   - 读取失败：`PageStateCard` / `ReadFailureCard` 与 `RecoveryButton`，或 danger `Alert` 加重试，如最近对话、
     申请详情与修改申请、Agent 的 Skill 绑定与可绑定版本、审计列表与详情、API 凭证列表、个人 Relay Key、目录名称批量读取；
+  - 部分省略：warn `Alert`（`role="status"`），如工作台与对话页「最近对话」里渠道资格暂时无法确认的 Agent，
+    文案为「{N} 个 Agent 的对话暂时无法显示，其他对话不受影响。」。其余对话照常列出，不显示 Agent ID，
+    也不按读取失败处理（[工程 Spec §14.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#141-web)）；
   - 空：`Empty`，如 Agent 目录、我的 Agent 两个 Tab、Agent 管理与创建审批无匹配、审计无记录、Skill Hub 与我的库为空；
   - 无权限：`PageStateCard`（`unauthorized`）或共用「无法访问」卡（P-01），如非 Owner 打开 Owner 配置或 Agent 的 Skill、
     员工打开系统管理页与平台审计、发送后访问权限失效；

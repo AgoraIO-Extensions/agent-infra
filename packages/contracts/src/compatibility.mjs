@@ -3734,6 +3734,38 @@ function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #3379：最近对话按 Agent 降级，只允许 200 响应追加可选的 `unavailableAgentIds`
+// （渠道资格无法确认、被省略的 Agent）。删除该字段后须与基线逐字节一致。
+const recentUnavailableAgentIdsProperty = {
+	items: { minLength: 1, type: "string" },
+	maxItems: 100,
+	minItems: 1,
+	type: "array",
+};
+function recentPersonalConversationPageSchema(document) {
+	return document.paths?.["/api/v2/me/conversations/recent"]?.get?.responses?.[
+		"200"
+	]?.content?.["application/json"]?.schema;
+}
+function isRecentUnavailableAgentsOpenApiAddition(previous, current) {
+	const before = recentPersonalConversationPageSchema(previous);
+	const after = recentPersonalConversationPageSchema(current);
+	if (
+		!before?.properties ||
+		Object.hasOwn(before.properties, "unavailableAgentIds") ||
+		!sameValue(
+			after?.properties?.unavailableAgentIds,
+			recentUnavailableAgentIdsProperty,
+		) ||
+		after.required?.includes("unavailableAgentIds")
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete recentPersonalConversationPageSchema(normalized).properties
+		.unavailableAgentIds;
+	return sameValue(previous, normalized);
+}
+
 // #440 adds bounded receipt management and Owner-scoped bot setup.
 // Keep both hashes: the first is the historical #440 shape before #1935's QR
 // branch, while the second is the exact current route set after that addition.
@@ -5919,6 +5951,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isConversationSessionAvailabilityOpenApiAddition(previous, current) &&
 			!isConversationSessionUpdatingOpenApiAddition(previous, current) &&
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&
+			!isRecentUnavailableAgentsOpenApiAddition(previous, current) &&
 			!isSkillHubReadOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationOpenApiAddition(previous, current) &&
 			!isSkillHubPublicationOpenApiAddition(previous, current) &&

@@ -51,6 +51,7 @@ import {
 	type TemplateNameLookup,
 	templateDisplayName,
 } from "../template-display-name.js";
+import { RecentUnavailableAgentsNotice } from "./recent-unavailable-agents-notice.js";
 
 /** 工作台只列最近几条个人对话（设计稿原型 3 条）；全部历史在对话页「最近对话」面板。 */
 export const workbenchRecentLimit = 3;
@@ -64,6 +65,8 @@ export type WorkbenchRecentState =
 			kind: "ready";
 			conversations: ConversationDetailProjectionV2["conversation"][];
 			nextCursor: string | null;
+			/** 已读取各页中渠道资格无法确认、对话未列出的 Agent（#3379）；缺省为没有。 */
+			unavailableAgentIds?: readonly string[];
 	  };
 
 export type WorkbenchScreenProps = {
@@ -441,7 +444,13 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 					}
 				>
 					{recent.kind === "ready" ? (
-						<RecentConversations agents={agents} recent={recent} />
+						<>
+							<RecentUnavailableAgentsNotice
+								agentIds={recent.unavailableAgentIds}
+								className="mb-3"
+							/>
+							<RecentConversations agents={agents} recent={recent} />
+						</>
 					) : (
 						<ReadNotice {...notice} state={recent} label="最近对话" />
 					)}
