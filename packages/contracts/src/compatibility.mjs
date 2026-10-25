@@ -4766,14 +4766,53 @@ function isConnectionCapabilityOpenApiAddition(previous, current) {
 		path: current.paths?.[path],
 		schema: current.components?.schemas?.[name],
 	};
+	const additionForHash = structuredClone(addition);
+	const available = additionForHash.schema?.oneOf?.find(
+		(option) => option.properties?.status?.const === "available",
+	);
+	delete available?.properties?.webPath;
+	if (Array.isArray(available?.required))
+		available.required = available.required.filter(
+			(field) => field !== "webPath",
+		);
 	if (
-		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		createHash("sha256")
+			.update(JSON.stringify(additionForHash))
+			.digest("hex") !==
 		"e1e46d38ed8749051748bbb54abfdd6674051907aa237dd38eae022ff63e9326"
 	)
 		return false;
 	const normalized = structuredClone(current);
 	delete normalized.paths[path];
 	delete normalized.components.schemas[name];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #851 keeps the existing MCP capability contract compatible while adding the
+// independently approved browser-console path used by Platform Web.
+function isConnectionCapabilityWebPathAddition(previous, current) {
+	const name = "ConnectionCapabilityProjectionV1";
+	const before = previous.components?.schemas?.[name];
+	const after = current.components?.schemas?.[name];
+	const available = (schema) =>
+		schema?.oneOf?.find(
+			(option) => option.properties?.status?.const === "available",
+		);
+	const beforeAvailable = available(before);
+	const afterAvailable = available(after);
+	if (
+		before === undefined ||
+		after === undefined ||
+		beforeAvailable?.properties?.webPath !== undefined ||
+		afterAvailable?.properties?.webPath === undefined
+	)
+		return false;
+	const normalized = structuredClone(current);
+	const normalizedAvailable = available(normalized.components.schemas[name]);
+	delete normalizedAvailable.properties.webPath;
+	normalizedAvailable.required = normalizedAvailable.required.filter(
+		(name) => name !== "webPath",
+	);
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
@@ -6102,6 +6141,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isScopedAuditDisplayNameV2OpenApiAddition(previous, current) &&
 			!isSkillHubAuditActionOpenApiAddition(previous, current) &&
 			!isConnectionInstallationOpenApiAddition(previous, current) &&
+			!isConnectionCapabilityWebPathAddition(previous, current) &&
 			!isPlatformUserDisableOpenApiAddition(previous, current) &&
 			!isConnectionInstallationAuthorizationUrlAddition(previous, current) &&
 			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&

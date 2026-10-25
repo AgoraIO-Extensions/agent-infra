@@ -40,7 +40,7 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 能力未知时先重读状态，只有服务端确认可用才建立配置会话。
 侧栏「我的 Connection」、对话「会话上下文」中的 Connection 提示与 Agent 详情「打开 Connection」
 只由 `src/features/connection-entry.ts` 生成：先按服务端规则分别校验原始 `publicOrigin` 与
-`mcpPath`，再拼接并确认 origin 不变。
+服务端批准的 `webPath`，再拼接并确认 origin 不变；Runtime 使用的 `mcpPath` 不作为浏览器授权入口。
 对话时间线独立滚动，保留消息输入区及代码、表格的局部滚动。
 短视口（高度不超过 600px）只压缩页头与间距，仍只有时间线一处滚动；执行详情是模态弹窗，关闭后焦点回到触发按钮。
 

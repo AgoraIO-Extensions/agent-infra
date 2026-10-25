@@ -155,6 +155,7 @@ export const ConnectionCapabilityProjectionV1Schema = z.discriminatedUnion(
 			schemaVersion: z.literal(1),
 			publicOrigin: z.string().url(),
 			mcpPath: z.string().startsWith("/"),
+			webPath: z.string().startsWith("/"),
 			configFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
 		}),
 		z.strictObject({

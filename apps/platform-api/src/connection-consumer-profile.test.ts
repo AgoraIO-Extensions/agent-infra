@@ -20,6 +20,9 @@ const approval = {
 	source: { ref: "platform-deployment", revision: "r1" },
 };
 
+const connectionCapability = (input: unknown, approval: unknown) =>
+	createConnectionCapability(input, approval, "/connection/connections");
+
 function approve(candidate: typeof profile) {
 	return {
 		...approval,
@@ -40,12 +43,13 @@ function approve(candidate: typeof profile) {
 }
 describe("Connection Consumer configuration", () => {
 	it("publishes a deterministic capability and fingerprint", () => {
-		const result = createConnectionCapability(profile, approval);
+		const result = connectionCapability(profile, approval);
 		expect(result).toEqual({
 			status: "available",
 			schemaVersion: 1,
 			publicOrigin: profile.publicOrigin,
 			mcpPath: profile.mcpPath,
+			webPath: "/connection/connections",
 			configFingerprint:
 				"7821b88d0acd40836eed51877a2e959774434f72cc4672475f7da41c89359331",
 		});
@@ -57,7 +61,7 @@ describe("Connection Consumer configuration", () => {
 		["invalid path", { ...profile, mcpPath: "/mcp/../admin" }],
 		["unapproved", profile],
 	] as const)("fails closed for %s", (label, input) => {
-		const result = createConnectionCapability(
+		const result = connectionCapability(
 			input,
 			label === "unapproved" ? undefined : input ? approve(input) : approval,
 		);
@@ -66,10 +70,7 @@ describe("Connection Consumer configuration", () => {
 
 	it("rejects unknown and cross-consumer fields", () => {
 		expect(
-			createConnectionCapability(
-				{ ...profile, consumerInstance: "other" },
-				approval,
-			),
+			connectionCapability({ ...profile, consumerInstance: "other" }, approval),
 		).toMatchObject({ status: "unavailable", reason: "invalid" });
 	});
 });
@@ -83,7 +84,7 @@ it.each([
 	"/a\u0000b",
 ])("rejects unsafe path %j", (mcpPath) => {
 	expect(
-		createConnectionCapability(
+		connectionCapability(
 			{ ...profile, mcpPath },
 			approve({ ...profile, mcpPath }),
 		).status,
@@ -96,9 +97,9 @@ it.each([
 	{ mcpPath: "/different" },
 	{ egressProfile: { ref: "egress-platform", revision: "r2" } },
 ])("rejects changed approved snapshot %j", (change) => {
-	expect(
-		createConnectionCapability({ ...profile, ...change }, approval).status,
-	).toBe("unavailable");
+	expect(connectionCapability({ ...profile, ...change }, approval).status).toBe(
+		"unavailable",
+	);
 });
 it.each([
 	{ ...approval, egressEnforced: false },
@@ -108,12 +109,19 @@ it.each([
 	{ ...approval, schemaVersion: 2 },
 	{ ...approval, source: { ref: "", revision: "r1" } },
 ])("rejects missing or invalid approval %j", (input) => {
-	expect(createConnectionCapability(profile, input).status).toBe("unavailable");
+	expect(connectionCapability(profile, input).status).toBe("unavailable");
+});
+
+it("fails closed when the approved Web entry path is missing", () => {
+	expect(createConnectionCapability(profile, approval, undefined).status).toBe(
+		"unavailable",
+	);
 });
 
 it("accepts an approved custom MCP path without rewriting it", () => {
 	const candidate = { ...profile, mcpPath: "/client/mcp-v1" };
-	expect(
-		createConnectionCapability(candidate, approve(candidate)),
-	).toMatchObject({ status: "available", mcpPath: candidate.mcpPath });
+	expect(connectionCapability(candidate, approve(candidate))).toMatchObject({
+		status: "available",
+		mcpPath: candidate.mcpPath,
+	});
 });
