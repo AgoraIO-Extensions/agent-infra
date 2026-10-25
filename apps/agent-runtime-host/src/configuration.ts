@@ -32,6 +32,11 @@ export function readCodexIsolationMode(environment: NodeJS.ProcessEnv) {
 	const value = environment.AGENT_INFRA_RUNTIME_ISOLATION_MODE ?? "landlock";
 	if (value !== "landlock" && value !== "container-boundary")
 		runtimeConfigurationInvalid();
+	if (
+		value === "container-boundary" &&
+		environment.AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED !== "worker-v1"
+	)
+		runtimeConfigurationInvalid();
 	return value;
 }
 
