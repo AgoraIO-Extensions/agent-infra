@@ -81,7 +81,10 @@ import { useConversationTimeline } from "./use-conversation-timeline.js";
 // the composer responsive while the Worker finishes the Session Sandbox.
 const preparingRefreshMs = 500;
 
-/** 执行详情读取：网络与服务失败可以重试；无权、其余 HTTP 与响应无效由时间线接手。 */
+/**
+ * 执行详情与 Runtime 模型目录读取：网络与服务失败可以重试；无权、其余 HTTP 与响应无效不可重试
+ * （执行详情由时间线接手）。
+ */
 function retryableExecutionRead(error: unknown) {
 	return (
 		!(error instanceof ConversationReadError) ||
@@ -368,6 +371,14 @@ export function ActiveConversation({
 		identityKey,
 		enabled: customPlatformAdapter,
 	});
+	// Runtime 模型目录读到过之后，后台重读（回到标签页）的可重试失败继续用最近一次读到的目录；不可重试的
+	// 失败（登录失效、无权、不存在、响应无效）与首次读取失败一致：不再列出旧目录，发送随之阻止（#3433）。
+	const runtimeSelectionShown = readFailed(
+		runtimeSelection,
+		retryableExecutionRead,
+	)
+		? undefined
+		: runtimeSelection.data;
 	const modelSave = useConversationModelAutosave({
 		agentId,
 		conversationId,
@@ -593,15 +604,15 @@ export function ActiveConversation({
 		toast,
 	]);
 	const options = customPlatformAdapter
-		? (runtimeSelection.data?.options ?? [])
+		? (runtimeSelectionShown?.options ?? [])
 		: agent.configuration.modelOptions;
 	const runtimeSelectionUnavailable =
-		customPlatformAdapter && !runtimeSelection.data?.available;
+		customPlatformAdapter && !runtimeSelectionShown?.available;
 	const currentModelId =
 		modelSave.desired?.modelOptionId ??
 		conversation?.selectedModelOptionId ??
 		(customPlatformAdapter
-			? (runtimeSelection.data?.currentModelOptionId ?? "")
+			? (runtimeSelectionShown?.currentModelOptionId ?? "")
 			: (agent.configuration.defaultModelOptionId ?? ""));
 	const option = options.find((item) => item.optionId === currentModelId);
 	const currentReasoning =
@@ -847,7 +858,7 @@ export function ActiveConversation({
 		);
 	const modelSelectable =
 		agent.capabilities.modelSelection &&
-		(!customPlatformAdapter || runtimeSelection.data?.available);
+		(!customPlatformAdapter || runtimeSelectionShown?.available);
 	// 发送按钮文案与说明只按页面已知状态预告服务端的判定（§12.5）：原回复已开始处理、没有待确认的
 	// 停止、也没有排队消息时，支持补充指令的 Agent 接收补充指令；其余情况进入排队。
 	const supplementExpected =
