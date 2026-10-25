@@ -543,67 +543,91 @@ it("executes an admitted V4 native command through the Driver seam without text"
 	expect(await f.driver.sideEffectCount()).toBe(2);
 });
 
-it("negotiates the state-changing V2 native command without downgrading to V1", async () => {
-	const f = await setup();
-	const submitted = await f.host.submitTurnV4(f.transport);
-	await f.driver.setOperationStatus("execution-1", "completed");
-	const revision = createHash("sha256").update("fake-native-v2").digest("hex");
-	const capabilityId = createHash("sha256")
-		.update("fake-compact-v2")
-		.digest("hex");
-	const projection = NativeMetadataCommandsProjectionV2Schema.parse({
-		schemaVersion: 1,
-		selector: "commands",
-		revision,
-		capabilities: [
-			{
-				schemaVersion: 2,
-				id: capabilityId,
-				kind: "command",
-				name: "compact",
-				description: "Compact the current native context",
-				source: { name: "fake", version: "0.153.0" },
-				parameters: [],
-				effect: "state_changing",
-				availability: "available",
+it.each([1, 2])(
+	"rejects V4 state-changing commands before admission with Key version %i",
+	async (keyVersion) => {
+		const f = await setup();
+		const submitted = await f.host.submitTurnV4(f.transport);
+		await f.driver.setOperationStatus("execution-1", "completed");
+		const revision = createHash("sha256")
+			.update("fake-native-v2")
+			.digest("hex");
+		const capabilityId = createHash("sha256")
+			.update("fake-compact-v2")
+			.digest("hex");
+		const projection = NativeMetadataCommandsProjectionV2Schema.parse({
+			schemaVersion: 1,
+			selector: "commands",
+			revision,
+			capabilities: [
+				{
+					schemaVersion: 2,
+					id: capabilityId,
+					kind: "command",
+					name: "compact",
+					description: "Compact the current native context",
+					source: { name: "fake", version: "0.153.0" },
+					parameters: [],
+					effect: "state_changing",
+					availability: "available",
+				},
+			],
+		});
+		const driver = f.driver as unknown as RuntimeDriver & {
+			readNativeMetadataV2: NonNullable<RuntimeDriver["readNativeMetadataV2"]>;
+		};
+		driver.readNativeMetadataV2 = async () => projection;
+		const createV2 = vi.spyOn(f.driver, "createNativeCommandCommandV2");
+		const createV1 = vi.spyOn(f.driver, "createNativeCommandCommand");
+		const execute = vi.spyOn(f.driver, "execute");
+		const prepare = vi.spyOn(f.store, "prepareOperation");
+		const before = await readFile(f.path, "utf8");
+		const keysBefore = [...retainedKeys(f.host)];
+		const { input: _input, selection: _selection, ...context } = submission();
+		const request = RuntimeNativeCapabilityRequestV4Schema.parse({
+			...context,
+			keyBinding: { ...context.keyBinding, version: keyVersion },
+			hostSessionRef: submitted.hostSessionRef,
+			executionId: "execution-command-v2",
+			turnId: "turn-command-v2",
+			operation: {
+				kind: "execution",
+				id: "execution-command-v2",
+				deliveryFence: 2,
+				executionDeliveryFence: 2,
 			},
-		],
-	});
-	const driver = f.driver as unknown as RuntimeDriver & {
-		readNativeMetadataV2: NonNullable<RuntimeDriver["readNativeMetadataV2"]>;
-	};
-	driver.readNativeMetadataV2 = async () => projection;
-	const createV2 = vi.spyOn(f.driver, "createNativeCommandCommandV2");
-	const { input: _input, selection: _selection, ...context } = submission();
-	const request = RuntimeNativeCapabilityRequestV4Schema.parse({
-		...context,
-		hostSessionRef: submitted.hostSessionRef,
-		executionId: "execution-command-v2",
-		turnId: "turn-command-v2",
-		operation: {
-			kind: "execution",
-			id: "execution-command-v2",
-			deliveryFence: 2,
-			executionDeliveryFence: 2,
-		},
-		capabilityId,
-		capabilityKind: "command",
-		directoryRevision: revision,
-		parameters: "",
-		parametersDigest: createHash("sha256").update("").digest("hex"),
-		capabilitySourceVersion: "0.153.0",
-	});
-	const result = await f.host.nativeCapabilityV4(delivery(request));
-	expect(result.result).toEqual({ outcome: "accepted", status: "completed" });
-	expect(createV2).toHaveBeenCalledWith(
-		expect.objectContaining({
-			schemaVersion: 2,
-			effect: "state_changing",
-			selection: submission().selection,
-			keyBinding: request.keyBinding,
-		}),
-	);
-});
+			capabilityId,
+			capabilityKind: "command",
+			directoryRevision: revision,
+			parameters: "",
+			parametersDigest: createHash("sha256").update("").digest("hex"),
+			capabilitySourceVersion: "0.153.0",
+		});
+		await expect(
+			f.host.nativeCapabilityV4(delivery(request)),
+		).rejects.toMatchObject({
+			code: "RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+		});
+		expect(prepare).not.toHaveBeenCalled();
+		expect(createV2).not.toHaveBeenCalled();
+		expect(createV1).not.toHaveBeenCalled();
+		expect(execute).not.toHaveBeenCalled();
+		expect(await readFile(f.path, "utf8")).toBe(before);
+		expect([...retainedKeys(f.host)]).toEqual(keysBefore);
+
+		// Rejecting compact must not consume the Session's execution slot.
+		const readonly = RuntimeNativeCapabilityRequestV4Schema.parse({
+			...request,
+			capabilityId: fakeNativeCommandCapabilityId,
+			directoryRevision: fakeNativeCommandDirectoryRevision,
+			capabilitySourceVersion: "1",
+		});
+		const result = await f.host.nativeCapabilityV4(delivery(readonly));
+		expect(result.result).toEqual({ outcome: "accepted", status: "completed" });
+		expect(createV1).toHaveBeenCalledOnce();
+		expect(createV2).not.toHaveBeenCalled();
+	},
+);
 
 it("passes the request-scoped file bridge only through the Driver execution context", async () => {
 	const fileBridge = {
