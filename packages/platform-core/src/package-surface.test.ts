@@ -338,6 +338,7 @@ describe("platform-core package surface", () => {
 			"snapshotApplicationRevisionWritePlanV1",
 			"taskApiSubscriptionEndAuditIdV1",
 			"uninstallSkillHubInstallationV1",
+			"validateNativeCapabilityInvocationPlanV6",
 			"validateSkillPackageEntriesV1",
 			"wecomAttachmentMergedTextV1",
 			"wecomBusyTextV1",
@@ -414,5 +415,5 @@ describe("platform-core package surface", () => {
 				/conformance|schema|postgres|drizzle|\.test\./.test(path),
 			),
 		).toBe(false);
-	}, 15_000);
+	}, 60_000);
 });

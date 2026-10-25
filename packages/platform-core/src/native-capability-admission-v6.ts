@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import {
 	type RuntimeNativeCapabilityRequestV6,
@@ -59,6 +60,15 @@ export type NativeCapabilityInvocationPlanV6 = Readonly<{
 	}>;
 	requestDigest: string;
 	operationDigest: string;
+}>;
+
+export type NativeCapabilityAdmissionV6AuthorityBinding = Readonly<{
+	agentId: string;
+	actorId: string;
+	channelId: string;
+	authorizationRevision: string;
+	sessionGeneration: number;
+	hostSessionRef: string;
 }>;
 
 function canonical(value: unknown): unknown {
@@ -122,4 +132,56 @@ export function nativeCapabilityOperationDigestV6(
 	return createHash("sha256")
 		.update(JSON.stringify(canonical(runtimeOperationDigestInputV6(request))))
 		.digest("hex");
+}
+
+/** Re-checks the complete immutable binding at the Store transaction seam. */
+export function validateNativeCapabilityInvocationPlanV6(
+	plan: NativeCapabilityInvocationPlanV6,
+	input: {
+		readonly request: NativeCapabilityAdmissionRequestV6;
+		readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
+		readonly requestDigest: string;
+		readonly operationDigest: string;
+	},
+): void {
+	const { request, authority } = input;
+	const keySubjectMatches =
+		(plan.keyBinding.purpose === "personal" &&
+			plan.keyBinding.subjectId === authority.actorId) ||
+		(plan.keyBinding.purpose === "agent-default" &&
+			plan.keyBinding.subjectId === authority.agentId);
+	if (
+		plan.schemaVersion !== 2 ||
+		plan.kind !== "native-capability" ||
+		plan.executionStatus !== "submitted" ||
+		plan.conversationId !== request.conversationId ||
+		plan.agentId !== authority.agentId ||
+		plan.actorId !== authority.actorId ||
+		plan.channelId !== authority.channelId ||
+		plan.authorizationRevision !== authority.authorizationRevision ||
+		plan.sessionGeneration !== authority.sessionGeneration ||
+		plan.hostSessionRef.length === 0 ||
+		plan.hostSessionRef !== authority.hostSessionRef ||
+		plan.capabilityId !== request.capabilityId ||
+		plan.directoryRevision !== request.directoryRevision ||
+		plan.capabilitySourceVersion !== request.capabilitySourceVersion ||
+		plan.parameters !== request.parameters ||
+		plan.parametersDigest !== request.parametersDigest ||
+		plan.modelOptionId !== request.modelOptionId ||
+		plan.reasoningLevel !== request.reasoningLevel ||
+		plan.configVersion !== request.configVersion ||
+		plan.executionId !== request.idempotencyKey ||
+		plan.keyBinding.ciphertextRef.length === 0 ||
+		!Number.isSafeInteger(plan.keyBinding.version) ||
+		plan.keyBinding.version < 1 ||
+		!keySubjectMatches ||
+		!digestPattern.test(plan.requestDigest) ||
+		!digestPattern.test(plan.operationDigest) ||
+		plan.requestDigest !== input.requestDigest ||
+		plan.operationDigest !== input.operationDigest ||
+		plan.outbox.id !== `conversation:native-capability:${plan.executionId}` ||
+		plan.outbox.operation !== "conversation.native-capability.invoke.v2" ||
+		!isDeepStrictEqual(plan.outbox.payload, request)
+	)
+		throw new TypeError("Native V6 admission plan is invalid");
 }
