@@ -689,6 +689,50 @@ describe("multi-service resource policy", () => {
 });
 
 describe("multi-service runtime operations", () => {
+	it.each([
+		["Deployment", manifest],
+		["StatefulSet", statefulManifest],
+		["Job", migrationManifest],
+	] as const)(
+		"applies the restricted Pod security baseline to every %s container",
+		async (kind, source) => {
+			const fake = fakeClient();
+			const operations = createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: { ...basePolicy, storageSize: "1Gi" },
+			});
+			const value = desired(source);
+			if (!isMultiService(value))
+				throw new Error("multi-service fixture invalid");
+			await operations.apply(value);
+			const workloads = [...fake.resources.values()].filter(
+				(resource) => resource.kind === kind,
+			) as (V1Deployment | V1StatefulSet | V1Job)[];
+			expect(workloads.length).toBeGreaterThan(0);
+			for (const workload of workloads) {
+				const pod = workload.spec?.template.spec;
+				expect(pod?.automountServiceAccountToken).toBe(false);
+				expect(pod?.securityContext).toMatchObject({
+					runAsNonRoot: true,
+					runAsUser: 1000,
+					runAsGroup: 1000,
+					fsGroup: 1000,
+					seccompProfile: { type: "RuntimeDefault" },
+				});
+				for (const container of pod?.containers ?? []) {
+					expect(container.securityContext).toMatchObject({
+						runAsNonRoot: true,
+						runAsUser: 1000,
+						runAsGroup: 1000,
+						allowPrivilegeEscalation: false,
+						readOnlyRootFilesystem: true,
+						capabilities: { drop: ["ALL"] },
+						seccompProfile: { type: "RuntimeDefault" },
+					});
+				}
+			}
+		},
+	);
 	it("injects ownership, service accounts, network isolation and entry route", async () => {
 		const fake = fakeClient();
 		const operations = createMultiServiceRuntimeOperations({
