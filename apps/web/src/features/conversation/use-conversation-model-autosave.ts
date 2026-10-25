@@ -90,7 +90,7 @@ export function useConversationModelAutosave({
 			queued.current = undefined;
 			if (next) {
 				// 用户在保存期间又改了选择：以最后一次为准，用新键覆盖。
-				void send(newAttempt(next));
+				await send(newAttempt(next));
 				return;
 			}
 			if (result.kind === "selection-updated") {
@@ -135,11 +135,11 @@ export function useConversationModelAutosave({
 		},
 		[send],
 	);
+	/** 重试上次失败的保存；返回的 Promise 在这次保存（含期间改选的覆盖保存）结束后完成。 */
 	const retry = useCallback(() => {
 		const attempt = failed.current;
-		if (!attempt || inflight.current) return false;
-		void send({ ...attempt, controller: new AbortController() });
-		return true;
+		if (!attempt || inflight.current) return undefined;
+		return send({ ...attempt, controller: new AbortController() });
 	}, [send]);
 	return {
 		/** 用户刚选、尚未被投影确认的值；回滚或未选择时为 undefined。 */

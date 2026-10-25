@@ -36,6 +36,8 @@ vi.mock("@tanstack/react-router", async () => {
 				{children}
 			</a>
 		)),
+		// 恢复按钮（RecoveryButton）读取路由以判断导航完成；本文件不挂路由。
+		useRouter: () => undefined,
 	};
 });
 vi.mock("../agent-administration/agent-administration.js", () => ({

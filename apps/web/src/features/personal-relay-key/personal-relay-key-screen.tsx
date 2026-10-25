@@ -194,14 +194,17 @@ export function PersonalRelayKeyScreen({
 		}
 	};
 
+	// 返回的 Promise 在会话确认与随后的重读都结束后完成：恢复焦点据此判断本次恢复何时有结果（#3388）。
 	const relogin = async () => {
 		if (!onSessionExpired || rechecking) return;
 		setRechecking(true);
+		let valid = false;
 		try {
-			if ((await onSessionExpired()) === true) void refresh();
+			valid = (await onSessionExpired()) === true;
 		} finally {
 			setRechecking(false);
 		}
+		if (valid) await refresh();
 	};
 
 	const kind = errorKind(failure);
@@ -299,7 +302,7 @@ export function PersonalRelayKeyScreen({
 											variant="outline"
 											recoveryKey="重新登录"
 											busy={rechecking}
-											onClick={() => void relogin()}
+											onClick={() => relogin()}
 										>
 											<LogIn aria-hidden="true" />
 											重新登录
@@ -310,7 +313,7 @@ export function PersonalRelayKeyScreen({
 											variant="outline"
 											recoveryKey="重新读取状态"
 											busy={state === "loading"}
-											onClick={() => void refresh()}
+											onClick={() => refresh()}
 										>
 											<RefreshCw aria-hidden="true" />
 											重新读取状态

@@ -37,7 +37,7 @@ function OperationsRoute() {
 			<OperationsEntry
 				isAdministrator={isAdministrator}
 				state={state}
-				onRefresh={() => void refresh()}
+				onRefresh={() => refresh()}
 				isRefreshing={isRefreshing}
 			/>
 		</main>

@@ -1,4 +1,10 @@
 import {
+	QueryClient,
+	QueryClientProvider,
+	useQuery,
+} from "@tanstack/react-query";
+import {
+	act,
 	cleanup,
 	fireEvent,
 	render,
@@ -7,9 +13,17 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RecoveryButton } from "../features/recovery-button.js";
-import { pageRecoveryTarget } from "./use-recovery-focus.js";
+import {
+	focusLostFrom,
+	pageRecoveryTarget,
+	RecoveryPageParams,
+} from "./use-recovery-focus.js";
 
-afterEach(cleanup);
+// 恢复代管与焦点记录是模块级状态：每个用例结束时模拟一次用户按下指针，结束代管、清空焦点记录。
+afterEach(() => {
+	fireEvent.pointerDown(document.body);
+	cleanup();
+});
 
 type State = "failed" | "retrying" | "loading" | "ready";
 
@@ -336,5 +350,393 @@ describe("pageRecoveryTarget", () => {
 			<Page state="ready" onRetry={vi.fn()} focusableHeading={false} />,
 		);
 		expect(pageRecoveryTarget()?.id).toBe("main-content");
+	});
+});
+
+/** 地址改到 next，结束时恢复原地址。 */
+async function atAddress(next: string, run: () => Promise<void> | void) {
+	const start = location.pathname + location.search;
+	history.pushState(null, "", next);
+	try {
+		await run();
+	} finally {
+		history.replaceState(null, "", start);
+	}
+}
+
+// #3388 N13-03：「离开页面」只指路径变化（或调用方声明的资源参数变化），或恢复按钮随导航一起卸载；同一页面的
+// 查询串变化（筛选、分页、Tab、?view= 后退等）期间按钮仍在，代管继续，结果按同页规则。
+describe("RecoveryButton keeps recovering across same-page query changes", () => {
+	it.each([
+		["recovers", "ready", () => heading()],
+		["fails again", "failed", () => retry()],
+	] as const)(
+		"moves focus as on the same page when the read %s after a query change",
+		(_name, outcome, focused) => {
+			const onRetry = vi.fn();
+			const view = render(<Page state="failed" onRetry={onRetry} />);
+			retry().focus();
+			fireEvent.click(retry());
+			view.rerender(<Page state="retrying" onRetry={onRetry} />);
+			return atAddress("?view=history", () => {
+				// 按钮在查询串变化后仍挂载（重绘时仍在文档中）：它所在的页面就是变化后的地址。
+				view.rerender(<Page state="retrying" onRetry={onRetry} />);
+				expect(document.activeElement).toBe(retry());
+				view.rerender(<Page state="loading" onRetry={onRetry} />);
+				expect(document.activeElement).toBe(heading());
+				view.rerender(<Page state={outcome} onRetry={onRetry} />);
+				expect(document.activeElement).toBe(focused());
+			});
+		},
+	);
+
+	it("keeps parking focus when only an undeclared query changes while loading", async () => {
+		const onRetry = vi.fn();
+		const view = render(<DetailPage state="failed" onRetry={onRetry} />);
+		retry().focus();
+		fireEvent.click(retry());
+		view.rerender(<DetailPage state="loading" onRetry={onRetry} />);
+		expect(document.activeElement?.id).toBe("main-content");
+		await atAddress("?page=2", async () => {
+			view.rerender(<DetailPage state="ready" onRetry={onRetry} />);
+			await waitFor(() =>
+				expect(document.activeElement).toBe(
+					screen.getByRole("heading", { name: "就绪标题" }),
+				),
+			);
+		});
+	});
+
+	it("stops recovering when a declared resource parameter changes", async () => {
+		const onRetry = vi.fn();
+		const view = render(
+			<RecoveryPageParams value={["project"]}>
+				<DetailPage state="failed" onRetry={onRetry} />
+			</RecoveryPageParams>,
+		);
+		retry().focus();
+		fireEvent.click(retry());
+		view.rerender(
+			<RecoveryPageParams value={["project"]}>
+				<DetailPage state="loading" onRetry={onRetry} />
+			</RecoveryPageParams>,
+		);
+		expect(document.activeElement?.id).toBe("main-content");
+		await atAddress("?project=other", async () => {
+			view.rerender(
+				<RecoveryPageParams value={["project"]}>
+					<DetailPage state="ready" onRetry={onRetry} />
+				</RecoveryPageParams>,
+			);
+			await Promise.resolve();
+			expect(document.activeElement?.id).toBe("main-content");
+			expect(document.activeElement).not.toBe(
+				screen.getByRole("heading", { name: "就绪标题" }),
+			);
+		});
+	});
+});
+
+/** 可控的恢复请求：onRetry 返回的 Promise 由用例结束。 */
+function controlledRequest() {
+	let finish = () => {};
+	const onRetry = vi.fn(
+		() =>
+			new Promise<void>((resolve) => {
+				finish = resolve;
+			}),
+	);
+	return { onRetry, finish: () => finish() };
+}
+
+const settle = () =>
+	act(() => new Promise((resolve) => setTimeout(resolve, 400)));
+
+// #3388 N13-04：恢复焦点只交接一次。本次恢复请求有了结果、焦点交给恢复目标后，同一个恢复按钮因后台重读
+// 再次出现（读取又失败）不取回焦点、不滚动；「仍失败回到按钮」只指本次恢复请求本身失败。
+describe("RecoveryButton ends the handoff once the recovery request has a result", () => {
+	it("does not take focus back when a later background read fails again", async () => {
+		const request = controlledRequest();
+		const view = render(<Page state="failed" onRetry={request.onRetry} />);
+		retry().focus();
+		fireEvent.click(retry());
+		view.rerender(<Page state="loading" onRetry={request.onRetry} />);
+		expect(document.activeElement).toBe(heading());
+		await act(async () => request.finish());
+		view.rerender(<Page state="ready" onRetry={request.onRetry} />);
+		expect(document.activeElement).toBe(heading());
+		await settle();
+		const scroll = vi.spyOn(HTMLElement.prototype, "focus");
+		view.rerender(<Page state="failed" onRetry={request.onRetry} />);
+		expect(document.activeElement).toBe(heading());
+		expect(scroll).not.toHaveBeenCalled();
+		scroll.mockRestore();
+	});
+
+	it("still returns focus to the retry when the recovery request itself fails", async () => {
+		const request = controlledRequest();
+		const view = render(<Page state="failed" onRetry={request.onRetry} />);
+		retry().focus();
+		fireEvent.click(retry());
+		view.rerender(<Page state="loading" onRetry={request.onRetry} />);
+		expect(document.activeElement).toBe(heading());
+		// 请求结束与页面换上失败结果在同一时刻：仍是本次请求的结果。
+		await act(async () => request.finish());
+		view.rerender(<Page state="failed" onRetry={request.onRetry} />);
+		expect(document.activeElement).toBe(retry());
+	});
+
+	it("still hands focus to an h1 that renders after the request finished", async () => {
+		const request = controlledRequest();
+		const view = render(
+			<DetailPage state="failed" onRetry={request.onRetry} />,
+		);
+		retry().focus();
+		fireEvent.click(retry());
+		view.rerender(<DetailPage state="loading" onRetry={request.onRetry} />);
+		expect(document.activeElement?.id).toBe("main-content");
+		// 恢复请求（例如壳层确认会话）先结束，页面内容稍后才读到：仍是本次恢复的交接，焦点到就绪标题。
+		await act(async () => request.finish());
+		await settle();
+		view.rerender(<DetailPage state="ready" onRetry={request.onRetry} />);
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByRole("heading", { name: "就绪标题" }),
+			),
+		);
+	});
+
+	it("restores a lost focus without scrolling after the handoff", async () => {
+		const request = controlledRequest();
+		// 就绪页与失败页的标题是不同的元素：后台重读失败整页替换时就绪标题随之卸载。
+		function ReplacedPage({ state }: { state: State }) {
+			return (
+				<div id="main-content" tabIndex={-1}>
+					{state === "ready" ? (
+						<h1 key="ready" tabIndex={-1}>
+							就绪标题
+						</h1>
+					) : state === "loading" ? (
+						<p>正在读取…</p>
+					) : (
+						<section key="failed">
+							<h2>读取失败</h2>
+							<RecoveryButton recoveryKey="重新加载" onClick={request.onRetry}>
+								重新加载
+							</RecoveryButton>
+						</section>
+					)}
+				</div>
+			);
+		}
+		const view = render(<ReplacedPage state="failed" />);
+		retry().focus();
+		fireEvent.click(retry());
+		view.rerender(<ReplacedPage state="loading" />);
+		await act(async () => request.finish());
+		view.rerender(<ReplacedPage state="ready" />);
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByRole("heading", { name: "就绪标题" }),
+			),
+		);
+		await settle();
+		// 后台重读又失败，整页换成失败态：就绪标题随之卸载，焦点不落到 body、不取回到按钮。
+		const focus = vi.spyOn(HTMLElement.prototype, "focus");
+		view.rerender(<ReplacedPage state="failed" />);
+		await waitFor(() =>
+			expect(document.activeElement?.id).toBe("main-content"),
+		);
+		expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+		focus.mockRestore();
+	});
+
+	it("tracks a TanStack Query re-read that the button does not return", async () => {
+		const client = new QueryClient({
+			defaultOptions: {
+				queries: { retry: false, gcTime: Number.POSITIVE_INFINITY },
+			},
+		});
+		let fail = true;
+		let release = () => {};
+		const read = vi.fn(
+			() =>
+				new Promise<string>((resolve, reject) => {
+					release = () =>
+						fail ? reject(new Error("读取失败")) : resolve("内容");
+				}),
+		);
+		function QueryPage() {
+			const query = useQuery({ queryKey: ["recovery"], queryFn: read });
+			return (
+				<Page
+					state={
+						query.isPending
+							? "loading"
+							: query.isError
+								? query.isFetching
+									? "retrying"
+									: "failed"
+								: "ready"
+					}
+					onRetry={() => void query.refetch()}
+				/>
+			);
+		}
+		render(
+			<QueryClientProvider client={client}>
+				<QueryPage />
+			</QueryClientProvider>,
+		);
+		await act(async () => release());
+		await waitFor(() => expect(retry()).toBeTruthy());
+		retry().focus();
+		fireEvent.click(retry());
+		// 没有数据的查询重读回到 pending：页面换成读取中，按钮卸载，焦点暂放页面标题。
+		await waitFor(() => expect(document.activeElement).toBe(heading()));
+		fail = false;
+		await act(async () => release());
+		await waitFor(() => expect(screen.getByText("内容")).toBeTruthy());
+		expect(document.activeElement).toBe(heading());
+		await settle();
+		// 后台重读失败（有数据时 status 变为 error）：同一个按钮再次出现，不取回焦点。
+		fail = true;
+		await act(async () => {
+			const background = client.refetchQueries();
+			release();
+			await background;
+		});
+		await waitFor(() => expect(retry()).toBeTruthy());
+		await settle();
+		expect(document.activeElement).toBe(heading());
+		client.clear();
+	});
+});
+
+// 页面里另有一个控件（例如筛选输入框）；失败态替换主内容时它随之卸载。
+function FilterPage({
+	state,
+	onRetry,
+}: {
+	state: "ready" | "failed";
+	onRetry: () => void;
+}) {
+	return (
+		<div id="main-content" tabIndex={-1}>
+			<h1 tabIndex={-1}>页面标题</h1>
+			{state === "ready" ? (
+				<input aria-label="搜索" />
+			) : (
+				<RecoveryButton recoveryKey="重新加载" onClick={onRetry}>
+					重新加载
+				</RecoveryButton>
+			)}
+		</div>
+	);
+}
+
+// #3388 N13-05：持有焦点的控件（含未按下的恢复按钮、筛选控件）因非用户发起的重绘卸载或变为原生禁用时，
+// 焦点交给同页的页面 h1（不可聚焦时 #main-content），不落到 body、不滚动。
+describe("focus held by a control that a background re-render removes", () => {
+	it("moves focus to the h1 when a focused, unpressed retry is removed by a background recovery", () => {
+		const view = render(<Page state="failed" onRetry={vi.fn()} />);
+		retry().focus();
+		view.rerender(<Page state="loading" onRetry={vi.fn()} />);
+		expect(document.activeElement).toBe(heading());
+		view.rerender(<Page state="ready" onRetry={vi.fn()} />);
+		expect(document.activeElement).toBe(heading());
+	});
+
+	it("returns focus to that retry when the background re-read fails again", () => {
+		const view = render(<DetailPage state="failed" onRetry={vi.fn()} />);
+		retry().focus();
+		view.rerender(<DetailPage state="loading" onRetry={vi.fn()} />);
+		expect(document.activeElement?.id).toBe("main-content");
+		view.rerender(<DetailPage state="failed" onRetry={vi.fn()} />);
+		expect(document.activeElement).toBe(retry());
+	});
+
+	it("moves focus to the h1 when a failure replaces the focused filter", async () => {
+		const view = render(<FilterPage state="ready" onRetry={vi.fn()} />);
+		screen.getByRole("textbox", { name: "搜索" }).focus();
+		const focus = vi.spyOn(HTMLElement.prototype, "focus");
+		view.rerender(<FilterPage state="failed" onRetry={vi.fn()} />);
+		await waitFor(() => expect(document.activeElement).toBe(heading()));
+		expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+		focus.mockRestore();
+	});
+
+	it("leaves focus alone when the failure appears on another page", async () => {
+		const view = render(<FilterPage state="ready" onRetry={vi.fn()} />);
+		screen.getByRole("textbox", { name: "搜索" }).focus();
+		await atAddress("/another-page", async () => {
+			view.rerender(<FilterPage state="failed" onRetry={vi.fn()} />);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(document.activeElement).toBe(document.body);
+		});
+	});
+
+	it("leaves focus alone when the user put it on body before the failure", async () => {
+		const view = render(<FilterPage state="ready" onRetry={vi.fn()} />);
+		screen.getByRole("textbox", { name: "搜索" }).focus();
+		fireEvent.pointerDown(document.body);
+		screen.getByRole("textbox", { name: "搜索" }).blur();
+		view.rerender(<FilterPage state="failed" onRetry={vi.fn()} />);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(document.activeElement).toBe(document.body);
+	});
+
+	it("leaves a focused retry alone when the user's own key press removes it", async () => {
+		const view = render(<Page state="failed" onRetry={vi.fn()} />);
+		retry().focus();
+		// 例如在弹窗里的「重新读取」上按 Escape 关闭弹窗：卸载是用户操作的结果，焦点去处由弹窗决定。
+		fireEvent.keyDown(retry(), { key: "Escape" });
+		view.rerender(<Page state="loading" onRetry={vi.fn()} />);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(document.activeElement).toBe(document.body);
+		view.rerender(<Page state="ready" onRetry={vi.fn()} />);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(document.activeElement).toBe(document.body);
+	});
+
+	it("hands a background recovery to the h1 without scrolling", () => {
+		const view = render(<Page state="failed" onRetry={vi.fn()} />);
+		retry().focus();
+		const focus = vi.spyOn(HTMLElement.prototype, "focus");
+		view.rerender(<Page state="loading" onRetry={vi.fn()} />);
+		expect(document.activeElement).toBe(heading());
+		expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+		expect(focus).not.toHaveBeenCalledWith({ preventScroll: false });
+		focus.mockRestore();
+	});
+
+	it("reports focus lost from a control that became disabled", () => {
+		const view = render(
+			<>
+				<button type="button">下一页</button>
+				<button type="button">上一页</button>
+			</>,
+		);
+		const next = screen.getByRole("button", { name: "下一页" });
+		next.focus();
+		expect(focusLostFrom(next)).toBe(false);
+		// 浏览器稍后才把焦点从变为禁用的按钮上移走：焦点仍在它上面时同样算丢失。
+		view.rerender(
+			<>
+				<button type="button" disabled>
+					下一页
+				</button>
+				<button type="button">上一页</button>
+			</>,
+		);
+		expect(document.activeElement).toBe(next);
+		expect(focusLostFrom(next)).toBe(true);
+		// 焦点修正后落到 body（不触发新的 focusin），仍算从它上面丢失。
+		next.blur();
+		expect(focusLostFrom(next)).toBe(true);
+		expect(focusLostFrom(null)).toBe(false);
+		// 用户把焦点移到别的控件：不是丢失。
+		screen.getByRole("button", { name: "上一页" }).focus();
+		expect(focusLostFrom(next)).toBe(false);
 	});
 });
