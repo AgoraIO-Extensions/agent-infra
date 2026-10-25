@@ -21,13 +21,9 @@ import type {
 	SkillHubAgentBindingStatusV1,
 } from "../src/pilot/generated-v2/types.gen";
 import {
-<<<<<<< HEAD
 	backgroundReread,
 	expectBackgroundRereadKeeps,
-=======
-	expectBackgroundRereadKeeps,
 	expectFatalRereadHandsFocus,
->>>>>>> f68f13bca (test(web): 后台重读不可重试失败替换我的 Agent、修改申请与 Agent 的 Skill 时的焦点（#3419 N14-07）)
 } from "./background-reread";
 import {
 	expectFocusableBusy,
