@@ -809,6 +809,126 @@ for (const path of [
 	});
 }
 
+// #3433 N15-06（G15-2-01）：申请表单「Connection 授权」分区嵌在「基本信息」里，标题为 h3，字体、字号、字重与行高
+// 同 FormSection 子级标题（16px / 620 / 1.35 正文字体），不被 `.management-content h2` 放大成展示字体；标题大纲为
+// h1 → h2 基本信息 → h3 Connection 授权 → h2 共同 Owner 与使用范围。入口可用与不可用、创建与修改申请、两视口相同。
+for (const path of [
+	"/my-agents/new",
+	"/my-agents/application-browser-1/edit",
+] as const)
+	for (const connection of ["available", "unavailable"] as const)
+		test(`the Connection authorization section heading is an h3 at the form subsection size on ${path} (${connection}, #3433 N15-06)`, async ({
+			page,
+		}, info) => {
+			await viewportFor(page, info.project.name === "mobile");
+			const pageErrors = trackPageErrors(page);
+			await fixture(page);
+			if (connection === "available")
+				await page.route(
+					(url) => url.pathname === "/api/v1/connection/capability",
+					(route) =>
+						route.fulfill({
+							json: ConnectionCapabilityProjectionV1Schema.parse({
+								schemaVersion: 1,
+								status: "available",
+								publicOrigin: "https://connection.example.test",
+								mcpPath: "/mcp",
+								webPath: "/connection/connections",
+								configFingerprint: "a".repeat(64),
+							}),
+						}),
+				);
+			await page.goto(path);
+			await expect(page.getByLabel("Agent 名称")).toBeVisible();
+			const section = page.getByRole("region", {
+				name: "Connection 授权",
+				exact: true,
+			});
+			const heading = section.getByRole("heading", {
+				level: 3,
+				name: "Connection 授权",
+				exact: true,
+			});
+			await expect(heading).toBeVisible();
+			await expect(
+				page.getByRole("heading", {
+					level: 2,
+					name: "Connection 授权",
+					exact: true,
+				}),
+			).toHaveCount(0);
+			if (connection === "available")
+				await expect(
+					section.getByRole("link", { name: "打开 Connection", exact: true }),
+				).toHaveAttribute(
+					"href",
+					"https://connection.example.test/connection/connections",
+				);
+			else
+				await expect(section).toContainText(
+					"Connection 入口暂不可用，请稍后再试。",
+				);
+			// 分区仍在「基本信息」里。
+			await expect(
+				page
+					.locator('section[data-slot="form-section"]', {
+						has: page.getByRole("heading", {
+							level: 2,
+							name: "基本信息",
+							exact: true,
+						}),
+					})
+					.getByRole("heading", { level: 3, name: "Connection 授权" }),
+			).toHaveCount(1);
+			const typography = [
+				"fontFamily",
+				"fontSize",
+				"fontWeight",
+				"lineHeight",
+				"letterSpacing",
+			] as const;
+			const basic = await computed(
+				page.getByRole("heading", {
+					level: 2,
+					name: "基本信息",
+					exact: true,
+				}),
+				[...typography],
+			);
+			expect(basic).toMatchObject({
+				fontSize: "16px",
+				fontWeight: "620",
+				lineHeight: "21.6px",
+			});
+			expect(await computed(heading, [...typography])).toEqual(basic);
+			expect(
+				await page.evaluate(() =>
+					[...document.querySelectorAll("main :is(h1, h2, h3)")]
+						.filter(
+							(element) =>
+								(element as HTMLElement).offsetParent !== null &&
+								(element.tagName === "H1" ||
+									[
+										"基本信息",
+										"Connection 授权",
+										"共同 Owner 与使用范围",
+									].includes(element.textContent?.trim() ?? "")),
+						)
+						.map(
+							(element) =>
+								`${element.tagName.toLowerCase()} ${element.textContent?.trim()}`,
+						),
+				),
+			).toEqual([
+				expect.stringMatching(/^h1 /),
+				"h2 基本信息",
+				"h3 Connection 授权",
+				"h2 共同 Owner 与使用范围",
+			]);
+			await expectCleanPage(page, pageErrors);
+			await noHorizontalOverflow(page);
+		});
+
 // #3329 N10-3-02：申请表单整表校验失败后，焦点从页底「提交审批」到页顶「Agent 名称」。「Agent 名称」原本
 // 整框在 72px 吸顶顶栏之下时，浏览器把它当作可见、不再滚动，焦点目标被顶栏盖住；根样式 scroll-padding-top
 // 让出顶栏后它停在顶栏之下。从下一个控件 Shift+Tab 回到被顶栏遮住的「Agent 名称」同样如此。两档视口都
