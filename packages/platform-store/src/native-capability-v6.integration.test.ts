@@ -59,9 +59,13 @@ const configuration = {
 	revision: 1,
 	modelConfiguration: {
 		...model,
-		options: model.options.map(
-			({ credential: _credential, ...option }) => option,
-		),
+		defaultOptionId: "model-primary",
+		defaultReasoningLevel: "high",
+		options: model.options.map(({ credential: _credential, ...option }) => ({
+			...option,
+			optionId: "model-primary",
+			reasoningLevels: ["high"],
+		})),
 	},
 };
 
@@ -128,7 +132,7 @@ function publicInvocation(
 		traceId: input.traceId,
 	};
 }
-function useCase(currentKey = keyBinding) {
+function useCase(currentKey = keyBinding, modelConfigurationRevision = 1) {
 	const internal = createNativeCapabilityAdmissionUseCaseV6({
 		authorization: {
 			authorize: async () => {
@@ -139,6 +143,7 @@ function useCase(currentKey = keyBinding) {
 					authority,
 					taskAuthority,
 					keyBinding: currentKey,
+					modelConfigurationRevision,
 				};
 			},
 		},
@@ -514,6 +519,80 @@ it("persists the exact Task boundary and refuses replay after a fresh authorizat
 		outcome: "denied",
 		reason: "authorization_lost",
 	});
+	expect(await effects()).toEqual(before);
+});
+
+it.each(["model", "reasoning"] as const)(
+	"rejects a stale %s choice without falling back to defaults",
+	async (kind) => {
+		const candidate = {
+			...request(),
+			selection: {
+				...request().selection,
+				...(kind === "model"
+					? { modelOptionId: "removed-model" }
+					: { reasoningLevel: "unsupported-reasoning" }),
+			},
+		};
+		expect(await useCase().admit(candidate)).toEqual({ outcome: "stale" });
+		expect(await effects()).toEqual(noEffects);
+	},
+);
+
+async function advanceModelConfiguration() {
+	const next = { ...configuration, revision: 2 };
+	await client`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,created_at,configuration)
+ values (${authority.agentId},2,'native-v6-fixture',now(),${client.json(next as unknown as postgres.JSONValue)})`;
+	await client`update platform.agents set current_configuration_revision=2 where id=${authority.agentId}`;
+}
+
+it("rejects a configuration revision changed after preparation", async () => {
+	await advanceModelConfiguration();
+	expect(await useCase().admit(request())).toEqual({ outcome: "stale" });
+	expect(await effects()).toEqual(noEffects);
+});
+
+it("refuses admission when the current model configuration cannot be read", async () => {
+	await client`delete from platform.agent_configuration_revisions where agent_id=${authority.agentId}`;
+	expect(await useCase().admit(request())).toEqual({
+		outcome: "unavailable",
+		reason: "metadata_unavailable",
+	});
+	expect(await effects()).toEqual(noEffects);
+});
+
+it("stores the approved model revision and explicit selection on the Execution", async () => {
+	await advanceModelConfiguration();
+	const result = await useCase(keyBinding, 2).admit({
+		...request(),
+		configVersion: "config-2",
+	});
+	expect(result).toMatchObject({
+		outcome: "accepted",
+		plan: { modelConfigurationRevision: 2 },
+	});
+	const [row] =
+		await client`select model_configuration_revision::int,model_option_id,reasoning_level
+ from platform.conversation_executions where execution_id=${request().executionId}`;
+	expect(row).toEqual({
+		model_configuration_revision: 2,
+		model_option_id: "model-primary",
+		reasoning_level: "high",
+	});
+});
+
+it("replays the original model snapshot after current model configuration changes", async () => {
+	const accepted = await useCase().admit(request());
+	if (accepted.outcome !== "accepted") throw new Error("expected acceptance");
+	const before = await effects();
+	await advanceModelConfiguration();
+	const candidate = { ...request("new-candidate"), configVersion: "config-2" };
+	expect(
+		await useCase(keyBinding, 2).admit(
+			candidate,
+			publicInvocation(candidate, request().executionId),
+		),
+	).toEqual({ outcome: "replayed", plan: accepted.plan });
 	expect(await effects()).toEqual(before);
 });
 

@@ -19,6 +19,7 @@ import {
 	type CreateConversationDecisionV1,
 	conversationAttachmentMergeWindowMsV1,
 	type FileRecordV1,
+	isNativeCapabilityModelSelectionCurrentV6,
 	type NativeCapabilityAdmissionDecisionV1,
 	type NativeCapabilityAdmissionTransactionPortV1,
 	type NativeCapabilityAdmissionTransactionPortV6,
@@ -653,6 +654,15 @@ export class PostgresConversationExecutionTransactionV1
    `;
 			if (occupied)
 				return { outcome: occupied.status === "unknown" ? "unknown" : "busy" };
+			if (!agent.modelConfiguration)
+				return { outcome: "unavailable", reason: "metadata_unavailable" };
+			if (
+				!isNativeCapabilityModelSelectionCurrentV6(
+					input.plan,
+					agent.modelConfiguration,
+				)
+			)
+				return { outcome: "stale" };
 			// New operations require the current Key; replay retains its frozen tuple.
 			const executionBinding =
 				await currentConversationExecutionRelayKeyBindingV1(transaction, {
@@ -684,6 +694,7 @@ export class PostgresConversationExecutionTransactionV1
 					 channel_id, turn_id, status, session_generation, delivery_fence,
 					 authorization_revision, execution_source, relay_key_purpose,
 					 relay_key_subject_id, relay_key_id, relay_key_version,
+					 model_configuration_revision, model_option_id, reasoning_level,
 					 principal_type, created_at, updated_at)
 				values
 					(${input.plan.executionId}, ${input.plan.conversationId},
@@ -693,6 +704,7 @@ export class PostgresConversationExecutionTransactionV1
 					 ${input.plan.authorizationRevision}, ${input.plan.executionSource},
 					 ${input.keyBinding.purpose}, ${input.keyBinding.subjectId},
 					 ${input.keyBinding.ciphertextRef}, ${input.keyBinding.version},
+					 ${input.plan.modelConfigurationRevision}, ${input.plan.modelOptionId}, ${input.plan.reasoningLevel},
 					 ${input.plan.principal.kind}, ${occurredAt}, ${occurredAt})
 			`;
 			await insertTaskAuthorization(transaction, {

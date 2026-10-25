@@ -8,6 +8,7 @@ import {
 import { parseAuthority } from "./conversation-execution-input.js";
 import {
 	type ConversationExecutionAuthorityV1,
+	type ConversationModelConfigurationV1,
 	conversationExecutionSourceV1,
 } from "./conversation-execution-types.js";
 import {
@@ -87,6 +88,7 @@ type NativeCapabilityInvocationBindingV6 = Readonly<{
 		ciphertextRef: string;
 		version: number;
 	}>;
+	modelConfigurationRevision: number;
 	executionStatus: "submitted";
 	requestDigest: string;
 	operationDigest: string;
@@ -150,6 +152,7 @@ export interface NativeCapabilityAdmissionTransactionPortV6 {
 			readonly request: NativeCapabilityAdmissionRequestV6;
 			readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
 			readonly taskAuthority: ConversationExecutionAuthorityV1;
+			readonly modelConfigurationRevision: number;
 			readonly plan: NativeCapabilityInvocationPlanV6;
 			readonly requestDigest: string;
 			readonly operationDigest: string;
@@ -164,6 +167,7 @@ export interface NativeCapabilityAdmissionV6AuthorizationPort {
 				readonly outcome: "allowed";
 				readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
 				readonly taskAuthority: ConversationExecutionAuthorityV1;
+				readonly modelConfigurationRevision: number;
 				readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
 		  }
 		| { readonly outcome: "denied" }
@@ -344,12 +348,18 @@ function frozenPlanV6(
 	authority: NativeCapabilityAdmissionV6AuthorityBinding,
 	keyBinding: NativeCapabilityAdmissionV6KeyBinding,
 	taskAuthority: ConversationExecutionAuthorityV1,
+	modelConfigurationRevision: number,
 ): NativeCapabilityInvocationPlanV6 {
 	if (
 		!taskAuthority.taskBoundary ||
 		!taskAuthorityMatches(authority, taskAuthority)
 	)
 		throw new TypeError("Native V6 task authority is invalid");
+	if (
+		!Number.isSafeInteger(modelConfigurationRevision) ||
+		modelConfigurationRevision < 1
+	)
+		throw new TypeError("Native V6 model configuration revision is invalid");
 	const requestDigest = nativeCapabilityAdmissionRequestDigestV6(request);
 	const operationDigest = nativeCapabilityOperationDigestV6(runtimeRequest);
 	const binding: NativeCapabilityInvocationBindingV6 = {
@@ -377,6 +387,7 @@ function frozenPlanV6(
 		reasoningLevel: request.reasoningLevel,
 		configVersion: request.configVersion,
 		keyBinding: structuredClone(keyBinding),
+		modelConfigurationRevision,
 		executionStatus: "submitted",
 		requestDigest,
 		operationDigest,
@@ -407,6 +418,7 @@ export function validateNativeCapabilityInvocationPlanV6(
 		readonly request: NativeCapabilityAdmissionRequestV6;
 		readonly authority: NativeCapabilityAdmissionV6AuthorityBinding;
 		readonly taskAuthority: ConversationExecutionAuthorityV1;
+		readonly modelConfigurationRevision: number;
 		readonly requestDigest: string;
 		readonly operationDigest: string;
 	},
@@ -419,6 +431,7 @@ export function validateNativeCapabilityInvocationPlanV6(
 		authority,
 		input.keyBinding,
 		parseAuthority(input.taskAuthority),
+		input.modelConfigurationRevision,
 	);
 	if (
 		!runtimeAuthorityMatches(runtimeRequest, authority, input.keyBinding) ||
@@ -486,7 +499,26 @@ export function validateNativeCapabilityReplayPlanV6(
 		),
 		keyBinding: plan.keyBinding,
 		operationDigest: plan.operationDigest,
+		modelConfigurationRevision: plan.modelConfigurationRevision,
 	});
+}
+
+/** A stateful command never replaces an explicit selection with Owner defaults. */
+export function isNativeCapabilityModelSelectionCurrentV6(
+	plan: Pick<
+		NativeCapabilityInvocationPlanV6,
+		"modelConfigurationRevision" | "modelOptionId" | "reasoningLevel"
+	>,
+	configuration: ConversationModelConfigurationV1,
+): boolean {
+	return (
+		plan.modelConfigurationRevision === configuration.configurationRevision &&
+		configuration.options.some(
+			(option) =>
+				option.optionId === plan.modelOptionId &&
+				option.reasoningLevels.includes(plan.reasoningLevel),
+		)
+	);
 }
 
 export function createNativeCapabilityAdmissionUseCaseV6(dependencies: {
@@ -508,6 +540,8 @@ export function createNativeCapabilityAdmissionUseCaseV6(dependencies: {
 				return { outcome: "denied", reason: "authorization_lost" };
 			const authority = structuredClone(authorization.authority);
 			const taskAuthority = parseAuthority(authorization.taskAuthority);
+			const modelConfigurationRevision =
+				authorization.modelConfigurationRevision;
 			const keyBinding = structuredClone(authorization.keyBinding);
 			if (
 				!runtimeAuthorityMatches(runtimeRequest, authority, keyBinding) ||
@@ -520,11 +554,13 @@ export function createNativeCapabilityAdmissionUseCaseV6(dependencies: {
 				authority,
 				keyBinding,
 				taskAuthority,
+				modelConfigurationRevision,
 			);
 			const { requestDigest, operationDigest } = plan;
 			validateNativeCapabilityInvocationPlanV6(plan, {
 				invocation,
 				taskAuthority,
+				modelConfigurationRevision,
 				runtimeRequest,
 				keyBinding,
 				request,
@@ -536,6 +572,7 @@ export function createNativeCapabilityAdmissionUseCaseV6(dependencies: {
 				freezePlan({
 					invocation,
 					taskAuthority,
+					modelConfigurationRevision,
 					runtimeRequest,
 					request,
 					authority,

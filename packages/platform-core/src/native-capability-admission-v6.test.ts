@@ -189,6 +189,7 @@ function validPlan() {
 			ciphertextRef: request.keyBinding.ciphertextRef as string,
 			version: 1,
 		},
+		modelConfigurationRevision: 1,
 		executionStatus: "submitted" as const,
 		requestDigest,
 		operationDigest,
@@ -210,6 +211,7 @@ function validPlan() {
 		authority,
 		plan,
 		input: {
+			modelConfigurationRevision: 1,
 			taskAuthority,
 			invocation: publicInvocation(runtimeRequest),
 			runtimeRequest,
@@ -272,6 +274,7 @@ function admissionHarness() {
 	const authorization = {
 		authorize: vi.fn(async () => ({
 			outcome: "allowed" as const,
+			modelConfigurationRevision: 1,
 			taskAuthority,
 			authority,
 			keyBinding,
