@@ -454,6 +454,31 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		await expectPathRemoved(capture.cwd);
 	});
 
+	it("uses the Session Sandbox as the Linux boundary when explicitly enabled", async () => {
+		const { capturePath, sandboxCapturePath } = await installFakeCodex("echo");
+		const bridge = await CodexAppServerBridge.open(
+			options({
+				isolationMode: "container-boundary",
+				officialLane: true,
+				nativeBarrierRequired: false,
+				model: "synthetic/gpt-5.6-sol",
+				modelAccess: {
+					endpoint: "http://127.0.0.1:8080",
+					credential: "synthetic-loopback-token",
+				},
+			}),
+		);
+		await bridge.close();
+		const captures = await readCaptures(capturePath, 3);
+		const server = captures[2];
+		expect(server?.args[0]).toBe("app-server");
+		expect(server?.args).toContain('sandbox_mode="workspace-write"');
+		expect(server?.args).not.toContain("features.use_legacy_landlock=true");
+		await expect(readFile(sandboxCapturePath, "utf8")).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+	});
+
 	it("fixes the official lane launch policy without inheriting executor overrides", async () => {
 		const { capturePath } = await installFakeCodex("barrier-missing");
 		const previous = process.env.CODEX_EXEC_SERVER_URL;

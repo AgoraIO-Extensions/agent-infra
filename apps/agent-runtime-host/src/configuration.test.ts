@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	readCodexIsolationMode,
 	readCodexPilotConfiguration,
 	readRuntimeFileExchangeOptions,
 	readRuntimeModelConfigurationV3,
@@ -35,6 +36,17 @@ function environment(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Runtime deployment configuration", () => {
+	it("defaults Codex isolation to Landlock and accepts the Worker-owned container mode", () => {
+		expect(readCodexIsolationMode({})).toBe("landlock");
+		expect(
+			readCodexIsolationMode({
+				AGENT_INFRA_RUNTIME_ISOLATION_MODE: "container-boundary",
+			}),
+		).toBe("container-boundary");
+		expect(() =>
+			readCodexIsolationMode({ AGENT_INFRA_RUNTIME_ISOLATION_MODE: "unsafe" }),
+		).toThrow("RUNTIME_CONFIGURATION_INVALID");
+	});
 	it("consumes Responses V3 through the Codex startup reader", () => {
 		const env = environment({
 			schemaVersion: 3,

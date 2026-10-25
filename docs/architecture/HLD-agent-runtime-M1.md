@@ -893,15 +893,17 @@ Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineerin
 
 ### 10.1 Codex Linux sandbox 启动准入
 
-Codex Native Bridge 在 Linux 由部署可信 `setpriv` 的 Landlock 边界承担全部文件约束，并把固定 Codex 版本的后端选择保持在 legacy Landlock（`features.use_legacy_landlock=true`），避免残留代码路径落到需要 namespace 权限的后端。原生自身的文件 sandbox 在 Linux 关闭，理由与代价见工程 Spec 的 [Codex 原生 Conversation 隔离边界](SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)。部署支持范围以工程 Spec 的 [Adapter 部署与 Registry 边界](SPEC-agent-infra-M1-engineering-architecture.md#112-adapter-部署与-registry-边界)为准。
+Codex Native Bridge 默认在 Linux 由部署可信 `setpriv` 的 Landlock 边界承担全部文件约束，并把固定 Codex 版本的后端选择保持在 legacy Landlock（`features.use_legacy_landlock=true`），避免残留代码路径落到需要 namespace 权限的后端。专属 Runtime Pod 也可以在经过 [ADR-0035](../adr/0035-codex-container-boundary-mode.md) 评审的 `container-boundary` 模式下，把专属 Pod/PVC/NetworkPolicy 与 Codex `workspace-write` 作为文件边界；该模式只由 Worker 为标准模板 Pod 注入，默认 Landlock 与私有 lane 不变。原生自身的文件 sandbox 在 Landlock 模式关闭，理由与代价见工程 Spec 的 [Codex 原生 Conversation 隔离边界](SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)。部署支持范围以工程 Spec 的 [Adapter 部署与 Registry 边界](SPEC-agent-infra-M1-engineering-architecture.md#112-adapter-部署与-registry-边界)为准。
 
-每次启动 `app-server` 前，Bridge 必须以相同运行身份和容器安全约束，在不含模型凭证的独立探针子进程中，通过部署提供的可信 `setpriv` 实际创建并应用处理 `fs:ioctl-dev` 的 Landlock 规则集，然后执行固定无副作用命令。该权限自 ABI V5 引入；安装过程必须直接要求该权限，不得屏蔽内核不支持的权限位。部署必须从受维护发行版安装 `setpriv`，通过固定可信 PATH 提供它，并以镜像权限及只读根文件系统保证运行用户不能替换它；其版本和包来源随最终镜像记录并纳入扫描。可信 PATH 属于部署装配，不能由用户请求或 Grant 覆写。
+Landlock 模式每次启动 `app-server` 前，Bridge 必须以相同运行身份和容器安全约束，在不含模型凭证的独立探针子进程中，通过部署提供的可信 `setpriv` 实际创建并应用处理 `fs:ioctl-dev` 的 Landlock 规则集，然后执行固定无副作用命令。该权限自 ABI V5 引入；安装过程必须直接要求该权限，不得屏蔽内核不支持的权限位。部署必须从受维护发行版安装 `setpriv`，通过固定可信 PATH 提供它，并以镜像权限及只读根文件系统保证运行用户不能替换它；其版本和包来源随最终镜像记录并纳入扫描。可信 PATH 属于部署装配，不能由用户请求或 Grant 覆写。
 
-只有探针正常退出且退出码为 0，才允许启动 `app-server` 并向原生子进程注入受限模型传输凭证。工具缺失、无法安装或应用规则集、异常退出、非零退出和超时均拒绝启动，返回稳定且脱敏的错误；不回退到部分权限或 unrestricted 模式。该准入不新增 RuntimeHost 对外配置或改变 Agent Runtime Contract。
+`container-boundary` 模式不执行 Landlock 探针，而要求目标 Pod 已由 Worker 绑定唯一 Agent/Session、PVC、ServiceAccount、NetworkPolicy 和 Secret，并以同样的 non-root、只读根文件系统、drop ALL、no-new-privileges 与 RuntimeDefault 运行。Codex 在该模式使用 `workspace-write`，Provider 原生 sandbox 不能关闭；平台中介跨 Sandbox 调用仍使用现有授权屏障。
+
+Landlock 模式只有探针正常退出且退出码为 0，才允许启动 `app-server` 并向原生子进程注入受限模型传输凭证。工具缺失、无法安装或应用规则集、异常退出、非零退出和超时均拒绝启动，返回稳定且脱敏的错误；不回退到部分权限或 unrestricted 模式。`container-boundary` 模式只在 Worker-owned Pod 装配中启用，缺少专属资源或安全上下文时同样拒绝。该准入不改变 Agent Runtime Contract。
 
 ### 10.2 Codex 原生 Conversation 隔离
 
-Codex Driver 在所属 Sandbox 内按可信 Agent/Conversation/generation 派生的存储键，为每个 Conversation 代次运行独立的原生进程与持久目录。文件边界在 Linux 由部署可信 `setpriv` 的 Landlock allowlist 单独施加、在 Darwin 由固定 Codex 版本自身的权限 profile 施加，无法施加边界的平台拒绝启动。启动准入按进程执行，因此 Driver 打开时不再预启动原生进程。约束与验收要求以工程 Spec 的 [Codex 原生 Conversation 隔离边界](SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)为唯一权威。
+Codex Driver 在所属 Sandbox 内按可信 Agent/Conversation/generation 派生的存储键，为每个 Conversation 代次运行独立的原生进程与持久目录。Landlock 模式在 Linux 由部署可信 `setpriv` 的 allowlist 单独施加、在 Darwin 由固定 Codex 版本自身的权限 profile 施加；`container-boundary` 模式由专属 Runtime Pod/PVC/NetworkPolicy 与 Provider `workspace-write` 共同承担。缺少所选模式的边界时平台拒绝启动。启动准入按进程执行，因此 Driver 打开时不再预启动原生进程。约束与验收要求以工程 Spec 的 [Codex 原生 Conversation 隔离边界](SPEC-agent-infra-M1-engineering-architecture.md#109-codex-原生-conversation-隔离边界)和 [ADR-0035](../adr/0035-codex-container-boundary-mode.md) 为准。
 
 ## 11. 验证
 

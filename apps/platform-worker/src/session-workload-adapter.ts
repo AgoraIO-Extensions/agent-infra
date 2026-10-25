@@ -631,6 +631,14 @@ function runtimeEnvironment(
 			valueFrom: secretRef("model-config"),
 		},
 		{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtime.driver },
+		...(runtime.driver === "codex"
+			? [
+					{
+						name: "AGENT_INFRA_RUNTIME_ISOLATION_MODE",
+						value: "container-boundary",
+					},
+				]
+			: []),
 		...platform,
 		...(runtime.nativeMetadataWorkerOrigin === undefined
 			? []

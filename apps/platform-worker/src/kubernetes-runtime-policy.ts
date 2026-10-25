@@ -230,6 +230,14 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 			...(runtimeDriver
 				? [{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtimeDriver }]
 				: []),
+			...(runtimeDriver === "codex"
+				? [
+						{
+							name: "AGENT_INFRA_RUNTIME_ISOLATION_MODE",
+							value: "container-boundary",
+						},
+					]
+				: []),
 			...(skillHubRuntime ? [skillHubRuntime] : []),
 			...runtimeAuth,
 			...connection.env,

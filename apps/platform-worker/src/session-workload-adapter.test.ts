@@ -1833,6 +1833,7 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 				"SESSION_ID",
 				"AGENT_INFRA_RUNTIME_MODEL_CONFIG",
 				"AGENT_INFRA_RUNTIME_DRIVER",
+				"AGENT_INFRA_RUNTIME_ISOLATION_MODE",
 				"AGENT_INFRA_RUNTIME_AGENT_ID",
 				"AGENT_INFRA_RUNTIME_WORKER_ID",
 				"AGENT_INFRA_RUNTIME_DATA_DIR",
@@ -1849,6 +1850,9 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			"/workspace/runtime",
 		);
 		expect(env.get("AGENT_INFRA_RUNTIME_AGENT_ID")?.value).toBe("agent-a");
+		expect(env.get("AGENT_INFRA_RUNTIME_ISOLATION_MODE")?.value).toBe(
+			"container-boundary",
+		);
 		expect(env.get("PORT")?.value).toBe("8080");
 		for (const [name, key] of [
 			["AGENT_INFRA_RUNTIME_MODEL_CONFIG", "model-config"],

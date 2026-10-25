@@ -27,6 +27,14 @@ export function readWorkloadReadinessBindingV1(environment: NodeJS.ProcessEnv) {
 
 export const CODEX_PILOT_CONFIGURATION_VERSION = 2;
 
+/** Worker-owned native isolation boundary. The secure default is Landlock. */
+export function readCodexIsolationMode(environment: NodeJS.ProcessEnv) {
+	const value = environment.AGENT_INFRA_RUNTIME_ISOLATION_MODE ?? "landlock";
+	if (value !== "landlock" && value !== "container-boundary")
+		runtimeConfigurationInvalid();
+	return value;
+}
+
 const FILE_EXCHANGE_TOKEN = /^[\x21-\x7e]{32,4096}$/;
 
 export function readRuntimeFileExchangeOptions(environment: NodeJS.ProcessEnv) {
