@@ -67,9 +67,11 @@ export function projectDeploymentConfiguration(
 }
 
 /**
- * 部署选项可用于提交标准模板申请：部署配置与模型目录都已读到并登记了内容。否则申请页顶部的部署状态说明
- * 「部署选项需要刷新后才能提交标准模板申请。」（或请联系管理员），创建与修改标准模板申请都按它拦下、不发
- * 请求（#3389 N13-09）。
+ * 部署选项可用于提交标准模板申请：部署配置与模型目录的 status 都是 populated（不是读取失败 unavailable、
+ * 过期 stale 或 empty）。否则申请页顶部的部署状态说明「部署选项需要刷新后才能提交标准模板申请。」（或请
+ * 联系管理员），创建与修改标准模板申请都按它拦下、不发请求（#3389 N13-09）。status 为 populated 而模板为空
+ * 时不在这里判断：创建申请按「部署没有标准模板」、修改申请按「已移除模板」拦下，下一步是联系管理员或新建
+ * 申请，不显示部署状态说明。
  */
 export function deploymentConfigurationUsable(
 	configuration: DeploymentConfigurationProjectionV2,

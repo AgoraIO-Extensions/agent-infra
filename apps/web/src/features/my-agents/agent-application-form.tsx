@@ -1014,7 +1014,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				(deployment.status !== "populated" ||
 					deployment.templates.length === 0 ||
 					!modelCatalogReady)));
-	// 部署选项不可用（读取失败、过期或没有登记内容）时标准模板申请不能提交，与页面顶部的部署状态说明
+	// 部署选项不可用（部署配置或模型目录读取失败、过期或为 empty）时标准模板申请不能提交，与页面顶部的部署状态说明
 	// 「部署选项需要刷新后才能提交标准模板申请。」一致：创建申请另由「标准模板」字段错误说明；修改申请不能
 	// 更换模板，由部署状态说明接手，不另写字段错误。两种模式都拦下、不发请求（#3389 N13-09）。
 	const deploymentBlocksStandard =

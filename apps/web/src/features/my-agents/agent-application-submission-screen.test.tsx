@@ -588,3 +588,74 @@ describe("AgentApplicationSubmissionScreen", () => {
 		expect(document.activeElement).toBe(status);
 	});
 });
+
+describe("AgentApplicationSubmissionScreen with a populated deployment that registers no templates", () => {
+	// #3389 评审：部署配置与模型目录为 populated、模板为空时不属于「部署选项不可用」，不显示要求刷新的部署
+	// 状态说明；创建申请按「部署没有标准模板」、修改申请按「已移除模板」拦下，同样不发请求，下一步是联系
+	// 管理员或新建申请。
+	const noTemplates = { ...deploymentConfiguration, templates: [] };
+
+	for (const mode of ["create", "update"] as const)
+		it(`blocks a ${mode} standard submission without a refresh prompt`, async () => {
+			const onSubmit = vi.fn();
+			await renderWithMyAgentsRouter(
+				mode === "create" ? (
+					<AgentApplicationSubmissionScreenView
+						deploymentConfiguration={noTemplates}
+						deploymentConfigurationRetryable
+						mode="create"
+						onRefreshDeploymentConfiguration={vi.fn()}
+						onSubmit={onSubmit}
+						refreshingDeploymentConfiguration={false}
+						submitting={false}
+					/>
+				) : (
+					<AgentApplicationSubmissionScreenView
+						action="resubmit"
+						application={rejectedApplication}
+						deploymentConfiguration={noTemplates}
+						deploymentConfigurationRetryable
+						mode="update"
+						onRefreshDeploymentConfiguration={vi.fn()}
+						onSubmit={onSubmit}
+						refreshingDeploymentConfiguration={false}
+						submitting={false}
+					/>
+				),
+			);
+			expect(
+				document.getElementById("application-deployment-status"),
+			).toBeNull();
+			if (mode === "create") {
+				fireEvent.change(screen.getByLabelText("Agent 名称"), {
+					target: { value: "Release assistant" },
+				});
+				fireEvent.change(screen.getByLabelText("用途说明"), {
+					target: { value: "Helps the release team" },
+				});
+			}
+			fireEvent.click(
+				screen.getByRole("button", {
+					name: mode === "create" ? "提交审批" : "修改并重新提交",
+				}),
+			);
+			expect(onSubmit).not.toHaveBeenCalled();
+			expect(
+				document.getElementById("application-template-id-error")?.textContent,
+			).toBe(
+				mode === "create"
+					? "当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。"
+					: "该模板已从当前部署移除。已有申请不能更换模板，请新建申请。",
+			);
+			if (mode === "update")
+				expect(screen.getByRole("alert").textContent).toBe(
+					"当前部署已移除此申请的模板，请新建申请。",
+				);
+			expect(
+				document.getElementById("application-deployment-status"),
+			).toBeNull();
+			expect(
+				screen.queryByRole("button", { name: "重新加载部署选项" }),
+			).toBeNull();
+		});
+});
