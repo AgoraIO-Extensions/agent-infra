@@ -117,6 +117,7 @@ describe("platform-core package surface", () => {
 			"createFileLimitDeclarationReaderV1",
 			"createFileReconciliationV1",
 			"createNativeCapabilityAdmissionUseCaseV1",
+			"createNativeCapabilityAdmissionUseCaseV6",
 			"createPersonalApiAgentReadUseCaseV1",
 			"createPersonalApiCredentialUseCaseV1",
 			"createPersonalRelayKeyUseCaseV1",
