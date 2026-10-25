@@ -506,6 +506,34 @@ describe("RecoveryButton ends the handoff once the recovery request has a result
 		);
 	});
 
+	it("treats a rejected recovery request as finished without an unhandled rejection", async () => {
+		const unhandled = vi.fn();
+		process.on("unhandledRejection", unhandled);
+		try {
+			let reject = (_error: Error) => {};
+			const onRetry = vi.fn(
+				() =>
+					new Promise<void>((_resolve, fail) => {
+						reject = fail;
+					}),
+			);
+			const view = render(<Page state="failed" onRetry={onRetry} />);
+			retry().focus();
+			fireEvent.click(retry());
+			view.rerender(<Page state="loading" onRetry={onRetry} />);
+			expect(document.activeElement).toBe(heading());
+			await act(async () => reject(new Error("恢复请求失败")));
+			await settle();
+			// 请求已结束（失败也算有了结果）：之后同一个按钮因后台重读再出现，不取回焦点。
+			view.rerender(<Page state="failed" onRetry={onRetry} />);
+			expect(document.activeElement).toBe(heading());
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(unhandled).not.toHaveBeenCalled();
+		} finally {
+			process.off("unhandledRejection", unhandled);
+		}
+	});
+
 	it("restores a lost focus without scrolling after the handoff", async () => {
 		const request = controlledRequest();
 		// 就绪页与失败页的标题是不同的元素：后台重读失败整页替换时就绪标题随之卸载。

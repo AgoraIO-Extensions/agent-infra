@@ -195,11 +195,8 @@ function watchRequest(
 			running = false;
 			for (const listener of listeners) listener();
 		};
-		// 只记录结束，不吞掉失败：拒绝仍按原样成为未处理的拒绝。
-		void Promise.resolve(result).then(done, (error: unknown) => {
-			done();
-			throw error;
-		});
+		// 只关心请求何时结束：失败由调用方在界面上表达（失败提示与按钮），这里不再派生新的未处理拒绝。
+		void Promise.resolve(result).then(done, done);
 	}
 	return {
 		busy: () =>
