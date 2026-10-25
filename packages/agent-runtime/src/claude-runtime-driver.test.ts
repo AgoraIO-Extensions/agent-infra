@@ -1422,30 +1422,30 @@ it("declares a platform refusal of an attachment before the native query and kee
 			state: "missing",
 		});
 
-		// 无法确认的读取失败不转换，保持原有的不确定语义。
+		// #3373：不是明确拒绝的读取失败发生在本操作记录与原生 query 之前，声明未提交。
+		const uncertainCommand = {
+			...claudeCommand("uncertain"),
+			input: { text: "inspect", attachments: ["file-png"] },
+		};
 		const uncertain = await f.driver
-			.execute(
-				{
-					...claudeCommand("uncertain"),
-					input: { text: "inspect", attachments: ["file-png"] },
-				},
-				{
-					fileBridge: {
-						...claudeAttachmentBridge(),
-						readInput: async () => {
-							throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
-						},
+			.execute(uncertainCommand, {
+				fileBridge: {
+					...claudeAttachmentBridge(),
+					readInput: async () => {
+						throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
 					},
 				},
-			)
+			})
 			.catch((error: unknown) => error);
 		expect(uncertain).toMatchObject({
-			message: "RUNTIME_FILE_EXCHANGE_UNAVAILABLE",
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			retryable: true,
+			driverFailureKind: "not_submitted",
+			reason: "file_input_unavailable",
 		});
-		expect(uncertain).not.toHaveProperty(
-			"driverFailureKind",
-			"file_input_rejected",
-		);
+		expect(await f.driver.lookupOperation(uncertainCommand)).toEqual({
+			state: "missing",
+		});
 
 		// 被拒绝的执行不占用该 Conversation：下一条消息正常受理。
 		const next = {
@@ -1494,7 +1494,10 @@ it("rejects Claude attachments beyond the Driver bounds, a planted link or a for
 					new Uint8Array(1),
 				),
 			}),
-		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			reason: "file_input_unavailable",
+		});
 		// 不在本次 Grant 中的 fileId（跨会话、跨执行）读不到。
 		await expect(
 			driver.execute(
@@ -1504,7 +1507,12 @@ it("rejects Claude attachments beyond the Driver bounds, a planted link or a for
 				},
 				{ fileBridge: claudeAttachmentBridge() },
 			),
-		).rejects.toThrow("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			cause: expect.objectContaining({
+				message: "RUNTIME_FILE_INPUT_NOT_AUTHORIZED",
+			}),
+		});
 		const [ref] = await readdir(path).then((entries) =>
 			entries.filter((entry) => entry !== "index.json"),
 		);
@@ -1524,7 +1532,10 @@ it("rejects Claude attachments beyond the Driver bounds, a planted link or a for
 				},
 				{ fileBridge: claudeAttachmentBridge() },
 			),
-		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			reason: "file_input_unavailable",
+		});
 		expect(await readdir(outside)).toEqual([]);
 	} finally {
 		await driver.close();
@@ -1548,7 +1559,10 @@ it("rejects an attachment whose bytes do not match the admitted digest", async (
 					bytes,
 				),
 			}),
-		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			reason: "file_input_unavailable",
+		});
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });
@@ -1561,27 +1575,45 @@ it("refuses native submission when the file authority lapses after materializati
 	const bytes = new TextEncoder().encode("claude-lapsed-authority-probe-image");
 	let revalidations = 0;
 	try {
+		const bridge = attachmentBridge(
+			{
+				mediaType: "image/png",
+				sizeBytes: bytes.byteLength,
+				sha256: createHash("sha256").update(bytes).digest("hex"),
+			},
+			bytes,
+			() => {
+				revalidations += 1;
+				// The authority lapses after materialization but before the native request.
+				if (revalidations === 2) {
+					throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
+				}
+			},
+		);
 		await expect(
-			driver.execute(attachmentCommand, {
-				fileBridge: attachmentBridge(
-					{
-						mediaType: "image/png",
-						sizeBytes: bytes.byteLength,
-						sha256: createHash("sha256").update(bytes).digest("hex"),
-					},
-					bytes,
-					() => {
-						revalidations += 1;
-						// The authority lapses after materialization but before the native request.
-						if (revalidations > 1) {
-							throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
-						}
-					},
-				),
+			driver.execute(attachmentCommand, { fileBridge: bridge }),
+		).rejects.toMatchObject({
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			driverFailureKind: "not_submitted",
+			reason: "session_preparation_failed",
+			cause: expect.objectContaining({
+				message: "RUNTIME_FILE_BRIDGE_CONTEXT_STALE",
 			}),
-		).rejects.toThrow("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
+		});
 		// The last check runs at the native submission boundary.
 		expect(revalidations).toBe(2);
+		// #3373：本操作的记录与 Turn 已回滚，Host 可以记为未提交；以新 Grant 重提即被受理，
+		// 不会因残留的 unknown Turn 被判为繁忙。
+		expect(await driver.lookupOperation(attachmentCommand)).toEqual({
+			state: "missing",
+		});
+		const resubmitted = await driver.execute(attachmentCommand, {
+			fileBridge: bridge,
+		});
+		expect(resubmitted.result).toEqual({
+			outcome: "accepted",
+			status: "running",
+		});
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });

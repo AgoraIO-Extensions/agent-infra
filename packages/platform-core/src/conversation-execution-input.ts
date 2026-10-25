@@ -309,6 +309,11 @@ export function parseAuthority(
 		"supportsSupplementaryInstruction",
 		...(input !== null &&
 		typeof input === "object" &&
+		Object.hasOwn(input, "attachmentMergeWindow")
+			? ["attachmentMergeWindow"]
+			: []),
+		...(input !== null &&
+		typeof input === "object" &&
 		Object.hasOwn(input, "taskBoundary")
 			? ["taskBoundary"]
 			: []),
@@ -324,7 +329,11 @@ export function parseAuthority(
 		!isText(values.agentId) ||
 		!isText(values.channelId) ||
 		!isText(values.authorizationRevision) ||
-		typeof values.supportsSupplementaryInstruction !== "boolean"
+		typeof values.supportsSupplementaryInstruction !== "boolean" ||
+		// #3374：附件合并窗口只属于企微智能机器人渠道。
+		(values.attachmentMergeWindow !== undefined &&
+			(values.attachmentMergeWindow !== true ||
+				!values.channelId.startsWith("wecom_bot:")))
 	) {
 		invalidInput();
 	}
@@ -369,6 +378,9 @@ export function parseAuthority(
 		channelId: values.channelId,
 		authorizationRevision: values.authorizationRevision,
 		supportsSupplementaryInstruction: values.supportsSupplementaryInstruction,
+		...(values.attachmentMergeWindow === true
+			? { attachmentMergeWindow: true as const }
+			: {}),
 		...(taskBoundary ? { taskBoundary } : {}),
 		...(personalApiAdmissionAuthority ? { personalApiAdmissionAuthority } : {}),
 	};

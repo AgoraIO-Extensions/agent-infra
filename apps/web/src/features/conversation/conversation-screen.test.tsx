@@ -2335,6 +2335,29 @@ describe("functional conversation screen", () => {
 		},
 	);
 
+	it("lists the confirmed recent conversations and notes omitted Agents instead of a read failure (#3379)", async () => {
+		setup((request) =>
+			new URL(request.url).pathname === "/api/v2/me/conversations/recent"
+				? Response.json({
+						items: [history("conversation-1").conversation],
+						nextCursor: null,
+						unavailableAgentIds: ["stopped-agent"],
+					})
+				: undefined,
+		);
+		const notice = await screen.findByText(
+			"1 个 Agent 的对话暂时无法显示，其他对话不受影响。",
+		);
+		const alert = notice.closest('[data-slot="alert"]');
+		expect(alert?.getAttribute("role")).toBe("status");
+		expect(alert?.getAttribute("data-tone")).toBe("warn");
+		const region = screen.getByRole("region", { name: "最近对话" });
+		expect(within(region).queryByRole("alert")).toBeNull();
+		expect(within(region).queryByText("最近对话暂时无法读取。")).toBeNull();
+		expect(within(region).getAllByRole("link").length).toBeGreaterThan(0);
+		expect(region.textContent).not.toContain("stopped-agent");
+	});
+
 	it("keeps the page header to the Agent name and the design subtitle", async () => {
 		setup();
 		const heading = await screen.findByRole("heading", {

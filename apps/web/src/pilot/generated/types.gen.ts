@@ -428,6 +428,7 @@ export type ConnectionCapabilityProjectionV1 = {
     publicOrigin: string;
     schemaVersion: 1;
     status: 'available';
+    webPath: string;
 } | {
     reason: 'missing' | 'invalid' | 'unapproved' | 'unavailable';
     schemaVersion: 1;

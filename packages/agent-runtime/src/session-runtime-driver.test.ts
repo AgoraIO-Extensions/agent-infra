@@ -906,25 +906,22 @@ it.each([
 		revokeAt: 1,
 		selected: false,
 		opened: false,
-		code: "RUNTIME_AUTHORIZATION_DENIED",
 	},
 	{
 		label: "before Turn admission",
 		revokeAt: 2,
 		selected: true,
 		opened: true,
-		code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE",
 	},
 	{
 		label: "at the native boundary",
 		revokeAt: 3,
 		selected: true,
 		opened: true,
-		code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE",
 	},
 ])(
 	"keeps an attachment Turn undispatched when authority lapses $label",
-	async ({ revokeAt, selected, opened, code }) => {
+	async ({ revokeAt, selected, opened }) => {
 		const path = await mkdtemp(join(tmpdir(), "session-attachment-authority-"));
 		const { port, readInput } = fileBridge((call) => {
 			if (call === revokeAt)
@@ -951,8 +948,16 @@ it.each([
 				fileBridge: port,
 			});
 			// A pre-dispatch authorization failure is definite: no prompt ran, so
-			// the request must not be retained as a possibly accepted Turn.
-			await expect(execution).rejects.toMatchObject({ code });
+			// the request must not be retained as a possibly accepted Turn. #3373:
+			// the Driver declares it not submitted; the lapsed authority is the cause.
+			await expect(execution).rejects.toMatchObject({
+				code: "RUNTIME_TURN_NOT_SUBMITTED",
+				driverFailureKind: "not_submitted",
+				reason: "session_preparation_failed",
+				cause: expect.objectContaining({
+					code: "RUNTIME_AUTHORIZATION_DENIED",
+				}),
+			});
 			expect(readInput).toHaveBeenCalledTimes(1);
 			expect(openSession.mock.calls.length > 0).toBe(opened);
 			expect(prompt).not.toHaveBeenCalled();

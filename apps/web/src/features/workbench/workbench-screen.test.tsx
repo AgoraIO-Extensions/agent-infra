@@ -720,6 +720,48 @@ describe("OpenDesign workbench presentation", () => {
 		expect(within(region).getByRole("link", { name: "查看全部" })).toBeTruthy();
 	});
 
+	it("names how many Agents' conversations are omitted without failing the recent section (#3379)", async () => {
+		const view = await showWorkbench(
+			<WorkbenchScreen
+				{...empty}
+				recent={{
+					kind: "ready",
+					conversations: [conversation],
+					nextCursor: null,
+					unavailableAgentIds: ["stopped-agent", "other-agent"],
+				}}
+			/>,
+		);
+		const region = screen.getByRole("region", { name: "最近对话" });
+		expect(within(region).getByRole("status").textContent).toBe(
+			"2 个 Agent 的对话暂时无法显示，其他对话不受影响。",
+		);
+		expect(within(region).queryByRole("alert")).toBeNull();
+		expect(
+			within(region).getByRole("link", {
+				name: `打开对话：${conversation.title}`,
+			}),
+		).toBeTruthy();
+		// 只有被省略的 Agent 时不显示「暂无个人对话」之外的失败，也不显示 Agent ID。
+		view.rerender(
+			<WorkbenchScreen
+				{...empty}
+				recent={{
+					kind: "ready",
+					conversations: [],
+					nextCursor: null,
+					unavailableAgentIds: ["stopped-agent"],
+				}}
+			/>,
+		);
+		expect(within(region).getByRole("status").textContent).toBe(
+			"1 个 Agent 的对话暂时无法显示，其他对话不受影响。",
+		);
+		expect(region.textContent).not.toContain("stopped-agent");
+		view.rerender(<WorkbenchScreen {...empty} />);
+		expect(within(region).queryByRole("status")).toBeNull();
+	});
+
 	it("shows one primary re-login for 401 and keeps partition notices without buttons", async () => {
 		const relogin = vi.fn();
 		const authentication = {

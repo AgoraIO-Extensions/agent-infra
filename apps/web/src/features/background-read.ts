@@ -168,3 +168,27 @@ export function retainContent<T>(
 export function retainedContentAt(owner: object): number {
 	return records.get(owner)?.content?.at ?? 0;
 }
+
+/** TanStack Query 的 refetchInterval 回调拿到的查询状态中判断轮询所需的字段。 */
+export type PollingQueryState<T> = {
+	readonly state: {
+		readonly status: string;
+		readonly data?: T;
+		readonly error?: unknown;
+	};
+};
+
+/**
+ * 轮询属于后台重读（#3418，见 docs/development/web-ui.md「组件与调用方」）：以最近一次读到的结果判断是否
+ * 继续（TanStack Query 的重读失败保留上一次的 data），可重试的失败（503、网络中断）之后按原节奏继续，
+ * 下一次读到时按新结果更新；没有结果（含写成 `{ kind: "unavailable" }` 的不可重试结果）或失败不可重试时停止。
+ */
+export function pollWhileShown<T>(
+	query: PollingQueryState<T>,
+	retryable: (error: unknown) => boolean,
+	interval: (data: T) => number | false,
+): number | false {
+	const { status, data, error } = query.state;
+	if (status === "error" && !retryable(error)) return false;
+	return data !== undefined && shownContent(data) ? interval(data) : false;
+}

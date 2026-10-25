@@ -1,10 +1,12 @@
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
+import { readFailed } from "../background-read.js";
 import { AgentCreationFailureNotice } from "../my-agents/agent-creation-failure.js";
 import { useBrowserSession } from "../use-browser-session.js";
 import { AgentAuthorizationControls } from "./agent-authorization-controls.js";
 import {
 	type AgentConfigurationRequestError,
 	isAgentConfigurationOwner,
+	isRetryableConfigurationError,
 } from "./agent-configuration.js";
 import {
 	AgentAdministratorConfigurationScreen,
@@ -99,6 +101,12 @@ function AgentConfigurationWorkflowContent({
 			agent.source.kind === "standard" &&
 			defaultRelayKeyManaged,
 	);
+	// 已保存 Key 的可用模型按后台重读规则（#3387）：已有结果时后台重读的可重试失败继续显示上一次的候选；
+	// 不可重试的失败（登录失效、无权、不存在、修订冲突、响应无效）即使已有候选也按 D2-59 显示「无法读取
+	// 可用模型」并收起选择器，旧候选不能再勾选、保存（#3418 N14-02）。
+	const savedCandidatesFailed = readFailed(savedRelayKeyCandidates, (error) =>
+		isRetryableConfigurationError(requestFailure(error)),
+	);
 	// API 与应用授权只由当前 Owner 治理（PRD §7.3、工程 Spec §9.2），服务端拒绝非 Owner 的管理员；
 	// 纯管理员视图因此不显示授权控制，只显示服务端允许的管理员操作（#3033 AC-2）。
 	const authorization = (
@@ -185,7 +193,11 @@ function AgentConfigurationWorkflowContent({
 					<ConfigurationFooterLifecycleFailure lifecycle={lifecycle} />
 				</>
 			}
-			savedRelayKeyCandidates={savedRelayKeyCandidates.data?.candidates}
+			savedRelayKeyCandidates={
+				savedCandidatesFailed
+					? undefined
+					: savedRelayKeyCandidates.data?.candidates
+			}
 			savedRelayKeyConfigurationRevision={
 				savedRelayKeyCandidates.data?.configurationRevision
 			}
@@ -198,7 +210,7 @@ function AgentConfigurationWorkflowContent({
 						savedRelayKeyCandidates.isFetching))
 			}
 			savedRelayKeyCandidatesError={
-				savedRelayKeyCandidates.isError
+				savedCandidatesFailed
 					? requestFailure(savedRelayKeyCandidates.error)
 					: null
 			}

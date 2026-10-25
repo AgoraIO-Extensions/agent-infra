@@ -15,7 +15,10 @@ import {
 	test,
 } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
-import { backgroundReread } from "./background-reread";
+import {
+	backgroundReread,
+	expectBackgroundRereadKeeps,
+} from "./background-reread";
 import {
 	expectFocusableBusy,
 	expectFocusSettled,
@@ -1208,3 +1211,87 @@ test("a re-login handoff is not taken back when a later background reread is 401
 	await expectCleanPage(page, errors);
 	expect(api.commands).toEqual([]);
 });
+
+// #3418 N14-03（F14-2）：部署配置读到过之后，后台重读（回到标签页）挂起或遇到可重试失败（503、网络中断）时，
+// 已显示的模板显示名「Codex」不回落为「标准模板」：Agent 目录卡片标签与「模板」筛选项（含已选值）、对话入口
+// 目录、Agent 详情眉标与「模板 / 入口」都保留；失败不可重试（403）时按读不到显示「标准模板」，不显示原始 ID。
+for (const target of [
+	{ name: "Agent 目录", path: "/agents" },
+	{ name: "对话入口目录", path: "/agents?mode=conversation" },
+	{ name: "Agent 详情", path: "/agents/search-template" },
+] as const)
+	for (const failure of ["503", "network"] as const)
+		test(`a background reread of the deployment configuration keeps template names: ${target.name} ${failure} (#3418 N14-03)`, async ({
+			page,
+		}) => {
+			const pageErrors = trackPageErrors(page);
+			const api = await fixture(page);
+			await page.goto(target.path);
+			const detail = target.name === "Agent 详情";
+			const eyebrow = page.locator("main .page-eyebrow");
+			const templateEntry = page
+				.locator("main dt", { hasText: "模板 / 入口" })
+				.locator("+ dd");
+			const filter = page.getByRole("combobox", { name: "模板", exact: true });
+			const card = page
+				.locator(".agent-list > li")
+				.filter({ hasText: "发布助理" });
+			const tag = card
+				.locator('[data-slot="badge"][data-variant="tag"]')
+				.first();
+			const expectNames = async (codex: boolean) => {
+				const label = codex ? "Codex" : "标准模板";
+				if (detail) {
+					await expect(eyebrow).toHaveText(`Agent 详情 · ${label}`);
+					await expect(templateEntry).toHaveText(
+						codex
+							? "标准模板 · Codex · 平台交互入口"
+							: "标准模板 · 平台交互入口",
+					);
+				} else {
+					await expect(tag).toHaveText(codex ? "标准模板 · Codex" : "标准模板");
+					await expect(filter.locator("option:checked")).toHaveText(label);
+					await expect(filter).toHaveValue("codex");
+				}
+				await expect(page.locator("main")).not.toContainText("codex");
+			};
+			if (!detail) await filter.selectOption("codex");
+			await expectNames(true);
+			const focus = await pinElement(
+				detail ? page.getByRole("link", { name: "返回 Agent 目录" }) : filter,
+				"template-name-focus",
+			);
+			await focus.focus();
+			await expectBackgroundRereadKeeps(page, {
+				path: "/api/v2/deployment/configuration",
+				focus,
+				failure,
+				context: `${target.name}（部署配置 ${failure}）`,
+				expectKept: () => expectNames(true),
+			});
+			// 失败不可重试：没有可继续显示的登记内容，按读不到显示「标准模板」（D2-59），焦点不动。
+			await page.route("**/api/v2/deployment/configuration", (route) =>
+				route.fulfill({
+					status: 403,
+					json: {
+						schemaVersion: 1,
+						code: "RESOURCE_UNAVAILABLE",
+						message: "Controlled deployment failure",
+						retryable: false,
+						traceId: "trace-template-names",
+					},
+				}),
+			);
+			const denied = page.waitForResponse(
+				(response) =>
+					new URL(response.url()).pathname ===
+						"/api/v2/deployment/configuration" && response.status() === 403,
+			);
+			await backgroundReread(page);
+			await denied;
+			await expectNames(false);
+			await expect(focus).toBeFocused();
+			expect(api.commands).toEqual([]);
+			await expectCleanPage(page, pageErrors);
+			await expectNoDuplicateControls(page, `${target.name}（#3418 N14-03）`);
+		});

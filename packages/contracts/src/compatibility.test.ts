@@ -4584,6 +4584,7 @@ describe("contract compatibility command", () => {
 	it.each([
 		["RUNTIME_SESSION_BLOCKED", "#3017"],
 		["RUNTIME_FILE_INPUT_REJECTED", "#3314"],
+		["RUNTIME_TURN_NOT_SUBMITTED", "#3373"],
 	])(
 		"admits only the pinned %s rejected result in submit V2+ unions (%s)",
 		async (code) => {
@@ -4655,7 +4656,17 @@ describe("contract compatibility command", () => {
 							member(value).properties.message.const = "Runtime is blocked";
 						},
 						(value: Document) => {
-							member(value).properties.retryable.const = true;
+							const retryable = member(value).properties.retryable;
+							retryable.const = retryable.const !== true;
+						},
+						// 阶段只允许固定值（只有未提交成员带 reason）。
+						(value: Document) => {
+							const properties = member(value).properties as Record<
+								string,
+								{ enum?: unknown[]; const?: unknown }
+							>;
+							if (properties.reason?.enum) properties.reason.enum.push("other");
+							else member(value).properties.message.const = "Runtime changed";
 						},
 						// 不能借机新增字段或放松必填。
 						(value: Document) => {

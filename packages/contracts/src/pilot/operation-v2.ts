@@ -13,6 +13,7 @@ import {
 import { SandboxWorkspaceReferenceV1Schema } from "../workspace-reference.ts";
 import {
 	ConversationDetailProjectionV1Schema,
+	ConversationPageV1Schema,
 	ExecutionDetailProjectionV1Schema,
 	pilotBrowserOpenApiPathsV1,
 } from "./browser.ts";
@@ -313,6 +314,21 @@ export const ExecutionDetailProjectionV2Schema = z.discriminatedUnion(
 
 const conversationList =
 	pilotBrowserOpenApiPathsV1["/api/v1/agents/{agentId}/conversations"].get;
+/** Maximum Agents listed when their Web channel eligibility cannot be confirmed. */
+const recentUnavailableAgentIdsMaximum = 100;
+/**
+ * Recent personal Web page (#3379). Agents whose current Web channel eligibility
+ * cannot be confirmed are omitted from `items` and listed once here instead of
+ * failing the page; absent when no Agent is omitted (and from older servers).
+ */
+export const RecentPersonalConversationPageV2Schema =
+	ConversationPageV1Schema.extend({
+		unavailableAgentIds: z
+			.array(OpaqueIdV1Schema)
+			.min(1)
+			.max(recentUnavailableAgentIdsMaximum)
+			.optional(),
+	});
 const personalConversationSecurity: Record<string, never[]>[] = [
 	{ PlatformSession: [] },
 ];
@@ -339,6 +355,17 @@ export const pilotOperationOpenApiPathsV2 = {
 				query: conversationList.requestParams.query.extend({
 					limit: conversationList.requestParams.query.shape.limit.default(50),
 				}),
+			},
+			responses: {
+				...conversationList.responses,
+				"200": {
+					...conversationList.responses["200"],
+					content: {
+						"application/json": {
+							schema: RecentPersonalConversationPageV2Schema,
+						},
+					},
+				},
 			},
 		},
 	},

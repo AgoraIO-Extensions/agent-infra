@@ -49,6 +49,8 @@ adapters:
 # resources and credentials are owned by the separate Connection deployment.
 connectionConsumer:
   source: inline
+  # 用户授权控制台路径；与 MCP endpoint 的 mcpPath 分开管理。
+  webPath: /connection/connections
   inline:
     schemaVersion: 1
     publicOrigin: https://connection.example.invalid

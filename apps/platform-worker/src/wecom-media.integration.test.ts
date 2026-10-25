@@ -241,7 +241,10 @@ async function persistRuntimeState(attachments: boolean | null) {
 		on conflict (agent_id) do update set state = excluded.state, revision = excluded.revision`;
 }
 
-async function receive(message: WecomMessageV1) {
+async function receive(
+	message: WecomMessageV1,
+	target: ReturnType<typeof createWecomChannelV1> = channel,
+) {
 	const keyId = `fixture-key:personal:${message.senderId}`;
 	await sql`insert into platform.relay_key_subjects
 		(purpose, subject_id, last_version, current_version)
@@ -252,7 +255,7 @@ async function receive(message: WecomMessageV1) {
 		values ('personal', ${message.senderId}, 1, ${keyId},
 			${sql.json({ purpose: "personal", subjectId: message.senderId, keyId, keyVersion: 1 })})
 		on conflict do nothing`;
-	return channel.receive(message);
+	return target.receive(message);
 }
 async function filesOf(executionId: string | null) {
 	return sql<
@@ -752,5 +755,153 @@ describe("WeCom long-connection inbound media (#3227)", {
 		const output = logged.join("\n");
 		expect(output).not.toContain(SENTINEL_URL);
 		expect(output).not.toContain(aesKey);
+	});
+});
+
+// #3374：先图后问合并为一个 Turn；受理被拒或部分失败的附件交给文件对账清理，不留下孤儿附件
+// （工程 Spec §14.2.4）。真实 PostgreSQL、File Authority 与受理事务；企微收发仍由 #3230 验收。
+describe("WeCom attachment merge and orphan cleanup (#3374)", {
+	timeout: 60_000,
+}, () => {
+	const mergeAuthorization: WecomAuthorizationPortV1 = {
+		async authorize(scope, ...rest) {
+			const allowed = await authorization.authorize(scope, ...rest);
+			if (allowed.outcome !== "allowed") return allowed;
+			return {
+				...allowed,
+				authority: {
+					...allowed.authority,
+					actor: { ...allowed.authority.actor, attachmentMergeWindow: true },
+				},
+			};
+		},
+	};
+	let merging: ReturnType<typeof createWecomChannelV1>;
+	beforeAll(() => {
+		merging = createWecomChannelV1({
+			authorization: mergeAuthorization,
+			store,
+			media: resolver,
+		});
+	});
+	async function receiveMerged(message: WecomMessageV1) {
+		const result = await receive(message, merging);
+		if (result.outcome !== "accepted" && result.outcome !== "replayed")
+			throw new Error(`Expected a receipt, got ${result.outcome}`);
+		return result.receipt;
+	}
+	const orphans = () =>
+		sql<{ file_id: string; status: string }[]>`
+			select file_id, record->>'status' as status from platform.files
+			where record->>'kind'='attachment' and record->>'status'='available'
+				and record->>'messageId' is null`;
+	const turnInput = async (executionId: string | null) => {
+		// 与认领读取同一事实：同一 Execution 下的消息按受理顺序，附件绑定到所属 Message
+		// （输入组合由 Store 的 readInitialTurnInput 测试覆盖）。
+		const messages = await sql<{ message_id: string; text: string }[]>`
+			select message_id, text from platform.conversation_messages
+			where execution_id=${executionId} order by created_at, message_id`;
+		const files = await sql<{ message_id: string; media_type: string }[]>`
+			select record->>'messageId' as message_id,
+				record->'descriptor'->>'mediaType' as media_type
+			from platform.files where record->>'executionId'=${executionId}
+				and record->>'kind'='attachment' and record->>'status'='available'`;
+		return { messages, files };
+	};
+
+	it("AC-1: an image followed by a question becomes one Turn that reads the image", async () => {
+		const sender = {
+			...base,
+			senderId: "merge_sender",
+			peerId: "merge_sender",
+		};
+		const image = await receiveMerged({
+			...sender,
+			eventId: "merge-image",
+			media: [{ kind: "image", name: null, download: serve(png) }],
+		});
+		const question = await receiveMerged({
+			...sender,
+			eventId: "merge-question",
+			text: "图里是什么？",
+		});
+		expect(question).toMatchObject({
+			status: "accepted",
+			executionId: image.executionId,
+		});
+		const { messages, files } = await turnInput(image.executionId);
+		expect(messages.map((row) => row.text)).toEqual(["", "图里是什么？"]);
+		expect(files).toEqual([
+			{ message_id: messages[0]?.message_id, media_type: "image/png" },
+		]);
+		// 文字消息结束窗口，Turn 立即可认领。
+		expect(
+			await sql`select available_at <= clock_timestamp() as claimable from platform.outbox_items where id=${`conversation:turn:${image.executionId}`}`,
+		).toEqual([{ claimable: true }]);
+		// 附件消息的回复以“已合并”说明结束；最终答案在文字消息的回复中。
+		const sent: Parameters<WecomSendPortV1["send"]>[0][] = [];
+		const delivery = createWecomDeliveryV1({
+			store,
+			authorization,
+			answerReferences: parseWecomAnswerReferencesV1,
+			sender: {
+				async send(input) {
+					sent.push(input);
+					return "sent";
+				},
+			},
+		});
+		while (await delivery.dispatch());
+		expect(sent.map((input) => input.text)).toContain(
+			"已与下一条消息合并处理，回复见下一条",
+		);
+		await completeWecomExecutionFixture(sql, image.executionId);
+		while (await delivery.dispatch());
+	});
+
+	it("AC-3: a busy image hands its written attachment to reconciliation", async () => {
+		const sender = { ...base, senderId: "busy_sender", peerId: "busy_sender" };
+		const question = await receiveMerged({
+			...sender,
+			eventId: "busy-question",
+			text: "先问一个问题",
+		});
+		const image = await receiveMerged({
+			...sender,
+			eventId: "busy-image",
+			// #3376：回复有效期不足以排队时按繁忙处理（排队期限不晚于有效期前 30 秒）。
+			replyExpiresAt: new Date(Date.now() + 20_000).toISOString(),
+			media: [{ kind: "image", name: null, download: serve(png) }],
+		});
+		expect(image).toMatchObject({ status: "busy", executionId: null });
+		// 已写入的附件没有绑定任何 Message，转为 expired 由对账在宽限期后删除对象。
+		const written = await sql<{ status: string; message_id: string | null }[]>`
+			select record->>'status' as status, record->>'messageId' as message_id
+			from platform.files where conversation_id=${image.conversationId}
+				and record->>'kind'='attachment' and record->>'executionId' is null`;
+		expect(written).toEqual([{ status: "expired", message_id: null }]);
+		expect(await orphans()).toEqual([]);
+		await completeWecomExecutionFixture(sql, question.executionId);
+	});
+
+	it("AC-3: a later media failure releases the attachments already written", async () => {
+		const failing = serve(png);
+		served.set(failing.url, () => new Response("error", { status: 500 }));
+		const rejected = await receiveMerged({
+			...base,
+			senderId: "partial_sender",
+			peerId: "partial_sender",
+			eventId: "partial-mixed",
+			media: [
+				{ kind: "image", name: null, download: serve(png) },
+				{ kind: "image", name: null, download: failing },
+			],
+		});
+		expect(rejected).toMatchObject({ status: "media_rejected" });
+		expect(await orphans()).toEqual([]);
+		expect(
+			await sql`select record->>'status' as status from platform.files
+				where record->>'actorId'='partial_sender' and record->>'kind'='attachment'`,
+		).toEqual([{ status: "expired" }]);
 	});
 });

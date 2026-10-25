@@ -2026,6 +2026,7 @@ for (const viewport of [
 					status: "available",
 					publicOrigin: "https://connection.example.test",
 					mcpPath: "/mcp",
+					webPath: "/connection/connections",
 					configFingerprint: "a".repeat(64),
 				}),
 			}),
@@ -2825,6 +2826,99 @@ test("background Agent updates keep focus where the user put it while the histor
 	await expectCleanPage(page, errors);
 	expect(fixture.unexpected).toEqual([]);
 });
+
+// #3418 N14-05（F14-4）：Agent「更新中」时对话页每 2 秒轮询；一次轮询失败（503、网络中断）之后继续按原节奏
+// 轮询，挂起时横幅、草稿与焦点不变，服务端转为就绪后不需要回到标签页，横幅收起、可以发送，草稿与焦点保留。
+for (const failure of ["503", "network"] as const)
+	test(`an updating Agent keeps polling after a failed poll on the conversation page: ${failure} (#3418 N14-05)`, async ({
+		page,
+	}, info) => {
+		test.setTimeout(60_000);
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		const fixture = await routingFixture(page);
+		await readyConversation(page, fixture.conversationId);
+		const agent = await mutableAgent(page, fixture, {
+			serviceAvailability: "updating",
+		});
+		let reads = 0;
+		let releaseHeld: (() => void) | undefined;
+		const held = new Promise<void>((resolve) => {
+			releaseHeld = resolve;
+		});
+		await page.route(
+			(url) => url.pathname === `/api/v2/agents/${fixture.agentId}`,
+			async (route) => {
+				if (route.request().method() !== "GET") return route.fallback();
+				reads += 1;
+				// 第 2 次读取（第一次轮询）失败；服务端随即完成更新。
+				if (reads === 2) {
+					agent.update({ serviceAvailability: "ready" });
+					return failure === "network"
+						? route.abort("internetdisconnected")
+						: route.fulfill({
+								status: 503,
+								json: {
+									schemaVersion: 1,
+									code: "DEPENDENCY_UNAVAILABLE",
+									message: "Controlled poll failure",
+									retryable: true,
+									traceId: "trace-conversation-poll",
+								},
+							});
+				}
+				// 失败后的下一次轮询先挂起。
+				if (reads === 3) await held;
+				return route.fallback().catch(() => undefined);
+			},
+		);
+		await page.goto(canonical(fixture.agentId, fixture.conversationId));
+		await page.evaluate(() => {
+			for (const target of [window, document])
+				target.addEventListener("visibilitychange", () => {
+					const probe = window as unknown as { __visibility?: number };
+					probe.__visibility = (probe.__visibility ?? 0) + 1;
+				});
+		});
+		const banner = page.getByText(
+			"可以查看历史，草稿仍可编辑；更新完成后才能发送。",
+			{ exact: true },
+		);
+		await expect(banner).toBeVisible();
+		const composer = page.getByLabel("消息", { exact: true });
+		const send = page.getByRole("button", { name: "发送", exact: true });
+		await composer.click();
+		await page.keyboard.type("受控草稿");
+		await expect(send).toBeDisabled();
+		await expect.poll(() => reads, { timeout: 6000 }).toBe(3);
+		// 失败后继续轮询：下一次读取已发出（挂起中），横幅、草稿与焦点不变，没有失败提示。
+		await expect(banner).toBeVisible();
+		await expect(composer).toHaveValue("受控草稿");
+		await expectFocusHeld(composer, [50, 300], "轮询失败后挂起");
+		await expect(page.locator("#main-content").getByRole("alert")).toHaveCount(
+			0,
+		);
+		releaseHeld?.();
+		await expect(banner).toHaveCount(0);
+		await expect(send).toBeEnabled();
+		await expect(composer).toHaveValue("受控草稿");
+		await expectFocusHeld(composer, [50, 300, 1000], "轮询读到就绪");
+		await page.keyboard.type("，继续");
+		await expect(composer).toHaveValue("受控草稿，继续");
+		// 就绪后不再轮询；全程没有回到标签页。
+		const settled = reads;
+		await page.waitForTimeout(2500);
+		expect(reads).toBe(settled);
+		expect(
+			await page.evaluate(
+				() =>
+					(window as unknown as { __visibility?: number }).__visibility ?? 0,
+			),
+		).toBe(0);
+		await expectNoDuplicateControls(page, `对话页（轮询 ${failure}，#3418）`);
+		await expectCleanPage(page, errors);
+		expect(fixture.unexpected).toEqual([]);
+	});
 
 // #3388 N13-03：?view=history 下按「刷新 Agent 状态」（读取挂起，按钮保持可聚焦），浏览器后退只改了查询串、
 // 仍是同一个对话页：读到可用、横幅卸载后焦点到 h1，仍不可用时留在按钮上，都不落到 body。两视口一致。

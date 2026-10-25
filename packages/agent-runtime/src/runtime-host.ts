@@ -106,6 +106,7 @@ import {
 	validateRuntimeBusinessBindingV5,
 	validateRuntimeEventAccessV4,
 	validateRuntimePrivateRelayKeyFieldV5,
+	validateRuntimePrivateRelayKeyFieldV6,
 	validateRuntimeRestoreExecutionKeyBindingV5,
 	validateRuntimeRestoreExecutionKeyPrivateFieldV5,
 	WorkloadReadinessRequestV1Schema,
@@ -128,9 +129,12 @@ import type {
 import {
 	type NativeSessionUnavailableDiagnostic,
 	RuntimeHostError,
+	RuntimeTurnNotSubmittedError,
+	type RuntimeTurnNotSubmittedReason,
 } from "./errors.js";
 import {
 	type FileRuntimeStore,
+	isRuntimeTurnNotSubmittedResult,
 	requestDigest,
 	type StoredOperation,
 	type StoredSession,
@@ -451,7 +455,8 @@ function operationResponse(
 		(result.code === "RUNTIME_MODEL_SELECTION_UNSUPPORTED" ||
 			// submit V1 的结果枚举不扩展：会话阻塞拒绝对 V1 调用方保持失败关闭。
 			result.code === "RUNTIME_SESSION_BLOCKED" ||
-			result.code === "RUNTIME_FILE_INPUT_REJECTED")
+			result.code === "RUNTIME_FILE_INPUT_REJECTED" ||
+			result.code === "RUNTIME_TURN_NOT_SUBMITTED")
 	) {
 		driverInvalid();
 	}
@@ -639,9 +644,15 @@ async function callDriverWithUncertainty<T>(work: () => Promise<T>) {
 
 const driverFileInputRejected = Symbol("driverFileInputRejected");
 
+/** #3373：Driver 在原生提交点之前声明本次 Turn 未提交，携带固定阶段。 */
+class DriverTurnNotSubmitted {
+	constructor(readonly reason: RuntimeTurnNotSubmittedReason) {}
+}
+
 /**
  * #3314：`execute` 额外识别 Driver 声明的“附件读取在原生副作用前被平台明确拒绝”。
  * 只有 Driver 在物化点主动转换的错误才算；FileBridge 的原始错误从别处逃逸时仍不可判定。
+ * #3373：同样只识别 Driver 在原生提交点之前主动声明的未提交错误。
  */
 async function callDriverExecute<T>(work: () => Promise<T>) {
 	try {
@@ -652,6 +663,11 @@ async function callDriverExecute<T>(work: () => Promise<T>) {
 			error.driverFailureKind === "file_input_rejected"
 		)
 			return driverFileInputRejected;
+		if (
+			error instanceof RuntimeTurnNotSubmittedError &&
+			error.driverFailureKind === "not_submitted"
+		)
+			return new DriverTurnNotSubmitted(error.reason);
 		throwSessionRecoveryFailure(error);
 		if (isUncertainDriverFailure(error)) return driverUncertain;
 		driverInvalid();
@@ -664,6 +680,16 @@ function fileInputRejected() {
 		code: "RUNTIME_FILE_INPUT_REJECTED" as const,
 		message: "Runtime file input was rejected" as const,
 		retryable: false as const,
+	};
+}
+
+function turnNotSubmitted(reason: RuntimeTurnNotSubmittedReason) {
+	return {
+		outcome: "rejected" as const,
+		code: "RUNTIME_TURN_NOT_SUBMITTED" as const,
+		message: "Runtime turn was not submitted" as const,
+		reason,
+		retryable: true as const,
 	};
 }
 
@@ -726,7 +752,9 @@ function parseDriverRecord(
 		parsed.data.kind !== operation.command.kind ||
 		parsed.data.operationId !== operation.operationId ||
 		(expectedNativeSessionRef !== undefined &&
-			parsed.data.nativeSessionRef !== expectedNativeSessionRef)
+			parsed.data.nativeSessionRef !== expectedNativeSessionRef) ||
+		// #3373：未提交只能由 Host 在核实 Driver 没有记录后写入，Driver 记录不能携带它。
+		isRuntimeTurnNotSubmittedResult(parsed.data.result)
 	)
 		driverInvalid();
 	return parsed.data;
@@ -1396,6 +1424,15 @@ export class RuntimeHost {
 			runtimeAuthorizationDenied();
 		const request = accepted.request;
 		const claims = accepted.claims;
+		try {
+			validateRuntimePrivateRelayKeyFieldV6(parsed.privateKeyField, {
+				request,
+				grantId: claims.grantId,
+				requestDigest: claims.requestDigest,
+			});
+		} catch {
+			runtimeAuthorizationDenied();
+		}
 		if (
 			claims.schemaVersion !== 6 ||
 			claims.purpose !== "business" ||
@@ -3288,7 +3325,17 @@ export class RuntimeHost {
 				this.options.driver.execute(operation.command, executionContext),
 			);
 			if (executed === driverFileInputRejected)
-				return this.resolveFileInputRejection(hostSessionRef, operation);
+				return this.resolveUnsubmittedTurn(
+					hostSessionRef,
+					operation,
+					fileInputRejected(),
+				);
+			if (executed instanceof DriverTurnNotSubmitted)
+				return this.resolveUnsubmittedTurn(
+					hostSessionRef,
+					operation,
+					turnNotSubmitted(executed.reason),
+				);
 			if (executed === driverUncertain) {
 				if (isInterruption(operation)) {
 					return unknownOperationResponse(hostSessionRef, operation);
@@ -3334,14 +3381,18 @@ export class RuntimeHost {
 	}
 
 	/**
-	 * #3314：Driver 声明附件读取在任何原生副作用之前被平台明确拒绝。Host 先按同一操作只读
-	 * 核实 Driver 没有该操作的记录，再把不可重试的 rejected 与该操作持久化，重放直接返回原
-	 * 结果。只有 submit V2 及以上的结果枚举包含该成员；其他操作、或 Driver 已有记录、查询
-	 * 不确定时都无法排除副作用，仍按原有的可重试失败处理，不推断为失败。
+	 * #3314：Driver 声明附件读取在任何原生副作用之前被平台明确拒绝；#3373：Driver 声明本次 Turn
+	 * 在原生提交点之前未提交。Host 先按同一操作只读核实 Driver 没有该操作的记录，再把结果与该
+	 * 操作持久化，相同 fence 的重放直接返回原结果。只有 submit V2 及以上的结果枚举包含这两个
+	 * 成员；其他操作、或 Driver 已有记录、查询不确定时都无法排除副作用，仍按原有的可重试失败
+	 * 处理，不推断为失败或未提交。
 	 */
-	private async resolveFileInputRejection(
+	private async resolveUnsubmittedTurn(
 		hostSessionRef: string,
 		operation: StoredOperation,
+		result:
+			| ReturnType<typeof fileInputRejected>
+			| ReturnType<typeof turnNotSubmitted>,
 	): Promise<RuntimeOperationResponse> {
 		if (
 			operation.kind !== "submit-turn" ||
@@ -3361,7 +3412,6 @@ export class RuntimeHost {
 		)
 			driverInvalid();
 		await this.options.afterDriverResult?.(operation.operationId);
-		const result = fileInputRejected();
 		await this.options.store.resolveOperation(
 			hostSessionRef,
 			operation.operationId,

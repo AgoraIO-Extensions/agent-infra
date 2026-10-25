@@ -44,16 +44,37 @@ export interface RecentPersonalConversationRecordV1 {
 	>[0];
 }
 
+/** At most this many omitted Agents are named on one page (#3379). */
+export const recentPersonalUnavailableAgentsMaximumV1 = 100;
+
+/**
+ * An Agent within the current user's grants whose Web channel eligibility the
+ * Store cannot confirm. Its rows are omitted rather than failing the page; the
+ * management state lets Core re-check the grant before naming the Agent.
+ */
+export interface RecentPersonalConversationUnavailableAgentV1 {
+	readonly agent: AgentManagementStateV1;
+}
+
+export interface RecentPersonalConversationsReadV1 {
+	/** Confirmed-eligible rows only, keyset-ordered before the global limit. */
+	readonly records: readonly RecentPersonalConversationRecordV1[];
+	/** Unconfirmed Agents with the user's Web rows after the requested position. */
+	readonly unavailableAgents: readonly RecentPersonalConversationUnavailableAgentV1[];
+}
+
 export interface RecentPersonalConversationsQueryPortV1 {
 	/** Current grants and channel eligibility must precede the global limit. */
 	readRecentPersonalConversations(
 		query: RecentPersonalConversationsQueryV1,
-	): Promise<readonly RecentPersonalConversationRecordV1[]>;
+	): Promise<RecentPersonalConversationsReadV1>;
 }
 
 export interface RecentPersonalConversationsPageV1 {
 	readonly items: readonly RecentPersonalConversationProjectionV1[];
 	readonly nextCursor: string | null;
+	/** Sorted, unique; empty when every Agent's eligibility is confirmed. */
+	readonly unavailableAgentIds: readonly string[];
 }
 
 export interface RecentPersonalConversationsUseCaseV1 {
@@ -179,14 +200,29 @@ export function createRecentPersonalConversationsUseCaseV1(options: {
 				const user = parseCurrentTaskUserV1(resolved);
 				if (user.userId !== actorId) return fail("unavailable");
 				if (user.accountStatus !== "active") return fail("revoked");
-				const records = await options.query.readRecentPersonalConversations({
+				const read = await options.query.readRecentPersonalConversations({
 					user,
 					limit: limit + 1,
 					...(after === undefined ? {} : { after }),
 				});
-				if (!Array.isArray(records) || records.length > limit + 1)
+				const records = read?.records;
+				const unavailableAgents = read?.unavailableAgents;
+				if (
+					!Array.isArray(records) ||
+					records.length > limit + 1 ||
+					!Array.isArray(unavailableAgents) ||
+					unavailableAgents.length > recentPersonalUnavailableAgentsMaximumV1
+				)
 					return fail("unavailable");
+				const actor = {
+					schemaVersion: 1 as const,
+					userId: user.userId,
+					accountStatus: user.accountStatus,
+					organizationIds: user.organizationIds,
+					isAdministrator: false,
+				};
 				const ids = new Set<string>();
+				const listedAgentIds = new Set<string>();
 				for (const record of records) {
 					const agent = parseAgentManagementPortState(record.agent);
 					if (
@@ -204,21 +240,27 @@ export function createRecentPersonalConversationsUseCaseV1(options: {
 						!(record.projection.updatedAt instanceof Date) ||
 						record.projection.updatedAt.getTime() !==
 							new Date(record.position.updatedAt).getTime() ||
-						!isAgentAccessAllowedV1(
-							agent,
-							{
-								schemaVersion: 1,
-								userId: user.userId,
-								accountStatus: user.accountStatus,
-								organizationIds: user.organizationIds,
-								isAdministrator: false,
-							},
-							"use",
-						) ||
+						!isAgentAccessAllowedV1(agent, actor, "use") ||
 						!isPlatformConversationChannelCurrentV1(record.channel)
 					)
 						return fail("unavailable");
 					ids.add(record.projection.conversationId);
+					listedAgentIds.add(agent.agentId);
+				}
+				// An omitted Agent is named only under the same current grant as listed
+				// rows, and never alongside its own confirmed rows from the same read.
+				const unavailableAgentIds = new Set<string>();
+				for (const unavailable of unavailableAgents) {
+					const agent = parseAgentManagementPortState(unavailable.agent);
+					if (
+						!text(agent.agentId) ||
+						!historyStatuses.has(agent.status) ||
+						unavailableAgentIds.has(agent.agentId) ||
+						listedAgentIds.has(agent.agentId) ||
+						!isAgentAccessAllowedV1(agent, actor, "use")
+					)
+						return fail("unavailable");
+					unavailableAgentIds.add(agent.agentId);
 				}
 				const items = records.slice(0, limit).map(({ projection }) => ({
 					conversationId: projection.conversationId,
@@ -237,6 +279,7 @@ export function createRecentPersonalConversationsUseCaseV1(options: {
 						records.length > limit && last
 							? encodeCursor(actorId, last.position)
 							: null,
+					unavailableAgentIds: [...unavailableAgentIds].sort(),
 				};
 			} catch (error) {
 				if (error instanceof RecentPersonalConversationsError) throw error;

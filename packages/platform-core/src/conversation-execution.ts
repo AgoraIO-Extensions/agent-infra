@@ -43,6 +43,7 @@ import type {
 	ConversationWithdrawResultV1,
 	ConversationWithdrawStateV1,
 } from "./conversation-execution-types.js";
+import { conversationAttachmentMergeMaxCountV1 } from "./conversation-execution-types.js";
 import {
 	digest,
 	invalidInput,
@@ -107,6 +108,8 @@ export {
 	type CreateConversationCommandV1,
 	type CreateConversationDecisionV1,
 	type CreateConversationWritePlanV1,
+	conversationAttachmentMergeMaxCountV1,
+	conversationAttachmentMergeWindowMsV1,
 } from "./conversation-execution-types.js";
 export * from "./conversation-queue.js";
 
@@ -439,11 +442,22 @@ export function createConversationExecutionUseCaseV1(
 					: {}),
 			});
 			try {
-				return normalizeCommandDecision(
+				// #3373：受理决定时记下占用 Conversation 的受理不明 Execution，受理后唤醒其恢复。
+				let unknownOccupant:
+					| { readonly conversationId: string; readonly executionId: string }
+					| undefined;
+				const decision = normalizeCommandDecision(
 					await dependencies.transaction.executeMessage(
 						{ command, authority, requestDigest },
 						(stateInput) => {
 							const state = parseState(stateInput);
+							unknownOccupant =
+								state.activeExecution?.status === "unknown"
+									? {
+											conversationId: state.activeExecution.conversationId,
+											executionId: state.activeExecution.executionId,
+										}
+									: undefined;
 							const conversation = state.conversation;
 							if (
 								!conversation ||
@@ -482,8 +496,23 @@ export function createConversationExecutionUseCaseV1(
 							};
 							const queue = state.queue ?? { waitingCount: 0 };
 							const active = state.activeExecution;
-							// 判定顺序见工程 Spec §12.5：补充指令 → 排队 → 繁忙；不默认打断当前回复。
-							if (active || queue.waitingCount > 0) {
+							const attachmentCount = command.attachments?.length ?? 0;
+							// #3374：合并窗口内尚未认领的 Execution 接收同一发送者的消息，组成同一个初始 Turn。
+							// 文字消息结束窗口；只含附件的消息重新计时，并入后附件不超过上限。
+							const merge =
+								active !== undefined &&
+								authority.attachmentMergeWindow === true &&
+								active.attachmentMerge !== undefined &&
+								// 已有排队消息时不再并入，避免越过先到的消息。
+								queue.waitingCount === 0 &&
+								active.status === "submitted" &&
+								!active.stopPending &&
+								active.actorId === authority.actorId &&
+								(attachmentCount === 0 ||
+									active.attachmentMerge.attachmentCount + attachmentCount <=
+										conversationAttachmentMergeMaxCountV1);
+							// 判定顺序见工程 Spec §12.5：合并窗口 → 补充指令 → 排队 → 繁忙；不默认打断当前回复。
+							if (!merge && (active || queue.waitingCount > 0)) {
 								if (active && active.actorId !== authority.actorId)
 									return busy(queue.waitingCount);
 								// 补充指令只给已被 Runtime 接受、仍在运行的回复；有排队时不越过先到的消息。
@@ -527,7 +556,13 @@ export function createConversationExecutionUseCaseV1(
 								};
 								return {
 									schemaVersion: 1,
-									kind: "supplement",
+									kind: merge ? "merge" : "supplement",
+									...(merge
+										? {
+												attachmentWindow:
+													command.text === "" ? "extend" : "close",
+											}
+										: {}),
 									conversation: {
 										...selectedConversation,
 										lastConversationCursor:
@@ -547,7 +582,10 @@ export function createConversationExecutionUseCaseV1(
 										createdAt: occurredAt,
 									},
 									outboxIntent: {
-										operation: "conversation.turn.supplement.v1",
+										// 合并不新建 outbox：意图描述被并入的原 Turn。
+										operation: merge
+											? "conversation.turn.submit.v1"
+											: "conversation.turn.supplement.v1",
 										conversationId: conversation.conversationId,
 										executionId: active.executionId,
 										messageId,
@@ -565,7 +603,9 @@ export function createConversationExecutionUseCaseV1(
 										occurredAt,
 									},
 									auditEvent: {
-										action: "conversation.message.supplemented",
+										action: merge
+											? "conversation.message.accepted"
+											: "conversation.message.supplemented",
 										actorId: authority.actorId,
 										agentId: authority.agentId,
 										conversationId: conversation.conversationId,
@@ -612,6 +652,12 @@ export function createConversationExecutionUseCaseV1(
 							return {
 								schemaVersion: 1,
 								kind: "initial",
+								// #3374：只含附件的企微消息打开合并窗口，等待随后的文字组成同一个 Turn。
+								...(authority.attachmentMergeWindow === true &&
+								command.text === "" &&
+								(command.attachments?.length ?? 0) > 0
+									? { attachmentWindow: "open" as const }
+									: {}),
 								conversation: {
 									...selectedConversation,
 									status: "active",
@@ -690,6 +736,18 @@ export function createConversationExecutionUseCaseV1(
 					),
 					parseMessageCommandResult,
 				);
+				// Waking is a best-effort nudge after the admission committed; the
+				// Worker still recovers on its own schedule if it fails. A denied
+				// command leaves no side effect, including this nudge.
+				if (
+					unknownOccupant &&
+					decision.outcome !== "denied" &&
+					dependencies.transaction.wakeUnknownExecutionRecovery
+				)
+					await dependencies.transaction
+						.wakeUnknownExecutionRecovery(unknownOccupant)
+						.catch(() => undefined);
+				return decision;
 			} catch {
 				return unavailable();
 			}

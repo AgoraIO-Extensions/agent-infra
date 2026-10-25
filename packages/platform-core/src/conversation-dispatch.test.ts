@@ -12,6 +12,7 @@ import { FakeConversationRuntimeHostV1 } from "./fake-conversation-runtime-host.
 import {
 	type ConversationDispatchAuthorizationPortV1,
 	type ConversationDispatchClaimV1,
+	ConversationDispatchError,
 	type ConversationDispatchStateTransitionV1,
 	type ConversationDispatchStorePortV1,
 	type ConversationDispatchUseCaseV1,
@@ -331,6 +332,7 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		| "sandbox_wait"
 		| "stop_changed" = "available";
 	released = 0;
+	releaseDelays: number[] = [];
 
 	constructor(seed = claim()) {
 		this.current = structuredClone(seed);
@@ -496,6 +498,7 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		claim: ConversationDispatchClaimV1;
 		retryDelayMs: number;
 		errorCode: string;
+		hostSessionRef?: string;
 	}) {
 		const recoveringUnacceptedTurn =
 			input.claim.executionStatus === "unknown" &&
@@ -510,15 +513,29 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 			this.current.executionStatus !== "unknown" ||
 			(!recoveringUnacceptedTurn &&
 				input.claim.executionStatus !== "submitted" &&
-				input.claim.executionStatus !== "waiting")
+				input.claim.executionStatus !== "waiting") ||
+			(input.hostSessionRef !== undefined &&
+				this.current.hostSessionRef !== null &&
+				this.current.hostSessionRef !== input.hostSessionRef)
 		)
 			return false;
 		this.released++;
+		this.releaseDelays.push(input.retryDelayMs);
 		this.outboxStatus = "retry_scheduled";
 		this.errorCode = input.errorCode;
 		this.current = {
 			...this.current,
 			executionStatus: restoredStatus,
+			hostSessionRef:
+				this.current.hostSessionRef ?? input.hostSessionRef ?? null,
+			...(input.errorCode === "RUNTIME_TURN_NOT_SUBMITTED"
+				? {
+						notSubmittedResubmissions: {
+							count: (this.current.notSubmittedResubmissions?.count ?? 0) + 1,
+							elapsedMs: this.current.notSubmittedResubmissions?.elapsedMs ?? 0,
+						},
+					}
+				: {}),
 		};
 		return true;
 	}
@@ -646,6 +663,8 @@ function setup(
 		runtimeHost?: ConversationRuntimeHostPortV1;
 		authorization?: ConversationDispatchAuthorizationPortV1;
 		maxRecoveryAttempts?: number;
+		recoveryBudgetMs?: number;
+		retryDelayMs?: number;
 	} = {},
 ) {
 	const store = options.store ?? new MemoryDispatchStore();
@@ -661,10 +680,13 @@ function setup(
 		},
 		{
 			leaseDurationMs: 3_000,
-			retryDelayMs: 0,
+			retryDelayMs: options.retryDelayMs ?? 0,
 			...(options.maxRecoveryAttempts === undefined
 				? {}
 				: { maxRecoveryAttempts: options.maxRecoveryAttempts }),
+			...(options.recoveryBudgetMs === undefined
+				? {}
+				: { recoveryBudgetMs: options.recoveryBudgetMs }),
 		},
 	);
 	return { store, runtimeHost, events, useCase };
@@ -1001,7 +1023,7 @@ describe("native capability with terminal execution (#2919)", () => {
 });
 
 describe("bounded unknown recovery", () => {
-	it("closes a denied unknown stop after the durable attempt limit", async () => {
+	it("closes a denied unknown stop after the wall-clock recovery budget", async () => {
 		const store = new MemoryDispatchStore(
 			claim({
 				operation: "conversation.turn.stop.v1",
@@ -1012,11 +1034,11 @@ describe("bounded unknown recovery", () => {
 				executionStatus: "unknown",
 				stopPending: true,
 				attemptCount: 3,
+				recoveryElapsedMs: 300_000,
 			}),
 		);
 		const h = setup({
 			store,
-			maxRecoveryAttempts: 3,
 			authorization: deniedAuthorization(),
 		});
 
@@ -1029,9 +1051,13 @@ describe("bounded unknown recovery", () => {
 		expect(store.current.executionStatus).toBe("failed");
 	});
 
-	it("fails an occupied unknown execution after the durable attempt limit", async () => {
+	it("fails an occupied unknown execution after the wall-clock recovery budget", async () => {
 		const store = new MemoryDispatchStore(
-			claim({ executionStatus: "unknown", attemptCount: 3 }),
+			claim({
+				executionStatus: "unknown",
+				attemptCount: 3,
+				recoveryElapsedMs: 300_000,
+			}),
 		);
 		const recoverOriginalStatus = vi.fn(async () => {
 			throw new Error("Runtime recovery is unavailable");
@@ -1039,11 +1065,7 @@ describe("bounded unknown recovery", () => {
 		const runtimeHost =
 			new FakeConversationRuntimeHostV1() as unknown as ConversationRuntimeHostPortV1;
 		runtimeHost.recoverOriginalStatus = recoverOriginalStatus;
-		const h = setup({
-			store,
-			maxRecoveryAttempts: 3,
-			runtimeHost,
-		});
+		const h = setup({ store, runtimeHost });
 
 		await expect(dispatch(h.useCase)).resolves.toEqual({
 			schemaVersion: 1,
@@ -1055,7 +1077,64 @@ describe("bounded unknown recovery", () => {
 		expect(store.current.executionStatus).toBe("failed");
 	});
 
-	it("closes terminal metadata recovery after the same limit", async () => {
+	// #3373：预算按 Execution 进入 unknown 以来的墙钟时间计，不按认领次数计。
+	it.each([
+		["below the default budget after many claims", 299_999, undefined],
+		["below a configured budget", 59_999, 60_000],
+	])(
+		"keeps querying the original Turn %s",
+		async (_name, recoveryElapsedMs, recoveryBudgetMs) => {
+			const store = new MemoryDispatchStore(
+				claim({
+					executionStatus: "unknown",
+					attemptCount: 10_000,
+					recoveryElapsedMs,
+				}),
+			);
+			const recoverOriginalStatus = vi.fn(async () => {
+				throw new Error("Runtime recovery is unavailable");
+			});
+			const runtimeHost =
+				new FakeConversationRuntimeHostV1() as unknown as ConversationRuntimeHostPortV1;
+			runtimeHost.recoverOriginalStatus = recoverOriginalStatus;
+			const h = setup({
+				store,
+				runtimeHost,
+				...(recoveryBudgetMs === undefined ? {} : { recoveryBudgetMs }),
+			});
+
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "retry",
+			});
+			expect(recoverOriginalStatus).toHaveBeenCalledOnce();
+			expect(store.errorCode).not.toBe("RUNTIME_RECOVERY_TIMEOUT");
+			expect(store.current.executionStatus).toBe("unknown");
+		},
+	);
+
+	it("applies a configured wall-clock budget", async () => {
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "unknown", recoveryElapsedMs: 60_000 }),
+		);
+		const h = setup({ store, recoveryBudgetMs: 60_000 });
+
+		await expect(dispatch(h.useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "rejected",
+		});
+		expect(store.errorCode).toBe("RUNTIME_RECOVERY_TIMEOUT");
+	});
+
+	it.each([0, 86_400_001, 1.5])(
+		"rejects an invalid recovery budget %s",
+		(recoveryBudgetMs) => {
+			expect(() => setup({ recoveryBudgetMs })).toThrow(
+				ConversationDispatchError,
+			);
+		},
+	);
+
+	it("closes terminal metadata recovery after the durable attempt limit", async () => {
 		const store = new MemoryDispatchStore(
 			claim({
 				executionStatus: "completed",
@@ -1286,6 +1365,7 @@ describe("Conversation Worker dispatch", () => {
 				hostSessionRef: "host-session",
 				executionStatus: "unknown",
 				attemptCount: 3,
+				recoveryElapsedMs: 300_000,
 				nativeCapability: {
 					agentId: "agent-1",
 					actorId: "actor-1",
@@ -1309,7 +1389,7 @@ describe("Conversation Worker dispatch", () => {
 			recoverStatus: vi.fn(),
 			async *events() {},
 		} as unknown as ConversationRuntimeHostPortV1;
-		const h = setup({ store, runtimeHost, maxRecoveryAttempts: 3 });
+		const h = setup({ store, runtimeHost });
 
 		await expect(dispatch(h.useCase, store.current.itemId)).resolves.toEqual({
 			schemaVersion: 1,
@@ -3904,5 +3984,225 @@ describe("attachment-only claim input (#3227)", () => {
 		expect(() =>
 			parseClaim(claim({ input: { text: "", attachments: [] } })),
 		).toThrow(expect.objectContaining({ code: "unavailable" }));
+	});
+});
+
+// #3373：Runtime 已核实本次 Turn 在原生提交点之前未提交。Worker 退回投递前状态，以新的
+// 认领（更高 fence、新 Grant）重提同一 Execution；2 分钟内最多 3 次，之后按阶段明确失败。
+describe("Runtime-reported unsubmitted Turns (#3373)", () => {
+	const notSubmitted = (
+		reason: "file_input_unavailable" | "session_preparation_failed",
+	) =>
+		({
+			outcome: "rejected",
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			message: "Runtime turn was not submitted",
+			reason,
+			retryable: true,
+		}) as const;
+	function hostReturning(
+		results: Record<string, unknown>[],
+		schemaVersion: 1 | 2 = 2,
+	) {
+		const dispatchRuntime = vi.fn(
+			async (request: ConversationRuntimeDispatchRequestV1) => ({
+				schemaVersion,
+				hostSessionRef: "host-session-1",
+				operationId: request.executionId,
+				result: results.shift() ?? { outcome: "accepted", status: "running" },
+			}),
+		);
+		const runtimeHost = {
+			dispatch: dispatchRuntime,
+			recoverOriginalStatus: vi.fn(),
+			recoverStatus: vi.fn(),
+			async *events() {},
+		} as unknown as ConversationRuntimeHostPortV1;
+		return { runtimeHost, dispatchRuntime };
+	}
+
+	it("accepts only the exact V2 submit result", () => {
+		const response = (result: Record<string, unknown>, schemaVersion = 2) => ({
+			schemaVersion,
+			hostSessionRef: "host-session-1",
+			operationId: "execution-1",
+			result,
+		});
+		for (const reason of [
+			"file_input_unavailable",
+			"session_preparation_failed",
+		] as const)
+			expect(
+				parseRuntimeResponse(response(notSubmitted(reason)), claim()),
+			).toMatchObject({ result: notSubmitted(reason) });
+		for (const drifted of [
+			{ ...notSubmitted("file_input_unavailable"), retryable: false },
+			{ ...notSubmitted("file_input_unavailable"), reason: "timeout" },
+			{ ...notSubmitted("file_input_unavailable"), message: "not sent" },
+			{ ...notSubmitted("file_input_unavailable"), outcome: "unknown" },
+			{
+				...notSubmitted("file_input_unavailable"),
+				code: "RUNTIME_SESSION_BLOCKED",
+			},
+		])
+			expect(() => parseRuntimeResponse(response(drifted), claim())).toThrow();
+		// submit V1 与原生能力的结果枚举不能表示未提交。
+		expect(() =>
+			parseRuntimeResponse(
+				response(notSubmitted("file_input_unavailable"), 1),
+				claim({
+					modelConfigurationRevision: null,
+					modelOptionId: null,
+					reasoningLevel: null,
+				}),
+			),
+		).toThrow();
+	});
+
+	it("returns the Execution to its pre-delivery state and resubmits it under a new claim", async () => {
+		const store = new MemoryDispatchStore();
+		const { runtimeHost, dispatchRuntime } = hostReturning([
+			notSubmitted("file_input_unavailable"),
+		]);
+		const h = setup({ store, runtimeHost, retryDelayMs: 1_000 });
+		const finish = vi.spyOn(store, "finish");
+
+		await expect(dispatch(h.useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "retry",
+			retryScheduled: true,
+		});
+		// 没有进入 unknown：退回投递前的状态，并记录 Host 返回的 Session Ref。
+		expect(store.current.executionStatus).toBe("submitted");
+		expect(store.current.hostSessionRef).toBe("host-session-1");
+		expect(store.errorCode).toBe("RUNTIME_TURN_NOT_SUBMITTED");
+		expect(store.releaseDelays).toEqual([1_000]);
+		expect(finish).not.toHaveBeenCalled();
+
+		await dispatch(h.useCase);
+		expect(dispatchRuntime).toHaveBeenCalledTimes(2);
+		const [first, second] = dispatchRuntime.mock.calls.map(
+			([request]) => request,
+		);
+		expect(second?.executionId).toBe(first?.executionId);
+		expect(second?.deliveryFence).toBeGreaterThan(first?.deliveryFence ?? 0);
+		expect(store.current.executionStatus).not.toBe("submitted");
+	});
+
+	it("backs off each resubmission within the window", async () => {
+		const store = new MemoryDispatchStore(
+			claim({ notSubmittedResubmissions: { count: 2, elapsedMs: 30_000 } }),
+		);
+		const { runtimeHost } = hostReturning([
+			notSubmitted("session_preparation_failed"),
+		]);
+		const h = setup({ store, runtimeHost, retryDelayMs: 1_000 });
+
+		await expect(dispatch(h.useCase)).resolves.toMatchObject({
+			outcome: "retry",
+		});
+		expect(store.releaseDelays).toEqual([9_000]);
+		expect(store.current.notSubmittedResubmissions?.count).toBe(3);
+	});
+
+	it("keeps the resubmission backoff within the Store delay bound", async () => {
+		// 部署允许的最大重试间隔乘以退避系数后仍须是 Store 接受的延迟，否则退回投递前状态失败。
+		const store = new MemoryDispatchStore(
+			claim({ notSubmittedResubmissions: { count: 2, elapsedMs: 30_000 } }),
+		);
+		const { runtimeHost } = hostReturning([
+			notSubmitted("file_input_unavailable"),
+		]);
+		const h = setup({ store, runtimeHost, retryDelayMs: 86_400_000 });
+
+		await expect(dispatch(h.useCase)).resolves.toMatchObject({
+			outcome: "retry",
+			retryScheduled: true,
+		});
+		expect(store.releaseDelays).toEqual([86_400_000]);
+	});
+
+	it.each([
+		[
+			"three resubmissions are spent",
+			{ count: 3, elapsedMs: 20_000 },
+			"session_preparation_failed",
+			"RUNTIME_SESSION_PREPARATION_FAILED",
+		],
+		[
+			"the two-minute window has passed",
+			{ count: 1, elapsedMs: 120_000 },
+			"file_input_unavailable",
+			"RUNTIME_FILE_INPUT_UNAVAILABLE",
+		],
+	] as const)(
+		"fails with a classified code once %s",
+		async (_name, notSubmittedResubmissions, reason, code) => {
+			const store = new MemoryDispatchStore(
+				claim({ notSubmittedResubmissions }),
+			);
+			const { runtimeHost } = hostReturning([notSubmitted(reason)]);
+			const h = setup({ store, runtimeHost });
+			const finish = vi.spyOn(store, "finish");
+
+			await expect(dispatch(h.useCase)).resolves.toEqual({
+				schemaVersion: 1,
+				outcome: "rejected",
+			});
+			expect(store.released).toBe(0);
+			expect(store.errorCode).toBe(code);
+			expect(store.outboxStatus).toBe("failed");
+			expect(store.current.executionStatus).toBe("failed");
+			expect(finish).toHaveBeenCalledExactlyOnceWith(
+				expect.objectContaining({
+					status: "failed",
+					errorCode: code,
+					transition: {
+						executionStatus: "failed",
+						conversationStatus: "ready",
+					},
+				}),
+			);
+		},
+	);
+
+	it("keeps an uncertain acceptance unknown instead of resubmitting", async () => {
+		const store = new MemoryDispatchStore();
+		const { runtimeHost } = hostReturning([
+			{
+				outcome: "unknown",
+				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+				message: "Runtime command acceptance could not be confirmed",
+			},
+		]);
+		const h = setup({ store, runtimeHost });
+
+		await expect(dispatch(h.useCase)).resolves.toMatchObject({
+			outcome: "unknown",
+		});
+		expect(store.released).toBe(0);
+		expect(store.errorCode).toBe("RUNTIME_ACCEPTANCE_UNKNOWN");
+		expect(store.current.executionStatus).toBe("unknown");
+	});
+
+	it("does not resubmit a not-submitted result from a V1 response", async () => {
+		const store = new MemoryDispatchStore(
+			claim({
+				modelConfigurationRevision: null,
+				modelOptionId: null,
+				reasoningLevel: null,
+			}),
+		);
+		const { runtimeHost } = hostReturning(
+			[notSubmitted("file_input_unavailable")],
+			1,
+		);
+		const h = setup({ store, runtimeHost });
+
+		await expect(dispatch(h.useCase)).resolves.toMatchObject({
+			outcome: "retry",
+		});
+		expect(store.released).toBe(0);
+		expect(store.current.executionStatus).toBe("unknown");
 	});
 });

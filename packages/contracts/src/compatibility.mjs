@@ -25,6 +25,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/json-schema/runtime.v2.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime.v3.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime.v5.schema.json",
+	"packages/contracts/artifacts/json-schema/runtime.v6.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime-readiness.v1.schema.json",
 	"packages/contracts/artifacts/openapi/common.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/browser-capability.v1.openapi.json",
@@ -36,6 +37,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/openapi/runtime-host.v2.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v3.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v5.openapi.json",
+	"packages/contracts/artifacts/openapi/runtime-host.v6.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-readiness.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/standard-template-release.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/standard-template-release.v2.openapi.json",
@@ -1288,6 +1290,23 @@ const runtimeFileInputRejectedResult = runtimeRejectedResult(
 	"RUNTIME_FILE_INPUT_REJECTED",
 	"Runtime file input was rejected",
 );
+// #3373 以同一规则新增可重试的 RUNTIME_TURN_NOT_SUBMITTED：Driver 在原生提交点之前声明本次
+// Turn 未提交。成员逐字段固定，阶段只允许两个固定值，retryable 固定为 true。
+const runtimeTurnNotSubmittedResult = {
+	additionalProperties: false,
+	properties: {
+		code: { const: "RUNTIME_TURN_NOT_SUBMITTED", type: "string" },
+		message: { const: "Runtime turn was not submitted", type: "string" },
+		outcome: { const: "rejected", type: "string" },
+		reason: {
+			enum: ["file_input_unavailable", "session_preparation_failed"],
+			type: "string",
+		},
+		retryable: { const: true, type: "boolean" },
+	},
+	required: ["outcome", "code", "message", "reason", "retryable"],
+	type: "object",
+};
 function runtimeRejectedResultUnions(schemas) {
 	return [
 		schemas?.RuntimeOperationResultV2?.anyOf,
@@ -1310,6 +1329,13 @@ function isRuntimeFileInputRejectedOpenApiAddition(previous, current) {
 		previous,
 		current,
 		runtimeFileInputRejectedResult,
+	);
+}
+function isRuntimeTurnNotSubmittedOpenApiAddition(previous, current) {
+	return isRuntimeRejectedResultOpenApiAddition(
+		previous,
+		current,
+		runtimeTurnNotSubmittedResult,
 	);
 }
 function isRuntimeRejectedResultOpenApiAddition(previous, current, member) {
@@ -3816,6 +3842,38 @@ function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #3379：最近对话按 Agent 降级，只允许 200 响应追加可选的 `unavailableAgentIds`
+// （渠道资格无法确认、被省略的 Agent）。删除该字段后须与基线逐字节一致。
+const recentUnavailableAgentIdsProperty = {
+	items: { minLength: 1, type: "string" },
+	maxItems: 100,
+	minItems: 1,
+	type: "array",
+};
+function recentPersonalConversationPageSchema(document) {
+	return document.paths?.["/api/v2/me/conversations/recent"]?.get?.responses?.[
+		"200"
+	]?.content?.["application/json"]?.schema;
+}
+function isRecentUnavailableAgentsOpenApiAddition(previous, current) {
+	const before = recentPersonalConversationPageSchema(previous);
+	const after = recentPersonalConversationPageSchema(current);
+	if (
+		!before?.properties ||
+		Object.hasOwn(before.properties, "unavailableAgentIds") ||
+		!sameValue(
+			after?.properties?.unavailableAgentIds,
+			recentUnavailableAgentIdsProperty,
+		) ||
+		after.required?.includes("unavailableAgentIds")
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete recentPersonalConversationPageSchema(normalized).properties
+		.unavailableAgentIds;
+	return sameValue(previous, normalized);
+}
+
 // #440 adds bounded receipt management and Owner-scoped bot setup.
 // Keep both hashes: the first is the historical #440 shape before #1935's QR
 // branch, while the second is the exact current route set after that addition.
@@ -4702,14 +4760,53 @@ function isConnectionCapabilityOpenApiAddition(previous, current) {
 		path: current.paths?.[path],
 		schema: current.components?.schemas?.[name],
 	};
+	const additionForHash = structuredClone(addition);
+	const available = additionForHash.schema?.oneOf?.find(
+		(option) => option.properties?.status?.const === "available",
+	);
+	delete available?.properties?.webPath;
+	if (Array.isArray(available?.required))
+		available.required = available.required.filter(
+			(field) => field !== "webPath",
+		);
 	if (
-		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		createHash("sha256")
+			.update(JSON.stringify(additionForHash))
+			.digest("hex") !==
 		"e1e46d38ed8749051748bbb54abfdd6674051907aa237dd38eae022ff63e9326"
 	)
 		return false;
 	const normalized = structuredClone(current);
 	delete normalized.paths[path];
 	delete normalized.components.schemas[name];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #851 keeps the existing MCP capability contract compatible while adding the
+// independently approved browser-console path used by Platform Web.
+function isConnectionCapabilityWebPathAddition(previous, current) {
+	const name = "ConnectionCapabilityProjectionV1";
+	const before = previous.components?.schemas?.[name];
+	const after = current.components?.schemas?.[name];
+	const available = (schema) =>
+		schema?.oneOf?.find(
+			(option) => option.properties?.status?.const === "available",
+		);
+	const beforeAvailable = available(before);
+	const afterAvailable = available(after);
+	if (
+		before === undefined ||
+		after === undefined ||
+		beforeAvailable?.properties?.webPath !== undefined ||
+		afterAvailable?.properties?.webPath === undefined
+	)
+		return false;
+	const normalized = structuredClone(current);
+	const normalizedAvailable = available(normalized.components.schemas[name]);
+	delete normalizedAvailable.properties.webPath;
+	normalizedAvailable.required = normalizedAvailable.required.filter(
+		(name) => name !== "webPath",
+	);
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
@@ -5957,6 +6054,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) &&
 			!isRuntimeSessionBlockedOpenApiAddition(previous, current) &&
 			!isRuntimeFileInputRejectedOpenApiAddition(previous, current) &&
+			!isRuntimeTurnNotSubmittedOpenApiAddition(previous, current) &&
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeSkillHostReadOpenApiAddition(previous, current) &&
 			!isRuntimeSkillReadGrantCommandOpenApiAddition(previous, current) &&
@@ -6002,6 +6100,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isConversationSessionAvailabilityOpenApiAddition(previous, current) &&
 			!isConversationSessionUpdatingOpenApiAddition(previous, current) &&
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&
+			!isRecentUnavailableAgentsOpenApiAddition(previous, current) &&
 			!isSkillHubReadOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationOpenApiAddition(previous, current) &&
 			!isSkillHubPublicationOpenApiAddition(previous, current) &&
@@ -6033,6 +6132,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isScopedAuditDisplayNameV2OpenApiAddition(previous, current) &&
 			!isSkillHubAuditActionOpenApiAddition(previous, current) &&
 			!isConnectionInstallationOpenApiAddition(previous, current) &&
+			!isConnectionCapabilityWebPathAddition(previous, current) &&
 			!isPlatformUserDisableOpenApiAddition(previous, current) &&
 			!isConnectionInstallationAuthorizationUrlAddition(previous, current) &&
 			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&
