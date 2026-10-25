@@ -726,3 +726,46 @@ it("rejects invalid Core input without persistence or sensitive observations", a
 		runtimeCursor: undefined,
 	});
 });
+
+it("records one bounded batch observation without body or cursor (#3378)", async () => {
+	const fixture = transactionFixture();
+	const records: OperationalEvent[] = [];
+	const events = createObservedConversationEvents({
+		transaction: fixture.transaction,
+		telemetry: { record: (event: OperationalEvent) => records.push(event) },
+	});
+	const batch = [1, 2, 3].map((index) => ({
+		...command,
+		adapterEventKey: `batch-${index}`,
+		runtimeCursor: `PRIVATE_CURSOR_SENTINEL_${index}`,
+	}));
+	const decisions = await events.persistBatch?.(batch);
+	expect(decisions?.map((decision) => decision.outcome)).toEqual([
+		"accepted",
+		"accepted",
+		"accepted",
+	]);
+	expect(fixture.snapshot().events.map((event) => event.sequence)).toEqual([
+		1, 2, 3,
+	]);
+	expect(records).toEqual([
+		expect.objectContaining({
+			stage: "result_persist",
+			outcome: "completed",
+			operationRef: "drain.persist_batch",
+			conversationId: command.conversationId,
+			executionId: command.executionId,
+		}),
+	]);
+	expect(JSON.stringify(records)).not.toMatch(/PRIVATE_(BODY|CURSOR)_SENTINEL/);
+	fixture.control.fail = true;
+	await expect(
+		events.persistBatch?.([{ ...command, adapterEventKey: "batch-failed" }]),
+	).rejects.toBeInstanceOf(ConversationEventError);
+	expect(records.at(-1)).toMatchObject({
+		stage: "result_persist",
+		outcome: "failed",
+		code: "PERSISTENCE_UNAVAILABLE",
+		operationRef: "drain.persist_batch",
+	});
+});

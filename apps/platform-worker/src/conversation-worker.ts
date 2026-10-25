@@ -675,6 +675,8 @@ export function createPlatformConversationWorkerV2(
 		"not_started";
 	let afterItemId: string | undefined;
 	let rescan = false;
+	// #3378：最近一次发现是否因槽位已满推迟了工作。
+	let deferredForCapacity = false;
 	const wakeups =
 		options.commitWakeups === false
 			? undefined
@@ -1120,11 +1122,10 @@ export function createPlatformConversationWorkerV2(
 			});
 		let launched = 0;
 		let lastBusinessItemId: string | undefined;
-		// Keep one business slot available while Sandbox reconciliation is busy.
-		// Sandbox retries can be continuously due, so filling every dispatch slot
-		// with them would make a newly submitted Turn wait indefinitely. A worker
-		// configured with one slot keeps its existing behavior because there is no
-		// spare slot to reserve.
+		deferredForCapacity = false;
+		// #3378：Sandbox 修复使用独立预算，不占业务投递槽位。Sandbox 重试可能持续到期，
+		// 共享槽位时新提交的 Turn 要等它们让出。单槽位 Worker 没有可拆分的容量，保持共享。
+		const sharedSlot = maximum === 1;
 		const maximumConcurrentSandboxes = Math.max(1, maximum - 1);
 		const orderedItems = [
 			...items.filter(
@@ -1151,17 +1152,21 @@ export function createPlatformConversationWorkerV2(
 				item.operation === "conversation.turn.stop.v1" ||
 				item.operation === "conversation.browser.handoff.v1";
 			const sandbox = item.operation === "conversation.sandbox.reconcile.v1";
-			const count = [...running.values()].filter(
-				(entry) => entry.control === control,
+			const entries = [...running.values()];
+			const sandboxes = entries.filter((entry) => entry.sandbox).length;
+			const business = entries.filter(
+				(entry) => !entry.control && !entry.sandbox,
 			).length;
-			if (
-				sandbox &&
-				[...running.values()].filter((entry) => entry.sandbox).length >=
-					maximumConcurrentSandboxes
-			)
-				continue;
+			const controls = entries.filter((entry) => entry.control).length;
 			// A busy streaming Turn cannot consume the capacity needed to stop it.
-			if (count >= (control ? 2 : maximum)) {
+			const full = control
+				? controls >= 2
+				: sandbox
+					? sandboxes >= maximumConcurrentSandboxes ||
+						(sharedSlot && business > 0)
+					: business + (sharedSlot ? sandboxes : 0) >= maximum;
+			if (full) {
+				deferredForCapacity = true;
 				continue;
 			}
 			const promise = dispatchItem(item)
@@ -1171,7 +1176,14 @@ export function createPlatformConversationWorkerV2(
 						log("CONVERSATION_DISPATCH_UNAVAILABLE");
 					},
 				)
-				.finally(() => running.delete(item.itemId));
+				.finally(() => {
+					running.delete(item.itemId);
+					// #3378：因容量推迟的工作在槽位释放时立即重新发现，不等下一次轮询。
+					if (deferredForCapacity) {
+						deferredForCapacity = false;
+						wake();
+					}
+				});
 			running.set(item.itemId, { control, sandbox, promise });
 			if (!control) lastBusinessItemId = item.itemId;
 			launched += 1;

@@ -46,10 +46,12 @@ import {
 	type ConversationRuntimeTurnNotSubmittedReasonV1,
 } from "./conversation-dispatch-types.js";
 import { exactObject, unavailable } from "./conversation-dispatch-values.js";
-import type {
-	ConversationEventCommandV1,
-	ConversationEventDecisionV1,
-	ConversationEventUseCaseV1,
+import {
+	type ConversationEventCommandV1,
+	type ConversationEventDecisionV1,
+	type ConversationEventUseCaseV1,
+	conversationEventBatchLimitV1,
+	isBatchableConversationEventV1,
 } from "./conversation-events.js";
 import { isConversationGenerationBarrierConfirmedV1 } from "./conversation-generation-isolation.js";
 
@@ -94,6 +96,9 @@ export {
 /** Far below the Host bound of 256 delivered but unacknowledged cursors. */
 const acknowledgementBatchSize = 32;
 
+/** #3378：缓冲的增量在没有新事件时最多等待 50 ms 再提交。 */
+const bufferedEventIdleMs = 50;
+
 /**
  * #3373：Runtime 报告未提交后最多重提 3 次，且只在首次重提起 2 分钟内重提（Runtime HLD §7.3）。
  */
@@ -124,6 +129,14 @@ export function createConversationDispatchUseCaseV1(
 					>;
 				},
 			): ReturnType<ConversationEventUseCaseV1["persist"]>;
+			/** #3378：未提供时逐个持久化。 */
+			persistBatch?(
+				commands: readonly (ConversationEventCommandV1 & {
+					readonly dispatchLease: NonNullable<
+						ConversationEventCommandV1["dispatchLease"]
+					>;
+				})[],
+			): Promise<readonly ConversationEventDecisionV1[]>;
 		};
 	},
 	options: {
@@ -434,88 +447,198 @@ export function createConversationDispatchUseCaseV1(
 					{ ...eventRequest, confirmedCursor: claim.runtimeCursor },
 					eventHeartbeat.signal,
 				);
-			for await (const eventInput of dependencies.runtimeHost.events(
-				eventRequest,
-				eventHeartbeat.signal,
-			)) {
-				const runtimeEvent = parseRuntimeEvent(eventInput, claim);
-				const event = normalizedEvent(runtimeEvent);
-				const transition = transitionFromEvent(event);
-				const eventFinalStatus = terminalStatus(event);
-				if (
-					renewalRefused &&
-					!terminalCommitPossible &&
-					!eventFinalStatus &&
-					(await confirmFinished()) === "interrupted"
-				)
-					return retryInterruptedDrain();
-				const connectionMetadata =
-					event.type === "execution.operation" &&
-					event.fact.kind === "tool" &&
-					event.fact.connection !== undefined &&
-					["completed", "failed", "unknown"].includes(event.fact.phase);
-				if (
-					(terminalEventSeen && !connectionMetadata) ||
-					(finalStatus && eventFinalStatus && eventFinalStatus !== finalStatus)
-				) {
-					const finished = await dependencies.store.finish({
-						claim,
-						status: "failed",
-						transition: {},
-						errorCode: "RUNTIME_EVENT_CONFLICT",
-					});
-					return finished
-						? { schemaVersion: 1, outcome: "rejected" }
-						: { schemaVersion: 1, outcome: "stale" };
-				}
-				if (eventFinalStatus) terminalCommitPossible = true;
-				let persisted: ConversationEventDecisionV1;
+			const dispatchLease = {
+				schemaVersion: 1 as const,
+				itemId: claim.itemId,
+				leaseOwner: claim.leaseOwner,
+				deliveryFence: claim.deliveryFence,
+			};
+			const eventCommand = (
+				runtimeEvent: ReturnType<typeof parseRuntimeEvent>,
+				event: ReturnType<typeof normalizedEvent>,
+				transition: ReturnType<typeof transitionFromEvent>,
+				eventFinalStatus: ReturnType<typeof terminalStatus>,
+			) => ({
+				schemaVersion: 1 as const,
+				conversationId: claim.conversationId,
+				executionId: claim.executionId,
+				sessionGeneration: claim.sessionGeneration,
+				deliveryFence: claim.executionDeliveryFence,
+				adapterEventKey: runtimeEvent.adapterEventKey,
+				runtimeCursor: runtimeEvent.cursor,
+				occurredAt: runtimeEvent.occurredAt,
+				event,
+				// The transaction checks the original persisted attempt and outcome.
+				...(terminalEventSeen ? { operationMetadataOnly: true as const } : {}),
+				...(transition &&
+				(!(responseFinalStatus ?? confirmedFinalStatus) ||
+					terminalEventSeen ||
+					eventFinalStatus)
+					? { transition }
+					: {}),
+				dispatchLease,
+			});
+			// #3378：连续的正文与思考增量在一个事务内持久化，避免每个事件一次往返。批次在
+			// 遇到其他事件、达到上限、空闲 50 ms 或流结束时提交；提交后才确认游标。
+			const batching = dependencies.events.persistBatch !== undefined;
+			const buffered: ReturnType<typeof eventCommand>[] = [];
+			const flushBuffered = async (): Promise<"stale" | undefined> => {
+				if (buffered.length === 0) return undefined;
+				const commands = buffered.splice(0);
+				let decisions: readonly ConversationEventDecisionV1[];
 				try {
-					persisted = await dependencies.events.persist({
-						schemaVersion: 1,
-						conversationId: claim.conversationId,
-						executionId: claim.executionId,
-						sessionGeneration: claim.sessionGeneration,
-						deliveryFence: claim.executionDeliveryFence,
-						adapterEventKey: runtimeEvent.adapterEventKey,
-						runtimeCursor: runtimeEvent.cursor,
-						occurredAt: runtimeEvent.occurredAt,
-						event,
-						// The transaction checks the original persisted attempt and outcome.
-						...(terminalEventSeen ? { operationMetadataOnly: true } : {}),
-						...(transition &&
-						(!(responseFinalStatus ?? confirmedFinalStatus) ||
-							terminalEventSeen ||
-							eventFinalStatus)
-							? { transition }
-							: {}),
-						dispatchLease: {
-							schemaVersion: 1,
-							itemId: claim.itemId,
-							leaseOwner: claim.leaseOwner,
-							deliveryFence: claim.deliveryFence,
-						},
-					});
+					const result = await dependencies.events.persistBatch?.(commands);
+					if (!result) throw new Error("unavailable");
+					decisions = result;
 				} catch {
 					throw new ConversationRuntimeHostError(
 						"EVENT_PERSISTENCE_UNAVAILABLE",
 						true,
 					);
 				}
-				if (persisted.outcome === "stale") {
-					return { schemaVersion: 1, outcome: "stale" };
-				}
-				if (eventFinalStatus) {
-					terminalEventSeen = true;
-					finalStatus = eventFinalStatus;
-				}
-				unacknowledgedCursor = runtimeEvent.cursor;
-				unacknowledgedEvents++;
 				if (
-					acknowledgeNow(event) ||
-					unacknowledgedEvents >= acknowledgementBatchSize
+					decisions.length !== commands.length ||
+					decisions.some((decision) => decision.outcome === "stale")
 				)
+					return "stale";
+				unacknowledgedCursor = commands.at(-1)?.runtimeCursor;
+				unacknowledgedEvents += commands.length;
+				if (unacknowledgedEvents >= acknowledgementBatchSize)
 					await acknowledgeCommitted();
+				return undefined;
+			};
+			const iterator = dependencies.runtimeHost
+				.events(eventRequest, eventHeartbeat.signal)
+				[Symbol.asyncIterator]();
+			let pending: Promise<IteratorResult<unknown>> | undefined;
+			try {
+				while (true) {
+					pending ??= iterator.next();
+					let step: IteratorResult<unknown> | "idle";
+					try {
+						step =
+							buffered.length === 0
+								? await pending
+								: await new Promise<IteratorResult<unknown> | "idle">(
+										(resolve, reject) => {
+											const timer = setTimeout(
+												() => resolve("idle"),
+												bufferedEventIdleMs,
+											);
+											pending?.then(
+												(value) => {
+													clearTimeout(timer);
+													resolve(value);
+												},
+												(error: unknown) => {
+													clearTimeout(timer);
+													reject(error);
+												},
+											);
+										},
+									);
+					} catch (error) {
+						// 流中断前已读到的增量照常提交，恢复时从已提交游标继续。
+						pending = undefined;
+						if (buffered.length > 0)
+							await flushBuffered().catch(() => undefined);
+						throw error;
+					}
+					if (step === "idle") {
+						if ((await flushBuffered()) === "stale")
+							return { schemaVersion: 1, outcome: "stale" };
+						continue;
+					}
+					pending = undefined;
+					if (step.done) break;
+					const runtimeEvent = parseRuntimeEvent(step.value, claim);
+					const event = normalizedEvent(runtimeEvent);
+					const transition = transitionFromEvent(event);
+					const eventFinalStatus = terminalStatus(event);
+					if (batching && !(renewalRefused && !terminalCommitPossible)) {
+						const command = eventCommand(
+							runtimeEvent,
+							event,
+							transition,
+							eventFinalStatus,
+						);
+						if (isBatchableConversationEventV1(command)) {
+							buffered.push(command);
+							if (
+								buffered.length >= conversationEventBatchLimitV1 &&
+								(await flushBuffered()) === "stale"
+							)
+								return { schemaVersion: 1, outcome: "stale" };
+							continue;
+						}
+					}
+					// 其他事件改变执行状态或操作历史，先提交此前的增量以保持顺序。
+					if ((await flushBuffered()) === "stale")
+						return { schemaVersion: 1, outcome: "stale" };
+					if (
+						renewalRefused &&
+						!terminalCommitPossible &&
+						!eventFinalStatus &&
+						(await confirmFinished()) === "interrupted"
+					)
+						return retryInterruptedDrain();
+					const connectionMetadata =
+						event.type === "execution.operation" &&
+						event.fact.kind === "tool" &&
+						event.fact.connection !== undefined &&
+						["completed", "failed", "unknown"].includes(event.fact.phase);
+					if (
+						(terminalEventSeen && !connectionMetadata) ||
+						(finalStatus &&
+							eventFinalStatus &&
+							eventFinalStatus !== finalStatus)
+					) {
+						const finished = await dependencies.store.finish({
+							claim,
+							status: "failed",
+							transition: {},
+							errorCode: "RUNTIME_EVENT_CONFLICT",
+						});
+						return finished
+							? { schemaVersion: 1, outcome: "rejected" }
+							: { schemaVersion: 1, outcome: "stale" };
+					}
+					if (eventFinalStatus) terminalCommitPossible = true;
+					let persisted: ConversationEventDecisionV1;
+					try {
+						persisted = await dependencies.events.persist(
+							eventCommand(runtimeEvent, event, transition, eventFinalStatus),
+						);
+					} catch {
+						throw new ConversationRuntimeHostError(
+							"EVENT_PERSISTENCE_UNAVAILABLE",
+							true,
+						);
+					}
+					if (persisted.outcome === "stale") {
+						return { schemaVersion: 1, outcome: "stale" };
+					}
+					if (eventFinalStatus) {
+						terminalEventSeen = true;
+						finalStatus = eventFinalStatus;
+					}
+					unacknowledgedCursor = runtimeEvent.cursor;
+					unacknowledgedEvents++;
+					if (
+						acknowledgeNow(event) ||
+						unacknowledgedEvents >= acknowledgementBatchSize
+					)
+						await acknowledgeCommitted();
+				}
+				if ((await flushBuffered()) === "stale")
+					return { schemaVersion: 1, outcome: "stale" };
+			} finally {
+				// 提前结束时关闭 Host 事件流。仍有未完成的读取时，生成器的 return 会排在它之后，
+				// 不等待它；随后停止心跳会中止该读取。
+				if (pending) {
+					pending.catch(() => undefined);
+					void Promise.resolve(iterator.return?.()).catch(() => undefined);
+				} else await iterator.return?.()?.catch?.(() => undefined);
 			}
 			await acknowledgeCommitted();
 		} catch (error) {

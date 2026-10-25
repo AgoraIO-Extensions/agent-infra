@@ -5,7 +5,9 @@ import {
 	type ConversationEventStateV1,
 	type ConversationEventTransactionPortV1,
 	type ConversationEventUseCaseV1,
+	conversationEventBatchLimitV1,
 	createConversationEventUseCaseV1,
+	isBatchableConversationEventV1,
 	parseConversationPersistedEventPayloadV1,
 	publicTaskStatusEventV1,
 } from "./conversation-events.js";
@@ -437,6 +439,178 @@ describe("Conversation event ingestion", () => {
 		const events = createConversationEventUseCaseV1({ transaction });
 
 		await expect(events.persist(event)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+	});
+});
+
+describe("batched delta persistence (#3378)", () => {
+	const delta = (index: number) => ({
+		...event,
+		adapterEventKey: `adapter_event_${index}`,
+		runtimeCursor: `runtime_cursor_${index}`,
+		event: { type: "text.delta" as const, text: `part ${index}` },
+	});
+
+	it("classifies only plain deltas as batchable", () => {
+		expect(isBatchableConversationEventV1(delta(1))).toBe(true);
+		expect(
+			isBatchableConversationEventV1({
+				...delta(1),
+				event: { type: "reasoning.delta", kind: "raw", text: "thought" },
+			}),
+		).toBe(true);
+		expect(
+			isBatchableConversationEventV1({
+				...delta(1),
+				transition: {
+					executionStatus: "processing",
+					conversationStatus: "active",
+				},
+			}),
+		).toBe(false);
+		expect(
+			isBatchableConversationEventV1({
+				...delta(1),
+				operationMetadataOnly: true,
+			}),
+		).toBe(false);
+		expect(
+			isBatchableConversationEventV1({
+				...delta(1),
+				event: { type: "execution.status", status: "processing" },
+			} as never),
+		).toBe(false);
+	});
+
+	it("decides each event from the counters left by the previous one", async () => {
+		const seen: number[] = [];
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async () => {
+				throw new Error("single persistence is not used");
+			},
+			persistEvents: async (requests, decide) => {
+				let sequence = 0;
+				return requests.map((_request, index) => {
+					const state = activeState();
+					const plan = decide(index, {
+						...state,
+						conversation: state.conversation && {
+							...state.conversation,
+							lastConversationCursor: sequence,
+						},
+						execution: state.execution && {
+							...state.execution,
+							lastSequence: sequence,
+						},
+					});
+					if (Object.hasOwn(plan, "outcome"))
+						throw new Error("Expected an accepted event plan");
+					const accepted = plan as { event: { sequence: number } };
+					sequence = accepted.event.sequence;
+					seen.push(sequence);
+					return { outcome: "accepted", event: accepted.event } as never;
+				});
+			},
+		};
+		let id = 0;
+		const events = createConversationEventUseCaseV1(
+			{ transaction },
+			{ newId: () => `event_${++id}` },
+		);
+		const decisions = await events.persistBatch?.([
+			delta(1),
+			delta(2),
+			delta(3),
+		]);
+		expect(seen).toEqual([1, 2, 3]);
+		expect(decisions?.map((decision) => decision.outcome)).toEqual([
+			"accepted",
+			"accepted",
+			"accepted",
+		]);
+	});
+
+	it("rejects a batch that mixes Executions, non-deltas or exceeds 64 events", async () => {
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async () => {
+				throw new Error("not used");
+			},
+			persistEvents: async () => {
+				throw new Error("not used");
+			},
+		};
+		const events = createConversationEventUseCaseV1({ transaction });
+		await expect(events.persistBatch?.([])).rejects.toMatchObject({
+			code: "invalid_input",
+		});
+		await expect(
+			events.persistBatch?.([
+				delta(1),
+				{ ...delta(2), executionId: "execution_other" },
+			]),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persistBatch?.([
+				delta(1),
+				{
+					...delta(2),
+					event: { type: "execution.status", status: "processing" },
+				} as never,
+			]),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persistBatch?.(
+				Array.from({ length: conversationEventBatchLimitV1 + 1 }, (_, index) =>
+					delta(index + 1),
+				),
+			),
+		).rejects.toMatchObject({ code: "invalid_input" });
+	});
+
+	it("persists one by one when the transaction has no batch port", async () => {
+		let single = 0;
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async (_request, decide) => {
+				single++;
+				const state = activeState();
+				const plan = decide({
+					...state,
+					conversation: state.conversation && {
+						...state.conversation,
+						lastConversationCursor: single - 1,
+					},
+					execution: state.execution && {
+						...state.execution,
+						lastSequence: single - 1,
+					},
+				});
+				return {
+					outcome: "accepted",
+					event: (plan as { event: unknown }).event,
+				} as never;
+			},
+		};
+		const events = createConversationEventUseCaseV1({ transaction });
+		const decisions = await events.persistBatch?.([delta(1), delta(2)]);
+		expect(single).toBe(2);
+		expect(decisions).toHaveLength(2);
+	});
+
+	it("fails closed when the batch port returns a different number of decisions", async () => {
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async () => {
+				throw new Error("not used");
+			},
+			persistEvents: async (_requests, decide) => {
+				const plan = decide(0, activeState()) as { event: unknown };
+				return [{ outcome: "accepted", event: plan.event }] as never;
+			},
+		};
+		const events = createConversationEventUseCaseV1({ transaction });
+		await expect(
+			events.persistBatch?.([delta(1), delta(2)]),
+		).rejects.toMatchObject({
 			code: "unavailable",
 		});
 	});

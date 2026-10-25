@@ -592,6 +592,25 @@ class MemoryEvents implements Pick<ConversationEventUseCaseV1, "persist"> {
 	}
 }
 
+/** #3378：批量持久化的内存实现，按序逐个写入并记录每批大小。 */
+class BatchedMemoryEvents extends MemoryEvents {
+	readonly batches: number[] = [];
+	failNextBatch = false;
+
+	async persistBatch(
+		commands: readonly Parameters<ConversationEventUseCaseV1["persist"]>[0][],
+	) {
+		this.batches.push(commands.length);
+		if (this.failNextBatch) {
+			this.failNextBatch = false;
+			throw new Error("injected batch persistence failure");
+		}
+		const decisions = [];
+		for (const command of commands) decisions.push(await this.persist(command));
+		return decisions;
+	}
+}
+
 function deniedAuthorization(): ConversationDispatchAuthorizationPortV1 {
 	return {
 		async authorize() {
@@ -665,12 +684,15 @@ function setup(
 		maxRecoveryAttempts?: number;
 		recoveryBudgetMs?: number;
 		retryDelayMs?: number;
+		batched?: true;
 	} = {},
 ) {
 	const store = options.store ?? new MemoryDispatchStore();
 	const runtimeHost =
 		options.runtimeHost ?? new FakeConversationRuntimeHostV1();
-	const events = new MemoryEvents(store);
+	const events = options.batched
+		? new BatchedMemoryEvents(store)
+		: new MemoryEvents(store);
 	const useCase = createConversationDispatchUseCaseV1(
 		{
 			store,
@@ -2367,6 +2389,156 @@ describe("Conversation Worker dispatch", () => {
 				"cursor-5",
 			]);
 			expect(inner.sideEffectCount()).toBe(1);
+		});
+
+		describe("batched delta persistence (#3378)", () => {
+			const batchedEvents = (h: ReturnType<typeof setup>) =>
+				h.events as BatchedMemoryEvents;
+
+			it("persists consecutive deltas in one batch and keeps Runtime order and the single ACK", async () => {
+				const { runtimeHost, acknowledged } = host(async function* () {
+					yield runtimeEvent(1, "running");
+					for (let sequence = 2; sequence <= 9; sequence++)
+						yield text(sequence);
+					yield runtimeEvent(10);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "accepted",
+				});
+				expect(batchedEvents(h).batches).toEqual([8]);
+				expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual(
+					Array.from({ length: 10 }, (_, index) => `cursor-${index + 1}`),
+				);
+				expect(acknowledged).toEqual(["cursor-10"]);
+			});
+
+			it("commits buffered deltas before a tool fact and acknowledges the fact at once", async () => {
+				const { runtimeHost, acknowledged } = host(async function* () {
+					yield text(1);
+					yield text(2);
+					yield tool(3, "intent");
+					yield runtimeEvent(4);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "accepted",
+				});
+				expect(batchedEvents(h).batches).toEqual([2]);
+				expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual([
+					"cursor-1",
+					"cursor-2",
+					"cursor-3",
+					"cursor-4",
+				]);
+				expect(acknowledged).toEqual(["cursor-3", "cursor-4"]);
+			});
+
+			it("bounds a batch at 64 deltas and the unacknowledged events below the Host bound", async () => {
+				const { runtimeHost, acknowledged } = host(async function* () {
+					for (let sequence = 1; sequence <= 70; sequence++)
+						yield text(sequence);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "retry",
+				});
+				expect(batchedEvents(h).batches).toEqual([64, 6]);
+				expect(h.events.persisted).toHaveLength(70);
+				expect(acknowledged).toEqual(["cursor-64", "cursor-70"]);
+			});
+
+			it("commits buffered deltas after 50 ms without a new event", async () => {
+				let release: () => void = () => undefined;
+				const gate = new Promise<void>((resolve) => {
+					release = resolve;
+				});
+				const { runtimeHost } = host(async function* () {
+					yield runtimeEvent(1, "running");
+					yield text(2);
+					await gate;
+					yield runtimeEvent(3);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				const result = dispatch(h.useCase);
+				await vi.waitFor(
+					() =>
+						expect(h.events.persisted.at(-1)?.runtimeCursor).toBe("cursor-2"),
+					{ timeout: 1_000, interval: 10 },
+				);
+				release();
+				await expect(result).resolves.toMatchObject({ outcome: "accepted" });
+				expect(batchedEvents(h).batches).toEqual([1]);
+			});
+
+			it("returns stale when a batched delta is stale", async () => {
+				const { runtimeHost, acknowledged } = host(async function* () {
+					yield text(1);
+					yield text(2);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				h.events.stale = true;
+				await expect(dispatch(h.useCase)).resolves.toEqual({
+					schemaVersion: 1,
+					outcome: "stale",
+				});
+				expect(acknowledged).toEqual([]);
+			});
+
+			it("never acknowledges past a failed batch and resumes from the committed cursor", async () => {
+				const stream = [
+					runtimeEvent(1, "running"),
+					text(2),
+					text(3),
+					runtimeEvent(4),
+				];
+				const requests: (string | undefined)[] = [];
+				const { inner, runtimeHost, acknowledged } = host(
+					async function* (request) {
+						requests.push(request.afterCursor);
+						const index = request.afterCursor
+							? stream.findIndex(
+									(event) => event.cursor === request.afterCursor,
+								) + 1
+							: 0;
+						yield* stream.slice(index);
+					},
+				);
+				const h = setup({ runtimeHost, batched: true });
+				batchedEvents(h).failNextBatch = true;
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "retry",
+				});
+				expect(acknowledged).toEqual([]);
+				expect(h.store.current.runtimeCursor).toBe("cursor-1");
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "accepted",
+				});
+				expect(requests).toEqual([undefined, "cursor-1"]);
+				expect(acknowledged).toEqual(["cursor-1", "cursor-4"]);
+				expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual([
+					"cursor-1",
+					"cursor-2",
+					"cursor-3",
+					"cursor-4",
+				]);
+				expect(inner.sideEffectCount()).toBe(1);
+			});
+
+			it("commits deltas read before a stream failure", async () => {
+				const { runtimeHost, acknowledged } = host(async function* () {
+					yield runtimeEvent(1, "running");
+					yield text(2);
+					yield text(3);
+					throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "retry",
+				});
+				expect(h.store.current.runtimeCursor).toBe("cursor-3");
+				expect(acknowledged).not.toContain("cursor-3");
+			});
 		});
 	});
 

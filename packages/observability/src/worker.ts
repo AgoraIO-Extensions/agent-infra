@@ -225,5 +225,62 @@ export function createObservedConversationEvents(
 				throw error;
 			}
 		},
+		// #3378：连续 delta 事件批量持久化，整批记一条 drain.persist（不含正文）。
+		async persistBatch(commands) {
+			const began = performance.now();
+			const events = createConversationEventUseCaseV1(
+				{
+					transaction: {
+						persistEvent: (request, decide) =>
+							transaction.persistEvent(request, decide),
+						...(transaction.persistEvents
+							? {
+									persistEvents: (requests, decide) =>
+										transaction.persistEvents?.(requests, decide) ??
+										Promise.reject(new Error("unavailable")),
+								}
+							: {}),
+					},
+				},
+				{ newId },
+			);
+			const first = commands[0];
+			try {
+				const decisions = await (events.persistBatch?.(commands) ??
+					Promise.reject(new Error("unavailable")));
+				const accepted = decisions.find(
+					(decision) => decision.outcome === "accepted",
+				);
+				if (accepted?.outcome === "accepted")
+					record({
+						stage: "result_persist",
+						outcome: "completed",
+						durationMs: performance.now() - began,
+						operationRef: "drain.persist_batch",
+						conversationId: accepted.event.conversationId,
+						executionId: accepted.event.executionId,
+					});
+				return decisions;
+			} catch (error) {
+				if (
+					error instanceof ConversationEventError &&
+					error.code === "unavailable"
+				)
+					record({
+						stage: "result_persist",
+						outcome: "failed",
+						code: "PERSISTENCE_UNAVAILABLE",
+						durationMs: performance.now() - began,
+						operationRef: "drain.persist_batch",
+						...(first
+							? {
+									conversationId: first.conversationId,
+									executionId: first.executionId,
+								}
+							: {}),
+					});
+				throw error;
+			}
+		},
 	};
 }
