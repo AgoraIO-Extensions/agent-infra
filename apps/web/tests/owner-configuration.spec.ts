@@ -1903,6 +1903,93 @@ for (const target of [
 		);
 	});
 
+// #3433（已显示内容后的不可重试失败）：Agent 的 Skill 页读到当前 Agent 版本之后，回到标签页的后台重读可重试地失败
+// （503、网络中断）时绑定与所选版本保留（#3387）；不可重试的失败（401、404、响应无效）与首次读取失败一致，
+// 显示「暂时无法读取当前 Agent 版本」，绑定区收起、不再用旧版本读写绑定，焦点交给 h1、不落到 body。两视口一致。
+test("a retryable background reread of the current Agent Version keeps the Skill bindings (#3433)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const api = await ownerConfigFixture(page, {
+		agentVersion: "agent-version-7",
+	});
+	await page.goto("/agents/agent-pilot-1/skills");
+	const region = main(page);
+	await expect(region.getByText("还未绑定 Skill")).toBeVisible();
+	const version = await pinElement(
+		region.getByLabel("固定版本", { exact: true }),
+		"current-version-keep",
+	);
+	await version.selectOption("workspace-summary-v2");
+	await version.focus();
+	await expectBackgroundRereadKeeps(page, {
+		path: "/api/v2/agents/agent-pilot-1/skills/current-version",
+		focus: version,
+		context: "Agent 的 Skill（当前 Agent 版本）",
+		expectKept: async () => {
+			await expect(version).toHaveValue("workspace-summary-v2");
+			await expect(region.getByText("还未绑定 Skill")).toBeVisible();
+			await expect(region.getByText("暂时无法读取当前 Agent 版本")).toHaveCount(
+				0,
+			);
+		},
+	});
+	expect(api.commands).toEqual([]);
+	await expectCleanPage(page, pageErrors);
+	await noHorizontalOverflow(page);
+});
+
+for (const failure of ["401", "404", "invalid"] as const)
+	test(`a non-retryable background reread of the current Agent Version shows the version read failure: ${failure} (#3433)`, async ({
+		page,
+	}, info) => {
+		await viewport(page, info.project.name === "mobile");
+		const pageErrors = trackPageErrors(page);
+		const api = await ownerConfigFixture(page, {
+			agentVersion: "agent-version-7",
+		});
+		await page.goto("/agents/agent-pilot-1/skills");
+		const region = main(page);
+		await expect(region.getByText("还未绑定 Skill")).toBeVisible();
+		const version = await pinElement(
+			region.getByLabel("固定版本", { exact: true }),
+			"current-version-fatal",
+		);
+		await version.focus();
+		const path = "/api/v2/agents/agent-pilot-1/skills/current-version";
+		await page.route(
+			(url) => url.pathname === path,
+			(route) =>
+				route.request().method() !== "GET"
+					? route.fallback()
+					: failure === "invalid"
+						? route.fulfill({ json: { schemaVersion: 1 } })
+						: route.fulfill(unavailable(failure === "401" ? 401 : 404, false)),
+		);
+		const failed = page.waitForResponse(
+			(response) => new URL(response.url()).pathname === path,
+		);
+		await backgroundReread(page);
+		await failed;
+		await expect(region).toContainText("暂时无法读取当前 Agent 版本");
+		await expect(region.getByText("还未绑定 Skill")).toHaveCount(0);
+		await expect(version).toHaveCount(0);
+		await expectFocusSettled(
+			page.getByRole("heading", { level: 1, name: "Agent 的 Skill" }),
+			`Agent 的 Skill（当前 Agent 版本 ${failure}）`,
+		);
+		const bindingReads = () =>
+			api.reads.filter((read) => read.includes("/versions/")).length;
+		const settled = bindingReads();
+		await backgroundReread(page);
+		await page.waitForTimeout(1000);
+		expect(bindingReads(), "不再用旧版本读取绑定").toBe(settled);
+		expect(api.commands).toEqual([]);
+		await expectCleanPage(page, pageErrors);
+		await noHorizontalOverflow(page);
+	});
+
 test("an Owner lists, binds and unbinds Skill versions under the server's Agent Version (O-02, #2903)", async ({
 	page,
 }) => {
