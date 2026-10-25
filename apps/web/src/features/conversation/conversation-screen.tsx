@@ -105,12 +105,14 @@ function ConversationHeader({
 	);
 }
 
-/** Agent 读取失败可以重试：网络中断与服务失败（5xx）；无权、其余 HTTP 与响应无效不可重试。 */
+/**
+ * Agent 读取失败可以重试：网络中断与服务失败（5xx）；无权、其余 HTTP 与响应无效不可重试。读取函数把
+ * 传输层失败也写成 ConversationReadError，其他未知错误按不可重试处理，轮询随之停止。
+ */
 function retryableAgentRead(error: unknown) {
 	return (
-		!(error instanceof ConversationReadError) ||
-		error.failure.kind === "network" ||
-		error.failure.kind === "service"
+		error instanceof ConversationReadError &&
+		(error.failure.kind === "network" || error.failure.kind === "service")
 	);
 }
 
@@ -274,11 +276,15 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		gcTime: 0,
 		placeholderData: undefined,
 		queryFn: async ({ signal }) => {
+			// 传输层失败（网络中断）统一写成 ConversationReadError，轮询只对已知的可重试失败继续（#3418）。
 			const result = await getAgentV2({
 				path: { agentId },
 				signal,
 				responseStyle: "fields",
 				throwOnError: false,
+			}).catch(() => {
+				signal.throwIfAborted();
+				throw new ConversationReadError({ kind: "network" });
 			});
 			signal.throwIfAborted();
 			if (!result.data || result.response?.status !== 200)
