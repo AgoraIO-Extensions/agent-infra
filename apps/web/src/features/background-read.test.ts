@@ -6,6 +6,7 @@ import {
 	readFailed,
 	retainContent,
 	retainedContentAt,
+	retryablePollFailure,
 	userReadFailed,
 	userReadPending,
 } from "./background-read.js";
@@ -229,6 +230,24 @@ describe("polling keeps going after a retryable failure (#3418 N14-04)", () => {
 		).toBe(false);
 		expect(
 			pollWhileShown({ state: { status: "pending" } }, always, transitioning),
+		).toBe(false);
+	});
+});
+
+describe("hand-written polls classify a failed read (#3433 N15-02, N15-03)", () => {
+	it("continues after a network failure, 408, 429 and 5xx", () => {
+		for (const status of [undefined, 408, 429, 500, 503])
+			expect(retryablePollFailure({ status })).toBe(true);
+		expect(
+			retryablePollFailure({ status: 503, error: { retryable: true } }),
+		).toBe(true);
+	});
+
+	it("stops after other HTTP failures, an explicit non-retryable error and an invalid 2xx response", () => {
+		for (const status of [200, 400, 401, 403, 404, 409, 600])
+			expect(retryablePollFailure({ status })).toBe(false);
+		expect(
+			retryablePollFailure({ status: 503, error: { retryable: false } }),
 		).toBe(false);
 	});
 });

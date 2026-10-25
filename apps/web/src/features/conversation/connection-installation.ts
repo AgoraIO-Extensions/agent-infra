@@ -9,6 +9,7 @@ import type {
 	BeginPlatformConnectionInstallationV1Response,
 	ReadPlatformConnectionInstallationV1Data,
 } from "../../pilot/generated-v2/types.gen.js";
+import { retryablePollFailure } from "../background-read.js";
 
 type BeginHeaders = BeginPlatformConnectionInstallationV1Data["headers"];
 type ReadHeaders = ReadPlatformConnectionInstallationV1Data["headers"];
@@ -60,11 +61,17 @@ export function safeConnectionAuthorizationUrl(
 	}
 }
 
+const invalidResponseMessage = "CONNECTION_INSTALLATION_INVALID_RESPONSE";
+
 function projection(value: unknown): ConnectionInstallationProjectionV1 {
 	const parsed = ConnectionInstallationProjectionV1Schema.safeParse(value);
-	if (!parsed.success)
-		throw new Error("CONNECTION_INSTALLATION_INVALID_RESPONSE");
+	if (!parsed.success) throw new Error(invalidResponseMessage);
 	return parsed.data;
+}
+
+/** 读到 2xx 但投影无效：不可重试（其余抛出的错误是网络中断等，可重试）。 */
+export function invalidInstallationResponse(error: unknown) {
+	return error instanceof Error && error.message === invalidResponseMessage;
 }
 
 function stateFromProjection(
@@ -116,10 +123,14 @@ export async function readConnectionInstallation(options: {
 		headers: connectionRequestHeaders(),
 		path: { authorizationId: options.authorizationId },
 	});
+	// 状态读取是轮询：与其他手写轮询同一失败分类（#3433）。
 	if (result.response?.status !== 200 || !result.data)
 		return {
 			kind: "unavailable",
-			retryable: retryable(result.response?.status),
+			retryable: retryablePollFailure({
+				status: result.response?.status,
+				error: result.error,
+			}),
 		};
 	return stateFromProjection(projection(result.data));
 }

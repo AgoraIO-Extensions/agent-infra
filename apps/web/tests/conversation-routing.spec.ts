@@ -2920,6 +2920,95 @@ for (const failure of ["503", "network"] as const)
 		expect(fixture.unexpected).toEqual([]);
 	});
 
+// #3433 N15-04（F15-1）：已显示 Agent 之后，「更新中」轮询或就绪时回到标签页的后台重读读到不可重试的失败（404、
+// 响应无效）：与 /agents/:id 一致换成读取失败卡（404 为「无法访问 / Agent 不存在，或你没有访问权限。」，响应无效为
+// 「数据无法读取」），工作区与「发送」随之收起、不再轮询；输入框里的焦点交给页面 h1，不落到 body。两视口一致。
+for (const trigger of ["poll", "reread"] as const)
+	for (const failure of ["404", "invalid"] as const)
+		test(`a non-retryable Agent read after the workspace is shown replaces it with the read failure: ${trigger} ${failure} (#3433 N15-04)`, async ({
+			page,
+		}, info) => {
+			test.setTimeout(60_000);
+			await acceptanceViewport(page, info);
+			const errors = trackPageErrors(page);
+			const fixture = await routingFixture(page);
+			await readyConversation(page, fixture.conversationId);
+			await mutableAgent(page, fixture, {
+				serviceAvailability: trigger === "poll" ? "updating" : "ready",
+			});
+			let reads = 0;
+			let failing = trigger === "poll";
+			await page.route(
+				(url) => url.pathname === `/api/v2/agents/${fixture.agentId}`,
+				(route) => {
+					if (route.request().method() !== "GET") return route.fallback();
+					reads += 1;
+					// 轮询：第 2 次读取（第一次轮询）失败；回到标签页：打开之后的下一次读取失败。
+					if (!failing || (trigger === "poll" && reads !== 2))
+						return route.fallback();
+					return failure === "invalid"
+						? route.fulfill({ json: { schemaVersion: 1 } })
+						: route.fulfill({
+								status: 404,
+								json: {
+									schemaVersion: 1,
+									code: "RESOURCE_UNAVAILABLE",
+									message: "Controlled Agent read failure",
+									retryable: false,
+									traceId: "trace-conversation-agent",
+								},
+							});
+				},
+			);
+			await page.goto(canonical(fixture.agentId, fixture.conversationId));
+			const composer = page.getByLabel("消息", { exact: true });
+			const send = page.getByRole("button", { name: "发送", exact: true });
+			await expect(
+				page.getByRole("heading", { level: 1, name: fixture.agentName }),
+			).toBeVisible();
+			await composer.click();
+			await page.keyboard.type("受控草稿");
+			if (trigger === "reread") {
+				await expect(send).toBeEnabled();
+				failing = true;
+				await backgroundReread(page);
+			}
+			const main = page.locator("#main-content");
+			const card = main.locator('[data-slot="state-card"]');
+			await expect(card).toContainText(
+				failure === "404" ? "无法访问" : "数据无法读取",
+			);
+			if (failure === "404")
+				await expect(card).toContainText("Agent 不存在，或你没有访问权限。");
+			await expect(composer).toHaveCount(0);
+			await expect(send).toHaveCount(0);
+			await expect(
+				page.getByText("可以查看历史，草稿仍可编辑；更新完成后才能发送。", {
+					exact: true,
+				}),
+			).toHaveCount(0);
+			await expectFocusSettled(
+				page.getByRole("heading", { level: 1, name: "对话" }),
+				`对话页 Agent 读取 ${trigger} ${failure}`,
+				[50, 300, 1000, 2500],
+			);
+			// 不再轮询，也不再读取。
+			const settled = reads;
+			await page.waitForTimeout(trigger === "poll" ? 4500 : 1000);
+			expect(reads).toBe(settled);
+			await expectNoDuplicateControls(
+				page,
+				`对话页（Agent 读取 ${trigger} ${failure}，#3433）`,
+			);
+			await expectCleanPage(page, errors);
+			expect(
+				await page.evaluate(
+					() => document.documentElement.scrollWidth <= innerWidth,
+				),
+			).toBe(true);
+			expect(fixture.unexpected).toEqual([]);
+		});
+
 // #3388 N13-03：?view=history 下按「刷新 Agent 状态」（读取挂起，按钮保持可聚焦），浏览器后退只改了查询串、
 // 仍是同一个对话页：读到可用、横幅卸载后焦点到 h1，仍不可用时留在按钮上，都不落到 body。两视口一致。
 for (const outcome of ["ready", "unavailable"] as const)

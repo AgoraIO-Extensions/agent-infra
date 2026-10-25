@@ -192,3 +192,29 @@ export function pollWhileShown<T>(
 	if (status === "error" && !retryable(error)) return false;
 	return data !== undefined && shownContent(data) ? interval(data) : false;
 }
+
+/** 手写轮询（不经 TanStack Query）一次读取失败的形态：HTTP 状态（没有响应时为 undefined）与错误体。 */
+export type PollReadFailure = {
+	readonly status?: number;
+	readonly error?: unknown;
+};
+
+/**
+ * 手写轮询（企微配置会话与连接状态）的一次读取失败是否可重试，与 pollWhileShown 同一规则（#3418、#3433）：
+ * 没有响应（网络中断）、408 / 429 与 5xx 之后按原节奏继续；服务端标明 `retryable: false`、其余 HTTP 失败
+ * （401 / 403 / 404 / 409 等，以及 5xx 之外的非标准状态）与读到 2xx 但响应无效时停止。
+ */
+export function retryablePollFailure({ status, error }: PollReadFailure) {
+	if (
+		typeof error === "object" &&
+		error !== null &&
+		(error as { readonly retryable?: unknown }).retryable === false
+	)
+		return false;
+	return (
+		status === undefined ||
+		status === 408 ||
+		status === 429 ||
+		(status >= 500 && status <= 599)
+	);
+}

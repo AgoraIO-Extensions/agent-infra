@@ -1862,12 +1862,15 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							className="space-y-3 rounded-lg border border-border bg-muted/20 p-4 sm:col-span-2"
 						>
 							<div>
-								<h2
-									className="font-semibold text-base text-foreground"
+								{/* 分区嵌在「基本信息」里：标题为 h3，字体、字号、字重与行高同 FormSection 子级标题
+								    （16px / 620 / 1.35 正文字体），显式压过未分层的 `.management-content h2` 一类
+								    展示字体规则（#3433 N15-06）。 */}
+								<h3
+									className="!font-[inherit] !text-[16px] !tracking-normal font-[620] text-foreground leading-[1.35]"
 									id="application-connection-heading"
 								>
 									Connection 授权
-								</h2>
+								</h3>
 								<p className="mt-1 text-muted-foreground text-sm">
 									创建 Agent 不会自动取得外部账号权限。使用者需要在 Connection
 									中用自己的账号确认连接器授权，授权结果由 Connection 独立管理。

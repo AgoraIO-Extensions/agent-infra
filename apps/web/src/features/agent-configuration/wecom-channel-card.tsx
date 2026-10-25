@@ -32,6 +32,36 @@ export const wecomStatusLabels = {
 	auth_failed: "认证失败",
 } satisfies Record<WecomChannelStatus, string>;
 
+/** 连接状态读取的结果是否是已知状态；不是时按响应无效处理（#3433 N15-03）。 */
+export function isWecomChannelStatus(
+	status: unknown,
+): status is WecomChannelStatus {
+	return typeof status === "string" && Object.hasOwn(wecomStatusLabels, status);
+}
+
+const wecomSetupStatuses = [
+	"awaiting_input",
+	"verifying",
+	"active",
+	"auth_failed",
+	"conflict",
+	"cancelled",
+	"expired",
+] as const;
+
+/** 配置会话读取的结果是否是已知状态；不是时按响应无效处理（#3433 N15-02）。 */
+export function isWecomSetupStatus(
+	status: unknown,
+): status is (typeof wecomSetupStatuses)[number] {
+	return (
+		typeof status === "string" &&
+		(wecomSetupStatuses as readonly string[]).includes(status)
+	);
+}
+
+/** 配置会话轮询读到不可重试的失败（登录失效、会话不存在、响应无效）时卡内的说明（#3433 N15-02）。 */
+export const wecomSetupSessionLost = "配置会话已失效，请重新配置。";
+
 // 设计稿 wecomTone：connected 绿、verifying / callback 琥珀、auth_failed 红，其余灰。
 function wecomStatusTone(status?: WecomChannelStatus): ChipTone {
 	if (status === "connected") return "green";

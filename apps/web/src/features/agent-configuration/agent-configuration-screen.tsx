@@ -323,6 +323,10 @@ export function AgentConfigurationScreen({
 		savedRelayKeyCandidates === undefined;
 	useEffect(() => {
 		if (!savedCandidatesWithdrawn) return;
+		// 撤回的是唯一的修改时「保存配置」随之变为原生禁用：焦点原在按钮上的交给紧挨按钮的
+		// 「没有需要保存的变更。」（同保存完成，#3433 N15-05），不留给兜底送到视口外的 h1；
+		// 还有其他修改时按钮保持可用，提示不出现，焦点不动。
+		if (document.activeElement === saveRef.current) setFocusUnchangedHint(true);
 		setSavedSelectionError(false);
 		setDraft((current) =>
 			current.replaceModels

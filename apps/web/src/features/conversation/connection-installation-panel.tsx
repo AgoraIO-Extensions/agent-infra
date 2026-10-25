@@ -7,6 +7,7 @@ import type { Client } from "../../pilot/generated-v2/client/index.js";
 import {
 	beginConnectionInstallation,
 	type ConnectionInstallationState,
+	invalidInstallationResponse,
 	readConnectionInstallation,
 	safeConnectionAuthorizationUrl,
 } from "./connection-installation.js";
@@ -103,34 +104,52 @@ export function ConnectionInstallationPanel({
 		}
 	};
 
-	const refreshStatus = useCallback(async () => {
-		if (!authorizationId) return;
-		request.current?.abort();
-		const controller = new AbortController();
-		request.current = controller;
-		setError(undefined);
-		setRefreshing(true);
-		try {
-			const next = await readConnectionInstallation({
-				client,
-				authorizationId,
-				signal: controller.signal,
-			});
-			if (controller.signal.aborted) return;
-			if (next.kind === "unavailable") {
-				setError("暂时无法读取安装状态。");
-				return;
+	/**
+	 * 读取安装状态。轮询（background）按 #3418 的轮询规则（#3433）：可重试的失败（503、网络中断）保留
+	 * 「等待 Connection 确认」并按原节奏继续，不另加提示；不可重试的失败（登录失效、无权、不存在、响应
+	 * 无效）停止轮询并显示「Connection 安装暂不可用。」；读到终态停止。用户按「查询状态」的读取可重试地
+	 * 失败时照旧提示「暂时无法读取安装状态。」。
+	 */
+	const refreshStatus = useCallback(
+		async (background = false) => {
+			if (!authorizationId) return;
+			request.current?.abort();
+			const controller = new AbortController();
+			request.current = controller;
+			// 用户读取的失败一直显示到下一次读到结果：轮询开始时不清掉它。
+			if (!background) setError(undefined);
+			setRefreshing(true);
+			const failed = (retryable: boolean) => {
+				if (!retryable) {
+					setError(undefined);
+					setState({ kind: "unavailable", retryable: false });
+				} else if (!background) setError("暂时无法读取安装状态。");
+			};
+			try {
+				const next = await readConnectionInstallation({
+					client,
+					authorizationId,
+					signal: controller.signal,
+				});
+				if (controller.signal.aborted) return;
+				if (next.kind === "unavailable") {
+					failed(next.retryable);
+					return;
+				}
+				setError(undefined);
+				setState(next);
+			} catch (error) {
+				if (!controller.signal.aborted)
+					failed(!invalidInstallationResponse(error));
+			} finally {
+				if (!controller.signal.aborted) {
+					setRefreshing(false);
+					setPolls((value) => value + 1);
+				}
 			}
-			setState(next);
-		} catch {
-			if (!controller.signal.aborted) setError("暂时无法读取安装状态。");
-		} finally {
-			if (!controller.signal.aborted) {
-				setRefreshing(false);
-				setPolls((value) => value + 1);
-			}
-		}
-	}, [authorizationId, client]);
+		},
+		[authorizationId, client],
+	);
 
 	useEffect(() => {
 		if (
@@ -141,7 +160,7 @@ export function ConnectionInstallationPanel({
 		)
 			return;
 		const timer = window.setTimeout(() => {
-			void refreshStatus();
+			void refreshStatus(true);
 		}, pollIntervalMs);
 		return () => {
 			window.clearTimeout(timer);

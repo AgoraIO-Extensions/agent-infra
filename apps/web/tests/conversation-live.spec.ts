@@ -2580,3 +2580,166 @@ test("a reconnect whose stream keeps failing returns focus to 重新连接 when 
 	expect(writes).toBe(0);
 	await expectCleanPage(page, errors);
 });
+
+// #3433（已显示内容后的不可重试失败）：自定义 Agent（platform-adapter）的 Runtime 模型目录读到之后，回到标签页的
+// 后台重读可重试地失败（503、网络中断）时继续显示模型入口、「发送」可用；不可重试的失败（401、404、响应无效）与首次
+// 读取失败一致：模型入口收起、「发送」阻止，草稿与输入框上的焦点保留，不落到 body。两视口一致。
+for (const failure of ["401", "404", "invalid"] as const)
+	test(`a background reread of the Runtime model directory keeps it through retryable failures and withdraws it after ${failure} (#3433)`, async ({
+		page,
+	}, info) => {
+		await page.setViewportSize(
+			info.project.name === "mobile"
+				? { width: 390, height: 844 }
+				: { width: 1440, height: 900 },
+		);
+		const errors = trackPageErrors(page);
+		const agent = AgentProjectionV2Schema.parse({
+			...activeAgent(),
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agent:v1",
+				interactionMode: "platform-adapter",
+			},
+		});
+		const selectionPath = `/api/v1/conversations/${conversationId}/model-selection`;
+		let selection: "ok" | "503" | "network" | typeof failure = "ok";
+		let selectionReads = 0;
+		const writes: string[] = [];
+		await keepConversationStreamOpen(page);
+		await page.route(/\/api\/v[12]\//, async (route) => {
+			const request = route.request();
+			const path = new URL(request.url()).pathname;
+			if (isFileLimitsRequest(request.method(), path))
+				return route.fulfill({ json: controlledFileLimits() });
+			if (request.method() !== "GET") {
+				writes.push(`${request.method()} ${path}`);
+				return route.fulfill({ status: 500, json: {} });
+			}
+			if (path === "/api/v1/connection/capability")
+				return route.fulfill({
+					json: ConnectionCapabilityProjectionV1Schema.parse({
+						schemaVersion: 1,
+						status: "unavailable",
+						reason: "missing",
+					}),
+				});
+			if (path === "/api/v2/me/conversations/recent")
+				return route.fulfill({
+					json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+				});
+			if (path.endsWith("/session"))
+				return route.fulfill({
+					json: BrowserSessionProjectionV1Schema.parse(ownerSession()),
+				});
+			if (path === `/api/v2/agents/${agentId}`)
+				return route.fulfill({ json: agent });
+			if (path.endsWith("/native-metadata"))
+				return route.fulfill({
+					json: {
+						selector:
+							new URL(request.url()).searchParams.get("selector") === "commands"
+								? "commands"
+								: "skills",
+						revision: "a".repeat(64),
+						capabilities: [],
+					},
+				});
+			if (path === selectionPath) {
+				selectionReads += 1;
+				if (selection === "network") return route.abort("internetdisconnected");
+				if (selection === "503" || selection === "401" || selection === "404")
+					return route.fulfill({
+						status: Number(selection),
+						json: {
+							schemaVersion: 1,
+							code:
+								selection === "503"
+									? "DEPENDENCY_UNAVAILABLE"
+									: "RESOURCE_UNAVAILABLE",
+							message: "Controlled model directory failure",
+							retryable: selection === "503",
+							traceId: "trace-runtime-model-directory",
+						},
+					});
+				if (selection === "invalid")
+					return route.fulfill({ json: { schemaVersion: 1 } });
+				return route.fulfill({
+					json: ConversationModelSelectionProjectionV1Schema.parse({
+						schemaVersion: 1,
+						conversationId,
+						agentId,
+						source: "custom-platform-adapter",
+						available: true,
+						options: agent.configuration.modelOptions,
+						currentModelOptionId: "model-secondary",
+						currentReasoningLevel: "high",
+						selectedModelOptionId: "model-secondary",
+						selectedReasoningLevel: "high",
+					}),
+				});
+			}
+			if (path === `/api/v2/conversations/${conversationId}`)
+				return route.fulfill({
+					json: ConversationDetailProjectionV2Schema.parse({
+						...history(conversationId, []),
+						conversation: {
+							...history(conversationId, []).conversation,
+							status: "ready",
+						},
+					}),
+				});
+			if (path === `/api/v2/conversations/${conversationId}/events`)
+				return route.fulfill({
+					contentType: "text/event-stream",
+					body: ": heartbeat\n\n",
+				});
+			return route.fulfill({ json: { items: [], nextCursor: null } });
+		});
+		await page.goto(`/chat/${agentId}/${conversationId}`);
+		const input = page.getByRole("textbox", { name: "消息", exact: true });
+		const send = page.getByRole("button", { name: "发送", exact: true });
+		const modelTrigger = page.locator(
+			"form.composer-zone .composer-controls .composer-setting-trigger",
+		);
+		await expect(modelTrigger.first()).toHaveAccessibleName(/Secondary model/);
+		await input.fill("保留的草稿");
+		await expect(send).toBeEnabled();
+		await input.focus();
+		const reread = async () => {
+			const before = selectionReads;
+			await page.evaluate(() =>
+				window.dispatchEvent(new Event("visibilitychange")),
+			);
+			await expect.poll(() => selectionReads).toBeGreaterThan(before);
+		};
+		for (const retryable of ["503", "network"] as const) {
+			selection = retryable;
+			await reread();
+			// 可重试的失败：模型入口与「发送」照旧，草稿与焦点保留。
+			await expect(modelTrigger.first()).toHaveAccessibleName(
+				/Secondary model/,
+			);
+			await expect(send).toBeEnabled();
+			await expect(input).toHaveValue("保留的草稿");
+			await expect(input).toBeFocused();
+		}
+		selection = failure;
+		await reread();
+		await expect(modelTrigger).toHaveCount(0);
+		await expect(send).toBeDisabled();
+		await expect(input).toHaveValue("保留的草稿");
+		await expectFocusSettled(input, `Runtime 模型目录（${failure}）`);
+		// 恢复：下一次读到目录时模型入口与「发送」回来。
+		selection = "ok";
+		await reread();
+		await expect(modelTrigger.first()).toHaveAccessibleName(/Secondary model/);
+		await expect(send).toBeEnabled();
+		expect(writes).toEqual([]);
+		expect(
+			await page.evaluate(
+				() => document.documentElement.scrollWidth <= window.innerWidth,
+			),
+		).toBe(true);
+		await expectCleanPage(page, errors);
+	});

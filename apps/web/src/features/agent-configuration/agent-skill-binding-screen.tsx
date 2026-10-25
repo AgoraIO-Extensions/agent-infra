@@ -42,7 +42,7 @@ import type {
 	SkillHubAgentBindingCommandV1,
 	SkillHubVersionMetadataV1,
 } from "../../pilot/generated-v2/types.gen.js";
-import { readFailed } from "../background-read.js";
+import { pollWhileShown, readFailed } from "../background-read.js";
 import type { BrowserSessionState } from "../browser-session.js";
 import { AccessDeniedCard } from "../page-state-card.js";
 import { RecoveryButton } from "../recovery-button.js";
@@ -52,6 +52,7 @@ import {
 } from "../skill-hub/skill-hub.js";
 import {
 	bindSkillHubAgentVersion,
+	isRetryableSkillHubManagementError,
 	readSkillHubAgentBindings,
 	type SkillHubManagementRequestError,
 } from "../skill-hub/skill-hub-management.js";
@@ -111,13 +112,11 @@ function requestStatus(error: unknown) {
 	return (error as SkillHubManagementRequestError | undefined)?.status;
 }
 
-function isRetryableSkillError(error: unknown) {
-	const status = requestStatus(error);
-	return (
-		(error as SkillHubManagementRequestError | undefined)?.retryable !==
-			false && ![401, 403, 404].includes(status ?? 0)
-	);
-}
+const isRetryableSkillError = isRetryableSkillHubManagementError;
+
+type AgentSkillBindingStatus = Awaited<
+	ReturnType<typeof readSkillHubAgentBindings>
+>;
 
 function versionLabel(version: { readonly name: string; version: string }) {
 	return `${version.name} · v${version.version}`;
@@ -268,13 +267,29 @@ function AgentSkillBindings({
 		agentVersion,
 		"skills",
 	] as const;
-	const [settling, setSettling] = useState(false);
+	// 存在等待同步或已同步未装配的项时每 2 秒重读，全部进入终态后停止。
+	const settlingInterval = (data: AgentSkillBindingStatus) =>
+		data.bindings.some(
+			(binding) => skillBindingView(binding, runtimeSkills).settling,
+		)
+			? 2000
+			: false;
+	// 同步轮询的每一次绑定读取一并重读 Agent 详情：Runtime 装配摘要在 Agent 投影里。随绑定读取发起而不是另设
+	// 定时器，两者同一节奏，绑定轮询停止（全部进入终态，或不可重试地失败）时 Agent 重读随之停止。
+	const refreshAgent = useRef(onRefreshAgent);
+	refreshAgent.current = onRefreshAgent;
+	const settlingRef = useRef(false);
 	const bindings = useQuery({
 		queryKey,
-		queryFn: () => readBindings(agent.agentId, agentVersion),
+		queryFn: () => {
+			if (settlingRef.current) refreshAgent.current?.();
+			return readBindings(agent.agentId, agentVersion);
+		},
 		retry: false,
-		// 存在等待同步或已同步未装配的项时每 2 秒重读，全部进入终态后停止。
-		refetchInterval: settling ? 2000 : false,
+		// 轮询以最近一次读到的绑定判断（#3418）：可重试的失败（503、网络中断）之后按原节奏继续，
+		// 不可重试的失败（401 / 403 / 404 / 409、响应无效）停止（#3433 N15-01）。
+		refetchInterval: (query) =>
+			pollWhileShown(query, isRetryableSkillError, settlingInterval),
 	});
 	const directory = useQuery({
 		queryKey: ["skill-hub", "directory", "agent-binding"],
@@ -286,16 +301,19 @@ function AgentSkillBindings({
 		binding,
 		view: skillBindingView(binding, runtimeSkills),
 	}));
-	const anySettling = views.some(({ view }) => view.settling);
-	useEffect(() => setSettling(anySettling), [anySettling]);
-	// 轮询时一并重读 Agent 详情：Runtime 装配摘要在 Agent 投影里。
-	const refreshAgent = useRef(onRefreshAgent);
-	refreshAgent.current = onRefreshAgent;
-	useEffect(() => {
-		if (!settling) return;
-		const timer = window.setInterval(() => refreshAgent.current?.(), 2000);
-		return () => window.clearInterval(timer);
-	}, [settling]);
+	// 绑定仍在同步、轮询继续时（与 refetchInterval 同一判断），下一次绑定读取一并重读 Agent。
+	settlingRef.current =
+		pollWhileShown(
+			{
+				state: {
+					status: bindings.status,
+					data: bindings.data,
+					error: bindings.error,
+				},
+			},
+			isRetryableSkillError,
+			settlingInterval,
+		) !== false;
 	// 某项首次变为对话可用时给一次 Toast。
 	const usable = new Set(
 		views

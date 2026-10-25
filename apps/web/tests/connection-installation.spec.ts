@@ -435,3 +435,104 @@ test("beginning an installation keeps focus on the same step button while prepar
 	statusRead.release();
 	await expectCleanPage(page, errors);
 });
+
+// #3433（轮询全量收口）：安装状态轮询按 #3418 的轮询规则。可重试的失败（503、网络中断）保留「等待 Connection
+// 确认」并按原节奏继续、不另加提示，读到「已确认」（终态）后停止；不可重试的失败（401、404、响应无效）停止轮询，
+// 显示「Connection 安装暂不可用。」，同一个步骤按钮原地换成「开始安装」，焦点留在它上面、不落到 body。两视口一致。
+test("the installation status poll continues through retryable failures and stops at the terminal state (#3433)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await openExecutionDetails(page);
+	const reads: string[] = [];
+	await page.route(statusPath, (route) => {
+		const step = ["503", "network", "awaiting"][reads.length] ?? "confirmed";
+		reads.push(step);
+		if (step === "network") return route.abort("internetdisconnected");
+		if (step === "503")
+			return route.fulfill({
+				status: 503,
+				json: { code: "DEPENDENCY_UNAVAILABLE", retryable: true },
+			});
+		return route.fulfill({
+			status: 200,
+			json: installationProjection(
+				step === "awaiting" ? "awaiting_confirmation" : "confirmed",
+			),
+		});
+	});
+	const details = page.getByRole("dialog", { name: "执行详情" });
+	const step = await pinElement(
+		details.getByRole("button", { name: "开始安装", exact: true }),
+		"connection-step-poll",
+	);
+	await step.click();
+	await expect(step).toHaveAccessibleName("查询状态");
+	await expect.poll(() => reads.length, { timeout: 8_000 }).toBe(2);
+	// 两次可重试的失败之后仍在等待确认，不另加提示，焦点仍在步骤按钮上。
+	await expect(
+		details.getByText("等待 Connection 确认", { exact: true }),
+	).toBeVisible();
+	await expect(details.getByText("暂时无法读取安装状态。")).toHaveCount(0);
+	await expect(details.getByRole("alert")).toHaveCount(0);
+	await expect(step).toBeFocused();
+	await expect(details.getByText("已确认", { exact: true })).toBeVisible({
+		timeout: 10_000,
+	});
+	await expect(step).toHaveAccessibleName("重新开始");
+	await expect(step).toBeFocused();
+	const settled = reads.length;
+	await page.waitForTimeout(4_500);
+	expect(reads.length, "读到终态后不再轮询").toBe(settled);
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= window.innerWidth,
+		),
+	).toBe(true);
+	await expectCleanPage(page, errors);
+});
+
+for (const failure of ["401", "404", "invalid"] as const)
+	test(`the installation status poll stops after a non-retryable failure: ${failure} (#3433)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		await openExecutionDetails(page);
+		let reads = 0;
+		await page.route(statusPath, (route) => {
+			reads += 1;
+			if (failure === "invalid")
+				return route.fulfill({ status: 200, json: { schemaVersion: 1 } });
+			return route.fulfill({
+				status: Number(failure),
+				json: { code: "RESOURCE_UNAVAILABLE", retryable: false },
+			});
+		});
+		const details = page.getByRole("dialog", { name: "执行详情" });
+		const step = await pinElement(
+			details.getByRole("button", { name: "开始安装", exact: true }),
+			"connection-step-fatal",
+		);
+		await step.click();
+		const alert = details
+			.getByRole("alert")
+			.filter({ hasText: "Connection 安装暂不可用。" });
+		await expect(alert).toBeVisible({ timeout: 8_000 });
+		expect(reads).toBe(1);
+		await expect(alert.getByRole("button")).toHaveCount(0);
+		await expect(
+			details.getByText("等待 Connection 确认", { exact: true }),
+		).toHaveCount(0);
+		await expect(step).toHaveAccessibleName("开始安装");
+		await expectFocusSettled(step, `安装状态轮询 ${failure} 后`);
+		await page.waitForTimeout(4_500);
+		expect(reads, "不可重试的失败之后不再轮询").toBe(1);
+		expect(
+			await page.evaluate(
+				() => document.documentElement.scrollWidth <= window.innerWidth,
+			),
+		).toBe(true);
+		await expectCleanPage(page, errors);
+	});
