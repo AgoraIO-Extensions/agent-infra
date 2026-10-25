@@ -153,6 +153,19 @@ it("keeps V6 private transport and restore contracts distinct", () => {
 	).toBe(true);
 });
 
+it("binds the private Key context to the accompanying business request", () => {
+	const transport = RuntimeNativeCapabilityTransportV6Schema.parse({
+		businessRequest: request,
+		privateKeyField,
+	});
+	expect(
+		RuntimeNativeCapabilityTransportV6Schema.safeParse({
+			...transport,
+			businessRequest: { ...request, executionId: "execution-2" },
+		}).success,
+	).toBe(false);
+});
+
 it("binds the digest to selection/config but excludes the Grant token", async () => {
 	const payload = runtimeRequestSigningPayloadV6(request);
 	const digest = await runtimeRequestDigestV6(request);

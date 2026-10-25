@@ -80,10 +80,41 @@ export type RuntimeNativeCapabilityRequestV6 = z.infer<
 	typeof RuntimeNativeCapabilityRequestV6Schema
 >;
 
-export const RuntimeNativeCapabilityTransportV6Schema = z.strictObject({
-	businessRequest: RuntimeNativeCapabilityRequestV6Schema,
-	privateKeyField: RuntimePrivateRelayKeyFieldV1Schema,
-});
+export const RuntimeNativeCapabilityTransportV6Schema = z
+	.strictObject({
+		businessRequest: RuntimeNativeCapabilityRequestV6Schema,
+		privateKeyField: RuntimePrivateRelayKeyFieldV1Schema,
+	})
+	.superRefine(({ businessRequest, privateKeyField }, ctx) => {
+		const keyContext = privateKeyField.context;
+		const fields = [
+			"requestId",
+			"traceId",
+			"channelId",
+			"agentId",
+			"conversationId",
+			"executionId",
+			"turnId",
+			"sessionGeneration",
+			"hostSessionRef",
+			"principal",
+			"executionSource",
+			"operation",
+			"keyBinding",
+		] as const;
+		for (const field of fields) {
+			if (
+				JSON.stringify(keyContext[field]) !==
+				JSON.stringify(businessRequest[field])
+			) {
+				ctx.addIssue({
+					code: "custom",
+					path: ["privateKeyField", "context", field],
+					message: "Must match businessRequest",
+				});
+			}
+		}
+	});
 export type RuntimeNativeCapabilityTransportV6 = z.infer<
 	typeof RuntimeNativeCapabilityTransportV6Schema
 >;
