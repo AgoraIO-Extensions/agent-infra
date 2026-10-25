@@ -958,7 +958,7 @@ export function ActiveConversation({
 							<RecoveryButton
 								variant="outline"
 								recoveryKey="重新连接"
-								onClick={() => void reader.reconnect()}
+								onClick={() => reader.reconnect()}
 							>
 								重新连接
 							</RecoveryButton>
@@ -1184,7 +1184,7 @@ export function ActiveConversation({
 									phase: modelSave.phase,
 									saved: modelSave.saved,
 									onChoose: modelSave.choose,
-									onRetry: () => void modelSave.retry(),
+									onRetry: () => modelSave.retry(),
 								}
 							: undefined
 					}
@@ -1230,11 +1230,9 @@ export function ActiveConversation({
 				modelOptions={options}
 				connectionEnabled={agent.capabilities.connection === true}
 				onRetry={() => {
-					if (timeline.failure?.kind === "http") void reader.reconnect();
-					else {
-						markUserRead(executionRead, reader.execution.dataUpdatedAt);
-						void reader.execution.refetch();
-					}
+					if (timeline.failure?.kind === "http") return reader.reconnect();
+					markUserRead(executionRead, reader.execution.dataUpdatedAt);
+					return reader.execution.refetch();
 				}}
 				onClose={() => setSelectedExecution(undefined)}
 				finalFocus={executionFinalFocus}

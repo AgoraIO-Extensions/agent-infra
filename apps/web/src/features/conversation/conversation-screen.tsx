@@ -290,10 +290,13 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 				? 2000
 				: false,
 	});
+	// 历史面板只在展开（或切换最近对话 / 全部历史）时、以及首次读到 Agent 时聚焦一次；之后 Agent 数据
+	// 后台更新（回到标签页重读、「更新中」轮询转就绪）不移动焦点，输入框与历史链接上的焦点保留（#3388 N13-07）。
+	const agentLoaded = agentQuery.data !== undefined;
 	useLayoutEffect(() => {
-		if (agentQuery.data && (showHistory || recentOpen))
+		if (agentLoaded && (showHistory || recentOpen))
 			historyPanel.current?.focus();
-	}, [agentQuery.data, showHistory, recentOpen]);
+	}, [agentLoaded, showHistory, recentOpen]);
 	useLayoutEffect(
 		() => () => {
 			void queryClient.cancelQueries({ queryKey, exact: true });

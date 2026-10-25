@@ -275,6 +275,9 @@ export class RuntimeHostV4 {
 				"schemaVersion" in capability &&
 				capability.schemaVersion === 2 &&
 				capability.effect === "state_changing";
+			// V4 does not carry the selection frozen at admission. A previous Turn
+			// cannot supply it or authorize state changes through a metadata read.
+			if (stateChanging) nativeUnsupported();
 			const response = await this.options.serialize(
 				this.options.store.sessionQueueKey(request),
 				async () => {
@@ -360,42 +363,6 @@ export class RuntimeHostV4 {
 							if (commandNativeSessionRef !== nativeSessionRef)
 								nativeRequired();
 							if (request.capabilityKind === "command") {
-								if (stateChanging) {
-									const originalCommand =
-										this.options.store.readLatestAcceptedSubmitTurnV2(
-											request,
-											request.hostSessionRef,
-										);
-									const selection =
-										originalCommand?.schemaVersion === 2
-											? originalCommand.selection
-											: undefined;
-									if (!selection) nativeUnsupported();
-									const createV2 =
-										this.options.driver.createNativeCommandCommandV2;
-									if (!createV2) nativeUnsupported();
-									return createV2.call(this.options.driver, {
-										schemaVersion: 2,
-										kind: "native-command",
-										operationId: request.executionId,
-										agentId: request.agentId,
-										conversationId: request.conversationId,
-										executionId: request.executionId,
-										turnId: request.turnId,
-										sessionGeneration: request.sessionGeneration,
-										nativeSessionRef: commandNativeSessionRef,
-										capabilityId: request.capabilityId,
-										directoryRevision: request.directoryRevision,
-										parameters: request.parameters,
-										parametersDigest: request.parametersDigest,
-										capabilityName,
-										capabilitySourceVersion: request.capabilitySourceVersion,
-										effect: "state_changing",
-										selection: structuredClone(selection),
-										keyBinding: structuredClone(pinnedScope.keyBinding),
-										authorizationRecordId: claims.authorizationRecordId,
-									});
-								}
 								const commandCreate =
 									this.options.driver.createNativeCommandCommand;
 								if (!commandCreate) nativeUnsupported();
