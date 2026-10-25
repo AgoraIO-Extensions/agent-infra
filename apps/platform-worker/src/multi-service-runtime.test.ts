@@ -9,6 +9,7 @@ import type {
 	V1ConfigMap,
 	V1Deployment,
 	V1Job,
+	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
@@ -750,10 +751,45 @@ describe("multi-service runtime operations", () => {
 		expect(
 			network?.metadata?.annotations?.["agent-infra.agora.io/spec-hash"],
 		).toBeTypeOf("string");
+		expect(
+			(network as V1NetworkPolicy | undefined)?.spec?.ingress?.[0]?._from,
+		).toContainEqual({
+			podSelector: {
+				matchLabels: { "app.kubernetes.io/name": "ingress" },
+			},
+		});
 		await operations.promote(value);
 		expect(
 			fake.resources.has(`Ingress/${workloadResourceNameV1("agent-a")}`),
 		).toBe(true);
+	});
+
+	it("scopes the entry NetworkPolicy to a cross-namespace route controller", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: { ...basePolicy, routeNamespace: "new-magic-infra" },
+		});
+		const value = desired();
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(value);
+		const network = [...fake.resources.values()].find(
+			(resource) =>
+				resource.kind === "NetworkPolicy" &&
+				resource.metadata?.name?.endsWith("-web-network"),
+		) as V1NetworkPolicy | undefined;
+		const routePeer = network?.spec?.ingress?.[0]?._from?.find(
+			(peer) => peer.namespaceSelector !== undefined,
+		);
+		expect(routePeer).toEqual({
+			namespaceSelector: {
+				matchLabels: { "kubernetes.io/metadata.name": "new-magic-infra" },
+			},
+			podSelector: {
+				matchLabels: { "app.kubernetes.io/name": "ingress" },
+			},
+		});
 	});
 
 	it("fails closed when an immutable ConfigMap is changed in place", async () => {
