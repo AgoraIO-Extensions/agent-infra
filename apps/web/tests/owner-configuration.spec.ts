@@ -1327,6 +1327,89 @@ for (const target of [
 		);
 	});
 
+// #3418 N14-01（G14-2-01）：部署选项后台重读遇到可重试失败（503、网络中断）时继续用上一次读到的模型
+// 目录与模板登记：部署目录模式的「替换模型配置」与未保存的档位勾选、已保存 Key 模式的环境变量名下拉
+// 都保留，焦点不落到 body，不换成「模型目录暂时不可用」。
+for (const mode of ["catalog", "saved-key"] as const)
+	for (const failure of ["503", "network"] as const)
+		test(`a background reread of the deployment options keeps the Owner configuration: ${mode} ${failure} (#3418 N14-01)`, async ({
+			page,
+		}, info) => {
+			await viewport(page, info.project.name === "mobile");
+			const pageErrors = trackPageErrors(page);
+			const api = await ownerConfigFixture(page, {
+				keySet: mode === "saved-key",
+			});
+			await page.goto("/agents/agent-pilot-1/configuration");
+			const models = page.getByRole("region", {
+				name: "模型与凭证",
+				exact: true,
+			});
+			const environment = page.getByRole("region", {
+				name: "环境变量与 Secret",
+				exact: true,
+			});
+			const environmentName = environment.getByRole("combobox", {
+				name: "环境变量名：环境变量 1",
+				exact: true,
+			});
+			await expect(environmentName).toBeVisible();
+			// 部署目录模式先勾选「替换模型配置」才显示模型选择器。
+			if (mode === "catalog")
+				await models.getByRole("checkbox", { name: "替换模型配置" }).click();
+			const gpt5 = await pinElement(
+				models.getByRole("checkbox", {
+					name: "Relay · Internal · gpt-5",
+					exact: true,
+				}),
+				"owner-config-model",
+			);
+			await expect(gpt5).toBeChecked();
+			const balanced = models.getByRole("checkbox", {
+				name: "均衡：Relay · Internal · gpt-5",
+				exact: true,
+			});
+			await balanced.click();
+			await expect(balanced).not.toBeChecked();
+			const save = page.getByRole("button", { name: "保存配置", exact: true });
+			await expect(save).toBeEnabled();
+			const focus =
+				mode === "catalog"
+					? gpt5
+					: await pinElement(environmentName, "owner-config-env-name");
+			await focus.focus();
+			await expectBackgroundRereadKeeps(page, {
+				path: "/api/v2/deployment/configuration",
+				focus,
+				failure,
+				context: `Owner 配置（${mode}，部署选项 ${failure}）`,
+				expectKept: async () => {
+					await expect(gpt5).toBeChecked();
+					await expect(balanced).not.toBeChecked();
+					await expect(environmentName).toBeVisible();
+					await expect(
+						environment.getByRole("textbox", {
+							name: "环境变量名：环境变量 1",
+						}),
+					).toHaveCount(0);
+					await expect(
+						main(page).getByText(
+							"模型目录暂时不可用，无法编辑模型配置；请刷新后重试。",
+						),
+					).toHaveCount(0);
+					await expect(main(page).getByRole("alert")).toHaveCount(0);
+					await expect(save).toBeEnabled();
+				},
+			});
+			expect(api.commands).toEqual([]);
+			await expectCleanPage(page, pageErrors);
+			await expectNoDuplicateControls(
+				page,
+				`Owner 配置（${mode}，部署选项 ${failure}，#3418）`,
+			);
+			await noHorizontalOverflow(page);
+		});
+
 for (const target of [
 	{ name: "Agent 读取", path: "/api/v2/agents/agent-pilot-1" },
 	{
