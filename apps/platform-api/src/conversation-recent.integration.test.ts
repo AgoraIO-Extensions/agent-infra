@@ -537,14 +537,22 @@ describe("recent generated client → production assembly/HTTP/Core → PostgreS
 		},
 	);
 
-	it("keeps the list available when a stopped Agent's configuration revision is ahead of its Workload (#3379)", async () => {
+	it.each([
+		"unreconciled",
+		"stopped-candidate",
+	])("keeps the list available when a stopped Agent's configuration revision is ahead of its Workload (%s, #3379)", async (shape) => {
 		// Fixed-environment shape: the stopped Agent's WeCom unbind advanced the
 		// configuration revision to 3 while the stopped Workload kept candidate 2.
+		// The reconciler itself advances only the source revision of a stopped
+		// Workload and keeps its old candidate until the Agent starts again.
 		await seedAgent("stopped", "stopped");
 		await sql`update platform.agents set current_configuration_revision = 3 where id = 'stopped'`;
 		await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, configuration, created_at)
 			select agent_id, 3, source_reference, jsonb_set(configuration, '{revision}', '3'), now()
 			from platform.agent_configuration_revisions where agent_id = 'stopped' and revision = 2`;
+		if (shape === "stopped-candidate")
+			await sql`update platform.workload_reconciliations
+				set state = jsonb_set(state, '{sourceConfigurationRevision}', '3') where agent_id = 'stopped'`;
 		for (let index = 0; index < 16; index++)
 			await seedConversation(
 				`stopped-${String(index).padStart(2, "0")}`,
@@ -562,6 +570,23 @@ describe("recent generated client → production assembly/HTTP/Core → PostgreS
 			await sql`select id from platform.conversations where agent_id <> 'stopped'
 				order by updated_at desc, id desc`
 		).map((row) => row.id);
+		// The Store omits only the unconfirmed Agent and names its current grant.
+		const read = await query.readRecentPersonalConversations({
+			user: {
+				schemaVersion: 1,
+				userId: "owner",
+				accountStatus: "active",
+				organizationIds: ["team"],
+				authorizationRevision: "current-directory",
+			},
+			limit: 51,
+		});
+		expect(read.records.map((row) => row.projection.conversationId)).toEqual(
+			ordered,
+		);
+		expect(
+			read.unavailableAgents.map(({ agent }) => [agent.agentId, agent.status]),
+		).toEqual([["stopped", "stopped"]]);
 		const first = await page();
 		expect(first.items.map((item) => item.conversationId)).toEqual(ordered);
 		expect(first.unavailableAgentIds).toEqual(["stopped"]);
@@ -582,6 +607,20 @@ describe("recent generated client → production assembly/HTTP/Core → PostgreS
 			items: [],
 			nextCursor: null,
 		});
+		// Once a restart reconciles revision 3, its rows return and the hint clears.
+		await sql`update platform.workload_reconciliations
+			set state = jsonb_set(jsonb_set(state, '{sourceConfigurationRevision}', '3'),
+				'{candidate,configuration,revision}', '3')
+			where agent_id = 'stopped'`;
+		const recovered = await page();
+		expect(recovered).not.toHaveProperty("unavailableAgentIds");
+		expect(
+			recovered.items.filter((item) => item.agentId === "stopped"),
+		).toHaveLength(16);
+		await sql`update platform.workload_reconciliations
+			set state = jsonb_set(state, '{candidate,configuration,revision}', '2')
+			where agent_id = 'stopped'`;
+		expect((await page()).unavailableAgentIds).toEqual(["stopped"]);
 		// Withdrawing the grant removes the hint as well as the rows.
 		await sql`delete from platform.agent_owners where agent_id = 'stopped'`;
 		await sql`delete from platform.agent_availability where agent_id = 'stopped'`;
