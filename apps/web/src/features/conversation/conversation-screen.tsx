@@ -28,6 +28,7 @@ import {
 	markUserRead,
 	pollWhileShown,
 	queryUserReading,
+	readFailed,
 	userReadFailed,
 } from "../background-read.js";
 import {
@@ -428,12 +429,18 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		deniedCallback.current?.();
 	}, [denied, queryClient, queryKey]);
 	const agent = agentQuery.data;
-	// #3267 N8-1-10：页面在使用中（已显示 Agent 工作区）转为访问失效时，整块换成提示，原来的
+	// 已显示 Agent 之后，轮询或后台重读读到不可重试的失败（404 等其余 HTTP、响应无效）同样换成读取失败卡，
+	// 与 /agents/:id 一致（#3387、#3433 N15-04）：TanStack Query 保留上一次的 Agent，不能据此继续显示工作区。
+	// 401 / 403 由上面的闭锁接手；可重试的失败（503、网络中断）继续显示工作区。「刷新 Agent 状态」的失败
+	// 只在横幅内说明（N14-12），这里不按用户发起的读取替换页面。
+	const agentFailed = readFailed(agentQuery, retryableAgentRead);
+	const replaced = denied || agentFailed;
+	// #3267 N8-1-10：页面在使用中（已显示 Agent 工作区）转为访问失效或读取失败时，整块换成提示，原来的
 	// 焦点（发送按钮、输入框）随之卸载；焦点已落到 body 时交给页面 h1，不让读屏与 Tab 从页首重来。
 	const workspaceShown = useRef(false);
 	const deniedHeading = useRef<HTMLHeadingElement>(null);
 	useLayoutEffect(() => {
-		if (!denied) {
+		if (!replaced) {
 			if (identityKey && agent) workspaceShown.current = true;
 			return;
 		}
@@ -442,8 +449,8 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		const focused = document.activeElement;
 		if (!focused || focused === document.body || !focused.isConnected)
 			deniedHeading.current?.focus();
-	}, [denied, identityKey, agent]);
-	if (denied || !identityKey || !agent)
+	}, [replaced, identityKey, agent]);
+	if (replaced || !identityKey || !agent)
 		return (
 			<section className="chat-layout">
 				<ConversationHeader title="对话" headingRef={deniedHeading} />
