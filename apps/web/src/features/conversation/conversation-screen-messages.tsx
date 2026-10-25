@@ -30,6 +30,7 @@ import {
 	distinctObjectNames,
 	withObjectName,
 } from "../../lib/accessible-name.js";
+import { useNow } from "../../lib/clock.js";
 import type { PilotProtocolErrorV1 } from "../../pilot/generated/types.gen.js";
 import type { ConversationDetailProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { AssistantMarkdown } from "./assistant-markdown.js";
@@ -50,7 +51,10 @@ import {
 	answerText,
 	commandFailure,
 	type ExecutionStatus,
+	elapsedSecondsLabel,
 	emptyAnswerKind,
+	executionPhase,
+	executionPhaseLabel,
 	executionStatus,
 	executionStatusLabels,
 	isTerminal,
@@ -265,7 +269,9 @@ export function ConversationMessages({
 		text,
 		bodyKind,
 		createdAt,
+		startedAt,
 		error,
+		failure,
 		objectName,
 		regenerate,
 		regeneratePending,
@@ -277,7 +283,10 @@ export function ConversationMessages({
 		text: string;
 		bodyKind: "text" | "empty" | "not_loaded";
 		createdAt?: string;
+		/** #3377：已用时长的起点（受理时间）；没有可靠起点时不显示。 */
+		startedAt?: string;
 		error?: PilotProtocolErrorV1 | null;
+		failure?: ReplyFailure | null;
 		objectName?: string;
 		regenerate?: () => void;
 		regeneratePending?: boolean;
@@ -292,7 +301,17 @@ export function ConversationMessages({
 			text={text}
 			bodyKind={bodyKind}
 			createdAt={createdAt}
+			startedAt={startedAt}
+			phase={
+				status && !isTerminal(status)
+					? (() => {
+							const phase = executionPhase(events, executionId, status);
+							return phase ? executionPhaseLabel(phase) : undefined;
+						})()
+					: undefined
+			}
 			error={error}
+			failure={failure}
 			objectName={objectName}
 			regenerate={regenerate}
 			regeneratePending={regeneratePending}
@@ -353,6 +372,7 @@ export function ConversationMessages({
 		id: string,
 		objectName?: string,
 		recorded?: ExecutionStatus,
+		acceptedAt?: string,
 	) => {
 		const fallback = id === current?.executionId ? current.status : recorded;
 		const status = executionStatus(events, id) ?? fallback;
@@ -368,6 +388,10 @@ export function ConversationMessages({
 				.join(""),
 			bodyKind: "text",
 			createdAt: events.find((event) => event.executionId === id)?.occurredAt,
+			// 用户消息的受理时间；没有对应提问（如重新生成）时取该执行最早的已持久事实。
+			startedAt:
+				acceptedAt ??
+				events.find((event) => event.executionId === id)?.occurredAt,
 			objectName,
 		});
 	};
@@ -414,7 +438,13 @@ export function ConversationMessages({
 				text,
 				bodyKind,
 				createdAt: selected.createdAt,
+				// 首个回答从提问受理起计时；重新生成的回答从它最早的已持久事实起计时。
+				startedAt:
+					(selected.answerVersion ?? 1) > 1
+						? selected.createdAt
+						: message.createdAt,
 				error: selected.error,
+				failure: selected.status === "failed" ? selected.failure : undefined,
 				objectName,
 				regenerate:
 					(canRegenerate || regeneratingMessageId === message.messageId) &&
@@ -465,6 +495,7 @@ export function ConversationMessages({
 				message.executionId,
 				objectName,
 				isTerminal(message.status) ? undefined : message.status,
+				message.createdAt,
 			);
 		}
 		// 提问与回复的间距由 .chat-layout .exchange 给出，与轮次之间等距（设计 .messages gap，G4-03）。
@@ -673,7 +704,10 @@ function AssistantReply({
 	text,
 	bodyKind,
 	createdAt,
+	startedAt,
+	phase,
 	error,
+	failure,
 	objectName,
 	regenerate,
 	regeneratePending = false,
@@ -693,7 +727,13 @@ function AssistantReply({
 	text: string;
 	bodyKind: "text" | "empty" | "not_loaded";
 	createdAt?: string;
+	/** #3377：已用时长的起点。 */
+	startedAt?: string;
+	/** #3377：处理中的阶段名（PRD 11.2），没有阶段事实时显示执行状态。 */
+	phase?: string;
 	error?: PilotProtocolErrorV1 | null;
+	/** #3377：失败回答的用户可见分类说明，与企微同源（工程 Spec §16.1.1）。 */
+	failure?: ReplyFailure | null;
 	objectName?: string;
 	regenerate?: () => void;
 	/** 重新生成请求进行中：「重新生成」保持可聚焦的禁用，不卸载（#3267 N8-1-09）。 */
@@ -751,10 +791,14 @@ function AssistantReply({
 				onRendered,
 			}
 		: undefined;
+	// #3377：处理中显示阶段与实时耗时；耗时每秒刷新，不放进 live region，读屏只播报阶段变化。
 	const meta = pending ? (
-		<LoadingLine className="message-loading">
-			{executionStatusLabels[status]}
-		</LoadingLine>
+		<span className="message-progress">
+			<LoadingLine className="message-loading">
+				{phase ?? executionStatusLabels[status]}
+			</LoadingLine>
+			{startedAt ? <ElapsedTime since={startedAt} /> : null}
+		</span>
 	) : status === "unknown" ? (
 		<span className="message-meta-state">{executionStatusLabels.unknown}</span>
 	) : (
@@ -771,9 +815,9 @@ function AssistantReply({
 		segments.push(label(status));
 		if (bodyKind === "not_loaded") segments.push("正文在更早的记录中");
 	} else if (status === "failed") {
-		// 原因按错误码映射，不需要打开执行详情（R4-08、NI-07）。
+		// 原因按 Core 给出的失败分类说明（#3377），旧服务端没有分类时按错误码映射（R4-08、NI-07）。
 		segments.push(label(status));
-		segments.push(commandFailure(error?.code));
+		segments.push(failure?.message ?? commandFailure(error?.code));
 		if (regenerate) segments.push("可重新生成");
 	} else if (status === "cancelled") {
 		segments.push(label(status));
@@ -1103,6 +1147,25 @@ function formatResultSize(value: number) {
 	if (value < 1024 ** 2) return `${Math.round(value / 1024)} KB`;
 	if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
 	return `${(value / 1024 ** 3).toFixed(1)} GB`;
+}
+
+type ReplyFailure = NonNullable<
+	Extract<
+		ConversationDetailProjectionV2["messages"][number],
+		{ status: "failed" }
+	>["failure"]
+>;
+
+/** #3377：处理中回复卡的实时耗时（“已用 N 秒”），每秒按当前时钟重算。 */
+function ElapsedTime({ since }: { since: string }) {
+	const now = useNow();
+	const [, tick] = useState(0);
+	useEffect(() => {
+		const timer = setInterval(() => tick((value) => value + 1), 1_000);
+		return () => clearInterval(timer);
+	}, []);
+	const label = elapsedSecondsLabel(since, now);
+	return label ? <span className="message-elapsed">{label}</span> : null;
 }
 
 /** 设计 .message-meta：左侧作者 12px/650，右侧时间（11px muted）或进行中状态，可换行。 */

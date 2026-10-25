@@ -8,7 +8,10 @@ import { describe, expect, it } from "vitest";
 import {
 	answerText,
 	currentExecution,
+	elapsedSecondsLabel,
 	emptyAnswerKind,
+	executionPhase,
+	executionPhaseLabel,
 	isTerminal,
 	reasoningTexts,
 } from "./conversation-screen-state.js";
@@ -347,5 +350,37 @@ describe("thinking text per execution (#2981)", () => {
 		expect(texts.get("execution-2")).toBe("other");
 		// 正文增量不进入思考过程；没有思考的 Execution 没有条目。
 		expect([...texts.keys()]).toEqual(["execution-1", "execution-2"]);
+	});
+});
+
+describe("reply progress labels (#3377)", () => {
+	it("names phases like the WeCom phase line and only for the given execution", () => {
+		expect(executionPhaseLabel({ kind: "queued" })).toBe("排队中");
+		expect(executionPhaseLabel({ kind: "preparing" })).toBe("准备会话");
+		expect(executionPhaseLabel({ kind: "running" })).toBe("执行中");
+		expect(
+			executionPhaseLabel({ kind: "tool", toolId: "browser_observe" }),
+		).toBe("调用工具：读取页面");
+		expect(executionPhaseLabel({ kind: "tool", toolId: "shell" })).toBe(
+			"调用工具：shell",
+		);
+		expect(executionPhaseLabel({ kind: "model_retry" })).toBe("模型重试");
+		const other = PersistedConversationEventV1Schema.parse({
+			...event(1),
+			executionId: "execution-2",
+			type: "execution.status",
+			payload: { status: "processing" },
+		});
+		expect(executionPhase([other], "execution-1", "submitted")).toEqual({
+			kind: "preparing",
+		});
+		expect(executionPhase([other], null, "processing")).toBeNull();
+	});
+
+	it("counts whole elapsed seconds and ignores an unusable start", () => {
+		const now = new Date("2026-09-15T10:01:05.900Z");
+		expect(elapsedSecondsLabel("2026-09-15T10:00:00Z", now)).toBe("已用 65 秒");
+		expect(elapsedSecondsLabel("2026-09-15T10:02:00Z", now)).toBe("已用 0 秒");
+		expect(elapsedSecondsLabel("not a time", now)).toBeNull();
 	});
 });

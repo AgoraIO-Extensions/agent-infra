@@ -4725,6 +4725,9 @@
                         }
                       ]
                     },
+                    "failure": {
+                      "$ref": "#/components/schemas/ExecutionFailureProjectionV1"
+                    },
                     "isCurrentAnswer": {
                       "anyOf": [
                         {
@@ -5742,6 +5745,38 @@
             ],
             "type": "object"
           }
+        ],
+        "type": "object"
+      },
+      "ExecutionFailureCategoryV1": {
+        "enum": [
+          "model_unavailable",
+          "agent_updating",
+          "session_preparation_failed",
+          "attachment_unreadable",
+          "authorization_revoked",
+          "relay_key_unavailable",
+          "queue_timeout",
+          "conversation_unavailable",
+          "internal_error"
+        ],
+        "type": "string"
+      },
+      "ExecutionFailureProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/ExecutionFailureCategoryV1"
+          },
+          "message": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "message"
         ],
         "type": "object"
       },

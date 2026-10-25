@@ -2005,6 +2005,7 @@ describe("published Relay authority migration", () => {
 			63,
 			64,
 			65,
+			66,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2079,8 +2080,8 @@ describe("published Relay authority migration", () => {
 			tag: "0063_wecom_outbound_media",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 65,
-			tag: "0065_wecom_receipt_execution",
+			idx: 66,
+			tag: "0066_wecom_stream_frame_seq",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2314,6 +2315,8 @@ describe("published Relay authority migration", () => {
 					"outbox_items:trace_parent",
 					"conversation_executions:accepted_original_host_session_ref",
 					"conversation_executions:unknown_since",
+					// #3377：长连接流式进度的帧序号。
+					"wecom_receipts:stream_frame_seq",
 				],
 				checks: [
 					...(kind === "original27"
@@ -2490,6 +2493,7 @@ describe("published Relay authority migration", () => {
 					"wecom_conversation_rotations:wecom_conversation_rotation_positive",
 					"wecom_receipts:wecom_acceptance_status",
 					"wecom_receipts:wecom_media_rejection",
+					"wecom_receipts:wecom_stream_frame_seq",
 					...["kind", "ordinal", "status"].map(
 						(name) => `wecom_receipt_media:wecom_receipt_media_${name}`,
 					),

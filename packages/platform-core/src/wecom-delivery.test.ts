@@ -9,6 +9,7 @@ import {
 	type WecomSendPortV1,
 	wecomQueueTimeoutTextV1,
 	wecomReplyTimeoutTextV1,
+	wecomRevalidationBackoffMsV1,
 } from "./wecom-channel.ts";
 import type { WecomAnswerReferenceParserV1 } from "./wecom-reply-media.ts";
 
@@ -98,6 +99,10 @@ function fixture() {
 			async () => true,
 		),
 		finish: vi.fn(async () => {}),
+		defer: vi.fn<WecomDeliveryStorePortV1["defer"]>(async () => {}),
+		prepareNotice: vi.fn<WecomDeliveryStorePortV1["prepareNotice"]>(
+			async () => "prepared",
+		),
 	};
 	const authorization = {
 		authorize: vi.fn<WecomAuthorizationPortV1["authorize"]>(async () => ({
@@ -207,7 +212,7 @@ it("cancels before sending when identity mapping or binding changes", async () =
 	expect(f.store.prepare).not.toHaveBeenCalled();
 	expect(f.store.finish).toHaveBeenCalledWith(claim, "cancelled");
 });
-it("leaves a reply retryable while the Agent is temporarily unavailable", async () => {
+it("retries revalidation with bounded backoff while a dependency is temporarily unavailable (#3377)", async () => {
 	const f = fixture();
 	f.authorization.authorize.mockResolvedValueOnce({
 		outcome: "unavailable",
@@ -217,11 +222,137 @@ it("leaves a reply retryable while the Agent is temporarily unavailable", async 
 	expect(f.store.prepare).not.toHaveBeenCalled();
 	expect(f.store.finish).not.toHaveBeenCalled();
 	expect(f.sender.send).not.toHaveBeenCalled();
+	// 首次退避 1 秒；回执仍由这次领取持有，不放弃也不推进状态。
+	expect(f.store.defer).toHaveBeenCalledWith(claim, 1_000);
 
 	expect(await f.useCase.dispatch()).toBe(true);
 	expect(f.store.prepare).toHaveBeenCalledTimes(1);
 	expect(f.sender.send).toHaveBeenCalledTimes(1);
 	expect(f.store.finish).toHaveBeenCalledWith(claim, "sent");
+});
+it.each([
+	[1, 1_000],
+	[2, 2_000],
+	[3, 4_000],
+	[4, 8_000],
+	[5, 15_000],
+	[40, 15_000],
+])(
+	"backs off revalidation after claim %i by %i ms (#3377)",
+	async (fence, delay) => {
+		expect(wecomRevalidationBackoffMsV1(fence)).toBe(delay);
+		const f = fixture();
+		f.store.claim.mockResolvedValueOnce({ ...claim, fence });
+		f.authorization.authorize.mockRejectedValueOnce(
+			new Error("directory down"),
+		);
+		await f.useCase.dispatch();
+		expect(f.store.defer).toHaveBeenCalledWith(
+			expect.objectContaining({ fence }),
+			delay,
+		);
+		expect(f.sender.send).not.toHaveBeenCalled();
+	},
+);
+it("never defers past the last 30 seconds of the reply lifetime (#3377)", async () => {
+	const now = new Date("2030-01-01T00:00:00Z");
+	const f = fixture();
+	const useCase = createWecomDeliveryV1({
+		store: f.store,
+		authorization: f.authorization,
+		sender: f.sender,
+		answerReferences,
+		now: () => now,
+	});
+	f.store.claim.mockResolvedValueOnce({
+		...claim,
+		fence: 9,
+		replyExpiresAt: "2030-01-01T00:00:32Z",
+	});
+	f.authorization.authorize.mockResolvedValueOnce({ outcome: "unavailable" });
+	await useCase.dispatch();
+	expect(f.store.defer).toHaveBeenCalledWith(expect.any(Object), 2_000);
+});
+it.each([
+	["a failure notice", { executionStatus: "failed", textDeltas: [] }],
+	["a completed answer", {}],
+	["an unready answer", { answerReady: false, textDeltas: ["机密半成品"] }],
+	["a busy notice", { acceptanceStatus: "busy" as const }],
+])(
+	"sends a fixed internal-error notice without business content when %s cannot be revalidated before the deadline (#3377 AC-2)",
+	async (_name, changes: Partial<WecomDeliveryClaimV1>) => {
+		const now = new Date("2030-01-01T00:00:00Z");
+		const f = fixture();
+		const useCase = createWecomDeliveryV1({
+			store: f.store,
+			authorization: f.authorization,
+			sender: f.sender,
+			answerReferences,
+			now: () => now,
+		});
+		f.store.claim.mockResolvedValueOnce({
+			...claim,
+			...changes,
+			fence: 7,
+			traceId: "trace-7",
+			replyExpiresAt: "2030-01-01T00:00:20Z",
+			thinking: { parts: [raw("私密思考")], complete: true },
+		});
+		f.authorization.authorize.mockResolvedValue({ outcome: "unavailable" });
+		expect(await useCase.dispatch()).toBe(true);
+		expect(f.store.defer).not.toHaveBeenCalled();
+		expect(f.store.prepare).not.toHaveBeenCalled();
+		expect(f.store.prepareNotice).toHaveBeenCalledTimes(1);
+		const input = f.sender.send.mock.calls[0]?.[0];
+		expect(input).toEqual({
+			scope: claim.scope,
+			replyHandle: claim.replyHandle,
+			text: "本次任务执行失败，平台内部错误，反馈时请提供追踪编号 trace-7",
+			revalidate: expect.any(Function),
+		});
+		expect(JSON.stringify(input)).not.toMatch(/final|机密|私密/);
+		// 复核仍不可用时照常发送；确认撤权或修订变化时不发送。
+		expect(await input?.revalidate?.()).toBe(true);
+		f.authorization.authorize.mockResolvedValueOnce({ outcome: "denied" });
+		expect(await input?.revalidate?.()).toBe(false);
+		f.authorization.authorize.mockResolvedValueOnce({
+			outcome: "allowed",
+			authority: { ...authority, channelRevision: "c2" },
+		});
+		expect(await input?.revalidate?.()).toBe(false);
+		expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
+	},
+);
+it("falls back to the receipt as trace and cancels the notice when revisions changed (#3377)", async () => {
+	const now = new Date("2030-01-01T00:00:00Z");
+	const f = fixture();
+	const useCase = createWecomDeliveryV1({
+		store: f.store,
+		authorization: f.authorization,
+		sender: f.sender,
+		answerReferences,
+		now: () => now,
+	});
+	const late = { ...claim, replyExpiresAt: "2030-01-01T00:00:10Z" };
+	f.authorization.authorize.mockResolvedValue({ outcome: "unavailable" });
+	f.store.claim.mockResolvedValueOnce(late);
+	await useCase.dispatch();
+	expect(f.sender.send).toHaveBeenCalledWith(
+		expect.objectContaining({
+			text: "本次任务执行失败，平台内部错误，反馈时请提供追踪编号 receipt",
+		}),
+	);
+	f.store.claim.mockResolvedValueOnce(late);
+	f.store.prepareNotice.mockResolvedValueOnce("changed");
+	await useCase.dispatch();
+	expect(f.store.finish).toHaveBeenLastCalledWith(late, "cancelled");
+	expect(f.sender.send).toHaveBeenCalledTimes(1);
+	f.store.claim.mockResolvedValueOnce(late);
+	f.store.prepareNotice.mockResolvedValueOnce("stale");
+	f.store.finish.mockClear();
+	await useCase.dispatch();
+	expect(f.store.finish).not.toHaveBeenCalled();
+	expect(f.sender.send).toHaveBeenCalledTimes(1);
 });
 it("cancels a reply when authorization is denied", async () => {
 	const f = fixture();
@@ -421,24 +552,51 @@ it.each([
 	},
 );
 
-// #3077：回答在有效期内没有就绪时，Store 在最后 30 秒领取，Core 发固定超时提示结束本次回复。
-it("ends an unready reply with the fixed timeout notice instead of expiring silently (#3077)", async () => {
+// #3077、#3377：回答在有效期内没有就绪时，Store 在最后 30 秒领取，Core 保留已有回答、附固定超时提示
+// 并以 finish=true 定稿，不附思考过程与结果文件。
+it("finalizes an unready reply with the answer so far and the timeout notice (#3377)", async () => {
 	const media = [pdf];
 	const { f, input } = await sentFor({
 		answerReady: false,
-		executionStatus: "completed",
-		textDeltas: ["partial "],
+		executionStatus: "processing",
+		textDeltas: ["已经", "写好的部分 [报告](sandbox:out/report.pdf)"],
 		media,
 		thinking: { parts: [raw("思考")], complete: true },
 	});
-	expect(f.store.prepare).toHaveBeenCalledTimes(1);
+	expect(f.store.prepare).toHaveBeenCalledWith(
+		expect.any(Object),
+		authority,
+		[],
+	);
 	expect(input).toEqual({
 		scope: claim.scope,
 		replyHandle: claim.replyHandle,
-		text: wecomReplyTimeoutTextV1,
+		text: `已经写好的部分 report.pdf（未发布）\n\n${wecomReplyTimeoutTextV1}`,
 		revalidate: expect.any(Function),
 	});
 	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
+});
+it("sends only the timeout notice when nothing has been answered yet (#3077)", async () => {
+	const { input } = await sentFor({
+		answerReady: false,
+		executionStatus: "processing",
+		textDeltas: [],
+	});
+	expect(input?.text).toBe(wecomReplyTimeoutTextV1);
+});
+it("cuts a long unready answer at a code point so the timeout notice always fits (#3377)", async () => {
+	const { input } = await sentFor({
+		answerReady: false,
+		executionStatus: "processing",
+		textDeltas: ["答".repeat(8000)],
+		answerTooLong: true,
+	});
+	const text = input?.text ?? "";
+	expect(Buffer.byteLength(text)).toBeLessThanOrEqual(20480);
+	expect(
+		text.endsWith(`（回答较长，已截断）\n\n${wecomReplyTimeoutTextV1}`),
+	).toBe(true);
+	expect(text.startsWith("答答")).toBe(true);
 });
 it.each([
 	["a ready answer", { answerReady: true }],
@@ -493,9 +651,9 @@ it.each([
 		"本次任务执行失败，当前会话不可用，发送 /new 开始新会话",
 	],
 	[
-		"keeps the ordinary failure text while the conversation is usable",
-		{ executionStatus: "failed", textDeltas: [] },
-		"本次任务执行失败，请稍后重试",
+		"explains an unclassified failure as an internal error with its trace",
+		{ executionStatus: "failed", textDeltas: [], traceId: "trace-1" },
+		"本次任务执行失败，平台内部错误，反馈时请提供追踪编号 trace-1",
 	],
 ] as const)("%s with its fixed reply (#3184)", async (_name, change, text) => {
 	const f = fixture();
@@ -1137,7 +1295,8 @@ it.each([
 			answerReady: false,
 			queue: { failureCode: null },
 		},
-		wecomReplyTimeoutTextV1,
+		// #3377：已开始处理的排队消息按普通回复超时定稿，保留已有回答。
+		`final reply\n\n${wecomReplyTimeoutTextV1}`,
 	],
 	[
 		"a busy receipt with a full queue",
@@ -1160,5 +1319,63 @@ it.each([
 		if (expected !== "final reply")
 			expect(input && "textWithThinking" in input).toBe(false);
 		expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
+	},
+);
+
+// #3377：失败说明按已持久的受限原因归入工程 Spec §16.1.1 的分类，内部错误附追踪编号。
+it.each([
+	[
+		{ modelFailureCode: "dependency_unavailable" },
+		"本次任务执行失败，模型服务暂时繁忙或超时，请稍后重试",
+	],
+	[
+		{ taskReason: "AGENT_UNAVAILABLE" },
+		"本次任务执行失败，Agent 正在更新，请在更新完成后重试",
+	],
+	[
+		{ dispatchCode: "RUNTIME_SESSION_PREPARATION_FAILED" },
+		"本次任务执行失败，会话准备失败，请重试，仍失败时新建会话",
+	],
+	[
+		{ dispatchCode: "RUNTIME_FILE_INPUT_UNAVAILABLE" },
+		"本次任务执行失败，附件无法读取，请重新发送附件",
+	],
+	[
+		{ dispatchCode: "AUTHORIZATION_REVOKED" },
+		"本次任务执行失败，当前没有使用该 Agent 的权限，请联系 Agent Owner 或管理员",
+	],
+	[
+		{ runtimeCode: "RELAY_KEY_UNAVAILABLE" },
+		"本次任务执行失败，个人 Relay Key 不可用，请到个人设置处理",
+	],
+	[
+		{ taskReason: "TASK_WAIT_TIMEOUT" },
+		"排队超时，等待超过时限仍未开始，本条消息未处理，请稍后重新发送",
+	],
+	[
+		{ dispatchCode: "RUNTIME_SESSION_BLOCKED" },
+		"本次任务执行失败，当前会话不可用，发送 /new 开始新会话",
+	],
+	[
+		{ dispatchCode: "RUNTIME_RECOVERY_TIMEOUT" },
+		"本次任务执行失败，平台内部错误，反馈时请提供追踪编号 trace-9",
+	],
+	[{}, "本次任务执行失败，平台内部错误，反馈时请提供追踪编号 trace-9"],
+] as const)(
+	"explains failure %j with its §16.1.1 category text (#3377 AC-2)",
+	async (failure, text) => {
+		const { input } = await sentFor({
+			executionStatus: "failed",
+			textDeltas: ["不应出现的半成品"],
+			failure,
+			traceId: "trace-9",
+			thinking: { parts: [raw("私密思考")], complete: true },
+		});
+		expect(input).toEqual({
+			scope: claim.scope,
+			replyHandle: claim.replyHandle,
+			text,
+			revalidate: expect.any(Function),
+		});
 	},
 );

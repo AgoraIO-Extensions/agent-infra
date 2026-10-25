@@ -172,6 +172,54 @@ describe("Conversation read projection", () => {
 		]);
 	});
 
+	it("classifies failed answers from persisted codes and leaves other messages unclassified (#3377)", () => {
+		const execution = (
+			executionId: string,
+			status: string,
+			failure?: { dispatchCode?: string; modelFailureCode?: string },
+		) => ({
+			executionId,
+			conversationId: "conversation-1",
+			sourceMessageId: `message-${executionId}`,
+			status,
+			createdAt: first,
+			updatedAt: second,
+			traceId: `trace-${executionId}`,
+			...(failure ? { failure } : {}),
+		});
+		const projected = projectConversationMessagesV1({
+			messages: [
+				{
+					messageId: "message-a",
+					text: "附件",
+					executionId: "a",
+					status: "failed",
+					failureCode: "EXECUTION_FAILED",
+					createdAt: first,
+				},
+			],
+			executions: [
+				execution("a", "failed", {
+					dispatchCode: "RUNTIME_FILE_INPUT_UNAVAILABLE",
+				}),
+				execution("b", "failed"),
+				execution("c", "cancelled"),
+			],
+			events: [],
+		});
+		const byId = new Map(projected.map((item) => [item.messageId, item]));
+		expect(byId.get("assistant:a")?.failure).toEqual({
+			category: "attachment_unreadable",
+			message: "附件无法读取，请重新发送附件",
+		});
+		expect(byId.get("assistant:b")?.failure).toEqual({
+			category: "internal_error",
+			message: "平台内部错误，反馈时请提供追踪编号 trace-b",
+		});
+		expect(byId.get("assistant:c")?.failure).toBeNull();
+		expect(byId.get("message-a")?.failure).toBeNull();
+	});
+
 	it("fails closed on malformed persisted facts", () => {
 		expect(() =>
 			projectConversationMessagesV1({

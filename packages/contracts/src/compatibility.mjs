@@ -1267,7 +1267,7 @@ function isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) {
 
 // #3017 只给 submit V2 及以上的 Runtime 操作结果联合新增一个稳定脱敏、不可重试的 rejected
 // 成员 RUNTIME_SESSION_BLOCKED。成员内容逐字段固定，且只允许出现在 V2 结果组件和
-// V3/V4/V5 响应的 result 联合中；V1 结果不扩展，删除新增成员后须与基线逐字节一致。
+// V3/V4/V5/V6 响应的 result 联合中；V1 结果不扩展，删除新增成员后须与基线逐字节一致。
 // #3314 以同一规则新增 RUNTIME_FILE_INPUT_REJECTED（附件读取在原生副作用前被平台明确拒绝）。
 function runtimeRejectedResult(code, message) {
 	return {
@@ -1314,6 +1314,7 @@ function runtimeRejectedResultUnions(schemas) {
 			"RuntimeOperationResponseV3",
 			"RuntimeOperationResponseV4",
 			"RuntimeOperationResponseV5",
+			"RuntimeOperationResponseV6",
 		].map((name) => schemas?.[name]?.properties?.result?.anyOf),
 	];
 }
@@ -3380,6 +3381,94 @@ function isAgentManagementRevisionOpenApiAddition(previous, current) {
 		changed = true;
 	}
 	return changed && sameValue(previous, normalized);
+}
+
+// #3377：V2 会话读取中失败的回答新增可选的用户可见失败分类 `failure`（工程 Spec §16.1.1），
+// 同时发布分类枚举与 strict 投影。去掉该可选字段与两个新组件后须与基线逐字节一致。
+const executionFailureProjectionAddition = {
+	ExecutionFailureCategoryV1: {
+		enum: [
+			"model_unavailable",
+			"agent_updating",
+			"session_preparation_failed",
+			"attachment_unreadable",
+			"authorization_revoked",
+			"relay_key_unavailable",
+			"queue_timeout",
+			"conversation_unavailable",
+			"internal_error",
+		],
+		type: "string",
+	},
+	ExecutionFailureProjectionV1: {
+		additionalProperties: false,
+		properties: {
+			category: { $ref: "#/components/schemas/ExecutionFailureCategoryV1" },
+			message: { maxLength: 512, minLength: 1, type: "string" },
+		},
+		required: ["category", "message"],
+		type: "object",
+	},
+};
+/**
+ * 只做加法：基线的失败回答还没有 `failure` 时，去掉当前的该可选字段；基线没有两个新组件时一并
+ * 去掉。字段或组件内容不符、被设为必填，或组件出现在其他位置时原样返回，让差异按破坏性变更判定。
+ * 作为规范化步骤先于其他历史例外执行，早于 #3377 的基线仍按原摘要比较。
+ */
+function normalizeExecutionFailureProjectionOpenApiAddition(previous, current) {
+	const failedBranch = (document) => {
+		const options =
+			document?.components?.schemas?.ConversationDetailProjectionV2?.properties
+				?.messages?.items?.oneOf;
+		const failed = Array.isArray(options)
+			? options.filter(
+					(option) => option?.properties?.status?.const === "failed",
+				)
+			: [];
+		return failed.length === 1 ? failed[0] : undefined;
+	};
+	const branch = failedBranch(current);
+	if (branch?.properties?.failure === undefined) return current;
+	if (failedBranch(previous)?.properties?.failure !== undefined) return current;
+	const names = Object.keys(executionFailureProjectionAddition);
+	if (
+		!sameValue(branch.properties.failure, {
+			$ref: "#/components/schemas/ExecutionFailureProjectionV1",
+		}) ||
+		branch.required?.includes("failure") ||
+		names.some(
+			(name) =>
+				!sameValue(
+					current.components?.schemas?.[name],
+					executionFailureProjectionAddition[name],
+				) ||
+				(previous.components?.schemas?.[name] !== undefined &&
+					!sameValue(
+						previous.components.schemas[name],
+						executionFailureProjectionAddition[name],
+					)),
+		)
+	)
+		return current;
+	const candidate = structuredClone(current);
+	delete failedBranch(candidate).properties.failure;
+	for (const name of names)
+		if (previous.components?.schemas?.[name] === undefined)
+			delete candidate.components.schemas[name];
+	// 其他位置借用这两个组件仍然拒绝。
+	const removed = names.filter(
+		(name) => candidate.components.schemas[name] === undefined,
+	);
+	if (removed.length) {
+		const text = JSON.stringify(candidate);
+		if (
+			removed.some((name) =>
+				text.includes(JSON.stringify(`#/components/schemas/${name}`)),
+			)
+		)
+			return current;
+	}
+	return candidate;
 }
 
 // #3035 把既有的浏览器目录搜索 GET /api/v2/directory/search 纳入 V2 契约；
@@ -6007,6 +6096,10 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			current,
 		);
 		current = normalizeBoundedQueueOpenApiAddition(previous, current);
+		current = normalizeExecutionFailureProjectionOpenApiAddition(
+			previous,
+			current,
+		);
 		current = normalizeConversationTaskStatusOpenApiAddition(previous, current);
 		current = normalizeReasoningEventOpenApiAddition(previous, current);
 		current = normalizeSandboxResultFileOpenApiAddition(previous, current);

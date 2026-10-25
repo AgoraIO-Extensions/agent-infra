@@ -60,6 +60,37 @@ it("retries failed channel polls with diagnostic codes only", async () => {
 	await running.stop();
 });
 
+it("refreshes streaming progress on its own loop so a slow reply cannot stall it (#3377)", async () => {
+	vi.useFakeTimers();
+	const log = vi.fn();
+	const slow = Promise.withResolvers<boolean>();
+	const worker = {
+		reconcile: vi.fn(async () => {}),
+		dispatch: vi.fn(() => slow.promise),
+		progress: vi
+			.fn()
+			.mockRejectedValueOnce(new Error("message body"))
+			.mockResolvedValue(1),
+		close: vi.fn(async () => {}),
+	};
+	const running = startPlatformWecomPollingWorkerV1(worker, {
+		intervalMs: 100,
+		log,
+	});
+	await vi.advanceTimersByTimeAsync(350);
+	// 终态回复仍在进行，进度照常每轮刷新；失败只记固定诊断码。
+	expect(worker.dispatch).toHaveBeenCalledOnce();
+	expect(worker.progress.mock.calls.length).toBeGreaterThanOrEqual(3);
+	expect(log.mock.calls.map(([code]) => code)).toEqual([
+		"WECOM_PROGRESS_UNAVAILABLE",
+	]);
+	const stopping = running.stop();
+	slow.resolve(false);
+	await stopping;
+	expect(worker.close).toHaveBeenCalledOnce();
+	expect(vi.getTimerCount()).toBe(0);
+});
+
 it("rejects missing deployment factories without exposing imported errors", async () => {
 	await expect(
 		startPlatformWecomWorkerFromDeploymentV1(

@@ -171,6 +171,8 @@ export type WecomWebSocketMediaInputV1 = Parameters<
 /** 长连接回复端口：文本 stream 与 #3229 的媒体被动回复。 */
 export interface WecomWebSocketSenderV1 {
 	send: WecomSendPortV1["send"];
+	/** #3377：覆盖式更新同一条回复（进度帧、排队提示），见 {@link WecomSendPortV1.update}。 */
+	update: NonNullable<WecomSendPortV1["update"]>;
 	planMedia: NonNullable<WecomSendPortV1["planMedia"]>;
 	sendMedia(
 		input: WecomWebSocketMediaInputV1,
@@ -312,6 +314,162 @@ export function createWecomWebSocketV1(options: {
 		if (replied.size > 256) {
 			const oldest = replied.values().next().value;
 			if (oldest !== undefined) replied.delete(oldest);
+		}
+	}
+	/**
+	 * #3377：每个 stream 只有一个发送者（工程 Spec §14.2.4，参照 Magic 的流式驱动）。处理中提示、
+	 * 进度帧与排队提示都经它覆盖式发送最新全量内容：上一帧收到 ACK 之后才发下一帧，相邻两帧至少
+	 * 间隔 1 秒，等待期间的新内容只保留最新的一帧。最终回复开始后不再发送。
+	 */
+	type StreamFrame = {
+		readonly text: string;
+		/** 每帧发送前的复核；处理中提示没有复核，取出后立即同步发送。 */
+		readonly prepare?: () => Promise<boolean>;
+		readonly settle?: (outcome: "sent" | "failed" | "unknown") => void;
+	};
+	const streams = new Map<
+		string,
+		{
+			latest: StreamFrame | null;
+			running: boolean;
+			sentAt: number;
+			readonly scope: WecomScopeV1;
+			readonly ws: NonNullable<WecomReplyRouteV1["websocket"]>;
+		}
+	>();
+	const frameIntervalMs = 1_000;
+	/** 会话频率额度偏紧时放慢进度更新，额度只够终态回复时不发进度帧（§14.2.3 的额度规划）。 */
+	const slowFrameIntervalMs = 5_000;
+	function streamUsable(ws: NonNullable<WecomReplyRouteV1["websocket"]>) {
+		return (
+			authenticated &&
+			!closed &&
+			ws.connectionId === connectionId &&
+			!replied.has(ws.requestId) &&
+			!sending.has(ws.requestId)
+		);
+	}
+	function enqueueFrame(
+		route: WecomReplyRouteV1,
+		ws: NonNullable<WecomReplyRouteV1["websocket"]>,
+		frame: StreamFrame,
+	): boolean {
+		if (!streamUsable(ws)) return false;
+		let stream = streams.get(ws.requestId);
+		if (!stream) {
+			stream = {
+				latest: null,
+				running: false,
+				sentAt: 0,
+				scope: route.scope,
+				ws,
+			};
+			streams.set(ws.requestId, stream);
+			// 只保留最近的 stream；更早的回复早已结束或超过回复有效期。
+			if (streams.size > 256)
+				for (const [requestId, entry] of streams) {
+					if (streams.size <= 256) break;
+					if (!entry.running && !entry.latest) streams.delete(requestId);
+				}
+		}
+		stream.latest?.settle?.("failed");
+		stream.latest = frame;
+		if (!stream.running) {
+			stream.running = true;
+			void drainFrames(stream);
+		}
+		return true;
+	}
+	async function drainFrames(
+		stream: NonNullable<ReturnType<typeof streams.get>>,
+	) {
+		try {
+			await sendFrames(stream);
+		} catch {
+			// 进度帧尽力而为：意外错误只丢弃尚未发送的帧，不影响最终回复。
+			stream.latest?.settle?.("failed");
+			stream.latest = null;
+		}
+	}
+	/**
+	 * 发送循环。没有待发的帧时退出，`finally` 在同一轮同步复位 `running`，中间没有 await；
+	 * 之后新到的帧一定会重新启动发送循环，不会滞留。
+	 */
+	async function sendFrames(
+		stream: NonNullable<ReturnType<typeof streams.get>>,
+	) {
+		const requestId = stream.ws.requestId;
+		const drop = () => {
+			stream.latest?.settle?.("failed");
+			stream.latest = null;
+		};
+		try {
+			for (;;) {
+				if (!stream.latest) return;
+				const room = conversationWindow(stream.scope).available(
+					now().getTime(),
+				);
+				if (room <= 1) {
+					drop();
+					return;
+				}
+				const interval = room < 10 ? slowFrameIntervalMs : frameIntervalMs;
+				const wait = stream.sentAt + interval - now().getTime();
+				if (wait > 0)
+					await new Promise<void>((resolve) => {
+						const timer = setTimeout(resolve, wait);
+						timer.unref();
+					});
+				const frame = stream.latest;
+				stream.latest = null;
+				if (!frame) return;
+				if (!streamUsable(stream.ws)) {
+					frame.settle?.("failed");
+					drop();
+					return;
+				}
+				let ready = !frame.prepare;
+				if (frame.prepare)
+					try {
+						ready = await frame.prepare();
+					} catch {
+						ready = false;
+					}
+				// 复核期间最终回复可能已经开始：同步核对后立即发送，不会与它交错。
+				if (!ready || !streamUsable(stream.ws)) {
+					frame.settle?.("failed");
+					if (!streamUsable(stream.ws)) {
+						drop();
+						return;
+					}
+					continue;
+				}
+				let pending: ReturnType<typeof client.replyStream>;
+				try {
+					pending = client.replyStream(
+						{ headers: { req_id: requestId } },
+						stream.ws.streamId,
+						frame.text,
+						false,
+					);
+				} catch {
+					frame.settle?.("failed");
+					continue;
+				}
+				acknowledging.set(requestId, pending);
+				stream.sentAt = now().getTime();
+				try {
+					const ack = await pending;
+					frame.settle?.(ack.errcode === 0 ? "sent" : "unknown");
+				} catch (error) {
+					frame.settle?.(providerRejected(error) ? "failed" : "unknown");
+				} finally {
+					if (acknowledging.get(requestId) === pending)
+						acknowledging.delete(requestId);
+				}
+			}
+		} finally {
+			stream.running = false;
 		}
 	}
 	async function settleAcknowledgement(requestId: string) {
@@ -685,6 +843,7 @@ export function createWecomWebSocketV1(options: {
 		}
 	}
 	const sender: WecomWebSocketSenderV1 = {
+		update: (input) => update(input),
 		async send(input) {
 			let requestId: string | undefined;
 			const status = await sendText(input, (id) => {
@@ -820,58 +979,58 @@ export function createWecomWebSocketV1(options: {
 	};
 	/**
 	 * #3077：受理后立即在该消息的 stream 上发送 `finish=false` 的固定处理中提示。它不是业务回复：
-	 * 不经回执状态机、不重发；最终回复在同一 stream 上 `finish=true` 覆盖它。
+	 * 不经回执状态机、不重发；之后的进度帧（#3377）与最终回复在同一 stream 上覆盖它。它是该
+	 * stream 的第一帧，经同一个发送者发送；stream 已有帧或最终回复已开始时不再发送。
 	 */
 	async function acknowledge(input: {
 		readonly scope: WecomScopeV1;
 		readonly replyHandle: string;
 		readonly text: string;
 	}): Promise<"sent" | "failed" | "unknown"> {
-		let ws: NonNullable<WecomReplyRouteV1["websocket"]>;
+		let resolved: Awaited<ReturnType<typeof currentRoute>>;
 		try {
-			const resolved = await currentRoute(input, input.text);
+			resolved = await currentRoute(input, input.text);
 			if (!resolved || !(await current())) return "failed";
-			ws = resolved.ws;
 		} catch {
 			return "failed";
 		}
-		// 同步核对后立即登记，最终回复与重复提示都不会与它交错。
-		if (
-			!authenticated ||
-			closed ||
-			ws.connectionId !== connectionId ||
-			sending.has(ws.requestId) ||
-			replied.has(ws.requestId) ||
-			acknowledging.has(ws.requestId)
-		)
+		const { route, ws } = resolved;
+		if (streams.has(ws.requestId) || acknowledging.has(ws.requestId))
 			return "failed";
-		let pending: ReturnType<typeof client.replyStream>;
+		return new Promise((resolve) => {
+			if (
+				!enqueueFrame(route, ws, {
+					text: input.text,
+					settle: resolve,
+				})
+			)
+				resolve("failed");
+		});
+	}
+	/**
+	 * #3377：覆盖式更新同一条回复（`finish=false`）：交给该 stream 的单一发送者，按 ACK 往返与每秒
+	 * 一帧节流并合并为最新全量。`prepare` 在每帧实际发送前调用（复核授权、持久化帧序号）。路由不属于
+	 * 当前连接、绑定或会话，内容不合规，或最终回复已开始时返回 failed。
+	 */
+	async function update(input: {
+		readonly scope: WecomScopeV1;
+		readonly replyHandle: string;
+		readonly text: string;
+		readonly prepare: () => Promise<boolean>;
+	}): Promise<"queued" | "failed"> {
+		let resolved: Awaited<ReturnType<typeof currentRoute>>;
 		try {
-			pending = client.replyStream(
-				{ headers: { req_id: ws.requestId } },
-				ws.streamId,
-				input.text,
-				false,
-			);
+			resolved = await currentRoute(input, input.text);
+			if (!resolved) return "failed";
 		} catch {
 			return "failed";
 		}
-		acknowledging.set(ws.requestId, pending);
-		try {
-			const ack = await pending;
-			return ack.errcode === 0 ? "sent" : "unknown";
-		} catch (error) {
-			return error &&
-				typeof error === "object" &&
-				"errcode" in error &&
-				typeof error.errcode === "number" &&
-				error.errcode !== 0
-				? "failed"
-				: "unknown";
-		} finally {
-			if (acknowledging.get(ws.requestId) === pending)
-				acknowledging.delete(ws.requestId);
-		}
+		return enqueueFrame(resolved.route, resolved.ws, {
+			text: input.text,
+			prepare: input.prepare,
+		})
+			? "queued"
+			: "failed";
 	}
 	return {
 		acknowledge,

@@ -1,3 +1,8 @@
+import {
+	type ExecutionProgressPhaseV1,
+	executionProgressPhaseV1,
+	executionToolDisplayNameV1,
+} from "@agent-infra/contracts/pilot";
 import type { PilotProtocolErrorV1 } from "../../pilot/generated/types.gen.js";
 import type {
 	ConversationDetailProjectionV2,
@@ -15,6 +20,45 @@ export const executionStatusLabels = {
 	unknown: "执行结果待核实",
 } as const;
 export type ExecutionStatus = keyof typeof executionStatusLabels;
+
+/**
+ * #3377（PRD 11.2）：回复处理期间的阶段。与企微进度帧使用同一个 Contract 推导，只取该执行
+ * 已持久的状态事件与实际模型/工具事实，没有事实时退回已持久的执行状态，不按时间推测。
+ */
+export function executionPhase(
+	events: readonly ConversationTimelineEventV2[],
+	executionId: string | null,
+	status: ExecutionStatus | undefined,
+): ExecutionProgressPhaseV1 | null {
+	if (!executionId) return null;
+	return executionProgressPhaseV1(
+		events.filter((event) => event.executionId === executionId),
+		status,
+	);
+}
+
+/** 阶段名与企微阶段行一致；工具只显示展示名，不含参数或结果。 */
+export function executionPhaseLabel(phase: ExecutionProgressPhaseV1): string {
+	switch (phase.kind) {
+		case "queued":
+			return "排队中";
+		case "preparing":
+			return "准备会话";
+		case "running":
+			return "执行中";
+		case "tool":
+			return `调用工具：${executionToolDisplayNameV1(phase.toolId)}`;
+		case "model_retry":
+			return "模型重试";
+	}
+}
+
+/** 已用时长的显示：与企微阶段行相同，按整秒计。 */
+export function elapsedSecondsLabel(since: string, now: Date): string | null {
+	const started = Date.parse(since);
+	if (!Number.isFinite(started)) return null;
+	return `已用 ${Math.max(0, Math.floor((now.getTime() - started) / 1000))} 秒`;
+}
 export function isTerminal(status: ExecutionStatus | undefined) {
 	return (
 		status === "completed" || status === "failed" || status === "cancelled"

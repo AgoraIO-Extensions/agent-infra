@@ -337,12 +337,13 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 	await expect(
 		page.getByText("第一段实时输出。第二段完成输出。", { exact: true }),
 	).toHaveCount(0);
-	// R4-07：受理与处理状态只在助手回复卡内（spinner + 状态文案），卡外不再有受理行。
+	// R4-07：受理与处理状态只在助手回复卡内（spinner + 阶段），卡外不再有受理行。
+	// #3377：阶段取自已持久的事实（准备会话、执行中等）。
 	await expect(
 		page
 			.getByRole("article")
 			.getByRole("status")
-			.filter({ hasText: /已受理，等待处理|处理中/ }),
+			.filter({ hasText: /准备会话|执行中/ }),
 	).toBeVisible();
 	await expect(page.getByText(/消息已受理，等待处理/)).toHaveCount(0);
 	await test.info().attach("conversation-incremental-sse", {
@@ -1690,11 +1691,12 @@ test("regenerates a terminal answer and opens its execution details", async ({
 	await expect(page.getByText("已完成检查。", { exact: true })).toBeVisible();
 	await page.getByRole("button", { name: /^重新生成/ }).click();
 	// R4-07：重新生成受理后，新回复卡内显示受理状态，卡外没有受理行。
+	// #3377：已受理、Runtime 尚未开始时的阶段为「准备会话」。
 	await expect(
 		page
 			.getByRole("article")
 			.getByRole("status")
-			.filter({ hasText: "已受理，等待处理" }),
+			.filter({ hasText: "准备会话" }),
 	).toBeVisible();
 	await expect(page.getByText(/消息已受理，等待处理/)).toHaveCount(0);
 	expect(regenerateBody).toEqual({

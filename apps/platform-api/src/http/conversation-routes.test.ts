@@ -918,6 +918,56 @@ describe("Conversation HTTP routes", () => {
 		);
 	});
 
+	// #3377：V2 读取在失败回答上附带 Core 的用户可见失败分类；V1 投影保持不变，不外露原因码。
+	it("classifies a failed answer only in the V2 conversation read", async () => {
+		const input = dependencies();
+		const current = await input.query.get(
+			{ actorId: identity.userId, channelId: "web" },
+			"conversation-1",
+		);
+		if (!current) throw new Error("Expected Conversation fixture");
+		input.query.get = vi.fn().mockResolvedValue({
+			...current,
+			executions: current.executions.map((item) => ({
+				...item,
+				status: "failed",
+				traceId: "trace-failed",
+				failure: { dispatchCode: "RUNTIME_SESSION_PREPARATION_FAILED" },
+			})),
+		});
+		const { app } = testApp(input);
+		const v2 = ConversationDetailProjectionV2Schema.parse(
+			await (await app.request("/api/v2/conversations/conversation-1")).json(),
+		);
+		expect(v2.messages).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					role: "assistant",
+					status: "failed",
+					error: expect.objectContaining({
+						code: "EXECUTION_FAILED",
+						traceId: "trace-failed",
+					}),
+					failure: {
+						category: "session_preparation_failed",
+						message: "会话准备失败，请重试，仍失败时新建会话",
+					},
+				}),
+			]),
+		);
+		const v1Body = await (
+			await app.request("/api/v1/conversations/conversation-1")
+		).text();
+		const v1 = ConversationDetailProjectionV1Schema.parse(JSON.parse(v1Body));
+		expect(
+			v1.messages.find((message) => message.role === "assistant"),
+		).toMatchObject({ status: "failed" });
+		expect(v1Body).not.toContain("failure");
+		expect(`${v1Body}${JSON.stringify(v2)}`).not.toContain(
+			"RUNTIME_SESSION_PREPARATION_FAILED",
+		);
+	});
+
 	it("maps an authorized unavailable Conversation without exposing internals", async () => {
 		const input = dependencies();
 		input.commands(identity).accept = vi
