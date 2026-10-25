@@ -408,18 +408,30 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 			);
 			expect(first.status).toBe(202);
 			const accepted = (await first.json()) as { executionId: string };
-			const before = await snapshot();
+			// 补充指令只给已被 Runtime 接受、仍在运行的回复（§12.5）。
+			await db.unsafe(
+				"update platform.conversation_executions set status='processing' where execution_id=$1",
+				[accepted.executionId],
+			);
 			const supplement = await post(
 				`/conversations/${conversationId}/messages`,
 				{ schemaVersion: 1, text: "supplement" },
 				"supplement",
 			);
-			expect(supplement.status).toBe(mode === "enabled" ? 202 : 409);
+			expect(supplement.status).toBe(202);
+			const result = (await supplement.json()) as { executionId: string };
 			if (mode === "enabled")
-				expect(await supplement.json()).toMatchObject({
-					executionId: accepted.executionId,
-				});
-			else expect(await snapshot()).toEqual(before);
+				expect(result).toMatchObject({ executionId: accepted.executionId });
+			else {
+				// #3376：没有当前已核实的补充能力时，消息进入排队，不并入当前回复。
+				expect(result.executionId).not.toBe(accepted.executionId);
+				expect(
+					await db.unsafe(
+						"select status, task_wait_order is not null as queued from platform.conversation_executions where execution_id=$1",
+						[result.executionId],
+					),
+				).toEqual([{ status: "waiting", queued: true }]);
+			}
 		},
 	);
 	it("replays acceptance once and preserves read, stop, and audit bindings", async () => {
