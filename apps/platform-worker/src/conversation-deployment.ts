@@ -25,9 +25,9 @@ import {
 	sessionSandboxFileExchangeTokenV1,
 } from "@agent-infra/platform-core";
 import type { V1Secret, V1Service } from "@kubernetes/client-node";
+import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
-import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import {
 	bindSessionSandboxCustomSecretMaterializationV1,

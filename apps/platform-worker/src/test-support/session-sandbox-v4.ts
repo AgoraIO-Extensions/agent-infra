@@ -5,11 +5,11 @@ import {
 	type StandardTemplateModelBindingV1,
 	validateRuntimeModelProjectionV4,
 } from "@agent-infra/model-catalog";
+import { containerBoundaryAttestationV1 } from "../container-boundary-attestation.js";
 import {
 	type SessionSandboxRuntimeInputV1,
 	sessionSandboxServiceTokenV1,
 } from "../session-workload-adapter.js";
-import { containerBoundaryAttestationV1 } from "../container-boundary-attestation.js";
 import type { WorkloadRuntimeAuthV1 } from "../workload-runtime-auth.js";
 
 /** Synthetic deployment token; Sandboxes only ever receive tokens derived from it. */
