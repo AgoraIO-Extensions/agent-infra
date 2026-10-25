@@ -1267,7 +1267,7 @@ function isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) {
 
 // #3017 只给 submit V2 及以上的 Runtime 操作结果联合新增一个稳定脱敏、不可重试的 rejected
 // 成员 RUNTIME_SESSION_BLOCKED。成员内容逐字段固定，且只允许出现在 V2 结果组件和
-// V3/V4/V5 响应的 result 联合中；V1 结果不扩展，删除新增成员后须与基线逐字节一致。
+// V3/V4/V5/V6 响应的 result 联合中；V1 结果不扩展，删除新增成员后须与基线逐字节一致。
 // #3314 以同一规则新增 RUNTIME_FILE_INPUT_REJECTED（附件读取在原生副作用前被平台明确拒绝）。
 function runtimeRejectedResult(code, message) {
 	return {
