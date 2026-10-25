@@ -533,6 +533,13 @@ async function ownerConfigFixture(
 		savedMode(next: CandidateMode) {
 			savedMode = next;
 		},
+		/** 服务端的 Agent 转为就绪（之后的读取都读到就绪，#3418 N14-04）。 */
+		agentReady() {
+			agent = AgentProjectionV2Schema.parse({
+				...agent,
+				serviceAvailability: "ready",
+			});
+		},
 	};
 }
 
@@ -1406,6 +1413,123 @@ for (const mode of ["catalog", "saved-key"] as const)
 			await expectNoDuplicateControls(
 				page,
 				`Owner 配置（${mode}，部署选项 ${failure}，#3418）`,
+			);
+			await noHorizontalOverflow(page);
+		});
+
+// #3418 N14-04（F14-3、G14-2-04）：Agent 启动中时每 2 秒轮询；一次轮询失败（503、网络中断）之后继续按原节奏
+// 轮询，挂起时页面不变，服务端转为就绪后不需要回到标签页就读到「就绪」。失败不可重试（403）时按 D2-59
+// 换成读取失败、停止轮询。Agent 详情读详情投影，Owner 配置读 V2 投影。
+for (const target of [
+	{
+		name: "Agent 详情",
+		page: "/agents/agent-pilot-1",
+		path: "/api/v2/agents/agent-pilot-1/detail",
+	},
+	{
+		name: "Owner 配置",
+		page: "/agents/agent-pilot-1/configuration",
+		path: "/api/v2/agents/agent-pilot-1",
+	},
+] as const)
+	for (const failure of ["503", "network", "403"] as const)
+		test(`polling a starting Agent continues after a failed poll: ${target.name} ${failure} (#3418 N14-04)`, async ({
+			page,
+		}, info) => {
+			await viewport(page, info.project.name === "mobile");
+			const pageErrors = trackPageErrors(page);
+			const api = await ownerConfigFixture(page);
+			let reads = 0;
+			let releaseHeld: (() => void) | undefined;
+			const held = new Promise<void>((resolve) => {
+				releaseHeld = resolve;
+			});
+			await page.route(
+				(url) => url.pathname === target.path,
+				async (route) => {
+					if (route.request().method() !== "GET") return route.fallback();
+					reads += 1;
+					// 第 2 次读取（第一次轮询）失败；服务端随即恢复并转为就绪。
+					if (reads === 2) {
+						if (failure !== "403") api.agentReady();
+						if (failure === "network")
+							return route.abort("internetdisconnected");
+						return route.fulfill(
+							failure === "403"
+								? unavailable(403, false)
+								: unavailable(503, true),
+						);
+					}
+					// 第 3 次读取（失败后的下一次轮询）先挂起。
+					if (reads === 3) await held;
+					return route.fallback().catch(() => undefined);
+				},
+			);
+			await page.goto(target.page);
+			await page.evaluate(() => {
+				document.addEventListener("visibilitychange", () => {
+					(window as unknown as { __visibility?: number }).__visibility =
+						((window as unknown as { __visibility?: number }).__visibility ??
+							0) + 1;
+				});
+				window.addEventListener("visibilitychange", () => {
+					(window as unknown as { __visibility?: number }).__visibility =
+						((window as unknown as { __visibility?: number }).__visibility ??
+							0) + 1;
+				});
+			});
+			const heading = page.getByRole("heading", { level: 1 });
+			const chip = main(page).locator(
+				'[data-slot="badge"][data-variant="chip"]',
+			);
+			await expect(chip.filter({ hasText: "启动中" }).first()).toBeVisible();
+			const focus = await pinElement(heading, "poll-focus");
+			await focus.focus();
+			await expect
+				.poll(() => reads, { timeout: 6000 })
+				.toBeGreaterThanOrEqual(2);
+			if (failure === "403") {
+				// 不可重试：换成读取失败，焦点不落到 body，之后不再轮询。
+				await expect(
+					main(page).getByText("Agent 不存在，或你没有访问权限。"),
+				).toBeVisible();
+				await expect
+					.poll(() =>
+						page.evaluate(() => document.activeElement === document.body),
+					)
+					.toBe(false);
+				await page.waitForTimeout(4500);
+				expect(reads).toBe(2);
+			} else {
+				// 失败后继续轮询：下一次读取已发出（挂起中），页面仍是上一次结果，没有失败提示。
+				await expect.poll(() => reads, { timeout: 6000 }).toBe(3);
+				await expect(chip.filter({ hasText: "启动中" }).first()).toBeVisible();
+				await expect(main(page).getByRole("alert")).toHaveCount(0);
+				await expect(focus).toBeFocused();
+				releaseHeld?.();
+				await expect(chip.filter({ hasText: "就绪" }).first()).toBeVisible();
+				await expect(chip.filter({ hasText: "启动中" })).toHaveCount(0);
+				if (target.name === "Agent 详情")
+					await expect(main(page)).toContainText("可以发送消息并获得回复");
+				await expect(focus).toBeFocused();
+				// 就绪后不再轮询。
+				const settled = reads;
+				await page.waitForTimeout(2500);
+				expect(reads).toBe(settled);
+			}
+			releaseHeld?.();
+			// 全程没有回到标签页。
+			expect(
+				await page.evaluate(
+					() =>
+						(window as unknown as { __visibility?: number }).__visibility ?? 0,
+				),
+			).toBe(0);
+			await expect(heading).toHaveCount(1);
+			await expectCleanPage(page, pageErrors);
+			await expectNoDuplicateControls(
+				page,
+				`${target.name}（轮询 ${failure}，#3418）`,
 			);
 			await noHorizontalOverflow(page);
 		});

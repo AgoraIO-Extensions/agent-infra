@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	markUserRead,
+	pollWhileShown,
 	queryUserReading,
 	readFailed,
 	retainContent,
@@ -166,5 +167,68 @@ describe("background reads keep shown content (#3387)", () => {
 		expect(retainContent(other, failure, { ...options, updatedAt: 40 })).toBe(
 			failure,
 		);
+	});
+});
+
+describe("polling keeps going after a retryable failure (#3418 N14-04)", () => {
+	const transitioning = (data: {
+		readonly kind: string;
+		readonly busy?: boolean;
+	}) => (data.kind === "ready" && data.busy ? 2000 : false);
+	const ready = { kind: "ready", busy: true };
+
+	it("decides from the last shown result while a retryable failure keeps it", () => {
+		expect(
+			pollWhileShown(
+				{ state: { status: "success", data: ready } },
+				always,
+				transitioning,
+			),
+		).toBe(2000);
+		// 重读失败（status 为 error，data 保留上一次结果）：可重试时按原节奏继续。
+		expect(
+			pollWhileShown(
+				{ state: { status: "error", data: ready, error: new Error("503") } },
+				always,
+				transitioning,
+			),
+		).toBe(2000);
+		// 读到新结果后按新结果判断。
+		expect(
+			pollWhileShown(
+				{ state: { status: "success", data: { kind: "ready", busy: false } } },
+				always,
+				transitioning,
+			),
+		).toBe(false);
+	});
+
+	it("stops without a result, after a non-retryable failure or an unavailable result", () => {
+		expect(
+			pollWhileShown(
+				{
+					state: { status: "error", data: undefined, error: new Error("503") },
+				},
+				always,
+				transitioning,
+			),
+		).toBe(false);
+		expect(
+			pollWhileShown(
+				{ state: { status: "error", data: ready, error: new Error("401") } },
+				never,
+				transitioning,
+			),
+		).toBe(false);
+		expect(
+			pollWhileShown(
+				{ state: { status: "success", data: { kind: "unavailable" } } },
+				always,
+				transitioning,
+			),
+		).toBe(false);
+		expect(
+			pollWhileShown({ state: { status: "pending" } }, always, transitioning),
+		).toBe(false);
 	});
 });
