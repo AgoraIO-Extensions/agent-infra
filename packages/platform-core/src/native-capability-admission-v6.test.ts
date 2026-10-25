@@ -6,6 +6,7 @@ import {
 	nativeCapabilityAdmissionRequestDigestV6,
 	nativeCapabilityOperationDigestV6,
 	parseNativeCapabilityAdmissionRequestV6,
+	validateNativeCapabilityInvocationPlanV6,
 } from "./native-capability-admission-v6.js";
 
 const request = {
@@ -94,3 +95,85 @@ it("changes operation identity when frozen selection or Key binding changes", ()
 		}),
 	).not.toBe(first);
 });
+
+function validPlan() {
+	const parsed = parseNativeCapabilityAdmissionRequestV6(request);
+	const authority = {
+		agentId: "agent-1",
+		actorId: "alice",
+		channelId: "web",
+		authorizationRevision: "auth-1",
+		sessionGeneration: 1,
+		hostSessionRef: "session-1",
+	};
+	const requestDigest = nativeCapabilityAdmissionRequestDigestV6(parsed);
+	const operationDigest = nativeCapabilityOperationDigestV6(request);
+	const plan = {
+		schemaVersion: 2 as const,
+		kind: "native-capability" as const,
+		conversationId: parsed.conversationId,
+		agentId: authority.agentId,
+		actorId: authority.actorId,
+		channelId: authority.channelId,
+		executionId: parsed.idempotencyKey,
+		turnId: "turn-1",
+		sessionGeneration: authority.sessionGeneration,
+		authorizationRevision: authority.authorizationRevision,
+		hostSessionRef: authority.hostSessionRef,
+		capabilityId: parsed.capabilityId,
+		directoryRevision: parsed.directoryRevision,
+		capabilitySourceVersion: parsed.capabilitySourceVersion,
+		parameters: parsed.parameters,
+		parametersDigest: parsed.parametersDigest,
+		modelOptionId: parsed.modelOptionId,
+		reasoningLevel: parsed.reasoningLevel,
+		configVersion: parsed.configVersion,
+		keyBinding: {
+			purpose: "personal" as const,
+			subjectId: authority.actorId,
+			ciphertextRef: "ciphertext-1",
+			version: 1,
+		},
+		executionStatus: "submitted" as const,
+		outbox: {
+			id: `conversation:native-capability:${parsed.idempotencyKey}`,
+			operation: "conversation.native-capability.invoke.v2" as const,
+			payload: parsed,
+		},
+		requestDigest,
+		operationDigest,
+	};
+	return {
+		authority,
+		plan,
+		input: { request: parsed, authority, requestDigest, operationDigest },
+	};
+}
+
+it("accepts a fully frozen V6 plan at the Store seam", () => {
+	const value = validPlan();
+	expect(() =>
+		validateNativeCapabilityInvocationPlanV6(value.plan, value.input),
+	).not.toThrow();
+});
+
+it.each(["selection", "configVersion", "keyBinding", "authority", "outbox"])(
+	"rejects V6 plan drift in %s before persistence",
+	(field) => {
+		const value = validPlan();
+		const changed = structuredClone(value.plan) as typeof value.plan;
+		if (field === "selection") changed.modelOptionId = "model-option-other";
+		if (field === "configVersion")
+			changed.configVersion = "configuration-other";
+		if (field === "keyBinding") changed.keyBinding.ciphertextRef = "";
+		if (field === "authority") changed.actorId = "bob";
+		if (field === "outbox")
+			changed.outbox.payload = {
+				...changed.outbox.payload,
+				parameters: "drift",
+			};
+		expect(() =>
+			validateNativeCapabilityInvocationPlanV6(changed, value.input),
+		).toThrow("Native V6 admission plan is invalid");
+	},
+);
