@@ -2,6 +2,7 @@ import {
 	type ConversationEventStatusV1,
 	parseConversationPersistedEventPayloadV1,
 } from "./conversation-events.js";
+import { conversationQueuePositionV1 } from "./conversation-queue.js";
 import {
 	classifyExecutionFailureV1,
 	type ExecutionFailureCategoryV1,
@@ -28,9 +29,26 @@ export interface ConversationReadExecutionV1 {
 	readonly createdAt: Date;
 	readonly updatedAt: Date;
 	readonly traceId: string | null;
+	/** 经排队受理的 Execution 保存的等待顺序（§12.5）；其他 Execution 为 null 或缺省。 */
+	readonly taskWaitOrder?: number | null;
 	/** #3377：失败执行已持久的受限原因（工程 Spec §16.1.1）。 */
 	readonly failure?: Omit<ExecutionFailureFactsV1, "conversationUnavailable">;
 }
+
+/**
+ * 排队消息在时间线上的状态（工程 Spec §12.5）。位次从持久等待顺序派生；开始处理后不再带此状态。
+ */
+export type ConversationMessageQueueStateV1 =
+	| { readonly status: "waiting"; readonly position: number }
+	| { readonly status: "withdrawn" }
+	| { readonly status: "timed_out" }
+	| {
+			readonly status: "cancelled";
+			readonly reason:
+				| "AGENT_UNAVAILABLE"
+				| "CONVERSATION_UNAVAILABLE"
+				| "AUTHORIZATION_REVOKED";
+	  };
 
 export interface ConversationReadEventV1 {
 	readonly executionId: string;
@@ -71,6 +89,8 @@ export interface ConversationMessageProjectionV1 {
 		readonly message: string;
 	} | null;
 	readonly createdAt: Date;
+	/** 只出现在经排队受理、尚未开始处理或未开始即结束的用户消息上。 */
+	readonly queue?: ConversationMessageQueueStateV1;
 }
 
 export interface ConversationExecutionReadModelV1 {
@@ -118,7 +138,37 @@ function executionStatus(input: string): ConversationEventStatusV1 {
 	) {
 		return input;
 	}
+	// 排队中的 Execution 尚未投递，按已受理、等待处理投影；位次见消息的 queue 状态。
+	if (input === "waiting") return "submitted";
 	return unavailable();
+}
+
+/** 排队消息未开始即结束时写在用户消息上的原因（finishWaitingTask）。 */
+const queueFailureCodes = new Set([
+	"TASK_WAIT_TIMEOUT",
+	"AGENT_UNAVAILABLE",
+	"CONVERSATION_UNAVAILABLE",
+	"AUTHORIZATION_REVOKED",
+	"WITHDRAWN",
+	"TASK_CANCELLED",
+]);
+
+function queueOutcome(
+	failureCode: string,
+): Exclude<ConversationMessageQueueStateV1, { status: "waiting" }> {
+	switch (failureCode) {
+		case "TASK_WAIT_TIMEOUT":
+			return { status: "timed_out" };
+		case "WITHDRAWN":
+		case "TASK_CANCELLED":
+			return { status: "withdrawn" };
+		case "AGENT_UNAVAILABLE":
+		case "CONVERSATION_UNAVAILABLE":
+		case "AUTHORIZATION_REVOKED":
+			return { status: "cancelled", reason: failureCode };
+		default:
+			return unavailable();
+	}
 }
 
 function messageStatus(input: string): VisibleMessageStatusV1 {
@@ -184,8 +234,53 @@ export function projectConversationMessagesV1(
 	const traceByExecution = new Map(
 		input.executions.map(({ executionId, traceId }) => [executionId, traceId]),
 	);
+	const executionById = new Map(
+		input.executions.map((execution) => [execution.executionId, execution]),
+	);
+	const waitingOrders = input.executions.flatMap((execution) =>
+		execution.status === "waiting" &&
+		typeof execution.taskWaitOrder === "number"
+			? [execution.taskWaitOrder]
+			: [],
+	);
+	/** 排队消息自身（Execution 的来源消息）在未开始前的状态；补充指令等其他消息不带。 */
+	const queueState = (
+		item: ConversationReadMessageV1,
+	): ConversationMessageQueueStateV1 | undefined => {
+		const execution = executionById.get(item.executionId);
+		if (
+			!execution ||
+			execution.taskWaitOrder === null ||
+			execution.taskWaitOrder === undefined ||
+			execution.sourceMessageId !== item.messageId
+		)
+			return undefined;
+		if (execution.status === "waiting") {
+			if (item.status !== "submitted") return unavailable();
+			return {
+				status: "waiting",
+				position: conversationQueuePositionV1(
+					execution.taskWaitOrder,
+					waitingOrders,
+				),
+			};
+		}
+		if (
+			item.status === "failed" &&
+			queueFailureCodes.has(item.failureCode ?? "")
+		)
+			return queueOutcome(item.failureCode as string);
+		return undefined;
+	};
+	const neverStarted = new Set<string>();
 	const userMessages = input.messages.map((item) => {
-		const status = userMessageStatus(item.status);
+		const queue = queueState(item);
+		if (queue && queue.status !== "waiting") neverStarted.add(item.executionId);
+		// 撤回与取消排队不是失败；超时与其他原因按失败投影，具体结果见 queue。
+		const status =
+			queue?.status === "withdrawn"
+				? ("cancelled" as const)
+				: userMessageStatus(item.status);
 		const failureCode: ConversationMessageProjectionV1["failureCode"] =
 			status === "failed" &&
 			(item.failureCode === "EXECUTION_FAILED" ||
@@ -193,10 +288,12 @@ export function projectConversationMessagesV1(
 				item.failureCode === "ORIGINAL_RESPONSE_NOT_STARTED" ||
 				item.failureCode === "ORIGINAL_RESPONSE_ALREADY_FINISHED")
 				? item.failureCode
-				: null;
+				: status === "failed" && queue
+					? "EXECUTION_FAILED"
+					: null;
 		if (
 			(status === "failed") !== (failureCode !== null) ||
-			(status !== "failed" && item.failureCode != null)
+			(status !== "failed" && item.failureCode != null && !queue)
 		) {
 			return unavailable();
 		}
@@ -216,6 +313,7 @@ export function projectConversationMessagesV1(
 			failureCode,
 			failure: null,
 			createdAt: date(item.createdAt),
+			...(queue ? { queue } : {}),
 		};
 	});
 	const bySource = new Map<string, ConversationReadExecutionV1[]>();
@@ -243,6 +341,8 @@ export function projectConversationMessagesV1(
 	}
 	const answers = [...bySource.entries()].flatMap(([sourceMessageId, items]) =>
 		items.flatMap((item, index) => {
+			// 未开始即结束的排队消息没有回复；结果只显示在用户消息的 queue 状态上。
+			if (neverStarted.has(item.executionId)) return [];
 			const events = byExecution.get(item.executionId) ?? [];
 			const text = events
 				.filter((event) => event.eventType === "text.delta")

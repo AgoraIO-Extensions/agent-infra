@@ -60,6 +60,8 @@ function state(
 		targetExecution: undefined,
 		existingStop: undefined,
 		activeExecution: active,
+		// #3376：会话内没有排队消息，Agent 级排队尚有容量。
+		queue: { waitingCount: 0, agent: { waitingCount: 0, lastWaitOrder: 0 } },
 	};
 }
 
@@ -191,7 +193,7 @@ describe("WeCom attachment merge window (#3374)", () => {
 			kind: "merge",
 			attachmentWindow: "extend",
 		});
-		// 超过上限的附件不再并入；不支持补充指令时维持原有的繁忙结论。
+		// 超过上限的附件不再并入；不支持补充指令时进入排队（#3376）。
 		const over = await decide(
 			{ text: "", attachments: ["file_2", "file_3", "file_4"] },
 			state({
@@ -201,7 +203,7 @@ describe("WeCom attachment merge window (#3374)", () => {
 				},
 			}),
 		);
-		expect(over.outcome).toEqual({ outcome: "busy" });
+		expect(over.decision).toMatchObject({ kind: "queued" });
 		// 不带附件的文字不受附件上限限制。
 		const text = await decide(
 			{ text: "这些图有什么共同点" },
@@ -216,7 +218,7 @@ describe("WeCom attachment merge window (#3374)", () => {
 		});
 	});
 
-	it("keeps the busy outcome outside an open window", async () => {
+	it("queues instead of merging outside an open window", async () => {
 		for (const [active, actor] of [
 			// 窗口已结束、Turn 已认领或已绑定文字：Store 不给出窗口。
 			[activeExecution, authority],
@@ -242,7 +244,7 @@ describe("WeCom attachment merge window (#3374)", () => {
 			],
 		] as const) {
 			const result = await decide({ text: "追问" }, state(active), actor);
-			expect(result.outcome).toEqual({ outcome: "busy" });
+			expect(result.decision).toMatchObject({ kind: "queued" });
 		}
 	});
 

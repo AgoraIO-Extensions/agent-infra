@@ -586,6 +586,16 @@ export const StopCommandRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	targetExecutionId: OpaqueIdV1Schema,
 });
+/** #3376：Web 发送者撤回自己仍在排队的消息；目标是该消息绑定的等待 Execution。 */
+export const WithdrawCommandRequestV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	targetExecutionId: OpaqueIdV1Schema,
+});
+export const WithdrawalAcceptedProjectionV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	status: z.enum(["withdrawn", "already_started", "already_finished"]),
+	executionId: OpaqueIdV1Schema,
+});
 export const BrowserCommandRequestV1Schema = z.discriminatedUnion("command", [
 	z.strictObject({
 		schemaVersion: SchemaVersionV1Schema,
@@ -1400,6 +1410,20 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 			requestBody: requiredJsonRequestBody(StopCommandRequestV1Schema),
 			responses: {
 				"202": jsonResponse("Stop accepted", CommandAcceptedProjectionV1Schema),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/conversations/{conversationId}/withdrawals": {
+		post: {
+			operationId: "withdrawQueuedMessage",
+			requestParams: { path: conversationPath, header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(WithdrawCommandRequestV1Schema),
+			responses: {
+				"202": jsonResponse(
+					"Withdrawal accepted",
+					WithdrawalAcceptedProjectionV1Schema,
+				),
 				...errorResponses,
 			},
 		},
@@ -2426,6 +2450,8 @@ export const pilotBrowserSchemasV1 = {
 	PlatformAuditProjectionV1: PlatformAuditProjectionV1Schema,
 	RegenerateCommandRequestV1: RegenerateCommandRequestV1Schema,
 	StopCommandRequestV1: StopCommandRequestV1Schema,
+	WithdrawCommandRequestV1: WithdrawCommandRequestV1Schema,
+	WithdrawalAcceptedProjectionV1: WithdrawalAcceptedProjectionV1Schema,
 };
 
 export const pilotBrowserSchemasV2 = {

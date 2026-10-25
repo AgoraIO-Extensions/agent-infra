@@ -263,6 +263,33 @@ export function framePilotSseMessageV2(input: unknown) {
 }
 
 /**
+ * #3376：执行中再发、进入排队的用户消息状态。位次从持久等待顺序派生；开始处理后不再出现，
+ * 未开始即结束的给出结果（撤回、排队超时或取消原因）。按 messageId 关联 messages。
+ */
+const queuedMessageShape = {
+	messageId: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+};
+export const QueuedMessageStateV2Schema = z.discriminatedUnion("status", [
+	z.strictObject({
+		...queuedMessageShape,
+		status: z.literal("waiting"),
+		position: z.number().int().positive().safe(),
+	}),
+	z.strictObject({ ...queuedMessageShape, status: z.literal("withdrawn") }),
+	z.strictObject({ ...queuedMessageShape, status: z.literal("timed_out") }),
+	z.strictObject({
+		...queuedMessageShape,
+		status: z.literal("cancelled"),
+		reason: z.enum([
+			"AGENT_UNAVAILABLE",
+			"CONVERSATION_UNAVAILABLE",
+			"AUTHORIZATION_REVOKED",
+		]),
+	}),
+]);
+
+/**
  * #3377：V2 会话读取中失败的回答带用户可见失败分类（工程 Spec §16.1.1）。分类与说明由 Core
  * 按已持久的受限原因给出，与企微读取同一结果；旧服务端不返回该字段，用户消息也不带它。
  */
@@ -286,6 +313,8 @@ export const ConversationDetailProjectionV2Schema =
 		sessionAvailability: z
 			.enum(["preparing", "ready", "unavailable", "updating"])
 			.optional(),
+		/** 排队消息的状态（#3376）；旧服务端不返回，Web 按没有排队处理。 */
+		queue: z.array(QueuedMessageStateV2Schema).optional(),
 	});
 
 const executionAdditions = {
@@ -438,6 +467,7 @@ export const pilotOperationSchemasV2 = {
 	ExecutionFailureProjectionV1: ExecutionFailureProjectionV1Schema,
 	ConversationEventWindowV1: ConversationEventWindowV1Schema,
 	ConversationDetailProjectionV2: ConversationDetailProjectionV2Schema,
+	QueuedMessageStateV2: QueuedMessageStateV2Schema,
 	ExecutionDetailProjectionV2: ExecutionDetailProjectionV2Schema,
 };
 

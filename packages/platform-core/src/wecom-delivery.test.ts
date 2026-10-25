@@ -7,6 +7,7 @@ import {
 	type WecomDeliveryStorePortV1,
 	type WecomResultFileReferenceV1,
 	type WecomSendPortV1,
+	wecomQueueTimeoutTextV1,
 	wecomReplyTimeoutTextV1,
 	wecomRevalidationBackoffMsV1,
 } from "./wecom-channel.ts";
@@ -1234,6 +1235,92 @@ it("AC-5: stops sending media when the channel revision changes between files (#
 	expect(f.sender.sendMedia).toHaveBeenCalledTimes(1);
 	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "unknown");
 });
+
+// #3376：排队消息的最终结果与排队已满的繁忙提示（工程 Spec §12.5，企微部署固定文案）。
+it.each([
+	[
+		"still waiting at the reply deadline",
+		{
+			executionStatus: "waiting",
+			answerReady: false,
+			queue: { failureCode: null },
+		},
+		wecomQueueTimeoutTextV1,
+	],
+	[
+		"timed out in the queue",
+		{
+			executionStatus: "failed",
+			answerReady: true,
+			queue: { failureCode: "TASK_WAIT_TIMEOUT" },
+		},
+		wecomQueueTimeoutTextV1,
+	],
+	[
+		"cancelled because the Agent stopped",
+		{
+			executionStatus: "failed",
+			answerReady: true,
+			queue: { failureCode: "AGENT_UNAVAILABLE" },
+		},
+		"已取消：Agent 当前不可用，本条消息未处理",
+	],
+	[
+		"cancelled because the conversation became unavailable",
+		{
+			executionStatus: "failed",
+			answerReady: true,
+			queue: { failureCode: "CONVERSATION_UNAVAILABLE" },
+		},
+		"当前会话不可用，发送 /new 开始新会话",
+	],
+	[
+		"cancelled because authorization was revoked",
+		{
+			executionStatus: "cancelled",
+			answerReady: true,
+			queue: { failureCode: "AUTHORIZATION_REVOKED" },
+		},
+		"已取消：权限已失效，本条消息未处理",
+	],
+	[
+		"a started queued message that completed",
+		{ executionStatus: "completed", queue: { failureCode: null } },
+		"final reply",
+	],
+	[
+		"a started queued message that ran past the reply deadline",
+		{
+			executionStatus: "processing",
+			answerReady: false,
+			queue: { failureCode: null },
+		},
+		// #3377：已开始处理的排队消息按普通回复超时定稿，保留已有回答。
+		`final reply\n\n${wecomReplyTimeoutTextV1}`,
+	],
+	[
+		"a busy receipt with a full queue",
+		{ acceptanceStatus: "busy" as const, queuedCount: 3 },
+		"当前会话已有 3 条消息在排队，请等前面的消息处理后再发送",
+	],
+	[
+		"a busy receipt without queued messages",
+		{ acceptanceStatus: "busy" as const, queuedCount: 0 },
+		"Agent 正忙，请稍后重试",
+	],
+])(
+	"replies to %s with the fixed queue text (#3376)",
+	async (_name, changes: Partial<WecomDeliveryClaimV1>, expected) => {
+		const { f, input } = await sentFor({
+			thinking: { parts: [raw("私密思考")], complete: true },
+			...changes,
+		});
+		expect(input?.text).toBe(expected);
+		if (expected !== "final reply")
+			expect(input && "textWithThinking" in input).toBe(false);
+		expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
+	},
+);
 
 // #3377：失败说明按已持久的受限原因归入工程 Spec §16.1.1 的分类，内部错误附追踪编号。
 it.each([

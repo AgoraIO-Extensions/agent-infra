@@ -59,6 +59,8 @@ export interface ConversationCommandConformanceHarnessV1 {
 	failNextFallbackEventCommit(): Promise<void> | void;
 	loseNextResponseAfterCommit(): void;
 	completeExecution(executionId: string): Promise<void> | void;
+	/** Runtime 已明确接受初始 Turn 且仍在运行（`processing`），补充指令只在此时受理（§12.5）。 */
+	startExecution(executionId: string): Promise<void> | void;
 	setModelConfiguration(
 		configuration: ConversationModelConfigurationV1 | undefined,
 	): Promise<void> | void;
@@ -243,6 +245,7 @@ export function conversationCommandConformanceV1(
 					"initial_supplement_fixture",
 					"bounded initial supplement fixture",
 				);
+				await harness.startExecution(initial.executionId);
 				const supplement = messageFixture(
 					conversationId,
 					"supplement_fixture",
@@ -272,7 +275,7 @@ export function conversationCommandConformanceV1(
 			}
 		});
 
-		it("serializes distinct concurrent commands into one active execution", async () => {
+		it("serializes distinct concurrent commands into one active execution and one queued message", async () => {
 			const harness = await open();
 			try {
 				harness.setAuthority({
@@ -294,19 +297,80 @@ export function conversationCommandConformanceV1(
 						),
 					),
 				);
-				expect(decisions.map(({ outcome }) => outcome).toSorted()).toEqual([
+				expect(decisions.map(({ outcome }) => outcome)).toEqual([
 					"accepted",
-					"busy",
+					"accepted",
 				]);
+				// 不能作为补充指令的后到消息进入排队，不并发启动第二个回复（§12.5）。
+				expect(
+					decisions
+						.map((decision) =>
+							decision.outcome === "accepted"
+								? (decision.result.queuePosition ?? 0)
+								: -1,
+						)
+						.toSorted(),
+				).toEqual([0, 1]);
 				expect(await harness.snapshot()).toEqual({
 					conversations: 1,
-					messages: 1,
-					executions: 1,
+					messages: 2,
+					executions: 2,
 					stops: 0,
-					outbox: 1,
-					audit: 1,
-					idempotency: 2,
+					outbox: 2,
+					audit: 2,
+					idempotency: 3,
 				});
+			} finally {
+				await harness.close();
+			}
+		});
+
+		it("queues at most three messages per conversation and then reports busy with the queued count", async () => {
+			const harness = await open();
+			try {
+				harness.setAuthority({
+					...conversationConformanceAuthorityV1,
+					supportsSupplementaryInstruction: false,
+				});
+				const conversationId = await createConversationFixture(
+					harness,
+					"queue_capacity_fixture",
+				);
+				await acceptMessageFixture(
+					harness,
+					conversationId,
+					"queue_capacity_initial_fixture",
+					"bounded initial queue fixture",
+				);
+				const queued = [];
+				for (const index of [1, 2, 3]) {
+					const decision = await harness.useCase.accept(
+						messageFixture(
+							conversationId,
+							`queue_capacity_${index}_fixture`,
+							`bounded queued fixture ${index}`,
+						),
+					);
+					queued.push(decision);
+				}
+				expect(queued).toEqual(
+					[1, 2, 3].map((position) => ({
+						outcome: "accepted",
+						result: expect.objectContaining({ queuePosition: position }),
+					})),
+				);
+				const before = await harness.snapshot();
+				await expect(
+					harness.useCase.accept(
+						messageFixture(
+							conversationId,
+							"queue_capacity_full_fixture",
+							"bounded full queue fixture",
+						),
+					),
+				).resolves.toEqual({ outcome: "busy", queuedCount: 3 });
+				// 队列已满时不创建 Message、Execution 或 outbox。
+				expect(await harness.snapshot()).toEqual(before);
 			} finally {
 				await harness.close();
 			}
@@ -364,14 +428,17 @@ export function conversationCommandConformanceV1(
 					...conversationConformanceAuthorityV1,
 					supportsSupplementaryInstruction: false,
 				});
+				// 重新生成不进入排队：活跃回复期间繁忙且不留下可见效果（§12.5）。
 				await expect(
-					harness.useCase.accept(
-						messageFixture(
-							conversationId,
-							"busy_fixture",
-							"bounded busy fixture",
-						),
-					),
+					harness.useCase.regenerate({
+						schemaVersion: 1,
+						command: "regenerate",
+						conversationId,
+						sourceMessageId: initial.messageId,
+						idempotencyKey: "regenerate_busy_fixture",
+						requestId: "request_regenerate_busy_fixture",
+						traceId: "trace_regenerate_busy_fixture",
+					}),
 				).resolves.toEqual({ outcome: "busy" });
 				expect(await harness.snapshot()).toEqual(before);
 			} finally {
@@ -835,6 +902,7 @@ export function conversationCommandConformanceV1(
 					"supplement_fallback_initial_fixture",
 					"bounded active fallback fixture",
 				);
+				await harness.startExecution(initial.executionId);
 				await harness.setModelConfiguration({
 					configurationRevision: 2,
 					options: [{ optionId: "model_primary", reasoningLevels: ["medium"] }],

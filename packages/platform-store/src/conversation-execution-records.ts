@@ -275,11 +275,16 @@ export function parseCreatedResult(value: unknown) {
 }
 
 export function parseMessageResult(value: unknown) {
+	const queued =
+		value !== null &&
+		typeof value === "object" &&
+		Object.hasOwn(value, "queuePosition");
 	const input = exactRecord(value, [
 		"schemaVersion",
 		"status",
 		"messageId",
 		"executionId",
+		...(queued ? ["queuePosition"] : []),
 	]);
 	if (
 		input.schemaVersion !== 1 ||
@@ -293,6 +298,7 @@ export function parseMessageResult(value: unknown) {
 		status: "submitted" as const,
 		messageId: text(input.messageId),
 		executionId: text(input.executionId),
+		...(queued ? { queuePosition: safeInteger(input.queuePosition, 1) } : {}),
 	};
 }
 
@@ -450,5 +456,25 @@ export function parseIdempotency(
 		commandType: input.commandType,
 		key: input.key,
 		requestDigest: input.requestDigest,
+	};
+}
+
+export function parseWithdrawResult(value: unknown, executionId: string) {
+	const input = exactRecord(value, ["schemaVersion", "status", "executionId"]);
+	if (
+		input.schemaVersion !== 1 ||
+		(input.status !== "withdrawn" &&
+			input.status !== "already_started" &&
+			input.status !== "already_finished") ||
+		input.executionId !== executionId
+	)
+		return unavailable();
+	return {
+		schemaVersion: 1 as const,
+		status: input.status as
+			| "withdrawn"
+			| "already_started"
+			| "already_finished",
+		executionId,
 	};
 }

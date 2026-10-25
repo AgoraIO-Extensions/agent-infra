@@ -12,7 +12,9 @@ import {
 	type ConversationExecutionUseCaseV1,
 	type ConversationMetadataRecoveryStateV1,
 	type ConversationMetadataRecoveryWritePlanV1,
+	type ConversationTaskExecutionStatusV1,
 	createConversationExecutionUseCaseV1,
+	decideConversationWithdrawalV1,
 	modelOptionDisplayNameV1,
 	requestedModelDisplayNameV1,
 } from "./conversation-execution.ts";
@@ -76,6 +78,7 @@ conversationCommandConformanceV1("Fake", async () => {
 		regenerate: (command) => fake.regenerate(command),
 		selectModel: (command) => fake.selectModel(command),
 		stop: (command) => fake.stop(command),
+		withdraw: (command) => fake.withdraw(command),
 	};
 	return {
 		useCase,
@@ -96,6 +99,9 @@ conversationCommandConformanceV1("Fake", async () => {
 		},
 		completeExecution(executionId) {
 			fake.completeExecution(executionId);
+		},
+		startExecution(executionId) {
+			fake.markExecutionProcessing(executionId);
 		},
 		setModelConfiguration(configuration) {
 			fake.setModelConfiguration(configuration);
@@ -656,7 +662,7 @@ describe("Conversation execution use case", () => {
 				reasoningLevel: null,
 				lastEventSequence: 0,
 				stopPending: false,
-				status: "submitted",
+				status: "processing",
 			},
 		} satisfies ConversationExecutionStateV1;
 		const stopState = {
@@ -898,6 +904,7 @@ describe("Conversation execution use case", () => {
 					return { outcome: "allowed" as const, authority: currentAuthority };
 				},
 			},
+			now: () => new Date("2026-10-25T00:00:00.000Z"),
 			newId: (() => {
 				let value = 1;
 				return () => `wake_${value++}`;
@@ -928,9 +935,14 @@ describe("Conversation execution use case", () => {
 			idempotencyKey: "message_wake_second",
 			requestId: "request_message_wake_second",
 			traceId: "trace_message_wake_second",
+			// 排队时限已过，确定性地得到繁忙结果（#3376 的排队不在本用例范围内）。
+			queueDeadlineLimit: "2026-10-25T00:00:00.000Z",
 		};
 		// 活跃 Execution 已被 Runtime 处理（未受理不明）时不唤醒。
-		expect(await conversation.accept(second)).toEqual({ outcome: "busy" });
+		expect(await conversation.accept(second)).toEqual({
+			outcome: "busy",
+			queuedCount: 0,
+		});
 		expect(conversation.wokenRecoveries).toEqual([]);
 		conversation.markExecutionUnknown(first.result.executionId);
 		const before = conversation.snapshot();
@@ -939,7 +951,10 @@ describe("Conversation execution use case", () => {
 		expect(await conversation.accept(second)).toEqual({ outcome: "denied" });
 		expect(conversation.wokenRecoveries).toEqual([]);
 		currentAuthority = ownerAuthority;
-		expect(await conversation.accept(second)).toEqual({ outcome: "busy" });
+		expect(await conversation.accept(second)).toEqual({
+			outcome: "busy",
+			queuedCount: 0,
+		});
 		// 受理不明占用时先唤醒恢复核实，不释放占用，也不新增可见记录。
 		expect(conversation.wokenRecoveries).toEqual([
 			{ conversationId: "wake_1", executionId: first.result.executionId },
@@ -947,7 +962,7 @@ describe("Conversation execution use case", () => {
 		expect(conversation.snapshot()).toEqual(before);
 	});
 
-	it("returns busy without a new visible side effect when the active execution cannot supplement", async () => {
+	it("queues a message that cannot supplement behind the active reply and replays it", async () => {
 		const conversation = new FakeConversationExecutionV1({
 			authority: { ...authority, supportsSupplementaryInstruction: false },
 			newId: (() => {
@@ -971,8 +986,7 @@ describe("Conversation execution use case", () => {
 			requestId: "request_message_busy_first",
 			traceId: "trace_message_busy_first",
 		});
-		const before = conversation.snapshot();
-		const busy = {
+		const queued = {
 			schemaVersion: 1 as const,
 			command: "message" as const,
 			conversationId: "busy_1",
@@ -981,12 +995,150 @@ describe("Conversation execution use case", () => {
 			requestId: "request_message_busy_second",
 			traceId: "trace_message_busy_second",
 		};
-		expect(await conversation.accept(busy)).toEqual({ outcome: "busy" });
-		expect(await conversation.accept(busy)).toEqual({ outcome: "busy" });
-		expect(conversation.snapshot()).toEqual(before);
+		const accepted = await conversation.accept(queued);
+		expect(accepted).toEqual({
+			outcome: "accepted",
+			result: {
+				schemaVersion: 1,
+				status: "submitted",
+				messageId: "busy_5",
+				executionId: "busy_6",
+				queuePosition: 1,
+			},
+		});
+		if (accepted.outcome !== "accepted") throw new Error("Expected queued");
+		// 重放返回首次受理的结果，不按变化后的活跃状态重新判定分支。
+		expect(await conversation.accept(queued)).toEqual({
+			outcome: "replayed",
+			result: accepted.result,
+		});
+		expect(conversation.snapshot()).toMatchObject({
+			executions: [
+				{ executionId: "busy_3", status: "submitted" },
+				{ executionId: "busy_6", status: "waiting", taskWaitOrder: 1 },
+			],
+			outbox: [
+				{ operation: "conversation.turn.submit.v1", executionId: "busy_3" },
+				{ operation: "conversation.turn.submit.v1", executionId: "busy_6" },
+			],
+			audit: expect.arrayContaining([
+				expect.objectContaining({ action: "conversation.message.queued" }),
+			]),
+		});
 	});
 
-	it("re-evaluates transient busy message and regeneration attempts", async () => {
+	it("queues instead of supplementing before the Runtime accepts the original reply", async () => {
+		const conversation = new FakeConversationExecutionV1({
+			authority,
+			newId: (() => {
+				let value = 1;
+				return () => `unaccepted_${value++}`;
+			})(),
+		});
+		await conversation.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "create_unaccepted",
+			requestId: "request_create_unaccepted",
+			traceId: "trace_create_unaccepted",
+		});
+		await conversation.accept({
+			schemaVersion: 1,
+			command: "message",
+			conversationId: "unaccepted_1",
+			text: "First",
+			idempotencyKey: "message_unaccepted_first",
+			requestId: "request_message_unaccepted_first",
+			traceId: "trace_message_unaccepted_first",
+		});
+		// 原回复尚未被 Runtime 接受：即使支持补充指令也直接排队（§12.5 判定 2、3）。
+		await expect(
+			conversation.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: "unaccepted_1",
+				text: "Second",
+				idempotencyKey: "message_unaccepted_second",
+				requestId: "request_message_unaccepted_second",
+				traceId: "trace_message_unaccepted_second",
+			}),
+		).resolves.toMatchObject({
+			outcome: "accepted",
+			result: { queuePosition: 1, executionId: "unaccepted_6" },
+		});
+		conversation.markExecutionProcessing("unaccepted_3");
+		// 已有排队消息时，新消息排到队尾，不作为补充指令越过先到的消息。
+		await expect(
+			conversation.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: "unaccepted_1",
+				text: "Third",
+				idempotencyKey: "message_unaccepted_third",
+				requestId: "request_message_unaccepted_third",
+				traceId: "trace_message_unaccepted_third",
+			}),
+		).resolves.toMatchObject({
+			outcome: "accepted",
+			result: { queuePosition: 2 },
+		});
+		expect(
+			conversation
+				.snapshot()
+				.outbox.map(({ operation }) => operation)
+				.filter((operation) => operation === "conversation.turn.supplement.v1"),
+		).toEqual([]);
+	});
+
+	it("caps the queue per conversation, the shared Agent waiting capacity and the channel deadline", async () => {
+		const conversation = new FakeConversationExecutionV1({
+			authority: { ...authority, supportsSupplementaryInstruction: false },
+			now: () => new Date("2026-10-25T00:00:00.000Z"),
+			newId: (() => {
+				let value = 1;
+				return () => `cap_${value++}`;
+			})(),
+		});
+		await conversation.createConversation({
+			schemaVersion: 1,
+			agentId: authority.agentId,
+			idempotencyKey: "create_cap",
+			requestId: "request_create_cap",
+			traceId: "trace_create_cap",
+		});
+		const send = (suffix: string, extra: object = {}) =>
+			conversation.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: "cap_1",
+				text: `Message ${suffix}`,
+				idempotencyKey: `message_cap_${suffix}`,
+				requestId: `request_message_cap_${suffix}`,
+				traceId: `trace_message_cap_${suffix}`,
+				...extra,
+			});
+		await send("initial");
+		// 渠道回复时限不足以排队时按繁忙处理，不写入任何记录。
+		await expect(
+			send("expired", { queueDeadlineLimit: "2026-10-25T00:00:00.000Z" }),
+		).resolves.toEqual({ outcome: "busy", queuedCount: 0 });
+		await expect(
+			send("first", { queueDeadlineLimit: "2026-10-25T00:08:30.000Z" }),
+		).resolves.toMatchObject({ result: { queuePosition: 1 } });
+		await send("second");
+		await send("third");
+		await expect(send("fourth")).resolves.toEqual({
+			outcome: "busy",
+			queuedCount: 3,
+		});
+		expect(
+			conversation
+				.snapshot()
+				.executions.filter(({ status }) => status === "waiting"),
+		).toHaveLength(3);
+	});
+
+	it("regenerates only after the active reply and every queued message finish", async () => {
 		const conversation = new FakeConversationExecutionV1({
 			authority: { ...authority, supportsSupplementaryInstruction: false },
 			newId: (() => {
@@ -1013,23 +1165,16 @@ describe("Conversation execution use case", () => {
 		if (initial.outcome !== "accepted" || initial.result.messageId === null) {
 			throw new Error("Expected an accepted initial message");
 		}
-		const busyMessage = {
-			schemaVersion: 1 as const,
-			command: "message" as const,
+		const queued = await conversation.accept({
+			schemaVersion: 1,
+			command: "message",
 			conversationId: "busy_retry_1",
 			text: "Wait for the active turn",
 			idempotencyKey: "message_busy_retry",
 			requestId: "request_message_busy_retry",
 			traceId: "trace_message_busy_retry",
-		};
-		expect(await conversation.accept(busyMessage)).toEqual({ outcome: "busy" });
-		conversation.completeExecution(initial.result.executionId);
-		const acceptedMessage = await conversation.accept(busyMessage);
-		expect(acceptedMessage).toMatchObject({ outcome: "accepted" });
-		if (acceptedMessage.outcome !== "accepted") {
-			throw new Error("Expected a retried message to be accepted");
-		}
-
+		});
+		if (queued.outcome !== "accepted") throw new Error("Expected queued");
 		const busyRegeneration = {
 			schemaVersion: 1 as const,
 			command: "regenerate" as const,
@@ -1042,7 +1187,13 @@ describe("Conversation execution use case", () => {
 		expect(await conversation.regenerate(busyRegeneration)).toEqual({
 			outcome: "busy",
 		});
-		conversation.completeExecution(acceptedMessage.result.executionId);
+		conversation.completeExecution(initial.result.executionId);
+		// 重新生成不越过仍在排队的消息。
+		expect(await conversation.regenerate(busyRegeneration)).toEqual({
+			outcome: "busy",
+		});
+		conversation.startWaitingExecution(queued.result.executionId);
+		conversation.completeExecution(queued.result.executionId);
 		expect(await conversation.regenerate(busyRegeneration)).toMatchObject({
 			outcome: "accepted",
 		});
@@ -1051,7 +1202,7 @@ describe("Conversation execution use case", () => {
 			executions: [
 				{ executionId: "busy_retry_3", status: "completed" },
 				{ executionId: "busy_retry_6", status: "completed" },
-				{ executionId: "busy_retry_8", status: "submitted" },
+				{ executionId: "busy_retry_9", status: "submitted" },
 			],
 		});
 	});
@@ -1080,6 +1231,8 @@ describe("Conversation execution use case", () => {
 			requestId: "request_message_supplement_initial",
 			traceId: "trace_message_supplement_initial",
 		});
+		// 补充指令只给已被 Runtime 接受、仍在运行的回复（§12.5）。
+		conversation.markExecutionProcessing("supplement_3");
 
 		expect(
 			await conversation.accept({
@@ -1426,7 +1579,7 @@ describe("Conversation execution use case", () => {
 		});
 	});
 
-	it("does not supplement an Execution with a pending stop", async () => {
+	it("queues instead of supplementing an Execution with a pending stop, and the stop keeps the queue", async () => {
 		const conversation = new FakeConversationExecutionV1({
 			authority,
 			newId: (() => {
@@ -1453,6 +1606,7 @@ describe("Conversation execution use case", () => {
 		if (initial.outcome !== "accepted") {
 			throw new Error("Expected an accepted initial message");
 		}
+		conversation.markExecutionProcessing(initial.result.executionId);
 		const stopped = await conversation.stop({
 			schemaVersion: 1,
 			command: "stop",
@@ -1463,20 +1617,34 @@ describe("Conversation execution use case", () => {
 			traceId: "trace_stop_pending",
 		});
 		expect(stopped).toMatchObject({ outcome: "accepted" });
-		const before = conversation.snapshot();
 
+		const followup = await conversation.accept({
+			schemaVersion: 1,
+			command: "message",
+			conversationId: "stop_pending_1",
+			text: "Do not supplement a stopped Execution",
+			idempotencyKey: "message_stop_pending_followup",
+			requestId: "request_message_stop_pending_followup",
+			traceId: "trace_message_stop_pending_followup",
+		});
+		expect(followup).toMatchObject({
+			outcome: "accepted",
+			result: { queuePosition: 1 },
+		});
+		if (followup.outcome !== "accepted") throw new Error("Expected queued");
+		expect(followup.result.executionId).not.toBe(initial.result.executionId);
+		const snapshot = conversation.snapshot();
+		// 停止只作用于当前回复：排队消息保留，不写补充指令 outbox。
 		expect(
-			await conversation.accept({
-				schemaVersion: 1,
-				command: "message",
-				conversationId: "stop_pending_1",
-				text: "Do not supplement a stopped Execution",
-				idempotencyKey: "message_stop_pending_followup",
-				requestId: "request_message_stop_pending_followup",
-				traceId: "trace_message_stop_pending_followup",
-			}),
-		).toEqual({ outcome: "busy" });
-		expect(conversation.snapshot()).toEqual(before);
+			snapshot.executions.find(
+				({ executionId }) => executionId === followup.result.executionId,
+			),
+		).toMatchObject({ status: "waiting" });
+		expect(
+			snapshot.outbox.filter(
+				({ operation }) => operation === "conversation.turn.supplement.v1",
+			),
+		).toEqual([]);
 	});
 
 	it("does not replay stop across actor, Agent, or channel bindings", async () => {
@@ -2256,5 +2424,161 @@ describe("model-selection fallback requested model (G-07)", () => {
 
 	it("uses the standard option presentation rule for the display name", () => {
 		expect(modelOptionDisplayNameV1({ modelId: "relay-a" })).toBe("relay-a");
+	});
+});
+
+describe("queued message withdrawal (#3376)", () => {
+	const withdrawAuthority = { ...authority, channelId: "web" };
+	const conversation = {
+		schemaVersion: 1,
+		conversationId: "withdraw_conversation",
+		agentId: withdrawAuthority.agentId,
+		actorId: withdrawAuthority.actorId,
+		channelId: "web",
+		status: "active",
+		sessionGeneration: 1,
+		hostSessionRef: null,
+		authorizationRevision: withdrawAuthority.authorizationRevision,
+		lastConversationCursor: 1,
+		selectedModelOptionId: null,
+		selectedReasoningLevel: null,
+		createdAt: new Date("2026-10-25T00:00:00.000Z"),
+		updatedAt: new Date("2026-10-25T00:00:00.000Z"),
+	} as const;
+	const command = {
+		schemaVersion: 1,
+		command: "withdraw",
+		conversationId: conversation.conversationId,
+		targetExecutionId: "queued_execution",
+		idempotencyKey: "withdraw_key",
+		requestId: "withdraw_request",
+		traceId: "withdraw_trace",
+	} as const;
+	const target = (
+		status: ConversationTaskExecutionStatusV1,
+		queued = true,
+	) => ({
+		executionId: "queued_execution",
+		conversationId: conversation.conversationId,
+		actorId: withdrawAuthority.actorId,
+		status,
+		queued,
+	});
+
+	it.each([
+		["waiting", "withdrawn"],
+		["unknown", "already_started"],
+		["processing", "already_started"],
+		["completed", "already_finished"],
+		["failed", "already_finished"],
+		["cancelled", "already_finished"],
+	] as const)("decides a %s queued execution as %s", (status, expected) => {
+		expect(
+			decideConversationWithdrawalV1(
+				{ conversation, target: target(status) },
+				command,
+				withdrawAuthority,
+				"digest",
+			),
+		).toEqual({
+			schemaVersion: 1,
+			result: {
+				schemaVersion: 1,
+				status: expected,
+				executionId: "queued_execution",
+			},
+			idempotency: {
+				scopeType: "conversation",
+				scopeId: conversation.conversationId,
+				actorId: withdrawAuthority.actorId,
+				commandType: "withdraw",
+				key: "withdraw_key",
+				requestDigest: "digest",
+			},
+		});
+	});
+
+	it.each([
+		["another sender", { target: { ...target("waiting"), actorId: "other" } }],
+		["a message that was never queued", { target: target("submitted", false) }],
+		["a missing execution", { target: undefined }],
+		[
+			"another conversation",
+			{
+				target: { ...target("waiting"), conversationId: "other_conversation" },
+			},
+		],
+	])("denies withdrawing %s", (_name, changes) => {
+		expect(
+			decideConversationWithdrawalV1(
+				{ conversation, ...changes },
+				command,
+				withdrawAuthority,
+				"digest",
+			),
+		).toEqual({ outcome: "denied" });
+	});
+
+	it("only offers withdrawal to the Web channel", () => {
+		expect(
+			decideConversationWithdrawalV1(
+				{
+					conversation: { ...conversation, channelId: "wecom_bot:channel" },
+					target: target("waiting"),
+				},
+				command,
+				{ ...withdrawAuthority, channelId: "wecom_bot:channel" },
+				"digest",
+			),
+		).toEqual({ outcome: "denied" });
+	});
+
+	it("withdraws a queued Web message through the use case", async () => {
+		const fake = new FakeConversationExecutionV1({
+			authority: withdrawAuthority,
+			newId: (() => {
+				let value = 1;
+				return () => `withdraw_${value++}`;
+			})(),
+		});
+		await fake.createConversation({
+			schemaVersion: 1,
+			agentId: withdrawAuthority.agentId,
+			idempotencyKey: "create_withdraw",
+			requestId: "request_create_withdraw",
+			traceId: "trace_create_withdraw",
+		});
+		const send = (suffix: string) =>
+			fake.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: "withdraw_1",
+				text: suffix,
+				idempotencyKey: `message_withdraw_${suffix}`,
+				requestId: `request_message_withdraw_${suffix}`,
+				traceId: `trace_message_withdraw_${suffix}`,
+			});
+		const active = await send("active");
+		const queued = await send("queued");
+		if (active.outcome !== "accepted" || queued.outcome !== "accepted")
+			throw new Error("Expected acceptance");
+		const withdraw = (executionId: string) =>
+			fake.withdraw({
+				...command,
+				conversationId: "withdraw_1",
+				targetExecutionId: executionId,
+			});
+		await expect(withdraw(queued.result.executionId)).resolves.toEqual({
+			outcome: "accepted",
+			result: {
+				schemaVersion: 1,
+				status: "withdrawn",
+				executionId: queued.result.executionId,
+			},
+		});
+		// 当前回复不是排队消息，不能撤回；停止当前回复另走 stop。
+		await expect(withdraw(active.result.executionId)).resolves.toEqual({
+			outcome: "denied",
+		});
 	});
 });

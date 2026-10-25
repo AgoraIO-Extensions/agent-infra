@@ -52,6 +52,7 @@ import {
 	transactionResult,
 } from "./conversation-dispatch-sql.js";
 import {
+	finishConversationWaitingTasks,
 	finishWaitingTask,
 	lockWaitingTaskAuthority,
 	recordTaskStatus,
@@ -778,6 +779,13 @@ export class PostgresConversationDispatchStoreV1
 				...claim,
 				executionStatus: state.execution.status,
 			});
+			// 尚未开始的等待 Execution（含排队消息）随会话不可用一并终结，不留下永远等待的消息。
+			await finishConversationWaitingTasks(
+				transaction,
+				claim.conversationId,
+				claim.sessionGeneration,
+				claim.leaseOwner,
+			);
 			const failed = await transaction<{ execution_id: string }[]>`
         update platform.conversation_executions set status = 'failed', updated_at = clock_timestamp()
         where conversation_id = ${claim.conversationId} and session_generation = ${claim.sessionGeneration}

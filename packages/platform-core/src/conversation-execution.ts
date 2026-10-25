@@ -7,6 +7,7 @@ import {
 	parseModelSelectionCommand,
 	parseRegenerateCommand,
 	parseStopCommand,
+	parseWithdrawCommand,
 } from "./conversation-execution-input.js";
 import {
 	normalizeCommandDecision,
@@ -14,6 +15,7 @@ import {
 	normalizeCreateDecision,
 	normalizeModelSelectionDecision,
 	normalizeStopDecision,
+	normalizeWithdrawDecision,
 	parseMessageCommandResult,
 	parseRegenerationCommandResult,
 } from "./conversation-execution-result.js";
@@ -26,22 +28,36 @@ import {
 import type {
 	ConversationCommandResultV1,
 	ConversationCreatedResultV1,
+	ConversationExecutionAuthorityV1,
+	ConversationExecutionConversationStateV1,
+	ConversationExecutionStateV1,
 	ConversationExecutionUseCaseDependenciesV1,
 	ConversationExecutionUseCaseOptionsV1,
 	ConversationExecutionUseCaseV1,
+	ConversationMessageCommandV1,
+	ConversationMessageWritePlanV1,
 	ConversationModelSelectionResultV1,
 	ConversationStopResultV1,
+	ConversationWithdrawCommandV1,
+	ConversationWithdrawPlanV1,
+	ConversationWithdrawResultV1,
+	ConversationWithdrawStateV1,
 } from "./conversation-execution-types.js";
 import { conversationAttachmentMergeMaxCountV1 } from "./conversation-execution-types.js";
 import {
 	digest,
 	invalidInput,
 	isText,
+	nextCounter,
 	nextOpaqueId,
 	safeNow,
 	snapshotObject,
 	unavailable,
 } from "./conversation-execution-values.js";
+import {
+	conversationQueueCapacityV1,
+	conversationQueueDeadlineV1,
+} from "./conversation-queue.js";
 import { createSessionSandboxBindingV1 } from "./session-sandbox.js";
 
 export {
@@ -83,12 +99,19 @@ export {
 	type ConversationStopDecisionV1,
 	type ConversationStopResultV1,
 	type ConversationStopWritePlanV1,
+	type ConversationTaskExecutionStatusV1,
+	type ConversationWithdrawCommandV1,
+	type ConversationWithdrawDecisionV1,
+	type ConversationWithdrawPlanV1,
+	type ConversationWithdrawResultV1,
+	type ConversationWithdrawStateV1,
 	type CreateConversationCommandV1,
 	type CreateConversationDecisionV1,
 	type CreateConversationWritePlanV1,
 	conversationAttachmentMergeMaxCountV1,
 	conversationAttachmentMergeWindowMsV1,
 } from "./conversation-execution-types.js";
+export * from "./conversation-queue.js";
 
 /** Platform stop acknowledgement budget; callers cannot configure task runtime limits. */
 export const conversationStopConfirmationTimeoutMsV1 = 60_000;
@@ -99,6 +122,153 @@ export function createConversationExecutionUseCaseV1(
 ): ConversationExecutionUseCaseV1 {
 	const now = options.now ?? (() => new Date());
 	const newId = options.newId ?? randomUUID;
+	const maximumWaitingTasksPerAgent = options.maximumWaitingTasksPerAgent;
+	if (
+		maximumWaitingTasksPerAgent !== undefined &&
+		(!Number.isSafeInteger(maximumWaitingTasksPerAgent) ||
+			maximumWaitingTasksPerAgent < 1)
+	)
+		invalidInput();
+	const busy = (queuedCount: number) =>
+		({ outcome: "busy", queuedCount }) as const;
+	/**
+	 * 排队消息（工程 Spec §12.5）：Message、`waiting` Execution、只能由认领准入的 Turn outbox，
+	 * 以及平台来源的 `task.status: waiting` 事件在同一事务写入。
+	 */
+	const queuedPlan = (
+		state: ConversationExecutionStateV1,
+		conversation: ConversationExecutionConversationStateV1,
+		modelSelection: ReturnType<typeof effectiveModelSelection>,
+		command: ConversationMessageCommandV1,
+		authority: ConversationExecutionAuthorityV1,
+		requestDigest: string,
+	):
+		| ConversationMessageWritePlanV1
+		| { readonly outcome: "busy"; readonly queuedCount: number } => {
+		const waitingCount = state.queue?.waitingCount ?? 0;
+		const agentQueue = state.queue?.agent;
+		if (!agentQueue) return unavailable();
+		if (
+			waitingCount >= conversationQueueCapacityV1 ||
+			(maximumWaitingTasksPerAgent !== undefined &&
+				agentQueue.waitingCount >= maximumWaitingTasksPerAgent)
+		)
+			return busy(waitingCount);
+		const occurredAt = safeNow(now);
+		const waitDeadline = conversationQueueDeadlineV1(
+			occurredAt,
+			command.queueDeadlineLimit,
+		);
+		if (!waitDeadline) return busy(waitingCount);
+		const messageId = nextOpaqueId(newId);
+		const executionId = nextOpaqueId(newId);
+		const turnId = nextOpaqueId(newId);
+		const statusEvent = {
+			eventId: nextOpaqueId(newId),
+			sequence: 1 as const,
+			conversationCursor: conversation.lastConversationCursor + 1,
+			event: { type: "task.status" as const, status: "waiting" as const },
+		};
+		if (!Number.isSafeInteger(statusEvent.conversationCursor))
+			return unavailable();
+		const modelSelectionFallback = modelSelectionFallbackWrite(
+			modelSelection.fallback,
+			state.modelConfiguration,
+			authority,
+			conversation.conversationId,
+			executionId,
+			statusEvent.sequence,
+			statusEvent.conversationCursor,
+			command.requestId,
+			command.traceId,
+			occurredAt,
+			newId,
+		);
+		const result: ConversationCommandResultV1 = {
+			schemaVersion: 1,
+			status: "submitted",
+			messageId,
+			executionId,
+			queuePosition: waitingCount + 1,
+		};
+		return {
+			schemaVersion: 1,
+			kind: "queued",
+			conversation: {
+				...conversation,
+				lastConversationCursor:
+					modelSelectionFallback?.timelineEvent.conversationCursor ??
+					statusEvent.conversationCursor,
+				authorizationRevision: authority.authorizationRevision,
+				updatedAt: occurredAt,
+			},
+			message: {
+				messageId,
+				conversationId: conversation.conversationId,
+				actorId: authority.actorId,
+				text: command.text,
+				executionId,
+				status: "submitted",
+				createdAt: occurredAt,
+			},
+			execution: {
+				executionId,
+				conversationId: conversation.conversationId,
+				agentId: authority.agentId,
+				actorId: authority.actorId,
+				channelId: authority.channelId,
+				turnId,
+				status: "waiting",
+				sessionGeneration: conversation.sessionGeneration,
+				deliveryFence: 0,
+				authorizationRevision: authority.authorizationRevision,
+				modelConfigurationRevision: modelSelection.modelConfigurationRevision,
+				modelOptionId: modelSelection.modelOptionId,
+				reasoningLevel: modelSelection.reasoningLevel,
+				createdAt: occurredAt,
+				taskWaitOrder: nextCounter(agentQueue.lastWaitOrder),
+				taskWaitDeadline: waitDeadline,
+			},
+			statusEvent,
+			outboxIntent: {
+				operation: "conversation.turn.submit.v1",
+				conversationId: conversation.conversationId,
+				executionId,
+				messageId,
+				turnId,
+				sessionGeneration: conversation.sessionGeneration,
+				modelConfigurationRevision: modelSelection.modelConfigurationRevision,
+				modelOptionId: modelSelection.modelOptionId,
+				reasoningLevel: modelSelection.reasoningLevel,
+				traceId: command.traceId,
+				requestId: command.requestId,
+				...(command.traceParent === undefined
+					? {}
+					: { traceParent: command.traceParent }),
+				occurredAt,
+			},
+			auditEvent: {
+				action: "conversation.message.queued",
+				actorId: authority.actorId,
+				agentId: authority.agentId,
+				conversationId: conversation.conversationId,
+				executionId,
+				traceId: command.traceId,
+				requestId: command.requestId,
+				occurredAt,
+			},
+			modelSelectionFallback,
+			result,
+			idempotency: {
+				scopeType: "conversation",
+				scopeId: conversation.conversationId,
+				actorId: authority.actorId,
+				commandType: "message",
+				key: command.idempotencyKey,
+				requestDigest,
+			},
+		};
+	};
 	return {
 		async requestMetadataRecovery(queryInput) {
 			const input = snapshotObject(
@@ -324,28 +494,45 @@ export function createConversationExecutionUseCaseV1(
 								selectedModelOptionId: modelSelection.modelOptionId,
 								selectedReasoningLevel: modelSelection.reasoningLevel,
 							};
-							if (state.activeExecution) {
-								const active = state.activeExecution;
-								const attachmentCount = command.attachments?.length ?? 0;
-								// #3374：合并窗口内尚未认领的 Execution 接收同一发送者的消息，组成同一个初始 Turn。
-								// 文字消息结束窗口；只含附件的消息重新计时，并入后附件不超过上限。
-								const merge =
-									authority.attachmentMergeWindow === true &&
-									active.attachmentMerge !== undefined &&
-									active.status === "submitted" &&
+							const queue = state.queue ?? { waitingCount: 0 };
+							const active = state.activeExecution;
+							const attachmentCount = command.attachments?.length ?? 0;
+							// #3374：合并窗口内尚未认领的 Execution 接收同一发送者的消息，组成同一个初始 Turn。
+							// 文字消息结束窗口；只含附件的消息重新计时，并入后附件不超过上限。
+							const merge =
+								active !== undefined &&
+								authority.attachmentMergeWindow === true &&
+								active.attachmentMerge !== undefined &&
+								// 已有排队消息时不再并入，避免越过先到的消息。
+								queue.waitingCount === 0 &&
+								active.status === "submitted" &&
+								!active.stopPending &&
+								active.actorId === authority.actorId &&
+								(attachmentCount === 0 ||
+									active.attachmentMerge.attachmentCount + attachmentCount <=
+										conversationAttachmentMergeMaxCountV1);
+							// 判定顺序见工程 Spec §12.5：合并窗口 → 补充指令 → 排队 → 繁忙；不默认打断当前回复。
+							if (!merge && (active || queue.waitingCount > 0)) {
+								if (active && active.actorId !== authority.actorId)
+									return busy(queue.waitingCount);
+								// 补充指令只给已被 Runtime 接受、仍在运行的回复；有排队时不越过先到的消息。
+								const canSupplement =
+									active !== undefined &&
+									active.status === "processing" &&
 									!active.stopPending &&
-									active.actorId === authority.actorId &&
-									(attachmentCount === 0 ||
-										active.attachmentMerge.attachmentCount + attachmentCount <=
-											conversationAttachmentMergeMaxCountV1);
-								if (
-									!merge &&
-									(active.stopPending ||
-										!authority.supportsSupplementaryInstruction ||
-										active.actorId !== authority.actorId)
-								) {
-									return { outcome: "busy" };
-								}
+									authority.supportsSupplementaryInstruction &&
+									queue.waitingCount === 0;
+								if (!canSupplement)
+									return queuedPlan(
+										state,
+										selectedConversation,
+										modelSelection,
+										command,
+										authority,
+										requestDigest,
+									);
+							}
+							if (active) {
 								const occurredAt = safeNow(now);
 								const messageId = nextOpaqueId(newId);
 								const modelSelectionFallback = modelSelectionFallbackWrite(
@@ -702,7 +889,9 @@ export function createConversationExecutionUseCaseV1(
 								conversation.sandboxResumable !== true
 							)
 								return { outcome: "starting" };
-							if (state.activeExecution) return { outcome: "busy" };
+							// 重新生成不进入排队：有活跃回复或更早的排队消息时繁忙（§12.5）。
+							if (state.activeExecution || (state.queue?.waitingCount ?? 0) > 0)
+								return { outcome: "busy" };
 							const modelSelection = effectiveModelSelection(
 								conversation,
 								state.modelConfiguration,
@@ -929,6 +1118,89 @@ export function createConversationExecutionUseCaseV1(
 			} catch {
 				return unavailable();
 			}
+		},
+		async withdraw(commandInput) {
+			const command = parseWithdrawCommand(commandInput);
+			const authority = await authorize(dependencies.authorization, {
+				schemaVersion: 1,
+				operation: "withdraw",
+				conversationId: command.conversationId,
+			});
+			if (!authority) return { outcome: "denied" };
+			const execute = dependencies.transaction.executeWithdrawal;
+			if (!execute) return unavailable();
+			const requestDigest = digest({
+				schemaVersion: command.schemaVersion,
+				command: command.command,
+				conversationId: command.conversationId,
+				targetExecutionId: command.targetExecutionId,
+			});
+			try {
+				return normalizeWithdrawDecision(
+					await execute.call(
+						dependencies.transaction,
+						{ command, authority, requestDigest },
+						(state) =>
+							decideConversationWithdrawalV1(
+								state,
+								command,
+								authority,
+								requestDigest,
+							),
+					),
+					command.targetExecutionId,
+				);
+			} catch {
+				return unavailable();
+			}
+		},
+	};
+}
+
+/**
+ * 撤回排队消息（工程 Spec §12.5）：只有 Web 发送者能撤回自己经排队受理、仍为 `waiting`
+ * 的消息；已离开 `waiting` 的返回已开始或已结束，不影响执行。
+ */
+export function decideConversationWithdrawalV1(
+	state: ConversationWithdrawStateV1,
+	command: ConversationWithdrawCommandV1,
+	authority: ConversationExecutionAuthorityV1,
+	requestDigest: string,
+): ConversationWithdrawPlanV1 | { readonly outcome: "denied" } {
+	const conversation = state.conversation;
+	const target = state.target;
+	if (
+		authority.channelId !== "web" ||
+		!conversation ||
+		conversation.conversationId !== command.conversationId ||
+		conversation.actorId !== authority.actorId ||
+		conversation.agentId !== authority.agentId ||
+		conversation.channelId !== authority.channelId ||
+		!target ||
+		target.executionId !== command.targetExecutionId ||
+		target.conversationId !== conversation.conversationId ||
+		target.actorId !== authority.actorId ||
+		!target.queued
+	)
+		return { outcome: "denied" };
+	const status: ConversationWithdrawResultV1["status"] =
+		target.status === "waiting"
+			? "withdrawn"
+			: target.status === "completed" ||
+					target.status === "failed" ||
+					target.status === "cancelled"
+				? "already_finished"
+				: "already_started";
+	return {
+		schemaVersion: 1,
+		result: { schemaVersion: 1, status, executionId: target.executionId },
+		idempotency: {
+			scopeType: "conversation",
+			scopeId: conversation.conversationId,
+			actorId: authority.actorId,
+			commandType: "withdraw",
+			key: command.idempotencyKey,
+			requestDigest,
 		},
 	};
 }
