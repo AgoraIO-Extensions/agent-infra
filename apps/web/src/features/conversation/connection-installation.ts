@@ -9,6 +9,7 @@ import type {
 	BeginPlatformConnectionInstallationV1Response,
 	ReadPlatformConnectionInstallationV1Data,
 } from "../../pilot/generated-v2/types.gen.js";
+import { retryablePollFailure } from "../background-read.js";
 
 type BeginHeaders = BeginPlatformConnectionInstallationV1Data["headers"];
 type ReadHeaders = ReadPlatformConnectionInstallationV1Data["headers"];
@@ -122,10 +123,14 @@ export async function readConnectionInstallation(options: {
 		headers: connectionRequestHeaders(),
 		path: { authorizationId: options.authorizationId },
 	});
+	// 状态读取是轮询：与其他手写轮询同一失败分类（#3433）。
 	if (result.response?.status !== 200 || !result.data)
 		return {
 			kind: "unavailable",
-			retryable: retryable(result.response?.status),
+			retryable: retryablePollFailure({
+				status: result.response?.status,
+				error: result.error,
+			}),
 		};
 	return stateFromProjection(projection(result.data));
 }
