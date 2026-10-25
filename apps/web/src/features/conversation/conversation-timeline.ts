@@ -53,6 +53,11 @@ type ReadingSession = {
 	reconnectTimer?: ReturnType<typeof setTimeout>;
 	/** 快速重连用尽或读取暂不可用后的低频重试已排队（#2151）。 */
 	slowRetry?: boolean;
+	/**
+	 * 手动「重新连接」的结果：事件流被服务端接受，或自动重连用尽、读取失败（回到中断 / 不可用 / 拒绝），
+	 * 或读取被停止时调用一次。恢复焦点据此判断本次恢复请求何时有结果（#3419 N14-11）。
+	 */
+	reconnectSettled?: () => void;
 };
 
 /** 页面可见性与唤醒信号；测试可注入。 */
@@ -191,6 +196,14 @@ export function createConversationTimeline({
 		for (const listener of listeners) listener();
 	}
 
+	/** 本次手动重连有了结果：结束 reconnect() 返回的 Promise。 */
+	function settleReconnect(session: ReadingSession | undefined) {
+		const settled = session?.reconnectSettled;
+		if (!session || !settled) return;
+		session.reconnectSettled = undefined;
+		settled();
+	}
+
 	function cancelReconnect(session: ReadingSession | undefined) {
 		if (!session) return;
 		session.slowRetry = false;
@@ -250,10 +263,12 @@ export function createConversationTimeline({
 		previous?.historyRequest?.abort();
 		previous?.stream?.abort();
 		previous?.earlierRequest?.abort();
+		settleReconnect(previous);
 	}
 
 	function fail(session: ReadingSession, failure: ConversationReadFailure) {
 		if (current !== session) return;
+		settleReconnect(session);
 		if (
 			failure.kind === "authorization" ||
 			failure.kind === "http" ||
@@ -500,6 +515,8 @@ export function createConversationTimeline({
 								transientFailure(state.failure)))
 					)
 						publish({ ...state, status: "ready", failure: null });
+					// 事件流被接受：手动重连成功。
+					if (active()) settleReconnect(session);
 					return response;
 				},
 				onSseError: (error) => {
@@ -547,6 +564,7 @@ export function createConversationTimeline({
 			if (streamFailure) fail(session, streamFailure);
 			else {
 				publish({ ...state, status: "disconnected" });
+				settleReconnect(session);
 				scheduleSlowRetry(session);
 			}
 		} catch (error) {
@@ -607,16 +625,29 @@ export function createConversationTimeline({
 			const session = current;
 			if (session) await readHistory(session);
 		},
-		async reconnect() {
+		/**
+		 * 手动重新连接。返回的 Promise 等到本次重连有了结果才结束：事件流被接受，或自动重连用尽、读取
+		 * 失败（中断提示重新出现），或读取被停止（#3419 N14-11）；不是在重新发起读取后立即结束。
+		 */
+		reconnect() {
 			const session = current;
-			if (!session) return;
+			if (!session) return Promise.resolve();
 			cancelReconnect(session);
 			session.reconnectAttempts = 0;
-			if (session.needsHistory) await readHistory(session);
+			// 上一次手动重连还没有结果：它随这一次一起结束。
+			const previous = session.reconnectSettled;
+			const settled = new Promise<void>((resolve) => {
+				session.reconnectSettled = () => {
+					previous?.();
+					resolve();
+				};
+			});
+			if (session.needsHistory) void readHistory(session);
 			else {
 				publish({ ...state, status: "ready", failure: null });
 				void readStream(session);
 			}
+			return settled;
 		},
 		async loadEarlier() {
 			const session = current;
@@ -635,6 +666,7 @@ export function createConversationTimeline({
 				failure: { kind: "network" },
 				earlierLoading: false,
 			});
+			settleReconnect(session);
 		},
 		rejectRead(failure: ConversationReadFailure) {
 			if (current) fail(current, failure);
