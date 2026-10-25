@@ -20,7 +20,10 @@ import type {
 	DeploymentConfigurationProjectionV2,
 	SkillHubAgentBindingStatusV1,
 } from "../src/pilot/generated-v2/types.gen";
-import { expectBackgroundRereadKeeps } from "./background-reread";
+import {
+	backgroundReread,
+	expectBackgroundRereadKeeps,
+} from "./background-reread";
 import {
 	expectFocusableBusy,
 	expectFocusSettled,
@@ -1413,6 +1416,129 @@ for (const mode of ["catalog", "saved-key"] as const)
 			await expectNoDuplicateControls(
 				page,
 				`Owner 配置（${mode}，部署选项 ${failure}，#3418）`,
+			);
+			await noHorizontalOverflow(page);
+		});
+
+// #3418 N14-02（G14-2-03）：已保存 Key 的可用模型已有结果时，后台重读挂起或可重试失败（503）照常显示选择器与
+// 未保存的勾选；不可重试失败（401、404）按 D2-59 显示「无法读取可用模型」、收起选择器，未保存的模型选择撤回、
+// 不随保存提交，焦点在选择器里时交给「模型与凭证」标题，在「保存配置」上时留在原处，都不落到 body。
+test("a background reread of the saved Key candidates keeps the picker through a retryable failure (#3418 N14-02)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	const pageErrors = trackPageErrors(page);
+	const api = await ownerConfigFixture(page, { keySet: true });
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const models = page.getByRole("region", {
+		name: "模型与凭证",
+		exact: true,
+	});
+	const mini = await pinElement(
+		models.getByRole("checkbox", {
+			name: "Relay · Internal · gpt-5-mini",
+			exact: true,
+		}),
+		"saved-key-mini",
+	);
+	await mini.click();
+	await expect(mini).toBeChecked();
+	await mini.focus();
+	await expectBackgroundRereadKeeps(page, {
+		path: "/api/v2/agents/agent-pilot-1/default-relay-key/display-candidates",
+		focus: mini,
+		context: "已保存 Key 可用模型（503）",
+		expectKept: async () => {
+			await expect(mini).toBeChecked();
+			await expect(models.getByText("只列出默认 Key 可见")).toHaveCount(1);
+			await expect(models.getByRole("alert")).toHaveCount(0);
+		},
+	});
+	expect(api.commands).toEqual([]);
+	await expectCleanPage(page, pageErrors);
+	await expectNoDuplicateControls(page, "已保存 Key 可用模型（503，#3418）");
+});
+
+for (const status of [401, 404] as const)
+	for (const focusOn of ["model", "save"] as const)
+		test(`a non-retryable background reread of the saved Key candidates shows the read failure: ${status} ${focusOn} (#3418 N14-02)`, async ({
+			page,
+		}, info) => {
+			await viewport(page, info.project.name === "mobile");
+			const pageErrors = trackPageErrors(page);
+			const api = await ownerConfigFixture(page, { keySet: true });
+			await page.goto("/agents/agent-pilot-1/configuration");
+			const models = page.getByRole("region", {
+				name: "模型与凭证",
+				exact: true,
+			});
+			const mini = await pinElement(
+				models.getByRole("checkbox", {
+					name: "Relay · Internal · gpt-5-mini",
+					exact: true,
+				}),
+				"saved-key-mini",
+			);
+			await mini.click();
+			await expect(mini).toBeChecked();
+			// 另改一个环境变量值：保存仍可用，用来确认撤回的模型选择不随保存提交。
+			await page
+				.getByRole("region", { name: "环境变量与 Secret", exact: true })
+				.getByLabel("值：环境变量 1", { exact: true })
+				.fill("after-candidates-failure");
+			const save = await pinElement(
+				page.getByRole("button", { name: "保存配置", exact: true }),
+				"saved-key-save",
+			);
+			const focus = focusOn === "model" ? mini : save;
+			await focus.focus();
+			const path =
+				"/api/v2/agents/agent-pilot-1/default-relay-key/display-candidates";
+			await page.route(
+				(url) => url.pathname === path,
+				(route) =>
+					route.request().method() === "GET"
+						? route.fulfill(unavailable(status, false))
+						: route.fallback(),
+			);
+			const failed = page.waitForResponse(
+				(response) =>
+					new URL(response.url()).pathname === path &&
+					response.status() === status,
+			);
+			await backgroundReread(page);
+			await failed;
+			const alert = models.getByRole("alert");
+			await expect(alert).toContainText("无法读取可用模型");
+			await expect(alert).toContainText(
+				"权限或 Agent 状态已变化，请刷新页面；如果默认 Key 已失效，请替换默认 Key。",
+			);
+			await expect(models.getByRole("checkbox")).toHaveCount(0);
+			await expect(models.getByText("只列出默认 Key 可见")).toHaveCount(0);
+			await expectFocusSettled(
+				focusOn === "model"
+					? models.getByRole("heading", {
+							name: "模型与凭证",
+							exact: true,
+						})
+					: save,
+				`已保存 Key 可用模型（${status}，焦点在${focusOn === "model" ? "选择器" : "保存配置"}）`,
+			);
+			await expect(save).toBeEnabled();
+			await save.click();
+			await expect(toast(page)).toHaveText("配置已保存，Secret 值不会回显");
+			const saved = api.commands.at(-1);
+			expect(saved?.path).toBe("/api/v2/agents/agent-pilot-1/configuration");
+			expect(saved?.body).not.toHaveProperty("modelConfiguration");
+			expect(saved?.body).toMatchObject({
+				environment: [
+					{ name: "AGENT_WORKSPACE", value: "after-candidates-failure" },
+				],
+			});
+			await expectCleanPage(page, pageErrors);
+			await expectNoDuplicateControls(
+				page,
+				`已保存 Key 可用模型（${status}，#3418）`,
 			);
 			await noHorizontalOverflow(page);
 		});
