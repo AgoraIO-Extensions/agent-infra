@@ -1428,8 +1428,8 @@ export class PostgresConversationDispatchStoreV1
 
 	/**
 	 * #3375：补充指令转入排队（工程 Spec §12.5）。在本次补充指令的 Conversation 锁事务内转换它与
-	 * 同一 Execution 之后仍待投递的补充指令；进入排队时 outbox 以“已转排队”终结，否则按“原回复
-	 * 已结束”失败。
+	 * 同一 Execution 之后仍待投递的补充指令；进入排队时 outbox 以“已转排队”终结，否则按“排队已满”
+	 * 或“权限已失效”失败。
 	 */
 	async queueSupplement(input: {
 		readonly claim: ConversationDispatchClaimV1;
@@ -1440,7 +1440,7 @@ export class PostgresConversationDispatchStoreV1
 		return transactionResult(this.#client, async (transaction) => {
 			const state = await ownedState(transaction, input.claim, true);
 			if (!state) throw new StaleDispatchLease();
-			const queued = await queueSupplementMessages(
+			const outcome = await queueSupplementMessages(
 				transaction,
 				state,
 				input.claim,
@@ -1454,8 +1454,8 @@ export class PostgresConversationDispatchStoreV1
 				transaction,
 				state,
 				input.claim,
-				queued ? "succeeded" : "failed",
-				queued ? "SUPPLEMENT_QUEUED" : "ORIGINAL_RESPONSE_ALREADY_FINISHED",
+				outcome === "queued" ? "succeeded" : "failed",
+				outcome === "queued" ? "SUPPLEMENT_QUEUED" : outcome,
 			);
 		});
 	}

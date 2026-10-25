@@ -2,15 +2,11 @@ import {
 	createWecomAuthorizationV1,
 	createWecomChannelV1,
 	createWecomReceiptAccessV1,
-	createWecomSupplementaryInstructionReaderV1,
 	type TaskUserDirectoryV1,
 	type WecomConnectionAuthorizationPortV1,
 	type WecomIdentityPortV1,
 } from "@agent-infra/platform-core";
-import {
-	PostgresAgentConfigurationQueryV1,
-	PostgresWecomChannelV1,
-} from "@agent-infra/platform-store";
+import { PostgresWecomChannelV1 } from "@agent-infra/platform-store";
 import {
 	createWecomAdapterV1,
 	createWecomReplyEncryptorV1,
@@ -47,10 +43,6 @@ export function assembleWecomApiV1(
 		deployment.connectionAuthorization,
 	);
 	const { store, authorization } = receipts;
-	// #3375：与 Web 读取同一 Runtime 展示投影中的补充指令能力。
-	const runtimePresentation = new PostgresAgentConfigurationQueryV1({
-		databaseUrl,
-	});
 	return {
 		dependencies: {
 			resolveBinding: deployment.resolveBinding,
@@ -61,26 +53,12 @@ export function assembleWecomApiV1(
 				? { acceptMessages: deployment.acceptMessages }
 				: {}),
 			adapter: createWecomAdapterV1({ protectReply }),
-			channel: createWecomChannelV1({
-				authorization,
-				store,
-				supplementaryInstruction: createWecomSupplementaryInstructionReaderV1({
-					runtime: runtimePresentation,
-					identity: deployment.identity,
-					state: store,
-				}),
-			}),
+			channel: createWecomChannelV1({ authorization, store }),
 			observe: deployment.observe,
 			receipts: receipts.dependencies.receipts,
 		} satisfies WecomRoutesDependenciesV1,
 		store,
-		close: async () => {
-			try {
-				await store.close();
-			} finally {
-				await runtimePresentation.close();
-			}
-		},
+		close: () => store.close(),
 	};
 }
 

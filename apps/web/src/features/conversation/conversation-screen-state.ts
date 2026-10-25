@@ -408,6 +408,9 @@ export function commandFailure(
 			return "投递失败：原回复未开始。";
 		case "ORIGINAL_RESPONSE_ALREADY_FINISHED":
 			return "投递失败：原回复已结束。";
+		// #3375：补充指令转入排队时排队已满（PRD 11.2）。
+		case "QUEUE_FULL":
+			return "投递失败：排队已满。";
 		case "AUTHORIZATION_REVOKED":
 			return "投递失败：权限已失效。";
 		case "AUTHENTICATION_REQUIRED":

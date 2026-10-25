@@ -5,7 +5,6 @@ import {
 	createWecomDeliveryV1,
 	createWecomProgressV1,
 	createWecomQueueNoticeV1,
-	createWecomSupplementaryInstructionReaderV1,
 	sameWecomConnectionAuthorizationFactV1,
 	type TaskRuntimeAuthorizationRecordV1,
 	type TaskUserDirectoryV1,
@@ -14,10 +13,7 @@ import {
 	type WecomIdentityPortV1,
 	type WecomSendPortV1,
 } from "@agent-infra/platform-core";
-import {
-	PostgresAgentConfigurationQueryV1,
-	PostgresWecomChannelV1,
-} from "@agent-infra/platform-store";
+import { PostgresWecomChannelV1 } from "@agent-infra/platform-store";
 import { parseWecomAnswerReferencesV1 } from "@agent-infra/wecom/worker";
 import {
 	createPlatformWecomConnectionsV1,
@@ -67,9 +63,6 @@ export function createPlatformWecomWorkerV1(
 		state: store,
 		connectionAuthorization: options.connectionAuthorization,
 	});
-	const runtimePresentation = new PostgresAgentConfigurationQueryV1({
-		databaseUrl: options.databaseUrl,
-	});
 	const media = options.media
 		? createWecomMediaV1({
 				...options.media,
@@ -83,12 +76,6 @@ export function createPlatformWecomWorkerV1(
 		authorization,
 		store,
 		...(media ? { media: media.inbound } : {}),
-		// #3375：与 Web 读取同一 Runtime 展示投影中的补充指令能力。
-		supplementaryInstruction: createWecomSupplementaryInstructionReaderV1({
-			runtime: runtimePresentation,
-			identity: options.identity,
-			state: store,
-		}),
 	});
 	const setup =
 		options.setup && options.connections
@@ -293,11 +280,7 @@ export function createPlatformWecomWorkerV1(
 				connections?.close(),
 			]);
 			// Keep business pools open until setup and connection shutdown settle.
-			for (const close of [
-				() => store.close(),
-				() => runtimePresentation.close(),
-				() => media?.close(),
-			])
+			for (const close of [() => store.close(), () => media?.close()])
 				try {
 					await close();
 				} catch (reason) {

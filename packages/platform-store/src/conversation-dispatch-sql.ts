@@ -995,9 +995,10 @@ function queueCount(value: string | number): number {
  * #3375：补充指令转入排队（工程 Spec §12.5）。调用方已持有本次补充指令的租约、Conversation 与原
  * Execution 锁（`ownedState`）。本 Execution 当前认领的补充指令与之后仍待投递的补充指令按受理顺序逐条
  * 转换：为每条消息新建等待 Execution（新的等待顺序与期限，写入与受理排队消息相同），把 Message、附件
- * 与企微回执改为绑定新 Execution，补充指令 outbox 以“已转排队”终结。排队已满、企微回复期限不足以
- * 排队，或原任务授权已不是当前 Agent 授权的消息按“原回复已结束”投递失败。认领中的那一条不存在或
- * 已不是 `submitted` 时视为租约失效。返回认领中的那一条是否进入了排队；它的 outbox 由调用方终结。
+ * 与企微回执改为绑定新 Execution，补充指令 outbox 以“已转排队”终结。排队已满或企微回复期限不足以
+ * 排队的消息按“排队已满”投递失败；原任务授权已撤销或不再是当前 Agent 授权时按“权限已失效”投递
+ * 失败。认领中的那一条不存在或已不是 `submitted` 时视为租约失效。返回认领中那一条的结果；它的
+ * outbox 由调用方终结。
  */
 export async function queueSupplementMessages(
 	transaction: Transaction,
@@ -1008,7 +1009,7 @@ export async function queueSupplementMessages(
 		readonly waitMs: number;
 		readonly replyLeadMs: number;
 	},
-): Promise<boolean> {
+): Promise<"queued" | "QUEUE_FULL" | "AUTHORIZATION_REVOKED"> {
 	const original = state.execution;
 	const conversationId = original.conversation_id;
 	const sessionGeneration = queueCount(original.session_generation);
@@ -1058,7 +1059,8 @@ export async function queueSupplementMessages(
 		from platform.conversation_executions where agent_id = ${original.agent_id}
 	`;
 	let lastOrder = queueCount(agentQueue?.last_order ?? "0");
-	let claimedQueued = false;
+	let claimedOutcome: "queued" | "QUEUE_FULL" | "AUTHORIZATION_REVOKED" =
+		"QUEUE_FULL";
 	for (const supplement of supplements) {
 		const claimed = supplement.id === claim.itemId;
 		const [message] = await transaction<{ message_id: string }[]>`
@@ -1084,14 +1086,17 @@ export async function queueSupplementMessages(
 						and r.execution_id = ${original.execution_id}), 'infinity'::timestamptz)
 			) as limit_at) bounded
 		`;
-		if (
-			authorization?.current !== true ||
-			waitingCount >= limits.capacity ||
-			deadline?.open !== true
-		) {
+		const failure =
+			authorization?.current !== true
+				? ("AUTHORIZATION_REVOKED" as const)
+				: waitingCount >= limits.capacity || deadline?.open !== true
+					? ("QUEUE_FULL" as const)
+					: undefined;
+		if (failure) {
+			if (claimed) claimedOutcome = failure;
 			await transaction`
 				update platform.conversation_messages
-				set status = 'failed', failure_code = 'ORIGINAL_RESPONSE_ALREADY_FINISHED',
+				set status = 'failed', failure_code = ${failure},
 					updated_at = clock_timestamp()
 				where message_id = ${message.message_id} and conversation_id = ${conversationId}
 			`;
@@ -1104,6 +1109,7 @@ export async function queueSupplementMessages(
 				`;
 			continue;
 		}
+		if (!deadline || !authorization) throw new StaleDispatchLease();
 		const executionId = randomUUID();
 		const turnId = randomUUID();
 		lastOrder += 1;
@@ -1203,7 +1209,7 @@ export async function queueSupplementMessages(
 			set execution_id = ${executionId}, updated_at = clock_timestamp()
 			where id = ${supplement.request_id ?? ""} and execution_id = ${original.execution_id}
 		`;
-		if (claimed) claimedQueued = true;
+		if (claimed) claimedOutcome = "queued";
 		else
 			await transaction`
 				update platform.outbox_items
@@ -1212,5 +1218,5 @@ export async function queueSupplementMessages(
 				where id = ${supplement.id}
 			`;
 	}
-	return claimedQueued;
+	return claimedOutcome;
 }

@@ -6431,7 +6431,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					["submitted", null, "succeeded"],
 					["submitted", null, "succeeded"],
 					["submitted", null, "succeeded"],
-					["failed", "ORIGINAL_RESPONSE_ALREADY_FINISHED", "failed"],
+					["failed", "QUEUE_FULL", "failed"],
 				]);
 			} finally {
 				await store.close();
@@ -6462,7 +6462,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				`;
 				expect(state).toEqual({
 					status: "failed",
-					failure_code: "ORIGINAL_RESPONSE_ALREADY_FINISHED",
+					failure_code: "AUTHORIZATION_REVOKED",
 					execution_id: work.executionId,
 					outbox: "failed",
 				});

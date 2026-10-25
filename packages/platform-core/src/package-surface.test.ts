@@ -146,7 +146,6 @@ describe("platform-core package surface", () => {
 			"createWecomReceiptAccessV1",
 			"createWecomSetupActivationV1",
 			"createWecomSetupV1",
-			"createWecomSupplementaryInstructionReaderV1",
 			"createWorkloadReconciliationV1",
 			"decideAgentRuntimePresentationV1",
 			"decideConversationDispatchCapacityV1",

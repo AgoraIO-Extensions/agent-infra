@@ -5,10 +5,6 @@ import {
 	snapshotAgentManagementDataObject,
 } from "./agent-management-input.js";
 import type {
-	AgentRuntimePresentationDecisionV1,
-	AgentRuntimePresentationExpectationV1,
-} from "./agent-runtime-presentation.js";
-import type {
 	ConversationExecutionAuthorityV1,
 	ConversationExecutionUseCaseV1,
 } from "./conversation-execution.js";
@@ -434,8 +430,6 @@ export function createWecomChannelV1(dependencies: {
 	readonly authorization: WecomAuthorizationPortV1;
 	readonly store: WecomChannelStorePortV1;
 	readonly media?: WecomMediaResolverV1;
-	/** #3375：Runtime 实际的补充指令能力；未装配时按不支持。 */
-	readonly supplementaryInstruction?: WecomSupplementaryInstructionReaderV1;
 	readonly now?: () => Date;
 }) {
 	const now = dependencies.now ?? (() => new Date());
@@ -521,19 +515,6 @@ export function createWecomChannelV1(dependencies: {
 				);
 				return { outcome: "denied" };
 			}
-			// #3375：补充指令分支取 Runtime 实际能力（与 Web 一致）；读取失败按不支持，授权结论不变。
-			const supportsSupplementaryInstruction =
-				(await dependencies
-					.supplementaryInstruction?.({
-						scope: message,
-						actorId: authority.actor.actorId,
-					})
-					.catch(() => false)) === true;
-			if (signal?.aborted) return { outcome: "unavailable" };
-			const admittedAuthority: WecomAuthorityV1 = {
-				...authority,
-				actor: { ...authority.actor, supportsSupplementaryInstruction },
-			};
 			const eventKey = digest([
 				message.kind,
 				message.providerId,
@@ -569,7 +550,7 @@ export function createWecomChannelV1(dependencies: {
 			]);
 			const plan: WecomAcceptancePlanV1 = {
 				message,
-				authority: admittedAuthority,
+				authority,
 				eventKey,
 				conversationKey,
 				requestDigest,
@@ -1531,73 +1512,6 @@ export interface WecomAuthorityStateV1 {
 }
 export interface WecomAuthorityStatePortV1 {
 	readAuthorityState(agentId: string): Promise<WecomAuthorityStateV1 | null>;
-}
-
-/**
- * #3375：企微入站准入时读取目标 Agent 当前 Runtime 已验证的补充指令能力。结果只决定 Core
- * 是否进入补充指令分支，不改变授权结论；未验证、不可见、读取期间状态变化或读取失败都按
- * 不支持处理。
- */
-export type WecomSupplementaryInstructionReaderV1 = (input: {
-	readonly scope: WecomScopeV1;
-	/** 已通过企微授权的发送者；当前身份解析结果必须仍是同一用户。 */
-	readonly actorId: string;
-}) => Promise<boolean>;
-
-/** 与 Web 相同的 Runtime 展示投影读取；Store 的 `readRuntimePresentation` 直接满足。 */
-export interface WecomRuntimePresentationPortV1 {
-	readRuntimePresentation(input: {
-		readonly agentId: string;
-		readonly actorId: string;
-		readonly organizationIds: readonly string[];
-		readonly isAdministrator: boolean;
-		readonly accountStatus: "active" | "disabled" | "revoked";
-		readonly expected: AgentRuntimePresentationExpectationV1;
-	}): Promise<AgentRuntimePresentationDecisionV1>;
-}
-
-/**
- * #3375：按发送者当前身份、Agent 当前配置修订与管理状态读取 Runtime 展示投影中的
- * `capabilities.supplementaryInstruction`，与 Web（`apps/platform-api` 的会话授权）和企微附件
- * 能力（#3258）读取同一份已验证投影，不另设能力来源。
- */
-export function createWecomSupplementaryInstructionReaderV1(input: {
-	readonly runtime: WecomRuntimePresentationPortV1;
-	readonly identity: Pick<WecomIdentityPortV1, "resolveSender">;
-	readonly state: WecomAuthorityStatePortV1;
-}): WecomSupplementaryInstructionReaderV1 {
-	return async ({ scope, actorId }) => {
-		try {
-			const resolved = await input.identity.resolveSender(scope);
-			const actor = resolved ? parseCurrentTaskUserV1(resolved) : null;
-			if (actor?.accountStatus !== "active" || actor.userId !== actorId)
-				return false;
-			const state = await input.state.readAuthorityState(scope.agentId);
-			if (
-				!state ||
-				state.management.agentId !== scope.agentId ||
-				state.configuration.agentId !== scope.agentId
-			)
-				return false;
-			const runtime = await input.runtime.readRuntimePresentation({
-				agentId: scope.agentId,
-				actorId: actor.userId,
-				organizationIds: actor.organizationIds,
-				isAdministrator: false,
-				accountStatus: actor.accountStatus,
-				expected: {
-					configurationRevision: state.configuration.revision,
-					management: state.management,
-				},
-			});
-			return (
-				runtime.outcome === "found" &&
-				runtime.capabilities?.supplementaryInstruction === true
-			);
-		} catch {
-			return false;
-		}
-	};
 }
 function parseWecomConnectionAuthorizationFactV1(
 	value: unknown,

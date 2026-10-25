@@ -29,6 +29,8 @@ export const PilotTerminalErrorCodeV1Schema = z.enum([
 	"ORIGINAL_RESPONSE_ALREADY_FINISHED",
 	/** 多服务 Agent 的档位估算总量超过部署配置的单 Agent 上限（#2396）。 */
 	"MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
+	/** #3375：补充指令转入排队时会话排队已满，消息投递失败（PRD 11.2）。 */
+	"QUEUE_FULL",
 ]);
 
 const errorShape = {

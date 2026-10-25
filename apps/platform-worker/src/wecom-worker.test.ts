@@ -55,14 +55,9 @@ vi.mock("@agent-infra/platform-store", () => ({
 		close = mocks.close;
 		scopeForExecution = mocks.scopeForExecution;
 	},
-	// #3375：补充指令能力读取用的 Runtime 展示投影；这里只验证关闭顺序。
-	PostgresAgentConfigurationQueryV1: class {
-		close = vi.fn(async () => {});
-	},
 }));
 vi.mock("@agent-infra/platform-core", () => ({
 	createWecomAuthorizationV1: () => ({}),
-	createWecomSupplementaryInstructionReaderV1: () => async () => false,
 	createWecomChannelV1: (options: typeof mocks.channelOptions) => {
 		mocks.channelOptions = options;
 		return { receive: vi.fn() };
