@@ -12,7 +12,12 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
 	for (const close of cleanups.splice(0).reverse()) await close();
 });
-async function setup() {
+async function setup(
+	options: {
+		readonly receive?: (message: WecomMessageV1) => Promise<void>;
+		readonly now?: () => Date;
+	} = {},
+) {
 	const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
 	await once(server, "listening");
 	const address = server.address();
@@ -32,10 +37,12 @@ async function setup() {
 		isCurrent: async () => current,
 		receive: async (message) => {
 			messages.push(message);
+			await options.receive?.(message);
 		},
 		protectReply: async (route) => JSON.stringify(route),
 		revealReply: async (handle) => JSON.parse(handle),
 		observe: (state) => states.push(state),
+		...(options.now ? { now: options.now } : {}),
 	});
 	cleanups.push(async () => {
 		adapter.close();
@@ -52,11 +59,11 @@ async function setup() {
 		socket.send(JSON.stringify({ headers: auth.headers, errcode: 0 }));
 		await expect.poll(() => states).toContain("connected");
 	};
-	const push = (overrides = {}) =>
+	const push = (overrides = {}, requestId = "request-1") =>
 		socket.send(
 			JSON.stringify({
 				cmd: "aibot_msg_callback",
-				headers: { req_id: "request-1" },
+				headers: { req_id: requestId },
 				body: {
 					aibotid: "bot-1",
 					msgid: "event-1",
@@ -1207,4 +1214,124 @@ it("keeps the remaining conversation quota for the final reply instead of progre
 				(frame.body.stream as { finish?: boolean } | undefined)?.finish,
 		),
 	).toEqual([true]);
+});
+
+// #3374：同一会话键（机器人、会话类型、单聊或群聊标识、发送者）的帧按收到的顺序逐条受理，
+// 媒体下载期间后到的文字不能先受理；不同会话键之间不互相阻塞（工程 Spec §14.2.4）。
+it("serializes one session key in arrival order and keeps other keys parallel (#3374)", async () => {
+	let releaseImage: () => void = () => {};
+	const imageDownloaded = new Promise<void>((resolve) => {
+		releaseImage = resolve;
+	});
+	const timeline: string[] = [];
+	const s = await setup({
+		async receive(message) {
+			timeline.push(`start:${message.eventId}`);
+			if (message.eventId === "image-1") await imageDownloaded;
+			timeline.push(`end:${message.eventId}`);
+		},
+	});
+	await s.authenticate();
+	s.push(
+		{
+			msgid: "image-1",
+			msgtype: "image",
+			image: { url: "https://provider.test/media/image-1", aeskey: "k1" },
+		},
+		"request-image",
+	);
+	s.push({ msgid: "text-1" }, "request-text");
+	// 同群另一位发送者是另一个会话键，单聊同一发送者也是另一个会话键。
+	s.push({ msgid: "other-1", from: { userid: "sender-2" } }, "request-other");
+	s.push(
+		{ msgid: "single-1", chattype: "single", chatid: undefined },
+		"request-single",
+	);
+	await expect
+		.poll(() => timeline.filter((entry) => entry.startsWith("end:")).sort())
+		.toEqual(["end:other-1", "end:single-1"]);
+	// 图片仍在“下载”：同一会话键的文字还没有开始受理。
+	expect(timeline).not.toContain("start:text-1");
+	releaseImage();
+	await expect.poll(() => timeline).toContain("end:text-1");
+	expect(timeline.indexOf("start:text-1")).toBeGreaterThan(
+		timeline.indexOf("end:image-1"),
+	);
+});
+
+it("replies busy for frames beyond the per-session bound instead of dropping them (#3374)", async () => {
+	let release: () => void = () => {};
+	const blocked = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const s = await setup({
+		async receive() {
+			await blocked;
+		},
+	});
+	await s.authenticate();
+	const replies: { reqId: string; content: string; finish: boolean }[] = [];
+	s.socket.on("message", (data) => {
+		const frame = JSON.parse(data.toString());
+		if (frame.cmd !== "aibot_respond_msg") return;
+		replies.push({
+			reqId: frame.headers.req_id,
+			content: frame.body.stream.content,
+			finish: frame.body.stream.finish,
+		});
+		s.socket.send(JSON.stringify({ headers: frame.headers, errcode: 0 }));
+	});
+	for (let index = 1; index <= 9; index++)
+		s.push({ msgid: `event-${index}` }, `request-${index}`);
+	// 第 9 帧超出该会话键的待处理上限：明确回复繁忙，不静默丢弃。
+	await expect
+		.poll(() => replies)
+		.toEqual([
+			{ reqId: "request-9", content: "Agent 正忙，请稍后重试", finish: true },
+		]);
+	await expect.poll(() => s.messages.length).toBe(1);
+	release();
+	await expect.poll(() => s.messages.length).toBe(8);
+	expect(s.messages.map((message) => message.eventId)).toEqual(
+		Array.from({ length: 8 }, (_, index) => `event-${index + 1}`),
+	);
+});
+
+it("keeps the reply lifetime from arrival while a frame waits for its session slot (#3374)", async () => {
+	let instant = Date.parse("2026-10-24T08:12:00.000Z");
+	let releaseImage: () => void = () => {};
+	const imageDownloaded = new Promise<void>((resolve) => {
+		releaseImage = resolve;
+	});
+	const s = await setup({
+		now: () => new Date(instant),
+		async receive(message) {
+			if (message.eventId === "image-1") await imageDownloaded;
+		},
+	});
+	await s.authenticate();
+	s.push(
+		{
+			msgid: "image-1",
+			msgtype: "image",
+			image: { url: "https://provider.test/media/image-1", aeskey: "k1" },
+		},
+		"request-image",
+	);
+	s.push({ msgid: "text-1" }, "request-text");
+	await expect.poll(() => s.messages.length).toBe(1);
+	// 等文字帧到达并在该会话键的槽位外排队（本地回环，留足余量）。
+	await new Promise((resolve) => setTimeout(resolve, 500));
+	// 文字在图片“下载”期间到达并等待；放行时时钟已过去 100 秒。
+	const arrivedAt = instant;
+	instant += 100_000;
+	releaseImage();
+	await expect.poll(() => s.messages.length).toBe(2);
+	expect(s.messages[1]).toMatchObject({
+		eventId: "text-1",
+		replyExpiresAt: new Date(arrivedAt + 540_000).toISOString(),
+	});
+	expect(JSON.parse(s.messages[1]?.replyHandle ?? "{}")).toMatchObject({
+		expiresAt: new Date(arrivedAt + 540_000).toISOString(),
+	});
 });

@@ -49,6 +49,7 @@ export function createPlatformWecomConnectionsV1(
 		readonly receive: (
 			message: WecomMessageV1,
 			fence: WecomConnectionFenceV1,
+			signal?: AbortSignal,
 		) => Promise<WecomAcceptanceV1>;
 	},
 ) {
@@ -65,6 +66,8 @@ export function createPlatformWecomConnectionsV1(
 	const blocked = new Set<string>();
 	const retryAfter = new Map<string, { identity: string; time: number }>();
 	const statuses = new Map<string, Promise<unknown>>();
+	// #3374：受理之后在串行槽位外发送的回复；关闭时等待它们结束。
+	const replies = new Set<Promise<void>>();
 	let closed = false;
 	let polling: Promise<void> | undefined;
 	async function reconcile() {
@@ -139,34 +142,22 @@ export function createPlatformWecomConnectionsV1(
 					!closed && Date.now() < claim.leaseUntil.getTime() - 1000,
 				isCurrent: () => leases.current(claim),
 				receive: async (message) => {
+					// #3374：同一会话键的下一帧要等这一帧受理结束；受理最多占用到回复有效期结束，
+					// 依赖挂起时也会释放槽位（过期后已无法回复）。
+					const remaining = Date.parse(message.replyExpiresAt) - Date.now();
+					const deadline = AbortSignal.timeout(
+						Number.isFinite(remaining) ? Math.max(0, remaining) : 0,
+					);
 					const result = await options
-						.receive(message, claim)
+						.receive(message, claim, deadline)
 						.catch(() => ({ outcome: "unavailable" as const }));
-					// #3077：新受理并已开始执行的消息立即回处理中提示；繁忙、重投与拒绝的消息不发。
-					if (
-						result.outcome === "accepted" &&
-						result.receipt.status === "accepted"
-					) {
-						if (!(await leases.current(claim))) return;
-						await connection.acknowledge({
-							scope: message,
-							replyHandle: message.replyHandle,
-							text: wecomProcessingTextV1,
-						});
-						return;
-					}
-					if (result.outcome === "denied" || result.outcome === "unavailable") {
-						if (!(await leases.current(claim))) return;
-						const status = await connection.sender.send({
-							scope: message,
-							replyHandle: message.replyHandle,
-							text:
-								result.outcome === "denied"
-									? "暂无权限使用此 Agent"
-									: "Agent 当前不可用，请稍后重试",
-						});
-						if (status !== "sent") options.observeIngress?.("unavailable");
-					}
+					// #3374：受理结束即释放该会话键的串行槽位；处理中提示与拒绝回复在槽位之外发送，
+					// 等待 ACK 不推迟同一会话的下一条消息（工程 Spec §14.2.4）。
+					const reply = replyAfterAdmission(message, result).catch(() => {
+						options.observeIngress?.("unavailable");
+					});
+					replies.add(reply);
+					void reply.finally(() => replies.delete(reply));
 				},
 				observeIngress: options.observeIngress,
 				protectReply: options.protectReply,
@@ -198,6 +189,36 @@ export function createPlatformWecomConnectionsV1(
 				connection,
 				credentialVersion: configuration.credentialVersion,
 			});
+			/** 受理之后的回复：新受理并已开始执行的消息立即回处理中提示（#3077）；繁忙、重投不发。 */
+			const replyAfterAdmission = async (
+				message: WecomMessageV1,
+				result: WecomAcceptanceV1,
+			) => {
+				if (
+					result.outcome === "accepted" &&
+					result.receipt.status === "accepted"
+				) {
+					if (!(await leases.current(claim))) return;
+					await connection.acknowledge({
+						scope: message,
+						replyHandle: message.replyHandle,
+						text: wecomProcessingTextV1,
+					});
+					return;
+				}
+				if (result.outcome === "denied" || result.outcome === "unavailable") {
+					if (!(await leases.current(claim))) return;
+					const status = await connection.sender.send({
+						scope: message,
+						replyHandle: message.replyHandle,
+						text:
+							result.outcome === "denied"
+								? "暂无权限使用此 Agent"
+								: "Agent 当前不可用，请稍后重试",
+					});
+					if (status !== "sent") options.observeIngress?.("unavailable");
+				}
+			};
 			await connection.connect();
 		}
 	}
@@ -262,6 +283,7 @@ export function createPlatformWecomConnectionsV1(
 		async close() {
 			closed = true;
 			await polling?.catch(() => {});
+			await Promise.allSettled([...replies]);
 			const entries = [...active.values()];
 			active.clear();
 			const results = await Promise.allSettled(

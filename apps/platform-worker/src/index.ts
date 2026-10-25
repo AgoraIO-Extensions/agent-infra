@@ -95,6 +95,7 @@ export function createPlatformConversationDispatchWorkerV1(options: {
 	readonly runtimeHost: WorkerRuntimeHostClientOptionsV1;
 	readonly leaseDurationMs?: number;
 	readonly retryDelayMs?: number;
+	readonly recoveryBudgetMs?: number;
 }) {
 	const store = openPostgresConversationDispatchStoreV1({
 		databaseUrl: options.databaseUrl,
@@ -115,6 +116,7 @@ export function createPlatformConversationDispatchWorkerV1(options: {
 			{
 				leaseDurationMs: options.leaseDurationMs,
 				retryDelayMs: options.retryDelayMs,
+				recoveryBudgetMs: options.recoveryBudgetMs,
 			},
 		);
 		return {

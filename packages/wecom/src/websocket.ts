@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import type {
-	WecomMediaDownloadV1,
-	WecomMediaReferenceV1,
-	WecomMessageV1,
-	WecomScopeV1,
-	WecomSendPortV1,
+import {
+	type WecomMediaDownloadV1,
+	type WecomMediaReferenceV1,
+	type WecomMessageV1,
+	type WecomScopeV1,
+	type WecomSendPortV1,
+	wecomBusyTextV1,
 } from "@agent-infra/platform-core";
 import {
 	WSAuthFailureError,
@@ -155,6 +156,8 @@ function createRateWindow() {
 }
 /** #3229：单个媒体的读取时限；上传由 SDK 按每帧 ACK 时限与有限重试结束，不提前放弃。 */
 const mediaReadTimeoutMs = 60_000;
+/** #3374：每个会话键排队与处理中的帧数上限（工程 Spec §14.2.4），超出时回复繁忙。 */
+const sessionPendingLimit = 8;
 const mediaMaximumBytes = 20 * 1024 * 1024;
 /**
  * 长连接发送一个结果文件的输入。`read` 由 Worker 提供，读取已确认结果文件的固定版本字节，
@@ -592,8 +595,65 @@ export function createWecomWebSocketV1(options: {
 			/* Fixed-label observation only. */
 		}
 	}
+	// #3374：每个会话键排队与处理中的帧；只在当前连接持有者的内存中。
+	const sessions = new Map<string, { tail: Promise<void>; size: number }>();
+	/**
+	 * #3374：会话键由已认证连接的机器人与帧中的会话类型、单聊或群聊标识、发送者标识组成，在身份
+	 * 映射前即可确定，不使用显示名（工程 Spec §14.2.4）。无法确定时返回 null。
+	 */
+	function sessionKeyOf(frame: WsFrame): string | null {
+		try {
+			const body = object(frame.body);
+			const senderId = object(body.from).userid;
+			const peerId = body.chattype === "single" ? senderId : body.chatid;
+			if (
+				(body.chattype !== "single" && body.chattype !== "group") ||
+				!text(senderId) ||
+				!text(peerId)
+			)
+				return null;
+			return JSON.stringify([config.botId, body.chattype, peerId, senderId]);
+		} catch {
+			return null;
+		}
+	}
+	/**
+	 * #3374：超出待处理上限的帧不进入受理，在它自己的 stream 上直接回复固定繁忙说明。只核对连接
+	 * 归属与帧结构，不含业务内容；发送失败只记观测，不重试。
+	 */
+	async function replyBusy(frame: WsFrame, generation: string) {
+		try {
+			const headers = object(frame.headers);
+			const body = object(frame.body);
+			if (
+				frame.cmd !== "aibot_msg_callback" ||
+				!text(headers.req_id) ||
+				body.aibotid !== config.botId ||
+				!text(body.msgid)
+			)
+				return;
+			if (!(await current()) || !authenticated || generation !== connectionId)
+				return;
+			await client.replyStream(
+				{ headers: { req_id: headers.req_id } },
+				createHash("sha256").update(body.msgid).digest("hex"),
+				wecomBusyTextV1,
+				true,
+			);
+		} catch {
+			observeIngress("unavailable");
+		}
+	}
 
-	async function receive(frame: WsFrame, generation: string) {
+	/**
+	 * `receivedAt` 是长连接收到该帧的时刻（#3374）：同一会话键的帧可能在串行槽位外等待，
+	 * 回复有效期与下载地址有效期仍从收到时起算，不因排队而延长。
+	 */
+	async function receive(
+		frame: WsFrame,
+		generation: string,
+		receivedAt: number,
+	) {
 		try {
 			if (
 				!authenticated ||
@@ -615,7 +675,6 @@ export function createWecomWebSocketV1(options: {
 			)
 				return observeIngress("invalid");
 			const senderId = object(body.from).userid;
-			const receivedAt = now().getTime();
 			// create_time is optional in the official protocol. Without it, use the authenticated receipt lifetime.
 			if (
 				body.create_time !== undefined &&
@@ -692,14 +751,38 @@ export function createWecomWebSocketV1(options: {
 	}
 	const receiveMessageFrame = (frame: WsFrame) => {
 		if (closed || !authenticated) return;
-		if (pending >= 64) {
+		const generation = connectionId;
+		const receivedAt = now().getTime();
+		const key = sessionKeyOf(frame);
+		const session = key === null ? undefined : sessions.get(key);
+		// #3374：超出全连接或该会话键的待处理上限时明确回复繁忙，不静默丢弃。
+		if (pending >= 64 || (session?.size ?? 0) >= sessionPendingLimit) {
 			observeIngress("overloaded");
+			void replyBusy(frame, generation);
 			return;
 		}
 		pending++;
-		void receive(frame, connectionId).finally(() => {
-			pending--;
-		});
+		if (key === null) {
+			// 无法确定会话键的帧不会通过校验，直接按原路径记为无效。
+			void receive(frame, generation, receivedAt).finally(() => {
+				pending--;
+			});
+			return;
+		}
+		// #3374：同一会话键按收到的顺序逐条完成去重、身份映射、媒体下载与受理后才处理下一帧；
+		// 不同会话键并行（工程 Spec §14.2.4）。串行只在当前连接持有者内保证，跨持有者由受理事务的
+		// 租约与隔离令牌校验拒绝迟到帧。
+		const entry = session ?? { tail: Promise.resolve(), size: 0 };
+		if (!session) sessions.set(key, entry);
+		entry.size++;
+		entry.tail = entry.tail
+			.then(() => receive(frame, generation, receivedAt))
+			.finally(() => {
+				pending--;
+				entry.size--;
+				if (entry.size === 0 && sessions.get(key) === entry)
+					sessions.delete(key);
+			});
 	};
 	client.on("message.text", receiveMessageFrame);
 	for (const kind of ["image", "file", "voice", "video", "mixed"] as const)

@@ -801,6 +801,15 @@ export function createWorkloadRuntimeV1(
 		});
 	}
 	const adapter = createAdapter();
+	function isUnmaterializedInitialWorkload(
+		state: WorkloadReconciliationStateV1,
+	) {
+		return (
+			state.candidate.deployment === null &&
+			state.identity === null &&
+			state.verified === null
+		);
+	}
 	function desired(
 		state: WorkloadReconciliationStateV1,
 		stopped = false,
@@ -1491,6 +1500,7 @@ export function createWorkloadRuntimeV1(
 		},
 		async closeRoute(state) {
 			if ("manifest" in state.candidate.configuration.source) {
+				if (isUnmaterializedInitialWorkload(state)) return;
 				const workload = desired(state);
 				if (
 					!isMultiService(workload) ||
@@ -1513,6 +1523,7 @@ export function createWorkloadRuntimeV1(
 			if (!(await cleanupUnactivatedSecrets(state, input))) return false;
 			if (!(await cleanupModelConfiguration(state))) return false;
 			if ("manifest" in state.candidate.configuration.source) {
+				if (isUnmaterializedInitialWorkload(state)) return true;
 				const workload = desired(state);
 				if (!isMultiService(workload)) return false;
 				return multiService.cleanupMigration(workload);
@@ -1521,6 +1532,7 @@ export function createWorkloadRuntimeV1(
 		},
 		async apply(state, stopped, input) {
 			if (stopped && "manifest" in state.candidate.configuration.source) {
+				if (isUnmaterializedInitialWorkload(state)) return null;
 				const workload = desired(state);
 				if (!isMultiService(workload)) return null;
 				await multiService.closeRoute(workload, {
@@ -1814,6 +1826,7 @@ export function createWorkloadRuntimeV1(
 				return false;
 			let resourcesRemoved: boolean;
 			if ("manifest" in state.candidate.configuration.source) {
+				if (isUnmaterializedInitialWorkload(state)) return true;
 				const workload = desired(state);
 				if (!isMultiService(workload)) return false;
 				resourcesRemoved = await multiService.cleanupAgent(

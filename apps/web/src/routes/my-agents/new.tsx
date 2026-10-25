@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { connectionEntryUrl } from "../../features/connection-entry.js";
 
 import {
 	AgentApplicationSubmissionScreen,
@@ -8,12 +9,14 @@ import { projectDeploymentConfiguration } from "../../features/my-agents/deploym
 import { useAgentApplicationSubmission } from "../../features/my-agents/use-agent-application-submission.js";
 import { useDeploymentConfiguration } from "../../features/my-agents/use-deployment-configuration.js";
 import { PageLoadingState } from "../../features/page-loading-state.js";
+import { useBrowserSession } from "../../features/use-browser-session.js";
 
 export const Route = createFileRoute("/my-agents/new")({
 	component: NewAgentApplicationRoute,
 });
 
 function NewAgentApplicationRoute() {
+	const session = useBrowserSession();
 	const submission = useAgentApplicationSubmission();
 	const deployment = useDeploymentConfiguration();
 	if (deployment.isPending) {
@@ -42,6 +45,11 @@ function NewAgentApplicationRoute() {
 	return (
 		<main className="platform-content management-content">
 			<AgentApplicationSubmissionScreen
+				connectionUrl={
+					session.state.kind === "ready"
+						? connectionEntryUrl(session.state.connection)
+						: undefined
+				}
 				error={error}
 				mode="create"
 				onSubmit={submission.create}

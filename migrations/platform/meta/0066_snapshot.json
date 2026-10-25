@@ -1,6 +1,6 @@
 {
   "id": "56a5040f-cf89-431e-bbd7-32de92ee3057",
-  "prevId": "d859a8f2-f1c0-4ea3-9fdb-9b99b041238e",
+  "prevId": "14bf3465-1e17-4d2a-9eb6-899fad59907e",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2150,6 +2150,12 @@
         "sandbox_id": {
           "name": "sandbox_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "unknown_since": {
+          "name": "unknown_since",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         }
@@ -6476,6 +6482,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "wecom_receipt_execution": {
+          "name": "wecom_receipt_execution",
+          "columns": [
+            {
+              "expression": "execution_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -6491,13 +6512,13 @@
           "name": "wecom_media_rejection",
           "value": "(\"platform\".\"wecom_receipts\".\"acceptance_status\" = 'media_rejected') = (\"platform\".\"wecom_receipts\".\"media_rejection_reason\" is not null) and (\"platform\".\"wecom_receipts\".\"media_rejection_reason\" is null or \"platform\".\"wecom_receipts\".\"media_rejection_reason\" in ('unsupported_channel','unsupported_type','too_large','expired','failed')) and (\"platform\".\"wecom_receipts\".\"media_rejection_reason\" is not distinct from 'too_large') = (\"platform\".\"wecom_receipts\".\"media_rejection_max_bytes\" is not null) and (\"platform\".\"wecom_receipts\".\"media_rejection_max_bytes\" is null or \"platform\".\"wecom_receipts\".\"media_rejection_max_bytes\" between 1 and 9007199254740991)"
         },
-        "wecom_stream_frame_seq": {
-          "name": "wecom_stream_frame_seq",
-          "value": "\"platform\".\"wecom_receipts\".\"stream_frame_seq\" >= 0"
-        },
         "wecom_delivery_status": {
           "name": "wecom_delivery_status",
           "value": "\"platform\".\"wecom_receipts\".\"delivery_status\" in ('pending','claimed','sending','sent','failed','unknown','cancelled','expired','abandoned')"
+        },
+        "wecom_stream_frame_seq": {
+          "name": "wecom_stream_frame_seq",
+          "value": "\"platform\".\"wecom_receipts\".\"stream_frame_seq\" >= 0"
         }
       },
       "isRLSEnabled": false

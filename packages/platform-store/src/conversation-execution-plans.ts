@@ -11,6 +11,7 @@ import type {
 	CreateConversationWritePlanV1,
 } from "@agent-infra/platform-core";
 import {
+	conversationAttachmentMergeMaxCountV1,
 	conversationStopConfirmationTimeoutMsV1,
 	parseSessionSandboxBindingV1,
 	requestedModelDisplayNameV1,
@@ -166,33 +167,25 @@ export function validateMessagePlan(
 	state: ConversationExecutionStateV1,
 ): ConversationMessageWritePlanV1 {
 	const authority = parseAuthority(request.authority);
-	const input = exactRecord(
-		value,
-		value && typeof value === "object" && Object.hasOwn(value, "execution")
-			? [
-					"schemaVersion",
-					"kind",
-					"conversation",
-					"message",
-					"execution",
-					"outboxIntent",
-					"auditEvent",
-					"modelSelectionFallback",
-					"result",
-					"idempotency",
-				]
-			: [
-					"schemaVersion",
-					"kind",
-					"conversation",
-					"message",
-					"outboxIntent",
-					"auditEvent",
-					"modelSelectionFallback",
-					"result",
-					"idempotency",
-				],
-	);
+	const hasExecution =
+		!!value && typeof value === "object" && Object.hasOwn(value, "execution");
+	const hasAttachmentWindow =
+		!!value &&
+		typeof value === "object" &&
+		Object.hasOwn(value, "attachmentWindow");
+	const input = exactRecord(value, [
+		"schemaVersion",
+		"kind",
+		...(hasAttachmentWindow ? ["attachmentWindow"] : []),
+		"conversation",
+		"message",
+		...(hasExecution ? ["execution"] : []),
+		"outboxIntent",
+		"auditEvent",
+		"modelSelectionFallback",
+		"result",
+		"idempotency",
+	]);
 	if (input.schemaVersion !== 1 || !state.conversation) unavailable();
 	const conversation = parseConversation(input.conversation);
 	const message = parseMessage(input.message, {
@@ -251,6 +244,15 @@ export function validateMessagePlan(
 	if (input.kind === "initial") {
 		if (state.activeExecution || conversation.status !== "active")
 			unavailable();
+		// #3374：只有企微智能机器人只含附件的消息打开合并窗口。
+		if (
+			hasAttachmentWindow &&
+			(input.attachmentWindow !== "open" ||
+				authority.attachmentMergeWindow !== true ||
+				request.command.text !== "" ||
+				(request.command.attachments?.length ?? 0) === 0)
+		)
+			unavailable();
 		const execution = parseExecution(input.execution);
 		if (
 			execution.executionId !== message.executionId ||
@@ -291,6 +293,7 @@ export function validateMessagePlan(
 	} else if (input.kind === "supplement") {
 		const active = state.activeExecution;
 		if (
+			hasAttachmentWindow ||
 			!active ||
 			current.status !== "active" ||
 			conversation.status !== "active" ||
@@ -301,6 +304,44 @@ export function validateMessagePlan(
 			outbox.sessionGeneration !== active.sessionGeneration ||
 			!sameModelSelection(outbox, active) ||
 			audit.action !== "conversation.message.supplemented"
+		) {
+			return unavailable();
+		}
+		validateModelSelectionFallback(modelSelectionFallback, {
+			state,
+			conversation,
+			authority,
+			requestId: request.command.requestId,
+			traceId: request.command.traceId,
+			occurredAt: message.createdAt,
+			executionId: active.executionId,
+			lastEventSequence: active.lastEventSequence,
+		});
+	} else if (input.kind === "merge") {
+		// #3374：并入合并窗口内尚未认领的 Execution；Store 已在 Conversation 锁内判定窗口仍打开。
+		const active = state.activeExecution;
+		const added = request.command.attachments?.length ?? 0;
+		if (
+			hasExecution ||
+			!active?.attachmentMerge ||
+			authority.attachmentMergeWindow !== true ||
+			active.status !== "submitted" ||
+			active.stopPending ||
+			active.actorId !== authority.actorId ||
+			(added > 0 &&
+				active.attachmentMerge.attachmentCount + added >
+					conversationAttachmentMergeMaxCountV1) ||
+			input.attachmentWindow !==
+				(request.command.text === "" ? "extend" : "close") ||
+			current.status !== "active" ||
+			conversation.status !== "active" ||
+			message.executionId !== active.executionId ||
+			result.executionId !== active.executionId ||
+			outbox.operation !== "conversation.turn.submit.v1" ||
+			outbox.turnId !== active.turnId ||
+			outbox.sessionGeneration !== active.sessionGeneration ||
+			!sameModelSelection(outbox, active) ||
+			audit.action !== "conversation.message.accepted"
 		) {
 			return unavailable();
 		}

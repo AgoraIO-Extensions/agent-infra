@@ -28,6 +28,7 @@ type RequestError = Error & {
 
 type AgentApplicationSubmissionScreenProps =
 	| {
+			connectionUrl?: string;
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			error?: RequestError | null;
 			mode: "create";
@@ -41,6 +42,7 @@ type AgentApplicationSubmissionScreenProps =
 	| {
 			action: AgentApplicationEditAction;
 			application: AgentApplicationProjectionV2;
+			connectionUrl?: string;
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			error?: RequestError | null;
 			mode: "update";

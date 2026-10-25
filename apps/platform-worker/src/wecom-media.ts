@@ -6,6 +6,7 @@ import {
 import {
 	createFileAuthorityV1,
 	createFileLimitDeclarationReaderV1,
+	discardUnboundInputFileV1,
 	FileAuthorityError,
 	type FileAuthorizationPortV1,
 	type FileLimitsV1,
@@ -535,6 +536,31 @@ export function createWecomInboundMediaResolverV1(
 		keyVersion: "wecom-inbound-media",
 		now,
 	});
+	/**
+	 * #3374：把同一作用域内仍可用、未绑定任何 Message 的附件转为 `expired`，由 §15.4.3 的对账在
+	 * 宽限期后删除对象。已绑定或已在清理中的附件保持不变。
+	 */
+	async function discardFiles(
+		scope: {
+			readonly actorId: string;
+			readonly agentId: string;
+			readonly channelId: string;
+			readonly conversationId: string;
+		},
+		fileIds: readonly string[],
+	) {
+		if (fileIds.length === 0) return;
+		await fileStore.transaction(scope.conversationId, async (tx) => {
+			for (const fileId of new Set(fileIds)) {
+				const discarded = discardUnboundInputFileV1(
+					await tx.getFile(fileId),
+					scope,
+					now(),
+				);
+				if (discarded) await tx.putFile(discarded);
+			}
+		});
+	}
 	return {
 		async resolve({ message, authority, conversationId, signal }) {
 			const scope = {
@@ -590,113 +616,136 @@ export function createWecomInboundMediaResolverV1(
 			if (!limits) return rejected("unsupported_channel");
 			const maxBytes = Math.min(limits.maxBytes, driverMaxBytes);
 			const attachments: string[] = [];
-			// 逐个处理，内存中同一时刻只保留本消息一个媒体的字节；跨消息的并发由 slots 限制。
-			for (const [ordinal, media] of (message.media ?? []).entries()) {
-				const download = media.download;
-				if (!download) return rejected("unsupported_channel");
-				const expiresAt = Date.parse(download.expiresAt);
-				const remaining = expiresAt - now().getTime();
-				if (!Number.isFinite(remaining) || remaining <= 0)
-					return rejected("expired");
-				const queue = AbortSignal.timeout(remaining);
-				let fetched: Awaited<ReturnType<typeof downloadWecomMediaV1>>;
-				try {
-					fetched = await slots(
-						signal ? AbortSignal.any([signal, queue]) : queue,
-						() =>
-							downloadWecomMediaV1({
-								download,
-								maxBytes,
-								timeoutMs: downloadTimeoutMs,
-								now: () => now().getTime(),
-								...(allowedHosts ? { allowedHosts } : {}),
-								...(options.fetch ? { fetch: options.fetch } : {}),
-								...(signal ? { signal } : {}),
-							}),
-					);
-				} catch {
-					return rejected(now().getTime() >= expiresAt ? "expired" : "failed");
-				}
-				if (fetched.outcome === "too_large")
-					return { outcome: "rejected", reason: "too_large", maxBytes };
-				if (fetched.outcome !== "downloaded") return rejected(fetched.outcome);
-				const bytes = fetched.bytes;
-				let probed: { sizeBytes: number; mediaType: string; sha256: string };
-				try {
-					const probe = createObjectContentProbeV1(maxBytes);
-					probe.write(bytes);
-					probed = await probe.finish();
-				} catch {
-					// 无法按实际字节确认格式时不提供任意二进制回退（工程 Spec §15.4.1）。
-					return rejected("unsupported_type");
-				}
-				if (!limits.mediaTypes.includes(probed.mediaType))
-					return rejected("unsupported_type");
-				const idempotencyKey = `wecom-${createHash("sha256")
-					.update(
-						JSON.stringify([
-							scope.actorId,
-							scope.agentId,
-							scope.channelId,
-							scope.conversationId,
-							message.providerId,
-							message.eventId,
-							ordinal,
-						]),
-					)
-					.digest("hex")}`;
-				try {
-					const file = await files.createUpload(
-						{
-							conversationId,
-							idempotencyKey,
-							descriptor: {
-								name: fileName(
-									fetched.filename ?? media.name,
-									media.kind,
-									ordinal,
-									probed.mediaType,
-								),
-								mediaType: probed.mediaType,
-								sizeBytes: probed.sizeBytes,
-								sha256: probed.sha256,
-							},
-						},
-						port,
-					);
-					if (file.status !== "available") {
-						const access = await files.issueAccess(
-							{
-								conversationId,
-								fileId: file.fileId,
-								operation: "write",
-								idempotencyKey,
-							},
-							port,
+			let resolved = false;
+			try {
+				// 逐个处理，内存中同一时刻只保留本消息一个媒体的字节；跨消息的并发由 slots 限制。
+				for (const [ordinal, media] of (message.media ?? []).entries()) {
+					const download = media.download;
+					if (!download) return rejected("unsupported_channel");
+					const expiresAt = Date.parse(download.expiresAt);
+					const remaining = expiresAt - now().getTime();
+					if (!Number.isFinite(remaining) || remaining <= 0)
+						return rejected("expired");
+					const queue = AbortSignal.timeout(remaining);
+					let fetched: Awaited<ReturnType<typeof downloadWecomMediaV1>>;
+					try {
+						fetched = await slots(
+							signal ? AbortSignal.any([signal, queue]) : queue,
+							() =>
+								downloadWecomMediaV1({
+									download,
+									maxBytes,
+									timeoutMs: downloadTimeoutMs,
+									now: () => now().getTime(),
+									...(allowedHosts ? { allowedHosts } : {}),
+									...(options.fetch ? { fetch: options.fetch } : {}),
+									...(signal ? { signal } : {}),
+								}),
 						);
-						await options.storage.upload({
-							objectRef: file.objectRef,
-							descriptor: file.descriptor,
-							expiresAt: access.expiresAt,
-							body: new Blob([bytes]).stream(),
-							...(signal ? { signal } : {}),
-						});
-						const confirmed = await files.complete(
-							{
-								conversationId,
-								fileId: file.fileId,
-								accessId: access.accessId,
-							},
-							port,
+					} catch {
+						return rejected(
+							now().getTime() >= expiresAt ? "expired" : "failed",
 						);
-						if (confirmed.status !== "available") return rejected("failed");
 					}
-					attachments.push(file.fileId);
-				} catch {
-					return rejected("failed");
+					if (fetched.outcome === "too_large")
+						return { outcome: "rejected", reason: "too_large", maxBytes };
+					if (fetched.outcome !== "downloaded")
+						return rejected(fetched.outcome);
+					const bytes = fetched.bytes;
+					let probed: { sizeBytes: number; mediaType: string; sha256: string };
+					try {
+						const probe = createObjectContentProbeV1(maxBytes);
+						probe.write(bytes);
+						probed = await probe.finish();
+					} catch {
+						// 无法按实际字节确认格式时不提供任意二进制回退（工程 Spec §15.4.1）。
+						return rejected("unsupported_type");
+					}
+					if (!limits.mediaTypes.includes(probed.mediaType))
+						return rejected("unsupported_type");
+					const idempotencyKey = `wecom-${createHash("sha256")
+						.update(
+							JSON.stringify([
+								scope.actorId,
+								scope.agentId,
+								scope.channelId,
+								scope.conversationId,
+								message.providerId,
+								message.eventId,
+								ordinal,
+							]),
+						)
+						.digest("hex")}`;
+					try {
+						const file = await files.createUpload(
+							{
+								conversationId,
+								idempotencyKey,
+								descriptor: {
+									name: fileName(
+										fetched.filename ?? media.name,
+										media.kind,
+										ordinal,
+										probed.mediaType,
+									),
+									mediaType: probed.mediaType,
+									sizeBytes: probed.sizeBytes,
+									sha256: probed.sha256,
+								},
+							},
+							port,
+						);
+						if (file.status !== "available") {
+							const access = await files.issueAccess(
+								{
+									conversationId,
+									fileId: file.fileId,
+									operation: "write",
+									idempotencyKey,
+								},
+								port,
+							);
+							await options.storage.upload({
+								objectRef: file.objectRef,
+								descriptor: file.descriptor,
+								expiresAt: access.expiresAt,
+								body: new Blob([bytes]).stream(),
+								...(signal ? { signal } : {}),
+							});
+							const confirmed = await files.complete(
+								{
+									conversationId,
+									fileId: file.fileId,
+									accessId: access.accessId,
+								},
+								port,
+							);
+							if (confirmed.status !== "available") return rejected("failed");
+						}
+						attachments.push(file.fileId);
+					} catch {
+						return rejected("failed");
+					}
 				}
+				resolved = true;
+				return { outcome: "resolved", attachments };
+			} finally {
+				// #3374：前面的媒体已写入、后面的媒体被拒或出错时，已写入的附件不会绑定任何 Message，
+				// 交给文件对账清理（工程 Spec §14.2.4）。
+				if (!resolved) await discardFiles(scope, attachments).catch(() => {});
 			}
-			return { outcome: "resolved", attachments };
+		},
+		/** #3374：受理被拒或会话变化后，把仍未绑定的附件交给文件对账清理。 */
+		async discard({ authority, conversationId, attachments }) {
+			await discardFiles(
+				{
+					actorId: authority.actor.actorId,
+					agentId: authority.actor.agentId,
+					channelId: authority.actor.channelId,
+					conversationId,
+				},
+				attachments,
+			);
 		},
 		async close() {
 			const results = await Promise.allSettled([

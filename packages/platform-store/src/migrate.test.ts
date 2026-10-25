@@ -569,7 +569,15 @@ describe("Platform PostgreSQL migration foundation", () => {
 						acceptedHostIndex >= 0
 					) {
 						columns.splice(acceptedHostIndex, 1);
-						columns.push("accepted_original_host_session_ref");
+						const unknownSinceIndex = columns.indexOf("unknown_since");
+						// 0064 appends unknown_since after it (#3373).
+						if (unknownSinceIndex >= 0)
+							columns.splice(
+								unknownSinceIndex,
+								0,
+								"accepted_original_host_session_ref",
+							);
+						else columns.push("accepted_original_host_session_ref");
 					}
 					return [config.name, columns];
 				}),
@@ -1996,6 +2004,8 @@ describe("published Relay authority migration", () => {
 			62,
 			63,
 			64,
+			65,
+			66,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2070,7 +2080,7 @@ describe("published Relay authority migration", () => {
 			tag: "0063_wecom_outbound_media",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 64,
+			idx: 66,
 			tag: "0066_wecom_stream_frame_seq",
 		});
 		const sourceJournal = await readFile(
@@ -2304,6 +2314,7 @@ describe("published Relay authority migration", () => {
 					"wecom_receipts:connection_authorization_fact",
 					"outbox_items:trace_parent",
 					"conversation_executions:accepted_original_host_session_ref",
+					"conversation_executions:unknown_since",
 					// #3377：长连接流式进度的帧序号。
 					"wecom_receipts:stream_frame_seq",
 				],
@@ -2506,6 +2517,7 @@ describe("published Relay authority migration", () => {
 					"wecom_conversation_rotations:wecom_conversation_rotations_pkey",
 					"wecom_receipt_media:wecom_receipt_media_file",
 					"wecom_receipt_media:wecom_receipt_media_receipt_id_ordinal_pk",
+					"wecom_receipts:wecom_receipt_execution",
 				].sort(),
 			});
 			expect(

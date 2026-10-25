@@ -22,6 +22,7 @@ import {
 	ModelSelectionUpdateRequestV1Schema,
 	PersistedConversationEventV2Schema,
 	ReasoningDeltaEventV2Schema,
+	RecentPersonalConversationPageV2Schema,
 	RegenerateCommandRequestV1Schema,
 	resolvePilotReplaySelectorV1,
 	StopCommandRequestV1Schema,
@@ -988,7 +989,7 @@ export function registerConversationRoutes(
 			return context.json(
 				project(
 					() =>
-						ConversationPageV1Schema.parse({
+						RecentPersonalConversationPageV2Schema.parse({
 							items: result.items.map((item) =>
 								ConversationProjectionV1Schema.parse({
 									schemaVersion: 1,
@@ -1004,6 +1005,10 @@ export function registerConversationRoutes(
 								}),
 							),
 							nextCursor: result.nextCursor,
+							// Omitted when every Agent's Web channel eligibility is confirmed.
+							...(result.unavailableAgentIds.length > 0
+								? { unavailableAgentIds: [...result.unavailableAgentIds] }
+								: {}),
 						}),
 					metadata.traceId,
 				),

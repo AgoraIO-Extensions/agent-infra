@@ -5880,6 +5880,7 @@ export type ListRecentPersonalConversationsV2Responses = {
             updatedAt: string;
         }>;
         nextCursor: string | null;
+        unavailableAgentIds?: Array<string>;
     };
 };
 

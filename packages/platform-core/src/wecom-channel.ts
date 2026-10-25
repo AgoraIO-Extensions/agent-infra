@@ -157,6 +157,16 @@ export interface WecomMediaResolverV1 {
 		readonly conversationId: string;
 		readonly signal?: AbortSignal;
 	}): Promise<WecomMediaResolutionV1>;
+	/**
+	 * #3374：受理被拒（繁忙、无权限、会话不可用等）或会话变化后不再使用的附件，交给 §15.4.3 的
+	 * 对账有界清理（工程 Spec §14.2.4）。只处理该会话中仍未绑定任何 Message 的附件，已绑定的保持
+	 * 不变；失败不改变受理结论。
+	 */
+	discard?(input: {
+		readonly authority: WecomAuthorityV1;
+		readonly conversationId: string;
+		readonly attachments: readonly string[];
+	}): Promise<void>;
 }
 export interface WecomResultFileReferenceV1 {
 	readonly fileId: string;
@@ -669,105 +679,137 @@ export function createWecomChannelV1(dependencies: {
 				message.media.some((entry) => !entry.download)
 			)
 				return rejectMedia({ reason: "unsupported_channel", maxBytes: null });
-			for (let attempt = 1; ; attempt++) {
-				// 下载和写入在受理事务之外：先按当前映射确定会话，附件绑定到它，受理时只绑定已确认的附件。
-				const prepared = await store.prepareConversation(
-					plan,
-					async (conversation, mapping) => {
-						replyOpen();
-						const created = await conversation.createConversation({
-							schemaVersion: 1,
-							agentId: message.agentId,
-							idempotencyKey: mapping.conversationKey,
-							requestId: eventKey,
-							traceId: eventKey,
-						});
-						if (
-							created.outcome !== "accepted" &&
-							created.outcome !== "replayed"
-						)
-							throw new Error("WeCom acceptance authorization changed");
-						const conversationId = created.result.conversationId;
-						const current = await conversation.readConversation({
-							schemaVersion: 1,
-							conversationId,
-						});
-						return {
-							conversationId,
-							unavailable:
-								current.outcome === "found" &&
-								(current.result.conversation.status === "unavailable" ||
-									current.result.conversation.isolationPending === true),
-						};
-					},
-					signal,
-				);
-				// 同一事件已有回执：直接走受理重放，不再下载，也不会重复写入附件。
-				if (prepared.outcome === "received")
-					return store.accept(
+			// #3374：本次写入的附件按会话记录；没有绑定到 Message 的（受理被拒、会话变化或出错），
+			// 在同一处理流程结束时交给文件对账清理，不留下长期无归属的附件。
+			const written: {
+				conversationId: string;
+				attachments: readonly string[];
+			}[] = [];
+			let boundConversationId: string | null = null;
+			try {
+				for (let attempt = 1; ; attempt++) {
+					// 下载和写入在受理事务之外：先按当前映射确定会话，附件绑定到它，受理时只绑定已确认的附件。
+					const prepared = await store.prepareConversation(
 						plan,
-						async () => {
-							throw new Error("WeCom receipt changed");
+						async (conversation, mapping) => {
+							replyOpen();
+							const created = await conversation.createConversation({
+								schemaVersion: 1,
+								agentId: message.agentId,
+								idempotencyKey: mapping.conversationKey,
+								requestId: eventKey,
+								traceId: eventKey,
+							});
+							if (
+								created.outcome !== "accepted" &&
+								created.outcome !== "replayed"
+							)
+								throw new Error("WeCom acceptance authorization changed");
+							const conversationId = created.result.conversationId;
+							const current = await conversation.readConversation({
+								schemaVersion: 1,
+								conversationId,
+							});
+							return {
+								conversationId,
+								unavailable:
+									current.outcome === "found" &&
+									(current.result.conversation.status === "unavailable" ||
+										current.result.conversation.isolationPending === true),
+							};
 						},
 						signal,
 					);
-				if (prepared.outcome !== "prepared")
-					return { outcome: prepared.outcome };
-				let attachments: readonly string[] | undefined;
-				if (!prepared.unavailable) {
-					let resolution: WecomMediaResolutionV1;
-					try {
-						resolution = await media.resolve({
-							message,
-							authority,
-							conversationId: prepared.conversationId,
-							...(signal ? { signal } : {}),
-						});
-					} catch {
-						if (signal?.aborted) return { outcome: "unavailable" };
-						return rejectMedia({ reason: "failed", maxBytes: null });
-					}
-					if (signal?.aborted) return { outcome: "unavailable" };
-					if (resolution.outcome === "rejected") {
-						if (!isWecomMediaRejectionV1(resolution))
-							throw new Error("Invalid WeCom media resolution");
-						return rejectMedia({
-							reason: resolution.reason,
-							maxBytes: resolution.maxBytes,
-						});
-					}
-					if (
-						resolution.outcome !== "resolved" ||
-						!Array.isArray(resolution.attachments) ||
-						resolution.attachments.length !== message.media.length ||
-						resolution.attachments.some(
-							(id) => !isAgentManagementText(id, 1024),
-						) ||
-						new Set(resolution.attachments).size !==
-							resolution.attachments.length
-					)
-						throw new Error("Invalid WeCom media resolution");
-					attachments = [...resolution.attachments];
-				}
-				let changed = false;
-				try {
-					return await store.accept(
-						plan,
-						admit({
-							conversationId: prepared.conversationId,
-							...(attachments ? { attachments } : {}),
-							retry: () => {
-								changed = true;
+					// 同一事件已有回执：直接走受理重放，不再下载，也不会重复写入附件。
+					if (prepared.outcome === "received")
+						return await store.accept(
+							plan,
+							async () => {
+								throw new Error("WeCom receipt changed");
 							},
-						}),
-						signal,
-					);
-				} catch (error) {
-					if (!changed) throw error;
-					// 再次变化时不再重试，明确告知用户重新发送，而不是静默丢弃。
-					if (attempt >= 2)
-						return rejectMedia({ reason: "failed", maxBytes: null });
+							signal,
+						);
+					if (prepared.outcome !== "prepared")
+						return { outcome: prepared.outcome };
+					let attachments: readonly string[] | undefined;
+					if (!prepared.unavailable) {
+						let resolution: WecomMediaResolutionV1;
+						try {
+							resolution = await media.resolve({
+								message,
+								authority,
+								conversationId: prepared.conversationId,
+								...(signal ? { signal } : {}),
+							});
+						} catch {
+							if (signal?.aborted) return { outcome: "unavailable" };
+							return await rejectMedia({ reason: "failed", maxBytes: null });
+						}
+						if (signal?.aborted) return { outcome: "unavailable" };
+						if (resolution.outcome === "rejected") {
+							if (!isWecomMediaRejectionV1(resolution))
+								throw new Error("Invalid WeCom media resolution");
+							return await rejectMedia({
+								reason: resolution.reason,
+								maxBytes: resolution.maxBytes,
+							});
+						}
+						if (
+							resolution.outcome !== "resolved" ||
+							!Array.isArray(resolution.attachments) ||
+							resolution.attachments.length !== message.media.length ||
+							resolution.attachments.some(
+								(id) => !isAgentManagementText(id, 1024),
+							) ||
+							new Set(resolution.attachments).size !==
+								resolution.attachments.length
+						)
+							throw new Error("Invalid WeCom media resolution");
+						attachments = [...resolution.attachments];
+						written.push({
+							conversationId: prepared.conversationId,
+							attachments,
+						});
+					}
+					let changed = false;
+					try {
+						const result = await store.accept(
+							plan,
+							admit({
+								conversationId: prepared.conversationId,
+								...(attachments ? { attachments } : {}),
+								retry: () => {
+									changed = true;
+								},
+							}),
+							signal,
+						);
+						if (
+							(result.outcome === "accepted" ||
+								result.outcome === "replayed") &&
+							result.receipt.status === "accepted" &&
+							result.receipt.conversationId === prepared.conversationId
+						)
+							boundConversationId = prepared.conversationId;
+						return result;
+					} catch (error) {
+						if (!changed) throw error;
+						// 再次变化时不再重试，明确告知用户重新发送，而不是静默丢弃。
+						if (attempt >= 2)
+							return await rejectMedia({ reason: "failed", maxBytes: null });
+					}
 				}
+			} finally {
+				const discard = media.discard;
+				for (const entry of written)
+					if (discard && entry.conversationId !== boundConversationId)
+						await discard
+							.call(media, {
+								authority,
+								conversationId: entry.conversationId,
+								attachments: entry.attachments,
+							})
+							.catch(() => {});
 			}
 		},
 	};
@@ -800,6 +842,11 @@ export interface WecomDeliveryClaimV1 {
 	 * 只在回复有效期最后 {@link wecomReplyTimeoutNoticeLeadMsV1} 内领取，Core 发送固定超时提示。
 	 */
 	readonly answerReady?: boolean;
+	/**
+	 * #3374：该回执所属的只含附件的消息已与随后的消息合并为同一个任务（同一 Execution 有更晚受理的
+	 * 回执）。它不等待答案，以 {@link wecomAttachmentMergedTextV1} 结束 stream，回复由最后一条承担。
+	 */
+	readonly merged?: boolean;
 	/** 回执所属的 Conversation 已不可用；失败文案据此附带 /new 指引（#3184）。 */
 	readonly conversationUnavailable?: boolean;
 	/** `media_rejected` 回执的拒绝原因，决定固定说明（#3227）。 */
@@ -930,6 +977,11 @@ export interface WecomSendPortV1 {
 }
 /** #3077：长连接受理后立即发送的固定处理中提示，最终回复在同一 stream 上覆盖它。 */
 export const wecomProcessingTextV1 = "已收到，正在处理…";
+/** 同一会话已有任务在执行、无法受理新消息时的固定提示。 */
+export const wecomBusyTextV1 = "Agent 正忙，请稍后重试";
+/** #3374：附件消息并入下一条消息的任务后，以这条固定说明结束它的 stream（企微部署固定文案）。 */
+export const wecomAttachmentMergedTextV1 =
+	"已与下一条消息合并处理，回复见下一条";
 /** #3077：回复有效期内回答仍未就绪时附在已有回答之后的固定超时提示。 */
 export { wecomReplyTimeoutTextV1 } from "./wecom-reply-text.js";
 /** 回复有效期结束前多久领取仍未就绪的回执，用来发送超时提示（#3077）。 */
@@ -998,7 +1050,7 @@ export function createWecomDeliveryV1(dependencies: {
 			case "media_rejected":
 				return wecomMediaRejectionTextV1(claim.mediaRejection);
 			case "busy":
-				return "Agent 正忙，请稍后重试";
+				return wecomBusyTextV1;
 			case "unavailable":
 				return wecomConversationUnavailableTextV1;
 			case "new_conversation":
@@ -1083,14 +1135,23 @@ export function createWecomDeliveryV1(dependencies: {
 				await dependencies.store.finish(claim, "cancelled");
 				return true;
 			}
+			// #3374：附件消息已并入下一条消息的任务，以固定说明结束它的 stream，回复由下一条承担。
+			const merged =
+				claim.acceptanceStatus === "accepted" && claim.merged === true;
 			// #3077：回答在有效期内没有就绪时，结束本次回复并明确提示超时，不静默过期。
 			const timedOut =
-				claim.acceptanceStatus === "accepted" && claim.answerReady === false;
+				claim.acceptanceStatus === "accepted" &&
+				!merged &&
+				claim.answerReady === false;
 			const answered =
 				claim.acceptanceStatus === "accepted" &&
+				!merged &&
 				!timedOut &&
 				claim.executionStatus === "completed";
-			let text = replyText(claim, timedOut);
+			// #3374：已合并的附件消息只发固定说明，其余按回执状态与执行结果组合（#3377）。
+			let text = merged
+				? wecomAttachmentMergedTextV1
+				: replyText(claim, timedOut);
 			// #3229：只有完成的回答带结果文件。先规划哪些文件会发送（文本先于媒体），再把回答中的
 			// `sandbox:` 引用改写为文件名与说明；不支持媒体的回复方式去掉结果文件，文本照常发送。
 			let media: readonly WecomOutboundMediaV1[] = [];
@@ -1458,6 +1519,10 @@ export function createWecomAuthorizationV1(dependencies: {
 						channelId: wecomChannelIdV1(scope),
 						authorizationRevision: state.authorizationRevision,
 						supportsSupplementaryInstruction: false,
+						// #3374：智能机器人入站按会话保序，只含附件的消息与随后的消息合并为一个任务。
+						...(scope.kind === "wecom_bot"
+							? { attachmentMergeWindow: true as const }
+							: {}),
 						taskBoundary: boundary,
 					},
 				},

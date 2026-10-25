@@ -158,6 +158,53 @@ export async function readMessage(
 	return rows[0];
 }
 
+/**
+ * #3374：新消息 Turn 的初始输入（工程 Spec §14.2.4）。文字按受理顺序拼接在前，附件按消息顺序
+ * 排列，由 Runtime 在用户消息之后追加附件清单。只有源消息时结果与原先只读源消息完全相同，已固化的
+ * 原始操作摘要不受影响。认领与首次分发的原始操作绑定必须共用这一读取。
+ *
+ * 把用户消息绑定到已有 Execution 的写入只有两种：补充指令（各自带 `conversation:supplement:` outbox，
+ * 不属于初始输入）与合并窗口内的并入（不建 outbox，且只在该 Turn 从未被认领时写入）。新增其他
+ * 绑定到已有 Execution 的写入时，必须给它自己的 outbox 或在这里显式排除。
+ */
+export async function readInitialTurnInput(
+	transaction: Transaction,
+	conversationId: string,
+	executionId: string,
+	source: Pick<MessageRow, "message_id" | "text">,
+): Promise<{ readonly text: string; readonly attachments: string[] }> {
+	const merged = await transaction<{ message_id: string; text: string }[]>`
+		select m.message_id, m.text
+		from platform.conversation_messages m
+		where m.conversation_id = ${conversationId}
+			and m.execution_id = ${executionId}
+			and m.role = 'user'
+			and m.message_id <> ${source.message_id}
+			and not exists (
+				select 1 from platform.outbox_items s
+				where s.id = 'conversation:supplement:' || m.message_id
+			)
+		order by m.created_at, m.message_id
+	`;
+	const messageIds = [
+		source.message_id,
+		...merged.map((row) => row.message_id),
+	];
+	const files = await transaction<{ file_id: string }[]>`
+		select file_id from platform.files
+		where conversation_id = ${conversationId}
+			and record->>'messageId' = any(${messageIds}::text[])
+			and record->>'kind' = 'attachment' and record->>'status' = 'available'
+		order by array_position(${messageIds}::text[], record->>'messageId'), file_id
+	`;
+	return {
+		text: [source.text, ...merged.map((row) => row.text)]
+			.filter((part) => part !== "")
+			.join("\n\n"),
+		attachments: files.map((file) => file.file_id),
+	};
+}
+
 export async function readStop(
 	transaction: Transaction,
 	executionId: string,

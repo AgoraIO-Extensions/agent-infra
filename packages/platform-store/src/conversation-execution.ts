@@ -17,6 +17,7 @@ import {
 	type ConversationStopDecisionV1,
 	type ConversationTaskAdmissionTransactionPortV1,
 	type CreateConversationDecisionV1,
+	conversationAttachmentMergeWindowMsV1,
 	type FileRecordV1,
 	type NativeCapabilityAdmissionDecisionV1,
 	type NativeCapabilityAdmissionTransactionPortV1,
@@ -983,9 +984,36 @@ export class PostgresConversationExecutionTransactionV1
 					 ${plan.message.createdAt}, ${plan.message.createdAt})
 			`,
 			);
-			await awaitConversationExecutionQueryV1(
-				transaction,
-				transaction`
+			if (plan.kind === "merge") {
+				// #3374：并入的消息不新建 outbox。文字消息结束合并窗口，Turn 立即可认领（更新
+				// available_at 会唤醒 Worker）；只含附件的消息重新计时。原 Turn 必须从未被认领。
+				const reopened = await awaitConversationExecutionQueryV1(
+					transaction,
+					transaction<{ id: string }[]>`
+					update platform.outbox_items
+					set available_at = ${
+						plan.attachmentWindow === "extend"
+							? transaction`clock_timestamp() + ${conversationAttachmentMergeWindowMsV1}::bigint * interval '1 millisecond'`
+							: transaction`clock_timestamp()`
+					},
+						updated_at = clock_timestamp()
+					where id = ${outboxId(
+						"conversation.turn.submit.v1",
+						plan.outboxIntent.messageId,
+						plan.outboxIntent.executionId,
+					)}
+						and scope_type = 'conversation'
+						and scope_id = ${plan.outboxIntent.conversationId}
+						and operation = 'conversation.turn.submit.v1'
+						and status = 'pending' and attempt_count = 0 and delivery_fence = 0
+					returning id
+				`,
+				);
+				if (reopened.length !== 1) unavailable();
+			} else
+				await awaitConversationExecutionQueryV1(
+					transaction,
+					transaction`
 				insert into platform.outbox_items
 					(id, scope_type, scope_id, operation, payload, trace_id, request_id, trace_parent,
 					 available_at, created_at, updated_at)
@@ -1007,10 +1035,16 @@ export class PostgresConversationExecutionTransactionV1
 							modelOptionId: plan.outboxIntent.modelOptionId,
 							reasoningLevel: plan.outboxIntent.reasoningLevel,
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
-					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.traceParent ?? null}, ${plan.outboxIntent.occurredAt},
+					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.traceParent ?? null},
+					 ${
+							// #3374：只含附件的企微消息打开合并窗口：Turn 在受理后 3 秒内不可认领。
+							plan.attachmentWindow === "open"
+								? transaction`clock_timestamp() + ${conversationAttachmentMergeWindowMsV1}::bigint * interval '1 millisecond'`
+								: plan.outboxIntent.occurredAt
+},
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`,
-			);
+				);
 			await awaitConversationExecutionQueryV1(
 				transaction,
 				transaction`
@@ -1674,6 +1708,39 @@ export class PostgresConversationExecutionTransactionV1
 			current.useGrantRevision !== sources[0].useGrantRevision
 		)
 			unavailable();
+	}
+
+	/**
+	 * #3373：新消息到达时 Conversation 被受理不明的 Execution 占用，把该 Execution 已排定的
+	 * 恢复工作项提前到当前时刻（提交唤醒随之通知 Worker）。只在 Execution 仍为 unknown 时生效，
+	 * 不改变 Execution、占用或工作项状态。
+	 */
+	async wakeUnknownExecutionRecovery(input: {
+		readonly conversationId: string;
+		readonly executionId: string;
+	}): Promise<void> {
+		const conversationId = text(input.conversationId);
+		const executionId = text(input.executionId);
+		await this.#transaction(async (transaction) => {
+			await transaction`
+				update platform.outbox_items
+				set available_at = clock_timestamp(), updated_at = clock_timestamp()
+				where scope_type = 'conversation' and scope_id = ${conversationId}
+					and operation in (
+						'conversation.turn.submit.v1',
+						'conversation.turn.regenerate.v1',
+						'conversation.native-capability.invoke.v1'
+					)
+					and payload->>'executionId' = ${executionId}
+					and status = 'retry_scheduled' and available_at > clock_timestamp()
+					and exists (
+						select 1 from platform.conversation_executions e
+						where e.execution_id = ${executionId}
+							and e.conversation_id = ${conversationId}
+							and e.status = 'unknown'
+					)
+			`;
+		});
 	}
 
 	async #transaction<T>(

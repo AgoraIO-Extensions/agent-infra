@@ -128,10 +128,21 @@ export interface ConversationExecutionAuthorityV1 {
 	readonly channelId: string;
 	readonly authorizationRevision: string;
 	readonly supportsSupplementaryInstruction: boolean;
+	/**
+	 * #3374：企微智能机器人入站的附件合并窗口（工程 Spec §14.2.4）。只由服务端的企微授权设置，
+	 * 只适用于 `wecom_bot:` 渠道：只含附件的消息新建的 Execution 在
+	 * {@link conversationAttachmentMergeWindowMsV1} 内不可认领，窗口内同一发送者的消息并入它。
+	 */
+	readonly attachmentMergeWindow?: true;
 	readonly taskBoundary?: TaskAuthorizationBoundaryV1;
 	/** Transient server authority; never part of the accepted durable boundary. */
 	readonly personalApiAdmissionAuthority?: PersonalApiTaskAdmissionAuthorityV1;
 }
+
+/** #3374：只含附件的消息新建的 Execution 不可认领的时长（工程 Spec §14.2.4）。 */
+export const conversationAttachmentMergeWindowMsV1 = 3_000;
+/** #3374：一个 Execution 经合并最多带的附件数；超出时新消息不再并入。 */
+export const conversationAttachmentMergeMaxCountV1 = 10;
 
 export interface ConversationExecutionAuthorizationPortV1 {
 	authorize(input: {
@@ -361,6 +372,11 @@ export interface ConversationExecutionStateV1 {
 				readonly lastEventSequence: number;
 				readonly stopPending: boolean;
 				readonly status: "submitted" | "processing" | "unknown";
+				/**
+				 * #3374：Store 在 Conversation 锁内按 Platform DB 判定的合并窗口：Turn outbox 从未被认领、
+				 * 窗口未到期，且已绑定的消息都只含附件。只有窗口打开时出现，给出已绑定的附件数。
+				 */
+				readonly attachmentMerge?: { readonly attachmentCount: number };
 		  }
 		| undefined;
 }
@@ -453,7 +469,16 @@ export interface CreateConversationWritePlanV1 {
 
 export interface ConversationMessageWritePlanV1 {
 	readonly schemaVersion: 1;
-	readonly kind: "initial" | "supplement";
+	/**
+	 * `merge`（#3374）：消息作为新 Message 绑定到合并窗口内尚未认领的 Execution，组成同一个初始
+	 * Turn；不新建 Execution 或 outbox。
+	 */
+	readonly kind: "initial" | "supplement" | "merge";
+	/**
+	 * #3374：合并窗口的变化。`open` 只用于只含附件的初始消息；`close` 是并入的文字消息，Turn
+	 * 立即可认领；`extend` 是并入的只含附件的消息，窗口重新计时。
+	 */
+	readonly attachmentWindow?: "open" | "close" | "extend";
 	readonly conversation: ConversationExecutionConversationStateV1;
 	readonly message: {
 		readonly messageId: string;
@@ -757,6 +782,15 @@ export interface ConversationExecutionTransactionPortV1 {
 					{ outcome: "accepted" | "replayed" | "denied" }
 			  >,
 	): Promise<ConversationStopDecisionV1>;
+	/**
+	 * #3373：新消息到达时 Conversation 被受理不明的 Execution 占用，立即唤醒该 Execution 的
+	 * 恢复工作项，让 Worker 先按 Host 的真实状态核实一次。只调整已排定恢复的可认领时间，
+	 * 不释放占用，也不改变 Execution 状态；Execution 已不是 unknown 时不做任何事。
+	 */
+	wakeUnknownExecutionRecovery?(input: {
+		readonly conversationId: string;
+		readonly executionId: string;
+	}): Promise<void>;
 }
 
 export interface ConversationExecutionUseCaseV1 {

@@ -27,6 +27,9 @@ describe("recent personal conversation additive compatibility", () => {
 		"preserves the entire old document when cookie schemes were %s",
 		async (cookieBaseline) => {
 			const current = structuredClone(document);
+			// #1052 published the recent read before #3379 added `unavailableAgentIds`.
+			delete current.paths[path].get.responses[200].content["application/json"]
+				.schema.properties.unavailableAgentIds;
 			if (cookieBaseline !== "existingBearer") {
 				// Historical recent-only fixtures precede the later personal Agent read.
 				delete current.paths["/api/v2/agents"].get.security;
@@ -224,4 +227,83 @@ describe("recent personal conversation additive compatibility", () => {
 		},
 		120_000,
 	);
+});
+
+describe("recent personal conversation unavailable Agent addition (#3379)", () => {
+	const schemaOf = (d: typeof document) =>
+		d.paths[path].get.responses[200].content["application/json"].schema;
+
+	it("accepts only the optional bounded unavailableAgentIds on the recent page", async () => {
+		const current = structuredClone(document);
+		const previous = structuredClone(current);
+		delete schemaOf(previous).properties.unavailableAgentIds;
+		const directory = await mkdtemp(join(tmpdir(), "agent-infra-recent-"));
+		const previousPath = join(directory, "previous.json");
+		const currentPath = join(directory, "current.json");
+		const compare = () =>
+			spawnSync(
+				process.execPath,
+				[cli, "--previous", previousPath, "--current", currentPath],
+				{ encoding: "utf8" },
+			);
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(compare().status).toBe(0);
+			for (const [name, mutate] of [
+				[
+					"required",
+					(d: typeof document) => {
+						schemaOf(d).required.push("unavailableAgentIds");
+					},
+				],
+				[
+					"unbounded",
+					(d: typeof document) => {
+						delete schemaOf(d).properties.unavailableAgentIds.maxItems;
+					},
+				],
+				[
+					"item-shape",
+					(d: typeof document) => {
+						schemaOf(d).properties.unavailableAgentIds.items = {
+							type: "object",
+						};
+					},
+				],
+				[
+					"other-field",
+					(d: typeof document) => {
+						schemaOf(d).properties.unavailableReasons = {
+							type: "array",
+							items: { type: "string" },
+						};
+					},
+				],
+				[
+					"items",
+					(d: typeof document) => {
+						schemaOf(d).properties.items.items.properties.status.enum.push(
+							"agent_unavailable",
+						);
+					},
+				],
+				[
+					"old-path",
+					(d: typeof document) => {
+						d.paths["/api/v2/agents"].get.operationId = "changed";
+					},
+				],
+			] as const) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				const result = compare();
+				expect(result.status, name).toBe(1);
+				expect(result.stderr, name).toContain("changed OpenAPI contract");
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	}, 120_000);
 });

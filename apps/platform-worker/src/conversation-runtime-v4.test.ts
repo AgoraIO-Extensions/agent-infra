@@ -642,6 +642,71 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		}
 	});
 
+	// #3373：Host 持久化的未提交结果（带固定阶段、可重试）原样交给 Core 重提；字段漂移时失败关闭，
+	// 不能被当作未提交而重投。
+	const notSubmitted = {
+		outcome: "rejected",
+		code: "RUNTIME_TURN_NOT_SUBMITTED",
+		message: "Runtime turn was not submitted",
+		reason: "file_input_unavailable",
+		retryable: true,
+	} as const;
+	it.each([
+		["passes the persisted unsubmitted Turn to Core", notSubmitted],
+		[
+			"passes the session preparation stage to Core",
+			{ ...notSubmitted, reason: "session_preparation_failed" },
+		],
+		[
+			"fails closed on an unpinned not-submitted stage",
+			{ ...notSubmitted, reason: "exchange_timeout" },
+		],
+		[
+			"fails closed on a non-retryable not-submitted result",
+			{ ...notSubmitted, retryable: false },
+		],
+		[
+			"fails closed on a not-submitted result without a stage",
+			{
+				outcome: notSubmitted.outcome,
+				code: notSubmitted.code,
+				message: notSubmitted.message,
+				retryable: notSubmitted.retryable,
+			},
+		],
+		[
+			"fails closed on a not-submitted result carrying diagnostics",
+			{ ...notSubmitted, message: "Codex app-server is unreachable" },
+		],
+	] as const)("%s (#3373)", async (name, result) => {
+		const h = runtimeV4Harness("submit");
+		try {
+			Object.assign(h.claim, {
+				input: { text: "inspect", attachments: ["file-input-1"] },
+			});
+			h.fetcher.mockImplementationOnce(async (_url, init) =>
+				Response.json({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					operationId: JSON.parse(init?.body as string).businessRequest
+						.operation.id,
+					result,
+				}),
+			);
+			const reference = await h.authorize();
+			const dispatched = h.runtime.runtimeHost.dispatch(h.request(reference));
+			if (name.startsWith("passes"))
+				await expect(dispatched).resolves.toMatchObject({ result });
+			else
+				await expect(dispatched).rejects.toMatchObject({
+					code: "RUNTIME_RESPONSE_INVALID",
+				});
+			expect(h.fetcher).toHaveBeenCalledTimes(1);
+		} finally {
+			await h.runtime.close();
+		}
+	});
+
 	it("reports a stop-pending key race without sending the business request", async () => {
 		const h = runtimeV4Harness();
 		try {
