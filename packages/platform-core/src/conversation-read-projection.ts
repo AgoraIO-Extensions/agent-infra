@@ -79,6 +79,7 @@ export interface ConversationMessageProjectionV1 {
 		| "AUTHORIZATION_REVOKED"
 		| "ORIGINAL_RESPONSE_NOT_STARTED"
 		| "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+		| "QUEUE_FULL"
 		| null;
 	/**
 	 * #3377：失败回答的用户可见分类与说明（工程 Spec §16.1.1），与企微读取同一结果；
@@ -286,7 +287,8 @@ export function projectConversationMessagesV1(
 			(item.failureCode === "EXECUTION_FAILED" ||
 				item.failureCode === "AUTHORIZATION_REVOKED" ||
 				item.failureCode === "ORIGINAL_RESPONSE_NOT_STARTED" ||
-				item.failureCode === "ORIGINAL_RESPONSE_ALREADY_FINISHED")
+				item.failureCode === "ORIGINAL_RESPONSE_ALREADY_FINISHED" ||
+				item.failureCode === "QUEUE_FULL")
 				? item.failureCode
 				: status === "failed" && queue
 					? "EXECUTION_FAILED"

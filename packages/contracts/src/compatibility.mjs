@@ -6065,10 +6065,42 @@ function normalizeMultiServiceResourceCapErrorCodeAddition(previous, current) {
 			for (const child of value) visit(child);
 			return;
 		}
+		// #3375 之后 QUEUE_FULL 可以紧跟在它后面。
+		const at = Array.isArray(value.enum)
+			? value.enum.indexOf(multiServiceResourceCapErrorCode)
+			: -1;
+		if (
+			at > 0 &&
+			value.enum[at - 1] === "ORIGINAL_RESPONSE_ALREADY_FINISHED" &&
+			(at === value.enum.length - 1 ||
+				(at === value.enum.length - 2 && value.enum.at(-1) === "QUEUE_FULL"))
+		)
+			value.enum = value.enum.filter((_, index) => index !== at);
+		for (const child of Object.values(value)) visit(child);
+	};
+	visit(normalized);
+	return normalized;
+}
+
+// #3375 在公共终止错误码末尾追加 QUEUE_FULL（补充指令转入排队时排队已满）。只有基线完全
+// 没有该值、且它紧跟在 MULTI_SERVICE_RESOURCE_CAP_EXCEEDED 之后时才去掉，其余改动照常比较。
+const queueFullErrorCode = "QUEUE_FULL";
+function normalizeQueueFullErrorCodeAddition(previous, current) {
+	if (JSON.stringify(previous).includes(`"${queueFullErrorCode}"`))
+		return current;
+	if (!JSON.stringify(current).includes(`"${queueFullErrorCode}"`))
+		return current;
+	const normalized = structuredClone(current);
+	const visit = (value) => {
+		if (!value || typeof value !== "object") return;
+		if (Array.isArray(value)) {
+			for (const child of value) visit(child);
+			return;
+		}
 		if (
 			Array.isArray(value.enum) &&
-			value.enum.at(-1) === multiServiceResourceCapErrorCode &&
-			value.enum.at(-2) === "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+			value.enum.at(-1) === queueFullErrorCode &&
+			value.enum.at(-2) === multiServiceResourceCapErrorCode
 		)
 			value.enum = value.enum.slice(0, -1);
 		for (const child of Object.values(value)) visit(child);
@@ -6103,7 +6135,10 @@ function findBreakingChanges(previousValue, currentValue) {
 
 function evaluateBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
-	let current = currentValue;
+	let current = normalizeQueueFullErrorCodeAddition(
+		previousValue,
+		currentValue,
+	);
 	if (
 		previous.openapi !== undefined &&
 		(isBrowserHandoffEventV2Addition(previous, current) ||

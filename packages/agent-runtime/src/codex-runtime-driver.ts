@@ -1030,7 +1030,8 @@ const capabilities: RuntimeCapabilitiesV1 = {
 	attachments: true,
 	resultFiles: true,
 	connection: false,
-	supplementaryInstruction: false,
+	// #3375：turn/steer 映射通过补充指令 Conformance 后开启（Runtime HLD §5）。
+	supplementaryInstruction: true,
 };
 
 const itemsListPageSize = 100;
@@ -1113,6 +1114,11 @@ type CodexInterruptionCommand = Extract<
 type CodexSubmitTurnCommand = Extract<
 	RuntimeDriverCommand,
 	{ kind: "submit-turn" }
+>;
+/** #3375：补充指令；operationId 即平台 messageId，绑定原 Execution 与 Turn。 */
+type CodexSupplementCommand = Extract<
+	RuntimeDriverCommand,
+	{ kind: "supplement" }
 >;
 type CodexNativeCommandCommand = Extract<
 	RuntimeDriverCommand,
@@ -1608,11 +1614,23 @@ function operationKey(
 
 /** 判断 operationKey 编码的操作是否为 submit-turn（键格式见 operationKey）。 */
 function isSubmitTurnOperationKey(key: string) {
+	return operationKeyKind(key) === "submit-turn";
+}
+
+/**
+ * #3375：补充指令只向已有原生 Turn 追加输入，不会新建 Turn，也不是中断；结果不明时
+ * 保持 prepared，但不阻塞后续 Turn、原生命令或终态 journal 归档。
+ */
+function isSupplementOperationKey(key: string) {
+	return operationKeyKind(key) === "supplement";
+}
+
+function operationKeyKind(key: string) {
 	try {
 		const parsed: unknown = JSON.parse(key);
-		return Array.isArray(parsed) && parsed[3] === "submit-turn";
+		return Array.isArray(parsed) ? parsed[3] : undefined;
 	} catch {
-		return false;
+		return undefined;
 	}
 }
 
@@ -1653,7 +1671,7 @@ function operationMatchesCommand(
 			operation.authorizationRecordId === command.authorizationRecordId
 		);
 	}
-	if (!isCodexInterruptionCommand(command)) {
+	if (!isCodexInterruptionCommand(command) && command.kind !== "supplement") {
 		return (
 			operation.executionId === undefined && operation.turnId === undefined
 		);
@@ -1740,6 +1758,64 @@ function isNativeSelectionRejection(value: unknown) {
 		nonEmptyString(value.message) &&
 		value.message.startsWith("invalid thread settings override:")
 	);
+}
+
+/** #3375：形状合法的 JSON-RPC 错误对象；正文只用于本地判定，不持久化或回传。 */
+function isJsonRpcErrorObject(
+	value: unknown,
+): value is { code: number; message: string; data?: unknown } {
+	return (
+		isPlainRecord(value) &&
+		hasOnlyKeys(value, ["code", "message", "data"]) &&
+		Number.isSafeInteger(value.code) &&
+		nonEmptyString(value.message)
+	);
+}
+
+/**
+ * #3375：固定 0.153.0 app-server `turn_steer` 在提交输入之前以 invalid request 明确拒绝的情形：
+ * 无活跃 Turn、`expectedTurnId` 不符，以及当前 Turn 不接受 steer（review、手动压缩、输出
+ * schema 不同）。只按完整文案判定；其他错误、超时与断连都无法证明输入未被接受。
+ */
+function isDefinitiveSteerRejection(value: unknown) {
+	if (!isJsonRpcErrorObject(value) || value.code !== -32_600) return false;
+	const { message } = value;
+	return (
+		message === "no active turn to steer" ||
+		/^expected active turn id `[^`]+` but found `[^`]+`$/.test(message) ||
+		message === "cannot steer a review turn" ||
+		message === "cannot steer a compact turn" ||
+		message === "active turn uses a different output schema"
+	);
+}
+
+/**
+ * #3375：从 `thread/items/list` 的一页中读出原 Turn 内 userMessage 的 `clientId`（即
+ * turn/start 或 turn/steer 的 `clientUserMessageId`）。不读取、不保留消息正文。
+ */
+function userMessageClientIdsFromList(value: unknown, nativeTurnId: string) {
+	if (!isPlainRecord(value) || !Array.isArray(value.data)) protocolInvalid();
+	const clientIds: string[] = [];
+	for (const entry of value.data) {
+		if (
+			!isPlainRecord(entry) ||
+			!hasOnlyKeys(entry, ["turnId", "item"]) ||
+			entry.turnId !== nativeTurnId ||
+			!isPlainRecord(entry.item) ||
+			!nonEmptyString(entry.item.id) ||
+			!nonEmptyString(entry.item.type)
+		)
+			protocolInvalid();
+		if (entry.item.type !== "userMessage") continue;
+		const clientId = entry.item.clientId;
+		if (clientId === undefined || clientId === null) continue;
+		if (!nonEmptyString(clientId)) protocolInvalid();
+		clientIds.push(clientId);
+	}
+	if (value.nextCursor === undefined || value.nextCursor === null)
+		return { clientIds, nextCursor: undefined };
+	if (!nonEmptyString(value.nextCursor)) protocolInvalid();
+	return { clientIds, nextCursor: value.nextCursor };
 }
 
 function isHistoryNotMaterializedError(value: unknown) {
@@ -3068,7 +3144,9 @@ function isCodexOperation(
 		kind !== "native-command"
 	)
 		return false;
-	const isInterruption = kind === "stop" || kind === "generation-cancel";
+	// #3375：补充指令与中断一样绑定原 Execution/Turn，不携带自己的模型选择或配置版本。
+	const isExecutionControl =
+		kind === "stop" || kind === "generation-cancel" || kind === "supplement";
 	const isNativeCommand = kind === "native-command";
 	const isStatefulNativeCommand = isNativeCommand && value.schemaVersion === 2;
 	if (
@@ -3108,28 +3186,28 @@ function isCodexOperation(
 			(typeof value.configVersion !== "string" ||
 				!codexModelPattern.test(value.configVersion))) ||
 		(value.internalModel !== undefined &&
-			(isInterruption ||
+			(isExecutionControl ||
 				typeof value.internalModel !== "string" ||
 				!/^(?:[a-f0-9]{64}\/)?[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(
 					value.internalModel,
 				))) ||
 		(value.modelOptionId !== undefined &&
-			(isInterruption ||
+			(isExecutionControl ||
 				typeof value.modelOptionId !== "string" ||
 				!codexModelPattern.test(value.modelOptionId))) ||
 		(value.reasoningLevel !== undefined &&
-			(isInterruption ||
+			(isExecutionControl ||
 				typeof value.reasoningLevel !== "string" ||
 				!codexReasoningPattern.test(value.reasoningLevel))) ||
-		(isInterruption && value.configVersion !== undefined)
+		(isExecutionControl && value.configVersion !== undefined)
 	) {
 		return false;
 	}
-	if (isInterruption || isNativeCommand) {
+	if (isExecutionControl || isNativeCommand) {
 		if (!nonEmptyString(value.executionId) || !nonEmptyString(value.turnId)) {
 			return false;
 		}
-		if (isInterruption) {
+		if (isExecutionControl) {
 			const execution = ownRecordValue(session.executions, value.executionId);
 			if (!execution || execution.turnId !== value.turnId) return false;
 		}
@@ -3196,7 +3274,7 @@ function isCodexOperation(
 			record.data.result.outcome !== "unknown"
 		);
 	}
-	if (isInterruption || isNativeCommand)
+	if (isExecutionControl || isNativeCommand)
 		return (
 			value.admissionPending === undefined &&
 			value.admissionRecoveryPending === undefined
@@ -3670,6 +3748,17 @@ class CodexHistoryNotMaterializedError extends Error {
 	constructor() {
 		super("Codex Runtime history is not materialized");
 		this.name = "CodexHistoryNotMaterializedError";
+	}
+}
+
+/**
+ * #3375：app-server 对 `turn/steer` 返回了形状合法的 JSON-RPC 错误。`definitive` 只在
+ * {@link isDefinitiveSteerRejection} 成立时为真；否则结果不明。原生错误正文不进入本对象。
+ */
+class CodexSteerRejectedError extends Error {
+	constructor(readonly definitive: boolean) {
+		super("Codex Runtime refused the supplementary instruction");
+		this.name = "CodexSteerRejectedError";
 	}
 }
 
@@ -4361,8 +4450,12 @@ class CodexRpc {
 		signal?: AbortSignal,
 	) {
 		if (this.failed) unavailable();
+		// #3375：带 signal 的历史分页读取（补充指令恢复查询）同样只读：错误或超时只结束本次
+		// 读取，不终止原生进程及其仍在运行的 Turn。
 		const readOnly =
-			(method === "thread/read" || method === "skills/list") &&
+			(method === "thread/read" ||
+				method === "skills/list" ||
+				method === "thread/items/list") &&
 			signal !== undefined;
 		if (
 			readOnly &&
@@ -4432,6 +4525,8 @@ class CodexRpc {
 			if (error instanceof CodexModelSelectionRejectedError) throw error;
 			if (error instanceof CodexSessionUnavailableError) throw error;
 			if (error instanceof CodexHistoryNotMaterializedError) throw error;
+			// #3375：app-server 已按协议回复 steer 错误，连接与原生 Turn 保持可用。
+			if (error instanceof CodexSteerRejectedError) throw error;
 			const failure =
 				error instanceof RuntimeHostError ? error : unavailableError();
 			this.fail(failure);
@@ -4612,6 +4707,17 @@ class CodexRpc {
 				isNativeSelectionRejection(frame.error)
 			) {
 				pending.reject(new CodexModelSelectionRejectedError());
+				this.pending.delete(frame.id);
+				return;
+			}
+			// #3375：steer 的错误响应不终止原生进程，否则会连带结束正在运行的原 Turn。
+			if (
+				pending.method === "turn/steer" &&
+				isJsonRpcErrorObject(frame.error)
+			) {
+				pending.reject(
+					new CodexSteerRejectedError(isDefinitiveSteerRejection(frame.error)),
+				);
 				this.pending.delete(frame.id);
 				return;
 			}
@@ -6244,9 +6350,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				? this.executeSubmitTurn(command, context?.fileBridge)
 				: command.kind === "native-command"
 					? this.executeNativeCommand(command, context?.nativeCommand)
-					: isCodexInterruptionCommand(command)
-						? this.executeInterruption(command)
-						: Promise.reject(unavailableError());
+					: command.kind === "supplement"
+						? this.executeSupplement(command, context?.fileBridge)
+						: isCodexInterruptionCommand(command)
+							? this.executeInterruption(command)
+							: Promise.reject(unavailableError());
 		this.inFlightOperations.set(key, execution);
 		try {
 			return await execution;
@@ -7800,8 +7908,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			this.assertRuntimeRequirements(session);
 			if (
 				session.acceptanceUncertainOperationKey !== undefined ||
-				Object.values(state.operations).some(
-					(operation) =>
+				Object.entries(state.operations).some(
+					([preparedKey, operation]) =>
+						!isSupplementOperationKey(preparedKey) &&
 						operation.nativeSessionRef === command.nativeSessionRef &&
 						operation.state === "prepared",
 				)
@@ -7829,7 +7938,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private async materializeCodexInput(
-		command: CodexSubmitTurnCommand,
+		command: Pick<CodexSubmitTurnCommand | CodexSupplementCommand, "input">,
 		text: string,
 		fileBridge: RuntimeFileBridgePortV1 | undefined,
 		key: string,
@@ -8420,6 +8529,308 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return { model: option.internalModel, effort: selection.reasoningLevel };
 	}
 
+	/**
+	 * #3375：补充指令映射为固定 app-server 的 `turn/steer`（Runtime HLD §5）。
+	 * - `expectedTurnId` 取该 Execution 已持久的原生 Turn，`clientUserMessageId` 取平台 messageId；
+	 * - 提交前先持久 prepared，同一 messageId 的重放只返回已保存结果，从不重复提交；
+	 * - app-server 以 invalid request 明确拒绝时持久 rejected；超时、断连或无法判定的错误保持
+	 *   unknown，之后只凭原生历史中 `clientId` 等于 messageId 的 userMessage 确认 accepted。
+	 */
+	private async executeSupplement(
+		command: CodexSupplementCommand,
+		fileBridge?: RuntimeFileBridgePortV1,
+	) {
+		const text = "text" in command.input ? command.input.text : "";
+		const key = operationKey(command);
+		const leaked = this.pendingInputCleanups.get(key);
+		if (leaked) {
+			await cleanupCodexInputDirectory(leaked);
+			this.pendingInputCleanups.delete(key);
+		}
+		let materialized: MaterializedCodexInput | undefined;
+		try {
+			if (
+				command.input.attachments.length > 0 &&
+				!ownRecordValue(this.readState().operations, key)
+			) {
+				// #3225：附件在任何 Driver 记录与原生调用之前取得并核对；失败时不留下记录。
+				materialized = await this.materializeCodexInput(
+					command,
+					text,
+					fileBridge,
+					key,
+				);
+				fileBridge?.revalidate();
+			}
+			const prepared = await this.prepareSupplement(command);
+			if (prepared.operation.record) return prepared.operation.record;
+			// 遗留的 prepared 表示此前的 steer 结果不明：只能经恢复查询确认，不能再次提交。
+			if (!prepared.created)
+				return this.unknown(command, command.nativeSessionRef);
+			let steer: {
+				readonly connection: CodexRpc;
+				readonly threadId: string;
+				readonly expectedTurnId: string;
+				readonly items: readonly CodexNativeInputItem[];
+			};
+			try {
+				// 原生 Thread 只加载在打开它的进程里；进程替换后先在新进程上 resume（#3176）。
+				await this.resumeSession(command.nativeSessionRef);
+				const session = this.session(command.nativeSessionRef);
+				const execution = ownRecordValue(
+					session.executions,
+					command.executionId,
+				);
+				if (
+					!session.threadId ||
+					!execution ||
+					execution.turnId !== command.turnId
+				)
+					stateInvalid();
+				const items = materialized
+					? (await this.placeCodexAttachments(session, text, materialized))
+							.items
+					: [{ type: "text" as const, text }];
+				const connection = await this.rpc(command.nativeSessionRef);
+				// File Grant 在提交边界再核对一次，过期的授权不能越过原生副作用。
+				fileBridge?.revalidate();
+				steer = {
+					connection,
+					threadId: session.threadId,
+					expectedTurnId: execution.nativeTurnId,
+					items,
+				};
+			} catch (error) {
+				// 尚未发出 steer：释放 prepared，修正后的重试不会被误判为结果不明。
+				await this.discardUnsubmittedSupplement(command);
+				throw error;
+			}
+			try {
+				await steer.connection.request(
+					"turn/steer",
+					{
+						threadId: steer.threadId,
+						expectedTurnId: steer.expectedTurnId,
+						clientUserMessageId: command.operationId,
+						input: steer.items,
+					},
+					(value) => {
+						// 只有返回的 turnId 等于 expectedTurnId 才证明输入进入了原 Turn。
+						if (
+							!isPlainRecord(value) ||
+							!hasOnlyKeys(value, ["turnId"]) ||
+							value.turnId !== steer.expectedTurnId
+						)
+							protocolInvalid();
+					},
+				);
+			} catch (error) {
+				if (error instanceof CodexSteerRejectedError && error.definitive)
+					return this.resolveSupplement(command, {
+						outcome: "rejected",
+						code: "RUNTIME_TURN_NOT_ACTIVE",
+						message: "Runtime turn is no longer active",
+						retryable: false,
+					});
+				// 超时、断连、进程退出或无法判定的错误：prepared 保留为结果不明的屏障。
+				return this.unknown(command, command.nativeSessionRef);
+			}
+			return this.resolveSupplement(command, {
+				outcome: "accepted",
+				status: "running",
+			});
+		} finally {
+			await materialized?.cleanup();
+		}
+	}
+
+	private async prepareSupplement(command: CodexSupplementCommand) {
+		return this.update((state) => {
+			const key = operationKey(command);
+			const existing = ownRecordValue(state.operations, key);
+			if (existing) {
+				if (!operationMatchesCommand(existing, command)) stateInvalid();
+				return { operation: existing, created: false };
+			}
+			const session = ownRecordValue(state.sessions, command.nativeSessionRef);
+			if (
+				!session ||
+				session.agentId !== command.agentId ||
+				session.conversationId !== command.conversationId ||
+				session.sessionGeneration !== command.sessionGeneration ||
+				!session.threadId
+			)
+				unavailable();
+			const execution = ownRecordValue(session.executions, command.executionId);
+			if (!execution || execution.turnId !== command.turnId) unavailable();
+			this.assertRuntimeRequirements(session);
+			// 原 Turn 的受理确认尚未持久完成：暂不可用，不留下记录，也不提交 steer。
+			const original = this.executionOperation(state, session, execution);
+			if (original.admissionPending || original.admissionRecoveryPending)
+				unavailable();
+			const journal = this.journalView(session, execution.nativeTurnId);
+			const operation: CodexOperation = {
+				schemaVersion: 1,
+				state: "prepared",
+				nativeSessionRef: command.nativeSessionRef,
+				executionId: command.executionId,
+				turnId: command.turnId,
+			};
+			if (
+				execution.status !== "running" ||
+				session.activeExecutionId !== command.executionId ||
+				journal?.nativeCompletionStatus !== undefined ||
+				journal?.externalActionsBlocked === true ||
+				this.hasInterruption(
+					command.nativeSessionRef,
+					command.executionId,
+					state,
+				)
+			) {
+				// 原 Turn 已结束、已封闭或已有停止：确定不能补充，在任何原生调用之前与操作
+				// 原子持久化稳定拒绝，同一 messageId 的重放返回该结果。
+				operation.state = "resolved";
+				operation.record = driverRecord(command, {
+					schemaVersion: 1,
+					agentId: command.agentId,
+					conversationId: command.conversationId,
+					sessionGeneration: command.sessionGeneration,
+					kind: command.kind,
+					operationId: command.operationId,
+					nativeSessionRef: command.nativeSessionRef,
+					result: {
+						outcome: "rejected",
+						code: "RUNTIME_TURN_NOT_ACTIVE",
+						message: "Runtime turn is no longer active",
+						retryable: false,
+					},
+				});
+			} else this.assertExecutionConfiguration(state, session, execution);
+			state.operations[key] = operation;
+			return { operation, created: true };
+		});
+	}
+
+	private async resolveSupplement(
+		command: CodexSupplementCommand,
+		result: RuntimeDriverOperationRecordV1["result"],
+	) {
+		const record = driverRecord(command, {
+			schemaVersion: 1,
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			sessionGeneration: command.sessionGeneration,
+			kind: command.kind,
+			operationId: command.operationId,
+			nativeSessionRef: command.nativeSessionRef,
+			result,
+		});
+		return this.update((state) => {
+			const operation = ownRecordValue(state.operations, operationKey(command));
+			if (!operation || !operationMatchesCommand(operation, command))
+				stateInvalid();
+			if (operation.state === "resolved") {
+				if (!operation.record) stateInvalid();
+				return operation.record;
+			}
+			if (operation.state !== "prepared") stateInvalid();
+			operation.state = "resolved";
+			operation.record = record;
+			return record;
+		});
+	}
+
+	private async discardUnsubmittedSupplement(command: CodexSupplementCommand) {
+		const key = operationKey(command);
+		try {
+			await this.update((state) => {
+				const operation = ownRecordValue(state.operations, key);
+				if (operation?.state === "prepared" && !operation.record)
+					delete state.operations[key];
+			});
+		} catch {
+			// 原始失败才是可处理的错误；残留的 prepared 只会按结果不明收敛，不会重复提交。
+		}
+	}
+
+	/**
+	 * #3375：结果不明的补充指令只按原 messageId 查询原生历史，不重复提交 steer。存在
+	 * `clientId` 等于 messageId 的 userMessage 时才确认 accepted；查询不到或查询失败都保持
+	 * unknown，不推断为 rejected。本查询不抛出，避免 Host 重启恢复把整个会话判为阻塞。
+	 */
+	private async recoverSupplement(
+		command: CodexSupplementCommand,
+	): Promise<RuntimeDriverLookup> {
+		if (this.inFlightOperations.has(operationKey(command)))
+			return { state: "unknown" };
+		try {
+			const session = this.session(command.nativeSessionRef);
+			const execution = ownRecordValue(session.executions, command.executionId);
+			if (
+				!session.threadId ||
+				!execution ||
+				execution.turnId !== command.turnId
+			)
+				return { state: "unknown" };
+			const steered = await this.hasNativeUserMessage(
+				command.nativeSessionRef,
+				session.threadId,
+				execution.nativeTurnId,
+				command.operationId,
+			);
+			if (!steered) return { state: "unknown" };
+			const current = ownRecordValue(
+				this.session(command.nativeSessionRef).executions,
+				command.executionId,
+			);
+			if (!current) return { state: "unknown" };
+			return {
+				state: "found",
+				record: await this.resolveSupplement(command, {
+					outcome: "accepted",
+					status: current.status,
+				}),
+			};
+		} catch {
+			return { state: "unknown" };
+		}
+	}
+
+	private async hasNativeUserMessage(
+		nativeSessionRef: string,
+		threadId: string,
+		nativeTurnId: string,
+		clientId: string,
+	) {
+		let cursor: string | undefined;
+		const seenCursors = new Set<string>();
+		const deadlineAt = Date.now() + rpcRequestTimeoutMs;
+		const signal = AbortSignal.timeout(rpcRequestTimeoutMs);
+		for (let page = 0; page < maximumItemsListPages; page += 1) {
+			const result = await (await this.rpc(nativeSessionRef)).request(
+				"thread/items/list",
+				{
+					threadId,
+					turnId: nativeTurnId,
+					limit: itemsListPageSize,
+					sortDirection: "asc",
+					...(cursor === undefined ? {} : { cursor }),
+				},
+				(value) => userMessageClientIdsFromList(value, nativeTurnId),
+				false,
+				false,
+				deadlineAt,
+				signal,
+			);
+			if (result.clientIds.includes(clientId)) return true;
+			if (result.nextCursor === undefined) return false;
+			if (seenCursors.has(result.nextCursor)) protocolInvalid();
+			seenCursors.add(result.nextCursor);
+			cursor = result.nextCursor;
+		}
+		unavailable();
+	}
+
 	private async executeInterruption(command: CodexInterruptionCommand) {
 		const prepared = await this.prepareInterruption(command);
 		const standard = this.standardMcpClients.get(
@@ -8664,6 +9075,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 			return { state: "found", record: operation.record };
 		}
+		if (command.kind === "supplement") return this.recoverSupplement(command);
 		if (!isCodexInterruptionCommand(command)) return { state: "unknown" };
 		const rootTurn = this.interruptionNativeTurn(
 			operation.nativeSessionRef,
@@ -9490,8 +9902,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			operation.admissionPending ||
 			operation.admissionRecoveryPending ||
 			operation.record?.result.outcome !== "accepted" ||
-			Object.values(state.operations).some(
-				(candidate) =>
+			Object.entries(state.operations).some(
+				([candidateKey, candidate]) =>
+					!isSupplementOperationKey(candidateKey) &&
 					candidate.state === "prepared" &&
 					candidate.nativeSessionRef === session.nativeSessionRef &&
 					candidate.executionId === execution.executionId,
@@ -14092,7 +14505,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				const preparedKeys = Object.entries(state.operations).flatMap(
 					([preparedKey, operation]) =>
 						operation.nativeSessionRef === nativeSessionRef &&
-						operation.state === "prepared"
+						operation.state === "prepared" &&
+						!isSupplementOperationKey(preparedKey)
 							? [preparedKey]
 							: [],
 				);
@@ -14298,8 +14712,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		state = this.readState(),
 	) {
-		return Object.values(state.operations).some(
-			(operation) =>
+		// #3375：补充指令也绑定原 Execution/Turn，但它不是中断，不能封住原 Turn 的模型与工具请求。
+		return Object.entries(state.operations).some(
+			([key, operation]) =>
+				!isSupplementOperationKey(key) &&
 				operation.nativeSessionRef === nativeSessionRef &&
 				operation.executionId === executionId &&
 				operation.turnId !== undefined,

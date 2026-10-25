@@ -695,7 +695,8 @@ function failure(
 		| "EXECUTION_FAILED"
 		| "AUTHORIZATION_REVOKED"
 		| "ORIGINAL_RESPONSE_NOT_STARTED"
-		| "ORIGINAL_RESPONSE_ALREADY_FINISHED",
+		| "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+		| "QUEUE_FULL",
 ) {
 	if (!traceId) throw new Error("Missing execution trace");
 	return {
@@ -706,6 +707,7 @@ function failure(
 			EXECUTION_FAILED: "Execution failed.",
 			ORIGINAL_RESPONSE_NOT_STARTED: "Original response did not start.",
 			ORIGINAL_RESPONSE_ALREADY_FINISHED: "Original response already finished.",
+			QUEUE_FULL: "Conversation queue is full.",
 		}[code],
 		retryable: false as const,
 		traceId,

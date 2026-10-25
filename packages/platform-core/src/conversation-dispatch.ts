@@ -170,6 +170,23 @@ export function createConversationDispatchUseCaseV1(
 				(isRuntimeEventOperation(claim.operation) ||
 					claim.operation === "conversation.turn.stop.v1");
 	/**
+	 * #3375：补充指令无法进入原回复时转入排队（工程 Spec §12.5）。Store 在同一 Conversation 锁事务
+	 * 内完成转换并终结本次补充指令；未装配转换时沿用原规则标记“原回复已结束”。
+	 */
+	async function queueSupplement(
+		claim: ConversationDispatchClaimV1,
+	): Promise<ConversationDispatchDecisionV1> {
+		if (!dependencies.store.queueSupplement)
+			return reject(
+				dependencies.store,
+				claim,
+				"ORIGINAL_RESPONSE_ALREADY_FINISHED",
+			);
+		return (await dependencies.store.queueSupplement({ claim }))
+			? { schemaVersion: 1, outcome: "rejected" }
+			: { schemaVersion: 1, outcome: "stale" };
+	}
+	/**
 	 * #3373：Runtime 已核实本次 Turn 在原生提交点之前未提交。2 分钟内最多重提 3 次：
 	 * Execution 退回投递前状态，下一次认领重新授权、提升 fence 并签发新的 Grant；
 	 * 次数或窗口用尽后按阶段明确失败（Runtime HLD §7.3）。
@@ -1011,11 +1028,8 @@ export function createConversationDispatchUseCaseV1(
 				claim.stopPending &&
 				claim.operation === "conversation.turn.supplement.v1"
 			) {
-				return reject(
-					dependencies.store,
-					claim,
-					"ORIGINAL_RESPONSE_ALREADY_FINISHED",
-				);
+				// #3375：原回复出现待确认的 stop，补充指令转入排队（§12.5）。
+				return queueSupplement(claim);
 			}
 			const recoveringOriginalTurn =
 				(claim.stopPending ||
@@ -1151,11 +1165,8 @@ export function createConversationDispatchUseCaseV1(
 			const executionFinished = executionTerminal(claim.executionStatus);
 			if (executionFinished) {
 				if (claim.operation === "conversation.turn.supplement.v1") {
-					return reject(
-						dependencies.store,
-						claim,
-						"ORIGINAL_RESPONSE_ALREADY_FINISHED",
-					);
+					// #3375：原回复已在补充指令投递前结束，补充指令转入排队（§12.5）。
+					return queueSupplement(claim);
 				}
 				if (isRuntimeEventOperation(claim.operation) && claim.hostSessionRef) {
 					return persistRuntimeEvents(
@@ -1191,6 +1202,12 @@ export function createConversationDispatchUseCaseV1(
 					(acceptedStop && claim.executionStatus === "unknown")) &&
 				claim.hostSessionRef !== null &&
 				dependencies.runtimeHost.recoverOriginalStatus !== undefined;
+			// #3375：已被 Runtime 接受的原回复在补充指令投递前转为 unknown，补充指令转入排队（§12.5）。
+			if (
+				claim.operation === "conversation.turn.supplement.v1" &&
+				claim.executionStatus === "unknown"
+			)
+				return queueSupplement(claim);
 			if (
 				(claim.operation === "conversation.turn.supplement.v1" ||
 					claim.operation === "conversation.turn.stop.v1") &&
@@ -1722,13 +1739,16 @@ export function createConversationDispatchUseCaseV1(
 						{},
 					);
 				}
+				// #3375：Runtime 明确拒绝补充指令（无活跃 Turn、Turn 不符或不接受 steer），转入排队。
+				if (
+					claim.operation === "conversation.turn.supplement.v1" &&
+					response.result.code === "RUNTIME_TURN_NOT_ACTIVE"
+				)
+					return queueSupplement(claim);
 				return reject(
 					dependencies.store,
 					claim,
-					claim.operation === "conversation.turn.supplement.v1" &&
-						response.result.code === "RUNTIME_TURN_NOT_ACTIVE"
-						? "ORIGINAL_RESPONSE_ALREADY_FINISHED"
-						: response.result.code,
+					response.result.code,
 					decideConversationDispatchRejectedTransitionV1({
 						operation: claim.operation,
 						code: response.result.code,

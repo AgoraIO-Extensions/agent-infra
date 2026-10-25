@@ -6248,6 +6248,230 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	// #3375：补充指令转入排队（工程 Spec §12.5）。
+	describe("supplementary instructions queued when they cannot enter the original reply (#3375)", () => {
+		async function authorize(work: Awaited<ReturnType<typeof seed>>) {
+			await client`insert into platform.task_authorization_records(id, execution_id, boundary)
+				values (${`authorization-${work.executionId}`}, ${work.executionId}, ${client.json(
+					{
+						schemaVersion: 1,
+						principal: { kind: "user", id: "actor-dispatch" },
+						agentId: "agent-dispatch",
+						channelId: "web",
+						identityRevision: "identity-dispatch",
+						agentAuthorizationRevision: "authorization-dispatch",
+						accessSources: [{ kind: "user", userId: "actor-dispatch" }],
+					},
+				)}) on conflict (execution_id) do nothing`;
+		}
+		async function laterSupplement(
+			work: Awaited<ReturnType<typeof seed>>,
+			name: string,
+		) {
+			const messageId = `${name}-${work.messageId}`;
+			await client`
+				insert into platform.conversation_messages
+					(message_id, conversation_id, actor_id, role, text, execution_id,
+					 status, created_at, updated_at)
+				values (${messageId}, ${work.conversationId}, 'actor-dispatch', 'user',
+					${name}, ${work.executionId}, 'submitted', now(), now())
+			`;
+			await client`
+				insert into platform.outbox_items
+					(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+					 available_at, created_at, updated_at)
+				values (${`conversation:supplement:${messageId}`}, 'conversation',
+					${work.conversationId}, 'conversation.turn.supplement.v1', ${client.json(
+						{
+							schemaVersion: 1,
+							conversationId: work.conversationId,
+							executionId: work.executionId,
+							messageId,
+							turnId: work.turnId,
+							sessionGeneration: 1,
+							modelConfigurationRevision: 4,
+							modelOptionId: "model-option-dispatch",
+							reasoningLevel: "medium",
+						},
+					)}, ${`trace-${name}`}, ${`request-${name}`},
+					now() + interval '1 hour', clock_timestamp(), clock_timestamp())
+			`;
+			return messageId;
+		}
+		const stateOf = (messageIds: readonly string[]) =>
+			client<
+				{
+					message_id: string;
+					message_status: string;
+					failure_code: string | null;
+					execution_id: string;
+					execution_status: string;
+					task_wait_order: string | null;
+					deadline_minutes: number | null;
+					turn_available: string | null;
+					supplement_status: string;
+					waiting_events: number;
+					authorizations: number;
+				}[]
+			>`
+				select message.message_id, message.status as message_status,
+					message.failure_code, message.execution_id,
+					execution.status as execution_status,
+					execution.task_wait_order::text,
+					round(extract(epoch from execution.task_wait_deadline - now()) / 60)::int
+						as deadline_minutes,
+					(select available_at::text from platform.outbox_items
+						where id = 'conversation:turn:' || message.execution_id) as turn_available,
+					supplement.status as supplement_status,
+					(select count(*)::int from platform.conversation_events event
+						where event.execution_id = message.execution_id
+							and event.event_type = 'task.status'
+							and event.event_payload->>'status' = 'waiting') as waiting_events,
+					(select count(*)::int from platform.task_authorization_records record
+						where record.execution_id = message.execution_id) as authorizations
+				from platform.conversation_messages message
+				join platform.conversation_executions execution
+					on execution.execution_id = message.execution_id
+				join platform.outbox_items supplement
+					on supplement.id = 'conversation:supplement:' || message.message_id
+				where message.message_id = any(${messageIds as string[]}::text[])
+				order by array_position(${messageIds as string[]}::text[], message.message_id)
+			`;
+
+		it("converts the claimed supplement and the later pending ones of the same Execution in order", async () => {
+			const work = await seed("conversation.turn.supplement.v1", {
+				executionStatus: "completed",
+				hostSessionRef: "host-session-existing",
+			});
+			await authorize(work);
+			const later = await laterSupplement(work, "later");
+			const { store, decision } = await claim(work.itemId);
+			try {
+				if (decision.outcome !== "claimed") throw new Error("Expected claim");
+				await expect(
+					store.queueSupplement({ claim: decision.claim }),
+				).resolves.toBe(true);
+				const rows = await stateOf([work.messageId, later]);
+				expect(rows).toEqual([
+					expect.objectContaining({
+						message_status: "submitted",
+						failure_code: null,
+						execution_status: "waiting",
+						deadline_minutes: 10,
+						turn_available: "infinity",
+						supplement_status: "succeeded",
+						waiting_events: 1,
+						authorizations: 1,
+					}),
+					expect.objectContaining({
+						message_status: "submitted",
+						execution_status: "waiting",
+						turn_available: "infinity",
+						supplement_status: "succeeded",
+						waiting_events: 1,
+						authorizations: 1,
+					}),
+				]);
+				// 各自绑定新的等待 Execution，按补充指令的受理顺序排队；原 Execution 不变。
+				expect(rows[0]?.execution_id).not.toBe(work.executionId);
+				expect(rows[1]?.execution_id).not.toBe(rows[0]?.execution_id);
+				expect(Number(rows[1]?.task_wait_order)).toBe(
+					Number(rows[0]?.task_wait_order) + 1,
+				);
+				const [original] = await client`
+					select status from platform.conversation_executions
+					where execution_id = ${work.executionId}
+				`;
+				expect(original).toEqual({ status: "completed" });
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("fails the supplements beyond the queue capacity as delivery failures", async () => {
+			const work = await seed("conversation.turn.supplement.v1", {
+				executionStatus: "completed",
+				hostSessionRef: "host-session-existing",
+			});
+			await authorize(work);
+			const later = [
+				await laterSupplement(work, "second"),
+				await laterSupplement(work, "third"),
+				await laterSupplement(work, "fourth"),
+			];
+			const { store, decision } = await claim(work.itemId);
+			try {
+				if (decision.outcome !== "claimed") throw new Error("Expected claim");
+				await expect(
+					store.queueSupplement({ claim: decision.claim }),
+				).resolves.toBe(true);
+				const rows = await client<
+					{
+						message_id: string;
+						status: string;
+						failure_code: string | null;
+						outbox: string;
+					}[]
+				>`
+					select message.message_id, message.status, message.failure_code,
+						outbox.status as outbox
+					from platform.conversation_messages message
+					join platform.outbox_items outbox
+						on outbox.id = 'conversation:supplement:' || message.message_id
+					where message.message_id = any(${[work.messageId, ...later]}::text[])
+					order by array_position(${[work.messageId, ...later]}::text[], message.message_id)
+				`;
+				expect(
+					rows.map(({ status, failure_code, outbox }) => [
+						status,
+						failure_code,
+						outbox,
+					]),
+				).toEqual([
+					["submitted", null, "succeeded"],
+					["submitted", null, "succeeded"],
+					["submitted", null, "succeeded"],
+					["failed", "QUEUE_FULL", "failed"],
+				]);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("fails the claimed supplement without queueing when its task authorization is no longer current", async () => {
+			const work = await seed("conversation.turn.supplement.v1", {
+				executionStatus: "processing",
+				executionFence: 7,
+				hostSessionRef: "host-session-existing",
+			});
+			await authorize(work);
+			await client`update platform.task_authorization_records set revoked_at = now()
+				where execution_id = ${work.executionId}`;
+			const { store, decision } = await claim(work.itemId);
+			try {
+				if (decision.outcome !== "claimed") throw new Error("Expected claim");
+				await expect(
+					store.queueSupplement({ claim: decision.claim }),
+				).resolves.toBe(true);
+				const [state] = await client`
+					select message.status, message.failure_code, message.execution_id,
+						outbox.status as outbox
+					from platform.conversation_messages message
+					join platform.outbox_items outbox on outbox.id = ${work.itemId}
+					where message.message_id = ${work.messageId}
+				`;
+				expect(state).toEqual({
+					status: "failed",
+					failure_code: "AUTHORIZATION_REVOKED",
+					execution_id: work.executionId,
+					outbox: "failed",
+				});
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
 	it("persists a supplementary delivery failure on its Message", async () => {
 		const work = await seed("conversation.turn.supplement.v1", {
 			executionStatus: "processing",
