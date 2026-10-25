@@ -152,13 +152,14 @@ function resolveConnectionInstallation(
 			candidate.configurationsByAgent,
 		)) {
 			if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
-				return undefined;
+				throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
 			const parsed = RuntimeOAuthConfigurationV1Schema.safeParse(configuration);
-			if (parsed.success)
-				Object.defineProperty(configurationsByAgent, agentId, {
-					value: parsed.data,
-					enumerable: true,
-				});
+			if (!parsed.success)
+				throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
+			Object.defineProperty(configurationsByAgent, agentId, {
+				value: parsed.data,
+				enumerable: true,
+			});
 		}
 		return {
 			configurationsByAgent: configurationsByAgent as NonNullable<

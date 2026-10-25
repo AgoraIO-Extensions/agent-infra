@@ -863,6 +863,7 @@ export const connectionInstallation = {
 it.each([
 	"export const connectionInstallation = { configuration: {}, authorize: true };",
 	"export const connectionInstallation = { configuration: {}, authorize: () => {}, extra: true };",
+	"export const connectionInstallation = { configurationsByAgent: { 'agent-a': {} } };",
 ])("rejects malformed installation producer configuration", async (entry) => {
 	const path = join(directory, "configuration.mjs");
 	const original = await readFile(path, "utf8");
