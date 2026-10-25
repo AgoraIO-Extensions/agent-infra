@@ -796,10 +796,11 @@ export function assemblePlatformApi(
 					identity: input.identity,
 					buildRequest: async ({ conversationId, body }) => ({
 						...body,
-						schemaVersion: 1 as const,
 						conversationId,
 					}),
 					admitWithIdentity: async ({ identity, request, requestContext }) => {
+						// The legacy metadata/admission pipeline cannot authorize V3.
+						if (request.schemaVersion === 3) return { outcome: "unsupported" };
 						const metadata =
 							nativeCapabilityMetadata ??
 							createDefaultNativeCapabilityMetadata?.(identity, requestContext);

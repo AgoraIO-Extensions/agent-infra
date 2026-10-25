@@ -21,9 +21,13 @@ import {
 	type CreateConversationDecisionV1,
 	conversationAttachmentMergeWindowMsV1,
 	type FileRecordV1,
+	isNativeCapabilityModelSelectionCurrentV6,
 	type NativeCapabilityAdmissionDecisionV1,
 	type NativeCapabilityAdmissionTransactionPortV1,
+	type NativeCapabilityAdmissionTransactionPortV6,
+	type NativeCapabilityAdmissionV6Decision,
 	type NativeCapabilityInvocationPlanV1,
+	type NativeCapabilityInvocationPlanV6,
 	type NativeTextInputV1,
 	nativeCapabilityParametersDigestV1,
 	PersonalApiCredentialErrorV1,
@@ -34,6 +38,8 @@ import {
 	type TaskApiAuditPlanV1,
 	type TaskApiChannelV1,
 	type TaskUserDirectoryV1,
+	validateNativeCapabilityInvocationPlanV6,
+	validateNativeCapabilityReplayPlanV6,
 } from "@agent-infra/platform-core";
 import {
 	lockConversation as lockDispatchConversation,
@@ -97,6 +103,7 @@ import {
 	isModelSelectionPlan,
 	isRegenerationPlan,
 	isStopPlan,
+	lockAgentConfiguration,
 	lockConversation,
 	lockConversationForRead,
 	outboxId,
@@ -295,7 +302,9 @@ export interface PostgresConversationExecutionOptionsV1 {
 }
 
 export class PostgresConversationExecutionTransactionV1
-	implements ConversationExecutionTransactionPortV1
+	implements
+		ConversationExecutionTransactionPortV1,
+		NativeCapabilityAdmissionTransactionPortV6
 {
 	readonly #client: ReturnType<typeof postgres> | undefined;
 	readonly #existingTransaction: Transaction | undefined;
@@ -562,6 +571,192 @@ export class PostgresConversationExecutionTransactionV1
 				result: structuredClone(plan.result),
 				plan,
 			};
+		});
+	}
+
+	/** Persists a pre-validated V6 plan atomically with idempotency and outbox state. */
+	async admitNativeCapabilityV6(
+		candidate: Parameters<
+			NativeCapabilityAdmissionTransactionPortV6["admitNativeCapabilityV6"]
+		>[0],
+		isAuthorized: () => Promise<boolean>,
+	): Promise<NativeCapabilityAdmissionV6Decision> {
+		const input = structuredClone(candidate);
+		return this.#transaction(async (transaction) => {
+			validateNativeCapabilityInvocationPlanV6(input.plan, input);
+			// Governance and ordinary execution admission lock Agent before Conversation.
+			const agent = await lockAgentConfiguration(
+				transaction,
+				input.authority.agentId,
+			);
+			if (
+				!agent ||
+				agent.authorizationRevision !== input.authority.authorizationRevision
+			)
+				return { outcome: "denied", reason: "authorization_lost" };
+			const conversation = await lockConversation(
+				transaction,
+				input.request.conversationId,
+			);
+			if (
+				!conversation ||
+				conversation.agentId !== input.authority.agentId ||
+				conversation.actorId !== input.authority.actorId ||
+				!isDeepStrictEqual(conversation.principal, input.authority.principal) ||
+				conversation.channelId !== input.authority.channelId ||
+				conversation.authorizationRevision !==
+					input.authority.authorizationRevision ||
+				conversation.sessionGeneration !== input.authority.sessionGeneration ||
+				conversation.hostSessionRef !== input.authority.hostSessionRef
+			)
+				return { outcome: "denied", reason: "authorization_lost" };
+			if (!(await isAuthorized()))
+				return { outcome: "denied", reason: "authorization_lost" };
+			const scope = {
+				scopeType: "conversation",
+				scopeId: input.request.conversationId,
+				actorId: input.authority.actorId,
+				commandType: "native-capability.invoke.v2",
+				key: input.request.idempotencyKey,
+			};
+			const existing = await readIdempotency(transaction, scope);
+			if (existing) {
+				if (existing.request_digest !== input.requestDigest)
+					return { outcome: "conflict", reason: "idempotency_conflict" };
+				if (existing.status !== "completed" || existing.result === null)
+					return { outcome: "unavailable", reason: "idempotency_in_progress" };
+				const envelope = existing.result;
+				if (
+					typeof envelope !== "object" ||
+					Array.isArray(envelope) ||
+					!("plan" in envelope) ||
+					typeof envelope.plan !== "object" ||
+					envelope.plan === null ||
+					Array.isArray(envelope.plan)
+				)
+					return unavailable();
+				const saved = envelope.plan as NativeCapabilityInvocationPlanV6;
+				if (
+					!isDeepStrictEqual(
+						saved.taskBoundary,
+						input.taskAuthority.taskBoundary,
+					)
+				)
+					return { outcome: "denied", reason: "authorization_lost" };
+				const payload = saved.outbox?.payload;
+				if (
+					!payload ||
+					typeof payload.requestId !== "string" ||
+					typeof payload.traceId !== "string"
+				)
+					return unavailable();
+				validateNativeCapabilityReplayPlanV6(saved, {
+					invocation: input.invocation,
+					taskAuthority: input.taskAuthority,
+					authority: input.authority,
+					requestDigest: input.requestDigest,
+				});
+				return { outcome: "replayed", plan: structuredClone(saved) };
+			}
+			if (conversation.status !== "ready" || conversation.isolationPending)
+				return { outcome: "denied", reason: "conversation_unavailable" };
+			if (conversation.sandboxReady !== true)
+				return { outcome: "unavailable", reason: "conversation_unavailable" };
+			// Waiting tasks also own the Conversation queue; they must not be overtaken.
+			const [occupied] = await transaction<{ status: string }[]>`
+    select status from platform.conversation_executions
+    where conversation_id = ${conversation.conversationId}
+     and status in ('waiting','submitted','processing','unknown')
+    order by (status = 'unknown') desc, execution_id
+    limit 1 for update
+   `;
+			if (occupied)
+				return { outcome: occupied.status === "unknown" ? "unknown" : "busy" };
+			if (!agent.modelConfiguration)
+				return { outcome: "unavailable", reason: "metadata_unavailable" };
+			if (
+				!isNativeCapabilityModelSelectionCurrentV6(
+					input.plan,
+					agent.modelConfiguration,
+				)
+			)
+				return { outcome: "stale" };
+			// New operations require the current Key; replay retains its frozen tuple.
+			const executionBinding =
+				await currentConversationExecutionRelayKeyBindingV1(transaction, {
+					authority: input.taskAuthority,
+					userDirectory: this.#userDirectory,
+					personalApiAdmissionAuthority:
+						input.taskAuthority.personalApiAdmissionAuthority,
+				});
+			const currentKey = executionBinding?.relayKeyBinding;
+			if (
+				!currentKey ||
+				executionBinding?.executionSource !== input.plan.executionSource ||
+				currentKey.keyId !== input.keyBinding.ciphertextRef ||
+				currentKey.keyVersion !== input.keyBinding.version ||
+				!(await isAuthorized())
+			)
+				return { outcome: "denied", reason: "authorization_lost" };
+			const occurredAt = new Date();
+			const reservationId = await reserveIdempotency(transaction, {
+				...scope,
+				requestDigest: input.requestDigest,
+				occurredAt,
+			});
+			if (!reservationId)
+				return { outcome: "unavailable", reason: "idempotency_in_progress" };
+			await transaction`
+				insert into platform.conversation_executions
+					(execution_id, conversation_id, sandbox_id, agent_id, actor_id,
+					 channel_id, turn_id, status, session_generation, delivery_fence,
+					 authorization_revision, execution_source, relay_key_purpose,
+					 relay_key_subject_id, relay_key_id, relay_key_version,
+					 model_configuration_revision, model_option_id, reasoning_level,
+					 principal_type, created_at, updated_at)
+				values
+					(${input.plan.executionId}, ${input.plan.conversationId},
+					 ${conversation.sandbox?.sandboxId ?? null}, ${input.plan.agentId},
+					 ${input.plan.actorId}, ${input.plan.channelId}, ${input.plan.turnId},
+					 'submitted', ${input.plan.sessionGeneration}, 0,
+					 ${input.plan.authorizationRevision}, ${input.plan.executionSource},
+					 ${input.keyBinding.purpose}, ${input.keyBinding.subjectId},
+					 ${input.keyBinding.ciphertextRef}, ${input.keyBinding.version},
+					 ${input.plan.modelConfigurationRevision}, ${input.plan.modelOptionId}, ${input.plan.reasoningLevel},
+					 ${input.plan.principal.kind}, ${occurredAt}, ${occurredAt})
+			`;
+			await insertTaskAuthorization(transaction, {
+				executionId: input.plan.executionId,
+				boundary: input.plan.taskBoundary,
+				traceId: input.request.traceId,
+				requestId: input.request.requestId,
+			});
+			await transaction`
+				insert into platform.outbox_items
+					(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+					 available_at, created_at, updated_at)
+				values
+					(${input.plan.outbox.id}, 'conversation', ${input.plan.conversationId},
+					 ${input.plan.outbox.operation}, ${transaction.json(input.plan.outbox.payload as unknown as JsonValue)},
+					 ${input.request.traceId}, ${input.request.requestId}, ${occurredAt}, ${occurredAt}, ${occurredAt})
+			`;
+			await transaction`
+				insert into platform.conversation_audit_events
+					(id, conversation_id, execution_id, agent_id, actor_id, action,
+					 trace_id, request_id, occurred_at)
+				values
+					(${randomUUID()}, ${input.plan.conversationId}, ${input.plan.executionId},
+					 ${input.plan.agentId}, ${input.plan.actorId},
+					 'conversation.native_capability.accepted', ${input.request.traceId},
+					 ${input.request.requestId}, ${occurredAt})
+			`;
+			await completeIdempotency(
+				transaction,
+				reservationId,
+				{ plan: input.plan },
+				occurredAt,
+			);
+			return { outcome: "accepted", plan: input.plan };
 		});
 	}
 

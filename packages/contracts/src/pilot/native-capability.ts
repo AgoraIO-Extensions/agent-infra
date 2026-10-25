@@ -5,6 +5,7 @@ import {
 	RequestIdV1Schema,
 	TraceIdV1Schema,
 } from "../index.ts";
+import { RuntimeSelectionV1Schema } from "../runtime/host.ts";
 
 const nativeCapabilityId = z.string().regex(/^[a-f0-9]{64}$/u);
 const boundedParameters = z.string().max(16 * 1024);
@@ -33,6 +34,14 @@ export const NativeCapabilityInvocationRequestV2Schema =
 			.min(1)
 			.max(4)
 			.refine((files) => new Set(files).size === files.length),
+	});
+
+// Stateful commands carry only the user's explicit choice. Identity, Key,
+// configuration, command effect and operation bindings come from the server.
+export const NativeCapabilityInvocationRequestV3Schema =
+	NativeCapabilityInvocationRequestV1Schema.extend({
+		schemaVersion: z.literal(3),
+		selection: RuntimeSelectionV1Schema,
 	});
 
 export const NativeCapabilityInvocationResultV1Schema = z.strictObject({
@@ -87,11 +96,12 @@ const body = (schema: z.ZodType) => ({
 	content: { "application/json": { schema } },
 });
 
-// One endpoint, two exact request versions. A body without `schemaVersion`
-// stays V1; V2 is selected only by its explicit version and attachment list.
+// The unversioned V1 wire stays exact; V2 files and V3 stateful commands
+// require distinct explicit versions and cannot be parsed as one another.
 const nativeCapabilityInvocationRequestSchema = z.union([
 	NativeCapabilityInvocationRequestV1Schema,
 	NativeCapabilityInvocationRequestV2Schema,
+	NativeCapabilityInvocationRequestV3Schema,
 ]);
 
 export const nativeCapabilityInvocationOpenApiPathsV1 = {
@@ -125,6 +135,8 @@ export const nativeCapabilityInvocationSchemasV1 = {
 		NativeCapabilityInvocationRequestV1Schema,
 	NativeCapabilityInvocationRequestV2:
 		NativeCapabilityInvocationRequestV2Schema,
+	NativeCapabilityInvocationRequestV3:
+		NativeCapabilityInvocationRequestV3Schema,
 	NativeCapabilityInvocationResultV1: NativeCapabilityInvocationResultV1Schema,
 	NativeCapabilityInvocationResponseV1:
 		NativeCapabilityInvocationResponseV1Schema,
@@ -135,6 +147,9 @@ export type NativeCapabilityInvocationRequestV1 = z.infer<
 >;
 export type NativeCapabilityInvocationRequestV2 = z.infer<
 	typeof NativeCapabilityInvocationRequestV2Schema
+>;
+export type NativeCapabilityInvocationRequestV3 = z.infer<
+	typeof NativeCapabilityInvocationRequestV3Schema
 >;
 export type NativeCapabilityInvocationResponseV1 = z.infer<
 	typeof NativeCapabilityInvocationResponseV1Schema

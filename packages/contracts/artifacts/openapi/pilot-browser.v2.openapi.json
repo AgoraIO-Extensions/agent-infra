@@ -6277,6 +6277,77 @@
         ],
         "type": "object"
       },
+      "NativeCapabilityInvocationRequestV3": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilityId": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "directoryRevision": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "type": "string"
+          },
+          "parameters": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "requestId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 3,
+            "type": "number"
+          },
+          "selection": {
+            "additionalProperties": false,
+            "properties": {
+              "modelOptionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "reasoningLevel": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "modelOptionId",
+              "reasoningLevel"
+            ],
+            "type": "object"
+          },
+          "traceId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "capabilityId",
+          "directoryRevision",
+          "parameters",
+          "idempotencyKey",
+          "requestId",
+          "traceId",
+          "schemaVersion",
+          "selection"
+        ],
+        "type": "object"
+      },
       "NativeCapabilityInvocationResponseV1": {
         "anyOf": [
           {
@@ -19246,6 +19317,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/NativeCapabilityInvocationRequestV2"
+                  },
+                  {
+                    "$ref": "#/components/schemas/NativeCapabilityInvocationRequestV3"
                   }
                 ]
               }
