@@ -218,6 +218,58 @@ describe("Audit page and detail lifetimes", () => {
 		expect(result.current.failure).toBeNull();
 	});
 
+	it("keeps rows during and after a failed background reread, unlike a refresh (#3387)", async () => {
+		let next: Promise<Response> | null = null;
+		let fail = false;
+		const { result } = setup(
+			() =>
+				next ??
+				(fail
+					? new Response("private service state", { status: 503 })
+					: Response.json(auditPage("audit-a", "cursor-a"))),
+		);
+		await waitFor(() => expect(result.current.items).toHaveLength(1));
+		const background = deferred<Response>();
+		next = background.promise;
+		act(() => {
+			focusManager.setFocused(false);
+			focusManager.setFocused(true);
+		});
+		await waitFor(() => expect(result.current.isFetching).toBe(true));
+		// 后台重读进行中：已读记录与翻页保留，不算用户发起的读取。
+		expect(result.current.userReading).toBe(false);
+		expect(result.current.status).toBe("ready");
+		expect(result.current.items).toHaveLength(1);
+		expect(result.current.hasNextPage).toBe(true);
+		next = null;
+		fail = true;
+		await act(async () => {
+			background.resolve(
+				new Response("private service state", { status: 503 }),
+			);
+		});
+		await waitFor(() => expect(result.current.isFetching).toBe(false));
+		expect(result.current.status).toBe("ready");
+		expect(result.current.failure).toBeNull();
+		expect(result.current.items).toHaveLength(1);
+		// 用户发起的刷新：进行中按读取中显示，失败仍收起记录（D2-59）。
+		const user = deferred<Response>();
+		next = user.promise;
+		let refresh!: Promise<unknown>;
+		act(() => {
+			refresh = result.current.refresh();
+		});
+		await waitFor(() => expect(result.current.userReading).toBe(true));
+		next = null;
+		await act(async () => {
+			user.resolve(new Response("private service state", { status: 503 }));
+			await refresh;
+		});
+		await waitFor(() => expect(result.current.status).toBe("error"));
+		expect(result.current.userReading).toBe(false);
+		expect(result.current.items).toEqual([]);
+	});
+
 	it("blocks cursor cycles instead of issuing repeated reads", async () => {
 		const { result, requests, queryClient } = setup(() =>
 			Response.json(auditPage("audit-a", "cursor-a")),

@@ -45,7 +45,8 @@ function MyAgentsRoute() {
 				}
 				ownedAgentsLoading={owned.isPending}
 				ownedAgentsUnavailable={
-					owned.isError || owned.data?.kind === "unavailable"
+					// 后台重读的可重试失败不替换已显示的列表（#3387）。
+					owned.failed || owned.data?.kind === "unavailable"
 				}
 				ownedAgentsRetryable={ownedAgentsRetryable}
 				onRetryApplications={() => void query.refetch()}
@@ -55,7 +56,7 @@ function MyAgentsRoute() {
 				state={
 					query.isPending
 						? { kind: "loading" }
-						: query.isError || !query.data
+						: query.failed || !query.data
 							? { kind: "unavailable", retryable: applicationsRetryable }
 							: query.data
 				}

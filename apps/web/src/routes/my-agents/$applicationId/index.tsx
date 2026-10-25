@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import { readFailed } from "../../../features/background-read.js";
 import { AgentCreationFailureNotice } from "../../../features/my-agents/agent-creation-failure.js";
 import { MyAgentApplicationDetailScreen } from "../../../features/my-agents/my-agent-application-detail-screen.js";
 import { isRetryableMyAgentApplicationError } from "../../../features/my-agents/my-agent-applications.js";
@@ -40,7 +41,9 @@ function MyAgentApplicationRoute() {
 				state={
 					query.isPending
 						? { kind: "loading" }
-						: query.isError || !query.data
+						: // 后台重读的可重试失败不替换已显示的申请（#3387）。
+							readFailed(query, isRetryableMyAgentApplicationError) ||
+								!query.data
 							? { kind: "unavailable", retryable }
 							: query.data
 				}

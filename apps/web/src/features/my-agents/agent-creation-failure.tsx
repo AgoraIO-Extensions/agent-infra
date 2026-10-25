@@ -4,6 +4,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
 import { getAgentCreationFailureV1 } from "../../pilot/generated-v2/sdk.gen.js";
 import type { AgentCreationFailureCategoryV1 } from "../../pilot/generated-v2/types.gen.js";
+import { collectionReadFailure } from "../collection-read-failure.js";
 
 /**
  * 创建失败类别的说明（#3034）。类别由服务端按工程 Spec §10.5 推导，只说明 Owner 或系统管理员
@@ -36,7 +37,9 @@ export const agentCreationFailureMessages = {
 
 /**
  * 读取一个创建失败 Agent 的失败类别。只有当前 Owner 与系统管理员能读到；其他主体、
- * 状态已变化或读取失败时返回 null，页面不展示任何原因。
+ * 状态已变化或响应无效时返回 null，页面不展示任何原因。暂时读取失败（503、网络中断）时抛出：
+ * 首次读取同样不展示原因，回到标签页、失效后重取等后台重读失败时查询保留已读到的类别，
+ * 已显示的说明不随之消失（#3387）。
  */
 export async function loadAgentCreationFailure(
 	agentId: string,
@@ -48,7 +51,14 @@ export async function loadAgentCreationFailure(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (result.response?.status !== 200) return null;
+	if (result.response?.status !== 200) {
+		if (collectionReadFailure(result.response?.status).retryable)
+			throw Object.assign(
+				new Error("Agent creation failure is temporarily unavailable"),
+				{ retryable: true as const },
+			);
+		return null;
+	}
 	const parsed = AgentCreationFailureProjectionV1Schema.safeParse(result.data);
 	return parsed.success && parsed.data.agentId === agentId
 		? parsed.data.category

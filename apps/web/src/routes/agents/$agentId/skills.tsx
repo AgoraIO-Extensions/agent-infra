@@ -6,6 +6,7 @@ import { isAgentConfigurationOwner } from "../../../features/agent-configuration
 import { AgentSkillBindingScreen } from "../../../features/agent-configuration/agent-skill-binding-screen.js";
 import { isRetryableAgentDiscoveryError } from "../../../features/agent-discovery/agent-discovery.js";
 import { useAgentDetail } from "../../../features/agent-discovery/use-agent-detail.js";
+import { readFailed } from "../../../features/background-read.js";
 import { PageLoadingState } from "../../../features/page-loading-state.js";
 import { ReadFailureCard } from "../../../features/page-state-card.js";
 import { readSkillHubAgentCurrentVersion } from "../../../features/skill-hub/skill-hub-management.js";
@@ -40,9 +41,11 @@ function AgentSkillsRoute() {
 			</main>
 		);
 	}
-	if (query.isError || query.data?.kind !== "ready") {
+	// 后台重读（回到标签页、绑定轮询时的 Agent 重读）的可重试失败不替换页面（#3387）。
+	const failed = readFailed(query, isRetryableAgentDiscoveryError);
+	if (failed || query.data?.kind !== "ready") {
 		const failure =
-			!query.isError && query.data?.kind === "unavailable"
+			!failed && query.data?.kind === "unavailable"
 				? query.data
 				: {
 						retryable: query.isError

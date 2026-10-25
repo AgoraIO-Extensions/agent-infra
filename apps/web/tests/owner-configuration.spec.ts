@@ -20,6 +20,7 @@ import type {
 	DeploymentConfigurationProjectionV2,
 	SkillHubAgentBindingStatusV1,
 } from "../src/pilot/generated-v2/types.gen";
+import { expectBackgroundRereadKeeps } from "./background-reread";
 import {
 	expectFocusableBusy,
 	expectFocusSettled,
@@ -1263,6 +1264,118 @@ test("the Owner configuration links to the Agent's Skill page (O-02)", async ({
 	expect(api.commands).toEqual([]);
 	await noHorizontalOverflow(page);
 });
+
+// #3387 N13-01（G13-2-02）：Owner 配置与 Agent 的 Skill 页在后台重读（回到标签页、生命周期轮询）挂起与 503 失败时
+// 不换成读取失败卡：未保存的修改（环境变量值、所选固定版本）、已显示的创建失败原因与绑定保留，「保存配置」
+// 仍可用，焦点一直在原控件上、不落到 body，页面高度与滚动位置不变；之后读到时修改仍在。两视口一致。
+for (const target of [
+	{ name: "Agent 读取", path: "/api/v2/agents/agent-pilot-1" },
+	{
+		name: "创建失败原因",
+		path: "/api/v2/agents/agent-pilot-1/creation-failure",
+		creationFailure: "health_check_failed",
+	},
+] as const)
+	test(`a background reread keeps the Owner configuration's unsaved changes: ${target.name} (#3387 N13-01)`, async ({
+		page,
+	}, info) => {
+		await viewport(page, info.project.name === "mobile");
+		const pageErrors = trackPageErrors(page);
+		const api = await ownerConfigFixture(
+			page,
+			"creationFailure" in target
+				? { creationFailure: target.creationFailure }
+				: {},
+		);
+		await page.goto("/agents/agent-pilot-1/configuration");
+		const section = page.getByRole("region", {
+			name: "环境变量与 Secret",
+			exact: true,
+		});
+		const value = await pinElement(
+			section.getByLabel("值：环境变量 1", { exact: true }),
+			"owner-config-value",
+		);
+		await value.fill("unsaved-workspace");
+		const heading = await pinElement(
+			page.getByRole("heading", { level: 1 }),
+			"owner-config-heading",
+		);
+		const save = page.getByRole("button", { name: "保存配置", exact: true });
+		await expect(save).toBeEnabled();
+		const notice = main(page).getByText("失败原因：健康检查未通过");
+		if ("creationFailure" in target) await expect(notice).toBeVisible();
+		await expectBackgroundRereadKeeps(page, {
+			path: target.path,
+			focus: value,
+			context: `Owner 配置（${target.name}）`,
+			expectKept: async () => {
+				await expect(heading).toHaveCount(1);
+				await expect(value).toHaveValue("unsaved-workspace");
+				await expect(save).toBeEnabled();
+				await expect(
+					main(page).getByText("暂时无法读取 Owner 配置，请稍后重试。"),
+				).toHaveCount(0);
+				if ("creationFailure" in target) await expect(notice).toBeVisible();
+			},
+		});
+		expect(api.commands).toEqual([]);
+		await expectCleanPage(page, pageErrors);
+		await expectNoDuplicateControls(
+			page,
+			`Owner 配置（${target.name}，#3387）`,
+		);
+	});
+
+for (const target of [
+	{ name: "Agent 读取", path: "/api/v2/agents/agent-pilot-1" },
+	{
+		name: "绑定读取",
+		path: "/api/v2/agents/agent-pilot-1/versions/agent-version-7/skills",
+	},
+] as const)
+	test(`a background reread keeps the Agent's Skill page and the chosen version: ${target.name} (#3387 N13-01)`, async ({
+		page,
+	}, info) => {
+		await viewport(page, info.project.name === "mobile");
+		const pageErrors = trackPageErrors(page);
+		const api = await ownerConfigFixture(page, {
+			agentVersion: "agent-version-7",
+		});
+		await page.goto("/agents/agent-pilot-1/skills");
+		const region = main(page);
+		await expect(region.getByText("还未绑定 Skill")).toBeVisible();
+		const version = await pinElement(
+			region.getByLabel("固定版本", { exact: true }),
+			"agent-skill-version",
+		);
+		await version.selectOption("workspace-summary-v2");
+		await version.focus();
+		const heading = await pinElement(
+			page.getByRole("heading", { level: 1, name: "Agent 的 Skill" }),
+			"agent-skill-heading",
+		);
+		await expectBackgroundRereadKeeps(page, {
+			path: target.path,
+			focus: version,
+			context: `Agent 的 Skill（${target.name}）`,
+			expectKept: async () => {
+				await expect(heading).toHaveCount(1);
+				await expect(version).toHaveValue("workspace-summary-v2");
+				await expect(region.getByText("还未绑定 Skill")).toBeVisible();
+				await expect(
+					region.getByRole("button", { name: "绑定固定版本" }),
+				).toBeVisible();
+				await expect(region.getByRole("alert")).toHaveCount(0);
+			},
+		});
+		expect(api.commands).toEqual([]);
+		await expectCleanPage(page, pageErrors);
+		await expectNoDuplicateControls(
+			page,
+			`Agent 的 Skill（${target.name}，#3387）`,
+		);
+	});
 
 test("an Owner lists, binds and unbinds Skill versions under the server's Agent Version (O-02, #2903)", async ({
 	page,

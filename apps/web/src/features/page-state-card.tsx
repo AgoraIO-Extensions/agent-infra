@@ -96,7 +96,7 @@ function ReauthenticateAction({
 			onClick={async () => {
 				setChecking(true);
 				try {
-					const result = await session.refetch();
+					const result = await session.recheck();
 					if (result.status === "success" && result.data?.kind === "ready")
 						onStillValid?.();
 				} finally {

@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLayoutEffect, useMemo } from "react";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
+import { markUserRead, readFailed } from "../background-read.js";
 import type { CollectionReadUnavailable } from "../collection-read-failure.js";
 import {
 	isRetryableSkillHubError,
@@ -64,13 +65,17 @@ function useIsolatedSkillHubRead<
 				current.state.data.retryable),
 		retry: false,
 	});
+	/** 页面发起的重读（恢复按钮、安装与撤销后的回读）：失败时按读取失败显示（D2-59）。 */
 	function refetch() {
 		const current = selection.queryClient.getQueryData<T>(selection.queryKey);
-		return selection.active &&
-			allowed &&
-			!(current?.kind === "unavailable" && !current.retryable)
-			? query.refetch({ cancelRefetch: false })
-			: Promise.resolve(undefined);
+		if (
+			!selection.active ||
+			!allowed ||
+			(current?.kind === "unavailable" && !current.retryable)
+		)
+			return Promise.resolve(undefined);
+		markUserRead(selection, query.dataUpdatedAt);
+		return query.refetch({ cancelRefetch: false });
 	}
 	const retryable =
 		query.error !== null
@@ -83,12 +88,13 @@ function useIsolatedSkillHubRead<
 	function reload() {
 		const current = selection.queryClient.getQueryData<T>(selection.queryKey);
 		if (!selection.active || !allowed) return Promise.resolve();
-		return current?.kind === "unavailable" && !current.retryable
-			? selection.queryClient.resetQueries({
-					queryKey: selection.queryKey,
-					exact: true,
-				})
-			: query.refetch({ cancelRefetch: false });
+		if (current?.kind === "unavailable" && !current.retryable)
+			return selection.queryClient.resetQueries({
+				queryKey: selection.queryKey,
+				exact: true,
+			});
+		markUserRead(selection, query.dataUpdatedAt);
+		return query.refetch({ cancelRefetch: false });
 	}
 	return {
 		...query,
@@ -96,6 +102,8 @@ function useIsolatedSkillHubRead<
 		reload,
 		isFetching: allowed && query.isFetching,
 		retryable: Boolean(retryable),
+		/** 是否按读取失败替换内容：回到标签页等后台重读的可重试失败保留已显示的内容（#3387）。 */
+		failed: readFailed(query, isRetryableSkillHubError, selection),
 	};
 }
 

@@ -5,6 +5,7 @@ import { buttonVariants } from "@/components/ui/button";
 
 import { checkAgentDefaultRelayKey } from "../../../features/agent-configuration/agent-configuration.js";
 import { useAgentDefaultRelayKeyState } from "../../../features/agent-configuration/use-agent-default-relay-key-state.js";
+import { readFailed } from "../../../features/background-read.js";
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
 import { projectDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
 import {
@@ -45,7 +46,12 @@ function EditAgentApplicationRoute() {
 			</main>
 		);
 	}
-	if (query.isError || !query.data || query.data.kind !== "ready") {
+	if (
+		// 后台重读（回到标签页等）的可重试失败不替换表单：未保存的修改与焦点保留（#3387）。
+		readFailed(query, isRetryableMyAgentApplicationError) ||
+		!query.data ||
+		query.data.kind !== "ready"
+	) {
 		return (
 			<main className="platform-content management-content">
 				<section

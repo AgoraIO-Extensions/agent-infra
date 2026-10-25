@@ -42,6 +42,7 @@ import type {
 	SkillHubAgentBindingCommandV1,
 	SkillHubVersionMetadataV1,
 } from "../../pilot/generated-v2/types.gen.js";
+import { readFailed } from "../background-read.js";
 import type { BrowserSessionState } from "../browser-session.js";
 import { AccessDeniedCard } from "../page-state-card.js";
 import { RecoveryButton } from "../recovery-button.js";
@@ -325,7 +326,7 @@ function AgentSkillBindings({
 	>(null);
 	useEffect(() => {
 		if (!focusRequest) return;
-		// 回读失败时列表被错误提示替换：焦点落在页面 h1。
+		// 写入后的回读失败：目标卡片读不到（列表保留上一次结果，或没有结果时换成错误提示），焦点落在页面 h1。
 		if (bindings.isError) {
 			document.getElementById(agentSkillHeadingId)?.focus();
 			setFocusRequest(null);
@@ -415,7 +416,9 @@ function AgentSkillBindings({
 		return <NoPermission agentId={agent.agentId} />;
 	if (bindings.isPending)
 		return <LoadingLine>正在读取 Skill 绑定…</LoadingLine>;
-	if (bindings.isError || !bindings.data) {
+	// 后台重读（回到标签页、同步轮询、写入后的回读）的可重试失败不替换已显示的绑定（#3387）：
+	// 「当前绑定不受影响」，卡片、版本选择与焦点保留。
+	if (readFailed(bindings, isRetryableSkillError) || !bindings.data) {
 		const retryable = isRetryableSkillError(bindings.error);
 		return (
 			<Alert tone="danger" role="alert">

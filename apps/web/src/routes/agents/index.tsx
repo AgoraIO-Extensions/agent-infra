@@ -50,7 +50,8 @@ function AgentsRoute() {
 					state={
 						query.isPending
 							? { kind: "loading" }
-							: query.isError || !query.data
+							: // 后台重读的可重试失败不替换已显示的目录与搜索（#3387）。
+								query.failed || !query.data
 								? { kind: "unavailable", retryable }
 								: query.data
 					}

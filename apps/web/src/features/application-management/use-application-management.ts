@@ -1,6 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLayoutEffect, useMemo, useRef } from "react";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
+import {
+	markUserRead,
+	retainContent,
+	retainedContentAt,
+} from "../background-read.js";
 import type {
 	ApplicationCredentialRequest,
 	ApplicationManagementState,
@@ -61,11 +66,22 @@ export function useOwnApplication({
 					query.error.retryable !== false,
 			}
 		: null;
+	const read: ApplicationManagementState | { kind: "loading" } = queryFailure ??
+		query.data ?? { kind: "loading" };
+	// 同个人凭证列表：后台重读的可重试失败继续显示上一次的应用（#3387）。
 	const state = !allowed
 		? { kind: "denied" as const }
-		: (queryFailure ?? query.data ?? { kind: "loading" as const });
+		: retainContent(scope, read, {
+				isContent: (current) =>
+					current.kind === "ready" || current.kind === "empty",
+				isRetryableFailure: (current) =>
+					current.kind === "unavailable" && current.retryable,
+				updatedAt: query.error ? query.errorUpdatedAt : query.dataUpdatedAt,
+			});
+	/** 页面发起的重读（「重新加载」、停用后的回读）：失败时按读取失败显示。 */
 	async function refetch() {
 		if (!scope.active || !allowed) return undefined;
+		markUserRead(scope, retainedContentAt(scope));
 		return query.refetch({ cancelRefetch: false });
 	}
 	return { state, isFetching: allowed && query.isFetching, refetch };

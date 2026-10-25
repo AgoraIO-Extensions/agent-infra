@@ -3,6 +3,7 @@ import { isAgentConfigurationOwner } from "../../../features/agent-configuration
 import { AgentDetailScreen } from "../../../features/agent-discovery/agent-detail-screen.js";
 import { isRetryableAgentDiscoveryError } from "../../../features/agent-discovery/agent-discovery.js";
 import { useAgentDetailView } from "../../../features/agent-discovery/use-agent-detail.js";
+import { readFailed } from "../../../features/background-read.js";
 import { connectionEntryUrl } from "../../../features/connection-entry.js";
 import { useTemplateNameLookup } from "../../../features/template-display-name.js";
 import { useBrowserSession } from "../../../features/use-browser-session.js";
@@ -46,7 +47,8 @@ function AgentDetailRoute() {
 					state={
 						query.isPending
 							? { kind: "loading" }
-							: query.isError || !query.data
+							: // 后台重读（回到标签页、生命周期轮询）的可重试失败不替换详情（#3387）。
+								readFailed(query, isRetryableAgentDiscoveryError) || !query.data
 								? { kind: "unavailable", retryable }
 								: query.data
 					}

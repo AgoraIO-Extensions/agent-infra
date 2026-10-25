@@ -17,6 +17,11 @@ import { distinctObjectNames } from "@/lib/accessible-name";
 import { Button } from "../../components/ui/button.js";
 import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
+import {
+	markUserRead,
+	queryUserReading,
+	readFailed,
+} from "../background-read.js";
 import { formatPerson } from "../directory-names.js";
 import { RecoveryButton } from "../recovery-button.js";
 import { BrowserActivityCard } from "./browser-activity-card.js";
@@ -58,6 +63,7 @@ import {
 	isTerminal,
 } from "./conversation-screen-state.js";
 import { useSkillControlFiles } from "./conversation-skill-control-files.js";
+import { ConversationReadError } from "./execution-detail.js";
 import { useAmbiguousDenial } from "./use-ambiguous-denial.js";
 import { useConversationCapabilityCatalog } from "./use-conversation-capability-catalog.js";
 import { useConversationCommands } from "./use-conversation-commands.js";
@@ -71,6 +77,15 @@ import { useConversationTimeline } from "./use-conversation-timeline.js";
 // Readiness is still authoritative on the server; a short bounded poll keeps
 // the composer responsive while the Worker finishes the Session Sandbox.
 const preparingRefreshMs = 500;
+
+/** 执行详情读取：网络与服务失败可以重试；无权、其余 HTTP 与响应无效由时间线接手。 */
+function retryableExecutionRead(error: unknown) {
+	return (
+		!(error instanceof ConversationReadError) ||
+		error.failure.kind === "network" ||
+		error.failure.kind === "service"
+	);
+}
 
 /** 浏览器卡只给出不透明 ID；服务端命令请求体只在这里构造。停止操作走现有的停止回复命令。 */
 export function browserCommandBody(
@@ -173,6 +188,9 @@ export function ActiveConversation({
 		executionId: selectedExecution,
 	});
 	const { timeline } = reader;
+	// 执行详情的用户发起读取（「重新读取详情」「核实原执行状态」）记在这里：弹窗打开时回到标签页、
+	// 时间线刷新带来的后台重读不显示读取行与失败提示，已显示的详情保留（#3387）。
+	const executionRead = useRef({}).current;
 	const [draft, setDraft] = useState(firstMessage?.text ?? "");
 	// 首条消息只在本次挂载内自动发送一次；草稿被改写或会话进入不可发送的状态时改为手动发送。
 	const firstSend = useRef(firstMessage?.send ? firstMessage.text : undefined);
@@ -1142,16 +1160,29 @@ export function ActiveConversation({
 				open={selectedExecution !== undefined}
 				data={selectedExecution ? reader.execution.data : undefined}
 				conversationId={conversationId}
-				loading={Boolean(selectedExecution) && reader.execution.isFetching}
+				loading={
+					Boolean(selectedExecution) &&
+					(reader.execution.data === undefined
+						? reader.execution.isFetching
+						: queryUserReading(reader.execution, executionRead))
+				}
 				failed={
 					Boolean(selectedExecution) &&
-					(reader.execution.isError || timeline.failure?.kind === "http")
+					(readFailed(
+						reader.execution,
+						retryableExecutionRead,
+						executionRead,
+					) ||
+						timeline.failure?.kind === "http")
 				}
 				modelOptions={options}
 				connectionEnabled={agent.capabilities.connection === true}
 				onRetry={() => {
 					if (timeline.failure?.kind === "http") void reader.reconnect();
-					else void reader.execution.refetch();
+					else {
+						markUserRead(executionRead, reader.execution.dataUpdatedAt);
+						void reader.execution.refetch();
+					}
 				}}
 				onClose={() => setSelectedExecution(undefined)}
 				finalFocus={executionFinalFocus}

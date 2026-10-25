@@ -200,6 +200,41 @@ describe("Administrator inventory authorization and login lifetimes", () => {
 		);
 	});
 
+	it("keeps rows on a failed background reread and still hides them after a failed refresh (#3387)", async () => {
+		let failed = false;
+		const { result, queryClient } = setup(() =>
+			failed
+				? new Response("synthetic-private-upstream-state", { status: 503 })
+				: Response.json(page()),
+		);
+		await waitFor(() => expect(result.current.state.kind).toBe("ready"));
+		failed = true;
+		act(() => {
+			focusManager.setFocused(false);
+			focusManager.setFocused(true);
+		});
+		await waitFor(() =>
+			expect(cached(queryClient)).toEqual([{ kind: "error", retryable: true }]),
+		);
+		// 回到标签页的后台重读失败：缓存不留旧行，页面继续显示上一次的列表。
+		expect(result.current.state).toMatchObject({
+			kind: "ready",
+			agents: [{ name: "Current Agent" }],
+		});
+		await act(async () => {
+			await result.current.refetch();
+		});
+		await waitFor(() =>
+			expect(result.current.state).toEqual({ kind: "error", retryable: true }),
+		);
+		failed = false;
+		act(() => {
+			focusManager.setFocused(false);
+			focusManager.setFocused(true);
+		});
+		await waitFor(() => expect(result.current.state.kind).toBe("ready"));
+	});
+
 	it.each([
 		{ status: 401, reason: "authentication-required" },
 		{ status: 403, reason: "denied" },

@@ -49,7 +49,8 @@ export function useWorkbenchCollections({
 	return {
 		agents: !identityKey
 			? { kind: "unavailable", retryable: false }
-			: agents.isError
+			: // 后台重读的可重试失败不替换已显示的分区（#3387）。
+				agents.failed
 				? {
 						kind: "unavailable",
 						retryable: isRetryableAgentDiscoveryError(agents.error),
@@ -57,7 +58,7 @@ export function useWorkbenchCollections({
 				: (agents.data ?? { kind: "loading" }),
 		ownerAgents: !identityKey
 			? { kind: "unavailable", retryable: false }
-			: ownerAgents.isError
+			: ownerAgents.failed
 				? {
 						kind: "unavailable",
 						retryable: isRetryableAgentDiscoveryError(ownerAgents.error),
@@ -65,7 +66,7 @@ export function useWorkbenchCollections({
 				: (ownerAgents.data ?? { kind: "loading" }),
 		applications: !identityKey
 			? { kind: "unavailable", retryable: false }
-			: applications.isError
+			: applications.failed
 				? {
 						kind: "unavailable",
 						retryable: isRetryableMyAgentApplicationError(applications.error),

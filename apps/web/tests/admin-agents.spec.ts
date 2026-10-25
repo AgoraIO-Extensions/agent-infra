@@ -3,6 +3,7 @@ import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures";
+import { expectBackgroundRereadKeeps } from "./background-reread";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { recordApiRequests } from "./generated-client-paths";
 import {
@@ -360,6 +361,55 @@ test("Agent management reads directory names only through the generated client (
 	expect(data.directory.length).toBeGreaterThan(0);
 	expect(api.requests).toContain("GET /api/v2/directory/search");
 	api.expectGenerated("Agent 管理");
+});
+
+// #3387 N13-01（N13-3-03 ②）：焦点在搜索框、已输入筛选时，回到标签页的后台重读挂起与 503 失败不收起筛选与表格，
+// 焦点一直在搜索框、不落到 body，页面高度与滚动位置不变，之后读到时筛选仍在。页头刷新失败仍按 D2-59 收起
+// （见「refresh second-page failure collapses the page to the heading and one retry」）。两视口一致。
+test("a background reread keeps Agent management's filter and rows (#3387 N13-01)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/admin/agents");
+	const search = await pinElement(
+		page.getByRole("searchbox", { name: "搜索 Agent" }),
+		"admin-agents-search",
+	);
+	await search.fill("编程助手 1");
+	await expect(page).toHaveURL(/q=/);
+	const table = await pinElement(
+		page.getByRole("table", { name: "已创建 Agent" }),
+		"admin-agents-table",
+	);
+	const rows = table.locator("tbody").getByRole("row");
+	await expect(rows.first()).toBeVisible();
+	const shown = await rows.count();
+	const heading = await pinElement(
+		page.getByRole("heading", { level: 1, name: "查看 Agent 状态" }),
+		"admin-agents-heading",
+	);
+	await expectBackgroundRereadKeeps(page, {
+		path: "/api/v2/admin/agents",
+		focus: search,
+		context: "Agent 管理",
+		expectKept: async () => {
+			await expect(heading).toHaveCount(1);
+			await expect(search).toHaveValue("编程助手 1");
+			await expect(table).toBeVisible();
+			await expect(rows).toHaveCount(shown);
+			await expect(
+				page.getByRole("button", { name: "重新加载", exact: true }),
+			).toHaveCount(0);
+		},
+	});
+	await expectNoDuplicateControls(page, "Agent 管理（后台重读，#3387）");
+	await expectCleanPage(page, errors);
 });
 
 test("refresh second-page failure collapses the page to the heading and one retry", async ({

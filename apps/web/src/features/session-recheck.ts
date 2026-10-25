@@ -1,6 +1,9 @@
 import { useContext, useState } from "react";
 import type { BrowserSessionState } from "./browser-session.js";
-import { BrowserSessionQueryContext } from "./use-browser-session.js";
+import {
+	BrowserSessionQueryContext,
+	markSessionRecheck,
+} from "./use-browser-session.js";
 
 /**
  * 读取返回 401 时的「重新登录」：经壳层重新确认浏览器会话，不整页刷新。会话已失效时
@@ -17,6 +20,8 @@ export function useSessionRecheck(onStillValid?: () => void) {
 			if (!sessionClient || checking) return false;
 			setChecking(true);
 			try {
+				// 用户发起的确认：仍确认不了时壳层显示「暂时无法确认登录状态」（#3387）。
+				markSessionRecheck(sessionClient);
 				await sessionClient.refetchQueries({
 					queryKey: ["browser-session"],
 					exact: true,

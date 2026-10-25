@@ -516,7 +516,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							// 主动退出后的未登录不是「登录已过期」。
 							loggedOut.current = true;
 							setFocusLoginAfterLogout(true);
-							return session.refetch();
+							return session.recheck();
 						}}
 					/>
 				)}
@@ -558,7 +558,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				expired={sessionExpired || expiredReason}
 				focusOnEntry={focusLoginAfterLogout || sessionExpired}
 				onLoggedIn={async () => {
-					const result = await session.refetch();
+					const result = await session.recheck();
 					if (result.data?.kind !== "ready")
 						throw new Error("Login session was not established");
 				}}
@@ -673,7 +673,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 										variant="outline"
 										recoveryKey="重新检查"
 										busy={session.isFetching}
-										onClick={() => void session.refetch()}
+										onClick={() => void session.recheck()}
 									>
 										{session.isFetching ? "正在检查…" : "重新检查"}
 									</RecoveryButton>

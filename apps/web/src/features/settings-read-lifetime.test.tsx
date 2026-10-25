@@ -74,6 +74,32 @@ afterEach(() => {
 });
 
 describe.each(readers)("$name read lifetime", (reader) => {
+	it("keeps the shown read on a failed background reread (#3387)", async () => {
+		let failed = false;
+		const { client, queryClient, wrapper } = setup(() => {
+			if (failed) return new Response("Controlled outage", { status: 503 });
+			return Response.json(reader.response("current-data"));
+		});
+		const { result } = renderHook(
+			() => reader.read("login-a", client, "application-a"),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.state.kind).toBe("ready"));
+		failed = true;
+		await act(async () => {
+			await queryClient.invalidateQueries({ queryKey: reader.prefix });
+		});
+		await waitFor(() => expect(result.current.isFetching).toBe(false));
+		expect(result.current.state.kind).toBe("ready");
+		expect(JSON.stringify(result.current.state)).toContain("current-data");
+		// 同一份读取的「重新加载」失败照常显示读取失败。
+		await act(async () => {
+			await result.current.refetch();
+		});
+		await waitFor(() => expect(result.current.state.kind).toBe("unavailable"));
+		expect(JSON.stringify(result.current.state)).not.toContain("current-data");
+	});
+
 	it("recovers from a failed manual refresh on a successful background read", async () => {
 		let failed = false;
 		const { client, queryClient, wrapper } = setup(() => {

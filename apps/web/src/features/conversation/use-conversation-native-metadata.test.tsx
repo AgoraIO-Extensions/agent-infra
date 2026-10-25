@@ -228,4 +228,41 @@ describe("conversation native metadata consumer", () => {
 		expect(result.current.available).toBe(false);
 		expect(result.current.capabilities).toEqual([]);
 	});
+
+	it("keeps a read projection when a background reread is temporarily unavailable (#3387)", async () => {
+		let calls = 0;
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		clients.push(queryClient);
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async () => {
+				calls += 1;
+				if (calls > 1) return new Response(null, { status: 503 });
+				return Response.json({
+					selector: "skills",
+					revision: "a".repeat(64),
+					capabilities: [],
+				});
+			},
+		});
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(
+			() =>
+				useConversationNativeMetadata({
+					identityKey: "login-a",
+					conversationId: "conversation-a",
+					executionId: "execution-a",
+					client,
+				}),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.available).toBe(true));
+		await result.current.refetch();
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		expect(result.current.available).toBe(true);
+	});
 });
