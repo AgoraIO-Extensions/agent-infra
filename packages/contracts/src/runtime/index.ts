@@ -25,6 +25,7 @@ export * from "./host-v4.ts";
 export * from "./host-v4-events.ts";
 export * from "./host-v4-key-recovery.ts";
 export * from "./host-v5.ts";
+export * from "./host-v6.ts";
 export * from "./installation.ts";
 export * from "./legacy-migration-v1.ts";
 export * from "./native-capability.ts";
@@ -221,6 +222,18 @@ import {
 	RuntimeRestoreExecutionKeyResponseV5Schema,
 	RuntimeRestoreExecutionKeyTransportV5Schema,
 } from "./host-v5.ts";
+import {
+	RuntimeBusinessGrantClaimsV6Schema,
+	RuntimeExecutionGrantV6Schema,
+	RuntimeNativeCapabilityRequestV6Schema,
+	RuntimeNativeCapabilityTransportV6Schema,
+	RuntimeOperationResponseV6Schema,
+	RuntimeRestoreExecutionKeyGrantClaimsV6Schema,
+	RuntimeRestoreExecutionKeyRequestV6Schema,
+	RuntimeRestoreExecutionKeyResponseV6Schema,
+	RuntimeRestoreExecutionKeyTransportV6Schema,
+	VerifiedRuntimeExecutionGrantV6Schema,
+} from "./host-v6.ts";
 
 export const RuntimeHostV4SchemaDefinitions = {
 	RuntimeBusinessGrantClaimsV4: RuntimeBusinessGrantClaimsV4Schema,
@@ -273,6 +286,23 @@ export const RuntimeHostV5SchemaDefinitions = {
 		RuntimeRestoreExecutionKeyTransportV5Schema,
 	RuntimeRestoreExecutionKeyResponseV5:
 		RuntimeRestoreExecutionKeyResponseV5Schema,
+};
+
+export const RuntimeHostV6SchemaDefinitions = {
+	RuntimeBusinessGrantClaimsV6: RuntimeBusinessGrantClaimsV6Schema,
+	RuntimeExecutionGrantV6: RuntimeExecutionGrantV6Schema,
+	VerifiedRuntimeExecutionGrantV6: VerifiedRuntimeExecutionGrantV6Schema,
+	RuntimeNativeCapabilityRequestV6: RuntimeNativeCapabilityRequestV6Schema,
+	RuntimeNativeCapabilityTransportV6: RuntimeNativeCapabilityTransportV6Schema,
+	RuntimeOperationResponseV6: RuntimeOperationResponseV6Schema,
+	RuntimeRestoreExecutionKeyGrantClaimsV6:
+		RuntimeRestoreExecutionKeyGrantClaimsV6Schema,
+	RuntimeRestoreExecutionKeyRequestV6:
+		RuntimeRestoreExecutionKeyRequestV6Schema,
+	RuntimeRestoreExecutionKeyTransportV6:
+		RuntimeRestoreExecutionKeyTransportV6Schema,
+	RuntimeRestoreExecutionKeyResponseV6:
+		RuntimeRestoreExecutionKeyResponseV6Schema,
 };
 
 export const RuntimeModelConfigurationV4SchemaDefinitions = {
