@@ -7000,6 +7000,200 @@ for (const [kind, title] of [
 		await expectCleanPage(page, errors);
 	});
 
+// #3433 N15-02（G15-2-05）：手动「验证并绑定」后的配置会话轮询按 #3418 规则：可重试失败（503、网络中断）之后
+// 按原节奏继续，期间仍是「验证中」（chip 不换成「连接状态暂不可用」），读到 active 后到卡片标题；不可重试
+// 失败（401、404、响应无效）结束验证，卡内说明「配置会话已失效，请重新配置。」，焦点到卡片标题，不再轮询。
+for (const [kind, title] of [
+	["bot", "企微机器人"],
+	["app", "企微应用"],
+] as const)
+	for (const failure of ["503", "network", "401", "404", "invalid"] as const)
+		test(`the manual WeCom ${kind} setup poll follows the polling rule: ${failure} (#3433 N15-02)`, async ({
+			page,
+		}, info) => {
+			await acceptanceViewport(page, info);
+			const errors = trackPageErrors(page);
+			await fixture(page);
+			await wecomManualRoutes(page);
+			const sessionPath = `/api/v1/agents/agent-pilot-1/${kind === "bot" ? "wecom-setup" : "wecom-app-setup"}/fixture-setup`;
+			const retryable = failure === "503" || failure === "network";
+			let sessionReads = 0;
+			await page.route(
+				(url) => url.pathname === sessionPath,
+				(route) => {
+					if (route.request().method() !== "GET") return route.fallback();
+					sessionReads += 1;
+					// 第一次会话读取失败，之后按 fixture 读到 active。
+					if (sessionReads !== 1) return route.fallback();
+					if (failure === "network")
+						return route.abort("internetdisconnected");
+					if (failure === "invalid")
+						return route.fulfill({ json: { sessionId: "fixture-setup" } });
+					return route.fulfill({
+						status: Number(failure),
+						json: {
+							schemaVersion: 1,
+							code:
+								failure === "503"
+									? "DEPENDENCY_UNAVAILABLE"
+									: failure === "401"
+										? "AUTHENTICATION_REQUIRED"
+										: "RESOURCE_UNAVAILABLE",
+							message: "Controlled failure",
+							retryable: failure === "503",
+							traceId: "trace-wecom-setup-poll",
+						},
+					});
+				},
+			);
+			const credentials = await holdRequests(page, "POST", /\/credentials$/);
+			await page.goto("/agents/agent-pilot-1/configuration");
+			const card = page.getByRole("region", { name: title, exact: true });
+			await expect(card.getByText("未配置", { exact: true })).toBeVisible();
+			await fillWecomManual(card, kind);
+			const verify = await pinElement(
+				card.getByRole("button", { name: `验证并绑定：${title}` }),
+				`verify-poll-${kind}`,
+			);
+			await verify.focus();
+			await page.keyboard.press("Enter");
+			await expect.poll(() => credentials.held()).toBe(1);
+			credentials.release();
+			await expect.poll(() => sessionReads).toBe(1);
+			const heading = page.locator(`h3#wecom-${kind}-title`);
+			const chip = card.locator('[data-slot="badge"]');
+			if (retryable) {
+				// 失败后仍在验证：按钮可聚焦地禁用、焦点不动，chip 保留「验证中」。
+				await expect(card.getByRole("alert")).toContainText(
+					"配置结果暂未确认，正在重新查询。请勿重复提交。",
+				);
+				await expect(chip).toHaveText("验证中");
+				await expect(verify).toHaveAccessibleName(`验证中…：${title}`);
+				await expectFocusableBusy(verify, `${title} 会话轮询 ${failure}`);
+				await expect.poll(() => sessionReads, { timeout: 6000 }).toBe(2);
+				await expect(chip).toHaveText("已连接");
+				await expect(toastHost(page)).toHaveText(`${title}已连接`);
+				await expectFocusSettled(heading, `${title} 会话轮询 ${failure} 后连接`);
+			} else {
+				await expect(card.getByRole("alert")).toHaveText(
+					"配置会话已失效，请重新配置。",
+				);
+				await expect(
+					card.getByRole("button", { name: `验证并绑定：${title}` }),
+				).toBeEnabled();
+				await expect(
+					card.getByRole("button", { name: `取消配置：${title}` }),
+				).toHaveCount(0);
+				await expect(chip).toHaveText("未配置");
+				await expectFocusSettled(
+					heading,
+					`${title} 会话轮询 ${failure}`,
+					[50, 300, 1000, 2500],
+				);
+				await page.waitForTimeout(2500);
+				expect(sessionReads).toBe(1);
+			}
+			await expectNoDuplicateControls(page, `${title} 会话轮询（#3433）`);
+			await expectCleanPage(page, errors);
+			expect(
+				await page.evaluate(
+					() => document.documentElement.scrollWidth <= innerWidth,
+				),
+			).toBe(true);
+		});
+
+// #3433 N15-03（G15-2-06）：连接状态在已断开时每 2 秒轮询。可重试失败（503、网络中断）保留上一次的「已断开」并
+// 按原节奏继续，服务端恢复后读到「已连接」并停止；不可重试失败（401、404、响应无效）停止并显示「连接状态暂不可用」。
+for (const [kind, title] of [
+	["bot", "企微机器人"],
+	["app", "企微应用"],
+] as const)
+	for (const failure of ["503", "network", "401", "404", "invalid"] as const)
+		test(`the WeCom ${kind} connection status poll follows the polling rule: ${failure} (#3433 N15-03)`, async ({
+			page,
+		}, info) => {
+			await acceptanceViewport(page, info);
+			const errors = trackPageErrors(page);
+			await fixture(page);
+			await wecomManualRoutes(page);
+			const statusPath = `/api/v${kind === "bot" ? 2 : 1}/agents/agent-pilot-1/${kind === "bot" ? "wecom-bot" : "wecom-app"}`;
+			const retryable = failure === "503" || failure === "network";
+			let reads = 0;
+			let connected = false;
+			const body = (status: "disconnected" | "connected") =>
+				kind === "bot"
+					? {
+							status,
+							qrAvailable: false,
+							qrUnavailableReason: "authorization_correlation_unverified",
+						}
+					: { status, callbackUrl: "https://callback.example.test/wecom" };
+			await page.route(
+				(url) => url.pathname === statusPath,
+				(route) => {
+					if (route.request().method() !== "GET") return route.fallback();
+					reads += 1;
+					// 第 2 次读取（第一次轮询）失败；服务端随即恢复为已连接。
+					if (reads !== 2)
+						return route.fulfill({
+							json: body(connected ? "connected" : "disconnected"),
+						});
+					connected = true;
+					if (failure === "network")
+						return route.abort("internetdisconnected");
+					if (failure === "invalid")
+						return route.fulfill({ json: { status: "unknown-state" } });
+					return route.fulfill({
+						status: Number(failure),
+						json: {
+							schemaVersion: 1,
+							code:
+								failure === "503"
+									? "DEPENDENCY_UNAVAILABLE"
+									: failure === "401"
+										? "AUTHENTICATION_REQUIRED"
+										: "RESOURCE_UNAVAILABLE",
+							message: "Controlled failure",
+							retryable: failure === "503",
+							traceId: "trace-wecom-status-poll",
+						},
+					});
+				},
+			);
+			await page.goto("/agents/agent-pilot-1/configuration");
+			const card = page.getByRole("region", { name: title, exact: true });
+			const chip = card.locator('[data-slot="badge"]');
+			await expect(chip).toHaveText("已断开");
+			const heading = await pinElement(
+				page.locator(`h3#wecom-${kind}-title`),
+				`status-poll-${kind}`,
+			);
+			await heading.focus();
+			await expect.poll(() => reads, { timeout: 6000 }).toBe(2);
+			if (retryable) {
+				// 失败期间仍是「已断开」，之后不需要「刷新状态」就读到「已连接」，随即停止轮询。
+				await expect(chip).toHaveText("已断开");
+				await expect.poll(() => reads, { timeout: 6000 }).toBe(3);
+				await expect(chip).toHaveText("已连接");
+				await page.waitForTimeout(2500);
+				expect(reads).toBe(3);
+			} else {
+				await expect(chip).toHaveText("连接状态暂不可用");
+				await page.waitForTimeout(4500);
+				expect(reads).toBe(2);
+				await expect(chip).toHaveText("连接状态暂不可用");
+			}
+			await expect(card.getByRole("alert")).toHaveCount(0);
+			await expect(heading).toBeFocused();
+			await expectNoDuplicateControls(page, `${title} 连接状态轮询（#3433）`);
+			await expectCleanPage(page, errors);
+			expect(
+				await page.evaluate(
+					() => document.documentElement.scrollWidth <= innerWidth,
+				),
+			).toBe(true);
+		});
+
 // 「打开扫码窗口」等待扫码期间是可聚焦的禁用（「等待扫码…」），扫码窗口关闭、面板收起后焦点回到
 // 「扫码授权」（#3242 K7-02）。
 test("waiting for the QR scan keeps focus on the button and returns it to 扫码授权 when the window closes (K7-02)", async ({

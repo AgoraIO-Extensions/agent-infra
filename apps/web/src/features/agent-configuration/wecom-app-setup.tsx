@@ -15,13 +15,17 @@ import {
 	getWecomAppSetup,
 	submitWecomAppCredentials,
 } from "../../pilot/generated/sdk.gen.js";
+import { retryablePollFailure } from "../background-read.js";
 import {
+	isWecomChannelStatus,
+	isWecomSetupStatus,
 	useWecomUnbind,
 	WecomChannelCard,
 	WecomChannelError,
 	type WecomChannelStatus,
 	WecomUnbindAction,
 	WecomUnbindFailure,
+	wecomSetupSessionLost,
 } from "./wecom-channel-card.js";
 
 // 卡片标题即页面上的对象名，用于区分两张企微卡片里的同名按钮（N-12、NI-107）。
@@ -56,6 +60,8 @@ export function WecomAppSetup({
 	const [error, setError] = useState("");
 	const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 	const session = useRef<{ id: string } | undefined>(undefined);
+	// 会话轮询读到不可重试失败的会话（#3433 N15-02）。
+	const lostSession = useRef<string | undefined>(undefined);
 	const generation = useRef(0);
 	const refreshSequence = useRef(0);
 	const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -67,42 +73,58 @@ export function WecomAppSetup({
 	// 手动「验证并绑定」或「取消配置」结束后把焦点交给卡片标题（见下方 effect）。
 	const handOffToTitle = useRef(false);
 
+	// 连接状态在已断开或验证中（还没有会话）时每 2 秒轮询（background）。轮询属于后台重读（#3418、#3433 N15-03）：
+	// 可重试的失败（503、网络中断）保留上一次的状态与回调地址并按原节奏继续；不可重试的失败（401 / 403 / 404、
+	// 响应无效）停止并显示「连接状态暂不可用」。打开页面、「刷新状态」与配置结束后的读取失败照常显示它。
 	// biome-ignore lint/correctness/useExhaustiveDependencies: poll reads refs and stable props
-	const refresh = useCallback(async () => {
-		clearTimeout(connectionTimer.current);
-		const attempt = generation.current;
-		const sequence = ++refreshSequence.current;
-		try {
-			const result = await getWecomAppConnection({
-				path: { agentId },
-				responseStyle: "fields",
-				throwOnError: false,
-			});
-			if (
-				attempt !== generation.current ||
-				sequence !== refreshSequence.current
-			)
-				return;
-			setStatus(result.data?.status);
-			setCallbackUrl(result.data?.callbackUrl ?? "");
-			if (result.data?.status === "verifying" && result.data.sessionId) {
-				session.current = { id: result.data.sessionId };
-				setBusy(true);
-				void poll(attempt);
+	const refresh = useCallback(
+		async (background = false) => {
+			clearTimeout(connectionTimer.current);
+			const attempt = generation.current;
+			const sequence = ++refreshSequence.current;
+			const current = () =>
+				attempt === generation.current && sequence === refreshSequence.current;
+			const pollAgain = () => {
+				connectionTimer.current = setTimeout(() => void refresh(true), 2000);
+			};
+			let failure: { status?: number; error?: unknown } = {};
+			try {
+				const result = await getWecomAppConnection({
+					path: { agentId },
+					responseStyle: "fields",
+					throwOnError: false,
+				});
+				if (!current()) return;
+				const next = result.data?.status;
+				if (isWecomChannelStatus(next)) {
+					setStatus(next);
+					setCallbackUrl(result.data?.callbackUrl ?? "");
+					// 刚读到不可重试失败的会话不再接着轮询（否则会话读取与连接状态读取会互相触发）。
+					const resumable =
+						next === "verifying" &&
+						result.data?.sessionId !== undefined &&
+						result.data.sessionId !== lostSession.current;
+					if (resumable && result.data?.sessionId) {
+						session.current = { id: result.data.sessionId };
+						setBusy(true);
+						void poll(attempt);
+					}
+					if (next === "disconnected" || (next === "verifying" && !resumable))
+						pollAgain();
+					return;
+				}
+				failure = { status: result.response?.status, error: result.error };
+			} catch {
+				if (!current()) return;
 			}
-			if (
-				result.data?.status === "disconnected" ||
-				(result.data?.status === "verifying" && !result.data.sessionId)
-			)
-				connectionTimer.current = setTimeout(() => void refresh(), 2000);
-		} catch {
-			if (
-				attempt === generation.current &&
-				sequence === refreshSequence.current
-			)
+			if (background && retryablePollFailure(failure)) pollAgain();
+			else {
 				setStatus(undefined);
-		}
-	}, [agentId]);
+				setCallbackUrl("");
+			}
+		},
+		[agentId],
+	);
 	const unbind = useWecomUnbind({
 		title: setupTitle,
 		unbindChannel,
@@ -157,7 +179,24 @@ export function WecomAppSetup({
 			});
 			if (attempt !== generation.current || session.current !== currentSession)
 				return;
-			if (!result.data) throw new Error();
+			if (!result.data || !isWecomSetupStatus(result.data.status)) {
+				// 会话轮询属于后台重读（#3418、#3433 N15-02）：可重试的失败（503、网络中断）之后按原节奏继续，
+				// 卡片仍是「验证中」；不可重试的失败（登录失效、会话不存在、响应无效）结束验证并说明，焦点交给卡片标题。
+				if (
+					retryablePollFailure({
+						status: result.response?.status,
+						error: result.error,
+					})
+				)
+					throw new Error();
+				lostSession.current = currentSession.id;
+				session.current = undefined;
+				handOffToTitle.current = true;
+				setBusy(false);
+				setError(wecomSetupSessionLost);
+				await refresh();
+				return;
+			}
 			const next = result.data.status;
 			if (next === "awaiting_input" || next === "verifying") {
 				setStatus("verifying");
