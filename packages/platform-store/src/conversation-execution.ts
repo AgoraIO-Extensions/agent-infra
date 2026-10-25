@@ -120,6 +120,7 @@ import {
 	resolvePersonalApiTaskAdmissionAuthorityV1,
 } from "./personal-api-task-authorization.js";
 import {
+	currentRelayKeyVersionInTransaction,
 	type RelayKeyVersionBindingV1,
 	type RelayKeyVersionCiphertextV1,
 	readRelayKeyVersionInTransaction,
@@ -663,6 +664,17 @@ export class PostgresConversationExecutionTransactionV1
    `;
 			if (occupied)
 				return { outcome: occupied.status === "unknown" ? "unknown" : "busy" };
+			// New operations require the current Key; replay retains its frozen tuple.
+			const currentKey = await currentRelayKeyVersionInTransaction(
+				transaction,
+				input.keyBinding,
+			);
+			if (
+				!currentKey ||
+				currentKey.keyId !== input.keyBinding.ciphertextRef ||
+				currentKey.keyVersion !== input.keyBinding.version
+			)
+				return { outcome: "denied", reason: "authorization_lost" };
 			const occurredAt = new Date();
 			const reservationId = await reserveIdempotency(transaction, {
 				...scope,

@@ -71,10 +71,14 @@ function request(executionId = "native-v6-execution") {
 		configVersion: "config-1",
 	};
 }
-function useCase() {
+function useCase(currentKey = keyBinding) {
 	return createNativeCapabilityAdmissionUseCaseV6({
 		authorization: {
-			authorize: async () => ({ outcome: "allowed", authority, keyBinding }),
+			authorize: async () => ({
+				outcome: "allowed",
+				authority,
+				keyBinding: currentKey,
+			}),
 		},
 		transaction: store,
 	});
@@ -166,6 +170,49 @@ it("checks the current Agent authorization revision", async () => {
 	await client`update platform.agents set authorization_revision='revoked' where id=${authority.agentId}`;
 	expect(await useCase().admit(request())).toMatchObject({ outcome: "denied" });
 	expect(await effects()).toEqual(noEffects);
+});
+async function rotateKey() {
+	const next = { ...keyBinding, ciphertextRef: "native-v6-key-2", version: 2 };
+	await client`insert into platform.relay_key_versions (purpose,subject_id,key_version,key_id,ciphertext)
+ values ('personal',${authority.actorId},2,${next.ciphertextRef},${client.json({ purpose: "personal", subjectId: authority.actorId, keyId: next.ciphertextRef, keyVersion: 2 })})`;
+	await client`update platform.relay_key_subjects set last_version=2,current_version=2 where purpose='personal' and subject_id=${authority.actorId}`;
+	return next;
+}
+it("rejects a new operation when its Key is no longer current", async () => {
+	await rotateKey();
+	expect(await useCase().admit(request())).toMatchObject({ outcome: "denied" });
+	expect(await effects()).toEqual(noEffects);
+});
+it("rejects a new operation when the current Key is absent", async () => {
+	await client`update platform.relay_key_subjects set current_version=null where purpose='personal' and subject_id=${authority.actorId}`;
+	expect(await useCase().admit(request())).toMatchObject({ outcome: "denied" });
+	expect(await effects()).toEqual(noEffects);
+});
+it("accepts and persists the newly authorized current Key after rotation", async () => {
+	const next = await rotateKey();
+	const result = await useCase(next).admit({ ...request(), keyBinding: next });
+	expect(result).toMatchObject({
+		outcome: "accepted",
+		plan: { keyBinding: next },
+	});
+	const [execution] =
+		await client`select relay_key_id,relay_key_version::int from platform.conversation_executions where execution_id=${request().executionId}`;
+	expect(execution).toEqual({
+		relay_key_id: next.ciphertextRef,
+		relay_key_version: 2,
+	});
+});
+it("replays the frozen accepted Key without following the current alias", async () => {
+	const accepted = await useCase().admit(request());
+	expect(accepted.outcome).toBe("accepted");
+	if (accepted.outcome !== "accepted") throw new Error("expected acceptance");
+	const before = await effects();
+	await rotateKey();
+	expect(await useCase().admit(request())).toEqual({
+		outcome: "replayed",
+		plan: accepted.plan,
+	});
+	expect(await effects()).toEqual(before);
 });
 it("serializes same-key admissions and replays the original plan after reopening the Store", async () => {
 	const results = await settledAdmissions([
