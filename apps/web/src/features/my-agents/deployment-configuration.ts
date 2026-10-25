@@ -66,6 +66,22 @@ export function projectDeploymentConfiguration(
 	};
 }
 
+/**
+ * 部署选项可用于提交标准模板申请：部署配置与模型目录的 status 都是 populated（不是读取失败 unavailable、
+ * 过期 stale 或 empty）。否则申请页顶部的部署状态说明「部署选项需要刷新后才能提交标准模板申请。」（或请
+ * 联系管理员），创建与修改标准模板申请都按它拦下、不发请求（#3389 N13-09）。status 为 populated 而模板为空
+ * 时不在这里判断：创建申请按「部署没有标准模板」、修改申请按「已移除模板」拦下，下一步是联系管理员或新建
+ * 申请，不显示部署状态说明。
+ */
+export function deploymentConfigurationUsable(
+	configuration: DeploymentConfigurationProjectionV2,
+) {
+	return (
+		configuration.status === "populated" &&
+		configuration.modelCatalog.status === "populated"
+	);
+}
+
 export async function loadDeploymentConfiguration(
 	client?: Client,
 ): Promise<DeploymentConfigurationState> {
@@ -100,8 +116,20 @@ export const templateReadinessMessages = {
 } as const;
 
 /**
+ * 部署选项读取失败（部署配置不可用）时就绪列表每一项的原因：读不到就绪状态，不按「尚未登记」说明；下一步
+ * 与同页的部署状态说明一致——可重试时重新加载部署选项，不可重试时联系管理员（PRD §4、§16「未就绪项展示
+ * 原因」，#3389 N13-08）。
+ */
+export function unreadableTemplateReadinessMessage(retryable: boolean) {
+	return retryable
+		? "暂时无法读取就绪状态，请重新加载部署选项。"
+		: "暂时无法读取就绪状态，请联系管理员。";
+}
+
+/**
  * 部署尚未登记任何标准模板时，就绪列表仍列出 M1 首发的四个模板并说明原因（PRD §4、§16
- * 「未就绪项显示原因」）；显示名按 PRD 模板名，不外露模板 ID（#3291 N9-2-01）。
+ * 「未就绪项显示原因」）；显示名按 PRD 模板名，不外露模板 ID（#3291 N9-2-01）。部署选项读取失败时同样
+ * 列出这四项（原因见 unreadableTemplateReadinessMessage），已选模板的下拉也按这里的显示名显示（#3389 N13-08）。
  */
 const fallbackStandardTemplates = [
 	{ templateId: "codex", displayName: "Codex" },
