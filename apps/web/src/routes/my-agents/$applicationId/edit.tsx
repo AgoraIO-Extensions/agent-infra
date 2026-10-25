@@ -4,9 +4,9 @@ import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 
 import { checkAgentDefaultRelayKey } from "../../../features/agent-configuration/agent-configuration.js";
-import { connectionEntryUrl } from "../../../features/connection-entry.js";
 import { useAgentDefaultRelayKeyState } from "../../../features/agent-configuration/use-agent-default-relay-key-state.js";
 import { readFailed } from "../../../features/background-read.js";
+import { connectionEntryUrl } from "../../../features/connection-entry.js";
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
 import { projectDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
 import {

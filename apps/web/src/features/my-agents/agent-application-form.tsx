@@ -1808,7 +1808,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						>
 							<div>
 								<h2
-									className="font-semibold text-foreground text-base"
+									className="font-semibold text-base text-foreground"
 									id="application-connection-heading"
 								>
 									Connection 授权
@@ -1829,7 +1829,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								</a>
 							) : (
 								<p className="text-muted-foreground text-sm">
-									Connection 入口当前不可用，请联系平台管理员配置部署 profile。
+									Connection 入口暂不可用，请稍后再试。
 								</p>
 							)}
 						</section>
