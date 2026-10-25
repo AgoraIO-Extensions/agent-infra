@@ -41,8 +41,14 @@ describe("Runtime deployment configuration", () => {
 		expect(
 			readCodexIsolationMode({
 				AGENT_INFRA_RUNTIME_ISOLATION_MODE: "container-boundary",
+				AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED: "worker-v1",
 			}),
 		).toBe("container-boundary");
+		expect(() =>
+			readCodexIsolationMode({
+				AGENT_INFRA_RUNTIME_ISOLATION_MODE: "container-boundary",
+			}),
+		).toThrow("RUNTIME_CONFIGURATION_INVALID");
 		expect(() =>
 			readCodexIsolationMode({ AGENT_INFRA_RUNTIME_ISOLATION_MODE: "unsafe" }),
 		).toThrow("RUNTIME_CONFIGURATION_INVALID");

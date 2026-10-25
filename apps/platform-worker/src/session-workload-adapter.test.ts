@@ -137,6 +137,7 @@ const allocation: SessionSandboxAllocationV1 = {
 		agentId: "agent-a",
 		namespace: "workload-test",
 		sandboxId: "sandbox-a",
+		codexContainerBoundaryEnabled: true,
 	}),
 	desiredState: "running",
 };
@@ -1834,6 +1835,7 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 				"AGENT_INFRA_RUNTIME_MODEL_CONFIG",
 				"AGENT_INFRA_RUNTIME_DRIVER",
 				"AGENT_INFRA_RUNTIME_ISOLATION_MODE",
+				"AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED",
 				"AGENT_INFRA_RUNTIME_AGENT_ID",
 				"AGENT_INFRA_RUNTIME_WORKER_ID",
 				"AGENT_INFRA_RUNTIME_DATA_DIR",
@@ -1853,6 +1855,9 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 		expect(env.get("AGENT_INFRA_RUNTIME_ISOLATION_MODE")?.value).toBe(
 			"container-boundary",
 		);
+		expect(
+			env.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED")?.value,
+		).toBe("worker-v1");
 		expect(env.get("PORT")?.value).toBe("8080");
 		for (const [name, key] of [
 			["AGENT_INFRA_RUNTIME_MODEL_CONFIG", "model-config"],

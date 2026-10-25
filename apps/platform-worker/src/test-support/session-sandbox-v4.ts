@@ -100,6 +100,7 @@ export function sessionSandboxRuntimeInputFixture(input: {
 	readonly namespace: string;
 	readonly sandboxId: string;
 	readonly imageDigest?: string;
+	readonly codexContainerBoundaryEnabled?: boolean;
 }): SessionSandboxRuntimeInputV1 {
 	const projection = sessionSandboxModelProjectionFixture({
 		agentId: input.agentId,
@@ -108,6 +109,9 @@ export function sessionSandboxRuntimeInputFixture(input: {
 	});
 	return {
 		driver: "codex",
+		...(input.codexContainerBoundaryEnabled === true
+			? { codexContainerBoundaryEnabled: true }
+			: {}),
 		modelConfiguration: runtimeModelInjectionV4(projection).configuration,
 		workerId: sessionSandboxRuntimeAuthFixture.workerId,
 		grantKeyId: sessionSandboxRuntimeAuthFixture.grantKeyId,

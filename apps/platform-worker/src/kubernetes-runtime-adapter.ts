@@ -138,6 +138,8 @@ function skillHubVolumeMountV1(value: AgentWorkloadDesiredV1): {
 }
 
 export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
+	/** Explicit deployment approval for the Codex container-boundary mode. */
+	readonly codexContainerBoundaryEnabled?: boolean;
 	/** Validated deployment copy, never an Agent/request environment value. */
 	readonly connectionConsumerSnapshot?: string | null;
 	readonly connectionConsumerSnapshotsByAgent?: RuntimeConnectionConsumerSnapshotsByAgentV1;

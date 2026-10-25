@@ -58,6 +58,8 @@ export interface SessionSandboxRuntimeInputV1 {
 	readonly grantIssuer: string;
 	/** Per-Sandbox transport token from {@link sessionSandboxServiceTokenV1}. */
 	readonly serviceToken: string;
+	/** Explicit deployment approval for the Codex container-boundary mode. */
+	readonly codexContainerBoundaryEnabled?: boolean;
 	/** Deployment-approved in-cluster Worker origin for native metadata callbacks. */
 	readonly nativeMetadataWorkerOrigin?: string;
 	/**
@@ -430,6 +432,7 @@ const requiredRuntimeInputKeys = [
 	"workerId",
 ];
 const optionalRuntimeInputKeys = [
+	"codexContainerBoundaryEnabled",
 	"custom",
 	"fileExchange",
 	"nativeMetadataWorkerOrigin",
@@ -459,6 +462,8 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 			typeof runtime.modelConfiguration !== "string" ||
 			(runtime.nativeMetadataWorkerOrigin !== undefined &&
 				!isNativeMetadataWorkerOriginV1(runtime.nativeMetadataWorkerOrigin)) ||
+			(runtime.codexContainerBoundaryEnabled !== undefined &&
+				typeof runtime.codexContainerBoundaryEnabled !== "boolean") ||
 			(runtime.fileExchange !== undefined &&
 				(!runtime.fileExchange ||
 					typeof runtime.fileExchange !== "object" ||
@@ -631,11 +636,16 @@ function runtimeEnvironment(
 			valueFrom: secretRef("model-config"),
 		},
 		{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtime.driver },
-		...(runtime.driver === "codex"
+		...(runtime.driver === "codex" &&
+		runtime.codexContainerBoundaryEnabled === true
 			? [
 					{
 						name: "AGENT_INFRA_RUNTIME_ISOLATION_MODE",
 						value: "container-boundary",
+					},
+					{
+						name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED",
+						value: "worker-v1",
 					},
 				]
 			: []),

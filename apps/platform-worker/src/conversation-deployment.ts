@@ -668,6 +668,12 @@ function createSessionSandboxAllocationResolverV1(
 			throw new WorkloadKubernetesError("policy");
 		return {
 			driver: templateBinding.driver,
+			...(templateBinding.driver === "codex"
+				? {
+						codexContainerBoundaryEnabled:
+							workload.policy.codexContainerBoundaryEnabled === true,
+					}
+				: {}),
 			modelConfiguration: runtimeModelInjectionV4(projection).configuration,
 			workerId: auth.workerId,
 			grantKeyId: auth.grantKeyId,
