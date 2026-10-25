@@ -23,6 +23,7 @@ import {
 	test,
 } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
+import { expectBackgroundRereadKeeps } from "./background-reread";
 import {
 	expectFocusableBusy,
 	expectFocusSettled,
@@ -2233,6 +2234,41 @@ for (const outcome of ["reads", "fails", "expires"] as const)
 		);
 		await expectCleanPage(page, errors);
 	});
+
+// #3387 N13-01：编辑器读到项目内容后，回到标签页的后台重读挂起与 503 失败不换掉编辑器，SKILL.md 未保存的修改与
+// 焦点保留，页面高度与滚动位置不变；用户发起的「重新读取内容」失败仍显示读取失败（见上方 N11-03）。两视口一致。
+test("a background reread keeps the Skill editor's unsaved SKILL.md (#3387 N13-01)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/skills/manage/new?project=release-notes");
+	const main = page.locator("#main-content");
+	const skillMd = await pinElement(
+		main.getByLabel("SKILL.md（任务说明）"),
+		"skill-editor-content",
+	);
+	await skillMd.fill("# release-notes\n未保存的本地修改\n");
+	const heading = await pinElement(
+		main.getByRole("heading", { level: 1, name: "创建与发布 Skill" }),
+		"skill-editor-heading",
+	);
+	await expectBackgroundRereadKeeps(page, {
+		path: "/api/v2/skills/projects/release-notes/content",
+		focus: skillMd,
+		context: "创建与发布 Skill",
+		expectKept: async () => {
+			await expect(heading).toHaveCount(1);
+			await expect(skillMd).toHaveValue("# release-notes\n未保存的本地修改\n");
+			await expect(
+				main.getByRole("alert").filter({ hasText: "暂时无法读取 Skill 内容" }),
+			).toHaveCount(0);
+		},
+	});
+	await expectNoDuplicateControls(page, "创建与发布（后台重读，#3387）");
+	await expectCleanPage(page, errors);
+});
 
 function installationItem(name: string) {
 	return SkillHubInstallationListItemV1Schema.parse({
