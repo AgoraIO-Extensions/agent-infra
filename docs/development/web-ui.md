@@ -14,12 +14,12 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `index.html` | `902cf6afac71dd7f811174e2340b384f6ad30baa5b44ac6918bd1c4742e9b984` |
+| `index.html` | `194bec792720833b6af0d6d4b1c7c2b417f832d1420746c38e45bb7db0ca40cb` |
 | `login.html` | `733d31e999296d2ed8e21f0237004427eac104cefd7c4c55cde6e3e87240641a` |
 | `DESIGN.md` | `fa953264eafe4e0bd05adaa86387a9d90ad7af51d4e79f0a67620bfa31596d65` |
 | `IMPLEMENTATION.md` | `ae3e592272933f65a0f7fc34363142a4471a724f7a75db76affe6ae12d640600` |
 | `DESIGN-HANDOFF.md` | `3f2313d6d72bf3d7263d1e864730278217836ccdd5730d4b83460518bd2d3396` |
-| `DESIGN-MANIFEST.json` | `7c3d0a82d0596030de48c7f0372dd4544e4bbd5b00071e8648966173b85a71a7` |
+| `DESIGN-MANIFEST.json` | `b288c4afb71b120f1d375a46f44466b48c41f923363ddac443a6ceaa374ab350` |
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量，并提供设计同名别名（`--bg`、`--fg`、`--surface-raised`、`--accent`、
