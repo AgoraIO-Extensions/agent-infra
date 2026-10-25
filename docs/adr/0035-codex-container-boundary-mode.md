@@ -15,10 +15,11 @@ Secret，具备相同的拓扑前提。
 
 ## 决策
 
-新增 Worker-owned `container-boundary` isolation mode：
+新增 Worker-owned Session Sandbox `container-boundary` isolation mode：
 
 1. 只有部署配置显式设置 `policy.codexContainerBoundaryEnabled: true` 时，平台 Worker
-   才为标准 Codex Runtime Pod 注入；Owner env、请求字段和自定义 Agent 不能选择或覆盖它。
+   才为业务 Session Sandbox 注入；Agent-level Workload、自定义 Agent、Owner env 和请求字段
+   不能选择或覆盖它。
    Worker 使用本次 Runtime service token 对 Agent/Session scope 生成 HMAC attestation，Host
    必须验证该 attestation；两个普通环境变量本身不构成准入证明。
 2. Bridge 不执行 Landlock `setpriv` 探针，不使用平台 Conversation allowlist；Codex
@@ -43,6 +44,6 @@ Secret，具备相同的拓扑前提。
 
 ## 取舍
 
-该模式把文件/进程边界的主要责任从 Runtime 内核 allowlist 转移到 Kubernetes 专属 Pod
+该模式把文件/进程边界的主要责任从 Runtime 内核 allowlist 转移到 Kubernetes 专属 Session Pod
 边界和 Codex Provider sandbox。它适合 ACK 当前节点能力，不能推广到共享 Runtime Pod、没有
 独立工作区的部署或缺少 NetworkPolicy/Secret 归属证明的环境。
