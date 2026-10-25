@@ -16,6 +16,7 @@ import { directorySearchResponse } from "../src/features/directory-test-fixtures
 import {
 	backgroundReread,
 	expectBackgroundRereadKeeps,
+	expectFatalRereadHandsFocus,
 } from "./background-reread";
 import { captureDesignContract, designViewports } from "./design-contract";
 import {
@@ -1787,3 +1788,60 @@ for (const [route, role, listPath] of [
 		await expectNoDuplicateControls(page, `${route}（#3388 N13-06）`);
 		await expectCleanPage(page, errors);
 	});
+
+// #3419 N14-10（N14-3-03）：打开第一条详情、焦点在未按下的「刷新审计详情」上，回到标签页的后台重读读到不可重试的失败
+// （401 / 403）：列表换成「当前无权访问审计记录…」，详情区域保留标题、内容换成「当前无权访问审计详情…」，刷新按钮随之
+// 卸载。焦点交给详情区域（Escape 仍能关闭详情），不落到 body、不滚动页面。先覆盖挂起、可重试失败与恢复（#3387：详情
+// 与焦点保留），两身份两视口一致。
+for (const [route, role, listPath] of [
+	["/audit", "employee", /^\/api\/v2\/audit(\/[^/]+)?$/],
+	["/admin/audit", "admin", /^\/api\/v4\/admin\/audit(\/[^/]+)?$/],
+] as const)
+	for (const status of [401, 403] as const)
+		test(`${route} a focused, unpressed detail refresh that a background ${status} removes hands focus to the detail region (#3419 N14-10)`, async ({
+			page,
+		}, info) => {
+			await acceptanceViewport(page, info);
+			const errors = trackPageErrors(page);
+			await fixture(page, role);
+			await page.goto(route);
+			const main = page.locator("main");
+			await main
+				.getByRole("button", { name: /^详情：/ })
+				.first()
+				.click();
+			const panel = page.getByRole("region", { name: "审计详情", exact: true });
+			await expect(panel).toBeFocused();
+			const refresh = await pinElement(
+				panel.getByRole("button", { name: "刷新审计详情" }),
+				"audit-detail-refresh",
+			);
+			await refresh.focus();
+			await expectBackgroundRereadKeeps(page, {
+				path: listPath,
+				focus: refresh,
+				context: `${route} 焦点在「刷新审计详情」`,
+				expectKept: async () => {
+					await expect(panel.locator("dl").first()).toBeVisible();
+					await expect(refresh).toBeVisible();
+				},
+			});
+			await expectFatalRereadHandsFocus(page, {
+				path: listPath,
+				status,
+				focus: refresh,
+				target: panel,
+				context: `${route} 焦点在「刷新审计详情」`,
+				expectReplaced: async () => {
+					await expect(
+						panel.getByText("当前无权访问审计详情，资源或权限可能已变化。"),
+					).toBeVisible();
+					await expect(refresh).toHaveCount(0);
+				},
+			});
+			// 详情区域仍处理 Escape：关闭详情。
+			await page.keyboard.press("Escape");
+			await expect(panel).toHaveCount(0);
+			await expectNoDuplicateControls(page, `${route}（#3419 N14-10）`);
+			await expectCleanPage(page, errors);
+		});
