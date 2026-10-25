@@ -7,6 +7,7 @@ import {
 	RuntimeModelConfigurationV4Schema,
 	WorkloadReadinessBindingV1Schema,
 } from "@agent-infra/contracts/runtime";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { isRuntimeFileExchangeOriginV1 } from "./runtime-file-exchange.js";
 
@@ -28,15 +29,38 @@ export function readWorkloadReadinessBindingV1(environment: NodeJS.ProcessEnv) {
 export const CODEX_PILOT_CONFIGURATION_VERSION = 2;
 
 /** Worker-owned native isolation boundary. The secure default is Landlock. */
-export function readCodexIsolationMode(environment: NodeJS.ProcessEnv) {
+export function readCodexIsolationMode(
+	environment: NodeJS.ProcessEnv,
+	serviceToken?: string,
+) {
 	const value = environment.AGENT_INFRA_RUNTIME_ISOLATION_MODE ?? "landlock";
 	if (value !== "landlock" && value !== "container-boundary")
 		runtimeConfigurationInvalid();
 	if (
 		value === "container-boundary" &&
-		environment.AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED !== "worker-v1"
+		(environment.AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED !==
+			"worker-v1" ||
+			!serviceToken ||
+			!environment.AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE ||
+			!environment.AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION)
 	)
 		runtimeConfigurationInvalid();
+	if (value === "container-boundary") {
+		const scope =
+			environment.AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE as string;
+		if (!/^[\x21-\x7e]{1,256}(?:\0[\x21-\x7e]{1,256})?$/.test(scope))
+			runtimeConfigurationInvalid();
+		const expected = createHmac("sha256", serviceToken as string)
+			.update(`agent-infra-container-boundary-v1\0${scope}`)
+			.digest("base64url");
+		const actual =
+			environment.AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION as string;
+		if (
+			!/^[A-Za-z0-9_-]{43}$/.test(actual) ||
+			!timingSafeEqual(Buffer.from(expected), Buffer.from(actual))
+		)
+			runtimeConfigurationInvalid();
+	}
 	return value;
 }
 

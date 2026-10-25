@@ -85,6 +85,8 @@ export type WorkloadBrowserBindingResolverV1 = (input: {
 
 export interface WorkloadRuntimeOptionsV1 {
 	readonly workerId: string;
+	/** Deployment-owned service token retained in Worker memory for attestation only. */
+	readonly codexContainerBoundaryServiceToken?: string;
 	readonly client: WorkerKubernetesClientV1;
 	readonly policy: KubernetesWorkloadPolicyV1;
 	readonly registry: ImageRegistryAdapterV1;
@@ -631,6 +633,7 @@ export function createWorkloadRuntimeV1(
 			policy: options.policy,
 			modelProjection,
 			standardTemplateBinding,
+			containerBoundaryServiceToken: options.codexContainerBoundaryServiceToken,
 			async probe({ desired, serviceOrigin, podUid }) {
 				const baseUrl = serviceOrigin;
 				const healthFetch =

@@ -19,6 +19,8 @@ Secret，具备相同的拓扑前提。
 
 1. 只有部署配置显式设置 `policy.codexContainerBoundaryEnabled: true` 时，平台 Worker
    才为标准 Codex Runtime Pod 注入；Owner env、请求字段和自定义 Agent 不能选择或覆盖它。
+   Worker 使用本次 Runtime service token 对 Agent/Session scope 生成 HMAC attestation，Host
+   必须验证该 attestation；两个普通环境变量本身不构成准入证明。
 2. Bridge 不执行 Landlock `setpriv` 探针，不使用平台 Conversation allowlist；Codex
    使用 `sandbox_mode=workspace-write` 和固定的官方 lane 配置。
 3. 该模式只适用于专属 Runtime Pod。Pod 必须继续满足 non-root、read-only rootfs、drop

@@ -38,6 +38,7 @@ import {
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
+import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import {
 	isFileExchangeOriginV1,
 	isWorkloadFileExchangeEgressCurrentV1,
@@ -646,6 +647,17 @@ function runtimeEnvironment(
 					{
 						name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED",
 						value: "worker-v1",
+					},
+					{
+						name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE",
+						value: `${allocation.agentId}\0${allocation.sessionId}`,
+					},
+					{
+						name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION",
+						value: containerBoundaryAttestationV1(
+							runtime.serviceToken,
+							`${allocation.agentId}\0${allocation.sessionId}`,
+						),
 					},
 				]
 			: []),

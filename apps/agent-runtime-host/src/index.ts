@@ -409,7 +409,9 @@ export async function assembleRuntimeHost(
 	const configuration =
 		binding === "codex" ? readCodexPilotConfiguration(environment) : undefined;
 	const codexIsolationMode =
-		binding === "codex" ? readCodexIsolationMode(environment) : undefined;
+		binding === "codex"
+			? readCodexIsolationMode(environment, serviceToken)
+			: undefined;
 	const connectionProfile = readConnectionClientProfile(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_PROFILE,
 	);

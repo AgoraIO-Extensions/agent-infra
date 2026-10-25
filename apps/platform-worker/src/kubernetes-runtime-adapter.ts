@@ -191,6 +191,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		| RuntimeModelProjectionV4;
 	/** Candidate-owned trusted tuple; never a global policy Driver. */
 	readonly standardTemplateBinding?: StandardTemplateModelBindingV1;
+	/** Deployment-owned service token retained in Worker memory for attestation only. */
+	readonly containerBoundaryServiceToken?: string;
 	readonly probe: (input: {
 		readonly desired: AgentWorkloadDesiredV1;
 		readonly serviceOrigin: string;
@@ -298,6 +300,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		modelInjection,
 		standardTemplateBinding,
 		egress,
+		containerBoundaryServiceToken: options.containerBoundaryServiceToken,
 	});
 
 	async function put<T extends KubernetesObject>(
