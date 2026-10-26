@@ -598,6 +598,65 @@ it("acknowledges a queued message with its position and updates the same stream 
 	}
 });
 
+// #3437：补充指令的首帧说明正在补充到当前回复，不进入排队提示。
+it("acknowledges a supplementary instruction with the supplement text", async () => {
+	const queued: [string, number][] = [];
+	const worker = createPlatformWecomConnectionsV1({
+		databaseUrl: "postgres://fixture",
+		holderId: "worker",
+		bindings: async () => [
+			{
+				botId: "bot",
+				agentId: "agent",
+				bindingReference: "binding",
+				credentialVersion: "v1",
+				secret: "fixture",
+			},
+		],
+		protectReply: async () => "fixture",
+		revealReply: async () => {
+			throw new Error("unused");
+		},
+		onQueued: (receiptId, position) => queued.push([receiptId, position]),
+		receive: async () => ({
+			outcome: "accepted",
+			receipt: {
+				receiptId: "receipt",
+				status: "accepted",
+				conversationId: "conversation",
+				executionId: "execution",
+				supplement: true,
+			},
+		}),
+	});
+	try {
+		await worker.tick();
+		const message: WecomMessageV1 = {
+			agentId: "agent",
+			bindingReference: "binding",
+			kind: "wecom_bot",
+			senderId: "sender",
+			peerId: "peer",
+			conversationType: "single",
+			threadId: null,
+			providerId: "bot",
+			eventId: "event",
+			text: "fixture",
+			replyHandle: "reply",
+			replyExpiresAt: new Date(Date.now() + 60000).toISOString(),
+		};
+		await mocks.receive?.(message);
+		expect(queued).toEqual([]);
+		expect(mocks.socketAcknowledge).toHaveBeenCalledWith({
+			scope: message,
+			replyHandle: "reply",
+			text: "已收到，正在补充到当前回复",
+		});
+	} finally {
+		await worker.close();
+	}
+});
+
 it("does not acknowledge after the connection lease is lost", async () => {
 	const worker = createPlatformWecomConnectionsV1({
 		databaseUrl: "postgres://fixture",

@@ -10,6 +10,8 @@ import {
 	wecomQueueTimeoutTextV1,
 	wecomReplyTimeoutTextV1,
 	wecomRevalidationBackoffMsV1,
+	wecomSupplementAcceptedTextV1,
+	wecomSupplementFailedTextV1,
 } from "./wecom-channel.ts";
 import type { WecomAnswerReferenceParserV1 } from "./wecom-reply-media.ts";
 
@@ -1379,3 +1381,54 @@ it.each([
 		});
 	},
 );
+
+it.each([
+	[
+		{ status: "accepted", failureCode: null },
+		"已补充到当前回复，答案见原消息的回复",
+	],
+	[
+		{ status: "failed", failureCode: "QUEUE_FULL" },
+		"投递失败：排队已满，请重新发送",
+	],
+	[
+		{ status: "failed", failureCode: "AUTHORIZATION_REVOKED" },
+		"投递失败：权限已失效，请重新发送",
+	],
+	[
+		{ status: "failed", failureCode: "ORIGINAL_RESPONSE_NOT_STARTED" },
+		"投递失败：原回复未开始，请重新发送",
+	],
+	[{ status: "failed", failureCode: null }, "投递失败，请重新发送"],
+	[{ status: "pending", failureCode: null }, wecomReplyTimeoutTextV1],
+] as const)(
+	"ends a supplementary instruction with its own result instead of the original answer (#3437): %o",
+	async (supplement, text) => {
+		// 原 Execution 已完成且有答案，也不能在补充指令的 stream 上重复发送答案、思考或文件。
+		const { f, input } = await sentFor({
+			supplement,
+			merged: true,
+			answerReady: false,
+			thinking: { parts: [{ kind: "raw", text: "思考" }], complete: true },
+		});
+		expect(input).toEqual({
+			scope: claim.scope,
+			replyHandle: claim.replyHandle,
+			text,
+			revalidate: expect.any(Function),
+		});
+		expect(f.store.prepare).toHaveBeenCalledWith(
+			expect.any(Object),
+			expect.any(Object),
+			[],
+		);
+		expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
+	},
+);
+
+it("uses the fixed supplementary instruction texts (#3437)", () => {
+	expect(wecomSupplementAcceptedTextV1).toBe(
+		"已补充到当前回复，答案见原消息的回复",
+	);
+	expect(wecomSupplementFailedTextV1(null)).toBe("投递失败，请重新发送");
+});

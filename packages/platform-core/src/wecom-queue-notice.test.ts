@@ -6,6 +6,7 @@ import {
 	wecomQueuedTextV1,
 	wecomQueueFullTextV1,
 	wecomQueueStartedTextV1,
+	wecomSupplementQueuedTextV1,
 } from "./wecom-channel.ts";
 
 const scope = {
@@ -151,5 +152,26 @@ describe("WeCom queue notices (#3376)", () => {
 		f.set([notice("one", null)]);
 		await f.useCase.tick();
 		expect(f.update).not.toHaveBeenCalled();
+	});
+});
+
+describe("WeCom supplementary instructions moved to the queue (#3437)", () => {
+	it("first explains that the current reply could not take the supplement, then follows the queue", async () => {
+		const f = fixture();
+		expect(wecomSupplementQueuedTextV1(2)).toBe(
+			"当前回复无法接收补充，已排队：第 2 位，前面还有 1 条消息",
+		);
+		expect(() => wecomSupplementQueuedTextV1(0)).toThrow();
+		f.set([{ ...notice("supplement", 2), supplement: true }]);
+		expect(await f.useCase.tick()).toBe(true);
+		f.set([{ ...notice("supplement", 1), supplement: true }]);
+		expect(await f.useCase.tick()).toBe(true);
+		f.set([{ ...notice("supplement", null), supplement: true }]);
+		expect(await f.useCase.tick()).toBe(true);
+		expect(f.update.mock.calls.map(([input]) => input.text)).toEqual([
+			wecomSupplementQueuedTextV1(2),
+			wecomQueuedTextV1(1),
+			wecomQueueStartedTextV1,
+		]);
 	});
 });
