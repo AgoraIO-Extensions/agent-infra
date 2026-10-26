@@ -67,6 +67,8 @@ vi.mock("@agent-infra/platform-core", async (importOriginal) => ({
 	ConversationRuntimeHostError: (
 		await importOriginal<typeof import("@agent-infra/platform-core")>()
 	).ConversationRuntimeHostError,
+	sessionSandboxRetryDelayMsV1: (attempt: number) =>
+		attempt < 6 ? 1_000 : Math.min(60_000, 1_000 * 2 ** (attempt - 5)),
 	createConversationDispatchUseCaseV1: (dependencies: {
 		events: unknown;
 		authorization: unknown;
@@ -1095,6 +1097,7 @@ describe("conversation dispatch observability", () => {
 				schemaVersion: 1,
 				execution: null,
 				deliveryFence: 7,
+				attemptCount: 3,
 				sandbox: {
 					agentId: "agent-3360",
 					sessionId: "11111111-1111-4111-8111-111111111111",
@@ -1135,6 +1138,7 @@ describe("conversation dispatch observability", () => {
 				conversationId: "11111111-1111-4111-8111-111111111111",
 				sandboxId: "22222222-2222-4222-8222-222222222222",
 				attemptRef: "7",
+				attempt: 3,
 				failureStep: "workload.conflict",
 			});
 			expect(JSON.stringify(event)).not.toContain("conversation:sandbox:");

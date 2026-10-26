@@ -236,6 +236,7 @@ function sandboxTelemetryFields(claim: SessionSandboxReconciliationClaimV1): {
 	readonly desiredRevision?: number;
 	readonly configurationRevision?: number;
 	readonly imageDigest?: string;
+	readonly attempt?: number;
 	readonly backoffMs?: number;
 } {
 	const source = claim.lifecycle?.source?.policy;
@@ -260,6 +261,7 @@ function sandboxTelemetryFields(claim: SessionSandboxReconciliationClaimV1): {
 		...(claim.policy?.imageDigest === undefined
 			? {}
 			: { imageDigest: claim.policy.imageDigest }),
+		...(attempt === undefined || attempt < 1 ? {} : { attempt }),
 		...(attempt === undefined || attempt < 1
 			? {}
 			: { backoffMs: sessionSandboxRetryDelayMsV1(attempt) }),

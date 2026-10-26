@@ -544,6 +544,7 @@ it("records bounded Sandbox lifecycle identity and retry facts", () => {
 		desiredRevision: 4,
 		configurationRevision: 7,
 		imageDigest: `sha256:${"a".repeat(64)}`,
+		attempt: 3,
 		backoffMs: 60_000,
 	});
 	expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
@@ -554,6 +555,7 @@ it("records bounded Sandbox lifecycle identity and retry facts", () => {
 		desiredRevision: 4,
 		configurationRevision: 7,
 		imageDigest: `sha256:${"a".repeat(64)}`,
+		attempt: 3,
 		backoffMs: 60_000,
 	});
 	telemetry.record({

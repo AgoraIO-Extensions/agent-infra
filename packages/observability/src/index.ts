@@ -146,6 +146,8 @@ export interface OperationalEvent {
 	readonly executionId?: string;
 	readonly operationRef?: string;
 	readonly attemptRef?: string;
+	/** 1-based durable reconciliation attempt number. */
+	readonly attempt?: number;
 	/** Bounded Session Sandbox identity/configuration facts for lifecycle failures. */
 	readonly sandboxId?: string;
 	readonly sandboxResourceUid?: string;
@@ -614,6 +616,7 @@ export function startObservability(options: ObservabilityOptions) {
 					executionId,
 					operationRef,
 					attemptRef,
+					attempt,
 					sandboxId,
 					sandboxResourceUid,
 					sourceRevision,
@@ -656,6 +659,13 @@ export function startObservability(options: ObservabilityOptions) {
 							value !== undefined &&
 							(!Number.isSafeInteger(value) || value < 0 || value > 86_400_000),
 					)
+				) {
+					invalidRecords++;
+					return;
+				}
+				if (
+					attempt !== undefined &&
+					(!Number.isSafeInteger(attempt) || attempt < 1 || attempt > 1_000_000)
 				) {
 					invalidRecords++;
 					return;
@@ -711,6 +721,7 @@ export function startObservability(options: ObservabilityOptions) {
 					...(safeId(executionId) ? { executionId } : {}),
 					...(safeOperationRef(operationRef) ? { operationRef } : {}),
 					...(safeOperationRef(attemptRef) ? { attemptRef } : {}),
+					...(attempt === undefined ? {} : { attempt }),
 					...(safeId(sandboxId) ? { sandboxId } : {}),
 					...(safeId(sandboxResourceUid) ? { sandboxResourceUid } : {}),
 					...(sourceRevision === undefined ? {} : { sourceRevision }),
