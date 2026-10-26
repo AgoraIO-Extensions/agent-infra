@@ -498,6 +498,26 @@ describe("durable Workload reconciliation", () => {
 		});
 	});
 	describe("swallowed step exceptions are observable (#2532)", () => {
+		it("converges permanent model binding mismatch without retrying ready work", async () => {
+			class ModelConfigurationErrorV1 extends Error {
+				readonly retryable = false;
+			}
+			const failures: WorkloadStepFailureV1[] = [];
+			const f = fixture(undefined, (failure) => failures.push(failure));
+			await f.tick(3);
+			vi.mocked(f.runtime.apply).mockRejectedValue(
+				new ModelConfigurationErrorV1(),
+			);
+			await f.tick();
+			expect(f.state).toMatchObject({
+				phase: "cleaning",
+				failureCode: "reconciliation_failed",
+				lastFailure: { reason: "configuration_mismatch", attempts: 1 },
+			});
+			expect(failures).toHaveLength(1);
+			expect(failures[0]).toMatchObject({ attempts: 1, terminal: true });
+		});
+
 		it("persists bounded failure details and terminates repeated Kubernetes forbidden errors", async () => {
 			const failures: WorkloadStepFailureV1[] = [];
 			const f = fixture(undefined, (failure) => failures.push(failure));
