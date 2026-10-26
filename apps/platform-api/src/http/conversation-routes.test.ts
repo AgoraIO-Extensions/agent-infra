@@ -626,6 +626,47 @@ describe("Conversation HTTP routes", () => {
 		expect(response.status).toBe(503);
 	});
 
+	it("does not read the Runtime directory before the first message without a selection", async () => {
+		const reader = { read: vi.fn() };
+		const input = dependencies({ modelSelection: reader });
+		const commands = input.commands(identity);
+		commands.readConversation = vi.fn().mockResolvedValue({
+			outcome: "found",
+			result: {
+				schemaVersion: 1,
+				conversation: {
+					schemaVersion: 1,
+					conversationId: conversation.conversationId,
+					agentId: conversation.agentId,
+					actorId: identity.userId,
+					channelId: "web",
+					status: conversation.status,
+					sessionGeneration: 1,
+					hostSessionRef: null,
+					authorizationRevision: identity.authorizationRevision,
+					lastConversationCursor: 1,
+					selectedModelOptionId: null,
+					selectedReasoningLevel: null,
+					createdAt: conversation.createdAt,
+					updatedAt: conversation.updatedAt,
+				},
+				modelSelectionFallback: null,
+			},
+		});
+		const app = testApp({ ...input, commands: () => commands }).app;
+		const response = await app.request(
+			"/api/v1/conversations/conversation-1/messages",
+			{
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify({ schemaVersion: 1, text: "First message" }),
+			},
+		);
+		expect(response.status).toBe(202);
+		expect(reader.read).not.toHaveBeenCalled();
+		expect(commands.accept).toHaveBeenCalledOnce();
+	});
+
 	it("projects the authorized Runtime directory and rejects stale custom choices before selection or submit", async () => {
 		const reader = {
 			read: vi

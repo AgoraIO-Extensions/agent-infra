@@ -451,6 +451,19 @@ async function assertCurrentRuntimeSelection(
 	traceId: string,
 ): Promise<void> {
 	if (!reader) return;
+	const effective = await effectiveConversation(
+		useCase,
+		conversationId,
+		traceId,
+	);
+	// A newly created conversation has no selected model yet. Runtime directory
+	// lookup is only meaningful once a selection exists; forcing it before the
+	// first message creates a reader -> active Execution dependency cycle.
+	if (
+		effective.conversation.selectedModelOptionId === null &&
+		effective.conversation.selectedReasoningLevel === null
+	)
+		return;
 	const runtime = await readRuntimeModelSelection(
 		reader,
 		identity,
@@ -459,11 +472,6 @@ async function assertCurrentRuntimeSelection(
 	);
 	if (runtime.source !== "custom-platform-adapter") return;
 	if (!runtime.available) return fail("RUNTIME_UNAVAILABLE", traceId);
-	const effective = await effectiveConversation(
-		useCase,
-		conversationId,
-		traceId,
-	);
 	const selected = runtime.options.find(
 		(option) =>
 			option.optionId === effective.conversation.selectedModelOptionId,
