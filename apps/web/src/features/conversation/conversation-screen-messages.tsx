@@ -228,17 +228,24 @@ export function ConversationMessages({
 		),
 	];
 	// 尚无回答投影的用户消息直接带出自己的回复卡，不再在卡外单独说明受理状态（R4-07）。
+	// 补充指令沿用原回复的 Execution，答案在原消息的回复中更新（PRD §11.2）：该 Execution 已由回答或
+	// 时间线中更早的用户消息带出回复卡时，补充消息只显示用户消息，不再生成第二张回复卡（#3449 N16-01）。
+	const claimedExecutions = new Set<string | null>(renderedExecutions);
+	const pendingReplyMessages = new Set<string>();
+	for (const message of userMessages) {
+		if (!message.executionId) continue;
+		if (
+			message.status !== "failed" &&
+			!queue.has(message.executionId) &&
+			!claimedExecutions.has(message.executionId) &&
+			!answers.some((answer) => answer.replyToMessageId === message.messageId)
+		)
+			pendingReplyMessages.add(message.messageId);
+		claimedExecutions.add(message.executionId);
+	}
 	const pendingReplies = new Set(
 		userMessages
-			.filter(
-				(message) =>
-					message.status !== "failed" &&
-					message.executionId &&
-					!queue.has(message.executionId) &&
-					!answers.some(
-						(answer) => answer.replyToMessageId === message.messageId,
-					),
-			)
+			.filter((message) => pendingReplyMessages.has(message.messageId))
 			.map((message) => message.executionId as string),
 	);
 	// 撤回受理后「撤回」随排队状态卸载：焦点已落到 body 时交给该条用户消息（不落到 body）。
@@ -490,7 +497,10 @@ export function ConversationMessages({
 						</div>
 					) : undefined,
 			});
-		} else if (message.executionId && pendingReplies.has(message.executionId)) {
+		} else if (
+			message.executionId &&
+			pendingReplyMessages.has(message.messageId)
+		) {
 			reply = liveReply(
 				message.executionId,
 				objectName,
