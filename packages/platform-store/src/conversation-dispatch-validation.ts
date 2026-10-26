@@ -163,6 +163,8 @@ export function exactPayload(
 				!binding ||
 				!binding.operation ||
 				binding.operation.kind !== "execution" ||
+				!validText(binding.operation.id) ||
+				binding.operation.id !== binding.executionId ||
 				!validText(binding.executionId) ||
 				binding.executionId !== input.executionId ||
 				!validText(binding.conversationId) ||

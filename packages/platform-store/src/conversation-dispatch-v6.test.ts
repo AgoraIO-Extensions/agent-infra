@@ -60,6 +60,16 @@ describe("V6 outbox payload validation", () => {
 		expect(payload?.nativeCapabilityV6?.executionId).toBe("execution-v6");
 	});
 
+	it("rejects a V6 payload with mismatched operation identity", () => {
+		const invalid = {
+			...binding,
+			operation: { ...binding.operation, id: "other-execution" },
+		};
+		expect(
+			exactPayload(invalid, "conversation.native-capability.invoke.v2"),
+		).toBeUndefined();
+	});
+
 	it("rejects a V6 payload with a missing immutable digest", () => {
 		const invalid = { ...binding, operationDigest: "" };
 		expect(
