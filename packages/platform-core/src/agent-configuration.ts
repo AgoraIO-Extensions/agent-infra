@@ -23,6 +23,7 @@ import {
 	parseUpgradeCustomImageCommand,
 } from "./agent-configuration-input.js";
 import {
+	agentConfigurationRuntimeInputChangedV1,
 	customImageUpgradeRequestDigest,
 	parseResult,
 	parseTransactionCommitDecision,
@@ -95,7 +96,10 @@ export {
 	parseStandardTemplateReleaseTargetV1,
 	validateLegacyInitialActionsV1,
 } from "./agent-configuration-input.js";
-export { snapshotAgentConfigurationWritePlanV1 } from "./agent-configuration-plan.js";
+export {
+	agentConfigurationRuntimeInputChangedV1,
+	snapshotAgentConfigurationWritePlanV1,
+} from "./agent-configuration-plan.js";
 export {
 	decodeAgentConfigurationRecord,
 	decodeAgentConfigurationRecordV2,
@@ -712,10 +716,13 @@ function createAgentConfigurationUseCaseV1Internal(
 			(field) => field === "owners" || field === "availability",
 		);
 		// Owner changes must re-run preflight because active Secrets bind to Owners.
-		const runtimeUnchanged = changedFields.every(
+		const revisionUnchanged = changedFields.every(
 			(field) => field === "availability",
 		);
-		const nextRevision = current.revision + (runtimeUnchanged ? 0 : 1);
+		// 只改渠道等非 Runtime 输入时推进配置修订，但不唤醒 Workload 调谐（ADR-0028）。
+		const runtimeInputChanged =
+			agentConfigurationRuntimeInputChangedV1(changedFields);
+		const nextRevision = current.revision + (revisionUnchanged ? 0 : 1);
 		if (!Number.isSafeInteger(nextRevision)) {
 			throw new AgentConfigurationError("persistence_failed");
 		}
@@ -752,7 +759,7 @@ function createAgentConfigurationUseCaseV1Internal(
 				key: command.idempotencyKey,
 				requestDigest: digest,
 			},
-			outboxIntent: runtimeUnchanged
+			outboxIntent: !runtimeInputChanged
 				? null
 				: {
 						operation: "agent.configuration.revised.v1",

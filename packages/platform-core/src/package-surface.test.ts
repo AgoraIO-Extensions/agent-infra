@@ -68,6 +68,7 @@ describe("platform-core package surface", () => {
 			"WorkloadPreflightRejectedErrorV1",
 			"admitAgentDefaultRelayKeyModelsV1",
 			"agentApiCreationIdsV1",
+			"agentConfigurationRuntimeInputChangedV1",
 			"agentCreationFailureCategoryV1",
 			"bindInputFileV1",
 			"bindNativeTextInputFileV1",

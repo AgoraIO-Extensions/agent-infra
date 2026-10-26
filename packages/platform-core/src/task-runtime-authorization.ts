@@ -47,6 +47,10 @@ export interface TaskRuntimeAuthorizationRecordV1 {
 	readonly boundary: TaskAuthorizationBoundaryV1;
 	readonly revokedAt: Date | null;
 	readonly agent: AgentManagementStateV1;
+	/**
+	 * Agent 当前配置修订行的 Runtime 修订（ADR-0028）。字段名沿用旧称；运行就绪、模型
+	 * 固定值与 Web 渠道的 Workload 判定都与它比较，只改渠道不会让已受理任务失效。
+	 */
 	readonly configurationRevision: number;
 	readonly workload: WorkloadReconciliationStateV1 | null;
 }

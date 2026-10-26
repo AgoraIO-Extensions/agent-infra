@@ -56,14 +56,17 @@ export async function readRecentPersonalConversations(
 		// Bind timestamp text so postgres.js does not truncate microseconds via Date.
 		const rows = await client.unsafe<Row[]>(
 			`with current_agents as (
+				-- Workload 只代表 Runtime 输入：与当前 Runtime 修订比较，只改渠道的配置修订
+				-- 不会让该 Agent 的渠道状态变成 unknown（ADR-0028）。
 				select a.current_configuration_revision,
+					coalesce(cfg.runtime_revision, a.current_configuration_revision) as runtime_revision,
 					ap.*, w.state as workload,
 					case
 						when w.state is null
 							or w.state->>'agentId' is distinct from a.id
-							or w.state->'sourceConfigurationRevision' is distinct from to_jsonb(a.current_configuration_revision)
+							or w.state->'sourceConfigurationRevision' is distinct from to_jsonb(coalesce(cfg.runtime_revision, a.current_configuration_revision))
 							or w.state#>>'{candidate,configuration,agentId}' is distinct from a.id
-							or w.state#>'{candidate,configuration,revision}' is distinct from to_jsonb(a.current_configuration_revision)
+							or w.state#>'{candidate,configuration,revision}' is distinct from to_jsonb(coalesce(cfg.runtime_revision, a.current_configuration_revision))
 							or jsonb_typeof(w.state->'fence') is distinct from 'number'
 							or w.state->'fence' < '1'::jsonb
 							or cfg.agent_id is null
@@ -74,7 +77,7 @@ export async function readRecentPersonalConversations(
 						when w.state#>>'{candidate,configuration,source,kind}' = 'custom'
 							and w.state#>>'{verified,configuration,agentId}' = a.id
 							and jsonb_typeof(w.state#>'{verified,configuration,revision}') = 'number'
-							and w.state#>'{verified,configuration,revision}' between '1'::jsonb and to_jsonb(a.current_configuration_revision)
+							and w.state#>'{verified,configuration,revision}' between '1'::jsonb and to_jsonb(coalesce(cfg.runtime_revision, a.current_configuration_revision))
 							and w.state#>>'{verified,configuration,source,kind}' = 'custom'
 							and w.state#>>'{verified,configuration,source,interactionMode}' = 'platform-adapter'
 							and jsonb_typeof(w.state->'capabilities') = 'object' then 'included'
@@ -113,7 +116,7 @@ export async function readRecentPersonalConversations(
 					c.selected_model_option_id, c.selected_reasoning_level,
 					c.last_conversation_cursor, c.created_at, c.updated_at,
 					to_char(c.updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as exact_updated_at,
-					a.current_configuration_revision::text as configuration_revision, a.workload,
+					a.runtime_revision::text as configuration_revision, a.workload,
 					${agentManagementStateJsonSql("a")} as management
 				from platform.conversations c
 				left join platform.session_sandbox_allocations s on s.conversation_id = c.id

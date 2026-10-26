@@ -7,7 +7,8 @@ interface CapacityState {
 	readonly operation?: ConversationDispatchOperationV1;
 	readonly agentId: string;
 	readonly modelConfigurationRevision: number | null;
-	readonly configurationRevision: number;
+	/** Runtime revision of the Agent's current configuration revision (ADR-0028). */
+	readonly runtimeRevision: number;
 	readonly status: string | null;
 	readonly desiredState: string | null;
 	readonly serviceAvailability: string | null;
@@ -52,7 +53,7 @@ export function decideConversationDispatchCapacityV1(
 		workload.phase !== "ready" ||
 		!workload.identity ||
 		workload.verifiedRevision !== workload.revision ||
-		workload.sourceConfigurationRevision !== state.configurationRevision ||
+		workload.sourceConfigurationRevision !== state.runtimeRevision ||
 		workload.sourceConfigurationRevision !== verified.configuration.revision ||
 		!modelConfigurationMatches ||
 		workload.sourceLifecycleRevision !== state.workloadRevision ||

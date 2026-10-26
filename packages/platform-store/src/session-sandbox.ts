@@ -35,14 +35,17 @@ export const conversationSandboxReadBindingSql = `
 `;
 
 /**
- * Whether a prepared Sandbox policy still matches the Agent's current
- * configuration, management fence and verified ready deployment. A Sandbox
- * prepared before a configuration or Workload change is stale until upgraded.
+ * Whether a prepared Sandbox policy still matches the Agent's current Runtime
+ * revision, management fence and verified ready deployment. A Sandbox prepared
+ * before a Runtime or Workload change is stale until upgraded; a configuration
+ * revision that only changes channels keeps it current (ADR-0028). The policy's
+ * `configurationRevision` field keeps its name and records the Runtime revision.
  */
 export function isSessionSandboxPolicyCurrentV1(input: {
 	readonly agentId: string;
 	readonly policy: SessionSandboxRuntimeStateV1["policy"] | null;
-	readonly configurationRevision: number;
+	/** The Runtime revision of the Agent's current configuration revision row. */
+	readonly runtimeRevision: number;
 	readonly managementFence: number;
 	readonly lifecycleRevision: number;
 	readonly workloadState: unknown;
@@ -59,7 +62,7 @@ export function isSessionSandboxPolicyCurrentV1(input: {
 	if (!parsed.success) return false;
 	const deployment = parsed.data;
 	return !(
-		policy.configurationRevision !== input.configurationRevision ||
+		policy.configurationRevision !== input.runtimeRevision ||
 		policy.managementFence !== input.managementFence ||
 		// The policy binds the verified deployment's Workload revision (checked
 		// below); the management lifecycle has its own source (#1480).
@@ -87,7 +90,7 @@ export async function readSessionSandboxRuntimeState(
 	const [row] = await transaction<
 		{
 			resource_fence: string;
-			configuration_revision: number;
+			runtime_revision: number;
 			management_fence: string;
 			workload_revision: number;
 			workload_state: unknown;
@@ -101,11 +104,13 @@ export async function readSessionSandboxRuntimeState(
 		}[]
 	>`
 		select s.resource_fence::text, s.desired_state, s.status, s.resource_policy, s.resource_observation,
-			a.current_configuration_revision as configuration_revision,
+			coalesce(cr.runtime_revision, a.current_configuration_revision) as runtime_revision,
 			m.fence::text as management_fence, m.workload_revision, w.state as workload_state,
 			m.id as application_id, m.management_revision, m.desired_state as management_desired_state
 		from platform.session_sandbox_allocations s
 		join platform.agents a on a.id = s.agent_id
+		left join platform.agent_configuration_revisions cr
+			on cr.agent_id = a.id and cr.revision = a.current_configuration_revision
 		join platform.agent_applications m on m.agent_id = s.agent_id
 		join platform.workload_reconciliations w on w.agent_id = s.agent_id
 		where s.sandbox_id = ${sandbox.sandboxId} and s.conversation_id = ${sandbox.sessionId}
@@ -193,7 +198,7 @@ export async function readSessionSandboxRuntimeState(
 		!isSessionSandboxPolicyCurrentV1({
 			agentId: sandbox.agentId,
 			policy,
-			configurationRevision: Number(row.configuration_revision),
+			runtimeRevision: Number(row.runtime_revision),
 			managementFence: Number(row.management_fence),
 			lifecycleRevision: Number(row.workload_revision),
 			workloadState: row.workload_state,

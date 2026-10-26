@@ -25,6 +25,10 @@ export interface SecretActivationCandidateV1 {
 
 export interface SecretActivationClaimStateV1 {
 	readonly schemaVersion: 1;
+	/**
+	 * Agent 当前配置修订行的 Runtime 修订（ADR-0028）。字段名沿用旧称；只改渠道等非
+	 * Runtime 输入的配置修订不改变它，因此不会使正在激活的 Secret 失效。
+	 */
 	readonly currentConfigurationRevision: number;
 	readonly candidate: SecretActivationCandidateV1;
 }

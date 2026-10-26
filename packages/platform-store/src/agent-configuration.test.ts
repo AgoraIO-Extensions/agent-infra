@@ -894,6 +894,116 @@ describe("PostgreSQL Agent configuration transaction", () => {
 		};
 	});
 
+	describe("Runtime revision (ADR-0028)", () => {
+		const update = (
+			transaction: AgentConfigurationTransactionPortV1,
+			key: string,
+			changes: Record<string, unknown>,
+		) =>
+			useCase(transaction).update(
+				{
+					schemaVersion: 2,
+					agentId: "agent_01",
+					idempotencyKey: key,
+					requestId: `request-${key}`,
+					traceId: `trace-${key}`,
+					changes: changes as never,
+				},
+				actor,
+			);
+		const bind = {
+			channels: [
+				{ kind: "wecom_bot", enabled: true, bindingReference: "binding_01" },
+			],
+		};
+		const runtimeRevisions = () => adminClient<
+			{ revision: number; runtime_revision: number }[]
+		>`select revision::int, runtime_revision::int from platform.agent_configuration_revisions
+			where agent_id = 'agent_01' order by revision`;
+
+		it("inherits the Runtime revision for channel changes and advances it for Runtime inputs", async () => {
+			await clearDatabase();
+			await seed();
+			const adapter = openTransaction();
+			await update(adapter, "runtime-bind", bind);
+			await update(adapter, "runtime-environment", {
+				environment: [{ name: "LOG_LEVEL", value: "debug" }],
+			});
+			await update(adapter, "runtime-unbind", {
+				channels: [{ kind: "wecom_bot", enabled: false }],
+			});
+			expect(await runtimeRevisions()).toEqual([
+				{ revision: 7, runtime_revision: 7 },
+				{ revision: 8, runtime_revision: 7 },
+				{ revision: 9, runtime_revision: 9 },
+				{ revision: 10, runtime_revision: 9 },
+			]);
+			// Only the Runtime input revision wakes Workload reconciliation.
+			expect(
+				await adminClient`select operation, payload->>'configurationRevision' as revision
+					from platform.outbox_items order by created_at`,
+			).toEqual([
+				{ operation: "agent.configuration.revised.v1", revision: "9" },
+			]);
+			// Every revision keeps its configuration audit with the real changed fields.
+			expect(
+				await adminClient`select details from platform.audit_events
+					where action = 'agent.configuration.revised' order by occurred_at, id`,
+			).toHaveLength(3);
+		});
+
+		it("rejects a channel-only plan that also rewrites Runtime inputs", async () => {
+			await clearDatabase();
+			await seed();
+			const adapter = openTransaction();
+			const before = await rawSnapshot();
+			const tampering: AgentConfigurationTransactionPortV1 = {
+				read: adapter.read.bind(adapter),
+				commit: (plan, attachments) =>
+					adapter.commit(
+						{
+							...plan,
+							configuration: {
+								...plan.configuration,
+								environment: [{ name: "LOG_LEVEL", value: "debug" }],
+							},
+						},
+						attachments,
+					),
+			};
+			await expect(update(tampering, "runtime-tamper", bind)).rejects.toThrow();
+			expect(await rawSnapshot()).toEqual(before);
+		});
+
+		it("keeps configuration CAS on the configuration revision after a channel change", async () => {
+			await clearDatabase();
+			await seed();
+			const adapter = openTransaction();
+			let stalePlan: AgentConfigurationWritePlanV1 | undefined;
+			await update(
+				{
+					read: adapter.read.bind(adapter),
+					async commit(plan) {
+						stalePlan = structuredClone(plan);
+						return { outcome: "stale" };
+					},
+				},
+				"runtime-captured",
+				{ environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+			).catch(() => undefined);
+			if (!stalePlan) throw new Error("Expected a captured plan");
+			await update(adapter, "runtime-bind-first", bind);
+			// The Runtime revision is unchanged, but a write based on revision 7 is stale.
+			await expect(adapter.commit(stalePlan)).resolves.toEqual({
+				outcome: "stale",
+			});
+			expect(await runtimeRevisions()).toEqual([
+				{ revision: 7, runtime_revision: 7 },
+				{ revision: 8, runtime_revision: 7 },
+			]);
+		});
+	});
+
 	it("atomically persists direct configuration Secret ciphertext records", async () => {
 		await clearDatabase();
 		await seed();
@@ -2277,6 +2387,46 @@ describe("PostgreSQL Agent configuration query", () => {
 		await expect(
 			query.readRuntimePresentation({ ...input, actorId: "viewer" }),
 		).resolves.toEqual({ outcome: "unavailable" });
+	});
+
+	it("keeps verified Runtime capabilities after a channel-only revision and binds channels to the configuration revision (ADR-0028)", async () => {
+		const { query, input, deployment, state, persist } =
+			await runtimePresentationFixture();
+		await persist(state);
+		await useCase(openTransaction()).update(
+			{
+				schemaVersion: 2,
+				agentId: "agent_01",
+				idempotencyKey: "presentation-channel-only",
+				requestId: "presentation-channel-only",
+				traceId: "presentation-channel-only",
+				changes: {
+					channels: [
+						{
+							kind: "wecom_bot",
+							enabled: true,
+							bindingReference: "binding_01",
+						},
+					],
+				},
+			},
+			actor,
+		);
+		// The caller's expected snapshot still compares the configuration revision.
+		await expect(query.readRuntimePresentation(input)).resolves.toEqual({
+			outcome: "stale",
+		});
+		const expected = await runtimeExpectation(query);
+		expect(expected.configurationRevision).toBe(8);
+		await expect(
+			query.readRuntimePresentation({ ...input, expected }),
+		).resolves.toEqual({
+			outcome: "found",
+			sourceReference: deployment.imageDigest,
+			channels: [{ kind: "wecom_bot", status: "binding" }],
+			capabilities: state.capabilities,
+			interactionUrl: null,
+		});
 	});
 
 	// #3304：漂移恢复只推进 Workload revision，verified 部署保留产生它的修订（#1480）。

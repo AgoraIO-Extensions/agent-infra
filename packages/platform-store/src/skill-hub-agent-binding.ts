@@ -15,10 +15,10 @@ import {
 	type SkillHubAgentBindingStatusPortV1,
 	type SkillHubGrantV1,
 } from "@agent-infra/platform-core";
-import { and, eq, inArray, or } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
-import { agents } from "./schema-agents.js";
+import { agentConfigurationRevisions, agents } from "./schema-agents.js";
 import { idempotencyRecords } from "./schema-operations.js";
 import {
 	skillHubAgentBindings,
@@ -61,6 +61,15 @@ const emptyGrant: SkillHubGrantV1 = {
 };
 
 type BindingReader = Pick<ReturnType<typeof drizzle>, "select">;
+
+/**
+ * Skill 绑定属于 Runtime 输入（ADR-0028）：绑定按 Runtime 修订解析，只改渠道的配置修订
+ * 继续使用上一个 Runtime 修订的绑定。该子查询取 Agent 当前配置修订行的 Runtime 修订。
+ */
+const currentRuntimeRevision = sql<number>`coalesce((
+	select cr.runtime_revision from ${agentConfigurationRevisions} cr
+	where cr.agent_id = ${agents.id} and cr.revision = ${agents.currentConfigurationRevision}
+), ${agents.currentConfigurationRevision})`.mapWith(Number);
 
 type SyncBindingQueryV1 = {
 	readonly agentId: string;
@@ -121,7 +130,7 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 						binding: skillHubAgentBindings,
 						version: skillHubVersions,
 						name: skillHubSkills.name,
-						currentConfigurationRevision: agents.currentConfigurationRevision,
+						currentRuntimeRevision,
 					})
 					.from(skillHubAgentBindings)
 					.innerJoin(
@@ -149,8 +158,7 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 				if (!row) throw new SkillHubAppliedReceiptErrorV1("not_found");
 
 				if (
-					Number(row.currentConfigurationRevision) !==
-					receipt.configurationRevision
+					Number(row.currentRuntimeRevision) !== receipt.configurationRevision
 				)
 					throw new SkillHubAppliedReceiptErrorV1("stale_revision");
 				if (row.binding.syncRevision !== receipt.syncRevision)
@@ -229,8 +237,9 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 	}
 
 	/**
-	 * Owner 读取：在同一只读快照里取当前配置修订，再按该修订解析绑定（#2903）。
-	 * 调用方不提交修订号，避免把管理修订当作配置修订使用。
+	 * Owner 读取：在同一只读快照里取当前配置修订，再按它的 Runtime 修订解析绑定（#2903、
+	 * ADR-0028）。返回的配置修订供绑定写入做 CAS；调用方不提交修订号，避免把管理修订当作
+	 * 配置修订使用。
 	 */
 	async readCurrentBindings(
 		input: Omit<SyncBindingQueryV1, "configurationRevision">,
@@ -244,6 +253,7 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 					const [agent] = await transaction
 						.select({
 							currentConfigurationRevision: agents.currentConfigurationRevision,
+							currentRuntimeRevision,
 						})
 						.from(agents)
 						.where(eq(agents.id, input.agentId))
@@ -251,14 +261,18 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 					const configurationRevision = Number(
 						agent?.currentConfigurationRevision,
 					);
+					const runtimeRevision = Number(agent?.currentRuntimeRevision);
 					if (
 						!Number.isSafeInteger(configurationRevision) ||
-						configurationRevision < 1
+						configurationRevision < 1 ||
+						!Number.isSafeInteger(runtimeRevision) ||
+						runtimeRevision < 1 ||
+						runtimeRevision > configurationRevision
 					)
 						throw new SkillHubAgentBindingAdmissionErrorV1();
 					const bindings = await this.#resolveSyncBindings(transaction, {
 						...input,
-						configurationRevision,
+						configurationRevision: runtimeRevision,
 					});
 					return { configurationRevision, bindings };
 				},
@@ -287,15 +301,14 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 		input: SyncBindingQueryV1,
 	): Promise<readonly SkillHubSyncBindingV1[]> {
 		const [agent] = await database
-			.select({
-				currentConfigurationRevision: agents.currentConfigurationRevision,
-			})
+			.select({ currentRuntimeRevision })
 			.from(agents)
 			.where(eq(agents.id, input.agentId))
 			.limit(1);
+		// The Worker resolves bindings for the Workload's Runtime revision.
 		if (
 			!agent ||
-			Number(agent.currentConfigurationRevision) !== input.configurationRevision
+			Number(agent.currentRuntimeRevision) !== input.configurationRevision
 		)
 			return [];
 		const rows = await database

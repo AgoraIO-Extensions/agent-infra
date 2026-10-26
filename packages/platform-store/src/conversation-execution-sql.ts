@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type {
 	ConversationExecutionAuthorityV1,
 	ConversationExecutionConversationStateV1,
@@ -57,6 +58,13 @@ export async function lockAgentConfiguration(
 			readonly configuration:
 				| ReturnType<typeof decodeAgentConfigurationRecord>
 				| undefined;
+			/**
+			 * The configuration document at the current Runtime revision (ADR-0028).
+			 * It equals `configuration` except for non-Runtime inputs such as channels.
+			 */
+			readonly runtimeConfiguration?: ReturnType<
+				typeof decodeAgentConfigurationRecord
+			>;
 			readonly modelConfiguration: ConversationModelConfigurationV1 | undefined;
 	  }
 	| undefined
@@ -65,11 +73,15 @@ export async function lockAgentConfiguration(
 		transaction,
 		transaction<AgentConfigurationRow[]>`
 		select agent.current_configuration_revision, agent.authorization_revision,
-			configuration.configuration
+			configuration.configuration, configuration.runtime_revision,
+			runtime.configuration as runtime_configuration
 		from platform.agents as agent
 		left join platform.agent_configuration_revisions as configuration
 			on configuration.agent_id = agent.id
 			and configuration.revision = agent.current_configuration_revision
+		left join platform.agent_configuration_revisions as runtime
+			on runtime.agent_id = agent.id
+			and runtime.revision = configuration.runtime_revision
 		where agent.id = ${agentId}
 		limit 1
 		for share of agent
@@ -86,10 +98,22 @@ export async function lockAgentConfiguration(
 	}
 	try {
 		const revision = safeInteger(row.current_configuration_revision, 1);
+		const runtimeRevision = safeInteger(row.runtime_revision, 1);
 		const configuration = decodeAgentConfigurationRecord(row.configuration);
+		const runtimeConfiguration =
+			runtimeRevision === revision
+				? configuration
+				: decodeAgentConfigurationRecord(row.runtime_configuration);
 		if (
 			configuration.agentId !== agentId ||
-			configuration.revision !== revision
+			configuration.revision !== revision ||
+			runtimeConfiguration.agentId !== agentId ||
+			runtimeConfiguration.revision !== runtimeRevision ||
+			runtimeRevision > revision ||
+			!isDeepStrictEqual(
+				configuration.modelConfiguration,
+				runtimeConfiguration.modelConfiguration,
+			)
 		) {
 			return unavailable();
 		}
@@ -97,9 +121,12 @@ export async function lockAgentConfiguration(
 		return {
 			authorizationRevision: row.authorization_revision,
 			configuration,
+			runtimeConfiguration,
 			modelConfiguration: model
 				? {
-						configurationRevision: revision,
+						// Executions pin the Runtime revision that carries this model
+						// configuration, which the Workload source revision matches.
+						configurationRevision: runtimeRevision,
 						options: model.options.map(({ optionId, reasoningLevels }) => ({
 							optionId,
 							reasoningLevels,

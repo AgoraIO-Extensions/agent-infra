@@ -12,6 +12,7 @@ import {
 	AgentConfigurationError,
 	type AgentConfigurationRecordV2,
 	type AgentConfigurationUseCaseDependenciesV1,
+	agentConfigurationRuntimeInputChangedV1,
 	beginInitialAgentConfigurationAdmissionV1,
 	createAgentConfigurationUseCaseV1,
 	decodeAgentConfigurationRecordV2,
@@ -358,6 +359,93 @@ describe("Agent configuration on keyless (V3) records (#2401)", () => {
 		claimed.result.changedFields = fields;
 		claimed.auditEvent.changedFields = fields;
 		expect(() => snapshotAgentConfigurationWritePlanV1(claimed)).toThrow();
+	});
+});
+
+describe("Agent configuration Runtime revision classification (ADR-0028)", () => {
+	it.each([
+		"defaultRelayKey",
+		"source",
+		"environment",
+		"modelConfiguration",
+		"secrets",
+		"actions",
+		"owners",
+		"skills",
+	] as const)("treats %s as a Runtime input", (field) => {
+		expect(agentConfigurationRuntimeInputChangedV1([field])).toBe(true);
+		expect(
+			agentConfigurationRuntimeInputChangedV1([
+				"availability",
+				"channels",
+				field,
+			]),
+		).toBe(true);
+	});
+
+	it("treats channel bindings and availability as non-Runtime inputs", () => {
+		expect(agentConfigurationRuntimeInputChangedV1(["channels"])).toBe(false);
+		expect(agentConfigurationRuntimeInputChangedV1(["availability"])).toBe(
+			false,
+		);
+		expect(
+			agentConfigurationRuntimeInputChangedV1(["availability", "channels"]),
+		).toBe(false);
+	});
+
+	it("binds the Workload outbox to Runtime inputs in every persisted plan", async () => {
+		const harness = createHarness();
+		await harness.useCase.update(
+			{
+				...command,
+				idempotencyKey: "channel-only-plan",
+				changes: {
+					channels: [
+						{
+							kind: "wecom_bot",
+							enabled: true,
+							bindingReference: "binding_01",
+						},
+					],
+				},
+			},
+			actor,
+		);
+		const channelOnly = harness.transaction.snapshot().lastPlan;
+		if (!channelOnly) throw new Error("Expected a channel-only plan");
+		expect(channelOnly).toMatchObject({
+			baseRevision: 7,
+			nextRevision: 8,
+			outboxIntent: null,
+		});
+		// A channel-only plan may not wake reconciliation.
+		expect(() =>
+			snapshotAgentConfigurationWritePlanV1({
+				...channelOnly,
+				outboxIntent: {
+					operation: "agent.configuration.revised.v1",
+					payload: {
+						schemaVersion: 1,
+						agentId: "agent_01",
+						baseRevision: 7,
+						configurationRevision: 8,
+						changedFields: ["channels"],
+					},
+					traceId: channelOnly.auditEvent.traceId,
+					requestId: channelOnly.auditEvent.requestId,
+					occurredAt: channelOnly.auditEvent.occurredAt,
+				},
+			}),
+		).toThrow();
+		// A Runtime input plan may not skip reconciliation.
+		const fields = ["channels", "environment"] as const;
+		expect(() =>
+			snapshotAgentConfigurationWritePlanV1({
+				...channelOnly,
+				result: { ...channelOnly.result, changedFields: [...fields] },
+				auditEvent: { ...channelOnly.auditEvent, changedFields: [...fields] },
+			}),
+		).toThrow();
 	});
 });
 

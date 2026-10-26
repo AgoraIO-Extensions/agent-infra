@@ -13,6 +13,11 @@ export interface SessionSandboxPolicyV1 {
 }
 
 export interface SessionSandboxVerifiedPolicyV1 extends SessionSandboxPolicyV1 {
+	/**
+	 * Runtime revision the Sandbox was prepared from (ADR-0028). The field keeps
+	 * its name; a configuration revision that only changes channels does not
+	 * advance it, so it does not make the policy stale.
+	 */
 	readonly configurationRevision: number;
 	/**
 	 * Workload revision of the verified deployment the Sandbox was prepared

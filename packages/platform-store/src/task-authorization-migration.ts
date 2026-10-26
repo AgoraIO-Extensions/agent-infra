@@ -496,8 +496,12 @@ export async function readLegacyControlRecoveryInTransaction(
 	const [deployment] = await transaction<
 		{ configuration_revision: string; workload: unknown }[]
 	>`
-						select agent.current_configuration_revision configuration_revision, workload.state workload
-						from platform.agents agent left join platform.workload_reconciliations workload on workload.agent_id = agent.id
+						select coalesce(configuration.runtime_revision, agent.current_configuration_revision) configuration_revision,
+							workload.state workload
+						from platform.agents agent
+						left join platform.agent_configuration_revisions configuration
+							on configuration.agent_id = agent.id and configuration.revision = agent.current_configuration_revision
+						left join platform.workload_reconciliations workload on workload.agent_id = agent.id
 						where agent.id = ${state.metadata.agentId}
 					`;
 	const workload = deployment

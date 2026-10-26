@@ -566,6 +566,7 @@ export class PostgresAgentConfigurationQueryV1 {
 						.select({
 							configuration: agentConfigurationRevisions.configuration,
 							revision: agents.currentConfigurationRevision,
+							runtimeRevision: agentConfigurationRevisions.runtimeRevision,
 							sourceReference: agentConfigurationRevisions.sourceReference,
 						})
 						.from(agents)
@@ -591,6 +592,38 @@ export class PostgresAgentConfigurationQueryV1 {
 						canonicalSourceReference(configuration) !== current.sourceReference
 					)
 						throw new AgentConfigurationStoreError();
+					// Runtime capabilities belong to the Runtime revision; channels and
+					// the expected snapshot stay on the current configuration (ADR-0028).
+					let runtimeConfiguration = configuration;
+					if (current.runtimeRevision !== current.revision) {
+						const [runtimeRow] = await transaction
+							.select({
+								configuration: agentConfigurationRevisions.configuration,
+								sourceReference: agentConfigurationRevisions.sourceReference,
+							})
+							.from(agentConfigurationRevisions)
+							.where(
+								and(
+									eq(agentConfigurationRevisions.agentId, input.agentId),
+									eq(
+										agentConfigurationRevisions.revision,
+										current.runtimeRevision,
+									),
+								),
+							)
+							.limit(1);
+						if (!runtimeRow?.configuration)
+							throw new AgentConfigurationStoreError();
+						runtimeConfiguration = decodeVersionedAgentConfigurationRecord(
+							runtimeRow.configuration,
+						);
+						if (
+							runtimeConfiguration.agentId !== input.agentId ||
+							runtimeConfiguration.revision !== current.runtimeRevision ||
+							runtimeRow.sourceReference !== current.sourceReference
+						)
+							throw new AgentConfigurationStoreError();
+					}
 					const [row] = await transaction
 						.select({
 							revision: workloadReconciliations.revision,
@@ -698,6 +731,7 @@ export class PostgresAgentConfigurationQueryV1 {
 						facts: {
 							management,
 							configuration,
+							runtimeConfiguration,
 							sourceReference: current.sourceReference,
 							channels: await this.#channelFacts(
 								transaction,

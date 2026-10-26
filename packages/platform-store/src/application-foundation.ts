@@ -358,6 +358,8 @@ async function persistApplicationFoundationRowsV1(
 	await transaction.insert(agentConfigurationRevisions).values({
 		agentId: plan.configurationRevision.agentId,
 		revision: plan.configurationRevision.revision,
+		// 首个修订本身就是全部 Runtime 输入的来源（ADR-0028）。
+		runtimeRevision: plan.configurationRevision.revision,
 		sourceReference: canonicalSourceReference(configuration),
 		configuration,
 		createdAt: plan.configurationRevision.createdAt,

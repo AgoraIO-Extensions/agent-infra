@@ -629,6 +629,85 @@ describe("Skill Hub Agent current binding read", () => {
 		}
 	});
 
+	it("keeps the Runtime revision's bindings across a channel-only configuration revision (ADR-0028)", async () => {
+		const store = new PostgresSkillHubAgentBindingAdmissionV1({
+			databaseUrl: database?.databaseUrl ?? "",
+		});
+		const useCase = createSkillHubAgentBindingUseCaseV1({
+			transaction,
+			bindingAdmission: store,
+			bindingStatus: store,
+			agentVersion: "agent-version-1",
+			authorizationAdmission: {
+				async authorize() {
+					return {
+						schemaVersion: 1,
+						status: "admitted",
+						agentId: "agent-1",
+						actorId: "owner-1",
+						authorizationRevision: "authorization-1",
+						accessAuthority,
+					};
+				},
+			},
+			now: () => occurredAt,
+		});
+		const sync = {
+			agentId: "agent-1",
+			agentVersion: "agent-version-1",
+			configurationRevision: 8,
+			actorId: "owner-1",
+			organizationIds: ["org-1"],
+			isAdministrator: false,
+		};
+		/** Revision `revision` carries the Runtime revision `runtimeRevision`. */
+		const revise = async (revision: number, runtimeRevision: number) => {
+			await client`
+				insert into platform.agent_configuration_revisions
+				(agent_id, revision, runtime_revision, source_reference, created_at, configuration)
+				select agent_id, ${revision}, ${runtimeRevision}, source_reference, created_at,
+					configuration || jsonb_build_object('revision', ${revision}::int)
+				from platform.agent_configuration_revisions
+				where agent_id = 'agent-1' and revision = 8`;
+			await client`update platform.agents set current_configuration_revision = ${revision} where id = 'agent-1'`;
+		};
+		try {
+			await expect(
+				useCase.bind(
+					{
+						schemaVersion: 1,
+						agentId: "agent-1",
+						agentVersion: "agent-version-1",
+						expectedConfigurationRevision: 7,
+						idempotencyKey: "bind-runtime-revision",
+						requestId: "request-bind-runtime-revision",
+						traceId: "trace-bind-runtime-revision",
+						bindings: [
+							{ skillVersionId: "skill-version-1", grant: emptyGrant },
+						],
+					},
+					actor,
+				),
+			).resolves.toMatchObject({ revision: 8 });
+			// Revision 9 only changes channels: the Worker still resolves revision 8.
+			await revise(9, 8);
+			expect(await store.resolveSyncBindings(sync)).toEqual([
+				expect.objectContaining({ configurationRevision: 8 }),
+			]);
+			// The Owner sees the effective bindings; CAS uses the configuration revision.
+			await expect(store.readCurrentBindings(owner)).resolves.toMatchObject({
+				configurationRevision: 9,
+				bindings: [expect.objectContaining({ configurationRevision: 8 })],
+			});
+			expect(await store.readCurrentConfigurationRevision(owner)).toBe(9);
+			// A Runtime input revision supersedes the bindings of revision 8.
+			await revise(10, 10);
+			expect(await store.resolveSyncBindings(sync)).toEqual([]);
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("fails closed for a persisted grant beyond the empty deployment boundary", async () => {
 		await client`
 			insert into platform.skill_hub_agent_bindings

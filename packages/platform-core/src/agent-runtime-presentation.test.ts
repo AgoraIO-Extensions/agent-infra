@@ -64,6 +64,7 @@ function fixture() {
 	const facts: AgentRuntimePresentationFactsV1 = {
 		management: structuredClone(management),
 		configuration,
+		runtimeConfiguration: configuration,
 		sourceReference: "template_01",
 		channels: [],
 		runtime: {
@@ -369,14 +370,66 @@ describe("Agent runtime presentation policy", () => {
 			).toEqual({ outcome: "unavailable" });
 	});
 
+	it("keeps verified Runtime capabilities and shows current channels after a channel-only revision (ADR-0028)", () => {
+		const input = fixture();
+		const runtimeConfiguration = input.facts.configuration;
+		const configuration = {
+			...runtimeConfiguration,
+			revision: runtimeConfiguration.revision + 1,
+			channels: [
+				{ kind: "wecom_bot" as const, bindingReference: "binding_01" },
+			],
+			channelRevision: "channels_2",
+		};
+		const expected = {
+			...input.expected,
+			configurationRevision: configuration.revision,
+		};
+		expect(
+			decideAgentRuntimePresentationV1({
+				...input,
+				expected,
+				facts: { ...input.facts, configuration, runtimeConfiguration },
+			}),
+		).toEqual({
+			outcome: "found",
+			sourceReference: "template_01",
+			channels: [{ kind: "wecom_bot", status: "binding" }],
+			capabilities: { modelSelection: true },
+			interactionUrl: null,
+		});
+		// The current configuration is not Runtime evidence by itself.
+		expect(
+			decideAgentRuntimePresentationV1({
+				...input,
+				expected,
+				facts: {
+					...input.facts,
+					configuration,
+					runtimeConfiguration: configuration,
+				},
+			}),
+		).toMatchObject({ outcome: "found", capabilities: null });
+		// The expected snapshot still binds the configuration revision.
+		expect(
+			decideAgentRuntimePresentationV1({
+				...input,
+				facts: { ...input.facts, configuration, runtimeConfiguration },
+			}),
+		).toEqual({ outcome: "stale" });
+	});
+
 	it("does not attach an older active runtime to the currently selected configuration after rollback", () => {
 		const input = fixture();
 		const runtime = input.facts.runtime;
 		if (!runtime) throw new Error("Expected verified fixture");
 		const revision = input.facts.configuration.revision + 1;
+		// The newer revision changed Runtime inputs, so it is also the Runtime revision.
+		const configuration = { ...input.facts.configuration, revision };
 		const facts = {
 			...input.facts,
-			configuration: { ...input.facts.configuration, revision },
+			configuration,
+			runtimeConfiguration: configuration,
 			runtime: {
 				...runtime,
 				state: {
@@ -457,6 +510,7 @@ describe("Agent runtime presentation policy", () => {
 		const facts = {
 			...input.facts,
 			configuration,
+			runtimeConfiguration: configuration,
 			runtime: {
 				...current,
 				verifiedConfiguration: configuration,

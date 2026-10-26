@@ -244,6 +244,8 @@ beforeAll(async () => {
 	await sql`create role legacy_task_migrator login password 'controlled_local_migration_test'`;
 	await sql`grant usage on schema platform to legacy_task_migrator`;
 	await sql`grant select on platform.conversations, platform.conversation_executions, platform.conversation_audit_events, platform.idempotency_records, platform.audit_events, platform.task_authorization_records, platform.agents, platform.workload_reconciliations to legacy_task_migrator`;
+	// Runtime revision only (ADR-0028); configuration bodies stay unreadable.
+	await sql`grant select (agent_id, revision, runtime_revision) on platform.agent_configuration_revisions to legacy_task_migrator`;
 	await sql`grant update (id) on platform.conversations, platform.conversation_audit_events, platform.idempotency_records to legacy_task_migrator`;
 	await sql`grant update (execution_id) on platform.conversation_executions to legacy_task_migrator`;
 	await sql`grant insert on platform.audit_events, platform.task_authorization_records to legacy_task_migrator`;

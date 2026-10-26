@@ -26,7 +26,7 @@ function snapshot(
 	return {
 		agentId: "agent",
 		modelConfigurationRevision: sourceKind === "standard" ? 4 : null,
-		configurationRevision: 4,
+		runtimeRevision: 4,
 		status: "available",
 		desiredState: "running",
 		serviceAvailability: "ready",
@@ -76,7 +76,7 @@ describe("Core dispatch capacity decision", () => {
 		expect(
 			decideConversationDispatchCapacityV1({
 				...native,
-				configurationRevision: 5,
+				runtimeRevision: 5,
 			}),
 		).toBe("capacity_unavailable");
 	});
@@ -137,11 +137,11 @@ describe("Core dispatch capacity decision", () => {
 			).toBe("capacity_unavailable");
 		},
 	);
-	it("does not dispatch the original model selection on a newer configuration", () => {
+	it("does not dispatch the original model selection on a newer Runtime revision", () => {
 		expect(
 			decideConversationDispatchCapacityV1({
 				...snapshot(),
-				configurationRevision: 5,
+				runtimeRevision: 5,
 			}),
 		).toBe("capacity_unavailable");
 	});

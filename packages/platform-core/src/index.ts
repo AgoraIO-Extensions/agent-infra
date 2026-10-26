@@ -51,6 +51,7 @@ export type {
 } from "./agent-configuration.js";
 export {
 	AgentConfigurationError,
+	agentConfigurationRuntimeInputChangedV1,
 	createAgentConfigurationUseCaseV1,
 	decodeAgentConfigurationRecordV3,
 	parseAgentConfigurationChangesV1,

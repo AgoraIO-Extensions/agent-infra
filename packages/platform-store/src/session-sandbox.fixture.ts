@@ -38,11 +38,13 @@ export async function markSessionSandboxReadyFixture(
 		set resource_policy = jsonb_build_object(
 			'namespace', 'fixture-sandboxes',
 			'resourceConfigurationHash', w.state->'verified'->'executionCapacity'->>'resourceConfigurationHash',
-			'configurationRevision', ag.current_configuration_revision,
+			'configurationRevision', coalesce(cr.runtime_revision, ag.current_configuration_revision),
 			'workloadRevision', (w.state->'verified'->'deployment'->>'workloadRevision')::bigint,
 			'managementFence', m.fence,
 			'imageDigest', w.state->'verified'->'deployment'->>'imageDigest')
 		from platform.agents ag
+		left join platform.agent_configuration_revisions cr
+			on cr.agent_id = ag.id and cr.revision = ag.current_configuration_revision
 		join platform.agent_applications m on m.agent_id = ag.id
 		join platform.workload_reconciliations w on w.agent_id = ag.id
 		where a.conversation_id = ${conversationId} and a.resource_policy is null

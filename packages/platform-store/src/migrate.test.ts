@@ -2064,9 +2064,13 @@ describe("published Relay authority migration", () => {
 			idx: 62,
 			tag: "0062_wecom_inbound_media",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 63)).toMatchObject({
 			idx: 63,
 			tag: "0063_wecom_outbound_media",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 64,
+			tag: "0064_configuration_runtime_revision",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
