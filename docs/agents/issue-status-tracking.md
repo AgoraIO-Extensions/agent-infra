@@ -3,22 +3,21 @@
 > 快照时间：2026-10-27（UTC）；来源：GitHub `AgoraIO-Extensions/agent-infra` 开放 Issue 实时回读。
 > 基线：`origin/main` `0015b97c5`。本表是调度快照，Issue 正文、依赖、PR 和真实验收仍是权威来源。
 
-当前开放 Issue：**53**。状态标签不能替代 AC、native blocker、PRD/工程 Spec 或真实环境证据。
+当前开放 Issue：**51**。状态标签不能替代 AC、native blocker、PRD/工程 Spec 或真实环境证据。
 
 ## 分类计数
 
 | 类别 | 数量 |
 | --- | ---: |
-| Runtime/Worker/Core | 17 |
+| Runtime/Worker/Core | 16 |
 | Deploy/E2E/Channels | 20 |
 | Platform/Web/Skill | 9 |
-| Workflow/Observability | 7 |
+| Workflow/Observability | 6 |
 
 ## 明细
 
 | 类别 | Issue | 标题 | 优先级 | 状态/标签 | 来源或负责人 | 最近更新 | 下一步 |
 | --- | ---: | --- | --- | --- | --- | --- | --- |
-| Runtime/Worker/Core | [#3382](https://github.com/AgoraIO-Extensions/agent-infra/issues/3382) | fix(worker): resolve pending application outbox before repeated workload reconcile | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Runtime/Worker/Core | [#3352](https://github.com/AgoraIO-Extensions/agent-infra/issues/3352) | feat(runtime): deliver Codex native context compaction in conversations | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Runtime/Worker/Core | [#3342](https://github.com/AgoraIO-Extensions/agent-infra/issues/3342) | fix(runtime): Pi Native Session reuse truncates later turns | priority:P1 | priority:P1, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Runtime/Worker/Core | [#3309](https://github.com/AgoraIO-Extensions/agent-infra/issues/3309) | obs(runtime): distinguish safe Messages transport failure stages | priority:P1 | priority:P1, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
@@ -65,7 +64,6 @@
 | Platform/Web/Skill | [#481](https://github.com/AgoraIO-Extensions/agent-infra/issues/481) | feat(platform): deliver user and application Agent management API | priority:P0 | needs-triage, priority:P0, agent:kiro | LichKing-2234 | 2026-10-26 | 先补齐 Problem/Scope/Validation/Blocked by，再分派 |
 | Platform/Web/Skill | [#400](https://github.com/AgoraIO-Extensions/agent-infra/issues/400) | design(web): restore agent-infra IA as the implementation and acceptance baseline | priority:P0 | enhancement, needs-triage, priority:P0, agent:codex | LichKing-2234 | 2026-10-26 | 先补齐 Problem/Scope/Validation/Blocked by，再分派 |
 | Workflow/Observability | [#3371](https://github.com/AgoraIO-Extensions/agent-infra/issues/3371) | 体验与时效性：Web 与企微在真实负载下近乎不可用（整体方案） | priority:P0 | needs-triage, priority:P0, agent:kiro | kiro（来源标签） | 2026-10-26 | 先补齐 Problem/Scope/Validation/Blocked by，再分派 |
-| Workflow/Observability | [#3303](https://github.com/AgoraIO-Extensions/agent-infra/issues/3303) | perf(runtime): investigate idle ACP Agent control-instance CPU bursts | priority:P1 | priority:P1, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Workflow/Observability | [#3301](https://github.com/AgoraIO-Extensions/agent-infra/issues/3301) | perf(workload): separate apply and readiness retry budgets | priority:P1 | bug, ready-for-human, priority:P1, agent:codex | codex（来源标签） | 2026-10-26 | 人工门禁；只做证据准备，不自动宣称通过 |
 | Workflow/Observability | [#3254](https://github.com/AgoraIO-Extensions/agent-infra/issues/3254) | test(wecom): media.test 的地址到期用例依赖 60ms 真实时间窗口，CI 偶发失败 | priority:P2 | needs-triage, priority:P2, agent:kiro | kiro（来源标签） | 2026-10-26 | 先补齐 Problem/Scope/Validation/Blocked by，再分派 |
 | Workflow/Observability | [#3159](https://github.com/AgoraIO-Extensions/agent-infra/issues/3159) | test(runtime): bounds historical bootstrap slots 用例在 CI 负载下偶发 5 秒超时 | priority:P2 | needs-triage, priority:P2, agent:kiro | kiro（来源标签） | 2026-10-26 | 先补齐 Problem/Scope/Validation/Blocked by，再分派 |
