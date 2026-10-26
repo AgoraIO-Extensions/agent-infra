@@ -1,7 +1,7 @@
 # Issue 工作指导
 
 > 适用范围：`AgoraIO-Extensions/agent-infra` 当前开放 Issue。本文把实时清单转成可执行的分派规则；具体产品结论仍以 PRD、工程 Spec、HLD 和 Issue 正文为准。
-> 最近快照：2026-10-26；开放 Issue 86 个；主干 `70fde6f25`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
+> 最近快照：2026-10-26；开放 Issue 87 个；主干 `448c0ad74`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
 
 ## 四类工作边界
 
@@ -23,25 +23,16 @@
 
 ## 本轮并行委派
 
-本轮已并行委派三条 lane；每条 lane 只拥有一个 primary Issue 和其声明文件，不共享写入。
+本轮按三条可独立交付的 lane 委派；每条 lane 只拥有一个 primary Issue 和其声明文件，不共享写入。
 
 | Agent lane | Primary Issue | 目标 | 禁止越界 |
 | --- | ---: | --- | --- |
-| Observability/Worker | [#3360](https://github.com/AgoraIO-Extensions/agent-infra/issues/3360) | 补齐 Sandbox 失败的稳定阶段/资源/版本/相关性字段，保持脱敏与有界重试 | 不改 ACK 资源、不泄露凭证或资源正文 |
-| Worker Diagnostics | [#3428](https://github.com/AgoraIO-Extensions/agent-infra/issues/3428) | 暴露有界、脱敏的多服务健康诊断并补齐未 Ready/无 Endpoint/最终失败测试 | 不改变健康状态机或输出原始 Pod 日志 |
-| Local CNI | [#2938](https://github.com/AgoraIO-Extensions/agent-infra/issues/2938) | 验证官方 kindnet NFQUEUE 修复及固定环境策略正负边界 | 不使用 latest、不放宽策略、不删除数据或操作 ACK |
+| V6 Consumer | [#3490](https://github.com/AgoraIO-Extensions/agent-infra/issues/3490) | 贯通 Core→Store→Worker V6 dispatch consumer，保留旧版本兼容和 fail-closed | 不改 Driver/ACK/Web 验收，不绕过 Grant/Key/fence |
+| Diagnostics | [#3428](https://github.com/AgoraIO-Extensions/agent-infra/issues/3428) | 完成多服务有界脱敏诊断并处理 review | 不改变健康状态机 |
+| Directory Deployment | [#3481](https://github.com/AgoraIO-Extensions/agent-infra/issues/3481) | 完成共享 timeout、部署 adapter 和本地 CPU 接线 | 不把真实环境观察代替代码/部署验收 |
 
-每条 lane 的子 agent 都必须先在最新 `origin/main` 上复读 Issue；若发现 AC、依赖或 owner 不满足实现门槛，返回带证据的只读 handoff，不创建伪 PR。
 
-## 当前交付跟进
-
-| Primary Issue | 当前状态 | 证据 |
-| --- | --- | --- |
-| #3360 | 代码 PR 已合入，但 AC-1/AC-3 仍保持开放 | [PR #3477](https://github.com/AgoraIO-Extensions/agent-infra/pull/3477) 已合入 `70fde6f25`；Issue 已重新打开，等待完整合同与 Hosted/ACK 证据 |
-| #3428 | Draft PR，Hosted 检查已通过，等待人工 review/转 Ready | [PR #3479](https://github.com/AgoraIO-Extensions/agent-infra/pull/3479)，head `866cdeb`；本地 194 项聚焦测试、types/build 通过 |
-| #3481 | PR 已提交，重型 Hosted 检查运行中 | [PR #3482](https://github.com/AgoraIO-Extensions/agent-infra/pull/3482)，需确认 local adapter/CPU 接线覆盖 Scope |
-| #2938 | 只读 blocker | 固定 context 无 Docker Hub 网络；官方 Go 1.26.7/toolchain 未缓存，未改集群或策略 |
-| #3473 | 已合入，保留其开发流程证据 | [PR #3473](https://github.com/AgoraIO-Extensions/agent-infra/pull/3473) 已合入 `00b860f32` |
+三条 lane 的子 agent 都必须先在最新 `origin/main` 上复读 Issue；若发现 AC、依赖或 owner 不满足实现门槛，返回带证据的只读 handoff，不创建伪 PR。
 
 ## 分派与状态更新规则
 
