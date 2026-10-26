@@ -17,11 +17,60 @@ const ENABLE_AUTO_MERGE_MUTATION = `
   }
 `;
 
+const DISABLE_AUTO_MERGE_MUTATION = `
+  mutation DisablePullRequestAutoMerge($pullRequestId: ID!) {
+    disablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId }) {
+      pullRequest { number autoMergeRequest { enabledAt } }
+    }
+  }
+`;
+
+const REVIEW_THREADS_QUERY = `
+  query PullRequestReviewThreads($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $cursor) {
+          nodes { isResolved }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }
+`;
+
+export function countUnresolvedReviewThreads(threads = []) {
+  return threads.filter((thread) => thread?.isResolved !== true).length;
+}
+
+export async function unresolvedReviewThreadCount({ repository, number, request }) {
+  const [owner, repo] = repository.split("/");
+  if (!owner || !repo) throw new Error("Repository must be owner/name");
+  let cursor = null;
+  let count = 0;
+  for (let page = 0; page < 20; page += 1) {
+    const response = await request("/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: REVIEW_THREADS_QUERY,
+        variables: { owner, repo, number, cursor },
+      }),
+    });
+    const connection = response.data?.repository?.pullRequest?.reviewThreads;
+    if (!connection?.nodes || !connection.pageInfo) throw new Error("GitHub did not return review threads");
+    count += countUnresolvedReviewThreads(connection.nodes);
+    if (!connection.pageInfo.hasNextPage) return count;
+    cursor = connection.pageInfo.endCursor;
+  }
+  throw new Error("Review thread pagination limit exceeded");
+}
+
 export function evaluateAutoMergeEligibility({
   action,
   pullRequest,
   repository,
   defaultBranch,
+  unresolvedReviewThreads = 0,
 }) {
   if (!ENROLLMENT_ACTIONS.has(action)) {
     return { eligible: false, reason: "unsupported action" };
@@ -37,6 +86,12 @@ export function evaluateAutoMergeEligibility({
   }
   if (pullRequest.head?.repo?.full_name !== repository) {
     return { eligible: false, reason: "pull request head is outside this repository" };
+  }
+  if (unresolvedReviewThreads > 0) {
+    return {
+      eligible: false,
+      reason: `${unresolvedReviewThreads} unresolved review thread${unresolvedReviewThreads === 1 ? "" : "s"}`,
+    };
   }
   if (pullRequest.auto_merge) {
     return { eligible: false, reason: "already enrolled" };
@@ -60,6 +115,22 @@ export async function enrollPullRequest({ pullRequest, request }) {
     throw new Error("GitHub did not confirm auto-merge enrollment");
   }
   return "enrolled";
+}
+
+export async function disableAutoMerge({ pullRequest, request }) {
+	if (!pullRequest.auto_merge) return "not-enrolled";
+	const response = await request("/graphql", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			query: DISABLE_AUTO_MERGE_MUTATION,
+			variables: { pullRequestId: pullRequest.node_id },
+		}),
+	});
+	if (!response.data?.disablePullRequestAutoMerge?.pullRequest) {
+		throw new Error("GitHub did not confirm auto-merge cancellation");
+	}
+	return "disabled";
 }
 
 function requiredEnvironment(name) {
@@ -99,12 +170,23 @@ async function main() {
   if (!number) throw new Error("Pull request event is required");
 
   const pullRequest = await githubRequest(`/repos/${repository}/pulls/${number}`);
+  const unresolvedReviewThreads = await unresolvedReviewThreadCount({
+    repository,
+    number,
+    request: githubRequest,
+  });
   const eligibility = evaluateAutoMergeEligibility({
     action: event.action,
     pullRequest,
     repository,
     defaultBranch: event.repository?.default_branch,
+    unresolvedReviewThreads,
   });
+  if (!eligibility.eligible && unresolvedReviewThreads > 0 && pullRequest.auto_merge) {
+		const result = await disableAutoMerge({ pullRequest, request: githubRequest });
+		console.log(`Auto-merge ${result}: ${eligibility.reason}`);
+		return;
+	}
   if (!eligibility.eligible) {
     console.log(`Auto-merge not enrolled: ${eligibility.reason}`);
     return;

@@ -143,6 +143,8 @@ export function validateWorkflowDocuments(workflows) {
   const enrollment = autoMerge?.jobs?.enroll;
   if (Object.keys(autoMerge?.jobs ?? {}).join() !== "enroll" ||
       JSON.stringify(autoMerge?.on?.pull_request_target?.types) !== JSON.stringify(["opened", "reopened", "ready_for_review"]) ||
+      JSON.stringify(autoMerge?.on?.pull_request_review?.types) !== JSON.stringify(["submitted", "edited", "dismissed"]) ||
+      JSON.stringify(autoMerge?.on?.pull_request_review_comment?.types) !== JSON.stringify(["created", "edited", "deleted"]) ||
       !sameObject(autoMerge?.concurrency, {group: "auto-merge-${{ github.event.pull_request.number }}", "cancel-in-progress": true})) {
     errors.push("Auto-merge Enrollment events and concurrency must stay fixed");
   }

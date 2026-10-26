@@ -127,8 +127,9 @@ git diff --check
 ## Git And Review
 
 - 所有可能产生 PR 的工作遵循 [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md#2-基本原则) 的 `Issue -> 实现与验证 -> PR` 规则；创建任务分支、修改文件或提交代码前，必须先确认内容完整的 primary Issue。
+- 开发 worktree 和验证计划遵循[开发 Harness](docs/agents/development-harness.md)：创建前 fetch `origin/main`、锁定并回读 exact SHA；验证用 `dev-preflight` 输出 required/skipped/reason receipt。通用 skill 不能覆盖本仓库的人工监督和 source provenance 门禁。
 - 保持改动范围与当前任务一致，不顺手恢复本地历史材料或重构无关文档。
-- 提交前检查 `git status`、完整 diff 和上述验证命令。
+- 提交前检查 `git status`、完整 diff 和 `node scripts/dev-preflight.mjs plan`；按 receipt 执行适用命令。
 - Commit 使用简洁的 Conventional Commit，例如 `docs: refine M1 architecture`。
 - 未经用户明确要求，不执行 force push、历史重写或破坏性清理。
 

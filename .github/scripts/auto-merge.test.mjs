@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  countUnresolvedReviewThreads,
+  disableAutoMerge,
   enrollPullRequest,
   evaluateAutoMergeEligibility,
+  unresolvedReviewThreadCount,
 } from "./auto-merge.mjs";
 
 function pullRequest(overrides = {}) {
@@ -20,11 +23,13 @@ function pullRequest(overrides = {}) {
 }
 
 function eligibility(action, overrides = {}) {
+  const { unresolvedReviewThreads, ...pullRequestOverrides } = overrides;
   return evaluateAutoMergeEligibility({
     action,
-    pullRequest: pullRequest(overrides),
+    pullRequest: pullRequest(pullRequestOverrides),
     repository: "example/agent-infra",
     defaultBranch: "main",
+    unresolvedReviewThreads,
   });
 }
 
@@ -52,6 +57,49 @@ test("rejects closed, draft, fork, and non-default-branch PRs", () => {
     eligibility("opened", { base: { ref: "release" } }).eligible,
     false,
   );
+});
+
+test("refuses auto-merge while review threads are unresolved", () => {
+  assert.deepEqual(eligibility("opened", { unresolvedReviewThreads: 1 }), {
+    eligible: false,
+    reason: "1 unresolved review thread",
+  });
+  assert.equal(
+    countUnresolvedReviewThreads([{ isResolved: false }, { isResolved: true }]),
+    1,
+  );
+});
+
+test("paginates review threads and counts only unresolved threads", async () => {
+  const calls = [];
+  const count = await unresolvedReviewThreadCount({
+    repository: "example/agent-infra",
+    number: 8,
+    request: async (path, options) => {
+      calls.push({ path, options });
+      const variables = JSON.parse(options.body).variables;
+      return {
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: variables.cursor
+                ? {
+                    nodes: [{ isResolved: false }],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  }
+                : {
+                    nodes: [{ isResolved: true }, { isResolved: false }],
+                    pageInfo: { hasNextPage: true, endCursor: "next" },
+                  },
+            },
+          },
+        },
+      };
+    },
+  });
+  assert.equal(count, 2);
+  assert.equal(calls.length, 2);
+  assert.equal(JSON.parse(calls[1].options.body).variables.cursor, "next");
 });
 
 test("treats an existing auto-merge request as an idempotent no-op", async () => {
@@ -84,4 +132,20 @@ test("enables native Squash auto-merge without a direct merge mutation", async (
   assert.match(payload.query, /mergeMethod:\s*SQUASH/);
   assert.doesNotMatch(payload.query, /\bmergePullRequest\b/);
   assert.deepEqual(payload.variables, { pullRequestId: "PR_node_id" });
+});
+
+test("disables an existing auto-merge request when a thread blocks it", async () => {
+
+	const calls = [];
+	const result = await disableAutoMerge({
+		pullRequest: pullRequest({ auto_merge: { enabled_by: { login: "member" } } }),
+		request: async (path, options) => {
+			calls.push({ path, options });
+			return { data: { disablePullRequestAutoMerge: { pullRequest: { number: 8 } } } };
+		},
+	});
+	assert.equal(result, "disabled");
+	const payload = JSON.parse(calls[0].options.body);
+	assert.match(payload.query, /disablePullRequestAutoMerge/);
+	assert.doesNotMatch(payload.query, /enablePullRequestAutoMerge/);
 });

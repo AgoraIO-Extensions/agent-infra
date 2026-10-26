@@ -54,9 +54,16 @@ GitHub native issue dependencies 是依赖权威，正文 `Blocked by` 作为投
 
 ## 6. 本地实现与验证
 
-使用隔离工作区，遵守产品 PRD、工程 Spec、目录权限和任务范围。按 `AGENTS.md` 执行适用的
-验证并记录结果；环境阻碍和未执行项明确列出。开发、重试和修复由人或其监督的本地 Agent
-执行，GitHub 不自动生成 Patch、维护 checkpoint 或推送修复。
+使用隔离工作区，遵守产品 PRD、工程 Spec、目录权限和任务范围。开发 worktree 必须由
+[开发 Harness](../agents/development-harness.md) 在 fetch `origin/main` 后按 immutable SHA 创建，
+或由原生 worktree 工具创建后立即用同一 SHA 回读；没有 provenance receipt 不能开始实现。
+验证通过 `node scripts/dev-preflight.mjs plan` 选择 required checks，并记录 source SHA、
+required、skipped 和 reason；跳过不等于通过。开发、重试和修复由人或其监督的本地 Agent 执行，
+GitHub 不自动生成 Patch、维护 checkpoint 或推送修复。
+
+本仓库不适用要求后台 implementer/merger subagent、无人值守修复或自动合并的通用开发 skill。
+任何例外必须先更新本 Spec 并取得负责人确认；skill 的默认行为不能改变本仓库的人工监督和
+Issue → 实现与验证 → PR 流程。
 
 ## 7. Pull Request
 
@@ -132,7 +139,10 @@ CI 或评审失败时由负责人、本地 Agent 查看原生日志和评论，�
 
 当前 head 的两个 required checks 满足（CI 可按 §7.2.1 豁免）、符合 CODEOWNER 批准要求且所有
 讨论解决后，才允许合并。同仓库、目标为默认分支的非 Draft PR 保留 GitHub 原生 Squash Auto-merge enrollment；
-它只登记 auto-merge，不直接 Merge、不绕过门禁，也不替人 Approve。
+它只登记 auto-merge，不直接 Merge、不绕过门禁，也不替人 Approve。登记前 Harness 通过 GraphQL
+回读当前 PR 的 review threads；存在任何未解决 thread 时不登记，并在 review/review-comment 事件
+后重新判断；已有 auto-merge request 会先取消。最终合并仍以 GitHub 的 required conversation
+resolution 为准。
 
 ## 10. 安全与验证
 
