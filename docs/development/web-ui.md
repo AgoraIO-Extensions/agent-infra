@@ -14,12 +14,12 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `index.html` | `902cf6afac71dd7f811174e2340b384f6ad30baa5b44ac6918bd1c4742e9b984` |
+| `index.html` | `194bec792720833b6af0d6d4b1c7c2b417f832d1420746c38e45bb7db0ca40cb` |
 | `login.html` | `733d31e999296d2ed8e21f0237004427eac104cefd7c4c55cde6e3e87240641a` |
 | `DESIGN.md` | `fa953264eafe4e0bd05adaa86387a9d90ad7af51d4e79f0a67620bfa31596d65` |
 | `IMPLEMENTATION.md` | `ae3e592272933f65a0f7fc34363142a4471a724f7a75db76affe6ae12d640600` |
 | `DESIGN-HANDOFF.md` | `3f2313d6d72bf3d7263d1e864730278217836ccdd5730d4b83460518bd2d3396` |
-| `DESIGN-MANIFEST.json` | `7c3d0a82d0596030de48c7f0372dd4544e4bbd5b00071e8648966173b85a71a7` |
+| `DESIGN-MANIFEST.json` | `b288c4afb71b120f1d375a46f44466b48c41f923363ddac443a6ceaa374ab350` |
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量，并提供设计同名别名（`--bg`、`--fg`、`--surface-raised`、`--accent`、
@@ -38,7 +38,7 @@ Agent 详情中的 Owner、渠道、模型和范围均取自实际投影；Owner
 Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工程 Spec §14.2.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1421-配置与凭证)）：
 扫码不可用时点击「扫码授权」直接显示「扫码授权暂不可用」面板与「改用手动配置」，不建立配置会话；
 能力未知时先重读状态，只有服务端确认可用才建立配置会话。
-侧栏「我的 Connection」、对话「会话上下文」中的 Connection 提示与 Agent 详情「打开 Connection」
+侧栏「我的 Connection」、对话「会话上下文」中的 Connection 提示、Agent 详情「打开 Connection」与申请表单「Connection 授权」分区的「打开 Connection」
 只由 `src/features/connection-entry.ts` 生成：先按服务端规则分别校验原始 `publicOrigin` 与
 服务端批准的 `webPath`，再拼接并确认 origin 不变；Runtime 使用的 `mcpPath` 不作为浏览器授权入口。
 对话时间线独立滚动，保留消息输入区及代码、表格的局部滚动。
@@ -73,7 +73,7 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 
 ### 已回写导出设计的结论
 
-以下结论已在 #2862、#2863、#2903、#2996 与 #2830 终验（#3037–#3041、#3046、#3052，第二轮 #3127–#3130，第三轮 #3160、#3161，第四轮 #3179、#3180，第五轮 #3215、#3216，第六轮 #3235、#3236，第七轮 #3242、#3243，第八轮 #3267–#3270，第九轮 #3291–#3294，第十轮 #3327–#3330）确认，
+以下结论已在 #2862、#2863、#2903、#2996 与 #2830 终验（#3037–#3041、#3046、#3052，第二轮 #3127–#3130，第三轮 #3160、#3161，第四轮 #3179、#3180，第五轮 #3215、#3216，第六轮 #3235、#3236，第七轮 #3242、#3243，第八轮 #3267–#3270，第九轮 #3291–#3294，第十轮 #3327–#3330，第十五轮 #3434）确认，
 并由 [#2863](https://github.com/AgoraIO-Extensions/agent-infra/issues/2863)、
 [#3107](https://github.com/AgoraIO-Extensions/agent-infra/issues/3107)、
 [#3130](https://github.com/AgoraIO-Extensions/agent-infra/issues/3130)、
@@ -83,8 +83,9 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 [#3236](https://github.com/AgoraIO-Extensions/agent-infra/issues/3236)、
 [#3243](https://github.com/AgoraIO-Extensions/agent-infra/issues/3243)、
 [#3270](https://github.com/AgoraIO-Extensions/agent-infra/issues/3270)、
-[#3294](https://github.com/AgoraIO-Extensions/agent-infra/issues/3294) 与
-[#3330](https://github.com/AgoraIO-Extensions/agent-infra/issues/3330) 回写本版导出稿；实现与验收以这里为准：
+[#3294](https://github.com/AgoraIO-Extensions/agent-infra/issues/3294)、
+[#3330](https://github.com/AgoraIO-Extensions/agent-infra/issues/3330) 与
+[#3434](https://github.com/AgoraIO-Extensions/agent-infra/issues/3434) 回写本版导出稿；实现与验收以这里为准：
 
 | 编号 | 位置 | 实现 | 依据 |
 | --- | --- | --- | --- |
@@ -230,7 +231,8 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | O8-08 | `/agents/:agentId/skills` 同步失败的绑定卡 | 固定说明「内容同步失败，这个版本不会在对话中提供。」（12px / 1.5 `--danger-ink`），不按失败原因区分 | 绑定投影的失败说明为固定文案（`agent-skill-binding.ts`）；原导出稿按原因写「包校验未完成，继续使用前需要重新同步。」 |
 | O8-09 / O9-17 | `/skills/manage/new`「导入固定来源」字段错误 | 错误放在各自字段下（12px / 1.5 `--danger-ink`），名称与固定版本引用都无效时两条一起显示，出错字段 `aria-invalid`：未聚焦时为 `--danger` 边框与 1px 20% `--danger` 外环，聚焦时边框仍为 `--accent`（F3-15，导出稿其余字段错误相同），焦点到第一个出错字段，输入时清除该字段的错误 | 同 V-19、D2-21 的字段错误规则（`skill-hub-management-screen.tsx`）；原导出稿只在按钮后显示第一条，且被 `.form-section > p` 改成 muted；出错字段没有 danger 边框（公共 `Input` 的 `aria-invalid:border-destructive aria-invalid:ring-1`，O9-17） |
 | O9-01 / O10-01 | 窄屏导航 Sheet 内的「退出登录」与「我的 Connection」 | 进行中与失败时 Sheet 保持打开，停在打开位置、不收起也不重放滑入动画：进行中焦点留在可聚焦的禁用「正在退出…」，失败后留在「退出登录」，「退出登录失败，请重试。」在入口下方可见；「我的 Connection」在新窗口打开，Sheet 不收起，焦点留在入口上；桌面侧栏相同 | 见[侧栏退出登录](#侧栏退出登录)（`logout-action.tsx`，#3267 N8-1-01）；Sheet 不随页面状态卸载，外链不关闭 Sheet（`application-shell.tsx`）；原导出稿重绘时收起 Sheet，焦点落到 body，失败提示渲染在已收起的 Sheet 里（O9-01）；#3294 回写后每次重绘抽屉先收回再滑入（约 215ms，失败时再来一次），侧栏「我的 Connection」仍收起 Sheet、焦点落到 body（O10-01） |
-| O9-03 / O9-04 | Agent 详情：自有交互入口与「运行与渠道」服务状态 | 自有交互入口的 Agent 不显示「每个用户都有独立会话」与「个人历史」分区，其余信息区、入口状态与「打开 Agent」不变；服务状态说明只写用户看到的行为：可用且就绪「可以发送消息并获得回复」，不可用「历史只读，可稍后重试」，其余服务状态「历史只读，暂时不能发送消息」，Agent 不在可用管理状态时「历史只读，当前不能发送消息」；服务状态 chip 与状态行同一色调 | `agent-detail-screen.tsx`（`!selfManaged`、`serviceDescription`）：自有交互入口不在平台会话中对话；[PRD §6.4](../prd/PRD-agent-platform-M1.md#64-服务可用性) 按用户看到的行为说明服务可用性；原导出稿一律写「Runtime 健康检查已通过」（技术组件名），chip 恒为 green |
+| O9-03 / O9-04 / O15-01 | Agent 详情：自有交互入口与「运行与渠道」服务状态 | 自有交互入口的 Agent 不显示「每个用户都有独立会话」与「个人历史」分区，其余信息区、入口状态与「打开 Agent」不变；「运行与渠道」只有「服务状态」一行，说明与「Agent 信息」的「入口状态」相同：由自有入口校验时「自有交互入口已就绪。」（没有可用入口时「自有交互入口尚未就绪。」），由平台校验时「平台身份入口已就绪。」 / 「平台身份入口尚未就绪。」，不列 Web 与企微渠道行，也不显示「暂无平台渠道」。标准模板与平台交互入口的服务状态说明只写用户看到的行为：可用且就绪「可以发送消息并获得回复」，不可用「历史只读，可稍后重试」，其余服务状态「历史只读，暂时不能发送消息」，Agent 不在可用管理状态时「历史只读，当前不能发送消息」，其下按服务端投影列平台渠道（Web 行带「平台对话入口」），没有渠道时为「暂无平台渠道」；服务状态 chip 与状态行同一色调 | `agent-detail-screen.tsx`（`!selfManaged`、`interactionReadiness`、`platformChannels`、`serviceDescription`）：自有交互入口不在平台会话中对话，服务状态不承诺发送消息、不列平台渠道（#3408）；[PRD §6.4](../prd/PRD-agent-platform-M1.md#64-服务可用性) 按用户看到的行为说明服务可用性；原导出稿一律写「Runtime 健康检查已通过」（技术组件名），chip 恒为 green；第十五轮导出稿自有交互入口仍写「可以发送消息并获得回复」并固定列 Web / 企微两行（#3434 O15-01，F15-2 / F15-3） |
+| O15-02 | 申请表单「基本信息」的「Connection 授权」分区 | 创建与修改申请都在「基本信息」的字段之后显示（四种来源相同，提交请求不含 Connection 字段，结果页不显示）：整行分区，1px `--border` 边框、8px 圆角、20% `--surface-raised` 底色（`bg-muted/20`）、16px 内边距，子项相距 12px；标题为 h3「Connection 授权」，排版同「基本信息」（16px / 620 / 1.35 正文字体，N15-06），其下说明「创建 Agent 不会自动取得外部账号权限。使用者需要在 Connection 中用自己的账号确认连接器授权，授权结果由 Connection 独立管理。」（14px / 20px `--muted-foreground`，上距 4px）。有 Connection 入口时为 44px outline 外链「打开 Connection」（新窗口打开，焦点留在链接上）；入口不可用时不给链接，为同样 14px / 20px `--muted-foreground` 的说明「Connection 入口暂不可用，请稍后再试。」 | `agent-application-form.tsx`「基本信息」`form-grid` 内 `sourceFields` 之后的 `section`（`aria-labelledby` 指向 h3，`props.connectionUrl` 决定外链或说明，#3406、#3433 N15-06）；入口地址与其他 Connection 入口同由 `connectionEntryUrl` 生成（见上文 Connection 入口一段）；原导出稿 `renderApplicationForm` 四种来源都没有该分区（#3434 核对，G15-2-02） |
 | O9-07 / O9-09 / O9-11 | 对话「结果文件」列表、产物预览读取失败、用户消息发送失败提示 | 回答内图片读取中（「正在加载图片：…」）已计为在回答中显示，列表该行只写 12px muted「已在回答中显示」；预览读取失败的 danger 提示内，文字与「重新读取」相距 10px；消息内 danger 提示的文字与公共 `Alert` 描述同为 13px / 1.65 | `conversation-screen-messages.tsx` `ResultFileList`（`inAnswer` 在占位渲染时已计入）、`conversation-artifact-preview.tsx`、公共 `AlertDescription`；原导出稿读取中给「预览」「下载」，按钮贴着失败文字，提示文字被 `.message-body p` 改成 14px |
 | O9-10 | 公共 `Dialog` 的弹窗容器（预览、执行详情、审阅与确认弹窗） | 打开后焦点在弹窗容器上，容器不画焦点环；弹窗内控件的焦点环不变 | 容器只是打开时的初始焦点落点，不是可操作控件（`DialogContent` `outline-none`）；原导出稿全局 `:focus-visible` 给 `.modal` 画 2px accent 环 |
 | N9-1-01 | 对话页输入框上方的说明行（代表态「请确认草稿后手动发送；不会自动提交。」） | 14px / 20px、400、正文前景色，左缘与输入框对齐，与输入框相距 10px（短视口 6px）；其余说明行见[对话页状态说明行](#对话页状态说明行) | `active-conversation.tsx` 的说明行为 `text-sm`，`.chat-thread` 子项间距 10px（短视口 6px，D2-56），#3293 统一；原导出稿 `.chat-draft-notice` 行高 23.1px、与输入框相距 22px（#3294 核对） |
@@ -302,11 +304,11 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 - 同一结构只换文案或色调的变体只画代表态，其余以 Web 为准：命令 / Skill 的服务端拒绝原因（导出稿画「所选版本已变化」）、
   模型设置不可重试失败行（同 O8-01 错误行）、
   附件与 Skill 控制文件的失败原因、用户消息的投递失败原因、创建失败类别（导出稿画健康检查未通过）、
-  企微卡片的提交、轮询与解绑提示、模型选择器改选后的「保存后 / 提交后会移除这些模型」、镜像升级失败、Agent 详情的生命周期与浏览器能力提示、申请表单模板就绪状态与提交失败（含所选模板不可申请、修改申请的模板不可用，#3328；非校验类提交失败，#3351；拦截后部署选项重读的同步与没有可申请的标准模板，#3364；部署选项读取失败，#3389）、
+  企微卡片的提交、轮询与解绑提示、模型选择器改选后的「保存后 / 提交后会移除这些模型」、镜像升级失败、Agent 详情的生命周期与浏览器能力提示、自有交互入口的入口状态（导出稿只有由自有入口校验且已就绪的「资料整理」，画「自有交互入口已就绪。」；尚未就绪与由平台校验的「平台身份入口…」以 Web 为准，O15-01）、申请表单模板就绪状态与提交失败（含所选模板不可申请、修改申请的模板不可用，#3328；非校验类提交失败，#3351；拦截后部署选项重读的同步与没有可申请的标准模板，#3364；部署选项读取失败，#3389）、
   写操作失败提示（撤回、停止与重启、保存配置、授权控制、审批决定、Skill 审核、加入或移出我的库、发布与导入、凭证签发与收窄）。
 - 动作进行中的按钮文案（「批准中…」「保存中…」「正在提交…」等）与 `aria-disabled` 以 Web 为准（[组件与调用方](#组件与调用方)、D2-59）。
 - 长名称、长提问、长文件名的截断与换行，以及「显示更多」「加载更多」的分批显示以 Web 为准。
-- 结果文件、回答内文件卡与产物预览弹窗的「下载」在原型中只弹 Toast，PDF 预览为示例页面；Skill 控制文件「添加文本文件」只在本页模拟上传；
+- 结果文件、回答内文件卡与产物预览弹窗的「下载」在原型中只弹 Toast，PDF 预览为示例页面；Skill 控制文件「添加文本文件」只在本页模拟上传；申请表单「Connection 授权」分区的「打开 Connection」在原型中不打开新窗口，入口不可用态由 `state.connection` 决定（O15-02）；
   替换默认 Key 的校验结果由「原型状态」页的入口决定（默认按新 Key 覆盖当前模型）。Web 以服务端结果为准。
 - 只在开发构建出现的界面（顶栏「本地开发 · 测试身份」、登录页「选择开发测试身份」与登录入口未配置）导出稿不画。
 - Owner 配置「模型与凭证」只画默认 Key 托管；部署目录管理模型时的「当前模型 / 当前默认」摘要与「替换模型配置」以 Web 为准，
