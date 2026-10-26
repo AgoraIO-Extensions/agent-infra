@@ -25,14 +25,13 @@ Skills 只能细化这些约束。发现需求冲突或验收不明确时，先�
 
 - `CODEOWNERS` 使用 `@AgoraIO-Extensions/agent-infra-owners`；人工 Approve 和需要的外部验收
   由 Team 中非 Bot 人员完成。
-- Human Validation job 仅使用 membership-only App token 查询 Team；不再 mint Check Publisher
-  token。两个基础 Gate 直接使用 GitHub Actions 原生 job 结果，不调用 Check Run 写接口。
-- required checks 为 `CI`、`Issue Gate`、`Human Validation Gate`，最终均绑定 GitHub Actions
-  App `15368`。保留 CODEOWNER approval、旧批准失效、last-push approval 和 conversation resolution。
-- 移除旧 `Issue Readiness Gate` 与 Coverage required context。迁移期间两个基础 Gate 保留旧
-  App 绑定；新 YAML 合入后切到 App `15368`，并用后续 PR 验证，不能伪造旧检查成功。
+- Issue Gate 直接使用 GitHub Actions 原生 job 结果，不调用 Check Run 写接口。
+- required checks 为 `CI` 与 `Issue Gate`，最终均绑定 GitHub Actions App `15368`。保留 CODEOWNER
+  approval、旧批准失效、last-push approval 和 conversation resolution。
+- 移除旧 `Issue Readiness Gate`、`Human Validation Gate` 与 Coverage required context；迁移期间
+  保留 `CI` 与 `Issue Gate` 的 App 绑定，并用后续 PR 验证，不能伪造旧检查成功。
 - 删除无人值守开发和旧 Reviewer 专用 Secret、Variable、workflow 与运行配置。PR-Agent
-  凭证、Team membership App 凭证及普通 CI/Auto-merge 的必要凭证保留。
+  凭证及普通 CI/Auto-merge 的必要凭证保留。
 
 ## 5. Issue 契约
 
@@ -74,11 +73,12 @@ Issue。文档和普通代码 PR 使用同一规则。
 | --- | --- |
 | `CI` | 确定性构建、静态检查和测试通过，或按 §7.2.1 明确豁免 |
 | `Issue Gate` | 唯一主 Issue 存在、非 wontfix，创建时间早于 PR |
-| `Human Validation Gate` | 未要求人工验证，或当前提交的人工验证由有效 Team 成员确认 |
 
-两个基础 Gate 在 PR 的 opened、reopened、synchronize、edited、labeled、unlabeled 和
-ready_for_review 事件运行。取消 Issue 事件派发、定时巡检和额外汇总 job；关联 Issue 或 Team
-成员状态单独变化后，必须重新运行 PR 检查。检查读取实时 PR，若已不是触发时的 head 则失败，
+`ready-for-human` 仅作为需要人工处理或验证的 label，不生成 required check，也不阻塞合并。
+
+Issue Gate 在 PR 的 opened、reopened、synchronize、edited 和 ready_for_review 事件运行；CI
+按自身 workflow 事件运行。
+取消 Issue 事件派发、定时巡检和额外汇总 job。检查读取实时 PR，若已不是触发时的 head 则失败，
 不把旧事件的结果当成新 head 的验证。
 
 #### 7.2.1 CI 豁免
@@ -91,7 +91,7 @@ Workload kind。标签使用 GitHub 原生权限管理；AI 不得自行添加�
 已撤销的标签。CI 执行中添加标签会取消同一 PR、同一 head 的旧运行，再发布豁免结果。
 移除 `ci:skip` 后恢复正常检查，标签保留期间的新提交继续豁免；旧 head 重跑不会取消新 head。
 读取失败时运行原有 CI，不能因此豁免。main push、独立 Connection E2E、Issue Gate、
-Human Validation Gate、CODEOWNER approval、conversation resolution 与 PR review 不受该标签影响。
+CODEOWNER approval、conversation resolution 与 PR review 不受该标签影响。
 
 ### 7.3 Automated PR Review
 
@@ -107,7 +107,7 @@ Human Validation Gate、CODEOWNER approval、conversation resolution 与 PR revi
   recorder/shadow、代理或派生镜像。原生 token 裁剪、文件过滤、分块、空结果与失败提示均由
   上游负责；评论存在不代表完整覆盖，也不保证每种超限情况都能发布“请拆分 PR”。
 - PR-Agent 是辅助评审，不提供 required Coverage Check。移除分支保护中的
-  `Automated Review Coverage` required context，不把失败改写为成功；CI、两个基础 Gate、
+  `Automated Review Coverage` required context，不把失败改写为成功；CI、Issue Gate、
   CODEOWNER approval 和 required conversation resolution 保持原样。
 - PR-Agent 不 Approve、不 Merge、不修改 branch/label，也不解决自己的线程。PR-Agent
   原生评论由人工处理，不接入自定义 repair 或 Workflow Outcome 通知。
@@ -115,12 +115,12 @@ Human Validation Gate、CODEOWNER approval、conversation resolution 与 PR revi
   重新启用 `pr-agent-review.yml`，再使用后续测试 PR 核验自动 Review/Suggestions 和两个评论命令。实现 PR 的静态检查不替代
   hosted 发布证据。
 
-### 7.4 人工验证
+### 7.4 人工处理标记
 
 自动化不能覆盖真实环境、视觉、权限或外部系统验收时，在 PR 正文写清内容并添加
-`ready-for-human`。完成后由 Team 中非 Bot 人员移除标签，job 回读成员身份与事件。
-Bot、非成员或查询失败不能确认验证。新的 commit 会使验证失效并重新要求人工确认。
-从未要求人工验证的 PR 直接通过该 Gate。人工测试确认与代码 Approve 各自完成，不能互相替代。
+`ready-for-human`。该标签只保留人工处理或验证的可见标记，不触发 workflow，不产生 required
+check，也不会因添加、移除或新 commit 阻塞合并。人工测试记录与代码 Approve 各自完成，不能
+互相替代。
 
 ## 8. 失败处理
 
@@ -130,7 +130,7 @@ CI 或评审失败时由负责人、本地 Agent 查看原生日志和评论，�
 
 ## 9. 合并
 
-当前 head 的三个 required checks 满足（CI 可按 §7.2.1 豁免）、符合 CODEOWNER 批准要求且所有
+当前 head 的两个 required checks 满足（CI 可按 §7.2.1 豁免）、符合 CODEOWNER 批准要求且所有
 讨论解决后，才允许合并。同仓库、目标为默认分支的非 Draft PR 保留 GitHub 原生 Squash Auto-merge enrollment；
 它只登记 auto-merge，不直接 Merge、不绕过门禁，也不替人 Approve。
 
