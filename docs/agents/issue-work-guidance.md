@@ -1,7 +1,7 @@
 # Issue 工作指导
 
 > 适用范围：`AgoraIO-Extensions/agent-infra` 当前开放 Issue。本文把实时清单转成可执行的分派规则；具体产品结论仍以 PRD、工程 Spec、HLD 和 Issue 正文为准。
-> 最近快照：2026-10-26；开放 Issue 86 个；主干 `cae0c2729`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
+> 最近快照：2026-10-26；开放 Issue 86 个；主干 `70fde6f25`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
 
 ## 四类工作边界
 
@@ -37,10 +37,9 @@
 
 | Primary Issue | 当前状态 | 证据 |
 | --- | --- | --- |
-| #3360 | 代码 PR 已合入，但 AC-1/AC-3 仍保持开放 | [PR #3477](https://github.com/AgoraIO-Extensions/agent-infra/pull/3477) 已合入 `cae0c2729`；Issue 已重新打开，等待完整合同与 Hosted/ACK 证据 |
+| #3360 | 代码 PR 已合入，但 AC-1/AC-3 仍保持开放 | [PR #3477](https://github.com/AgoraIO-Extensions/agent-infra/pull/3477) 已合入 `70fde6f25`；Issue 已重新打开，等待完整合同与 Hosted/ACK 证据 |
 | #3428 | Draft PR，Hosted 检查已通过，等待人工 review/转 Ready | [PR #3479](https://github.com/AgoraIO-Extensions/agent-infra/pull/3479)，head `866cdeb`；本地 194 项聚焦测试、types/build 通过 |
 | #3481 | PR 已提交，重型 Hosted 检查运行中 | [PR #3482](https://github.com/AgoraIO-Extensions/agent-infra/pull/3482)，需确认 local adapter/CPU 接线覆盖 Scope |
-| #2938 | 只读 blocker | 固定 context 无 Docker Hub 网络；官方 Go 1.26.7/toolchain 未缓存，未改集群或策略 |
 | #2938 | 只读 blocker | 固定 context 无 Docker Hub 网络；官方 Go 1.26.7/toolchain 未缓存，未改集群或策略 |
 | #3473 | 已合入，保留其开发流程证据 | [PR #3473](https://github.com/AgoraIO-Extensions/agent-infra/pull/3473) 已合入 `00b860f32` |
 
