@@ -72,8 +72,8 @@ import {
 import { createKubernetesWorkloadPolicyHelpersV1 } from "./kubernetes-runtime-policy.js";
 import {
 	createMultiServiceRuntimeOperations,
-	type MultiServiceHealthDiagnosticV1,
 	isMultiService,
+	type MultiServiceHealthDiagnosticV1,
 } from "./multi-service-runtime.js";
 
 const selectorNamePattern = /^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/;
@@ -200,7 +200,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		/** 本次观测到的唯一就绪 Pod，用于绑定签名 readiness 结果（#1889）。 */
 		readonly podUid?: string;
 	}) => Promise<boolean>;
-	readonly onHealthDiagnostic?: (diagnostic: MultiServiceHealthDiagnosticV1) => void;
+	readonly onHealthDiagnostic?: (
+		diagnostic: MultiServiceHealthDiagnosticV1,
+	) => void;
 }) {
 	const { client, policy } = options;
 	const multiService = createMultiServiceRuntimeOperations({

@@ -7,11 +7,11 @@ import {
 } from "@agent-infra/platform-core";
 import { openPostgresWorkloadReconciliationStoreV1 } from "@agent-infra/platform-store";
 import { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";
+import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import {
 	createWorkloadRuntimeV1,
 	type WorkloadRuntimeOptionsV1,
 } from "./workload-runtime.js";
-import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import { createWorkloadStepFailureLoggerV1 } from "./workload-step-failure.js";
 
 export interface PlatformWorkloadWorkerOptionsV1

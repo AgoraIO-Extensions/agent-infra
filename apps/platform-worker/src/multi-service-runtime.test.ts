@@ -1101,7 +1101,8 @@ describe("multi-service runtime operations", () => {
 			onHealthDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
 		});
 		const value = desired();
-		if (!isMultiService(value)) throw new Error("multi-service fixture invalid");
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
 		const identity = await operations.apply(value);
 		await operations.observe(value, identity);
 		expect(diagnostics[0]).toMatchObject({
@@ -1110,28 +1111,59 @@ describe("multi-service runtime operations", () => {
 			stage: "workload_not_ready",
 		});
 		expect(
-			(diagnostics[0] as { workloads: { kind: string; name: string }[] }).workloads.some(
+			(
+				diagnostics[0] as { workloads: { kind: string; name: string }[] }
+			).workloads.some(
 				(entry) => entry.kind === "Deployment" && entry.name.endsWith("-web"),
 			),
 		).toBe(true);
 		markWorkloadsReady(fake);
-		fake.resources.set(
-			`Endpoints/${workloadResourceNameV1("agent-a")}-web`,
-			{
-				apiVersion: "v1",
-				kind: "Endpoints",
-				metadata: { name: `${workloadResourceNameV1("agent-a")}-web` },
-				subsets: [{ addresses: [] }],
-			} as V1Endpoints,
-		);
+		fake.resources.set(`Endpoints/${workloadResourceNameV1("agent-a")}-web`, {
+			apiVersion: "v1",
+			kind: "Endpoints",
+			metadata: { name: `${workloadResourceNameV1("agent-a")}-web` },
+			subsets: [{ addresses: [] }],
+		} as V1Endpoints);
 		diagnostics.length = 0;
-		expect(await operations.observe(value, identity)).toBe("pending");
+		expect(await operations.observe(value, identity)).toBe("healthy");
 		expect(diagnostics[0]).toMatchObject({ stage: "service_no_endpoints" });
 		expect(
-			(diagnostics[0] as { services: { name: string; endpointAddresses: number }[] }).services.some(
+			(
+				diagnostics[0] as {
+					services: { name: string; endpointAddresses: number }[];
+				}
+			).services.some(
 				(entry) => entry.name.endsWith("-web") && entry.endpointAddresses === 0,
 			),
 		).toBe(true);
+	});
+
+	it("keeps health unchanged when the optional Endpoints diagnostic read is denied", async () => {
+		const fake = fakeClient();
+		const diagnostics: unknown[] = [];
+		const read = fake.client.read.bind(fake.client);
+		const client = {
+			...fake.client,
+			read: async <T extends KubernetesObject>(
+				kind: Parameters<typeof fake.client.read>[0],
+				name: string,
+			): Promise<T | null> => {
+				if (kind === "Endpoints") throw new Error("forbidden");
+				return (await read(kind, name)) as T | null;
+			},
+		};
+		const operations = createMultiServiceRuntimeOperations({
+			client,
+			policy: { ...basePolicy, storageSize: "1Gi" },
+			onHealthDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+		});
+		const value = desired();
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		const identity = await operations.apply(value);
+		markWorkloadsReady(fake);
+		expect(await operations.observe(value, identity)).toBe("healthy");
+		expect(diagnostics.at(-1)).toMatchObject({ stage: "healthy" });
 	});
 
 	it("runs a migration Job before services and reuses its completed result", async () => {
