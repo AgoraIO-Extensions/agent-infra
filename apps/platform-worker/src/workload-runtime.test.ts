@@ -4884,6 +4884,30 @@ describe("observeForDrain (#1889)", () => {
 		expect(health).toHaveBeenCalledTimes(3);
 	});
 
+	it("records bounded health/readiness timing and reuse observations (#3303)", async () => {
+		const observations: Array<Record<string, unknown>> = [];
+		const { state, monitor, drain } = await ready({
+			onProbe: (observation) => observations.push({ ...observation }),
+		});
+		observations.length = 0;
+		await expect(monitor.observe(state)).resolves.toBe("healthy");
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		expect(
+			observations.map(({ stage, outcome }) => ({ stage, outcome })),
+		).toEqual([
+			{ stage: "health", outcome: "passed" },
+			{ stage: "readiness", outcome: "passed" },
+			{ stage: "health", outcome: "passed" },
+			{ stage: "readiness", outcome: "reused" },
+		]);
+		for (const observation of observations) {
+			expect(observation.agentId).toBe("agent-a");
+			expect(observation.workloadRevision).toBe(state.revision);
+			expect(observation.durationMs).toEqual(expect.any(Number));
+			expect(observation.durationMs).toBeGreaterThanOrEqual(0);
+		}
+	});
+
 	it("runs the full readiness without a passed record", async () => {
 		const { state, drain, probeRuntime } = await ready();
 		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");

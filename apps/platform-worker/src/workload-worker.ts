@@ -99,6 +99,16 @@ export function createPlatformWorkloadWorkerV1(
 				}),
 			);
 		},
+		onProbe(observation) {
+			options.onProbe?.(observation);
+			logSafely(
+				JSON.stringify({
+					service: "platform-worker",
+					code: "WORKLOAD_PROBE_OBSERVED",
+					...observation,
+				}),
+			);
+		},
 	});
 	const store = openPostgresWorkloadReconciliationStoreV1({
 		databaseUrl: options.databaseUrl,
