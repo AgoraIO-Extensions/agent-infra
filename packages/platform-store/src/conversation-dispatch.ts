@@ -475,6 +475,7 @@ export class PostgresConversationDispatchStoreV1
 						'conversation.turn.supplement.v1',
 						'conversation.turn.stop.v1',
 						'conversation.native-capability.invoke.v1',
+						'conversation.native-capability.invoke.v2',
 						'conversation.browser.handoff.v1',
 						'conversation.sandbox.reconcile.v1'
 					)
@@ -515,6 +516,7 @@ export class PostgresConversationDispatchStoreV1
 								'conversation.turn.regenerate.v1',
 								'conversation.turn.supplement.v1',
 								'conversation.native-capability.invoke.v1',
+								'conversation.native-capability.invoke.v2',
 								'conversation.browser.handoff.v1'
 							)
 							and (
@@ -543,7 +545,8 @@ export class PostgresConversationDispatchStoreV1
 									operation in (
 										'conversation.turn.submit.v1',
 										'conversation.turn.regenerate.v1',
-										'conversation.native-capability.invoke.v1'
+									'conversation.native-capability.invoke.v1',
+									'conversation.native-capability.invoke.v2'
 									)
 									and exists (
 										select 1
@@ -553,7 +556,7 @@ export class PostgresConversationDispatchStoreV1
 											and e.conversation_id = outbox_items.scope_id
 											and e.status in ('processing', 'unknown')
 											and (
-												outbox_items.operation <> 'conversation.native-capability.invoke.v1'
+												outbox_items.operation not in ('conversation.native-capability.invoke.v1', 'conversation.native-capability.invoke.v2')
 												or c.host_session_ref is not null
 											)
 									)
@@ -1035,8 +1038,10 @@ export class PostgresConversationDispatchStoreV1
 					)
 						throw new StaleDispatchLease();
 					if (
-						input.claim.operation ===
-							"conversation.native-capability.invoke.v1" &&
+						(input.claim.operation ===
+							"conversation.native-capability.invoke.v1" ||
+							input.claim.operation ===
+								"conversation.native-capability.invoke.v2") &&
 						state.execution.status === "submitted" &&
 						state.conversation.status !== "ready"
 					)

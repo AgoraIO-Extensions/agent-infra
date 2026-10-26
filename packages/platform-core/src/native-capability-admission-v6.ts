@@ -58,7 +58,7 @@ export type NativeCapabilityAdmissionRequestV6 = Readonly<{
 	traceId: string;
 }>;
 
-type NativeCapabilityInvocationBindingV6 = Readonly<{
+export type NativeCapabilityInvocationBindingV6 = Readonly<{
 	schemaVersion: 2;
 	kind: "native-capability";
 	conversationId: string;

@@ -197,6 +197,7 @@ export interface ConversationPayload {
 	modelOptionId: string | null;
 	reasoningLevel: string | null;
 	nativeCapability?: import("@agent-infra/platform-core").ConversationNativeCapabilityBindingV1;
+	nativeCapabilityV6?: import("@agent-infra/platform-core").NativeCapabilityInvocationBindingV6;
 	browserHandoff?: BrowserHandoffCommandV1;
 }
 
@@ -227,6 +228,7 @@ export const operations = new Set<ConversationDispatchOperationV1>([
 	"conversation.turn.supplement.v1",
 	"conversation.turn.stop.v1",
 	"conversation.native-capability.invoke.v1",
+	"conversation.native-capability.invoke.v2",
 	"conversation.browser.handoff.v1",
 ]);
 

@@ -21,7 +21,10 @@ import { isWorkspaceReferenceV1 } from "./file-authority.js";
 function runtimeOperation(
 	claim: ConversationDispatchClaimV1,
 ): ConversationRuntimeDispatchOperationV1 {
-	if (claim.operation === "conversation.native-capability.invoke.v1")
+	if (
+		claim.operation === "conversation.native-capability.invoke.v1" ||
+		claim.operation === "conversation.native-capability.invoke.v2"
+	)
 		return "native-capability.invoke";
 	if (claim.operation === "conversation.turn.supplement.v1") {
 		return "turn.supplement" as const;
@@ -41,7 +44,10 @@ export function isTurnOperation(operation: ConversationDispatchOperationV1) {
 export function isNativeCapabilityOperation(
 	operation: ConversationDispatchOperationV1,
 ) {
-	return operation === "conversation.native-capability.invoke.v1";
+	return (
+		operation === "conversation.native-capability.invoke.v1" ||
+		operation === "conversation.native-capability.invoke.v2"
+	);
 }
 
 /** Runtime operations that produce durable event/status streams. */
@@ -52,7 +58,10 @@ export function isRuntimeEventOperation(
 }
 
 export function operationId(claim: ConversationDispatchClaimV1): string {
-	if (claim.operation === "conversation.native-capability.invoke.v1")
+	if (
+		claim.operation === "conversation.native-capability.invoke.v1" ||
+		claim.operation === "conversation.native-capability.invoke.v2"
+	)
 		return claim.executionId;
 	if (claim.operation === "conversation.turn.supplement.v1") {
 		return claim.messageId ?? unavailable();
@@ -105,6 +114,13 @@ export function runtimeRequest(
 			...base,
 			operation: "native-capability.invoke",
 			nativeCapability: claim.nativeCapability ?? unavailable(),
+		};
+	}
+	if (claim.operation === "conversation.native-capability.invoke.v2") {
+		return {
+			...base,
+			operation: "native-capability.invoke",
+			nativeCapabilityV6: claim.nativeCapabilityV6 ?? unavailable(),
 		};
 	}
 	return {

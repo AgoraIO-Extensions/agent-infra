@@ -5,6 +5,7 @@ import {
 	type ConversationDispatchOperationV1,
 	type ConversationDispatchStateTransitionV1,
 	type ConversationMetadataRecoveryV1,
+	type NativeCapabilityInvocationBindingV6,
 	type NativeTextInputV1,
 	nativeCapabilityParametersDigestV1,
 	parseConversationMetadataRecoveryV1,
@@ -26,7 +27,8 @@ export function exactPayload(
 	if (!input) return undefined;
 	const isStop = operation === "conversation.turn.stop.v1";
 	const isNativeCapability =
-		operation === "conversation.native-capability.invoke.v1";
+		operation === "conversation.native-capability.invoke.v1" ||
+		operation === "conversation.native-capability.invoke.v2";
 	const isBrowserHandoff = operation === "conversation.browser.handoff.v1";
 	const selectionKeys = [
 		"modelConfigurationRevision",
@@ -149,6 +151,52 @@ export function exactPayload(
 		};
 	}
 	if (isNativeCapability) {
+		if (operation === "conversation.native-capability.invoke.v2") {
+			const binding =
+				input as unknown as NativeCapabilityInvocationBindingV6 & {
+					readonly requestId?: unknown;
+					readonly traceId?: unknown;
+					readonly idempotencyKey?: unknown;
+				};
+			if (
+				binding.schemaVersion !== 2 ||
+				!binding ||
+				!binding.operation ||
+				binding.operation.kind !== "execution" ||
+				!validText(binding.operation.id) ||
+				binding.operation.id !== binding.executionId ||
+				!validText(binding.executionId) ||
+				binding.executionId !== input.executionId ||
+				!validText(binding.conversationId) ||
+				binding.conversationId !== input.conversationId ||
+				!validText(binding.capabilityId) ||
+				!validText(binding.parametersDigest) ||
+				!validText(binding.directoryRevision) ||
+				!validText(binding.capabilitySourceVersion) ||
+				!validText(binding.requestDigest) ||
+				!validText(binding.operationDigest) ||
+				binding.executionStatus !== "submitted" ||
+				!validText(binding.requestId) ||
+				!validText(binding.traceId) ||
+				!validText(binding.idempotencyKey) ||
+				!validText(binding.hostSessionRef)
+			)
+				return undefined;
+			return {
+				schemaVersion: 1,
+				conversationId: input.conversationId as string,
+				executionId: input.executionId as string,
+				messageId: null,
+				turnId: input.turnId as string,
+				sessionGeneration: safeCounter(input.sessionGeneration, 1) as number,
+				stopRequestId: null,
+				modelConfigurationRevision: null,
+				modelOptionId: null,
+				reasoningLevel: null,
+				nativeCapabilityV6:
+					binding as ConversationPayload["nativeCapabilityV6"],
+			};
+		}
 		const capabilityId = input.capabilityId;
 		const capabilityKind = input.capabilityKind;
 		const directoryRevision = input.directoryRevision;
@@ -293,7 +341,8 @@ export function isExecutionOperation(
 ) {
 	return (
 		isTurn(operation) ||
-		operation === "conversation.native-capability.invoke.v1"
+		operation === "conversation.native-capability.invoke.v1" ||
+		operation === "conversation.native-capability.invoke.v2"
 	);
 }
 

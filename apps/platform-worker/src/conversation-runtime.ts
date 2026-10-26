@@ -14,6 +14,7 @@ import type {
 	RuntimeEventAckRequestV4,
 	RuntimeEventReadRequestV4,
 	RuntimeNativeCapabilityRequestV5,
+	RuntimeNativeCapabilityRequestV6,
 	RuntimeRestoreExecutionKeyRequestV4,
 } from "@agent-infra/contracts/runtime";
 import {
@@ -51,7 +52,9 @@ import { createWorkerRuntimeGrantSignerV4 } from "./runtime-grant-signer-v4.js";
 import {
 	createWorkerRuntimeHostClientV3,
 	createWorkerRuntimeHostClientV4,
+	createWorkerRuntimeHostClientV6,
 	type WorkerExecutionKeyReaderV4,
+	type WorkerExecutionKeyReaderV6,
 } from "./runtime-host-client.js";
 import {
 	installationUnavailable,
@@ -951,6 +954,27 @@ export function createConversationRuntimeV2(
 				),
 		});
 	}
+	function v6Client(
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		signal: AbortSignal,
+		assertCurrent = () =>
+			assertCurrentPrepared(prepared, "native-capability.invoke", signal),
+	) {
+		const keys = executionKeys as unknown as
+			| WorkerExecutionKeyReaderV6
+			| undefined;
+		if (!keys || !decryptor) unavailable("RUNTIME_KEY_UNAVAILABLE");
+		return createWorkerRuntimeHostClientV6({
+			...prepared.target,
+			fetch: options.fetch,
+			executionKeys: keys,
+			decryptor,
+			signGrant: (request, authorizationRecordId) =>
+				signV4.signV6(request, authorizationRecordId),
+			verifyGrant: signV4.verifyV6,
+			assertCurrentAuthorization: assertCurrent,
+		});
+	}
 	async function dispatchBusinessV4(
 		prepared: Awaited<ReturnType<typeof prepare>>,
 		signal: AbortSignal,
@@ -1475,7 +1499,9 @@ export function createConversationRuntimeV2(
 			const active = combined(signal);
 			const context = contextFor(request);
 			const expectedOperation: ConversationRuntimeDispatchRequestV1["operation"] =
-				context.claim.operation === "conversation.native-capability.invoke.v1"
+				context.claim.operation ===
+					"conversation.native-capability.invoke.v1" ||
+				context.claim.operation === "conversation.native-capability.invoke.v2"
 					? "native-capability.invoke"
 					: context.claim.operation === "conversation.turn.stop.v1"
 						? "turn.stop"
@@ -1523,6 +1549,49 @@ export function createConversationRuntimeV2(
 				denied();
 			}
 			if (request.operation === "native-capability.invoke") {
+				if (context.claim.nativeCapabilityV6) {
+					const binding = context.claim.nativeCapabilityV6;
+					if (!state.hostSessionRef || authority.purpose !== "business")
+						unavailable("RUNTIME_REQUEST_INVALID");
+					const unsigned: RuntimeNativeCapabilityRequestV6 = {
+						...base,
+						schemaVersion: 6,
+						principal: context.claim
+							.principal as RuntimeNativeCapabilityRequestV6["principal"],
+						executionSource: binding.executionSource,
+						channelId: context.claim.channelId,
+						agentId: context.claim.agentId,
+						conversationId: context.claim.conversationId,
+						executionId: context.claim.executionId,
+						turnId: context.claim.turnId,
+						sessionGeneration: context.claim.sessionGeneration,
+						hostSessionRef: state.hostSessionRef,
+						operation: binding.operation,
+						grant: {
+							schemaVersion: 6,
+							format: "runtime-execution-jws",
+							token: "unsigned.unsigned.unsigned",
+						},
+						keyBinding: binding.keyBinding,
+						capabilityId: binding.capabilityId,
+						capabilityKind: "command",
+						directoryRevision: binding.directoryRevision,
+						parameters: binding.parameters,
+						parametersDigest: binding.parametersDigest,
+						capabilitySourceVersion: binding.capabilitySourceVersion,
+						selection: {
+							schemaVersion: 1,
+							modelOptionId: binding.modelOptionId,
+							reasoningLevel: binding.reasoningLevel,
+						},
+						configVersion: binding.configVersion,
+					};
+					const response = await v6Client(prepared, active).nativeCapability(
+						unsigned,
+						active,
+					);
+					return { ...response, schemaVersion: 1 };
+				}
 				if (state.runtimeSubmitProtocol === "v4")
 					return dispatchBusinessV4(prepared, active);
 				if (

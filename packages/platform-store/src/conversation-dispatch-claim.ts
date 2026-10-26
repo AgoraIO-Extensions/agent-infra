@@ -52,7 +52,8 @@ async function retireInvalidNativeCapability(
 	outbox: OutboxRow,
 ): Promise<boolean> {
 	if (
-		outbox.operation !== "conversation.native-capability.invoke.v1" ||
+		(outbox.operation !== "conversation.native-capability.invoke.v1" &&
+			outbox.operation !== "conversation.native-capability.invoke.v2") ||
 		(outbox.status !== "pending" && outbox.status !== "retry_scheduled")
 	)
 		return false;
@@ -491,6 +492,9 @@ export async function claimWork(
 				: null,
 		...(payload.nativeCapability
 			? { nativeCapability: payload.nativeCapability }
+			: {}),
+		...(payload.nativeCapabilityV6
+			? { nativeCapabilityV6: payload.nativeCapabilityV6 }
 			: {}),
 		...(payload.browserHandoff
 			? { browserHandoff: payload.browserHandoff }
