@@ -1369,6 +1369,70 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		}
 	});
 
+	it("lets the consumer commit buffered events before every read and reads from that cursor (#3443)", async () => {
+		const h = runtimeV4Harness();
+		try {
+			const reference = await h.authorize();
+			const order: string[] = [];
+			h.fetcher.mockImplementation(async (_url, init) => {
+				const body = JSON.parse(init?.body as string);
+				order.push(`read:${body.afterCursor}`);
+				return Response.json({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					executionId: "execution",
+					events:
+						body.afterCursor === "tool-cursor"
+							? [terminal]
+							: [modelFact, toolFact],
+				});
+			});
+			let reads = 0;
+			const beforeRead = vi.fn(async () => {
+				reads++;
+				order.push(`commit:${reads}`);
+				// 第二次读取前消费方提交了第一页的两个事件。
+				if (reads === 2)
+					Object.assign(h.state, { runtimeCursor: "tool-cursor" });
+			});
+			const events: unknown[] = [];
+			for await (const event of h.runtime.runtimeHost.events(
+				h.events(reference),
+				undefined,
+				{ beforeRead },
+			))
+				events.push(event);
+			expect(events).toEqual([modelFact, toolFact, terminal]);
+			expect(order).toEqual([
+				"commit:1",
+				"read:null",
+				"commit:2",
+				"read:tool-cursor",
+			]);
+		} finally {
+			h.runtime.close();
+		}
+	});
+
+	it("does not read when committing buffered events fails (#3443)", async () => {
+		const h = runtimeV4Harness();
+		try {
+			const reference = await h.authorize();
+			const failure = new Error("buffered commit failed");
+			const stream = h.runtime.runtimeHost
+				.events(h.events(reference), undefined, {
+					beforeRead: async () => {
+						throw failure;
+					},
+				})
+				[Symbol.asyncIterator]();
+			await expect(stream.next()).rejects.toBe(failure);
+			expect(h.fetcher).not.toHaveBeenCalled();
+		} finally {
+			h.runtime.close();
+		}
+	});
+
 	it("switches the same V4 event loop to persisted control after stop", async () => {
 		const h = runtimeV4Harness();
 		try {

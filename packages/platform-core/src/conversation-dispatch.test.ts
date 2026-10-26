@@ -2207,14 +2207,17 @@ describe("Conversation Worker dispatch", () => {
 			} as ConversationRuntimeOperationEventV2["payload"],
 		});
 		function host(
-			stream: (request: { afterCursor?: string }) => AsyncIterable<unknown>,
+			stream: (
+				request: { afterCursor?: string },
+				hooks?: { readonly beforeRead?: () => Promise<void> },
+			) => AsyncIterable<unknown>,
 		) {
 			const inner = new FakeConversationRuntimeHostV1();
 			const acknowledged: string[] = [];
 			const runtimeHost: ConversationRuntimeHostPortV1 = {
 				dispatch: (request) => inner.dispatch(request),
 				recoverStatus: (request) => inner.recoverStatus(request),
-				events: (request) => stream(request) as never,
+				events: (request, _signal, hooks) => stream(request, hooks) as never,
 				async acknowledge(request) {
 					acknowledged.push(request.confirmedCursor);
 				},
@@ -2541,6 +2544,71 @@ describe("Conversation Worker dispatch", () => {
 					outcome: "retry",
 				});
 				expect(h.store.current.runtimeCursor).toBe("cursor-1");
+			});
+
+			it("commits buffered deltas before the Host's next read and never while a read is in flight (#3443)", async () => {
+				let reading = false;
+				const committedDuringRead: number[] = [];
+				const cursorsAtRead: (string | null | undefined)[] = [];
+				let h: ReturnType<typeof setup> | undefined;
+				const { runtimeHost, acknowledged } = host(
+					async function* (_request, hooks) {
+						await hooks?.beforeRead?.();
+						cursorsAtRead.push(h?.store.current.runtimeCursor);
+						yield runtimeEvent(1, "running");
+						yield text(2);
+						yield text(3);
+						await hooks?.beforeRead?.();
+						cursorsAtRead.push(h?.store.current.runtimeCursor);
+						// 读取进行中超过 50 ms，期间不能有提交改变读取发送前复核的 fenced state。
+						reading = true;
+						await new Promise((resolve) => setTimeout(resolve, 150));
+						reading = false;
+						yield text(4);
+						yield runtimeEvent(5);
+					},
+				);
+				h = setup({ runtimeHost, batched: true });
+				const events = batchedEvents(h);
+				const persistBatch = events.persistBatch.bind(events);
+				events.persistBatch = async (commands) => {
+					if (reading) committedDuringRead.push(commands.length);
+					return persistBatch(commands);
+				};
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "accepted",
+				});
+				expect(committedDuringRead).toEqual([]);
+				expect(events.batches).toEqual([2, 1]);
+				expect(cursorsAtRead).toEqual([null, "cursor-3"]);
+				expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual([
+					"cursor-1",
+					"cursor-2",
+					"cursor-3",
+					"cursor-4",
+					"cursor-5",
+				]);
+				expect(acknowledged).toEqual(["cursor-5"]);
+			});
+
+			it("reports stale when the commit before a read loses the lease (#3443)", async () => {
+				const { runtimeHost } = host(async function* (_request, hooks) {
+					await hooks?.beforeRead?.();
+					yield text(1);
+					await hooks?.beforeRead?.();
+					yield text(2);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				const events = batchedEvents(h);
+				const persistBatch = events.persistBatch.bind(events);
+				events.persistBatch = async (commands) => {
+					events.stale = true;
+					return persistBatch(commands);
+				};
+				await expect(dispatch(h.useCase)).resolves.toEqual({
+					schemaVersion: 1,
+					outcome: "stale",
+				});
 			});
 
 			it("commits deltas read before a stream failure", async () => {
