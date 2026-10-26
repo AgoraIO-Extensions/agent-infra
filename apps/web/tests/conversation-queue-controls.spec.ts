@@ -13,7 +13,11 @@ import {
 	timestamp,
 } from "../src/features/conversation/conversation-test-fixtures";
 import { keepConversationStreamOpen } from "./conversation-stream";
-import { expectFocusSettled, expectNoDuplicateControls } from "./page-health";
+import {
+	expectFocusSettled,
+	expectNoDuplicateControls,
+	holdRequests,
+} from "./page-health";
 import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
 // #3457（#3451 B16-1～3）：对话页排队期间的「命令 / Skill」入口、排队已满时的说明行与多条
@@ -341,8 +345,21 @@ for (const viewport of viewports) {
 		await expect(page.getByText(queueNote, { exact: true })).toHaveCount(0);
 		await expect(page.getByText(waitingNote, { exact: true })).toHaveCount(0);
 		await expect(send).not.toHaveAttribute("aria-describedby");
-		await expect(fixture.input).toHaveValue("第三条：附上统计表");
-		// 草稿保留、发送按钮仍可用：焦点留在刚按下的发送按钮上，不落到 body。
+		await expectCleanPage(page, errors);
+		// 再次发送同一草稿：提交进行中恢复原规则，说明重新出现；再次被拒为排队已满后又只剩繁忙提示。
+		const held = await holdRequests(
+			page,
+			"POST",
+			`/api/v1/conversations/${conversationId}/messages`,
+		);
+		await send.click();
+		await expect.poll(held.held).toBe(1);
+		await expect(page.getByText(queueNote, { exact: true })).toBeVisible();
+		held.release();
+		await expect(busy).toBeVisible();
+		await expect(page.getByText(queueNote, { exact: true })).toHaveCount(0);
+		await expect(send).not.toHaveAttribute("aria-describedby");
+		// 改写草稿后恢复原规则：说明重新出现，并由发送按钮引用。不落到 body。
 		await expectFocusSettled(send, "排队已满");
 		await expectNoDuplicateControls(page, "排队已满");
 		await expectCleanPage(page, errors);
@@ -355,6 +372,7 @@ for (const viewport of viewports) {
 		await expect(send).toHaveAttribute("aria-describedby", id ?? "");
 		await expectCleanPage(page, errors);
 		expect(fixture.writes).toEqual([
+			`POST /api/v1/conversations/${conversationId}/messages`,
 			`POST /api/v1/conversations/${conversationId}/messages`,
 		]);
 	});
