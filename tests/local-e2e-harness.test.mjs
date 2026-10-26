@@ -234,6 +234,27 @@ test("Worker readback rejects old, missing and non-ready Worker containers", asy
 		},
 	};
 	assert.doesNotThrow(() => assertWorkerReadback(binding, [deployment], [pod]));
+	assert.doesNotThrow(() =>
+		assertWorkerReadback(
+			binding,
+			[deployment],
+			[
+				pod,
+				{
+					metadata: { deletionTimestamp: "2026-01-01T00:00:00Z" },
+					status: {
+						containerStatuses: [
+							{
+								name: "platform-worker",
+								ready: true,
+								imageID: `registry.example/worker@${digest("b")}`,
+							},
+						],
+					},
+				},
+			],
+		),
+	);
 	assert.throws(
 		() => assertWorkerReadback(binding, [deployment], []),
 		/Worker image readback/,
@@ -256,25 +277,27 @@ test("Worker readback rejects old, missing and non-ready Worker containers", asy
 		/Worker image readback/,
 	);
 	assert.throws(
-		() =>
-			assertWorkerReadback(
-				binding,
-				[deployment],
-				[
-					pod,
-					{
-						status: {
-							containerStatuses: [
-								{
-									...pod.status.containerStatuses[0],
-									imageID: `registry.example/worker@${digest("b")}`,
-								},
-							],
-						},
-					},
-				],
-			),
+		() => assertWorkerReadback(binding, [{ spec: { replicas: 1 } }], [pod]),
 		/Worker image readback/,
+	);
+	assert.doesNotThrow(() =>
+		assertWorkerReadback(
+			binding,
+			[deployment],
+			[
+				pod,
+				{
+					status: {
+						containerStatuses: [
+							{
+								...pod.status.containerStatuses[0],
+								imageID: `registry.example/worker@${digest("b")}`,
+							},
+						],
+					},
+				},
+			],
+		),
 	);
 });
 

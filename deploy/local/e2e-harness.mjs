@@ -527,11 +527,28 @@ function inspectLocalImage(reference) {
 	return image;
 }
 
+async function lookupDnsWithTimeout(dns, host, timeoutMs = 30_000) {
+	let timer;
+	try {
+		return await Promise.race([
+			dns.lookup(host),
+			new Promise((_, reject) => {
+				timer = setTimeout(
+					() => reject(new Error(`DNS_LOOKUP_TIMEOUT:${host}`)),
+					timeoutMs,
+				);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
 async function buildPlatformImages(source) {
 	const platform = dockerPlatform();
 	const dns = await import("node:dns/promises");
 	const buildHosts = ["registry.npmjs.org", "dl-cdn.alpinelinux.org", "github.com", "raw.githubusercontent.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"];
-	const resolvedHosts = await Promise.all(buildHosts.map(async (host) => [host, (await dns.lookup(host)).address]));
+	const resolvedHosts = await Promise.all(buildHosts.map(async (host) => [host, (await lookupDnsWithTimeout(dns, host)).address]));
 	const proxy = process.env.E2E_HARNESS_BUILD_PROXY ?? "http://host.lima.internal:7892";
 	const profile = targetProfile();
 	const cachePath = join(stateRoot, "component-image-cache.json");
@@ -551,7 +568,7 @@ async function buildPlatformImages(source) {
 			"enterprise-directory-sync",
 		]) {
 			const input = await componentInputForSource(source, service, platform);
-			const key = `${service}:${input.inputHash}`;
+			const key = `${profile}:${service}:${input.inputHash}`;
 			const tag = `agent-infra-e2e-${service}:${input.inputHash}`;
 			const alias = `agent-infra-e2e-${service}`;
 			const previous = cache.components[key];
@@ -609,6 +626,7 @@ async function buildPlatformImages(source) {
 				tag,
 				buildSourceSha: previous?.buildSourceSha ?? source.sha,
 				platform,
+				profile,
 			};
 			await writeFile(cachePath, `${JSON.stringify(cache, null, 2)}\n`, {
 				mode: 0o600,
@@ -730,6 +748,7 @@ async function applyWorkerBinding(source) {
 		manifest.schemaVersion !== 1 ||
 		manifest.sourceSha !== source.sha ||
 		manifest.profile !== targetProfile() ||
+		!binding ||
 		binding?.inputHash !== input.inputHash ||
 		binding.platform !== platform ||
 		binding.repository !== repository ||
@@ -1117,7 +1136,20 @@ async function requireRealLoginValidation() {
 	if (session.status !== 200) fail(`AUTHORIZED_READ_FAILED_STATUS_${session.status}`);
 	let projection; try { projection = JSON.parse(session.body); } catch { fail("AUTHORIZED_READ_INVALID_JSON"); }
 	if (projection?.user?.userId !== expected) fail("AUTHORIZED_IDENTITY_MISMATCH");
-	console.log("Real login and authorized API read passed");
+	const businessPath = process.env.E2E_HARNESS_BUSINESS_READ_PATH ?? "/api/v2/agents";
+	if (!businessPath.startsWith("/") || businessPath.startsWith("//"))
+		fail("BUSINESS_READ_PATH_INVALID");
+	const business = await loginRequest(
+		base,
+		businessPath,
+		"GET",
+		undefined,
+		setCookie.split(";", 1)[0],
+		ca,
+	);
+	if (business.status !== 200) fail(`BUSINESS_READ_FAILED_STATUS_${business.status}`);
+	try { JSON.parse(business.body); } catch { fail("BUSINESS_READ_INVALID_JSON"); }
+	console.log("Real login, authorized session read, and business read passed");
 }
 
 function usage() {

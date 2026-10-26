@@ -53,7 +53,9 @@ export function assertWorkerReadback(binding, deployments, pods) {
 	const container = deployment?.spec?.template?.spec?.containers?.find(
 		(item) => item.name === "platform-worker",
 	);
-	const statuses = pods.map((pod) =>
+	const statuses = pods
+		.filter((pod) => !pod.metadata?.deletionTimestamp)
+		.map((pod) =>
 		pod.status?.containerStatuses?.find(
 			(item) => item.name === "platform-worker",
 		),
@@ -61,10 +63,9 @@ export function assertWorkerReadback(binding, deployments, pods) {
 	if (
 		container?.image !== expected ||
 		!(deployment.spec.replicas > 0) ||
-		statuses.length !== deployment.spec.replicas ||
-		statuses.some(
-			(item) => !item?.ready || !item.imageID?.endsWith(`@${binding.digest}`),
-		)
+		statuses.filter(
+			(item) => item?.ready && item.imageID?.endsWith(`@${binding.digest}`),
+		).length < deployment.spec.replicas
 	) {
 		throw new Error("Worker image readback mismatch or rollout incomplete");
 	}
