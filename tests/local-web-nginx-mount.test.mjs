@@ -42,3 +42,10 @@ test("the Web image installs the template the entrypoint reads and only loads th
 		/include \/tmp\/nginx-conf\/\*\.conf;/,
 	);
 });
+
+test("local Compose gives the directory sidecar a one CPU default budget", () => {
+	assert.match(
+		read("deploy/local/compose.yaml"),
+		/enterprise-directory-sync:[\s\S]*?cpus: \$\{PLATFORM_LOCAL_DIRECTORY_CPUS:-1\.0\}/,
+	);
+});

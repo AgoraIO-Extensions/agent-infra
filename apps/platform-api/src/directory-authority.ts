@@ -9,6 +9,8 @@ import type { LdapAccount } from "@agent-infra/identity";
 export interface DirectorySnapshotDeploymentInputV1 {
 	readonly endpoint: string;
 	readonly token: string;
+	/** Optional deployment budget; the directory client keeps its 5s default. */
+	readonly timeoutMs?: number;
 	readonly fetch?: typeof fetch;
 	readonly organizationIdForDepartment: (
 		department: DirectoryDepartment,

@@ -78,6 +78,9 @@ services:
     restart: unless-stopped
     image: ${PLATFORM_LOCAL_DIRECTORY_IMAGE:?Set the local directory sync image}
     build: !reset null
+    # Keep the local E2E directory sidecar at its declared 1 CPU budget by
+    # default; private environments may lower it explicitly for capacity tests.
+    cpus: ${PLATFORM_LOCAL_DIRECTORY_CPUS:-1.0}
     environment:
       DIRECTORY_ROOT_DEPARTMENT_ID: ${PLATFORM_LOCAL_DIRECTORY_ROOT_DEPARTMENT_ID:-1}
       WECOM_CORP_ID: ${PLATFORM_LOCAL_DIRECTORY_CORP_ID:?Set the private directory Corp ID}
