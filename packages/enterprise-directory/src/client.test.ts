@@ -69,6 +69,35 @@ describe("authenticated directory client", () => {
 		await expect(expired.loadCurrent(snapshot.validUntil)).rejects.toThrow();
 	});
 
+	it("uses the configured response timeout", async () => {
+		const client = createDirectoryClient({
+			endpoint: "https://directory.internal/internal/directory/snapshot",
+			token,
+			timeoutMs: 100,
+			fetch: async (_input, init) =>
+				new Promise<Response>((_resolve, reject) => {
+					init?.signal?.addEventListener(
+						"abort",
+						() => reject(init.signal?.reason),
+						{ once: true },
+					);
+				}),
+		});
+		await expect(client.loadCurrent(now)).rejects.toThrow();
+	});
+
+	it("rejects unsafe response timeout values", () => {
+		for (const timeoutMs of [99, 30_001, 1.5]) {
+			expect(() =>
+				createDirectoryClient({
+					endpoint: "https://directory.internal/internal/directory/snapshot",
+					token,
+					timeoutMs,
+				}),
+			).toThrow();
+		}
+	});
+
 	describe("concurrent loads (#2740)", () => {
 		const endpoint = "https://directory.internal/internal/directory/snapshot";
 
