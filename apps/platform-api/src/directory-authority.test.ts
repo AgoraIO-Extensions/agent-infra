@@ -60,6 +60,30 @@ describe("Platform directory deployment consumer", () => {
 		});
 	});
 
+	it("passes the deployment timeout budget to the snapshot client", async () => {
+		let signal: AbortSignal | undefined;
+		const resolveAuthority = createDirectoryOrganizationAuthorityResolverV1({
+			endpoint: "https://directory.internal/internal/directory/v2/snapshot",
+			token: "t".repeat(32),
+			timeoutMs: 100,
+			organizationIdForDepartment: (department) => `org:${department.id}`,
+			fetch: async (_input, init) => {
+				signal = init?.signal ?? undefined;
+				return Response.json(toDirectorySnapshotV2(snapshot));
+			},
+		});
+		await resolveAuthority({
+			uid: "ldap-1",
+			userId: "platform-1",
+			email: "alice@example.test",
+			displayName: "Alice",
+			accountStatus: "active",
+			roles: ["employee"],
+			authorizationRevision: "identity-1",
+		});
+		expect(signal).toBeInstanceOf(AbortSignal);
+	});
+
 	it("maps only the current LDAP email through the snapshot", async () => {
 		let requests = 0;
 		const organizationIds = createDirectoryOrganizationIdsResolverV1({
