@@ -163,6 +163,7 @@ beforeAll(async () => {
 		{ idx: 65, tag: "0065_wecom_receipt_execution" },
 		{ idx: 66, tag: "0066_wecom_stream_frame_seq" },
 		{ idx: 67, tag: "0067_configuration_runtime_revision" },
+		{ idx: 68, tag: "0068_database_jit_off" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
