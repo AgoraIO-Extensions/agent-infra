@@ -68,6 +68,16 @@ node deploy/local/e2e-harness.mjs verify
 node deploy/local/e2e-harness.mjs all
 ```
 
+`sync` 固定本次运行的 `sourceRevision`；后续 `images`、`build`、`deploy` 和 `verify` 只接受
+同一 worktree 的 pinned revision。缓存按组件输入和不可变 image ID 复用，Worker 还会校验
+依赖闭包、目标架构、registry 和 target profile。不同 state directory 指向同一 Docker/Kubernetes
+环境时仍共享环境锁，不能借此并行写入固定环境。
+
+默认使用完整 Harness。确认共享 base receipt、独立端口、TLS 和 loopback API 后，只有 Web-only
+变更可以运行 `node deploy/local/e2e-harness.mjs app`；涉及 API、Worker、Runtime、目录、身份、
+迁移、共享 Secret 或未知影响时必须使用完整流程。App lane 不执行迁移、不写共享 Kubernetes
+资源，也不拥有完整 E2E 锁。
+
 `all` 依次同步当前 branch upstream、解析/构建基础设施镜像、从干净 tracked context 构建
 Platform 镜像、执行数据库迁移、交付 Runtime 部署材料和 `platform.sh up`，最后回读组件状态。
 `reset` 只接受
@@ -76,6 +86,11 @@ Platform 镜像、执行数据库迁移、交付 Runtime 部署材料和 `platfo
 
 Runtime 镜像绑定必须是当前节点架构的 OCI image manifest Digest：API 与 Worker 准入不接受
 多架构 index。Harness 读取到 index 时只解析唯一的当前架构子 manifest，无法唯一解析即失败。
+
+Platform Worker 业务镜像默认不会被 Harness 推送到外部 registry。若当前 local kind 只能从
+registry 拉取，必须显式设置 `E2E_HARNESS_LOCAL_WORKER_REPOSITORY`，并确保它与 Worker values
+中的 repository 相同；推送和 digest 回读失败时 Harness 直接停止。配置 overlay 只包含
+Worker repository/digest，权限为 `0600`，不会复制完整私有 values。
 
 ## Runtime 部署材料
 
@@ -206,3 +221,10 @@ Harness 的 `verify` 只表示固定环境、镜像、Secret 引用、Worker 和
 仍须通过现有浏览器 E2E 入口显式完成；任何 mock、静态 healthz、wrapper 或上游 patch 都
 不能把 readiness 失败改写为成功。失败 Secret 只能通过正式 UI 重新生成 pending Secret，
 不能直接修改业务数据库。
+
+完整 Harness 的 `verify/all` 在 readiness 后还要求设置 `E2E_HARNESS_PUBLIC_ORIGIN`、
+`E2E_HARNESS_LOGIN_USERNAME_FILE`、`E2E_HARNESS_LOGIN_PASSWORD_FILE` 和
+`E2E_HARNESS_EXPECTED_USER_ID_FILE`。它使用 HTTPS、精确 Origin、真实 `/auth/login` POST、
+`__Host-platform-session` Cookie 和 `/api/v1/session` 授权读回；凭据只从仓库外的 `*_FILE`
+读取，失败时不打印值。未提供这些输入时，部署接线检查仍可单独运行，但业务登录验收必须保持
+未完成。
