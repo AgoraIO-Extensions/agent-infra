@@ -554,6 +554,7 @@ export function ConversationMessages({
 								<AlertAction>
 									<Button
 										variant="outline"
+										aria-label={withObjectName("准备重新发送", objectName)}
 										onClick={() => onResend(message.text)}
 									>
 										准备重新发送
@@ -692,7 +693,12 @@ function QueuedMessageStatus({
 			<AlertDescription>{text}</AlertDescription>
 			{state.status === "timed_out" && (
 				<AlertAction>
-					<Button variant="outline" onClick={onResend}>
+					{/* 多条排队超时可同时出现：可访问名称带提问摘要，同页不同名（N-12）。 */}
+					<Button
+						variant="outline"
+						aria-label={withObjectName("准备重新发送", objectName)}
+						onClick={onResend}
+					>
 						准备重新发送
 					</Button>
 				</AlertAction>
