@@ -160,6 +160,9 @@ export class PostgresConversationDispatchStoreV1
 			platformDatabaseUrlFromEnvironment({
 				PLATFORM_DATABASE_URL: options.databaseUrl,
 			}),
+			// #3447：发现查询的相关子查询让估算成本超过 jit_above_cost，每次轮询 JIT 编译约 1.9 s，
+			// 执行本身只要几十毫秒；这个 Store 只做短事务，JIT 没有收益。
+			{ connection: { jit: "off" } },
 		);
 	}
 
