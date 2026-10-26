@@ -141,7 +141,8 @@ CI 或评审失败时由负责人、本地 Agent 查看原生日志和评论，�
 讨论解决后，才允许合并。同仓库、目标为默认分支的非 Draft PR 保留 GitHub 原生 Squash Auto-merge enrollment；
 它只登记 auto-merge，不直接 Merge、不绕过门禁，也不替人 Approve。登记前 Harness 通过 GraphQL
 回读当前 PR 的 review threads；存在任何未解决 thread 时不登记，并在 review/review-comment 事件
-后重新判断。最终合并仍以 GitHub 的 required conversation resolution 为准。
+后重新判断；已有 auto-merge request 会先取消。最终合并仍以 GitHub 的 required conversation
+resolution 为准。
 
 ## 10. 安全与验证
 

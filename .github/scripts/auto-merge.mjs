@@ -17,6 +17,14 @@ const ENABLE_AUTO_MERGE_MUTATION = `
   }
 `;
 
+const DISABLE_AUTO_MERGE_MUTATION = `
+  mutation DisablePullRequestAutoMerge($pullRequestId: ID!) {
+    disablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId }) {
+      pullRequest { number autoMergeRequest { enabledAt } }
+    }
+  }
+`;
+
 const REVIEW_THREADS_QUERY = `
   query PullRequestReviewThreads($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
     repository(owner: $owner, name: $repo) {
@@ -109,6 +117,22 @@ export async function enrollPullRequest({ pullRequest, request }) {
   return "enrolled";
 }
 
+export async function disableAutoMerge({ pullRequest, request }) {
+	if (!pullRequest.auto_merge) return "not-enrolled";
+	const response = await request("/graphql", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			query: DISABLE_AUTO_MERGE_MUTATION,
+			variables: { pullRequestId: pullRequest.node_id },
+		}),
+	});
+	if (!response.data?.disablePullRequestAutoMerge?.pullRequest) {
+		throw new Error("GitHub did not confirm auto-merge cancellation");
+	}
+	return "disabled";
+}
+
 function requiredEnvironment(name) {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
@@ -158,6 +182,11 @@ async function main() {
     defaultBranch: event.repository?.default_branch,
     unresolvedReviewThreads,
   });
+  if (!eligibility.eligible && unresolvedReviewThreads > 0 && pullRequest.auto_merge) {
+		const result = await disableAutoMerge({ pullRequest, request: githubRequest });
+		console.log(`Auto-merge ${result}: ${eligibility.reason}`);
+		return;
+	}
   if (!eligibility.eligible) {
     console.log(`Auto-merge not enrolled: ${eligibility.reason}`);
     return;

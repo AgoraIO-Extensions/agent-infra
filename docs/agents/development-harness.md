@@ -37,5 +37,5 @@ receipt 只表示选择结果。命令复用仓库已有检查，不删除安全
 修复或自动合并的通用 skill 不适用于本仓库，除非负责人另行确认并更新本仓库 workflow Spec。
 
 Auto-merge Enrollment 会回读 PR 的 GraphQL review threads；任何未解决 thread 都会阻止登记，
-review 或 review-comment 事件会重新执行检查。这个日志判断不能替代 GitHub branch protection 的
-required conversation resolution。
+如果已有 auto-merge request 则先取消它。review 或 review-comment 事件会重新执行检查。这个
+日志判断不能替代 GitHub branch protection 的 required conversation resolution。

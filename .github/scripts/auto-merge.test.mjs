@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   countUnresolvedReviewThreads,
+  disableAutoMerge,
   enrollPullRequest,
   evaluateAutoMergeEligibility,
   unresolvedReviewThreadCount,
@@ -131,4 +132,20 @@ test("enables native Squash auto-merge without a direct merge mutation", async (
   assert.match(payload.query, /mergeMethod:\s*SQUASH/);
   assert.doesNotMatch(payload.query, /\bmergePullRequest\b/);
   assert.deepEqual(payload.variables, { pullRequestId: "PR_node_id" });
+});
+
+test("disables an existing auto-merge request when a thread blocks it", async () => {
+
+	const calls = [];
+	const result = await disableAutoMerge({
+		pullRequest: pullRequest({ auto_merge: { enabled_by: { login: "member" } } }),
+		request: async (path, options) => {
+			calls.push({ path, options });
+			return { data: { disablePullRequestAutoMerge: { pullRequest: { number: 8 } } } };
+		},
+	});
+	assert.equal(result, "disabled");
+	const payload = JSON.parse(calls[0].options.body);
+	assert.match(payload.query, /disablePullRequestAutoMerge/);
+	assert.doesNotMatch(payload.query, /enablePullRequestAutoMerge/);
 });
