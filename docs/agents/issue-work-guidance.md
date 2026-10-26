@@ -1,7 +1,7 @@
 # Issue 工作指导
 
 > 适用范围：`AgoraIO-Extensions/agent-infra` 当前开放 Issue。本文把实时清单转成可执行的分派规则；具体产品结论仍以 PRD、工程 Spec、HLD 和 Issue 正文为准。
-> 最近快照：2026-10-26；开放 Issue 87 个；主干 `448c0ad74`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
+> 最近快照：2026-10-26；开放 Issue 57 个；主干 `247f8face`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
 
 ## 四类工作边界
 
@@ -27,19 +27,27 @@
 
 | Agent lane | Primary Issue | 目标 | 禁止越界 |
 | --- | ---: | --- | --- |
-| V6 Consumer | [#3490](https://github.com/AgoraIO-Extensions/agent-infra/issues/3490) | 贯通 Core→Store→Worker V6 dispatch consumer，保留旧版本兼容和 fail-closed | 不改 Driver/ACK/Web 验收，不绕过 Grant/Key/fence |
-| Diagnostics | [#3428](https://github.com/AgoraIO-Extensions/agent-infra/issues/3428) | 完成多服务有界脱敏诊断并处理 review | 不改变健康状态机 |
-| Directory Deployment | [#3481](https://github.com/AgoraIO-Extensions/agent-infra/issues/3481) | 完成共享 timeout、部署 adapter 和本地 CPU 接线 | 不把真实环境观察代替代码/部署验收 |
+| Worker stale binding | [#3380](https://github.com/AgoraIO-Extensions/agent-infra/issues/3380) | 分类永久 model binding mismatch，停止 ready 热循环并保留 retryable outage 重试 | 不改 ACK/Helm，不处理 AC |
+| Worker diagnostics | [#3428](https://github.com/AgoraIO-Extensions/agent-infra/issues/3428) | PR #3479 复核与合入 | 不改变健康状态机 |
+| Platform/Directory | [#3481](https://github.com/AgoraIO-Extensions/agent-infra/issues/3481) | 代码已合入，开发关闭；真实 AC 后续跟进 | 不把 AC 结果写成开发完成证明 |
 
 三条 lane 的子 agent 都必须先在最新 `origin/main` 上复读 Issue；若发现 AC、依赖或 owner 不满足实现门槛，返回带证据的只读 handoff，不创建伪 PR。
 
 ## 分派与状态更新规则
 
-- `ready-for-agent` 只表示可以开始契约复核，不代表依赖已满足。
-- `needs-triage` 先由协调者补齐问题、范围、验证和 blocker；不得直接认领。
-- `ready-for-human`、真实部署、真实浏览器、外部账号和人工决策保持人工门禁；代码测试通过不等于验收完成。
-- 同一文件、同一部署单元或同一 Issue 只能有一个写 owner；依赖关系写回 Issue 或 PR，不在状态表里推测。
-- 每次状态更新必须带日期、证据链接、准确的 head/PR 状态和未完成 AC；不使用“看起来完成”“CI 绿色”作为完成依据。
+- 开发完成且代码已合入即可关闭开发 Issue；AC/真实验收保留在评论和后续验收票中。
+- 有开放开发 PR、未提交实现或明确外部 blocker 的 Issue 保持开放。
+- 子 Issue 的开发全部完成后关闭父开发 Issue；Parent 的真实验收范围另行跟进。
+- 同一文件、部署单元或 Issue 只允许一个写 owner。
+
+## 当前交付跟进
+
+| Primary Issue | 当前状态 | 证据 |
+| --- | --- | --- |
+| #3380 | 开发 lane 复核/实现中 | 诊断确认永久 mismatch 分类缺口；待 PR |
+| #3428 | Draft PR，Hosted checks 通过，待 review/转 Ready | [PR #3479](https://github.com/AgoraIO-Extensions/agent-infra/pull/3479) |
+| #3481 | 开发已合入，Issue 按开发口径关闭；真实 AC 后续跟进 | [PR #3482](https://github.com/AgoraIO-Extensions/agent-infra/pull/3482)、[PR #3489](https://github.com/AgoraIO-Extensions/agent-infra/pull/3489) |
+| #3494 | 开发已合入并清理 | [PR #3494](https://github.com/AgoraIO-Extensions/agent-infra/pull/3494) |
 
 ## 权威来源
 
