@@ -835,6 +835,7 @@ export async function createPlatformSavedKeyCandidatesOptionsV1(
 	const decryptor = deployment.conversation.relayKeyDecryptor;
 	if (!decryptor) throw new Error("WORKER_EXECUTION_KEY_CONFIGURATION_INVALID");
 	const reader = createProductionSavedKeyCandidatesReaderV1({
+		...savedKeyCandidatesPolicy,
 		databaseUrl: deployment.conversation.databaseUrl,
 		decryptor,
 		modelCatalog: {
@@ -843,16 +844,6 @@ export async function createPlatformSavedKeyCandidatesOptionsV1(
 		},
 		templateBindings: deployment.workload
 			.templateModelBindings as readonly StandardTemplateModelBindingV1[],
-		...(savedKeyCandidatesPolicy.relayEndpoints
-			? { relayEndpoints: savedKeyCandidatesPolicy.relayEndpoints }
-			: {
-					relayEndpointId: savedKeyCandidatesPolicy.relayEndpointId,
-					relayBaseUrl: savedKeyCandidatesPolicy.relayBaseUrl,
-				}),
-		validation: savedKeyCandidatesPolicy.validation,
-		...(savedKeyCandidatesPolicy.fetch
-			? { fetch: savedKeyCandidatesPolicy.fetch }
-			: {}),
 	});
 	return {
 		app: createWorkerSavedKeyCandidatesApp({ serviceToken, reader }),

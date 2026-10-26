@@ -34,14 +34,7 @@ export function createAgentDefaultRelayKeyCandidatesV1(
 ): Required<Pick<AgentDefaultRelayKeyDependenciesV1, "candidates" | "verify">> {
 	const validate = createPersonalRelayKeyValidatorV1(input.validation);
 	const relay = {
-		modelCatalog: input.modelCatalog,
-		templateBindings: input.templateBindings,
-		...(input.relayEndpoints
-			? { relayEndpoints: input.relayEndpoints }
-			: {
-					relayEndpointId: input.relayEndpointId,
-					relayBaseUrl: input.relayBaseUrl,
-				}),
+		...input,
 		...(input.validation.fetch ? { fetch: input.validation.fetch } : {}),
 	};
 	const read = createAgentDefaultRelayKeyCandidateReaderV1({

@@ -48,17 +48,7 @@ export function createProductionSavedKeyCandidatesReaderV1(
 		databaseUrl: input.databaseUrl,
 	});
 	const validate = createPersonalRelayKeyValidatorV1(input.validation);
-	const relay = {
-		modelCatalog: input.modelCatalog,
-		templateBindings: input.templateBindings,
-		...(input.relayEndpoints
-			? { relayEndpoints: input.relayEndpoints }
-			: {
-					relayEndpointId: input.relayEndpointId,
-					relayBaseUrl: input.relayBaseUrl,
-				}),
-		...(input.fetch ? { fetch: input.fetch } : {}),
-	};
+	const relay = input;
 	const candidateReader = createAgentDefaultRelayKeyCandidateReaderV1({
 		...relay,
 		validateKey: validate,

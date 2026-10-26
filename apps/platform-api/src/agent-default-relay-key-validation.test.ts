@@ -1,3 +1,4 @@
+import type { AgentDefaultRelayKeyEndpointPolicyV1 } from "@agent-infra/model-catalog";
 import { describe, expect, it, vi } from "vitest";
 import { agentConfigurationConformanceRecordV1 as configuration } from "../../../packages/platform-core/src/agent-configuration.conformance.ts";
 import { createAgentDefaultRelayKeyCandidatesV1 } from "./agent-default-relay-key-validation.ts";
@@ -34,6 +35,7 @@ function fixture(
 	mode = "valid",
 	options: {
 		allowedModels?: readonly string[] | null;
+		policy?: AgentDefaultRelayKeyEndpointPolicyV1;
 		responses?: (body: Record<string, unknown>) => Response;
 	} = {},
 ) {
@@ -64,8 +66,10 @@ function fixture(
 		);
 	});
 	const relay = createAgentDefaultRelayKeyCandidatesV1({
-		relayEndpointId: "endpoint_01",
-		relayBaseUrl: "https://relay.example.test/v1",
+		...(options.policy ?? {
+			relayEndpointId: "endpoint_01",
+			relayBaseUrl: "https://relay.example.test/v1",
+		}),
 		validation: {
 			profile: "sub2api-key-billing-v1",
 			billingUrl: "https://sub2api.la3.agoralab.co/v1/sub2api/billing",
@@ -111,6 +115,38 @@ function fixture(
 }
 const fixedLevels = ["low", "medium", "high", "xhigh", "max"];
 describe("default Key visibility with controlled Relay responses", () => {
+	it("passes the multi-endpoint policy to candidate and verification readers", async () => {
+		const f = fixture("valid", {
+			policy: {
+				relayEndpoints: [
+					{
+						endpointId: "messages",
+						baseUrl: "https://relay.example.test",
+						protocol: "anthropic-messages-v1",
+					},
+					{
+						endpointId: "endpoint_01",
+						baseUrl: "https://relay.example.test/v1",
+						protocol: "openai-responses-v1",
+					},
+				],
+			},
+		});
+		await expect(f.candidates(key, configuration)).resolves.toMatchObject([
+			{ endpointId: "endpoint_01", modelId: "gpt-5" },
+		]);
+		await expect(
+			f.verify(key, configuration, [
+				{ endpointId: "endpoint_01", modelId: "gpt-5", reasoningLevel: "low" },
+			]),
+		).resolves.toBeUndefined();
+		expect(f.fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+			"https://sub2api.la3.agoralab.co/v1/sub2api/billing",
+			"https://relay.example.test/v1/models",
+			"https://relay.example.test/v1/responses",
+		]);
+	});
+
 	it("offers the fixed levels for every Key-visible model in the exact template protocol (ADR-0029)", async () => {
 		expect(await fixture().candidates(key, configuration)).toEqual([
 			{

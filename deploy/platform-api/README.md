@@ -82,7 +82,7 @@ Relay Key 策略必须作为配置模块 `apiInput` 的 `agentDefaultRelayKeyPol
 `personalRelayKeyValidation` 字段提供；两者来源必须与模板 `modelBinding`、Model Catalog 端点和固定 billing transport 一致。
 `agentDefaultRelayKeyPolicy` 可以使用兼容的单端点 `{ relayEndpointId, relayBaseUrl, templateBindings }`，
 或使用受信多端点 `{ relayEndpoints: [{ endpointId, baseUrl, protocol }], templateBindings }`。
-多端点列表只允许部署配置提供，`endpointId` 必须唯一；每个端点必须与 Model Catalog 的精确 ID、URL、协议、TLS
+两种格式不能混用。多端点列表只允许部署配置提供，`endpointId` 必须唯一；每个端点必须与 Model Catalog 的精确 ID、URL、协议、TLS
 和重定向策略一致。模板的 digest 与 Driver 协议仍由 `templateBindings` 校验，不能由 Owner 或请求方覆盖。
 任一字段缺失时，Platform API 仍可启动，但以稳定的 `PLATFORM_RELAY_KEY_POLICY_MISSING` degraded
 warning 只列出缺失字段名，不输出 Relay Key、endpoint、billing URL 或 credential 内容；依赖缺失策略的

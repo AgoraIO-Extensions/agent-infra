@@ -244,6 +244,42 @@ const probes = () =>
 	fetcher.mock.calls.filter(([url]) => String(url).endsWith("/responses"));
 
 describe("Worker saved-Key verification (ADR-0029)", () => {
+	it("uses the same multi-endpoint policy for saved-Key candidates and verification", async () => {
+		const { relayEndpointId, relayBaseUrl, ...policy } = relay;
+		const multiReader = createProductionSavedKeyCandidatesReaderV1({
+			...policy,
+			databaseUrl: database.databaseUrl,
+			decryptor,
+			fetch: fetcher,
+			relayEndpoints: [
+				{
+					endpointId: "messages",
+					baseUrl: "https://relay.example.test",
+					protocol: "anthropic-messages-v1",
+				},
+				{
+					endpointId: relayEndpointId,
+					baseUrl: relayBaseUrl,
+					protocol: "openai-responses-v1",
+				},
+			],
+		});
+		try {
+			await expect(
+				multiReader.read(
+					request([{ modelId: savedModel, reasoningLevel: "low" }]),
+					AbortSignal.timeout(10000),
+				),
+			).resolves.toMatchObject({
+				candidates: [{ endpointId: relayEndpointId, modelId: savedModel }],
+				verification: "verified",
+			});
+			expect(probes()).toHaveLength(1);
+		} finally {
+			await multiReader.close();
+		}
+	});
+
 	it("returns candidates without any model request when nothing is new", async () => {
 		const result = await reader.read(request(), AbortSignal.timeout(10_000));
 		expect(result).not.toHaveProperty("verification");

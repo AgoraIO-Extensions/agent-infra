@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	type AgentDefaultRelayKeyEndpointPolicyV1,
 	createAgentDefaultRelayKeyCandidateReaderV1,
 	createAgentDefaultRelayKeyModelVerifierV1,
 } from "./agent-default-candidates.js";
 import { messagesStreamFixture } from "./messages-stream.fixture.js";
 
-const endpoints = [
+type ApprovedEndpoint = NonNullable<
+	AgentDefaultRelayKeyEndpointPolicyV1["relayEndpoints"]
+>[number];
+const endpoints: [ApprovedEndpoint, ApprovedEndpoint] = [
 	{
 		endpointId: "responses",
 		baseUrl: "https://relay.example.test/v1",
@@ -29,9 +33,18 @@ const bindings = (["codex", "claude", "acp", "pi"] as const).map((driver) => ({
 const source = (templateId: string) => ({
 	kind: "standard" as const,
 	templateId,
-	imageDigest: bindings[0].imageDigest,
+	imageDigest: `sha256:${"a".repeat(64)}`,
+	admissionRevision: "policy-a",
+	allowedEnvironmentKeys: [],
+	allowedSecretKeys: [],
+	platformManagedKeys: [],
+	connectionEnabled: false,
 });
-function fixture(relayEndpoints = endpoints) {
+function fixture(
+	relayEndpoints: readonly ApprovedEndpoint[] = endpoints,
+	policy: Partial<AgentDefaultRelayKeyEndpointPolicyV1> = {},
+	redirects = "reject",
+) {
 	const fetcher = vi.fn<typeof fetch>(async (url) => {
 		if (String(url).endsWith("/models"))
 			return Response.json({ data: [{ id: "claude-opus-5" }] });
@@ -44,6 +57,7 @@ function fixture(relayEndpoints = endpoints) {
 	});
 	const input = {
 		relayEndpoints,
+		...policy,
 		templateBindings: bindings,
 		fetch: fetcher,
 		modelCatalog: {
@@ -59,7 +73,7 @@ function fixture(relayEndpoints = endpoints) {
 					...endpoint,
 					origin: "https://relay.example.test",
 					authentication: "bearer",
-					security: { tls: "verify-peer", redirects: "reject" },
+					security: { tls: "verify-peer", redirects },
 					capabilities: {
 						streaming: true,
 						tools: true,
@@ -70,7 +84,7 @@ function fixture(relayEndpoints = endpoints) {
 				})),
 			}),
 		},
-	};
+	} as Parameters<typeof createAgentDefaultRelayKeyModelVerifierV1>[0];
 	return {
 		fetcher,
 		read: createAgentDefaultRelayKeyCandidateReaderV1({
@@ -138,6 +152,63 @@ describe("deployment-approved Relay endpoints", () => {
 			expect(f.fetcher).not.toHaveBeenCalled();
 		},
 	);
+
+	it.each(
+		[
+			[],
+			[endpoints[0], endpoints[0]],
+			[{ endpointId: "responses", baseUrl: endpoints[0].baseUrl }],
+			[{ ...endpoints[0], protocol: "unknown" }],
+		].map((value) => ({ value })),
+	)("rejects invalid endpoint policy %#", ({ value }) => {
+		expect(() => fixture(value as readonly ApprovedEndpoint[])).toThrow(
+			"RELAY_ENDPOINT_POLICY_INVALID",
+		);
+	});
+
+	it("rejects mixed single and multiple endpoint policies", () => {
+		expect(() =>
+			fixture(endpoints, {
+				relayEndpointId: "responses",
+				relayBaseUrl: endpoints[0].baseUrl,
+			}),
+		).toThrow("RELAY_ENDPOINT_POLICY_INVALID");
+	});
+
+	it("keeps a snapshot of the approved routes", async () => {
+		const approved = endpoints.map((endpoint) => ({ ...endpoint }));
+		const f = fixture(approved);
+		approved.push({ ...endpoints[0], endpointId: "unapproved" });
+		await expect(
+			f.verify(
+				"synthetic-key",
+				{ source: source("codex") },
+				[combo("unapproved")],
+				AbortSignal.timeout(1000),
+			),
+		).resolves.toBe("incompatible");
+		expect(f.fetcher).not.toHaveBeenCalled();
+	});
+
+	it("rejects a redirect-following Catalog before sending the Key", async () => {
+		const f = fixture(endpoints, {}, "follow");
+		await expect(
+			f.read(
+				"synthetic-key",
+				{ source: source("codex") },
+				AbortSignal.timeout(1000),
+			),
+		).rejects.toThrow();
+		await expect(
+			f.verify(
+				"synthetic-key",
+				{ source: source("codex") },
+				[combo("responses")],
+				AbortSignal.timeout(1000),
+			),
+		).resolves.toBe("unavailable");
+		expect(f.fetcher).not.toHaveBeenCalled();
+	});
 
 	it("never probes an unapproved Catalog endpoint or an unknown image", async () => {
 		const f = fixture();

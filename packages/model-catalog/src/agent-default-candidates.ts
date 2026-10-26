@@ -1,3 +1,5 @@
+import { RuntimeModelProtocolV1Schema } from "@agent-infra/contracts/runtime";
+import { z } from "zod";
 import { probeResponsesModelV1 } from "./access.js";
 import {
 	ModelCatalogSnapshotV1Schema,
@@ -75,25 +77,43 @@ type RelayInputV1 = AgentDefaultRelayKeyEndpointPolicyV1 & {
 	readonly fetch?: typeof fetch;
 };
 
+const approvedEndpointSchema = z.strictObject({
+	endpointId: modelIdentifier,
+	baseUrl: z.string().min(1).max(2048),
+	protocol: RuntimeModelProtocolV1Schema,
+});
+
 function trustedRelayEndpoints(input: AgentDefaultRelayKeyEndpointPolicyV1) {
-	if (input.relayEndpoints !== undefined) {
-		if (input.relayEndpointId !== undefined || input.relayBaseUrl !== undefined)
-			throw new Error("RELAY_ENDPOINT_POLICY_INVALID");
-		if (
-			input.relayEndpoints.length === 0 ||
-			new Set(input.relayEndpoints.map((endpoint) => endpoint.endpointId))
-				.size !== input.relayEndpoints.length
-		)
-			throw new Error("RELAY_ENDPOINT_POLICY_INVALID");
-		return input.relayEndpoints;
+	try {
+		if (input.relayEndpoints !== undefined) {
+			if (
+				input.relayEndpointId !== undefined ||
+				input.relayBaseUrl !== undefined
+			)
+				throw new Error();
+			return z
+				.array(approvedEndpointSchema)
+				.min(1)
+				.max(1024)
+				.refine(
+					(endpoints) =>
+						new Set(endpoints.map((endpoint) => endpoint.endpointId)).size ===
+						endpoints.length,
+				)
+				.parse(input.relayEndpoints);
+		}
+		return [
+			{
+				...approvedEndpointSchema.omit({ protocol: true }).parse({
+					endpointId: input.relayEndpointId,
+					baseUrl: input.relayBaseUrl,
+				}),
+				protocol: undefined,
+			},
+		];
+	} catch {
+		throw new Error("RELAY_ENDPOINT_POLICY_INVALID");
 	}
-	return [
-		{
-			endpointId: input.relayEndpointId,
-			baseUrl: input.relayBaseUrl,
-			protocol: undefined,
-		},
-	] as const;
 }
 
 function trustedBindings(bindings: readonly DeploymentTemplateBindingV1[]) {
