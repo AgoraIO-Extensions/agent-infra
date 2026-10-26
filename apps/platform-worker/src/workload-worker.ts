@@ -92,6 +92,11 @@ export function createPlatformWorkloadWorkerV1(
 		workerId,
 		onHealthDiagnostic(diagnostic: MultiServiceHealthDiagnosticV1) {
 			try {
+				options.onHealthDiagnostic?.(diagnostic);
+			} catch {
+				// Caller diagnostics are observational and never alter reconciliation.
+			}
+			try {
 				logSafely(
 					JSON.stringify({
 						service: "platform-worker",

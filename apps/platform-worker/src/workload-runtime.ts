@@ -538,6 +538,7 @@ export function createWorkloadRuntimeV1(
 	const multiService = createMultiServiceRuntimeOperations({
 		client: options.client,
 		policy: options.policy,
+		onHealthDiagnostic: options.onHealthDiagnostic,
 	});
 	const fetcher = options.fetch ?? globalThis.fetch;
 	const observedCapabilities = new WeakMap<
