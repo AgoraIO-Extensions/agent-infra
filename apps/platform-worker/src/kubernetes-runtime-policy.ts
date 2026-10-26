@@ -49,6 +49,7 @@ import {
 import { createKubernetesPodValidationV1 } from "./kubernetes-runtime-pod-validation.js";
 import type { workloadEgressRulesV1 } from "./workload-network.js";
 import { workloadRuntimeAuthEnvironmentV1 } from "./workload-runtime-auth.js";
+import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 
 const routeHostSuffixPattern =
 	/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
@@ -122,6 +123,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		| undefined;
 	readonly egress: ReturnType<typeof workloadEgressRulesV1>;
 	/** Deployment-owned service token, retained in Worker memory only. */
+	readonly containerBoundaryServiceToken?: string;
 }) {
 	const {
 		policy,
@@ -241,6 +243,22 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 							{
 								name: "AGENT_INFRA_RUNTIME_ISOLATION_MODE",
 								value: "container-boundary",
+							},
+							{
+								name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED",
+								value: "worker-v1",
+							},
+							{
+								name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE",
+								value: value.agentId,
+							},
+							{
+								name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION",
+								value: containerBoundaryAttestationV1(
+									dependencies.containerBoundaryServiceToken ??
+										"",
+									value.agentId,
+								),
 							},
 						]
 					: []),
