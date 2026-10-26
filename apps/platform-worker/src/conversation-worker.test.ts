@@ -64,11 +64,7 @@ vi.mock("@agent-infra/platform-store", () => ({
 	},
 }));
 vi.mock("@agent-infra/platform-core", async (importOriginal) => ({
-	ConversationRuntimeHostError: (
-		await importOriginal<typeof import("@agent-infra/platform-core")>()
-	).ConversationRuntimeHostError,
-	sessionSandboxRetryDelayMsV1: (attempt: number) =>
-		attempt < 6 ? 1_000 : Math.min(60_000, 1_000 * 2 ** (attempt - 5)),
+	...(await importOriginal<typeof import("@agent-infra/platform-core")>()),
 	createConversationDispatchUseCaseV1: (dependencies: {
 		events: unknown;
 		authorization: unknown;

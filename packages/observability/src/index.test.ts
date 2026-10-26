@@ -572,6 +572,34 @@ it("records bounded Sandbox lifecycle identity and retry facts", () => {
 	expect(lines.join("")).not.toContain("PRIVATE_SENTINEL");
 });
 
+it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 1_000_001])(
+	"rejects invalid Sandbox attempt values without emitting telemetry (%s)",
+	(attempt) => {
+		const lines: string[] = [];
+		const telemetry = startObservability({
+			service: "platform-worker",
+			output: new Writable({
+				write(chunk, _encoding, done) {
+					lines.push(String(chunk));
+					done();
+				},
+			}),
+		});
+		active.push(telemetry);
+		telemetry.record({
+			stage: "workload",
+			outcome: "failed",
+			code: "WORKLOAD_RECONCILIATION_FAILED",
+			failureStep: "runtime.configuration",
+			attempt,
+			operationRef: "sandbox.reconcile.prepare",
+		});
+		expect(telemetry.status().invalidRecords).toBe(1);
+		expect(lines).toEqual([]);
+		expect(lines.join("")).not.toContain("PRIVATE_SENTINEL");
+	},
+);
+
 it("keeps invalid observational input out of business control flow", () => {
 	const telemetry = startObservability({
 		service: "platform-api",
