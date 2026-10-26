@@ -1104,7 +1104,7 @@ async function requireRealLoginValidation() {
 
 function usage() {
 	console.log(
-		"Usage: node deploy/local/e2e-harness.mjs <sync|images|build|deploy|runtime|verify|all|reset>",
+		"Usage: node deploy/local/e2e-harness.mjs <sync|images|build|deploy|runtime|verify|all|reset|app>",
 	);
 }
 

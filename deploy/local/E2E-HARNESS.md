@@ -66,6 +66,7 @@ node deploy/local/e2e-harness.mjs deploy
 node deploy/local/e2e-harness.mjs runtime
 node deploy/local/e2e-harness.mjs verify
 node deploy/local/e2e-harness.mjs all
+node deploy/local/e2e-harness.mjs app
 ```
 
 `sync` 固定本次运行的 `sourceRevision`；后续 `images`、`build`、`deploy` 和 `verify` 只接受
