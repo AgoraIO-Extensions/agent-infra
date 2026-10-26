@@ -170,3 +170,379 @@ test("Worker trusted CA bundle accepts only CA certificates", {
 		await rm(directory, { recursive: true, force: true });
 	}
 });
+
+test("component inputs include transitive workspace dependencies, not unrelated apps", async () => {
+	const { componentWorkspacePaths } = await import(
+		"../deploy/local/harness-image-cache.mjs"
+	);
+	const workspaces = [
+		{
+			path: "apps/platform-worker",
+			manifest: { name: "worker", dependencies: { core: "workspace:*" } },
+		},
+		{
+			path: "packages/core",
+			manifest: { name: "core", devDependencies: { config: "workspace:*" } },
+		},
+		{ path: "packages/config", manifest: { name: "config" } },
+		{ path: "apps/web", manifest: { name: "web" } },
+		{ path: "packages/unused", manifest: { name: "unused" } },
+	];
+	assert.deepEqual(
+		componentWorkspacePaths(workspaces, "apps/platform-worker"),
+		["apps/platform-worker", "packages/config", "packages/core"],
+	);
+	assert.throws(
+		() =>
+			componentWorkspacePaths(workspaces.slice(0, 2), "apps/platform-worker"),
+		/workspace dependency/,
+	);
+});
+
+test("Worker readback rejects old, missing and non-ready Worker containers", async () => {
+	const { assertWorkerReadback } = await import(
+		"../deploy/local/harness-image-cache.mjs"
+	);
+	const binding = {
+		repository: "registry.example/worker",
+		digest: digest("a"),
+	};
+	const deployment = {
+		spec: {
+			replicas: 1,
+			template: {
+				spec: {
+					containers: [
+						{
+							name: "platform-worker",
+							image: `${binding.repository}@${binding.digest}`,
+						},
+					],
+				},
+			},
+		},
+	};
+	const pod = {
+		status: {
+			containerStatuses: [
+				{
+					name: "platform-worker",
+					ready: true,
+					imageID: `${binding.repository}@${binding.digest}`,
+				},
+			],
+		},
+	};
+	assert.doesNotThrow(() => assertWorkerReadback(binding, [deployment], [pod]));
+	assert.throws(
+		() => assertWorkerReadback(binding, [deployment], []),
+		/Worker image readback/,
+	);
+	assert.throws(
+		() =>
+			assertWorkerReadback(
+				binding,
+				[deployment],
+				[
+					{
+						status: {
+							containerStatuses: [
+								{ ...pod.status.containerStatuses[0], ready: false },
+							],
+						},
+					},
+				],
+			),
+		/Worker image readback/,
+	);
+	assert.throws(
+		() =>
+			assertWorkerReadback(
+				binding,
+				[deployment],
+				[
+					pod,
+					{
+						status: {
+							containerStatuses: [
+								{
+									...pod.status.containerStatuses[0],
+									imageID: `registry.example/worker@${digest("b")}`,
+								},
+							],
+						},
+					},
+				],
+			),
+		/Worker image readback/,
+	);
+});
+
+test("Harness rejects unsupported lightweight lane before external commands", async () => {
+	const result = spawnSync(
+		process.execPath,
+		["deploy/local/e2e-harness.mjs", "deploy"],
+		{
+			encoding: "utf8",
+			env: {
+				...process.env,
+				E2E_HARNESS_LANE: "app",
+				DOCKER_BIN: "/no-external-command",
+			},
+		},
+	);
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /APP_LANE_UNAVAILABLE/);
+});
+
+test("split Harness stages keep the synchronized SHA and skip cached digest pulls", async () => {
+	const { cp, mkdir, chmod } = await import("node:fs/promises");
+	const directory = await mkdtemp(join(tmpdir(), "harness-command-"));
+	const repository = join(directory, "repo");
+	const state = join(directory, "state");
+	const bin = join(directory, "docker");
+	const log = join(directory, "docker.log");
+	const runGit = (args) => execFileAsync("git", args, { cwd: repository });
+	try {
+		await mkdir(join(repository, "deploy/local"), { recursive: true });
+		for (const name of [
+			"e2e-harness.mjs",
+			"harness-image-cache.mjs",
+			"runtime-material.mjs",
+		])
+			await cp(
+				join("deploy/local", name),
+				join(repository, "deploy/local", name),
+			);
+		await runGit(["init", "-b", "main"]);
+		await runGit(["config", "user.name", "Harness test"]);
+		await runGit(["config", "user.email", "harness@example.invalid"]);
+		await runGit(["add", "."]);
+		await runGit(["commit", "-m", "fixture"]);
+		const sha = (await runGit(["rev-parse", "HEAD"])).stdout.trim();
+		await runGit(["remote", "add", "origin", "https://example.invalid/repo"]);
+		await runGit(["update-ref", "refs/remotes/origin/main", sha]);
+		await runGit(["branch", "--set-upstream-to=origin/main", "main"]);
+		await writeFile(
+			bin,
+			`#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.TEST_DOCKER_LOG, JSON.stringify(args) + "\\n");
+if (args.includes("--raw")) console.log(JSON.stringify({mediaType:"application/vnd.oci.image.manifest.v1+json"}));
+else if(args.includes("imagetools")) console.log("Digest: sha256:${"a".repeat(64)}");
+else if(args.includes("info")) console.log("aarch64");
+else if(args.includes("inspect")) console.log("[{}]");
+else process.exit(43);
+`,
+		);
+		await chmod(bin, 0o700);
+		const env = {
+			...process.env,
+			E2E_HARNESS_LANE: "full",
+			E2E_HARNESS_OFFLINE: "true",
+			PLATFORM_LOCAL_STATE_DIRECTORY: state,
+			PLATFORM_LOCAL_PROJECT: "agent-infra-e2e",
+			PLATFORM_LOCAL_NAMESPACE: "agent-infra-e2e",
+			PLATFORM_LOCAL_KUBE_CONTEXT: "kind-agent-infra-e2e",
+			PLATFORM_LOCAL_DOCKER_CONTEXT: "fixture",
+			DOCKER_BIN: bin,
+			TEST_DOCKER_LOG: log,
+		};
+		const cli = (action) =>
+			execFileAsync(
+				process.execPath,
+				["deploy/local/e2e-harness.mjs", action],
+				{ cwd: repository, env },
+			);
+		await cli("sync");
+		const tree = (await runGit(["rev-parse", "HEAD^{tree}"])).stdout.trim();
+		const next = (
+			await runGit(["commit-tree", tree, "-p", sha, "-m", "upstream advances"])
+		).stdout.trim();
+		await runGit(["update-ref", "refs/remotes/origin/main", next]);
+		const result = await cli("images");
+		assert.match(result.stdout, new RegExp(`sourceRevision=${sha}`));
+		assert.equal((await runGit(["rev-parse", "HEAD"])).stdout.trim(), sha);
+		const calls = (await readFile(log, "utf8"))
+			.trim()
+			.split("\n")
+			.map(JSON.parse);
+		assert.equal(
+			calls.some((args) => args.includes("pull")),
+			false,
+		);
+		const manifest = JSON.parse(
+			await readFile(join(state, `infrastructure-${sha}.json`), "utf8"),
+		);
+		assert.equal(manifest.sourceRevision, sha);
+		await writeFile(join(state, "source-pin.json"), "{");
+		await assert.rejects(cli("images"), /Source pin is unreadable or invalid/);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("build reuses dependency-equivalent Worker and writes only an image overlay", async () => {
+	const { cp, mkdir, chmod, symlink, stat } = await import("node:fs/promises");
+	const { resolve } = await import("node:path");
+	const directory = await mkdtemp(join(tmpdir(), "harness-build-"));
+	const repository = join(directory, "repo");
+	const state = join(directory, "state");
+	const bin = join(directory, "docker");
+	const log = join(directory, "docker.log");
+	const imageState = join(directory, "images.json");
+	const values = join(directory, "private.yaml");
+	const runGit = (args) => execFileAsync("git", args, { cwd: repository });
+	try {
+		await mkdir(join(repository, "deploy/local"), { recursive: true });
+		for (const name of [
+			"e2e-harness.mjs",
+			"harness-image-cache.mjs",
+			"runtime-material.mjs",
+		])
+			await cp(
+				join("deploy/local", name),
+				join(repository, "deploy/local", name),
+			);
+		await writeFile(
+			join(repository, "package.json"),
+			JSON.stringify({ private: true }),
+		);
+		await writeFile(join(repository, ".gitignore"), "node_modules/\n");
+		for (const service of [
+			"web",
+			"platform-api",
+			"platform-worker",
+			"enterprise-directory-sync",
+		]) {
+			const path = join(repository, "apps", service);
+			await mkdir(path, { recursive: true });
+			await writeFile(
+				join(path, "package.json"),
+				JSON.stringify({
+					name: service,
+					dependencies: { core: "workspace:*" },
+				}),
+			);
+			await writeFile(join(path, "Dockerfile"), "FROM scratch\n");
+		}
+		for (const name of ["core", "unused"]) {
+			const path = join(repository, "packages", name);
+			await mkdir(path, { recursive: true });
+			await writeFile(join(path, "package.json"), JSON.stringify({ name }));
+		}
+		await symlink(
+			resolve("node_modules"),
+			join(repository, "node_modules"),
+			"dir",
+		);
+		await runGit(["init", "-b", "main"]);
+		await runGit(["config", "user.name", "Harness test"]);
+		await runGit(["config", "user.email", "harness@example.invalid"]);
+		await runGit(["add", "."]);
+		await runGit(["commit", "-m", "fixture"]);
+		const sha = (await runGit(["rev-parse", "HEAD"])).stdout.trim();
+		await runGit(["remote", "add", "origin", "https://example.invalid/repo"]);
+		await runGit(["update-ref", "refs/remotes/origin/main", sha]);
+		await runGit(["branch", "--set-upstream-to=origin/main", "main"]);
+		await writeFile(
+			values,
+			"images:\n  platformWorker:\n    repository: registry.example/worker\nprivateOnly: fixture-sensitive-sentinel\n",
+		);
+		await writeFile(
+			bin,
+			`#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(4);
+fs.appendFileSync(process.env.TEST_DOCKER_LOG, JSON.stringify(args) + "\\n");
+const statePath = process.env.TEST_IMAGE_STATE;
+const images = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf8")) : {};
+const image = {Id:"sha256:${"b".repeat(64)}", RepoDigests:["registry.example/worker@sha256:${"a".repeat(64)}"]};
+if(args[0] === "info") console.log("aarch64");
+else if(args[0] === "image" && args[1] === "inspect") { if(!images[args[2]]) process.exit(1); console.log(JSON.stringify([images[args[2]]])); }
+else if(args[0] === "build") { images[args[args.indexOf("--tag")+1]] = image; images[image.Id] = image; }
+else if(args[0] === "tag") { if(!images[args[1]]) process.exit(44); images[args[2]] = images[args[1]]; }
+else if(args.includes("--raw")) console.log(JSON.stringify({mediaType:"application/vnd.oci.image.manifest.v1+json", config:{digest:image.Id}}));
+else process.exit(43);
+fs.writeFileSync(statePath, JSON.stringify(images));
+`,
+		);
+		await chmod(bin, 0o700);
+		const env = {
+			...process.env,
+			E2E_HARNESS_LANE: "full",
+			E2E_HARNESS_OFFLINE: "true",
+			PLATFORM_LOCAL_STATE_DIRECTORY: state,
+			PLATFORM_LOCAL_PROJECT: "agent-infra-e2e",
+			PLATFORM_LOCAL_NAMESPACE: "agent-infra-e2e",
+			PLATFORM_LOCAL_KUBE_CONTEXT: "kind-agent-infra-e2e",
+			PLATFORM_LOCAL_DOCKER_CONTEXT: "fixture",
+			PLATFORM_LOCAL_WORKER_VALUES: values,
+			DOCKER_BIN: bin,
+			TEST_DOCKER_LOG: log,
+			TEST_IMAGE_STATE: imageState,
+		};
+		const cli = (action) =>
+			execFileAsync(
+				process.execPath,
+				["deploy/local/e2e-harness.mjs", action],
+				{ cwd: repository, env },
+			);
+		await cli("sync");
+		await cli("build");
+		const first = JSON.parse(
+			await readFile(join(state, `platform-images-${sha}.json`), "utf8"),
+		);
+		const overlay = await readFile(
+			join(state, `worker-values-${sha}.yaml`),
+			"utf8",
+		);
+		assert.doesNotMatch(overlay, /privateOnly|fixture-sensitive-sentinel/);
+		assert.match(overlay, /repository: "registry.example\/worker"/);
+		assert.equal(
+			(await stat(join(state, `worker-values-${sha}.yaml`))).mode & 0o777,
+			0o600,
+		);
+		const initialCalls = (await readFile(log, "utf8"))
+			.trim()
+			.split("\n")
+			.map(JSON.parse);
+		assert.equal(initialCalls.filter((args) => args[0] === "build").length, 4);
+		assert.equal(
+			initialCalls.some((args) => args[0] === "push"),
+			false,
+		);
+		await writeFile(join(repository, "apps/web/ui.txt"), "changed web");
+		await writeFile(
+			join(repository, "packages/unused/unused.txt"),
+			"unrelated package",
+		);
+		await runGit(["add", "."]);
+		await runGit(["commit", "-m", "web change"]);
+		const nextSha = (await runGit(["rev-parse", "HEAD"])).stdout.trim();
+		await cli("sync");
+		await writeFile(log, "");
+		await cli("build");
+		const second = JSON.parse(
+			await readFile(join(state, `platform-images-${nextSha}.json`), "utf8"),
+		);
+		assert.equal(second.sourceSha, nextSha);
+		assert.equal(second.worker.inputHash, first.worker.inputHash);
+		assert.equal(second.worker.digest, first.worker.digest);
+		assert.equal(second.worker.buildSourceSha, sha);
+		const nextCalls = (await readFile(log, "utf8"))
+			.trim()
+			.split("\n")
+			.map(JSON.parse);
+		assert.equal(nextCalls.filter((args) => args[0] === "build").length, 1);
+		assert.equal(
+			nextCalls
+				.find((args) => args[0] === "build")
+				.includes("agent-infra-e2e-web"),
+			true,
+		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});

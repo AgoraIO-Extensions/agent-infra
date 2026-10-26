@@ -186,6 +186,13 @@ worker_values() {
     --set-string database.secretRef.key=url
     --set-string platformWorker.deploymentModule=file:///app/dist/deployment.mjs
   )
+  if [[ -n "${PLATFORM_LOCAL_WORKER_VALUES_OVERLAY:-}" ]]; then
+    [[ "$PLATFORM_LOCAL_WORKER_VALUES_OVERLAY" = /* && -r "$PLATFORM_LOCAL_WORKER_VALUES_OVERLAY" ]] || {
+      echo "PLATFORM_LOCAL_WORKER_VALUES_OVERLAY must be an absolute readable file" >&2
+      exit 1
+    }
+    worker_options+=(--values "$PLATFORM_LOCAL_WORKER_VALUES_OVERLAY")
+  fi
   # Optional staged file-plane E2E. The API Service already exists when the
   # native metadata route is enabled; the API still needs its own
   # file-deployment configuration and the same service token registered.
