@@ -1,7 +1,7 @@
 # Issue 工作指导
 
 > 适用范围：`AgoraIO-Extensions/agent-infra` 当前开放 Issue。本文把实时清单转成可执行的分派规则；具体产品结论仍以 PRD、工程 Spec、HLD 和 Issue 正文为准。
-> 最近快照：2026-10-26；开放 Issue 86 个；主干 `58c544ed6`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
+> 最近快照：2026-10-26；开放 Issue 87 个；主干 `00b860f32`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
 
 ## 四类工作边界
 
@@ -23,24 +23,25 @@
 
 ## 本轮并行委派
 
-本轮已并行委派两条实现 lane；每条 lane 只拥有一个 primary Issue 和其声明文件，不共享写入。
+本轮已并行委派三条 lane；每条 lane 只拥有一个 primary Issue 和其声明文件，不共享写入。
 
 | Agent lane | Primary Issue | 目标 | 禁止越界 |
 | --- | ---: | --- | --- |
-| Worker Diagnostics | [#3428](https://github.com/AgoraIO-Extensions/agent-infra/issues/3428) | 暴露有界、脱敏的多服务健康诊断并补齐未 Ready/无 Endpoint/最终失败测试 | 不改 ACK 资源、不输出原始 Pod 日志或会话正文 |
-| Observability/Worker | [#3360](https://github.com/AgoraIO-Extensions/agent-infra/issues/3360) | 补齐 Sandbox 失败的稳定阶段/资源/版本/相关性字段，保持脱敏与有界重试 | 不改 ACK 资源、不把手工分类冒充结构化验收、不泄露凭证或资源正文 |
+| Observability/Worker | [#3360](https://github.com/AgoraIO-Extensions/agent-infra/issues/3360) | 补齐 Sandbox 失败的稳定阶段/资源/版本/相关性字段，保持脱敏与有界重试 | 不改 ACK 资源、不泄露凭证或资源正文 |
+| Worker Diagnostics | [#3428](https://github.com/AgoraIO-Extensions/agent-infra/issues/3428) | 暴露有界、脱敏的多服务健康诊断并补齐未 Ready/无 Endpoint/最终失败测试 | 不改变健康状态机或输出原始 Pod 日志 |
+| Local CNI | [#2938](https://github.com/AgoraIO-Extensions/agent-infra/issues/2938) | 验证官方 kindnet NFQUEUE 修复及固定环境策略正负边界 | 不使用 latest、不放宽策略、不删除数据或操作 ACK |
 
-当前两条实现 lane 的子 agent 都必须先在最新 `origin/main` 上复读 Issue；若发现 AC、依赖或 owner 不满足实现门槛，返回带证据的只读 handoff，不创建伪 PR。#3472 已有开放 PR #3473，本轮只跟进其状态，不重复创建实现 PR；#2708、#2887、#2899、#2934、#2939 已复核为代码已交付/等待真实验收，不重复创建 PR。
+每条 lane 的子 agent 都必须先在最新 `origin/main` 上复读 Issue；若发现 AC、依赖或 owner 不满足实现门槛，返回带证据的只读 handoff，不创建伪 PR。
 
-## 本轮交付跟进
+## 当前交付跟进
 
-| 类别 / Primary Issue | 负责人 | 当前状态 | PR / 证据 |
-| --- | --- | --- | --- |
-| Worker 观测 / #3360 | observability_3360 | 已提交 PR；真实验收仍按 Issue AC 跟进 | [PR #3477](https://github.com/AgoraIO-Extensions/agent-infra/pull/3477)，新增 durable attempt；Worker 46/46、observability 46/46 |
-| Worker 多服务诊断 / #3428 | workflow_dev_3472（已换任务） | PR 复核发现行为偏差，修复中 | [PR #3479](https://github.com/AgoraIO-Extensions/agent-infra/pull/3479)，撤回旧测试对最终 head 的通过声明；待健康判定/异常隔离修复及重新验证 |
-| 工作指导 / #3475 | 根协调者 | 首版已合入，计数与状态回填中 | [PR #3476](https://github.com/AgoraIO-Extensions/agent-infra/pull/3476) |
-
-已有开发流程 [PR #3473](https://github.com/AgoraIO-Extensions/agent-infra/pull/3473) 属于既有 owner；本轮不认领其分支。
+| Primary Issue | 当前状态 | 证据 |
+| --- | --- | --- |
+| #3360 | PR 已提交，等待 hosted CI/review | [PR #3477](https://github.com/AgoraIO-Extensions/agent-infra/pull/3477)，最新 head 5771bd5；本地 observability 52、Worker 46、types/build/Biome 通过 |
+| #3428 | Draft PR 修复中，尚未宣称通过 | [PR #3479](https://github.com/AgoraIO-Extensions/agent-infra/pull/3479)，最新 head 866cdeb；本地 194 项聚焦测试、types/build 通过；Draft 等待 hosted 门禁 |
+| #3481 | PR 已提交，等待 hosted CI/review；Scope 接线待作者回应 | [PR #3482](https://github.com/AgoraIO-Extensions/agent-infra/pull/3482)，冷目录与 24/24 focused evidence 已记录；local adapter/CPU 接线需明确 |
+| #2938 | 只读 blocker | 固定 context 无 Docker Hub 网络；官方 Go 1.26.7/toolchain 未缓存，未改集群或策略 |
+| #3472 | 既有 PR 跟进，不重复认领 | [PR #3473](https://github.com/AgoraIO-Extensions/agent-infra/pull/3473) |
 
 ## 分派与状态更新规则
 
