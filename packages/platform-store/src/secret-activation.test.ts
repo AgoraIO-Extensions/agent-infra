@@ -775,7 +775,7 @@ describe("PostgreSQL Secret activation Store", () => {
 			error: {
 				schemaVersion: 1 as const,
 				code: "SECRET_KEY_UNAVAILABLE" as const,
-				message: "Secret key is unavailable",
+				message: "Secret key is unavailable" as const,
 				retryable: true,
 				traceId,
 			},

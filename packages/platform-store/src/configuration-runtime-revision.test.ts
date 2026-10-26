@@ -119,7 +119,7 @@ beforeEach(async () => {
 		'request-r', now(), 1, 1, 'running', 1, 1)`;
 	// 旧写入路径不写 runtime_revision：迁移触发器按“改变了 Runtime 输入”补为本修订号。
 	await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at)
-		values (${agentId}, 1, ${record.source.imageDigest}, ${sql.json(record)}, now())`;
+		values (${agentId}, 1, ${record.source.imageDigest}, ${sql.json(record as never)}, now())`;
 	await sql`insert into platform.agent_owners(agent_id, owner_id, created_at) values (${agentId}, ${ownerId}, now())`;
 	await sql`insert into platform.outbox_items(id, scope_type, scope_id, operation, payload, trace_id, request_id)
 		values ('task-r', 'agent', ${agentId}, 'agent.workload.reconcile.v1',
@@ -438,12 +438,15 @@ describe("Runtime revision (ADR-0028)", () => {
 		for (let attempt = 0; attempt < 3; attempt += 1) await tick(worker);
 		// No reset to closing with a stale candidate: the Workload still matches.
 		expect(await workload()).toEqual(stopped);
-		await expect(recent()).resolves.toMatchObject([
-			{
-				projection: { conversationId: "conversation-r" },
-				channel: { configurationRevision: 1 },
-			},
-		]);
+		await expect(recent()).resolves.toMatchObject({
+			records: [
+				{
+					projection: { conversationId: "conversation-r" },
+					channel: { configurationRevision: 1 },
+				},
+			],
+			unavailableAgents: [],
+		});
 	});
 
 	it("pins new Executions to the Runtime revision that carries their model configuration", async () => {
@@ -456,7 +459,7 @@ describe("Runtime revision (ADR-0028)", () => {
 		await sql`insert into platform.agents(id, current_configuration_revision, authorization_revision)
 			values (${model}, 2, 'authorization-m')`;
 		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at)
-			values (${model}, 1, 'template_01', ${sql.json(record)}, now())`;
+			values (${model}, 1, 'template_01', ${sql.json(record as never)}, now())`;
 		const channelOnly = {
 			...record,
 			revision: 2,
@@ -464,7 +467,7 @@ describe("Runtime revision (ADR-0028)", () => {
 			channelRevision: "channels-m",
 		};
 		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, runtime_revision, source_reference, configuration, created_at)
-			values (${model}, 2, 1, 'template_01', ${sql.json(channelOnly)}, now())`;
+			values (${model}, 2, 1, 'template_01', ${sql.json(channelOnly as never)}, now())`;
 		const locked = await sql.begin((transaction) =>
 			lockAgentConfiguration(transaction as never, model),
 		);
@@ -483,14 +486,14 @@ describe("Runtime revision (ADR-0028)", () => {
 			modelConfiguration: {
 				...record.modelConfiguration,
 				defaultReasoningLevel: "medium",
-				options: record.modelConfiguration.options.map((option) => ({
+				options: (record.modelConfiguration?.options ?? []).map((option) => ({
 					...option,
 					reasoningLevels: ["low", "medium"],
 				})),
 			},
 		};
 		await sql`insert into platform.agent_configuration_revisions(agent_id, revision, runtime_revision, source_reference, configuration, created_at)
-			values (${model}, 3, 1, 'template_01', ${sql.json(forged)}, now())`;
+			values (${model}, 3, 1, 'template_01', ${sql.json(forged as never)}, now())`;
 		await sql`update platform.agents set current_configuration_revision = 3 where id = ${model}`;
 		await expect(
 			sql.begin((transaction) =>

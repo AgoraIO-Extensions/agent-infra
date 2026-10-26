@@ -214,16 +214,17 @@ export const agentConfigurationRevisions = platformSchema.table(
 			.notNull()
 			.references(() => agents.id),
 		revision: bigint("revision", { mode: "number" }).notNull(),
-		/**
-		 * 本修订对应的 Runtime 修订：最近一次改变 Runtime 输入的配置修订号（ADR-0028）。
-		 * 迁移中的触发器把未写入该列的插入按“本修订改变了 Runtime 输入”补为自身修订号。
-		 */
-		runtimeRevision: bigint("runtime_revision", { mode: "number" }).notNull(),
 		sourceReference: text("source_reference").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 		configuration: jsonb("configuration").$type<
 			AgentConfigurationRecordV1 | AgentConfigurationRecord
 		>(),
+		// 0067 追加在末尾，与迁移后的物理列顺序一致。
+		/**
+		 * 本修订对应的 Runtime 修订：最近一次改变 Runtime 输入的配置修订号（ADR-0028）。
+		 * 迁移中的触发器把未写入该列的插入按“本修订改变了 Runtime 输入”补为自身修订号。
+		 */
+		runtimeRevision: bigint("runtime_revision", { mode: "number" }).notNull(),
 	},
 	(table) => [
 		primaryKey({ columns: [table.agentId, table.revision] }),
