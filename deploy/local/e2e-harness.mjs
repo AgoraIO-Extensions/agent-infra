@@ -740,6 +740,24 @@ async function applyWorkerBinding(source) {
 	return binding;
 }
 
+async function applyComponentBindings(source) {
+	const platform = dockerPlatform();
+	const cache = await readCache(join(stateRoot, "component-image-cache.json"), {
+		schemaVersion: 1,
+		components: {},
+	});
+	for (const service of ["web", "platform-api", "platform-worker", "enterprise-directory-sync"]) {
+		const input = await componentInputForSource(source, service, platform);
+		const entry = cache.components?.[`${service}:${input.inputHash}`];
+		if (!entry?.imageId || entry.platform !== platform)
+			fail(`Component binding is missing for ${service} at ${source.sha}`);
+		const image = inspectLocalImage(entry.imageId);
+		if (!image || image.Id !== entry.imageId)
+			fail(`Component image is unavailable for ${service}`);
+		docker(["tag", entry.imageId, `agent-infra-e2e-${service}`]);
+	}
+}
+
 function requiredAbsoluteEnv(name) {
 	const value = process.env[name];
 	if (!value || !isAbsolute(value)) fail(`${name} must be an absolute path`);
@@ -1166,6 +1184,8 @@ async function main() {
 		const workerBinding = ["deploy", "verify", "all"].includes(action)
 			? await applyWorkerBinding(source)
 			: null;
+		if (["deploy", "verify", "all"].includes(action))
+			await applyComponentBindings(source);
 		if (["deploy", "all"].includes(action)) {
 			platformScript("data");
 			platformScript("migrate");
