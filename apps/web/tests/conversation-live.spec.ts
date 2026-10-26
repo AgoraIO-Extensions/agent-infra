@@ -891,6 +891,280 @@ test("keeps the previous reply and its thinking process while the next round str
 	});
 });
 
+// #3449 N16-01：补充指令沿用原回复的 Execution（PRD §11.2「答案在原消息的回复中更新」）。受理后与
+// 原回复结束后，时间线只有来源消息下的一张回复卡；补充消息只显示用户消息（导出稿 #chat send-message）。
+for (const streamed of [false, true])
+	test(`a supplementary instruction joins the original reply without a second reply card (${streamed ? "after" : "before"} the first output, #3449 N16-01)`, async ({
+		page,
+		isMobile,
+	}) => {
+		if (!isMobile) await page.setViewportSize({ width: 1440, height: 900 });
+		const errors = trackPageErrors(page);
+		const agent = activeAgent();
+		const question = "整理变更说明并分组";
+		const supplement = "补一句：只看 apps/web";
+		const processing = event("execution.status", 1, { status: "processing" });
+		const firstDelta = event("text.delta", 2, { text: "正在整理第一部分。" });
+		const secondDelta = event("text.delta", 3, {
+			text: "已按 apps/web 收窄。",
+		});
+		const completed = event("execution.status", 4, { status: "completed" });
+		const finalText = "正在整理第一部分。已按 apps/web 收窄。";
+		let phase: "active" | "supplemented" | "completed" = "active";
+		let supplementBody: unknown;
+		const at = (seconds: number) =>
+			new Date(Date.parse(timestamp) + seconds * 1_000).toISOString();
+		const detail = () => {
+			const events =
+				phase === "completed"
+					? [processing, firstDelta, secondDelta, completed]
+					: streamed
+						? [processing, firstDelta]
+						: [processing];
+			const status = phase === "completed" ? "completed" : "processing";
+			const text = events
+				.flatMap((item) => (item.type === "text.delta" ? [item.payload] : []))
+				.map((payload) => ("text" in payload ? payload.text : ""))
+				.join("");
+			return ConversationDetailProjectionV2Schema.parse({
+				schemaVersion: 2,
+				conversation: {
+					schemaVersion: 1,
+					conversationId,
+					agentId,
+					title: "补充指令会话",
+					status: phase === "completed" ? "ready" : "active",
+					selectedModelOptionId: null,
+					selectedReasoningLevel: null,
+					lastConversationCursor: events.at(-1)?.conversationCursor ?? null,
+					createdAt: timestamp,
+					updatedAt: timestamp,
+				},
+				messages: [
+					{
+						messageId,
+						role: "user",
+						text: question,
+						status,
+						executionId,
+						replyToMessageId: null,
+						answerVersion: null,
+						isCurrentAnswer: null,
+						error: null,
+						createdAt: at(0),
+					},
+					// 服务端投影：Execution 有正文或已结束时才有回答（conversation-read-projection）。
+					...(text
+						? [
+								{
+									messageId: `assistant:${executionId}`,
+									role: "assistant",
+									text,
+									status,
+									executionId,
+									replyToMessageId: messageId,
+									answerVersion: 1,
+									isCurrentAnswer: true,
+									error: null,
+									createdAt: at(1),
+								},
+							]
+						: []),
+					// 补充消息的 executionId 是原 Execution，没有指向它的回答。
+					...(phase === "active"
+						? []
+						: [
+								{
+									messageId: "message-supplement-1",
+									role: "user",
+									text: supplement,
+									status,
+									executionId,
+									replyToMessageId: null,
+									answerVersion: null,
+									isCurrentAnswer: null,
+									error: null,
+									createdAt: at(2),
+								},
+							]),
+				],
+				events,
+			});
+		};
+		await page.addInitScript(() => {
+			type FixtureWindow = Window & {
+				hasConversationStream: () => boolean;
+				emitConversationFrame: (value: unknown, id: string) => void;
+			};
+			const fixture = window as unknown as FixtureWindow;
+			const realFetch = window.fetch.bind(window);
+			const encoder = new TextEncoder();
+			let activeController:
+				| ReadableStreamDefaultController<Uint8Array>
+				| undefined;
+			fixture.hasConversationStream = () => Boolean(activeController);
+			fixture.emitConversationFrame = (value, id) => {
+				if (!activeController)
+					throw new Error("The conversation stream is not open");
+				activeController.enqueue(
+					encoder.encode(`id: ${id}\ndata: ${JSON.stringify(value)}\n\n`),
+				);
+			};
+			window.fetch = async (input, init) => {
+				const url = new URL(
+					typeof input === "string"
+						? input
+						: input instanceof Request
+							? input.url
+							: String(input),
+					window.location.href,
+				);
+				if (!url.pathname.endsWith("/events")) return realFetch(input, init);
+				let controllerForStream:
+					| ReadableStreamDefaultController<Uint8Array>
+					| undefined;
+				const body = new ReadableStream<Uint8Array>({
+					start(controller) {
+						controllerForStream = controller;
+						activeController = controller;
+						controller.enqueue(encoder.encode(": heartbeat\n\n"));
+					},
+					cancel() {
+						if (activeController === controllerForStream)
+							activeController = undefined;
+					},
+				});
+				return new Response(body, {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			};
+		});
+		await page.route(/\/api\/v[12]\//, async (route) => {
+			const request = route.request();
+			const path = new URL(request.url()).pathname;
+			if (isFileLimitsRequest(request.method(), path))
+				return route.fulfill({ json: controlledFileLimits() });
+			if (path === "/api/v2/me/conversations/recent")
+				return route.fulfill({
+					json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+				});
+			if (path.endsWith("/session"))
+				return route.fulfill({ json: ownerSession() });
+			if (path === `/api/v2/agents/${agentId}`)
+				return route.fulfill({ json: agent });
+			if (path === `/api/v2/conversations/${conversationId}`)
+				return route.fulfill({ json: detail() });
+			if (
+				request.method() === "POST" &&
+				path === `/api/v1/conversations/${conversationId}/messages`
+			) {
+				supplementBody = request.postDataJSON();
+				phase = "supplemented";
+				return route.fulfill({
+					status: 202,
+					json: CommandAcceptedProjectionV1Schema.parse({
+						schemaVersion: 1,
+						status: "processing",
+						messageId: "message-supplement-1",
+						executionId,
+					}),
+				});
+			}
+			return route.fulfill({ json: { items: [], nextCursor: null } });
+		});
+		const emit = (frame: { eventId: string }) =>
+			page.evaluate(
+				(value) =>
+					(
+						window as unknown as {
+							emitConversationFrame: (value: unknown, id: string) => void;
+						}
+					).emitConversationFrame(value, value.eventId),
+				frame,
+			);
+		const timeline = page.getByRole("region", { name: "会话时间线" });
+		const replies = timeline.getByRole("article", {
+			name: `${agent.name}的消息`,
+		});
+		const stopReply = page.getByRole("button", {
+			name: "停止回复",
+			exact: true,
+		});
+		const expectSingleReply = async (context: string) => {
+			await expect(replies, `${context} 回复卡`).toHaveCount(1);
+			// 回复卡在来源消息之下、补充消息之前（导出稿：补充消息追加在处理中回复卡之后）。
+			expect(
+				await timeline
+					.getByRole("article")
+					.evaluateAll((nodes) =>
+						nodes.map((node) => node.getAttribute("aria-label")),
+					),
+				`${context} 时间线顺序`,
+			).toEqual([
+				"开发 Owner的消息",
+				`${agent.name}的消息`,
+				"开发 Owner的消息",
+			]);
+			expect(await duplicateControlNames(page), `${context} 同名控件`).toEqual(
+				[],
+			);
+			await expectCleanPage(page, errors);
+		};
+
+		await page.goto(
+			`/agents/${agentId}/conversations?conversation=${conversationId}`,
+		);
+		await expect(stopReply).toHaveCount(1);
+		await expect
+			.poll(() =>
+				page.evaluate(() =>
+					(
+						window as unknown as { hasConversationStream: () => boolean }
+					).hasConversationStream(),
+				),
+			)
+			.toBe(true);
+		await page
+			.getByRole("textbox", { name: "消息", exact: true })
+			.fill(supplement);
+		await page
+			.getByRole("button", { name: "发送补充指令", exact: true })
+			.click();
+		await expect(timeline.getByText(supplement, { exact: true })).toBeVisible();
+		expect(supplementBody).toMatchObject({ text: supplement });
+		await expect(stopReply).toHaveCount(1);
+		await expect(replies).toHaveCount(1);
+		if (streamed)
+			await expect(
+				timeline.getByText("正在整理第一部分。", { exact: true }),
+			).toHaveCount(1);
+		await expectSingleReply("补充指令受理后");
+		await test.info().attach("supplement-accepted", {
+			body: await page.screenshot({ fullPage: true }),
+			contentType: "image/png",
+		});
+
+		// 原回复继续输出并结束：答案只在原消息的回复中更新，补充消息下没有第二张已完成回答。
+		if (!streamed) await emit(firstDelta);
+		await emit(secondDelta);
+		await expect(timeline.getByText(finalText, { exact: true })).toHaveCount(1);
+		await expect(replies).toHaveCount(1);
+		phase = "completed";
+		await emit(completed);
+		await expect(stopReply).toHaveCount(0);
+		await expect(
+			page.getByRole("button", { name: `重新生成：${question}` }),
+		).toBeVisible();
+		await expect(timeline.getByText(finalText, { exact: true })).toHaveCount(1);
+		await expect(timeline.getByText(supplement, { exact: true })).toBeVisible();
+		await expectSingleReply("原回复结束后");
+		await test.info().attach("supplement-finished", {
+			body: await page.screenshot({ fullPage: true }),
+			contentType: "image/png",
+		});
+	});
+
 test("renders an authorization failure without retaining another subject's conversation", async ({
 	page,
 }) => {
