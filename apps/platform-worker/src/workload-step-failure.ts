@@ -31,6 +31,7 @@ export type WorkloadStepFailureReasonV1 =
 	| "kubernetes_policy"
 	| "preflight_rejected"
 	| "capabilities_unavailable"
+	| "configuration_mismatch"
 	| "unexpected_error";
 
 export interface WorkloadStepFailureClassV1 {
@@ -87,6 +88,14 @@ export function classifyWorkloadStepFailureV1(
 			...(error.stage ? { preflightStage: error.stage } : {}),
 		};
 	if (error instanceof WorkloadStepErrorV1) return { reason: error.reason };
+	if (
+		typeof error === "object" &&
+		error !== null &&
+		(error as { constructor?: { name?: unknown } }).constructor?.name ===
+			"ModelConfigurationErrorV1" &&
+		(error as { retryable?: unknown }).retryable === false
+	)
+		return { reason: "configuration_mismatch" };
 	const name =
 		typeof error === "object" && error !== null
 			? error.constructor?.name

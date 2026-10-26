@@ -91,6 +91,19 @@ describe("classifyWorkloadStepFailureV1 (#2532)", () => {
 		});
 	});
 
+	it("classifies permanent model binding mismatches without exposing error text", () => {
+		class ModelConfigurationErrorV1 extends Error {
+			readonly retryable = false;
+		}
+		expect(
+			classifyWorkloadStepFailureV1(
+				new ModelConfigurationErrorV1(
+					"model endpoint or credential details must not be logged",
+				),
+			),
+		).toEqual({ reason: "configuration_mismatch" });
+	});
+
 	it("recognises the known bounded errors", () => {
 		expect(
 			classifyWorkloadStepFailureV1(new WorkloadPreflightRejectedErrorV1()),

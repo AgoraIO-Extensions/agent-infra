@@ -52,6 +52,7 @@ function parsePersistedWorkloadReconciliationFailureV1(
 		"kubernetes_policy",
 		"preflight_rejected",
 		"capabilities_unavailable",
+		"configuration_mismatch",
 		"unexpected_error",
 	];
 	if (

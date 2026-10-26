@@ -1,7 +1,7 @@
 # Issue 工作指导
 
 > 适用范围：`AgoraIO-Extensions/agent-infra` 当前开放 Issue。本文把实时清单转成可执行的分派规则；具体产品结论仍以 PRD、工程 Spec、HLD 和 Issue 正文为准。
-> 最近快照：2026-10-26；开放 Issue 57 个；主干 `6bb57c998`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
+> 最近快照：2026-10-26；开放 Issue 54 个；主干 `6bb57c998`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
 
 ## 四类工作边界
 
@@ -27,9 +27,9 @@
 
 | Agent lane | Primary Issue | 目标 | 禁止越界 |
 | --- | ---: | --- | --- |
-| Runtime/Core | [#2899](https://github.com/AgoraIO-Extensions/agent-infra/issues/2899) | 接受有界的空 native command 参数，补齐 dispatch 边界测试并提交 PR | 不改 Runtime Host 版本、不重写其他 native admission 路径 |
-| Deploy/Local | [#2939](https://github.com/AgoraIO-Extensions/agent-infra/issues/2939) | 批量读取 directory authority 的 canonical identity，降低重复外部读取并验证失败边界 | 不改 Connection 服务、不接触真实凭证、不扩展部署范围 |
-| Workflow/Dev | [#3472](https://github.com/AgoraIO-Extensions/agent-infra/issues/3472) | 让 worktree provenance 与 validation policy 的判定稳定可复现，补文档/脚本测试 | 不修改产品运行时和无关 CI gate |
+| Worker stale binding | [#3380](https://github.com/AgoraIO-Extensions/agent-infra/issues/3380) | 已提交 PR #3495，等待开发合入 | 不处理 AC/ACK |
+| Worker diagnostics | [#3428](https://github.com/AgoraIO-Extensions/agent-infra/issues/3428) | 已提交 PR #3479，等待开发合入 | 不处理 AC/真实验收 |
+| E2E Harness | [#3036](https://github.com/AgoraIO-Extensions/agent-infra/issues/3036) | 已提交 PR #3469，等待开发合入 | 不处理 AC/固定环境验收 |
 
 三条 lane 的子 agent 都必须先在最新 `origin/main` 上复读 Issue；若发现 AC、依赖或 owner 不满足实现门槛，返回带证据的只读 handoff，不创建伪 PR。
 
@@ -52,7 +52,7 @@
 
 ## 当前开发交付
 
-- #3495 stale binding PR：开发实现已提交，Hosted checks 运行中。
-- #3479 diagnostics PR：开发实现已提交，Hosted/Review 运行中。
-- #3469 E2E Harness PR：开发实现已提交，Hosted 运行中。
-- 代码已合入的开发票按当前指示关闭；AC/真实验收作为后续跟进。
+- #3495：stale binding fix，Hosted Backend/Workload 运行。
+- #3479：multi-service diagnostics，Hosted Backend/Workload 运行。
+- #3469：E2E Harness，Hosted Web/Backend/Heavy/Workload 运行。
+- 开发 PR 合入后立即关闭对应 development Issue；AC 后续统一跟进。

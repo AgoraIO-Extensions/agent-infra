@@ -299,6 +299,7 @@ export type WorkloadFailureReasonCodeV1 =
 	| "kubernetes_policy"
 	| "preflight_rejected"
 	| "capabilities_unavailable"
+	| "configuration_mismatch"
 	| "unexpected_error";
 
 /** Credential-free persisted explanation of a swallowed Workload step failure. */
@@ -320,6 +321,11 @@ function classifyWorkloadFailureReasonV1(
 	const value = error as Record<string, unknown>;
 	if (value.reason === "capabilities_unavailable")
 		return "capabilities_unavailable";
+	if (
+		value.constructor?.name === "ModelConfigurationErrorV1" &&
+		value.retryable === false
+	)
+		return "configuration_mismatch";
 	const code = value.code;
 	if (code === "policy") return "kubernetes_policy";
 	if (code === "conflict") return "kubernetes_conflict";
@@ -883,6 +889,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 					)
 						return observe(retrying);
 					if (
+						reason === "configuration_mismatch" ||
 						state.attempts + 1 >= attemptBudget(state.phase) ||
 						authorizationTerminal
 					)

@@ -3,14 +3,14 @@
 > 快照时间：2026-10-26（UTC）；来源：GitHub `AgoraIO-Extensions/agent-infra` 开放 Issue 实时回读。
 > 基线：`origin/main` `6bb57c998`。本表是调度快照，Issue 正文、依赖、PR 和真实验收仍是权威来源。
 
-当前开放 Issue：**57**。状态标签不能替代 AC、native blocker、PRD/工程 Spec 或真实环境证据。
+当前开放 Issue：**54**。状态标签不能替代 AC、native blocker、PRD/工程 Spec 或真实环境证据。
 
 ## 分类计数
 
 | 类别 | 数量 |
 | --- | ---: |
-| Runtime/Worker/Core | 19 |
-| Deploy/E2E/Channels | 22 |
+| Runtime/Worker/Core | 17 |
+| Deploy/E2E/Channels | 21 |
 | Platform/Web/Skill | 9 |
 | Workflow/Observability | 7 |
 
@@ -18,9 +18,7 @@
 
 | 类别 | Issue | 标题 | 优先级 | 状态/标签 | 来源或负责人 | 最近更新 | 下一步 |
 | --- | ---: | --- | --- | --- | --- | --- | --- |
-| Runtime/Worker/Core | [#3428](https://github.com/AgoraIO-Extensions/agent-infra/issues/3428) | fix(worker): expose bounded multi-service health diagnostics | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Runtime/Worker/Core | [#3382](https://github.com/AgoraIO-Extensions/agent-infra/issues/3382) | fix(worker): resolve pending application outbox before repeated workload reconcile | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
-| Runtime/Worker/Core | [#3380](https://github.com/AgoraIO-Extensions/agent-infra/issues/3380) | perf(worker): stop high-frequency reconcile for stale ready model bindings | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Runtime/Worker/Core | [#3352](https://github.com/AgoraIO-Extensions/agent-infra/issues/3352) | feat(runtime): deliver Codex native context compaction in conversations | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Runtime/Worker/Core | [#3342](https://github.com/AgoraIO-Extensions/agent-infra/issues/3342) | fix(runtime): Pi Native Session reuse truncates later turns | priority:P1 | priority:P1, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Runtime/Worker/Core | [#3309](https://github.com/AgoraIO-Extensions/agent-infra/issues/3309) | obs(runtime): distinguish safe Messages transport failure stages | priority:P1 | priority:P1, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
@@ -37,7 +35,7 @@
 | Runtime/Worker/Core | [#2757](https://github.com/AgoraIO-Extensions/agent-infra/issues/2757) | fix: local concurrent native metadata reads intermittently return 503 (79/100 rounds) | priority:P1 | ready-for-agent, priority:P1, agent:codex | LichKing-2234 | 2026-10-26 | 可进入实现；先复读 AC、依赖和当前 head |
 | Runtime/Worker/Core | [#1578](https://github.com/AgoraIO-Extensions/agent-infra/issues/1578) | perf(worker): cut route verification cost on the Runtime submit path | priority:P1 | needs-triage, priority:P1, agent:kiro | kiro（来源标签） | 2026-10-26 | 先补齐 Problem/Scope/Validation/Blocked by，再分派 |
 | Runtime/Worker/Core | [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) | feat(runtime): deliver standard MCP Agent token client | priority:P0 | priority:P0, agent:codex | LichKing-2234 | 2026-10-26 | 按优先级和依赖复核后分派 |
-| Deploy/E2E/Channels | [#3498](https://github.com/AgoraIO-Extensions/agent-infra/issues/3498) | docs: refresh tracker after development issue closure | priority:P2 | priority:P2, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派；当前文档刷新 primary Issue；本快照覆盖 57/57 开放 Issue |
+| Deploy/E2E/Channels | [#3500](https://github.com/AgoraIO-Extensions/agent-infra/issues/3500) | docs: refresh tracker after development close sweep | priority:P2 | priority:P2, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派；本文档刷新 primary Issue；当前快照覆盖 54/54 开放 Issue |
 | Deploy/E2E/Channels | [#3365](https://github.com/AgoraIO-Extensions/agent-infra/issues/3365) | fix(deploy): bind ACK standard templates to architecture manifest digests | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#3356](https://github.com/AgoraIO-Extensions/agent-infra/issues/3356) | fix(ack): refresh standard-template readiness from real ECI validation | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#3337](https://github.com/AgoraIO-Extensions/agent-infra/issues/3337) | fix(deploy): ACK pre-render uses default Helm Kubernetes version | priority:P2 | priority:P2, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
@@ -50,7 +48,6 @@
 | Deploy/E2E/Channels | [#3106](https://github.com/AgoraIO-Extensions/agent-infra/issues/3106) | fix(helm): preserve configured encryption key versions in ACK wrapper | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#3072](https://github.com/AgoraIO-Extensions/agent-infra/issues/3072) | 验收 ACK main 部署的四基础模板与自定义镜像真实链路 | priority:P0 | priority:P0, agent:codex | LichKing-2234 | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#3060](https://github.com/AgoraIO-Extensions/agent-infra/issues/3060) | fix(local): 固定 E2E 部署缺少文件面装配、FileLimits 声明与 Runtime 文件交换注入 | 未标注 | agent:kiro | kiro（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
-| Deploy/E2E/Channels | [#3036](https://github.com/AgoraIO-Extensions/agent-infra/issues/3036) | fix(local): E2E Harness 构建挂起、revision 漂移与 Worker 未绑定 | priority:P2 | bug, ready-for-agent, priority:P2, agent:kiro | kiro（来源标签） | 2026-10-26 | 可进入实现；先复读 AC、依赖和当前 head |
 | Deploy/E2E/Channels | [#2998](https://github.com/AgoraIO-Extensions/agent-infra/issues/2998) | test(e2e): real WeCom credential and official QR binding acceptance | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#2989](https://github.com/AgoraIO-Extensions/agent-infra/issues/2989) | fix(local): 验证登录代理前等待主机发布端口就绪 | priority:P2 | priority:P2, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#2983](https://github.com/AgoraIO-Extensions/agent-infra/issues/2983) | test(e2e): 固定环境验收 DeepSeek 与思考过程（Web 与企微） | priority:P1 | ready-for-agent, priority:P1, agent:kiro | kiro（来源标签） | 2026-10-26 | 可进入实现；先复读 AC、依赖和当前 head |
