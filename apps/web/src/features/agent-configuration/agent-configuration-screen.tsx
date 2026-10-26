@@ -315,6 +315,31 @@ export function AgentConfigurationScreen({
 			?.querySelector<HTMLElement>('[role="checkbox"]');
 		(picker ?? saveRef.current)?.focus();
 	}, [focusAfterReload]);
+	// 已保存 Key 的可用模型读取不可重试地失败、选择器随之收起时（#3418 N14-02），草稿里尚未保存的模型选择
+	// 不再有可核对的候选：撤回它，不随其他字段提交；其他未保存的修改保留。
+	const savedCandidatesWithdrawn =
+		defaultRelayKeyManaged &&
+		savedRelayKeyCandidatesError !== null &&
+		savedRelayKeyCandidates === undefined;
+	useEffect(() => {
+		if (!savedCandidatesWithdrawn) return;
+		// 撤回的是唯一的修改时「保存配置」随之变为原生禁用：焦点原在按钮上的交给紧挨按钮的
+		// 「没有需要保存的变更。」（同保存完成，#3433 N15-05），不留给兜底送到视口外的 h1；
+		// 还有其他修改时按钮保持可用，提示不出现，焦点不动。
+		if (document.activeElement === saveRef.current) setFocusUnchangedHint(true);
+		setSavedSelectionError(false);
+		setDraft((current) =>
+			current.replaceModels
+				? {
+						...current,
+						replaceModels: false,
+						models: [],
+						defaultModelOptionId: "",
+						defaultReasoningLevel: "",
+					}
+				: current,
+		);
+	}, [savedCandidatesWithdrawn]);
 
 	if (!isOwner) return unavailableScreen(agent.agentId);
 

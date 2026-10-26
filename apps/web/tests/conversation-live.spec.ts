@@ -337,12 +337,13 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 	await expect(
 		page.getByText("第一段实时输出。第二段完成输出。", { exact: true }),
 	).toHaveCount(0);
-	// R4-07：受理与处理状态只在助手回复卡内（spinner + 状态文案），卡外不再有受理行。
+	// R4-07：受理与处理状态只在助手回复卡内（spinner + 阶段），卡外不再有受理行。
+	// #3377：阶段取自已持久的事实（准备会话、执行中等）。
 	await expect(
 		page
 			.getByRole("article")
 			.getByRole("status")
-			.filter({ hasText: /已受理，等待处理|处理中/ }),
+			.filter({ hasText: /准备会话|执行中/ }),
 	).toBeVisible();
 	await expect(page.getByText(/消息已受理，等待处理/)).toHaveCount(0);
 	await test.info().attach("conversation-incremental-sse", {
@@ -1690,11 +1691,12 @@ test("regenerates a terminal answer and opens its execution details", async ({
 	await expect(page.getByText("已完成检查。", { exact: true })).toBeVisible();
 	await page.getByRole("button", { name: /^重新生成/ }).click();
 	// R4-07：重新生成受理后，新回复卡内显示受理状态，卡外没有受理行。
+	// #3377：已受理、Runtime 尚未开始时的阶段为「准备会话」。
 	await expect(
 		page
 			.getByRole("article")
 			.getByRole("status")
-			.filter({ hasText: "已受理，等待处理" }),
+			.filter({ hasText: "准备会话" }),
 	).toBeVisible();
 	await expect(page.getByText(/消息已受理，等待处理/)).toHaveCount(0);
 	expect(regenerateBody).toEqual({
@@ -2486,3 +2488,258 @@ test("the last timeline exchange ends at the timeline bottom padding when scroll
 	await expectCleanPage(page, errors);
 	expect(await duplicateControlNames(page)).toEqual([]);
 });
+// #3419 N14-11（F14-5）：「重新连接」后事件流仍失败（503），自动重连用尽、连接中断提示与「重新连接」重新出现时，
+// 本次恢复请求仍在进行（reconnect() 等到事件流被接受或自动重连用尽才结束），焦点回到按钮；重连进行中焦点在
+// h1，事件流恢复后仍到 h1（D2-59）。两视口一致；不发送任何写请求。
+test("a reconnect whose stream keeps failing returns focus to 重新连接 when it reappears (#3419 N14-11)", async ({
+	page,
+}, info) => {
+	test.setTimeout(120_000);
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	const agent = AgentProjectionV2Schema.parse({
+		...pilotFakeScenariosV2.starting.response.body,
+		agentId,
+		managementStatus: "available",
+		serviceAvailability: "ready",
+	});
+	let missing = true;
+	let streamFailing = true;
+	let streamReads = 0;
+	let writes = 0;
+	await keepConversationStreamOpen(page);
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		if (route.request().method() !== "GET") writes += 1;
+		const path = new URL(route.request().url()).pathname;
+		if (isFileLimitsRequest(route.request().method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
+		if (path.endsWith("/session"))
+			return route.fulfill({ json: ownerSession() });
+		if (path === `/api/v2/agents/${agentId}`)
+			return route.fulfill({ json: agent });
+		if (path === `/api/v2/conversations/${conversationId}`)
+			return route.fulfill(
+				missing
+					? { status: 404, json: { message: "Synthetic route missing" } }
+					: { json: history(conversationId, []) },
+			);
+		if (path === `/api/v2/conversations/${conversationId}/events`) {
+			streamReads += 1;
+			return route.fulfill(
+				streamFailing
+					? {
+							status: 503,
+							json: {
+								schemaVersion: 1,
+								code: "DEPENDENCY_UNAVAILABLE",
+								message: "Controlled stream failure",
+								retryable: true,
+								traceId: "trace-stream-failure",
+							},
+						}
+					: { contentType: "text/event-stream", body: ": heartbeat\n\n" },
+			);
+		}
+		return route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+	await page.goto(
+		`/agents/${agentId}/conversations?conversation=${conversationId}`,
+	);
+	const reconnect = page.getByRole("button", { name: "重新连接" });
+	const heading = page.getByRole("heading", { level: 1 });
+	await expect(reconnect).toBeVisible();
+	missing = false;
+	await reconnect.focus();
+	await page.keyboard.press("Enter");
+	await expect(reconnect).toHaveCount(0);
+	await expectFocusSettled(heading, "重新连接后（重连进行中）", [30, 150, 400]);
+	await expect(
+		page.getByText("会话连接中断，正在自动重新连接，草稿会保留。"),
+	).toBeVisible();
+	// 自动重连（0.5 + 1 + 2 + 4 + 8 秒）用尽：中断提示与按钮重新出现，焦点回到按钮。
+	await expect(reconnect).toBeVisible({ timeout: 40_000 });
+	expect(streamReads).toBeGreaterThanOrEqual(6);
+	await expectFocusSettled(
+		reconnect,
+		"自动重连用尽、重新连接重新出现后",
+		[50, 300, 1000, 3000],
+	);
+	// 事件流恢复：按钮随提示卸载，焦点到 h1。
+	streamFailing = false;
+	await page.keyboard.press("Enter");
+	await expect(reconnect).toHaveCount(0);
+	await expectFocusSettled(heading, "重新连接成功后", [30, 150, 400, 1000]);
+	expect(writes).toBe(0);
+	await expectCleanPage(page, errors);
+});
+
+// #3433（已显示内容后的不可重试失败）：自定义 Agent（platform-adapter）的 Runtime 模型目录读到之后，回到标签页的
+// 后台重读可重试地失败（503、网络中断）时继续显示模型入口、「发送」可用；不可重试的失败（401、404、响应无效）与首次
+// 读取失败一致：模型入口收起、「发送」阻止，草稿与输入框上的焦点保留，不落到 body。两视口一致。
+for (const failure of ["401", "404", "invalid"] as const)
+	test(`a background reread of the Runtime model directory keeps it through retryable failures and withdraws it after ${failure} (#3433)`, async ({
+		page,
+	}, info) => {
+		await page.setViewportSize(
+			info.project.name === "mobile"
+				? { width: 390, height: 844 }
+				: { width: 1440, height: 900 },
+		);
+		const errors = trackPageErrors(page);
+		const agent = AgentProjectionV2Schema.parse({
+			...activeAgent(),
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agent:v1",
+				interactionMode: "platform-adapter",
+			},
+		});
+		const selectionPath = `/api/v1/conversations/${conversationId}/model-selection`;
+		let selection: "ok" | "503" | "network" | typeof failure = "ok";
+		let selectionReads = 0;
+		const writes: string[] = [];
+		await keepConversationStreamOpen(page);
+		await page.route(/\/api\/v[12]\//, async (route) => {
+			const request = route.request();
+			const path = new URL(request.url()).pathname;
+			if (isFileLimitsRequest(request.method(), path))
+				return route.fulfill({ json: controlledFileLimits() });
+			if (request.method() !== "GET") {
+				writes.push(`${request.method()} ${path}`);
+				return route.fulfill({ status: 500, json: {} });
+			}
+			if (path === "/api/v1/connection/capability")
+				return route.fulfill({
+					json: ConnectionCapabilityProjectionV1Schema.parse({
+						schemaVersion: 1,
+						status: "unavailable",
+						reason: "missing",
+					}),
+				});
+			if (path === "/api/v2/me/conversations/recent")
+				return route.fulfill({
+					json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+				});
+			if (path.endsWith("/session"))
+				return route.fulfill({
+					json: BrowserSessionProjectionV1Schema.parse(ownerSession()),
+				});
+			if (path === `/api/v2/agents/${agentId}`)
+				return route.fulfill({ json: agent });
+			if (path.endsWith("/native-metadata"))
+				return route.fulfill({
+					json: {
+						selector:
+							new URL(request.url()).searchParams.get("selector") === "commands"
+								? "commands"
+								: "skills",
+						revision: "a".repeat(64),
+						capabilities: [],
+					},
+				});
+			if (path === selectionPath) {
+				selectionReads += 1;
+				if (selection === "network") return route.abort("internetdisconnected");
+				if (selection === "503" || selection === "401" || selection === "404")
+					return route.fulfill({
+						status: Number(selection),
+						json: {
+							schemaVersion: 1,
+							code:
+								selection === "503"
+									? "DEPENDENCY_UNAVAILABLE"
+									: "RESOURCE_UNAVAILABLE",
+							message: "Controlled model directory failure",
+							retryable: selection === "503",
+							traceId: "trace-runtime-model-directory",
+						},
+					});
+				if (selection === "invalid")
+					return route.fulfill({ json: { schemaVersion: 1 } });
+				return route.fulfill({
+					json: ConversationModelSelectionProjectionV1Schema.parse({
+						schemaVersion: 1,
+						conversationId,
+						agentId,
+						source: "custom-platform-adapter",
+						available: true,
+						options: agent.configuration.modelOptions,
+						currentModelOptionId: "model-secondary",
+						currentReasoningLevel: "high",
+						selectedModelOptionId: "model-secondary",
+						selectedReasoningLevel: "high",
+					}),
+				});
+			}
+			if (path === `/api/v2/conversations/${conversationId}`)
+				return route.fulfill({
+					json: ConversationDetailProjectionV2Schema.parse({
+						...history(conversationId, []),
+						conversation: {
+							...history(conversationId, []).conversation,
+							status: "ready",
+						},
+					}),
+				});
+			if (path === `/api/v2/conversations/${conversationId}/events`)
+				return route.fulfill({
+					contentType: "text/event-stream",
+					body: ": heartbeat\n\n",
+				});
+			return route.fulfill({ json: { items: [], nextCursor: null } });
+		});
+		await page.goto(`/chat/${agentId}/${conversationId}`);
+		const input = page.getByRole("textbox", { name: "消息", exact: true });
+		const send = page.getByRole("button", { name: "发送", exact: true });
+		const modelTrigger = page.locator(
+			"form.composer-zone .composer-controls .composer-setting-trigger",
+		);
+		await expect(modelTrigger.first()).toHaveAccessibleName(/Secondary model/);
+		await input.fill("保留的草稿");
+		await expect(send).toBeEnabled();
+		await input.focus();
+		const reread = async () => {
+			const before = selectionReads;
+			await page.evaluate(() =>
+				window.dispatchEvent(new Event("visibilitychange")),
+			);
+			await expect.poll(() => selectionReads).toBeGreaterThan(before);
+		};
+		for (const retryable of ["503", "network"] as const) {
+			selection = retryable;
+			await reread();
+			// 可重试的失败：模型入口与「发送」照旧，草稿与焦点保留。
+			await expect(modelTrigger.first()).toHaveAccessibleName(
+				/Secondary model/,
+			);
+			await expect(send).toBeEnabled();
+			await expect(input).toHaveValue("保留的草稿");
+			await expect(input).toBeFocused();
+		}
+		selection = failure;
+		await reread();
+		await expect(modelTrigger).toHaveCount(0);
+		await expect(send).toBeDisabled();
+		await expect(input).toHaveValue("保留的草稿");
+		await expectFocusSettled(input, `Runtime 模型目录（${failure}）`);
+		// 恢复：下一次读到目录时模型入口与「发送」回来。
+		selection = "ok";
+		await reread();
+		await expect(modelTrigger.first()).toHaveAccessibleName(/Secondary model/);
+		await expect(send).toBeEnabled();
+		expect(writes).toEqual([]);
+		expect(
+			await page.evaluate(
+				() => document.documentElement.scrollWidth <= window.innerWidth,
+			),
+		).toBe(true);
+		await expectCleanPage(page, errors);
+	});

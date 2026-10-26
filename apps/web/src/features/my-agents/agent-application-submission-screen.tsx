@@ -10,11 +10,13 @@ import type {
 	AgentApplicationProjectionV2,
 	AgentApplicationUpdateRequestV2Writable,
 	DeploymentConfigurationProjectionV2,
+	DeploymentModelEndpointProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
 import type { AgentDefaultRelayKeyCheck } from "../agent-configuration/agent-configuration.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import { RecoveryButton } from "../recovery-button.js";
 import { AgentApplicationForm } from "./agent-application-form.js";
+import { deploymentConfigurationUsable } from "./deployment-configuration.js";
 import {
 	type AgentApplicationEditAction,
 	agentApplicationEditActionLabels,
@@ -27,6 +29,7 @@ type RequestError = Error & {
 
 type AgentApplicationSubmissionScreenProps =
 	| {
+			connectionUrl?: string;
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			error?: RequestError | null;
 			mode: "create";
@@ -35,11 +38,14 @@ type AgentApplicationSubmissionScreenProps =
 			submitting: boolean;
 			onRefreshDeploymentConfiguration?: () => void;
 			deploymentConfigurationRetryable?: boolean;
+			/** 最近一次读到的模型目录端点：部署选项读取失败时只用于显示名称（#3418 N14-06）。 */
+			lastReadModelEndpoints?: readonly DeploymentModelEndpointProjectionV2[];
 			refreshingDeploymentConfiguration?: boolean;
 	  }
 	| {
 			action: AgentApplicationEditAction;
 			application: AgentApplicationProjectionV2;
+			connectionUrl?: string;
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			error?: RequestError | null;
 			mode: "update";
@@ -53,6 +59,8 @@ type AgentApplicationSubmissionScreenProps =
 			submitting: boolean;
 			onRefreshDeploymentConfiguration?: () => void;
 			deploymentConfigurationRetryable?: boolean;
+			/** 最近一次读到的模型目录端点：部署选项读取失败时只用于显示名称（#3418 N14-06）。 */
+			lastReadModelEndpoints?: readonly DeploymentModelEndpointProjectionV2[];
 			refreshingDeploymentConfiguration?: boolean;
 	  };
 
@@ -114,9 +122,9 @@ export function AgentApplicationSubmissionScreen(
 		props.application.source.kind === "custom" &&
 		props.application.source.interactionMode === "self-managed" &&
 		props.application.source.identityResponsibility === "platform-managed";
-	const deploymentUnavailable =
-		props.deploymentConfiguration.status !== "populated" ||
-		props.deploymentConfiguration.modelCatalog.status !== "populated";
+	const deploymentUnavailable = !deploymentConfigurationUsable(
+		props.deploymentConfiguration,
+	);
 	const deploymentRetryable = props.deploymentConfigurationRetryable ?? false;
 	const submissionFailureMessage =
 		props.error?.code === "DEPENDENCY_UNAVAILABLE" ||
@@ -164,19 +172,28 @@ export function AgentApplicationSubmissionScreen(
 							<li>提交</li>
 						</ol>
 					)}
-					{deploymentUnavailable ? (
+					{/* 部署状态说明只服务于还没提交的表单：提交受理后的结果页不再显示它与「重新加载部署选项」
+					    （#3389 N13-09）。部署选项不可用时标准模板申请被拦下、没有可操作的出错字段，焦点交给
+					    「重新加载部署选项」（不可重试时交给说明本身，tabIndex=-1），按钮经 aria-describedby 带上
+					    说明（#3389 N13-10）。 */}
+					{deploymentUnavailable && !props.result ? (
 						<div
 							className="application-deployment-status"
 							id="application-deployment-status"
 							role="status"
+							tabIndex={-1}
 						>
-							<p className="text-muted-foreground text-sm">
+							<p
+								className="text-muted-foreground text-sm"
+								id="application-deployment-status-message"
+							>
 								{deploymentRetryable
 									? "部署选项需要刷新后才能提交标准模板申请。"
 									: "部署选项暂不可用，请联系管理员。"}
 							</p>
 							{deploymentRetryable && props.onRefreshDeploymentConfiguration ? (
 								<RecoveryButton
+									aria-describedby="application-deployment-status-message"
 									variant="outline"
 									recoveryKey="重新加载部署选项"
 									busy={props.refreshingDeploymentConfiguration}

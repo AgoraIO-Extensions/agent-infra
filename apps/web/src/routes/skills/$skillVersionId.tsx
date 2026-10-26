@@ -57,7 +57,8 @@ function SkillHubVersionRoute() {
 				state={
 					query.isPending
 						? { kind: "loading" }
-						: query.isError || !query.data
+						: // 后台重读的可重试失败不替换已显示的版本详情与页面标题（#3387，N13-3-03 ③）。
+							query.failed || !query.data
 							? { kind: "unavailable", retryable: Boolean(retryable) }
 							: query.data
 				}
@@ -67,14 +68,14 @@ function SkillHubVersionRoute() {
 				catalog={
 					catalog.isPending
 						? { kind: "loading" }
-						: catalog.isError || !catalog.data
+						: catalog.failed || !catalog.data
 							? { kind: "unavailable", retryable: catalog.retryable }
 							: catalog.data
 				}
 				ownedVersions={
 					ownedVersions.isPending
 						? { kind: "loading" }
-						: ownedVersions.isError || !ownedVersions.data
+						: ownedVersions.failed || !ownedVersions.data
 							? { kind: "unavailable", retryable: ownedVersions.retryable }
 							: ownedVersions.data
 				}

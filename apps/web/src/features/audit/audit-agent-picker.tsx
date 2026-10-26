@@ -84,7 +84,9 @@ export function AuditAgentPicker({
 				option.agentId.toLocaleLowerCase().includes(search)),
 	);
 	const visibleOptions = matches.slice(0, maximumVisibleOptions);
-	const loading = candidates.isPending || candidates.isFetching;
+	// 读取中只用于还没有候选时；展开后回到标签页等后台重读期间保留已列出的候选与当前选项（#3387）。
+	// 读取失败不再提供旧候选（读取函数把无权与暂时失败合并为同一个错误）。
+	const loading = candidates.isPending;
 	const listboxId = `${id}-options`;
 	const showListbox =
 		open && !loading && !candidates.isError && visibleOptions.length > 0;

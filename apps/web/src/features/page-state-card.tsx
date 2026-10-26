@@ -3,6 +3,7 @@ import { LogIn, RefreshCw } from "lucide-react";
 import { type ComponentProps, type ReactNode, useState } from "react";
 import { buttonVariants } from "@/components/ui/button";
 import { StateCard } from "@/components/ui/state-card";
+import { useRestoreLostFocus } from "@/hooks/use-recovery-focus";
 import type { CollectionReadUnavailable } from "./collection-read-failure";
 import { RecoveryButton } from "./recovery-button";
 import { useBrowserSession } from "./use-browser-session";
@@ -96,7 +97,7 @@ function ReauthenticateAction({
 			onClick={async () => {
 				setChecking(true);
 				try {
-					const result = await session.refetch();
+					const result = await session.recheck();
 					if (result.status === "success" && result.data?.kind === "ready")
 						onStillValid?.();
 				} finally {
@@ -161,10 +162,12 @@ function defaultAction(
 /**
  * 公共状态卡。默认的「重新登录」「重新加载」是 RecoveryButton：请求中保持可聚焦，恢复成功、
  * 状态卡卸载时焦点移到页面 h1（需 tabIndex=-1），不落到 body；自定义 action 同样用它。
+ * 状态卡替换主内容、卸载了持有焦点的控件时，焦点交给页面 h1（#3388 N13-05）。
  */
 export function PageStateCard(props: PageStateCardProps) {
 	const { kind, title, description, action, headingLevel, className } = props;
 	const defaults = pageStateDefaults[kind];
+	useRestoreLostFocus();
 	return (
 		<StateCard
 			data-kind={kind}

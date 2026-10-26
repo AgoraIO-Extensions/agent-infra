@@ -6,9 +6,13 @@ import { isAgentConfigurationOwner } from "../../../features/agent-configuration
 import { AgentSkillBindingScreen } from "../../../features/agent-configuration/agent-skill-binding-screen.js";
 import { isRetryableAgentDiscoveryError } from "../../../features/agent-discovery/agent-discovery.js";
 import { useAgentDetail } from "../../../features/agent-discovery/use-agent-detail.js";
+import { readFailed } from "../../../features/background-read.js";
 import { PageLoadingState } from "../../../features/page-loading-state.js";
 import { ReadFailureCard } from "../../../features/page-state-card.js";
-import { readSkillHubAgentCurrentVersion } from "../../../features/skill-hub/skill-hub-management.js";
+import {
+	isRetryableSkillHubManagementError,
+	readSkillHubAgentCurrentVersion,
+} from "../../../features/skill-hub/skill-hub-management.js";
 import { useBrowserSession } from "../../../features/use-browser-session.js";
 
 export const Route = createFileRoute("/agents/$agentId/skills")({
@@ -40,9 +44,11 @@ function AgentSkillsRoute() {
 			</main>
 		);
 	}
-	if (query.isError || query.data?.kind !== "ready") {
+	// 后台重读（回到标签页、绑定轮询时的 Agent 重读）的可重试失败不替换页面（#3387）。
+	const failed = readFailed(query, isRetryableAgentDiscoveryError);
+	if (failed || query.data?.kind !== "ready") {
 		const failure =
-			!query.isError && query.data?.kind === "unavailable"
+			!failed && query.data?.kind === "unavailable"
 				? query.data
 				: {
 						retryable: query.isError
@@ -85,7 +91,13 @@ function AgentSkillsRoute() {
 			<AgentSkillBindingScreen
 				agent={query.data.agent}
 				// 绑定读写路径只使用服务端给出的当前版本，不让用户手填。
-				agentVersion={currentVersion.data?.agentVersion ?? null}
+				// 已读到版本后，后台重读的可重试失败继续用它；不可重试的失败（登录失效、无权、不存在、响应无效）
+				// 与首次读取失败一致，显示「暂时无法读取当前 Agent 版本」，不再用旧版本读写绑定（#3433）。
+				agentVersion={
+					readFailed(currentVersion, isRetryableSkillHubManagementError)
+						? null
+						: (currentVersion.data?.agentVersion ?? null)
+				}
 				agentVersionPending={isOwner && currentVersion.isPending}
 				session={session.state}
 				onRefreshAgent={() => void query.refetch()}

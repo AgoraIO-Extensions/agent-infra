@@ -42,7 +42,11 @@ export type WorkerInstallationAuthorization = Omit<
 };
 export interface WorkerConnectionInstallationOptions {
 	/** Trusted, deployment-approved nonsecret snapshot. No caller config overlay. */
-	readonly configuration: RuntimeOAuthConfigurationV1;
+	readonly configuration?: RuntimeOAuthConfigurationV1;
+	/** When present, only the original verified Agent key may select a configuration. */
+	readonly configurationsByAgent?: Readonly<
+		Record<string, RuntimeOAuthConfigurationV1>
+	>;
 	/** Platform's independent current browser confirmation, never business authorization alone. */
 	readonly authorize: (
 		input: Omit<WorkerInstallationAuthorization, "revision">,

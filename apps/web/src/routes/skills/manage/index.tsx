@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useApplicationSession } from "../../../features/application-shell.js";
+import { readFailed } from "../../../features/background-read.js";
 import { collectionReadFailure } from "../../../features/collection-read-failure.js";
 import { useSessionRecheck } from "../../../features/session-recheck.js";
 import { MySkillsScreen } from "../../../features/skill-hub/skill-hub-management-screen.js";
@@ -27,27 +28,34 @@ function MySkillsRoute() {
 		void installations.reload();
 	});
 	const status = (projects.error as { status?: number } | null)?.status;
+	// 后台重读的可重试失败不替换已显示的三个分区（#3387）；401 等不可重试的失败照常显示。
+	const projectsFailed = readFailed(
+		projects,
+		(error) =>
+			collectionReadFailure((error as { status?: number } | null)?.status)
+				.retryable,
+	);
 	return (
 		<main className="platform-content management-content ia-skill-hub">
 			<MySkillsScreen
 				projects={
 					projects.isPending
 						? { kind: "loading" }
-						: projects.isError || !projects.data
+						: projectsFailed || !projects.data
 							? collectionReadFailure(status)
 							: { kind: "ready", items: projects.data.items }
 				}
 				versions={
 					versions.isPending
 						? { kind: "loading" }
-						: versions.isError || !versions.data
+						: versions.failed || !versions.data
 							? { kind: "unavailable", retryable: versions.retryable }
 							: versions.data
 				}
 				installations={
 					installations.isPending
 						? { kind: "loading" }
-						: installations.isError || !installations.data
+						: installations.failed || !installations.data
 							? { kind: "unavailable", retryable: installations.retryable }
 							: installations.data
 				}

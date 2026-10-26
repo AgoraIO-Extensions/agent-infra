@@ -6,6 +6,7 @@ import type {
 	ConversationRegenerateCommandV1,
 	ConversationStateQueryV1,
 	ConversationStopCommandV1,
+	ConversationWithdrawCommandV1,
 	CreateConversationCommandV1,
 } from "./conversation-execution-types.js";
 import {
@@ -66,7 +67,7 @@ export function parseMessageCommand(
 			"requestId",
 			"traceId",
 		],
-		["attachments", "traceParent"],
+		["attachments", "traceParent", "queueDeadlineLimit"],
 	);
 	if (
 		values.schemaVersion !== 1 ||
@@ -81,7 +82,10 @@ export function parseMessageCommand(
 		typeof values.idempotencyKey !== "string" ||
 		!idempotencyKeyPattern.test(values.idempotencyKey) ||
 		!isText(values.requestId) ||
-		!isText(values.traceId)
+		!isText(values.traceId) ||
+		(values.queueDeadlineLimit !== undefined &&
+			(typeof values.queueDeadlineLimit !== "string" ||
+				!Number.isFinite(Date.parse(values.queueDeadlineLimit))))
 	) {
 		invalidInput();
 	}
@@ -102,6 +106,51 @@ export function parseMessageCommand(
 		...(values.attachments === undefined
 			? {}
 			: { attachments: [...(values.attachments as string[])] }),
+		idempotencyKey: values.idempotencyKey,
+		requestId: values.requestId,
+		traceId: values.traceId,
+		...(isTraceParentV1(values.traceParent)
+			? { traceParent: values.traceParent }
+			: {}),
+		...(values.queueDeadlineLimit === undefined
+			? {}
+			: { queueDeadlineLimit: values.queueDeadlineLimit as string }),
+	};
+}
+
+export function parseWithdrawCommand(
+	input: unknown,
+): ConversationWithdrawCommandV1 {
+	const values = snapshotObject(
+		input,
+		[
+			"schemaVersion",
+			"command",
+			"conversationId",
+			"targetExecutionId",
+			"idempotencyKey",
+			"requestId",
+			"traceId",
+		],
+		["traceParent"],
+	);
+	if (
+		values.schemaVersion !== 1 ||
+		values.command !== "withdraw" ||
+		!isText(values.conversationId) ||
+		!isText(values.targetExecutionId) ||
+		typeof values.idempotencyKey !== "string" ||
+		!idempotencyKeyPattern.test(values.idempotencyKey) ||
+		!isText(values.requestId) ||
+		!isText(values.traceId)
+	) {
+		invalidInput();
+	}
+	return {
+		schemaVersion: 1,
+		command: "withdraw",
+		conversationId: values.conversationId,
+		targetExecutionId: values.targetExecutionId,
 		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
 		traceId: values.traceId,
@@ -260,6 +309,11 @@ export function parseAuthority(
 		"supportsSupplementaryInstruction",
 		...(input !== null &&
 		typeof input === "object" &&
+		Object.hasOwn(input, "attachmentMergeWindow")
+			? ["attachmentMergeWindow"]
+			: []),
+		...(input !== null &&
+		typeof input === "object" &&
 		Object.hasOwn(input, "taskBoundary")
 			? ["taskBoundary"]
 			: []),
@@ -275,7 +329,11 @@ export function parseAuthority(
 		!isText(values.agentId) ||
 		!isText(values.channelId) ||
 		!isText(values.authorizationRevision) ||
-		typeof values.supportsSupplementaryInstruction !== "boolean"
+		typeof values.supportsSupplementaryInstruction !== "boolean" ||
+		// #3374：附件合并窗口只属于企微智能机器人渠道。
+		(values.attachmentMergeWindow !== undefined &&
+			(values.attachmentMergeWindow !== true ||
+				!values.channelId.startsWith("wecom_bot:")))
 	) {
 		invalidInput();
 	}
@@ -320,6 +378,9 @@ export function parseAuthority(
 		channelId: values.channelId,
 		authorizationRevision: values.authorizationRevision,
 		supportsSupplementaryInstruction: values.supportsSupplementaryInstruction,
+		...(values.attachmentMergeWindow === true
+			? { attachmentMergeWindow: true as const }
+			: {}),
 		...(taskBoundary ? { taskBoundary } : {}),
 		...(personalApiAdmissionAuthority ? { personalApiAdmissionAuthority } : {}),
 	};

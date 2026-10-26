@@ -11,6 +11,7 @@ import {
 } from "@agent-infra/contracts/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
+import { expectBackgroundRereadKeeps } from "./background-reread";
 import {
 	expectFocusableBusy,
 	expectFocusSettled,
@@ -1253,5 +1254,56 @@ test("revoking a Skill version keeps focus on the pending trigger, then on the h
 	);
 	expect(control.requests.revokes).toHaveLength(1);
 	await expectNoDuplicateControls(page, "Skill 详情（撤销版本，K7-02）");
+	await expectCleanPage(page, errors);
+});
+
+// #3387 N13-01（N13-3-03 ③）：Skill 详情首次读取 503，「重新读取」恢复后焦点交给 h1；用户不操作，回到标签页的
+// 后台重读挂起与再次 503 时不整页换成失败卡（h1 不被替换），焦点一直在 h1、不落到 body，页面高度与滚动位置
+// 不变，之后读到时详情照常显示。两视口一致。
+test("a recovered Skill detail keeps its heading and content through a background reread (#3387 N13-01)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	const detailPath = "/api/v2/skills/versions/release-notes-v2/detail";
+	let firstRead = true;
+	await page.route(
+		(url) => url.pathname === detailPath,
+		(route) => {
+			if (!firstRead || route.request().method() !== "GET")
+				return route.fallback();
+			firstRead = false;
+			return route.fulfill({
+				status: 503,
+				json: protocolError("DEPENDENCY_UNAVAILABLE", true),
+			});
+		},
+	);
+	await page.goto("/skills/release-notes-v2");
+	const main = page.locator("#main-content");
+	await expect(main.getByText("暂时无法读取这个版本")).toBeVisible();
+	await main.getByRole("button", { name: "重新读取" }).click();
+	const tablist = page.getByRole("tablist", { name: "Skill 详情" });
+	await expect(tablist).toBeVisible();
+	const heading = await pinElement(
+		page.getByRole("heading", { level: 1 }),
+		"skill-detail-heading",
+	);
+	await expectFocusSettled(heading, "Skill 详情重新读取恢复后");
+	await expectBackgroundRereadKeeps(page, {
+		path: detailPath,
+		focus: heading,
+		context: "Skill 详情",
+		expectKept: async () => {
+			await expect(heading).toHaveCount(1);
+			await expect(tablist).toBeVisible();
+			await expect(main.getByText("暂时无法读取这个版本")).toHaveCount(0);
+			await expect(main.getByRole("button", { name: "重新读取" })).toHaveCount(
+				0,
+			);
+		},
+	});
+	await expectNoDuplicateControls(page, "Skill 详情（后台重读，#3387）");
 	await expectCleanPage(page, errors);
 });

@@ -400,6 +400,7 @@ export async function readMessageState(
 	transaction: Transaction,
 	conversation: ConversationExecutionConversationStateV1,
 	readDisplayName?: RequestedModelDisplayNameResolverV1,
+	options: { readonly queueAdmission?: boolean } = {},
 ): Promise<ConversationExecutionStateV1> {
 	const agent = await lockAgentConfiguration(transaction, conversation.agentId);
 	// 回退时要记录原选项显示名，即使该选项已从当前配置删除（G-07）。
@@ -410,6 +411,40 @@ export async function readMessageState(
 		conversation.selectedModelOptionId,
 		readDisplayName,
 	);
+	// 本会话的排队在 Conversation 锁内变化（受理、认领、撤回、到期均先锁会话），计数稳定。
+	const [waiting] = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<{ waiting_count: string }[]>`
+		select count(*)::text as waiting_count
+		from platform.conversation_executions
+		where conversation_id = ${conversation.conversationId} and status = 'waiting'
+	`,
+	);
+	const waitingCount = safeInteger(waiting?.waiting_count ?? "0", 0);
+	const queueAgent = async (occupied: boolean) => {
+		if (!options.queueAdmission || !occupied) return { waitingCount };
+		// 与任务 API 共用 Agent 等待顺序与容量：同一 Agent 锁内分配顺序（§12.5）。
+		await awaitConversationExecutionQueryV1(
+			transaction,
+			transaction`select pg_advisory_xact_lock(pg_catalog.hashtextextended(${`task:agent:${conversation.agentId}`}, 0))`,
+		);
+		const [row] = await awaitConversationExecutionQueryV1(
+			transaction,
+			transaction<{ waiting_count: string; last_order: string | null }[]>`
+			select count(*) filter (where status = 'waiting')::text as waiting_count,
+				max(task_wait_order)::text as last_order
+			from platform.conversation_executions where agent_id = ${conversation.agentId}
+		`,
+		);
+		if (!row) unavailable();
+		return {
+			waitingCount,
+			agent: {
+				waitingCount: safeInteger(row.waiting_count, 0),
+				lastWaitOrder: safeInteger(row.last_order ?? "0", 0),
+			},
+		};
+	};
 	const activeRows = await awaitConversationExecutionQueryV1(
 		transaction,
 		transaction<ExecutionRow[]>`
@@ -433,6 +468,7 @@ export async function readMessageState(
 			targetExecution: undefined,
 			existingStop: undefined,
 			activeExecution: undefined,
+			queue: await queueAgent(waitingCount > 0),
 		};
 	}
 	const status = text(active.status);
@@ -459,12 +495,22 @@ export async function readMessageState(
 	const stop = stopRows[0];
 	if (stop && stop.status !== "submitted" && stop.status !== "completed")
 		unavailable();
+	const attachmentMerge =
+		status === "submitted" && text(active.channel_id).startsWith("wecom_bot:")
+			? await readAttachmentMergeWindow(
+					transaction,
+					conversation.conversationId,
+					text(active.execution_id),
+				)
+			: undefined;
+	const queue = await queueAgent(true);
 	return {
 		conversation,
 		modelConfiguration,
 		sourceMessage: undefined,
 		targetExecution: undefined,
 		existingStop: undefined,
+		queue,
 		activeExecution: {
 			executionId: text(active.execution_id),
 			conversationId: text(active.conversation_id),
@@ -486,8 +532,54 @@ export async function readMessageState(
 			lastEventSequence: safeInteger(active.last_event_sequence, 0),
 			stopPending: stop?.status === "submitted",
 			status: status as "submitted" | "processing" | "unknown",
+			...(attachmentMerge ? { attachmentMerge } : {}),
 		},
 	};
+}
+
+/**
+ * #3374：在 Conversation 锁内按 Platform DB 判定合并窗口（工程 Spec §14.2.4）。窗口打开要求
+ * Turn outbox 从未被认领且未到期，并且已绑定到该 Execution 的消息都只含附件；文字消息、普通
+ * 消息和已认领的 Turn 都没有窗口。返回已绑定的附件数，用于合并上限。
+ */
+async function readAttachmentMergeWindow(
+	transaction: Transaction,
+	conversationId: string,
+	executionId: string,
+): Promise<{ readonly attachmentCount: number } | undefined> {
+	const rows = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<{ attachment_count: string | number }[]>`
+		select (
+			select count(*) from platform.files f
+			where f.conversation_id = ${conversationId}
+				and f.record->>'executionId' = ${executionId}
+				and f.record->>'kind' = 'attachment'
+		) as attachment_count
+		from platform.outbox_items o
+		join platform.conversation_executions e
+			on e.execution_id = ${executionId} and e.conversation_id = ${conversationId}
+		where o.id = ${`conversation:turn:${executionId}`}
+			and o.scope_type = 'conversation' and o.scope_id = ${conversationId}
+			and o.operation = 'conversation.turn.submit.v1'
+			and o.status = 'pending' and o.attempt_count = 0 and o.delivery_fence = 0
+			and o.available_at > clock_timestamp()
+			and e.status = 'submitted' and e.delivery_fence = 0
+			and exists (
+				select 1 from platform.conversation_messages m
+				where m.conversation_id = ${conversationId} and m.execution_id = ${executionId}
+			)
+			and not exists (
+				select 1 from platform.conversation_messages m
+				where m.conversation_id = ${conversationId} and m.execution_id = ${executionId}
+					and coalesce(m.text, '') <> ''
+			)
+	`,
+	);
+	const row = rows[0];
+	return row
+		? { attachmentCount: safeInteger(Number(row.attachment_count), 0) }
+		: undefined;
 }
 
 export async function readModelSelectionState(

@@ -222,6 +222,87 @@ it("admits Invocation V2 with the server-resolved ordered attachment ids", async
 	expect(buildRequest).toHaveBeenCalledOnce();
 });
 
+const statefulBody = {
+	...body,
+	schemaVersion: 3 as const,
+	selection: {
+		schemaVersion: 1 as const,
+		modelOptionId: "model-1",
+		reasoningLevel: "high",
+	},
+};
+
+it("preserves explicit V3 selection for the authenticated admission handler", async () => {
+	const admit = vi.fn<
+		NonNullable<
+			NativeCapabilityInvocationRouteDependenciesV1["admitWithIdentity"]
+		>
+	>(async ({ identity: currentIdentity, request }) => {
+		expect(currentIdentity.userId).toBe(identity.userId);
+		expect(request).toEqual({
+			...statefulBody,
+			conversationId: "conversation",
+		});
+		return { outcome: "unsupported" };
+	});
+	const response = await app({
+		buildRequest: async ({ conversationId, body: parsed }) => ({
+			...parsed,
+			conversationId,
+		}),
+		admitWithIdentity: admit,
+	}).request("/api/v2/conversations/conversation/native-capability/invoke", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(statefulBody),
+	});
+	expect(response.status).toBe(503);
+	expect(await response.json()).toEqual({ outcome: "unsupported" });
+	expect(admit).toHaveBeenCalledOnce();
+});
+
+it.each([{ ...body, schemaVersion: 2, attachments: ["file-1"] }, statefulBody])(
+	"rejects an adapter that downgrades Invocation $schemaVersion",
+	async (value) => {
+		const admit = vi.fn();
+		const response = await app({ admit }).request(
+			"/api/v2/conversations/conversation/native-capability/invoke",
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(value),
+			},
+		);
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ outcome: "unavailable" });
+		expect(admit).not.toHaveBeenCalled();
+	},
+);
+
+it.each([
+	{ attachments: ["file-1"] },
+	{ keyBinding: { ciphertextRef: "key-1", version: 1 } },
+	{ effect: "read_only" },
+	{ executionId: "caller-operation" },
+])(
+	"rejects V3 caller-owned runtime fields before admission %j",
+	async (extra) => {
+		const buildRequest = vi.fn();
+		const admit = vi.fn();
+		const response = await app({ buildRequest, admit }).request(
+			"/api/v2/conversations/conversation/native-capability/invoke",
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ ...statefulBody, ...extra }),
+			},
+		);
+		expect(response.status).toBe(400);
+		expect(buildRequest).not.toHaveBeenCalled();
+		expect(admit).not.toHaveBeenCalled();
+	},
+);
+
 it.each([
 	["attachments without the V2 version", { ...body, attachments: ["file-a"] }],
 	["an explicit V1 version", { ...body, schemaVersion: 1 }],

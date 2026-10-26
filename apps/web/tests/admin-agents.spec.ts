@@ -3,6 +3,11 @@ import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures";
+import {
+	backgroundReread,
+	expectBackgroundRereadKeeps,
+	expectFatalRereadHandsFocus,
+} from "./background-reread";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { recordApiRequests } from "./generated-client-paths";
 import {
@@ -360,6 +365,55 @@ test("Agent management reads directory names only through the generated client (
 	expect(data.directory.length).toBeGreaterThan(0);
 	expect(api.requests).toContain("GET /api/v2/directory/search");
 	api.expectGenerated("Agent 管理");
+});
+
+// #3387 N13-01（N13-3-03 ②）：焦点在搜索框、已输入筛选时，回到标签页的后台重读挂起与 503 失败不收起筛选与表格，
+// 焦点一直在搜索框、不落到 body，页面高度与滚动位置不变，之后读到时筛选仍在。页头刷新失败仍按 D2-59 收起
+// （见「refresh second-page failure collapses the page to the heading and one retry」）。两视口一致。
+test("a background reread keeps Agent management's filter and rows (#3387 N13-01)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/admin/agents");
+	const search = await pinElement(
+		page.getByRole("searchbox", { name: "搜索 Agent" }),
+		"admin-agents-search",
+	);
+	await search.fill("编程助手 1");
+	await expect(page).toHaveURL(/q=/);
+	const table = await pinElement(
+		page.getByRole("table", { name: "已创建 Agent" }),
+		"admin-agents-table",
+	);
+	const rows = table.locator("tbody").getByRole("row");
+	await expect(rows.first()).toBeVisible();
+	const shown = await rows.count();
+	const heading = await pinElement(
+		page.getByRole("heading", { level: 1, name: "查看 Agent 状态" }),
+		"admin-agents-heading",
+	);
+	await expectBackgroundRereadKeeps(page, {
+		path: "/api/v2/admin/agents",
+		focus: search,
+		context: "Agent 管理",
+		expectKept: async () => {
+			await expect(heading).toHaveCount(1);
+			await expect(search).toHaveValue("编程助手 1");
+			await expect(table).toBeVisible();
+			await expect(rows).toHaveCount(shown);
+			await expect(
+				page.getByRole("button", { name: "重新加载", exact: true }),
+			).toHaveCount(0);
+		},
+	});
+	await expectNoDuplicateControls(page, "Agent 管理（后台重读，#3387）");
+	await expectCleanPage(page, errors);
 });
 
 test("refresh second-page failure collapses the page to the heading and one retry", async ({
@@ -1694,4 +1748,327 @@ test("going back while refreshing leaves the previous page's focus alone (#3364 
 		).toBe(false);
 	}
 	await expectCleanPage(page, pageErrors);
+});
+
+const scrollTop = (page: Page) => page.evaluate(() => window.scrollY);
+
+// #3388 N13-03：页头「刷新 Agent 列表」读取中，用户在同一页面改了写进地址的筛选或页码（?q= / ?status= /
+// ?page=）。查询串变化不算离开页面，刷新失败、筛选与表格收起后焦点按同页规则到 h1，50～2000ms 都不落到
+// body；刷新成功时焦点留在用户所在的控件上。两视口一致。
+for (const change of ["search", "status", "page"] as const)
+	test(`a page-head refresh that fails after a ${change} change in the address hands focus to the h1 (#3388 N13-03)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const pageErrors = trackPageErrors(page);
+		const data = await fixture(page);
+		await page.goto("/admin/agents");
+		const main = page.locator("#main-content");
+		const heading = main.getByRole("heading", {
+			level: 1,
+			name: "查看 Agent 状态",
+		});
+		await expect(
+			main.getByRole("table", { name: "已创建 Agent" }),
+		).toBeVisible();
+		const refresh = main
+			.locator("header.page-heading")
+			.getByRole("button", { name: "刷新 Agent 列表" });
+		data.pause();
+		data.failSecond();
+		await refresh.focus();
+		await page.keyboard.press("Enter");
+		await expect(refresh).toHaveAttribute("aria-disabled", "true");
+		if (change === "search") {
+			await main.getByRole("searchbox", { name: "搜索 Agent" }).focus();
+			await page.keyboard.type("编程");
+			await expect(page).toHaveURL(/[?&]q=/);
+		} else if (change === "status") {
+			await main.getByLabel("运行状态").selectOption("available");
+			await expect(page).toHaveURL(/[?&]status=available/);
+		} else {
+			await main.getByRole("button", { name: "下一页", exact: true }).focus();
+			await page.keyboard.press("Enter");
+			await expect(page).toHaveURL(/[?&]page=2/);
+		}
+		await expect(refresh).toHaveAttribute("aria-disabled", "true");
+		data.resume();
+		await expect(main.getByRole("alert")).toContainText(
+			"暂时无法读取 Agent 列表，请稍后重试。",
+		);
+		await expectFocusSettled(
+			heading,
+			`改 ${change} 后页头刷新失败`,
+			[50, 300, 1000, 2000],
+		);
+		await expectNoDuplicateControls(page, `Agent 管理（${change}，#3388）`);
+		await expectCleanPage(page, pageErrors);
+	});
+
+test("a page-head refresh that succeeds after a search change leaves focus in the search box (#3388 N13-03)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const pageErrors = trackPageErrors(page);
+	const data = await fixture(page);
+	await page.goto("/admin/agents");
+	const main = page.locator("#main-content");
+	await expect(main.getByRole("table", { name: "已创建 Agent" })).toBeVisible();
+	const refresh = main
+		.locator("header.page-heading")
+		.getByRole("button", { name: "刷新 Agent 列表" });
+	data.pause();
+	await refresh.focus();
+	await page.keyboard.press("Enter");
+	await expect(refresh).toHaveAttribute("aria-disabled", "true");
+	const search = main.getByRole("searchbox", { name: "搜索 Agent" });
+	await search.focus();
+	await page.keyboard.type("编程");
+	await expect(page).toHaveURL(/[?&]q=/);
+	data.resume();
+	await expect(refresh).toHaveAttribute("aria-disabled", "false");
+	await expect(main.getByRole("table", { name: "已创建 Agent" })).toBeVisible();
+	await expectFocusSettled(
+		search,
+		"改搜索后页头刷新成功",
+		[50, 300, 1000, 2000],
+	);
+	await expect(search).toHaveValue("编程");
+	await expectCleanPage(page, pageErrors);
+});
+
+// #3388 N13-04：页头刷新失败、焦点交给 h1 后用户不操作（读屏浏览或只滚动）。回到标签页的后台重读挂起时与
+// 读到列表、页头「刷新 Agent 列表」重新出现后，焦点都留在 h1 上，不被同一个按钮取走、不滚动页面；之后
+// 后台重读读到无权、整页替换时焦点也留在 h1。两视口一致。
+test("a background reread after a failed refresh handoff leaves focus on the h1 (#3388 N13-04)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const pageErrors = trackPageErrors(page);
+	const data = await fixture(page);
+	await page.goto("/admin/agents");
+	const main = page.locator("#main-content");
+	const heading = main.getByRole("heading", {
+		level: 1,
+		name: "查看 Agent 状态",
+	});
+	const table = main.getByRole("table", { name: "已创建 Agent" });
+	const failure = main
+		.getByRole("alert")
+		.filter({ hasText: "暂时无法读取 Agent 列表，请稍后重试。" });
+	await expect(table).toBeVisible();
+	const refresh = main
+		.locator("header.page-heading")
+		.getByRole("button", { name: "刷新 Agent 列表" });
+	data.failSecond();
+	await refresh.focus();
+	await page.keyboard.press("Enter");
+	await expect(failure).toBeVisible();
+	await expectFocusSettled(heading, "页头刷新失败后", [50, 300, 1000]);
+
+	data.recover();
+	const scrolled = await scrollTop(page);
+	const reading = await holdRequests(page, "GET", "/api/v2/admin/agents");
+	await backgroundReread(page);
+	await expect.poll(() => reading.held()).toBeGreaterThanOrEqual(1);
+	await expectFocusHeld(heading, [50, 300], "后台重读挂起");
+	reading.release();
+	await expect(table).toBeVisible();
+	await expect(refresh).toBeVisible();
+	await expectFocusSettled(
+		heading,
+		"后台重读读到列表后",
+		[50, 300, 1000, 2000],
+	);
+	expect(await scrollTop(page)).toBe(scrolled);
+
+	// 之后后台重读读到无权（不可重试，仍整页替换，#3387）：页头工具收起，焦点仍在 h1、不滚动。
+	data.deny();
+	await backgroundReread(page);
+	await expect(main.getByText("当前无权访问 Agent 管理。")).toBeVisible();
+	await expect(refresh).toHaveCount(0);
+	await expectFocusSettled(heading, "后台重读读到无权后", [50, 300, 1000]);
+	expect(await scrollTop(page)).toBe(scrolled);
+	await expectCleanPage(page, pageErrors);
+});
+
+// #3388 N13-05：持有焦点的控件因非用户发起的重绘卸载时，焦点交给同页的下一个合理目标，不落到 body、
+// 不滚动页面。① 不经恢复、焦点在搜索框时回到标签页的后台重读读到无权，筛选随之收起：焦点到 h1；后台重读
+// 成功时焦点留在搜索框。② 刷新失败交接 h1 后按 Tab 到未按下的「重新加载」，回到标签页的重读挂起时焦点
+// 留在按钮上，读到列表、按钮随失败提示卸载后焦点到 h1；仍失败时留在按钮上。两视口一致。
+test("a background reread that collapses the focused search box hands focus to the h1 (#3388 N13-05)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const pageErrors = trackPageErrors(page);
+	const data = await fixture(page);
+	await page.goto("/admin/agents");
+	const main = page.locator("#main-content");
+	const heading = main.getByRole("heading", {
+		level: 1,
+		name: "查看 Agent 状态",
+	});
+	const search = main.getByRole("searchbox", { name: "搜索 Agent" });
+	await expect(main.getByRole("table", { name: "已创建 Agent" })).toBeVisible();
+	await search.focus();
+	await page.keyboard.type("编程");
+
+	// 后台重读成功：焦点留在搜索框。
+	let reading = await holdRequests(page, "GET", "/api/v2/admin/agents");
+	await backgroundReread(page);
+	await expect.poll(() => reading.held()).toBeGreaterThanOrEqual(1);
+	await expectFocusHeld(search, [50, 300], "后台重读挂起（搜索框）");
+	reading.release();
+	await expectFocusHeld(search, [50, 300, 1000], "后台重读成功后（搜索框）");
+
+	// 后台重读读到无权（不可重试的失败仍整页替换，#3387；可重试的失败保留筛选与表格，见 #3387 用例）：
+	// 筛选与表格随「当前无权访问」卡收起，焦点到 h1。
+	data.deny();
+	const scrolled = await scrollTop(page);
+	reading = await holdRequests(page, "GET", "/api/v2/admin/agents");
+	await backgroundReread(page);
+	await expect.poll(() => reading.held()).toBeGreaterThanOrEqual(1);
+	await expectFocusHeld(search, [50, 300], "后台重读挂起（无权前）");
+	reading.release();
+	await expect(main.getByText("当前无权访问 Agent 管理。")).toBeVisible();
+	await expect(search).toHaveCount(0);
+	await expectFocusSettled(
+		heading,
+		"后台重读读到无权收起筛选后",
+		[50, 300, 1000, 2000],
+	);
+	expect(await scrollTop(page)).toBeLessThanOrEqual(scrolled);
+	await expectCleanPage(page, pageErrors);
+});
+
+for (const outcome of ["recovers", "fails again"] as const)
+	test(`a focused, unpressed reload that a background reread ${outcome === "recovers" ? "removes" : "keeps"} does not drop focus to body (#3388 N13-05)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const pageErrors = trackPageErrors(page);
+		const data = await fixture(page);
+		await page.goto("/admin/agents");
+		const main = page.locator("#main-content");
+		const heading = main.getByRole("heading", {
+			level: 1,
+			name: "查看 Agent 状态",
+		});
+		const failure = main
+			.getByRole("alert")
+			.filter({ hasText: "暂时无法读取 Agent 列表，请稍后重试。" });
+		await expect(
+			main.getByRole("table", { name: "已创建 Agent" }),
+		).toBeVisible();
+		data.failSecond();
+		await main
+			.locator("header.page-heading")
+			.getByRole("button", { name: "刷新 Agent 列表" })
+			.focus();
+		await page.keyboard.press("Enter");
+		await expect(failure).toBeVisible();
+		await expectFocusSettled(heading, "页头刷新失败后", [50, 300]);
+		const reload = failure.getByRole("button", {
+			name: "重新加载",
+			exact: true,
+		});
+		await page.keyboard.press("Tab");
+		await expect(reload).toBeFocused();
+
+		if (outcome === "recovers") data.recover();
+		const scrolled = await scrollTop(page);
+		const reading = await holdRequests(page, "GET", "/api/v2/admin/agents");
+		await backgroundReread(page);
+		await expect.poll(() => reading.held()).toBeGreaterThanOrEqual(1);
+		await expectFocusHeld(
+			reload,
+			[50, 300],
+			"后台重读挂起（未按下的重新加载）",
+		);
+		reading.release();
+		if (outcome === "recovers") {
+			await expect(
+				main.getByRole("table", { name: "已创建 Agent" }),
+			).toBeVisible();
+			await expect(failure).toHaveCount(0);
+			await expectFocusSettled(
+				heading,
+				"后台重读成功、重新加载卸载后",
+				[50, 300, 1000, 2000],
+			);
+		} else {
+			await expect(failure).toBeVisible();
+			await expect(reload).toHaveAttribute("aria-disabled", "false");
+			await expectFocusSettled(
+				reload,
+				"后台重读仍失败后",
+				[50, 300, 1000, 2000],
+			);
+		}
+		expect(await scrollTop(page)).toBe(scrolled);
+		await expectNoDuplicateControls(page, `Agent 管理（${outcome}，#3388）`);
+		await expectCleanPage(page, pageErrors);
+	});
+// #3419 N14-09（N14-3-02 ③）：员工访问控制选中员工后「禁用这名员工？」确认弹窗打开时，回到标签页的 Agent 列表后台重读
+// 读到登录失效（401）：整页换成「登录已过期」状态卡，弹窗随之卸载，finalFocus 指向的「禁用员工：{姓名}」已不在文档。
+// 焦点交给 h1「查看 Agent 状态」，不落到 body、不滚动页面。先覆盖挂起、可重试失败与恢复（弹窗保留），两视口一致。
+test("an employee disable confirmation removed by a background 401 hands focus to the h1 (#3419 N14-09)", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	const userId = "11111111-1111-4111-8111-111111111111";
+	await page.route("**/api/v2/directory/search?**", (route) =>
+		route.fulfill({
+			json: directorySearchResponse(new URL(route.request().url()), [
+				{
+					kind: "user",
+					canonicalId: userId,
+					displayName: "验收员工",
+					email: "employee@example.test",
+				},
+			]),
+		}),
+	);
+	await page.route(`**/api/v2/admin/users/${userId}/disable`, (route) =>
+		route.fulfill({ json: { schemaVersion: 1, userId, disabled: false } }),
+	);
+	await page.goto("/admin/agents");
+	await expect(page.getByRole("table", { name: "已创建 Agent" })).toBeVisible();
+	const users = page.getByRole("region", { name: "员工访问控制" });
+	await users.getByRole("combobox", { name: "员工" }).click();
+	await page.getByRole("option", { name: /验收员工/ }).click();
+	const ban = users.getByRole("button", {
+		name: "禁用员工：验收员工",
+		exact: true,
+	});
+	// 读到员工当前状态后才可禁用。
+	await expect(ban).toBeEnabled();
+	await ban.click();
+	const dialog = page.getByRole("dialog", { name: "禁用这名员工？" });
+	await expect(dialog).toBeFocused();
+	await expectBackgroundRereadKeeps(page, {
+		path: "/api/v2/admin/agents",
+		focus: dialog,
+		context: "禁用员工确认",
+		expectKept: async () => {
+			await expect(dialog).toBeVisible();
+		},
+	});
+	const main = page.locator("#main-content");
+	await expectFatalRereadHandsFocus(page, {
+		path: "/api/v2/admin/agents",
+		status: 401,
+		focus: dialog,
+		target: main.getByRole("heading", { level: 1, name: "查看 Agent 状态" }),
+		context: "禁用员工确认",
+		expectReplaced: async () => {
+			await expect(main.getByText("登录已过期")).toBeVisible();
+			await expect(dialog).toHaveCount(0);
+			await expect(ban).toHaveCount(0);
+		},
+	});
+	await expectNoDuplicateControls(page, "Agent 管理（#3419 N14-09）");
+	await expectCleanPage(page, errors);
 });

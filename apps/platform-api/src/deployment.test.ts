@@ -989,12 +989,14 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 				...fixture.input,
 				connectionConsumerProfile,
 				connectionConsumerProfileApproval,
+				connectionWebPath: "/connection/connections",
 			}).connectionCapability;
 		expect(build(profile, approval)).toEqual({
 			status: "available",
 			schemaVersion: 1,
 			publicOrigin: profile.publicOrigin,
 			mcpPath: profile.mcpPath,
+			webPath: "/connection/connections",
 			configFingerprint: approval.configFingerprint,
 		});
 		expect(

@@ -256,6 +256,8 @@ export function codexConversationKey(binding: {
 }
 
 export interface CodexAppServerBridgeOptions {
+	/** Deployment-owned isolation boundary for the Linux native process. */
+	readonly isolationMode?: "landlock" | "container-boundary";
 	/** Fixed installed-Skill launch policy, only for a new official-lane process. */
 	readonly disableBundledSkills?: true;
 	readonly officialLane?: boolean;
@@ -526,6 +528,7 @@ export class CodexAppServerBridgeError extends Error {
 }
 
 interface ValidatedOptions {
+	readonly isolationMode: "landlock" | "container-boundary";
 	readonly disableBundledSkills: boolean;
 	officialLane: boolean;
 	readonly launchPath?: string;
@@ -708,6 +711,7 @@ function parseTimeout(value: unknown, fallback: number) {
 function validateOptions(input: unknown): ValidatedOptions {
 	if (!isPlainRecord(input)) configurationInvalid();
 	const allowedKeys = [
+		"isolationMode",
 		"disableBundledSkills",
 		"officialLane",
 		"launchPath",
@@ -760,12 +764,20 @@ function validateOptions(input: unknown): ValidatedOptions {
 	)
 		configurationInvalid();
 	if (!hasPinnedProvenance(input.provenance)) provenanceMismatch();
+	const isolationMode = input.isolationMode ?? "landlock";
+	if (isolationMode !== "landlock" && isolationMode !== "container-boundary")
+		configurationInvalid();
 	if (
 		input.nativeBarrierRequired !== undefined &&
 		typeof input.nativeBarrierRequired !== "boolean"
 	)
 		configurationInvalid();
 	const privateLane = privateNativeLaneRequired(input);
+	if (
+		isolationMode === "container-boundary" &&
+		(platform !== "linux" || privateLane)
+	)
+		configurationInvalid();
 	if (
 		input.disableBundledSkills !== undefined &&
 		(input.disableBundledSkills !== true ||
@@ -828,6 +840,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 		configurationInvalid();
 	}
 	return {
+		isolationMode,
 		disableBundledSkills: input.disableBundledSkills === true,
 		...(input.launchPath !== undefined ? { launchPath: input.launchPath } : {}),
 		dataDirectory: input.dataDirectory,
@@ -1561,7 +1574,8 @@ export class CodexAppServerBridge {
 					validated.startupTimeoutMs,
 					launchPolicy,
 				);
-			await verifyLinuxSandbox(launchPolicy, validated.startupTimeoutMs);
+			if (validated.isolationMode === "landlock")
+				await verifyLinuxSandbox(launchPolicy, validated.startupTimeoutMs);
 			nativeLaunchPolicy = await persistentLaunchPolicy(
 				validated.dataDirectory,
 				validated.conversationKey,
@@ -1569,7 +1583,7 @@ export class CodexAppServerBridge {
 			);
 			// A platform without an enforceable Conversation boundary never starts a
 			// native process; there is no unrestricted fallback.
-			if (platform === "linux") {
+			if (platform === "linux" && validated.isolationMode === "landlock") {
 				const helper = await resolveExecutable(launchPath, "setpriv");
 				boundary = [
 					helper,
@@ -1580,6 +1594,13 @@ export class CodexAppServerBridge {
 					)),
 					"--",
 				];
+			} else if (
+				platform === "linux" &&
+				validated.isolationMode === "container-boundary"
+			) {
+				// The dedicated Runtime Pod is the isolation boundary. This
+				// mode is Worker-owned; the default remains Landlock above.
+				boundary = [];
 			} else if (platform === "darwin") {
 				boundary = [];
 			} else {
@@ -1634,20 +1655,19 @@ export class CodexAppServerBridge {
 								],
 							)
 						: []),
-					// On Linux the boundary above is the only filesystem boundary. The
-					// pinned legacy Landlock backend has to read the whole filesystem
-					// tree before it runs a tool, so keeping it enabled would force a
-					// recursive `read-dir` grant on `/` that re-exposes every sibling
-					// Conversation. See the ADR for the measured trade-off.
+					// In Landlock mode the boundary above is the only filesystem boundary.
+					// In container-boundary mode the dedicated Pod is the boundary and Codex
+					// keeps its own provider-native workspace sandbox enabled.
 					...(platform === "linux"
 						? [
 								"--config",
-								`sandbox_mode=${JSON.stringify(linuxNativeSandboxMode)}`,
+								`sandbox_mode=${JSON.stringify(validated.isolationMode === "container-boundary" ? "workspace-write" : linuxNativeSandboxMode)}`,
 								// If a pinned code path still sandboxes a child, keep it on
 								// the backend this deployment can run: the namespace sandbox
 								// needs privileges the runtime never has.
-								"--config",
-								"features.use_legacy_landlock=true",
+								...(validated.isolationMode === "landlock"
+									? ["--config", "features.use_legacy_landlock=true"]
+									: []),
 							]
 						: conversationPermissionArguments(nativeLaunchPolicy)),
 					...modelAccessArguments(validated.modelAccess),

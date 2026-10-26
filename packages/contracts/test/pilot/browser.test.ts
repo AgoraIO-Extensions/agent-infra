@@ -43,6 +43,8 @@ const requiredOperations = [
 	"submitMessage",
 	"regenerateAnswer",
 	"stopExecution",
+	// #3376：Web 发送者撤回自己仍在排队的消息。
+	"withdrawQueuedMessage",
 	"commandBrowserHandoffOrSideEffect",
 	"updateConversationModelSelection",
 	"getExecutionDetail",

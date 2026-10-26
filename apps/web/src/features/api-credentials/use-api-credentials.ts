@@ -6,6 +6,11 @@ import type {
 	PersonalApiCredentialMetadataV1,
 } from "../../pilot/generated-v2/types.gen.js";
 import {
+	markUserRead,
+	retainContent,
+	retainedContentAt,
+} from "../background-read.js";
+import {
 	type ApiCredentialsState,
 	issuePersonalApiCredential,
 	loadPersonalApiCredentials,
@@ -61,9 +66,19 @@ export function useApiCredentials({
 					query.error.retryable !== false,
 			}
 		: null;
+	const read: ApiCredentialsState | { kind: "loading" } = queryFailure ??
+		query.data ?? { kind: "loading" };
+	// 读取函数把 503 等可重试失败作为结果写入缓存：回到标签页、签发或撤销后的重读失败时继续显示
+	// 上一次的凭证列表（#3387）；没有读到过列表或 401 等不可重试的失败照常显示。
 	const state: ApiCredentialsState | { kind: "denied" | "loading" } = !allowed
 		? { kind: "denied" }
-		: (queryFailure ?? query.data ?? { kind: "loading" });
+		: retainContent(scope, read, {
+				isContent: (current) => current.kind === "ready",
+				isRetryableFailure: (current) =>
+					current.kind === "unavailable" && current.retryable,
+				updatedAt: query.error ? query.errorUpdatedAt : query.dataUpdatedAt,
+			});
+	/** 页面发起的重读（「重新加载」、签发与撤销后的回读）：失败时按读取失败显示。 */
 	async function refetch() {
 		const current = queryClient.getQueryData<ApiCredentialsState>(
 			scope.queryKey,
@@ -74,6 +89,7 @@ export function useApiCredentials({
 			(current?.kind === "unavailable" && !current.retryable)
 		)
 			return undefined;
+		markUserRead(scope, retainedContentAt(scope));
 		return query.refetch({ cancelRefetch: false });
 	}
 	/**
@@ -90,6 +106,7 @@ export function useApiCredentials({
 				queryKey: scope.queryKey,
 				exact: true,
 			});
+		markUserRead(scope, retainedContentAt(scope));
 		return query.refetch({ cancelRefetch: false });
 	}
 	return { state, isFetching: allowed && query.isFetching, refetch, reload };

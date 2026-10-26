@@ -21,7 +21,10 @@ import {
 	type Transaction,
 	validText,
 } from "./conversation-dispatch-common.js";
-import { readMessage } from "./conversation-dispatch-sql.js";
+import {
+	readInitialTurnInput,
+	readMessage,
+} from "./conversation-dispatch-sql.js";
 import {
 	exactPayload,
 	isTurn,
@@ -313,21 +316,37 @@ export async function originalOperationBinding(
 			message.execution_id !== state.execution.execution_id)
 	)
 		return null;
-	const inputFiles = await transaction<{ file_id: string }[]>`
+	// #3374：与认领共用初始 Turn 输入的读取，包含合并窗口内并入的消息；重新生成只读源消息。
+	const input =
+		originOperation === "conversation.turn.submit.v1"
+			? await readInitialTurnInput(
+					transaction,
+					claim.conversationId,
+					state.execution.execution_id,
+					message,
+				)
+			: {
+					text: message.text,
+					attachments: (
+						await transaction<{ file_id: string }[]>`
 		select file_id from platform.files
 		where conversation_id = ${claim.conversationId}
 			and record->>'messageId' = ${originalPayload.messageId}
 			and record->>'kind' = 'attachment'
 			and record->>'status' = 'available'
 		order by file_id
-	`;
+	`
+					).map((file) => file.file_id),
+				};
 	const original = {
 		...base,
 		kind: "submit-turn",
-		input: {
-			text: message.text,
-			attachments: inputFiles.map((file) => file.file_id),
-		},
+		// 与 Worker 实际发送的 Runtime 输入同形（RuntimeInputV1）：只含附件的消息不带空正文。
+		// 否则 V4 摘要投影无法通过契约校验，V2 摘要也与 Host 记录的请求摘要不一致（#3374）。
+		input:
+			input.text === "" && input.attachments.length > 0
+				? { attachments: input.attachments }
+				: { text: input.text, attachments: input.attachments },
 		...(state.execution.model_option_id && state.execution.reasoning_level
 			? {
 					selection: {

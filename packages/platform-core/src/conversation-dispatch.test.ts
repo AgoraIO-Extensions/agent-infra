@@ -12,6 +12,7 @@ import { FakeConversationRuntimeHostV1 } from "./fake-conversation-runtime-host.
 import {
 	type ConversationDispatchAuthorizationPortV1,
 	type ConversationDispatchClaimV1,
+	ConversationDispatchError,
 	type ConversationDispatchStateTransitionV1,
 	type ConversationDispatchStorePortV1,
 	type ConversationDispatchUseCaseV1,
@@ -331,6 +332,7 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		| "sandbox_wait"
 		| "stop_changed" = "available";
 	released = 0;
+	releaseDelays: number[] = [];
 
 	constructor(seed = claim()) {
 		this.current = structuredClone(seed);
@@ -496,6 +498,7 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		claim: ConversationDispatchClaimV1;
 		retryDelayMs: number;
 		errorCode: string;
+		hostSessionRef?: string;
 	}) {
 		const recoveringUnacceptedTurn =
 			input.claim.executionStatus === "unknown" &&
@@ -510,15 +513,29 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 			this.current.executionStatus !== "unknown" ||
 			(!recoveringUnacceptedTurn &&
 				input.claim.executionStatus !== "submitted" &&
-				input.claim.executionStatus !== "waiting")
+				input.claim.executionStatus !== "waiting") ||
+			(input.hostSessionRef !== undefined &&
+				this.current.hostSessionRef !== null &&
+				this.current.hostSessionRef !== input.hostSessionRef)
 		)
 			return false;
 		this.released++;
+		this.releaseDelays.push(input.retryDelayMs);
 		this.outboxStatus = "retry_scheduled";
 		this.errorCode = input.errorCode;
 		this.current = {
 			...this.current,
 			executionStatus: restoredStatus,
+			hostSessionRef:
+				this.current.hostSessionRef ?? input.hostSessionRef ?? null,
+			...(input.errorCode === "RUNTIME_TURN_NOT_SUBMITTED"
+				? {
+						notSubmittedResubmissions: {
+							count: (this.current.notSubmittedResubmissions?.count ?? 0) + 1,
+							elapsedMs: this.current.notSubmittedResubmissions?.elapsedMs ?? 0,
+						},
+					}
+				: {}),
 		};
 		return true;
 	}
@@ -572,6 +589,25 @@ class MemoryEvents implements Pick<ConversationEventUseCaseV1, "persist"> {
 				event: command.event,
 			},
 		};
+	}
+}
+
+/** #3378：批量持久化的内存实现，按序逐个写入并记录每批大小。 */
+class BatchedMemoryEvents extends MemoryEvents {
+	readonly batches: number[] = [];
+	failNextBatch = false;
+
+	async persistBatch(
+		commands: readonly Parameters<ConversationEventUseCaseV1["persist"]>[0][],
+	) {
+		this.batches.push(commands.length);
+		if (this.failNextBatch) {
+			this.failNextBatch = false;
+			throw new Error("injected batch persistence failure");
+		}
+		const decisions = [];
+		for (const command of commands) decisions.push(await this.persist(command));
+		return decisions;
 	}
 }
 
@@ -646,12 +682,17 @@ function setup(
 		runtimeHost?: ConversationRuntimeHostPortV1;
 		authorization?: ConversationDispatchAuthorizationPortV1;
 		maxRecoveryAttempts?: number;
+		recoveryBudgetMs?: number;
+		retryDelayMs?: number;
+		batched?: true;
 	} = {},
 ) {
 	const store = options.store ?? new MemoryDispatchStore();
 	const runtimeHost =
 		options.runtimeHost ?? new FakeConversationRuntimeHostV1();
-	const events = new MemoryEvents(store);
+	const events = options.batched
+		? new BatchedMemoryEvents(store)
+		: new MemoryEvents(store);
 	const useCase = createConversationDispatchUseCaseV1(
 		{
 			store,
@@ -661,10 +702,13 @@ function setup(
 		},
 		{
 			leaseDurationMs: 3_000,
-			retryDelayMs: 0,
+			retryDelayMs: options.retryDelayMs ?? 0,
 			...(options.maxRecoveryAttempts === undefined
 				? {}
 				: { maxRecoveryAttempts: options.maxRecoveryAttempts }),
+			...(options.recoveryBudgetMs === undefined
+				? {}
+				: { recoveryBudgetMs: options.recoveryBudgetMs }),
 		},
 	);
 	return { store, runtimeHost, events, useCase };
@@ -1001,7 +1045,7 @@ describe("native capability with terminal execution (#2919)", () => {
 });
 
 describe("bounded unknown recovery", () => {
-	it("closes a denied unknown stop after the durable attempt limit", async () => {
+	it("closes a denied unknown stop after the wall-clock recovery budget", async () => {
 		const store = new MemoryDispatchStore(
 			claim({
 				operation: "conversation.turn.stop.v1",
@@ -1012,11 +1056,11 @@ describe("bounded unknown recovery", () => {
 				executionStatus: "unknown",
 				stopPending: true,
 				attemptCount: 3,
+				recoveryElapsedMs: 300_000,
 			}),
 		);
 		const h = setup({
 			store,
-			maxRecoveryAttempts: 3,
 			authorization: deniedAuthorization(),
 		});
 
@@ -1029,9 +1073,13 @@ describe("bounded unknown recovery", () => {
 		expect(store.current.executionStatus).toBe("failed");
 	});
 
-	it("fails an occupied unknown execution after the durable attempt limit", async () => {
+	it("fails an occupied unknown execution after the wall-clock recovery budget", async () => {
 		const store = new MemoryDispatchStore(
-			claim({ executionStatus: "unknown", attemptCount: 3 }),
+			claim({
+				executionStatus: "unknown",
+				attemptCount: 3,
+				recoveryElapsedMs: 300_000,
+			}),
 		);
 		const recoverOriginalStatus = vi.fn(async () => {
 			throw new Error("Runtime recovery is unavailable");
@@ -1039,11 +1087,7 @@ describe("bounded unknown recovery", () => {
 		const runtimeHost =
 			new FakeConversationRuntimeHostV1() as unknown as ConversationRuntimeHostPortV1;
 		runtimeHost.recoverOriginalStatus = recoverOriginalStatus;
-		const h = setup({
-			store,
-			maxRecoveryAttempts: 3,
-			runtimeHost,
-		});
+		const h = setup({ store, runtimeHost });
 
 		await expect(dispatch(h.useCase)).resolves.toEqual({
 			schemaVersion: 1,
@@ -1055,7 +1099,64 @@ describe("bounded unknown recovery", () => {
 		expect(store.current.executionStatus).toBe("failed");
 	});
 
-	it("closes terminal metadata recovery after the same limit", async () => {
+	// #3373：预算按 Execution 进入 unknown 以来的墙钟时间计，不按认领次数计。
+	it.each([
+		["below the default budget after many claims", 299_999, undefined],
+		["below a configured budget", 59_999, 60_000],
+	])(
+		"keeps querying the original Turn %s",
+		async (_name, recoveryElapsedMs, recoveryBudgetMs) => {
+			const store = new MemoryDispatchStore(
+				claim({
+					executionStatus: "unknown",
+					attemptCount: 10_000,
+					recoveryElapsedMs,
+				}),
+			);
+			const recoverOriginalStatus = vi.fn(async () => {
+				throw new Error("Runtime recovery is unavailable");
+			});
+			const runtimeHost =
+				new FakeConversationRuntimeHostV1() as unknown as ConversationRuntimeHostPortV1;
+			runtimeHost.recoverOriginalStatus = recoverOriginalStatus;
+			const h = setup({
+				store,
+				runtimeHost,
+				...(recoveryBudgetMs === undefined ? {} : { recoveryBudgetMs }),
+			});
+
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "retry",
+			});
+			expect(recoverOriginalStatus).toHaveBeenCalledOnce();
+			expect(store.errorCode).not.toBe("RUNTIME_RECOVERY_TIMEOUT");
+			expect(store.current.executionStatus).toBe("unknown");
+		},
+	);
+
+	it("applies a configured wall-clock budget", async () => {
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "unknown", recoveryElapsedMs: 60_000 }),
+		);
+		const h = setup({ store, recoveryBudgetMs: 60_000 });
+
+		await expect(dispatch(h.useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "rejected",
+		});
+		expect(store.errorCode).toBe("RUNTIME_RECOVERY_TIMEOUT");
+	});
+
+	it.each([0, 86_400_001, 1.5])(
+		"rejects an invalid recovery budget %s",
+		(recoveryBudgetMs) => {
+			expect(() => setup({ recoveryBudgetMs })).toThrow(
+				ConversationDispatchError,
+			);
+		},
+	);
+
+	it("closes terminal metadata recovery after the durable attempt limit", async () => {
 		const store = new MemoryDispatchStore(
 			claim({
 				executionStatus: "completed",
@@ -1286,6 +1387,7 @@ describe("Conversation Worker dispatch", () => {
 				hostSessionRef: "host-session",
 				executionStatus: "unknown",
 				attemptCount: 3,
+				recoveryElapsedMs: 300_000,
 				nativeCapability: {
 					agentId: "agent-1",
 					actorId: "actor-1",
@@ -1309,7 +1411,7 @@ describe("Conversation Worker dispatch", () => {
 			recoverStatus: vi.fn(),
 			async *events() {},
 		} as unknown as ConversationRuntimeHostPortV1;
-		const h = setup({ store, runtimeHost, maxRecoveryAttempts: 3 });
+		const h = setup({ store, runtimeHost });
 
 		await expect(dispatch(h.useCase, store.current.itemId)).resolves.toEqual({
 			schemaVersion: 1,
@@ -2105,14 +2207,17 @@ describe("Conversation Worker dispatch", () => {
 			} as ConversationRuntimeOperationEventV2["payload"],
 		});
 		function host(
-			stream: (request: { afterCursor?: string }) => AsyncIterable<unknown>,
+			stream: (
+				request: { afterCursor?: string },
+				hooks?: { readonly beforeRead?: () => Promise<void> },
+			) => AsyncIterable<unknown>,
 		) {
 			const inner = new FakeConversationRuntimeHostV1();
 			const acknowledged: string[] = [];
 			const runtimeHost: ConversationRuntimeHostPortV1 = {
 				dispatch: (request) => inner.dispatch(request),
 				recoverStatus: (request) => inner.recoverStatus(request),
-				events: (request) => stream(request) as never,
+				events: (request, _signal, hooks) => stream(request, hooks) as never,
 				async acknowledge(request) {
 					acknowledged.push(request.confirmedCursor);
 				},
@@ -2287,6 +2392,239 @@ describe("Conversation Worker dispatch", () => {
 				"cursor-5",
 			]);
 			expect(inner.sideEffectCount()).toBe(1);
+		});
+
+		describe("batched delta persistence (#3378)", () => {
+			const batchedEvents = (h: ReturnType<typeof setup>) =>
+				h.events as BatchedMemoryEvents;
+
+			it("persists consecutive deltas in one batch and keeps Runtime order and the single ACK", async () => {
+				const { runtimeHost, acknowledged } = host(async function* () {
+					yield runtimeEvent(1, "running");
+					for (let sequence = 2; sequence <= 9; sequence++)
+						yield text(sequence);
+					yield runtimeEvent(10);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "accepted",
+				});
+				expect(batchedEvents(h).batches).toEqual([8]);
+				expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual(
+					Array.from({ length: 10 }, (_, index) => `cursor-${index + 1}`),
+				);
+				expect(acknowledged).toEqual(["cursor-10"]);
+			});
+
+			it("commits buffered deltas before a tool fact and acknowledges the fact at once", async () => {
+				const { runtimeHost, acknowledged } = host(async function* () {
+					yield text(1);
+					yield text(2);
+					yield tool(3, "intent");
+					yield runtimeEvent(4);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "accepted",
+				});
+				expect(batchedEvents(h).batches).toEqual([2]);
+				expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual([
+					"cursor-1",
+					"cursor-2",
+					"cursor-3",
+					"cursor-4",
+				]);
+				expect(acknowledged).toEqual(["cursor-3", "cursor-4"]);
+			});
+
+			it("bounds a batch at 64 deltas and the unacknowledged events below the Host bound", async () => {
+				const { runtimeHost, acknowledged } = host(async function* () {
+					for (let sequence = 1; sequence <= 70; sequence++)
+						yield text(sequence);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "retry",
+				});
+				expect(batchedEvents(h).batches).toEqual([64, 6]);
+				expect(h.events.persisted).toHaveLength(70);
+				expect(acknowledged).toEqual(["cursor-64", "cursor-70"]);
+			});
+
+			it("commits buffered deltas after 50 ms without a new event", async () => {
+				let release: () => void = () => undefined;
+				const gate = new Promise<void>((resolve) => {
+					release = resolve;
+				});
+				const { runtimeHost } = host(async function* () {
+					yield runtimeEvent(1, "running");
+					yield text(2);
+					await gate;
+					yield runtimeEvent(3);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				const result = dispatch(h.useCase);
+				await vi.waitFor(
+					() =>
+						expect(h.events.persisted.at(-1)?.runtimeCursor).toBe("cursor-2"),
+					{ timeout: 1_000, interval: 10 },
+				);
+				release();
+				await expect(result).resolves.toMatchObject({ outcome: "accepted" });
+				expect(batchedEvents(h).batches).toEqual([1]);
+			});
+
+			it("returns stale when a batched delta is stale", async () => {
+				const { runtimeHost, acknowledged } = host(async function* () {
+					yield text(1);
+					yield text(2);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				h.events.stale = true;
+				await expect(dispatch(h.useCase)).resolves.toEqual({
+					schemaVersion: 1,
+					outcome: "stale",
+				});
+				expect(acknowledged).toEqual([]);
+			});
+
+			it("never acknowledges past a failed batch and resumes from the committed cursor", async () => {
+				const stream = [
+					runtimeEvent(1, "running"),
+					text(2),
+					text(3),
+					runtimeEvent(4),
+				];
+				const requests: (string | undefined)[] = [];
+				const { inner, runtimeHost, acknowledged } = host(
+					async function* (request) {
+						requests.push(request.afterCursor);
+						const index = request.afterCursor
+							? stream.findIndex(
+									(event) => event.cursor === request.afterCursor,
+								) + 1
+							: 0;
+						yield* stream.slice(index);
+					},
+				);
+				const h = setup({ runtimeHost, batched: true });
+				batchedEvents(h).failNextBatch = true;
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "retry",
+				});
+				expect(acknowledged).toEqual([]);
+				expect(h.store.current.runtimeCursor).toBe("cursor-1");
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "accepted",
+				});
+				expect(requests).toEqual([undefined, "cursor-1"]);
+				expect(acknowledged).toEqual(["cursor-1", "cursor-4"]);
+				expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual([
+					"cursor-1",
+					"cursor-2",
+					"cursor-3",
+					"cursor-4",
+				]);
+				expect(inner.sideEffectCount()).toBe(1);
+			});
+
+			it("reports a failed batch before a non-retryable stream failure", async () => {
+				const { runtimeHost } = host(async function* () {
+					yield runtimeEvent(1, "running");
+					yield text(2);
+					throw new ConversationRuntimeHostError(
+						"RUNTIME_PROTOCOL_INVALID",
+						false,
+					);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				batchedEvents(h).failNextBatch = true;
+				// 增量没有提交，持久化失败可重试；不能按流错误拒绝这次执行。
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "retry",
+				});
+				expect(h.store.current.runtimeCursor).toBe("cursor-1");
+			});
+
+			it("commits buffered deltas before the Host's next read and never while a read is in flight (#3443)", async () => {
+				let reading = false;
+				const committedDuringRead: number[] = [];
+				const cursorsAtRead: (string | null | undefined)[] = [];
+				let h: ReturnType<typeof setup> | undefined;
+				const { runtimeHost, acknowledged } = host(
+					async function* (_request, hooks) {
+						await hooks?.beforeRead?.();
+						cursorsAtRead.push(h?.store.current.runtimeCursor);
+						yield runtimeEvent(1, "running");
+						yield text(2);
+						yield text(3);
+						await hooks?.beforeRead?.();
+						cursorsAtRead.push(h?.store.current.runtimeCursor);
+						// 读取进行中超过 50 ms，期间不能有提交改变读取发送前复核的 fenced state。
+						reading = true;
+						await new Promise((resolve) => setTimeout(resolve, 150));
+						reading = false;
+						yield text(4);
+						yield runtimeEvent(5);
+					},
+				);
+				h = setup({ runtimeHost, batched: true });
+				const events = batchedEvents(h);
+				const persistBatch = events.persistBatch.bind(events);
+				events.persistBatch = async (commands) => {
+					if (reading) committedDuringRead.push(commands.length);
+					return persistBatch(commands);
+				};
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "accepted",
+				});
+				expect(committedDuringRead).toEqual([]);
+				expect(events.batches).toEqual([2, 1]);
+				expect(cursorsAtRead).toEqual([null, "cursor-3"]);
+				expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual([
+					"cursor-1",
+					"cursor-2",
+					"cursor-3",
+					"cursor-4",
+					"cursor-5",
+				]);
+				expect(acknowledged).toEqual(["cursor-5"]);
+			});
+
+			it("reports stale when the commit before a read loses the lease (#3443)", async () => {
+				const { runtimeHost } = host(async function* (_request, hooks) {
+					await hooks?.beforeRead?.();
+					yield text(1);
+					await hooks?.beforeRead?.();
+					yield text(2);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				const events = batchedEvents(h);
+				const persistBatch = events.persistBatch.bind(events);
+				events.persistBatch = async (commands) => {
+					events.stale = true;
+					return persistBatch(commands);
+				};
+				await expect(dispatch(h.useCase)).resolves.toEqual({
+					schemaVersion: 1,
+					outcome: "stale",
+				});
+			});
+
+			it("commits deltas read before a stream failure", async () => {
+				const { runtimeHost, acknowledged } = host(async function* () {
+					yield runtimeEvent(1, "running");
+					yield text(2);
+					yield text(3);
+					throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
+				});
+				const h = setup({ runtimeHost, batched: true });
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "retry",
+				});
+				expect(h.store.current.runtimeCursor).toBe("cursor-3");
+				expect(acknowledged).not.toContain("cursor-3");
+			});
 		});
 	});
 
@@ -3206,6 +3544,93 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.errorCode).toBe("ORIGINAL_RESPONSE_ALREADY_FINISHED");
 	});
 
+	// #3375：补充指令无法进入原回复时转入排队（工程 Spec §12.5）。
+	class QueueingDispatchStore extends MemoryDispatchStore {
+		queued: ConversationDispatchClaimV1[] = [];
+		async queueSupplement(input: {
+			readonly claim: ConversationDispatchClaimV1;
+		}) {
+			this.queued.push(input.claim);
+			this.outboxStatus = "succeeded";
+			return true;
+		}
+	}
+	it.each([
+		[
+			"Runtime explicitly rejects the steer",
+			{ executionStatus: "processing" as const },
+			true,
+		],
+		[
+			"the original reply already finished",
+			{ executionStatus: "completed" as const },
+			false,
+		],
+		[
+			"the original reply has a pending stop",
+			{ executionStatus: "processing" as const, stopPending: true },
+			false,
+		],
+		[
+			"the original reply became unknown",
+			{ executionStatus: "unknown" as const },
+			false,
+		],
+	])(
+		"queues a supplement when %s (#3375)",
+		async (_name, state, reachesRuntime) => {
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			runtimeHost.setResult({
+				outcome: "rejected",
+				code: "RUNTIME_TURN_NOT_ACTIVE",
+				message: "Runtime turn is no longer active",
+				retryable: false,
+			});
+			const store = new QueueingDispatchStore(
+				claim({
+					operation: "conversation.turn.supplement.v1",
+					messageId: "message-supplement",
+					hostSessionRef: "host-session-conversation-1",
+					...state,
+				}),
+			);
+			const sent = vi.spyOn(runtimeHost, "dispatch");
+			const { useCase } = setup({ store, runtimeHost });
+
+			await expect(dispatch(useCase)).resolves.toMatchObject({
+				outcome: "rejected",
+			});
+			expect(store.queued).toHaveLength(1);
+			expect(store.queued[0]).toMatchObject({
+				messageId: "message-supplement",
+			});
+			// 不再按“原回复已结束”终结这条补充指令。
+			expect(store.errorCode).toBeUndefined();
+			expect(sent.mock.calls.length > 0).toBe(reachesRuntime);
+		},
+	);
+
+	it("keeps an unclear supplement result unknown instead of queueing it (#3375)", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.setResult({
+			outcome: "unknown",
+			code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+			message: "Runtime command acceptance could not be confirmed",
+		});
+		const store = new QueueingDispatchStore(
+			claim({
+				operation: "conversation.turn.supplement.v1",
+				messageId: "message-supplement",
+				executionStatus: "processing",
+				hostSessionRef: "host-session-conversation-1",
+			}),
+		);
+		const { useCase } = setup({ store, runtimeHost });
+
+		await dispatch(useCase);
+		expect(store.queued).toEqual([]);
+	});
+
 	it("completes a stop when Runtime reports the target already ended", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
 		runtimeHost.setResult({
@@ -3904,5 +4329,225 @@ describe("attachment-only claim input (#3227)", () => {
 		expect(() =>
 			parseClaim(claim({ input: { text: "", attachments: [] } })),
 		).toThrow(expect.objectContaining({ code: "unavailable" }));
+	});
+});
+
+// #3373：Runtime 已核实本次 Turn 在原生提交点之前未提交。Worker 退回投递前状态，以新的
+// 认领（更高 fence、新 Grant）重提同一 Execution；2 分钟内最多 3 次，之后按阶段明确失败。
+describe("Runtime-reported unsubmitted Turns (#3373)", () => {
+	const notSubmitted = (
+		reason: "file_input_unavailable" | "session_preparation_failed",
+	) =>
+		({
+			outcome: "rejected",
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			message: "Runtime turn was not submitted",
+			reason,
+			retryable: true,
+		}) as const;
+	function hostReturning(
+		results: Record<string, unknown>[],
+		schemaVersion: 1 | 2 = 2,
+	) {
+		const dispatchRuntime = vi.fn(
+			async (request: ConversationRuntimeDispatchRequestV1) => ({
+				schemaVersion,
+				hostSessionRef: "host-session-1",
+				operationId: request.executionId,
+				result: results.shift() ?? { outcome: "accepted", status: "running" },
+			}),
+		);
+		const runtimeHost = {
+			dispatch: dispatchRuntime,
+			recoverOriginalStatus: vi.fn(),
+			recoverStatus: vi.fn(),
+			async *events() {},
+		} as unknown as ConversationRuntimeHostPortV1;
+		return { runtimeHost, dispatchRuntime };
+	}
+
+	it("accepts only the exact V2 submit result", () => {
+		const response = (result: Record<string, unknown>, schemaVersion = 2) => ({
+			schemaVersion,
+			hostSessionRef: "host-session-1",
+			operationId: "execution-1",
+			result,
+		});
+		for (const reason of [
+			"file_input_unavailable",
+			"session_preparation_failed",
+		] as const)
+			expect(
+				parseRuntimeResponse(response(notSubmitted(reason)), claim()),
+			).toMatchObject({ result: notSubmitted(reason) });
+		for (const drifted of [
+			{ ...notSubmitted("file_input_unavailable"), retryable: false },
+			{ ...notSubmitted("file_input_unavailable"), reason: "timeout" },
+			{ ...notSubmitted("file_input_unavailable"), message: "not sent" },
+			{ ...notSubmitted("file_input_unavailable"), outcome: "unknown" },
+			{
+				...notSubmitted("file_input_unavailable"),
+				code: "RUNTIME_SESSION_BLOCKED",
+			},
+		])
+			expect(() => parseRuntimeResponse(response(drifted), claim())).toThrow();
+		// submit V1 与原生能力的结果枚举不能表示未提交。
+		expect(() =>
+			parseRuntimeResponse(
+				response(notSubmitted("file_input_unavailable"), 1),
+				claim({
+					modelConfigurationRevision: null,
+					modelOptionId: null,
+					reasoningLevel: null,
+				}),
+			),
+		).toThrow();
+	});
+
+	it("returns the Execution to its pre-delivery state and resubmits it under a new claim", async () => {
+		const store = new MemoryDispatchStore();
+		const { runtimeHost, dispatchRuntime } = hostReturning([
+			notSubmitted("file_input_unavailable"),
+		]);
+		const h = setup({ store, runtimeHost, retryDelayMs: 1_000 });
+		const finish = vi.spyOn(store, "finish");
+
+		await expect(dispatch(h.useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "retry",
+			retryScheduled: true,
+		});
+		// 没有进入 unknown：退回投递前的状态，并记录 Host 返回的 Session Ref。
+		expect(store.current.executionStatus).toBe("submitted");
+		expect(store.current.hostSessionRef).toBe("host-session-1");
+		expect(store.errorCode).toBe("RUNTIME_TURN_NOT_SUBMITTED");
+		expect(store.releaseDelays).toEqual([1_000]);
+		expect(finish).not.toHaveBeenCalled();
+
+		await dispatch(h.useCase);
+		expect(dispatchRuntime).toHaveBeenCalledTimes(2);
+		const [first, second] = dispatchRuntime.mock.calls.map(
+			([request]) => request,
+		);
+		expect(second?.executionId).toBe(first?.executionId);
+		expect(second?.deliveryFence).toBeGreaterThan(first?.deliveryFence ?? 0);
+		expect(store.current.executionStatus).not.toBe("submitted");
+	});
+
+	it("backs off each resubmission within the window", async () => {
+		const store = new MemoryDispatchStore(
+			claim({ notSubmittedResubmissions: { count: 2, elapsedMs: 30_000 } }),
+		);
+		const { runtimeHost } = hostReturning([
+			notSubmitted("session_preparation_failed"),
+		]);
+		const h = setup({ store, runtimeHost, retryDelayMs: 1_000 });
+
+		await expect(dispatch(h.useCase)).resolves.toMatchObject({
+			outcome: "retry",
+		});
+		expect(store.releaseDelays).toEqual([9_000]);
+		expect(store.current.notSubmittedResubmissions?.count).toBe(3);
+	});
+
+	it("keeps the resubmission backoff within the Store delay bound", async () => {
+		// 部署允许的最大重试间隔乘以退避系数后仍须是 Store 接受的延迟，否则退回投递前状态失败。
+		const store = new MemoryDispatchStore(
+			claim({ notSubmittedResubmissions: { count: 2, elapsedMs: 30_000 } }),
+		);
+		const { runtimeHost } = hostReturning([
+			notSubmitted("file_input_unavailable"),
+		]);
+		const h = setup({ store, runtimeHost, retryDelayMs: 86_400_000 });
+
+		await expect(dispatch(h.useCase)).resolves.toMatchObject({
+			outcome: "retry",
+			retryScheduled: true,
+		});
+		expect(store.releaseDelays).toEqual([86_400_000]);
+	});
+
+	it.each([
+		[
+			"three resubmissions are spent",
+			{ count: 3, elapsedMs: 20_000 },
+			"session_preparation_failed",
+			"RUNTIME_SESSION_PREPARATION_FAILED",
+		],
+		[
+			"the two-minute window has passed",
+			{ count: 1, elapsedMs: 120_000 },
+			"file_input_unavailable",
+			"RUNTIME_FILE_INPUT_UNAVAILABLE",
+		],
+	] as const)(
+		"fails with a classified code once %s",
+		async (_name, notSubmittedResubmissions, reason, code) => {
+			const store = new MemoryDispatchStore(
+				claim({ notSubmittedResubmissions }),
+			);
+			const { runtimeHost } = hostReturning([notSubmitted(reason)]);
+			const h = setup({ store, runtimeHost });
+			const finish = vi.spyOn(store, "finish");
+
+			await expect(dispatch(h.useCase)).resolves.toEqual({
+				schemaVersion: 1,
+				outcome: "rejected",
+			});
+			expect(store.released).toBe(0);
+			expect(store.errorCode).toBe(code);
+			expect(store.outboxStatus).toBe("failed");
+			expect(store.current.executionStatus).toBe("failed");
+			expect(finish).toHaveBeenCalledExactlyOnceWith(
+				expect.objectContaining({
+					status: "failed",
+					errorCode: code,
+					transition: {
+						executionStatus: "failed",
+						conversationStatus: "ready",
+					},
+				}),
+			);
+		},
+	);
+
+	it("keeps an uncertain acceptance unknown instead of resubmitting", async () => {
+		const store = new MemoryDispatchStore();
+		const { runtimeHost } = hostReturning([
+			{
+				outcome: "unknown",
+				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+				message: "Runtime command acceptance could not be confirmed",
+			},
+		]);
+		const h = setup({ store, runtimeHost });
+
+		await expect(dispatch(h.useCase)).resolves.toMatchObject({
+			outcome: "unknown",
+		});
+		expect(store.released).toBe(0);
+		expect(store.errorCode).toBe("RUNTIME_ACCEPTANCE_UNKNOWN");
+		expect(store.current.executionStatus).toBe("unknown");
+	});
+
+	it("does not resubmit a not-submitted result from a V1 response", async () => {
+		const store = new MemoryDispatchStore(
+			claim({
+				modelConfigurationRevision: null,
+				modelOptionId: null,
+				reasoningLevel: null,
+			}),
+		);
+		const { runtimeHost } = hostReturning(
+			[notSubmitted("file_input_unavailable")],
+			1,
+		);
+		const h = setup({ store, runtimeHost });
+
+		await expect(dispatch(h.useCase)).resolves.toMatchObject({
+			outcome: "retry",
+		});
+		expect(store.released).toBe(0);
+		expect(store.current.executionStatus).toBe("unknown");
 	});
 });

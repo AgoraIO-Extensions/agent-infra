@@ -247,11 +247,13 @@ it("reconciles more than 100 bindings and responds when ingress persistence fail
 		};
 		await mocks.receive?.(message);
 		expect(receive).toHaveBeenCalledOnce();
-		expect(mocks.socketSend).toHaveBeenCalledWith({
-			scope: message,
-			replyHandle: "reply",
-			text: "Agent 当前不可用，请稍后重试",
-		});
+		await vi.waitFor(() =>
+			expect(mocks.socketSend).toHaveBeenCalledWith({
+				scope: message,
+				replyHandle: "reply",
+				text: "Agent 当前不可用，请稍后重试",
+			}),
+		);
 	} finally {
 		await worker.close();
 	}
@@ -293,10 +295,10 @@ it("does not reply after the connection lease is lost", async () => {
 			replyHandle: "reply",
 			replyExpiresAt: new Date(Date.now() + 60000).toISOString(),
 		});
-		expect(mocks.socketSend).not.toHaveBeenCalled();
 	} finally {
 		await worker.close();
 	}
+	expect(mocks.socketSend).not.toHaveBeenCalled();
 });
 
 it("does not route application scopes through a bot socket", async () => {
@@ -440,18 +442,220 @@ it.each([
 			};
 			await mocks.receive?.(message);
 			if (acknowledged)
-				expect(mocks.socketAcknowledge).toHaveBeenCalledWith({
-					scope: message,
-					replyHandle: "reply",
-					text: "已收到，正在处理…",
-				});
-			else expect(mocks.socketAcknowledge).not.toHaveBeenCalled();
-			expect(mocks.socketSend).not.toHaveBeenCalled();
+				await vi.waitFor(() =>
+					expect(mocks.socketAcknowledge).toHaveBeenCalledWith({
+						scope: message,
+						replyHandle: "reply",
+						text: "已收到，正在处理…",
+					}),
+				);
 		} finally {
+			// 关闭等待受理之后在槽位外发送的回复结束。
 			await worker.close();
 		}
+		if (!acknowledged) expect(mocks.socketAcknowledge).not.toHaveBeenCalled();
+		expect(mocks.socketSend).not.toHaveBeenCalled();
 	},
 );
+
+// #3374：处理中提示在会话键的串行槽位之外发送，等待 ACK 不推迟同一会话的下一条消息。
+it("returns from admission before the processing notice is acknowledged", async () => {
+	let acknowledge: (status: string) => void = () => {};
+	mocks.socketAcknowledge.mockImplementationOnce(
+		() =>
+			new Promise<string>((resolve) => {
+				acknowledge = resolve;
+			}),
+	);
+	const worker = createPlatformWecomConnectionsV1({
+		databaseUrl: "postgres://fixture",
+		holderId: "worker",
+		bindings: async () => [
+			{
+				botId: "bot",
+				agentId: "agent",
+				bindingReference: "binding",
+				credentialVersion: "v1",
+				secret: "fixture",
+			},
+		],
+		protectReply: async () => "fixture",
+		revealReply: async () => {
+			throw new Error("unused");
+		},
+		receive: async () => ({
+			outcome: "accepted",
+			receipt: {
+				receiptId: "receipt",
+				status: "accepted",
+				conversationId: "conversation",
+				executionId: "execution",
+			},
+		}),
+	});
+	try {
+		await worker.tick();
+		await mocks.receive?.({
+			agentId: "agent",
+			bindingReference: "binding",
+			kind: "wecom_bot",
+			senderId: "sender",
+			peerId: "peer",
+			conversationType: "single",
+			threadId: null,
+			providerId: "bot",
+			eventId: "event",
+			text: "fixture",
+			replyHandle: "reply",
+			replyExpiresAt: new Date(Date.now() + 60000).toISOString(),
+		});
+		// 受理已返回，处理中提示仍在等待 ACK。
+		await vi.waitFor(() => expect(mocks.socketAcknowledge).toHaveBeenCalled());
+	} finally {
+		acknowledge("sent");
+		await worker.close();
+	}
+});
+
+// #3376：排队受理的消息首帧是排队提示，之后的位次更新走同一 stream，只由持有租约的连接发送。
+it("acknowledges a queued message with its position and updates the same stream later", async () => {
+	const queued: [string, number][] = [];
+	const worker = createPlatformWecomConnectionsV1({
+		databaseUrl: "postgres://fixture",
+		holderId: "worker",
+		bindings: async () => [
+			{
+				botId: "bot",
+				agentId: "agent",
+				bindingReference: "binding",
+				credentialVersion: "v1",
+				secret: "fixture",
+			},
+		],
+		protectReply: async () => "fixture",
+		revealReply: async () => {
+			throw new Error("unused");
+		},
+		onQueued: (receiptId, position) => queued.push([receiptId, position]),
+		receive: async () => ({
+			outcome: "accepted",
+			receipt: {
+				receiptId: "receipt",
+				status: "accepted",
+				conversationId: "conversation",
+				executionId: "execution",
+				queuePosition: 2,
+			},
+		}),
+	});
+	try {
+		await worker.tick();
+		const message: WecomMessageV1 = {
+			agentId: "agent",
+			bindingReference: "binding",
+			kind: "wecom_bot",
+			senderId: "sender",
+			peerId: "peer",
+			conversationType: "single",
+			threadId: null,
+			providerId: "bot",
+			eventId: "event",
+			text: "fixture",
+			replyHandle: "reply",
+			replyExpiresAt: new Date(Date.now() + 60000).toISOString(),
+		};
+		await mocks.receive?.(message);
+		expect(queued).toEqual([["receipt", 2]]);
+		expect(mocks.socketAcknowledge).toHaveBeenCalledWith({
+			scope: message,
+			replyHandle: "reply",
+			text: "已排队：第 2 位，前面还有 1 条消息，当前回复结束后按顺序处理",
+		});
+		mocks.socketAcknowledge.mockClear();
+		await expect(
+			worker.updater.update({
+				scope: message,
+				replyHandle: "reply",
+				text: "开始处理",
+			}),
+		).resolves.toBe("sent");
+		expect(mocks.socketAcknowledge).toHaveBeenCalledWith({
+			scope: message,
+			replyHandle: "reply",
+			text: "开始处理",
+		});
+		// 其他机器人或自建应用的回执没有本连接，不发送。
+		await expect(
+			worker.updater.update({
+				scope: { ...message, bindingReference: "other-binding" },
+				replyHandle: "reply",
+				text: "开始处理",
+			}),
+		).resolves.toBe("failed");
+		expect(mocks.socketSend).not.toHaveBeenCalled();
+	} finally {
+		await worker.close();
+	}
+});
+
+// #3437：补充指令的首帧说明正在补充到当前回复，不进入排队提示。
+it("acknowledges a supplementary instruction with the supplement text", async () => {
+	const queued: [string, number][] = [];
+	const worker = createPlatformWecomConnectionsV1({
+		databaseUrl: "postgres://fixture",
+		holderId: "worker",
+		bindings: async () => [
+			{
+				botId: "bot",
+				agentId: "agent",
+				bindingReference: "binding",
+				credentialVersion: "v1",
+				secret: "fixture",
+			},
+		],
+		protectReply: async () => "fixture",
+		revealReply: async () => {
+			throw new Error("unused");
+		},
+		onQueued: (receiptId, position) => queued.push([receiptId, position]),
+		receive: async () => ({
+			outcome: "accepted",
+			receipt: {
+				receiptId: "receipt",
+				status: "accepted",
+				conversationId: "conversation",
+				executionId: "execution",
+				supplement: true,
+			},
+		}),
+	});
+	try {
+		await worker.tick();
+		const message: WecomMessageV1 = {
+			agentId: "agent",
+			bindingReference: "binding",
+			kind: "wecom_bot",
+			senderId: "sender",
+			peerId: "peer",
+			conversationType: "single",
+			threadId: null,
+			providerId: "bot",
+			eventId: "event",
+			text: "fixture",
+			replyHandle: "reply",
+			replyExpiresAt: new Date(Date.now() + 60000).toISOString(),
+		};
+		await mocks.receive?.(message);
+		expect(queued).toEqual([]);
+		expect(mocks.socketAcknowledge).toHaveBeenCalledWith({
+			scope: message,
+			replyHandle: "reply",
+			text: "已收到，正在补充到当前回复",
+		});
+	} finally {
+		await worker.close();
+	}
+});
 
 it("does not acknowledge after the connection lease is lost", async () => {
 	const worker = createPlatformWecomConnectionsV1({
@@ -497,7 +701,58 @@ it("does not acknowledge after the connection lease is lost", async () => {
 			replyHandle: "reply",
 			replyExpiresAt: new Date(Date.now() + 60000).toISOString(),
 		});
-		expect(mocks.socketAcknowledge).not.toHaveBeenCalled();
+	} finally {
+		await worker.close();
+	}
+	expect(mocks.socketAcknowledge).not.toHaveBeenCalled();
+});
+
+// #3374：同一会话键的下一帧要等这一帧受理结束；受理最多占用到回复有效期结束，依赖挂起时也会释放。
+it("bounds one admission by the reply lifetime so a stuck frame releases its session slot", async () => {
+	vi.useRealTimers();
+	let observed: AbortSignal | undefined;
+	const worker = createPlatformWecomConnectionsV1({
+		databaseUrl: "postgres://fixture",
+		holderId: "worker",
+		bindings: async () => [
+			{
+				botId: "bot",
+				agentId: "agent",
+				bindingReference: "binding",
+				credentialVersion: "v1",
+				secret: "fixture",
+			},
+		],
+		protectReply: async () => "fixture",
+		revealReply: async () => {
+			throw new Error("unused");
+		},
+		receive: (_message, _fence, signal) =>
+			new Promise((resolve) => {
+				observed = signal;
+				// 模拟挂起的依赖：只有截止信号能结束这次受理。
+				signal?.addEventListener("abort", () =>
+					resolve({ outcome: "unavailable" }),
+				);
+			}),
+	});
+	try {
+		await worker.tick();
+		await mocks.receive?.({
+			agentId: "agent",
+			bindingReference: "binding",
+			kind: "wecom_bot",
+			senderId: "sender",
+			peerId: "peer",
+			conversationType: "single",
+			threadId: null,
+			providerId: "bot",
+			eventId: "event",
+			text: "fixture",
+			replyHandle: "reply",
+			replyExpiresAt: new Date(Date.now() + 50).toISOString(),
+		});
+		expect(observed?.aborted).toBe(true);
 	} finally {
 		await worker.close();
 	}

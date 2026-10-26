@@ -446,7 +446,11 @@ async function dispatchedTurn(name: string) {
 
 type Turn = Awaited<ReturnType<typeof dispatchedTurn>>;
 
-function hostBridge(turn: Turn, diagnostics: unknown[] = []) {
+function hostBridge(
+	turn: Turn,
+	diagnostics: unknown[] = [],
+	channelId = "web",
+) {
 	const target = new URL(origin);
 	return createRuntimeFileBridgeFactoryV1({
 		// Runtime Host 的明文 origin 必须是 DNS 名称；测试 fetch 把它解析回本地监听地址。
@@ -464,7 +468,7 @@ function hostBridge(turn: Turn, diagnostics: unknown[] = []) {
 	})(
 		{
 			actorId: identity.userId,
-			channelId: "web",
+			channelId,
 			agentId,
 			conversationId: turn.conversationId,
 			executionId: turn.executionId,
@@ -592,6 +596,70 @@ describe("Runtime file exchange over the production API assembly, HTTP and Postg
 			from platform.files where file_id = ${receipt.projection.fileId}`;
 		expect(stored).toEqual({ kind: "result", status: "available" });
 		expect(diagnostics).toEqual([]);
+	}, 60_000);
+
+	it("#3432: reads a WeCom conversation's attachment and writes a result in the execution's own channel", async () => {
+		const turn = await dispatchedTurn("wecom");
+		const channel = "wecom_bot:bot-3432";
+		// 企微会话由 Worker 的渠道受理创建，这里在同一事务内把已派发的 Web 会话改写成企微会话：
+		// Conversation、Execution、Sandbox 分配、附件记录与任务授权边界一起换渠道。组合外键在
+		// 改写期间暂停（只在本测试数据库内），检查约束照常生效。
+		await db.begin(async (sql) => {
+			await sql`set local session_replication_role = replica`;
+			await sql`update platform.conversations set channel_id = ${channel}
+				where id = ${turn.conversationId}`;
+			await sql`update platform.conversation_executions
+				set channel_id = ${channel}, execution_source = 'wecom'
+				where conversation_id = ${turn.conversationId}`;
+			await sql`update platform.session_sandbox_allocations set channel_id = ${channel}
+				where conversation_id = ${turn.conversationId}`;
+			await sql`update platform.files
+				set record = jsonb_set(record, '{channelId}', to_jsonb(${channel}::text))
+				where conversation_id = ${turn.conversationId}`;
+			await sql`update platform.task_authorization_records
+				set boundary = jsonb_set(boundary, '{channelId}', to_jsonb(${channel}::text))
+				where id = ${turn.recordId}`;
+		});
+		await insertLimit("channel", agentId, channel);
+		const unsigned = {
+			...turn.unsigned,
+			executionSource: "wecom",
+			channelId: channel,
+		} as RuntimeBusinessRequestV4;
+		const grant = signer.sign(unsigned, turn.recordId);
+		const claims = JSON.parse(
+			Buffer.from(grant.token.split(".")[1] ?? "", "base64url").toString(
+				"utf8",
+			),
+		) as { grantId: string; expiresAt: number };
+		const diagnostics: unknown[] = [];
+		const bridge = hostBridge({ ...turn, grant, claims }, diagnostics, channel);
+		const input = await bridge.readInput(turn.attachment.fileId);
+		expect(await bytesOf(input.body)).toEqual(turn.attachment.value);
+		await db`update platform.conversation_executions set status = 'processing'
+			where execution_id = ${turn.executionId}`;
+		const result = Buffer.from("wecom result file for #3432");
+		const receipt = await bridge.writeResult(
+			descriptor("result.txt", result),
+			new Response(result).body as ReadableStream<Uint8Array>,
+		);
+		expect(receipt.projection).toMatchObject({
+			kind: "result",
+			status: "available",
+		});
+		const [stored] = await db<{ channel: string; kind: string }[]>`
+			select record->>'channelId' as channel, record->>'kind' as kind
+			from platform.files where file_id = ${receipt.projection.fileId}`;
+		expect(stored).toEqual({ channel, kind: "result" });
+		expect(diagnostics).toEqual([]);
+		// 浏览器会话不能借执行期渠道读取企微会话的文件：Web 渠道下这个会话不存在。
+		const browserRead = await browser(
+			"POST",
+			`/api/v1/conversations/${turn.conversationId}/files/${turn.attachment.fileId}/access`,
+			{ schemaVersion: 1, operation: "read" },
+			{ "Idempotency-Key": "wecom-browser-read" },
+		);
+		expect(browserRead.status).toBe(404);
 	}, 60_000);
 
 	it("AC-2: denies every failed check with the same 404 and records only a bounded failure step", async () => {

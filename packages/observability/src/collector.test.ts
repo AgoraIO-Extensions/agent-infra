@@ -48,6 +48,12 @@ it("exports correlated traces and bounded metrics to a local OTLP collector", as
 			durationMs: 14,
 			message: "PRIVATE_SENTINEL",
 		} as Parameters<typeof telemetry.record>[0]);
+		telemetry.record({
+			stage: "worker",
+			outcome: "completed",
+			operationRef: "drain.prepare",
+			durationMs: 300,
+		});
 		const deadline = Date.now() + 5000;
 		while (
 			(!requests.some((item) => item.path === "/v1/traces") ||
@@ -68,6 +74,13 @@ it("exports correlated traces and bounded metrics to a local OTLP collector", as
 		).toContain("attempt-1");
 		for (const request of requests)
 			expect(request.body.toString()).not.toContain("PRIVATE_SENTINEL");
+		// #3378：只有封闭集合中的阶段引用进入指标标签。
+		const metrics = requests
+			.filter((item) => item.path === "/v1/metrics")
+			.map((item) => item.body.toString())
+			.join("");
+		expect(metrics).toContain("drain.prepare");
+		expect(metrics).not.toContain("operation-1");
 		expect(telemetry.status().exportFailures).toBe(0);
 	} finally {
 		await Promise.all(active.splice(0).map((item) => item.close()));

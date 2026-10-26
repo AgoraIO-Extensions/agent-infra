@@ -165,7 +165,22 @@ export interface ConversationTaskStatusEventV1 {
 		| "STOP_CONFIRMATION_TIMEOUT"
 		| "TASK_WAIT_TIMEOUT"
 		| "AGENT_UNAVAILABLE"
-		| "CONVERSATION_UNAVAILABLE";
+		| "CONVERSATION_UNAVAILABLE"
+		| ConversationQueueCancelReasonV1;
+}
+
+/**
+ * Web/渠道排队消息取消时的受限原因（工程 Spec §12.5）：发送者撤回，或出队前重验发现权限失效。
+ * 任务 API 的取消事件不带原因。
+ */
+export type ConversationQueueCancelReasonV1 =
+	| "WITHDRAWN"
+	| "AUTHORIZATION_REVOKED";
+
+function isQueueCancelReasonV1(
+	reason: unknown,
+): reason is ConversationQueueCancelReasonV1 {
+	return reason === "WITHDRAWN" || reason === "AUTHORIZATION_REVOKED";
 }
 
 function isTaskFailureReasonV1(
@@ -185,6 +200,8 @@ export function publicTaskStatusEventV1(input: {
 	readonly isTask: boolean;
 	readonly status: ConversationTaskStatusEventV1["status"];
 	readonly reason?: string;
+	/** Web/渠道排队消息（非任务 API）；只有它的取消事件带受限原因。 */
+	readonly queuedMessage?: boolean;
 }): ConversationTaskStatusEventV1 | null {
 	if (
 		!input.isTask &&
@@ -198,7 +215,11 @@ export function publicTaskStatusEventV1(input: {
 			? input.reason
 			: input.status === "failed" && isTaskFailureReasonV1(input.reason)
 				? input.reason
-				: undefined;
+				: input.status === "cancelled" &&
+						input.queuedMessage === true &&
+						isQueueCancelReasonV1(input.reason)
+					? input.reason
+					: undefined;
 	return {
 		type: "task.status",
 		status: input.status,
@@ -303,12 +324,54 @@ export interface ConversationEventTransactionPortV1 {
 			state: ConversationEventStateV1,
 		) => ConversationEventWritePlanV1 | ConversationEventDecisionV1,
 	): Promise<ConversationEventDecisionV1>;
+	/**
+	 * #3378：同一 Execution 连续的 delta 事件在一个事务内按顺序持久化。每个事件的状态按前一个
+	 * 事件写入后的计数器给出，判定与单个事件完全相同；返回与输入同序的结果。未实现时逐个持久化。
+	 */
+	persistEvents?(
+		requests: readonly {
+			readonly command: ConversationEventCommandV1;
+			readonly eventDigest: string;
+		}[],
+		decide: (
+			index: number,
+			state: ConversationEventStateV1,
+		) => ConversationEventWritePlanV1 | ConversationEventDecisionV1,
+	): Promise<readonly ConversationEventDecisionV1[]>;
 }
 
 export interface ConversationEventUseCaseV1 {
 	persist(
 		command: ConversationEventCommandV1,
 	): Promise<ConversationEventDecisionV1>;
+	/**
+	 * #3378：持久化同一 Execution、同一投递租约下连续的 delta 事件（见
+	 * {@link isBatchableConversationEventV1}），结果与逐个调用 `persist` 相同。
+	 */
+	persistBatch?(
+		commands: readonly ConversationEventCommandV1[],
+	): Promise<readonly ConversationEventDecisionV1[]>;
+}
+
+/** #3378：一批最多 64 个事件。 */
+export const conversationEventBatchLimitV1 = 64;
+
+/**
+ * #3378：可以批量持久化的事件：没有状态迁移、不是终态之后的元数据补记的正文与思考增量。其他事件
+ * 都会改变执行状态、操作历史或审计，仍逐个持久化。
+ */
+export function isBatchableConversationEventV1(
+	command: Pick<
+		ConversationEventCommandV1,
+		"event" | "transition" | "operationMetadataOnly"
+	>,
+): boolean {
+	return (
+		(command.event.type === "text.delta" ||
+			command.event.type === "reasoning.delta") &&
+		command.transition === undefined &&
+		command.operationMetadataOnly === undefined
+	);
 }
 
 export interface ConversationEventUseCaseDependenciesV1 {
@@ -772,7 +835,8 @@ export function parseConversationPersistedEventPayloadV1(
 			!(
 				(values.reason === "STOP_CONFIRMATION_TIMEOUT" &&
 					values.status === "unknown") ||
-				(values.status === "failed" && isTaskFailureReasonV1(values.reason))
+				(values.status === "failed" && isTaskFailureReasonV1(values.reason)) ||
+				(values.status === "cancelled" && isQueueCancelReasonV1(values.reason))
 			)
 		)
 			invalidInput();
@@ -790,7 +854,8 @@ export function parseConversationPersistedEventPayloadV1(
 			invalidInput();
 		const reason =
 			values.reason === "STOP_CONFIRMATION_TIMEOUT" ||
-			isTaskFailureReasonV1(values.reason)
+			isTaskFailureReasonV1(values.reason) ||
+			isQueueCancelReasonV1(values.reason)
 				? values.reason
 				: undefined;
 		return {
@@ -1159,12 +1224,77 @@ function normalizeDecision(
 	}
 }
 
+/** 单个事件的持久化判定；单个与批量路径共用（#3378）。 */
+function decideEvent(
+	command: ConversationEventCommandV1,
+	digest: string,
+	stateInput: ConversationEventStateV1,
+	newId: () => string,
+): ConversationEventWritePlanV1 | ConversationEventDecisionV1 {
+	const state = parseState(stateInput);
+	if (state.existingEvent) {
+		if (
+			state.existingEvent.eventDigest !== digest ||
+			state.existingEvent.event.conversationId !== command.conversationId ||
+			state.existingEvent.event.executionId !== command.executionId
+		) {
+			return unavailable();
+		}
+		return {
+			outcome: "replayed" as const,
+			event: state.existingEvent.event,
+		};
+	}
+	const conversation = state.conversation;
+	const execution = state.execution;
+	if (
+		!conversation ||
+		!execution ||
+		conversation.conversationId !== command.conversationId ||
+		execution.executionId !== command.executionId ||
+		execution.conversationId !== command.conversationId ||
+		conversation.sessionGeneration !== command.sessionGeneration ||
+		execution.sessionGeneration !== command.sessionGeneration ||
+		execution.deliveryFence !== command.deliveryFence
+	) {
+		return { outcome: "stale" as const };
+	}
+	if (command.event.type === "execution.operation") {
+		if (state.operationHistory === undefined) return unavailable();
+		requireConversationOperationSuccessorV2(
+			state.operationHistory,
+			command.event.fact,
+			command.operationMetadataOnly,
+		);
+	}
+	const event: PersistedRuntimeConversationEventV1 = {
+		schemaVersion: 1,
+		eventId: nextOpaqueId(newId),
+		conversationId: command.conversationId,
+		executionId: command.executionId,
+		sequence: nextCounter(execution.lastSequence),
+		conversationCursor: nextCounter(conversation.lastConversationCursor),
+		occurredAt: command.occurredAt,
+		event: command.event,
+	};
+	return {
+		schemaVersion: 1 as const,
+		event,
+		adapterEventKey: command.adapterEventKey,
+		eventDigest: digest,
+		runtimeCursor: command.runtimeCursor,
+		sessionGeneration: command.sessionGeneration,
+		deliveryFence: command.deliveryFence,
+		...(command.transition ? { transition: command.transition } : {}),
+	};
+}
+
 export function createConversationEventUseCaseV1(
 	dependencies: ConversationEventUseCaseDependenciesV1,
 	options: ConversationEventUseCaseOptionsV1 = {},
 ): ConversationEventUseCaseV1 {
 	const newId = options.newId ?? randomUUID;
-	return {
+	const useCase: ConversationEventUseCaseV1 = {
 		async persist(commandInput) {
 			const command = parseCommand(commandInput);
 			const digest = eventDigest(command);
@@ -1177,69 +1307,7 @@ export function createConversationEventUseCaseV1(
 					{ command, eventDigest: digest },
 					(stateInput) => {
 						if (expected !== undefined) return unavailable();
-						const state = parseState(stateInput);
-						const next = (() => {
-							if (state.existingEvent) {
-								if (
-									state.existingEvent.eventDigest !== digest ||
-									state.existingEvent.event.conversationId !==
-										command.conversationId ||
-									state.existingEvent.event.executionId !== command.executionId
-								) {
-									return unavailable();
-								}
-								return {
-									outcome: "replayed" as const,
-									event: state.existingEvent.event,
-								};
-							}
-							const conversation = state.conversation;
-							const execution = state.execution;
-							if (
-								!conversation ||
-								!execution ||
-								conversation.conversationId !== command.conversationId ||
-								execution.executionId !== command.executionId ||
-								execution.conversationId !== command.conversationId ||
-								conversation.sessionGeneration !== command.sessionGeneration ||
-								execution.sessionGeneration !== command.sessionGeneration ||
-								execution.deliveryFence !== command.deliveryFence
-							) {
-								return { outcome: "stale" as const };
-							}
-							if (command.event.type === "execution.operation") {
-								if (state.operationHistory === undefined) return unavailable();
-								requireConversationOperationSuccessorV2(
-									state.operationHistory,
-									command.event.fact,
-									command.operationMetadataOnly,
-								);
-							}
-							const event: PersistedRuntimeConversationEventV1 = {
-								schemaVersion: 1,
-								eventId: nextOpaqueId(newId),
-								conversationId: command.conversationId,
-								executionId: command.executionId,
-								sequence: nextCounter(execution.lastSequence),
-								conversationCursor: nextCounter(
-									conversation.lastConversationCursor,
-								),
-								occurredAt: command.occurredAt,
-								event: command.event,
-							};
-							return {
-								schemaVersion: 1 as const,
-								event,
-								adapterEventKey: command.adapterEventKey,
-								eventDigest: digest,
-								runtimeCursor: command.runtimeCursor,
-								sessionGeneration: command.sessionGeneration,
-								deliveryFence: command.deliveryFence,
-								...(command.transition
-									? { transition: command.transition }
-									: {}),
-							};
-						})();
+						const next = decideEvent(command, digest, stateInput, newId);
 						expected = structuredClone(next);
 						return structuredClone(next);
 					},
@@ -1249,5 +1317,66 @@ export function createConversationEventUseCaseV1(
 				return unavailable();
 			}
 		},
+		async persistBatch(commandInputs) {
+			if (
+				!Array.isArray(commandInputs) ||
+				commandInputs.length < 1 ||
+				commandInputs.length > conversationEventBatchLimitV1
+			)
+				return invalidInput();
+			const commands = commandInputs.map(parseCommand);
+			const first = commands[0] as ConversationEventCommandV1;
+			for (const command of commands)
+				if (
+					!isBatchableConversationEventV1(command) ||
+					command.conversationId !== first.conversationId ||
+					command.executionId !== first.executionId ||
+					command.sessionGeneration !== first.sessionGeneration ||
+					command.deliveryFence !== first.deliveryFence ||
+					JSON.stringify(command.dispatchLease) !==
+						JSON.stringify(first.dispatchLease)
+				)
+					return invalidInput();
+			if (!dependencies.transaction.persistEvents) {
+				const decisions: ConversationEventDecisionV1[] = [];
+				for (const command of commands)
+					decisions.push(await useCase.persist(command));
+				return decisions;
+			}
+			const digests = commands.map(eventDigest);
+			try {
+				const expected: (
+					| ConversationEventWritePlanV1
+					| ConversationEventDecisionV1
+					| undefined
+				)[] = commands.map(() => undefined);
+				const decisions = await dependencies.transaction.persistEvents(
+					commands.map((command, index) => ({
+						command,
+						eventDigest: digests[index] as string,
+					})),
+					(index, stateInput) => {
+						const command = commands[index];
+						if (!command || expected[index] !== undefined) return unavailable();
+						const next = decideEvent(
+							command,
+							digests[index] as string,
+							stateInput,
+							newId,
+						);
+						expected[index] = structuredClone(next);
+						return structuredClone(next);
+					},
+				);
+				if (!Array.isArray(decisions) || decisions.length !== commands.length)
+					return unavailable();
+				return decisions.map((decision, index) =>
+					normalizeDecision(decision, expected[index]),
+				);
+			} catch {
+				return unavailable();
+			}
+		},
 	};
+	return useCase;
 }

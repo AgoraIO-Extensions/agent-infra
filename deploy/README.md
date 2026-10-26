@@ -150,6 +150,15 @@ HTTP `202` 仅表示新配置修订已提交；同一发布重试沿用原 key�
 
 ### Platform Connection 安装确认
 
+逐 Agent 安装由同一受信部署提供两侧的完整绑定。API 配置模块导出
+`connectionInstallationsByAgent`，以平台 Agent ID 为键，每项为
+`{ configuration, profile, approval }`；省略原 `connectionInstallationConfiguration`。
+Worker 配置模块在 `connectionInstallation.configurationsByAgent` 提供相同键的 OAuth 配置，
+并通过既有逐 Agent profile 和 installation supply 映射提供对应快照与供应引用。
+两侧导出均为非秘密部署输入。配置选择、冲突处理和回调约束以
+[工程 Spec §13.5.6](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)
+为准。
+
 Platform API 的受信 `configuration.mjs` 可导出非敏感 `connectionInstallationConfiguration`
 （现有 `RuntimeOAuthConfigurationV1`），与相同模块的完整 Consumer profile/approval 和
 `publicOrigin` 一起装配。API 的 POST `/api/connection-installations`、`/{authorizationId}/confirm`

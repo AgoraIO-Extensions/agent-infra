@@ -145,6 +145,38 @@ describe("Workbench existing collections", () => {
 		expect(globalThis.fetch).not.toHaveBeenCalled();
 	});
 
+	it("keeps every shown section when a background reread fails (#3387)", async () => {
+		let failed = false;
+		const { result, queryClient } = setup(
+			(request) =>
+				failed
+					? new Response("Controlled service failure", { status: 503 })
+					: collectionResponse(request),
+			{ identityKey: "login-a:administrator", administrator: true },
+		);
+		const fields = [
+			"agents",
+			"ownerAgents",
+			"applications",
+			"pending",
+			"adminAgents",
+		] as const;
+		await waitFor(() =>
+			expect(fields.map((field) => result.current[field].kind)).toEqual(
+				fields.map(() => "ready"),
+			),
+		);
+		failed = true;
+		// 回到标签页、失效后重取都是后台重读：失败时各分区继续显示上一次结果。
+		await act(async () => {
+			await queryClient.invalidateQueries();
+		});
+		await waitFor(() => expect(result.current.refreshing).toBe(false));
+		expect(fields.map((field) => result.current[field].kind)).toEqual(
+			fields.map(() => "ready"),
+		);
+	});
+
 	it.each([
 		{
 			field: "agents",

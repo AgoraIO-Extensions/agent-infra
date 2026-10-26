@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useApplicationSession } from "../../features/application-shell.js";
+import { readFailed } from "../../features/background-read.js";
 import { useSessionRecheck } from "../../features/session-recheck.js";
 import { isRetryableSkillHubError } from "../../features/skill-hub/skill-hub.js";
 import { reviewSkillHubVersion } from "../../features/skill-hub/skill-hub-management.js";
@@ -28,7 +29,8 @@ function SkillReviewsRoute() {
 				queue={
 					query.isPending
 						? { kind: "loading" }
-						: query.isError || !query.data
+						: // 后台重读（回到标签页、审核后的重读）的可重试失败不替换队列（#3387）。
+							readFailed(query, isRetryableSkillHubError) || !query.data
 							? {
 									kind: "unavailable",
 									retryable: isRetryableSkillHubError(query.error),

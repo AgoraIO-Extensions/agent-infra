@@ -9,6 +9,15 @@ import {
 } from "./recent-personal-conversations.js";
 import type { WorkbenchRecentState } from "./workbench-screen.js";
 
+function unavailableAgents(
+	pages: readonly { readonly unavailableAgentIds?: readonly string[] }[],
+): { unavailableAgentIds?: readonly string[] } {
+	const ids = [
+		...new Set(pages.flatMap((page) => page.unavailableAgentIds ?? [])),
+	];
+	return ids.length > 0 ? { unavailableAgentIds: ids } : {};
+}
+
 export function useRecentPersonalConversations({
 	identityKey,
 	client,
@@ -99,6 +108,7 @@ export function useRecentPersonalConversations({
 				? { kind: "unavailable" as const, retryable: true }
 				: null);
 	const seen = new Set<string>();
+	const pages = query.data?.pages ?? [];
 	const state: WorkbenchRecentState = !identityKey
 		? { kind: "unavailable", retryable: false }
 		: (failure ??
@@ -108,19 +118,20 @@ export function useRecentPersonalConversations({
 						kind: "ready",
 						// Live pages can overlap after updates; keep first occurrence in
 						// received order, without sorting or scanning per-Agent history.
-						conversations:
-							query.data?.pages.flatMap((page) =>
-								page.items.filter((item) => {
-									// Conversation IDs are only opaque within an Agent. Keep
-									// the producer order while retaining same-ID records from
-									// different Agents.
-									const key = `${item.agentId}\u0000${item.conversationId}`;
-									if (seen.has(key)) return false;
-									seen.add(key);
-									return true;
-								}),
-							) ?? [],
-						nextCursor: query.data?.pages.at(-1)?.nextCursor ?? null,
+						conversations: pages.flatMap((page) =>
+							page.items.filter((item) => {
+								// Conversation IDs are only opaque within an Agent. Keep
+								// the producer order while retaining same-ID records from
+								// different Agents.
+								const key = `${item.agentId}\u0000${item.conversationId}`;
+								if (seen.has(key)) return false;
+								seen.add(key);
+								return true;
+							}),
+						),
+						nextCursor: pages.at(-1)?.nextCursor ?? null,
+						// 各页省略的 Agent 取并集，按首次出现的顺序；没有时不带该字段（#3379）。
+						...unavailableAgents(pages),
 					}));
 
 	async function read(next: boolean) {

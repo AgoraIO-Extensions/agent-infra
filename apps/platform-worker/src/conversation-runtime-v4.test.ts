@@ -574,6 +574,60 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		},
 	);
 
+	it.each([
+		[
+			"supplement",
+			"cursor advance",
+			{ runtimeCursor: "cursor-advanced" },
+			true,
+		],
+		["submit", "cursor advance", { runtimeCursor: "cursor-advanced" }, false],
+		["supplement", "stop", { stopPending: true }, false],
+	] as const)(
+		"%s rechecks the fenced state across a concurrent %s before sending (#3445)",
+		async (operation, _change, change, sends) => {
+			// 对照：未变化时一次投递解析几次路由；最后一次属于发送前复核。
+			const control = runtimeV4Harness(operation);
+			let last = 0;
+			try {
+				await control.runtime.runtimeHost.dispatch(
+					control.request(await control.authorize()),
+				);
+				last = control.resolveRuntimeHost.mock.calls.length;
+			} finally {
+				control.runtime.close();
+			}
+			expect(last).toBeGreaterThan(1);
+			const h = runtimeV4Harness(operation);
+			try {
+				const reference = await h.authorize();
+				const before = h.resolveRuntimeHost.mock.calls.length;
+				const resolve = h.resolveRuntimeHost.getMockImplementation();
+				h.resolveRuntimeHost.mockImplementation(async (input) => {
+					const target = await resolve?.(input);
+					// 发送前复核解析路由时，原 Turn 的排空已提交事件（或 stop 已受理）。
+					if (h.resolveRuntimeHost.mock.calls.length - before === last)
+						Object.assign(h.state, change);
+					return target as never;
+				});
+				const dispatched = h.runtime.runtimeHost.dispatch(h.request(reference));
+				if (sends) {
+					await expect(dispatched).resolves.toMatchObject({
+						operationId: "message",
+					});
+					expect(h.fetcher).toHaveBeenCalled();
+				} else {
+					await expect(dispatched).rejects.toMatchObject({
+						code: expect.stringMatching(/^RUNTIME_(FENCE|ROUTE)_STALE$/),
+					});
+					expect(h.fetcher).not.toHaveBeenCalled();
+				}
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
+
 	it("sends an attachment-only message without an empty body (#3227)", async () => {
 		const h = runtimeV4Harness("submit");
 		try {
@@ -619,6 +673,71 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 				message,
 				retryable,
 			};
+			h.fetcher.mockImplementationOnce(async (_url, init) =>
+				Response.json({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					operationId: JSON.parse(init?.body as string).businessRequest
+						.operation.id,
+					result,
+				}),
+			);
+			const reference = await h.authorize();
+			const dispatched = h.runtime.runtimeHost.dispatch(h.request(reference));
+			if (name.startsWith("passes"))
+				await expect(dispatched).resolves.toMatchObject({ result });
+			else
+				await expect(dispatched).rejects.toMatchObject({
+					code: "RUNTIME_RESPONSE_INVALID",
+				});
+			expect(h.fetcher).toHaveBeenCalledTimes(1);
+		} finally {
+			await h.runtime.close();
+		}
+	});
+
+	// #3373：Host 持久化的未提交结果（带固定阶段、可重试）原样交给 Core 重提；字段漂移时失败关闭，
+	// 不能被当作未提交而重投。
+	const notSubmitted = {
+		outcome: "rejected",
+		code: "RUNTIME_TURN_NOT_SUBMITTED",
+		message: "Runtime turn was not submitted",
+		reason: "file_input_unavailable",
+		retryable: true,
+	} as const;
+	it.each([
+		["passes the persisted unsubmitted Turn to Core", notSubmitted],
+		[
+			"passes the session preparation stage to Core",
+			{ ...notSubmitted, reason: "session_preparation_failed" },
+		],
+		[
+			"fails closed on an unpinned not-submitted stage",
+			{ ...notSubmitted, reason: "exchange_timeout" },
+		],
+		[
+			"fails closed on a non-retryable not-submitted result",
+			{ ...notSubmitted, retryable: false },
+		],
+		[
+			"fails closed on a not-submitted result without a stage",
+			{
+				outcome: notSubmitted.outcome,
+				code: notSubmitted.code,
+				message: notSubmitted.message,
+				retryable: notSubmitted.retryable,
+			},
+		],
+		[
+			"fails closed on a not-submitted result carrying diagnostics",
+			{ ...notSubmitted, message: "Codex app-server is unreachable" },
+		],
+	] as const)("%s (#3373)", async (name, result) => {
+		const h = runtimeV4Harness("submit");
+		try {
+			Object.assign(h.claim, {
+				input: { text: "inspect", attachments: ["file-input-1"] },
+			});
 			h.fetcher.mockImplementationOnce(async (_url, init) =>
 				Response.json({
 					schemaVersion: 4,
@@ -1299,6 +1418,70 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 				expect(body).not.toHaveProperty("privateKeyField");
 			}
 			expect(h.executionKeys.readCiphertext).not.toHaveBeenCalled();
+		} finally {
+			h.runtime.close();
+		}
+	});
+
+	it("lets the consumer commit buffered events before every read and reads from that cursor (#3443)", async () => {
+		const h = runtimeV4Harness();
+		try {
+			const reference = await h.authorize();
+			const order: string[] = [];
+			h.fetcher.mockImplementation(async (_url, init) => {
+				const body = JSON.parse(init?.body as string);
+				order.push(`read:${body.afterCursor}`);
+				return Response.json({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					executionId: "execution",
+					events:
+						body.afterCursor === "tool-cursor"
+							? [terminal]
+							: [modelFact, toolFact],
+				});
+			});
+			let reads = 0;
+			const beforeRead = vi.fn(async () => {
+				reads++;
+				order.push(`commit:${reads}`);
+				// 第二次读取前消费方提交了第一页的两个事件。
+				if (reads === 2)
+					Object.assign(h.state, { runtimeCursor: "tool-cursor" });
+			});
+			const events: unknown[] = [];
+			for await (const event of h.runtime.runtimeHost.events(
+				h.events(reference),
+				undefined,
+				{ beforeRead },
+			))
+				events.push(event);
+			expect(events).toEqual([modelFact, toolFact, terminal]);
+			expect(order).toEqual([
+				"commit:1",
+				"read:null",
+				"commit:2",
+				"read:tool-cursor",
+			]);
+		} finally {
+			h.runtime.close();
+		}
+	});
+
+	it("does not read when committing buffered events fails (#3443)", async () => {
+		const h = runtimeV4Harness();
+		try {
+			const reference = await h.authorize();
+			const failure = new Error("buffered commit failed");
+			const stream = h.runtime.runtimeHost
+				.events(h.events(reference), undefined, {
+					beforeRead: async () => {
+						throw failure;
+					},
+				})
+				[Symbol.asyncIterator]();
+			await expect(stream.next()).rejects.toBe(failure);
+			expect(h.fetcher).not.toHaveBeenCalled();
 		} finally {
 			h.runtime.close();
 		}

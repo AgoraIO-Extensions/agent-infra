@@ -137,6 +137,7 @@ const allocation: SessionSandboxAllocationV1 = {
 		agentId: "agent-a",
 		namespace: "workload-test",
 		sandboxId: "sandbox-a",
+		codexContainerBoundaryEnabled: true,
 	}),
 	desiredState: "running",
 };
@@ -1833,6 +1834,10 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 				"SESSION_ID",
 				"AGENT_INFRA_RUNTIME_MODEL_CONFIG",
 				"AGENT_INFRA_RUNTIME_DRIVER",
+				"AGENT_INFRA_RUNTIME_ISOLATION_MODE",
+				"AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED",
+				"AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE",
+				"AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION",
 				"AGENT_INFRA_RUNTIME_AGENT_ID",
 				"AGENT_INFRA_RUNTIME_WORKER_ID",
 				"AGENT_INFRA_RUNTIME_DATA_DIR",
@@ -1849,6 +1854,27 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			"/workspace/runtime",
 		);
 		expect(env.get("AGENT_INFRA_RUNTIME_AGENT_ID")?.value).toBe("agent-a");
+		expect(env.get("AGENT_INFRA_RUNTIME_ISOLATION_MODE")?.value).toBe(
+			"container-boundary",
+		);
+		expect(
+			env.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED")?.value,
+		).toBe("worker-v1");
+		expect(env.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE")?.value).toBe(
+			"agent-a\0session-a",
+		);
+		expect(
+			env.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION")?.value,
+		).toBeUndefined();
+		expect(
+			env.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION")?.valueFrom,
+		).toEqual({
+			secretKeyRef: {
+				name: allocation.secretName,
+				key: "container-boundary-attestation",
+				optional: false,
+			},
+		});
 		expect(env.get("PORT")?.value).toBe("8080");
 		for (const [name, key] of [
 			["AGENT_INFRA_RUNTIME_MODEL_CONFIG", "model-config"],
@@ -1879,6 +1905,7 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			},
 		});
 		expect(Object.keys(secret.data ?? {}).sort()).toEqual([
+			"container-boundary-attestation",
 			"model-config",
 			"token",
 		]);
@@ -2525,6 +2552,7 @@ describe("Session Sandbox Runtime file exchange (#3276)", () => {
 			},
 		});
 		expect(Object.keys(secret.data ?? {}).sort()).toEqual([
+			"container-boundary-attestation",
 			"file-exchange-token",
 			"model-config",
 			"token",

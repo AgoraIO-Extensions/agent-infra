@@ -1,6 +1,7 @@
-import type { ComponentProps } from "react";
+import { type ComponentProps, useContext } from "react";
 import { Button } from "@/components/ui/button";
 import { useRecoveryTrigger } from "@/hooks/use-recovery-focus";
+import { BrowserSessionQueryContext } from "./use-browser-session.js";
 
 type RecoveryButtonProps = Omit<
 	ComponentProps<typeof Button>,
@@ -12,7 +13,11 @@ type RecoveryButtonProps = Omit<
 	busy?: boolean;
 	/** 恢复成功、按钮卸载后的焦点目标（需可程序聚焦）；不传或取不到时为页面 h1。 */
 	recoveryTarget?: () => HTMLElement | null;
-	onClick: () => void;
+	/**
+	 * 发起恢复请求。不经 TanStack Query 的请求（自有 fetch、事件流重连等）返回请求的 Promise，
+	 * 恢复焦点据此判断本次请求何时有结果（#3388 N13-04）。
+	 */
+	onClick: () => unknown;
 };
 
 /**
@@ -20,6 +25,7 @@ type RecoveryButtonProps = Omit<
  * 页头「刷新」按钮，所有页面共用。
  * 请求中不用原生 disabled：获得焦点的按钮被禁用后，浏览器会把焦点移到 body，读屏与 Tab
  * 都从页首重来。恢复成功、按钮随失败提示卸载时，焦点移到页面 h1（useRecoveryTrigger）。
+ * 「重新登录」的会话确认在壳层的会话 QueryClient 上，一并跟踪。
  */
 export function RecoveryButton({
 	recoveryKey,
@@ -28,7 +34,10 @@ export function RecoveryButton({
 	onClick,
 	...props
 }: RecoveryButtonProps) {
-	const trigger = useRecoveryTrigger(recoveryKey, recoveryTarget);
+	const sessionClient = useContext(BrowserSessionQueryContext);
+	const trigger = useRecoveryTrigger(recoveryKey, recoveryTarget, [
+		sessionClient,
+	]);
 	return (
 		<Button
 			{...props}
@@ -36,10 +45,7 @@ export function RecoveryButton({
 			type="button"
 			disabled={busy}
 			focusableWhenDisabled
-			onClick={() => {
-				trigger.arm();
-				onClick();
-			}}
+			onClick={() => trigger.run(onClick)}
 		/>
 	);
 }

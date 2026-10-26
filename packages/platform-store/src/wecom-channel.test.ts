@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createConnection, createServer, type Socket } from "node:net";
 import {
 	createWecomAuthorizationV1,
@@ -16,12 +17,15 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import { PostgresPlatformAuditQueryV1 } from "./audit.ts";
+import { PostgresConversationDispatchStoreV1 } from "./conversation-dispatch.ts";
+import { PostgresConversationQueryV1 } from "./conversation-query.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
 import { PostgresScopedPlatformAuditQueryV1 } from "./scoped-audit-query.ts";
+import { markSessionSandboxReadyFixture } from "./session-sandbox.fixture.ts";
 import { PostgresWecomChannelV1 } from "./wecom-channel.ts";
 import { completeWecomExecutionFixture } from "./wecom-receipt.fixture.ts";
 
@@ -2480,7 +2484,8 @@ it("pins the sender-to-Connection fact in the receipt and delivery claim", async
 			select connection_authorization_fact from platform.wecom_receipts
 			where id=${accepted.receipt.receiptId}`;
 		expect(row?.connection_authorization_fact).toEqual(fact);
-		await sql`update platform.conversation_executions set status='completed'
+		// 该发送者的会话此前已有回复，本条进入排队；按失败结束即可领取，验证回执携带的事实。
+		await sql`update platform.conversation_executions set status='failed'
 			where execution_id=${accepted.receipt.executionId}`;
 		const claim = await connectionStore.claim();
 		expect(claim?.connectionAuthorizationFact).toEqual(fact);
@@ -2537,15 +2542,16 @@ describe("WeCom /new and unavailable conversations (#3184)", () => {
 		const next = await receiptOf(scoped(sender, "rotation_3", "next"));
 		expect(next.receipt.status).toBe("accepted");
 		expect(next.receipt.conversationId).not.toBe(first.receipt.conversationId);
-		// 重放同一个 /new 事件不再轮换：下一条仍进入同一个新会话（处理中，所以是 busy）。
+		// 重放同一个 /new 事件不再轮换：下一条仍进入同一个新会话（处理中，所以进入排队）。
 		expect(await receiptOf(scoped(sender, "rotation_2", "/new"))).toEqual({
 			...started,
 			outcome: "replayed",
 		});
 		const again = await receiptOf(scoped(sender, "rotation_4", "again"));
 		expect(again.receipt).toMatchObject({
-			status: "busy",
+			status: "accepted",
 			conversationId: next.receipt.conversationId,
+			queuePosition: 1,
 		});
 		expect(
 			await sql`select action, outcome from platform.audit_events where request_id=${started.receipt.receiptId}`,
@@ -2909,4 +2915,966 @@ describe("WeCom receipt actions in the administrator audit query (#3258)", () =>
 			await legacyQuery.close();
 		}
 	}, 60_000);
+});
+
+// #3377：失败提示的分类事实、复核退避与兜底说明，以及长连接流式进度。
+describe("WeCom failure delivery and streaming progress (#3377)", () => {
+	type StoredEvent = { readonly type: string } & Record<string, unknown>;
+	async function append(
+		executionId: string,
+		conversationId: string,
+		rows: readonly StoredEvent[],
+		source: "runtime" | "platform" = "runtime",
+	) {
+		for (const payload of rows) {
+			const key = `${executionId}-${payload.type}-${Math.random()}`;
+			await sql`insert into platform.conversation_events
+				(event_id,conversation_id,execution_id,adapter_event_key,sequence,
+				 conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,
+				 occurred_at,source)
+				select ${key},${conversationId},${executionId},${key},
+					coalesce((select max(sequence) from platform.conversation_events where execution_id=${executionId}),0)+1,
+					coalesce((select max(conversation_cursor) from platform.conversation_events where conversation_id=${conversationId}),0)+1,
+					${payload.type},${sql.json(payload as never)},${createHash("sha256").update(key).digest("hex")},
+					${source === "runtime" ? `runtime-${key}` : null},now(),${source}`;
+		}
+	}
+	const operation = (fact: Record<string, unknown>) => ({
+		schemaVersion: 2,
+		type: "execution.operation",
+		fact: {
+			operationRef: "op-1",
+			attemptRef: "attempt-1",
+			...fact,
+		},
+	});
+	async function accepted(
+		senderId: string,
+		target = store,
+		fence?: WecomConnectionFenceV1,
+	) {
+		const result = await channel(target).receive(
+			{ ...message, senderId, eventId: `${senderId}_event` },
+			fence,
+		);
+		if (result.outcome !== "accepted") throw new Error("Expected receipt");
+		const { executionId, conversationId } = result.receipt;
+		if (!executionId || !conversationId) throw new Error("Expected execution");
+		return { ...result.receipt, executionId, conversationId };
+	}
+
+	it("claims a failure with its persisted codes and trace, and Web reads the same facts", async () => {
+		await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+		const receipt = await accepted("failure_facts_sender");
+		await append(receipt.executionId, receipt.conversationId, [
+			operation({
+				kind: "model",
+				phase: "started",
+				model: {
+					configVersion: "c",
+					modelOptionId: "model_1",
+					modelId: "model_1",
+				},
+			}),
+			operation({
+				kind: "model",
+				phase: "failed",
+				failureCode: "dependency_unavailable",
+				model: {
+					configVersion: "c",
+					modelOptionId: "model_1",
+					modelId: "model_1",
+				},
+			}),
+			{
+				type: "conversation.error",
+				code: "RUNTIME_FILE_INPUT_UNAVAILABLE",
+				message: "not exposed",
+				retryable: false,
+			},
+		]);
+		const [outbox] = await sql<
+			{ id: string; trace_id: string }[]
+		>`select id,trace_id from platform.outbox_items where scope_type='conversation' and scope_id=${receipt.conversationId} and payload->>'executionId'=${receipt.executionId}`;
+		if (!outbox) throw new Error("Expected Turn outbox");
+		await sql`insert into platform.persisted_events (event_id,stream_id,sequence,stream_cursor,event_type,payload,trace_id,occurred_at)
+			values (${`outbox:${outbox.id}:99`},${`outbox:${outbox.id}`},99,99,'outbox.failed',${sql.json({ attemptCount: 1, deliveryFence: "99", errorCode: "RUNTIME_SESSION_PREPARATION_FAILED" })},${outbox.trace_id},now())`;
+		await sql`update platform.conversation_executions set status='failed' where execution_id=${receipt.executionId}`;
+		const claim = await store.claim();
+		expect(claim?.receiptId).toBe(receipt.receiptId);
+		expect(claim?.failure).toEqual({
+			taskReason: null,
+			dispatchCode: "RUNTIME_SESSION_PREPARATION_FAILED",
+			runtimeCode: "RUNTIME_FILE_INPUT_UNAVAILABLE",
+			modelFailureCode: "dependency_unavailable",
+		});
+		expect(claim?.traceId).toEqual(expect.any(String));
+		expect(JSON.stringify(claim)).not.toContain("not exposed");
+		const query = new PostgresConversationQueryV1({
+			databaseUrl: db.databaseUrl,
+		});
+		try {
+			const detail = await query.get(
+				{
+					principal: { kind: "user", id: "failure_facts_sender" },
+					actorId: "failure_facts_sender",
+					channelId: wecomChannelIdV1(message),
+				},
+				receipt.conversationId,
+			);
+			expect(
+				detail?.executions.find(
+					(item) => item.executionId === receipt.executionId,
+				),
+			).toMatchObject({ failure: claim?.failure, traceId: claim?.traceId });
+		} finally {
+			await query.close();
+		}
+		// 其他状态的执行不读取失败原因。
+		await sql`update platform.conversation_executions set status='cancelled' where execution_id=${receipt.executionId}`;
+		await sql`update platform.wecom_receipts set delivery_status='pending',lease_until=null where id=${receipt.receiptId}`;
+		expect((await store.claim())?.failure).toBeUndefined();
+	});
+
+	it("finalizes an unready reply with a bounded answer prefix", async () => {
+		await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+		const receipt = await accepted("timeout_prefix_sender");
+		await append(receipt.executionId, receipt.conversationId, [
+			{ type: "text.delta", text: "答".repeat(5_000) },
+			{ type: "text.delta", text: "案".repeat(5_000) },
+		]);
+		await sql`update platform.conversation_executions set status='processing' where execution_id=${receipt.executionId}`;
+		await sql`update platform.wecom_receipts set expires_at=now()+interval '29 seconds' where id=${receipt.receiptId}`;
+		const claim = await store.claim();
+		expect(claim?.receiptId).toBe(receipt.receiptId);
+		expect(claim?.answerReady).toBe(false);
+		expect(claim?.answerTooLong).toBe(true);
+		// 第二条开始于 15000 字节之前，照常读取；Core 截短到单条回复上限。
+		expect(claim?.textDeltas).toEqual(["答".repeat(5_000), "案".repeat(5_000)]);
+	});
+
+	it("defers a claim during temporary unavailability and prepares a fixed notice without a ready Agent", async () => {
+		await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+		const receipt = await accepted("revalidation_notice_sender");
+		await sql`update platform.conversation_executions set status='failed' where execution_id=${receipt.executionId}`;
+		const first = await store.claim();
+		if (!first) throw new Error("Expected claim");
+		await expect(store.defer(first, 60_001)).rejects.toThrow();
+		await store.defer(first, 60_000);
+		expect(await store.claim()).toBeNull();
+		// 退避到期后重新领取，fence 推进；旧领取不能再推进状态。
+		await sql`update platform.wecom_receipts set lease_until=now()-interval '1 second' where id=${receipt.receiptId}`;
+		const second = await store.claim();
+		expect(second?.fence).toBe(first.fence + 1);
+		if (!second) throw new Error("Expected claim");
+		await store.defer(first, 0);
+		expect(await store.claim()).toBeNull();
+		expect(await store.prepareNotice(first)).toBe("stale");
+		// Agent 正在更新：固定说明不要求服务就绪。
+		await sql`update platform.agent_applications set service_availability='updating' where agent_id=${message.agentId}`;
+		try {
+			expect(await store.prepareNotice(second)).toBe("prepared");
+		} finally {
+			await sql`update platform.agent_applications set service_availability='ready' where agent_id=${message.agentId}`;
+		}
+		expect(
+			await store.read(receipt.receiptId, "revalidation_notice_sender"),
+		).toMatchObject({
+			deliveryStatus: "sending",
+		});
+		await store.finish(second, "sent");
+		expect(
+			await store.read(receipt.receiptId, "revalidation_notice_sender"),
+		).toMatchObject({
+			deliveryStatus: "sent",
+		});
+		// Agent 授权修订已变化：复核确认不一致，调用方取消。
+		const changed = await accepted("revalidation_changed_sender");
+		await sql`update platform.conversation_executions set status='failed' where execution_id=${changed.executionId}`;
+		const claim = await store.claim();
+		if (!claim) throw new Error("Expected claim");
+		await sql`update platform.agents set authorization_revision='authorization_changed' where id=${message.agentId}`;
+		try {
+			expect(await store.prepareNotice(claim)).toBe("changed");
+		} finally {
+			await sql`update platform.agents set authorization_revision='authorization_1' where id=${message.agentId}`;
+		}
+		expect(
+			await store.read(changed.receiptId, "revalidation_changed_sender"),
+		).toMatchObject({
+			deliveryStatus: "claimed",
+		});
+	});
+
+	it("lists progress only for the connection holder and persists the frame sequence under its fence (ADR-0033 decision 6)", async () => {
+		await sql`update platform.wecom_receipts set delivery_status='abandoned'`;
+		await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status)
+    values (${message.providerId},${message.agentId},${message.bindingReference},'progress-worker',30,now()+interval '30 seconds','connected')
+    on conflict (bot_id) do update set agent_id=excluded.agent_id,binding_reference=excluded.binding_reference,holder_id=excluded.holder_id,fence=excluded.fence,lease_until=excluded.lease_until,status=excluded.status`;
+		const open = (holder: string) =>
+			new PostgresWecomChannelV1({
+				...db,
+				userDirectory: fixtureUserDirectory,
+				identity: fixtureIdentity,
+				connectionHolderId: holder,
+			});
+		const owner = open("progress-worker");
+		const other = open("progress-other");
+		try {
+			const fence = {
+				botId: message.providerId,
+				holderId: "progress-worker",
+				fence: 30,
+			};
+			const receipt = await accepted("progress_sender", owner, fence);
+			expect(await other.progressCandidates()).toEqual([]);
+			expect(await store.progressCandidates()).toEqual([]);
+			const [candidate] = await owner.progressCandidates();
+			if (!candidate) throw new Error("Expected progress candidate");
+			expect(candidate).toMatchObject({
+				receiptId: receipt.receiptId,
+				executionId: receipt.executionId,
+				actorId: "progress_sender",
+				channelRevision: "channels_1",
+				replyHandle: message.replyHandle,
+			});
+			// 还没有任何 Runtime 事件：已受理的执行在准备会话。
+			expect(await owner.progressSnapshot(candidate)).toEqual({
+				phase: { kind: "preparing" },
+				textDeltas: [],
+				answerComplete: true,
+			});
+			await append(receipt.executionId, receipt.conversationId, [
+				{ type: "execution.status", status: "processing" },
+				operation({
+					kind: "tool",
+					phase: "started",
+					toolId: "browser_navigate",
+				}),
+				{ type: "reasoning.delta", kind: "summary", text: "先打开页面" },
+				{ type: "text.delta", text: "正在查" },
+			]);
+			const [changed] = await owner.progressCandidates();
+			expect(changed?.revision).not.toBe(candidate.revision);
+			if (!changed) throw new Error("Expected progress candidate");
+			expect(await owner.progressSnapshot(changed)).toEqual({
+				phase: { kind: "tool", toolName: "打开页面" },
+				textDeltas: ["正在查"],
+				answerComplete: true,
+				thinking: {
+					parts: [{ kind: "summary", text: "先打开页面" }],
+					complete: true,
+				},
+			});
+			expect(await owner.reserveStreamFrame(changed)).toBe(1);
+			expect(await owner.reserveStreamFrame(changed)).toBe(2);
+			// 其他 Worker、改绑前的回复路由都不能占用帧序号。
+			expect(await other.reserveStreamFrame(changed)).toBeNull();
+			expect(
+				await owner.reserveStreamFrame({
+					...changed,
+					replyHandle: "stale-route",
+				}),
+			).toBeNull();
+			// 有效期只剩最后 30 秒：交给终态回复定稿，不再列出。
+			await sql`update platform.wecom_receipts set expires_at=now()+interval '29 seconds' where id=${receipt.receiptId}`;
+			expect(await owner.progressCandidates()).toEqual([]);
+			await sql`update platform.wecom_receipts set expires_at=now()+interval '5 minutes' where id=${receipt.receiptId}`;
+			// 持有者切换：旧持有者的迟到帧不被采用，新持有者重投改绑后从已持久的序号之后继续。
+			await sql`update platform.wecom_connections set holder_id='progress-other',fence=31 where bot_id=${message.providerId}`;
+			expect(await owner.reserveStreamFrame(changed)).toBeNull();
+			expect(await owner.progressCandidates()).toEqual([]);
+			expect(
+				await channel(other).receive(
+					{
+						...message,
+						senderId: "progress_sender",
+						eventId: "progress_sender_event",
+						replyHandle: "rebound-route",
+					},
+					{ ...fence, holderId: "progress-other", fence: 31 },
+				),
+			).toMatchObject({ outcome: "replayed" });
+			const [rebound] = await other.progressCandidates();
+			expect(rebound?.replyHandle).toBe("rebound-route");
+			if (!rebound) throw new Error("Expected rebound candidate");
+			expect(await other.reserveStreamFrame(rebound)).toBe(3);
+			// 进入终态回复后不再发进度帧。
+			await completeWecomExecutionFixture(sql, receipt.executionId);
+			expect(await other.progressCandidates()).toEqual([]);
+			const terminal = await other.claim();
+			expect(terminal?.receiptId).toBe(receipt.receiptId);
+			expect(await other.reserveStreamFrame(rebound)).toBeNull();
+			const [persisted] =
+				await sql`select stream_frame_seq from platform.wecom_receipts where id=${receipt.receiptId}`;
+			expect(persisted?.stream_frame_seq).toBe(3);
+		} finally {
+			await owner.close();
+			await other.close();
+		}
+	});
+});
+
+// #3374：只含附件的企微消息打开 3 秒合并窗口，窗口内同一发送者的消息并入同一个初始 Turn
+// （工程 Spec §14.2.4）。窗口状态只在 Platform DB 中：Turn outbox 的可认领时间与绑定的消息。
+// 每个用例经过多次真实受理事务；CI 负载下放宽默认 5 秒的超时（同 #3227 的媒体集成测试）。
+const mergeTimeout = { timeout: 60_000 };
+describe("WeCom attachment merge window (#3374)", () => {
+	const mergeAuthorization: WecomAuthorizationPortV1 = {
+		async authorize(scope, ...rest) {
+			const allowed = await allowedAuthorization.authorize(scope, ...rest);
+			if (allowed.outcome !== "allowed") return allowed;
+			return {
+				...allowed,
+				authority: {
+					...allowed.authority,
+					actor: { ...allowed.authority.actor, attachmentMergeWindow: true },
+				},
+			};
+		},
+	};
+	const image = {
+		kind: "image" as const,
+		name: null,
+		download: {
+			url: "https://download.example.test/merge",
+			aesKey: "merge-aeskey",
+			expiresAt: "2099-01-01T00:00:00Z",
+		},
+	};
+	let fileSequence = 0;
+	/** 替身 resolver：按 File Authority 的结果写入当前会话中可用、未绑定的附件记录。 */
+	const media = {
+		async resolve(input: { message: WecomMessageV1; conversationId: string }) {
+			const attachments: string[] = [];
+			for (const _entry of input.message.media ?? []) {
+				const fileId = `merge_file_${++fileSequence}`;
+				const record = {
+					actorId: input.message.senderId,
+					agentId: input.message.agentId,
+					channelId: wecomChannelIdV1(input.message),
+					conversationId: input.conversationId,
+					fileId,
+					objectRef: `object-${fileId}`,
+					kind: "attachment",
+					idempotencyKey: `intent-${fileId}`,
+					descriptor: {
+						name: `${fileId}.png`,
+						mediaType: "image/png",
+						sizeBytes: 5,
+						sha256: "e".repeat(64),
+					},
+					status: "available",
+					executionId: null,
+					messageId: null,
+					sessionGeneration: null,
+					objectVersion: "version-1",
+					etag: "etag-1",
+					createdAt: "2026-10-24T00:00:00.000Z",
+					expiresAt: "2099-01-01T00:00:00Z",
+					updatedAt: "2026-10-24T00:00:00.000Z",
+					revision: 1,
+				};
+				await sql`insert into platform.files (file_id, actor_id, conversation_id, idempotency_key, record, updated_at)
+					values (${fileId}, ${record.actorId}, ${input.conversationId}, ${record.idempotencyKey}, ${sql.json(record)}, now())`;
+				attachments.push(fileId);
+			}
+			return { outcome: "resolved" as const, attachments };
+		},
+	};
+	function mergeChannel(authorization = mergeAuthorization) {
+		const base = createWecomChannelV1({
+			store,
+			authorization,
+			media,
+		});
+		return {
+			async receive(input: WecomMessageV1) {
+				const keyId = `fixture-key:personal:${input.senderId}`;
+				await sql`insert into platform.relay_key_subjects
+					(purpose, subject_id, last_version, current_version)
+					values ('personal', ${input.senderId}, 1, 1)
+					on conflict (purpose, subject_id) do nothing`;
+				await sql`insert into platform.relay_key_versions
+					(purpose, subject_id, key_version, key_id, ciphertext)
+					values ('personal', ${input.senderId}, 1, ${keyId},
+						${sql.json({ purpose: "personal", subjectId: input.senderId, keyId, keyVersion: 1 })})
+					on conflict do nothing`;
+				const result = await base.receive(input);
+				if (result.outcome !== "accepted" && result.outcome !== "replayed")
+					throw new Error(`Expected a receipt, got ${result.outcome}`);
+				return result.receipt;
+			},
+		};
+	}
+	const event = (
+		senderId: string,
+		eventId: string,
+		input: { text?: string; images?: number; busy?: true } = {},
+	): WecomMessageV1 => ({
+		...message,
+		senderId,
+		peerId: "merge_group",
+		eventId,
+		text: input.text ?? "",
+		// #3376：回复有效期不足以排队（排队期限不晚于有效期前 30 秒），不能并入时按繁忙处理。
+		...(input.busy
+			? { replyExpiresAt: new Date(Date.now() + 20_000).toISOString() }
+			: {}),
+		...(input.images === 0
+			? {}
+			: { media: Array.from({ length: input.images ?? 1 }, () => image) }),
+	});
+	const windowOf = async (executionId: string | null) => {
+		const [row] = await sql<{ open: boolean }[]>`
+			select available_at > clock_timestamp() as open from platform.outbox_items
+			where id = ${`conversation:turn:${executionId}`}`;
+		return row?.open;
+	};
+	const messagesOf = (executionId: string | null) =>
+		sql<{ message_id: string; text: string }[]>`
+			select message_id, text from platform.conversation_messages
+			where execution_id = ${executionId} order by created_at, message_id`;
+	const turnInput = async (
+		conversationId: string | null,
+		executionId: string | null,
+	) => {
+		const { readInitialTurnInput, readMessage } = await import(
+			"./conversation-dispatch-sql.ts"
+		);
+		const [outbox] = await sql<{ payload: { messageId: string } }[]>`
+			select payload from platform.outbox_items where id = ${`conversation:turn:${executionId}`}`;
+		return sql.begin(async (transaction) => {
+			const source = await readMessage(
+				transaction,
+				conversationId ?? "",
+				outbox?.payload.messageId ?? "",
+			);
+			if (!source) throw new Error("Expected the source message");
+			return readInitialTurnInput(
+				transaction,
+				conversationId ?? "",
+				executionId ?? "",
+				source,
+			);
+		});
+	};
+	const settleReceipts = () =>
+		sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+	/** Worker 认领该 Execution 的初始 Turn，并读取首次投递前的原始操作绑定。 */
+	const claimTurn = async (
+		conversationId: string | null,
+		executionId: string | null,
+	) => {
+		await markSessionSandboxReadyFixture(sql, conversationId ?? "");
+		const dispatch = new PostgresConversationDispatchStoreV1({
+			databaseUrl: db.databaseUrl,
+		});
+		try {
+			const claimed = await dispatch.claim({
+				schemaVersion: 1,
+				itemId: `conversation:turn:${executionId}`,
+				workerId: "merge-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (claimed.outcome !== "claimed") return { outcome: claimed.outcome };
+			const runtime = await dispatch.readRuntimeState({
+				claim: claimed.claim,
+			});
+			return {
+				outcome: claimed.outcome,
+				input: claimed.claim.input,
+				originalOperationDigest: runtime?.originalOperationDigest,
+			};
+		} finally {
+			await dispatch.close();
+		}
+	};
+
+	it(
+		"claims only after the window, with the text first and every merged attachment",
+		mergeTimeout,
+		async () => {
+			await settleReceipts();
+			const sender = "merge_sender_claim";
+			const first = await mergeChannel().receive(
+				event(sender, "merge_claim_image_1"),
+			);
+			// 窗口内 Worker 认领不到这个 Turn，输入因此能在首次投递前定稿。
+			expect(await claimTurn(first.conversationId, first.executionId)).toEqual({
+				outcome: "busy",
+			});
+			const second = await mergeChannel().receive(
+				event(sender, "merge_claim_image_2", { images: 2 }),
+			);
+			const text = await mergeChannel().receive(
+				event(sender, "merge_claim_text", {
+					text: "这三张图哪张最清楚？",
+					images: 0,
+				}),
+			);
+			expect([second.executionId, text.executionId]).toEqual([
+				first.executionId,
+				first.executionId,
+			]);
+			const files = await sql<{ file_id: string; message_id: string }[]>`
+				select f.file_id, f.record->>'messageId' as message_id
+				from platform.files f
+				join platform.conversation_messages m on m.message_id = f.record->>'messageId'
+				where f.record->>'executionId'=${first.executionId}
+				order by m.created_at, m.message_id, f.file_id`;
+			const claimed = await claimTurn(first.conversationId, first.executionId);
+			expect(claimed).toEqual({
+				outcome: "claimed",
+				input: {
+					text: "这三张图哪张最清楚？",
+					attachments: files.map((file) => file.file_id),
+				},
+				originalOperationDigest: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+			});
+			expect(files).toHaveLength(3);
+			// 已认领的 Turn 不再接收并入：之后的消息按原有规则繁忙，输入不变。
+			const late = await mergeChannel().receive(
+				event(sender, "merge_claim_late", {
+					text: "补一句",
+					images: 0,
+					busy: true,
+				}),
+			);
+			expect(late).toMatchObject({ status: "busy", executionId: null });
+			await completeWecomExecutionFixture(sql, first.executionId);
+		},
+	);
+
+	it(
+		"runs an attachment-only Turn on its own once the window expires without text",
+		mergeTimeout,
+		async () => {
+			await settleReceipts();
+			// 没有合并能力的授权立即可认领；有合并能力时窗口到期后才可认领。两者的原始操作摘要
+			// 都按实际发送的 Runtime 输入（不带空正文）计算。
+			for (const [sender, receiver] of [
+				["merge_sender_plain_alone", mergeChannel(allowedAuthorization)],
+				["merge_sender_alone", mergeChannel()],
+			] as const) {
+				const image = await receiver.receive(event(sender, `${sender}_image`));
+				await sql`update platform.outbox_items set available_at = clock_timestamp() - interval '1 millisecond'
+					where id = ${`conversation:turn:${image.executionId}`}`;
+				const [file] = await sql<{ file_id: string }[]>`
+					select file_id from platform.files where record->>'executionId'=${image.executionId}`;
+				expect(
+					await claimTurn(image.conversationId, image.executionId),
+				).toEqual({
+					outcome: "claimed",
+					input: { text: "", attachments: [file?.file_id] },
+					originalOperationDigest: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+				});
+				await completeWecomExecutionFixture(sql, image.executionId);
+			}
+		},
+	);
+
+	it(
+		"merges an image and the following text into one Turn and ends the image stream as merged",
+		mergeTimeout,
+		async () => {
+			await settleReceipts();
+			const sender = "merge_sender_text";
+			const image = await mergeChannel().receive(
+				event(sender, "merge_image_1"),
+			);
+			expect(image.status).toBe("accepted");
+			// 只含附件的消息新建的 Turn 在窗口内不可认领。
+			expect(await windowOf(image.executionId)).toBe(true);
+			const text = await mergeChannel().receive(
+				event(sender, "merge_text_1", { text: "图里写了什么？", images: 0 }),
+			);
+			expect(text).toMatchObject({
+				status: "accepted",
+				conversationId: image.conversationId,
+				executionId: image.executionId,
+			});
+			// 文字消息结束窗口；两条消息都绑定到同一个 Execution，没有第二个 Turn。
+			expect(await windowOf(image.executionId)).toBe(false);
+			const messages = await messagesOf(image.executionId);
+			expect(messages.map((row) => row.text)).toEqual(["", "图里写了什么？"]);
+			expect(
+				await sql`select count(*)::int as count from platform.conversation_executions where conversation_id=${image.conversationId}`,
+			).toEqual([{ count: 1 }]);
+			expect(
+				await sql`select count(*)::int as count from platform.outbox_items where scope_id=${image.conversationId} and operation like 'conversation.turn.%'`,
+			).toEqual([{ count: 1 }]);
+			// 初始 Turn 输入：文字在前，附件来自附件消息；附件绑定到它所属的 Message。
+			const input = await turnInput(image.conversationId, image.executionId);
+			const [file] = await sql<
+				{ file_id: string; message_id: string }[]
+			>`select file_id, record->>'messageId' as message_id from platform.files where record->>'executionId'=${image.executionId}`;
+			expect(input).toEqual({
+				text: "图里写了什么？",
+				attachments: [file?.file_id],
+			});
+			expect(file?.message_id).toBe(messages[0]?.message_id);
+			// 重投文字消息只重放回执，不会再次绑定或改变窗口。
+			expect(
+				await mergeChannel().receive(
+					event(sender, "merge_text_1", { text: "图里写了什么？", images: 0 }),
+				),
+			).toEqual(text);
+			expect(await messagesOf(image.executionId)).toHaveLength(2);
+			// 附件消息的回执立即领取并以“已合并”结束；文字消息的回执等待答案。
+			const claimed = await store.claim();
+			expect(claimed).toMatchObject({
+				receiptId: image.receiptId,
+				acceptanceStatus: "accepted",
+				merged: true,
+				textDeltas: [],
+			});
+			if (!claimed) throw new Error("Expected the merged receipt");
+			await store.finish(claimed, "sent");
+			expect(await store.claim()).toBeNull();
+			await completeWecomExecutionFixture(sql, image.executionId);
+			const answer = await store.claim();
+			expect(answer).toMatchObject({ receiptId: text.receiptId });
+			expect(answer).not.toHaveProperty("merged");
+			if (answer) await store.finish(answer, "sent");
+		},
+	);
+
+	it(
+		"merges several images within the limit, re-timing the window until the text",
+		mergeTimeout,
+		async () => {
+			await settleReceipts();
+			const sender = "merge_sender_images";
+			const first = await mergeChannel().receive(
+				event(sender, "merge_images_1"),
+			);
+			const second = await mergeChannel().receive(
+				event(sender, "merge_images_2", { images: 2 }),
+			);
+			expect(second.executionId).toBe(first.executionId);
+			expect(await windowOf(first.executionId)).toBe(true);
+			// 再并入 8 张会超过 10 个附件：不再并入，按繁忙处理（排队由 #3376 负责）。
+			const over = await mergeChannel().receive(
+				event(sender, "merge_images_3", { images: 8, busy: true }),
+			);
+			expect(over).toMatchObject({ status: "busy", executionId: null });
+			expect(await windowOf(first.executionId)).toBe(true);
+			const text = await mergeChannel().receive(
+				event(sender, "merge_images_text", { text: "比较这三张图", images: 0 }),
+			);
+			expect(text.executionId).toBe(first.executionId);
+			expect(await windowOf(first.executionId)).toBe(false);
+			const input = await turnInput(first.conversationId, first.executionId);
+			expect(input.text).toBe("比较这三张图");
+			expect(input.attachments).toHaveLength(3);
+			await completeWecomExecutionFixture(sql, first.executionId);
+		},
+	);
+
+	it(
+		"stops merging once the window has expired or the Turn was claimed",
+		mergeTimeout,
+		async () => {
+			await settleReceipts();
+			const sender = "merge_sender_expired";
+			const image = await mergeChannel().receive(
+				event(sender, "merge_expired_1"),
+			);
+			// 窗口到期（不依赖进程内存，只看 Platform DB 的可认领时间）。
+			await sql`update platform.outbox_items set available_at = clock_timestamp() - interval '1 second'
+			where id = ${`conversation:turn:${image.executionId}`}`;
+			const late = await mergeChannel().receive(
+				event(sender, "merge_expired_text", {
+					text: "晚到的文字",
+					images: 0,
+					busy: true,
+				}),
+			);
+			expect(late).toMatchObject({ status: "busy", executionId: null });
+			expect(await messagesOf(image.executionId)).toHaveLength(1);
+			await completeWecomExecutionFixture(sql, image.executionId);
+			// 已被 Worker 认领过的 Turn 即使窗口未到期也不再并入。
+			const claimed = await mergeChannel().receive(
+				event(sender, "merge_claimed_1"),
+			);
+			await sql`update platform.outbox_items set attempt_count = 1
+			where id = ${`conversation:turn:${claimed.executionId}`}`;
+			const afterClaim = await mergeChannel().receive(
+				event(sender, "merge_claimed_text", {
+					text: "认领后的文字",
+					images: 0,
+					busy: true,
+				}),
+			);
+			expect(afterClaim).toMatchObject({ status: "busy", executionId: null });
+			await completeWecomExecutionFixture(sql, claimed.executionId);
+		},
+	);
+
+	it(
+		"never merges a text-first Turn, a Web-style authority or another sender's message",
+		mergeTimeout,
+		async () => {
+			await settleReceipts();
+			const sender = "merge_sender_text_first";
+			const textFirst = await mergeChannel().receive(
+				event(sender, "merge_text_first", { text: "先发文字", images: 0 }),
+			);
+			expect(await windowOf(textFirst.executionId)).toBe(false);
+			const followUp = await mergeChannel().receive(
+				event(sender, "merge_text_first_image", { busy: true }),
+			);
+			expect(followUp).toMatchObject({ status: "busy", executionId: null });
+			await completeWecomExecutionFixture(sql, textFirst.executionId);
+			// 群里另一位发送者的文字进入自己的会话，不会并入前一位发送者的附件任务。
+			const alice = await mergeChannel().receive(
+				event("merge_alice", "merge_alice_image"),
+			);
+			const bob = await mergeChannel().receive(
+				event("merge_bob", "merge_bob_text", { text: "我的问题", images: 0 }),
+			);
+			expect(bob.conversationId).not.toBe(alice.conversationId);
+			expect(bob.executionId).not.toBe(alice.executionId);
+			expect(await messagesOf(alice.executionId)).toHaveLength(1);
+			expect(await windowOf(alice.executionId)).toBe(true);
+			await completeWecomExecutionFixture(sql, alice.executionId);
+			await completeWecomExecutionFixture(sql, bob.executionId);
+			// 没有合并能力的授权（自建应用、Web 等）不开窗：只含附件的消息立即可认领。
+			const plain = await mergeChannel(allowedAuthorization).receive(
+				event("merge_plain", "merge_plain_image"),
+			);
+			expect(await windowOf(plain.executionId)).toBe(false);
+			await completeWecomExecutionFixture(sql, plain.executionId);
+		},
+	);
+
+	describe("supplementary instructions (#3437)", () => {
+		/** 当前 Runtime 支持补充指令的企微会话。 */
+		function supplementChannel() {
+			const base = createWecomChannelV1({
+				store,
+				authorization: allowedAuthorization,
+				supplementaryInstruction: async () => true,
+			});
+			return {
+				async receive(input: WecomMessageV1) {
+					const keyId = `fixture-key:personal:${input.senderId}`;
+					await sql`insert into platform.relay_key_subjects
+						(purpose, subject_id, last_version, current_version)
+						values ('personal', ${input.senderId}, 1, 1)
+						on conflict (purpose, subject_id) do nothing`;
+					await sql`insert into platform.relay_key_versions
+						(purpose, subject_id, key_version, key_id, ciphertext)
+						values ('personal', ${input.senderId}, 1, ${keyId},
+							${sql.json({ purpose: "personal", subjectId: input.senderId, keyId, keyVersion: 1 })})
+						on conflict do nothing`;
+					const result = await base.receive(input);
+					if (result.outcome !== "accepted" && result.outcome !== "replayed")
+						throw new Error(`Expected a receipt, got ${result.outcome}`);
+					return result.receipt;
+				},
+			};
+		}
+		/** 原消息正在执行时再发一条文字消息，作为补充指令绑定原 Execution。 */
+		async function supplementFixture(sender: string) {
+			const original = await supplementChannel().receive(
+				event(sender, `${sender}_original`, { text: "原问题", images: 0 }),
+			);
+			await sql`update platform.conversation_executions set status='processing'
+				where execution_id=${original.executionId}`;
+			const supplement = await supplementChannel().receive(
+				event(sender, `${sender}_supplement`, { text: "补充一句", images: 0 }),
+			);
+			const [message] = await sql<{ message_id: string }[]>`
+				select payload->>'messageId' as message_id from platform.outbox_items
+				where request_id=${supplement.receiptId} and operation='conversation.turn.supplement.v1'`;
+			if (!message) throw new Error("Expected the supplement outbox");
+			return { original, supplement, messageId: message.message_id };
+		}
+
+		it(
+			"keeps the original reply and ends the supplement once the Runtime accepts it",
+			mergeTimeout,
+			async () => {
+				await settleReceipts();
+				const { original, supplement, messageId } = await supplementFixture(
+					"supplement_accepted",
+				);
+				expect(supplement).toMatchObject({
+					status: "accepted",
+					executionId: original.executionId,
+					supplement: true,
+				});
+				expect(original).not.toHaveProperty("supplement");
+				// 投递前两条回执都不领取：原消息不算已合并，补充指令等待 Runtime 的结果。
+				expect(await store.claim()).toBeNull();
+				await sql`update platform.outbox_items set status='succeeded'
+					where id=${`conversation:supplement:${messageId}`}`;
+				const claimed = await store.claim();
+				expect(claimed).toMatchObject({
+					receiptId: supplement.receiptId,
+					supplement: { status: "accepted", failureCode: null },
+					textDeltas: [],
+				});
+				expect(claimed).not.toHaveProperty("merged");
+				if (!claimed) throw new Error("Expected the supplement receipt");
+				await store.finish(claimed, "sent");
+				expect(await store.claim()).toBeNull();
+				// 原消息的回执照常等待并承担答案。
+				await completeWecomExecutionFixture(sql, original.executionId);
+				const answer = await store.claim();
+				expect(answer).toMatchObject({ receiptId: original.receiptId });
+				expect(answer).not.toHaveProperty("merged");
+				expect(answer).not.toHaveProperty("supplement");
+				if (answer) await store.finish(answer, "sent");
+			},
+		);
+
+		it(
+			"ends a failed supplement with its failure code",
+			mergeTimeout,
+			async () => {
+				await settleReceipts();
+				const { original, supplement, messageId } =
+					await supplementFixture("supplement_failed");
+				await sql`update platform.outbox_items set status='failed'
+					where id=${`conversation:supplement:${messageId}`}`;
+				await sql`update platform.conversation_messages set status='failed', failure_code='QUEUE_FULL'
+					where message_id=${messageId}`;
+				const claimed = await store.claim();
+				expect(claimed).toMatchObject({
+					receiptId: supplement.receiptId,
+					supplement: { status: "failed", failureCode: "QUEUE_FULL" },
+				});
+				if (claimed) await store.finish(claimed, "sent");
+				await completeWecomExecutionFixture(sql, original.executionId);
+				const answer = await store.claim();
+				expect(answer).toMatchObject({ receiptId: original.receiptId });
+				if (answer) await store.finish(answer, "sent");
+			},
+		);
+	});
+});
+
+describe("WeCom bounded queue receipts (#3376)", () => {
+	it("queues in-flight messages within the reply window and exposes queue facts only to the connection holder", async () => {
+		await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+		const botId = "queue-provider";
+		await sql`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status) values (${botId},${message.agentId},${message.bindingReference},'queue-worker',1,now()+interval '60 seconds','connected')`;
+		const owner = new PostgresWecomChannelV1({
+			...db,
+			userDirectory: fixtureUserDirectory,
+			identity: fixtureIdentity,
+			connectionHolderId: "queue-worker",
+		});
+		const other = new PostgresWecomChannelV1({
+			...db,
+			userDirectory: fixtureUserDirectory,
+			identity: fixtureIdentity,
+			connectionHolderId: "queue-other-worker",
+		});
+		const fence = { botId, holderId: "queue-worker", fence: 1 };
+		// 回复有效期短于 10 分钟：排队期限取有效期结束前 30 秒（§14.2.4）。
+		const replyExpiresAt = new Date(Date.now() + 300_000).toISOString();
+		const event = (eventId: string) => ({
+			...message,
+			providerId: botId,
+			senderId: "queue_sender",
+			eventId,
+			replyHandle: `handle-${eventId}`,
+			replyExpiresAt,
+		});
+		const receive = async (eventId: string) => {
+			const result = await channel(owner).receive(event(eventId), fence);
+			if (result.outcome !== "accepted") throw new Error("Expected receipt");
+			return result.receipt;
+		};
+		try {
+			const active = await receive("queue_active");
+			expect(active.queuePosition).toBeUndefined();
+			const queued = [
+				await receive("queue_1"),
+				await receive("queue_2"),
+				await receive("queue_3"),
+			];
+			expect(
+				queued.map(({ status, queuePosition }) => [status, queuePosition]),
+			).toEqual([
+				["accepted", 1],
+				["accepted", 2],
+				["accepted", 3],
+			]);
+			const busy = await receive("queue_4");
+			expect(busy).toMatchObject({
+				status: "busy",
+				conversationId: active.conversationId,
+				executionId: null,
+			});
+			const deadlines = await sql<{ matches: boolean }[]>`
+				select e.task_wait_deadline = r.expires_at - interval '30 seconds' as matches
+				from platform.wecom_receipts r
+				join platform.conversation_executions e on e.execution_id = r.execution_id
+				where r.id in ${sql(queued.map(({ receiptId }) => receiptId))}
+			`;
+			expect(deadlines).toEqual([
+				{ matches: true },
+				{ matches: true },
+				{ matches: true },
+			]);
+			// 位次从持久等待顺序派生，只给持有该连接的 Worker。
+			expect(await owner.listQueueNotices()).toEqual(
+				queued.map((receipt, index) => ({
+					receiptId: receipt.receiptId,
+					scope: expect.objectContaining({ senderId: "queue_sender" }),
+					replyHandle: `handle-queue_${index + 1}`,
+					position: index + 1,
+				})),
+			);
+			expect(await other.listQueueNotices()).toEqual([]);
+
+			// 繁忙回执带当前排队条数，用于“排队已满”提示。
+			const busyClaim = await owner.claim();
+			expect(busyClaim).toMatchObject({
+				receiptId: busy.receiptId,
+				acceptanceStatus: "busy",
+				queuedCount: 3,
+			});
+			if (busyClaim) await owner.finish(busyClaim, "sent");
+
+			// 第一条开始处理（认领准入写 task.status: unknown），第二条排队超时。
+			const [first, second, third] = queued;
+			if (!first || !second || !third) throw new Error("Missing fixture");
+			await sql`update platform.conversation_executions set status='completed' where execution_id=${active.executionId}`;
+			await sql`update platform.conversation_executions set status='unknown' where execution_id=${first.executionId}`;
+			await sql`insert into platform.conversation_events
+				(event_id, conversation_id, execution_id, adapter_event_key, sequence, conversation_cursor,
+				 event_type, event_payload, event_digest, source, runtime_cursor, occurred_at)
+				select 'queue-started-event', e.conversation_id, e.execution_id, 'platform:queue-started-event',
+					e.last_event_sequence + 1, c.last_conversation_cursor + 1, 'task.status',
+					${sql.json({ type: "task.status", status: "unknown" })}, ${"a".repeat(64)}, 'platform', null, now()
+				from platform.conversation_executions e join platform.conversations c on c.id = e.conversation_id
+				where e.execution_id = ${first.executionId}`;
+			await sql`update platform.conversation_executions set status='failed' where execution_id=${second.executionId}`;
+			await sql`update platform.conversation_messages set status='failed', failure_code='TASK_WAIT_TIMEOUT' where execution_id=${second.executionId}`;
+			expect(
+				(await owner.listQueueNotices()).map(({ receiptId, position }) => [
+					receiptId,
+					position,
+				]),
+			).toEqual([
+				[first.receiptId, null],
+				[third.receiptId, 1],
+			]);
+			// 排队超时的回执立即可领取，并带上未开始即结束的原因。
+			const timedOut = await owner.claim();
+			expect(timedOut).toMatchObject({
+				receiptId: second.receiptId,
+				executionStatus: "failed",
+				queue: { failureCode: "TASK_WAIT_TIMEOUT" },
+			});
+		} finally {
+			await Promise.all([owner.close(), other.close()]);
+		}
+	});
 });

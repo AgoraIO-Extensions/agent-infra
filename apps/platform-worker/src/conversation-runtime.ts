@@ -311,6 +311,17 @@ export function createConversationRuntimeV2(
 	const installationConfiguration = installation
 		? RuntimeOAuthConfigurationV1Schema.safeParse(installation.configuration)
 		: undefined;
+	const installationConfigurationsByAgent =
+		installation?.configurationsByAgent === undefined
+			? undefined
+			: Object.fromEntries(
+					Object.entries(
+						structuredClone(installation.configurationsByAgent),
+					).map(([agentId, value]) => [
+						agentId,
+						RuntimeOAuthConfigurationV1Schema.safeParse(value),
+					]),
+				);
 	const combined = (signal?: AbortSignal) =>
 		signal ? AbortSignal.any([lifetime, signal]) : lifetime;
 	function recordDrainStage(
@@ -797,7 +808,11 @@ export function createConversationRuntimeV2(
 		}
 		// The last await revalidates the owned lease/fence after directory and route waits.
 		const fenced = await stateFor(prepared.context, signal);
-		if (!isDeepStrictEqual(fenced, prepared.state))
+		// #3445：补充指令与原 Turn 的事件排空是两个 outbox item，排空提交事件会并发推进 Runtime
+		// 游标；补充指令不读取事件，只忽略游标的变化，其他字段仍逐一复核。
+		const comparable = (value: ConversationRuntimeStateV2) =>
+			command === "turn.supplement" ? { ...value, runtimeCursor: null } : value;
+		if (!isDeepStrictEqual(comparable(fenced), comparable(prepared.state)))
 			unavailable("RUNTIME_FENCE_STALE");
 		signal.throwIfAborted();
 		if (routeObservedAt !== undefined)
@@ -1757,7 +1772,7 @@ export function createConversationRuntimeV2(
 				}
 			}
 		},
-		async *events(request, signal) {
+		async *events(request, signal, hooks) {
 			const active = combined(signal);
 			const pause = async () => {
 				let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1779,6 +1794,9 @@ export function createConversationRuntimeV2(
 				let previous: Awaited<ReturnType<typeof prepare>> | undefined;
 				let controlReprepareAttempts = 0;
 				for (;;) {
+					active.throwIfAborted();
+					// #3443：先让消费方提交已缓冲的事件，读取起点与发送前复核的 fenced state 都是已提交游标。
+					await hooks?.beforeRead?.();
 					active.throwIfAborted();
 					const prepared = await prepareEventStep(
 						request,
@@ -1986,7 +2004,10 @@ export function createConversationRuntimeV2(
 				if (
 					!installation ||
 					typeof installationAuthorize !== "function" ||
-					!installationConfiguration?.success
+					(installationConfigurationsByAgent === undefined &&
+						!installationConfiguration?.success) ||
+					(installation.configuration !== undefined &&
+						installationConfigurationsByAgent !== undefined)
 				)
 					installationUnavailable();
 				if (
@@ -1994,7 +2015,6 @@ export function createConversationRuntimeV2(
 					Boolean(input.attemptId) !== Boolean(input.attemptOwner)
 				)
 					installationUnavailable();
-				const configuration = installationConfiguration.data;
 				if (
 					typeof input.authorizationId !== "string" ||
 					!input.authorizationId ||
@@ -2035,6 +2055,18 @@ export function createConversationRuntimeV2(
 				);
 				const pod = pods?.[0];
 				const target = prepared.target.connectionConsumer;
+				if (context.kind !== "business") installationUnavailable();
+				const selectedConfiguration =
+					installationConfigurationsByAgent === undefined
+						? installationConfiguration
+						: Object.hasOwn(
+									installationConfigurationsByAgent,
+									context.claim.agentId,
+								)
+							? installationConfigurationsByAgent[context.claim.agentId]
+							: undefined;
+				if (!selectedConfiguration?.success) installationUnavailable();
+				const configuration = selectedConfiguration.data;
 				if (
 					context.kind !== "business" ||
 					context.principal.kind !== "user" ||

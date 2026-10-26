@@ -1,10 +1,12 @@
 import {
 	NativeCapabilityInvocationRequestV1Schema,
 	NativeCapabilityInvocationRequestV2Schema,
+	NativeCapabilityInvocationRequestV3Schema,
 } from "@agent-infra/contracts/pilot";
 import type {
 	NativeCapabilityAdmissionDecisionV1,
 	NativeCapabilityAdmissionRequest,
+	NativeCapabilityAdmissionRequestV3,
 } from "@agent-infra/platform-core";
 import type { Hono } from "hono";
 import type { z } from "zod";
@@ -22,24 +24,29 @@ import {
 const path = "/api/v2/conversations/:conversationId/native-capability/invoke";
 type V1HttpRequest = z.infer<typeof NativeCapabilityInvocationRequestV1Schema>;
 type V2HttpRequest = z.infer<typeof NativeCapabilityInvocationRequestV2Schema>;
+type V3HttpRequest = z.infer<typeof NativeCapabilityInvocationRequestV3Schema>;
 type HttpRequest =
 	| (V1HttpRequest & { readonly schemaVersion: 1 })
-	| V2HttpRequest;
+	| V2HttpRequest
+	| V3HttpRequest;
+type AdmissionRequest =
+	| NativeCapabilityAdmissionRequest
+	| NativeCapabilityAdmissionRequestV3;
 
 /**
  * The old V1 wire has no version field and stays exact, so a body is V2 only
- * when it explicitly carries `schemaVersion: 2`. Everything else is parsed by
+ * when it explicitly carries `schemaVersion: 2`; V3 similarly requires 3.
+ * Everything else is parsed by
  * the strict V1 schema, which rejects an added `schemaVersion` or
  * `attachments` field instead of silently accepting caller-selected files.
  */
 function parseHttpRequest(value: unknown): HttpRequest {
-	if (
-		typeof value === "object" &&
-		value !== null &&
-		!Array.isArray(value) &&
-		(value as Record<string, unknown>).schemaVersion === 2
-	)
-		return NativeCapabilityInvocationRequestV2Schema.parse(value);
+	if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+		if ((value as Record<string, unknown>).schemaVersion === 2)
+			return NativeCapabilityInvocationRequestV2Schema.parse(value);
+		if ((value as Record<string, unknown>).schemaVersion === 3)
+			return NativeCapabilityInvocationRequestV3Schema.parse(value);
+	}
 	// The legacy wire omits the version; normalize it for admission without
 	// accepting a version or attachment field from the caller.
 	return {
@@ -54,13 +61,13 @@ export interface NativeCapabilityInvocationRouteDependenciesV1 {
 		readonly identity: IdentityContext;
 		readonly conversationId: string;
 		readonly body: HttpRequest;
-	}): Promise<NativeCapabilityAdmissionRequest>;
+	}): Promise<AdmissionRequest>;
 	readonly admit?: (
-		request: NativeCapabilityAdmissionRequest,
+		request: AdmissionRequest,
 	) => Promise<NativeCapabilityAdmissionDecisionV1>;
 	readonly admitWithIdentity?: (input: {
 		readonly identity: IdentityContext;
-		readonly request: NativeCapabilityAdmissionRequest;
+		readonly request: AdmissionRequest;
 		readonly requestContext: RuntimeNativeMetadataRequestContextV1;
 	}) => Promise<NativeCapabilityAdmissionDecisionV1>;
 }
@@ -139,6 +146,8 @@ export function registerNativeCapabilityInvocationRoutesV1(
 					body,
 				}),
 			);
+			if (request.schemaVersion !== body.schemaVersion)
+				throw new Error("Native capability invocation version changed");
 			const decision = await requestContext.run(() =>
 				dependencies.admitWithIdentity
 					? dependencies.admitWithIdentity({

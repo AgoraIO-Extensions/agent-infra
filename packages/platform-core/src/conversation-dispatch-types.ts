@@ -187,8 +187,21 @@ export interface ConversationDispatchClaimV1 {
 	readonly stopRequestId: string | null;
 	readonly sessionGeneration: number;
 	readonly deliveryFence: number;
-	/** Durable outbox attempt number, used to bound unknown recovery. */
+	/** Durable outbox attempt number, used to bound metadata recovery. */
 	readonly attemptCount?: number;
+	/**
+	 * #3373：Execution 本次进入 `unknown` 以来经过的毫秒数（Store 按数据库时钟计算），
+	 * 只在 Execution 为 `unknown` 时投影，用于墙钟恢复预算。
+	 */
+	readonly recoveryElapsedMs?: number;
+	/**
+	 * #3373：本工作项已因 Runtime 报告未提交而重提的次数，以及自首次重提起经过的毫秒数
+	 * （Store 按数据库时钟计算）。没有重提时不投影。
+	 */
+	readonly notSubmittedResubmissions?: {
+		readonly count: number;
+		readonly elapsedMs: number;
+	};
 	readonly executionDeliveryFence: number;
 	readonly authorizationRevision: string;
 	readonly modelConfigurationRevision: number | null;
@@ -283,6 +296,11 @@ export interface ConversationDispatchStorePortV1 {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly retryDelayMs: number;
 		readonly errorCode: string;
+		/**
+		 * #3373：Runtime 在未提交结果中返回的 Host Session Ref；Conversation 尚未记录时一并保存，
+		 * 已记录时必须一致。
+		 */
+		readonly hostSessionRef?: string;
 	}): Promise<boolean>;
 	cancelUnaccepted(input: {
 		readonly claim: ConversationDispatchClaimV1;
@@ -309,6 +327,14 @@ export interface ConversationDispatchStorePortV1 {
 		readonly retryDelayMs: number;
 		readonly errorCode: string;
 		readonly transition: ConversationDispatchStateTransitionV1;
+	}): Promise<boolean>;
+	/**
+	 * #3375：补充指令转入排队（工程 Spec §12.5）。在同一 Conversation 锁事务内，把本补充指令及
+	 * 同一 Execution 之后仍待投递的补充指令按原顺序转为排队消息；排队已满或期限不足的部分按投递
+	 * 失败终结。租约不再属于本次认领时返回 false。未装配时按原规则标记“原回复已结束”。
+	 */
+	queueSupplement?(input: {
+		readonly claim: ConversationDispatchClaimV1;
 	}): Promise<boolean>;
 }
 
@@ -414,10 +440,23 @@ export type ConversationRuntimeOperationResultV1 =
 			readonly retryable: false;
 	  }
 	| {
+			/** #3373：Host 核实 Driver 在原生提交点之前未提交本次 Turn，可以用新 Grant 重提。 */
+			readonly outcome: "rejected";
+			readonly code: "RUNTIME_TURN_NOT_SUBMITTED";
+			readonly message: "Runtime turn was not submitted";
+			readonly reason: ConversationRuntimeTurnNotSubmittedReasonV1;
+			readonly retryable: true;
+	  }
+	| {
 			readonly outcome: "unknown";
 			readonly code: "RUNTIME_ACCEPTANCE_UNKNOWN";
 			readonly message: "Runtime command acceptance could not be confirmed";
 	  };
+
+/** #3373：未提交的失败阶段。 */
+export type ConversationRuntimeTurnNotSubmittedReasonV1 =
+	| "file_input_unavailable"
+	| "session_preparation_failed";
 
 export interface ConversationRuntimeOperationResponseV1 {
 	readonly schemaVersion: 1 | 2;
@@ -526,6 +565,12 @@ export interface ConversationRuntimeHostPortV1 {
 	events(
 		request: ConversationRuntimeEventRequestV1,
 		signal?: AbortSignal,
+		/**
+		 * #3443：Host 在每次读取（含首次）前调用 `beforeRead`，Dispatch 借此提交已缓冲的事件，读取的
+		 * 起点与发送前复核的 fenced state 因此都是已提交的游标。回调失败时不发起这次读取，把错误交给
+		 * 消费方。
+		 */
+		hooks?: { readonly beforeRead?: () => Promise<void> },
 	): AsyncIterable<ConversationRuntimeEvent>;
 }
 

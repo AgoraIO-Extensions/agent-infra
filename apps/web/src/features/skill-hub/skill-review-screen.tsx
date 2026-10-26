@@ -23,12 +23,14 @@ import type {
 	SkillHubReviewQueueItemV1,
 	SkillHubReviewRequestV1,
 } from "../../pilot/generated-v2/types.gen.js";
+import { readFailed } from "../background-read.js";
 import {
 	type DirectoryNames,
 	DirectoryReadAlert,
 	useDirectoryNames,
 } from "../directory-names.js";
 import { PageStateCard } from "../page-state-card.js";
+import { isRetryableSkillHubError } from "./skill-hub.js";
 import {
 	type SkillHubVersionState,
 	skillHubProviderLabels,
@@ -495,7 +497,8 @@ function SkillReviewContent({
 	const container = useRef<HTMLDivElement>(null);
 	const state = query.data;
 	let content: ReactNode;
-	if (query.isError)
+	// 弹窗打开时回到标签页的后台重读失败不替换已显示的正文（#3387）。
+	if (readFailed(query, isRetryableSkillHubError))
 		content = (
 			<Alert tone="danger" role="alert">
 				<AlertDescription>

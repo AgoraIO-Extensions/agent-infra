@@ -11,6 +11,8 @@ import type {
 	ConversationStateResultV1,
 	ConversationStopDecisionV1,
 	ConversationStopResultV1,
+	ConversationWithdrawDecisionV1,
+	ConversationWithdrawResultV1,
 	CreateConversationDecisionV1,
 } from "./conversation-execution-types.js";
 import {
@@ -50,17 +52,23 @@ function parseCreateConversationResult(
 export function parseMessageCommandResult(
 	input: unknown,
 ): ConversationCommandResultV1 {
+	const queued =
+		input !== null &&
+		typeof input === "object" &&
+		Object.hasOwn(input, "queuePosition");
 	const values = transactionObject(input, [
 		"schemaVersion",
 		"status",
 		"messageId",
 		"executionId",
+		...(queued ? ["queuePosition"] : []),
 	]);
 	if (
 		values.schemaVersion !== 1 ||
 		values.status !== "submitted" ||
 		!isText(values.messageId) ||
-		!isText(values.executionId)
+		!isText(values.executionId) ||
+		(queued && !isPositiveSafeInteger(values.queuePosition))
 	) {
 		return unavailable();
 	}
@@ -69,7 +77,48 @@ export function parseMessageCommandResult(
 		status: "submitted",
 		messageId: values.messageId,
 		executionId: values.executionId,
+		...(queued ? { queuePosition: values.queuePosition as number } : {}),
 	};
+}
+
+export function parseWithdrawCommandResult(
+	input: unknown,
+	expectedExecutionId: string,
+): ConversationWithdrawResultV1 {
+	const values = transactionObject(input, [
+		"schemaVersion",
+		"status",
+		"executionId",
+	]);
+	if (
+		values.schemaVersion !== 1 ||
+		(values.status !== "withdrawn" &&
+			values.status !== "already_started" &&
+			values.status !== "already_finished") ||
+		values.executionId !== expectedExecutionId
+	)
+		return unavailable();
+	return {
+		schemaVersion: 1,
+		status: values.status,
+		executionId: expectedExecutionId,
+	};
+}
+
+export function normalizeWithdrawDecision(
+	input: unknown,
+	expectedExecutionId: string,
+): ConversationWithdrawDecisionV1 {
+	const resultDecision = parseAcceptedOrReplayedDecision(input, (result) =>
+		parseWithdrawCommandResult(result, expectedExecutionId),
+	);
+	if (resultDecision) return resultDecision;
+	const bare = trySnapshotObject(input, ["outcome"]);
+	if (bare) {
+		if (bare.outcome === "denied") return { outcome: "denied" };
+		return unavailable();
+	}
+	return parseConflictDecision(input) ?? unavailable();
 }
 
 export function parseRegenerationCommandResult(
@@ -253,6 +302,17 @@ export function normalizeCommandDecision(
 ): ConversationCommandDecisionV1 {
 	const resultDecision = parseAcceptedOrReplayedDecision(input, parseResult);
 	if (resultDecision) return resultDecision;
+	const queuedBusy = trySnapshotObject(input, ["outcome", "queuedCount"]);
+	if (queuedBusy) {
+		if (
+			queuedBusy.outcome !== "busy" ||
+			typeof queuedBusy.queuedCount !== "number" ||
+			!Number.isSafeInteger(queuedBusy.queuedCount) ||
+			queuedBusy.queuedCount < 0
+		)
+			return unavailable();
+		return { outcome: "busy", queuedCount: queuedBusy.queuedCount };
+	}
 	const bare = trySnapshotObject(input, ["outcome"]);
 	if (bare) {
 		if (bare.outcome === "busy") return { outcome: "busy" };

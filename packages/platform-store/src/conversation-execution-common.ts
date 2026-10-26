@@ -209,3 +209,10 @@ export function timestamp(value: unknown): string {
 	if (!Number.isFinite(milliseconds)) unavailable();
 	return new Date(milliseconds).toISOString();
 }
+
+export type WithdrawRequest = Parameters<
+	NonNullable<ConversationExecutionTransactionPortV1["executeWithdrawal"]>
+>[0];
+export type WithdrawDecide = Parameters<
+	NonNullable<ConversationExecutionTransactionPortV1["executeWithdrawal"]>
+>[1];

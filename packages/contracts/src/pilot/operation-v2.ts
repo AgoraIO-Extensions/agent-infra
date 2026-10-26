@@ -13,9 +13,15 @@ import {
 import { SandboxWorkspaceReferenceV1Schema } from "../workspace-reference.ts";
 import {
 	ConversationDetailProjectionV1Schema,
+	ConversationPageV1Schema,
 	ExecutionDetailProjectionV1Schema,
+	MessageProjectionV1Schema,
 	pilotBrowserOpenApiPathsV1,
 } from "./browser.ts";
+import {
+	ExecutionFailureCategoryV1Schema,
+	ExecutionFailureProjectionV1Schema,
+} from "./execution-progress.ts";
 import {
 	AuthorizationRevokedSignalV1Schema,
 	HeartbeatSignalV1Schema,
@@ -256,9 +262,48 @@ export function framePilotSseMessageV2(input: unknown) {
 	return data.kind === "event" ? { id: data.eventId, data } : { data };
 }
 
+/**
+ * #3376：执行中再发、进入排队的用户消息状态。位次从持久等待顺序派生；开始处理后不再出现，
+ * 未开始即结束的给出结果（撤回、排队超时或取消原因）。按 messageId 关联 messages。
+ */
+const queuedMessageShape = {
+	messageId: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+};
+export const QueuedMessageStateV2Schema = z.discriminatedUnion("status", [
+	z.strictObject({
+		...queuedMessageShape,
+		status: z.literal("waiting"),
+		position: z.number().int().positive().safe(),
+	}),
+	z.strictObject({ ...queuedMessageShape, status: z.literal("withdrawn") }),
+	z.strictObject({ ...queuedMessageShape, status: z.literal("timed_out") }),
+	z.strictObject({
+		...queuedMessageShape,
+		status: z.literal("cancelled"),
+		reason: z.enum([
+			"AGENT_UNAVAILABLE",
+			"CONVERSATION_UNAVAILABLE",
+			"AUTHORIZATION_REVOKED",
+		]),
+	}),
+]);
+
+/**
+ * #3377：V2 会话读取中失败的回答带用户可见失败分类（工程 Spec §16.1.1）。分类与说明由 Core
+ * 按已持久的受限原因给出，与企微读取同一结果；旧服务端不返回该字段，用户消息也不带它。
+ */
+export const MessageProjectionV2Schema = z.discriminatedUnion("status", [
+	MessageProjectionV1Schema.options[0],
+	MessageProjectionV1Schema.options[1].extend({
+		failure: ExecutionFailureProjectionV1Schema.optional(),
+	}),
+]);
+
 export const ConversationDetailProjectionV2Schema =
 	ConversationDetailProjectionV1Schema.extend({
 		schemaVersion: z.literal(2),
+		messages: z.array(MessageProjectionV2Schema),
 		events: conversationEvents,
 		/** Present on current servers; omitted by older detail responses. */
 		eventWindow: ConversationEventWindowV1Schema.optional(),
@@ -268,6 +313,8 @@ export const ConversationDetailProjectionV2Schema =
 		sessionAvailability: z
 			.enum(["preparing", "ready", "unavailable", "updating"])
 			.optional(),
+		/** 排队消息的状态（#3376）；旧服务端不返回，Web 按没有排队处理。 */
+		queue: z.array(QueuedMessageStateV2Schema).optional(),
 	});
 
 const executionAdditions = {
@@ -284,6 +331,21 @@ export const ExecutionDetailProjectionV2Schema = z.discriminatedUnion(
 
 const conversationList =
 	pilotBrowserOpenApiPathsV1["/api/v1/agents/{agentId}/conversations"].get;
+/** Maximum Agents listed when their Web channel eligibility cannot be confirmed. */
+const recentUnavailableAgentIdsMaximum = 100;
+/**
+ * Recent personal Web page (#3379). Agents whose current Web channel eligibility
+ * cannot be confirmed are omitted from `items` and listed once here instead of
+ * failing the page; absent when no Agent is omitted (and from older servers).
+ */
+export const RecentPersonalConversationPageV2Schema =
+	ConversationPageV1Schema.extend({
+		unavailableAgentIds: z
+			.array(OpaqueIdV1Schema)
+			.min(1)
+			.max(recentUnavailableAgentIdsMaximum)
+			.optional(),
+	});
 const personalConversationSecurity: Record<string, never[]>[] = [
 	{ PlatformSession: [] },
 ];
@@ -310,6 +372,17 @@ export const pilotOperationOpenApiPathsV2 = {
 				query: conversationList.requestParams.query.extend({
 					limit: conversationList.requestParams.query.shape.limit.default(50),
 				}),
+			},
+			responses: {
+				...conversationList.responses,
+				"200": {
+					...conversationList.responses["200"],
+					content: {
+						"application/json": {
+							schema: RecentPersonalConversationPageV2Schema,
+						},
+					},
+				},
 			},
 		},
 	},
@@ -390,8 +463,11 @@ export const pilotOperationSseSchemasV2 = {
 
 export const pilotOperationSchemasV2 = {
 	...pilotOperationSseSchemasV2,
+	ExecutionFailureCategoryV1: ExecutionFailureCategoryV1Schema,
+	ExecutionFailureProjectionV1: ExecutionFailureProjectionV1Schema,
 	ConversationEventWindowV1: ConversationEventWindowV1Schema,
 	ConversationDetailProjectionV2: ConversationDetailProjectionV2Schema,
+	QueuedMessageStateV2: QueuedMessageStateV2Schema,
 	ExecutionDetailProjectionV2: ExecutionDetailProjectionV2Schema,
 };
 
@@ -416,3 +492,4 @@ export type ConversationSseMessageV2 = z.infer<
 export type ConversationEventWindowV1 = z.infer<
 	typeof ConversationEventWindowV1Schema
 >;
+export type MessageProjectionV2 = z.infer<typeof MessageProjectionV2Schema>;

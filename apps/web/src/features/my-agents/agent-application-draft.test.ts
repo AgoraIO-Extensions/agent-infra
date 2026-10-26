@@ -229,6 +229,62 @@ describe("Agent application draft", () => {
 		expect(errors["model.0.modelId"]).toBe("请选择模型。");
 	});
 
+	// #3389 N13-10：部署选项读取失败时模型选择器都禁用，不对它们列「请选择…」「至少…」；只在标准模板
+	// 选择同时被拦下时如此，提交仍不会发出。目录可用（只是没有标准模板）时照常列出。
+	it("does not ask for unreachable model choices while the deployment is unreadable", () => {
+		const draft = {
+			...standardCreateDraft,
+			templateId: "",
+			defaultRelayKey: "",
+			models: [
+				{ optionId: "", endpointId: "", modelId: "", reasoningLevels: "" },
+			],
+			defaultModelOptionId: "",
+			defaultReasoningLevel: "",
+		};
+		const unreadable = {
+			configurationMessage:
+				"部署选项暂不可用，请重新加载；标准模板申请暂不能提交。",
+			modelChoicesUnavailable: true,
+			modelConfigurationVisible: true,
+			requiresDefaultRelayKey: true,
+			staleModel: false,
+			staleTemplate: false,
+			standardChoicesBlocked: true,
+		};
+		expect(validateAgentApplicationDraft(draft, unreadable)).toEqual({
+			templateId: "部署选项暂不可用，请重新加载；标准模板申请暂不能提交。",
+		});
+		expect(
+			validateAgentApplicationDraft({ ...draft, models: [] }, unreadable),
+		).toEqual({
+			templateId: "部署选项暂不可用，请重新加载；标准模板申请暂不能提交。",
+		});
+		// 目录读不到却没有拦下标准模板时（不应出现）仍校验模型，不放过一个不完整的申请。
+		const notBlocked = validateAgentApplicationDraft(
+			{ ...draft, templateId: "codex" },
+			{ ...unreadable, standardChoicesBlocked: false },
+		);
+		expect(notBlocked["model.0.endpointId"]).toBe("请选择模型端点。");
+		expect(notBlocked.defaultModelOptionId).toBe("请选择默认模型。");
+		// 目录可用（部署没有标准模板）时照常列出模型字段错误。
+		const catalogReadable = validateAgentApplicationDraft(draft, {
+			...unreadable,
+			configurationMessage:
+				"当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。",
+			modelChoicesUnavailable: false,
+		});
+		expect(catalogReadable).toMatchObject({
+			templateId:
+				"当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。",
+			"model.0.endpointId": "请选择模型端点。",
+			"model.0.modelId": "请选择模型。",
+			"model.0.reasoningLevels": "至少选择一个推理档位。",
+			defaultModelOptionId: "请选择默认模型。",
+			defaultReasoningLevel: "请选择默认推理档位。",
+		});
+	});
+
 	it("requires one default Relay Key instead of per-model credentials", () => {
 		const draft = { ...standardCreateDraft, defaultRelayKey: "" };
 		const context = {

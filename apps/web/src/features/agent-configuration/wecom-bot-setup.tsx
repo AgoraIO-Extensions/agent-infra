@@ -18,13 +18,17 @@ import type {
 	BeginWecomSetupResponse,
 	GetWecomBotConnectionV2Response,
 } from "../../pilot/generated/types.gen.js";
+import { retryablePollFailure } from "../background-read.js";
 import {
+	isWecomChannelStatus,
+	isWecomSetupStatus,
 	useWecomUnbind,
 	WecomChannelCard,
 	WecomChannelError,
 	type WecomChannelStatus,
 	WecomUnbindAction,
 	WecomUnbindFailure,
+	wecomSetupSessionLost,
 } from "./wecom-channel-card.js";
 import {
 	openWecomQrAuthorizationV1,
@@ -135,38 +139,44 @@ export function WecomBotSetup({
 		if (qrResult.current) qrResult.current.secret = "";
 		qrResult.current = undefined;
 	}, []);
+	// 连接状态在验证中或已断开时每 2 秒轮询（background）。轮询属于后台重读（#3418、#3433 N15-03）：可重试的失败
+	// （503、网络中断）保留上一次的状态并按原节奏继续；不可重试的失败（401 / 403 / 404、响应无效）停止并显示
+	// 「连接状态暂不可用」。打开页面、「刷新状态」与配置结束后的读取失败照常显示「连接状态暂不可用」。
 	const refresh = useCallback(
-		async function refreshConnection() {
+		async function refreshConnection(background = false) {
 			clearTimeout(connectionTimer.current);
 			const attempt = generation.current;
 			const sequence = ++refreshSequence.current;
+			const current = () =>
+				attempt === generation.current && sequence === refreshSequence.current;
+			const pollAgain = () => {
+				connectionTimer.current = setTimeout(() => {
+					void refreshConnection(true);
+				}, 2000);
+			};
+			let failure: { status?: number; error?: unknown } = {};
 			try {
 				const result = await getWecomBotConnectionV2({
 					path: { agentId },
 					responseStyle: "fields",
 					throwOnError: false,
 				});
-				if (
-					attempt === generation.current &&
-					sequence === refreshSequence.current
-				) {
-					const next = result.data?.status;
+				if (!current()) return;
+				const next = result.data?.status;
+				if (isWecomChannelStatus(next)) {
 					setStatus(next);
 					// 读取失败时保留已知的扫码能力；建立 setup session 的响应仍会再判定一次。
 					const capability = qrCapabilityOf(result.data);
 					if (capability) setQrCapability(capability);
-					if (next === "verifying" || next === "disconnected")
-						connectionTimer.current = setTimeout(() => {
-							void refreshConnection();
-						}, 2000);
+					if (next === "verifying" || next === "disconnected") pollAgain();
+					return;
 				}
+				failure = { status: result.response?.status, error: result.error };
 			} catch {
-				if (
-					attempt === generation.current &&
-					sequence === refreshSequence.current
-				)
-					setStatus(undefined);
+				if (!current()) return;
 			}
+			if (background && retryablePollFailure(failure)) pollAgain();
+			else setStatus(undefined);
 		},
 		[agentId],
 	);
@@ -231,7 +241,23 @@ export function WecomBotSetup({
 				throwOnError: false,
 			});
 			if (attempt !== generation.current) return;
-			if (!current.data) throw new Error();
+			if (!current.data || !isWecomSetupStatus(current.data.status)) {
+				// 会话轮询属于后台重读（#3418、#3433 N15-02）：可重试的失败（503、网络中断）之后按原节奏继续，
+				// 卡片仍是「验证中」；不可重试的失败（登录失效、会话不存在、响应无效）结束验证并说明，焦点交给卡片标题。
+				if (
+					retryablePollFailure({
+						status: current.response?.status,
+						error: current.error,
+					})
+				)
+					throw new Error();
+				setBusy(false);
+				session.current = undefined;
+				handOffToTitle.current = true;
+				setError(wecomSetupSessionLost);
+				await refresh();
+				return;
+			}
 			if (["verifying", "awaiting_input"].includes(current.data.status)) {
 				setError(
 					current.data.status === "awaiting_input"
@@ -250,7 +276,6 @@ export function WecomBotSetup({
 			}
 		} catch {
 			if (attempt !== generation.current) return;
-			setStatus(undefined);
 			setError("配置结果暂未确认，正在重新查询。请勿重复提交。");
 		}
 		timer.current = setTimeout(() => {

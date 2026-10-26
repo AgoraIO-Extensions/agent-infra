@@ -16,6 +16,10 @@ import {
 } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import {
+	backgroundReread,
+	expectBackgroundRereadKeeps,
+} from "./background-reread";
+import {
 	expectFocusableBusy,
 	expectFocusSettled,
 	expectNoDuplicateControls,
@@ -1042,3 +1046,252 @@ test("clearing directory filters returns focus to the search box (N8-3-02)", asy
 	await expectNoDuplicateControls(page, "Agent 目录（N8-3-02）");
 	await expectCleanPage(page, pageErrors);
 });
+
+// #3388 N13-03：/agents?mode=conversation 读取 401，侧栏「Agent 目录」到 /agents（同一张失败卡），按「重新登录」
+// （会话确认挂起，按钮可聚焦地禁用）后浏览器后退到 ?mode=conversation：只改了查询串、按钮仍在，代管继续。
+// 确认完成、目录读到后焦点到 h1，仍 401 时留在「重新登录」上，都不落到 body。两视口一致。
+for (const outcome of ["recovers", "fails again"] as const)
+	test(`going back to ?mode=conversation while re-login is confirming keeps the same-page handoff (${outcome}, #3388 N13-03)`, async ({
+		page,
+	}, info) => {
+		const mobile = info.project.name === "mobile";
+		if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
+		const errors = trackPageErrors(page);
+		const api = await fixture(page);
+		api.current.failure = 401;
+		await page.goto("/agents?mode=conversation");
+		const main = page.locator("#main-content");
+		const card = main.locator('[data-slot="state-card"]');
+		await expect(card).toHaveAttribute("data-kind", "login");
+		if (mobile)
+			await page.getByRole("button", { name: "打开导航", exact: true }).click();
+		await page
+			.getByRole("navigation")
+			.getByRole("link", { name: "Agent 目录" })
+			.first()
+			.click();
+		await expect(page).toHaveURL(/\/agents$/);
+		await expect(card).toHaveAttribute("data-kind", "login");
+		const relogin = card.getByRole("button", { name: "重新登录", exact: true });
+		if (outcome === "recovers") api.current.failure = undefined;
+		const hold = await holdRequests(page, "GET", "/api/v1/session");
+		await relogin.focus();
+		await page.keyboard.press("Enter");
+		await expect.poll(() => hold.held()).toBeGreaterThanOrEqual(1);
+		await expectFocusableBusy(relogin, "重新登录确认会话中", [30, 150]);
+		await page.goBack();
+		await expect(page).toHaveURL(/\/agents\?mode=conversation$/);
+		await expectFocusableBusy(relogin, "后退只改查询串后", [30, 150]);
+		hold.release();
+		if (outcome === "recovers") {
+			await expect(page.locator(".agent-list > li").first()).toBeVisible();
+			await expect(card).toHaveCount(0);
+			await expectFocusSettled(
+				main.getByRole("heading", { level: 1, name: "选择 Agent 开始对话" }),
+				"后退后重新登录恢复",
+				[50, 300, 1000, 2000],
+			);
+		} else {
+			await expect(relogin).toHaveAttribute("aria-disabled", "false");
+			await expectFocusSettled(
+				relogin,
+				"后退后重新登录仍失败",
+				[50, 300, 1000, 2000],
+			);
+		}
+		await expectNoDuplicateControls(page, `Agent 目录（后退，${outcome}）`);
+		await expectCleanPage(page, errors);
+		expect(api.commands).toEqual([]);
+	});
+
+// #3388 N13-05：目录读取 503 后焦点在未按下的「重新加载 Agent」上（Tab 到它），回到标签页的后台重读：成功、
+// 失败卡卸载后焦点交给 h1，不滚动页面；仍失败时失败卡与按钮重新出现，焦点回到按钮上；都不落到 body。
+// 对照：按下按钮的恢复同样到 h1（既有行为）。两视口一致。
+for (const outcome of ["recovers", "fails again"] as const)
+	test(`a background reread of a failed directory with focus on the unpressed reload ${outcome === "recovers" ? "hands focus to the h1" : "keeps it on the reload"} (#3388 N13-05)`, async ({
+		page,
+	}, info) => {
+		const mobile = info.project.name === "mobile";
+		if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
+		const errors = trackPageErrors(page);
+		const api = await fixture(page);
+		api.current.failure = 503;
+		await page.goto("/agents");
+		const main = page.locator("#main-content");
+		const card = main.locator('[data-slot="state-card"]');
+		await expect(card).toHaveAttribute("data-kind", "unavailable");
+		const reload = card.getByRole("button", {
+			name: "重新加载 Agent",
+			exact: true,
+		});
+		const heading = main.getByRole("heading", {
+			level: 1,
+			name: "选择要使用的 Agent。",
+		});
+		// 用户 Tab 到按钮但不按下（这里直接聚焦，等同键盘到达）。
+		await reload.focus();
+		await expect(reload).toBeFocused();
+		if (outcome === "recovers") api.current.failure = undefined;
+		const scrolled = await page.evaluate(() => window.scrollY);
+		const reading = await holdRequests(page, "GET", "/api/v2/agents");
+		await backgroundReread(page);
+		await expect.poll(() => reading.held()).toBeGreaterThanOrEqual(1);
+		// 没有数据的查询重读回到读取中：失败卡与按钮卸载，焦点先到 h1（D2-59），不落到 body。
+		await expectFocusSettled(heading, "后台重读挂起", [30, 150, 400]);
+		reading.release();
+		if (outcome === "recovers") {
+			await expect(page.locator(".agent-list > li")).toHaveCount(5);
+			await expectFocusSettled(
+				heading,
+				"后台重读成功后",
+				[50, 300, 1000, 2000],
+			);
+		} else {
+			await expect(card).toHaveAttribute("data-kind", "unavailable");
+			await expectFocusSettled(
+				reload,
+				"后台重读仍失败后",
+				[50, 300, 1000, 2000],
+			);
+		}
+		expect(await page.evaluate(() => window.scrollY)).toBe(scrolled);
+		await expectNoDuplicateControls(page, `Agent 目录（后台重读，${outcome}）`);
+		await expectCleanPage(page, errors);
+		expect(api.commands).toEqual([]);
+	});
+
+// #3388 N13-04：目录读取 401，「重新登录」恢复后焦点交给 h1；用户之后只滚动、不按键不点击。回到标签页的后台
+// 重读又读到 401（不可重试，仍整页换成「登录已过期」卡，#3387）、同一个「重新登录」再次出现时不取回焦点、
+// 不滚动页面：「仍失败回到按钮」只指本次恢复请求本身失败（对照：本次请求仍 401 时回到按钮，见上方用例）。
+// 后台重读挂起时焦点同样留在 h1。两视口一致。
+test("a re-login handoff is not taken back when a later background reread is 401 again (#3388 N13-04)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
+	const errors = trackPageErrors(page);
+	const api = await fixture(page);
+	api.current.failure = 401;
+	await page.goto("/agents");
+	const main = page.locator("#main-content");
+	const card = main.locator('[data-slot="state-card"]');
+	const heading = main.getByRole("heading", {
+		level: 1,
+		name: "选择要使用的 Agent。",
+	});
+	const relogin = card.getByRole("button", { name: "重新登录", exact: true });
+	await expect(card).toHaveAttribute("data-kind", "login");
+	api.current.failure = undefined;
+	await relogin.focus();
+	await page.keyboard.press("Enter");
+	await expect(page.locator(".agent-list > li")).toHaveCount(5);
+	await expectFocusSettled(heading, "重新登录恢复后", [50, 300, 1000]);
+	await page.evaluate(() =>
+		window.scrollTo(0, document.documentElement.scrollHeight),
+	);
+	const scrolled = await page.evaluate(() => window.scrollY);
+
+	api.current.failure = 401;
+	const reading = await holdRequests(page, "GET", "/api/v2/agents");
+	await backgroundReread(page);
+	await expect.poll(() => reading.held()).toBeGreaterThanOrEqual(1);
+	await expectFocusSettled(heading, "后台重读挂起", [50, 300]);
+	reading.release();
+	await expect(card).toHaveAttribute("data-kind", "login");
+	await expect(relogin).toBeVisible();
+	await expectFocusSettled(
+		heading,
+		"后台重读又读到 401 后",
+		[50, 300, 1000, 2000],
+	);
+	expect(await page.evaluate(() => window.scrollY)).toBeLessThanOrEqual(
+		scrolled,
+	);
+	await expectNoDuplicateControls(page, "Agent 目录（交接后后台 401）");
+	await expectCleanPage(page, errors);
+	expect(api.commands).toEqual([]);
+});
+
+// #3418 N14-03（F14-2）：部署配置读到过之后，后台重读（回到标签页）挂起或遇到可重试失败（503、网络中断）时，
+// 已显示的模板显示名「Codex」不回落为「标准模板」：Agent 目录卡片标签与「模板」筛选项（含已选值）、对话入口
+// 目录、Agent 详情眉标与「模板 / 入口」都保留；失败不可重试（403）时按读不到显示「标准模板」，不显示原始 ID。
+for (const target of [
+	{ name: "Agent 目录", path: "/agents" },
+	{ name: "对话入口目录", path: "/agents?mode=conversation" },
+	{ name: "Agent 详情", path: "/agents/search-template" },
+] as const)
+	for (const failure of ["503", "network"] as const)
+		test(`a background reread of the deployment configuration keeps template names: ${target.name} ${failure} (#3418 N14-03)`, async ({
+			page,
+		}) => {
+			const pageErrors = trackPageErrors(page);
+			const api = await fixture(page);
+			await page.goto(target.path);
+			const detail = target.name === "Agent 详情";
+			const eyebrow = page.locator("main .page-eyebrow");
+			const templateEntry = page
+				.locator("main dt", { hasText: "模板 / 入口" })
+				.locator("+ dd");
+			const filter = page.getByRole("combobox", { name: "模板", exact: true });
+			const card = page
+				.locator(".agent-list > li")
+				.filter({ hasText: "发布助理" });
+			const tag = card
+				.locator('[data-slot="badge"][data-variant="tag"]')
+				.first();
+			const expectNames = async (codex: boolean) => {
+				const label = codex ? "Codex" : "标准模板";
+				if (detail) {
+					await expect(eyebrow).toHaveText(`Agent 详情 · ${label}`);
+					await expect(templateEntry).toHaveText(
+						codex
+							? "标准模板 · Codex · 平台交互入口"
+							: "标准模板 · 平台交互入口",
+					);
+				} else {
+					await expect(tag).toHaveText(codex ? "标准模板 · Codex" : "标准模板");
+					await expect(filter.locator("option:checked")).toHaveText(label);
+					await expect(filter).toHaveValue("codex");
+				}
+				await expect(page.locator("main")).not.toContainText("codex");
+			};
+			if (!detail) await filter.selectOption("codex");
+			await expectNames(true);
+			const focus = await pinElement(
+				detail ? page.getByRole("link", { name: "返回 Agent 目录" }) : filter,
+				"template-name-focus",
+			);
+			await focus.focus();
+			await expectBackgroundRereadKeeps(page, {
+				path: "/api/v2/deployment/configuration",
+				focus,
+				failure,
+				context: `${target.name}（部署配置 ${failure}）`,
+				expectKept: () => expectNames(true),
+			});
+			// 失败不可重试：没有可继续显示的登记内容，按读不到显示「标准模板」（D2-59），焦点不动。
+			await page.route("**/api/v2/deployment/configuration", (route) =>
+				route.fulfill({
+					status: 403,
+					json: {
+						schemaVersion: 1,
+						code: "RESOURCE_UNAVAILABLE",
+						message: "Controlled deployment failure",
+						retryable: false,
+						traceId: "trace-template-names",
+					},
+				}),
+			);
+			const denied = page.waitForResponse(
+				(response) =>
+					new URL(response.url()).pathname ===
+						"/api/v2/deployment/configuration" && response.status() === 403,
+			);
+			await backgroundReread(page);
+			await denied;
+			await expectNames(false);
+			await expect(focus).toBeFocused();
+			expect(api.commands).toEqual([]);
+			await expectCleanPage(page, pageErrors);
+			await expectNoDuplicateControls(page, `${target.name}（#3418 N14-03）`);
+		});

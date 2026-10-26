@@ -45,7 +45,7 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { Timestamp } from "@/components/ui/timestamp";
-import { pageRecoveryTarget } from "@/hooks/use-recovery-focus";
+import { focusLostFrom, pageRecoveryTarget } from "@/hooks/use-recovery-focus";
 import { withObjectName } from "@/lib/accessible-name";
 import { formatTimestamp } from "@/lib/format-time";
 import { useApplicationSession } from "../application-shell.js";
@@ -108,28 +108,39 @@ type FilterName = keyof AuditFilters;
 /**
  * 详情区域内的重读按钮（「刷新审计详情」「重试详情」）。重读失败或恢复后按钮随内容卸载、
  * 焦点已落到 body 时，把焦点交给详情区域：Escape 由区域的 onKeyDown 处理，仍能关闭详情（D2-59）。
- * 详情区域同时卸载（关闭详情、权限撤销）时 ref 已清空，不移动焦点。
+ * 未按下但持有焦点的按钮被后台重读（读到无权、登录失效等）卸载时同样交给详情区域，不滚动页面；详情区域
+ * 也已卸载时交给页面 h1（#3419 N14-10）。按下后详情区域同时卸载（关闭详情、权限撤销）时不移动焦点。
  */
 function AuditDetailReadButton({
 	panel,
 	onRead,
 	...props
-}: Omit<ComponentProps<typeof Button>, "onClick"> & {
+}: Omit<ComponentProps<typeof Button>, "onClick" | "ref"> & {
 	panel: RefObject<HTMLElement | null>;
 	onRead: () => void;
 }) {
 	const armed = useRef(false);
-	useEffect(
-		() => () => {
-			if (!armed.current) return;
+	const button = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		const element = button.current;
+		return () => {
 			const active = document.activeElement;
-			if (!active || active === document.body) panel.current?.focus();
-		},
-		[panel],
-	);
+			if (armed.current) {
+				if (!active || active === document.body) panel.current?.focus();
+				return;
+			}
+			// 卸载前焦点就在这个按钮上、之后没有移到别处（不是用户移走的）。
+			if (!focusLostFrom(element)) return;
+			(panel.current?.isConnected
+				? panel.current
+				: pageRecoveryTarget()
+			)?.focus({ preventScroll: true });
+		};
+	}, [panel]);
 	return (
 		<Button
 			{...props}
+			ref={button}
 			onClick={() => {
 				armed.current = true;
 				onRead();
@@ -169,16 +180,22 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 
 	const formId = useId();
 	const query = useAuditQuery({ identityKey, scope, filters, auditId });
-	const busy = query.status === "loading" || query.isFetching;
+	// 读取行只用于首次读取与用户发起的「查询」「重置」「刷新审计记录」「重试」、翻页（D2-59）；回到标签页等
+	// 后台重读期间保留已读记录，页面高度与滚动位置不变，只有页头「刷新审计记录」显示读取中（#3387 N13-02）。
+	const busy = query.status === "loading" || query.userReading;
+	const refreshing = busy || query.isFetching;
 	const denied = query.status === "denied";
 	const detailReading =
-		query.detailStatus === "loading" || query.isDetailFetching || busy;
+		query.detailStatus === "loading" || query.isDetailUserReading || busy;
 	const items = busy || formFailure ? [] : query.items;
 	// 「上一页」「下一页」读取中是可聚焦的禁用（#3242 K7-02）；读完后触发的按钮因到了首页或末页而
 	// 禁用时，焦点交给另一个分页按钮，两个都不可用时到页面 h1（D2-59），不落到 body。
 	const previousPageButton = useRef<HTMLButtonElement>(null);
 	const nextPageButton = useRef<HTMLButtonElement>(null);
 	const pageTrigger = useRef<"previous" | "next" | null>(null);
+	const previousDisabled =
+		busy || formFailure !== null || !query.canPreviousPage;
+	const nextDisabled = busy || formFailure !== null || !query.hasNextPage;
 	useEffect(() => {
 		const trigger = pageTrigger.current;
 		if (busy || !trigger) return;
@@ -193,6 +210,21 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 		if (other && !other.disabled) other.focus();
 		else pageRecoveryTarget()?.focus();
 	}, [busy]);
+	// 不是分页按钮触发的变化（回到标签页的后台重读读到了末页、查询失败等）让持有焦点的分页按钮变为原生
+	// 禁用时同样交接：交给另一个分页按钮，两个都不可用时到页面 h1，不落到 body、不滚动页面（#3388 N13-06）。
+	useEffect(() => {
+		if (busy || pageTrigger.current || !(previousDisabled || nextDisabled))
+			return;
+		const previous = previousPageButton.current;
+		const next = nextPageButton.current;
+		const lost = [previous, next].find(
+			(button) => button?.disabled && focusLostFrom(button),
+		);
+		if (!lost) return;
+		const other = lost === previous ? next : previous;
+		if (other && !other.disabled) other.focus({ preventScroll: true });
+		else pageRecoveryTarget()?.focus({ preventScroll: true });
+	}, [busy, previousDisabled, nextDisabled]);
 	const administrator = scope === "administrator";
 	// 列表与详情中的用户主体合并读取一次目录；后台组件与应用主体不是目录记录。
 	const userNames = useDirectoryNames(
@@ -294,7 +326,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					size="icon"
 					aria-label="刷新审计记录"
 					title="刷新审计记录"
-					disabled={busy || denied}
+					disabled={refreshing || denied}
 					focusableWhenDisabled
 					onClick={() => {
 						setFormFailure(null);
@@ -584,7 +616,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 						<Button
 							ref={previousPageButton}
 							variant="outline"
-							disabled={busy || formFailure !== null || !query.canPreviousPage}
+							disabled={previousDisabled}
 							focusableWhenDisabled={busy}
 							onClick={() => {
 								pageTrigger.current = "previous";
@@ -598,7 +630,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 						<Button
 							ref={nextPageButton}
 							variant="outline"
-							disabled={busy || formFailure !== null || !query.hasNextPage}
+							disabled={nextDisabled}
 							focusableWhenDisabled={busy}
 							onClick={() => {
 								pageTrigger.current = "next";
@@ -632,7 +664,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 							<h2>
 								{query.detail &&
 								query.detailStatus !== "loading" &&
-								!query.isDetailFetching
+								!query.isDetailUserReading
 									? auditDetailHeading(query.detail)
 									: "审计详情"}
 							</h2>
@@ -679,7 +711,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 									size="icon"
 									aria-label="刷新审计详情"
 									title="刷新审计详情"
-									disabled={detailReading}
+									disabled={detailReading || query.isDetailFetching}
 									focusableWhenDisabled
 									panel={detailPanel}
 									onRead={() => void query.retryDetail()}

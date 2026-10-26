@@ -16,11 +16,18 @@ import {
 	type ConversationStateDecisionV1,
 	type ConversationStopDecisionV1,
 	type ConversationTaskAdmissionTransactionPortV1,
+	type ConversationTaskExecutionStatusV1,
+	type ConversationWithdrawDecisionV1,
 	type CreateConversationDecisionV1,
+	conversationAttachmentMergeWindowMsV1,
 	type FileRecordV1,
+	isNativeCapabilityModelSelectionCurrentV6,
 	type NativeCapabilityAdmissionDecisionV1,
 	type NativeCapabilityAdmissionTransactionPortV1,
+	type NativeCapabilityAdmissionTransactionPortV6,
+	type NativeCapabilityAdmissionV6Decision,
 	type NativeCapabilityInvocationPlanV1,
+	type NativeCapabilityInvocationPlanV6,
 	type NativeTextInputV1,
 	nativeCapabilityParametersDigestV1,
 	PersonalApiCredentialErrorV1,
@@ -31,6 +38,8 @@ import {
 	type TaskApiAuditPlanV1,
 	type TaskApiChannelV1,
 	type TaskUserDirectoryV1,
+	validateNativeCapabilityInvocationPlanV6,
+	validateNativeCapabilityReplayPlanV6,
 } from "@agent-infra/platform-core";
 import {
 	lockConversation as lockDispatchConversation,
@@ -64,6 +73,8 @@ import {
 	type Transaction,
 	text,
 	unavailable,
+	type WithdrawDecide,
+	type WithdrawRequest,
 } from "./conversation-execution-common.js";
 import { currentConversationExecutionRelayKeyBindingV1 } from "./conversation-execution-key.js";
 import {
@@ -82,6 +93,7 @@ import {
 	parseModelSelectionResult,
 	parseRegenerationResult,
 	parseStopResult,
+	parseWithdrawResult as parseWithdrawCommandResult,
 } from "./conversation-execution-records.js";
 import {
 	completeIdempotency,
@@ -91,6 +103,7 @@ import {
 	isModelSelectionPlan,
 	isRegenerationPlan,
 	isStopPlan,
+	lockAgentConfiguration,
 	lockConversation,
 	lockConversationForRead,
 	outboxId,
@@ -289,7 +302,9 @@ export interface PostgresConversationExecutionOptionsV1 {
 }
 
 export class PostgresConversationExecutionTransactionV1
-	implements ConversationExecutionTransactionPortV1
+	implements
+		ConversationExecutionTransactionPortV1,
+		NativeCapabilityAdmissionTransactionPortV6
 {
 	readonly #client: ReturnType<typeof postgres> | undefined;
 	readonly #existingTransaction: Transaction | undefined;
@@ -389,6 +404,15 @@ export class PostgresConversationExecutionTransactionV1
 			}
 
 			const state = await readMessageState(transaction, conversation);
+			// 原生命令与 Skill 不进入排队：有排队消息时同样按占用处理（§12.5）。
+			const [waiting] =
+				state.activeExecution || (state.queue?.waitingCount ?? 0) === 0
+					? []
+					: await transaction<{ execution_id: string }[]>`
+							select execution_id from platform.conversation_executions
+							where conversation_id = ${conversation.conversationId} and status = 'waiting'
+							order by task_wait_order limit 1
+						`;
 			const inputFiles =
 				command.schemaVersion === 2
 					? {
@@ -404,7 +428,11 @@ export class PostgresConversationExecutionTransactionV1
 					: null;
 			const decision = await decide({
 				conversation,
-				activeExecution: state.activeExecution ?? null,
+				activeExecution:
+					state.activeExecution ??
+					(waiting
+						? { executionId: waiting.execution_id, status: "waiting" as const }
+						: null),
 				authorizationRevision: conversation.authorizationRevision,
 				inputFiles,
 			});
@@ -543,6 +571,192 @@ export class PostgresConversationExecutionTransactionV1
 				result: structuredClone(plan.result),
 				plan,
 			};
+		});
+	}
+
+	/** Persists a pre-validated V6 plan atomically with idempotency and outbox state. */
+	async admitNativeCapabilityV6(
+		candidate: Parameters<
+			NativeCapabilityAdmissionTransactionPortV6["admitNativeCapabilityV6"]
+		>[0],
+		isAuthorized: () => Promise<boolean>,
+	): Promise<NativeCapabilityAdmissionV6Decision> {
+		const input = structuredClone(candidate);
+		return this.#transaction(async (transaction) => {
+			validateNativeCapabilityInvocationPlanV6(input.plan, input);
+			// Governance and ordinary execution admission lock Agent before Conversation.
+			const agent = await lockAgentConfiguration(
+				transaction,
+				input.authority.agentId,
+			);
+			if (
+				!agent ||
+				agent.authorizationRevision !== input.authority.authorizationRevision
+			)
+				return { outcome: "denied", reason: "authorization_lost" };
+			const conversation = await lockConversation(
+				transaction,
+				input.request.conversationId,
+			);
+			if (
+				!conversation ||
+				conversation.agentId !== input.authority.agentId ||
+				conversation.actorId !== input.authority.actorId ||
+				!isDeepStrictEqual(conversation.principal, input.authority.principal) ||
+				conversation.channelId !== input.authority.channelId ||
+				conversation.authorizationRevision !==
+					input.authority.authorizationRevision ||
+				conversation.sessionGeneration !== input.authority.sessionGeneration ||
+				conversation.hostSessionRef !== input.authority.hostSessionRef
+			)
+				return { outcome: "denied", reason: "authorization_lost" };
+			if (!(await isAuthorized()))
+				return { outcome: "denied", reason: "authorization_lost" };
+			const scope = {
+				scopeType: "conversation",
+				scopeId: input.request.conversationId,
+				actorId: input.authority.actorId,
+				commandType: "native-capability.invoke.v2",
+				key: input.request.idempotencyKey,
+			};
+			const existing = await readIdempotency(transaction, scope);
+			if (existing) {
+				if (existing.request_digest !== input.requestDigest)
+					return { outcome: "conflict", reason: "idempotency_conflict" };
+				if (existing.status !== "completed" || existing.result === null)
+					return { outcome: "unavailable", reason: "idempotency_in_progress" };
+				const envelope = existing.result;
+				if (
+					typeof envelope !== "object" ||
+					Array.isArray(envelope) ||
+					!("plan" in envelope) ||
+					typeof envelope.plan !== "object" ||
+					envelope.plan === null ||
+					Array.isArray(envelope.plan)
+				)
+					return unavailable();
+				const saved = envelope.plan as NativeCapabilityInvocationPlanV6;
+				if (
+					!isDeepStrictEqual(
+						saved.taskBoundary,
+						input.taskAuthority.taskBoundary,
+					)
+				)
+					return { outcome: "denied", reason: "authorization_lost" };
+				const payload = saved.outbox?.payload;
+				if (
+					!payload ||
+					typeof payload.requestId !== "string" ||
+					typeof payload.traceId !== "string"
+				)
+					return unavailable();
+				validateNativeCapabilityReplayPlanV6(saved, {
+					invocation: input.invocation,
+					taskAuthority: input.taskAuthority,
+					authority: input.authority,
+					requestDigest: input.requestDigest,
+				});
+				return { outcome: "replayed", plan: structuredClone(saved) };
+			}
+			if (conversation.status !== "ready" || conversation.isolationPending)
+				return { outcome: "denied", reason: "conversation_unavailable" };
+			if (conversation.sandboxReady !== true)
+				return { outcome: "unavailable", reason: "conversation_unavailable" };
+			// Waiting tasks also own the Conversation queue; they must not be overtaken.
+			const [occupied] = await transaction<{ status: string }[]>`
+    select status from platform.conversation_executions
+    where conversation_id = ${conversation.conversationId}
+     and status in ('waiting','submitted','processing','unknown')
+    order by (status = 'unknown') desc, execution_id
+    limit 1 for update
+   `;
+			if (occupied)
+				return { outcome: occupied.status === "unknown" ? "unknown" : "busy" };
+			if (!agent.modelConfiguration)
+				return { outcome: "unavailable", reason: "metadata_unavailable" };
+			if (
+				!isNativeCapabilityModelSelectionCurrentV6(
+					input.plan,
+					agent.modelConfiguration,
+				)
+			)
+				return { outcome: "stale" };
+			// New operations require the current Key; replay retains its frozen tuple.
+			const executionBinding =
+				await currentConversationExecutionRelayKeyBindingV1(transaction, {
+					authority: input.taskAuthority,
+					userDirectory: this.#userDirectory,
+					personalApiAdmissionAuthority:
+						input.taskAuthority.personalApiAdmissionAuthority,
+				});
+			const currentKey = executionBinding?.relayKeyBinding;
+			if (
+				!currentKey ||
+				executionBinding?.executionSource !== input.plan.executionSource ||
+				currentKey.keyId !== input.keyBinding.ciphertextRef ||
+				currentKey.keyVersion !== input.keyBinding.version ||
+				!(await isAuthorized())
+			)
+				return { outcome: "denied", reason: "authorization_lost" };
+			const occurredAt = new Date();
+			const reservationId = await reserveIdempotency(transaction, {
+				...scope,
+				requestDigest: input.requestDigest,
+				occurredAt,
+			});
+			if (!reservationId)
+				return { outcome: "unavailable", reason: "idempotency_in_progress" };
+			await transaction`
+				insert into platform.conversation_executions
+					(execution_id, conversation_id, sandbox_id, agent_id, actor_id,
+					 channel_id, turn_id, status, session_generation, delivery_fence,
+					 authorization_revision, execution_source, relay_key_purpose,
+					 relay_key_subject_id, relay_key_id, relay_key_version,
+					 model_configuration_revision, model_option_id, reasoning_level,
+					 principal_type, created_at, updated_at)
+				values
+					(${input.plan.executionId}, ${input.plan.conversationId},
+					 ${conversation.sandbox?.sandboxId ?? null}, ${input.plan.agentId},
+					 ${input.plan.actorId}, ${input.plan.channelId}, ${input.plan.turnId},
+					 'submitted', ${input.plan.sessionGeneration}, 0,
+					 ${input.plan.authorizationRevision}, ${input.plan.executionSource},
+					 ${input.keyBinding.purpose}, ${input.keyBinding.subjectId},
+					 ${input.keyBinding.ciphertextRef}, ${input.keyBinding.version},
+					 ${input.plan.modelConfigurationRevision}, ${input.plan.modelOptionId}, ${input.plan.reasoningLevel},
+					 ${input.plan.principal.kind}, ${occurredAt}, ${occurredAt})
+			`;
+			await insertTaskAuthorization(transaction, {
+				executionId: input.plan.executionId,
+				boundary: input.plan.taskBoundary,
+				traceId: input.request.traceId,
+				requestId: input.request.requestId,
+			});
+			await transaction`
+				insert into platform.outbox_items
+					(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+					 available_at, created_at, updated_at)
+				values
+					(${input.plan.outbox.id}, 'conversation', ${input.plan.conversationId},
+					 ${input.plan.outbox.operation}, ${transaction.json(input.plan.outbox.payload as unknown as JsonValue)},
+					 ${input.request.traceId}, ${input.request.requestId}, ${occurredAt}, ${occurredAt}, ${occurredAt})
+			`;
+			await transaction`
+				insert into platform.conversation_audit_events
+					(id, conversation_id, execution_id, agent_id, actor_id, action,
+					 trace_id, request_id, occurred_at)
+				values
+					(${randomUUID()}, ${input.plan.conversationId}, ${input.plan.executionId},
+					 ${input.plan.agentId}, ${input.plan.actorId},
+					 'conversation.native_capability.accepted', ${input.request.traceId},
+					 ${input.request.requestId}, ${occurredAt})
+			`;
+			await completeIdempotency(
+				transaction,
+				reservationId,
+				{ plan: input.plan },
+				occurredAt,
+			);
+			return { outcome: "accepted", plan: input.plan };
 		});
 	}
 
@@ -865,6 +1079,7 @@ export class PostgresConversationExecutionTransactionV1
 				transaction,
 				conversation,
 				this.#readRequestedModelDisplayName,
+				{ queueAdmission: true },
 			);
 			const decision = decide(state);
 			if (!isMessagePlan(decision)) {
@@ -917,6 +1132,7 @@ export class PostgresConversationExecutionTransactionV1
 						 authorization_revision, model_configuration_revision,
 						 model_option_id, reasoning_level, execution_source,
 						relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version,
+						task_wait_order, task_wait_deadline, last_event_sequence,
 						created_at, updated_at)
 					values
 						(${plan.execution.executionId}, ${plan.execution.conversationId}, ${conversation.sandbox?.sandboxId ?? null},
@@ -932,6 +1148,9 @@ export class PostgresConversationExecutionTransactionV1
 						${executionBinding?.relayKeyBinding?.subjectId ?? null},
 						${executionBinding?.relayKeyBinding?.keyId ?? null},
 						${executionBinding?.relayKeyBinding?.keyVersion ?? null},
+						${plan.execution.taskWaitOrder ?? null},
+						${plan.execution.taskWaitDeadline ?? null},
+						${plan.statusEvent?.sequence ?? 0},
 						 ${plan.execution.createdAt},
 						 ${plan.execution.createdAt})
 				`,
@@ -942,6 +1161,25 @@ export class PostgresConversationExecutionTransactionV1
 					traceId: request.command.traceId,
 					requestId: request.command.requestId,
 				});
+			}
+			if (plan.statusEvent) {
+				// 入队写平台来源的 task.status: waiting 事件，与 Execution 同事务（§12.5）。
+				const statusEvent = plan.statusEvent;
+				await awaitConversationExecutionQueryV1(
+					transaction,
+					transaction`
+					insert into platform.conversation_events
+						(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+						 conversation_cursor, event_type, event_payload, event_digest, source,
+						 runtime_cursor, occurred_at)
+					values (${statusEvent.eventId}, ${conversation.conversationId}, ${plan.message.executionId},
+						${`platform:${statusEvent.eventId}`}, ${statusEvent.sequence},
+						${statusEvent.conversationCursor}, ${statusEvent.event.type},
+						${transaction.json(statusEvent.event as unknown as JsonValue)},
+						${createHash("sha256").update(JSON.stringify(statusEvent.event)).digest("hex")},
+						'platform', null, ${plan.message.createdAt})
+				`,
+				);
 			}
 			for (const fileId of request.command.attachments ?? []) {
 				const [row] = await awaitConversationExecutionQueryV1(
@@ -983,9 +1221,36 @@ export class PostgresConversationExecutionTransactionV1
 					 ${plan.message.createdAt}, ${plan.message.createdAt})
 			`,
 			);
-			await awaitConversationExecutionQueryV1(
-				transaction,
-				transaction`
+			if (plan.kind === "merge") {
+				// #3374：并入的消息不新建 outbox。文字消息结束合并窗口，Turn 立即可认领（更新
+				// available_at 会唤醒 Worker）；只含附件的消息重新计时。原 Turn 必须从未被认领。
+				const reopened = await awaitConversationExecutionQueryV1(
+					transaction,
+					transaction<{ id: string }[]>`
+					update platform.outbox_items
+					set available_at = ${
+						plan.attachmentWindow === "extend"
+							? transaction`clock_timestamp() + ${conversationAttachmentMergeWindowMsV1}::bigint * interval '1 millisecond'`
+							: transaction`clock_timestamp()`
+					},
+						updated_at = clock_timestamp()
+					where id = ${outboxId(
+						"conversation.turn.submit.v1",
+						plan.outboxIntent.messageId,
+						plan.outboxIntent.executionId,
+					)}
+						and scope_type = 'conversation'
+						and scope_id = ${plan.outboxIntent.conversationId}
+						and operation = 'conversation.turn.submit.v1'
+						and status = 'pending' and attempt_count = 0 and delivery_fence = 0
+					returning id
+				`,
+				);
+				if (reopened.length !== 1) unavailable();
+			} else
+				await awaitConversationExecutionQueryV1(
+					transaction,
+					transaction`
 				insert into platform.outbox_items
 					(id, scope_type, scope_id, operation, payload, trace_id, request_id, trace_parent,
 					 available_at, created_at, updated_at)
@@ -1007,10 +1272,19 @@ export class PostgresConversationExecutionTransactionV1
 							modelOptionId: plan.outboxIntent.modelOptionId,
 							reasoningLevel: plan.outboxIntent.reasoningLevel,
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
-					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.traceParent ?? null}, ${plan.outboxIntent.occurredAt},
+					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.traceParent ?? null},
+					 ${
+							// 排队消息的 Turn 只能由认领的等待判定准入（与任务 API 相同）。
+							plan.kind === "queued"
+								? transaction`'infinity'::timestamptz`
+								: // #3374：只含附件的企微消息打开合并窗口：Turn 在受理后 3 秒内不可认领。
+									plan.attachmentWindow === "open"
+									? transaction`clock_timestamp() + ${conversationAttachmentMergeWindowMsV1}::bigint * interval '1 millisecond'`
+									: plan.outboxIntent.occurredAt
+},
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`,
-			);
+				);
 			await awaitConversationExecutionQueryV1(
 				transaction,
 				transaction`
@@ -1504,6 +1778,126 @@ export class PostgresConversationExecutionTransactionV1
 		});
 	}
 
+	/**
+	 * 撤回排队消息（工程 Spec §12.5）。等待中的 Execution 与认领、到期和撤权一样先锁原 Turn
+	 * outbox（其内先锁 Conversation），在同一事务中以 `cancelled`/`WITHDRAWN` 终结并写入
+	 * task.status 事件；已离开等待的返回已开始或已结束，不影响执行。
+	 */
+	async executeWithdrawal(
+		request: WithdrawRequest,
+		decide: WithdrawDecide,
+	): Promise<ConversationWithdrawDecisionV1> {
+		return this.#transaction(async (transaction) => {
+			const authority = parseAuthority(request.authority);
+			await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
+			const executionId = text(request.command.targetExecutionId);
+			const [initialExecution] = await transaction<
+				{ status: string; conversation_id: string }[]
+			>`
+				select status, conversation_id from platform.conversation_executions
+				where execution_id = ${executionId}
+			`;
+			let originalOutbox: Awaited<ReturnType<typeof lockDispatchOutbox>>;
+			if (
+				initialExecution?.status === "waiting" &&
+				initialExecution.conversation_id === request.command.conversationId
+			)
+				originalOutbox = await lockDispatchOutbox(
+					transaction,
+					`conversation:turn:${executionId}`,
+				);
+			const conversation = await lockConversation(
+				transaction,
+				text(request.command.conversationId),
+			);
+			if (!conversation || !matchesBinding(conversation, authority))
+				return { outcome: "denied" };
+			const scope = {
+				scopeType: "conversation",
+				scopeId: conversation.conversationId,
+				actorId: authority.actorId,
+				commandType: "withdraw",
+				key: text(request.command.idempotencyKey, 128),
+			};
+			const existing = await readIdempotency(transaction, scope);
+			if (existing) {
+				if (existing.request_digest !== request.requestDigest)
+					return { outcome: "conflict", reason: "idempotency_conflict" };
+				if (existing.status !== "completed") unavailable();
+				const result = parseWithdrawCommandResult(existing.result, executionId);
+				return { outcome: "replayed", result };
+			}
+			const execution = await lockDispatchExecution(
+				transaction,
+				conversation.conversationId,
+				executionId,
+			);
+			const decision = decide({
+				conversation,
+				target:
+					execution && execution.actor_id === authority.actorId
+						? {
+								executionId: execution.execution_id,
+								conversationId: execution.conversation_id,
+								actorId: execution.actor_id,
+								status: execution.status as ConversationTaskExecutionStatusV1,
+								queued: execution.task_wait_order !== null,
+							}
+						: undefined,
+			});
+			if (!("result" in decision)) return { outcome: "denied" };
+			const result = parseWithdrawCommandResult(decision.result, executionId);
+			if (
+				decision.idempotency.scopeId !== conversation.conversationId ||
+				decision.idempotency.actorId !== authority.actorId ||
+				decision.idempotency.commandType !== "withdraw" ||
+				decision.idempotency.key !== request.command.idempotencyKey ||
+				decision.idempotency.requestDigest !== request.requestDigest
+			)
+				unavailable();
+			const occurredAt = new Date();
+			const reservationId = await reserveIdempotency(transaction, {
+				...scope,
+				requestDigest: request.requestDigest,
+				occurredAt,
+			});
+			if (!reservationId) unavailable();
+			if (result.status === "withdrawn") {
+				const dispatchConversation = await lockDispatchConversation(
+					transaction,
+					conversation.conversationId,
+				);
+				if (
+					!originalOutbox ||
+					!dispatchConversation ||
+					!execution ||
+					execution.status !== "waiting"
+				)
+					unavailable();
+				await finishWaitingTask(
+					transaction,
+					{
+						outbox: originalOutbox,
+						conversation: dispatchConversation,
+						execution,
+					},
+					"cancelled",
+					"WITHDRAWN",
+					"platform-api",
+				);
+				await transaction`
+					insert into platform.conversation_audit_events
+						(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at)
+					values (${randomUUID()}, ${conversation.conversationId}, ${executionId},
+						${authority.agentId}, ${authority.actorId}, 'conversation.message.withdrawn',
+						${request.command.traceId}, ${request.command.requestId}, ${occurredAt})
+				`;
+			}
+			await completeIdempotency(transaction, reservationId, result, occurredAt);
+			return { outcome: "accepted", result };
+		});
+	}
+
 	/** Resolve actual request Bearer using the original Store transaction and lock order. */
 	async authorizeTaskApi(input: {
 		readonly material: string;
@@ -1674,6 +2068,39 @@ export class PostgresConversationExecutionTransactionV1
 			current.useGrantRevision !== sources[0].useGrantRevision
 		)
 			unavailable();
+	}
+
+	/**
+	 * #3373：新消息到达时 Conversation 被受理不明的 Execution 占用，把该 Execution 已排定的
+	 * 恢复工作项提前到当前时刻（提交唤醒随之通知 Worker）。只在 Execution 仍为 unknown 时生效，
+	 * 不改变 Execution、占用或工作项状态。
+	 */
+	async wakeUnknownExecutionRecovery(input: {
+		readonly conversationId: string;
+		readonly executionId: string;
+	}): Promise<void> {
+		const conversationId = text(input.conversationId);
+		const executionId = text(input.executionId);
+		await this.#transaction(async (transaction) => {
+			await transaction`
+				update platform.outbox_items
+				set available_at = clock_timestamp(), updated_at = clock_timestamp()
+				where scope_type = 'conversation' and scope_id = ${conversationId}
+					and operation in (
+						'conversation.turn.submit.v1',
+						'conversation.turn.regenerate.v1',
+						'conversation.native-capability.invoke.v1'
+					)
+					and payload->>'executionId' = ${executionId}
+					and status = 'retry_scheduled' and available_at > clock_timestamp()
+					and exists (
+						select 1 from platform.conversation_executions e
+						where e.execution_id = ${executionId}
+							and e.conversation_id = ${conversationId}
+							and e.status = 'unknown'
+					)
+			`;
+		});
 	}
 
 	async #transaction<T>(

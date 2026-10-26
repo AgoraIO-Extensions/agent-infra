@@ -5,6 +5,10 @@ import {
 import { expect, type Page, test } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import {
+	expectBackgroundRereadKeeps,
+	expectFatalRereadHandsFocus,
+} from "./background-reread";
+import {
 	expectFocusableBusy,
 	expectFocusSettled,
 	expectNoDuplicateControls,
@@ -823,5 +827,143 @@ test("disable application confirmation returns focus to its trigger and keeps it
 		"停用成功后",
 		[50, 300, 1000],
 	);
+	await expectCleanPage(page, errors);
+});
+
+// #3388 N13-03：打开既有应用后地址带 ?applicationId=，个人凭证读取失败，按「重新加载」（读取挂起、可聚焦地禁用）
+// 后浏览器后退到不带应用的地址：同一页面、个人凭证分区不变，焦点仍在按钮上。读取成功、按钮卸载后焦点
+// 到 h1「API 凭证」，仍失败时留在按钮上，都不落到 body。两视口一致。
+for (const outcome of ["recovers", "fails again"] as const)
+	test(`going back from ?applicationId= while reloading personal credentials keeps the same-page handoff (${outcome}, #3388 N13-03)`, async ({
+		page,
+	}, info) => {
+		await page.setViewportSize(
+			info.project.name === "mobile"
+				? { width: 390, height: 844 }
+				: { width: 1440, height: 900 },
+		);
+		const errors = trackPageErrors(page);
+		await fixture(page);
+		let failing = true;
+		await page.route(
+			(url) => url.pathname === "/api/v2/me/api-credentials",
+			(route) =>
+				route.request().method() === "GET" && failing
+					? route.fulfill({
+							status: 503,
+							json: {
+								schemaVersion: 1,
+								code: "DEPENDENCY_UNAVAILABLE",
+								message: "Controlled read failure",
+								retryable: true,
+								traceId: "browser-personal-failure",
+							},
+						})
+					: route.fallback(),
+		);
+		await page.goto("/my-settings/api-credentials");
+		const main = page.locator("#main-content");
+		const personal = main
+			.getByRole("alert")
+			.filter({ hasText: "暂时无法读取 API 凭证，请稍后重试。" });
+		await expect(personal).toBeVisible();
+		const input = page.getByLabel("既有应用 ID");
+		await input.fill(application.applicationId);
+		await input.press("Enter");
+		await expect(page).toHaveURL(
+			new RegExp(`applicationId=${application.applicationId}`),
+		);
+		await expect(
+			page.getByRole("heading", { name: application.name }),
+		).toBeVisible();
+		const reload = personal.getByRole("button", {
+			name: "重新加载",
+			exact: true,
+		});
+		if (outcome === "recovers") failing = false;
+		const reading = await holdRequests(
+			page,
+			"GET",
+			"/api/v2/me/api-credentials",
+		);
+		await reload.focus();
+		await page.keyboard.press("Enter");
+		await expect.poll(() => reading.held()).toBe(1);
+		await expectFocusableBusy(reload, "个人凭证重新加载读取中", [30, 150]);
+		await page.goBack();
+		await expect(page).toHaveURL(/\/my-settings\/api-credentials$/);
+		await expectFocusableBusy(reload, "后退只改查询串后", [30, 150]);
+		reading.release();
+		if (outcome === "recovers") {
+			await expect(personal).toHaveCount(0);
+			await expectFocusSettled(
+				main.getByRole("heading", { level: 1, name: "API 凭证" }),
+				"后退后个人凭证恢复",
+				[50, 300, 1000, 2000],
+			);
+		} else {
+			await expect(reload).toHaveAttribute("aria-disabled", "false");
+			await expectFocusSettled(
+				reload,
+				"后退后个人凭证仍失败",
+				[50, 300, 1000, 2000],
+			);
+		}
+		await expectNoDuplicateControls(page, `API 凭证（后退，${outcome}）`);
+		await expectCleanPage(page, errors);
+	});
+// #3419 N14-09（N14-3-02 ②）：「停用这个应用？」确认弹窗打开时，回到标签页的应用读取读到登录失效（401）：应用管理
+// 换成「登录状态已失效」与「重新登录」，弹窗随之卸载，finalFocus 指向的「停用应用：{应用名}」已不在文档。焦点交给
+// h1「API 凭证」，不落到 body、不滚动页面。先覆盖挂起、可重试失败与恢复（弹窗保留），两视口一致。
+test("a disable confirmation removed by a background 401 hands focus to the h1 (#3419 N14-09)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	await page.setViewportSize(
+		mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+	);
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	// 列表读取的 staleTime 为 15 秒：每次回到标签页之前让上一次结果过期。
+	await page.clock.install();
+	const stale = () => page.clock.fastForward(16_000);
+	await page.goto(
+		`/my-settings/api-credentials?applicationId=${application.applicationId}`,
+	);
+	const trigger = page.getByRole("button", {
+		name: `停用应用：${application.name}`,
+		exact: true,
+	});
+	await trigger.focus();
+	await page.keyboard.press("Enter");
+	const dialog = page.getByRole("dialog", { name: "停用这个应用？" });
+	await expect(dialog).toBeFocused();
+	const read = `/api/v2/applications/${application.applicationId}`;
+	await expectBackgroundRereadKeeps(page, {
+		path: read,
+		focus: dialog,
+		beforeReread: stale,
+		context: "停用应用确认",
+		expectKept: async () => {
+			await expect(dialog).toBeVisible();
+		},
+	});
+	const main = page.locator("#main-content");
+	await expectFatalRereadHandsFocus(page, {
+		path: read,
+		status: 401,
+		focus: dialog,
+		beforeReread: stale,
+		target: main.getByRole("heading", { level: 1, name: "API 凭证" }),
+		context: "停用应用确认",
+		expectReplaced: async () => {
+			await expect(
+				main.getByText("登录状态已失效，请重新登录后再试。"),
+			).toBeVisible();
+			await expect(dialog).toHaveCount(0);
+			await expect(trigger).toHaveCount(0);
+		},
+	});
+	await expectNoDuplicateControls(page, "应用管理（#3419 N14-09）");
 	await expectCleanPage(page, errors);
 });

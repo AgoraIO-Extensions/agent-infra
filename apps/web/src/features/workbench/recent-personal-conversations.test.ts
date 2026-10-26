@@ -93,6 +93,36 @@ describe("Personal recent generated Client read", () => {
 		expect(requests).toHaveLength(2);
 	});
 
+	it("keeps the omitted-Agent list and rejects malformed lists (#3379)", async () => {
+		let body: unknown = { ...page, unavailableAgentIds: ["agent-stopped"] };
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async () => Response.json(body),
+		});
+		await expect(
+			loadRecentPersonalConversationsPage({
+				client,
+				signal: new AbortController().signal,
+			}),
+		).resolves.toEqual({ ...page, unavailableAgentIds: ["agent-stopped"] });
+		for (const unavailableAgentIds of [
+			[],
+			[""],
+			[{ agentId: "agent-stopped" }],
+			Array.from({ length: 101 }, (_, index) => `agent-${index}`),
+		]) {
+			body = { ...page, unavailableAgentIds };
+			await expect(
+				loadRecentPersonalConversationsPage({
+					client,
+					signal: new AbortController().signal,
+				}),
+			).rejects.toMatchObject({
+				state: { kind: "unavailable", reason: "invalid-response" },
+			});
+		}
+	});
+
 	it.each([
 		[401, "authentication-required", false],
 		[403, "denied", false],

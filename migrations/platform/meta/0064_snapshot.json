@@ -1,5 +1,5 @@
 {
-  "id": "599a7beb-e0a8-442b-a97e-21f8da88c3dc",
+  "id": "538d3a37-4769-4757-ab38-7707408d86d1",
   "prevId": "d859a8f2-f1c0-4ea3-9fdb-9b99b041238e",
   "version": "7",
   "dialect": "postgresql",
@@ -386,12 +386,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "runtime_revision": {
-          "name": "runtime_revision",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
         "source_reference": {
           "name": "source_reference",
           "type": "text",
@@ -426,22 +420,6 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
-        },
-        "agent_configuration_runtime_revision_fk": {
-          "name": "agent_configuration_runtime_revision_fk",
-          "tableFrom": "agent_configuration_revisions",
-          "tableTo": "agent_configuration_revisions",
-          "schemaTo": "platform",
-          "columnsFrom": [
-            "agent_id",
-            "runtime_revision"
-          ],
-          "columnsTo": [
-            "agent_id",
-            "revision"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -459,10 +437,6 @@
         "agent_configuration_revision_number_safe": {
           "name": "agent_configuration_revision_number_safe",
           "value": "\"platform\".\"agent_configuration_revisions\".\"revision\" between 1 and 9007199254740991"
-        },
-        "agent_configuration_runtime_revision_range": {
-          "name": "agent_configuration_runtime_revision_range",
-          "value": "\"platform\".\"agent_configuration_revisions\".\"runtime_revision\" between 1 and \"platform\".\"agent_configuration_revisions\".\"revision\""
         },
         "agent_configuration_source_reference_non_empty": {
           "name": "agent_configuration_source_reference_non_empty",
@@ -2176,6 +2150,12 @@
         "sandbox_id": {
           "name": "sandbox_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "unknown_since": {
+          "name": "unknown_since",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         }

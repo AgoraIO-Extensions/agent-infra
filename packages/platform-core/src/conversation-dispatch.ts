@@ -43,12 +43,15 @@ import {
 	type ConversationRuntimeOperationResponseV1,
 	type ConversationRuntimeStatusResponseV2,
 	type ConversationRuntimeStatusV1,
+	type ConversationRuntimeTurnNotSubmittedReasonV1,
 } from "./conversation-dispatch-types.js";
 import { exactObject, unavailable } from "./conversation-dispatch-values.js";
-import type {
-	ConversationEventCommandV1,
-	ConversationEventDecisionV1,
-	ConversationEventUseCaseV1,
+import {
+	type ConversationEventCommandV1,
+	type ConversationEventDecisionV1,
+	type ConversationEventUseCaseV1,
+	conversationEventBatchLimitV1,
+	isBatchableConversationEventV1,
 } from "./conversation-events.js";
 import { isConversationGenerationBarrierConfirmedV1 } from "./conversation-generation-isolation.js";
 
@@ -93,6 +96,15 @@ export {
 /** Far below the Host bound of 256 delivered but unacknowledged cursors. */
 const acknowledgementBatchSize = 32;
 
+/** #3378：缓冲的增量在没有新事件时最多等待 50 ms 再提交。 */
+const bufferedEventIdleMs = 50;
+
+/**
+ * #3373：Runtime 报告未提交后最多重提 3 次，且只在首次重提起 2 分钟内重提（Runtime HLD §7.3）。
+ */
+const notSubmittedResubmitLimit = 3;
+const notSubmittedResubmitWindowMs = 120_000;
+
 /** A standard tool call waits for its persisted fact to be acknowledged before
  * the Runtime calls the tool or reports its result. The terminal event closes
  * the batch, so acknowledging it costs no extra round trip. */
@@ -117,18 +129,32 @@ export function createConversationDispatchUseCaseV1(
 					>;
 				},
 			): ReturnType<ConversationEventUseCaseV1["persist"]>;
+			/** #3378：未提供时逐个持久化。 */
+			persistBatch?(
+				commands: readonly (ConversationEventCommandV1 & {
+					readonly dispatchLease: NonNullable<
+						ConversationEventCommandV1["dispatchLease"]
+					>;
+				})[],
+			): Promise<readonly ConversationEventDecisionV1[]>;
 		};
 	},
 	options: {
 		readonly leaseDurationMs?: number;
 		readonly retryDelayMs?: number;
-		/** Maximum durable claims spent recovering an unknown Runtime execution. */
+		/** Maximum durable claims spent recovering terminal Execution metadata. */
 		readonly maxRecoveryAttempts?: number;
+		/**
+		 * #3373：Execution 处于 `unknown` 后恢复的墙钟预算（毫秒），用尽时以
+		 * `RUNTIME_RECOVERY_TIMEOUT` 收敛为失败。默认 5 分钟，由部署配置。
+		 */
+		readonly recoveryBudgetMs?: number;
 	} = {},
 ): ConversationDispatchUseCaseV1 {
 	const leaseDurationMs = options.leaseDurationMs ?? 30_000;
 	const retryDelayMs = options.retryDelayMs ?? 1_000;
 	const maxRecoveryAttempts = options.maxRecoveryAttempts ?? 120;
+	const recoveryBudgetMs = options.recoveryBudgetMs ?? 300_000;
 	if (
 		!Number.isSafeInteger(leaseDurationMs) ||
 		leaseDurationMs < 3 ||
@@ -138,18 +164,82 @@ export function createConversationDispatchUseCaseV1(
 		retryDelayMs > 86_400_000 ||
 		!Number.isSafeInteger(maxRecoveryAttempts) ||
 		maxRecoveryAttempts < 1 ||
-		maxRecoveryAttempts > 1_000_000
+		maxRecoveryAttempts > 1_000_000 ||
+		!Number.isSafeInteger(recoveryBudgetMs) ||
+		recoveryBudgetMs < 1 ||
+		recoveryBudgetMs > 86_400_000
 	) {
 		throw new ConversationDispatchError("invalid_input");
 	}
+	// 元数据恢复仍按认领次数；接受结果不确定的恢复按 Execution 进入 unknown 以来的墙钟时间
+	// （#3373，Runtime HLD §7.3）。
 	const recoveryExhausted = (claim: ConversationDispatchClaimV1) =>
-		claim.attemptCount !== undefined &&
-		claim.attemptCount >= maxRecoveryAttempts &&
-		(claim.executionStatus === "unknown" ||
-			claim.metadataRecovery !== undefined) &&
-		(isRuntimeEventOperation(claim.operation) ||
-			claim.operation === "conversation.turn.stop.v1" ||
-			claim.metadataRecovery !== undefined);
+		claim.metadataRecovery !== undefined
+			? claim.attemptCount !== undefined &&
+				claim.attemptCount >= maxRecoveryAttempts
+			: claim.executionStatus === "unknown" &&
+				claim.recoveryElapsedMs !== undefined &&
+				claim.recoveryElapsedMs >= recoveryBudgetMs &&
+				(isRuntimeEventOperation(claim.operation) ||
+					claim.operation === "conversation.turn.stop.v1");
+	/**
+	 * #3375：补充指令无法进入原回复时转入排队（工程 Spec §12.5）。Store 在同一 Conversation 锁事务
+	 * 内完成转换并终结本次补充指令；未装配转换时沿用原规则标记“原回复已结束”。
+	 */
+	async function queueSupplement(
+		claim: ConversationDispatchClaimV1,
+	): Promise<ConversationDispatchDecisionV1> {
+		if (!dependencies.store.queueSupplement)
+			return reject(
+				dependencies.store,
+				claim,
+				"ORIGINAL_RESPONSE_ALREADY_FINISHED",
+			);
+		return (await dependencies.store.queueSupplement({ claim }))
+			? { schemaVersion: 1, outcome: "rejected" }
+			: { schemaVersion: 1, outcome: "stale" };
+	}
+	/**
+	 * #3373：Runtime 已核实本次 Turn 在原生提交点之前未提交。2 分钟内最多重提 3 次：
+	 * Execution 退回投递前状态，下一次认领重新授权、提升 fence 并签发新的 Grant；
+	 * 次数或窗口用尽后按阶段明确失败（Runtime HLD §7.3）。
+	 */
+	async function settleUnsubmittedTurn(
+		claim: ConversationDispatchClaimV1,
+		hostSessionRef: string,
+		reason: ConversationRuntimeTurnNotSubmittedReasonV1,
+	): Promise<ConversationDispatchDecisionV1> {
+		const previous = claim.notSubmittedResubmissions;
+		const resubmissions = previous?.count ?? 0;
+		if (
+			resubmissions < notSubmittedResubmitLimit &&
+			(previous === undefined ||
+				previous.elapsedMs < notSubmittedResubmitWindowMs) &&
+			dependencies.store.releaseUnsentDispatch
+		) {
+			try {
+				return (await dependencies.store.releaseUnsentDispatch({
+					claim,
+					// 退避给暂时不可达的依赖留出恢复时间，总时长仍在窗口之内；不超过 Store 接受的
+					// 最大延迟（部署配置的重试间隔可达 24 小时）。
+					retryDelayMs: Math.min(retryDelayMs * 3 ** resubmissions, 86_400_000),
+					errorCode: "RUNTIME_TURN_NOT_SUBMITTED",
+					hostSessionRef,
+				}))
+					? { schemaVersion: 1, outcome: "retry", retryScheduled: true }
+					: { schemaVersion: 1, outcome: "stale" };
+			} catch {
+				return { schemaVersion: 1, outcome: "retry", retryScheduled: false };
+			}
+		}
+		return reject(
+			dependencies.store,
+			claim,
+			reason === "file_input_unavailable"
+				? "RUNTIME_FILE_INPUT_UNAVAILABLE"
+				: "RUNTIME_SESSION_PREPARATION_FAILED",
+		);
+	}
 	async function persistRuntimeEvents(
 		claim: ConversationDispatchClaimV1,
 		authority: ConversationDispatchAuthorityV1,
@@ -357,88 +447,224 @@ export function createConversationDispatchUseCaseV1(
 					{ ...eventRequest, confirmedCursor: claim.runtimeCursor },
 					eventHeartbeat.signal,
 				);
-			for await (const eventInput of dependencies.runtimeHost.events(
-				eventRequest,
-				eventHeartbeat.signal,
-			)) {
-				const runtimeEvent = parseRuntimeEvent(eventInput, claim);
-				const event = normalizedEvent(runtimeEvent);
-				const transition = transitionFromEvent(event);
-				const eventFinalStatus = terminalStatus(event);
-				if (
-					renewalRefused &&
-					!terminalCommitPossible &&
-					!eventFinalStatus &&
-					(await confirmFinished()) === "interrupted"
-				)
-					return retryInterruptedDrain();
-				const connectionMetadata =
-					event.type === "execution.operation" &&
-					event.fact.kind === "tool" &&
-					event.fact.connection !== undefined &&
-					["completed", "failed", "unknown"].includes(event.fact.phase);
-				if (
-					(terminalEventSeen && !connectionMetadata) ||
-					(finalStatus && eventFinalStatus && eventFinalStatus !== finalStatus)
-				) {
-					const finished = await dependencies.store.finish({
-						claim,
-						status: "failed",
-						transition: {},
-						errorCode: "RUNTIME_EVENT_CONFLICT",
-					});
-					return finished
-						? { schemaVersion: 1, outcome: "rejected" }
-						: { schemaVersion: 1, outcome: "stale" };
+			const dispatchLease = {
+				schemaVersion: 1 as const,
+				itemId: claim.itemId,
+				leaseOwner: claim.leaseOwner,
+				deliveryFence: claim.deliveryFence,
+			};
+			const eventCommand = (
+				runtimeEvent: ReturnType<typeof parseRuntimeEvent>,
+				event: ReturnType<typeof normalizedEvent>,
+				transition: ReturnType<typeof transitionFromEvent>,
+				eventFinalStatus: ReturnType<typeof terminalStatus>,
+			) => ({
+				schemaVersion: 1 as const,
+				conversationId: claim.conversationId,
+				executionId: claim.executionId,
+				sessionGeneration: claim.sessionGeneration,
+				deliveryFence: claim.executionDeliveryFence,
+				adapterEventKey: runtimeEvent.adapterEventKey,
+				runtimeCursor: runtimeEvent.cursor,
+				occurredAt: runtimeEvent.occurredAt,
+				event,
+				// The transaction checks the original persisted attempt and outcome.
+				...(terminalEventSeen ? { operationMetadataOnly: true as const } : {}),
+				...(transition &&
+				(!(responseFinalStatus ?? confirmedFinalStatus) ||
+					terminalEventSeen ||
+					eventFinalStatus)
+					? { transition }
+					: {}),
+				dispatchLease,
+			});
+			// #3378：连续的正文与思考增量在一个事务内持久化，避免每个事件一次往返。批次在
+			// 遇到其他事件、达到上限、空闲 50 ms 或流结束时提交；提交后才确认游标。
+			const batching = dependencies.events.persistBatch !== undefined;
+			const buffered: ReturnType<typeof eventCommand>[] = [];
+			// #3443：Host 在读取前提交缓冲时，不再按空闲计时提交，避免提交与进行中的读取并发、
+			// 改变读取发送前复核的 fenced state。
+			let hostCommitsBeforeRead = false;
+			let staleBeforeRead = false;
+			// 提交按顺序串行，读取前回调与消费方的提交不会交错。
+			let flushing: Promise<unknown> = Promise.resolve();
+			const flushBuffered = (): Promise<"stale" | undefined> => {
+				const run = flushing.then(flushBufferedNow);
+				flushing = run.catch(() => undefined);
+				return run;
+			};
+			const beforeRead = async () => {
+				hostCommitsBeforeRead = true;
+				if ((await flushBuffered()) === "stale") {
+					staleBeforeRead = true;
+					throw new ConversationRuntimeHostError(
+						"EVENT_PERSISTENCE_UNAVAILABLE",
+						true,
+					);
 				}
-				if (eventFinalStatus) terminalCommitPossible = true;
-				let persisted: ConversationEventDecisionV1;
+			};
+			const flushBufferedNow = async (): Promise<"stale" | undefined> => {
+				if (buffered.length === 0) return undefined;
+				const commands = buffered.splice(0);
+				let decisions: readonly ConversationEventDecisionV1[];
 				try {
-					persisted = await dependencies.events.persist({
-						schemaVersion: 1,
-						conversationId: claim.conversationId,
-						executionId: claim.executionId,
-						sessionGeneration: claim.sessionGeneration,
-						deliveryFence: claim.executionDeliveryFence,
-						adapterEventKey: runtimeEvent.adapterEventKey,
-						runtimeCursor: runtimeEvent.cursor,
-						occurredAt: runtimeEvent.occurredAt,
-						event,
-						// The transaction checks the original persisted attempt and outcome.
-						...(terminalEventSeen ? { operationMetadataOnly: true } : {}),
-						...(transition &&
-						(!(responseFinalStatus ?? confirmedFinalStatus) ||
-							terminalEventSeen ||
-							eventFinalStatus)
-							? { transition }
-							: {}),
-						dispatchLease: {
-							schemaVersion: 1,
-							itemId: claim.itemId,
-							leaseOwner: claim.leaseOwner,
-							deliveryFence: claim.deliveryFence,
-						},
-					});
+					const result = await dependencies.events.persistBatch?.(commands);
+					if (!result) throw new Error("unavailable");
+					decisions = result;
 				} catch {
 					throw new ConversationRuntimeHostError(
 						"EVENT_PERSISTENCE_UNAVAILABLE",
 						true,
 					);
 				}
-				if (persisted.outcome === "stale") {
-					return { schemaVersion: 1, outcome: "stale" };
-				}
-				if (eventFinalStatus) {
-					terminalEventSeen = true;
-					finalStatus = eventFinalStatus;
-				}
-				unacknowledgedCursor = runtimeEvent.cursor;
-				unacknowledgedEvents++;
 				if (
-					acknowledgeNow(event) ||
-					unacknowledgedEvents >= acknowledgementBatchSize
+					decisions.length !== commands.length ||
+					decisions.some((decision) => decision.outcome === "stale")
 				)
+					return "stale";
+				unacknowledgedCursor = commands.at(-1)?.runtimeCursor;
+				unacknowledgedEvents += commands.length;
+				if (unacknowledgedEvents >= acknowledgementBatchSize)
 					await acknowledgeCommitted();
+				return undefined;
+			};
+			const iterator = dependencies.runtimeHost
+				.events(
+					eventRequest,
+					eventHeartbeat.signal,
+					batching ? { beforeRead } : {},
+				)
+				[Symbol.asyncIterator]();
+			let pending: Promise<IteratorResult<unknown>> | undefined;
+			try {
+				while (true) {
+					pending ??= iterator.next();
+					let step: IteratorResult<unknown> | "idle";
+					try {
+						step =
+							buffered.length === 0 || hostCommitsBeforeRead
+								? await pending
+								: await new Promise<IteratorResult<unknown> | "idle">(
+										(resolve, reject) => {
+											const timer = setTimeout(
+												() => resolve("idle"),
+												bufferedEventIdleMs,
+											);
+											pending?.then(
+												(value) => {
+													clearTimeout(timer);
+													resolve(value);
+												},
+												(error: unknown) => {
+													clearTimeout(timer);
+													reject(error);
+												},
+											);
+										},
+									);
+					} catch (error) {
+						// 流中断前已读到的增量照常提交，恢复时从已提交游标继续。提交失败或已失去
+						// 租约时以提交结果为准，不用流错误掩盖。
+						pending = undefined;
+						if (staleBeforeRead || (await flushBuffered()) === "stale")
+							return { schemaVersion: 1, outcome: "stale" };
+						throw error;
+					}
+					if (step === "idle") {
+						if ((await flushBuffered()) === "stale")
+							return { schemaVersion: 1, outcome: "stale" };
+						continue;
+					}
+					pending = undefined;
+					if (step.done) break;
+					const runtimeEvent = parseRuntimeEvent(step.value, claim);
+					const event = normalizedEvent(runtimeEvent);
+					const transition = transitionFromEvent(event);
+					const eventFinalStatus = terminalStatus(event);
+					if (batching && !(renewalRefused && !terminalCommitPossible)) {
+						const command = eventCommand(
+							runtimeEvent,
+							event,
+							transition,
+							eventFinalStatus,
+						);
+						if (isBatchableConversationEventV1(command)) {
+							buffered.push(command);
+							if (
+								buffered.length >= conversationEventBatchLimitV1 &&
+								(await flushBuffered()) === "stale"
+							)
+								return { schemaVersion: 1, outcome: "stale" };
+							continue;
+						}
+					}
+					// 其他事件改变执行状态或操作历史，先提交此前的增量以保持顺序。
+					if ((await flushBuffered()) === "stale")
+						return { schemaVersion: 1, outcome: "stale" };
+					if (
+						renewalRefused &&
+						!terminalCommitPossible &&
+						!eventFinalStatus &&
+						(await confirmFinished()) === "interrupted"
+					)
+						return retryInterruptedDrain();
+					const connectionMetadata =
+						event.type === "execution.operation" &&
+						event.fact.kind === "tool" &&
+						event.fact.connection !== undefined &&
+						["completed", "failed", "unknown"].includes(event.fact.phase);
+					if (
+						(terminalEventSeen && !connectionMetadata) ||
+						(finalStatus &&
+							eventFinalStatus &&
+							eventFinalStatus !== finalStatus)
+					) {
+						const finished = await dependencies.store.finish({
+							claim,
+							status: "failed",
+							transition: {},
+							errorCode: "RUNTIME_EVENT_CONFLICT",
+						});
+						return finished
+							? { schemaVersion: 1, outcome: "rejected" }
+							: { schemaVersion: 1, outcome: "stale" };
+					}
+					if (eventFinalStatus) terminalCommitPossible = true;
+					let persisted: ConversationEventDecisionV1;
+					try {
+						persisted = await dependencies.events.persist(
+							eventCommand(runtimeEvent, event, transition, eventFinalStatus),
+						);
+					} catch {
+						throw new ConversationRuntimeHostError(
+							"EVENT_PERSISTENCE_UNAVAILABLE",
+							true,
+						);
+					}
+					if (persisted.outcome === "stale") {
+						return { schemaVersion: 1, outcome: "stale" };
+					}
+					if (eventFinalStatus) {
+						terminalEventSeen = true;
+						finalStatus = eventFinalStatus;
+					}
+					unacknowledgedCursor = runtimeEvent.cursor;
+					unacknowledgedEvents++;
+					if (
+						acknowledgeNow(event) ||
+						unacknowledgedEvents >= acknowledgementBatchSize
+					)
+						await acknowledgeCommitted();
+				}
+				if ((await flushBuffered()) === "stale")
+					return { schemaVersion: 1, outcome: "stale" };
+			} finally {
+				// 提前结束时关闭 Host 事件流。仍有未完成的读取时，生成器的 return 会排在它之后，
+				// 不等待它；随后停止心跳会中止该读取。
+				if (pending) {
+					pending.catch(() => undefined);
+					void Promise.resolve(iterator.return?.()).catch(() => undefined);
+				} else await iterator.return?.()?.catch?.(() => undefined);
 			}
 			await acknowledgeCommitted();
 		} catch (error) {
@@ -951,11 +1177,8 @@ export function createConversationDispatchUseCaseV1(
 				claim.stopPending &&
 				claim.operation === "conversation.turn.supplement.v1"
 			) {
-				return reject(
-					dependencies.store,
-					claim,
-					"ORIGINAL_RESPONSE_ALREADY_FINISHED",
-				);
+				// #3375：原回复出现待确认的 stop，补充指令转入排队（§12.5）。
+				return queueSupplement(claim);
 			}
 			const recoveringOriginalTurn =
 				(claim.stopPending ||
@@ -1091,11 +1314,8 @@ export function createConversationDispatchUseCaseV1(
 			const executionFinished = executionTerminal(claim.executionStatus);
 			if (executionFinished) {
 				if (claim.operation === "conversation.turn.supplement.v1") {
-					return reject(
-						dependencies.store,
-						claim,
-						"ORIGINAL_RESPONSE_ALREADY_FINISHED",
-					);
+					// #3375：原回复已在补充指令投递前结束，补充指令转入排队（§12.5）。
+					return queueSupplement(claim);
 				}
 				if (isRuntimeEventOperation(claim.operation) && claim.hostSessionRef) {
 					return persistRuntimeEvents(
@@ -1131,6 +1351,12 @@ export function createConversationDispatchUseCaseV1(
 					(acceptedStop && claim.executionStatus === "unknown")) &&
 				claim.hostSessionRef !== null &&
 				dependencies.runtimeHost.recoverOriginalStatus !== undefined;
+			// #3375：已被 Runtime 接受的原回复在补充指令投递前转为 unknown，补充指令转入排队（§12.5）。
+			if (
+				claim.operation === "conversation.turn.supplement.v1" &&
+				claim.executionStatus === "unknown"
+			)
+				return queueSupplement(claim);
 			if (
 				(claim.operation === "conversation.turn.supplement.v1" ||
 					claim.operation === "conversation.turn.stop.v1") &&
@@ -1575,6 +1801,17 @@ export function createConversationDispatchUseCaseV1(
 				return { schemaVersion: 1, outcome: "stale" };
 			}
 
+			if (
+				response.result.outcome === "rejected" &&
+				response.result.code === "RUNTIME_TURN_NOT_SUBMITTED"
+			)
+				// 解析只对普通 Turn 的 submit V2 结果接受该成员。
+				return settleUnsubmittedTurn(
+					claim,
+					response.hostSessionRef,
+					response.result.reason,
+				);
+
 			const responseTransition =
 				response.result.outcome === "accepted"
 					? acceptedTransition(response.result.status)
@@ -1651,13 +1888,16 @@ export function createConversationDispatchUseCaseV1(
 						{},
 					);
 				}
+				// #3375：Runtime 明确拒绝补充指令（无活跃 Turn、Turn 不符或不接受 steer），转入排队。
+				if (
+					claim.operation === "conversation.turn.supplement.v1" &&
+					response.result.code === "RUNTIME_TURN_NOT_ACTIVE"
+				)
+					return queueSupplement(claim);
 				return reject(
 					dependencies.store,
 					claim,
-					claim.operation === "conversation.turn.supplement.v1" &&
-						response.result.code === "RUNTIME_TURN_NOT_ACTIVE"
-						? "ORIGINAL_RESPONSE_ALREADY_FINISHED"
-						: response.result.code,
+					response.result.code,
 					decideConversationDispatchRejectedTransitionV1({
 						operation: claim.operation,
 						code: response.result.code,

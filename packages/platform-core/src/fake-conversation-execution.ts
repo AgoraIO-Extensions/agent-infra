@@ -72,12 +72,14 @@ interface StoredExecution {
 	readonly reasoningLevel: string | null;
 	lastEventSequence: number;
 	status:
+		| "waiting"
 		| "submitted"
 		| "processing"
 		| "unknown"
 		| "completed"
 		| "failed"
 		| "cancelled";
+	taskWaitOrder?: number;
 }
 
 interface StoredOutbox {
@@ -493,8 +495,11 @@ export class FakeConversationExecutionV1
 							plan.execution.modelConfigurationRevision,
 						modelOptionId: plan.execution.modelOptionId,
 						reasoningLevel: plan.execution.reasoningLevel,
-						lastEventSequence: 0,
+						lastEventSequence: plan.statusEvent ? 1 : 0,
 						status: plan.execution.status,
+						...(plan.execution.taskWaitOrder === undefined
+							? {}
+							: { taskWaitOrder: plan.execution.taskWaitOrder }),
 					});
 				}
 				this.#outbox.push({
@@ -690,6 +695,9 @@ export class FakeConversationExecutionV1
 				});
 				return accepted;
 			},
+			wakeUnknownExecutionRecovery: async (input) => {
+				this.wokenRecoveries.push(structuredClone(input));
+			},
 			executeStop: async (request, decide) => {
 				if (
 					!isCurrentConversationBinding(
@@ -849,6 +857,40 @@ export class FakeConversationExecutionV1
 				return { outcome: "accepted", event: structuredClone(decision.event) };
 			},
 		};
+		transaction.executeWithdrawal = async (request, decide) => {
+			const conversation = this.#conversations.get(
+				request.command.conversationId,
+			);
+			if (
+				!isCurrentConversationBinding(
+					conversation,
+					request.authority,
+					request.command.conversationId,
+				)
+			)
+				return { outcome: "denied" };
+			const target = this.#executions.find(
+				(execution) =>
+					execution.conversationId === request.command.conversationId &&
+					execution.executionId === request.command.targetExecutionId,
+			);
+			const decision = decide({
+				conversation: structuredClone(conversation),
+				target: target
+					? {
+							executionId: target.executionId,
+							conversationId: target.conversationId,
+							actorId: target.actorId,
+							status: target.status,
+							queued: target.taskWaitOrder !== undefined,
+						}
+					: undefined,
+			});
+			if (!("result" in decision)) return decision;
+			if (decision.result.status === "withdrawn" && target)
+				target.status = "cancelled";
+			return { outcome: "accepted", result: decision.result };
+		};
 		this.#interface = createConversationExecutionUseCaseV1(
 			{
 				authorization:
@@ -882,6 +924,29 @@ export class FakeConversationExecutionV1
 
 	regenerate: ConversationExecutionUseCaseV1["regenerate"] = (command) =>
 		this.#interface.regenerate(command);
+
+	withdraw: ConversationExecutionUseCaseV1["withdraw"] = (command) =>
+		this.#interface.withdraw(command);
+
+	/** 测试用：排队 Execution 出队开始处理（Worker 认领准入的效果，§12.5）。 */
+	startWaitingExecution(executionId: string) {
+		const execution = this.#executions.find(
+			(candidate) => candidate.executionId === executionId,
+		);
+		if (execution?.status !== "waiting")
+			throw new Error("Execution is not waiting");
+		execution.status = "processing";
+	}
+
+	/** 测试用：Runtime 已明确接受初始 Turn 并开始运行。 */
+	markExecutionProcessing(executionId: string) {
+		const execution = this.#executions.find(
+			(candidate) => candidate.executionId === executionId,
+		);
+		if (execution?.status !== "submitted" && execution?.status !== "unknown")
+			throw new Error("Execution is not awaiting Runtime acceptance");
+		execution.status = "processing";
+	}
 
 	stop: ConversationExecutionUseCaseV1["stop"] = (command) =>
 		this.#interface.stop(command);
@@ -978,6 +1043,22 @@ export class FakeConversationExecutionV1
 		});
 	}
 
+	/** 测试用：把活跃 Execution 置为受理不明（#3373）。 */
+	markExecutionUnknown(executionId: string) {
+		const execution = this.#executions.find(
+			(candidate) => candidate.executionId === executionId,
+		);
+		if (!execution || !isActiveExecution(execution))
+			throw new Error("Execution is not active");
+		execution.status = "unknown";
+	}
+
+	/** #3373：新消息唤醒的受理不明 Execution 恢复。 */
+	readonly wokenRecoveries: {
+		readonly conversationId: string;
+		readonly executionId: string;
+	}[] = [];
+
 	snapshot() {
 		return structuredClone({
 			conversations: [...this.#conversations.values()],
@@ -1072,7 +1153,36 @@ export class FakeConversationExecutionV1
 						candidate.status === "submitted",
 				)
 			: false;
+		const waitingCount = this.#executions.filter(
+			(execution) =>
+				execution.conversationId === conversationId &&
+				execution.status === "waiting",
+		).length;
+		const occupied = active !== undefined || waitingCount > 0;
+		const agentId = this.#conversations.get(conversationId)?.agentId;
+		const agentExecutions = this.#executions.filter(
+			(execution) =>
+				this.#conversations.get(execution.conversationId)?.agentId === agentId,
+		);
 		return {
+			queue: {
+				waitingCount,
+				...(occupied
+					? {
+							agent: {
+								waitingCount: agentExecutions.filter(
+									(execution) => execution.status === "waiting",
+								).length,
+								lastWaitOrder: Math.max(
+									0,
+									...agentExecutions.map(
+										(execution) => execution.taskWaitOrder ?? 0,
+									),
+								),
+							},
+						}
+					: {}),
+			},
 			conversation: structuredClone(this.#conversations.get(conversationId)),
 			modelConfiguration: this.#modelConfigurationFor(
 				this.#conversations.get(conversationId),
@@ -1085,18 +1195,19 @@ export class FakeConversationExecutionV1
 						role: source.role,
 					}
 				: undefined,
-			targetExecution: target
-				? {
-						executionId: target.executionId,
-						conversationId: target.conversationId,
-						actorId: target.actorId,
-						sessionGeneration: target.sessionGeneration,
-						modelConfigurationRevision: target.modelConfigurationRevision,
-						modelOptionId: target.modelOptionId,
-						reasoningLevel: target.reasoningLevel,
-						status: target.status,
-					}
-				: undefined,
+			targetExecution:
+				target && target.status !== "waiting"
+					? {
+							executionId: target.executionId,
+							conversationId: target.conversationId,
+							actorId: target.actorId,
+							sessionGeneration: target.sessionGeneration,
+							modelConfigurationRevision: target.modelConfigurationRevision,
+							modelOptionId: target.modelOptionId,
+							reasoningLevel: target.reasoningLevel,
+							status: target.status,
+						}
+					: undefined,
 			existingStop: stop
 				? {
 						executionId: stop.executionId,

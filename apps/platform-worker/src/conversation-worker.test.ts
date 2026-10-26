@@ -615,6 +615,85 @@ describe("Conversation Worker discovery and shutdown", () => {
 			await worker.stop();
 		}
 	});
+	it("keeps every business slot for Turns while Sandbox retries use their own budget (#3378)", async () => {
+		const items = [
+			...Array.from({ length: 8 }, (_, index) => ({
+				itemId: `sandbox-${String.fromCharCode(97 + index)}`,
+				operation: "conversation.sandbox.reconcile.v1" as const,
+			})),
+			...Array.from({ length: 9 }, (_, index) => ({
+				itemId: `turn-${index}`,
+				operation: "conversation.turn.submit.v1" as const,
+			})),
+		];
+		const sandboxClaim = { schemaVersion: 1, execution: null } as never;
+		const release = Promise.withResolvers<void>();
+		mocks.find.mockResolvedValue(items);
+		mocks.claimSandbox.mockResolvedValue(sandboxClaim);
+		mocks.recordSandbox.mockResolvedValue(undefined);
+		mocks.dispatch.mockImplementation(() => release.promise);
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			maximumConcurrentDispatches: 8,
+			receiveSandbox: async (_claim, signal) =>
+				new Promise((resolve) => {
+					signal.addEventListener(
+						"abort",
+						() => resolve({ status: "unknown", resources: [] }),
+						{ once: true },
+					);
+				}),
+		});
+		try {
+			expect(await worker.tick()).toBe(15);
+			await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledTimes(8));
+			await vi.waitFor(() =>
+				expect(mocks.claimSandbox).toHaveBeenCalledTimes(7),
+			);
+			expect(
+				mocks.dispatch.mock.calls.map((call) => call[0].itemId),
+			).not.toContain("turn-8");
+		} finally {
+			release.resolve();
+			await worker.stop();
+		}
+	});
+	it("rediscovers work deferred for capacity as soon as a slot is released (#3378)", async () => {
+		const first = Promise.withResolvers<void>();
+		const items = ["turn-a", "turn-b"].map((itemId) => ({
+			itemId,
+			operation: "conversation.turn.submit.v1" as const,
+		}));
+		const completed = new Set<string>();
+		mocks.find.mockImplementation(async () =>
+			items.filter((item) => !completed.has(item.itemId)),
+		);
+		mocks.dispatch.mockImplementation(async ({ itemId }) => {
+			if (itemId === "turn-a") await first.promise;
+			completed.add(itemId);
+		});
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			commitWakeups: false,
+			pollIntervalMs: 30_000,
+		});
+		try {
+			worker.start();
+			await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledTimes(1));
+			first.resolve();
+			// 轮询间隔 30 s，只有释放槽位时的唤醒能在此之前认领 turn-b。
+			await vi.waitFor(
+				() =>
+					expect(mocks.dispatch).toHaveBeenCalledWith(
+						expect.objectContaining({ itemId: "turn-b" }),
+					),
+				{ timeout: 1_000 },
+			);
+		} finally {
+			first.resolve();
+			await worker.stop();
+		}
+	});
 	it("prioritizes a Turn when the worker has one dispatch slot", async () => {
 		mocks.find.mockResolvedValue([
 			{ itemId: "sandbox-a", operation: "conversation.sandbox.reconcile.v1" },

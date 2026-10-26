@@ -28,7 +28,7 @@ import {
 } from "./primitive-styles";
 
 // #3293 N9-1-01：对话页的状态说明行（会话准备中 / 更新中、原执行结果待核实、自动重新连接）与同区
-// 「不支持补充指令」说明同为 14px / 20px，不继承正文 15px。导出稿没有这些状态，规格见
+// 「发送后排队」说明同为 14px / 20px，不继承正文 15px。导出稿没有这些状态，规格见
 // web-ui.md「对话页状态说明行」。受控 fixture 只返回合成数据，不代表真实 Runtime。
 const agentId = "agent-1";
 const conversationId = "conversation-feedback-1";
@@ -66,7 +66,7 @@ const scenarios: readonly Scenario[] = [
 	},
 	{
 		name: "原执行结果待核实",
-		text: "原执行结果待核实，同会话暂不能发送下一条消息。",
+		text: "原执行结果待核实，核实前新消息只进入排队。",
 		executionStatus: "unknown",
 	},
 	{
@@ -76,8 +76,9 @@ const scenarios: readonly Scenario[] = [
 		streamFailure: true,
 	},
 	{
-		name: "不支持补充指令（同区参照）",
-		text: "当前回复仍在处理，不支持补充指令。草稿会保留。",
+		// #3376：不支持补充指令时，草稿发送后进入排队。
+		name: "发送后排队（同区参照）",
+		text: "当前回复仍在处理，这条消息发送后进入排队，按顺序处理。",
 		executionStatus: "processing",
 		supplementaryInstruction: false,
 		static: true,
@@ -182,10 +183,9 @@ async function chatFixture(
 					]
 				: []),
 		],
-		...(scenario.sessionAvailability
-			? { sessionAvailability: scenario.sessionAvailability }
-			: {}),
 	});
+	// 会话准备状态可在用例中途改变（#3433：准备中重读读到就绪）。
+	let sessionAvailability = scenario.sessionAvailability;
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const url = new URL(request.url());
@@ -224,7 +224,9 @@ async function chatFixture(
 		if (path === `/api/v2/agents/${agentId}`)
 			return route.fulfill({ json: agent });
 		if (path === `/api/v2/conversations/${conversationId}`)
-			return route.fulfill({ json: detail });
+			return route.fulfill({
+				json: sessionAvailability ? { ...detail, sessionAvailability } : detail,
+			});
 		if (path.endsWith("/events")) {
 			if (scenario.streamFailure) {
 				streamReads += 1;
@@ -256,6 +258,9 @@ async function chatFixture(
 		writes,
 		streamReads: () => streamReads,
 		releaseStream: () => openStream(),
+		setSessionAvailability: (next: Scenario["sessionAvailability"]) => {
+			sessionAvailability = next;
+		},
 	};
 }
 
@@ -303,7 +308,7 @@ for (const viewport of viewports)
 			await expect(line).toBeVisible();
 			const measured = await measure(line, form);
 			const foreground = await resolved(page, "color", "var(--foreground)");
-			// 同区说明（「不支持补充指令」、模型保存提示）为 text-sm：14px / 20px、400、正文前景色。
+			// 同区说明（发送后排队、模型保存提示）为 text-sm：14px / 20px、400、正文前景色。
 			expect(
 				{
 					fontSize: measured.fontSize,
@@ -326,7 +331,8 @@ for (const viewport of viewports)
 				expect(measured.role).toBeNull();
 				expect(measured.live).toBe(false);
 				const send = page.getByRole("button", { name: "发送", exact: true });
-				await expect(send).toBeDisabled();
+				// #3376：发送不再被拦截，说明告诉用户这条消息会进入排队。
+				await expect(send).toBeEnabled();
 				const id = await line.getAttribute("id");
 				expect(id).toBeTruthy();
 				await expect(send).toHaveAttribute("aria-describedby", id ?? "");
@@ -501,4 +507,124 @@ for (const viewport of viewports)
 		expect(fixture.writes).toEqual([
 			`PUT /api/v1/conversations/${conversationId}/model-selection`,
 		]);
+	});
+
+// #3433（轮询全量收口）：会话准备中时每 500ms 重读会话投影（active-conversation.tsx）。可重试的失败（503、网络中断）
+// 之后历史与草稿保留并继续重读，读到就绪（终态）后「发送」可用、不再重读；不可重试的失败（401、404）停止重读并显示
+// 失败（401 为「当前登录或访问权限已失效…」，404 为只读的「会话连接暂时中断」提示），不再自动重读。两视口一致。
+const preparingDetailPath = `/api/v2/conversations/${conversationId}`;
+test("the preparing Session reread continues through retryable failures and stops once ready (#3433)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile" ? viewports[1] : viewports[0],
+	);
+	const errors = trackPageErrors(page);
+	const scenario = scenarios[0];
+	if (!scenario) throw new Error("missing preparing scenario");
+	const fixture = await chatFixture(page, scenario);
+	await expect(
+		page.getByRole("status").filter({ hasText: scenario.text }),
+	).toBeVisible();
+	await fixture.input.fill("准备期间的草稿");
+	const steps: string[] = [];
+	await page.route(
+		(url) => url.pathname === preparingDetailPath,
+		async (route) => {
+			const step = ["503", "network", "preparing"][steps.length] ?? "ready";
+			steps.push(step);
+			if (step === "network") return route.abort("internetdisconnected");
+			if (step === "503")
+				return route.fulfill({
+					status: 503,
+					json: {
+						schemaVersion: 1,
+						code: "DEPENDENCY_UNAVAILABLE",
+						message: "Controlled preparing reread failure",
+						retryable: true,
+						traceId: "trace-preparing-reread",
+					},
+				});
+			if (step === "ready") fixture.setSessionAvailability(undefined);
+			return route.fallback();
+		},
+	);
+	const send = page.getByRole("button", { name: "发送", exact: true });
+	await expect(send).toBeEnabled({ timeout: 10_000 });
+	expect(steps.slice(0, 4)).toEqual(["503", "network", "preparing", "ready"]);
+	await expect(fixture.input).toHaveValue("准备期间的草稿");
+	await expect(page.getByText(question, { exact: true })).toBeVisible();
+	const settled = steps.length;
+	await page.waitForTimeout(2_000);
+	expect(steps.length, "就绪后不再重读").toBe(settled);
+	expect(fixture.writes).toEqual([]);
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= window.innerWidth,
+		),
+	).toBe(true);
+	await expectCleanPage(page, errors);
+});
+
+for (const status of [401, 404] as const)
+	test(`the preparing Session reread stops after a non-retryable failure: ${status} (#3433)`, async ({
+		page,
+	}, info) => {
+		await page.setViewportSize(
+			info.project.name === "mobile" ? viewports[1] : viewports[0],
+		);
+		const errors = trackPageErrors(page);
+		const scenario = scenarios[0];
+		if (!scenario) throw new Error("missing preparing scenario");
+		const fixture = await chatFixture(page, scenario);
+		await expect(
+			page.getByRole("status").filter({ hasText: scenario.text }),
+		).toBeVisible();
+		let reads = 0;
+		await page.route(
+			(url) => url.pathname === preparingDetailPath,
+			(route) => {
+				reads += 1;
+				return route.fulfill({
+					status,
+					json: {
+						schemaVersion: 1,
+						code:
+							status === 401
+								? "AUTHENTICATION_REQUIRED"
+								: "RESOURCE_UNAVAILABLE",
+						message: "Controlled preparing reread failure",
+						retryable: false,
+						traceId: "trace-preparing-reread",
+					},
+				});
+			},
+		);
+		await expect.poll(() => reads).toBeGreaterThanOrEqual(1);
+		if (status === 401)
+			await expect(
+				page.getByRole("alert").filter({
+					hasText: "当前登录或访问权限已失效，请重新登录或返回 Agent 目录。",
+				}),
+			).toBeVisible();
+		else
+			await expect(
+				page.getByRole("alert").filter({
+					hasText:
+						"会话连接暂时中断，草稿已保留。重新连接只恢复读取，不重新发送任务。",
+				}),
+			).toBeVisible();
+		await expect(
+			page.getByRole("status").filter({ hasText: scenario.text }),
+		).toHaveCount(0);
+		const settled = reads;
+		await page.waitForTimeout(2_500);
+		expect(reads, "不可重试的失败之后不再自动重读").toBe(settled);
+		expect(fixture.writes).toEqual([]);
+		expect(
+			await page.evaluate(
+				() => document.documentElement.scrollWidth <= window.innerWidth,
+			),
+		).toBe(true);
+		await expectCleanPage(page, errors);
 	});

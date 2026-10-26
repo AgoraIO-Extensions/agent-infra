@@ -24,6 +24,7 @@ import {
 	RuntimeNativeCapabilityRequestV3Schema,
 	RuntimeNativeCapabilityTransportV4Schema,
 	RuntimeNativeCapabilityTransportV5Schema,
+	RuntimeNativeCapabilityTransportV6Schema,
 	RuntimeNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataReadResponseV1Schema,
 	RuntimeReplayRequestV1Schema,
@@ -83,6 +84,10 @@ interface RuntimeHostAppOptions {
 	verifyGrantV5?: (request: unknown) => Promise<{
 		request: import("@agent-infra/contracts/runtime").RuntimeNativeCapabilityRequestV5;
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
+	}>;
+	verifyGrantV6?: (request: unknown) => Promise<{
+		request: import("@agent-infra/contracts/runtime").RuntimeNativeCapabilityRequestV6;
+		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV6;
 	}>;
 	verifyRecoveryGrantV5?: (request: unknown) => Promise<{
 		request: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyRequestV5;
@@ -179,7 +184,7 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		// must remain usable when a deployment profile changes or disappears.
 		if (
 			context.req.method === "POST" &&
-			/^\/internal\/runtime\/v(?:[1-4]\/turns|[134]\/instructions|3\/native-capability|4\/native-capability|5\/native-capability)$/.test(
+			/^\/internal\/runtime\/v(?:[1-4]\/turns|[134]\/instructions|3\/native-capability|4\/native-capability|5\/native-capability|6\/native-capability)$/.test(
 				context.req.path,
 			)
 		) {
@@ -535,6 +540,22 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			);
 		return verified;
 	}
+	async function verifyV6(request: unknown) {
+		if (!options.verifyGrantV6 || !options.runtimeWorkerId)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization is not configured",
+				403,
+			);
+		const verified = await options.verifyGrantV6(request);
+		if (verified.claims.workerId !== options.runtimeWorkerId)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization does not match this deployment",
+				403,
+			);
+		return verified;
+	}
 	async function verifyRecoveryV5(request: unknown) {
 		if (!options.verifyRecoveryGrantV5 || !options.runtimeWorkerId)
 			throw new RuntimeHostError(
@@ -590,6 +611,14 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		);
 		await verifyV5(request.businessRequest);
 		return context.json(await options.host.nativeCapabilityV5(request));
+	});
+	app.post("/internal/runtime/v6/native-capability", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeNativeCapabilityTransportV6Schema,
+		);
+		await verifyV6(request.businessRequest);
+		return context.json(await options.host.nativeCapabilityV6(request));
 	});
 	app.post("/internal/runtime/v5/execution-key/restore", async (context) => {
 		const request = await parseBody(

@@ -153,7 +153,7 @@ async function snapshotHistory() {
 	]) {
 		const record =
 			table === "conversation_executions"
-				? "to_jsonb(record) - 'principal_type' - 'task_wait_order' - 'task_wait_deadline' - 'execution_source' - 'relay_key_purpose' - 'relay_key_subject_id' - 'relay_key_id' - 'relay_key_version' - 'runtime_submit_protocol' - 'original_operation_digest' - 'original_submit_host_session_ref' - 'sandbox_id' - 'accepted_original_host_session_ref'"
+				? "to_jsonb(record) - 'principal_type' - 'task_wait_order' - 'task_wait_deadline' - 'execution_source' - 'relay_key_purpose' - 'relay_key_subject_id' - 'relay_key_id' - 'relay_key_version' - 'runtime_submit_protocol' - 'original_operation_digest' - 'original_submit_host_session_ref' - 'sandbox_id' - 'accepted_original_host_session_ref' - 'unknown_since'"
 				: table === "conversations"
 					? "to_jsonb(record) - 'principal_type'"
 					: table === "outbox_items"
@@ -224,6 +224,11 @@ beforeAll(async () => {
 				or original_submit_host_session_ref is not null or sandbox_id is not null
 				or accepted_original_host_session_ref is not null`,
 	).toEqual([{ count: 0 }]);
+	// #3373：0064 只为迁移前已处于 unknown 的 Execution 从迁移时开始计时，其他行保持为空。
+	expect(
+		await sql`select execution_id from platform.conversation_executions
+			where unknown_since is not null order by execution_id`,
+	).toEqual([{ execution_id: "execution-recovery" }]);
 	expect(
 		await sql`select count(*)::int as count from platform.conversation_executions where principal_type <> 'user'`,
 	).toEqual([{ count: 0 }]);

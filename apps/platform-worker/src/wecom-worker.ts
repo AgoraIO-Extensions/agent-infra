@@ -3,6 +3,9 @@ import {
 	createWecomAuthorizationV1,
 	createWecomChannelV1,
 	createWecomDeliveryV1,
+	createWecomProgressV1,
+	createWecomQueueNoticeV1,
+	createWecomSupplementaryInstructionReaderV1,
 	sameWecomConnectionAuthorizationFactV1,
 	type TaskRuntimeAuthorizationRecordV1,
 	type TaskUserDirectoryV1,
@@ -11,7 +14,10 @@ import {
 	type WecomIdentityPortV1,
 	type WecomSendPortV1,
 } from "@agent-infra/platform-core";
-import { PostgresWecomChannelV1 } from "@agent-infra/platform-store";
+import {
+	PostgresAgentConfigurationQueryV1,
+	PostgresWecomChannelV1,
+} from "@agent-infra/platform-store";
 import { parseWecomAnswerReferencesV1 } from "@agent-infra/wecom/worker";
 import {
 	createPlatformWecomConnectionsV1,
@@ -61,6 +67,9 @@ export function createPlatformWecomWorkerV1(
 		state: store,
 		connectionAuthorization: options.connectionAuthorization,
 	});
+	const runtimePresentation = new PostgresAgentConfigurationQueryV1({
+		databaseUrl: options.databaseUrl,
+	});
 	const media = options.media
 		? createWecomMediaV1({
 				...options.media,
@@ -74,6 +83,12 @@ export function createPlatformWecomWorkerV1(
 		authorization,
 		store,
 		...(media ? { media: media.inbound } : {}),
+		// #3375：与 Web 读取同一 Runtime 展示投影中的补充指令能力。
+		supplementaryInstruction: createWecomSupplementaryInstructionReaderV1({
+			runtime: runtimePresentation,
+			identity: options.identity,
+			state: store,
+		}),
 	});
 	const setup =
 		options.setup && options.connections
@@ -84,6 +99,8 @@ export function createPlatformWecomWorkerV1(
 				})
 			: undefined;
 	const deployment = options.connections;
+	// #3376：排队提示由持有长连接的 Worker 在该消息自己的 stream 上发送与更新。
+	let queueNotices: ReturnType<typeof createWecomQueueNoticeV1> | undefined;
 	const connections = deployment
 		? createPlatformWecomConnectionsV1({
 				...options.connections,
@@ -102,8 +119,15 @@ export function createPlatformWecomWorkerV1(
 				},
 				databaseUrl: options.databaseUrl,
 				receive: channel.receive,
+				onQueued: (receiptId, position) =>
+					queueNotices?.noted(receiptId, position),
 			})
 		: undefined;
+	if (connections)
+		queueNotices = createWecomQueueNoticeV1({
+			store,
+			sender: connections.updater,
+		});
 	const outbound = media?.outbound;
 	/** 只有长连接回复路由支持媒体；其他回复方式与未装配出站文件面时按不支持处理（#3229）。 */
 	const websocketRoute = async (replyHandle: string) => {
@@ -187,6 +211,21 @@ export function createPlatformWecomWorkerV1(
 			},
 		},
 	});
+	// #3377：长连接流式进度（工程 Spec §14.2.4）。只有长连接回复路由能覆盖更新已发送的回复；
+	// 自建应用与显式机器人回调只发送终态回复。
+	const progress = connections
+		? createWecomProgressV1({
+				store,
+				authorization,
+				answerReferences: parseWecomAnswerReferencesV1,
+				sender: {
+					async update(input) {
+						if (!(await websocketRoute(input.replyHandle))) return "failed";
+						return connections.sender.update(input);
+					},
+				},
+			})
+		: undefined;
 	return {
 		async reconcile() {
 			if (setup) {
@@ -204,14 +243,23 @@ export function createPlatformWecomWorkerV1(
 		},
 		async dispatch() {
 			// Claim a bounded batch so one slow reply cannot serialize all bots.
-			const results = await Promise.allSettled(
-				Array.from({ length: 8 }, () => delivery.dispatch()),
-			);
+			const results = await Promise.allSettled([
+				...Array.from({ length: 8 }, () => delivery.dispatch()),
+				// 位次变化与开始处理的提示；失败只影响提示帧，不影响最终回复。
+				...(queueNotices ? [queueNotices.tick().catch(() => false)] : []),
+			]);
 			const failure = results.find((result) => result.status === "rejected");
 			if (failure?.status === "rejected") throw failure.reason;
 			return results.some(
 				(result) => result.status === "fulfilled" && result.value,
 			);
+		},
+		/**
+		 * #3377：刷新长连接回执的进度帧，返回交给发送者的帧数。由独立的轮询驱动，较慢的终态回复或
+		 * 媒体发送不会让进度停下；进度帧尽力而为，失败在下一轮重试，不影响终态回复。
+		 */
+		async progress() {
+			return (await progress?.tick()) ?? 0;
 		},
 		async channelAuthorizationCurrent(
 			record: TaskRuntimeAuthorizationRecordV1,
@@ -245,7 +293,11 @@ export function createPlatformWecomWorkerV1(
 				connections?.close(),
 			]);
 			// Keep business pools open until setup and connection shutdown settle.
-			for (const close of [() => store.close(), () => media?.close()])
+			for (const close of [
+				() => store.close(),
+				() => runtimePresentation.close(),
+				() => media?.close(),
+			])
 				try {
 					await close();
 				} catch (reason) {

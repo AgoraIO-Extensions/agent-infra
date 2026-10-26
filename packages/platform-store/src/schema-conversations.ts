@@ -154,6 +154,9 @@ export const conversationExecutions = platformSchema.table(
 		taskWaitDeadline: timestamp("task_wait_deadline", { withTimezone: true }),
 		// Legacy rows remain unbound and cannot be dispatched as isolated Sessions.
 		sandboxId: text("sandbox_id"),
+		// #3373：本次进入 unknown 的时间，由触发器随状态迁移维护，离开 unknown 时清除；
+		// 墙钟恢复预算只读这一列。
+		unknownSince: timestamp("unknown_since", { withTimezone: true }),
 	},
 	(table) => [
 		foreignKey({

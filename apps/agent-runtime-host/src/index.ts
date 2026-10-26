@@ -13,6 +13,7 @@ import {
 	createExecutionGrantVerifier,
 	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantValidatorV5,
+	createRuntimeExecutionGrantValidatorV6,
 	createRuntimeExecutionGrantVerifierV2,
 	createRuntimeExecutionKeyRecoveryValidatorV4,
 	createRuntimeExecutionKeyRecoveryValidatorV5,
@@ -45,6 +46,7 @@ import { probeRuntimeBrowserCapabilityV1 } from "./browser-capability-probe.js";
 import { createSessionBrowserExecutionContextV1 } from "./browser-session-provider.js";
 import {
 	readCodexInstalledSkillDeployment,
+	readCodexIsolationMode,
 	readCodexPilotConfiguration,
 	readRuntimeFileExchangeOptions,
 	readRuntimeModelConfigurationV3,
@@ -124,6 +126,7 @@ interface StartOptions {
 		request: RuntimeNativeCapabilityRequestV5;
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
 	}>;
+	verifyGrantV6?: RuntimeHostOptions["validateGrantV6"];
 	verifyRecoveryGrantV5?: (request: unknown) => Promise<{
 		request: RuntimeRestoreExecutionKeyRequestV5;
 		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV5;
@@ -405,6 +408,10 @@ export async function assembleRuntimeHost(
 	}
 	const configuration =
 		binding === "codex" ? readCodexPilotConfiguration(environment) : undefined;
+	const codexIsolationMode =
+		binding === "codex"
+			? readCodexIsolationMode(environment, serviceToken)
+			: undefined;
 	const connectionProfile = readConnectionClientProfile(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_PROFILE,
 	);
@@ -558,6 +565,7 @@ export async function assembleRuntimeHost(
 				: undefined;
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
+					isolationMode: codexIsolationMode,
 					browserCapability: verifiedBrowserCapability,
 					...(skillDirectory ? { skillDirectory } : {}),
 					...(standardConnectionClient ? { standardConnectionClient } : {}),
@@ -809,6 +817,29 @@ export async function assembleRuntimeHost(
 					return verified;
 				}
 			: undefined;
+		const rawValidateV6 =
+			runtimeWorkerId && activeConfiguration?.schemaVersion === 4
+				? createRuntimeExecutionGrantValidatorV6(
+						new Map([[keyId, publicKey]]),
+						{ expectedIssuer, expectedWorkerId: runtimeWorkerId },
+					)
+				: undefined;
+		const validateV6 = rawValidateV6
+			? async (request: unknown) => {
+					const verified = await rawValidateV6(request);
+					if (
+						(agentId && verified.claims.agentId !== agentId) ||
+						verified.request.configVersion !==
+							activeConfiguration?.configVersion
+					)
+						throw new RuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							"Runtime authorization does not match this deployment",
+							403,
+						);
+					return verified;
+				}
+			: undefined;
 		const host = await RuntimeHost.open({
 			createBrowserExecutionContext,
 			probeBrowserCapability: async ({ declaration, binding, signal }) =>
@@ -851,6 +882,7 @@ export async function assembleRuntimeHost(
 				? { validateRecoveryGrantV4: validateRecoveryV4 }
 				: {}),
 			...(validateV5 ? { validateGrantV5: validateV5 } : {}),
+			...(validateV6 ? { validateGrantV6: validateV6 } : {}),
 			...(validateRecoveryV5
 				? { validateRecoveryGrantV5: validateRecoveryV5 }
 				: {}),
@@ -906,6 +938,7 @@ export async function assembleRuntimeHost(
 			...(validateV5
 				? { verifyGrantV5: (request: unknown) => validateV5(request) }
 				: {}),
+			...(validateV6 ? { verifyGrantV6: validateV6 } : {}),
 			...(validateRecoveryV5
 				? {
 						verifyRecoveryGrantV5: (request: unknown) =>

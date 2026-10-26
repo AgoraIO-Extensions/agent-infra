@@ -6,6 +6,9 @@ import {
 	type ConversationDispatchOperationV1,
 	type ConversationDispatchStateTransitionV1,
 	type ConversationDispatchStorePortV1,
+	conversationQueueCapacityV1,
+	conversationQueueReplyLeadMsV1,
+	conversationQueueWaitMsV1,
 	decideConversationDispatchCapacityV1,
 	decideConversationDispatchRetryTransitionV1,
 	parseConversationPersistedEventPayloadV1,
@@ -44,6 +47,7 @@ import {
 	isolationProjection,
 	lockOutbox,
 	ownedState,
+	queueSupplementMessages,
 	readGenerationIsolation,
 	readStop,
 	renewLease,
@@ -52,6 +56,7 @@ import {
 	transactionResult,
 } from "./conversation-dispatch-sql.js";
 import {
+	finishConversationWaitingTasks,
 	finishWaitingTask,
 	lockWaitingTaskAuthority,
 	recordTaskStatus,
@@ -530,6 +535,8 @@ export class PostgresConversationDispatchStoreV1
 										and s.resource_observation->>'status' = 'ready'
 								)
 								or (
+									-- #3373：只核实状态的恢复不以 Sandbox 就绪为前置。原生能力调用只有记录了
+									-- Host Session Ref 时才沿原操作查询。
 									operation in (
 										'conversation.turn.submit.v1',
 										'conversation.turn.regenerate.v1',
@@ -538,14 +545,13 @@ export class PostgresConversationDispatchStoreV1
 									and exists (
 										select 1
 										from platform.conversation_executions e
-										join platform.agent_applications ap
-											on ap.agent_id = e.agent_id
+										join platform.conversations c on c.id = e.conversation_id
 										where e.execution_id = outbox_items.payload->>'executionId'
 											and e.conversation_id = outbox_items.scope_id
 											and e.status in ('processing', 'unknown')
 											and (
-												ap.status in ('stopped', 'disabled')
-												or ap.desired_state = 'stopped'
+												outbox_items.operation <> 'conversation.native-capability.invoke.v1'
+												or c.host_session_ref is not null
 											)
 									)
 								)
@@ -777,6 +783,13 @@ export class PostgresConversationDispatchStoreV1
 				...claim,
 				executionStatus: state.execution.status,
 			});
+			// 尚未开始的等待 Execution（含排队消息）随会话不可用一并终结，不留下永远等待的消息。
+			await finishConversationWaitingTasks(
+				transaction,
+				claim.conversationId,
+				claim.sessionGeneration,
+				claim.leaseOwner,
+			);
 			const failed = await transaction<{ execution_id: string }[]>`
         update platform.conversation_executions set status = 'failed', updated_at = clock_timestamp()
         where conversation_id = ${claim.conversationId} and session_generation = ${claim.sessionGeneration}
@@ -991,17 +1004,17 @@ export class PostgresConversationDispatchStoreV1
 						if (decision.outcome === "wait")
 							throw new DispatchCapacityUnavailable("capacity_wait");
 					}
-					const stoppedRecovery =
+					// #3373：只核实状态的恢复不以 Sandbox 就绪为前置（与认领一致）。
+					const statusRecovery =
 						isExecutionOperation(input.claim.operation) &&
 						(input.claim.executionStatus === "processing" ||
 							input.claim.executionStatus === "unknown") &&
-						(agent.status === "stopped" ||
-							agent.status === "disabled" ||
-							agent.desired_state === "stopped");
+						(isTurn(input.claim.operation) ||
+							state.conversation.host_session_ref !== null);
 					if (
 						!state.conversation.sandbox_ready &&
 						input.claim.operation !== "conversation.turn.stop.v1" &&
-						!stoppedRecovery
+						!statusRecovery
 					)
 						// An upgrading Sandbox is this Session's own wait, not
 						// Agent capacity (ADR 0023).
@@ -1194,6 +1207,7 @@ export class PostgresConversationDispatchStoreV1
 		readonly claim: ConversationDispatchClaimV1;
 		readonly retryDelayMs: number;
 		readonly errorCode: string;
+		readonly hostSessionRef?: string;
 	}): Promise<boolean> {
 		requireClaim(input.claim);
 		const recoveringUnacceptedTurn =
@@ -1214,7 +1228,8 @@ export class PostgresConversationDispatchStoreV1
 			!Number.isSafeInteger(input.retryDelayMs) ||
 			input.retryDelayMs < 0 ||
 			input.retryDelayMs > 86_400_000 ||
-			!symbolicCode.test(input.errorCode)
+			!symbolicCode.test(input.errorCode) ||
+			(input.hostSessionRef !== undefined && !validText(input.hostSessionRef))
 		)
 			throw new TypeError("Conversation dispatch release is invalid");
 		return transactionResult(this.#client, async (transaction) => {
@@ -1224,9 +1239,28 @@ export class PostgresConversationDispatchStoreV1
 			if (
 				state?.execution.status !== "unknown" ||
 				state.execution.last_runtime_cursor !== null ||
-				state.conversation.host_session_ref !== input.claim.hostSessionRef
+				state.conversation.host_session_ref !== input.claim.hostSessionRef ||
+				(input.hostSessionRef !== undefined &&
+					state.conversation.host_session_ref !== null &&
+					state.conversation.host_session_ref !== input.hostSessionRef)
 			)
 				throw new StaleDispatchLease();
+			// #3373：未提交结果带回 Host Session Ref；尚未记录时一并保存，之后的状态核实可以沿它查询。
+			if (
+				input.hostSessionRef !== undefined &&
+				state.conversation.host_session_ref === null
+			) {
+				const recorded = await transaction<{ id: string }[]>`
+					update platform.conversations
+					set host_session_ref = ${input.hostSessionRef}, updated_at = clock_timestamp()
+					where id = ${input.claim.conversationId}
+						and session_generation = ${input.claim.sessionGeneration}
+						and authorization_revision = ${input.claim.authorizationRevision}
+						and host_session_ref is null
+					returning id
+				`;
+				if (recorded.length !== 1) throw new StaleDispatchLease();
+			}
 			const rows = await transaction<{ execution_id: string }[]>`
 				update platform.conversation_executions
 				set status = ${original}, updated_at = clock_timestamp()
@@ -1393,6 +1427,40 @@ export class PostgresConversationDispatchStoreV1
 		});
 	}
 
+	/**
+	 * #3375：补充指令转入排队（工程 Spec §12.5）。在本次补充指令的 Conversation 锁事务内转换它与
+	 * 同一 Execution 之后仍待投递的补充指令；进入排队时 outbox 以“已转排队”终结，否则按“排队已满”
+	 * 或“权限已失效”失败。
+	 */
+	async queueSupplement(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}): Promise<boolean> {
+		requireClaim(input.claim);
+		if (input.claim.operation !== "conversation.turn.supplement.v1")
+			throw new TypeError("Only a supplementary instruction can be queued");
+		return transactionResult(this.#client, async (transaction) => {
+			const state = await ownedState(transaction, input.claim, true);
+			if (!state) throw new StaleDispatchLease();
+			const outcome = await queueSupplementMessages(
+				transaction,
+				state,
+				input.claim,
+				{
+					capacity: conversationQueueCapacityV1,
+					waitMs: conversationQueueWaitMsV1,
+					replyLeadMs: conversationQueueReplyLeadMsV1,
+				},
+			);
+			await closeOutbox(
+				transaction,
+				state,
+				input.claim,
+				outcome === "queued" ? "succeeded" : "failed",
+				outcome === "queued" ? "SUPPLEMENT_QUEUED" : outcome,
+			);
+		});
+	}
+
 	async finish(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly status: "succeeded" | "failed";
@@ -1426,8 +1494,11 @@ export class PostgresConversationDispatchStoreV1
 				await settleUnacceptedExecutionWork(transaction, input.claim);
 			// #3314：附件读取在原生副作用前被平台明确拒绝，初始 Turn 未被 Runtime 接受即失败
 			// （HLD §8.1）：同一事务终结本次 Execution 的待处理补充指令与 stop，会话保持可用。
+			// #3373：Runtime 报告未提交且重提用尽时同样如此。
 			if (
-				input.errorCode === "RUNTIME_FILE_INPUT_REJECTED" &&
+				(input.errorCode === "RUNTIME_FILE_INPUT_REJECTED" ||
+					input.errorCode === "RUNTIME_FILE_INPUT_UNAVAILABLE" ||
+					input.errorCode === "RUNTIME_SESSION_PREPARATION_FAILED") &&
 				isTurn(input.claim.operation) &&
 				input.transition.executionStatus === "failed"
 			)

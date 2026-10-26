@@ -4,6 +4,8 @@ import type { Client } from "../../pilot/generated-v2/client/index.js";
 import { client as defaultClient } from "../../pilot/generated-v2/client.gen.js";
 import { readConversationNativeMetadataV1 } from "../../pilot/generated-v2/sdk.gen.js";
 import type { NativeMetadataProjectionV1 } from "../../pilot/generated-v2/types.gen.js";
+import { readFailed } from "../background-read.js";
+import { collectionReadFailure } from "../collection-read-failure.js";
 import type { ConversationCapabilityV1 } from "./conversation-capability-picker.js";
 
 export function nativeMetadataCapabilities(
@@ -58,14 +60,24 @@ export function useConversationNativeMetadata({
 			});
 			signal.throwIfAborted();
 			if (result.response?.status !== 200 || !result.data)
-				throw new Error("Native metadata is unavailable");
+				throw Object.assign(new Error("Native metadata is unavailable"), {
+					retryable: collectionReadFailure(result.response?.status).retryable,
+				});
 			const parsed = NativeMetadataProjectionV1Schema.safeParse(result.data);
 			if (!parsed.success || parsed.data.selector !== selector)
 				throw new Error("Native metadata response is invalid");
 			return parsed.data;
 		},
 	});
-	const projection = enabled && !query.isError ? query.data : undefined;
+	// 读到过的目录在后台重读的可重试失败时继续可用（#3387）；无权、响应无效等仍清除目录。
+	const projection =
+		enabled &&
+		!readFailed(
+			query,
+			(error) => (error as { retryable?: boolean } | null)?.retryable === true,
+		)
+			? query.data
+			: undefined;
 	return {
 		...query,
 		isPending: enabled && query.isPending,

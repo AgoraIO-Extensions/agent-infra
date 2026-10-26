@@ -1,6 +1,8 @@
+import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
+	readCodexIsolationMode,
 	readCodexPilotConfiguration,
 	readRuntimeFileExchangeOptions,
 	readRuntimeModelConfigurationV3,
@@ -35,6 +37,36 @@ function environment(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Runtime deployment configuration", () => {
+	it("defaults Codex isolation to Landlock and accepts the Worker-owned container mode", () => {
+		expect(readCodexIsolationMode({})).toBe("landlock");
+		const serviceToken = "synthetic-service-token";
+		const scope = "agent-a";
+		const attestation = createHmac("sha256", serviceToken)
+			.update(`agent-infra-container-boundary-v1\0${scope}`)
+			.digest("base64url");
+		expect(
+			readCodexIsolationMode(
+				{
+					AGENT_INFRA_RUNTIME_ISOLATION_MODE: "container-boundary",
+					AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED: "worker-v1",
+					AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE: scope,
+					AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION: attestation,
+				},
+				serviceToken,
+			),
+		).toBe("container-boundary");
+		expect(() =>
+			readCodexIsolationMode(
+				{
+					AGENT_INFRA_RUNTIME_ISOLATION_MODE: "container-boundary",
+				},
+				serviceToken,
+			),
+		).toThrow("RUNTIME_CONFIGURATION_INVALID");
+		expect(() =>
+			readCodexIsolationMode({ AGENT_INFRA_RUNTIME_ISOLATION_MODE: "unsafe" }),
+		).toThrow("RUNTIME_CONFIGURATION_INVALID");
+	});
 	it("consumes Responses V3 through the Codex startup reader", () => {
 		const env = environment({
 			schemaVersion: 3,

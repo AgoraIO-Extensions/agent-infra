@@ -5,6 +5,8 @@ import { buttonVariants } from "@/components/ui/button";
 
 import { checkAgentDefaultRelayKey } from "../../../features/agent-configuration/agent-configuration.js";
 import { useAgentDefaultRelayKeyState } from "../../../features/agent-configuration/use-agent-default-relay-key-state.js";
+import { readFailed } from "../../../features/background-read.js";
+import { connectionEntryUrl } from "../../../features/connection-entry.js";
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
 import { projectDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
 import {
@@ -13,20 +15,25 @@ import {
 	isRetryableMyAgentApplicationError,
 } from "../../../features/my-agents/my-agent-applications.js";
 import { useAgentApplicationSubmission } from "../../../features/my-agents/use-agent-application-submission.js";
-import { useDeploymentConfiguration } from "../../../features/my-agents/use-deployment-configuration.js";
+import { useShownDeploymentConfiguration } from "../../../features/my-agents/use-deployment-configuration.js";
 import { useMyAgentApplication } from "../../../features/my-agents/use-my-agent-application.js";
 import { PageLoadingState } from "../../../features/page-loading-state.js";
 import { RecoveryButton } from "../../../features/recovery-button.js";
+import { useBrowserSession } from "../../../features/use-browser-session.js";
 
 export const Route = createFileRoute("/my-agents/$applicationId/edit")({
 	component: EditAgentApplicationRoute,
 });
 
 function EditAgentApplicationRoute() {
+	const session = useBrowserSession();
 	const { applicationId } = Route.useParams();
 	const query = useMyAgentApplication(applicationId);
 	const submission = useAgentApplicationSubmission(applicationId);
-	const deployment = useDeploymentConfiguration();
+	// 部署状态说明与提交拦截按当前读取结果（N12-01）；读取失败时模型端点与模型的显示名沿用最近一次读到的
+	// 目录（#3418 N14-06）。
+	const { query: deployment, shown: shownDeployment } =
+		useShownDeploymentConfiguration();
 	// 标准模板申请的模型由默认 Key 管理时，更换模型需要重新提交 Key（#2421）。
 	const loadedApplication =
 		query.data?.kind === "ready" ? query.data.application : undefined;
@@ -45,7 +52,12 @@ function EditAgentApplicationRoute() {
 			</main>
 		);
 	}
-	if (query.isError || !query.data || query.data.kind !== "ready") {
+	if (
+		// 后台重读（回到标签页等）的可重试失败不替换表单：未保存的修改与焦点保留（#3387）。
+		readFailed(query, isRetryableMyAgentApplicationError) ||
+		!query.data ||
+		query.data.kind !== "ready"
+	) {
 		return (
 			<main className="platform-content management-content">
 				<section
@@ -135,6 +147,11 @@ function EditAgentApplicationRoute() {
 	return (
 		<main className="platform-content management-content">
 			<AgentApplicationSubmissionScreen
+				connectionUrl={
+					session.state.kind === "ready"
+						? connectionEntryUrl(session.state.connection)
+						: undefined
+				}
 				action={action}
 				application={application}
 				defaultRelayKeyManaged={defaultRelayKey.data?.isSet === true}
@@ -154,6 +171,11 @@ function EditAgentApplicationRoute() {
 				submitting={submission.isPending}
 				deploymentConfiguration={deploymentConfiguration}
 				deploymentConfigurationRetryable={deploymentConfigurationRetryable}
+				lastReadModelEndpoints={
+					shownDeployment?.kind === "ready"
+						? shownDeployment.configuration.modelCatalog.endpoints
+						: undefined
+				}
 				onRefreshDeploymentConfiguration={() => void deployment.refetch()}
 				refreshingDeploymentConfiguration={deployment.isFetching}
 			/>

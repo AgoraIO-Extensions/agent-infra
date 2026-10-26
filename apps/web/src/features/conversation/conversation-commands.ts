@@ -8,6 +8,8 @@ import {
 	PilotProtocolErrorV1Schema,
 	RegenerateCommandRequestV1Schema,
 	StopCommandRequestV1Schema,
+	WithdrawalAcceptedProjectionV1Schema,
+	WithdrawCommandRequestV1Schema,
 } from "@agent-infra/contracts/pilot";
 import type { Client } from "../../pilot/generated/client/index.js";
 import {
@@ -17,6 +19,7 @@ import {
 	stopExecution,
 	submitMessage,
 	updateConversationModelSelection,
+	withdrawQueuedMessage,
 } from "../../pilot/generated/sdk.gen.js";
 import type {
 	BrowserCommandAcceptedProjectionV1,
@@ -28,6 +31,8 @@ import type {
 	StopExecutionData,
 	SubmitMessageData,
 	UpdateConversationModelSelectionData,
+	WithdrawQueuedMessageData,
+	WithdrawQueuedMessageResponse,
 } from "../../pilot/generated/types.gen.js";
 import type { NativeCapabilityInvocationRequestV2 } from "../../pilot/generated-v2/types.gen.js";
 import type { CapabilityInvocationBody } from "./conversation-capability-picker.js";
@@ -47,6 +52,7 @@ export type ConversationCommand =
 	  }
 	| { kind: "message"; body: SubmitMessageData["body"] }
 	| { kind: "stop"; body: StopExecutionData["body"] }
+	| { kind: "withdraw"; body: WithdrawQueuedMessageData["body"] }
 	| { kind: "regenerate"; body: RegenerateAnswerData["body"] }
 	| { kind: "selection"; body: UpdateConversationModelSelectionData["body"] }
 	| { kind: "native-capability"; body: NativeCapabilityCommandBody }
@@ -54,6 +60,8 @@ export type ConversationCommand =
 export type ConversationCommandResult =
 	| { kind: "created"; agentId: string; conversationId: string }
 	| { kind: "accepted"; receipt: CommandAcceptedProjectionV1 }
+	/** 撤回排队消息的结果（#3376）：已撤回，或消息已开始处理 / 已结束而不受影响。 */
+	| { kind: "withdrawal"; receipt: WithdrawQueuedMessageResponse }
 	| {
 			kind: "selection-updated";
 			agentId: string;
@@ -223,6 +231,28 @@ export async function performConversationCommand(
 			)
 				return { kind: "unknown" };
 			return { kind: "browser-accepted", receipt: parsed.data };
+		}
+		if (command.kind === "withdraw") {
+			const body = WithdrawCommandRequestV1Schema.safeParse(command.body);
+			if (!body.success || !target.conversationId)
+				return { kind: "rejected", code: "INVALID_REQUEST", retryable: false };
+			const response = await withdrawQueuedMessage({
+				...options,
+				path: { conversationId: target.conversationId },
+				body: body.data,
+			});
+			if (!response.data)
+				return failure(response.response?.status, response.error);
+			if (response.response?.status !== 202) return { kind: "unknown" };
+			const parsed = WithdrawalAcceptedProjectionV1Schema.safeParse(
+				response.data,
+			);
+			if (
+				!parsed.success ||
+				parsed.data.executionId !== body.data.targetExecutionId
+			)
+				return { kind: "unknown" };
+			return { kind: "withdrawal", receipt: parsed.data };
 		}
 		if (command.kind === "create") {
 			const body = CreateConversationRequestV1Schema.safeParse(command.body);

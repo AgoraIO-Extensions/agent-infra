@@ -9,7 +9,7 @@ import {
 	useState,
 } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
 	Field,
@@ -45,6 +45,10 @@ import { useKeylessKeyCheck } from "../agent-configuration/use-keyless-key-check
 import { agentSourceReferenceLabel } from "../agent-management-status.js";
 import { DirectoryPicker } from "../directory-fields.js";
 import {
+	templateDisplayName,
+	templateNameLookup,
+} from "../template-display-name.js";
+import {
 	type AgentApplicationEnvironmentDraft,
 	type AgentApplicationFieldErrors,
 	type AgentApplicationModelDraft,
@@ -58,7 +62,9 @@ import {
 import { ApplicationKeylessModelEditor } from "./application-keyless-model-editor.js";
 import {
 	applicationTemplateChoices,
+	deploymentConfigurationUsable,
 	templateReadinessMessages,
+	unreadableTemplateReadinessMessage,
 } from "./deployment-configuration.js";
 import {
 	formatMultiServiceManifestSummary,
@@ -73,6 +79,12 @@ import {
 
 type AgentApplicationFormProps = {
 	cancelAction?: ReactNode;
+	connectionUrl?: string;
+	/**
+	 * 最近一次读到的模型目录端点（#3418 N14-06）。部署选项读取失败时（N13-08）模型选择器禁用，端点与模型只按它
+	 * 显示名称和已选档位，不用于校验与提交。
+	 */
+	lastReadModelEndpoints?: readonly DeploymentModelEndpointProjectionV2[];
 	showDeploymentStatus?: boolean;
 	/**
 	 * 提交失败时页面顶部 danger 提示的文案（由提交页按服务端错误给出）。表单在顶部只放这一条提示；
@@ -198,9 +210,18 @@ function firstFieldError(errors: AgentApplicationFieldErrors) {
 		);
 	};
 	const fallback =
-		document.getElementById("application-deployment-status") ??
-		document.getElementById(rowAddId.model);
+		deploymentStatusFocusTarget() ?? document.getElementById(rowAddId.model);
 	return controls.find(isActionable) ?? fallback;
+}
+
+/**
+ * 部署状态说明里的下一步：可重试时为「重新加载部署选项」，不可重试时为说明本身（tabIndex=-1）。出错的
+ * 字段都不可操作（部署选项读取失败时「标准模板」与模型选择器都禁用），或修改申请因部署选项不可用被拦下时
+ * 焦点交给它，浏览器把它滚入视口（根样式让出吸顶顶栏），不留在页底的提交按钮上（#3389 N13-09、N13-10）。
+ */
+function deploymentStatusFocusTarget() {
+	const status = document.getElementById("application-deployment-status");
+	return status?.querySelector<HTMLElement>("button") ?? status;
 }
 
 function reindexRowErrors(
@@ -390,6 +411,9 @@ function modelLabel(
 	return `${endpoint.displayName} · ${modelId}`;
 }
 
+/** 部署选项读取失败、也没有读到过端点显示名时「模型端点」的显示（不显示原始端点 ID，RK2-01、#3418 N14-06）。 */
+const unreadableEndpointLabel = "暂时无法读取端点名称";
+
 function templateFor(
 	configuration: DeploymentConfigurationProjectionV2,
 	templateId: string,
@@ -402,12 +426,18 @@ function templateFor(
 function ModelRows({
 	models,
 	endpoints,
+	displayEndpoints,
+	unreadable,
 	errors,
 	onChange,
 	onRemove,
 }: {
 	models: readonly AgentApplicationModelDraft[];
 	endpoints: readonly DeploymentModelEndpointProjectionV2[];
+	/** 显示名称与已选档位用的目录：部署选项读取失败时为最近一次读到的目录（#3418 N14-06）。 */
+	displayEndpoints: readonly DeploymentModelEndpointProjectionV2[];
+	/** 部署选项读取失败，模型目录读不到（N13-08）。 */
+	unreadable: boolean;
 	errors: AgentApplicationFieldErrors;
 	onChange: (
 		index: number,
@@ -425,6 +455,19 @@ function ModelRows({
 				const selectedModel = endpoint?.models.find(
 					(item) => item.modelId === model.modelId,
 				);
+				// 部署选项读取失败时只能看、不能改：端点按最近一次读到的显示名，已选档位照常列出（禁用），不回退
+				// 原始端点 ID，也不改说「选择模型后显示可用档位」（RK2-01、#3418 N14-06）。
+				const displayEndpoint = displayEndpoints.find(
+					(item) => item.endpointId === model.endpointId,
+				);
+				const selectedLevels = model.reasoningLevels
+					.split("\n")
+					.filter(Boolean);
+				const shownLevels = unreadable
+					? (displayEndpoint?.models.find(
+							(item) => item.modelId === model.modelId,
+						)?.reasoningLevels ?? selectedLevels)
+					: (selectedModel?.reasoningLevels ?? []);
 				const modelOptions = [
 					...new Set(endpoint?.models.map((item) => item.modelId) ?? []),
 				].map((modelId) => ({ value: modelId, label: modelId }));
@@ -445,8 +488,9 @@ function ModelRows({
 								value={model.endpointId}
 								disabled={endpoints.length === 0}
 								itemToStringLabel={(value) =>
-									endpoints.find((item) => item.endpointId === value)
-										?.displayName ?? String(value)
+									displayEndpoints.find((item) => item.endpointId === value)
+										?.displayName ??
+									(unreadable ? unreadableEndpointLabel : String(value))
 								}
 								onValueChange={(value) =>
 									value && onChange(index, "endpointId", value)
@@ -464,7 +508,14 @@ function ModelRows({
 										errors[`model.${index}.endpointId`] ? true : undefined
 									}
 								>
-									<SelectValue placeholder="选择模型端点" />
+									{/* 打开页面时就读不到目录：已有的模型选项认不出端点，不提示「选择」（#3418 N14-06）。 */}
+									<SelectValue
+										placeholder={
+											unreadable && model.modelId
+												? unreadableEndpointLabel
+												: "选择模型端点"
+										}
+									/>
 								</SelectTrigger>
 								<SelectContent>
 									{endpoints.map((item) => (
@@ -543,49 +594,50 @@ function ModelRows({
 								>
 									允许的推理档位
 								</FieldLegend>
-								{!selectedModel && (
+								{unreadable && model.modelId ? (
+									<p className="text-muted-foreground text-sm">
+										部署选项读取后可调整。
+									</p>
+								) : !selectedModel ? (
 									<p className="text-muted-foreground text-sm">
 										选择模型后显示可用档位。
 									</p>
-								)}
-								{(selectedModel?.reasoningLevels ?? []).map(
-									(level, levelIndex) => {
-										const selected = model.reasoningLevels
-											.split("\n")
-											.includes(level);
-										// base-ui 复选框默认取外层 label 作 aria-labelledby，aria-label 不生效；
-										// 与 E3-16 相同，名称取自旁边的隐藏文本，可见文字与点击标签切换不变。
-										const nameId = `application-model-option-reasoning-${index}-level-${levelIndex}-name`;
-										return (
-											<Fragment key={level}>
-												<Label variant="option">
-													<Checkbox
-														aria-labelledby={nameId}
-														checked={selected}
-														onCheckedChange={(checked) => {
-															const levels = new Set(
-																model.reasoningLevels
-																	.split("\n")
-																	.filter(Boolean),
-															);
-															if (checked) levels.add(level);
-															else levels.delete(level);
-															onChange(
-																index,
-																"reasoningLevels",
-																[...levels].join("\n"),
-															);
-														}}
-													/>
-													{reasoningLevelLabel(level)}
-												</Label>
-												<span id={nameId} hidden>
-													{withObjectName(reasoningLevelLabel(level), rowName)}
-												</span>
-											</Fragment>
-										);
-									},
-								)}
+								) : null}
+								{shownLevels.map((level, levelIndex) => {
+									const selected = model.reasoningLevels
+										.split("\n")
+										.includes(level);
+									// base-ui 复选框默认取外层 label 作 aria-labelledby，aria-label 不生效；
+									// 与 E3-16 相同，名称取自旁边的隐藏文本，可见文字与点击标签切换不变。
+									const nameId = `application-model-option-reasoning-${index}-level-${levelIndex}-name`;
+									return (
+										<Fragment key={level}>
+											<Label variant="option">
+												<Checkbox
+													aria-labelledby={nameId}
+													checked={selected}
+													disabled={unreadable}
+													onCheckedChange={(checked) => {
+														const levels = new Set(
+															model.reasoningLevels.split("\n").filter(Boolean),
+														);
+														if (checked) levels.add(level);
+														else levels.delete(level);
+														onChange(
+															index,
+															"reasoningLevels",
+															[...levels].join("\n"),
+														);
+													}}
+												/>
+												{reasoningLevelLabel(level)}
+											</Label>
+											<span id={nameId} hidden>
+												{withObjectName(reasoningLevelLabel(level), rowName)}
+											</span>
+										</Fragment>
+									);
+								})}
 							</fieldset>
 							<FieldError
 								id={errorId(`model.${index}.reasoningLevels`)}
@@ -757,16 +809,26 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const deploymentRetryable = props.deploymentConfigurationRetryable ?? false;
 	const showDeploymentStatus = props.showDeploymentStatus ?? true;
 	const modelEndpoints = deployment.modelCatalog.endpoints;
+	// 部署选项读取失败：就绪状态与模型目录都读不到，模型选择器不列「请选择…」（#3389 N13-08、N13-10）。
+	const modelChoicesUnavailable =
+		(deployment.status === "unavailable" ||
+			deployment.modelCatalog.status === "unavailable") &&
+		modelEndpoints.length === 0;
+	// 这时端点与模型的名称、已选档位按最近一次读到的目录显示，不回退原始 ID、不写「已移除模型」；选择与校验
+	// 仍只用当前目录（#3418 N14-06）。
+	const displayEndpoints = modelChoicesUnavailable
+		? (props.lastReadModelEndpoints ?? [])
+		: modelEndpoints;
 	// 默认 Key 候选按部署目录显示端点名，不显示原始端点 ID（RK2-01、G5-12）。
 	const endpointNames = useMemo(
 		() =>
 			Object.fromEntries(
-				modelEndpoints.map((endpoint) => [
+				displayEndpoints.map((endpoint) => [
 					endpoint.endpointId,
 					endpoint.displayName,
 				]),
 			),
-		[modelEndpoints],
+		[displayEndpoints],
 	);
 	const [name, setName] = useState(application?.name ?? "");
 	const [description, setDescription] = useState(
@@ -778,13 +840,25 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			? application.source.templateId
 			: "",
 	);
-	const [templateRevision, setTemplateRevision] = useState(
+	// 修改申请的模板验证 revision 以页面读到的为准。页面打开时部署选项读取失败、还没读到过（null）时，以之后
+	// 第一次读到的为准：「重新加载部署选项」成功后即可提交，不再要求刷新页面，与部署状态说明给出同一个下一步
+	// （#3389 N13-09）。读到过之后 revision 再变化仍按「模板已更新」处理（N12-01）。
+	const [templateRevisionRead, setTemplateRevision] = useState<string | null>(
 		application?.source.kind === "standard"
-			? (deployment.templates.find(
-					(template) => template.templateId === templateId,
-				)?.readiness?.revision ?? "")
+			? deployment.status === "unavailable"
+				? null
+				: (templateFor(deployment, templateId)?.readiness?.revision ?? "")
 			: "",
 	);
+	const templateRevision =
+		templateRevisionRead ??
+		(deployment.status === "unavailable"
+			? ""
+			: (templateFor(deployment, templateId)?.readiness?.revision ?? ""));
+	useEffect(() => {
+		if (templateRevisionRead === null && deployment.status !== "unavailable")
+			setTemplateRevision(templateRevision);
+	}, [deployment.status, templateRevision, templateRevisionRead]);
 	const [sourceKind, setSourceKind] = useState<AgentApplicationSourceKind>(() =>
 		sourceKindFor(application?.source),
 	);
@@ -987,6 +1061,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				(deployment.status !== "populated" ||
 					deployment.templates.length === 0 ||
 					!modelCatalogReady)));
+	// 部署选项不可用（部署配置或模型目录读取失败、过期或为 empty）时标准模板申请不能提交，与页面顶部的部署状态说明
+	// 「部署选项需要刷新后才能提交标准模板申请。」一致：创建申请另由「标准模板」字段错误说明；修改申请不能
+	// 更换模板，由部署状态说明接手，不另写字段错误。两种模式都拦下、不发请求（#3389 N13-09）。
+	const deploymentBlocksStandard =
+		sourceKind === "standard" && !deploymentConfigurationUsable(deployment);
+	// 部署选项读取失败：就绪状态与模型目录都读不到。就绪列表不按「尚未登记」说明（#3389 N13-08）。
+	const deploymentUnreadable = deployment.status === "unavailable";
 	useEffect(() => {
 		if (props.mode !== "update" || modelEndpoints.length === 0) return;
 		setModels((current) => {
@@ -1222,8 +1303,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			setTemplateLockAttempted(false);
 	}, [templateLock, templateLockAttempted]);
 	// 创建申请时部署选项重读后「标准模板」下拉随之禁用（部署选项暂不可用、没有登记模板）：它若正握着
-	// 焦点，浏览器会在下一帧把焦点丢到 body。禁用生效的这次提交里焦点还在它上面，先交给页面标题（不可
-	// 聚焦时为 #main-content），不为此滚动页面（#3364）。
+	// 焦点（含展开的弹层），公共 Select 先把焦点交给页面标题（不可聚焦时为 #main-content），不为此滚动
+	// 页面（#3364、#3389 N13-08）。
 	const templateSelectDisabled =
 		props.mode === "update" || deployment.templates.length === 0;
 	// 没有一个模板可申请、也没有选过模板时，下拉为可聚焦的禁用（aria-disabled，不能展开，外观同禁用）：
@@ -1234,10 +1315,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		noApplicableTemplateMessage !== undefined &&
 		!templateId;
 	const [templateMenuOpen, setTemplateMenuOpen] = useState(false);
-	useLayoutEffect(() => {
-		const trigger = document.getElementById(fieldId("templateId"));
-		if (templateSelectDisabled && trigger && document.activeElement === trigger)
-			pageRecoveryTarget()?.focus({ preventScroll: true });
+	// 下拉随重读禁用时，公共 Select 收起弹层并把握着的焦点交给页面标题（#3364 N12-01、#3389 N13-08）；这里
+	// 同步收起受控的展开状态，恢复可用后不自行重新展开。
+	useEffect(() => {
+		if (templateSelectDisabled) setTemplateMenuOpen(false);
 	}, [templateSelectDisabled]);
 	const advancedConfigurationHasErrors = Object.keys(fieldErrors).some(
 		(key) => key.startsWith("environment.") || key.startsWith("secret."),
@@ -1249,6 +1330,20 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const defaultModel = models.find(
 		(model) => model.optionId === defaultModelOptionId,
 	);
+	// 「默认模型」的显示：端点按显示名；部署选项读取失败时按最近一次读到的端点名，没有时只写模型名，
+	// 不把读不到目录说成「已移除模型」（#3418 N14-06）。
+	const defaultModelLabel = (model: AgentApplicationModelDraft) => {
+		const endpoint = displayEndpoints.find(
+			(item) => item.endpointId === model.endpointId,
+		);
+		if (endpoint) return modelLabel(endpoint, model.modelId);
+		if (!modelChoicesUnavailable) return "已移除模型";
+		return (
+			persistedModelOptions?.find(
+				(option) => option.optionId === model.optionId,
+			)?.displayName || model.modelId
+		);
+	};
 	const defaultModelDefinition = modelEndpoints
 		.find((endpoint) => endpoint.endpointId === defaultModel?.endpointId)
 		?.models.find((model) => model.modelId === defaultModel?.modelId);
@@ -1332,11 +1427,16 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							setTemplateMenuOpen(open && !templateSelectUnavailable)
 						}
 						value={templateId}
+						// 显示名按部署登记取；部署选项读取失败（没有登记内容可查）时按 M1 标准模板的显示名映射，
+						// 查不到时为「标准模板」，不回退原始模板 ID（#3291 N9-2-01、#3389 N13-08）。
 						itemToStringLabel={(value) =>
-							deployment.templates.find(
-								(template) => template.templateId === value,
-							)?.displayName ??
-							(staleTemplate ? removedTemplateLabel : String(value))
+							templateNameLookup(deployment.templates)(String(value)) ??
+							(staleTemplate
+								? removedTemplateLabel
+								: templateDisplayName(
+										String(value),
+										templateNameLookup(templates),
+									))
 						}
 						onValueChange={(value) => {
 							if (!value) return;
@@ -1391,11 +1491,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						{templates.map((template) => (
 							<li key={template.templateId}>
 								{template.displayName}：
-								{
-									templateReadinessMessages[
-										template.readiness?.state ?? "unverified"
-									]
-								}
+								{deploymentUnreadable
+									? unreadableTemplateReadinessMessage(deploymentRetryable)
+									: templateReadinessMessages[
+											template.readiness?.state ?? "unverified"
+										]}
 							</li>
 						))}
 					</ul>
@@ -1568,9 +1668,16 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			identityEntryLocked ||
 			templateLockShown ||
 			serverErrorArrived;
+		// 这次提交因部署选项不可用被拦下（修改申请没有字段错误说明它；页面初次渲染不算提交）。
+		const deploymentBlocked =
+			focusRequest > 0 &&
+			focusRequest !== previous.focusRequest &&
+			deploymentBlocksStandard;
 		if (
 			!shouldFocus ||
-			(Object.keys(fieldErrors).length === 0 && !summarizedAtTop)
+			(Object.keys(fieldErrors).length === 0 &&
+				!summarizedAtTop &&
+				!deploymentBlocked)
 		)
 			return;
 		// 只读的「入口身份校验」与修改申请里只读的「标准模板」不作为焦点目标；其余字段错误仍先于
@@ -1589,8 +1696,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		// （#3328）与非校验类提交失败（#3351 N11-02）时同样聚焦顶部提示。聚焦时浏览器把它滚入视口。
 		else if (summarizedAtTop)
 			document.getElementById(applicationSubmissionErrorId)?.focus();
+		// 部署选项不可用时修改申请被拦下、没有其他出错字段：焦点交给部署状态的下一步（#3389 N13-09）。
+		else if (deploymentBlocked) deploymentStatusFocusTarget()?.focus();
 	}, [
 		advancedConfigurationOpen,
+		deploymentBlocksStandard,
 		fieldErrors,
 		focusRequest,
 		identityEntryLocked,
@@ -1628,6 +1738,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			defaultModelReasoningLevels: defaultModel?.reasoningLevels
 				?.split("\n")
 				.filter(Boolean),
+			modelChoicesUnavailable,
 			modelConfigurationVisible,
 			requiresDefaultRelayKey:
 				props.mode === "create" && sourceKind === "standard",
@@ -1654,7 +1765,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			Object.keys(errors).length > 0 ||
 			Object.keys(serverFieldErrors).length > 0 ||
 			hasActiveServerValidationError ||
-			serverFormError
+			serverFormError ||
+			deploymentBlocksStandard
 		)
 			return;
 		setSecrets([]);
@@ -1745,6 +1857,40 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							/>
 						</Field>
 						{sourceFields}
+						<section
+							aria-labelledby="application-connection-heading"
+							className="space-y-3 rounded-lg border border-border bg-muted/20 p-4 sm:col-span-2"
+						>
+							<div>
+								{/* 分区嵌在「基本信息」里：标题为 h3，字体、字号、字重与行高同 FormSection 子级标题
+								    （16px / 620 / 1.35 正文字体），显式压过未分层的 `.management-content h2` 一类
+								    展示字体规则（#3433 N15-06）。 */}
+								<h3
+									className="!font-[inherit] !text-[16px] !tracking-normal font-[620] text-foreground leading-[1.35]"
+									id="application-connection-heading"
+								>
+									Connection 授权
+								</h3>
+								<p className="mt-1 text-muted-foreground text-sm">
+									创建 Agent 不会自动取得外部账号权限。使用者需要在 Connection
+									中用自己的账号确认连接器授权，授权结果由 Connection 独立管理。
+								</p>
+							</div>
+							{props.connectionUrl ? (
+								<a
+									className={buttonVariants({ variant: "outline" })}
+									href={props.connectionUrl}
+									rel="noopener noreferrer"
+									target="_blank"
+								>
+									打开 Connection
+								</a>
+							) : (
+								<p className="text-muted-foreground text-sm">
+									Connection 入口暂不可用，请稍后再试。
+								</p>
+							)}
+						</section>
 					</div>
 				</FormSection>
 				<FormSection
@@ -1895,6 +2041,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									) : null}
 									<ModelRows
 										endpoints={modelEndpoints}
+										displayEndpoints={displayEndpoints}
+										unreadable={modelChoicesUnavailable}
 										errors={fieldErrors}
 										models={models}
 										onChange={(index, key, value) => {
@@ -1981,13 +2129,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 													const model = models.find(
 														(item) => item.optionId === value,
 													);
-													const endpoint = model
-														? modelEndpoints.find(
-																(item) => item.endpointId === model.endpointId,
-															)
-														: undefined;
-													return model && endpoint
-														? modelLabel(endpoint, model.modelId)
+													return model
+														? defaultModelLabel(model)
 														: "已移除模型";
 												}}
 												onValueChange={(value) => {
@@ -2016,21 +2159,14 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 												<SelectContent>
 													{models
 														.filter((model) => model.optionId)
-														.map((model) => {
-															const endpoint = modelEndpoints.find(
-																(item) => item.endpointId === model.endpointId,
-															);
-															return (
-																<SelectItem
-																	key={model.optionId}
-																	value={model.optionId}
-																>
-																	{endpoint
-																		? modelLabel(endpoint, model.modelId)
-																		: "已移除模型"}
-																</SelectItem>
-															);
-														})}
+														.map((model) => (
+															<SelectItem
+																key={model.optionId}
+																value={model.optionId}
+															>
+																{defaultModelLabel(model)}
+															</SelectItem>
+														))}
 												</SelectContent>
 											</Select>
 											<FieldError
@@ -2085,7 +2221,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									<Button
 										variant="outline"
 										id={rowAddId.model}
+										// 部署选项读取失败时模型选择器都已禁用，不再添加空的模型选项；保持可聚焦（aria-disabled），
+										// 焦点在它上面时随重读失败不落到 body（#3418 N14-06）。
+										aria-disabled={modelChoicesUnavailable || undefined}
 										onClick={() => {
+											if (modelChoicesUnavailable) return;
 											dismissServerFormError();
 											setModels((current) => [...current, blankModel()]);
 										}}

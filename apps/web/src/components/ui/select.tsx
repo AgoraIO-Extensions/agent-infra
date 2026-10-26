@@ -1,8 +1,58 @@
 import { Select as SelectPrimitive } from "@base-ui/react/select";
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
+import { useLayoutEffect, useRef, useState } from "react";
+import { pageRecoveryTarget } from "@/hooks/use-recovery-focus";
 import { cn } from "@/lib/utils";
 
-const Select = SelectPrimitive.Root;
+/**
+ * 下拉随禁用收起：部署选项重读等非用户操作让下拉变为禁用时，展开的弹层一起收起（同原生 select），不留
+ * 一个展开却不能操作的菜单（#3389 N13-08）。握着焦点的触发器（禁用后浏览器会把焦点丢到 body）或弹层随之
+ * 失去焦点时，焦点交给页面标题（不可聚焦时为 #main-content），不为此滚动页面（#3364 N12-01）。
+ * 受控用法（传 open）由调用方在禁用时同步收起自己的状态，这里只保证禁用期间不展开。
+ */
+function Select<Value, Multiple extends boolean | undefined = false>({
+	defaultOpen = false,
+	disabled = false,
+	onOpenChange,
+	open: openProp,
+	...props
+}: SelectPrimitive.Root.Props<Value, Multiple>) {
+	const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+	const open = (openProp ?? uncontrolledOpen) && !disabled;
+	// 上一次提交时弹层是否展开：禁用生效的这次提交里弹层已收起，浏览器可能已把弹层里的焦点丢到 body。
+	const shownRef = useRef(open);
+	useLayoutEffect(() => {
+		const wasShown = shownRef.current;
+		shownRef.current = open;
+		if (!disabled) return;
+		const active = document.activeElement;
+		const onDisabledTrigger =
+			active instanceof HTMLButtonElement &&
+			active.disabled &&
+			active.matches('[data-slot="select-trigger"]');
+		const menuHeldFocus =
+			wasShown &&
+			(!active ||
+				active === document.body ||
+				active.closest('[data-slot="select-content"]') !== null);
+		if (onDisabledTrigger || menuHeldFocus)
+			pageRecoveryTarget()?.focus({ preventScroll: true });
+		if (uncontrolledOpen) setUncontrolledOpen(false);
+	}, [disabled, open, uncontrolledOpen]);
+	return (
+		<SelectPrimitive.Root
+			{...props}
+			disabled={disabled}
+			open={open}
+			onOpenChange={(next, eventDetails) => {
+				onOpenChange?.(next, eventDetails);
+				// 调用方取消（eventDetails.cancel()）时同 Base UI 非受控用法，不改变展开状态。
+				if (openProp === undefined && !eventDetails.isCanceled)
+					setUncontrolledOpen(next);
+			}}
+		/>
+	);
+}
 
 function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
 	return (

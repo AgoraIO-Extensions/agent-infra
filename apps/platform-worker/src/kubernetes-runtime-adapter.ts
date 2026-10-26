@@ -138,6 +138,8 @@ function skillHubVolumeMountV1(value: AgentWorkloadDesiredV1): {
 }
 
 export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
+	/** Explicit deployment approval for the Codex container-boundary mode. */
+	readonly codexContainerBoundaryEnabled?: boolean;
 	/** Validated deployment copy, never an Agent/request environment value. */
 	readonly connectionConsumerSnapshot?: string | null;
 	readonly connectionConsumerSnapshotsByAgent?: RuntimeConnectionConsumerSnapshotsByAgentV1;
@@ -189,6 +191,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		| RuntimeModelProjectionV4;
 	/** Candidate-owned trusted tuple; never a global policy Driver. */
 	readonly standardTemplateBinding?: StandardTemplateModelBindingV1;
+	/** Deployment-owned service token retained in Worker memory for attestation only. */
+	readonly containerBoundaryServiceToken?: string;
 	readonly probe: (input: {
 		readonly desired: AgentWorkloadDesiredV1;
 		readonly serviceOrigin: string;

@@ -25,6 +25,7 @@ import {
 	sessionSandboxFileExchangeTokenV1,
 } from "@agent-infra/platform-core";
 import type { V1Secret, V1Service } from "@kubernetes/client-node";
+import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
@@ -668,6 +669,25 @@ function createSessionSandboxAllocationResolverV1(
 			throw new WorkloadKubernetesError("policy");
 		return {
 			driver: templateBinding.driver,
+			...(templateBinding.driver === "codex"
+				? {
+						codexContainerBoundaryEnabled:
+							workload.policy.codexContainerBoundaryEnabled === true,
+						...(workload.policy.codexContainerBoundaryEnabled === true
+							? {
+									codexContainerBoundaryAttestation:
+										containerBoundaryAttestationV1(
+											sessionSandboxServiceTokenV1(
+												options.serviceToken,
+												policy.namespace,
+												binding.sandboxId,
+											),
+											`${deployment.agentId}\0${binding.sessionId}`,
+										),
+								}
+							: {}),
+					}
+				: {}),
 			modelConfiguration: runtimeModelInjectionV4(projection).configuration,
 			workerId: auth.workerId,
 			grantKeyId: auth.grantKeyId,

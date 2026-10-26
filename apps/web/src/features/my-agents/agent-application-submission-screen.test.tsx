@@ -457,4 +457,205 @@ describe("AgentApplicationSubmissionScreen", () => {
 			screen.queryByRole("button", { name: "重新加载部署选项" }),
 		).toBeNull();
 	});
+
+	const unreadableDeployment = {
+		...deploymentConfiguration,
+		status: "unavailable" as const,
+		templates: [],
+		modelCatalog: {
+			...deploymentConfiguration.modelCatalog,
+			status: "unavailable" as const,
+			endpoints: [],
+		},
+	};
+
+	// #3389 N13-09：部署状态说明只服务于还没提交的表单，提交受理后的结果页不再显示它与「重新加载部署选项」。
+	for (const mode of ["create", "update"] as const)
+		it(`drops the deployment status from the ${mode} result (#3389 N13-09)`, async () => {
+			await renderWithMyAgentsRouter(
+				mode === "create" ? (
+					<AgentApplicationSubmissionScreenView
+						deploymentConfiguration={unreadableDeployment}
+						deploymentConfigurationRetryable
+						mode="create"
+						onRefreshDeploymentConfiguration={vi.fn()}
+						onSubmit={vi.fn()}
+						refreshingDeploymentConfiguration={false}
+						result={pendingApplication}
+						submitting={false}
+					/>
+				) : (
+					<AgentApplicationSubmissionScreenView
+						action="resubmit"
+						application={rejectedApplication}
+						deploymentConfiguration={unreadableDeployment}
+						deploymentConfigurationRetryable
+						mode="update"
+						onRefreshDeploymentConfiguration={vi.fn()}
+						onSubmit={vi.fn()}
+						refreshingDeploymentConfiguration={false}
+						result={pendingApplication}
+						submitting={false}
+					/>
+				),
+			);
+			await expectSubmittedFeedback();
+			expect(
+				document.getElementById("application-deployment-status"),
+			).toBeNull();
+			expect(
+				screen.queryByText("部署选项需要刷新后才能提交标准模板申请。"),
+			).toBeNull();
+			expect(
+				screen.queryByRole("button", { name: "重新加载部署选项" }),
+			).toBeNull();
+		});
+
+	// #3389 N13-09、N13-10：部署选项读取失败时提交标准模板申请（创建与修改）被拦下、不发请求；没有可操作
+	// 的出错字段，焦点交给「重新加载部署选项」，它经 aria-describedby 带上部署状态说明。
+	for (const mode of ["create", "update"] as const)
+		it(`hands a ${mode} submission blocked by an unreadable deployment to 重新加载部署选项 (#3389)`, async () => {
+			const onSubmit = vi.fn();
+			await renderWithMyAgentsRouter(
+				mode === "create" ? (
+					<AgentApplicationSubmissionScreenView
+						deploymentConfiguration={unreadableDeployment}
+						deploymentConfigurationRetryable
+						mode="create"
+						onRefreshDeploymentConfiguration={vi.fn()}
+						onSubmit={onSubmit}
+						refreshingDeploymentConfiguration={false}
+						submitting={false}
+					/>
+				) : (
+					<AgentApplicationSubmissionScreenView
+						action="resubmit"
+						application={rejectedApplication}
+						deploymentConfiguration={unreadableDeployment}
+						deploymentConfigurationRetryable
+						mode="update"
+						onRefreshDeploymentConfiguration={vi.fn()}
+						onSubmit={onSubmit}
+						refreshingDeploymentConfiguration={false}
+						submitting={false}
+					/>
+				),
+			);
+			if (mode === "create") {
+				fireEvent.change(screen.getByLabelText("Agent 名称"), {
+					target: { value: "Release assistant" },
+				});
+				fireEvent.change(screen.getByLabelText("用途说明"), {
+					target: { value: "Helps the release team" },
+				});
+			}
+			fireEvent.click(
+				screen.getByRole("button", {
+					name: mode === "create" ? "提交审批" : "修改并重新提交",
+				}),
+			);
+			expect(onSubmit).not.toHaveBeenCalled();
+			const reload = screen.getByRole("button", { name: "重新加载部署选项" });
+			expect(document.activeElement).toBe(reload);
+			expect(reload.getAttribute("aria-describedby")).toBe(
+				"application-deployment-status-message",
+			);
+			expect(
+				document.getElementById("application-deployment-status-message")
+					?.textContent,
+			).toBe("部署选项需要刷新后才能提交标准模板申请。");
+		});
+
+	// 不可重试时没有重新加载入口：焦点交给部署状态说明本身（tabIndex=-1）。
+	it("hands a blocked submission to the deployment status when it cannot be retried (#3389 N13-10)", async () => {
+		const onSubmit = vi.fn();
+		await renderWithMyAgentsRouter(
+			<AgentApplicationSubmissionScreenView
+				action="resubmit"
+				application={rejectedApplication}
+				deploymentConfiguration={unreadableDeployment}
+				mode="update"
+				onRefreshDeploymentConfiguration={vi.fn()}
+				onSubmit={onSubmit}
+				refreshingDeploymentConfiguration={false}
+				submitting={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+		const status = document.getElementById("application-deployment-status");
+		expect(status?.getAttribute("tabindex")).toBe("-1");
+		expect(document.activeElement).toBe(status);
+	});
+});
+
+describe("AgentApplicationSubmissionScreen with a populated deployment that registers no templates", () => {
+	// #3389 评审：部署配置与模型目录为 populated、模板为空时不属于「部署选项不可用」，不显示要求刷新的部署
+	// 状态说明；创建申请按「部署没有标准模板」、修改申请按「已移除模板」拦下，同样不发请求，下一步是联系
+	// 管理员或新建申请。
+	const noTemplates = { ...deploymentConfiguration, templates: [] };
+
+	for (const mode of ["create", "update"] as const)
+		it(`blocks a ${mode} standard submission without a refresh prompt`, async () => {
+			const onSubmit = vi.fn();
+			await renderWithMyAgentsRouter(
+				mode === "create" ? (
+					<AgentApplicationSubmissionScreenView
+						deploymentConfiguration={noTemplates}
+						deploymentConfigurationRetryable
+						mode="create"
+						onRefreshDeploymentConfiguration={vi.fn()}
+						onSubmit={onSubmit}
+						refreshingDeploymentConfiguration={false}
+						submitting={false}
+					/>
+				) : (
+					<AgentApplicationSubmissionScreenView
+						action="resubmit"
+						application={rejectedApplication}
+						deploymentConfiguration={noTemplates}
+						deploymentConfigurationRetryable
+						mode="update"
+						onRefreshDeploymentConfiguration={vi.fn()}
+						onSubmit={onSubmit}
+						refreshingDeploymentConfiguration={false}
+						submitting={false}
+					/>
+				),
+			);
+			expect(
+				document.getElementById("application-deployment-status"),
+			).toBeNull();
+			if (mode === "create") {
+				fireEvent.change(screen.getByLabelText("Agent 名称"), {
+					target: { value: "Release assistant" },
+				});
+				fireEvent.change(screen.getByLabelText("用途说明"), {
+					target: { value: "Helps the release team" },
+				});
+			}
+			fireEvent.click(
+				screen.getByRole("button", {
+					name: mode === "create" ? "提交审批" : "修改并重新提交",
+				}),
+			);
+			expect(onSubmit).not.toHaveBeenCalled();
+			expect(
+				document.getElementById("application-template-id-error")?.textContent,
+			).toBe(
+				mode === "create"
+					? "当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。"
+					: "该模板已从当前部署移除。已有申请不能更换模板，请新建申请。",
+			);
+			if (mode === "update")
+				expect(screen.getByRole("alert").textContent).toBe(
+					"当前部署已移除此申请的模板，请新建申请。",
+				);
+			expect(
+				document.getElementById("application-deployment-status"),
+			).toBeNull();
+			expect(
+				screen.queryByRole("button", { name: "重新加载部署选项" }),
+			).toBeNull();
+		});
 });

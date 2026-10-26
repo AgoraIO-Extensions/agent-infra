@@ -41,9 +41,11 @@ const {
 	organizationIds: configuredOrganizationIds,
 	directorySnapshot,
 	publicOrigin,
+	connectionWebPath,
 	connectionConsumerProfile,
 	connectionConsumerProfileApproval,
 	connectionInstallationConfiguration,
+	connectionInstallationsByAgent,
 	connectionInstallationCallback,
 	applicationCredentialDelivery,
 	apiInput,
@@ -73,6 +75,8 @@ const resolvedConnectionConsumerProfile =
 	connectionConsumerProfile ?? environmentConnectionConsumer?.profile;
 const resolvedConnectionConsumerProfileApproval =
 	connectionConsumerProfileApproval ?? environmentConnectionConsumer?.approval;
+const resolvedConnectionWebPath =
+	connectionWebPath ?? environmentConnectionConsumer?.webPath;
 
 async function nativeMetadataWorkerFromEnvironment() {
 	const baseUrl = process.env.PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN;
@@ -184,7 +188,7 @@ const browser = createPostgresLdapBrowserDeployment({
 });
 const callbackForwarder =
 	connectionInstallationCallback ??
-	(connectionInstallationConfiguration &&
+	((connectionInstallationConfiguration || connectionInstallationsByAgent) &&
 	process.env.PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE
 		? {
 				forward: createProtectedConnectionInstallationForwarder({
@@ -299,10 +303,12 @@ export function createPlatformApiAssemblyInput() {
 		connectionConsumerProfile: resolvedConnectionConsumerProfile,
 		connectionConsumerProfileApproval:
 			resolvedConnectionConsumerProfileApproval,
-		...(connectionInstallationConfiguration
+		connectionWebPath: resolvedConnectionWebPath,
+		...(connectionInstallationConfiguration || connectionInstallationsByAgent
 			? {
 					connectionInstallation: {
 						configuration: connectionInstallationConfiguration,
+						bindingsByAgent: connectionInstallationsByAgent,
 						publicOrigin,
 					},
 				}

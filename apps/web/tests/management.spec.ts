@@ -27,6 +27,10 @@ import type {
 	AgentApplicationCreateRequestV2Writable,
 	DeploymentConfigurationProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
+import {
+	expectBackgroundRereadKeeps,
+	expectFatalRereadHandsFocus,
+} from "./background-reread";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { recordApiRequests } from "./generated-client-paths";
 import {
@@ -2775,6 +2779,7 @@ for (const available of [true, false]) {
 						status: "available",
 						publicOrigin: "https://connection.example.test",
 						mcpPath: "/mcp",
+						webPath: "/connection/connections",
 						configFingerprint: "a".repeat(64),
 					}),
 				}),
@@ -2791,7 +2796,7 @@ for (const available of [true, false]) {
 			await expect(connection).toHaveAttribute("target", "_blank");
 			await expect(connection).toHaveAttribute(
 				"href",
-				"https://connection.example.test/mcp",
+				"https://connection.example.test/connection/connections",
 			);
 		} else {
 			await expect(connection).toHaveCount(0);
@@ -5709,12 +5714,13 @@ async function stubConnectionCapability(
 
 const availableCapability = (
 	publicOrigin: string = connectionOrigin,
-	mcpPath = "/mcp",
+	webPath = "/connection/connections",
 ) => ({
 	schemaVersion: 1,
 	status: "available",
 	publicOrigin,
-	mcpPath,
+	mcpPath: "/mcp",
+	webPath,
 	configFingerprint: "a".repeat(64),
 });
 
@@ -5754,7 +5760,10 @@ test.describe("Agent detail design alignment", () => {
 		])
 			await expect(notice.getByText(text, { exact: true })).toBeVisible();
 		const open = notice.getByRole("link", { name: "打开 Connection" });
-		await expect(open).toHaveAttribute("href", `${connectionOrigin}/mcp`);
+		await expect(open).toHaveAttribute(
+			"href",
+			`${connectionOrigin}/connection/connections`,
+		);
 		await expect(open).toHaveAttribute("target", "_blank");
 		await expect(open).toHaveAttribute("rel", /noopener/);
 		await expect(open).toHaveAttribute("rel", /noreferrer/);
@@ -5799,7 +5808,7 @@ test.describe("Agent detail design alignment", () => {
 		await expect(notice.getByText("等待 Connection 授权返回")).toBeVisible();
 		await expect(
 			notice.getByRole("link", { name: "返回查看授权状态" }),
-		).toHaveAttribute("href", `${connectionOrigin}/mcp`);
+		).toHaveAttribute("href", `${connectionOrigin}/connection/connections`);
 		await capture(page, info, "agent-detail-connection-handoff");
 		// Platform 不读取 Connection 的授权结果，也不发写请求。
 		expect(mainRequests).toEqual([]);
@@ -5921,7 +5930,7 @@ test.describe("Agent detail design alignment", () => {
 		test.setTimeout(120_000);
 		await fixture(page, "employee");
 		const inputs: [string, string][] = [
-			[connectionOrigin, "/mcp"],
+			[connectionOrigin, "/connection/connections"],
 			[connectionOrigin, "//evil.example/mcp"],
 			[connectionOrigin, "/\\evil.example/mcp"],
 			[connectionOrigin, "\\\\evil.example\\mcp"],
@@ -5977,8 +5986,8 @@ test.describe("Agent detail design alignment", () => {
 		});
 		// 合法输入两处都给出同一地址；其余每组两处都没有链接。
 		expect(results[0]).toMatchObject({
-			nav: `${connectionOrigin}/mcp`,
-			detail: `${connectionOrigin}/mcp`,
+			nav: `${connectionOrigin}/connection/connections`,
+			detail: `${connectionOrigin}/connection/connections`,
 		});
 		for (const result of results.slice(1))
 			expect(result, JSON.stringify(result.input)).toEqual({
@@ -6991,6 +7000,201 @@ for (const [kind, title] of [
 		await expectCleanPage(page, errors);
 	});
 
+// #3433 N15-02（G15-2-05）：手动「验证并绑定」后的配置会话轮询按 #3418 规则：可重试失败（503、网络中断）之后
+// 按原节奏继续，期间仍是「验证中」（chip 不换成「连接状态暂不可用」），读到 active 后到卡片标题；不可重试
+// 失败（401、404、响应无效）结束验证，卡内说明「配置会话已失效，请重新配置。」，焦点到卡片标题，不再轮询。
+for (const [kind, title] of [
+	["bot", "企微机器人"],
+	["app", "企微应用"],
+] as const)
+	for (const failure of ["503", "network", "401", "404", "invalid"] as const)
+		test(`the manual WeCom ${kind} setup poll follows the polling rule: ${failure} (#3433 N15-02)`, async ({
+			page,
+		}, info) => {
+			await acceptanceViewport(page, info);
+			const errors = trackPageErrors(page);
+			await fixture(page);
+			await wecomManualRoutes(page);
+			const sessionPath = `/api/v1/agents/agent-pilot-1/${kind === "bot" ? "wecom-setup" : "wecom-app-setup"}/fixture-setup`;
+			const retryable = failure === "503" || failure === "network";
+			let sessionReads = 0;
+			await page.route(
+				(url) => url.pathname === sessionPath,
+				(route) => {
+					if (route.request().method() !== "GET") return route.fallback();
+					sessionReads += 1;
+					// 第一次会话读取失败，之后按 fixture 读到 active。
+					if (sessionReads !== 1) return route.fallback();
+					if (failure === "network") return route.abort("internetdisconnected");
+					if (failure === "invalid")
+						return route.fulfill({ json: { sessionId: "fixture-setup" } });
+					return route.fulfill({
+						status: Number(failure),
+						json: {
+							schemaVersion: 1,
+							code:
+								failure === "503"
+									? "DEPENDENCY_UNAVAILABLE"
+									: failure === "401"
+										? "AUTHENTICATION_REQUIRED"
+										: "RESOURCE_UNAVAILABLE",
+							message: "Controlled failure",
+							retryable: failure === "503",
+							traceId: "trace-wecom-setup-poll",
+						},
+					});
+				},
+			);
+			const credentials = await holdRequests(page, "POST", /\/credentials$/);
+			await page.goto("/agents/agent-pilot-1/configuration");
+			const card = page.getByRole("region", { name: title, exact: true });
+			await expect(card.getByText("未配置", { exact: true })).toBeVisible();
+			await fillWecomManual(card, kind);
+			const verify = await pinElement(
+				card.getByRole("button", { name: `验证并绑定：${title}` }),
+				`verify-poll-${kind}`,
+			);
+			await verify.focus();
+			await page.keyboard.press("Enter");
+			await expect.poll(() => credentials.held()).toBe(1);
+			credentials.release();
+			await expect.poll(() => sessionReads).toBe(1);
+			const heading = page.locator(`h3#wecom-${kind}-title`);
+			const chip = card.locator('[data-slot="badge"]');
+			if (retryable) {
+				// 失败后仍在验证：按钮可聚焦地禁用、焦点不动，chip 保留「验证中」。
+				await expect(card.getByRole("alert")).toContainText(
+					"配置结果暂未确认，正在重新查询。请勿重复提交。",
+				);
+				await expect(chip).toHaveText("验证中");
+				await expect(verify).toHaveAccessibleName(`验证中…：${title}`);
+				await expectFocusableBusy(verify, `${title} 会话轮询 ${failure}`);
+				await expect.poll(() => sessionReads, { timeout: 6000 }).toBe(2);
+				await expect(chip).toHaveText("已连接");
+				await expect(toastHost(page)).toHaveText(`${title}已连接`);
+				await expectFocusSettled(
+					heading,
+					`${title} 会话轮询 ${failure} 后连接`,
+				);
+			} else {
+				await expect(card.getByRole("alert")).toHaveText(
+					"配置会话已失效，请重新配置。",
+				);
+				await expect(
+					card.getByRole("button", { name: `验证并绑定：${title}` }),
+				).toBeEnabled();
+				await expect(
+					card.getByRole("button", { name: `取消配置：${title}` }),
+				).toHaveCount(0);
+				await expect(chip).toHaveText("未配置");
+				await expectFocusSettled(
+					heading,
+					`${title} 会话轮询 ${failure}`,
+					[50, 300, 1000, 2500],
+				);
+				await page.waitForTimeout(2500);
+				expect(sessionReads).toBe(1);
+			}
+			await expectNoDuplicateControls(page, `${title} 会话轮询（#3433）`);
+			await expectCleanPage(page, errors);
+			expect(
+				await page.evaluate(
+					() => document.documentElement.scrollWidth <= innerWidth,
+				),
+			).toBe(true);
+		});
+
+// #3433 N15-03（G15-2-06）：连接状态在已断开时每 2 秒轮询。可重试失败（503、网络中断）保留上一次的「已断开」并
+// 按原节奏继续，服务端恢复后读到「已连接」并停止；不可重试失败（401、404、响应无效）停止并显示「连接状态暂不可用」。
+for (const [kind, title] of [
+	["bot", "企微机器人"],
+	["app", "企微应用"],
+] as const)
+	for (const failure of ["503", "network", "401", "404", "invalid"] as const)
+		test(`the WeCom ${kind} connection status poll follows the polling rule: ${failure} (#3433 N15-03)`, async ({
+			page,
+		}, info) => {
+			await acceptanceViewport(page, info);
+			const errors = trackPageErrors(page);
+			await fixture(page);
+			await wecomManualRoutes(page);
+			const statusPath = `/api/v${kind === "bot" ? 2 : 1}/agents/agent-pilot-1/${kind === "bot" ? "wecom-bot" : "wecom-app"}`;
+			const retryable = failure === "503" || failure === "network";
+			let reads = 0;
+			let connected = false;
+			const body = (status: "disconnected" | "connected") =>
+				kind === "bot"
+					? {
+							status,
+							qrAvailable: false,
+							qrUnavailableReason: "authorization_correlation_unverified",
+						}
+					: { status, callbackUrl: "https://callback.example.test/wecom" };
+			await page.route(
+				(url) => url.pathname === statusPath,
+				(route) => {
+					if (route.request().method() !== "GET") return route.fallback();
+					reads += 1;
+					// 第 2 次读取（第一次轮询）失败；服务端随即恢复为已连接。
+					if (reads !== 2)
+						return route.fulfill({
+							json: body(connected ? "connected" : "disconnected"),
+						});
+					connected = true;
+					if (failure === "network") return route.abort("internetdisconnected");
+					if (failure === "invalid")
+						return route.fulfill({ json: { status: "unknown-state" } });
+					return route.fulfill({
+						status: Number(failure),
+						json: {
+							schemaVersion: 1,
+							code:
+								failure === "503"
+									? "DEPENDENCY_UNAVAILABLE"
+									: failure === "401"
+										? "AUTHENTICATION_REQUIRED"
+										: "RESOURCE_UNAVAILABLE",
+							message: "Controlled failure",
+							retryable: failure === "503",
+							traceId: "trace-wecom-status-poll",
+						},
+					});
+				},
+			);
+			await page.goto("/agents/agent-pilot-1/configuration");
+			const card = page.getByRole("region", { name: title, exact: true });
+			const chip = card.locator('[data-slot="badge"]');
+			await expect(chip).toHaveText("已断开");
+			const heading = await pinElement(
+				page.locator(`h3#wecom-${kind}-title`),
+				`status-poll-${kind}`,
+			);
+			await heading.focus();
+			await expect.poll(() => reads, { timeout: 6000 }).toBe(2);
+			if (retryable) {
+				// 失败期间仍是「已断开」，之后不需要「刷新状态」就读到「已连接」，随即停止轮询。
+				await expect(chip).toHaveText("已断开");
+				await expect.poll(() => reads, { timeout: 6000 }).toBe(3);
+				await expect(chip).toHaveText("已连接");
+				await page.waitForTimeout(2500);
+				expect(reads).toBe(3);
+			} else {
+				await expect(chip).toHaveText("连接状态暂不可用");
+				await page.waitForTimeout(4500);
+				expect(reads).toBe(2);
+				await expect(chip).toHaveText("连接状态暂不可用");
+			}
+			await expect(card.getByRole("alert")).toHaveCount(0);
+			await expect(heading).toBeFocused();
+			await expectNoDuplicateControls(page, `${title} 连接状态轮询（#3433）`);
+			await expectCleanPage(page, errors);
+			expect(
+				await page.evaluate(
+					() => document.documentElement.scrollWidth <= innerWidth,
+				),
+			).toBe(true);
+		});
+
 // 「打开扫码窗口」等待扫码期间是可聚焦的禁用（「等待扫码…」），扫码窗口关闭、面板收起后焦点回到
 // 「扫码授权」（#3242 K7-02）。
 test("waiting for the QR scan keeps focus on the button and returns it to 扫码授权 when the window closes (K7-02)", async ({
@@ -7652,3 +7856,143 @@ test("an in-flight image upgrade leaves every lifecycle action available (#3291 
 	await expectNoDuplicateControls(page, "Owner 配置（镜像升级中重启，#3291）");
 	await expectCleanPage(page, errors);
 });
+
+// #3419 N14-08（N14-3-01）：审批队列已有数据时，焦点在「审阅：…」、搜索框、审阅弹窗的「批准申请」或已填写未提交的
+// 驳回原因上，回到标签页的后台重读读到不可重试的失败（403，或 401 映射为不可用）：队列（连同弹窗与未提交的原因）
+// 换成「审批列表不可用，请联系管理员。」，壳层焦点丢失兜底把焦点交给 h1「审批申请」，不落到 body、不滚动页面。
+// 先覆盖挂起、可重试失败与恢复（#3387：内容、焦点与未提交的原因保留），两视口一致。
+const approvalsQueue = /^\/api\/v2\/admin\/agent-applications$/;
+for (const target of [
+	{ name: "审阅按钮", status: 403 },
+	{ name: "审阅按钮", status: 401 },
+	{ name: "搜索框", status: 403 },
+	{ name: "审阅弹窗", status: 403 },
+	{ name: "驳回原因", status: 403 },
+] as const)
+	test(`a background reread that cannot be retried (${target.status}) hands focus from the approval ${target.name} to the h1 (#3419 N14-08)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		await fixture(page, "admin");
+		await page.goto("/admin/approvals");
+		const main = page.locator("#main-content");
+		const review = main.getByRole("button", { name: /^审阅：/ });
+		await expect(review).toBeVisible();
+		let control: Locator;
+		let kept: () => Promise<void> = async () => {
+			await expect(review).toBeVisible();
+		};
+		if (target.name === "审阅按钮") {
+			control = await pinElement(review, "approval-review");
+		} else if (target.name === "搜索框") {
+			control = await pinElement(
+				main.getByRole("searchbox", { name: "搜索申请" }),
+				"approval-search",
+			);
+			await control.focus();
+			await page.keyboard.type("Rel");
+			kept = async () => {
+				await expect(control).toHaveValue("Rel");
+			};
+		} else {
+			await review.click();
+			let dialog = page.getByRole("dialog", { name: "审阅创建申请" });
+			await expect(dialog).toBeVisible();
+			if (target.name === "审阅弹窗") {
+				control = await pinElement(
+					dialog.getByRole("button", { name: "批准申请" }),
+					"approval-approve",
+				);
+				kept = async () => {
+					await expect(control).toBeVisible();
+				};
+			} else {
+				await dialog.getByRole("button", { name: "驳回并说明" }).click();
+				dialog = page.getByRole("dialog", { name: "填写驳回原因" });
+				control = await pinElement(
+					dialog.getByLabel("驳回原因", { exact: true }),
+					"approval-reason",
+				);
+				await control.fill("未提交的驳回原因");
+				kept = async () => {
+					await expect(control).toHaveValue("未提交的驳回原因");
+				};
+			}
+		}
+		await control.focus();
+		await expectBackgroundRereadKeeps(page, {
+			path: approvalsQueue,
+			focus: control,
+			context: `审批（${target.name}）`,
+			expectKept: kept,
+		});
+		await expectFatalRereadHandsFocus(page, {
+			path: approvalsQueue,
+			status: target.status,
+			focus: control,
+			target: main.getByRole("heading", { level: 1, name: "审批申请" }),
+			context: `审批（${target.name}）`,
+			expectReplaced: async () => {
+				await expect(
+					main.getByRole("alert").filter({
+						hasText: "审批列表不可用，请联系管理员。",
+					}),
+				).toBeVisible();
+				await expect(control).toHaveCount(0);
+				await expect(page.getByRole("dialog")).toHaveCount(0);
+			},
+		});
+		await expectNoDuplicateControls(page, `审批（${target.name}，#3419）`);
+		await expectCleanPage(page, errors);
+	});
+
+// #3433 N15-07（A15-3-OBS）：用户点进「搜索申请」或在其中按 Enter 之后约 1 秒内恰好读到队列不可重试的失败（403、401）：
+// 这段丢失是用户操作的结果，壳层兜底按已登记规则不接手；审批页不可重试分支自己在结果出来后把焦点交给 h1「审批申请」
+// （同 PageStateCard 挂载时的检查），不落到 body、不滚动页面。两视口一致。
+for (const status of [403, 401] as const)
+	for (const activation of ["click", "Enter"] as const)
+		test(`a non-retryable queue read right after ${activation} in the approval search hands focus to the h1 (${status}, #3433 N15-07)`, async ({
+			page,
+		}, info) => {
+			await acceptanceViewport(page, info);
+			const errors = trackPageErrors(page);
+			await fixture(page, "admin");
+			await page.goto("/admin/approvals");
+			const main = page.locator("#main-content");
+			await expect(main.getByRole("button", { name: /^审阅：/ })).toBeVisible();
+			const search = await pinElement(
+				main.getByRole("searchbox", { name: "搜索申请" }),
+				"approval-search-activation",
+			);
+			// 点击：焦点先在「审阅：…」上，用户点进搜索框；Enter：焦点已在搜索框里，用户按 Enter。
+			const start =
+				activation === "click"
+					? await pinElement(
+							main.getByRole("button", { name: /^审阅：/ }),
+							"approval-review-before-search",
+						)
+					: search;
+			await start.focus();
+			await expectFatalRereadHandsFocus(page, {
+				path: approvalsQueue,
+				status,
+				focus: start,
+				target: main.getByRole("heading", { level: 1, name: "审批申请" }),
+				context: `审批（搜索框 ${activation}）`,
+				beforeReread: async () => {
+					if (activation === "click") await search.click();
+					else await page.keyboard.press("Enter");
+					await expect(search).toBeFocused();
+				},
+				expectReplaced: async () => {
+					await expect(
+						main.getByRole("alert").filter({
+							hasText: "审批列表不可用，请联系管理员。",
+						}),
+					).toBeVisible();
+					await expect(search).toHaveCount(0);
+				},
+			});
+			await expectCleanPage(page, errors);
+		});

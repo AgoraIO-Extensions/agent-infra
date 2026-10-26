@@ -3355,6 +3355,34 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		},
 	);
 
+	// #3374：初始 Turn 输入只包含源消息与合并窗口内并入的消息；补充指令有自己的 outbox，不进入。
+	it("builds the initial Turn input from merged Messages but never from supplements", async () => {
+		const work = await seed();
+		await seedSupplement(work);
+		await client`
+			insert into platform.conversation_messages
+				(message_id, conversation_id, actor_id, role, text, execution_id,
+				 status, created_at, updated_at)
+			values (${`merged-${work.messageId}`}, ${work.conversationId}, 'actor-dispatch', 'user',
+				'merged follow-up', ${work.executionId}, 'submitted',
+				now() + interval '1 second', now() + interval '1 second')
+		`;
+		const result = await claim(work.itemId);
+		try {
+			expect(result.decision).toMatchObject({
+				outcome: "claimed",
+				claim: {
+					input: {
+						text: "bounded dispatch fixture\n\nmerged follow-up",
+						attachments: [],
+					},
+				},
+			});
+		} finally {
+			await result.store.close();
+		}
+	});
+
 	it("reads Sandbox readiness after acquiring the Conversation lock", async () => {
 		const work = await seed();
 		const store = open();
@@ -4113,6 +4141,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 
 		async function expectRejectedOutcome(
 			work: Awaited<ReturnType<typeof seed>>,
+			code = "RUNTIME_FILE_INPUT_REJECTED",
 		) {
 			expect(await dispatchState(work)).toMatchObject({
 				status: "failed",
@@ -4140,7 +4169,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				select payload->>'errorCode' as error_code from platform.persisted_events
 				where stream_id = ${`outbox:${work.itemId}`} and event_type = 'outbox.failed'
 			`;
-			expect(attempt?.error_code).toBe("RUNTIME_FILE_INPUT_REJECTED");
+			expect(attempt?.error_code).toBe(code);
 		}
 
 		async function expectSettledWork(
@@ -4173,40 +4202,48 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			expect(stop?.status).toBe("completed");
 		}
 
-		it("fails the write-ahead Execution and settles its pending supplement and stop in one finish", async () => {
-			const work = await seed();
-			const { store, decision } = await claim(work.itemId, "rejected-worker");
-			try {
-				if (decision.outcome !== "claimed")
-					throw new Error(`Expected claim: ${decision.outcome}`);
-				const owned = decision.claim;
-				expect(
-					await store.prepareRuntimeDispatch({
-						claim: owned,
-						leaseDurationMs: 30_000,
-					}),
-				).toBe(true);
-				expect((await dispatchState(work))?.execution_status).toBe("unknown");
-				// 附件读取期间到达的补充指令与 stop。
-				const messageId = await seedSupplement(work);
-				await seedStop(work);
-				expect(
-					await store.finish({
-						claim: owned,
-						status: "failed",
-						transition: {
-							executionStatus: "failed",
-							conversationStatus: "ready",
-						},
-						errorCode: "RUNTIME_FILE_INPUT_REJECTED",
-					}),
-				).toBe(true);
-				await expectRejectedOutcome(work);
-				await expectSettledWork(work, messageId);
-			} finally {
-				await store.close();
-			}
-		});
+		// #3373：未提交重提用尽后的两个失败码同样在一次 finish 中收敛补充指令与 stop。
+		it.each([
+			"RUNTIME_FILE_INPUT_REJECTED",
+			"RUNTIME_FILE_INPUT_UNAVAILABLE",
+			"RUNTIME_SESSION_PREPARATION_FAILED",
+		])(
+			"fails the write-ahead Execution and settles its pending supplement and stop in one finish (%s)",
+			async (errorCode) => {
+				const work = await seed();
+				const { store, decision } = await claim(work.itemId, "rejected-worker");
+				try {
+					if (decision.outcome !== "claimed")
+						throw new Error(`Expected claim: ${decision.outcome}`);
+					const owned = decision.claim;
+					expect(
+						await store.prepareRuntimeDispatch({
+							claim: owned,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(true);
+					expect((await dispatchState(work))?.execution_status).toBe("unknown");
+					// 附件读取期间到达的补充指令与 stop。
+					const messageId = await seedSupplement(work);
+					await seedStop(work);
+					expect(
+						await store.finish({
+							claim: owned,
+							status: "failed",
+							transition: {
+								executionStatus: "failed",
+								conversationStatus: "ready",
+							},
+							errorCode,
+						}),
+					).toBe(true);
+					await expectRejectedOutcome(work, errorCode);
+					await expectSettledWork(work, messageId);
+				} finally {
+					await store.close();
+				}
+			},
+		);
 
 		it("keeps other rejected codes on their original supplement and stop convergence", async () => {
 			const work = await seed();
@@ -4337,6 +4374,317 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				expect(runtimeHost.sideEffectCount()).toBe(1);
 			} finally {
 				await store.close();
+			}
+		});
+	});
+
+	// #3373：Runtime 报告未提交时退回投递前状态并有界重提；unknown 恢复按墙钟预算；只核实
+	// 状态的恢复不以 Sandbox 就绪为前置。
+	describe("unsubmitted Turns and wall-clock recovery (#3373)", () => {
+		const notSubmitted = {
+			outcome: "rejected",
+			code: "RUNTIME_TURN_NOT_SUBMITTED",
+			message: "Runtime turn was not submitted",
+			reason: "file_input_unavailable",
+			retryable: true,
+		} as const;
+		async function unknownSince(executionId: string) {
+			const [row] = await client<{ unknown_since: Date | null }[]>`
+				select unknown_since from platform.conversation_executions where execution_id = ${executionId}
+			`;
+			return row?.unknown_since;
+		}
+
+		it("measures recovery from the latest entry into unknown and clears it on leaving", async () => {
+			const work = await seed();
+			const first = await claim(work.itemId, "unknown-since-worker");
+			try {
+				if (first.decision.outcome !== "claimed")
+					throw new Error(`Expected claim: ${first.decision.outcome}`);
+				expect(first.decision.claim.recoveryElapsedMs).toBeUndefined();
+				expect(await unknownSince(work.executionId)).toBeNull();
+				expect(
+					await first.store.prepareRuntimeDispatch({
+						claim: first.decision.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				expect(await unknownSince(work.executionId)).toBeInstanceOf(Date);
+				// 模拟已经过去的时间；保持 unknown 的迁移不重置起点。
+				await client`update platform.conversation_executions
+					set unknown_since = clock_timestamp() - interval '301 seconds'
+					where execution_id = ${work.executionId}`;
+				expect(
+					await first.store.retry({
+						claim: first.decision.claim,
+						retryDelayMs: 0,
+						errorCode: "RUNTIME_UNAVAILABLE",
+						transition: {
+							executionStatus: "unknown",
+							conversationStatus: "active",
+						},
+					}),
+				).toBe(true);
+			} finally {
+				await first.store.close();
+			}
+			await waitForAvailableItem(work.itemId);
+			const recovery = await claim(work.itemId, "recovery-worker");
+			try {
+				if (recovery.decision.outcome !== "claimed")
+					throw new Error(`Expected claim: ${recovery.decision.outcome}`);
+				expect(recovery.decision.claim.executionStatus).toBe("unknown");
+				expect(
+					recovery.decision.claim.recoveryElapsedMs,
+				).toBeGreaterThanOrEqual(301_000);
+				// 核实到原 Turn 仍在运行：离开 unknown，计时清除。
+				expect(
+					await recovery.store.recordRuntimeResponse({
+						claim: recovery.decision.claim,
+						hostSessionRef: "host-session-unknown-since",
+						transition: {
+							executionStatus: "processing",
+							conversationStatus: "active",
+						},
+					}),
+				).toBe(true);
+				expect(await unknownSince(work.executionId)).toBeNull();
+			} finally {
+				await recovery.store.close();
+			}
+		});
+
+		it("returns an unsubmitted Turn to its pre-delivery state and projects bounded resubmissions", async () => {
+			const work = await seed();
+			const first = await claim(work.itemId, "not-submitted-worker");
+			try {
+				if (first.decision.outcome !== "claimed")
+					throw new Error(`Expected claim: ${first.decision.outcome}`);
+				expect(first.decision.claim.notSubmittedResubmissions).toBeUndefined();
+				await first.store.prepareRuntimeDispatch({
+					claim: first.decision.claim,
+					leaseDurationMs: 30_000,
+				});
+				expect(
+					await first.store.releaseUnsentDispatch({
+						claim: first.decision.claim,
+						retryDelayMs: 0,
+						errorCode: "RUNTIME_TURN_NOT_SUBMITTED",
+						hostSessionRef: "host-session-not-submitted",
+					}),
+				).toBe(true);
+			} finally {
+				await first.store.close();
+			}
+			expect(await dispatchState(work)).toMatchObject({
+				status: "retry_scheduled",
+				execution_status: "submitted",
+			});
+			expect(await unknownSince(work.executionId)).toBeNull();
+			const [conversation] = await client<
+				{ host_session_ref: string | null }[]
+			>`select host_session_ref from platform.conversations where id = ${work.conversationId}`;
+			expect(conversation?.host_session_ref).toBe("host-session-not-submitted");
+			const [platformEvent] = await client`
+				select 1 from platform.conversation_events
+				where execution_id = ${work.executionId} and source = 'platform'
+			`;
+			// 没有进入 unknown，时间线不出现平台来源的待核实事件。
+			expect(platformEvent).toBeUndefined();
+
+			await waitForAvailableItem(work.itemId);
+			const resubmission = await claim(work.itemId, "resubmission-worker");
+			try {
+				if (resubmission.decision.outcome !== "claimed")
+					throw new Error(`Expected claim: ${resubmission.decision.outcome}`);
+				const resubmitted = resubmission.decision.claim;
+				expect(resubmitted.executionStatus).toBe("submitted");
+				expect(resubmitted.hostSessionRef).toBe("host-session-not-submitted");
+				expect(resubmitted.notSubmittedResubmissions).toEqual({
+					count: 1,
+					elapsedMs: expect.any(Number),
+				});
+				await resubmission.store.prepareRuntimeDispatch({
+					claim: resubmitted,
+					leaseDurationMs: 30_000,
+				});
+				// 已记录的 Session Ref 不能被另一个 Ref 改写。
+				expect(
+					await resubmission.store.releaseUnsentDispatch({
+						claim: resubmitted,
+						retryDelayMs: 0,
+						errorCode: "RUNTIME_TURN_NOT_SUBMITTED",
+						hostSessionRef: "host-session-foreign",
+					}),
+				).toBe(false);
+			} finally {
+				await resubmission.store.close();
+			}
+		});
+
+		it("resubmits through Core with a new claim and admits the accepted resubmission", async () => {
+			const work = await seed();
+			const store = open();
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			const fences: number[] = [];
+			const original = runtimeHost.dispatch.bind(runtimeHost);
+			runtimeHost.dispatch = async (request) => {
+				fences.push(request.deliveryFence);
+				// 第一次投递：Runtime 已核实本次 Turn 在原生提交点之前未提交。
+				if (fences.length === 1)
+					return {
+						schemaVersion: 2,
+						hostSessionRef: `host-session-${request.conversationId}`,
+						operationId: request.executionId,
+						result: notSubmitted,
+					};
+				return original(request);
+			};
+			try {
+				const useCase = createConversationDispatchUseCaseV1(
+					{
+						store,
+						runtimeHost,
+						authorization: isolationAuthorization,
+						events: {
+							async persist(): Promise<never> {
+								throw new Error("No Runtime events in this fixture");
+							},
+						},
+					},
+					{ retryDelayMs: 0 },
+				);
+				expect(
+					await useCase.dispatch({
+						schemaVersion: 1,
+						itemId: work.itemId,
+						workerId: "not-submitted-core-worker",
+					}),
+				).toEqual({ schemaVersion: 1, outcome: "retry", retryScheduled: true });
+				expect((await dispatchState(work))?.execution_status).toBe("submitted");
+				await waitForAvailableItem(work.itemId);
+				await useCase.dispatch({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "resubmission-core-worker",
+				});
+				expect(fences).toHaveLength(2);
+				expect(fences[1]).toBeGreaterThan(fences[0] ?? 0);
+				expect(runtimeHost.sideEffectCount()).toBe(1);
+				expect((await dispatchState(work))?.execution_status).not.toBe(
+					"submitted",
+				);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("wakes only the scheduled recovery of an Execution that is still unknown", async () => {
+			const unknown = await seed("conversation.turn.submit.v1", {
+				executionStatus: "unknown",
+				hostSessionRef: "host-session-wake",
+			});
+			const processing = await seed("conversation.turn.submit.v1", {
+				executionStatus: "processing",
+				hostSessionRef: "host-session-wake-processing",
+			});
+			// 另一 Conversation 中受理不明的 Execution：不能借别的 Conversation 唤醒。
+			const foreign = await seed("conversation.turn.submit.v1", {
+				executionStatus: "unknown",
+				hostSessionRef: "host-session-wake-foreign",
+			});
+			for (const work of [unknown, processing, foreign])
+				await client`update platform.outbox_items
+					set status = 'retry_scheduled', available_at = clock_timestamp() + interval '1 hour'
+					where id = ${work.itemId}`;
+			const transaction = new PostgresConversationExecutionTransactionV1({
+				databaseUrl,
+			});
+			try {
+				for (const work of [unknown, processing])
+					await transaction.wakeUnknownExecutionRecovery({
+						conversationId: work.conversationId,
+						executionId: work.executionId,
+					});
+				await transaction.wakeUnknownExecutionRecovery({
+					conversationId: processing.conversationId,
+					executionId: foreign.executionId,
+				});
+			} finally {
+				await transaction.close();
+			}
+			const rows = await client<
+				{ id: string; status: string; available: boolean }[]
+			>`select id, status, available_at <= clock_timestamp() as available
+				from platform.outbox_items
+				where id in (${unknown.itemId}, ${processing.itemId}, ${foreign.itemId})
+				order by id`;
+			expect(Object.fromEntries(rows.map((row) => [row.id, row]))).toEqual({
+				[unknown.itemId]: {
+					id: unknown.itemId,
+					status: "retry_scheduled",
+					available: true,
+				},
+				[processing.itemId]: {
+					id: processing.itemId,
+					status: "retry_scheduled",
+					available: false,
+				},
+				[foreign.itemId]: {
+					id: foreign.itemId,
+					status: "retry_scheduled",
+					available: false,
+				},
+			});
+			// 唤醒不改变 Execution 状态，也不释放占用。
+			expect((await dispatchState(unknown))?.execution_status).toBe("unknown");
+		});
+
+		it("keeps status-only recovery claimable while the Sandbox is not ready, but not a first delivery", async () => {
+			const work = await seed();
+			await client`update platform.session_sandbox_allocations
+				set status = 'unknown' where conversation_id = ${work.conversationId}`;
+			// 首次投递仍等待 Sandbox 就绪。
+			const firstDiscovery = open();
+			try {
+				expect(
+					await firstDiscovery.findDispatchable({ limit: 256 }),
+				).not.toContainEqual(expect.objectContaining({ itemId: work.itemId }));
+			} finally {
+				await firstDiscovery.close();
+			}
+			const waiting = await claim(work.itemId, "first-delivery-worker");
+			try {
+				expect(waiting.decision.outcome).toBe("busy");
+			} finally {
+				await waiting.store.close();
+			}
+			// Owner 重启等期间 Execution 受理不明：只核实状态的恢复继续推进。
+			await client`update platform.conversation_executions
+				set status = 'unknown' where execution_id = ${work.executionId}`;
+			const discovering = open();
+			try {
+				expect(
+					await discovering.findDispatchable({ limit: 256 }),
+				).toContainEqual(expect.objectContaining({ itemId: work.itemId }));
+			} finally {
+				await discovering.close();
+			}
+			const recovery = await claim(work.itemId, "status-recovery-worker");
+			try {
+				if (recovery.decision.outcome !== "claimed")
+					throw new Error(`Expected claim: ${recovery.decision.outcome}`);
+				expect(recovery.decision.claim.recoveryElapsedMs).toEqual(
+					expect.any(Number),
+				);
+				expect(
+					await recovery.store.prepareRuntimeDispatch({
+						claim: recovery.decision.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+			} finally {
+				await recovery.store.close();
 			}
 		});
 	});
@@ -4838,7 +5186,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
-	it("discovers stopped-Agent recovery for a processing Turn without a ready Sandbox", async () => {
+	it("discovers status-only recovery for a processing Turn without a ready Sandbox (#3373)", async () => {
 		const work = await seed("conversation.turn.submit.v1", {
 			executionStatus: "processing",
 			hostSessionRef: "historical-host",
@@ -4852,11 +5200,11 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			await client`update platform.agent_applications
 				set status = 'available', desired_state = 'running', service_availability = 'starting'
 				where agent_id = 'agent-dispatch'`;
-			expect(
-				(await store.findDispatchable({ limit: 256 })).some(
-					(item) => item.itemId === work.itemId,
-				),
-			).toBe(false);
+			// #3373：只核实状态的恢复不以 Sandbox 就绪为前置；Owner 重启 Agent 期间同样可发现。
+			expect(await store.findDispatchable({ limit: 256 })).toContainEqual({
+				itemId: work.itemId,
+				operation: "conversation.turn.submit.v1",
+			});
 			await client`update platform.agent_applications
 				set status = 'stopped', desired_state = 'stopped', service_availability = null
 				where agent_id = 'agent-dispatch'`;
@@ -4869,7 +5217,35 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
-	it("prepares stopped-Agent recovery without reserving an unready Sandbox", async () => {
+	it("keeps a native capability without a recorded Host Session Ref behind Sandbox readiness (#3373)", async () => {
+		// 没有 Host Session Ref 时 Core 只能重放投递，不是只核实状态的恢复。
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "unknown",
+			hostSessionRef: null,
+		});
+		const store = new PostgresConversationDispatchStoreV1({ databaseUrl });
+		try {
+			await client`update platform.session_sandbox_allocations
+				set status = 'unknown' where conversation_id = ${work.conversationId}`;
+			await client`update platform.outbox_items
+				set operation = 'conversation.native-capability.invoke.v1'
+				where id = ${work.itemId}`;
+			expect(await store.findDispatchable({ limit: 256 })).not.toContainEqual(
+				expect.objectContaining({ itemId: work.itemId }),
+			);
+			await client`update platform.conversations
+				set host_session_ref = 'host-session-native-recovery'
+				where id = ${work.conversationId}`;
+			expect(await store.findDispatchable({ limit: 256 })).toContainEqual({
+				itemId: work.itemId,
+				operation: "conversation.native-capability.invoke.v1",
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("prepares status-only recovery without reserving an unready Sandbox (#3373)", async () => {
 		const work = await seed("conversation.turn.submit.v1", {
 			executionStatus: "processing",
 			hostSessionRef: "historical-host",
@@ -4884,12 +5260,14 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		const { store, decision } = await claim(work.itemId);
 		try {
 			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			// #3373：Agent 重启中时也准备只核实状态的恢复，不预留新的执行容量。
 			expect(
 				await store.prepareRuntimeDispatch({
 					claim: decision.claim,
 					leaseDurationMs: 30_000,
 				}),
-			).toBe("capacity_wait");
+			).toBe(true);
+			expect((await dispatchState(work))?.execution_status).toBe("processing");
 			await client`update platform.agent_applications
 				set status = 'stopped', desired_state = 'stopped', service_availability = null
 				where agent_id = 'agent-dispatch'`;
@@ -6027,6 +6405,230 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				await store.close();
 			}
 		}
+	});
+
+	// #3375：补充指令转入排队（工程 Spec §12.5）。
+	describe("supplementary instructions queued when they cannot enter the original reply (#3375)", () => {
+		async function authorize(work: Awaited<ReturnType<typeof seed>>) {
+			await client`insert into platform.task_authorization_records(id, execution_id, boundary)
+				values (${`authorization-${work.executionId}`}, ${work.executionId}, ${client.json(
+					{
+						schemaVersion: 1,
+						principal: { kind: "user", id: "actor-dispatch" },
+						agentId: "agent-dispatch",
+						channelId: "web",
+						identityRevision: "identity-dispatch",
+						agentAuthorizationRevision: "authorization-dispatch",
+						accessSources: [{ kind: "user", userId: "actor-dispatch" }],
+					},
+				)}) on conflict (execution_id) do nothing`;
+		}
+		async function laterSupplement(
+			work: Awaited<ReturnType<typeof seed>>,
+			name: string,
+		) {
+			const messageId = `${name}-${work.messageId}`;
+			await client`
+				insert into platform.conversation_messages
+					(message_id, conversation_id, actor_id, role, text, execution_id,
+					 status, created_at, updated_at)
+				values (${messageId}, ${work.conversationId}, 'actor-dispatch', 'user',
+					${name}, ${work.executionId}, 'submitted', now(), now())
+			`;
+			await client`
+				insert into platform.outbox_items
+					(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+					 available_at, created_at, updated_at)
+				values (${`conversation:supplement:${messageId}`}, 'conversation',
+					${work.conversationId}, 'conversation.turn.supplement.v1', ${client.json(
+						{
+							schemaVersion: 1,
+							conversationId: work.conversationId,
+							executionId: work.executionId,
+							messageId,
+							turnId: work.turnId,
+							sessionGeneration: 1,
+							modelConfigurationRevision: 4,
+							modelOptionId: "model-option-dispatch",
+							reasoningLevel: "medium",
+						},
+					)}, ${`trace-${name}`}, ${`request-${name}`},
+					now() + interval '1 hour', clock_timestamp(), clock_timestamp())
+			`;
+			return messageId;
+		}
+		const stateOf = (messageIds: readonly string[]) =>
+			client<
+				{
+					message_id: string;
+					message_status: string;
+					failure_code: string | null;
+					execution_id: string;
+					execution_status: string;
+					task_wait_order: string | null;
+					deadline_minutes: number | null;
+					turn_available: string | null;
+					supplement_status: string;
+					waiting_events: number;
+					authorizations: number;
+				}[]
+			>`
+				select message.message_id, message.status as message_status,
+					message.failure_code, message.execution_id,
+					execution.status as execution_status,
+					execution.task_wait_order::text,
+					round(extract(epoch from execution.task_wait_deadline - now()) / 60)::int
+						as deadline_minutes,
+					(select available_at::text from platform.outbox_items
+						where id = 'conversation:turn:' || message.execution_id) as turn_available,
+					supplement.status as supplement_status,
+					(select count(*)::int from platform.conversation_events event
+						where event.execution_id = message.execution_id
+							and event.event_type = 'task.status'
+							and event.event_payload->>'status' = 'waiting') as waiting_events,
+					(select count(*)::int from platform.task_authorization_records record
+						where record.execution_id = message.execution_id) as authorizations
+				from platform.conversation_messages message
+				join platform.conversation_executions execution
+					on execution.execution_id = message.execution_id
+				join platform.outbox_items supplement
+					on supplement.id = 'conversation:supplement:' || message.message_id
+				where message.message_id = any(${messageIds as string[]}::text[])
+				order by array_position(${messageIds as string[]}::text[], message.message_id)
+			`;
+
+		it("converts the claimed supplement and the later pending ones of the same Execution in order", async () => {
+			const work = await seed("conversation.turn.supplement.v1", {
+				executionStatus: "completed",
+				hostSessionRef: "host-session-existing",
+			});
+			await authorize(work);
+			const later = await laterSupplement(work, "later");
+			const { store, decision } = await claim(work.itemId);
+			try {
+				if (decision.outcome !== "claimed") throw new Error("Expected claim");
+				await expect(
+					store.queueSupplement({ claim: decision.claim }),
+				).resolves.toBe(true);
+				const rows = await stateOf([work.messageId, later]);
+				expect(rows).toEqual([
+					expect.objectContaining({
+						message_status: "submitted",
+						failure_code: null,
+						execution_status: "waiting",
+						deadline_minutes: 10,
+						turn_available: "infinity",
+						supplement_status: "succeeded",
+						waiting_events: 1,
+						authorizations: 1,
+					}),
+					expect.objectContaining({
+						message_status: "submitted",
+						execution_status: "waiting",
+						turn_available: "infinity",
+						supplement_status: "succeeded",
+						waiting_events: 1,
+						authorizations: 1,
+					}),
+				]);
+				// 各自绑定新的等待 Execution，按补充指令的受理顺序排队；原 Execution 不变。
+				expect(rows[0]?.execution_id).not.toBe(work.executionId);
+				expect(rows[1]?.execution_id).not.toBe(rows[0]?.execution_id);
+				expect(Number(rows[1]?.task_wait_order)).toBe(
+					Number(rows[0]?.task_wait_order) + 1,
+				);
+				const [original] = await client`
+					select status from platform.conversation_executions
+					where execution_id = ${work.executionId}
+				`;
+				expect(original).toEqual({ status: "completed" });
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("fails the supplements beyond the queue capacity as delivery failures", async () => {
+			const work = await seed("conversation.turn.supplement.v1", {
+				executionStatus: "completed",
+				hostSessionRef: "host-session-existing",
+			});
+			await authorize(work);
+			const later = [
+				await laterSupplement(work, "second"),
+				await laterSupplement(work, "third"),
+				await laterSupplement(work, "fourth"),
+			];
+			const { store, decision } = await claim(work.itemId);
+			try {
+				if (decision.outcome !== "claimed") throw new Error("Expected claim");
+				await expect(
+					store.queueSupplement({ claim: decision.claim }),
+				).resolves.toBe(true);
+				const rows = await client<
+					{
+						message_id: string;
+						status: string;
+						failure_code: string | null;
+						outbox: string;
+					}[]
+				>`
+					select message.message_id, message.status, message.failure_code,
+						outbox.status as outbox
+					from platform.conversation_messages message
+					join platform.outbox_items outbox
+						on outbox.id = 'conversation:supplement:' || message.message_id
+					where message.message_id = any(${[work.messageId, ...later]}::text[])
+					order by array_position(${[work.messageId, ...later]}::text[], message.message_id)
+				`;
+				expect(
+					rows.map(({ status, failure_code, outbox }) => [
+						status,
+						failure_code,
+						outbox,
+					]),
+				).toEqual([
+					["submitted", null, "succeeded"],
+					["submitted", null, "succeeded"],
+					["submitted", null, "succeeded"],
+					["failed", "QUEUE_FULL", "failed"],
+				]);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("fails the claimed supplement without queueing when its task authorization is no longer current", async () => {
+			const work = await seed("conversation.turn.supplement.v1", {
+				executionStatus: "processing",
+				executionFence: 7,
+				hostSessionRef: "host-session-existing",
+			});
+			await authorize(work);
+			await client`update platform.task_authorization_records set revoked_at = now()
+				where execution_id = ${work.executionId}`;
+			const { store, decision } = await claim(work.itemId);
+			try {
+				if (decision.outcome !== "claimed") throw new Error("Expected claim");
+				await expect(
+					store.queueSupplement({ claim: decision.claim }),
+				).resolves.toBe(true);
+				const [state] = await client`
+					select message.status, message.failure_code, message.execution_id,
+						outbox.status as outbox
+					from platform.conversation_messages message
+					join platform.outbox_items outbox on outbox.id = ${work.itemId}
+					where message.message_id = ${work.messageId}
+				`;
+				expect(state).toEqual({
+					status: "failed",
+					failure_code: "AUTHORIZATION_REVOKED",
+					execution_id: work.executionId,
+					outbox: "failed",
+				});
+			} finally {
+				await store.close();
+			}
+		});
 	});
 
 	it("persists a supplementary delivery failure on its Message", async () => {
@@ -9901,6 +10503,275 @@ describe("aborted dispatch polls (#2664)", () => {
 			expect(result).toBe("resolved");
 		} finally {
 			await store.close();
+		}
+	});
+});
+
+/** Web 排队消息：与写入路径相同的等待 Execution、来源消息、只能由认领准入的 Turn 与原任务授权。 */
+async function seedQueued(
+	work: Awaited<ReturnType<typeof seed>>,
+	deadlineMs = 60_000,
+) {
+	const suffix = fixture++;
+	const executionId = `execution-queued-${suffix}`;
+	const messageId = `message-queued-${suffix}`;
+	const turnId = `turn-queued-${suffix}`;
+	await client`
+		insert into platform.conversation_executions
+			(execution_id, conversation_id, sandbox_id, agent_id, actor_id, principal_type, channel_id, turn_id,
+			 status, task_wait_order, task_wait_deadline, session_generation, delivery_fence,
+			 authorization_revision, model_configuration_revision, model_option_id, reasoning_level,
+			 last_event_sequence, created_at, updated_at)
+		select ${executionId}, e.conversation_id, e.sandbox_id, e.agent_id, e.actor_id, e.principal_type,
+			e.channel_id, ${turnId}, 'waiting', 100000 + ${suffix},
+			clock_timestamp() + (${deadlineMs}::bigint * interval '1 millisecond'), 1, 0,
+			'authorization-dispatch', 4, 'model-option-dispatch', 'medium', 0, now(), now()
+		from platform.conversation_executions e where e.execution_id = ${work.executionId}
+	`;
+	await client`
+		insert into platform.conversation_messages
+			(message_id, conversation_id, actor_id, role, text, execution_id, status, created_at, updated_at)
+		values (${messageId}, ${work.conversationId}, 'actor-dispatch', 'user',
+			'queued dispatch fixture', ${executionId}, 'submitted', now(), now())
+	`;
+	await client`
+		insert into platform.outbox_items
+			(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+			 available_at, created_at, updated_at)
+		values (${`conversation:turn:${executionId}`}, 'conversation', ${work.conversationId},
+			'conversation.turn.submit.v1', ${client.json({
+				schemaVersion: 1,
+				conversationId: work.conversationId,
+				executionId,
+				messageId,
+				turnId,
+				sessionGeneration: 1,
+				modelConfigurationRevision: 4,
+				modelOptionId: "model-option-dispatch",
+				reasoningLevel: "medium",
+			})}, 'trace-queued', 'request-queued', 'infinity', now(), now())
+	`;
+	await client`insert into platform.agent_owners (agent_id, owner_id, created_at)
+		values ('agent-dispatch', 'actor-dispatch', now()) on conflict do nothing`;
+	await client`insert into platform.task_authorization_records(id, execution_id, boundary)
+		values (${`authorization-${executionId}`}, ${executionId}, ${client.json({
+			schemaVersion: 1,
+			principal: { kind: "user", id: "actor-dispatch" },
+			agentId: "agent-dispatch",
+			channelId: "web",
+			identityRevision: "identity-dispatch",
+			agentAuthorizationRevision: "authorization-dispatch",
+			// actor-dispatch 是 Owner：出队前重验的当前访问来源是 owner。
+			accessSources: [{ kind: "owner", userId: "actor-dispatch" }],
+		})})`;
+	return {
+		conversationId: work.conversationId,
+		executionId,
+		messageId,
+		itemId: `conversation:turn:${executionId}`,
+	};
+}
+
+async function queuedOutcome(queued: { executionId: string }) {
+	const [row] = await client`
+		select e.status as execution, m.status as message, m.failure_code
+		from platform.conversation_executions e
+		join platform.conversation_messages m on m.execution_id = e.execution_id
+		where e.execution_id = ${queued.executionId}
+	`;
+	const events = await client<{ event_payload: unknown }[]>`
+		select event_payload from platform.conversation_events
+		where execution_id = ${queued.executionId} and event_type = 'task.status'
+		order by sequence
+	`;
+	return { ...row, events: events.map(({ event_payload }) => event_payload) };
+}
+
+describe("Web bounded queue dispatch (#3376)", () => {
+	const queueStore = () =>
+		new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			userDirectory: {
+				resolveUser: async (userId: string) => ({
+					schemaVersion: 1 as const,
+					userId,
+					accountStatus: "active" as const,
+					organizationIds: [],
+					authorizationRevision: "identity-dispatch",
+				}),
+			},
+		});
+	const claim = async (itemId: string) => {
+		const store = queueStore();
+		const decision = await store.claim({
+			schemaVersion: 1,
+			itemId,
+			workerId: "queue-worker",
+			leaseDurationMs: 30_000,
+		});
+		return { store, decision };
+	};
+	it("admits queued messages one at a time in FIFO order after the current reply", async () => {
+		const active = await seed("conversation.turn.submit.v1");
+		const first = await seedQueued(active);
+		const second = await seedQueued(active);
+		const stores: PostgresConversationDispatchStoreV1[] = [];
+		const attempt = async (itemId: string) => {
+			const result = await claim(itemId);
+			stores.push(result.store);
+			return result.decision;
+		};
+		try {
+			// 当前回复占用会话：排队消息继续等待，不并发启动第二个回复。
+			expect(await attempt(first.itemId)).toEqual({ outcome: "busy" });
+			await client`update platform.conversation_executions set status = 'completed' where execution_id = ${active.executionId}`;
+			// 只准入同会话中等待顺序最小的一条。
+			expect(await attempt(second.itemId)).toEqual({ outcome: "busy" });
+			const admitted = await attempt(first.itemId);
+			expect(admitted).toMatchObject({
+				outcome: "claimed",
+				claim: {
+					executionId: first.executionId,
+					executionStatus: "waiting",
+				},
+			});
+			expect(await queuedOutcome(second)).toMatchObject({
+				execution: "waiting",
+				message: "submitted",
+			});
+		} finally {
+			await Promise.all(stores.map((store) => store.close()));
+		}
+	});
+
+	it("keeps the queue when the current reply is being stopped", async () => {
+		const active = await seed("conversation.turn.submit.v1", {
+			executionStatus: "processing",
+			hostSessionRef: "host-queue-stop",
+		});
+		await seedStop(active);
+		const queued = await seedQueued(active);
+		const { store, decision } = await claim(queued.itemId);
+		try {
+			// 停止只作用于当前回复：确认停止前排队消息等待，不被清空。
+			expect(decision).toEqual({ outcome: "busy" });
+			expect(await queuedOutcome(queued)).toMatchObject({
+				execution: "waiting",
+				message: "submitted",
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("ends an expired queued message with TASK_WAIT_TIMEOUT and a status event", async () => {
+		const active = await seed("conversation.turn.submit.v1");
+		const queued = await seedQueued(active, 1);
+		await client`update platform.conversation_executions
+			set created_at = clock_timestamp() - interval '2 seconds',
+				task_wait_deadline = clock_timestamp() - interval '1 second'
+			where execution_id = ${queued.executionId}`;
+		const { store, decision } = await claim(queued.itemId);
+		try {
+			expect(decision).toEqual({ outcome: "failed" });
+			expect(await queuedOutcome(queued)).toEqual({
+				execution: "failed",
+				message: "failed",
+				failure_code: "TASK_WAIT_TIMEOUT",
+				events: [
+					{
+						type: "task.status",
+						status: "failed",
+						reason: "TASK_WAIT_TIMEOUT",
+					},
+				],
+			});
+			expect(await dispatchState(queued)).toMatchObject({ status: "failed" });
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("cancels a queued message whose sender lost access before it starts", async () => {
+		const active = await seed("conversation.turn.submit.v1");
+		const queued = await seedQueued(active);
+		const sibling = await seed("conversation.turn.submit.v1");
+		const unaffected = await seedQueued(sibling);
+		await client`insert into platform.platform_user_disables (user_id) values ('actor-dispatch') on conflict do nothing`;
+		const { store, decision } = await claim(queued.itemId);
+		try {
+			expect(decision).toEqual({ outcome: "failed" });
+			// 出队前重验发现权限失效：取消且不投递，取消事件带受限原因。
+			expect(await queuedOutcome(queued)).toEqual({
+				execution: "cancelled",
+				message: "failed",
+				failure_code: "AUTHORIZATION_REVOKED",
+				events: [
+					{
+						type: "task.status",
+						status: "cancelled",
+						reason: "AUTHORIZATION_REVOKED",
+					},
+				],
+			});
+			// 只作用于被认领的这一条；其他会话的排队消息由各自的认领重验。
+			expect(await queuedOutcome(unaffected)).toMatchObject({
+				execution: "waiting",
+			});
+		} finally {
+			await store.close();
+			await client`delete from platform.platform_user_disables where user_id = 'actor-dispatch'`;
+		}
+	});
+
+	it("fails the conversation's waiting queue when generation isolation makes it unavailable", async () => {
+		const work = await seedIsolation();
+		const queued = await seedQueued(work);
+		const store = open();
+		const transaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		const events = createConversationEventUseCaseV1({ transaction });
+		const useCase = createConversationDispatchUseCaseV1(
+			{
+				store,
+				authorization: isolationAuthorization,
+				runtimeHost: isolationHost(work),
+				events,
+			},
+			{ retryDelayMs: 0 },
+		);
+		try {
+			for (
+				let attempt = 0;
+				attempt < 6 &&
+				(await isolationState(work))?.isolation_status !== "confirmed";
+				attempt++
+			)
+				await useCase.dispatch({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "worker-queue-isolation",
+				});
+			expect(await isolationState(work)).toMatchObject({
+				status: "unavailable",
+				isolation_status: "confirmed",
+			});
+			expect(await queuedOutcome(queued)).toEqual({
+				execution: "failed",
+				message: "failed",
+				failure_code: "CONVERSATION_UNAVAILABLE",
+				events: [
+					{
+						type: "task.status",
+						status: "failed",
+						reason: "CONVERSATION_UNAVAILABLE",
+					},
+				],
+			});
+			expect(await dispatchState(queued)).toMatchObject({ status: "failed" });
+		} finally {
+			await Promise.all([store.close(), transaction.close()]);
 		}
 	});
 });

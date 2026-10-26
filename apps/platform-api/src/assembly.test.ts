@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { createServer } from "node:net";
 import { PassThrough } from "node:stream";
 
+import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type { NativeCapabilityInvocationRequestV1 } from "@agent-infra/contracts/pilot";
 import * as telemetryModule from "@agent-infra/observability";
 import {
@@ -12,7 +13,7 @@ import {
 } from "@agent-infra/platform-store";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-
+import { createPlatformApp } from "./app.js";
 import { assemblePlatformApi } from "./assembly.js";
 import {
 	deploymentDiagnosticV1,
@@ -222,6 +223,54 @@ describe("Platform API production assembly", () => {
 		});
 		expect(assembly.dependencies.nativeMetadataCurrent?.check).toBeDefined();
 		expect(assembly.dependencies.nativeCapabilityInvocation).toBeDefined();
+		const invocation = assembly.dependencies.nativeCapabilityInvocation;
+		if (!invocation) throw new Error("missing native invocation assembly");
+		const inputBody = {
+			capabilityId: "a".repeat(64),
+			directoryRevision: "b".repeat(64),
+			parameters: "",
+			idempotencyKey: "invoke-version",
+			requestId: "request-version",
+			traceId: "trace-version",
+		};
+		const withFiles = {
+			...inputBody,
+			schemaVersion: 2 as const,
+			attachments: ["file-1"],
+		};
+		expect(
+			await invocation.buildRequest({
+				identity,
+				conversationId: "conversation",
+				body: withFiles,
+			}),
+		).toEqual({ ...withFiles, conversationId: "conversation" });
+		const stateful = {
+			...inputBody,
+			schemaVersion: 3 as const,
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "model-1",
+				reasoningLevel: "high",
+			},
+		};
+		expect(
+			await invocation.buildRequest({
+				identity,
+				conversationId: "conversation",
+				body: stateful,
+			}),
+		).toEqual({ ...stateful, conversationId: "conversation" });
+		const response = await createPlatformApp(assembly.dependencies).request(
+			"/api/v2/conversations/conversation/native-capability/invoke",
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(stateful),
+			},
+		);
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ outcome: "unsupported" });
 		await assembly.close();
 		let override: ReturnType<typeof assemblePlatformApi> | undefined;
 		try {
@@ -877,3 +926,100 @@ describe("Platform API production assembly", () => {
 		expect(assembly.close).toHaveBeenCalledOnce();
 	});
 });
+
+it.each([false, true])(
+	"assembles only a consistent per-Agent installation callback (mismatch=%s)",
+	async (mismatch) => {
+		const unavailable = async () => {
+			throw Error("unused test adapter");
+		};
+		const bindingFor = (agentId: string) => {
+			const profile = {
+				schemaVersion: 1 as const,
+				publicOrigin: "https://connection.test",
+				mcpPath: "/mcp",
+				consumerId: agentId,
+				audience: "mcp",
+				egressProfile: { ref: "egress", revision: "r1" },
+			};
+			const approval = {
+				schemaVersion: 1 as const,
+				configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+				egressEnforced: true as const,
+				source: { ref: "source", revision: "r1" },
+			};
+			return {
+				profile,
+				approval,
+				configuration: {
+					schemaVersion: 1 as const,
+					ref: agentId,
+					revision: "r1",
+					clientId: agentId,
+					issuer: "https://connection.test/",
+					authorizationEndpoint: "https://connection.test/oauth/authorize",
+					tokenEndpoint: "https://connection.test/oauth/token",
+					revocationEndpoint: "https://connection.test/oauth/revoke",
+					resource: "https://connection.test/mcp",
+					scope: "mcp" as const,
+					callbackUrl:
+						mismatch && agentId === "agent-b"
+							? "https://platform.test/other-callback"
+							: "https://platform.test/callback",
+					runtimeOrigin: "https://runtime.test:3443/",
+					configFingerprint: approval.configFingerprint,
+					source: approval.source,
+				},
+			};
+		};
+		const bindingsByAgent = {
+			"agent-a": bindingFor("agent-a"),
+			"agent-b": bindingFor("agent-b"),
+		};
+		const assembly = assemblePlatformApi({
+			taskAdmissionPolicy: {
+				maximumWaitingTasksPerAgent: 2,
+				waitingTimeoutMs: 60000,
+			},
+			databaseUrl: "postgres://invalid:invalid@127.0.0.1:1/invalid",
+			identity: { resolve: async () => null, hydrateUsers: async () => [] },
+			admissions: {
+				authorizationAdmission: { authorize: unavailable },
+				imageAdmission: { admitImage: unavailable },
+				modelAdmission: { admitModels: unavailable },
+				secretAdmission: { admitSecrets: unavailable },
+				channelAdmission: { admitChannels: unavailable },
+			},
+			allocateApplicationIds: unavailable,
+			prepareApplicationSecrets: unavailable,
+			prepareConfigurationSecrets: unavailable,
+			presentAgent: unavailable,
+			connectionInstallation: {
+				publicOrigin: "https://platform.test",
+				bindingsByAgent,
+			},
+			connectionInstallationCallback: { forward: vi.fn(async () => {}) },
+		});
+		try {
+			expect(assembly.dependencies.conversation).toBeDefined();
+			if (mismatch) {
+				expect(assembly.dependencies.connectionInstallations).toBeUndefined();
+				expect(
+					assembly.dependencies.connectionInstallationCallback,
+				).toBeUndefined();
+			} else {
+				bindingsByAgent["agent-a"].configuration.callbackUrl =
+					"https://platform.test/mutated";
+				expect(assembly.dependencies.connectionInstallations).toBeDefined();
+				expect(
+					assembly.dependencies.connectionInstallationCallback,
+				).toMatchObject({
+					callbackUrl: "https://platform.test/callback",
+					issuer: "https://connection.test/",
+				});
+			}
+		} finally {
+			await assembly.close();
+		}
+	},
+);

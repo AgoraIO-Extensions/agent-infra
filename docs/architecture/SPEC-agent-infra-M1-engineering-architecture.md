@@ -1290,7 +1290,7 @@ Web、任务 API、Eval 执行和平台托管渠道只面对统一 Platform Conv
 
 `platform-worker` 只运行 RuntimeHost Client Adapter，并通过 Agent Service 的内部 HTTP/SSE Interface 调用 Pod；RuntimeHost 和 Native/ACP Driver 在 Agent Pod 内运行。M1 使用固定 Registry，不动态发现或加载 Driver；标准模板绑定、自定义交互模式和 capability 派生规则只在 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#3-runtime-registry-与交互模式) 中完整维护。RuntimeHost 的依赖方向和未来抽取维护标准见 [RuntimeHost 未来抽取与维护标准](HLD-agent-runtime-M1.md#12-runtimehost-未来抽取与维护标准)，工程 Spec 不重复定义。
 
-Codex Linux 部署必须启用并完整支持 Landlock ABI V5 的文件系统权限，且允许运行用户在非 root、只读根文件系统、移除全部 capabilities 和 `no-new-privileges` 的约束下安装并应用规则集。原生执行前必须通过实际规则集安装完成能力准入；不能根据 `uname` 或内核版本推断支持，也不能接受部分权限降级。内部后端、可信部署工具与启动顺序见 [Codex Linux sandbox 启动准入](HLD-agent-runtime-M1.md#101-codex-linux-sandbox-启动准入)。
+Codex Linux 的默认 Landlock 部署必须启用并完整支持 ABI V5 的文件系统权限，且允许运行用户在非 root、只读根文件系统、移除全部 capabilities 和 `no-new-privileges` 的约束下安装并应用规则集。原生执行前必须通过实际规则集安装完成能力准入；不能根据 `uname` 或内核版本推断支持，也不能接受部分权限降级。对于每个由 Worker 独占管理、具备专属 Pod/PVC/NetworkPolicy/Secret 的标准 Runtime Pod，可以按 [ADR-0035](../adr/0035-codex-container-boundary-mode.md) 选择 `container-boundary`：Codex 保持 Provider `workspace-write`，专属 Pod 是文件/进程边界；该模式不适用于共享 Pod、私有 callback lane 或自定义 Agent。内部后端、可信部署工具与启动顺序见 [Codex Linux sandbox 启动准入](HLD-agent-runtime-M1.md#101-codex-linux-sandbox-启动准入)。
 
 Agent Pod 的 `/tmp` 挂载部署控制、具有显式容量上限的内存临时卷，随 Pod 删除，不保存业务持久数据。Runtime 为每次原生启动分配独立临时目录，仍遵循 [Conversation 隔离边界](#109-codex-原生-conversation-隔离边界)，不能把共享 `/tmp` 根加入原生文件访问许可。生产 Workload 和镜像准入探针必须使用一致的临时卷容量与安全约束；部署参数见 [Kubernetes 交付拓扑](../../deploy/README.md)。
 
@@ -1350,6 +1350,73 @@ Host/Worker 重启和 SSE 重连沿该原操作核实。
 重新发现同名命令、不再次 invoke，不适用于 unknown、终态、只读查询或停止；Key 不能写入
 命令、journal、环境、原生可见文件或日志。具体固定 Runtime 映射见
 [Runtime HLD §5.3](HLD-agent-runtime-M1.md#53-固定官方能力矩阵)。
+
+##### 有状态命令的端到端版本与受理
+
+有状态命令使用独立的公开 Invocation V3、`NativeCapabilityInvocationPlanV2`、
+`conversation.native-capability.invoke.v2` outbox 和 Worker→Host Native V6。
+旧 Invocation V1、带 Skill 附件的 V2、Native V4/V5 及其签名和恢复语义保持不变。
+V3 只承载服务端受控目录认定的有状态 command，不接受附件、Skill、自由原生方法或路径；
+旧 native 请求缺少冻结选择时返回不支持，不能从上一条消息、当前默认配置或最新 Key 补值。
+
+浏览器以当前 V2 command metadata 选择确定能力及目录修订，提交参数和所选模型选项、
+推理强度；这些输入不是授权。Core 在既有受理事务中复用普通 Execution 的模型准入和 Key
+选择规则，验证当前主体、会话及无活跃/等待/unknown 占用，并重验当前目录和参数。
+服务端决定 `effect: state_changing`，不信任浏览器对副作用类别的声明。准备与提交之间
+目录、授权、配置或模型/Key 选择发生变化时拒绝受理，不换成其他能力或普通消息。
+
+新计划与 outbox 原子保存以下不可变绑定，Worker 只消费该版本的已持久值：
+
+| 绑定 | 权威来源与约束 |
+| --- | --- |
+| 主体、Agent、Conversation、Execution、Turn、Session 代次和渠道 | 当前服务端授权与同一受理事务；沿既有 Sandbox 归属与 fence 校验，不由目录或原生 ID 建立身份 |
+| capability ID、目录修订、来源版本、参数及摘要 | 当前受控目录和校验后的输入；名称不能代替确定版本，参数摘要不能代替完整调用摘要 |
+| selection 与 configVersion | 当前获准的有效 modelOptionId、reasoningLevel 和 Runtime 配置修订；不得在投递时重选或从旧消息推导 |
+| keyBinding | 原 Execution 的 Key 用途、主体、密文引用和版本；只保存引用，不保存明文或明文摘要 |
+
+受理幂等摘要覆盖公开 V3 输入、版本及主体、Agent、Conversation、Session 代次等授权范围；
+原操作摘要另覆盖完整冻结绑定。两者用途不同，重试同一公开输入应回读原受理结果，不能因
+当前模型或 Key 变化重新受理。同键异参、不同模型选择或附件注入在副作用前冲突/拒绝。
+检查活跃占用、创建计划和写入 outbox 必须在同一事务中完成，并由存储层唯一约束或条件写入
+保证并发请求最多产生一个原操作。旧计划保持旧版本；缺失字段不是可迁移的默认值。
+
+##### Native V6 的签名、执行与恢复
+
+Native V6 使用独立的 stateful-command request/transport、business Grant 和 Key restore
+Schema，固定 `schemaVersion: 6`；生成 JSON Schema、OpenAPI 与 Client 同步发布。
+请求携带上表冻结绑定、原 Host Session Ref、operation/fence、requestId/traceId，命令类别
+固定为 command。Grant 仅授权 `native-capability.invoke`，精确绑定同一请求、主体及范围；
+当前授权与原受理范围取交集。请求签名摘要覆盖版本和全部业务字段，排除 Grant token 与
+独立私有 Key 原值；持久原操作摘要按既有规则排除可换手的投递 fence，仍包含 selection、
+configVersion、keyBinding、能力修订及参数摘要。不能把 V6 请求降为 V4 验签或复用旧摘要。
+私有 Key 沿既有独立字段交付，绑定该次已验证 V6 请求摘要与同一 Key 引用/版本。
+
+Host 在当前目录重验后持久准备原操作，再安装原 Execution Key，并以独立的业务执行
+context 调用 Driver V2。metadata context 只用于前置目录读取，其固定 30 秒期限和 HTTP
+连接结束不终止已受理业务，也不能授予业务执行权。已受理命令沿原 Execution 租约、
+当前授权、停止和恢复机制运行，不保存回调、signal 或私有 Key。
+
+Driver 在发送压缩 RPC 前校验原 Session 实际模型、endpoint、reasoning、Key 绑定与冻结
+选择一致，持久保存完整命令摘要和原操作意图，并为本 Execution 建立带 fence 的短期受保护
+模型传输 admission。模型请求只有在原生 Turn 与该持久操作唯一绑定、当前授权通过且该
+admission 租约在发送时仍有效时才能出网；授权撤销、租约失效或冻结摘要变化必须在出网前
+原子拒绝；
+模型 intent/started/结果事实归属于该压缩 Execution，不沿用上一条消息的模型授权或 journal。
+所有异步通知同时核对所属进程/传输、Conversation、原 Session、原生 Turn/item 和原操作；
+仅 threadId 相同或收到第一条通知不足以建立关联。官方接口或装配不能证明这些条件时
+保持不支持，不以受控 transport 的成功代替真实进程证据。
+
+完成须同时具有原 `contextCompaction` item、Turn 终态及已持久的真实模型事实。
+空 RPC ACK 不建立完成事实；已唯一确认受理但仍执行时返回 accepted/running，未知时
+保留 unknown 和会话占用。重投必须先比较完整冻结摘要，再回读原操作；内存中已有 Promise
+也不能吞掉同键异参冲突。重启和停止只核实原 Turn/item，不发送第二次压缩。
+
+V6 Key restore 仅接受已持久 accepted/running 的原 V6 命令，Grant 仅授权
+`execution.key.restore`，固定 existing-accepted-only。它绑定原请求/操作摘要、原 Host
+Session、命令和目录、selection、configVersion、Key 引用/版本、当前权限和 fence；
+只恢复原执行的内存 Key，不创建意图、重读目录、再次 invoke 或授予新的业务副作用。
+unknown、终态、停止和只读查询不能取得该恢复权。历史事件仍沿原 journal、游标和 ACK
+回读，不因协议升级改绑或重放。
 
 ### 11.5 Browser Capability 边界
 
@@ -1476,6 +1543,7 @@ sequenceDiagram
 - 消息持久化成功后才向用户显示“已提交”。后续投递失败不能删除消息或静默丢弃，必须收敛为可解释状态。
 - 同一 Conversation 同时只有一个活跃 Turn。普通消息、补充指令、重新生成和停止的重试不能产生重复 Execution、越过发送者边界，或改绑到后续 Execution。
 - `platform-worker` 在实际投递前重新解析当前授权；Runtime 是否接受命令不确定时按持久化状态恢复查询，不能盲目重放可能产生副作用的请求。
+- Runtime 明确报告本次 Turn 在原生提交点之前未提交（`RUNTIME_TURN_NOT_SUBMITTED`）时，Worker 把 Execution 退回投递前的状态，用新的 Grant 重新投递同一 Execution：2 分钟内最多 3 次，之后以 `RUNTIME_FILE_INPUT_UNAVAILABLE` 或 `RUNTIME_SESSION_PREPARATION_FAILED` 明确失败。接受结果不确定的恢复按墙钟预算收敛，默认 5 分钟，由部署配置（Worker 环境变量 `PLATFORM_WORKER_RUNTIME_RECOVERY_BUDGET_MS`），用尽时以 `RUNTIME_RECOVERY_TIMEOUT` 失败。只核实状态的恢复不以 Session Sandbox 就绪为前置。完整契约见 [Runtime HLD §5](HLD-agent-runtime-M1.md#5-platform-conversation-contract) 与 [§7.3](HLD-agent-runtime-M1.md#73-重启恢复)，决策见 [ADR-0034](../adr/0034-not-submitted-turns-and-wall-clock-recovery-budget.md)。
 - 用户可见结果以 [Agent Platform PRD 11.2](../prd/PRD-agent-platform-M1.md#112-对话能力) 为准；幂等键、事务分支、outbox 状态迁移、Runtime 接受竞态和失败收敛的完整工程契约见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#8-消息事件与-sse-可靠性)。
 - 停止是尽力而为；已经提交给外部 Provider 的操作不自动撤回。
 - Connection 的外部调用幂等、未知结果与恢复由 Connection 负责；平台不能通过重投整个任务来绕过原调用对账。
@@ -1527,7 +1595,7 @@ RuntimeHost 命令、租约/fence、原生 Session 和事件字段继续由 [Run
 **与停止、重启、待核实和撤权的关系。**
 
 - 停止：只针对目标 Execution，不终结等待 Execution。停止确认、占用释放后，下一条等待 Execution 按序准入；停止确认超时转为待核实期间继续等待，到期按 `TASK_WAIT_TIMEOUT` 终结。
-- 待核实：`unknown` 不释放占用，等待 Execution 不出队，直到原执行核实为终态或等待到期。代次隔离完成、Conversation 标记为会话不可用的事务（[Runtime HLD §7.3](HLD-agent-runtime-M1.md#73-重启恢复)）同时终结该 Conversation 的全部等待 Execution；`RUNTIME_SESSION_BLOCKED` 使会话不可用后，等待 Execution 在随后的认领中以 `CONVERSATION_UNAVAILABLE` 终结。
+- 待核实：`unknown` 不释放占用，等待 Execution 不出队，直到原执行核实为终态、恢复预算用尽（[§12.2](#122-可靠性规则)）或等待到期。代次隔离完成、Conversation 标记为会话不可用的事务（[Runtime HLD §7.3](HLD-agent-runtime-M1.md#73-重启恢复)）同时终结该 Conversation 的全部等待 Execution；`RUNTIME_SESSION_BLOCKED` 使会话不可用后，等待 Execution 在随后的认领中以 `CONVERSATION_UNAVAILABLE` 终结。
 - 重启：`platform-api`、`platform-worker` 或 Agent 重启后，等待 Execution 沿原顺序与期限继续（§16.3）。Agent 启动或更新中继续等待，停止或停用时终结。
 - 撤权：主体禁用、Agent 可用范围或渠道权限撤销时，按 §9.2 与 [Runtime HLD §8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等) 取消受影响的等待 Execution，原因为 `AUTHORIZATION_REVOKED`，不投递。
 - 撤回：Web 发送者撤回自己的排队消息，复用 12.4 未投递任务的取消路径。撤回与认领互斥：Execution 仍为 `waiting` 时以 `cancelled` 终结，记录撤回原因与必要审计；已离开 `waiting` 时返回已开始处理，不影响执行。撤回入口遵循 §8.1 的命令约定，校验可信主体与 Conversation 归属并支持幂等。企微不提供撤回入口。
@@ -1610,6 +1678,7 @@ Connection 的 LDAP、OAuth 客户端、MCP/API、Grant、凭证保护、Provide
 | `schemaVersion` | 本配置契约的整数版本，当前为 `1`；不是 Connection API、MCP 或客户端产物版本。 |
 | `publicOrigin` | 部署批准并与 Connection 发布配置一致的 HTTPS origin，只含 scheme、host 和可选端口；使用 URL origin 的规范形式，不含凭据、路径、尾斜杠、query 或 fragment。批准范围按完整 origin 精确匹配，不使用域名后缀或通配符。 |
 | `mcpPath` | 相对此 origin 的独立绝对路径，以单个 `/` 开始；不含 scheme、host、query、fragment、反斜杠、`.`/`..` 路径段或编码后的路径分隔符及点段。最终 MCP endpoint 为 `publicOrigin + mcpPath`，不以 URL 解析的相对路径回退或重定向改变目标。 |
+| `webPath` | Connection Web 控制台的独立绝对路径，以单个 `/` 开始；与 `mcpPath` 分开批准和校验。Platform Web 的授权入口使用 `publicOrigin + webPath`，不能把 MCP endpoint 当作浏览器管理入口；该字段不进入 MCP 配置指纹。 |
 | `consumerId` | Connection 为该产品注册的非空 Consumer 标识，按原值精确匹配；不是 Principal、ConsumerInstance、Actor 或授权证明，不能由 Platform 创建实例身份或代替 Connection 的认证解析。 |
 | `audience` | Connection 为该 Consumer 部署批准的非空目标资源标识，按原值精确匹配；不能从 origin、路径或 Platform Runtime Execution Grant 的 audience 推导。 |
 | `egressProfile` | 非敏感的 `{ ref, revision }`，两项均为非空字符串，引用部署批准的出站策略及不可变修订。该策略限定到达上述 Connection 目标所需的网络路径、DNS 和 TLS 校验；引用名不授予授权，也不允许访问 Connection DB 或 Provider。 |
@@ -1888,6 +1957,30 @@ native client metadata，并把每个 Agent 的返回 `client_id` 绑定到该 A
 其他产品 Consumer 或 Portable PAT 作为自动 fallback。API/Worker/Web 不持有 Consumer
 secret、PKCE verifier、access/refresh Token，也不兑换授权码、刷新或代调用 MCP。
 
+**逐 Agent 安装配置。** 部署可为不同 Agent 提供完整的非敏感安装绑定，每项包含已有
+Consumer profile、approval 和 `RuntimeOAuthConfigurationV1`；复用现有 schema、指纹及
+source 校验，不创建另一种身份或凭据权威。API、Worker 与安装 Store 捕获同一批准修订。
+显式配置逐 Agent 绑定时，该映射是安装能力的唯一来源：缺少 Agent、条目无效、profile 与
+OAuth resource/source/指纹不一致时拒绝该安装，不回退到共享配置、Owner 或其他 Agent。
+原单份配置部署继续使用原路径；两种安装配置来源同时提供时拒绝安装能力装配。
+安装能力不可用不扩大为普通模型执行或原 stop/status、只读恢复不可用。
+
+API begin 只从已认证原主体的既有 Execution 和数据库 Agent 关系选择绑定。confirm、status、
+callback 及 Worker 命令领取沿原授权记录重新核对同一 Agent、主体、配置 ref/revision、
+profile/source、Pod 和代次。浏览器不能提交配置选择器。Worker 在已验证的原执行路由内选择
+相应 OAuth 配置，并在最后发送前核对它与目标 Consumer 快照一致。多个 Agent 继续共用现有
+持久安装命令表和事务，不新增调度器或逐 Agent 后台循环。
+
+一个 Platform callback 接收入口仍固定同一 HTTPS callback URL、Connection issuer 和
+callback 格式（标准 OAuth 或既有 PAT binding）；逐 Agent 配置必须与该入口一致，拒绝混用。
+回调中的 state/binding ID 只定位原持久记录，不能选择 Agent、Runtime 地址或凭据。
+Store 从原记录的 Agent 重新选择当前绑定；跨 Agent、配置漂移、过期或来源缺失均拒绝转交。
+既有一次性领取、callback-only 服务认证和 unknown 不重放规则保持不变。
+
+上述安装选择不创建 Consumer、不执行管理员注册，也不表示外部授权已成立。API/Worker
+只传非秘密配置和原安装命令；API 瞬时转交一次性授权码的窄通道仍遵循本节“浏览器与回跳”。
+授权码兑换及 access/refresh Token 仍由受保护 Host 执行和保管。
+
 **DCR metadata。** 受保护 Runtime 为每个 Agent/安装生成唯一短期 loopback callback 路径，
 并发送固定 metadata：`client_name="Codex"`、该 callback 的单元素 `redirect_uris`、
 `grant_types=["authorization_code","refresh_token"]`、`response_types=["code"]`、
@@ -2046,6 +2139,13 @@ revoke 超时都不宣称已远端撤销，不替代 Connection 的逐次授权�
 ### 14.1 Web
 
 平台对话页统一经过 `platform-api`，使用公司登录态、Agent 可用范围和平台 Conversation。自定义 Agent 的自有交互入口不进入 Platform Conversation Contract，历史不互相合并。
+
+个人 Web 最近对话（`GET /api/v2/me/conversations/recent`）在全局 limit 之前，按 Agent 判定当前用户的使用范围和该 Agent 的平台对话渠道资格，只返回资格已确认的 Agent 下本人的 Web Conversation（[PRD §12.2](../prd/PRD-agent-platform-M1.md#122-会话历史)）。
+
+- 某个 Agent 的资格无法确认时，只省略该 Agent 的会话，不让整个列表失败；其余会话照常返回。无法确认的情形包括：缺少 Workload 状态或状态无法解析、Workload 修订与当前配置修订不一致、fence 非法，以及自定义平台入口缺少已验证修订。
+- 被省略的 Agent 必须仍在当前用户的使用范围内，且本人在当前位置之后还有 Web 会话。这些 Agent 的 ID 列在响应的 `unavailableAgentIds` 中，最多 100 个，不附带配置、修订或原因细节。没有被省略的 Agent 时不返回该字段。
+- 无法确认资格的 Agent 不能按已确认处理：它的会话不进入列表，cursor 只在已确认的集合内分页。
+- 当前身份、账号状态、查询或已返回记录校验失败时，整页仍按原错误失败。
 
 ### 14.2 企微
 
@@ -2283,7 +2383,7 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 附件物化：
 
 - Driver 只通过 FileBridge 的 `readInput` 读取本次 Grant 精确列出的附件。
-- 读取被平台明确拒绝时（交换或数据面返回 4xx，408、429 除外），若拒绝发生在原生副作用和该操作的 Driver 持久记录之前，RuntimeHost 持久化不可重试的 `RUNTIME_FILE_INPUT_REJECTED`，只有 submit V2 及以上返回该结果。Worker 按 [Runtime HLD 8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等) 中“初始 Execution 在 Runtime 明确接受前失败”的规则，把本次 Execution 收敛为失败，并在同一事务内终结其待处理的补充指令与 stop，会话保持可用。以下情况保持“接受结果不确定”，不推断为失败：超时、断连、5xx、响应无法解析，或无法排除已有副作用。
+- 读取被平台明确拒绝时（交换或数据面返回 4xx，408、429 除外），若拒绝发生在原生副作用和该操作的 Driver 持久记录之前，RuntimeHost 持久化不可重试的 `RUNTIME_FILE_INPUT_REJECTED`，只有 submit V2 及以上返回该结果。Worker 按 [Runtime HLD 8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等) 中“初始 Execution 在 Runtime 明确接受前失败”的规则，把本次 Execution 收敛为失败，并在同一事务内终结其待处理的补充指令与 stop，会话保持可用。读取失败但不是明确拒绝时（超时、断连、5xx、响应无法解析），若失败发生在原生提交点和该操作的 Driver 持久记录之前，Driver 声明本次 Turn 未提交，RuntimeHost 持久化可重试的 `RUNTIME_TURN_NOT_SUBMITTED`，Worker 按 [§12.2](#122-可靠性规则) 重提或明确失败；无法排除已有副作用时保持“接受结果不确定”，不推断为失败。
 - 写入位置为当前 Conversation 工作区的 `.agent-infra/attachments/<ref>/<name>`：
   - `<ref>` 取 fileId 的 SHA-256 前 16 位十六进制。
   - `<name>` 只保留 basename，去掉控制字符、路径分隔符和开头的点，不超过 255 字节。
@@ -2383,8 +2483,8 @@ Web 与托管渠道的执行失败按下表归入渠道无关的用户可见分�
 | --- | --- | --- |
 | 模型服务繁忙或超时 | 可重试的模型调用 `failureCode` 或 Runtime `protocolCode`：限流、超时、上游暂时故障、流中断 | 模型服务暂时繁忙或超时，请稍后重试 |
 | Agent 正在更新 | 正在应用新的 Runtime 修订，或 Workload 启动、更新中导致的 `AGENT_UNAVAILABLE` | Agent 正在更新，完成后重试；有可靠阶段信息时给出预计等待时间 |
-| 会话准备失败 | Session Sandbox 准备或恢复失败，Driver 物化或启动失败；已判定会话不可用的除外 | 会话准备失败，请重试，仍失败时新建会话 |
-| 附件读取失败 | `RUNTIME_FILE_INPUT_*`、`RUNTIME_FILE_BRIDGE_*` 等文件交换错误，附件过期或超限 | 附件无法读取，请重新发送附件 |
+| 会话准备失败 | Session Sandbox 准备或恢复失败，Driver 物化或启动失败（含未提交重提用尽的 `RUNTIME_SESSION_PREPARATION_FAILED`）；已判定会话不可用的除外 | 会话准备失败，请重试，仍失败时新建会话 |
+| 附件读取失败 | `RUNTIME_FILE_INPUT_*`（含未提交重提用尽的 `RUNTIME_FILE_INPUT_UNAVAILABLE`）、`RUNTIME_FILE_BRIDGE_*` 等文件交换错误，附件过期或超限 | 附件无法读取，请重新发送附件 |
 | 权限已失效 | `AUTHORIZATION_REVOKED`、`RUNTIME_AUTHORIZATION_DENIED`、渠道权限撤销 | 当前没有使用该 Agent 的权限，请联系 Owner 或管理员 |
 | 个人 Relay Key 不可用 | 个人 Key 缺失、失效、额度不足或无权调用所选模型（§10.7） | 请到个人设置处理 Relay Key |
 | 排队超时 | `TASK_WAIT_TIMEOUT` | 排队超过等待时限，未处理，请稍后重新发送 |

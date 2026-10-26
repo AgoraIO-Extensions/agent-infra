@@ -159,7 +159,10 @@ beforeAll(async () => {
 		{ idx: 61, tag: "0061_wecom_conversation_rotation" },
 		{ idx: 62, tag: "0062_wecom_inbound_media" },
 		{ idx: 63, tag: "0063_wecom_outbound_media" },
-		{ idx: 64, tag: "0064_configuration_runtime_revision" },
+		{ idx: 64, tag: "0064_execution_unknown_since" },
+		{ idx: 65, tag: "0065_wecom_receipt_execution" },
+		{ idx: 66, tag: "0066_wecom_stream_frame_seq" },
+		{ idx: 67, tag: "0067_configuration_runtime_revision" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
@@ -416,6 +419,10 @@ describe("personal credential disable authority append", () => {
 							if ("accepted_original_host_session_ref" in copy)
 								expect(copy.accepted_original_host_session_ref).toBeNull();
 							delete copy.accepted_original_host_session_ref;
+							// #3373：迁移前没有 unknown 的 Execution，新列保持为空。
+							if ("unknown_since" in copy)
+								expect(copy.unknown_since).toBeNull();
+							delete copy.unknown_since;
 						}
 						return copy;
 					}),

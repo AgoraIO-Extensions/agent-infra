@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLayoutEffect, useMemo } from "react";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
+import { markUserRead, readFailed } from "../background-read.js";
 
 import {
 	isRetryableAgentAdministrationError,
@@ -50,15 +51,19 @@ export function usePendingAgentApplications({
 				current.state.data.retryable),
 		retry: false,
 	});
+	/** 页面发起的重读（恢复按钮、工作台「重新加载…」）：失败时按读取失败显示（D2-59）。 */
 	function refetch() {
 		const current = queryClient.getQueryData<PendingAgentApplicationsState>(
 			scope.queryKey,
 		);
-		return scope.active &&
-			allowed &&
-			!(current?.kind === "unavailable" && !current.retryable)
-			? query.refetch({ cancelRefetch: false })
-			: Promise.resolve(undefined);
+		if (
+			!scope.active ||
+			!allowed ||
+			(current?.kind === "unavailable" && !current.retryable)
+		)
+			return Promise.resolve(undefined);
+		markUserRead(scope, query.dataUpdatedAt);
+		return query.refetch({ cancelRefetch: false });
 	}
 	/**
 	 * 用户明确要求重读（例如「重新登录」后会话仍有效）：不可重试的结果会锁住 refetch，
@@ -69,9 +74,13 @@ export function usePendingAgentApplications({
 			scope.queryKey,
 		);
 		if (!scope.active || !allowed) return Promise.resolve();
-		return current?.kind === "unavailable" && !current.retryable
-			? queryClient.resetQueries({ queryKey: scope.queryKey, exact: true })
-			: query.refetch({ cancelRefetch: false });
+		if (current?.kind === "unavailable" && !current.retryable)
+			return queryClient.resetQueries({
+				queryKey: scope.queryKey,
+				exact: true,
+			});
+		markUserRead(scope, query.dataUpdatedAt);
+		return query.refetch({ cancelRefetch: false });
 	}
 
 	return {
@@ -83,7 +92,9 @@ export function usePendingAgentApplications({
 			? ({ kind: "unavailable", retryable: false } as const)
 			: query.isPending
 				? ({ kind: "loading" } as const)
-				: query.isError || !query.data
+				: // 后台重读（回到标签页、审批后的重读）的可重试失败不替换已显示的队列（#3387）。
+					readFailed(query, isRetryableAgentAdministrationError, scope) ||
+						!query.data
 					? ({
 							kind: "unavailable",
 							retryable:

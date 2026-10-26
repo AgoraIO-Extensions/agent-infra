@@ -91,6 +91,18 @@ function requestError(
 	return error;
 }
 
+/**
+ * 管理读取失败是否可重试：网络中断与服务失败可重试；登录失效、无权、不存在、冲突（401 / 403 / 404 / 409）、
+ * 服务端标明不可重试与响应无效不可重试（#3418、#3433）。
+ */
+export function isRetryableSkillHubManagementError(error: unknown): boolean {
+	const failure = error as SkillHubManagementRequestError | undefined;
+	return (
+		failure?.retryable !== false &&
+		![401, 403, 404, 409].includes(failure?.status ?? 0)
+	);
+}
+
 function requireData<T>(
 	message: string,
 	result: {
@@ -436,8 +448,12 @@ export async function readSkillHubAgentCurrentVersion(
 	});
 	const data = requireData("当前 Agent 版本暂时无法读取。", result);
 	const parsed = SkillHubAgentCurrentVersionV1Schema.safeParse(data);
+	// 响应无效不可重试（同项目内容读取），后台重读读到时按读取失败显示（#3433）。
 	if (!parsed.success || parsed.data.agentId !== agentId)
-		throw requestError("当前 Agent 版本响应无效。", result);
+		throw requestError("当前 Agent 版本响应无效。", {
+			...result,
+			error: { retryable: false },
+		});
 	return parsed.data;
 }
 
@@ -460,7 +476,12 @@ export async function readSkillHubAgentBindings(
 	});
 	const data = requireData("Agent Skill 状态暂时无法读取。", result);
 	const parsed = SkillHubAgentBindingStatusResponseV1Schema.safeParse(data);
-	if (!parsed.success) throw requestError("Agent Skill 状态响应无效。", result);
+	// 响应无效不可重试：同步轮询读到时停止并显示失败（#3433 N15-01）。
+	if (!parsed.success)
+		throw requestError("Agent Skill 状态响应无效。", {
+			...result,
+			error: { retryable: false },
+		});
 	return parsed.data;
 }
 

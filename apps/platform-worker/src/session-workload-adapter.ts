@@ -58,6 +58,9 @@ export interface SessionSandboxRuntimeInputV1 {
 	readonly grantIssuer: string;
 	/** Per-Sandbox transport token from {@link sessionSandboxServiceTokenV1}. */
 	readonly serviceToken: string;
+	/** Explicit deployment approval for the Codex container-boundary mode. */
+	readonly codexContainerBoundaryEnabled?: boolean;
+	readonly codexContainerBoundaryAttestation?: string;
 	/** Deployment-approved in-cluster Worker origin for native metadata callbacks. */
 	readonly nativeMetadataWorkerOrigin?: string;
 	/**
@@ -114,6 +117,8 @@ export function sessionSandboxServiceTokenV1(
 const sessionSandboxTokenPattern = /^[A-Za-z0-9_-]{43}$/;
 /** 本 Sandbox Secret 中文件交换派生 token 的键（#3276）。 */
 export const sessionSandboxFileExchangeSecretKey = "file-exchange-token";
+export const sessionSandboxContainerBoundaryAttestationSecretKey =
+	"container-boundary-attestation";
 const runtimeTextPattern = /^[\x21-\x7e]{1,256}$/;
 export function isNativeMetadataWorkerOriginV1(
 	value: unknown,
@@ -430,6 +435,8 @@ const requiredRuntimeInputKeys = [
 	"workerId",
 ];
 const optionalRuntimeInputKeys = [
+	"codexContainerBoundaryEnabled",
+	"codexContainerBoundaryAttestation",
 	"custom",
 	"fileExchange",
 	"nativeMetadataWorkerOrigin",
@@ -459,6 +466,19 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 			typeof runtime.modelConfiguration !== "string" ||
 			(runtime.nativeMetadataWorkerOrigin !== undefined &&
 				!isNativeMetadataWorkerOriginV1(runtime.nativeMetadataWorkerOrigin)) ||
+			(runtime.codexContainerBoundaryEnabled !== undefined &&
+				typeof runtime.codexContainerBoundaryEnabled !== "boolean") ||
+			(runtime.codexContainerBoundaryAttestation !== undefined &&
+				(!runtime.codexContainerBoundaryEnabled ||
+					typeof runtime.codexContainerBoundaryAttestation !== "string" ||
+					!/^[A-Za-z0-9_-]{43}$/.test(
+						runtime.codexContainerBoundaryAttestation,
+					))) ||
+			(runtime.codexContainerBoundaryEnabled === true &&
+				(typeof runtime.codexContainerBoundaryAttestation !== "string" ||
+					!/^[A-Za-z0-9_-]{43}$/.test(
+						runtime.codexContainerBoundaryAttestation,
+					))) ||
 			(runtime.fileExchange !== undefined &&
 				(!runtime.fileExchange ||
 					typeof runtime.fileExchange !== "object" ||
@@ -631,6 +651,29 @@ function runtimeEnvironment(
 			valueFrom: secretRef("model-config"),
 		},
 		{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtime.driver },
+		...(runtime.driver === "codex" &&
+		runtime.codexContainerBoundaryEnabled === true
+			? [
+					{
+						name: "AGENT_INFRA_RUNTIME_ISOLATION_MODE",
+						value: "container-boundary",
+					},
+					{
+						name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED",
+						value: "worker-v1",
+					},
+					{
+						name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE",
+						value: `${allocation.agentId}\0${allocation.sessionId}`,
+					},
+					{
+						name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION",
+						valueFrom: secretRef(
+							sessionSandboxContainerBoundaryAttestationSecretKey,
+						),
+					},
+				]
+			: []),
 		...platform,
 		...(runtime.nativeMetadataWorkerOrigin === undefined
 			? []
@@ -829,6 +872,14 @@ export function sessionSandboxResourcesV1(
 									[sessionSandboxFileExchangeSecretKey]: Buffer.from(
 										allocation.runtime.fileExchange.serviceToken,
 									).toString("base64"),
+								}
+							: {}),
+						...(allocation.runtime.codexContainerBoundaryAttestation
+							? {
+									[sessionSandboxContainerBoundaryAttestationSecretKey]:
+										Buffer.from(
+											allocation.runtime.codexContainerBoundaryAttestation,
+										).toString("base64"),
 								}
 							: {}),
 						...(custom

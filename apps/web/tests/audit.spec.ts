@@ -13,6 +13,11 @@ import {
 	test,
 } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
+import {
+	backgroundReread,
+	expectBackgroundRereadKeeps,
+	expectFatalRereadHandsFocus,
+} from "./background-reread";
 import { captureDesignContract, designViewports } from "./design-contract";
 import {
 	expectFocusableBusy,
@@ -1565,6 +1570,66 @@ test("audit query, reset and pagination keep focus on the pending button and han
 	await expectCleanPage(page, errors);
 });
 
+// #3387 N13-02（N13-3-05）：不经恢复动作，滚到页面底部、焦点在主区（点空白处）后回到标签页：后台重读挂起时
+// 已读记录保留，不换成读取行，只有页头「刷新审计记录」显示读取中（aria-disabled）；重读 503 失败时记录仍在、
+// 不显示查询失败，之后读到照常显示。页面高度与滚动位置一直不变，焦点留在主区、不落到 body。两视口一致。
+// 用户发起的「查询」「重置」「刷新审计记录」与翻页仍显示读取行（见上方 K7-02 与 N8-3-02 用例）。
+for (const [route, role, listPath] of [
+	["/audit", "employee", "/api/v2/audit"],
+	["/admin/audit", "admin", "/api/v4/admin/audit"],
+] as const)
+	test(`${route} keeps its records, height and scroll position through a background reread (#3387 N13-02)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		await fixture(page, role);
+		await page.goto(route);
+		const main = page.locator("main");
+		const table = await pinElement(
+			main.locator("table.audit-table"),
+			"audit-background-table",
+		);
+		await expect(table).toBeVisible();
+		const rows = await table.locator("tbody tr").count();
+		expect(rows).toBeGreaterThan(0);
+		const refresh = main.getByRole("button", {
+			name: "刷新审计记录",
+			exact: true,
+		});
+		await expect(refresh).not.toHaveAttribute("aria-disabled", "true");
+		// 焦点在主区（同点主区空白处），再滚到页面底部。
+		const mainContent = page.locator("#main-content");
+		await mainContent.evaluate((element) =>
+			(element as HTMLElement).focus({ preventScroll: true }),
+		);
+		await page.evaluate(() =>
+			window.scrollTo({
+				top: document.documentElement.scrollHeight,
+				behavior: "instant",
+			}),
+		);
+		await expectBackgroundRereadKeeps(page, {
+			path: listPath,
+			focus: mainContent,
+			context: `${route} 审计列表`,
+			expectKept: async () => {
+				await expect(table).toBeVisible();
+				await expect(table.locator("tbody tr")).toHaveCount(rows);
+				await expect(main.getByText("正在读取审计记录…")).toHaveCount(0);
+				await expect(main.getByText("审计查询失败，请稍后重试。")).toHaveCount(
+					0,
+				);
+			},
+			expectPending: async () => {
+				await expect(refresh).toHaveAttribute("aria-disabled", "true");
+			},
+		});
+		await expect(refresh).not.toHaveAttribute("aria-disabled", "true");
+		await expectNoDuplicateControls(page, `${route}（后台重读，#3387）`);
+		await expectCleanPage(page, errors);
+	});
+
 // #3269 N8-3-02：列表读取失败后的「重试」是 RecoveryButton。没有已读数据时重读先换成读取行、按钮卸载，
 // 焦点交给页面 h1，仍失败时回到重新出现的「重试」；已有数据时失败提示保留，「重试」是可聚焦的禁用，
 // 恢复后焦点到 h1。30 / 150 / 400 / 1000ms 采样都不落到 body。
@@ -1657,3 +1722,126 @@ for (const [route, role, listPath] of [
 		await expectNoDuplicateControls(page, `${route}（N8-3-02）`);
 		await expectCleanPage(page, errors);
 	});
+
+// #3388 N13-06：持有焦点的分页按钮因不是本按钮触发的变化变为原生禁用（回到标签页的后台重读读到了末页）时，
+// 焦点交给另一个分页按钮，两个都不可用时到页面 h1，不落到 body、不滚动页面；后台重读挂起、可重试失败与
+// 读到同样的记录时记录保留（#3387），焦点留在「下一页」上。验收中「重试」进行中 Tab 到「下一页」的路径在
+// #3387 之后不再出现（重试期间失败提示保留，分页按钮为原生禁用、不在 Tab 序列中），这里覆盖同一条交接规则。
+// 平台审计有 4 条记录：先翻到第 2 页，「上一页」仍可用；我的执行审计有 2 条：停在第 1 页。两视口一致。
+for (const [route, role, listPath] of [
+	["/audit", "employee", "/api/v2/audit"],
+	["/admin/audit", "admin", "/api/v4/admin/audit"],
+] as const)
+	test(`${route} a focused page button that a background reread disables hands focus on (#3388 N13-06)`, async ({
+		page,
+	}, info) => {
+		await acceptanceViewport(page, info);
+		const errors = trackPageErrors(page);
+		const api = await fixture(page, role);
+		await page.goto(route);
+		const main = page.locator("main");
+		const previous = main.getByRole("button", { name: "上一页", exact: true });
+		const next = main.getByRole("button", { name: "下一页", exact: true });
+		await expect(main.getByText("第 1 页 · 本页 1 条")).toBeVisible();
+		const middle = role === "admin";
+		if (middle) {
+			await next.click();
+			await expect(main.getByText("第 2 页 · 本页 1 条")).toBeVisible();
+		}
+		await expect(next).toBeEnabled();
+		await next.focus();
+		const pageText = middle ? "第 2 页 · 本页 1 条" : "第 1 页 · 本页 1 条";
+		await expectBackgroundRereadKeeps(page, {
+			path: listPath,
+			focus: next,
+			expectKept: async () => {
+				await expect(main.getByText(pageText)).toBeVisible();
+				await expect(next).toBeEnabled();
+			},
+			context: `${route} 焦点在「下一页」`,
+		});
+
+		// 后台重读读到这一页之后没有记录：「下一页」变为原生禁用。
+		const scrolled = await page.evaluate(() => window.scrollY);
+		api.emptyNext();
+		await backgroundReread(page);
+		await expect(next).toBeDisabled();
+		await expectFocusSettled(
+			middle ? previous : main.getByRole("heading", { level: 1 }),
+			`${route} 「下一页」随后台重读禁用后`,
+			[50, 300, 1000, 2000],
+		);
+		// 列表变空后页面变短，滚动位置只会被收到新的最大值，不为交接焦点滚动。
+		expect(
+			await page.evaluate(() => window.scrollY),
+			`${route} 交接后的滚动位置`,
+		).toBe(
+			await page.evaluate(
+				(before) =>
+					Math.min(
+						before,
+						document.documentElement.scrollHeight - window.innerHeight,
+					),
+				scrolled,
+			),
+		);
+		await expectNoDuplicateControls(page, `${route}（#3388 N13-06）`);
+		await expectCleanPage(page, errors);
+	});
+
+// #3419 N14-10（N14-3-03）：打开第一条详情、焦点在未按下的「刷新审计详情」上，回到标签页的后台重读读到不可重试的失败
+// （401 / 403）：列表换成「当前无权访问审计记录…」，详情区域保留标题、内容换成「当前无权访问审计详情…」，刷新按钮随之
+// 卸载。焦点交给详情区域（Escape 仍能关闭详情），不落到 body、不滚动页面。先覆盖挂起、可重试失败与恢复（#3387：详情
+// 与焦点保留），两身份两视口一致。
+for (const [route, role, listPath] of [
+	["/audit", "employee", /^\/api\/v2\/audit(\/[^/]+)?$/],
+	["/admin/audit", "admin", /^\/api\/v4\/admin\/audit(\/[^/]+)?$/],
+] as const)
+	for (const status of [401, 403] as const)
+		test(`${route} a focused, unpressed detail refresh that a background ${status} removes hands focus to the detail region (#3419 N14-10)`, async ({
+			page,
+		}, info) => {
+			await acceptanceViewport(page, info);
+			const errors = trackPageErrors(page);
+			await fixture(page, role);
+			await page.goto(route);
+			const main = page.locator("main");
+			await main
+				.getByRole("button", { name: /^详情：/ })
+				.first()
+				.click();
+			const panel = page.getByRole("region", { name: "审计详情", exact: true });
+			await expect(panel).toBeFocused();
+			const refresh = await pinElement(
+				panel.getByRole("button", { name: "刷新审计详情" }),
+				"audit-detail-refresh",
+			);
+			await refresh.focus();
+			await expectBackgroundRereadKeeps(page, {
+				path: listPath,
+				focus: refresh,
+				context: `${route} 焦点在「刷新审计详情」`,
+				expectKept: async () => {
+					await expect(panel.locator("dl").first()).toBeVisible();
+					await expect(refresh).toBeVisible();
+				},
+			});
+			await expectFatalRereadHandsFocus(page, {
+				path: listPath,
+				status,
+				focus: refresh,
+				target: panel,
+				context: `${route} 焦点在「刷新审计详情」`,
+				expectReplaced: async () => {
+					await expect(
+						panel.getByText("当前无权访问审计详情，资源或权限可能已变化。"),
+					).toBeVisible();
+					await expect(refresh).toHaveCount(0);
+				},
+			});
+			// 详情区域仍处理 Escape：关闭详情。
+			await page.keyboard.press("Escape");
+			await expect(panel).toHaveCount(0);
+			await expectNoDuplicateControls(page, `${route}（#3419 N14-10）`);
+			await expectCleanPage(page, errors);
+		});

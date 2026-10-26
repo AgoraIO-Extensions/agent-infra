@@ -850,7 +850,8 @@
                                 "DELEGATED_RESULT_REJECTED",
                                 "ORIGINAL_RESPONSE_NOT_STARTED",
                                 "ORIGINAL_RESPONSE_ALREADY_FINISHED",
-                                "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED"
+                                "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
+                                "QUEUE_FULL"
                               ],
                               "type": "string"
                             },
@@ -1533,7 +1534,8 @@
                                     "DELEGATED_RESULT_REJECTED",
                                     "ORIGINAL_RESPONSE_NOT_STARTED",
                                     "ORIGINAL_RESPONSE_ALREADY_FINISHED",
-                                    "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED"
+                                    "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
+                                    "QUEUE_FULL"
                                   ],
                                   "type": "string"
                                 },
@@ -2830,6 +2832,27 @@
                     "status"
                   ],
                   "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "reason": {
+                      "enum": [
+                        "WITHDRAWN",
+                        "AUTHORIZATION_REVOKED"
+                      ],
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "cancelled",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "reason"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -4002,7 +4025,8 @@
                             "DELEGATED_RESULT_REJECTED",
                             "ORIGINAL_RESPONSE_NOT_STARTED",
                             "ORIGINAL_RESPONSE_ALREADY_FINISHED",
-                            "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED"
+                            "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
+                            "QUEUE_FULL"
                           ],
                           "type": "string"
                         },
@@ -4557,7 +4581,8 @@
                                 "DELEGATED_RESULT_REJECTED",
                                 "ORIGINAL_RESPONSE_NOT_STARTED",
                                 "ORIGINAL_RESPONSE_ALREADY_FINISHED",
-                                "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED"
+                                "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
+                                "QUEUE_FULL"
                               ],
                               "type": "string"
                             },
@@ -6401,6 +6426,27 @@
               },
               "required": [
                 "status"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "WITHDRAWN",
+                    "AUTHORIZATION_REVOKED"
+                  ],
+                  "type": "string"
+                },
+                "status": {
+                  "const": "cancelled",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "reason"
               ],
               "type": "object"
             }

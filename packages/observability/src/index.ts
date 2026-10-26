@@ -88,6 +88,24 @@ export const operationalBrowserCategories = [
 export type OperationalBrowserCategory =
 	(typeof operationalBrowserCategories)[number];
 
+/**
+ * #3378：可以进入指标 `operation` 标签的阶段引用，封闭集合。其他 operationRef 只进入日志与 Trace。
+ */
+export const operationalMetricOperations = [
+	"conversation.queue.find",
+	"drain.authorization",
+	"drain.prepare",
+	"drain.route",
+	"drain.host_read",
+	"drain.ack",
+	"drain.persist",
+	"drain.persist_batch",
+	"sandbox.reconcile.prepare",
+	"sandbox.reconcile.drain",
+	"sse.open",
+	"sse.ended",
+] as const;
+
 export const operationalCodes = [
 	"AUTHORIZATION_DENIED",
 	"TASK_UNAVAILABLE",
@@ -240,6 +258,7 @@ const outcomes = new Set<OperationalOutcome>([
 const stages = new Set<string>(operationalStages);
 const codes = new Set<string>(operationalCodes);
 const browserCategories = new Set<string>(operationalBrowserCategories);
+const metricOperations = new Set<string>(operationalMetricOperations);
 const knownResourceKinds = new Set<string>(resourceKinds);
 const identifier =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -657,6 +676,9 @@ export function startObservability(options: ObservabilityOptions) {
 					stage,
 					outcome,
 					...(browserCategory === undefined ? {} : { browserCategory }),
+					...(operationRef !== undefined && metricOperations.has(operationRef)
+						? { operation: operationRef }
+						: {}),
 				};
 				const details = {
 					...labels,
