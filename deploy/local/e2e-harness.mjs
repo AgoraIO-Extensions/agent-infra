@@ -457,7 +457,8 @@ function workspaceInputs(source, service) {
 				path,
 			),
 		);
-	return [...paths, ...shared].map((path) => ({
+	const dockerfile = `apps/${service}/Dockerfile`;
+	return [...paths, ...shared, dockerfile].map((path) => ({
 		path,
 		content: git(["rev-parse", `${source.sha}:${path}`]),
 	}));
@@ -1034,6 +1035,30 @@ async function acquireLock() {
 	return async () => rm(lock, { recursive: true, force: true });
 }
 
+async function writeRunReceipt(status, action, error) {
+	try {
+		await mkdir(stateRoot, { recursive: true });
+		const receipt = {
+			schemaVersion: 1,
+			status,
+			action,
+			profile: targetProfile(),
+			...(error
+				? {
+					errorClass: error instanceof Error ? error.name : "Error",
+					errorHash: fingerprint([String(error instanceof Error ? error.message : error)]),
+				}
+				: {}),
+		};
+		await writeFile(join(stateRoot, "deployment-receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`, {
+			mode: 0o600,
+		});
+		await chmod(join(stateRoot, "deployment-receipt.json"), 0o600);
+	} catch {
+		// A diagnostic receipt must never hide the original Harness result.
+	}
+}
+
 function assertAppLane(source, action) {
 	if (action !== "app") return;
 	const receipt = requiredAbsoluteEnv("E2E_HARNESS_SHARED_BASE_RECEIPT");
@@ -1159,7 +1184,11 @@ async function main() {
 	}
 }
 
-main().catch((error) => {
-	console.error(error instanceof Error ? error.message : String(error));
-	process.exitCode = 1;
-});
+const action = process.argv[2] ?? "all";
+main()
+	.then(async () => writeRunReceipt("passed", action))
+	.catch(async (error) => {
+		await writeRunReceipt("failed", action, error);
+		console.error(error instanceof Error ? error.message : String(error));
+		process.exitCode = 1;
+	});
