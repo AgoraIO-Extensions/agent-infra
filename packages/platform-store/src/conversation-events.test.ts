@@ -1004,6 +1004,175 @@ describe("PostgreSQL reasoning deltas (#2979)", () => {
 	);
 });
 
+describe("PostgreSQL batched delta persistence (#3378)", () => {
+	function openBatchEvents() {
+		const transaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		let id = 0;
+		return {
+			events: createConversationEventUseCaseV1(
+				{ transaction },
+				{ newId: () => `event_batch_${nextFixture}_${++id}` },
+			),
+			close: () => transaction.close(),
+		};
+	}
+	async function counters(conversationId: string, executionId: string) {
+		const [state] = await client`
+			select
+				(select count(*)::int from platform.conversation_events
+					where execution_id = ${executionId}) as events,
+				(select last_conversation_cursor from platform.conversations
+					where id = ${conversationId}) as conversation_cursor,
+				(select last_event_sequence from platform.conversation_executions
+					where execution_id = ${executionId}) as execution_sequence,
+				(select last_runtime_cursor from platform.conversation_executions
+					where execution_id = ${executionId}) as runtime_cursor
+		`;
+		return state;
+	}
+
+	it("commits consecutive deltas in order, replays them and continues with single events", async () => {
+		const { conversationId, executionId } = await seedConversation();
+		const { events, close } = openBatchEvents();
+		try {
+			const batch = [1, 2, 3].map((index) =>
+				eventInput(conversationId, executionId, `adapter_batch_${index}`),
+			);
+			const decisions = await events.persistBatch?.(batch);
+			expect(
+				decisions?.map((decision) =>
+					decision.outcome === "stale"
+						? [decision.outcome]
+						: [
+								decision.outcome,
+								decision.event.sequence,
+								decision.event.conversationCursor,
+							],
+				),
+			).toEqual([
+				["accepted", 1, 1],
+				["accepted", 2, 2],
+				["accepted", 3, 3],
+			]);
+			expect(await counters(conversationId, executionId)).toEqual({
+				events: 3,
+				conversation_cursor: "3",
+				execution_sequence: "3",
+				runtime_cursor: "runtime_cursor_adapter_batch_3",
+			});
+
+			// 重放已提交的前缀，只追加新事件。
+			const resumed = await events.persistBatch?.([
+				...batch.slice(1),
+				eventInput(conversationId, executionId, "adapter_batch_4"),
+			]);
+			expect(resumed?.map((decision) => decision.outcome)).toEqual([
+				"replayed",
+				"replayed",
+				"accepted",
+			]);
+			await expect(
+				events.persist(
+					eventInput(conversationId, executionId, "adapter_single_5"),
+				),
+			).resolves.toMatchObject({
+				outcome: "accepted",
+				event: { sequence: 5, conversationCursor: 5 },
+			});
+			expect(await counters(conversationId, executionId)).toEqual({
+				events: 5,
+				conversation_cursor: "5",
+				execution_sequence: "5",
+				runtime_cursor: "runtime_cursor_adapter_single_5",
+			});
+		} finally {
+			await close();
+		}
+	});
+
+	it("rejects a stale batch without advancing either cursor", async () => {
+		const { conversationId, executionId } = await seedConversation();
+		const { events, close } = openBatchEvents();
+		try {
+			const decisions = await events.persistBatch?.(
+				[1, 2].map((index) => ({
+					...eventInput(conversationId, executionId, `adapter_stale_${index}`),
+					deliveryFence: 4,
+				})),
+			);
+			expect(decisions).toEqual([{ outcome: "stale" }, { outcome: "stale" }]);
+			expect(await counters(conversationId, executionId)).toEqual({
+				events: 0,
+				conversation_cursor: "0",
+				execution_sequence: "0",
+				runtime_cursor: null,
+			});
+		} finally {
+			await close();
+		}
+	});
+
+	it("rolls back every event of a batch when the cursor update fails", async () => {
+		const { conversationId, executionId } = await seedConversation();
+		const { events, close } = openBatchEvents();
+		await armEventCommitFailure();
+		try {
+			await expect(
+				events.persistBatch?.(
+					[1, 2].map((index) =>
+						eventInput(
+							conversationId,
+							executionId,
+							`adapter_rollback_${index}`,
+						),
+					),
+				),
+			).rejects.toMatchObject({ code: "unavailable" });
+		} finally {
+			await disarmEventCommitFailure();
+		}
+		try {
+			expect(await counters(conversationId, executionId)).toEqual({
+				events: 0,
+				conversation_cursor: "0",
+				execution_sequence: "0",
+				runtime_cursor: null,
+			});
+		} finally {
+			await close();
+		}
+	});
+
+	it("rejects a non-delta event in a batch at the adapter", async () => {
+		const { conversationId, executionId } = await seedConversation();
+		const transaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		try {
+			const command = {
+				...eventInput(conversationId, executionId, "adapter_status"),
+				event: {
+					type: "execution.status" as const,
+					status: "processing" as const,
+				},
+			};
+			await expect(
+				transaction.persistEvents(
+					[{ command, eventDigest: "0".repeat(64) }],
+					() => ({ outcome: "stale" }),
+				),
+			).rejects.toThrow();
+			expect(await counters(conversationId, executionId)).toMatchObject({
+				events: 0,
+			});
+		} finally {
+			await transaction.close();
+		}
+	});
+});
+
 describe("PostgreSQL Conversation event transaction", () => {
 	it("rejects new and replayed events after the Execution loses its Sandbox binding", async () => {
 		const { conversationId, executionId } = await seedConversation();

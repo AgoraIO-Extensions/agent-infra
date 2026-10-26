@@ -973,6 +973,137 @@ export class PostgresConversationEventTransactionV1
 		});
 	}
 
+	/**
+	 * #3378：同一 Execution 连续的 delta 事件在一个事务内持久化。锁、租约与 Execution 只读一次；
+	 * 每个事件按前一个事件写入后的计数器给出状态，判定与校验与 {@link persistEvent} 相同；计数器
+	 * 在批末按批首的值做一次条件更新。只接受没有状态迁移的正文与思考增量。
+	 */
+	async persistEvents(
+		requestInputs: readonly PersistRequest[],
+		decide: (
+			index: number,
+			state: ConversationEventStateV1,
+		) => ConversationEventWritePlanV1 | ConversationEventDecisionV1,
+	): Promise<readonly ConversationEventDecisionV1[]> {
+		if (
+			!Array.isArray(requestInputs) ||
+			requestInputs.length < 1 ||
+			requestInputs.length > 64 ||
+			typeof decide !== "function"
+		)
+			unavailable();
+		const requests = requestInputs.map(request);
+		const first = requests[0] as PersistRequest;
+		for (const item of requests)
+			if (
+				(item.command.event.type !== "text.delta" &&
+					item.command.event.type !== "reasoning.delta") ||
+				item.command.transition !== undefined ||
+				item.command.operationMetadataOnly !== undefined ||
+				item.command.conversationId !== first.command.conversationId ||
+				item.command.executionId !== first.command.executionId ||
+				JSON.stringify(item.command.dispatchLease) !==
+					JSON.stringify(first.command.dispatchLease)
+			)
+				unavailable();
+		return this.#transaction(async (transaction) => {
+			const conversation = await lockConversation(
+				transaction,
+				first.command.conversationId,
+			);
+			const leaseCurrent = await currentDispatchLease(
+				transaction,
+				first.command,
+			);
+			const execution = conversation
+				? await readExecution(
+						transaction,
+						conversation.id,
+						first.command.executionId,
+					)
+				: undefined;
+			if (!conversation || !execution) unavailable();
+			let conversationCounter = conversationState(conversation);
+			let executionCounter = executionState(
+				leaseCurrent ? execution : undefined,
+			);
+			const initial = {
+				sequence: executionCounter?.lastSequence,
+				cursor: conversationCounter?.lastConversationCursor,
+			};
+			let last: ConversationEventWritePlanV1 | undefined;
+			const decisions: ConversationEventDecisionV1[] = [];
+			for (const [index, item] of requests.entries()) {
+				const existing = await readExistingEvent(
+					transaction,
+					item.command.executionId,
+					item.command.adapterEventKey,
+				);
+				const state: ConversationEventStateV1 = {
+					conversation: conversationCounter,
+					execution: executionCounter,
+					existingEvent: eventState(existing),
+				};
+				const decision = decide(index, state);
+				if (!isWritePlan(decision)) {
+					decisions.push(validateDecision(decision, state));
+					continue;
+				}
+				if (!conversationCounter || !executionCounter || state.existingEvent)
+					return unavailable();
+				const plan = validatePlan(decision, item, state);
+				await transaction`
+					insert into platform.conversation_events
+						(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+						 conversation_cursor, event_type, event_payload, event_digest,
+						 source, runtime_cursor, occurred_at)
+					values
+						(${plan.event.eventId}, ${plan.event.conversationId},
+						 ${plan.event.executionId}, ${plan.adapterEventKey}, ${plan.event.sequence},
+						 ${plan.event.conversationCursor}, ${plan.event.event.type},
+						 ${transaction.json(plan.event.event as JsonValue)}, ${plan.eventDigest},
+						 'runtime', ${plan.runtimeCursor}, ${plan.event.occurredAt})
+				`;
+				executionCounter = {
+					...executionCounter,
+					lastSequence: plan.event.sequence,
+				};
+				conversationCounter = {
+					...conversationCounter,
+					lastConversationCursor: plan.event.conversationCursor,
+				};
+				last = plan;
+				decisions.push({ outcome: "accepted", event: plan.event });
+			}
+			if (last) {
+				const updatedExecution = await transaction<{ execution_id: string }[]>`
+					update platform.conversation_executions
+					set last_event_sequence = ${last.event.sequence},
+						last_runtime_cursor = ${last.runtimeCursor},
+						updated_at = now()
+					where execution_id = ${last.event.executionId}
+						and conversation_id = ${last.event.conversationId}
+						and session_generation = ${last.sessionGeneration}
+						and delivery_fence = ${last.deliveryFence}
+						and last_event_sequence = ${initial.sequence ?? -1}
+					returning execution_id
+				`;
+				if (updatedExecution.length !== 1) unavailable();
+				const updatedConversation = await transaction<{ id: string }[]>`
+					update platform.conversations
+					set last_conversation_cursor = ${last.event.conversationCursor},
+						updated_at = now()
+					where id = ${last.event.conversationId}
+						and session_generation = ${last.sessionGeneration}
+						and last_conversation_cursor = ${initial.cursor ?? -1}
+					returning id
+				`;
+				if (updatedConversation.length !== 1) unavailable();
+			}
+			return decisions;
+		});
+	}
+
 	async close(): Promise<void> {
 		try {
 			await this.#client.end();

@@ -6,13 +6,13 @@
 
 | 指标 | 单位 | 标签 | 计数边界 |
 | --- | --- | --- | --- |
-| `agent_platform_operations_total` | 次 | `service`、`stage`、`outcome` | 阶段拥有者确认结果后调用一次 `record`；重放消费者须先按持久操作、尝试和事件标识去重。 |
-| `agent_platform_operation_duration` | ms | `service`、`stage`、`outcome` | 阶段拥有者提供一次已确认耗时；缺失时不记录。 |
+| `agent_platform_operations_total` | 次 | `service`、`stage`、`outcome`，可选 `operation` | 阶段拥有者确认结果后调用一次 `record`；重放消费者须先按持久操作、尝试和事件标识去重。 |
+| `agent_platform_operation_duration` | ms | `service`、`stage`、`outcome`，可选 `operation` | 阶段拥有者提供一次已确认耗时；缺失时不记录。 |
 | `agent_platform_resource_count` | `1`，当前数量 | `service`、`kind` | 阶段拥有者从权威运行状态采样后调用 `observeResource`；同种类只保留最新值，不按事件增量累加。 |
 
 `observeResource` 只接受非负安全整数和固定 `kind`：`sse_connections`、`sse_pending_events`、`task_waiting`、`outbox_pending`。未收到快照的种类不会输出零值；收到明确的零值才输出零。每个实例最多保留上述四种最新值，样本超过三个 Metric 导出间隔后停止观测，下一次可信采样才恢复。该 Gauge 使用 delta 聚合以避免 SDK 在无新观测时继续导出过期值；现有阶段计数器保持原聚合方式。真实 API/Worker 必须定期从各自权威状态采样，包内不读取 Store、SSE 或 PostgreSQL。过期停止输出只表示本进程没有新样本，不能证明下游查询后端已经删除旧时间序列。
 
-`service`、`stage` 和 `outcome` 均为封闭集合。请求、Trace、Agent、Conversation、Execution、操作和尝试引用只进入受控日志与 Trace，不作为指标标签。请求、Trace、Agent、Conversation 和 Execution ID 仅接受平台生成的 UUID；操作与尝试引用须来自可信持久事实，包内仅接受 1-128 字符、字母或数字开头且其余为字母、数字、`.`、`_`、`:`、`-` 的值。格式校验不证明引用来源可信；外部请求头和任意文本不得作为观测关联值。不符合格式的关联值会被省略，非法阶段、结果或耗时会被丢弃并计入 `status().invalidRecords`。
+`service`、`stage` 和 `outcome` 均为封闭集合。`operation` 只在 `operationRef` 属于封闭集合 `operationalMetricOperations`（队列发现、`drain.*` 投递分阶段、Sandbox 调谐与 SSE 入口）时出现，用于按投递分阶段统计耗时（#3378）；其他操作引用不进入指标。请求、Trace、Agent、Conversation、Execution、其他操作和尝试引用只进入受控日志与 Trace，不作为指标标签。请求、Trace、Agent、Conversation 和 Execution ID 仅接受平台生成的 UUID；操作与尝试引用须来自可信持久事实，包内仅接受 1-128 字符、字母或数字开头且其余为字母、数字、`.`、`_`、`:`、`-` 的值。格式校验不证明引用来源可信；外部请求头和任意文本不得作为观测关联值。不符合格式的关联值会被省略，非法阶段、结果或耗时会被丢弃并计入 `status().invalidRecords`。
 
 `record` 只记录调用方已确认的阶段结果。`durationMs` 进入耗时直方图；当前 Span 在采集时创建并结束，其自身时长不是该阶段的实际耗时。业务 `traceId` 仍是受控关联属性；持久会话 outbox 另存有界的 W3C `traceparent`（仅 ID 与 flags）。Worker 对合法 context 建立独立的 root span，并用 SpanLink 关联发起请求，不把异步等待计算进 API span；缺失或格式错误的 context 会忽略并开新的 root span。context 永远不作为身份或授权依据，重试共享原持久 context 但由 attempt/operation 区分。
 
@@ -30,7 +30,7 @@ Platform API 与 Conversation Worker 的 queue sampler 只消费 Store-owned 的
 
 HTTP 只记录一次响应头建立阶段的结果与实测耗时：2xx/3xx 为 `completed`，4xx 为 `rejected`，5xx 或未被应用处理的异常为 `failed`。不读取 URL、header、body 或原始 error。流式响应返回后的传输耗时、连接数、积压与断流须由实际流入口另行采样；本 middleware 不声称这些数据已获得。
 
-`@agent-infra/observability/worker` 的 `createObservedConversationEvents({ transaction, telemetry }, options)` 保持 Core `ConversationEventUseCaseV1` 的输入、决定和错误契约。它复用原事务 Port，由 Core 校验输入、既有事实及持久返回值后才观测。每个 `accepted` 记录一次 `result_persist/completed`，只表示事件保存已确认，不表示任务业务成功；`replayed`、`stale` 不重复记录。保存或持久返回值确认失败记录受限 `PERSISTENCE_UNAVAILABLE`，再抛出原 Core 错误；采集失败不改变原决定、事务或 cursor ACK。
+`@agent-infra/observability/worker` 的 `createObservedConversationEvents({ transaction, telemetry }, options)` 保持 Core `ConversationEventUseCaseV1` 的输入、决定和错误契约。它复用原事务 Port，由 Core 校验输入、既有事实及持久返回值后才观测。每个 `accepted` 记录一次 `result_persist/completed`，只表示事件保存已确认，不表示任务业务成功；连续正文与思考增量通过 `persistBatch` 在一个事务内保存时，整批只记录一次 `operationRef=drain.persist_batch` 的结果与耗时（#3378）；`replayed`、`stale` 不重复记录。保存或持久返回值确认失败记录受限 `PERSISTENCE_UNAVAILABLE`，再抛出原 Core 错误；采集失败不改变原决定、事务或 cursor ACK。
 
 模型/工具只记录同一事务历史中该 operation/attempt 的首个持久 `completed`、`failed` 或 `unknown`，不在内存中新增去重权威。恢复确认未知结果、Connection 元数据修订及同事件重放不再计数；合法新 attempt 单独计数。`intent`、`started` 不冒充终态，耗时只使用事实中已提供的值；未获得的时间、原始故障、工具/模型名与 Connection 内容均不补值或进入观测输出；模型用量仅按下列指标约定消费。
 
@@ -41,3 +41,15 @@ HTTP 只记录一次响应头建立阶段的结果与实测耗时：2xx/3xx 为 
 Issue #962 提供基础消费者 Adapter。实际进程装配、collector、四模板及 Connection 验收、SSE/资源采样、查询与告警继续按各自 Issue 的实际证据验收；用量消费不证明真实 Codex 或 Connection 全链通过。
 
 Trace 队列最多保留 512 个 Span，每批最多导出 32 个；Trace 和 Metric 各最多并发一个 OTLP 请求，导出超时为两秒，`close()` 最多等待五秒。关闭超时后不再发起新的导出，状态保持 `closing`，直到 SDK shutdown 真正结束才变为 `closed`；此前已发出的请求仍受各自的导出超时约束。日志目的地阻塞或报错时，后续日志会丢弃并计入 `status().droppedLogs`。同步采集异常计入 `status().captureFailures`，导出回调只记录失败次数和时间，不记录原始错误。故障计数需要独立的进程健康入口；故障中的 exporter 无法可靠导出自己的故障指标。
+
+## 分阶段耗时统计
+
+`tests/stage-latency.mjs` 只读汇总受理、认领、授权、准备、路由、提交、事件持久化、首字、终态和渠道送达各阶段的 n/p50/p90/max，并输出按执行的明细（#3378）。输入是 Worker 的 `operation` 日志和 `tests/stage-latency.sql` 在只读事务中导出的时间点；两者都只含标识与时间，不含正文。
+
+```sh
+kubectl logs deploy/<platform-worker> --since=30m > worker.log
+psql -tA -v minutes=30 -f tests/stage-latency.sql > facts.json
+node tests/stage-latency.mjs --logs worker.log --facts facts.json
+```
+
+受理→认领取首次授权开始时间，包含等待 Sandbox 就绪的时间；`terminal_persist_lag` 是 Runtime 产生终态事件到 Platform 保存它的间隔。
