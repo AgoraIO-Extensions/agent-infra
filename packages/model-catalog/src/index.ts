@@ -27,6 +27,7 @@ export {
 } from "./access.js";
 export {
 	type AgentDefaultRelayKeyCandidateV1,
+	type AgentDefaultRelayKeyEndpointPolicyV1,
 	type AgentDefaultRelayKeyModelComboV1,
 	type AgentDefaultRelayKeyVerificationV1,
 	createAgentDefaultRelayKeyCandidateReaderV1,
