@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from "node:child_process";
+import { request as httpsRequest } from "node:https";
 import {
 	chmod,
 	mkdir,
@@ -527,6 +528,10 @@ function inspectLocalImage(reference) {
 
 async function buildPlatformImages(source) {
 	const platform = dockerPlatform();
+	const dns = await import("node:dns/promises");
+	const buildHosts = ["registry.npmjs.org", "dl-cdn.alpinelinux.org", "github.com", "raw.githubusercontent.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"];
+	const resolvedHosts = await Promise.all(buildHosts.map(async (host) => [host, (await dns.lookup(host)).address]));
+	const proxy = process.env.E2E_HARNESS_BUILD_PROXY ?? "http://host.lima.internal:7892";
 	const profile = targetProfile();
 	const cachePath = join(stateRoot, "component-image-cache.json");
 	const cache = await readCache(cachePath, {
@@ -557,9 +562,12 @@ async function buildPlatformImages(source) {
 				docker(
 					[
 						"build",
-						"--platform",
+						"--network", "host", "--platform",
 						platform,
 						...input.buildArgs.flatMap((arg) => ["--build-arg", arg]),
+						...["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"].flatMap((name) => ["--build-arg", `${name}=${proxy}`]),
+						"--add-host", "host.lima.internal:host-gateway",
+						...resolvedHosts.flatMap(([host, address]) => ["--add-host", `${host}:${address}`]),
 						"--file",
 						join(context, `apps/${service}/Dockerfile`),
 						"--tag",
@@ -1013,29 +1021,60 @@ function assertFixedEnvironment() {
 }
 
 async function acquireLock() {
-	await mkdir(stateRoot, { recursive: true });
-	const lock = join(stateRoot, "run.lock");
+	const canonicalRoot = join(process.env.XDG_STATE_HOME ?? join(process.env.HOME ?? tmpdir(), ".local/state"), "agent-infra/e2e-locks");
+	const identity = workerInputHash([{ path: "docker-context", content: process.env.PLATFORM_LOCAL_DOCKER_CONTEXT ?? "" }, { path: "docker-endpoint", content: process.env.PLATFORM_LOCAL_DOCKER_ENDPOINT ?? "" }, { path: "kube-context", content: process.env.PLATFORM_LOCAL_KUBE_CONTEXT ?? "" }, { path: "kube-server", content: process.env.PLATFORM_LOCAL_KUBE_SERVER ?? "" }, { path: "namespace", content: process.env.PLATFORM_LOCAL_NAMESPACE ?? "" }]);
+	await mkdir(canonicalRoot, { recursive: true });
+	const lock = join(canonicalRoot, `${identity}.lock`);
 	try {
 		await mkdir(lock);
-		await writeFile(join(lock, "pid"), `${process.pid}\n`, { flag: "wx" });
+		await writeFile(join(lock, "pid"), `${process.pid}\n`, { flag: "wx", mode: 0o600 });
 	} catch {
-		fail(`Another E2E Harness run owns ${lock}`);
+		fail(`Another E2E Harness run owns environment ${identity}`);
 	}
 	return async () => rm(lock, { recursive: true, force: true });
 }
 
-function assertAppLane() {
-	const lane = process.env.E2E_HARNESS_LANE ?? "full";
-	if (lane !== "full")
-		fail(
-			"APP_LANE_UNAVAILABLE: shared-state isolation is not implemented; use the full Harness",
-		);
+function assertAppLane(source, action) {
+	if (action !== "app") return;
+	const receipt = requiredAbsoluteEnv("E2E_HARNESS_SHARED_BASE_RECEIPT");
+	if (!tryCommand("test", ["-r", receipt])) fail("APP_BASE_UNAVAILABLE: shared base receipt is missing");
+	const changed = git(["diff", "--name-only", `${source.upstream}...${source.sha}`]).split("\n").filter(Boolean);
+	const unsafe = changed.filter((path) => /^(apps\/(platform-api|platform-worker|enterprise-directory-sync|connection-api)|packages\/(platform-|identity|contracts)|migrations\/|deploy\/helm|deploy\/local\/(environment|platform-worker))/.test(path));
+	if (unsafe.length) fail(`APP_LANE_UNSAFE_CHANGE: ${unsafe.join(", ")}`);
+	const port = Number(process.env.E2E_HARNESS_APP_PORT);
+	if (!Number.isInteger(port) || port < 1024 || port > 65535) fail("E2E_HARNESS_APP_PORT must be a valid unprivileged port");
+	if (!process.env.PLATFORM_API_PROXY_TARGET?.startsWith("http://127.0.0.1:") && !process.env.PLATFORM_API_PROXY_TARGET?.startsWith("https://127.0.0.1:")) fail("PLATFORM_API_PROXY_TARGET must target the shared loopback API");
+	if (!process.env.PLATFORM_WEB_TLS_CERT_FILE || !process.env.PLATFORM_WEB_TLS_KEY_FILE) fail("APP_TLS_INPUT_MISSING");
+}
+
+function loginRequest(base, path, method, body, cookie, ca) {
+	return new Promise((resolve, reject) => {
+		const payload = body ? JSON.stringify(body) : undefined;
+		const request = httpsRequest(new URL(path, base), { method, ca, headers: { Origin: base.origin, Accept: "application/json", ...(payload ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) } : {}), ...(cookie ? { Cookie: cookie } : {}) } }, (response) => {
+			const chunks = []; response.on("data", (chunk) => chunks.push(chunk)); response.on("end", () => resolve({ status: response.statusCode ?? 0, headers: response.headers, body: Buffer.concat(chunks).toString("utf8") }));
+		});
+		request.once("error", reject); request.setTimeout(15_000, () => request.destroy(new Error("LOGIN_PROBE_TIMEOUT"))); if (payload) request.write(payload); request.end();
+	});
 }
 
 async function requireRealLoginValidation() {
-	fail(
-		"REAL_LOGIN_VALIDATION_REQUIRED: existing local-browser tests use controlled identities; run the deployment identity login and authorized API validation separately",
-	);
+	const value = process.env.E2E_HARNESS_PUBLIC_ORIGIN?.trim();
+	let base; try { base = new URL(value); } catch { fail("LOGIN_PROBE_INPUT_MISSING"); }
+	if (base.protocol !== "https:" || base.origin !== value || base.username || base.password || base.search || base.hash) fail("LOGIN_PROBE_ORIGIN_INVALID");
+	const readSecret = async (name) => { const path = requiredAbsoluteEnv(name); const secret = (await readFile(path, "utf8")).trim(); if (!secret) fail("LOGIN_PROBE_INPUT_MISSING"); return secret; };
+	const username = await readSecret("E2E_HARNESS_LOGIN_USERNAME_FILE");
+	const password = await readSecret("E2E_HARNESS_LOGIN_PASSWORD_FILE");
+	const expected = await readSecret("E2E_HARNESS_EXPECTED_USER_ID_FILE");
+	if ((process.env.E2E_HARNESS_LOGIN_PROTOCOL ?? "ldap") !== "ldap") fail("LOGIN_PROTOCOL_UNSUPPORTED");
+	const ca = process.env.E2E_HARNESS_LOGIN_CA_FILE ? await readFile(requiredAbsoluteEnv("E2E_HARNESS_LOGIN_CA_FILE")) : undefined;
+	const login = await loginRequest(base, "/auth/login", "POST", { login: username, password }, undefined, ca);
+	const setCookie = login.headers["set-cookie"]?.find((entry) => entry.startsWith("__Host-platform-session="));
+	if (login.status !== 204 || !setCookie) fail(`LOGIN_FAILED_STATUS_${login.status}`);
+	const session = await loginRequest(base, "/api/v1/session", "GET", undefined, setCookie.split(";", 1)[0], ca);
+	if (session.status !== 200) fail(`AUTHORIZED_READ_FAILED_STATUS_${session.status}`);
+	let projection; try { projection = JSON.parse(session.body); } catch { fail("AUTHORIZED_READ_INVALID_JSON"); }
+	if (projection?.user?.userId !== expected) fail("AUTHORIZED_IDENTITY_MISMATCH");
+	console.log("Real login and authorized API read passed");
 }
 
 function usage() {
@@ -1060,13 +1099,13 @@ async function main() {
 			"verify",
 			"all",
 			"reset",
+			"app",
 		].includes(action)
 	) {
 		usage();
 		process.exitCode = 2;
 		return;
 	}
-	assertAppLane();
 	if (action === "reset" || action === "runtime") {
 		assertFixedEnvironment();
 		const release = await acquireLock();
@@ -1081,12 +1120,17 @@ async function main() {
 		}
 		return;
 	}
-	if (action !== "sync") assertFixedEnvironment();
+	if (action !== "sync" && action !== "app") assertFixedEnvironment();
 	const release = await acquireLock();
 	try {
 		const source = await resolveSource(action);
+		assertAppLane(source, action);
 		console.log(`E2E sourceRevision=${source.sha} upstream=${source.upstream}`);
 		if (action === "sync") return;
+		if (action === "app") {
+			command("pnpm", ["--filter", "@agent-infra/web", "dev", "--host", "127.0.0.1", "--port", process.env.E2E_HARNESS_APP_PORT], { stdio: "inherit" });
+			return;
+		}
 		if (["images", "all"].includes(action)) {
 			const result = await resolveInfrastructureImages(source);
 			applyRuntimeBinding(result.manifest);

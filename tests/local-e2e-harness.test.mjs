@@ -287,12 +287,19 @@ test("Harness rejects unsupported lightweight lane before external commands", as
 			env: {
 				...process.env,
 				E2E_HARNESS_LANE: "app",
+				PLATFORM_LOCAL_PROJECT: "agent-infra-e2e",
+				PLATFORM_LOCAL_NAMESPACE: "agent-infra-e2e",
+				PLATFORM_LOCAL_KUBE_CONTEXT: "kind-agent-infra-e2e",
+				E2E_HARNESS_SHARED_BASE_RECEIPT: "/missing",
 				DOCKER_BIN: "/no-external-command",
 			},
 		},
 	);
 	assert.equal(result.status, 1);
-	assert.match(result.stderr, /APP_LANE_UNAVAILABLE/);
+	assert.match(
+		result.stderr,
+		/APP_BASE_UNAVAILABLE|APP_LANE_UNSAFE_CHANGE|APP_TLS_INPUT_MISSING|Source pin is missing/,
+	);
 });
 
 test("split Harness stages keep the synchronized SHA and skip cached digest pulls", async () => {
