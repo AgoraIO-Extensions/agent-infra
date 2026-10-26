@@ -47,7 +47,7 @@ export async function persistSessionSandboxUpgradeIntents(
 			: Date.now() - input.idleSandboxReclaimAfterMs;
 	const [agent] = await transaction<
 		{
-			configuration_revision: string;
+			runtime_revision: string;
 			authorization_revision: string;
 			application_id: string;
 			status: AgentManagementStateV1["status"];
@@ -58,10 +58,12 @@ export async function persistSessionSandboxUpgradeIntents(
 			workload_state: unknown;
 		}[]
 	>`
-		select a.current_configuration_revision::text as configuration_revision, a.authorization_revision,
+		select coalesce(cr.runtime_revision, a.current_configuration_revision)::text as runtime_revision, a.authorization_revision,
 			m.id as application_id, m.status, m.management_revision::text, m.desired_state,
 			m.workload_revision::text, m.fence::text, w.state as workload_state
 		from platform.agents a
+		left join platform.agent_configuration_revisions cr
+			on cr.agent_id = a.id and cr.revision = a.current_configuration_revision
 		join platform.agent_applications m on m.agent_id = a.id
 		join platform.workload_reconciliations w on w.agent_id = a.id
 		where a.id = ${input.agentId}
@@ -101,7 +103,8 @@ export async function persistSessionSandboxUpgradeIntents(
 		isSessionSandboxPolicyCurrentV1({
 			agentId: input.agentId,
 			policy,
-			configurationRevision: Number(agent.configuration_revision),
+			// 只改渠道的配置修订不使 policy 过期，也不产生升级意图（ADR-0028）。
+			runtimeRevision: Number(agent.runtime_revision),
 			managementFence: management.fence,
 			lifecycleRevision: management.workloadRevision,
 			workloadState: agent.workload_state,

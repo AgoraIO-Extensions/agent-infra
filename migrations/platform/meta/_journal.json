@@ -442,6 +442,13 @@
       "when": 1792896673828,
       "tag": "0066_wecom_stream_frame_seq",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1792896733828,
+      "tag": "0067_configuration_runtime_revision",
+      "breakpoints": true
     }
   ]
 }

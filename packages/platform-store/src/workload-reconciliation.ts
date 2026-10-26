@@ -556,10 +556,12 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 		return client.begin(async (sql) => {
 			// The same Agent row is locked by management, configuration and
 			// Secret activation. SKIP LOCKED lets other Workers progress.
-			const [agent] = await sql<
-				{ id: string; current_configuration_revision: string }[]
-			>`
-				select a.id, a.current_configuration_revision from platform.agents a
+			// Workload 只消费 Runtime 输入：调谐读取当前配置修订行指向的 Runtime 修订，
+			// 只改渠道等非 Runtime 输入的配置修订不产生新的调谐意图（ADR-0028）。
+			const [agent] = await sql<{ id: string; runtime_revision: string }[]>`
+				select a.id, coalesce((select cr.runtime_revision from platform.agent_configuration_revisions cr
+					where cr.agent_id = a.id and cr.revision = a.current_configuration_revision
+				), a.current_configuration_revision)::text as runtime_revision from platform.agents a
 				join platform.agent_applications ap on ap.agent_id = a.id
 				left join platform.workload_reconciliations w on w.agent_id = a.id
 				where (ap.approval_revision is not null or ap.creation_channel = 'api')
@@ -595,10 +597,15 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 			if (!management) throw new Error();
 			const [configurationRow] = await sql<
 				{ configuration: unknown }[]
-			>`select configuration from platform.agent_configuration_revisions where agent_id = ${agent.id} and revision = ${agent.current_configuration_revision}`;
+			>`select configuration from platform.agent_configuration_revisions where agent_id = ${agent.id} and revision = ${agent.runtime_revision}`;
 			const configuration = decodeAgentConfigurationRecord(
 				configurationRow?.configuration,
 			);
+			if (
+				configuration.agentId !== agent.id ||
+				configuration.revision !== Number(agent.runtime_revision)
+			)
+				throw new Error();
 			const [persistedRow] = await sql<
 				PersistedWorkloadRowV1[]
 			>`select revision::text, state from platform.workload_reconciliations where agent_id = ${agent.id}`;
@@ -885,9 +892,11 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					>`select pg_try_advisory_xact_lock(hashtextextended(${key}, 0)) as acquired`;
 					if (!writeBackLock?.acquired) return "stale" as const;
 					await sql`select set_config('lock_timeout', ${workloadWriteBackLockTimeout}, true)`;
-					const [locked] = await sql<
-						{ current_configuration_revision: string }[]
-					>`select current_configuration_revision::text from platform.agents where id = ${agentId} for update`;
+					const [locked] = await sql<{ runtime_revision: string }[]>`
+						select coalesce((select cr.runtime_revision from platform.agent_configuration_revisions cr
+							where cr.agent_id = a.id and cr.revision = a.current_configuration_revision
+						), a.current_configuration_revision)::text as runtime_revision
+						from platform.agents a where a.id = ${agentId} for update of a`;
 					const database = transactionDatabase(sql);
 					const current = await readAgentManagementState(database, agentId);
 					const [row] = await sql<
@@ -895,11 +904,12 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					>`select revision::text, state from platform.workload_reconciliations where agent_id = ${agentId} for update`;
 					// Writers may commit while the step runs. Persist only a result
 					// derived from inputs that are still current; otherwise the next
-					// step converges on the newer intent from the stored state.
+					// step converges on the newer intent from the stored state. A
+					// configuration revision that keeps the Runtime revision (for
+					// example a channel change) leaves this step valid (ADR-0028).
 					if (
 						!locked ||
-						Number(locked.current_configuration_revision) !==
-							configuration.revision ||
+						Number(locked.runtime_revision) !== configuration.revision ||
 						!isDeepStrictEqual(current, management) ||
 						(persisted === null
 							? row !== undefined

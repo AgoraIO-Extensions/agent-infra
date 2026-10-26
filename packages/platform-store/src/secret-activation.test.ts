@@ -129,6 +129,8 @@ beforeAll(async () => {
 	await client`grant usage on schema platform to secret_activation_runtime`;
 	await client`grant select, update on platform.agents, platform.secret_records to secret_activation_runtime`;
 	await client`grant select, insert on platform.audit_events to secret_activation_runtime`;
+	// Activation compares the current Runtime revision (ADR-0028), never configuration bodies.
+	await client`grant select (agent_id, revision, runtime_revision) on platform.agent_configuration_revisions to secret_activation_runtime`;
 	const runtimeUrl = new URL(database.databaseUrl);
 	runtimeUrl.username = "secret_activation_runtime";
 	runtimeUrl.password = "controlled_activation_test";
@@ -723,6 +725,88 @@ describe("PostgreSQL Secret activation Store", () => {
 			}),
 		).resolves.toBe(false);
 		await expect(claim("worker_03", retryable)).resolves.toEqual({
+			outcome: "stale",
+		});
+	});
+
+	it("keeps an activation current across a channel-only configuration revision (ADR-0028)", async () => {
+		const candidate = validatePlatformSecretRecordV1({
+			...pending,
+			agentId: "agent_channel_only",
+			secretId: "credential_channel_only",
+			crypto: {
+				...pending.crypto,
+				dekFingerprint: "f".repeat(64),
+				aadBinding: {
+					...pending.crypto.aadBinding,
+					agentId: "agent_channel_only",
+					secretId: "credential_channel_only",
+				},
+			},
+		});
+		await client`
+			insert into platform.agents (id, current_configuration_revision)
+			values (${candidate.agentId}, 7)
+		`;
+		// Revision 8 only changes channels and keeps Runtime revision 7.
+		await client`
+			insert into platform.agent_configuration_revisions
+				(agent_id, revision, runtime_revision, source_reference, created_at)
+			values
+				(${candidate.agentId}, 7, 7, 'configuration_07', now()),
+				(${candidate.agentId}, 8, 7, 'configuration_08', now()),
+				(${candidate.agentId}, 9, 9, 'configuration_09', now())
+		`;
+		await client`
+			insert into platform.secret_records
+				(agent_id, secret_id, secret_version, configuration_revision,
+				 owner_type, owner_id, name, lifecycle_state, dek_fingerprint,
+				 wrapping_key_version, record, created_at, updated_at)
+			values
+				(${candidate.agentId}, ${candidate.secretId}, ${candidate.secretVersion},
+				 ${candidate.configRevision}, ${candidate.ownerType}, ${candidate.ownerId},
+				 ${candidate.name}, ${candidate.lifecycleState},
+				 ${candidate.crypto.dekFingerprint},
+				 ${candidate.crypto.wrappingKeyVersion}, ${client.json(candidate)},
+				 ${new Date(candidate.createdAt)}, ${new Date(candidate.updatedAt)})
+		`;
+		const retryableFailure = (traceId: string) => ({
+			lifecycleState: "failed" as const,
+			error: {
+				schemaVersion: 1 as const,
+				code: "SECRET_KEY_UNAVAILABLE" as const,
+				message: "Secret key is unavailable" as const,
+				retryable: true,
+				traceId,
+			},
+		});
+		const first = await claim("worker_channel_01", candidate);
+		if (first.outcome !== "claimed") throw new Error("Expected claim");
+		await client`update platform.agents set current_configuration_revision = 8 where id = ${candidate.agentId}`;
+		// The claimed transition and a new claim both see Runtime revision 7.
+		await expect(
+			store.commitTransition({
+				claim: first.claim,
+				plan: plan({
+					expectedLifecycleStates: ["pending"],
+					next: retryableFailure("trace_channel_01"),
+				}),
+			}),
+		).resolves.toBe(true);
+		const second = await claim("worker_channel_02", candidate);
+		if (second.outcome !== "claimed") throw new Error("Expected claim");
+		// A Runtime input revision makes the same activation stale.
+		await client`update platform.agents set current_configuration_revision = 9 where id = ${candidate.agentId}`;
+		await expect(
+			store.commitTransition({
+				claim: second.claim,
+				plan: plan({
+					expectedLifecycleStates: ["failed"],
+					next: retryableFailure("trace_channel_02"),
+				}),
+			}),
+		).resolves.toBe(false);
+		await expect(claim("worker_channel_03", candidate)).resolves.toEqual({
 			outcome: "stale",
 		});
 	});

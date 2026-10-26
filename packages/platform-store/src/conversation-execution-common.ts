@@ -111,6 +111,10 @@ export interface AgentConfigurationRow {
 	readonly current_configuration_revision: string | number;
 	readonly authorization_revision: string | null;
 	readonly configuration: unknown;
+	/** Runtime revision of the current configuration row (ADR-0028). */
+	readonly runtime_revision: string | number | null;
+	/** The configuration document at that Runtime revision. */
+	readonly runtime_configuration: unknown;
 }
 
 export interface StopRow {

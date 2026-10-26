@@ -17,7 +17,7 @@ import {
 	type TaskPrincipalV1,
 	type TimedOutUnknownStopResolutionInputV1,
 } from "@agent-infra/platform-core";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { readAgentManagementState } from "./agent-management.js";
 import {
@@ -38,6 +38,7 @@ import {
 } from "./conversation-execution-sql.js";
 import postgres from "./observed-postgres.js";
 import {
+	agentConfigurationRevisions,
 	agents,
 	conversationExecutions,
 	conversations,
@@ -634,12 +635,28 @@ export class PostgresTaskAuthorizationStoreV1 {
 					)
 						throw new TaskAuthorizationStoreError();
 					if (!agent) return null;
+					// 运行授权按 Runtime 修订比较 Workload：只改渠道的配置修订不使已受理任务
+					// 失去运行资格（ADR-0028）。
 					const [deployment] = await transaction
 						.select({
-							configurationRevision: agents.currentConfigurationRevision,
+							// 缺少当前修订行时按“改变了 Runtime 输入”解释，退回配置修订。
+							configurationRevision:
+								sql<number>`coalesce(${agentConfigurationRevisions.runtimeRevision}, ${agents.currentConfigurationRevision})`.mapWith(
+									Number,
+								),
 							workload: workloadReconciliations.state,
 						})
 						.from(agents)
+						.leftJoin(
+							agentConfigurationRevisions,
+							and(
+								eq(agentConfigurationRevisions.agentId, agents.id),
+								eq(
+									agentConfigurationRevisions.revision,
+									agents.currentConfigurationRevision,
+								),
+							),
+						)
 						.leftJoin(
 							workloadReconciliations,
 							eq(workloadReconciliations.agentId, agents.id),

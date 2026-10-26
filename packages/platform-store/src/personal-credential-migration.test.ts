@@ -162,6 +162,7 @@ beforeAll(async () => {
 		{ idx: 64, tag: "0064_execution_unknown_since" },
 		{ idx: 65, tag: "0065_wecom_receipt_execution" },
 		{ idx: 66, tag: "0066_wecom_stream_frame_seq" },
+		{ idx: 67, tag: "0067_configuration_runtime_revision" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
@@ -411,6 +412,12 @@ describe("personal credential disable authority append", () => {
 							delete copy.creator_principal_id;
 						}
 						if (table === "outbox_items") delete copy.trace_parent;
+						// #3078：迁移把已有修订的 Runtime 修订回填为自身修订号。
+						if (table === "agent_configuration_revisions") {
+							if ("runtime_revision" in copy)
+								expect(copy.runtime_revision).toBe(copy.revision);
+							delete copy.runtime_revision;
+						}
 						delete copy.principal_type;
 						if (table === "conversation_executions") {
 							if ("sandbox_id" in copy) expect(copy.sandbox_id).toBeNull();

@@ -185,6 +185,10 @@ export interface WorkloadBrowserCapabilityProjectionV1 {
 export interface WorkloadReconciliationStateV1 {
 	readonly schemaVersion: 1;
 	readonly agentId: string;
+	/**
+	 * 本状态所依据的 Runtime 修订（ADR-0028）。字段名沿用旧称；只改渠道等非 Runtime
+	 * 输入的配置修订不改变它，Workload 因此不会重新调谐。
+	 */
 	readonly sourceConfigurationRevision: number;
 	readonly sourceLifecycleRevision: number;
 	readonly revision: number;
@@ -218,6 +222,10 @@ export interface WorkloadSecretBindingV1 {
 
 export interface WorkloadReconciliationInputV1 {
 	readonly management: AgentManagementStateV1;
+	/**
+	 * Agent 当前 Runtime 修订对应的配置文档，不一定是当前配置修订：只改渠道等非 Runtime
+	 * 输入时，Workload 继续以 Runtime 修订那一份为输入（ADR-0028）。
+	 */
 	readonly configuration: AgentConfigurationRecord;
 	readonly state: WorkloadReconciliationStateV1 | null;
 	readonly requestId: string;

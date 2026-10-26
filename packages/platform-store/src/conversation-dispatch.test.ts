@@ -185,6 +185,41 @@ async function seedCapacityAgent(
 	return state;
 }
 
+/**
+ * ADR-0028：写入一个只改渠道的配置修订 5，它继承 Workload 已验证的 Runtime 修订 4。
+ * `runtime` 为 true 时改写一个 Runtime 输入，修订 5 本身成为 Runtime 修订。
+ */
+async function reviseConfiguration(
+	agentId = "agent-dispatch",
+	{ runtime = false } = {},
+) {
+	const [workload] = await client<{ configuration: Record<string, unknown> }[]>`
+		select state->'verified'->'configuration' as configuration
+		from platform.workload_reconciliations where agent_id = ${agentId}`;
+	const verified = workload?.configuration;
+	if (!verified) throw new Error("Expected a verified Workload");
+	await client`insert into platform.agent_configuration_revisions
+		(agent_id, revision, source_reference, created_at, configuration)
+		values (${agentId}, 4, 'revision-test-source', now(), ${client.json(verified as Parameters<typeof client.json>[0])})
+		on conflict do nothing`;
+	const next = {
+		...verified,
+		revision: 5,
+		...(runtime
+			? { environment: [{ name: "LOG_LEVEL", value: "debug" }] }
+			: {
+					channels: [
+						{ kind: "wecom_bot", bindingReference: "binding-dispatch" },
+					],
+					channelRevision: "channels-b",
+				}),
+	};
+	await client`insert into platform.agent_configuration_revisions
+		(agent_id, revision, runtime_revision, source_reference, created_at, configuration)
+		values (${agentId}, 5, ${runtime ? 5 : 4}, 'revision-test-source', now(), ${client.json(next as Parameters<typeof client.json>[0])})`;
+	await client`update platform.agents set current_configuration_revision = 5 where id = ${agentId}`;
+}
+
 async function seed(
 	operation:
 		| "conversation.turn.submit.v1"
@@ -2744,6 +2779,95 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it.each([
+		{ runtime: false, reasons: [] },
+		{ runtime: true, reasons: ["configuration_pending"] },
+	] as const)(
+		"prepares a new Session at once after a configuration revision unless it changes Runtime inputs (runtime: $runtime, ADR-0028)",
+		async ({ runtime, reasons: expectedReasons }) => {
+			await seedCapacityAgent("agent-dispatch", 8, "custom");
+			await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent-dispatch', 'actor-dispatch', now()), ('agent-dispatch', 'owner-a', now())`;
+			await reviseConfiguration("agent-dispatch", { runtime });
+			const transaction = new PostgresConversationExecutionTransactionV1({
+				databaseUrl,
+			});
+			const api = createConversationExecutionUseCaseV1({
+				transaction,
+				authorization: {
+					async authorize() {
+						return {
+							outcome: "allowed",
+							authority: {
+								schemaVersion: 1,
+								actorId: "actor-dispatch",
+								agentId: "agent-dispatch",
+								channelId: "web",
+								authorizationRevision: "authorization-dispatch",
+								supportsSupplementaryInstruction: false,
+							},
+						};
+					},
+				},
+			});
+			const sandboxPolicy = {
+				namespace: workloadTestPolicy.namespace,
+				resourceConfigurationHash:
+					workloadResourceConfigurationHashV1(workloadTestPolicy),
+			};
+			const store = new PostgresConversationDispatchStoreV1({
+				databaseUrl,
+				sandboxPolicy,
+				userDirectory: {
+					async resolveUser(userId) {
+						return {
+							schemaVersion: 1,
+							userId,
+							accountStatus: "active",
+							organizationIds: [],
+							authorizationRevision: "identity-1",
+						};
+					},
+				},
+			});
+			try {
+				const created = await api.createConversation({
+					schemaVersion: 1,
+					agentId: "agent-dispatch",
+					idempotencyKey: "channel-revision-create",
+					requestId: "channel-revision-request",
+					traceId: "channel-revision-trace",
+				});
+				if (created.outcome !== "accepted") throw new Error("Expected Session");
+				const itemId = `conversation:sandbox:${created.result.conversationId}:1`;
+				await waitForAvailableItem(itemId);
+				const reasons: SessionSandboxClaimWaitReasonV1[] = [];
+				const claim = await store.claimSandboxReconciliation(
+					{
+						schemaVersion: 1,
+						itemId,
+						workerId: "channel-revision-worker",
+						leaseDurationMs: 30_000,
+					},
+					(reason) => {
+						reasons.push(reason);
+					},
+				);
+				expect(reasons).toEqual(expectedReasons);
+				if (runtime) {
+					expect(claim).toBeNull();
+					return;
+				}
+				// The Sandbox policy records the Runtime revision the Workload verified.
+				expect(claim).toMatchObject({
+					purpose: "prepare",
+					policy: { configurationRevision: 4, workloadRevision: 4 },
+				});
+			} finally {
+				await Promise.allSettled([store.close(), transaction.close()]);
+			}
+		},
+	);
+
 	it("prepares a new Session without an Execution and commits observations only under the current lease and authority", async () => {
 		const verifiedState = await seedCapacityAgent(
 			"agent-dispatch",
@@ -4721,6 +4845,41 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				expect((await dispatchState(work))?.execution_status).toBe("submitted");
 			} finally {
 				await store.close();
+			}
+		},
+	);
+
+	it.each([
+		{ runtime: false, prepared: true, runtimeRevision: 4 },
+		{ runtime: true, prepared: "capacity_unavailable", runtimeRevision: 5 },
+	] as const)(
+		"dispatches an accepted Turn after a configuration revision unless it changes Runtime inputs (runtime: $runtime, ADR-0028)",
+		async ({ runtime, prepared, runtimeRevision }) => {
+			const work = await seed();
+			await reviseConfiguration("agent-dispatch", { runtime });
+			const authorization = new PostgresTaskAuthorizationStoreV1({
+				databaseUrl,
+			});
+			const { store, decision } = await claim(work.itemId);
+			try {
+				if (decision.outcome !== "claimed") throw new Error("Expected claim");
+				// The Execution keeps the model pin of the Runtime revision it was accepted on.
+				expect(decision.claim.modelConfigurationRevision).toBe(4);
+				// Run authorization compares the Workload with the Runtime revision.
+				await expect(
+					authorization.readExecution(work.executionId),
+				).resolves.toMatchObject({ configurationRevision: runtimeRevision });
+				expect(
+					await store.prepareRuntimeDispatch({
+						claim: decision.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(prepared);
+				expect((await dispatchState(work))?.execution_status).toBe(
+					prepared === true ? "unknown" : "submitted",
+				);
+			} finally {
+				await Promise.all([store.close(), authorization.close()]);
 			}
 		},
 	);
@@ -9707,6 +9866,43 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 			where a.conversation_id = ${conversationId}`;
 		return row;
 	}
+
+	it("keeps an idle Sandbox current after a channel-only configuration revision (ADR-0028)", async () => {
+		const idle = await seed("conversation.turn.submit.v1", {
+			executionFence: 2,
+		});
+		const idleSandbox = await prepared(idle);
+		const before = await sandboxState(idle.conversationId);
+		await reviseConfiguration();
+		// No upgrade intent: the policy still binds the current Runtime revision.
+		await expect(upgrade()).resolves.toBe(0);
+		expect(await sandboxState(idle.conversationId)).toEqual(before);
+		expect(
+			await client`select 1 from platform.audit_events where action = 'conversation.sandbox.upgrade_requested'`,
+		).toHaveLength(0);
+		await expect(
+			client.begin((transaction) =>
+				readSessionSandboxRuntimeState(
+					transaction,
+					{
+						schemaVersion: 1,
+						sandboxId: idleSandbox.sandboxId,
+						sessionId: idle.conversationId,
+						agentId: "agent-dispatch",
+						principal: { kind: "user", id: "actor-dispatch" },
+						channelId: "web",
+						generation: 1,
+						resourceName: `sandbox-${idleSandbox.sandboxId}`,
+						workspaceScope: idleSandbox.sandboxId,
+					},
+					sandboxPolicy,
+				),
+			),
+		).resolves.toMatchObject({
+			status: "ready",
+			policy: { configurationRevision: 4 },
+		});
+	});
 
 	it("writes one upgrade intent per idle stale Sandbox and leaves busy or current ones alone", async () => {
 		// A claimed Turn waiting for the Sandbox already carries a delivery fence.

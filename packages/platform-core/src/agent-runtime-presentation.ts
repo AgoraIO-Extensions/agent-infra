@@ -101,7 +101,13 @@ export interface AgentRuntimePresentationDeploymentV1 {
 
 export interface AgentRuntimePresentationFactsV1 {
 	readonly management: AgentManagementStateV1;
+	/** 当前配置修订：渠道与 expected 快照比较都以它为准。 */
 	readonly configuration: AgentConfigurationRecord;
+	/**
+	 * 当前 Runtime 修订对应的配置文档（ADR-0028）。只改渠道等非 Runtime 输入时它落后于
+	 * `configuration`；verified Workload 与它比较，Runtime 能力投影因此不随渠道变更失效。
+	 */
+	readonly runtimeConfiguration: AgentConfigurationRecord;
 	readonly sourceReference: string;
 	/** 当前修订各企微渠道的连接事实；缺少某个渠道的事实时该渠道按未证实处理。 */
 	readonly channels: readonly AgentChannelConnectionFactV1[];
@@ -270,12 +276,12 @@ export function decideAgentRuntimePresentationV1(input: {
 		!state.capabilities ||
 		state.fence !== management.fence ||
 		state.sourceLifecycleRevision !== management.workloadRevision ||
-		state.sourceConfigurationRevision !== facts.configuration.revision ||
+		state.sourceConfigurationRevision !== facts.runtimeConfiguration.revision ||
 		state.revision !== runtime.revision ||
 		state.verifiedRevision !== state.revision ||
 		!isDeepStrictEqual(state.candidate, state.verified) ||
 		!isDeepStrictEqual(configuration, state.verified.configuration) ||
-		!isDeepStrictEqual(configuration, facts.configuration) ||
+		!isDeepStrictEqual(configuration, facts.runtimeConfiguration) ||
 		runtime.verifiedSourceReference !== facts.sourceReference ||
 		deployment.agentId !== input.agentId ||
 		deployment.configRevision !== configuration.revision ||

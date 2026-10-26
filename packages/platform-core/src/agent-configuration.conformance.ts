@@ -633,6 +633,85 @@ export function agentConfigurationUseCaseConformance(
 		}
 	});
 
+	it("revises a channel-only change without waking Workload reconciliation (ADR-0028)", async () => {
+		const harness = await createHarness();
+		try {
+			await expect(
+				harness.useCase.update(
+					{
+						...command,
+						idempotencyKey: "configuration-channel-only-01",
+						changes: {
+							channels: [
+								{
+									kind: "wecom_bot",
+									enabled: true,
+									bindingReference: "binding_01",
+								},
+							],
+						},
+					},
+					actor,
+				),
+			).resolves.toEqual({
+				schemaVersion: 1,
+				agentId: "agent_01",
+				revision: 8,
+				changedFields: ["channels"],
+			});
+			const snapshot = await harness.snapshot();
+			expect(snapshot).toMatchObject({
+				commitCount: 1,
+				idempotencyCount: 1,
+				outboxCount: 0,
+				auditCount: 1,
+				configuration: {
+					revision: 8,
+					channels: [{ kind: "wecom_bot", bindingReference: "binding_01" }],
+					channelRevision: "channels_2",
+				},
+				lastPlan: {
+					baseRevision: 7,
+					nextRevision: 8,
+					outboxIntent: null,
+					auditEvent: {
+						action: "agent.configuration.revised",
+						changedFields: ["channels"],
+					},
+				},
+			});
+
+			// A Runtime input in the same command still wakes reconciliation.
+			await harness.useCase.update(
+				{
+					...command,
+					idempotencyKey: "configuration-channel-runtime-02",
+					changes: {
+						environment: [{ name: "LOG_LEVEL", value: "debug" }],
+						channels: [{ kind: "wecom_bot", enabled: false }],
+					},
+				},
+				actor,
+			);
+			expect(await harness.snapshot()).toMatchObject({
+				commitCount: 2,
+				outboxCount: 1,
+				configuration: { revision: 9, channels: [] },
+				lastPlan: {
+					outboxIntent: {
+						operation: "agent.configuration.revised.v1",
+						payload: {
+							configurationRevision: 9,
+							changedFields: ["channels", "environment"],
+						},
+					},
+				},
+			});
+		} finally {
+			await harness.close();
+		}
+	});
+
 	it("advances authorization with fresh writes and preserves earlier replays", async () => {
 		const harness = await createHarness();
 		try {

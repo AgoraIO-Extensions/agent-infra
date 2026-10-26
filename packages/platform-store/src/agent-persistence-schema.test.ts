@@ -95,6 +95,8 @@ describe("Agent persistence schema contract", () => {
 			"source_reference",
 			"created_at",
 			"configuration",
+			// ADR-0028：Runtime 修订（迁移 0067）。
+			"runtime_revision",
 		]);
 		expect(columnNames(platformSecretRecords)).toEqual([
 			"agent_id",

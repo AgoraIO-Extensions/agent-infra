@@ -36,6 +36,26 @@ import {
 import { platformIdempotencyV1 } from "./idempotency.js";
 import { parseSkillHubAgentBindingWriteV1 } from "./skill-hub-agent-binding.js";
 
+/**
+ * ADR-0028 的非 Runtime 输入：Worker、RuntimeHost 与 Session Sandbox 都不读取的已变更字段。
+ * 可用范围本身不产生配置修订。新增字段默认属于 Runtime 输入；把字段移入本集合前，
+ * 须先证明上述消费方都不读取它，并同步更新 ADR-0028 与工程 Spec §10.2。
+ */
+const nonRuntimeConfigurationFieldsV1: ReadonlySet<AgentConfigurationChangedFieldV1> =
+	new Set(["availability", "channels"]);
+
+/**
+ * 本次修订是否改变了 Runtime 输入。为真时 Runtime 修订等于本修订号，并写入 Workload
+ * 调谐 outbox；为假时继承上一修订的 Runtime 修订（ADR-0028）。
+ */
+export function agentConfigurationRuntimeInputChangedV1(
+	changedFields: readonly AgentConfigurationChangedFieldV1[],
+): boolean {
+	return changedFields.some(
+		(field) => !nonRuntimeConfigurationFieldsV1.has(field),
+	);
+}
+
 export function requestDigest(
 	command:
 		| UpdateAgentConfigurationCommandV2
@@ -261,8 +281,11 @@ export function snapshotAgentConfigurationWritePlanV1(
 			(field) => field === "owners" || field === "availability",
 		);
 		const accessOnly = accessFields.length === result.changedFields.length;
-		const runtimeUnchanged = result.changedFields.every(
+		const revisionUnchanged = result.changedFields.every(
 			(field) => field === "availability",
+		);
+		const runtimeInputChanged = agentConfigurationRuntimeInputChangedV1(
+			result.changedFields,
 		);
 		const expectedAction = accessOnly
 			? "agent.access.updated"
@@ -282,7 +305,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 			(values.baseRevision as number) < 1 ||
 			!Number.isSafeInteger(values.nextRevision) ||
 			values.nextRevision !==
-				(values.baseRevision as number) + (runtimeUnchanged ? 0 : 1) ||
+				(values.baseRevision as number) + (revisionUnchanged ? 0 : 1) ||
 			(values.expectedManagementRevision !== null &&
 				(!Number.isSafeInteger(values.expectedManagementRevision) ||
 					(values.expectedManagementRevision as number) < 0)) ||
@@ -314,7 +337,8 @@ export function snapshotAgentConfigurationWritePlanV1(
 			throw new Error();
 		}
 		let outboxIntent: AgentConfigurationWritePlanV1["outboxIntent"] = null;
-		if (runtimeUnchanged) {
+		// 只改非 Runtime 输入（如渠道）时仍写配置修订与审计，但不唤醒 Workload 调谐（ADR-0028）。
+		if (!runtimeInputChanged) {
 			if (values.outboxIntent !== null) throw new Error();
 		} else {
 			const outbox = configurationPlanObject(values.outboxIntent, [

@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
-import type {
-	AgentConfigurationRecord,
-	AgentConfigurationRelayKeyAttachmentV1,
-	AgentConfigurationWritePlanV1,
-	AgentManagementWritePlanV1,
+import {
+	type AgentConfigurationRecord,
+	type AgentConfigurationRelayKeyAttachmentV1,
+	type AgentConfigurationWritePlanV1,
+	type AgentManagementWritePlanV1,
+	agentConfigurationRuntimeInputChangedV1,
 } from "@agent-infra/platform-core";
 import { and, eq, sql } from "drizzle-orm";
 import type { drizzle } from "drizzle-orm/postgres-js";
+import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { replaceRelayKeyVersionInTransaction } from "./relay-key-versions.js";
 import {
 	agentAvailability,
@@ -101,6 +104,53 @@ export async function replaceAgentDefaultRelayKeyInTransaction(
 	return "replaced";
 }
 
+/**
+ * ADR-0028：新配置修订对应的 Runtime 修订。改变 Runtime 输入时等于本修订号；只改渠道等
+ * 非 Runtime 输入时继承上一修订的值。继承前再核对新旧配置除修订号与渠道外完全相同：
+ * 分类出错时拒绝提交，而不是让运行实例继续使用旧配置。
+ */
+async function nextRuntimeRevision(
+	transaction: Transaction,
+	plan: AgentConfigurationWritePlanV1,
+	configuration: AgentConfigurationRecord,
+): Promise<number> {
+	if (agentConfigurationRuntimeInputChangedV1(plan.result.changedFields))
+		return plan.nextRevision;
+	const [base] = await transaction
+		.select({
+			runtimeRevision: agentConfigurationRevisions.runtimeRevision,
+			configuration: agentConfigurationRevisions.configuration,
+		})
+		.from(agentConfigurationRevisions)
+		.where(
+			and(
+				eq(agentConfigurationRevisions.agentId, plan.agentId),
+				eq(agentConfigurationRevisions.revision, plan.baseRevision),
+			),
+		)
+		.limit(1);
+	const runtimeInputs = ({
+		revision: _revision,
+		channels: _channels,
+		channelRevision: _channelRevision,
+		...inputs
+	}: AgentConfigurationRecord) => inputs;
+	if (
+		!base?.configuration ||
+		!Number.isSafeInteger(base.runtimeRevision) ||
+		base.runtimeRevision < 1 ||
+		base.runtimeRevision > plan.baseRevision ||
+		!isDeepStrictEqual(
+			runtimeInputs(
+				decodeVersionedAgentConfigurationRecord(base.configuration),
+			),
+			runtimeInputs(configuration),
+		)
+	)
+		throw new Error("Runtime revision cannot be inherited");
+	return base.runtimeRevision;
+}
+
 export async function advanceAgentConfigurationRevision(
 	transaction: Transaction,
 	plan: AgentConfigurationWritePlanV1,
@@ -110,6 +160,11 @@ export async function advanceAgentConfigurationRevision(
 		await transaction.insert(agentConfigurationRevisions).values({
 			agentId: plan.agentId,
 			revision: plan.nextRevision,
+			runtimeRevision: await nextRuntimeRevision(
+				transaction,
+				plan,
+				configuration,
+			),
 			sourceReference:
 				configuration.source.kind === "standard"
 					? configuration.source.templateId

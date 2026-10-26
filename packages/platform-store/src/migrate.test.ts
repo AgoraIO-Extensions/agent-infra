@@ -2006,6 +2006,7 @@ describe("published Relay authority migration", () => {
 			64,
 			65,
 			66,
+			67,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2080,8 +2081,8 @@ describe("published Relay authority migration", () => {
 			tag: "0063_wecom_outbound_media",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 66,
-			tag: "0066_wecom_stream_frame_seq",
+			idx: 67,
+			tag: "0067_configuration_runtime_revision",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2317,6 +2318,8 @@ describe("published Relay authority migration", () => {
 					"conversation_executions:unknown_since",
 					// #3377：长连接流式进度的帧序号。
 					"wecom_receipts:stream_frame_seq",
+					// #3078：Runtime 修订（ADR-0028）。
+					"agent_configuration_revisions:runtime_revision",
 				],
 				checks: [
 					...(kind === "original27"
@@ -2361,6 +2364,7 @@ describe("published Relay authority migration", () => {
 
 			expectedDelta.checks.push(
 				"agent_configuration_revisions:agent_configuration_identity_matches",
+				"agent_configuration_revisions:agent_configuration_runtime_revision_range",
 				"conversation_executions:conversation_execution_accepted_original_host",
 			);
 			expectedDelta.checks.push(

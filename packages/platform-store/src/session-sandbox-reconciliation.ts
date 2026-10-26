@@ -92,10 +92,14 @@ async function lockedContext(
 	await transaction`lock table platform.platform_user_disables in share mode`;
 	await transaction`select id from platform.platform_applications where id = ${hint.actor_id} and ${hint.principal_type} = 'application' for share`;
 	await transaction`select principal_id from platform.agent_principal_grants where agent_id = ${hint.agent_id} and principal_type = ${hint.principal_type} and principal_id = ${hint.actor_id} for share`;
+	// Sandbox policy 绑定 Runtime 修订：只改渠道的配置修订不阻止新 Sandbox 准备（ADR-0028）。
 	const [agent] = await transaction<
-		{ authorization_revision: string; current_configuration_revision: number }[]
+		{ authorization_revision: string; runtime_revision: string }[]
 	>`
-		select authorization_revision, current_configuration_revision from platform.agents where id = ${hint.agent_id} for share`;
+		select a.authorization_revision, coalesce((select cr.runtime_revision from platform.agent_configuration_revisions cr
+			where cr.agent_id = a.id and cr.revision = a.current_configuration_revision
+		), a.current_configuration_revision)::text as runtime_revision
+		from platform.agents a where a.id = ${hint.agent_id} for share of a`;
 	await transaction`select id from platform.agent_applications where agent_id = ${hint.agent_id} for share`;
 	await transaction`select owner_id from platform.agent_owners where agent_id = ${hint.agent_id} for share`;
 	await transaction`select target_id from platform.agent_availability where agent_id = ${hint.agent_id} for share`;
@@ -283,12 +287,11 @@ async function lockedContext(
 		state.sourceLifecycleRevision !== management.workloadRevision
 	)
 		return waiting("workload_not_ready");
+	const runtimeRevision = Number(agent.runtime_revision);
 	if (
-		state.sourceConfigurationRevision !==
-			Number(agent.current_configuration_revision) ||
-		verified.configuration.revision !==
-			Number(agent.current_configuration_revision) ||
-		deployment.configRevision !== Number(agent.current_configuration_revision)
+		state.sourceConfigurationRevision !== runtimeRevision ||
+		verified.configuration.revision !== runtimeRevision ||
+		deployment.configRevision !== runtimeRevision
 	)
 		return waiting("configuration_pending");
 	if (
@@ -339,7 +342,7 @@ async function lockedContext(
 	if (!authorization) return waiting("authorization_changed");
 	const currentPolicy: SessionSandboxVerifiedPolicyV1 = {
 		...policy,
-		configurationRevision: Number(agent.current_configuration_revision),
+		configurationRevision: runtimeRevision,
 		workloadRevision: deployment.workloadRevision,
 		managementFence: management.fence,
 		imageDigest: deployment.imageDigest,

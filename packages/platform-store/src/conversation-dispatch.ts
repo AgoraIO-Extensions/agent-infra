@@ -929,7 +929,7 @@ export class PostgresConversationDispatchStoreV1
 					// retain a pre-lock snapshot of application or reconciliation state.
 					const [agent] = await transaction<
 						{
-							current_configuration_revision: string;
+							runtime_revision: string;
 							status: string | null;
 							desired_state: string | null;
 							service_availability: string | null;
@@ -938,9 +938,12 @@ export class PostgresConversationDispatchStoreV1
 							state: unknown;
 						}[]
 					>`
-				select a.current_configuration_revision::text, ap.status, ap.desired_state,
+				select coalesce(cr.runtime_revision, a.current_configuration_revision)::text as runtime_revision,
+					ap.status, ap.desired_state,
 					ap.service_availability, ap.workload_revision::text, ap.fence::text, w.state
 				from platform.agents a
+				left join platform.agent_configuration_revisions cr
+					on cr.agent_id = a.id and cr.revision = a.current_configuration_revision
 				left join platform.agent_applications ap on ap.agent_id = a.id
 				left join platform.workload_reconciliations w on w.agent_id = a.id
 					where a.id = ${input.claim.agentId}
@@ -1080,10 +1083,8 @@ export class PostgresConversationDispatchStoreV1
 								agentId: input.claim.agentId,
 								modelConfigurationRevision:
 									input.claim.modelConfigurationRevision,
-								configurationRevision: requireSafeCounter(
-									agent.current_configuration_revision,
-									1,
-								),
+								// 投递就绪比较 Runtime 修订：只改渠道不让已受理任务等待（ADR-0028）。
+								runtimeRevision: requireSafeCounter(agent.runtime_revision, 1),
 								status: agent.status,
 								desiredState: agent.desired_state,
 								serviceAvailability: agent.service_availability,
@@ -1111,7 +1112,7 @@ export class PostgresConversationDispatchStoreV1
 						}
 						if (capacityDecision !== "admit")
 							throw new DispatchCapacityUnavailable(capacityDecision);
-						// A Sandbox prepared for an earlier configuration or Workload
+						// A Sandbox prepared for an earlier Runtime or Workload
 						// revision cannot serve this Turn. Keep it waiting without
 						// reserving capacity; never write unknown for work that is
 						// not going to be sent (HLD §8.4).
@@ -1133,8 +1134,8 @@ export class PostgresConversationDispatchStoreV1
 									policy: (allocation?.resource_policy ?? null) as Parameters<
 										typeof isSessionSandboxPolicyCurrentV1
 									>[0]["policy"],
-									configurationRevision: requireSafeCounter(
-										agent.current_configuration_revision,
+									runtimeRevision: requireSafeCounter(
+										agent.runtime_revision,
 										1,
 									),
 									managementFence: requireSafeCounter(agent.fence, 1),

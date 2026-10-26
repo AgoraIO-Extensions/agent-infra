@@ -26,7 +26,8 @@ interface SecretActivationRow {
 	readonly configuration_revision: string | number;
 	readonly lifecycle_state: string;
 	readonly record: unknown;
-	readonly current_configuration_revision: string | number;
+	/** 当前配置修订行的 Runtime 修订（ADR-0028），不是配置修订本身。 */
+	readonly current_runtime_revision: string | number;
 	readonly secret_activation_fence: string | number;
 	readonly secret_activation_owner: string | null;
 	readonly secret_activation_lease_expires_at: Date | null;
@@ -188,7 +189,7 @@ function claimMatchesRow(
 ): boolean {
 	try {
 		const currentConfigurationRevision = integer(
-			row.current_configuration_revision,
+			row.current_runtime_revision,
 			1,
 		);
 		return (
@@ -494,7 +495,7 @@ export class PostgresSecretActivationStoreV1
 				const plan = claimPlan(decide, {
 					schemaVersion: 1,
 					currentConfigurationRevision: integer(
-						row.current_configuration_revision,
+						row.current_runtime_revision,
 						1,
 					),
 					candidate,
@@ -631,7 +632,10 @@ export class PostgresSecretActivationStoreV1
 		const rows = await sql<SecretActivationRow[]>`
 			select sr.agent_id, sr.secret_id, sr.secret_version,
 				sr.configuration_revision, sr.lifecycle_state, sr.record,
-				a.current_configuration_revision, a.secret_activation_fence,
+				-- 激活与复用比较 Workload 的 Runtime 修订，只改渠道的配置修订不使其失效（ADR-0028）。
+				coalesce((select cr.runtime_revision from platform.agent_configuration_revisions cr
+					where cr.agent_id = a.id and cr.revision = a.current_configuration_revision
+				), a.current_configuration_revision) as current_runtime_revision, a.secret_activation_fence,
 				a.secret_activation_owner, a.secret_activation_lease_expires_at
 			from platform.agents a
 			join platform.secret_records sr on sr.agent_id = a.id

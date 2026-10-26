@@ -132,10 +132,14 @@ async function readAgent(
 	`;
 	let customCapability: ConversationTaskAdmissionStateV1["customCapability"] =
 		null;
+	// The verified Workload carries the Runtime-revision document, which may
+	// trail the current configuration on channels only (ADR-0028). Never fall
+	// back to the current document: without it there is no custom capability.
+	const runtimeConfiguration = agent.runtimeConfiguration;
 	// V3 只能是标准模板；自定义 Agent 始终是 V2 配置。
 	if (
-		agent.configuration?.schemaVersion === 2 &&
-		agent.configuration.source.kind === "custom"
+		runtimeConfiguration?.schemaVersion === 2 &&
+		runtimeConfiguration.source.kind === "custom"
 	) {
 		const [row] = await transaction<{ state: unknown }[]>`
 			select state from platform.workload_reconciliations
@@ -147,7 +151,7 @@ async function readAgent(
 				decoded.state.verified.deployment,
 			);
 			customCapability = {
-				configuration: agent.configuration,
+				configuration: runtimeConfiguration,
 				verified: decoded.state.verified,
 				deployment: {
 					agentId: deployment.agentId,
