@@ -482,7 +482,28 @@ export function createConversationDispatchUseCaseV1(
 			// 遇到其他事件、达到上限、空闲 50 ms 或流结束时提交；提交后才确认游标。
 			const batching = dependencies.events.persistBatch !== undefined;
 			const buffered: ReturnType<typeof eventCommand>[] = [];
-			const flushBuffered = async (): Promise<"stale" | undefined> => {
+			// #3443：Host 在读取前提交缓冲时，不再按空闲计时提交，避免提交与进行中的读取并发、
+			// 改变读取发送前复核的 fenced state。
+			let hostCommitsBeforeRead = false;
+			let staleBeforeRead = false;
+			// 提交按顺序串行，读取前回调与消费方的提交不会交错。
+			let flushing: Promise<unknown> = Promise.resolve();
+			const flushBuffered = (): Promise<"stale" | undefined> => {
+				const run = flushing.then(flushBufferedNow);
+				flushing = run.catch(() => undefined);
+				return run;
+			};
+			const beforeRead = async () => {
+				hostCommitsBeforeRead = true;
+				if ((await flushBuffered()) === "stale") {
+					staleBeforeRead = true;
+					throw new ConversationRuntimeHostError(
+						"EVENT_PERSISTENCE_UNAVAILABLE",
+						true,
+					);
+				}
+			};
+			const flushBufferedNow = async (): Promise<"stale" | undefined> => {
 				if (buffered.length === 0) return undefined;
 				const commands = buffered.splice(0);
 				let decisions: readonly ConversationEventDecisionV1[];
@@ -508,7 +529,11 @@ export function createConversationDispatchUseCaseV1(
 				return undefined;
 			};
 			const iterator = dependencies.runtimeHost
-				.events(eventRequest, eventHeartbeat.signal)
+				.events(
+					eventRequest,
+					eventHeartbeat.signal,
+					batching ? { beforeRead } : {},
+				)
 				[Symbol.asyncIterator]();
 			let pending: Promise<IteratorResult<unknown>> | undefined;
 			try {
@@ -517,7 +542,7 @@ export function createConversationDispatchUseCaseV1(
 					let step: IteratorResult<unknown> | "idle";
 					try {
 						step =
-							buffered.length === 0
+							buffered.length === 0 || hostCommitsBeforeRead
 								? await pending
 								: await new Promise<IteratorResult<unknown> | "idle">(
 										(resolve, reject) => {
@@ -541,7 +566,7 @@ export function createConversationDispatchUseCaseV1(
 						// 流中断前已读到的增量照常提交，恢复时从已提交游标继续。提交失败或已失去
 						// 租约时以提交结果为准，不用流错误掩盖。
 						pending = undefined;
-						if ((await flushBuffered()) === "stale")
+						if (staleBeforeRead || (await flushBuffered()) === "stale")
 							return { schemaVersion: 1, outcome: "stale" };
 						throw error;
 					}

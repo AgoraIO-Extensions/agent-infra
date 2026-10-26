@@ -565,6 +565,12 @@ export interface ConversationRuntimeHostPortV1 {
 	events(
 		request: ConversationRuntimeEventRequestV1,
 		signal?: AbortSignal,
+		/**
+		 * #3443：Host 在每次读取（含首次）前调用 `beforeRead`，Dispatch 借此提交已缓冲的事件，读取的
+		 * 起点与发送前复核的 fenced state 因此都是已提交的游标。回调失败时不发起这次读取，把错误交给
+		 * 消费方。
+		 */
+		hooks?: { readonly beforeRead?: () => Promise<void> },
 	): AsyncIterable<ConversationRuntimeEvent>;
 }
 

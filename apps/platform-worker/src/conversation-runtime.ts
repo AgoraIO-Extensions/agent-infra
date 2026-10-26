@@ -1768,7 +1768,7 @@ export function createConversationRuntimeV2(
 				}
 			}
 		},
-		async *events(request, signal) {
+		async *events(request, signal, hooks) {
 			const active = combined(signal);
 			const pause = async () => {
 				let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1790,6 +1790,9 @@ export function createConversationRuntimeV2(
 				let previous: Awaited<ReturnType<typeof prepare>> | undefined;
 				let controlReprepareAttempts = 0;
 				for (;;) {
+					active.throwIfAborted();
+					// #3443：先让消费方提交已缓冲的事件，读取起点与发送前复核的 fenced state 都是已提交游标。
+					await hooks?.beforeRead?.();
 					active.throwIfAborted();
 					const prepared = await prepareEventStep(
 						request,
