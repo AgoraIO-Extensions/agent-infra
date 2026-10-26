@@ -4,6 +4,7 @@ import type { ConversationExecutionSourceV1 } from "./conversation-execution-typ
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import type { ConversationOperationFactV2 } from "./conversation-operation-facts.js";
 import type { NativeTextInputV1 } from "./file-authority.js";
+import type { NativeCapabilityInvocationBindingV6 } from "./native-capability-admission-v6.js";
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 
 export type ConversationDispatchOperationV1 =
@@ -12,6 +13,7 @@ export type ConversationDispatchOperationV1 =
 	| "conversation.turn.supplement.v1"
 	| "conversation.turn.stop.v1"
 	| "conversation.native-capability.invoke.v1"
+	| "conversation.native-capability.invoke.v2"
 	| "conversation.browser.handoff.v1";
 
 export type ConversationNativeCapabilityBindingV1 = Readonly<{
@@ -225,6 +227,8 @@ export interface ConversationDispatchClaimV1 {
 		readonly attachments: readonly string[];
 	} | null;
 	readonly nativeCapability?: ConversationNativeCapabilityBindingV1;
+	/** Store-owned immutable V6 native invocation binding. */
+	readonly nativeCapabilityV6?: NativeCapabilityInvocationBindingV6;
 	/** Server-admitted Browser command carried by the same outbox lease. */
 	readonly browserHandoff?: BrowserHandoffCommandV1;
 	readonly executionStatus: ConversationDispatchExecutionStatusV1;
@@ -417,6 +421,7 @@ export interface ConversationRuntimeDispatchRequestV1 {
 	};
 	readonly runtimeGrant: unknown;
 	readonly nativeCapability?: ConversationNativeCapabilityBindingV1;
+	readonly nativeCapabilityV6?: NativeCapabilityInvocationBindingV6;
 }
 
 export type ConversationRuntimeOperationResultV1 =
