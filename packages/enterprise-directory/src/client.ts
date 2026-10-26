@@ -8,6 +8,8 @@ import { fromDirectorySnapshot } from "./wire.js";
 export interface DirectoryClientConfig {
 	endpoint: string;
 	token: string;
+	/** Maximum time to wait for the directory snapshot response. */
+	timeoutMs?: number;
 	fetch?: typeof fetch;
 }
 
@@ -23,13 +25,17 @@ export function createDirectoryClient(config: DirectoryClientConfig) {
 	) {
 		throw new DirectoryUnavailableError();
 	}
+	const timeoutMs = config.timeoutMs ?? 5_000;
+	if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30_000) {
+		throw new DirectoryUnavailableError();
+	}
 	const fetcher = config.fetch ?? fetch;
 	async function fetchSnapshot(): Promise<DirectorySnapshot> {
 		const response = await fetcher(endpoint, {
 			method: "GET",
 			headers: { Authorization: `Bearer ${config.token}` },
 			redirect: "error",
-			signal: AbortSignal.timeout(5_000),
+			signal: AbortSignal.timeout(timeoutMs),
 		});
 		if (!response.ok) throw new DirectoryUnavailableError();
 		return fromDirectorySnapshot(await response.json());
