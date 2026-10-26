@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { RuntimeOAuthConfigurationV1Schema } from "@agent-infra/contracts/runtime";
-import type { StandardTemplateModelBindingV1 } from "@agent-infra/model-catalog";
+import type {
+	AgentDefaultRelayKeyEndpointPolicyV1,
+	StandardTemplateModelBindingV1,
+} from "@agent-infra/model-catalog";
 import {
 	createRuntimeConnectionConsumerSnapshotV1,
 	createRuntimeConnectionInstallationRevisionV1,
@@ -110,11 +113,9 @@ type DeploymentConfiguration = {
 	readonly modelDirectory?: PlatformWorkerRuntimeModelDirectoryDeploymentPortsV1;
 	/** Deployment-owned saved-Key candidate reader; it keeps decryptor access in Worker. */
 	readonly savedKeyCandidates?: PlatformWorkerInternalGatewayServerOptionsV1;
-	readonly savedKeyCandidatesPolicy?: {
+	readonly savedKeyCandidatesPolicy?: AgentDefaultRelayKeyEndpointPolicyV1 & {
 		readonly port?: number;
 		readonly hostname?: string;
-		readonly relayEndpointId: string;
-		readonly relayBaseUrl: string;
 		readonly catalogRevision: string;
 		readonly validation: Parameters<
 			typeof import("@agent-infra/model-catalog")["createPersonalRelayKeyValidatorV1"]
@@ -842,8 +843,12 @@ export async function createPlatformSavedKeyCandidatesOptionsV1(
 		},
 		templateBindings: deployment.workload
 			.templateModelBindings as readonly StandardTemplateModelBindingV1[],
-		relayEndpointId: savedKeyCandidatesPolicy.relayEndpointId,
-		relayBaseUrl: savedKeyCandidatesPolicy.relayBaseUrl,
+		...(savedKeyCandidatesPolicy.relayEndpoints
+			? { relayEndpoints: savedKeyCandidatesPolicy.relayEndpoints }
+			: {
+					relayEndpointId: savedKeyCandidatesPolicy.relayEndpointId,
+					relayBaseUrl: savedKeyCandidatesPolicy.relayBaseUrl,
+				}),
 		validation: savedKeyCandidatesPolicy.validation,
 		...(savedKeyCandidatesPolicy.fetch
 			? { fetch: savedKeyCandidatesPolicy.fetch }

@@ -70,6 +70,8 @@ Workload 调谐还可以分别配置 `workloadInput.maximumApplyAttempts` 和
 部署也可以导出 `savedKeyCandidatesPolicy`，由 Worker 生产入口组装
 `PostgresAgentDefaultRelayKeyStoreV1`、`PostgresRelayKeyVersionStoreV1`、Worker keyring、
 当前模板/image binding 和 model catalog。Policy 必须提供固定 Relay endpoint/base URL、
+或提供部署批准的 `relayEndpoints: [{ endpointId, baseUrl, protocol }]` 列表（ID 唯一）；
+列表中的每项必须与 Model Catalog 精确匹配，模板仍按 digest 与 Driver 协议筛选。
 catalog revision 及 approved billing validation；请求会重新检查 Owner、禁用状态、配置
 修订和 Key version。`savedKeyCandidates` 仍可作为受控部署 override。
 

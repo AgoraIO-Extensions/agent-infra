@@ -1,6 +1,9 @@
 import { AgentResourceProfileProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { OciImageReferenceV1Schema } from "@agent-infra/contracts/workload";
-import { createDeploymentModelDisplayNamesV1 } from "@agent-infra/model-catalog";
+import {
+	type AgentDefaultRelayKeyEndpointPolicyV1,
+	createDeploymentModelDisplayNamesV1,
+} from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationAuthorityContextV1,
 	type AgentConfigurationUseCaseDependenciesV1,
@@ -133,10 +136,11 @@ export interface ProductionPlatformApiInputV1
 	/** Public wrapping keys only. Worker private keys belong to the Worker deployment. */
 	readonly encryptionKeys: unknown;
 	/** Exact existing template/image/Driver bindings for default Key validation. */
-	readonly agentDefaultRelayKeyPolicy?: Pick<
-		Parameters<typeof createAgentDefaultRelayKeyCandidatesV1>[0],
-		"templateBindings" | "relayEndpointId" | "relayBaseUrl"
-	>;
+	readonly agentDefaultRelayKeyPolicy?: AgentDefaultRelayKeyEndpointPolicyV1 &
+		Pick<
+			Parameters<typeof createAgentDefaultRelayKeyCandidatesV1>[0],
+			"templateBindings"
+		>;
 	/** Approved fixed billing profile and deployment-owned CA/TLS transport only. */
 	readonly personalRelayKeyValidation?: Parameters<
 		typeof createPersonalRelayKeyValidatorV1

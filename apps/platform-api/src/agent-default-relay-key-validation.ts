@@ -1,4 +1,5 @@
 import {
+	type AgentDefaultRelayKeyEndpointPolicyV1,
 	createAgentDefaultRelayKeyCandidateReaderV1,
 	createAgentDefaultRelayKeyModelVerifierV1,
 	type StandardTemplateModelBindingV1,
@@ -16,27 +17,31 @@ const verificationTimeoutMs = 120_000;
  * Assemble the approved Relay checks for the API write-only path: Key visibility
  * (`/models`) and save-time verification of every (model, level) pair.
  */
-export function createAgentDefaultRelayKeyCandidatesV1(input: {
-	readonly modelCatalog: {
-		readonly revision: string;
-		readonly load: (signal: AbortSignal) => Promise<unknown>;
-	};
-	/** 旧部署配置里的 `reasoningLevels` 兼容读取并忽略（ADR-0029）。 */
-	readonly templateBindings: readonly (StandardTemplateModelBindingV1 & {
-		readonly reasoningLevels?: readonly string[];
-	})[];
-	readonly relayEndpointId: string;
-	readonly relayBaseUrl: string;
-	readonly validation: Parameters<typeof createPersonalRelayKeyValidatorV1>[0];
-}): Required<
-	Pick<AgentDefaultRelayKeyDependenciesV1, "candidates" | "verify">
-> {
+export function createAgentDefaultRelayKeyCandidatesV1(
+	input: AgentDefaultRelayKeyEndpointPolicyV1 & {
+		readonly modelCatalog: {
+			readonly revision: string;
+			readonly load: (signal: AbortSignal) => Promise<unknown>;
+		};
+		/** 旧部署配置里的 `reasoningLevels` 兼容读取并忽略（ADR-0029）。 */
+		readonly templateBindings: readonly (StandardTemplateModelBindingV1 & {
+			readonly reasoningLevels?: readonly string[];
+		})[];
+		readonly validation: Parameters<
+			typeof createPersonalRelayKeyValidatorV1
+		>[0];
+	},
+): Required<Pick<AgentDefaultRelayKeyDependenciesV1, "candidates" | "verify">> {
 	const validate = createPersonalRelayKeyValidatorV1(input.validation);
 	const relay = {
 		modelCatalog: input.modelCatalog,
 		templateBindings: input.templateBindings,
-		relayEndpointId: input.relayEndpointId,
-		relayBaseUrl: input.relayBaseUrl,
+		...(input.relayEndpoints
+			? { relayEndpoints: input.relayEndpoints }
+			: {
+					relayEndpointId: input.relayEndpointId,
+					relayBaseUrl: input.relayBaseUrl,
+				}),
 		...(input.validation.fetch ? { fetch: input.validation.fetch } : {}),
 	};
 	const read = createAgentDefaultRelayKeyCandidateReaderV1({

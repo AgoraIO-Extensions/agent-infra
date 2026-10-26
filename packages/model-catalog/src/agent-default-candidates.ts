@@ -11,6 +11,22 @@ import {
 	standardTemplateModelBindingV1,
 } from "./projection.js";
 
+/** Deployment-approved Relay routes. The legacy fields remain supported for one route. */
+export type AgentDefaultRelayKeyEndpointPolicyV1 =
+	| {
+			readonly relayEndpoints: readonly Pick<
+				ModelEndpointV1,
+				"endpointId" | "baseUrl" | "protocol"
+			>[];
+			readonly relayEndpointId?: never;
+			readonly relayBaseUrl?: never;
+	  }
+	| {
+			readonly relayEndpoints?: undefined;
+			readonly relayEndpointId: string;
+			readonly relayBaseUrl: string;
+	  };
+
 /**
  * 标准模板对每个模型提供的推理档位（ADR-0030）：平台固定，不按模型、端点或模板登记。
  * 模型是否支持某个档位，由保存时的真实请求判定。
@@ -50,15 +66,34 @@ type DeploymentTemplateBindingV1 = StandardTemplateModelBindingV1 & {
 	readonly reasoningLevels?: readonly string[];
 };
 
-interface RelayInputV1 {
+type RelayInputV1 = AgentDefaultRelayKeyEndpointPolicyV1 & {
 	readonly modelCatalog: {
 		readonly revision: string;
 		readonly load: (signal: AbortSignal) => Promise<unknown>;
 	};
 	readonly templateBindings: readonly DeploymentTemplateBindingV1[];
-	readonly relayEndpointId: string;
-	readonly relayBaseUrl: string;
 	readonly fetch?: typeof fetch;
+};
+
+function trustedRelayEndpoints(input: AgentDefaultRelayKeyEndpointPolicyV1) {
+	if (input.relayEndpoints !== undefined) {
+		if (input.relayEndpointId !== undefined || input.relayBaseUrl !== undefined)
+			throw new Error("RELAY_ENDPOINT_POLICY_INVALID");
+		if (
+			input.relayEndpoints.length === 0 ||
+			new Set(input.relayEndpoints.map((endpoint) => endpoint.endpointId))
+				.size !== input.relayEndpoints.length
+		)
+			throw new Error("RELAY_ENDPOINT_POLICY_INVALID");
+		return input.relayEndpoints;
+	}
+	return [
+		{
+			endpointId: input.relayEndpointId,
+			baseUrl: input.relayBaseUrl,
+			protocol: undefined,
+		},
+	] as const;
 }
 
 function trustedBindings(bindings: readonly DeploymentTemplateBindingV1[]) {
@@ -71,6 +106,7 @@ function trustedBindings(bindings: readonly DeploymentTemplateBindingV1[]) {
 /** The deployment-approved Relay endpoint usable by this exact template/image. */
 async function relayEndpoints(
 	input: RelayInputV1,
+	approvedEndpoints: ReturnType<typeof trustedRelayEndpoints>,
 	bindings: readonly StandardTemplateModelBindingV1[],
 	source: Parameters<typeof standardTemplateModelBindingV1>[0],
 	signal: AbortSignal,
@@ -88,8 +124,13 @@ async function relayEndpoints(
 		binding,
 		endpoints: catalog.endpoints.filter(
 			(endpoint) =>
-				endpoint.endpointId === input.relayEndpointId &&
-				endpoint.baseUrl === input.relayBaseUrl &&
+				approvedEndpoints.some(
+					(approved) =>
+						approved.endpointId === endpoint.endpointId &&
+						approved.baseUrl === endpoint.baseUrl &&
+						(approved.protocol === undefined ||
+							approved.protocol === endpoint.protocol),
+				) &&
 				endpoint.available &&
 				endpoint.protocol === binding.protocol &&
 				endpoint.security.tls === "verify-peer",
@@ -174,6 +215,7 @@ export function createAgentDefaultRelayKeyCandidateReaderV1(
 	},
 ) {
 	const bindings = trustedBindings(structuredClone(input.templateBindings));
+	const approvedEndpoints = trustedRelayEndpoints(input);
 	const fetcher = input.fetch ?? globalThis.fetch;
 	return async function read(
 		keyValue: string,
@@ -187,6 +229,7 @@ export function createAgentDefaultRelayKeyCandidateReaderV1(
 		return modelOperationV1(signal, async () => {
 			const { endpoints } = await relayEndpoints(
 				input,
+				approvedEndpoints,
 				bindings,
 				configuration.source,
 				signal,
@@ -222,6 +265,7 @@ export function createAgentDefaultRelayKeyCandidateReaderV1(
  */
 export function createAgentDefaultRelayKeyModelVerifierV1(input: RelayInputV1) {
 	const bindings = trustedBindings(structuredClone(input.templateBindings));
+	const approvedEndpoints = trustedRelayEndpoints(input);
 	return async function verify(
 		keyValue: string,
 		configuration: {
@@ -234,7 +278,13 @@ export function createAgentDefaultRelayKeyModelVerifierV1(input: RelayInputV1) {
 		let resolved: Awaited<ReturnType<typeof relayEndpoints>>;
 		try {
 			resolved = await modelOperationV1(signal, () =>
-				relayEndpoints(input, bindings, configuration.source, signal),
+				relayEndpoints(
+					input,
+					approvedEndpoints,
+					bindings,
+					configuration.source,
+					signal,
+				),
 			);
 		} catch {
 			return "unavailable";

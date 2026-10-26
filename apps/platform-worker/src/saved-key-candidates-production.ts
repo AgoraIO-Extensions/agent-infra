@@ -4,6 +4,7 @@ import type {
 	RuntimeSavedKeyCandidatesResponseV1,
 } from "@agent-infra/contracts/runtime";
 import {
+	type AgentDefaultRelayKeyEndpointPolicyV1,
 	createAgentDefaultRelayKeyCandidateReaderV1,
 	createAgentDefaultRelayKeyModelVerifierV1,
 	createPersonalRelayKeyValidatorV1,
@@ -22,22 +23,24 @@ type Configuration = Parameters<
 >[1];
 
 /** Production Worker reader: Store authority, Worker keyring, and catalog stay local. */
-export function createProductionSavedKeyCandidatesReaderV1(input: {
-	readonly databaseUrl: string;
-	readonly decryptor: RelayKeyWorkerDecryptorV1;
-	readonly modelCatalog: {
-		readonly revision: string;
-		readonly load: (signal: AbortSignal) => Promise<unknown>;
-	};
-	/** 旧部署配置里的 `reasoningLevels` 兼容读取并忽略（ADR-0029）。 */
-	readonly templateBindings: readonly (StandardTemplateModelBindingV1 & {
-		readonly reasoningLevels?: readonly string[];
-	})[];
-	readonly relayEndpointId: string;
-	readonly relayBaseUrl: string;
-	readonly validation: Parameters<typeof createPersonalRelayKeyValidatorV1>[0];
-	readonly fetch?: typeof fetch;
-}): WorkerSavedKeyCandidatesReaderV1 & { close(): Promise<void> } {
+export function createProductionSavedKeyCandidatesReaderV1(
+	input: AgentDefaultRelayKeyEndpointPolicyV1 & {
+		readonly databaseUrl: string;
+		readonly decryptor: RelayKeyWorkerDecryptorV1;
+		readonly modelCatalog: {
+			readonly revision: string;
+			readonly load: (signal: AbortSignal) => Promise<unknown>;
+		};
+		/** 旧部署配置里的 `reasoningLevels` 兼容读取并忽略（ADR-0029）。 */
+		readonly templateBindings: readonly (StandardTemplateModelBindingV1 & {
+			readonly reasoningLevels?: readonly string[];
+		})[];
+		readonly validation: Parameters<
+			typeof createPersonalRelayKeyValidatorV1
+		>[0];
+		readonly fetch?: typeof fetch;
+	},
+): WorkerSavedKeyCandidatesReaderV1 & { close(): Promise<void> } {
 	const keyStore = new PostgresAgentDefaultRelayKeyStoreV1({
 		databaseUrl: input.databaseUrl,
 	});
@@ -48,8 +51,12 @@ export function createProductionSavedKeyCandidatesReaderV1(input: {
 	const relay = {
 		modelCatalog: input.modelCatalog,
 		templateBindings: input.templateBindings,
-		relayEndpointId: input.relayEndpointId,
-		relayBaseUrl: input.relayBaseUrl,
+		...(input.relayEndpoints
+			? { relayEndpoints: input.relayEndpoints }
+			: {
+					relayEndpointId: input.relayEndpointId,
+					relayBaseUrl: input.relayBaseUrl,
+				}),
 		...(input.fetch ? { fetch: input.fetch } : {}),
 	};
 	const candidateReader = createAgentDefaultRelayKeyCandidateReaderV1({
