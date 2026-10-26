@@ -133,9 +133,9 @@ async function readAgent(
 	let customCapability: ConversationTaskAdmissionStateV1["customCapability"] =
 		null;
 	// The verified Workload carries the Runtime-revision document, which may
-	// trail the current configuration on channels only (ADR-0028).
-	const runtimeConfiguration =
-		agent.runtimeConfiguration ?? agent.configuration;
+	// trail the current configuration on channels only (ADR-0028). Never fall
+	// back to the current document: without it there is no custom capability.
+	const runtimeConfiguration = agent.runtimeConfiguration;
 	// V3 只能是标准模板；自定义 Agent 始终是 V2 配置。
 	if (
 		runtimeConfiguration?.schemaVersion === 2 &&
