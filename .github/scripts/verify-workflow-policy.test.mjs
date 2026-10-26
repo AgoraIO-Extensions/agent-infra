@@ -162,6 +162,16 @@ test("defines the minimal native auto-merge enrollment workflow", async () => {
     "reopened",
     "ready_for_review",
   ]);
+  assert.deepEqual(workflow.on.pull_request_review.types, [
+    "submitted",
+    "edited",
+    "dismissed",
+  ]);
+  assert.deepEqual(workflow.on.pull_request_review_comment.types, [
+    "created",
+    "edited",
+    "deleted",
+  ]);
   assert.deepEqual(workflow.concurrency, {
     group: "auto-merge-${{ github.event.pull_request.number }}",
     "cancel-in-progress": true,

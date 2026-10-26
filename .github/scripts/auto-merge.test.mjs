@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  countUnresolvedReviewThreads,
   enrollPullRequest,
   evaluateAutoMergeEligibility,
+  unresolvedReviewThreadCount,
 } from "./auto-merge.mjs";
 
 function pullRequest(overrides = {}) {
@@ -20,11 +22,13 @@ function pullRequest(overrides = {}) {
 }
 
 function eligibility(action, overrides = {}) {
+  const { unresolvedReviewThreads, ...pullRequestOverrides } = overrides;
   return evaluateAutoMergeEligibility({
     action,
-    pullRequest: pullRequest(overrides),
+    pullRequest: pullRequest(pullRequestOverrides),
     repository: "example/agent-infra",
     defaultBranch: "main",
+    unresolvedReviewThreads,
   });
 }
 
@@ -52,6 +56,49 @@ test("rejects closed, draft, fork, and non-default-branch PRs", () => {
     eligibility("opened", { base: { ref: "release" } }).eligible,
     false,
   );
+});
+
+test("refuses auto-merge while review threads are unresolved", () => {
+  assert.deepEqual(eligibility("opened", { unresolvedReviewThreads: 1 }), {
+    eligible: false,
+    reason: "1 unresolved review thread",
+  });
+  assert.equal(
+    countUnresolvedReviewThreads([{ isResolved: false }, { isResolved: true }]),
+    1,
+  );
+});
+
+test("paginates review threads and counts only unresolved threads", async () => {
+  const calls = [];
+  const count = await unresolvedReviewThreadCount({
+    repository: "example/agent-infra",
+    number: 8,
+    request: async (path, options) => {
+      calls.push({ path, options });
+      const variables = JSON.parse(options.body).variables;
+      return {
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: variables.cursor
+                ? {
+                    nodes: [{ isResolved: false }],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  }
+                : {
+                    nodes: [{ isResolved: true }, { isResolved: false }],
+                    pageInfo: { hasNextPage: true, endCursor: "next" },
+                  },
+            },
+          },
+        },
+      };
+    },
+  });
+  assert.equal(count, 2);
+  assert.equal(calls.length, 2);
+  assert.equal(JSON.parse(calls[1].options.body).variables.cursor, "next");
 });
 
 test("treats an existing auto-merge request as an idempotent no-op", async () => {
