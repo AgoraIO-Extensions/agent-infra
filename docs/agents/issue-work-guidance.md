@@ -1,7 +1,7 @@
 # Issue 工作指导
 
 > 适用范围：`AgoraIO-Extensions/agent-infra` 当前开放 Issue。本文把实时清单转成可执行的分派规则；具体产品结论仍以 PRD、工程 Spec、HLD 和 Issue 正文为准。
-> 最近快照：2026-10-26；开放 Issue 54 个；主干 `6bb57c998`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
+> 最近快照：2026-10-27；开放 Issue 53 个；主干 `0015b97c5`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
 
 ## 四类工作边界
 
@@ -27,9 +27,9 @@
 
 | Agent lane | Primary Issue | 目标 | 禁止越界 |
 | --- | ---: | --- | --- |
-| Worker stale binding | [#3380](https://github.com/AgoraIO-Extensions/agent-infra/issues/3380) | 已提交 PR #3495，等待开发合入 | 不处理 AC/ACK |
-| Worker diagnostics | [#3428](https://github.com/AgoraIO-Extensions/agent-infra/issues/3428) | 已提交 PR #3479，等待开发合入 | 不处理 AC/真实验收 |
-| E2E Harness | [#3036](https://github.com/AgoraIO-Extensions/agent-infra/issues/3036) | 已提交 PR #3469，等待开发合入 | 不处理 AC/固定环境验收 |
+| Worker application outbox | [#3382](https://github.com/AgoraIO-Extensions/agent-infra/issues/3382) | 修复 pending application outbox 的选择、claim、排序和终态元数据，补 focused tests | 不处理 AC/ACK/真实验收 |
+| Runtime idle CPU | [#3303](https://github.com/AgoraIO-Extensions/agent-infra/issues/3303) | 定位并修复 idle ACP control-instance CPU burst，补回归测量 | 缺少可执行契约时只读 handoff，不伪造 PR |
+| Active development PRs | 已关闭 development Issues #3428/#3036；PR #3479/#3469 | 等待 Hosted checks 和开发合入；合入后保留 AC 待办 | 不处理真实验收 |
 
 三条 lane 的子 agent 都必须先在最新 `origin/main` 上复读 Issue；若发现 AC、依赖或 owner 不满足实现门槛，返回带证据的只读 handoff，不创建伪 PR。
 
