@@ -39,7 +39,8 @@
 | --- | --- | --- |
 | #3360 | PR 已提交，等待 hosted CI/review | [PR #3477](https://github.com/AgoraIO-Extensions/agent-infra/pull/3477)，最新 head 5771bd5；本地 observability 52、Worker 46、types/build/Biome 通过 |
 | #3428 | Draft PR 修复中，尚未宣称通过 | [PR #3479](https://github.com/AgoraIO-Extensions/agent-infra/pull/3479)，最新 head 866cdeb；本地 194 项聚焦测试、types/build 通过；Draft 等待 hosted 门禁 |
-| #3481 | PR 已提交，等待 hosted CI/review | [PR #3482](https://github.com/AgoraIO-Extensions/agent-infra/pull/3482)，冷目录与 24/24 focused evidence 已记录；Issue AC 仍需完整回读 |
+| #3481 | PR 已提交，等待 hosted CI/review；Scope 接线待作者回应 | [PR #3482](https://github.com/AgoraIO-Extensions/agent-infra/pull/3482)，冷目录与 24/24 focused evidence 已记录；local adapter/CPU 接线需明确 |
+| #2938 | 只读 blocker | 固定 context 无 Docker Hub 网络；官方 Go 1.26.7/toolchain 未缓存，未改集群或策略 |
 | #3472 | 既有 PR 跟进，不重复认领 | [PR #3473](https://github.com/AgoraIO-Extensions/agent-infra/pull/3473) |
 
 ## 分派与状态更新规则
