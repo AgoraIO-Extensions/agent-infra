@@ -13,6 +13,24 @@
 
 仓库由当前 Git remote 推断。
 
+## Agent provenance
+
+由 Agent 创建的 Issue 和 PR 必须：
+
+- 添加且仅添加一个来源标签：`agent:codex`、`agent:kiro`、`agent:claude` 或 `agent:dsh`。
+- 在正文中保留以下机器可读区块：
+
+  ```text
+  <!-- agent-provenance:start -->
+  Agent: codex
+  Agent-Session-ID: <opaque-session-id>
+  <!-- agent-provenance:end -->
+  ```
+
+`Agent` 必须与 `agent:*` 标签一致。`Agent-Session-ID` 仅用于追踪会话，不得填写
+Token、API Key、OAuth Secret 或用户会话正文。使用 `gh issue create` 或 `gh pr create`
+时显式传入对应 `--label`，并将该区块放入正文。
+
 ## Planning priority labels
 
 - `priority:P0`：M1 后端主链路或 P0 首发真实环境验收的必要前置。
