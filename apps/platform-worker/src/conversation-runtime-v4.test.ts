@@ -574,6 +574,60 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		},
 	);
 
+	it.each([
+		[
+			"supplement",
+			"cursor advance",
+			{ runtimeCursor: "cursor-advanced" },
+			true,
+		],
+		["submit", "cursor advance", { runtimeCursor: "cursor-advanced" }, false],
+		["supplement", "stop", { stopPending: true }, false],
+	] as const)(
+		"%s rechecks the fenced state across a concurrent %s before sending (#3445)",
+		async (operation, _change, change, sends) => {
+			// 对照：未变化时一次投递解析几次路由；最后一次属于发送前复核。
+			const control = runtimeV4Harness(operation);
+			let last = 0;
+			try {
+				await control.runtime.runtimeHost.dispatch(
+					control.request(await control.authorize()),
+				);
+				last = control.resolveRuntimeHost.mock.calls.length;
+			} finally {
+				control.runtime.close();
+			}
+			expect(last).toBeGreaterThan(1);
+			const h = runtimeV4Harness(operation);
+			try {
+				const reference = await h.authorize();
+				const before = h.resolveRuntimeHost.mock.calls.length;
+				const resolve = h.resolveRuntimeHost.getMockImplementation();
+				h.resolveRuntimeHost.mockImplementation(async (input) => {
+					const target = await resolve?.(input);
+					// 发送前复核解析路由时，原 Turn 的排空已提交事件（或 stop 已受理）。
+					if (h.resolveRuntimeHost.mock.calls.length - before === last)
+						Object.assign(h.state, change);
+					return target as never;
+				});
+				const dispatched = h.runtime.runtimeHost.dispatch(h.request(reference));
+				if (sends) {
+					await expect(dispatched).resolves.toMatchObject({
+						operationId: "message",
+					});
+					expect(h.fetcher).toHaveBeenCalled();
+				} else {
+					await expect(dispatched).rejects.toMatchObject({
+						code: expect.stringMatching(/^RUNTIME_(FENCE|ROUTE)_STALE$/),
+					});
+					expect(h.fetcher).not.toHaveBeenCalled();
+				}
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
+
 	it("sends an attachment-only message without an empty body (#3227)", async () => {
 		const h = runtimeV4Harness("submit");
 		try {

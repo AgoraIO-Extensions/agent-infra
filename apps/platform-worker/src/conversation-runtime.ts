@@ -808,7 +808,11 @@ export function createConversationRuntimeV2(
 		}
 		// The last await revalidates the owned lease/fence after directory and route waits.
 		const fenced = await stateFor(prepared.context, signal);
-		if (!isDeepStrictEqual(fenced, prepared.state))
+		// #3445：补充指令与原 Turn 的事件排空是两个 outbox item，排空提交事件会并发推进 Runtime
+		// 游标；补充指令不读取事件，只忽略游标的变化，其他字段仍逐一复核。
+		const comparable = (value: ConversationRuntimeStateV2) =>
+			command === "turn.supplement" ? { ...value, runtimeCursor: null } : value;
+		if (!isDeepStrictEqual(comparable(fenced), comparable(prepared.state)))
 			unavailable("RUNTIME_FENCE_STALE");
 		signal.throwIfAborted();
 		if (routeObservedAt !== undefined)
