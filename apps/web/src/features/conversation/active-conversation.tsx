@@ -868,9 +868,19 @@ export function ActiveConversation({
 		!capabilityExecution &&
 		stopping !== latestExecution &&
 		!queueWaiting;
+	// 刚因排队已满被拒（AGENT_BUSY）且草稿仍是被拒的那条时，「排队已满」提示就是这条消息的结果，
+	// 不再同时预告「发送后进入排队」；下一次发送或改写草稿后恢复原规则（#3457 B16-2）。
+	const queueFullShown =
+		command.result?.kind === "rejected" &&
+		command.result.code === "AGENT_BUSY" &&
+		!command.isPending &&
+		sentText.current === draft;
 	// 排队说明只在草稿非空时作为发送按钮的说明出现（R4-07、AC-7）。
 	const queueOnSend =
-		(active || queueWaiting) && !supplementExpected && Boolean(draft.trim());
+		(active || queueWaiting) &&
+		!supplementExpected &&
+		!queueFullShown &&
+		Boolean(draft.trim());
 	const stopControl =
 		active && latestExecution
 			? {
@@ -1174,7 +1184,8 @@ export function ActiveConversation({
 					draftDisabled={draftLocked}
 					draftBusy={commandLocked && !draftLocked}
 					submitReady={submitReady}
-					invokeReady={!active}
+					// 原生命令与 Skill 不进入排队：有当前回复或排队消息时不提供入口（F3-06、§12.5，#3457 B16-1）。
+					invokeReady={!active && !queueWaiting}
 					sendLabel={supplementExpected ? "发送补充指令" : "发送"}
 					capability={capability}
 					skillControlFiles={{
