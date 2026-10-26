@@ -449,6 +449,13 @@
       "when": 1792896733828,
       "tag": "0067_configuration_runtime_revision",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1792896793828,
+      "tag": "0068_database_jit_off",
+      "breakpoints": true
     }
   ]
 }
