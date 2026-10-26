@@ -2194,6 +2194,32 @@ html {
 	justify-content: space-between;
 	gap: 8px 12px;
 }
+.execution-progress-list {
+	display: grid;
+	margin-top: 12px;
+	border-top: 1px solid var(--border);
+}
+.execution-progress-list > li {
+	display: grid;
+	grid-template-columns: 92px minmax(0, 1fr) auto;
+	align-items: baseline;
+	gap: 8px 12px;
+	min-width: 0;
+	padding: 11px 0;
+	border-bottom: 1px solid var(--border);
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+.execution-progress-list > li > strong {
+	font-weight: 650;
+}
+.execution-progress-list > li.execution-progress-item > span,
+.execution-progress-list > li.execution-progress-item > time {
+	color: var(--muted-foreground);
+}
+.execution-progress-list > li.execution-progress-item > time {
+	font-size: 12px;
+}
 .execution-detail-list {
 	display: grid;
 	gap: 10px;
@@ -2267,6 +2293,11 @@ html {
 	}
 	.conversation-facts dd {
 		margin-bottom: 4px;
+	}
+	.execution-progress-list > li {
+		grid-template-columns: 82px minmax(0, 1fr) auto;
+		gap: 6px 8px;
+		padding-block: 10px;
 	}
 }
 @media (max-width: 1023px) {

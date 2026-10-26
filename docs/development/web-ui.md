@@ -14,16 +14,17 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `index.html` | `6c3e21d9d1051ad4eff91c12ab51ec3e672bdd2b689deeaf2a4146d8c3f81760` |
+| `index.html` | `65bdaf3d5b6a072e63abdc391ec5a93530755f6419a07ccd27c53d56451541e5` |
 | `login.html` | `733d31e999296d2ed8e21f0237004427eac104cefd7c4c55cde6e3e87240641a` |
-| `DESIGN.md` | `52569abee3609f691201858c989e255b5bfb6a7de5611fe7b1d1276bf98ae773` |
-| `IMPLEMENTATION.md` | `fbe87e3ec283022c5de94c0a1becab8c2b30aca065b4d95ef081cb2d074f5ea5` |
-| `DESIGN-HANDOFF.md` | `22edcb82c033aac7819a5551f698600b056cb696803c81fb1c303d323615c1e2` |
-| `DESIGN-MANIFEST.json` | `87e3e7c706f08237dfefc66fad153ae50e70152600c5b01523d38e88dfb36cb1` |
+| `DESIGN.md` | `0439f45924cf0ee110a2ee793a4b5b95d4aa0278d6fb19660069fe66c2df2b51` |
+| `IMPLEMENTATION.md` | `794a51ebae348655e15283497744261916fe6725b55b2f992b84d83da54a3557` |
+| `DESIGN-HANDOFF.md` | `c6a3b8ea06a10df8335a55255dc316f1b947c6acdc75bd03249eb23f7931ffe9` |
+| `DESIGN-MANIFEST.json` | `2afb4dc8174a51e916fa72e958525559cd8078216d7ba21ee161649cc9d1d96a` |
 
 2026-10-26 增量回写补充了执行详情与恢复的代表态：受理、等待、工具与模型事实、耗时、Connection
-关联、停止请求、结果待核实和恢复失败。补充指令排队与自定义镜像升级沿用已有代表态和本节回写边界，
-不逐一扩展同类变体；1440×900 与 390×844 的实际浏览器回读仍以 Web 验证为准。
+关联、停止请求、结果待核实和恢复失败。执行详情的模型与工具调用事实、Connection 安装折叠区及其恢复状态
+也已纳入 canonical 结构。补充指令排队与自定义镜像升级沿用已有代表态和本节回写边界，不逐一扩展同类变体；
+1440×900 与 390×844 的实际浏览器回读仍以 Web 验证为准。
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量，并提供设计同名别名（`--bg`、`--fg`、`--surface-raised`、`--accent`、

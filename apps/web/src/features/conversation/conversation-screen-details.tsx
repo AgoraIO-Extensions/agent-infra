@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/dialog";
 import { IdentifierText } from "@/components/ui/identifier-text";
 import { LoadingLine } from "@/components/ui/spinner";
-import { Timestamp } from "@/components/ui/timestamp";
 import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 import type { ChipTone } from "@/lib/status-tone";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
@@ -165,6 +164,23 @@ export function executionConnectionSummary(data: ExecutionDetailProjectionV2) {
 		: "未采集";
 }
 
+/** 总耗时只在起止时间都由服务端确认时展示；未知或不完整时不推测。 */
+export function executionDurationSummary(data: ExecutionDetailProjectionV2) {
+	if (!data.startedAt || !data.finishedAt) return "未知";
+	const durationMs = Date.parse(data.finishedAt) - Date.parse(data.startedAt);
+	if (!Number.isFinite(durationMs) || durationMs < 0) return "未采集";
+	if (durationMs < 1000) return `${durationMs} ms`;
+	return `${Math.round(durationMs / 1000)} 秒`;
+}
+
+/** 顶部只显示最近一条已回读工具事实，详细阶段仍在调用事实区展示。 */
+export function executionToolSummary(data: ExecutionDetailProjectionV2) {
+	const fact = operationFacts(data.events).findLast(
+		(event) => event.payload.kind === "tool",
+	);
+	return fact?.payload.kind === "tool" ? toolName(fact.payload) : "未采集";
+}
+
 /** 本次执行确实需要 Connection 授权时，安装区默认展开。 */
 function needsConnectionAuthorization(data: ExecutionDetailProjectionV2) {
 	return (
@@ -178,21 +194,43 @@ function needsConnectionAuthorization(data: ExecutionDetailProjectionV2) {
 	);
 }
 
-function summaryText(
+function summaryTitle(
+	item: ExecutionDetailProjectionV2["processSummary"][number],
+) {
+	switch (item.kind) {
+		case "status":
+			return {
+				submitted: "受理",
+				processing: "执行中",
+				completed: "状态核实",
+				failed: "失败",
+				cancelled: "已停止",
+				unknown: "待核实",
+			}[item.status];
+		case "model_call":
+			return "模型响应";
+		case "connection_call":
+			return "工具调用";
+		default:
+			return "过程摘要";
+	}
+}
+
+function summaryDetail(
 	item: ExecutionDetailProjectionV2["processSummary"][number],
 	options: readonly ExecutionModelOption[],
 ) {
 	switch (item.kind) {
 		case "status":
-			return executionStatusLabels[item.status];
+			return /^Execution (submitted|processing|completed|failed|cancelled|unknown)\.$/.test(
+				item.summary,
+			)
+				? executionStatusLabels[item.status]
+				: item.summary;
 		case "model_call":
-			return `模型调用 · ${modelName(options, { modelId: item.modelId })} · ${
-				item.status === "succeeded" ? "成功" : "失败"
-			}`;
+			return `${modelName(options, { modelId: item.modelId })} · ${item.status === "succeeded" ? "已回读结果" : "失败"}`;
 		case "connection_call":
-			return `Connection 调用 · ${item.accountDisplay} · ${
-				item.status === "succeeded" ? "成功" : "失败"
-			}`;
+			return `${item.accountDisplay} · ${item.status === "succeeded" ? "已回读结果" : "失败"}`;
 		default:
 			return item.summary;
 	}
@@ -208,17 +246,15 @@ function ProcessSummary({
 	if (!data.processSummary.length)
 		return <p className="text-muted-foreground">尚无过程摘要。</p>;
 	return (
-		<ul className="execution-detail-list">
+		<ul className="execution-progress-list">
 			{data.processSummary.map((item, index) => (
-				<li key={`${item.occurredAt}-${index}`}>
-					<p>{summaryText(item, options)}</p>
-					<p className="execution-detail-meta">
-						{item.kind === "agent_summary"
-							? "Agent 提供的摘要"
-							: "Platform 记录"}
-						{" · "}
-						<Timestamp value={item.occurredAt} />
-					</p>
+				<li
+					className="execution-progress-item"
+					key={`${item.occurredAt}-${index}`}
+				>
+					<strong>{summaryTitle(item)}</strong>
+					<span>{summaryDetail(item, options)}</span>
+					<time>已记录</time>
 				</li>
 			))}
 		</ul>
@@ -507,24 +543,12 @@ function ExecutionDetailBody({
 						{executionStatusLabels[data.status]}
 					</Badge>
 				</dd>
+				<dt>耗时</dt>
+				<dd>{executionDurationSummary(data)}</dd>
 				<dt>Connection</dt>
 				<dd>{executionConnectionSummary(data)}</dd>
-				<dt>开始时间</dt>
-				<dd>
-					{data.startedAt ? (
-						<Timestamp value={data.startedAt} style="absolute" />
-					) : (
-						"未提供"
-					)}
-				</dd>
-				<dt>结束时间</dt>
-				<dd>
-					{data.finishedAt ? (
-						<Timestamp value={data.finishedAt} style="absolute" />
-					) : (
-						"尚未确认结束"
-					)}
-				</dd>
+				<dt>工具</dt>
+				<dd>{executionToolSummary(data)}</dd>
 			</dl>
 			{data.error && (
 				<Alert tone="danger" role="alert" className="execution-detail-section">
