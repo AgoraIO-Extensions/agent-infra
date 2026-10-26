@@ -31,7 +31,6 @@
 | Diagnostics | [#3428](https://github.com/AgoraIO-Extensions/agent-infra/issues/3428) | 完成多服务有界脱敏诊断并处理 review | 不改变健康状态机 |
 | Directory Deployment | [#3481](https://github.com/AgoraIO-Extensions/agent-infra/issues/3481) | 完成共享 timeout、部署 adapter 和本地 CPU 接线 | 不把真实环境观察代替代码/部署验收 |
 
-
 三条 lane 的子 agent 都必须先在最新 `origin/main` 上复读 Issue；若发现 AC、依赖或 owner 不满足实现门槛，返回带证据的只读 handoff，不创建伪 PR。
 
 ## 分派与状态更新规则
