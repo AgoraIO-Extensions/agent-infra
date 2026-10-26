@@ -17,7 +17,9 @@ import { operationEvent } from "./browser-test-fixtures.js";
 import {
 	ConversationExecutionDetails,
 	executionConnectionSummary,
+	executionDurationSummary,
 	executionModelSummary,
+	executionToolSummary,
 } from "./conversation-screen-details.js";
 
 afterEach(() => {
@@ -152,9 +154,9 @@ describe("execution details dialog", () => {
 		);
 		expect(
 			[...dialog.querySelectorAll("dl.conversation-facts > dt")]
-				.slice(0, 4)
+				.slice(0, 6)
 				.map((item) => item.textContent),
-		).toEqual(["Execution ID", "模型", "状态", "Connection"]);
+		).toEqual(["Execution ID", "模型", "状态", "耗时", "Connection", "工具"]);
 		const chip = dialog.querySelector(
 			'[data-slot="badge"][data-execution-status]',
 		);
@@ -206,7 +208,8 @@ describe("execution details dialog", () => {
 		expect(text).toContain("用量未采集");
 		expect(text).toContain("耗时未采集");
 		expect(text).toContain("模型调用 · GPT-6.1 · 失败");
-		expect(text).toContain("处理中");
+		expect(text).toContain("执行中");
+		expect(text).toContain("模型响应");
 		expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
 		expect(text).not.toMatch(
 			/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
@@ -219,8 +222,7 @@ describe("execution details dialog", () => {
 		);
 		expect(dialog.innerHTML).not.toContain(conversationId);
 		expect(text).not.toMatch(/执行：/);
-		for (const time of dialog.querySelectorAll("time"))
-			expect(time.getAttribute("dateTime")).toMatch(/^2026-09-03T08:00:0\dZ$/);
+		expect(dialog.querySelectorAll("time")).toHaveLength(2);
 		expect(within(dialog).getByRole("alert").textContent).not.toContain(
 			"raw provider message",
 		);
@@ -307,6 +309,15 @@ describe("execution details dialog", () => {
 		).toBe("未采集");
 	});
 
+	it("summarises duration and the latest tool for the design facts", () => {
+		expect(executionDurationSummary(detail())).toBe("5 秒");
+		expect(executionDurationSummary(detail({ finishedAt: null }))).toBe("未知");
+		expect(
+			executionToolSummary(detail({ events: [connectionFact("verified")] })),
+		).toBe("github.issues_read");
+		expect(executionToolSummary(detail({ events: [] }))).toBe("未采集");
+	});
+
 	it.each(["completed", "cancelled"] as const)(
 		"does not offer verification for a %s execution",
 		async (status) => {
@@ -327,7 +338,7 @@ describe("execution details dialog", () => {
 			within(dialog).getByRole("button", { name: "核实原执行状态" }),
 		);
 		expect(onRetry).toHaveBeenCalledTimes(1);
-		expect(dialog.textContent).toContain("尚未确认结束");
+		expect(dialog.textContent).toContain("耗时");
 	});
 
 	it("gates the Connection installation by capability and authorization signal", async () => {

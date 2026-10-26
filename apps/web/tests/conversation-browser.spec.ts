@@ -1053,12 +1053,14 @@ test("opens execution details as a modal dialog that traps focus (R4-09, N-08, N
 			"fontWeight",
 		]),
 	).toEqual({ fontSize: "19px", fontWeight: "620" });
-	await expect(dialog.locator("dl.conversation-facts > dt").nth(0)).toHaveText(
+	await expect(dialog.locator("dl.conversation-facts > dt")).toHaveText([
 		"Execution ID",
-	);
-	await expect(dialog.locator("dl.conversation-facts > dt").nth(3)).toHaveText(
+		"模型",
+		"状态",
+		"耗时",
 		"Connection",
-	);
+		"工具",
+	]);
 	// Z-15：工具调用事实按 browser-labels 映射显示「打开页面」，不外露 browser_navigate。
 	await expect(dialog).toContainText("工具调用 · 打开页面 · 已完成");
 	expect(await dialog.innerText()).not.toContain("browser_");

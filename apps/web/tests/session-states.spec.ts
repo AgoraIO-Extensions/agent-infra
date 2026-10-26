@@ -792,6 +792,10 @@ async function sessionLostOnDirectory(
 	await expect(
 		page.getByRole("heading", { level: 1, name: "选择要使用的 Agent。" }),
 	).toBeVisible();
+	// 标题先于目录结果出现；首次读取未结束时，focus 重读会复用仍在进行的请求。
+	await expect(
+		page.getByRole("link", { name: `查看 ${agent.name} 详情`, exact: true }),
+	).toBeVisible();
 	set.agents({ status: 401 });
 	await backgroundReread(page);
 	const login = page.locator(
