@@ -34,8 +34,23 @@ test("validation plan selects code, workflow, and deploy checks", () => {
 	assert.ok(plan.required.includes("pnpm check"));
 	assert.ok(plan.required.includes("pnpm check-types"));
 	assert.ok(plan.required.includes("focused tests for changed modules"));
+	assert.ok(plan.required.includes("pnpm build"));
+	assert.ok(plan.required.includes("pnpm smoke"));
 	assert.ok(plan.required.includes("workflow policy and actionlint"));
 	assert.ok(plan.required.includes("pnpm docker:build"));
+});
+
+test("validation plan keeps Markdown checks for mixed changes", () => {
+	const plan = validationPlan(
+		["AGENTS.md", "packages/example/src/index.ts"],
+		sourceSha,
+	);
+	assert.ok(plan.required.includes("markdownlint"));
+	assert.ok(plan.required.includes("markdown-link-check"));
+	assert.equal(
+		plan.skipped.some((entry) => entry.command === "markdownlint"),
+		false,
+	);
 });
 
 test("worktree verification rejects a stale HEAD", async () => {

@@ -66,6 +66,9 @@ export function validationPlan(files, sourceSha) {
 		names.every((file) =>
 			/^(README\.md|AGENTS\.md|\.github\/.*\.md|docs\/.*\.md)$/.test(file),
 		);
+	const markdownChanged = names.some((file) =>
+		/^(README\.md|AGENTS\.md|\.github\/.*\.md|docs\/.*\.md)$/.test(file),
+	);
 	const workflowChanged = names.some(
 		(file) =>
 			file.startsWith(".github/workflows/") ||
@@ -83,14 +86,24 @@ export function validationPlan(files, sourceSha) {
 	);
 	const required = new Set(["git diff --check"]);
 	const skipped = [];
-	if (docsOnly) {
+	if (markdownChanged) {
 		required.add("markdownlint");
 		required.add("markdown-link-check");
 	} else {
+		for (const command of ["markdownlint", "markdown-link-check"]) {
+			skipped.push({
+				command,
+				reason: "no checked Markdown files changed",
+			});
+		}
+	}
+	if (!docsOnly) {
 		if (codeChanged || dependencyChanged) {
 			required.add("pnpm check");
 			required.add("pnpm check-types");
 			required.add("focused tests for changed modules");
+			required.add("pnpm build");
+			required.add("pnpm smoke");
 		} else
 			skipped.push({
 				command: "pnpm check-types",
@@ -108,11 +121,12 @@ export function validationPlan(files, sourceSha) {
 				command: "workflow policy and actionlint",
 				reason: "no workflow or GitHub script changed",
 			});
-		if (deployChanged) required.add("pnpm docker:build");
+		if (deployChanged || codeChanged || dependencyChanged)
+			required.add("pnpm docker:build");
 		else
 			skipped.push({
 				command: "pnpm docker:build",
-				reason: "no deploy or container input changed",
+				reason: "no deploy, application, package, test, or dependency changes",
 			});
 	}
 	return { sourceSha, files: names, required: [...required], skipped };
