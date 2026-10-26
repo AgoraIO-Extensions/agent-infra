@@ -8,6 +8,7 @@ import type {
 	KubernetesObject,
 	V1ConfigMap,
 	V1Deployment,
+	V1Endpoints,
 	V1Job,
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
@@ -1091,10 +1092,86 @@ describe("multi-service runtime operations", () => {
 		}
 	});
 
-	it("runs a migration Job before services and reuses its completed result", async () => {
+	it("emits bounded diagnostics for readiness and endpoint failures", async () => {
 		const fake = fakeClient();
+		const diagnostics: unknown[] = [];
 		const operations = createMultiServiceRuntimeOperations({
 			client: fake.client,
+			policy: { ...basePolicy, storageSize: "1Gi" },
+			onHealthDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+		});
+		const value = desired();
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		const identity = await operations.apply(value);
+		await operations.observe(value, identity);
+		expect(diagnostics[0]).toMatchObject({
+			schemaVersion: 1,
+			agentId: "agent-a",
+			stage: "workload_not_ready",
+		});
+		expect(
+			(
+				diagnostics[0] as { workloads: { kind: string; name: string }[] }
+			).workloads.some(
+				(entry) => entry.kind === "Deployment" && entry.name.endsWith("-web"),
+			),
+		).toBe(true);
+		markWorkloadsReady(fake);
+		fake.resources.set(`Endpoints/${workloadResourceNameV1("agent-a")}-web`, {
+			apiVersion: "v1",
+			kind: "Endpoints",
+			metadata: { name: `${workloadResourceNameV1("agent-a")}-web` },
+			subsets: [{ addresses: [] }],
+		} as V1Endpoints);
+		diagnostics.length = 0;
+		expect(await operations.observe(value, identity)).toBe("healthy");
+		expect(diagnostics[0]).toMatchObject({ stage: "service_no_endpoints" });
+		expect(
+			(
+				diagnostics[0] as {
+					services: { name: string; endpointAddresses: number }[];
+				}
+			).services.some(
+				(entry) => entry.name.endsWith("-web") && entry.endpointAddresses === 0,
+			),
+		).toBe(true);
+	});
+
+	it("keeps health unchanged when the optional Endpoints diagnostic read is denied", async () => {
+		const fake = fakeClient();
+		const diagnostics: unknown[] = [];
+		const read = fake.client.read.bind(fake.client);
+		const client = {
+			...fake.client,
+			read: async <T extends KubernetesObject>(
+				kind: Parameters<typeof fake.client.read>[0],
+				name: string,
+			): Promise<T | null> => {
+				if (kind === "Endpoints") throw new Error("forbidden");
+				return (await read(kind, name)) as T | null;
+			},
+		};
+		const operations = createMultiServiceRuntimeOperations({
+			client,
+			policy: { ...basePolicy, storageSize: "1Gi" },
+			onHealthDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+		});
+		const value = desired();
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		const identity = await operations.apply(value);
+		markWorkloadsReady(fake);
+		expect(await operations.observe(value, identity)).toBe("healthy");
+		expect(diagnostics.at(-1)).toMatchObject({ stage: "healthy" });
+	});
+
+	it("runs a migration Job before services and reuses its completed result", async () => {
+		const fake = fakeClient();
+		const diagnostics: unknown[] = [];
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			onHealthDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
 			policy: {
 				namespace: "agents",
 				multiServiceResourceProfiles: [smallProfile],
@@ -1119,6 +1196,10 @@ describe("multi-service runtime operations", () => {
 			),
 		).toBe(false);
 		expect(await operations.observe(value, identity)).toBe("unreachable");
+		expect(diagnostics.at(-1)).toMatchObject({
+			stage: "migration_pending",
+			agentId: "agent-a",
+		});
 		if (!job) throw new Error("migration Job fixture missing");
 		job.status = { succeeded: 1 };
 		expect(await operations.observe(value, identity)).toBe("drifted");
