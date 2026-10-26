@@ -14,6 +14,7 @@ import {
 	parseDnsForward,
 	selectPlatformManifest,
 } from "./runtime-material.mjs";
+import { cachedWorkerDigest, workerInputHash } from "./harness-image-cache.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const stateRoot = resolve(
@@ -152,6 +153,42 @@ function syncSource() {
 	return { ...upstream, sha };
 }
 
+const sourcePinPath = join(stateRoot, "source-pin.json");
+
+async function saveSourcePin(source) {
+	await mkdir(stateRoot, { recursive: true });
+	await writeFile(
+		sourcePinPath,
+		`${JSON.stringify({ ...source, repositoryRoot }, null, 2)}\n`,
+	);
+}
+
+async function readSourcePin() {
+	try {
+		const pin = JSON.parse(await readFile(sourcePinPath, "utf8"));
+		if (pin.repositoryRoot !== repositoryRoot) {
+			fail(`Source pin belongs to another worktree: ${pin.repositoryRoot}`);
+		}
+		if (!pin.sha || !pin.branch || !pin.upstream) fail("Source pin is invalid");
+		return pin;
+	} catch (error) {
+		if (error instanceof SyntaxError) fail("Source pin is invalid JSON");
+		if (error instanceof Error && error.message.startsWith("Source pin")) throw error;
+		return null;
+	}
+}
+
+async function resolveSource(action) {
+	const refresh = action === "sync" || action === "all";
+	if (!refresh) {
+		const pinned = await readSourcePin();
+		if (pinned) return pinned;
+	}
+	const source = syncSource();
+	await saveSourcePin(source);
+	return { ...source, repositoryRoot };
+}
+
 async function cleanContext(sha) {
 	await mkdir(stateRoot, { recursive: true });
 	const directory = await mkdtemp(join(stateRoot, "context-"));
@@ -212,7 +249,11 @@ function pullDigest(repository, sha) {
 	const digest =
 		readImageDigest(tag) ?? readImageDigest(`${repository}:${sha}`);
 	if (!digest) return null;
-	docker(["pull", `${repository}@${digest}`]);
+	if (!tryDocker(["image", "inspect", `${repository}@${digest}`])) {
+		docker(["pull", `${repository}@${digest}`]);
+	} else {
+		console.log(`Image cache hit ${repository}@${digest}`);
+	}
 	return { repository, digest };
 }
 
@@ -363,6 +404,19 @@ async function buildPlatformImages(source) {
 		buildHosts.map(async (host) => [host, (await dns.lookup(host)).address]),
 	);
 	const proxy = process.env.E2E_HARNESS_BUILD_PROXY ?? "http://host.lima.internal:7892";
+	const workerInput = workerInputHash([
+		...[
+			"apps/platform-worker",
+			"apps/platform-worker/Dockerfile",
+			"packages",
+			"package.json",
+			"pnpm-lock.yaml",
+			"pnpm-workspace.yaml",
+		].map((path) => ({ path, content: git(["rev-parse", `${source.sha}:${path}`]) })),
+	]);
+	const workerCache = await readWorkerCache();
+	const cached = cachedWorkerDigest(workerCache, workerInput);
+	let workerBinding = cached;
 	try {
 		for (const [service, dockerfile] of [
 			["web", "apps/web/Dockerfile"],
@@ -370,6 +424,10 @@ async function buildPlatformImages(source) {
 			["platform-worker", "apps/platform-worker/Dockerfile"],
 			["enterprise-directory-sync", "apps/enterprise-directory-sync/Dockerfile"],
 		]) {
+			if (service === "platform-worker" && cached) {
+				console.log(`Worker image cache hit input=${workerInput}`);
+				continue;
+			}
 			const args = [
 				"build",
 				"--network",
@@ -401,15 +459,103 @@ async function buildPlatformImages(source) {
 				"--file",
 				join(context, dockerfile),
 				"--tag",
-				`agent-infra-e2e-${service}`,
+				service === "platform-worker"
+					? `agent-infra-e2e-${service}:${workerInput}`
+					: `agent-infra-e2e-${service}`,
 				context,
 			];
 			docker(args, { stdio: "inherit" });
 		}
+		if (!workerBinding) {
+			workerBinding = await publishWorkerImage(
+				`agent-infra-e2e-platform-worker:${workerInput}`,
+				workerInput,
+			);
+			const existing = workerCache.worker?.[workerInput];
+			if (existing && existing.digest !== workerBinding.digest)
+				fail(`Worker image is not reproducible for input ${workerInput}`);
+		}
+		await saveWorkerCache(workerInput, workerBinding);
 		await buildPrivateDeploymentOverlays();
 	} finally {
 		await rm(context, { recursive: true, force: true });
 	}
+}
+
+async function readWorkerCache() {
+	try {
+		return JSON.parse(await readFile(join(stateRoot, "worker-image-cache.json"), "utf8"));
+	} catch {
+		return { schemaVersion: 1, worker: {} };
+	}
+}
+
+async function saveWorkerCache(inputHash, binding) {
+	const cache = await readWorkerCache();
+	cache.schemaVersion = 1;
+	cache.worker ??= {};
+	cache.worker[inputHash] = binding;
+	await mkdir(stateRoot, { recursive: true });
+	await writeFile(join(stateRoot, "worker-image-cache.json"), `${JSON.stringify(cache, null, 2)}\n`);
+	await writeWorkerValuesOverlay(inputHash, binding);
+}
+
+async function readWorkerValues() {
+	const { parse } = await import("yaml");
+	const path = requiredAbsoluteEnv("PLATFORM_LOCAL_WORKER_VALUES");
+	const values = parse(await readFile(path, "utf8"));
+	const repository = values?.images?.platformWorker?.repository;
+	if (typeof repository !== "string" || !repository) {
+		fail("Worker values must name images.platformWorker.repository");
+	}
+	return { path, values, repository };
+}
+
+async function publishWorkerImage(localTag, inputHash) {
+	const { repository } = await readWorkerValues();
+	const tag = `${repository}:e2e-${inputHash}`;
+	docker(["tag", localTag, tag]);
+	docker(["push", tag], { stdio: "inherit" });
+	const digest = readImageDigest(tag);
+	if (!digest) fail(`Worker image digest was not published for ${tag}`);
+	return { repository, digest, inputHash };
+}
+
+async function writeWorkerValuesOverlay(inputHash, binding) {
+	const { values } = await readWorkerValues();
+	values.images ??= {};
+	values.images.platformWorker = {
+		...(values.images.platformWorker ?? {}),
+		repository: binding.repository,
+		digest: binding.digest,
+	};
+	const { stringify } = await import("yaml");
+	const path = join(stateRoot, `worker-values-${inputHash}.yaml`);
+	await writeFile(path, stringify(values));
+	await writeFile(
+		join(stateRoot, `platform-images-${inputHash}.json`),
+		`${JSON.stringify({ schemaVersion: 1, worker: binding, valuesPath: path }, null, 2)}\n`,
+	);
+	process.env.PLATFORM_LOCAL_WORKER_VALUES = path;
+}
+
+async function applyWorkerBinding(source) {
+	const workerInput = workerInputHash([
+		...[
+			"apps/platform-worker",
+			"apps/platform-worker/Dockerfile",
+			"packages",
+			"package.json",
+			"pnpm-lock.yaml",
+			"pnpm-workspace.yaml",
+		].map((path) => ({ path, content: git(["rev-parse", `${source.sha}:${path}`]) })),
+	]);
+	const manifest = JSON.parse(
+		await readFile(join(stateRoot, `platform-images-${workerInput}.json`), "utf8"),
+	);
+	if (manifest.worker?.inputHash !== workerInput || !manifest.valuesPath)
+		fail(`Worker binding is missing for source ${source.sha}`);
+	process.env.PLATFORM_LOCAL_WORKER_VALUES = manifest.valuesPath;
 }
 
 async function buildPrivateDeploymentOverlays() {
@@ -686,9 +832,9 @@ async function main() {
 		return;
 	}
 	if (action !== "sync") assertFixedEnvironment();
-	const release = action === "sync" ? async () => {} : await acquireLock();
+	const release = await acquireLock();
 	try {
-		const source = syncSource();
+		const source = await resolveSource(action);
 		console.log(`E2E sourceRevision=${source.sha} upstream=${source.upstream}`);
 		if (action === "sync") return;
 		if (["images", "all"].includes(action)) {
@@ -698,6 +844,7 @@ async function main() {
 			applyRuntimeBinding(await readInfrastructureManifest(source));
 		}
 		if (["build", "all"].includes(action)) await buildPlatformImages(source);
+		if (["deploy", "verify"].includes(action)) await applyWorkerBinding(source);
 		if (["deploy", "all"].includes(action)) {
 			platformScript("data");
 			platformScript("migrate");
@@ -705,7 +852,8 @@ async function main() {
 			await provisionRuntimeMaterial();
 			platformScript("up");
 		}
-		if (["verify", "all"].includes(action)) platformScript("status");
+		if (["verify", "all"].includes(action))
+			process.stdout.write(platformScript("status"));
 	} finally {
 		await release();
 	}

@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
-
+import {
+	cachedWorkerDigest,
+	workerInputHash,
+} from "../deploy/local/harness-image-cache.mjs";
 import {
 	corefileWithForwardZones,
 	isUsableCa,
@@ -15,6 +18,43 @@ import {
 
 const execFileAsync = promisify(execFile);
 const digest = (character) => `sha256:${character.repeat(64)}`;
+
+test("Worker input hash ignores entry order and changes when an input changes", () => {
+	const first = workerInputHash([
+		{ path: "apps/platform-worker/Dockerfile", content: "worker" },
+		{ path: "pnpm-lock.yaml", content: "lock" },
+	]);
+	assert.equal(
+		first,
+		workerInputHash([
+			{ path: "pnpm-lock.yaml", content: "lock" },
+			{ path: "apps/platform-worker/Dockerfile", content: "worker" },
+		]),
+	);
+	assert.notEqual(
+		first,
+		workerInputHash([
+			{ path: "apps/platform-worker/Dockerfile", content: "worker-v2" },
+			{ path: "pnpm-lock.yaml", content: "lock" },
+		]),
+	);
+});
+
+test("Worker cache accepts only a valid immutable digest for the input hash", () => {
+	const inputHash = "abc";
+	const entry = { repository: "registry.example/worker", digest: digest("a") };
+	assert.deepEqual(
+		cachedWorkerDigest({ worker: { [inputHash]: entry } }, inputHash),
+		entry,
+	);
+	assert.equal(
+		cachedWorkerDigest(
+			{ worker: { [inputHash]: { ...entry, digest: "latest" } } },
+			inputHash,
+		),
+		null,
+	);
+});
 
 test("local E2E Harness exposes the staged lifecycle without environment access", async () => {
 	const { stdout } = await execFileAsync(process.execPath, [
