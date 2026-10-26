@@ -37,7 +37,7 @@
 | 类别 / Primary Issue | 负责人 | 当前状态 | PR / 证据 |
 | --- | --- | --- | --- |
 | Worker 观测 / #3360 | observability_3360 | 已提交 PR；真实验收仍按 Issue AC 跟进 | [PR #3477](https://github.com/AgoraIO-Extensions/agent-infra/pull/3477)，新增 durable attempt；Worker 46/46、observability 46/46 |
-| Worker 多服务诊断 / #3428 | workflow_dev_3472（已换任务） | 已提交 PR；类型验证受依赖产物缺失限制 | [PR #3479](https://github.com/AgoraIO-Extensions/agent-infra/pull/3479)，聚焦测试 24/24；待依赖构建后类型复核 |
+| Worker 多服务诊断 / #3428 | workflow_dev_3472（已换任务） | PR 复核发现行为偏差，修复中 | [PR #3479](https://github.com/AgoraIO-Extensions/agent-infra/pull/3479)，撤回旧测试对最终 head 的通过声明；待健康判定/异常隔离修复及重新验证 |
 | 工作指导 / #3475 | 根协调者 | 首版已合入，计数与状态回填中 | [PR #3476](https://github.com/AgoraIO-Extensions/agent-infra/pull/3476) |
 
 已有开发流程 [PR #3473](https://github.com/AgoraIO-Extensions/agent-infra/pull/3473) 属于既有 owner；本轮不认领其分支。

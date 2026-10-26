@@ -24,7 +24,7 @@
 
 | 类别 | Issue | 标题 | 优先级 | 状态/标签 | 来源或负责人 | 最近更新 | 下一步 |
 | --- | ---: | --- | --- | --- | --- | --- | --- |
-| Runtime/Worker/Core | [#3428](https://github.com/AgoraIO-Extensions/agent-infra/issues/3428) | fix(worker): expose bounded multi-service health diagnostics | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 本轮 PR #3479：多服务诊断聚焦测试 24/24；待依赖构建后类型复核、review 和 CI |
+| Runtime/Worker/Core | [#3428](https://github.com/AgoraIO-Extensions/agent-infra/issues/3428) | fix(worker): expose bounded multi-service health diagnostics | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 本轮 PR #3479 复核发现诊断影响健康判定，修复中；旧 24/24 不覆盖最终 head，待重跑 |
 | Runtime/Worker/Core | [#3409](https://github.com/AgoraIO-Extensions/agent-infra/issues/3409) | feat(runtime): consume V6 stateful native command admission | priority:P1 | priority:P1, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Runtime/Worker/Core | [#3382](https://github.com/AgoraIO-Extensions/agent-infra/issues/3382) | fix(worker): resolve pending application outbox before repeated workload reconcile | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Runtime/Worker/Core | [#3380](https://github.com/AgoraIO-Extensions/agent-infra/issues/3380) | perf(worker): stop high-frequency reconcile for stale ready model bindings | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
