@@ -462,15 +462,41 @@ export async function claimSandboxReconciliation(
 	| null
 > {
 	const wait = input.onWait ?? (() => {});
+	// Stale discovery/commit wakeups must not reacquire Agent FOR SHARE while
+	// Workload reconciliation needs FOR UPDATE to make this Sandbox ready.
+	const [discovered] = await transaction<{ eligible: boolean }[]>`select
+		(status in ('pending','retry_scheduled') and available_at <= clock_timestamp()) or
+		(status = 'processing' and lease_expires_at <= clock_timestamp()) as eligible
+		from platform.outbox_items where id = ${input.itemId}
+			and scope_type = 'conversation' and operation = 'conversation.sandbox.reconcile.v1'`;
+	if (!discovered?.eligible) {
+		wait(discovered ? "lease_ineligible" : "intent_mismatch");
+		return null;
+	}
+	let waitingForWorkload = false;
 	const context = await lockedContext(
 		transaction,
 		input.itemId,
 		policy,
 		directory,
-		wait,
+		(reason) => {
+			waitingForWorkload =
+				reason === "workload_not_ready" || reason === "configuration_pending";
+			wait(reason);
+		},
 	);
 	if (!context) {
-		await settleRetainedStopReceipt(transaction, input.itemId);
+		if (waitingForWorkload) {
+			// The outbox is already locked. Preserve the original operation/fences
+			// and defer only an eligible delivery, never a live lease or later retry.
+			await transaction`update platform.outbox_items
+				set status = case when status = 'processing' then 'retry_scheduled' else status end,
+					available_at = clock_timestamp() + interval '1 second',
+					lease_owner = null, lease_expires_at = null, updated_at = clock_timestamp()
+				where id = ${input.itemId} and (
+					(status in ('pending', 'retry_scheduled') and available_at <= clock_timestamp())
+					or (status = 'processing' and lease_expires_at <= clock_timestamp()))`;
+		} else await settleRetainedStopReceipt(transaction, input.itemId);
 		return null;
 	}
 	const { outbox, sandbox, allocation, authorization } = context;

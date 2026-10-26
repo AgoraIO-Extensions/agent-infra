@@ -1126,6 +1126,160 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		return { work, itemId, store };
 	}
 
+	it.each(["workload", "configuration"] as const)(
+		"defers waiting Sandbox claims before taking Agent locks across Worker restarts (%s, #3461)",
+		async (waitingFor) => {
+			const { work, itemId, store } =
+				await seedSandboxPrepareIntent("workload-wait");
+			const [ready] =
+				await client`select state from platform.workload_reconciliations where agent_id = 'agent-dispatch'`;
+			if (waitingFor === "workload")
+				await client`update platform.workload_reconciliations set state = jsonb_set(state, '{phase}', '"preflight"') where agent_id = 'agent-dispatch'`;
+			else
+				await client`update platform.agents set current_configuration_revision = 5 where id = 'agent-dispatch'`;
+			const request = {
+				schemaVersion: 1 as const,
+				itemId,
+				workerId: "waiting-worker",
+				leaseDurationMs: 30_000,
+			};
+			let pending:
+				| ReturnType<typeof store.claimSandboxReconciliation>
+				| undefined;
+			let restarted: PostgresConversationDispatchStoreV1 | undefined;
+			try {
+				// Reproduce the production lock conflict: a Sandbox claim holds Agent
+				// FOR SHARE while waiting on its Conversation, so Workload skips it.
+				await client.begin(async (blocker) => {
+					const [owner] = await blocker`select pg_backend_pid() as pid`;
+					await blocker`select id from platform.conversations where id = ${work.conversationId} for update`;
+					pending = store.claimSandboxReconciliation(request);
+					await expect
+						.poll(
+							async () =>
+								(
+									await client`select 1 from pg_stat_activity where ${owner?.pid} = any(pg_blocking_pids(pid))`
+								).length,
+							{ timeout: 2000, interval: 10 },
+						)
+						.toBeGreaterThan(0);
+					expect(
+						await client`select id from platform.agents where id = 'agent-dispatch' for update skip locked`,
+					).toHaveLength(0);
+				});
+				expect(await pending).toBeNull();
+				const [deferred] =
+					await client`select available_at, delivery_fence, attempt_count, extract(epoch from (available_at - clock_timestamp())) as delay from platform.outbox_items where id = ${itemId}`;
+				expect(Number(deferred?.delay)).toBeGreaterThan(0);
+				expect(Number(deferred?.delay)).toBeLessThanOrEqual(1);
+				expect(Number(deferred?.delivery_fence)).toBe(0);
+				expect(deferred?.attempt_count).toBe(0);
+				await store.close();
+				restarted = new PostgresConversationDispatchStoreV1({
+					databaseUrl,
+					sandboxPolicy: {
+						namespace: workloadTestPolicy.namespace,
+						resourceConfigurationHash:
+							workloadResourceConfigurationHashV1(workloadTestPolicy),
+					},
+					userDirectory: {
+						async resolveUser(userId) {
+							return {
+								schemaVersion: 1,
+								userId,
+								accountStatus: "active",
+								organizationIds: [],
+								authorizationRevision: "workload-wait",
+							};
+						},
+					},
+				});
+				const restartedStore = restarted;
+				// Keep the deadline distant during the controlled lock test, even on a
+				// slow CI host. A queued discovery result must not reacquire Agent locks.
+				await client`update platform.outbox_items set available_at = clock_timestamp() + interval '1 minute' where id = ${itemId}`;
+				expect(
+					(await restarted.findDispatchable({ limit: 100 })).some(
+						(item) => item.itemId === itemId,
+					),
+				).toBe(false);
+				await client.begin(async (update) => {
+					await update`select id from platform.agents where id = 'agent-dispatch' for update`;
+					await expect(
+						Promise.race([
+							restartedStore.claimSandboxReconciliation(request),
+							new Promise((resolve) =>
+								setTimeout(() => resolve("blocked-on-agent"), 1000),
+							),
+						]),
+					).resolves.toBeNull();
+					await update`update platform.workload_reconciliations set state = ${update.json(ready?.state)} where agent_id = 'agent-dispatch'`;
+					await update`update platform.agents set current_configuration_revision = 4 where id = 'agent-dispatch'`;
+				});
+				await client`update platform.outbox_items set available_at = clock_timestamp() where id = ${itemId}`;
+				const claimed = await restarted.claimSandboxReconciliation(request);
+				expect(claimed).toMatchObject({
+					purpose: "prepare",
+					deliveryFence: 1,
+					attemptCount: 1,
+					sandbox: { sessionId: work.conversationId },
+				});
+				const lease = () =>
+					client`select status, available_at, lease_owner, lease_expires_at, delivery_fence, attempt_count from platform.outbox_items where id = ${itemId}`;
+				const leased = await lease();
+				await client`update platform.workload_reconciliations set state = jsonb_set(state, '{phase}', '"preflight"') where agent_id = 'agent-dispatch'`;
+				expect(await restarted.claimSandboxReconciliation(request)).toBeNull();
+				expect(await lease()).toEqual(leased);
+			} finally {
+				await pending?.catch(() => {});
+				await Promise.allSettled([store.close(), restarted?.close()]);
+			}
+		},
+	);
+
+	it("paces an expired Sandbox lease without changing its delivery fence (#3461)", async () => {
+		const { itemId, store } = await seedSandboxPrepareIntent(
+			"expired-workload-wait",
+		);
+		const request = {
+			schemaVersion: 1 as const,
+			itemId,
+			workerId: "expired-worker",
+			leaseDurationMs: 30_000,
+		};
+		try {
+			const claim = await store.claimSandboxReconciliation(request);
+			expect(claim).toMatchObject({ deliveryFence: 1, attemptCount: 1 });
+			await client`update platform.workload_reconciliations set state = jsonb_set(state, '{phase}', '"preflight"') where agent_id = 'agent-dispatch'`;
+			await client`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 second' where id = ${itemId}`;
+			expect(await store.claimSandboxReconciliation(request)).toBeNull();
+			const [deferred] =
+				await client`select status, lease_owner, lease_expires_at, delivery_fence::int as fence, attempt_count, available_at > clock_timestamp() as delayed from platform.outbox_items where id = ${itemId}`;
+			expect(deferred).toEqual({
+				status: "retry_scheduled",
+				lease_owner: null,
+				lease_expires_at: null,
+				fence: 1,
+				attempt_count: 1,
+				delayed: true,
+			});
+			expect(
+				(await store.findDispatchable({ limit: 100 })).some(
+					(item) => item.itemId === itemId,
+				),
+			).toBe(false);
+			if (!claim) throw new Error("Expected original lease");
+			expect(
+				await store.prepareSandboxReconciliation({
+					claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(false);
+		} finally {
+			await store.close();
+		}
+	});
+
 	/** 把共享夹具 Agent 改成 API 创建（无审批修订号）；返回恢复函数，供用例结束时还原。 */
 	async function useApiCreatedAgent(agentId = "agent-dispatch") {
 		await client`update platform.agent_applications
@@ -2680,6 +2834,9 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			const reasons: SessionSandboxClaimWaitReasonV1[] = [];
 			const claimObserved = async () => {
 				reasons.length = 0;
+				// Each case explicitly advances the persisted wait window before
+				// checking a different authority condition.
+				await client`update platform.outbox_items set available_at = now() where id = ${request.itemId} and status in ('pending','retry_scheduled')`;
 				return store.claimSandboxReconciliation(request, (reason) => {
 					reasons.push(reason);
 				});
