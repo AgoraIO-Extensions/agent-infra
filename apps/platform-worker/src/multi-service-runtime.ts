@@ -15,6 +15,7 @@ import type {
 	V1ConfigMap,
 	V1Container,
 	V1Deployment,
+	V1Endpoints,
 	V1Ingress,
 	V1Job,
 	V1NetworkPolicy,
@@ -55,6 +56,30 @@ export interface MultiServiceRuntimePolicyV1 {
 	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
 	readonly multiServiceResourceCap?: MultiServiceResourceCapV1;
 }
+
+export type MultiServiceHealthDiagnosticV1 = {
+	readonly schemaVersion: 1;
+	readonly agentId: string;
+	readonly workloadRevision: number;
+	readonly stage:
+		| "migration_missing"
+		| "migration_failed"
+		| "workload_not_ready"
+		| "service_no_endpoints"
+		| "health_check_failed";
+	readonly workloads: readonly {
+		readonly kind: "Deployment" | "StatefulSet";
+		readonly name: string;
+		readonly desiredReplicas: number;
+		readonly readyReplicas: number;
+		readonly availableReplicas: number;
+	}[];
+	readonly services: readonly {
+		readonly name: string;
+		readonly ports: number;
+		readonly endpointAddresses: number;
+	}[];
+};
 
 /** 启动期解析部署档位与上限；非法配置使 Worker 装配失败（fail closed）。 */
 export function resolveMultiServiceResourceConfigurationV1(
@@ -669,6 +694,7 @@ function ingress(
 export function createMultiServiceRuntimeOperations(options: {
 	readonly client: WorkerKubernetesClientV1;
 	readonly policy: MultiServiceRuntimePolicyV1;
+	readonly onHealthDiagnostic?: (diagnostic: MultiServiceHealthDiagnosticV1) => void;
 }) {
 	const { client } = options;
 	const resources = resolveMultiServiceResourceConfigurationV1(options.policy);
@@ -680,6 +706,56 @@ export function createMultiServiceRuntimeOperations(options: {
 				resource.kind === "PersistentVolumeClaim" &&
 				resourceName(value, resource.metadata.name) === name,
 		);
+	async function emitHealthDiagnostic(
+		value: MultiServiceDesired,
+		stage: MultiServiceHealthDiagnosticV1["stage"],
+	) {
+		if (!options.onHealthDiagnostic) return;
+		const workloads: Array<MultiServiceHealthDiagnosticV1["workloads"][number]> = [];
+		const services: Array<MultiServiceHealthDiagnosticV1["services"][number]> = [];
+		for (const resource of value.multiService.resources) {
+			if (resource.kind === "Deployment" || resource.kind === "StatefulSet") {
+				const name = resourceName(value, resource.metadata.name);
+				const current = await client.read<V1Deployment | V1StatefulSet>(
+					resource.kind,
+					name,
+				);
+				workloads.push({
+					kind: resource.kind,
+					name,
+					desiredReplicas: value.replicas,
+					readyReplicas: current?.status?.readyReplicas ?? 0,
+					availableReplicas: current?.status?.availableReplicas ?? 0,
+				});
+			}
+			if (resource.kind === "Service") {
+				const name = resourceName(value, resource.metadata.name);
+				const service = await client.read<V1Service>("Service", name);
+				const endpoints = await client.read<V1Endpoints>("Endpoints", name);
+				const endpointAddresses = (endpoints?.subsets ?? []).reduce(
+					(total, subset) => total + (subset.addresses?.length ?? 0),
+					0,
+				);
+				services.push({
+					name,
+					ports: service?.spec?.ports?.length ?? 0,
+					endpointAddresses,
+				});
+			}
+		}
+		try {
+			options.onHealthDiagnostic({
+				schemaVersion: 1,
+				agentId: value.agentId,
+				workloadRevision: value.workloadRevision,
+				stage,
+				workloads,
+				services,
+			});
+		} catch {
+			// Diagnostics are observational and never alter reconciliation.
+		}
+	}
 	async function put<T extends KubernetesObject>(
 		object: T,
 		value: MultiServiceDesired,
@@ -994,8 +1070,14 @@ export function createMultiServiceRuntimeOperations(options: {
 			const migration = migrationResource(value);
 			if (migration?.kind === "Job") {
 				const job = await client.read<V1Job>("Job", migrationJobName(value));
-				if (!job) return "unreachable" as const;
-				if (jobFailed(job)) return "unhealthy" as const;
+				if (!job) {
+					await emitHealthDiagnostic(value, "migration_missing");
+					return "unreachable" as const;
+				}
+				if (jobFailed(job)) {
+					await emitHealthDiagnostic(value, "migration_failed");
+					return "unhealthy" as const;
+				}
 				if (!jobSucceeded(job)) return "unreachable" as const;
 			}
 			for (const resource of value.multiService.resources) {
@@ -1012,8 +1094,21 @@ export function createMultiServiceRuntimeOperations(options: {
 					(resource.kind === "Deployment"
 						? (current.status?.availableReplicas ?? 0)
 						: (current.status?.readyReplicas ?? 0)) < 1
-				)
+				) {
+					await emitHealthDiagnostic(value, "workload_not_ready");
 					return "pending" as const;
+				}
+			}
+			for (const resource of value.multiService.resources) {
+				if (resource.kind !== "Service") continue;
+				const endpoints = await client.read<V1Endpoints>(
+					"Endpoints",
+					resourceName(value, resource.metadata.name),
+				);
+				if (!endpoints || (endpoints.subsets ?? []).every((subset) => !subset.addresses?.length)) {
+					await emitHealthDiagnostic(value, "service_no_endpoints");
+					return "pending" as const;
+				}
 			}
 			for (const resource of value.multiService.resources) {
 				if (resource.kind !== "PersistentVolumeClaim") continue;
@@ -1031,8 +1126,10 @@ export function createMultiServiceRuntimeOperations(options: {
 						options.policy,
 						resources,
 					)
-				)
+				) {
+					await emitHealthDiagnostic(value, "health_check_failed");
 					return "unhealthy" as const;
+				}
 			}
 			return "healthy" as const;
 		},

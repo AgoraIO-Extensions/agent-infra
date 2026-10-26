@@ -8,6 +8,7 @@ import type {
 	KubernetesObject,
 	V1ConfigMap,
 	V1Deployment,
+	V1Endpoints,
 	V1Job,
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
@@ -1089,6 +1090,48 @@ describe("multi-service runtime operations", () => {
 			workload.status = { availableReplicas: 0, readyReplicas: 0, replicas: 1 };
 			expect(await operations.observe(value, identity)).toBe("pending");
 		}
+	});
+
+	it("emits bounded diagnostics for readiness and endpoint failures", async () => {
+		const fake = fakeClient();
+		const diagnostics: unknown[] = [];
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: { ...basePolicy, storageSize: "1Gi" },
+			onHealthDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+		});
+		const value = desired();
+		if (!isMultiService(value)) throw new Error("multi-service fixture invalid");
+		const identity = await operations.apply(value);
+		await operations.observe(value, identity);
+		expect(diagnostics[0]).toMatchObject({
+			schemaVersion: 1,
+			agentId: "agent-a",
+			stage: "workload_not_ready",
+		});
+		expect(
+			(diagnostics[0] as { workloads: { kind: string; name: string }[] }).workloads.some(
+				(entry) => entry.kind === "Deployment" && entry.name.endsWith("-web"),
+			),
+		).toBe(true);
+		markWorkloadsReady(fake);
+		fake.resources.set(
+			`Endpoints/${workloadResourceNameV1("agent-a")}-web`,
+			{
+				apiVersion: "v1",
+				kind: "Endpoints",
+				metadata: { name: `${workloadResourceNameV1("agent-a")}-web` },
+				subsets: [{ addresses: [] }],
+			} as V1Endpoints,
+		);
+		diagnostics.length = 0;
+		expect(await operations.observe(value, identity)).toBe("pending");
+		expect(diagnostics[0]).toMatchObject({ stage: "service_no_endpoints" });
+		expect(
+			(diagnostics[0] as { services: { name: string; endpointAddresses: number }[] }).services.some(
+				(entry) => entry.name.endsWith("-web") && entry.endpointAddresses === 0,
+			),
+		).toBe(true);
 	});
 
 	it("runs a migration Job before services and reuses its completed result", async () => {

@@ -11,6 +11,7 @@ export const workloadApiVersions = {
 	Deployment: "apps/v1",
 	StatefulSet: "apps/v1",
 	Service: "v1",
+  Endpoints: "v1",
 	ConfigMap: "v1",
 	Job: "batch/v1",
 	ServiceAccount: "v1",
