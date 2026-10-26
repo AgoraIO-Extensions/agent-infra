@@ -175,9 +175,14 @@ export function executionDurationSummary(data: ExecutionDetailProjectionV2) {
 
 /** 顶部只显示最近一条已回读工具事实，详细阶段仍在调用事实区展示。 */
 export function executionToolSummary(data: ExecutionDetailProjectionV2) {
-	const fact = operationFacts(data.events).findLast(
-		(event) => event.payload.kind === "tool",
-	);
+	const facts = operationFacts(data.events);
+	let fact: (typeof facts)[number] | undefined;
+	for (let index = facts.length - 1; index >= 0; index -= 1) {
+		if (facts[index]?.payload.kind === "tool") {
+			fact = facts[index];
+			break;
+		}
+	}
 	return fact?.payload.kind === "tool" ? toolName(fact.payload) : "未采集";
 }
 
