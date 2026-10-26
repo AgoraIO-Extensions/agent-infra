@@ -1105,7 +1105,10 @@ export function createMultiServiceRuntimeOperations(options: {
 					await emitHealthDiagnostic(value, "migration_failed");
 					return "unhealthy" as const;
 				}
-				if (!jobSucceeded(job)) return "unreachable" as const;
+				if (!jobSucceeded(job)) {
+					await emitHealthDiagnostic(value, "migration_pending");
+					return "unreachable" as const;
+				}
 			}
 			for (const resource of value.multiService.resources) {
 				if (resource.kind !== "Deployment" && resource.kind !== "StatefulSet")

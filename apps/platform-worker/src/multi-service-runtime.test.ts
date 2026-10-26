@@ -1168,8 +1168,10 @@ describe("multi-service runtime operations", () => {
 
 	it("runs a migration Job before services and reuses its completed result", async () => {
 		const fake = fakeClient();
+		const diagnostics: unknown[] = [];
 		const operations = createMultiServiceRuntimeOperations({
 			client: fake.client,
+			onHealthDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
 			policy: {
 				namespace: "agents",
 				multiServiceResourceProfiles: [smallProfile],
@@ -1194,6 +1196,10 @@ describe("multi-service runtime operations", () => {
 			),
 		).toBe(false);
 		expect(await operations.observe(value, identity)).toBe("unreachable");
+		expect(diagnostics.at(-1)).toMatchObject({
+			stage: "migration_pending",
+			agentId: "agent-a",
+		});
 		if (!job) throw new Error("migration Job fixture missing");
 		job.status = { succeeded: 1 };
 		expect(await operations.observe(value, identity)).toBe("drifted");
