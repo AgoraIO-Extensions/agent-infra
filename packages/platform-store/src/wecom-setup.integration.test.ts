@@ -396,7 +396,9 @@ it.each([
 			await db.stop();
 		}
 	},
-	30000,
+	// Docker startup, schema migration, and teardown are part of this fixture's
+	// lifecycle and can exceed the Vitest default on a busy CI runner.
+	90000,
 );
 
 it("returns all current active bindings beyond the former 100-row limit", async () => {
@@ -420,7 +422,7 @@ it("returns all current active bindings beyond the former 100-row limit", async 
 		await sql.end();
 		await db.stop();
 	}
-});
+}, 90000);
 
 it("selects unattempted setups before a released timeout and skips live probes", async () => {
 	const db = await startPostgresTestDatabase("wecom-fairness");
@@ -445,4 +447,4 @@ it("selects unattempted setups before a released timeout and skips live probes",
 		await sql.end();
 		await db.stop();
 	}
-}, 30000);
+}, 90000);
