@@ -789,7 +789,7 @@ Owner 配置、Secret 清空、模型复选框、停止、重启、镜像升级�
 empty、error 和布局边界。
 
 CI 保存 `web-management-<head SHA>` artifact，HTML 报告包含 head 元数据、旅程结果及截图。
-PR 的人工 UI 验收仍遵循[工作流 §7.4](../architecture/SPEC-ai-native-development-workflow.md#74-人工验证)。
+PR 的人工 UI 验收标记仍遵循[工作流 §7.4](../architecture/SPEC-ai-native-development-workflow.md#74-人工处理标记)。
 [#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192) 可复用这些基础组件；
 [#194](https://github.com/AgoraIO-Extensions/agent-infra/issues/194) 的 UI 基础验收仍以 #389 完成为前提。
 

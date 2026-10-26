@@ -16,9 +16,6 @@ const PR_AGENT_SECRETS = [
   "PR_AGENT_MODEL",
 ];
 
-const TEAM_MEMBERSHIP_TOKEN_ACTION =
-  "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
-
 function sameObject(actual, expected) {
   return JSON.stringify(Object.entries(actual ?? {}).sort()) ===
     JSON.stringify(Object.entries(expected).sort());
@@ -28,12 +25,6 @@ function referencedSecrets(value) {
   return [...JSON.stringify(value ?? {}).matchAll(/secrets\.([A-Z0-9_]+)/gi)].map(
     (match) => match[1],
   );
-}
-
-function teamMembershipTokenReferences(value) {
-  return JSON.stringify(value ?? {}).match(
-    /steps\.team-membership-token\.outputs\.token/g,
-  ) ?? [];
 }
 
 function validateStepSecrets(errors, workflowName, jobName, step) {
@@ -93,31 +84,6 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       }
       continue;
     }
-    if (
-      ["TEAM_MEMBERSHIP_APP_ID", "TEAM_MEMBERSHIP_APP_PRIVATE_KEY"].includes(secret)
-    ) {
-      const reference = `\${{ secrets.${secret} }}`;
-      const input = {
-        TEAM_MEMBERSHIP_APP_ID: "app-id",
-        TEAM_MEMBERSHIP_APP_PRIVATE_KEY: "private-key",
-      }[secret];
-      const allowedMembershipLocation =
-        step.id === "team-membership-token" &&
-        workflowName === "pr-gates.yml" &&
-        jobName === "human";
-      if (
-        !allowedMembershipLocation ||
-        step.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
-        step.with?.[input] !== reference ||
-        step.with?.owner !== "${{ github.repository_owner }}" ||
-        occurrences !== 1
-      ) {
-        errors.push(
-          `${workflowName}/${jobName}: ${secret} is allowed only in fixed control App token steps`,
-        );
-      }
-      continue;
-    }
     errors.push(`${workflowName}/${jobName}: Secret ${secret} is not allowlisted`);
   }
 }
@@ -137,12 +103,12 @@ export function validateWorkflowDocuments(workflows) {
         referencedSecrets(runName).length) {
       errors.push(`${name} must use a fixed safe run-name`);
     }
-    if (referencedSecrets(workflow.env).length || teamMembershipTokenReferences(workflow.env).length) {
-      errors.push(`${name}: Secrets and membership tokens require step scope`);
+    if (referencedSecrets(workflow.env).length) {
+      errors.push(`${name}: Secrets require step scope`);
     }
     for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
-      if (referencedSecrets(job.env).length || teamMembershipTokenReferences(job.env).length) {
-        errors.push(`${name}/${jobName}: Secrets and membership tokens require step scope`);
+      if (referencedSecrets(job.env).length) {
+        errors.push(`${name}/${jobName}: Secrets require step scope`);
       }
       if (workflow.on?.pull_request_target && /pull_request\.head\.(?:ref|sha)/.test(JSON.stringify(job))) {
         errors.push(`${name}/${jobName}: pull_request_target jobs must not execute PR head`);
@@ -152,12 +118,6 @@ export function validateWorkflowDocuments(workflows) {
           errors.push(`${name}: third-party Actions must use a full commit SHA`);
         }
         validateStepSecrets(errors, name, jobName, step);
-        const refs = teamMembershipTokenReferences(step);
-        if (refs.length && !(refs.length === 1 && name === "pr-gates.yml" && jobName === "human" &&
-            step.run === "node .github/scripts/pr-gates.mjs human" &&
-            step.env?.TEAM_MEMBERSHIP_TOKEN === "${{ steps.team-membership-token.outputs.token }}")) {
-          errors.push(`${name}/${jobName}: Team membership token is allowed only in human validation`);
-        }
         if (workflow.on?.pull_request_target && step.uses?.startsWith("actions/checkout@") &&
             (step.with?.ref !== "${{ github.event.repository.default_branch }}" || step.with?.["persist-credentials"] !== false)) {
           errors.push(`${name}/${jobName}: checkout must use the trusted default branch without credentials`);
@@ -167,28 +127,17 @@ export function validateWorkflowDocuments(workflows) {
   }
   const gates = workflows["pr-gates.yml"];
   const issue = gates?.jobs?.issue;
-  const human = gates?.jobs?.human;
-  const memberStep = human?.steps?.find((step) => step.id === "team-membership-token");
-  const humanStep = human?.steps?.find((step) => step.run === "node .github/scripts/pr-gates.mjs human");
-  if (Object.keys(gates?.jobs ?? {}).sort().join() !== "human,issue" ||
+  if (Object.keys(gates?.jobs ?? {}).join() !== "issue" ||
       Object.keys(gates?.on ?? {}).join() !== "pull_request_target" ||
       JSON.stringify(gates?.on?.pull_request_target?.types) !== JSON.stringify([
-        "opened", "reopened", "synchronize", "edited", "labeled", "unlabeled", "ready_for_review",
+        "opened", "reopened", "synchronize", "edited", "ready_for_review",
       ]) ||
       !sameObject(gates?.concurrency, {group: "pr-gates-${{ github.event.pull_request.number }}", "cancel-in-progress": true}) ||
-      issue?.name !== "Issue Gate" || human?.name !== "Human Validation Gate" ||
+      issue?.name !== "Issue Gate" ||
       !sameObject(issue?.permissions, {contents: "read", issues: "read", "pull-requests": "read"}) ||
-      !sameObject(human?.permissions, {contents: "read", issues: "read", "pull-requests": "write"}) ||
       !issue?.steps?.some((step) => step.run === "node .github/scripts/pr-gates.mjs issue" &&
-        sameObject(step.env, {GITHUB_TOKEN: "${{ github.token }}"})) ||
-      humanStep?.if !== "always()" || !sameObject(humanStep?.env, {
-        GITHUB_TOKEN: "${{ github.token }}", TEAM_MEMBERSHIP_TOKEN: "${{ steps.team-membership-token.outputs.token }}",
-      }) ||
-      memberStep?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION || !sameObject(memberStep?.with, {
-        "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}", "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
-        owner: "${{ github.repository_owner }}", "permission-members": "read",
-      }) || /GATE_CHECK_TOKEN|permission-checks|check-runs/.test(JSON.stringify(gates))) {
-    errors.push("PR Gates must use two native jobs and a read-only Team membership token");
+        sameObject(step.env, {GITHUB_TOKEN: "${{ github.token }}"}))) {
+    errors.push("PR Gates must use the Issue Gate job only");
   }
   const autoMerge = workflows["auto-merge.yml"];
   const enrollment = autoMerge?.jobs?.enroll;

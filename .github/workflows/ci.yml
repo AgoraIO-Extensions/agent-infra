@@ -46,7 +46,7 @@ jobs:
             fi
           fi
           if [[ "$skip" == true ]]; then
-            echo 'CI and Workload kind are waived by the current ci:skip label; tests did not run. Issue and human validation gates still apply.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'CI and Workload kind are waived by the current ci:skip label; tests did not run. Issue Gate and CODEOWNER/review requirements still apply.' >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'No CI exemption; normal checks apply.' >> "$GITHUB_STEP_SUMMARY"
           fi

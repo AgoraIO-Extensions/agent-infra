@@ -1760,8 +1760,8 @@ profile 必须明确配置、两端可互操作且保持自身门禁；不允许
 不重放的要求不变。实现与取舍见 [ADR 0018](../adr/0018-use-standard-mcp-with-agent-scoped-tokens.md)。
 
 本消费契约的正式修订由 Platform API/Web、Runtime 客户端和 Connection 契约原 owner
-评审，按 PRD → Spec → HLD 的共同版本合入；CODEOWNER、Human Validation 与适用 CI
-门禁仍由当前工作流维护。未完成共同文档对齐与消费方评审时，不据文档候选启用客户端。
+评审，按 PRD → Spec → HLD 的共同版本合入；CODEOWNER 与适用 CI 门禁仍由当前工作流维护。
+未完成共同文档对齐与消费方评审时，不据文档候选启用客户端。
 后续 #851/#1271 只消费已合入版本及具名接收接口；本节不改变 Connection 运行实现、
 部署、Provider 或其原 owner 的 tickets，也不签收客户端和真实双系统验收。
 

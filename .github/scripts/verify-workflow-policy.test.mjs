@@ -27,19 +27,15 @@ test("accepts the complete trusted workflow set", async () => {
   assert.deepEqual(validateWorkflowDocuments(await actualWorkflows()), []);
 });
 
-test("native gates reject dispatch, extra jobs, and Check Publisher permissions", async () => {
+test("native gates reject dispatch, extra jobs, and expanded permissions", async () => {
   for (const mutate of [
     (workflow) => { workflow.on.repository_dispatch = { types: ["pr-gates"] }; },
     (workflow) => { workflow.jobs.publisher = { steps: [] }; },
-    (workflow) => { workflow.jobs.human.permissions.checks = "write"; },
-    (workflow) => {
-      workflow.jobs.human.steps.find((step) => step.id === "team-membership-token")
-        .with["permission-checks"] = "write";
-    },
+    (workflow) => { workflow.jobs.issue.permissions.checks = "write"; },
   ]) {
     const workflows = await actualWorkflows();
     mutate(workflows["pr-gates.yml"]);
-    assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("two native jobs")));
+    assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("Issue Gate job only")));
   }
 });
 
@@ -131,26 +127,10 @@ test("keeps PR-Agent Secrets only in the pinned review Action", async () => {
 
 test("rejects an untrusted PR checkout in PR Gates", async () => {
   const workflows = await actualWorkflows();
-  const checkout = workflows["pr-gates.yml"].jobs.human.steps.find((step) => step.uses);
+  const checkout = workflows["pr-gates.yml"].jobs.issue.steps.find((step) => step.uses);
   checkout.with.ref = "${{ github.event.pull_request.head.sha }}";
   assert.ok(
     validateWorkflowDocuments(workflows).some((error) => error.includes("default branch")),
-  );
-});
-
-test("rejects the Team membership token outside fixed Gate steps", async () => {
-  const workflows = await actualWorkflows();
-  const setup = workflows["pr-gates.yml"].jobs.human.steps.find(
-    (step) => step.name === "Set up Node.js",
-  );
-  setup.env = {
-    LEAK: "${{ steps.team-membership-token.outputs.token }}",
-  };
-
-  assert.ok(
-    validateWorkflowDocuments(workflows).some((error) =>
-      error.includes("Team membership token is allowed only in human validation"),
-    ),
   );
 });
 
@@ -236,15 +216,6 @@ test("rejects direct merge or administrative bypass commands", async () => {
     ),
   );
 });
-
-test("grants PR write permission before restoring human validation labels", async () => {
-  const workflows = await actualWorkflows();
-  assert.equal(
-    workflows["pr-gates.yml"].jobs.human.permissions["pull-requests"],
-    "write",
-  );
-});
-
 
 test("main image publication rejects business images, ambiguous tags and invalid setup-node pins", async () => {
   for (const mutate of [
