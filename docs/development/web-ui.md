@@ -14,12 +14,16 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `index.html` | `e4e074e5d876b3906060e4505279705e5a285519c4c4db5678fbe545e2e46447` |
+| `index.html` | `6c3e21d9d1051ad4eff91c12ab51ec3e672bdd2b689deeaf2a4146d8c3f81760` |
 | `login.html` | `733d31e999296d2ed8e21f0237004427eac104cefd7c4c55cde6e3e87240641a` |
-| `DESIGN.md` | `fa953264eafe4e0bd05adaa86387a9d90ad7af51d4e79f0a67620bfa31596d65` |
-| `IMPLEMENTATION.md` | `ae3e592272933f65a0f7fc34363142a4471a724f7a75db76affe6ae12d640600` |
-| `DESIGN-HANDOFF.md` | `3f2313d6d72bf3d7263d1e864730278217836ccdd5730d4b83460518bd2d3396` |
-| `DESIGN-MANIFEST.json` | `622053f66757e5a72610b46a6c964547c338f229d9118ab6656c48f670be5648` |
+| `DESIGN.md` | `52569abee3609f691201858c989e255b5bfb6a7de5611fe7b1d1276bf98ae773` |
+| `IMPLEMENTATION.md` | `fbe87e3ec283022c5de94c0a1becab8c2b30aca065b4d95ef081cb2d074f5ea5` |
+| `DESIGN-HANDOFF.md` | `22edcb82c033aac7819a5551f698600b056cb696803c81fb1c303d323615c1e2` |
+| `DESIGN-MANIFEST.json` | `87e3e7c706f08237dfefc66fad153ae50e70152600c5b01523d38e88dfb36cb1` |
+
+2026-10-26 增量回写补充了执行详情与恢复的代表态：受理、等待、工具与模型事实、耗时、Connection
+关联、停止请求、结果待核实和恢复失败。补充指令排队与自定义镜像升级沿用已有代表态和本节回写边界，
+不逐一扩展同类变体；1440×900 与 390×844 的实际浏览器回读仍以 Web 验证为准。
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量，并提供设计同名别名（`--bg`、`--fg`、`--surface-raised`、`--accent`、
