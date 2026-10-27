@@ -349,7 +349,9 @@ export function createSkillSpectorPackageScannerV1(
 				prepared.packageDigest !== input.packageObject.sha256 ||
 				prepared.fileCount !== input.fileCount ||
 				prepared.totalBytes !== input.totalBytes ||
-				new TextDecoder().decode(prepared.manifestBytes).length === 0
+				createHash("sha256")
+					.update(prepared.manifestBytes)
+					.digest("hex") !== input.manifestDigest
 			)
 				throw new SkillPackageAdmissionErrorV1("digest_mismatch");
 			const report = await options.adapter.scan({
