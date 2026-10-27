@@ -40,6 +40,8 @@ Optional validation inputs:
   ACK_CA_CERT_FILE         private CA bundle for the public HTTPS origin
   ACK_EVIDENCE_DIR         external directory for redacted receipts
   ACK_AGENT_REQUESTS_FILE  private JSON list for API Agent creation/replay
+  ACK_AGENT_STATE_DIR      external existing 0700 directory for private ID bindings
+  ACK_BROWSER_BLUEPRINT_DIR private browser configs without a fixed Agent ID
 
 Cleanup commands are disabled pending exact inventory and restore verification.
 
@@ -165,9 +167,11 @@ provision() {
 	local requests=${ACK_AGENT_REQUESTS_FILE:-}
 	require_file ACK_AGENT_REQUESTS_FILE "$requests"
 	prepare_evidence
-	if ! node "$repo_root/deploy/ack/provision-agents.mjs" "$requests" >"$evidence_dir/agent-provision.json"; then
+	[[ -n "${ACK_AGENT_STATE_DIR:-}" && -n "${ACK_BROWSER_BLUEPRINT_DIR:-}" ]] || die "Agent state and browser blueprint directories are required"
+	if ! node "$repo_root/deploy/ack/agent-bindings.ts" provision "$requests" "$ACK_AGENT_STATE_DIR" "$ACK_BROWSER_BLUEPRINT_DIR" "$source_sha" >"$evidence_dir/agent-provision.json"; then
 		die "one or more Agent API creation requests failed; inspect redacted receipt: $evidence_dir/agent-provision.json"
 	fi
+	export ACK_TEMPLATE_CONFIG_DIR="$ACK_AGENT_STATE_DIR/browser"
 	echo "ack-redeploy: Agent provision passed; evidence=$evidence_dir"
 }
 
@@ -188,11 +192,20 @@ validate_endpoint() {
 
 validate_templates() {
 	local dir=${ACK_TEMPLATE_CONFIG_DIR:-}
+	if [[ -n "${ACK_AGENT_STATE_DIR:-}" ]]; then
+		node "$repo_root/deploy/ack/agent-bindings.ts" materialize "${ACK_AGENT_REQUESTS_FILE:-}" "$ACK_AGENT_STATE_DIR" "${ACK_BROWSER_BLUEPRINT_DIR:-}" "$source_sha" >/dev/null
+		dir="$ACK_AGENT_STATE_DIR/browser"
+	fi
 	[[ -n "$dir" ]] || die "ACK_TEMPLATE_CONFIG_DIR is required for four-template validation"
 	[[ -d "$dir" ]] || die "template config directory does not exist: $dir"
 	local template config out
-	for template in codex claude opencode pi; do
-		config="$dir/$template.json"
+	local -a journey_configs=("$dir/codex.json" "$dir/claude.json" "$dir/opencode.json" "$dir/pi.json")
+	for config in "$dir"/custom-*.json; do
+		[[ -f "$config" ]] || continue
+		journey_configs+=("$config")
+	done
+	for config in "${journey_configs[@]}"; do
+		template=$(basename "$config" .json)
 		[[ -r "$config" ]] || die "missing template config: $config"
 		out="$evidence_dir/template-$template.json"
 		local run_output receipt_dir
@@ -299,6 +312,12 @@ case "$command" in
 	clean) clean ;;
 	destroy) destroy ;;
 	provision) provision ;;
-	all) deploy; if [[ -n "${ACK_AGENT_REQUESTS_FILE:-}" ]]; then provision; fi; validate ;;
+	all)
+		require_source_tuple
+		node "$repo_root/deploy/ack/agent-bindings.ts" check "${ACK_AGENT_REQUESTS_FILE:-}" "${ACK_AGENT_STATE_DIR:-}" "${ACK_BROWSER_BLUEPRINT_DIR:-}" "$source_sha" >/dev/null
+		deploy
+		provision
+		validate
+		;;
 	*) usage; die "unknown command: $command" ;;
 esac

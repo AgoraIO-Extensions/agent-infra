@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { provisionAgents } from "../deploy/ack/provision-agents.mjs";
+import { provisionAgents } from "../deploy/ack/provision-agents.ts";
 
 test("Agent provision sends private credentials and returns only bounded hashes", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "ack-agent-provision-"));
