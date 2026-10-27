@@ -1079,6 +1079,18 @@ describe
 			const stopResult = await driver.execute(
 				stop(command.executionId, command.turnId, accepted.nativeSessionRef),
 			);
+			// Native cancellation may close the model stream before app-server publishes
+			// a terminal Turn. In that case `unknown` is the durable fail-closed fact;
+			// poll it instead of treating the first asynchronous read as completion.
+			await expect
+				.poll(
+					async () =>
+						(
+							await recoveryEvidence(path, command.executionId)
+						).operationPhases.at(-1),
+					{ timeout: 10_000 },
+				)
+				.toMatch(/^(failed|unknown)$/);
 			const afterStop = await recoveryEvidence(path, command.executionId);
 			expect(
 				stopResult.result,
@@ -1091,7 +1103,17 @@ describe
 				}),
 			).toEqual({ outcome: "accepted", status: "cancelled" });
 			expect(provider.requestCount()).toBe(1);
-			expect(afterStop.operationPhases).toContain("failed");
+			expect(afterStop.executionStatus).toBe("cancelled");
+			expect(["failed", "unknown"]).toContain(afterStop.operationPhases.at(-1));
+			expect(afterStop.operationPhases).toContain("intent");
+			expect(afterStop.operationPhases).toContain("started");
+			const terminalIndex = afterStop.operationPhases.findIndex((phase) =>
+				["failed", "unknown"].includes(phase ?? ""),
+			);
+			expect(terminalIndex).toBeGreaterThanOrEqual(0);
+			expect(afterStop.operationPhases.slice(terminalIndex + 1)).not.toContain(
+				"started",
+			);
 		}, 90_000);
 
 		it("preserves a pre-stop native failure instead of converting it to cancellation", async () => {
