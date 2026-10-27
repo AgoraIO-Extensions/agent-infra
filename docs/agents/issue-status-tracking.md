@@ -1,6 +1,6 @@
 # 开放 Issue 状态跟进
 
-> 快照：2026-10-27 02:17 UTC；`origin/main` `aee3ceaf2`。
+> 快照：2026-10-27 02:17 UTC；`origin/main` `1cadb58a6`。
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
 当前开放 Issue：**41**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
@@ -9,7 +9,7 @@
 
 | 类别 | 数量 |
 | --- | ---: |
-| Runtime/Worker/Core | 14 |
+| Runtime/Worker/Core | 13 |
 | Deploy/E2E/Channels | 15 |
 | Platform/Web/Skill | 8 |
 | Workflow/Observability | 4 |
@@ -25,7 +25,6 @@
 | Runtime/Worker/Core | [#3203](https://github.com/AgoraIO-Extensions/agent-infra/issues/3203) | feat(worker): Session Sandbox 支持部署批准的通用出网（#3198） | priority:P1 | needs-triage, priority:P1, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Runtime/Worker/Core | [#3202](https://github.com/AgoraIO-Extensions/agent-infra/issues/3202) | feat(runtime): Claude、OpenCode、Pi 标准模板开放原生工具（#3198） | priority:P1 | needs-triage, priority:P1, agent:kiro | 2026-10-26 | 核对 #3218 与原生工具开发子项 |
 | Runtime/Worker/Core | [#3198](https://github.com/AgoraIO-Extensions/agent-infra/issues/3198) | feat(runtime): 恢复标准模板 Agent 的原生能力，以 Session Sandbox 为隔离边界 | priority:P1 | needs-triage, priority:P1, agent:kiro | 2026-10-26 | 核对全部开发子项后才能关闭父票 |
-| Runtime/Worker/Core | [#2949](https://github.com/AgoraIO-Extensions/agent-infra/issues/2949) | feat(worker): verify immutable Skill publication evidence before materialization | priority:P1 | priority:P1, agent:codex | 2026-10-27 | 继续开发唯一原 publication reader、固定证据 consumer 与当前 trust 接线 |
 | Runtime/Worker/Core | [#2946](https://github.com/AgoraIO-Extensions/agent-infra/issues/2946) | fix(worker): deliver Skill generations to the real Runtime PVC with separated identities | priority:P1 | priority:P1, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Runtime/Worker/Core | [#2929](https://github.com/AgoraIO-Extensions/agent-infra/issues/2929) | test(runtime): isolate native early-stop failure during recovery setup | priority:P2 | ready-for-agent, priority:P2, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Runtime/Worker/Core | [#2857](https://github.com/AgoraIO-Extensions/agent-infra/issues/2857) | test: accept Session Sandbox multi-entry isolation from #1253 | 未标注 | agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
@@ -82,3 +81,5 @@
 | [#3510](https://github.com/AgoraIO-Extensions/agent-infra/pull/3510) | OPEN | `cee18c2eb19cd0d26e66a5d28d392be84b6d8786` | — | 原 [#3106](https://github.com/AgoraIO-Extensions/agent-infra/issues/3106) 的 AC 保持原状态；本表不代勾 |
 | [#3511](https://github.com/AgoraIO-Extensions/agent-infra/pull/3511) | MERGED | `d86d52134fb5fe1927d69b05e620d4c75a1ad8bc` | `9b2407c5cb30c8c9de1b6fcc7078600c817a9e47` | 原 [#3159](https://github.com/AgoraIO-Extensions/agent-infra/issues/3159) 的 AC 保持原状态；本表不代勾 |
 | [#3512](https://github.com/AgoraIO-Extensions/agent-infra/pull/3512) | OPEN | `d4021c4b56c95b97497fb7127a0a7c356b3b5397` | — | 原 [#3337](https://github.com/AgoraIO-Extensions/agent-infra/issues/3337) 的 AC 保持原状态；本表不代勾 |
+
+| [#3517](https://github.com/AgoraIO-Extensions/agent-infra/pull/3517) | OPEN | `2ccd2e5048fe12c97164489f51396ec9c2d2e98b` | — | #2949 已关闭；真实部署 AC 待后续 |
