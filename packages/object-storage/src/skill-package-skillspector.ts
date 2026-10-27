@@ -39,8 +39,6 @@ export type SkillPackageAutomaticAdmissionPolicyV1 = Readonly<{
 	maximumAutomaticSeverity: "info" | "low" | "medium";
 	dynamicProbeRequired?: boolean;
 	now?: () => number;
-	dynamicProbeRequired?: boolean;
-	now?: () => number;
 }>;
 
 export type SkillPackageAutomaticAdmissionDecisionV1 = Readonly<{
