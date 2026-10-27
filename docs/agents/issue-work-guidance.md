@@ -56,7 +56,7 @@
 - #3495 stale binding fix：已合入 `0015b97c5`，Issue #3380 已按开发完成关闭；AC 留待后续。
 - #3479 diagnostics：已合入 `5e6a73f0`，Issue #3428 已按开发完成关闭；AC 留待后续。
 - #3362 API admission：主干已有修复并已关闭；剩余为 ACK/Worker 外部状态与 #3369。
-- #3309 Messages transport：已合入 `d7a36c773`，Issue 已按开发完成关闭；AC 留待后续。
+- #3309 Messages transport：已合入 `9b2407c5c`，Issue 已按开发完成关闭；AC 留待后续。
 - #2989 local auth port、#3508：开发 PR 已提交，Issue 已按开发完成关闭，等待 Hosted checks/合入。
 - #3106 encryption key versions、#3510：开发 PR 已提交，Issue 已按开发完成关闭，等待 Hosted checks/合入。
 - #3159 bootstrap timeout、#3511：开发 PR 已提交，Issue 已按开发完成关闭，等待 Hosted checks/合入。
