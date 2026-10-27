@@ -36,7 +36,11 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 			"HTTPS validation must not disable certificate verification",
 		);
 	const source = await readFile(script, "utf8");
-	if (!source.includes('git -C "$repo_root" status --porcelain --untracked-files=all'))
+	if (
+		!source.includes(
+			'git -C "$repo_root" status --porcelain --untracked-files=all',
+		)
+	)
 		throw new Error("deploy must reject a dirty source checkout");
 	const allBlock = source.slice(source.indexOf("\n\tall)"));
 	if (
