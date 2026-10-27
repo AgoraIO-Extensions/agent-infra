@@ -1,9 +1,9 @@
 # 开放 Issue 状态跟进
 
-> 快照：2026-10-27 23:15 UTC；`origin/main` `57ea5bb0a90d5f007812a689ab106b6201852c6b`.
+> 快照：2026-10-27 23:22 UTC；`origin/main` `9c55871504bca2be8a87f789aeed1a4ddddddd76`.
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
-当前开放 Issue：**26**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
+当前开放 Issue：**25**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
 
 ## 分类计数
 
@@ -12,7 +12,7 @@
 | Runtime/Worker/Core | 8 |
 | Deploy/E2E/Channels | 8 |
 | Platform/Web/Skill | 6 |
-| Workflow/Observability | 4 |
+| Workflow/Observability | 3 |
 
 ## 明细
 
@@ -40,14 +40,13 @@
 | Platform/Web/Skill | [#485](https://github.com/AgoraIO-Extensions/agent-infra/issues/485) | feat(platform): deliver authorized evaluation and quality analysis | priority:P2 | needs-triage, priority:P2, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Platform/Web/Skill | [#481](https://github.com/AgoraIO-Extensions/agent-infra/issues/481) | feat(platform): deliver user and application Agent management API | priority:P0 | needs-triage, priority:P0, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Platform/Web/Skill | [#400](https://github.com/AgoraIO-Extensions/agent-infra/issues/400) | design(web): restore agent-infra IA as the implementation and acceptance baseline | priority:P0 | enhancement, needs-triage, priority:P0, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
-| Workflow/Observability | [#3371](https://github.com/AgoraIO-Extensions/agent-infra/issues/3371) | 体验与时效性：Web 与企微在真实负载下近乎不可用（整体方案） | priority:P0 | needs-triage, priority:P0, agent:kiro | 2026-10-26 | 逐项核对开发子项及父票自身缺口 |
 | Workflow/Observability | [#690](https://github.com/AgoraIO-Extensions/agent-infra/issues/690) | feat(workflow): add bounded AI coding coordination harness | priority:P2 | enhancement, priority:P2, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Workflow/Observability | [#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144) | wayfinder: 形成 Agent 平台 M1 启动与落地路线 | priority:P0 | wayfinder:map, wayfinder, priority:P0, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
-| Workflow/Observability | [#3587](https://github.com/AgoraIO-Extensions/agent-infra/issues/3587) | docs: refresh tracker after snapshot merge | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 创建本次跟踪 PR，合并后回读快照与开放 Issue 集合 |
+| Workflow/Observability | [#3589](https://github.com/AgoraIO-Extensions/agent-infra/issues/3589) | docs: refresh tracker after parent closure | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 创建本次跟踪 PR，合并后回读快照与开放 Issue 集合 |
 
 ## 开发 PR 回读
 
-状态截至 2026-10-27 23:15 UTC。OPEN 不等于合入，MERGED 不等于真实验收完成。
+状态截至 2026-10-27 23:22 UTC。OPEN 不等于合入，MERGED 不等于真实验收完成。
 
 | PR | 状态 | head SHA | 未完成验收 |
 | --- | --- | --- | --- |
