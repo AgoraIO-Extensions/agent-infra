@@ -1,6 +1,6 @@
 # 开放 Issue 状态跟进
 
-> 快照：2026-10-27 14:50 UTC；`origin/main` `7472773eb`.
+> 快照：2026-10-27 14:58 UTC；`origin/main` `311c537ba`.
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
 当前开放 Issue：**26**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
@@ -45,7 +45,7 @@
 
 | Platform/Web/Skill | [#3568](https://github.com/AgoraIO-Extensions/agent-infra/issues/3568) | fix(platform): admit standard model selection before image digest is known | priority:P0 | priority:P0, agent:codex | 2026-10-27 | 核对完整开发范围、依赖和开发权限 |
 
-| Workflow/Observability | [#3571](https://github.com/AgoraIO-Extensions/agent-infra/issues/3571) | docs: remove closed tracker rows after final merge | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 本票用于当前清单收口 |
+| Workflow/Observability | [#3573](https://github.com/AgoraIO-Extensions/agent-infra/issues/3573) | docs: finalize tracker after latest merge | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 本票用于当前清单收口 |
 
 ## 开发 PR 回读
 
