@@ -3,13 +3,13 @@
 > 快照时间：2026-10-27（UTC）；来源：GitHub `AgoraIO-Extensions/agent-infra` 开放 Issue 实时回读。
 > 基线：`origin/main` `0015b97c5`。本表是调度快照，Issue 正文、依赖、PR 和真实验收仍是权威来源。
 
-当前开放 Issue：**51**。状态标签不能替代 AC、native blocker、PRD/工程 Spec 或真实环境证据。
+当前开放 Issue：**50**。状态标签不能替代 AC、native blocker、PRD/工程 Spec 或真实环境证据。
 
 ## 分类计数
 
 | 类别 | 数量 |
 | --- | ---: |
-| Runtime/Worker/Core | 16 |
+| Runtime/Worker/Core | 15 |
 | Deploy/E2E/Channels | 20 |
 | Platform/Web/Skill | 9 |
 | Workflow/Observability | 6 |
@@ -19,7 +19,6 @@
 | 类别 | Issue | 标题 | 优先级 | 状态/标签 | 来源或负责人 | 最近更新 | 下一步 |
 | --- | ---: | --- | --- | --- | --- | --- | --- |
 | Runtime/Worker/Core | [#3352](https://github.com/AgoraIO-Extensions/agent-infra/issues/3352) | feat(runtime): deliver Codex native context compaction in conversations | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
-| Runtime/Worker/Core | [#3342](https://github.com/AgoraIO-Extensions/agent-infra/issues/3342) | fix(runtime): Pi Native Session reuse truncates later turns | priority:P1 | priority:P1, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Runtime/Worker/Core | [#3309](https://github.com/AgoraIO-Extensions/agent-infra/issues/3309) | obs(runtime): distinguish safe Messages transport failure stages | priority:P1 | priority:P1, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Runtime/Worker/Core | [#3295](https://github.com/AgoraIO-Extensions/agent-infra/issues/3295) | blocker(ack): Flannel 环境未通过 Worker NetworkPolicy 负向验证 | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Runtime/Worker/Core | [#3277](https://github.com/AgoraIO-Extensions/agent-infra/issues/3277) | fix(worker): 开启文件交换后，镜像早于 #3256 的 Agent Workload 启动即退出（CrashLoop） | priority:P2 | needs-triage, priority:P2, agent:kiro | kiro（来源标签） | 2026-10-26 | 先补齐 Problem/Scope/Validation/Blocked by，再分派 |
