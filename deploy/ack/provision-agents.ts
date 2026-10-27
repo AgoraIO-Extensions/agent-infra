@@ -58,6 +58,12 @@ function parseInput(value: unknown) {
 	if (!value || typeof value !== "object" || Array.isArray(value))
 		fail("CONFIGURATION_INVALID");
 	const input = value as Record<string, any>;
+	if (
+		Object.keys(input).some(
+			(key) => !["schemaVersion", "origin", "requests", "waitSeconds"].includes(key),
+		)
+	)
+		fail("CONFIGURATION_INVALID");
 	if (input.schemaVersion !== 1 || typeof input.origin !== "string")
 		fail("CONFIGURATION_INVALID");
 	const origin = new URL(input.origin);
@@ -82,6 +88,12 @@ function parseInput(value: unknown) {
 	const seen = new Set();
 	const requests = input.requests.map((request: Record<string, any>) => {
 		if (!request || typeof request !== "object" || Array.isArray(request))
+			fail("CONFIGURATION_INVALID");
+		if (
+			Object.keys(request).some(
+				(key) => !["name", "bodyFile", "credentialFile", "idempotencyKey"].includes(key),
+			)
+		)
 			fail("CONFIGURATION_INVALID");
 		const { name, bodyFile, credentialFile, idempotencyKey } = request;
 		if (
