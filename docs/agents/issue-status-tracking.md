@@ -1,6 +1,6 @@
 # 开放 Issue 状态跟进
 
-> 快照：2026-10-27 02:17 UTC；`origin/main` `fc5cd80ff`。
+> 快照：2026-10-27 02:17 UTC；`origin/main` `aee3ceaf2`。
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
 当前开放 Issue：**41**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
@@ -47,7 +47,7 @@
 | Deploy/E2E/Channels | [#2742](https://github.com/AgoraIO-Extensions/agent-infra/issues/2742) | feat(skill): connect project snapshot packaging to the production publication path | 未标注 | agent:codex | 2026-10-26 | 核对 #2949/#2946 消费者交付后收口 |
 | Deploy/E2E/Channels | [#1548](https://github.com/AgoraIO-Extensions/agent-infra/issues/1548) | test(skill-hub): accept the deployed lifecycle and Web conversation chain | priority:P0 | ready-for-human, priority:P0, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Deploy/E2E/Channels | [#171](https://github.com/AgoraIO-Extensions/agent-infra/issues/171) | 准备 P0 首发真实环境 ACK tenancy 与访问入口资源 | priority:P0 | wayfinder:task, wayfinder, priority:P0, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
-| Platform/Web/Skill | [#3146](https://github.com/AgoraIO-Extensions/agent-infra/issues/3146) | feat(web): 新建标准模板申请按默认 Key 的 /models 候选选择模型（支持 allowedModels: null） | priority:P1 | needs-triage, ready-for-agent, priority:P1, agent:kiro | 2026-10-27 | 开发中：候选 API、生成客户端和 Web 消费者；遵循当前 ADR-0030 档位 |
+| Platform/Web/Skill | [#3146](https://github.com/AgoraIO-Extensions/agent-infra/issues/3146) | feat(web): 新建标准模板申请按默认 Key 的 /models 候选选择模型（支持 allowedModels: null） | priority:P1 | ready-for-agent, priority:P1, agent:kiro | 2026-10-27 | 开发中：候选 API、生成客户端和 Web 消费者；遵循当前 ADR-0030 档位 |
 | Platform/Web/Skill | [#3139](https://github.com/AgoraIO-Extensions/agent-infra/issues/3139) | fix(model): Catalog 端点追加模型或档位后，已有 Agent 的模型投影全部失效 | 未标注 | needs-triage, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Platform/Web/Skill | [#2976](https://github.com/AgoraIO-Extensions/agent-infra/issues/2976) | feat: 标准 Codex 模板接入 DeepSeek，并在 Web 与企微展示思考过程 | priority:P1 | ready-for-agent, priority:P1, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Platform/Web/Skill | [#2858](https://github.com/AgoraIO-Extensions/agent-infra/issues/2858) | test: accept Platform management Web flow from #535 | 未标注 | agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
