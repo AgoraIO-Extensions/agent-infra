@@ -1,6 +1,6 @@
 # 开放 Issue 状态跟进
 
-> 快照：2026-10-27 13:44 UTC；`origin/main` `467fe161a`.
+> 快照：2026-10-27 14:01 UTC；`origin/main` `f73fb9354`.
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
 当前开放 Issue：**26**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
@@ -45,11 +45,11 @@
 
 | Platform/Web/Skill | [#3552](https://github.com/AgoraIO-Extensions/agent-infra/issues/3552) | feat(skill): wire SkillSpector admission into publication supplier | priority:P1 | ready-for-agent, priority:P1, agent:codex | 2026-10-27 | 依赖 #2742 的生产项目快照发布；完成 admission-to-publication 接线后再收口 |
 
-| Workflow/Observability | [#3564](https://github.com/AgoraIO-Extensions/agent-infra/issues/3564) | docs: remove closed tracker issue after final merge | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 本票用于当前清单收口 |
+| Workflow/Observability | [#3566](https://github.com/AgoraIO-Extensions/agent-infra/issues/3566) | docs: remove closed tracker issue after final merge | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 本票用于当前清单收口 |
 
 ## 开发 PR 回读
 
-状态截至 2026-10-27 13:35 UTC。OPEN 不等于合入，MERGED 不等于真实验收完成。
+状态截至 2026-10-27 14:01 UTC。OPEN 不等于合入，MERGED 不等于真实验收完成。
 
 | PR | 状态 | head SHA | 未完成验收 |
 | --- | --- | --- | --- |
