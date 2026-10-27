@@ -145,3 +145,33 @@ node tests/local-real-e2e/conversation-browser.mjs --check-config \
 `apps/web/tests/conversation-live.spec.ts` 是 Playwright 的合成 fixture 测试：它在浏览器
 内延迟返回两帧 SSE，专门验证提交防重、增量渲染、刷新恢复和权限失效 UI。fixture 通过不
 代表部署后端、模型或 Connection 已经可用。
+
+## 同一会话多轮检查
+
+为配置添加后续提示词和逐轮期望答案，可在同一个 Conversation 内顺序运行 3–5 轮：
+
+```json
+{
+  "prompt": "仅回复 FIRST-OK",
+  "followUpPrompts": ["仅回复 SECOND-OK", "仅回复 THIRD-OK"],
+  "expectedReplies": ["FIRST-OK", "SECOND-OK", "THIRD-OK"]
+}
+```
+
+这些字段补充到前述完整配置中。多轮必须提供与轮数一致的期望答案；比较时只移除两端
+空白，不输出答案正文。第一轮创建 Conversation，后续轮只向该 Conversation 提交消息，
+每轮要求独立 Execution、对应 SSE 增量、完成状态、持久化回复、页面刷新恢复及跨主体拒绝。
+第二轮失败就停止，不能把第一轮结果报告为多轮通过。
+
+输出增加 `requestedTurnCount`、`completedTurnCount` 和 `turns`。
+每轮保存失败阶段及浏览器点击到受理、首个文本帧、完成帧的毫秒数；
+模型、排队、Sandbox 准备耗时未采集时为 `null`，不把浏览器总耗时当模型耗时。
+`modelCallVerified` 和 `connectionVerified` 仍为 `false`，多轮检查不证明真实模型或 Connection。
+
+受控本机服务配合真实 Chromium 的回归命令如下，只验证工具接线和失败检测：
+
+```bash
+ACK_BROWSER_FIXTURE_TEST=1 node --test tests/ack-multiturn-browser.test.mjs
+```
+
+该回归使用合成响应、临时浏览器主体和 loopback 服务，不访问 ACK、不验证 LDAP 或模型。

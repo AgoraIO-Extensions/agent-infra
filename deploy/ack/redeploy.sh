@@ -209,10 +209,9 @@ validate_templates() {
 		[[ -r "$config" ]] || die "missing template config: $config"
 		out="$evidence_dir/template-$template.json"
 		local run_output receipt_dir
-		run_output=$(node "$repo_root/tests/local-real-e2e/conversation-browser.mjs" "$config" 2>&1) || {
-			printf '%s\n' '{"result":"failed","failureClass":"BROWSER_JOURNEY_FAILED"}' >"$evidence_dir/template-$template.json"
-			die "template validation failed: $template"
-		}
+		local run_status=0
+		run_output=$(node "$repo_root/tests/local-real-e2e/conversation-browser.mjs" "$config" 2>&1) || run_status=$?
+
 		receipt_dir=$(printf '%s\n' "$run_output" | tail -n 1)
 		[[ -r "$receipt_dir/evidence.json" ]] || die "template validation did not produce evidence: $template"
 		cp "$receipt_dir/evidence.json" "$out"
@@ -227,8 +226,12 @@ NODE
 		node - "$out" <<'NODE'
 const fs = require("node:fs");
 const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-if (value.result !== "passed") process.exit(1);
+if (value.result !== "passed" || !Number.isInteger(value.requestedTurnCount) ||
+	value.requestedTurnCount < 3 || value.completedTurnCount !== value.requestedTurnCount ||
+	!Array.isArray(value.turns) || value.turns.length !== value.requestedTurnCount ||
+	value.turns.some(turn => turn.result !== "passed")) process.exit(1);
 NODE
+		[[ "$run_status" -eq 0 ]] || die "browser journey failed"
 		# Preserve the browser runner evidence and masked screenshots for diagnosis.
 	done
 }

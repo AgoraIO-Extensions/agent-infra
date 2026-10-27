@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { conversationTurns } from "../../tests/local-real-e2e/conversation-turn-plan.ts";
 import { provisionAgents, readPrivateText } from "./provision-agents.ts";
 
 type Source = { kind: string; templateId?: string; interactionMode?: string };
@@ -164,6 +165,8 @@ export async function provisionWithBindings(
 					join(blueprintDirectory, `${filename}.json`),
 				);
 				assert(blueprint.origin === input.origin);
+				const turns = conversationTurns(blueprint);
+				if (requireMatrix) assert(turns.length >= 3, "THREE_TURNS_REQUIRED");
 				assert(
 					typeof blueprint.prompt === "string" && blueprint.prompt.length > 0,
 				);
