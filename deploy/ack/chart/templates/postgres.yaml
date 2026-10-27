@@ -3,7 +3,7 @@
 {{- end }}
 {{- if .Values.postgres.enabled }}
 {{- $admin := default "agent_infra" .Values.postgres.adminUser }}
-{{- $database := default "agent_infra" .Values.postgres.initialDatabase }}
+{{- $database := default "postgres" .Values.postgres.initialDatabase }}
 {{- $secret := default .Values.secrets.database .Values.postgres.adminSecret }}
 apiVersion: v1
 kind: Service

@@ -33,6 +33,22 @@ export ACK_EVIDENCE_DIR=/private/ack/evidence/$(date -u +%Y%m%dT%H%M%SZ)
 
 `ACK_VALUES_FILE` 从 [`values.ack.example.yaml`](./values.ack.example.yaml) 复制并替换所有镜像、Ingress、Corp ID 和 Secret **名称**。`ACK_IMAGE_MANIFEST` 和 `ACK_RUNTIME_IMAGE_MANIFEST` 必须是同一 `ACK_SOURCE_SHA` 生成的 `linux/amd64` Platform/Runtime manifest；脚本会将 digest 逐项与渲染后的 Helm image 和 Runtime 输入绑定。HTTPS 探针默认使用系统 CA；自签名 ACK 入口必须提供仓库外的 `ACK_CA_CERT_FILE`，脚本不会跳过证书验证。Secret 内容通过 E2E/private 配置在目标集群预先创建，不能写进 values 或 Git。已有数据库环境保持 `postgres.enabled=false`、`migrations.enabled=false`；全新环境必须先单独评审数据库和 migration，再开启这两个开关。
 
+如果需要从现有 ACK 生成迁移 capsule，可先执行只读采集：
+
+```bash
+export ACK_KUBECONFIG=/private/ack/kubeconfig
+export ACK_CAPTURE_DIR=/private/ack/input-capsule
+deploy/ack/redeploy.sh capture-inputs
+```
+
+该命令读取精确 Helm release 的合并 values、集群版本和渲染出的 Secret/ConfigMap 依赖，
+在 `ACK_CAPTURE_DIR` 下以 `0600` 保存文件引用和脱敏 receipt，不写 ACK。它生成
+`values.reuse.yaml`、`values.fresh.yaml`、`bootstrap-inputs.reuse.json` 和
+`bootstrap-inputs.fresh.json`。fresh 配置会为新的 PostgreSQL 生成独立的管理员、Platform、
+目录运行和目录迁移账号；不会错误复用旧环境中共用一个角色/数据库的 URL。旧 values 中被
+当前 schema 拒绝的字段会被移除并记录在本地 receipt。采集仍不生成源码绑定的镜像 manifest，
+部署前必须补齐同一个 `ACK_SOURCE_SHA` 的 Platform/Runtime amd64 manifest。
+
 `ACK_AGENT_STATE_DIR` 必须是仓库外、当前用户拥有的既有 `0700` 目录。
 创建成功即以 `0600` 原子写入 `agent-bindings.json`；它是私有操作状态，
 包含原始 Agent ID，不是可分享证据。状态绑定目标 origin、源码 SHA 和创建请求哈希；

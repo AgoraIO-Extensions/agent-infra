@@ -24,7 +24,7 @@ die() {
 
 usage() {
 	cat <<'EOF'
-Usage: deploy/ack/redeploy.sh <plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|bootstrap-credential|cleanup-plan|deploy|provision|validate|clean|destroy|all>
+Usage: deploy/ack/redeploy.sh <capture-inputs|plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|bootstrap-credential|cleanup-plan|deploy|provision|validate|clean|destroy|all>
 
 Required for plan/deploy/validate:
   ACK_KUBECONFIG   private kubeconfig path
@@ -46,6 +46,7 @@ Optional validation inputs:
   ACK_CLEANUP_PLAN_FILE    private cluster/namespace ownership input for cleanup-plan
   ACK_AGENT_STATE_DIR      external existing 0700 directory for private ID bindings
   ACK_BROWSER_BLUEPRINT_DIR private browser configs without a fixed Agent ID
+  ACK_CAPTURE_DIR          external 0700 directory for read-only ACK input capture
 
 Cleanup commands are disabled pending exact inventory and restore verification.
 
@@ -167,6 +168,18 @@ bootstrap_credential() {
 		die "API credential bootstrap failed; inspect only the redacted receipt: $evidence_dir/api-credential.json"
 	fi
 	echo "ack-redeploy: API credential bootstrap passed; evidence=$evidence_dir"
+}
+
+capture_inputs() {
+	require_file ACK_KUBECONFIG "${ACK_KUBECONFIG:-}"
+	local output=${ACK_CAPTURE_DIR:-"${TMPDIR:-/tmp}/agent-infra-ack-inputs-$(date -u +%Y%m%dT%H%M%SZ)"}
+	mkdir -p "$output"
+	chmod 700 "$output"
+	if ! node --experimental-strip-types "$repo_root/deploy/ack/capture-inputs.ts" "$output" >"$output/capture.stdout.json"; then
+		die "ACK input capture failed; no deployment was attempted"
+	fi
+	chmod 600 "$output/capture.stdout.json"
+	echo "ack-redeploy: existing ACK inputs captured read-only; source-bound image manifests remain required; capsule=$output"
 }
 
 cleanup_plan() {
@@ -363,6 +376,7 @@ destroy() {
 command=${1:-help}
 case "$command" in
 	help|-h|--help) usage ;;
+	capture-inputs) capture_inputs ;;
 	plan) plan ;;
 	bootstrap-plan) bootstrap_inputs plan ;;
 	bootstrap-inputs) bootstrap_inputs apply ;;

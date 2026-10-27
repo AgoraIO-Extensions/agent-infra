@@ -100,7 +100,7 @@ postgres:
   enabled: false
   # Fresh bootstrap supplies a separate administrator and generated initialization Secret.
   adminUser: agent_infra
-  initialDatabase: agent_infra
+  initialDatabase: postgres
   adminSecret: ""
   initializationSecret: ""
   bootstrapInstallationId: ""
