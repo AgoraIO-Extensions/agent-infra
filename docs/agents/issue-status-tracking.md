@@ -1,6 +1,6 @@
 # 开放 Issue 状态跟进
 
-> 快照：2026-10-27 15:05 UTC；`origin/main` `4116383c4`.
+> 快照：2026-10-27 15:12 UTC；`origin/main` `4116383c4`.
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
 当前开放 Issue：**25**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
@@ -12,7 +12,7 @@
 | Runtime/Worker/Core | 8 |
 | Deploy/E2E/Channels | 7 |
 | Platform/Web/Skill | 7 |
-| Workflow/Observability | 4 |
+| Workflow/Observability | 3 |
 
 ## 明细
 
@@ -44,7 +44,6 @@
 | Workflow/Observability | [#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144) | wayfinder: 形成 Agent 平台 M1 启动与落地路线 | priority:P0 | wayfinder:map, wayfinder, priority:P0, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 
 | Platform/Web/Skill | [#3568](https://github.com/AgoraIO-Extensions/agent-infra/issues/3568) | fix(platform): admit standard model selection before image digest is known | priority:P0 | priority:P0, agent:codex | 2026-10-27 | 核对完整开发范围、依赖和开发权限 |
-
 
 ## 开发 PR 回读
 
