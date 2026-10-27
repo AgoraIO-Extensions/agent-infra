@@ -712,6 +712,23 @@ function createSessionSandboxAllocationResolverV1(
 		resourceFence: number,
 		requireCurrentTemplateTrust = true,
 	): Promise<SessionSandboxAllocationV1> => {
+		const projectedTemplateId =
+			modelProjection &&
+			typeof modelProjection === "object" &&
+			"standardTemplateBinding" in modelProjection &&
+			modelProjection.standardTemplateBinding &&
+			typeof modelProjection.standardTemplateBinding === "object" &&
+			"templateId" in modelProjection.standardTemplateBinding &&
+			typeof modelProjection.standardTemplateBinding.templateId === "string"
+				? modelProjection.standardTemplateBinding.templateId
+				: undefined;
+		const templateBinding = projectedTemplateId
+			? workload.templateModelBindings.find(
+					(candidate) =>
+						candidate.templateId === projectedTemplateId &&
+						candidate.imageDigest === deployment.imageDigest,
+				)
+			: undefined;
 		const allocation: SessionSandboxAllocationV1 = {
 			...binding,
 			generation,
@@ -725,7 +742,7 @@ function createSessionSandboxAllocationResolverV1(
 			secretName: binding.resourceName,
 			// Only the reviewed deployment egress, identical to the Agent Workload's.
 			egress: sessionSandboxEgressPolicyV1(workload.policy),
-			imageDigest: `${workload.policy.imageRepository}@${deployment.imageDigest}`,
+			imageDigest: `${templateBinding?.imageRepository ?? workload.policy.imageRepository}@${deployment.imageDigest}`,
 			containerPort: deployment.service.port,
 			env: deployment.env,
 			// V4-only: a static-key or missing projection fails before any write.

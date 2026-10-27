@@ -109,6 +109,8 @@ function skillHubRuntimeEnvironmentV1(value: AgentWorkloadDesiredV1) {
 export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 	readonly connectionConsumerControl?: boolean;
 	readonly policy: KubernetesWorkloadPolicyV1;
+	/** Exact pull repository selected by the trusted standard-template binding. */
+	readonly imageRepository: string;
 	readonly modelProjection:
 		| RuntimeModelProjectionV1
 		| RuntimeModelProjectionV4
@@ -123,6 +125,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 }) {
 	const {
 		policy,
+		imageRepository,
 		modelProjection,
 		modelInjection,
 		standardTemplateBinding,
@@ -509,6 +512,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 	} = createKubernetesPodValidationV1({
 		connectionConsumerControl: dependencies.connectionConsumerControl,
 		policy,
+		imageRepository,
 		standardTemplateBinding: templateBinding,
 		workloadEnvironment,
 		environmentSecrets,

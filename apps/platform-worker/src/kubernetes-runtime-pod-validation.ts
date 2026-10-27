@@ -28,13 +28,16 @@ import {
 export function createKubernetesPodValidationV1(dependencies: {
 	readonly connectionConsumerControl?: boolean;
 	readonly policy: KubernetesWorkloadPolicyV1;
+	/** Exact pull repository selected by the trusted standard-template binding. */
+	readonly imageRepository: string;
 	readonly standardTemplateBinding?: StandardTemplateModelBindingV1;
 	readonly workloadEnvironment: (value: AgentWorkloadDesiredV1) => V1EnvVar[];
 	readonly environmentSecrets: (
 		value: AgentWorkloadDesiredV1,
 	) => AgentWorkloadDesiredV1["secretRefs"];
 }) {
-	const { policy, workloadEnvironment, environmentSecrets } = dependencies;
+	const { policy, imageRepository, workloadEnvironment, environmentSecrets } =
+		dependencies;
 	const topologyLabelValues = structuredClone(
 		policy.allowedPodTopologyLabelValues ?? {},
 	);
@@ -439,7 +442,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 			pod?.affinity !== undefined ||
 			pod?.runtimeClassName !== undefined ||
 			pod?.nodeName !== undefined ||
-			container?.image !== `${policy.imageRepository}@${value.imageDigest}` ||
+			container?.image !== `${imageRepository}@${value.imageDigest}` ||
 			pod?.automountServiceAccountToken !== false
 		);
 	}
