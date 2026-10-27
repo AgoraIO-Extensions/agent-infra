@@ -11,6 +11,7 @@
 | --- | ---: |
 | Runtime/Worker/Core | 14 |
 | Deploy/E2E/Channels | 15 |
+| Deploy/E2E/Channels | [#3337](https://github.com/AgoraIO-Extensions/agent-infra/issues/3337) | fix(deploy): ACK pre-render uses default Helm Kubernetes version | priority:P2 | priority:P2, agent:codex | codex（来源标签） | 2026-10-27 | PR #3507 已合入；PR #3512 修复 kubectl JSON 兼容性缺陷，开发 Issue 重新开放 |
 | Platform/Web/Skill | 8 |
 | Workflow/Observability | 5 |
 
