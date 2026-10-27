@@ -32,6 +32,10 @@ secrets:
   workerDirectoryRead: agent-infra-worker-directory-read
   workerCa: agent-infra-worker-ca
   webTls: agent-infra-web-tls
+encryption:
+  keyVersion: key-v1
+worker:
+  keyVersions: key-v1
 publicOrigin: https://ack.example.invalid
 directory:
   corpId: ww0000000000000000

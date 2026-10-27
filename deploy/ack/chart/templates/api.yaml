@@ -54,7 +54,7 @@ spec:
             - name: PLATFORM_DATABASE_URL
               valueFrom: {secretKeyRef: {name: {{ .Values.secrets.database }}, key: url}}
             - {name: AGENT_INFRA_ENCRYPTION_PUBLIC_KEY_FILE, value: /var/run/agent-infra/encryption-public-key/public.pem}
-            - {name: AGENT_INFRA_ENCRYPTION_KEY_VERSION, value: key-v1}
+            - {name: AGENT_INFRA_ENCRYPTION_KEY_VERSION, value: {{ .Values.encryption.keyVersion | quote }} }
             - {name: NODE_EXTRA_CA_CERTS, value: /var/run/agent-infra/directory-ca/tls.crt}
           volumeMounts:
             - {name: api-configuration, mountPath: /app/deployment, readOnly: true}
