@@ -123,7 +123,10 @@ describe("Platform API native metadata current client", () => {
 						resolve(
 							new Response(
 								JSON.stringify({ outcome: "allowed", request: liveRequest }),
-								{ status: 200, headers: { "content-type": "application/json" } },
+								{
+									status: 200,
+									headers: { "content-type": "application/json" },
+								},
 							),
 						);
 					}, 11_000);
