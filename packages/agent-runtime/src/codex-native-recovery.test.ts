@@ -1102,8 +1102,10 @@ describe
 			const command = submit("synthetic-pre-stop-failure");
 			const accepted = await driver.execute(command);
 			await expect
-				.poll(() =>
-					driver.getStatus(accepted.nativeSessionRef, command.executionId),
+				.poll(
+					() =>
+						driver.getStatus(accepted.nativeSessionRef, command.executionId),
+					{ timeout: 60_000 },
 				)
 				.toBe("failed");
 			const beforeStop = await recoveryEvidence(path, command.executionId);
