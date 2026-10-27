@@ -1,6 +1,6 @@
 # 开放 Issue 状态跟进
 
-> 快照：2026-10-27 14:01 UTC；`origin/main` `f73fb9354`.
+> 快照：2026-10-27 14:23 UTC；`origin/main` `b7882c57f`.
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
 当前开放 Issue：**26**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
@@ -11,8 +11,8 @@
 | --- | ---: |
 | Runtime/Worker/Core | 8 |
 | Deploy/E2E/Channels | 7 |
-| Platform/Web/Skill | 7 |
-| Workflow/Observability | 4 |
+| Platform/Web/Skill | 6 |
+| Workflow/Observability | 5 |
 
 ## 明细
 
@@ -43,9 +43,10 @@
 | Workflow/Observability | [#690](https://github.com/AgoraIO-Extensions/agent-infra/issues/690) | feat(workflow): add bounded AI coding coordination harness | priority:P2 | enhancement, priority:P2, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Workflow/Observability | [#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144) | wayfinder: 形成 Agent 平台 M1 启动与落地路线 | priority:P0 | wayfinder:map, wayfinder, priority:P0, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 
-| Platform/Web/Skill | [#3552](https://github.com/AgoraIO-Extensions/agent-infra/issues/3552) | feat(skill): wire SkillSpector admission into publication supplier | priority:P1 | ready-for-agent, priority:P1, agent:codex | 2026-10-27 | 依赖 #2742 的生产项目快照发布；完成 admission-to-publication 接线后再收口 |
 
 | Workflow/Observability | [#3566](https://github.com/AgoraIO-Extensions/agent-infra/issues/3566) | docs: remove closed tracker issue after final merge | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 本票用于当前清单收口 |
+
+| Workflow/Observability | [#3568](https://github.com/AgoraIO-Extensions/agent-infra/issues/3568) | fix(platform): admit standard model selection before image digest is known | priority:P2 | priority:P0, agent:codex | 2026-10-27 | 本票用于当前清单收口 |
 
 ## 开发 PR 回读
 
