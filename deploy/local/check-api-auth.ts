@@ -13,7 +13,7 @@ if (
 }
 
 const token = (await readFile(tokenFile, "utf8")).trim();
-const request = (value: string) => new Promise<number | undefined>((resolve, reject) => {
+const requestOnce = (value: string) => new Promise<number | undefined>((resolve, reject) => {
   const probe = httpRequest({
     hostname: "127.0.0.1",
     port: apiPort,
@@ -33,6 +33,29 @@ const request = (value: string) => new Promise<number | undefined>((resolve, rej
   probe.once("error", reject);
   probe.end();
 });
+
+const connectionErrors = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+]);
+const request = async (value: string) => {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    try {
+      return await requestOnce(value);
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error
+        ? error.code
+        : undefined;
+      if (typeof code !== "string" || !connectionErrors.has(code) || Date.now() >= deadline) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, deadline - Date.now())));
+    }
+  }
+};
 
 try {
   if (

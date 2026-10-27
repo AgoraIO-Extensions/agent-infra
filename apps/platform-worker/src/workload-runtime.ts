@@ -131,6 +131,8 @@ export interface WorkloadRuntimeOptionsV1 {
 	}>;
 	/** Credential-free record of each failed Workload probe (#2046). */
 	readonly onProbeFailure?: (failure: WorkloadProbeFailureV1) => void;
+	/** Credential-free timing/count evidence for readiness CPU investigation (#3303). */
+	readonly onProbe?: (observation: WorkloadProbeObservationV1) => void;
 	/**
 	 * 同一 Worker 进程内 Workload 监测与会话路由共享的 readiness 记录（#1889）。
 	 * 未提供时每个实例使用自己的记录，只复用本实例最近一次完整探测的结果。
@@ -216,6 +218,15 @@ export interface WorkloadProbeFailureV1 {
 	/** `timeout`/`connection` never answered; `unavailable` answered 5xx;
 	 * `response` answered unhealthy. */
 	readonly reason: "timeout" | "connection" | "unavailable" | "response";
+}
+
+export interface WorkloadProbeObservationV1 {
+	readonly agentId: string;
+	readonly workloadRevision: number;
+	readonly stage: "health" | "readiness";
+	readonly outcome: "passed" | "failed" | "reused";
+	readonly durationMs: number;
+	readonly reason?: WorkloadProbeFailureV1["reason"];
 }
 
 export function workloadResourceConfigurationHashV1(
@@ -639,6 +650,25 @@ export function createWorkloadRuntimeV1(
 			modelProjection,
 			standardTemplateBinding,
 			async probe({ desired, serviceOrigin, podUid }) {
+				let probeStartedAt = performance.now();
+				const observed = (
+					stage: WorkloadProbeObservationV1["stage"],
+					outcome: WorkloadProbeObservationV1["outcome"],
+					reason?: WorkloadProbeFailureV1["reason"],
+				) => {
+					try {
+						options.onProbe?.({
+							agentId: desired.agentId,
+							workloadRevision: desired.workloadRevision,
+							stage,
+							outcome,
+							durationMs: performance.now() - probeStartedAt,
+							...(reason ? { reason } : {}),
+						});
+					} catch {
+						// Probe telemetry is observational and never changes readiness.
+					}
+				};
 				const baseUrl = serviceOrigin;
 				const healthFetch =
 					desired.runtimeManifest.interactionMode === "self-managed"
@@ -658,6 +688,7 @@ export function createWorkloadRuntimeV1(
 					} catch {
 						// Recording a failure is observational and never changes it.
 					}
+					observed(stage, "failed", reason);
 				};
 				// Only a probe that never answered is incomplete; every answer
 				// that fails validation stays an unhealthy result (#2046).
@@ -691,11 +722,17 @@ export function createWorkloadRuntimeV1(
 					return false;
 				}
 				if (desired.runtimeManifest.interactionMode === "self-managed") {
+					observed("health", "passed");
 					recordCapabilities(RuntimeCapabilitySetV1Schema.parse({}));
 					return true;
 				}
+				observed("health", "passed");
+				probeStartedAt = performance.now();
 				// 同一 Pod 在有效期内已通过签名 readiness：只保留上面的 /healthz。
-				if (podUid && readiness?.reuse?.(podUid)) return true;
+				if (podUid && readiness?.reuse?.(podUid)) {
+					observed("readiness", "reused");
+					return true;
+				}
 				const controller = new AbortController();
 				const resolvedBrowserBinding =
 					browserBinding ??
@@ -802,7 +839,10 @@ export function createWorkloadRuntimeV1(
 					...(browser ? { browser } : {}),
 				});
 				if (probe.core !== "passed") failed("readiness", "response");
-				else if (podUid) readiness?.passed?.(podUid);
+				else {
+					observed("readiness", "passed");
+					if (podUid) readiness?.passed?.(podUid);
+				}
 				return probe.core === "passed";
 			},
 		});

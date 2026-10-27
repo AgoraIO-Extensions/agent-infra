@@ -1,7 +1,7 @@
 # Issue 工作指导
 
 > 适用范围：`AgoraIO-Extensions/agent-infra` 当前开放 Issue。本文把实时清单转成可执行的分派规则；具体产品结论仍以 PRD、工程 Spec、HLD 和 Issue 正文为准。
-> 最近快照：2026-10-26；开放 Issue 54 个；主干 `6bb57c998`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
+> 最新时间、基线、标签与 PR head/merge 证据统一见 [状态跟进](issue-status-tracking.md)。
 
 ## 四类工作边界
 
@@ -19,19 +19,19 @@
 3. 刷新 `origin/main`，建立独立 worktree 和分支；冻结本 lane 的 Issue、文件和部署资源所有权。不得覆盖其他 lane 的脏工作树或分支。
 4. 实现最小直接改动，优先补边界和负向测试；把受控 fixture、focused test、Hosted CI、真实部署/浏览器/外部账号证据分开记录。
 5. 提交 Conventional Commit，创建 PR 时带 Issue 链接、变更边界、验证命令、剩余 blocker 和回滚风险；PR 创建后交给 CI watcher，合并确认后交给 merged-PR cleanup。
-6. 只有在 PR head、required checks、review threads、merge state 和 Issue AC 回读一致后，才把状态推进为完成；任何未验证的真实验收 AC 保持未勾选。
+6. 完整开发工作完成即可关闭 development Issue；创建 PR 或部分 slice 不足以证明完整开发范围完成。真实验收 AC 保留原状态，后续由负责人统一跟进。父 Issue 只有在全部开发子项完成且无自身独立开发缺口时关闭。
 
 ## 本轮并行委派
 
-本轮按三条可独立交付的 lane 委派；每条 lane 只拥有一个 primary Issue 和其声明文件，不共享写入。
+| Lane | Primary Issue | 文件范围与交付终点 |
+| --- | --- | --- |
+| 模型候选 | [#3146](https://github.com/AgoraIO-Extensions/agent-infra/issues/3146) | Core、API、Contracts/生成物、Web 新建申请；实现候选查询至提交的完整消费者 |
+| Skill consumer | PR #3517；Issue #2949 已按开发交付关闭 | Store publication reader、Object Storage 证据 verifier、Worker 接线；不触碰其他 lane 的生成物 |
+| 协调者 | [#3499](https://github.com/AgoraIO-Extensions/agent-infra/pull/3499) | 状态文档、父子开发范围、标签和未解决 review threads |
 
-| Agent lane | Primary Issue | 目标 | 禁止越界 |
-| --- | ---: | --- | --- |
-| Worker stale binding | [#3380](https://github.com/AgoraIO-Extensions/agent-infra/issues/3380) | 已提交 PR #3495，等待开发合入 | 不处理 AC/ACK |
-| Worker diagnostics | [#3428](https://github.com/AgoraIO-Extensions/agent-infra/issues/3428) | 已提交 PR #3479，等待开发合入 | 不处理 AC/真实验收 |
-| E2E Harness | [#3036](https://github.com/AgoraIO-Extensions/agent-infra/issues/3036) | 已提交 PR #3469，等待开发合入 | 不处理 AC/固定环境验收 |
-
-三条 lane 的子 agent 都必须先在最新 `origin/main` 上复读 Issue；若发现 AC、依赖或 owner 不满足实现门槛，返回带证据的只读 handoff，不创建伪 PR。
+每条 lane 独占已声明文件，基于刷新后的 main 和隔离 worktree 开发。
+缺失内部接口若已在 Issue Scope 中授权，属于待实现内容；只有实际产品/架构冲突或外部输入缺失
+才记录 blocker，不将缺失代码本身当作外部审批门禁。
 
 ## 分派与状态更新规则
 
@@ -50,9 +50,13 @@
 - [Issue Tracker](issue-tracker.md)
 - [Triage Labels](triage-labels.md)
 
-## 当前开发交付
+## 开发交付与来源
 
-- #3495：stale binding fix，Hosted Backend/Workload 运行。
-- #3479：multi-service diagnostics，Hosted Backend/Workload 运行。
-- #3469：E2E Harness，Hosted Web/Backend/Heavy/Workload 运行。
-- 开发 PR 合入后立即关闭对应 development Issue；AC 后续统一跟进。
+开发 PR 的准确状态、日期、head SHA、merge SHA、Issue AC 链接统一见
+[开发 PR 回读](issue-status-tracking.md#开发-pr-回读)，不在此重复维护历史 SHA。
+发现代码遗漏或回归继续修复并恢复跟踪，不把真实验收延期当成代码缺口已完成。
+
+标签遵循 [Issue Tracker](issue-tracker.md#agent-provenance) 与
+[Triage Labels](triage-labels.md)。新建 Issue/PR 显式传入唯一 `agent:*` 来源标签，
+正文 `Agent` 与标签一致并保留 `Agent-Session-ID`；处理其他 Agent 创建的 Issue 保留原来源。
+优先级按实际开发顺序设置，标签不替代依赖和权限判断。
