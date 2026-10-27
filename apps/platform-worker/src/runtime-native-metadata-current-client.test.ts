@@ -16,7 +16,7 @@ const request = {
 		authorizationRevision: "authorization-current-client",
 	},
 	readStartedAt: 1_000,
-	expiresAt: 20_000,
+	expiresAt: Date.now() + 30_000,
 	requestId: "request-current-client",
 	traceId: "trace-current-client",
 	phase: "read_metadata" as const,
