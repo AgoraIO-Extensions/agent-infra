@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
+import {
+	openRuntimeMessagesTransport,
+	type RuntimeMessagesTransportDiagnostic,
+} from "./messages-model-transport.js";
 
 function messages(text: string[]) {
 	return [
@@ -239,6 +242,7 @@ it.each(["valid", "credential"])(
 it("admits the bound option before sending and prevents a native retry after a provider error", async () => {
 	let admitted = false;
 	let calls = 0;
+	const diagnostics: RuntimeMessagesTransportDiagnostic[] = [];
 	const transport = await openRuntimeMessagesTransport({
 		endpoint: "https://model.example.test/team",
 		credential: "synthetic-provider-credential",
@@ -247,6 +251,9 @@ it("admits the bound option before sending and prevents a native retry after a p
 		effort: "high",
 		admit: async () => {
 			admitted = true;
+		},
+		receipt: async (_state, _endTurn, diagnostic) => {
+			if (diagnostic) diagnostics.push(diagnostic);
 		},
 		fetch: async (url, init) => {
 			expect(admitted).toBe(true);
@@ -282,6 +289,60 @@ it("admits the bound option before sending and prevents a native retry after a p
 		expect(await (await request()).text()).not.toContain("synthetic-provider");
 		expect(calls).toBe(1);
 		expect(transport.failure()).toBe("failed");
+		expect(diagnostics.at(-1)).toMatchObject({
+			stage: "upstream_http",
+			sent: true,
+			statusCode: 400,
+			statusClass: "4xx",
+		});
+	} finally {
+		await transport.close();
+	}
+});
+
+it("records a bounded content-type diagnostic without exposing upstream data", async () => {
+	const diagnostics: RuntimeMessagesTransportDiagnostic[] = [];
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		credential: "synthetic-provider-credential",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {},
+		receipt: async (_state, _endTurn, diagnostic) => {
+			if (diagnostic) diagnostics.push(diagnostic);
+		},
+		fetch: async () =>
+			new Response("synthetic-provider-secret", {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			}),
+	});
+	try {
+		const response = await fetch(
+			`${transport.modelAccess.endpoint}/v1/messages`,
+			{
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${transport.modelAccess.credential}`,
+				},
+				body: JSON.stringify({
+					model: "claude-opus-5",
+					output_config: { effort: "high" },
+					thinking: { type: "adaptive" },
+					stream: true,
+					messages: [],
+				}),
+			},
+		);
+		const body = await response.text();
+		expect(body).not.toContain("synthetic-provider-secret");
+		expect(transport.failure()).toBe("unknown");
+		expect(diagnostics.at(-1)).toMatchObject({
+			stage: "upstream_content_type",
+			sent: true,
+		});
+		expect(diagnostics.at(-1)).not.toHaveProperty("statusCode");
 	} finally {
 		await transport.close();
 	}

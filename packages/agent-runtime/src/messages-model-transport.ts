@@ -3,6 +3,24 @@ import { createServer, type ServerResponse } from "node:http";
 import { forwardClaudeMessages } from "./claude-messages-stream.js";
 import { validateModelAccess } from "./codex-app-server-bridge.js";
 
+export type RuntimeMessagesTransportStage =
+	| "request"
+	| "admission"
+	| "credential"
+	| "upstream_http"
+	| "upstream_content_type"
+	| "stream_validation"
+	| "transport"
+	| "abort";
+
+export interface RuntimeMessagesTransportDiagnostic {
+	readonly stage: RuntimeMessagesTransportStage;
+	readonly sent: boolean;
+	readonly durationMs: number;
+	readonly statusCode?: number;
+	readonly statusClass?: "1xx" | "2xx" | "3xx" | "4xx" | "5xx";
+}
+
 export interface RuntimeMessagesTransportOptions {
 	readonly client?: "claude" | "opencode" | "pi";
 	readonly endpoint: string;
@@ -16,7 +34,8 @@ export interface RuntimeMessagesTransportOptions {
 	readonly fetch?: typeof fetch;
 	readonly receipt?: (
 		state: "sent" | "completed" | "failed" | "unknown",
-		endTurn?: boolean,
+		endTurn: boolean,
+		diagnostic?: RuntimeMessagesTransportDiagnostic,
 	) => Promise<void>;
 }
 
@@ -97,6 +116,31 @@ export async function openRuntimeMessagesTransport(
 				if (!response.writableFinished) controller.abort();
 			});
 			let sent = false;
+			let stage: RuntimeMessagesTransportStage = "request";
+			let statusCode: number | undefined;
+			const startedAt = Date.now();
+			const diagnostic = (): RuntimeMessagesTransportDiagnostic => {
+				const safeStatusCode =
+					statusCode !== undefined && statusCode >= 100 && statusCode <= 599
+						? statusCode
+						: undefined;
+				return {
+					stage,
+					sent,
+					durationMs: Math.max(0, Date.now() - startedAt),
+					...(safeStatusCode === undefined
+						? {}
+						: {
+								statusCode: safeStatusCode,
+								statusClass: `${Math.floor(safeStatusCode / 100)}xx` as
+									| "1xx"
+									| "2xx"
+									| "3xx"
+									| "4xx"
+									| "5xx",
+							}),
+				};
+			};
 			try {
 				const chunks: Buffer[] = [];
 				let size = 0;
@@ -131,10 +175,12 @@ export async function openRuntimeMessagesTransport(
 				)
 					throw new Error();
 				if (!admitted || options.client === "pi") {
+					stage = "admission";
 					await options.admit();
 					admitted = true;
 				}
 				if (closed || controller.signal.aborted) throw new Error();
+				stage = "credential";
 				const credential = options.resolveCredential
 					? await options.resolveCredential()
 					: options.credential;
@@ -158,7 +204,8 @@ export async function openRuntimeMessagesTransport(
 				if (options.authentication === "api-key")
 					headers["x-api-key"] = requestAccess.credential;
 				else headers.authorization = `Bearer ${requestAccess.credential}`;
-				if (!counting) await options.receipt?.("sent");
+				stage = "upstream_http";
+				if (!counting) await options.receipt?.("sent", false, diagnostic());
 				sent = true;
 				const upstream = await (options.fetch ?? fetch)(
 					`${requestAccess.endpoint.replace(/\/$/, "")}${request.url}`,
@@ -173,12 +220,14 @@ export async function openRuntimeMessagesTransport(
 
 				if (!upstream.ok) {
 					void upstream.body?.cancel().catch(() => {});
+					statusCode = upstream.status;
 					failure = upstream.status >= 500 ? "unknown" : "failed";
-					await options.receipt?.(failure);
+					await options.receipt?.(failure, false, diagnostic());
 					reject(response);
 					return;
 				}
 				if (counting) {
+					stage = "stream_validation";
 					if (!upstream.body) throw new Error();
 					const chunks: Uint8Array[] = [];
 					let length = 0;
@@ -204,15 +253,20 @@ export async function openRuntimeMessagesTransport(
 					response.end(JSON.stringify({ input_tokens: value.input_tokens }));
 					return;
 				}
+				if (!upstream.body) {
+					stage = "upstream_content_type";
+					throw new Error();
+				}
 				if (
-					!upstream.body ||
 					!/^text\/event-stream(?:;|$)/i.test(
 						upstream.headers.get("content-type") ?? "",
 					)
 				) {
+					stage = "upstream_content_type";
 					void upstream.body?.cancel().catch(() => {});
 					throw new Error();
 				}
+				stage = "stream_validation";
 				await forwardClaudeMessages(
 					upstream.body,
 					response,
@@ -220,15 +274,21 @@ export async function openRuntimeMessagesTransport(
 					[requestAccess.credential, requestAccess.endpoint],
 					controller.signal,
 					async (reason) => {
-						await options.receipt?.("completed", reason === "end_turn");
+						await options.receipt?.(
+							"completed",
+							reason === "end_turn",
+							diagnostic(),
+						);
 					},
 				);
 			} catch {
+				if (controller.signal.aborted) stage = "abort";
+				else if (sent && stage === "upstream_http") stage = "transport";
 				controller.abort();
 				if (!closed && !failure) failure = sent ? "unknown" : "failed";
 				if (failure) {
 					try {
-						await options.receipt?.(failure);
+						await options.receipt?.(failure, false, diagnostic());
 					} catch {
 						failure = "unknown";
 					}
