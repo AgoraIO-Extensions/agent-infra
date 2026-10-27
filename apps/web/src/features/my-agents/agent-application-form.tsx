@@ -1735,7 +1735,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		const draft = {
 			name,
 			description,
-			defaultRelayKey: managedModelCreate ? creationCheck.key : defaultRelayKey,
+			defaultRelayKey: managedModelCreate
+				? creationCheck.key.trim()
+				: defaultRelayKey,
 			sourceKind,
 			templateId,
 			templateRevision,
