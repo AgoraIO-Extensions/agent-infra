@@ -241,10 +241,12 @@ PVC、Pod ownership、镜像、账号 verifier/权限和数据库归属，再允
 
 ## 清理与恢复门禁
 
-`clean` 和 `destroy` 当前均拒绝执行。此前基于宽泛 label 删除资源的实现无法保证
-所有权和数据保留，且删除 namespace 不能证明集群级准入策略、云盘或外部存储已清理。
-后续清理必须绑定精确集群与 namespace UID、资源清单、备份恢复验证和用户清理指令，
-通过读回确认后才能启用。当前未做任何 ACK 清理。
+`clean` 保持拒绝执行；`destroy` 只在明确的双重确认下删除完整 ACK namespace。
+它绑定精确集群与 namespace UID、namespace ownership labels 和当前清理计划，并要求
+`ACK_CLEAN_CONFIRM=DELETE_ACK_ENV` 与 `ACK_CLEAN_ALLOW_FOREIGN=DELETE_ALL_ACK_NAMESPACE`。
+该模式删除 namespace 内所有资源以及精确名称的 Session ECI admission 对象，完成后读回
+namespace 已不存在；不会输出资源名称、UID、Secret 或数据库内容。执行前应保留外部备份
+或确认数据可丢弃。
 
 现在可以先生成只读清理计划：
 
@@ -257,7 +259,13 @@ ownership 预期；输出 receipt 对资源名称、UID 和节点只保存哈希
 的 Deployment、StatefulSet、Pod、Job、Service、Secret、ConfigMap、PVC、Ingress、RBAC、
 NetworkPolicy、Quota，以及 Session ECI 的 cluster-scoped admission 对象。任何外来资源、
 UID 漂移或 ownership 缺失都会使 `deletionReady=false`。该命令不删除资源、不暂停业务、不
-备份数据库，也不表示可安全执行 destroy。
+备份数据库。确认数据可丢弃后，使用同一份 `ACK_CLEANUP_PLAN_FILE` 执行：
+
+```bash
+ACK_CLEAN_CONFIRM=DELETE_ACK_ENV \
+ACK_CLEAN_ALLOW_FOREIGN=DELETE_ALL_ACK_NAMESPACE \
+deploy/ack/redeploy.sh destroy
+```
 
 ## 从 session 记录沉淀的成功与失败
 

@@ -48,7 +48,9 @@ Optional validation inputs:
   ACK_BROWSER_BLUEPRINT_DIR private browser configs without a fixed Agent ID
   ACK_CAPTURE_DIR          external 0700 directory for read-only ACK input capture
 
-Cleanup commands are disabled pending exact inventory and restore verification.
+`destroy` requires both ACK_CLEAN_CONFIRM=DELETE_ACK_ENV and
+ACK_CLEAN_ALLOW_FOREIGN=DELETE_ALL_ACK_NAMESPACE. It deletes the selected
+namespace and the exact Session ECI admission objects after identity checks.
 
 EOF
 }
@@ -373,7 +375,53 @@ clean() {
 
 destroy() {
 	[[ "${ACK_CLEAN_CONFIRM:-}" == DELETE_ACK_ENV ]] || die "destroy requires ACK_CLEAN_CONFIRM=DELETE_ACK_ENV"
-	die "ACK cleanup is disabled until an exact resource inventory and restore verification are implemented"
+	require_file ACK_KUBECONFIG "${ACK_KUBECONFIG:-}"
+	require_file ACK_CLEANUP_PLAN_FILE "${ACK_CLEANUP_PLAN_FILE:-}"
+	[[ "${ACK_CLEAN_ALLOW_FOREIGN:-}" == DELETE_ALL_ACK_NAMESPACE ]] || die "destroy requires ACK_CLEAN_ALLOW_FOREIGN=DELETE_ALL_ACK_NAMESPACE"
+	prepare_evidence
+	export KUBECONFIG="$ACK_KUBECONFIG"
+	local expected_cluster expected_namespace
+	expected_cluster=$(node - "$ACK_CLEANUP_PLAN_FILE" <<'NODE'
+const fs = require("node:fs");
+const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+if (!/^[a-f0-9-]{36}$/u.test(value.clusterUid) || !/^[a-f0-9-]{36}$/u.test(value.namespaceUid) ||
+	!/^[a-f0-9-]{36}$/u.test(value.installationId) || value.namespace !== process.env.ACK_NAMESPACE ||
+	value.release !== process.env.ACK_RELEASE) process.exit(1);
+process.stdout.write(`${value.clusterUid}\n`);
+NODE
+) || die "cleanup identity input is invalid"
+	expected_namespace=$(node - "$ACK_CLEANUP_PLAN_FILE" <<'NODE'
+const fs = require("node:fs");
+const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+process.stdout.write(`${value.namespaceUid}\n`);
+NODE
+) || die "cleanup namespace identity input is invalid"
+	local live_cluster live_namespace namespace_json
+	live_cluster=$(kubectl --kubeconfig "$ACK_KUBECONFIG" get namespace kube-system -o jsonpath='{.metadata.uid}' 2>/dev/null) || die "cleanup cluster identity read failed"
+	live_namespace=$(kubectl --kubeconfig "$ACK_KUBECONFIG" get namespace "$namespace" -o jsonpath='{.metadata.uid}' 2>/dev/null) || die "cleanup namespace identity read failed"
+	[[ "$live_cluster" == "$expected_cluster" && "$live_namespace" == "$expected_namespace" ]] || die "cleanup UID identity mismatch"
+	namespace_json=$(kubectl --kubeconfig "$ACK_KUBECONFIG" get namespace "$namespace" -o json 2>/dev/null) || die "cleanup namespace read failed"
+	if ! node - "$namespace_json" <<'NODE'
+const value = JSON.parse(process.argv[2]);
+const labels = value.metadata?.labels ?? {};
+if (labels["app.kubernetes.io/part-of"] !== "agent-infra" || labels["app.agoralab.co/workload-plane"] !== "agent-infra") process.exit(1);
+NODE
+	then
+		die "cleanup namespace ownership labels are missing"
+	fi
+	cleanup_plan >/dev/null
+	local admission="${namespace}-session-eci"
+	kubectl --kubeconfig "$ACK_KUBECONFIG" delete mutatingadmissionpolicy "$admission" --ignore-not-found --wait >/dev/null 2>&1 || die "cleanup admission policy deletion failed"
+	kubectl --kubeconfig "$ACK_KUBECONFIG" delete mutatingadmissionpolicybinding "$admission" --ignore-not-found --wait >/dev/null 2>&1 || die "cleanup admission binding deletion failed"
+	kubectl --kubeconfig "$ACK_KUBECONFIG" delete namespace "$namespace" --wait --timeout="$timeout" >/dev/null 2>&1 || die "cleanup namespace deletion failed"
+	if kubectl --kubeconfig "$ACK_KUBECONFIG" get namespace "$namespace" --ignore-not-found -o name 2>/dev/null | grep -q .; then
+		die "cleanup namespace still exists"
+	fi
+	cat >"$evidence_dir/destroy.json" <<'JSON'
+{"schemaVersion":1,"kind":"ack-destroy","namespaceDeleted":true,"sessionAdmissionDeleted":true,"foreignResourcesExplicitlyApproved":true,"dataRestoreVerified":false,"businessVerified":false}
+JSON
+	chmod 600 "$evidence_dir/destroy.json"
+	echo "ack-redeploy: ACK namespace and exact Session ECI objects deleted; evidence=$evidence_dir"
 }
 
 command=${1:-help}
