@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { sha256 } from "./image-manifest.mjs";
 import { runCommand } from "./run-command.mjs";
+import { assertArchitectureManifestDigest } from "./image-publication.mjs";
 
 async function main() {
 	const [tag, namesArgument, ...paths] = process.argv.slice(2);
@@ -46,9 +47,19 @@ async function main() {
 			`${manifest.platform?.os}/${manifest.platform?.architecture}`, manifest.digest,
 		]));
 		assert.deepEqual([...actual].sort(), [...platforms].sort(), "published index differs from verified receipts");
-		const digest = `sha256:${sha256(bytes)}`;
-		verifiedIndexes.push({repository, digest});
-		console.info(JSON.stringify({commitSha, reference, digest, platforms: Object.fromEntries(actual)}));
+		const indexDigest = `sha256:${sha256(bytes)}`;
+		const platformDigests = Object.fromEntries(actual);
+		for (const [platform, digest] of Object.entries(platformDigests))
+			assertArchitectureManifestDigest({ indexDigest, platformDigests }, platform, digest);
+		verifiedIndexes.push({repository, digest: indexDigest});
+		console.info(JSON.stringify({
+			commitSha,
+			reference,
+			digest: indexDigest,
+			indexDigest,
+			platforms: platformDigests,
+			platformDigests,
+		}));
 	}
 	// A stable Git tag may promote latest only after every version index passes.
 	if (process.env.GITHUB_REF === `refs/tags/${tag}` && /^v[0-9]+\.[0-9]+\.[0-9]+$/.test(tag)) {
