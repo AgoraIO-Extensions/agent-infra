@@ -10,11 +10,11 @@
 | 类别 | 数量 |
 | --- | ---: |
 | Runtime/Worker/Core | [#3527](https://github.com/AgoraIO-Extensions/agent-infra/issues/3527) | feat(skill): add automatic Skill admission with SkillSpector | priority:P1 | ready-for-agent, priority:P1, agent:codex | 2026-10-27 | 已分派 Skillspector admission lane |
-| Runtime/Worker/Core | 13 |
+| Runtime/Worker/Core | 14 |
 | Deploy/E2E/Channels | 14 |
 | Platform/Web/Skill | 7 |
 | Workflow/Observability | [#3528](https://github.com/AgoraIO-Extensions/agent-infra/issues/3528) | docs: refresh tracker after SkillSpector issue opened | priority:P2 | priority:P2, agent:codex | 2026-10-27 | tracker refresh PR |
-| Workflow/Observability | 4 |
+| Workflow/Observability | 5 |
 
 ## 明细
 
