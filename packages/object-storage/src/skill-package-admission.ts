@@ -552,12 +552,29 @@ export function canonicalSkillPackageSourceProofV1(
 		reject("source_untrusted");
 	return canonical(value);
 }
+type SkillPackageScanReceiptScalarV1 = Pick<
+	SkillPackageScanReceiptV1,
+	| "schemaVersion"
+	| "scannerId"
+	| "engineVersion"
+	| "rulesetDigest"
+	| "policyRevision"
+	| "scannedAt"
+	| "expiresAt"
+	| "packageDigest"
+	| "manifestDigest"
+	| "scannedFileCount"
+	| "scannedBytes"
+	| "verdict"
+	| "admissionDecision"
+>;
+
 function scanReceiptData(input: SkillPackageScanReceiptV1) {
 	const admissionEvidence = input.admissionEvidence;
 	const scalarInput = { ...input } as Record<string, unknown>;
 	delete scalarInput.admissionEvidence;
-	const receipt = evidenceData(
-		scalarInput,
+	const receipt = evidenceData<SkillPackageScanReceiptScalarV1>(
+		scalarInput as SkillPackageScanReceiptScalarV1,
 		[
 			"schemaVersion",
 			"scannerId",
@@ -597,8 +614,8 @@ function scanReceiptData(input: SkillPackageScanReceiptV1) {
 		!iso(receipt.expiresAt)
 	)
 		reject("scan_rejected");
-	if (Object.hasOwn(receipt, "admissionEvidence")) {
-		const evidence = receipt.admissionEvidence;
+	if (Object.hasOwn(input, "admissionEvidence")) {
+		const evidence = admissionEvidence;
 		if (
 			!evidence ||
 			(evidence.coverage !== "complete" &&

@@ -217,7 +217,7 @@ export function createClamAvSkillPackageScannerV1(
 						coverage: "complete",
 						findings: [],
 						dynamicProbe: { required: false, completed: false, violations: [] },
-					},
+					} as const,
 				});
 			} catch (error) {
 				if (error instanceof SkillPackageAdmissionErrorV1) throw error;
