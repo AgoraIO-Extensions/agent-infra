@@ -21,6 +21,8 @@ Chart 默认声明 `agent-infra-ack-quota` ResourceQuota：25 个 PVC、500Gi �
 
 可复用入口为 [`preflight.sh`](./preflight.sh) 和 [`deploy.sh`](./deploy.sh)，环境变量模板为 [`ack.env.example`](./ack.env.example)，值文件模板为 [`values.ack.example.yaml`](./values.ack.example.yaml)。`preflight.sh` 会检查 ACK 访问、Helm chart、所有 E2E Secret 和目录 source ConfigMap，不会打印 Secret 内容。
 
+加密版本由 private values 的 `encryption.keyVersion` 和 `worker.keyVersions` 显式提供，默认仍为 `key-v1`；values schema 会拒绝空值、非法字符和不完整的 worker 版本列表。wrapper 不生成或替换任何密钥。
+
 | 组件 | 结果 | 说明 |
 | --- | --- | --- |
 | Web | `1/1 Running` | GHCR amd64 immutable image；公网 Ingress |
