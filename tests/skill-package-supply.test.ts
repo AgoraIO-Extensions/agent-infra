@@ -837,3 +837,168 @@ describe("web-edited Skill project publication with real PG, versioned S3 and na
 		});
 	});
 });
+
+import { createSkillPackageConsumerV1 } from "../packages/object-storage/src/skill-package-consumer.ts";
+// #2949: production reader consumes the Supplier's actual durable operation; no success rows are fabricated.
+import { PostgresSkillHubAgentBindingAdmissionV1 } from "../packages/platform-store/src/skill-hub-agent-binding.ts";
+
+it("reads and verifies the original published package with current public-key trust after reopening the reader", async () => {
+	const publication = await supplier().value.admitVersion(request(), input());
+	const query = {
+		skillVersionId: publication.version.skillVersionId,
+		packageObjectVersion: publication.version.packageObjectVersion,
+	};
+	const reader = new PostgresSkillHubAgentBindingAdmissionV1({
+		databaseUrl: database.databaseUrl,
+	});
+	const options = {
+		storage: fixture.storage,
+		readPublication: reader.readPublication.bind(reader),
+		resolveAdmissionPolicy: async () => ({
+			...(await scanner.describe()),
+			policyRevision,
+			trustRevision: "trust-1",
+			keyId: "key-1",
+			keyState: revokedKey ? ("revoked" as const) : ("active" as const),
+			publicKey: keys.publicKey,
+			allowInternalWithoutApproval: true,
+		}),
+		sourceVerifier: {
+			verify: async (
+				i: Parameters<
+					import("../packages/object-storage/src/skill-package-admission.ts").SkillPackageSourceVerifierV1["verify"]
+				>[0],
+			) => {
+				if (!sourceApproved) throw new Error("source unavailable");
+				return {
+					schemaVersion: 1 as const,
+					provider: i.provider,
+					publisherId: i.ownerId,
+					sourceVersion: i.sourceVersion,
+					sourceDigest: i.sourceDigest,
+					approvalRef: i.approvalRef,
+					trustRevision: i.trustRevision,
+				};
+			},
+		},
+	};
+	try {
+		const facts = await reader.readPublication(query);
+		expect(facts?.state.objects).toEqual(publication.artifacts);
+		expect(
+			(await createSkillPackageConsumerV1(options).verify(query)).packageObject,
+		).toEqual(publication.artifacts.zip);
+		revokedKey = true;
+		await expect(
+			createSkillPackageConsumerV1(options).verify(query),
+		).rejects.toThrow();
+		revokedKey = false;
+		sourceApproved = false;
+		await expect(
+			createSkillPackageConsumerV1(options).verify(query),
+		).rejects.toThrow();
+		sourceApproved = true;
+	} finally {
+		await reader.close();
+	}
+	const restarted = new PostgresSkillHubAgentBindingAdmissionV1({
+		databaseUrl: database.databaseUrl,
+	});
+	try {
+		const result = await createSkillPackageConsumerV1({
+			...options,
+			readPublication: restarted.readPublication.bind(restarted),
+		}).verify(query);
+		expect(result.state.objects).toEqual(publication.artifacts);
+		expect(scanCount).toBe(1);
+		expect(await counts()).toEqual({
+			versions: 1,
+			completed: 1,
+			idempotency: 1,
+		});
+	} finally {
+		await restarted.close();
+	}
+});
+
+it("rejects inconsistent original Store facts without repairing publication", async () => {
+	const publication = await supplier().value.admitVersion(request(), input());
+	const query = {
+		skillVersionId: publication.version.skillVersionId,
+		packageObjectVersion: publication.version.packageObjectVersion,
+	};
+	const reader = new PostgresSkillHubAgentBindingAdmissionV1({
+		databaseUrl: database.databaseUrl,
+	});
+	const [original] =
+		await sql`select * from platform.idempotency_records where scope_type='skill_package'`;
+	const [outbox] =
+		await sql`select * from platform.outbox_items where scope_type='skill_package'`;
+	if (!original || !outbox) throw new Error("publication fixture unavailable");
+	try {
+		expect(await reader.readPublication(query)).not.toBeNull();
+		for (const mutation of [
+			{ command_type: "wrong.operation" },
+			{ actor_id: "owner-b" },
+			{ scope_type: "wrong_scope" },
+			{ request_digest: "f".repeat(64) },
+			{
+				result: { operationId: "wrong", skillVersionId: query.skillVersionId },
+			},
+		]) {
+			await sql`update platform.idempotency_records set ${sql({ ...mutation, ...("result" in mutation ? { result: sql.json(mutation.result) } : {}) })} where id=${original.id}`;
+			expect(await reader.readPublication(query)).toBeNull();
+			await sql`update platform.idempotency_records set command_type=${original.command_type},actor_id=${original.actor_id},scope_type=${original.scope_type},request_digest=${original.request_digest},result=${sql.json(original.result)} where id=${original.id}`;
+		}
+		for (const mutate of [
+			(p: Record<string, unknown>) => {
+				p.ownerId = "owner-b";
+			},
+			(p: Record<string, unknown>) => {
+				p.selection = {
+					...(p.selection as Record<string, unknown>),
+					skillId: "different-skill",
+				};
+			},
+			(p: Record<string, unknown>) => {
+				const { bundle: _bundle, ...remaining } = p.objects as Record<
+					string,
+					unknown
+				>;
+				p.objects = remaining;
+			},
+			(p: Record<string, unknown>) => {
+				p.operationId = randomUUID();
+			},
+		]) {
+			const payload = structuredClone(outbox.payload);
+			mutate(payload);
+			await sql`update platform.outbox_items set payload=${sql.json(payload)} where id=${outbox.id}`;
+			expect(await reader.readPublication(query)).toBeNull();
+			await sql`update platform.outbox_items set payload=${sql.json(outbox.payload)} where id=${outbox.id}`;
+		}
+		await sql`update platform.outbox_items set operation='wrong.operation' where id=${outbox.id}`;
+		expect(await reader.readPublication(query)).toBeNull();
+		await sql`update platform.outbox_items set operation='skill.package.publish.v1' where id=${outbox.id}`;
+		expect(
+			await reader.readPublication({
+				...query,
+				packageObjectVersion: "wrong-version",
+			}),
+		).toBeNull();
+		expect(await reader.readPublication(query)).not.toBeNull();
+		await sql`update platform.outbox_items set status='failed' where id=${outbox.id}`;
+		expect(await reader.readPublication(query)).toBeNull();
+		await sql`update platform.outbox_items set status='succeeded' where id=${outbox.id}`;
+		const conflictingId = randomUUID();
+		await sql`insert into platform.idempotency_records (id,scope_type,scope_id,actor_id,command_type,idempotency_key,request_digest,status,result)
+        select ${conflictingId},scope_type,scope_id,actor_id,command_type,${conflictingId},request_digest,status,result from platform.idempotency_records where id=${original.id}`;
+		expect(await reader.readPublication(query)).toBeNull();
+		await sql`delete from platform.idempotency_records where id=${conflictingId}`;
+		expect(await reader.readPublication(query)).not.toBeNull();
+		await sql`delete from platform.outbox_items where id=${outbox.id}`;
+		expect(await reader.readPublication(query)).toBeNull();
+	} finally {
+		await reader.close();
+	}
+});
