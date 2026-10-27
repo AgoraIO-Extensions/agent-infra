@@ -4,12 +4,15 @@ import {
 	NativeMetadataCurrentRequestV1Schema,
 	type NativeMetadataCurrentResponseV1,
 	NativeMetadataCurrentResponseV1Schema,
+	RuntimeNativeMetadataProofMaximumLifetimeMsV1,
 } from "@agent-infra/contracts/runtime";
 
 const currentPath = "internal/platform/v1/native-metadata/current";
 const maximumRequestBytes = 64 * 1024;
 const maximumResponseBytes = 64 * 1024;
-const transportTimeoutMs = 10_000;
+// Current confirmation shares the original metadata request deadline.
+// A shorter default rejects a healthy chain before the request expires.
+const transportTimeoutMs = RuntimeNativeMetadataProofMaximumLifetimeMsV1;
 const maximumSourceRefLength = 256;
 
 function endpoint(baseUrl: string) {
@@ -133,9 +136,15 @@ export function createPlatformApiNativeMetadataCurrentClientV1(
 			});
 			if (Buffer.byteLength(body, "utf8") > maximumRequestBytes)
 				return unavailable();
+			const requestTimeoutMs = Math.min(
+				RuntimeNativeMetadataProofMaximumLifetimeMsV1,
+				timeoutMs,
+				Math.max(0, request.expiresAt - Date.now()),
+			);
+			if (requestTimeoutMs < 1) return unavailable();
 			const signal = input.signal
-				? AbortSignal.any([input.signal, AbortSignal.timeout(timeoutMs)])
-				: AbortSignal.timeout(timeoutMs);
+				? AbortSignal.any([input.signal, AbortSignal.timeout(requestTimeoutMs)])
+				: AbortSignal.timeout(requestTimeoutMs);
 			let response: Response | undefined;
 			try {
 				response = await fetcher(url, {

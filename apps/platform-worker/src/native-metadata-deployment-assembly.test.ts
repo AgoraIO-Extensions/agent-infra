@@ -13,6 +13,8 @@ import {
 } from "./native-metadata-deployment-assembly.js";
 import { sessionSandboxServiceTokenV1 } from "./session-workload-adapter.js";
 
+const bindingNow = Date.now();
+
 const ports = {
 	binding: { resolve: vi.fn(async () => null) },
 	current: { check: vi.fn(async () => ({ outcome: "unavailable" as const })) },
@@ -41,8 +43,8 @@ const bindingRequest = {
 		sessionGeneration: 3,
 		authorizationRevision: "authorization-default-binding",
 	},
-	readStartedAt: 1_000,
-	expiresAt: 20_000,
+	readStartedAt: bindingNow,
+	expiresAt: bindingNow + 30_000,
 	requestId: "request-default-binding",
 	traceId: "trace-default-binding",
 	apiRequestSourceRef: "api-default-binding",
@@ -355,6 +357,7 @@ describe("native metadata deployment assembly", () => {
 	});
 
 	it("assembles the optional Platform API current checker", async () => {
+		const requestNow = Date.now();
 		const request = {
 			schemaVersion: 1 as const,
 			readId: "read-assembly-client",
@@ -369,8 +372,8 @@ describe("native metadata deployment assembly", () => {
 				sessionGeneration: 1,
 				authorizationRevision: "authorization-assembly-client",
 			},
-			readStartedAt: 1_000,
-			expiresAt: 20_000,
+			readStartedAt: requestNow,
+			expiresAt: requestNow + 30_000,
 			requestId: "request-assembly-client",
 			traceId: "trace-assembly-client",
 			apiRequestSourceRef: "api-assembly-client",
@@ -468,8 +471,8 @@ describe("native metadata deployment assembly", () => {
 						sessionGeneration: 1,
 						authorizationRevision: "authorization-assembly",
 					},
-					readStartedAt: 1_000,
-					expiresAt: 20_000,
+					readStartedAt: Date.now(),
+					expiresAt: Date.now() + 30_000,
 					requestId: "request-assembly",
 					traceId: "trace-assembly",
 					apiRequestSourceRef: "api-assembly",
