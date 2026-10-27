@@ -30,7 +30,7 @@
 | Runtime Pi session | [#3342](https://github.com/AgoraIO-Extensions/agent-infra/issues/3342) | 复读契约并修复 Pi Native Session reuse 截断后续 turn；若门禁不足则只读交接 | 不处理 AC/ACK/真实验收 |
 | Worker application outbox | 已关闭 #3382；PR #3503 | 等待开发合入，确认 outbox identity validation 和终态事件 | 不处理 AC/ACK/真实验收 |
 | Runtime idle CPU | 已关闭 #3303；PR #3502 | 等待开发合入，确认 probe 观测不影响调谐 | 不处理 AC/真实验收 |
-| Active development PRs | 已关闭 development Issues #3428/#3036；PR #3479/#3469 | 等待 Hosted checks 和开发合入 | 不处理真实验收 |
+| Active development PRs | 已关闭 development Issues #3428/#3036；PR #3469、#3502、#3503 | 等待 Hosted checks 和开发合入；合入后保留 AC 待办 | 不处理真实验收 |
 
 三条 lane 的子 agent 都必须先在最新 `origin/main` 上复读 Issue；若发现 AC、依赖或 owner 不满足实现门槛，返回带证据的只读 handoff，不创建伪 PR。
 
@@ -53,7 +53,7 @@
 
 ## 当前开发交付
 
-- #3495：stale binding fix，Hosted Backend/Workload 运行。
-- #3479：multi-service diagnostics，Hosted Backend/Workload 运行。
-- #3469：E2E Harness，Hosted Web/Backend/Heavy/Workload 运行。
-- 开发 PR 合入后立即关闭对应 development Issue；AC 后续统一跟进。
+- #3495 stale binding fix：已合入 `0015b97c5`，Issue #3380 已按开发完成关闭；AC 留待后续。
+- #3479 diagnostics：已合入 `5e6a73f0`，Issue #3428 已按开发完成关闭；AC 留待后续。
+- #3469 E2E Harness、#3502 idle CPU、#3503 application outbox：开发 PR 已提交，等待 Hosted checks/合入。
+- 已提交开发 PR 的 development Issue 按当前指示关闭；AC/真实验收作为后续跟进。
