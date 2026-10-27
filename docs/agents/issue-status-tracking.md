@@ -1,6 +1,6 @@
 # 开放 Issue 状态跟进
 
-> 快照：2026-10-27 23:09 UTC；`origin/main` `893e48e5cad298850d34802f33ea6bf30a6d1a6e`.
+> 快照：2026-10-27 23:15 UTC；`origin/main` `57ea5bb0a90d5f007812a689ab106b6201852c6b`.
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
 当前开放 Issue：**26**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
@@ -43,13 +43,12 @@
 | Workflow/Observability | [#3371](https://github.com/AgoraIO-Extensions/agent-infra/issues/3371) | 体验与时效性：Web 与企微在真实负载下近乎不可用（整体方案） | priority:P0 | needs-triage, priority:P0, agent:kiro | 2026-10-26 | 逐项核对开发子项及父票自身缺口 |
 | Workflow/Observability | [#690](https://github.com/AgoraIO-Extensions/agent-infra/issues/690) | feat(workflow): add bounded AI coding coordination harness | priority:P2 | enhancement, priority:P2, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Workflow/Observability | [#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144) | wayfinder: 形成 Agent 平台 M1 启动与落地路线 | priority:P0 | wayfinder:map, wayfinder, priority:P0, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
-| Workflow/Observability | [#3585](https://github.com/AgoraIO-Extensions/agent-infra/issues/3585) | docs: refresh tracker snapshot after merge | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 创建本次跟踪 PR，合并后回读快照与开放 Issue 集合 |
+| Workflow/Observability | [#3587](https://github.com/AgoraIO-Extensions/agent-infra/issues/3587) | docs: refresh tracker after snapshot merge | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 创建本次跟踪 PR，合并后回读快照与开放 Issue 集合 |
 
 ## 开发 PR 回读
 
-状态截至 2026-10-27 23:11 UTC。OPEN 不等于合入，MERGED 不等于真实验收完成。
+状态截至 2026-10-27 23:15 UTC。OPEN 不等于合入，MERGED 不等于真实验收完成。
 
 | PR | 状态 | head SHA | 未完成验收 |
 | --- | --- | --- | --- |
 | [#3582](https://github.com/AgoraIO-Extensions/agent-infra/pull/3582) | OPEN / BLOCKED | `9b1f4fc7fae5ae4eeb272d74b5e597f134cd926b` | CI heavy validation 与 CI 失败，需开发会话修复后重新回读 |
-| [#3586](https://github.com/AgoraIO-Extensions/agent-infra/pull/3586) | OPEN / BLOCKED | `3d8fa792b4b700913c7a882f7b867165eb2e57a3` | CI 与 Issue Gate 尚在排队，需完成门禁后再合并 |
