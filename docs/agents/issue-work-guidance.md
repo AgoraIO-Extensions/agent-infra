@@ -25,7 +25,7 @@
 
 | Lane | Primary Issue | 文件范围与交付终点 |
 | --- | --- | --- |
-| 模型候选 | [#3146](https://github.com/AgoraIO-Extensions/agent-infra/issues/3146) | Core、API、Contracts/生成物、Web 新建申请；实现候选查询至提交的完整消费者 |
+| 模型候选 | PR #3520；Issue #3146 已按开发交付关闭 | Core、API、Contracts/生成物、Web 新建申请；实现候选查询至提交的完整消费者 |
 | Skill consumer | PR #3517；Issue #2949 已按开发交付关闭 | Store publication reader、Object Storage 证据 verifier、Worker 接线；不触碰其他 lane 的生成物 |
 | 协调者 | [#3499](https://github.com/AgoraIO-Extensions/agent-infra/pull/3499) | 状态文档、父子开发范围、标签和未解决 review threads |
 
