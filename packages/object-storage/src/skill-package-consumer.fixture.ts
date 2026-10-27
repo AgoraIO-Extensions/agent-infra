@@ -125,7 +125,7 @@ export async function publicationFixture(receiptTtlMs = 50_000) {
 				scannedFileCount: i.fileCount,
 				scannedBytes: i.totalBytes,
 				verdict: "clean",
-			admissionDecision: "pending_review",
+				admissionDecision: "pending_review",
 			}),
 		},
 	});
