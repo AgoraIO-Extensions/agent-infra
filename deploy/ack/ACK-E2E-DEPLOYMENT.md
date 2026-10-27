@@ -19,7 +19,7 @@ Namespace 示例为 `agent-infra`。首次试部署使用受控 raw manifests，
 
 Chart 默认声明 `agent-infra-ack-quota` ResourceQuota：25 个 PVC、500Gi 请求存储、30 个 Pod 和 50 个 Service，覆盖保留的 Session Sandbox PVC。接管已有 namespace 前必须核对 quota 的 `hard/used`，不能用默认值覆盖其他租户的预算；Chart 不删除历史 PVC，回收由 Session Sandbox 生命周期负责。
 
-可复用入口为 [`preflight.sh`](./preflight.sh) 和 [`deploy.sh`](./deploy.sh)，环境变量模板为 [`ack.env.example`](./ack.env.example)，值文件模板为 [`values.ack.example.yaml`](./values.ack.example.yaml)。`preflight.sh` 会检查 ACK 访问、Helm chart、所有 E2E Secret 和目录 source ConfigMap，不会打印 Secret 内容。
+可复用入口为 [`preflight.sh`](./preflight.sh)、[`deploy.sh`](./deploy.sh) 和面向清理后重部署的 [`redeploy.sh`](./redeploy.sh)，完整顺序见 [`ACK-REDEPLOY-WORKFLOW.md`](./ACK-REDEPLOY-WORKFLOW.md)。环境变量模板为 [`ack.env.example`](./ack.env.example)，值文件模板为 [`values.ack.example.yaml`](./values.ack.example.yaml)。`preflight.sh` 会检查 ACK 访问、Helm chart、所有 E2E Secret 和目录 source ConfigMap，不会打印 Secret 内容。
 
 `deploy.sh` 会先从 `ACK_KUBECONFIG` 读取目标集群的 `serverVersion`，严格解析为 `major.minor.patch` 后把同一版本传给离线 `helm template`；版本缺失或格式非法时会停止，不会伪造 Helm 能力版本或切换 kubeconfig context。
 
