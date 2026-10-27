@@ -39,7 +39,9 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		allBlock.indexOf("bootstrap_credential") >
 		allBlock.indexOf('agent-bindings.ts" check')
 	)
-		throw new Error("all must issue the credential before validating Agent inputs");
+		throw new Error(
+			"all must issue the credential before validating Agent inputs",
+		);
 });
 
 test("ACK destructive command fails closed without its explicit confirmation", () => {
