@@ -1324,6 +1324,31 @@ describe("production deployment admissions", () => {
 		expect(rejected).toBeNull();
 	});
 
+	it("admits standard API model selection before image admission supplies a digest", async () => {
+		const f = fixture();
+		const requested = {
+			...modelInput(),
+			options: modelInput().options.map(
+				({ replaceCredential: _replaceCredential, ...option }) => option,
+			),
+		};
+		const result = await createDeploymentAdmissionsV1(
+			f.input,
+		).keylessModelAdmission.admitModels({
+			...request,
+			source: {
+				kind: "standard",
+				templateId: "codex",
+			} as AgentConfigurationSourceV1,
+			requested,
+		});
+		expect(result).toMatchObject({
+			catalogRevision: "catalog-a",
+			defaultOptionId: "option-a",
+			options: [{ modelId: "model-a", reasoningLevels: ["high", "medium"] }],
+		});
+	});
+
 	it.each([
 		"revision",
 		"expired",

@@ -470,6 +470,17 @@ export function createDeploymentAdmissionsV1(
 			)?.driver !== "codex"
 		)
 			return true;
+		// API and browser creation perform keyless model admission before image
+		// admission. The request source therefore has the template identity but
+		// does not have the immutable image digest yet. Image admission below is
+		// still the authority that binds the exact digest and readiness record.
+		if (!source.imageDigest) {
+			return templates.some(
+				(item) =>
+					item.templateId === source.templateId &&
+					item.modelBinding?.driver === "codex",
+			);
+		}
 		return templates.some(
 			(item) =>
 				item.templateId === source.templateId &&

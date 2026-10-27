@@ -1,13 +1,16 @@
 # ACK 重部署工作流（实现中）
 
-本工作流正在为清空后重建 ACK 准备工具。当前只支持已有私有依赖的 Platform 部署、
-API Agent 创建和入口检查，尚未证明从空环境自动恢复，不能作为清空环境的前提。
-相关真实验收保持在 #3072，脚本测试不完成该 Issue。
+本工作流为清空后重建 ACK 提供可重复的 Platform 部署、四模板真实 Runtime preflight、
+API Agent 创建和入口验收入口；每次真实运行仍必须以当前 source/image/config receipt 为准。
+空环境数据库、真实多轮/闲置恢复、自定义 ACP/多服务完整矩阵和目标绑定的 ECI 执行证据仍需
+在目标集群执行并回读，脚本测试本身不替代这些外部证据。
 
-实现尚缺：完整空环境演练、四模板 readiness 刷新、真实多轮与闲置恢复验收、自定义 ACP/多服务完整矩阵，以及目标绑定的 ECI 执行证据。
+待完成的外部验收包括：完整空环境演练、真实多轮与闲置恢复、自定义 ACP/多服务完整矩阵，以及目标绑定的 ECI 执行证据。
 所有 kubeconfig、Secret、Cookie、浏览器 state 和真实环境输入留在仓库外。
 
 入口脚本是 [`redeploy.sh`](./redeploy.sh)。它只接受 immutable image reference，渲染结果仍包含占位值时直接失败；每次运行把脱敏 receipt 写到外部 `ACK_EVIDENCE_DIR`，不会把会话正文或凭证写入仓库。
+
+上一轮演练的成功与失败因果、以及 fresh 环境的一键顺序，见 [`ACK-REDEPLOY-LESSONS.md`](./ACK-REDEPLOY-LESSONS.md)。
 
 ## 当前输入与已有环境部署
 
@@ -28,6 +31,8 @@ export ACK_BROWSER_BLUEPRINT_DIR=/private/ack/browser-blueprints
 export ACK_CUSTOM_AGENT_PROBE=platform-auth
 export ACK_CUSTOM_AGENT_CONFIGS=$'/private/ack/custom-a.json\n/private/ack/custom-b.json'
 export ACK_AGENT_REQUESTS_FILE=/private/ack/agent-requests.json
+export ACK_TEMPLATE_VALIDATIONS_FILE=/private/ack/template-validations.json
+export ACK_TEMPLATE_PREFLIGHT_JOBS_FILE=/private/ack/template-preflight-jobs.json
 export ACK_EVIDENCE_DIR=/private/ack/evidence/$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
@@ -70,6 +75,34 @@ deploy/ack/redeploy.sh capture-inputs
 
 `ACK_AGENT_REQUESTS_FILE` 是仓库外的 API 创建/重放清单。每项引用一个 `0600` Bearer credential 文件、一个 `0600` JSON body 文件和固定 `Idempotency-Key`；credential 需要创建和读取 Agent 的权限。body 可以是标准模板或自定义 Agent 的 `POST /api/v2/agents` 请求。脚本只输出 HTTP 状态、状态枚举和 Agent ID 的 SHA-256，不输出 Token、Secret 或响应正文；创建后会轮询 `/state`，直到 `available/ready` 或明确失败/超时。API 创建不需要 Web 审批；需要审批的 Web application 流程仍应由真实管理员完成并回读。
 
+`ACK_TEMPLATE_VALIDATIONS_FILE` 是四个标准模板的私有 receipt 清单。每项同时引用同一
+模板、image digest、configuration revision 和 model 的 validation candidate，以及产生它的
+真实 Runtime preflight receipt；清单还固定 `ACK_SOURCE_SHA` 和至少 60 秒的剩余有效期。
+`provision` 和 `validate` 在任何 Agent 写入或浏览器旅程前执行该门禁，拒绝缺失、过期、
+simulation、失败、来源 SHA 漂移或 tuple 漂移。validation candidate 只能放入 API/Worker
+Secret，清单和 preflight receipt 仍留在仓库外。
+
+若需要由 `all` 自动生成四份 receipt，`ACK_TEMPLATE_PREFLIGHT_JOBS_FILE` 使用以下私有清单；
+每个 job 文件声明一个当前 source SHA、不可变 Runtime image、template/config/model tuple、
+ECI placement，以及 grant private key、Runtime service token 和 Relay key 的私有文件路径：
+
+```json
+{
+  "schemaVersion": 1,
+  "jobs": [
+    "/private/ack/template-jobs/codex.json",
+    "/private/ack/template-jobs/claude.json",
+    "/private/ack/template-jobs/opencode.json",
+    "/private/ack/template-jobs/pi.json"
+  ]
+}
+```
+
+`template-preflight` 会为每个 job 创建带 ownership label 的临时 ECI Pod，生成 HMAC boundary
+attestation，执行真实 Runtime turn 和事件回读，写入私有 candidate/preflight receipt，随后
+删除 Pod 和 Secret。镜像拉取、Runtime 启动、真实模型、完成事件或 cleanup 任一步失败都会
+让流程失败；它不会复用历史 receipt。
+
 清单结构如下，具体 body 和 credential 仍放在仓库外：
 
 ```json
@@ -102,7 +135,7 @@ deploy/ack/redeploy.sh all
 
 1. 确认当前 worktree `HEAD` 等于 `ACK_SOURCE_SHA`，渲染 Helm 并拒绝占位值。
 2. 运行 ACK 访问、Secret、目录 source ConfigMap 和 Helm lint 预检。
-3. `helm upgrade --install --wait` 部署 Platform，并逐个等待 API、Web、Worker、Directory rollout。
+3. `helm upgrade --install --wait` 部署 Platform，并逐个等待 API、Web、Worker、Directory rollout。`bootstrap-inputs` 更新私有 Secret 后会显式滚动 API/Worker 并再次等待 rollout，避免进程继续使用旧的 readiness 或 origin。
 4. 保存预期源码 SHA、精确 release 的 Helm revision，以及 workload/Pod 的名称、UID、节点和镜像哈希。原始 env、annotation、事件消息和地址不进入 snapshot；读取失败退出非零。
 5. 按固定 Idempotency-Key 创建尚未绑定的 Agent，已绑定项只读状态；私有目录保留 ID 映射，分享 receipt 仅保存状态/哈希。
 6. 检查公网 Web 为 `200`、匿名 `/api/v2/agents` 为 `401`。
