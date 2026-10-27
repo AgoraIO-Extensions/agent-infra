@@ -1291,6 +1291,8 @@ export function createWorkloadRuntimeV1(
 								binding.imageDigest === source.imageDigest,
 						)
 					: undefined;
+			if (source.kind === "standard" && templateBinding === undefined)
+				throw new WorkloadPreflightRejectedErrorV1();
 			const request = {
 				schemaVersion: 1 as const,
 				requestId: input.requestId,
