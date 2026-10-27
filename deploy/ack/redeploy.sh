@@ -120,18 +120,15 @@ const [manifestFile, renderedFile] = process.argv.slice(2);
 const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
 const rendered = fs.readFileSync(renderedFile, "utf8");
 const names = [
-	["web", "web"],
-	["platformApi", "api"],
-	["platformWorker", "worker"],
-	["enterpriseDirectorySync", "directory"],
+	"web",
+	"platformApi",
+	"platformWorker",
+	"enterpriseDirectorySync",
 ];
-for (const [manifestName, valuesName] of names) {
+for (const manifestName of names) {
 	const image = manifest.images?.[manifestName];
 	const reference = `${image?.repository ?? ""}@${image?.digest ?? ""}`;
-	if (!image || !rendered.includes(reference)) process.exit(1);
-	if (!rendered.includes(`image: ${reference}`) && valuesName !== "directory") {
-		process.exit(1);
-	}
+	if (!image || !rendered.includes(`image: ${reference}`)) process.exit(1);
 }
 NODE
 	then
