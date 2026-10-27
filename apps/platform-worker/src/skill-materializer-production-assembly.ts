@@ -1,9 +1,14 @@
+import { isDeepStrictEqual } from "node:util";
 import type { SkillHubAppliedReceiptV1 } from "@agent-infra/contracts";
 import type {
 	ObjectStorageDataV1,
 	SkillPackageMaterializationInputV1,
 } from "@agent-infra/object-storage";
-import { SkillPackageMaterializerV1 } from "@agent-infra/object-storage";
+import {
+	createSkillPackageConsumerV1,
+	type SkillPackageConsumerOptionsV1,
+	SkillPackageMaterializerV1,
+} from "@agent-infra/object-storage";
 import type { SkillPackagePublicationObjectV1 } from "@agent-infra/platform-core";
 import type {
 	WorkloadSkillMaterializationBindingV1,
@@ -43,11 +48,18 @@ export interface DeploymentSkillMaterializerAssemblyV1 {
  */
 export type DeploymentSkillMaterializationConfigurationV1 = Omit<
 	DeploymentSkillMaterializerAssemblyV1,
-	"resolveBindings" | "recordAppliedReceipt"
+	"resolveBindings" | "recordAppliedReceipt" | "verifyAdmission"
 > &
-	Omit<SkillHubStoreMaterializationAdapterOptionsV1, "agentVersion"> & {
-		/** Agent Version is a fixed deployment fact, never derived from Workload input. */
+	Omit<
+		SkillHubStoreMaterializationAdapterOptionsV1,
+		"agentVersion" | "resolvePackageObject" | "store"
+	> & {
 		readonly agentVersion: string;
+		readonly store: SkillHubStoreMaterializationAdapterOptionsV1["store"] & {
+			readonly readPublication: SkillPackageConsumerOptionsV1["readPublication"];
+		};
+		readonly resolveAdmissionPolicy: SkillPackageConsumerOptionsV1["resolveAdmissionPolicy"];
+		readonly sourceVerifier: SkillPackageConsumerOptionsV1["sourceVerifier"];
 	};
 
 async function readObject(
@@ -60,6 +72,10 @@ async function readObject(
 		objectRef: object.objectRef,
 		version: object.version,
 		etag: object.etag,
+		expectedMetadata: {
+			sizeBytes: object.sizeBytes,
+			mediaType: object.mediaType,
+		},
 		expiresAt: new Date(Date.now() + 300_000).toISOString(),
 	});
 	const reader = stream.getReader();
@@ -137,22 +153,106 @@ export function createDeploymentSkillMaterializerFactoryV1(
 export function createDeploymentSkillHubMaterializerFactoryV1(
 	configuration: DeploymentSkillMaterializationConfigurationV1 | undefined,
 ): DeploymentSkillMaterializerFactoryV1 | undefined {
-	if (!configuration || typeof configuration.agentVersion !== "string")
+	if (
+		!configuration ||
+		typeof configuration.agentVersion !== "string" ||
+		typeof configuration.store?.readPublication !== "function" ||
+		typeof configuration.resolveAdmissionPolicy !== "function" ||
+		typeof configuration.sourceVerifier?.verify !== "function"
+	)
 		return undefined;
 	try {
+		const consumer = createSkillPackageConsumerV1({
+			storage: configuration.storage,
+			readPublication: (input) => configuration.store.readPublication(input),
+			resolveAdmissionPolicy: configuration.resolveAdmissionPolicy,
+			sourceVerifier: configuration.sourceVerifier,
+		});
 		const adapter = createSkillHubStoreMaterializationAdapterV1({
 			store: configuration.store,
 			agentVersion: configuration.agentVersion,
 			actor: configuration.actor,
-			resolvePackageObject: configuration.resolvePackageObject,
+			resolvePackageObject: async (input) =>
+				(await consumer.verify(input)).packageObject,
 		});
-		return createDeploymentSkillMaterializerFactoryV1({
-			storage: configuration.storage,
-			assemblyRoot: configuration.assemblyRoot,
-			runtimeUid: configuration.runtimeUid,
+		// Validate deployment inputs now. Each invocation below has its own exact binding snapshot.
+		createDeploymentSkillMaterializerFactoryV1({
+			...configuration,
 			resolveBindings: adapter.resolveBindings,
 			recordAppliedReceipt: adapter.recordAppliedReceipt,
-			verifyAdmission: configuration.verifyAdmission,
+			verifyAdmission: async () => {
+				throw new Error("Unbound Skill admission");
+			},
+		});
+		return async (context) => ({
+			async materialize(input) {
+				const signal = input.signal
+					? AbortSignal.any([input.signal, context.signal])
+					: context.signal;
+				const scopedInput = { ...input, signal };
+				let original:
+					| readonly WorkloadSkillMaterializationBindingV1[]
+					| undefined;
+				const current = async () => {
+					signal.throwIfAborted();
+					const bindings = await adapter.resolveBindings(scopedInput);
+					signal.throwIfAborted();
+					if (original && !isDeepStrictEqual(original, bindings))
+						throw new Error("Skill binding changed");
+					return bindings;
+				};
+				const verifyAdmission = async (
+					item: SkillPackageMaterializationInputV1,
+				) => {
+					const bindings = await current();
+					const binding = bindings.find(
+						(b) =>
+							b.name === item.name &&
+							b.skillVersion.version === item.version &&
+							isDeepStrictEqual(b.packageObject, item.packageObject),
+					);
+					if (!original || !binding)
+						throw new Error("Skill publication binding unavailable");
+					const publication = await consumer.verify({
+						skillVersionId: binding.skillVersion.skillVersionId,
+						packageObjectVersion: binding.skillVersion.packageObjectVersion,
+						signal,
+					});
+					for (const key of [
+						"skillId",
+						"skillVersionId",
+						"provider",
+						"version",
+						"packageObjectVersion",
+						"packageDigest",
+						"manifestDigest",
+						"signatureDigest",
+					] as const)
+						if (publication.version[key] !== binding.skillVersion[key])
+							throw new Error("Skill publication mismatch");
+					if (
+						publication.version.name !== item.name ||
+						publication.version.packageDigest !== item.packageDigest ||
+						publication.version.manifestDigest !== item.manifestDigest
+					)
+						throw new Error("Skill publication mismatch");
+					await current();
+				};
+				const factory = createDeploymentSkillMaterializerFactoryV1({
+					...configuration,
+					resolveBindings: async () => {
+						original = await current();
+						return original;
+					},
+					verifyAdmission,
+					recordAppliedReceipt: async (receipt) => {
+						await current();
+						await adapter.recordAppliedReceipt(receipt);
+					},
+				});
+				const materializer = await factory({ ...context, signal });
+				return materializer.materialize(scopedInput);
+			},
 		});
 	} catch {
 		return undefined;

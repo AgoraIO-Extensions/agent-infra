@@ -24,6 +24,11 @@ export interface ObjectUploadV1 {
 	readonly signal?: AbortSignal;
 }
 export interface ObjectDownloadV1 {
+	/** Fixed internal evidence metadata, checked against the selected object version. */
+	readonly expectedMetadata?: {
+		readonly sizeBytes: number;
+		readonly mediaType: string;
+	};
 	readonly objectRef: string;
 	readonly version: string;
 	readonly etag: string;
