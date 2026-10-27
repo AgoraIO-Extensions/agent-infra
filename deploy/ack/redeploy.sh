@@ -21,7 +21,7 @@ die() {
 
 usage() {
 	cat <<'EOF'
-Usage: deploy/ack/redeploy.sh <plan|deploy|validate|clean|destroy|all>
+Usage: deploy/ack/redeploy.sh <plan|deploy|provision|validate|clean|destroy|all>
 
 Required for plan/deploy/validate:
   ACK_KUBECONFIG   private kubeconfig path
@@ -35,6 +35,7 @@ Optional validation inputs:
   ACK_CUSTOM_AGENT_CONFIGS newline-separated private probe config paths
   ACK_CUSTOM_AGENT_PROBE   web (default) or platform-auth
   ACK_EVIDENCE_DIR         external directory for redacted receipts
+  ACK_AGENT_REQUESTS_FILE  private JSON list for API Agent creation/replay
 
 Destructive operations require exact confirmation:
   ACK_CLEAN_CONFIRM=DELETE_ACK_ENV deploy/ack/redeploy.sh destroy
@@ -138,6 +139,17 @@ deploy() {
 	kubectl -n "$namespace" rollout status deployment/agent-infra-directory --timeout="$timeout"
 	snapshot deployed
 	echo "ack-redeploy: deploy passed; evidence=$evidence_dir"
+}
+
+provision() {
+	require_source_tuple
+	local requests=${ACK_AGENT_REQUESTS_FILE:-}
+	require_file ACK_AGENT_REQUESTS_FILE "$requests"
+	prepare_evidence
+	if ! node "$repo_root/deploy/ack/provision-agents.mjs" "$requests" >"$evidence_dir/agent-provision.json"; then
+		die "one or more Agent API creation requests failed; inspect redacted receipt: $evidence_dir/agent-provision.json"
+	fi
+	echo "ack-redeploy: Agent provision passed; evidence=$evidence_dir"
 }
 
 validate_endpoint() {
@@ -261,6 +273,7 @@ case "$command" in
 	validate) validate ;;
 	clean) clean ;;
 	destroy) destroy ;;
-	all) deploy; validate ;;
+	provision) provision ;;
+	all) deploy; if [[ -n "${ACK_AGENT_REQUESTS_FILE:-}" ]]; then provision; fi; validate ;;
 	*) usage; die "unknown command: $command" ;;
 esac

@@ -13,6 +13,7 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 	for (const command of [
 		"plan",
 		"deploy",
+		"provision",
 		"validate",
 		"clean",
 		"destroy",
