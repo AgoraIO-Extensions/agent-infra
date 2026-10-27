@@ -13,8 +13,10 @@ release=${ACK_RELEASE:-agent-infra-ack}
 values_file=${ACK_VALUES_FILE:-}
 timeout=${ACK_HELM_TIMEOUT:-15m}
 source_sha=${ACK_SOURCE_SHA:-}
+export ACK_SOURCE_SHA="$source_sha"
 image_manifest=${ACK_IMAGE_MANIFEST:-}
 runtime_manifest=${ACK_RUNTIME_IMAGE_MANIFEST:-}
+export ACK_RUNTIME_IMAGE_MANIFEST="$runtime_manifest"
 evidence_dir=${ACK_EVIDENCE_DIR:-"${TMPDIR:-/tmp}/agent-infra-ack-redeploy-$(date -u +%Y%m%dT%H%M%SZ)"}
 
 die() {
@@ -24,7 +26,7 @@ die() {
 
 usage() {
 	cat <<'EOF'
-Usage: deploy/ack/redeploy.sh <capture-inputs|plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|bootstrap-credential|cleanup-plan|deploy|provision|validate|clean|destroy|all>
+Usage: deploy/ack/redeploy.sh <capture-inputs|plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|template-preflight|bootstrap-credential|cleanup-plan|deploy|provision|validate|clean|destroy|all>
 
 Required for plan/deploy/validate:
   ACK_KUBECONFIG   private kubeconfig path
@@ -42,6 +44,8 @@ Optional validation inputs:
   ACK_EVIDENCE_DIR         external directory for redacted receipts
   ACK_BOOTSTRAP_INPUTS_FILE private Secret/ConfigMap file-reference bundle
   ACK_AGENT_REQUESTS_FILE  private JSON list for API Agent creation/replay
+  ACK_TEMPLATE_VALIDATIONS_FILE private four-template validation expectation bundle
+  ACK_TEMPLATE_PREFLIGHT_JOBS_FILE private JSON list of four template preflight jobs
   ACK_CREDENTIAL_BOOTSTRAP_FILE private browser storageState credential request
   ACK_CLEANUP_PLAN_FILE    private cluster/namespace ownership input for cleanup-plan
   ACK_AGENT_STATE_DIR      external existing 0700 directory for private ID bindings
@@ -150,8 +154,37 @@ bootstrap_inputs() {
 	trap 'unlink "$rendered_manifest"' EXIT
 	render_manifest "$rendered_manifest"
 	node "$repo_root/deploy/ack/bootstrap-inputs.ts" "$1" "$ACK_BOOTSTRAP_INPUTS_FILE" "$rendered_manifest" >"$evidence_dir/bootstrap-inputs.json"
+	if [[ "$1" == apply ]]; then
+		restart_config_consumers
+	fi
 	unlink "$rendered_manifest"
 	trap - EXIT
+}
+
+restart_config_consumers() {
+	export KUBECONFIG="$ACK_KUBECONFIG"
+	local count=0
+	local component
+	local -a deployments=()
+	local found
+	for component in api worker; do
+		found=$(kubectl -n "$namespace" get deployment "agent-infra-$component" --ignore-not-found -o name 2>/dev/null || true)
+		if [[ -n "$found" ]]; then
+			count=$((count + 1))
+			deployments+=("deployment/agent-infra-$component")
+		fi
+	done
+	if [[ "$count" -eq 0 ]]; then
+		printf '%s\n' '{"schemaVersion":1,"kind":"ack-configuration-rollout","restartApplied":false,"deploymentCount":0}' >"$evidence_dir/configuration-rollout.json"
+		chmod 600 "$evidence_dir/configuration-rollout.json"
+		return
+	fi
+	kubectl -n "$namespace" rollout restart "${deployments[@]}" >/dev/null
+	for component in "${deployments[@]}"; do
+		kubectl -n "$namespace" rollout status "$component" --timeout="$timeout" >/dev/null
+	done
+	printf '{"schemaVersion":1,"kind":"ack-configuration-rollout","restartApplied":true,"deploymentCount":%s}\n' "$count" >"$evidence_dir/configuration-rollout.json"
+	chmod 600 "$evidence_dir/configuration-rollout.json"
 }
 
 bootstrap_database() {
@@ -173,6 +206,80 @@ bootstrap_credential() {
 		die "API credential bootstrap failed; inspect only the redacted receipt: $evidence_dir/api-credential.json"
 	fi
 	echo "ack-redeploy: API credential bootstrap passed; evidence=$evidence_dir"
+}
+
+template_preflight() {
+	require_source_tuple
+	local jobs=${ACK_TEMPLATE_PREFLIGHT_JOBS_FILE:-}
+	require_file ACK_TEMPLATE_PREFLIGHT_JOBS_FILE "$jobs"
+	prepare_evidence
+	local list_file
+	list_file=$(mktemp)
+	trap 'unlink "$list_file"' EXIT
+	if ! node - "$jobs" >"$list_file" <<'NODE'
+const fs = require("node:fs");
+const file = process.argv[2];
+const value = JSON.parse(fs.readFileSync(file, "utf8"));
+const manifest = JSON.parse(fs.readFileSync(process.env.ACK_RUNTIME_IMAGE_MANIFEST, "utf8"));
+if (!value || value.schemaVersion !== 1 || !Array.isArray(value.jobs) || value.jobs.length !== 4)
+	process.exit(1);
+const seen = new Set();
+const templateIds = new Set();
+for (const job of value.jobs) {
+	if (typeof job !== "string" || !job.startsWith("/") || seen.has(job)) process.exit(1);
+	seen.add(job);
+	const input = JSON.parse(fs.readFileSync(job, "utf8"));
+	const image = manifest.images?.[input.templateId];
+	if (!["codex", "claude", "opencode", "pi"].includes(input.templateId) || templateIds.has(input.templateId) || input.sourceCommit !== process.env.ACK_SOURCE_SHA || !image || input.imageReference !== `${image.repository}@${image.digest}` || input.imageDigest !== image.digest)
+		process.exit(1);
+	templateIds.add(input.templateId);
+	process.stdout.write(`${job}\n`);
+}
+if (seen.size !== 4) process.exit(1);
+NODE
+	then
+		die "template preflight job list is invalid or does not match ACK_SOURCE_SHA"
+	fi
+	local job template index=0
+	while IFS= read -r job; do
+		template=$(node - "$job" <<'NODE'
+const fs = require("node:fs");
+const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+process.stdout.write(value.templateId);
+NODE
+)
+		if ! node --experimental-strip-types "$repo_root/deploy/ack/template-model-preflight.mjs" "$job" >"$evidence_dir/template-preflight-$template.json"; then
+			die "real-runtime template preflight failed: $template"
+		fi
+		index=$((index + 1))
+	done <"$list_file"
+	local expectations=${ACK_TEMPLATE_VALIDATIONS_FILE:-"$evidence_dir/template-validations.json"}
+	node - "$list_file" "$expectations" <<'NODE'
+const fs = require("node:fs");
+const [listFile, output] = process.argv.slice(2);
+const jobs = fs.readFileSync(listFile, "utf8").split("\n").filter(Boolean).map((file) => JSON.parse(fs.readFileSync(file, "utf8")));
+const driver = { codex: "codex", claude: "claude", opencode: "acp", pi: "pi" };
+const result = {
+	schemaVersion: 1,
+	sourceSha: process.env.ACK_SOURCE_SHA,
+	minValidityMs: 300_000,
+	templates: jobs.map((job) => ({
+		templateId: job.templateId,
+		driver: driver[job.templateId],
+		imageDigest: job.imageDigest,
+		configurationRevision: job.configurationRevision,
+		modelId: job.modelId,
+		validationFile: `${job.outputDirectory}/template-validation-${job.templateId}.candidate.json`,
+		preflightFile: `${job.outputDirectory}/template-model-preflight.receipt.json`,
+	})),
+};
+fs.writeFileSync(output, `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
+NODE
+	export ACK_TEMPLATE_VALIDATIONS_FILE="$expectations"
+	validate_template_receipts
+	unlink "$list_file"
+	trap - EXIT
+	echo "ack-redeploy: four template real-runtime preflights passed; evidence=$evidence_dir"
 }
 
 capture_inputs() {
@@ -239,12 +346,21 @@ provision() {
 	local requests=${ACK_AGENT_REQUESTS_FILE:-}
 	require_file ACK_AGENT_REQUESTS_FILE "$requests"
 	prepare_evidence
+	validate_template_receipts
 	[[ -n "${ACK_AGENT_STATE_DIR:-}" && -n "${ACK_BROWSER_BLUEPRINT_DIR:-}" ]] || die "Agent state and browser blueprint directories are required"
 	if ! node "$repo_root/deploy/ack/agent-bindings.ts" provision "$requests" "$ACK_AGENT_STATE_DIR" "$ACK_BROWSER_BLUEPRINT_DIR" "$source_sha" >"$evidence_dir/agent-provision.json"; then
 		die "one or more Agent API creation requests failed; inspect redacted receipt: $evidence_dir/agent-provision.json"
 	fi
 	export ACK_TEMPLATE_CONFIG_DIR="$ACK_AGENT_STATE_DIR/browser"
 	echo "ack-redeploy: Agent provision passed; evidence=$evidence_dir"
+}
+
+validate_template_receipts() {
+	local expectations=${ACK_TEMPLATE_VALIDATIONS_FILE:-}
+	require_file ACK_TEMPLATE_VALIDATIONS_FILE "$expectations"
+	if ! node "$repo_root/deploy/ack/template-validation.mjs" "$expectations" >"$evidence_dir/template-validation.json"; then
+		die "four-template real-runtime validation is missing, expired, or drifted; inspect redacted receipt: $evidence_dir/template-validation.json"
+	fi
 }
 
 validate_endpoint() {
@@ -362,6 +478,7 @@ validate() {
 	export KUBECONFIG="$ACK_KUBECONFIG"
 	kubectl -n "$namespace" wait --for=condition=available deployment/agent-infra-api deployment/agent-infra-web deployment/agent-infra-worker deployment/agent-infra-directory --timeout="$timeout"
 	validate_endpoint
+	validate_template_receipts
 	validate_templates
 	snapshot validated
 	validate_custom_agents
@@ -436,6 +553,7 @@ case "$command" in
 	bootstrap-inputs) bootstrap_inputs apply ;;
 	bootstrap-database) bootstrap_database ;;
 	bootstrap-credential) bootstrap_credential ;;
+	template-preflight) template_preflight ;;
 	cleanup-plan) cleanup_plan ;;
 	deploy) deploy ;;
 	validate) validate ;;
@@ -450,6 +568,11 @@ case "$command" in
 			bootstrap_database
 		fi
 		deploy
+		if [[ -n "${ACK_TEMPLATE_PREFLIGHT_JOBS_FILE:-}" ]]; then
+			template_preflight
+		else
+			require_file ACK_TEMPLATE_VALIDATIONS_FILE "${ACK_TEMPLATE_VALIDATIONS_FILE:-}"
+		fi
 		if [[ -n "${ACK_CREDENTIAL_BOOTSTRAP_FILE:-}" ]]; then
 			bootstrap_credential
 		fi

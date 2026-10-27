@@ -16,6 +16,7 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		"bootstrap-plan",
 		"bootstrap-inputs",
 		"bootstrap-database",
+		"template-preflight",
 		"bootstrap-credential",
 		"cleanup-plan",
 		"deploy",
@@ -28,9 +29,13 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		if (!help.includes(command)) throw new Error(`missing command: ${command}`);
 	if (
 		!help.includes("ACK_RUNTIME_IMAGE_MANIFEST") ||
-		!help.includes("ACK_CA_CERT_FILE")
+		!help.includes("ACK_CA_CERT_FILE") ||
+		!help.includes("ACK_TEMPLATE_VALIDATIONS_FILE") ||
+		!help.includes("ACK_TEMPLATE_PREFLIGHT_JOBS_FILE")
 	)
-		throw new Error("provenance and CA inputs are missing from help");
+		throw new Error(
+			"provenance, CA, or template receipt inputs are missing from help",
+		);
 	if ((await readFile(script, "utf8")).includes("--insecure"))
 		throw new Error(
 			"HTTPS validation must not disable certificate verification",
@@ -48,6 +53,13 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 	)
 		throw new Error(
 			"destroy must fail closed when namespace absence cannot be verified",
+		);
+	if (
+		!source.includes("restart_config_consumers") ||
+		!source.includes("template-validation.mjs")
+	)
+		throw new Error(
+			"configuration reload and template receipt gates are missing",
 		);
 	const allBlock = source.slice(source.indexOf("\n\tall)"));
 	if (
