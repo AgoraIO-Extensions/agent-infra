@@ -69,7 +69,7 @@ spec:
             - name: PLATFORM_DATABASE_URL
               valueFrom: {secretKeyRef: {name: {{ .Values.secrets.database }}, key: url}}
             - {name: AGENT_INFRA_WORKER_KEYRING_FILE, value: /var/run/agent-infra/keyring/keyring.pem}
-            - {name: AGENT_INFRA_WORKER_KEY_VERSIONS, value: key-v1}
+            - {name: AGENT_INFRA_WORKER_KEY_VERSIONS, value: {{ .Values.worker.keyVersions | quote }} }
             - {name: AGENT_INFRA_RUNTIME_IMAGE_REPOSITORY, value: {{ .Values.images.runtimeHost.repository | quote }}}
             - {name: AGENT_INFRA_RUNTIME_IMAGE_DIGEST, value: {{ .Values.images.runtimeHost.digest | quote }}}
             - {name: NODE_EXTRA_CA_CERTS, value: /var/run/agent-infra/directory-ca/ca.crt}
