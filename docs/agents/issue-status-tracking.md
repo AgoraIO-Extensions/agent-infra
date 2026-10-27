@@ -1,6 +1,6 @@
 # 开放 Issue 状态跟进
 
-> 快照：2026-10-27 06:00 UTC；`origin/main` `de18fba6d`。
+> 快照：2026-10-27 10:21 UTC；`origin/main` `43f1790c7`.
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
 当前开放 Issue：**32**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
@@ -9,10 +9,10 @@
 
 | 类别 | 数量 |
 | --- | ---: |
-| Runtime/Worker/Core | 10 |
+| Runtime/Worker/Core | 8 |
 | Deploy/E2E/Channels | 12 |
-| Platform/Web/Skill | 6 |
-| Workflow/Observability | 4 |
+| Platform/Web/Skill | 7 |
+| Workflow/Observability | 5 |
 
 ## 明细
 
@@ -24,9 +24,7 @@
 | Runtime/Worker/Core | [#3203](https://github.com/AgoraIO-Extensions/agent-infra/issues/3203) | feat(worker): Session Sandbox 支持部署批准的通用出网（#3198） | priority:P1 | needs-triage, priority:P1, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Runtime/Worker/Core | [#3202](https://github.com/AgoraIO-Extensions/agent-infra/issues/3202) | feat(runtime): Claude、OpenCode、Pi 标准模板开放原生工具（#3198） | priority:P1 | needs-triage, priority:P1, agent:kiro | 2026-10-26 | 核对 #3218 与原生工具开发子项 |
 | Runtime/Worker/Core | [#3198](https://github.com/AgoraIO-Extensions/agent-infra/issues/3198) | feat(runtime): 恢复标准模板 Agent 的原生能力，以 Session Sandbox 为隔离边界 | priority:P1 | needs-triage, priority:P1, agent:kiro | 2026-10-26 | 核对全部开发子项后才能关闭父票 |
-| Runtime/Worker/Core | [#2929](https://github.com/AgoraIO-Extensions/agent-infra/issues/2929) | test(runtime): isolate native early-stop failure during recovery setup | priority:P2 | ready-for-agent, priority:P2, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Runtime/Worker/Core | [#2857](https://github.com/AgoraIO-Extensions/agent-infra/issues/2857) | test: accept Session Sandbox multi-entry isolation from #1253 | 未标注 | agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
-| Runtime/Worker/Core | [#2757](https://github.com/AgoraIO-Extensions/agent-infra/issues/2757) | fix: local concurrent native metadata reads intermittently return 503 (79/100 rounds) | priority:P1 | ready-for-agent, priority:P1, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Runtime/Worker/Core | [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) | feat(runtime): deliver standard MCP Agent token client | priority:P0 | priority:P0, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Deploy/E2E/Channels | [#3356](https://github.com/AgoraIO-Extensions/agent-infra/issues/3356) | fix(ack): refresh standard-template readiness from real ECI validation | 未标注 | agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Deploy/E2E/Channels | [#3232](https://github.com/AgoraIO-Extensions/agent-infra/issues/3232) | feat(deploy): expose authenticated standard-template release app for ACK upgrades | priority:P1 | priority:P1, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
@@ -51,12 +49,15 @@
 | Workflow/Observability | [#690](https://github.com/AgoraIO-Extensions/agent-infra/issues/690) | feat(workflow): add bounded AI coding coordination harness | priority:P2 | enhancement, priority:P2, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Workflow/Observability | [#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144) | wayfinder: 形成 Agent 平台 M1 启动与落地路线 | priority:P0 | wayfinder:map, wayfinder, priority:P0, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 
+| Platform/Web/Skill | [#3552](https://github.com/AgoraIO-Extensions/agent-infra/issues/3552) | feat(skill): wire SkillSpector admission into publication supplier | priority:P1 | ready-for-agent, priority:P1, agent:codex | 2026-10-27 | 依赖 #2742 的生产项目快照发布；完成 admission-to-publication 接线后再收口 |
+| Workflow/Observability | [#3554](https://github.com/AgoraIO-Extensions/agent-infra/issues/3554) | docs: sync tracker after native metadata delivery | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 同步实时开放 Issue、开发 PR 和准确 head；保持 AC 未完成状态 |
+
 ## 开发 PR 回读
 
-状态截至 2026-10-27 06:00 UTC。OPEN 不等于合入，MERGED 不等于真实验收完成。
+状态截至 2026-10-27 10:21 UTC。OPEN 不等于合入，MERGED 不等于真实验收完成。
 
 | PR | 状态 | head SHA | 未完成验收 |
 | --- | --- | --- | --- |
-| [#3509](https://github.com/AgoraIO-Extensions/agent-infra/pull/3509) | OPEN / Draft | `7e5ad36853e448d4183bd6d98bf37b57220e3f19` | #3072 的 ACK 真实部署/恢复 AC 仍未完成；保留 Draft |
-| [#3520](https://github.com/AgoraIO-Extensions/agent-infra/pull/3520) | OPEN | `547fec4845b26c89c85c4c590f6a3e7c43f39a4f` | #3146 已按开发交付关闭；真实 Web/ACK AC 待后续 |
-| [#3532](https://github.com/AgoraIO-Extensions/agent-infra/pull/3532) | OPEN | `acef1e3ff306243577278859071efe9b359a20a3` | #3527 已按开发交付关闭；真实部署/Skill AC 待后续 |
+| [#3509](https://github.com/AgoraIO-Extensions/agent-infra/pull/3509) | OPEN | `7fa1df1c5b5669620a7aacd66503c6fc2779172b` | #3072 的 ACK 真实部署/恢复 AC 仍未完成；保留 Draft |
+| [#3520](https://github.com/AgoraIO-Extensions/agent-infra/pull/3520) | OPEN | `a523b788fee6971a92acb278b1058b9acbbf7640` | #3146 已按开发交付关闭；真实 Web/ACK AC 待后续 |
+| [#3553](https://github.com/AgoraIO-Extensions/agent-infra/pull/3553) | OPEN | `aa7ad01134a0d475f33b9634fb267094a08d0106` | 关联 Issue 的 AC 保持原状态 |
