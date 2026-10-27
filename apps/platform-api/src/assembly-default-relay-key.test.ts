@@ -12,6 +12,9 @@ vi.mock("@agent-infra/platform-core", async (importOriginal) => {
 		createAgentConfigurationUseCaseV1: vi.fn(
 			actual.createAgentConfigurationUseCaseV1,
 		),
+		createApplicationModelCandidatesUseCaseV1: vi.fn(
+			actual.createApplicationModelCandidatesUseCaseV1,
+		),
 		createApplicationRevisionUseCaseV1: vi.fn(
 			actual.createApplicationRevisionUseCaseV1,
 		),
@@ -80,12 +83,16 @@ describe("Platform API assembly of the default Relay Key ports (#2421)", () => {
 		};
 		vi.mocked(platformCore.createAgentConfigurationUseCaseV1).mockClear();
 		vi.mocked(platformCore.createApplicationRevisionUseCaseV1).mockClear();
+		vi.mocked(
+			platformCore.createApplicationModelCandidatesUseCaseV1,
+		).mockClear();
 		const assembly = assemble(ports as never);
 		try {
 			// 创建申请本来就接收这组端口；修订和配置更新必须与它共用同一组，
 			// 否则带 Key 的更换模型请求会在服务端因缺少依赖而失败。
 			for (const create of [
 				platformCore.createApplicationRevisionUseCaseV1,
+				platformCore.createApplicationModelCandidatesUseCaseV1,
 				platformCore.createAgentConfigurationUseCaseV1,
 			])
 				expect(vi.mocked(create).mock.calls[0]?.[0]).toMatchObject({
@@ -100,10 +107,14 @@ describe("Platform API assembly of the default Relay Key ports (#2421)", () => {
 	it("does not invent Key ports when the deployment has none", async () => {
 		vi.mocked(platformCore.createAgentConfigurationUseCaseV1).mockClear();
 		vi.mocked(platformCore.createApplicationRevisionUseCaseV1).mockClear();
+		vi.mocked(
+			platformCore.createApplicationModelCandidatesUseCaseV1,
+		).mockClear();
 		const assembly = assemble();
 		try {
 			for (const create of [
 				platformCore.createApplicationRevisionUseCaseV1,
+				platformCore.createApplicationModelCandidatesUseCaseV1,
 				platformCore.createAgentConfigurationUseCaseV1,
 			])
 				expect(vi.mocked(create).mock.calls[0]?.[0]).not.toHaveProperty(

@@ -1,12 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { connectionEntryUrl } from "../../features/connection-entry.js";
-
 import {
 	AgentApplicationSubmissionScreen,
 	createApplicationHeading,
 } from "../../features/my-agents/agent-application-submission-screen.js";
 import { projectDeploymentConfiguration } from "../../features/my-agents/deployment-configuration.js";
 import { useAgentApplicationSubmission } from "../../features/my-agents/use-agent-application-submission.js";
+import { loadApplicationModelCandidates } from "../../features/my-agents/use-application-model-candidates.js";
 import { useShownDeploymentConfiguration } from "../../features/my-agents/use-deployment-configuration.js";
 import { PageLoadingState } from "../../features/page-loading-state.js";
 import { useBrowserSession } from "../../features/use-browser-session.js";
@@ -55,6 +55,7 @@ function NewAgentApplicationRoute() {
 				}
 				error={error}
 				mode="create"
+				onCheckApplicationModels={loadApplicationModelCandidates}
 				onSubmit={submission.create}
 				result={submission.data}
 				submitting={submission.isPending}

@@ -8,6 +8,7 @@ import { ConfigurationModelPicker } from "../agent-configuration/configuration-m
 import type {
 	KeylessCurrentModelOption,
 	KeylessEndpointNames,
+	KeylessModelCandidate,
 } from "../agent-configuration/keyless-model-selection.js";
 import type { useKeylessKeyCheck } from "../agent-configuration/use-keyless-key-check.js";
 
@@ -15,12 +16,24 @@ type ApplicationKeylessModelEditorProps = {
 	current: readonly KeylessCurrentModelOption[];
 	currentDefault: { optionId: string; level: string };
 	disabled: boolean;
+	checkDisabled?: boolean;
 	/** 端点 ID → 部署目录显示名，候选不显示原始端点 ID（G5-12）。 */
 	endpointNames?: KeylessEndpointNames;
 	/** 表单校验或保存被拦下时的提示。 */
 	error?: string | undefined;
 	errorId: string;
-	keyCheck: ReturnType<typeof useKeylessKeyCheck>;
+	keyCheck: Pick<
+		ReturnType<typeof useKeylessKeyCheck>,
+		| "key"
+		| "typed"
+		| "checking"
+		| "error"
+		| "noCandidates"
+		| "setKey"
+		| "runCheck"
+		| "setSelection"
+	> & { readonly candidates: readonly KeylessModelCandidate[] };
+	create?: boolean;
 	onChangeKey: () => void;
 };
 
@@ -33,11 +46,13 @@ export function ApplicationKeylessModelEditor({
 	current,
 	currentDefault,
 	disabled,
+	checkDisabled = false,
 	endpointNames,
 	error,
 	errorId,
 	keyCheck,
 	onChangeKey,
+	create = false,
 }: ApplicationKeylessModelEditorProps) {
 	return (
 		<div className="space-y-4">
@@ -62,7 +77,9 @@ export function ApplicationKeylessModelEditor({
 					/>
 					{/* 检查进行中是可聚焦的禁用（aria-disabled），焦点留在按钮上（#3242 K7-02）。 */}
 					<Button
-						disabled={disabled || keyCheck.checking || !keyCheck.typed}
+						disabled={
+							disabled || checkDisabled || keyCheck.checking || !keyCheck.typed
+						}
 						focusableWhenDisabled={keyCheck.checking}
 						onClick={() => void keyCheck.runCheck()}
 						type="button"
@@ -72,8 +89,9 @@ export function ApplicationKeylessModelEditor({
 					</Button>
 				</div>
 				<p className="text-muted-foreground text-sm">
-					更换模型集合需要重新提交 Key；检查后只能从该 Key
-					可见的模型里选择。保存后不会回显。
+					{create
+						? "填写默认 Key 并检查可用模型；只能选择该 Key 可见的模型。保存后不会回显。"
+						: "更换模型集合需要重新提交 Key；检查后只能从该 Key 可见的模型里选择。保存后不会回显。"}
 				</p>
 				{keyCheck.error ? (
 					<Alert tone="danger" role="alert">
@@ -105,7 +123,7 @@ export function ApplicationKeylessModelEditor({
 					current={current}
 					currentDefault={currentDefault}
 					description="只列出该 Key 可见、且模板支持的模型。勾选后可调整推理档位和默认模型选项。"
-					disabled={disabled}
+					disabled={disabled || checkDisabled}
 					endpointNames={endpointNames}
 					idPrefix="application-keyless-model"
 					key={keyCheck.candidates

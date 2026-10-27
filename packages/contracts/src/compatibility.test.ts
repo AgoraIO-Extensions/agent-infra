@@ -5930,3 +5930,52 @@ it("admits only the appended queue-full error code (#3375)", async () => {
 		await rm(directory, { recursive: true, force: true });
 	}
 });
+
+it("admits only the pinned application model preview (#3146)", async () => {
+	const current = JSON.parse(
+		await readFile(
+			new URL(
+				"../artifacts/openapi/pilot-browser.v2.openapi.json",
+				import.meta.url,
+			),
+			"utf8",
+		),
+	);
+	const path = "/api/v2/agent-applications/model-candidates";
+	const previous = structuredClone(current);
+	delete previous.paths[path];
+	delete previous.components.schemas.AgentApplicationModelCandidatesRequestV2;
+	delete previous.components.schemas.AgentApplicationModelCandidatesResponseV2;
+	const directory = await mkdtemp(
+		resolve(tmpdir(), "application-model-candidates-compat-"),
+	);
+	try {
+		const before = resolve(directory, "before.json");
+		const after = resolve(directory, "after.json");
+		await writeFile(before, JSON.stringify(previous));
+		await writeFile(after, JSON.stringify(current));
+		expect(comparePaths(after, before).status).toBe(0);
+		for (const mutate of [
+			(value: typeof current) => {
+				value.components.schemas.AgentApplicationModelCandidatesRequestV2.properties.defaultRelayKey.writeOnly = false;
+			},
+			(value: typeof current) => {
+				value.components.schemas.AgentApplicationModelCandidatesRequestV2.additionalProperties = true;
+			},
+			(value: typeof current) => {
+				value.paths[path].post.security = [];
+			},
+			(value: typeof current) => {
+				value.components.schemas.AgentApplicationModelCandidatesResponseV2.properties.key =
+					{ type: "string" };
+			},
+		]) {
+			const changed = structuredClone(current);
+			mutate(changed);
+			await writeFile(after, JSON.stringify(changed));
+			expect(comparePaths(after, before).status).toBe(1);
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});

@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
 	AgentApiLifecycleAcceptedResponseV1Schema,
 	AgentApplicationCreateRequestV2Schema,
+	AgentApplicationModelCandidatesRequestV2Schema,
+	AgentApplicationModelCandidatesResponseV2Schema,
 	AgentApplicationProjectionV1Schema,
 	AgentApplicationProjectionV2Schema,
 	AgentApplicationUpdateRequestV2Schema,
@@ -22,6 +25,7 @@ import type {
 	ApplicationFoundationUseCaseV1,
 	ApplicationRevisionUseCaseV1,
 	CurrentTaskUserV1,
+	createApplicationModelCandidatesUseCaseV1,
 	PendingSecretRecordAttachmentResolverV1,
 	PersonalApiAgentReadUseCaseV1,
 	WorkloadFailureReasonCodeV1,
@@ -126,6 +130,9 @@ export interface ManagementRouteDependencies {
 		},
 	) => Promise<unknown>;
 	readonly foundation: Pick<ApplicationFoundationUseCaseV1, "submit">;
+	readonly applicationModelCandidates?: ReturnType<
+		typeof createApplicationModelCandidatesUseCaseV1
+	>;
 	readonly revision: Pick<ApplicationRevisionUseCaseV1, "revise">;
 	readonly management: Pick<
 		AgentManagementInterfaceV1,
@@ -672,6 +679,53 @@ export function registerV2ManagementRoutes(
 	app: Hono,
 	dependencies: ManagementRouteDependencies,
 ): void {
+	app.post("/api/v2/agent-applications/model-candidates", (context) =>
+		boundary(context, async (metadata) => {
+			context.header("Cache-Control", "no-store");
+			context.header("Referrer-Policy", "no-referrer");
+			const request = context.req.raw;
+			if (request.headers.has("Authorization"))
+				fail("AUTHENTICATION_REQUIRED", metadata.traceId);
+			if (new URL(request.url).search)
+				fail("INVALID_REQUEST", metadata.traceId);
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				request,
+				metadata.traceId,
+			);
+			const { value: body, rawRequestDigest } = await parseJson(
+				request,
+				AgentApplicationModelCandidatesRequestV2Schema,
+				metadata.traceId,
+			);
+			if (
+				!dependencies.applicationModelCandidates ||
+				!dependencies.validateDefaultRelayKey
+			)
+				fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			const validity = await dependencies.validateDefaultRelayKey(
+				body.defaultRelayKey,
+			);
+			if (validity === "invalid") fail("INVALID_REQUEST", metadata.traceId);
+			if (validity !== "valid")
+				fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			const result = await dependencies.applicationModelCandidates(
+				{
+					agentId: randomUUID(),
+					...metadata,
+					templateId: body.templateId,
+					defaultRelayKey: body.defaultRelayKey,
+				},
+				{ schemaVersion: 1, userId: identity.userId, rawRequestDigest },
+			);
+			return context.json(
+				AgentApplicationModelCandidatesResponseV2Schema.parse({
+					schemaVersion: 2,
+					candidates: result.candidates,
+				}),
+			);
+		}),
+	);
 	app.post("/api/v2/agent-applications", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(

@@ -217,6 +217,25 @@ async function fixture(
 					candidates: defaultRelayKeyCandidates,
 				}),
 			});
+		if (
+			request.method() === "POST" &&
+			url.pathname === "/api/v2/agent-applications/model-candidates"
+		) {
+			return route.fulfill({
+				json: {
+					schemaVersion: 2,
+					candidates: (
+						input.deployment ?? deploymentConfiguration
+					).modelCatalog.endpoints.flatMap((endpoint) =>
+						endpoint.models.map((model) => ({
+							endpointId: endpoint.endpointId,
+							modelId: model.modelId,
+							reasoningLevels: model.reasoningLevels,
+						})),
+					),
+				},
+			});
+		}
 		if (request.method() !== "GET") {
 			commands.push(url.pathname);
 			return route.fulfill({ status: 409, json: {} });
@@ -715,39 +734,18 @@ test("application form footer, field errors, legends and option labels follow th
 		page.getByRole("heading", { level: 2, name: "高级配置", exact: true }),
 	).toHaveCSS("font-weight", "620");
 	const muted = await resolved(page, "color", "var(--muted-foreground)");
-	await page.getByRole("combobox", { name: "模型端点" }).click();
-	await page.getByRole("option", { name: "Primary endpoint" }).click();
-	await page
-		.getByRole("combobox", { name: "模型：模型选项 1", exact: true })
-		.click();
-	await page.getByRole("option", { name: "gpt-5" }).click();
-	for (const legend of ["模型选项 1", "允许的推理档位"])
-		expect(
-			await computed(page.locator("legend", { hasText: legend }), [
-				"fontSize",
-				"fontWeight",
-				"color",
-			]),
-		).toEqual({ fontSize: "12px", fontWeight: "650", color: muted });
-	// 推理档位只显示中文（reasoningLevelLabel），原始枚举 medium / high 不进入页面。
+	await pick(page, "标准模板", "Codex");
+	await selectCreateModel(page);
+	const picker = page.locator("#application-keyless-model");
 	await expect(
-		page.locator('.model-reasoning label[data-variant="option"]'),
+		picker.getByRole("group", { name: "允许的模型", exact: true }),
+	).toBeVisible();
+	await expect(
+		picker.locator('.keyless-level-row label[data-variant="option"]'),
 	).toHaveText(["均衡", "高"]);
-	// M-06：推理档位选项 13px / 400 / 前景色，至少 44px 高，复选框 18×18。
-	const option = page.locator('label[data-variant="option"]', {
-		hasText: "均衡",
-	});
-	expect(await computed(option, ["fontSize", "fontWeight", "color"])).toEqual({
-		fontSize: "13px",
-		fontWeight: "400",
-		color: await resolved(page, "color", "var(--foreground)"),
-	});
-	expect((await option.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
-	const box = await option.getByRole("checkbox").boundingBox();
-	expect([box?.width, box?.height]).toEqual([18, 18]);
-	expect(
-		await computed(page.locator(".model-reasoning"), ["rowGap", "columnGap"]),
-	).toEqual({ rowGap: "12px", columnGap: "22px" });
+	await expect(
+		picker.getByRole("combobox", { name: "默认模型选项" }),
+	).toBeVisible();
 
 	await page.getByRole("button", { name: "展开高级配置" }).click();
 	await page.getByRole("button", { name: "添加环境变量" }).click();
@@ -1924,6 +1922,17 @@ const twoEndpointDeployment = DeploymentConfigurationProjectionV2Schema.parse({
 	},
 });
 
+async function selectCreateModel(
+	page: Page,
+	label = "Primary endpoint · gpt-5",
+) {
+	await page
+		.getByLabel("Agent 默认 Relay Key", { exact: true })
+		.fill("synthetic-relay-key");
+	await page.getByRole("button", { name: "检查可用模型", exact: true }).click();
+	await page.getByRole("checkbox", { name: label, exact: true }).check();
+}
+
 async function pick(page: Page, combobox: string, option: string) {
 	await page.getByRole("combobox", { name: combobox, exact: true }).click();
 	await page.getByRole("option", { name: option, exact: true }).click();
@@ -1947,36 +1956,57 @@ for (const path of [
 		if (path === "/my-agents/new") await pick(page, "标准模板", "Codex");
 		else await page.getByRole("checkbox", { name: "修改模型配置" }).click();
 
-		await pick(page, "模型端点：模型选项 1", "Primary endpoint");
-		await pick(page, "模型：模型选项 1", "gpt-5");
-		await page.getByRole("button", { name: "添加模型选项" }).click();
-		await pick(page, "模型端点：模型选项 2", "Secondary endpoint");
-		await pick(page, "模型：模型选项 2", "gpt-5-mini");
-		for (const row of ["模型选项 1", "模型选项 2"])
-			for (const level of ["均衡", "高"]) {
-				const checkbox = page.getByRole("checkbox", {
-					name: `${level}：${row}`,
+		if (path === "/my-agents/new") {
+			await selectCreateModel(page);
+			await page
+				.getByRole("checkbox", {
+					name: "Secondary endpoint · gpt-5-mini",
 					exact: true,
-				});
-				await checkbox.click();
-				await expect(checkbox).toBeChecked();
+				})
+				.check();
+			for (const label of [
+				"Primary endpoint · gpt-5",
+				"Secondary endpoint · gpt-5-mini",
+			]) {
+				await expect(
+					page.getByRole("checkbox", { name: `均衡：${label}`, exact: true }),
+				).toBeChecked();
+				await expect(
+					page.getByRole("checkbox", { name: `高：${label}`, exact: true }),
+				).toBeChecked();
 			}
-		// 可见文字不变：档位仍只显示中文名，移除按钮仍为「移除模型选项」。
-		const secondRow = page.locator(".model-option-fieldset").nth(1);
-		await expect(
-			secondRow.locator('.model-reasoning label[data-variant="option"]'),
-		).toHaveText(["均衡", "高"]);
-		const removeModel = page.getByRole("button", {
-			name: "移除模型选项：模型选项 2",
-			exact: true,
-		});
-		await expect(removeModel).toHaveText("移除模型选项");
-		await expect(
-			page.getByRole("button", {
-				name: "移除模型选项：模型选项 1",
+		} else {
+			await pick(page, "模型端点：模型选项 1", "Primary endpoint");
+			await pick(page, "模型：模型选项 1", "gpt-5");
+			await page.getByRole("button", { name: "添加模型选项" }).click();
+			await pick(page, "模型端点：模型选项 2", "Secondary endpoint");
+			await pick(page, "模型：模型选项 2", "gpt-5-mini");
+			for (const row of ["模型选项 1", "模型选项 2"])
+				for (const level of ["均衡", "高"]) {
+					const checkbox = page.getByRole("checkbox", {
+						name: `${level}：${row}`,
+						exact: true,
+					});
+					await checkbox.click();
+					await expect(checkbox).toBeChecked();
+				}
+			// 可见文字不变：档位仍只显示中文名，移除按钮仍为「移除模型选项」。
+			const secondRow = page.locator(".model-option-fieldset").nth(1);
+			await expect(
+				secondRow.locator('.model-reasoning label[data-variant="option"]'),
+			).toHaveText(["均衡", "高"]);
+			const removeModel = page.getByRole("button", {
+				name: "移除模型选项：模型选项 2",
 				exact: true,
-			}),
-		).toBeVisible();
+			});
+			await expect(removeModel).toHaveText("移除模型选项");
+			await expect(
+				page.getByRole("button", {
+					name: "移除模型选项：模型选项 1",
+					exact: true,
+				}),
+			).toBeVisible();
+		}
 
 		await page.getByRole("button", { name: "展开高级配置" }).click();
 		for (let index = 0; index < 2; index += 1) {
@@ -2024,10 +2054,21 @@ for (const path of [
 
 		// 移除第二个模型选项后只剩一行，不再有「移除模型选项」；移除第一行环境变量后，原第二行
 		// 重新编号为「环境变量 1」，名称随 legend 更新，仍不重名。
-		await removeModel.click();
-		await expect(
-			page.getByRole("button", { name: /^移除模型选项/ }),
-		).toHaveCount(0);
+		if (path === "/my-agents/new")
+			await page
+				.getByRole("checkbox", {
+					name: "Secondary endpoint · gpt-5-mini",
+					exact: true,
+				})
+				.uncheck();
+		else {
+			await page
+				.getByRole("button", { name: "移除模型选项：模型选项 2", exact: true })
+				.click();
+			await expect(
+				page.getByRole("button", { name: /^移除模型选项/ }),
+			).toHaveCount(0);
+		}
 		await page
 			.getByRole("button", { name: "移除环境变量：环境变量 1", exact: true })
 			.click();
@@ -2748,13 +2789,7 @@ test("a create form whose selected template is updated in the session reuses the
 		.getByLabel("Agent 默认 Relay Key", { exact: true })
 		.fill("synthetic-relay-key");
 	await pick(page, "标准模板", "Claude");
-	await pick(page, "模型端点：模型选项 1", "Primary endpoint");
-	await pick(page, "模型：模型选项 1", "gpt-5");
-	await page
-		.getByRole("checkbox", { name: "均衡：模型选项 1", exact: true })
-		.click();
-	await pick(page, "默认模型", "Primary endpoint · gpt-5");
-	await pick(page, "默认推理档位", "均衡");
+	await selectCreateModel(page);
 
 	claudeRevision = "claude-r2";
 	await page.evaluate(() =>
@@ -3055,13 +3090,7 @@ for (const failure of submissionFailures)
 				.getByLabel("Agent 默认 Relay Key", { exact: true })
 				.fill("synthetic-relay-key");
 			await pick(page, "标准模板", "Codex");
-			await pick(page, "模型端点：模型选项 1", "Primary endpoint");
-			await pick(page, "模型：模型选项 1", "gpt-5");
-			await page
-				.getByRole("checkbox", { name: "均衡：模型选项 1", exact: true })
-				.click();
-			await pick(page, "默认模型", "Primary endpoint · gpt-5");
-			await pick(page, "默认推理档位", "均衡");
+			await selectCreateModel(page);
 		} else {
 			await page.goto("/my-agents/application-browser-1/edit");
 			await expect(name).toHaveValue(rejectedStandardApplication().name);
@@ -3301,13 +3330,7 @@ test("a create form's template field error follows a deployment reread (#3364 N1
 		.getByLabel("Agent 默认 Relay Key", { exact: true })
 		.fill("synthetic-relay-key");
 	await pick(page, "标准模板", "Codex");
-	await pick(page, "模型端点：模型选项 1", "Primary endpoint");
-	await pick(page, "模型：模型选项 1", "gpt-5");
-	await page
-		.getByRole("checkbox", { name: "均衡：模型选项 1", exact: true })
-		.click();
-	await pick(page, "默认模型", "Primary endpoint · gpt-5");
-	await pick(page, "默认推理档位", "均衡");
+	await selectCreateModel(page);
 
 	const main = page.locator("#main-content");
 	const readiness = page
@@ -3653,7 +3676,13 @@ for (const menu of ["标准模板", "模型端点：模型选项 1"])
 							}),
 						}),
 		);
-		await page.goto("/my-agents/new");
+		await page.goto(
+			menu === "标准模板"
+				? "/my-agents/new"
+				: "/my-agents/application-browser-1/edit",
+		);
+		if (menu !== "标准模板")
+			await page.getByRole("checkbox", { name: "修改模型配置" }).check();
 		const template = page.getByRole("combobox", { name: menu, exact: true });
 		await template.click();
 		const listbox = page.getByRole("listbox");
@@ -3768,6 +3797,43 @@ for (const scenario of [
 				: "/my-agents/new",
 		);
 		const main = page.locator("#main-content");
+		if (scenario.mode === "create") {
+			await pick(page, "标准模板", "Codex");
+			await selectCreateModel(page);
+			const picker = page.locator("#application-keyless-model");
+			const selected = picker.getByRole("checkbox", {
+				name: /^(?:Primary endpoint · )?gpt-5$/,
+				exact: false,
+			});
+			await expect(selected).toBeChecked();
+			const holding = await holdRequests(page, "GET", deploymentPath);
+			failing = true;
+			await rereadDeployment(page);
+			await expect.poll(() => holding.held()).toBe(1);
+			await expect(selected).toBeEnabled();
+			holding.release();
+			await expect(
+				main.getByText(
+					scenario.failure === "403"
+						? "部署选项暂不可用，请联系管理员。"
+						: "部署选项需要刷新后才能提交标准模板申请。",
+				),
+			).toBeVisible();
+			await expect(selected).toBeDisabled();
+			await expect(selected).toBeChecked();
+			await expect(picker).toContainText("gpt-5");
+			await expect(main).not.toContainText("endpoint-primary");
+			if (scenario.failure !== "403") {
+				failing = false;
+				await main.getByRole("button", { name: "重新加载部署选项" }).click();
+				await expect(selected).toBeEnabled();
+			}
+			expect(commands).toEqual([]);
+			await expectCleanPage(page, pageErrors);
+			await expectNoDuplicateControls(page, "新申请候选重读");
+			await noHorizontalOverflow(page);
+			return;
+		}
 		const endpoint = page.getByRole("combobox", {
 			name: "模型端点：模型选项 1",
 			exact: true,
@@ -3797,14 +3863,6 @@ for (const scenario of [
 		if (scenario.mode === "update")
 			await page.getByRole("checkbox", { name: "修改模型配置" }).click();
 		if (scenario.failure !== "open") {
-			if (scenario.mode === "create") {
-				await pick(page, "标准模板", "Codex");
-				await pick(page, "模型端点：模型选项 1", "Primary endpoint");
-				await pick(page, "模型：模型选项 1", "gpt-5");
-				await balanced.click();
-				await pick(page, "默认模型", "Primary endpoint · gpt-5");
-				await pick(page, "默认推理档位", "均衡");
-			}
 			await expect(value(endpoint)).toHaveText("Primary endpoint");
 			await expect(value(defaultModel)).toHaveText("Primary endpoint · gpt-5");
 			await expect(balanced).toBeChecked();
@@ -3819,16 +3877,12 @@ for (const scenario of [
 			holding.release();
 		}
 		await expect(
-			main.getByText(
-				scenario.failure === "403"
-					? "部署选项暂不可用，请联系管理员。"
-					: "部署选项需要刷新后才能提交标准模板申请。",
-			),
+			main.getByText("部署选项需要刷新后才能提交标准模板申请。"),
 		).toBeVisible();
 		await expect(endpoint).toBeDisabled();
 		await expect(model).toBeDisabled();
 		await expect(defaultModel).toBeDisabled();
-		const named = scenario.failure !== "open" && scenario.failure !== "403";
+		const named = scenario.failure !== "open";
 		await expect(value(endpoint)).toHaveText(
 			named ? "Primary endpoint" : "暂时无法读取端点名称",
 		);
@@ -3850,18 +3904,16 @@ for (const scenario of [
 			page.getByRole("combobox", { name: "模型端点：模型选项 2" }),
 		).toHaveCount(0);
 		await expect(addModel).toBeFocused();
-		if (scenario.failure !== "403") {
-			// 「重新加载部署选项」读到后恢复可编辑，显示名同读取正常时。
-			failing = false;
-			await main.getByRole("button", { name: "重新加载部署选项" }).click();
-			await expect(endpoint).toBeEnabled();
-			await expect(value(endpoint)).toHaveText("Primary endpoint");
-			await expect(value(defaultModel)).toHaveText("Primary endpoint · gpt-5");
-			await expect(balanced).toBeEnabled();
-			await expect(balanced).toBeChecked();
-			await expect(main.getByText("部署选项读取后可调整。")).toHaveCount(0);
-			await expect(addModel).not.toHaveAttribute("aria-disabled", "true");
-		}
+		// 「重新加载部署选项」读到后恢复可编辑，显示名同读取正常时。
+		failing = false;
+		await main.getByRole("button", { name: "重新加载部署选项" }).click();
+		await expect(endpoint).toBeEnabled();
+		await expect(value(endpoint)).toHaveText("Primary endpoint");
+		await expect(value(defaultModel)).toHaveText("Primary endpoint · gpt-5");
+		await expect(balanced).toBeEnabled();
+		await expect(balanced).toBeChecked();
+		await expect(main.getByText("部署选项读取后可调整。")).toHaveCount(0);
+		await expect(addModel).not.toHaveAttribute("aria-disabled", "true");
 		expect(commands).toEqual([]);
 		await expectCleanPage(page, pageErrors);
 		await expectNoDuplicateControls(
@@ -4171,3 +4223,87 @@ for (const status of [401, 404] as const)
 			);
 			await noHorizontalOverflow(page);
 		});
+
+test("new standard application uses Key models with an empty catalog (#3146)", async ({
+	page,
+}) => {
+	await fixture(page, {
+		deployment: {
+			...deploymentConfiguration,
+			modelCatalog: { status: "empty", revision: "catalog-new", endpoints: [] },
+		},
+	});
+	const candidates = [
+		{
+			endpointId: "relay",
+			modelId: "fresh-model",
+			reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
+		},
+	];
+	await page.route("**/api/v2/agent-applications/model-candidates", (route) =>
+		route.fulfill({ json: { schemaVersion: 2, candidates } }),
+	);
+	let submitted: unknown;
+	await page.route("**/api/v2/agent-applications", (route) => {
+		if (route.request().method() !== "POST") return route.fallback();
+		submitted = route.request().postDataJSON();
+		return route.fulfill({ status: 201, json: application() });
+	});
+	await page.goto("/my-agents/new");
+	await pick(page, "标准模板", "Codex");
+	await page
+		.getByLabel("Agent 名称", { exact: true })
+		.fill("Controlled candidate Agent");
+	await page
+		.getByLabel("用途说明", { exact: true })
+		.fill("Tests candidate model creation");
+	await selectCreateModel(page, "fresh-model");
+	await page.getByRole("button", { name: "提交审批", exact: true }).click();
+	await expect(
+		page.getByText("申请已提交：待审批。", { exact: true }),
+	).toBeVisible();
+	expect(submitted).toMatchObject({
+		defaultRelayKey: "synthetic-relay-key",
+		modelConfiguration: {
+			options: [
+				{
+					endpointId: "relay",
+					modelId: "fresh-model",
+					reasoningLevels: ["high", "low", "max", "medium", "xhigh"],
+				},
+			],
+		},
+	});
+});
+
+test("invalid default Key leaves new application without selectable models (#3146)", async ({
+	page,
+}) => {
+	const { commands } = await fixture(page);
+	await page.route("**/api/v2/agent-applications/model-candidates", (route) =>
+		route.fulfill({
+			status: 400,
+			json: {
+				schemaVersion: 1,
+				code: "INVALID_REQUEST",
+				message: "Synthetic rejected Key",
+				retryable: false,
+				traceId: "synthetic-preview",
+			},
+		}),
+	);
+	await page.goto("/my-agents/new");
+	await pick(page, "标准模板", "Codex");
+	await page
+		.getByLabel("Agent 默认 Relay Key", { exact: true })
+		.fill("synthetic-relay-key");
+	await page.getByRole("button", { name: "检查可用模型", exact: true }).click();
+	await expect(
+		page.getByText("Key 校验失败或暂时无法读取可用模型，请检查后重试。", {
+			exact: true,
+		}),
+	).toBeVisible();
+	await expect(page.locator("#application-keyless-model")).toHaveCount(0);
+	await page.getByRole("button", { name: "提交审批", exact: true }).click();
+	expect(commands).toEqual([]);
+});

@@ -1036,6 +1036,78 @@
         ],
         "type": "object"
       },
+      "AgentApplicationModelCandidatesRequestV2": {
+        "additionalProperties": false,
+        "properties": {
+          "defaultRelayKey": {
+            "format": "password",
+            "maxLength": 8192,
+            "minLength": 16,
+            "pattern": "^[\\x21-\\x7e]+$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "templateId": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "templateId",
+          "defaultRelayKey"
+        ],
+        "type": "object"
+      },
+      "AgentApplicationModelCandidatesResponseV2": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "endpointId": {
+                  "maxLength": 1024,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "modelId": {
+                  "maxLength": 1024,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "reasoningLevels": {
+                  "items": {
+                    "maxLength": 1024,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 32,
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "endpointId",
+                "modelId",
+                "reasoningLevels"
+              ],
+              "type": "object"
+            },
+            "maxItems": 32768,
+            "type": "array"
+          },
+          "schemaVersion": {
+            "const": 2,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "candidates"
+        ],
+        "type": "object"
+      },
       "AgentApplicationProjectionV2": {
         "additionalProperties": false,
         "properties": {
@@ -12738,6 +12810,110 @@
             "description": "Dependency is temporarily unavailable"
           }
         }
+      }
+    },
+    "/api/v2/agent-applications/model-candidates": {
+      "post": {
+        "description": "Active browser session only; no Authorization header or query. Template readiness and current user authority are checked. No Key, Agent or application is persisted. Responses are no-store; submission independently revalidates the Key, template and models.",
+        "operationId": "getAgentApplicationModelCandidatesV2",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentApplicationModelCandidatesRequestV2"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentApplicationModelCandidatesResponseV2"
+                }
+              }
+            },
+            "description": "Models available to a standard-template application"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ],
+        "summary": "Preview models for a standard-template application before creation"
       }
     },
     "/api/v2/agent-applications/{applicationId}": {

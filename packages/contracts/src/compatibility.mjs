@@ -3522,6 +3522,35 @@ function normalizeExecutionFailureProjectionOpenApiAddition(previous, current) {
 
 // #3035 把既有的浏览器目录搜索 GET /api/v2/directory/search 纳入 V2 契约；
 // 新增路径与两个 strict 投影用写死的 SHA-256 固定，删除新增后须与基线逐字节一致。
+// #3146 pins the pre-application candidate request and response; existing paths remain identical.
+function isApplicationModelCandidates3146OpenApiAddition(previous, current) {
+	const path = "/api/v2/agent-applications/model-candidates";
+	const schemas = [
+		"AgentApplicationModelCandidatesRequestV2",
+		"AgentApplicationModelCandidatesResponseV2",
+	];
+	if (
+		previous.paths?.[path] !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: { [path]: current.paths?.[path] },
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"e80f8c41387c2cf13fe364e57fc03856de0a37eed7845c59f921bacba3b3bbc7"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 function isDirectorySearchV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/directory/search";
 	const schemas = ["DirectorySearchItemV1", "DirectorySearchResponseV1"];
@@ -6303,6 +6332,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isWecomQrAuthorizationOpenApiAddition(previous, current) &&
 			!isWecomBotQrAvailabilityOpenApiAddition(previous, current) &&
 			!isDirectorySearchV2OpenApiAddition(previous, current) &&
+			!isApplicationModelCandidates3146OpenApiAddition(previous, current) &&
 			!isObservabilityStatusV1OpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&

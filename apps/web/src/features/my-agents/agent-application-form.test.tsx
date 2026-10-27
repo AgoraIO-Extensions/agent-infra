@@ -3426,3 +3426,96 @@ describe("AgentApplicationForm design alignment", () => {
 		expect(placeholder("可使用的组织")).toBe("搜索组织名称或路径");
 	});
 });
+
+describe("new application model candidates (#3146)", () => {
+	const candidates = [
+		{
+			endpointId: "endpoint-primary",
+			modelId: "new-relay-model",
+			reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
+		},
+	];
+	const emptyCatalog = {
+		...deploymentConfiguration,
+		modelCatalog: {
+			...deploymentConfiguration.modelCatalog,
+			status: "empty" as const,
+			endpoints: [],
+		},
+	};
+	it("creates from Key-visible candidates even without deployment model rows", async () => {
+		const onSubmit = vi.fn();
+		const onCheckApplicationModels = vi.fn().mockResolvedValue(candidates);
+		render(
+			<AgentApplicationForm
+				mode="create"
+				deploymentConfiguration={emptyCatalog}
+				onSubmit={onSubmit}
+				submitting={false}
+				onCheckApplicationModels={onCheckApplicationModels}
+			/>,
+		);
+		choose("标准模板", "Codex");
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Candidate agent" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Candidate preview" },
+		});
+		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
+			target: { value: "synthetic-candidate-key" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
+		const model = await screen.findByRole("checkbox", {
+			name: "new-relay-model",
+		});
+		fireEvent.click(model);
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+		expect(onCheckApplicationModels).toHaveBeenCalledWith(
+			"codex",
+			"synthetic-candidate-key",
+		);
+		expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
+			defaultRelayKey: "synthetic-candidate-key",
+			modelConfiguration: {
+				options: [
+					{ modelId: "new-relay-model", endpointId: "endpoint-primary" },
+				],
+			},
+		});
+	});
+	it("clears candidate selection on Key changes and refuses failed Key previews", async () => {
+		const onSubmit = vi.fn();
+		const check = vi
+			.fn()
+			.mockResolvedValueOnce(candidates)
+			.mockRejectedValue(new Error("synthetic failure"));
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+				onCheckApplicationModels={check}
+			/>,
+		);
+		choose("标准模板", "Codex");
+		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
+			target: { value: "synthetic-candidate-key" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
+		await screen.findByRole("checkbox", { name: /new-relay-model/ });
+		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
+			target: { value: "another-synthetic-key" },
+		});
+		expect(
+			screen.queryByRole("checkbox", { name: /new-relay-model/ }),
+		).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
+		await screen.findByText(
+			"Key 校验失败或暂时无法读取可用模型，请检查后重试。",
+		);
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+});
