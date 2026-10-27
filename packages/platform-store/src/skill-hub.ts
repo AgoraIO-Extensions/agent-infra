@@ -1296,13 +1296,21 @@ export class PostgresSkillHubLifecycleV1 {
 				async (tx, request, identity) => {
 					checkIdentity(identity);
 					await revalidate();
+					const scannerDecision =
+						state.intents.scan?.evidence?.admissionDecision;
+					if (
+						(scannerDecision !== "auto_published" &&
+							scannerDecision !== "pending_review") ||
+						registration.admissionDecision !== scannerDecision
+					)
+						throw new SkillHubOperationErrorV1("unavailable");
 					const registered = await this.#register(
 						tx,
 						request,
 						identity,
 						`package-${state.operationId}`,
 						registration,
-						registration.admissionDecision === "auto_published",
+						scannerDecision === "auto_published",
 					);
 					if (lease) {
 						const rows = await tx
