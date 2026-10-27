@@ -172,7 +172,11 @@ export function createSkillHubVersionV1(
 		...input,
 		state: requiresReview ? "pending_review" : "published",
 		needUpgrade: false,
-		reviewedBy: requiresReview ? null : automaticAdmission ? "system:skill-package-admission" : input.ownerId,
+		reviewedBy: requiresReview
+			? null
+			: automaticAdmission
+				? "system:skill-package-admission"
+				: input.ownerId,
 		reviewReason: automaticAdmission ? "automatic_admission" : null,
 		revokedAt: null,
 	});

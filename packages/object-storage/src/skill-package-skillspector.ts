@@ -315,10 +315,12 @@ export function decideSkillPackageAdmissionV1(
 }
 
 /** Bridges the validated SkillSpector report into the production supplier seam. */
-export function createSkillSpectorPackageScannerV1(options: Readonly<{
-	adapter: ReturnType<typeof createSkillSpectorAdapterV1>;
-	policy: SkillPackageAutomaticAdmissionPolicyV1;
-}>): SkillPackageScannerV1 {
+export function createSkillSpectorPackageScannerV1(
+	options: Readonly<{
+		adapter: ReturnType<typeof createSkillSpectorAdapterV1>;
+		policy: SkillPackageAutomaticAdmissionPolicyV1;
+	}>,
+): SkillPackageScannerV1 {
 	return Object.freeze({
 		scan: async (
 			input: Parameters<SkillPackageScannerV1["scan"]>[0],
