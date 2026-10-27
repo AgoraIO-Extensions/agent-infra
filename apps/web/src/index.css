@@ -2493,7 +2493,7 @@ html {
 	white-space: pre;
 	overflow-wrap: normal;
 }
-.assistant-markdown pre code {
+.assistant-markdown :where(pre) code {
 	padding: 0;
 }
 .assistant-markdown :is(.markdown-code, .markdown-table):focus-visible {
