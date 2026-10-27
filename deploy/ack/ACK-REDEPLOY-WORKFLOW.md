@@ -4,7 +4,7 @@
 API Agent 创建和入口检查，尚未证明从空环境自动恢复，不能作为清空环境的前提。
 相关真实验收保持在 #3072，脚本测试不完成该 Issue。
 
-实现尚缺：数据库角色和 Secret 初始化、四模板 readiness 刷新、真实多轮与闲置恢复验收、自定义 ACP/多服务完整矩阵，以及目标绑定的 ECI 执行证据。
+实现尚缺：数据库启动/角色初始化与完整空环境演练、四模板 readiness 刷新、真实多轮与闲置恢复验收、自定义 ACP/多服务完整矩阵，以及目标绑定的 ECI 执行证据。
 所有 kubeconfig、Secret、Cookie、浏览器 state 和真实环境输入留在仓库外。
 
 入口脚本是 [`redeploy.sh`](./redeploy.sh)。它只接受 immutable image reference，渲染结果仍包含占位值时直接失败；每次运行把脱敏 receipt 写到外部 `ACK_EVIDENCE_DIR`，不会把会话正文或凭证写入仓库。
@@ -98,6 +98,60 @@ deploy/ack/redeploy.sh all
 当前 `validate` 是入口检查，未绑定真实模型执行证据和多轮成功。
 `ACK_CA_CERT_FILE` 用于 curl；Node probe 信任私有 CA 时另设 `NODE_EXTRA_CA_CERTS`。
 现有浏览器 runner 仍使用自身 TLS 配置，应在完整验收实现时统一。
+
+## 私有依赖供应
+
+`bootstrap-plan` 和 `bootstrap-inputs` 分别预览和创建 namespace、Secret、ConfigMap，
+它们是空环境恢复的第一阶段，不启动数据库、不运行迁移，也不表示平台已部署。
+`ACK_BOOTSTRAP_INPUTS_FILE` 指向仓库外的 `0600` JSON 文件，示意片段如下：
+
+```json
+{
+  "schemaVersion": 1,
+  "installationId": "11111111-1111-1111-1111-111111111111",
+  "clusterUid": "22222222-2222-2222-2222-222222222222",
+  "namespace": "agent-infra",
+  "objects": [
+    {
+      "kind": "Secret",
+      "name": "agent-infra-api-configuration",
+      "files": {
+        "configuration.mjs": "/private/ack/api/configuration.mjs"
+      }
+    },
+    {
+      "kind": "ConfigMap",
+      "name": "agent-infra-directory-source",
+      "files": {
+        "source.ts": "/private/ack/directory/source.ts"
+      }
+    }
+  ]
+}
+```
+
+实际清单必须包含渲染出的全部依赖及其必需键；上例仅说明结构，不是完整清单。
+`clusterUid` 是目标集群 `kube-system` namespace 的 UID；`installationId` 是这次安装
+自行生成并固定的 UUID。所有输入文件须是当前用户拥有的私有普通文件，禁止符号链接。
+Secret 可选 `secretType` 为 `Opaque`、`kubernetes.io/tls` 或
+`kubernetes.io/dockerconfigjson`。凭证始终放 Secret，ConfigMap 只放非秘密内容。
+
+```bash
+deploy/ack/redeploy.sh bootstrap-plan
+deploy/ack/redeploy.sh bootstrap-inputs
+```
+
+工具先校验全部本地输入、集群 UID、namespace ownership 和已有对象，再创建缺失对象；
+任何已有内容漂移均拒绝，不覆盖、收养或删除既有资源。每个写入后立即回读字节和 ownership。
+重跑复用同一安装标识和输入；创建请求失去响应时，下一次回读实际状态再决定，不强制重建。
+支持迁移前准备其他显式列出的运行时 Secret，但不会从 configuration 模块中执行代码
+或猜测缺失凭证。分享 receipt 只包含数量及集群/namespace 哈希，不包含文件内容、路径或名称。
+
+当前 `all` 尚未自动接入此阶段：Chart 的 migration 是 pre-install hook，而同一 Chart 的
+PostgreSQL 在 hook 之后才创建，目录数据库账号也尚未初始化。
+必须补齐“依赖 → 数据库可用 → 数据库角色 → schema migrations → Platform”的分阶段实现
+与真实验证，才能声称空环境可一键重建。已有环境的 `preflight.sh` 现在只读检查依赖，
+不会在连接失败时尝试创建 namespace。
 
 ## 清理与恢复门禁
 

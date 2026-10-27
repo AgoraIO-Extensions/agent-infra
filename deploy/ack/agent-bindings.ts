@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
 import {
 	lstat,
 	mkdir,
-	open,
 	realpath,
 	rename,
 	rmdir,
@@ -15,6 +13,8 @@ import {
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { conversationTurns } from "../../tests/local-real-e2e/conversation-turn-plan.ts";
+import { privateJson } from "./private-input.ts";
+export { privateJson } from "./private-input.ts";
 import { provisionAgents, readPrivateText } from "./provision-agents.ts";
 
 type Source = { kind: string; templateId?: string; interactionMode?: string };
@@ -30,33 +30,6 @@ type Binding = { name: string; agentId: string; ready: boolean };
 const hash = (value: string) =>
 	createHash("sha256").update(value).digest("hex");
 const templates = ["codex", "claude", "opencode", "pi"];
-
-export async function privateJson(file: string) {
-	assert(isAbsolute(file));
-	const handle = await open(
-		file,
-		constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-	);
-	try {
-		const stat = await handle.stat();
-		assert(
-			stat.isFile() &&
-				stat.uid === process.getuid?.() &&
-				(stat.mode & 0o077) === 0,
-		);
-		assert(stat.size <= 1024 * 1024);
-		const bytes = Buffer.alloc(1024 * 1024 + 1);
-		const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
-		assert(bytesRead <= 1024 * 1024);
-		return JSON.parse(
-			new TextDecoder("utf-8", { fatal: true }).decode(
-				bytes.subarray(0, bytesRead),
-			),
-		);
-	} finally {
-		await handle.close();
-	}
-}
 
 async function privateDirectory(directory: string) {
 	assert(isAbsolute(directory));
