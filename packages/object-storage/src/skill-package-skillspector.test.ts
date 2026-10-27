@@ -53,7 +53,7 @@ describe("SkillSpector scanner adapter", () => {
 			const executable = join(root, "scanner.mjs");
 			await writeFile(
 				executable,
-				'#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({risk_assessment:{recommendation:"SAFE"}}));',
+				'#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({risk_assessment:{recommendation:"SAFE"},components:[]}));',
 			);
 			await chmod(executable, 0o700);
 			const bytes = archive();

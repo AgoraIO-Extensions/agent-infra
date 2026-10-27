@@ -112,6 +112,16 @@ export function createSkillSpectorSkillPackageScannerV1(options: Readonly<{
 				} catch {
 					fail("scan_unavailable");
 				}
+				const reportObject =
+					report && typeof report === "object"
+						? (report as {
+								risk_assessment?: { recommendation?: unknown };
+								findings?: unknown;
+								filtered_findings?: unknown;
+								components?: unknown;
+								metadata?: { coverage_complete?: unknown };
+						  })
+						: undefined;
 				const assessment =
 					report && typeof report === "object"
 						? (report as {
@@ -130,6 +140,33 @@ export function createSkillSpectorSkillPackageScannerV1(options: Readonly<{
 					| "SAFE"
 					| "CAUTION"
 					| "DO_NOT_INSTALL";
+				const rawFindings = Array.isArray(reportObject?.findings)
+					? reportObject.findings
+					: Array.isArray(reportObject?.filtered_findings)
+						? reportObject.filtered_findings
+						: [];
+				const findings = rawFindings.flatMap((item) => {
+					if (!item || typeof item !== "object") return [];
+					const value = item as Record<string, unknown>;
+					const ruleId = value.rule_id ?? value.ruleId;
+					const category = value.category;
+					const severity = value.severity;
+					if (
+						typeof ruleId !== "string" ||
+						typeof category !== "string" ||
+						(severity !== "LOW" &&
+							severity !== "MEDIUM" &&
+							severity !== "HIGH" &&
+							severity !== "CRITICAL")
+					)
+						return [];
+					return [{
+						ruleId,
+						category,
+						severity,
+						deterministic: value.deterministic !== false,
+					}];
+				});
 				const decision = decideSkillPackageAdmissionV1({
 					policy: options.reviewPolicy,
 					assessment: {
@@ -146,10 +183,12 @@ export function createSkillSpectorSkillPackageScannerV1(options: Readonly<{
 						expiresAt: new Date(
 							Date.now() + options.maximumReceiptAgeMs,
 						).toISOString(),
-						coverageComplete: true,
+						coverageComplete:
+							reportObject?.metadata?.coverage_complete !== false &&
+							Array.isArray(reportObject?.components),
 						recommendation: typedRecommendation,
 						scanMode: "static",
-						findings: [],
+						findings,
 					},
 				});
 				if (decision.decision === "rejected") fail("scan_rejected");
