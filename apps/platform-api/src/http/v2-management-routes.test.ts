@@ -129,6 +129,8 @@ const agentProjection = {
 function createApp(
 	options: {
 		administrator?: boolean;
+		applicationModelCandidates?: import("./v2-management-routes.js").ManagementRouteDependencies["applicationModelCandidates"];
+		keyValidity?: "valid" | "invalid" | "unavailable";
 		identityFailure?: boolean;
 		identityValue?: unknown;
 		queryFailure?: boolean;
@@ -217,13 +219,16 @@ function createApp(
 			hydrateUsers: vi.fn().mockResolvedValue([]),
 		},
 		foundation: { submit },
+		applicationModelCandidates: options.applicationModelCandidates,
 		revision: { revise },
 		management: { executeManagementCommand },
 		configuration: { upgradeCustomImage },
 		query: { listApplications, getApplication, listAgents, getAgent },
 		allocateApplicationIds,
 		prepareSecretReplacements: vi.fn().mockResolvedValue({ secrets: [] }),
-		validateDefaultRelayKey: vi.fn().mockResolvedValue("valid"),
+		validateDefaultRelayKey: vi
+			.fn()
+			.mockResolvedValue(options.keyValidity ?? "valid"),
 		enforceDefaultRelayKey: true,
 		readApplicationProjection,
 		readAgentProjection,
@@ -1740,5 +1745,77 @@ describe("creation failure category route (#3034)", () => {
 			});
 			expect(JSON.stringify(body)).not.toContain("private failure detail");
 		}
+	});
+});
+
+describe("application model candidate preview (#3146)", () => {
+	const body = {
+		templateId: "codex",
+		defaultRelayKey: "synthetic-preview-key-3146",
+	};
+	const candidates = [
+		{
+			endpointId: "relay",
+			modelId: "new-model",
+			reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
+		},
+	];
+	const request = (extra = {}, headers = {}, query = "") =>
+		new Request(
+			`https://platform.test/api/v2/agent-applications/model-candidates${query}`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json", ...headers },
+				body: JSON.stringify({ ...body, ...extra }),
+			},
+		);
+	it("passes only server identity to preview without persisting or submitting", async () => {
+		const preview = vi.fn().mockResolvedValue({ schemaVersion: 3, candidates });
+		const f = createApp({ applicationModelCandidates: preview });
+		const response = await f.app.fetch(request());
+		expect(response.status).toBe(200);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		expect(await response.json()).toEqual({ schemaVersion: 2, candidates });
+		expect(preview.mock.calls[0]?.[0]).toMatchObject(body);
+		expect(preview.mock.calls[0]?.[1]).toMatchObject({
+			userId: identity.userId,
+		});
+		expect(f.submit).not.toHaveBeenCalled();
+	});
+	it.each(["invalid", "unavailable"] as const)(
+		"rejects %s Keys before candidate access",
+		async (validity) => {
+			const preview = vi.fn();
+			const f = createApp({
+				applicationModelCandidates: preview,
+				keyValidity: validity,
+			});
+			const response = await f.app.fetch(request());
+			expect(response.status).toBe(validity === "invalid" ? 400 : 503);
+			expect(await response.text()).not.toContain(body.defaultRelayKey);
+			expect(preview).not.toHaveBeenCalled();
+		},
+	);
+	it("rejects unauthenticated access, identity overrides, bearer material and query keys", async () => {
+		const preview = vi.fn();
+		const f = createApp({ applicationModelCandidates: preview });
+		for (const input of [
+			request({ userId: "other-user" }),
+			request({}, { Authorization: "Bearer synthetic" }),
+			request({}, {}, "?key=synthetic"),
+		]) {
+			const response = await f.app.fetch(input);
+			expect([400, 401]).toContain(response.status);
+		}
+		const noIdentity = createApp({
+			applicationModelCandidates: preview,
+			identityValue: null,
+		});
+		expect((await noIdentity.app.fetch(request())).status).toBe(401);
+		expect(preview).not.toHaveBeenCalled();
+	});
+	it("fails closed when the candidate dependency is absent", async () => {
+		const response = await createApp().app.fetch(request());
+		expect(response.status).toBe(503);
 	});
 });

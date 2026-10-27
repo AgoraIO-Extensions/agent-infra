@@ -4,7 +4,6 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { useResultFocus } from "@/hooks/use-result-focus";
-
 import type {
 	AgentApplicationCreateRequestV2Writable,
 	AgentApplicationProjectionV2,
@@ -21,6 +20,7 @@ import {
 	type AgentApplicationEditAction,
 	agentApplicationEditActionLabels,
 } from "./my-agent-applications.js";
+import type { loadApplicationModelCandidates } from "./use-application-model-candidates.js";
 
 type RequestError = Error & {
 	readonly code?: string;
@@ -33,6 +33,7 @@ type AgentApplicationSubmissionScreenProps =
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			error?: RequestError | null;
 			mode: "create";
+			onCheckApplicationModels?: typeof loadApplicationModelCandidates;
 			onSubmit: (body: AgentApplicationCreateRequestV2Writable) => void;
 			result?: AgentApplicationProjectionV2;
 			submitting: boolean;
@@ -124,6 +125,7 @@ export function AgentApplicationSubmissionScreen(
 		props.application.source.identityResponsibility === "platform-managed";
 	const deploymentUnavailable = !deploymentConfigurationUsable(
 		props.deploymentConfiguration,
+		props.mode === "create" && props.onCheckApplicationModels !== undefined,
 	);
 	const deploymentRetryable = props.deploymentConfigurationRetryable ?? false;
 	const submissionFailureMessage =

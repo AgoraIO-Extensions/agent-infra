@@ -13,6 +13,7 @@ import {
 	createApplicationApiCredentialIssuerV1,
 	createApplicationFoundationUseCaseV1,
 	createApplicationMaterialGrantUseCaseV1,
+	createApplicationModelCandidatesUseCaseV1,
 	createApplicationRegistrationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
 	createConversationExecutionUseCaseV1,
@@ -1144,6 +1145,12 @@ export function assemblePlatformApi(
 		management: {
 			identity: input.identity,
 			foundation,
+			applicationModelCandidates: createApplicationModelCandidatesUseCaseV1({
+				...admissions,
+				...(agentDefaultRelayKeyPorts
+					? { defaultRelayKey: agentDefaultRelayKeyPorts }
+					: {}),
+			}),
 			revision,
 			management,
 			configuration,

@@ -76,6 +76,10 @@ import {
 	type AgentApplicationEditAction,
 	agentApplicationEditActionLabels,
 } from "./my-agent-applications.js";
+import {
+	type loadApplicationModelCandidates,
+	useApplicationModelCandidates,
+} from "./use-application-model-candidates.js";
 
 type AgentApplicationFormProps = {
 	cancelAction?: ReactNode;
@@ -94,6 +98,7 @@ type AgentApplicationFormProps = {
 } & (
 	| {
 			mode: "create";
+			onCheckApplicationModels?: typeof loadApplicationModelCandidates;
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			deploymentConfigurationRetryable?: boolean;
 			onSubmit: (body: AgentApplicationCreateRequestV2Writable) => void;
@@ -1024,9 +1029,19 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	// 由默认 Key 管理模型的申请改用“Key + 候选选择”，目录里的逐行模型编辑随之隐藏。
 	const managedModelEdit =
 		keyManaged && sourceKind === "standard" && configureModels;
+	const managedModelCreate =
+		props.mode === "create" &&
+		sourceKind === "standard" &&
+		props.onCheckApplicationModels !== undefined;
+	const creationCheck = useApplicationModelCandidates(
+		templateId,
+		`${sourceKind}/${templateId}/${templateRevision}`,
+		props.mode === "create" ? props.onCheckApplicationModels : undefined,
+	);
 	const modelConfigurationVisible =
 		showsModelConfiguration(props.mode, sourceKind, configureModels) &&
-		!managedModelEdit;
+		!managedModelEdit &&
+		!managedModelCreate;
 	const selectedTemplate = templateFor(deployment, templateId);
 	const templateReadiness = selectedTemplate?.readiness;
 	const readinessEnabled = deployment.templates.some(
@@ -1057,6 +1072,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const standardChoicesBlocked =
 		sourceKind === "standard" &&
 		(templateUnavailable ||
+			(managedModelCreate &&
+				(deployment.status !== "populated" ||
+					deployment.templates.length === 0)) ||
 			(modelConfigurationVisible &&
 				(deployment.status !== "populated" ||
 					deployment.templates.length === 0 ||
@@ -1065,7 +1083,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	// 「部署选项需要刷新后才能提交标准模板申请。」一致：创建申请另由「标准模板」字段错误说明；修改申请不能
 	// 更换模板，由部署状态说明接手，不另写字段错误。两种模式都拦下、不发请求（#3389 N13-09）。
 	const deploymentBlocksStandard =
-		sourceKind === "standard" && !deploymentConfigurationUsable(deployment);
+		sourceKind === "standard" &&
+		!deploymentConfigurationUsable(deployment, managedModelCreate);
 	// 部署选项读取失败：就绪状态与模型目录都读不到。就绪列表不按「尚未登记」说明（#3389 N13-08）。
 	const deploymentUnreadable = deployment.status === "unavailable";
 	useEffect(() => {
@@ -1250,16 +1269,19 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		props.serverError?.code === "MODEL_SELECTION_INVALID" &&
 		!serverValidationDismissed;
 	const configurationMessage =
-		deployment.status === "stale" || deployment.modelCatalog.status === "stale"
+		deployment.status === "stale" ||
+		(!managedModelCreate && deployment.modelCatalog.status === "stale")
 			? "部署选项已过期，请重新加载后再提交。"
 			: deployment.status === "unavailable" ||
-					deployment.modelCatalog.status === "unavailable"
+					(!managedModelCreate &&
+						deployment.modelCatalog.status === "unavailable")
 				? deploymentRetryable
 					? "部署选项暂不可用，请重新加载；标准模板申请暂不能提交。"
 					: "部署选项暂不可用，请联系管理员。"
 				: deployment.status === "empty" ||
 						(deployment.templates.length === 0 && sourceKind === "standard") ||
-						(deployment.modelCatalog.status === "empty" &&
+						(!managedModelCreate &&
+							deployment.modelCatalog.status === "empty" &&
 							sourceKind === "standard")
 					? "当前部署没有可用的标准模板或模型选项，请联系管理员配置后重试。"
 					: staleTemplate || (modelConfigurationVisible && staleModel)
@@ -1713,7 +1735,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		const draft = {
 			name,
 			description,
-			defaultRelayKey,
+			defaultRelayKey: managedModelCreate
+				? creationCheck.key.trim()
+				: defaultRelayKey,
 			sourceKind,
 			templateId,
 			templateRevision,
@@ -1758,6 +1782,19 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					: keyCheck.checked
 						? "请在下方选好模型（至少一个模型，每个模型至少一个推理档位）。"
 						: "请先点击「检查可用模型」并选好模型（至少一个模型，每个模型至少一个推理档位）。";
+		if (
+			managedModelCreate &&
+			!deploymentBlocksStandard &&
+			!templateUnavailable &&
+			templateId &&
+			!creationCheck.selection
+		) {
+			errors.defaultRelayKey = !creationCheck.typed
+				? "请输入 Agent 默认 Relay Key。"
+				: creationCheck.noCandidates
+					? "该 Key 没有此模板可用的模型，请换一个 Key 后重新检查。"
+					: "请检查可用模型并选择模型、推理档位和默认模型选项。";
+		}
 		setFieldErrors(errors);
 		setTemplateLockAttempted(templateLock !== undefined);
 		setFocusRequest((current) => current + 1);
@@ -1771,7 +1808,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			return;
 		setSecrets([]);
 		if (props.mode === "create") {
-			props.onSubmit(buildAgentApplicationRequest("create", draft));
+			props.onSubmit({
+				...buildAgentApplicationRequest("create", draft),
+				...(managedModelCreate && creationCheck.selection
+					? { modelConfiguration: creationCheck.selection }
+					: {}),
+			});
 			return;
 		}
 		props.onSubmit(
@@ -1988,6 +2030,24 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										message={fieldErrors.configureModels}
 									/>
 								</Field>
+							) : null}
+							{managedModelCreate ? (
+								<ApplicationKeylessModelEditor
+									create
+									current={[]}
+									currentDefault={{ optionId: "", level: "" }}
+									disabled={props.submitting}
+									checkDisabled={
+										!templateId ||
+										templateUnavailable ||
+										deploymentBlocksStandard
+									}
+									endpointNames={endpointNames}
+									error={fieldErrors.defaultRelayKey}
+									errorId={errorId("defaultRelayKey")}
+									keyCheck={creationCheck}
+									onChangeKey={() => clearFieldErrors("defaultRelayKey")}
+								/>
 							) : null}
 							{managedModelEdit ? (
 								<ApplicationKeylessModelEditor

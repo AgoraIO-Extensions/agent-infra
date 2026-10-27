@@ -186,6 +186,19 @@ export type AgentApplicationManagerResponseV1 = {
     schemaVersion: 1;
 };
 
+export type AgentApplicationModelCandidatesRequestV2 = {
+    templateId: string;
+};
+
+export type AgentApplicationModelCandidatesResponseV2 = {
+    candidates: Array<{
+        endpointId: string;
+        modelId: string;
+        reasoningLevels: Array<string>;
+    }>;
+    schemaVersion: 2;
+};
+
 export type AgentApplicationProjectionV2 = {
     agentId: string | null;
     applicant?: {
@@ -2143,6 +2156,11 @@ export type AgentApplicationCreateRequestV2Writable = {
     };
 };
 
+export type AgentApplicationModelCandidatesRequestV2Writable = {
+    defaultRelayKey: string;
+    templateId: string;
+};
+
 export type AgentApplicationUpdateRequestV2Writable = {
     availability: Array<{
         kind: 'user';
@@ -2916,6 +2934,55 @@ export type CreateAgentApplicationV2Responses = {
 };
 
 export type CreateAgentApplicationV2Response = CreateAgentApplicationV2Responses[keyof CreateAgentApplicationV2Responses];
+
+export type GetAgentApplicationModelCandidatesV2Data = {
+    body: AgentApplicationModelCandidatesRequestV2Writable;
+    path?: never;
+    query?: never;
+    url: '/api/v2/agent-applications/model-candidates';
+};
+
+export type GetAgentApplicationModelCandidatesV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentApplicationModelCandidatesV2Error = GetAgentApplicationModelCandidatesV2Errors[keyof GetAgentApplicationModelCandidatesV2Errors];
+
+export type GetAgentApplicationModelCandidatesV2Responses = {
+    /**
+     * Models available to a standard-template application
+     */
+    200: AgentApplicationModelCandidatesResponseV2;
+};
+
+export type GetAgentApplicationModelCandidatesV2Response = GetAgentApplicationModelCandidatesV2Responses[keyof GetAgentApplicationModelCandidatesV2Responses];
 
 export type GetAgentApplicationV2Data = {
     body?: never;

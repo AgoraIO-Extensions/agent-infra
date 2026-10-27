@@ -7600,22 +7600,8 @@ test("removing application rows hands focus to the neighbouring remove button or
 	const button = (name: string) =>
 		page.getByRole("button", { name, exact: true });
 
-	// 模型选项：两行时删第 2 行，剩下一行没有「移除」，焦点到「添加模型选项」。
-	const addModel = button("添加模型选项");
-	await addModel.click();
-	await button("移除模型选项：模型选项 2").focus();
-	await page.keyboard.press("Enter");
-	await expect(button("移除模型选项：模型选项 1")).toHaveCount(0);
-	await expectFocusSettled(addModel, "移除模型选项：模型选项 2");
-	// 三行时删中间一行：下一行移到同一位置。
-	await addModel.click();
-	await addModel.click();
-	await button("移除模型选项：模型选项 2").click();
-	await expect(button("移除模型选项：模型选项 3")).toHaveCount(0);
-	await expectFocusSettled(
-		button("移除模型选项：模型选项 2"),
-		"移除模型选项（中间一行）",
-	);
+	// 创建申请的标准模板模型现在由默认 Key 候选选择器管理；本流程继续覆盖可编辑的
+	// 环境变量和 Secret 行移除焦点闭环。
 
 	// Secret：删最后一行到上一行，删唯一一行到「添加 Secret」。
 	await button("展开高级配置").click();

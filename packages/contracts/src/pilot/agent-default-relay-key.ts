@@ -25,6 +25,15 @@ export const AgentDefaultRelayKeyCandidatesRequestV1Schema = z.strictObject({
 		.regex(/^[\x21-\x7e]+$/)
 		.meta({ format: "password", writeOnly: true }),
 });
+export const AgentApplicationModelCandidatesRequestV2Schema = z.strictObject({
+	templateId: id,
+	defaultRelayKey: z
+		.string()
+		.min(16)
+		.max(8192)
+		.regex(/^[\x21-\x7e]+$/)
+		.meta({ format: "password", writeOnly: true }),
+});
 export const AgentDefaultRelayKeyReplaceRequestV1Schema =
 	AgentDefaultRelayKeyCandidatesRequestV1Schema.extend({
 		expectedVersion: version.nullable(),
@@ -34,6 +43,11 @@ const candidateSchema = z.strictObject({
 	endpointId: id,
 	modelId: id,
 	reasoningLevels: z.array(id).min(1).max(32),
+});
+
+export const AgentApplicationModelCandidatesResponseV2Schema = z.strictObject({
+	schemaVersion: z.literal(2),
+	candidates: z.array(candidateSchema).max(32768),
 });
 
 export const AgentDefaultRelayKeyCandidatesV1Schema = z.strictObject({

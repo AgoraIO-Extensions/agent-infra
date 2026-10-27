@@ -25,6 +25,8 @@ import {
 	AgentApplicationManagerResponseV1Schema,
 } from "./agent-application-manager.ts";
 import {
+	AgentApplicationModelCandidatesRequestV2Schema,
+	AgentApplicationModelCandidatesResponseV2Schema,
 	AgentDefaultRelayKeyCandidatesRequestV1Schema,
 	AgentDefaultRelayKeyCandidatesV1Schema,
 	AgentDefaultRelayKeyDisplayCandidatesV2Schema,
@@ -2104,6 +2106,26 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			},
 		},
 	},
+	"/api/v2/agent-applications/model-candidates": {
+		post: {
+			operationId: "getAgentApplicationModelCandidatesV2",
+			summary:
+				"Preview models for a standard-template application before creation",
+			description:
+				"Active browser session only; no Authorization header or query. Template readiness and current user authority are checked. No Key, Agent or application is persisted. Responses are no-store; submission independently revalidates the Key, template and models.",
+			security: personalCredentialSecurity,
+			requestBody: requiredJsonRequestBody(
+				AgentApplicationModelCandidatesRequestV2Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Models available to a standard-template application",
+					AgentApplicationModelCandidatesResponseV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agent-applications": {
 		get: {
 			operationId: "listAgentApplicationsV2",
@@ -2501,6 +2523,10 @@ export const pilotBrowserSchemasV2 = {
 	AgentLifecycleCommandRequestV1: AgentLifecycleCommandRequestV1Schema,
 	ApprovalDecisionRequestV1: ApprovalDecisionRequestV1Schema,
 	AgentApplicationCreateRequestV2: AgentApplicationCreateRequestV2Schema,
+	AgentApplicationModelCandidatesRequestV2:
+		AgentApplicationModelCandidatesRequestV2Schema,
+	AgentApplicationModelCandidatesResponseV2:
+		AgentApplicationModelCandidatesResponseV2Schema,
 	AgentApplicationUpdateRequestV2: AgentApplicationUpdateRequestV2Schema,
 	AgentConfigurationUpdateRequestV2: AgentConfigurationUpdateRequestV2Schema,
 	AgentApplicationProjectionV2: AgentApplicationProjectionV2Schema,

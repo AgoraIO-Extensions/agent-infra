@@ -4997,9 +4997,11 @@ describe("contract compatibility command", () => {
 		for (const name of [
 			"AgentApplicationCreateRequestV2",
 			"AgentApplicationUpdateRequestV2",
-		])
-			delete current.components.schemas[name].properties.source.anyOf[0]
-				.properties.templateRevision;
+		]) {
+			const source = current.components.schemas[name]?.properties?.source;
+			if (source?.anyOf?.[0]?.properties?.templateRevision)
+				delete source.anyOf[0].properties.templateRevision;
+		}
 		for (const name of [
 			"ApplicationMetadataV1",
 			"ApplicationRegistrationRequestV1",
@@ -5061,6 +5063,8 @@ describe("contract compatibility command", () => {
 				delete previous.paths[path];
 		}
 		for (const name of [
+			"AgentApplicationModelCandidatesRequestV2",
+			"AgentApplicationModelCandidatesResponseV2",
 			"AgentApplicationCreateRequestV2",
 			"AgentApplicationProjectionV2",
 			"AgentApplicationUpdateRequestV2",
@@ -5085,7 +5089,10 @@ describe("contract compatibility command", () => {
 		try {
 			await writeFile(previousPath, JSON.stringify(previous), "utf8");
 			await writeFile(currentPath, JSON.stringify(current), "utf8");
-			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const lifecycleComparison = comparePaths(currentPath, previousPath);
+			if (lifecycleComparison.status !== 0)
+				console.error("lifecycle compatibility", lifecycleComparison.stderr);
+			expect(lifecycleComparison.status).toBe(0);
 			for (const mutate of [
 				(document: typeof current) => {
 					delete document.paths["/api/v2/agents"];
@@ -5926,6 +5933,55 @@ it("admits only the appended queue-full error code (#3375)", async () => {
 		await writeFile(before, JSON.stringify(current));
 		await writeFile(after, JSON.stringify(previous));
 		expect(comparePaths(after, before).status).toBe(1);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+it("admits only the pinned application model preview (#3146)", async () => {
+	const current = JSON.parse(
+		await readFile(
+			new URL(
+				"../artifacts/openapi/pilot-browser.v2.openapi.json",
+				import.meta.url,
+			),
+			"utf8",
+		),
+	);
+	const path = "/api/v2/agent-applications/model-candidates";
+	const previous = structuredClone(current);
+	delete previous.paths[path];
+	delete previous.components.schemas.AgentApplicationModelCandidatesRequestV2;
+	delete previous.components.schemas.AgentApplicationModelCandidatesResponseV2;
+	const directory = await mkdtemp(
+		resolve(tmpdir(), "application-model-candidates-compat-"),
+	);
+	try {
+		const before = resolve(directory, "before.json");
+		const after = resolve(directory, "after.json");
+		await writeFile(before, JSON.stringify(previous));
+		await writeFile(after, JSON.stringify(current));
+		expect(comparePaths(after, before).status).toBe(0);
+		for (const mutate of [
+			(value: typeof current) => {
+				value.components.schemas.AgentApplicationModelCandidatesRequestV2.properties.defaultRelayKey.writeOnly = false;
+			},
+			(value: typeof current) => {
+				value.components.schemas.AgentApplicationModelCandidatesRequestV2.additionalProperties = true;
+			},
+			(value: typeof current) => {
+				value.paths[path].post.security = [];
+			},
+			(value: typeof current) => {
+				value.components.schemas.AgentApplicationModelCandidatesResponseV2.properties.key =
+					{ type: "string" };
+			},
+		]) {
+			const changed = structuredClone(current);
+			mutate(changed);
+			await writeFile(after, JSON.stringify(changed));
+			expect(comparePaths(after, before).status).toBe(1);
+		}
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
