@@ -77,11 +77,14 @@ test("local API auth probe requires the configured token and rejects another", a
 });
 
 test("local API auth probe waits through a transient refused port", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "agent-infra-auth-readiness-"));
+	const directory = await mkdtemp(
+		join(tmpdir(), "agent-infra-auth-readiness-"),
+	);
 	const token = randomBytes(32).toString("base64url");
 	const tokenFile = join(directory, "proxy-token");
 	const server = createServer((request, response) => {
-		response.statusCode = request.headers["x-platform-proxy-token"] === token ? 405 : 400;
+		response.statusCode =
+			request.headers["x-platform-proxy-token"] === token ? 405 : 400;
 		response.end();
 	});
 	let port;
