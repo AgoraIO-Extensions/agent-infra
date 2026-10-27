@@ -150,6 +150,34 @@ deploy/ack/redeploy.sh bootstrap-inputs
 
 已有环境的 `preflight.sh` 只读检查依赖，不会在连接失败时创建 namespace。
 
+## 新环境的 API 凭证
+
+数据库、迁移和 Platform 就绪后，部署拥有者必须先通过真实 LDAP/浏览器登录生成一个新的
+Playwright `storageState`。工具不会接收 LDAP 密码，也不会模拟登录。将下列私有请求文件
+放在仓库外，storageState 和输出 credential 文件都必须是当前用户拥有、权限 `0600` 的普通文件：
+
+```json
+{
+  "schemaVersion": 1,
+  "origin": "https://ack.example.test",
+  "storageStateFile": "/private/ack/login/owner-state.json",
+  "outputFile": "/private/ack/credentials/owner-create.token",
+  "scopes": ["agent:create", "agent:read", "agent:use", "agent:manage"],
+  "expiresAt": null,
+  "idempotencyKey": "fresh-install-owner-credential-v1"
+}
+```
+
+运行 `bootstrap-credential` 会 POST `/api/v2/me/api-credentials`，把一次性返回的
+`papi_...` 材料原子写入 `outputFile`，receipt 只包含状态和 SHA-256。相同 key 重试时，
+服务器返回 null 材料；只有本地已存在且权限正确的 credential 文件才允许继续。文件随后
+作为 Agent 请求清单的 `credentialFile`，不会复制到 values、Secret、日志或浏览器 evidence。
+此阶段只验证 credential 签发，不验证 Agent、模型或 Connection 业务成功。
+
+```bash
+deploy/ack/redeploy.sh bootstrap-credential
+```
+
 ## 数据库与迁移顺序
 
 全新环境在 private values 中显式设置：
@@ -194,6 +222,34 @@ PVC、Pod ownership、镜像、账号 verifier/权限和数据库归属，再允
 本机隔离 PostgreSQL 17 已通过生成密码认证、跨数据库拒绝和运行账号权限负例；
 这不是 ACK PostgreSQL 16 镜像、空环境或模型验收。真实 ACK 演练、fresh DB 后的登录/API
 凭证初始化和完整业务矩阵仍需完成，不能因数据库阶段通过而关闭 #3072。
+
+## 新环境的 API 凭证
+
+数据库和 Platform 就绪后，部署拥有者必须先用真实 LDAP/浏览器登录生成新的 Playwright
+storageState。工具不会接收 LDAP 密码，也不会模拟登录。私有请求文件可以这样写：
+
+```json
+{
+  "schemaVersion": 1,
+  "origin": "https://ack.example.test",
+  "storageStateFile": "/private/ack/login/owner-state.json",
+  "outputFile": "/private/ack/credentials/owner-create.token",
+  "scopes": ["agent:create", "agent:read", "agent:use", "agent:manage"],
+  "expiresAt": null,
+  "idempotencyKey": "fresh-install-owner-credential-v1"
+}
+```
+
+`bootstrap-credential` 会调用 `/api/v2/me/api-credentials`，把一次性返回的
+`papi_...` 材料原子写入 `outputFile`；receipt 只保存状态和哈希。相同 key 重放时服务器不
+再返回材料，只有已存在且权限正确的本地文件允许继续。该文件可作为 Agent 请求清单的
+`credentialFile`；它不会进入 values、Kubernetes Secret、日志或公开 evidence。
+
+```bash
+deploy/ack/redeploy.sh bootstrap-credential
+```
+
+这个阶段证明凭证签发，不证明 Agent、模型、Connection 或业务会话成功。
 
 ## 清理与恢复门禁
 

@@ -15,6 +15,7 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		"bootstrap-plan",
 		"bootstrap-inputs",
 		"bootstrap-database",
+		"bootstrap-credential",
 		"deploy",
 		"provision",
 		"validate",
@@ -32,6 +33,13 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		throw new Error(
 			"HTTPS validation must not disable certificate verification",
 		);
+	const source = await readFile(script, "utf8");
+	const allBlock = source.slice(source.indexOf("\n\tall)"));
+	if (
+		allBlock.indexOf("bootstrap_credential") >
+		allBlock.indexOf('agent-bindings.ts" check')
+	)
+		throw new Error("all must issue the credential before validating Agent inputs");
 });
 
 test("ACK destructive command fails closed without its explicit confirmation", () => {
