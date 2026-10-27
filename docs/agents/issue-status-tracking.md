@@ -12,7 +12,6 @@
 | Runtime/Worker/Core | 13 |
 | Deploy/E2E/Channels | 15 |
 | Platform/Web/Skill | 7 |
-| Workflow/Observability | [#3525](https://github.com/AgoraIO-Extensions/agent-infra/issues/3525) | docs: sync tracker count after latest closure | priority:P2 | priority:P2, agent:codex | 2026-10-27 | current tracker refresh PR #3526 |
 | Workflow/Observability | 4 |
 
 ## 明细
