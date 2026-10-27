@@ -4995,13 +4995,13 @@ describe("contract compatibility command", () => {
 		delete current.components.schemas.DeploymentTemplateProjectionV2.properties
 			.readiness;
 		for (const name of [
-			"AgentApplicationModelCandidatesRequestV2",
-			"AgentApplicationModelCandidatesResponseV2",
 			"AgentApplicationCreateRequestV2",
 			"AgentApplicationUpdateRequestV2",
-		])
-			delete current.components.schemas[name].properties.source.anyOf[0]
-				.properties.templateRevision;
+		]) {
+			const source = current.components.schemas[name]?.properties?.source;
+			if (source?.anyOf?.[0]?.properties?.templateRevision)
+				delete source.anyOf[0].properties.templateRevision;
+		}
 		for (const name of [
 			"ApplicationMetadataV1",
 			"ApplicationRegistrationRequestV1",
