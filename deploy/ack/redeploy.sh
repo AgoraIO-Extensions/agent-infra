@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 # Re-deploy and validate an ACK environment from one immutable source tuple.
 # Secrets, kubeconfig and browser state stay outside the repository.
@@ -40,10 +41,8 @@ Optional validation inputs:
   ACK_EVIDENCE_DIR         external directory for redacted receipts
   ACK_AGENT_REQUESTS_FILE  private JSON list for API Agent creation/replay
 
-Destructive operations require exact confirmation:
-  ACK_CLEAN_CONFIRM=DELETE_ACK_ENV deploy/ack/redeploy.sh destroy
-  ACK_CLEAN_DELETE_DATA=true      also delete PVCs and Secrets
-  ACK_CLEAN_DELETE_NAMESPACE=true delete the namespace after resources are gone
+Cleanup commands are disabled pending exact inventory and restore verification.
+
 EOF
 }
 
@@ -105,7 +104,7 @@ render_manifest() {
 	local output=$1
 	helm template "$release" "$chart_dir" \
 		--namespace "$namespace" \
-		--values "$values_file" >"$output"
+		--values "$values_file" >"$output" 2>/dev/null || die "HELM_RENDER_FAILED"
 	for placeholder in \
 		"sha256:0000000000000000000000000000000000000000000000000000000000000000" \
 		"https://ack.example.invalid" \
@@ -114,63 +113,25 @@ render_manifest() {
 			die "rendered values still contain placeholder: $placeholder"
 		fi
 	done
-	if ! node - "$image_manifest" "$output" <<'NODE'
-const fs = require("node:fs");
-const [manifestFile, renderedFile] = process.argv.slice(2);
-const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
-const rendered = fs.readFileSync(renderedFile, "utf8");
-const names = [
-	"web",
-	"platformApi",
-	"platformWorker",
-	"enterpriseDirectorySync",
-];
-for (const manifestName of names) {
-	const image = manifest.images?.[manifestName];
-	const reference = `${image?.repository ?? ""}@${image?.digest ?? ""}`;
-	if (!image || !rendered.includes(`image: ${reference}`)) process.exit(1);
-}
-NODE
-	then
-		die "ACK_IMAGE_MANIFEST digests do not match rendered Helm image references"
-	fi
-	if ! node - "$runtime_manifest" "$output" <<'NODE'
-const fs = require("node:fs");
-const [manifestFile, renderedFile] = process.argv.slice(2);
-const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
-const rendered = fs.readFileSync(renderedFile, "utf8");
-if (
-	!rendered.includes(`AGENT_INFRA_RUNTIME_IMAGE_REPOSITORY, value: ${JSON.stringify(manifest.repository)}`) ||
-	!rendered.includes(`AGENT_INFRA_RUNTIME_IMAGE_DIGEST, value: ${JSON.stringify(manifest.digest)}`)
-)
-	process.exit(1);
-NODE
-	then
-		die "ACK_RUNTIME_IMAGE_MANIFEST digest does not match rendered Runtime image inputs"
-	fi
+	node "$repo_root/deploy/ack/redeploy-evidence.ts" render "$output" "$image_manifest" "$runtime_manifest"
+
 }
 
 snapshot() {
 	local prefix=${1:-snapshot}
 	export KUBECONFIG="$ACK_KUBECONFIG"
-	local helm_list
-	helm_list=$(helm list -n "$namespace" -o json 2>/dev/null || printf '[]')
-	{
-		printf 'source_sha=%s\nnamespace=%s\nrelease=%s\n' "$source_sha" "$namespace" "$release"
-		printf '%s\n' "$helm_list" | node -e '
-let s=""; process.stdin.on("data", c => s+=c).on("end", () => { try { const a=JSON.parse(s); console.log(`helm_revision=${a[0]?.revision ?? "absent"}`); } catch { console.log("helm_revision=unavailable"); } });'
-	} >"$evidence_dir/$prefix.txt"
-	helm history "$release" -n "$namespace" -o json >"$evidence_dir/$prefix-helm-history.json" 2>/dev/null || true
-	kubectl -n "$namespace" get deploy,pod,job,svc,ingress,pvc -o wide >"$evidence_dir/$prefix-resources.txt" 2>&1 || true
-	kubectl -n "$namespace" get deploy,statefulset -o json >"$evidence_dir/$prefix-workloads.json" 2>/dev/null || true
-	kubectl -n "$namespace" get events --sort-by=.metadata.creationTimestamp >"$evidence_dir/$prefix-events.txt" 2>/dev/null || true
+	node "$repo_root/deploy/ack/redeploy-evidence.ts" snapshot "$namespace" "$release" "$source_sha" >"$evidence_dir/$prefix.json"
 }
 
 plan() {
 	require_source_tuple
 	prepare_evidence
-	render_manifest "$evidence_dir/rendered.yaml"
-	helm lint "$chart_dir" --values "$values_file" --strict
+	rendered_manifest=$(mktemp)
+	trap 'unlink "$rendered_manifest"' EXIT
+	render_manifest "$rendered_manifest"
+	unlink "$rendered_manifest"
+	trap - EXIT
+	helm lint "$chart_dir" --values "$values_file" --strict >/dev/null 2>&1 || die "HELM_LINT_FAILED"
 	snapshot plan
 	echo "ack-redeploy: plan passed; evidence=$evidence_dir"
 }
@@ -178,7 +139,11 @@ plan() {
 deploy() {
 	require_source_tuple
 	prepare_evidence
-	render_manifest "$evidence_dir/rendered.yaml"
+	rendered_manifest=$(mktemp)
+	trap 'unlink "$rendered_manifest"' EXIT
+	render_manifest "$rendered_manifest"
+	unlink "$rendered_manifest"
+	trap - EXIT
 	"$repo_root/deploy/ack/preflight.sh"
 	export KUBECONFIG="$ACK_KUBECONFIG"
 	helm upgrade --install "$release" "$chart_dir" \
@@ -215,11 +180,10 @@ validate_endpoint() {
 		tls_args+=(--cacert "$ACK_CA_CERT_FILE")
 	fi
 	local status
-	status=$(curl --silent --show-error "${tls_args[@]}" --output "$evidence_dir/web.body" --write-out '%{http_code}' "$origin/" || true)
+	status=$(curl --silent --show-error "${tls_args[@]}" --connect-timeout 10 --max-time 30 --output /dev/null --write-out '%{http_code}' "$origin/" || true)
 	[[ "$status" == 200 ]] || die "Web readiness expected HTTP 200, got $status"
-	status=$(curl --silent --show-error "${tls_args[@]}" --output "$evidence_dir/api.body" --write-out '%{http_code}' "$origin/api/v2/agents" || true)
+	status=$(curl --silent --show-error "${tls_args[@]}" --connect-timeout 10 --max-time 30 --output /dev/null --write-out '%{http_code}' "$origin/api/v2/agents" || true)
 	[[ "$status" == 401 ]] || die "anonymous API probe expected HTTP 401, got $status"
-	rm -f "$evidence_dir/web.body" "$evidence_dir/api.body"
 }
 
 validate_templates() {
@@ -233,7 +197,7 @@ validate_templates() {
 		out="$evidence_dir/template-$template.json"
 		local run_output receipt_dir
 		run_output=$(node "$repo_root/tests/local-real-e2e/conversation-browser.mjs" "$config" 2>&1) || {
-			printf '%s\n' "$run_output" >"$evidence_dir/template-$template.failure.log"
+			printf '%s\n' '{"result":"failed","failureClass":"BROWSER_JOURNEY_FAILED"}' >"$evidence_dir/template-$template.json"
 			die "template validation failed: $template"
 		}
 		receipt_dir=$(printf '%s\n' "$run_output" | tail -n 1)
@@ -252,13 +216,13 @@ const fs = require("node:fs");
 const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 if (value.result !== "passed") process.exit(1);
 NODE
-		rm -rf "$receipt_dir"
+		# Preserve the browser runner evidence and masked screenshots for diagnosis.
 	done
 }
 
 validate_custom_agents() {
 	local configs=${ACK_CUSTOM_AGENT_CONFIGS:-}
-	[[ -n "$configs" ]] || return 0
+	[[ -n "$configs" ]] || die "ACK_CUSTOM_AGENT_CONFIGS is required"
 	local probe=${ACK_CUSTOM_AGENT_PROBE:-web}
 	local script
 	case "$probe" in
@@ -283,13 +247,15 @@ NODE
 		fi
 		index=$((index + 1))
 	done <<<"$configs"
-	if ! node - "$evidence_dir/validated-workloads.json" "$configs" <<'NODE'
+	if ! node - "$evidence_dir/validated.json" "$configs" <<'NODE'
 const fs = require("node:fs");
 const [workloadsFile, configs] = process.argv.slice(2);
-const workloads = fs.readFileSync(workloadsFile, "utf8");
+const workloads = JSON.parse(fs.readFileSync(workloadsFile, "utf8"));
+const hash = value => require("node:crypto").createHash("sha256").update(value).digest("hex");
+const images = new Set(workloads.resources.flatMap(resource => resource.images.map(image => image.digestHash)));
 for (const file of configs.split("\n").filter(Boolean)) {
 		const input = JSON.parse(fs.readFileSync(file, "utf8"));
-		if (!workloads.includes(input.imageDigest)) process.exit(1);
+		if (!/^sha256:[a-f0-9]{64}$/.test(input.imageDigest) || !images.has(hash(input.imageDigest))) process.exit(1);
 }
 NODE
 	then
@@ -300,6 +266,11 @@ NODE
 validate() {
 	require_source_tuple
 	prepare_evidence
+	rendered_manifest=$(mktemp)
+	trap 'unlink "$rendered_manifest"' EXIT
+	render_manifest "$rendered_manifest"
+	unlink "$rendered_manifest"
+	trap - EXIT
 	export KUBECONFIG="$ACK_KUBECONFIG"
 	kubectl -n "$namespace" wait --for=condition=available deployment/agent-infra-api deployment/agent-infra-web deployment/agent-infra-worker deployment/agent-infra-directory --timeout="$timeout"
 	validate_endpoint
@@ -307,33 +278,16 @@ validate() {
 	snapshot validated
 	validate_custom_agents
 	date -u +%Y-%m-%dT%H:%M:%SZ >"$evidence_dir/completed-at"
-	echo "ack-redeploy: validate passed; evidence=$evidence_dir"
+	echo "ack-redeploy: browser/entry checks passed; full rebuild acceptance remains unverified; evidence=$evidence_dir"
 }
 
 clean() {
-	require_file ACK_KUBECONFIG "${ACK_KUBECONFIG:-}"
-	export KUBECONFIG="$ACK_KUBECONFIG"
-	prepare_evidence
-	snapshot before-clean
-	helm uninstall "$release" -n "$namespace" --wait --timeout="$timeout" 2>/dev/null || true
-	kubectl -n "$namespace" delete mutatingadmissionpolicy,mutatingadmissionpolicybinding \
-		"$namespace-session-eci" --ignore-not-found >/dev/null 2>&1 || true
-	kubectl -n "$namespace" delete all,role,rolebinding,serviceaccount,resourcequota,networkpolicy,ingress \
-		-l app.kubernetes.io/name=agent-infra --ignore-not-found >/dev/null 2>&1 || true
-	snapshot after-clean
-	echo "ack-redeploy: chart-owned workloads removed; PVCs, Secrets and user Agents were preserved; evidence=$evidence_dir"
+	die "ACK cleanup is disabled until an exact resource inventory and restore verification are implemented"
 }
 
 destroy() {
 	[[ "${ACK_CLEAN_CONFIRM:-}" == DELETE_ACK_ENV ]] || die "destroy requires ACK_CLEAN_CONFIRM=DELETE_ACK_ENV"
-	[[ "${ACK_CLEAN_DELETE_DATA:-false}" == true ]] || die "destroy requires ACK_CLEAN_DELETE_DATA=true"
-	[[ "${ACK_CLEAN_DELETE_NAMESPACE:-false}" == true ]] || die "destroy requires ACK_CLEAN_DELETE_NAMESPACE=true"
-	require_file ACK_KUBECONFIG "${ACK_KUBECONFIG:-}"
-	export KUBECONFIG="$ACK_KUBECONFIG"
-	prepare_evidence
-	snapshot before-destroy
-	kubectl delete namespace "$namespace" --wait --timeout="$timeout"
-	echo "ack-redeploy: namespace destroyed; evidence=$evidence_dir"
+	die "ACK cleanup is disabled until an exact resource inventory and restore verification are implemented"
 }
 
 command=${1:-help}

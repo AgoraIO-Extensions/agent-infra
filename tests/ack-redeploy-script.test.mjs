@@ -46,3 +46,25 @@ test("ACK destructive command fails closed without its explicit confirmation", (
 	}
 	if (!failed) throw new Error("destroy unexpectedly succeeded");
 });
+
+test("cleanup cannot mutate ACK even when legacy destruction flags are set", () => {
+	for (const command of ["clean", "destroy"]) {
+		let failed = false;
+		try {
+			execFileSync("bash", [script, command], {
+				env: {
+					...process.env,
+					ACK_CLEAN_CONFIRM: "DELETE_ACK_ENV",
+					ACK_CLEAN_DELETE_DATA: "true",
+					ACK_CLEAN_DELETE_NAMESPACE: "true",
+				},
+				stdio: "pipe",
+			});
+		} catch (error) {
+			failed = true;
+			if (!error.stderr.toString().includes("cleanup is disabled"))
+				throw new Error("cleanup did not stop at the inventory gate");
+		}
+		if (!failed) throw new Error("cleanup unexpectedly succeeded");
+	}
+});

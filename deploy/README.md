@@ -2,10 +2,9 @@
 
 `deploy/helm/agent-infra` 提供 M1 Platform 的 Kubernetes 配置入口。它固定以下边界：
 
-ACK 环境的可迁移重部署入口见 [`ack/ACK-REDEPLOY-WORKFLOW.md`](ack/ACK-REDEPLOY-WORKFLOW.md)，
-脚本为 [`ack/redeploy.sh`](ack/redeploy.sh)。它把 immutable image、ACK preflight、Helm
-rollout、四模板真实浏览器验收、自定义 Agent probe 和脱敏 receipt 串成 `all` 命令；环境输入
-仍放在仓库外。
+ACK 重部署工具草稿见 [`ack/ACK-REDEPLOY-WORKFLOW.md`](ack/ACK-REDEPLOY-WORKFLOW.md)，
+脚本为 [`ack/redeploy.sh`](ack/redeploy.sh)。当前串联镜像校验、ACK preflight、Helm rollout、单轮浏览器和自定义入口检查；
+从空环境恢复与完整业务验收仍待实现，环境输入放在仓库外。
 
 - `platform-worker` 始终部署在 Workload Plane，并只获得 release namespace 内的 RBAC。
 - Web 与 `platform-api` 分别选择 `external` 或 `in-cluster`，两者不获得 Kubernetes API 凭证。
