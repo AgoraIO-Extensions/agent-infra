@@ -42,6 +42,13 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		)
 	)
 		throw new Error("deploy must reject a dirty source checkout");
+	if (
+		!source.includes("local remaining_namespace") ||
+		!source.includes("cleanup namespace absence verification failed")
+	)
+		throw new Error(
+			"destroy must fail closed when namespace absence cannot be verified",
+		);
 	const allBlock = source.slice(source.indexOf("\n\tall)"));
 	if (
 		allBlock.indexOf("bootstrap_credential") >

@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	assertCaptureDestination,
 	freshDatabaseAccounts,
 	freshDatabaseValues,
 	sanitizeValues,
 } from "../deploy/ack/capture-inputs.ts";
 
 const installationId = "22222222-2222-2222-2222-222222222222";
+
+test("capture destination must be outside the source worktree", () => {
+	assert.throws(
+		() => assertCaptureDestination(import.meta.dirname),
+		/CAPTURE_DIRECTORY_MUST_BE_OUTSIDE_GIT/,
+	);
+});
 
 test("capture sanitizes legacy values rejected by the current chart schema", () => {
 	const value = sanitizeValues(

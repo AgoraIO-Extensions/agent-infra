@@ -23,6 +23,21 @@ function privatePath(file: string) {
 	return file;
 }
 
+export function assertCaptureDestination(output: string) {
+	assert(resolve(output) === output);
+	let insideWorktree = false;
+	try {
+		insideWorktree = execFileSync(
+			"git",
+			["-C", output, "rev-parse", "--is-inside-work-tree"],
+			{ encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+		).trim() === "true";
+	} catch {
+		// An external capture directory does not need to belong to a repository.
+	}
+	assert(!insideWorktree, "CAPTURE_DIRECTORY_MUST_BE_OUTSIDE_GIT");
+}
+
 function randomPassword() {
 	let value = "";
 	while (value.length < 32) value += randomBytes(32).toString("base64url");
@@ -200,6 +215,7 @@ export async function captureInputs(options: {
 	release: string;
 }) {
 	assert(resolve(options.output) === options.output);
+	assertCaptureDestination(options.output);
 	await mkdir(join(options.output, "objects"), { recursive: true, mode: 0o700 });
 	const helm = (args: string[], input?: string) =>
 		execFileSync("helm", args, {

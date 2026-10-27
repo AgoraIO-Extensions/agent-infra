@@ -414,7 +414,10 @@ NODE
 	kubectl --kubeconfig "$ACK_KUBECONFIG" delete mutatingadmissionpolicy "$admission" --ignore-not-found --wait >/dev/null 2>&1 || die "cleanup admission policy deletion failed"
 	kubectl --kubeconfig "$ACK_KUBECONFIG" delete mutatingadmissionpolicybinding "$admission" --ignore-not-found --wait >/dev/null 2>&1 || die "cleanup admission binding deletion failed"
 	kubectl --kubeconfig "$ACK_KUBECONFIG" delete namespace "$namespace" --wait --timeout="$timeout" >/dev/null 2>&1 || die "cleanup namespace deletion failed"
-	if kubectl --kubeconfig "$ACK_KUBECONFIG" get namespace "$namespace" --ignore-not-found -o name 2>/dev/null | grep -q .; then
+	local remaining_namespace
+	remaining_namespace=$(kubectl --kubeconfig "$ACK_KUBECONFIG" get namespace "$namespace" --ignore-not-found -o name 2>/dev/null) \
+		|| die "cleanup namespace absence verification failed"
+	if [[ -n "$remaining_namespace" ]]; then
 		die "cleanup namespace still exists"
 	fi
 	cat >"$evidence_dir/destroy.json" <<'JSON'
