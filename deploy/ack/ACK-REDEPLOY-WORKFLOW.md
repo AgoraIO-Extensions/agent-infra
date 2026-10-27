@@ -33,6 +33,7 @@ export ACK_CUSTOM_AGENT_CONFIGS=$'/private/ack/custom-a.json\n/private/ack/custo
 export ACK_AGENT_REQUESTS_FILE=/private/ack/agent-requests.json
 export ACK_TEMPLATE_VALIDATIONS_FILE=/private/ack/template-validations.json
 export ACK_TEMPLATE_PREFLIGHT_JOBS_FILE=/private/ack/template-preflight-jobs.json
+export ACK_TEMPLATE_IMAGE_MANIFEST=/private/ack/templates-amd64.json
 export ACK_EVIDENCE_DIR=/private/ack/evidence/$(date -u +%Y%m%dT%H%M%SZ)
 ```
 

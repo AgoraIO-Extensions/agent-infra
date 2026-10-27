@@ -31,7 +31,8 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		!help.includes("ACK_RUNTIME_IMAGE_MANIFEST") ||
 		!help.includes("ACK_CA_CERT_FILE") ||
 		!help.includes("ACK_TEMPLATE_VALIDATIONS_FILE") ||
-		!help.includes("ACK_TEMPLATE_PREFLIGHT_JOBS_FILE")
+		!help.includes("ACK_TEMPLATE_PREFLIGHT_JOBS_FILE") ||
+		!help.includes("ACK_TEMPLATE_IMAGE_MANIFEST")
 	)
 		throw new Error(
 			"provenance, CA, or template receipt inputs are missing from help",
