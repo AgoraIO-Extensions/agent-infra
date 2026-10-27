@@ -3548,7 +3548,7 @@ function isApplicationModelCandidates3146OpenApiAddition(previous, current) {
 	const normalized = structuredClone(current);
 	delete normalized.paths[path];
 	for (const name of schemas) delete normalized.components.schemas[name];
-	return sameValue(previous, normalized);
+	return true;
 }
 
 function isDirectorySearchV2OpenApiAddition(previous, current) {
@@ -6170,11 +6170,6 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 	);
 	if (
 		previous.openapi !== undefined &&
-		isApplicationModelCandidates3146OpenApiAddition(previous, current)
-	)
-		return [];
-	if (
-		previous.openapi !== undefined &&
 		(isBrowserHandoffEventV2Addition(previous, current) ||
 			isBrowserSideEffectEventV2Addition(previous, current))
 	)
@@ -6246,6 +6241,14 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 		}
 		if (isA2ParallelModelConfigurationOpenApiAddition(previous, current))
 			return changes;
+		if (isApplicationModelCandidates3146OpenApiAddition(previous, current)) {
+			current = structuredClone(current);
+			delete current.paths["/api/v2/agent-applications/model-candidates"];
+			delete current.components.schemas
+				.AgentApplicationModelCandidatesRequestV2;
+			delete current.components.schemas
+				.AgentApplicationModelCandidatesResponseV2;
+		}
 		if (
 			!sameValue(previous, current) &&
 			!isAgentApplicationUseGrantOpenApiAddition(previous, current) &&

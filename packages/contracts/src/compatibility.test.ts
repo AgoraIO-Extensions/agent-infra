@@ -5041,7 +5041,6 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/agents/{agentId}/detail" &&
 				path !== "/api/v2/admin/agents/{agentId}" &&
 				path !== "/api/v2/directory/search" &&
-				path !== "/api/v2/agent-applications/model-candidates" &&
 				path !== "/api/v2/agents/{agentId}/creation-failure" &&
 				path !== "/api/v2/skills/projects" &&
 				path !== "/api/v2/skills/projects/{projectId}" &&
@@ -5090,7 +5089,10 @@ describe("contract compatibility command", () => {
 		try {
 			await writeFile(previousPath, JSON.stringify(previous), "utf8");
 			await writeFile(currentPath, JSON.stringify(current), "utf8");
-			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const lifecycleComparison = comparePaths(currentPath, previousPath);
+			if (lifecycleComparison.status !== 0)
+				console.error("lifecycle compatibility", lifecycleComparison.stderr);
+			expect(lifecycleComparison.status).toBe(0);
 			for (const mutate of [
 				(document: typeof current) => {
 					delete document.paths["/api/v2/agents"];
