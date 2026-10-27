@@ -403,8 +403,7 @@ async function settleRetainedStopReceipt(
 		from platform.session_sandbox_allocations where conversation_id = ${outbox.scope_id}
 		for update`;
 	if (
-		!allocation ||
-		allocation.desired_state !== "stopped" ||
+		allocation?.desired_state !== "stopped" ||
 		allocation.sandbox_id !== receipt.sandboxId
 	)
 		return false;

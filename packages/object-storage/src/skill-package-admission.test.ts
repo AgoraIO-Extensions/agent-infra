@@ -95,6 +95,7 @@ const scanReceipt = {
 	scannedFileCount: 1,
 	scannedBytes: 5,
 	verdict: "clean" as const,
+	admissionDecision: "pending_review" as const,
 };
 const signingInput = {
 	packageObjectVersion: "opaque/s3+version",
@@ -312,6 +313,7 @@ describe("Skill package admission", () => {
 			scannedFileCount: prepared.fileCount,
 			scannedBytes: prepared.totalBytes,
 			verdict: "clean" as const,
+			admissionDecision: "pending_review" as const,
 		};
 		verifySkillPackageScanReceiptV1(
 			receipt,

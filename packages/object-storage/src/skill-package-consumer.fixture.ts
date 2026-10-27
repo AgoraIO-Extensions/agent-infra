@@ -125,6 +125,16 @@ export async function publicationFixture(receiptTtlMs = 50_000) {
 				scannedFileCount: i.fileCount,
 				scannedBytes: i.totalBytes,
 				verdict: "clean",
+				admissionDecision: "pending_review",
+				admissionEvidence: {
+					coverage: "complete",
+					findings: [],
+					dynamicProbe: {
+						required: false,
+						completed: true,
+						violations: [],
+					},
+				},
 			}),
 		},
 	});

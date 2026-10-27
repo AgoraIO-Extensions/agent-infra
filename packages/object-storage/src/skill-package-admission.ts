@@ -69,6 +69,20 @@ export type SkillPackageScanReceiptV1 = Readonly<{
 	scannedFileCount: number;
 	scannedBytes: number;
 	verdict: "clean";
+	admissionDecision: "auto_published" | "pending_review";
+	readonly admissionEvidence?: Readonly<{
+		coverage: "complete" | "incomplete";
+		findings: readonly Readonly<{
+			code: string;
+			severity: "info" | "low" | "medium" | "high" | "critical";
+			category: "static" | "supply_chain" | "semantic" | "dynamic";
+		}>[];
+		dynamicProbe: Readonly<{
+			required: boolean;
+			completed: boolean;
+			violations: readonly string[];
+		}>;
+	}>;
 }>;
 
 export interface SkillPackageSourceVerifierV1 {
@@ -538,9 +552,29 @@ export function canonicalSkillPackageSourceProofV1(
 		reject("source_untrusted");
 	return canonical(value);
 }
+type SkillPackageScanReceiptScalarV1 = Pick<
+	SkillPackageScanReceiptV1,
+	| "schemaVersion"
+	| "scannerId"
+	| "engineVersion"
+	| "rulesetDigest"
+	| "policyRevision"
+	| "scannedAt"
+	| "expiresAt"
+	| "packageDigest"
+	| "manifestDigest"
+	| "scannedFileCount"
+	| "scannedBytes"
+	| "verdict"
+	| "admissionDecision"
+>;
+
 function scanReceiptData(input: SkillPackageScanReceiptV1) {
-	const receipt = evidenceData(
-		input,
+	const admissionEvidence = input.admissionEvidence;
+	const scalarInput = { ...input } as Record<string, unknown>;
+	delete scalarInput.admissionEvidence;
+	const receipt = evidenceData<SkillPackageScanReceiptScalarV1>(
+		scalarInput as SkillPackageScanReceiptScalarV1,
 		[
 			"schemaVersion",
 			"scannerId",
@@ -554,6 +588,7 @@ function scanReceiptData(input: SkillPackageScanReceiptV1) {
 			"scannedFileCount",
 			"scannedBytes",
 			"verdict",
+			"admissionDecision",
 		],
 		"scan_rejected",
 	);
@@ -573,11 +608,45 @@ function scanReceiptData(input: SkillPackageScanReceiptV1) {
 		receipt.scannedFileCount < 0 ||
 		receipt.scannedBytes < 0 ||
 		receipt.verdict !== "clean" ||
+		(receipt.admissionDecision !== "auto_published" &&
+			receipt.admissionDecision !== "pending_review") ||
 		!iso(receipt.scannedAt) ||
 		!iso(receipt.expiresAt)
 	)
 		reject("scan_rejected");
-	return receipt;
+	if (Object.hasOwn(input, "admissionEvidence")) {
+		const evidence = admissionEvidence;
+		if (
+			!evidence ||
+			(evidence.coverage !== "complete" &&
+				evidence.coverage !== "incomplete") ||
+			!Array.isArray(evidence.findings) ||
+			!evidence.findings.every(
+				(finding) =>
+					typeof finding.code === "string" &&
+					["info", "low", "medium", "high", "critical"].includes(
+						finding.severity,
+					) &&
+					Object.hasOwn(
+						{ static: true, supply_chain: true, semantic: true, dynamic: true },
+						finding.category,
+					),
+			) ||
+			!evidence.dynamicProbe ||
+			typeof evidence.dynamicProbe.required !== "boolean" ||
+			typeof evidence.dynamicProbe.completed !== "boolean" ||
+			!Array.isArray(evidence.dynamicProbe.violations) ||
+			!evidence.dynamicProbe.violations.every(
+				(item) => typeof item === "string",
+			)
+		)
+			reject("scan_rejected");
+	}
+	return Object.freeze(
+		Object.hasOwn(input, "admissionEvidence")
+			? { ...receipt, admissionEvidence }
+			: receipt,
+	);
 }
 
 export function canonicalSkillPackageScanReceiptV1(
@@ -602,6 +671,8 @@ export function verifySkillPackageScanReceiptV1(
 		!/^[a-f0-9]{64}$/.test(receipt.rulesetDigest) ||
 		!validText(receipt.policyRevision) ||
 		receipt.verdict !== "clean" ||
+		(receipt.admissionDecision !== "auto_published" &&
+			receipt.admissionDecision !== "pending_review") ||
 		receipt.packageDigest !== prepared.packageDigest ||
 		receipt.manifestDigest !== digest(prepared.manifestBytes) ||
 		receipt.policyRevision !== policyRevision ||
