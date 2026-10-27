@@ -191,6 +191,14 @@ export {
 	SkillPackageMaterializerV1,
 } from "./skill-package-materializer.js";
 export {
+	createSkillSpectorAdapterV1,
+	decideSkillPackageAdmissionV1,
+	type SkillPackageAutomaticAdmissionDecisionV1,
+	type SkillPackageAutomaticAdmissionPolicyV1,
+	type SkillSpectorFindingV1,
+	type SkillSpectorScanReportV1,
+} from "./skill-package-skillspector.js";
+export {
 	type SkillPackageAdmissionPolicyV1,
 	type SkillPackageSupplierOptionsV1,
 	SkillPackageSupplierV1,
