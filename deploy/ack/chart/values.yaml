@@ -94,13 +94,22 @@ quota:
     requests.memory: 4Gi
     requests.storage: 500Gi
     services: "50"
+bootstrap:
+  databaseOnly: false
 postgres:
   enabled: false
+  # Fresh bootstrap supplies a separate administrator and generated initialization Secret.
+  adminUser: agent_infra
+  initialDatabase: postgres
+  adminSecret: ""
+  initializationSecret: ""
+  bootstrapInstallationId: ""
   storageClass: alicloud-disk-essd
   storageSize: 20Gi
 ingress:
   enabled: true
   className: new-magic-nginx
+  host: ""
   tlsSecret: agent-infra-web-tls
 migrations:
   enabled: false

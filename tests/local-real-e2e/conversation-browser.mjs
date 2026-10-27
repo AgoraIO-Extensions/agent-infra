@@ -13,6 +13,11 @@ import {
 	restoredHistoryPreservesEvents,
 } from "./conversation-browser-validation.mjs";
 
+import {
+	assertTurnReply,
+	conversationTurns,
+} from "./conversation-turn-plan.ts";
+
 const requireWebDependency = createRequire(
 	new URL("../../apps/web/package.json", import.meta.url),
 );
@@ -100,6 +105,7 @@ function configuration(value) {
 	);
 	nonEmptyString(agentId, "agentId is required");
 	nonEmptyString(prompt, "prompt is required");
+	conversationTurns(value);
 	acceptance(value.acceptance);
 	for (const subject of [owner, other]) {
 		assert(
@@ -190,16 +196,19 @@ async function run(input, evidence) {
 			window.__agentInfraSseFrames = [];
 			window.__agentInfraAssistantRenders = [];
 			window.__agentInfraStreamStartAssistantLength = 0;
+			window.__agentInfraTurnAssistantOffset = 0;
+			window.__agentInfraLastAssistantLength = 0;
 			const assistantTextLength = () =>
-				[...document.querySelectorAll(".assistant-markdown")].reduce(
-					(max, node) => Math.max(max, node.textContent?.trim().length ?? 0),
-					0,
-				);
-			let lastAssistantLength = 0;
+				[...document.querySelectorAll(".assistant-markdown")]
+					.slice(window.__agentInfraTurnAssistantOffset)
+					.reduce(
+						(max, node) => Math.max(max, node.textContent?.trim().length ?? 0),
+						0,
+					);
 			const recordAssistantRender = () => {
 				const visibleTextLength = assistantTextLength();
-				if (visibleTextLength <= lastAssistantLength) return;
-				lastAssistantLength = visibleTextLength;
+				if (visibleTextLength <= window.__agentInfraLastAssistantLength) return;
+				window.__agentInfraLastAssistantLength = visibleTextLength;
 				window.__agentInfraAssistantRenders.push({
 					at: performance.now(),
 					visibleTextLength,
@@ -243,6 +252,7 @@ async function run(input, evidence) {
 										const parsed = JSON.parse(data);
 										window.__agentInfraSseFrames.push({
 											id,
+											executionId: parsed.executionId,
 											status:
 												parsed.type === "execution.status"
 													? parsed.payload?.status
@@ -274,265 +284,347 @@ async function run(input, evidence) {
 		await page.goto(
 			`${input.origin}/agents/${encodeURIComponent(input.agentId)}/conversations`,
 		);
-		// 新会话页直接显示 composer：首次发送时先创建会话，再由新会话用原草稿发送（CH-10）。
-		await expect(page.getByRole("textbox", { name: "消息" })).toBeEnabled();
-		await page.getByRole("textbox", { name: "消息" }).fill(input.prompt);
-		const [created, submitted] = await Promise.all([
-			page.waitForResponse(
-				(response) =>
-					response.request().method() === "POST" &&
-					new URL(response.url()).pathname ===
-						`/api/v1/agents/${encodeURIComponent(input.agentId)}/conversations`,
-			),
-			page.waitForResponse(
-				(response) =>
-					response.request().method() === "POST" &&
-					/^\/api\/v1\/conversations\/[^/]+\/messages$/.test(
-						new URL(response.url()).pathname,
+		const rootEvidence = evidence;
+		const turns = conversationTurns(input);
+		rootEvidence.requestedTurnCount = turns.length;
+		rootEvidence.completedTurnCount = 0;
+		rootEvidence.turns = [];
+		let conversationId;
+		const executionIds = new Set();
+		for (const [turnIndex, turn] of turns.entries()) {
+			const evidence = {
+				index: turnIndex + 1,
+				result: "running",
+				stage: "submit",
+			};
+			rootEvidence.turns.push(evidence);
+			await page.setViewportSize({ width: 1440, height: 1000 });
+			await expect(page.getByRole("textbox", { name: "消息" })).toBeEnabled();
+			await page.getByRole("textbox", { name: "消息" }).fill(turn.prompt);
+			await page.evaluate(() => {
+				window.__agentInfraSseFrames = [];
+				window.__agentInfraAssistantRenders = [];
+				window.__agentInfraStreamStartAssistantLength = 0;
+				window.__agentInfraTurnAssistantOffset = document.querySelectorAll(
+					".assistant-markdown",
+				).length;
+				window.__agentInfraLastAssistantLength = 0;
+			});
+			const clickedAt = await page.evaluate(() => performance.now());
+			let submitted;
+			if (turnIndex === 0) {
+				const [created, accepted] = await Promise.all([
+					page.waitForResponse(
+						(response) =>
+							response.request().method() === "POST" &&
+							new URL(response.url()).pathname ===
+								`/api/v1/agents/${encodeURIComponent(input.agentId)}/conversations`,
 					),
-			),
-			page.getByRole("button", { name: "发送", exact: true }).click(),
-		]);
-		assert.equal(created.status(), 201);
-		const { conversationId } = await created.json();
-		assert(typeof conversationId === "string" && conversationId.length > 0);
-		evidence.createStatus = created.status();
-		evidence.conversationHash = digest(conversationId);
-		assert.equal(
-			new URL(submitted.url()).pathname,
-			`/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
-		);
-		assert.equal(submitted.status(), 202);
-		const receipt = await submitted.json();
-		assert(
-			["submitted", "processing"].includes(receipt.status),
-			"Message must be newly accepted",
-		);
-		assert(typeof receipt.executionId === "string" && receipt.executionId);
-		evidence.submitStatus = submitted.status();
-		evidence.executionHash = digest(receipt.executionId);
-		let preTerminalNativeMetadata;
-		const requiresNativeMetadata =
-			(input.acceptance?.requireSkillMetadata ?? false) ||
-			input.acceptance?.requiredSkillName !== undefined;
-		if (requiresNativeMetadata) {
+					page.waitForResponse(
+						(response) =>
+							response.request().method() === "POST" &&
+							/^\/api\/v1\/conversations\/[^/]+\/messages$/.test(
+								new URL(response.url()).pathname,
+							),
+					),
+					page.getByRole("button", { name: "发送", exact: true }).click(),
+				]);
+				assert.equal(created.status(), 201);
+				conversationId = (await created.json()).conversationId;
+				assert(typeof conversationId === "string" && conversationId.length > 0);
+				rootEvidence.conversationHash = digest(conversationId);
+				evidence.createStatus = created.status();
+				submitted = accepted;
+			} else {
+				const [accepted] = await Promise.all([
+					page.waitForResponse(
+						(response) =>
+							response.request().method() === "POST" &&
+							new URL(response.url()).pathname ===
+								`/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
+					),
+					page.getByRole("button", { name: "发送", exact: true }).click(),
+				]);
+				submitted = accepted;
+			}
+			evidence.conversationHash = digest(conversationId);
+			const acceptedAt = await page.evaluate(() => performance.now());
+			assert.equal(
+				new URL(submitted.url()).pathname,
+				`/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
+			);
+			assert.equal(submitted.status(), 202);
+			evidence.stage = "accepted";
+			const receipt = await submitted.json();
+			assert(
+				["submitted", "processing"].includes(receipt.status),
+				"Message must be newly accepted",
+			);
+			assert(typeof receipt.executionId === "string" && receipt.executionId);
+			evidence.submitStatus = submitted.status();
+			assert(
+				!executionIds.has(receipt.executionId),
+				"Each turn must have a new execution",
+			);
+			executionIds.add(receipt.executionId);
+			evidence.executionHash = digest(receipt.executionId);
+			let preTerminalNativeMetadata;
+			const requiresNativeMetadata =
+				(input.acceptance?.requireSkillMetadata ?? false) ||
+				input.acceptance?.requiredSkillName !== undefined;
+			if (requiresNativeMetadata) {
+				await expect
+					.poll(
+						async () => {
+							const response = await owner.request.get(
+								`${input.origin}/api/v2/conversations/${encodeURIComponent(conversationId)}/executions/${encodeURIComponent(receipt.executionId)}/native-metadata?selector=skills`,
+							);
+							if (response.status() !== 200) return false;
+							const metadata = await response.json();
+							if (!Array.isArray(metadata.capabilities)) return false;
+							if (
+								input.acceptance?.requiredSkillName !== undefined &&
+								!metadata.capabilities.some(
+									(entry) => entry?.name === input.acceptance.requiredSkillName,
+								)
+							)
+								return false;
+							preTerminalNativeMetadata = metadata;
+							return true;
+						},
+						{ timeout: 180_000, intervals: [500, 1000, 2000] },
+					)
+					.toBe(true);
+			}
+			await expect
+				.poll(
+					() =>
+						page.evaluate((executionId) => {
+							const frames = (window.__agentInfraSseFrames ?? []).filter(
+								(frame) => frame.executionId === executionId,
+							);
+							const firstFrame = frames.find(
+								(frame) => frame.type === "text.delta" && frame.textLength > 0,
+							);
+							const terminalFrame = frames.find(
+								(frame) =>
+									frame.type === "execution.status" &&
+									frame.status === "completed",
+							);
+							return Boolean(
+								firstFrame &&
+									terminalFrame &&
+									firstFrame.at < terminalFrame.at &&
+									terminalFrame.visibleTextLength >
+										(window.__agentInfraStreamStartAssistantLength ?? 0),
+							);
+						}, receipt.executionId),
+					{ timeout: 180_000, intervals: [500, 1000, 2000] },
+				)
+				.toBe(true);
 			await expect
 				.poll(
 					async () => {
-						const response = await owner.request.get(
-							`${input.origin}/api/v2/conversations/${encodeURIComponent(conversationId)}/executions/${encodeURIComponent(receipt.executionId)}/native-metadata?selector=skills`,
+						const detail = await conversationDetail(
+							owner,
+							input.origin,
+							conversationId,
 						);
-						if (response.status() !== 200) return false;
-						const metadata = await response.json();
-						if (!Array.isArray(metadata.capabilities)) return false;
-						if (
-							input.acceptance?.requiredSkillName !== undefined &&
-							!metadata.capabilities.some(
-								(entry) => entry?.name === input.acceptance.requiredSkillName,
-							)
-						)
-							return false;
-						preTerminalNativeMetadata = metadata;
-						return true;
+						return detail.messages?.some(
+							(message) =>
+								message.role === "assistant" &&
+								message.executionId === receipt.executionId &&
+								message.status === "completed" &&
+								Boolean(message.text?.trim()),
+						);
 					},
 					{ timeout: 180_000, intervals: [500, 1000, 2000] },
 				)
 				.toBe(true);
-		}
-		await expect
-			.poll(
-				() =>
-					page.evaluate(() => {
-						const frames = window.__agentInfraSseFrames ?? [];
-						const firstFrame = frames.find(
-							(frame) => frame.type === "text.delta" && frame.textLength > 0,
-						);
-						const terminalFrame = frames.find(
-							(frame) =>
-								frame.type === "execution.status" &&
-								frame.status === "completed",
-						);
-						return Boolean(
-							firstFrame &&
-								terminalFrame &&
-								firstFrame.at < terminalFrame.at &&
-								terminalFrame.visibleTextLength >
-									(window.__agentInfraStreamStartAssistantLength ?? 0),
-						);
-					}),
-				{ timeout: 180_000, intervals: [500, 1000, 2000] },
-			)
-			.toBe(true);
-		await expect
-			.poll(
-				async () => {
-					const detail = await conversationDetail(
-						owner,
-						input.origin,
-						conversationId,
-					);
-					return detail.messages?.some(
-						(message) =>
-							message.role === "assistant" &&
-							message.executionId === receipt.executionId &&
-							message.status === "completed" &&
-							Boolean(message.text?.trim()),
-					);
-				},
-				{ timeout: 180_000, intervals: [500, 1000, 2000] },
-			)
-			.toBe(true);
-		const detail = await conversationDetail(
-			owner,
-			input.origin,
-			conversationId,
-		);
-		const events = currentExecutionEvents(
-			detail,
-			conversationId,
-			receipt.executionId,
-		);
-		assert(
-			events,
-			"Current-execution events must stay bound to this conversation and execution",
-		);
-		assertAcceptance(input, events, evidence, preTerminalNativeMetadata);
-		const sseFrames = await page.evaluate(
-			() => window.__agentInfraSseFrames ?? [],
-		);
-		const currentFrames = currentExecutionFrames(events, sseFrames);
-		const streamStartAssistantLength = await page.evaluate(
-			() => window.__agentInfraStreamStartAssistantLength ?? 0,
-		);
-		const assistantRenders = await page.evaluate(
-			() => window.__agentInfraAssistantRenders ?? [],
-		);
-		assert(
-			currentFrames.length >= 2,
-			"Browser must observe incremental SSE frames for the submitted execution",
-		);
-		const firstFrame = currentFrames.find(
-			(frame) => frame.type === "text.delta" && frame.textLength > 0,
-		);
-		const terminalFrame = currentFrames.find(
-			(frame) =>
-				frame.type === "execution.status" && frame.status === "completed",
-		);
-		assert(
-			firstFrame && terminalFrame,
-			"SSE must include text and terminal frames",
-		);
-		assert(
-			assistantRenders.some(
-				(render) =>
-					render.at >= firstFrame.at &&
-					render.at < terminalFrame.at &&
-					render.visibleTextLength > streamStartAssistantLength,
-			),
-			"The page must render incremental assistant text before the terminal frame",
-		);
-		assert(
-			firstFrame.at < terminalFrame.at,
-			"An incremental text frame must arrive before the terminal frame",
-		);
-		await expect(page.locator(".assistant-markdown").last()).not.toBeEmpty();
-		evidence.sse = {
-			status: 200,
-			eventCount: events.length,
-			historyEventCount: detail.events.length,
-			eventIdHashes: events.map((event) => digest(event.eventId)),
-			observedFrames: currentFrames.map((frame) => ({
-				idHash: digest(frame.id),
-				type: frame.type,
-				status: frame.status ?? null,
-				textLength: frame.textLength ?? null,
-				visibleTextLength: frame.visibleTextLength,
-			})),
-			assistantRenders: assistantRenders.map((render) => ({
-				visibleTextLength: render.visibleTextLength,
-			})),
-			cursorHash: detail.conversation.lastConversationCursor
-				? digest(detail.conversation.lastConversationCursor)
-				: null,
-		};
-		await page.screenshot({
-			path: join(evidence.directory, "conversation-desktop.png"),
-			mask: [
-				page.locator(".message-text"),
-				page.locator(".assistant-markdown"),
-			],
-		});
-		const renderedAnswer = await page
-			.locator(".assistant-markdown")
-			.last()
-			.innerText();
-		assert(renderedAnswer.trim(), "Completed assistant reply must be visible");
-		await page.reload();
-		await expect(page.locator(".assistant-markdown").last()).toHaveText(
-			renderedAnswer,
-		);
-		const restored = await conversationDetail(
-			owner,
-			input.origin,
-			conversationId,
-		);
-		assert(
-			restoredHistoryPreservesEvents(
+			evidence.stage = "persistent-readback";
+			const detail = await conversationDetail(
+				owner,
+				input.origin,
+				conversationId,
+			);
+			const persistedReply = detail.messages.find(
+				(message) =>
+					message.role === "assistant" &&
+					message.executionId === receipt.executionId &&
+					message.status === "completed",
+			);
+			assertTurnReply(persistedReply?.text ?? "", turn.expectedReply);
+			const events = currentExecutionEvents(
 				detail,
-				restored,
 				conversationId,
 				receipt.executionId,
-			),
-			"Reload must preserve the original conversation event sequence",
-		);
-		evidence.reload = "restored";
-		await page.setViewportSize({ width: 390, height: 844 });
-		await expect(page.locator(".assistant-markdown").last()).not.toBeEmpty();
-		assert(
-			await page.evaluate(
-				() =>
-					Math.max(
-						document.documentElement.scrollWidth,
-						document.body.scrollWidth,
-					) <= window.innerWidth,
-			),
-			"Mobile conversation must not overflow horizontally",
-		);
-		await page.screenshot({
-			path: join(evidence.directory, "conversation-mobile.png"),
-			mask: [
-				page.locator(".message-text"),
-				page.locator(".assistant-markdown"),
-			],
-		});
-		const denied = await other.request.get(
-			`${input.origin}/api/v2/conversations/${encodeURIComponent(conversationId)}`,
-		);
-		assert([403, 404].includes(denied.status()));
-		evidence.crossUserReadStatus = denied.status();
-		const deniedStream = await conversationStream(
-			other,
-			input.origin,
-			conversationId,
-		);
-		assert([403, 404].includes(deniedStream.status()));
-		evidence.crossUserSseStatus = deniedStream.status();
-		const otherPage = await other.newPage();
-		await otherPage.goto(
-			`${input.origin}/agents/${encodeURIComponent(input.agentId)}/conversations?conversation=${encodeURIComponent(conversationId)}`,
-		);
-		await expect(
-			otherPage.getByText(
-				"当前登录或访问权限已失效，请重新登录或返回 Agent 目录。",
-			),
-		).toBeVisible();
-		await expect(
-			otherPage.getByText(input.prompt, { exact: true }),
-		).toHaveCount(0);
-		await expect(otherPage.locator(".assistant-markdown")).toHaveCount(0);
-		await otherPage.screenshot({
-			path: join(evidence.directory, "cross-user-mobile.png"),
-		});
+			);
+			assert(
+				events,
+				"Current-execution events must stay bound to this conversation and execution",
+			);
+			assertAcceptance(input, events, evidence, preTerminalNativeMetadata);
+			const sseFrames = await page.evaluate(
+				() => window.__agentInfraSseFrames ?? [],
+			);
+			const currentFrames = currentExecutionFrames(events, sseFrames);
+			const streamStartAssistantLength = await page.evaluate(
+				() => window.__agentInfraStreamStartAssistantLength ?? 0,
+			);
+			const assistantRenders = await page.evaluate(
+				() => window.__agentInfraAssistantRenders ?? [],
+			);
+			assert(
+				currentFrames.length >= 2,
+				"Browser must observe incremental SSE frames for the submitted execution",
+			);
+			const firstFrame = currentFrames.find(
+				(frame) => frame.type === "text.delta" && frame.textLength > 0,
+			);
+			const terminalFrame = currentFrames.find(
+				(frame) =>
+					frame.type === "execution.status" && frame.status === "completed",
+			);
+			assert(
+				firstFrame && terminalFrame,
+				"SSE must include text and terminal frames",
+			);
+			assert(
+				assistantRenders.some(
+					(render) =>
+						render.at >= firstFrame.at &&
+						render.at < terminalFrame.at &&
+						render.visibleTextLength > streamStartAssistantLength,
+				),
+				"The page must render incremental assistant text before the terminal frame",
+			);
+			assert(
+				firstFrame.at < terminalFrame.at,
+				"An incremental text frame must arrive before the terminal frame",
+			);
+			await expect(page.locator(".assistant-markdown").last()).not.toBeEmpty();
+			evidence.sse = {
+				status: 200,
+				eventCount: events.length,
+				historyEventCount: detail.events.length,
+				eventIdHashes: events.map((event) => digest(event.eventId)),
+				observedFrames: currentFrames.map((frame) => ({
+					idHash: digest(frame.id),
+					type: frame.type,
+					status: frame.status ?? null,
+					textLength: frame.textLength ?? null,
+					visibleTextLength: frame.visibleTextLength,
+				})),
+				assistantRenders: assistantRenders.map((render) => ({
+					visibleTextLength: render.visibleTextLength,
+				})),
+				cursorHash: detail.conversation.lastConversationCursor
+					? digest(detail.conversation.lastConversationCursor)
+					: null,
+			};
+			await page.screenshot({
+				path: join(rootEvidence.directory, `turn-${turnIndex + 1}-desktop.png`),
+				mask: [
+					page.locator(".message-text"),
+					page.locator(".assistant-markdown"),
+				],
+			});
+			const renderedAnswer = await page
+				.locator(".assistant-markdown")
+				.last()
+				.innerText();
+			evidence.stage = "reply-check";
+			assertTurnReply(renderedAnswer, turn.expectedReply);
+			evidence.timings = {
+				browserClickToAcceptedMs: Math.max(0, acceptedAt - clickedAt),
+				browserClickToFirstTextMs: firstFrame.at - clickedAt,
+				browserClickToCompletedMs: terminalFrame.at - clickedAt,
+				modelDurationMs: null,
+				queueDurationMs: null,
+				sessionPreparationMs: null,
+			};
+			assert(evidence.timings.browserClickToFirstTextMs >= 0);
+			assert(
+				evidence.timings.browserClickToCompletedMs >=
+					evidence.timings.browserClickToFirstTextMs,
+			);
+			evidence.stage = "reload";
+			await page.reload();
+			await expect(page.locator(".assistant-markdown").last()).toHaveText(
+				renderedAnswer,
+			);
+			const restored = await conversationDetail(
+				owner,
+				input.origin,
+				conversationId,
+			);
+			assert(
+				restoredHistoryPreservesEvents(
+					detail,
+					restored,
+					conversationId,
+					receipt.executionId,
+				),
+				"Reload must preserve the original conversation event sequence",
+			);
+			evidence.reload = "restored";
+			await page.setViewportSize({ width: 390, height: 844 });
+			await expect(page.locator(".assistant-markdown").last()).not.toBeEmpty();
+			assert(
+				await page.evaluate(
+					() =>
+						Math.max(
+							document.documentElement.scrollWidth,
+							document.body.scrollWidth,
+						) <= window.innerWidth,
+				),
+				"Mobile conversation must not overflow horizontally",
+			);
+			await page.screenshot({
+				path: join(rootEvidence.directory, `turn-${turnIndex + 1}-mobile.png`),
+				mask: [
+					page.locator(".message-text"),
+					page.locator(".assistant-markdown"),
+				],
+			});
+			const denied = await other.request.get(
+				`${input.origin}/api/v2/conversations/${encodeURIComponent(conversationId)}`,
+			);
+			assert([403, 404].includes(denied.status()));
+			evidence.crossUserReadStatus = denied.status();
+			const deniedStream = await conversationStream(
+				other,
+				input.origin,
+				conversationId,
+			);
+			assert([403, 404].includes(deniedStream.status()));
+			evidence.crossUserSseStatus = deniedStream.status();
+			evidence.stage = "cross-user-page";
+			const otherPage = await other.newPage();
+			await otherPage.goto(
+				`${input.origin}/agents/${encodeURIComponent(input.agentId)}/conversations?conversation=${encodeURIComponent(conversationId)}`,
+			);
+			await expect(
+				otherPage.getByText(
+					"当前登录或访问权限已失效，请重新登录或返回 Agent 目录。",
+				),
+			).toBeVisible();
+			await expect(
+				otherPage.getByText(turn.prompt, { exact: true }),
+			).toHaveCount(0);
+			await expect(otherPage.locator(".assistant-markdown")).toHaveCount(0);
+			await otherPage.screenshot({
+				path: join(
+					rootEvidence.directory,
+					`turn-${turnIndex + 1}-cross-user.png`,
+				),
+			});
+			await otherPage.close();
+			evidence.result = "passed";
+			evidence.stage = "completed";
+			rootEvidence.completedTurnCount += 1;
+		}
+		if (turns.length === 1) Object.assign(rootEvidence, rootEvidence.turns[0]);
 	} finally {
 		await browser.close();
 	}
@@ -593,6 +685,8 @@ try {
 	evidence.result = "passed";
 } catch (error) {
 	evidence.result = "failed";
+	const failedTurn = evidence.turns?.find((turn) => turn.result === "running");
+	if (failedTurn) failedTurn.result = "failed";
 	evidence.failureClass = error instanceof Error ? error.name : "Unknown";
 	process.exitCode = 1;
 }

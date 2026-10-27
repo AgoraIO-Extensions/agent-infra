@@ -1,3 +1,4 @@
+{{- if not .Values.bootstrap.databaseOnly }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -71,3 +72,5 @@ spec:
         - name: directory-ca
           secret: {secretName: {{ .Values.secrets.directoryCa }}, items: [{key: tls.crt, path: tls.crt}]}
         - {name: tmp, emptyDir: {}}
+
+{{- end }}

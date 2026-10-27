@@ -1,3 +1,4 @@
+{{- if not .Values.bootstrap.databaseOnly }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -90,3 +91,5 @@ spec:
           secret: {secretName: {{ .Values.secrets.workerDirectoryRead }}, items: [{key: read-token, path: read-token}]}
         - name: directory-ca
           secret: {secretName: {{ .Values.secrets.workerCa }}, items: [{key: ca.crt, path: ca.crt}]}
+
+{{- end }}

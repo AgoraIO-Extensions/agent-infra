@@ -43,15 +43,18 @@ export function createPostgresLdapBrowserDeployment(
 				if (!trustedProxy(request)) return new Response(null, { status: 400 });
 				const incoming = new URL(request.url);
 				// Local nginx owns this exact Host and scheme marker at TLS termination.
-				// A mismatched or direct request keeps its URL for the adapter to reject.
+				// Rebuild the public URL from verified proxy headers because the Node
+				// adapter may construct request.url from the upstream service host.
 				if (
-					incoming.protocol === "http:" &&
-					incoming.host === publicOrigin.host &&
 					request.headers.get("host") === publicOrigin.host &&
 					request.headers.get("x-forwarded-proto") === "https"
 				) {
-					incoming.protocol = "https:";
-					return adapter.handleRequest(new Request(incoming, request));
+					if (request.method !== "POST")
+						return new Response(null, { status: 405 });
+					const publicUrl = new URL(publicOrigin.origin);
+					publicUrl.pathname = incoming.pathname;
+					publicUrl.search = incoming.search;
+					return adapter.handleRequest(new Request(publicUrl, request.clone()));
 				}
 				return adapter.handleRequest(request);
 			},

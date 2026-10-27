@@ -1,3 +1,4 @@
+{{- if not .Values.bootstrap.databaseOnly }}
 {{- if .Values.migrations.enabled }}
 apiVersion: batch/v1
 kind: Job
@@ -8,11 +9,13 @@ spec:
   backoffLimit: 1
   template:
     spec:
+      automountServiceAccountToken: false
       restartPolicy: Never
       {{- include "ack.pullSecrets" . | nindent 6 }}
       securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: migrate
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           image: {{ .Values.images.api }}
           command: [node, node_modules/@agent-infra/platform-store/dist/migrate-cli.mjs]
           env:
@@ -28,15 +31,19 @@ spec:
   backoffLimit: 1
   template:
     spec:
+      automountServiceAccountToken: false
       restartPolicy: Never
       {{- include "ack.pullSecrets" . | nindent 6 }}
       securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: migrate
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           image: {{ .Values.images.directory }}
           command: [node, scripts/migrate.mjs]
           env:
             - name: DIRECTORY_MIGRATION_DATABASE_URL
               valueFrom: {secretKeyRef: {name: {{ .Values.secrets.directoryMigrationDatabase }}, key: url}}
             - {name: DIRECTORY_RUNTIME_DATABASE_ROLE, value: {{ .Values.directory.runtimeDatabaseRole | quote }}}
+{{- end }}
+
 {{- end }}
