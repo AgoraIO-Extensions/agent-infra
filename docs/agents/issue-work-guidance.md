@@ -23,12 +23,14 @@
 
 ## 本轮并行委派
 
-| Lane | Primary Issue | 文件范围与交付终点 |
+| Lane | Primary Issue / PR | 文件范围与交付终点 |
 | --- | --- | --- |
-| 模型候选 | PR #3520；Issue #3146 已按开发交付关闭 | Core、API、Contracts/生成物、Web 新建申请；候选查询到提交的完整消费者 |
-| SkillSpector admission | [#3527](https://github.com/AgoraIO-Extensions/agent-infra/issues/3527) | SkillPackageScannerV1/admission policy/receipt/negative paths；不绕过 #2742 producer |
-| Skill consumer | PR #3517；Issue #2949 已按开发交付关闭 | Store publication reader、Object Storage 证据 verifier、Worker 接线；不触碰其他 lane 的生成物 |
-| 协调者 | [#3499](https://github.com/AgoraIO-Extensions/agent-infra/pull/3499) | 状态文档、父子开发范围、标签和未解决 review threads |
+| SkillSpector supplier | [#3552](https://github.com/AgoraIO-Extensions/agent-infra/issues/3552) / [PR #3553](https://github.com/AgoraIO-Extensions/agent-infra/pull/3553) | `packages/object-storage/src/skill-package-admission.ts`, ClamAV supplier and Store registration seam；消费 server-owned admission evidence，不绕过 #2742 producer |
+| 模型候选 | Issue #3146 已按开发交付关闭 / [PR #3520](https://github.com/AgoraIO-Extensions/agent-infra/pull/3520) | Core、API、Contracts/生成物、Web 新建申请；候选查询到提交的完整消费者 |
+| ACK acceptance | Issue #3072 / [PR #3509](https://github.com/AgoraIO-Extensions/agent-infra/pull/3509) | Draft-only repeatable ACK redeploy and evidence capture；真实部署、镜像和恢复 AC 保持开放 |
+| Native metadata | Issue #2757 已按开发交付关闭 / [PR #3550](https://github.com/AgoraIO-Extensions/agent-infra/pull/3550) | Worker current-confirmation deadline and negative regressions；真实 100 轮 AC 保持原票跟进 |
+| Recovery diagnostics | Issue #2929 已按开发交付关闭 / [PR #3551](https://github.com/AgoraIO-Extensions/agent-infra/pull/3551) | Pinned recovery A/B/C stop evidence；不修改生产授权或终态规则 |
+| 协调者 | Issue #3556 | 状态文档、父子开发范围、标签和未解决 review threads |
 
 每条 lane 独占已声明文件，基于刷新后的 main 和隔离 worktree 开发。
 缺失内部接口若已在 Issue Scope 中授权，属于待实现内容；只有实际产品/架构冲突或外部输入缺失
