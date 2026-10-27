@@ -46,7 +46,7 @@
 
 | Workflow/Observability | [#3566](https://github.com/AgoraIO-Extensions/agent-infra/issues/3566) | docs: remove closed tracker issue after final merge | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 本票用于当前清单收口 |
 
-| Workflow/Observability | [#3568](https://github.com/AgoraIO-Extensions/agent-infra/issues/3568) | fix(platform): admit standard model selection before image digest is known | priority:P2 | priority:P0, agent:codex | 2026-10-27 | 本票用于当前清单收口 |
+| Workflow/Observability | [#3568](https://github.com/AgoraIO-Extensions/agent-infra/issues/3568) | fix(platform): admit standard model selection before image digest is known | priority:P0 | priority:P0, agent:codex | 2026-10-27 | 本票用于当前清单收口 |
 
 ## 开发 PR 回读
 
