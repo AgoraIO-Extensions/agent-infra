@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPlatformApiNativeMetadataCurrentClientV1 } from "./runtime-native-metadata-current-client.js";
 
+const requestNow = Date.now();
+
 const request = {
 	schemaVersion: 1 as const,
 	readId: "read-current-client",
@@ -15,8 +17,8 @@ const request = {
 		sessionGeneration: 1,
 		authorizationRevision: "authorization-current-client",
 	},
-	readStartedAt: 1_000,
-	expiresAt: Date.now() + 30_000,
+	readStartedAt: requestNow,
+	expiresAt: requestNow + 30_000,
 	requestId: "request-current-client",
 	traceId: "trace-current-client",
 	phase: "read_metadata" as const,
