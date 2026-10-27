@@ -1,3 +1,4 @@
+{{- if not .Values.bootstrap.databaseOnly }}
 {{- if .Values.sessionRuntimeScheduling.enabled }}
 {{- if not (semverCompare ">=1.36.0-0" .Capabilities.KubeVersion.Version) }}
 {{- fail "sessionRuntimeScheduling requires Kubernetes 1.36 or later (GA MutatingAdmissionPolicy)" }}
@@ -55,4 +56,6 @@ spec:
     objectSelector:
       matchLabels:
         agent-infra.agora.io/managed: session-sandbox-v1
+{{- end }}
+
 {{- end }}
