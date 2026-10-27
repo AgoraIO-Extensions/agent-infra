@@ -1,23 +1,24 @@
 # 开放 Issue 状态跟进
 
-> 快照：2026-10-27 02:17 UTC；`origin/main` `6ee5e16f1`。
+> 快照：2026-10-27 02:17 UTC；`origin/main` `ad57fb1ca`。
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
-当前开放 Issue：**40**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
+当前开放 Issue：**39**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
 
 ## 分类计数
 
 | 类别 | 数量 |
 | --- | ---: |
-| Runtime/Worker/Core | 13 |
-| Deploy/E2E/Channels | 15 |
+| Runtime/Worker/Core | 14 |
+| Deploy/E2E/Channels | 14 |
 | Platform/Web/Skill | 7 |
-| Workflow/Observability | 4 |
+| Workflow/Observability | 5 |
 
 ## 明细
 
 | 类别 | Issue | 标题 | 优先级 | 实时标签 | 最近更新 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- |
+| Workflow/Observability | [#3540](https://github.com/AgoraIO-Extensions/agent-infra/issues/3540) | docs: include latest tracker refresh issue | priority:P2 | priority:P2, agent:codex | 2026-10-27 | tracker refresh PR |
 | Runtime/Worker/Core | [#3352](https://github.com/AgoraIO-Extensions/agent-infra/issues/3352) | feat(runtime): deliver Codex native context compaction in conversations | 未标注 | agent:codex | 2026-10-26 | 继续核对有状态原生命令的 Host/Driver 消费链 |
 | Runtime/Worker/Core | [#3295](https://github.com/AgoraIO-Extensions/agent-infra/issues/3295) | blocker(ack): Flannel 环境未通过 Worker NetworkPolicy 负向验证 | 未标注 | agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Runtime/Worker/Core | [#3277](https://github.com/AgoraIO-Extensions/agent-infra/issues/3277) | fix(worker): 开启文件交换后，镜像早于 #3256 的 Agent Workload 启动即退出（CrashLoop） | priority:P2 | needs-triage, priority:P2, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
@@ -32,7 +33,6 @@
 | Runtime/Worker/Core | [#1578](https://github.com/AgoraIO-Extensions/agent-infra/issues/1578) | perf(worker): cut route verification cost on the Runtime submit path | priority:P1 | needs-triage, priority:P1, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Runtime/Worker/Core | [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) | feat(runtime): deliver standard MCP Agent token client | priority:P0 | priority:P0, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Deploy/E2E/Channels | [#3356](https://github.com/AgoraIO-Extensions/agent-infra/issues/3356) | fix(ack): refresh standard-template readiness from real ECI validation | 未标注 | agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
-| Deploy/E2E/Channels | [#3337](https://github.com/AgoraIO-Extensions/agent-infra/issues/3337) | fix(deploy): ACK pre-render uses default Helm Kubernetes version | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 跟进 PR #3512 的 kubectl JSON 兼容性修复 |
 | Deploy/E2E/Channels | [#3232](https://github.com/AgoraIO-Extensions/agent-infra/issues/3232) | feat(deploy): expose authenticated standard-template release app for ACK upgrades | priority:P1 | priority:P1, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Deploy/E2E/Channels | [#3230](https://github.com/AgoraIO-Extensions/agent-infra/issues/3230) | test(e2e): 固定环境 Web 与企微双向文件和图片验收（#3221） | priority:P1 | needs-triage, priority:P1, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Deploy/E2E/Channels | [#3221](https://github.com/AgoraIO-Extensions/agent-infra/issues/3221) | feat(files): 企微与 Web 双向收发文件和图片（附件进入 Sandbox、显式结果文件、企微媒体） | priority:P1 | needs-triage, priority:P1, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
