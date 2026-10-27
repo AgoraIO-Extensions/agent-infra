@@ -2633,7 +2633,8 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					if (!stop.lifecycle) throw new Error("Expected drain lifecycle");
 					const retainedPVC = replacementResources.find(
 						(resource) => resource.kind === "PersistentVolumeClaim",
-					)!;
+					);
+					if (!retainedPVC) throw new Error("Expected retained PVC");
 					expect(
 						await store.recordSandboxObservation({
 							claim: stop,
