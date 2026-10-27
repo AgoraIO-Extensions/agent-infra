@@ -339,6 +339,19 @@ it("allows an explicitly empty custom deployment without inventing a standard Dr
 	).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
 });
 
+it("preserves a template-specific image repository in the trusted binding", () => {
+	const repository = "ghcr.nju.edu.cn/agoraio-extensions/agent-runtime-claude";
+	const [binding] = validateStandardTemplateModelBindingsV1([
+		{ ...standardBinding, imageRepository: repository },
+	]);
+	expect(binding?.imageRepository).toBe(repository);
+	expect(() =>
+		validateStandardTemplateModelBindingsV1([
+			{ ...standardBinding, imageRepository: "https://registry.example.test" },
+		]),
+	).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+});
+
 async function projection(
 	protocol: "anthropic-messages-v1" | "openai-responses-v1",
 	templateProtocol = protocol,

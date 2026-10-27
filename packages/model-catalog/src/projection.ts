@@ -32,6 +32,11 @@ const secretReferenceSchema = z.strictObject({
 export interface StandardTemplateModelBindingV1 {
 	readonly templateId: string;
 	readonly imageDigest: string;
+	/**
+	 * Optional pull repository for this template. Older single-repository
+	 * deployments omit it and continue using the Worker policy repository.
+	 */
+	readonly imageRepository?: string;
 	readonly driver: "codex" | "claude" | "acp" | "pi";
 	readonly protocol: RuntimeModelProtocolV1;
 }
@@ -58,11 +63,15 @@ const templateBindingSchema = z
 				),
 			),
 		imageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+		imageRepository: z.string().min(1).max(1024).optional(),
 		driver: z.enum(["codex", "claude", "acp", "pi"]),
 		protocol: RuntimeModelProtocolV1Schema,
 	})
 	.refine(
-		(binding) => binding.protocol === standardTemplateProtocol[binding.driver],
+		(binding) =>
+			binding.protocol === standardTemplateProtocol[binding.driver] &&
+			(binding.imageRepository === undefined ||
+				/^[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])?$/u.test(binding.imageRepository)),
 	);
 
 const projectionContentSchema = z.strictObject({

@@ -901,6 +901,9 @@ describe("assembled Workload Runtime contracts", () => {
 		const bindings = (["claude", "pi"] as const).map((driver, index) => ({
 			templateId: `template-${index}`,
 			imageDigest: `sha256:${String(index + 1).repeat(64)}`,
+			...(index === 0
+				? { imageRepository: "registry.example.test/agent-claude" }
+				: {}),
 			driver,
 			protocol: "anthropic-messages-v1" as const,
 		}));
@@ -969,7 +972,7 @@ describe("assembled Workload Runtime contracts", () => {
 			const container = workload.spec.template.spec.containers[0];
 			const environment = structuredClone(container.env ?? []);
 			expect(container.image).toBe(
-				`${f.options.policy.imageRepository}@${binding.imageDigest}`,
+				`${binding.imageRepository ?? f.options.policy.imageRepository}@${binding.imageDigest}`,
 			);
 			expect(
 				environment.filter(

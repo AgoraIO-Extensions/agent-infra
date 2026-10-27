@@ -286,7 +286,9 @@ export const workloadInput = {
   Kubernetes 内预置的 Runtime transport Secret 名称/键，不保存私钥或 Token 值。可选的
   `fileExchangeOrigin` 见 [Runtime 文件交换注入](#runtime-文件交换注入)。
 - `templateModelBindings` 使用当前获准标准模板 digest、必需 `driver` 与协议，绑定规则见
-  [Runtime HLD §3.1](../../docs/architecture/HLD-agent-runtime-M1.md#31-标准-runtime)。上面空数组仅是形状示例，
+  [Runtime HLD §3.1](../../docs/architecture/HLD-agent-runtime-M1.md#31-标准-runtime)。需要从多个
+  OCI repository 拉取标准模板时，在对应绑定上同时填写固定的 `imageRepository`；省略时沿用
+  `policy.imageRepository`，兼容旧的单 repository 部署。上面空数组仅是形状示例，
   不能验证标准模板；自定义 Agent 可使用空数组。
 - `executionCapacityProfiles` 必须由真实负载/conformance 证据产生，绑定精确 image digest、
   resource profile 与资源配置 hash。空数组不允许新 Turn。撤回容量证明仍保留原执行控制。

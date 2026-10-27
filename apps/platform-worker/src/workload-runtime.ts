@@ -1282,13 +1282,22 @@ export function createWorkloadRuntimeV1(
 					throw new WorkloadPreflightRejectedErrorV1();
 				}
 			}
+			const source = configuration.source;
+			const templateBinding =
+				source.kind === "standard"
+					? options.templateModelBindings.find(
+							(binding) =>
+								binding.templateId === source.templateId &&
+								binding.imageDigest === source.imageDigest,
+						)
+					: undefined;
 			const request = {
 				schemaVersion: 1 as const,
 				requestId: input.requestId,
 				traceId: input.traceId,
 				subjectRef: options.registrySubjectRef,
 				agentId: state.agentId,
-				imageReference: `${options.policy.imageRepository}@${configuration.source.imageDigest}`,
+				imageReference: `${templateBinding?.imageRepository ?? options.policy.imageRepository}@${configuration.source.imageDigest}`,
 				usage:
 					configuration.source.kind === "standard"
 						? ("standard-template" as const)

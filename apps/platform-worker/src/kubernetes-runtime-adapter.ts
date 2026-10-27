@@ -235,6 +235,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				])[0];
 	const templateBinding =
 		standardTemplateBinding ?? modelProjection?.standardTemplateBinding;
+	const imageRepository =
+		templateBinding?.imageRepository ?? policy.imageRepository;
 	const connection = runtimeConnectionConsumerProjectionV1(
 		options.connectionConsumerControl
 			? undefined
@@ -301,6 +303,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	} = createKubernetesWorkloadPolicyHelpersV1({
 		connectionConsumerControl: options.connectionConsumerControl,
 		policy,
+		imageRepository,
 		modelProjection,
 		modelInjection,
 		standardTemplateBinding,
@@ -632,7 +635,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		const refs =
 			container?.envFrom?.map((entry) => entry.secretRef?.name).sort() ?? [];
 		if (
-			container?.image !== `${policy.imageRepository}@${value.imageDigest}` ||
+			container?.image !== `${imageRepository}@${value.imageDigest}` ||
 			!hasSameStructure(
 				refs,
 				environmentSecrets(value)
@@ -1533,7 +1536,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 							containers: [
 								{
 									name: "agent",
-									image: `${policy.imageRepository}@${value.imageDigest}`,
+									image: `${imageRepository}@${value.imageDigest}`,
 									resources: structuredClone(policy.resources),
 									ports: [
 										{ name: "runtime", containerPort: value.service.port },
