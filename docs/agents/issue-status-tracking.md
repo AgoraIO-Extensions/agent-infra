@@ -1,6 +1,6 @@
 # 开放 Issue 状态跟进
 
-> 快照：2026-10-27 23:29 UTC；`origin/main` `63d0d6a01724ebbb2cf098b9960480a37bbb9b71`.
+> 快照：2026-10-27 23:32 UTC；`origin/main` `6c8f2a74aedd9bbf0474c6824833462fe8ec2a6a`.
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
 当前开放 Issue：**25**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
@@ -42,11 +42,11 @@
 | Platform/Web/Skill | [#400](https://github.com/AgoraIO-Extensions/agent-infra/issues/400) | design(web): restore agent-infra IA as the implementation and acceptance baseline | priority:P0 | enhancement, needs-triage, priority:P0, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Workflow/Observability | [#690](https://github.com/AgoraIO-Extensions/agent-infra/issues/690) | feat(workflow): add bounded AI coding coordination harness | priority:P2 | enhancement, priority:P2, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Workflow/Observability | [#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144) | wayfinder: 形成 Agent 平台 M1 启动与落地路线 | priority:P0 | wayfinder:map, wayfinder, priority:P0, agent:codex | 2026-10-27 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
-| Workflow/Observability | [#3593](https://github.com/AgoraIO-Extensions/agent-infra/issues/3593) | docs: sync tracker after latest merge | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 创建本次跟踪 PR，合并后回读快照与开放 Issue 集合 |
+| Workflow/Observability | [#3595](https://github.com/AgoraIO-Extensions/agent-infra/issues/3595) | docs: sync tracker after latest snapshot PR | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 创建本次跟踪 PR，合并后回读快照与开放 Issue 集合 |
 
 ## 开发 PR 回读
 
-状态截至 2026-10-27 23:29 UTC。OPEN 不等于合入，MERGED 不等于真实验收完成。
+状态截至 2026-10-27 23:32 UTC。OPEN 不等于合入，MERGED 不等于真实验收完成。
 
 | PR | 状态 | head SHA | 未完成验收 |
 | --- | --- | --- | --- |
