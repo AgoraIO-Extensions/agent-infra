@@ -109,6 +109,7 @@ postgres:
 ingress:
   enabled: true
   className: new-magic-nginx
+  host: ""
   tlsSecret: agent-infra-web-tls
 migrations:
   enabled: false
