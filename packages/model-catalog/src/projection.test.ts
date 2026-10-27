@@ -345,9 +345,22 @@ it("preserves a template-specific image repository in the trusted binding", () =
 		{ ...standardBinding, imageRepository: repository },
 	]);
 	expect(binding?.imageRepository).toBe(repository);
+	expect(
+		validateStandardTemplateModelBindingsV1([
+			{
+				...standardBinding,
+				imageRepository: "registry.example.test:5000/agent-runtime-claude",
+			},
+		])[0]?.imageRepository,
+	).toBe("registry.example.test:5000/agent-runtime-claude");
 	expect(() =>
 		validateStandardTemplateModelBindingsV1([
 			{ ...standardBinding, imageRepository: "https://registry.example.test" },
+		]),
+	).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+	expect(() =>
+		validateStandardTemplateModelBindingsV1([
+			{ ...standardBinding, imageRepository: "registry.example.test//runtime" },
 		]),
 	).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
 });

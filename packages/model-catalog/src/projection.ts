@@ -6,6 +6,7 @@ import {
 	type RuntimeModelProtocolV1,
 	RuntimeModelProtocolV1Schema,
 } from "@agent-infra/contracts/runtime";
+import { OciImageReferenceV1Schema } from "@agent-infra/contracts/workload";
 import type {
 	AgentConfigurationModelOptionV1,
 	AgentConfigurationRecord,
@@ -71,7 +72,9 @@ const templateBindingSchema = z
 		(binding) =>
 			binding.protocol === standardTemplateProtocol[binding.driver] &&
 			(binding.imageRepository === undefined ||
-				/^[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])?$/u.test(binding.imageRepository)),
+				OciImageReferenceV1Schema.safeParse(
+					`${binding.imageRepository}@${binding.imageDigest}`,
+				).success),
 	);
 
 const projectionContentSchema = z.strictObject({

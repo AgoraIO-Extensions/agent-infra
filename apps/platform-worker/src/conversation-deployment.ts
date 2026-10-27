@@ -712,9 +712,23 @@ function createSessionSandboxAllocationResolverV1(
 		resourceFence: number,
 		requireCurrentTemplateTrust = true,
 	): Promise<SessionSandboxAllocationV1> => {
-		const templateBinding = workload.templateModelBindings.find(
-			(candidate) => candidate.imageDigest === deployment.imageDigest,
-		);
+		const projectedTemplateId =
+			modelProjection &&
+			typeof modelProjection === "object" &&
+			"standardTemplateBinding" in modelProjection &&
+			modelProjection.standardTemplateBinding &&
+			typeof modelProjection.standardTemplateBinding === "object" &&
+			"templateId" in modelProjection.standardTemplateBinding &&
+			typeof modelProjection.standardTemplateBinding.templateId === "string"
+				? modelProjection.standardTemplateBinding.templateId
+				: undefined;
+		const templateBinding = projectedTemplateId
+			? workload.templateModelBindings.find(
+					(candidate) =>
+						candidate.templateId === projectedTemplateId &&
+						candidate.imageDigest === deployment.imageDigest,
+				)
+			: undefined;
 		const allocation: SessionSandboxAllocationV1 = {
 			...binding,
 			generation,
