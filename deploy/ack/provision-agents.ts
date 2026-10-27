@@ -2,28 +2,50 @@
 
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open, readFile } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
+import { pathToFileURL } from "node:url";
 
-const digest = (value) => createHash("sha256").update(value).digest("hex");
-const fail = (message) => {
+type Binding = { name: string; agentId: string; ready: boolean };
+type Hooks = {
+	onBinding?: (binding: Binding) => Promise<void>;
+	bindings?: Record<string, string>;
+	materials?: Record<string, { token: string; body: unknown }>;
+};
+
+const digest = (value: string) =>
+	createHash("sha256").update(value).digest("hex");
+const fail = (message: string): never => {
 	throw new Error(message);
 };
 
-async function readPrivateText(path, label, allowNewlines = false) {
+export async function readPrivateText(
+	path: string,
+	label: string,
+	allowNewlines = false,
+) {
 	if (!isAbsolute(path) || typeof constants.O_NOFOLLOW !== "number")
 		fail(`${label}_FILE_INVALID`);
-	const stat = await lstat(path).catch(() => undefined);
-	if (
-		!stat?.isFile() ||
-		(stat.mode & 0o077) !== 0 ||
-		(process.getuid?.() !== undefined && stat.uid !== process.getuid()) ||
-		stat.size > 8192
-	)
-		fail(`${label}_FILE_INVALID`);
-	const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+	const maximum = allowNewlines ? 1024 * 1024 : 8192;
+	const handle = await open(
+		path,
+		constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+	);
 	try {
-		const value = (await handle.readFile({ encoding: "utf8" })).trim();
+		const stat = await handle.stat();
+		if (
+			!stat.isFile() ||
+			(stat.mode & 0o077) !== 0 ||
+			stat.uid !== process.getuid?.() ||
+			stat.size > maximum
+		)
+			fail(`${label}_FILE_INVALID`);
+		const buffer = Buffer.alloc(maximum + 1);
+		const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+		if (bytesRead > maximum) fail(`${label}_FILE_INVALID`);
+		const value = new TextDecoder("utf-8", { fatal: true })
+			.decode(buffer.subarray(0, bytesRead))
+			.trim();
 		if (!value || (!allowNewlines && /[\r\n]/u.test(value)))
 			fail(`${label}_FILE_INVALID`);
 		return value;
@@ -32,10 +54,10 @@ async function readPrivateText(path, label, allowNewlines = false) {
 	}
 }
 
-function parseInput(value) {
+function parseInput(value: unknown) {
 	if (!value || typeof value !== "object" || Array.isArray(value))
 		fail("CONFIGURATION_INVALID");
-	const input = value;
+	const input = value as Record<string, any>;
 	if (input.schemaVersion !== 1 || typeof input.origin !== "string")
 		fail("CONFIGURATION_INVALID");
 	const origin = new URL(input.origin);
@@ -58,7 +80,7 @@ function parseInput(value) {
 	if (!Number.isInteger(waitSeconds) || waitSeconds < 0 || waitSeconds > 900)
 		fail("CONFIGURATION_INVALID");
 	const seen = new Set();
-	const requests = input.requests.map((request) => {
+	const requests = input.requests.map((request: Record<string, any>) => {
 		if (!request || typeof request !== "object" || Array.isArray(request))
 			fail("CONFIGURATION_INVALID");
 		const { name, bodyFile, credentialFile, idempotencyKey } = request;
@@ -80,7 +102,7 @@ function parseInput(value) {
 	return { origin: origin.origin, requests, waitSeconds };
 }
 
-async function readBody(path) {
+async function readBody(path: string) {
 	const raw = await readPrivateText(path, "BODY", true);
 	let value;
 	try {
@@ -93,9 +115,17 @@ async function readBody(path) {
 	return value;
 }
 
-async function waitForReady(origin, token, agentId, waitSeconds) {
+async function waitForReady(
+	origin: string,
+	token: string,
+	agentId: string,
+	waitSeconds: number,
+) {
 	const deadline = Date.now() + waitSeconds * 1000;
-	let last = { status: "unknown", serviceAvailability: null };
+	let last: { status: string; serviceAvailability: string | null } = {
+		status: "unknown",
+		serviceAvailability: null,
+	};
 	const statuses = new Set([
 		"creating",
 		"available",
@@ -118,13 +148,15 @@ async function waitForReady(origin, token, agentId, waitSeconds) {
 				redirect: "error",
 			},
 		);
-		let body = null;
+		let body: any = null;
 		try {
-			body = await response.json();
+			body = await response!.json();
 		} catch {
 			body = null;
 		}
 		if (response.status === 200 && body && typeof body === "object") {
+			if (body.schemaVersion !== 1 || body.agentId !== agentId)
+				fail("STATE_BINDING_INVALID");
 			last = {
 				status:
 					typeof body.status === "string" && statuses.has(body.status)
@@ -136,13 +168,10 @@ async function waitForReady(origin, token, agentId, waitSeconds) {
 						? body.serviceAvailability
 						: null,
 			};
-			if (
-				last.status === "available" &&
-				last.serviceAvailability === "ready"
-			)
-				return { pass: true, state: last };
+			if (last.status === "available" && last.serviceAvailability === "ready")
+				return { pass: true, state: last, timeout: false };
 			if (["creation_failed", "disabled"].includes(last.status))
-				return { pass: false, state: last };
+				return { pass: false, state: last, timeout: false };
 		}
 		if (Date.now() >= deadline)
 			return { pass: false, state: last, timeout: true };
@@ -150,45 +179,69 @@ async function waitForReady(origin, token, agentId, waitSeconds) {
 	}
 }
 
-export async function provisionAgents(input) {
+export async function provisionAgents(
+	input: unknown,
+	{ onBinding, bindings = {}, materials = {} }: Hooks = {},
+) {
 	const parsed = parseInput(input);
 	const results = [];
 	for (const request of parsed.requests) {
 		try {
-			const [token, body] = await Promise.all([
-				readPrivateText(request.credentialFile, "CREDENTIAL"),
-				readBody(request.bodyFile),
-			]);
-			const response = await fetch(`${parsed.origin}/api/v2/agents`, {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${token}`,
-					"Content-Type": "application/json",
-					"Idempotency-Key": request.idempotencyKey,
-				},
-				body: JSON.stringify(body),
-				signal: AbortSignal.timeout(30_000),
-				redirect: "error",
-			});
-			let responseBody = null;
+			const frozen = Object.hasOwn(materials, request.name)
+				? materials[request.name]
+				: undefined;
+			const [token, body] = frozen
+				? [frozen.token, frozen.body]
+				: await Promise.all([
+						readPrivateText(request.credentialFile, "CREDENTIAL"),
+						readBody(request.bodyFile),
+					]);
+			const existingId = Object.hasOwn(bindings, request.name)
+				? bindings[request.name]
+				: undefined;
+			const response = existingId
+				? null
+				: await fetch(`${parsed.origin}/api/v2/agents`, {
+						method: "POST",
+						headers: {
+							Authorization: `Bearer ${token}`,
+							"Content-Type": "application/json",
+							"Idempotency-Key": request.idempotencyKey,
+						},
+						body: JSON.stringify(body),
+						signal: AbortSignal.timeout(30_000),
+						redirect: "error",
+					});
+			let responseBody: any = null;
 			try {
-				responseBody = await response.json();
+				responseBody = existingId
+					? { schemaVersion: 1, agentId: existingId }
+					: await response!.json();
 			} catch {
 				responseBody = null;
 			}
 			const agentId =
-				responseBody && typeof responseBody.agentId === "string"
+				responseBody?.schemaVersion === 1 &&
+				typeof responseBody.agentId === "string" &&
+				responseBody.agentId.length > 0 &&
+				responseBody.agentId.length <= 256
 					? responseBody.agentId
 					: undefined;
 			const created =
-				(response.status === 201 || response.status === 200) &&
+				(existingId !== undefined ||
+					response?.status === 201 ||
+					response?.status === 200) &&
 				agentId !== undefined;
+			if (created)
+				await onBinding?.({ name: request.name, agentId, ready: false });
 			const readiness = created
 				? await waitForReady(parsed.origin, token, agentId, parsed.waitSeconds)
-				: { pass: false, state: undefined };
+				: { pass: false, state: undefined, timeout: false };
+			if (created && readiness.pass)
+				await onBinding?.({ name: request.name, agentId, ready: true });
 			results.push({
 				name: request.name,
-				status: response.status,
+				status: response?.status ?? 200,
 				pass: created && readiness.pass,
 				...(agentId === undefined ? {} : { agentHash: digest(agentId) }),
 				...(readiness.state === undefined ? {} : { state: readiness.state }),
@@ -201,7 +254,13 @@ export async function provisionAgents(input) {
 				pass: false,
 				error:
 					error instanceof Error &&
-					/^(CONFIGURATION|BODY|CREDENTIAL|REQUEST|FETCH)/u.test(error.message)
+					new Set([
+						"CONFIGURATION_INVALID",
+						"BODY_FILE_INVALID",
+						"BODY_JSON_INVALID",
+						"CREDENTIAL_FILE_INVALID",
+						"STATE_BINDING_INVALID",
+					]).has(error.message)
 						? error.message
 						: "REQUEST_FAILED",
 			});
@@ -216,7 +275,10 @@ export async function provisionAgents(input) {
 	};
 }
 
-if (process.argv[1] === new URL(import.meta.url).pathname) {
+if (
+	process.argv[1] &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
 	try {
 		const path = process.argv[2];
 		if (!path) fail("CONFIGURATION_REQUIRED");
@@ -226,7 +288,8 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
 		if (!result.pass) process.exitCode = 1;
 	} catch (error) {
 		process.stderr.write(
-			error instanceof Error && /^(CONFIGURATION|BODY|CREDENTIAL)/u.test(error.message)
+			error instanceof Error &&
+				/^(CONFIGURATION|BODY|CREDENTIAL)/u.test(error.message)
 				? `${error.message}\n`
 				: "ACK_AGENT_PROVISION_FAILED\n",
 		);

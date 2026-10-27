@@ -4,8 +4,7 @@
 API Agent 创建和入口检查，尚未证明从空环境自动恢复，不能作为清空环境的前提。
 相关真实验收保持在 #3072，脚本测试不完成该 Issue。
 
-实现尚缺：数据库角色和 Secret 初始化、四模板 readiness 刷新、创建后的 Agent ID 自动接入
-验收配置、同一会话多轮和恢复、自定义 ACP/多服务完整矩阵，以及目标绑定的 ECI 执行证据。
+实现尚缺：数据库角色和 Secret 初始化、四模板 readiness 刷新、同一会话多轮和恢复、自定义 ACP/多服务完整矩阵，以及目标绑定的 ECI 执行证据。
 所有 kubeconfig、Secret、Cookie、浏览器 state 和真实环境输入留在仓库外。
 
 入口脚本是 [`redeploy.sh`](./redeploy.sh)。它只接受 immutable image reference，渲染结果仍包含占位值时直接失败；每次运行把脱敏 receipt 写到外部 `ACK_EVIDENCE_DIR`，不会把会话正文或凭证写入仓库。
@@ -24,7 +23,8 @@ export ACK_IMAGE_MANIFEST=/private/ack/platform-images.json
 export ACK_RUNTIME_IMAGE_MANIFEST=/private/ack/runtime-host-manifest.json
 export ACK_PUBLIC_ORIGIN=https://ack.example.test
 export ACK_CA_CERT_FILE=/private/ack/ack-ca.pem
-export ACK_TEMPLATE_CONFIG_DIR=/private/ack/templates
+export ACK_AGENT_STATE_DIR=/private/ack/agent-state
+export ACK_BROWSER_BLUEPRINT_DIR=/private/ack/browser-blueprints
 export ACK_CUSTOM_AGENT_PROBE=platform-auth
 export ACK_CUSTOM_AGENT_CONFIGS=$'/private/ack/custom-a.json\n/private/ack/custom-b.json'
 export ACK_AGENT_REQUESTS_FILE=/private/ack/agent-requests.json
@@ -33,7 +33,22 @@ export ACK_EVIDENCE_DIR=/private/ack/evidence/$(date -u +%Y%m%dT%H%M%SZ)
 
 `ACK_VALUES_FILE` 从 [`values.ack.example.yaml`](./values.ack.example.yaml) 复制并替换所有镜像、Ingress、Corp ID 和 Secret **名称**。`ACK_IMAGE_MANIFEST` 和 `ACK_RUNTIME_IMAGE_MANIFEST` 必须是同一 `ACK_SOURCE_SHA` 生成的 `linux/amd64` Platform/Runtime manifest；脚本会将 digest 逐项与渲染后的 Helm image 和 Runtime 输入绑定。HTTPS 探针默认使用系统 CA；自签名 ACK 入口必须提供仓库外的 `ACK_CA_CERT_FILE`，脚本不会跳过证书验证。Secret 内容通过 E2E/private 配置在目标集群预先创建，不能写进 values 或 Git。已有数据库环境保持 `postgres.enabled=false`、`migrations.enabled=false`；全新环境必须先单独评审数据库和 migration，再开启这两个开关。
 
-`ACK_TEMPLATE_CONFIG_DIR` 必须包含 `codex.json`、`claude.json`、`opencode.json`、`pi.json` 四个文件。每个文件使用 [`conversation-browser.mjs`](../../tests/local-real-e2e/conversation-browser.mjs) 的真实配置，引用当前部署登录后生成的两个 `0600` Playwright state 文件，并填写该模板的实际 Agent ID。不要复用旧会话；每次 Platform/Worker 或 Runtime revision 变化后都创建新的对话。
+`ACK_AGENT_STATE_DIR` 必须是仓库外、当前用户拥有的既有 `0700` 目录。
+创建成功即以 `0600` 原子写入 `agent-bindings.json`；它是私有操作状态，
+包含原始 Agent ID，不是可分享证据。状态绑定目标 origin、源码 SHA 和创建请求哈希；
+任何变化都拒绝复用。再次运行会读回已有 Agent 的状态而不重复 POST 创建；
+未收到创建响应时只能用原 Idempotency-Key 重试，不生成新 key。
+
+`ACK_BROWSER_BLUEPRINT_DIR` 包含 `codex.json`、`claude.json`、`opencode.json`、
+`pi.json`，自定义 ACP 用 `custom-<request-name>.json`。
+内容沿用 [浏览器旅程配置](../../tests/local-real-e2e/README.md#对话真实浏览器验收)，
+`agentId` 可以省略；origin 必须与创建清单一致，两个主体的 storageState 必须各自是
+`0600` 私有文件。全部请求的输入先在本机检查，再开始创建。
+
+所有 Agent 就绪后，生成的配置写入私有状态目录下的 `browser/`，自动替换新 Agent ID，
+保留提示词、主体和 acceptance 要求。后续 `validate` 会从相同映射重新生成，
+并依次执行四模板和自定义 ACP 单轮旅程。原始 ID 不进入公开 provision receipt。
+旧 Agent 存在与否、当前授权和业务是否成功仍由真实 API 和浏览器检查确定。
 
 自定义 Agent 配置使用 [`custom-agent-web-probe.md`](../../tests/local-real-e2e/custom-agent-web-probe.md) 规定的私有 JSON。`platform-auth` 只适用于已经接入 Platform Auth 的 Agent；自有入口使用 `web`。每份配置必须声明当前来源 commit、不可变 Digest、configuration revision、期望内容 hash 和两个不同主体的私有授权文件。
 
@@ -57,11 +72,14 @@ export ACK_EVIDENCE_DIR=/private/ack/evidence/$(date -u +%Y%m%dT%H%M%SZ)
 }
 ```
 
-在已有环境中，以下命令执行当前支持的部署、可选创建和入口检查；结果不代表完整重建验收：
+在已有环境中，以下命令执行当前支持的部署、创建和入口检查；结果不代表完整重建验收：
 
 ```bash
 deploy/ack/redeploy.sh all
 ```
+
+`all` 在 Helm 写入前检查四个不同标准模板和至少两个自定义 Agent 的创建清单及蓝图，
+缺项则拒绝。此数量校验不代表模型或自定义业务验收。`provision` 可单独处理清单子集。
 
 脚本按以下顺序运行：
 
@@ -69,9 +87,9 @@ deploy/ack/redeploy.sh all
 2. 运行 ACK 访问、Secret、目录 source ConfigMap 和 Helm lint 预检。
 3. `helm upgrade --install --wait` 部署 Platform，并逐个等待 API、Web、Worker、Directory rollout。
 4. 保存预期源码 SHA、精确 release 的 Helm revision，以及 workload/Pod 的名称、UID、节点和镜像哈希。原始 env、annotation、事件消息和地址不进入 snapshot；读取失败退出非零。
-5. 若设置 `ACK_AGENT_REQUESTS_FILE`，按固定 Idempotency-Key 创建或重放 Agent，并保存状态/哈希化 Agent ID。
+5. 按固定 Idempotency-Key 创建尚未绑定的 Agent，已绑定项只读状态；私有目录保留 ID 映射，分享 receipt 仅保存状态/哈希。
 6. 检查公网 Web 为 `200`、匿名 `/api/v2/agents` 为 `401`。
-7. 依次运行四个单轮浏览器旅程；每个 receipt 必须有 `text.delta`、`execution.status=completed`、持久化刷新回读和跨主体拒绝证据。任一模板失败，整次检查失败。该 runner 明确设置 modelCallVerified=false，不能据此宣称真实模型或多轮通过。
+7. 从私有映射生成当前 Agent ID 的浏览器配置，依次运行四模板和自定义 ACP 的单轮旅程；每个 receipt 必须有 `text.delta`、`execution.status=completed`、持久化刷新回读和跨主体拒绝证据。任一模板失败，整次检查失败。该 runner 明确设置 modelCallVerified=false，不能据此宣称真实模型或多轮通过。
 8. 对每个自定义 Agent 运行选择的真实入口 probe；`pass` 不等同于生命周期或 Kubernetes 验收，脚本只检查声明 Digest 的哈希是否出现在 workload 回读中，尚不能证明该 workload 对应目标入口。
 
 若需要分步执行，使用 `plan`、`deploy`、`provision`、`validate`。
