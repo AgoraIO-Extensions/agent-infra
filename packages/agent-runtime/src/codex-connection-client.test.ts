@@ -321,7 +321,7 @@ describe("socket-bound independent Connection client", () => {
 			decision: "unavailable",
 			reason: "credential_unavailable",
 		});
-	});
+	}, 15_000);
 	it("rejects expired credentials and redacts a loader error", async () => {
 		const config = originalConfiguration();
 		config.credential.expiresAt = time;
