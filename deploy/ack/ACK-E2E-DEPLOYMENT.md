@@ -1,5 +1,8 @@
 # ACK 真实环境 E2E 部署记录（脱敏）
 
+这是早期部署记录，不代表当前集群状态；重建工具的已实现范围和缺口见
+[ACK 重部署工作流](./ACK-REDEPLOY-WORKFLOW.md)。
+
 本文件只保留 ACK 真实环境 E2E 的部署方式和验收结论。真实 LB IP、企微 Corp ID、镜像
 digest、Secret 名和集群细节属于部署机器状态，只允许出现在仓库外的 private env/values；
 仓库内 chart 和脚本使用占位符，`deploy.sh` 会拒绝未替换的占位值。不要把真实值补回本文件。
@@ -15,7 +18,7 @@ digest、Secret 名和集群细节属于部署机器状态，只允许出现在�
 
 ## 已部署组件
 
-Namespace 示例为 `agent-infra`。首次试部署使用受控 raw manifests，不是 Helm release；ACK 专用 Helm wrapper 见 [`deploy/ack/chart`](./chart)，它复用现有 E2E Secret、目录 source ConfigMap 和 GHCR immutable image，真实环境值只放在仓库外 private values。默认 `migrations.enabled=false`、`postgres.enabled=false`，适合接管已初始化的 ACK 数据库；全新集群可显式开启 PostgreSQL 和 migrations。当前线上资源仍由 raw manifests 管理，wrapper 已完成 `helm lint`、渲染校验和 ACK server dry-run。
+Namespace 示例为 `agent-infra`。首次试部署使用受控 raw manifests，不是 Helm release；ACK 专用 Helm wrapper 见 [`deploy/ack/chart`](./chart)，它复用现有 E2E Secret、目录 source ConfigMap 和 GHCR immutable image，真实环境值只放在仓库外 private values。默认 `migrations.enabled=false`、`postgres.enabled=false`，适合接管已初始化的 ACK 数据库；全新集群需先引导 PostgreSQL 和数据库账号，再运行 migrations；当前 migration pre-install hook 不能依赖同次 Helm 安装后才创建的数据库。当前线上资源仍由 raw manifests 管理，wrapper 已完成 `helm lint`、渲染校验和 ACK server dry-run。
 
 Chart 默认声明 `agent-infra-ack-quota` ResourceQuota：25 个 PVC、500Gi 请求存储、30 个 Pod 和 50 个 Service，覆盖保留的 Session Sandbox PVC。接管已有 namespace 前必须核对 quota 的 `hard/used`，不能用默认值覆盖其他租户的预算；Chart 不删除历史 PVC，回收由 Session Sandbox 生命周期负责。
 

@@ -8,6 +8,7 @@ umask 077
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 chart_dir=${ACK_CHART_DIR:-"$repo_root/deploy/ack/chart"}
 namespace=${ACK_NAMESPACE:-agent-infra}
+export ACK_NAMESPACE="$namespace"
 release=${ACK_RELEASE:-agent-infra-ack}
 values_file=${ACK_VALUES_FILE:-}
 timeout=${ACK_HELM_TIMEOUT:-15m}
@@ -23,7 +24,7 @@ die() {
 
 usage() {
 	cat <<'EOF'
-Usage: deploy/ack/redeploy.sh <plan|deploy|provision|validate|clean|destroy|all>
+Usage: deploy/ack/redeploy.sh <plan|bootstrap-plan|bootstrap-inputs|deploy|provision|validate|clean|destroy|all>
 
 Required for plan/deploy/validate:
   ACK_KUBECONFIG   private kubeconfig path
@@ -39,6 +40,7 @@ Optional validation inputs:
   ACK_CUSTOM_AGENT_PROBE   web (default) or platform-auth
   ACK_CA_CERT_FILE         private CA bundle for the public HTTPS origin
   ACK_EVIDENCE_DIR         external directory for redacted receipts
+  ACK_BOOTSTRAP_INPUTS_FILE private Secret/ConfigMap file-reference bundle
   ACK_AGENT_REQUESTS_FILE  private JSON list for API Agent creation/replay
   ACK_AGENT_STATE_DIR      external existing 0700 directory for private ID bindings
   ACK_BROWSER_BLUEPRINT_DIR private browser configs without a fixed Agent ID
@@ -104,8 +106,15 @@ prepare_evidence() {
 
 render_manifest() {
 	local output=$1
+	local kube_version
+	kube_version=$(kubectl --kubeconfig "$ACK_KUBECONFIG" version --request-timeout=10s -o json 2>/dev/null | node -e '
+let data="";process.stdin.on("data", chunk=>data+=chunk).on("end",()=>{
+ try {const version=JSON.parse(data).serverVersion.gitVersion;
+ if(!/^v[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.+-]*$/.test(version))process.exit(1);
+ process.stdout.write(version);}catch{process.exit(1)}
+});') || die "ACK_CLUSTER_VERSION_READ_FAILED"
 	helm template "$release" "$chart_dir" \
-		--namespace "$namespace" \
+		--namespace "$namespace" --kube-version "$kube_version" \
 		--values "$values_file" >"$output" 2>/dev/null || die "HELM_RENDER_FAILED"
 	for placeholder in \
 		"sha256:0000000000000000000000000000000000000000000000000000000000000000" \
@@ -123,6 +132,18 @@ snapshot() {
 	local prefix=${1:-snapshot}
 	export KUBECONFIG="$ACK_KUBECONFIG"
 	node "$repo_root/deploy/ack/redeploy-evidence.ts" snapshot "$namespace" "$release" "$source_sha" >"$evidence_dir/$prefix.json"
+}
+
+bootstrap_inputs() {
+	require_source_tuple
+	require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
+	prepare_evidence
+	rendered_manifest=$(mktemp)
+	trap 'unlink "$rendered_manifest"' EXIT
+	render_manifest "$rendered_manifest"
+	node "$repo_root/deploy/ack/bootstrap-inputs.ts" "$1" "$ACK_BOOTSTRAP_INPUTS_FILE" "$rendered_manifest" >"$evidence_dir/bootstrap-inputs.json"
+	unlink "$rendered_manifest"
+	trap - EXIT
 }
 
 plan() {
@@ -310,6 +331,8 @@ command=${1:-help}
 case "$command" in
 	help|-h|--help) usage ;;
 	plan) plan ;;
+	bootstrap-plan) bootstrap_inputs plan ;;
+	bootstrap-inputs) bootstrap_inputs apply ;;
 	deploy) deploy ;;
 	validate) validate ;;
 	clean) clean ;;

@@ -12,6 +12,8 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 	const help = execFileSync("bash", [script, "help"], { encoding: "utf8" });
 	for (const command of [
 		"plan",
+		"bootstrap-plan",
+		"bootstrap-inputs",
 		"deploy",
 		"provision",
 		"validate",
