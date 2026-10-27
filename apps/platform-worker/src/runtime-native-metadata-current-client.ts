@@ -4,12 +4,15 @@ import {
 	NativeMetadataCurrentRequestV1Schema,
 	type NativeMetadataCurrentResponseV1,
 	NativeMetadataCurrentResponseV1Schema,
+	RuntimeNativeMetadataProofMaximumLifetimeMsV1,
 } from "@agent-infra/contracts/runtime";
 
 const currentPath = "internal/platform/v1/native-metadata/current";
 const maximumRequestBytes = 64 * 1024;
 const maximumResponseBytes = 64 * 1024;
-const transportTimeoutMs = 10_000;
+// Current confirmation shares the original metadata request deadline.
+// A shorter default rejects a healthy chain before the request expires.
+const transportTimeoutMs = RuntimeNativeMetadataProofMaximumLifetimeMsV1;
 const maximumSourceRefLength = 256;
 
 function endpoint(baseUrl: string) {

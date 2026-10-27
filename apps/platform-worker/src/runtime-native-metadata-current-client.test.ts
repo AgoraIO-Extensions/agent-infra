@@ -104,6 +104,41 @@ describe("Platform API native metadata current client", () => {
 		expect(fetcher).not.toHaveBeenCalled();
 	});
 
+	it("allows confirmation beyond ten seconds within the original request deadline", async () => {
+		const startedAt = Date.now();
+		const liveRequest = {
+			...request,
+			readStartedAt: startedAt,
+			expiresAt: startedAt + 30_000,
+		};
+		const fetcher = vi.fn<typeof fetch>().mockImplementation(
+			async (_input, init) =>
+				new Promise<Response>((resolve, reject) => {
+					const abort = () => {
+						clearTimeout(timer);
+						reject(new Error("aborted"));
+					};
+					const timer = setTimeout(() => {
+						init?.signal?.removeEventListener("abort", abort);
+						resolve(
+							new Response(
+								JSON.stringify({ outcome: "allowed", request: liveRequest }),
+								{ status: 200, headers: { "content-type": "application/json" } },
+							),
+						);
+					}, 11_000);
+					init?.signal?.addEventListener("abort", abort, { once: true });
+					if (init?.signal?.aborted) abort();
+				}),
+		);
+		await expect(
+			client(fetcher).check({
+				request: liveRequest,
+				apiRequestSourceRef: "api-instance-current-client",
+			}),
+		).resolves.toEqual({ outcome: "allowed", request: liveRequest });
+	}, 15_000);
+
 	it("fails closed on timeout", async () => {
 		const fetcher = vi.fn<typeof fetch>().mockImplementation(
 			async (_input, init) =>
