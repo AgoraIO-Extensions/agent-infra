@@ -3,7 +3,7 @@
 > 快照：2026-10-27 02:17 UTC；`origin/main` `ad57fb1ca`。
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
-当前开放 Issue：**39**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
+当前开放 Issue：**40**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
 
 ## 分类计数
 
@@ -12,6 +12,7 @@
 | Runtime/Worker/Core | 14 |
 | Deploy/E2E/Channels | 14 |
 | Platform/Web/Skill | 7 |
+| Workflow/Observability | [#3538](https://github.com/AgoraIO-Extensions/agent-infra/issues/3538) | docs: sync tracker count after latest closure | priority:P2 | priority:P2, agent:codex | 2026-10-27 | tracker refresh PR |
 | Workflow/Observability | 5 |
 
 ## 明细
