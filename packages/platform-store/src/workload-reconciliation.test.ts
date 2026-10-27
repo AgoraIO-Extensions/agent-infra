@@ -114,6 +114,72 @@ beforeEach(async () => {
 	await sql`insert into platform.outbox_items(id, scope_type, scope_id, operation, payload, trace_id, request_id) values ('task-a', 'agent', 'agent-a', 'agent.workload.reconcile.v1', ${sql.json({ schemaVersion: 1, agentId: "agent-a", revision: 1, workloadRevision: 1, fence: 1, desiredState: "running" })}, 'trace-a', 'request-a')`;
 });
 
+it("completes an application submission before workload reconciliation", async () => {
+	await sql`insert into platform.outbox_items(id, scope_type, scope_id, operation, payload, trace_id, request_id, available_at, created_at, updated_at)
+		values ('application-a', 'agent', 'agent-a', 'agent.application.submitted.v1', ${sql.json(
+			{
+				schemaVersion: 1,
+				applicationId: "application-a",
+				agentId: "agent-a",
+				configurationRevision: 1,
+			},
+		)}, 'application-trace', 'application-request', now() - interval '1 second', now() - interval '1 second', now() - interval '1 second')`;
+	const step = vi.fn();
+	expect(await first.runNext("worker-application", step)).toBe("advanced");
+	expect(step).not.toHaveBeenCalled();
+	const rows =
+		await sql`select id, status, operation from platform.outbox_items order by id`;
+	expect(rows).toEqual([
+		{
+			id: "application-a",
+			status: "succeeded",
+			operation: "agent.application.submitted.v1",
+		},
+		{
+			id: "task-a",
+			status: "pending",
+			operation: "agent.workload.reconcile.v1",
+		},
+	]);
+	const [event] =
+		await sql`select event_type, payload from platform.persisted_events where event_id like 'outbox:application-a:%'`;
+	expect(event).toMatchObject({
+		event_type: "outbox.succeeded",
+		payload: {
+			operation: "agent.application.submitted.v1",
+			agentId: "agent-a",
+			applicationId: "application-a",
+		},
+	});
+});
+
+it("fails closed for an application submission with a mismatched identity", async () => {
+	await sql`insert into platform.outbox_items(id, scope_type, scope_id, operation, payload, trace_id, request_id, available_at, created_at, updated_at)
+		values ('application-invalid', 'agent', 'agent-a', 'agent.application.submitted.v1', ${sql.json(
+			{
+				schemaVersion: 1,
+				applicationId: "other-application",
+				agentId: "agent-a",
+				configurationRevision: 1,
+			},
+		)}, 'application-trace', 'application-request', now() - interval '1 second', now() - interval '1 second', now() - interval '1 second')`;
+	const step = vi.fn();
+	expect(await first.runNext("worker-application", step)).toBe("advanced");
+	expect(step).not.toHaveBeenCalled();
+	const [row] =
+		await sql`select status from platform.outbox_items where id = 'application-invalid'`;
+	expect(row?.status).toBe("failed");
+	const [event] =
+		await sql`select event_type, payload from platform.persisted_events where event_id like 'outbox:application-invalid:%'`;
+	expect(event).toMatchObject({
+		event_type: "outbox.failed",
+		payload: {
+			errorCode: "INVALID_APPLICATION_SUBMISSION_PAYLOAD",
+			applicationId: "application-a",
+		},
+	});
+});
+
 async function rejectRegistryAdmission(request: {
 	readonly requestId: string;
 	readonly traceId: string;
