@@ -3,7 +3,7 @@
 > 快照：2026-10-27 06:00 UTC；`origin/main` `de18fba6d`。
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
-当前开放 Issue：**33**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
+当前开放 Issue：**32**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
 
 ## 分类计数
 
@@ -12,7 +12,7 @@
 | Runtime/Worker/Core | 10 |
 | Deploy/E2E/Channels | 12 |
 | Platform/Web/Skill | 6 |
-| Workflow/Observability | 5 |
+| Workflow/Observability | 4 |
 
 ## 明细
 
@@ -46,7 +46,6 @@
 | Platform/Web/Skill | [#485](https://github.com/AgoraIO-Extensions/agent-infra/issues/485) | feat(platform): deliver authorized evaluation and quality analysis | priority:P2 | needs-triage, priority:P2, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Platform/Web/Skill | [#481](https://github.com/AgoraIO-Extensions/agent-infra/issues/481) | feat(platform): deliver user and application Agent management API | priority:P0 | needs-triage, priority:P0, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Platform/Web/Skill | [#400](https://github.com/AgoraIO-Extensions/agent-infra/issues/400) | design(web): restore agent-infra IA as the implementation and acceptance baseline | priority:P0 | enhancement, needs-triage, priority:P0, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
-| Workflow/Observability | [#3547](https://github.com/AgoraIO-Extensions/agent-infra/issues/3547) | docs: refresh open Issue tracker after development closures | priority:P2 | agent:codex, priority:P2 | 2026-10-27 | 本票用于跟踪当前开放清单与开发关闭后的快照同步 |
 | Workflow/Observability | [#3371](https://github.com/AgoraIO-Extensions/agent-infra/issues/3371) | 体验与时效性：Web 与企微在真实负载下近乎不可用（整体方案） | priority:P0 | needs-triage, priority:P0, agent:kiro | 2026-10-26 | 逐项核对开发子项及父票自身缺口 |
 | Workflow/Observability | [#3301](https://github.com/AgoraIO-Extensions/agent-infra/issues/3301) | perf(workload): separate apply and readiness retry budgets | priority:P1 | bug, ready-for-human, priority:P1, agent:codex | 2026-10-26 | 仍缺镜像/PVC 等待与 signed readiness 的实际预算分离 |
 | Workflow/Observability | [#690](https://github.com/AgoraIO-Extensions/agent-infra/issues/690) | feat(workflow): add bounded AI coding coordination harness | priority:P2 | enhancement, priority:P2, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
