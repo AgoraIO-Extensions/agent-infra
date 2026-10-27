@@ -159,6 +159,12 @@ const scanner = {
 		scannedFileCount: selected.fileCount,
 		scannedBytes: selected.totalBytes,
 		verdict: "clean" as const,
+		admissionDecision: "pending_review" as const,
+		admissionEvidence: {
+			coverage: "complete" as const,
+			findings: [],
+			dynamicProbe: { required: false, completed: true, violations: [] },
+		},
 	}),
 };
 const supply = (
