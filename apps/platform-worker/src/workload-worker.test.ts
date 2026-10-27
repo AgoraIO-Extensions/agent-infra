@@ -25,10 +25,13 @@ vi.mock("@agent-infra/platform-store", () => ({
 	},
 }));
 
+import { createWorkloadRuntimeV1 } from "./workload-runtime.js";
 import {
 	createPlatformWorkloadWorkerV1,
 	startPlatformWorkloadWorkerFromDeploymentV1,
 } from "./workload-worker.js";
+
+vi.mock("./workload-runtime.js", { spy: true });
 
 function fixture() {
 	return {
@@ -63,6 +66,49 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("Workload Worker lifecycle", () => {
+	it.each(["none", "callback", "logger"])(
+		"forwards diagnostics independently of %s failure",
+		async (failure) => {
+			const diagnostic = {
+				schemaVersion: 1 as const,
+				agentId: "agent-a",
+				workloadRevision: 1,
+				stage: "workload_not_ready" as const,
+				workloads: [],
+				services: [],
+			};
+			const onHealthDiagnostic = vi.fn(() => {
+				if (failure === "callback") throw new Error("private callback failure");
+			});
+			const log = vi.fn(() => {
+				if (failure === "logger") throw new Error("private logger failure");
+			});
+			const worker = createPlatformWorkloadWorkerV1({
+				...fixture(),
+				onHealthDiagnostic,
+				log,
+			});
+			try {
+				const runtimeOptions = vi
+					.mocked(createWorkloadRuntimeV1)
+					.mock.calls.at(-1)?.[0];
+				expect(() =>
+					runtimeOptions?.onHealthDiagnostic?.(diagnostic),
+				).not.toThrow();
+				expect(onHealthDiagnostic).toHaveBeenCalledExactlyOnceWith(diagnostic);
+				expect(log).toHaveBeenCalledExactlyOnceWith(
+					JSON.stringify({
+						service: "platform-worker",
+						code: "WORKLOAD_MULTI_SERVICE_HEALTH_DIAGNOSTIC",
+						...diagnostic,
+					}),
+				);
+				await expect(worker.tick()).resolves.toBe("idle");
+			} finally {
+				await worker.stop();
+			}
+		},
+	);
 	it("continues file cleanup when successive workload reconciliation attempts fail", async () => {
 		store.runNext.mockRejectedValue(new Error("workload unavailable"));
 		const worker = createPlatformWorkloadWorkerV1({

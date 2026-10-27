@@ -7,6 +7,7 @@ import {
 } from "@agent-infra/platform-core";
 import { openPostgresWorkloadReconciliationStoreV1 } from "@agent-infra/platform-store";
 import { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";
+import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import {
 	createWorkloadRuntimeV1,
 	type WorkloadRuntimeOptionsV1,
@@ -89,6 +90,24 @@ export function createPlatformWorkloadWorkerV1(
 	const runtime = createWorkloadRuntimeV1({
 		...options,
 		workerId,
+		onHealthDiagnostic(diagnostic: MultiServiceHealthDiagnosticV1) {
+			try {
+				options.onHealthDiagnostic?.(diagnostic);
+			} catch {
+				// Caller diagnostics are observational and never alter reconciliation.
+			}
+			try {
+				logSafely(
+					JSON.stringify({
+						service: "platform-worker",
+						code: "WORKLOAD_MULTI_SERVICE_HEALTH_DIAGNOSTIC",
+						...diagnostic,
+					}),
+				);
+			} catch {
+				// Diagnostics never alter reconciliation.
+			}
+		},
 		onProbeFailure(failure) {
 			options.onProbeFailure?.(failure);
 			logSafely(

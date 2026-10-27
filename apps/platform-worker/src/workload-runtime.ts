@@ -58,6 +58,7 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
 import { createWorkloadInteractionOriginV1 } from "./kubernetes-runtime-policy.js";
+import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import {
 	createMultiServiceRuntimeOperations,
 	isMultiService,
@@ -104,6 +105,10 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly fetch?: typeof fetch;
 	/** Deployment-owned Session binding for the current Browser Sandbox. */
 	readonly browserBinding?: WorkloadBrowserBindingResolverV1;
+	/** Bounded multi-service health facts; recording is observational only. */
+	readonly onHealthDiagnostic?: (
+		diagnostic: MultiServiceHealthDiagnosticV1,
+	) => void;
 	readonly probeRuntime: (input: {
 		readonly agentId: string;
 		readonly workloadRevision: number;
@@ -533,6 +538,7 @@ export function createWorkloadRuntimeV1(
 	const multiService = createMultiServiceRuntimeOperations({
 		client: options.client,
 		policy: options.policy,
+		onHealthDiagnostic: options.onHealthDiagnostic,
 	});
 	const fetcher = options.fetch ?? globalThis.fetch;
 	const observedCapabilities = new WeakMap<
@@ -629,6 +635,7 @@ export function createWorkloadRuntimeV1(
 				purpose === "cleanup" || connectionConsumerControl,
 			client: options.client,
 			policy: options.policy,
+			onHealthDiagnostic: options.onHealthDiagnostic,
 			modelProjection,
 			standardTemplateBinding,
 			async probe({ desired, serviceOrigin, podUid }) {
