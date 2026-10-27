@@ -1,7 +1,7 @@
 # Issue 工作指导
 
 > 适用范围：`AgoraIO-Extensions/agent-infra` 当前开放 Issue。本文把实时清单转成可执行的分派规则；具体产品结论仍以 PRD、工程 Spec、HLD 和 Issue 正文为准。
-> 最近快照：2026-10-27；开放 Issue 50 个；主干 `0015b97c5`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
+> 最近快照：2026-10-27；开放 Issue 50 个；主干 `5e6a73f07`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
 
 ## 四类工作边界
 
