@@ -5,6 +5,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
+import {
+	assertArchitectureManifestDigest,
+	selectArchitectureManifestDigest,
+} from "../deploy/release/image-publication.mjs";
+
 const root = resolve(import.meta.dirname, "..");
 const sha = "1".repeat(40);
 const prefix = "registry.example/agent-infra";
@@ -15,6 +20,52 @@ const names = [
 	"agent-runtime-pi",
 	"custom-agent-base",
 ];
+
+const publication = {
+	indexDigest: `sha256:${"f".repeat(64)}`,
+	platformDigests: {
+		"linux/amd64": `sha256:${"a".repeat(64)}`,
+		"linux/arm64": `sha256:${"b".repeat(64)}`,
+	},
+};
+
+test("publication metadata selects architecture manifests and rejects the index digest", () => {
+	assert.equal(
+		selectArchitectureManifestDigest(publication, "linux/amd64"),
+		publication.platformDigests["linux/amd64"],
+	);
+	assert.equal(
+		assertArchitectureManifestDigest(
+			publication,
+			"linux/arm64",
+			publication.platformDigests["linux/arm64"],
+		),
+		publication.platformDigests["linux/arm64"],
+	);
+	assert.throws(
+		() =>
+			assertArchitectureManifestDigest(
+				publication,
+				"linux/amd64",
+				publication.indexDigest,
+			),
+		/architecture manifest digest/,
+	);
+	assert.throws(
+		() =>
+			selectArchitectureManifestDigest(
+				{
+					...publication,
+					platformDigests: {
+						...publication.platformDigests,
+						"linux/amd64": publication.indexDigest,
+					},
+				},
+				"linux/amd64",
+			),
+		/architecture manifest digest/,
+	);
+});
 
 test("index publication uses same-source architecture Digests and fails closed on missing or mixed receipts", async () => {
 	const temp = await mkdtemp(join(tmpdir(), "agent-infra-indexes-"));
