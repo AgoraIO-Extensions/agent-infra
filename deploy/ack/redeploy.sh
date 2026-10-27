@@ -69,6 +69,9 @@ require_source_tuple() {
 	local actual
 	actual=$(git -C "$repo_root" rev-parse HEAD)
 	[[ "$actual" == "$source_sha" ]] || die "worktree HEAD $actual does not match ACK_SOURCE_SHA $source_sha"
+	local worktree_status
+	worktree_status=$(git -C "$repo_root" status --porcelain --untracked-files=all) || die "cannot verify worktree cleanliness"
+	[[ -z "$worktree_status" ]] || die "source checkout must be clean; commit or remove local changes before redeploying"
 	if ! node - "$image_manifest" "$source_sha" <<'NODE'
 const fs = require("node:fs");
 const [file, source] = process.argv.slice(2);

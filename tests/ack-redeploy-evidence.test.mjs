@@ -243,5 +243,11 @@ test("plan does not report success on cluster failure or retain raw rendered val
 	assert.notEqual(result.status, 0);
 	assert(!result.stdout.includes("plan passed"));
 	assert(!result.stderr.includes("private-canary"));
-	assert(!(await readdir(evidence)).includes("rendered.yaml"));
+	let entries = [];
+	try {
+		entries = await readdir(evidence);
+	} catch (error) {
+		assert.equal(error.code, "ENOENT");
+	}
+	assert(!entries.includes("rendered.yaml"));
 });
