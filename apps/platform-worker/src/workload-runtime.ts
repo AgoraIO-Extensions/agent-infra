@@ -650,7 +650,7 @@ export function createWorkloadRuntimeV1(
 			modelProjection,
 			standardTemplateBinding,
 			async probe({ desired, serviceOrigin, podUid }) {
-				const probeStartedAt = performance.now();
+				let probeStartedAt = performance.now();
 				const observed = (
 					stage: WorkloadProbeObservationV1["stage"],
 					outcome: WorkloadProbeObservationV1["outcome"],
@@ -727,6 +727,7 @@ export function createWorkloadRuntimeV1(
 					return true;
 				}
 				observed("health", "passed");
+				probeStartedAt = performance.now();
 				// 同一 Pod 在有效期内已通过签名 readiness：只保留上面的 /healthz。
 				if (podUid && readiness?.reuse?.(podUid)) {
 					observed("readiness", "reused");

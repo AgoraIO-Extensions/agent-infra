@@ -4918,6 +4918,38 @@ describe("observeForDrain (#1889)", () => {
 		}
 	});
 
+	it("measures readiness separately from health duration", async () => {
+		const observations: Array<{ stage: string; durationMs: number }> = [];
+		const { state, monitor, drain, health, probeRuntime } = await ready({
+			onProbe: (event) => observations.push(event),
+		});
+		let now = 0;
+		const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+		health.mockImplementation(async () => {
+			now += 40;
+			return new Response("ok");
+		});
+		probeRuntime.mockImplementation(async () => {
+			now += 7;
+			return { core: "passed", capabilities: {} };
+		});
+		observations.length = 0;
+		try {
+			await expect(monitor.observe(state)).resolves.toBe("healthy");
+			await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+			expect(
+				observations.map(({ stage, durationMs }) => ({ stage, durationMs })),
+			).toEqual([
+				{ stage: "health", durationMs: 40 },
+				{ stage: "readiness", durationMs: 7 },
+				{ stage: "health", durationMs: 40 },
+				{ stage: "readiness", durationMs: 0 },
+			]);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
 	it("runs the full readiness without a passed record", async () => {
 		const { state, drain, probeRuntime } = await ready();
 		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
