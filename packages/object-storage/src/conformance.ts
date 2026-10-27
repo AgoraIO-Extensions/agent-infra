@@ -41,6 +41,20 @@ export async function objectStorageConformanceV1(storage: ObjectStorageDataV1) {
 	expect(
 		Buffer.from(await new Response(await storage.download(read)).arrayBuffer()),
 	).toEqual(bytes);
+	for (const expectedMetadata of [
+		{ sizeBytes: bytes.length + 1, mediaType: "text/plain" },
+		{ sizeBytes: bytes.length, mediaType: "application/json" },
+	])
+		await expect(
+			storage.download({ ...read, expectedMetadata }),
+		).rejects.toMatchObject({ code: "missing" });
+	const verified = await storage.download({
+		...read,
+		expectedMetadata: { sizeBytes: bytes.length, mediaType: "text/plain" },
+	});
+	expect(Buffer.from(await new Response(verified).arrayBuffer())).toEqual(
+		bytes,
+	);
 	await expect(
 		storage.download({ ...read, etag: '"wrong-etag"' }),
 	).rejects.toMatchObject({ code: "missing" });

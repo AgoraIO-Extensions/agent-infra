@@ -751,12 +751,13 @@ export const skillMaterialization = {
   runtimeUid: 65534,
   store: {
     resolveSyncBindings: async () => [],
+    readPublication: async () => null,
     recordAppliedReceipt: async (receipt) => receipt,
   },
   agentVersion: "agent-version-1",
   actor: { actorId: "deployment-actor", organizationIds: [], isAdministrator: false },
-  resolvePackageObject: async () => undefined,
-  verifyAdmission: async () => {},
+  resolveAdmissionPolicy: async () => { throw new Error("no package"); },
+  sourceVerifier: { verify: async () => { throw new Error("no package"); } },
 };
 `,
 	);

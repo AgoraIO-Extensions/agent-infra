@@ -305,3 +305,25 @@ export const workloadInput = {
 其 Kubernetes 与 Runtime HTTP 是受控对端；不代表真实模型、身份服务、Connection 或 Web
 首通。签名 readiness 对真实 RuntimeHost 的独立验证位于 `workload-deployment.test.ts`。
 整体汇合仍遵循 [ADR 0015](../../docs/adr/0015-m1-shared-contract-assembly-convergence.md)。
+
+## Skill 原发布证据消费者
+
+可选 `skillMaterialization` 装配使用 `PostgresSkillHubAgentBindingAdmissionV1` 的
+`resolveSyncBindings`、`readPublication`、`recordAppliedReceipt`，并提供以下部署事实：
+
+- `storage`：固定版本的 ObjectStorage Adapter，支持 `download.expectedMetadata` 校验实际长度与媒体类型。
+- `resolveAdmissionPolicy()`：每次读取当前 `policyRevision`、`trustRevision`、扫描器/规则集、
+  `maximumReceiptAgeMs`、`keyId`、`keyState`、Ed25519 `publicKey`（公开 `KeyObject`）和
+  `allowInternalWithoutApproval`；撤销或无法读取必须拒绝，不返回缓存的允许结果。
+- `sourceVerifier`：按当前 Provider/平台项目来源与审批复核原 source proof，外部来源仍须独立验证
+  发布者与源签名；无审批引用只允许部署明确批准的内部来源。
+- 既有 `assemblyRoot`、分离的 `runtimeUid`、固定 `agentVersion` 与服务端 `actor`。
+
+生产工厂不再接受任意 `resolvePackageObject`/`verifyAdmission` 回调代替完整消费者；旧配置缺少
+上述输入时保持 materialization unavailable。消费者只读取同一已提交的 publication operation 和
+七阶段固定对象，并复核实际 ZIP、canonical manifest/证据、Ed25519 签名、扫描覆盖与当前期限。
+每次物化、CURRENT 选择前及 Applied 回执前重查同一 binding、安装、grant 和配置事实；不重签、
+不延长旧扫描、不写入新的发布状态。Worker 只持验证公钥，不持 Supplier 签名私钥。
+
+物理 PVC 交付与 Runtime 实际加载仍沿各自装配验证；本消费者的通过只证明原包当前仍获准，
+不能单独证明字节已到 Runtime。
