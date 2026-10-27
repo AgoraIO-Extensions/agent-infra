@@ -199,10 +199,16 @@ function shellQuote(value: string) {
 
 type LoopbackResponseMode =
 	| "active"
+	| "failure"
 	| "tool"
 	| "custom-tool"
 	| "code-mode"
 	| "text";
+
+type NativeProviderTraceEntry = Readonly<{
+	phase: "request" | "response-close";
+	requestOrdinal: number;
+}>;
 
 async function loopbackResponsesProvider(
 	root: string,
@@ -210,6 +216,7 @@ async function loopbackResponsesProvider(
 ) {
 	let requested = false;
 	let requestCount = 0;
+	const trace: NativeProviderTraceEntry[] = [];
 	const responses = new Set<ServerResponse>();
 	const server = createServer((request, response) => {
 		if (
@@ -218,7 +225,15 @@ async function loopbackResponsesProvider(
 		) {
 			requested = true;
 			requestCount++;
+			const requestOrdinal = requestCount;
+			trace.push({ phase: "request", requestOrdinal });
 			request.resume();
+			if (responseMode === "failure") {
+				response.writeHead(502, { "content-type": "application/json" });
+				response.end('{"error":"synthetic upstream failure"}');
+				trace.push({ phase: "response-close", requestOrdinal });
+				return;
+			}
 			response.writeHead(200, {
 				"cache-control": "no-cache",
 				"content-type": "text/event-stream",
@@ -286,7 +301,10 @@ async function loopbackResponsesProvider(
 				response.end();
 			}
 			responses.add(response);
-			response.once("close", () => responses.delete(response));
+			response.once("close", () => {
+				responses.delete(response);
+				trace.push({ phase: "response-close", requestOrdinal });
+			});
 			return;
 		}
 		response.statusCode = 404;
@@ -341,7 +359,11 @@ async function loopbackResponsesProvider(
 	);
 	await chmod(join(bin, "codex"), 0o700);
 	vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH ?? ""}`);
-	return { wasRequested: () => requested, requestCount: () => requestCount };
+	return {
+		wasRequested: () => requested,
+		requestCount: () => requestCount,
+		trace: () => [...trace],
+	};
 }
 
 function ownedNativeProcesses() {
@@ -497,6 +519,51 @@ async function mapping(path: string) {
 	if (!nativeSessionRef || !session)
 		throw new Error("Expected one native session mapping");
 	return { nativeSessionRef, ...session };
+}
+
+async function recoveryEvidence(path: string, executionId: string) {
+	const state = JSON.parse(await readFile(path, "utf8")) as {
+		sessions: Record<
+			string,
+			{
+				executions?: Record<string, { status?: string; nativeTurnId?: string }>;
+				journals?: Record<
+					string,
+					{
+						events?: {
+							type?: string;
+							payload?: { phase?: string; failureCode?: string };
+						}[];
+						nativeCompletionStatus?: string;
+					}
+				>;
+			}
+		>;
+	};
+	for (const session of Object.values(state.sessions)) {
+		const execution = session.executions?.[executionId];
+		if (!execution) continue;
+		const journal = execution.nativeTurnId
+			? session.journals?.[execution.nativeTurnId]
+			: undefined;
+		const operationEvents = (journal?.events ?? []).filter(
+			(event) => event.type === "operation" && event.payload?.phase,
+		);
+		return {
+			executionStatus: execution.status,
+			operationPhases: operationEvents.map((event) => event.payload?.phase),
+			failureCodes: operationEvents
+				.map((event) => event.payload?.failureCode)
+				.filter((value): value is string => value !== undefined),
+			nativeCompletionStatus: journal?.nativeCompletionStatus,
+		};
+	}
+	return {
+		executionStatus: undefined,
+		operationPhases: [],
+		failureCodes: [],
+		nativeCompletionStatus: undefined,
+	};
 }
 
 type NativeHistory = { contents: string; size: number };
@@ -893,7 +960,7 @@ describe
 		it("reads an active Turn from paginated history larger than one Bridge frame", async () => {
 			const root = await directory();
 			const path = join(root, "driver.json");
-			await loopbackResponsesProvider(root, "active");
+			const provider = await loopbackResponsesProvider(root, "active");
 			const driver = await nativeDriver(path);
 			const syntheticHistoryInputs = Array.from(
 				{ length: 8 },
@@ -920,16 +987,20 @@ describe
 				threadId = mappedThreadId;
 				expect(session.threadId).toBe(mappedThreadId);
 				await waitForNativeHistorySeed(home, mappedThreadId, seed, index);
+				const beforeStop = await recoveryEvidence(path, command.executionId);
+				const stopResult = await driver.execute(
+					stop(command.executionId, command.turnId, accepted.nativeSessionRef),
+				);
+				const afterStop = await recoveryEvidence(path, command.executionId);
 				expect(
-					(
-						await driver.execute(
-							stop(
-								command.executionId,
-								command.turnId,
-								accepted.nativeSessionRef,
-							),
-						)
-					).result,
+					stopResult.result,
+					JSON.stringify({
+						seedOrdinal: index,
+						beforeStop,
+						afterStop,
+						providerRequestCount: provider.requestCount(),
+						providerTrace: provider.trace(),
+					}),
 				).toEqual({ outcome: "accepted", status: "cancelled" });
 			}
 			if (!nativeSessionRef || !threadId)
@@ -968,6 +1039,114 @@ describe
 			expect(
 				await driver.getStatus(active.nativeSessionRef, command.executionId),
 			).toBe("running");
+		}, 90_000);
+
+		it("records a pre-provider early stop before any model request", async () => {
+			const root = await directory();
+			const path = join(root, "driver.json");
+			const provider = await loopbackResponsesProvider(root, "active");
+			const driver = await nativeDriver(path);
+			const command = submit("synthetic-pre-provider-stop");
+			const accepted = await driver.execute(command);
+			const beforeStop = await recoveryEvidence(path, command.executionId);
+			expect(provider.requestCount()).toBe(0);
+			const stopResult = await driver.execute(
+				stop(command.executionId, command.turnId, accepted.nativeSessionRef),
+			);
+			const afterStop = await recoveryEvidence(path, command.executionId);
+			expect(
+				stopResult.result,
+				JSON.stringify({
+					scenario: "A-pre-provider",
+					beforeStop,
+					afterStop,
+					providerRequestCount: provider.requestCount(),
+					providerTrace: provider.trace(),
+				}),
+			).toEqual({ outcome: "accepted", status: "cancelled" });
+			expect(provider.requestCount()).toBe(0);
+		}, 90_000);
+
+		it("records a provider-active early stop without a second model request", async () => {
+			const root = await directory();
+			const path = join(root, "driver.json");
+			const provider = await loopbackResponsesProvider(root, "active");
+			const driver = await nativeDriver(path);
+			const command = submit("synthetic-provider-active-stop");
+			const accepted = await driver.execute(command);
+			await expect.poll(() => provider.wasRequested()).toBe(true);
+			const beforeStop = await recoveryEvidence(path, command.executionId);
+			const stopResult = await driver.execute(
+				stop(command.executionId, command.turnId, accepted.nativeSessionRef),
+			);
+			// Native cancellation may close the model stream before app-server publishes
+			// a terminal Turn. In that case `unknown` is the durable fail-closed fact;
+			// poll it instead of treating the first asynchronous read as completion.
+			await expect
+				.poll(
+					async () =>
+						(
+							await recoveryEvidence(path, command.executionId)
+						).operationPhases.at(-1),
+					{ timeout: 10_000 },
+				)
+				.toMatch(/^(failed|unknown)$/);
+			const afterStop = await recoveryEvidence(path, command.executionId);
+			expect(
+				stopResult.result,
+				JSON.stringify({
+					scenario: "B-provider-active",
+					beforeStop,
+					afterStop,
+					providerRequestCount: provider.requestCount(),
+					providerTrace: provider.trace(),
+				}),
+			).toEqual({ outcome: "accepted", status: "cancelled" });
+			expect(provider.requestCount()).toBe(1);
+			expect(afterStop.executionStatus).toBe("cancelled");
+			expect(["failed", "unknown"]).toContain(afterStop.operationPhases.at(-1));
+			expect(afterStop.operationPhases).toContain("intent");
+			expect(afterStop.operationPhases).toContain("started");
+			const terminalIndex = afterStop.operationPhases.findIndex((phase) =>
+				["failed", "unknown"].includes(phase ?? ""),
+			);
+			expect(terminalIndex).toBeGreaterThanOrEqual(0);
+			expect(afterStop.operationPhases.slice(terminalIndex + 1)).not.toContain(
+				"started",
+			);
+		}, 90_000);
+
+		it("preserves a pre-stop native failure instead of converting it to cancellation", async () => {
+			const root = await directory();
+			const path = join(root, "driver.json");
+			const provider = await loopbackResponsesProvider(root, "failure");
+			const driver = await nativeDriver(path);
+			const command = submit("synthetic-pre-stop-failure");
+			const accepted = await driver.execute(command);
+			await expect
+				.poll(
+					() =>
+						driver.getStatus(accepted.nativeSessionRef, command.executionId),
+					{ timeout: 60_000 },
+				)
+				.toBe("failed");
+			const beforeStop = await recoveryEvidence(path, command.executionId);
+			const stopResult = await driver.execute(
+				stop(command.executionId, command.turnId, accepted.nativeSessionRef),
+			);
+			const afterStop = await recoveryEvidence(path, command.executionId);
+			expect(
+				stopResult.result,
+				JSON.stringify({
+					scenario: "C-pre-stop-failure",
+					beforeStop,
+					afterStop,
+					providerRequestCount: provider.requestCount(),
+					providerTrace: provider.trace(),
+				}),
+			).toEqual({ outcome: "accepted", status: "failed" });
+			expect(afterStop.operationPhases).toContain("failed");
+			expect(afterStop.operationPhases).not.toContain("cancelled");
 		}, 90_000);
 
 		it.each(["close", "crash"])(

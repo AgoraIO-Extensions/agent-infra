@@ -26,6 +26,7 @@ import {
 	skillHubSkills,
 	skillHubVersions,
 } from "./schema-skill-hub.js";
+import { readSkillPackagePublicationV1 } from "./skill-package-publication-reader.js";
 
 export class SkillHubAgentBindingAdmissionErrorV1 extends Error {
 	readonly code = "unavailable" as const;
@@ -107,6 +108,17 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 		this.#client = postgres(options.databaseUrl, { max: 5 });
 		this.#database = drizzle(this.#client);
 		this.#resolveGrantBoundary = options.resolveGrantBoundary;
+	}
+
+	/** Full original publication facts for an already authorized immutable binding. */
+	async readPublication(input: {
+		readonly skillVersionId: string;
+		readonly packageObjectVersion: string;
+	}) {
+		return this.#database.transaction(
+			(transaction) => readSkillPackagePublicationV1(transaction, input),
+			{ isolationLevel: "repeatable read", accessMode: "read only" },
+		);
 	}
 
 	async close(): Promise<void> {

@@ -155,7 +155,10 @@ export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
 		if (
 			!value ||
 			value.metadata.version !== request.version ||
-			value.metadata.etag !== request.etag
+			value.metadata.etag !== request.etag ||
+			(request.expectedMetadata !== undefined &&
+				(value.metadata.sizeBytes !== request.expectedMetadata.sizeBytes ||
+					value.metadata.mediaType !== request.expectedMetadata.mediaType))
 		)
 			throw new ObjectStorageError("missing");
 		return new ReadableStream<Uint8Array>({
@@ -178,6 +181,7 @@ export {
 } from "./s3.js";
 export * from "./skill-package-admission.js";
 export { createClamAvSkillPackageScannerV1 } from "./skill-package-clamav.js";
+export * from "./skill-package-consumer.js";
 export { readAdmittedSkillPackageEntryV1 } from "./skill-package-content.js";
 export {
 	type SkillPackageMaterializationDetailsV1,
@@ -186,6 +190,14 @@ export {
 	SkillPackageMaterializerErrorV1,
 	SkillPackageMaterializerV1,
 } from "./skill-package-materializer.js";
+export {
+	createSkillSpectorAdapterV1,
+	decideSkillPackageAdmissionV1,
+	type SkillPackageAutomaticAdmissionDecisionV1,
+	type SkillPackageAutomaticAdmissionPolicyV1,
+	type SkillSpectorFindingV1,
+	type SkillSpectorScanReportV1,
+} from "./skill-package-skillspector.js";
 export {
 	type SkillPackageAdmissionPolicyV1,
 	type SkillPackageSupplierOptionsV1,
