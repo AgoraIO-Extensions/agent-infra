@@ -1,7 +1,7 @@
 # Issue 工作指导
 
 > 适用范围：`AgoraIO-Extensions/agent-infra` 当前开放 Issue。本文把实时清单转成可执行的分派规则；具体产品结论仍以 PRD、工程 Spec、HLD 和 Issue 正文为准。
-> 最近快照：2026-10-27；开放 Issue 47 个；主干 `56e6f7ab0`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
+> 最近快照：2026-10-27；开放 Issue 46 个；主干 `56e6f7ab0`。状态明细见 [issue-status-tracking.md](issue-status-tracking.md)。
 
 ## 四类工作边界
 
@@ -30,7 +30,7 @@
 | Runtime Pi session | 已关闭 #3342；PR #3504 | 等待开发合入，确认 durable terminal suffix 校验和 fail-closed 边界 | 不处理 AC/ACK/真实验收 |
 | Worker application outbox | 已关闭 #3382；PR #3503 | 等待开发合入，确认 outbox identity validation 和终态事件 | 不处理 AC/ACK/真实验收 |
 | Runtime idle CPU | 已关闭 #3303；PR #3502 | 等待开发合入，确认 probe 观测不影响调谐 | 不处理 AC/真实验收 |
-| Active development PRs | 已关闭 development Issues #3428/#3036/#3342/#3362；PR #3469、#3502、#3503、#3504、#3505、#3506 | 等待 Hosted checks 和开发合入；合入后保留 AC 待办 | 不处理真实验收 |
+| Active development PRs | 已关闭 development Issues #3428/#3036/#3342/#3362；PR #3337/#3469、#3502、#3503、#3504、#3505、#3506、#3507 | 等待 Hosted checks 和开发合入；合入后保留 AC 待办 | 不处理真实验收 |
 
 三条 lane 的子 agent 都必须先在最新 `origin/main` 上复读 Issue；若发现 AC、依赖或 owner 不满足实现门槛，返回带证据的只读 handoff，不创建伪 PR。
 

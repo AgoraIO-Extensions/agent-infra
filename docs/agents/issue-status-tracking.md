@@ -3,14 +3,14 @@
 > 快照时间：2026-10-27（UTC）；来源：GitHub `AgoraIO-Extensions/agent-infra` 开放 Issue 实时回读。
 > 基线：`origin/main` `56e6f7ab0`。本表是调度快照，Issue 正文、依赖、PR 和真实验收仍是权威来源。
 
-当前开放 Issue：**47**。状态标签不能替代 AC、native blocker、PRD/工程 Spec 或真实环境证据。
+当前开放 Issue：**46**。状态标签不能替代 AC、native blocker、PRD/工程 Spec 或真实环境证据。
 
 ## 分类计数
 
 | 类别 | 数量 |
 | --- | ---: |
 | Runtime/Worker/Core | 14 |
-| Deploy/E2E/Channels | 19 |
+| Deploy/E2E/Channels | 18 |
 | Platform/Web/Skill | 8 |
 | Workflow/Observability | 6 |
 
@@ -33,7 +33,6 @@
 | Runtime/Worker/Core | [#1578](https://github.com/AgoraIO-Extensions/agent-infra/issues/1578) | perf(worker): cut route verification cost on the Runtime submit path | priority:P1 | needs-triage, priority:P1, agent:kiro | kiro（来源标签） | 2026-10-26 | 先补齐 Problem/Scope/Validation/Blocked by，再分派 |
 | Runtime/Worker/Core | [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) | feat(runtime): deliver standard MCP Agent token client | priority:P0 | priority:P0, agent:codex | LichKing-2234 | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#3356](https://github.com/AgoraIO-Extensions/agent-infra/issues/3356) | fix(ack): refresh standard-template readiness from real ECI validation | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
-| Deploy/E2E/Channels | [#3337](https://github.com/AgoraIO-Extensions/agent-infra/issues/3337) | fix(deploy): ACK pre-render uses default Helm Kubernetes version | priority:P2 | priority:P2, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#3232](https://github.com/AgoraIO-Extensions/agent-infra/issues/3232) | feat(deploy): expose authenticated standard-template release app for ACK upgrades | priority:P1 | priority:P1, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#3230](https://github.com/AgoraIO-Extensions/agent-infra/issues/3230) | test(e2e): 固定环境 Web 与企微双向文件和图片验收（#3221） | priority:P1 | needs-triage, priority:P1, agent:kiro | kiro（来源标签） | 2026-10-26 | 先补齐 Problem/Scope/Validation/Blocked by，再分派 |
 | Deploy/E2E/Channels | [#3221](https://github.com/AgoraIO-Extensions/agent-infra/issues/3221) | feat(files): 企微与 Web 双向收发文件和图片（附件进入 Sandbox、显式结果文件、企微媒体） | priority:P1 | needs-triage, priority:P1, agent:kiro | kiro（来源标签） | 2026-10-26 | 先补齐 Problem/Scope/Validation/Blocked by，再分派 |
