@@ -24,7 +24,7 @@ die() {
 
 usage() {
 	cat <<'EOF'
-Usage: deploy/ack/redeploy.sh <plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|bootstrap-credential|deploy|provision|validate|clean|destroy|all>
+Usage: deploy/ack/redeploy.sh <plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|bootstrap-credential|cleanup-plan|deploy|provision|validate|clean|destroy|all>
 
 Required for plan/deploy/validate:
   ACK_KUBECONFIG   private kubeconfig path
@@ -43,6 +43,7 @@ Optional validation inputs:
   ACK_BOOTSTRAP_INPUTS_FILE private Secret/ConfigMap file-reference bundle
   ACK_AGENT_REQUESTS_FILE  private JSON list for API Agent creation/replay
   ACK_CREDENTIAL_BOOTSTRAP_FILE private browser storageState credential request
+  ACK_CLEANUP_PLAN_FILE    private cluster/namespace ownership input for cleanup-plan
   ACK_AGENT_STATE_DIR      external existing 0700 directory for private ID bindings
   ACK_BROWSER_BLUEPRINT_DIR private browser configs without a fixed Agent ID
 
@@ -166,6 +167,15 @@ bootstrap_credential() {
 		die "API credential bootstrap failed; inspect only the redacted receipt: $evidence_dir/api-credential.json"
 	fi
 	echo "ack-redeploy: API credential bootstrap passed; evidence=$evidence_dir"
+}
+
+cleanup_plan() {
+	require_file ACK_CLEANUP_PLAN_FILE "${ACK_CLEANUP_PLAN_FILE:-}"
+	prepare_evidence
+	if ! node "$repo_root/deploy/ack/cleanup-plan.ts" "$ACK_CLEANUP_PLAN_FILE" >"$evidence_dir/cleanup-plan.json"; then
+		die "cleanup plan failed closed; inspect only the bounded status code"
+	fi
+	echo "ack-redeploy: cleanup plan created; deletion remains disabled; evidence=$evidence_dir"
 }
 
 plan() {
@@ -358,6 +368,7 @@ case "$command" in
 	bootstrap-inputs) bootstrap_inputs apply ;;
 	bootstrap-database) bootstrap_database ;;
 	bootstrap-credential) bootstrap_credential ;;
+	cleanup-plan) cleanup_plan ;;
 	deploy) deploy ;;
 	validate) validate ;;
 	clean) clean ;;

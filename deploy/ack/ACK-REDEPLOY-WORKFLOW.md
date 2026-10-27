@@ -223,40 +223,25 @@ PVC、Pod ownership、镜像、账号 verifier/权限和数据库归属，再允
 这不是 ACK PostgreSQL 16 镜像、空环境或模型验收。真实 ACK 演练、fresh DB 后的登录/API
 凭证初始化和完整业务矩阵仍需完成，不能因数据库阶段通过而关闭 #3072。
 
-## 新环境的 API 凭证
-
-数据库和 Platform 就绪后，部署拥有者必须先用真实 LDAP/浏览器登录生成新的 Playwright
-storageState。工具不会接收 LDAP 密码，也不会模拟登录。私有请求文件可以这样写：
-
-```json
-{
-  "schemaVersion": 1,
-  "origin": "https://ack.example.test",
-  "storageStateFile": "/private/ack/login/owner-state.json",
-  "outputFile": "/private/ack/credentials/owner-create.token",
-  "scopes": ["agent:create", "agent:read", "agent:use", "agent:manage"],
-  "expiresAt": null,
-  "idempotencyKey": "fresh-install-owner-credential-v1"
-}
-```
-
-`bootstrap-credential` 会调用 `/api/v2/me/api-credentials`，把一次性返回的
-`papi_...` 材料原子写入 `outputFile`；receipt 只保存状态和哈希。相同 key 重放时服务器不
-再返回材料，只有已存在且权限正确的本地文件允许继续。该文件可作为 Agent 请求清单的
-`credentialFile`；它不会进入 values、Kubernetes Secret、日志或公开 evidence。
-
-```bash
-deploy/ack/redeploy.sh bootstrap-credential
-```
-
-这个阶段证明凭证签发，不证明 Agent、模型、Connection 或业务会话成功。
-
 ## 清理与恢复门禁
 
 `clean` 和 `destroy` 当前均拒绝执行。此前基于宽泛 label 删除资源的实现无法保证
 所有权和数据保留，且删除 namespace 不能证明集群级准入策略、云盘或外部存储已清理。
 后续清理必须绑定精确集群与 namespace UID、资源清单、备份恢复验证和用户清理指令，
 通过读回确认后才能启用。当前未做任何 ACK 清理。
+
+现在可以先生成只读清理计划：
+
+```bash
+deploy/ack/redeploy.sh cleanup-plan
+```
+
+`ACK_CLEANUP_PLAN_FILE` 只包含 namespace UID、cluster UID、installationId、release 和
+ownership 预期；输出 receipt 对资源名称、UID 和节点只保存哈希。计划会读取 namespace 内
+的 Deployment、StatefulSet、Pod、Job、Service、Secret、ConfigMap、PVC、Ingress、RBAC、
+NetworkPolicy、Quota，以及 Session ECI 的 cluster-scoped admission 对象。任何外来资源、
+UID 漂移或 ownership 缺失都会使 `deletionReady=false`。该命令不删除资源、不暂停业务、不
+备份数据库，也不表示可安全执行 destroy。
 
 ## 从 session 记录沉淀的成功与失败
 
