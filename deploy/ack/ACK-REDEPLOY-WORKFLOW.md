@@ -15,7 +15,9 @@ export ACK_KUBECONFIG=/private/ack/kubeconfig
 export ACK_VALUES_FILE=/private/ack/values.yaml
 export ACK_SOURCE_SHA=0123456789abcdef0123456789abcdef01234567
 export ACK_IMAGE_MANIFEST=/private/ack/platform-images.json
+export ACK_RUNTIME_IMAGE_MANIFEST=/private/ack/runtime-host-manifest.json
 export ACK_PUBLIC_ORIGIN=https://ack.example.test
+export ACK_CA_CERT_FILE=/private/ack/ack-ca.pem
 export ACK_TEMPLATE_CONFIG_DIR=/private/ack/templates
 export ACK_CUSTOM_AGENT_PROBE=platform-auth
 export ACK_CUSTOM_AGENT_CONFIGS=$'/private/ack/custom-a.json\n/private/ack/custom-b.json'
@@ -23,7 +25,7 @@ export ACK_AGENT_REQUESTS_FILE=/private/ack/agent-requests.json
 export ACK_EVIDENCE_DIR=/private/ack/evidence/$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
-`ACK_VALUES_FILE` 从 [`values.ack.example.yaml`](./values.ack.example.yaml) 复制并替换所有镜像、Ingress、Corp ID 和 Secret **名称**。`ACK_IMAGE_MANIFEST` 必须是同一 `ACK_SOURCE_SHA` 生成的 `linux/amd64` platform image manifest；脚本会检查 commit、架构和四个 Platform image digest。Secret 内容通过 E2E/private 配置在目标集群预先创建，不能写进 values 或 Git。已有数据库环境保持 `postgres.enabled=false`、`migrations.enabled=false`；全新环境必须先单独评审数据库和 migration，再开启这两个开关。
+`ACK_VALUES_FILE` 从 [`values.ack.example.yaml`](./values.ack.example.yaml) 复制并替换所有镜像、Ingress、Corp ID 和 Secret **名称**。`ACK_IMAGE_MANIFEST` 和 `ACK_RUNTIME_IMAGE_MANIFEST` 必须是同一 `ACK_SOURCE_SHA` 生成的 `linux/amd64` Platform/Runtime manifest；脚本会将 digest 逐项与渲染后的 Helm image 和 Runtime 输入绑定。HTTPS 探针默认使用系统 CA；自签名 ACK 入口必须提供仓库外的 `ACK_CA_CERT_FILE`，脚本不会跳过证书验证。Secret 内容通过 E2E/private 配置在目标集群预先创建，不能写进 values 或 Git。已有数据库环境保持 `postgres.enabled=false`、`migrations.enabled=false`；全新环境必须先单独评审数据库和 migration，再开启这两个开关。
 
 `ACK_TEMPLATE_CONFIG_DIR` 必须包含 `codex.json`、`claude.json`、`opencode.json`、`pi.json` 四个文件。每个文件使用 [`conversation-browser.mjs`](../../tests/local-real-e2e/conversation-browser.mjs) 的真实配置，引用当前部署登录后生成的两个 `0600` Playwright state 文件，并填写该模板的实际 Agent ID。不要复用旧会话；每次 Platform/Worker 或 Runtime revision 变化后都创建新的对话。
 

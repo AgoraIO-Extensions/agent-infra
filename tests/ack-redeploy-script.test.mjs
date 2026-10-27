@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -20,6 +20,15 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		"all",
 	])
 		if (!help.includes(command)) throw new Error(`missing command: ${command}`);
+	if (
+		!help.includes("ACK_RUNTIME_IMAGE_MANIFEST") ||
+		!help.includes("ACK_CA_CERT_FILE")
+	)
+		throw new Error("provenance and CA inputs are missing from help");
+	if ((await readFile(script, "utf8")).includes("--insecure"))
+		throw new Error(
+			"HTTPS validation must not disable certificate verification",
+		);
 });
 
 test("ACK destructive command fails closed without its explicit confirmation", () => {
