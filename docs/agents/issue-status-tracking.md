@@ -1,7 +1,7 @@
 # 开放 Issue 状态跟进
 
 > 快照时间：2026-10-27（UTC）；来源：GitHub `AgoraIO-Extensions/agent-infra` 开放 Issue 实时回读。
-> 基线：`origin/main` `5e6a73f07`。本表是调度快照，Issue 正文、依赖、PR 和真实验收仍是权威来源。
+> 基线：`origin/main` `56e6f7ab0`。本表是调度快照，Issue 正文、依赖、PR 和真实验收仍是权威来源。
 
 当前开放 Issue：**49**。状态标签不能替代 AC、native blocker、PRD/工程 Spec 或真实环境证据。
 
