@@ -3471,9 +3471,9 @@ body {
 	margin-bottom: 12px;
 }
 
-.page-eyebrow,
 .ia-workbench .page-heading .workbench-eyebrow,
-.ia-agent-directory .directory-eyebrow {
+.ia-agent-directory .directory-eyebrow,
+.page-eyebrow {
 	color: var(--accent-ink);
 	font: 11px / 1.4 var(--font-mono);
 	letter-spacing: 0.08em;
