@@ -4,7 +4,7 @@
 API Agent 创建和入口检查，尚未证明从空环境自动恢复，不能作为清空环境的前提。
 相关真实验收保持在 #3072，脚本测试不完成该 Issue。
 
-实现尚缺：数据库角色和 Secret 初始化、四模板 readiness 刷新、同一会话多轮和恢复、自定义 ACP/多服务完整矩阵，以及目标绑定的 ECI 执行证据。
+实现尚缺：数据库角色和 Secret 初始化、四模板 readiness 刷新、真实多轮与闲置恢复验收、自定义 ACP/多服务完整矩阵，以及目标绑定的 ECI 执行证据。
 所有 kubeconfig、Secret、Cookie、浏览器 state 和真实环境输入留在仓库外。
 
 入口脚本是 [`redeploy.sh`](./redeploy.sh)。它只接受 immutable image reference，渲染结果仍包含占位值时直接失败；每次运行把脱敏 receipt 写到外部 `ACK_EVIDENCE_DIR`，不会把会话正文或凭证写入仓库。
@@ -47,7 +47,7 @@ export ACK_EVIDENCE_DIR=/private/ack/evidence/$(date -u +%Y%m%dT%H%M%SZ)
 
 所有 Agent 就绪后，生成的配置写入私有状态目录下的 `browser/`，自动替换新 Agent ID，
 保留提示词、主体和 acceptance 要求。后续 `validate` 会从相同映射重新生成，
-并依次执行四模板和自定义 ACP 单轮旅程。原始 ID 不进入公开 provision receipt。
+并依次执行四模板和自定义 ACP 的同一会话多轮旅程。原始 ID 不进入公开 provision receipt。
 旧 Agent 存在与否、当前授权和业务是否成功仍由真实 API 和浏览器检查确定。
 
 自定义 Agent 配置使用 [`custom-agent-web-probe.md`](../../tests/local-real-e2e/custom-agent-web-probe.md) 规定的私有 JSON。`platform-auth` 只适用于已经接入 Platform Auth 的 Agent；自有入口使用 `web`。每份配置必须声明当前来源 commit、不可变 Digest、configuration revision、期望内容 hash 和两个不同主体的私有授权文件。
@@ -79,7 +79,8 @@ deploy/ack/redeploy.sh all
 ```
 
 `all` 在 Helm 写入前检查四个不同标准模板和至少两个自定义 Agent 的创建清单及蓝图，
-缺项则拒绝。此数量校验不代表模型或自定义业务验收。`provision` 可单独处理清单子集。
+缺项则拒绝。每份浏览器蓝图还须含至少两条 `followUpPrompts` 和覆盖全部轮次的
+`expectedReplies`，用于识别后续轮截断。此数量校验不代表模型或自定义业务验收。`provision` 可单独处理清单子集。
 
 脚本按以下顺序运行：
 
@@ -89,7 +90,7 @@ deploy/ack/redeploy.sh all
 4. 保存预期源码 SHA、精确 release 的 Helm revision，以及 workload/Pod 的名称、UID、节点和镜像哈希。原始 env、annotation、事件消息和地址不进入 snapshot；读取失败退出非零。
 5. 按固定 Idempotency-Key 创建尚未绑定的 Agent，已绑定项只读状态；私有目录保留 ID 映射，分享 receipt 仅保存状态/哈希。
 6. 检查公网 Web 为 `200`、匿名 `/api/v2/agents` 为 `401`。
-7. 从私有映射生成当前 Agent ID 的浏览器配置，依次运行四模板和自定义 ACP 的单轮旅程；每个 receipt 必须有 `text.delta`、`execution.status=completed`、持久化刷新回读和跨主体拒绝证据。任一模板失败，整次检查失败。该 runner 明确设置 modelCallVerified=false，不能据此宣称真实模型或多轮通过。
+7. 从私有映射生成当前 Agent ID 的浏览器配置，依次运行四模板和自定义 ACP 的至少三轮旅程；每个 receipt 必须有 `text.delta`、`execution.status=completed`、持久化刷新回读和跨主体拒绝证据。任一模板失败，整次检查失败。该 runner 明确设置 modelCallVerified=false，多轮检查通过仍不能据此宣称真实模型通过。
 8. 对每个自定义 Agent 运行选择的真实入口 probe；`pass` 不等同于生命周期或 Kubernetes 验收，脚本只检查声明 Digest 的哈希是否出现在 workload 回读中，尚不能证明该 workload 对应目标入口。
 
 若需要分步执行，使用 `plan`、`deploy`、`provision`、`validate`。
@@ -116,7 +117,7 @@ Platform Ready、单次回复与多轮通过分别记录。后续其他 session 
 
 - main 在发布期间多次前进，导致“最新镜像”与部署/运行时绑定混用。脚本要求 `ACK_SOURCE_SHA == HEAD`，并把每次镜像和 Helm 回读放入同一 receipt。
 - Pod Ready、healthz、受控回显和旧会话不能证明业务成功。脚本强制四个新浏览器旅程，要求真实 SSE、落库终态、刷新回读和第二主体拒绝。
-- Pi 曾出现首轮成功、下一轮只返回一个字符、再失败。当前 runner 只测试单轮，这个历史失败要求后续增加同一会话至少三轮验证，当前未覆盖。
+- Pi 曾出现首轮成功、下一轮只返回一个字符、再失败。当前入口要求同一会话至少三轮，各轮验证独立 Execution 与期望回复；受控 Chromium 已覆盖第二轮截断失败，真实 ACK 多轮结果仍待验证。
 - Codex 的 ECI/普通节点缺少可执行的 Landlock ABI，真实 `setpriv` 预检失败。脚本不会用 Pi 或受控 fixture 替代 Codex；当前规范另有 container-boundary 模式，按 [Runtime 预检](./RUNTIME-PREFLIGHT.md) 完成对应隔离和真实工具验收后才可使用；不能从历史 Landlock 失败推断当前方案必然失败。
 - 运行时绑定曾指向旧 Digest，旧 Sandbox 进入 `RUNTIME_CONFIGURATION_INVALID`。当前浏览器配置尚未绑定 image/revision；必须补齐这一验证才能排除旧 Sandbox。
 - malformed execution-capacity profile、重复 `templateModelBindings` 和配额耗尽曾阻断全局 workload reconciliation。部署前应从 Worker configuration 中删除坏 profile、确保每个标准模板只有一个当前绑定，并核对 `ResourceQuota hard/used`；现场排查应只读取配额数值与有界故障码；不要导出完整事件消息。

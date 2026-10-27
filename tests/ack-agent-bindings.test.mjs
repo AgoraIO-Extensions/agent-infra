@@ -58,6 +58,8 @@ async function fixture() {
 		origin,
 		agentId: "stale-id",
 		prompt: "controlled prompt",
+		followUpPrompts: ["second prompt", "third prompt"],
+		expectedReplies: ["reply one", "reply two", "reply three"],
 		owner: { userId: "owner", stateFile: owner },
 		other: { userId: "other", stateFile: other },
 	};
