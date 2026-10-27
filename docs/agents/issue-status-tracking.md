@@ -1,6 +1,6 @@
 # 开放 Issue 状态跟进
 
-> 快照：2026-10-27 13:35 UTC；`origin/main` `fb171b589`.
+> 快照：2026-10-27 13:44 UTC；`origin/main` `467fe161a`.
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
 当前开放 Issue：**26**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
@@ -12,7 +12,7 @@
 | Runtime/Worker/Core | 8 |
 | Deploy/E2E/Channels | 7 |
 | Platform/Web/Skill | 7 |
-| Workflow/Observability | 3 |
+| Workflow/Observability | 4 |
 
 ## 明细
 
@@ -45,7 +45,7 @@
 
 | Platform/Web/Skill | [#3552](https://github.com/AgoraIO-Extensions/agent-infra/issues/3552) | feat(skill): wire SkillSpector admission into publication supplier | priority:P1 | ready-for-agent, priority:P1, agent:codex | 2026-10-27 | 依赖 #2742 的生产项目快照发布；完成 admission-to-publication 接线后再收口 |
 
-| Workflow/Observability | [#3562](https://github.com/AgoraIO-Extensions/agent-infra/issues/3562) | docs: finalize tracker after development closures | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 本票用于当前清单收口 |
+| Workflow/Observability | [#3564](https://github.com/AgoraIO-Extensions/agent-infra/issues/3564) | docs: remove closed tracker issue after final merge | priority:P2 | priority:P2, agent:codex | 2026-10-27 | 本票用于当前清单收口 |
 
 ## 开发 PR 回读
 
