@@ -24,8 +24,6 @@ Chart 默认声明 `agent-infra-ack-quota` ResourceQuota：25 个 PVC、500Gi �
 
 可复用入口为 [`preflight.sh`](./preflight.sh)、[`deploy.sh`](./deploy.sh) 和面向清理后重部署的 [`redeploy.sh`](./redeploy.sh)，完整顺序见 [`ACK-REDEPLOY-WORKFLOW.md`](./ACK-REDEPLOY-WORKFLOW.md)。环境变量模板为 [`ack.env.example`](./ack.env.example)，值文件模板为 [`values.ack.example.yaml`](./values.ack.example.yaml)。`preflight.sh` 会检查 ACK 访问、Helm chart、所有 E2E Secret 和目录 source ConfigMap，不会打印 Secret 内容。
 
-`deploy.sh` 会先从 `ACK_KUBECONFIG` 读取目标集群的 `serverVersion`，严格解析为 `major.minor.patch` 后把同一版本传给离线 `helm template`；版本缺失或格式非法时会停止，不会伪造 Helm 能力版本或切换 kubeconfig context。
-
 | 组件 | 结果 | 说明 |
 | --- | --- | --- |
 | Web | `1/1 Running` | GHCR amd64 immutable image；公网 Ingress |
