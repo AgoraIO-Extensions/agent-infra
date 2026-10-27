@@ -1,3 +1,4 @@
+{{- if not .Values.bootstrap.databaseOnly }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -70,4 +71,6 @@ spec:
     - http:
         paths:
           - {path: /, pathType: Prefix, backend: {service: {name: agent-infra-web, port: {number: 8080}}}}
+{{- end }}
+
 {{- end }}

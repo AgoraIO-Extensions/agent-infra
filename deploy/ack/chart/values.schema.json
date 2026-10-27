@@ -41,7 +41,22 @@
         "hard": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string", "minLength": 1}}
       }
     },
-    "postgres": {"type": "object"},
+    "bootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["databaseOnly"],
+      "properties": {"databaseOnly": {"type": "boolean"}}
+    },
+    "postgres": {
+      "type": "object",
+      "properties": {
+        "adminUser": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,62}$"},
+        "initialDatabase": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,62}$"},
+        "adminSecret": {"type": "string"},
+        "initializationSecret": {"type": "string"},
+        "bootstrapInstallationId": {"type": "string", "pattern": "^([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})?$"}
+      }
+    },
     "ingress": {"type": "object"},
     "migrations": {"type": "object"}
   }

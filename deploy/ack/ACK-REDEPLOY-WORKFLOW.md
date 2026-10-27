@@ -4,7 +4,7 @@
 API Agent 创建和入口检查，尚未证明从空环境自动恢复，不能作为清空环境的前提。
 相关真实验收保持在 #3072，脚本测试不完成该 Issue。
 
-实现尚缺：数据库启动/角色初始化与完整空环境演练、四模板 readiness 刷新、真实多轮与闲置恢复验收、自定义 ACP/多服务完整矩阵，以及目标绑定的 ECI 执行证据。
+实现尚缺：完整空环境演练、四模板 readiness 刷新、真实多轮与闲置恢复验收、自定义 ACP/多服务完整矩阵，以及目标绑定的 ECI 执行证据。
 所有 kubeconfig、Secret、Cookie、浏览器 state 和真实环境输入留在仓库外。
 
 入口脚本是 [`redeploy.sh`](./redeploy.sh)。它只接受 immutable image reference，渲染结果仍包含占位值时直接失败；每次运行把脱敏 receipt 写到外部 `ACK_EVIDENCE_DIR`，不会把会话正文或凭证写入仓库。
@@ -102,7 +102,7 @@ deploy/ack/redeploy.sh all
 ## 私有依赖供应
 
 `bootstrap-plan` 和 `bootstrap-inputs` 分别预览和创建 namespace、Secret、ConfigMap，
-它们是空环境恢复的第一阶段，不启动数据库、不运行迁移，也不表示平台已部署。
+它们是空环境恢复的第一阶段；数据库启动使用后续 `bootstrap-database`，schema migrations 随正常 `deploy` 执行。
 `ACK_BOOTSTRAP_INPUTS_FILE` 指向仓库外的 `0600` JSON 文件，示意片段如下：
 
 ```json
@@ -147,11 +147,52 @@ deploy/ack/redeploy.sh bootstrap-inputs
 支持迁移前准备其他显式列出的运行时 Secret，但不会从 configuration 模块中执行代码
 或猜测缺失凭证。分享 receipt 只包含数量及集群/namespace 哈希，不包含文件内容、路径或名称。
 
-当前 `all` 尚未自动接入此阶段：Chart 的 migration 是 pre-install hook，而同一 Chart 的
-PostgreSQL 在 hook 之后才创建，目录数据库账号也尚未初始化。
-必须补齐“依赖 → 数据库可用 → 数据库角色 → schema migrations → Platform”的分阶段实现
-与真实验证，才能声称空环境可一键重建。已有环境的 `preflight.sh` 现在只读检查依赖，
-不会在连接失败时尝试创建 namespace。
+已有环境的 `preflight.sh` 只读检查依赖，不会在连接失败时创建 namespace。
+
+## 数据库与迁移顺序
+
+全新环境在 private values 中显式设置：
+
+```yaml
+postgres:
+  enabled: true
+  adminUser: bootstrap_admin
+  initialDatabase: postgres
+  adminSecret: database-administrator
+  initializationSecret: database-initialization
+  bootstrapInstallationId: 11111111-1111-1111-1111-111111111111
+migrations:
+  enabled: true
+```
+
+管理员 Secret 的 `password` 来自私有文件；它不能复用 Platform 的数据库账号。
+在私有供应清单设置 `initializeDatabase: true`，且 `installationId` 必须与 values 一致。
+工具从渲染后的 Platform、目录迁移和目录运行 Secret 引用读取三条 URL，要求三个不同账号、
+两个不同业务数据库及同一目标 PostgreSQL Service；目录迁移账号和目录运行账号连接同一
+目录数据库，管理员与三个账号各自独立。数据库密码要求 16–256 个可打印 ASCII 字符。
+
+工具自动生成 `initializationSecret`，无需在 objects 中手工供应 SQL。
+初始化 SQL 使用 [PostgreSQL SCRAM verifier 格式](https://www.postgresql.org/docs/16/catalog-pg-authid.html)，
+不含明文密码；SQL 与 verifier 仍属于私有材料，不能进入分享 receipt。
+SQL 只在空 PGDATA 首次启动时执行，创建受限业务账号和数据库，撤销公共数据库连接和建表
+权限。目录运行账号的具体表权限仍由现有目录 migration 授予。
+
+```bash
+deploy/ack/redeploy.sh bootstrap-inputs
+deploy/ack/redeploy.sh bootstrap-database
+deploy/ack/redeploy.sh deploy
+```
+
+配置了 `ACK_BOOTSTRAP_INPUTS_FILE` 的 `all` 会按上述顺序运行。
+数据库阶段使用同一个 Helm release 的 `bootstrap.databaseOnly=true`，此时只部署数据库
+及其配额，不运行 migration，也不启动 Platform。等待 TCP readiness 后，核对 namespace、
+PVC、Pod ownership、镜像、账号 verifier/权限和数据库归属，再允许正常 `deploy` 显式切回
+`databaseOnly=false`，执行迁移并启动平台。已有完整 Platform release 不会被降回数据库阶段；
+遇到外部 PVC、账号漂移或验证失败会停止，不覆盖或清空数据。
+
+本机隔离 PostgreSQL 17 已通过生成密码认证、跨数据库拒绝和运行账号权限负例；
+这不是 ACK PostgreSQL 16 镜像、空环境或模型验收。真实 ACK 演练、fresh DB 后的登录/API
+凭证初始化和完整业务矩阵仍需完成，不能因数据库阶段通过而关闭 #3072。
 
 ## 清理与恢复门禁
 

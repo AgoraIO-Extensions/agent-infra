@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import { posix } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseAllDocuments } from "yaml";
+import { initializationFromResources } from "./database-initialization.ts";
 import { privateBytes, privateJson } from "./private-input.ts";
 
 type Kind = "Secret" | "ConfigMap";
@@ -104,13 +105,14 @@ export function requiredInputs(rendered: string) {
 	return [...requirements.values()];
 }
 
-async function prepare(config: any, rendered: string) {
+export async function prepareBootstrapInputs(config: any, rendered: string) {
 	assert(
 		config &&
 			Object.keys(config).every((key) =>
 				[
 					"schemaVersion",
 					"installationId",
+					"initializeDatabase",
 					"clusterUid",
 					"namespace",
 					"objects",
@@ -200,6 +202,39 @@ async function prepare(config: any, rendered: string) {
 			data,
 		});
 	}
+	if (config.initializeDatabase !== undefined)
+		assert(typeof config.initializeDatabase === "boolean");
+	if (config.initializeDatabase) {
+		const documents = parseAllDocuments(rendered)
+			.map((doc) => {
+				assert.equal(doc.errors.length, 0);
+				return doc.toJSON();
+			})
+			.filter(Boolean);
+		const initialization = initializationFromResources(
+			documents,
+			objects,
+			config.namespace,
+			config.installationId,
+		);
+		assert(
+			namePattern.test(initialization.secretName) &&
+				!seen.has(`Secret/${initialization.secretName}`),
+		);
+		objects.push({
+			apiVersion: "v1",
+			kind: "Secret",
+			type: "Opaque",
+			metadata: {
+				name: initialization.secretName,
+				namespace: config.namespace,
+				labels: { [ownerLabel]: config.installationId },
+			},
+			data: {
+				"01-roles.sql": Buffer.from(initialization.sql).toString("base64"),
+			},
+		});
+	}
 	for (const required of requiredInputs(rendered)) {
 		const supplied = objects.find(
 			(object) =>
@@ -266,7 +301,7 @@ export async function bootstrapInputs(
 	apply = false,
 ) {
 	const input = config as ObjectRecord;
-	const objects = await prepare(input, rendered);
+	const objects = await prepareBootstrapInputs(input, rendered);
 	const read = (kind: string, name: string, namespace?: string) => {
 		const raw = kubectl([
 			...(namespace ? ["-n", namespace] : []),

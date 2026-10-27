@@ -24,7 +24,7 @@ die() {
 
 usage() {
 	cat <<'EOF'
-Usage: deploy/ack/redeploy.sh <plan|bootstrap-plan|bootstrap-inputs|deploy|provision|validate|clean|destroy|all>
+Usage: deploy/ack/redeploy.sh <plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|deploy|provision|validate|clean|destroy|all>
 
 Required for plan/deploy/validate:
   ACK_KUBECONFIG   private kubeconfig path
@@ -146,6 +146,18 @@ bootstrap_inputs() {
 	trap - EXIT
 }
 
+bootstrap_database() {
+	require_source_tuple
+	require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
+	prepare_evidence
+	rendered_manifest=$(mktemp)
+	trap 'unlink "$rendered_manifest"' EXIT
+	render_manifest "$rendered_manifest"
+	node "$repo_root/deploy/ack/bootstrap-database.ts" "${1:-apply}" "$ACK_BOOTSTRAP_INPUTS_FILE" "$rendered_manifest" "$chart_dir" "$values_file" >"$evidence_dir/bootstrap-database.json"
+	unlink "$rendered_manifest"
+	trap - EXIT
+}
+
 plan() {
 	require_source_tuple
 	prepare_evidence
@@ -173,6 +185,7 @@ deploy() {
 		--namespace "$namespace" \
 		--create-namespace \
 		--values "$values_file" \
+		--set bootstrap.databaseOnly=false \
 		--wait \
 		--timeout "$timeout"
 	kubectl -n "$namespace" rollout status deployment/agent-infra-api --timeout="$timeout"
@@ -333,6 +346,7 @@ case "$command" in
 	plan) plan ;;
 	bootstrap-plan) bootstrap_inputs plan ;;
 	bootstrap-inputs) bootstrap_inputs apply ;;
+	bootstrap-database) bootstrap_database ;;
 	deploy) deploy ;;
 	validate) validate ;;
 	clean) clean ;;
@@ -341,6 +355,11 @@ case "$command" in
 	all)
 		require_source_tuple
 		node "$repo_root/deploy/ack/agent-bindings.ts" check "${ACK_AGENT_REQUESTS_FILE:-}" "${ACK_AGENT_STATE_DIR:-}" "${ACK_BROWSER_BLUEPRINT_DIR:-}" "$source_sha" >/dev/null
+		if [[ -n "${ACK_BOOTSTRAP_INPUTS_FILE:-}" ]]; then
+			bootstrap_database check
+			bootstrap_inputs apply
+			bootstrap_database
+		fi
 		deploy
 		provision
 		validate

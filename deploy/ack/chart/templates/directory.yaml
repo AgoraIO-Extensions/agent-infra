@@ -1,3 +1,4 @@
+{{- if not .Values.bootstrap.databaseOnly }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -75,3 +76,5 @@ spec:
       volumes:
         - {name: source, configMap: {name: {{ .Values.directory.sourceConfigMap }}}}
         - {name: runtime, secret: {secretName: {{ .Values.secrets.directoryRuntime }}}}
+
+{{- end }}

@@ -14,6 +14,7 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		"plan",
 		"bootstrap-plan",
 		"bootstrap-inputs",
+		"bootstrap-database",
 		"deploy",
 		"provision",
 		"validate",
