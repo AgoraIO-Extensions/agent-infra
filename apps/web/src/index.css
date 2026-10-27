@@ -732,9 +732,6 @@ html {
 .audit-table small.audit-identifier {
 	font-family: var(--font-mono);
 }
-.audit-table small.audit-identifier [data-slot="identifier-text"] code {
-	font-size: inherit;
-}
 .audit-table [data-slot="table-head"]:last-child {
 	width: 120px;
 }
@@ -2499,6 +2496,10 @@ html {
 .assistant-markdown :is(.markdown-code, .markdown-table):focus-visible {
 	outline: 2px solid var(--ring);
 	outline-offset: 3px;
+}
+
+.audit-table small.audit-identifier [data-slot="identifier-text"] code {
+	font-size: inherit;
 }
 /* #3228：回答内 sandbox: 引用。图片与文件卡都限制在消息宽度内，桌面与移动端不横向溢出。 */
 .assistant-markdown .sandbox-image {
