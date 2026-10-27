@@ -4995,6 +4995,8 @@ describe("contract compatibility command", () => {
 		delete current.components.schemas.DeploymentTemplateProjectionV2.properties
 			.readiness;
 		for (const name of [
+			"AgentApplicationModelCandidatesRequestV2",
+			"AgentApplicationModelCandidatesResponseV2",
 			"AgentApplicationCreateRequestV2",
 			"AgentApplicationUpdateRequestV2",
 		])
@@ -5039,6 +5041,7 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/agents/{agentId}/detail" &&
 				path !== "/api/v2/admin/agents/{agentId}" &&
 				path !== "/api/v2/directory/search" &&
+				path !== "/api/v2/agent-applications/model-candidates" &&
 				path !== "/api/v2/agents/{agentId}/creation-failure" &&
 				path !== "/api/v2/skills/projects" &&
 				path !== "/api/v2/skills/projects/{projectId}" &&
@@ -5061,6 +5064,8 @@ describe("contract compatibility command", () => {
 				delete previous.paths[path];
 		}
 		for (const name of [
+			"AgentApplicationModelCandidatesRequestV2",
+			"AgentApplicationModelCandidatesResponseV2",
 			"AgentApplicationCreateRequestV2",
 			"AgentApplicationProjectionV2",
 			"AgentApplicationUpdateRequestV2",

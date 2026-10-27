@@ -320,6 +320,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/admin/deployment/file-limits",
 			"/api/v2/admin/users/{userId}/disable",
 			"/api/v2/agent-applications",
+			"/api/v2/agent-applications/model-candidates",
 			"/api/v2/agent-applications/{applicationId}",
 			"/api/v2/agent-applications/{applicationId}/withdraw",
 			"/api/v2/agents",
