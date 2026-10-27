@@ -6170,6 +6170,11 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 	);
 	if (
 		previous.openapi !== undefined &&
+		isApplicationModelCandidates3146OpenApiAddition(previous, current)
+	)
+		return [];
+	if (
+		previous.openapi !== undefined &&
 		(isBrowserHandoffEventV2Addition(previous, current) ||
 			isBrowserSideEffectEventV2Addition(previous, current))
 	)
