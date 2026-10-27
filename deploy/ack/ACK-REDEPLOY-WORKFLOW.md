@@ -111,6 +111,7 @@ deploy/ack/redeploy.sh all
   "installationId": "11111111-1111-1111-1111-111111111111",
   "clusterUid": "22222222-2222-2222-2222-222222222222",
   "namespace": "agent-infra",
+  "initializeDatabase": true,
   "objects": [
     {
       "kind": "Secret",
