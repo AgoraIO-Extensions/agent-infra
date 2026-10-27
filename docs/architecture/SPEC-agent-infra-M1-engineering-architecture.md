@@ -1471,7 +1471,7 @@ Skill Hub 是 Platform DB、版本化 S3 兼容对象存储、Platform API/Web�
 | 证据 | 受控内容与检查 |
 | --- | --- |
 | 来源证明 | `schemaVersion`、`provider`、`publisherId`、`sourceVersion`、`sourceDigest`、`approvalRef`、`trustRevision`；由受信 Provider Adapter/平台项目供应产生并复核，固定实际源版本和内容摘要。仅策略未要求审批的内部来源允许 `approvalRef: null`；外部来源必须有当前有效审批，PRIVATE 初始状态不能替代 |
-| 扫描回执 | `schemaVersion`、`scannerId`、`engineVersion`、`rulesetDigest`、`policyRevision`、`scannedAt`、`expiresAt`、`packageDigest`、`manifestDigest`、`scannedFileCount`、`scannedBytes`、`verdict`；实际扫描覆盖已校验的完整 payload，摘要及覆盖文件数/字节数均与实际 manifest 一致 |
+| 扫描回执 | `schemaVersion`、`scannerId`、`engineVersion`、`rulesetDigest`、`policyRevision`、`scannedAt`、`expiresAt`、`packageDigest`、`manifestDigest`、`scannedFileCount`、`scannedBytes`、`verdict`、`admissionDecision`；实际扫描覆盖已校验的完整 payload，摘要及覆盖文件数/字节数均与实际 manifest 一致；`admissionDecision` 只能由平台受控扫描器和当前 policy revision 派生，`auto_published`、`pending_review` 与拒绝分别按策略处理 |
 | 签名记录 | `schemaVersion`、`skillId`、`skillVersionId`、`ownerId`、`provider`、`version`、`packageObjectVersion`、`packageDigest`、`manifestDigest`、`sourceProofDigest`、`scanReceiptDigest`、`trustRevision`、`policyRevision`、`signingKeyId`；身份与版本事实由当前受权服务端原操作派生 |
 
 来源证明和扫描回执按上表字段顺序进行 canonical 编码并计算 SHA-256，不能签名任意字典。摘要均为小写 SHA-256 hex，版本/身份引用与政策修订为有界受控字段；时间使用 UTC ISO 8601。扫描有效期限由服务端策略限制，回读时再次核对当前期限、策略与来源审批，调用方不能延长期限。平台只接纳真实受信扫描器的 `clean` 结果；未知、感染、超限、不支持、依赖失败或无法确认完整扫描均拒绝。外部发布者/签名验证、内容校验和审批分别执行，平台签名不能补造缺失的外部证据。

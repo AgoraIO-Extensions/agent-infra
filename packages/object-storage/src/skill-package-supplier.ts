@@ -28,6 +28,7 @@ import {
 	verifyAdmissionSignatureV1,
 	verifySkillPackageScanReceiptV1,
 } from "./skill-package-admission.js";
+import { decideSkillPackageAdmissionV1 } from "./skill-package-review-policy.js";
 import type { ObjectStorageDataV1 } from "./types.js";
 
 const sha256 = (value: Uint8Array) =>
@@ -242,6 +243,35 @@ export class SkillPackageSupplierV1 {
 					receipt.rulesetDigest !== finalPolicy.rulesetDigest
 				)
 					fail();
+				const recommendation =
+					receipt.admissionDecision === "auto_published" ? "SAFE" : "CAUTION";
+				const decision = decideSkillPackageAdmissionV1({
+					policy: {
+						schemaVersion: 1,
+						policyRevision: finalPolicy.policyRevision,
+						autoPublishMaxSeverity: "LOW",
+						fatalRuleIds: [],
+						dynamicProbeCategories: [],
+					},
+					assessment: {
+						schemaVersion: 1,
+						scannerId: receipt.scannerId,
+						engineVersion: receipt.engineVersion,
+						rulesetDigest: receipt.rulesetDigest,
+						policyRevision: receipt.policyRevision,
+						packageDigest: receipt.packageDigest,
+						manifestDigest: receipt.manifestDigest,
+						scannedFileCount: receipt.scannedFileCount,
+						scannedBytes: receipt.scannedBytes,
+						scannedAt: receipt.scannedAt,
+						expiresAt: receipt.expiresAt,
+						coverageComplete: true,
+						recommendation,
+						scanMode: "static",
+						findings: [],
+					},
+				});
+				if (decision.decision !== receipt.admissionDecision) fail();
 			}
 		};
 		const guard = async () => {
