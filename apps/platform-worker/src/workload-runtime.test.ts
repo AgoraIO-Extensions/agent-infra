@@ -3119,8 +3119,9 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(f.state).toMatchObject({ phase: "ready" });
 	});
 	it("fails the creation with a health failure when a multi-service workload never becomes available", async () => {
+		const onHealthDiagnostic = vi.fn();
 		const f = fixture(
-			{},
+			{ onHealthDiagnostic },
 			{ configuration: multiServiceConfigurationFixture() },
 		);
 		for (let i = 0; i < 10 && f.state?.phase !== "observing"; i++)
@@ -3136,6 +3137,15 @@ describe("assembled Workload Runtime contracts", () => {
 		await f.tick(2);
 		expect(f.state).toMatchObject({ failureCode: "health_check_failed" });
 		expect(f.state?.phase).not.toBe("ready");
+		expect(onHealthDiagnostic).toHaveBeenCalledTimes(2);
+		expect(onHealthDiagnostic.mock.calls.at(-1)?.[0]).toMatchObject({
+			agentId: f.state?.agentId,
+			workloadRevision: f.state?.revision,
+			stage: "workload_not_ready",
+			workloads: expect.arrayContaining([
+				expect.objectContaining({ kind: "Deployment", availableReplicas: 0 }),
+			]),
+		});
 	});
 	it("closes a ready route when its health probe throws an unrecognised error", async () => {
 		const fetcher = vi.fn(async () => new Response("ok"));

@@ -425,6 +425,8 @@ interface ClaimedWorkloadTaskV1 {
 	readonly id: string;
 	readonly trace_id: string;
 	readonly request_id: string | null;
+	readonly operation: string;
+	readonly payload: Record<string, unknown>;
 	readonly delivery_fence: string;
 }
 
@@ -449,6 +451,20 @@ const workloadStepLockNamespace = "agent-infra:workload-reconciliation:";
 const workloadWriteBackLockTimeout = "5s";
 /** Bound how many in-flight Agents one poll skips before reporting idle. */
 const maximumBusyWorkloadSelections = 8;
+
+function applicationSubmissionPayloadMatches(
+	payload: Record<string, unknown>,
+	management: AgentManagementStateV1,
+	configurationRevision: number,
+): boolean {
+	return (
+		Object.keys(payload).length === 4 &&
+		payload.schemaVersion === 1 &&
+		payload.applicationId === management.applicationId &&
+		payload.agentId === management.agentId &&
+		payload.configurationRevision === configurationRevision
+	);
+}
 
 function transactionDatabase(sql: postgres.TransactionSql) {
 	const dialect = new PgDialect();
@@ -572,7 +588,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					or w.next_attempt_at <= clock_timestamp()
 					or exists (select 1 from platform.outbox_items o where o.scope_type = 'agent'
 						and o.scope_id = a.id
-						and o.operation in ('agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
+						and o.operation in ('agent.application.submitted.v1', 'agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
 						and ((o.status in ('pending', 'retry_scheduled') and o.available_at <= clock_timestamp())
 							or (o.status = 'processing' and o.lease_expires_at <= clock_timestamp())))
 				) order by
@@ -681,9 +697,9 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 				if (state.fence > management.fence) throw new Error();
 			}
 			const [candidate] = await sql<{ id: string; delivery_fence: string }[]>`
-				select id, delivery_fence::text from platform.outbox_items where scope_type = 'agent'
+				select id, operation, payload, delivery_fence::text from platform.outbox_items where scope_type = 'agent'
 				and scope_id = ${agent.id}
-				and operation in ('agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
+				and operation in ('agent.application.submitted.v1', 'agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
 				and ((status in ('pending', 'retry_scheduled') and available_at <= clock_timestamp())
 					or (status = 'processing' and lease_expires_at <= clock_timestamp()))
 				order by created_at, id limit 1 for update
@@ -703,7 +719,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					where id = ${candidate.id} and delivery_fence = ${candidate.delivery_fence}
 						and ((status in ('pending', 'retry_scheduled') and available_at <= decision_time.decision_at)
 							or (status = 'processing' and lease_expires_at <= decision_time.decision_at))
-					returning id, trace_id, request_id, delivery_fence::text
+					returning id, trace_id, request_id, operation, payload, delivery_fence::text
 				`;
 				if (!claimed) throw new Error();
 				task = claimed;
@@ -805,6 +821,45 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 		`;
 	}
 
+	async function finishApplicationSubmission(
+		workerId: string,
+		task: ClaimedWorkloadTaskV1,
+		agentId: string,
+		applicationId: string,
+		status: "succeeded" | "failed",
+		errorCode?: string,
+	) {
+		await client.begin(async (sql) => {
+			const [completed] = await sql<
+				{
+					id: string;
+					trace_id: string;
+					attempt_count: number;
+					delivery_fence: string;
+				}[]
+			>`
+				update platform.outbox_items
+				set status = ${status}, lease_owner = null, lease_expires_at = null,
+					updated_at = clock_timestamp()
+				where id = ${task.id} and status = 'processing'
+					and lease_owner = ${workerId} and delivery_fence = ${task.delivery_fence}
+				returning id, trace_id, attempt_count, delivery_fence::text
+			`;
+			if (!completed) throw new Error();
+			await sql`insert into platform.persisted_events (event_id, stream_id, sequence, stream_cursor, event_type, payload, trace_id)
+				values (${`outbox:${completed.id}:${completed.delivery_fence}`}, ${`outbox:${completed.id}`}, ${completed.delivery_fence}, ${completed.delivery_fence}, ${`outbox.${status}`}, ${sql.json(
+					{
+						operation: task.operation,
+						agentId,
+						applicationId,
+						attemptCount: completed.attempt_count,
+						deliveryFence: completed.delivery_fence,
+						...(errorCode ? { errorCode } : {}),
+					},
+				)}, ${completed.trace_id})`;
+		});
+	}
+
 	return {
 		async close() {
 			await Promise.all([client.end(), lockClient.end()]);
@@ -836,6 +891,23 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 				const bindings = prepared.bindings;
 				const requestId = task?.request_id ?? `workload-${agentId}`;
 				const traceId = task?.trace_id ?? requestId;
+				if (task?.operation === "agent.application.submitted.v1") {
+					const valid = applicationSubmissionPayloadMatches(
+						task.payload,
+						management,
+						configuration.revision,
+					);
+					await finishApplicationSubmission(
+						workerId,
+						task,
+						agentId,
+						management.applicationId,
+						valid ? "succeeded" : "failed",
+						valid ? undefined : "INVALID_APPLICATION_SUBMISSION_PAYLOAD",
+					);
+					pendingTask = undefined;
+					return "advanced" as const;
+				}
 				const input: WorkloadReconciliationInputV1 = {
 					management,
 					configuration,
