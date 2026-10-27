@@ -86,7 +86,8 @@ function samePiUserContent(left: PiUserContent, right: PiUserContent) {
 
 /** Return the durable suffix that was not observed during native streaming. */
 export function missingPiTextDelta(complete: string, streamed: string) {
-	if (!complete.startsWith(streamed)) return undefined;
+	if (!complete.startsWith(streamed))
+		throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 	return complete.slice(streamed.length);
 }
 

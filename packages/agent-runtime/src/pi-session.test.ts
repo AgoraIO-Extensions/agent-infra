@@ -31,7 +31,12 @@ it("does not load the Pi SDK when only importing the session adapter", async () 
 it("reconciles only a durable suffix after a reused session drops stream deltas", () => {
 	expect(missingPiTextDelta("PINE-64", "P")).toBe("INE-64");
 	expect(missingPiTextDelta("PINE-64", "PINE-64")).toBe("");
-	expect(missingPiTextDelta("PINE-64", "other")).toBeUndefined();
+	expect(() => missingPiTextDelta("PINE-64", "other")).toThrow(
+		"RUNTIME_ACCEPTANCE_UNKNOWN",
+	);
+	expect(() => missingPiTextDelta("PINE-64", "PNE-64")).toThrow(
+		"RUNTIME_ACCEPTANCE_UNKNOWN",
+	);
 });
 
 async function fixture() {
