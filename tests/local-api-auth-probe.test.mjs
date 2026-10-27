@@ -75,3 +75,31 @@ test("local API auth probe requires the configured token and rejects another", a
 		await rm(directory, { recursive: true, force: true });
 	}
 });
+
+test("local API auth probe waits through a transient refused port", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "agent-infra-auth-readiness-"));
+	const token = randomBytes(32).toString("base64url");
+	const tokenFile = join(directory, "proxy-token");
+	const server = createServer((request, response) => {
+		response.statusCode = request.headers["x-platform-proxy-token"] === token ? 405 : 400;
+		response.end();
+	});
+	let port;
+	try {
+		await writeFile(tokenFile, token, { mode: 0o600 });
+		await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const address = server.address();
+		assert.ok(address && typeof address !== "string");
+		port = address.port;
+		await new Promise((resolve) => server.close(resolve));
+
+		const resultPromise = runProbe(tokenFile, port);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
+		const result = await resultPromise;
+		assert.equal(result.code, 0, result.stderr);
+	} finally {
+		if (server.listening) await new Promise((resolve) => server.close(resolve));
+		await rm(directory, { recursive: true, force: true });
+	}
+});
