@@ -150,6 +150,8 @@ export function parseSkillHubRegistrationV1(
 			"manifestDigest",
 			"signatureDigest",
 		] as const;
+		// Legacy package operations created before automatic admission have no
+		// decision field; they remain manual-review records and cannot auto-publish.
 		const hasAdmissionDecision = Object.hasOwn(
 			(input as Record<string, unknown>) ?? {},
 			"admissionDecision",

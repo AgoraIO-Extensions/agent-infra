@@ -10,6 +10,10 @@ import {
 	type SkillPackageScannerV1,
 	type SkillPackageScanReceiptV1,
 } from "./skill-package-admission.js";
+import {
+	decideSkillPackageAdmissionV1,
+	type SkillPackageReviewPolicyV1,
+} from "./skill-package-review-policy.js";
 
 const execFile = promisify(callback);
 const fail = (code: "scan_unavailable" | "scan_rejected"): never => {
@@ -25,6 +29,7 @@ export function createSkillSpectorSkillPackageScannerV1(options: Readonly<{
 	policyRevision: string;
 	maximumReceiptAgeMs: number;
 	timeoutMs: number;
+	reviewPolicy: SkillPackageReviewPolicyV1;
 	stagingRoot?: string;
 }>) {
 	if (
@@ -33,6 +38,7 @@ export function createSkillSpectorSkillPackageScannerV1(options: Readonly<{
 		!options.engineVersion ||
 		!/^[a-f0-9]{64}$/.test(options.rulesetDigest) ||
 		!options.policyRevision ||
+		options.reviewPolicy.policyRevision !== options.policyRevision ||
 		!Number.isSafeInteger(options.maximumReceiptAgeMs) ||
 		options.maximumReceiptAgeMs < 1 ||
 		options.maximumReceiptAgeMs > 86_400_000 ||
@@ -108,17 +114,50 @@ export function createSkillSpectorSkillPackageScannerV1(options: Readonly<{
 				}
 				const assessment =
 					report && typeof report === "object"
-						? (report as { risk_assessment?: { recommendation?: unknown } })
-							.risk_assessment
+						? (report as {
+								risk_assessment?: { recommendation?: unknown };
+								metadata?: { llm_requested?: unknown };
+						  }).risk_assessment
 						: undefined;
 				const recommendation = assessment?.recommendation;
+				if (
+					recommendation !== "SAFE" &&
+					recommendation !== "CAUTION" &&
+					recommendation !== "DO_NOT_INSTALL"
+				)
+					fail("scan_unavailable");
+				const typedRecommendation = recommendation as
+					| "SAFE"
+					| "CAUTION"
+					| "DO_NOT_INSTALL";
+				const decision = decideSkillPackageAdmissionV1({
+					policy: options.reviewPolicy,
+					assessment: {
+						schemaVersion: 1,
+						scannerId: options.scannerId,
+						engineVersion: options.engineVersion,
+						rulesetDigest: options.rulesetDigest,
+						policyRevision: options.policyRevision,
+						packageDigest: input.packageDigest,
+						manifestDigest: input.manifestDigest,
+						scannedFileCount: prepared.fileCount,
+						scannedBytes: prepared.totalBytes,
+						scannedAt: new Date().toISOString(),
+						expiresAt: new Date(
+							Date.now() + options.maximumReceiptAgeMs,
+						).toISOString(),
+						coverageComplete: true,
+						recommendation: typedRecommendation,
+						scanMode: "static",
+						findings: [],
+					},
+				});
+				if (decision.decision === "rejected") fail("scan_rejected");
 				const admissionDecision: "auto_published" | "pending_review" =
-					(() => {
-						if (recommendation === "SAFE") return "auto_published";
-						if (recommendation === "CAUTION") return "pending_review";
-						if (recommendation === "DO_NOT_INSTALL") fail("scan_rejected");
-						return fail("scan_unavailable");
-					})();
+					decision.decision === "auto_published" ||
+					decision.decision === "pending_review"
+						? decision.decision
+						: fail("scan_rejected");
 				const scannedAt = new Date();
 				return Object.freeze({
 					schemaVersion: 1,
