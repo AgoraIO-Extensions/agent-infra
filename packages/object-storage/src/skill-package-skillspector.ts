@@ -13,6 +13,7 @@ import {
 import {
 	decideSkillPackageAdmissionV1,
 	type SkillPackageReviewPolicyV1,
+	type SkillPackageReviewSeverityV1,
 } from "./skill-package-review-policy.js";
 
 const execFile = promisify(callback);
@@ -163,7 +164,7 @@ export function createSkillSpectorSkillPackageScannerV1(options: Readonly<{
 					return [{
 						ruleId,
 						category,
-						severity,
+						severity: severity as SkillPackageReviewSeverityV1,
 						deterministic: value.deterministic !== false,
 					}];
 				});
