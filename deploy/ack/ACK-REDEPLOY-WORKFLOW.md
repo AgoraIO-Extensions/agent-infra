@@ -19,6 +19,7 @@ export ACK_PUBLIC_ORIGIN=https://ack.example.test
 export ACK_TEMPLATE_CONFIG_DIR=/private/ack/templates
 export ACK_CUSTOM_AGENT_PROBE=platform-auth
 export ACK_CUSTOM_AGENT_CONFIGS=$'/private/ack/custom-a.json\n/private/ack/custom-b.json'
+export ACK_AGENT_REQUESTS_FILE=/private/ack/agent-requests.json
 export ACK_EVIDENCE_DIR=/private/ack/evidence/$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
@@ -28,7 +29,27 @@ export ACK_EVIDENCE_DIR=/private/ack/evidence/$(date -u +%Y%m%dT%H%M%SZ)
 
 自定义 Agent 配置使用 [`custom-agent-web-probe.md`](../../tests/local-real-e2e/custom-agent-web-probe.md) 规定的私有 JSON。`platform-auth` 只适用于已经接入 Platform Auth 的 Agent；自有入口使用 `web`。每份配置必须声明当前来源 commit、不可变 Digest、configuration revision、期望内容 hash 和两个不同主体的私有授权文件。
 
-完成上述准备后，一条命令执行部署和真实验收：
+`ACK_AGENT_REQUESTS_FILE` 是仓库外的 API 创建/重放清单。每项引用一个 `0600` Bearer credential 文件、一个 `0600` JSON body 文件和固定 `Idempotency-Key`；credential 需要创建和读取 Agent 的权限。body 可以是标准模板或自定义 Agent 的 `POST /api/v2/agents` 请求。脚本只输出 HTTP 状态、状态枚举和 Agent ID 的 SHA-256，不输出 Token、Secret 或响应正文；创建后会轮询 `/state`，直到 `available/ready` 或明确失败/超时。API 创建不需要 Web 审批；需要审批的 Web application 流程仍应由真实管理员完成并回读。
+
+清单结构如下，具体 body 和 credential 仍放在仓库外：
+
+```json
+{
+  "schemaVersion": 1,
+  "origin": "https://ack.example.test",
+  "waitSeconds": 300,
+  "requests": [
+    {
+      "name": "custom-agent-a",
+      "bodyFile": "/private/ack/requests/custom-agent-a.json",
+      "credentialFile": "/private/ack/credentials/agent-api.token",
+      "idempotencyKey": "custom-agent-a-create-v1"
+    }
+  ]
+}
+```
+
+完成上述准备后，一条命令执行部署、Agent 创建/重放和真实验收：
 
 ```bash
 deploy/ack/redeploy.sh all
@@ -40,11 +61,12 @@ deploy/ack/redeploy.sh all
 2. 运行 ACK 访问、Secret、目录 source ConfigMap 和 Helm lint 预检。
 3. `helm upgrade --install --wait` 部署 Platform，并逐个等待 API、Web、Worker、Directory rollout。
 4. 保存源码 SHA、Helm history、Deployment image、Pod/Job/Service/Ingress/PVC、事件和 HTTP 状态码的脱敏回读。
-5. 检查公网 Web 为 `200`、匿名 `/api/v2/agents` 为 `401`。
-6. 依次运行四个真实浏览器旅程；每个 receipt 必须有 `text.delta`、`execution.status=completed`、持久化刷新回读和跨主体拒绝证据。任一模板失败，整次验收失败，失败 receipt 原样保留。
-7. 对每个自定义 Agent 运行选择的真实入口 probe；`pass` 不等同于生命周期或 Kubernetes 验收，脚本同时保存 Deployment/Pod 回读供人工核对。
+5. 若设置 `ACK_AGENT_REQUESTS_FILE`，按固定 Idempotency-Key 创建或重放 Agent，并保存状态/哈希化 Agent ID。
+6. 检查公网 Web 为 `200`、匿名 `/api/v2/agents` 为 `401`。
+7. 依次运行四个真实浏览器旅程；每个 receipt 必须有 `text.delta`、`execution.status=completed`、持久化刷新回读和跨主体拒绝证据。任一模板失败，整次验收失败，失败 receipt 原样保留。
+8. 对每个自定义 Agent 运行选择的真实入口 probe；`pass` 不等同于生命周期或 Kubernetes 验收，脚本同时保存 Deployment/Pod 回读供人工核对。
 
-若需要分步执行，使用 `plan`、`deploy`、`validate`。`plan` 只读集群并生成渲染结果；`clean` 卸载本次 Helm release 和 chart-owned workload，但保留 PVC、Secret、用户 Agent、历史和数据库；这适合重新部署而不丢业务数据。
+若需要分步执行，使用 `plan`、`deploy`、`provision`、`validate`。`plan` 只读集群并生成渲染结果；`clean` 卸载本次 Helm release 和 chart-owned workload，但保留 PVC、Secret、用户 Agent、历史和数据库；这适合重新部署而不丢业务数据。
 
 ## 清理 ACK 环境
 
