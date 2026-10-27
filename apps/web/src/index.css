@@ -3473,7 +3473,7 @@ body {
 
 .ia-workbench .page-heading .workbench-eyebrow,
 .ia-agent-directory .directory-eyebrow,
-.page-eyebrow {
+:where(.page-eyebrow) {
 	color: var(--accent-ink);
 	font: 11px / 1.4 var(--font-mono);
 	letter-spacing: 0.08em;
