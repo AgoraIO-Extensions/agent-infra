@@ -43,6 +43,31 @@ export interface StandardTemplateReleaseDeploymentBindingV1 {
 	readonly target: StandardTemplateReleaseTargetV1;
 	readonly operatorIds: readonly string[];
 }
+
+/** Publication metadata keeps the multi-architecture index separate from the runtime child. */
+export interface StandardTemplateImagePublicationV1 {
+	readonly indexDigest: string;
+	readonly platformDigests: Readonly<
+		Record<"linux/amd64" | "linux/arm64", string>
+	>;
+}
+
+function assertRuntimeImagePublication(
+	publication: StandardTemplateImagePublicationV1,
+	platform: "linux/amd64" | "linux/arm64",
+	digest: string,
+) {
+	if (!/^sha256:[a-f0-9]{64}$/.test(publication.indexDigest)) throw new Error();
+	const selected = publication.platformDigests[platform];
+	if (
+		!/^sha256:[a-f0-9]{64}$/.test(selected) ||
+		selected === publication.indexDigest ||
+		digest !== selected
+	)
+		throw new Error();
+	return true;
+}
+
 export interface ProductionSingleAgentTemplateReleaseInputV1
 	extends Omit<DeploymentAdmissionInputV1, "currentIdentity"> {
 	readonly databaseUrl: string;
@@ -50,6 +75,11 @@ export interface ProductionSingleAgentTemplateReleaseInputV1
 	readonly imageRepository: string;
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
 	readonly target: StandardTemplateReleaseTargetV1;
+	/** Optional verified publication receipt used to reject multi-architecture index bindings. */
+	readonly runtimeImagePublication?: {
+		readonly platform: "linux/amd64" | "linux/arm64";
+		readonly publication: StandardTemplateImagePublicationV1;
+	};
 	/** Current deployment-owned binding; reload on each admission so revocation is effective. */
 	readonly loadReleaseBinding: () => Promise<StandardTemplateReleaseDeploymentBindingV1>;
 	/** Optional additive V2 fan-out adapter. Each target is still applied through
@@ -186,6 +216,12 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 					template.templateId === target.templateId &&
 					template.imageDigest === target.targetImageDigest,
 			).length !== 1 ||
+			(input.runtimeImagePublication !== undefined &&
+				!assertRuntimeImagePublication(
+					input.runtimeImagePublication.publication,
+					input.runtimeImagePublication.platform,
+					target.targetImageDigest,
+				)) ||
 			(input.templateUpgrade !== undefined &&
 				(!/^[A-Za-z0-9._~-]{1,128}$/.test(input.templateUpgrade.releaseId) ||
 					!input.templateUpgrade.templateId ||

@@ -16,9 +16,22 @@ fi
 [[ -r "$values_file" ]] || { echo "ACK_VALUES_FILE is not readable: $values_file" >&2; exit 2; }
 [[ -d "$chart_dir" ]] || { echo "ACK_CHART_DIR is not a chart directory: $chart_dir" >&2; exit 2; }
 
+server_git_version=$(kubectl --kubeconfig "$ACK_KUBECONFIG" version -o jsonpath='{.serverVersion.gitVersion}') || {
+  echo "Unable to read Kubernetes server version from ACK_KUBECONFIG" >&2
+  exit 2
+}
+if [[ ! "$server_git_version" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)([-+].*)?$ ]]; then
+  echo "ACK_KUBECONFIG returned an invalid Kubernetes server version" >&2
+  exit 2
+fi
+helm_kube_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+
 rendered_manifest=$(mktemp "${TMPDIR:-/tmp}/ack-rendered.XXXXXX")
 trap 'rm -f "$rendered_manifest"' EXIT
-helm template "$release" "$chart_dir" --namespace "$namespace" --values "$values_file" > "$rendered_manifest"
+helm template "$release" "$chart_dir" \
+  --namespace "$namespace" \
+  --kube-version "$helm_kube_version" \
+  --values "$values_file" > "$rendered_manifest"
 for placeholder in \
   "sha256:0000000000000000000000000000000000000000000000000000000000000000" \
   "https://ack.example.invalid" \
