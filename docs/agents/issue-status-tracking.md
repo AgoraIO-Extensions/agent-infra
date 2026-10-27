@@ -1,6 +1,6 @@
 # 开放 Issue 状态跟进
 
-> 快照：2026-10-27 02:17 UTC；`origin/main` `9e568ac5cf`。
+> 快照：2026-10-27 02:17 UTC；`origin/main` `9e568ac5c`。
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
 当前开放 Issue：**40**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
@@ -14,6 +14,7 @@
 | Platform/Web/Skill | 7 |
 | Workflow/Observability | [#3525](https://github.com/AgoraIO-Extensions/agent-infra/issues/3525) | docs: sync tracker count after latest closure | priority:P2 | priority:P2, agent:codex | 2026-10-27 | current tracker refresh PR #3526 |
 | Workflow/Observability | 4 |
+
 
 ## 明细
 
@@ -81,4 +82,3 @@
 | [#3510](https://github.com/AgoraIO-Extensions/agent-infra/pull/3510) | OPEN | `cee18c2eb19cd0d26e66a5d28d392be84b6d8786` | — | 原 [#3106](https://github.com/AgoraIO-Extensions/agent-infra/issues/3106) 的 AC 保持原状态；本表不代勾 |
 | [#3511](https://github.com/AgoraIO-Extensions/agent-infra/pull/3511) | MERGED | `d86d52134fb5fe1927d69b05e620d4c75a1ad8bc` | `9b2407c5cb30c8c9de1b6fcc7078600c817a9e47` | 原 [#3159](https://github.com/AgoraIO-Extensions/agent-infra/issues/3159) 的 AC 保持原状态；本表不代勾 |
 | [#3512](https://github.com/AgoraIO-Extensions/agent-infra/pull/3512) | OPEN | `d4021c4b56c95b97497fb7127a0a7c356b3b5397` | — | 原 [#3337](https://github.com/AgoraIO-Extensions/agent-infra/issues/3337) 的 AC 保持原状态；本表不代勾 |
-
