@@ -21,6 +21,7 @@ const registration = {
 	packageDigest: "a".repeat(64),
 	manifestDigest: "b".repeat(64),
 	signatureDigest: "c".repeat(64),
+	admissionDecision: "pending_review",
 } as const;
 const actor = {
 	schemaVersion: 1,

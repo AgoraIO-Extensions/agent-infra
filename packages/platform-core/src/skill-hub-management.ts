@@ -49,6 +49,7 @@ export type SkillHubRegistrationV1 = Omit<
 	readonly schemaVersion: 1;
 	readonly name: string;
 	readonly organizationId?: string | null;
+	readonly admissionDecision: "auto_published" | "pending_review";
 };
 
 function invalid(): never {
@@ -149,11 +150,19 @@ export function parseSkillHubRegistrationV1(
 			"manifestDigest",
 			"signatureDigest",
 		] as const;
+		const hasAdmissionDecision = Object.hasOwn(
+			(input as Record<string, unknown>) ?? {},
+			"admissionDecision",
+		);
 		const value = object(
 			input,
 			Object.hasOwn((input as Record<string, unknown>) ?? {}, "organizationId")
-				? [...keys, "organizationId"]
-				: keys,
+				? hasAdmissionDecision
+					? [...keys, "admissionDecision", "organizationId"]
+					: [...keys, "organizationId"]
+				: hasAdmissionDecision
+					? [...keys, "admissionDecision"]
+					: keys,
 		);
 		if (
 			value.schemaVersion !== 1 ||
@@ -181,6 +190,12 @@ export function parseSkillHubRegistrationV1(
 			packageDigest: digest(value.packageDigest),
 			manifestDigest: digest(value.manifestDigest),
 			signatureDigest: digest(value.signatureDigest),
+			admissionDecision:
+				!hasAdmissionDecision || value.admissionDecision === "pending_review"
+					? "pending_review"
+					: value.admissionDecision === "auto_published"
+						? value.admissionDecision
+						: invalid(),
 			...(Object.hasOwn(value, "organizationId")
 				? {
 						organizationId:

@@ -212,6 +212,7 @@ export function createClamAvSkillPackageScannerV1(
 					scannedFileCount: prepared.fileCount,
 					scannedBytes: prepared.totalBytes,
 					verdict: "clean",
+					admissionDecision: "pending_review",
 				});
 			} catch (error) {
 				if (error instanceof SkillPackageAdmissionErrorV1) throw error;

@@ -161,6 +161,7 @@ const scanner = {
 		scannedFileCount: selected.fileCount,
 		scannedBytes: selected.totalBytes,
 		verdict: "clean" as const,
+		admissionDecision: "pending_review" as const,
 	}),
 };
 const supply = (

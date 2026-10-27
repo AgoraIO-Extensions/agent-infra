@@ -69,6 +69,7 @@ export type SkillPackageScanReceiptV1 = Readonly<{
 	scannedFileCount: number;
 	scannedBytes: number;
 	verdict: "clean";
+	admissionDecision: "auto_published" | "pending_review";
 }>;
 
 export interface SkillPackageSourceVerifierV1 {
@@ -554,6 +555,7 @@ function scanReceiptData(input: SkillPackageScanReceiptV1) {
 			"scannedFileCount",
 			"scannedBytes",
 			"verdict",
+			"admissionDecision",
 		],
 		"scan_rejected",
 	);
@@ -573,6 +575,8 @@ function scanReceiptData(input: SkillPackageScanReceiptV1) {
 		receipt.scannedFileCount < 0 ||
 		receipt.scannedBytes < 0 ||
 		receipt.verdict !== "clean" ||
+		(receipt.admissionDecision !== "auto_published" &&
+			receipt.admissionDecision !== "pending_review") ||
 		!iso(receipt.scannedAt) ||
 		!iso(receipt.expiresAt)
 	)
@@ -602,6 +606,8 @@ export function verifySkillPackageScanReceiptV1(
 		!/^[a-f0-9]{64}$/.test(receipt.rulesetDigest) ||
 		!validText(receipt.policyRevision) ||
 		receipt.verdict !== "clean" ||
+		(receipt.admissionDecision !== "auto_published" &&
+			receipt.admissionDecision !== "pending_review") ||
 		receipt.packageDigest !== prepared.packageDigest ||
 		receipt.manifestDigest !== digest(prepared.manifestBytes) ||
 		receipt.policyRevision !== policyRevision ||

@@ -110,6 +110,15 @@ describe("Skill Hub lifecycle", () => {
 		).toBe("published");
 	});
 
+	it("publishes a server-approved shared version without owner review", () => {
+		const published = createSkillHubVersionV1(input, {
+			automaticAdmission: true,
+		});
+		expect(published.state).toBe("published");
+		expect(published.reviewedBy).toBe("system:skill-package-admission");
+		expect(published.reviewReason).toBe("automatic_admission");
+	});
+
 	it("keeps upgrade explicit and revocation terminal", async () => {
 		const current = reviewSkillHubVersionV1(createSkillHubVersionV1(input), {
 			reviewerId: "reviewer-1",

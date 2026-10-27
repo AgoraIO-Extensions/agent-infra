@@ -180,6 +180,7 @@ export {
 	type S3ObjectStorageOptionsV1,
 } from "./s3.js";
 export * from "./skill-package-admission.js";
+export * from "./skill-package-review-policy.js";
 export { createClamAvSkillPackageScannerV1 } from "./skill-package-clamav.js";
 export * from "./skill-package-consumer.js";
 export { readAdmittedSkillPackageEntryV1 } from "./skill-package-content.js";

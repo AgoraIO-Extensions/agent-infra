@@ -505,11 +505,16 @@ export class PostgresSkillHubLifecycleV1 {
 					);
 				if (existing.length || sameVersion.length)
 					throw new SkillHubOperationErrorV1("version_conflict");
-				const { name: _name, schemaVersion: _schema, ...reference } = command;
+				const {
+					name: _name,
+					schemaVersion: _schema,
+					admissionDecision,
+					...reference
+				} = command;
 				const version = createSkillHubVersionV1({
 					...reference,
 					ownerId: request.userId,
-				});
+				}, { automaticAdmission: admissionDecision === "auto_published" });
 				await transaction.insert(skillHubVersions).values({
 					id: version.skillVersionId,
 					skillId: version.skillId,
