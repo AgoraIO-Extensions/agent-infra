@@ -10,6 +10,8 @@ import {
 const validationSchema = z.strictObject({
 	schemaVersion: z.literal(1),
 	templateId: modelIdentifier,
+	/** Optional provenance bound by the deployment preflight gate; ignored by readiness hashing. */
+	sourceCommit: z.string().regex(/^[a-f0-9]{40}$/).optional(),
 	imageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
 	driver: z.enum(["codex", "claude", "acp", "pi"]),
 	configurationRevision: modelIdentifier,

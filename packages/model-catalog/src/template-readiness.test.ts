@@ -22,6 +22,19 @@ const validation = {
 	validUntil: 1_000,
 };
 
+it("accepts a source-bound preflight candidate", () => {
+	expect(
+		standardTemplateReadinessV1({
+			templateId: "claude",
+			imageDigest: binding.imageDigest,
+			binding,
+			configurationRevision: "config-1",
+			validation: { ...validation, sourceCommit: "a".repeat(40) },
+			now: 500,
+		}),
+	).toMatchObject({ state: "ready" });
+});
+
 it("only marks matching, non-expired real runtime evidence ready", () => {
 	expect(
 		standardTemplateReadinessV1({
