@@ -751,6 +751,7 @@ describe("web-edited Skill project publication with real PG, versioned S3 and na
 		expect(receipt).toMatchObject({
 			scannerId: "native-clamav",
 			verdict: "clean",
+			admissionDecision: "pending_review",
 		});
 		verifySkillPackageScanReceiptV1(
 			receipt,

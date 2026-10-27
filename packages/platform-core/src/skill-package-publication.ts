@@ -244,6 +244,7 @@ const evidenceKeys = {
 		"scannedFileCount",
 		"scannedBytes",
 		"verdict",
+		"admissionDecision",
 	],
 	"signature-record": [
 		"schemaVersion",
@@ -299,6 +300,8 @@ function validatePublicationEvidence(
 			!digestValue("packageDigest") ||
 			!digestValue("manifestDigest") ||
 			evidence.verdict !== "clean" ||
+			(evidence.admissionDecision !== "auto_published" &&
+				evidence.admissionDecision !== "pending_review") ||
 			typeof evidence.scannedFileCount !== "number" ||
 			!Number.isSafeInteger(evidence.scannedFileCount) ||
 			typeof evidence.scannedBytes !== "number" ||

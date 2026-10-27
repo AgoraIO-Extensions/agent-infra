@@ -409,6 +409,7 @@ export class PostgresSkillHubLifecycleV1 {
 		identity: ReturnType<typeof parseSkillHubIdentitySnapshotV1>,
 		key: string,
 		input: unknown,
+		automaticAdmission = false,
 	) {
 		const command = parseSkillHubRegistrationV1(input);
 		if (
@@ -509,7 +510,7 @@ export class PostgresSkillHubLifecycleV1 {
 				const version = createSkillHubVersionV1({
 					...reference,
 					ownerId: request.userId,
-				});
+				}, { automaticAdmission });
 				await transaction.insert(skillHubVersions).values({
 					id: version.skillVersionId,
 					skillId: version.skillId,
@@ -1298,6 +1299,7 @@ export class PostgresSkillHubLifecycleV1 {
 						identity,
 						`package-${state.operationId}`,
 						registration,
+					registration.admissionDecision === "auto_published",
 					);
 					if (lease) {
 						const rows = await tx

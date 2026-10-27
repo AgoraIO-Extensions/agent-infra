@@ -163,15 +163,17 @@ export class SkillHubLifecycleErrorV1 extends Error {
 
 export function createSkillHubVersionV1(
 	input: SkillHubVersionCreateInputV1,
+	options: Readonly<{ automaticAdmission?: boolean }> = {},
 ): SkillHubVersionV1 {
-	const requiresReview = input.visibility !== "PRIVATE";
+	const automaticAdmission = options.automaticAdmission === true;
+	const requiresReview = input.visibility !== "PRIVATE" && !automaticAdmission;
 	return Object.freeze({
 		schemaVersion: 1,
 		...input,
 		state: requiresReview ? "pending_review" : "published",
 		needUpgrade: false,
-		reviewedBy: requiresReview ? null : input.ownerId,
-		reviewReason: null,
+		reviewedBy: requiresReview ? null : automaticAdmission ? "system:skill-package-admission" : input.ownerId,
+		reviewReason: automaticAdmission ? "automatic_admission" : null,
 		revokedAt: null,
 	});
 }
