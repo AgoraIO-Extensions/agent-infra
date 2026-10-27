@@ -137,7 +137,12 @@ for (const mode of [
 		const root = await mkdtemp(join(tmpdir(), "skill-consumer-worker-"));
 		await chmod(root, 0o700);
 		const f = await publicationFixture();
-		const { name: _name, visibility: _visibility, ...ref } = f.version;
+		const {
+			name: _name,
+			visibility: _visibility,
+			admissionDecision: _admissionDecision,
+			...ref
+		} = f.version;
 		let revoked = false;
 		const binding: SkillHubSyncBindingV1 = {
 			schemaVersion: 1,

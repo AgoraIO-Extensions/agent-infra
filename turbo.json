@@ -17,7 +17,8 @@
 			"dependsOn": ["build", "^build", "^check-types"]
 		},
 		"test": {
-			"dependsOn": ["^test"]
+			"dependsOn": ["^test"],
+			"env": ["AGENT_INFRA_RUNTIME_INSTALLED_SKILL"]
 		},
 		"dev": {
 			"cache": false,

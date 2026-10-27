@@ -409,6 +409,7 @@ export class PostgresSkillHubLifecycleV1 {
 		identity: ReturnType<typeof parseSkillHubIdentitySnapshotV1>,
 		key: string,
 		input: unknown,
+		automaticAdmission = false,
 	) {
 		const command = parseSkillHubRegistrationV1(input);
 		if (
@@ -506,10 +507,13 @@ export class PostgresSkillHubLifecycleV1 {
 				if (existing.length || sameVersion.length)
 					throw new SkillHubOperationErrorV1("version_conflict");
 				const { name: _name, schemaVersion: _schema, ...reference } = command;
-				const version = createSkillHubVersionV1({
-					...reference,
-					ownerId: request.userId,
-				});
+				const version = createSkillHubVersionV1(
+					{
+						...reference,
+						ownerId: request.userId,
+					},
+					{ automaticAdmission },
+				);
 				await transaction.insert(skillHubVersions).values({
 					id: version.skillVersionId,
 					skillId: version.skillId,
@@ -1292,12 +1296,21 @@ export class PostgresSkillHubLifecycleV1 {
 				async (tx, request, identity) => {
 					checkIdentity(identity);
 					await revalidate();
+					const scannerDecision =
+						state.intents.scan?.evidence?.admissionDecision;
+					if (
+						(scannerDecision !== "auto_published" &&
+							scannerDecision !== "pending_review") ||
+						registration.admissionDecision !== scannerDecision
+					)
+						throw new SkillHubOperationErrorV1("unavailable");
 					const registered = await this.#register(
 						tx,
 						request,
 						identity,
 						`package-${state.operationId}`,
 						registration,
+						scannerDecision === "auto_published",
 					);
 					if (lease) {
 						const rows = await tx

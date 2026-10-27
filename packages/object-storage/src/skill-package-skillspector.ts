@@ -4,6 +4,12 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import {
+	prepareSkillPackageV1,
+	SkillPackageAdmissionErrorV1,
+	type SkillPackageScannerV1,
+	type SkillPackageScanReceiptV1,
+} from "./skill-package-admission.js";
 
 const execFile = promisify(callback);
 
@@ -305,5 +311,87 @@ export function decideSkillPackageAdmissionV1(
 		reason: review ? "review_required" : "clean",
 		policyRevision: policy.policyRevision,
 		findingCount: report.findingCount,
+	});
+}
+
+/** Bridges the validated SkillSpector report into the production supplier seam. */
+export function createSkillSpectorPackageScannerV1(
+	options: Readonly<{
+		adapter: ReturnType<typeof createSkillSpectorAdapterV1>;
+		policy: SkillPackageAutomaticAdmissionPolicyV1;
+	}>,
+): SkillPackageScannerV1 {
+	return Object.freeze({
+		scan: async (
+			input: Parameters<SkillPackageScannerV1["scan"]>[0],
+		): Promise<SkillPackageScanReceiptV1> => {
+			const stream = await input.openPackage();
+			const reader = stream.getReader();
+			const chunks: Uint8Array[] = [];
+			try {
+				while (true) {
+					const next = await reader.read();
+					if (next.done) break;
+					chunks.push(next.value);
+				}
+			} finally {
+				await reader.cancel().catch(() => {});
+				reader.releaseLock();
+			}
+			const archiveBytes = Buffer.concat(chunks);
+			const prepared = prepareSkillPackageV1({
+				archiveBytes,
+				name: input.name,
+				version: input.version,
+			});
+			if (
+				prepared.packageDigest !== input.packageDigest ||
+				prepared.packageDigest !== input.packageObject.sha256 ||
+				prepared.fileCount !== input.fileCount ||
+				prepared.totalBytes !== input.totalBytes ||
+				createHash("sha256").update(prepared.manifestBytes).digest("hex") !==
+					input.manifestDigest
+			)
+				throw new SkillPackageAdmissionErrorV1("digest_mismatch");
+			const report = await options.adapter.scan({
+				packageDigest: input.packageDigest,
+				manifestDigest: input.manifestDigest,
+				policyRevision: input.policyRevision,
+				archiveBytes,
+			});
+			if (
+				report.packageDigest !== input.packageDigest ||
+				report.manifestDigest !== input.manifestDigest ||
+				report.policyRevision !== input.policyRevision
+			)
+				throw new SkillPackageAdmissionErrorV1("scan_rejected");
+			const decision = decideSkillPackageAdmissionV1(report, options.policy);
+			if (decision.outcome === "rejected")
+				throw new SkillPackageAdmissionErrorV1("scan_rejected");
+			const issuedAt = Date.parse(report.issuedAt);
+			const expiresAt = new Date(
+				issuedAt + options.policy.maximumReceiptAgeMs,
+			).toISOString();
+			return Object.freeze({
+				schemaVersion: 1,
+				scannerId: report.scannerId,
+				engineVersion: report.engineVersion,
+				rulesetDigest: report.rulesetDigest,
+				policyRevision: report.policyRevision,
+				scannedAt: report.issuedAt,
+				expiresAt,
+				packageDigest: report.packageDigest,
+				manifestDigest: report.manifestDigest,
+				scannedFileCount: prepared.fileCount,
+				scannedBytes: prepared.totalBytes,
+				verdict: "clean" as const,
+				admissionDecision: decision.outcome,
+				admissionEvidence: {
+					coverage: report.coverage,
+					findings: report.findings,
+					dynamicProbe: report.dynamicProbe,
+				},
+			});
+		},
 	});
 }

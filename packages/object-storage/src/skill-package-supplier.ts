@@ -432,6 +432,7 @@ export class SkillPackageSupplierV1 {
 						packageDigest: prepared.packageDigest,
 						manifestDigest: manifest.sha256,
 						signatureDigest: detached.sha256,
+						admissionDecision: receipt.admissionDecision,
 						...(Object.hasOwn(selection, "organizationId")
 							? { organizationId: selection.organizationId }
 							: {}),
