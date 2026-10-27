@@ -3,14 +3,14 @@
 > 快照时间：2026-10-27（UTC）；来源：GitHub `AgoraIO-Extensions/agent-infra` 开放 Issue 实时回读。
 > 基线：`origin/main` `56e6f7ab0`。本表是调度快照，Issue 正文、依赖、PR 和真实验收仍是权威来源。
 
-当前开放 Issue：**45**。状态标签不能替代 AC、native blocker、PRD/工程 Spec 或真实环境证据。
+当前开放 Issue：**44**。状态标签不能替代 AC、native blocker、PRD/工程 Spec 或真实环境证据。
 
 ## 分类计数
 
 | 类别 | 数量 |
 | --- | ---: |
 | Runtime/Worker/Core | 14 |
-| Deploy/E2E/Channels | 17 |
+| Deploy/E2E/Channels | 16 |
 | Platform/Web/Skill | 8 |
 | Workflow/Observability | 6 |
 
@@ -39,7 +39,6 @@
 | Deploy/E2E/Channels | [#3193](https://github.com/AgoraIO-Extensions/agent-infra/issues/3193) | test(e2e): read Skill metadata before sandbox terminal teardown | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#3149](https://github.com/AgoraIO-Extensions/agent-infra/issues/3149) | feat(deployment): automate safe template validation receipt refresh | priority:P1 | priority:P1, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#3108](https://github.com/AgoraIO-Extensions/agent-infra/issues/3108) | acceptance: ACK resumed conversations receive Messages gateway errors | priority:P1 | priority:P1, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
-| Deploy/E2E/Channels | [#3106](https://github.com/AgoraIO-Extensions/agent-infra/issues/3106) | fix(helm): preserve configured encryption key versions in ACK wrapper | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#3072](https://github.com/AgoraIO-Extensions/agent-infra/issues/3072) | 验收 ACK main 部署的四基础模板与自定义镜像真实链路 | priority:P0 | priority:P0, agent:codex | LichKing-2234 | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#3060](https://github.com/AgoraIO-Extensions/agent-infra/issues/3060) | fix(local): 固定 E2E 部署缺少文件面装配、FileLimits 声明与 Runtime 文件交换注入 | 未标注 | agent:kiro | kiro（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#2998](https://github.com/AgoraIO-Extensions/agent-infra/issues/2998) | test(e2e): real WeCom credential and official QR binding acceptance | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
