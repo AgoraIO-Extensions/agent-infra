@@ -213,6 +213,11 @@ export function createClamAvSkillPackageScannerV1(
 					scannedBytes: prepared.totalBytes,
 					verdict: "clean",
 					admissionDecision: "pending_review",
+					admissionEvidence: {
+						coverage: "complete",
+						findings: [],
+						dynamicProbe: { required: false, completed: false, violations: [] },
+					},
 				});
 			} catch (error) {
 				if (error instanceof SkillPackageAdmissionErrorV1) throw error;

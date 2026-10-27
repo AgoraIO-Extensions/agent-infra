@@ -245,6 +245,7 @@ const evidenceKeys = {
 		"scannedBytes",
 		"verdict",
 		"admissionDecision",
+		"admissionEvidence",
 	],
 	"signature-record": [
 		"schemaVersion",
@@ -302,6 +303,9 @@ function validatePublicationEvidence(
 			evidence.verdict !== "clean" ||
 			(evidence.admissionDecision !== "auto_published" &&
 				evidence.admissionDecision !== "pending_review") ||
+			(evidence.admissionDecision === "auto_published" &&
+				(!evidence.admissionEvidence ||
+					typeof evidence.admissionEvidence !== "object")) ||
 			typeof evidence.scannedFileCount !== "number" ||
 			!Number.isSafeInteger(evidence.scannedFileCount) ||
 			typeof evidence.scannedBytes !== "number" ||
@@ -377,6 +381,10 @@ export function parseSkillPackagePublicationIntentV1(
 			if (
 				!(
 					field === null ||
+					(stage === "scan" &&
+						field === evidence.admissionEvidence &&
+						typeof field === "object" &&
+						field !== null) ||
 					(typeof field === "number" &&
 						Number.isSafeInteger(field) &&
 						field >= 0) ||

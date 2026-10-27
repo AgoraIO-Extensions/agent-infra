@@ -385,6 +385,11 @@ export function createSkillSpectorPackageScannerV1(
 				scannedBytes: prepared.totalBytes,
 				verdict: "clean" as const,
 				admissionDecision: decision.outcome,
+				admissionEvidence: {
+					coverage: report.coverage,
+					findings: report.findings,
+					dynamicProbe: report.dynamicProbe,
+				},
 			});
 		},
 	});

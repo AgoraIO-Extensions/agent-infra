@@ -70,6 +70,19 @@ export type SkillPackageScanReceiptV1 = Readonly<{
 	scannedBytes: number;
 	verdict: "clean";
 	admissionDecision: "auto_published" | "pending_review";
+	readonly admissionEvidence?: Readonly<{
+		coverage: "complete" | "incomplete";
+		findings: readonly Readonly<{
+			code: string;
+			severity: "info" | "low" | "medium" | "high" | "critical";
+			category: "static" | "supply_chain" | "semantic" | "dynamic";
+		}>[];
+		dynamicProbe: Readonly<{
+			required: boolean;
+			completed: boolean;
+			violations: readonly string[];
+		}>;
+	}>;
 }>;
 
 export interface SkillPackageSourceVerifierV1 {
@@ -540,8 +553,11 @@ export function canonicalSkillPackageSourceProofV1(
 	return canonical(value);
 }
 function scanReceiptData(input: SkillPackageScanReceiptV1) {
+	const admissionEvidence = input.admissionEvidence;
+	const scalarInput = { ...input } as Record<string, unknown>;
+	delete scalarInput.admissionEvidence;
 	const receipt = evidenceData(
-		input,
+		scalarInput,
 		[
 			"schemaVersion",
 			"scannerId",
@@ -581,7 +597,39 @@ function scanReceiptData(input: SkillPackageScanReceiptV1) {
 		!iso(receipt.expiresAt)
 	)
 		reject("scan_rejected");
-	return receipt;
+	if (Object.hasOwn(receipt, "admissionEvidence")) {
+		const evidence = receipt.admissionEvidence;
+		if (
+			!evidence ||
+			(evidence.coverage !== "complete" &&
+				evidence.coverage !== "incomplete") ||
+			!Array.isArray(evidence.findings) ||
+			!evidence.findings.every(
+				(finding) =>
+					typeof finding.code === "string" &&
+					["info", "low", "medium", "high", "critical"].includes(
+						finding.severity,
+					) &&
+					Object.hasOwn(
+						{ static: true, supply_chain: true, semantic: true, dynamic: true },
+						finding.category,
+					),
+			) ||
+			!evidence.dynamicProbe ||
+			typeof evidence.dynamicProbe.required !== "boolean" ||
+			typeof evidence.dynamicProbe.completed !== "boolean" ||
+			!Array.isArray(evidence.dynamicProbe.violations) ||
+			!evidence.dynamicProbe.violations.every(
+				(item) => typeof item === "string",
+			)
+		)
+			reject("scan_rejected");
+	}
+	return Object.freeze(
+		Object.hasOwn(input, "admissionEvidence")
+			? { ...receipt, admissionEvidence }
+			: receipt,
+	);
 }
 
 export function canonicalSkillPackageScanReceiptV1(
