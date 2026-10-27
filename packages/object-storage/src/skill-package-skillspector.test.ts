@@ -23,6 +23,7 @@ const report = (overrides: Record<string, unknown> = {}) => ({
 	policyRevision: "policy-v1",
 	packageDigest: "b".repeat(64),
 	manifestDigest: "c".repeat(64),
+	issuedAt: new Date().toISOString(),
 	coverage: "complete" as const,
 	findingCount: 0,
 	findings: [],
@@ -68,6 +69,44 @@ it("routes uncertain findings to review but publishes clean complete reports", (
 	});
 });
 
+it("rejects stale receipts and server-required probes", () => {
+	const stale = decideSkillPackageAdmissionV1(
+		report({ issuedAt: new Date(0).toISOString() }),
+		{
+			...policy,
+			now: () => 60_001,
+		},
+	);
+	expect(stale).toMatchObject({
+		outcome: "rejected",
+		reason: "incomplete_evidence",
+	});
+	const probe = decideSkillPackageAdmissionV1(
+		report({
+			dynamicProbe: { required: false, completed: false, violations: [] },
+		}),
+		{ ...policy, dynamicProbeRequired: true, now: () => 1 },
+	);
+	expect(probe).toMatchObject({
+		outcome: "rejected",
+		reason: "incomplete_evidence",
+	});
+	const violation = decideSkillPackageAdmissionV1(
+		report({
+			dynamicProbe: {
+				required: false,
+				completed: true,
+				violations: ["network"],
+			},
+		}),
+		{ ...policy, now: () => 1 },
+	);
+	expect(violation).toMatchObject({
+		outcome: "rejected",
+		reason: "incomplete_evidence",
+	});
+});
+
 it("executes the external scanner with a staged archive and validates its report", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "skillspector-test-"));
 	const executable = join(directory, "scanner.cjs");
@@ -80,7 +119,7 @@ const args = process.argv.slice(2);
 const archivePath = args[args.indexOf("--archive") + 1];
 if (!fs.statSync(archivePath).isFile()) process.exit(1);
 const value = (name) => args[args.indexOf(name) + 1];
-process.stdout.write(JSON.stringify({schemaVersion:1,scannerId:value("--scanner-id"),engineVersion:value("--engine-version"),rulesetDigest:value("--ruleset-digest"),policyRevision:value("--policy-revision"),packageDigest:value("--package-digest"),manifestDigest:value("--manifest-digest"),coverage:"complete",findings:[],dynamicProbe:{required:false,completed:false,violations:[]}}));
+process.stdout.write(JSON.stringify({schemaVersion:1,scannerId:value("--scanner-id"),engineVersion:value("--engine-version"),rulesetDigest:value("--ruleset-digest"),policyRevision:value("--policy-revision"),packageDigest:value("--package-digest"),manifestDigest:value("--manifest-digest"),issuedAt:new Date().toISOString(),coverage:"complete",findings:[],dynamicProbe:{required:false,completed:false,violations:[]}}));
 `,
 		{ mode: 0o700 },
 	);

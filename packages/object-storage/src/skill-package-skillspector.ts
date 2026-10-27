@@ -21,6 +21,7 @@ export type SkillSpectorScanReportV1 = Readonly<{
 	policyRevision: string;
 	packageDigest: string;
 	manifestDigest: string;
+	issuedAt: string;
 	coverage: "complete" | "incomplete";
 	findingCount: number;
 	findings: readonly SkillSpectorFindingV1[];
@@ -36,6 +37,10 @@ export type SkillPackageAutomaticAdmissionPolicyV1 = Readonly<{
 	maximumReceiptAgeMs: number;
 	fatalSeverities: readonly ("high" | "critical")[];
 	maximumAutomaticSeverity: "info" | "low" | "medium";
+	dynamicProbeRequired?: boolean;
+	now?: () => number;
+	dynamicProbeRequired?: boolean;
+	now?: () => number;
 }>;
 
 export type SkillPackageAutomaticAdmissionDecisionV1 = Readonly<{
@@ -72,6 +77,9 @@ function parseReport(
 		packageDigest: string;
 		manifestDigest: string;
 		policyRevision: string;
+		scannerId: string;
+		engineVersion: string;
+		rulesetDigest: string;
 	}>,
 ): SkillSpectorScanReportV1 {
 	if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
@@ -80,9 +88,11 @@ function parseReport(
 	const probe = report.dynamicProbe;
 	if (
 		report.schemaVersion !== 1 ||
-		typeof report.scannerId !== "string" ||
-		typeof report.engineVersion !== "string" ||
-		!validDigest(report.rulesetDigest) ||
+		report.scannerId !== input.scannerId ||
+		report.engineVersion !== input.engineVersion ||
+		report.rulesetDigest !== input.rulesetDigest ||
+		typeof report.issuedAt !== "string" ||
+		!Number.isFinite(Date.parse(report.issuedAt)) ||
 		report.policyRevision !== input.policyRevision ||
 		report.packageDigest !== input.packageDigest ||
 		report.manifestDigest !== input.manifestDigest ||
@@ -123,6 +133,7 @@ function parseReport(
 		policyRevision: report.policyRevision as string,
 		packageDigest: report.packageDigest as string,
 		manifestDigest: report.manifestDigest as string,
+		issuedAt: report.issuedAt as string,
 		coverage: report.coverage as SkillSpectorScanReportV1["coverage"],
 		findingCount: parsedFindings.length,
 		findings: Object.freeze(parsedFindings),
@@ -206,7 +217,12 @@ export function createSkillSpectorAdapterV1(
 					},
 				);
 				if (result.stderr || !result.stdout.trim()) invalid();
-				return parseReport(JSON.parse(result.stdout), input);
+				return parseReport(JSON.parse(result.stdout), {
+					...input,
+					scannerId: options.scannerId,
+					engineVersion: options.engineVersion,
+					rulesetDigest: options.rulesetDigest,
+				});
 			} finally {
 				await rm(staging, { recursive: true, force: true }).catch(
 					() => undefined,
@@ -233,11 +249,26 @@ export function decideSkillPackageAdmissionV1(
 			policyRevision: policy.policyRevision,
 			findingCount: report.findingCount,
 		});
+	const issuedAt = Date.parse(report.issuedAt);
+	const now = policy.now?.() ?? Date.now();
+	if (
+		!Number.isFinite(issuedAt) ||
+		!Number.isFinite(now) ||
+		issuedAt > now ||
+		now - issuedAt > policy.maximumReceiptAgeMs
+	)
+		return Object.freeze({
+			outcome: "rejected",
+			reason: "incomplete_evidence",
+			policyRevision: policy.policyRevision,
+			findingCount: report.findingCount,
+		});
 	if (
 		report.coverage !== "complete" ||
-		(report.dynamicProbe.required &&
+		((policy.dynamicProbeRequired ?? report.dynamicProbe.required) &&
 			(!report.dynamicProbe.completed ||
-				report.dynamicProbe.violations.length > 0))
+				report.dynamicProbe.violations.length > 0)) ||
+		report.dynamicProbe.violations.length > 0
 	)
 		return Object.freeze({
 			outcome: "rejected",
