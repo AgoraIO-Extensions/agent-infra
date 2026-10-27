@@ -84,6 +84,12 @@ function samePiUserContent(left: PiUserContent, right: PiUserContent) {
 	);
 }
 
+/** Return the durable suffix that was not observed during native streaming. */
+export function missingPiTextDelta(complete: string, streamed: string) {
+	if (!complete.startsWith(streamed)) return undefined;
+	return complete.slice(streamed.length);
+}
+
 /**
  * Validates one prompt against the native Pi RPC representation: a single text
  * message plus optional structured images, never an encoded text substitute.
@@ -269,6 +275,7 @@ export async function openPiSession(
 	let active:
 		| {
 				content: PiUserContent;
+				streamedText: string;
 				resolve: (result: { stopReason: string; checkpoint: string }) => void;
 				reject: (error: Error) => void;
 		  }
@@ -332,11 +339,13 @@ export async function openPiSession(
 						frame.type === "message_update" &&
 						delta?.type === "text_delta" &&
 						typeof delta.delta === "string"
-					)
+					) {
 						await options.update({
 							type: "text",
 							payload: { delta: delta.delta },
 						});
+						target.streamedText += delta.delta;
+					}
 					if (
 						["tool_execution_start", "tool_execution_end"].includes(
 							frame.type as string,
@@ -374,6 +383,19 @@ export async function openPiSession(
 							: undefined;
 						if (!confirmed) throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 						const { stopReason, checkpoint } = confirmed;
+						// The native peer may persist the complete assistant message while a
+						// final text_delta is still queued (or omit intermediate deltas).
+						// Reconcile only the verified durable suffix so a reused Session never
+						// publishes a first-character prefix as its completed answer.
+						const missing = missingPiTextDelta(
+							confirmed.text,
+							target.streamedText,
+						);
+						if (missing)
+							await options.update({
+								type: "text",
+								payload: { delta: missing },
+							});
 						const persisted = await open(sessionFile, "r");
 						try {
 							await persisted.sync();
@@ -613,6 +635,7 @@ export async function openPiSession(
 				}>();
 				const target = {
 					content,
+					streamedText: "",
 					resolve: terminal.resolve,
 					reject: terminal.reject,
 				};
@@ -740,6 +763,7 @@ export async function openPiSession(
 				}>();
 				const target = {
 					content,
+					streamedText: "",
 					resolve: terminal.resolve,
 					reject: terminal.reject,
 				};

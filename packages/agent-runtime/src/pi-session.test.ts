@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
-import { openPiSession } from "./pi-session.js";
+import { missingPiTextDelta, openPiSession } from "./pi-session.js";
 
 const { openRpc } = vi.hoisted(() => ({ openRpc: vi.fn() }));
 vi.mock("./pi-rpc.js", async (importOriginal) => ({
@@ -26,6 +26,12 @@ it("does not load the Pi SDK when only importing the session adapter", async () 
 		vi.doUnmock("@earendil-works/pi-coding-agent");
 		vi.resetModules();
 	}
+});
+
+it("reconciles only a durable suffix after a reused session drops stream deltas", () => {
+	expect(missingPiTextDelta("PINE-64", "P")).toBe("INE-64");
+	expect(missingPiTextDelta("PINE-64", "PINE-64")).toBe("");
+	expect(missingPiTextDelta("PINE-64", "other")).toBeUndefined();
 });
 
 async function fixture() {
