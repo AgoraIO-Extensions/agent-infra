@@ -46,6 +46,15 @@ it("fails closed for incomplete evidence and fatal findings", () => {
 			policy,
 		),
 	).toMatchObject({ outcome: "rejected", reason: "fatal_finding" });
+	const malformed = report({
+		findings: [{ code: "x", category: "static", severity: "toString" }],
+	});
+	expect(
+		decideSkillPackageAdmissionV1(malformed as never, policy),
+	).toMatchObject({
+		outcome: "rejected",
+		reason: "incomplete_evidence",
+	});
 });
 
 it("routes uncertain findings to review but publishes clean complete reports", () => {

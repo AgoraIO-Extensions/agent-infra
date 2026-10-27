@@ -108,7 +108,7 @@ function parseReport(
 			typeof item.code !== "string" ||
 			typeof item.category !== "string" ||
 			typeof item.severity !== "string" ||
-			!(item.severity in severityRank)
+			!Object.hasOwn(severityRank, item.severity)
 		)
 			invalid();
 		return Object.freeze({
@@ -269,6 +269,17 @@ export function decideSkillPackageAdmissionV1(
 			(!report.dynamicProbe.completed ||
 				report.dynamicProbe.violations.length > 0)) ||
 		report.dynamicProbe.violations.length > 0
+	)
+		return Object.freeze({
+			outcome: "rejected",
+			reason: "incomplete_evidence",
+			policyRevision: policy.policyRevision,
+			findingCount: report.findingCount,
+		});
+	if (
+		report.findings.some(
+			(finding) => !Object.hasOwn(severityRank, finding.severity),
+		)
 	)
 		return Object.freeze({
 			outcome: "rejected",
