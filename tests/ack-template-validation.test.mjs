@@ -33,6 +33,7 @@ async function fixture({ expired = false, drift = false } = {}) {
 			JSON.stringify({
 				schemaVersion: 1,
 				templateId,
+				sourceCommit: sourceSha,
 				imageDigest,
 				driver,
 				configurationRevision: `revision-${templateId}`,
@@ -53,6 +54,7 @@ async function fixture({ expired = false, drift = false } = {}) {
 				templateId,
 				sourceCommit: sourceSha,
 				imageDigest,
+				configurationRevision: `revision-${templateId}`,
 				modelId: templateId === "codex" ? "gpt-5.6-sol" : "claude-opus-5",
 				terminalStatus: "completed",
 				modelFactSource: "protected-driver-journal",

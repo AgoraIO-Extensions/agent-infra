@@ -207,13 +207,13 @@ async function run() {
 		stage = "evidence-write";
 		await mkdir(c.outputDirectory, { recursive: true, mode: 0o700 });
 		const validatedAt = Date.now();
-		const validation = { schemaVersion: 1, templateId: c.templateId, imageDigest: c.imageDigest,
+		const validation = { schemaVersion: 1, templateId: c.templateId, sourceCommit: c.sourceCommit, imageDigest: c.imageDigest,
 			driver: c.driver, configurationRevision: c.configurationRevision,
 			status: "passed", evidenceKind: "real-runtime-model", executionId: id,
 			modelId: c.modelId, validatedAt, validUntil: validatedAt + 60 * 60 * 1000 };
 		const receipt = { schemaVersion: 1, scope: c.scope, templateId: c.templateId,
 			platformLdapVerified: false, platformBusinessAuthorizationVerified: false,
-			sourceCommit: source, imageDigest: c.imageDigest, imageId: image, observedResourceLimits, launcherPath: command, launcherArgs: commandArgs,
+			sourceCommit: source, imageDigest: c.imageDigest, configurationRevision: c.configurationRevision, imageId: image, observedResourceLimits, launcherPath: command, launcherArgs: commandArgs,
 			signatureDispatchDelayMs:350, resumedExistingExecution:Boolean(resume), operatorApprovalRef: c.operatorApprovalRef, approvedRelayOriginSha256: hash(relay.origin),
 			executionId: id, hostSessionRefSha256: hash(accepted.hostSessionRef),
 			runtimeModuleSha256: c.runtimeModuleSha256, artifactKind: "official-published-runtime", modelFactSource: "protected-driver-journal", modelFactsInV4EventStream: false, replyMatched: true, replySha256: hash(reply.trim()), nativeTelemetryModelIds:[...new Set(modelFacts.map(f=>f.model.modelId))], modelOperationCount: modelFacts.length, modelOperationRefs: modelFacts.map(f => hash(f.operationRef)),

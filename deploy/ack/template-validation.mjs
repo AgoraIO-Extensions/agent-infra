@@ -93,12 +93,13 @@ function parseExpectations(value) {
 	};
 }
 
-function parseValidation(value, expected) {
+function parseValidation(value, expected, sourceSha) {
 	const item = exactRecord(
 		value,
 		[
 			"schemaVersion",
 			"templateId",
+			"sourceCommit",
 			"imageDigest",
 			"driver",
 			"configurationRevision",
@@ -114,6 +115,7 @@ function parseValidation(value, expected) {
 	if (
 		item.schemaVersion !== 1 ||
 		item.templateId !== expected.templateId ||
+		item.sourceCommit !== sourceSha ||
 		item.imageDigest !== expected.imageDigest ||
 		item.driver !== expected.driver ||
 		item.configurationRevision !== expected.configurationRevision ||
@@ -138,6 +140,7 @@ function parsePreflight(value, expected, sourceSha) {
 			"templateId",
 			"sourceCommit",
 			"imageDigest",
+			"configurationRevision",
 			"modelId",
 			"terminalStatus",
 			"modelFactSource",
@@ -152,6 +155,7 @@ function parsePreflight(value, expected, sourceSha) {
 		item.templateId !== expected.templateId ||
 		item.sourceCommit !== sourceSha ||
 		item.imageDigest !== expected.imageDigest ||
+		item.configurationRevision !== expected.configurationRevision ||
 		item.modelId !== expected.modelId ||
 		item.terminalStatus !== "completed" ||
 		item.modelFactSource !== "protected-driver-journal" ||
@@ -174,6 +178,7 @@ export async function validateTemplateValidationExpectations(
 			const validation = parseValidation(
 				await privateJson(expected.validationFile, "VALIDATION"),
 				expected,
+				expectations.sourceSha,
 			);
 			const preflight = parsePreflight(
 				await privateJson(expected.preflightFile, "PREFLIGHT"),
