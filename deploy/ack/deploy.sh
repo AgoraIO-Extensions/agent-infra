@@ -16,15 +16,23 @@ fi
 [[ -r "$values_file" ]] || { echo "ACK_VALUES_FILE is not readable: $values_file" >&2; exit 2; }
 [[ -d "$chart_dir" ]] || { echo "ACK_CHART_DIR is not a chart directory: $chart_dir" >&2; exit 2; }
 
-server_git_version=$(kubectl --kubeconfig "$ACK_KUBECONFIG" version -o jsonpath='{.serverVersion.gitVersion}') || {
+server_version_json=$(kubectl --kubeconfig "$ACK_KUBECONFIG" --request-timeout=10s version -o json) || {
   echo "Unable to read Kubernetes server version from ACK_KUBECONFIG" >&2
   exit 2
 }
-if [[ ! "$server_git_version" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)([-+].*)?$ ]]; then
+helm_kube_version=$(printf '%s' "$server_version_json" | node -e '
+  try {
+    const version = JSON.parse(require("node:fs").readFileSync(0, "utf8")).serverVersion?.gitVersion;
+    const number = "(?:0|[1-9][0-9]*)";
+    const identifier = "(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)";
+    const pattern = new RegExp(`^v${number}\\.${number}\\.${number}(?:-${identifier}(?:\\.${identifier})*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`);
+    if (typeof version !== "string" || !pattern.test(version)) process.exit(1);
+    process.stdout.write(version.slice(1));
+  } catch { process.exit(1); }
+') || {
   echo "ACK_KUBECONFIG returned an invalid Kubernetes server version" >&2
   exit 2
-fi
-helm_kube_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+}
 
 rendered_manifest=$(mktemp "${TMPDIR:-/tmp}/ack-rendered.XXXXXX")
 trap 'rm -f "$rendered_manifest"' EXIT

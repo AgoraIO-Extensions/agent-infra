@@ -335,7 +335,10 @@ export function createS3ObjectStorageV1(
 					object.ContentLength === undefined ||
 					!Number.isSafeInteger(object.ContentLength) ||
 					object.ContentLength < 0 ||
-					object.ContentLength > options.maxObjectBytes
+					object.ContentLength > options.maxObjectBytes ||
+					(request.expectedMetadata !== undefined &&
+						(object.ContentLength !== request.expectedMetadata.sizeBytes ||
+							object.ContentType !== request.expectedMetadata.mediaType))
 				) {
 					await object.Body?.transformToWebStream()
 						.cancel()

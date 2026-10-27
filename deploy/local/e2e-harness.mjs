@@ -1,8 +1,16 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from "node:child_process";
-import dns from "node:dns/promises";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { request as httpsRequest } from "node:https";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	readdir,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import {
@@ -14,6 +22,12 @@ import {
 	parseDnsForward,
 	selectPlatformManifest,
 } from "./runtime-material.mjs";
+import {
+	assertWorkerReadback,
+	cachedWorkerDigest,
+	componentWorkspacePaths,
+	workerInputHash,
+} from "./harness-image-cache.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const stateRoot = resolve(
@@ -44,10 +58,12 @@ function command(file, args, options = {}) {
 		env: { ...process.env, ...(options.env ?? {}) },
 		encoding: options.encoding ?? "utf8",
 		input: options.input,
-		stdio:
-			options.stdio ??
-			[options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-		timeout: options.timeout,
+		stdio: options.stdio ?? [
+			options.input === undefined ? "ignore" : "pipe",
+			"pipe",
+			"pipe",
+		],
+		timeout: options.timeout ?? 15 * 60_000,
 		killSignal: "SIGTERM",
 		maxBuffer: 16 * 1024 * 1024,
 	});
@@ -59,6 +75,7 @@ function tryCommand(file, args, options = {}) {
 		env: { ...process.env, ...(options.env ?? {}) },
 		encoding: "utf8",
 		stdio: options.stdio ?? ["ignore", "pipe", "pipe"],
+		timeout: options.timeout ?? 30_000,
 	});
 	return result.status === 0 ? result.stdout : null;
 }
@@ -152,6 +169,43 @@ function syncSource() {
 	return { ...upstream, sha };
 }
 
+const sourcePinPath = join(stateRoot, "source-pin.json");
+
+async function saveSourcePin(source) {
+	await mkdir(stateRoot, { recursive: true });
+	await writeFile(
+		sourcePinPath,
+		`${JSON.stringify({ ...source, repositoryRoot }, null, 2)}\n`,
+	);
+}
+
+async function readSourcePin() {
+	let pin;
+	try {
+		pin = JSON.parse(await readFile(sourcePinPath, "utf8"));
+	} catch (error) {
+		if (error.code === "ENOENT") fail("Source pin is missing; run sync first");
+		fail("Source pin is unreadable or invalid");
+	}
+	if (
+		pin.repositoryRoot !== repositoryRoot ||
+		!/^[a-f0-9]{40}$/.test(pin.sha ?? "") ||
+		!pin.branch ||
+		!pin.upstream
+	)
+		fail("Source pin is invalid or belongs to another worktree");
+	if (trackedChanges().length || git(["rev-parse", "HEAD"]) !== pin.sha)
+		fail("Source changed after sync; commit changes and sync again");
+	return pin;
+}
+
+async function resolveSource(action) {
+	if (action !== "sync" && action !== "all") return readSourcePin();
+	const source = syncSource();
+	await saveSourcePin(source);
+	return { ...source, repositoryRoot };
+}
+
 async function cleanContext(sha) {
 	await mkdir(stateRoot, { recursive: true });
 	const directory = await mkdtemp(join(stateRoot, "context-"));
@@ -212,7 +266,11 @@ function pullDigest(repository, sha) {
 	const digest =
 		readImageDigest(tag) ?? readImageDigest(`${repository}:${sha}`);
 	if (!digest) return null;
-	docker(["pull", `${repository}@${digest}`]);
+	if (!tryDocker(["image", "inspect", `${repository}@${digest}`])) {
+		docker(["pull", `${repository}@${digest}`]);
+	} else {
+		console.log(`Image cache hit ${repository}@${digest}`);
+	}
 	return { repository, digest };
 }
 
@@ -328,12 +386,15 @@ function applyRuntimeBinding(manifest) {
 	let digest = binding.digest;
 	if (raw) {
 		try {
-			digest = selectPlatformManifest(JSON.parse(raw), dockerPlatform()) ?? digest;
+			digest =
+				selectPlatformManifest(JSON.parse(raw), dockerPlatform()) ?? digest;
 		} catch (error) {
 			fail(error instanceof Error ? error.message : String(error));
 		}
 	} else {
-		console.log("Runtime binding was not re-read; Worker admission remains the gate");
+		console.log(
+			"Runtime binding was not re-read; Worker admission remains the gate",
+		);
 	}
 	process.env.AGENT_INFRA_RUNTIME_IMAGE_REPOSITORY = binding.repository;
 	process.env.AGENT_INFRA_RUNTIME_IMAGE_DIGEST = digest;
@@ -342,100 +403,377 @@ function applyRuntimeBinding(manifest) {
 async function readInfrastructureManifest(source) {
 	try {
 		return JSON.parse(
-			await readFile(join(stateRoot, `infrastructure-${source.sha}.json`), "utf8"),
+			await readFile(
+				join(stateRoot, `infrastructure-${source.sha}.json`),
+				"utf8",
+			),
 		);
 	} catch {
-		fail(`Infrastructure manifest is missing for ${source.sha}; run images first`);
+		fail(
+			`Infrastructure manifest is missing for ${source.sha}; run images first`,
+		);
+	}
+}
+
+async function readCache(path, fallback) {
+	try {
+		return JSON.parse(await readFile(path, "utf8"));
+	} catch (error) {
+		if (error.code === "ENOENT") return fallback;
+		fail(`Image cache is unreadable or invalid: ${basename(path)}`);
+	}
+}
+
+function targetProfile() {
+	return fingerprint([
+		process.env.PLATFORM_LOCAL_DOCKER_CONTEXT ?? "",
+		process.env.PLATFORM_LOCAL_KUBE_CONTEXT ?? "",
+		process.env.PLATFORM_LOCAL_PROJECT ?? "",
+		process.env.PLATFORM_LOCAL_NAMESPACE ?? "",
+	]);
+}
+
+function workspaceInputs(source, service) {
+	const manifests = git([
+		"ls-tree",
+		"-r",
+		"--name-only",
+		source.sha,
+		"apps",
+		"packages",
+	])
+		.split("\n")
+		.filter((path) => /^(apps|packages)\/[^/]+\/package\.json$/.test(path));
+	const workspaces = manifests.map((path) => ({
+		path: path.slice(0, -"/package.json".length),
+		manifest: JSON.parse(git(["show", `${source.sha}:${path}`])),
+	}));
+	const paths = componentWorkspacePaths(workspaces, `apps/${service}`);
+	// Shared build policy and lockfile remain conservative invalidators.
+	const shared = git(["ls-tree", "--name-only", source.sha])
+		.split("\n")
+		.filter((path) =>
+			/^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|turbo\.json|tsconfig[^/]*\.json|\.npmrc|\.dockerignore)$/.test(
+				path,
+			),
+		);
+	const dockerfile = `apps/${service}/Dockerfile`;
+	return [...paths, ...shared, dockerfile].map((path) => ({
+		path,
+		content: git(["rev-parse", `${source.sha}:${path}`]),
+	}));
+}
+
+async function overlayInputs(directory, prefix = "") {
+	let entries;
+	try {
+		entries = await readdir(join(directory, prefix), { withFileTypes: true });
+	} catch (error) {
+		if (error.code === "ENOENT" && !prefix) return [];
+		throw error;
+	}
+	const inputs = [];
+	for (const entry of entries) {
+		const path = join(prefix, entry.name);
+		if (entry.isSymbolicLink())
+			fail("Deployment overlay must not contain symlinks");
+		if (entry.isDirectory())
+			inputs.push(...(await overlayInputs(directory, path)));
+		else if (entry.isFile())
+			inputs.push({
+				path: `overlay/${path}`,
+				content: await readFile(join(directory, path)),
+			});
+		else fail("Deployment overlay contains an unsupported file");
+	}
+	return inputs;
+}
+
+async function componentInputForSource(source, service, platform) {
+	const overlayDirectory =
+		service === "platform-api"
+			? join(stateRoot, "api-overlay")
+			: service === "platform-worker"
+				? join(stateRoot, "worker-overlay")
+				: null;
+	const overlays = overlayDirectory
+		? await overlayInputs(overlayDirectory)
+		: [];
+	const buildArgs =
+		service === "web"
+			? [
+					"VITE_PLATFORM_LOGIN_URL=/auth/login",
+					"VITE_PLATFORM_LOGOUT_URL=/auth/logout",
+				]
+			: [];
+	return {
+		inputHash: workerInputHash([
+			...workspaceInputs(source, service),
+			...overlays,
+			{ path: "target-platform", content: platform },
+			{ path: "build-args", content: JSON.stringify(buildArgs) },
+		]),
+		overlayDirectory: overlays.length ? overlayDirectory : null,
+		buildArgs,
+	};
+}
+
+function inspectLocalImage(reference) {
+	const raw = tryDocker(["image", "inspect", reference]);
+	if (!raw) return null;
+	const image = JSON.parse(raw)?.[0];
+	if (!/^sha256:[a-f0-9]{64}$/.test(image?.Id))
+		fail("Local image has no immutable image ID");
+	return image;
+}
+
+async function lookupDnsWithTimeout(dns, host, timeoutMs = 30_000) {
+	let timer;
+	try {
+		return await Promise.race([
+			dns.lookup(host),
+			new Promise((_, reject) => {
+				timer = setTimeout(
+					() => reject(new Error(`DNS_LOOKUP_TIMEOUT:${host}`)),
+					timeoutMs,
+				);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
 	}
 }
 
 async function buildPlatformImages(source) {
-	const context = await cleanContext(source.sha);
-	const buildHosts = [
-		"registry.npmjs.org",
-		"dl-cdn.alpinelinux.org",
-		"github.com",
-		"raw.githubusercontent.com",
-		"objects.githubusercontent.com",
-		"release-assets.githubusercontent.com",
-	];
-	const resolvedHosts = await Promise.all(
-		buildHosts.map(async (host) => [host, (await dns.lookup(host)).address]),
-	);
+	const platform = dockerPlatform();
+	const dns = await import("node:dns/promises");
+	const buildHosts = ["registry.npmjs.org", "dl-cdn.alpinelinux.org", "github.com", "raw.githubusercontent.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"];
+	const resolvedHosts = await Promise.all(buildHosts.map(async (host) => [host, (await lookupDnsWithTimeout(dns, host)).address]));
 	const proxy = process.env.E2E_HARNESS_BUILD_PROXY ?? "http://host.lima.internal:7892";
+	const profile = targetProfile();
+	const cachePath = join(stateRoot, "component-image-cache.json");
+	const cache = await readCache(cachePath, {
+		schemaVersion: 1,
+		components: {},
+	});
+	if (cache.schemaVersion !== 1 || !cache.components)
+		fail("Component image cache schema is invalid");
+	let context;
+	let workerBinding;
 	try {
-		for (const [service, dockerfile] of [
-			["web", "apps/web/Dockerfile"],
-			["platform-api", "apps/platform-api/Dockerfile"],
-			["platform-worker", "apps/platform-worker/Dockerfile"],
-			["enterprise-directory-sync", "apps/enterprise-directory-sync/Dockerfile"],
+		for (const service of [
+			"web",
+			"platform-api",
+			"platform-worker",
+			"enterprise-directory-sync",
 		]) {
-			const args = [
-				"build",
-				"--network",
-				"host",
-				"--build-arg",
-				`SOURCE_COMMIT=${source.sha}`,
-				...(service === "web"
-					? [
-							"--build-arg",
-							"VITE_PLATFORM_LOGIN_URL=/auth/login",
-							"--build-arg",
-							"VITE_PLATFORM_LOGOUT_URL=/auth/logout",
-						]
-					: []),
-				...[
-					"HTTP_PROXY",
-					"HTTPS_PROXY",
-					"ALL_PROXY",
-					"http_proxy",
-					"https_proxy",
-					"all_proxy",
-				].flatMap((name) => ["--build-arg", `${name}=${proxy}`]),
-				"--add-host",
-				"host.lima.internal:host-gateway",
-				...resolvedHosts.flatMap(([host, address]) => [
-					"--add-host",
-					`${host}:${address}`,
-				]),
-				"--file",
-				join(context, dockerfile),
-				"--tag",
-				`agent-infra-e2e-${service}`,
-				context,
-			];
-			docker(args, { stdio: "inherit" });
+			const input = await componentInputForSource(source, service, platform);
+			const key = `${profile}:${service}:${input.inputHash}`;
+			const tag = `agent-infra-e2e-${service}:${input.inputHash}`;
+			const alias = `agent-infra-e2e-${service}`;
+			const previous = cache.components[key];
+			let image = inspectLocalImage(tag);
+			if (previous && image && image.Id !== previous.imageId)
+				fail(`Component cache image changed: ${service}`);
+			if (!previous || !image) {
+				context ??= await cleanContext(source.sha);
+				docker(
+					[
+						"build",
+						"--network", "host", "--platform",
+						platform,
+						...input.buildArgs.flatMap((arg) => ["--build-arg", arg]),
+						...["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"].flatMap((name) => ["--build-arg", `${name}=${proxy}`]),
+						"--add-host", "host.lima.internal:host-gateway",
+						...resolvedHosts.flatMap(([host, address]) => ["--add-host", `${host}:${address}`]),
+						"--file",
+						join(context, `apps/${service}/Dockerfile`),
+						"--tag",
+						alias,
+						context,
+					],
+					{ stdio: "inherit" },
+				);
+				if (input.overlayDirectory) {
+					docker(
+						[
+							"build",
+							"--platform",
+							platform,
+							"--file",
+							join(input.overlayDirectory, "Dockerfile"),
+							"--tag",
+							alias,
+							input.overlayDirectory,
+						],
+						{ stdio: "inherit" },
+					);
+				}
+				image = inspectLocalImage(alias);
+				if (!image) fail(`Built image is unavailable: ${service}`);
+				if (previous && previous.imageId !== image.Id)
+					fail(
+						`Component image is not reproducible for input ${input.inputHash}`,
+					);
+				docker(["tag", image.Id, tag]);
+			} else {
+				console.log(`Component image cache hit service=${service}`);
+				docker(["tag", image.Id, alias]);
+			}
+			cache.components[key] = {
+				inputHash: input.inputHash,
+				imageId: image.Id,
+				tag,
+				buildSourceSha: previous?.buildSourceSha ?? source.sha,
+				platform,
+				profile,
+			};
+			await writeFile(cachePath, `${JSON.stringify(cache, null, 2)}\n`, {
+				mode: 0o600,
+			});
+			if (service === "platform-worker")
+				workerBinding = await resolveWorkerBinding(
+					image,
+					cache.components[key],
+					profile,
+				);
 		}
-		await buildPrivateDeploymentOverlays();
+		await writeWorkerValuesOverlay(source, workerBinding, profile);
 	} finally {
-		await rm(context, { recursive: true, force: true });
+		if (context) await rm(context, { recursive: true, force: true });
 	}
 }
 
-async function buildPrivateDeploymentOverlays() {
-	const overlays = [
-		["agent-infra-e2e-platform-api", join(stateRoot, "api-overlay")],
-		["agent-infra-e2e-platform-worker", join(stateRoot, "worker-overlay")],
-	];
-	for (const [tag, directory] of overlays) {
-		try {
-			await readFile(join(directory, "Dockerfile"));
-		} catch {
-			continue;
-		}
-		docker(
-			[
-				"build",
-				"--network",
-				"host",
-				"--file",
-				join(directory, "Dockerfile"),
-				"--tag",
-				tag,
-				directory,
-			],
-			{ stdio: "inherit" },
-		);
+async function readWorkerValues() {
+	const path = requiredAbsoluteEnv("PLATFORM_LOCAL_WORKER_VALUES");
+	const { parse } = await import("yaml");
+	const values = parse(await readFile(path, "utf8"));
+	const repository = values?.images?.platformWorker?.repository;
+	if (
+		typeof repository !== "string" ||
+		!/^[a-z0-9][a-z0-9._:/-]*$/.test(repository) ||
+		repository.includes("@")
+	)
+		fail("Worker values must name an image repository");
+	return { repository };
+}
+
+async function resolveWorkerBinding(image, component, profile) {
+	const { repository } = await readWorkerValues();
+	const expectedPrefix = `${repository}@`;
+	const existing = (image.RepoDigests ?? []).find((value) =>
+		value.startsWith(expectedPrefix),
+	);
+	let digest = existing?.slice(expectedPrefix.length);
+	if (!digest) {
+		// Publishing is restricted to a separately declared local-registry destination.
+		if (process.env.E2E_HARNESS_LOCAL_WORKER_REPOSITORY !== repository)
+			fail(
+				"Worker image needs a digest; declare E2E_HARNESS_LOCAL_WORKER_REPOSITORY before publishing to the local registry",
+			);
+		const tag = `${repository}:e2e-${component.inputHash}`;
+		docker(["tag", component.imageId, tag]);
+		docker(["push", tag], { stdio: "inherit" });
+		digest = readImageDigest(tag);
+	}
+	if (!/^sha256:[a-f0-9]{64}$/.test(digest ?? ""))
+		fail("Worker image has no immutable registry digest");
+	const raw = tryDocker([
+		"buildx",
+		"imagetools",
+		"inspect",
+		"--raw",
+		`${repository}@${digest}`,
+	]);
+	if (!raw) fail("Worker image digest cannot be read back from its registry");
+	const manifest = JSON.parse(raw);
+	if (
+		manifest.mediaType !== "application/vnd.oci.image.manifest.v1+json" &&
+		manifest.mediaType !==
+			"application/vnd.docker.distribution.manifest.v2+json"
+	)
+		fail("Worker binding must use a single-platform manifest");
+	if (manifest.config?.digest !== component.imageId)
+		fail("Worker registry manifest does not match the built image");
+	const cachePath = join(stateRoot, "worker-image-cache.json");
+	const cache = await readCache(cachePath, { schemaVersion: 1, worker: {} });
+	const key = `${profile}:${repository}:${component.inputHash}`;
+	const previous = cachedWorkerDigest(cache, key);
+	if (previous && previous.digest !== digest)
+		fail("Worker digest changed for identical build inputs");
+	const binding = {
+		repository,
+		digest,
+		inputHash: component.inputHash,
+		imageId: component.imageId,
+		buildSourceSha: component.buildSourceSha,
+		platform: component.platform,
+	};
+	cache.worker[key] = binding;
+	await writeFile(cachePath, `${JSON.stringify(cache, null, 2)}\n`, {
+		mode: 0o600,
+	});
+	return binding;
+}
+
+async function writeWorkerValuesOverlay(source, binding, profile) {
+	const path = join(stateRoot, `worker-values-${source.sha}.yaml`);
+	const overlay = `images:\n  platformWorker:\n    repository: ${JSON.stringify(binding.repository)}\n    digest: ${JSON.stringify(binding.digest)}\n`;
+	await writeFile(path, overlay, { mode: 0o600 });
+	await chmod(path, 0o600);
+	await writeFile(
+		join(stateRoot, `platform-images-${source.sha}.json`),
+		`${JSON.stringify({ schemaVersion: 1, sourceSha: source.sha, profile, worker: binding }, null, 2)}\n`,
+		{ mode: 0o600 },
+	);
+	process.env.PLATFORM_LOCAL_WORKER_VALUES_OVERLAY = path;
+}
+
+async function applyWorkerBinding(source) {
+	const manifest = JSON.parse(
+		await readFile(
+			join(stateRoot, `platform-images-${source.sha}.json`),
+			"utf8",
+		),
+	);
+	const platform = dockerPlatform();
+	const input = await componentInputForSource(
+		source,
+		"platform-worker",
+		platform,
+	);
+	const { repository } = await readWorkerValues();
+	const binding = manifest.worker;
+	if (
+		manifest.schemaVersion !== 1 ||
+		manifest.sourceSha !== source.sha ||
+		manifest.profile !== targetProfile() ||
+		!binding ||
+		binding?.inputHash !== input.inputHash ||
+		binding.platform !== platform ||
+		binding.repository !== repository ||
+		!/^sha256:[a-f0-9]{64}$/.test(binding.digest)
+	)
+		fail("Worker binding does not match source, inputs or target profile");
+	await writeWorkerValuesOverlay(source, binding, targetProfile());
+	return binding;
+}
+
+async function applyComponentBindings(source) {
+	const platform = dockerPlatform();
+	const cache = await readCache(join(stateRoot, "component-image-cache.json"), {
+		schemaVersion: 1,
+		components: {},
+	});
+	for (const service of ["web", "platform-api", "platform-worker", "enterprise-directory-sync"]) {
+		const input = await componentInputForSource(source, service, platform);
+		const entry = cache.components?.[`${service}:${input.inputHash}`];
+		if (!entry?.imageId || entry.platform !== platform)
+			fail(`Component binding is missing for ${service} at ${source.sha}`);
+		const image = inspectLocalImage(entry.imageId);
+		if (!image || image.Id !== entry.imageId)
+			fail(`Component image is unavailable for ${service}`);
+		docker(["tag", entry.imageId, `agent-infra-e2e-${service}`]);
 	}
 }
 
@@ -471,6 +809,25 @@ function readKubeObject(kind, name, namespace) {
 		"json",
 	]).trim();
 	return output ? JSON.parse(output) : null;
+}
+
+function verifyWorkerImageBinding(binding) {
+	const selector = `app.kubernetes.io/instance=${process.env.PLATFORM_LOCAL_PROJECT},app.kubernetes.io/component=platform-worker`;
+	const read = (kind) =>
+		JSON.parse(
+			kubectl([
+				"--namespace",
+				process.env.PLATFORM_LOCAL_NAMESPACE,
+				"get",
+				kind,
+				"--selector",
+				selector,
+				"--output",
+				"json",
+			]),
+		).items ?? [];
+	assertWorkerReadback(binding, read("deployment"), read("pods"));
+	console.log(`Worker image readback ${binding.repository}@${binding.digest}`);
 }
 
 const isHarnessOwned = (object) =>
@@ -524,8 +881,21 @@ function ensureClusterDns() {
 			data: { ...config.data, Corefile: next },
 		}),
 	});
-	kubectl(["--namespace", "kube-system", "rollout", "restart", "deployment/coredns"]);
-	kubectl(["--namespace", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=2m"]);
+	kubectl([
+		"--namespace",
+		"kube-system",
+		"rollout",
+		"restart",
+		"deployment/coredns",
+	]);
+	kubectl([
+		"--namespace",
+		"kube-system",
+		"rollout",
+		"status",
+		"deployment/coredns",
+		"--timeout=2m",
+	]);
 	console.log(`E2E cluster DNS forward zones=${zones.length}`);
 }
 
@@ -560,15 +930,32 @@ async function provisionRuntimeMaterial() {
 	const moduleRef = worker.configurationModuleSecretRef;
 	const authRef = worker.runtimeAuthSecretRef;
 	const caRef = worker.trustedCaSecretRef;
-	if (!moduleRef?.name || !moduleRef?.key || !authRef?.name || !authRef?.serviceTokenKey || !caRef?.name || !caRef?.key)
-		fail("Worker values must name configuration, runtime-auth and trusted CA Secrets");
+	if (
+		!moduleRef?.name ||
+		!moduleRef?.key ||
+		!authRef?.name ||
+		!authRef?.serviceTokenKey ||
+		!caRef?.name ||
+		!caRef?.key
+	)
+		fail(
+			"Worker values must name configuration, runtime-auth and trusted CA Secrets",
+		);
 
 	ensureClusterDns();
 
 	const bundle = await trustedCaBundle();
-	applyOwnedSecret(namespace, caRef.name, "Opaque", { [caRef.key]: bundle }, readKubeObject("secret", caRef.name, namespace));
+	applyOwnedSecret(
+		namespace,
+		caRef.name,
+		"Opaque",
+		{ [caRef.key]: bundle },
+		readKubeObject("secret", caRef.name, namespace),
+	);
 
-	const configurationPath = requiredAbsoluteEnv("PLATFORM_LOCAL_WORKER_CONFIGURATION");
+	const configurationPath = requiredAbsoluteEnv(
+		"PLATFORM_LOCAL_WORKER_CONFIGURATION",
+	);
 	try {
 		command(process.execPath, ["--check", configurationPath]);
 	} catch {
@@ -578,10 +965,17 @@ async function provisionRuntimeMaterial() {
 	// Private read-only adapter inputs (for example directory identity bindings)
 	// travel in the same reviewed module Secret; values never enter Git or argv.
 	const deploymentFiles = {};
-	for (const file of (process.env.E2E_WORKER_DEPLOYMENT_FILES ?? "").split(":").filter(Boolean)) {
-		if (!isAbsolute(file)) fail("E2E_WORKER_DEPLOYMENT_FILES must list absolute paths");
+	for (const file of (process.env.E2E_WORKER_DEPLOYMENT_FILES ?? "")
+		.split(":")
+		.filter(Boolean)) {
+		if (!isAbsolute(file))
+			fail("E2E_WORKER_DEPLOYMENT_FILES must list absolute paths");
 		const key = basename(file);
-		if (!/^[-._a-zA-Z0-9]{1,253}$/.test(key) || key === moduleRef.key || key in deploymentFiles)
+		if (
+			!/^[-._a-zA-Z0-9]{1,253}$/.test(key) ||
+			key === moduleRef.key ||
+			key in deploymentFiles
+		)
 			fail(`Worker deployment file name is not a unique Secret key: ${key}`);
 		deploymentFiles[key] = await readFile(file, "utf8");
 	}
@@ -596,8 +990,15 @@ async function provisionRuntimeMaterial() {
 	const auth = readKubeObject("secret", authRef.name, namespace);
 	const token = decodeSecret(auth, authRef.serviceTokenKey);
 	if (!token?.trim()) fail("Worker runtime-auth service token is unavailable");
-	const transport = process.env.E2E_RUNTIME_TRANSPORT_SECRET ?? "platform-runtime-transport";
-	applyOwnedSecret(namespace, transport, "Opaque", { token }, readKubeObject("secret", transport, namespace));
+	const transport =
+		process.env.E2E_RUNTIME_TRANSPORT_SECRET ?? "platform-runtime-transport";
+	applyOwnedSecret(
+		namespace,
+		transport,
+		"Opaque",
+		{ token },
+		readKubeObject("secret", transport, namespace),
+	);
 
 	const deployment = kubectl([
 		"--namespace",
@@ -612,11 +1013,37 @@ async function provisionRuntimeMaterial() {
 	if (!deployment) return;
 	if (deployment.includes(" ")) fail("Fixed Worker Deployment is ambiguous");
 	const annotation = "agent-infra.agora.io/e2e-runtime-material";
-	const material = fingerprint([configuration, bundle, ...Object.entries(deploymentFiles).flat()]);
-	const live = readKubeObject("deployment", deployment, namespace)?.spec?.template?.metadata?.annotations?.[annotation];
+	const material = fingerprint([
+		configuration,
+		bundle,
+		...Object.entries(deploymentFiles).flat(),
+	]);
+	const live = readKubeObject("deployment", deployment, namespace)?.spec
+		?.template?.metadata?.annotations?.[annotation];
 	if (live === material) return;
-	kubectl(["--namespace", namespace, "patch", "deployment", deployment, "--type", "merge", "--patch", JSON.stringify({ spec: { template: { metadata: { annotations: { [annotation]: material } } } } })]);
-	kubectl(["--namespace", namespace, "rollout", "status", `deployment/${deployment}`, "--timeout=5m"]);
+	kubectl([
+		"--namespace",
+		namespace,
+		"patch",
+		"deployment",
+		deployment,
+		"--type",
+		"merge",
+		"--patch",
+		JSON.stringify({
+			spec: {
+				template: { metadata: { annotations: { [annotation]: material } } },
+			},
+		}),
+	]);
+	kubectl([
+		"--namespace",
+		namespace,
+		"rollout",
+		"status",
+		`deployment/${deployment}`,
+		"--timeout=5m",
+	]);
 	console.log("E2E Worker restarted with current Runtime material");
 }
 
@@ -632,20 +1059,102 @@ function assertFixedEnvironment() {
 }
 
 async function acquireLock() {
-	await mkdir(stateRoot, { recursive: true });
-	const lock = join(stateRoot, "run.lock");
+	const canonicalRoot = join(process.env.XDG_STATE_HOME ?? join(process.env.HOME ?? tmpdir(), ".local/state"), "agent-infra/e2e-locks");
+	const identity = workerInputHash([{ path: "docker-context", content: process.env.PLATFORM_LOCAL_DOCKER_CONTEXT ?? "" }, { path: "docker-endpoint", content: process.env.PLATFORM_LOCAL_DOCKER_ENDPOINT ?? "" }, { path: "kube-context", content: process.env.PLATFORM_LOCAL_KUBE_CONTEXT ?? "" }, { path: "kube-server", content: process.env.PLATFORM_LOCAL_KUBE_SERVER ?? "" }, { path: "namespace", content: process.env.PLATFORM_LOCAL_NAMESPACE ?? "" }]);
+	await mkdir(canonicalRoot, { recursive: true });
+	const lock = join(canonicalRoot, `${identity}.lock`);
 	try {
 		await mkdir(lock);
-		await writeFile(join(lock, "pid"), `${process.pid}\n`, { flag: "wx" });
+		await writeFile(join(lock, "pid"), `${process.pid}\n`, { flag: "wx", mode: 0o600 });
 	} catch {
-		fail(`Another E2E Harness run owns ${lock}`);
+		fail(`Another E2E Harness run owns environment ${identity}`);
 	}
 	return async () => rm(lock, { recursive: true, force: true });
 }
 
+async function writeRunReceipt(status, action, error) {
+	try {
+		await mkdir(stateRoot, { recursive: true });
+		const receipt = {
+			schemaVersion: 1,
+			status,
+			action,
+			profile: targetProfile(),
+			...(error
+				? {
+					errorClass: error instanceof Error ? error.name : "Error",
+					errorHash: fingerprint([String(error instanceof Error ? error.message : error)]),
+				}
+				: {}),
+		};
+		await writeFile(join(stateRoot, "deployment-receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`, {
+			mode: 0o600,
+		});
+		await chmod(join(stateRoot, "deployment-receipt.json"), 0o600);
+	} catch {
+		// A diagnostic receipt must never hide the original Harness result.
+	}
+}
+
+function assertAppLane(source, action) {
+	if (action !== "app") return;
+	const receipt = requiredAbsoluteEnv("E2E_HARNESS_SHARED_BASE_RECEIPT");
+	if (!tryCommand("test", ["-r", receipt])) fail("APP_BASE_UNAVAILABLE: shared base receipt is missing");
+	const changed = git(["diff", "--name-only", `${source.upstream}...${source.sha}`]).split("\n").filter(Boolean);
+	const unsafe = changed.filter((path) => /^(apps\/(platform-api|platform-worker|enterprise-directory-sync|connection-api)|packages\/(platform-|identity|contracts)|migrations\/|deploy\/helm|deploy\/local\/(environment|platform-worker))/.test(path));
+	if (unsafe.length) fail(`APP_LANE_UNSAFE_CHANGE: ${unsafe.join(", ")}`);
+	const port = Number(process.env.E2E_HARNESS_APP_PORT);
+	if (!Number.isInteger(port) || port < 1024 || port > 65535) fail("E2E_HARNESS_APP_PORT must be a valid unprivileged port");
+	if (!process.env.PLATFORM_API_PROXY_TARGET?.startsWith("http://127.0.0.1:") && !process.env.PLATFORM_API_PROXY_TARGET?.startsWith("https://127.0.0.1:")) fail("PLATFORM_API_PROXY_TARGET must target the shared loopback API");
+	if (!process.env.PLATFORM_WEB_TLS_CERT_FILE || !process.env.PLATFORM_WEB_TLS_KEY_FILE) fail("APP_TLS_INPUT_MISSING");
+}
+
+function loginRequest(base, path, method, body, cookie, ca) {
+	return new Promise((resolve, reject) => {
+		const payload = body ? JSON.stringify(body) : undefined;
+		const request = httpsRequest(new URL(path, base), { method, ca, headers: { Origin: base.origin, Accept: "application/json", ...(payload ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) } : {}), ...(cookie ? { Cookie: cookie } : {}) } }, (response) => {
+			const chunks = []; response.on("data", (chunk) => chunks.push(chunk)); response.on("end", () => resolve({ status: response.statusCode ?? 0, headers: response.headers, body: Buffer.concat(chunks).toString("utf8") }));
+		});
+		request.once("error", reject); request.setTimeout(15_000, () => request.destroy(new Error("LOGIN_PROBE_TIMEOUT"))); if (payload) request.write(payload); request.end();
+	});
+}
+
+async function requireRealLoginValidation() {
+	const value = process.env.E2E_HARNESS_PUBLIC_ORIGIN?.trim();
+	let base; try { base = new URL(value); } catch { fail("LOGIN_PROBE_INPUT_MISSING"); }
+	if (base.protocol !== "https:" || base.origin !== value || base.username || base.password || base.search || base.hash) fail("LOGIN_PROBE_ORIGIN_INVALID");
+	const readSecret = async (name) => { const path = requiredAbsoluteEnv(name); const secret = (await readFile(path, "utf8")).trim(); if (!secret) fail("LOGIN_PROBE_INPUT_MISSING"); return secret; };
+	const username = await readSecret("E2E_HARNESS_LOGIN_USERNAME_FILE");
+	const password = await readSecret("E2E_HARNESS_LOGIN_PASSWORD_FILE");
+	const expected = await readSecret("E2E_HARNESS_EXPECTED_USER_ID_FILE");
+	if ((process.env.E2E_HARNESS_LOGIN_PROTOCOL ?? "ldap") !== "ldap") fail("LOGIN_PROTOCOL_UNSUPPORTED");
+	const ca = process.env.E2E_HARNESS_LOGIN_CA_FILE ? await readFile(requiredAbsoluteEnv("E2E_HARNESS_LOGIN_CA_FILE")) : undefined;
+	const login = await loginRequest(base, "/auth/login", "POST", { login: username, password }, undefined, ca);
+	const setCookie = login.headers["set-cookie"]?.find((entry) => entry.startsWith("__Host-platform-session="));
+	if (login.status !== 204 || !setCookie) fail(`LOGIN_FAILED_STATUS_${login.status}`);
+	const session = await loginRequest(base, "/api/v1/session", "GET", undefined, setCookie.split(";", 1)[0], ca);
+	if (session.status !== 200) fail(`AUTHORIZED_READ_FAILED_STATUS_${session.status}`);
+	let projection; try { projection = JSON.parse(session.body); } catch { fail("AUTHORIZED_READ_INVALID_JSON"); }
+	if (projection?.user?.userId !== expected) fail("AUTHORIZED_IDENTITY_MISMATCH");
+	const businessPath = process.env.E2E_HARNESS_BUSINESS_READ_PATH ?? "/api/v2/agents";
+	if (!businessPath.startsWith("/") || businessPath.startsWith("//"))
+		fail("BUSINESS_READ_PATH_INVALID");
+	const business = await loginRequest(
+		base,
+		businessPath,
+		"GET",
+		undefined,
+		setCookie.split(";", 1)[0],
+		ca,
+	);
+	if (business.status !== 200) fail(`BUSINESS_READ_FAILED_STATUS_${business.status}`);
+	try { JSON.parse(business.body); } catch { fail("BUSINESS_READ_INVALID_JSON"); }
+	console.log("Real login, authorized session read, and business read passed");
+}
+
 function usage() {
 	console.log(
-		"Usage: node deploy/local/e2e-harness.mjs <sync|images|build|deploy|runtime|verify|all|reset>",
+		"Usage: node deploy/local/e2e-harness.mjs <sync|images|build|deploy|runtime|verify|all|reset|app>",
 	);
 }
 
@@ -665,6 +1174,7 @@ async function main() {
 			"verify",
 			"all",
 			"reset",
+			"app",
 		].includes(action)
 	) {
 		usage();
@@ -685,12 +1195,17 @@ async function main() {
 		}
 		return;
 	}
-	if (action !== "sync") assertFixedEnvironment();
-	const release = action === "sync" ? async () => {} : await acquireLock();
+	if (action !== "sync" && action !== "app") assertFixedEnvironment();
+	const release = await acquireLock();
 	try {
-		const source = syncSource();
+		const source = await resolveSource(action);
+		assertAppLane(source, action);
 		console.log(`E2E sourceRevision=${source.sha} upstream=${source.upstream}`);
 		if (action === "sync") return;
+		if (action === "app") {
+			command("pnpm", ["--filter", "@agent-infra/web", "dev", "--host", "127.0.0.1", "--port", process.env.E2E_HARNESS_APP_PORT], { stdio: "inherit" });
+			return;
+		}
 		if (["images", "all"].includes(action)) {
 			const result = await resolveInfrastructureImages(source);
 			applyRuntimeBinding(result.manifest);
@@ -698,20 +1213,34 @@ async function main() {
 			applyRuntimeBinding(await readInfrastructureManifest(source));
 		}
 		if (["build", "all"].includes(action)) await buildPlatformImages(source);
+		const workerBinding = ["deploy", "verify", "all"].includes(action)
+			? await applyWorkerBinding(source)
+			: null;
+		if (["deploy", "verify", "all"].includes(action))
+			await applyComponentBindings(source);
 		if (["deploy", "all"].includes(action)) {
 			platformScript("data");
 			platformScript("migrate");
 			// Referenced Secrets must exist before Helm validates Worker material.
 			await provisionRuntimeMaterial();
 			platformScript("up");
+			verifyWorkerImageBinding(workerBinding);
 		}
-		if (["verify", "all"].includes(action)) platformScript("status");
+		if (["verify", "all"].includes(action)) {
+			process.stdout.write(platformScript("status"));
+			if (workerBinding) verifyWorkerImageBinding(workerBinding);
+			await requireRealLoginValidation();
+		}
 	} finally {
 		await release();
 	}
 }
 
-main().catch((error) => {
-	console.error(error instanceof Error ? error.message : String(error));
-	process.exitCode = 1;
-});
+const action = process.argv[2] ?? "all";
+main()
+	.then(async () => writeRunReceipt("passed", action))
+	.catch(async (error) => {
+		await writeRunReceipt("failed", action, error);
+		console.error(error instanceof Error ? error.message : String(error));
+		process.exitCode = 1;
+	});
