@@ -1,16 +1,16 @@
 # 开放 Issue 状态跟进
 
-> 快照：2026-10-27 02:17 UTC；`origin/main` `9b2407c5cb30c8c9de1b6fcc7078600c817a9e47`。
+> 快照：2026-10-27 02:17 UTC；`origin/main` `fc5cd80ff`。
 > GitHub 状态不代表验收通过；Issue 与 PR 链接是持续更新的证据入口。
 
-当前开放 Issue：**42**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
+当前开放 Issue：**41**。完整开发工作完成即可关闭，真实验收 AC 由负责人后续统一跟进。
 
 ## 分类计数
 
 | 类别 | 数量 |
 | --- | ---: |
 | Runtime/Worker/Core | 14 |
-| Deploy/E2E/Channels | 16 |
+| Deploy/E2E/Channels | 15 |
 | Platform/Web/Skill | 8 |
 | Workflow/Observability | 4 |
 
@@ -43,7 +43,6 @@
 | Deploy/E2E/Channels | [#3060](https://github.com/AgoraIO-Extensions/agent-infra/issues/3060) | fix(local): 固定 E2E 部署缺少文件面装配、FileLimits 声明与 Runtime 文件交换注入 | 未标注 | agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Deploy/E2E/Channels | [#2998](https://github.com/AgoraIO-Extensions/agent-infra/issues/2998) | test(e2e): real WeCom credential and official QR binding acceptance | 未标注 | agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Deploy/E2E/Channels | [#2983](https://github.com/AgoraIO-Extensions/agent-infra/issues/2983) | test(e2e): 固定环境验收 DeepSeek 与思考过程（Web 与企微） | priority:P1 | ready-for-agent, priority:P1, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
-| Deploy/E2E/Channels | [#2939](https://github.com/AgoraIO-Extensions/agent-infra/issues/2939) | perf(local): batch fresh canonical identity reads for directory authority | priority:P1 | ready-for-agent, priority:P1, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Deploy/E2E/Channels | [#2938](https://github.com/AgoraIO-Extensions/agent-infra/issues/2938) | fix(local): validate official kindnet NFQUEUE flush fix under default policy | priority:P2 | ready-for-agent, priority:P2, agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Deploy/E2E/Channels | [#2742](https://github.com/AgoraIO-Extensions/agent-infra/issues/2742) | feat(skill): connect project snapshot packaging to the production publication path | 未标注 | agent:codex | 2026-10-26 | 核对 #2949/#2946 消费者交付后收口 |
 | Deploy/E2E/Channels | [#1548](https://github.com/AgoraIO-Extensions/agent-infra/issues/1548) | test(skill-hub): accept the deployed lifecycle and Web conversation chain | priority:P0 | ready-for-human, priority:P0, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
