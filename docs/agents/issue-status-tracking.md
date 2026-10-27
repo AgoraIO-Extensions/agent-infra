@@ -47,8 +47,9 @@
 
 ## 开发 PR 回读
 
-状态截至 2026-10-27 23:09 UTC。OPEN 不等于合入，MERGED 不等于真实验收完成。
+状态截至 2026-10-27 23:11 UTC。OPEN 不等于合入，MERGED 不等于真实验收完成。
 
 | PR | 状态 | head SHA | 未完成验收 |
 | --- | --- | --- | --- |
 | [#3582](https://github.com/AgoraIO-Extensions/agent-infra/pull/3582) | OPEN / BLOCKED | `9b1f4fc7fae5ae4eeb272d74b5e597f134cd926b` | CI heavy validation 与 CI 失败，需开发会话修复后重新回读 |
+| [#3586](https://github.com/AgoraIO-Extensions/agent-infra/pull/3586) | OPEN / BLOCKED | `3d8fa792b4b700913c7a882f7b867165eb2e57a3` | CI 与 Issue Gate 尚在排队，需完成门禁后再合并 |
