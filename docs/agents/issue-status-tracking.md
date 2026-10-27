@@ -3,14 +3,14 @@
 > 快照时间：2026-10-27（UTC）；来源：GitHub `AgoraIO-Extensions/agent-infra` 开放 Issue 实时回读。
 > 基线：`origin/main` `56e6f7ab0`。本表是调度快照，Issue 正文、依赖、PR 和真实验收仍是权威来源。
 
-当前开放 Issue：**46**。状态标签不能替代 AC、native blocker、PRD/工程 Spec 或真实环境证据。
+当前开放 Issue：**45**。状态标签不能替代 AC、native blocker、PRD/工程 Spec 或真实环境证据。
 
 ## 分类计数
 
 | 类别 | 数量 |
 | --- | ---: |
 | Runtime/Worker/Core | 14 |
-| Deploy/E2E/Channels | 18 |
+| Deploy/E2E/Channels | 17 |
 | Platform/Web/Skill | 8 |
 | Workflow/Observability | 6 |
 
@@ -43,7 +43,6 @@
 | Deploy/E2E/Channels | [#3072](https://github.com/AgoraIO-Extensions/agent-infra/issues/3072) | 验收 ACK main 部署的四基础模板与自定义镜像真实链路 | priority:P0 | priority:P0, agent:codex | LichKing-2234 | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#3060](https://github.com/AgoraIO-Extensions/agent-infra/issues/3060) | fix(local): 固定 E2E 部署缺少文件面装配、FileLimits 声明与 Runtime 文件交换注入 | 未标注 | agent:kiro | kiro（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#2998](https://github.com/AgoraIO-Extensions/agent-infra/issues/2998) | test(e2e): real WeCom credential and official QR binding acceptance | 未标注 | agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
-| Deploy/E2E/Channels | [#2989](https://github.com/AgoraIO-Extensions/agent-infra/issues/2989) | fix(local): 验证登录代理前等待主机发布端口就绪 | priority:P2 | priority:P2, agent:codex | codex（来源标签） | 2026-10-26 | 按优先级和依赖复核后分派 |
 | Deploy/E2E/Channels | [#2983](https://github.com/AgoraIO-Extensions/agent-infra/issues/2983) | test(e2e): 固定环境验收 DeepSeek 与思考过程（Web 与企微） | priority:P1 | ready-for-agent, priority:P1, agent:kiro | kiro（来源标签） | 2026-10-26 | 可进入实现；先复读 AC、依赖和当前 head |
 | Deploy/E2E/Channels | [#2939](https://github.com/AgoraIO-Extensions/agent-infra/issues/2939) | perf(local): batch fresh canonical identity reads for directory authority | priority:P1 | ready-for-agent, priority:P1, agent:codex | codex（来源标签） | 2026-10-26 | 可进入实现；先复读 AC、依赖和当前 head |
 | Deploy/E2E/Channels | [#2938](https://github.com/AgoraIO-Extensions/agent-infra/issues/2938) | fix(local): validate official kindnet NFQUEUE flush fix under default policy | priority:P2 | ready-for-agent, priority:P2, agent:codex | codex（来源标签） | 2026-10-26 | 可进入实现；先复读 AC、依赖和当前 head |
