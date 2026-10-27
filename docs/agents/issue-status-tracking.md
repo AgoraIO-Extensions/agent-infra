@@ -18,7 +18,6 @@
 
 | 类别 | Issue | 标题 | 优先级 | 实时标签 | 最近更新 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- |
-| Workflow/Observability | [#3540](https://github.com/AgoraIO-Extensions/agent-infra/issues/3540) | docs: include latest tracker refresh issue | priority:P2 | priority:P2, agent:codex | 2026-10-27 | tracker refresh PR |
 | Runtime/Worker/Core | [#3352](https://github.com/AgoraIO-Extensions/agent-infra/issues/3352) | feat(runtime): deliver Codex native context compaction in conversations | 未标注 | agent:codex | 2026-10-26 | 继续核对有状态原生命令的 Host/Driver 消费链 |
 | Runtime/Worker/Core | [#3295](https://github.com/AgoraIO-Extensions/agent-infra/issues/3295) | blocker(ack): Flannel 环境未通过 Worker NetworkPolicy 负向验证 | 未标注 | agent:codex | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
 | Runtime/Worker/Core | [#3277](https://github.com/AgoraIO-Extensions/agent-infra/issues/3277) | fix(worker): 开启文件交换后，镜像早于 #3256 的 Agent Workload 启动即退出（CrashLoop） | priority:P2 | needs-triage, priority:P2, agent:kiro | 2026-10-26 | 核对完整开发范围、关联 PR 与依赖；仅余真实验收时记录交接 |
