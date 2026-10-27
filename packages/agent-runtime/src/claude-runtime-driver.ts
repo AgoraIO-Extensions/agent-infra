@@ -86,7 +86,10 @@ import {
 } from "./driver-operation.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
-import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
+import {
+	openRuntimeMessagesTransport,
+	type RuntimeMessagesTransportDiagnostic,
+} from "./messages-model-transport.js";
 import {
 	projectNativeMetadataCommandsV1,
 	projectNativeMetadataSkillsV1,
@@ -268,6 +271,31 @@ interface Operation {
 	digest: string;
 	record?: RuntimeDriverOperationRecord;
 }
+
+function validMessagesTransportDiagnostic(
+	diagnostic: RuntimeMessagesTransportDiagnostic,
+) {
+	return (
+		[
+			"request",
+			"admission",
+			"credential",
+			"upstream_http",
+			"upstream_content_type",
+			"stream_validation",
+			"transport",
+			"abort",
+		].includes(diagnostic.stage) &&
+		typeof diagnostic.sent === "boolean" &&
+		Number.isSafeInteger(diagnostic.durationMs) &&
+		diagnostic.durationMs >= 0 &&
+		(diagnostic.statusCode === undefined ||
+			(Number.isInteger(diagnostic.statusCode) &&
+				diagnostic.statusCode >= 100 &&
+				diagnostic.statusCode <= 599))
+	);
+}
+
 interface Turn {
 	kind?: "submit-turn" | "native-command";
 	executionId: string;
@@ -279,6 +307,7 @@ interface Turn {
 	modelResponse?: {
 		state: "sent" | "completed" | "failed" | "unknown";
 		endTurn: boolean;
+		diagnostic?: RuntimeMessagesTransportDiagnostic;
 	};
 	status: RuntimeStatusV1;
 	/** An uncertain Connection operation permanently occupies this Turn after restart. */
@@ -1030,7 +1059,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							) ||
 							typeof turn.modelResponse.endTurn !== "boolean" ||
 							(turn.modelResponse.endTurn &&
-								turn.modelResponse.state !== "completed"))
+								turn.modelResponse.state !== "completed") ||
+							(turn.modelResponse.diagnostic !== undefined &&
+								!validMessagesTransportDiagnostic(
+									turn.modelResponse.diagnostic,
+								)))
 					)
 						unavailable();
 					if (
@@ -1666,7 +1699,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						},
 					}
 				: {}),
-			receipt: async (response, endTurn = false) => {
+			receipt: async (response, endTurn, diagnostic) => {
 				const now = Date.now();
 				if (response === "sent" && modelPhase === "intent") {
 					modelStartedAt = now;
@@ -1701,7 +1734,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						state.turns.find(
 							(turn) => turn.executionId === command.executionId,
 						) ?? unavailable();
-					turn.modelResponse = { state: response, endTurn };
+					turn.modelResponse = {
+						state: response,
+						endTurn,
+						...(diagnostic === undefined ? {} : { diagnostic }),
+					};
 				});
 			},
 			admit,
