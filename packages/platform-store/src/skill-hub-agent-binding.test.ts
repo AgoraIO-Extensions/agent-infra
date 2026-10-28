@@ -1,8 +1,10 @@
 import {
 	type AgentConfigurationAccessAuthorityV1,
+	createAgentConfigurationUseCaseV1,
 	createSkillHubAgentBindingUseCaseV1,
 	type SkillHubAgentBindingAdmissionPortV1,
 } from "@agent-infra/platform-core";
+import { FakeAgentConfigurationAdmissionsV1 } from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
 import {
 	afterAll,
@@ -13,7 +15,10 @@ import {
 	it,
 	vi,
 } from "vitest";
-import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
+import {
+	agentConfigurationConformanceAdmissionsV1,
+	agentConfigurationConformanceRecordV1,
+} from "../../platform-core/src/agent-configuration.conformance.ts";
 import { PostgresAgentConfigurationTransactionV1 } from "./agent-configuration.transaction.ts";
 import { PostgresPlatformAuditQueryV1 } from "./audit.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
@@ -628,6 +633,160 @@ describe("Skill Hub Agent current binding read", () => {
 			await store.close();
 		}
 	});
+
+	it.each(["environment", "source"])(
+		"retains the effective fixed bindings when %s replaces a channel revision",
+		async (kind) => {
+			const store = new PostgresSkillHubAgentBindingAdmissionV1({
+				databaseUrl: database?.databaseUrl ?? "",
+			});
+			const authorizationAdmission = {
+				async authorize() {
+					return {
+						schemaVersion: 1 as const,
+						status: "admitted" as const,
+						agentId: "agent-1",
+						actorId: "owner-1",
+						authorizationRevision: "authorization-1",
+						accessAuthority,
+					};
+				},
+			};
+			const bind = createSkillHubAgentBindingUseCaseV1({
+				transaction,
+				bindingAdmission: store,
+				bindingStatus: store,
+				agentVersion: "agent-version-1",
+				authorizationAdmission,
+				now: () => occurredAt,
+			});
+			const admissions = new FakeAgentConfigurationAdmissionsV1({
+				...agentConfigurationConformanceAdmissionsV1,
+				images: agentConfigurationConformanceAdmissionsV1.images.map(
+					(image) => ({
+						...image,
+						source: {
+							...image.source,
+							imageDigest: `sha256:${"e".repeat(64)}`,
+						},
+					}),
+				),
+			});
+			const update = createAgentConfigurationUseCaseV1(
+				{
+					transaction,
+					authorizationAdmission,
+					imageAdmission: admissions,
+					modelAdmission: admissions,
+					secretAdmission: admissions,
+					channelAdmission: admissions,
+				},
+				{ now: () => occurredAt },
+			);
+			const change = (key: string, changes: object) =>
+				update.update(
+					{
+						schemaVersion: 2,
+						agentId: "agent-1",
+						idempotencyKey: key,
+						requestId: key,
+						traceId: key,
+						changes,
+					},
+					actor,
+				);
+			try {
+				await bind.bind(
+					{
+						schemaVersion: 1,
+						agentId: "agent-1",
+						agentVersion: "agent-version-1",
+						expectedConfigurationRevision: 7,
+						idempotencyKey: "retain-bind",
+						requestId: "retain-bind",
+						traceId: "retain-bind",
+						bindings: [
+							{ skillVersionId: "skill-version-1", grant: emptyGrant },
+						],
+					},
+					actor,
+				);
+				await change("channel-only", {
+					channels: [
+						{
+							kind: "wecom_bot",
+							enabled: true,
+							bindingReference: "binding_01",
+						},
+					],
+				});
+				expect(await store.readCurrentBindings(owner)).toMatchObject({
+					configurationRevision: 9,
+					bindings: [{ configurationRevision: 8 }],
+				});
+				const runtimeChanges =
+					kind === "environment"
+						? { environment: [{ name: "LOG_LEVEL", value: "debug" }] }
+						: { source: { kind: "standard", templateId: "template_01" } };
+				await change("runtime-input", runtimeChanges);
+				expect(await store.readCurrentBindings(owner)).toMatchObject({
+					configurationRevision: 10,
+					bindings: [
+						{
+							configurationRevision: 10,
+							skillVersion: { skillVersionId: "skill-version-1" },
+							grant: emptyGrant,
+							state: "pending_sync",
+							appliedReceipt: null,
+						},
+					],
+				});
+				expect(
+					await store.resolveSyncBindings({
+						...owner,
+						configurationRevision: 10,
+					}),
+				).toHaveLength(1);
+				expect(
+					await store.resolveSyncBindings({
+						...owner,
+						configurationRevision: 8,
+					}),
+				).toEqual([]);
+				await expect(
+					change("runtime-input", runtimeChanges),
+				).resolves.toMatchObject({ revision: 10 });
+				await bind.bind(
+					{
+						schemaVersion: 1,
+						agentId: "agent-1",
+						agentVersion: "agent-version-1",
+						expectedConfigurationRevision: 10,
+						idempotencyKey: "retain-unbind",
+						requestId: "retain-unbind",
+						traceId: "retain-unbind",
+						bindings: [],
+					},
+					actor,
+				);
+				await change("after-unbind", {
+					environment: [{ name: "LOG_LEVEL", value: "warn" }],
+				});
+				expect(await store.readCurrentBindings(owner)).toMatchObject({
+					configurationRevision: 12,
+					bindings: [],
+				});
+				expect(
+					await client`select configuration_revision from platform.skill_hub_agent_bindings order by configuration_revision`,
+				).toEqual([
+					{ configuration_revision: "8" },
+					{ configuration_revision: "10" },
+				]);
+			} finally {
+				await store.close();
+			}
+		},
+	);
 
 	it("keeps the Runtime revision's bindings across a channel-only configuration revision (ADR-0028)", async () => {
 		const store = new PostgresSkillHubAgentBindingAdmissionV1({
