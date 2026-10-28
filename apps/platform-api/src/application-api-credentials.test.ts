@@ -2,7 +2,9 @@ import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import {
 	AgentApiCreationResponseV1Schema,
+	ApplicationApiCredentialPageV1Schema,
 	ApplicationApiCredentialResponseV1Schema,
+	ApplicationApiCredentialRevocationV1Schema,
 } from "@agent-infra/contracts/pilot";
 import type {
 	createLdapIdentityDirectory,
@@ -633,7 +635,7 @@ it("lists and revokes with current browser authority, then rejects only that cre
 	const listed = await read();
 	expect(listed.status).toBe(200);
 	expect(listed.headers.get("Cache-Control")).toBe("no-store");
-	const page = await listed.json();
+	const page = ApplicationApiCredentialPageV1Schema.parse(await listed.json());
 	expect(page.items).toHaveLength(2);
 	expect(JSON.stringify(page)).not.toContain(material);
 	expect(JSON.stringify(page)).not.toContain("credentialHash");
@@ -669,15 +671,18 @@ it("lists and revokes with current browser authority, then rejects only that cre
 	).toBe(400);
 	const revoked = await revoke(credentialId);
 	expect(revoked.status).toBe(200);
-	expect((await revoked.json()).metadata.revokedAt).not.toBeNull();
+	expect(
+		ApplicationApiCredentialRevocationV1Schema.parse(await revoked.json())
+			.metadata.revokedAt,
+	).not.toBeNull();
 	expect((await revoke(credentialId)).status).toBe(200);
 	expect((await authenticate(material)).status).toBe(401);
 	expect((await authenticate(siblingMaterial)).status).toBe(200);
 	expect(
-		(await (await read()).json()).items.find(
-			(item: { credentialId: string }) => item.credentialId === credentialId,
-		).revokedAt,
-	).not.toBeNull();
+		ApplicationApiCredentialPageV1Schema.parse(
+			await (await read()).json(),
+		).items.find((item) => item.credentialId === credentialId),
+	).toMatchObject({ revokedAt: expect.any(String) });
 	await sql`update platform.platform_applications set responsible_user_id = 'recipient' where id = ${applicationId}`;
 	expect((await read()).status).toBe(404);
 	expect((await revoke(credentialId)).status).toBe(404);
