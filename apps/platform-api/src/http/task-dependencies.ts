@@ -20,6 +20,12 @@ export function createTaskRoutesDependenciesV1(input: {
 		authorize: (request) => transaction.authorizeTaskApi(request),
 		query: {
 			getExecution: input.query.getExecution.bind(input.query),
+			...(input.query.getEvalExecutionControlReference
+				? {
+						getEvalExecutionControlReference:
+							input.query.getEvalExecutionControlReference.bind(input.query),
+					}
+				: {}),
 			...(input.query.replayExecution
 				? { replayExecution: input.query.replayExecution.bind(input.query) }
 				: {}),

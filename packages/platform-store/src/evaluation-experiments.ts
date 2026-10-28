@@ -57,6 +57,20 @@ export class PostgresEvaluationExperimentsV1
 			? { revision: +row.revision, digest: row.digest, now: row.now }
 			: null;
 	}
+	async #requireAgentUse(
+		tx: postgres.TransactionSql,
+		principal: import("@agent-infra/platform-core").EvaluationPrincipalV1,
+		ids: Iterable<string>,
+	) {
+		for (const agentId of [...new Set(ids)].sort()) {
+			const grant = await readCurrentTaskApiUseGrantV1(tx, {
+				principal,
+				agentId,
+			});
+			if (!grant || grant.revoked) throw new EvaluationDataErrorV1("denied");
+		}
+	}
+
 	async authorizeAgents(
 		request: EvaluationRequestV1,
 		experiment: EvaluationExperimentV1,
@@ -67,10 +81,10 @@ export class PostgresEvaluationExperimentsV1
 				...this.options,
 				transaction: tx,
 			});
-			const actor = await dataStore.authenticate(
-				{ ...request, credentialScope: "eval:run" },
-				true,
-			);
+			const actor = await dataStore.authenticate({
+				...request,
+				credentialScope: "eval:run",
+			});
 			requireEvaluationExperimentOwnerV1(experiment, actor);
 			const rows = await tx<
 				{
@@ -115,17 +129,8 @@ export class PostgresEvaluationExperimentsV1
 					throw new EvaluationDataErrorV1("denied");
 				agents.add(boundary.agentId);
 			}
-			for (const agentId of [...agents].sort()) {
-				const grant = await readCurrentTaskApiUseGrantV1(tx, {
-					principal: actor,
-					agentId,
-				});
-				if (!grant || grant.revoked) throw new EvaluationDataErrorV1("denied");
-			}
-			await dataStore.authenticate(
-				{ ...request, credentialScope: "eval:run" },
-				true,
-			);
+			await this.#requireAgentUse(tx, actor, agents);
+			await dataStore.authenticate({ ...request, credentialScope: "eval:run" });
 		});
 	}
 
@@ -215,7 +220,7 @@ export class PostgresEvaluationExperimentsV1
 				if (!row) throw new EvaluationDataErrorV1("denied");
 				const experiment = parseEvaluationExperimentV1(row.data);
 				requireEvaluationExperimentOwnerV1(experiment, actor);
-				if (experiment.status === "cancelled") return experiment;
+
 				const tasks = await tx<
 					{
 						execution_id: string;
@@ -224,8 +229,21 @@ export class PostgresEvaluationExperimentsV1
 						boundary: unknown;
 					}[]
 				>`select e.execution_id,e.conversation_id,e.agent_id,a.boundary from platform.evaluation_sample_tasks s join platform.conversation_executions e on e.execution_id=s.execution_id join platform.task_authorization_records a on a.execution_id=e.execution_id where s.experiment_id=${id} order by e.agent_id,e.execution_id for update of e,a`;
+				await this.#requireAgentUse(
+					tx,
+					actor,
+					tasks.map((task) => task.agent_id),
+				);
+				if (experiment.status === "cancelled") return experiment;
 				for (const task of tasks) {
 					const boundary = parseTaskAuthorizationBoundaryV1(task.boundary);
+					if (
+						boundary.principal.kind !== actor.kind ||
+						boundary.principal.id !== actor.id ||
+						boundary.agentId !== task.agent_id ||
+						boundary.evaluation?.experimentId !== id
+					)
+						throw new EvaluationDataErrorV1("denied");
 					const authority = {
 						schemaVersion: 1 as const,
 						actorId: actor.id,
@@ -303,6 +321,11 @@ export class PostgresEvaluationExperimentsV1
 				}
 				await tx`insert into platform.audit_events(id,trace_id,request_id,actor_type,actor_id,action,target_type,target_id,outcome,details)values(${randomUUID()},${request.traceId},${request.requestId},${actor.kind},${actor.id},'evaluation.experiment.cancel','evaluation_experiment',${id},'succeeded',${tx.json({ purpose: "eval", returnedMaterial: false })})`;
 				await store.authenticate({ ...request, credentialScope: "eval:run" });
+				await this.#requireAgentUse(
+					tx,
+					actor,
+					tasks.map((task) => task.agent_id),
+				);
 				return cancelled;
 			})
 			.catch((error) => {

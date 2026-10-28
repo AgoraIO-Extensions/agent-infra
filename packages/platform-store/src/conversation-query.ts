@@ -2265,6 +2265,22 @@ export class PostgresConversationQueryV1 {
 			this.#getProjection(input, id, signal),
 		);
 	}
+	/** Metadata-only target check after caller cancellation scope/use authorization; never returns content. */
+	async getEvalExecutionControlReference(
+		input: ConversationQueryScopeV1,
+		conversationIdInput: string,
+		executionIdInput: string,
+	) {
+		const trusted = scope(input);
+		if (trusted.channelId !== "eval" || !trusted.principal) return undefined;
+		const conversationId = requestText(conversationIdInput);
+		const executionId = requestText(executionIdInput);
+		const [row] = await this.#client<
+			{ executionId: string; conversationId: string }[]
+		>`select e.execution_id as "executionId",e.conversation_id as "conversationId" from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id and c.actor_id=e.actor_id and c.principal_type=e.principal_type and c.agent_id=e.agent_id and c.channel_id=e.channel_id where e.execution_id=${executionId} and c.id=${conversationId} and e.actor_id=${trusted.actorId} and e.principal_type=${trusted.principal.kind} and e.channel_id='eval' and e.execution_source='eval'`;
+		return row;
+	}
+
 	async getExecution(
 		input: ConversationQueryScopeV1,
 		id: string,

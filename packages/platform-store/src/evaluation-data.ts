@@ -170,7 +170,6 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 		request: EvaluationRequestV1,
 		work: (tx: EvaluationDataTransactionV1) => Promise<T>,
 		identityOnly = false,
-		requireScope = false,
 	): Promise<T> {
 		try {
 			const workInTransaction = async (tx: Tx) => {
@@ -335,9 +334,7 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 								disabled,
 								now: await clock(tx),
 							},
-							identityOnly && !requireScope
-								? null
-								: (request.credentialScope ?? "eval:data"),
+							request.credentialScope ?? "eval:data",
 						);
 					};
 					const identity = await check();
@@ -558,13 +555,8 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 			throw unavailable();
 		}
 	}
-	async authenticate(request: EvaluationRequestV1, requireScope = false) {
-		return this.transaction(
-			request,
-			async (tx) => tx.principal,
-			true,
-			requireScope,
-		);
+	async authenticate(request: EvaluationRequestV1) {
+		return this.transaction(request, async (tx) => tx.principal, true);
 	}
 
 	/** Worker-only metadata sweep; no policy or content authority is needed to fulfill existing expiry. */

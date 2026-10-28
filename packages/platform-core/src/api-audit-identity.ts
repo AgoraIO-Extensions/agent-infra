@@ -38,12 +38,11 @@ export function requireApiCredentialIdentityV1(
 		readonly disabled: boolean;
 		readonly now: Date;
 	},
-	requiredScope: PersonalApiCredentialScopeV1 | null,
+	requiredScope: PersonalApiCredentialScopeV1,
 ): ApiAuditCredentialIdentityV1 {
 	try {
 		if (
-			(requiredScope !== null &&
-				!personalApiCredentialScopesV1.includes(requiredScope)) ||
+			!personalApiCredentialScopesV1.includes(requiredScope) ||
 			typeof input.disabled !== "boolean"
 		)
 			throw new TypeError();
@@ -85,7 +84,7 @@ export function requireApiCredentialIdentityV1(
 			(credential.expiresAt !== null && credential.expiresAt <= now)
 		)
 			throw new PersonalApiCredentialErrorV1("authentication_required");
-		if (requiredScope !== null && !credential.scopes.includes(requiredScope))
+		if (!credential.scopes.includes(requiredScope))
 			throw new PersonalApiCredentialErrorV1("forbidden");
 		if (principal.kind === "user") {
 			if (input.application !== undefined) throw new TypeError();

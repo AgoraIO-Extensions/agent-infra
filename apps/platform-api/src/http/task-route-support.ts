@@ -68,6 +68,11 @@ export interface TaskRoutesDependencies extends TaskAccessDependencies {
 		stop: ConversationExecutionUseCaseV1["stop"];
 	};
 	readonly query: {
+		getEvalExecutionControlReference?: (
+			scope: ConversationQueryScopeV1,
+			conversationId: string,
+			executionId: string,
+		) => Promise<{ executionId: string; conversationId: string } | undefined>;
 		getExecution(
 			scope: ConversationQueryScopeV1,
 			conversationId: string,

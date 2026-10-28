@@ -148,15 +148,12 @@ it("keeps the explicit Eval envelope separate from every existing Agent scope", 
 		expect.objectContaining({ code: "forbidden" }),
 	);
 });
-it("only explicit null authenticates control identity; missing scopes never silently bypass and invalidated identities remain denied", () => {
+it("missing or invalid scopes cannot bypass caller authorization and invalidated identities remain denied", () => {
 	const limited = {
 		...facts,
 		credential: { ...credential, scopes: ["agent:read"] },
 	};
-	expect(requireApiCredentialIdentityV1(limited, null).principal).toEqual(
-		credential.principal,
-	);
-	for (const scope of [undefined, "invented", false])
+	for (const scope of [null, undefined, "invented", false])
 		expect(() =>
 			Reflect.apply(requireApiCredentialIdentityV1, undefined, [
 				limited,
@@ -169,7 +166,9 @@ it("only explicit null authenticates control identity; missing scopes never sile
 		{ ...limited, credential: { ...limited.credential, revokedAt: facts.now } },
 		{ ...limited, credential: { ...limited.credential, expiresAt: facts.now } },
 	])
-		expect(() => requireApiCredentialIdentityV1(changed, null)).toThrow();
+		expect(() =>
+			requireApiCredentialIdentityV1(changed, "agent:read"),
+		).toThrow();
 	for (const scope of [
 		"eval:data",
 		"eval:run",

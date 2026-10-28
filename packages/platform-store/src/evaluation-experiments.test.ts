@@ -1442,7 +1442,7 @@ it("requires current experiment policy and run grant before underlying content/r
 		await authority.close();
 	}
 }, 30000);
-it("allows the original subject to cancel after its still-valid credential loses run scope", async () => {
+it("requires caller Eval scope and current Agent use to cancel without restoring revoked data run", async () => {
 	const command = await dataset();
 	const experiment = await core.create(
 		request("runner"),
@@ -1459,6 +1459,27 @@ it("allows the original subject to cancel after its still-valid credential loses
 	await expect(
 		core.get(credentials, experiment.experimentId),
 	).rejects.toMatchObject({ code: "denied" });
+	await expect(
+		core.cancel(credentials, experiment.experimentId, randomUUID()),
+	).rejects.toMatchObject({ code: "denied" });
+	await sql`update platform.platform_api_credentials set scopes=${sql.json(["eval:run"])} where id='eval-cancel-token'`;
+	await sql`update platform.agent_principal_grants set revoked_at=clock_timestamp() where agent_id=${configuration.agentId} and principal_type='user' and principal_id='runner' and grant_type='use'`;
+	try {
+		await expect(
+			core.cancel(credentials, experiment.experimentId, randomUUID()),
+		).rejects.toMatchObject({ code: "denied" });
+	} finally {
+		await sql`update platform.agent_principal_grants set revoked_at=null where agent_id=${configuration.agentId} and principal_type='user' and principal_id='runner' and grant_type='use'`;
+	}
+	const [grant] =
+		await sql`select data from platform.evaluation_grants where dataset_id=${command.datasetId} and data->'principal'->>'id'='runner' and data->'operations' ? 'run'`;
+	await data.revoke(
+		request("admin"),
+		randomUUID(),
+		command.datasetId,
+		grant?.data.grantId,
+		grant?.data.revision,
+	);
 	expect(
 		(await core.cancel(credentials, experiment.experimentId, randomUUID()))
 			.status,
@@ -3246,3 +3267,126 @@ it("settles human scores after their completed outbox when cancelling an experim
 		await worker.close();
 	}
 }, 30000);
+
+it.each(["user", "application"] as const)(
+	"requires current %s caller scope/use for HTTP cancellation while revoked data run stays unavailable",
+	async (kind) => {
+		const command = await dataset();
+		if (kind === "application")
+			await data.grant(request("admin"), randomUUID(), command.datasetId, {
+				expectedRevision: 4,
+				principal: { kind, id: "runner" },
+				versionIds: [command.versionId],
+				operations: ["run"],
+				expiresAt: new Date(Date.now() + 50000).toISOString(),
+			});
+		const material = `papi_${(kind === "user" ? "H" : "J").repeat(43)}`;
+		const credentialId = `http-cancel-${kind}`;
+		await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes)values(${credentialId},${kind},'runner',${createHash("sha256").update(material).digest("hex")},${sql.json(["eval:run"])})`;
+		const experiment = await core.create(
+			{
+				...request("runner"),
+				authentication: { kind: "credential", material },
+			},
+			randomUUID(),
+			command,
+		);
+		const tasks = await experiments.samples(experiment.experimentId, 10);
+		const task = tasks[0];
+		if (!task) throw new Error("missing task");
+		const unused = async (): Promise<never> => {
+			throw new Error("unused");
+		};
+		const assembly = assemblePlatformApi({
+			...database,
+			identity: {
+				...directory,
+				resolve: async () => null,
+				hydrateUsers: async () => [],
+			},
+			evaluation: {
+				storage,
+				loadPolicy: async () => policy,
+				loadExperimentPolicy: async () => experimentPolicy,
+			},
+			taskAdmissionPolicy: {
+				maximumWaitingTasksPerAgent: 100,
+				waitingTimeoutMs: 30000,
+			},
+			admissions: {
+				authorizationAdmission: { authorize: unused },
+				imageAdmission: { admitImage: unused },
+				modelAdmission: { admitModels: unused },
+				secretAdmission: { admitSecrets: unused },
+				channelAdmission: { admitChannels: unused },
+			},
+			allocateApplicationIds: unused,
+			prepareApplicationSecrets: unused,
+			prepareConfigurationSecrets: unused,
+			presentAgent: unused,
+		});
+		const server = serve({
+			fetch: createPlatformApp(assembly.dependencies).fetch,
+			hostname: "127.0.0.1",
+			port: 0,
+		});
+		if (!server.listening)
+			await new Promise<void>((resolve) => server.once("listening", resolve));
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("address");
+		const base = `http://127.0.0.1:${address.port}`;
+		const expPath = `/api/v2/evaluation/experiments/${experiment.experimentId}/cancel`;
+		const taskPath = `/api/v1/conversations/${task.conversationId}/tasks/${task.executionId}`;
+		const cancel = (path: string) =>
+			fetch(base + path, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${material}`,
+					"Content-Type": "application/json",
+					"Idempotency-Key": randomUUID(),
+				},
+				body: JSON.stringify(path === expPath ? {} : { schemaVersion: 1 }),
+			});
+		try {
+			await sql`update platform.platform_api_credentials set scopes=${sql.json(["agent:read"])} where id=${credentialId}`;
+			for (const path of [expPath, `${taskPath}/cancel`])
+				expect((await cancel(path)).status).toBeGreaterThanOrEqual(400);
+			await sql`update platform.platform_api_credentials set scopes=${sql.json(["eval:run"])} where id=${credentialId}`;
+			await sql`update platform.agent_principal_grants set revoked_at=clock_timestamp() where agent_id=${configuration.agentId} and principal_type=${kind} and principal_id='runner' and grant_type='use'`;
+			try {
+				for (const path of [expPath, `${taskPath}/cancel`])
+					expect((await cancel(path)).status).toBeGreaterThanOrEqual(400);
+			} finally {
+				await sql`update platform.agent_principal_grants set revoked_at=null where agent_id=${configuration.agentId} and principal_type=${kind} and principal_id='runner' and grant_type='use'`;
+			}
+			const [grant] =
+				await sql`select data from platform.evaluation_grants where dataset_id=${command.datasetId} and data->'principal'->>'kind'=${kind} and data->'principal'->>'id'='runner' and data->'operations' ? 'run'`;
+			await data.revoke(
+				request("admin"),
+				randomUUID(),
+				command.datasetId,
+				grant?.data.grantId,
+				grant?.data.revision,
+			);
+			expect(
+				(
+					await fetch(base + taskPath, {
+						headers: { Authorization: `Bearer ${material}` },
+					})
+				).status,
+			).toBe(404);
+			expect((await cancel(`${taskPath}/cancel`)).status).toBe(202);
+			expect((await cancel(expPath)).status).toBe(200);
+			await sql`update platform.platform_api_credentials set revoked_at=clock_timestamp() where id=${credentialId}`;
+			expect((await cancel(expPath)).status).toBeGreaterThanOrEqual(400);
+			expect(
+				await sql`select distinct status from platform.conversation_executions where execution_id in(select execution_id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId})`,
+			).toEqual([{ status: "cancelled" }]);
+		} finally {
+			if ("closeAllConnections" in server) server.closeAllConnections();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await assembly.close();
+		}
+	},
+	30000,
+);

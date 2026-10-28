@@ -2677,7 +2677,7 @@ Eval 幂等回执的保留截止时间不得晚于相关数据集/版本的元�
 
 数据基础模块的 `read` 用例仅校验 `read` 用途。后续实验和评分在该模块的事务/版本/授权边界扩展服务端固定的 `run`、`score`、`review` 或 `analyze` 入口，并与 Execution/fence 绑定；不得借用浏览器 `read` 入口或要求额外授予 `read` 来实现这些独立用途，也不接受客户端自报用途来扩大正文权限。
 
-实验、评分和复核 API 分别要求凭证最大范围 `eval:run`、`eval:score`、`eval:review`；浏览器会话沿相同对象权限边界。最大范围不授予具体数据用途，也不替代当前 Agent 使用权。任务提交为用户和应用均核对精确主体的显式 Agent use grant；应用始终保留应用主体。已受理任务的停止、取消和 unknown 处置沿原主体/任务控制权限，不因 run 用途撤销要求重新获准运行，处置不授权读取已撤正文。
+实验、评分和复核 API 分别要求凭证最大范围 `eval:run`、`eval:score`、`eval:review`；浏览器会话沿相同对象权限边界。最大范围不授予具体数据用途，也不替代当前 Agent 使用权。任务提交为用户和应用均核对精确主体的显式 Agent use grant；应用始终保留应用主体。已受理任务的调用方停止/取消仍按 PRD §7.3 要求当前有效主体、原任务归属、当前 Agent use 授权及 API 凭证的 `eval:run` 范围；数据集 run 用途撤销不要求重新授予正文/运行许可，取消不授权读取已撤正文。凭证范围收窄或 Agent use 撤销后，调用方不得继续取消；撤权后的系统停止/unknown 核实沿独立持久控制记录执行，不借调用方失效权限。
 
 实验受理在原 ConversationTask 事务中为每个样本/基线或候选建立独立 Conversation/Execution、outbox 和 Eval 绑定。`TaskAuthorizationBoundaryV1.evaluation` 仅允许 `channelId=eval`，由服务端绑定 experiment/sample/variant、dataset/version、run grant ID/revision、policy ID/revision、Agent configuration revision、模型选项/推理级别、工具环境及内容截止时间；对应 `eval-use` 来源只保存已核对的 Agent use grant revision。普通 API/Web 不能提交或借用该绑定，Eval 不被归类为 API 渠道。请求条件与实际执行事实分别保存，不允许当前配置漂移悄悄替换基线。Worker 的当前用途回读缺失或不可确认时不投递；读取、SSE、文件及结果提交也使用同一持久绑定复核。
 

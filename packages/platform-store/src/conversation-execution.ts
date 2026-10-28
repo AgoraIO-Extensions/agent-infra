@@ -42,6 +42,7 @@ import {
 	validateNativeCapabilityInvocationPlanV6,
 	validateNativeCapabilityReplayPlanV6,
 } from "@agent-infra/platform-core";
+import { readCurrentTaskApiUseGrantV1 } from "./application-task-authorization.js";
 import {
 	lockConversation as lockDispatchConversation,
 	lockExecution as lockDispatchExecution,
@@ -1963,10 +1964,12 @@ export class PostgresConversationExecutionTransactionV1
 					requestId: input.requestId ?? randomUUID(),
 					traceId: input.traceId ?? randomUUID(),
 				};
-				const actor =
-					input.operation === "agent:read"
-						? await evaluationStore.authenticate(request, true)
-						: await evaluationStore.authenticate(request);
+				const actor = await evaluationStore.authenticate(request);
+				const use = await readCurrentTaskApiUseGrantV1(transaction, {
+					principal: actor,
+					agentId,
+				});
+				if (!use || use.revoked) return null;
 				const [row] = await transaction<
 					{ boundary: unknown; revoked_at: Date | null }[]
 				>`select a.boundary,a.revoked_at from platform.task_authorization_records a join platform.conversation_executions e on e.execution_id=a.execution_id where e.conversation_id=${input.conversationId} and e.actor_id=${actor.id} and e.principal_type=${actor.kind} order by e.created_at desc limit 1 for share of a`;
@@ -2000,6 +2003,11 @@ export class PostgresConversationExecutionTransactionV1
 					}
 				}
 				await evaluationStore.authenticate(request);
+				const finalUse = await readCurrentTaskApiUseGrantV1(transaction, {
+					principal: actor,
+					agentId,
+				});
+				if (!finalUse || finalUse.revoked) return null;
 				return authority;
 			}
 			if (!["api", "api:user", "api:application"].includes(channelId))
