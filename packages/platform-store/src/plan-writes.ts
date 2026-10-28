@@ -259,7 +259,25 @@ export async function replaceSkillHubAgentBindings(
 	plan: AgentConfigurationWritePlanV1,
 ): Promise<void> {
 	const skillBindings = plan.skillBindings;
-	if (!skillBindings) return;
+	if (!skillBindings) {
+		if (!agentConfigurationRuntimeInputChangedV1(plan.result.changedFields))
+			return;
+		// Channel revisions keep the preceding Runtime revision. Carry that exact
+		// binding set forward; its old Applied receipt cannot authorize the new one.
+		await transaction.execute(sql`
+			insert into ${skillHubAgentBindings}
+				(agent_id, agent_version, skill_version_id, configuration_revision,
+				 "grant", sync_revision, state, failure_reason, applied_receipt, created_at, updated_at)
+			select b.agent_id, b.agent_version, b.skill_version_id, ${plan.nextRevision},
+				b."grant", 1, 'pending_sync', null, null,
+				${plan.auditEvent.occurredAt.toISOString()}::timestamptz, ${plan.auditEvent.occurredAt.toISOString()}::timestamptz
+			from ${skillHubAgentBindings} b
+			join ${agentConfigurationRevisions} c
+				on c.agent_id = b.agent_id and c.runtime_revision = b.configuration_revision
+			where c.agent_id = ${plan.agentId} and c.revision = ${plan.baseRevision}
+		`);
+		return;
+	}
 	if (skillBindings.bindings.length === 0) return;
 	for (const binding of skillBindings.bindings) {
 		const [version] = await transaction
