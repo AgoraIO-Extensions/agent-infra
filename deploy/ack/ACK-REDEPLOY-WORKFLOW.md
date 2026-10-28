@@ -106,6 +106,25 @@ attestation，执行真实 Runtime turn 和事件回读，写入私有 candidate
 模板校验使用同次生成的 `template-model-validation.receipt.json`；详细诊断
 `template-model-preflight.receipt.json` 和 `runtime-capacity.receipt.json` 分别保留运行证据与实测容量，均保持私有。
 
+`all` 在生成新 preflight receipts 或读取已有 `ACK_TEMPLATE_VALIDATIONS_FILE` 后，均执行
+`runtime-inputs`，并在部署前要求 bootstrap 与 capacity 私有输入。该阶段复用
+`ACK_BOOTSTRAP_INPUTS_FILE`，要求 API、Worker 的 configuration Secret 文件清单都声明
+`template-validation-<templateId>.json` 四个键。Worker capacity key 必须与
+`ACK_WORKLOAD_CAPACITY_FILE` 的 `workerSecretRef` 和 `profilesFile` 对应；候选文件同目录必须有
+本轮生成的 `runtime-capacity.receipt.json`。自定义镜像仍需提供自己的实测容量证据。
+
+`runtime-inputs` 校验本轮 source/image/config、实测资源和容量后，更新这些已声明的私有文件
+和 configuration Secret。它先验证 cluster UID、namespace/Secret 归属、原配置字节及实际
+Deployment mount，再带 resourceVersion 更新，回读 Secret 后让 API/Worker 加载新配置。
+内容 hash 注解使相同输入无需再次更新或滚动；上次 rollout 中断时可用同一组仍有效的 receipts
+重试并等待收敛。任何配置漂移、回读或 rollout 失败均停止后续 provisioning。
+完成后还必须通过 Worker 的 mounted-capacity gate。此步骤不签发登录会话、不修改 principal
+映射，也不代表真实模型或完整重建验收已经通过。
+
+```bash
+deploy/ack/redeploy.sh runtime-inputs
+```
+
 清单结构如下，具体 body 和 credential 仍放在仓库外：
 
 ```json
