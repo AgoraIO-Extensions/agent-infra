@@ -741,10 +741,33 @@ it.skipIf(!process.env.OPENCODE_EXECUTABLE)(
 				const before = fixture.modelRequests().length;
 				const accepted = await fixture.driver.execute(command);
 				ref = accepted.nativeSessionRef;
-				await vi.waitFor(
-					() => expect(fixture.modelRequests().length).toBe(before + 2),
-					{ timeout: 15000 },
-				);
+				try {
+					await vi.waitFor(
+						() => expect(fixture.modelRequests().length).toBe(before + 2),
+						{ timeout: 15000 },
+					);
+				} catch (error) {
+					const status = await fixture.driver
+						.getStatus(ref, command.executionId)
+						.catch(() => "unavailable");
+					const events = await fixture.driver
+						.replayEvents(ref, command.executionId)
+						.catch(() => []);
+					throw new Error(
+						JSON.stringify({
+							code: "OPENCODE_CATALOG_PROGRESS_TIMEOUT",
+							tool: name,
+							expectedModelRequests: before + 2,
+							observedModelRequests: fixture.modelRequests().length,
+							webFetchRequests: gets,
+							status,
+							toolPhases: events
+								.filter((event) => event.type === "tool")
+								.map((event) => event.payload.phase),
+						}),
+						{ cause: error },
+					);
+				}
 				await fixture.completeStopAsCompleted();
 				const events = await fixture.driver.replayEvents(
 					ref,
