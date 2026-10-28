@@ -284,6 +284,7 @@ process.stdout.write(JSON.stringify({workspace:fs.readFileSync("allowed.txt","ut
 				.map((item) => (item.type === "text" ? item.text : ""))
 				.join("");
 			expect(output).not.toContain(secret);
+			expect(result.structuredContent, output).toMatchObject({ exit_code: 0 });
 			expect(JSON.parse(output)).toEqual({
 				workspace: true,
 				environment: true,

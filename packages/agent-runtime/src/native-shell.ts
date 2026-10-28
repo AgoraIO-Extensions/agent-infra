@@ -44,7 +44,7 @@ export function nativeShellEnvironment(workspace: string): NodeJS.ProcessEnv {
 	};
 }
 
-async function immutableExecutable(path: string) {
+async function immutableFile(path: string) {
 	const actual = await realpath(path);
 	const metadata = await stat(actual);
 	if (!metadata.isFile() || (metadata.mode & 0o022) !== 0) throw unavailable();
@@ -105,9 +105,9 @@ export async function nativeShellPlan(
 		args[1].includes("\0")
 	)
 		throw unavailable();
-	const program = await immutableExecutable(fileURLToPath(import.meta.url));
-	const installedHelper = await immutableExecutable(helper);
-	const installedShell = await immutableExecutable(shell);
+	const program = await immutableFile(fileURLToPath(import.meta.url));
+	const installedHelper = await immutableFile(helper);
+	const installedShell = await immutableFile(shell);
 	if (
 		[program, installedHelper, installedShell].some((path) =>
 			inside(workspace, path),
@@ -130,6 +130,8 @@ export async function nativeShellPlan(
 	await grant("read-file,read-dir", "/opt/codex/agent-infra-skills");
 	await grant("read-dir", "/proc");
 	await grant("read-file,read-dir", "/etc/ssl/certs");
+	// Node/OpenSSL reads this system file at startup, before the probe script runs.
+	await grant("read-file", await immutableFile("/etc/ssl/openssl.cnf"));
 	for (const path of [
 		"/etc/resolv.conf",
 		"/etc/hosts",
