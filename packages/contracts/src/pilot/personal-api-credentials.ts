@@ -75,3 +75,11 @@ export const PersonalApiCredentialPageV1Schema = z.strictObject({
 		.regex(/^[A-Za-z0-9_-]{1,4096}$/)
 		.nullable(),
 });
+
+export const PersonalApiIdentityV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	principal: z.strictObject({ kind: z.literal("user"), id: OpaqueIdV1Schema }),
+	credentialId: OpaqueIdV1Schema,
+	scopes,
+	expiresAt: Rfc3339TimestampV1Schema.nullable(),
+});

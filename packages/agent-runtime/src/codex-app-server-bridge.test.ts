@@ -20,6 +20,37 @@ import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v
 	type: "json",
 };
 
+const hubFilesystem = vi.hoisted(() => ({
+	state: "missing" as "missing" | "mounted" | "symlink",
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs/promises")>();
+	return {
+		...actual,
+		realpath: async (
+			path: Parameters<typeof actual.realpath>[0],
+			...args: unknown[]
+		) =>
+			path === "/opt/agent-infra-skill-hub/.agents" &&
+			hubFilesystem.state !== "missing"
+				? hubFilesystem.state === "symlink"
+					? "/another-agent/.agents"
+					: path
+				: actual.realpath(path, ...(args as [])),
+		lstat: async (
+			path: Parameters<typeof actual.lstat>[0],
+			...args: unknown[]
+		) =>
+			actual.lstat(
+				path === "/opt/agent-infra-skill-hub/.agents" &&
+					hubFilesystem.state === "mounted"
+					? process.cwd()
+					: path,
+				...(args as []),
+			),
+	};
+});
+
 // Exercise Linux admission on every test host; the helper itself is synthetic.
 vi.mock("node:process", async (importOriginal) => ({
 	...(await importOriginal<typeof import("node:process")>()),
@@ -399,6 +430,7 @@ async function expectPathRemoved(path: string) {
 }
 
 afterEach(async () => {
+	hubFilesystem.state = "missing";
 	for (const pid of childPids.splice(0)) {
 		try {
 			process.kill(pid, "SIGKILL");
@@ -823,6 +855,23 @@ describe.sequential("Codex app-server v2 bridge", () => {
 			).rejects.toMatchObject({
 				code: "CODEX_APP_SERVER_CONFIGURATION_INVALID",
 			});
+		},
+	);
+
+	it.each([false, true])(
+		"allows only read access to a canonical mounted Hub root (symlink=%s)",
+		async (symlinked) => {
+			const { boundaryCapturePath } = await installFakeCodex("echo");
+			const mountedRoot = "/opt/agent-infra-skill-hub/.agents";
+			hubFilesystem.state = symlinked ? "symlink" : "mounted";
+			const bridge = await CodexAppServerBridge.open(options());
+			await bridge.close();
+			const rules = (await boundaryCapture(boundaryCapturePath)).args.filter(
+				(arg) => arg.endsWith(`:${mountedRoot}`),
+			);
+			expect(rules).toEqual(
+				symlinked ? [] : [`path-beneath:read-file,read-dir:${mountedRoot}`],
+			);
 		},
 	);
 

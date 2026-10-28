@@ -360,7 +360,7 @@ Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，
 | Runtime 工作区和原生 Session 数据 | 所属 Sandbox PVC | Runtime 自己解释，平台不读取内容 |
 | Skill、Skill Version、发布/审核/安装/绑定/同步状态 | Platform DB | 版本与关系是唯一业务权威；Agent Version 固定具体 Skill Version，不静默升级 |
 | Skill ZIP、manifest、digest/signature | 版本化 S3 兼容对象存储 | 对象不可变；Worker 只消费不可变对象版本和受控摘要 |
-| Agent project 的 Skill materialization | 所属 Sandbox PVC 的 .agents/skills | 由 Worker/RuntimeHost 受控同步和只读挂载，Runtime 按需读取，平台不以工作区文件反推业务授权 |
+| Agent project 的 Skill materialization | Worker 管理的固定 generation | 按工程 Spec §11.6 只读装配到 Sandbox，Runtime 按需读取，平台不以工作区文件反推业务授权 |
 
 Session/Sandbox 的标识、分配、资源和授权权威统一遵循
 [工程 Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定)。

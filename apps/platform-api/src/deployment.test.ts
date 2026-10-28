@@ -521,7 +521,7 @@ function request(path: string, user: User, body?: unknown, key?: string) {
 					? "POST"
 					: "PUT",
 		headers: {
-			authorization: sessionKeys[user],
+			cookie: `synthetic-session=${sessionKeys[user]}`,
 			"content-type": "application/json",
 			...(key ? { "Idempotency-Key": key } : {}),
 		},
@@ -1740,8 +1740,11 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		await unavailable("agent_missing_creation_failure", "alice");
 		// 只接受浏览器会话：同一主体改用 Authorization 也被拒绝。
 		expect(
-			(await request(`/api/v2/agents/${failed}/creation-failure`, "alice"))
-				.status,
+			(
+				await fetch(`${origin}/api/v2/agents/${failed}/creation-failure`, {
+					headers: { authorization: sessionKeys.alice },
+				})
+			).status,
 		).toBe(401);
 	});
 });

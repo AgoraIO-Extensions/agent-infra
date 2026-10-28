@@ -16789,7 +16789,7 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 		).toEqual({
 			extraRoots: [
 				"/opt/codex/agent-infra-skills",
-				"/opt/agent-infra-skill-hub",
+				"/opt/agent-infra-skill-hub/.agents/skills",
 			],
 		});
 
@@ -16857,7 +16857,7 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 		).toEqual({
 			extraRoots: [
 				"/opt/codex/agent-infra-skills",
-				"/opt/agent-infra-skill-hub",
+				"/opt/agent-infra-skill-hub/.agents/skills",
 			],
 		});
 	});
@@ -17123,7 +17123,7 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 			params: {
 				extraRoots: [
 					"/opt/codex/agent-infra-skills",
-					"/opt/agent-infra-skill-hub",
+					"/opt/agent-infra-skill-hub/.agents/skills",
 				],
 			},
 		});
