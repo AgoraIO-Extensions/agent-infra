@@ -736,6 +736,7 @@ export function createEvaluationDataV1(options: {
 				grant: g,
 				policy: p,
 				principal: tx.principal,
+				scope: (await dataset(tx, datasetId)).scope,
 			};
 		});
 	}
@@ -749,7 +750,13 @@ export function createEvaluationDataV1(options: {
 			const v = await version(tx, datasetId, versionId);
 			const g = await permission(tx, p, v, operation);
 			if (v.status !== "available" || !v.stored) return fail("denied");
-			return { version: v, grant: g, policy: p, principal: tx.principal };
+			return {
+				version: v,
+				grant: g,
+				policy: p,
+				principal: tx.principal,
+				scope: (await dataset(tx, datasetId)).scope,
+			};
 		});
 	}
 	return {

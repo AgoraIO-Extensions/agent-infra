@@ -1,18 +1,34 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
+import { createServer } from "node:http";
+import {
+	EvaluationExperimentV1Schema,
+	EvaluationScoreMetadataV1Schema,
+} from "@agent-infra/contracts/pilot";
+import { createDeploymentModelCatalogAdapterV1 } from "@agent-infra/model-catalog";
 import {
 	createEvaluationDataV1,
 	createEvaluationExperimentsV1,
+	createEvaluationHumanScoringV1,
 	evaluationRetainedMetadataFieldsV1,
 	parseEvaluationExperimentPolicyV1,
 	parseEvaluationPolicyV1,
+	scoreEvaluationRuleV1,
 } from "@agent-infra/platform-core";
+import { createRelayKeyEncryptorV1 } from "@agent-infra/secret-store";
+import { createRelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
+import { serve } from "@hono/node-server";
 import postgres from "postgres";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { FakeObjectStorageV1 } from "../../object-storage/src/index.js";
+import { createPlatformApp } from "../../../apps/platform-api/src/app.js";
+import { assemblePlatformApi } from "../../../apps/platform-api/src/assembly.js";
+import { createEvaluationScoringWorkerV1 } from "../../../apps/platform-worker/src/evaluation-scoring-worker.js";
+import { startMinioFileFixtureV1 } from "../../object-storage/src/minio.test-support.js";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.js";
 import { PostgresEvaluationDataStoreV1 } from "./evaluation-data.js";
 import { PostgresEvaluationExperimentsV1 } from "./evaluation-experiments.js";
+import { PostgresEvaluationScoringV1 } from "./evaluation-scoring.js";
 import { migratePlatformDatabase } from "./migrate.js";
+import { createPostgresOutboxStore } from "./outbox.js";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
@@ -22,7 +38,8 @@ let database: PostgresTestDatabase;
 let sql: ReturnType<typeof postgres>;
 let dataStore: PostgresEvaluationDataStoreV1;
 let experiments: PostgresEvaluationExperimentsV1;
-const storage = new FakeObjectStorageV1();
+let storageFixture: Awaited<ReturnType<typeof startMinioFileFixtureV1>>;
+let storage: Awaited<ReturnType<typeof startMinioFileFixtureV1>>["storage"];
 const directory = {
 	resolveUser: async (userId: string) => ({
 		schemaVersion: 1,
@@ -91,6 +108,7 @@ const scorer = {
 	timeoutMs: 1000,
 	maxAttempts: 2,
 	retryDelayMs: 1000,
+	datasetScopes: ["team"],
 	implementation: { kind: "rule", rule: "exact_match" },
 };
 const configuration = {
@@ -99,6 +117,26 @@ const configuration = {
 	actions: [],
 	actionSetRevision: "actions_1",
 };
+const extraScorers = [
+	{ ...scorer, scorerId: "human", implementation: { kind: "human" } },
+	{
+		...scorer,
+		scorerId: "model",
+		implementation: {
+			kind: "model",
+			endpointId: "score-endpoint",
+			modelId: "score-model",
+			catalogRevision: "score-catalog",
+			maxOutputTokens: 256,
+			inputCategories: ["output", "rubric"],
+		},
+	},
+].map((value) => ({
+	...value,
+	configurationDigest: createHash("sha256")
+		.update(JSON.stringify(value))
+		.digest("hex"),
+}));
 let experimentPolicy = parseEvaluationExperimentPolicyV1({
 	schemaVersion: 1,
 	policyId: policy.policyId,
@@ -115,6 +153,7 @@ let experimentPolicy = parseEvaluationExperimentPolicyV1({
 		toolEnvironment: "synthetic",
 	})),
 	scorers: [
+		...extraScorers,
 		{
 			...scorer,
 			configurationDigest: createHash("sha256")
@@ -132,6 +171,8 @@ let data: ReturnType<typeof createEvaluationDataV1>;
 let core: ReturnType<typeof createEvaluationExperimentsV1>;
 beforeAll(async () => {
 	database = await startPostgresTestDatabase("evaluation-experiments");
+	storageFixture = await startMinioFileFixtureV1("file", "eval");
+	storage = storageFixture.storage;
 	await migratePlatformDatabase(database);
 	sql = postgres(database.databaseUrl, { max: 2 });
 	dataStore = new PostgresEvaluationDataStoreV1({ ...database, directory });
@@ -171,6 +212,7 @@ afterAll(async () => {
 	await dataStore?.close();
 	await sql?.end();
 	await database?.stop();
+	await storageFixture?.close();
 });
 async function dataset() {
 	const d = await data.create(request("admin"), randomUUID(), {
@@ -333,6 +375,9 @@ it("checks a shorter experiment-policy expiry using fresh DB time before returni
 		data,
 		loadPolicy: async () => expiring,
 		transaction: {
+			target: transaction.target.bind(transaction),
+			samples: transaction.samples.bind(transaction),
+			cancel: transaction.cancel.bind(transaction),
 			transaction: (request, command, work) =>
 				transaction.transaction(request, command, (tx) =>
 					work({
@@ -358,5 +403,478 @@ it("checks a shorter experiment-policy expiry using fresh DB time before returni
 	} finally {
 		experimentPolicy = previous;
 		await transaction.close();
+	}
+}, 30000);
+it("executes rule/human/model scorers and independent review on one terminal business result without resubmitting Tasks", async () => {
+	const command = await dataset();
+	command.scorerRefs = [
+		{ scorerId: "exact", version: "1" },
+		{ scorerId: "human", version: "1" },
+		{ scorerId: "model", version: "1" },
+	];
+	const unused = async (): Promise<never> => {
+		throw new Error("unused fixture");
+	};
+	const assembly = assemblePlatformApi({
+		...database,
+		taskAdmissionPolicy: {
+			maximumWaitingTasksPerAgent: 100,
+			waitingTimeoutMs: 30000,
+		},
+		identity: {
+			...directory,
+			resolve: async (req) => {
+				const id = req.headers.get("Cookie")?.split("=")[1];
+				return id
+					? {
+							schemaVersion: 1,
+							userId: id,
+							displayName: id,
+							accountStatus: "active",
+							organizationIds: [],
+							roles: ["employee"],
+							authorizationRevision: "identity-1",
+						}
+					: null;
+			},
+			hydrateUsers: async () => [],
+		},
+		evaluation: {
+			storage,
+			loadPolicy: async () => policy,
+			loadExperimentPolicy: async () => experimentPolicy,
+		},
+		admissions: {
+			authorizationAdmission: { authorize: unused },
+			imageAdmission: { admitImage: unused },
+			modelAdmission: { admitModels: unused },
+			secretAdmission: { admitSecrets: unused },
+			channelAdmission: { admitChannels: unused },
+		},
+		allocateApplicationIds: unused,
+		prepareApplicationSecrets: unused,
+		prepareConfigurationSecrets: unused,
+		presentAgent: unused,
+	});
+	const api = serve({
+		fetch: createPlatformApp(assembly.dependencies).fetch,
+		hostname: "127.0.0.1",
+		port: 0,
+	});
+	if (!api.listening)
+		await new Promise<void>((resolve) => api.once("listening", resolve));
+	const apiAddress = api.address();
+	if (!apiAddress || typeof apiAddress === "string")
+		throw new Error("fixture API");
+	const http = async (
+		path: string,
+		user: string,
+		body: unknown,
+		key = randomUUID(),
+	) => {
+		const response = await fetch(
+			`http://127.0.0.1:${apiAddress.port}/api/v2/evaluation${path}`,
+			{
+				method: "POST",
+				headers: {
+					Cookie: `session=${user}`,
+					"Content-Type": "application/json",
+					"Idempotency-Key": key,
+				},
+				body: JSON.stringify(body),
+			},
+		);
+		const result = (await response.json()) as Record<string, unknown>;
+		expect(response.status, JSON.stringify(result)).toBeLessThan(300);
+		return result;
+	};
+	const experiment = EvaluationExperimentV1Schema.parse(
+		await http("/experiments", "runner", command),
+	);
+	const baseUrl = `http://127.0.0.1:${apiAddress.port}/api/v2/evaluation`;
+	const malformed = [
+		await fetch(
+			`${baseUrl}/experiments/${experiment.experimentId}?limit=1&limit=2`,
+			{ headers: { Cookie: "session=runner" } },
+		),
+		await fetch(`${baseUrl}/experiments/${experiment.experimentId}`, {
+			headers: { Cookie: "session=runner", "x-principal-id": "admin" },
+		}),
+		await fetch(
+			`${baseUrl}/experiments/${experiment.experimentId}/cancel/extra`,
+			{
+				method: "POST",
+				headers: {
+					Cookie: "session=runner",
+					"Content-Type": "application/json",
+					"Idempotency-Key": randomUUID(),
+				},
+				body: "{}",
+			},
+		),
+		await fetch(`${baseUrl}/experiments/${experiment.experimentId}/cancel`, {
+			method: "POST",
+			headers: {
+				Cookie: "session=runner",
+				"Content-Type": "application/json",
+				"Idempotency-Key": randomUUID(),
+			},
+			body: JSON.stringify({ actorId: "admin" }),
+		}),
+	];
+	expect(malformed.map((r) => r.status)).toEqual([400, 400, 404, 400]);
+	const metadata = await fetch(
+		`${baseUrl}/experiments/${experiment.experimentId}?limit=1`,
+		{ headers: { Cookie: "session=runner" } },
+	);
+	expect(metadata.status).toBe(200);
+	const page = (await metadata.json()) as {
+		items: { scoreIds: string[] }[];
+		nextCursor: string | null;
+	};
+	expect(page.items).toHaveLength(1);
+	expect(page.items[0]?.scoreIds).toHaveLength(3);
+	expect(page.nextCursor).not.toBeNull();
+	await data.grant(request("admin"), randomUUID(), command.datasetId, {
+		expectedRevision: 4,
+		principal: { kind: "user", id: "runner" },
+		versionIds: [command.versionId],
+		operations: ["score"],
+		expiresAt: new Date(Date.now() + 50000).toISOString(),
+	});
+	await data.grant(request("admin"), randomUUID(), command.datasetId, {
+		expectedRevision: 5,
+		principal: { kind: "user", id: "reviewer" },
+		versionIds: [command.versionId],
+		operations: ["review"],
+		expiresAt: new Date(Date.now() + 50000).toISOString(),
+	});
+	await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)values(${configuration.agentId},'user','reviewer','use','review-1') on conflict do nothing`;
+	const tasks =
+		await sql`select e.* from platform.evaluation_sample_tasks s join platform.conversation_executions e on e.execution_id=s.execution_id where s.experiment_id=${experiment.experimentId}`;
+	for (const task of tasks) {
+		await sql`update platform.conversation_executions set status='completed',last_event_sequence=2 where execution_id=${task.execution_id}`;
+		await sql`insert into platform.conversation_events(event_id,conversation_id,execution_id,sequence,conversation_cursor,event_type,event_payload,source,adapter_event_key,event_digest,runtime_cursor,occurred_at)values(${randomUUID()},${task.conversation_id},${task.execution_id},2,2,'text.delta',${sql.json({ type: "text.delta", text: "yes" })},'runtime',${randomUUID()},${"a".repeat(64)},'runtime-2',clock_timestamp())`;
+	}
+	const pair = generateKeyPairSync("rsa", { modulusLength: 3072 });
+	const publicKey = pair.publicKey.export({ format: "der", type: "spki" });
+	const encryptor = createRelayKeyEncryptorV1({
+		encryptionKeys: {
+			schemaVersion: 1,
+			activeWrappingKeyVersion: "fixture",
+			keys: [
+				{
+					schemaVersion: 1,
+					keyVersion: "fixture",
+					wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+					publicKeySpkiDerBase64: publicKey.toString("base64"),
+					publicKeyFingerprint: createHash("sha256")
+						.update(publicKey)
+						.digest("hex"),
+					rsaModulusBits: 3072,
+					status: "active",
+				},
+			],
+		},
+	});
+	const ciphertext = encryptor.encrypt({
+		purpose: "agent-default",
+		subjectId: configuration.agentId,
+		keyId: "eval-default",
+		keyVersion: 1,
+		plaintext: "synthetic-score-key",
+	});
+	await sql`update platform.relay_key_versions set ciphertext=${sql.json(ciphertext as unknown as postgres.JSONValue)} where key_id='eval-default'`;
+	let calls = 0;
+	const server = createServer(async (req, res) => {
+		calls++;
+		let body = "";
+		for await (const chunk of req) body += chunk;
+		expect(req.headers.authorization).toBe("Bearer synthetic-score-key");
+		expect(JSON.parse(body)).toMatchObject({ tools: [], tool_choice: "none" });
+		res.writeHead(200, { "Content-Type": "application/json" });
+		res.end(
+			JSON.stringify({
+				id: "response-fixture",
+				object: "response",
+				model: "score-model",
+				status: "completed",
+				output: [
+					{
+						type: "message",
+						role: "assistant",
+						status: "completed",
+						content: [
+							{
+								type: "output_text",
+								text: JSON.stringify({
+									status: "scored",
+									value: 1,
+									reason: "Synthetic model reason",
+								}),
+							},
+						],
+					},
+				],
+			}),
+		);
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	if (!address || typeof address === "string")
+		throw new Error("fixture endpoint");
+	const origin = `http://127.0.0.1:${address.port}`;
+	const options = {
+		...database,
+		directory,
+		loadDataPolicy: async () => policy,
+		loadExperimentPolicy: async () => experimentPolicy,
+		storage,
+		taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+	};
+	const worker = createEvaluationScoringWorkerV1({
+		...options,
+		batchSize: 100,
+		leaseMs: 30000,
+		retryDelayMs: 1000,
+		catalog: createDeploymentModelCatalogAdapterV1({
+			load: async () => ({
+				schemaVersion: 1,
+				revision: "score-catalog",
+				validUntil: Date.now() + 60000,
+				endpoints: [
+					{
+						endpointId: "score-endpoint",
+						baseUrl: origin,
+						origin,
+						protocol: "openai-responses-v1",
+						security: { tls: "loopback-http", redirects: "reject" },
+						capabilities: {
+							streaming: true,
+							tools: true,
+							reasoningLevels: ["low"],
+						},
+						allowedModels: ["score-model"],
+						available: true,
+					},
+				],
+			}),
+		}),
+		decryptor: createRelayKeyWorkerDecryptorV1({
+			keys: [
+				{
+					keyVersion: "fixture",
+					privateKeyPkcs8DerBase64: pair.privateKey
+						.export({ format: "der", type: "pkcs8" })
+						.toString("base64"),
+				},
+			],
+		}),
+	});
+	const scoring = new PostgresEvaluationScoringV1(options);
+	const humans = createEvaluationHumanScoringV1(scoring);
+	try {
+		const [rule] =
+			await sql`select id from platform.evaluation_score_intents where scorer_id='exact' and sample_task_id in (select id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId}) limit 1`;
+		const outbox = createPostgresOutboxStore(database);
+		try {
+			const itemId = `evaluation-score:${rule?.id}`;
+			const claim = await outbox.claim({
+				itemId,
+				leaseOwner: "test-rule",
+				leaseDurationMs: 30000,
+			});
+			if (!claim) throw new Error("claim missing");
+			const lease = {
+				itemId,
+				intentId: String(rule?.id),
+				leaseOwner: "test-rule",
+				deliveryFence: claim.deliveryFence.toString(),
+			};
+			const prepared = await scoring.prepare(lease);
+			if (!prepared.input || !prepared.intent) throw new Error("input missing");
+			await scoring.commit(
+				lease,
+				prepared.intent,
+				scoreEvaluationRuleV1({
+					scorer: prepared.intent.scorer,
+					output: prepared.input.output,
+					expected: prepared.input.expected,
+				}),
+			);
+			await outbox.markSucceeded({
+				itemId,
+				leaseOwner: "test-rule",
+				deliveryFence: claim.deliveryFence,
+			});
+		} finally {
+			await outbox.close();
+		}
+		await worker.runOnce();
+		const scores =
+			await sql`select * from platform.evaluation_score_intents where sample_task_id in (select id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId})`;
+		expect(scores).toHaveLength(6);
+		for (const score of scores)
+			expect(
+				score.status,
+				JSON.stringify(
+					scores.map((s) => ({
+						scorer: s.scorer_id,
+						status: s.status,
+						code: s.data.failureCode,
+					})),
+				),
+			).toBe(score.scorer_id === "human" ? "awaiting_human" : "scored");
+		expect(calls).toBe(2);
+		const human = scores.find((s) => s.scorer_id === "human");
+		if (!human) throw new Error("missing score");
+		const key = randomUUID();
+		const result = {
+			status: "scored",
+			value: 1,
+			reason: "Synthetic human reason",
+		};
+		const saved = EvaluationScoreMetadataV1Schema.parse(
+			await http(
+				`/scores/${human.id}/human`,
+				"runner",
+				{ expectedRevision: Number(human.revision), result },
+				key,
+			),
+		);
+		expect(saved.scoreActor).toEqual({ kind: "user", id: "runner" });
+		expect(
+			(
+				await http(
+					`/scores/${human.id}/human`,
+					"runner",
+					{ expectedRevision: Number(human.revision), result },
+					key,
+				)
+			).revision,
+		).toBe(saved.revision);
+		await expect(
+			humans.review(
+				request("runner"),
+				randomUUID(),
+				human.id,
+				Number(saved.revision),
+				result,
+			),
+		).rejects.toThrow();
+		const reviewContext = await fetch(
+			`${baseUrl}/scores/${human.id}/review-context`,
+			{ headers: { Cookie: "session=reviewer" } },
+		);
+		expect(reviewContext.status).toBe(200);
+		expect(await reviewContext.json()).toEqual(result);
+		const reviewKey = randomUUID();
+		const reviewed = await http(
+			`/scores/${human.id}/reviews`,
+			"reviewer",
+			{ expectedRevision: saved.revision, result },
+			reviewKey,
+		);
+		expect(
+			await http(
+				`/scores/${human.id}/reviews`,
+				"reviewer",
+				{ expectedRevision: saved.revision, result },
+				reviewKey,
+			),
+		).toEqual(reviewed);
+		const [audit] =
+			await sql`select actor_id from platform.audit_events where action='evaluation.score.reviewed' and target_id=${human.id}`;
+		expect(audit?.actor_id).toBe("reviewer");
+		await worker.runOnce();
+		expect(calls).toBe(2);
+		expect(
+			await sql`select id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId}`,
+		).toHaveLength(2);
+	} finally {
+		await worker.close();
+		await scoring.close();
+		if ("closeAllConnections" in api) api.closeAllConnections();
+		await new Promise<void>((resolve) => api.close(() => resolve()));
+		await assembly.close();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	}
+}, 60000);
+it("requires current experiment policy and run grant before underlying content/replay queries and allows original-subject cancellation after revoke", async () => {
+	const command = await dataset();
+	const experiment = await core.create(
+		request("runner"),
+		randomUUID(),
+		command,
+	);
+	const tasks = await experiments.samples(experiment.experimentId, 10);
+	const task = tasks[0];
+	if (!task) throw new Error("missing task");
+	const { PostgresEvaluationTaskAuthorityV1 } = await import(
+		"./evaluation-task-authority.js"
+	);
+	const { PostgresConversationQueryV1 } = await import(
+		"./conversation-query.js"
+	);
+	const authority = new PostgresEvaluationTaskAuthorityV1({
+		...database,
+		directory,
+		loadPolicy: {
+			data: async () => policy,
+			experiment: async () => experimentPolicy,
+		},
+	});
+	const query = new PostgresConversationQueryV1({
+		...database,
+		evaluationCurrent: authority.conversationCurrent.bind(authority),
+	});
+	const scope = {
+		actorId: "runner",
+		channelId: "eval",
+		principal: { kind: "user" as const, id: "runner" },
+	};
+	try {
+		expect(
+			await query.getExecution(scope, task.conversationId, task.executionId),
+		).toBeDefined();
+		const original = experimentPolicy;
+		experimentPolicy = { ...original, variants: [] };
+		expect(
+			await query.getExecution(scope, task.conversationId, task.executionId),
+		).toBeUndefined();
+		experimentPolicy = original;
+		const [grant] =
+			await sql`select data from platform.evaluation_grants where dataset_id=${command.datasetId} and data->'principal'->>'id'='runner'`;
+		await data.revoke(
+			request("admin"),
+			randomUUID(),
+			command.datasetId,
+			grant?.data.grantId,
+			grant?.data.revision,
+		);
+		expect(
+			await query.getExecution(scope, task.conversationId, task.executionId),
+		).toBeUndefined();
+		expect(
+			await query.replayExecution(
+				scope,
+				task.conversationId,
+				task.executionId,
+				undefined,
+			),
+		).toBeUndefined();
+		const cancelled = await core.cancel(
+			request("runner"),
+			experiment.experimentId,
+			randomUUID(),
+		);
+		expect(cancelled.status).toBe("cancelled");
+		await expect(
+			core.cancel(request("reviewer"), experiment.experimentId, randomUUID()),
+		).rejects.toMatchObject({ code: "denied" });
+	} finally {
+		await query.close();
+		await authority.close();
 	}
 }, 30000);

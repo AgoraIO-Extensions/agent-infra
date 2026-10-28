@@ -634,7 +634,14 @@ async function createPrepared(signal: AbortSignal) {
 			},
 			relayKeyDecryptor,
 			evaluationPolicy,
-			channelAuthorizationCurrent: (record, signal) =>
+			channelAuthorizationCurrent: (
+				record: Parameters<
+					NonNullable<
+						ConversationRuntimeOptionsV2["channelAuthorizationCurrent"]
+					>
+				>[0],
+				signal: AbortSignal,
+			) =>
 				record.boundary.channelId === "eval"
 					? (evaluationAuthority?.current(record.boundary) ??
 						Promise.resolve(false))

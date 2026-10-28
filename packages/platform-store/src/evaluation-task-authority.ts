@@ -62,6 +62,11 @@ export async function requireCurrentEvaluationTaskV1(
 			createHash("sha256").update(JSON.stringify(policy)).digest("hex")
 	)
 		throw new EvaluationDataErrorV1("unavailable");
+	const [agent] = await tx<
+		{ configuration_revision: string }[]
+	>`select current_configuration_revision::text as configuration_revision from platform.agents where id=${boundary.agentId} for share`;
+	if (!agent || +agent.configuration_revision !== binding.configurationRevision)
+		throw new EvaluationDataErrorV1("denied");
 	const [row] = await tx<
 		{ data: unknown; dataset_id: string; status: string; expires_at: Date }[]
 	>`select data,dataset_id,status,expires_at from platform.evaluation_versions where id=${binding.versionId} for share`;

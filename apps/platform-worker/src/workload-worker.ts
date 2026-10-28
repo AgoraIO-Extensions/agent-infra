@@ -7,6 +7,10 @@ import {
 } from "@agent-infra/platform-core";
 import { openPostgresWorkloadReconciliationStoreV1 } from "@agent-infra/platform-store";
 import { createEvaluationDataWorkerV1 } from "./evaluation-data-worker.js";
+import {
+	createEvaluationScoringWorkerV1,
+	type EvaluationScoringWorkerOptionsV1,
+} from "./evaluation-scoring-worker.js";
 import { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";
 import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import {
@@ -18,6 +22,10 @@ import { createWorkloadStepFailureLoggerV1 } from "./workload-step-failure.js";
 export interface PlatformWorkloadWorkerOptionsV1
 	extends Omit<WorkloadRuntimeOptionsV1, "workerId"> {
 	readonly databaseUrl: string;
+	readonly evaluationScoring?: Omit<
+		EvaluationScoringWorkerOptionsV1,
+		"databaseUrl"
+	>;
 	readonly evaluation?: Omit<
 		Parameters<typeof createEvaluationDataWorkerV1>[0],
 		"databaseUrl"
@@ -144,8 +152,16 @@ export function createPlatformWorkloadWorkerV1(
 		| ReturnType<typeof createPlatformFileReconciliationWorkerV1>
 		| undefined;
 	let evaluation: ReturnType<typeof createEvaluationDataWorkerV1> | undefined;
+	let evaluationScoring:
+		| ReturnType<typeof createEvaluationScoringWorkerV1>
+		| undefined;
 	let reconciliation: ReturnType<typeof createWorkloadReconciliationV1>;
 	try {
+		if (options.evaluationScoring)
+			evaluationScoring = createEvaluationScoringWorkerV1({
+				...options.evaluationScoring,
+				databaseUrl: options.databaseUrl,
+			});
 		if (options.evaluation)
 			evaluation = createEvaluationDataWorkerV1({
 				...options.evaluation,
@@ -196,6 +212,7 @@ export function createPlatformWorkloadWorkerV1(
 			store.close(),
 			files?.close(),
 			evaluation?.close(),
+			evaluationScoring?.close(),
 		]);
 		throw error;
 	}
@@ -231,6 +248,7 @@ export function createPlatformWorkloadWorkerV1(
 				if (!draining) {
 					await files?.runOnce();
 					await evaluation?.runOnce();
+					await evaluationScoring?.runOnce();
 				}
 			}
 		});
@@ -293,6 +311,7 @@ export function createPlatformWorkloadWorkerV1(
 						store.close(),
 						files?.close(),
 						evaluation?.close(),
+						evaluationScoring?.close(),
 					]);
 				}
 			})();

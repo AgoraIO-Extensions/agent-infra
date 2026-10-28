@@ -84,6 +84,14 @@ export interface RuntimeFileExchangeCredentialReaderV1 {
 }
 
 export function assemblePlatformFilesV1(input: {
+	evaluationCurrent?: (
+		scope: {
+			actorId: string;
+			channelId: string;
+			principal?: { kind: "user" | "application"; id: string };
+		},
+		conversationId: string,
+	) => Promise<boolean>;
 	databaseUrl: string;
 	deployment: PlatformFileDeploymentV1;
 	identity: IdentityAdapter;
@@ -271,6 +279,15 @@ export function assemblePlatformFilesV1(input: {
 						: null;
 					if (!limits) return deny("limits", failure);
 				}
+				if (
+					scope.channelId === "eval" &&
+					(!input.evaluationCurrent ||
+						!(await input.evaluationCurrent(
+							{ actorId: scope.actorId, channelId: "eval" },
+							conversationId,
+						)))
+				)
+					return deny("authorize");
 				return { ...scope, execution: execution ?? null, limits };
 			},
 		};
@@ -437,6 +454,19 @@ export function assemblePlatformFilesV1(input: {
 								execution.authorizationRevision
 						)
 							return deny("boundary");
+						if (
+							boundary.channelId === "eval" &&
+							(!input.evaluationCurrent ||
+								!(await input.evaluationCurrent(
+									{
+										actorId: boundary.principal.id,
+										channelId: "eval",
+										principal: boundary.principal,
+									},
+									claims.conversationId,
+								)))
+						)
+							return deny("task_authorization");
 						return execution;
 					})
 					.catch((error: unknown) => {

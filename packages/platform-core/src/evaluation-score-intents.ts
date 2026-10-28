@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { snapshotObject } from "./conversation-execution-values.js";
 import {
 	EvaluationDataErrorV1,
 	type EvaluationPrincipalV1,
@@ -12,9 +13,11 @@ import {
 	type EvaluationScoreOutcomeV1,
 	type EvaluationScorerV1,
 	parseEvaluationScoreOutcomeV1,
+	parseEvaluationScorerV1,
 	requireIndependentEvaluationReviewV1,
 	scoreEvaluationRuleV1,
 } from "./evaluation-scoring.js";
+import { parseTaskPrincipalV1 } from "./task-authorization.js";
 export interface EvaluationScoreIntentV1 {
 	id: string;
 	sampleTaskId: string;
@@ -31,6 +34,7 @@ export interface EvaluationScoreIntentV1 {
 	status:
 		| "waiting_output"
 		| "pending"
+		| "result_ready"
 		| "awaiting_human"
 		| "scored"
 		| "not_applicable"
@@ -71,8 +75,9 @@ export interface EvaluationScoreWorkPortV1 {
 		lease: EvaluationScoreLeaseV1,
 	): Promise<
 		| { intent: EvaluationScoreIntentV1; input: EvaluationScoringInputV1 }
-		| { waiting: true }
+		| { waiting: true; delayMs: number }
 		| { terminal: true }
+		| { intent: EvaluationScoreIntentV1; recovered: EvaluationScoreOutcomeV1 }
 	>;
 	model(
 		lease: EvaluationScoreLeaseV1,
@@ -87,21 +92,32 @@ export interface EvaluationScoreWorkPortV1 {
 	failed(
 		lease: EvaluationScoreLeaseV1,
 		code: "SCORER_UNAVAILABLE" | "SCORER_RESULT_INVALID",
+		preparationFailure?: boolean,
 	): Promise<{ retry: boolean; delayMs: number }>;
 }
 /** Scorer retries call only this intent port; business Task admission is intentionally absent. */
 export function createEvaluationScoreWorkV1(port: EvaluationScoreWorkPortV1) {
 	return {
-		async execute(
-			lease: EvaluationScoreLeaseV1,
-		): Promise<{
+		async execute(lease: EvaluationScoreLeaseV1): Promise<{
 			outcome: "completed" | "waiting" | "retry";
 			delayMs?: number;
 		}> {
 			let prepared: Awaited<ReturnType<EvaluationScoreWorkPortV1["prepare"]>>;
-			prepared = await port.prepare(lease);
-			if ("waiting" in prepared) return { outcome: "waiting" };
+			try {
+				prepared = await port.prepare(lease);
+			} catch {
+				const failure = await port.failed(lease, "SCORER_UNAVAILABLE", true);
+				return failure.retry
+					? { outcome: "retry", delayMs: failure.delayMs }
+					: { outcome: "completed" };
+			}
+			if ("waiting" in prepared)
+				return { outcome: "waiting", delayMs: prepared.delayMs };
 			if ("terminal" in prepared) return { outcome: "completed" };
+			if ("recovered" in prepared) {
+				await port.commit(lease, prepared.intent, prepared.recovered);
+				return { outcome: "completed" };
+			}
 			const { intent, input } = prepared;
 			if (intent.scorer.implementation.kind === "human")
 				return { outcome: "completed" };
@@ -172,10 +188,13 @@ export function createEvaluationHumanScoringV1(
 			const { intent } = await port.load(request, id, "score");
 			if (
 				intent.scorer.implementation.kind !== "human" ||
-				intent.status !== "awaiting_human"
+				!["awaiting_human", "scored", "not_applicable"].includes(intent.status)
 			)
 				throw new EvaluationDataErrorV1("conflict");
-			if (expectedRevision !== intent.revision)
+			if (
+				intent.status === "awaiting_human" &&
+				expectedRevision !== intent.revision
+			)
 				throw new EvaluationDataErrorV1("conflict");
 			return port.submit(
 				request,
@@ -246,4 +265,130 @@ export function planEvaluationScoreIntentV1(
 		metadataExpiresAt: experiment.metadataExpiresAt,
 		scoreActor: null,
 	};
+}
+
+export function parseEvaluationScoreIntentV1(
+	input: unknown,
+): EvaluationScoreIntentV1 {
+	const v = snapshotObject(input, [
+		"id",
+		"sampleTaskId",
+		"datasetId",
+		"versionId",
+		"experimentId",
+		"executionId",
+		"agentId",
+		"principal",
+		"scorer",
+		"policyId",
+		"policyRevision",
+		"resultVersion",
+		"status",
+		"revision",
+		"attempts",
+		"outputObjectId",
+		"reasonObjectId",
+		"value",
+		"passed",
+		"failureCode",
+		"keyBinding",
+		"createdAt",
+		"metadataExpiresAt",
+		"scoreActor",
+	]);
+	const text = (value: unknown) => {
+		if (
+			typeof value !== "string" ||
+			!value ||
+			value.length > 256 ||
+			!value.isWellFormed()
+		)
+			throw new EvaluationDataErrorV1("unavailable");
+		return value;
+	};
+	for (const key of [
+		"id",
+		"sampleTaskId",
+		"datasetId",
+		"versionId",
+		"experimentId",
+		"executionId",
+		"agentId",
+		"policyId",
+	])
+		text(v[key]);
+	for (const key of ["policyRevision", "revision", "attempts"]) {
+		const count = v[key];
+		if (
+			typeof count !== "number" ||
+			!Number.isSafeInteger(count) ||
+			count < (key === "attempts" ? 0 : 1)
+		)
+			throw new EvaluationDataErrorV1("unavailable");
+	}
+	const principal = parseTaskPrincipalV1(v.principal);
+	const scorer = parseEvaluationScorerV1(v.scorer);
+	if (
+		![
+			"waiting_output",
+			"pending",
+			"result_ready",
+			"awaiting_human",
+			"scored",
+			"not_applicable",
+			"failed",
+			"unknown",
+		].includes(text(v.status))
+	)
+		throw new EvaluationDataErrorV1("unavailable");
+	for (const key of [
+		"resultVersion",
+		"outputObjectId",
+		"reasonObjectId",
+		"failureCode",
+	])
+		if (v[key] !== null) text(v[key]);
+	for (const key of ["createdAt", "metadataExpiresAt"])
+		if (
+			!Number.isFinite(Date.parse(text(v[key]))) ||
+			new Date(text(v[key])).toISOString() !== v[key]
+		)
+			throw new EvaluationDataErrorV1("unavailable");
+	if (v.scoreActor !== null) parseTaskPrincipalV1(v.scoreActor);
+	if (
+		v.value !== null &&
+		(typeof v.value !== "number" ||
+			!Number.isFinite(v.value) ||
+			v.value < scorer.minimum ||
+			v.value > scorer.maximum)
+	)
+		throw new EvaluationDataErrorV1("unavailable");
+	if (v.passed !== null && typeof v.passed !== "boolean")
+		throw new EvaluationDataErrorV1("unavailable");
+	if (
+		v.status === "scored" &&
+		(v.value === null ||
+			v.passed === null ||
+			v.scoreActor === null ||
+			v.reasonObjectId === null)
+	)
+		throw new EvaluationDataErrorV1("unavailable");
+	if (v.keyBinding !== null) {
+		const key = snapshotObject(v.keyBinding, [
+			"purpose",
+			"subjectId",
+			"keyId",
+			"keyVersion",
+		]);
+		if (
+			key.purpose !== "agent-default" ||
+			key.subjectId !== v.agentId ||
+			typeof key.keyVersion !== "number" ||
+			!Number.isSafeInteger(key.keyVersion) ||
+			key.keyVersion < 1
+		)
+			throw new EvaluationDataErrorV1("unavailable");
+		text(key.keyId);
+	}
+	return { ...v, principal, scorer } as unknown as EvaluationScoreIntentV1;
 }

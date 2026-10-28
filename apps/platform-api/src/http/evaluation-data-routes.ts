@@ -33,7 +33,13 @@ export function registerEvaluationDataRoutesV1(
 	app: Hono,
 	input?: EvaluationDataRoutesV1,
 ) {
-	app.all("/api/v2/evaluation/*", async (context) => {
+	app.all("/api/v2/evaluation/*", async (context, next) => {
+		if (
+			!new URL(context.req.url).pathname.startsWith(
+				"/api/v2/evaluation/datasets",
+			)
+		)
+			return next();
 		const request = context.req.raw;
 		const metadata = requestMetadata(request);
 		context.header("Cache-Control", "no-store");

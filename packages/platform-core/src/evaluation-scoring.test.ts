@@ -22,6 +22,7 @@ function scorer(
 		timeoutMs: 1000,
 		maxAttempts: 2,
 		retryDelayMs: 1000,
+		datasetScopes: ["team"],
 		implementation: { kind: "rule", rule },
 	};
 	return parseEvaluationScorerV1({

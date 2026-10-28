@@ -30,6 +30,7 @@ export type EvaluationScorerV1 = {
 	readonly timeoutMs: number;
 	readonly maxAttempts: number;
 	readonly retryDelayMs: number;
+	readonly datasetScopes: readonly string[];
 	readonly implementation:
 		| {
 				readonly kind: "rule";
@@ -114,6 +115,7 @@ export function parseEvaluationScorerV1(input: unknown): EvaluationScorerV1 {
 		"timeoutMs",
 		"maxAttempts",
 		"retryDelayMs",
+		"datasetScopes",
 		"implementation",
 	]);
 	const minimum = finite(v.minimum);
@@ -185,8 +187,16 @@ export function parseEvaluationScorerV1(input: unknown): EvaluationScorerV1 {
 		timeoutMs: integer(v.timeoutMs, 300000),
 		maxAttempts: integer(v.maxAttempts, 10),
 		retryDelayMs: integer(v.retryDelayMs, 86400000),
+		datasetScopes: snapshotAgentManagementDenseArray(v.datasetScopes, 100).map(
+			(scope) => text(scope),
+		),
 		implementation,
 	};
+	if (
+		!result.datasetScopes.length ||
+		new Set(result.datasetScopes).size !== result.datasetScopes.length
+	)
+		return invalid();
 	const configurationDigest = text(v.configurationDigest, 64);
 	if (
 		!/^[a-f0-9]{64}$/.test(configurationDigest) ||

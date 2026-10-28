@@ -23,6 +23,7 @@ import {
 	createApplicationRevisionUseCaseV1,
 	createConversationExecutionUseCaseV1,
 	createEvaluationDataV1,
+	createEvaluationExperimentsV1,
 	createNativeCapabilityAdmissionUseCaseV1,
 	createPersonalApiAgentReadUseCaseV1,
 	createPersonalApiCredentialUseCaseV1,
@@ -57,6 +58,9 @@ import {
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
 	PostgresEvaluationDataStoreV1,
+	PostgresEvaluationExperimentsV1,
+	PostgresEvaluationScoringV1,
+	PostgresEvaluationTaskAuthorityV1,
 	PostgresFileLimitDeclarationStoreV1,
 	PostgresPersonalApiCredentialStoreV1,
 	PostgresPersonalRelayKeyStoreV1,
@@ -172,6 +176,7 @@ export interface PlatformApiAssemblyInput {
 	readonly evaluation?: {
 		close?: () => Promise<void>;
 		loadPolicy: () => Promise<EvaluationPolicyV1>;
+		loadExperimentPolicy?: () => Promise<unknown>;
 		storage: ObjectStorageDataV1;
 	};
 	readonly databaseUrl: string;
@@ -361,6 +366,33 @@ export function assemblePlatformApi(
 				directory: userDirectory,
 			})
 		: undefined;
+
+	const evaluationOptions = input.evaluation?.loadExperimentPolicy
+		? {
+				databaseUrl: input.databaseUrl,
+				directory: userDirectory,
+				loadDataPolicy: input.evaluation.loadPolicy,
+				loadExperimentPolicy: input.evaluation.loadExperimentPolicy,
+				storage: input.evaluation.storage,
+				taskPolicy: input.taskAdmissionPolicy,
+			}
+		: undefined;
+	const evaluationExperiments = evaluationOptions
+		? new PostgresEvaluationExperimentsV1(evaluationOptions)
+		: undefined;
+	const evaluationScoring = evaluationOptions
+		? new PostgresEvaluationScoringV1(evaluationOptions)
+		: undefined;
+	const evaluationTaskAuthority = evaluationOptions
+		? new PostgresEvaluationTaskAuthorityV1({
+				databaseUrl: input.databaseUrl,
+				directory: userDirectory,
+				loadPolicy: {
+					data: evaluationOptions.loadDataPolicy,
+					experiment: evaluationOptions.loadExperimentPolicy,
+				},
+			})
+		: undefined;
 	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
 		databaseUrl: input.databaseUrl,
 		userDirectory,
@@ -513,6 +545,11 @@ export function assemblePlatformApi(
 				: {}),
 		});
 	const conversationQuery = new PostgresConversationQueryV1({
+		evaluationCurrent: evaluationTaskAuthority
+			? evaluationTaskAuthority.conversationCurrent.bind(
+					evaluationTaskAuthority,
+				)
+			: undefined,
 		databaseUrl: input.databaseUrl,
 		...(input.conversationReplayWindow === undefined
 			? {}
@@ -1020,6 +1057,9 @@ export function assemblePlatformApi(
 	}
 	const files = input.files
 		? assemblePlatformFilesV1({
+				evaluationCurrent: evaluationTaskAuthority?.conversationCurrent.bind(
+					evaluationTaskAuthority,
+				),
 				databaseUrl: input.databaseUrl,
 				deployment: input.files,
 				identity: input.identity,
@@ -1201,6 +1241,25 @@ export function assemblePlatformApi(
 				: {}),
 		},
 		applications: { identity: input.identity, applications },
+		evaluationExperiments:
+			evaluationOptions &&
+			evaluationExperiments &&
+			evaluationScoring &&
+			evaluationStore
+				? {
+						identity: input.identity,
+						experiments: createEvaluationExperimentsV1({
+							data: createEvaluationDataV1({
+								store: evaluationStore,
+								loadPolicy: evaluationOptions.loadDataPolicy,
+								storage: evaluationOptions.storage,
+							}),
+							loadPolicy: evaluationOptions.loadExperimentPolicy,
+							transaction: evaluationExperiments,
+						}),
+						scoring: evaluationScoring,
+					}
+				: undefined,
 		evaluation:
 			input.evaluation && evaluationStore
 				? {
@@ -1378,6 +1437,9 @@ export function assemblePlatformApi(
 		skillHubBindingAdmission,
 		applicationApiCredentialStore,
 		...(evaluationStore ? [evaluationStore] : []),
+		...(evaluationExperiments ? [evaluationExperiments] : []),
+		...(evaluationScoring ? [evaluationScoring] : []),
+		...(evaluationTaskAuthority ? [evaluationTaskAuthority] : []),
 		...(input.evaluation?.close ? [{ close: input.evaluation.close }] : []),
 		...(installationStore ? [installationStore] : []),
 		...(browserCommandStore ? [browserCommandStore] : []),

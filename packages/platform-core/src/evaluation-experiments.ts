@@ -7,6 +7,7 @@ import type {
 } from "./conversation-execution-task.js";
 import type { ConversationExecutionAuthorityV1 } from "./conversation-execution-types.js";
 import { snapshotObject } from "./conversation-execution-values.js";
+import { parseConversationOperationEventV2 } from "./conversation-operation-facts.js";
 import {
 	type createEvaluationDataV1,
 	EvaluationDataErrorV1,
@@ -44,6 +45,7 @@ export interface EvaluationExperimentV1 {
 }
 export interface EvaluationSampleTaskV1 {
 	readonly sampleTaskId: string;
+	readonly scoreIds?: readonly string[];
 	readonly experimentId: string;
 	readonly sampleId: string;
 	readonly variantId: string;
@@ -156,6 +158,17 @@ export interface EvaluationExperimentTransactionV1 {
 	audit(action: string, targetId: string): Promise<void>;
 }
 export interface EvaluationExperimentTransactionPortV1 {
+	target(id: string): Promise<EvaluationExperimentV1 | null>;
+	samples(
+		id: string,
+		limit: number,
+		cursor?: string,
+	): Promise<EvaluationSampleTaskV1[]>;
+	cancel(
+		request: EvaluationRequestV1,
+		id: string,
+		key: string,
+	): Promise<EvaluationExperimentV1>;
 	transaction<T>(
 		request: EvaluationRequestV1,
 		command: EvaluationExperimentCreateV1,
@@ -168,6 +181,48 @@ export function createEvaluationExperimentsV1(options: {
 	transaction: EvaluationExperimentTransactionPortV1;
 }) {
 	return {
+		async get(
+			request: EvaluationRequestV1,
+			id: string,
+			limit = 50,
+			cursor?: string,
+		) {
+			if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+				return invalid();
+			const experiment = await options.transaction.target(id);
+			if (!experiment) throw new EvaluationDataErrorV1("denied");
+			const authority = await options.data.authorizeRun(
+				request,
+				experiment.datasetId,
+				experiment.versionId,
+			);
+			if (!isDeepStrictEqual(authority.principal, experiment.principal))
+				throw new EvaluationDataErrorV1("denied");
+			const tasks = await options.transaction.samples(id, limit + 1, cursor);
+			await options.data.authorizeRun(
+				request,
+				experiment.datasetId,
+				experiment.versionId,
+			);
+			return {
+				experiment,
+				items: tasks.slice(0, limit).map((task) => ({
+					sampleTaskId: task.sampleTaskId,
+					sampleId: task.sampleId,
+					variantId: task.variantId,
+					conversationId: task.conversationId,
+					executionId: task.executionId,
+					scoreIds: task.scoreIds ?? [],
+					requested: task.requested,
+				})),
+				nextCursor:
+					tasks.length > limit
+						? (tasks[limit - 1]?.sampleTaskId ?? null)
+						: null,
+			};
+		},
+		cancel: (request: EvaluationRequestV1, id: string, key: string) =>
+			options.transaction.cancel(request, id, key),
 		async create(request: EvaluationRequestV1, key: string, input: unknown) {
 			const command = parseEvaluationExperimentCreateV1(input);
 			if (!/^[A-Za-z0-9._~-]{1,128}$/.test(key)) return invalid();
@@ -198,6 +253,10 @@ export function createEvaluationExperimentsV1(options: {
 				)
 			)
 				return invalid();
+			if (
+				scorers.some((scorer) => !scorer.datasetScopes.includes(source.scope))
+			)
+				throw new EvaluationDataErrorV1("denied");
 			const digest = createHash("sha256")
 				.update(JSON.stringify(command))
 				.digest("hex");
@@ -215,6 +274,7 @@ export function createEvaluationExperimentsV1(options: {
 							grant: source.grant,
 							policy: source.policy,
 							principal: source.principal,
+							scope: source.scope,
 						}) ||
 						!isDeepStrictEqual(policy, await tx.currentPolicy()) ||
 						Date.parse(policy.validUntil) <= +(await tx.currentTime())
@@ -426,5 +486,56 @@ export function parseEvaluationExperimentV1(
 		revision: value.revision,
 		createdAt: String(value.createdAt),
 		metadataExpiresAt: String(value.metadataExpiresAt),
+	};
+}
+export function requireEvaluationExperimentOwnerV1(
+	experiment: EvaluationExperimentV1,
+	principal: EvaluationPrincipalV1,
+) {
+	if (!isDeepStrictEqual(experiment.principal, principal))
+		throw new EvaluationDataErrorV1("denied");
+}
+
+/** Actual model/tool metadata is projected only from persisted runtime operation facts. */
+export function projectEvaluationExecutionFactsV1(
+	events: readonly { sequence: number; eventType: string; payload: unknown }[],
+) {
+	const models: {
+		operationRef: string;
+		attemptRef: string;
+		sequence: number;
+		phase: string;
+		observed: boolean;
+		[key: string]: unknown;
+	}[] = [];
+	const tools: unknown[] = [];
+	for (const event of events) {
+		if (event.eventType !== "execution.operation") continue;
+		const fact = parseConversationOperationEventV2(event.payload).fact;
+		if (fact.kind === "model")
+			models.push({
+				operationRef: fact.operationRef,
+				attemptRef: fact.attemptRef,
+				sequence: event.sequence,
+				observed: fact.phase === "started" || fact.startedAt !== undefined,
+				model: fact.model,
+				phase: fact.phase,
+				usage: fact.usage ?? null,
+				durationMs: fact.durationMs ?? null,
+			});
+		if (fact.kind === "tool")
+			tools.push({
+				operationRef: fact.operationRef,
+				attemptRef: fact.attemptRef,
+				sequence: event.sequence,
+				toolId: fact.toolId,
+				phase: fact.phase,
+				durationMs: fact.durationMs ?? null,
+			});
+	}
+	return {
+		models,
+		tools,
+		actualModelObserved: models.some((model) => model.observed),
 	};
 }

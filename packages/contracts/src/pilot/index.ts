@@ -15,6 +15,7 @@ export * from "./direct.ts";
 export * from "./directory-search.ts";
 export * from "./errors.ts";
 export * from "./evaluation-data.ts";
+export * from "./evaluation-experiments.ts";
 export * from "./execution-progress.ts";
 export * from "./multi-service.ts";
 export * from "./native-capability.ts";

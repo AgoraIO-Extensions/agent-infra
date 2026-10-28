@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { snapshotObject } from "./conversation-execution-values.js";
 import {
 	EvaluationDataErrorV1,
 	type EvaluationGrantV1,
@@ -106,26 +107,51 @@ export function createEvaluationDerivedContentV1(options: {
 					Date.now() + binding.policy.transferTimeoutMs + 5000,
 				).toISOString(),
 			});
+			const bound = await options.store.authorize(
+				request,
+				datasetId,
+				versionId,
+				kind,
+			);
+			if (
+				!isDeepStrictEqual(bound, binding) ||
+				bytes.length > bound.policy.maxContentBytes ||
+				Date.parse(intent.expiresAt) <= Date.now()
+			)
+				throw new EvaluationDataErrorV1("denied");
 			if (intent.status === "available") return intent;
-			const stored = await options.storage.upload({
-				objectRef: intent.objectRef,
-				descriptor: {
-					name: "evaluation.json",
-					mediaType: "application/json",
-					sizeBytes: bytes.length,
-					sha256: intent.sha256,
-				},
-				body: new ReadableStream({
-					start(controller) {
-						controller.enqueue(bytes);
-						controller.close();
+			const present = await options.storage.inspect(intent.objectRef);
+			if (
+				present &&
+				(present.sha256 !== intent.sha256 ||
+					present.sizeBytes !== intent.sizeBytes ||
+					present.mediaType !== "application/json")
+			)
+				throw new EvaluationDataErrorV1("unavailable");
+			const stored =
+				present ??
+				(await options.storage.upload({
+					objectRef: intent.objectRef,
+					descriptor: {
+						name: "evaluation.json",
+						mediaType: "application/json",
+						sizeBytes: bytes.length,
+						sha256: intent.sha256,
 					},
-				}),
-				expiresAt: new Date(
-					Date.now() + binding.policy.transferTimeoutMs,
-				).toISOString(),
-				signal: AbortSignal.timeout(binding.policy.transferTimeoutMs),
-			});
+					body: new ReadableStream({
+						start(controller) {
+							controller.enqueue(bytes);
+							controller.close();
+						},
+					}),
+					expiresAt: new Date(
+						Math.min(
+							Date.now() + bound.policy.transferTimeoutMs,
+							Date.parse(intent.transferUntil) - 5000,
+						),
+					).toISOString(),
+					signal: AbortSignal.timeout(bound.policy.transferTimeoutMs),
+				}));
 			const inspected = await options.storage.inspect(
 				intent.objectRef,
 				stored.version,
@@ -160,11 +186,20 @@ export function createEvaluationDerivedContentV1(options: {
 				original.versionId,
 				kind,
 			);
+			const expiresAt = new Date(
+				Math.min(
+					Date.parse(original.expiresAt),
+					Date.parse(original.createdAt) +
+						binding.policy.retention[kind].contentMs,
+				),
+			).toISOString();
+			if (Date.parse(expiresAt) <= Date.now())
+				throw new EvaluationDataErrorV1("denied");
 			const stream = await options.storage.download({
 				objectRef: original.objectRef,
 				version: original.stored.version,
 				etag: original.stored.etag,
-				expiresAt: original.expiresAt,
+				expiresAt,
 				signal: AbortSignal.timeout(binding.policy.transferTimeoutMs),
 			});
 			const chunks: Uint8Array[] = [];
@@ -190,7 +225,11 @@ export function createEvaluationDerivedContentV1(options: {
 			if (
 				!isDeepStrictEqual(latest, binding) ||
 				!isDeepStrictEqual(await options.store.get(id), original) ||
-				Date.parse(original.expiresAt) <= Date.now()
+				Math.min(
+					Date.parse(original.expiresAt),
+					Date.parse(original.createdAt) +
+						latest.policy.retention[kind].contentMs,
+				) <= Date.now()
 			)
 				throw new EvaluationDataErrorV1("denied");
 			return JSON.parse(
@@ -198,4 +237,87 @@ export function createEvaluationDerivedContentV1(options: {
 			) as unknown;
 		},
 	};
+}
+
+export function parseEvaluationDerivedObjectV1(
+	input: unknown,
+): EvaluationDerivedObjectV1 {
+	const v = snapshotObject(input, [
+		"id",
+		"datasetId",
+		"versionId",
+		"kind",
+		"objectRef",
+		"status",
+		"stored",
+		"sha256",
+		"sizeBytes",
+		"createdAt",
+		"expiresAt",
+		"metadataExpiresAt",
+		"deleteBy",
+		"transferUntil",
+	]);
+	const text = (value: unknown) => {
+		if (
+			typeof value !== "string" ||
+			!value ||
+			value.length > 512 ||
+			!value.isWellFormed()
+		)
+			throw new EvaluationDataErrorV1("unavailable");
+		return value;
+	};
+	for (const key of ["id", "datasetId", "versionId", "objectRef"])
+		if (
+			!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(
+				text(v[key]),
+			)
+		)
+			throw new EvaluationDataErrorV1("unavailable");
+	if (
+		!["output", "score", "review"].includes(text(v.kind)) ||
+		!["pending", "available", "deleting", "deleted"].includes(text(v.status)) ||
+		!/^[a-f0-9]{64}$/.test(text(v.sha256)) ||
+		typeof v.sizeBytes !== "number" ||
+		!Number.isSafeInteger(v.sizeBytes) ||
+		v.sizeBytes < 1 ||
+		v.sizeBytes > 1024 * 1024
+	)
+		throw new EvaluationDataErrorV1("unavailable");
+	for (const key of [
+		"createdAt",
+		"expiresAt",
+		"metadataExpiresAt",
+		"deleteBy",
+		"transferUntil",
+	])
+		if (
+			!Number.isFinite(Date.parse(text(v[key]))) ||
+			new Date(text(v[key])).toISOString() !== v[key]
+		)
+			throw new EvaluationDataErrorV1("unavailable");
+	if (v.stored !== null) {
+		const stored = snapshotObject(v.stored, [
+			"sha256",
+			"sizeBytes",
+			"mediaType",
+			"etag",
+			"version",
+		]);
+		if (
+			stored.sha256 !== v.sha256 ||
+			stored.sizeBytes !== v.sizeBytes ||
+			stored.mediaType !== "application/json"
+		)
+			throw new EvaluationDataErrorV1("unavailable");
+		text(stored.etag);
+		text(stored.version);
+	}
+	if (
+		(v.status === "available" && v.stored === null) ||
+		(v.status === "pending" && v.stored !== null)
+	)
+		throw new EvaluationDataErrorV1("unavailable");
+	return v as unknown as EvaluationDerivedObjectV1;
 }

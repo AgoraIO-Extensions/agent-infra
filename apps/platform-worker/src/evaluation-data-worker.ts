@@ -39,13 +39,21 @@ export function createEvaluationDataWorkerV1(input: {
 				});
 				if (!lease) continue;
 				try {
-					const versionId = lease.payload.versionId;
+					const versionId =
+						lease.operation === "evaluation.derived.delete.v1"
+							? lease.payload.objectId
+							: lease.payload.versionId;
 					if (
 						typeof versionId !== "string" ||
-						lease.operation !== "evaluation.content.delete.v1"
+						![
+							"evaluation.content.delete.v1",
+							"evaluation.derived.delete.v1",
+						].includes(lease.operation)
 					)
 						throw new Error("EVALUATION_DELETE_INVALID");
-					await store.cleanupVersion(
+					await (lease.operation === "evaluation.derived.delete.v1"
+						? store.cleanupDerived.bind(store)
+						: store.cleanupVersion.bind(store))(
 						{
 							itemId,
 							leaseOwner: owner,
