@@ -8,6 +8,7 @@ import { isAbsolute, join } from "node:path";
 
 import {
 	assertAcceptance,
+	assistantDeliveryEvidence,
 	currentExecutionEvents,
 	currentExecutionFrames,
 	restoredHistoryPreservesEvents,
@@ -194,6 +195,7 @@ async function run(input, evidence) {
 		const page = await owner.newPage();
 		await page.addInitScript(() => {
 			window.__agentInfraSseFrames = [];
+			window.__agentInfraChunkSequence = 0;
 			window.__agentInfraAssistantRenders = [];
 			window.__agentInfraStreamStartAssistantLength = 0;
 			window.__agentInfraTurnAssistantOffset = 0;
@@ -238,6 +240,7 @@ async function run(input, evidence) {
 				const stream = response.body.pipeThrough(
 					new TransformStream({
 						transform(chunk, controller) {
+							const chunkSequence = ++window.__agentInfraChunkSequence;
 							pending += decoder
 								.decode(chunk, { stream: true })
 								.replaceAll("\r\n", "\n");
@@ -264,6 +267,7 @@ async function run(input, evidence) {
 													: undefined,
 											type: parsed.type,
 											at: performance.now(),
+											chunkSequence,
 											visibleTextLength: assistantTextLength(),
 										});
 									} catch {}
@@ -398,27 +402,25 @@ async function run(input, evidence) {
 			}
 			await expect
 				.poll(
-					() =>
-						page.evaluate((executionId) => {
-							const frames = (window.__agentInfraSseFrames ?? []).filter(
-								(frame) => frame.executionId === executionId,
-							);
-							const firstFrame = frames.find(
-								(frame) => frame.type === "text.delta" && frame.textLength > 0,
-							);
-							const terminalFrame = frames.find(
-								(frame) =>
-									frame.type === "execution.status" &&
-									frame.status === "completed",
-							);
-							return Boolean(
-								firstFrame &&
-									terminalFrame &&
-									firstFrame.at < terminalFrame.at &&
-									terminalFrame.visibleTextLength >
-										(window.__agentInfraStreamStartAssistantLength ?? 0),
-							);
-						}, receipt.executionId),
+					async () => {
+						const observed = await page.evaluate(
+							(executionId) => ({
+								frames: (window.__agentInfraSseFrames ?? []).filter(
+									(frame) => frame.executionId === executionId,
+								),
+								renders: window.__agentInfraAssistantRenders ?? [],
+								baseline: window.__agentInfraStreamStartAssistantLength ?? 0,
+							}),
+							receipt.executionId,
+						);
+						return (
+							assistantDeliveryEvidence(
+								observed.frames,
+								observed.renders,
+								observed.baseline,
+							) !== null
+						);
+					},
 					{ timeout: 180_000, intervals: [500, 1000, 2000] },
 				)
 				.toBe(true);
@@ -489,22 +491,19 @@ async function run(input, evidence) {
 				firstFrame && terminalFrame,
 				"SSE must include text and terminal frames",
 			);
-			assert(
-				assistantRenders.some(
-					(render) =>
-						render.at >= firstFrame.at &&
-						render.at < terminalFrame.at &&
-						render.visibleTextLength > streamStartAssistantLength,
-				),
-				"The page must render incremental assistant text before the terminal frame",
+			const delivery = assistantDeliveryEvidence(
+				currentFrames,
+				assistantRenders,
+				streamStartAssistantLength,
 			);
 			assert(
-				firstFrame.at < terminalFrame.at,
-				"An incremental text frame must arrive before the terminal frame",
+				delivery,
+				"The page must render the current reply according to its observed SSE delivery",
 			);
 			await expect(page.locator(".assistant-markdown").last()).not.toBeEmpty();
 			evidence.sse = {
 				status: 200,
+				delivery,
 				eventCount: events.length,
 				historyEventCount: detail.events.length,
 				eventIdHashes: events.map((event) => digest(event.eventId)),
@@ -514,6 +513,7 @@ async function run(input, evidence) {
 					status: frame.status ?? null,
 					textLength: frame.textLength ?? null,
 					visibleTextLength: frame.visibleTextLength,
+					chunkSequence: frame.chunkSequence,
 				})),
 				assistantRenders: assistantRenders.map((render) => ({
 					visibleTextLength: render.visibleTextLength,
