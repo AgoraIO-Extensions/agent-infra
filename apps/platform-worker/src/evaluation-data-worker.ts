@@ -12,6 +12,7 @@ import {
 export function createEvaluationDataWorkerV1(input: {
 	databaseUrl: string;
 	storage: ObjectStorageDataV1;
+	closeStorage?: () => void;
 	batchSize: number;
 	timeoutMs: number;
 }) {
@@ -102,6 +103,7 @@ export function createEvaluationDataWorkerV1(input: {
 		},
 		close: async () => {
 			await Promise.all([store.close(), outbox.close()]);
+			input.closeStorage?.();
 		},
 	};
 }

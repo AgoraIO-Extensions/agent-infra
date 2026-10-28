@@ -1,4 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
 	EvaluationDatasetPageV1Schema,
 	EvaluationDatasetV1Schema,
@@ -36,6 +40,10 @@ import {
 import { createPlatformApp } from "./app.js";
 import { assemblePlatformApi } from "./assembly.js";
 import { registerEvaluationDataRoutesV1 } from "./http/evaluation-data-routes.js";
+import {
+	createPlatformApiShutdown,
+	startPlatformApiFromDeployment,
+} from "./index.js";
 
 let database: PostgresTestDatabase;
 let sql: ReturnType<typeof postgres>;
@@ -963,4 +971,45 @@ describe("Eval data authority with real PG and versioned S3", {
 			await sql`update platform.audit_events set details=details-'sample' where id=${row?.id}`;
 		}
 	});
+	it("starts from a private deployment module with a current policy file and dedicated S3 factory", async () => {
+		const temporary = await mkdtemp(join(tmpdir(), "eval-deployment-"));
+		let running:
+			| Awaited<ReturnType<typeof startPlatformApiFromDeployment>>
+			| undefined;
+		const policyFile = join(temporary, "policy.json");
+		const moduleFile = join(temporary, "configuration.mjs");
+		const source = `
+import {readFile} from 'node:fs/promises';
+import {createPlatformApiAssemblyInput as base} from ${JSON.stringify(new URL("../../../tests/fixtures/platform-api-deployment.mjs", import.meta.url).href)};
+import {createEvaluationObjectStorageV1} from ${JSON.stringify(new URL("../../../packages/object-storage/dist/index.mjs", import.meta.url).href)};
+import {parseEvaluationPolicyV1} from ${JSON.stringify(new URL("../../../packages/platform-core/dist/index.mjs", import.meta.url).href)};
+const storage=createEvaluationObjectStorageV1(${JSON.stringify(storage.configuration)});
+const loadPolicy=async()=>parseEvaluationPolicyV1(JSON.parse(await readFile(${JSON.stringify(policyFile)},'utf8')));
+await loadPolicy();
+export function createPlatformApiAssemblyInput(){ const input=base(); return {...input,databaseUrl:${JSON.stringify(database.databaseUrl)},identity:{...input.identity,resolveUser:async(userId)=>({schemaVersion:1,userId,accountStatus:'active',organizationIds:[],authorizationRevision:'v1'}),resolve:async()=>({schemaVersion:1,userId:'admin',displayName:'Fixture',accountStatus:'active',organizationIds:[],roles:['employee'],authorizationRevision:'v1'})},evaluation:{storage,loadPolicy,close:async()=>storage.close()}};}
+`;
+		try {
+			await writeFile(policyFile, JSON.stringify(policy));
+			await writeFile(moduleFile, source);
+			running = await startPlatformApiFromDeployment({
+				moduleSpecifier: pathToFileURL(moduleFile).href,
+				port: 0,
+				log: () => {},
+			});
+			const address = running.server.address();
+			if (!address || typeof address === "string")
+				throw new Error("fixture address");
+			const origin = `http://127.0.0.1:${address.port}`;
+			expect((await fetch(`${origin}/api/v2/evaluation/datasets`)).status).toBe(
+				200,
+			);
+			await writeFile(policyFile, "{}");
+			const denied = await fetch(`${origin}/api/v2/evaluation/datasets`);
+			expect(denied.status).toBe(503);
+			expect(await denied.text()).not.toContain("Synthetic evaluation");
+		} finally {
+			if (running) await createPlatformApiShutdown(running)();
+			await rm(temporary, { recursive: true, force: true });
+		}
+	}, 30000);
 });

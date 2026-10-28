@@ -1,12 +1,12 @@
 import { execFile as callback } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
-import { createEvaluationObjectStorageV1 } from "@agent-infra/object-storage";
 import {
 	CreateBucketCommand,
 	PutBucketVersioningCommand,
 	S3Client,
 } from "@aws-sdk/client-s3";
+import { createEvaluationObjectStorageV1 } from "./evaluation-storage.js";
 import { createS3ObjectStorageV1 } from "./s3.ts";
 
 const execFile = promisify(callback);
@@ -84,6 +84,14 @@ export async function startMinioFileFixtureV1(
 			timeoutMs: 10000,
 		});
 		return {
+			configuration: {
+				endpoint,
+				region: "us-east-1",
+				credentials,
+				bucket: "file-contract",
+				maxObjectBytes: 1024 * 1024,
+				timeoutMs: 10000,
+			},
 			storage,
 			client,
 			bucket: "file-contract",

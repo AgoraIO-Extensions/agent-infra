@@ -170,6 +170,7 @@ export interface PlatformApiAssemblyInput {
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly files?: PlatformFileDeploymentV1;
 	readonly evaluation?: {
+		close?: () => Promise<void>;
 		loadPolicy: () => Promise<EvaluationPolicyV1>;
 		storage: ObjectStorageDataV1;
 	};
@@ -1377,6 +1378,7 @@ export function assemblePlatformApi(
 		skillHubBindingAdmission,
 		applicationApiCredentialStore,
 		...(evaluationStore ? [evaluationStore] : []),
+		...(input.evaluation?.close ? [{ close: input.evaluation.close }] : []),
 		...(installationStore ? [installationStore] : []),
 		...(browserCommandStore ? [browserCommandStore] : []),
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),

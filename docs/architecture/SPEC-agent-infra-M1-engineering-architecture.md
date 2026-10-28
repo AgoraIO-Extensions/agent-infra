@@ -2613,6 +2613,33 @@ API 读取/写入、Worker 投递样本/评分、受控对象访问及结果提�
 
 数据 API 路径为 `/api/v2/evaluation/datasets` 及其版本、授权和内容子路径，使用生成 Client。写入携带 `Idempotency-Key`；期望修订冲突返回 409，无当前用途权限返回 404，未配置或当前政策不可读取返回 503。列表及内部授权集合的 V1 支持上限均为 1000，超过上限整体拒绝，不能返回被静默截断的授权结果。API/Worker 的部署模块须使用 `createEvaluationObjectStorageV1` 装配现有 S3 Adapter，固定独立 `eval/` 前缀；普通 FileGrant 存储实例不能接入。对象传输在短事务之外执行，意图和传输截止时间先持久化，提交前用当前 DB 时间再次检查政策、主体、授权和内容有效期。
 
+部署沿用现有私有配置模块：API 的 `apiInput.evaluation` 经 `deployment-entry.ts` 传入生产装配，Worker 的 `workloadInput.evaluation` 经同一启动入口传入既有清理轮询。不新增环境变量或独立服务；省略该配置时 API 返回未配置，不能从 Owner 或普通文件配置推导默认值。API 的 `loadPolicy` 每次读取当前私有政策文件并调用 `parseEvaluationPolicyV1`，不能永久捕获启动快照；政策读取错误使请求失败。两端使用相同政策版本和存储绑定，Worker 只执行 DB 已固化的清理义务，政策失效不撤销清理。
+
+私有配置模块的接线形式如下，文件路径及对象存储参数由部署提供；配置和凭证不写入镜像或 Git：
+
+```typescript
+import { readFile } from "node:fs/promises";
+import { parseEvaluationPolicyV1 } from "@agent-infra/platform-core";
+import { createEvaluationObjectStorageV1 } from "@agent-infra/object-storage";
+
+const settings = JSON.parse(await readFile(privateConfigurationFile, "utf8"));
+const loadPolicy = async () =>
+  parseEvaluationPolicyV1(JSON.parse(await readFile(settings.policyFile, "utf8")));
+await loadPolicy(); // 已声明启用但配置非法时启动失败
+const storage = createEvaluationObjectStorageV1(settings.objectStorage);
+// API 私有 configuration.mjs：
+apiInput.evaluation = { loadPolicy, storage, close: async () => storage.close() };
+// Worker 的独立私有 configuration.mjs 使用相同批准输入：
+workloadInput.evaluation = {
+  storage,
+  batchSize: settings.cleanup.batchSize,
+  timeoutMs: settings.cleanup.timeoutMs,
+  closeStorage: () => storage.close(),
+};
+```
+
+数据基础模块的 `read` 用例仅校验 `read` 用途。后续实验和评分在该模块的事务/版本/授权边界扩展服务端固定的 `run`、`score`、`review` 或 `analyze` 入口，并与 Execution/fence 绑定；不得借用浏览器 `read` 入口或要求额外授予 `read` 来实现这些独立用途，也不接受客户端自报用途来扩大正文权限。
+
 #### 18.4.2 版本、对象与任务绑定
 
 数据集、样本集合与 rubric 的版本不可变。新版本保存来源版本和必要变更元数据；真实材料导入记录

@@ -25,7 +25,7 @@ test("uses the real API, PostgreSQL and S3 for explicit grants, import, revoke a
 					method: incoming.method(),
 					headers: incoming.headers(),
 					...(incoming.postDataBuffer()
-						? { body: incoming.postDataBuffer() }
+						? { body: new Uint8Array(incoming.postDataBuffer() ?? []) }
 						: {}),
 					redirect: "manual",
 				},

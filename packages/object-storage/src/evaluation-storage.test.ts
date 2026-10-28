@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { expect, it } from "vitest";
 import {
 	createS3ObjectStorageV1,
 	requireEvaluationObjectStorageV1,
-} from "@agent-infra/object-storage";
-import { PutObjectCommand } from "@aws-sdk/client-s3";
-import { expect, it } from "vitest";
+} from "./index.js";
 import { startMinioFileFixtureV1 } from "./minio.test-support.js";
 
 it("uses the dedicated Eval prefix and inspects/deletes only an explicitly selected S3 version", async () => {
