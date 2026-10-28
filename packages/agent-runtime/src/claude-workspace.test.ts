@@ -72,7 +72,7 @@ describe("Claude workspace result hook", () => {
 		).toBeUndefined();
 	});
 
-	it("reports the native tool dispatch boundary without forwarding tool input", async () => {
+	it("records local tools only after the native completion hook without an intent barrier", async () => {
 		const root = await realpath(
 			await mkdtemp(join(tmpdir(), "claude-workspace-hook-")),
 		);
@@ -80,11 +80,9 @@ describe("Claude workspace result hook", () => {
 		const memory = join(root, "memory");
 		await mkdir(workspace);
 		await mkdir(memory);
-		const onIntent = vi.fn(async () => {});
 		const onStarted = vi.fn(async () => {});
 		const onCompleted = vi.fn(async () => {});
 		const tools = claudeWorkspaceTools(workspace, memory, {
-			onIntent,
 			onStarted,
 			onCompleted,
 		});
@@ -104,7 +102,6 @@ describe("Claude workspace result hook", () => {
 		expect(beforeResult).toMatchObject({
 			hookSpecificOutput: { permissionDecision: "allow" },
 		});
-		expect(onIntent).toHaveBeenCalledWith("tool-1", "Read");
 		expect(onStarted).not.toHaveBeenCalled();
 		await after(
 			{
@@ -131,10 +128,8 @@ describe("Claude workspace result hook", () => {
 		const memory = join(root, "memory");
 		await mkdir(workspace);
 		await mkdir(memory);
-		const onIntent = vi.fn(async () => {});
 		const onStarted = vi.fn(async () => {});
 		const tools = claudeWorkspaceTools(workspace, memory, {
-			onIntent,
 			onStarted,
 		});
 		const before = tools.hooks?.PreToolUse?.[0]?.hooks[0];
@@ -149,7 +144,6 @@ describe("Claude workspace result hook", () => {
 			"tool-denied",
 			{ signal: new AbortController().signal },
 		);
-		expect(onIntent).not.toHaveBeenCalled();
 		expect(onStarted).not.toHaveBeenCalled();
 		await rm(root, { recursive: true, force: true });
 	});
@@ -405,4 +399,67 @@ describe("Claude workspace list and search tools", () => {
 			await rm(f.root, { recursive: true, force: true });
 		}
 	});
+});
+
+it("revalidates the fixed shell boundary for every Bash permission and preserves file policy", async () => {
+	const authorizeShell = vi
+		.fn()
+		.mockResolvedValueOnce(true)
+		.mockResolvedValue(false);
+	const tools = claudeWorkspaceTools("/private/workspace", "/private/memory", {
+		authorizeShell,
+	});
+	const options = {
+		signal: new AbortController().signal,
+		toolUseID: "shell",
+		requestId: "request",
+	};
+	expect(tools.tools).toContain("Bash");
+	expect(
+		await tools.canUseTool?.("Bash", { command: "true" }, options),
+	).toMatchObject({ behavior: "allow" });
+	expect(
+		await tools.canUseTool?.("Bash", { command: "true" }, options),
+	).toMatchObject({ behavior: "deny" });
+	expect(
+		await tools.canUseTool?.(
+			"Read",
+			{ file_path: "/private/host-secret" },
+			options,
+		),
+	).toMatchObject({ behavior: "deny" });
+	expect(authorizeShell).toHaveBeenCalledTimes(2);
+});
+
+it("does not let an obsolete throwing intent callback become a Bash execution barrier", async () => {
+	const onIntent = vi.fn(async () => {
+		throw new Error("SYNTHETIC_INTENT_WRITE_FAILED");
+	});
+	const callbacks = {
+		authorizeShell: async () => true,
+		authorize: async () => true,
+		onIntent,
+	};
+	const tools = claudeWorkspaceTools(
+		"/session/workspace",
+		"/session/memory",
+		callbacks,
+	);
+	const before = tools.hooks?.PreToolUse?.[0]?.hooks[0];
+	if (!before) throw Error();
+	await expect(
+		before(
+			{
+				hook_event_name: "PreToolUse",
+				tool_name: "Bash",
+				tool_use_id: "shell",
+				tool_input: { command: "true" },
+			} as never,
+			"shell",
+			{ signal: new AbortController().signal },
+		),
+	).resolves.toMatchObject({
+		hookSpecificOutput: { permissionDecision: "allow" },
+	});
+	expect(onIntent).not.toHaveBeenCalled();
 });

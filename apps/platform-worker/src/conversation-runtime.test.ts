@@ -2900,3 +2900,56 @@ it("rejects missing per-Agent configuration instead of using another Agent or a 
 		}
 	}
 });
+
+it.each(["claude", "pi", "opencode", "custom"])(
+	"derives native observation authority from the stored Workload: %s",
+	async (template) => {
+		const h = harness();
+		try {
+			const record = h.record();
+			if (!record?.workload) throw Error();
+			const source =
+				template === "custom"
+					? { kind: "custom", interactionMode: "platform-adapter" }
+					: { kind: "standard", templateId: template };
+			Object.assign(record.workload.candidate.configuration, { source });
+			Object.assign(record.workload.verified?.configuration ?? {}, { source });
+			const reference = await h.authorize();
+			const event = {
+				schemaVersion: 2,
+				adapterEventKey: "native-local",
+				executionId: "execution",
+				cursor: "native-local",
+				occurredAt: "2026-09-14T12:00:02.000Z",
+				type: "operation",
+				payload: {
+					kind: "tool",
+					toolId: "Bash",
+					operationRef: "local",
+					attemptRef: "attempt",
+					phase: "started",
+					executionBoundary: "sandbox-local",
+				},
+			};
+			h.fetcher.mockImplementation(async (url) => {
+				if (!String(url).endsWith("/events/stream"))
+					throw Error("Unexpected request");
+				return new Response(
+					`id: native-local\nevent: operation\ndata: ${JSON.stringify(event)}\n\n`,
+					{ headers: { "content-type": "text/event-stream" } },
+				);
+			});
+			const stream = h.runtime.runtimeHost
+				.events(h.events(reference))
+				[Symbol.asyncIterator]();
+			if (template === "claude")
+				await expect(stream.next()).resolves.toMatchObject({
+					value: { payload: { executionBoundary: "sandbox-local" } },
+				});
+			else await expect(stream.next()).rejects.toThrow();
+			await stream.return?.();
+		} finally {
+			h.runtime.close();
+		}
+	},
+);

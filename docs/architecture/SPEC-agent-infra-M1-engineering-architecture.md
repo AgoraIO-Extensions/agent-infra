@@ -1277,6 +1277,14 @@ Session Sandbox，以及 §10.9 等各 Driver 的 Conversation 文件边界。�
   前关闭非必要的继承 FD。仅排除已知变量名不构成证明：部署须用负向验收证明上述凭证不能经环境、
   `/proc`、挂载文件或继承的 FD 读取。某模板做不到时，只关闭受影响的工具并记录缺口（fail closed），
   不关闭其余原生工具。
+- **原生命令子进程后端。** 在固定非 root、只读根文件系统、移除全部 capabilities 与
+  `no-new-privileges` 的部署中，上游 namespace 沙箱不可用时，不放宽部署权限。平台可以使用固定版本
+  原生 shell 入口接入可信 TypeScript launcher，由 launcher 在每个命令子进程执行前安装完整 ABI V5
+  Landlock 规则、重建环境白名单并关闭额外 FD。入口及 helper 必须在工作区外只读安装并通过实际执行
+  准入；上游对缺失入口的普通 shell 回退不能成为可用路径。普通、组合和后台命令必须继承同一内核
+  边界；原生配置、历史、Host 数据与兄弟 Conversation 均不属于可读根。该后端只替代命令子进程的
+  文件与凭证边界，不改变原生文件工具权限、部署出网策略或当前授权。实际固定 Linux 正负例、工具
+  事实与恢复验证完成前，不启用该模板的命令能力。
 - **审批与配置。** 原生审批或权限请求由 Driver 按部署固定的策略应答：Sandbox 内本地操作批准，越出
   Conversation 文件边界的请求拒绝。模型、Owner、工作区文件或 Skill 都不能改写该策略，也不能关闭
   文件边界。
@@ -2545,6 +2553,17 @@ Web 与托管渠道的执行失败按下表归入渠道无关的用户可见分�
 `packages/observability` 提供 OpenTelemetry、Pino、受限错误和关联上下文的公共实现；不承载领域授权、审计权威存储或 Eval 正文。Platform API 产生请求与受理事实，Dispatch/Worker 产生等待与投递事实，RuntimeHost/Driver 从实际模型和工具边界采集开始、终态、耗时及可获得的用量，Worker 校验、去重并保存规范化事实。结果保存与 SSE 投递分别观测。
 
 一次任务用 `requestId`、`traceId`、`agentId`、`conversationId`、`executionId`、实际操作/尝试引用及适用的 Runtime fence/cursor 串起 API → 等待/投递 → Worker → Runtime → 模型/工具 → 结果。持久工作项保留关联上下文，异步 Trace 可用 span link 关联原请求；外部调用按第 13.2 节独立核对，不能采信任意传入 Trace 字段作为身份。
+
+原生本地工具事实使用 `executionBoundary: sandbox-local` 标明观察来源；该字段不是授权。只允许
+已验证标准模板的固定本地工具标识，由 Worker 根据当前受权 Workload 的模板来源核对后保存；
+自定义 Agent、模型、MCP、Browser、Connection 和平台文件发布不得使用该标记，也不得同时携带
+RPC 请求、Connection 或 Browser 绑定。此类事实从真实开始观察或已确认执行的终态回报进入
+`started -> completed/failed/unknown`，不补造 intent；缺失的开始时间与耗时不填零。既有未带标记的
+事实仍保持 intent-first，标记属于同一操作的不可变绑定，不能在阶段转换中新增或移除。
+这次 Runtime V2 事实字段扩展先部署 Worker/Core 接收与校验，再发布产生标记的新 Runtime；旧记录与
+旧生产者保持原语义，旧读取端不能静默丢弃字段。公开查询按需投影已有事实，不把标记转成调用方权限。
+生成的 JSON Schema/OpenAPI 只声明固定可选字段；工具类别、阶段与中介字段之间的约束仍由接收端
+Zod 和 Core 语义校验执行，不能以生成产物校验成功替代上述校验。
 
 四个标准模板必须验证实际模型/工具调用采集，不能以整体 Turn 耗时代替模型耗时。自定义 Agent 只报告已验证能力；缺失、无法确认、不支持与失败是不同结果，不能填成成功、零耗时或零 Token。重连、重放与恢复按稳定事实标识去重，合法的新尝试独立记录。
 

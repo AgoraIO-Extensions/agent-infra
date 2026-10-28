@@ -1,4 +1,4 @@
-/** #3217：Pi 标准模板开放的原生工具；shell 待 OS 级边界就绪后开放（#3218）。 */
+/** #3217：始终可用的文件工具；隔离 Bash 由 #3218 的实际内核/安装准入另行选择。 */
 export const piWorkspaceToolNames: readonly string[] = Object.freeze([
 	"read",
 	"write",
@@ -15,6 +15,7 @@ const piToolIds: Readonly<Record<string, string>> = Object.freeze({
 	find: "Find",
 	grep: "Grep",
 	ls: "List",
+	sandbox_bash: "Bash",
 });
 
 /** 工具事实与事件使用的稳定工具标识；未开放的工具记为 unavailable。 */

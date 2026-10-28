@@ -19,6 +19,7 @@ import {
 	createWriteToolDefinition,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import { createPiNativeShellTool, piNativeShellToolName } from "./pi-shell.js";
 import { piWorkspaceToolNames } from "./pi-tools.js";
 import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
 import {
@@ -238,11 +239,12 @@ export function createPiWorkspaceTools(
 }
 
 /** Loaded explicitly by the pinned Pi CLI; project and user extension discovery are disabled. */
-export default function piWorkspacePolicy(pi: ExtensionAPI) {
+export default async function piWorkspacePolicy(pi: ExtensionAPI) {
 	const workspace = process.env.AGENT_INFRA_PI_WORKSPACE;
 	if (!workspace) throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	const memory = join(workspace, ".memory");
 	const tools = createPiWorkspaceTools(workspace);
+	const shell = await createPiNativeShellTool(workspace);
 	const connectionMcp = piConnectionMcpConfiguration();
 	const browserMcp = piBrowserMcpConfiguration();
 	pi.registerTool(tools.read);
@@ -251,6 +253,7 @@ export default function piWorkspacePolicy(pi: ExtensionAPI) {
 	pi.registerTool(tools.find);
 	pi.registerTool(tools.grep);
 	pi.registerTool(tools.ls);
+	if (shell) pi.registerTool(shell);
 	if (connectionMcp)
 		pi.registerMcpServer("agent-infra-connection", connectionMcp);
 	if (browserMcp) pi.registerMcpServer("agent-infra-browser", browserMcp);
@@ -266,6 +269,7 @@ export default function piWorkspacePolicy(pi: ExtensionAPI) {
 		);
 		if (
 			!piWorkspaceToolNames.includes(event.toolName) &&
+			!(shell && event.toolName === piNativeShellToolName) &&
 			!(connectionMcp && connectionTool) &&
 			!(browserMcp && browserTool)
 		)

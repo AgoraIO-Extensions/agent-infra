@@ -5475,6 +5475,10 @@
                             "minimum": 0,
                             "type": "integer"
                           },
+                          "executionBoundary": {
+                            "const": "sandbox-local",
+                            "type": "string"
+                          },
                           "failureCode": {
                             "enum": [
                               "authorization_denied",
@@ -6128,6 +6132,10 @@
                             "maximum": 9007199254740991,
                             "minimum": 0,
                             "type": "integer"
+                          },
+                          "executionBoundary": {
+                            "const": "sandbox-local",
+                            "type": "string"
                           },
                           "failureCode": {
                             "enum": [
@@ -6844,6 +6852,10 @@
                                   "maximum": 9007199254740991,
                                   "minimum": 0,
                                   "type": "integer"
+                                },
+                                "executionBoundary": {
+                                  "const": "sandbox-local",
+                                  "type": "string"
                                 },
                                 "failureCode": {
                                   "enum": [
@@ -7878,6 +7890,10 @@
                                 "maximum": 9007199254740991,
                                 "minimum": 0,
                                 "type": "integer"
+                              },
+                              "executionBoundary": {
+                                "const": "sandbox-local",
+                                "type": "string"
                               },
                               "failureCode": {
                                 "enum": [

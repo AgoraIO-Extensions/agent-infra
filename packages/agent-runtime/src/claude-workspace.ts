@@ -7,7 +7,6 @@ import {
 } from "./workspace-path.js";
 
 export type ClaudeToolOperationCallbacks = Readonly<{
-	onIntent?: (toolUseId: string, toolName: string) => Promise<void>;
 	onStarted?: (toolUseId: string, toolName: string) => Promise<void>;
 	onCompleted?: (toolUseId: string, toolName: string) => Promise<void>;
 	onFailed?: (
@@ -16,6 +15,7 @@ export type ClaudeToolOperationCallbacks = Readonly<{
 		durationMs?: number,
 	) => Promise<void>;
 	authorize?: () => Promise<boolean>;
+	authorizeShell?: () => Promise<boolean>;
 	resolveReadOnlyFile?: (
 		filePath: string,
 		signal: AbortSignal,
@@ -31,12 +31,13 @@ export const claudeWorkspaceToolNames: readonly string[] = Object.freeze([
 	"Glob",
 	"Grep",
 	"TodoWrite",
+	"Bash",
 ]);
 
 /**
  * Fixed core tools. 文件读写、列举与搜索只在本 Conversation 的工作区、memory 与只读 Skill
- * 根内可用（#3217）；Bash、子 Agent、网络工具和任意文件根仍不开放，Bash 待 OS 级边界
- * 就绪后开放（#3218）。#3226：Write/Edit 不再隐式发布结果文件，PostToolUse 只记录工具事实。
+ * 根内可用（#3217）；Bash 仅在固定子进程边界准入后开放，且每次调用重新准入（#3218）。
+ * 子 Agent、网络工具和任意文件根仍不开放。Write/Edit 不隐式发布结果文件。
  */
 export function claudeWorkspaceTools(
 	workspace: string,
@@ -67,6 +68,15 @@ export function claudeWorkspaceTools(
 			return undefined;
 		const record = input as Record<string, unknown>;
 		if (name === "TodoWrite") return record;
+		if (name === "Bash") {
+			if (
+				typeof record.command !== "string" ||
+				record.command.includes("\0") ||
+				!(await onToolOperation?.authorizeShell?.())
+			)
+				return undefined;
+			return record;
+		}
 		if (name === "Glob" || name === "Grep") {
 			// 未给出 path 时，原生工具在 cwd（本 Conversation 工作区）内搜索。
 			if (
@@ -136,7 +146,10 @@ export function claudeWorkspaceTools(
 		return undefined;
 	};
 	return {
-		tools: [...claudeWorkspaceToolNames],
+		tools: claudeWorkspaceToolNames.filter(
+			(name) =>
+				name !== "Bash" || onToolOperation?.authorizeShell !== undefined,
+		),
 		settings: {
 			autoMemoryEnabled: true,
 			autoMemoryDirectory: memory,
@@ -181,17 +194,7 @@ export function claudeWorkspaceTools(
 								updatedInput !== undefined &&
 								(!onToolOperation?.authorize ||
 									(await onToolOperation.authorize()));
-							if (
-								allowed &&
-								onToolOperation &&
-								input.hook_event_name === "PreToolUse"
-							)
-								await onToolOperation.onIntent?.(
-									typeof input.tool_use_id === "string"
-										? input.tool_use_id
-										: "unknown-tool-use",
-									input.tool_name,
-								);
+
 							const output = {
 								hookSpecificOutput: {
 									hookEventName: "PreToolUse" as const,

@@ -657,6 +657,12 @@ export function createConversationRuntimeV2(
 		authority = afterTargetRoute.authority;
 		const client = createWorkerRuntimeHostClientV3({
 			...postTarget,
+			...(afterTargetRoute.record.workload?.candidate.configuration.source
+				.kind === "standard" &&
+			afterTargetRoute.record.workload.candidate.configuration.source
+				.templateId === "claude"
+				? { nativeToolTemplate: "claude" as const }
+				: {}),
 			fetch: options.fetch,
 		});
 		const base = {
@@ -911,6 +917,12 @@ export function createConversationRuntimeV2(
 		const claim = prepared.context.claim;
 		return createWorkerRuntimeHostClientV4({
 			...prepared.target,
+			...(prepared.route.workload?.candidate.configuration.source.kind ===
+				"standard" &&
+			prepared.route.workload.candidate.configuration.source.templateId ===
+				"claude"
+				? { nativeToolTemplate: "claude" as const }
+				: {}),
 			fetch: options.fetch,
 			verifyGrant: signV4.verify,
 			verifyGrantV5: signV4.verifyV5,

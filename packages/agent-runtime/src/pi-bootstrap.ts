@@ -13,6 +13,7 @@ import { DurableJsonFile } from "./durable-json.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { PiRuntimeDriver } from "./pi-runtime-driver.js";
+import { piNativeShellAvailable, piNativeShellToolName } from "./pi-shell.js";
 import { piWorkspaceToolNames } from "./pi-tools.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
@@ -134,6 +135,9 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 					if ((await realpath(path)) !== path) throw new Error();
 				}
 				const config = join(directory, "config");
+				const shellAvailable = await piNativeShellAvailable(
+					join(directory, "workspace"),
+				);
 				const write = async (name: string, value: Record<string, unknown>) => {
 					const file = await DurableJsonFile.open(
 						join(config, name),
@@ -202,7 +206,10 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 						"--no-themes",
 						"--no-context-files",
 						"--tools",
-						piWorkspaceToolNames.join(","),
+						[
+							...piWorkspaceToolNames,
+							...(shellAvailable ? [piNativeShellToolName] : []),
+						].join(","),
 						"--extension",
 						fileURLToPath(new URL("../dist/pi-policy.mjs", import.meta.url)),
 					],

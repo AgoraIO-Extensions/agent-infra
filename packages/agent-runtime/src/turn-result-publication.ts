@@ -50,8 +50,20 @@ export function isTurnResultPublicationV1(
 export function appendTurnOperationFactV1(
 	turn: Pick<PublishingTurn, "operationFacts">,
 	input: RuntimeOperationFactV2,
+	localTool = false,
 ) {
 	const fact = RuntimeOperationFactV2Schema.parse(input);
+	if (
+		localTool &&
+		(fact.kind !== "tool" ||
+			fact.executionBoundary !== "sandbox-local" ||
+			fact.phase === "intent")
+	)
+		throw new RuntimeHostError(
+			"RUNTIME_OPERATION_CONFLICT",
+			"Local tool facts cannot carry intent",
+			409,
+		);
 	turn.operationFacts ??= [];
 	const previous = turn.operationFacts
 		.filter(
@@ -66,7 +78,7 @@ export function appendTurnOperationFactV1(
 		JSON.stringify(previous) === JSON.stringify(fact);
 	if (duplicate) return;
 	if (!previous) {
-		if (fact.phase !== "intent")
+		if (fact.phase !== "intent" && !(localTool && fact.phase === "started"))
 			throw new RuntimeHostError(
 				"RUNTIME_OPERATION_CONFLICT",
 				"Runtime operation must start with intent",
@@ -74,6 +86,10 @@ export function appendTurnOperationFactV1(
 			);
 	} else if (
 		previous.kind !== fact.kind ||
+		(previous.kind === "tool" &&
+			fact.kind === "tool" &&
+			(previous.toolId !== fact.toolId ||
+				previous.executionBoundary !== fact.executionBoundary)) ||
 		(previous.phase !== "intent" && previous.phase !== "started") ||
 		fact.phase === "intent"
 	)
