@@ -26,11 +26,12 @@ function setup(failure: "none" | "write" | "read" = "none") {
 	let writes = 0;
 	let reads = 0;
 	let failedRead = false;
-	const fetcher = vi.fn(async (input: Request) => {
-		if (input.method === "DELETE") {
+	const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+		const request = new Request(input, init);
+		if (request.method === "DELETE") {
 			writes += 1;
-			expect(input.url).toContain("/app-1/credentials/credential-1");
-			expect(input.headers.get("Idempotency-Key")).toBeTruthy();
+			expect(request.url).toContain("/app-1/credentials/credential-1");
+			expect(request.headers.get("Idempotency-Key")).toBeTruthy();
 			revoked = true;
 			if (failure === "write") throw new TypeError("lost response");
 			return Response.json({
