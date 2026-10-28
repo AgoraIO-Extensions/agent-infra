@@ -1652,7 +1652,7 @@ function isLocalToolBoundaryOpenApiAddition(previous, current) {
 				!node.properties?.toolId ||
 				!node.properties?.phase ||
 				node.properties.executionBoundary.type !== "string" ||
-					node.properties.executionBoundary.const !== "sandbox-local" ||
+				node.properties.executionBoundary.const !== "sandbox-local" ||
 				Object.keys(node.properties.executionBoundary).length !== 2 ||
 				node.required?.includes("executionBoundary")
 			)
