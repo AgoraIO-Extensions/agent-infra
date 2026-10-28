@@ -121,6 +121,28 @@ test("self-managed custom Agents still require a distinct Web probe config", asy
 	assert.equal(result.platformAdapterCount, 0);
 });
 
+test("bound own-entry configs select the current self-managed request and exact source", async (t) => {
+	const f = await fixture(t, "self-managed");
+	const file = join(f.root, "own-entry.json");
+	await f.save(file, {
+		schemaVersion: 1,
+		sourceSha,
+		requestName: "custom-one",
+	});
+	assert.equal((await f.run([file])).selfManagedCount, 1);
+	for (const changed of [
+		{ schemaVersion: 1, sourceSha, requestName: "unrelated-agent" },
+		{ schemaVersion: 1, sourceSha: "b".repeat(40), requestName: "custom-one" },
+		{ schemaVersion: 2, sourceSha, requestName: "custom-one" },
+	]) {
+		await f.save(file, changed);
+		await assert.rejects(
+			f.run([file]),
+			/CUSTOM_ENTRY_REQUEST_BINDING_INVALID/u,
+		);
+	}
+});
+
 for (const failure of [
 	"missing",
 	"failed",
