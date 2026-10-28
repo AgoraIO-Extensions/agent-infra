@@ -197,4 +197,10 @@ export const platformInfrastructureTables = [
 
 import { sessionSandboxAllocations } from "./schema-session-sandboxes";
 
+export {
+	evaluationDatasets,
+	evaluationGrants,
+	evaluationPolicies,
+	evaluationVersions,
+} from "./schema-evaluation.js";
 export { sessionSandboxAllocations } from "./schema-session-sandboxes";

@@ -6,6 +6,7 @@ import {
 	type WorkloadReconciliationStorePortV1,
 } from "@agent-infra/platform-core";
 import { openPostgresWorkloadReconciliationStoreV1 } from "@agent-infra/platform-store";
+import { createEvaluationDataWorkerV1 } from "./evaluation-data-worker.js";
 import { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";
 import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import {
@@ -17,6 +18,10 @@ import { createWorkloadStepFailureLoggerV1 } from "./workload-step-failure.js";
 export interface PlatformWorkloadWorkerOptionsV1
 	extends Omit<WorkloadRuntimeOptionsV1, "workerId"> {
 	readonly databaseUrl: string;
+	readonly evaluation?: Omit<
+		Parameters<typeof createEvaluationDataWorkerV1>[0],
+		"databaseUrl"
+	>;
 	readonly files?: Omit<
 		Parameters<typeof createPlatformFileReconciliationWorkerV1>[0],
 		"databaseUrl"
@@ -138,8 +143,14 @@ export function createPlatformWorkloadWorkerV1(
 	let files:
 		| ReturnType<typeof createPlatformFileReconciliationWorkerV1>
 		| undefined;
+	let evaluation: ReturnType<typeof createEvaluationDataWorkerV1> | undefined;
 	let reconciliation: ReturnType<typeof createWorkloadReconciliationV1>;
 	try {
+		if (options.evaluation)
+			evaluation = createEvaluationDataWorkerV1({
+				...options.evaluation,
+				databaseUrl: options.databaseUrl,
+			});
 		if (options.files)
 			files = createPlatformFileReconciliationWorkerV1({
 				...options.files,
@@ -181,7 +192,11 @@ export function createPlatformWorkloadWorkerV1(
 			onStepFailure: createWorkloadStepFailureLoggerV1({ log: logSafely }),
 		});
 	} catch (error) {
-		void Promise.allSettled([store.close(), files?.close()]);
+		void Promise.allSettled([
+			store.close(),
+			files?.close(),
+			evaluation?.close(),
+		]);
 		throw error;
 	}
 	let stopped = false;
@@ -213,7 +228,10 @@ export function createPlatformWorkloadWorkerV1(
 					polling &&
 					outcome === "advanced" &&
 					consecutiveSteps + 1 < maximumConsecutiveStepsV1;
-				if (!draining) await files?.runOnce();
+				if (!draining) {
+					await files?.runOnce();
+					await evaluation?.runOnce();
+				}
 			}
 		});
 		tickTail = result.then(
@@ -271,7 +289,11 @@ export function createPlatformWorkloadWorkerV1(
 					await running;
 				} finally {
 					await tickTail;
-					await Promise.all([store.close(), files?.close()]);
+					await Promise.all([
+						store.close(),
+						files?.close(),
+						evaluation?.close(),
+					]);
 				}
 			})();
 			return closing;

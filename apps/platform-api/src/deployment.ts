@@ -119,6 +119,7 @@ export interface ProductionPlatformApiInputV1
 	/** 部署获准的扫码授权来源（企微官方页 origin、授权地址与来源标识）；不提供时扫码入口保持不可用（#2894）。 */
 	readonly wecomBotQr?: PlatformApiAssemblyInput["wecomBotQr"];
 	/** Deployment-owned ObjectStorage/file authority adapter for Web and Runtime exchange. */
+	readonly evaluation?: PlatformApiAssemblyInput["evaluation"];
 	readonly files?: PlatformApiAssemblyInput["files"];
 	readonly databaseUrl: string;
 	readonly taskAdmissionPolicy: PlatformApiAssemblyInput["taskAdmissionPolicy"];
@@ -629,6 +630,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 			: {}),
 		...(input.wecomBotQr ? { wecomBotQr: input.wecomBotQr } : {}),
 		...(input.files ? { files: input.files } : {}),
+		...(input.evaluation ? { evaluation: input.evaluation } : {}),
 		...(input.agentVersion !== undefined
 			? { agentVersion: input.agentVersion }
 			: {}),

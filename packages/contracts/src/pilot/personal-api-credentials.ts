@@ -2,9 +2,17 @@ import { z } from "zod";
 import { OpaqueIdV1Schema, Rfc3339TimestampV1Schema } from "../index.ts";
 
 const scopes = z
-	.array(z.enum(["agent:create", "agent:manage", "agent:use", "agent:read"]))
+	.array(
+		z.enum([
+			"agent:create",
+			"agent:manage",
+			"agent:use",
+			"agent:read",
+			"eval:data",
+		]),
+	)
 	.min(1)
-	.max(4)
+	.max(5)
 	.refine((values) => new Set(values).size === values.length)
 	.meta({ uniqueItems: true });
 const issuanceExpiry = z

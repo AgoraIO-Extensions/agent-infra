@@ -118,6 +118,7 @@ export {
 	type RuntimeModelDirectoryDispatchRequestResponseV1,
 	readPlatformQueueResourceSnapshot,
 } from "./conversation-query.ts";
+export { PostgresEvaluationDataStoreV1 } from "./evaluation-data.js";
 export { PostgresFileLimitDeclarationStoreV1 } from "./file-limit-declarations.js";
 export { PostgresFileStoreV1 } from "./files.js";
 export {

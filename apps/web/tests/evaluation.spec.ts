@@ -26,6 +26,8 @@ async function fixture(page: Page) {
 					},
 				},
 			});
+		if (path === "/api/v2/evaluation/datasets")
+			return route.fulfill({ json: { schemaVersion: 1, items: [] } });
 		return route.fulfill({
 			status: 404,
 			json: {
@@ -52,7 +54,7 @@ test("evaluation keeps the design heading, notice and in-card segments without s
 	).toBeVisible();
 
 	// 主操作在页头；接口未接入时不可用，说明在卡片底部。
-	const create = main.getByRole("button", { name: "创建评测集" });
+	const create = main.getByRole("button", { name: "实验运行待接入" });
 	await expect(create).toBeDisabled();
 	await expect(create).toHaveAttribute(
 		"aria-describedby",
@@ -131,7 +133,7 @@ test("evaluation keeps the design heading, notice and in-card segments without s
 
 	// 每段各有空态，不出现设计原型里的示例数据。
 	await expect(surface.getByRole("tabpanel", { name: "评测集" })).toContainText(
-		"还没有评测集",
+		"当前没有可见评测集。",
 	);
 	await expect(main).not.toContainText("支持场景回归集");
 	await idle.click();
@@ -171,6 +173,7 @@ test("evaluation segment panels take the empty state's 14px radius for the keybo
 	const tabs = tablist.getByRole("tab");
 	await expect(tabs).toHaveText(["评测集", "实验", "反馈"]);
 	for (const tab of await tabs.all()) {
+		if ((await tab.textContent()) === "评测集") continue;
 		const name = (await tab.textContent()) ?? "";
 		await tab.click();
 		await expect(tab).toHaveAttribute("aria-selected", "true");

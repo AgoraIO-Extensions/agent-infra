@@ -2587,6 +2587,8 @@ Platform DB 保存用途授权及其撤销状态；部署输入限定谁能授�
 API 与 Worker 必须使用同一政策身份及当前 revision，不能回退旧缓存。政策失效不阻止系统完成既有
 停止、撤销和已持久化删除义务，也不授权读取正文；处置按 §18.4.3 的原义务执行。
 
+数据集 API 的个人与应用凭证须显式包含 `eval:data` 最大权限范围，并校验当前凭证、主体启用状态及身份修订。该范围仅允许进入数据集元数据、版本、用途授权及内容生命周期接口，不直接授予任何数据权限，也不授予 Agent 使用、实验运行或评分权限。每项操作继续与当前部署管理许可或精确版本用途授权取交集；浏览器会话沿相同数据授权边界。现有 `agent:create/manage/use/read` 范围不替代 `eval:data`，存量凭证不自动扩权；签发必须显式选择，收窄只能移除既有范围。涉及 Agent 的后续运行仍须独立 Agent 使用权和运行授权。
+
 用途授权由经过当前身份校验的部署批准管理者，经 Core 用例写入 Platform DB，不能由浏览器自报
 issuer、Owner、应用责任人或 Worker 服务身份授予。授权记录绑定 `grantId`、授予主体、接收主体
 类型/ID、`purpose=eval`、政策身份/revision、数据集及明确版本集合、操作集合、有效期和自身修订。
@@ -2606,6 +2608,10 @@ API 读取/写入、Worker 投递样本/评分、受控对象访问及结果提�
 应用保持自身主体，不借责任人的许可。事务锁定相关授权/对象修订，投递使用现有 lease/fence 和
 执行前授权边界；撤权后不接纳新操作、取消等待工作，并沿现有停止路径处理活跃执行。已经发生的
 外部效果不回滚或盲目重放，未确认结果保留 unknown；授权变化后不能提交或展示未获准的正文。
+
+数据集 V1 装配消费 `EvaluationPolicyV1`：政策 revision 在该部署内单调递增，更换 policyId 也不能重置 revision；DB 保存当前政策检查点并拒绝旧实例回退。样本/rubric 的 `startsAt=version_reserved` 明确以版本预留时刻起算，pending 另受 `pendingMs` 限制，确认后使用已绑定内容期限；输出/评分/复核声明 `startsAt=content_created`，由后续用例按实际产生时刻固化。`retainedMetadataFields` 必须显式批准该版本公开的有限元数据字段集合；未知字段或不支持的字段子集视为政策不匹配，不能静默保留被禁止的名称或摘要。`materialApprovals` 由部署批准，逐项绑定 `approvalId`、数据集范围、`synthetic/approved` 类型；实际材料还必须包含已确认的 `redactionRef`。上传 JSON 仅选择 `provenance.approvalId`，不能自报审批结论；该引用必须匹配当前政策及版本所属范围，合成材料同样需要部署批准及精确版本导入授权。
+
+数据 API 路径为 `/api/v2/evaluation/datasets` 及其版本、授权和内容子路径，使用生成 Client。写入携带 `Idempotency-Key`；期望修订冲突返回 409，无当前用途权限返回 404，未配置或当前政策不可读取返回 503。列表及内部授权集合的 V1 支持上限均为 1000，超过上限整体拒绝，不能返回被静默截断的授权结果。API/Worker 的部署模块须使用 `createEvaluationObjectStorageV1` 装配现有 S3 Adapter，固定独立 `eval/` 前缀；普通 FileGrant 存储实例不能接入。对象传输在短事务之外执行，意图和传输截止时间先持久化，提交前用当前 DB 时间再次检查政策、主体、授权和内容有效期。
 
 #### 18.4.2 版本、对象与任务绑定
 

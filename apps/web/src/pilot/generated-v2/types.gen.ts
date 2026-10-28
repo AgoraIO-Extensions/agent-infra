@@ -930,6 +930,107 @@ export type DirectorySearchResponseV1 = {
     query: string;
 };
 
+export type EvaluationDatasetContentV1 = {
+    provenance: {
+        approvalId: string;
+    };
+    rubric: Array<{
+        description: string;
+        id: string;
+    }>;
+    samples: Array<{
+        context: string | null;
+        expectedResult: string | null;
+        id: string;
+        input: string;
+        taskType: string;
+    }>;
+    schemaVersion: 1;
+};
+
+export type EvaluationDatasetCreateV1 = {
+    name: string;
+    scope: string;
+};
+
+export type EvaluationDatasetPageV1 = {
+    items: Array<{
+        createdAt: string;
+        datasetId: string;
+        grants: Array<EvaluationGrantV1>;
+        metadataExpiresAt: string;
+        name: string;
+        revision: number;
+        scope: string;
+        versions: Array<EvaluationVersionV1>;
+    }>;
+    schemaVersion: 1;
+};
+
+export type EvaluationDatasetV1 = {
+    createdAt: string;
+    datasetId: string;
+    metadataExpiresAt: string;
+    name: string;
+    revision: number;
+    scope: string;
+};
+
+export type EvaluationGrantCreateV1 = {
+    expectedRevision: number;
+    expiresAt: string;
+    operations: Array<'create' | 'import' | 'read' | 'run' | 'score' | 'review' | 'analyze' | 'manage_grants' | 'delete'>;
+    principal: {
+        id: string;
+        kind: 'user' | 'application';
+    };
+    versionIds: Array<string>;
+};
+
+export type EvaluationGrantV1 = {
+    datasetId: string;
+    expiresAt: string;
+    grantId: string;
+    issuer: {
+        id: string;
+        kind: 'user' | 'application';
+    };
+    operations: Array<'create' | 'import' | 'read' | 'run' | 'score' | 'review' | 'analyze' | 'manage_grants' | 'delete'>;
+    policyId: string;
+    policyRevision: number;
+    principal: {
+        id: string;
+        kind: 'user' | 'application';
+    };
+    revision: number;
+    revoked: boolean;
+    versionIds: Array<string>;
+};
+
+export type EvaluationRevisionCommandV1 = {
+    expectedRevision: number;
+};
+
+export type EvaluationVersionReserveV1 = {
+    expectedRevision: number;
+    sourceVersionId: string | null;
+};
+
+export type EvaluationVersionV1 = {
+    createdAt: string;
+    datasetId: string;
+    deleteBy: string;
+    expiresAt: string;
+    materialApprovalId: string | null;
+    metadataExpiresAt: string;
+    policyId: string;
+    policyRevision: number;
+    revision: number;
+    sourceVersionId: string | null;
+    status: 'pending' | 'uploading' | 'available' | 'deleting' | 'deleted';
+    versionId: string;
+};
+
 export type ExecutionDetailProjectionV2 = {
     conversationId: string;
     error: null;
@@ -1262,7 +1363,7 @@ export type PersistedConversationEventV2 = PersistedConversationEventV1 | Execut
 
 export type PersonalApiCredentialIssueRequestV1 = {
     expiresAt: string | null;
-    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data'>;
 };
 
 export type PersonalApiCredentialIssueResponseV1 = {
@@ -1289,12 +1390,12 @@ export type PersonalApiCredentialMetadataV1 = {
     expiresAt: string | null;
     lastUsedAt: string | null;
     revokedAt: string | null;
-    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data'>;
 };
 
 export type PersonalApiCredentialNarrowRequestV1 = {
     expiresAt?: string;
-    scopes?: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+    scopes?: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data'>;
 };
 
 export type PersonalApiCredentialNarrowResponseV1 = {
@@ -5098,7 +5199,7 @@ export type ListApplicationApiCredentialsV2Responses = {
             expiresAt: string | null;
             lastUsedAt: string | null;
             revokedAt: string | null;
-            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data'>;
         }>;
         nextCursor: string | null;
     };
@@ -5114,7 +5215,7 @@ export type IssueOrRotateApplicationApiCredentialV2Data = {
             principalId: string;
             principalType: 'user' | 'application';
         };
-        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data'>;
     } | {
         credentialId: string;
         expiresAt: string | null;
@@ -5123,7 +5224,7 @@ export type IssueOrRotateApplicationApiCredentialV2Data = {
             principalId: string;
             principalType: 'user' | 'application';
         };
-        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data'>;
     };
     headers: {
         'Idempotency-Key': string;
@@ -5189,7 +5290,7 @@ export type IssueOrRotateApplicationApiCredentialV2Responses = {
             expiresAt: string | null;
             lastUsedAt: string | null;
             revokedAt: string | null;
-            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data'>;
         };
         replayed: boolean;
     };
@@ -5213,7 +5314,7 @@ export type IssueOrRotateApplicationApiCredentialV2Responses = {
             expiresAt: string | null;
             lastUsedAt: string | null;
             revokedAt: string | null;
-            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data'>;
         };
         replayed: boolean;
     };
@@ -5279,7 +5380,7 @@ export type RevokeApplicationApiCredentialV2Responses = {
             expiresAt: string | null;
             lastUsedAt: string | null;
             revokedAt: string | null;
-            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data'>;
         };
         replayed: boolean;
     };
@@ -5828,6 +5929,484 @@ export type SearchDirectoryV2Responses = {
 };
 
 export type SearchDirectoryV2Response = SearchDirectoryV2Responses[keyof SearchDirectoryV2Responses];
+
+export type ListEvaluationDatasetsV1Data = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v2/evaluation/datasets';
+};
+
+export type ListEvaluationDatasetsV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListEvaluationDatasetsV1Error = ListEvaluationDatasetsV1Errors[keyof ListEvaluationDatasetsV1Errors];
+
+export type ListEvaluationDatasetsV1Responses = {
+    /**
+     * Eval purpose-bound result
+     */
+    200: EvaluationDatasetPageV1;
+};
+
+export type ListEvaluationDatasetsV1Response = ListEvaluationDatasetsV1Responses[keyof ListEvaluationDatasetsV1Responses];
+
+export type CreateEvaluationDatasetV1Data = {
+    body: EvaluationDatasetCreateV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/evaluation/datasets';
+};
+
+export type CreateEvaluationDatasetV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CreateEvaluationDatasetV1Error = CreateEvaluationDatasetV1Errors[keyof CreateEvaluationDatasetV1Errors];
+
+export type CreateEvaluationDatasetV1Responses = {
+    /**
+     * Eval purpose-bound result
+     */
+    201: EvaluationDatasetV1;
+};
+
+export type CreateEvaluationDatasetV1Response = CreateEvaluationDatasetV1Responses[keyof CreateEvaluationDatasetV1Responses];
+
+export type GrantEvaluationPurposeV1Data = {
+    body: EvaluationGrantCreateV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        datasetId: string;
+    };
+    query?: never;
+    url: '/api/v2/evaluation/datasets/{datasetId}/grants';
+};
+
+export type GrantEvaluationPurposeV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GrantEvaluationPurposeV1Error = GrantEvaluationPurposeV1Errors[keyof GrantEvaluationPurposeV1Errors];
+
+export type GrantEvaluationPurposeV1Responses = {
+    /**
+     * Eval purpose-bound result
+     */
+    201: EvaluationGrantV1;
+};
+
+export type GrantEvaluationPurposeV1Response = GrantEvaluationPurposeV1Responses[keyof GrantEvaluationPurposeV1Responses];
+
+export type RevokeEvaluationPurposeV1Data = {
+    body: EvaluationRevisionCommandV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        datasetId: string;
+        grantId: string;
+    };
+    query?: never;
+    url: '/api/v2/evaluation/datasets/{datasetId}/grants/{grantId}';
+};
+
+export type RevokeEvaluationPurposeV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokeEvaluationPurposeV1Error = RevokeEvaluationPurposeV1Errors[keyof RevokeEvaluationPurposeV1Errors];
+
+export type RevokeEvaluationPurposeV1Responses = {
+    /**
+     * Eval purpose-bound result
+     */
+    200: EvaluationGrantV1;
+};
+
+export type RevokeEvaluationPurposeV1Response = RevokeEvaluationPurposeV1Responses[keyof RevokeEvaluationPurposeV1Responses];
+
+export type ReserveEvaluationVersionV1Data = {
+    body: EvaluationVersionReserveV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        datasetId: string;
+    };
+    query?: never;
+    url: '/api/v2/evaluation/datasets/{datasetId}/versions';
+};
+
+export type ReserveEvaluationVersionV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReserveEvaluationVersionV1Error = ReserveEvaluationVersionV1Errors[keyof ReserveEvaluationVersionV1Errors];
+
+export type ReserveEvaluationVersionV1Responses = {
+    /**
+     * Eval purpose-bound result
+     */
+    201: EvaluationVersionV1;
+};
+
+export type ReserveEvaluationVersionV1Response = ReserveEvaluationVersionV1Responses[keyof ReserveEvaluationVersionV1Responses];
+
+export type ConfirmEvaluationContentV1Data = {
+    body?: never;
+    path: {
+        datasetId: string;
+        versionId: string;
+    };
+    query?: never;
+    url: '/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/confirm';
+};
+
+export type ConfirmEvaluationContentV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ConfirmEvaluationContentV1Error = ConfirmEvaluationContentV1Errors[keyof ConfirmEvaluationContentV1Errors];
+
+export type ConfirmEvaluationContentV1Responses = {
+    /**
+     * Eval purpose-bound result
+     */
+    200: EvaluationVersionV1;
+};
+
+export type ConfirmEvaluationContentV1Response = ConfirmEvaluationContentV1Responses[keyof ConfirmEvaluationContentV1Responses];
+
+export type DeleteEvaluationContentV1Data = {
+    body: EvaluationRevisionCommandV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        datasetId: string;
+        versionId: string;
+    };
+    query?: never;
+    url: '/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/content';
+};
+
+export type DeleteEvaluationContentV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type DeleteEvaluationContentV1Error = DeleteEvaluationContentV1Errors[keyof DeleteEvaluationContentV1Errors];
+
+export type DeleteEvaluationContentV1Responses = {
+    /**
+     * Eval purpose-bound result
+     */
+    200: EvaluationVersionV1;
+};
+
+export type DeleteEvaluationContentV1Response = DeleteEvaluationContentV1Responses[keyof DeleteEvaluationContentV1Responses];
+
+export type ReadEvaluationContentV1Data = {
+    body?: never;
+    path: {
+        datasetId: string;
+        versionId: string;
+    };
+    query?: never;
+    url: '/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/content';
+};
+
+export type ReadEvaluationContentV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadEvaluationContentV1Error = ReadEvaluationContentV1Errors[keyof ReadEvaluationContentV1Errors];
+
+export type ReadEvaluationContentV1Responses = {
+    /**
+     * Eval purpose-bound result
+     */
+    200: EvaluationDatasetContentV1;
+};
+
+export type ReadEvaluationContentV1Response = ReadEvaluationContentV1Responses[keyof ReadEvaluationContentV1Responses];
+
+export type UploadEvaluationContentV1Data = {
+    body: EvaluationDatasetContentV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        datasetId: string;
+        versionId: string;
+    };
+    query?: never;
+    url: '/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/content';
+};
+
+export type UploadEvaluationContentV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type UploadEvaluationContentV1Error = UploadEvaluationContentV1Errors[keyof UploadEvaluationContentV1Errors];
+
+export type UploadEvaluationContentV1Responses = {
+    /**
+     * Eval purpose-bound result
+     */
+    200: EvaluationVersionV1;
+};
+
+export type UploadEvaluationContentV1Response = UploadEvaluationContentV1Responses[keyof UploadEvaluationContentV1Responses];
 
 export type ListPersonalApiCredentialsV2Data = {
     body?: never;

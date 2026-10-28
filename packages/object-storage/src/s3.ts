@@ -80,14 +80,20 @@ export function createS3ObjectStorageV1(
 	}
 	async function inspect(
 		objectRef: string,
+		version?: string,
 	): Promise<StoredFileObjectV1 | null> {
 		try {
 			const abortSignal = signal();
 			const head = await client.send(
-				new HeadObjectCommand({ Bucket: options.bucket, Key: key(objectRef) }),
+				new HeadObjectCommand({
+					Bucket: options.bucket,
+					Key: key(objectRef),
+					...(version === undefined ? {} : { VersionId: version }),
+				}),
 				{ abortSignal },
 			);
 			if (
+				(version !== undefined && head.VersionId !== version) ||
 				!head.VersionId ||
 				head.VersionId === "null" ||
 				!head.ETag ||

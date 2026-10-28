@@ -4,6 +4,7 @@ import {
 	type ApiPrincipalV1,
 	type ConversationOperationFactV2,
 	captureTaskAuthorizationBoundaryV1,
+	evaluationAuditActionsV1,
 	type PersonalApiCredentialErrorCodeV1,
 	PersonalApiCredentialErrorV1,
 	type PlatformAuditQueryActionV1,
@@ -51,7 +52,8 @@ export interface ScopedPlatformAuditProjectionV1 {
 		readonly kind:
 			| PlatformAuditProjectionV1["subject"]["kind"]
 			| "api_credential"
-			| "application";
+			| "application"
+			| "evaluation_dataset";
 		readonly subjectId: string;
 	};
 	readonly result: PlatformAuditQueryResultV1;
@@ -803,6 +805,33 @@ function project(
 		agentDefaultRelayKeyReadActions.has(row.action as never)
 			? agentDefaultRelayKeyReadSummary(row, scope)
 			: null;
+	const evaluationSummary = evaluationAuditActionsV1.some(
+		(action) => action === row.action,
+	)
+		? (() => {
+				const details = row.details;
+				if (
+					scope.kind !== "administrator" ||
+					row.source !== "platform" ||
+					!["user", "application"].includes(row.actorType) ||
+					row.targetType !== "evaluation_dataset" ||
+					row.outcome !== "succeeded" ||
+					row.result !== "succeeded" ||
+					row.agentId !== null ||
+					row.executionId !== null ||
+					row.conversationId !== null ||
+					!details ||
+					typeof details !== "object" ||
+					Array.isArray(details) ||
+					Object.keys(details).sort().join(",") !==
+						"purpose,returnedMaterial" ||
+					(details as Record<string, unknown>).purpose !== "eval" ||
+					(details as Record<string, unknown>).returnedMaterial !== false
+				)
+					throw new PlatformAuditScopeErrorV1("unavailable");
+				return row.action;
+			})()
+		: null;
 	const applicationSummary = applicationCredentialActions.has(row.action)
 		? applicationCredentialSummary(row, scope)
 		: null;
@@ -813,7 +842,8 @@ function project(
 		agentSummary !== null ||
 		skillProjectSummaryValue !== null ||
 		agentDefaultRelayKeyReadSummaryValue !== null ||
-		applicationSummary !== null
+		applicationSummary !== null ||
+		evaluationSummary !== null
 			? null
 			: decodePlatformAuditRowV1(row);
 	// The legacy decoder has already validated exact Task API metadata and its
@@ -895,6 +925,7 @@ function project(
 			mutationSummary === null &&
 			agentSummary === null &&
 			applicationSummary === null &&
+			evaluationSummary === null &&
 			![
 				"agent_application",
 				"agent",
@@ -916,6 +947,7 @@ function project(
 		skillProjectSummaryValue ??
 		agentDefaultRelayKeyReadSummaryValue ??
 		applicationSummary ??
+		evaluationSummary ??
 		(row.action === "audit.query.completed" ||
 		row.action === "audit.query.failed"
 			? projectPlatformAuditQuerySummaryV1(row.action, row.details)

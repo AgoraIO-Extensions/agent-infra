@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { BeginPlatformConnectionInstallationV1Data, BeginPlatformConnectionInstallationV1Responses, BindSkillHubAgentVersionV1Data, BindSkillHubAgentVersionV1Errors, BindSkillHubAgentVersionV1Responses, CommandAgentApiLifecycleV1Data, CommandAgentApiLifecycleV1Errors, CommandAgentApiLifecycleV1Responses, CommandAgentLifecycleV2Data, CommandAgentLifecycleV2Errors, CommandAgentLifecycleV2Responses, ConfirmPlatformConnectionInstallationV1Data, ConfirmPlatformConnectionInstallationV1Responses, CreateAgentApiV1Data, CreateAgentApiV1Errors, CreateAgentApiV1Responses, CreateAgentApplicationV2Data, CreateAgentApplicationV2Errors, CreateAgentApplicationV2Responses, CreateSkillHubProjectV1Data, CreateSkillHubProjectV1Errors, CreateSkillHubProjectV1Responses, DecideAgentApplicationV2Data, DecideAgentApplicationV2Errors, DecideAgentApplicationV2Responses, DisableOwnApplicationV2Data, DisableOwnApplicationV2Errors, DisableOwnApplicationV2Responses, GetAdminAgentV2Data, GetAdminAgentV2Errors, GetAdminAgentV2Responses, GetAgentApiStateV1Data, GetAgentApiStateV1Errors, GetAgentApiStateV1Responses, GetAgentApplicationModelCandidatesV2Data, GetAgentApplicationModelCandidatesV2Errors, GetAgentApplicationModelCandidatesV2Responses, GetAgentApplicationV2Data, GetAgentApplicationV2Errors, GetAgentApplicationV2Responses, GetAgentCreationFailureV1Data, GetAgentCreationFailureV1Errors, GetAgentCreationFailureV1Responses, GetAgentDefaultRelayKeyCandidatesV2Data, GetAgentDefaultRelayKeyCandidatesV2Errors, GetAgentDefaultRelayKeyCandidatesV2Responses, GetAgentDefaultRelayKeyDisplayCandidatesV2Data, GetAgentDefaultRelayKeyDisplayCandidatesV2Errors, GetAgentDefaultRelayKeyDisplayCandidatesV2Responses, GetAgentDefaultRelayKeySavedCandidatesV2Data, GetAgentDefaultRelayKeySavedCandidatesV2Errors, GetAgentDefaultRelayKeySavedCandidatesV2Responses, GetAgentDefaultRelayKeySavedDisplayCandidatesV2Data, GetAgentDefaultRelayKeySavedDisplayCandidatesV2Errors, GetAgentDefaultRelayKeySavedDisplayCandidatesV2Responses, GetAgentDefaultRelayKeyV2Data, GetAgentDefaultRelayKeyV2Errors, GetAgentDefaultRelayKeyV2Responses, GetAgentDetailV1Data, GetAgentDetailV1Errors, GetAgentDetailV1Responses, GetAgentV2Data, GetAgentV2Errors, GetAgentV2Responses, GetConversationV2Data, GetConversationV2Errors, GetConversationV2Responses, GetDeploymentConfigurationV2Data, GetDeploymentConfigurationV2Errors, GetDeploymentConfigurationV2Responses, GetExecutionDetailV2Data, GetExecutionDetailV2Errors, GetExecutionDetailV2Responses, GetOwnApplicationV2Data, GetOwnApplicationV2Errors, GetOwnApplicationV2Responses, GetPersonalRelayKeyV2Data, GetPersonalRelayKeyV2Errors, GetPersonalRelayKeyV2Responses, GetPlatformUserDisabledV2Data, GetPlatformUserDisabledV2Errors, GetPlatformUserDisabledV2Responses, GrantAgentApplicationManagerV1Data, GrantAgentApplicationManagerV1Errors, GrantAgentApplicationManagerV1Responses, GrantAgentApplicationUseV1Data, GrantAgentApplicationUseV1Errors, GrantAgentApplicationUseV1Responses, GrantAgentUserApiManageV1Data, GrantAgentUserApiManageV1Errors, GrantAgentUserApiManageV1Responses, GrantAgentUserApiUseV1Data, GrantAgentUserApiUseV1Errors, GrantAgentUserApiUseV1Responses, GrantApplicationMaterialV2Data, GrantApplicationMaterialV2Errors, GrantApplicationMaterialV2Responses, ImportSkillHubVersionV1Data, ImportSkillHubVersionV1Errors, ImportSkillHubVersionV1Responses, InstallSkillHubVersionV1Data, InstallSkillHubVersionV1Errors, InstallSkillHubVersionV1Responses, InvokeNativeCapabilityV1Data, InvokeNativeCapabilityV1Errors, InvokeNativeCapabilityV1Responses, IssueOrRotateApplicationApiCredentialV2Data, IssueOrRotateApplicationApiCredentialV2Errors, IssueOrRotateApplicationApiCredentialV2Responses, IssuePersonalApiCredentialV2Data, IssuePersonalApiCredentialV2Errors, IssuePersonalApiCredentialV2Responses, ListAdminAgentsV2Data, ListAdminAgentsV2Errors, ListAdminAgentsV2Responses, ListAgentApplicationsV2Data, ListAgentApplicationsV2Errors, ListAgentApplicationsV2Responses, ListAgentsV2Data, ListAgentsV2Errors, ListAgentsV2Responses, ListApplicationApiCredentialsV2Data, ListApplicationApiCredentialsV2Errors, ListApplicationApiCredentialsV2Responses, ListOwnedSkillHubVersionsV1Data, ListOwnedSkillHubVersionsV1Errors, ListOwnedSkillHubVersionsV1Responses, ListPendingAgentApplicationsV2Data, ListPendingAgentApplicationsV2Errors, ListPendingAgentApplicationsV2Responses, ListPersonalApiCredentialsV2Data, ListPersonalApiCredentialsV2Errors, ListPersonalApiCredentialsV2Responses, ListPlatformAuditV2Data, ListPlatformAuditV2Errors, ListPlatformAuditV2Responses, ListRecentPersonalConversationsV2Data, ListRecentPersonalConversationsV2Errors, ListRecentPersonalConversationsV2Responses, ListSkillHubInstallationsV1Data, ListSkillHubInstallationsV1Errors, ListSkillHubInstallationsV1Responses, ListSkillHubProjectsV1Data, ListSkillHubProjectsV1Errors, ListSkillHubProjectsV1Responses, ListSkillHubReviewQueueV1Data, ListSkillHubReviewQueueV1Errors, ListSkillHubReviewQueueV1Responses, ListSkillHubVersionsV1Data, ListSkillHubVersionsV1Errors, ListSkillHubVersionsV1Responses, NarrowPersonalApiCredentialV2Data, NarrowPersonalApiCredentialV2Errors, NarrowPersonalApiCredentialV2Responses, PublishSkillHubProjectVersionV1Data, PublishSkillHubProjectVersionV1Errors, PublishSkillHubProjectVersionV1Responses, PublishSkillHubVersionV1Data, PublishSkillHubVersionV1Errors, PublishSkillHubVersionV1Responses, ReadAgentFileLimitsV2Data, ReadAgentFileLimitsV2Errors, ReadAgentFileLimitsV2Responses, ReadApplicationMaterialV2Data, ReadApplicationMaterialV2Errors, ReadApplicationMaterialV2Responses, ReadChannelFileLimitsV2Data, ReadChannelFileLimitsV2Errors, ReadChannelFileLimitsV2Responses, ReadConversationNativeMetadataV1Data, ReadConversationNativeMetadataV1Errors, ReadConversationNativeMetadataV1Responses, ReadDeploymentFileLimitsV2Data, ReadDeploymentFileLimitsV2Errors, ReadDeploymentFileLimitsV2Responses, ReadPlatformConnectionInstallationV1Data, ReadPlatformConnectionInstallationV1Responses, ReadSkillHubAgentBindingsV1Data, ReadSkillHubAgentBindingsV1Errors, ReadSkillHubAgentBindingsV1Responses, ReadSkillHubAgentCurrentVersionV1Data, ReadSkillHubAgentCurrentVersionV1Errors, ReadSkillHubAgentCurrentVersionV1Responses, ReadSkillHubProjectContentV1Data, ReadSkillHubProjectContentV1Errors, ReadSkillHubProjectContentV1Responses, ReadSkillHubProjectV1Data, ReadSkillHubProjectV1Errors, ReadSkillHubProjectV1Responses, ReadSkillHubReviewContentV1Data, ReadSkillHubReviewContentV1Errors, ReadSkillHubReviewContentV1Responses, ReadSkillHubVersionDetailV1Data, ReadSkillHubVersionDetailV1Errors, ReadSkillHubVersionDetailV1Responses, ReadSkillHubVersionV1Data, ReadSkillHubVersionV1Errors, ReadSkillHubVersionV1Responses, RegisterApplicationV2Data, RegisterApplicationV2Errors, RegisterApplicationV2Responses, ReplaceAgentDefaultRelayKeyV2Data, ReplaceAgentDefaultRelayKeyV2Errors, ReplaceAgentDefaultRelayKeyV2Responses, ReplacePersonalRelayKeyV2Data, ReplacePersonalRelayKeyV2Errors, ReplacePersonalRelayKeyV2Responses, ReviewSkillHubVersionV1Data, ReviewSkillHubVersionV1Errors, ReviewSkillHubVersionV1Responses, RevokeAgentApplicationManagerV1Data, RevokeAgentApplicationManagerV1Errors, RevokeAgentApplicationManagerV1Responses, RevokeAgentApplicationUseV1Data, RevokeAgentApplicationUseV1Errors, RevokeAgentApplicationUseV1Responses, RevokeAgentUserApiManageV1Data, RevokeAgentUserApiManageV1Errors, RevokeAgentUserApiManageV1Responses, RevokeAgentUserApiUseV1Data, RevokeAgentUserApiUseV1Errors, RevokeAgentUserApiUseV1Responses, RevokeApplicationApiCredentialV2Data, RevokeApplicationApiCredentialV2Errors, RevokeApplicationApiCredentialV2Responses, RevokeApplicationMaterialV2Data, RevokeApplicationMaterialV2Errors, RevokeApplicationMaterialV2Responses, RevokePersonalApiCredentialV2Data, RevokePersonalApiCredentialV2Errors, RevokePersonalApiCredentialV2Responses, RevokePersonalRelayKeyV2Data, RevokePersonalRelayKeyV2Errors, RevokePersonalRelayKeyV2Responses, RevokeSkillHubVersionV1Data, RevokeSkillHubVersionV1Errors, RevokeSkillHubVersionV1Responses, SaveSkillHubProjectContentV1Data, SaveSkillHubProjectContentV1Errors, SaveSkillHubProjectContentV1Responses, SearchDirectoryV2Data, SearchDirectoryV2Errors, SearchDirectoryV2Responses, SetPlatformUserDisabledV2Data, SetPlatformUserDisabledV2Errors, SetPlatformUserDisabledV2Responses, StreamConversationEventsV2Data, StreamConversationEventsV2Errors, StreamConversationEventsV2Response, StreamConversationEventsV2Responses, UninstallSkillHubInstallationV1Data, UninstallSkillHubInstallationV1Errors, UninstallSkillHubInstallationV1Responses, UpdateAgentApplicationV2Data, UpdateAgentApplicationV2Errors, UpdateAgentApplicationV2Responses, UpdateAgentConfigurationV2Data, UpdateAgentConfigurationV2Errors, UpdateAgentConfigurationV2Responses, UpdateAgentFileLimitsV2Data, UpdateAgentFileLimitsV2Errors, UpdateAgentFileLimitsV2Responses, UpdateAgentSavedModelConfigurationV2Data, UpdateAgentSavedModelConfigurationV2Errors, UpdateAgentSavedModelConfigurationV2Responses, UpdateChannelFileLimitsV2Data, UpdateChannelFileLimitsV2Errors, UpdateChannelFileLimitsV2Responses, UpdateDeploymentFileLimitsV2Data, UpdateDeploymentFileLimitsV2Errors, UpdateDeploymentFileLimitsV2Responses, UpdateSkillHubProjectV1Data, UpdateSkillHubProjectV1Errors, UpdateSkillHubProjectV1Responses, WithdrawAgentApplicationV2Data, WithdrawAgentApplicationV2Errors, WithdrawAgentApplicationV2Responses } from './types.gen';
+import type { BeginPlatformConnectionInstallationV1Data, BeginPlatformConnectionInstallationV1Responses, BindSkillHubAgentVersionV1Data, BindSkillHubAgentVersionV1Errors, BindSkillHubAgentVersionV1Responses, CommandAgentApiLifecycleV1Data, CommandAgentApiLifecycleV1Errors, CommandAgentApiLifecycleV1Responses, CommandAgentLifecycleV2Data, CommandAgentLifecycleV2Errors, CommandAgentLifecycleV2Responses, ConfirmEvaluationContentV1Data, ConfirmEvaluationContentV1Errors, ConfirmEvaluationContentV1Responses, ConfirmPlatformConnectionInstallationV1Data, ConfirmPlatformConnectionInstallationV1Responses, CreateAgentApiV1Data, CreateAgentApiV1Errors, CreateAgentApiV1Responses, CreateAgentApplicationV2Data, CreateAgentApplicationV2Errors, CreateAgentApplicationV2Responses, CreateEvaluationDatasetV1Data, CreateEvaluationDatasetV1Errors, CreateEvaluationDatasetV1Responses, CreateSkillHubProjectV1Data, CreateSkillHubProjectV1Errors, CreateSkillHubProjectV1Responses, DecideAgentApplicationV2Data, DecideAgentApplicationV2Errors, DecideAgentApplicationV2Responses, DeleteEvaluationContentV1Data, DeleteEvaluationContentV1Errors, DeleteEvaluationContentV1Responses, DisableOwnApplicationV2Data, DisableOwnApplicationV2Errors, DisableOwnApplicationV2Responses, GetAdminAgentV2Data, GetAdminAgentV2Errors, GetAdminAgentV2Responses, GetAgentApiStateV1Data, GetAgentApiStateV1Errors, GetAgentApiStateV1Responses, GetAgentApplicationModelCandidatesV2Data, GetAgentApplicationModelCandidatesV2Errors, GetAgentApplicationModelCandidatesV2Responses, GetAgentApplicationV2Data, GetAgentApplicationV2Errors, GetAgentApplicationV2Responses, GetAgentCreationFailureV1Data, GetAgentCreationFailureV1Errors, GetAgentCreationFailureV1Responses, GetAgentDefaultRelayKeyCandidatesV2Data, GetAgentDefaultRelayKeyCandidatesV2Errors, GetAgentDefaultRelayKeyCandidatesV2Responses, GetAgentDefaultRelayKeyDisplayCandidatesV2Data, GetAgentDefaultRelayKeyDisplayCandidatesV2Errors, GetAgentDefaultRelayKeyDisplayCandidatesV2Responses, GetAgentDefaultRelayKeySavedCandidatesV2Data, GetAgentDefaultRelayKeySavedCandidatesV2Errors, GetAgentDefaultRelayKeySavedCandidatesV2Responses, GetAgentDefaultRelayKeySavedDisplayCandidatesV2Data, GetAgentDefaultRelayKeySavedDisplayCandidatesV2Errors, GetAgentDefaultRelayKeySavedDisplayCandidatesV2Responses, GetAgentDefaultRelayKeyV2Data, GetAgentDefaultRelayKeyV2Errors, GetAgentDefaultRelayKeyV2Responses, GetAgentDetailV1Data, GetAgentDetailV1Errors, GetAgentDetailV1Responses, GetAgentV2Data, GetAgentV2Errors, GetAgentV2Responses, GetConversationV2Data, GetConversationV2Errors, GetConversationV2Responses, GetDeploymentConfigurationV2Data, GetDeploymentConfigurationV2Errors, GetDeploymentConfigurationV2Responses, GetExecutionDetailV2Data, GetExecutionDetailV2Errors, GetExecutionDetailV2Responses, GetOwnApplicationV2Data, GetOwnApplicationV2Errors, GetOwnApplicationV2Responses, GetPersonalRelayKeyV2Data, GetPersonalRelayKeyV2Errors, GetPersonalRelayKeyV2Responses, GetPlatformUserDisabledV2Data, GetPlatformUserDisabledV2Errors, GetPlatformUserDisabledV2Responses, GrantAgentApplicationManagerV1Data, GrantAgentApplicationManagerV1Errors, GrantAgentApplicationManagerV1Responses, GrantAgentApplicationUseV1Data, GrantAgentApplicationUseV1Errors, GrantAgentApplicationUseV1Responses, GrantAgentUserApiManageV1Data, GrantAgentUserApiManageV1Errors, GrantAgentUserApiManageV1Responses, GrantAgentUserApiUseV1Data, GrantAgentUserApiUseV1Errors, GrantAgentUserApiUseV1Responses, GrantApplicationMaterialV2Data, GrantApplicationMaterialV2Errors, GrantApplicationMaterialV2Responses, GrantEvaluationPurposeV1Data, GrantEvaluationPurposeV1Errors, GrantEvaluationPurposeV1Responses, ImportSkillHubVersionV1Data, ImportSkillHubVersionV1Errors, ImportSkillHubVersionV1Responses, InstallSkillHubVersionV1Data, InstallSkillHubVersionV1Errors, InstallSkillHubVersionV1Responses, InvokeNativeCapabilityV1Data, InvokeNativeCapabilityV1Errors, InvokeNativeCapabilityV1Responses, IssueOrRotateApplicationApiCredentialV2Data, IssueOrRotateApplicationApiCredentialV2Errors, IssueOrRotateApplicationApiCredentialV2Responses, IssuePersonalApiCredentialV2Data, IssuePersonalApiCredentialV2Errors, IssuePersonalApiCredentialV2Responses, ListAdminAgentsV2Data, ListAdminAgentsV2Errors, ListAdminAgentsV2Responses, ListAgentApplicationsV2Data, ListAgentApplicationsV2Errors, ListAgentApplicationsV2Responses, ListAgentsV2Data, ListAgentsV2Errors, ListAgentsV2Responses, ListApplicationApiCredentialsV2Data, ListApplicationApiCredentialsV2Errors, ListApplicationApiCredentialsV2Responses, ListEvaluationDatasetsV1Data, ListEvaluationDatasetsV1Errors, ListEvaluationDatasetsV1Responses, ListOwnedSkillHubVersionsV1Data, ListOwnedSkillHubVersionsV1Errors, ListOwnedSkillHubVersionsV1Responses, ListPendingAgentApplicationsV2Data, ListPendingAgentApplicationsV2Errors, ListPendingAgentApplicationsV2Responses, ListPersonalApiCredentialsV2Data, ListPersonalApiCredentialsV2Errors, ListPersonalApiCredentialsV2Responses, ListPlatformAuditV2Data, ListPlatformAuditV2Errors, ListPlatformAuditV2Responses, ListRecentPersonalConversationsV2Data, ListRecentPersonalConversationsV2Errors, ListRecentPersonalConversationsV2Responses, ListSkillHubInstallationsV1Data, ListSkillHubInstallationsV1Errors, ListSkillHubInstallationsV1Responses, ListSkillHubProjectsV1Data, ListSkillHubProjectsV1Errors, ListSkillHubProjectsV1Responses, ListSkillHubReviewQueueV1Data, ListSkillHubReviewQueueV1Errors, ListSkillHubReviewQueueV1Responses, ListSkillHubVersionsV1Data, ListSkillHubVersionsV1Errors, ListSkillHubVersionsV1Responses, NarrowPersonalApiCredentialV2Data, NarrowPersonalApiCredentialV2Errors, NarrowPersonalApiCredentialV2Responses, PublishSkillHubProjectVersionV1Data, PublishSkillHubProjectVersionV1Errors, PublishSkillHubProjectVersionV1Responses, PublishSkillHubVersionV1Data, PublishSkillHubVersionV1Errors, PublishSkillHubVersionV1Responses, ReadAgentFileLimitsV2Data, ReadAgentFileLimitsV2Errors, ReadAgentFileLimitsV2Responses, ReadApplicationMaterialV2Data, ReadApplicationMaterialV2Errors, ReadApplicationMaterialV2Responses, ReadChannelFileLimitsV2Data, ReadChannelFileLimitsV2Errors, ReadChannelFileLimitsV2Responses, ReadConversationNativeMetadataV1Data, ReadConversationNativeMetadataV1Errors, ReadConversationNativeMetadataV1Responses, ReadDeploymentFileLimitsV2Data, ReadDeploymentFileLimitsV2Errors, ReadDeploymentFileLimitsV2Responses, ReadEvaluationContentV1Data, ReadEvaluationContentV1Errors, ReadEvaluationContentV1Responses, ReadPlatformConnectionInstallationV1Data, ReadPlatformConnectionInstallationV1Responses, ReadSkillHubAgentBindingsV1Data, ReadSkillHubAgentBindingsV1Errors, ReadSkillHubAgentBindingsV1Responses, ReadSkillHubAgentCurrentVersionV1Data, ReadSkillHubAgentCurrentVersionV1Errors, ReadSkillHubAgentCurrentVersionV1Responses, ReadSkillHubProjectContentV1Data, ReadSkillHubProjectContentV1Errors, ReadSkillHubProjectContentV1Responses, ReadSkillHubProjectV1Data, ReadSkillHubProjectV1Errors, ReadSkillHubProjectV1Responses, ReadSkillHubReviewContentV1Data, ReadSkillHubReviewContentV1Errors, ReadSkillHubReviewContentV1Responses, ReadSkillHubVersionDetailV1Data, ReadSkillHubVersionDetailV1Errors, ReadSkillHubVersionDetailV1Responses, ReadSkillHubVersionV1Data, ReadSkillHubVersionV1Errors, ReadSkillHubVersionV1Responses, RegisterApplicationV2Data, RegisterApplicationV2Errors, RegisterApplicationV2Responses, ReplaceAgentDefaultRelayKeyV2Data, ReplaceAgentDefaultRelayKeyV2Errors, ReplaceAgentDefaultRelayKeyV2Responses, ReplacePersonalRelayKeyV2Data, ReplacePersonalRelayKeyV2Errors, ReplacePersonalRelayKeyV2Responses, ReserveEvaluationVersionV1Data, ReserveEvaluationVersionV1Errors, ReserveEvaluationVersionV1Responses, ReviewSkillHubVersionV1Data, ReviewSkillHubVersionV1Errors, ReviewSkillHubVersionV1Responses, RevokeAgentApplicationManagerV1Data, RevokeAgentApplicationManagerV1Errors, RevokeAgentApplicationManagerV1Responses, RevokeAgentApplicationUseV1Data, RevokeAgentApplicationUseV1Errors, RevokeAgentApplicationUseV1Responses, RevokeAgentUserApiManageV1Data, RevokeAgentUserApiManageV1Errors, RevokeAgentUserApiManageV1Responses, RevokeAgentUserApiUseV1Data, RevokeAgentUserApiUseV1Errors, RevokeAgentUserApiUseV1Responses, RevokeApplicationApiCredentialV2Data, RevokeApplicationApiCredentialV2Errors, RevokeApplicationApiCredentialV2Responses, RevokeApplicationMaterialV2Data, RevokeApplicationMaterialV2Errors, RevokeApplicationMaterialV2Responses, RevokeEvaluationPurposeV1Data, RevokeEvaluationPurposeV1Errors, RevokeEvaluationPurposeV1Responses, RevokePersonalApiCredentialV2Data, RevokePersonalApiCredentialV2Errors, RevokePersonalApiCredentialV2Responses, RevokePersonalRelayKeyV2Data, RevokePersonalRelayKeyV2Errors, RevokePersonalRelayKeyV2Responses, RevokeSkillHubVersionV1Data, RevokeSkillHubVersionV1Errors, RevokeSkillHubVersionV1Responses, SaveSkillHubProjectContentV1Data, SaveSkillHubProjectContentV1Errors, SaveSkillHubProjectContentV1Responses, SearchDirectoryV2Data, SearchDirectoryV2Errors, SearchDirectoryV2Responses, SetPlatformUserDisabledV2Data, SetPlatformUserDisabledV2Errors, SetPlatformUserDisabledV2Responses, StreamConversationEventsV2Data, StreamConversationEventsV2Errors, StreamConversationEventsV2Response, StreamConversationEventsV2Responses, UninstallSkillHubInstallationV1Data, UninstallSkillHubInstallationV1Errors, UninstallSkillHubInstallationV1Responses, UpdateAgentApplicationV2Data, UpdateAgentApplicationV2Errors, UpdateAgentApplicationV2Responses, UpdateAgentConfigurationV2Data, UpdateAgentConfigurationV2Errors, UpdateAgentConfigurationV2Responses, UpdateAgentFileLimitsV2Data, UpdateAgentFileLimitsV2Errors, UpdateAgentFileLimitsV2Responses, UpdateAgentSavedModelConfigurationV2Data, UpdateAgentSavedModelConfigurationV2Errors, UpdateAgentSavedModelConfigurationV2Responses, UpdateChannelFileLimitsV2Data, UpdateChannelFileLimitsV2Errors, UpdateChannelFileLimitsV2Responses, UpdateDeploymentFileLimitsV2Data, UpdateDeploymentFileLimitsV2Errors, UpdateDeploymentFileLimitsV2Responses, UpdateSkillHubProjectV1Data, UpdateSkillHubProjectV1Errors, UpdateSkillHubProjectV1Responses, UploadEvaluationContentV1Data, UploadEvaluationContentV1Errors, UploadEvaluationContentV1Responses, WithdrawAgentApplicationV2Data, WithdrawAgentApplicationV2Errors, WithdrawAgentApplicationV2Responses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -744,6 +744,147 @@ export const searchDirectoryV2 = <ThrowOnError extends boolean = false>(options:
         }],
     url: '/api/v2/directory/search',
     ...options
+});
+
+/**
+ * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
+ */
+export const listEvaluationDatasetsV1 = <ThrowOnError extends boolean = false>(options?: Options<ListEvaluationDatasetsV1Data, ThrowOnError>): RequestResult<ListEvaluationDatasetsV1Responses, ListEvaluationDatasetsV1Errors, ThrowOnError> => (options?.client ?? client).get<ListEvaluationDatasetsV1Responses, ListEvaluationDatasetsV1Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/v2/evaluation/datasets',
+    ...options
+});
+
+/**
+ * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
+ */
+export const createEvaluationDatasetV1 = <ThrowOnError extends boolean = false>(options: Options<CreateEvaluationDatasetV1Data, ThrowOnError>): RequestResult<CreateEvaluationDatasetV1Responses, CreateEvaluationDatasetV1Errors, ThrowOnError> => (options.client ?? client).post<CreateEvaluationDatasetV1Responses, CreateEvaluationDatasetV1Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/v2/evaluation/datasets',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
+ */
+export const grantEvaluationPurposeV1 = <ThrowOnError extends boolean = false>(options: Options<GrantEvaluationPurposeV1Data, ThrowOnError>): RequestResult<GrantEvaluationPurposeV1Responses, GrantEvaluationPurposeV1Errors, ThrowOnError> => (options.client ?? client).post<GrantEvaluationPurposeV1Responses, GrantEvaluationPurposeV1Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/v2/evaluation/datasets/{datasetId}/grants',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
+ */
+export const revokeEvaluationPurposeV1 = <ThrowOnError extends boolean = false>(options: Options<RevokeEvaluationPurposeV1Data, ThrowOnError>): RequestResult<RevokeEvaluationPurposeV1Responses, RevokeEvaluationPurposeV1Errors, ThrowOnError> => (options.client ?? client).delete<RevokeEvaluationPurposeV1Responses, RevokeEvaluationPurposeV1Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/v2/evaluation/datasets/{datasetId}/grants/{grantId}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
+ */
+export const reserveEvaluationVersionV1 = <ThrowOnError extends boolean = false>(options: Options<ReserveEvaluationVersionV1Data, ThrowOnError>): RequestResult<ReserveEvaluationVersionV1Responses, ReserveEvaluationVersionV1Errors, ThrowOnError> => (options.client ?? client).post<ReserveEvaluationVersionV1Responses, ReserveEvaluationVersionV1Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/v2/evaluation/datasets/{datasetId}/versions',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
+ */
+export const confirmEvaluationContentV1 = <ThrowOnError extends boolean = false>(options: Options<ConfirmEvaluationContentV1Data, ThrowOnError>): RequestResult<ConfirmEvaluationContentV1Responses, ConfirmEvaluationContentV1Errors, ThrowOnError> => (options.client ?? client).post<ConfirmEvaluationContentV1Responses, ConfirmEvaluationContentV1Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/confirm',
+    ...options
+});
+
+/**
+ * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
+ */
+export const deleteEvaluationContentV1 = <ThrowOnError extends boolean = false>(options: Options<DeleteEvaluationContentV1Data, ThrowOnError>): RequestResult<DeleteEvaluationContentV1Responses, DeleteEvaluationContentV1Errors, ThrowOnError> => (options.client ?? client).delete<DeleteEvaluationContentV1Responses, DeleteEvaluationContentV1Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/content',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
+ */
+export const readEvaluationContentV1 = <ThrowOnError extends boolean = false>(options: Options<ReadEvaluationContentV1Data, ThrowOnError>): RequestResult<ReadEvaluationContentV1Responses, ReadEvaluationContentV1Errors, ThrowOnError> => (options.client ?? client).get<ReadEvaluationContentV1Responses, ReadEvaluationContentV1Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/content',
+    ...options
+});
+
+/**
+ * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
+ */
+export const uploadEvaluationContentV1 = <ThrowOnError extends boolean = false>(options: Options<UploadEvaluationContentV1Data, ThrowOnError>): RequestResult<UploadEvaluationContentV1Responses, UploadEvaluationContentV1Errors, ThrowOnError> => (options.client ?? client).put<UploadEvaluationContentV1Responses, UploadEvaluationContentV1Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/content',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });
 
 /**

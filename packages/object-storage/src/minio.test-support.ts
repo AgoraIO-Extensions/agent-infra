@@ -1,17 +1,18 @@
 import { execFile as callback } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
+import { createEvaluationObjectStorageV1 } from "@agent-infra/object-storage";
 import {
 	CreateBucketCommand,
 	PutBucketVersioningCommand,
 	S3Client,
 } from "@aws-sdk/client-s3";
-
 import { createS3ObjectStorageV1 } from "./s3.ts";
 
 const execFile = promisify(callback);
 export async function startMinioFileFixtureV1(
 	contentPolicy: "file" | "skill-package" = "file",
+	purpose?: "eval",
 ) {
 	const name = `agent-infra-442-s3-${randomUUID()}`;
 	const credentials = {
@@ -63,12 +64,21 @@ export async function startMinioFileFixtureV1(
 				VersioningConfiguration: { Status: "Enabled" },
 			}),
 		);
-		const storage = createS3ObjectStorageV1({
+		const storage = (
+			purpose === "eval"
+				? createEvaluationObjectStorageV1
+				: createS3ObjectStorageV1
+		)({
 			endpoint,
 			region: "us-east-1",
 			credentials,
 			bucket: "file-contract",
-			prefix: contentPolicy === "skill-package" ? "skill-packages/" : "files/",
+			prefix:
+				purpose === "eval"
+					? "eval/"
+					: contentPolicy === "skill-package"
+						? "skill-packages/"
+						: "files/",
 			contentPolicy,
 			maxObjectBytes: 1024 * 1024,
 			timeoutMs: 10000,
@@ -77,7 +87,12 @@ export async function startMinioFileFixtureV1(
 			storage,
 			client,
 			bucket: "file-contract",
-			prefix: contentPolicy === "skill-package" ? "skill-packages/" : "files/",
+			prefix:
+				purpose === "eval"
+					? "eval/"
+					: contentPolicy === "skill-package"
+						? "skill-packages/"
+						: "files/",
 			async close() {
 				storage.close();
 				client?.destroy();

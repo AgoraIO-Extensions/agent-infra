@@ -351,6 +351,7 @@ describe("personal credential narrowing policy", () => {
 		]);
 		for (const input of [
 			{ scopes: ["agent:read", "agent:use"] },
+			{ scopes: ["agent:read", "eval:data"] },
 			{ expiresAt: "2031-01-01T00:00:00Z" },
 		])
 			expect(() => apply(input)).toThrow(
@@ -375,4 +376,31 @@ describe("personal credential narrowing policy", () => {
 			),
 		).toThrow(new PersonalApiCredentialErrorV1("unavailable"));
 	});
+});
+
+it("issues Eval scope only when explicitly selected and accepts the five-scope envelope", () => {
+	expect(
+		parsePersonalApiCredentialIssuanceV1({
+			scopes: ["agent:read"],
+			expiresAt: null,
+		}).scopes,
+	).toEqual(["agent:read"]);
+	expect(
+		parsePersonalApiCredentialIssuanceV1({
+			scopes: ["eval:data"],
+			expiresAt: null,
+		}).scopes,
+	).toEqual(["eval:data"]);
+	expect(
+		parsePersonalApiCredentialIssuanceV1({
+			scopes: [
+				"agent:create",
+				"agent:manage",
+				"agent:use",
+				"agent:read",
+				"eval:data",
+			],
+			expiresAt: null,
+		}).scopes,
+	).toHaveLength(5);
 });

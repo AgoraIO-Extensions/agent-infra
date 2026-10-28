@@ -8,6 +8,7 @@ import {
 	EmptyTitle,
 } from "@/components/ui/empty";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EvaluationDatasets } from "./evaluation-datasets.js";
 
 type EvaluationSection = "datasets" | "experiments" | "feedback";
 
@@ -54,7 +55,7 @@ export function EvaluationWorkbench() {
 				</div>
 				{/* 评测集写入接口未接入：主操作保留在设计位置，但不可用并指向说明。 */}
 				<Button disabled aria-describedby={pendingNoteId}>
-					创建评测集
+					实验运行待接入
 				</Button>
 			</header>
 
@@ -88,27 +89,31 @@ export function EvaluationWorkbench() {
 							className="rounded-[14px]"
 						>
 							{/* 设计 eval-feedback-empty：标题、说明与操作直接作为空态的网格行（X-16）。 */}
-							<Empty>
-								<EmptyTitle>{item.emptyTitle}</EmptyTitle>
-								<EmptyDescription>{item.emptyDescription}</EmptyDescription>
-								{item.id === "feedback" ? (
-									<EmptyContent>
-										{/* 反馈在对话里提交：先选择 Agent 再进入对话（与导航「对话」一致）。 */}
-										<Link
-											className={buttonVariants({ variant: "outline" })}
-											to="/agents"
-											search={{ mode: "conversation" }}
-										>
-											查看对话反馈
-										</Link>
-									</EmptyContent>
-								) : null}
-							</Empty>
+							{item.id === "datasets" ? (
+								<EvaluationDatasets />
+							) : (
+								<Empty>
+									<EmptyTitle>{item.emptyTitle}</EmptyTitle>
+									<EmptyDescription>{item.emptyDescription}</EmptyDescription>
+									{item.id === "feedback" ? (
+										<EmptyContent>
+											{/* 反馈在对话里提交：先选择 Agent 再进入对话（与导航「对话」一致）。 */}
+											<Link
+												className={buttonVariants({ variant: "outline" })}
+												to="/agents"
+												search={{ mode: "conversation" }}
+											>
+												查看对话反馈
+											</Link>
+										</EmptyContent>
+									) : null}
+								</Empty>
+							)}
 						</TabsContent>
 					))}
 				</Tabs>
 				<p id={pendingNoteId} className="evaluation-note">
-					评测集读写、真实运行、评分器和逐例复核尚未接入，接入前不能创建评测集，也不会显示示例结果。
+					评测数据读写须由部署启用并显式授权；实验运行、评分和逐例复核仍待接入，不显示示例结果。
 				</p>
 			</div>
 		</section>
