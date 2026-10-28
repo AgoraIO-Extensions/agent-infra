@@ -9,6 +9,7 @@ import {
 	uuid,
 } from "drizzle-orm/pg-core";
 import { platformSchema as platform } from "./schema-common.js";
+import { conversationExecutions } from "./schema-conversations.js";
 
 export const evaluationPolicies = platform.table("evaluation_policies", {
 	id: text("id").primaryKey(),
@@ -162,4 +163,30 @@ export const evaluationDerivedObjects = platform.table(
 		data: jsonb("data").notNull(),
 	},
 	(t) => [index("evaluation_derived_expiry").on(t.expiresAt, t.id)],
+);
+
+export const taskFeedback = platform.table(
+	"task_feedback",
+	{
+		executionId: text("execution_id").primaryKey(),
+		principalType: text("principal_type").notNull(),
+		principalId: text("principal_id").notNull(),
+		agentId: text("agent_id").notNull(),
+		revision: bigint("revision", { mode: "number" }).notNull(),
+		metadataExpiresAt: timestamp("metadata_expires_at", {
+			withTimezone: true,
+		}).notNull(),
+		data: jsonb("data").notNull(),
+	},
+	(t) => [
+		foreignKey({
+			name: "task_feedback_execution_fk",
+			columns: [t.executionId],
+			foreignColumns: [conversationExecutions.executionId],
+		}),
+		index("task_feedback_metadata_expiry_idx").on(
+			t.metadataExpiresAt,
+			t.executionId,
+		),
+	],
 );

@@ -157,6 +157,9 @@ export const conversationExecutions = platformSchema.table(
 		// #3373：本次进入 unknown 的时间，由触发器随状态迁移维护，离开 unknown 时清除；
 		// 墙钟恢复预算只读这一列。
 		unknownSince: timestamp("unknown_since", { withTimezone: true }),
+		terminalObservedAt: timestamp("terminal_observed_at", {
+			withTimezone: true,
+		}),
 	},
 	(table) => [
 		foreignKey({
@@ -320,6 +323,22 @@ export const conversationExecutions = platformSchema.table(
 		uniqueIndex("conversation_active_execution_unique")
 			.on(table.conversationId)
 			.where(sql`${table.status} in ('submitted', 'processing', 'unknown')`),
+		index("execution_feedback_actor_window_idx")
+			.on(
+				table.agentId,
+				table.principalType,
+				table.actorId,
+				table.terminalObservedAt,
+				table.executionId,
+			)
+			.where(
+				sql`${table.terminalObservedAt} is not null and ${table.status} in ('completed','failed','cancelled')`,
+			),
+		index("execution_feedback_owner_window_idx")
+			.on(table.agentId, table.terminalObservedAt, table.executionId)
+			.where(
+				sql`${table.terminalObservedAt} is not null and ${table.status} in ('completed','failed','cancelled')`,
+			),
 		index("conversation_execution_conversation_idx").on(
 			table.conversationId,
 			table.createdAt,
@@ -580,6 +599,11 @@ export const conversationEvents = platformSchema.table(
 			table.conversationId,
 			table.conversationCursor,
 		),
+		index("execution_model_fact_sequence_idx")
+			.on(table.executionId, table.sequence)
+			.where(
+				sql`${table.source}='runtime' and ${table.eventType}='execution.operation' and ${table.eventPayload}->'fact'->>'kind'='model'`,
+			),
 		index("conversation_event_conversation_cursor_idx").on(
 			table.conversationId,
 			table.conversationCursor,

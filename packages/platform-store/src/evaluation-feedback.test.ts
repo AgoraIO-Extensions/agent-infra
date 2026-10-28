@@ -1,0 +1,331 @@
+import { createHash, randomUUID } from "node:crypto";
+import {
+	createTaskFeedbackV1,
+	type EvaluationRequestV1,
+	parseEvaluationAnalysisPolicyV1,
+} from "@agent-infra/platform-core";
+import postgres from "postgres";
+import { afterAll, beforeAll, expect, it } from "vitest";
+import { PostgresEvaluationFeedbackV1 } from "./evaluation-feedback.js";
+import { migratePlatformDatabase } from "./migrate.js";
+import {
+	type PostgresTestDatabase,
+	startPostgresTestDatabase,
+} from "./postgres-test.js";
+
+let database: PostgresTestDatabase;
+let sql: ReturnType<typeof postgres>;
+let store: PostgresEvaluationFeedbackV1;
+let core: ReturnType<typeof createTaskFeedbackV1>;
+const directory = {
+	resolveUser: async (userId: string) => ({
+		schemaVersion: 1,
+		userId,
+		accountStatus: "active",
+		organizationIds: [],
+		authorizationRevision: "identity-1",
+	}),
+};
+const policy = parseEvaluationAnalysisPolicyV1({
+	schemaVersion: 1,
+	policyId: "synthetic",
+	revision: 1,
+	validUntil: new Date(Date.now() + 300000).toISOString(),
+	maximumWindowMs: 86400000,
+	maximumTasks: 100,
+	maximumModelFacts: 1000,
+	feedbackMetadataMs: 600000,
+});
+const token = (kind: string) =>
+	`papi_${(kind === "user" ? "U" : "A").repeat(43)}`;
+const request = (kind: string): EvaluationRequestV1 => ({
+	authentication: { kind: "credential", material: token(kind) },
+	requestId: randomUUID(),
+	traceId: randomUUID(),
+});
+beforeAll(async () => {
+	database = await startPostgresTestDatabase("evaluation-feedback");
+	await migratePlatformDatabase(database);
+	sql = postgres(database.databaseUrl, { max: 3 });
+	store = new PostgresEvaluationFeedbackV1({
+		...database,
+		directory,
+		loadPolicy: async () => policy,
+	});
+	core = createTaskFeedbackV1(store);
+	await sql`insert into platform.agents(id,authorization_revision)values('agent','agent-1')`;
+	await sql`insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence)values('app','agent','owner','Feedback','synthetic','available','seed','seed',now(),1,1,'ready','running',1,1)`;
+	await sql`insert into platform.agent_owners(agent_id,owner_id,created_at)values('agent','owner',now())`;
+	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision)values('same','Synthetic','owner','identity-1')`;
+	for (const kind of ["user", "application"]) {
+		await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)values('agent',${kind},'same','use','use-1')`;
+		await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes)values(${kind},${kind},'same',${createHash("sha256").update(token(kind)).digest("hex")},${sql.json(["agent:use", "agent:read"])})`;
+	}
+}, 120000);
+afterAll(async () => {
+	await store?.close();
+	await sql?.end();
+	await database?.stop();
+});
+async function seed(kind: string, channelId = "api") {
+	const id = randomUUID();
+	const boundary = {
+		schemaVersion: 1,
+		principal: { kind, id: "same" },
+		agentId: "agent",
+		channelId,
+		identityRevision: "identity-1",
+		agentAuthorizationRevision: "agent-1",
+		accessSources:
+			channelId === "api"
+				? [{ kind: "api-use", useGrantRevision: "use-1" }]
+				: [{ kind: "user", userId: "same" }],
+	};
+	await sql`insert into platform.conversations(id,agent_id,actor_id,principal_type,channel_id,status,session_generation,authorization_revision)values(${id},'agent','same',${kind},${channelId},'active',1,'agent-1')`;
+	await sql`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,principal_type,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,created_at)values(${id},${id},'agent','same',${kind},${channelId},${id},'unknown',1,1,'agent-1',clock_timestamp())`;
+	await sql`insert into platform.task_authorization_records(id,execution_id,boundary)values(${randomUUID()},${id},${sql.json(boundary)})`;
+	await sql`update platform.conversation_executions set status='completed' where execution_id=${id}`;
+	return id;
+}
+it.each(["user", "application"])(
+	"persists only original %s feedback with bounded CAS/idempotency and current authority",
+	async (kind) => {
+		const id = await seed(kind);
+		const actor = request(kind);
+		const original = await core.get(actor, id);
+		expect(original.eligibility).toBe("eligible");
+		expect(original.conditions).toEqual([]);
+		const command = {
+			expectedRevision: original.revision,
+			expectedCondition: original.conditionDigest,
+			useful: false,
+			categories: ["correctness"],
+		};
+		const key = randomUUID();
+		const value = await core.submit(actor, id, key, command);
+		expect(value).toMatchObject({
+			revision: 1,
+			principal: { kind, id: "same" },
+			useful: false,
+		});
+		expect(await core.submit(actor, id, key, command)).toEqual(value);
+		expect(
+			await sql`select execution_id from platform.task_feedback where execution_id=${id}`,
+		).toHaveLength(1);
+		expect(
+			await sql`select id from platform.audit_events where target_id=${id} and action='task.feedback.updated'`,
+		).toHaveLength(1);
+		await expect(
+			core.get(request(kind === "user" ? "application" : "user"), id),
+		).rejects.toBeDefined();
+		await expect(
+			core.submit(actor, id, key, { ...command, useful: true }),
+		).rejects.toMatchObject({ code: "conflict" });
+		const updated = await core.submit(actor, id, randomUUID(), {
+			...command,
+			expectedRevision: 1,
+			useful: true,
+			categories: [],
+		});
+		expect(updated.revision).toBe(2);
+		await sql`update platform.agent_principal_grants set revoked_at=clock_timestamp() where principal_type=${kind} and principal_id='same'`;
+		try {
+			await expect(core.get(actor, id)).rejects.toBeDefined();
+			await expect(core.submit(actor, id, key, command)).rejects.toBeDefined();
+		} finally {
+			await sql`update platform.agent_principal_grants set revoked_at=null where principal_type=${kind} and principal_id='same'`;
+		}
+		expect((await core.get(actor, id)).feedback).toEqual(updated);
+		expect(
+			await sql`select execution_id from platform.conversation_executions where execution_id=${id}`,
+		).toHaveLength(1);
+	},
+);
+it("rolls feedback and receipt back when required audit fails", async () => {
+	const id = await seed("user");
+	const actor = request("user");
+	const context = await core.get(actor, id);
+	await sql.unsafe(
+		"create function platform.feedback_audit_fail()returns trigger language plpgsql as $$ begin if NEW.action='task.feedback.updated' then raise exception 'synthetic audit failure'; end if;return NEW;end $$",
+	);
+	await sql.unsafe(
+		"create trigger feedback_audit_fail before insert on platform.audit_events for each row execute function platform.feedback_audit_fail()",
+	);
+	try {
+		await expect(
+			core.submit(actor, id, randomUUID(), {
+				expectedRevision: 0,
+				expectedCondition: context.conditionDigest,
+				useful: true,
+				categories: [],
+			}),
+		).rejects.toBeDefined();
+		expect(
+			await sql`select execution_id from platform.task_feedback where execution_id=${id}`,
+		).toHaveLength(0);
+		expect(
+			await sql`select id from platform.idempotency_records where scope_type='task_feedback' and scope_id=${id}`,
+		).toHaveLength(0);
+	} finally {
+		await sql.unsafe(
+			"drop trigger feedback_audit_fail on platform.audit_events",
+		);
+		await sql.unsafe("drop function platform.feedback_audit_fail()");
+	}
+});
+it("keeps legacy terminal feedback writable while its unknown terminal window remains explicit", async () => {
+	const id = await seed("user");
+	await sql`alter table platform.conversation_executions disable trigger conversation_execution_terminal_observed_at`;
+	try {
+		await sql`update platform.conversation_executions set terminal_observed_at=null where execution_id=${id}`;
+	} finally {
+		await sql`alter table platform.conversation_executions enable trigger conversation_execution_terminal_observed_at`;
+	}
+	const actor = request("user");
+	const context = await core.get(actor, id);
+	expect(context.eligibility).toBe("eligible");
+	expect(context.terminalObservedAt).toBeNull();
+	expect(
+		await core.submit(actor, id, randomUUID(), {
+			expectedRevision: 0,
+			expectedCondition: context.conditionDigest,
+			useful: true,
+			categories: [],
+		}),
+	).toMatchObject({ executionId: id, useful: true });
+});
+it("counts unfeedback Tasks and hides other Task identities in current Owner aggregate", async () => {
+	const id = await seed("user");
+	await seed("application");
+	const query = {
+		from: new Date(Date.now() - 60000).toISOString(),
+		to: new Date(Date.now() + 60000).toISOString(),
+	};
+	const self = await store.summary(request("user"), "agent", "self", query);
+	expect(self.eligibleTasks).toBeGreaterThan(self.feedbackTasks);
+	expect(self.terminalTimeMissingTasks).toBe(1);
+	const owner: EvaluationRequestV1 = {
+		authentication: { kind: "browser", userId: "owner" },
+		requestId: randomUUID(),
+		traceId: randomUUID(),
+	};
+	const all = await store.summary(owner, "agent", "owner", query);
+	expect(all.eligibleTasks).toBeGreaterThan(self.eligibleTasks);
+	expect(JSON.stringify(all)).not.toContain(id);
+	expect(JSON.stringify(all)).not.toMatch(
+		/principal|executionId|conversationId/,
+	);
+	await expect(
+		store.summary(request("application"), "agent", "owner", query),
+	).rejects.toBeDefined();
+	await sql`delete from platform.agent_owners where owner_id='owner'`;
+	try {
+		await expect(
+			store.summary(owner, "agent", "owner", query),
+		).rejects.toBeDefined();
+	} finally {
+		await sql`insert into platform.agent_owners(agent_id,owner_id,created_at)values('agent','owner',now())`;
+	}
+});
+
+it("authorizes Web historical feedback without an API grant and accepts a newly granted current API use revision", async () => {
+	const id = await seed("user", "web");
+	await sql`insert into platform.agent_availability(agent_id,target_type,target_id)values('agent','user','same')`;
+	await sql`update platform.agent_principal_grants set revoked_at=clock_timestamp() where principal_type='user' and principal_id='same'`;
+	const browser: EvaluationRequestV1 = {
+		authentication: { kind: "browser", userId: "same" },
+		requestId: randomUUID(),
+		traceId: randomUUID(),
+	};
+	try {
+		const context = await core.get(browser, id);
+		expect(context.eligibility).toBe("eligible");
+		await core.submit(browser, id, randomUUID(), {
+			expectedRevision: 0,
+			expectedCondition: context.conditionDigest,
+			useful: true,
+			categories: [],
+		});
+		const query = {
+			from: new Date(Date.now() - 60000).toISOString(),
+			to: new Date(Date.now() + 60000).toISOString(),
+		};
+		expect(
+			(
+				await store.summary(browser, "agent", "self", {
+					from: context.terminalObservedAt!,
+					to: new Date(
+						Date.parse(context.terminalObservedAt!) + 1000,
+					).toISOString(),
+				})
+			).eligibleTasks,
+		).toBe(1);
+		// The same user also has API history, whose current access is tested after regrant below.
+		await sql`update platform.agent_principal_grants set revoked_at=null,authorization_revision='use-new' where principal_type='user' and principal_id='same'`;
+		expect(
+			(await store.summary(browser, "agent", "self", query)).feedbackTasks,
+		).toBeGreaterThan(0);
+		const apiId = await seed("user");
+		expect((await core.get(request("user"), apiId)).eligibility).toBe(
+			"eligible",
+		);
+	} finally {
+		await sql`update platform.agent_principal_grants set revoked_at=null,authorization_revision='use-1' where principal_type='user' and principal_id='same'`;
+	}
+});
+it("uses fresh commit time and the current shorter retention for receipts and summaries", async () => {
+	const id = await seed("user");
+	const actor = request("user");
+	const context = await core.get(actor, id);
+	const key = randomUUID();
+	const command = {
+		expectedRevision: 0,
+		expectedCondition: context.conditionDigest,
+		useful: true,
+		categories: [],
+	};
+	const value = await core.submit(actor, id, key, command);
+	// A real persisted expiry reached while the final directory check is blocked.
+	const short = {
+		...value,
+		createdAt: new Date(Date.now() - 500).toISOString(),
+		updatedAt: new Date(Date.now() - 400).toISOString(),
+		metadataExpiresAt: new Date(Date.now() + 200).toISOString(),
+	};
+	await sql`update platform.task_feedback set metadata_expires_at=${short.metadataExpiresAt},data=${sql.json(short as unknown as postgres.JSONValue)} where execution_id=${id}`;
+	let calls = 0;
+	const held = new PostgresEvaluationFeedbackV1({
+		...database,
+		loadPolicy: async () => policy,
+		directory: {
+			resolveUser: async (userId) => {
+				calls++;
+				if (calls === 4) await sql`select pg_sleep(0.25)`;
+				return directory.resolveUser(userId);
+			},
+		},
+	});
+	try {
+		const read = await createTaskFeedbackV1(held).get(actor, id);
+		expect(read.feedback).toBeNull();
+		expect(read.revision).toBe(0);
+	} finally {
+		await held.close();
+	}
+	const narrowed = { ...policy, revision: 2, feedbackMetadataMs: 1 };
+	const shorter = new PostgresEvaluationFeedbackV1({
+		...database,
+		directory,
+		loadPolicy: async () => narrowed,
+	});
+	try {
+		const replacement = await createTaskFeedbackV1(shorter)
+			.submit(actor, id, key, command)
+			.catch(() => null);
+		// An expired original receipt can never be returned as a fresh acknowledgement.
+		expect(replacement?.createdAt).not.toBe(value.createdAt);
+	} finally {
+		await shorter.close();
+		policy.revision = 3;
+	}
+});

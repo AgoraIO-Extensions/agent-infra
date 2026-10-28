@@ -61,6 +61,7 @@ export {
 export * from "./agent-creation-failure.js";
 export * from "./agent-default-relay-key.js";
 export * from "./agent-management.js";
+export { parseAgentManagementPortState } from "./agent-management-input.js";
 export * from "./agent-runtime-presentation.js";
 export * from "./agent-user-manage-grants.js";
 export * from "./agent-user-use-grants.js";
@@ -98,6 +99,8 @@ export * from "./evaluation-data.js";
 export * from "./evaluation-derived-content.js";
 export * from "./evaluation-experiment-policy.js";
 export * from "./evaluation-experiments.js";
+export * from "./evaluation-feedback.js";
+export * from "./evaluation-model-facts.js";
 export * from "./evaluation-score-intents.js";
 export * from "./evaluation-scoring.js";
 export * from "./evaluation-task-binding.js";

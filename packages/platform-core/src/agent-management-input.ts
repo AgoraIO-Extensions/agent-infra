@@ -212,7 +212,7 @@ export function isAgentManagementFailureCode(
 }
 
 export function parseAgentManagementPortState(
-	input: AgentManagementStateV1,
+	input: unknown,
 ): AgentManagementStateV1 {
 	try {
 		const values = snapshotAgentManagementDataObject(input);

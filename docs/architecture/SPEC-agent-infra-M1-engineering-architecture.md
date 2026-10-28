@@ -2797,6 +2797,71 @@ Owner 可看获准汇总但不能下钻他人原会话。实验分析以固定�
 更新反馈不增加任务数，未反馈数量单列；本人的查询仅计本人任务，Owner 汇总须获相应汇总权限。筛选、
 窗口和分母随结果返回，不从反馈记录数反推总任务量；线上统计不并入离线实验通过率。
 
+##### 分析入口、发现与一致读
+
+分析凭证使用独立最大范围 `eval:analyze`，不继承 `eval:run/score/review`；仍须当前 Agent 使用权、
+精确数据集/版本的 analyze 用途及当前数据/实验政策。分析可见性不要求原实验发起主体相同，
+但不能仅凭 Owner、实验 ID 或普通会话权限访问。实验历史、固定集合汇总及逐例明细沿同一 analyze
+授权；样本/输出/评分理由和复核正文由服务端固定 analyze 用途读取原不可变对象，不能调用方自报用途。
+可选变体/评分器目录只投射当前 run 授权可使用的部署批准项、公开模型/配置标识和 Agent 默认 Key
+费用归属；不返回 endpoint URL、认证配置或 Key 材料。score/review 待办列表按各自当前用途过滤，
+独立评分者和复核者无需借 run 发现对象。评分来源和所用评分模型来自已冻结 scorer，不从名称猜测。
+
+离线分析先构造实验已固定的 sampleIds × variantIds × scorerRefs 全集合，再关联实际 Task 和评分；
+汇总不从当前明细页反推分母。每评分器分别返回固定样本数、已评分/通过/未通过、未评分、评分故障、
+不适用及业务失败；不同评分器不混成一个质量分数。逐例配对明确实际条件缺失、工具环境或非比较目标
+条件变化，不把正常任务完成当质量通过；按任务类型给出同样分母。原评分和独立复核分列，复核不覆盖
+原分数。新的版本/再次运行使用显式新意图，原实验保留原版本与结论。
+
+实验显式声明可组合的比较目标维度 model/configuration/template。受理时从当时已批准的 Agent
+配置冻结每变体的非敏感 requestedEvidence：模型选项到 modelId/推理级别的映射、配置修订及摘要、
+模板/镜像标识；该证据不来自请求任意字段，也不重新定义 Runtime 权威。每侧实际条件先与各自冻结
+请求证据核对；非目标维度漂移标为不可比，实际缺失或旧样本没有足够冻结映射标为 unknown，不能
+猜测 modelId 或把条件变化默认视为合法比较。模型 attempt 耗时之和可能包含并行，只标为模型累计
+耗时；任务受理到确认终态的墙钟跨度另列，缺少可信边界时为空。
+
+同一汇总响应在单一 PostgreSQL 一致读快照内读取固定样本、评分、复核元数据与各 Execution 捕获的
+last_sequence；事件不得超过对应上限。内容读取在短事务之外，最终另用当前授权查询复核主体、Agent
+和用途/政策；快照内旧授权不能充当最终撤权检查。明细 cursor 绑定实验/用途并有界分页，每个响应
+返回自己的 observedAt/事件边界；跨 HTTP 页不宣称冻结同一 MVCC 快照。汇总始终重新计算完整集合。
+
+##### 终态时间、实际条件与线上反馈
+
+`conversation_executions.terminal_observed_at` 仅表示 Platform DB 首次持久确认 completed/failed/
+cancelled 的时间，不表示模型耗时。沿现有 unknown_since 模式，以机械 DB trigger 在首次非终态到
+终态的同一事务写 clock_timestamp；覆盖 Runtime 事件、Host 状态确认、等待队列取消/到期、generation
+隔离和受控 unknown 处置等全部状态生产者。重复终态和后续元数据不移动该时间，回滚不留下投影。
+迁移前终态行没有已确认的时间证据时保持 null，不填迁移时间、created_at 或 updated_at；响应明确
+报告 terminal-time-missing 的历史覆盖缺口，不能把这些行伪装进任一时间窗口。
+
+实际模型只读取受控 Runtime execution.operation 元数据，Core 按 Execution/operationRef/attemptRef
+折叠有序阶段，保留每 attempt 最新有效结果与是否实际开始的证据。intent-only 不计实际模型；同一
+attempt 的 intent/started/completed 不重复求和，缺失 usage/duration 不补零。任务条件是实际出现的
+(configVersion, modelOptionId, modelId, reasoningLevel) 去重集合，多模型显示 mixed；请求配置另列，
+不以请求值填 actual。不同 attempt 可以累计已观察用量，同时返回覆盖数；一个 Execution 始终只占
+一个任务分母。查询只投射模型元数据，不读取会话正文或工具参数。
+
+本人反馈只允许已确认 completed/failed/cancelled 的线上 Task，unknown 和离线 Eval 不进入线上
+分母。原 typed principal 与 execution/Agent 由服务端持久记录解析；本人当前身份和原渠道的 Agent
+使用权仍须有效，API 反馈写入要求 `agent:use`、本人汇总读取要求 `agent:read`。Web/企微等任务沿
+原渠道授权，不把应用转换为用户，也不要求用户获得 Eval 数据用途。反馈只保存 useful/not_useful 和
+有限分类 correctness/relevance/instruction_following/format/tool_use/incomplete/performance/other，
+没有自由正文。当前反馈按原 Execution 与 typed principal 唯一，expectedRevision 与幂等摘要控制更新，
+必要元数据审计与反馈同事务；重放也核验当前权限。反馈冻结当时的实际模型条件和终态版本；后续
+条件证据变化使旧反馈标为条件已变化，须本人明确更新才进入当前有效反馈分子。
+
+反馈查询使用半开终态窗口 [from,to)，先固定同一 Agent、当前授权范围与实际模型/配置筛选的终态
+Execution 集合，再关联有效反馈；无反馈不丢出分母，重复反馈不增加分子，0 分母返回无样本而非 100%。
+终态时间缺失另列覆盖缺口，反馈提交时间和晚到元数据不移动窗口。Owner 汇总必须确认当前用户 Owner
+关系，只返回计数、条件/分类分布及缺失覆盖，不返回他人的主体 ID、Execution/Conversation ID、事实引用
+或正文下钻入口；应用不能借责任人身份成为 Owner。查询结束后重新核对当前 Owner/使用权与身份。
+
+分析与反馈沿现有私有配置显式提供查询预算（maximumWindowMs、maximumTasks、maximumModelFacts）
+及反馈 metadataMs 保留期限，无生产默认保留期限。预算约束完整查询而非分母：超出任何预算明确返回
+query_too_large，不能截断后给出部分反馈率。反馈当前行和幂等回执的到期清理由现有 Worker 履行，
+不得保留不受政策约束的无限主体/摘要。反馈元数据独立于离线内容，不自动导入评测集；所有新增审计
+仅保存受限操作/目标/结果元数据，不保存反馈正文、样本、评分理由或私有配置。
+
 #### 18.4.5 实现交接与验证
 
 开发分工按以下依赖交接；各模块仍在现有部署单元内。Contracts/API/Web 的公共入口、migration 顺序和
