@@ -100,7 +100,11 @@ it("fails closed when an enabled Codex boundary has no Worker service token", ()
 it("fails closed for empty tokens and non-printable boundary scopes", () => {
 	for (const input of [
 		{ enabled: true, serviceToken: "", scope: "agent_api_codex" },
-		{ enabled: true, serviceToken: "worker-service-token", scope: "agent\napi" },
+		{
+			enabled: true,
+			serviceToken: "worker-service-token",
+			scope: "agent\napi",
+		},
 		{ enabled: true, serviceToken: "worker-service-token", scope: "" },
 	]) {
 		expect(() => codexContainerBoundaryEnvironmentV1(input)).toThrow("policy");
