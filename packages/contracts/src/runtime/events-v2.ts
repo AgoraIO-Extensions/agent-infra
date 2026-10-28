@@ -110,17 +110,42 @@ export const RuntimeOperationFactV2Schema = z.discriminatedUnion("kind", [
 			})
 			.optional(),
 	}),
-	z.strictObject({
-		...operation,
-		kind: z.literal("tool"),
-		toolId: metadataId,
-		/** JSON-RPC identity and parameter digest persisted before dispatch. */
-		rpcRequestId: rpcRequestId.optional(),
-		requestDigest: requestDigest.optional(),
-		resultRef: OpaqueIdV1Schema.optional(),
-		connection: RuntimeConnectionAssociationV1Schema.optional(),
-		browser: RuntimeBrowserActionBindingV1Schema.optional(),
-	}),
+	z
+		.strictObject({
+			...operation,
+			kind: z.literal("tool"),
+			toolId: metadataId,
+			executionBoundary: z.literal("sandbox-local").optional(),
+			/** JSON-RPC identity and parameter digest persisted before dispatch. */
+			rpcRequestId: rpcRequestId.optional(),
+			requestDigest: requestDigest.optional(),
+			resultRef: OpaqueIdV1Schema.optional(),
+			connection: RuntimeConnectionAssociationV1Schema.optional(),
+			browser: RuntimeBrowserActionBindingV1Schema.optional(),
+		})
+		.superRefine((fact, context) => {
+			if (
+				fact.executionBoundary === "sandbox-local" &&
+				(fact.phase === "intent" ||
+					![
+						"Bash",
+						"Read",
+						"Write",
+						"Edit",
+						"Glob",
+						"Grep",
+						"TodoWrite",
+					].includes(fact.toolId) ||
+					fact.rpcRequestId !== undefined ||
+					fact.requestDigest !== undefined ||
+					fact.connection !== undefined ||
+					fact.browser !== undefined)
+			)
+				context.addIssue({
+					code: "custom",
+					message: "Invalid local tool observation",
+				});
+		}),
 ]);
 
 export const RuntimeEventV2Schema = z.strictObject({

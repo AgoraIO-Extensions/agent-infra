@@ -56,3 +56,8 @@ Claude、Pi 与 OpenCode 的原生命令通过镜像内只读 TypeScript launche
 取消、组合/后台命令、工作区/memory 成功路径、工具事实、重启不重放与准入失效拒绝。受控模型
 fixture 与真实外部模型验收分别记录，不互相代签。工程约束见
 [Spec §10.14](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1014-标准模板-session-sandbox-原生工具)。
+
+Claude 本地工具只在原生完成/失败 hook 确认实际执行后记录 `sandbox-local` 事实，不保存执行前
+intent。没有原生开始时间或成功耗时时，字段保持缺失；失败 hook 提供的实际 `duration_ms` 可保留。
+模型、MCP、Browser 与平台结果文件发布继续使用 intent-first 屏障。发布新 Runtime 前，必须先部署
+识别该标记并核对标准模板来源的 Worker/Core 以及对应读取契约；旧事实仍沿原顺序读取。

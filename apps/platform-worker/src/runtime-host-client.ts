@@ -124,6 +124,8 @@ export interface WorkerRuntimeHostClientOptionsV1 {
 	/** Trusted, approval-bound non-sensitive Connection target; never request supplied. */
 	readonly connectionConsumer?: ApprovedConnectionConsumerTargetV1;
 	readonly fetch?: typeof fetch;
+	/** Resolved from the authorized Workload, never the event or request body. */
+	readonly nativeToolTemplate?: "claude";
 }
 
 /** Projection of the original accepted Execution, never a subject's current Key alias. */
@@ -987,7 +989,21 @@ export function createWorkerRuntimeHostClientV1(
 
 /** Project only the already schema-validated public fields into domain facts. */
 // #2979：只有操作事实需要转换为平台形状；思考过程等其他 V2 事件原样交给 Core 精确校验。
-function workerRuntimeEvent(event: RuntimeEvent) {
+function workerRuntimeEvent(
+	event: RuntimeEvent,
+	nativeToolTemplate?: "claude",
+) {
+	if (
+		event.schemaVersion === 2 &&
+		event.type === "operation" &&
+		event.payload.kind === "tool" &&
+		event.payload.executionBoundary !== undefined &&
+		(nativeToolTemplate !== "claude" ||
+			!["Bash", "Read", "Write", "Edit", "Glob", "Grep", "TodoWrite"].includes(
+				event.payload.toolId,
+			))
+	)
+		return failure("RUNTIME_EVENT_INVALID", true);
 	return event.schemaVersion === 2 && event.type === "operation"
 		? operationEvent(event)
 		: event;
@@ -1018,6 +1034,9 @@ function operationEvent(
 			...base,
 			kind: "tool",
 			toolId: fact.toolId,
+			...(fact.executionBoundary === undefined
+				? {}
+				: { executionBoundary: fact.executionBoundary }),
 			...(fact.resultRef === undefined ? {} : { resultRef: fact.resultRef }),
 			...(association === undefined
 				? {}
@@ -1258,7 +1277,7 @@ export function createWorkerRuntimeHostClientV3(
 			for await (const event of eventStream(response, RuntimeEventSchema)) {
 				if (event.executionId !== body.executionId)
 					return failure("RUNTIME_EVENT_INVALID", true);
-				yield workerRuntimeEvent(event);
+				yield workerRuntimeEvent(event, options.nativeToolTemplate);
 			}
 		},
 	};
@@ -2103,7 +2122,9 @@ export function createWorkerRuntimeHostClientV4(
 				}
 				return {
 					...replay,
-					events: replay.events.map((event) => workerRuntimeEvent(event)),
+					events: replay.events.map((event) =>
+						workerRuntimeEvent(event, options.nativeToolTemplate),
+					),
 				};
 			} catch {
 				return failure("RUNTIME_EVENT_INVALID", true);

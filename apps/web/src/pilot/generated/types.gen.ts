@@ -962,6 +962,7 @@ export type ScopedPlatformAuditProjectionV1 = {
                 verification: 'unverified';
             };
             durationMs?: number;
+            executionBoundary?: 'sandbox-local';
             failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
             finishedAt?: string;
             kind: 'tool';
@@ -1063,6 +1064,7 @@ export type ScopedPlatformAuditProjectionV2 = {
                 verification: 'unverified';
             };
             durationMs?: number;
+            executionBoundary?: 'sandbox-local';
             failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
             finishedAt?: string;
             kind: 'tool';
@@ -1187,6 +1189,7 @@ export type TaskProjectionV1 = {
                 verification: 'unverified';
             };
             durationMs?: number;
+            executionBoundary?: 'sandbox-local';
             failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
             finishedAt?: string;
             kind: 'tool';
@@ -1368,6 +1371,7 @@ export type TaskSseMessageV1 = PersistedConversationEventV1 | {
             verification: 'unverified';
         };
         durationMs?: number;
+        executionBoundary?: 'sandbox-local';
         failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
         finishedAt?: string;
         kind: 'tool';

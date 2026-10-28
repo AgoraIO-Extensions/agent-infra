@@ -1633,6 +1633,41 @@ function isApplicationMaterialGrantV2OpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #3218 adds only a fixed optional classification on existing tool facts.
+// Receivers deploy first; absent historical facts keep their intent-first meaning.
+function isLocalToolBoundaryOpenApiAddition(previous, current) {
+	const normalized = structuredClone(current);
+	let additions = 0;
+	let invalid = false;
+	const visit = (old, node) => {
+		if (!node || typeof node !== "object") return;
+		if (
+			node.properties?.executionBoundary !== undefined &&
+			old?.properties?.executionBoundary === undefined
+		) {
+			if (
+				node.properties?.kind?.const !== "tool" ||
+				!node.properties?.operationRef ||
+				!node.properties?.attemptRef ||
+				!node.properties?.toolId ||
+				!node.properties?.phase ||
+				node.properties.executionBoundary.type !== "string" ||
+					node.properties.executionBoundary.const !== "sandbox-local" ||
+				Object.keys(node.properties.executionBoundary).length !== 2 ||
+				node.required?.includes("executionBoundary")
+			)
+				invalid = true;
+			else {
+				delete node.properties.executionBoundary;
+				additions++;
+			}
+		}
+		for (const [key, value] of Object.entries(node)) visit(old?.[key], value);
+	};
+	visit(previous, normalized);
+	return !invalid && additions > 0 && sameValue(previous, normalized);
+}
+
 // Browser operation binding is an additive optional field on existing operation facts.
 function stripRuntimeBrowserOperationFacts(value) {
 	const normalized = normalizeRuntimeConnectionAssociationOpenApiAddition(
@@ -6483,6 +6518,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isRuntimeSkillReadGrantCommandOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserEvidenceOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserOperationFactOpenApiAddition(previous, current) &&
+			!isLocalToolBoundaryOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserWorkloadIdentityOpenApiAddition(previous, current) &&
 			!isPilotBrowserProjectionOpenApiAddition(previous, current) &&
 			!isApplicationProjectionLifecycleFieldsOpenApiAddition(

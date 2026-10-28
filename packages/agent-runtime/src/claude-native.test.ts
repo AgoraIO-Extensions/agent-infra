@@ -869,6 +869,35 @@ it("publishes a Claude answer reference written by the Write tool after the SDK 
 	f.release();
 	await f.settled(accepted.nativeSessionRef, command.executionId);
 	// Write 本身不发布结果文件，只有最终回答中的引用发布一次。
+	const persisted = JSON.parse(
+		await readFile(join(root, accepted.nativeSessionRef, "state.json"), "utf8"),
+	);
+	const writeFacts = persisted.turns
+		.find(
+			(turn: { executionId: string }) =>
+				turn.executionId === command.executionId,
+		)
+		.operationFacts.filter(
+			(fact: { toolId?: string }) => fact.toolId === "Write",
+		);
+	expect(writeFacts.map((fact: { phase: string }) => fact.phase)).toEqual([
+		"started",
+		"completed",
+	]);
+	expect(
+		writeFacts.every(
+			(fact: { startedAt?: string; durationMs?: number }) =>
+				fact.startedAt === undefined && fact.durationMs === undefined,
+		),
+	).toBe(true);
+	expect(
+		persisted.turns[0].operationFacts
+			.filter(
+				(fact: { toolId?: string }) =>
+					fact.toolId === "workspace.publish_result_file",
+			)
+			.map((fact: { phase: string }) => fact.phase),
+	).toEqual(["intent", "started", "completed"]);
 	expect(writeResult).toHaveBeenCalledOnce();
 	expect(writeResult.mock.calls[0]?.[0]).toMatchObject({
 		name: "report.txt",
@@ -897,6 +926,10 @@ it("publishes a Claude answer reference written by the Write tool after the SDK 
 				event.payload.phase === "completed",
 		),
 	).toBe(true);
+	await f.restart();
+	expect(
+		await f.driver.replayEvents(accepted.nativeSessionRef, command.executionId),
+	).toEqual(events);
 }, 30000);
 
 it.for([
@@ -1311,6 +1344,30 @@ it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
 		};
 		await runShell(0, "first-proof.json", false);
 		await f.settled(accepted.nativeSessionRef, firstCommand.executionId);
+		const persisted = JSON.parse(
+			await readFile(
+				join(root, accepted.nativeSessionRef, "state.json"),
+				"utf8",
+			),
+		);
+		const shellFacts = persisted.turns
+			.find(
+				(turn: { executionId: string }) =>
+					turn.executionId === firstCommand.executionId,
+			)
+			.operationFacts.filter(
+				(fact: { toolId?: string }) => fact.toolId === "Bash",
+			);
+		expect(shellFacts.map((fact: { phase: string }) => fact.phase)).toEqual([
+			"started",
+			"completed",
+		]);
+		expect(
+			shellFacts.every(
+				(fact: { startedAt?: string; durationMs?: number }) =>
+					fact.startedAt === undefined && fact.durationMs === undefined,
+			),
+		).toBe(true);
 		const events = await f.driver.replayEvents(
 			accepted.nativeSessionRef,
 			firstCommand.executionId,

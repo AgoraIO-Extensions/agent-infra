@@ -7,7 +7,6 @@ import {
 } from "./workspace-path.js";
 
 export type ClaudeToolOperationCallbacks = Readonly<{
-	onIntent?: (toolUseId: string, toolName: string) => Promise<void>;
 	onStarted?: (toolUseId: string, toolName: string) => Promise<void>;
 	onCompleted?: (toolUseId: string, toolName: string) => Promise<void>;
 	onFailed?: (
@@ -195,17 +194,7 @@ export function claudeWorkspaceTools(
 								updatedInput !== undefined &&
 								(!onToolOperation?.authorize ||
 									(await onToolOperation.authorize()));
-							if (
-								allowed &&
-								onToolOperation &&
-								input.hook_event_name === "PreToolUse"
-							)
-								await onToolOperation.onIntent?.(
-									typeof input.tool_use_id === "string"
-										? input.tool_use_id
-										: "unknown-tool-use",
-									input.tool_name,
-								);
+
 							const output = {
 								hookSpecificOutput: {
 									hookEventName: "PreToolUse" as const,

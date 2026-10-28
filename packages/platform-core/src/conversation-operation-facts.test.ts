@@ -489,3 +489,52 @@ describe("actual operation facts", () => {
 		expect(events.runtimeCursor()).toBe("cursor-2");
 	});
 });
+
+describe("sandbox-local tool observations", () => {
+	const local = {
+		kind: "tool" as const,
+		toolId: "Bash",
+		operationRef: "local",
+		attemptRef: "local-attempt",
+		executionBoundary: "sandbox-local" as const,
+		phase: "started" as const,
+	};
+	it("accepts started-first local history without inventing an intent or duration", () => {
+		const first = parseConversationOperationFactV2(local);
+		const completed = parseConversationOperationFactV2({
+			...local,
+			phase: "completed",
+		});
+		expect(() =>
+			requireConversationOperationSuccessorV2([], first),
+		).not.toThrow();
+		expect(() =>
+			requireConversationOperationSuccessorV2([first], completed),
+		).not.toThrow();
+		expect(first.startedAt).toBeUndefined();
+		expect(completed.durationMs).toBeUndefined();
+	});
+	it("keeps mediated operations intent-first and the boundary immutable", () => {
+		const { executionBoundary: _boundary, ...unmarked } = local;
+		expect(() =>
+			requireConversationOperationSuccessorV2([], unmarked),
+		).toThrow();
+		expect(() =>
+			requireConversationOperationSuccessorV2([local], {
+				...unmarked,
+				phase: "completed",
+			}),
+		).toThrow();
+		for (const patch of [
+			{ phase: "intent" },
+			{ toolId: "mcp.connection" },
+			{ toolId: "workspace.publish_result_file" },
+			{ executionBoundary: "other" },
+			{ connection: {} },
+			{ browser: {} },
+		])
+			expect(() =>
+				parseConversationOperationFactV2({ ...local, ...patch }),
+			).toThrow();
+	});
+});

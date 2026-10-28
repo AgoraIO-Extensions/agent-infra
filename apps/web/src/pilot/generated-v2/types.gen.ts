@@ -1519,6 +1519,7 @@ export type RuntimeOperationFactV2 = {
     };
     connection?: RuntimeConnectionAssociationV1;
     durationMs?: number;
+    executionBoundary?: 'sandbox-local';
     failureCode?: RuntimeOperationFailureV2;
     finishedAt?: string;
     kind: 'tool';

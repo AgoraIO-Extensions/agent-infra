@@ -6197,3 +6197,60 @@ it("admits only application credential audit registration #3626", async () => {
 		await rm(directory, { recursive: true, force: true });
 	}
 });
+
+it("accepts only the exact optional sandbox-local tool classification addition", async () => {
+	const directory = await mkdtemp(resolve(tmpdir(), "local-tool-compat-"));
+	try {
+		const previous = {
+			openapi: "3.1.0",
+			info: { title: "fixture", version: "1" },
+			paths: {},
+			components: {
+				schemas: {
+					RuntimeOperationFactV2: {
+						type: "object",
+						additionalProperties: false,
+						required: ["kind", "operationRef", "attemptRef", "toolId", "phase"],
+						properties: {
+							kind: { const: "tool", type: "string" },
+							operationRef: { type: "string" },
+							attemptRef: { type: "string" },
+							toolId: { type: "string" },
+							phase: { type: "string" },
+						},
+					},
+				},
+			},
+		};
+		const before = resolve(directory, "before.json");
+		const after = resolve(directory, "after.json");
+		await writeFile(before, JSON.stringify(previous));
+		for (const variant of [
+			"exact",
+			"wide",
+			"required",
+			"other-change",
+		] as const) {
+			const current = structuredClone(previous) as typeof previous & {
+				components: {
+					schemas: {
+						RuntimeOperationFactV2: { properties: Record<string, unknown> };
+					};
+				};
+			};
+			const schema = current.components.schemas.RuntimeOperationFactV2;
+			schema.properties.executionBoundary =
+				variant === "wide"
+					? { type: "string" }
+					: { type: "string", const: "sandbox-local" };
+			if (variant === "required") schema.required.push("executionBoundary");
+			if (variant === "other-change") schema.additionalProperties = true;
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status, variant).toBe(
+				variant === "exact" ? 0 : 1,
+			);
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
