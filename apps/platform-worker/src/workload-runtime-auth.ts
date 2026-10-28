@@ -300,7 +300,12 @@ export function codexContainerBoundaryEnvironmentV1(input: {
 }): V1EnvVar[] {
 	if (!input.enabled) return [];
 	const serviceToken = input.serviceToken;
-	if (serviceToken === undefined) throw new Error("policy");
+	if (
+		serviceToken === undefined ||
+		!/^[\x21-\x7e]{1,8192}$/u.test(serviceToken) ||
+		!/^[\x21-\x7e]{1,256}$/u.test(input.scope)
+	)
+		throw new Error("policy");
 	return [
 		{ name: "AGENT_INFRA_RUNTIME_ISOLATION_MODE", value: "container-boundary" },
 		{
