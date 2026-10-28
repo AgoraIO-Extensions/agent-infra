@@ -6,8 +6,10 @@ import {
 	lstat,
 	mkdir,
 	open,
+	readlink,
 	rename,
 	rmdir,
+	symlink,
 	unlink,
 } from "node:fs/promises";
 import { hostname } from "node:os";
@@ -34,7 +36,12 @@ type Journal = {
 	pid: number;
 	entries: Entry[];
 };
-type Operations = { rename: typeof rename; link: typeof link };
+type Operations = {
+	rename: typeof rename;
+	link: typeof link;
+	open?: typeof open;
+	symlink?: typeof symlink;
+};
 const operations: Operations = { rename, link };
 
 export async function loginOutputBytes(file: string): Promise<Buffer | null> {
@@ -74,8 +81,8 @@ async function exists(file: string) {
 		throw error;
 	}
 }
-async function durable(file: string, bytes: string | Buffer) {
-	const handle = await open(file, "wx", 0o600);
+async function durable(file: string, bytes: string | Buffer, create = open) {
+	const handle = await create(file, "wx", 0o600);
 	try {
 		await handle.writeFile(bytes);
 		await handle.sync();
@@ -163,7 +170,35 @@ async function rollback(journal: Journal, io: Operations) {
 	assert(!conflict, "LOGIN_OUTPUT_RECOVERY_REQUIRED");
 }
 
+async function journalDirectory(identityFile: string) {
+	await loginOutputBytes(identityFile);
+	const gate = pending(identityFile);
+	const gateMetadata = await lstat(gate);
+	assert.equal(gateMetadata.uid, process.getuid?.());
+	const directory = gateMetadata.isSymbolicLink() ? await readlink(gate) : gate;
+	if (directory !== gate) {
+		assert(
+			directory.startsWith(`${gate}.`) &&
+				/^[a-f0-9-]{36}\.prepared$/u.test(directory.slice(gate.length + 1)),
+			"LOGIN_OUTPUT_RECOVERY_CONFLICT",
+		);
+	}
+	const metadata = await lstat(directory);
+	assert(
+		metadata.isDirectory() &&
+			!metadata.isSymbolicLink() &&
+			metadata.uid === process.getuid?.() &&
+			(metadata.mode & 0o077) === 0,
+	);
+	return directory;
+}
+
 async function cleanJournal(identityFile: string, journal: Journal) {
+	const directory = await journalDirectory(identityFile);
+	assert(
+		directory === pending(identityFile) ||
+			directory === `${pending(identityFile)}.${journal.generation}.prepared`,
+	);
 	for (const entry of journal.entries) {
 		await remove(entry.backup);
 		await remove(entry.staged);
@@ -172,9 +207,12 @@ async function cleanJournal(identityFile: string, journal: Journal) {
 	// Atomically release the gate only after recovery/commit and backup retirement.
 	const retired = `${pending(identityFile)}.${journal.generation}.retired`;
 	await rename(pending(identityFile), retired);
-	await remove(join(retired, "committed"));
-	await remove(join(retired, "journal.json"));
-	await rmdir(retired);
+	const contents = directory === pending(identityFile) ? retired : directory;
+	await remove(join(contents, "committed"));
+	await remove(join(contents, "commit.next"));
+	await remove(join(contents, "journal.json"));
+	await rmdir(contents);
+	if (contents !== retired) await remove(retired);
 }
 
 /** Explicit recovery only, and never while the originating local process may still run. */
@@ -183,14 +221,7 @@ export async function recoverLoginOutputs(
 	declaredFiles: readonly string[],
 	io = operations,
 ) {
-	const directory = pending(identityFile);
-	const metadata = await lstat(directory);
-	assert(
-		metadata.isDirectory() &&
-			!metadata.isSymbolicLink() &&
-			metadata.uid === process.getuid?.() &&
-			(metadata.mode & 0o077) === 0,
-	);
+	const directory = await journalDirectory(identityFile);
 	const journal: Journal = await privateJson(join(directory, "journal.json"));
 	assert(
 		journal.schemaVersion === 1 &&
@@ -198,6 +229,10 @@ export async function recoverLoginOutputs(
 			journal.hostname === hostname() &&
 			Number.isSafeInteger(journal.pid) &&
 			journal.pid > 1,
+	);
+	assert(
+		directory === pending(identityFile) ||
+			directory === `${pending(identityFile)}.${journal.generation}.prepared`,
 	);
 	let dead = false;
 	try {
@@ -271,12 +306,21 @@ export async function promoteLoginOutputs(
 			before.get(entry.file),
 			"LOGIN_OUTPUT_CHANGED",
 		);
-	await mkdir(pending(identityFile), { mode: 0o700 });
-	// Persist the entire recovery plan before moving any declared output.
-	await durable(
-		join(pending(identityFile), "journal.json"),
-		`${JSON.stringify(journal)}\n`,
-	);
+	const prepared = `${pending(identityFile)}.${generation}.prepared`;
+	await mkdir(prepared, { mode: 0o700 });
+	try {
+		await durable(
+			join(prepared, "journal.json"),
+			`${JSON.stringify(journal)}\n`,
+			io.open,
+		);
+		// symlink is an atomic exclusive publish, even against an old empty gate.
+		await (io.symlink ?? symlink)(prepared, pending(identityFile));
+	} catch (error) {
+		await remove(join(prepared, "journal.json"));
+		await rmdir(prepared);
+		throw error;
+	}
 	try {
 		for (const entry of journal.entries)
 			await durable(
@@ -312,7 +356,10 @@ export async function promoteLoginOutputs(
 		throw error;
 	}
 	// The durable commit distinguishes cleanup interruption from an incomplete promotion.
-	await durable(join(pending(identityFile), "committed"), generation);
+	const commitTemporary = join(prepared, "commit.next");
+	await durable(commitTemporary, generation, io.open);
+	await io.link(commitTemporary, join(prepared, "committed"));
+	await remove(commitTemporary);
 	// Once every output is verified, backups can be retired while the gate stays shut.
 	await cleanJournal(identityFile, journal);
 }

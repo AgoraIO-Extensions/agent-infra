@@ -319,8 +319,9 @@ HTTPS 必须通过系统信任或 `NODE_EXTRA_CA_CERTS` 验证；不跟随登录
 deploy/ack/redeploy.sh bootstrap-login
 ```
 
-登录输出采用私有提交门禁：所有主体验证完成后，先写 `identityFile.promotion` 恢复记录，
-再逐项发布身份、浏览器状态和蓝图。门禁存在期间，新登录和 `verifiedLoginCandidate` 均拒绝。
+登录输出采用私有提交门禁：所有主体验证完成后，先在私有 generation 目录写完整恢复记录，
+再独占创建 `identityFile.promotion` 符号链接门禁，逐项发布身份、浏览器状态和蓝图。
+提交标记也在完整写入后原子发布；初始化中断不会发布空日志或不完整提交标记。门禁存在期间，新登录和 `verifiedLoginCandidate` 均拒绝。
 失败时只回滚本次仍可核实的输出；并发写入保留，无法恢复时门禁及私有备份继续保留，不能发布混合材料。
 原始文件缺失会恢复为缺失。恢复记录/备份含敏感浏览器状态，只能留在原私有目录，禁止提交或打印。
 
@@ -332,8 +333,9 @@ node --experimental-strip-types deploy/ack/bootstrap-login.ts recover "$ACK_LOGI
 ```
 
 该命令不发起登录、部署或授权，只按已保存 generation 恢复；并发冲突未解决时保持失败。
-同主机 PID 被复用也会保守拒绝恢复。运行中断后残留的 `.retired` 目录只可能包含已完成的私有提交记录，
-不是恢复权限；它不会被新运行扫描或用于覆盖输出。
+同主机 PID 被复用也会保守拒绝恢复。旧的空门禁、损坏日志或非声明私有目录的链接仍保守拒绝。
+初始化或清理中断可能留下私有 `.prepared` 目录或 `.retired` 门禁；它们不是恢复权限，
+不会被新运行扫描或用于覆盖输出。上述恢复覆盖进程中断，不承诺机器掉电后的文件系统持久性。
 
 数据库、迁移和 Platform 就绪后，部署拥有者必须先通过真实 LDAP/浏览器登录生成一个新的
 Playwright `storageState`。工具不会接收 LDAP 密码，也不会模拟登录。将下列私有请求文件

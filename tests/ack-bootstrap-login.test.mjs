@@ -434,7 +434,12 @@ test("incomplete promotion blocks a fresh login before network I/O", async (t) =
 	assert.equal(f.calls.length, 0);
 });
 
-for (const stop of ["first-publish", "rollback-failure", "corrupted-backup"]) {
+for (const stop of [
+	"first-publish",
+	"rollback-failure",
+	"corrupted-backup",
+	"legacy-directory",
+]) {
 	test(`dead writer recovery restores originals after ${stop}`, async (t) => {
 		const f = await promotionFixture(t);
 		const { pathToFileURL } = await import("node:url");
@@ -479,6 +484,13 @@ try { await promoteLoginOutputs(input.identityFile,new Map(input.before.map(([p,
 			stop === "rollback-failure" ? 72 : 71,
 			result.stderr,
 		);
+		if (stop === "legacy-directory") {
+			const fs = await import("node:fs/promises");
+			const gate = `${f.config.identityFile}.promotion`;
+			const prepared = await fs.readlink(gate);
+			await fs.unlink(gate);
+			await fs.rename(prepared, gate);
+		}
 		const {
 			assertLoginOutputsCommitted,
 			recoverLoginOutputs,
@@ -525,3 +537,304 @@ try { await promoteLoginOutputs(input.identityFile,new Map(input.before.map(([p,
 		assert.equal((await bootstrapLogin(f.file, source)).loginVerified, true);
 	});
 }
+
+for (const stop of [
+	"journal-open",
+	"journal-partial",
+	"journal-ready",
+	"gate-published",
+	"commit-open",
+	"commit-partial",
+	"commit-published",
+]) {
+	test(`process exit at ${stop} leaves only a complete published recovery decision`, async (t) => {
+		const f = await promotionFixture(t);
+		const fs = await import("node:fs/promises");
+		const module = new URL(
+			"../deploy/ack/login-output-promotion.ts",
+			import.meta.url,
+		).href;
+		const inputFile = await f.save(
+			join(f.directory, "interruption-input.json"),
+			{
+				identityFile: f.config.identityFile,
+				before: [...f.before].map(([file, bytes]) => [
+					file,
+					bytes?.toString("base64") ?? null,
+				]),
+				outputs: [...f.outputs],
+			},
+		);
+		const code = `
+import * as fs from 'node:fs/promises';
+import { promoteLoginOutputs } from ${JSON.stringify(module)};
+const stop = ${JSON.stringify(stop)};
+const input = JSON.parse(await fs.readFile(${JSON.stringify(inputFile)}, 'utf8'));
+await promoteLoginOutputs(input.identityFile,
+ new Map(input.before.map(([p,b]) => [p,b === null ? null : Buffer.from(b,'base64')])),
+ new Map(input.outputs), {
+ rename: fs.rename,
+ open: async (file, ...args) => {
+  const handle = await fs.open(file, ...args);
+  const kind = String(file).endsWith('journal.json') ? 'journal' : 'commit';
+  if (stop === kind + '-open') process.exit(73);
+  return {
+   writeFile: async bytes => {
+    if (stop === kind + '-partial') {
+     await handle.writeFile(bytes.slice(0, 3));
+     await handle.sync();
+     process.exit(73);
+    }
+    return handle.writeFile(bytes);
+   },
+   sync: () => handle.sync(), close: () => handle.close()
+  };
+ },
+ symlink: async (from, to) => {
+  if (stop === 'journal-ready') process.exit(73);
+  await fs.symlink(from, to);
+  if (stop === 'gate-published') process.exit(73);
+ },
+ link: async (from, to) => {
+  await fs.link(from, to);
+  if (stop === 'commit-published' && String(to).endsWith('/committed')) process.exit(73);
+ }
+});
+`;
+		const result = spawnSync(
+			process.execPath,
+			["--experimental-strip-types", "--input-type=module", "-e", code],
+			{ encoding: "utf8" },
+		);
+		assert.equal(result.status, 73, result.stderr);
+		const {
+			assertLoginOutputsCommitted,
+			recoverLoginOutputs,
+			loginOutputBytes,
+			promoteLoginOutputs,
+		} = await import(module);
+		const gate = `${f.config.identityFile}.promotion`;
+		const beforeGate = stop.startsWith("journal-");
+		if (beforeGate) {
+			await assertLoginOutputsCommitted(f.config.identityFile);
+			const names = await fs.readdir(f.directory);
+			assert.equal(
+				names.filter((name) => name.endsWith(".prepared")).length,
+				1,
+			);
+			assert(!names.some((name) => /\.(next|before|rollback)$/u.test(name)));
+		} else {
+			await assert.rejects(
+				assertLoginOutputsCommitted(f.config.identityFile),
+				/PROMOTION_INCOMPLETE/,
+			);
+			const prepared = await fs.readlink(gate);
+			const journal = JSON.parse(
+				await fs.readFile(join(prepared, "journal.json"), "utf8"),
+			);
+			assert.equal(prepared, `${gate}.${journal.generation}.prepared`);
+			await assert.rejects(
+				verifiedLoginCandidate(f.file, source, f.config.origin),
+			);
+			if (stop.startsWith("commit-") && stop !== "commit-published") {
+				await assert.rejects(fs.lstat(join(prepared, "committed")), {
+					code: "ENOENT",
+				});
+				assert.equal(
+					(await fs.readFile(join(prepared, "commit.next"))).length,
+					stop === "commit-open" ? 0 : 3,
+				);
+			}
+			await recoverLoginOutputs(f.config.identityFile, [...f.outputs.keys()]);
+			await assert.rejects(fs.lstat(prepared), { code: "ENOENT" });
+			await assertLoginOutputsCommitted(f.config.identityFile);
+		}
+		for (const [file, before] of f.before) {
+			const expected =
+				stop === "commit-published"
+					? Buffer.from(`${JSON.stringify(f.outputs.get(file), null, 2)}\n`)
+					: before;
+			assert.deepEqual(await loginOutputBytes(file), expected);
+		}
+		if (beforeGate) {
+			await promoteLoginOutputs(f.config.identityFile, f.before, f.outputs);
+			await assertLoginOutputsCommitted(f.config.identityFile);
+		}
+	});
+}
+
+for (const existing of [
+	"empty-directory",
+	"truncated-directory",
+	"other-writer-symlink",
+]) {
+	test(`gate publication preserves a concurrent ${existing} and cleans only its own preparation`, async (t) => {
+		const f = await promotionFixture(t);
+		const fs = await import("node:fs/promises");
+		const { randomUUID } = await import("node:crypto");
+		const { promoteLoginOutputs, recoverLoginOutputs, loginOutputBytes } =
+			await import("../deploy/ack/login-output-promotion.ts");
+		const gate = `${f.config.identityFile}.promotion`;
+		let otherDirectory;
+		let gateInode;
+		await assert.rejects(
+			promoteLoginOutputs(f.config.identityFile, f.before, f.outputs, {
+				rename: fs.rename,
+				link: fs.link,
+				symlink: async (from, to) => {
+					otherDirectory =
+						existing === "other-writer-symlink"
+							? `${gate}.${randomUUID()}.prepared`
+							: gate;
+					await fs.mkdir(otherDirectory, { mode: 0o700 });
+					if (existing !== "empty-directory")
+						await fs.writeFile(join(otherDirectory, "journal.json"), "{", {
+							mode: 0o600,
+						});
+					if (existing === "other-writer-symlink")
+						await fs.symlink(otherDirectory, gate);
+					gateInode = (await fs.lstat(gate)).ino;
+					return fs.symlink(from, to);
+				},
+			}),
+			{ code: "EEXIST" },
+		);
+		assert.equal((await fs.lstat(gate)).ino, gateInode);
+		assert.deepEqual(
+			(await fs.readdir(f.directory)).filter((name) =>
+				name.endsWith(".prepared"),
+			),
+			existing === "other-writer-symlink"
+				? [otherDirectory.split("/").at(-1)]
+				: [],
+		);
+		await assert.rejects(
+			recoverLoginOutputs(f.config.identityFile, [...f.outputs.keys()]),
+		);
+		assert.equal((await fs.lstat(gate)).ino, gateInode);
+		for (const [file, before] of f.before)
+			assert.deepEqual(await loginOutputBytes(file), before);
+	});
+}
+
+for (const invalid of [
+	"outside-target",
+	"relative-target",
+	"linked-directory",
+	"public-directory",
+	"generation-mismatch",
+]) {
+	test(`recovery rejects ${invalid} without following an undeclared journal`, async (t) => {
+		const f = await promotionFixture(t);
+		const fs = await import("node:fs/promises");
+		const { randomUUID } = await import("node:crypto");
+		const { hostname } = await import("node:os");
+		const {
+			recoverLoginOutputs,
+			assertLoginOutputsCommitted,
+			loginOutputBytes,
+		} = await import("../deploy/ack/login-output-promotion.ts");
+		const gate = `${f.config.identityFile}.promotion`;
+		const generation = randomUUID();
+		const prepared = `${gate}.${generation}.prepared`;
+		const unrelated = join(f.directory, "unrelated-private-directory");
+		await fs.mkdir(unrelated, { mode: 0o700 });
+		await fs.writeFile(join(unrelated, "journal.json"), "unrelated-evidence", {
+			mode: 0o600,
+		});
+		let target = prepared;
+		if (invalid === "outside-target") target = unrelated;
+		else if (invalid === "relative-target")
+			target = "unrelated-private-directory";
+		else if (invalid === "linked-directory")
+			await fs.symlink(unrelated, prepared);
+		else {
+			await fs.mkdir(prepared, { mode: 0o700 });
+			if (invalid === "public-directory") await fs.chmod(prepared, 0o755);
+			await fs.writeFile(
+				join(prepared, "journal.json"),
+				JSON.stringify({
+					schemaVersion: 1,
+					generation: randomUUID(),
+					hostname: hostname(),
+					pid: 2147483647,
+					entries: [],
+				}),
+				{ mode: 0o600 },
+			);
+		}
+		await fs.symlink(target, gate);
+		await assert.rejects(
+			recoverLoginOutputs(f.config.identityFile, [...f.outputs.keys()]),
+		);
+		assert.equal(await fs.readlink(gate), target);
+		assert.equal(
+			await fs.readFile(join(unrelated, "journal.json"), "utf8"),
+			"unrelated-evidence",
+		);
+		await assert.rejects(
+			assertLoginOutputsCommitted(f.config.identityFile),
+			/PROMOTION_INCOMPLETE/,
+		);
+		for (const [file, before] of f.before)
+			assert.deepEqual(await loginOutputBytes(file), before);
+	});
+}
+
+test("failed journal write removes only its unpublished preparation", async (t) => {
+	const f = await promotionFixture(t);
+	const fs = await import("node:fs/promises");
+	const { promoteLoginOutputs, assertLoginOutputsCommitted, loginOutputBytes } =
+		await import("../deploy/ack/login-output-promotion.ts");
+	await assert.rejects(
+		promoteLoginOutputs(f.config.identityFile, f.before, f.outputs, {
+			rename: fs.rename,
+			link: fs.link,
+			open: async (...args) => {
+				const handle = await fs.open(...args);
+				return {
+					writeFile: async (bytes) => {
+						await handle.writeFile(bytes.slice(0, 3));
+						throw new Error("INJECTED_JOURNAL_WRITE_FAILURE");
+					},
+					sync: () => handle.sync(),
+					close: () => handle.close(),
+				};
+			},
+		}),
+		/INJECTED_JOURNAL_WRITE_FAILURE/,
+	);
+	assert(
+		!(await fs.readdir(f.directory)).some((name) => name.endsWith(".prepared")),
+	);
+	await assertLoginOutputsCommitted(f.config.identityFile);
+	for (const [file, before] of f.before)
+		assert.deepEqual(await loginOutputBytes(file), before);
+});
+
+test("commit publication never overwrites an existing marker", async (t) => {
+	const f = await promotionFixture(t);
+	const fs = await import("node:fs/promises");
+	const { promoteLoginOutputs, assertLoginOutputsCommitted } = await import(
+		"../deploy/ack/login-output-promotion.ts"
+	);
+	let marker;
+	await assert.rejects(
+		promoteLoginOutputs(f.config.identityFile, f.before, f.outputs, {
+			rename: fs.rename,
+			link: async (from, to) => {
+				if (String(to).endsWith("/committed")) {
+					marker = to;
+					await fs.writeFile(to, "other-marker", { flag: "wx", mode: 0o600 });
+				}
+				return fs.link(from, to);
+			},
+		}),
+		{ code: "EEXIST" },
+	);
+	assert.equal(await fs.readFile(marker, "utf8"), "other-marker");
+	await assert.rejects(
+		assertLoginOutputsCommitted(f.config.identityFile),
+		/PROMOTION_INCOMPLETE/,
+	);
+});
