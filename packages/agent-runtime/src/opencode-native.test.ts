@@ -761,9 +761,9 @@ it.skipIf(!process.env.OPENCODE_EXECUTABLE)(
 							observedModelRequests: fixture.modelRequests().length,
 							webFetchRequests: gets,
 							status,
-							toolPhases: events
-								.filter((event) => event.type === "tool")
-								.map((event) => event.payload.phase),
+							toolPhases: events.flatMap((event) =>
+								event.type === "tool" ? [event.payload.phase] : [],
+							),
 						}),
 						{ cause: error },
 					);
