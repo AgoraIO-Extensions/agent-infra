@@ -681,10 +681,30 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const turn = file
 			.read()
 			.turns.find((item) => item.executionId === action.executionId);
+		const fact = turn?.operationFacts
+			?.filter(
+				(entry) =>
+					entry.kind === "model" &&
+					entry.operationRef === action.operationRef &&
+					entry.attemptRef === action.attemptRef,
+			)
+			.at(-1);
+		const selectedModel =
+			turn &&
+			this.options.modelOptions.find(
+				(option) => option.modelOptionId === turn.selection.modelOptionId,
+			);
 		if (
 			!turn ||
-			turn.operationRef !== action.operationRef ||
-			turn.attemptRef !== action.attemptRef
+			!fact ||
+			fact.kind !== "model" ||
+			!["intent", "started"].includes(fact.phase) ||
+			fact.model.configVersion !== turn.configVersion ||
+			fact.model.modelOptionId !== turn.selection.modelOptionId ||
+			fact.model.modelId !== selectedModel?.model ||
+			(action.operationRef === turn.operationRef
+				? action.attemptRef !== turn.attemptRef
+				: fact.parentOperationRef !== turn.operationRef)
 		)
 			runtimeAuthorizationDenied();
 	}
@@ -1665,9 +1685,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			...modelFact,
 			phase: "intent",
 		});
-		let modelPhase: "intent" | "started" | "completed" | "failed" | "unknown" =
-			"intent";
-		let modelStartedAt: number | undefined;
+		const networkPermits = new Map<
+			string,
+			{ name: "WebFetch" | "WebSearch"; used: boolean }
+		>();
+		let modelRequests = 0;
+		let primaryIssued = false;
 		let admitted: () => void = () => {};
 		const admission = new Promise<void>((resolve) => {
 			admitted = resolve;
@@ -1687,64 +1710,123 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const transport = await openRuntimeMessagesTransport({
 			...option,
 			effort: selection.reasoningLevel,
-			...(this.options.authorizeModelAction
-				? {
-						resolveCredential: async () => {
-							const authorized = await this.options.authorizeModelAction?.({
-								kind: "model",
-								nativeSessionRef: ref,
-								executionId: command.executionId,
-								runtimeOperationId: command.executionId,
-								operationRef,
-								attemptRef,
-							});
-							if (!authorized?.relayKey)
-								throw new Error("RUNTIME_AUTHORIZATION_DENIED");
-							return authorized.relayKey;
-						},
-					}
-				: {}),
-			receipt: async (response, endTurn, diagnostic) => {
-				const now = Date.now();
-				if (response === "sent" && modelPhase === "intent") {
-					modelStartedAt = now;
-					modelPhase = "started";
-					await this.recordFact(file, command.executionId, {
-						...modelFact,
-						phase: "started",
-						startedAt: new Date(now).toISOString(),
-					});
-				} else if (
-					modelStartedAt !== undefined &&
-					modelPhase === "started" &&
-					(response === "completed" ||
-						response === "failed" ||
-						response === "unknown")
-				) {
-					modelPhase = response;
-					await this.recordFact(file, command.executionId, {
-						...modelFact,
-						phase: response,
-						finishedAt: new Date(now).toISOString(),
-						durationMs: Math.max(0, now - modelStartedAt),
-						...(response === "failed"
-							? { failureCode: "operation_failed" as const }
-							: response === "unknown"
-								? { failureCode: "recovery_unconfirmed" as const }
-								: {}),
-					});
+			openRequest: async (purpose) => {
+				if (this.closed || modelRequests >= 64) unavailable();
+				if (purpose === "web-fetch" || purpose === "web-search") {
+					const name = purpose === "web-fetch" ? "WebFetch" : "WebSearch";
+					const permit = [...networkPermits.values()].find(
+						(entry) => entry.name === name && !entry.used,
+					);
+					if (!permit) throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+					permit.used = true;
 				}
-				await file.update((state) => {
-					const turn =
-						state.turns.find(
-							(turn) => turn.executionId === command.executionId,
-						) ?? unavailable();
-					turn.modelResponse = {
-						state: response,
-						endTurn,
-						...(diagnostic === undefined ? {} : { diagnostic }),
-					};
-				});
+				modelRequests++;
+				const first = purpose === "main" && !primaryIssued;
+				if (first) primaryIssued = true;
+				const requestFact = first
+					? modelFact
+					: {
+							...modelFact,
+							operationRef: randomUUID(),
+							attemptRef: randomUUID(),
+							parentOperationRef: operationRef,
+							model: {
+								...modelFact.model,
+								...(purpose === "main" ? {} : { reasoningLevel: undefined }),
+							},
+						};
+				if (!first)
+					await this.recordFact(file, command.executionId, {
+						...requestFact,
+						phase: "intent",
+					});
+				let phase: "intent" | "started" | "completed" | "failed" | "unknown" =
+					"intent";
+				let startedAt: number | undefined;
+				let revalidate: (() => void) | undefined;
+				return {
+					revalidate: () => {
+						if (
+							this.closed ||
+							file
+								.read()
+								.turns.find((turn) => turn.executionId === command.executionId)
+								?.status !== "running"
+						)
+							throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+						revalidate?.();
+					},
+					resolveCredential: async () => {
+						if (
+							this.closed ||
+							file
+								.read()
+								.turns.find((turn) => turn.executionId === command.executionId)
+								?.status !== "running"
+						)
+							throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+						if (!this.options.authorizeModelAction)
+							return option.credential ?? "";
+						const authorization = await this.options.authorizeModelAction({
+							kind: "model",
+							nativeSessionRef: ref,
+							executionId: command.executionId,
+							runtimeOperationId: command.executionId,
+							operationRef: requestFact.operationRef,
+							attemptRef: requestFact.attemptRef,
+						});
+						if (!authorization?.relayKey)
+							throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+						revalidate = authorization.revalidate;
+						return authorization.relayKey;
+					},
+					receipt: async (response, endTurn, diagnostic) => {
+						const now = Date.now();
+						if (response === "sent" && phase === "intent") {
+							await this.recordFact(file, command.executionId, {
+								...requestFact,
+								phase: "started",
+								startedAt: new Date(now).toISOString(),
+							});
+							startedAt = now;
+							phase = "started";
+						} else if (
+							(phase === "started" || phase === "intent") &&
+							response !== "sent"
+						) {
+							await this.recordFact(file, command.executionId, {
+								...requestFact,
+								phase: response,
+								...(startedAt === undefined
+									? {}
+									: {
+											startedAt: new Date(startedAt).toISOString(),
+											durationMs: Math.max(0, now - startedAt),
+										}),
+								finishedAt: new Date(now).toISOString(),
+								...(diagnostic?.usage ? { usage: diagnostic.usage } : {}),
+								...(response === "failed"
+									? { failureCode: "operation_failed" as const }
+									: response === "unknown"
+										? { failureCode: "recovery_unconfirmed" as const }
+										: {}),
+							});
+							phase = response;
+						}
+						if (purpose === "main")
+							await file.update((state) => {
+								const turn =
+									state.turns.find(
+										(turn) => turn.executionId === command.executionId,
+									) ?? unavailable();
+								turn.modelResponse = {
+									state: response,
+									endTurn,
+									...(diagnostic ? { diagnostic } : {}),
+								};
+							});
+					},
+				};
 			},
 			admit,
 		});
@@ -1912,6 +1994,23 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			}
 		>();
 		const toolOperations: ClaudeToolOperationCallbacks = {
+			authorizeNetwork: async (toolUseId, name) => {
+				if (
+					this.closed ||
+					file
+						.read()
+						.turns.find((turn) => turn.executionId === command.executionId)
+						?.status !== "running"
+				)
+					return false;
+				if (!networkPermits.has(toolUseId)) {
+					// Native auxiliary HTTP has no tool-use ID: admit one unambiguous
+					// network invocation at a time instead of guessing a concurrent owner.
+					if (networkPermits.size >= 1) return false;
+					networkPermits.set(toolUseId, { name, used: false });
+				}
+				return true;
+			},
 			authorize: async () => {
 				if (this.closed || handle?.retiring) return false;
 				return (
@@ -1950,6 +2049,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				);
 			},
 			onCompleted: async (toolUseId, toolName) => {
+				networkPermits.delete(toolUseId);
 				const tool = toolFacts.get(toolUseId);
 				if (!tool) return;
 				const finishedAt = Date.now();
@@ -1965,6 +2065,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				toolFacts.delete(toolUseId);
 			},
 			onFailed: async (toolUseId, toolName, durationMs) => {
+				networkPermits.delete(toolUseId);
 				const tool = toolFacts.get(toolUseId);
 				if (!tool) return;
 				await this.recordFact(file, command.executionId, {
@@ -1982,6 +2083,21 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			},
 		};
 		const settleToolFacts = async () => {
+			if (!primaryIssued) {
+				const current = file
+					.read()
+					.turns.find((turn) => turn.executionId === command.executionId);
+				const primary = current?.operationFacts
+					?.filter((fact) => fact.operationRef === operationRef)
+					.at(-1);
+				if (primary?.phase === "intent")
+					await this.recordFact(file, command.executionId, {
+						...modelFact,
+						phase: "failed",
+						failureCode: "request_rejected",
+						finishedAt: new Date().toISOString(),
+					});
+			}
 			for (const [toolUseId, tool] of toolFacts) {
 				await this.recordFact(file, command.executionId, {
 					kind: "tool",
@@ -2061,6 +2177,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						ANTHROPIC_BASE_URL: transport.modelAccess.endpoint,
 						ANTHROPIC_AUTH_TOKEN: transport.modelAccess.credential,
 						CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+						ANTHROPIC_SMALL_FAST_MODEL: option.model,
+						ANTHROPIC_DEFAULT_HAIKU_MODEL: option.model,
 						...(shellAvailable ? claudeShellEnvironment(workspace) : {}),
 					},
 					sandbox: { enabled: false },
@@ -2099,6 +2217,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			if (standardMcp) await standardMcp.close().catch(() => {});
 			browserAbortController.abort();
 			await transport.close();
+			await settleToolFacts();
 			return result(command, ref, unknownResult);
 		}
 		if (command.kind === "native-command") {
@@ -2230,6 +2349,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						// unavailable 工具，不让本轮失败。
 						const name =
 							claudeWorkspaceToolNames.includes(requested) ||
+							["WebFetch", "WebSearch"].includes(requested) ||
 							requested.startsWith("mcp_")
 								? requested
 								: "unavailable";

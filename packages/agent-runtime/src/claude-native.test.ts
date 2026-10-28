@@ -1447,3 +1447,431 @@ it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
 	},
 	30_000,
 );
+
+it("executes native WebSearch with a separately authorized model request and per-request usage", async () => {
+	const f = await claudeNativeFixture(true);
+	fixtures.push(f);
+	f.hold();
+	const command = claudeCommand("web-search");
+	const accepted = await f.driver.execute(command);
+	await vi.waitFor(() => expect(f.calls).toHaveLength(1), { timeout: 10000 });
+	const first = f.calls[0];
+	if (!first) throw Error();
+	completeClaudeToolUses(
+		first.response,
+		"msg_main_search",
+		String(first.body.model),
+		"",
+		[
+			{
+				id: "web-search-call",
+				name: "WebSearch",
+				input: { query: "synthetic native search" },
+			},
+		],
+	);
+	await vi.waitFor(() => expect(f.calls).toHaveLength(2), { timeout: 10000 });
+	const side = f.calls[1];
+	if (!side) throw Error();
+	expect(side.body).toMatchObject({
+		model: first.body.model,
+		thinking: { type: "disabled" },
+		tool_choice: { type: "tool", name: "web_search" },
+		tools: [{ type: "web_search_20250305", name: "web_search" }],
+	});
+	side.response.writeHead(200, { "content-type": "text/event-stream" });
+	for (const event of [
+		{
+			type: "message_start",
+			message: {
+				id: "msg_side",
+				type: "message",
+				role: "assistant",
+				model: side.body.model,
+				content: [],
+				stop_reason: null,
+				stop_sequence: null,
+				usage: { input_tokens: 17, output_tokens: 0 },
+			},
+		},
+		{
+			type: "content_block_start",
+			index: 0,
+			content_block: {
+				type: "server_tool_use",
+				id: "srvtoolu_fixture",
+				name: "web_search",
+				input: {},
+			},
+		},
+		{
+			type: "content_block_delta",
+			index: 0,
+			delta: {
+				type: "input_json_delta",
+				partial_json: '{"query":"synthetic native search"}',
+			},
+		},
+		{ type: "content_block_stop", index: 0 },
+		{
+			type: "content_block_start",
+			index: 1,
+			content_block: {
+				type: "web_search_tool_result",
+				tool_use_id: "srvtoolu_fixture",
+				content: [
+					{
+						type: "web_search_result",
+						url: "https://content.fixture.invalid/page",
+						title: "Synthetic source",
+						encrypted_content: "synthetic-encrypted-content",
+					},
+				],
+			},
+		},
+		{ type: "content_block_stop", index: 1 },
+		{
+			type: "content_block_start",
+			index: 2,
+			content_block: { type: "text", text: "" },
+		},
+		{
+			type: "content_block_delta",
+			index: 2,
+			delta: { type: "text_delta", text: "Synthetic search answer" },
+		},
+		{ type: "content_block_stop", index: 2 },
+		{
+			type: "message_delta",
+			delta: { stop_reason: "end_turn", stop_sequence: null },
+			usage: { output_tokens: 9 },
+		},
+		{ type: "message_stop" },
+	])
+		side.response.write(
+			`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+		);
+	side.response.end();
+	await vi.waitFor(() => expect(f.calls).toHaveLength(3), { timeout: 10000 });
+	expect(JSON.stringify(f.calls[2]?.body.messages)).toContain(
+		"Synthetic search answer",
+	);
+	f.release();
+	await f.settled(accepted.nativeSessionRef, command.executionId);
+	const persisted = JSON.parse(
+		await readFile(
+			join(f.path, accepted.nativeSessionRef, "state.json"),
+			"utf8",
+		),
+	);
+	const facts = persisted.turns[0].operationFacts.filter(
+		(fact: { kind: string }) => fact.kind === "model",
+	);
+	const completed = facts.filter(
+		(fact: { phase: string }) => fact.phase === "completed",
+	);
+	expect(completed).toHaveLength(3);
+	expect(
+		new Set(
+			completed.map((fact: { operationRef: string }) => fact.operationRef),
+		).size,
+	).toBe(3);
+	expect(completed[1]).toMatchObject({
+		parentOperationRef: completed[0].operationRef,
+		usage: { inputTokens: 17, outputTokens: 9 },
+	});
+	for (const binding of [
+		completed[1],
+		{ ...completed[1], operationRef: "foreign-operation" },
+		{ ...completed[1], attemptRef: "foreign-attempt" },
+	]) {
+		await expect(
+			f.driver.validateExternalAction({
+				kind: "model",
+				nativeSessionRef: accepted.nativeSessionRef,
+				executionId: command.executionId,
+				runtimeOperationId: command.executionId,
+				operationRef: binding.operationRef,
+				attemptRef: binding.attemptRef,
+			}),
+		).rejects.toThrow();
+	}
+	expect(
+		facts.filter((fact: { phase: string }) => fact.phase === "intent"),
+	).toHaveLength(3);
+	const events = await f.driver.replayEvents(
+		accepted.nativeSessionRef,
+		command.executionId,
+	);
+	expect(
+		events
+			.filter(
+				(event) => event.type === "tool" && event.payload.name === "WebSearch",
+			)
+			.map((event) => (event.type === "tool" ? event.payload.phase : "")),
+	).toEqual(["started", "completed"]);
+	await f.restart();
+	expect(
+		await f.driver.replayEvents(accepted.nativeSessionRef, command.executionId),
+	).toEqual(events);
+	expect(f.calls).toHaveLength(3);
+}, 30000);
+
+it("executes native WebFetch with direct content retrieval and an independently accounted helper", async () => {
+	const { nativeNetworkFixture } = await import(
+		"./native-network.test-support.js"
+	);
+	const nativeQuery = await import("./claude-query.js");
+	const network = await nativeNetworkFixture();
+	const original = nativeQuery.claudeQuery;
+	const intercepted = vi
+		.spyOn(nativeQuery, "claudeQuery")
+		.mockImplementation((options, message) =>
+			original(
+				{ ...options, env: { ...options.env, ...network.env } },
+				message,
+			),
+		);
+	try {
+		const f = await fixture();
+		f.hold();
+		const command = claudeCommand("web-fetch");
+		const accepted = await f.driver.execute(command);
+		await vi.waitFor(() => expect(f.calls).toHaveLength(1), { timeout: 10000 });
+		const first = f.calls[0];
+		if (!first) throw Error();
+		completeClaudeToolUses(
+			first.response,
+			"msg_fetch",
+			String(first.body.model),
+			"",
+			[
+				{
+					id: "native-fetch",
+					name: "WebFetch",
+					input: { url: network.url, prompt: "Summarize synthetic content" },
+				},
+			],
+		);
+		await vi.waitFor(() => expect(f.calls).toHaveLength(2), { timeout: 10000 });
+		const helper = f.calls[1];
+		if (!helper) throw Error();
+		expect(helper.body).toMatchObject({
+			model: first.body.model,
+			thinking: { type: "disabled" },
+			tools: [],
+		});
+		completeClaudeResponse(
+			helper.response,
+			"msg_helper",
+			String(helper.body.model),
+			"Synthetic fetched summary",
+		);
+		await vi.waitFor(() => expect(f.calls).toHaveLength(3), { timeout: 10000 });
+		expect(JSON.stringify(f.calls[2]?.body.messages)).toContain(
+			"Synthetic fetched summary",
+		);
+		f.release();
+		await f.settled(accepted.nativeSessionRef, command.executionId);
+		expect(network.observed).toEqual([
+			{ host: "api.anthropic.com", domainCheck: true, credential: false },
+			{
+				host: "content.fixture.invalid",
+				domainCheck: false,
+				credential: false,
+			},
+		]);
+		const state = JSON.parse(
+			await readFile(
+				join(f.path, accepted.nativeSessionRef, "state.json"),
+				"utf8",
+			),
+		);
+		const facts = state.turns[0].operationFacts.filter(
+			(fact: { kind: string; phase: string }) =>
+				fact.kind === "model" && fact.phase === "completed",
+		);
+		expect(facts).toHaveLength(3);
+		expect(facts[1]).toMatchObject({
+			parentOperationRef: facts[0].operationRef,
+			usage: { inputTokens: 10, outputTokens: 2 },
+		});
+	} finally {
+		intercepted.mockRestore();
+		await network.close();
+	}
+}, 30000);
+
+it("rejects a second concurrent native network invocation without borrowing the first permit", async () => {
+	const f = await fixture();
+	f.hold();
+	const command = claudeCommand("parallel-search");
+	const accepted = await f.driver.execute(command);
+	await vi.waitFor(() => expect(f.calls).toHaveLength(1), { timeout: 10000 });
+	const main = f.calls[0];
+	if (!main) throw Error();
+	completeClaudeToolUses(
+		main.response,
+		"msg_parallel",
+		String(main.body.model),
+		"",
+		["first", "second"].map((id) => ({
+			id,
+			name: "WebSearch",
+			input: { query: `synthetic ${id}` },
+		})),
+	);
+	await vi.waitFor(() => expect(f.calls).toHaveLength(2), { timeout: 10000 });
+	const side = f.calls[1];
+	if (!side) throw Error();
+	expect(side.body.thinking).toEqual({ type: "disabled" });
+	completeClaudeResponse(
+		side.response,
+		"msg_one_side",
+		String(side.body.model),
+		"single admitted search",
+	);
+	await vi.waitFor(() => expect(f.calls).toHaveLength(3), { timeout: 10000 });
+	const messages = f.calls[2]?.body.messages as {
+		content?: { type: string; is_error?: boolean; tool_use_id?: string }[];
+	}[];
+	const results = messages.flatMap((message) =>
+		Array.isArray(message.content)
+			? message.content.filter((block) => block.type === "tool_result")
+			: [],
+	);
+	expect(results).toHaveLength(2);
+	expect(results.filter((result) => result.is_error)).toHaveLength(1);
+	f.release();
+	await f.settled(accepted.nativeSessionRef, command.executionId);
+	expect(f.calls).toHaveLength(3);
+}, 30000);
+
+it.each([false, true])(
+	"keeps token-count identity separate from the primary model (count only: %s)",
+	async (countOnly) => {
+		const transportModule = await import("./messages-model-transport.js");
+		const queryModule = await import("./claude-query.js");
+		const originalTransport = transportModule.openRuntimeMessagesTransport;
+		const interception = vi
+			.spyOn(transportModule, "openRuntimeMessagesTransport")
+			.mockImplementation(async (options) => {
+				const transport = await originalTransport(options);
+				if (options.openRequest) {
+					const response = await fetch(
+						transport.modelAccess.endpoint + "/v1/messages/count_tokens",
+						{
+							method: "POST",
+							headers: {
+								authorization: `Bearer ${transport.modelAccess.credential}`,
+							},
+							body: JSON.stringify({ model: options.model, messages: [] }),
+						},
+					);
+					expect(response.status).toBe(200);
+				}
+				return transport;
+			});
+		const query = countOnly
+			? vi.spyOn(queryModule, "claudeQuery").mockImplementation(() => {
+					throw Error("synthetic-no-main");
+				})
+			: undefined;
+		try {
+			const f = await fixture();
+			const command = claudeCommand("count-first");
+			const accepted = await f.driver.execute(command);
+			if (!countOnly)
+				await f.settled(accepted.nativeSessionRef, command.executionId);
+			const state = JSON.parse(
+				await readFile(
+					join(f.path, accepted.nativeSessionRef, "state.json"),
+					"utf8",
+				),
+			);
+			const turn = state.turns[0];
+			const facts = turn.operationFacts.filter(
+				(fact: { kind: string }) => fact.kind === "model",
+			);
+			const primary = facts.filter(
+				(fact: { operationRef: string }) =>
+					fact.operationRef === turn.operationRef,
+			);
+			expect(primary.map((fact: { phase: string }) => fact.phase)).toEqual(
+				countOnly ? ["intent", "failed"] : ["intent", "started", "completed"],
+			);
+			const count = facts.filter(
+				(fact: { operationRef: string }) =>
+					fact.operationRef !== turn.operationRef,
+			);
+			expect(count.map((fact: { phase: string }) => fact.phase)).toEqual([
+				"intent",
+				"started",
+				"completed",
+			]);
+			expect(count[0].parentOperationRef).toBe(turn.operationRef);
+			expect(count[2].usage).toBeUndefined();
+		} finally {
+			interception.mockRestore();
+			query?.mockRestore();
+		}
+	},
+	30000,
+);
+
+it("reports an unsupported approved search provider as a tool failure without replaying it", async () => {
+	const f = await fixture();
+	f.hold();
+	const command = claudeCommand("unsupported-search");
+	const accepted = await f.driver.execute(command);
+	await vi.waitFor(() => expect(f.calls).toHaveLength(1), { timeout: 10000 });
+	const first = f.calls[0];
+	if (!first) throw Error();
+	completeClaudeToolUses(
+		first.response,
+		"msg_search_unsupported",
+		String(first.body.model),
+		"",
+		[
+			{
+				id: "unsupported_search",
+				name: "WebSearch",
+				input: { query: "synthetic" },
+			},
+		],
+	);
+	await vi.waitFor(() => expect(f.calls).toHaveLength(2), { timeout: 10000 });
+	f.calls[1]?.response
+		.writeHead(400, { "content-type": "application/json" })
+		.end(
+			JSON.stringify({
+				error: { message: "private provider detail must not escape" },
+			}),
+		);
+	await vi.waitFor(
+		async () =>
+			expect(
+				await f.driver.getStatus(
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toBe("failed"),
+		{ timeout: 10000 },
+	);
+	const state = await readFile(
+		join(f.path, accepted.nativeSessionRef, "state.json"),
+		"utf8",
+	);
+	expect(state).not.toContain("private provider detail");
+	const events = await f.driver.replayEvents(
+		accepted.nativeSessionRef,
+		command.executionId,
+	);
+	expect(events).toContainEqual(
+		expect.objectContaining({
+			type: "tool",
+			payload: expect.objectContaining({ name: "WebSearch", phase: "failed" }),
+		}),
+	);
+	expect(f.calls).toHaveLength(2);
+}, 30000);

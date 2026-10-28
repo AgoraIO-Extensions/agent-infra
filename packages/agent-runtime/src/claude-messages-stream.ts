@@ -28,7 +28,15 @@ export async function forwardClaudeMessages(
 	model: string,
 	protectedValues: readonly string[],
 	signal: AbortSignal,
-	verified: (stopReason: string) => Promise<void> = async () => {},
+	verified: (
+		stopReason: string,
+		usage: {
+			inputTokens?: number;
+			outputTokens?: number;
+			cachedInputTokens?: number;
+		},
+	) => Promise<void> = async () => {},
+	serverSearch = false,
 ) {
 	const matcher = createCredentialMatcher(protectedValues);
 	const channels = new Map<string, number>();
@@ -44,6 +52,25 @@ export async function forwardClaudeMessages(
 	let pending: string[] = [];
 	let queued: string[] = [];
 	let pendingBytes = 0;
+	const searchIds = new Set<string>();
+	const completedSearchIds = new Set<string>();
+	const usage: {
+		inputTokens?: number;
+		outputTokens?: number;
+		cachedInputTokens?: number;
+	} = {};
+	const captureUsage = (value: Record<string, unknown>) => {
+		for (const [source, target] of [
+			["input_tokens", "inputTokens"],
+			["output_tokens", "outputTokens"],
+			["cache_read_input_tokens", "cachedInputTokens"],
+		] as const) {
+			if (value[source] === undefined) continue;
+			if (!Number.isSafeInteger(value[source]) || (value[source] as number) < 0)
+				invalid();
+			usage[target] = value[source] as number;
+		}
+	};
 	const scan = (value: unknown): void => {
 		if (typeof value === "string" && matcher.contains(value)) invalid();
 		if (Array.isArray(value)) for (const item of value) scan(item);
@@ -98,6 +125,7 @@ export async function forwardClaudeMessages(
 				)
 					invalid();
 				started = true;
+				captureUsage(message.usage);
 				projected = {
 					type: value.type,
 					message: {
@@ -154,8 +182,85 @@ export async function forwardClaudeMessages(
 								name: block.name,
 								input: block.input,
 							};
-						else invalid();
-						if (block.type === "tool_use")
+						else if (
+							serverSearch &&
+							block.type === "server_tool_use" &&
+							block.name === "web_search" &&
+							typeof block.id === "string" &&
+							/^srvtoolu_[A-Za-z0-9_-]{1,200}$/.test(block.id) &&
+							!searchIds.has(block.id) &&
+							!completedSearchIds.has(block.id) &&
+							record(block.input)
+						) {
+							searchIds.add(block.id);
+							content = {
+								type: block.type,
+								id: block.id,
+								name: block.name,
+								input: block.input,
+							};
+						} else if (
+							serverSearch &&
+							block.type === "web_search_tool_result" &&
+							typeof block.tool_use_id === "string" &&
+							searchIds.delete(block.tool_use_id)
+						) {
+							completedSearchIds.add(block.tool_use_id);
+							if (
+								record(block.content) &&
+								block.content.type === "web_search_tool_result_error" &&
+								[
+									"invalid_tool_input",
+									"unavailable",
+									"max_uses_exceeded",
+									"too_many_requests",
+									"query_too_long",
+								].includes(String(block.content.error_code)) &&
+								Object.keys(block.content).every((key) =>
+									["type", "error_code"].includes(key),
+								)
+							) {
+								content = {
+									type: block.type,
+									tool_use_id: block.tool_use_id,
+									content: {
+										type: block.content.type,
+										error_code: block.content.error_code,
+									},
+								};
+							} else {
+								if (!Array.isArray(block.content) || block.content.length > 100)
+									invalid();
+								const results = block.content.map((result: unknown) => {
+									if (
+										!record(result) ||
+										result.type !== "web_search_result" ||
+										typeof result.url !== "string" ||
+										!/^https?:\/\//.test(result.url) ||
+										typeof result.title !== "string" ||
+										typeof result.encrypted_content !== "string" ||
+										result.title.length > 8192 ||
+										result.encrypted_content.length > 262144
+									)
+										invalid();
+									return {
+										type: "web_search_result",
+										url: result.url,
+										title: result.title,
+										encrypted_content: result.encrypted_content,
+										...(typeof result.page_age === "string"
+											? { page_age: result.page_age }
+											: {}),
+									};
+								});
+								content = {
+									type: block.type,
+									tool_use_id: block.tool_use_id,
+									content: results,
+								};
+							}
+						} else invalid();
+						if (block.type === "tool_use" || block.type === "server_tool_use")
 							toolArguments.set(index as number, "");
 						projected = { type: value.type, index, content_block: content };
 						break;
@@ -178,7 +283,9 @@ export async function forwardClaudeMessages(
 											blocks.get(index) === "thinking"
 										? "signature"
 										: update.type === "input_json_delta" &&
-												blocks.get(index) === "tool_use"
+												["tool_use", "server_tool_use"].includes(
+													blocks.get(index) ?? "",
+												)
 											? "partial_json"
 											: undefined;
 						if (!field) invalid();
@@ -226,6 +333,7 @@ export async function forwardClaudeMessages(
 						)
 							invalid();
 						stopReason = String(value.delta.stop_reason);
+						captureUsage(value.usage);
 						delta = true;
 						projected = {
 							type: value.type,
@@ -284,7 +392,8 @@ export async function forwardClaudeMessages(
 		(!completed && !ending.replace(/\r\n?/g, "\n").endsWith("\n\n"))
 	)
 		invalid();
-	await verified(stopReason);
+	if (searchIds.size) invalid();
+	await verified(stopReason, usage);
 	for (const encoded of [...queued, ...pending, terminal])
 		await write(response, encoded, signal);
 	response.end();

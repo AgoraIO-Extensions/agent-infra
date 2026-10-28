@@ -178,7 +178,19 @@ function sessionNotification(value: unknown) {
 			update: {
 				sessionUpdate: update.sessionUpdate,
 				toolCallId: update.toolCallId,
-				title: "Runtime tool",
+				title:
+					"title" in update &&
+					typeof update.title === "string" &&
+					[
+						"glob",
+						"grep",
+						"webfetch",
+						"websearch",
+						"todowrite",
+						"apply_patch",
+					].includes(update.title)
+						? update.title
+						: "Runtime tool",
 				...(kind ? { kind } : {}),
 				...(status ? { status } : {}),
 				...("rawInput" in update ? { rawInput: update.rawInput } : {}),

@@ -1680,7 +1680,8 @@ it("delivers a per-execution key for a credential-free Claude option", async () 
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	const address = server.address();
 	if (!address || typeof address === "string") throw new Error();
-	const driver = await ClaudeRuntimeDriver.open({
+	let driver: Awaited<ReturnType<typeof ClaudeRuntimeDriver.open>>;
+	driver = await ClaudeRuntimeDriver.open({
 		path,
 		configVersion: "configuration-v4",
 		defaultModelOptionId: "primary",
@@ -1695,6 +1696,7 @@ it("delivers a per-execution key for a credential-free Claude option", async () 
 			},
 		],
 		authorizeModelAction: async (action) => {
+			await driver.validateExternalAction(action);
 			activeExecution = action.executionId;
 			actions.push(action);
 			return { relayKey: keys.get(action.executionId) };
@@ -1736,7 +1738,9 @@ it("delivers a per-execution key for a credential-free Claude option", async () 
 			expect(action.nativeSessionRef).toBe(first.nativeSessionRef);
 			expect(action.executionId).toBe("execution-a");
 			expect(action.runtimeOperationId).toBe("execution-a");
-			await driver.validateExternalAction?.(action);
+			await expect(driver.validateExternalAction(action)).rejects.toMatchObject(
+				{ code: "RUNTIME_GRANT_INVALID" },
+			);
 		}
 
 		const previousHeaders = authorizationHeaders.length;
@@ -1766,6 +1770,10 @@ it("delivers a per-execution key for a credential-free Claude option", async () 
 				.slice(previousHeaders)
 				.every((action) => action.executionId === "execution-b"),
 		).toBe(true);
+		for (const action of actions.slice(previousHeaders))
+			await expect(driver.validateExternalAction(action)).rejects.toMatchObject(
+				{ code: "RUNTIME_GRANT_INVALID" },
+			);
 	} finally {
 		await driver.close();
 		server.closeAllConnections();

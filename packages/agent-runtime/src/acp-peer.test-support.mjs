@@ -125,6 +125,35 @@ const connection = new AgentSideConnection(
 					JSON.stringify(params.prompt),
 				);
 			count++;
+			if (process.env.ACP_TEST_MODE === "catalog-tools") {
+				const catalog = [
+					["webfetch", "fetch"],
+					["glob", "search"],
+					["grep", "search"],
+					["todowrite", "other"],
+					["apply_patch", "edit"],
+				];
+				for (const [title, kind] of catalog)
+					await connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate: "tool_call",
+							toolCallId: title,
+							title,
+							kind,
+							status: "in_progress",
+						},
+					});
+				for (const [toolCallId] of catalog.toReversed())
+					await connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate: "tool_call_update",
+							toolCallId,
+							status: "completed",
+						},
+					});
+			}
 			if (process.env.ACP_TEST_MODE === "interleaved-tools") {
 				for (const update of [
 					{

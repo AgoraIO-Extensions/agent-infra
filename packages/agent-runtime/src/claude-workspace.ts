@@ -16,6 +16,10 @@ export type ClaudeToolOperationCallbacks = Readonly<{
 	) => Promise<void>;
 	authorize?: () => Promise<boolean>;
 	authorizeShell?: () => Promise<boolean>;
+	authorizeNetwork?: (
+		toolUseId: string,
+		tool: "WebFetch" | "WebSearch",
+	) => Promise<boolean>;
 	resolveReadOnlyFile?: (
 		filePath: string,
 		signal: AbortSignal,
@@ -37,7 +41,7 @@ export const claudeWorkspaceToolNames: readonly string[] = Object.freeze([
 /**
  * Fixed core tools. 文件读写、列举与搜索只在本 Conversation 的工作区、memory 与只读 Skill
  * 根内可用（#3217）；Bash 仅在固定子进程边界准入后开放，且每次调用重新准入（#3218）。
- * 子 Agent、网络工具和任意文件根仍不开放。Write/Edit 不隐式发布结果文件。
+ * WebFetch/WebSearch 仅由 Driver 的实际调用许可接入额外模型边界；子 Agent 与任意文件根不开放。
  */
 export function claudeWorkspaceTools(
 	workspace: string,
@@ -67,6 +71,32 @@ export function claudeWorkspaceTools(
 		if (!input || typeof input !== "object" || Array.isArray(input))
 			return undefined;
 		const record = input as Record<string, unknown>;
+		if (name === "WebFetch" || name === "WebSearch") {
+			if (!toolUseId || !onToolOperation?.authorizeNetwork) return undefined;
+			if (name === "WebFetch") {
+				if (
+					typeof record.url !== "string" ||
+					typeof record.prompt !== "string" ||
+					record.prompt.length > 65536
+				)
+					return undefined;
+				try {
+					const url = new URL(record.url);
+					if (
+						!["http:", "https:"].includes(url.protocol) ||
+						url.username ||
+						url.password
+					)
+						return undefined;
+				} catch {
+					return undefined;
+				}
+			} else if (typeof record.query !== "string" || record.query.length > 8192)
+				return undefined;
+			return (await onToolOperation.authorizeNetwork(toolUseId, name))
+				? record
+				: undefined;
+		}
 		if (name === "TodoWrite") return record;
 		if (name === "Bash") {
 			if (
@@ -146,10 +176,13 @@ export function claudeWorkspaceTools(
 		return undefined;
 	};
 	return {
-		tools: claudeWorkspaceToolNames.filter(
-			(name) =>
-				name !== "Bash" || onToolOperation?.authorizeShell !== undefined,
-		),
+		tools: [
+			...claudeWorkspaceToolNames.filter(
+				(name) =>
+					name !== "Bash" || onToolOperation?.authorizeShell !== undefined,
+			),
+			...(onToolOperation?.authorizeNetwork ? ["WebFetch", "WebSearch"] : []),
+		],
 		settings: {
 			autoMemoryEnabled: true,
 			autoMemoryDirectory: memory,
