@@ -143,7 +143,18 @@ export {
 	skillHubVersions,
 } from "./schema-skill-hub";
 
+import {
+	evaluationDatasets,
+	evaluationGrants,
+	evaluationPolicies,
+	evaluationVersions,
+} from "./schema-evaluation.js";
+
 export const platformInfrastructureTables = [
+	evaluationDatasets,
+	evaluationGrants,
+	evaluationPolicies,
+	evaluationVersions,
 	connectionInstallationAuthorizations,
 	connectionInstallationCommands,
 	platformUserDisables,

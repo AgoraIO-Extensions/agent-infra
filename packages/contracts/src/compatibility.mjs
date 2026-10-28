@@ -6262,6 +6262,21 @@ function normalizeQueueFullErrorCodeAddition(previous, current) {
 // Existing paths, actor kinds, security and unrelated schemas still compare normally.
 function normalizeEvaluationData3638(document) {
 	if (!document.openapi) return document;
+	// Other extension normalizers recurse on already stripped documents. Most of
+	// those states have no Eval material: avoid cloning/hashing the whole OpenAPI.
+	const serialized = JSON.stringify(document);
+	if (
+		!serialized.includes('"eval:data"') &&
+		!serialized.includes('"evaluation.') &&
+		!Object.keys(document.components?.schemas ?? {}).some((name) =>
+			name.startsWith("Evaluation"),
+		) &&
+		!Object.keys(document.paths ?? {}).some((path) =>
+			path.startsWith("/api/v2/evaluation/"),
+		)
+	) {
+		return document;
+	}
 	const normalized = structuredClone(document);
 	const paths = [
 		"/api/v2/evaluation/datasets",
@@ -6374,7 +6389,10 @@ function normalizeEvaluationData3638(document) {
 				);
 		}
 	}
-	return normalized;
+	const result = isDeepStrictEqual(document, normalized)
+		? document
+		: normalized;
+	return result;
 }
 
 let comparisonCache;
@@ -6397,7 +6415,9 @@ function findBreakingChanges(previousValue, currentValue) {
 		return changes;
 	} finally {
 		// Normalizer permutations share results only within this comparison.
-		if (isRoot) comparisonCache = undefined;
+		if (isRoot) {
+			comparisonCache = undefined;
+		}
 	}
 }
 
@@ -6405,8 +6425,8 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 	const previousEvaluation = normalizeEvaluationData3638(previousValue);
 	const currentEvaluation = normalizeEvaluationData3638(currentValue);
 	if (
-		!isDeepStrictEqual(previousEvaluation, previousValue) ||
-		!isDeepStrictEqual(currentEvaluation, currentValue)
+		previousEvaluation !== previousValue ||
+		currentEvaluation !== currentValue
 	)
 		return findBreakingChanges(previousEvaluation, currentEvaluation);
 	let previous = previousValue;
