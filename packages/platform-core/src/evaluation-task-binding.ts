@@ -86,7 +86,7 @@ export function parseEvaluationTaskBindingV1(
 			throw new TypeError("Eval Task binding is invalid");
 	}
 	if (
-		(value.modelOptionId === null) !== (value.reasoningLevel === null) ||
+		(value.modelOptionId === null && value.reasoningLevel !== null) ||
 		typeof value.expiresAt !== "string" ||
 		!Number.isFinite(Date.parse(value.expiresAt)) ||
 		new Date(value.expiresAt).toISOString() !== value.expiresAt

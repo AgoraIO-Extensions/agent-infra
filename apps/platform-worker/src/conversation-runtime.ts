@@ -114,6 +114,12 @@ export interface ConversationRuntimeOptionsV2 {
 		observation: ConversationDrainStageObservationV1,
 	) => void;
 	readonly connectionInstallation?: WorkerConnectionInstallationOptions;
+	readonly evaluationPolicy?: {
+		data: () => Promise<
+			import("@agent-infra/platform-core").EvaluationPolicyV1
+		>;
+		experiment: () => Promise<unknown>;
+	};
 	readonly channelAuthorizationCurrent?: (
 		record: TaskRuntimeAuthorizationRecordV1,
 		signal: AbortSignal,

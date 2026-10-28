@@ -102,7 +102,8 @@ export async function insertTaskAuthorization(
 		!binding ||
 		boundary.principal.kind !== binding.principal_type ||
 		(boundary.principal.kind === "application" &&
-			!isTaskApiChannelV1(boundary.channelId, boundary.principal)) ||
+			!isTaskApiChannelV1(boundary.channelId, boundary.principal) &&
+			boundary.channelId !== "eval") ||
 		boundary.principal.id !== binding.actor_id ||
 		boundary.agentId !== binding.agent_id ||
 		boundary.channelId !== binding.channel_id ||

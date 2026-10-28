@@ -85,3 +85,73 @@ it("independent review preserves typed subjects and original score revision", ()
 		}),
 	).toThrow(expect.objectContaining({ code: "conflict" }));
 });
+
+it("does not coerce rule/category objects or evaluate category getters", () => {
+	let calls = 0;
+	const impostor = {
+		toString() {
+			calls++;
+			return "exact_match";
+		},
+	};
+	expect(() =>
+		parseEvaluationScorerV1({
+			...scorer(),
+			implementation: { kind: "rule", rule: impostor },
+		}),
+	).toThrow();
+	const categories = ["output", "rubric"];
+	Object.defineProperty(categories, "0", {
+		get() {
+			calls++;
+			return "output";
+		},
+	});
+	expect(() =>
+		parseEvaluationScorerV1({
+			...scorer(),
+			implementation: {
+				kind: "model",
+				endpointId: "e",
+				modelId: "m",
+				catalogRevision: "c",
+				maxOutputTokens: 100,
+				inputCategories: categories,
+			},
+		}),
+	).toThrow();
+	expect(calls).toBe(0);
+});
+
+it("counts invalid JSON output as failure but keeps an invalid expected fixture separately not applicable", () => {
+	expect(
+		scoreEvaluationRuleV1({
+			scorer: scorer("json_equal"),
+			output: "bad answer",
+			expected: '{"x":1}',
+		}),
+	).toMatchObject({
+		status: "scored",
+		value: 0,
+		passed: false,
+		reason: "output_not_json",
+	});
+	expect(
+		scoreEvaluationRuleV1({
+			scorer: scorer("json_equal"),
+			output: '{"x":1}',
+			expected: "invalid fixture",
+		}),
+	).toMatchObject({
+		status: "not_applicable",
+		value: null,
+		reason: "invalid_expected_json",
+	});
+	expect(() =>
+		scoreEvaluationRuleV1({
+			scorer: scorer("json_equal"),
+			output: "[".repeat(102) + "0" + "]".repeat(102),
+			expected: "[]",
+		}),
+	).toThrow();
+});

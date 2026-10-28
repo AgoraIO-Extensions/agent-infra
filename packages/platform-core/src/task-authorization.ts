@@ -253,10 +253,8 @@ export interface TaskUserDirectoryV1 {
 type TaskAccessSourceV1 =
 	| { readonly kind: "owner" | "user"; readonly userId: string }
 	| { readonly kind: "organization"; readonly organizationId: string }
-	| {
-			readonly kind: "api-use" | "eval-use";
-			readonly useGrantRevision: string;
-	  };
+	| { readonly kind: "api-use"; readonly useGrantRevision: string }
+	| { readonly kind: "eval-use"; readonly useGrantRevision: string };
 
 export interface TaskAuthorizationBoundaryV1 {
 	readonly schemaVersion: 1;

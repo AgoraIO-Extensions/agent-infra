@@ -119,6 +119,11 @@ export {
 	readPlatformQueueResourceSnapshot,
 } from "./conversation-query.ts";
 export { PostgresEvaluationDataStoreV1 } from "./evaluation-data.js";
+export {
+	type EvaluationExperimentStoreOptionsV1,
+	PostgresEvaluationExperimentsV1,
+} from "./evaluation-experiments.js";
+export { PostgresEvaluationTaskAuthorityV1 } from "./evaluation-task-authority.js";
 export { PostgresFileLimitDeclarationStoreV1 } from "./file-limit-declarations.js";
 export { PostgresFileStoreV1 } from "./files.js";
 export {

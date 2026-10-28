@@ -10,12 +10,19 @@ import {
 	parseEvaluationDatasetV1,
 	parseEvaluationGrantV1,
 	parseEvaluationVersionV1,
+	parseTaskPrincipalV1,
 	requireApiCredentialIdentityV1,
 	resolveCurrentPersonalApiUserV1,
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import { and, eq, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/postgres-js";
+import { PgDialect } from "drizzle-orm/pg-core";
+import {
+	drizzle,
+	PostgresJsSession,
+	PostgresJsTransaction,
+} from "drizzle-orm/postgres-js";
+import type { TransactionSql } from "postgres";
 import postgres from "./observed-postgres.js";
 import {
 	auditEvents,
@@ -32,9 +39,10 @@ import {
 	evaluationVersions,
 } from "./schema-evaluation.js";
 
-type Tx = Parameters<
-	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
->[0];
+type Tx = Pick<
+	ReturnType<typeof drizzle>,
+	"execute" | "select" | "insert" | "update" | "delete"
+>;
 const unavailable = () => new EvaluationDataErrorV1("unavailable");
 async function clock(tx: Tx) {
 	const result = await tx.execute<{ time: string }>(
@@ -128,21 +136,38 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 	constructor(
 		private readonly options: {
 			databaseUrl: string;
+			transaction?: TransactionSql;
 			directory?: TaskUserDirectoryV1;
 		},
 	) {
-		this.client = postgres(options.databaseUrl, { max: 4 });
-		this.db = drizzle(this.client);
+		this.client = options.transaction
+			? undefined
+			: postgres(options.databaseUrl, { max: 4 });
+		const connection = options.transaction ?? this.client;
+		if (!connection) throw unavailable();
+		if (options.transaction) {
+			const dialect = new PgDialect();
+			// Same transaction session adapter as workload reconciliation; no pool or nested begin.
+			this.db = new PostgresJsTransaction(
+				dialect,
+				new PostgresJsSession(
+					options.transaction as postgres.Sql & TransactionSql,
+					dialect,
+					undefined,
+				),
+				undefined,
+			);
+		} else this.db = drizzle(connection as postgres.Sql);
 	}
 	async close() {
-		await this.client.end();
+		await this.client?.end();
 	}
 	async transaction<T>(
 		request: EvaluationRequestV1,
 		work: (tx: EvaluationDataTransactionV1) => Promise<T>,
 	): Promise<T> {
 		try {
-			return await this.db.transaction(async (tx) => {
+			const workInTransaction = async (tx: Tx) => {
 				await tx.execute(sql`set local statement_timeout='10s'`);
 				await tx.execute(sql`set local lock_timeout='5s'`);
 				// A short metadata transaction; external object transfer never holds this lock.
@@ -151,7 +176,53 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 				if (!Number.isFinite(+now)) throw unavailable();
 				let revalidate: () => Promise<void>;
 				let principal: EvaluationDataTransactionV1["principal"];
-				if (request.authentication.kind === "browser") {
+				if (request.authentication.kind === "score_work") {
+					const work = request.authentication;
+					const check = async () => {
+						const records = await tx.execute<{ data: unknown }>(
+							sql`select s.data from platform.evaluation_score_intents s join platform.outbox_items o on o.id='evaluation-score:'||s.id::text where s.id=${work.intentId}::uuid and o.operation='evaluation.score.v1' and o.status='processing' and o.lease_owner=${work.leaseOwner} and o.delivery_fence=${work.deliveryFence}::bigint and o.lease_expires_at>clock_timestamp() for share of s,o`,
+						);
+						const record = records[0]?.data;
+						if (
+							!record ||
+							typeof record !== "object" ||
+							!("principal" in record)
+						)
+							throw unavailable();
+						const actor = parseTaskPrincipalV1(record.principal);
+						await tx.execute(
+							sql`lock table platform.platform_user_disables in share mode`,
+						);
+						if (actor.kind === "user") {
+							const user = await resolveCurrentPersonalApiUserV1(
+								this.options.directory,
+								actor.id,
+							);
+							const disabled = await tx
+								.select()
+								.from(platformUserDisables)
+								.where(eq(platformUserDisables.userId, actor.id));
+							if (!user || disabled.length || user.accountStatus !== "active")
+								throw new EvaluationDataErrorV1("denied");
+							return { actor, revision: user.authorizationRevision };
+						}
+						const [app] = await tx
+							.select()
+							.from(platformApplications)
+							.where(eq(platformApplications.id, actor.id))
+							.for("share");
+						if (!app || app.status !== "active")
+							throw new EvaluationDataErrorV1("denied");
+						return { actor, revision: app.authorizationRevision };
+					};
+					const identity = await check();
+					principal = identity.actor;
+					revalidate = async () => {
+						const current = await check();
+						if (JSON.stringify(current) !== JSON.stringify(identity))
+							throw unavailable();
+					};
+				} else if (request.authentication.kind === "browser") {
 					const userId = request.authentication.userId;
 					await tx.execute(
 						sql`lock table platform.platform_user_disables in share mode`,
@@ -249,7 +320,7 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 								disabled,
 								now: await clock(tx),
 							},
-							"eval:data",
+							request.credentialScope ?? "eval:data",
 						);
 					};
 					const identity = await check();
@@ -452,7 +523,10 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 				if (Date.parse(operations.authorizationExpiresAt) <= +(await clock(tx)))
 					throw new EvaluationDataErrorV1("denied");
 				return result;
-			});
+			};
+			return this.options.transaction
+				? await workInTransaction(this.db)
+				: await this.db.transaction(workInTransaction);
 		} catch (error) {
 			if (error instanceof EvaluationDataErrorV1) throw error;
 			if (

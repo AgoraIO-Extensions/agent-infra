@@ -120,6 +120,7 @@ import {
 	reserveIdempotency,
 } from "./conversation-execution-sql.js";
 import { submitConversationTask } from "./conversation-execution-task.js";
+import type { EvaluationCurrentPolicyReaderV1 } from "./evaluation-task-authority.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import postgres from "./observed-postgres.js";
 import {
@@ -296,6 +297,7 @@ function validateNativeAdmissionPlan(
 }
 
 export interface PostgresConversationExecutionOptionsV1 {
+	readonly evaluationPolicy?: EvaluationCurrentPolicyReaderV1;
 	readonly databaseUrl: string;
 	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly readRequestedModelDisplayName?: RequestedModelDisplayNameResolverV1;
@@ -306,6 +308,7 @@ export class PostgresConversationExecutionTransactionV1
 		ConversationExecutionTransactionPortV1,
 		NativeCapabilityAdmissionTransactionPortV6
 {
+	readonly #evaluationPolicy: EvaluationCurrentPolicyReaderV1 | undefined;
 	readonly #client: ReturnType<typeof postgres> | undefined;
 	readonly #existingTransaction: Transaction | undefined;
 	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
@@ -320,12 +323,14 @@ export class PostgresConversationExecutionTransactionV1
 			| PostgresConversationExecutionOptionsV1
 			| {
 					readonly transaction: Transaction;
+					readonly evaluationPolicy?: EvaluationCurrentPolicyReaderV1;
 					readonly userDirectory?: TaskUserDirectoryV1;
 					readonly readRequestedModelDisplayName?: RequestedModelDisplayNameResolverV1;
 					readonly signal?: AbortSignal;
 			  },
 	) {
 		this.#userDirectory = options.userDirectory;
+		this.#evaluationPolicy = options.evaluationPolicy;
 		this.#readRequestedModelDisplayName = options.readRequestedModelDisplayName;
 		if ("transaction" in options) {
 			bindConversationExecutionSignalV1(options.transaction, options.signal);
@@ -2024,6 +2029,7 @@ export class PostgresConversationExecutionTransactionV1
 				decide,
 				this.#userDirectory,
 				this.#readRequestedModelDisplayName,
+				this.#evaluationPolicy,
 			),
 		);
 	}

@@ -32,6 +32,9 @@ export const personalApiCredentialScopes = [
 	"agent:manage",
 	"agent:create",
 	"eval:data",
+	"eval:run",
+	"eval:score",
+	"eval:review",
 ] as const;
 
 export type PersonalApiCredentialScope =
@@ -46,6 +49,9 @@ export const personalApiCredentialScopeLabels: Record<
 	"agent:manage": "管理 Agent",
 	"agent:create": "创建 Agent",
 	"eval:data": "评测数据（仍需用途授权）",
+	"eval:run": "评测运行（仍需用途授权）",
+	"eval:score": "评测评分（仍需用途授权）",
+	"eval:review": "评测复核（仍需用途授权）",
 };
 
 export type ApiCredentialsState =

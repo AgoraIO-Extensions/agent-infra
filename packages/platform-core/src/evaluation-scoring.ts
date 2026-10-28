@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { snapshotAgentManagementDenseArray } from "./agent-management-input.js";
 import { snapshotObject } from "./conversation-execution-values.js";
 import { EvaluationDataErrorV1 } from "./evaluation-data.js";
 
@@ -117,7 +119,7 @@ export function parseEvaluationScorerV1(input: unknown): EvaluationScorerV1 {
 	const minimum = finite(v.minimum);
 	const maximum = finite(v.maximum);
 	const passThreshold = finite(v.passThreshold);
-	if (minimum >= maximum || passThreshold < minimum || passThreshold > maximum)
+	if (minimum >= maximum || passThreshold <= minimum || passThreshold > maximum)
 		return invalid();
 	const raw = v.implementation;
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return invalid();
@@ -125,7 +127,10 @@ export function parseEvaluationScorerV1(input: unknown): EvaluationScorerV1 {
 	let implementation: EvaluationScorerV1["implementation"];
 	if (kind === "rule") {
 		const r = object(raw, ["kind", "rule"]);
-		if (!["exact_match", "contains", "json_equal"].includes(String(r.rule)))
+		if (
+			typeof r.rule !== "string" ||
+			!["exact_match", "contains", "json_equal"].includes(r.rule)
+		)
 			return invalid();
 		implementation = {
 			kind,
@@ -143,17 +148,12 @@ export function parseEvaluationScorerV1(input: unknown): EvaluationScorerV1 {
 			"maxOutputTokens",
 			"inputCategories",
 		]);
-		if (
-			!Array.isArray(m.inputCategories) ||
-			!m.inputCategories.length ||
-			m.inputCategories.length > 5
-		)
-			return invalid();
-		const inputCategories = m.inputCategories.map((entry: unknown) => {
+		const categories = snapshotAgentManagementDenseArray(m.inputCategories, 5);
+		if (!categories.length) return invalid();
+		const inputCategories = categories.map((entry: unknown) => {
 			if (
-				!["sample", "context", "expected", "output", "rubric"].includes(
-					String(entry),
-				)
+				typeof entry !== "string" ||
+				!["sample", "context", "expected", "output", "rubric"].includes(entry)
 			)
 				return invalid();
 			return entry as "sample" | "context" | "expected" | "output" | "rubric";
@@ -247,28 +247,43 @@ export function scoreEvaluationRuleV1(input: {
 	else if (scorer.implementation.rule === "contains")
 		matches = output.includes(expected);
 	else {
-		const canonical = (value: unknown): unknown =>
-			Array.isArray(value)
-				? value.map(canonical)
-				: value !== null && typeof value === "object"
-					? Object.fromEntries(
-							Object.entries(value)
-								.sort(([a], [b]) => a.localeCompare(b))
-								.map(([key, v]) => [key, canonical(v)]),
-						)
-					: value;
+		let expectedJson: unknown;
+		let outputJson: unknown;
 		try {
-			matches =
-				JSON.stringify(canonical(JSON.parse(output))) ===
-				JSON.stringify(canonical(JSON.parse(expected)));
+			expectedJson = JSON.parse(expected);
 		} catch {
 			return {
 				status: "not_applicable",
 				value: null,
 				passed: null,
-				reason: "invalid_json_input",
+				reason: "invalid_expected_json",
 			};
 		}
+		try {
+			outputJson = JSON.parse(output);
+		} catch {
+			return {
+				status: "scored",
+				value: scorer.minimum,
+				passed: false,
+				reason: "output_not_json",
+			};
+		}
+		const bounded = (root: unknown) => {
+			const stack: [unknown, number][] = [[root, 0]];
+			while (stack.length) {
+				const pair = stack.pop();
+				if (!pair) break;
+				const [value, depth] = pair;
+				if (depth > 100) return invalid();
+				if (value !== null && typeof value === "object")
+					for (const child of Object.values(value))
+						stack.push([child, depth + 1]);
+			}
+		};
+		bounded(expectedJson);
+		bounded(outputJson);
+		matches = isDeepStrictEqual(expectedJson, outputJson);
 	}
 	const value = matches ? scorer.maximum : scorer.minimum;
 	return {

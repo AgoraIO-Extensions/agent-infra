@@ -73,6 +73,7 @@ export function parseAuthority(
 		(!taskBoundary || !isTaskApiChannelV1(channelId, taskBoundary.principal))
 	)
 		unavailable();
+	if (channelId === "eval" && !taskBoundary?.evaluation) unavailable();
 	const personalApiAdmissionAuthority =
 		input.personalApiAdmissionAuthority === undefined
 			? undefined
@@ -159,7 +160,8 @@ export function parseConversation(
 	if (
 		(api && (!principal || !isTaskApiChannelV1(channelId, principal))) ||
 		(principal &&
-			(principal.id !== input.actorId || (!api && principal.kind !== "user")))
+			(principal.id !== input.actorId ||
+				(!api && channelId !== "eval" && principal.kind !== "user")))
 	)
 		unavailable();
 	const sandbox =

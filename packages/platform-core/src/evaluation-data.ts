@@ -33,11 +33,19 @@ export type EvaluationOperationV1 = (typeof evaluationOperationsV1)[number];
 export type EvaluationPrincipalV1 = TaskPrincipalV1;
 export type EvaluationAuthenticationV1 =
 	| { kind: "browser"; userId: string }
-	| { kind: "credential"; material: string };
+	| { kind: "credential"; material: string }
+	| {
+			kind: "score_work";
+			intentId: string;
+			leaseOwner: string;
+			deliveryFence: string;
+	  };
 export interface EvaluationRequestV1 {
 	authentication: EvaluationAuthenticationV1;
 	requestId: string;
 	traceId: string;
+	/** Fixed by server-only experiment/scoring use cases, never decoded from HTTP. */
+	credentialScope?: "eval:run" | "eval:score" | "eval:review";
 }
 /** The bounded V1 metadata projection must be explicitly approved as a whole. */
 export const evaluationRetainedMetadataFieldsV1 = [
@@ -671,6 +679,79 @@ export function createEvaluationDataV1(options: {
 		await tx.saveVersion(v);
 		await tx.deleteIntent(v);
 	}
+	async function readForPurpose(
+		request: EvaluationRequestV1,
+		datasetId: string,
+		versionId: string,
+		operation: "read" | "run" | "score" | "review",
+	) {
+		const before = await current(request, async (tx, p) => {
+			const v = await version(tx, datasetId, versionId);
+			const g = await permission(tx, p, v, operation);
+			if (v.status !== "available" || !v.stored) return fail("denied");
+			return { version: v, grant: g, policy: p };
+		});
+		const stored = before.version.stored ?? fail("unavailable");
+		let bytes: Uint8Array;
+		try {
+			const stream = await options.storage.download({
+				objectRef: before.version.objectRef,
+				version: stored.version,
+				etag: stored.etag,
+				expiresAt: new Date(
+					Date.now() + before.policy.transferTimeoutMs,
+				).toISOString(),
+				signal: AbortSignal.timeout(before.policy.transferTimeoutMs),
+			});
+			const chunks: Uint8Array[] = [];
+			let size = 0;
+			for await (const chunk of stream) {
+				size += chunk.length;
+				if (size > before.policy.maxContentBytes) return fail("unavailable");
+				chunks.push(chunk);
+			}
+			bytes = Buffer.concat(chunks);
+		} catch {
+			return fail("unavailable");
+		}
+		if (
+			bytes.length !== stored.sizeBytes ||
+			createHash("sha256").update(bytes).digest("hex") !== stored.sha256
+		)
+			return fail("unavailable");
+		return current(request, async (tx, p) => {
+			const v = await version(tx, datasetId, versionId);
+			const g = await permission(tx, p, v, operation);
+			if (
+				v.revision !== before.version.revision ||
+				g.grantId !== before.grant.grantId ||
+				g.revision !== before.grant.revision ||
+				!isDeepStrictEqual(p, before.policy)
+			)
+				return fail("denied");
+			await tx.audit("evaluation.content.read", datasetId);
+			return {
+				content: validateEvaluationDatasetContentV1(bytes),
+				version: v,
+				grant: g,
+				policy: p,
+				principal: tx.principal,
+			};
+		});
+	}
+	async function authorizePurpose(
+		request: EvaluationRequestV1,
+		datasetId: string,
+		versionId: string,
+		operation: "run" | "score" | "review",
+	) {
+		return current(request, async (tx, p) => {
+			const v = await version(tx, datasetId, versionId);
+			const g = await permission(tx, p, v, operation);
+			if (v.status !== "available" || !v.stored) return fail("denied");
+			return { version: v, grant: g, policy: p, principal: tx.principal };
+		});
+	}
 	return {
 		async list(request: EvaluationRequestV1) {
 			return current(request, async (tx, p) => {
@@ -1115,59 +1196,77 @@ export function createEvaluationDataV1(options: {
 				return metadata(v);
 			});
 		},
-		async read(
+		read: async (
 			request: EvaluationRequestV1,
 			datasetId: string,
 			versionId: string,
-		) {
-			const before = await current(request, async (tx, p) => {
-				const v = await version(tx, datasetId, versionId);
-				const g = await permission(tx, p, v, "read");
-				if (v.status !== "available" || !v.stored) return fail("denied");
-				return { version: v, grant: g, policy: p };
-			});
-			const stored = before.version.stored ?? fail("unavailable");
-			let bytes: Uint8Array;
-			try {
-				const stream = await options.storage.download({
-					objectRef: before.version.objectRef,
-					version: stored.version,
-					etag: stored.etag,
-					expiresAt: new Date(
-						Date.now() + before.policy.transferTimeoutMs,
-					).toISOString(),
-					signal: AbortSignal.timeout(before.policy.transferTimeoutMs),
-				});
-				const chunks: Uint8Array[] = [];
-				let size = 0;
-				for await (const chunk of stream) {
-					size += chunk.length;
-					if (size > before.policy.maxContentBytes) return fail("unavailable");
-					chunks.push(chunk);
-				}
-				bytes = Buffer.concat(chunks);
-			} catch {
-				return fail("unavailable");
-			}
-			if (
-				bytes.length !== stored.sizeBytes ||
-				createHash("sha256").update(bytes).digest("hex") !== stored.sha256
-			)
-				return fail("unavailable");
-			return current(request, async (tx, p) => {
-				const v = await version(tx, datasetId, versionId);
-				const g = await permission(tx, p, v, "read");
-				if (
-					v.revision !== before.version.revision ||
-					g.grantId !== before.grant.grantId ||
-					g.revision !== before.grant.revision ||
-					!isDeepStrictEqual(p, before.policy)
-				)
-					return fail("denied");
-				await tx.audit("evaluation.content.read", datasetId);
-				return validateEvaluationDatasetContentV1(bytes);
-			});
-		},
+		) => (await readForPurpose(request, datasetId, versionId, "read")).content,
+		readForRun: (
+			request: EvaluationRequestV1,
+			datasetId: string,
+			versionId: string,
+		) =>
+			readForPurpose(
+				{ ...request, credentialScope: "eval:run" },
+				datasetId,
+				versionId,
+				"run",
+			),
+		readForScore: (
+			request: EvaluationRequestV1,
+			datasetId: string,
+			versionId: string,
+		) =>
+			readForPurpose(
+				{ ...request, credentialScope: "eval:score" },
+				datasetId,
+				versionId,
+				"score",
+			),
+		readForReview: (
+			request: EvaluationRequestV1,
+			datasetId: string,
+			versionId: string,
+		) =>
+			readForPurpose(
+				{ ...request, credentialScope: "eval:review" },
+				datasetId,
+				versionId,
+				"review",
+			),
+		authorizeRun: (
+			request: EvaluationRequestV1,
+			datasetId: string,
+			versionId: string,
+		) =>
+			authorizePurpose(
+				{ ...request, credentialScope: "eval:run" },
+				datasetId,
+				versionId,
+				"run",
+			),
+		authorizeScore: (
+			request: EvaluationRequestV1,
+			datasetId: string,
+			versionId: string,
+		) =>
+			authorizePurpose(
+				{ ...request, credentialScope: "eval:score" },
+				datasetId,
+				versionId,
+				"score",
+			),
+		authorizeReview: (
+			request: EvaluationRequestV1,
+			datasetId: string,
+			versionId: string,
+		) =>
+			authorizePurpose(
+				{ ...request, credentialScope: "eval:review" },
+				datasetId,
+				versionId,
+				"review",
+			),
 		async remove(
 			request: EvaluationRequestV1,
 			key: string,

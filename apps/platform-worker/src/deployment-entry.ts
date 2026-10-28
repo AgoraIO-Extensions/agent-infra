@@ -4,6 +4,7 @@ import type {
 	AgentDefaultRelayKeyEndpointPolicyV1,
 	StandardTemplateModelBindingV1,
 } from "@agent-infra/model-catalog";
+import { PostgresEvaluationTaskAuthorityV1 } from "@agent-infra/platform-store";
 import {
 	createRuntimeConnectionConsumerSnapshotV1,
 	createRuntimeConnectionInstallationRevisionV1,
@@ -48,6 +49,12 @@ import {
 } from "./workload-runtime-auth.js";
 
 type DeploymentConfiguration = {
+	readonly evaluationPolicy?: {
+		data: () => Promise<
+			import("@agent-infra/platform-core").EvaluationPolicyV1
+		>;
+		experiment: () => Promise<unknown>;
+	};
 	readonly workloadInput: Omit<
 		Parameters<typeof createProductionWorkloadWorkerOptionsV1>[0],
 		"workerId" | "runtimeProbe" | "databaseUrl"
@@ -196,6 +203,7 @@ function resolveConnectionInstallation(
 // Deployment-owned code supplies current IdentityAdapter facts and Worker-only material.
 // The adjacent configuration.mjs is mounted by the deployment, never bundled into the image.
 const {
+	evaluationPolicy,
 	workloadInput: configuredWorkloadInput,
 	signing,
 	serviceToken,
@@ -602,6 +610,13 @@ async function createPrepared(signal: AbortSignal) {
 			...(installationStore ? { commandStore: installationStore } : {}),
 		};
 	}
+	const evaluationAuthority = evaluationPolicy
+		? new PostgresEvaluationTaskAuthorityV1({
+				databaseUrl: workload.databaseUrl,
+				loadPolicy: evaluationPolicy,
+				directory,
+			})
+		: undefined;
 	return {
 		// Database lease ownership is per process; Runtime service identity is deployment-bound.
 		workload: { ...workload, workerId: instanceId },
@@ -615,9 +630,15 @@ async function createPrepared(signal: AbortSignal) {
 				: {}),
 			closeDeployment: async () => {
 				await installationStore?.close();
+				await evaluationAuthority?.close();
 			},
 			relayKeyDecryptor,
-			channelAuthorizationCurrent: wecomDeployment.channelAuthorizationCurrent,
+			evaluationPolicy,
+			channelAuthorizationCurrent: (record, signal) =>
+				record.boundary.channelId === "eval"
+					? (evaluationAuthority?.current(record.boundary) ??
+						Promise.resolve(false))
+					: wecomDeployment.channelAuthorizationCurrent(record, signal),
 			sandboxPolicy: {
 				namespace: workload.policy.namespace,
 				resourceConfigurationHash: workloadResourceConfigurationHashV1(

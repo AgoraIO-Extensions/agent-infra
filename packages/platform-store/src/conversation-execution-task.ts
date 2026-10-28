@@ -33,6 +33,8 @@ import {
 	reserveIdempotency,
 	withSelectedModelOption,
 } from "./conversation-execution-sql.js";
+import { requireCurrentEvaluationAdmissionV1 } from "./evaluation-task-admission.js";
+import type { EvaluationCurrentPolicyReaderV1 } from "./evaluation-task-authority.js";
 import { requireCurrentPersonalApiTaskAdmissionV1 } from "./personal-api-task-authorization.js";
 import {
 	insertSessionSandboxBinding,
@@ -53,7 +55,17 @@ async function requireCurrentApiAdmission(
 	transaction: Transaction,
 	authority: ConversationExecutionAuthorityV1,
 	userDirectory: TaskUserDirectoryV1 | undefined,
+	evaluationPolicy?: EvaluationCurrentPolicyReaderV1,
 ) {
+	if (authority.channelId === "eval") {
+		await requireCurrentEvaluationAdmissionV1(
+			transaction,
+			authority,
+			userDirectory,
+			evaluationPolicy,
+		);
+		return;
+	}
 	const boundary = authority.taskBoundary;
 	if (
 		!boundary ||
@@ -238,18 +250,25 @@ export async function submitConversationTask(
 	decide: SubmitDecide,
 	userDirectory: TaskUserDirectoryV1 | undefined,
 	readDisplayName?: RequestedModelDisplayNameResolverV1,
+	evaluationPolicy?: EvaluationCurrentPolicyReaderV1,
 ): ReturnType<ConversationTaskAdmissionTransactionPortV1["submitTask"]> {
 	const authority = parseAuthority(request.authority);
 	const principal = authority.taskBoundary?.principal;
 	if (
 		!principal ||
-		!isTaskApiChannelV1(authority.channelId, principal) ||
+		(!isTaskApiChannelV1(authority.channelId, principal) &&
+			authority.channelId !== "eval") ||
 		principal.id !== authority.actorId ||
 		request.command.agentId !== authority.agentId
 	)
 		return { outcome: "denied", reason: "conversation_unavailable" };
 	// Preserve disable -> exact credential -> application/use -> Agent/Conversation locks.
-	await requireCurrentApiAdmission(transaction, authority, userDirectory);
+	await requireCurrentApiAdmission(
+		transaction,
+		authority,
+		userDirectory,
+		evaluationPolicy,
+	);
 	const scope = {
 		scopeType: "principal",
 		scopeId: JSON.stringify([principal.kind, principal.id]),
@@ -273,7 +292,12 @@ export async function submitConversationTask(
 		if (existing.status !== "completed") unavailable();
 		const result = replayResult(existing.result);
 		await requireReplay(transaction, result, request);
-		await requireCurrentApiAdmission(transaction, authority, userDirectory);
+		await requireCurrentApiAdmission(
+			transaction,
+			authority,
+			userDirectory,
+			evaluationPolicy,
+		);
 		return { outcome: "replayed", result };
 	}
 	const agent = await readAgent(transaction, authority.agentId);
@@ -292,6 +316,17 @@ export async function submitConversationTask(
 		from platform.conversation_executions where agent_id = ${authority.agentId}
 	`;
 	if (!queue) unavailable();
+	const evaluation = authority.taskBoundary?.evaluation;
+	if (evaluation) {
+		const [configuration] = await transaction<
+			{ revision: string }[]
+		>`select current_configuration_revision::text as revision from platform.agents where id=${authority.agentId}`;
+		if (
+			!configuration ||
+			+configuration.revision !== evaluation.configurationRevision
+		)
+			return { outcome: "denied", reason: "model_unavailable" };
+	}
 	const state: ConversationTaskAdmissionStateV1 = {
 		...agent,
 		// 任务续用已有会话时同样记录回退前的原选项显示名（G-07）。
@@ -303,7 +338,15 @@ export async function submitConversationTask(
 					conversation.selectedModelOptionId,
 					readDisplayName,
 				)) ?? null)
-			: agent.modelConfiguration,
+			: evaluation && agent.modelConfiguration && evaluation.modelOptionId
+				? {
+						...agent.modelConfiguration,
+						defaultOptionId: evaluation.modelOptionId,
+						defaultReasoningLevel:
+							evaluation.reasoningLevel ??
+							agent.modelConfiguration.defaultReasoningLevel,
+					}
+				: agent.modelConfiguration,
 		conversation: conversation ?? null,
 		waitingCount: safeInteger(queue.waiting_count, 0),
 		lastWaitOrder: safeInteger(queue.last_order ?? "0", 0),
@@ -477,6 +520,11 @@ export async function submitConversationTask(
 		result,
 		plan.acceptedAt,
 	);
-	await requireCurrentApiAdmission(transaction, authority, userDirectory);
+	await requireCurrentApiAdmission(
+		transaction,
+		authority,
+		userDirectory,
+		evaluationPolicy,
+	);
 	return { outcome: "accepted", result };
 }

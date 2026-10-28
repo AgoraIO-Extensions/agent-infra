@@ -73,6 +73,7 @@ import {
 	requireLeaseDuration,
 	requireTransition,
 } from "./conversation-dispatch-validation.js";
+import type { EvaluationCurrentPolicyReaderV1 } from "./evaluation-task-authority.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
 import {
 	type PlatformQueueResourceSnapshot,
@@ -96,6 +97,7 @@ import { readLegacyControlRecoveryInTransaction } from "./task-authorization-mig
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.ts";
 
 export interface PostgresConversationDispatchOptionsV1 {
+	readonly evaluationPolicy?: EvaluationCurrentPolicyReaderV1;
 	readonly sandboxPolicy?: SessionSandboxPolicyV1;
 	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly databaseUrl: string;
@@ -136,6 +138,7 @@ async function lockUnleasedExecutionOutbox(
 export class PostgresConversationDispatchStoreV1
 	implements ConversationDispatchStorePortV1
 {
+	readonly #evaluationPolicy: EvaluationCurrentPolicyReaderV1 | undefined;
 	readonly #client: Client;
 	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
 	readonly #sandboxPolicy: SessionSandboxPolicyV1 | undefined;
@@ -145,6 +148,7 @@ export class PostgresConversationDispatchStoreV1
 			throw new TypeError("Conversation dispatch Store options are invalid");
 		}
 		this.#userDirectory = options.userDirectory;
+		this.#evaluationPolicy = options.evaluationPolicy;
 		if (
 			options.sandboxPolicy &&
 			(!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(
@@ -985,6 +989,7 @@ export class PostgresConversationDispatchStoreV1
 								state,
 								input.claim.leaseOwner,
 								this.#userDirectory,
+								this.#evaluationPolicy,
 							))
 						) {
 							settledWaiting = true;
