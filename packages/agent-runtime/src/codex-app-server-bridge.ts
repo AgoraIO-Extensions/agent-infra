@@ -1222,6 +1222,9 @@ async function conversationLandlockArguments(
 	};
 	// The pinned release and its bundled resources stay read-only.
 	await allow(landlockProgramRights, dirname(dirname(executable)));
+	// Worker mounts only the verified immutable generation here. Native Skill
+	// discovery/loading needs reads, never execution or writes to the package.
+	await allow(landlockMetadataRights, "/opt/agent-infra-skill-hub/.agents");
 	for (const entry of (launchPath ?? "").split(delimiter)) {
 		if (entry) await allow(landlockProgramRights, entry);
 	}

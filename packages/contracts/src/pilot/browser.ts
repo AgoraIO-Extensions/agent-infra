@@ -83,6 +83,7 @@ import {
 	PersonalApiCredentialNarrowResponseV1Schema,
 	PersonalApiCredentialPageV1Schema,
 	PersonalApiCredentialRevokeResponseV1Schema,
+	PersonalApiIdentityV1Schema,
 } from "./personal-api-credentials.ts";
 import {
 	PersonalRelayKeyReplaceRequestV1Schema,
@@ -2057,6 +2058,22 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			},
 		},
 	},
+	"/api/v2/me/api-identity": {
+		get: {
+			operationId: "getPersonalApiIdentityV2",
+			security: agentApiCredentialSecurity,
+			description:
+				"Current personal Bearer identity only; no Cookie, query, body or self-reported identity. No agent:read scope or Agent grant required. Scopes are credential limits, not resource grants. Null expiry means no time expiry; revocation and current user state still apply. Responses are no-store.",
+			responses: {
+				"200": jsonResponse(
+					"Current personal API identity",
+					PersonalApiIdentityV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+
 	"/api/v2/me/api-credentials": {
 		get: {
 			operationId: "listPersonalApiCredentialsV2",
@@ -2315,6 +2332,9 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 	"/api/v2/agents/{agentId}": {
 		get: {
 			operationId: "getAgentV2",
+			security: agentListSecurity,
+			description:
+				"Browser session or personal Bearer. Bearer requires agent:read and current explicit manage or use grant; no Cookie, query, body or self-reported identity. Invisible and missing Agents both return RESOURCE_UNAVAILABLE. Same projection as the personal Bearer list; responses are no-store.",
 			requestParams: { path: agentPath },
 			responses: {
 				"200": jsonResponse("Agent detail", AgentProjectionV2Schema),
@@ -2555,6 +2575,7 @@ export const pilotBrowserSchemasV2 = {
 	PersonalApiCredentialIssueResponseV1:
 		PersonalApiCredentialIssueResponseV1Schema,
 	PersonalApiCredentialMetadataV1: PersonalApiCredentialMetadataV1Schema,
+	PersonalApiIdentityV1: PersonalApiIdentityV1Schema,
 	PersonalApiCredentialListQueryV1: PersonalApiCredentialListQueryV1Schema,
 	PersonalApiCredentialPageV1: PersonalApiCredentialPageV1Schema,
 	PersonalApiCredentialNarrowRequestV1:

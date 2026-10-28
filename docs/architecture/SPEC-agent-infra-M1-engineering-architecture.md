@@ -411,7 +411,22 @@ API 创建许可由部署显式配置获准主体集合，以主体类型和稳�
 
 Agent 资源授权修订与逐主体的 manage/use 授权修订属于不同版本域。独立授权的撤销、重新授予产生新的授权修订；消费者按完整主体类型、稳定 ID、Agent 与授权类型复核当前记录，不能以授权修订等于 Agent 修订判断是否授权。任务边界分别绑定 `agentAuthorizationRevision` 与 `useGrantRevision` 并复验；审计查询使用当前使用权，同时保留原提交主体和执行关联校验。
 
-Agent 元数据的 API 列表读取要求凭证包含 `agent:read`，并仅返回主体当前显式拥有管理或使用授权的 Agent；任一授权有效即可读取元数据，两项均撤销时排除该 Agent。元数据读取不授予管理或使用操作权，Owner 或系统管理员角色不能替代独立 API 授权。无可见 Agent 时返回空页，浏览器发现与 Owner 读取仍按其既有规则执行。
+Agent 元数据的个人 API 列表与单项读取要求凭证包含 `agent:read`，并仅返回主体当前显式拥有管理或使用授权的 Agent；任一授权有效即可读取元数据，两项均撤销时排除该 Agent。元数据读取不授予管理或使用操作权，Owner 或系统管理员角色不能替代独立 API 授权。无可见 Agent 时返回空页，浏览器发现与 Owner 读取仍按其既有规则执行。
+
+个人凭证自查使用 `GET /api/v2/me/api-identity`，仅接受当前个人 Bearer，不接受 Cookie、
+其他凭证类型或调用方选择主体。返回 `schemaVersion: 1`、`principal: { kind: "user", id }`、
+`credentialId`、当前 `scopes` 和 UTC `expiresAt`；`null` 仅表示未设置到期时间，撤销和禁用仍
+生效。稳定主体来自已有用户 ID；凭证引用不作为账号身份。不要求 `agent:read` 或 Agent 授权，
+不返回凭证值、校验摘要或个人资料，不代表 Connection 的身份或授权。
+
+`GET /api/v2/agents/:agentId` 的个人 Bearer 路径使用与列表项相同的 V2 投影及 API 用户查询范围。
+两项读取均复核当前凭证、目录及禁用事实，沿用读取事务和必要审计；提交失败不得返回成功。
+单项读取额外检查上述 `agent:read` 与目标显式授权；已通过身份和范围校验后，不可见或不存在
+均返回 `404 RESOURCE_UNAVAILABLE`。无效凭证返回 `401 AUTHENTICATION_REQUIRED`，禁用主体
+或缺少读取范围返回 `403 FORBIDDEN`，非法输入返回 `400 INVALID_REQUEST`，依赖故障返回
+`503 DEPENDENCY_UNAVAILABLE`。两项 Bearer 请求拒绝混合 Cookie、额外 query/body 和自报身份头，
+响应禁止缓存。浏览器单项读取、`/detail`、管理员入口和凭证管理保持各自认证规则。
+调用步骤见[个人 API 凭证读取联调](../agents/personal-api-read.md)。
 
 | 变化 | API/订阅 | 已受理任务 |
 | --- | --- | --- |
@@ -1448,6 +1463,7 @@ Skill Hub 是 Platform DB、版本化 S3 兼容对象存储、Platform API/Web�
 - 网页编辑的 Skill 项目内容是该项目的可变草稿，只属于项目 Owner，由 Platform DB 以有界字节保存，不进入目录、审计、日志、Worker 或 Runtime。内容按整体替换保存，以项目内容修订号做 CAS；根目录必须有非空 UTF-8 `SKILL.md`，其余文件只能位于 `scripts/`、`references/` 或 `assets/` 下，路径沿用 §11.6.1 的规则。普通文件最多 100 个、单个最多 256 KiB、解码后合计最多 512 KiB；该上限低于 §11.6.1 的包上限，并受 1 MiB JSON 请求上限约束，调用方不能提高。
 - 网页发布只提交内容修订、版本号与发布范围，不接收对象版本、摘要、签名、来源或准入字段。服务端在当前授权下读取本人启用项目该修订的内容，由平台项目打包器生成 ZIP，`provider` 固定为 `my_library`；来源证明由平台项目供应生成：`publisherId` 为项目 Owner，`sourceVersion` 为项目与内容修订引用，`sourceDigest` 等于实际 ZIP 的 `packageDigest`，`approvalRef` 为 null。扫描、Ed25519 admission 签名（部署维护的同一 signer 及 trust/policy 修订）、固定对象版本和原操作提交沿 §11.6.1–11.6.4 的同一包供应，不另设签名密钥、发布路径或部署来源校验器。ORGANIZATION 范围的组织取项目所属组织，且须仍属于当前主体。同一项目已登记的版本号直接冲突，不进入供应；同一幂等键的重试按原修订重新打包并核对原输入摘要，修订已变化时拒绝，不用新内容续接原操作。草稿之后的修改不影响已提交版本，修改内容须以新版本号重新发布。部署未装配 Skill 包供应时网页发布返回不可用，内容编辑不受影响。
 - Agent Version 绑定后由受控异步同步将固定包 materialize 到 Agent project 的 `.agents/skills/<name>`，并维护 `.agents/SKILLS.md`；只有同步成功、Worker Applied 与 Runtime 装配摘要一致后，Skill 才进入可发现目录。同步失败、撤权、版本撤销、digest/signature 不一致和 Applied 未确认均 fail closed。
+- Session Sandbox 从同一已验证部署接收 Skill generation 与 Applied binding。包 generation 可以从所属 Agent 的受控物化卷按固定子目录只读挂载；Worker 核对来源卷归属，卷引用与挂载均只读，不挂载其可写工作区或其他 generation。Session 自己的工作区、HOME、运行数据和 PVC 仍按 §10.1.1 独立；来源或挂载漂移沿原生命周期拒绝准备与业务就绪。
 - Platform Worker 消费带有 Skill Version、对象版本、manifest、digest/signature、目标相对路径和只读策略的不可变投影，写入并回读版本化 Workload Desired/Applied/恢复事实。调用方不能提交路径、URL、身份、Agent、Connection 或权限字段；Worker 不直接解析 Provider，也不执行未经 grant 的脚本。
 - Runtime 的 find_skills、install_skills 和 read_skills 仅作用于当前主体、Agent Version、Sandbox 和已批准 grant 的交集。初始 Prompt 只放有界 metadata（最多 150 项、约 30000 字符），正文和关联资源按需读取；读取结果必须包含实际包版本和加载证据。Runtime 不能自行改变 Hub 权威状态，不能静默跟随同名新版本。
 - Skill 的 Tool、Connection、文件、网络和脚本执行 grant 只能收敛既有授权；脚本默认关闭。当前权限失效、跨组织/Agent/Session、无实际加载证据、包不可用或工具结果无法核实时，调用拒绝或保持 unknown，不降级为普通文本。
@@ -2591,7 +2607,9 @@ API 与 Worker 必须使用同一政策身份及当前 revision，不能回退�
 issuer、Owner、应用责任人或 Worker 服务身份授予。授权记录绑定 `grantId`、授予主体、接收主体
 类型/ID、`purpose=eval`、政策身份/revision、数据集及明确版本集合、操作集合、有效期和自身修订。
 新版本默认不继承旧版本授权；扩展版本、操作或期限须重新核验授予者的当前范围并提交新修订。
-创建数据集的许可只允许在批准范围建立空记录；上传、读取及使用新版本还须有相应内容用途授权。
+创建数据集的许可只允许在批准范围建立空记录。Core 在批准的创建/导入范围内先分配不可变的 pending
+版本 ID，不写入正文；授权管理者据该版本 ID 显式授予操作后，才能上传、读取或使用内容。预留版本
+不自动授予创建者内容权限；未获授权、上传失败或过期的 pending 记录按部署政策收敛，不能当作可用版本。
 
 操作分别表示创建数据集、导入/新增版本、读取内容、运行样本、评分、人工复核、查看分析、管理授权
 和删除内容，不隐含互相授予。实验、输出、评分与复核必须关联原数据集版本及用途授权，生成派生
@@ -2663,7 +2681,10 @@ Eval 删除不擅自删除其他业务权威数据；反向引用也不允许重
 
 反馈沿原任务提交主体校验，仅允许本人任务的有用/无用和受控问题分类；汇总绑定实际模型、配置和时间，
 Owner 可看获准汇总但不能下钻他人原会话。实验分析以固定样本集合为分母，同时返回可比较、已评分、缺失、
-错误与不适用数量；实际耗时/用量缺失明确标记。线上反馈数量/反馈率独立统计，不并入离线实验通过率。
+错误与不适用数量；实际耗时/用量缺失明确标记。线上反馈率的分母是当前查询范围内、按任务终态时间落入
+所选窗口并匹配实际模型/配置的可反馈任务数；分子是这些任务中有有效主动反馈的去重任务数。同一任务
+更新反馈不增加任务数，未反馈数量单列；本人的查询仅计本人任务，Owner 汇总须获相应汇总权限。筛选、
+窗口和分母随结果返回，不从反馈记录数反推总任务量；线上统计不并入离线实验通过率。
 
 #### 18.4.5 实现交接与验证
 

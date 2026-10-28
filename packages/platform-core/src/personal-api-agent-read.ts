@@ -30,7 +30,7 @@ export interface PersonalApiAgentReadAuditV1 {
 	readonly traceId: string;
 	readonly userId: string | null;
 	readonly credentialId: string | null;
-	readonly action: "api.agent.metadata.read";
+	readonly action: "api.agent.metadata.read" | "api.credential.identity.read";
 	readonly outcome: "succeeded" | "failed" | "rejected";
 	readonly details: {
 		readonly reason?: PersonalApiCredentialErrorCodeV1;
@@ -66,6 +66,7 @@ export interface PersonalApiAgentReadTransactionPortV1 {
 function requireUsedCredential(
 	credential: PersonalApiCredentialMetadataV1,
 	now: Date,
+	requireReadScope: boolean,
 ): void {
 	if (!Number.isFinite(now.getTime())) {
 		throw new PersonalApiCredentialErrorV1("unavailable");
@@ -89,7 +90,7 @@ function requireUsedCredential(
 	} catch {
 		throw new PersonalApiCredentialErrorV1("unavailable");
 	}
-	if (!scopes.includes("agent:read")) {
+	if (requireReadScope && !scopes.includes("agent:read")) {
 		throw new PersonalApiCredentialErrorV1("forbidden");
 	}
 }
@@ -98,17 +99,144 @@ export function createPersonalApiAgentReadUseCaseV1(dependencies: {
 	readonly transaction: PersonalApiAgentReadTransactionPortV1;
 	readonly userDirectory: TaskUserDirectoryV1;
 }) {
+	async function readAuthenticated<T>(
+		metadata: Pick<PersonalApiCredentialRequestV1, "requestId" | "traceId">,
+		material: string,
+		identityRead: boolean,
+		readGrantedAgents: (
+			user: CurrentTaskUserV1,
+			credential: PersonalApiCredentialMetadataV1,
+		) => Promise<{
+			readonly result: T;
+			readonly returnedAgentIds: readonly string[];
+		}>,
+	): Promise<T> {
+		const action = identityRead
+			? "api.credential.identity.read"
+			: "api.agent.metadata.read";
+
+		const request = parsePersonalApiCredentialRequestV1({
+			...metadata,
+			userId: "unknown",
+			idempotencyKey: "unkeyed",
+		});
+		const evidence: { userId: string | null; credentialId: string | null } = {
+			userId: null,
+			credentialId: null,
+		};
+		try {
+			if (!/^papi_[A-Za-z0-9_-]{43}$/.test(material)) {
+				throw new PersonalApiCredentialErrorV1("authentication_required");
+			}
+			const credentialHash = createHash("sha256")
+				.update(material)
+				.digest("hex");
+			return await dependencies.transaction.executeAgentRead(
+				async (transaction) => {
+					const credential =
+						await transaction.lockUsedCredential(credentialHash);
+					if (credential === null) {
+						throw new PersonalApiCredentialErrorV1("authentication_required");
+					}
+					if (!isAgentManagementText(credential.credentialId)) {
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					}
+					evidence.credentialId = credential.credentialId;
+					if (credential.principalType !== "user") {
+						throw new PersonalApiCredentialErrorV1("authentication_required");
+					}
+					if (!isAgentManagementText(credential.principalId)) {
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					}
+					evidence.userId = credential.principalId;
+					requirePersonalApiUserEnabledV1(
+						await transaction.lockUserDisabled(credential.principalId),
+					);
+					requireUsedCredential(
+						credential,
+						await transaction.databaseTime(),
+						!identityRead,
+					);
+					const first = await resolveCurrentPersonalApiUserV1(
+						dependencies.userDirectory,
+						credential.principalId,
+					);
+					requirePersonalApiUserActiveV1(first);
+					if (!identityRead) await transaction.lockAgentGrants();
+					const page = await readGrantedAgents(
+						Object.freeze({
+							...first,
+							organizationIds: Object.freeze([...first.organizationIds]),
+						}),
+						credential,
+					);
+					if (
+						page.returnedAgentIds.length > 100 ||
+						new Set(page.returnedAgentIds).size !==
+							page.returnedAgentIds.length ||
+						page.returnedAgentIds.some((id) => !isAgentManagementText(id))
+					) {
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					}
+					await transaction.recordAudit({
+						requestId: request.requestId,
+						traceId: request.traceId,
+						...evidence,
+						action,
+						outcome: "succeeded",
+						details: identityRead
+							? {}
+							: {
+									returnedAgentIds: [...page.returnedAgentIds],
+									grantFilter: "manage_or_use",
+								},
+					});
+					const current = await resolveCurrentPersonalApiUserV1(
+						dependencies.userDirectory,
+						credential.principalId,
+					);
+					requirePersonalApiUserActiveV1(current);
+					if (current.authorizationRevision !== first.authorizationRevision) {
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					}
+					const usedAt = await transaction.databaseTime();
+					requireUsedCredential(credential, usedAt, !identityRead);
+					await transaction.markCredentialUsed(credential.credentialId, usedAt);
+					return page.result;
+				},
+			);
+		} catch (error) {
+			const failure =
+				error instanceof PersonalApiCredentialErrorV1
+					? error
+					: new PersonalApiCredentialErrorV1("unavailable");
+			try {
+				await dependencies.transaction.recordAgentReadAudit({
+					requestId: request.requestId,
+					traceId: request.traceId,
+					...evidence,
+					action,
+					outcome: failure.code === "unavailable" ? "failed" : "rejected",
+					details: { reason: failure.code },
+				});
+			} catch {
+				// Store records a sanitized dependency fault; refusal remains refusal.
+			}
+			throw failure;
+		}
+	}
 	return {
 		async recordRefusal(
 			metadata: Pick<PersonalApiCredentialRequestV1, "requestId" | "traceId">,
 			reason: PersonalApiCredentialErrorCodeV1,
+			action: PersonalApiAgentReadAuditV1["action"] = "api.agent.metadata.read",
 		): Promise<void> {
 			try {
 				await dependencies.transaction.recordAgentReadAudit({
 					...metadata,
 					userId: null,
 					credentialId: null,
-					action: "api.agent.metadata.read",
+					action,
 					outcome: reason === "unavailable" ? "failed" : "rejected",
 					details: { reason },
 				});
@@ -117,10 +245,30 @@ export function createPersonalApiAgentReadUseCaseV1(dependencies: {
 			}
 		},
 		/**
-		 * The server's reader applies explicit API grants, never browser discover/Owner.
-		 * It runs while the used credential, disable facts and grant writes are locked.
+		 * Both reads revalidate the used credential and current user.
+		 * Agent reads additionally hold the explicit grant lock.
 		 * Its result is withheld until the required audit and transaction commit succeed.
 		 */
+		async readIdentity(
+			metadata: Pick<PersonalApiCredentialRequestV1, "requestId" | "traceId">,
+			material: string,
+		) {
+			return readAuthenticated(
+				metadata,
+				material,
+				true,
+				async (user, credential) => ({
+					result: {
+						schemaVersion: 1 as const,
+						principal: { kind: "user" as const, id: user.userId },
+						credentialId: credential.credentialId,
+						scopes: [...credential.scopes],
+						expiresAt: credential.expiresAt,
+					},
+					returnedAgentIds: [],
+				}),
+			);
+		},
 		async readAgents<T>(
 			metadata: Pick<PersonalApiCredentialRequestV1, "requestId" | "traceId">,
 			material: string,
@@ -129,111 +277,9 @@ export function createPersonalApiAgentReadUseCaseV1(dependencies: {
 				readonly returnedAgentIds: readonly string[];
 			}>,
 		): Promise<T> {
-			const request = parsePersonalApiCredentialRequestV1({
-				...metadata,
-				userId: "unknown",
-				idempotencyKey: "unkeyed",
-			});
-			const evidence: { userId: string | null; credentialId: string | null } = {
-				userId: null,
-				credentialId: null,
-			};
-			try {
-				if (!/^papi_[A-Za-z0-9_-]{43}$/.test(material)) {
-					throw new PersonalApiCredentialErrorV1("authentication_required");
-				}
-				const credentialHash = createHash("sha256")
-					.update(material)
-					.digest("hex");
-				return await dependencies.transaction.executeAgentRead(
-					async (transaction) => {
-						const credential =
-							await transaction.lockUsedCredential(credentialHash);
-						if (credential === null) {
-							throw new PersonalApiCredentialErrorV1("authentication_required");
-						}
-						if (!isAgentManagementText(credential.credentialId)) {
-							throw new PersonalApiCredentialErrorV1("unavailable");
-						}
-						evidence.credentialId = credential.credentialId;
-						if (credential.principalType !== "user") {
-							throw new PersonalApiCredentialErrorV1("authentication_required");
-						}
-						if (!isAgentManagementText(credential.principalId)) {
-							throw new PersonalApiCredentialErrorV1("unavailable");
-						}
-						evidence.userId = credential.principalId;
-						requirePersonalApiUserEnabledV1(
-							await transaction.lockUserDisabled(credential.principalId),
-						);
-						requireUsedCredential(credential, await transaction.databaseTime());
-						const first = await resolveCurrentPersonalApiUserV1(
-							dependencies.userDirectory,
-							credential.principalId,
-						);
-						requirePersonalApiUserActiveV1(first);
-						await transaction.lockAgentGrants();
-						const page = await readGrantedAgents(
-							Object.freeze({
-								...first,
-								organizationIds: Object.freeze([...first.organizationIds]),
-							}),
-						);
-						if (
-							page.returnedAgentIds.length > 100 ||
-							new Set(page.returnedAgentIds).size !==
-								page.returnedAgentIds.length ||
-							page.returnedAgentIds.some((id) => !isAgentManagementText(id))
-						) {
-							throw new PersonalApiCredentialErrorV1("unavailable");
-						}
-						await transaction.recordAudit({
-							requestId: request.requestId,
-							traceId: request.traceId,
-							...evidence,
-							action: "api.agent.metadata.read",
-							outcome: "succeeded",
-							details: {
-								returnedAgentIds: [...page.returnedAgentIds],
-								grantFilter: "manage_or_use",
-							},
-						});
-						const current = await resolveCurrentPersonalApiUserV1(
-							dependencies.userDirectory,
-							credential.principalId,
-						);
-						requirePersonalApiUserActiveV1(current);
-						if (current.authorizationRevision !== first.authorizationRevision) {
-							throw new PersonalApiCredentialErrorV1("unavailable");
-						}
-						const usedAt = await transaction.databaseTime();
-						requireUsedCredential(credential, usedAt);
-						await transaction.markCredentialUsed(
-							credential.credentialId,
-							usedAt,
-						);
-						return page.result;
-					},
-				);
-			} catch (error) {
-				const failure =
-					error instanceof PersonalApiCredentialErrorV1
-						? error
-						: new PersonalApiCredentialErrorV1("unavailable");
-				try {
-					await dependencies.transaction.recordAgentReadAudit({
-						requestId: request.requestId,
-						traceId: request.traceId,
-						...evidence,
-						action: "api.agent.metadata.read",
-						outcome: failure.code === "unavailable" ? "failed" : "rejected",
-						details: { reason: failure.code },
-					});
-				} catch {
-					// Store records a sanitized dependency fault; refusal remains refusal.
-				}
-				throw failure;
-			}
+			return readAuthenticated(metadata, material, false, (user) =>
+				readGrantedAgents(user),
+			);
 		},
 	};
 }
