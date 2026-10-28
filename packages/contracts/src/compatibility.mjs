@@ -1851,6 +1851,31 @@ function isApplicationCredentialIssuerV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #3611 adds only bounded application credential metadata and targeted revocation.
+function isApplicationCredentialGovernanceV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/applications/{applicationId}/credentials";
+	const revokePath = `${path}/{credentialId}`;
+	if (
+		!previous.paths?.[path] ||
+		previous.paths[path].get !== undefined ||
+		previous.paths?.[revokePath] !== undefined
+	)
+		return false;
+	const addition = {
+		get: current.paths?.[path]?.get,
+		revoke: current.paths?.[revokePath],
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"5f9eb6faf3b8f7ffea88bf95d3ae6a265e003bd098734920f061bfef08a36473"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].get;
+	delete normalized.paths[revokePath];
+	return sameValue(previous, normalized);
+}
+
 function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v2/admin/agent-applications",
@@ -6288,6 +6313,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
 			!isApplicationMaterialGrantV2OpenApiAddition(previous, current) &&
 			!isApplicationCredentialIssuerV2OpenApiAddition(previous, current) &&
+			!isApplicationCredentialGovernanceV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationDisableV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
