@@ -441,11 +441,36 @@ function restorePreApplicationUseGrantContract(value: {
 		);
 }
 
+// Restore the pre-#3625 surface only for historical guards. The identity tests
+// below independently pin the new endpoint, authentication and audit addition.
+function restorePrePersonalIdentityContract(value: {
+	paths: Record<string, unknown>;
+	components: { schemas: Record<string, unknown> };
+}) {
+	delete value.paths["/api/v2/me/api-identity"];
+	delete value.components.schemas.PersonalApiIdentityV1;
+	const single = value.paths["/api/v2/agents/{agentId}"] as
+		| { get?: { security?: unknown; description?: string } }
+		| undefined;
+	if (single?.get) {
+		delete single.get.security;
+		delete single.get.description;
+	}
+	const actions = value.components.schemas.ScopedPlatformAuditActionV1 as
+		| { enum?: string[] }
+		| undefined;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) => action !== "api.credential.identity.read",
+		);
+}
+
 // Keep earlier pinned guards on their original contracts; the #481 guard is tested separately.
 function restorePreAgentApiManagementContract(value: {
 	paths: Record<string, unknown>;
 	components: { schemas: Record<string, unknown> };
 }) {
+	restorePrePersonalIdentityContract(value);
 	restorePreWecomAuditActionsRegistration3258Contract(value);
 	restorePreAdminAuditActionsRegistration2879Contract(value);
 	restorePreSkillHubAuditContract(value);
@@ -2212,6 +2237,7 @@ describe("contract compatibility command", () => {
 					"utf8",
 				),
 			);
+			restorePrePersonalIdentityContract(current);
 			const previous = structuredClone(current);
 			restorePreAgentApiManagementContract(previous);
 			for (const document of [current, previous]) {
@@ -3295,6 +3321,7 @@ describe("contract compatibility command", () => {
 				),
 			);
 			const current = JSON.parse(await readFile(artifact, "utf8"));
+			restorePrePersonalIdentityContract(current);
 			// This test isolates the credential compatibility contract. Skill Hub reads
 			// have their own pinned-addition test below; keeping them out avoids paying
 			// the subprocess cost for an unrelated contract mutation matrix.
