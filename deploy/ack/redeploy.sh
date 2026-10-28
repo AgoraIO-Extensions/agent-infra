@@ -440,7 +440,7 @@ NODE
 
 validate_custom_agents() {
 	local configs=${ACK_CUSTOM_AGENT_CONFIGS:-}
-	if ! node --experimental-strip-types "$repo_root/deploy/ack/custom-validation.ts" \
+	if ! ACK_CUSTOM_AGENT_CONFIGS="$configs" node --experimental-strip-types "$repo_root/deploy/ack/custom-validation.ts" \
 		"${ACK_AGENT_REQUESTS_FILE:-}" "${ACK_AGENT_STATE_DIR:-}" "$evidence_dir" "$source_sha" >"$evidence_dir/custom-validation-plan.json"; then
 		die "custom Agent bindings, conversation evidence, or interaction-mode probes are incomplete"
 	fi

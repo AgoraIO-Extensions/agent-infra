@@ -201,6 +201,9 @@ node() {
 repo_root=${quote(new URL("..", import.meta.url).pathname.replace(/\/$/, ""))}
 evidence_dir=${quote(f.evidence)}
 source_sha=${quote(sourceSha)}
+configs_for_test=${quote(mode === "self-managed" ? web : "")}
+unset ACK_CUSTOM_AGENT_CONFIGS
+ACK_CUSTOM_AGENT_CONFIGS=$configs_for_test
 ${body}
 validate_custom_agents
 `,
