@@ -17,6 +17,7 @@ export const personalApiCredentialScopesV1 = [
 	"agent:manage",
 	"agent:use",
 	"agent:read",
+	"eval:data",
 ] as const;
 
 export type PersonalApiCredentialScopeV1 =
@@ -205,7 +206,10 @@ export function parsePersonalApiCredentialScopesV1(
 	input: unknown,
 ): readonly PersonalApiCredentialScopeV1[] {
 	try {
-		const scopes = snapshotAgentManagementDenseArray(input, 4);
+		const scopes = snapshotAgentManagementDenseArray(
+			input,
+			personalApiCredentialScopesV1.length,
+		);
 		if (
 			scopes.length === 0 ||
 			new Set(scopes).size !== scopes.length ||

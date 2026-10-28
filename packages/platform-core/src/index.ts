@@ -94,6 +94,7 @@ export {
 export * from "./conversation-operation-facts.js";
 export * from "./conversation-read-projection.js";
 export * from "./conversation-recent.js";
+export * from "./evaluation-data.js";
 export * from "./execution-failure.js";
 export {
 	bindInputFileV1,

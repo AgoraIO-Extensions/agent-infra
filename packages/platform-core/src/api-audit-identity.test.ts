@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { requireApiAuditCredentialIdentityV1 } from "./api-audit-identity.js";
+import {
+	requireApiAuditCredentialIdentityV1,
+	requireApiCredentialIdentityV1,
+} from "./api-audit-identity.js";
 
 const user = {
 	schemaVersion: 1,
@@ -115,4 +118,33 @@ describe("generic audit credential identity policy", () => {
 			}),
 		).toThrow(expect.objectContaining({ code: "unavailable" }));
 	});
+});
+
+it("keeps the explicit Eval envelope separate from every existing Agent scope", () => {
+	for (const scope of [
+		"agent:create",
+		"agent:manage",
+		"agent:use",
+		"agent:read",
+	]) {
+		expect(() =>
+			requireApiCredentialIdentityV1(
+				{ ...facts, credential: { ...credential, scopes: [scope] } },
+				"eval:data",
+			),
+		).toThrow(expect.objectContaining({ code: "forbidden" }));
+	}
+	const evaluation = {
+		...facts,
+		credential: { ...credential, scopes: ["eval:data"] },
+	};
+	expect(
+		requireApiCredentialIdentityV1(evaluation, "eval:data").principal,
+	).toEqual(credential.principal);
+	expect(() => requireApiCredentialIdentityV1(evaluation, "agent:use")).toThrow(
+		expect.objectContaining({ code: "forbidden" }),
+	);
+	expect(() => requireApiAuditCredentialIdentityV1(evaluation)).toThrow(
+		expect.objectContaining({ code: "forbidden" }),
+	);
 });

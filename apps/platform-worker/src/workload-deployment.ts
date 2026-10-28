@@ -78,6 +78,7 @@ export interface ProductionWorkloadWorkerInputV1 {
 	readonly executionCapacityProfiles?: PlatformWorkloadWorkerOptionsV1["executionCapacityProfiles"];
 	/** Deployment-owned ObjectStorage adapter used by the bounded reconciliation worker. */
 	readonly files?: PlatformWorkloadWorkerOptionsV1["files"];
+	readonly evaluation?: PlatformWorkloadWorkerOptionsV1["evaluation"];
 	/** Deployment-owned immutable Skill materializer; no caller paths or URLs cross this boundary. */
 	readonly skillMaterializer?: PlatformWorkloadWorkerOptionsV1["skillMaterializer"];
 	readonly runtimeModelVersion?: PlatformWorkloadWorkerOptionsV1["runtimeModelVersion"];
@@ -255,6 +256,7 @@ export async function createProductionWorkloadWorkerOptionsV1(
 				input.executionCapacityProfiles,
 			),
 			...(input.files ? { files: input.files } : {}),
+			...(input.evaluation ? { evaluation: input.evaluation } : {}),
 			...(input.skillMaterializer
 				? { skillMaterializer: input.skillMaterializer }
 				: {}),

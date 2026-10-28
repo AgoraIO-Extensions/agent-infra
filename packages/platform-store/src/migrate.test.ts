@@ -2008,6 +2008,7 @@ describe("published Relay authority migration", () => {
 			66,
 			67,
 			68,
+			69,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2082,8 +2083,8 @@ describe("published Relay authority migration", () => {
 			tag: "0063_wecom_outbound_media",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 68,
-			tag: "0068_database_jit_off",
+			idx: 69,
+			tag: "0069_evaluation_data",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2376,6 +2377,23 @@ describe("published Relay authority migration", () => {
 				...expectedDelta,
 				columns: [
 					...expectedDelta.columns,
+					...["id", "scope", "data"].map(
+						(column) => `evaluation_datasets:${column}`,
+					),
+					...["id", "dataset_id", "data"].map(
+						(column) => `evaluation_grants:${column}`,
+					),
+					...["id", "revision", "digest"].map(
+						(column) => `evaluation_policies:${column}`,
+					),
+					...[
+						"id",
+						"dataset_id",
+						"status",
+						"expires_at",
+						"metadata_expires_at",
+						"data",
+					].map((column) => `evaluation_versions:${column}`),
 					...[
 						"id",
 						"execution_id",
@@ -2505,6 +2523,13 @@ describe("published Relay authority migration", () => {
 				].sort(),
 				indexes: [
 					...expectedDelta.indexes,
+					"evaluation_datasets:evaluation_datasets_pkey",
+					"evaluation_grants:evaluation_grants_pkey",
+					"evaluation_grants:evaluation_grants_dataset",
+					"evaluation_policies:evaluation_policies_pkey",
+					"evaluation_versions:evaluation_versions_pkey",
+					"evaluation_versions:evaluation_versions_dataset",
+					"evaluation_versions:evaluation_versions_expiry",
 					"connection_installation_authorizations:connection_installation_authorizations_pkey",
 					"connection_installation_authorizations:connection_installation_user_execution_idx",
 					"connection_installation_commands:connection_installation_commands_pkey",

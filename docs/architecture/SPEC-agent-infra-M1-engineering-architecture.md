@@ -2603,6 +2603,8 @@ Platform DB 保存用途授权及其撤销状态；部署输入限定谁能授�
 API 与 Worker 必须使用同一政策身份及当前 revision，不能回退旧缓存。政策失效不阻止系统完成既有
 停止、撤销和已持久化删除义务，也不授权读取正文；处置按 §18.4.3 的原义务执行。
 
+数据集 API 的个人与应用凭证须显式包含 `eval:data` 最大权限范围，并校验当前凭证、主体启用状态及身份修订。该范围仅允许进入数据集元数据、版本、用途授权及内容生命周期接口，不直接授予任何数据权限，也不授予 Agent 使用、实验运行或评分权限。每项操作继续与当前部署管理许可或精确版本用途授权取交集；浏览器会话沿相同数据授权边界。现有 `agent:create/manage/use/read` 范围不替代 `eval:data`，存量凭证不自动扩权；签发必须显式选择，收窄只能移除既有范围。涉及 Agent 的后续运行仍须独立 Agent 使用权和运行授权。
+
 用途授权由经过当前身份校验的部署批准管理者，经 Core 用例写入 Platform DB，不能由浏览器自报
 issuer、Owner、应用责任人或 Worker 服务身份授予。授权记录绑定 `grantId`、授予主体、接收主体
 类型/ID、`purpose=eval`、政策身份/revision、数据集及明确版本集合、操作集合、有效期和自身修订。
@@ -2622,6 +2624,39 @@ API 读取/写入、Worker 投递样本/评分、受控对象访问及结果提�
 应用保持自身主体，不借责任人的许可。事务锁定相关授权/对象修订，投递使用现有 lease/fence 和
 执行前授权边界；撤权后不接纳新操作、取消等待工作，并沿现有停止路径处理活跃执行。已经发生的
 外部效果不回滚或盲目重放，未确认结果保留 unknown；授权变化后不能提交或展示未获准的正文。
+
+数据集 V1 装配消费 `EvaluationPolicyV1`：政策 revision 在该部署内单调递增，更换 policyId 也不能重置 revision；DB 保存当前政策检查点并拒绝旧实例回退。样本/rubric 的 `startsAt=version_reserved` 明确以版本预留时刻起算，pending 另受 `pendingMs` 限制，确认后使用已绑定内容期限；输出/评分/复核声明 `startsAt=content_created`，由后续用例按实际产生时刻固化。`retainedMetadataFields` 必须显式批准该版本公开的有限元数据字段集合；未知字段或不支持的字段子集视为政策不匹配，不能静默保留被禁止的名称或摘要。`materialApprovals` 由部署批准，逐项绑定 `approvalId`、数据集范围、`synthetic/approved` 类型；实际材料还必须包含已确认的 `redactionRef`。上传 JSON 仅选择 `provenance.approvalId`，不能自报审批结论；该引用必须匹配当前政策及版本所属范围，合成材料同样需要部署批准及精确版本导入授权。
+
+数据 API 路径为 `/api/v2/evaluation/datasets` 及其版本、授权和内容子路径，使用生成 Client。写入携带 `Idempotency-Key`；期望修订冲突返回 409，无当前用途权限返回 404，未配置或当前政策不可读取返回 503。列表及内部授权集合的 V1 支持上限均为 1000，超过上限整体拒绝，不能返回被静默截断的授权结果。API/Worker 的部署模块须使用 `createEvaluationObjectStorageV1` 装配现有 S3 Adapter，固定独立 `eval/` 前缀；普通 FileGrant 存储实例不能接入。对象传输在短事务之外执行，意图和传输截止时间先持久化，提交前用当前 DB 时间再次检查政策、主体、授权和内容有效期。
+
+部署沿用现有私有配置模块：API 的 `apiInput.evaluation` 经 `deployment-entry.ts` 传入生产装配，Worker 的 `workloadInput.evaluation` 经同一启动入口传入既有清理轮询。不新增环境变量或独立服务；省略该配置时 API 返回未配置，不能从 Owner 或普通文件配置推导默认值。API 的 `loadPolicy` 每次读取当前私有政策文件并调用 `parseEvaluationPolicyV1`，不能永久捕获启动快照；政策读取错误使请求失败。两端使用相同政策版本和存储绑定，Worker 只执行 DB 已固化的清理义务，政策失效不撤销清理。
+
+私有配置模块的接线形式如下，文件路径及对象存储参数由部署提供；配置和凭证不写入镜像或 Git：
+
+```typescript
+import { readFile } from "node:fs/promises";
+import { parseEvaluationPolicyV1 } from "@agent-infra/platform-core";
+import { createEvaluationObjectStorageV1 } from "@agent-infra/object-storage";
+
+const settings = JSON.parse(await readFile(privateConfigurationFile, "utf8"));
+const loadPolicy = async () =>
+  parseEvaluationPolicyV1(JSON.parse(await readFile(settings.policyFile, "utf8")));
+await loadPolicy(); // 已声明启用但配置非法时启动失败
+const storage = createEvaluationObjectStorageV1(settings.objectStorage);
+// API 私有 configuration.mjs：
+apiInput.evaluation = { loadPolicy, storage, close: async () => storage.close() };
+// Worker 的独立私有 configuration.mjs 使用相同批准输入：
+workloadInput.evaluation = {
+  storage,
+  batchSize: settings.cleanup.batchSize,
+  timeoutMs: settings.cleanup.timeoutMs,
+  closeStorage: () => storage.close(),
+};
+```
+
+Eval 幂等回执的保留截止时间不得晚于相关数据集/版本的元数据期限。到期由 Worker 物理删除整个专属回执，包含主体、摘要和时间字段；不留下无限期可关联墓碑。迟到重试始终重新检查当前版本和授权，过期/已删除版本不能重新导入或恢复正文；空数据集/新 pending 版本仍不授予内容访问权。幂等窗口之后，相同键可受理一个新的空数据集意图，但不能因此复活旧版本或已撤授权。
+
+数据基础模块的 `read` 用例仅校验 `read` 用途。后续实验和评分在该模块的事务/版本/授权边界扩展服务端固定的 `run`、`score`、`review` 或 `analyze` 入口，并与 Execution/fence 绑定；不得借用浏览器 `read` 入口或要求额外授予 `read` 来实现这些独立用途，也不接受客户端自报用途来扩大正文权限。
 
 #### 18.4.2 版本、对象与任务绑定
 

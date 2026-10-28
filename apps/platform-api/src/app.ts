@@ -61,6 +61,10 @@ import {
 	registerDirectoryRoutes,
 } from "./http/directory-routes.js";
 import {
+	type EvaluationDataRoutesV1,
+	registerEvaluationDataRoutesV1,
+} from "./http/evaluation-data-routes.js";
+import {
 	type FileLimitRoutesDependenciesV1,
 	registerFileLimitRoutesV2,
 } from "./http/file-limit-routes.js";
@@ -170,6 +174,7 @@ type ApiObservability = Pick<
 >;
 
 export interface PlatformAppDependencies {
+	readonly evaluation?: EvaluationDataRoutesV1;
 	readonly connectionInstallations?: ConnectionInstallationRouteDependenciesV1;
 	readonly connectionInstallationCallback?: ConnectionInstallationCallbackRouteDependenciesV1;
 	readonly agentApiCreation?: AgentApiCreationRouteDependencies;
@@ -318,6 +323,7 @@ export function createPlatformApp(
 		registerAgentApiLifecycleRoutes(app, dependencies.agentApiLifecycle);
 	if (dependencies.applications)
 		registerApplicationRegistrationRoutes(app, dependencies.applications);
+	registerEvaluationDataRoutesV1(app, dependencies.evaluation);
 	if (dependencies.applicationApiCredentials)
 		registerApplicationApiCredentialRoutes(
 			app,

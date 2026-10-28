@@ -5037,6 +5037,15 @@
           "wecom.conversation_started",
           "wecom.conversation_unavailable",
           "wecom.media_rejected",
+          "evaluation.dataset.list",
+          "evaluation.dataset.create",
+          "evaluation.version.reserve",
+          "evaluation.grant.create",
+          "evaluation.grant.revoke",
+          "evaluation.content.write",
+          "evaluation.content.confirm",
+          "evaluation.content.read",
+          "evaluation.content.delete",
           "application.credential.issued",
           "application.credential.rotated",
           "application.credential.delivery",
@@ -5624,7 +5633,8 @@
                   "execution",
                   "configuration",
                   "api_credential",
-                  "application"
+                  "application",
+                  "evaluation_dataset"
                 ],
                 "type": "string"
               },
@@ -6302,7 +6312,8 @@
                   "execution",
                   "configuration",
                   "api_credential",
-                  "application"
+                  "application",
+                  "evaluation_dataset"
                 ],
                 "type": "string"
               },

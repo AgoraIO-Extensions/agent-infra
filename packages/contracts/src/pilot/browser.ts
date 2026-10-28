@@ -70,6 +70,17 @@ import {
 	PilotProtocolErrorV1Schema,
 } from "./errors.ts";
 import {
+	EvaluationDatasetContentV1Schema,
+	EvaluationDatasetCreateV1Schema,
+	EvaluationDatasetPageV1Schema,
+	EvaluationDatasetV1Schema,
+	EvaluationGrantCreateV1Schema,
+	EvaluationGrantV1Schema,
+	EvaluationRevisionCommandV1Schema,
+	EvaluationVersionReserveV1Schema,
+	EvaluationVersionV1Schema,
+} from "./evaluation-data.ts";
+import {
 	MultiServiceAgentSourceV1Schema,
 	MultiServiceResourceCapV1Schema,
 	MultiServiceResourceProfileProjectionV1Schema,
@@ -1501,6 +1512,169 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/evaluation/datasets": {
+		get: {
+			operationId: "listEvaluationDatasetsV1",
+			description:
+				"Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.",
+			security: agentListSecurity,
+			requestParams: {},
+			responses: {
+				"200": jsonResponse(
+					"Eval purpose-bound result",
+					EvaluationDatasetPageV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		post: {
+			operationId: "createEvaluationDatasetV1",
+			description:
+				"Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.",
+			security: agentListSecurity,
+			requestParams: { header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(EvaluationDatasetCreateV1Schema),
+			responses: {
+				"201": jsonResponse(
+					"Eval purpose-bound result",
+					EvaluationDatasetV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/evaluation/datasets/{datasetId}/versions": {
+		post: {
+			operationId: "reserveEvaluationVersionV1",
+			description:
+				"Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.",
+			security: agentListSecurity,
+			requestParams: {
+				path: z.strictObject({ datasetId: z.uuid() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(EvaluationVersionReserveV1Schema),
+			responses: {
+				"201": jsonResponse(
+					"Eval purpose-bound result",
+					EvaluationVersionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/evaluation/datasets/{datasetId}/grants": {
+		post: {
+			operationId: "grantEvaluationPurposeV1",
+			description:
+				"Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.",
+			security: agentListSecurity,
+			requestParams: {
+				path: z.strictObject({ datasetId: z.uuid() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(EvaluationGrantCreateV1Schema),
+			responses: {
+				"201": jsonResponse(
+					"Eval purpose-bound result",
+					EvaluationGrantV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/evaluation/datasets/{datasetId}/grants/{grantId}": {
+		delete: {
+			operationId: "revokeEvaluationPurposeV1",
+			description:
+				"Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.",
+			security: agentListSecurity,
+			requestParams: {
+				path: z.strictObject({ datasetId: z.uuid(), grantId: z.uuid() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(EvaluationRevisionCommandV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Eval purpose-bound result",
+					EvaluationGrantV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/content": {
+		put: {
+			operationId: "uploadEvaluationContentV1",
+			description:
+				"Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.",
+			security: agentListSecurity,
+			requestParams: {
+				path: z.strictObject({ datasetId: z.uuid(), versionId: z.uuid() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(EvaluationDatasetContentV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Eval purpose-bound result",
+					EvaluationVersionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		get: {
+			operationId: "readEvaluationContentV1",
+			description:
+				"Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.",
+			security: agentListSecurity,
+			requestParams: {
+				path: z.strictObject({ datasetId: z.uuid(), versionId: z.uuid() }),
+			},
+			responses: {
+				"200": jsonResponse(
+					"Eval purpose-bound result",
+					EvaluationDatasetContentV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		delete: {
+			operationId: "deleteEvaluationContentV1",
+			description:
+				"Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.",
+			security: agentListSecurity,
+			requestParams: {
+				path: z.strictObject({ datasetId: z.uuid(), versionId: z.uuid() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(EvaluationRevisionCommandV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Eval purpose-bound result",
+					EvaluationVersionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/confirm": {
+		post: {
+			operationId: "confirmEvaluationContentV1",
+			description:
+				"Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.",
+			security: agentListSecurity,
+			requestParams: {
+				path: z.strictObject({ datasetId: z.uuid(), versionId: z.uuid() }),
+			},
+			responses: {
+				"200": jsonResponse(
+					"Eval purpose-bound result",
+					EvaluationVersionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/admin/users/{userId}/disable": {
 		get: {
 			operationId: "getPlatformUserDisabledV2",
@@ -2540,6 +2714,15 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	EvaluationDatasetContentV1: EvaluationDatasetContentV1Schema,
+	EvaluationDatasetCreateV1: EvaluationDatasetCreateV1Schema,
+	EvaluationDatasetPageV1: EvaluationDatasetPageV1Schema,
+	EvaluationDatasetV1: EvaluationDatasetV1Schema,
+	EvaluationGrantCreateV1: EvaluationGrantCreateV1Schema,
+	EvaluationGrantV1: EvaluationGrantV1Schema,
+	EvaluationRevisionCommandV1: EvaluationRevisionCommandV1Schema,
+	EvaluationVersionReserveV1: EvaluationVersionReserveV1Schema,
+	EvaluationVersionV1: EvaluationVersionV1Schema,
 	FileLimitDeclarationProjectionV1: FileLimitDeclarationProjectionV1Schema,
 	FileLimitDeclarationResponseV1: FileLimitDeclarationResponseV1Schema,
 	FileLimitDeclarationWriteRequestV1: FileLimitDeclarationWriteRequestV1Schema,

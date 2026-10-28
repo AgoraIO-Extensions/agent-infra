@@ -80,14 +80,20 @@ export function createS3ObjectStorageV1(
 	}
 	async function inspect(
 		objectRef: string,
+		version?: string,
 	): Promise<StoredFileObjectV1 | null> {
 		try {
 			const abortSignal = signal();
 			const head = await client.send(
-				new HeadObjectCommand({ Bucket: options.bucket, Key: key(objectRef) }),
+				new HeadObjectCommand({
+					Bucket: options.bucket,
+					Key: key(objectRef),
+					...(version === undefined ? {} : { VersionId: version }),
+				}),
 				{ abortSignal },
 			);
 			if (
+				(version !== undefined && head.VersionId !== version) ||
 				!head.VersionId ||
 				head.VersionId === "null" ||
 				!head.ETag ||
@@ -141,19 +147,26 @@ export function createS3ObjectStorageV1(
 	}
 	return {
 		inspect,
-		async scan(cursor: string | null, limit: number) {
+		async scan(cursor: string | null, limit: number, objectRef?: string) {
 			try {
 				if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
 					throw new ObjectStorageError("invalid");
+				const scanPrefix =
+					objectRef === undefined ? options.prefix : key(objectRef);
 				const position: { key?: string; version?: string } = cursor
 					? JSON.parse(cursor)
 					: {};
-				if (position.key && !position.key.startsWith(options.prefix))
+				if (
+					position.key &&
+					(objectRef === undefined
+						? !position.key.startsWith(options.prefix)
+						: position.key !== scanPrefix)
+				)
 					throw new ObjectStorageError("invalid");
 				const page = await client.send(
 					new ListObjectVersionsCommand({
 						Bucket: options.bucket,
-						Prefix: options.prefix,
+						Prefix: scanPrefix,
 						MaxKeys: limit,
 						KeyMarker: position.key,
 						VersionIdMarker: position.version,
@@ -164,12 +177,17 @@ export function createS3ObjectStorageV1(
 					...(page.Versions ?? []),
 					...(page.DeleteMarkers ?? []),
 				].map((value) => {
-					if (!value.Key || !value.VersionId || !value.LastModified)
+					if (
+						!value.Key ||
+						!value.VersionId ||
+						!value.LastModified ||
+						(objectRef !== undefined && value.Key !== scanPrefix)
+					)
 						throw new ObjectStorageError("unavailable");
-					const objectRef = value.Key.slice(options.prefix.length);
-					key(objectRef);
+					const returnedRef = value.Key.slice(options.prefix.length);
+					key(returnedRef);
 					return {
-						objectRef,
+						objectRef: returnedRef,
 						version: value.VersionId,
 						createdAt: value.LastModified.toISOString(),
 					};

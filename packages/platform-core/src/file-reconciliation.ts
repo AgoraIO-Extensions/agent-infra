@@ -9,7 +9,12 @@ export interface FileObjectPageV1 {
 	readonly cursor: string | null;
 }
 export interface FileReconciliationStorageV1 {
-	scan(cursor: string | null, limit: number): Promise<FileObjectPageV1>;
+	/** Optional exact object scope keeps per-object cleanup independent of bucket size. */
+	scan(
+		cursor: string | null,
+		limit: number,
+		objectRef?: string,
+	): Promise<FileObjectPageV1>;
 	remove(objectRef: string, version: string): Promise<void>;
 }
 export interface FileReconciliationStoreV1 extends FileStoreV1 {

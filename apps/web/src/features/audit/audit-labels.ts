@@ -2,6 +2,15 @@ import type { ChipTone } from "@/lib/status-tone";
 import type { AuditRecord } from "./audit-query.js";
 
 export const auditActionLabels: Record<AuditRecord["action"], string> = {
+	"evaluation.dataset.list": "查看评测集",
+	"evaluation.dataset.create": "创建评测集",
+	"evaluation.version.reserve": "预留评测版本",
+	"evaluation.grant.create": "授予评测用途权限",
+	"evaluation.grant.revoke": "撤销评测用途权限",
+	"evaluation.content.write": "导入评测内容",
+	"evaluation.content.confirm": "确认评测内容",
+	"evaluation.content.read": "读取评测内容",
+	"evaluation.content.delete": "删除评测内容",
 	"connection.installation.begin": "发起 Connection 安装",
 	"connection.installation.confirm": "确认 Connection 安装",
 	"skill.version.register": "Skill 版本登记",
@@ -175,6 +184,7 @@ export const auditSubjectLabels: Record<
 	configuration: "配置",
 	api_credential: "API 凭证",
 	application: "应用",
+	evaluation_dataset: "评测集",
 };
 
 /**

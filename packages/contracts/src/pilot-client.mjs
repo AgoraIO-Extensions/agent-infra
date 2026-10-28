@@ -62,6 +62,24 @@ async function generate(
 			operation.security = [{ platformApiCredential: [] }];
 		}
 	}
+	// Eval data methods also have explicit alternative Cookie/Bearer channels.
+	// SDK string auth must select Bearer once rather than emitting both schemes.
+	specification =
+		typeof specification === "string"
+			? JSON.parse(await readFile(specification, "utf8"))
+			: specification;
+	for (const [path, methods] of Object.entries(specification.paths ?? {})) {
+		if (!path.startsWith("/api/v2/evaluation/")) continue;
+		for (const [method, operation] of Object.entries(methods)) {
+			if (!["get", "post", "put", "delete"].includes(method)) continue;
+			if (
+				JSON.stringify(operation.security) !==
+				JSON.stringify([{ PlatformSession: [] }, { platformApiCredential: [] }])
+			)
+				throw new Error(`Unexpected Eval authentication alternatives: ${path}`);
+			operation.security = [{ platformApiCredential: [] }];
+		}
+	}
 	await createClient({
 		input: specification,
 		output: directory,

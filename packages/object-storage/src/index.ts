@@ -53,11 +53,13 @@ export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
 		string,
 		{ bytes: Uint8Array; metadata: StoredFileObjectV1; createdAt: string }
 	>();
-	async scan(cursor: string | null, limit: number) {
+	async scan(cursor: string | null, limit: number, objectRef?: string) {
 		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
 			throw new ObjectStorageError("invalid");
+		if (objectRef !== undefined) requireReference(objectRef);
 		const keys = [...this.objects.keys()]
 			.sort()
+			.filter((key) => objectRef === undefined || key === objectRef)
 			.filter((key) => !cursor || key > cursor)
 			.slice(0, limit);
 		return {
@@ -78,10 +80,13 @@ export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
 		if (this.objects.get(objectRef)?.metadata.version === version)
 			this.objects.delete(objectRef);
 	}
-	async inspect(objectRef: string) {
+	async inspect(objectRef: string, version?: string) {
 		requireReference(objectRef);
 		const value = this.objects.get(objectRef);
-		return value ? structuredClone(value.metadata) : null;
+		return value &&
+			(version === undefined || value.metadata.version === version)
+			? structuredClone(value.metadata)
+			: null;
 	}
 	async upload(request: ObjectUploadV1) {
 		requireReference(request.objectRef);
@@ -175,6 +180,10 @@ export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
  * 服务端内部写入（例如企微入站媒体，#3227）据此在创建上传意图前得到可被确认的描述。
  */
 export { createContentProbe as createObjectContentProbeV1 } from "@agent-infra/file-content";
+export {
+	createEvaluationObjectStorageV1,
+	requireEvaluationObjectStorageV1,
+} from "./evaluation-storage.js";
 export {
 	createS3ObjectStorageV1,
 	type S3ObjectStorageOptionsV1,

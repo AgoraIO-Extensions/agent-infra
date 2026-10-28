@@ -6258,6 +6258,143 @@ function normalizeQueueFullErrorCodeAddition(previous, current) {
 	return normalized;
 }
 
+// #3638: exact dataset surface plus the explicit Eval credential/audit additions.
+// Existing paths, actor kinds, security and unrelated schemas still compare normally.
+function normalizeEvaluationData3638(document) {
+	if (!document.openapi) return document;
+	// Other extension normalizers recurse on already stripped documents. Most of
+	// those states have no Eval material: avoid cloning/hashing the whole OpenAPI.
+	const serialized = JSON.stringify(document);
+	if (
+		!serialized.includes('"eval:data"') &&
+		!serialized.includes('"evaluation.') &&
+		!Object.keys(document.components?.schemas ?? {}).some((name) =>
+			name.startsWith("Evaluation"),
+		) &&
+		!Object.keys(document.paths ?? {}).some((path) =>
+			path.startsWith("/api/v2/evaluation/"),
+		)
+	) {
+		return document;
+	}
+	const normalized = structuredClone(document);
+	const paths = [
+		"/api/v2/evaluation/datasets",
+		"/api/v2/evaluation/datasets/{datasetId}/grants",
+		"/api/v2/evaluation/datasets/{datasetId}/grants/{grantId}",
+		"/api/v2/evaluation/datasets/{datasetId}/versions",
+		"/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/confirm",
+		"/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/content",
+	];
+	const schemas = [
+		"EvaluationDatasetContentV1",
+		"EvaluationDatasetCreateV1",
+		"EvaluationDatasetPageV1",
+		"EvaluationDatasetV1",
+		"EvaluationGrantCreateV1",
+		"EvaluationGrantV1",
+		"EvaluationRevisionCommandV1",
+		"EvaluationVersionReserveV1",
+		"EvaluationVersionV1",
+	];
+
+	const foundPaths = paths.filter(
+		(path) => document.paths?.[path] !== undefined,
+	);
+	const foundSchemas = Object.fromEntries(
+		schemas.map((name) => [name, document.components?.schemas?.[name]]),
+	);
+	const schemaDigest = createHash("sha256")
+		.update(JSON.stringify(foundSchemas))
+		.digest("hex");
+	if (foundPaths.length === paths.length) {
+		const addition = {
+			paths: Object.fromEntries(
+				paths.map((path) => [path, document.paths[path]]),
+			),
+			schemas: foundSchemas,
+		};
+		if (
+			createHash("sha256").update(JSON.stringify(addition)).digest("hex") ===
+			"7e7241467db23ed386b6d907f2ae1fc522d0df84408a3ed0f6d3173cb10673ff"
+		) {
+			for (const path of paths) delete normalized.paths[path];
+			for (const name of schemas) delete normalized.components.schemas[name];
+		}
+	} else if (
+		foundPaths.length === 0 &&
+		schemaDigest ===
+			"f8cae0088360d6dc4451efe9e4ef88197477a2592fba891ef6cd69d7ca79aea6"
+	) {
+		// Historical path-addition fixtures may retain unused, identical new schemas.
+		for (const name of schemas) delete normalized.components.schemas[name];
+	}
+	const scopes = ["agent:create", "agent:manage", "agent:use", "agent:read"];
+	const visit = (value) => {
+		if (!value || typeof value !== "object") return;
+		const scope = value.properties?.scopes;
+		if (
+			scope?.maxItems === 5 &&
+			sameValue(scope.items?.enum, [...scopes, "eval:data"])
+		) {
+			scope.maxItems = 4;
+			scope.items.enum = scopes;
+		}
+		for (const child of Object.values(value)) visit(child);
+	};
+	visit(normalized);
+	const actions = [
+		"evaluation.dataset.list",
+		"evaluation.dataset.create",
+		"evaluation.version.reserve",
+		"evaluation.grant.create",
+		"evaluation.grant.revoke",
+		"evaluation.content.write",
+		"evaluation.content.confirm",
+		"evaluation.content.read",
+		"evaluation.content.delete",
+	];
+	const currentActions =
+		normalized.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	if (
+		Array.isArray(currentActions) &&
+		sameValue(
+			currentActions.slice(
+				currentActions.indexOf(actions[0]),
+				currentActions.indexOf(actions[0]) + actions.length,
+			),
+			actions,
+		) &&
+		actions.every(
+			(action) =>
+				currentActions.filter((value) => value === action).length === 1,
+		)
+	) {
+		normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+			currentActions.filter((action) => !actions.includes(action));
+		for (const name of [
+			"ScopedPlatformAuditProjectionV1",
+			"ScopedPlatformAuditProjectionV2",
+		]) {
+			const subject =
+				normalized.components.schemas[name]?.properties?.subject?.properties
+					?.kind;
+			if (
+				Array.isArray(subject?.enum) &&
+				subject.enum.filter((kind) => kind === "evaluation_dataset").length ===
+					1
+			)
+				subject.enum = subject.enum.filter(
+					(kind) => kind !== "evaluation_dataset",
+				);
+		}
+	}
+	const result = isDeepStrictEqual(document, normalized)
+		? document
+		: normalized;
+	return result;
+}
+
 let comparisonCache;
 
 function findBreakingChanges(previousValue, currentValue) {
@@ -6278,11 +6415,90 @@ function findBreakingChanges(previousValue, currentValue) {
 		return changes;
 	} finally {
 		// Normalizer permutations share results only within this comparison.
-		if (isRoot) comparisonCache = undefined;
+		if (isRoot) {
+			comparisonCache = undefined;
+		}
 	}
 }
 
+function evaluationRemoval(previous, current) {
+	const serialized = JSON.stringify(previous);
+	if (
+		!serialized.includes('"eval:data"') &&
+		!serialized.includes('"evaluation.') &&
+		!serialized.includes('"evaluation_dataset"') &&
+		!Object.keys(previous.components?.schemas ?? {}).some((name) =>
+			name.startsWith("Evaluation"),
+		) &&
+		!Object.keys(previous.paths ?? {}).some((path) =>
+			path.startsWith("/api/v2/evaluation/"),
+		)
+	)
+		return false;
+	for (const [path] of Object.entries(previous.paths ?? {}))
+		if (path.startsWith("/api/v2/evaluation/") && !current.paths?.[path])
+			return true;
+	for (const name of Object.keys(previous.components?.schemas ?? {}))
+		if (name.startsWith("Evaluation") && !current.components?.schemas?.[name])
+			return true;
+	const beforeActions =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum ?? [];
+	const afterActions =
+		current.components?.schemas?.ScopedPlatformAuditActionV1?.enum ?? [];
+	if (
+		beforeActions.some(
+			(action) =>
+				action.startsWith("evaluation.") && !afterActions.includes(action),
+		)
+	)
+		return true;
+	for (const name of [
+		"ScopedPlatformAuditProjectionV1",
+		"ScopedPlatformAuditProjectionV2",
+	]) {
+		const before =
+			previous.components?.schemas?.[name]?.properties?.subject?.properties
+				?.kind?.enum ?? [];
+		const after =
+			current.components?.schemas?.[name]?.properties?.subject?.properties?.kind
+				?.enum ?? [];
+		if (
+			before.includes("evaluation_dataset") &&
+			!after.includes("evaluation_dataset")
+		)
+			return true;
+	}
+	const removedScope = (before, after) => {
+		if (
+			!before ||
+			!after ||
+			typeof before !== "object" ||
+			typeof after !== "object"
+		)
+			return false;
+		if (
+			before.properties?.scopes?.items?.enum?.includes("eval:data") &&
+			after.properties?.scopes &&
+			!after.properties.scopes.items?.enum?.includes("eval:data")
+		)
+			return true;
+		return Object.keys(before).some((key) =>
+			removedScope(before[key], after[key]),
+		);
+	};
+	return removedScope(previous, current);
+}
+
 function evaluateBreakingChanges(previousValue, currentValue) {
+	if (evaluationRemoval(previousValue, currentValue))
+		return ["removed published Eval contract"];
+	const previousEvaluation = normalizeEvaluationData3638(previousValue);
+	const currentEvaluation = normalizeEvaluationData3638(currentValue);
+	if (
+		previousEvaluation !== previousValue ||
+		currentEvaluation !== currentValue
+	)
+		return findBreakingChanges(previousEvaluation, currentEvaluation);
 	let previous = previousValue;
 	// Compose the reviewed audit extension with earlier independently checked additions.
 	const applicationActions = [

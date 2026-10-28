@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
+	type ObjectStorageDataV1,
+	requireEvaluationObjectStorageV1,
+} from "@agent-infra/object-storage";
+import {
 	type AgentConfigurationAuthorityContextV1,
 	type AgentConfigurationUseCaseDependenciesV1,
 	type AgentManagementActorContextV1,
@@ -18,12 +22,14 @@ import {
 	createApplicationRegistrationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
 	createConversationExecutionUseCaseV1,
+	createEvaluationDataV1,
 	createNativeCapabilityAdmissionUseCaseV1,
 	createPersonalApiAgentReadUseCaseV1,
 	createPersonalApiCredentialUseCaseV1,
 	createPersonalRelayKeyUseCaseV1,
 	createRecentPersonalConversationsUseCaseV1,
 	createSkillHubAgentBindingUseCaseV1,
+	type EvaluationPolicyV1,
 	type FileLimitDeclarationSubjectV1,
 	type FileLimitDeclarationsV1,
 	type FileScopeV1,
@@ -50,6 +56,7 @@ import {
 	type PostgresConversationExecutionOptionsV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
+	PostgresEvaluationDataStoreV1,
 	PostgresFileLimitDeclarationStoreV1,
 	PostgresPersonalApiCredentialStoreV1,
 	PostgresPersonalRelayKeyStoreV1,
@@ -162,6 +169,11 @@ export interface PlatformApiAssemblyInput {
 	};
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly files?: PlatformFileDeploymentV1;
+	readonly evaluation?: {
+		close?: () => Promise<void>;
+		loadPolicy: () => Promise<EvaluationPolicyV1>;
+		storage: ObjectStorageDataV1;
+	};
 	readonly databaseUrl: string;
 	readonly taskAdmissionPolicy: ConversationTaskAdmissionPolicyV1;
 	readonly conversationReplayWindow?: number;
@@ -257,6 +269,8 @@ export interface PlatformApiAssembly {
 export function assemblePlatformApi(
 	input: PlatformApiAssemblyInput,
 ): PlatformApiAssembly {
+	if (input.evaluation)
+		requireEvaluationObjectStorageV1(input.evaluation.storage);
 	if (
 		input.nativeMetadataWorker &&
 		input.nativeMetadataCurrent &&
@@ -341,6 +355,12 @@ export function assemblePlatformApi(
 		!wecom && input.wecomIdentity
 			? assembleWecomReceiptApiV1(input.databaseUrl, input.wecomIdentity)
 			: undefined;
+	const evaluationStore = input.evaluation
+		? new PostgresEvaluationDataStoreV1({
+				databaseUrl: input.databaseUrl,
+				directory: userDirectory,
+			})
+		: undefined;
 	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
 		databaseUrl: input.databaseUrl,
 		userDirectory,
@@ -1181,6 +1201,17 @@ export function assemblePlatformApi(
 				: {}),
 		},
 		applications: { identity: input.identity, applications },
+		evaluation:
+			input.evaluation && evaluationStore
+				? {
+						identity: input.identity,
+						service: createEvaluationDataV1({
+							store: evaluationStore,
+							loadPolicy: input.evaluation.loadPolicy,
+							storage: input.evaluation.storage,
+						}),
+					}
+				: undefined,
 		applicationApiCredentials: {
 			identity: input.identity,
 			issuer: applicationApiCredentials,
@@ -1346,6 +1377,8 @@ export function assemblePlatformApi(
 		skillHubRead,
 		skillHubBindingAdmission,
 		applicationApiCredentialStore,
+		...(evaluationStore ? [evaluationStore] : []),
+		...(input.evaluation?.close ? [{ close: input.evaluation.close }] : []),
 		...(installationStore ? [installationStore] : []),
 		...(browserCommandStore ? [browserCommandStore] : []),
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),

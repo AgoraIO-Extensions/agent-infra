@@ -399,6 +399,12 @@ try {
    process.exit(0);
  }
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
+ if (process.env.RUN_EVALUATION === 'true') {
+   const storage = await import(${JSON.stringify(new URL("../../../packages/object-storage/dist/index.mjs", import.meta.url).href)});
+   storage.requireEvaluationObjectStorageV1(workload.evaluation.storage);
+   console.log(JSON.stringify({batchSize:workload.evaluation.batchSize,timeoutMs:workload.evaluation.timeoutMs,hasCleanupStorage:typeof workload.evaluation.storage.remove==='function'}));
+   workload.evaluation.closeStorage();process.exit(0);
+ }
  if (process.env.RUN_FILE_EXCHANGE === 'true') {
    console.log(JSON.stringify(globalThis.fileExchange));
    process.exit(0);
@@ -1107,6 +1113,30 @@ it("keeps ordinary Workload assembly but disables per-Agent OAuth without per-Ag
 			configurations: null,
 			workloadReady: true,
 			shared: null,
+		});
+	} finally {
+		await writeFile(path, original);
+	}
+});
+
+it("passes the deployment-owned Eval factory and cleanup limits through the actual entry", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	try {
+		await writeFile(
+			path,
+			`${original}
+import {createEvaluationObjectStorageV1} from ${JSON.stringify(new URL("../../../packages/object-storage/dist/index.mjs", import.meta.url).href)};
+const evaluationStorage=createEvaluationObjectStorageV1({region:'fixture',bucket:'fixture',endpoint:'http://127.0.0.1:1',maxObjectBytes:1024,timeoutMs:1000});
+workloadInput.evaluation={storage:evaluationStorage,batchSize:7,timeoutMs:3000,closeStorage:()=>evaluationStorage.close()};
+`,
+		);
+		const result = run({ RUN_EVALUATION: "true" });
+		expect(result.status, result.stderr + result.stdout).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			batchSize: 7,
+			timeoutMs: 3000,
+			hasCleanupStorage: true,
 		});
 	} finally {
 		await writeFile(path, original);

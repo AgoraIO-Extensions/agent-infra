@@ -107,7 +107,10 @@ export interface StoredFileObjectV1 {
 	readonly version: string;
 }
 export interface ObjectStoragePortV1 {
-	inspect(objectRef: string): Promise<StoredFileObjectV1 | null>;
+	inspect(
+		objectRef: string,
+		version?: string,
+	): Promise<StoredFileObjectV1 | null>;
 }
 export interface FileAccessRecordV1 extends FileScopeV1 {
 	readonly schemaVersion: 1;

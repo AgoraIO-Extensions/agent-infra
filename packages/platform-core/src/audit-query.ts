@@ -8,6 +8,8 @@ import {
 	type ConversationOperationFactV2,
 	parseConversationOperationEventV2,
 } from "./conversation-operation-facts.js";
+import { evaluationAuditActionsV1 } from "./evaluation-data.js";
+import { personalApiCredentialScopesV1 } from "./personal-api-credentials.js";
 import {
 	type CurrentTaskUserV1,
 	parseCurrentTaskUserV1,
@@ -30,9 +32,7 @@ export interface ApiCredentialMetadataV1 {
 }
 
 function isApiCredentialScopeV1(value: unknown): boolean {
-	return ["agent:create", "agent:manage", "agent:use", "agent:read"].includes(
-		value as string,
-	);
+	return personalApiCredentialScopesV1.some((scope) => scope === value);
 }
 
 function hasApiCredentialScopeV1(
@@ -91,6 +91,7 @@ export const platformAuditQueryResultsV1 = [
 ] as const;
 
 export const platformAuditQueryActionsV1 = [
+	...evaluationAuditActionsV1,
 	"skill.version.register",
 	"skill.version.review",
 	"skill.version.revoke",
