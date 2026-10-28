@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+	assertWorkerMount,
 	checkWorkloadCapacity,
 	validateCapacityBindings,
 } from "../deploy/ack/workload-capacity.ts";
@@ -18,7 +19,19 @@ const policy = {
 		limits: { cpu: "1", memory: "2Gi" },
 	},
 };
-const evidenceBytes = Buffer.from('{"kind":"synthetic-test-evidence"}');
+const measurement = {
+	schemaVersion: 1,
+	scope: "ack-runtime-capacity",
+	imageDigest,
+	maximumConcurrentExecutions: 1,
+	observedResources: policy.resources,
+	terminalStatus: "completed",
+	replyMatched: true,
+	modelOperationCount: 1,
+	submittedAt: 1000,
+	completedAt: 2000,
+};
+const evidenceBytes = Buffer.from(JSON.stringify(measurement));
 const evidence = new Map([[imageDigest, evidenceBytes]]);
 const profile = {
 	schemaVersion: 1,
@@ -122,6 +135,92 @@ test("self-managed entrypoints do not require a Platform Session capacity profil
 	);
 });
 
+test("unmeasured files and evidence for another image/resources cannot authorize capacity", () => {
+	for (const receipt of [
+		{ kind: "pod-ready-only" },
+		{ ...measurement, terminalStatus: "failed" },
+		{ ...measurement, modelOperationCount: 0 },
+		{ ...measurement, imageDigest: `sha256:${"b".repeat(64)}` },
+		{
+			...measurement,
+			observedResources: {
+				...policy.resources,
+				limits: { cpu: "2", memory: "2Gi" },
+			},
+		},
+	]) {
+		const bytes = Buffer.from(JSON.stringify(receipt));
+		assert.throws(() =>
+			check([{ ...profile, conformanceEvidenceHash: hash(bytes) }], {
+				evidence: new Map([[imageDigest, bytes]]),
+			}),
+		);
+	}
+	assert.throws(
+		() => check([{ ...profile, maximumConcurrentExecutions: 100 }]),
+		/CAPACITY_EVIDENCE_NOT_MEASURED/,
+	);
+});
+
+test("Worker binding requires the actual configuration mount and a restart after Secret changes", () => {
+	const ref = { name: "worker-config", key: "capacity.json" };
+	const secret = {
+		metadata: {
+			name: ref.name,
+			namespace: "test",
+			creationTimestamp: "2026-01-01T00:00:00Z",
+			managedFields: [{ time: "2026-01-01T01:00:00Z" }],
+		},
+		data: { [ref.key]: "e30=" },
+	};
+	const pod = {
+		metadata: { namespace: "test" },
+		status: {
+			phase: "Running",
+			startTime: "2026-01-01T02:00:00Z",
+			containerStatuses: [{ ready: true }],
+		},
+		spec: {
+			containers: [
+				{
+					name: "platform-worker",
+					env: [
+						{
+							name: "PLATFORM_WORKER_DEPLOYMENT_MODULE",
+							value: "file:///app/dist/deployment.mjs",
+						},
+					],
+					volumeMounts: [
+						{
+							name: "configuration",
+							mountPath: "/app/dist/configuration.mjs",
+							subPath: "configuration.mjs",
+							readOnly: true,
+						},
+					],
+				},
+			],
+			volumes: [{ name: "configuration", secret: { secretName: ref.name } }],
+		},
+	};
+	assert.equal(
+		assertWorkerMount(pod, secret, ref).configPath,
+		"/app/dist/configuration.mjs",
+	);
+	const stale = structuredClone(pod);
+	stale.status.startTime = "2026-01-01T00:30:00Z";
+	assert.throws(
+		() => assertWorkerMount(stale, secret, ref),
+		/CAPACITY_WORKER_RESTART_REQUIRED/,
+	);
+	const foreign = structuredClone(pod);
+	foreign.spec.volumes[0].secret.secretName = "another-secret";
+	assert.throws(
+		() => assertWorkerMount(foreign, secret, ref),
+		/CAPACITY_WORKER_MOUNT_INVALID/,
+	);
+});
+
 test("private input checks fail before cluster read when invalid and reject stale mounted profiles", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "ack-capacity-"));
 	const sourceSha = "a".repeat(40);
@@ -152,9 +251,13 @@ test("private input checks fail before cluster read when invalid and reject stal
 		let reads = 0;
 		const read = () => {
 			reads++;
-			return Buffer.from(
-				JSON.stringify({ schemaVersion: 1, profiles: [profile] }),
-			);
+			return {
+				...policy,
+				profiles: [profile],
+				bytes: Buffer.from(
+					JSON.stringify({ schemaVersion: 1, profiles: [profile] }),
+				),
+			};
 		};
 		await assert.rejects(
 			checkWorkloadCapacity(
@@ -186,9 +289,35 @@ test("private input checks fail before cluster read when invalid and reject stal
 				paths.requests,
 				paths.templates,
 				sourceSha,
-				() => Buffer.from("stale"),
+				() => ({ ...read(), bytes: Buffer.from("stale") }),
 			),
 			/CAPACITY_SECRET_DRIFT/,
+		);
+		await assert.rejects(
+			checkWorkloadCapacity(
+				paths.config,
+				paths.requests,
+				paths.templates,
+				sourceSha,
+				() => ({
+					...read(),
+					resources: {
+						...policy.resources,
+						limits: { cpu: "2", memory: "2Gi" },
+					},
+				}),
+			),
+			/CAPACITY_WORKER_POLICY_DRIFT/,
+		);
+		await assert.rejects(
+			checkWorkloadCapacity(
+				paths.config,
+				paths.requests,
+				paths.templates,
+				sourceSha,
+				() => ({ ...read(), profiles: [] }),
+			),
+			/CAPACITY_WORKER_PROFILES_DRIFT/,
 		);
 	} finally {
 		await rm(dir, { recursive: true, force: true });

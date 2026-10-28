@@ -231,9 +231,12 @@ deploy/ack/redeploy.sh bootstrap-inputs
 ```
 
 `resources` 必须与 Worker policy 一致，`profilesFile` 必须是 bootstrap 交付给 Worker 的同一
-文件。工具在创建 Agent 前比较本地文件与集群 Secret 字节；缺失、重复、资源不匹配、
-全零证据哈希、收据字节变化或 Secret 漂移均失败。哈希核对只证明绑定一致，不能替代
-真实测量：只测过单执行就只能声明上限 1，不能把一次回复推广为更高并发。
+文件。工具在创建 Agent 前核对当前 Worker Pod 的实际挂载及装配输出，再比较本地文件与集群 Secret 字节；缺失、重复、资源不匹配、
+全零证据哈希、收据字节变化或 Secret 漂移均失败。当前检查只支持单执行测量收据，
+同时校验镜像、完整 CPU/内存资源、真实模型事实、完成状态、回复匹配和上限 1。
+标准模板 preflight 自动生成 `runtime-capacity.receipt.json`；容量 profile 的证据哈希
+指向该文件。自定义 ACP 可使用 `isolated-custom-runtime-capacity` 收据。
+纯 Pod-ready、任意文件、缺少模型事实或把容量扩大到测量上限以上都不能通过。
 更新配置后须等待 Worker rollout；已有 Agent 通过正式 lifecycle 重启重新生成 verified
 capacity，禁止手工写数据库补齐。
 

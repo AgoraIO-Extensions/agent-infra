@@ -157,6 +157,7 @@ async function main(inputPath) {
 		const port = 35000 + Math.floor(Math.random() * 1000);
 		portForward = spawn("kubectl", [...kubeArgs, "port-forward", `pod/${name}`, `${port}:3003`], { stdio: ["ignore", "pipe", "pipe"] });
 		await waitForPort(port, portForward);
+		const measurementPod = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
 		const actualModuleHash = run([...kubeArgs, "exec", name, "--", "node", "-e", "console.log(require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync('/app/node_modules/@agent-infra/agent-runtime/dist/index.mjs')).digest('hex'))"]).trim();
 		const runnerJob = {
 			schemaVersion: 1, scope: job.scope, kubeconfig: job.kubeconfig, namespace: job.namespace,
@@ -180,6 +181,23 @@ async function main(inputPath) {
 			child.once("exit", (value) => resolve(value ?? 1));
 		});
 		if (code !== 0) throw new Error("TEMPLATE_PREFLIGHT_FAILED");
+		const measured = JSON.parse(await privateFile(join(job.outputDirectory, "template-model-preflight.receipt.json"), "MEASUREMENT"));
+		const observed = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
+		if (observed.metadata.uid !== measurementPod.metadata.uid ||
+			observed.metadata.labels["agent-infra.validation-owner"] !== owner ||
+			observed.spec.containers[0].image !== job.imageReference ||
+			observed.status.containerStatuses[0].restartCount !== 0 ||
+			measured.imageDigest !== job.imageDigest || measured.sourceCommit !== job.sourceCommit ||
+			measured.terminalStatus !== "completed" || measured.replyMatched !== true ||
+			!Number.isSafeInteger(measured.modelOperationCount) || measured.modelOperationCount < 1)
+			throw new Error("CAPACITY_MEASUREMENT_INVALID");
+		await writeFile(join(job.outputDirectory, "runtime-capacity.receipt.json"), JSON.stringify({
+			schemaVersion: 1, scope: "ack-runtime-capacity", sourceCommit: job.sourceCommit,
+			imageDigest: job.imageDigest, observedResources: observed.spec.containers[0].resources,
+			maximumConcurrentExecutions: 1, terminalStatus: "completed", replyMatched: true,
+			modelOperationCount: measured.modelOperationCount,
+			submittedAt: measured.submittedAt, completedAt: measured.validatedAt,
+		}) + "\n", { mode: 0o600, flag: "wx" });
 		process.stdout.write(JSON.stringify({ schemaVersion: 1, kind: "ack-template-preflight", templateId: job.templateId, status: "passed" }) + "\n");
 	} finally {
 		portForward?.kill("SIGTERM");
