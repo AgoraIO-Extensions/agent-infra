@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { validateTemplateValidationExpectations } from "../deploy/ack/template-validation.mjs";
+import {
+	templatePreflightValidationReceipt,
+	validateTemplateValidationExpectations,
+} from "../deploy/ack/template-validation.mjs";
 
 const sourceSha = "a".repeat(40);
 const imageDigest = `sha256:${"b".repeat(64)}`;
@@ -93,6 +96,45 @@ test("accepts four current real-runtime validation tuples", async () => {
 	assert.equal(result.pass, true);
 	assert.equal(result.results.length, 4);
 	assert(result.results.every((entry) => entry.status === "passed"));
+});
+
+test("projects Runtime diagnostics into the deployment receipt without losing required evidence", async () => {
+	const f = await fixture();
+	const file = f.expectations.templates[0].preflightFile;
+	const measured = {
+		...JSON.parse(await readFile(file, "utf8")),
+		executionId: "private-validation-execution",
+		submittedAt: Date.now() - 2_000,
+		observedResourceLimits: { cpu: "1", memory: "2Gi" },
+	};
+	await writeFile(file, JSON.stringify(measured));
+	assert.equal(
+		(await validateTemplateValidationExpectations(f.expectations)).results[0]
+			.reason,
+		"PREFLIGHT_UNBOUNDED",
+	);
+	await writeFile(
+		file,
+		JSON.stringify(templatePreflightValidationReceipt(measured)),
+	);
+	assert.equal(
+		(await validateTemplateValidationExpectations(f.expectations)).pass,
+		true,
+	);
+	await writeFile(
+		file,
+		JSON.stringify(
+			templatePreflightValidationReceipt({
+				...measured,
+				modelOperationCount: 0,
+			}),
+		),
+	);
+	assert.equal(
+		(await validateTemplateValidationExpectations(f.expectations)).results[0]
+			.reason,
+		"PREFLIGHT_TUPLE_INVALID",
+	);
 });
 
 test("rejects an expired receipt before it can authorize deployment", async () => {
