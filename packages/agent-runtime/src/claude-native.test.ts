@@ -1449,7 +1449,8 @@ it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
 );
 
 it("executes native WebSearch with a separately authorized model request and per-request usage", async () => {
-	const f = await fixture();
+	const f = await claudeNativeFixture(true);
+	fixtures.push(f);
 	f.hold();
 	const command = claudeCommand("web-search");
 	const accepted = await f.driver.execute(command);
@@ -1579,6 +1580,22 @@ it("executes native WebSearch with a separately authorized model request and per
 		parentOperationRef: completed[0].operationRef,
 		usage: { inputTokens: 17, outputTokens: 9 },
 	});
+	for (const binding of [
+		completed[1],
+		{ ...completed[1], operationRef: "foreign-operation" },
+		{ ...completed[1], attemptRef: "foreign-attempt" },
+	]) {
+		await expect(
+			f.driver.validateExternalAction({
+				kind: "model",
+				nativeSessionRef: accepted.nativeSessionRef,
+				executionId: command.executionId,
+				runtimeOperationId: command.executionId,
+				operationRef: binding.operationRef,
+				attemptRef: binding.attemptRef,
+			}),
+		).rejects.toThrow();
+	}
 	expect(
 		facts.filter((fact: { phase: string }) => fact.phase === "intent"),
 	).toHaveLength(3);

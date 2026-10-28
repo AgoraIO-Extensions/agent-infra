@@ -121,7 +121,7 @@ export function completeClaudeToolUses(
 		response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
 	response.end();
 }
-export async function claudeNativeFixture() {
+export async function claudeNativeFixture(validateModelActions = false) {
 	const path = await mkdtemp(join(tmpdir(), "claude-native-"));
 	const calls: {
 		endpoint: number;
@@ -177,7 +177,19 @@ export async function claudeNativeFixture() {
 			};
 		}),
 	};
-	let driver = await ClaudeRuntimeDriver.open(options);
+	let driver: ClaudeRuntimeDriver;
+	const protectedOptions = validateModelActions
+		? {
+				...options,
+				authorizeModelAction: async (
+					action: Parameters<ClaudeRuntimeDriver["validateExternalAction"]>[0],
+				) => {
+					await driver.validateExternalAction(action);
+					return { relayKey: "synthetic-credential-0" };
+				},
+			}
+		: options;
+	driver = await ClaudeRuntimeDriver.open(protectedOptions);
 	return {
 		path,
 		options,
@@ -208,7 +220,7 @@ export async function claudeNativeFixture() {
 			);
 		},
 		async restart(
-			config: Parameters<typeof ClaudeRuntimeDriver.open>[0] = options,
+			config: Parameters<typeof ClaudeRuntimeDriver.open>[0] = protectedOptions,
 		) {
 			await driver.close();
 			driver = await ClaudeRuntimeDriver.open(config);

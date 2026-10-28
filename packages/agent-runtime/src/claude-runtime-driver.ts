@@ -681,10 +681,30 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const turn = file
 			.read()
 			.turns.find((item) => item.executionId === action.executionId);
+		const fact = turn?.operationFacts
+			?.filter(
+				(entry) =>
+					entry.kind === "model" &&
+					entry.operationRef === action.operationRef &&
+					entry.attemptRef === action.attemptRef,
+			)
+			.at(-1);
+		const selectedModel =
+			turn &&
+			this.options.modelOptions.find(
+				(option) => option.modelOptionId === turn.selection.modelOptionId,
+			);
 		if (
 			!turn ||
-			turn.operationRef !== action.operationRef ||
-			turn.attemptRef !== action.attemptRef
+			!fact ||
+			fact.kind !== "model" ||
+			!["intent", "started"].includes(fact.phase) ||
+			fact.model.configVersion !== turn.configVersion ||
+			fact.model.modelOptionId !== turn.selection.modelOptionId ||
+			fact.model.modelId !== selectedModel?.model ||
+			(action.operationRef === turn.operationRef
+				? action.attemptRef !== turn.attemptRef
+				: fact.parentOperationRef !== turn.operationRef)
 		)
 			runtimeAuthorizationDenied();
 	}
