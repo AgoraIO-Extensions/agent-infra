@@ -4,6 +4,7 @@ import { createHmac, createPrivateKey, createPublicKey, randomUUID } from "node:
 import { execFileSync, spawn } from "node:child_process";
 import { chmod, lstat, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { templatePreflightValidationReceipt } from "./template-validation.mjs";
 
 const runner = join(import.meta.dirname, "template-model-preflight-runner.mts");
@@ -25,7 +26,7 @@ const run = (args, input) =>
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 
-function validateJob(value) {
+export function validateTemplatePreflightJob(value) {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("JOB_INVALID");
 	const allowed = new Set([
 		"schemaVersion", "scope", "kubeconfig", "namespace", "sourceCommit", "templateId", "driver",
@@ -75,7 +76,7 @@ async function waitForPort(port, process) {
 }
 
 async function main(inputPath) {
-	const job = validateJob(JSON.parse(await privateFile(inputPath, "JOB")));
+	const job = validateTemplatePreflightJob(JSON.parse(await privateFile(inputPath, "JOB")));
 	await mkdir(job.outputDirectory, { recursive: true, mode: 0o700 });
 	const owner = randomUUID();
 	const name = `ack-preflight-${job.templateId}-${owner.slice(0, 8)}`;
@@ -227,7 +228,7 @@ async function main(inputPath) {
 	}
 }
 
-try {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) try {
 	const path = process.argv[2];
 	if (!path) throw new Error("JOB_REQUIRED");
 	await main(path);
