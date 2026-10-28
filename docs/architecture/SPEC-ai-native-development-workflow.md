@@ -16,6 +16,11 @@ Agent Runtime 或 Connection 的运行职责。
   Blocker Reconciler 和 Workflow Outcome 通知/自动重开 Issue 链路均退役。
 - 本地验证、受控 fixture 与真实外部验收分别记录；未执行、失败或跳过不能描述为完成。
 
+需要从 Roadmap 或 Map 选择一组可执行 frontier 时，可显式调用仓库级
+[`gen-goal-with-roadmap`](../../.agents/skills/gen-goal-with-roadmap/SKILL.md)。该 Skill 只读发现并冻结
+snapshot，生成一个 Coordinator Goal；它不创建 Goal、不修改 Issue/Project、不启动执行，也不绑定个人通知流程。
+生成的 snapshot 可交给本地协调执行入口继续处理，GitHub Issue、依赖、PR、CI 和 Project 仍是事实源。
+
 ## 3. 需求与文档依据
 
 产品范围以 PRD 为准，实现边界以工程 Spec 为准，开发流程以本文为准。Issue、ADR 和本地
