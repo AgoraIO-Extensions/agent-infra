@@ -203,7 +203,20 @@ async function run() {
         // event stream carries reply/status, not Codex V2 operation frames.
         console.log(JSON.stringify({stage:"reply-check",replyLength:reply.trim().length,replyHash:hash(reply.trim())}));
         if(!completed || !cursor || reply.trim()!=="READY") fail();
-        if (modelFacts.length < 1) fail();
+		if (modelFacts.length < 1 && c.driver !== "codex") {
+			const factReader = `const fs=require('node:fs');const found=[];function walk(p,d=0){if(d>7)return;for(const e of fs.readdirSync(p,{withFileTypes:true})){const f=p+'/'+e.name;if(e.isDirectory())walk(f,d+1);else if(e.name.endsWith('.json')&&fs.statSync(f).size<10000000){let x;try{x=JSON.parse(fs.readFileSync(f,'utf8'))}catch{continue}if(x.binding?.agentId===process.argv[2]&&Array.isArray(x.turns))for(const t of x.turns)if(t.executionId===process.argv[1])found.push({status:t.status,facts:(t.operationFacts??[]).filter(f=>f.kind==='model')});}}}walk('/var/lib/agent-runtime');if(found.length!==1||found[0].status!=='completed')process.exit(1);console.log(JSON.stringify(found[0].facts));`;
+			const durableFacts = JSON.parse(kube("exec", c.containerName, "--", "node", "-e", factReader, id, c.agentId));
+			for (const raw of durableFacts) {
+				const fact = contracts.RuntimeOperationFactV2Schema.parse(raw);
+				if (fact.kind !== "model") continue;
+				if (fact.phase === "failed" || fact.phase === "unknown") fail();
+				if (fact.phase === "completed") {
+					if (fact.model.modelOptionId !== c.modelOptionId || fact.model.configVersion !== c.runtimeConfigVersion || fact.model.reasoningLevel !== c.reasoningLevel) fail();
+					modelFacts.push(fact);
+				}
+			}
+		}
+		if (modelFacts.length < 1) fail();
 		stage = "evidence-write";
 		await mkdir(c.outputDirectory, { recursive: true, mode: 0o700 });
 		const validatedAt = Date.now();
