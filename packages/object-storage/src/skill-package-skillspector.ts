@@ -199,6 +199,13 @@ function parseNativeReport(
 	)
 		invalid();
 	const ids = new Set<string>();
+	const llmAnalyzers = new Set([
+		"semantic_developer_intent",
+		"semantic_quality_policy",
+		"semantic_security_discovery",
+		"meta_analyzer",
+		"mcp_tool_poisoning",
+	]);
 	let completed = 0;
 	for (const item of coverage.analyzer_statuses) {
 		const analyzer = record(item);
@@ -222,7 +229,7 @@ function parseNativeReport(
 			planned !== 0 ||
 			!(
 				analyzer.status === "not_applicable" ||
-				(analyzer.status === "disabled" && id.startsWith("semantic_"))
+				(analyzer.status === "disabled" && llmAnalyzers.has(id))
 			)
 		)
 			invalid();
