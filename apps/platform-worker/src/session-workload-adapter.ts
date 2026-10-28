@@ -419,7 +419,11 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 		)
 	)
 		throw new WorkloadKubernetesError("policy");
-	if (value.egress.nativeEgress && (!value.runtime || value.runtime.custom))
+	if (
+		value.egress.nativeEgress &&
+		(value.runtime?.custom ||
+			(value.desiredState === "running" && value.runtime === null))
+	)
 		throw new WorkloadKubernetesError("policy");
 	// Rejects any destination the shared Agent-level compiler would reject.
 	workloadEgressRulesV1(value.egress);

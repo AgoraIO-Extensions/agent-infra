@@ -2821,6 +2821,64 @@ describe("Session Sandbox Runtime file exchange (#3276)", () => {
 });
 
 describe("native Session policy binding", () => {
+	it("drains a native-egress allocation without Runtime input but never creates one", async () => {
+		const client = api();
+		let creates = 0;
+		const create = client.create.bind(client);
+		client.create = async (object) => {
+			creates++;
+			return create(object);
+		};
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		const live = {
+			...allocation,
+			egress: { nativeEgress: nativeEgressFixture() },
+		};
+		await adapter.apply(live);
+		const previous = (await adapter.observe(live)).resources;
+		const stopped: SessionSandboxAllocationV1 = {
+			...live,
+			desiredState: "stopped",
+			runtime: null,
+		};
+		const before = creates;
+		await adapter.apply(stopped, previous);
+		expect(creates).toBe(before);
+		expect(await client.read("Pod", stopped.podName)).toBeNull();
+		expect(await client.read("Service", stopped.serviceName)).toBeNull();
+		expect(
+			await client.read("NetworkPolicy", stopped.networkPolicyName),
+		).not.toBeNull();
+		expect(await client.read("Secret", stopped.secretName)).toBeNull();
+		expect((await adapter.observe(stopped, [], "control")).status).toBe(
+			"stopped",
+		);
+		expect((await adapter.observe(stopped)).status).toBe("stopped");
+		await expect(
+			adapter.apply({ ...stopped, desiredState: "running" }),
+		).rejects.toThrow();
+		expect(creates).toBe(before);
+	});
+	it("rejects native-egress creation for a custom Runtime", async () => {
+		const client = api();
+		let creates = 0;
+		const create = client.create.bind(client);
+		client.create = async (object) => {
+			creates++;
+			return create(object);
+		};
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		if (!allocation.runtime) throw new Error("Missing Runtime fixture");
+		await expect(
+			adapter.apply({
+				...allocation,
+				egress: { nativeEgress: nativeEgressFixture() },
+				runtime: { ...allocation.runtime, custom: { secretRefs: [] } },
+			}),
+		).rejects.toThrow();
+		expect(creates).toBe(0);
+	});
+
 	it.each(["port", "destination", "protection", "removed"])(
 		"rejects %s drift without rewriting native policy",
 		async (change) => {
