@@ -226,6 +226,20 @@ function agentListScope(request: Request, traceId: string): "user" | "owner" {
 	return "owner";
 }
 
+const personalApiIdentityHeaders = [
+	"x-user-id",
+	"x-application-id",
+	"x-principal",
+	"x-principal-id",
+	"x-recipient",
+	"x-recipient-user-id",
+	"x-role",
+	"x-roles",
+	"x-scope",
+	"x-agent-id",
+	"x-identity-context",
+];
+
 async function personalBearerRead(
 	request: Request,
 	metadata: RequestMetadata,
@@ -243,19 +257,7 @@ async function personalBearerRead(
 	if (
 		new URL(request.url).search ||
 		request.body !== null ||
-		[
-			"x-user-id",
-			"x-application-id",
-			"x-principal",
-			"x-principal-id",
-			"x-recipient",
-			"x-recipient-user-id",
-			"x-role",
-			"x-roles",
-			"x-scope",
-			"x-agent-id",
-			"x-identity-context",
-		].some((name) => request.headers.has(name))
+		personalApiIdentityHeaders.some((name) => request.headers.has(name))
 	) {
 		await reader.recordRefusal(metadata, "invalid_input", action);
 		fail("INVALID_REQUEST", metadata.traceId);
@@ -1088,7 +1090,6 @@ export function registerV2ManagementRoutes(
 				const { value: body } = await parseJson(
 					context.req.raw,
 					ApprovalDecisionRequestV1Schema,
-					PersonalApiIdentityV1Schema,
 					metadata.traceId,
 				);
 				const applicationId = context.req.param("applicationId");
@@ -1250,19 +1251,7 @@ export function registerV2ManagementRoutes(
 					fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 				if (
 					request.body !== null ||
-					[
-						"x-user-id",
-						"x-application-id",
-						"x-principal",
-						"x-principal-id",
-						"x-recipient",
-						"x-recipient-user-id",
-						"x-role",
-						"x-roles",
-						"x-scope",
-						"x-agent-id",
-						"x-identity-context",
-					].some((name) => request.headers.has(name))
+					personalApiIdentityHeaders.some((name) => request.headers.has(name))
 				) {
 					await reader.recordRefusal(metadata, "invalid_input");
 					fail("INVALID_REQUEST", metadata.traceId);
