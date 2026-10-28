@@ -9,6 +9,10 @@ import {
 	isAgentManagementText as text,
 } from "./agent-management-input.js";
 import type { ConversationDispatchExecutionStatusV1 } from "./conversation-dispatch.js";
+import {
+	type EvaluationTaskBindingV1,
+	parseEvaluationTaskBindingV1,
+} from "./evaluation-task-binding.js";
 
 export type TaskPrincipalV1 = {
 	readonly kind: "user" | "application";
@@ -249,7 +253,10 @@ export interface TaskUserDirectoryV1 {
 type TaskAccessSourceV1 =
 	| { readonly kind: "owner" | "user"; readonly userId: string }
 	| { readonly kind: "organization"; readonly organizationId: string }
-	| { readonly kind: "api-use"; readonly useGrantRevision: string };
+	| {
+			readonly kind: "api-use" | "eval-use";
+			readonly useGrantRevision: string;
+	  };
 
 export interface TaskAuthorizationBoundaryV1 {
 	readonly schemaVersion: 1;
@@ -260,6 +267,7 @@ export interface TaskAuthorizationBoundaryV1 {
 	readonly agentAuthorizationRevision: string;
 	readonly accessSources: readonly TaskAccessSourceV1[];
 	readonly directorySnapshotBinding?: DirectorySnapshotBindingV1;
+	readonly evaluation?: EvaluationTaskBindingV1;
 }
 
 function sameDirectorySnapshotBinding(
@@ -415,7 +423,7 @@ function accessSources(
 }
 
 function sourceKey(source: TaskAccessSourceV1): string {
-	if (source.kind === "api-use")
+	if (source.kind === "api-use" || source.kind === "eval-use")
 		return JSON.stringify([source.kind, source.useGrantRevision]);
 	return JSON.stringify([
 		source.kind,
@@ -438,6 +446,7 @@ export function parseTaskAuthorizationBoundaryV1(
 	];
 	if (Object.hasOwn(value, "directorySnapshotBinding"))
 		keys.push("directorySnapshotBinding");
+	if (Object.hasOwn(value, "evaluation")) keys.push("evaluation");
 	exact(value, keys);
 	if (
 		value.schemaVersion !== 1 ||
@@ -450,6 +459,12 @@ export function parseTaskAuthorizationBoundaryV1(
 	) {
 		throw new TypeError("Task authorization boundary is invalid");
 	}
+	const evaluation =
+		value.evaluation === undefined
+			? undefined
+			: parseEvaluationTaskBindingV1(value.evaluation);
+	if ((value.channelId === "eval") !== (evaluation !== undefined))
+		throw new TypeError("Eval Task binding is required only for Eval");
 	const subject = parseTaskPrincipalV1(value.principal);
 	if (
 		(value.channelId === "api:user" || value.channelId === "api:application") &&
@@ -459,15 +474,17 @@ export function parseTaskAuthorizationBoundaryV1(
 	const sources = array(value.accessSources).map(
 		(input): TaskAccessSourceV1 => {
 			const source = object(input);
-			if (source.kind === "api-use") {
+			if (source.kind === "api-use" || source.kind === "eval-use") {
 				exact(source, ["kind", "useGrantRevision"]);
 				if (
-					!isTaskApiChannelV1(value.channelId as string, subject) ||
+					(source.kind === "api-use"
+						? !isTaskApiChannelV1(value.channelId as string, subject)
+						: value.channelId !== "eval" || !evaluation) ||
 					!text(source.useGrantRevision)
 				) {
 					throw new TypeError("Task API access source is invalid");
 				}
-				return { kind: "api-use", useGrantRevision: source.useGrantRevision };
+				return { kind: source.kind, useGrantRevision: source.useGrantRevision };
 			}
 			if (subject.kind !== "user")
 				throw new TypeError("Task access source is invalid");
@@ -490,10 +507,15 @@ export function parseTaskAuthorizationBoundaryV1(
 	);
 	if (
 		sources.length === 0 ||
-		(sources.some((source) => source.kind === "api-use") &&
+		(sources.some(
+			(source) => source.kind === "api-use" || source.kind === "eval-use",
+		) &&
 			sources.length !== 1) ||
 		(subject.kind === "application" &&
-			!isTaskApiChannelV1(value.channelId as string, subject)) ||
+			!isTaskApiChannelV1(value.channelId as string, subject) &&
+			value.channelId !== "eval") ||
+		(value.channelId === "eval" &&
+			(sources.length !== 1 || sources[0]?.kind !== "eval-use")) ||
 		new Set(sources.map(sourceKey)).size !== sources.length
 	) {
 		throw new TypeError("Task access sources are invalid");
@@ -512,6 +534,7 @@ export function parseTaskAuthorizationBoundaryV1(
 		identityRevision: value.identityRevision as string,
 		agentAuthorizationRevision: value.agentAuthorizationRevision as string,
 		accessSources: sources,
+		...(evaluation ? { evaluation } : {}),
 		...(directorySnapshotBinding ? { directorySnapshotBinding } : {}),
 	};
 }
@@ -557,7 +580,8 @@ function apiUseCurrent(
 		grant.principal.kind === boundary.principal.kind &&
 		grant.principal.id === boundary.principal.id &&
 		boundary.accessSources.length === 1 &&
-		boundary.accessSources[0]?.kind === "api-use" &&
+		(boundary.accessSources[0]?.kind === "api-use" ||
+			boundary.accessSources[0]?.kind === "eval-use") &&
 		boundary.accessSources[0].useGrantRevision === grant.authorizationRevision
 	);
 }
@@ -646,7 +670,8 @@ export function isTaskApplicationAuthorizationCurrentV1(input: {
 	const agent = parseAgentManagementPortState(input.agent);
 	return (
 		boundary.principal.kind === "application" &&
-		isTaskApiChannelV1(boundary.channelId, boundary.principal) &&
+		(isTaskApiChannelV1(boundary.channelId, boundary.principal) ||
+			boundary.channelId === "eval") &&
 		boundary.principal.id === application.applicationId &&
 		boundary.agentId === agent.agentId &&
 		application.status === "active" &&
@@ -684,7 +709,10 @@ export function isTaskAuthorizationCurrentV1(input: {
 		)
 	)
 		return false;
-	if (isTaskApiChannelV1(boundary.channelId, boundary.principal))
+	if (
+		isTaskApiChannelV1(boundary.channelId, boundary.principal) ||
+		boundary.channelId === "eval"
+	)
 		return (
 			user.accountStatus === "active" &&
 			apiUseCurrent(boundary, input.useGrant ?? null)
