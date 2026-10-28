@@ -1,0 +1,8 @@
+FROM node@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03
+ARG SOURCE_COMMIT
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
+COPY --chown=node:node signed-server.ts /app/signed-server.ts
+LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"self-managed","service":{"port":3003},"health":{"path":"/healthz"}}'
+USER node
+EXPOSE 3003
+ENTRYPOINT ["node", "/app/signed-server.ts"]

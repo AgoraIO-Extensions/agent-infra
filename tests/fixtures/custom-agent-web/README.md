@@ -24,6 +24,31 @@ docker run --rm --publish 8080:8080 \
 
 这是 fixture 和脚本契约测试；它不能证明获准 Registry Digest、Kubernetes/Ingress/TLS、Gateway、真实身份目录或浏览器环境已经可用。
 
+## 签名身份与多服务示例
+
+`signed-server.ts` 和 `Dockerfile.signed` 提供自有身份的部署样例。应用在端口 `3003` 监听；
+`/` 是登录页，`/app` 是受保护页面，按钮通过 `/api/check` 读取服务状态，`/healthz` 仅用于就绪。
+匿名或伪造身份不能读取受保护页面；合法但无 `web:read` 的主体被拒绝。签名 token 只通过
+应用登录请求或 Authorization 传入，Cookie 使用 Secure、HttpOnly 和 SameSite=Strict。
+
+应用只需要非秘密配置 `CUSTOM_ENTRY_PUBLIC_KEY`、`CUSTOM_ENTRY_ISSUER`、`CUSTOM_ENTRY_AUDIENCE`
+和 `CUSTOM_ENTRY_ROLE`。私钥留在部署验证端，镜像、普通环境变量和 ConfigMap 都不含凭证。
+`single` 直接提供应用；多服务 manifest 使用 `web` 与 `api` 两个 Deployment/Service，前者按
+平台生成的 Pod 名推导同 Agent 的 `api` Service，转发签名身份并显示真实后端返回值。
+该命名约定是此样例的约束，不新增平台服务发现契约。
+
+构建时传入实际 clean source SHA，并使用 OCI 格式发布不可变 Digest：
+
+```bash
+docker buildx build --platform linux/amd64 --build-arg SOURCE_COMMIT="$SOURCE_SHA" \
+  --file tests/fixtures/custom-agent-web/Dockerfile.signed \
+  --output type=image,name="$IMAGE_REFERENCE",push=true,oci-mediatypes=true \
+  tests/fixtures/custom-agent-web
+```
+
+真实 ACK 验收由 [重部署工作流](../../../deploy/ack/ACK-REDEPLOY-WORKFLOW.md) 绑定当前 Agent、
+全部服务、入口 TLS、浏览器和实际 imageID；本地样例测试不代表这些外部条件已通过。
+
 ## Platform identity verifier fixture
 
 `platform-auth-server.mjs` 是独立的应用端 verifier fixture。它消费

@@ -134,6 +134,37 @@ deploy/ack/redeploy.sh capture-inputs
 Platform Auth 的自有入口；其他自有入口使用 `web`。每份配置必须声明来源 commit、不可变
 Digest、configuration revision、期望内容 hash 和两个不同主体的私有授权文件。
 
+清空后重建自有入口时，同一个 `ACK_CUSTOM_AGENT_CONFIGS` 可改为列出按 `requestName` 绑定的
+私有配置。该模式用于仓库的签名身份示例，支持单服务和 web/api 多服务；一旦选择此模式，
+所有 self-managed 请求都必须有自己的绑定配置，不能混入静态 URL 探针：
+
+```json
+{
+  "schemaVersion": 1,
+  "requestName": "own-web",
+  "sourceSha": "0123456789abcdef0123456789abcdef01234567",
+  "imageSourceSha": "0123456789abcdef0123456789abcdef01234567",
+  "routeHostSuffix": "apps.example.test",
+  "contentSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123",
+  "issuer": "example-application-owner",
+  "audience": "example-own-web",
+  "signingKeyFile": "@CAPSULE_ROOT@/credentials/application-signing.pem",
+  "browserCertificateFile": "@CAPSULE_ROOT@/certificates/application-leaf.pem",
+  "expectedReply": "Hello from application service"
+}
+```
+
+将该 JSON 加入 capsule 的 `inputs` 后，`self-managed-entry.ts` 会从本轮 Agent binding 和授权
+API 回读当前入口，验证批准的 host suffix、同 Agent 的全部工作负载、Pod owner chain、Service、
+EndpointSlice、Ingress 和实际 imageID。它不接受任意旧 URL 或仅在其他 Pod 中找到的 Digest。
+应用签名私钥只由本地验证工具读取，生成两个短期应用身份；部署仅包含公钥、issuer 和 audience。
+工具先用 Node 的正常 CA/hostname 校验执行受保护页面和身份反例，再以明确的 leaf SPKI pin
+运行 Chromium 登录、按钮调用内部 API、刷新和拒绝无权主体的旅程。截图保存在私有证据目录。
+这不是操作系统 CA 安装或通用浏览器信任验收；不能据此宣称公共 CA 已签发。
+
+示例源码和构建方式见 [自有入口示例](../../tests/fixtures/custom-agent-web/README.md#签名身份与多服务示例)。
+受控本地测试不替代实际镜像发布、平台创建、入口和多服务调用证据。
+
 `ACK_AGENT_REQUESTS_FILE` 是仓库外的 API 创建/重放清单。每项引用一个 `0600` Bearer credential 文件、一个 `0600` JSON body 文件和固定 `Idempotency-Key`；credential 需要创建和读取 Agent 的权限。body 可以是标准模板或自定义 Agent 的 `POST /api/v2/agents` 请求。脚本只输出 HTTP 状态、状态枚举和 Agent ID 的 SHA-256，不输出 Token、Secret 或响应正文；创建后会轮询 `/state`，直到 `available/ready` 或明确失败/超时。API 创建不需要 Web 审批；需要审批的 Web application 流程仍应由真实管理员完成并回读。
 
 `ACK_TEMPLATE_VALIDATIONS_FILE` 是四个标准模板的私有 receipt 清单。每项同时引用同一
