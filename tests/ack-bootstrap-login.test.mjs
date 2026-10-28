@@ -303,3 +303,190 @@ test("CLI redacts invalid credential files", async (t) => {
 	assert.equal(result.stdout, "");
 	assert.equal(result.stderr.trim(), "ACK_LOGIN_BOOTSTRAP_FAILED");
 });
+
+async function promotionFixture(t, missing = false) {
+	const f = await fixture(t);
+	if (missing) await rm(f.config.identityFile);
+	const { loginOutputBytes } = await import(
+		"../deploy/ack/login-output-promotion.ts"
+	);
+	const before = new Map(
+		await Promise.all(
+			f.outputs.map(async (file) => [file, await loginOutputBytes(file)]),
+		),
+	);
+	const outputs = new Map(
+		f.outputs.map((file, index) => [file, { generation: "new", index }]),
+	);
+	return { ...f, before, outputs };
+}
+
+for (const missing of [false, true]) {
+	test(`promotion failure after first output restores exact original bytes (missing=${missing})`, async (t) => {
+		const f = await promotionFixture(t, missing);
+		const fs = await import("node:fs/promises");
+		const {
+			promoteLoginOutputs,
+			assertLoginOutputsCommitted,
+			loginOutputBytes,
+		} = await import("../deploy/ack/login-output-promotion.ts");
+		let published = 0;
+		await assert.rejects(
+			promoteLoginOutputs(f.config.identityFile, f.before, f.outputs, {
+				rename: fs.rename,
+				link: async (from, to) => {
+					if (String(from).endsWith(".next") && ++published === 2)
+						throw new Error("INJECTED_PROMOTION_FAILURE");
+					return fs.link(from, to);
+				},
+			}),
+			/INJECTED_PROMOTION_FAILURE/,
+		);
+		assert.equal(published, 2);
+		for (const [file, before] of f.before)
+			assert.deepEqual(await loginOutputBytes(file), before);
+		await assertLoginOutputsCommitted(f.config.identityFile);
+	});
+}
+
+test("rollback preserves a concurrent replacement and leaves publication blocked", async (t) => {
+	const f = await promotionFixture(t);
+	const fs = await import("node:fs/promises");
+	const {
+		promoteLoginOutputs,
+		assertLoginOutputsCommitted,
+		recoverLoginOutputs,
+	} = await import("../deploy/ack/login-output-promotion.ts");
+	let published = 0;
+	await assert.rejects(
+		promoteLoginOutputs(f.config.identityFile, f.before, f.outputs, {
+			rename: fs.rename,
+			link: async (from, to) => {
+				if (String(from).endsWith(".next") && ++published === 2) {
+					// Replace the first output with a different inode, as another writer would.
+					const replacement = join(f.directory, "other-writer");
+					await fs.writeFile(replacement, "concurrent-private-state", {
+						mode: 0o600,
+					});
+					await fs.rename(replacement, f.config.identityFile);
+					throw new Error("INJECTED_PROMOTION_FAILURE");
+				}
+				return fs.link(from, to);
+			},
+		}),
+		/LOGIN_OUTPUT_RECOVERY_REQUIRED/,
+	);
+	assert.equal(
+		await readFile(f.config.identityFile, "utf8"),
+		"concurrent-private-state",
+	);
+	await assert.rejects(
+		assertLoginOutputsCommitted(f.config.identityFile),
+		/PROMOTION_INCOMPLETE/,
+	);
+	await assert.rejects(verifiedLoginCandidate(f.file, source, f.config.origin));
+	await assert.rejects(
+		recoverLoginOutputs(f.config.identityFile, f.outputs.keys().toArray()),
+		/WRITER_NOT_RETIRED/,
+	);
+});
+
+test("incomplete promotion blocks a fresh login before network I/O", async (t) => {
+	const f = await fixture(t);
+	const { mkdir } = await import("node:fs/promises");
+	await mkdir(`${f.config.identityFile}.promotion`, { mode: 0o700 });
+	await assert.rejects(bootstrapLogin(f.file, source), /PROMOTION_INCOMPLETE/);
+	assert.equal(f.calls.length, 0);
+});
+
+for (const stop of ["first-publish", "rollback-failure", "corrupted-backup"]) {
+	test(`dead writer recovery restores originals after ${stop}`, async (t) => {
+		const f = await promotionFixture(t);
+		const { pathToFileURL } = await import("node:url");
+		const module = pathToFileURL(
+			new URL("../deploy/ack/login-output-promotion.ts", import.meta.url)
+				.pathname,
+		).href;
+		const inputFile = await f.save(join(f.directory, "recovery-input.json"), {
+			identityFile: f.config.identityFile,
+			before: [...f.before].map(([file, bytes]) => [
+				file,
+				bytes?.toString("base64") ?? null,
+			]),
+			outputs: [...f.outputs],
+		});
+		const code = `
+import * as fs from 'node:fs/promises';
+import { promoteLoginOutputs } from ${JSON.stringify(module)};
+const input=JSON.parse(await fs.readFile(${JSON.stringify(inputFile)},'utf8'));
+let count=0;
+try { await promoteLoginOutputs(input.identityFile,new Map(input.before.map(([p,b])=>[p,b===null?null:Buffer.from(b,'base64')])),new Map(input.outputs),{
+ rename: async(from,to)=>{if(${JSON.stringify(stop)}==='rollback-failure' && String(to).endsWith('.rollback'))throw Error('INJECTED_ROLLBACK_FAILURE');return fs.rename(from,to);},
+ link: async(from,to)=>{
+  if(String(from).endsWith('.next')){
+   count++;
+   if(count===2)throw Error('INJECTED_PROMOTION_FAILURE');
+   await fs.link(from,to);
+   if(${JSON.stringify(stop)}!=='rollback-failure')process.exit(71);
+   return;
+  }
+  return fs.link(from,to);
+ }
+}); } catch {process.exit(72);}
+`;
+		const result = spawnSync(
+			process.execPath,
+			["--experimental-strip-types", "--input-type=module", "-e", code],
+			{ encoding: "utf8" },
+		);
+		assert.equal(
+			result.status,
+			stop === "rollback-failure" ? 72 : 71,
+			result.stderr,
+		);
+		const {
+			assertLoginOutputsCommitted,
+			recoverLoginOutputs,
+			loginOutputBytes,
+		} = await import("../deploy/ack/login-output-promotion.ts");
+		await assert.rejects(
+			assertLoginOutputsCommitted(f.config.identityFile),
+			/PROMOTION_INCOMPLETE/,
+		);
+		await assert.rejects(
+			verifiedLoginCandidate(f.file, source, f.config.origin),
+		);
+		await assert.rejects(
+			recoverLoginOutputs(f.config.identityFile, [f.config.identityFile]),
+			/AssertionError/,
+		);
+		if (stop === "corrupted-backup") {
+			const journal = JSON.parse(
+				await readFile(
+					`${f.config.identityFile}.promotion/journal.json`,
+					"utf8",
+				),
+			);
+			const original = await readFile(f.config.identityFile);
+			await writeFile(journal.entries[0].backup, "corrupted-private-backup", {
+				mode: 0o600,
+			});
+			await assert.rejects(
+				recoverLoginOutputs(f.config.identityFile, [...f.outputs.keys()]),
+				/RECOVERY_REQUIRED/,
+			);
+			assert.deepEqual(await readFile(f.config.identityFile), original);
+			await assert.rejects(
+				assertLoginOutputsCommitted(f.config.identityFile),
+				/PROMOTION_INCOMPLETE/,
+			);
+			return;
+		}
+		await recoverLoginOutputs(f.config.identityFile, [...f.outputs.keys()]);
+		for (const [file, before] of f.before)
+			assert.deepEqual(await loginOutputBytes(file), before);
+		await assertLoginOutputsCommitted(f.config.identityFile);
+		// A retry performs fresh authentication after the old private bundle is restored.
+		assert.equal((await bootstrapLogin(f.file, source)).loginVerified, true);
+	});
+}

@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { lstat, rename, unlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { conversationTurns } from "../../tests/local-real-e2e/conversation-turn-plan.ts";
 import { privateBytes, privateJson } from "./private-input.ts";
+import { assertLoginOutputsCommitted, loginOutputBytes, promoteLoginOutputs, recoverLoginOutputs } from "./login-output-promotion.ts";
 
 const requireWeb = createRequire(new URL("../../apps/web/package.json", import.meta.url));
 const { request } = requireWeb("@playwright/test");
@@ -14,16 +13,6 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
 const identityKey = "deployment-identities.json";
 
-async function outputPath(file: string) {
-	assert(typeof file === "string" && isAbsolute(file) && resolve(file) === file);
-	const parent = await lstat(dirname(file));
-	assert(parent.isDirectory() && !parent.isSymbolicLink() && parent.uid === process.getuid?.() && (parent.mode & 0o077) === 0);
-	let insideGit = false;
-	try { insideGit = execFileSync("git", ["-C", dirname(file), "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim() === "true"; } catch {}
-	assert(!insideGit, "LOGIN_OUTPUT_INSIDE_WORKTREE");
-	try { return await privateBytes(file); }
-	catch (error: any) { if (error.code === "ENOENT") return null; throw error; }
-}
 
 export async function loginConfiguration(file: string) {
 	const input = await privateJson(file);
@@ -48,7 +37,7 @@ export async function loginConfiguration(file: string) {
 	}
 	assert(new Set(outputs).size === outputs.length && outputs.every((p) => !inputs.includes(p)), "LOGIN_OUTPUT_ALIAS");
 	const before = new Map<string, Buffer | null>();
-	for (const file of outputs) before.set(file, await outputPath(file));
+	for (const file of outputs) before.set(file, await loginOutputBytes(file));
 	const subjects = [];
 	const logins = new Set();
 	for (const subject of input.subjects) {
@@ -90,6 +79,7 @@ function sessionCookie(state: any, origin: string) {
 export async function bootstrapLogin(configFile: string, sourceSha: string, expectedOrigin?: string) {
 	assert(/^[a-f0-9]{40}$/u.test(sourceSha));
 	const config = await loginConfiguration(configFile);
+	await assertLoginOutputsCommitted(config.input.identityFile);
 	if (expectedOrigin !== undefined) assert.equal(config.input.origin, expectedOrigin, "LOGIN_ORIGIN_MISMATCH");
 	const contexts: any[] = [];
 	const states = new Map<string, { userId: string; state: any }>();
@@ -115,19 +105,7 @@ export async function bootstrapLogin(configFile: string, sourceSha: string, expe
 		for (const { file, value } of config.blueprints) outputs.set(file, { ...value,
 			owner: { ...value.owner, userId: states.get(value.owner.stateFile)!.userId },
 			other: { ...value.other, userId: states.get(value.other.stateFile)!.userId } });
-		for (const [file, before] of config.before) assert.deepEqual(await outputPath(file), before, "LOGIN_OUTPUT_CHANGED");
-		const temporary = new Map<string, string>();
-		try {
-			for (const [file, value] of outputs) {
-				const path = `${file}.${randomUUID()}.tmp`;
-				await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: "wx" });
-				temporary.set(file, path);
-			}
-			for (const [file, path] of temporary) {
-				assert.deepEqual(await outputPath(file), config.before.get(file), "LOGIN_OUTPUT_CHANGED");
-				await rename(path, file);
-			}
-		} finally { for (const path of temporary.values()) await unlink(path).catch(() => {}); }
+		await promoteLoginOutputs(config.input.identityFile, config.before, outputs);
 		return { schemaVersion: 1, kind: "ack-bootstrap-login", subjectCount: states.size, blueprintCount: config.blueprints.length,
 			originHash: hash(config.input.origin), subjects: Object.values(candidate.subjects).map((s) => ({ userHash: hash(s.userId) })), loginVerified: true, businessVerified: false };
 	} finally { await Promise.allSettled(contexts.map((c) => c.dispose())); }
@@ -135,6 +113,7 @@ export async function bootstrapLogin(configFile: string, sourceSha: string, expe
 
 export async function verifiedLoginCandidate(configFile: string, sourceSha: string, origin: string) {
 	const config = await loginConfiguration(configFile);
+	await assertLoginOutputsCommitted(config.input.identityFile);
 	const bytes = await privateBytes(config.input.identityFile);
 	const value = JSON.parse(bytes.toString("utf8"));
 	assert(config.input.origin === origin && value.schemaVersion === 1 && value.sourceSha === sourceSha && value.origin === origin &&
@@ -152,14 +131,22 @@ export async function verifiedLoginCandidate(configFile: string, sourceSha: stri
 		try { assert.equal(await session(context), userId, "LOGIN_CANDIDATE_SESSION_MISMATCH"); }
 		finally { await context.dispose(); }
 	}
+	await assertLoginOutputsCommitted(config.input.identityFile);
+	for (const [file, before] of config.before) assert.deepEqual(await loginOutputBytes(file), before, "LOGIN_OUTPUT_CHANGED");
 	return { bytes, secretRef: config.input.identitySecretRef };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	try {
-		assert(process.env.ACK_SOURCE_SHA && process.env.ACK_PUBLIC_ORIGIN);
-		const result = await bootstrapLogin(process.argv[2], process.env.ACK_SOURCE_SHA, process.env.ACK_PUBLIC_ORIGIN);
-		process.stdout.write(`${JSON.stringify(result)}\n`);
+		if (process.argv[2] === "recover") {
+			const input = await privateJson(process.argv[3]);
+			await recoverLoginOutputs(input.identityFile, [input.identityFile, ...input.subjects.map((s: any) => s.storageStateFile), ...input.blueprints]);
+			process.stdout.write("{\"schemaVersion\":1,\"recovered\":true}\n");
+		} else {
+			assert(process.env.ACK_SOURCE_SHA && process.env.ACK_PUBLIC_ORIGIN);
+			const result = await bootstrapLogin(process.argv[2], process.env.ACK_SOURCE_SHA, process.env.ACK_PUBLIC_ORIGIN);
+			process.stdout.write(`${JSON.stringify(result)}\n`);
+		}
 	} catch {
 		process.stderr.write("ACK_LOGIN_BOOTSTRAP_FAILED\n");
 		process.exitCode = 1;

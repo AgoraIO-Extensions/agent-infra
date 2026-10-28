@@ -319,6 +319,22 @@ HTTPS 必须通过系统信任或 `NODE_EXTRA_CA_CERTS` 验证；不跟随登录
 deploy/ack/redeploy.sh bootstrap-login
 ```
 
+登录输出采用私有提交门禁：所有主体验证完成后，先写 `identityFile.promotion` 恢复记录，
+再逐项发布身份、浏览器状态和蓝图。门禁存在期间，新登录和 `verifiedLoginCandidate` 均拒绝。
+失败时只回滚本次仍可核实的输出；并发写入保留，无法恢复时门禁及私有备份继续保留，不能发布混合材料。
+原始文件缺失会恢复为缺失。恢复记录/备份含敏感浏览器状态，只能留在原私有目录，禁止提交或打印。
+
+进程退出后可显式恢复同一配置的声明输出，再重新执行登录；恢复拒绝仍存活的本机 writer、不同主机、
+声明输出变化和不可信恢复记录，不通过删除门禁绕过检查：
+
+```bash
+node --experimental-strip-types deploy/ack/bootstrap-login.ts recover "$ACK_LOGIN_BOOTSTRAP_FILE"
+```
+
+该命令不发起登录、部署或授权，只按已保存 generation 恢复；并发冲突未解决时保持失败。
+同主机 PID 被复用也会保守拒绝恢复。运行中断后残留的 `.retired` 目录只可能包含已完成的私有提交记录，
+不是恢复权限；它不会被新运行扫描或用于覆盖输出。
+
 数据库、迁移和 Platform 就绪后，部署拥有者必须先通过真实 LDAP/浏览器登录生成一个新的
 Playwright `storageState`。工具不会接收 LDAP 密码，也不会模拟登录。将下列私有请求文件
 放在仓库外，storageState 和输出 credential 文件都必须是当前用户拥有、权限 `0600` 的普通文件：
