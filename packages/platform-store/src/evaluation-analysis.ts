@@ -5,11 +5,13 @@ import {
 	type EvaluationAnalysisPolicyV1,
 	type EvaluationAnalysisTaskV1,
 	EvaluationDataErrorV1,
+	type EvaluationDerivedObjectV1,
 	type EvaluationExperimentV1,
 	EvaluationQueryLimitErrorV1,
 	type EvaluationRequestV1,
 	foldEvaluationModelFactsV1,
 	parseEvaluationAnalysisPolicyV1,
+	parseEvaluationDerivedObjectV1,
 	parseEvaluationExperimentPolicyV1,
 	parseEvaluationExperimentV1,
 	parseEvaluationPolicyV1,
@@ -60,7 +62,11 @@ export class PostgresEvaluationAnalysisV1 {
 			this.#derivedStore.close(),
 		]);
 	}
-	async #current(request: EvaluationRequestV1, id: string) {
+	async #current(
+		request: EvaluationRequestV1,
+		id: string,
+		content?: readonly EvaluationDerivedObjectV1[],
+	) {
 		return this.#client.begin(async (tx) => {
 			await tx`select pg_advisory_xact_lock(hashtextextended('evaluation-data-v1',0))`;
 			const { policy: analysisPolicy } = await bindEvaluationAnalysisPolicyV1(
@@ -127,7 +133,9 @@ export class PostgresEvaluationAnalysisV1 {
 				});
 				if (!grant || grant.revoked) throw new EvaluationDataErrorV1("denied");
 			}
-			const final = await service.authorizeAnalysisMetadata(
+			const final = await (content
+				? service.authorizeAnalyze
+				: service.authorizeAnalysisMetadata)(
 				request,
 				experiment.datasetId,
 				experiment.versionId,
@@ -149,6 +157,68 @@ export class PostgresEvaluationAnalysisV1 {
 				Date.parse(experiment.metadataExpiresAt) <= +now.now
 			)
 				throw new EvaluationDataErrorV1("denied");
+			if (content) {
+				for (const original of content) {
+					const [record] = await tx<
+						{
+							id: string;
+							dataset_id: string;
+							version_id: string;
+							kind: string;
+							status: string;
+							expires_at: Date;
+							metadata_expires_at: Date;
+							data: unknown;
+						}[]
+					>`select id,dataset_id,version_id,kind,status,expires_at,metadata_expires_at,data from platform.evaluation_derived_objects where id=${original.id} for share`;
+					if (!record) throw new EvaluationDataErrorV1("denied");
+					const object = parseEvaluationDerivedObjectV1(record.data);
+					if (
+						object.id !== record.id ||
+						object.datasetId !== record.dataset_id ||
+						object.versionId !== record.version_id ||
+						object.kind !== record.kind ||
+						object.status !== record.status ||
+						object.expiresAt !== record.expires_at.toISOString() ||
+						object.metadataExpiresAt !==
+							record.metadata_expires_at.toISOString()
+					)
+						throw new EvaluationDataErrorV1("unavailable");
+					if (
+						!isDeepStrictEqual(object, original) ||
+						object.status !== "available"
+					)
+						throw new EvaluationDataErrorV1("denied");
+				}
+				const [fresh] = await tx<
+					{ now: Date }[]
+				>`select clock_timestamp() as now`;
+				if (!fresh) throw new EvaluationDataErrorV1("unavailable");
+				if (
+					Date.parse(final.policy.validUntil) <= +fresh.now ||
+					Date.parse(final.grant.expiresAt) <= +fresh.now ||
+					Math.min(
+						Date.parse(final.version.expiresAt),
+						Date.parse(final.version.createdAt) +
+							final.policy.retention.samples.contentMs,
+						Date.parse(final.version.createdAt) +
+							final.policy.retention.rubric.contentMs,
+					) <= +fresh.now
+				)
+					throw new EvaluationDataErrorV1("denied");
+				for (const object of content) {
+					const retention = final.policy.retention[object.kind];
+					if (
+						Math.min(
+							Date.parse(object.expiresAt),
+							Date.parse(object.metadataExpiresAt),
+							Date.parse(object.createdAt) + retention.contentMs,
+							Date.parse(object.createdAt) + retention.metadataMs,
+						) <= +fresh.now
+					)
+						throw new EvaluationDataErrorV1("denied");
+				}
+			}
 			return { experiment, data, analysisPolicy, now: now.now };
 		});
 	}
@@ -342,6 +412,19 @@ export class PostgresEvaluationAnalysisV1 {
 		);
 		if (!sample) throw new EvaluationDataErrorV1("unavailable");
 		const scoped = { ...request, credentialScope: "eval:analyze" as const };
+		const returned: EvaluationDerivedObjectV1[] = [];
+		const readRetained = async (expected: {
+			id: string;
+			datasetId: string;
+			versionId: string;
+			kind: "output" | "score" | "review";
+		}) => {
+			const object = await this.#derivedStore.get(expected.id);
+			if (!object) throw new EvaluationDataErrorV1("unavailable");
+			const result = await this.#derived.readRetained(scoped, expected);
+			if (result.contentStatus === "available") returned.push(object);
+			return result;
+		};
 		const candidates = row.scores
 			.filter(
 				(s) =>
@@ -361,7 +444,7 @@ export class PostgresEvaluationAnalysisV1 {
 				break;
 			}
 			const output = score.outputObjectId
-				? await this.#derived.readRetained(scoped, {
+				? await readRetained({
 						id: score.outputObjectId,
 						datasetId: score.datasetId,
 						versionId: score.versionId,
@@ -369,7 +452,7 @@ export class PostgresEvaluationAnalysisV1 {
 					})
 				: null;
 			const reason = score.reasonObjectId
-				? await this.#derived.readRetained(scoped, {
+				? await readRetained({
 						id: score.reasonObjectId,
 						datasetId: score.datasetId,
 						versionId: score.versionId,
@@ -415,7 +498,7 @@ export class PostgresEvaluationAnalysisV1 {
 					record.score_id !== score.id
 				)
 					throw new EvaluationDataErrorV1("unavailable");
-				const result = await this.#derived.readRetained(scoped, {
+				const result = await readRetained({
 					id: review.objectId,
 					datasetId: score.datasetId,
 					versionId: score.versionId,
@@ -446,7 +529,7 @@ export class PostgresEvaluationAnalysisV1 {
 			if (nextCursor) break;
 			scores.push({ ...item, reviews, nextReviewCursor });
 		}
-		const after = await this.#current(request, id);
+		const after = await this.#current(request, id, returned);
 		if (
 			!isDeepStrictEqual(before.data.policy, after.data.policy) ||
 			before.data.grant.revision !== after.data.grant.revision

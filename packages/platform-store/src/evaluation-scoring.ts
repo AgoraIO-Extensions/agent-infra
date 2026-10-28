@@ -15,6 +15,7 @@ import {
 	type EvaluationScoringInputV1,
 	parseEvaluationExperimentPolicyV1,
 	parseEvaluationExperimentV1,
+	parseEvaluationPolicyV1,
 	parseEvaluationReviewRecordV1,
 	parseEvaluationSampleTaskV1,
 	parseEvaluationScoreIntentV1,
@@ -630,7 +631,9 @@ export class PostgresEvaluationScoringV1
 			...req,
 			credentialScope: purpose === "score" ? "eval:score" : "eval:review",
 		});
-		const policy = await this.options.loadDataPolicy();
+		const policy = parseEvaluationPolicyV1(await this.options.loadDataPolicy());
+		if (Date.parse(policy.validUntil) <= Date.now())
+			throw new EvaluationDataErrorV1("denied");
 		const rows = await this.#client<
 			{ id: string }[]
 		>`select i.id from platform.evaluation_score_intents i where (i.data->>'metadataExpiresAt')::timestamptz>clock_timestamp() ${cursor ? this.#client`and i.id>${cursor}::uuid` : this.#client``} and exists(select 1 from platform.evaluation_grants g where g.dataset_id=(i.data->>'datasetId')::uuid and g.data->'principal'=${this.#client.json(principal)}::jsonb and g.data->>'revoked'='false' and g.data->>'policyId'=${policy.policyId} and (g.data->>'policyRevision')::bigint=${policy.revision} and (g.data->>'expiresAt')::timestamptz>clock_timestamp() and g.data->'versionIds' @> jsonb_build_array(i.data->>'versionId') and g.data->'operations' @> ${this.#client.json([purpose])}::jsonb) order by i.id limit 501`;
@@ -675,6 +678,14 @@ export class PostgresEvaluationScoringV1
 			...req,
 			credentialScope: purpose === "score" ? "eval:score" : "eval:review",
 		});
+		if (
+			!isDeepStrictEqual(
+				policy,
+				parseEvaluationPolicyV1(await this.options.loadDataPolicy()),
+			) ||
+			Date.parse(policy.validUntil) <= Date.now()
+		)
+			throw new EvaluationDataErrorV1("denied");
 		return {
 			purpose,
 			items,

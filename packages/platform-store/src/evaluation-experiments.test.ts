@@ -1199,6 +1199,44 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 			experimentPolicy = previousExperimentPolicy;
 		}
 
+		const [liveScore] =
+			await sql`select data from platform.evaluation_score_intents where id=${human.id}`;
+		const [bodyObject] =
+			await sql`select id,data from platform.evaluation_derived_objects where id=${liveScore?.data.outputObjectId}`;
+		const [reasonObject] =
+			await sql`select data from platform.evaluation_derived_objects where id=${liveScore?.data.reasonObjectId}`;
+		if (!bodyObject || !reasonObject)
+			throw new Error("missing controlled objects");
+		const deadline = new Date(Date.now() + 350).toISOString();
+		await sql`update platform.evaluation_derived_objects set expires_at=${deadline}::timestamptz,data=jsonb_set(data,'{expiresAt}',to_jsonb(${deadline}::text)) where id=${bodyObject.id}`;
+		const originalDownload = storage.download;
+		let readOutput = false;
+		let delayed = false;
+		storage.download = async (input) => {
+			if (input.objectRef === bodyObject.data.objectRef) readOutput = true;
+			if (input.objectRef === reasonObject.data.objectRef) {
+				delayed = true;
+				await new Promise((resolve) =>
+					setTimeout(
+						resolve,
+						Math.max(1, Date.parse(deadline) - Date.now() + 40),
+					),
+				);
+			}
+			return originalDownload(input);
+		};
+		try {
+			const response = await getAnalysis(
+				`/analysis/${experiment.experimentId}/samples/${human.sample_task_id}?scoreId=${human.id}`,
+			);
+			expect(readOutput).toBe(true);
+			expect(delayed).toBe(true);
+			expect(Date.now() > Date.parse(deadline)).toBe(true);
+			expect(response.status).toBe(404);
+		} finally {
+			storage.download = originalDownload;
+			await sql`update platform.evaluation_derived_objects set expires_at=${bodyObject.data.expiresAt}::timestamptz,data=${sql.json(bodyObject.data)} where id=${bodyObject.id}`;
+		}
 		await worker.runOnce();
 		expect(calls).toBe(2);
 		for (const status of [401, 403]) {
@@ -3522,7 +3560,7 @@ it("keeps authorized old-version analysis after a new deployment policy and expl
 		validUntil: policy.validUntil,
 		maximumWindowMs: 86400000,
 		maximumTasks: 1000,
-		maximumModelFacts: 1000,
+		maximumModelFacts: 10000,
 		feedbackMetadataMs: 600000,
 	});
 	const analysis = new PostgresEvaluationAnalysisV1({
