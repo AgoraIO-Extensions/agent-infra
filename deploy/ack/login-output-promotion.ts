@@ -6,6 +6,7 @@ import {
 	lstat,
 	mkdir,
 	open,
+	readdir,
 	readlink,
 	rename,
 	rmdir,
@@ -193,7 +194,11 @@ async function journalDirectory(identityFile: string) {
 	return directory;
 }
 
-async function cleanJournal(identityFile: string, journal: Journal) {
+async function cleanJournal(
+	identityFile: string,
+	journal: Journal,
+	journalName = `journal.${journal.generation}.json`,
+) {
 	const directory = await journalDirectory(identityFile);
 	assert(
 		directory === pending(identityFile) ||
@@ -210,9 +215,35 @@ async function cleanJournal(identityFile: string, journal: Journal) {
 	const contents = directory === pending(identityFile) ? retired : directory;
 	await remove(join(contents, "committed"));
 	await remove(join(contents, "commit.next"));
-	await remove(join(contents, "journal.json"));
+	await remove(join(contents, journalName));
 	await rmdir(contents);
 	if (contents !== retired) await remove(retired);
+}
+
+function assertRetired(pid: number) {
+	assert(Number.isSafeInteger(pid) && pid > 1);
+	let dead = false;
+	try {
+		process.kill(pid, 0);
+	} catch (error) {
+		dead = (error as NodeJS.ErrnoException).code === "ESRCH";
+	}
+	assert(dead, "LOGIN_OUTPUT_WRITER_NOT_RETIRED");
+}
+
+// The full journal moves with ownership, so an interrupted claim has no empty lock.
+async function recoveryJournal(directory: string) {
+	const names = (await readdir(directory)).filter(
+		(name) => name !== "committed" && name !== "commit.next",
+	);
+	assert.equal(names.length, 1, "LOGIN_OUTPUT_RECOVERY_CONFLICT");
+	const name = names[0]!;
+	if (name !== "journal.json" && !/^journal\.[a-f0-9-]{36}\.json$/u.test(name)) {
+		const match = /^recovery\.([1-9][0-9]*)\.([a-f0-9-]{36})\.json$/u.exec(name);
+		assert(match, "LOGIN_OUTPUT_RECOVERY_CONFLICT");
+		assertRetired(Number(match[1]));
+	}
+	return name;
 }
 
 /** Explicit recovery only, and never while the originating local process may still run. */
@@ -222,7 +253,8 @@ export async function recoverLoginOutputs(
 	io = operations,
 ) {
 	const directory = await journalDirectory(identityFile);
-	const journal: Journal = await privateJson(join(directory, "journal.json"));
+	const journalName = await recoveryJournal(directory);
+	const journal: Journal = await privateJson(join(directory, journalName));
 	assert(
 		journal.schemaVersion === 1 &&
 			/^[a-f0-9-]{36}$/u.test(journal.generation) &&
@@ -234,13 +266,13 @@ export async function recoverLoginOutputs(
 		directory === pending(identityFile) ||
 			directory === `${pending(identityFile)}.${journal.generation}.prepared`,
 	);
-	let dead = false;
-	try {
-		process.kill(journal.pid, 0);
-	} catch (error) {
-		dead = (error as NodeJS.ErrnoException).code === "ESRCH";
-	}
-	assert(dead, "LOGIN_OUTPUT_WRITER_NOT_RETIRED");
+	assert(
+		!journalName.startsWith("journal.") ||
+			journalName === "journal.json" ||
+			journalName === `journal.${journal.generation}.json`,
+		"LOGIN_OUTPUT_RECOVERY_CONFLICT",
+	);
+	assertRetired(journal.pid);
 	assert(
 		Array.isArray(journal.entries) &&
 			journal.entries.length === declaredFiles.length &&
@@ -258,6 +290,9 @@ export async function recoverLoginOutputs(
 				/^[a-f0-9]{64}$/u.test(entry.after),
 		);
 	}
+	const claim = `recovery.${process.pid}.${randomUUID()}.json`;
+	// Only one contender can rename this exact source; losers must never clean the gate.
+	await io.rename(join(directory, journalName), join(directory, claim));
 	if (await exists(join(directory, "committed"))) {
 		assert.equal(
 			(await privateBytes(join(directory, "committed"))).toString(),
@@ -270,7 +305,7 @@ export async function recoverLoginOutputs(
 				"LOGIN_OUTPUT_RECOVERY_CONFLICT",
 			);
 	} else await rollback(journal, io);
-	await cleanJournal(identityFile, journal);
+	await cleanJournal(identityFile, journal, claim);
 }
 
 /** Marker is the commit gate; links publish without clobbering a concurrent creator. */
@@ -310,14 +345,14 @@ export async function promoteLoginOutputs(
 	await mkdir(prepared, { mode: 0o700 });
 	try {
 		await durable(
-			join(prepared, "journal.json"),
+			join(prepared, `journal.${generation}.json`),
 			`${JSON.stringify(journal)}\n`,
 			io.open,
 		);
 		// symlink is an atomic exclusive publish, even against an old empty gate.
 		await (io.symlink ?? symlink)(prepared, pending(identityFile));
 	} catch (error) {
-		await remove(join(prepared, "journal.json"));
+		await remove(join(prepared, `journal.${generation}.json`));
 		await rmdir(prepared);
 		throw error;
 	}

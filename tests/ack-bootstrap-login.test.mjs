@@ -304,6 +304,15 @@ test("CLI redacts invalid credential files", async (t) => {
 	assert.equal(result.stderr.trim(), "ACK_LOGIN_BOOTSTRAP_FAILED");
 });
 
+async function initialJournal(directory) {
+	const { readdir } = await import("node:fs/promises");
+	const names = (await readdir(directory)).filter((name) =>
+		/^journal(?:\.[a-f0-9-]{36})?\.json$/u.test(name),
+	);
+	assert.equal(names.length, 1);
+	return join(directory, names[0]);
+}
+
 async function promotionFixture(t, missing = false) {
 	const f = await fixture(t);
 	if (missing) await rm(f.config.identityFile);
@@ -490,6 +499,7 @@ try { await promoteLoginOutputs(input.identityFile,new Map(input.before.map(([p,
 			const prepared = await fs.readlink(gate);
 			await fs.unlink(gate);
 			await fs.rename(prepared, gate);
+			await fs.rename(await initialJournal(gate), join(gate, "journal.json"));
 		}
 		const {
 			assertLoginOutputsCommitted,
@@ -510,7 +520,7 @@ try { await promoteLoginOutputs(input.identityFile,new Map(input.before.map(([p,
 		if (stop === "corrupted-backup") {
 			const journal = JSON.parse(
 				await readFile(
-					`${f.config.identityFile}.promotion/journal.json`,
+					await initialJournal(`${f.config.identityFile}.promotion`),
 					"utf8",
 				),
 			);
@@ -576,7 +586,7 @@ await promoteLoginOutputs(input.identityFile,
  rename: fs.rename,
  open: async (file, ...args) => {
   const handle = await fs.open(file, ...args);
-  const kind = String(file).endsWith('journal.json') ? 'journal' : 'commit';
+  const kind = String(file).split('/').at(-1).startsWith('journal.') ? 'journal' : 'commit';
   if (stop === kind + '-open') process.exit(73);
   return {
    writeFile: async bytes => {
@@ -630,7 +640,7 @@ await promoteLoginOutputs(input.identityFile,
 			);
 			const prepared = await fs.readlink(gate);
 			const journal = JSON.parse(
-				await fs.readFile(join(prepared, "journal.json"), "utf8"),
+				await fs.readFile(await initialJournal(prepared), "utf8"),
 			);
 			assert.equal(prepared, `${gate}.${journal.generation}.prepared`);
 			await assert.rejects(
@@ -838,3 +848,370 @@ test("commit publication never overwrites an existing marker", async (t) => {
 		/PROMOTION_INCOMPLETE/,
 	);
 });
+
+async function interruptedPromotion(t, stop = "committed") {
+	const f = await promotionFixture(t);
+	const module = new URL(
+		"../deploy/ack/login-output-promotion.ts",
+		import.meta.url,
+	).href;
+	const inputFile = await f.save(join(f.directory, "dead-writer-input.json"), {
+		identityFile: f.config.identityFile,
+		before: [...f.before].map(([file, bytes]) => [
+			file,
+			bytes?.toString("base64") ?? null,
+		]),
+		outputs: [...f.outputs],
+	});
+	const code = `
+import * as fs from 'node:fs/promises';
+import {promoteLoginOutputs} from ${JSON.stringify(module)};
+const input=JSON.parse(await fs.readFile(${JSON.stringify(inputFile)},'utf8'));
+await promoteLoginOutputs(input.identityFile,
+ new Map(input.before.map(([p,b])=>[p,b===null?null:Buffer.from(b,'base64')])),new Map(input.outputs),{
+ rename:fs.rename,link:async(from,to)=>{await fs.link(from,to);
+ if(${JSON.stringify(stop)}==='committed'?String(to).endsWith('/committed'):to===input.identityFile)process.exit(74);}
+});`;
+	const child = spawnSync(
+		process.execPath,
+		["--experimental-strip-types", "--input-type=module", "-e", code],
+		{ encoding: "utf8" },
+	);
+	assert.equal(child.status, 74, child.stderr);
+	return { ...f, module };
+}
+
+for (const legacy of [false, true])
+	test(`a stale recovery cannot retire the next writer gate (legacy=${legacy})`, {
+		timeout: 20_000,
+	}, async (t) => {
+		const f = await interruptedPromotion(t);
+		const fs = await import("node:fs/promises");
+		const fsBase = (await import("node:fs")).default;
+		const { syncBuiltinESMExports } = await import("node:module");
+		const {
+			recoverLoginOutputs,
+			promoteLoginOutputs,
+			assertLoginOutputsCommitted,
+		} = await import(f.module);
+		const gate = `${f.config.identityFile}.promotion`;
+		if (legacy) {
+			const prepared = await fs.readlink(gate);
+			await fs.unlink(gate);
+			await fs.rename(prepared, gate);
+			await fs.rename(await initialJournal(gate), join(gate, "journal.json"));
+		}
+		const actualRename = fs.rename;
+		const releases = [];
+		let signalReady;
+		const ready = new Promise((resolve) => {
+			signalReady = resolve;
+		});
+		let releaseWriter;
+		const continueWriter = new Promise((resolve) => {
+			releaseWriter = resolve;
+		});
+		let signalWriter;
+		const writerPaused = new Promise((resolve) => {
+			signalWriter = resolve;
+		});
+		// Delay ownership/retirement at real filesystem operations, preserving their arguments.
+		fsBase.promises.rename = async (from, to) => {
+			if (
+				releases.length < 2 &&
+				(from === gate || String(from).split("/").at(-1).startsWith("journal."))
+			) {
+				await new Promise((resolve) => {
+					releases.push(resolve);
+					if (releases.length === 2) signalReady();
+				});
+			}
+			return actualRename(from, to);
+		};
+		syncBuiltinESMExports();
+		let writer;
+		const recoveries = [1, 2].map(() =>
+			recoverLoginOutputs(f.config.identityFile, [...f.outputs.keys()], {
+				rename: (from, to) => fsBase.promises.rename(from, to),
+				link: fs.link,
+			}).then(
+				() => true,
+				() => false,
+			),
+		);
+		try {
+			await ready;
+			releases[0]();
+			assert.equal(await Promise.race(recoveries), true);
+			const before = new Map(
+				await Promise.all(
+					[...f.outputs.keys()].map(async (file) => [
+						file,
+						await fs.readFile(file),
+					]),
+				),
+			);
+			writer = promoteLoginOutputs(
+				f.config.identityFile,
+				before,
+				new Map(
+					[...f.outputs.keys()].map((file) => [file, { generation: "next" }]),
+				),
+				{
+					rename: actualRename,
+					link: async (from, to) => {
+						await fs.link(from, to);
+						if (to === f.config.identityFile) {
+							signalWriter();
+							await continueWriter;
+						}
+					},
+				},
+			).then(
+				() => true,
+				() => false,
+			);
+			await writerPaused;
+			releases[1]();
+			assert.deepEqual((await Promise.all(recoveries)).sort(), [false, true]);
+			assert.equal(
+				JSON.parse(await fs.readFile(f.config.identityFile, "utf8")).generation,
+				"next",
+			);
+			assert.equal(
+				JSON.parse(await fs.readFile([...f.outputs.keys()][1], "utf8"))
+					.generation,
+				"new",
+			);
+			await assert.rejects(
+				assertLoginOutputsCommitted(f.config.identityFile),
+				/PROMOTION_INCOMPLETE/,
+			);
+			releaseWriter();
+			assert.equal(await writer, true);
+			await assertLoginOutputsCommitted(f.config.identityFile);
+		} finally {
+			fsBase.promises.rename = actualRename;
+			syncBuiltinESMExports();
+			for (const release of releases) release();
+			releaseWriter();
+			await Promise.all([...recoveries, writer]);
+		}
+	});
+
+for (const legacy of [false, true]) {
+	for (const committed of [false, true]) {
+		test(`dead recovery claims transfer intact across repeated crashes (legacy=${legacy}, committed=${committed})`, async (t) => {
+			const f = await interruptedPromotion(
+				t,
+				committed ? "committed" : "first-output",
+			);
+			const fs = await import("node:fs/promises");
+			const {
+				recoverLoginOutputs,
+				assertLoginOutputsCommitted,
+				loginOutputBytes,
+			} = await import(f.module);
+			const gate = `${f.config.identityFile}.promotion`;
+			let directory = await fs.readlink(gate);
+			if (legacy) {
+				await fs.unlink(gate);
+				await fs.rename(directory, gate);
+				directory = gate;
+				await fs.rename(await initialJournal(gate), join(gate, "journal.json"));
+			}
+			const originalPath = await initialJournal(directory);
+			const originalJournal = await fs.readFile(originalPath);
+			let previousClaim = originalPath.split("/").at(-1);
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const code = `
+import * as fs from 'node:fs/promises';
+import {recoverLoginOutputs} from ${JSON.stringify(f.module)};
+await recoverLoginOutputs(${JSON.stringify(f.config.identityFile)},${JSON.stringify([...f.outputs.keys()])},{
+ link:fs.link,rename:async(from,to)=>{await fs.rename(from,to);if(String(to).includes('/recovery.'))process.exit(75);}
+});`;
+				const child = spawnSync(
+					process.execPath,
+					["--experimental-strip-types", "--input-type=module", "-e", code],
+					{ encoding: "utf8" },
+				);
+				assert.equal(child.status, 75, child.stderr);
+				const claims = (await fs.readdir(directory)).filter((name) =>
+					name.startsWith("recovery."),
+				);
+				assert.equal(claims.length, 1);
+				assert.notEqual(claims[0], previousClaim);
+				assert.deepEqual(
+					await fs.readFile(join(directory, claims[0])),
+					originalJournal,
+				);
+				assert.equal(
+					(await fs.lstat(join(directory, claims[0]))).mode & 0o777,
+					0o600,
+				);
+				await assert.rejects(fs.lstat(join(directory, previousClaim)), {
+					code: "ENOENT",
+				});
+				previousClaim = claims[0];
+				await assert.rejects(
+					assertLoginOutputsCommitted(f.config.identityFile),
+					/PROMOTION_INCOMPLETE/,
+				);
+			}
+			await recoverLoginOutputs(f.config.identityFile, [...f.outputs.keys()]);
+			await assertLoginOutputsCommitted(f.config.identityFile);
+			for (const [file, before] of f.before) {
+				assert.deepEqual(
+					await loginOutputBytes(file),
+					committed
+						? Buffer.from(`${JSON.stringify(f.outputs.get(file), null, 2)}\n`)
+						: before,
+				);
+			}
+		});
+	}
+}
+
+test("a live recovery owns the only complete journal and rejects other recoverers", async (t) => {
+	const f = await interruptedPromotion(t);
+	const fs = await import("node:fs/promises");
+	const { recoverLoginOutputs } = await import(f.module);
+	let release;
+	const resume = new Promise((resolve) => {
+		release = resolve;
+	});
+	let acquired;
+	const ready = new Promise((resolve) => {
+		acquired = resolve;
+	});
+	const first = recoverLoginOutputs(
+		f.config.identityFile,
+		[...f.outputs.keys()],
+		{
+			link: fs.link,
+			rename: async (from, to) => {
+				await fs.rename(from, to);
+				if (String(to).includes("/recovery.")) {
+					acquired();
+					await resume;
+				}
+			},
+		},
+	);
+	await ready;
+	try {
+		await assert.rejects(
+			recoverLoginOutputs(f.config.identityFile, [...f.outputs.keys()]),
+			/WRITER_NOT_RETIRED/,
+		);
+	} finally {
+		release();
+		await first;
+	}
+});
+
+for (const stop of ["restore-output", "before-retire", "after-retire"]) {
+	test(`a crashed recoverer retains its claim until gate retirement (${stop})`, async (t) => {
+		const f = await interruptedPromotion(t, "first-output");
+		const fs = await import("node:fs/promises");
+		const {
+			recoverLoginOutputs,
+			assertLoginOutputsCommitted,
+			loginOutputBytes,
+		} = await import(f.module);
+		const gate = `${f.config.identityFile}.promotion`;
+		const directory = await fs.readlink(gate);
+		const code = `
+import fs from 'node:fs/promises';
+import {syncBuiltinESMExports} from 'node:module';
+const stop=${JSON.stringify(stop)}, gate=${JSON.stringify(gate)};
+const rename=fs.rename;
+fs.rename=async(from,to)=>{
+ if(from===gate&&stop==='before-retire')process.exit(76);
+ await rename(from,to);
+ if(from===gate&&stop==='after-retire')process.exit(76);
+};
+syncBuiltinESMExports();
+const {recoverLoginOutputs}=await import(${JSON.stringify(f.module)});
+await recoverLoginOutputs(${JSON.stringify(f.config.identityFile)},${JSON.stringify([...f.outputs.keys()])},{
+ rename:fs.rename,link:async(from,to)=>{await fs.link(from,to);if(stop==='restore-output'&&String(from).endsWith('.before'))process.exit(76);}
+});`;
+		const child = spawnSync(
+			process.execPath,
+			["--experimental-strip-types", "--input-type=module", "-e", code],
+			{ encoding: "utf8" },
+		);
+		assert.equal(child.status, 76, child.stderr);
+		const claims = (await fs.readdir(directory)).filter((name) =>
+			name.startsWith("recovery."),
+		);
+		assert.equal(claims.length, 1);
+		JSON.parse(await fs.readFile(join(directory, claims[0]), "utf8"));
+		if (stop !== "after-retire") {
+			await assert.rejects(
+				assertLoginOutputsCommitted(f.config.identityFile),
+				/PROMOTION_INCOMPLETE/,
+			);
+			await recoverLoginOutputs(f.config.identityFile, [...f.outputs.keys()]);
+		}
+		await assertLoginOutputsCommitted(f.config.identityFile);
+		for (const [file, before] of f.before)
+			assert.deepEqual(await loginOutputBytes(file), before);
+	});
+}
+
+for (const invalid of [
+	"live-pid",
+	"invalid-pid",
+	"duplicate",
+	"symlink",
+	"public-file",
+	"unknown-name",
+	"generation-name",
+]) {
+	test(`recovery rejects ${invalid} claims without changing gate or outputs`, async (t) => {
+		const f = await interruptedPromotion(t);
+		const fs = await import("node:fs/promises");
+		const { randomUUID } = await import("node:crypto");
+		const { recoverLoginOutputs } = await import(f.module);
+		const gate = `${f.config.identityFile}.promotion`;
+		const directory = await fs.readlink(gate);
+		const original = await initialJournal(directory);
+		const pid =
+			invalid === "live-pid"
+				? process.pid
+				: invalid === "invalid-pid"
+					? 0
+					: 2147483647;
+		const claim = join(
+			directory,
+			invalid === "unknown-name"
+				? "unknown.json"
+				: invalid === "generation-name"
+					? `journal.${randomUUID()}.json`
+					: `recovery.${pid}.${randomUUID()}.json`,
+		);
+		if (invalid === "duplicate") await fs.copyFile(original, claim);
+		else if (invalid === "symlink") {
+			const external = join(f.directory, "external-journal.json");
+			await fs.rename(original, external);
+			await fs.symlink(external, claim);
+		} else {
+			await fs.rename(original, claim);
+			if (invalid === "public-file") await fs.chmod(claim, 0o644);
+		}
+		const inode = (await fs.lstat(gate)).ino;
+		const before = await Promise.all(
+			[...f.outputs.keys()].map((file) => fs.readFile(file)),
+		);
+		await assert.rejects(
+			recoverLoginOutputs(f.config.identityFile, [...f.outputs.keys()]),
+		);
+		assert.equal((await fs.lstat(gate)).ino, inode);
+		assert.deepEqual(
+			await Promise.all([...f.outputs.keys()].map((file) => fs.readFile(file))),
+			before,
+		);
+		assert(await fs.lstat(claim));
+	});
+}
