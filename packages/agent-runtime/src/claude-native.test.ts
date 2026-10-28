@@ -1090,6 +1090,42 @@ it.for([
 		expect(calls, JSON.stringify(requestMetadata)).toBe(shell ? 2 : 1);
 		expect(outcomes).toEqual([{ subtype: "success", is_error: false }]);
 		if (shell) {
+			stage = "shell-tool-result";
+			const messages = requests.at(-1)?.messages;
+			const results = (Array.isArray(messages) ? messages : []).flatMap(
+				(message) =>
+					Array.isArray(message.content)
+						? message.content.filter(
+								(block: { type?: string; tool_use_id?: string }) =>
+									block.type === "tool_result" &&
+									block.tool_use_id === "isolated-bash",
+							)
+						: [],
+			);
+			// Only this synthetic tool result is considered; never dump model requests.
+			const summary = results.map((result) => {
+				const output =
+					typeof result.content === "string"
+						? result.content
+						: JSON.stringify(result.content);
+				return {
+					isError: result.is_error === true,
+					diagnostic: output
+						.replaceAll(secret, "<redacted>")
+						.replaceAll(root, "<fixture>")
+						.split("\n")
+						.filter((line: string) =>
+							/bwrap|sandbox|permission denied|operation not permitted|not found|unshare|EPERM|not available|not installed/i.test(
+								line,
+							),
+						)
+						.slice(0, 4)
+						.map((line: string) => line.slice(0, 300)),
+				};
+			});
+			expect(summary, JSON.stringify(summary)).toEqual([
+				{ isError: false, diagnostic: [] },
+			]);
 			stage = "shell-proof";
 			expect(
 				JSON.parse(
