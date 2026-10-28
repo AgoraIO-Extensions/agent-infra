@@ -35,6 +35,9 @@ import {
 	agentPodSecurityContext,
 } from "./kubernetes-runtime-comparison.js";
 import {
+	hasAdditionalEgressPolicyV1,
+	nativeEgressPolicyAnnotationsV1,
+	nativeEgressPolicyAnnotationV1,
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
@@ -385,6 +388,7 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 		Object.keys(value.egress).some(
 			(key) =>
 				![
+					"nativeEgress",
 					"modelEgress",
 					"connectionEgress",
 					"nativeMetadataWorkerEgress",
@@ -413,6 +417,12 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 			value.runtime.fileExchange?.origin,
 			value.egress.fileExchangeEgress,
 		)
+	)
+		throw new WorkloadKubernetesError("policy");
+	if (
+		value.egress.nativeEgress &&
+		(value.runtime?.custom ||
+			(value.desiredState === "running" && value.runtime === null))
 	)
 		throw new WorkloadKubernetesError("policy");
 	// Rejects any destination the shared Agent-level compiler would reject.
@@ -765,7 +775,13 @@ export function sessionSandboxResourcesV1(
 	const policy: V1NetworkPolicy = {
 		apiVersion: "networking.k8s.io/v1",
 		kind: "NetworkPolicy",
-		metadata: metadata(allocation, allocation.networkPolicyName),
+		metadata: {
+			...metadata(allocation, allocation.networkPolicyName),
+			annotations: {
+				...metadata(allocation, allocation.networkPolicyName).annotations,
+				...nativeEgressPolicyAnnotationsV1(allocation.egress.nativeEgress),
+			},
+		},
 		spec: {
 			podSelector: { matchLabels: resourceLabels },
 			policyTypes: ["Ingress", "Egress"],
@@ -1079,6 +1095,11 @@ function resourceSpecMatches(
 			);
 		}
 		case "NetworkPolicy": {
+			if (
+				current.metadata?.annotations?.[nativeEgressPolicyAnnotationV1] !==
+				expected.metadata?.annotations?.[nativeEgressPolicyAnnotationV1]
+			)
+				return false;
 			const actual = (current as V1NetworkPolicy).spec;
 			const wanted = (expected as V1NetworkPolicy).spec;
 			const matchLabels = legacyComparableLabels(
@@ -1386,6 +1407,15 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			if (allocation.desiredState === "running" && allocation.runtime === null)
 				throw new WorkloadKubernetesError("policy");
 			const resources = sessionSandboxResourcesV1(allocation);
+			if (
+				allocation.desiredState === "running" &&
+				allocation.egress.nativeEgress &&
+				hasAdditionalEgressPolicyV1(
+					await options.client.list<V1NetworkPolicy>("NetworkPolicy", ""),
+					resources.find((r) => r.kind === "NetworkPolicy") as V1NetworkPolicy,
+				)
+			)
+				throw new WorkloadKubernetesError("policy");
 			// Check the complete previous set before any write. A vanished or replaced
 			// instance needs Store-authorized recovery, not implicit allocation here.
 			for (const prior of previous) {
@@ -1516,6 +1546,18 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					? { ...allocation, desiredState: "stopped" }
 					: allocation,
 			);
+			if (
+				purpose === "business" &&
+				allocation.desiredState === "running" &&
+				allocation.egress.nativeEgress &&
+				hasAdditionalEgressPolicyV1(
+					await options.client.list<V1NetworkPolicy>("NetworkPolicy", ""),
+					expectedResources.find(
+						(r) => r.kind === "NetworkPolicy",
+					) as V1NetworkPolicy,
+				)
+			)
+				throw new WorkloadKubernetesError("policy");
 			// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源没有模型投影，排空 allocation 的
 			// runtime 为 null：当时不创建 Runtime Secret，资源规格也由当时的模板渲染，今天的模板
 			// 复现不了。这类来源的 control 观测只按归属标记与 UID 识别（#2885）。

@@ -43,6 +43,7 @@ import {
 	sessionSandboxSelectorMatchesV1,
 	sessionSandboxServiceTokenV1,
 } from "./session-workload-adapter.js";
+import { workloadEgressRulesV1 } from "./workload-network.js";
 import {
 	createWorkloadRuntimeV1,
 	drainCacheableCommands,
@@ -529,8 +530,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 /** Picks the deployment-approved egress fields; other policy fields never widen it. */
 function sessionSandboxEgressPolicyV1(
 	policy: WorkloadRuntimeOptionsV1["policy"],
+	standard: boolean,
 ): SessionSandboxAllocationV1["egress"] {
 	return {
+		...(standard && policy.nativeEgress
+			? { nativeEgress: policy.nativeEgress }
+			: {}),
 		...(policy.modelEgress ? { modelEgress: policy.modelEgress } : {}),
 		...(policy.connectionEgress
 			? { connectionEgress: policy.connectionEgress }
@@ -551,6 +556,8 @@ function createSessionSandboxAllocationResolverV1(
 	workload: WorkloadRuntimeOptionsV1,
 	options: { readonly serviceToken: string },
 ) {
+	const egressPolicy = structuredClone(workload.policy);
+	workloadEgressRulesV1(egressPolicy);
 	const connectionConsumerSnapshot = workload.policy.connectionConsumerSnapshot;
 	const connectionInstallationRevision =
 		workload.policy.connectionInstallationRevision;
@@ -741,7 +748,10 @@ function createSessionSandboxAllocationResolverV1(
 			networkPolicyName: binding.resourceName,
 			secretName: binding.resourceName,
 			// Only the reviewed deployment egress, identical to the Agent Workload's.
-			egress: sessionSandboxEgressPolicyV1(workload.policy),
+			egress: sessionSandboxEgressPolicyV1(
+				egressPolicy,
+				templateBinding !== undefined,
+			),
 			imageDigest: `${templateBinding?.imageRepository ?? workload.policy.imageRepository}@${deployment.imageDigest}`,
 			containerPort: deployment.service.port,
 			env: deployment.env,

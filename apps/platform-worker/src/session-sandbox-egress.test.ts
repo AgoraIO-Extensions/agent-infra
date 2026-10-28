@@ -6,6 +6,7 @@ import {
 	type SessionSandboxEgressBindingV1,
 } from "./session-sandbox-egress.js";
 import { sessionSandboxLabelsV1 } from "./session-workload-adapter.js";
+import { nativeEgressFixture } from "./test-support/native-egress.js";
 
 const binding: SessionSandboxEgressBindingV1 = {
 	schemaVersion: 1,
@@ -316,4 +317,36 @@ describe("Session Sandbox egress enforcement (Kubernetes fixture, not CNI eviden
 			ports: [{ protocol: "TCP", port: 443 }],
 		});
 	});
+});
+
+it("keeps native profile immutable and binds its protected inventory through observe/revoke", async () => {
+	const { api } = setup();
+	const configured = { ...profile, nativeEgress: nativeEgressFixture() };
+	const options = {
+		client: api.client,
+		profile: configured,
+		withCurrentAllocation: async <T>(
+			_binding: SessionSandboxEgressBindingV1,
+			_operation: unknown,
+			action: () => Promise<T>,
+		) => action(),
+	};
+	const adapter = createSessionSandboxEgressV1(options);
+	const receipt = await adapter.apply(binding);
+	configured.nativeEgress.destinations[0].destination.ip = "1.1.1.1";
+	const current = await api.client.read<V1NetworkPolicy>(
+		"NetworkPolicy",
+		receipt.name,
+	);
+	expect(JSON.stringify(current?.spec?.egress)).toContain("8.8.8.8");
+	await adapter.observe(binding, receipt);
+	const removed = createSessionSandboxEgressV1({ ...options, profile });
+	await expect(removed.observe(binding, receipt)).rejects.toThrow();
+	const drift = createSessionSandboxEgressV1(options);
+	await expect(drift.observe(binding, receipt)).rejects.toThrow();
+	await adapter.revoke(binding, receipt);
+	expect(
+		(await api.client.read<V1NetworkPolicy>("NetworkPolicy", receipt.name))
+			?.spec?.egress,
+	).toEqual([]);
 });
