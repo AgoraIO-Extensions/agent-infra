@@ -551,13 +551,15 @@ NODE
 	live_namespace=$(kubectl --kubeconfig "$ACK_KUBECONFIG" get namespace "$namespace" -o jsonpath='{.metadata.uid}' 2>/dev/null) || die "cleanup namespace identity read failed"
 	[[ "$live_cluster" == "$expected_cluster" && "$live_namespace" == "$expected_namespace" ]] || die "cleanup UID identity mismatch"
 	namespace_json=$(kubectl --kubeconfig "$ACK_KUBECONFIG" get namespace "$namespace" -o json 2>/dev/null) || die "cleanup namespace read failed"
-	if ! node - "$namespace_json" <<'NODE'
+	if ! node - "$namespace_json" "$ACK_CLEANUP_PLAN_FILE" <<'NODE'
+const fs = require("node:fs");
 const value = JSON.parse(process.argv[2]);
+const expected = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
 const labels = value.metadata?.labels ?? {};
-if (labels["app.kubernetes.io/part-of"] !== "agent-infra" || labels["app.agoralab.co/workload-plane"] !== "agent-infra") process.exit(1);
+if (labels["agent-infra.agora.io/bootstrap-id"] !== expected.installationId) process.exit(1);
 NODE
 	then
-		die "cleanup namespace ownership labels are missing"
+		die "cleanup namespace bootstrap ownership mismatch"
 	fi
 	cleanup_plan >/dev/null
 	local admission="${namespace}-session-eci"
