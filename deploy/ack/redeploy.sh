@@ -28,7 +28,7 @@ die() {
 
 usage() {
 	cat <<'EOF'
-Usage: deploy/ack/redeploy.sh <capture-inputs|plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|template-preflight|bootstrap-credential|cleanup-plan|deploy|provision|validate|clean|destroy|all>
+Usage: deploy/ack/redeploy.sh <capture-inputs|plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|template-preflight|runtime-inputs|bootstrap-credential|cleanup-plan|deploy|provision|validate|clean|destroy|all>
 
 Required for plan/deploy/validate:
   ACK_KUBECONFIG   private kubeconfig path
@@ -210,6 +210,27 @@ bootstrap_credential() {
 		die "API credential bootstrap failed; inspect only the redacted receipt: $evidence_dir/api-credential.json"
 	fi
 	echo "ack-redeploy: API credential bootstrap passed; evidence=$evidence_dir"
+}
+
+runtime_inputs() {
+	require_source_tuple
+	require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
+	require_file ACK_TEMPLATE_VALIDATIONS_FILE "${ACK_TEMPLATE_VALIDATIONS_FILE:-}"
+	require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
+	require_file ACK_AGENT_REQUESTS_FILE "${ACK_AGENT_REQUESTS_FILE:-}"
+	prepare_evidence
+	rendered_manifest=$(mktemp)
+	trap 'unlink "$rendered_manifest"' EXIT
+	render_manifest "$rendered_manifest"
+	if ! node "$repo_root/deploy/ack/runtime-inputs.ts" apply "$ACK_BOOTSTRAP_INPUTS_FILE" \
+		"$ACK_TEMPLATE_VALIDATIONS_FILE" "$ACK_WORKLOAD_CAPACITY_FILE" "$ACK_AGENT_REQUESTS_FILE" \
+		"$rendered_manifest" >"$evidence_dir/runtime-inputs.json"; then
+		die "fresh Runtime inputs could not be published and read back"
+	fi
+	unlink "$rendered_manifest"
+	trap - EXIT
+	validate_workload_capacity
+	echo "ack-redeploy: fresh Runtime inputs published and loaded; evidence=$evidence_dir"
 }
 
 template_preflight() {
@@ -569,6 +590,7 @@ case "$command" in
 	bootstrap-database) bootstrap_database ;;
 	bootstrap-credential) bootstrap_credential ;;
 	template-preflight) template_preflight ;;
+	runtime-inputs) runtime_inputs ;;
 	cleanup-plan) cleanup_plan ;;
 	deploy) deploy ;;
 	validate) validate ;;
@@ -577,6 +599,10 @@ case "$command" in
 	provision) provision ;;
 	all)
 		require_source_tuple
+		if [[ -n "${ACK_TEMPLATE_PREFLIGHT_JOBS_FILE:-}" ]]; then
+			require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
+			require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
+		fi
 		if [[ -n "${ACK_BOOTSTRAP_INPUTS_FILE:-}" ]]; then
 			bootstrap_database check
 			bootstrap_inputs apply
@@ -585,6 +611,7 @@ case "$command" in
 		deploy
 		if [[ -n "${ACK_TEMPLATE_PREFLIGHT_JOBS_FILE:-}" ]]; then
 			template_preflight
+			runtime_inputs
 		else
 			require_file ACK_TEMPLATE_VALIDATIONS_FILE "${ACK_TEMPLATE_VALIDATIONS_FILE:-}"
 		fi
