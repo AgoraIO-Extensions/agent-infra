@@ -1046,6 +1046,8 @@ it.for([
 		},
 	);
 	const outcomes: unknown[] = [];
+	const failures: unknown[] = [];
+	let stage = "native-result";
 	let deadline: ReturnType<typeof setTimeout> | undefined;
 	try {
 		await Promise.race([
@@ -1083,10 +1085,12 @@ it.for([
 				);
 			}),
 		]);
+		stage = "fixture-response";
 		expect(fixtureErrors).toEqual([]);
 		expect(calls, JSON.stringify(requestMetadata)).toBe(shell ? 2 : 1);
 		expect(outcomes).toEqual([{ subtype: "success", is_error: false }]);
 		if (shell) {
+			stage = "shell-proof";
 			expect(
 				JSON.parse(
 					await readFile(join(workspace, "claude-proof.json"), "utf8"),
@@ -1096,14 +1100,27 @@ it.for([
 				"isolated-claude-shell",
 			);
 		}
+		stage = "credential-redaction";
 		expect(JSON.stringify(requests)).not.toContain(secret);
+	} catch (error) {
+		failures.push(
+			new Error(`Claude probe failed at ${stage}`, { cause: error }),
+		);
 	} finally {
 		clearTimeout(deadline);
-		await native.close();
+		try {
+			await native.close();
+		} catch (error) {
+			failures.push(
+				new Error("Claude probe failed at native-close", { cause: error }),
+			);
+		}
 		server.closeAllConnections();
 		await new Promise<void>((accept) => server.close(() => accept()));
 		await rm(root, { recursive: true, force: true });
 	}
+	if (failures.length)
+		throw new AggregateError(failures, "Claude probe failed");
 });
 
 it("rejects non-Messages and malformed requests without stalling the Claude fixture", async () => {

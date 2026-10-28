@@ -480,7 +480,7 @@ jobs:
       - name: Verify native Claude conformance in the pinned Linux image
         if: ${{ needs.changes.outputs.runtime == 'true' }}
         run: |
-          docker run --rm --pull=never --network=none --read-only \
+          docker run --init --rm --pull=never --network=none --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
             --tmpfs /tmp:rw,exec,size=256m,mode=1777 \
             --env AGENT_INFRA_NATIVE_SHELL_TEST=1 \
