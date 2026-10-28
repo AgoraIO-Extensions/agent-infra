@@ -362,3 +362,163 @@ process.stdout.write(JSON.stringify({workspace:fs.readFileSync("allowed.txt","ut
 	},
 	30_000,
 );
+
+it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
+	"executes the isolated Bash capability through the pinned Pi CLI and restores its tool facts without replay",
+	async () => {
+		const path = await mkdtemp(join(tmpdir(), "pi-cli-shell-"));
+		const fixture = await openMessagesRuntimeDriverConformanceFixture(
+			path,
+			false,
+			"pi",
+		);
+		try {
+			const command = {
+				schemaVersion: 2 as const,
+				kind: "submit-turn" as const,
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "execution-shell",
+				turnId: "turn-shell",
+				operationId: "operation-shell",
+				input: { text: "synthetic shell capability", attachments: [] },
+				selection: {
+					schemaVersion: 1 as const,
+					modelOptionId: "model-option-primary",
+					reasoningLevel: "high",
+				},
+			};
+			fixture.nextTool("sandbox_bash", {
+				command:
+					"printf 'isolated-native-bash' > native-shell-result.txt; cat native-shell-result.txt",
+				timeout: 5,
+			});
+			const accepted = await fixture.driver.execute(command);
+			expect(accepted.result.outcome).toBe("accepted");
+			await vi.waitFor(() => expect(fixture.modelRequests()).toHaveLength(2), {
+				timeout: 10_000,
+			});
+			const tools = fixture.modelRequests()[0]?.tools as { name: string }[];
+			expect(tools.map((tool) => tool.name)).toContain("sandbox_bash");
+			expect(tools.map((tool) => tool.name)).not.toContain("bash");
+			await expect(
+				readFile(
+					join(
+						path,
+						accepted.nativeSessionRef,
+						"workspace/native-shell-result.txt",
+					),
+					"utf8",
+				),
+			).resolves.toBe("isolated-native-bash");
+			expect(JSON.stringify(fixture.modelRequests()[1]?.messages)).toContain(
+				"isolated-native-bash",
+			);
+			await fixture.completeStopAsCompleted();
+			const events = await fixture.driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			expect(events).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						type: "tool",
+						payload: expect.objectContaining({
+							name: "Bash",
+							phase: "started",
+						}),
+					}),
+					expect.objectContaining({
+						type: "tool",
+						payload: expect.objectContaining({
+							name: "Bash",
+							phase: "completed",
+						}),
+					}),
+				]),
+			);
+			const calls = await fixture.createdTurnCount();
+			const installed = await (
+				await import("./pi-installation.js")
+			).verifyPiInstallation();
+			const { spawn } = await import("node:child_process");
+			const { nativeShellEnvironment } = await import("./native-shell.js");
+			const workspace = join(path, accepted.nativeSessionRef, "workspace");
+			const missingExtension = await new Promise<{
+				code: number | null;
+				output: string;
+			}>((accept, reject) => {
+				const child = spawn(
+					installed.executable,
+					[
+						installed.cli,
+						"--no-extensions",
+						"--no-skills",
+						"--no-prompt-templates",
+						"--no-themes",
+						"--no-context-files",
+						"--no-session",
+						"--mode",
+						"rpc",
+						"--tools",
+						"sandbox_bash",
+						"--extension",
+						join(path, "missing-policy.mjs"),
+					],
+					{
+						cwd: workspace,
+						env: {
+							...nativeShellEnvironment(workspace),
+							PI_CODING_AGENT_DIR: join(
+								path,
+								accepted.nativeSessionRef,
+								"config",
+							),
+						},
+						stdio: ["pipe", "pipe", "pipe"],
+					},
+				);
+				let output = "";
+				child.stdout.on("data", (data) => {
+					output += data;
+				});
+				child.stderr.on("data", (data) => {
+					output += data;
+				});
+				child.stdin.end();
+				const timer = setTimeout(() => child.kill("SIGKILL"), 5000);
+				child.once("error", (error) => {
+					clearTimeout(timer);
+					reject(error);
+				});
+				child.once("close", (code) => {
+					clearTimeout(timer);
+					accept({ code, output });
+				});
+			});
+			expect(missingExtension.code).not.toBeNull();
+			expect(missingExtension.code).not.toBe(0);
+			expect(missingExtension.output).toMatch(/sandbox_bash|missing-policy/);
+			await fixture.restart();
+			expect(
+				await fixture.driver.getStatus(
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toBe("completed");
+			expect(
+				await fixture.driver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toEqual(events);
+			expect(await fixture.driver.execute(command)).toEqual(accepted);
+			expect(await fixture.createdTurnCount()).toBe(calls);
+		} finally {
+			await fixture.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+	30_000,
+);

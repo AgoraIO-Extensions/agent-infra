@@ -37,15 +37,18 @@ Claude 使用已审核的 SDK 内部 MCP bridge；Host 只把受保护的 client
 
 ## 原生 Shell 子边界验证（#3218）
 
-`native-shell.ts` 是固定 Pi Bash 接缝的候选子进程 launcher。Runtime 镜像将它作为只读可执行文件
-安装到 `/opt/agent-infra/native-shell.mjs`；现有 Linux 原生 conformance 阶段通过
-`AGENT_INFRA_NATIVE_SHELL_TEST=1` 强制执行 `pi-native.test.ts` 的隔离探针。探针直接使用经过
-来源核对的 Pi 原生 Bash 工具，不连接真实模型或业务账号，也不等于完整 Pi CLI/Driver 验收。
+`native-shell.ts` 是 Pi 原生 Bash 的子进程 launcher。镜像将它安装为只读可执行文件
+`/opt/agent-infra/native-shell.mjs`，真实安装/ABI5 检查通过后，Pi bootstrap 才允许
+`sandbox_bash`。policy 使用固定上游 `createBashToolDefinition`，保留原生执行、取消和输出逻辑。
+这个注册名避免扩展加载失败时回退到没有子边界的 builtin `bash`；界面工具事实使用 Bash 标签。
 
-launcher 在完整 ABI 5 准入后，只允许本工作区及固定系统只读路径，显式重建工具环境，并以仅继承
-stdio 的新子进程关闭额外 FD 传递。测试覆盖原生/Host/兄弟目录、`/proc`、符号链接、环境启动钩子、
-实际继承 FD 与取消；缺 helper、ABI 或合法目录时拒绝，不使用较弱权限重试。
+launcher 只允许本工作区、固定只读系统/Skill 目录，显式重建环境，并以仅继承 stdio 的新子进程
+隔断额外 FD。缺 helper、ABI5 或合法目录时不提供该能力，每次执行继续重新检查，不使用弱权限
+重试。`/etc/ssl/openssl.cnf` 仅以不可写系统文件的只读授权提供给 Node/OpenSSL，不开放整个 `/etc`。
 
-此阶段不修改 `piWorkspaceToolNames`、Claude 或 OpenCode 权限，不开放任何生产 Bash 工具。
-后续还须通过完整固定 Linux 原生 CLI、模型工具事实、只读 Skill、恢复/取消矩阵，以及 Claude 和
-OpenCode 的受信接缝，才能按 #3218 启用对应工具；单个探针通过不能关闭 #3218 或父票 #3202。
+既有 Linux conformance 通过 `AGENT_INFRA_NATIVE_SHELL_TEST=1` 强制执行 Pi 探针：直接固定工具
+覆盖环境/Host/native/兄弟目录、proc、符号链接、继承 FD、非法输入和取消；实际 Pi CLI 通过本地
+模型 fixture 调用同一能力，记录工具事实，并验证重启后不重放和缺失扩展不能回退。
+
+完整 #3218 仍包含 Claude/OpenCode 接线、完整父子边界与恢复矩阵。上述单模板受控调用不等于真实
+模型/外部环境验收，也不能代签其余模板；Draft 验证结果未完成前不得合入或关闭父票 #3202。

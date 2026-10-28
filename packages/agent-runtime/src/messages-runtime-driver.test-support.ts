@@ -20,6 +20,8 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>,
 ) {
 	let loseResult = loseFirstResult;
+	let pendingTool: { name: string; input: Record<string, unknown> } | undefined;
+	const requests: Record<string, unknown>[] = [];
 	let calls = 0;
 	const selections: {
 		schemaVersion: 1;
@@ -35,6 +37,7 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 			});
 			request.on("end", () => {
 				const value = JSON.parse(body);
+				requests.push(value);
 				if (
 					request.headers.authorization !==
 						`Bearer synthetic-${id}-credential` ||
@@ -69,6 +72,40 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 						},
 					}),
 				);
+				if (pendingTool) {
+					const tool = pendingTool;
+					pendingTool = undefined;
+					for (const event of [
+						{
+							type: "content_block_start",
+							index: 0,
+							content_block: {
+								type: "tool_use",
+								id: `tool_${calls}`,
+								name: tool.name,
+								input: {},
+							},
+						},
+						{
+							type: "content_block_delta",
+							index: 0,
+							delta: {
+								type: "input_json_delta",
+								partial_json: JSON.stringify(tool.input),
+							},
+						},
+						{ type: "content_block_stop", index: 0 },
+						{
+							type: "message_delta",
+							delta: { stop_reason: "tool_use", stop_sequence: null },
+							usage: { output_tokens: 2 },
+						},
+						{ type: "message_stop" },
+					])
+						response.write(encode(event));
+					response.end();
+					return;
+				}
 				responses.add(response);
 				response.on("close", () => responses.delete(response));
 			});
@@ -159,6 +196,10 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 	decorate();
 	let closed = false;
 	const fixture = {
+		nextTool(name: string, input: Record<string, unknown>) {
+			pendingTool = { name, input };
+		},
+		modelRequests: () => structuredClone(requests),
 		get driver() {
 			return raw;
 		},
