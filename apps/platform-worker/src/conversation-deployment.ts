@@ -682,7 +682,7 @@ function createSessionSandboxAllocationResolverV1(
 												policy.namespace,
 												binding.sandboxId,
 											),
-											`${deployment.agentId}\0${binding.sessionId}`,
+											`${deployment.agentId}:${binding.sessionId}`,
 										),
 								}
 							: {}),

@@ -125,6 +125,11 @@ Agent 默认 Relay Key 的 `/models`，私有 API/Worker Model Catalog 的 `allo
 
 文件 E2E 仍由 #3060 跟踪，Harness 的 `verify` 不执行它。需要显式启用时才设置：
 
+开启前必须先按[旧 Runtime 镜像检查与迁移顺序](../../docs/architecture/FILE-storage-deployment.md#启用前检查旧-runtime-镜像)
+盘点全部已保存 Agent 镜像和现存 Sandbox，把旧镜像迁移到包含 #3256 修复的已验证镜像，
+或通过正式生命周期入口停止并保持停止。只更新默认模板不会升级现有 Agent，Harness
+也不会根据附件能力自动过滤旧镜像；完成此检查后才执行以下步骤。
+
 1. 把 `file-deployment.json`、Ed25519 签名密钥、Runtime 公钥和服务令牌文件放入
    `PLATFORM_LOCAL_API_DIRECTORY`（该目录只读挂到 API 的 `/app/deployment`），并设置
    `PLATFORM_LOCAL_API_FILE_DEPLOYMENT_CONFIGURATION_FILE=/app/deployment/file-deployment.json`。

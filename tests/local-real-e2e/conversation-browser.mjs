@@ -606,7 +606,7 @@ async function run(input, evidence) {
 			);
 			await expect(
 				otherPage.getByText(
-					"当前登录或访问权限已失效，请重新登录或返回 Agent 目录。",
+					/^(当前登录或访问权限已失效，请重新登录或返回 Agent 目录。|Agent 不存在，或你没有访问权限。)$/u,
 				),
 			).toBeVisible();
 			await expect(

@@ -52,6 +52,8 @@ export interface WorkloadRuntimeProbeAuthorizationV1 {
 }
 
 export interface ProductionWorkloadWorkerInputV1 {
+	/** Deployment-owned service token retained in Worker memory for Codex boundary attestations. */
+	readonly serviceToken: string;
 	readonly databaseUrl: string;
 	readonly workerId: string;
 	readonly kubernetes:
@@ -237,6 +239,7 @@ export async function createProductionWorkloadWorkerOptionsV1(
 		return {
 			databaseUrl: input.databaseUrl,
 			workerId: input.workerId,
+			containerBoundaryServiceToken: input.serviceToken,
 			policy: structuredClone(input.policy),
 			client,
 			registry,

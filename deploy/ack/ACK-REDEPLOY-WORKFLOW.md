@@ -33,6 +33,7 @@ export ACK_CUSTOM_AGENT_CONFIGS=$'/private/ack/custom-a.json\n/private/ack/custo
 export ACK_AGENT_REQUESTS_FILE=/private/ack/agent-requests.json
 export ACK_TEMPLATE_VALIDATIONS_FILE=/private/ack/template-validations.json
 export ACK_TEMPLATE_PREFLIGHT_JOBS_FILE=/private/ack/template-preflight-jobs.json
+export ACK_TEMPLATE_IMAGE_MANIFEST=/private/ack/templates-amd64.json
 export ACK_EVIDENCE_DIR=/private/ack/evidence/$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
@@ -102,6 +103,8 @@ ECI placement，以及 grant private key、Runtime service token 和 Relay key �
 attestation，执行真实 Runtime turn 和事件回读，写入私有 candidate/preflight receipt，随后
 删除 Pod 和 Secret。镜像拉取、Runtime 启动、真实模型、完成事件或 cleanup 任一步失败都会
 让流程失败；它不会复用历史 receipt。
+模板校验使用同次生成的 `template-model-validation.receipt.json`；详细诊断
+`template-model-preflight.receipt.json` 和 `runtime-capacity.receipt.json` 分别保留运行证据与实测容量，均保持私有。
 
 清单结构如下，具体 body 和 credential 仍放在仓库外：
 
@@ -200,6 +203,47 @@ deploy/ack/redeploy.sh bootstrap-inputs
 已有环境的 `preflight.sh` 只读检查依赖，不会在连接失败时创建 namespace。
 
 ## 新环境的 API 凭证
+
+### 创建 Agent 前的 Session 容量检查
+
+`provision`（含 `all`）同时读取 `ACK_WORKLOAD_CAPACITY_FILE`。标准模板和
+`platform-adapter` 自定义 Agent 的每个最终镜像都必须有唯一容量记录，绑定当前
+`resourceProfileRef`、CPU/内存 requests/limits 与真实测量收据的 SHA-256。
+`self-managed` 入口通过自己的业务探针验收，不使用 Platform Session 容量。
+
+私有检查文件示例：
+
+```json
+{
+  "schemaVersion": 1,
+  "sourceSha": "0123456789abcdef0123456789abcdef01234567",
+  "resourceProfileRef": "small",
+  "resources": {
+    "requests": { "cpu": "100m", "memory": "128Mi" },
+    "limits": { "cpu": "1", "memory": "2Gi" }
+  },
+  "profilesFile": "/private/ack/execution-capacity-profiles.json",
+  "workerSecretRef": { "name": "worker-configuration", "key": "execution-capacity-profiles.json" },
+  "evidence": [
+    {
+      "imageDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "file": "/private/ack/runtime-measurement.json"
+    }
+  ]
+}
+```
+
+`resources` 必须与 Worker policy 一致，`profilesFile` 必须是 bootstrap 交付给 Worker 的同一
+文件。工具在创建 Agent 前核对当前 Worker Pod 的实际挂载及装配输出，再比较本地文件与集群 Secret 字节；缺失、重复、资源不匹配、
+全零证据哈希、收据字节变化或 Secret 漂移均失败。当前检查只支持单执行测量收据，
+同时校验镜像、完整 CPU/内存资源、真实模型事实、完成状态、回复匹配和上限 1。
+标准模板 preflight 自动生成 `runtime-capacity.receipt.json`；容量 profile 的证据哈希
+指向该文件。自定义 ACP 可使用 `isolated-custom-runtime-capacity` 收据。
+纯 Pod-ready、任意文件、缺少模型事实或把容量扩大到测量上限以上都不能通过。
+更新配置后须等待 Worker rollout；已有 Agent 通过正式 lifecycle 重启重新生成 verified
+capacity，禁止手工写数据库补齐。
+
+### 签发个人 API credential
 
 数据库、迁移和 Platform 就绪后，部署拥有者必须先通过真实 LDAP/浏览器登录生成一个新的
 Playwright `storageState`。工具不会接收 LDAP 密码，也不会模拟登录。将下列私有请求文件
@@ -302,8 +346,9 @@ deploy/ack/redeploy.sh destroy
 
 ## 从 session 记录沉淀的成功与失败
 
-原 session 的历史记录支持 Claude、Pi、OpenCode 和一个自定义镜像曾有真实回复；
-Codex 在该记录中的 Landlock 预检失败，不能记为四模板全部成功。
+原 session 早期记录过 Codex Landlock 失败，后续记录了四个标准模板的真实回复及完成终态；
+自定义 ACP 的对话与自有多服务入口也分别留下成功证据。仍有历史自定义 Agent 创建失败，
+不能把已成功的目标扩写成所有记录都成功。
 Platform Ready、单次回复与多轮通过分别记录。后续其他 session 的 ACP 或多服务结果
 不得回填成此 session 的成功证据；这些记录也不是当前部署状态。
 
@@ -312,10 +357,16 @@ Platform Ready、单次回复与多轮通过分别记录。后续其他 session 
 - main 在发布期间多次前进，导致“最新镜像”与部署/运行时绑定混用。脚本要求 `ACK_SOURCE_SHA == HEAD`，并把每次镜像和 Helm 回读放入同一 receipt。
 - Pod Ready、healthz、受控回显和旧会话不能证明业务成功。脚本强制四个新浏览器旅程，要求真实 SSE、落库终态、刷新回读和第二主体拒绝。
 - Pi 曾出现首轮成功、下一轮只返回一个字符、再失败。当前入口要求同一会话至少三轮，各轮验证独立 Execution 与期望回复；受控 Chromium 已覆盖第二轮截断失败，真实 ACK 多轮结果仍待验证。
-- Codex 的 ECI/普通节点缺少可执行的 Landlock ABI，真实 `setpriv` 预检失败。脚本不会用 Pi 或受控 fixture 替代 Codex；当前规范另有 container-boundary 模式，按 [Runtime 预检](./RUNTIME-PREFLIGHT.md) 完成对应隔离和真实工具验收后才可使用；不能从历史 Landlock 失败推断当前方案必然失败。
+- Codex 的 ECI/普通节点可能缺少可执行的 Landlock ABI，真实 `setpriv` 预检会失败。脚本不会用 Pi 或受控 fixture 替代 Codex；ACK 的标准 Runtime Pod 可在 `policy.codexContainerBoundaryEnabled=true` 且 Worker 注入匹配 HMAC attestation 时使用 reviewed `container-boundary` 模式。该模式必须先通过 [Runtime 预检](./RUNTIME-PREFLIGHT.md)，再对同一标准 Workload 做签名真实 readiness 和真实模型回合；缺少边界输入时仍应 fail closed，不能从历史 Landlock 失败或 Pod Ready 推断当前方案成功。
+- Fresh 数据库会生成新的 canonical Platform user ID。`allowedPrincipals`、API subject 映射和 custom admission 不能写死历史 UUID；登录后读取当前 session，再更新仓库外私有配置，删除并重建 owned configuration Secret，滚动 API/Worker 后重新签发 credential。
+- 标准 Workload 的 Codex boundary 输入由 Worker 在运行时根据当前 Agent ID 生成；私有 values 只打开部署策略开关。任何手工给 Agent Pod 加 `AGENT_INFRA_*` boundary 输入、复用旧 UID 或直接改 StatefulSet 都会破坏 ownership/attestation 验证。
 - 运行时绑定曾指向旧 Digest，旧 Sandbox 进入 `RUNTIME_CONFIGURATION_INVALID`。当前浏览器配置尚未绑定 image/revision；必须补齐这一验证才能排除旧 Sandbox。
 - malformed execution-capacity profile、重复 `templateModelBindings` 和配额耗尽曾阻断全局 workload reconciliation。部署前应从 Worker configuration 中删除坏 profile、确保每个标准模板只有一个当前绑定，并核对 `ResourceQuota hard/used`；现场排查应只读取配额数值与有界故障码；不要导出完整事件消息。
 - ACK registry 对不完整 OCI config 返回 `409`，镜像 mirror tag 写入返回 `405`；发布阶段使用受支持的 GHCR/workflow 路径和完整 Digest，不能把临时 Tag 写入 values。
 - 真实 ECI image pull 可能在短窗口停留 `ContainerCreating`。这只能记为冷启动/镜像交付证据，不能直接判定模型失败；必须等待同一执行的完成事件或明确失败。
+- 四模板 Agent 全部 ready 后，真实会话仍可能返回 `AGENT_STARTING`：更换模板 digest 却漏更新 capacity profiles 时，verified capacity 为空，Session 记录 `capacity_mismatch`。创建前使用上述容量检查，创建后仍要求新 Session 的真实回复和持久化终态。
+- 自定义镜像未设置 Driver 默认值时，Agent Workload 的 `acp` 注入不能覆盖到 Session。Session 装配必须同样注入服务端选择的 Driver，同时保留镜像/Owner 管理的模型配置与会话专属 Secret。
+- 浏览器写请求的直接 HTTP 探针必须携带目标 Origin。GET session 成功而 POST 返回 401 时先核对协议边界，不应先认定密码错误或重启丢 Cookie。
+- CI run 的 `updatedAt` 不是执行心跳。应读取 job 的当前 step 与终态；长测试仍在运行时继续等待，不因顶层时间戳未变就取消重跑。
 
 这套脚本不会替平台创建账号、审批 Agent、生成登录 Cookie、修复内核或伪造模型凭证；这些输入必须由部署拥有者按现有 E2E 配置提供。上述缺口全部完成并通过真实演练后，才能称为一键移植方案。
