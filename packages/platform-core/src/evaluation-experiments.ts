@@ -726,6 +726,15 @@ export function parseEvaluationSampleTaskV1(
 			resourceConfigurationHash: p.resourceConfigurationHash,
 		};
 	}
+	const requestedEvidence =
+		x.requestedEvidence === undefined
+			? undefined
+			: parseEvaluationRequestedEvidenceV1(x.requestedEvidence);
+	if (
+		requestedEvidence &&
+		requestedEvidence.configurationRevision !== binding.configurationRevision
+	)
+		throw new EvaluationDataErrorV1("unavailable");
 	return {
 		sampleTaskId: text(x.sampleTaskId),
 		experimentId: text(x.experimentId),
@@ -743,13 +752,7 @@ export function parseEvaluationSampleTaskV1(
 			toolEnvironment: binding.toolEnvironment,
 		},
 		...(preparedRuntime ? { preparedRuntime } : {}),
-		...(x.requestedEvidence === undefined
-			? {}
-			: {
-					requestedEvidence: parseEvaluationRequestedEvidenceV1(
-						x.requestedEvidence,
-					),
-				}),
+		...(requestedEvidence ? { requestedEvidence } : {}),
 	};
 }
 

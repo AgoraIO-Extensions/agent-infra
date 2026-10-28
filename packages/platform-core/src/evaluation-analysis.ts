@@ -149,6 +149,18 @@ export function summarizeEvaluationExperimentV1(input: {
 	taskTypes: ReadonlyMap<string, string> | null;
 }) {
 	const { experiment } = input;
+	if (
+		!experiment.sampleIds.length ||
+		!experiment.variantIds.length ||
+		new Set(experiment.sampleIds).size !== experiment.sampleIds.length ||
+		new Set(experiment.variantIds).size !== experiment.variantIds.length ||
+		new Set(
+			experiment.scorerRefs.map((ref) =>
+				JSON.stringify([ref.scorerId, ref.version]),
+			),
+		).size !== experiment.scorerRefs.length
+	)
+		throw new EvaluationDataErrorV1("unavailable");
 	const taskMap = new Map<string, EvaluationAnalysisTaskV1>();
 	for (const task of input.tasks) {
 		const key = JSON.stringify([task.task.sampleId, task.task.variantId]);

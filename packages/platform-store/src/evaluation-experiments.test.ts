@@ -3491,3 +3491,161 @@ it.each(["user", "application"] as const)(
 	},
 	30000,
 );
+it("keeps authorized old-version analysis after a new deployment policy and explicit new-version experiment", async () => {
+	const { PostgresEvaluationAnalysisV1 } = await import(
+		"./evaluation-analysis.js"
+	);
+	const command = await dataset();
+	const original = await core.create(request("runner"), randomUUID(), {
+		...command,
+		comparisonTargets: ["model", "configuration"],
+	});
+	const [d] =
+		await sql`select (data->>'revision')::int as revision from platform.evaluation_datasets where id=${command.datasetId}`;
+	const grant = await data.grant(
+		request("admin"),
+		randomUUID(),
+		command.datasetId,
+		{
+			expectedRevision: Number(d?.revision),
+			principal: { kind: "user", id: "analyst-history" },
+			versionIds: [command.versionId],
+			operations: ["analyze"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		},
+	);
+	await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)values(${configuration.agentId},'user','analyst-history','use','history-use')`;
+	const loadAnalysisPolicy = async () => ({
+		schemaVersion: 1 as const,
+		policyId: "analysis",
+		revision: 1,
+		validUntil: policy.validUntil,
+		maximumWindowMs: 86400000,
+		maximumTasks: 1000,
+		maximumModelFacts: 1000,
+		feedbackMetadataMs: 600000,
+	});
+	const analysis = new PostgresEvaluationAnalysisV1({
+		...database,
+		directory,
+		loadDataPolicy: async () => policy,
+		loadExperimentPolicy: async () => experimentPolicy,
+		loadAnalysisPolicy,
+		storage,
+		taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+	});
+	try {
+		expect(
+			(
+				await analysis.summary(
+					request("analyst-history"),
+					original.experimentId,
+				)
+			).groups.every((g) => g.counts.fixedSamples === 1),
+		).toBe(true);
+		const [latest] =
+			await sql`select (data->>'revision')::int as revision from platform.evaluation_datasets where id=${command.datasetId}`;
+		const version = await data.reserve(
+			request("admin"),
+			randomUUID(),
+			command.datasetId,
+			{
+				expectedRevision: Number(latest?.revision),
+				sourceVersionId: command.versionId,
+			},
+		);
+		const [afterReserve] =
+			await sql`select (data->>'revision')::int as revision from platform.evaluation_datasets where id=${command.datasetId}`;
+		await data.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: Number(afterReserve?.revision),
+			principal: { kind: "user", id: "admin" },
+			versionIds: [version.versionId],
+			operations: ["import"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+		await data.upload(
+			request("admin"),
+			randomUUID(),
+			command.datasetId,
+			version.versionId,
+			new TextEncoder().encode(
+				JSON.stringify({
+					schemaVersion: 1,
+					provenance: { approvalId: "synthetic-fixture" },
+					samples: [
+						{
+							id: "one",
+							input: "synthetic changed version",
+							context: null,
+							taskType: "answer",
+							expectedResult: "yes",
+						},
+					],
+					rubric: [{ id: "quality", description: "Exact answer" }],
+				}),
+			),
+		);
+		const [afterUpload] =
+			await sql`select (data->>'revision')::int as revision from platform.evaluation_datasets where id=${command.datasetId}`;
+		await data.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: Number(afterUpload?.revision),
+			principal: { kind: "user", id: "runner" },
+			versionIds: [version.versionId],
+			operations: ["run"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+		const [afterRun] =
+			await sql`select (data->>'revision')::int as revision from platform.evaluation_datasets where id=${command.datasetId}`;
+		await data.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: Number(afterRun?.revision),
+			principal: { kind: "user", id: "analyst-history" },
+			versionIds: [version.versionId],
+			operations: ["analyze"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+		const next = await core.create(request("runner"), randomUUID(), {
+			...command,
+			versionId: version.versionId,
+			comparisonTargets: ["model", "configuration"],
+		});
+		expect(next.experimentId).not.toBe(original.experimentId);
+		const oldPolicy = experimentPolicy;
+		experimentPolicy = {
+			...experimentPolicy,
+			revision: experimentPolicy.revision + 1,
+			variants: [],
+		};
+		try {
+			const page = await analysis.history(request("analyst-history"), 100);
+			expect(page.items.map((i) => i.experimentId)).toEqual(
+				expect.arrayContaining([original.experimentId, next.experimentId]),
+			);
+			expect(
+				(
+					await analysis.summary(
+						request("analyst-history"),
+						original.experimentId,
+					)
+				).versionId,
+			).toBe(command.versionId);
+		} finally {
+			experimentPolicy = oldPolicy;
+		}
+		await data.revoke(
+			request("admin"),
+			randomUUID(),
+			command.datasetId,
+			grant.grantId,
+			grant.revision,
+		);
+		await expect(
+			analysis.summary(request("analyst-history"), original.experimentId),
+		).rejects.toMatchObject({ code: "denied" });
+		expect(
+			(await analysis.summary(request("analyst-history"), next.experimentId))
+				.versionId,
+		).toBe(version.versionId);
+	} finally {
+		await analysis.close();
+	}
+}, 30000);

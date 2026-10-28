@@ -2084,8 +2084,8 @@ describe("published Relay authority migration", () => {
 			tag: "0063_wecom_outbound_media",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 70,
-			tag: "0070_evaluation_experiments",
+			idx: 71,
+			tag: "0071_evaluation_analysis_feedback",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2319,6 +2319,7 @@ describe("published Relay authority migration", () => {
 					"outbox_items:trace_parent",
 					"conversation_executions:accepted_original_host_session_ref",
 					"conversation_executions:unknown_since",
+					"conversation_executions:terminal_observed_at",
 					// #3377：长连接流式进度的帧序号。
 					"wecom_receipts:stream_frame_seq",
 					// #3078：Runtime 修订（ADR-0028）。
@@ -2420,6 +2421,15 @@ describe("published Relay authority migration", () => {
 						"revision",
 						"data",
 					].map((column) => `evaluation_score_intents:${column}`),
+					...[
+						"execution_id",
+						"principal_type",
+						"principal_id",
+						"agent_id",
+						"revision",
+						"metadata_expires_at",
+						"data",
+					].map((column) => `task_feedback:${column}`),
 					...["id", "score_id", "revision", "data"].map(
 						(column) => `evaluation_score_reviews:${column}`,
 					),
@@ -2569,6 +2579,11 @@ describe("published Relay authority migration", () => {
 				].sort(),
 				indexes: [
 					...expectedDelta.indexes,
+					"task_feedback:task_feedback_pkey",
+					"task_feedback:task_feedback_metadata_expiry_idx",
+					"conversation_executions:execution_feedback_actor_window_idx",
+					"conversation_executions:execution_feedback_owner_window_idx",
+					"conversation_events:execution_model_fact_sequence_idx",
 					"evaluation_derived_objects:evaluation_derived_objects_pkey",
 					"evaluation_derived_objects:evaluation_derived_expiry",
 					"evaluation_experiments:evaluation_experiments_pkey",

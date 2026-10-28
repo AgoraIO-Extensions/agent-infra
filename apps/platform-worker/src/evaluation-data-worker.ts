@@ -4,6 +4,10 @@ import {
 	requireEvaluationObjectStorageV1,
 } from "@agent-infra/object-storage";
 import {
+	type EvaluationAnalysisPolicyV1,
+	parseEvaluationAnalysisPolicyV1,
+} from "@agent-infra/platform-core";
+import {
 	createPostgresOutboxStore,
 	PostgresEvaluationDataStoreV1,
 } from "@agent-infra/platform-store";
@@ -11,6 +15,7 @@ import {
 /** Uses the existing outbox lease/fence; cleanup needs no expired data-use policy. */
 export function createEvaluationDataWorkerV1(input: {
 	databaseUrl: string;
+	loadAnalysisPolicy?: () => Promise<EvaluationAnalysisPolicyV1>;
 	storage: ObjectStorageDataV1;
 	closeStorage?: () => void | Promise<void>;
 	batchSize: number;
@@ -31,7 +36,20 @@ export function createEvaluationDataWorkerV1(input: {
 	const owner = `evaluation-cleanup-${randomUUID()}`;
 	return {
 		async runOnce() {
-			for (const itemId of await store.expired(input.batchSize)) {
+			let feedbackPolicy: EvaluationAnalysisPolicyV1 | undefined;
+			if (input.loadAnalysisPolicy) {
+				try {
+					feedbackPolicy = parseEvaluationAnalysisPolicyV1(
+						await input.loadAnalysisPolicy(),
+					);
+				} catch {
+					/* Existing frozen expiry obligations remain valid if the current policy is unavailable. */
+				}
+			}
+			for (const itemId of await store.expired(
+				input.batchSize,
+				feedbackPolicy,
+			)) {
 				const lease = await outbox.claim({
 					itemId,
 					leaseOwner: owner,

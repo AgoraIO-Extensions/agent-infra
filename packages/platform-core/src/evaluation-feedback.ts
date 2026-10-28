@@ -248,6 +248,7 @@ export function parseTaskFeedbackSubmitV1(
 	};
 }
 export interface TaskFeedbackTransactionV1 {
+	resultExpiresAt?: string;
 	now: Date;
 	principal: EvaluationPrincipalV1;
 	target: TaskFeedbackTargetV1;
@@ -348,6 +349,13 @@ export function createTaskFeedbackV1(port: TaskFeedbackPortV1) {
 					) {
 						if (receipt.digest !== digest)
 							throw new EvaluationDataErrorV1("conflict");
+						tx.resultExpiresAt = new Date(
+							Math.min(
+								Date.parse(receipt.expiresAt),
+								Date.parse(receipt.result.createdAt) +
+									tx.policy.feedbackMetadataMs,
+							),
+						).toISOString();
 						return parseTaskFeedbackRecordV1(receipt.result);
 					}
 					const previous = currentFeedback(await tx.current(), tx);
@@ -375,6 +383,7 @@ export function createTaskFeedbackV1(port: TaskFeedbackPortV1) {
 							),
 						).toISOString(),
 					};
+					tx.resultExpiresAt = record.metadataExpiresAt;
 					await tx.save(record, key, digest);
 					await tx.audit(record);
 					return record;

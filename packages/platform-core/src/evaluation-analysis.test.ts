@@ -245,3 +245,37 @@ it("allows only explicitly combined target changes after each actual side matche
 		}).pairs[0]?.counts.nonTargetDrift,
 	).toBe(1);
 });
+
+it("keeps comparison intent in the idempotency request and rejects invented or duplicate target dimensions", async () => {
+	const {
+		parseEvaluationExperimentCreateV1,
+		parseEvaluationRequestedEvidenceV1,
+	} = await import("./evaluation-experiments.js");
+	const base = {
+		datasetId: "d",
+		versionId: "v",
+		variantIds: ["base", "candidate"],
+		scorerRefs: [{ scorerId: "s", version: "1" }],
+	};
+	expect(parseEvaluationExperimentCreateV1(base)).toEqual(base);
+	expect(
+		parseEvaluationExperimentCreateV1({
+			...base,
+			comparisonTargets: ["template", "model"],
+		}),
+	).toMatchObject({ comparisonTargets: ["model", "template"] });
+	for (const comparisonTargets of [[], ["arbitrary"], ["model", "model"]])
+		expect(() =>
+			parseEvaluationExperimentCreateV1({ ...base, comparisonTargets }),
+		).toThrow();
+	expect(() =>
+		parseEvaluationRequestedEvidenceV1({
+			configurationRevision: 1,
+			configurationDigest: "a".repeat(64),
+			imageDigest: "sha256:" + "a".repeat(64),
+			templateId: null,
+			model: null,
+			endpoint: "private",
+		}),
+	).toThrow();
+});

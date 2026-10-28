@@ -494,3 +494,149 @@ it("authorizes a genuinely empty self window and conceals an unavailable Agent w
 			store.summary(outsider, agentId, "self", query),
 		).rejects.toMatchObject({ code: "denied" });
 });
+it("deduplicates persisted model phases/attempts and keeps mixed actual conditions in a single Task denominator", async () => {
+	const id = await seed("user");
+	const model = {
+		configVersion: "7",
+		modelOptionId: "option",
+		modelId: "actual-a",
+	};
+	const facts = [
+		{
+			kind: "model",
+			operationRef: "first",
+			attemptRef: "one",
+			phase: "intent",
+			model,
+		},
+		{
+			kind: "model",
+			operationRef: "first",
+			attemptRef: "one",
+			phase: "started",
+			model,
+		},
+		{
+			kind: "model",
+			operationRef: "first",
+			attemptRef: "one",
+			phase: "completed",
+			model,
+			usage: { inputTokens: 7, outputTokens: 0 },
+		},
+		{
+			kind: "model",
+			operationRef: "second",
+			attemptRef: "two",
+			phase: "started",
+			model: { ...model, modelId: "actual-b" },
+		},
+	];
+	for (const [index, fact] of facts.entries())
+		await sql`insert into platform.conversation_events(event_id,conversation_id,execution_id,sequence,conversation_cursor,event_type,event_payload,source,adapter_event_key,event_digest,runtime_cursor,occurred_at)values(${randomUUID()},${id},${id},${index + 1},${index + 1},'execution.operation',${JSON.stringify({ schemaVersion: 2, type: "execution.operation", fact })}::text::jsonb,'runtime',${randomUUID()},${"a".repeat(64)},${String(index + 1)},clock_timestamp())`;
+	await sql`update platform.conversation_executions set last_event_sequence=${facts.length} where execution_id=${id}`;
+	const context = await core.get(request("user"), id);
+	expect(context.conditions).toHaveLength(2);
+	const query = {
+		from: new Date(Date.now() - 60000).toISOString(),
+		to: new Date(Date.now() + 60000).toISOString(),
+		modelId: "actual-a",
+		configVersion: "7",
+	};
+	const before = await store.summary(request("user"), "agent", "self", query);
+	expect(before.eligibleTasks).toBe(1);
+	expect(before.feedbackTasks).toBe(0);
+	await core.submit(request("user"), id, randomUUID(), {
+		expectedRevision: 0,
+		expectedCondition: context.conditionDigest,
+		useful: true,
+		categories: [],
+	});
+	const after = await store.summary(request("user"), "agent", "self", query);
+	expect(after.eligibleTasks).toBe(1);
+	expect(after.feedbackTasks).toBe(1);
+	expect(after.conditions[0]?.conditions).toHaveLength(2);
+	const [plan] =
+		await sql`explain (analyze,format json) select execution_id from platform.conversation_executions where agent_id='agent' and principal_type='user' and actor_id='same' and terminal_observed_at>=${query.from}::timestamptz and terminal_observed_at<${query.to}::timestamptz and status in ('completed','failed','cancelled') order by terminal_observed_at,execution_id`;
+	expect(JSON.stringify(plan)).toContain("Actual Rows");
+});
+
+it("removes entire expired feedback rows and receipts through the existing Eval cleanup sweep", async () => {
+	const id = await seed("user");
+	const context = await core.get(request("user"), id);
+	const key = randomUUID();
+	await core.submit(request("user"), id, key, {
+		expectedRevision: 0,
+		expectedCondition: context.conditionDigest,
+		useful: false,
+		categories: ["other"],
+	});
+	const expired = new Date(Date.now() - 1000).toISOString();
+	await sql`update platform.task_feedback set metadata_expires_at=${expired}::timestamptz,data=jsonb_set(data,'{metadataExpiresAt}',to_jsonb(${expired}::text)) where execution_id=${id}`;
+	await sql`update platform.idempotency_records set result=jsonb_set(result,'{metadataExpiresAt}',to_jsonb(${expired}::text)) where scope_type='task_feedback' and scope_id=${id}`;
+	const { PostgresEvaluationDataStoreV1 } = await import(
+		"./evaluation-data.js"
+	);
+	const cleanup = new PostgresEvaluationDataStoreV1(database);
+	try {
+		await cleanup.expired(100);
+	} finally {
+		await cleanup.close();
+	}
+	expect(
+		await sql`select execution_id from platform.task_feedback where execution_id=${id}`,
+	).toHaveLength(0);
+	expect(
+		await sql`select id from platform.idempotency_records where scope_type='task_feedback' and scope_id=${id}`,
+	).toHaveLength(0);
+	expect(
+		await sql`select execution_id from platform.conversation_executions where execution_id=${id}`,
+	).toHaveLength(1);
+});
+
+it("does not create earlier deletion obligations from stale or expired analysis policies", async () => {
+	const id = await seed("user");
+	const context = await core.get(request("user"), id);
+	await core.submit(request("user"), id, randomUUID(), {
+		expectedRevision: 0,
+		expectedCondition: context.conditionDigest,
+		useful: true,
+		categories: [],
+	});
+	const { PostgresEvaluationDataStoreV1 } = await import(
+		"./evaluation-data.js"
+	);
+	const cleanup = new PostgresEvaluationDataStoreV1(database);
+	try {
+		for (const invalid of [
+			{ ...policy, revision: policy.revision - 1, feedbackMetadataMs: 1 },
+			{
+				...policy,
+				validUntil: "2020-01-01T00:00:00.000Z",
+				feedbackMetadataMs: 1,
+			},
+		]) {
+			await cleanup.expired(100, invalid);
+			expect(
+				await sql`select execution_id from platform.task_feedback where execution_id=${id}`,
+			).toHaveLength(1);
+		}
+		await cleanup.expired(100);
+		expect(
+			await sql`select execution_id from platform.task_feedback where execution_id=${id}`,
+		).toHaveLength(1);
+		const futurePolicy = {
+			...policy,
+			revision: policy.revision + 1,
+			feedbackMetadataMs: 1,
+		};
+		await sql`update platform.evaluation_policies set revision=${futurePolicy.revision},digest=${createHash("sha256").update(JSON.stringify(futurePolicy)).digest("hex")} where id='analysis'`;
+		await cleanup.expired(100, futurePolicy);
+		expect(
+			await sql`select execution_id from platform.task_feedback where execution_id=${id}`,
+		).toHaveLength(0);
+	} finally {
+		policy.revision += 2;
+		await cleanup.close();
+	}
+});

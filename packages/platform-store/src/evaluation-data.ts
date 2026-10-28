@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+	type EvaluationAnalysisPolicyV1,
 	EvaluationDataErrorV1,
 	type EvaluationDataStoreV1,
 	type EvaluationDataTransactionV1,
@@ -8,6 +9,7 @@ import {
 	type EvaluationRequestV1,
 	type EvaluationVersionV1,
 	PersonalApiCredentialErrorV1,
+	parseEvaluationAnalysisPolicyV1,
 	parseEvaluationDatasetV1,
 	parseEvaluationDerivedObjectV1,
 	parseEvaluationGrantV1,
@@ -560,10 +562,35 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 	}
 
 	/** Worker-only metadata sweep; no policy or content authority is needed to fulfill existing expiry. */
-	async expired(limit: number) {
+	async expired(limit: number, feedbackPolicy?: EvaluationAnalysisPolicyV1) {
 		return this.db.transaction(async (tx) => {
 			await lock(tx);
 			const now = await clock(tx);
+			let feedbackMetadataMs: number | undefined;
+			if (feedbackPolicy) {
+				try {
+					const policy = parseEvaluationAnalysisPolicyV1(feedbackPolicy);
+					const checkpoint = await tx.execute<{
+						revision: string;
+						digest: string;
+					}>(
+						sql`select revision,digest from platform.evaluation_policies where id='analysis' for share`,
+					);
+					if (
+						checkpoint[0] &&
+						+checkpoint[0].revision === policy.revision &&
+						checkpoint[0].digest ===
+							createHash("sha256")
+								.update(JSON.stringify(policy))
+								.digest("hex") &&
+						Date.parse(policy.validUntil) > +(await clock(tx))
+					)
+						feedbackMetadataMs = policy.feedbackMetadataMs;
+				} catch {
+					/* Only previously frozen expiry remains actionable without a current policy. */
+				}
+			}
+
 			const rows = await tx
 				.select()
 				.from(evaluationVersions)
@@ -612,8 +639,12 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 					})
 					.onConflictDoNothing();
 			}
-			await tx.execute(sql`delete from platform.idempotency_records where id in(select id from platform.idempotency_records where scope_type='task_feedback' and (result->>'metadataExpiresAt')::timestamptz<=clock_timestamp() order by id limit ${limit} for update skip locked)`);
-			await tx.execute(sql`delete from platform.task_feedback where execution_id in(select execution_id from platform.task_feedback where metadata_expires_at<=clock_timestamp() order by metadata_expires_at,execution_id limit ${limit} for update skip locked)`);
+			await tx.execute(
+				sql`delete from platform.idempotency_records where id in(select id from platform.idempotency_records where scope_type='task_feedback' and ((result->>'metadataExpiresAt')::timestamptz<=clock_timestamp() or (${feedbackMetadataMs ?? null}::bigint is not null and (result->>'createdAt')::timestamptz+${feedbackMetadataMs ?? 0}*interval '1 millisecond'<=clock_timestamp())) order by id limit ${limit} for update skip locked)`,
+			);
+			await tx.execute(
+				sql`delete from platform.task_feedback where execution_id in(select execution_id from platform.task_feedback where (metadata_expires_at<=clock_timestamp() or (${feedbackMetadataMs ?? null}::bigint is not null and (data->>'createdAt')::timestamptz+${feedbackMetadataMs ?? 0}*interval '1 millisecond'<=clock_timestamp())) order by metadata_expires_at,execution_id limit ${limit} for update skip locked)`,
+			);
 			await tx.execute(
 				sql`delete from platform.evaluation_score_reviews where (data->>'metadataExpiresAt')::timestamptz<=clock_timestamp()`,
 			);

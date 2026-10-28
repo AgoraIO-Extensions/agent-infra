@@ -2858,7 +2858,8 @@ Execution 集合，再关联有效反馈；无反馈不丢出分母，重复反�
 
 分析与反馈沿现有私有配置显式提供查询预算（maximumWindowMs、maximumTasks、maximumModelFacts）
 及反馈 metadataMs 保留期限，无生产默认保留期限。预算约束完整查询而非分母：超出任何预算明确返回
-query_too_large，不能截断后给出部分反馈率。反馈当前行和幂等回执的到期清理由现有 Worker 履行，
+query_too_large，不能截断后给出部分反馈率。私有 API 的 `evaluation.loadAnalysisPolicy` 与 Worker 的
+`workloadInput.evaluation.loadAnalysisPolicy` 使用同一部署政策；反馈当前行和幂等回执的到期清理由现有 Worker 履行，
 不得保留不受政策约束的无限主体/摘要。反馈元数据独立于离线内容，不自动导入评测集；所有新增审计
 仅保存受限操作/目标/结果元数据，不保存反馈正文、样本、评分理由或私有配置。
 

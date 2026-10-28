@@ -91,6 +91,7 @@ export const platformAuditQueryResultsV1 = [
 ] as const;
 
 export const platformAuditQueryActionsV1 = [
+	"task.feedback.updated",
 	...evaluationAuditActionsV1,
 	"skill.version.register",
 	"skill.version.review",

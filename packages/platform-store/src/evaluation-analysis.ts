@@ -23,6 +23,7 @@ import { readCurrentTaskApiUseGrantV1 } from "./application-task-authorization.j
 import { PostgresEvaluationDataStoreV1 } from "./evaluation-data.js";
 import { PostgresEvaluationDerivedContentV1 } from "./evaluation-derived-content.js";
 import type { EvaluationExperimentStoreOptionsV1 } from "./evaluation-experiments.js";
+import { bindEvaluationAnalysisPolicyV1 } from "./evaluation-feedback.js";
 import postgres from "./observed-postgres.js";
 
 export interface EvaluationAnalysisStoreOptionsV1
@@ -60,61 +61,96 @@ export class PostgresEvaluationAnalysisV1 {
 		]);
 	}
 	async #current(request: EvaluationRequestV1, id: string) {
-		const [row] = await this.#client<
-			{ id: string; dataset_id: string; version_id: string; data: unknown }[]
-		>`select id,dataset_id,version_id,data from platform.evaluation_experiments where id=${id}`;
-		if (!row) throw new EvaluationDataErrorV1("denied");
-		const experiment = parseEvaluationExperimentV1(row.data);
-		if (
-			experiment.experimentId !== row.id ||
-			experiment.datasetId !== row.dataset_id ||
-			experiment.versionId !== row.version_id
-		)
-			throw new EvaluationDataErrorV1("unavailable");
-		const data = await this.#data.authorizeAnalysisMetadata(
-			request,
-			experiment.datasetId,
-			experiment.versionId,
-		);
-		const analysisPolicy = parseEvaluationAnalysisPolicyV1(
-			await this.options.loadAnalysisPolicy(),
-		);
-		const [clock] = await this.#client<
-			{ now: Date }[]
-		>`select clock_timestamp() as now`;
-		if (
-			!clock ||
-			Date.parse(analysisPolicy.validUntil) <= +clock.now ||
-			Date.parse(experiment.metadataExpiresAt) <= +clock.now
-		)
-			throw new EvaluationDataErrorV1("denied");
-		const samples = await this.#client<
-			{ id: string; experiment_id: string; data: unknown }[]
-		>`select id,experiment_id,data from platform.evaluation_sample_tasks where experiment_id=${id} order by id limit ${analysisPolicy.maximumTasks + 1}`;
-		if (samples.length > analysisPolicy.maximumTasks)
-			throw new EvaluationQueryLimitErrorV1();
-		const agents = new Set<string>();
-		for (const row of samples) {
-			const sample = parseEvaluationSampleTaskV1(row.data);
+		return this.#client.begin(async (tx) => {
+			await tx`select pg_advisory_xact_lock(hashtextextended('evaluation-data-v1',0))`;
+			const { policy: analysisPolicy } = await bindEvaluationAnalysisPolicyV1(
+				tx,
+				this.options.loadAnalysisPolicy,
+			);
+			const service = createEvaluationDataV1({
+				store: new PostgresEvaluationDataStoreV1({
+					...this.options,
+					transaction: tx,
+				}),
+				loadPolicy: this.options.loadDataPolicy,
+				storage: this.options.storage,
+			});
+			const [row] = await tx<
+				{ id: string; dataset_id: string; version_id: string; data: unknown }[]
+			>`select id,dataset_id,version_id,data from platform.evaluation_experiments where id=${id}`;
+			if (!row) throw new EvaluationDataErrorV1("denied");
+			const experiment = parseEvaluationExperimentV1(row.data);
 			if (
-				sample.sampleTaskId !== row.id ||
-				sample.experimentId !== id ||
-				row.experiment_id !== id
+				experiment.experimentId !== row.id ||
+				experiment.datasetId !== row.dataset_id ||
+				experiment.versionId !== row.version_id
 			)
 				throw new EvaluationDataErrorV1("unavailable");
-			agents.add(sample.requested.agentId);
-		}
-		if (!agents.size) throw new EvaluationDataErrorV1("unavailable");
-		await this.#client.begin(async (tx) => {
+			const data = await service.authorizeAnalysisMetadata(
+				request,
+				experiment.datasetId,
+				experiment.versionId,
+			);
+
+			const [clock] = await tx<
+				{ now: Date }[]
+			>`select clock_timestamp() as now`;
+			if (
+				!clock ||
+				Date.parse(analysisPolicy.validUntil) <= +clock.now ||
+				Date.parse(experiment.metadataExpiresAt) <= +clock.now
+			)
+				throw new EvaluationDataErrorV1("denied");
+			const samples = await tx<
+				{ id: string; experiment_id: string; data: unknown }[]
+			>`select id,experiment_id,data from platform.evaluation_sample_tasks where experiment_id=${id} order by id limit ${analysisPolicy.maximumTasks + 1}`;
+			if (samples.length > analysisPolicy.maximumTasks)
+				throw new EvaluationQueryLimitErrorV1();
+			const agents = new Set<string>();
+			for (const row of samples) {
+				const sample = parseEvaluationSampleTaskV1(row.data);
+				if (
+					sample.sampleTaskId !== row.id ||
+					sample.experimentId !== id ||
+					row.experiment_id !== id
+				)
+					throw new EvaluationDataErrorV1("unavailable");
+				agents.add(sample.requested.agentId);
+			}
+			if (!agents.size) throw new EvaluationDataErrorV1("unavailable");
+
 			for (const agentId of [...agents].sort()) {
+				await tx`select id from platform.agents where id=${agentId} for share`;
 				const grant = await readCurrentTaskApiUseGrantV1(tx, {
 					principal: data.principal,
 					agentId,
 				});
 				if (!grant || grant.revoked) throw new EvaluationDataErrorV1("denied");
 			}
+			const final = await service.authorizeAnalysisMetadata(
+				request,
+				experiment.datasetId,
+				experiment.versionId,
+			);
+			if (
+				!isDeepStrictEqual(data, final) ||
+				!isDeepStrictEqual(
+					analysisPolicy,
+					parseEvaluationAnalysisPolicyV1(
+						await this.options.loadAnalysisPolicy(),
+					),
+				)
+			)
+				throw new EvaluationDataErrorV1("denied");
+			const [now] = await tx<{ now: Date }[]>`select clock_timestamp() as now`;
+			if (
+				!now ||
+				Date.parse(analysisPolicy.validUntil) <= +now.now ||
+				Date.parse(experiment.metadataExpiresAt) <= +now.now
+			)
+				throw new EvaluationDataErrorV1("denied");
+			return { experiment, data, analysisPolicy, now: now.now };
 		});
-		return { experiment, data, analysisPolicy, now: clock.now };
 	}
 	async #snapshot(
 		experiment: EvaluationExperimentV1,
@@ -154,7 +190,7 @@ export class PostgresEvaluationAnalysisV1 {
 						revision: string;
 						data: unknown;
 					}[]
-				>`select i.id,i.sample_task_id,i.status,i.revision,i.data from platform.evaluation_score_intents i join platform.evaluation_sample_tasks s on s.id=i.sample_task_id where s.experiment_id=${experiment.experimentId}`;
+				>`select i.id,i.sample_task_id,i.status,i.revision,i.data from platform.evaluation_score_intents i join platform.evaluation_sample_tasks s on s.id=i.sample_task_id where s.experiment_id=${experiment.experimentId} and (i.data->>'metadataExpiresAt')::timestamptz>clock_timestamp()`;
 				const scores = scoreRows.map((row) => {
 					const value = parseEvaluationScoreIntentV1(row.data);
 					if (
@@ -185,7 +221,9 @@ export class PostgresEvaluationAnalysisV1 {
 							policy.maximumModelFacts,
 						),
 						taskDurationMs: row.terminal_observed_at
-							? Math.max(0, +row.terminal_observed_at - +row.created_at)
+							? +row.terminal_observed_at >= +row.created_at
+								? +row.terminal_observed_at - +row.created_at
+								: null
 							: null,
 						scores: scores.filter((s) => s.sampleTaskId === row.id),
 					};
@@ -228,6 +266,16 @@ export class PostgresEvaluationAnalysisV1 {
 			before.data.grant.revision !== final.data.grant.revision
 		)
 			throw new EvaluationDataErrorV1("denied");
+		if (
+			tasks.some((row) =>
+				row.scores.some(
+					(score) => Date.parse(score.metadataExpiresAt) <= +final.now,
+				),
+			)
+		)
+			throw new EvaluationDataErrorV1("denied");
+		if (source)
+			await this.#data.authorizeAnalyze(request, v.datasetId, v.versionId);
 		return {
 			...result,
 			observedAt: before.now.toISOString(),
@@ -478,6 +526,47 @@ export class PostgresEvaluationAnalysisV1 {
 			)
 		)
 			throw new EvaluationDataErrorV1("denied");
+		await this.#client.begin(async (tx) => {
+			const data = createEvaluationDataV1({
+				store: new PostgresEvaluationDataStoreV1({
+					...this.options,
+					transaction: tx,
+				}),
+				loadPolicy: this.options.loadDataPolicy,
+				storage: this.options.storage,
+			});
+			const current = await data.authorizeRun(request, datasetId, versionId);
+			if (!isDeepStrictEqual(current, source))
+				throw new EvaluationDataErrorV1("denied");
+			for (const variant of variants) {
+				const [agent] = await tx<
+					{ current_configuration_revision: string }[]
+				>`select current_configuration_revision from platform.agents where id=${variant.agentId} for share`;
+				const grant = await readCurrentTaskApiUseGrantV1(tx, {
+					principal: source.principal,
+					agentId: variant.agentId,
+				});
+				if (
+					!agent ||
+					+agent.current_configuration_revision !==
+						variant.configurationRevision ||
+					!grant ||
+					grant.revoked
+				)
+					throw new EvaluationDataErrorV1("denied");
+			}
+			await data.authorizeRun(request, datasetId, versionId);
+			if (
+				!isDeepStrictEqual(
+					policy,
+					parseEvaluationExperimentPolicyV1(
+						await this.options.loadExperimentPolicy(),
+					),
+				) ||
+				Date.parse(policy.validUntil) <= Date.now()
+			)
+				throw new EvaluationDataErrorV1("denied");
+		});
 		return {
 			datasetId,
 			versionId,
@@ -496,8 +585,14 @@ export class PostgresEvaluationAnalysisV1 {
 			credentialScope: "eval:analyze",
 		});
 		const policy = parseEvaluationPolicyV1(await this.options.loadDataPolicy());
-		const budget = parseEvaluationAnalysisPolicyV1(
-			await this.options.loadAnalysisPolicy(),
+		const budget = await this.#client.begin(
+			async (tx) =>
+				(
+					await bindEvaluationAnalysisPolicyV1(
+						tx,
+						this.options.loadAnalysisPolicy,
+					)
+				).policy,
 		);
 		if (
 			Date.parse(policy.validUntil) <= Date.now() ||

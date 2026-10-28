@@ -57,27 +57,7 @@ export class PostgresEvaluationFeedbackV1 implements TaskFeedbackPortV1 {
 		await this.#client.end();
 	}
 	async #policy(tx: TransactionSql) {
-		const policy = parseEvaluationAnalysisPolicyV1(
-			await this.options.loadPolicy(),
-		);
-		await tx`select pg_advisory_xact_lock(hashtextextended('evaluation-analysis-policy-v1',0))`;
-		const [clock] = await tx<{ now: Date }[]>`select clock_timestamp() as now`;
-		if (!clock || Date.parse(policy.validUntil) <= +clock.now)
-			throw new EvaluationDataErrorV1("denied");
-		const digest = createHash("sha256")
-			.update(JSON.stringify(policy))
-			.digest("hex");
-		const [existing] = await tx<
-			{ revision: string; digest: string }[]
-		>`select revision,digest from platform.evaluation_policies where id='analysis' for update`;
-		if (
-			existing &&
-			(+existing.revision > policy.revision ||
-				(+existing.revision === policy.revision && existing.digest !== digest))
-		)
-			throw new EvaluationDataErrorV1("unavailable");
-		await tx`insert into platform.evaluation_policies(id,revision,digest)values('analysis',${policy.revision},${digest}) on conflict(id)do update set revision=excluded.revision,digest=excluded.digest`;
-		return { policy, now: clock.now };
+		return bindEvaluationAnalysisPolicyV1(tx, this.options.loadPolicy);
 	}
 	async #identity(
 		tx: TransactionSql,
@@ -277,7 +257,7 @@ export class PostgresEvaluationFeedbackV1 implements TaskFeedbackPortV1 {
 					await tx`insert into platform.idempotency_records(id,scope_type,scope_id,actor_id,command_type,idempotency_key,request_digest,status,result)values(${receiptId(key)},'task_feedback',${executionId},${identity.principal.id},'task.feedback.updated',${key},${digest},'completed',${tx.json(value as unknown as postgres.JSONValue)}) on conflict(id)do update set request_digest=excluded.request_digest,result=excluded.result`;
 				},
 				audit: async (value) => {
-					await tx`insert into platform.audit_events(id,request_id,trace_id,actor_type,actor_id,action,target_type,target_id,outcome,details)values(${randomUUID()},${request.requestId},${request.traceId},${identity.principal.kind},${identity.principal.id},'task.feedback.updated','execution',${executionId},'succeeded',${tx.json({ revision: value.revision, returnedMaterial: false })})`;
+					await tx`insert into platform.audit_events(id,request_id,trace_id,actor_type,actor_id,agent_id,action,target_type,target_id,outcome,details)values(${randomUUID()},${request.requestId},${request.traceId},${identity.principal.kind},${identity.principal.id},${value.agentId},'task.feedback.updated','execution',${executionId},'succeeded',${tx.json({ revision: value.revision, returnedMaterial: false })})`;
 				},
 			};
 			const value = await work(port);
@@ -309,6 +289,11 @@ export class PostgresEvaluationFeedbackV1 implements TaskFeedbackPortV1 {
 				{ now: Date }[]
 			>`select clock_timestamp() as now`;
 			if (!endClock || Date.parse(policy.validUntil) <= +endClock.now)
+				throw new EvaluationDataErrorV1("denied");
+			if (
+				port.resultExpiresAt &&
+				Date.parse(port.resultExpiresAt) <= +endClock.now
+			)
 				throw new EvaluationDataErrorV1("denied");
 			if (operation === "read") {
 				port.now = endClock.now;
@@ -536,4 +521,29 @@ export class PostgresEvaluationFeedbackV1 implements TaskFeedbackPortV1 {
 			await tx`delete from platform.task_feedback where execution_id in(select execution_id from platform.task_feedback where metadata_expires_at<=clock_timestamp() order by metadata_expires_at,execution_id limit ${limit} for update skip locked)`;
 		});
 	}
+}
+
+export async function bindEvaluationAnalysisPolicyV1(
+	tx: TransactionSql,
+	loadPolicy: () => Promise<EvaluationAnalysisPolicyV1>,
+) {
+	const policy = parseEvaluationAnalysisPolicyV1(await loadPolicy());
+	await tx`select pg_advisory_xact_lock(hashtextextended('evaluation-analysis-policy-v1',0))`;
+	const [clock] = await tx<{ now: Date }[]>`select clock_timestamp() as now`;
+	if (!clock || Date.parse(policy.validUntil) <= +clock.now)
+		throw new EvaluationDataErrorV1("denied");
+	const digest = createHash("sha256")
+		.update(JSON.stringify(policy))
+		.digest("hex");
+	const [existing] = await tx<
+		{ revision: string; digest: string }[]
+	>`select revision,digest from platform.evaluation_policies where id='analysis' for update`;
+	if (
+		existing &&
+		(+existing.revision > policy.revision ||
+			(+existing.revision === policy.revision && existing.digest !== digest))
+	)
+		throw new EvaluationDataErrorV1("unavailable");
+	await tx`insert into platform.evaluation_policies(id,revision,digest)values('analysis',${policy.revision},${digest}) on conflict(id)do update set revision=excluded.revision,digest=excluded.digest`;
+	return { policy, now: clock.now };
 }

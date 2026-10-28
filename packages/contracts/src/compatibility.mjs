@@ -6722,7 +6722,253 @@ function normalizeEvaluationFileBinding3639(previous, current) {
 	return copy;
 }
 
+// #3640 accepts only the pinned analysis/feedback extension; published surfaces are never erased.
+const evaluationAnalysis3640Pins = {
+	1: {
+		added: [],
+		changed: [
+			[
+				"schemas",
+				"ScopedPlatformAuditActionV1",
+				"fa3959ccd5ed31e4af287844d5848177f566d4891ca889623ac3f3121f025f60",
+				"ed23345126edd2fd80386f4bb57988dca0b6f396de0394eea4545ed00939d338",
+			],
+		],
+	},
+	2: {
+		added: [
+			[
+				"paths",
+				"/api/v2/agents/{agentId}/feedback-summary",
+				"27fe0a205d1b4995e5e412d83cfd68cb98516de0dbe38dc539175d09d9d2634c",
+			],
+			[
+				"paths",
+				"/api/v2/evaluation/analysis/{experimentId}",
+				"3486a78567ec08488b9560c0aeba34f22e233d00051627e6c49808b0fd942a36",
+			],
+			[
+				"paths",
+				"/api/v2/evaluation/analysis/{experimentId}/samples/{sampleTaskId}",
+				"35f2df79b742e329a369dc12a4122b279400b7e98a55099f2c01d89336fe7398",
+			],
+			[
+				"paths",
+				"/api/v2/evaluation/choices",
+				"7f0eb40b4b1570523352e5d65a4e091dd43c1ae60b394fbe502d7c6d1b263019",
+			],
+			[
+				"paths",
+				"/api/v2/evaluation/history",
+				"cdccacd6f64fabfc33a73c7a29c3985c7e6d0f2fa490e66d0f5317848bfa72b9",
+			],
+			[
+				"paths",
+				"/api/v2/evaluation/worklist",
+				"72a46d54335b0937a618ccdb41bf5f9755930cb09841843b0d0494b9c94a060c",
+			],
+			[
+				"paths",
+				"/api/v2/task-feedback/{executionId}",
+				"f890b41b80eb0b0382aeabf18f118b45513eb649b7670e65a68476c8c5902661",
+			],
+			[
+				"schemas",
+				"EvaluationAnalysisDetailV1",
+				"2b033013339ea0388dadf72bdf4de1a69e58799344d714afda1b0932546eb94f",
+			],
+			[
+				"schemas",
+				"EvaluationAnalysisSummaryV1",
+				"27339fce500b72a84359301bfb00c06e12ffcb284af88742626633d2651f4397",
+			],
+			[
+				"schemas",
+				"EvaluationChoiceCatalogV1",
+				"413723ebb4e7140ff473ee545915be3cff6540cb69a9adee12ee1edc67286255",
+			],
+			[
+				"schemas",
+				"EvaluationHistoryV1",
+				"d7feecb62cda8ef6077cb14e419bcc3425ca93df4229f210cd56d10a59f533fd",
+			],
+			[
+				"schemas",
+				"EvaluationQueryTooLargeV1",
+				"6b78e3339df5dc6fa8e4652bbb0a569956110d5c4d0e9cbfabaf4c711e3c4c7f",
+			],
+			[
+				"schemas",
+				"EvaluationWorklistV1",
+				"e9506e7542f35202e29e3522ae29fe475fa4c97f0422c3f896a19d090d746b04",
+			],
+			[
+				"schemas",
+				"TaskFeedbackContextV1",
+				"1c356b31c8e45f2e8f812945444b00a2b6e42a185a67dbd93648c6966142f359",
+			],
+			[
+				"schemas",
+				"TaskFeedbackRecordV1",
+				"ea265c52bcb28ba638d7058acbc6cfbc3a8c61755c889c8f99cd95e5963a1e1c",
+			],
+			[
+				"schemas",
+				"TaskFeedbackSubmitV1",
+				"a851f2a57625a93d0a00c217ca0dc3546906733921b6bd579f18b5819c082709",
+			],
+			[
+				"schemas",
+				"TaskFeedbackSummaryQueryV1",
+				"4d4f06a8fbf82d40df8da3aa89b73cd8746bdf6d934546f53b59866b3e59884a",
+			],
+			[
+				"schemas",
+				"TaskFeedbackSummaryV1",
+				"6eff11c474a4cbc4ce7d32fa8a2fa697bbc29b70e22ec77afd3ae36ab999adbc",
+			],
+		],
+		changed: [
+			[
+				"paths",
+				"/api/v2/applications/{applicationId}/credentials",
+				"e9aa20704a5d9ce63fad4f25027aeeb258a93ee9d8c236b2747f29f29673e955",
+				"f080a2b5b8770a92becf35e8121d4c7584d036b4531d97f6717aea2858b22a91",
+			],
+			[
+				"paths",
+				"/api/v2/applications/{applicationId}/credentials/{credentialId}",
+				"706651ab08958c60da3859f9c4f6c352671581476c602abe55f88ffea30860c1",
+				"da2be96fdcae609d1dcce2e4614d5c488c18ed444a459067a849da5d75e42362",
+			],
+			[
+				"schemas",
+				"EvaluationExperimentCreateV1",
+				"7006887b246c935cdd43e7a6fa5cb0e2dd6388742fcca666c84d75bebb6bd3d6",
+				"825bac59404624ff2c516a7e489aa78cb124d9f46da3d2420605a15bbb699518",
+			],
+			[
+				"schemas",
+				"EvaluationExperimentPageV1",
+				"c28b3f2fcd6e3040585cc53a990cfce57aba68db49c45bcd392848f5f6542698",
+				"29d7264350ddc064bd3f6066d6d97d7851662a743cce932fb86c2cac4948a211",
+			],
+			[
+				"schemas",
+				"EvaluationExperimentV1",
+				"0d3ec58dc00e361450a191c2297078efcd2a9751d111fcbc2dc2f19d139efe82",
+				"59c7289511fd5a91c959dcc7903129dc5193f8642eb9bd0fab9d60de771026aa",
+			],
+			[
+				"schemas",
+				"EvaluationScoreMetadataV1",
+				"8392595f2cb55fe269dc7bd9b5071b2786a590742e93b0376b9895aff4809dbd",
+				"bd94f03bca5b9e73b4a343f5ece16c24a987eeade65419e83ba14f10fe23659a",
+			],
+			[
+				"schemas",
+				"EvaluationScoringContextV1",
+				"6bdd87e719336b1acb0c17e214384f97bcc67f872a688ba4d8bd8a0b6a9041e0",
+				"c0b25dac5c29e295c91c7eaad054e07de39e5364ebb84a69e59b3a064d6a7b73",
+			],
+			[
+				"schemas",
+				"PersonalApiCredentialIssueRequestV1",
+				"db5da099100eb8281ab54953f6f08f853f9c0fab1b0f14f6f9d7f7dff823d06e",
+				"b0d199be6126d6b616be5c2e355ff4a562b2726307b863c9847e8214d0001609",
+			],
+			[
+				"schemas",
+				"PersonalApiCredentialMetadataV1",
+				"9bae75bd6894cc1e2ab9e9a618df267ac559353006203890260892ae7987651a",
+				"1be8377f0884cae445ee7c7f05f8ea600e03283bbdfb4bd3e668d212cc63e171",
+			],
+			[
+				"schemas",
+				"PersonalApiCredentialNarrowRequestV1",
+				"f06c63dec4fcf7130d1a0e2c4b69418fd8368a28a1f72767cf4b4abbe44c7f18",
+				"9b56d7aa7ec07e85f8085557ba920eb584073437393ab64ee5ef853022606bf1",
+			],
+			[
+				"schemas",
+				"PersonalApiIdentityV1",
+				"69c44d6c3881eb386ae65047d6bfdb1dd0da5fc5fcaf564a07dbaa2512781f46",
+				"7f69c1fff74fc2f3919381cfc186929a8e2812161ae3fa5a8b67c1286dcdc67d",
+			],
+		],
+	},
+};
+function normalizeEvaluationAnalysis3640(previous, current) {
+	if (
+		!current.openapi ||
+		(!JSON.stringify(current).includes('"eval:analyze"') &&
+			!JSON.stringify(current).includes('"task.feedback.updated"'))
+	)
+		return current;
+	if (
+		JSON.stringify(previous).includes('"eval:analyze"') ||
+		JSON.stringify(previous).includes('"task.feedback.updated"')
+	)
+		return current;
+	const pins = current.paths?.["/api/v2/evaluation/history"]
+		? evaluationAnalysis3640Pins[2]
+		: evaluationAnalysis3640Pins[1];
+	const digest = (value) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	const normalized = structuredClone(current);
+	function strip(value) {
+		if (!value || typeof value !== "object") return;
+		if (Array.isArray(value)) {
+			for (const child of value) strip(child);
+			return;
+		}
+		if (value.properties) {
+			for (const field of ["comparisonTargets", "requestedEvidence"])
+				delete value.properties[field];
+			if (
+				value.properties.scorerId &&
+				(value.properties.scoreId || value.properties.minimum)
+			) {
+				delete value.properties.source;
+				delete value.properties.scoringModel;
+			}
+			const scope = value.properties.scopes;
+			if (
+				scope?.maxItems === 9 &&
+				Array.isArray(scope.items?.enum) &&
+				scope.items.enum.at(-1) === "eval:analyze"
+			) {
+				scope.maxItems = 8;
+				scope.items.enum.pop();
+			}
+		}
+		if (Array.isArray(value.enum) && value.enum[0] === "task.feedback.updated")
+			value.enum.shift();
+		for (const child of Object.values(value)) strip(child);
+	}
+	for (const [section, key, pin] of pins.added) {
+		const target =
+			section === "paths" ? normalized.paths : normalized.components?.schemas;
+		if (!target?.[key] || digest(target[key]) !== pin) return current;
+		delete target[key];
+	}
+	for (const [section, key, pin, oldPin] of pins.changed) {
+		const target =
+			section === "paths" ? normalized.paths : normalized.components?.schemas;
+		if (!target?.[key] || digest(target[key]) !== pin) return current;
+		strip(target[key]);
+		if (digest(target[key]) !== oldPin) return current;
+	}
+	return normalized;
+}
+
 function evaluateBreakingChanges(previousValue, currentValue) {
+	const analysis3640 = normalizeEvaluationAnalysis3640(
+		previousValue,
+		currentValue,
+	);
+	if (analysis3640 !== currentValue)
+		return findBreakingChanges(previousValue, analysis3640);
 	const priorFile = (
 		previousValue.$defs ?? previousValue.components?.schemas
 	)?.FileAccessClaimsV1?.properties?.execution?.anyOf?.find(

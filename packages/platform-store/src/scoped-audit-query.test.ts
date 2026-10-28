@@ -2089,3 +2089,17 @@ it("projects only registered Eval experiment/scoring targets without exposing co
 		).rejects.toThrow();
 	}
 });
+it("projects registered feedback governance metadata without returning classifications or raw content", async () => {
+	const id = randomUUID();
+	await sql`insert into platform.audit_events(id,trace_id,request_id,actor_type,actor_id,action,target_type,target_id,outcome,details)values(${id},'feedback-trace','feedback-request','user','self','task.feedback.updated','execution','synthetic-execution','succeeded',${sql.json({ revision: 2, returnedMaterial: false })})`;
+	const record = await query.getAudit(admin, id, detail, request());
+	expect(record).toMatchObject({
+		action: "task.feedback.updated",
+		summary: "task.feedback.updated",
+		subject: { kind: "execution", subjectId: "synthetic-execution" },
+	});
+	await sql`update platform.audit_events set details=details||${sql.json({ classification: "SYNTHETIC-PRIVATE-FEEDBACK-SENTINEL" })}::jsonb where id=${id}`;
+	await expect(
+		query.getAudit(admin, id, detail, request()),
+	).rejects.toBeDefined();
+});
