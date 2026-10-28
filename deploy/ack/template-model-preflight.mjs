@@ -84,6 +84,7 @@ async function main(inputPath) {
 	const privateKey = createPrivateKey(await privateFile(job.grantPrivateKeyFile, "GRANT_KEY"));
 	const publicKey = createPublicKey(privateKey).export({ type: "spki", format: "pem" }).toString();
 	const serviceToken = (await privateFile(job.runtimeServiceTokenFile, "SERVICE_TOKEN")).toString().trim();
+	if (!/^[\x21-\x7e]{1,8192}$/u.test(serviceToken)) throw new Error("SERVICE_TOKEN_INVALID");
 	const attestation = createHmac("sha256", serviceToken)
 		.update(`agent-infra-container-boundary-v1\0${name}`)
 		.digest("base64url");
@@ -147,6 +148,16 @@ async function main(inputPath) {
 			volumes: [{ name: "data", emptyDir: {} }, { name: "tmp", emptyDir: {} }],
 		},
 	};
+	if (job.driver === "codex") {
+		const environment = new Map(pod.spec.containers[0].env.map((entry) => [entry.name, entry.value]));
+		if (
+			environment.get("AGENT_INFRA_RUNTIME_ISOLATION_MODE") !== "container-boundary" ||
+			environment.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED") !== "worker-v1" ||
+			environment.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE") !== name ||
+			environment.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION") !== attestation
+		)
+			throw new Error("CODEX_BOUNDARY_PREFLIGHT_CONFIGURATION_INVALID");
+	}
 	let portForward;
 	const generatedJob = join(job.outputDirectory, `.runner-job-${owner}.json`);
 	try {
