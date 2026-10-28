@@ -84,6 +84,10 @@ Agent 与 Channel 声明通过 `/api/v2/agents/{agentId}/file-limits`、`/api/v2
 
 ### Runtime 文件交换注入
 
+启用前先完成[旧 Runtime 镜像检查与迁移顺序](#启用前检查旧-runtime-镜像)。这是部署级开关，
+Worker 不会根据某个 Agent 的附件能力自动跳过注入；只升级 Worker 或默认模板不能升级已有
+Agent 固定的 Runtime 镜像。
+
 Worker 只有同时拿到精确的 Platform API origin 与 runtime-auth service token 引用时，才向 Agent Pod 和会话 Sandbox Pod 注入这两个变量：
 
 - `AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN=<exact origin>`：两类 Pod 取同一值。
@@ -109,6 +113,78 @@ Worker 只有同时拿到精确的 Platform API origin 与 runtime-auth service 
 已有 Agent Workload：同样的变化使 Agent Pod 的 env 或 NetworkPolicy 与期望不符，Worker 下一次监测判为 drifted，先关闭路由，再以新的生命周期修订原地替换 NetworkPolicy 并在原 PVC 上滚动重建 Agent Pod。重建完成前，该 Agent 的业务 Turn（含会话 Sandbox 上的 Turn）以可重试错误拒绝。
 
 FileBridge 的交换、数据面读写或完成确认失败时，Runtime Host 向 stderr 输出一条 JSON 诊断：`code` 固定为 `RUNTIME_FILE_EXCHANGE_UNAVAILABLE`，另含阶段 `operation`（`exchange`、`read`、`write`、`complete`）、有界原因 `reason`（`unreachable`、`timeout`、`rejected`、`invalid_response`、`unconfirmed`、`failed`），以及适用时的 HTTP `status`、本模块的稳定错误码 `error` 与传输层错误码 `cause`（例如 `UND_ERR_CONNECT_TIMEOUT`）。诊断不含凭据、URL、路径、File Grant 或 Execution Grant。出站规则缺失时，典型表现是 `operation=exchange`、`reason=unreachable`、`cause=UND_ERR_CONNECT_TIMEOUT`。
+
+### 启用前检查旧 Runtime 镜像
+
+包含 [#3256](https://github.com/AgoraIO-Extensions/agent-infra/pull/3256) 的 Runtime Host
+统一了配置读取和 FileBridge 的 origin 校验。更早的镜像可能拒绝集群内 HTTP origin，在部署
+开启文件交换后直接退出。此处采用 #3277 的部署顺序方案，不改变 Runtime 校验或 V4 契约。
+
+1. 保持文件交换开关关闭。使用正式管理入口盘点全部 Agent 的已保存镜像和生命周期状态，
+   包括已停止、创建失败和暂时没有 Pod 的 Agent。需要数据库核对时，使用已配置的只读
+   `PGSERVICE` 连接执行下列查询；不得导出完整配置、env、Secret 或会话正文。
+
+   ```sql
+   BEGIN READ ONLY;
+   SELECT a.id AS agent_id, a.current_configuration_revision AS revision,
+          app.status, app.desired_state,
+          cr.configuration #>> '{source,kind}' AS source_kind,
+          cr.configuration #>> '{source,templateId}' AS template_id,
+          cr.configuration #>> '{source,imageDigest}' AS image_digest
+   FROM platform.agents a
+   LEFT JOIN platform.agent_configuration_revisions cr
+     ON cr.agent_id = a.id AND cr.revision = a.current_configuration_revision
+   LEFT JOIN platform.agent_applications app ON app.agent_id = a.id
+   ORDER BY a.id;
+   ROLLBACK;
+   ```
+
+2. 回读部署负责人指定的 kubeconfig 和 namespace 中的实际镜像。以下命令只读，不依赖
+   当前默认 Kubernetes context；StatefulSet 包含零副本模板，Pod 列表同时覆盖已有会话
+   Sandbox。它们补充上一步的数据库清单，不能代替平台权威状态。
+
+   ```bash
+   : "${FILE_CHECK_KUBECONFIG:?设置目标 kubeconfig}"
+   : "${FILE_CHECK_NAMESPACE:?设置目标 namespace}"
+   kubectl --kubeconfig "$FILE_CHECK_KUBECONFIG" -n "$FILE_CHECK_NAMESPACE" \
+     get statefulsets -o json | jq '[.items[] |
+       select(.metadata.labels["agent-infra.agora.io/agent"] != null) |
+       {name: .metadata.name, replicas: .spec.replicas,
+        images: [.spec.template.spec.containers[].image]}]'
+   kubectl --kubeconfig "$FILE_CHECK_KUBECONFIG" -n "$FILE_CHECK_NAMESPACE" \
+     get pods -o json | jq '[.items[] |
+       select(.metadata.labels["agent-infra.agora.io/agent"] != null or
+              .metadata.labels["agent-infra.agora.io/managed"] == "session-sandbox-v1") |
+       {name: .metadata.name, uid: .metadata.uid, phase: .status.phase,
+        images: [.spec.containers[].image],
+        containers: [.status.containerStatuses[]? |
+          {name, imageID, ready, restartCount}]}]'
+   ```
+
+3. 用发布 manifest/provenance 将每个保存及实际运行的 digest 绑定到 Runtime 源码提交，
+   核对镜像包含修复；不要用 tag、发布时间或默认模板配置推断。已取得对应源码且无本地
+   替换时，可从仓库执行下面的祖先检查作为基线证据；非零结果或来源缺失必须继续人工
+   核查。祖先检查不证明没有后续回退，也不能替代该 digest 的真实 Runtime 文件能力验证。
+
+   ```bash
+   : "${FILE_RUNTIME_SOURCE_SHA:?设置已核实的 Runtime 源码提交}"
+   git merge-base --is-ancestor \
+     bf874ba01414c0de1a1700ea088c995b6f4a4114 "$FILE_RUNTIME_SOURCE_SHA"
+   ```
+
+4. 在开启文件交换前，Owner 通过正式配置/升级流程将旧镜像或来源不明的 Agent 迁移到
+   已验证的新镜像，并回读保存 digest 与实际 digest 一致；暂不能迁移的，先通过正式生命周期
+   入口停止，并确认其 Workload 和会话 Sandbox 已停止。禁止用直接缩容、删除 Pod/PVC 或
+   修改数据库冒充停止。仍有未处理的运行实例时，不开启文件交换。停止的旧 Agent 在迁移
+   验证完成前不得重新启动；新建 Agent 和回滚镜像也必须满足同一条件。
+5. 完成盘点和处理后，才由部署负责人开启本地 `PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED`
+   或生产 `fileExchangeOrigin`，并同步前文要求的服务身份、出站声明和 API 文件配置。
+   按前文的 Workload/Sandbox 漂移流程回读实际 Pod UID、digest、Ready 和重启次数，再用
+   受控附件/结果文件验证真实往返。Pod Ready 不能单独签收文件能力；出现启动失败时停止
+   扩大启用范围，由部署负责人按原配置回滚并复核已保存镜像，不放宽 origin 校验。
+
+盘点、迁移或停止、启用后回读分别留存时间和版本证据。该检查不自动选择升级镜像，也不
+执行迁移或停止；仅完成命令检查不等于已完成旧镜像的真实处理验收。
 
 Platform API 对执行期文件访问的拒绝一律返回与对象不存在相同的 404 `RESOURCE_UNAVAILABLE`，只在 HTTP 运行日志的 `failureStep` 中记录被拒绝的检查：`file_exchange.grant`（V4 Grant 验签、issuer 或签名 Worker 身份）、`service_identity`（服务凭据缺失或不匹配）、`credential_scope`（执行当前的 Sandbox 分配缺失、未就绪或不可读）、`conversation`、`execution`（终态或停止中）、`delivery_fence`、`task_authorization`、`boundary`、`authorize`（会话授权或主体不一致）、`limits`（已验证能力或三方限制声明不可用）、`file`（文件、allowlist 或执行状态的文件 Core 判定）与 `store`（均以 `file_exchange.` 为前缀）。Platform DB 驱动错误先记为 `store.query` 并带 `sqlState`。日志只含固定步骤名与错误类名，不含 token、Grant、URL 或对象引用。执行在 Worker 调用 Runtime 前已 write-ahead 为 `unknown`，该状态不是终态，附件读取与结果写入照常授权（#3307）。
 
