@@ -895,158 +895,198 @@ it("publishes a Claude answer reference written by the Write tool after the SDK 
 	).toBe(true);
 }, 30000);
 
-it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
-	"requires the official Claude sandbox to isolate a real Bash child under the fixed container security context",
-	async () => {
-		const { mkdtemp, mkdir } = await import("node:fs/promises");
-		const { tmpdir } = await import("node:os");
-		const { createServer } = await import("node:http");
-		const { claudeQuery } = await import("./claude-query.js");
-		const { verifyClaudeInstallation } = await import(
-			"./claude-installation.js"
-		);
-		const installation = await verifyClaudeInstallation();
-		const root = await realpath(
-			await mkdtemp(join(tmpdir(), "claude-shell-boundary-")),
-		);
-		const workspace = join(root, "workspace");
-		const config = join(root, "config");
-		for (const directory of [
-			workspace,
-			config,
-			join(root, "home"),
-			join(root, "tmp"),
-			join(root, "private"),
-		])
-			await mkdir(directory);
-		const secret = "synthetic-claude-child-secret";
-		const forbidden = join(root, "private/host-state");
-		await writeFile(forbidden, secret);
-		const nativeSecret = join(config, "private-state.txt");
-		await writeFile(nativeSecret, secret);
-		const tokenKeys = [
-			"ANTHROPIC_AUTH_TOKEN",
-			"SYNTHETIC_MCP_TOKEN",
-			"SYNTHETIC_BROWSER_TOKEN",
-		];
-		const program = `const fs=require("node:fs");const denied=p=>{try{fs.readFileSync(p);return false}catch{return true}};fs.writeFileSync("claude-proof.json",JSON.stringify({env:${JSON.stringify(tokenKeys)}.every(k=>!Object.hasOwn(process.env,k)),host:denied(${JSON.stringify(forbidden)}),proc:denied("/proc/self/environ")&&denied(${JSON.stringify(`/proc/${process.pid}/environ`)})&&denied(${JSON.stringify(`/proc/${process.pid}/fd/0`)}),native:denied(${JSON.stringify(nativeSecret)})}));process.stdout.write("isolated-claude-shell");`;
-		const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
-		let calls = 0;
-		const requests: Record<string, unknown>[] = [];
-		const fixtureErrors: string[] = [];
-		const requestMetadata: { route: string; method: string; status: number }[] =
-			[];
-		const server = createServer(async (request, response) => {
-			response.once("finish", () => {
-				if (requestMetadata.length < 32)
-					requestMetadata.push({
-						route:
-							request.url?.split("?")[0] === "/v1/messages"
-								? "messages"
-								: "other",
-						method: request.method === "POST" ? "POST" : "other",
-						status: response.statusCode,
-					});
-			});
-			try {
-				const value = await readClaudeFixtureMessage(request, response);
-				if (!value) return;
-				requests.push(value);
-				calls++;
-				completeClaudeToolUses(
-					response,
-					`msg_${calls}`,
-					value.model,
-					"complete",
-					calls === 1
-						? [
-								{
-									id: "isolated-bash",
-									name: "Bash",
-									input: {
-										command: `/usr/local/bin/node -e ${quote(program)}`,
-										timeout: 5000,
-										description: "Verify isolated shell",
-									},
-								},
-							]
-						: [],
-				);
-			} catch {
-				fixtureErrors.push("synthetic-response-failed");
-				if (!response.headersSent) response.writeHead(500);
-				response.end();
-			}
+it.for([
+	{
+		shell: false,
+		label:
+			"finishes a real Claude SDK result without waiting for an open input stream",
+	},
+	{
+		shell: true,
+		label:
+			"requires the official Claude sandbox to isolate a real Bash child under the fixed container security context",
+	},
+])("$label", { timeout: 30_000 }, async ({ shell }, context) => {
+	if (shell && process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")
+		context.skip();
+	const { mkdtemp, mkdir } = await import("node:fs/promises");
+	const { tmpdir } = await import("node:os");
+	const { createServer } = await import("node:http");
+	const { claudeQuery } = await import("./claude-query.js");
+	const { verifyClaudeInstallation } = await import("./claude-installation.js");
+	const installation = await verifyClaudeInstallation();
+	const root = await realpath(
+		await mkdtemp(join(tmpdir(), "claude-shell-boundary-")),
+	);
+	const workspace = join(root, "workspace");
+	const config = join(root, "config");
+	for (const directory of [
+		workspace,
+		config,
+		join(root, "home"),
+		join(root, "tmp"),
+		join(root, "private"),
+	])
+		await mkdir(directory);
+	const secret = "synthetic-claude-child-secret";
+	const forbidden = join(root, "private/host-state");
+	await writeFile(forbidden, secret);
+	const nativeSecret = join(config, "private-state.txt");
+	await writeFile(nativeSecret, secret);
+	const tokenKeys = [
+		"ANTHROPIC_AUTH_TOKEN",
+		"SYNTHETIC_MCP_TOKEN",
+		"SYNTHETIC_BROWSER_TOKEN",
+	];
+	const program = `const fs=require("node:fs");const denied=p=>{try{fs.readFileSync(p);return false}catch{return true}};fs.writeFileSync("claude-proof.json",JSON.stringify({env:${JSON.stringify(tokenKeys)}.every(k=>!Object.hasOwn(process.env,k)),host:denied(${JSON.stringify(forbidden)}),proc:denied("/proc/self/environ")&&denied(${JSON.stringify(`/proc/${process.pid}/environ`)})&&denied(${JSON.stringify(`/proc/${process.pid}/fd/0`)}),native:denied(${JSON.stringify(nativeSecret)})}));process.stdout.write("isolated-claude-shell");`;
+	const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
+	let calls = 0;
+	const requests: Record<string, unknown>[] = [];
+	const fixtureErrors: string[] = [];
+	const requestMetadata: { route: string; method: string; status: number }[] =
+		[];
+	const server = createServer(async (request, response) => {
+		response.once("finish", () => {
+			if (requestMetadata.length < 32)
+				requestMetadata.push({
+					route:
+						request.url?.split("?")[0] === "/v1/messages"
+							? "messages"
+							: "other",
+					method: request.method === "POST" ? "POST" : "other",
+					status: response.statusCode,
+				});
 		});
-		await new Promise<void>((accept) => server.listen(0, "127.0.0.1", accept));
-		const address = server.address();
-		if (!address || typeof address === "string")
-			throw new Error("Missing fixture endpoint");
-		const native = claudeQuery(
-			{
-				pathToClaudeCodeExecutable: installation.executable,
-				cwd: workspace,
-				env: {
-					PATH: "/usr/local/bin:/usr/bin:/bin",
-					HOME: join(root, "home"),
-					TMPDIR: join(root, "tmp"),
-					CLAUDE_CONFIG_DIR: config,
-					ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
-					ANTHROPIC_AUTH_TOKEN: secret,
-					SYNTHETIC_MCP_TOKEN: secret,
-					SYNTHETIC_BROWSER_TOKEN: secret,
-					CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-				},
-				settingSources: [],
-				model: "claude-opus-5",
-				tools: ["Bash"],
-				allowedTools: ["Bash"],
-				canUseTool: async (toolName, input) =>
-					toolName === "Bash"
-						? { behavior: "allow", updatedInput: input }
-						: { behavior: "deny", message: "Unexpected tool" },
-				mcpServers: {},
-				strictMcpConfig: true,
-				persistSession: false,
-				maxTurns: 3,
-				sandbox: {
-					enabled: true,
-					failIfUnavailable: true,
-					allowUnsandboxedCommands: false,
-					autoAllowBashIfSandboxed: true,
-					filesystem: {
-						allowWrite: [workspace],
-						denyRead: [join(root, "private"), config, "/proc"],
-						denyWrite: [config, join(root, "private")],
-					},
-					network: { allowedDomains: [], strictAllowlist: true },
-					credentials: {
-						envVars: tokenKeys.map((name) => ({ name, mode: "deny" })),
-						files: [
-							{ path: config, mode: "deny" },
-							{ path: forbidden, mode: "deny" },
-						],
-					},
-				},
-			},
-			{
-				type: "user",
-				session_id: "",
-				parent_tool_use_id: null,
-				message: { role: "user", content: "Run the synthetic Bash probe." },
-			},
-		);
 		try {
-			const outcomes: unknown[] = [];
-			for await (const message of native.query)
-				if (message.type === "result")
+			const value = await readClaudeFixtureMessage(request, response);
+			if (!value) return;
+			requests.push(value);
+			calls++;
+			completeClaudeToolUses(
+				response,
+				`msg_${calls}`,
+				value.model,
+				"complete",
+				shell && calls === 1
+					? [
+							{
+								id: "isolated-bash",
+								name: "Bash",
+								input: {
+									command: `/usr/local/bin/node -e ${quote(program)}`,
+									timeout: 5000,
+									description: "Verify isolated shell",
+								},
+							},
+						]
+					: [],
+			);
+		} catch {
+			fixtureErrors.push("synthetic-response-failed");
+			if (!response.headersSent) response.writeHead(500);
+			response.end();
+		}
+	});
+	await new Promise<void>((accept) => server.listen(0, "127.0.0.1", accept));
+	const address = server.address();
+	if (!address || typeof address === "string")
+		throw new Error("Missing fixture endpoint");
+	const native = claudeQuery(
+		{
+			pathToClaudeCodeExecutable: installation.executable,
+			cwd: workspace,
+			env: {
+				PATH: "/usr/local/bin:/usr/bin:/bin",
+				HOME: join(root, "home"),
+				TMPDIR: join(root, "tmp"),
+				CLAUDE_CONFIG_DIR: config,
+				ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
+				ANTHROPIC_AUTH_TOKEN: secret,
+				SYNTHETIC_MCP_TOKEN: secret,
+				SYNTHETIC_BROWSER_TOKEN: secret,
+				CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+			},
+			settingSources: [],
+			model: "claude-opus-5",
+			tools: shell ? ["Bash"] : [],
+			allowedTools: shell ? ["Bash"] : [],
+			canUseTool: async (toolName, input) =>
+				toolName === "Bash"
+					? { behavior: "allow", updatedInput: input }
+					: { behavior: "deny", message: "Unexpected tool" },
+			mcpServers: {},
+			strictMcpConfig: true,
+			persistSession: false,
+			maxTurns: 3,
+			sandbox: {
+				enabled: shell,
+				failIfUnavailable: true,
+				allowUnsandboxedCommands: false,
+				autoAllowBashIfSandboxed: true,
+				filesystem: {
+					allowWrite: [workspace],
+					denyRead: [join(root, "private"), config, "/proc"],
+					denyWrite: [config, join(root, "private")],
+				},
+				network: { allowedDomains: [], strictAllowlist: true },
+				credentials: {
+					envVars: tokenKeys.map((name) => ({ name, mode: "deny" })),
+					files: [
+						{ path: config, mode: "deny" },
+						{ path: forbidden, mode: "deny" },
+					],
+				},
+			},
+		},
+		{
+			type: "user",
+			session_id: "",
+			parent_tool_use_id: null,
+			message: { role: "user", content: "Run the synthetic Bash probe." },
+		},
+	);
+	const outcomes: unknown[] = [];
+	let deadline: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			(async () => {
+				// The SDK input stays open after a result. Retire the process in
+				// finally before iterator cleanup, which can wait on that input.
+				for (;;) {
+					const next = await native.query.next();
+					if (next.done)
+						throw new Error("Claude query ended before its result");
+					const message = next.value;
+					if (message.type !== "result") continue;
 					outcomes.push({
 						subtype: message.subtype,
 						is_error: message.is_error,
 					});
-			expect(fixtureErrors).toEqual([]);
-			expect(calls, JSON.stringify(requestMetadata)).toBe(2);
-			expect(outcomes).toEqual([{ subtype: "success", is_error: false }]);
+					return;
+				}
+			})(),
+			new Promise<never>((_, reject) => {
+				deadline = setTimeout(
+					() =>
+						reject(
+							new Error(
+								JSON.stringify({
+									stage: "await-native-result",
+									calls,
+									outcomes,
+									requestMetadata,
+									fixtureErrors,
+								}),
+							),
+						),
+					20_000,
+				);
+			}),
+		]);
+		expect(fixtureErrors).toEqual([]);
+		expect(calls, JSON.stringify(requestMetadata)).toBe(shell ? 2 : 1);
+		expect(outcomes).toEqual([{ subtype: "success", is_error: false }]);
+		if (shell) {
 			expect(
 				JSON.parse(
 					await readFile(join(workspace, "claude-proof.json"), "utf8"),
@@ -1055,16 +1095,16 @@ it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
 			expect(JSON.stringify(requests.at(-1)?.messages)).toContain(
 				"isolated-claude-shell",
 			);
-			expect(JSON.stringify(requests)).not.toContain(secret);
-		} finally {
-			await native.close();
-			server.closeAllConnections();
-			await new Promise<void>((accept) => server.close(() => accept()));
-			await rm(root, { recursive: true, force: true });
 		}
-	},
-	30_000,
-);
+		expect(JSON.stringify(requests)).not.toContain(secret);
+	} finally {
+		clearTimeout(deadline);
+		await native.close();
+		server.closeAllConnections();
+		await new Promise<void>((accept) => server.close(() => accept()));
+		await rm(root, { recursive: true, force: true });
+	}
+});
 
 it("rejects non-Messages and malformed requests without stalling the Claude fixture", async () => {
 	const { createServer } = await import("node:http");
