@@ -307,6 +307,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		modelProjection,
 		modelInjection,
 		standardTemplateBinding,
+		containerBoundaryServiceToken: options.containerBoundaryServiceToken,
 		egress,
 	});
 
