@@ -1668,6 +1668,31 @@ function isLocalToolBoundaryOpenApiAddition(previous, current) {
 	return !invalid && additions > 0 && sameValue(previous, normalized);
 }
 
+// Normalize only the newly published portion for its pre-#3218 pinned digest.
+// Whole-document comparisons still retain every previously published marker.
+function stripLocalToolBoundaryFromHistoricalAddition(value) {
+	const normalized = structuredClone(value);
+	const visit = (node) => {
+		if (!node || typeof node !== "object") return;
+		const boundary = node.properties?.executionBoundary;
+		if (
+			node.properties?.kind?.const === "tool" &&
+			node.properties?.operationRef &&
+			node.properties?.attemptRef &&
+			node.properties?.toolId &&
+			node.properties?.phase &&
+			boundary?.type === "string" &&
+			boundary.const === "sandbox-local" &&
+			Object.keys(boundary).length === 2 &&
+			!node.required?.includes("executionBoundary")
+		)
+			delete node.properties.executionBoundary;
+		for (const entry of Object.values(node)) visit(entry);
+	};
+	visit(normalized);
+	return normalized;
+}
+
 // Browser operation binding is an additive optional field on existing operation facts.
 function stripRuntimeBrowserOperationFacts(value) {
 	const normalized = normalizeRuntimeConnectionAssociationOpenApiAddition(
@@ -1809,7 +1834,11 @@ function isTaskHttpV1OpenApiAddition(previous, current) {
 		}),
 	);
 	if (
-		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		createHash("sha256")
+			.update(
+				JSON.stringify(stripLocalToolBoundaryFromHistoricalAddition(addition)),
+			)
+			.digest("hex") !==
 		"062938f470294f68ec205f6e2007fa01a6306c40e3a59fe2195b8cad9e580a48"
 	)
 		return false;
@@ -2359,7 +2388,9 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		addition.schemas.ConversationDetailProjectionV2 = { ...detail, properties };
 	}
 	const additionHash = createHash("sha256")
-		.update(JSON.stringify(addition))
+		.update(
+			JSON.stringify(stripLocalToolBoundaryFromHistoricalAddition(addition)),
+		)
 		.digest("hex");
 	if (
 		![
@@ -4472,7 +4503,11 @@ function isScopedAuditDisplayNameV2OpenApiAddition(previous, current) {
 		),
 	};
 	if (
-		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		createHash("sha256")
+			.update(
+				JSON.stringify(stripLocalToolBoundaryFromHistoricalAddition(addition)),
+			)
+			.digest("hex") !==
 		"80d060a8084126b72578212f6045af70ac0990d56c85b853ede4545d7cf291e2"
 	)
 		return false;
