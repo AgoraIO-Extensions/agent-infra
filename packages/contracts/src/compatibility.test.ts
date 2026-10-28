@@ -5780,12 +5780,24 @@ describe("contract compatibility command", () => {
 			delete oldOperation.paths[
 				"/api/v1/conversations/{conversationId}/messages"
 			].post;
+			const requiredEvaluation = structuredClone(current);
+			requiredEvaluation.components.schemas.FileAccessClaimsV1.properties.execution.anyOf
+				.find((schema: { type: string }) => schema.type === "object")
+				.required.push("evaluation");
+			const changedEvaluation = structuredClone(current);
+			changedEvaluation.components.schemas.FileAccessClaimsV1.properties.execution.anyOf
+				.find((schema: { type: string }) => schema.type === "object")
+				.properties.evaluation.properties.principal.properties.kind.enum.push(
+					"admin",
+				);
 			for (const changed of [
 				changedPath,
 				changedScope,
 				changedLimit,
 				required,
 				oldOperation,
+				requiredEvaluation,
+				changedEvaluation,
 			]) {
 				await writeFile(currentPath, JSON.stringify(changed));
 				expect(comparePaths(currentPath, previousPath).status).toBe(1);

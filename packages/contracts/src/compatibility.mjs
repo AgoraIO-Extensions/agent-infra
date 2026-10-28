@@ -6700,9 +6700,9 @@ function normalizeEvaluationFileBinding3639(previous, current) {
 		(value) => value.type === "object",
 	);
 	if (
-		!prior ||
+		(!prior && before?.FileAccessClaimsV1 !== undefined) ||
 		!next ||
-		prior.properties?.evaluation !== undefined ||
+		prior?.properties?.evaluation !== undefined ||
 		next.properties?.evaluation === undefined
 	)
 		return current;
