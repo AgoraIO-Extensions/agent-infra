@@ -985,3 +985,161 @@ it("revalidates after persisted dispatch receipt and before upstream fetch", asy
 		await transport.close();
 	}
 });
+
+it.each(["credential", "receipt", "request-admission"] as const)(
+	"seals every pending request after a concurrent uncertain send at %s",
+	async (boundary) => {
+		let release = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let entered = () => {};
+		const ready = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		let ids = 0;
+		let sends = 0;
+		const facts: { id: number; phase: string; sent: boolean | undefined }[] =
+			[];
+		const transport = await openRuntimeMessagesTransport({
+			endpoint: "https://model.example.test",
+			credential: "synthetic-provider-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			admit: async () => {},
+			openRequest: async () => {
+				const id = ++ids;
+				const block = async () => {
+					entered();
+					await held;
+				};
+				if (id === 1 && boundary === "request-admission") await block();
+				return {
+					resolveCredential: async () => {
+						if (id === 1 && boundary === "credential") await block();
+						return "synthetic-provider-credential";
+					},
+					receipt: async (phase, _end, diagnostic) => {
+						facts.push({ id, phase, sent: diagnostic?.sent });
+						if (id === 1 && boundary === "receipt" && phase === "sent")
+							await block();
+					},
+				};
+			},
+			fetch: async () => {
+				sends++;
+				throw Error("disconnect");
+			},
+		});
+		const invoke = () =>
+			fetch(`${transport.modelAccess.endpoint}/v1/messages`, {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${transport.modelAccess.credential}`,
+				},
+				body: JSON.stringify({
+					model: "claude-opus-5",
+					messages: [],
+					stream: true,
+					output_config: { effort: "high" },
+					thinking: { type: "adaptive" },
+				}),
+			}).then((response) => response.text());
+		try {
+			const first = invoke();
+			await ready;
+			await invoke();
+			expect(sends).toBe(1);
+			expect(transport.failure()).toBe("unknown");
+			release();
+			await first;
+			expect(sends).toBe(1);
+			expect(facts.filter((fact) => fact.id === 1).at(-1)).toEqual({
+				id: 1,
+				phase: "failed",
+				sent: false,
+			});
+			expect(transport.failure()).toBe("unknown");
+		} finally {
+			release();
+			await transport.close();
+		}
+	},
+);
+
+it.each(["abort", "close"] as const)(
+	"retires a held credential request on %s without upstream send",
+	async (mode) => {
+		let release = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let entered = () => {};
+		const ready = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		let sends = 0;
+		const facts: { phase: string; sent: boolean | undefined }[] = [];
+		const transport = await openRuntimeMessagesTransport({
+			endpoint: "https://model.example.test",
+			credential: "synthetic-provider-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			admit: async () => {},
+			openRequest: async () => ({
+				resolveCredential: async () => {
+					entered();
+					await held;
+					return "synthetic-provider-credential";
+				},
+				receipt: async (phase, _end, diagnostic) => {
+					facts.push({ phase, sent: diagnostic?.sent });
+				},
+			}),
+			fetch: async () => {
+				sends++;
+				return new Response(messages(["never"]), {
+					headers: { "content-type": "text/event-stream" },
+				});
+			},
+		});
+		const controller = new AbortController();
+		const request = fetch(`${transport.modelAccess.endpoint}/v1/messages`, {
+			method: "POST",
+			signal: controller.signal,
+			headers: { authorization: `Bearer ${transport.modelAccess.credential}` },
+			body: JSON.stringify({
+				model: "claude-opus-5",
+				messages: [],
+				stream: true,
+				output_config: { effort: "high" },
+				thinking: { type: "adaptive" },
+			}),
+		})
+			.then((response) => response.text())
+			.catch(() => undefined);
+		try {
+			await ready;
+			expect(() => transport.beginTurn()).toThrow();
+			if (mode === "abort") {
+				controller.abort();
+				await request;
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				release();
+			} else {
+				const closed = transport.close();
+				release();
+				await closed;
+			}
+			await request;
+			await transport.close();
+			expect(sends).toBe(0);
+			expect(facts.at(-1)).toEqual({ phase: "failed", sent: false });
+		} finally {
+			release();
+			await transport.close();
+		}
+	},
+);

@@ -120,6 +120,9 @@ export async function openRuntimeMessagesTransport(
 	let admitted = false;
 	let active = 0;
 	let failure: "failed" | "unknown" | undefined;
+	const seal = (outcome: "failed" | "unknown") => {
+		if (failure !== "unknown") failure = outcome;
+	};
 	const server = createServer((request, response) => {
 		const operation = (async () => {
 			if (
@@ -156,6 +159,10 @@ export async function openRuntimeMessagesTransport(
 			let statusCode: number | undefined;
 			let requestContext: RuntimeMessagesRequest | undefined;
 			let usage: RuntimeMessagesTransportDiagnostic["usage"];
+			const assertOpen = () => {
+				if (closed || failure || controller.signal.aborted)
+					throw new Error("RUNTIME_MODEL_QUERY_SEALED");
+			};
 			const receipt: NonNullable<RuntimeMessagesTransportOptions["receipt"]> = (
 				...args
 			) =>
@@ -198,6 +205,7 @@ export async function openRuntimeMessagesTransport(
 						Buffer.concat(chunks),
 					),
 				);
+				assertOpen();
 				const counting = request.url?.includes("/count_tokens");
 				const auxiliary =
 					options.client !== "opencode" &&
@@ -267,16 +275,19 @@ export async function openRuntimeMessagesTransport(
 				if (!admitted || options.client === "pi") {
 					stage = "admission";
 					await options.admit();
+					assertOpen();
 					admitted = true;
 				}
-				if (closed || controller.signal.aborted) throw new Error();
+				assertOpen();
 				requestContext = await options.openRequest?.(purpose);
+				assertOpen();
 				stage = "credential";
 				const resolveCredential =
 					requestContext?.resolveCredential ?? options.resolveCredential;
 				const credential = resolveCredential
 					? await resolveCredential()
 					: options.credential;
+				assertOpen();
 				const requestAccess = validateModelAccess({
 					endpoint: options.endpoint,
 					credential,
@@ -300,8 +311,9 @@ export async function openRuntimeMessagesTransport(
 				stage = "upstream_http";
 				if (!counting || options.openRequest)
 					await receipt("sent", false, diagnostic());
+				assertOpen();
 				requestContext?.revalidate?.();
-				if (closed || controller.signal.aborted) throw new Error();
+				assertOpen();
 				sent = true;
 				const upstream = await (options.fetch ?? fetch)(
 					`${requestAccess.endpoint.replace(/\/$/, "")}${request.url}`,
@@ -326,7 +338,7 @@ export async function openRuntimeMessagesTransport(
 						purpose === "main" ||
 						purpose === "count-tokens"
 					)
-						failure = outcome;
+						seal(outcome);
 					reject(
 						response,
 						400,
@@ -395,13 +407,12 @@ export async function openRuntimeMessagesTransport(
 				if (controller.signal.aborted) stage = "abort";
 				else if (sent && stage === "upstream_http") stage = "transport";
 				controller.abort();
-				if (!closed && !failure) failure = sent ? "unknown" : "failed";
-				if (failure) {
-					try {
-						await receipt(failure, false, diagnostic());
-					} catch {
-						failure = "unknown";
-					}
+				const outcome = sent ? "unknown" : "failed";
+				seal(outcome);
+				try {
+					await receipt(outcome, false, diagnostic());
+				} catch {
+					seal("unknown");
 				}
 				reject(response);
 			} finally {
@@ -438,6 +449,7 @@ export async function openRuntimeMessagesTransport(
 		},
 		/** Start a new Execution on a reused native session. */
 		beginTurn() {
+			if (active !== 0 || closed) throw new Error("RUNTIME_MODEL_QUERY_ACTIVE");
 			admitted = false;
 			failure = undefined;
 		},
