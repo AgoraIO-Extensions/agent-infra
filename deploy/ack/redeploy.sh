@@ -251,7 +251,7 @@ template_preflight() {
 	local list_file
 	list_file=$(mktemp)
 	trap 'unlink "$list_file"' EXIT
-	if ! node "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" >"$list_file"; then
+	if ! node --experimental-strip-types "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" >"$list_file"; then
 		die "template preflight inputs do not match the source/image/target tuple"
 	fi
 	local job template run_directory index=0
