@@ -904,7 +904,7 @@ it.for([
 	{
 		shell: true,
 		label:
-			"requires the official Claude sandbox to isolate a real Bash child under the fixed container security context",
+			"isolates a real Claude Bash child through the fixed Landlock shell entrypoint",
 	},
 ])("$label", { timeout: 30_000 }, async ({ shell }, context) => {
 	if (shell && process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")
@@ -991,6 +991,22 @@ it.for([
 	const address = server.address();
 	if (!address || typeof address === "string")
 		throw new Error("Missing fixture endpoint");
+	if (shell) {
+		const { execFile } = await import("node:child_process");
+		const { promisify } = await import("node:util");
+		await promisify(execFile)(
+			"/opt/agent-infra/native-bash.mjs",
+			["-c", "-l", "true"],
+			{
+				cwd: workspace,
+				env: {
+					PATH: "/usr/local/bin:/usr/bin:/bin",
+					AGENT_INFRA_NATIVE_SHELL_WORKSPACE: workspace,
+				},
+				timeout: 6000,
+			},
+		);
+	}
 	const native = claudeQuery(
 		{
 			pathToClaudeCodeExecutable: installation.executable,

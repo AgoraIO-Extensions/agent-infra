@@ -88,8 +88,15 @@ async function probe(environment: NodeJS.ProcessEnv) {
 export async function nativeShellPlan(
 	workspace: string,
 	cwd: string,
-	args: readonly string[],
+	suppliedArgs: readonly string[],
 ) {
+	// Claude's fixed shell provider separates -c and -l. Never honor login startup.
+	const args =
+		suppliedArgs.length === 3 &&
+		suppliedArgs[0] === "-c" &&
+		suppliedArgs[1] === "-l"
+			? ["-c", suppliedArgs[2] ?? ""]
+			: suppliedArgs;
 	if (
 		process.platform !== "linux" ||
 		process.getuid?.() === 0 ||

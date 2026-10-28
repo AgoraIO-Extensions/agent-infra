@@ -57,7 +57,8 @@ OpenCode 1.19.0 候选接线复用同一准入和固定 shell 路径，仅准入
 完整 #3218 仍包含 Claude 接线、完整父子边界与恢复矩阵。上述单模板受控调用不等于真实
 模型/外部环境验收，也不能代签其余模板；Draft 验证结果未完成前不得合入或关闭父票 #3202。
 
-Claude 的独立 Linux 探针使用固定 SDK/native 二进制与官方 sandbox：`failIfUnavailable=true`、
-`allowUnsandboxedCommands=false`，凭证环境/配置及 `/proc` 显式拒绝。镜像固定安装其
-`bubblewrap`/`socat` 依赖；既有容器的非 root、只读根、cap-drop/no-new-privileges 不变。
-探针未通过前，不把官方配置字段存在当隔离证明，生产 Claude Bash 继续保持关闭。
+Claude 固定版本的官方 namespace sandbox 在当前非 root 安全上下文中不能创建 user namespace。
+候选探针改用同一 Landlock launcher 的只读 `native-bash.mjs` 入口，先执行实际 ABI5 准入，再由
+固定原生 `CLAUDE_CODE_SHELL` 接入；shell 临时文件留在工作区，原生配置与历史不向子进程开放。
+该路径只验证平台子边界，不改变容器安全策略。生产 Claude Bash 在真实子进程正负例、不可用准入、
+工具事实与恢复矩阵通过前继续关闭；工程约束见 [Spec §10.14](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1014-标准模板-session-sandbox-原生工具)。
