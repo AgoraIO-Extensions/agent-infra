@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -69,6 +69,118 @@ async function fixture(replayed = false) {
 		{ mode: 0o600 },
 	);
 	return { dir, state, output, input, server, origin };
+}
+
+for (const scenario of [
+	"empty",
+	"existing",
+	"replace-failed",
+	"changed-readback",
+	"invalid-state",
+	"public-key-file",
+	"missing-key-file",
+	"invalid-key-file",
+]) {
+	test(`personal Relay Key bootstrap ${scenario} keeps the authenticated HTTP and API credential order`, async (t) => {
+		const f = await fixture();
+		t.after(async () => {
+			f.server.closeAllConnections();
+			f.server.close();
+			await rm(f.dir, { recursive: true, force: true });
+		});
+		const keyFile = join(f.dir, "personal.key");
+		const key = "sk-private-fixture-do-not-log";
+		await writeFile(keyFile, scenario === "invalid-key-file" ? "short" : key, {
+			mode: 0o600,
+		});
+		if (scenario === "public-key-file") await chmod(keyFile, 0o644);
+		if (scenario === "missing-key-file") await rm(keyFile);
+		const config = {
+			...JSON.parse(await readFile(f.input, "utf8")),
+			origin: f.origin,
+			personalRelayKeyFile: keyFile,
+		};
+		const calls = [];
+		let version = scenario === "existing" ? 5 : null;
+		f.server.removeAllListeners("request");
+		f.server.on("request", async (request, response) => {
+			let body = "";
+			for await (const chunk of request) body += chunk;
+			calls.push(`${request.method} ${request.url}`);
+			assert(request.headers.cookie?.includes("session-private"));
+			assert.equal(request.headers.authorization, undefined);
+			response.setHeader("content-type", "application/json");
+			if (request.url === "/api/v2/me/relay-key") {
+				if (request.method === "PUT") {
+					assert.equal(request.headers.origin, f.origin);
+					assert.deepEqual(JSON.parse(body), {
+						expectedVersion: null,
+						keyValue: key,
+					});
+					if (scenario === "replace-failed") {
+						response.writeHead(409);
+						response.end(JSON.stringify({ code: "CONFLICT" }));
+						return;
+					}
+					version = 1;
+					response.end(
+						JSON.stringify({ schemaVersion: 1, isSet: true, keyVersion: 1 }),
+					);
+					return;
+				}
+				assert.equal(request.method, "GET");
+				if (scenario === "invalid-state") {
+					response.end(
+						JSON.stringify({ schemaVersion: 1, isSet: true, keyVersion: null }),
+					);
+					return;
+				}
+				response.end(
+					JSON.stringify({
+						schemaVersion: 1,
+						isSet: version !== null,
+						keyVersion:
+							scenario === "changed-readback" && version !== null ? 2 : version,
+					}),
+				);
+				return;
+			}
+			assert.equal(request.url, "/api/v2/me/api-credentials");
+			assert(version !== null);
+			assert.equal(request.method, "POST");
+			assert.equal(request.headers.origin, f.origin);
+			response.writeHead(201);
+			response.end(
+				JSON.stringify({
+					replayed: false,
+					credential: `papi_${"A".repeat(43)}`,
+					metadata: {},
+				}),
+			);
+		});
+		if (["empty", "existing"].includes(scenario)) {
+			const result = await bootstrapCredential(config);
+			assert.deepEqual(result.personalRelayKey, {
+				mode:
+					scenario === "empty"
+						? "installed-and-read-back"
+						: "existing-retained",
+				keyVersion: scenario === "empty" ? 1 : 5,
+			});
+			assert.equal(JSON.stringify(result).includes(key), false);
+			assert.deepEqual(calls, [
+				"GET /api/v2/me/relay-key",
+				...(scenario === "empty" ? ["PUT /api/v2/me/relay-key"] : []),
+				"GET /api/v2/me/relay-key",
+				"POST /api/v2/me/api-credentials",
+			]);
+		} else {
+			await assert.rejects(bootstrapCredential(config));
+			assert.equal(calls.includes("POST /api/v2/me/api-credentials"), false);
+			await assert.rejects(readFile(f.output), { code: "ENOENT" });
+			if (scenario.endsWith("key-file")) assert.deepEqual(calls, []);
+		}
+	});
 }
 
 test("credential bootstrap rejects non-HTTPS origins before networking", async () => {
