@@ -3302,18 +3302,45 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
-	// Keep every CLI comparison while bounding each baseline/version below one CI budget.
-	it.each([
-		["pinned", "historical"],
-		["empty", "historical"],
-		["empty", "latest"],
-		["existingCookie", "historical"],
-		["existingCookie", "latest"],
-		["governance", "historical"],
-		["governance", "latest"],
-	] as const)(
-		"admits only the pinned personal credential contract and rejects security/material regressions [%s/%s]",
-		async (baselineKind, version) => {
+	// Each security mutation keeps its real CLI comparison and its own bounded deadline.
+	it.each(
+		(
+			[
+				["pinned", "historical"],
+				["empty", "historical"],
+				["empty", "latest"],
+				["existingCookie", "historical"],
+				["existingCookie", "latest"],
+				["governance", "historical"],
+				["governance", "latest"],
+			] as const
+		).flatMap(([baseline, version]) => [
+			...(version === "historical"
+				? [[baseline, version, "baseline"] as const]
+				: []),
+			...[
+				"anonymous",
+				"bearerGovernance",
+				"hashReadback",
+				"emptyScopes",
+				"materialReplay",
+				"unexpectedPatch",
+				"differentCookie",
+				"unrelatedOperation",
+				"oldAdministratorSecurity",
+				"oldMetadataResponse",
+				"globalSecurity",
+				"anonymousAgentRead",
+				"bearerOwnerOverride",
+				"bearerSchemeChanged",
+				"unrelatedBearerOperation",
+				"andAuthentication",
+				"removedBrowserAuthentication",
+			].map((mutation) => [baseline, version, mutation] as const),
+		]),
+	)(
+		"admits only the pinned personal credential contract and rejects security/material regressions [%s/%s/%s]",
+		async (baselineKind, version, selectedMutation) => {
 			const artifact = fileURLToPath(
 				new URL(
 					"../artifacts/openapi/pilot-browser.v2.openapi.json",
@@ -3441,8 +3468,10 @@ describe("contract compatibility command", () => {
 					},
 				};
 				if (baselineKind === "pinned") {
-					expect(comparePaths(historicalCurrent, baseline).status).toBe(0);
+					if (selectedMutation === "baseline")
+						expect(comparePaths(historicalCurrent, baseline).status).toBe(0);
 					for (const [name, mutate] of Object.entries(mutations)) {
+						if (name !== selectedMutation) continue;
 						const candidate = structuredClone(current);
 						mutate(candidate);
 						const path = resolve(directory, `${name}.json`);
@@ -3470,7 +3499,7 @@ describe("contract compatibility command", () => {
 							);
 					const path = resolve(directory, `${baselineKind}-previous.json`);
 					await writeFile(path, JSON.stringify(existing));
-					if (version === "historical") {
+					if (version === "historical" && selectedMutation === "baseline") {
 						if (baselineKind === "governance")
 							expect(comparePaths(path, baseline).status).toBe(0);
 						expect(
@@ -3483,6 +3512,7 @@ describe("contract compatibility command", () => {
 						).toBe(0);
 					}
 					for (const [name, mutate] of Object.entries(mutations)) {
+						if (name !== selectedMutation) continue;
 						const candidate = structuredClone(
 							version === "historical" ? current : latest,
 						);
