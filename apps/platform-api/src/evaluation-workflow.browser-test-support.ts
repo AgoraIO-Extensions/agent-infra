@@ -350,28 +350,47 @@ export async function startEvaluationWorkflowBrowserFixture() {
 		const unused = async (): Promise<never> => {
 			throw new Error("Unconfigured fixture operation");
 		};
+		const identity = {
+			...directory,
+			resolve: async (request: Request) => {
+				const id = /(?:^|;\s*)session=([^;]+)/.exec(
+					request.headers.get("Cookie") ?? "",
+				)?.[1];
+				return id && Object.values(roles).some((role) => role === id)
+					? { ...user(id), displayName: id, roles: ["employee" as const] }
+					: null;
+			},
+			hydrateUsers: async (ids: readonly string[]) =>
+				ids.map((id) => ({
+					userId: id,
+					displayName: id,
+					accountStatus: "active" as const,
+				})),
+		};
 		const assembly = assemblePlatformApi({
 			...database,
 			taskAdmissionPolicy: {
 				maximumWaitingTasksPerAgent: 100,
 				waitingTimeoutMs: 30000,
 			},
-			identity: {
-				...directory,
-				resolve: async (request) => {
-					const id = /(?:^|;\s*)session=([^;]+)/.exec(
-						request.headers.get("Cookie") ?? "",
-					)?.[1];
-					return id && Object.values(roles).some((role) => role === id)
-						? { ...user(id), displayName: id, roles: ["employee"] }
-						: null;
-				},
-				hydrateUsers: async (ids) =>
-					ids.map((id) => ({
-						userId: id,
-						displayName: id,
-						accountStatus: "active" as const,
-					})),
+			identity,
+			directory: {
+				identity,
+				search: async ({ kind, query, ids, limit }) =>
+					kind === "user"
+						? Object.values(roles)
+								.filter((id) =>
+									ids.length
+										? ids.includes(id)
+										: id.includes(query.toLowerCase()),
+								)
+								.slice(0, limit)
+								.map((id) => ({
+									kind: "user" as const,
+									canonicalId: id,
+									displayName: id,
+								}))
+						: [],
 			},
 			evaluation: {
 				storage,
