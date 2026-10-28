@@ -479,6 +479,7 @@ async function createPrepared(signal: AbortSignal) {
 	const productionWorkload = await createProductionWorkloadWorkerOptionsV1(
 		{
 			...workloadInput,
+			serviceToken,
 			...(skillMaterializer ? { skillMaterializer } : {}),
 			policy: {
 				...workloadInput.policy,

@@ -665,7 +665,10 @@ function runtimeEnvironment(
 					},
 					{
 						name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE",
-						value: `${allocation.agentId}\0${allocation.sessionId}`,
+						// Kubernetes rejects NUL bytes in environment values. Keep the
+						// scope injective while using only printable characters; the
+						// same value is used when deriving the attestation.
+						value: `${allocation.agentId}:${allocation.sessionId}`,
 					},
 					{
 						name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION",

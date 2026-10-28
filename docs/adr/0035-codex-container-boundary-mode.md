@@ -15,11 +15,12 @@ Secret，具备相同的拓扑前提。
 
 ## 决策
 
-新增 Worker-owned Session Sandbox `container-boundary` isolation mode：
+新增 Worker-owned standard Runtime Pod `container-boundary` isolation mode：
 
 1. 只有部署配置显式设置 `policy.codexContainerBoundaryEnabled: true` 时，平台 Worker
-   才为业务 Session Sandbox 注入；Agent-level Workload、自定义 Agent、Owner env 和请求字段
-   不能选择或覆盖它。
+   才为标准 Agent-level Workload 或业务 Session Sandbox 注入；自定义 Agent、共享 Pod、
+   Owner env 和请求字段不能选择或覆盖它。Agent scope 使用 Agent ID，Session scope 使用
+   可打印的 Agent/Session 组合并保持与 attestation 输入一致。
    Worker 使用本次 Runtime service token 对 Agent/Session scope 生成 HMAC attestation，Host
    必须验证该 attestation；两个普通环境变量本身不构成准入证明。
 2. Bridge 不执行 Landlock `setpriv` 探针，不使用平台 Conversation allowlist；Codex
@@ -30,12 +31,13 @@ Secret，具备相同的拓扑前提。
    `AGENT_INFRA_*` 仍由 Codex shell 环境排除。跨 Sandbox 的模型、Connection、平台文件和
    Browser 调用仍保留原有 intent/授权屏障。
 5. 默认 `landlock` 模式和私有 callback/Connection lane 不变；`container-boundary` 不得
-   用于私有 lane。撤掉 Worker 注入后，Runtime 自动回到 Landlock，并在不具备 ABI V5 时
-   fail closed。
+   用于私有 lane。标准 Workload 或 Session 缺少 Worker 注入、专属资源、安全上下文或
+   attestation 时，Runtime 自动回到 Landlock 并在不具备 ABI V5 时 fail closed；部署验收必须
+   在该模式下看到真实 Codex readiness 通过，不能用 Pod Ready 替代。
 
 ## 验收
 
-- 在目标 ACK 节点使用与生产一致的 Pod 安全上下文，真实 Codex app-server Turn 和
+- 在目标 ACK 节点使用与生产一致的标准 Workload Pod 安全上下文，真实 Codex app-server Turn 和
   `exec_command`/文件编辑成功。
 - 同一 Pod 内工具不能读取平台服务凭证；另一 Session 的 Pod/PVC/Service/网络目标不可达。
 - Web 和企微各完成一轮真实 shell 与文件编辑，多轮对话和重启恢复通过。

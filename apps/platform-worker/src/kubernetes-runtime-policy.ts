@@ -48,7 +48,10 @@ import {
 } from "./kubernetes-runtime-comparison.js";
 import { createKubernetesPodValidationV1 } from "./kubernetes-runtime-pod-validation.js";
 import type { workloadEgressRulesV1 } from "./workload-network.js";
-import { workloadRuntimeAuthEnvironmentV1 } from "./workload-runtime-auth.js";
+import {
+	codexContainerBoundaryEnvironmentV1,
+	workloadRuntimeAuthEnvironmentV1,
+} from "./workload-runtime-auth.js";
 
 const routeHostSuffixPattern =
 	/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
@@ -122,6 +125,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		| undefined;
 	readonly egress: ReturnType<typeof workloadEgressRulesV1>;
 	/** Deployment-owned service token, retained in Worker memory only. */
+	readonly containerBoundaryServiceToken?: string;
 }) {
 	const {
 		policy,
@@ -234,6 +238,15 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 			...(runtimeDriver
 				? [{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtimeDriver }]
 				: []),
+			...codexContainerBoundaryEnvironmentV1({
+				enabled:
+					standardTemplateBinding !== undefined &&
+					injection !== undefined &&
+					runtimeDriver === "codex" &&
+					policy.codexContainerBoundaryEnabled === true,
+				serviceToken: dependencies.containerBoundaryServiceToken,
+				scope: value.agentId,
+			}),
 			...(skillHubRuntime ? [skillHubRuntime] : []),
 			...runtimeAuth,
 			...connection.env,
