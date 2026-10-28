@@ -222,3 +222,29 @@ describe("AuditPrincipalName", () => {
 		expect(screen.queryAllByRole("button")).toHaveLength(0);
 	});
 });
+
+it.each([
+	["application.credential.issued", "签发应用 API 凭证"],
+	["application.credential.rotated", "轮换应用 API 凭证"],
+	["application.credential.delivery", "交付应用 API 凭证"],
+	["application.credential.metadata.read", "查看应用 API 凭证元数据"],
+	["application.credential.revoked", "撤销应用 API 凭证"],
+] as const)("shows controlled application audit action %s", (action, label) => {
+	const record = {
+		...auditRecord(),
+		action,
+		subject: {
+			kind: "application" as const,
+			subjectId: "app-a",
+			displayName: null,
+		},
+		summary: action,
+		agentDisplayName: null,
+	};
+	const { container } = render(
+		<AuditRecordDetail record={record} names={names} />,
+	);
+	expect(facts(container).事件?.textContent).toBe(label);
+	expect(facts(container).对象类型?.textContent).toBe("应用");
+	expect(auditObjectName(record)).toBe("应用");
+});

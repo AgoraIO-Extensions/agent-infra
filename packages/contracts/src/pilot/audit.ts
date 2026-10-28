@@ -140,6 +140,11 @@ export const ScopedPlatformAuditActionV1Schema = z.enum([
 	"wecom.conversation_started",
 	"wecom.conversation_unavailable",
 	"wecom.media_rejected",
+	"application.credential.issued",
+	"application.credential.rotated",
+	"application.credential.delivery",
+	"application.credential.metadata.read",
+	"application.credential.revoked",
 ]);
 
 export const ScopedPlatformAuditProjectionV1Schema = z.strictObject({
@@ -162,6 +167,7 @@ export const ScopedPlatformAuditProjectionV1Schema = z.strictObject({
 			"execution",
 			"configuration",
 			"api_credential",
+			"application",
 		]),
 		subjectId: OpaqueIdV1Schema,
 	}),

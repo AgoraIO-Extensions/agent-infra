@@ -28,7 +28,7 @@ die() {
 
 usage() {
 	cat <<'EOF'
-Usage: deploy/ack/redeploy.sh <capture-inputs|plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|template-preflight|bootstrap-credential|cleanup-plan|deploy|provision|validate|clean|destroy|all>
+Usage: deploy/ack/redeploy.sh <capture-inputs|plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|template-preflight|runtime-inputs|bootstrap-credential|cleanup-plan|deploy|provision|validate|clean|destroy|all>
 
 Required for plan/deploy/validate:
   ACK_KUBECONFIG   private kubeconfig path
@@ -212,6 +212,27 @@ bootstrap_credential() {
 	echo "ack-redeploy: API credential bootstrap passed; evidence=$evidence_dir"
 }
 
+runtime_inputs() {
+	require_source_tuple
+	require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
+	require_file ACK_TEMPLATE_VALIDATIONS_FILE "${ACK_TEMPLATE_VALIDATIONS_FILE:-}"
+	require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
+	require_file ACK_AGENT_REQUESTS_FILE "${ACK_AGENT_REQUESTS_FILE:-}"
+	prepare_evidence
+	rendered_manifest=$(mktemp)
+	trap 'unlink "$rendered_manifest"' EXIT
+	render_manifest "$rendered_manifest"
+	if ! node "$repo_root/deploy/ack/runtime-inputs.ts" apply "$ACK_BOOTSTRAP_INPUTS_FILE" \
+		"$ACK_TEMPLATE_VALIDATIONS_FILE" "$ACK_WORKLOAD_CAPACITY_FILE" "$ACK_AGENT_REQUESTS_FILE" \
+		"$rendered_manifest" >"$evidence_dir/runtime-inputs.json"; then
+		die "fresh Runtime inputs could not be published and read back"
+	fi
+	unlink "$rendered_manifest"
+	trap - EXIT
+	validate_workload_capacity
+	echo "ack-redeploy: fresh Runtime inputs published and loaded; evidence=$evidence_dir"
+}
+
 template_preflight() {
 	require_source_tuple
 	local jobs=${ACK_TEMPLATE_PREFLIGHT_JOBS_FILE:-}
@@ -221,33 +242,10 @@ template_preflight() {
 	local list_file
 	list_file=$(mktemp)
 	trap 'unlink "$list_file"' EXIT
-	if ! node - "$jobs" >"$list_file" <<'NODE'
-const fs = require("node:fs");
-const file = process.argv[2];
-const value = JSON.parse(fs.readFileSync(file, "utf8"));
-const manifest = JSON.parse(fs.readFileSync(process.env.ACK_TEMPLATE_IMAGE_MANIFEST, "utf8"));
-if (!value || value.schemaVersion !== 1 || !Array.isArray(value.jobs) || value.jobs.length !== 4)
-	process.exit(1);
-if (manifest.schemaVersion !== 1 || manifest.commitSha !== process.env.ACK_SOURCE_SHA || manifest.platform !== "linux/amd64")
-	process.exit(1);
-const seen = new Set();
-const templateIds = new Set();
-for (const job of value.jobs) {
-	if (typeof job !== "string" || !job.startsWith("/") || seen.has(job)) process.exit(1);
-	seen.add(job);
-	const input = JSON.parse(fs.readFileSync(job, "utf8"));
-	const image = manifest.images?.[input.templateId];
-	if (!["codex", "claude", "opencode", "pi"].includes(input.templateId) || templateIds.has(input.templateId) || input.sourceCommit !== process.env.ACK_SOURCE_SHA || !image || input.imageReference !== `${image.repository}@${image.digest}` || input.imageDigest !== image.digest)
-		process.exit(1);
-	templateIds.add(input.templateId);
-	process.stdout.write(`${job}\n`);
-}
-if (seen.size !== 4) process.exit(1);
-NODE
-	then
-		die "template preflight job list is invalid or does not match ACK_SOURCE_SHA"
+	if ! node --experimental-strip-types "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" >"$list_file"; then
+		die "template preflight inputs do not match the source/image/target tuple"
 	fi
-	local job template index=0
+	local job template run_directory index=0
 	while IFS= read -r job; do
 		template=$(node - "$job" <<'NODE'
 const fs = require("node:fs");
@@ -255,7 +253,8 @@ const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 process.stdout.write(value.templateId);
 NODE
 )
-		if ! node --experimental-strip-types "$repo_root/deploy/ack/template-model-preflight.mjs" "$job" >"$evidence_dir/template-preflight-$template.json"; then
+		run_directory=$(dirname "$job")
+		if ! node --experimental-strip-types "$repo_root/deploy/ack/template-model-preflight.mjs" "$job" >"$run_directory/$template.log" 2>&1; then
 			die "real-runtime template preflight failed: $template"
 		fi
 		index=$((index + 1))
@@ -569,6 +568,7 @@ case "$command" in
 	bootstrap-database) bootstrap_database ;;
 	bootstrap-credential) bootstrap_credential ;;
 	template-preflight) template_preflight ;;
+	runtime-inputs) runtime_inputs ;;
 	cleanup-plan) cleanup_plan ;;
 	deploy) deploy ;;
 	validate) validate ;;
@@ -577,6 +577,8 @@ case "$command" in
 	provision) provision ;;
 	all)
 		require_source_tuple
+		require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
+		require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
 		if [[ -n "${ACK_BOOTSTRAP_INPUTS_FILE:-}" ]]; then
 			bootstrap_database check
 			bootstrap_inputs apply
@@ -588,6 +590,7 @@ case "$command" in
 		else
 			require_file ACK_TEMPLATE_VALIDATIONS_FILE "${ACK_TEMPLATE_VALIDATIONS_FILE:-}"
 		fi
+		runtime_inputs
 		if [[ -n "${ACK_CREDENTIAL_BOOTSTRAP_FILE:-}" ]]; then
 			bootstrap_credential
 		fi

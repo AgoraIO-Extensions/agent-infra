@@ -5036,7 +5036,12 @@
           "relay_key.agent_default.candidates",
           "wecom.conversation_started",
           "wecom.conversation_unavailable",
-          "wecom.media_rejected"
+          "wecom.media_rejected",
+          "application.credential.issued",
+          "application.credential.rotated",
+          "application.credential.delivery",
+          "application.credential.metadata.read",
+          "application.credential.revoked"
         ],
         "type": "string"
       },
@@ -5618,7 +5623,8 @@
                   "conversation",
                   "execution",
                   "configuration",
-                  "api_credential"
+                  "api_credential",
+                  "application"
                 ],
                 "type": "string"
               },
@@ -6295,7 +6301,8 @@
                   "conversation",
                   "execution",
                   "configuration",
-                  "api_credential"
+                  "api_credential",
+                  "application"
                 ],
                 "type": "string"
               },
