@@ -10,6 +10,53 @@ API Agent 创建和入口验收入口；每次真实运行仍必须以当前 sou
 
 入口脚本是 [`redeploy.sh`](./redeploy.sh)。它只接受 immutable image reference，渲染结果仍包含占位值时直接失败；每次运行把脱敏 receipt 写到外部 `ACK_EVIDENCE_DIR`，不会把会话正文或凭证写入仓库。
 
+## 搬迁私有输入包
+
+在另一台机器检出已发布镜像对应的源码 commit，并安装 Node 24、pnpm 依赖、kubectl 和 Helm。
+将私有输入包完整复制到 Git 仓库外的 `0700` 目录，文件保持 `0600`，再执行：
+
+```bash
+node --experimental-strip-types deploy/ack/run-capsule.ts /private/ack/capsule.json all
+```
+
+`run-capsule.ts` 只解析输入路径，然后调用同一 checkout 的 `redeploy.sh`。它不复制部署逻辑，
+也不修改镜像与源码约束。`capsule.json` 示例：
+
+```json
+{
+  "schemaVersion": 1,
+  "sourceSha": "0123456789abcdef0123456789abcdef01234567",
+  "inputs": ["bootstrap.json", "requests.json", "jobs.json", "jobs/codex.json"],
+  "directories": ["state", "evidence"],
+  "environment": {
+    "ACK_KUBECONFIG": "@CAPSULE_ROOT@/kubeconfig",
+    "ACK_NAMESPACE": "agent-infra",
+    "ACK_RELEASE": "agent-infra-ack",
+    "ACK_VALUES_FILE": "@CAPSULE_ROOT@/values.fresh.yaml",
+    "ACK_BOOTSTRAP_INPUTS_FILE": "@CAPSULE_ROOT@/bootstrap.json",
+    "ACK_AGENT_REQUESTS_FILE": "@CAPSULE_ROOT@/requests.json",
+    "ACK_EVIDENCE_DIR": "@CAPSULE_ROOT@/evidence",
+    "ACK_PUBLIC_ORIGIN": "https://ack.example.test"
+  }
+}
+```
+
+示例只展示格式；完整输入包仍需后文规定的所有镜像 manifest、四份 job、容量/登录/credential
+配置和六个或更多 Agent 请求及浏览器蓝图。`inputs` 显式列出需要解析路径的 JSON 模板。
+模板中的 `@CAPSULE_ROOT@/relative/path` 指向包内路径；目标也在 `inputs` 中时，指向本轮生成
+的 JSON 副本，否则指向包内原始文件或声明的输出目录。job 的 `worktree` 使用 `@SOURCE_ROOT@`。
+证据与原始凭证不需要改写；运行后保留 `.resolved-*` 私有目录用于诊断，原 JSON 模板保持不变。
+
+`directories` 声明允许创建的输出目录，例如浏览器 state、API credential 和证据目录。
+除这些目录内的预期输出外，所有引用必须事先存在；符号链接、越界路径、公开权限和未知
+环境变量均被拒绝。`ACK_CUSTOM_AGENT_CONFIGS` 可使用路径 token 数组，入口会转换为既有脚本
+接受的换行列表。旧 shell 中的 ACK 配置不参与此次运行；删除确认只接受调用方明确设置的
+`ACK_CLEAN_CONFIRM` 和 `ACK_CLEAN_ALLOW_FOREIGN`，输入包不能内置这两个变量。
+
+第三个参数可选择既有 `plan`、`bootstrap-login`、`runtime-inputs`、`provision`、`validate` 或
+其他已声明阶段；所有原有 source/image、ownership 和破坏性清理门禁继续执行。不要把含凭证的
+输入包或 `.resolved-*` 目录提交到 Git、PR 或共享文档。
+
 上一轮演练的成功与失败因果、以及 fresh 环境的一键顺序，见 [`ACK-REDEPLOY-LESSONS.md`](./ACK-REDEPLOY-LESSONS.md)。
 
 ## 当前输入与已有环境部署

@@ -46,6 +46,10 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 
 ## 可移植的一键顺序
 
+输入包搬到其他机器后，原来的绝对路径会失效。`run-capsule.ts` 使用显式 JSON 模板列表和
+包内路径 token，为每轮生成私有解析副本，再调用同一份 `redeploy.sh`；迁移时不用手工替换
+多个文件中的本机目录，也不继承旧 shell 的 ACK 配置。原始凭证与历史证据保持私有。
+
 自定义 Agent 的验收方式由创建请求的 `interactionMode` 决定：`platform-adapter` 必须验证
 当前 Agent 的三轮 Platform 对话；`self-managed` 必须验证自己的应用入口。之前流程对所有
 custom 都要求 HTML probe，导致 ACP 对话成功后仍无法结束；当前分派保留各自完整的检查。
