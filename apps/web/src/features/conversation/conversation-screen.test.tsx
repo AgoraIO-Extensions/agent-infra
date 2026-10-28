@@ -3,6 +3,7 @@ import {
 	CommandAcceptedProjectionV1Schema,
 	ConversationDetailProjectionV2Schema,
 	ConversationSseMessageV2Schema,
+	NativeCapabilityInvocationRequestV1Schema,
 	PersistedConversationEventV2Schema,
 	PilotProtocolErrorV1Schema,
 	ReasoningDeltaEventV2Schema,
@@ -440,7 +441,13 @@ describe("functional conversation screen", () => {
 		const invoke = requests.find((request) =>
 			request.url.endsWith("/native-capability/invoke"),
 		);
-		expect(await invoke?.json()).toEqual({
+		const skillRequest = NativeCapabilityInvocationRequestV1Schema.parse(
+			await invoke?.json(),
+		);
+		expect(skillRequest.idempotencyKey).toBe(
+			invoke?.headers.get("Idempotency-Key"),
+		);
+		expect(skillRequest).toMatchObject({
 			capabilityId: "e".repeat(64),
 			directoryRevision: "d".repeat(64),
 			parameters: "梳理当前工作区",
@@ -690,7 +697,13 @@ describe("functional conversation screen", () => {
 		const invoke = requests.find((request) =>
 			request.url.endsWith("/native-capability/invoke"),
 		);
-		expect(await invoke?.json()).toEqual({
+		const commandRequest = NativeCapabilityInvocationRequestV1Schema.parse(
+			await invoke?.json(),
+		);
+		expect(commandRequest.idempotencyKey).toBe(
+			invoke?.headers.get("Idempotency-Key"),
+		);
+		expect(commandRequest).toMatchObject({
 			capabilityId: "f".repeat(64),
 			directoryRevision: "c".repeat(64),
 			parameters: "",
