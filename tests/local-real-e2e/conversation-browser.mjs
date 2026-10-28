@@ -400,30 +400,58 @@ async function run(input, evidence) {
 					)
 					.toBe(true);
 			}
-			await expect
-				.poll(
-					async () => {
-						const observed = await page.evaluate(
-							(executionId) => ({
-								frames: (window.__agentInfraSseFrames ?? []).filter(
-									(frame) => frame.executionId === executionId,
-								),
-								renders: window.__agentInfraAssistantRenders ?? [],
-								baseline: window.__agentInfraStreamStartAssistantLength ?? 0,
-							}),
-							receipt.executionId,
-						);
-						return (
-							assistantDeliveryEvidence(
-								observed.frames,
-								observed.renders,
-								observed.baseline,
-							) !== null
-						);
-					},
-					{ timeout: 180_000, intervals: [500, 1000, 2000] },
-				)
-				.toBe(true);
+			let deliveryObservation;
+			try {
+				await expect
+					.poll(
+						async () => {
+							const observed = await page.evaluate(
+								(executionId) => ({
+									frames: (window.__agentInfraSseFrames ?? []).filter(
+										(frame) => frame.executionId === executionId,
+									),
+									renders: window.__agentInfraAssistantRenders ?? [],
+									baseline: window.__agentInfraStreamStartAssistantLength ?? 0,
+								}),
+								receipt.executionId,
+							);
+							deliveryObservation = observed;
+							return (
+								assistantDeliveryEvidence(
+									observed.frames,
+									observed.renders,
+									observed.baseline,
+								) !== null
+							);
+						},
+						{ timeout: 180_000, intervals: [500, 1000, 2000] },
+					)
+					.toBe(true);
+			} catch (error) {
+				evidence.deliveryFailure = deliveryObservation && {
+					baseline: deliveryObservation.baseline,
+					frames: deliveryObservation.frames.map(
+						({
+							type,
+							status,
+							textLength,
+							at,
+							chunkSequence,
+							visibleTextLength,
+						}) => ({
+							type,
+							status,
+							textLength,
+							at,
+							chunkSequence,
+							visibleTextLength,
+						}),
+					),
+					renders: deliveryObservation.renders,
+				};
+				throw error;
+			}
+
 			await expect
 				.poll(
 					async () => {
