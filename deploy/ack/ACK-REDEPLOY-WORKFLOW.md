@@ -268,6 +268,56 @@ capacity，禁止手工写数据库补齐。
 
 ### 签发个人 API credential
 
+Fresh 数据库可以先设置 `ACK_LOGIN_BOOTSTRAP_FILE` 并运行 `bootstrap-login`。`all` 在模型
+preflight 后、`runtime-inputs` 前执行此步骤，使用正常 `/auth/login` 和 `/api/v1/session`
+取得当前 canonical user ID。它为每个声明主体创建全新 Cookie context，验证两次 session
+身份一致且主体不同，然后写入私有 storageState、身份候选文件和对应浏览器蓝图。
+HTTPS 必须通过系统信任或 `NODE_EXTRA_CA_CERTS` 验证；不跟随登录重定向。
+
+```json
+{
+  "schemaVersion": 1,
+  "origin": "https://ack.example.test",
+  "identityFile": "/private/ack/login/identities.candidate.json",
+  "identitySecretRef": {
+    "name": "agent-infra-api-configuration",
+    "key": "deployment-identities.json"
+  },
+  "subjects": [
+    {
+      "name": "owner",
+      "loginFile": "/private/ack/login/owner-login",
+      "passwordFile": "/private/ack/login/owner-password",
+      "storageStateFile": "/private/ack/login/owner-state.json"
+    },
+    {
+      "name": "other",
+      "loginFile": "/private/ack/login/other-login",
+      "passwordFile": "/private/ack/login/other-password",
+      "storageStateFile": "/private/ack/login/other-state.json"
+    }
+  ],
+  "blueprints": ["/private/ack/blueprints/codex.json"]
+}
+```
+
+输入文件和输出目录必须在 Git 仓库外，分别使用 `0600` 与 `0700` 权限。`origin` 必须等于
+`ACK_PUBLIC_ORIGIN`。为完整验收，`blueprints` 应列出四模板和每个 custom platform-adapter
+的蓝图；每份蓝图的 owner/other `stateFile` 必须对应本次声明的两个不同主体。
+只替换它们的 `userId`，其余对话计划保持原样。
+
+身份候选包含 `schemaVersion/sourceSha/origin/createdAt/subjects`，其中
+`subjects.<name>.userId` 来自服务端 session。`runtime-inputs` 在发布前用私有 Cookie 再核对
+当前 session，只把候选写入已声明的 API Secret `deployment-identities.json` 键并等待 API
+加载。bootstrap 文件清单须事先声明这个键，其初始文件可以是 `{"subjects":{}}`。
+部署自有 `configuration.mjs` 必须明确读取此文件，并仅把原本批准的主体名称映射到现有
+`allowedPrincipals` 和 custom admission 规则；脚本不生成角色、授权列表或修改数据库。
+身份候选十分钟后失效，需重新执行登录步骤。
+
+```bash
+deploy/ack/redeploy.sh bootstrap-login
+```
+
 数据库、迁移和 Platform 就绪后，部署拥有者必须先通过真实 LDAP/浏览器登录生成一个新的
 Playwright `storageState`。工具不会接收 LDAP 密码，也不会模拟登录。将下列私有请求文件
 放在仓库外，storageState 和输出 credential 文件都必须是当前用户拥有、权限 `0600` 的普通文件：
