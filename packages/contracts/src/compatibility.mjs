@@ -6371,14 +6371,14 @@ function normalizeEvaluationExperiments3639(document) {
 				paths.map((path) => [path, document.paths[path]]),
 			),
 			schemas: values,
-		}) === "76c6a5d1cf2bb6e1f2bde32c17efbb4d9781e90dcf6e6e2a9a45887f161b4af4"
+		}) === "47797d583a9278b24e0e9c673b90ff9a2679f83fe58eb09cbc9babcd1c3f4a9f"
 	) {
 		for (const path of paths) delete normalized.paths[path];
 		for (const name of schemas) delete normalized.components.schemas[name];
 	} else if (
 		found.length === 0 &&
 		digest(values) ===
-			"dc5df9045a8775ab23f5a2fbff32f097c4294eb6079f597446240674404b724f"
+			"4a5a5fc404cd05e52ccc841d3f1d882520f63332b247e13400dc7dffa7010435"
 	)
 		for (const name of schemas) delete normalized.components.schemas[name];
 	const scopes = [
@@ -6408,6 +6408,7 @@ function normalizeEvaluationExperiments3639(document) {
 	visit(normalized);
 	const actions = [
 		"evaluation.experiment.create",
+		"evaluation.experiment.cancel",
 		"evaluation.derived.confirm",
 		"evaluation.score.completed",
 		"evaluation.score.human",

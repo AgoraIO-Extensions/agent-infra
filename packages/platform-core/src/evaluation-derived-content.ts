@@ -56,7 +56,61 @@ export function createEvaluationDerivedContentV1(options: {
 	store: EvaluationDerivedContentPortV1;
 	storage: EvaluationStorageV1;
 }) {
-	return {
+	const service = {
+		async readRetained(
+			request: EvaluationRequestV1,
+			expected: {
+				id: string;
+				datasetId: string;
+				versionId: string;
+				kind: EvaluationDerivedKindV1;
+			},
+		): Promise<{
+			contentStatus: "available" | "expired" | "deleting" | "deleted";
+			value: unknown | null;
+		}> {
+			const object = await options.store.get(expected.id);
+			if (
+				!object ||
+				object.id !== expected.id ||
+				object.datasetId !== expected.datasetId ||
+				object.versionId !== expected.versionId ||
+				object.kind !== expected.kind
+			)
+				throw new EvaluationDataErrorV1("unavailable");
+			const binding = await options.store.authorize(
+				request,
+				expected.datasetId,
+				expected.versionId,
+				expected.kind,
+			);
+			if (!isDeepStrictEqual(await options.store.get(expected.id), object))
+				throw new EvaluationDataErrorV1("denied");
+			const now = Date.now();
+			const retention = binding.policy.retention[expected.kind];
+			if (
+				Math.min(
+					Date.parse(object.metadataExpiresAt),
+					Date.parse(object.createdAt) + retention.metadataMs,
+				) <= now
+			)
+				throw new EvaluationDataErrorV1("denied");
+			if (object.status === "deleted" || object.status === "deleting")
+				return { contentStatus: object.status, value: null };
+			if (
+				Math.min(
+					Date.parse(object.expiresAt),
+					Date.parse(object.createdAt) + retention.contentMs,
+				) <= now
+			)
+				return { contentStatus: "expired", value: null };
+			if (object.status !== "available")
+				throw new EvaluationDataErrorV1("unavailable");
+			return {
+				contentStatus: "available",
+				value: await service.read(request, expected.id, expected.kind),
+			};
+		},
 		async write(
 			request: EvaluationRequestV1,
 			key: string,
@@ -237,6 +291,7 @@ export function createEvaluationDerivedContentV1(options: {
 			) as unknown;
 		},
 	};
+	return service;
 }
 
 export function parseEvaluationDerivedObjectV1(

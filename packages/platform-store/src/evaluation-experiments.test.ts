@@ -2,6 +2,7 @@ import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import {
 	EvaluationExperimentV1Schema,
+	EvaluationReviewV1Schema,
 	EvaluationScoreMetadataV1Schema,
 	EvaluationScoringContextV1Schema,
 } from "@agent-infra/contracts/pilot";
@@ -659,6 +660,7 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 	await sql`update platform.relay_key_versions set ciphertext=${sql.json(ciphertext as unknown as postgres.JSONValue)} where key_id='eval-default'`;
 	let calls = 0;
 	let holdModel = false;
+	let rejectedStatus: number | undefined;
 	const modelEntered = Promise.withResolvers<void>();
 	const server = createServer(async (req, res) => {
 		calls++;
@@ -666,6 +668,11 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 		for await (const chunk of req) body += chunk;
 		expect(req.headers.authorization).toBe("Bearer synthetic-score-key");
 		expect(JSON.parse(body)).toMatchObject({ tools: [], tool_choice: "none" });
+		if (rejectedStatus) {
+			res.writeHead(rejectedStatus, { "content-type": "text/plain" });
+			res.end("PRIVATE_MODEL_REFUSAL synthetic-score-key");
+			return;
+		}
 		if (holdModel) {
 			modelEntered.resolve();
 			return;
@@ -940,11 +947,13 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 			);
 			await sql.unsafe("drop function platform.eval_review_audit_failure()");
 		}
-		const reviewed = await http(
-			`/scores/${human.id}/reviews`,
-			"reviewer",
-			{ expectedRevision: reviewerContext.revision, result },
-			reviewKey,
+		const reviewed = EvaluationReviewV1Schema.parse(
+			await http(
+				`/scores/${human.id}/reviews`,
+				"reviewer",
+				{ expectedRevision: reviewerContext.revision, result },
+				reviewKey,
+			),
 		);
 		expect(
 			await http(
@@ -960,7 +969,7 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 		);
 		expect(reviewHistory.status).toBe(200);
 		const history = await reviewHistory.json();
-		expect(history).toEqual({
+		expect(history).toMatchObject({
 			items: [{ ...reviewed, result }],
 			nextCursor: null,
 		});
@@ -986,11 +995,126 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 				})
 			).status,
 		).toBe(400);
+		const newest = EvaluationReviewV1Schema.parse(
+			await http(
+				`/scores/${human.id}/reviews`,
+				"reviewer",
+				{ expectedRevision: reviewerContext.revision, result },
+				randomUUID(),
+			),
+		);
+		const [oldReview] =
+			await sql`select data from platform.evaluation_score_reviews where id=${reviewed.reviewId}`;
+		const expiredReview = new Date(Date.now() - 1000).toISOString();
+		await sql`update platform.evaluation_derived_objects set expires_at=${expiredReview}::timestamptz,data=jsonb_set(data,'{expiresAt}',to_jsonb(${expiredReview}::text)) where id=${oldReview?.data.objectId}`;
+		const retained = await fetch(`${baseUrl}/scores/${human.id}/reviews`, {
+			headers: { Cookie: "session=reviewer" },
+		});
+		expect(retained.status).toBe(200);
+		const retainedPage = (await retained.json()) as {
+			items: { reviewId: string; contentStatus: string; result: unknown }[];
+		};
+		expect(retainedPage.items).toHaveLength(2);
+		expect(
+			retainedPage.items.find((item) => item.reviewId === reviewed.reviewId),
+		).toMatchObject({ contentStatus: "expired", result: null });
+		expect(
+			retainedPage.items.find((item) => item.reviewId === newest.reviewId),
+		).toMatchObject({ contentStatus: "available", result });
+		await sql`update platform.evaluation_derived_objects set status='deleting',data=jsonb_set(data,'{status}','"deleting"'::jsonb) where id=${oldReview?.data.objectId}`;
+		const deletingPage = (await (
+			await fetch(`${baseUrl}/scores/${human.id}/reviews`, {
+				headers: { Cookie: "session=reviewer" },
+			})
+		).json()) as {
+			items: { reviewId: string; contentStatus: string; result: unknown }[];
+		};
+		expect(
+			deletingPage.items.find((item) => item.reviewId === reviewed.reviewId),
+		).toMatchObject({ contentStatus: "deleting", result: null });
+		await sql`update platform.evaluation_derived_objects set status='available',data=jsonb_set(data,'{status}','"available"'::jsonb) where id=${oldReview?.data.objectId}`;
+		await sql`update platform.evaluation_score_reviews set data=jsonb_set(data,'{metadataExpiresAt}',to_jsonb(${expiredReview}::text)) where id=${reviewed.reviewId}`;
+		const filteredPage = (await (
+			await fetch(`${baseUrl}/scores/${human.id}/reviews`, {
+				headers: { Cookie: "session=reviewer" },
+			})
+		).json()) as { items: { reviewId: string }[] };
+		expect(filteredPage.items.map((item) => item.reviewId)).toEqual([
+			newest.reviewId,
+		]);
+		const [newReview] =
+			await sql`select data from platform.evaluation_score_reviews where id=${newest.reviewId}`;
+		const [newObject] =
+			await sql`select data from platform.evaluation_derived_objects where id=${newReview?.data.objectId}`;
+		const download = storage.download;
+		storage.download = async (input) => {
+			if (input.objectRef === newObject?.data.objectRef)
+				throw new Error("synthetic storage outage");
+			return download(input);
+		};
+		try {
+			expect(
+				(
+					await fetch(`${baseUrl}/scores/${human.id}/reviews`, {
+						headers: { Cookie: "session=reviewer" },
+					})
+				).status,
+			).toBeGreaterThanOrEqual(500);
+		} finally {
+			storage.download = download;
+		}
 		const [audit] =
 			await sql`select actor_id from platform.audit_events where action='evaluation.score.reviewed' and target_id=${human.id}`;
 		expect(audit?.actor_id).toBe("reviewer");
 		await worker.runOnce();
 		expect(calls).toBe(2);
+		for (const status of [401, 403]) {
+			rejectedStatus = status;
+			const stoppingCommand = {
+				...(await dataset()),
+				scorerRefs: [{ scorerId: "model", version: "1" }],
+			};
+			await data.grant(
+				request("admin"),
+				randomUUID(),
+				stoppingCommand.datasetId,
+				{
+					expectedRevision: 4,
+					principal: { kind: "user", id: "runner" },
+					versionIds: [stoppingCommand.versionId],
+					operations: ["score"],
+					expiresAt: new Date(Date.now() + 50000).toISOString(),
+				},
+			);
+			const stoppingExperiment = await core.create(
+				request("runner"),
+				randomUUID(),
+				stoppingCommand,
+			);
+			const stoppingTasks = await experiments.samples(
+				stoppingExperiment.experimentId,
+				10,
+			);
+			for (const task of stoppingTasks) {
+				await sql`update platform.conversation_executions set status='completed',last_event_sequence=2 where execution_id=${task.executionId}`;
+				await sql`insert into platform.conversation_events(event_id,conversation_id,execution_id,sequence,conversation_cursor,event_type,event_payload,source,adapter_event_key,event_digest,runtime_cursor,occurred_at)values(${randomUUID()},${task.conversationId},${task.executionId},2,2,'text.delta',${sql.json({ type: "text.delta", text: "yes" })},'runtime',${randomUUID()},${"d".repeat(64)},'2',clock_timestamp())`;
+			}
+			await worker.runOnce();
+			const beforeCalls = calls;
+			await worker.runOnce();
+			expect(calls).toBe(beforeCalls);
+			const failures =
+				await sql`select status,data->>'failureCode' as code from platform.evaluation_score_intents where sample_task_id in(select id from platform.evaluation_sample_tasks where experiment_id=${stoppingExperiment.experimentId})`;
+			expect(failures).toEqual([
+				{ status: "failed", code: "SCORER_AUTHORIZATION_DENIED" },
+				{ status: "failed", code: "SCORER_AUTHORIZATION_DENIED" },
+			]);
+			expect(
+				await sql`select count(*)::int as count from platform.evaluation_sample_tasks where experiment_id=${stoppingExperiment.experimentId}`,
+			).toEqual([{ count: 2 }]);
+			expect(JSON.stringify(failures)).not.toContain("PRIVATE_MODEL_REFUSAL");
+		}
+		rejectedStatus = undefined;
 		const stoppingCommand = {
 			...(await dataset()),
 			scorerRefs: [{ scorerId: "model", version: "1" }],
@@ -1033,8 +1157,8 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 		expect(worker.close()).toBe(close);
 		await close;
 		await stoppingRun;
-		expect(calls).toBe(3);
-		expect(plaintexts.length).toBe(3);
+		expect(calls).toBe(7);
+		expect(plaintexts.length).toBe(7);
 		expect(
 			plaintexts.every((bytes) => bytes.every((value) => value === 0)),
 		).toBe(true);
@@ -1093,6 +1217,22 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 		expect(
 			await sql`select id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId}`,
 		).toHaveLength(2);
+		const [reviewGrant] =
+			await sql`select data from platform.evaluation_grants where dataset_id=${command.datasetId} and data->'principal'->>'id'='reviewer'`;
+		await data.revoke(
+			request("admin"),
+			randomUUID(),
+			command.datasetId,
+			reviewGrant?.data.grantId,
+			reviewGrant?.data.revision,
+		);
+		expect(
+			(
+				await fetch(`${baseUrl}/scores/${human.id}/reviews`, {
+					headers: { Cookie: "session=reviewer" },
+				})
+			).status,
+		).toBe(404);
 		const expired = new Date(Date.now() - 1000).toISOString();
 		await sql`update platform.evaluation_versions set expires_at=${expired}::timestamptz,metadata_expires_at=${expired}::timestamptz,data=jsonb_set(jsonb_set(data,'{expiresAt}',to_jsonb(${expired}::text)),'{metadataExpiresAt}',to_jsonb(${expired}::text)) where id=${command.versionId}`;
 		await sql`update platform.evaluation_datasets set data=jsonb_set(data,'{metadataExpiresAt}',to_jsonb(${expired}::text)) where id=${command.datasetId}`;
@@ -1221,12 +1361,47 @@ it("requires current experiment policy and run grant before underlying content/r
 				undefined,
 			),
 		).toBeUndefined();
+		const beforeCancel =
+			await sql`select execution_id,status from platform.conversation_executions where execution_id in(select execution_id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId}) order by execution_id`;
+		await sql.unsafe(
+			`create function platform.eval_cancel_audit_failure() returns trigger language plpgsql as $$ begin if NEW.action='evaluation.experiment.cancel' then raise exception 'synthetic audit rejection'; end if; return NEW; end $$`,
+		);
+		await sql.unsafe(
+			"create trigger eval_cancel_audit_failure before insert on platform.audit_events for each row execute function platform.eval_cancel_audit_failure()",
+		);
+		try {
+			await expect(
+				core.cancel(request("runner"), experiment.experimentId, randomUUID()),
+			).rejects.toThrow();
+			expect(
+				await sql`select status from platform.evaluation_experiments where id=${experiment.experimentId}`,
+			).toEqual([{ status: "active" }]);
+			expect(
+				await sql`select execution_id,status from platform.conversation_executions where execution_id in(select execution_id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId}) order by execution_id`,
+			).toEqual(beforeCancel);
+		} finally {
+			await sql.unsafe(
+				"drop trigger eval_cancel_audit_failure on platform.audit_events",
+			);
+			await sql.unsafe("drop function platform.eval_cancel_audit_failure()");
+		}
 		const cancelled = await core.cancel(
 			request("runner"),
 			experiment.experimentId,
 			randomUUID(),
 		);
 		expect(cancelled.status).toBe("cancelled");
+		await core.cancel(request("runner"), experiment.experimentId, randomUUID());
+		expect(
+			await sql`select actor_id,target_type,details from platform.audit_events where target_id=${experiment.experimentId} and action='evaluation.experiment.cancel'`,
+		).toEqual([
+			{
+				actor_id: "runner",
+				target_type: "evaluation_experiment",
+				details: { purpose: "eval", returnedMaterial: false },
+			},
+		]);
+
 		await expect(
 			core.cancel(request("reviewer"), experiment.experimentId, randomUUID()),
 		).rejects.toMatchObject({ code: "denied" });

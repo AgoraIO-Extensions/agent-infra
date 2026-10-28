@@ -548,3 +548,45 @@ it("freezes model identity and response limits before awaiting transport", async
 		await f.close();
 	}
 });
+
+it.each([401, 403])(
+	"classifies trusted HTTP %s as definite authorization rejection without provider text",
+	async (status) => {
+		const f = await fixture("openai-responses-v1", (_req, res) => {
+			res.writeHead(status, { "content-type": "text/plain" });
+			res.end("PRIVATE_AUTH_REJECTION synthetic-scoring-credential");
+		});
+		try {
+			await expect(scoreEvaluationModelV1(f.input)).rejects.toMatchObject({
+				code: "authorization_denied",
+				message: "EVALUATION_MODEL_AUTHORIZATION_DENIED",
+			});
+		} finally {
+			await f.close();
+		}
+	},
+);
+
+it("does not classify a redirected or forged error as a trusted authorization refusal", async () => {
+	const f = await fixture("openai-responses-v1", (_req, res) => {
+		res.writeHead(401);
+		res.end();
+	});
+	try {
+		for (const fetch of [
+			async () => {
+				throw { code: "authorization_denied" };
+			},
+			async () => {
+				const response = new Response(null, { status: 401 });
+				Object.defineProperty(response, "redirected", { value: true });
+				return response;
+			},
+		])
+			await expect(
+				scoreEvaluationModelV1({ ...f.input, fetch }),
+			).rejects.toMatchObject({ code: "unavailable" });
+	} finally {
+		await f.close();
+	}
+});

@@ -2682,8 +2682,12 @@ Eval 幂等回执的保留截止时间不得晚于相关数据集/版本的元�
 实验受理在原 ConversationTask 事务中为每个样本/基线或候选建立独立 Conversation/Execution、outbox 和 Eval 绑定。`TaskAuthorizationBoundaryV1.evaluation` 仅允许 `channelId=eval`，由服务端绑定 experiment/sample/variant、dataset/version、run grant ID/revision、policy ID/revision、Agent configuration revision、模型选项/推理级别、工具环境及内容截止时间；对应 `eval-use` 来源只保存已核对的 Agent use grant revision。普通 API/Web 不能提交或借用该绑定，Eval 不被归类为 API 渠道。请求条件与实际执行事实分别保存，不允许当前配置漂移悄悄替换基线。Worker 的当前用途回读缺失或不可确认时不投递；读取、SSE、文件及结果提交也使用同一持久绑定复核。
 
 评分意图有自身的原发起主体、数据/结果版本、评分器不可变配置摘要、状态与期望修订、outbox lease/fence、有限尝试预算和 Agent 默认 Key 四元绑定。模型 Key 在评分意图首次开始时冻结，重试复用该绑定并重验当前使用许可，不借用已终态业务 Execution 的解密授权。部署评分器明确 rule/human/model 类型、rubric ID、分数范围/通过阈值、输入输出字节/token/时限、重试预算；模型类型另绑定当前 Catalog revision、精确 endpoint/model 及允许发送的内容类别。缺政策不推导生产默认评分器或 TTL。人工 score 和独立 review 分别保存不可变结果及操作者；同一原评分操作者不能冒充独立复核人。
+实验取消与受信主体/实验 ID 的 `evaluation.experiment.cancel` 元数据审计同事务提交；审计失败回滚
+实验状态与样本停止，已取消意图重放不重复审计。
 模型发送前 Key/Catalog 等前置失败以可信未发送结果进入有限重试；进入模型传输后失联保留 unknown，
-后续只核实同一派生结果意图，不再调用模型。已保存结果的提交恢复也消耗评分器有限尝试预算，耗尽
+后续只核实同一派生结果意图，不再调用模型。可信评分 Adapter 从原获准端点直接收到 HTTP 401/403
+时记录 `SCORER_AUTHORIZATION_DENIED` 并结束为 failed，不回退 Key；重定向、普通异常或失联不能
+冒充这种确定拒绝。已保存结果的提交恢复也消耗评分器有限尝试预算，耗尽
 保留 failed 与原结果引用，不无限轮询或重建业务执行。
 
 启用实验时，私有 API 配置在 `apiInput.evaluation` 增加每次读取并严格解析的 `loadExperimentPolicy`。
@@ -2745,7 +2749,9 @@ Eval 删除不擅自删除其他业务权威数据；反向引用也不允许重
 复核操作者须有独立 review 权限，结论独立于原评分，不原地覆盖或冒充其他人的判断。
 独立复核历史通过 `/api/v2/evaluation/scores/{scoreId}/reviews` 读取，按 score 绑定和当前 review
 用途逐项复核；分页最多 100 项且内容合计不超过 2 MiB，超出时返回 nextCursor，已过元数据期限的
-记录不进入页面。返回原 scoreRevision、受信 reviewer 和独立结果，不能用原评分覆盖复核历史。
+记录不进入页面。返回原 scoreRevision、受信 reviewer 和独立结果，不能用原评分覆盖复核历史。正文先到期或已逻辑删除、
+而元数据仍获准保留时返回 `contentStatus=expired/deleting/deleted` 和 `result=null`；正常正文返回
+`contentStatus=available`。当前 review 授权、对象绑定或存储核验失败仍整体拒绝，不伪装成正文到期。
 
 模型评分还须匹配部署批准的精确 endpoint/model、数据集用途范围、允许发送的内容类别、单次输入/输出
 大小和 deadline。API/Worker 只引用获准评分器，调用方不能指定 URL、认证 Header 或任意评分端点。

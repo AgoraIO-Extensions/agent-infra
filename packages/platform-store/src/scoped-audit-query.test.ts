@@ -2064,6 +2064,7 @@ describe("audit display names follow the querying principal's current access", (
 it("projects only registered Eval experiment/scoring targets without exposing content", async () => {
 	for (const [action, target] of [
 		["evaluation.experiment.create", "evaluation_experiment"],
+		["evaluation.experiment.cancel", "evaluation_experiment"],
 		["evaluation.derived.confirm", "evaluation_object"],
 		["evaluation.score.completed", "evaluation_score"],
 		["evaluation.score.human", "evaluation_score"],

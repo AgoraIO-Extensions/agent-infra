@@ -37,7 +37,12 @@ export interface EvaluationModelScoringInputV1 {
 }
 export class EvaluationModelScoringErrorV1 extends Error {
 	constructor(
-		readonly code: "invalid" | "unavailable" | "invalid_result" | "timeout",
+		readonly code:
+			| "invalid"
+			| "unavailable"
+			| "invalid_result"
+			| "timeout"
+			| "authorization_denied",
 	) {
 		super(`EVALUATION_MODEL_${code.toUpperCase()}`);
 		this.name = "EvaluationModelScoringErrorV1";
@@ -323,12 +328,11 @@ export async function scoreEvaluationModelV1(
 				body,
 			}),
 		);
-		if (
-			!response.ok ||
-			response.redirected ||
-			(response.url && response.url !== url)
-		)
+		if (response.redirected || (response.url && response.url !== url))
 			return fail("unavailable");
+		if (response.status === 401 || response.status === 403)
+			return fail("authorization_denied");
+		if (!response.ok) return fail("unavailable");
 		if (
 			!/^application\/json(?:\s*;|$)/i.test(
 				response.headers.get("content-type") ?? "",

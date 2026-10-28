@@ -6349,101 +6349,285 @@
         "properties": {
           "items": {
             "items": {
-              "additionalProperties": false,
-              "properties": {
-                "result": {
-                  "oneOf": [
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "reason": {
-                          "maxLength": 1048576,
-                          "type": "string"
-                        },
-                        "status": {
-                          "const": "scored",
-                          "type": "string"
-                        },
-                        "value": {
-                          "type": "number"
-                        }
-                      },
-                      "required": [
-                        "status",
-                        "value",
-                        "reason"
-                      ],
-                      "type": "object"
-                    },
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "reason": {
-                          "maxLength": 1048576,
-                          "type": "string"
-                        },
-                        "status": {
-                          "const": "not_applicable",
-                          "type": "string"
-                        },
-                        "value": {
-                          "type": "null"
-                        }
-                      },
-                      "required": [
-                        "status",
-                        "value",
-                        "reason"
-                      ],
-                      "type": "object"
-                    }
-                  ],
-                  "type": "object"
-                },
-                "reviewId": {
-                  "format": "uuid",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
-                  "type": "string"
-                },
-                "reviewer": {
+              "oneOf": [
+                {
                   "additionalProperties": false,
                   "properties": {
-                    "id": {
-                      "maxLength": 256,
-                      "minLength": 1,
+                    "contentStatus": {
+                      "const": "available",
                       "type": "string"
                     },
-                    "kind": {
-                      "enum": [
-                        "user",
-                        "application"
+                    "result": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "reason": {
+                              "maxLength": 1048576,
+                              "type": "string"
+                            },
+                            "status": {
+                              "const": "scored",
+                              "type": "string"
+                            },
+                            "value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "status",
+                            "value",
+                            "reason"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "reason": {
+                              "maxLength": 1048576,
+                              "type": "string"
+                            },
+                            "status": {
+                              "const": "not_applicable",
+                              "type": "string"
+                            },
+                            "value": {
+                              "type": "null"
+                            }
+                          },
+                          "required": [
+                            "status",
+                            "value",
+                            "reason"
+                          ],
+                          "type": "object"
+                        }
                       ],
+                      "type": "object"
+                    },
+                    "reviewId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
                       "type": "string"
+                    },
+                    "reviewer": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "user",
+                            "application"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "type": "object"
+                    },
+                    "scoreId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "scoreRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
                     }
                   },
                   "required": [
-                    "kind",
-                    "id"
+                    "reviewId",
+                    "scoreId",
+                    "scoreRevision",
+                    "reviewer",
+                    "contentStatus",
+                    "result"
                   ],
                   "type": "object"
                 },
-                "scoreId": {
-                  "format": "uuid",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
-                  "type": "string"
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "contentStatus": {
+                      "const": "expired",
+                      "type": "string"
+                    },
+                    "result": {
+                      "type": "null"
+                    },
+                    "reviewId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "reviewer": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "user",
+                            "application"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "type": "object"
+                    },
+                    "scoreId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "scoreRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "reviewId",
+                    "scoreId",
+                    "scoreRevision",
+                    "reviewer",
+                    "contentStatus",
+                    "result"
+                  ],
+                  "type": "object"
                 },
-                "scoreRevision": {
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991,
-                  "type": "integer"
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "contentStatus": {
+                      "const": "deleting",
+                      "type": "string"
+                    },
+                    "result": {
+                      "type": "null"
+                    },
+                    "reviewId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "reviewer": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "user",
+                            "application"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "type": "object"
+                    },
+                    "scoreId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "scoreRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "reviewId",
+                    "scoreId",
+                    "scoreRevision",
+                    "reviewer",
+                    "contentStatus",
+                    "result"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "contentStatus": {
+                      "const": "deleted",
+                      "type": "string"
+                    },
+                    "result": {
+                      "type": "null"
+                    },
+                    "reviewId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "reviewer": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "user",
+                            "application"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "type": "object"
+                    },
+                    "scoreId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "scoreRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "reviewId",
+                    "scoreId",
+                    "scoreRevision",
+                    "reviewer",
+                    "contentStatus",
+                    "result"
+                  ],
+                  "type": "object"
                 }
-              },
-              "required": [
-                "reviewId",
-                "scoreId",
-                "scoreRevision",
-                "reviewer",
-                "result"
               ],
               "type": "object"
             },

@@ -124,72 +124,78 @@ export class PostgresEvaluationExperimentsV1
 	}
 
 	async cancel(request: EvaluationRequestV1, id: string, key: string) {
-		return this.#client.begin(async (tx) => {
-			const store = new PostgresEvaluationDataStoreV1({
-				...this.options,
-				transaction: tx,
-			});
-			const actor = await store.authenticate({
-				...request,
-				credentialScope: "eval:run",
-			});
-			const [row] = await tx<
-				{ data: unknown }[]
-			>`select data from platform.evaluation_experiments where id=${id} for update`;
-			if (!row) throw new EvaluationDataErrorV1("denied");
-			const experiment = parseEvaluationExperimentV1(row.data);
-			requireEvaluationExperimentOwnerV1(experiment, actor);
-			if (experiment.status === "cancelled") return experiment;
-			const tasks = await tx<
-				{
-					execution_id: string;
-					conversation_id: string;
-					agent_id: string;
-					boundary: unknown;
-				}[]
-			>`select e.execution_id,e.conversation_id,e.agent_id,a.boundary from platform.evaluation_sample_tasks s join platform.conversation_executions e on e.execution_id=s.execution_id join platform.task_authorization_records a on a.execution_id=e.execution_id where s.experiment_id=${id} order by e.agent_id,e.execution_id for update of e,a`;
-			for (const task of tasks) {
-				const boundary = parseTaskAuthorizationBoundaryV1(task.boundary);
-				const authority = {
-					schemaVersion: 1 as const,
-					actorId: actor.id,
-					agentId: task.agent_id,
-					channelId: "eval",
-					authorizationRevision: boundary.agentAuthorizationRevision,
-					supportsSupplementaryInstruction: false,
-					taskBoundary: boundary,
-				};
-				const transaction = new PostgresConversationExecutionTransactionV1({
+		return this.#client
+			.begin(async (tx) => {
+				const store = new PostgresEvaluationDataStoreV1({
+					...this.options,
 					transaction: tx,
-					userDirectory: this.options.directory,
 				});
-				const useCase = createConversationExecutionUseCaseV1({
-					authorization: {
-						authorize: async () => ({ outcome: "allowed", authority }),
-					},
-					transaction,
+				const actor = await store.authenticate({
+					...request,
+					credentialScope: "eval:run",
 				});
-				await useCase.stop({
-					schemaVersion: 1,
-					command: "stop",
-					conversationId: task.conversation_id,
-					targetExecutionId: task.execution_id,
-					idempotencyKey: createHash("sha256")
-						.update(JSON.stringify([key, task.execution_id]))
-						.digest("hex"),
-					requestId: request.requestId,
-					traceId: request.traceId,
-				});
-			}
-			const cancelled = {
-				...experiment,
-				status: "cancelled" as const,
-				revision: experiment.revision + 1,
-			};
-			await tx`update platform.evaluation_experiments set status='cancelled',revision=${cancelled.revision},data=${tx.json(cancelled as unknown as postgres.JSONValue)} where id=${id}`;
-			await store.authenticate({ ...request, credentialScope: "eval:run" });
-			return cancelled;
-		});
+				const [row] = await tx<
+					{ data: unknown }[]
+				>`select data from platform.evaluation_experiments where id=${id} for update`;
+				if (!row) throw new EvaluationDataErrorV1("denied");
+				const experiment = parseEvaluationExperimentV1(row.data);
+				requireEvaluationExperimentOwnerV1(experiment, actor);
+				if (experiment.status === "cancelled") return experiment;
+				const tasks = await tx<
+					{
+						execution_id: string;
+						conversation_id: string;
+						agent_id: string;
+						boundary: unknown;
+					}[]
+				>`select e.execution_id,e.conversation_id,e.agent_id,a.boundary from platform.evaluation_sample_tasks s join platform.conversation_executions e on e.execution_id=s.execution_id join platform.task_authorization_records a on a.execution_id=e.execution_id where s.experiment_id=${id} order by e.agent_id,e.execution_id for update of e,a`;
+				for (const task of tasks) {
+					const boundary = parseTaskAuthorizationBoundaryV1(task.boundary);
+					const authority = {
+						schemaVersion: 1 as const,
+						actorId: actor.id,
+						agentId: task.agent_id,
+						channelId: "eval",
+						authorizationRevision: boundary.agentAuthorizationRevision,
+						supportsSupplementaryInstruction: false,
+						taskBoundary: boundary,
+					};
+					const transaction = new PostgresConversationExecutionTransactionV1({
+						transaction: tx,
+						userDirectory: this.options.directory,
+					});
+					const useCase = createConversationExecutionUseCaseV1({
+						authorization: {
+							authorize: async () => ({ outcome: "allowed", authority }),
+						},
+						transaction,
+					});
+					await useCase.stop({
+						schemaVersion: 1,
+						command: "stop",
+						conversationId: task.conversation_id,
+						targetExecutionId: task.execution_id,
+						idempotencyKey: createHash("sha256")
+							.update(JSON.stringify([key, task.execution_id]))
+							.digest("hex"),
+						requestId: request.requestId,
+						traceId: request.traceId,
+					});
+				}
+				const cancelled = {
+					...experiment,
+					status: "cancelled" as const,
+					revision: experiment.revision + 1,
+				};
+				await tx`update platform.evaluation_experiments set status='cancelled',revision=${cancelled.revision},data=${tx.json(cancelled as unknown as postgres.JSONValue)} where id=${id}`;
+				await tx`insert into platform.audit_events(id,trace_id,request_id,actor_type,actor_id,action,target_type,target_id,outcome,details)values(${randomUUID()},${request.traceId},${request.requestId},${actor.kind},${actor.id},'evaluation.experiment.cancel','evaluation_experiment',${id},'succeeded',${tx.json({ purpose: "eval", returnedMaterial: false })})`;
+				await store.authenticate({ ...request, credentialScope: "eval:run" });
+				return cancelled;
+			})
+			.catch((error) => {
+				if (error instanceof EvaluationDataErrorV1) throw error;
+				throw new EvaluationDataErrorV1("unavailable");
+			});
 	}
 
 	async transaction<T>(

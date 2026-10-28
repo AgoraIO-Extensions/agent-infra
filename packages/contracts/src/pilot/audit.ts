@@ -150,6 +150,7 @@ export const ScopedPlatformAuditActionV1Schema = z.enum([
 	"evaluation.content.read",
 	"evaluation.content.delete",
 	"evaluation.experiment.create",
+	"evaluation.experiment.cancel",
 	"evaluation.derived.confirm",
 	"evaluation.score.completed",
 	"evaluation.score.human",

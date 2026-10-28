@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import {
+	EvaluationModelScoringErrorV1,
 	type ModelCatalogAdapterV1,
 	scoreEvaluationModelV1,
 } from "@agent-infra/model-catalog";
 import {
 	createEvaluationScoreWorkV1,
 	EvaluationDataErrorV1,
+	EvaluationModelAuthorizationDeniedErrorV1,
 	EvaluationModelNotSentErrorV1,
 } from "@agent-infra/platform-core";
 import {
@@ -104,6 +106,11 @@ export function createEvaluationScoringWorkerV1(
 				}
 			} catch (error) {
 				if (!sent) throw new EvaluationModelNotSentErrorV1();
+				if (
+					error instanceof EvaluationModelScoringErrorV1 &&
+					error.code === "authorization_denied"
+				)
+					throw new EvaluationModelAuthorizationDeniedErrorV1();
 				throw error;
 			}
 		},

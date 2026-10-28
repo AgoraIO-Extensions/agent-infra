@@ -13,7 +13,8 @@ const fixture = vi.hoisted(() => ({
 	outboxClose: vi.fn(),
 	transport: vi.fn(),
 }));
-vi.mock("@agent-infra/model-catalog", () => ({
+vi.mock("@agent-infra/model-catalog", async (original) => ({
+	...(await original<typeof import("@agent-infra/model-catalog")>()),
 	scoreEvaluationModelV1: fixture.transport,
 }));
 vi.mock("@agent-infra/platform-store", () => ({

@@ -108,9 +108,24 @@ export const EvaluationScoringContextV1Schema = z.strictObject({
 export const EvaluationReviewPageV1Schema = z.strictObject({
 	items: z
 		.array(
-			EvaluationReviewV1Schema.extend({
-				result: EvaluationScoreSubmitV1Schema.shape.result,
-			}),
+			z.discriminatedUnion("contentStatus", [
+				EvaluationReviewV1Schema.extend({
+					contentStatus: z.literal("available"),
+					result: EvaluationScoreSubmitV1Schema.shape.result,
+				}),
+				EvaluationReviewV1Schema.extend({
+					contentStatus: z.literal("expired"),
+					result: z.null(),
+				}),
+				EvaluationReviewV1Schema.extend({
+					contentStatus: z.literal("deleting"),
+					result: z.null(),
+				}),
+				EvaluationReviewV1Schema.extend({
+					contentStatus: z.literal("deleted"),
+					result: z.null(),
+				}),
+			]),
 		)
 		.max(100),
 	nextCursor: id.nullable(),

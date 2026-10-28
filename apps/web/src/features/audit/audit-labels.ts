@@ -3,6 +3,7 @@ import type { AuditRecord } from "./audit-query.js";
 
 export const auditActionLabels: Record<AuditRecord["action"], string> = {
 	"evaluation.experiment.create": "创建评测实验",
+	"evaluation.experiment.cancel": "取消评测实验",
 	"evaluation.derived.confirm": "确认评测结果内容",
 	"evaluation.score.completed": "完成评测评分",
 	"evaluation.score.human": "提交人工评分",

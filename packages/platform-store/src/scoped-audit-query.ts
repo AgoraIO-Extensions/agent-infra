@@ -828,7 +828,10 @@ function project(
 					row.source !== "platform" ||
 					!["user", "application"].includes(row.actorType) ||
 					row.targetType !==
-						(row.action === "evaluation.experiment.create"
+						([
+							"evaluation.experiment.create",
+							"evaluation.experiment.cancel",
+						].includes(row.action)
 							? "evaluation_experiment"
 							: row.action === "evaluation.derived.confirm"
 								? "evaluation_object"

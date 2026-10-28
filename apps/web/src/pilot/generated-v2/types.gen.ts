@@ -1108,6 +1108,7 @@ export type EvaluationGrantV1 = {
 
 export type EvaluationReviewPageV1 = {
     items: Array<{
+        contentStatus: 'available';
         result: {
             reason: string;
             status: 'scored';
@@ -1117,6 +1118,36 @@ export type EvaluationReviewPageV1 = {
             status: 'not_applicable';
             value: null;
         };
+        reviewId: string;
+        reviewer: {
+            id: string;
+            kind: 'user' | 'application';
+        };
+        scoreId: string;
+        scoreRevision: number;
+    } | {
+        contentStatus: 'expired';
+        result: null;
+        reviewId: string;
+        reviewer: {
+            id: string;
+            kind: 'user' | 'application';
+        };
+        scoreId: string;
+        scoreRevision: number;
+    } | {
+        contentStatus: 'deleting';
+        result: null;
+        reviewId: string;
+        reviewer: {
+            id: string;
+            kind: 'user' | 'application';
+        };
+        scoreId: string;
+        scoreRevision: number;
+    } | {
+        contentStatus: 'deleted';
+        result: null;
         reviewId: string;
         reviewer: {
             id: string;

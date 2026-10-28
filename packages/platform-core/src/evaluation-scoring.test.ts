@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
+import { planEvaluationScoreFailureV1 } from "./evaluation-score-intents.js";
 import {
 	parseEvaluationScoreOutcomeV1,
 	parseEvaluationScorerV1,
@@ -155,4 +156,69 @@ it("counts invalid JSON output as failure but keeps an invalid expected fixture 
 			expected: "[]",
 		}),
 	).toThrow();
+});
+
+it("keeps scoring failure budgets and unknown reconciliation in Core", () => {
+	const base = {
+		status: "pending" as const,
+		attempts: 1,
+		revision: 4,
+		failureCode: null,
+		scorer: { maxAttempts: 2, retryDelayMs: 17 },
+	};
+	expect(
+		planEvaluationScoreFailureV1(base, "SCORER_UNAVAILABLE"),
+	).toMatchObject({
+		state: { status: "pending", attempts: 1, revision: 5 },
+		retry: true,
+		delayMs: 17,
+	});
+	expect(
+		planEvaluationScoreFailureV1(base, "SCORER_UNAVAILABLE", true),
+	).toMatchObject({ state: { status: "failed", attempts: 2 }, retry: false });
+	expect(
+		planEvaluationScoreFailureV1(
+			{ ...base, status: "result_ready" },
+			"SCORER_UNAVAILABLE",
+		),
+	).toMatchObject({
+		state: { status: "result_ready", attempts: 2 },
+		retry: true,
+	});
+	expect(
+		planEvaluationScoreFailureV1(
+			{ ...base, status: "result_ready", attempts: 2 },
+			"SCORER_UNAVAILABLE",
+		),
+	).toMatchObject({ state: { status: "failed", attempts: 2 }, retry: false });
+	expect(
+		planEvaluationScoreFailureV1(
+			{ ...base, status: "unknown", attempts: 2 },
+			"SCORER_UNAVAILABLE",
+		),
+	).toMatchObject({ state: { status: "unknown", attempts: 2 }, retry: true });
+	expect(
+		planEvaluationScoreFailureV1(
+			{ ...base, status: "unknown", attempts: 2 },
+			"SCORER_UNAVAILABLE",
+			true,
+		),
+	).toMatchObject({ state: { status: "unknown", attempts: 2 }, retry: false });
+	expect(
+		planEvaluationScoreFailureV1(
+			{ ...base, status: "unknown" },
+			"SCORER_AUTHORIZATION_DENIED",
+		),
+	).toMatchObject({
+		state: { status: "failed", failureCode: "SCORER_AUTHORIZATION_DENIED" },
+		retry: false,
+	});
+	for (const status of ["scored", "not_applicable", "failed"] as const)
+		expect(
+			planEvaluationScoreFailureV1(
+				{ ...base, status },
+				"SCORER_UNAVAILABLE",
+				true,
+			),
+		).toEqual({ state: null, retry: false, delayMs: 17 });
 });

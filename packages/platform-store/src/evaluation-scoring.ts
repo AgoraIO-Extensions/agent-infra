@@ -5,6 +5,7 @@ import {
 	createEvaluationDerivedContentV1,
 	EvaluationDataErrorV1,
 	type EvaluationHumanScorePortV1,
+	EvaluationModelAuthorizationDeniedErrorV1,
 	EvaluationModelNotSentErrorV1,
 	type EvaluationRequestV1,
 	type EvaluationScoreIntentV1,
@@ -17,6 +18,7 @@ import {
 	parseEvaluationScoreIntentV1,
 	parseEvaluationScoreOutcomeV1,
 	parseEvaluationScorerV1,
+	planEvaluationScoreFailureV1,
 	projectEvaluationScoringContextV1,
 } from "@agent-infra/platform-core";
 import { readCurrentTaskApiUseGrantV1 } from "./application-task-authorization.js";
@@ -398,6 +400,17 @@ export class PostgresEvaluationScoringV1
 		try {
 			output = await this.options.model(lease, intent, input);
 		} catch (error) {
+			if (error instanceof EvaluationModelAuthorizationDeniedErrorV1) {
+				await this.#transaction(async (tx) => {
+					const current = await this.#lock(tx, lease);
+					const decision = planEvaluationScoreFailureV1(
+						current,
+						"SCORER_AUTHORIZATION_DENIED",
+					);
+					if (decision.state)
+						await this.#save(tx, { ...current, ...decision.state });
+				});
+			}
 			if (
 				error instanceof EvaluationModelNotSentErrorV1 ||
 				(error &&
@@ -506,40 +519,14 @@ export class PostgresEvaluationScoringV1
 	) {
 		return this.#transaction(async (tx) => {
 			const intent = await this.#lock(tx, lease);
-			if (["scored", "not_applicable", "failed"].includes(intent.status))
-				return { retry: false, delayMs: intent.scorer.retryDelayMs };
-			if (intent.status === "result_ready") {
-				const retry = intent.attempts < intent.scorer.maxAttempts;
-				await this.#save(tx, {
-					...intent,
-					attempts: Math.min(intent.scorer.maxAttempts, intent.attempts + 1),
-					revision: intent.revision + 1,
-					status: retry ? "result_ready" : "failed",
-					failureCode: code,
-				});
-				return { retry, delayMs: intent.scorer.retryDelayMs };
-			}
-			// Reconcile an unknown send against its stored result; prepare never
-			// sends the model again from unknown.
-
-			const attempts = intent.attempts + (preparationFailure ? 1 : 0);
-			const retry =
-				intent.status === "unknown"
-					? !preparationFailure || attempts < intent.scorer.maxAttempts
-					: attempts < intent.scorer.maxAttempts;
-			await this.#save(tx, {
-				...intent,
-				status:
-					intent.status === "unknown"
-						? "unknown"
-						: retry
-							? "pending"
-							: "failed",
-				revision: intent.revision + 1,
-				failureCode: code,
-				attempts,
-			});
-			return { retry, delayMs: intent.scorer.retryDelayMs };
+			const decision = planEvaluationScoreFailureV1(
+				intent,
+				code,
+				preparationFailure,
+			);
+			if (decision.state)
+				await this.#save(tx, { ...intent, ...decision.state });
+			return { retry: decision.retry, delayMs: decision.delayMs };
 		});
 	}
 	async load(
@@ -633,24 +620,32 @@ export class PostgresEvaluationScoringV1
 				Date.parse(review.metadataExpiresAt) <= Date.now()
 			)
 				throw new EvaluationDataErrorV1("denied");
-			const result = parseEvaluationScoreOutcomeV1(
-				await this.#derived.read(
-					{ ...req, credentialScope: "eval:review" },
-					review.objectId,
-					"review",
-				),
-				intent.scorer,
+			const content = await this.#derived.readRetained(
+				{ ...req, credentialScope: "eval:review" },
+				{
+					id: review.objectId,
+					datasetId: intent.datasetId,
+					versionId: intent.versionId,
+					kind: "review",
+				},
 			);
+			const result =
+				content.contentStatus === "available"
+					? parseEvaluationScoreOutcomeV1(content.value, intent.scorer)
+					: null;
 			const item = {
 				reviewId: review.reviewId,
 				scoreId: review.scoreId,
 				scoreRevision: review.scoreRevision,
 				reviewer: review.reviewer,
-				result: {
-					status: result.status,
-					value: result.value,
-					reason: result.reason,
-				},
+				contentStatus: content.contentStatus,
+				result: result
+					? {
+							status: result.status,
+							value: result.value,
+							reason: result.reason,
+						}
+					: null,
 			};
 			const bytes = Buffer.byteLength(JSON.stringify(item));
 			if (pageBytes + bytes > 2 * 1024 * 1024) {

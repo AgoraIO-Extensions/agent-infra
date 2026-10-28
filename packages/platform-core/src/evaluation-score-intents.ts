@@ -24,6 +24,12 @@ export class EvaluationModelNotSentErrorV1 extends Error {
 		super("EVALUATION_MODEL_NOT_SENT");
 	}
 }
+/** Trusted adapter observed a direct authentication/authorization refusal. */
+export class EvaluationModelAuthorizationDeniedErrorV1 extends Error {
+	constructor() {
+		super("EVALUATION_MODEL_AUTHORIZATION_DENIED");
+	}
+}
 export interface EvaluationScoreIntentV1 {
 	id: string;
 	sampleTaskId: string;
@@ -508,5 +514,72 @@ export function projectEvaluationScoringContextV1(input: {
 		score: result
 			? { status: result.status, value: result.value, reason: result.reason }
 			: null,
+	};
+}
+
+export function planEvaluationScoreFailureV1(
+	intent: Pick<
+		EvaluationScoreIntentV1,
+		"status" | "attempts" | "revision" | "failureCode"
+	> & { scorer: Pick<EvaluationScorerV1, "maxAttempts" | "retryDelayMs"> },
+	code:
+		| "SCORER_UNAVAILABLE"
+		| "SCORER_RESULT_INVALID"
+		| "SCORER_AUTHORIZATION_DENIED",
+	preparationFailure = false,
+): {
+	state: Pick<
+		EvaluationScoreIntentV1,
+		"status" | "attempts" | "revision" | "failureCode"
+	> | null;
+	retry: boolean;
+	delayMs: number;
+} {
+	const delayMs = intent.scorer.retryDelayMs;
+	if (["scored", "not_applicable", "failed"].includes(intent.status))
+		return { state: null, retry: false, delayMs };
+	if (code === "SCORER_AUTHORIZATION_DENIED")
+		return {
+			state: {
+				status: "failed",
+				attempts: intent.attempts,
+				revision: intent.revision + 1,
+				failureCode: code,
+			},
+			retry: false,
+			delayMs,
+		};
+	if (intent.status === "result_ready") {
+		const retry = intent.attempts < intent.scorer.maxAttempts;
+		return {
+			state: {
+				status: retry ? "result_ready" : "failed",
+				attempts: Math.min(intent.scorer.maxAttempts, intent.attempts + 1),
+				revision: intent.revision + 1,
+				failureCode: code,
+			},
+			retry,
+			delayMs,
+		};
+	}
+	const attempts = Math.min(
+		intent.scorer.maxAttempts,
+		intent.attempts + (preparationFailure ? 1 : 0),
+	);
+	// Unknown may reconcile its original result once; it must never resend a model call.
+	const retry =
+		intent.status === "unknown"
+			? !preparationFailure || attempts < intent.scorer.maxAttempts
+			: attempts < intent.scorer.maxAttempts;
+	return {
+		state: {
+			status:
+				intent.status === "unknown" ? "unknown" : retry ? "pending" : "failed",
+			attempts,
+			revision: intent.revision + 1,
+			failureCode: code,
+		},
+		retry,
+		delayMs,
 	};
 }
