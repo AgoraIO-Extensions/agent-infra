@@ -182,6 +182,10 @@ export interface EvaluationExperimentTransactionV1 {
 	audit(action: string, targetId: string): Promise<void>;
 }
 export interface EvaluationExperimentTransactionPortV1 {
+	authorizeAgents(
+		request: EvaluationRequestV1,
+		experiment: EvaluationExperimentV1,
+	): Promise<void>;
 	policyCheckpoint(): Promise<{
 		revision: number;
 		digest: string;
@@ -257,12 +261,14 @@ export function createEvaluationExperimentsV1(options: {
 			);
 			if (!isDeepStrictEqual(authority.principal, experiment.principal))
 				throw new EvaluationDataErrorV1("denied");
+			await options.transaction.authorizeAgents(request, experiment);
 			const tasks = await options.transaction.samples(id, limit + 1, cursor);
 			await options.data.authorizeRun(
 				request,
 				experiment.datasetId,
 				experiment.versionId,
 			);
+			await options.transaction.authorizeAgents(request, experiment);
 			await checkPolicy();
 			return {
 				experiment,

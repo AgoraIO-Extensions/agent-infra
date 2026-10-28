@@ -15,7 +15,9 @@ import {
 	parseEvaluationExperimentPolicyV1,
 	parseEvaluationExperimentV1,
 	parseEvaluationSampleTaskV1,
+	parseEvaluationScoreIntentV1,
 	parseTaskAuthorizationBoundaryV1,
+	planEvaluationCancelledScoreV1,
 	projectEvaluationExecutionFactsV1,
 	requireEvaluationExperimentOwnerV1,
 	resolveCurrentPersonalApiUserV1,
@@ -55,6 +57,78 @@ export class PostgresEvaluationExperimentsV1
 			? { revision: +row.revision, digest: row.digest, now: row.now }
 			: null;
 	}
+	async authorizeAgents(
+		request: EvaluationRequestV1,
+		experiment: EvaluationExperimentV1,
+	) {
+		return this.#client.begin(async (tx) => {
+			await tx`select pg_advisory_xact_lock(hashtextextended('evaluation-data-v1',0))`;
+			const dataStore = new PostgresEvaluationDataStoreV1({
+				...this.options,
+				transaction: tx,
+			});
+			const actor = await dataStore.authenticate(
+				{ ...request, credentialScope: "eval:run" },
+				true,
+			);
+			requireEvaluationExperimentOwnerV1(experiment, actor);
+			const rows = await tx<
+				{
+					boundary: unknown;
+					sample_data: unknown;
+					execution_id: string;
+					conversation_id: string;
+					actor_id: string;
+					principal_type: string;
+					agent_id: string;
+					channel_id: string;
+					execution_source: string;
+				}[]
+			>`select a.boundary,s.data as sample_data,e.execution_id,e.conversation_id,e.actor_id,e.principal_type,e.agent_id,e.channel_id,e.execution_source from platform.evaluation_sample_tasks s join platform.conversation_executions e on e.execution_id=s.execution_id join platform.task_authorization_records a on a.execution_id=e.execution_id where s.experiment_id=${experiment.experimentId} and a.revoked_at is null order by s.id limit 1001`;
+			if (
+				!rows.length ||
+				rows.length > 1000 ||
+				rows.length !==
+					experiment.sampleIds.length * experiment.variantIds.length
+			)
+				throw new EvaluationDataErrorV1("denied");
+			const agents = new Set<string>();
+			for (const row of rows) {
+				const boundary = parseTaskAuthorizationBoundaryV1(row.boundary);
+				const sample = parseEvaluationSampleTaskV1(row.sample_data);
+				if (
+					boundary.principal.kind !== actor.kind ||
+					boundary.principal.id !== actor.id ||
+					boundary.evaluation?.experimentId !== experiment.experimentId ||
+					boundary.evaluation.datasetId !== experiment.datasetId ||
+					boundary.evaluation.versionId !== experiment.versionId ||
+					sample.experimentId !== experiment.experimentId ||
+					sample.executionId !== row.execution_id ||
+					sample.conversationId !== row.conversation_id ||
+					sample.requested.agentId !== row.agent_id ||
+					row.agent_id !== boundary.agentId ||
+					row.principal_type !== actor.kind ||
+					row.actor_id !== actor.id ||
+					row.channel_id !== "eval" ||
+					row.execution_source !== "eval"
+				)
+					throw new EvaluationDataErrorV1("denied");
+				agents.add(boundary.agentId);
+			}
+			for (const agentId of [...agents].sort()) {
+				const grant = await readCurrentTaskApiUseGrantV1(tx, {
+					principal: actor,
+					agentId,
+				});
+				if (!grant || grant.revoked) throw new EvaluationDataErrorV1("denied");
+			}
+			await dataStore.authenticate(
+				{ ...request, credentialScope: "eval:run" },
+				true,
+			);
+		});
+	}
+
 	async target(id: string) {
 		const [row] = await this.#client<
 			{ data: unknown }[]
@@ -126,6 +200,7 @@ export class PostgresEvaluationExperimentsV1
 	async cancel(request: EvaluationRequestV1, id: string, key: string) {
 		return this.#client
 			.begin(async (tx) => {
+				await tx`select pg_advisory_xact_lock(hashtextextended('evaluation-data-v1',0))`;
 				const store = new PostgresEvaluationDataStoreV1({
 					...this.options,
 					transaction: tx,
@@ -188,6 +263,44 @@ export class PostgresEvaluationExperimentsV1
 					revision: experiment.revision + 1,
 				};
 				await tx`update platform.evaluation_experiments set status='cancelled',revision=${cancelled.revision},data=${tx.json(cancelled as unknown as postgres.JSONValue)} where id=${id}`;
+				const humanScores = await tx<
+					{
+						id: string;
+						sample_task_id: string;
+						execution_id: string;
+						task_status: string;
+						data: unknown;
+					}[]
+				>`select i.id,i.sample_task_id,s.execution_id,t.status as task_status,i.data from platform.evaluation_score_intents i join platform.evaluation_sample_tasks s on s.id=i.sample_task_id join platform.conversation_executions t on t.execution_id=s.execution_id where s.experiment_id=${id} and i.status='awaiting_human' for update of i`;
+				for (const row of humanScores) {
+					const intent = parseEvaluationScoreIntentV1(row.data);
+					if (
+						intent.id !== row.id ||
+						intent.sampleTaskId !== row.sample_task_id ||
+						intent.executionId !== row.execution_id ||
+						intent.experimentId !== id ||
+						intent.principal.kind !== experiment.principal.kind ||
+						intent.principal.id !== experiment.principal.id ||
+						intent.status !== "awaiting_human"
+					)
+						throw new EvaluationDataErrorV1("unavailable");
+					const plan = planEvaluationCancelledScoreV1(
+						intent,
+						"cancelled",
+						row.task_status,
+					);
+					if (plan.outcome !== "settle")
+						throw new EvaluationDataErrorV1("unavailable");
+					const settled = {
+						...intent,
+						status: plan.status,
+						revision: plan.revision,
+						failureCode: plan.failureCode,
+						value: null,
+						passed: null,
+					};
+					await tx`update platform.evaluation_score_intents set status=${settled.status},revision=${settled.revision},data=${tx.json(settled as unknown as postgres.JSONValue)} where id=${intent.id}`;
+				}
 				await tx`insert into platform.audit_events(id,trace_id,request_id,actor_type,actor_id,action,target_type,target_id,outcome,details)values(${randomUUID()},${request.traceId},${request.requestId},${actor.kind},${actor.id},'evaluation.experiment.cancel','evaluation_experiment',${id},'succeeded',${tx.json({ purpose: "eval", returnedMaterial: false })})`;
 				await store.authenticate({ ...request, credentialScope: "eval:run" });
 				return cancelled;

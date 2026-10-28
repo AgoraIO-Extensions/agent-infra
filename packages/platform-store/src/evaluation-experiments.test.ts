@@ -375,6 +375,18 @@ it("preserves application subject and eval source for the default Agent Key", as
 		expect(EvaluationExperimentV1Schema.parse(await replay.json())).toEqual(
 			experiment,
 		);
+		const metadata = () =>
+			fetch(
+				`http://127.0.0.1:${address.port}/api/v2/evaluation/experiments/${experiment.experimentId}`,
+				{ headers: { Authorization: `Bearer ${material}` } },
+			);
+		expect((await metadata()).status).toBe(200);
+		await sql`update platform.agent_principal_grants set revoked_at=clock_timestamp() where principal_type='application' and principal_id='runner' and agent_id=${configuration.agentId} and grant_type='use'`;
+		try {
+			expect((await metadata()).status).toBe(404);
+		} finally {
+			await sql`update platform.agent_principal_grants set revoked_at=null where principal_type='application' and principal_id='runner' and agent_id=${configuration.agentId} and grant_type='use'`;
+		}
 	} finally {
 		await new Promise<void>((resolve, reject) =>
 			server.close((error) => (error ? reject(error) : resolve())),
@@ -443,6 +455,7 @@ it("checks a shorter experiment-policy expiry using fresh DB time before returni
 		loadPolicy: async () => expiring,
 		transaction: {
 			policyCheckpoint: transaction.policyCheckpoint.bind(transaction),
+			authorizeAgents: transaction.authorizeAgents.bind(transaction),
 			target: transaction.target.bind(transaction),
 			samples: transaction.samples.bind(transaction),
 			cancel: transaction.cancel.bind(transaction),
@@ -833,6 +846,19 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 				),
 			).toBe(score.scorer_id === "human" ? "awaiting_human" : "scored");
 		expect(calls).toBe(2);
+		await sql`update platform.agent_principal_grants set revoked_at=clock_timestamp() where agent_id=${configuration.agentId} and principal_type='user' and principal_id='runner' and grant_type='use'`;
+		try {
+			expect(
+				(
+					await fetch(
+						`${baseUrl}/experiments/${experiment.experimentId}?limit=1`,
+						{ headers: { Cookie: "session=runner" } },
+					)
+				).status,
+			).toBe(404);
+		} finally {
+			await sql`update platform.agent_principal_grants set revoked_at=null where agent_id=${configuration.agentId} and principal_type='user' and principal_id='runner' and grant_type='use'`;
+		}
 		const human = scores.find((s) => s.scorer_id === "human");
 		if (!human) throw new Error("missing score");
 		await data.grant(request("admin"), randomUUID(), command.datasetId, {
@@ -3122,3 +3148,101 @@ async function evaluationFileJourney({
 		},
 	};
 }
+
+it("settles human scores after their completed outbox when cancelling an experiment", async () => {
+	const worker = createEvaluationScoringWorkerV1({
+		...database,
+		directory,
+		loadDataPolicy: async () => policy,
+		loadExperimentPolicy: async () => experimentPolicy,
+		storage,
+		taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+		batchSize: 100,
+		leaseMs: 30000,
+		retryDelayMs: 1000,
+		catalog: createDeploymentModelCatalogAdapterV1({
+			load: async () => {
+				throw new Error("Human cannot resolve model");
+			},
+		}),
+		decryptor: {
+			decrypt: async () => {
+				throw new Error("Human cannot read Key");
+			},
+		},
+	});
+	try {
+		const humanCommand = {
+			...(await dataset()),
+			scorerRefs: [{ scorerId: "human", version: "1" }],
+		};
+		await data.grant(request("admin"), randomUUID(), humanCommand.datasetId, {
+			expectedRevision: 4,
+			principal: { kind: "user", id: "runner" },
+			versionIds: [humanCommand.versionId],
+			operations: ["score"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+		const humanExperiment = await core.create(
+			request("runner"),
+			randomUUID(),
+			humanCommand,
+		);
+		for (const task of await experiments.samples(
+			humanExperiment.experimentId,
+			10,
+		)) {
+			await sql`update platform.conversation_executions set status='completed',last_event_sequence=2 where execution_id=${task.executionId}`;
+			await sql`insert into platform.conversation_events(event_id,conversation_id,execution_id,sequence,conversation_cursor,event_type,event_payload,source,adapter_event_key,event_digest,runtime_cursor,occurred_at)values(${randomUUID()},${task.conversationId},${task.executionId},2,2,'text.delta',${sql.json({ type: "text.delta", text: "yes" })},'runtime',${randomUUID()},${"e".repeat(64)},'2',clock_timestamp())`;
+		}
+		await worker.runOnce();
+		expect(
+			await sql`select distinct i.status as score_status,o.status as outbox_status from platform.evaluation_score_intents i join platform.evaluation_sample_tasks s on s.id=i.sample_task_id join platform.outbox_items o on o.scope_id=i.id::text and o.operation='evaluation.score.v1' where s.experiment_id=${humanExperiment.experimentId}`,
+		).toEqual([{ score_status: "awaiting_human", outbox_status: "succeeded" }]);
+		const before =
+			await sql`select i.id,i.data from platform.evaluation_score_intents i join platform.evaluation_sample_tasks s on s.id=i.sample_task_id where s.experiment_id=${humanExperiment.experimentId} order by i.id`;
+		await sql.unsafe(
+			`create function platform.eval_cancel_human_failure()returns trigger language plpgsql as $$ begin if NEW.action='evaluation.experiment.cancel' then raise exception 'synthetic cancel audit failure';end if;return NEW;end $$`,
+		);
+		await sql.unsafe(
+			"create trigger eval_cancel_human_failure before insert on platform.audit_events for each row execute function platform.eval_cancel_human_failure()",
+		);
+		try {
+			await expect(
+				core.cancel(
+					request("runner"),
+					humanExperiment.experimentId,
+					randomUUID(),
+				),
+			).rejects.toThrow();
+			expect(
+				await sql`select i.id,i.data from platform.evaluation_score_intents i join platform.evaluation_sample_tasks s on s.id=i.sample_task_id where s.experiment_id=${humanExperiment.experimentId} order by i.id`,
+			).toEqual(before);
+		} finally {
+			await sql.unsafe(
+				"drop trigger eval_cancel_human_failure on platform.audit_events",
+			);
+			await sql.unsafe("drop function platform.eval_cancel_human_failure()");
+		}
+		await core.cancel(
+			request("runner"),
+			humanExperiment.experimentId,
+			randomUUID(),
+		);
+		expect(
+			await sql`select distinct i.status as score_status,i.data->>'failureCode' as code,o.status as outbox_status from platform.evaluation_score_intents i join platform.evaluation_sample_tasks s on s.id=i.sample_task_id join platform.outbox_items o on o.scope_id=i.id::text and o.operation='evaluation.score.v1' where s.experiment_id=${humanExperiment.experimentId}`,
+		).toEqual([
+			{
+				score_status: "not_applicable",
+				code: "EXPERIMENT_CANCELLED",
+				outbox_status: "succeeded",
+			},
+		]);
+		expect(
+			(await core.get(request("runner"), humanExperiment.experimentId))
+				.experiment.status,
+		).toBe("cancelled");
+	} finally {
+		await worker.close();
+	}
+}, 30000);

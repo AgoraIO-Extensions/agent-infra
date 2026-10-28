@@ -2689,7 +2689,9 @@ Execution 的持久绑定收口元数据，不恢复正文、Key 或模型使用
 `not_applicable/EXPERIMENT_CANCELLED`；业务停止尚未确认时继续等待元数据，不伪造 Task 终态。
 既有评分终态以及已发送 unknown、已保存 result_ready 保留原事实和引用，停止取消实验的后续评分
 I/O；已保存 result_ready 的评分 outbox 完成控制收口，但意图仍保留 result_ready 和已知结果引用，
-不冒称 scored，也不得据此重新发送模型。取消不声称未知模型调用从未发生。
+不冒称 scored，也不得据此重新发送模型。已结束准备 outbox 的 awaiting_human 意图由同一实验
+取消事务直接收口，并与取消审计共同回滚，不等待已完成的 outbox 再次投递。取消不声称未知模型调用
+从未发生。
 模型发送前 Key/Catalog 等前置失败以可信未发送结果进入有限重试；进入模型传输后失联保留 unknown，
 后续只核实同一派生结果意图，不再调用模型。可信评分 Adapter 从原获准端点直接收到 HTTP 401/403
 时记录 `SCORER_AUTHORIZATION_DENIED` 并结束为 failed，不回退 Key；重定向、普通异常或失联不能
@@ -2710,7 +2712,9 @@ Worker decryptor，并显式配置 taskPolicy、batchSize、leaseMs 和 retryDel
 数据集、样本集合与 rubric 的版本不可变。新版本保存来源版本和必要变更元数据；真实材料导入记录
 用途许可及脱敏确认的受控引用，不自动复制线上会话。实验固定基线/候选、同一数据集/rubric 版本、
 评分器版本、工具环境声明与原发起主体，分别保留请求配置和每例实际 Execution 事实。
-实验逐例查询返回请求配置、Task 当前状态及最后事件序号；Worker 首次投递准备在同一事务固定实际
+实验逐例查询在读取前后同时复核原主体对全部样本 Agent 的当前 use 授权和固定 Task 绑定，
+不因数据 run grant 仍有效而绕过 Agent 撤权；该历史读取不要求实验仍 active 或 Runtime 仍可投递，
+取消本身不撤销仍有效的读取权限。查询返回请求配置、Task 当前状态及最后事件序号；Worker 首次投递准备在同一事务固定实际
 Runtime 配置修订、镜像 Digest 和资源配置摘要，`preparedRuntime` 只证明投递准备，收到 Runtime
 事件后才标记 `runtimeObserved`。实际模型/工具来自持久操作事件，保留 operation/attempt/sequence、
 阶段、耗时和用量；intent 不算实际已调用，无事实明确为空。单例首屏最多 100 条操作事实，超过时
