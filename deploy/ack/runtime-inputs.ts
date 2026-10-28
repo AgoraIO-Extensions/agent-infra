@@ -18,6 +18,7 @@ type Files = {
 	templates: string;
 	capacity: string;
 	requests: string;
+	login?: string;
 };
 const ownerLabel = "agent-infra.agora.io/bootstrap-id";
 const revisionAnnotation = "agent-infra.agora.io/runtime-inputs-hash";
@@ -75,6 +76,17 @@ async function prepare(files: Files, rendered: string, sourceSha: string) {
 			writes.set(file, { before, after });
 		}
 	};
+	if (files.login) {
+		const { verifiedLoginCandidate } = await import("./bootstrap-login.ts");
+		const candidate = await verifiedLoginCandidate(files.login, sourceSha, requests.origin);
+		const api = consumers.find((c) => c.component === "api")!;
+		assert(candidate.secretRef.name === api.secretName && candidate.secretRef.key === "deployment-identities.json", "RUNTIME_INPUT_IDENTITY_TARGET_INVALID");
+		const secret = secrets.find((s) => s.desired.metadata.name === api.secretName)!;
+		const target = secret.files[candidate.secretRef.key];
+		assert(typeof target === "string", "RUNTIME_INPUT_IDENTITY_TARGET_MISSING");
+		await stageFile(target, candidate.bytes);
+		secret.desired.data[candidate.secretRef.key] = candidate.bytes.toString("base64");
+	}
 	const profilesDocument = await privateJson(capacity.profilesFile);
 	assert(profilesDocument.schemaVersion === 1 && Array.isArray(profilesDocument.profiles));
 	let profiles = profilesDocument.profiles;
@@ -214,7 +226,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			input, encoding: "utf8", timeout: args.includes("rollout") ? 310_000 : 30_000,
 			maxBuffer: 16 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
 		});
-		const result = await publishRuntimeInputs({ bootstrap, templates, capacity, requests }, await readFile(rendered, "utf8"), source, run, mode === "apply");
+		const result = await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined }, await readFile(rendered, "utf8"), source, run, mode === "apply");
 		process.stdout.write(`${JSON.stringify(result)}\n`);
 	} catch {
 		process.stderr.write("ACK_RUNTIME_INPUTS_INVALID\n");

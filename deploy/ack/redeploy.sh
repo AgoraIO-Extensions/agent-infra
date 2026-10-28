@@ -28,7 +28,7 @@ die() {
 
 usage() {
 	cat <<'EOF'
-Usage: deploy/ack/redeploy.sh <capture-inputs|plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|template-preflight|runtime-inputs|bootstrap-credential|cleanup-plan|deploy|provision|validate|clean|destroy|all>
+Usage: deploy/ack/redeploy.sh <capture-inputs|plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|template-preflight|bootstrap-login|runtime-inputs|bootstrap-credential|cleanup-plan|deploy|provision|validate|clean|destroy|all>
 
 Required for plan/deploy/validate:
   ACK_KUBECONFIG   private kubeconfig path
@@ -51,6 +51,7 @@ Optional validation inputs:
   ACK_TEMPLATE_PREFLIGHT_JOBS_FILE private JSON list of four template preflight jobs
   ACK_TEMPLATE_IMAGE_MANIFEST private amd64 four-template image manifest
   ACK_CREDENTIAL_BOOTSTRAP_FILE private browser storageState credential request
+  ACK_LOGIN_BOOTSTRAP_FILE private existing login inputs and identity output binding
   ACK_CLEANUP_PLAN_FILE    private cluster/namespace ownership input for cleanup-plan
   ACK_AGENT_STATE_DIR      external existing 0700 directory for private ID bindings
   ACK_BROWSER_BLUEPRINT_DIR private browser configs without a fixed Agent ID
@@ -210,6 +211,14 @@ bootstrap_credential() {
 		die "API credential bootstrap failed; inspect only the redacted receipt: $evidence_dir/api-credential.json"
 	fi
 	echo "ack-redeploy: API credential bootstrap passed; evidence=$evidence_dir"
+}
+
+bootstrap_login() {
+	require_file ACK_LOGIN_BOOTSTRAP_FILE "${ACK_LOGIN_BOOTSTRAP_FILE:-}"
+	prepare_evidence
+	if ! node "$repo_root/deploy/ack/bootstrap-login.ts" "$ACK_LOGIN_BOOTSTRAP_FILE" >"$evidence_dir/login.json"; then
+		die "fresh login or private identity preparation failed"
+	fi
 }
 
 runtime_inputs() {
@@ -440,7 +449,17 @@ NODE
 
 validate_custom_agents() {
 	local configs=${ACK_CUSTOM_AGENT_CONFIGS:-}
-	[[ -n "$configs" ]] || die "ACK_CUSTOM_AGENT_CONFIGS is required"
+	if ! ACK_CUSTOM_AGENT_CONFIGS="$configs" node --experimental-strip-types "$repo_root/deploy/ack/custom-validation.ts" \
+		"${ACK_AGENT_REQUESTS_FILE:-}" "${ACK_AGENT_STATE_DIR:-}" "$evidence_dir" "$source_sha" >"$evidence_dir/custom-validation-plan.json"; then
+		die "custom Agent bindings, conversation evidence, or interaction-mode probes are incomplete"
+	fi
+	local web_count
+	web_count=$(node - "$evidence_dir/custom-validation-plan.json" <<'NODE'
+const fs = require("node:fs");
+process.stdout.write(String(JSON.parse(fs.readFileSync(process.argv[2], "utf8")).webProbeCount));
+NODE
+)
+	[[ "$web_count" -gt 0 ]] || return 0
 	local probe=${ACK_CUSTOM_AGENT_PROBE:-web}
 	local script
 	case "$probe" in
@@ -567,6 +586,7 @@ case "$command" in
 	bootstrap-inputs) bootstrap_inputs apply ;;
 	bootstrap-database) bootstrap_database ;;
 	bootstrap-credential) bootstrap_credential ;;
+	bootstrap-login) bootstrap_login ;;
 	template-preflight) template_preflight ;;
 	runtime-inputs) runtime_inputs ;;
 	cleanup-plan) cleanup_plan ;;
@@ -589,6 +609,9 @@ case "$command" in
 			template_preflight
 		else
 			require_file ACK_TEMPLATE_VALIDATIONS_FILE "${ACK_TEMPLATE_VALIDATIONS_FILE:-}"
+		fi
+		if [[ -n "${ACK_LOGIN_BOOTSTRAP_FILE:-}" ]]; then
+			bootstrap_login
 		fi
 		runtime_inputs
 		if [[ -n "${ACK_CREDENTIAL_BOOTSTRAP_FILE:-}" ]]; then

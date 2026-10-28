@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { prepareBootstrapInputs } from "../deploy/ack/bootstrap-inputs.ts";
+import { bootstrapLogin } from "../deploy/ack/bootstrap-login.ts";
 import { publishRuntimeInputs } from "../deploy/ack/runtime-inputs.ts";
 import { templatePreflightValidationReceipt } from "../deploy/ack/template-validation.mjs";
 import { checkWorkloadCapacity } from "../deploy/ack/workload-capacity.ts";
@@ -584,6 +587,108 @@ test("a concurrent Secret edit during rollout cannot be reported as published in
 	);
 });
 
+for (const wrongTarget of [false, true]) {
+	test(`publication binds a verified login candidate to the API configuration only (wrongTarget=${wrongTarget})`, async (t) => {
+		const f = await fixture(t);
+		const server = createServer(async (request, response) => {
+			if (request.url === "/auth/login") {
+				let body = "";
+				for await (const chunk of request) body += chunk;
+				const token = JSON.parse(body).login === "fixture-owner" ? "A" : "B";
+				response.writeHead(204, {
+					"Set-Cookie": `__Host-platform-session=${token.repeat(43)}; Path=/; HttpOnly; SameSite=Lax`,
+				});
+				response.end();
+				return;
+			}
+			const digit = request.headers.cookie?.includes("B".repeat(43))
+				? "2"
+				: "1";
+			response.writeHead(200, { "Content-Type": "application/json" });
+			response.end(
+				JSON.stringify({
+					schemaVersion: 1,
+					user: {
+						userId: `${digit.repeat(8)}-${digit.repeat(4)}-${digit.repeat(4)}-${digit.repeat(4)}-${digit.repeat(12)}`,
+					},
+				}),
+			);
+		});
+		server.listen(0, "127.0.0.1");
+		await once(server, "listening");
+		t.after(async () => {
+			server.closeAllConnections();
+			await new Promise((resolve) => server.close(resolve));
+		});
+		const origin = `http://127.0.0.1:${server.address().port}`;
+		const directory = join(f.files.bootstrap, "..");
+		const subjects = [];
+		for (const name of ["owner", "other"])
+			subjects.push({
+				name,
+				loginFile: await f.save(
+					join(directory, `${name}.login`),
+					`fixture-${name}`,
+				),
+				passwordFile: await f.save(
+					join(directory, `${name}.password`),
+					"fixture-password",
+				),
+				storageStateFile: join(directory, `${name}.state`),
+			});
+		const target = await f.save(join(directory, "deployment-identities.json"), {
+			subjects: {},
+		});
+		f.bootstrap.objects[0].files["deployment-identities.json"] = target;
+		await f.save(f.files.bootstrap, f.bootstrap);
+		f.cluster.get("secret/api-config").data["deployment-identities.json"] = (
+			await readFile(target)
+		).toString("base64");
+		const requests = JSON.parse(await readFile(f.files.requests));
+		requests.origin = origin;
+		await f.save(f.files.requests, requests);
+		const config = {
+			schemaVersion: 1,
+			origin,
+			identityFile: join(directory, "identity-candidate.json"),
+			subjects,
+			blueprints: [],
+			identitySecretRef: {
+				name: wrongTarget ? "worker-config" : "api-config",
+				key: "deployment-identities.json",
+			},
+		};
+		f.files.login = await f.save(join(directory, "login.json"), config);
+		await bootstrapLogin(f.files.login, source);
+		if (wrongTarget) {
+			await assert.rejects(
+				publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+				/IDENTITY_TARGET_INVALID/,
+			);
+			assert.equal(f.mutations.length, 0);
+		} else {
+			await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+			assert.deepEqual(
+				Buffer.from(
+					f.cluster.get("secret/api-config").data["deployment-identities.json"],
+					"base64",
+				),
+				await readFile(config.identityFile),
+			);
+			assert.equal(
+				f.cluster.get("secret/worker-config").data[
+					"deployment-identities.json"
+				],
+				undefined,
+			);
+			assert.deepEqual(
+				await readFile(target),
+				await readFile(config.identityFile),
+			);
+		}
+	});
+}
+
 test("failed Secret readback prevents consumer rollout and local input promotion", async (t) => {
 	const f = await fixture(t);
 	f.afterReplace((object) => {
@@ -625,6 +730,7 @@ deploy() { echo deploy; }
 template_preflight() { echo preflight; }
 runtime_inputs() { echo publish; ${failPublication ? "return 1" : "return 0"}; }
 bootstrap_credential() { echo credential; }
+bootstrap_login() { echo login; }
 node() { echo check-bindings; }
 provision() { echo provision; }
 validate() { echo validate; }
@@ -645,12 +751,14 @@ ${dispatch}
 						ACK_BOOTSTRAP_INPUTS_FILE: "/synthetic/bootstrap",
 						ACK_WORKLOAD_CAPACITY_FILE: "/synthetic/capacity",
 						ACK_CREDENTIAL_BOOTSTRAP_FILE: "",
+						ACK_LOGIN_BOOTSTRAP_FILE: "/synthetic/login",
 					},
 				},
 			);
 			assert.equal(result.status, failPublication ? 1 : 0, result.stderr);
 			const stages = result.stdout.trim().split("\n");
 			assert(stages.includes("publish"));
+			assert(stages.indexOf("login") < stages.indexOf("publish"));
 			assert.equal(stages.includes("preflight"), fresh);
 			if (failPublication) {
 				assert(!stages.includes("check-bindings"));
