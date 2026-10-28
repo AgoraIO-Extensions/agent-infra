@@ -31,7 +31,30 @@ function authority(channelId = "web"): ConversationExecutionAuthorityV1 {
 			accessSources:
 				channelId === "api" || channelId === "api:user"
 					? [{ kind: "api-use", useGrantRevision: "use-1" }]
-					: [{ kind: "organization", organizationId: "org-1" }],
+					: channelId === "eval"
+						? [{ kind: "eval-use", useGrantRevision: "use-1" }]
+						: [{ kind: "organization", organizationId: "org-1" }],
+			...(channelId === "eval"
+				? {
+						evaluation: {
+							schemaVersion: 1,
+							experimentId: "experiment",
+							sampleId: "sample",
+							variantId: "baseline",
+							datasetId: "dataset",
+							versionId: "version",
+							grantId: "run-grant",
+							grantRevision: 1,
+							policyId: "policy",
+							policyRevision: 1,
+							configurationRevision: 1,
+							modelOptionId: null,
+							reasoningLevel: null,
+							toolEnvironment: "synthetic",
+							expiresAt: "2099-01-01T00:00:00.000Z",
+						},
+					}
+				: {}),
 		},
 	};
 }

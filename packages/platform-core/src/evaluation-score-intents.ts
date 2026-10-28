@@ -405,3 +405,40 @@ export function parseEvaluationScoreIntentV1(
 	}
 	return { ...v, principal, scorer } as unknown as EvaluationScoreIntentV1;
 }
+
+/** Stored independent review binding; content remains in its purpose-bound object. */
+export function parseEvaluationReviewRecordV1(input: unknown) {
+	const value = snapshotObject(input, [
+		"reviewId",
+		"scoreId",
+		"scoreRevision",
+		"reviewer",
+		"objectId",
+		"metadataExpiresAt",
+	]);
+	for (const key of ["reviewId", "scoreId", "objectId"])
+		if (
+			typeof value[key] !== "string" ||
+			!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(
+				value[key],
+			)
+		)
+			throw new EvaluationDataErrorV1("unavailable");
+	if (
+		typeof value.scoreRevision !== "number" ||
+		!Number.isSafeInteger(value.scoreRevision) ||
+		value.scoreRevision < 1 ||
+		typeof value.metadataExpiresAt !== "string" ||
+		!Number.isFinite(Date.parse(value.metadataExpiresAt)) ||
+		new Date(value.metadataExpiresAt).toISOString() !== value.metadataExpiresAt
+	)
+		throw new EvaluationDataErrorV1("unavailable");
+	return {
+		reviewId: value.reviewId as string,
+		scoreId: value.scoreId as string,
+		scoreRevision: value.scoreRevision,
+		reviewer: parseTaskPrincipalV1(value.reviewer),
+		objectId: value.objectId as string,
+		metadataExpiresAt: value.metadataExpiresAt,
+	};
+}

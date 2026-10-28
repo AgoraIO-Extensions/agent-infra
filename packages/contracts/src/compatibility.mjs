@@ -6352,6 +6352,7 @@ function normalizeEvaluationExperiments3639(document) {
 		"EvaluationExperimentCreateV1",
 		"EvaluationExperimentPageV1",
 		"EvaluationExperimentV1",
+		"EvaluationReviewPageV1",
 		"EvaluationReviewV1",
 		"EvaluationScoreMetadataV1",
 		"EvaluationScoreSubmitV1",
@@ -6369,14 +6370,14 @@ function normalizeEvaluationExperiments3639(document) {
 				paths.map((path) => [path, document.paths[path]]),
 			),
 			schemas: values,
-		}) === "2d0693e02cfd989e3f28c2d3855eddcafed30c8645ad4e5cb361775c0c8b8a9d"
+		}) === "7afb61060c4d2d3d9843f09342b8faf2e2d54f8a7aee46b97cf6bf74d2d198a6"
 	) {
 		for (const path of paths) delete normalized.paths[path];
 		for (const name of schemas) delete normalized.components.schemas[name];
 	} else if (
 		found.length === 0 &&
 		digest(values) ===
-			"f42133c0198963e0f346a86e9c798fb632ab2c5cdec20de6353107aca38e8d94"
+			"48b47dc538e818b510eb5006b2022788f372a36a269d1f3ac021f174b955ad77"
 	)
 		for (const name of schemas) delete normalized.components.schemas[name];
 	const scopes = [

@@ -2,6 +2,7 @@ import {
 	EvaluationExperimentCreateV1Schema,
 	EvaluationExperimentPageV1Schema,
 	EvaluationExperimentV1Schema,
+	EvaluationReviewPageV1Schema,
 	EvaluationReviewV1Schema,
 	EvaluationScoreMetadataV1Schema,
 	EvaluationScoreSubmitV1Schema,
@@ -57,7 +58,10 @@ export function registerEvaluationExperimentRoutesV1(
 				(url.search &&
 					!(
 						request.method === "GET" &&
-						url.pathname.startsWith("/api/v2/evaluation/experiments/")
+						(url.pathname.startsWith("/api/v2/evaluation/experiments/") ||
+							/^\/api\/v2\/evaluation\/scores\/[^/]+\/reviews$/.test(
+								url.pathname,
+							))
 					)) ||
 				[
 					"x-principal",
@@ -85,7 +89,11 @@ export function registerEvaluationExperimentRoutesV1(
 						},
 			};
 			const path = url.pathname.split("/");
-			if (path.at(-1) === "experiments" && request.method === "POST")
+			if (
+				path.length === 5 &&
+				path[4] === "experiments" &&
+				request.method === "POST"
+			)
 				return context.json(
 					EvaluationExperimentV1Schema.parse(
 						await input.experiments.create(
@@ -179,7 +187,36 @@ export function registerEvaluationExperimentRoutesV1(
 							path[6] === "review-context" ? "review" : "score",
 						)) as object,
 					);
-				if (request.method === "POST") {
+				if (
+					request.method === "GET" &&
+					path.length === 7 &&
+					path[6] === "reviews"
+				) {
+					for (const key of url.searchParams.keys())
+						if (!["limit", "cursor"].includes(key))
+							throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+					const limit = url.searchParams.has("limit")
+						? z.coerce
+								.number()
+								.int()
+								.min(1)
+								.max(100)
+								.parse(url.searchParams.get("limit"))
+						: 20;
+					const cursor = url.searchParams.has("cursor")
+						? z.uuid().parse(url.searchParams.get("cursor"))
+						: undefined;
+					return context.json(
+						EvaluationReviewPageV1Schema.parse(
+							await input.scoring.reviews(trusted, id, limit, cursor),
+						),
+					);
+				}
+				if (
+					request.method === "POST" &&
+					path.length === 7 &&
+					["reviews", "human"].includes(path[6] ?? "")
+				) {
 					const body = (
 						await parseJson(
 							request,

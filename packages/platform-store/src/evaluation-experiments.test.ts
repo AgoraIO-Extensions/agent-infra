@@ -554,6 +554,16 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 	);
 	const baseUrl = `http://127.0.0.1:${apiAddress.port}/api/v2/evaluation`;
 	const malformed = [
+		await fetch(`${baseUrl}/scores/${randomUUID()}/experiments`, {
+			method: "POST",
+			headers: {
+				Cookie: "session=runner",
+				"Content-Type": "application/json",
+				"Idempotency-Key": randomUUID(),
+			},
+			body: JSON.stringify(command),
+		}),
+
 		await fetch(
 			`${baseUrl}/experiments/${experiment.experimentId}?limit=1&limit=2`,
 			{ headers: { Cookie: "session=runner" } },
@@ -583,7 +593,7 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 			body: JSON.stringify({ actorId: "admin" }),
 		}),
 	];
-	expect(malformed.map((r) => r.status)).toEqual([400, 400, 404, 400]);
+	expect(malformed.map((r) => r.status)).toEqual([404, 400, 400, 404, 400]);
 	const metadata = await fetch(
 		`${baseUrl}/experiments/${experiment.experimentId}?limit=1`,
 		{ headers: { Cookie: "session=runner" } },
@@ -838,6 +848,32 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 		expect(reviewContext.status).toBe(200);
 		expect(await reviewContext.json()).toEqual(result);
 		const reviewKey = randomUUID();
+		await sql.unsafe(
+			`create function platform.eval_review_audit_failure() returns trigger language plpgsql as $$ begin if NEW.action='evaluation.score.reviewed' then raise exception 'synthetic audit unavailable'; end if; return NEW; end $$`,
+		);
+		await sql.unsafe(
+			"create trigger eval_review_audit_failure before insert on platform.audit_events for each row execute function platform.eval_review_audit_failure()",
+		);
+		try {
+			const failure = await fetch(`${baseUrl}/scores/${human.id}/reviews`, {
+				method: "POST",
+				headers: {
+					Cookie: "session=reviewer",
+					"Content-Type": "application/json",
+					"Idempotency-Key": reviewKey,
+				},
+				body: JSON.stringify({ expectedRevision: saved.revision, result }),
+			});
+			expect(failure.status).toBe(503);
+			expect(
+				await sql`select count(*)::int as count from platform.evaluation_score_reviews where score_id=${human.id}`,
+			).toEqual([{ count: 0 }]);
+		} finally {
+			await sql.unsafe(
+				"drop trigger eval_review_audit_failure on platform.audit_events",
+			);
+			await sql.unsafe("drop function platform.eval_review_audit_failure()");
+		}
 		const reviewed = await http(
 			`/scores/${human.id}/reviews`,
 			"reviewer",
@@ -852,6 +888,38 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 				reviewKey,
 			),
 		).toEqual(reviewed);
+		const reviewHistory = await fetch(
+			`${baseUrl}/scores/${human.id}/reviews?limit=1`,
+			{ headers: { Cookie: "session=reviewer" } },
+		);
+		expect(reviewHistory.status).toBe(200);
+		const history = await reviewHistory.json();
+		expect(history).toEqual({
+			items: [{ ...reviewed, result }],
+			nextCursor: null,
+		});
+		expect(
+			(
+				await fetch(`${baseUrl}/scores/${human.id}/reviews`, {
+					headers: { Cookie: "session=runner" },
+				})
+			).status,
+		).toBe(404);
+		expect(
+			(
+				await fetch(
+					`${baseUrl}/scores/${human.id}/reviews?cursor=${randomUUID()}`,
+					{ headers: { Cookie: "session=reviewer" } },
+				)
+			).status,
+		).toBe(200);
+		expect(
+			(
+				await fetch(`${baseUrl}/scores/${human.id}/reviews?limit=1&limit=2`, {
+					headers: { Cookie: "session=reviewer" },
+				})
+			).status,
+		).toBe(400);
 		const [audit] =
 			await sql`select actor_id from platform.audit_events where action='evaluation.score.reviewed' and target_id=${human.id}`;
 		expect(audit?.actor_id).toBe("reviewer");
@@ -1476,6 +1544,7 @@ it.each([
 	"post-send-unknown",
 	"checkpoint-lost",
 	"commit-response-lost",
+	"commit-persistent-failure",
 	"definite-not-sent",
 ] as const)(
 	"recovers the original model intent without duplicate business execution: %s",
@@ -1608,9 +1677,9 @@ it.each([
 			};
 		};
 		try {
-			if (mode === "checkpoint-lost") {
+			if (mode === "checkpoint-lost" || mode === "commit-persistent-failure") {
 				await sql.unsafe(
-					`create function platform.eval_checkpoint_failure()returns trigger language plpgsql as $$ begin if NEW.status='result_ready' and OLD.status='unknown' then raise exception 'synthetic checkpoint failure'; end if; return NEW; end $$`,
+					`create function platform.eval_checkpoint_failure()returns trigger language plpgsql as $$ begin if ${mode === "checkpoint-lost" ? "NEW.status='result_ready' and OLD.status='unknown'" : "NEW.status='scored'"} then raise exception 'synthetic checkpoint failure'; end if; return NEW; end $$`,
 				);
 				await sql.unsafe(
 					"create trigger eval_checkpoint_failure before update on platform.evaluation_score_intents for each row execute function platform.eval_checkpoint_failure()",
@@ -1651,8 +1720,17 @@ it.each([
 				await sql`select status,(data->>'attempts')::int as attempts from platform.evaluation_score_intents where id=${score.id}`,
 			).toEqual([
 				{
-					status: mode === "post-send-unknown" ? "unknown" : "scored",
-					attempts: mode === "definite-not-sent" ? 2 : 1,
+					status:
+						mode === "post-send-unknown"
+							? "unknown"
+							: mode === "commit-persistent-failure"
+								? "failed"
+								: "scored",
+					attempts: ["definite-not-sent", "commit-persistent-failure"].includes(
+						mode,
+					)
+						? 2
+						: 1,
 				},
 			]);
 			expect(

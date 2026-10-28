@@ -73,6 +73,16 @@ export const EvaluationReviewV1Schema = z.strictObject({
 	scoreRevision: revision,
 	reviewer: EvaluationPrincipalV1Schema,
 });
+export const EvaluationReviewPageV1Schema = z.strictObject({
+	items: z
+		.array(
+			EvaluationReviewV1Schema.extend({
+				result: EvaluationScoreSubmitV1Schema.shape.result,
+			}),
+		)
+		.max(100),
+	nextCursor: id.nullable(),
+});
 export const EvaluationScorePageV1Schema = z.strictObject({
 	items: z.array(EvaluationScoreMetadataV1Schema).max(100),
 	nextCursor: id.nullable(),

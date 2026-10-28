@@ -84,6 +84,7 @@ import {
 	EvaluationExperimentCreateV1Schema,
 	EvaluationExperimentPageV1Schema,
 	EvaluationExperimentV1Schema,
+	EvaluationReviewPageV1Schema,
 	EvaluationReviewV1Schema,
 	EvaluationScoreMetadataV1Schema,
 	EvaluationScoreSubmitV1Schema,
@@ -1635,6 +1636,24 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 		},
 	},
 	"/api/v2/evaluation/scores/{scoreId}/reviews": {
+		get: {
+			operationId: "listEvaluationReviewsV1",
+			security: agentListSecurity,
+			requestParams: {
+				path: z.strictObject({ scoreId: z.uuid() }),
+				query: z.strictObject({
+					limit: z.coerce.number().int().min(1).max(100).optional(),
+					cursor: z.uuid().optional(),
+				}),
+			},
+			responses: {
+				"200": jsonResponse(
+					"Current review-purpose bounded independent history",
+					EvaluationReviewPageV1Schema,
+				),
+				...errorResponses,
+			},
+		},
 		post: {
 			operationId: "reviewEvaluationScoreV1",
 			security: agentListSecurity,
@@ -2860,6 +2879,7 @@ export const pilotBrowserSchemasV2 = {
 	EvaluationExperimentPageV1: EvaluationExperimentPageV1Schema,
 	EvaluationScoreSubmitV1: EvaluationScoreSubmitV1Schema,
 	EvaluationReviewV1: EvaluationReviewV1Schema,
+	EvaluationReviewPageV1: EvaluationReviewPageV1Schema,
 	EvaluationScoreMetadataV1: EvaluationScoreMetadataV1Schema,
 	EvaluationDatasetContentV1: EvaluationDatasetContentV1Schema,
 	EvaluationDatasetCreateV1: EvaluationDatasetCreateV1Schema,

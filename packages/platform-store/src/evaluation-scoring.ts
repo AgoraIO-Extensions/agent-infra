@@ -13,6 +13,7 @@ import {
 	type EvaluationScoreWorkPortV1,
 	type EvaluationScoringInputV1,
 	parseEvaluationExperimentPolicyV1,
+	parseEvaluationReviewRecordV1,
 	parseEvaluationScoreIntentV1,
 	parseEvaluationScoreOutcomeV1,
 	parseEvaluationScorerV1,
@@ -96,6 +97,20 @@ export class PostgresEvaluationScoringV1
 			storage: options.storage,
 		});
 	}
+	async #transaction<T>(
+		work: (tx: postgres.TransactionSql) => Promise<T>,
+	): Promise<T> {
+		try {
+			const result = await this.#client.begin(async (tx) => ({
+				value: await work(tx),
+			}));
+			return result.value;
+		} catch (error) {
+			if (error instanceof EvaluationDataErrorV1) throw error;
+			throw new EvaluationDataErrorV1("unavailable");
+		}
+	}
+
 	async close() {
 		await this.#derivedStore.close();
 		await this.#dataStore.close();
@@ -194,7 +209,7 @@ export class PostgresEvaluationScoringV1
 	}
 	async prepare(lease: EvaluationScoreLeaseV1) {
 		const req = request(lease);
-		const intent = await this.#client.begin(async (tx) => {
+		const intent = await this.#transaction(async (tx) => {
 			const value = await this.#lock(tx, lease);
 			await this.#current(tx, req, value);
 			return value;
@@ -213,7 +228,7 @@ export class PostgresEvaluationScoringV1
 					await this.#derived.read(req, recovered.id, "score"),
 					intent.scorer,
 				);
-				const ready = await this.#client.begin(async (tx) => {
+				const ready = await this.#transaction(async (tx) => {
 					const current = await this.#lock(tx, lease);
 					await this.#current(tx, req, current);
 					const updated = {
@@ -261,7 +276,7 @@ export class PostgresEvaluationScoringV1
 		if (!["completed", "failed", "cancelled"].includes(execution.status))
 			return { waiting: true as const, delayMs: intent.scorer.retryDelayMs };
 		if (execution.status !== "completed") {
-			await this.#client.begin(async (tx) => {
+			await this.#transaction(async (tx) => {
 				const latest = await this.#lock(tx, lease);
 				await this.#current(tx, req, latest);
 				await this.#save(tx, {
@@ -309,7 +324,7 @@ export class PostgresEvaluationScoringV1
 			"output",
 			{ text: output, executionId: intent.executionId, resultVersion },
 		);
-		const prepared = await this.#client.begin(async (tx) => {
+		const prepared = await this.#transaction(async (tx) => {
 			const latest = await this.#lock(tx, lease);
 			await this.#current(tx, req, latest);
 			const [current] = await tx<
@@ -365,7 +380,7 @@ export class PostgresEvaluationScoringV1
 		input: EvaluationScoringInputV1,
 	) {
 		if (!this.options.model) throw new EvaluationDataErrorV1("unavailable");
-		await this.#client.begin(async (tx) => {
+		await this.#transaction(async (tx) => {
 			const current = await this.#lock(tx, lease);
 			await this.#current(tx, request(lease), current);
 			if (current.status !== "pending")
@@ -387,7 +402,7 @@ export class PostgresEvaluationScoringV1
 					"code" in error &&
 					(error.code === "invalid" || error.code === "invalid_result"))
 			)
-				await this.#client.begin(async (tx) => {
+				await this.#transaction(async (tx) => {
 					const current = await this.#lock(tx, lease);
 					await this.#save(tx, {
 						...current,
@@ -407,7 +422,7 @@ export class PostgresEvaluationScoringV1
 			"score",
 			output,
 		);
-		await this.#client.begin(async (tx) => {
+		await this.#transaction(async (tx) => {
 			const current = await this.#lock(tx, lease);
 			await this.#current(tx, request(lease), current);
 			if (current.status !== "unknown")
@@ -424,7 +439,7 @@ export class PostgresEvaluationScoringV1
 		return output;
 	}
 	async readKey(lease: EvaluationScoreLeaseV1) {
-		return this.#client.begin(async (tx) => {
+		return this.#transaction(async (tx) => {
 			const intent = await this.#lock(tx, lease);
 			await this.#current(tx, request(lease), intent);
 			if (!intent.keyBinding) throw new EvaluationDataErrorV1("denied");
@@ -459,7 +474,7 @@ export class PostgresEvaluationScoringV1
 					{ status: result.status, value: result.value, reason: result.reason },
 				);
 		if (!object) throw new EvaluationDataErrorV1("unavailable");
-		await this.#client.begin(async (tx) => {
+		await this.#transaction(async (tx) => {
 			const current = await this.#lock(tx, lease);
 			await this.#current(tx, req, current);
 			if (
@@ -478,6 +493,7 @@ export class PostgresEvaluationScoringV1
 				scoreActor: current.principal,
 			});
 			await this.#audit(tx, req, current, "evaluation.score.completed");
+			await this.#current(tx, req, current);
 		});
 	}
 	async failed(
@@ -485,7 +501,7 @@ export class PostgresEvaluationScoringV1
 		code: "SCORER_UNAVAILABLE" | "SCORER_RESULT_INVALID",
 		preparationFailure = false,
 	) {
-		return this.#client.begin(async (tx) => {
+		return this.#transaction(async (tx) => {
 			const intent = await this.#lock(tx, lease);
 			if (["scored", "not_applicable", "failed"].includes(intent.status))
 				return { retry: false, delayMs: intent.scorer.retryDelayMs };
@@ -493,7 +509,7 @@ export class PostgresEvaluationScoringV1
 				const retry = intent.attempts < intent.scorer.maxAttempts;
 				await this.#save(tx, {
 					...intent,
-					attempts: intent.attempts + 1,
+					attempts: Math.min(intent.scorer.maxAttempts, intent.attempts + 1),
 					revision: intent.revision + 1,
 					status: retry ? "result_ready" : "failed",
 					failureCode: code,
@@ -528,7 +544,7 @@ export class PostgresEvaluationScoringV1
 		id: string,
 		purpose: "score" | "review",
 	) {
-		return this.#client.begin(async (tx) => {
+		return this.#transaction(async (tx) => {
 			await tx`select pg_advisory_xact_lock(hashtextextended('evaluation-data-v1',0))`;
 			const [row] = await tx<
 				ScoreRow[]
@@ -570,6 +586,66 @@ export class PostgresEvaluationScoringV1
 		return { status: value.status, value: value.value, reason: value.reason };
 	}
 
+	async reviews(
+		req: EvaluationRequestV1,
+		id: string,
+		limit: number,
+		cursor?: string,
+	) {
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+			throw new EvaluationDataErrorV1("invalid");
+		const { intent } = await this.load(req, id, "review");
+		const rows = await this.#client<
+			{ id: string; score_id: string; data: unknown }[]
+		>`select id,score_id,data from platform.evaluation_score_reviews where score_id=${id} and (data->>'metadataExpiresAt' is null or (data->>'metadataExpiresAt')::timestamptz>clock_timestamp()) ${cursor ? this.#client`and id>${cursor}::uuid` : this.#client``} order by id limit ${limit + 1}`;
+		const items = [];
+		let pageBytes = 0;
+		let more = rows.length > limit;
+		for (const row of rows.slice(0, limit)) {
+			const review = parseEvaluationReviewRecordV1(row.data);
+			if (
+				review.reviewId !== row.id ||
+				review.scoreId !== id ||
+				row.score_id !== id ||
+				review.scoreRevision > intent.revision ||
+				isDeepStrictEqual(review.reviewer, intent.scoreActor) ||
+				Date.parse(review.metadataExpiresAt) <= Date.now()
+			)
+				throw new EvaluationDataErrorV1("denied");
+			const result = parseEvaluationScoreOutcomeV1(
+				await this.#derived.read(
+					{ ...req, credentialScope: "eval:review" },
+					review.objectId,
+					"review",
+				),
+				intent.scorer,
+			);
+			const item = {
+				reviewId: review.reviewId,
+				scoreId: review.scoreId,
+				scoreRevision: review.scoreRevision,
+				reviewer: review.reviewer,
+				result: {
+					status: result.status,
+					value: result.value,
+					reason: result.reason,
+				},
+			};
+			const bytes = Buffer.byteLength(JSON.stringify(item));
+			if (pageBytes + bytes > 2 * 1024 * 1024) {
+				more = true;
+				break;
+			}
+			pageBytes += bytes;
+			items.push(item);
+		}
+		await this.load(req, id, "review");
+		return {
+			items,
+			nextCursor: more ? (items.at(-1)?.reviewId ?? null) : null,
+		};
+	}
+
 	async submit(
 		req: EvaluationRequestV1,
 		key: string,
@@ -589,9 +665,9 @@ export class PostgresEvaluationScoringV1
 			intent.datasetId,
 			intent.versionId,
 			"score",
-			result,
+			{ status: result.status, value: result.value, reason: result.reason },
 		);
-		return this.#client.begin(async (tx) => {
+		return this.#transaction(async (tx) => {
 			await tx`select pg_advisory_xact_lock(hashtextextended('evaluation-data-v1',0))`;
 			const [row] = await tx<
 				ScoreRow[]
@@ -637,6 +713,7 @@ export class PostgresEvaluationScoringV1
 				"evaluation.score.human",
 				binding.principal,
 			);
+			await this.#current(tx, req, scored);
 			return scored;
 		});
 	}
@@ -659,9 +736,9 @@ export class PostgresEvaluationScoringV1
 			intent.datasetId,
 			intent.versionId,
 			"review",
-			result,
+			{ status: result.status, value: result.value, reason: result.reason },
 		);
-		return this.#client.begin(async (tx) => {
+		return this.#transaction(async (tx) => {
 			await tx`select pg_advisory_xact_lock(hashtextextended('evaluation-data-v1',0))`;
 			const [row] = await tx<
 				ScoreRow[]
@@ -710,6 +787,7 @@ export class PostgresEvaluationScoringV1
 			await tx`insert into platform.evaluation_score_reviews(id,score_id,revision,data)values(${review.reviewId},${intent.id},1,${tx.json({ ...review, objectId: object.id, metadataExpiresAt: object.metadataExpiresAt })})`;
 			await tx`insert into platform.idempotency_records(id,scope_type,scope_id,actor_id,command_type,idempotency_key,request_digest,status,result)values(${id},'evaluation',${JSON.stringify(actor)},${actor.id},'evaluation.score.review',${createHash("sha256").update(key).digest("hex")},${digest},'completed',${tx.json({ ...review, expiresAt: object.metadataExpiresAt })})`;
 			await this.#audit(tx, req, intent, "evaluation.score.reviewed", actor);
+			await this.#current(tx, req, current, "review");
 			return review;
 		});
 	}

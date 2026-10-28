@@ -108,6 +108,7 @@ it.each(["v1", "v2"])(
 					"EvaluationExperimentPageV1",
 					"EvaluationScoreMetadataV1",
 					"EvaluationReviewV1",
+					"EvaluationReviewPageV1",
 				]) {
 					const changed = structuredClone(current);
 					delete changed.components.schemas[name];
@@ -143,6 +144,11 @@ it.each(["v1", "v2"])(
 			await writeFile(before, JSON.stringify(previous));
 			if (version === "v2")
 				for (const mutate of [
+					(doc: typeof current) => {
+						doc.paths[
+							"/api/v2/evaluation/scores/{scoreId}/reviews"
+						].get.security = [];
+					},
 					(doc: typeof current) => {
 						doc.paths["/api/v2/evaluation/experiments"].post.security = [];
 					},

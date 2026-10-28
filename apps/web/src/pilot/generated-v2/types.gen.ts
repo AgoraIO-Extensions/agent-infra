@@ -1106,6 +1106,28 @@ export type EvaluationGrantV1 = {
     versionIds: Array<string>;
 };
 
+export type EvaluationReviewPageV1 = {
+    items: Array<{
+        result: {
+            reason: string;
+            status: 'scored';
+            value: number;
+        } | {
+            reason: string;
+            status: 'not_applicable';
+            value: null;
+        };
+        reviewId: string;
+        reviewer: {
+            id: string;
+            kind: 'user' | 'application';
+        };
+        scoreId: string;
+        scoreRevision: number;
+    }>;
+    nextCursor: string | null;
+};
+
 export type EvaluationReviewV1 = {
     reviewId: string;
     reviewer: {
@@ -6944,6 +6966,60 @@ export type ReadEvaluationReviewContextV1Responses = {
 };
 
 export type ReadEvaluationReviewContextV1Response = ReadEvaluationReviewContextV1Responses[keyof ReadEvaluationReviewContextV1Responses];
+
+export type ListEvaluationReviewsV1Data = {
+    body?: never;
+    path: {
+        scoreId: string;
+    };
+    query?: {
+        limit?: number;
+        cursor?: string;
+    };
+    url: '/api/v2/evaluation/scores/{scoreId}/reviews';
+};
+
+export type ListEvaluationReviewsV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListEvaluationReviewsV1Error = ListEvaluationReviewsV1Errors[keyof ListEvaluationReviewsV1Errors];
+
+export type ListEvaluationReviewsV1Responses = {
+    /**
+     * Current review-purpose bounded independent history
+     */
+    200: EvaluationReviewPageV1;
+};
+
+export type ListEvaluationReviewsV1Response = ListEvaluationReviewsV1Responses[keyof ListEvaluationReviewsV1Responses];
 
 export type ReviewEvaluationScoreV1Data = {
     body: EvaluationScoreSubmitV1;
