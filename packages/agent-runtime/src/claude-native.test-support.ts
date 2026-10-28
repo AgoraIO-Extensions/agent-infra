@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import {
 	createServer,
 	type IncomingHttpHeaders,
+	type IncomingMessage,
 	type ServerResponse,
 } from "node:http";
 import { tmpdir } from "node:os";
@@ -219,4 +220,42 @@ export async function claudeNativeFixture() {
 			}
 		},
 	};
+}
+
+// Only Messages requests carry model JSON; native startup also probes this origin.
+export async function readClaudeFixtureMessage(
+	request: IncomingMessage,
+	response: ServerResponse,
+): Promise<(Record<string, unknown> & { model: string }) | undefined> {
+	if (
+		request.method !== "POST" ||
+		request.url?.split("?")[0] !== "/v1/messages"
+	) {
+		request.resume();
+		response.writeHead(404).end();
+		return;
+	}
+	try {
+		let body = "";
+		for await (const chunk of request) {
+			body += chunk;
+			if (body.length > 1_048_576) {
+				response.writeHead(413).end();
+				return;
+			}
+		}
+		const value = JSON.parse(body);
+		if (
+			!value ||
+			typeof value.model !== "string" ||
+			!Array.isArray(value.messages)
+		) {
+			response.writeHead(400).end();
+			return;
+		}
+		return value;
+	} catch {
+		response.writeHead(400).end();
+		return;
+	}
 }

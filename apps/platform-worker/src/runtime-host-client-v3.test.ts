@@ -412,3 +412,60 @@ describe("Worker V3 Runtime Client", () => {
 		}).rejects.toThrow();
 	});
 });
+
+it.each(["claude", "pi", "opencode", "custom", undefined] as const)(
+	"validates local observations against the trusted template before Core storage: %s",
+	async (template) => {
+		const facts = ["started", "completed"].map((phase) => ({
+			kind: "tool",
+			toolId: "Bash",
+			operationRef: "local",
+			attemptRef: "local-attempt",
+			phase,
+			executionBoundary: "sandbox-local",
+		}));
+		const wire = facts.map((payload, index) => ({
+			schemaVersion: 2,
+			type: "operation",
+			adapterEventKey: `native-${index}`,
+			executionId: "execution",
+			cursor: `native-${index}`,
+			occurredAt: "2026-09-14T12:00:02.000Z",
+			payload,
+		}));
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValue(
+				new Response(
+					wire
+						.map(
+							(event) =>
+								`id: ${event.cursor}\nevent: operation\ndata: ${JSON.stringify(event)}\n\n`,
+						)
+						.join(""),
+					{ headers: { "content-type": "text/event-stream" } },
+				),
+			);
+		const runtime = createWorkerRuntimeHostClientV3({
+			baseUrl: "http://runtime.local",
+			serviceToken: "synthetic-service-proof",
+			fetch: fetcher,
+			...(template ? { nativeToolTemplate: template as "claude" } : {}),
+		});
+		const consume = async () => {
+			const history = [];
+			for await (const event of runtime.events({
+				...base,
+				consumer: "platform_worker_persistence",
+				afterCursor: null,
+			})) {
+				if (event.type !== "operation") throw Error();
+				requireConversationOperationSuccessorV2(history, event.payload);
+				history.push(event.payload);
+			}
+			return history;
+		};
+		if (template === "claude") await expect(consume()).resolves.toEqual(facts);
+		else await expect(consume()).rejects.toThrow();
+	},
+);

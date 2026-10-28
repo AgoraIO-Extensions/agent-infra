@@ -32,6 +32,15 @@ const agentCreationAuditActions = [
 	"relay_key.agent_default.replace",
 ];
 
+function removePublishedLocalToolBoundary(schema: unknown) {
+	if (!schema || typeof schema !== "object") return;
+	const node = schema as Record<string, unknown>;
+	if (node.properties && typeof node.properties === "object")
+		delete (node.properties as Record<string, unknown>).executionBoundary;
+	for (const value of Object.values(node))
+		removePublishedLocalToolBoundary(value);
+}
+
 function comparePaths(current: string, previous: string) {
 	return spawnSync(
 		process.execPath,
@@ -783,6 +792,11 @@ describe("contract compatibility command", () => {
 			await writeFile(after, JSON.stringify(current));
 			expect(comparePaths(after, before).status).toBe(0);
 			for (const mutate of [
+				(value: typeof current) => {
+					removePublishedLocalToolBoundary(
+						value.components.schemas.ScopedPlatformAuditProjectionV1,
+					);
+				},
 				// 管理员入口只接受平台会话，不能改成 Bearer 或匿名。
 				(value: typeof current) => {
 					value.paths["/api/v4/admin/audit"].get.security = [
@@ -2897,6 +2911,11 @@ describe("contract compatibility command", () => {
 			await writeFile(currentPath, JSON.stringify(current));
 			expect(comparePaths(currentPath, previousPath).status).toBe(0);
 			for (const mutate of [
+				(value: typeof current) => {
+					removePublishedLocalToolBoundary(
+						value.components.schemas.ScopedPlatformAuditProjectionV1,
+					);
+				},
 				(value: typeof current) => {
 					delete value.paths[paths[0]].post.parameters;
 				},
@@ -5363,6 +5382,11 @@ describe("contract compatibility command", () => {
 			await writeFile(currentPath, JSON.stringify(reviewedCurrent));
 			expect(comparePaths(currentPath, previousPath).status).toBe(0);
 			for (const mutate of [
+				(value: typeof current) => {
+					removePublishedLocalToolBoundary(
+						value.components.schemas.ScopedPlatformAuditProjectionV1,
+					);
+				},
 				(document: typeof current) => {
 					delete document.paths["/api/v2/conversations/{conversationId}/events"]
 						.get.responses["404"];
@@ -6222,6 +6246,65 @@ it("admits only application credential audit registration #3626", async () => {
 			mutate(changed);
 			await writeFile(currentPath, JSON.stringify(changed));
 			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+it("accepts only the exact optional sandbox-local tool classification addition", async () => {
+	const directory = await mkdtemp(resolve(tmpdir(), "local-tool-compat-"));
+	try {
+		const previous = {
+			openapi: "3.1.0",
+			info: { title: "fixture", version: "1" },
+			paths: {},
+			components: {
+				schemas: {
+					RuntimeOperationFactV2: {
+						type: "object",
+						additionalProperties: false,
+						required: ["kind", "operationRef", "attemptRef", "toolId", "phase"],
+						properties: {
+							kind: { const: "tool", type: "string" },
+							operationRef: { type: "string" },
+							attemptRef: { type: "string" },
+							toolId: { type: "string" },
+							phase: { type: "string" },
+						},
+					},
+				},
+			},
+		};
+		const before = resolve(directory, "before.json");
+		const after = resolve(directory, "after.json");
+		await writeFile(before, JSON.stringify(previous));
+		for (const variant of [
+			"exact",
+			"wide",
+			"required",
+			"other-change",
+		] as const) {
+			const current = structuredClone(previous) as typeof previous & {
+				components: {
+					schemas: {
+						RuntimeOperationFactV2: { properties: Record<string, unknown> };
+					};
+				};
+			};
+			const schema = current.components.schemas.RuntimeOperationFactV2;
+			schema.properties.executionBoundary =
+				variant === "wide"
+					? { type: "string" }
+					: { type: "string", const: "sandbox-local" };
+			if (variant === "required") schema.required.push("executionBoundary");
+			if (variant === "other-change") schema.additionalProperties = true;
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status, variant).toBe(
+				variant === "exact" ? 0 : 1,
+			);
+			if (variant === "exact")
+				expect(comparePaths(before, after).status).toBe(1);
 		}
 	} finally {
 		await rm(directory, { recursive: true, force: true });

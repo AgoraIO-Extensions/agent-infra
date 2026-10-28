@@ -2071,6 +2071,10 @@
                             "minimum": 0,
                             "type": "integer"
                           },
+                          "executionBoundary": {
+                            "const": "sandbox-local",
+                            "type": "string"
+                          },
                           "failureCode": {
                             "enum": [
                               "authorization_denied",

@@ -577,3 +577,98 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 		);
 	},
 );
+
+it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
+	"executes pinned OpenCode ACP Bash through the child boundary without exposing native configuration",
+	async () => {
+		const { openMessagesRuntimeDriverConformanceFixture } = await import(
+			"./messages-runtime-driver.test-support.js"
+		);
+		const path = await mkdtemp(join(tmpdir(), "opencode-shell-boundary-"));
+		const fixture = await openMessagesRuntimeDriverConformanceFixture(
+			path,
+			false,
+			"opencode",
+		);
+		try {
+			const marker = "synthetic-host-file-not-readable";
+			const forbidden = join(path, "host-secret");
+			await writeFile(forbidden, marker);
+			const program = `const fs=require("node:fs");const denied=p=>{try{fs.readFileSync(p);return false}catch{return true}};fs.writeFileSync("shell-proof.json",JSON.stringify({env:!Object.hasOwn(process.env,"OPENCODE_CONFIG_CONTENT"),host:denied(${JSON.stringify(forbidden)}),proc:denied("/proc/self/environ"),native:denied("../process.json")}));process.stdout.write("isolated-opencode-shell");`;
+			const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
+			fixture.nextTool("bash", {
+				command: `/usr/local/bin/node -e ${quote(program)}`,
+				description: "Verify isolated shell",
+				timeout: 5000,
+			});
+			const command = {
+				schemaVersion: 2 as const,
+				kind: "submit-turn" as const,
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "execution-shell",
+				turnId: "turn-shell",
+				operationId: "operation-shell",
+				input: { text: "synthetic shell probe", attachments: [] },
+				selection: {
+					schemaVersion: 1 as const,
+					modelOptionId: "model-option-primary",
+					reasoningLevel: "high",
+				},
+			};
+			const accepted = await fixture.driver.execute(command);
+			expect(accepted.result.outcome).toBe("accepted");
+			await vi.waitFor(() => expect(fixture.modelRequests()).toHaveLength(2), {
+				timeout: 15_000,
+			});
+			const proof = JSON.parse(
+				await readFile(
+					join(path, accepted.nativeSessionRef, "workspace/shell-proof.json"),
+					"utf8",
+				),
+			);
+			expect(proof).toEqual({
+				env: true,
+				host: true,
+				proc: true,
+				native: true,
+			});
+			const messages = JSON.stringify(fixture.modelRequests()[1]?.messages);
+			expect(messages).toContain("isolated-opencode-shell");
+			expect(messages).not.toContain(marker);
+			await fixture.completeStopAsCompleted();
+			const events = await fixture.driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			expect(
+				events
+					.filter(
+						(event) => event.type === "tool" && event.payload.name === "Bash",
+					)
+					.map((event) => (event.type === "tool" ? event.payload.phase : "")),
+			).toEqual(["started", "completed"]);
+			const calls = await fixture.createdTurnCount();
+			await fixture.restart();
+			expect(
+				await fixture.driver.getStatus(
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toBe("completed");
+			expect(await fixture.driver.execute(command)).toEqual(accepted);
+			expect(await fixture.createdTurnCount()).toBe(calls);
+			expect(
+				await fixture.driver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toEqual(events);
+		} finally {
+			await fixture.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+	45_000,
+);

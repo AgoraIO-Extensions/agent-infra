@@ -47,6 +47,10 @@ import {
 } from "./claude-installation.js";
 import { claudeQuery } from "./claude-query.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
+import {
+	claudeShellAvailable,
+	claudeShellEnvironment,
+} from "./claude-shell.js";
 import { createClaudeStandardMcpServer } from "./claude-standard-mcp.js";
 import {
 	type ClaudeToolOperationCallbacks,
@@ -799,6 +803,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		file: DurableJsonFile<Session>,
 		executionId: string,
 		input: RuntimeOperationFactV2,
+		localTool = false,
 	): Promise<void> {
 		const fact = RuntimeOperationFactV2Schema.parse(input);
 		await file.update((state) => {
@@ -811,7 +816,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					"Runtime operation fact is no longer current",
 					409,
 				);
-			appendTurnOperationFactV1(turn, fact);
+			appendTurnOperationFactV1(turn, fact, localTool);
 		});
 	}
 	private constructor(
@@ -1904,7 +1909,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				readonly operationRef: string;
 				readonly attemptRef: string;
 				readonly toolId: string;
-				startedAt?: number;
 			}
 		>();
 		const toolOperations: ClaudeToolOperationCallbacks = {
@@ -1917,33 +1921,33 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						?.status === "running"
 				);
 			},
-			onIntent: async (toolUseId, toolName) => {
-				if (toolFacts.has(toolUseId)) return;
-				const operationRef = randomUUID();
-				const attemptRef = randomUUID();
-				const tool = { operationRef, attemptRef, toolId: toolName };
-				await this.recordFact(file, command.executionId, {
-					kind: "tool",
-					operationRef,
-					attemptRef,
-					phase: "intent",
-					toolId: toolName,
-				});
-				toolFacts.set(toolUseId, tool);
-			},
 			onStarted: async (toolUseId, toolName) => {
-				const tool = toolFacts.get(toolUseId);
-				if (!tool || tool.startedAt !== undefined) return;
-				const startedAt = Date.now();
-				tool.startedAt = startedAt;
-				await this.recordFact(file, command.executionId, {
-					kind: "tool",
-					operationRef: tool.operationRef,
-					attemptRef: tool.attemptRef,
-					phase: "started",
-					startedAt: new Date(startedAt).toISOString(),
+				if (
+					!claudeWorkspaceToolNames.includes(toolName) ||
+					toolFacts.has(toolUseId)
+				)
+					return;
+				// Completion hooks confirm execution but supply no start timestamp.
+				// Leave timing absent rather than measure post-execution persistence.
+				const tool = {
+					operationRef: randomUUID(),
+					attemptRef: randomUUID(),
 					toolId: toolName,
-				});
+				};
+				toolFacts.set(toolUseId, tool);
+				await this.recordFact(
+					file,
+					command.executionId,
+					{
+						kind: "tool",
+						executionBoundary: "sandbox-local",
+						operationRef: tool.operationRef,
+						attemptRef: tool.attemptRef,
+						phase: "started",
+						toolId: toolName,
+					},
+					true,
+				);
 			},
 			onCompleted: async (toolUseId, toolName) => {
 				const tool = toolFacts.get(toolUseId);
@@ -1951,13 +1955,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				const finishedAt = Date.now();
 				await this.recordFact(file, command.executionId, {
 					kind: "tool",
+					executionBoundary: "sandbox-local",
 					operationRef: tool.operationRef,
 					attemptRef: tool.attemptRef,
 					phase: "completed",
 					finishedAt: new Date(finishedAt).toISOString(),
-					...(tool.startedAt === undefined
-						? {}
-						: { durationMs: Math.max(0, finishedAt - tool.startedAt) }),
 					toolId: toolName,
 				});
 				toolFacts.delete(toolUseId);
@@ -1967,6 +1969,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				if (!tool) return;
 				await this.recordFact(file, command.executionId, {
 					kind: "tool",
+					executionBoundary: "sandbox-local",
 					operationRef: tool.operationRef,
 					attemptRef: tool.attemptRef,
 					phase: "failed",
@@ -1982,13 +1985,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			for (const [toolUseId, tool] of toolFacts) {
 				await this.recordFact(file, command.executionId, {
 					kind: "tool",
+					executionBoundary: "sandbox-local",
 					operationRef: tool.operationRef,
 					attemptRef: tool.attemptRef,
 					phase: "unknown",
 					finishedAt: new Date().toISOString(),
-					...(tool.startedAt === undefined
-						? {}
-						: { durationMs: Math.max(0, Date.now() - tool.startedAt) }),
 					failureCode: "recovery_unconfirmed",
 					toolId: tool.toolId,
 				});
@@ -1998,6 +1999,13 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		let native: ReturnType<typeof claudeQuery>;
 		let initialMessage: Parameters<typeof claudeQuery>[1];
 		try {
+			const shellAvailable = await claudeShellAvailable(workspace);
+			const workspaceOperations = shellAvailable
+				? {
+						...toolOperations,
+						authorizeShell: () => claudeShellAvailable(workspace),
+					}
+				: toolOperations;
 			const skillLaunchOptions = claudeNativeSkillLaunchOptions(
 				this.options.skillDirectory,
 			);
@@ -2053,20 +2061,22 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						ANTHROPIC_BASE_URL: transport.modelAccess.endpoint,
 						ANTHROPIC_AUTH_TOKEN: transport.modelAccess.credential,
 						CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+						...(shellAvailable ? claudeShellEnvironment(workspace) : {}),
 					},
+					sandbox: { enabled: false },
 					...claudeNativeQuerySettings(),
 					...claudeWorkspaceTools(
 						workspace,
 						join(directory, "memory"),
 						resolveReadOnlySkillFile
 							? {
-									...toolOperations,
+									...workspaceOperations,
 									resolveReadOnlyFile: resolveReadOnlySkillFile,
 									cleanupReadOnlyFile: async (filePath: string) => {
 										await unlink(filePath).catch(() => undefined);
 									},
 								}
-							: toolOperations,
+							: workspaceOperations,
 					),
 					strictMcpConfig: true,
 					mcpServers: {

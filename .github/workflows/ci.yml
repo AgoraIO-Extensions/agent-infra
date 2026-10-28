@@ -381,6 +381,7 @@ jobs:
         if: ${{ needs.changes.outputs.runtime == 'true' || needs.changes.outputs.source == 'true' }}
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.11.1
       - name: Build pinned Codex native test environment
+        id: native_test_image
         if: ${{ needs.changes.outputs.runtime == 'true' }}
         env:
           CI_CACHE_WRITE: ${{ github.event_name == 'push' }}
@@ -478,23 +479,25 @@ jobs:
             src/codex-native-recovery.test.ts --cache=false
 
       - name: Verify native Claude conformance in the pinned Linux image
-        if: ${{ needs.changes.outputs.runtime == 'true' }}
+        if: ${{ !cancelled() && needs.changes.outputs.runtime == 'true' && steps.native_test_image.outcome == 'success' }}
         run: |
-          docker run --rm --pull=never --network=none --read-only \
+          docker run --init --rm --pull=never --network=none --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
             --tmpfs /tmp:rw,exec,size=256m,mode=1777 \
+            --env AGENT_INFRA_NATIVE_SHELL_TEST=1 \
             agent-infra-codex-native-test \
             pnpm --filter @agent-infra/agent-runtime exec vitest run \
             src/claude-native.test.ts src/claude-runtime-driver.test.ts \
             src/runtime-driver-conformance.test.ts --cache=false
 
       - name: Verify Generic ACP, OpenCode and Pi conformance in the pinned Linux image
-        if: ${{ needs.changes.outputs.runtime == 'true' }}
+        if: ${{ !cancelled() && needs.changes.outputs.runtime == 'true' && steps.native_test_image.outcome == 'success' }}
         run: |
           docker run --init --rm --pull=never --network=none --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
             --tmpfs /tmp:rw,exec,size=512m,mode=1777 \
             --env OPENCODE_EXECUTABLE=/opt/opencode/bin/opencode \
+            --env AGENT_INFRA_NATIVE_SHELL_TEST=1 \
             agent-infra-codex-native-test \
             pnpm --filter @agent-infra/agent-runtime exec vitest run \
             src/acp-runtime-driver.test.ts src/acp-session.test.ts \

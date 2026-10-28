@@ -81,6 +81,7 @@ export type ConversationOperationFactV2 = ConversationOperationBaseV2 &
 		| {
 				readonly kind: "tool";
 				readonly toolId: string;
+				readonly executionBoundary?: "sandbox-local";
 				readonly resultRef?: string;
 				readonly connection?: ConversationConnectionAssociationV1;
 				readonly browser?: ConversationBrowserActionBindingV1;
@@ -255,7 +256,7 @@ export function parseConversationOperationFactV2(
 			"failureCode",
 			...(shape.kind === "model"
 				? ["usage"]
-				: ["resultRef", "connection", "browser"]),
+				: ["resultRef", "connection", "browser", "executionBoundary"]),
 		],
 	);
 	if (value.kind !== "model" && value.kind !== "tool") invalid();
@@ -312,11 +313,26 @@ export function parseConversationOperationFactV2(
 		(base.phase === "completed" && base.failureCode !== undefined)
 	)
 		invalid();
+	if (
+		value.kind === "tool" &&
+		value.executionBoundary !== undefined &&
+		(value.executionBoundary !== "sandbox-local" ||
+			base.phase === "intent" ||
+			!["Bash", "Read", "Write", "Edit", "Glob", "Grep", "TodoWrite"].includes(
+				String(value.toolId),
+			) ||
+			value.connection !== undefined ||
+			value.browser !== undefined)
+	)
+		invalid();
 	if (value.kind === "tool")
 		return {
 			...base,
 			kind: "tool",
 			toolId: metadata(value.toolId),
+			...(value.executionBoundary === "sandbox-local"
+				? { executionBoundary: "sandbox-local" as const }
+				: {}),
 			...(value.resultRef === undefined
 				? {}
 				: { resultRef: reference(value.resultRef) }),
@@ -396,7 +412,11 @@ function operationBinding(fact: ConversationOperationFactV2) {
 		fact.parentOperationRef ?? null,
 		fact.kind === "model"
 			? fact.model
-			: { toolId: fact.toolId, browser: fact.browser ?? null },
+			: {
+					toolId: fact.toolId,
+					browser: fact.browser ?? null,
+					executionBoundary: fact.executionBoundary ?? null,
+				},
 	]);
 }
 
@@ -465,7 +485,15 @@ export function requireConversationOperationSuccessorV2(
 	)
 		invalid();
 	if (!previous) {
-		if (next.phase !== "intent") invalid();
+		if (
+			next.phase !== "intent" &&
+			!(
+				next.kind === "tool" &&
+				next.executionBoundary === "sandbox-local" &&
+				next.phase === "started"
+			)
+		)
+			invalid();
 		return;
 	}
 	if (operationBinding(previous) !== operationBinding(next)) invalid();

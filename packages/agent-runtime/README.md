@@ -34,3 +34,30 @@ Claude 使用已审核的 SDK 内部 MCP bridge；Host 只把受保护的 client
 | 统一 Host/Grant/Store conformance | [runtime-driver-conformance.test.ts](src/runtime-driver-conformance.test.ts) | 46/46 通过；共享 fixture 覆盖 Pi 与其他 Driver，不代表真实模型或部署授权验收 |
 
 本矩阵只记录固定 Pi 版本与上述测试入口的兼容性。漏洞告警由 GitHub 仓库安全功能维护；标准模板、真实模型、附件、Connection 和生产环境验收仍须按各自的验证入口执行。
+
+## 原生 Shell 子边界（#3218）
+
+Claude、Pi 与 OpenCode 的原生命令通过镜像内只读 TypeScript launcher 安装完整 ABI5 Landlock
+规则，再启动 Bash。子进程只可写当前 Conversation 的工作区和存在的 canonical memory 目录，
+只读固定系统/Skill 目录；显式环境白名单与仅继承 stdio 的新进程隔断 native/Host 凭证及额外 FD。
+缺 helper、ABI5 或合法目录时拒绝执行，不使用弱权限重试。`/etc/ssl/openssl.cnf` 仅作为不可写
+系统文件提供给 Node/OpenSSL，不开放整个 `/etc`。
+
+- Pi 使用固定上游 `createBashToolDefinition`，保留原生执行、取消和输出逻辑。能力名
+  `sandbox_bash` 避免扩展加载失败时回退到 builtin `bash`；用户工具事实显示 Bash。
+- OpenCode 固定配置的 shell 指向 launcher，ACP execute 只在初始及本次真实准入通过后批准；
+  受信 OpenCode 的 execute 事件映射为 Bash 事实，不改变自定义 ACP 的工具身份。
+- Claude 的固定 `CLAUDE_CODE_SHELL` 指向只读 `native-bash.mjs` alias；声明 Bash 前以及每次
+  权限调用都检查 alias/helper 不可写、无符号链接、内容一致并实际执行 ABI5 准入。原生配置与
+  历史保持在工作区外，shell 临时文件留在工作区。平台后端不要求放宽容器 namespace 权限。
+
+既有固定 Linux conformance 通过 `AGENT_INFRA_NATIVE_SHELL_TEST=1` 强制运行三个模板的真实
+原生工具调用。矩阵覆盖环境、Host/native/兄弟目录、proc、符号链接、继承 FD、非法启动输入、
+取消、组合/后台命令、工作区/memory 成功路径、工具事实、重启不重放与准入失效拒绝。受控模型
+fixture 与真实外部模型验收分别记录，不互相代签。工程约束见
+[Spec §10.14](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1014-标准模板-session-sandbox-原生工具)。
+
+Claude 本地工具只在原生完成/失败 hook 确认实际执行后记录 `sandbox-local` 事实，不保存执行前
+intent。没有原生开始时间或成功耗时时，字段保持缺失；失败 hook 提供的实际 `duration_ms` 可保留。
+模型、MCP、Browser 与平台结果文件发布继续使用 intent-first 屏障。发布新 Runtime 前，必须先部署
+识别该标记并核对标准模板来源的 Worker/Core 以及对应读取契约；旧事实仍沿原顺序读取。

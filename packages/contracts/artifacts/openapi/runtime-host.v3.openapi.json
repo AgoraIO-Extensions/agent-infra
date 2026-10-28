@@ -2828,6 +2828,10 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "executionBoundary": {
+                "const": "sandbox-local",
+                "type": "string"
+              },
               "failureCode": {
                 "$ref": "#/components/schemas/RuntimeOperationFailureV2"
               },

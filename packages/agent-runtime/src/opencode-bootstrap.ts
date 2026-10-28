@@ -22,6 +22,10 @@ import type {
 	RuntimeExternalActionAuthorizationResult,
 } from "./driver.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
+import {
+	nativeShellAvailable,
+	nativeShellLauncher,
+} from "./native-shell-admission.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
@@ -269,7 +273,11 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 					join(directory, "config"),
 				);
 				const nativeModel = `anthropic/${option.model}`;
+				const shellAvailable = await nativeShellAvailable(
+					join(directory, "workspace"),
+				);
 				const config = {
+					...(shellAvailable ? { shell: nativeShellLauncher } : {}),
 					model: nativeModel,
 					small_model: nativeModel,
 					enabled_providers: ["anthropic"],
@@ -299,13 +307,14 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 						join(directory, "workspace/.memory/MEMORY.md"),
 					],
 					// #3217：列举与搜索类工具经 ACP 权限请求按本 Conversation 路径授权；
-					// bash 待 OS 级边界就绪后开放（#3218）。
+					// Bash 仅在固定子进程 launcher 的真实安装/ABI 准入后开放（#3218）。
 					permission: {
 						"*": "deny",
 						read: "ask",
 						edit: "ask",
 						glob: "ask",
 						grep: "ask",
+						...(shellAvailable ? { bash: "ask" } : {}),
 					},
 					autoupdate: false,
 					share: "disabled",
@@ -325,6 +334,14 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 						XDG_CACHE_HOME: join(directory, "cache"),
 						XDG_STATE_HOME: join(directory, "state"),
 						TMPDIR: join(directory, "tmp"),
+						...(shellAvailable
+							? {
+									AGENT_INFRA_NATIVE_SHELL_WORKSPACE: join(
+										directory,
+										"workspace",
+									),
+								}
+							: {}),
 						OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
 						OPENCODE_DISABLE_PROJECT_CONFIG: "true",
 						OPENCODE_DISABLE_AUTOUPDATE: "true",
@@ -332,6 +349,16 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 						OPENCODE_DISABLE_PRUNE: "true",
 					},
 					authorize: async (tool) => {
+						if (tool.kind === "execute") {
+							return (
+								shellAvailable &&
+								(await nativeShellAvailable(join(directory, "workspace"))) &&
+								!!tool.rawInput &&
+								typeof tool.rawInput === "object" &&
+								"command" in tool.rawInput &&
+								typeof tool.rawInput.command === "string"
+							);
+						}
 						if (tool.kind === "search")
 							return openCodeSearchAllowed(
 								join(directory, "workspace"),
