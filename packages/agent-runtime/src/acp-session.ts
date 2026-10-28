@@ -48,6 +48,8 @@ export interface AcpLaunch {
 	mcpServers?: readonly McpServer[];
 	/** OpenCode exposes command and compaction RPCs beyond generic ACP prompt. */
 	nativeCommandMode?: "opencode";
+	/** Some native peers send display metadata, not tool arguments, in permissions. */
+	permissionInputSource?: "announced";
 }
 
 export async function openAcpSession(options: {
@@ -91,7 +93,9 @@ export async function openAcpSession(options: {
 	});
 	const tools = new Map<
 		string,
-		Pick<ToolCall, "toolCallId" | "kind" | "rawInput" | "title">
+		Pick<ToolCall, "toolCallId" | "kind" | "rawInput" | "title"> & {
+			announcement: object;
+		}
 	>();
 	let activeSessionId: string | undefined;
 	let currentRecordOperationFact = options.recordOperationFact;
@@ -143,6 +147,10 @@ export async function openAcpSession(options: {
 					tools.delete(update.toolCallId);
 				else
 					tools.set(update.toolCallId, {
+						announcement:
+							update.sessionUpdate === "tool_call"
+								? {}
+								: (previous?.announcement ?? {}),
 						toolCallId: update.toolCallId,
 						title: previous?.title ?? update.title ?? "",
 						kind: update.kind ?? previous?.kind,
@@ -155,14 +163,19 @@ export async function openAcpSession(options: {
 		})
 		.onRequest("session/request_permission", async ({ params }) => {
 			await updates.catch(() => {});
-			const requestedInput = params.toolCall.rawInput;
+			const requestedInput =
+				options.launch.permissionInputSource === "announced"
+					? undefined
+					: params.toolCall.rawInput;
 			let tool = tools.get(params.toolCall.toolCallId);
+			const announcement = tool?.announcement;
 			const deadline = performance.now() + 1000;
 			while (
 				!processExited &&
 				!loading &&
 				params.sessionId === activeSessionId &&
 				tool &&
+				tool.announcement === announcement &&
 				incompleteToolInput(tool.rawInput) &&
 				incompleteToolInput(requestedInput) &&
 				performance.now() < deadline
@@ -183,24 +196,38 @@ export async function openAcpSession(options: {
 			// The announced identity remains authoritative. ACP permission requests can
 			// complete arguments before the corresponding tool notification arrives.
 			const permissionTool = tool && {
-				...tool,
-				rawInput:
-					incomplete && !requestIncomplete
-						? structuredClone(requestedInput)
-						: previousInput,
+				toolCallId: tool.toolCallId,
+				title: tool.title,
+				kind: tool.kind,
+				rawInput: structuredClone(
+					incomplete && !requestIncomplete ? requestedInput : previousInput,
+				),
 			};
 			const once = params.options.find(
 				(option) => option.kind === "allow_once",
 			);
-			const allowed =
+			const authorized =
 				!processExited &&
 				!loading &&
 				params.sessionId === activeSessionId &&
+				tool?.announcement === announcement &&
 				permissionTool &&
 				once &&
 				inputMatches &&
 				kindMatches &&
 				(await options.launch.authorize?.(permissionTool).catch(() => false));
+			const current = tools.get(params.toolCall.toolCallId);
+			const allowed =
+				authorized &&
+				!processExited &&
+				!loading &&
+				params.sessionId === activeSessionId &&
+				current &&
+				current.announcement === announcement &&
+				current.title === permissionTool.title &&
+				current.kind === permissionTool.kind &&
+				(isDeepStrictEqual(current.rawInput, permissionTool.rawInput) ||
+					(incompleteToolInput(current.rawInput) && incomplete));
 			const rejected = params.options.find(
 				(option) => option.kind === "reject_once",
 			);

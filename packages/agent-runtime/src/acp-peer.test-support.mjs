@@ -130,7 +130,12 @@ const connection = new AgentSideConnection(
 				const rawInput =
 					scenario === "conflicting-input"
 						? { pattern: "old" }
-						: ["announced-input", "empty-request"].includes(scenario)
+						: [
+									"announced-input",
+									"empty-request",
+									"announced-metadata",
+								].includes(scenario) ||
+								scenario.endsWith("-during-authorization")
 							? { pattern: "allowed" }
 							: {};
 				if (scenario !== "unannounced")
@@ -164,34 +169,84 @@ const connection = new AgentSideConnection(
 						...([
 							"late-notification",
 							"completed-during-wait",
+							"reannounced-during-wait",
 							"still-empty",
 							"empty-request",
 						].includes(scenario)
 							? { rawInput: {} }
 							: scenario === "announced-input"
 								? {}
-								: {
-										rawInput: {
-											pattern:
-												scenario === "denied-input" ? "forbidden" : "allowed",
-										},
-									}),
+								: scenario.endsWith("announced-metadata")
+									? { rawInput: { provider: "synthetic-display-metadata" } }
+									: {
+											rawInput: {
+												pattern:
+													scenario === "denied-input" ? "forbidden" : "allowed",
+											},
+										}),
 					},
 					options: [
 						{ optionId: "allow", name: "Allow once", kind: "allow_once" },
 						{ optionId: "reject", name: "Reject once", kind: "reject_once" },
 					],
 				});
-				if (["late-notification", "completed-during-wait"].includes(scenario)) {
+				if (
+					[
+						"late-notification",
+						"completed-during-wait",
+						"reannounced-during-wait",
+						"late-announced-metadata",
+					].includes(scenario)
+				) {
 					await new Promise((resolve) => setTimeout(resolve, 40));
 					await connection.sessionUpdate({
 						sessionId,
 						update: {
-							sessionUpdate: "tool_call_update",
+							sessionUpdate:
+								scenario === "reannounced-during-wait"
+									? "tool_call"
+									: "tool_call_update",
 							toolCallId: "catalog-tool",
+							...(scenario === "reannounced-during-wait"
+								? { title: "grep", kind: "search", status: "pending" }
+								: {}),
 							...(scenario === "completed-during-wait"
 								? { status: "completed" }
 								: { rawInput: { pattern: "allowed" } }),
+						},
+					});
+				}
+				if (scenario.endsWith("-during-authorization")) {
+					const deadline = Date.now() + 2000;
+					while (
+						!(await readFile(
+							join(process.cwd(), "authorization-entered"),
+						).catch(() => null))
+					) {
+						if (Date.now() > deadline)
+							throw new Error("AUTHORIZER_NOT_ENTERED");
+						await new Promise((resolve) => setTimeout(resolve, 10));
+					}
+					await connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate:
+								scenario === "reannounced-during-authorization"
+									? "tool_call"
+									: "tool_call_update",
+							toolCallId: "catalog-tool",
+							title: "grep",
+							kind: "search",
+							status:
+								scenario === "completed-during-authorization"
+									? "completed"
+									: "pending",
+							rawInput: {
+								pattern:
+									scenario === "conflicting-during-authorization"
+										? "forbidden"
+										: "allowed",
+							},
 						},
 					});
 				}

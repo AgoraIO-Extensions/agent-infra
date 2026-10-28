@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ it.each([
 	"empty-request",
 	"late-notification",
 	"completed-during-wait",
+	"reannounced-during-wait",
 	"still-empty",
 	"denied-input",
 	"conflicting-input",
@@ -19,17 +20,35 @@ it.each([
 	"unannounced",
 	"foreign-session",
 	"completed",
+	"announced-metadata",
+	"late-announced-metadata",
+	"missing-announced-input",
+	"completed-during-authorization",
+	"conflicting-during-authorization",
+	"same-input-during-authorization",
+	"reannounced-during-authorization",
 ])(
 	"authorizes only the current announced ACP tool with consistent complete arguments: %s",
 	async (scenario) => {
 		const cwd = await mkdtemp(join(tmpdir(), "acp-permission-input-"));
 		await mkdir(join(cwd, "workspace"));
-		const authorize = vi.fn(
-			async (tool) =>
+		let authorizing = false;
+		const updateObserved = Promise.withResolvers<void>();
+		const authorize = vi.fn(async (tool) => {
+			const allowed =
 				tool.title === "grep" &&
 				tool.kind === "search" &&
-				tool.rawInput?.pattern === "allowed",
-		);
+				tool.rawInput?.pattern === "allowed";
+			if (scenario.endsWith("-during-authorization")) {
+				authorizing = true;
+				await writeFile(
+					join(cwd, "workspace", "authorization-entered"),
+					"entered",
+				);
+				await updateObserved.promise;
+			}
+			return allowed;
+		});
 		const session = await openAcpSession({
 			directory: cwd,
 			cwd: join(cwd, "workspace"),
@@ -45,8 +64,19 @@ it.each([
 					ACP_TEST_PERMISSION_SCENARIO: scenario,
 				},
 				authorize,
+				...(scenario.endsWith("announced-metadata") ||
+				scenario === "missing-announced-input"
+					? { permissionInputSource: "announced" as const }
+					: {}),
 			},
-			update: async () => {},
+			update: async ({ update }) => {
+				if (
+					authorizing &&
+					(update.sessionUpdate === "tool_call" ||
+						update.sessionUpdate === "tool_call_update")
+				)
+					updateObserved.resolve();
+			},
 		});
 		try {
 			await session.prompt("synthetic permission ordering");
@@ -61,6 +91,9 @@ it.each([
 						"announced-input",
 						"empty-request",
 						"late-notification",
+						"announced-metadata",
+						"late-announced-metadata",
+						"same-input-during-authorization",
 					].includes(scenario)
 						? "allow"
 						: "reject",
@@ -74,22 +107,30 @@ it.each([
 					"late-notification",
 					"denied-input",
 					"still-empty",
+					"announced-metadata",
+					"late-announced-metadata",
+					"missing-announced-input",
+					"completed-during-authorization",
+					"conflicting-during-authorization",
+					"same-input-during-authorization",
+					"reannounced-during-authorization",
 				].includes(scenario)
 			) {
 				expect(authorize).toHaveBeenCalledExactlyOnceWith({
 					toolCallId: "catalog-tool",
 					title: "grep",
 					kind: "search",
-					rawInput:
-						scenario === "still-empty"
-							? {}
-							: {
-									pattern:
-										scenario === "denied-input" ? "forbidden" : "allowed",
-								},
+					rawInput: ["still-empty", "missing-announced-input"].includes(
+						scenario,
+					)
+						? {}
+						: {
+								pattern: scenario === "denied-input" ? "forbidden" : "allowed",
+							},
 				});
 			} else expect(authorize).not.toHaveBeenCalled();
 		} finally {
+			updateObserved.resolve();
 			await session.close();
 			await rm(cwd, { recursive: true, force: true });
 		}
