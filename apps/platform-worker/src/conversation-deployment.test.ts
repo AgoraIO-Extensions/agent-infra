@@ -1,5 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { RuntimeSkillHubBindingV1Schema } from "@agent-infra/contracts/runtime";
 import { runtimeModelInjectionV4 } from "@agent-infra/model-catalog";
 import {
 	decideSessionSandboxDrainObservationV1,
@@ -31,6 +32,7 @@ import {
 	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
+import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 import { sessionSandboxServiceTokenV1 } from "./session-workload-adapter.js";
 import { nativeEgressFixture } from "./test-support/native-egress.js";
 import {
@@ -143,6 +145,105 @@ function fixture() {
 	};
 }
 
+async function skillFixture() {
+	const f = fixture();
+	const projection = {
+		schemaVersion: 1,
+		agentId: f.claim.sandbox.agentId,
+		agentVersion: "agent-version-1",
+		skillVersion: {
+			schemaVersion: 1,
+			skillId: "skill-a",
+			skillVersionId: "skill-version-a",
+			provider: "my_library",
+			version: "1.0.0",
+			packageObjectVersion: "object-a",
+			packageDigest: "a".repeat(64),
+			manifestDigest: "b".repeat(64),
+			signatureDigest: "c".repeat(64),
+		},
+		manifest: {
+			schemaVersion: 1,
+			name: "session-notes",
+			version: "1.0.0",
+			entryPath: "SKILL.md",
+			files: [{ path: "SKILL.md", sizeBytes: 1, sha256: "d".repeat(64) }],
+			packageDigest: "a".repeat(64),
+		},
+		targetPath: ".agents/skills/session-notes",
+		readOnly: true,
+		grant: {
+			schemaVersion: 1,
+			tools: [],
+			connections: [],
+			fileRoots: [],
+			networkOrigins: [],
+			scripts: false,
+		},
+	};
+	const binding = RuntimeSkillHubBindingV1Schema.parse({
+		schemaVersion: 1,
+		agentId: projection.agentId,
+		agentVersion: projection.agentVersion,
+		configurationRevision: 1,
+		generationId: "e".repeat(64),
+		projections: [projection],
+		appliedBindings: [
+			{
+				schemaVersion: 1,
+				agentId: projection.agentId,
+				agentVersion: projection.agentVersion,
+				skillName: projection.manifest.name,
+				skillVersion: projection.skillVersion,
+				grant: projection.grant,
+				configurationRevision: 1,
+				syncRevision: 1,
+				state: "synced",
+				failureReason: null,
+				appliedReceipt: {
+					schemaVersion: 1,
+					agentId: projection.agentId,
+					agentVersion: projection.agentVersion,
+					skillName: projection.manifest.name,
+					configurationRevision: 1,
+					syncRevision: 1,
+					skillVersionId: projection.skillVersion.skillVersionId,
+					generationId: "e".repeat(64),
+					packageDigest: projection.skillVersion.packageDigest,
+					manifestDigest: projection.skillVersion.manifestDigest,
+					targetPath: projection.targetPath,
+					readOnly: true,
+				},
+			},
+		],
+	});
+	const claim = {
+		...f.claim,
+		deployment: {
+			...workloadDesiredFixture(1, projection.agentId, "internal-only"),
+			skillGenerationId: binding.generationId,
+			skills: binding.projections,
+			skillAppliedBindings: JSON.stringify(binding.appliedBindings),
+		},
+	};
+	const sourceName = `${workloadResourceNameV1(projection.agentId)}-data`;
+	await f.client.create({
+		apiVersion: "v1",
+		kind: "PersistentVolumeClaim",
+		metadata: {
+			name: sourceName,
+			namespace: workloadTestPolicy.namespace,
+			labels: {
+				"agent-infra.agora.io/agent": workloadResourceNameV1(
+					projection.agentId,
+				),
+			},
+			annotations: { "agent-infra.agora.io/agent-id": projection.agentId },
+		},
+	});
+	return { ...f, claim, binding, sourceName };
+}
+
 function drainClaim(
 	f: ReturnType<typeof fixture>,
 	observation: SessionSandboxObservationV1,
@@ -178,6 +279,176 @@ function drainClaim(
 }
 
 describe("production SessionSandbox resource receiver", () => {
+	it("carries the verified Hub generation to the Session without sharing its workspace", async () => {
+		const f = await skillFixture();
+		const signal = new AbortController().signal;
+		const observation = await f.receive(f.claim, signal);
+		const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+		const container = pod.spec?.containers[0];
+		expect(container?.volumeMounts).toContainEqual({
+			name: "skill-hub",
+			mountPath: "/opt/agent-infra-skill-hub",
+			subPath: `generations/${f.binding.generationId}/.agents`,
+			readOnly: true,
+		});
+		expect(pod.spec?.volumes).toContainEqual({
+			name: "skill-hub",
+			persistentVolumeClaim: { claimName: f.sourceName, readOnly: true },
+		});
+		expect(pod.spec?.volumes).toContainEqual({
+			name: "workspace",
+			persistentVolumeClaim: { claimName: "sandbox-allocation-a" },
+		});
+		expect(
+			JSON.parse(
+				container?.env?.find(
+					(e) => e.name === "AGENT_INFRA_RUNTIME_SKILL_HUB_BINDING",
+				)?.value ?? "null",
+			),
+		).toEqual(f.binding);
+		pod.status = {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		};
+		expect(
+			(
+				await f.receive(
+					{ ...f.claim, previousObservation: observation },
+					signal,
+				)
+			).status,
+		).toBe("ready");
+	});
+
+	it("shares only immutable packages between independent Session workspaces", async () => {
+		const f = await skillFixture();
+		const signal = new AbortController().signal;
+		await f.receive(f.claim, signal);
+		const otherClaim = {
+			...f.claim,
+			sandbox: {
+				...f.claim.sandbox,
+				sessionId: "conversation-b",
+				sandboxId: "allocation-b",
+				resourceName: "sandbox-allocation-b",
+				workspaceScope: "allocation-b",
+			},
+		};
+		await f.receive(otherClaim, signal);
+		const podA = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+		const podB = f.resources.get("Pod/sandbox-allocation-b") as V1Pod;
+		expect(podA.spec?.volumes?.find((v) => v.name === "skill-hub")).toEqual(
+			podB.spec?.volumes?.find((v) => v.name === "skill-hub"),
+		);
+		expect(podB.spec?.volumes?.find((v) => v.name === "workspace")).toEqual({
+			name: "workspace",
+			persistentVolumeClaim: { claimName: "sandbox-allocation-b" },
+		});
+		expect(podA.spec?.volumes?.find((v) => v.name === "workspace")).not.toEqual(
+			podB.spec?.volumes?.find((v) => v.name === "workspace"),
+		);
+	});
+
+	it("drains its recorded Session resources even after the Skill source volume disappears", async () => {
+		const f = await skillFixture();
+		const signal = new AbortController().signal;
+		const observed = await f.receive(f.claim, signal);
+		f.resources.delete(`PersistentVolumeClaim/${f.sourceName}`);
+		const result = await f.receive(
+			drainClaim(f, observed),
+			signal,
+			async () => "committed",
+		);
+		expect(result.status).toBe("stopped");
+		expect(f.resources.get("Pod/sandbox-allocation-a")).toBeUndefined();
+		expect(
+			f.resources.get("PersistentVolumeClaim/sandbox-allocation-a"),
+		).toBeDefined();
+	});
+
+	it.each(["missing", "other-agent", "terminating"])(
+		"rejects a %s source PVC before creating Session resources",
+		async (mutation) => {
+			const f = await skillFixture();
+			const key = `PersistentVolumeClaim/${f.sourceName}`;
+			const source = f.resources.get(key);
+			if (!source?.metadata) throw new Error("missing fixture PVC");
+			if (mutation === "missing") f.resources.delete(key);
+			if (mutation === "other-agent")
+				source.metadata.annotations = {
+					"agent-infra.agora.io/agent-id": "agent-b",
+				};
+			if (mutation === "terminating")
+				source.metadata.deletionTimestamp = new Date();
+			await expect(
+				f.receive(f.claim, new AbortController().signal),
+			).rejects.toThrow();
+			expect(
+				[...f.resources.keys()].filter((key) => key.includes("sandbox-")),
+			).toEqual([]);
+		},
+	);
+
+	it.each([
+		"missing-applied",
+		"stale-applied",
+		"other-agent",
+		"missing-generation",
+	])("rejects %s Skill input before resource writes", async (mutation) => {
+		const f = await skillFixture();
+		const deployment = structuredClone(f.claim.deployment);
+		if (mutation === "missing-applied") deployment.skillAppliedBindings = "[]";
+		if (mutation === "stale-applied") {
+			const bindings = JSON.parse(deployment.skillAppliedBindings);
+			bindings[0].configurationRevision = 2;
+			deployment.skillAppliedBindings = JSON.stringify(bindings);
+		}
+		if (mutation === "other-agent" && deployment.skills[0])
+			deployment.skills[0].agentId = "agent-b";
+		if (mutation === "missing-generation")
+			Object.assign(deployment, { skillGenerationId: undefined });
+		await expect(
+			f.receive({ ...f.claim, deployment }, new AbortController().signal),
+		).rejects.toThrow();
+		expect(
+			[...f.resources.keys()].filter((key) => key.includes("sandbox-")),
+		).toEqual([]);
+	});
+
+	it.each([
+		"writable-mount",
+		"other-generation",
+		"writable-volume",
+		"missing-binding",
+	])("rejects %s drift without replacing the Session Pod", async (mutation) => {
+		const f = await skillFixture();
+		const signal = new AbortController().signal;
+		const observation = await f.receive(f.claim, signal);
+		const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+		const container = pod.spec?.containers[0];
+		const mount = container?.volumeMounts?.find((m) => m.name === "skill-hub");
+		if (!mount) throw new Error("missing Skill mount");
+		if (mutation === "writable-mount") mount.readOnly = false;
+		if (mutation === "other-generation")
+			mount.subPath = `generations/${"f".repeat(64)}/.agents`;
+		if (mutation === "writable-volume") {
+			const volume = pod.spec?.volumes?.find((v) => v.name === "skill-hub");
+			if (volume?.persistentVolumeClaim)
+				volume.persistentVolumeClaim.readOnly = false;
+		}
+		if (mutation === "missing-binding" && container)
+			container.env = container.env?.filter(
+				(e) => e.name !== "AGENT_INFRA_RUNTIME_SKILL_HUB_BINDING",
+			);
+		const uid = pod.metadata?.uid;
+		await expect(
+			f.receive({ ...f.claim, previousObservation: observation }, signal),
+		).rejects.toThrow();
+		expect(f.resources.get("Pod/sandbox-allocation-a")?.metadata?.uid).toBe(
+			uid,
+		);
+	});
+
 	it("copies custom Owner Secret data into the Session Secret and keeps it out of the claim", async () => {
 		const f = fixture();
 		const ownerSecretName = "agent-owner-secret";

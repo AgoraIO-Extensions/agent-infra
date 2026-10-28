@@ -1,6 +1,11 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { posix } from "node:path";
-import { RuntimeModelConfigurationV4Schema } from "@agent-infra/contracts/runtime";
+import {
+	RuntimeModelConfigurationV4Schema,
+	type RuntimeSkillHubBindingV1,
+	RuntimeSkillHubBindingV1Schema,
+	runtimeSkillHubBindingEnvironmentNameV1,
+} from "@agent-infra/contracts/runtime";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	decideSessionSandboxDrainObservationV1,
@@ -31,9 +36,13 @@ import {
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import {
+	agentAnnotation,
 	agentContainerSecurityContext,
 	agentPodSecurityContext,
+	ownerLabel,
+	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
+import { skillHubVolumeMountV1 } from "./kubernetes-runtime-skill-mount.js";
 import {
 	hasAdditionalEgressPolicyV1,
 	nativeEgressPolicyAnnotationsV1,
@@ -189,6 +198,8 @@ export interface SessionSandboxAllocationV1 {
 	 * 此字段为 null；只有 desiredState === "running" 的准备操作才强制要求非 null。
 	 */
 	readonly runtime: SessionSandboxRuntimeInputV1 | null;
+	/** Frozen Hub package input from the Store's verified deployment. */
+	readonly skillHub?: RuntimeSkillHubBindingV1;
 	readonly connectionConsumerSnapshot?: string | null;
 	readonly connectionInstallationRevision?: string | null;
 	readonly resources: {
@@ -340,6 +351,15 @@ function metadata(allocation: SessionSandboxAllocationV1, name: string) {
 }
 
 function validateAllocation(value: SessionSandboxAllocationV1) {
+	if (value.skillHub !== undefined) {
+		const parsed = RuntimeSkillHubBindingV1Schema.safeParse(value.skillHub);
+		if (
+			!parsed.success ||
+			parsed.data.agentId !== value.agentId ||
+			parsed.data.projections.length === 0
+		)
+			throw new WorkloadKubernetesError("policy");
+	}
 	if (
 		value.schemaVersion !== 1 ||
 		!value.agentId ||
@@ -602,6 +622,14 @@ function runtimeEnvironment(
 		secretKeyRef: { name: allocation.secretName, key, optional: false },
 	});
 	const platform = [
+		...(allocation.skillHub
+			? [
+					{
+						name: runtimeSkillHubBindingEnvironmentNameV1,
+						value: JSON.stringify(allocation.skillHub),
+					},
+				]
+			: []),
 		{ name: "AGENT_INFRA_RUNTIME_AGENT_ID", value: allocation.agentId },
 		{ name: "AGENT_INFRA_RUNTIME_WORKER_ID", value: runtime.workerId },
 		{
@@ -708,6 +736,11 @@ export function sessionSandboxResourcesV1(
 	allocation: SessionSandboxAllocationV1,
 ): SessionSandboxResourceSetV1 {
 	validateAllocation(allocation);
+	const skillMount = allocation.skillHub
+		? skillHubVolumeMountV1({
+				skillGenerationId: allocation.skillHub.generationId,
+			})
+		: null;
 	const custom = customSecretMaterializations.get(allocation);
 	if (
 		allocation.desiredState === "running" &&
@@ -835,6 +868,7 @@ export function sessionSandboxResourcesV1(
 						...connection.env,
 					],
 					volumeMounts: [
+						...(skillMount ? [{ ...skillMount, name: "skill-hub" }] : []),
 						...connection.volumeMounts,
 						{ name: "workspace", mountPath: allocation.workspaceMountPath },
 						{ name: runtimeTmpVolume.name, mountPath: "/tmp" },
@@ -856,6 +890,17 @@ export function sessionSandboxResourcesV1(
 				},
 			],
 			volumes: [
+				...(skillMount
+					? [
+							{
+								name: "skill-hub",
+								persistentVolumeClaim: {
+									claimName: `${workloadResourceNameV1(allocation.agentId)}-data`,
+									readOnly: true,
+								},
+							},
+						]
+					: []),
 				...connection.volumes,
 				{
 					name: "workspace",
@@ -1224,6 +1269,24 @@ function ownedAtOrBefore(
 export function createSessionSandboxWorkloadAdapterV1(options: {
 	readonly client: WorkerKubernetesClientV1;
 }) {
+	const validateSkillSource = async (
+		allocation: SessionSandboxAllocationV1,
+	) => {
+		if (!allocation.skillHub || allocation.desiredState !== "running") return;
+		const owner = workloadResourceNameV1(allocation.agentId);
+		const name = `${owner}-data`;
+		const source = await options.client.read("PersistentVolumeClaim", name);
+		if (
+			!source?.metadata?.uid ||
+			!source.metadata.resourceVersion ||
+			source.metadata.name !== name ||
+			source.metadata.namespace !== allocation.namespace ||
+			source.metadata.deletionTimestamp ||
+			source.metadata.labels?.[ownerLabel] !== owner ||
+			source.metadata.annotations?.[agentAnnotation] !== allocation.agentId
+		)
+			throw new WorkloadKubernetesError("conflict");
+	};
 	return {
 		/**
 		 * #2917：来源本身已停止（只记录了保留的 PVC）时，不删除任何资源，只读证明停止：
@@ -1407,6 +1470,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			if (allocation.desiredState === "running" && allocation.runtime === null)
 				throw new WorkloadKubernetesError("policy");
 			const resources = sessionSandboxResourcesV1(allocation);
+			await validateSkillSource(allocation);
 			if (
 				allocation.desiredState === "running" &&
 				allocation.egress.nativeEgress &&
@@ -1537,6 +1601,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			if (options.client.namespace !== allocation.namespace)
 				throw new WorkloadKubernetesError("policy");
 			validateAllocation(allocation);
+			if (purpose === "business") await validateSkillSource(allocation);
 			const resources: SessionSandboxResourceIdentityV1[] = [];
 			let status: SessionSandboxObservationV1["status"] =
 				allocation.desiredState === "stopped" ? "stopped" : "ready";
