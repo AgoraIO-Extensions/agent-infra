@@ -1,45 +1,196 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
-import {
-	type RuntimeNativeCapabilityRequestV6,
-	RuntimeNativeCapabilityRequestV6Schema,
-} from "@agent-infra/contracts/runtime";
 import { parseAuthority } from "./conversation-execution-input.js";
 import {
 	type ConversationExecutionAuthorityV1,
+	type ConversationExecutionSourceV1,
 	type ConversationModelConfigurationV1,
 	conversationExecutionSourceV1,
 } from "./conversation-execution-types.js";
 import {
+	isPositiveSafeInteger,
+	snapshotObject,
+} from "./conversation-execution-values.js";
+import {
 	type NativeCapabilityAdmissionRequestV3,
 	parseNativeCapabilityAdmissionRequestV3,
 } from "./native-capability-admission.js";
-import type { TaskAuthorizationBoundaryV1 } from "./task-authorization.js";
+import {
+	parseTaskPrincipalV1,
+	type TaskAuthorizationBoundaryV1,
+	type TaskPrincipalV1,
+} from "./task-authorization.js";
 
 const digestPattern = /^[a-f0-9]{64}$/u;
-type NativeCapabilityRuntimeInputV6 = Omit<
-	RuntimeNativeCapabilityRequestV6,
-	"grant"
->;
-const runtimeInputSchema = RuntimeNativeCapabilityRequestV6Schema.omit({
-	grant: true,
-});
+/** Unsigned, server-resolved context; transport DTOs and Grants stay outside Core. */
+type NativeCapabilityAdmissionContextV6 = Readonly<{
+	schemaVersion: 6;
+	requestId: string;
+	traceId: string;
+	principal: TaskPrincipalV1;
+	executionSource: ConversationExecutionSourceV1;
+	channelId: string;
+	agentId: string;
+	conversationId: string;
+	executionId: string;
+	turnId: string;
+	sessionGeneration: number;
+	hostSessionRef: string;
+	operation: Readonly<{
+		kind: "execution";
+		id: string;
+		deliveryFence: number;
+		executionDeliveryFence: number;
+	}>;
+	keyBinding: NativeCapabilityAdmissionV6KeyBinding;
+	capabilityId: string;
+	capabilityKind: "command";
+	directoryRevision: string;
+	parameters: string;
+	parametersDigest: string;
+	capabilitySourceVersion: string;
+	selection: NativeCapabilityAdmissionRequestV3["selection"];
+	configVersion: string;
+}>;
 
-function parseRuntimeInput(input: unknown): NativeCapabilityRuntimeInputV6 {
-	if (typeof input === "object" && input !== null && "grant" in input) {
-		const { grant: _grant, ...binding } =
-			RuntimeNativeCapabilityRequestV6Schema.parse(input);
-		return binding;
-	}
-	return runtimeInputSchema.parse(input);
+function contextText(
+	value: unknown,
+	maximum = Number.POSITIVE_INFINITY,
+	allowEmpty = false,
+): string {
+	if (
+		typeof value !== "string" ||
+		(!allowEmpty && value.length === 0) ||
+		value.length > maximum
+	)
+		throw new TypeError("Native V6 admission context is invalid");
+	return value;
+}
+
+function parseRuntimeInput(input: unknown): NativeCapabilityAdmissionContextV6 {
+	const value = snapshotObject(input, [
+		"schemaVersion",
+		"requestId",
+		"traceId",
+		"principal",
+		"executionSource",
+		"channelId",
+		"agentId",
+		"conversationId",
+		"executionId",
+		"turnId",
+		"sessionGeneration",
+		"hostSessionRef",
+		"operation",
+		"keyBinding",
+		"capabilityId",
+		"capabilityKind",
+		"directoryRevision",
+		"parameters",
+		"parametersDigest",
+		"capabilitySourceVersion",
+		"selection",
+		"configVersion",
+	]);
+	const principal = parseTaskPrincipalV1(
+		snapshotObject(value.principal, ["kind", "id"]),
+	);
+	const operation = snapshotObject(value.operation, [
+		"kind",
+		"id",
+		"deliveryFence",
+		"executionDeliveryFence",
+	]);
+	const keyBinding = snapshotObject(value.keyBinding, [
+		"purpose",
+		"subjectId",
+		"ciphertextRef",
+		"version",
+	]);
+	const selection = snapshotObject(value.selection, [
+		"schemaVersion",
+		"modelOptionId",
+		"reasoningLevel",
+	]);
+	if (
+		value.schemaVersion !== 6 ||
+		value.capabilityKind !== "command" ||
+		(value.executionSource !== "web" &&
+			value.executionSource !== "wecom" &&
+			value.executionSource !== "platform-api" &&
+			value.executionSource !== "eval") ||
+		!isPositiveSafeInteger(value.sessionGeneration) ||
+		operation.kind !== "execution" ||
+		!isPositiveSafeInteger(operation.deliveryFence) ||
+		!isPositiveSafeInteger(operation.executionDeliveryFence) ||
+		operation.id !== value.executionId ||
+		operation.deliveryFence !== operation.executionDeliveryFence ||
+		(keyBinding.purpose !== "personal" &&
+			keyBinding.purpose !== "agent-default") ||
+		!isPositiveSafeInteger(keyBinding.version) ||
+		selection.schemaVersion !== 1
+	)
+		throw new TypeError("Native V6 admission context is invalid");
+	const parameters = contextText(value.parameters, 16 * 1024, true);
+	const parametersDigest = contextText(value.parametersDigest);
+	const capabilityId = contextText(value.capabilityId);
+	const directoryRevision = contextText(value.directoryRevision);
+	const configVersion = contextText(value.configVersion);
+	if (
+		!digestPattern.test(capabilityId) ||
+		!digestPattern.test(directoryRevision) ||
+		!digestPattern.test(parametersDigest) ||
+		parametersDigest !==
+			createHash("sha256").update(parameters).digest("hex") ||
+		!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(configVersion)
+	)
+		throw new TypeError("Native V6 admission context is invalid");
+	return Object.freeze({
+		schemaVersion: 6,
+		requestId: contextText(value.requestId),
+		traceId: contextText(value.traceId),
+		principal: Object.freeze(principal),
+		executionSource: value.executionSource,
+		channelId: contextText(value.channelId),
+		agentId: contextText(value.agentId),
+		conversationId: contextText(value.conversationId),
+		executionId: contextText(value.executionId),
+		turnId: contextText(value.turnId),
+		sessionGeneration: value.sessionGeneration,
+		hostSessionRef: contextText(value.hostSessionRef),
+		operation: Object.freeze({
+			kind: "execution",
+			id: contextText(operation.id),
+			deliveryFence: operation.deliveryFence,
+			executionDeliveryFence: operation.executionDeliveryFence,
+		}),
+		keyBinding: Object.freeze({
+			purpose: keyBinding.purpose,
+			subjectId: contextText(keyBinding.subjectId),
+			ciphertextRef: contextText(keyBinding.ciphertextRef),
+			version: keyBinding.version,
+		}),
+		capabilityId,
+		capabilityKind: "command",
+		directoryRevision,
+		parameters,
+		parametersDigest,
+		capabilitySourceVersion: contextText(value.capabilitySourceVersion, 512),
+		selection: Object.freeze({
+			schemaVersion: 1,
+			modelOptionId: contextText(selection.modelOptionId),
+			reasoningLevel: contextText(selection.reasoningLevel),
+		}),
+		configVersion,
+	});
 }
 
 /** Store-owned input for the V6 stateful command admission transaction. */
 export type NativeCapabilityAdmissionRequestV6 = Readonly<{
 	schemaVersion: 6;
-	principal: RuntimeNativeCapabilityRequestV6["principal"];
-	executionSource: RuntimeNativeCapabilityRequestV6["executionSource"];
+	principal: TaskPrincipalV1;
+	executionSource: ConversationExecutionSourceV1;
 	agentId: string;
 	channelId: string;
 	sessionGeneration: number;
@@ -64,9 +215,9 @@ export type NativeCapabilityInvocationBindingV6 = Readonly<{
 	conversationId: string;
 	agentId: string;
 	actorId: string;
-	principal: RuntimeNativeCapabilityRequestV6["principal"];
-	executionSource: RuntimeNativeCapabilityRequestV6["executionSource"];
-	operation: RuntimeNativeCapabilityRequestV6["operation"];
+	principal: TaskPrincipalV1;
+	executionSource: ConversationExecutionSourceV1;
+	operation: NativeCapabilityAdmissionContextV6["operation"];
 	channelId: string;
 	executionId: string;
 	turnId: string;
@@ -111,8 +262,8 @@ export type NativeCapabilityInvocationPlanV6 =
 
 export type NativeCapabilityAdmissionV6AuthorityBinding = Readonly<{
 	conversationId: string;
-	principal: RuntimeNativeCapabilityRequestV6["principal"];
-	executionSource: RuntimeNativeCapabilityRequestV6["executionSource"];
+	principal: TaskPrincipalV1;
+	executionSource: ConversationExecutionSourceV1;
 	agentId: string;
 	actorId: string;
 	channelId: string;
@@ -146,7 +297,7 @@ export type NativeCapabilityAdmissionV6Decision =
 export interface NativeCapabilityAdmissionTransactionPortV6 {
 	admitNativeCapabilityV6(
 		input: {
-			readonly runtimeRequest: NativeCapabilityRuntimeInputV6;
+			readonly runtimeRequest: NativeCapabilityAdmissionContextV6;
 			readonly invocation: NativeCapabilityAdmissionRequestV3;
 			readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
 			readonly request: NativeCapabilityAdmissionRequestV6;
@@ -262,7 +413,7 @@ export function nativeCapabilityAdmissionRequestDigestV6(
 }
 
 export function nativeCapabilityOperationDigestV6(
-	input: NativeCapabilityRuntimeInputV6,
+	input: NativeCapabilityAdmissionContextV6,
 ): string {
 	const {
 		requestId: _requestId,
@@ -284,11 +435,11 @@ export function nativeCapabilityOperationDigestV6(
 }
 
 function runtimeAuthorityMatches(
-	request: NativeCapabilityRuntimeInputV6,
+	request: NativeCapabilityAdmissionContextV6,
 	authority: NativeCapabilityAdmissionV6AuthorityBinding,
 	keyBinding: NativeCapabilityAdmissionV6KeyBinding,
 ): boolean {
-	let source: RuntimeNativeCapabilityRequestV6["executionSource"];
+	let source: ConversationExecutionSourceV1;
 	try {
 		source = conversationExecutionSourceV1(authority.channelId);
 	} catch {
@@ -343,7 +494,7 @@ function freezePlan<T>(value: T): T {
 }
 
 function frozenPlanV6(
-	runtimeRequest: NativeCapabilityRuntimeInputV6,
+	runtimeRequest: NativeCapabilityAdmissionContextV6,
 	request: NativeCapabilityAdmissionRequestV6,
 	authority: NativeCapabilityAdmissionV6AuthorityBinding,
 	keyBinding: NativeCapabilityAdmissionV6KeyBinding,
@@ -412,7 +563,7 @@ function frozenPlanV6(
 export function validateNativeCapabilityInvocationPlanV6(
 	plan: NativeCapabilityInvocationPlanV6,
 	input: {
-		readonly runtimeRequest: NativeCapabilityRuntimeInputV6;
+		readonly runtimeRequest: NativeCapabilityAdmissionContextV6;
 		readonly invocation: NativeCapabilityAdmissionRequestV3;
 		readonly keyBinding: NativeCapabilityAdmissionV6KeyBinding;
 		readonly request: NativeCapabilityAdmissionRequestV6;
@@ -456,7 +607,7 @@ export function validateNativeCapabilityReplayPlanV6(
 		readonly requestDigest: string;
 	},
 ): void {
-	const runtimeRequest: NativeCapabilityRuntimeInputV6 = {
+	const runtimeRequest: NativeCapabilityAdmissionContextV6 = {
 		schemaVersion: 6,
 		requestId: plan.outbox.payload.requestId,
 		traceId: plan.outbox.payload.traceId,
