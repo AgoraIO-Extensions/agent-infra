@@ -8,12 +8,73 @@ import test from "node:test";
 import { ConversationDetailProjectionV2Schema } from "../../packages/contracts/src/pilot/operation-v2.ts";
 import {
 	assertAcceptance,
+	assistantDeliveryEvidence,
 	currentExecutionEvents,
 	currentExecutionFrames,
 	restoredHistoryPreservesEvents,
 } from "./conversation-browser-validation.mjs";
 
 const script = join(import.meta.dirname, "conversation-browser.mjs");
+
+test("coalesced text and completion wait for the current reply to render after delivery", () => {
+	const frames = [
+		{ type: "text.delta", textLength: 5, at: 10, chunkSequence: 1 },
+		{ type: "execution.status", status: "completed", at: 10, chunkSequence: 1 },
+	];
+	assert.equal(assistantDeliveryEvidence(frames, []), null);
+	assert.deepEqual(
+		assistantDeliveryEvidence(frames, [{ at: 11, visibleTextLength: 5 }]),
+		{ mode: "coalesced", renderedBeforeTerminal: false },
+	);
+	assert.equal(
+		assistantDeliveryEvidence(frames, [{ at: 9, visibleTextLength: 5 }]),
+		null,
+	);
+	assert.equal(
+		assistantDeliveryEvidence(frames, [{ at: 11, visibleTextLength: 5 }], 5),
+		null,
+	);
+});
+
+test("separate SSE chunks still require an incremental render before completion", () => {
+	const frames = [
+		{ type: "text.delta", textLength: 5, at: 10, chunkSequence: 1 },
+		{ type: "execution.status", status: "completed", at: 30, chunkSequence: 2 },
+	];
+	assert.deepEqual(
+		assistantDeliveryEvidence(frames, [{ at: 15, visibleTextLength: 5 }]),
+		{ mode: "incremental", renderedBeforeTerminal: true },
+	);
+	assert.equal(
+		assistantDeliveryEvidence(frames, [{ at: 31, visibleTextLength: 5 }]),
+		null,
+	);
+	assert.equal(
+		assistantDeliveryEvidence([...frames].reverse(), [
+			{ at: 15, visibleTextLength: 5 },
+		]),
+		null,
+	);
+	assert.equal(
+		assistantDeliveryEvidence(frames.slice(0, 1), [
+			{ at: 15, visibleTextLength: 5 },
+		]),
+		null,
+	);
+	assert.equal(
+		assistantDeliveryEvidence(frames.slice(1), [
+			{ at: 31, visibleTextLength: 5 },
+		]),
+		null,
+	);
+	assert.equal(
+		assistantDeliveryEvidence(
+			frames.map(({ chunkSequence: _, ...f }) => f),
+			[{ at: 15, visibleTextLength: 5 }],
+		),
+		null,
+	);
+});
 
 function persistedEvent(eventId, executionId) {
 	return {

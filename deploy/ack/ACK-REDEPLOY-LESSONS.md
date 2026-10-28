@@ -46,6 +46,10 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 
 ## 可移植的一键顺序
 
+短回复的文本帧和完成帧可能合并在同一个网络数据块中。浏览器探针在把数据交给应用前采样，
+不能要求页面已经显示该数据块的内容。当前 probe 明确记录 coalesced delivery，继续检查当前
+回复实际显示、事件顺序、持久化及隔离；分块交付仍要求终态前的增量渲染，不用人为延迟拆包制造证据。
+
 自定义 Agent 的验收方式由创建请求的 `interactionMode` 决定：`platform-adapter` 必须验证
 当前 Agent 的三轮 Platform 对话；`self-managed` 必须验证自己的应用入口。之前流程对所有
 custom 都要求 HTML probe，导致 ACP 对话成功后仍无法结束；当前分派保留各自完整的检查。

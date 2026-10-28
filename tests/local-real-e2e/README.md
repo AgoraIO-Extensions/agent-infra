@@ -132,9 +132,12 @@ node tests/local-real-e2e/conversation-browser.mjs --check-config \
 输出包含 `endpointChecked: false`，不能作为页面、SSE、模型或 Connection 验收证据。
 
 该旅程会在 Owner 浏览器中创建会话、提交文本、读取 SSE，并在回答完成后刷新页面。
-它记录浏览器实际消费到的增量 `text.delta` 与终态 `execution.status` 帧，并要求页面在终态
-帧前显示增量文本、增量帧先于 `completed` 终态帧到达；随后回读持久化事件、恢复页面和窄
-屏布局。第二个独立浏览器主体同时请求
+它记录浏览器实际消费到的 `text.delta` 与终态 `execution.status` 帧，要求文本帧按顺序出现在
+`completed` 帧之前。文本与终态分属不同网络数据块时，页面必须在终态前显示增量文本。
+两者合并在同一数据块时，探针在交付数据前无法要求页面已经渲染；它等待当前回复实际显示，
+并在 receipt 中明确记录 `delivery.mode=coalesced`、`renderedBeforeTerminal=false`。
+这种结果不证明终态前的增量显示。两种模式都继续检查回复正文、持久化事件、刷新恢复与窄屏
+布局。第二个独立浏览器主体同时请求
 会话详情和 `/events` 订阅，两者必须得到 `403` 或 `404`，页面不得保留另一个主体的正文。
 
 输出目录中的 `evidence.json` 只保存主体、会话、执行和事件 ID 的 SHA-256，以及状态码和

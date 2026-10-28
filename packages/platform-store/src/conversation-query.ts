@@ -2135,10 +2135,20 @@ export class PostgresConversationQueryV1 {
 		const readScope = scope(inputScope);
 		const conversationId = requestText(conversationIdInput);
 		try {
-			const row = await readConversation(
-				this.#client,
-				readScope,
-				conversationId,
+			// Authorization needs ownership, not the expensive upgrade/recovery UI projection.
+			const [row] = await this.#client.unsafe<{ agent_id: string }[]>(
+				`select c.agent_id
+				 from platform.conversations c
+				 left join platform.session_sandbox_allocations s on s.conversation_id = c.id
+				 where c.id = $1 and c.actor_id = $2 and c.channel_id = $3 and c.principal_type = $4
+				   and ${conversationSandboxReadBindingSql}
+				 limit 1`,
+				[
+					conversationId,
+					readScope.actorId,
+					readScope.channelId,
+					readScope.principal?.kind ?? "user",
+				],
 			);
 			return row ? { agentId: text(row.agent_id) } : undefined;
 		} catch (error) {
