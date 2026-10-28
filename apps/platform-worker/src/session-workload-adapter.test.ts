@@ -1861,7 +1861,7 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			env.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED")?.value,
 		).toBe("worker-v1");
 		expect(env.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE")?.value).toBe(
-			"agent-a\0session-a",
+			"agent-a:session-a",
 		);
 		expect(
 			env.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION")?.value,

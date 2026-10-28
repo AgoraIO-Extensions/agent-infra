@@ -1,6 +1,7 @@
 import { createPublicKey } from "node:crypto";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import type { V1EnvVar } from "@kubernetes/client-node";
+import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import {
 	type WorkloadEgressDestinationV1,
@@ -284,5 +285,40 @@ export function workloadRuntimeAuthEnvironmentV1(
 						},
 					},
 				] satisfies V1EnvVar[])),
+	];
+}
+
+/**
+ * Inject the Worker-owned Codex container boundary for one dedicated Workload.
+ * The service token is used only to derive the attestation; it is never put in
+ * a Pod environment value.
+ */
+export function codexContainerBoundaryEnvironmentV1(input: {
+	readonly enabled: boolean;
+	readonly serviceToken?: string;
+	readonly scope: string;
+}): V1EnvVar[] {
+	if (!input.enabled) return [];
+	const serviceToken = input.serviceToken;
+	if (
+		serviceToken === undefined ||
+		!/^[\x21-\x7e]{1,8192}$/u.test(serviceToken) ||
+		!/^[\x21-\x7e]{1,256}$/u.test(input.scope)
+	)
+		throw new Error("policy");
+	return [
+		{ name: "AGENT_INFRA_RUNTIME_ISOLATION_MODE", value: "container-boundary" },
+		{
+			name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED",
+			value: "worker-v1",
+		},
+		{
+			name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE",
+			value: input.scope,
+		},
+		{
+			name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION",
+			value: containerBoundaryAttestationV1(serviceToken, input.scope),
+		},
 	];
 }

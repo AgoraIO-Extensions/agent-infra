@@ -85,6 +85,8 @@ export type WorkloadBrowserBindingResolverV1 = (input: {
 }) => BrowserCapabilityBindingV1 | undefined;
 
 export interface WorkloadRuntimeOptionsV1 {
+	/** Deployment-owned service token used only for Codex container-boundary attestations. */
+	readonly containerBoundaryServiceToken?: string;
 	readonly workerId: string;
 	readonly client: WorkerKubernetesClientV1;
 	readonly policy: KubernetesWorkloadPolicyV1;
@@ -649,6 +651,7 @@ export function createWorkloadRuntimeV1(
 			onHealthDiagnostic: options.onHealthDiagnostic,
 			modelProjection,
 			standardTemplateBinding,
+			containerBoundaryServiceToken: options.containerBoundaryServiceToken,
 			async probe({ desired, serviceOrigin, podUid }) {
 				let probeStartedAt = performance.now();
 				const observed = (

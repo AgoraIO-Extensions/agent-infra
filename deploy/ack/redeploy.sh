@@ -16,6 +16,8 @@ source_sha=${ACK_SOURCE_SHA:-}
 export ACK_SOURCE_SHA="$source_sha"
 image_manifest=${ACK_IMAGE_MANIFEST:-}
 runtime_manifest=${ACK_RUNTIME_IMAGE_MANIFEST:-}
+template_manifest=${ACK_TEMPLATE_IMAGE_MANIFEST:-}
+export ACK_TEMPLATE_IMAGE_MANIFEST="$template_manifest"
 export ACK_RUNTIME_IMAGE_MANIFEST="$runtime_manifest"
 evidence_dir=${ACK_EVIDENCE_DIR:-"${TMPDIR:-/tmp}/agent-infra-ack-redeploy-$(date -u +%Y%m%dT%H%M%SZ)"}
 
@@ -46,6 +48,7 @@ Optional validation inputs:
   ACK_AGENT_REQUESTS_FILE  private JSON list for API Agent creation/replay
   ACK_TEMPLATE_VALIDATIONS_FILE private four-template validation expectation bundle
   ACK_TEMPLATE_PREFLIGHT_JOBS_FILE private JSON list of four template preflight jobs
+  ACK_TEMPLATE_IMAGE_MANIFEST private amd64 four-template image manifest
   ACK_CREDENTIAL_BOOTSTRAP_FILE private browser storageState credential request
   ACK_CLEANUP_PLAN_FILE    private cluster/namespace ownership input for cleanup-plan
   ACK_AGENT_STATE_DIR      external existing 0700 directory for private ID bindings
@@ -212,6 +215,7 @@ template_preflight() {
 	require_source_tuple
 	local jobs=${ACK_TEMPLATE_PREFLIGHT_JOBS_FILE:-}
 	require_file ACK_TEMPLATE_PREFLIGHT_JOBS_FILE "$jobs"
+	require_file ACK_TEMPLATE_IMAGE_MANIFEST "$template_manifest"
 	prepare_evidence
 	local list_file
 	list_file=$(mktemp)
@@ -220,8 +224,10 @@ template_preflight() {
 const fs = require("node:fs");
 const file = process.argv[2];
 const value = JSON.parse(fs.readFileSync(file, "utf8"));
-const manifest = JSON.parse(fs.readFileSync(process.env.ACK_RUNTIME_IMAGE_MANIFEST, "utf8"));
+const manifest = JSON.parse(fs.readFileSync(process.env.ACK_TEMPLATE_IMAGE_MANIFEST, "utf8"));
 if (!value || value.schemaVersion !== 1 || !Array.isArray(value.jobs) || value.jobs.length !== 4)
+	process.exit(1);
+if (manifest.schemaVersion !== 1 || manifest.commitSha !== process.env.ACK_SOURCE_SHA || manifest.platform !== "linux/amd64")
 	process.exit(1);
 const seen = new Set();
 const templateIds = new Set();

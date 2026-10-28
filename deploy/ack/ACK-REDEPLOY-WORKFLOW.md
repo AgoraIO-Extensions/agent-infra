@@ -33,6 +33,7 @@ export ACK_CUSTOM_AGENT_CONFIGS=$'/private/ack/custom-a.json\n/private/ack/custo
 export ACK_AGENT_REQUESTS_FILE=/private/ack/agent-requests.json
 export ACK_TEMPLATE_VALIDATIONS_FILE=/private/ack/template-validations.json
 export ACK_TEMPLATE_PREFLIGHT_JOBS_FILE=/private/ack/template-preflight-jobs.json
+export ACK_TEMPLATE_IMAGE_MANIFEST=/private/ack/templates-amd64.json
 export ACK_EVIDENCE_DIR=/private/ack/evidence/$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
@@ -312,7 +313,9 @@ Platform Ready、单次回复与多轮通过分别记录。后续其他 session 
 - main 在发布期间多次前进，导致“最新镜像”与部署/运行时绑定混用。脚本要求 `ACK_SOURCE_SHA == HEAD`，并把每次镜像和 Helm 回读放入同一 receipt。
 - Pod Ready、healthz、受控回显和旧会话不能证明业务成功。脚本强制四个新浏览器旅程，要求真实 SSE、落库终态、刷新回读和第二主体拒绝。
 - Pi 曾出现首轮成功、下一轮只返回一个字符、再失败。当前入口要求同一会话至少三轮，各轮验证独立 Execution 与期望回复；受控 Chromium 已覆盖第二轮截断失败，真实 ACK 多轮结果仍待验证。
-- Codex 的 ECI/普通节点缺少可执行的 Landlock ABI，真实 `setpriv` 预检失败。脚本不会用 Pi 或受控 fixture 替代 Codex；当前规范另有 container-boundary 模式，按 [Runtime 预检](./RUNTIME-PREFLIGHT.md) 完成对应隔离和真实工具验收后才可使用；不能从历史 Landlock 失败推断当前方案必然失败。
+- Codex 的 ECI/普通节点可能缺少可执行的 Landlock ABI，真实 `setpriv` 预检会失败。脚本不会用 Pi 或受控 fixture 替代 Codex；ACK 的标准 Runtime Pod 可在 `policy.codexContainerBoundaryEnabled=true` 且 Worker 注入匹配 HMAC attestation 时使用 reviewed `container-boundary` 模式。该模式必须先通过 [Runtime 预检](./RUNTIME-PREFLIGHT.md)，再对同一标准 Workload 做签名真实 readiness 和真实模型回合；缺少边界输入时仍应 fail closed，不能从历史 Landlock 失败或 Pod Ready 推断当前方案成功。
+- Fresh 数据库会生成新的 canonical Platform user ID。`allowedPrincipals`、API subject 映射和 custom admission 不能写死历史 UUID；登录后读取当前 session，再更新仓库外私有配置，删除并重建 owned configuration Secret，滚动 API/Worker 后重新签发 credential。
+- 标准 Workload 的 Codex boundary 输入由 Worker 在运行时根据当前 Agent ID 生成；私有 values 只打开部署策略开关。任何手工给 Agent Pod 加 `AGENT_INFRA_*` boundary 输入、复用旧 UID 或直接改 StatefulSet 都会破坏 ownership/attestation 验证。
 - 运行时绑定曾指向旧 Digest，旧 Sandbox 进入 `RUNTIME_CONFIGURATION_INVALID`。当前浏览器配置尚未绑定 image/revision；必须补齐这一验证才能排除旧 Sandbox。
 - malformed execution-capacity profile、重复 `templateModelBindings` 和配额耗尽曾阻断全局 workload reconciliation。部署前应从 Worker configuration 中删除坏 profile、确保每个标准模板只有一个当前绑定，并核对 `ResourceQuota hard/used`；现场排查应只读取配额数值与有界故障码；不要导出完整事件消息。
 - ACK registry 对不完整 OCI config 返回 `409`，镜像 mirror tag 写入返回 `405`；发布阶段使用受支持的 GHCR/workflow 路径和完整 Digest，不能把临时 Tag 写入 values。
