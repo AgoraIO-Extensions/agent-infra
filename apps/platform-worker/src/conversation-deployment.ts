@@ -29,6 +29,7 @@ import { containerBoundaryAttestationV1 } from "./container-boundary-attestation
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
+import { skillHubRuntimeBindingV1 } from "./kubernetes-runtime-skill-mount.js";
 import {
 	bindSessionSandboxCustomSecretMaterializationV1,
 	createSessionSandboxWorkloadAdapterV1,
@@ -736,7 +737,15 @@ function createSessionSandboxAllocationResolverV1(
 						candidate.imageDigest === deployment.imageDigest,
 				)
 			: undefined;
+		const skillHub = skillHubRuntimeBindingV1(deployment);
+		if (
+			skillHub &&
+			deployment.persistentVolume.name !==
+				`${workloadResourceNameV1(binding.agentId)}-data`
+		)
+			throw new WorkloadKubernetesError("policy");
 		const allocation: SessionSandboxAllocationV1 = {
+			...(skillHub ? { skillHub } : {}),
 			...binding,
 			generation,
 			resourceFence,
