@@ -302,6 +302,9 @@ export class PostgresEvaluationFeedbackV1 implements TaskFeedbackPortV1 {
 			if (!clock || Date.parse(policy.validUntil) <= +clock.now)
 				throw new EvaluationDataErrorV1("denied");
 			await identity.revalidate();
+			// Configuration access updates hold this same Agent row while replacing owners/availability.
+			await tx`select id from platform.agents where id=${row.agent_id} for share`;
+			await this.#task(tx, executionId, identity.principal);
 			const [endClock] = await tx<
 				{ now: Date }[]
 			>`select clock_timestamp() as now`;
@@ -342,12 +345,43 @@ export class PostgresEvaluationFeedbackV1 implements TaskFeedbackPortV1 {
 				principal: identity.principal,
 				agentId,
 			});
+			const [record] = await tx<
+				{ state: unknown; authorization_revision: string }[]
+			>`select ${tx.unsafe(agentManagementStateJsonSql("a"))} as state,g.authorization_revision from platform.agent_applications a join platform.agents g on g.id=a.agent_id where a.agent_id=${agentId}`;
+			if (!record) throw new EvaluationDataErrorV1("denied");
+			const agent = parseAgentManagementPortState(record.state);
+			const user =
+				identity.principal.kind === "user"
+					? await resolveCurrentPersonalApiUserV1(
+							this.options.directory,
+							identity.principal.id,
+						)
+					: null;
+			const application =
+				identity.principal.kind === "application"
+					? await readCurrentTaskApplicationV1(tx, {
+							applicationId: identity.principal.id,
+							agentId,
+						})
+					: null;
+			const current = {
+				principal: identity.principal,
+				agent,
+				agentAuthorizationRevision: record.authorization_revision,
+				user,
+				application,
+				useGrant: grant,
+			};
 			if (
-				request.authentication.kind === "credential" &&
-				(!grant || grant.revoked)
+				!(
+					isCurrentTaskFeedbackUseV1({ ...current, channelId: "api" }) ||
+					(request.authentication.kind === "browser" &&
+						isCurrentTaskFeedbackUseV1({ ...current, channelId: "web" }))
+				)
 			)
 				throw new EvaluationDataErrorV1("denied");
 		}
+
 		return identity;
 	}
 	async summary(
@@ -470,6 +504,15 @@ export class PostgresEvaluationFeedbackV1 implements TaskFeedbackPortV1 {
 				for (const id of snapshot.ids)
 					await this.#task(tx, id, current.principal);
 			await current.revalidate();
+			await tx`select id from platform.agents where id=${agentId} for share`;
+			await this.#summaryAuthority(tx, request, agentId, view);
+			if (view === "owner") {
+				const owners =
+					await tx`select owner_id from platform.agent_owners where agent_id=${agentId} and owner_id=${current.principal.id}`;
+				if (owners.length !== 1) throw new EvaluationDataErrorV1("denied");
+			} else
+				for (const id of snapshot.ids)
+					await this.#task(tx, id, current.principal);
 			const [clock] = await tx<
 				{ now: Date }[]
 			>`select clock_timestamp() as now`;

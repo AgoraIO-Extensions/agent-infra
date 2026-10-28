@@ -83,7 +83,7 @@ async function seed(kind: string, channelId = "api") {
 	};
 	await sql`insert into platform.conversations(id,agent_id,actor_id,principal_type,channel_id,status,session_generation,authorization_revision)values(${id},'agent','same',${kind},${channelId},'active',1,'agent-1')`;
 	await sql`insert into platform.conversation_executions(execution_id,conversation_id,agent_id,actor_id,principal_type,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,created_at)values(${id},${id},'agent','same',${kind},${channelId},${id},'unknown',1,1,'agent-1',clock_timestamp())`;
-	await sql`insert into platform.task_authorization_records(id,execution_id,boundary)values(${randomUUID()},${id},${sql.json(boundary)})`;
+	await sql`insert into platform.task_authorization_records(id,execution_id,boundary)values(${randomUUID()},${id},${JSON.stringify(boundary)}::text::jsonb)`;
 	await sql`update platform.conversation_executions set status='completed' where execution_id=${id}`;
 	return id;
 }
@@ -328,4 +328,166 @@ it("uses fresh commit time and the current shorter retention for receipts and su
 		await shorter.close();
 		policy.revision = 3;
 	}
+});
+it.each(["owner", "web"] as const)(
+	"denies historical %s access revoked by the real configuration use case during the final directory check",
+	async (mode) => {
+		const { drizzle } = await import("drizzle-orm/postgres-js");
+		const { readAgentManagementState } = await import("./agent-management.js");
+		const { PostgresAgentConfigurationTransactionV1 } = await import(
+			"./agent-configuration.js"
+		);
+		const { createAgentConfigurationUseCaseV1 } = await import(
+			"@agent-infra/platform-core"
+		);
+		const { FakeAgentConfigurationAdmissionsV1 } = await import(
+			"../../platform-core/src/fake-agent-configuration.js"
+		);
+		const {
+			agentConfigurationConformanceAdmissionsV1,
+			agentConfigurationConformanceRecordV1,
+		} = await import(
+			"../../platform-core/src/agent-configuration.conformance.js"
+		);
+		const configuration = {
+			...agentConfigurationConformanceRecordV1,
+			agentId: "agent",
+		};
+		await sql`update platform.agents set current_configuration_revision=7 where id='agent'`;
+		await sql`insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,created_at,configuration)values('agent',7,'template_01',now(),${JSON.stringify(configuration)}::text::jsonb) on conflict do nothing`;
+		if (mode === "owner")
+			await sql`insert into platform.agent_owners(agent_id,owner_id,created_at)values('agent','viewer',now()) on conflict do nothing`;
+		else
+			await sql`insert into platform.agent_availability(agent_id,target_type,target_id)values('agent','user','same') on conflict do nothing`;
+		const state = await readAgentManagementState(drizzle(sql), "agent");
+		if (!state) throw new Error("missing fixture state");
+		const admission = new FakeAgentConfigurationAdmissionsV1({
+			...agentConfigurationConformanceAdmissionsV1,
+			authorizations: [
+				{
+					agentId: "agent",
+					actorId: "owner",
+					authorizationRevision: "agent-1",
+					accessAuthority: {
+						state,
+						actorContext: {
+							schemaVersion: 1,
+							userId: "owner",
+							accountStatus: "active",
+							organizationIds: [],
+							isAdministrator: false,
+						},
+						authorityContext: {
+							schemaVersion: 1,
+							users: ["owner", "viewer", "same"].map((userId) => ({
+								userId,
+								accountStatus: "active" as const,
+							})),
+							organizationIds: [],
+						},
+					},
+				},
+			],
+		});
+		const configTx = new PostgresAgentConfigurationTransactionV1(database);
+		const configurationCore = createAgentConfigurationUseCaseV1({
+			transaction: configTx,
+			authorizationAdmission: admission,
+			imageAdmission: admission,
+			modelAdmission: admission,
+			secretAdmission: admission,
+			channelAdmission: admission,
+		});
+		const barrier = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let calls = 0;
+		const guarded = new PostgresEvaluationFeedbackV1({
+			...database,
+			loadPolicy: async () => policy,
+			directory: {
+				resolveUser: async (id) => {
+					calls++;
+					if (calls === 4) {
+						barrier.resolve();
+						await release.promise;
+					}
+					return directory.resolveUser(id);
+				},
+			},
+		});
+		const actor: EvaluationRequestV1 = {
+			authentication: {
+				kind: "browser",
+				userId: mode === "owner" ? "viewer" : "same",
+			},
+			requestId: randomUUID(),
+			traceId: randomUUID(),
+		};
+		const id = mode === "web" ? await seed("user", "web") : null;
+		const pending =
+			mode === "owner"
+				? guarded.summary(actor, "agent", "owner", {
+						from: new Date(Date.now() - 60000).toISOString(),
+						to: new Date(Date.now() + 60000).toISOString(),
+					})
+				: createTaskFeedbackV1(guarded).get(actor, id!);
+		const outcome = Promise.allSettled([pending]);
+		try {
+			await Promise.race([
+				barrier.promise,
+				pending.then(() => {
+					throw new Error("missing final barrier");
+				}),
+			]);
+			const mutation = await configurationCore.update(
+				{
+					schemaVersion: 2,
+					agentId: "agent",
+					idempotencyKey: randomUUID(),
+					requestId: randomUUID(),
+					traceId: randomUUID(),
+					changes: mode === "owner" ? { coOwnerIds: [] } : { availability: [] },
+				},
+				{
+					schemaVersion: 1,
+					actorId: "owner",
+					rawRequestDigest: "a".repeat(64),
+				},
+			);
+			expect(mutation).toBeDefined();
+			release.resolve();
+			expect(await outcome).toEqual([
+				expect.objectContaining({
+					status: "rejected",
+					reason: expect.objectContaining({ code: "denied" }),
+				}),
+			]);
+		} finally {
+			release.resolve();
+			await outcome;
+			await guarded.close();
+			await configTx.close();
+		}
+	},
+	30000,
+);
+
+it("authorizes a genuinely empty self window and conceals an unavailable Agent without relying on Task rows", async () => {
+	const query = {
+		from: "2026-01-01T00:00:00.000Z",
+		to: "2026-01-02T00:00:00.000Z",
+	};
+	expect(
+		(await store.summary(request("user"), "agent", "self", query))
+			.eligibleTasks,
+	).toBe(0);
+	const outsider: EvaluationRequestV1 = {
+		authentication: { kind: "browser", userId: "outsider" },
+		requestId: randomUUID(),
+		traceId: randomUUID(),
+	};
+	for (const agentId of ["agent", "does-not-exist"])
+		await expect(
+			store.summary(outsider, agentId, "self", query),
+		).rejects.toMatchObject({ code: "denied" });
 });
