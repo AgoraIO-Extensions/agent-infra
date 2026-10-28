@@ -609,7 +609,11 @@ it("lists and searches only inside the owning Conversation through native Glob a
 			name: "Glob",
 			input: { pattern: "../../*/workspace/*" },
 		},
-		{ id: "bash_denied", name: "Bash", input: { command: "ls" } },
+		{
+			id: "bash_denied",
+			name: "Bash",
+			input: { command: "cat /proc/self/environ" },
+		},
 	];
 	completeClaudeToolUses(
 		first.response,
@@ -1229,3 +1233,160 @@ it("rejects non-Messages and malformed requests without stalling the Claude fixt
 		await new Promise<void>((accept) => server.close(() => accept()));
 	}
 });
+
+it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
+	"runs production Claude Bash with child isolation, background inheritance and restart facts",
+	async () => {
+		const f = await fixture();
+		const root = await realpath(f.path);
+		const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
+		const hostSecret = join(root, "host-secret.txt");
+		await writeFile(hostSecret, "synthetic-host-secret");
+		f.hold();
+		const firstCommand = claudeCommand("shell-first");
+		const accepted = await f.driver.execute(firstCommand);
+		const workspace = join(root, accepted.nativeSessionRef, "workspace");
+		const nativeConfig = join(
+			root,
+			accepted.nativeSessionRef,
+			"config",
+			"shell-secret.txt",
+		);
+		await writeFile(nativeConfig, "synthetic-native-secret");
+		await symlink(root, join(workspace, "escape"));
+		const forbidden = [
+			hostSecret,
+			nativeConfig,
+			join(workspace, "escape/host-secret.txt"),
+			"/proc/self/environ",
+			`/proc/${process.pid}/environ`,
+			`/proc/${process.pid}/mem`,
+			`/proc/${process.pid}/fd/0`,
+		];
+		const program = `const fs=require('node:fs'); const denied=p=>{try{fs.readFileSync(p);return false}catch{return true}}; const proof={env:Object.keys(process.env).every(k=>!/TOKEN|SECRET|ANTHROPIC|AGENT_INFRA|BASH_ENV|NODE_OPTIONS/.test(k)),files:${JSON.stringify(forbidden)}.every(denied)}; fs.writeFileSync('../memory/shell-memory.txt','owned-memory'); fs.writeFileSync(process.argv[1],JSON.stringify(proof)); process.stdout.write('isolated-production-shell');`;
+		const runShell = async (
+			offset: number,
+			file: string,
+			background: boolean,
+		) => {
+			await vi.waitFor(() => expect(f.calls).toHaveLength(offset + 1), {
+				timeout: 10000,
+			});
+			const call = f.calls[offset];
+			if (!call) throw Error();
+			expect(call.body.tools).toEqual(
+				expect.arrayContaining([expect.objectContaining({ name: "Bash" })]),
+			);
+			const command = `/usr/local/bin/node -e ${quote(program)} ${quote(file)}`;
+			completeClaudeToolUses(
+				call.response,
+				`msg_shell_${offset}`,
+				String(call.body.model),
+				"",
+				[
+					{
+						id: `production_shell_${offset}`,
+						name: "Bash",
+						input: {
+							command: background
+								? `${command} & wait`
+								: `${command} && test -s ${quote(file)}`,
+							timeout: 5000,
+						},
+					},
+				],
+			);
+			await vi.waitFor(() => expect(f.calls).toHaveLength(offset + 2), {
+				timeout: 10000,
+			});
+			expect(JSON.parse(await readFile(join(workspace, file), "utf8"))).toEqual(
+				{ env: true, files: true },
+			);
+			const answer = f.calls[offset + 1];
+			if (!answer) throw Error();
+			expect(JSON.stringify(answer.body.messages)).toContain(
+				"isolated-production-shell",
+			);
+			f.release();
+		};
+		await runShell(0, "first-proof.json", false);
+		await f.settled(accepted.nativeSessionRef, firstCommand.executionId);
+		const events = await f.driver.replayEvents(
+			accepted.nativeSessionRef,
+			firstCommand.executionId,
+		);
+		expect(
+			events
+				.filter(
+					(event) => event.type === "tool" && event.payload.name === "Bash",
+				)
+				.map((event) => (event.type === "tool" ? event.payload.phase : "")),
+		).toEqual(["started", "completed"]);
+		const beforeRestart = f.calls.length;
+		await f.restart();
+		expect(await f.driver.lookupOperation(firstCommand)).toMatchObject({
+			state: "found",
+		});
+		expect(
+			await f.driver.replayEvents(
+				accepted.nativeSessionRef,
+				firstCommand.executionId,
+			),
+		).toEqual(events);
+		expect(f.calls).toHaveLength(beforeRestart);
+		f.hold();
+		const secondCommand = {
+			...claudeCommand("shell-second"),
+			nativeSessionRef: accepted.nativeSessionRef,
+		};
+		await f.driver.execute(secondCommand);
+		await runShell(beforeRestart, "background-proof.json", true);
+		await f.settled(accepted.nativeSessionRef, secondCommand.executionId);
+		// Revoke admission after this Query has already advertised Bash.
+		const shellModule = await import("./claude-shell.js");
+		const unavailable = vi.spyOn(shellModule, "claudeShellAvailable");
+		try {
+			await f.restart();
+			f.hold();
+			const offset = f.calls.length;
+			const deniedCommand = {
+				...claudeCommand("shell-unavailable"),
+				nativeSessionRef: accepted.nativeSessionRef,
+			};
+			await f.driver.execute(deniedCommand);
+			await vi.waitFor(() => expect(f.calls).toHaveLength(offset + 1), {
+				timeout: 10000,
+			});
+			const call = f.calls[offset];
+			if (!call) throw Error();
+			expect(call.body.tools).toEqual(
+				expect.arrayContaining([expect.objectContaining({ name: "Bash" })]),
+			);
+			unavailable.mockResolvedValue(false);
+			completeClaudeToolUses(
+				call.response,
+				"msg_denied_shell",
+				String(call.body.model),
+				"",
+				[
+					{
+						id: "denied_shell",
+						name: "Bash",
+						input: { command: "touch forbidden-fallback" },
+					},
+				],
+			);
+			await vi.waitFor(() => expect(f.calls).toHaveLength(offset + 2), {
+				timeout: 10000,
+			});
+			await expect(
+				readFile(join(workspace, "forbidden-fallback")),
+			).rejects.toThrow();
+			f.release();
+			await f.settled(accepted.nativeSessionRef, deniedCommand.executionId);
+		} finally {
+			unavailable.mockRestore();
+		}
+	},
+	30_000,
+);

@@ -150,6 +150,13 @@ export async function nativeShellPlan(
 	for (const path of ["/dev/null", "/dev/zero", "/dev/random", "/dev/urandom"])
 		await grant("read-file,write-file", path);
 	rules.push("--landlock-rule", `path-beneath:${dataRights}:${workspace}`);
+	const memory = resolve(workspace, "../memory");
+	const resolvedMemory = await realpath(memory).catch(() => undefined);
+	if (resolvedMemory !== undefined) {
+		if (resolvedMemory !== memory || !(await stat(memory)).isDirectory())
+			throw unavailable();
+		rules.push("--landlock-rule", `path-beneath:${dataRights}:${memory}`);
+	}
 	return {
 		command: helper,
 		args: [

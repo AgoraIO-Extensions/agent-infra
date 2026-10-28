@@ -60,5 +60,6 @@ OpenCode 1.19.0 候选接线复用同一准入和固定 shell 路径，仅准入
 Claude 固定版本的官方 namespace sandbox 在当前非 root 安全上下文中不能创建 user namespace。
 候选探针改用同一 Landlock launcher 的只读 `native-bash.mjs` 入口，先执行实际 ABI5 准入，再由
 固定原生 `CLAUDE_CODE_SHELL` 接入；shell 临时文件留在工作区，原生配置与历史不向子进程开放。
-该路径只验证平台子边界，不改变容器安全策略。生产 Claude Bash 在真实子进程正负例、不可用准入、
-工具事实与恢复矩阵通过前继续关闭；工程约束见 [Spec §10.14](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1014-标准模板-session-sandbox-原生工具)。
+Claude Driver 仅在只读 alias/helper 与实际 ABI5 准入通过后声明 Bash，每次权限调用再次核对；
+缺失、可写、符号链接或内容不一致时不提供 Bash。生产接线仍须通过真实子进程正负例、
+工具事实与恢复矩阵才可交付；工程约束见 [Spec §10.14](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1014-标准模板-session-sandbox-原生工具)。

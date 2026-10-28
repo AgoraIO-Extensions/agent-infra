@@ -47,6 +47,10 @@ import {
 } from "./claude-installation.js";
 import { claudeQuery } from "./claude-query.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
+import {
+	claudeShellAvailable,
+	claudeShellEnvironment,
+} from "./claude-shell.js";
 import { createClaudeStandardMcpServer } from "./claude-standard-mcp.js";
 import {
 	type ClaudeToolOperationCallbacks,
@@ -1998,6 +2002,13 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		let native: ReturnType<typeof claudeQuery>;
 		let initialMessage: Parameters<typeof claudeQuery>[1];
 		try {
+			const shellAvailable = await claudeShellAvailable(workspace);
+			const workspaceOperations = shellAvailable
+				? {
+						...toolOperations,
+						authorizeShell: () => claudeShellAvailable(workspace),
+					}
+				: toolOperations;
 			const skillLaunchOptions = claudeNativeSkillLaunchOptions(
 				this.options.skillDirectory,
 			);
@@ -2053,20 +2064,22 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						ANTHROPIC_BASE_URL: transport.modelAccess.endpoint,
 						ANTHROPIC_AUTH_TOKEN: transport.modelAccess.credential,
 						CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+						...(shellAvailable ? claudeShellEnvironment(workspace) : {}),
 					},
+					sandbox: { enabled: false },
 					...claudeNativeQuerySettings(),
 					...claudeWorkspaceTools(
 						workspace,
 						join(directory, "memory"),
 						resolveReadOnlySkillFile
 							? {
-									...toolOperations,
+									...workspaceOperations,
 									resolveReadOnlyFile: resolveReadOnlySkillFile,
 									cleanupReadOnlyFile: async (filePath: string) => {
 										await unlink(filePath).catch(() => undefined);
 									},
 								}
-							: toolOperations,
+							: workspaceOperations,
 					),
 					strictMcpConfig: true,
 					mcpServers: {

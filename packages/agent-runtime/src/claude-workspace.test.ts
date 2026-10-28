@@ -406,3 +406,33 @@ describe("Claude workspace list and search tools", () => {
 		}
 	});
 });
+
+it("revalidates the fixed shell boundary for every Bash permission and preserves file policy", async () => {
+	const authorizeShell = vi
+		.fn()
+		.mockResolvedValueOnce(true)
+		.mockResolvedValue(false);
+	const tools = claudeWorkspaceTools("/private/workspace", "/private/memory", {
+		authorizeShell,
+	});
+	const options = {
+		signal: new AbortController().signal,
+		toolUseID: "shell",
+		requestId: "request",
+	};
+	expect(tools.tools).toContain("Bash");
+	expect(
+		await tools.canUseTool?.("Bash", { command: "true" }, options),
+	).toMatchObject({ behavior: "allow" });
+	expect(
+		await tools.canUseTool?.("Bash", { command: "true" }, options),
+	).toMatchObject({ behavior: "deny" });
+	expect(
+		await tools.canUseTool?.(
+			"Read",
+			{ file_path: "/private/host-secret" },
+			options,
+		),
+	).toMatchObject({ behavior: "deny" });
+	expect(authorizeShell).toHaveBeenCalledTimes(2);
+});
