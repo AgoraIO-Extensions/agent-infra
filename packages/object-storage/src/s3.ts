@@ -124,7 +124,9 @@ export function createS3ObjectStorageV1(
 				{ signal: abortSignal },
 			))
 				probe.write(chunk);
-			const measured = await probe.finish();
+			const measured = await probe.finish().catch(() => {
+				throw new ObjectStorageError("conflict");
+			});
 			if (
 				measured.sizeBytes !== head.ContentLength ||
 				measured.mediaType !== head.ContentType

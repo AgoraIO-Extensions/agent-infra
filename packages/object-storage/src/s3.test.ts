@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { expect, it } from "vitest";
 import {
 	objectCleanupConformanceV1,
@@ -6,6 +9,59 @@ import {
 	objectTextDeclarationConformanceV1,
 } from "./conformance.ts";
 import { startMinioFileFixtureV1 } from "./minio.test-support.ts";
+import { createS3ObjectStorageV1 } from "./s3.ts";
+
+it("keeps S3 service failures unavailable", async () => {
+	const server = createServer((_request, response) => {
+		response.writeHead(503);
+		response.end();
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("Missing port");
+	const storage = createS3ObjectStorageV1({
+		endpoint: `http://127.0.0.1:${address.port}`,
+		region: "us-east-1",
+		credentials: { accessKeyId: "test", secretAccessKey: "test" },
+		bucket: "file-contract",
+		prefix: "files/",
+		maxObjectBytes: 1024,
+		timeoutMs: 1000,
+	});
+	try {
+		await expect(storage.inspect(randomUUID())).rejects.toMatchObject({
+			code: "unavailable",
+		});
+	} finally {
+		storage.close();
+		await new Promise<void>((resolve, reject) => {
+			server.close((error) => (error ? reject(error) : resolve()));
+		});
+	}
+});
+
+it("rejects persisted invalid text as a content conflict", async () => {
+	const fixture = await startMinioFileFixtureV1();
+	try {
+		const objectRef = randomUUID();
+		// A rejected streaming upload can leave bytes behind before validation finishes.
+		const result = await fixture.client.send(
+			new PutObjectCommand({
+				Bucket: fixture.bucket,
+				Key: `${fixture.prefix}${objectRef}`,
+				Body: Buffer.from("c3fbb3c62cbafd0a", "hex"),
+				ContentType: "text/csv",
+			}),
+		);
+		expect(result.VersionId).toBeTruthy();
+		await expect(fixture.storage.inspect(objectRef)).rejects.toMatchObject({
+			code: "conflict",
+		});
+	} finally {
+		await fixture.close();
+	}
+}, 60000);
 
 it("uses actual versioned S3 bytes for immutable writes, confirmation and reads", async () => {
 	const fixture = await startMinioFileFixtureV1();
