@@ -2691,7 +2691,8 @@ Worker 私有模块导出 `evaluationPolicy = { data: loadPolicy, experiment: lo
 现有 Conversation Worker 当前用途复核；`workloadInput.evaluationScoring` 使用同一 storage、
 `loadDataPolicy: loadPolicy`、`loadExperimentPolicy`、directory、已有部署 ModelCatalog adapter 与
 Worker decryptor，并显式配置 taskPolicy、batchSize、leaseMs 和 retryDelayMs。该配置经原
-`deployment-entry.ts`/Workload 装配进入评分轮询，不新增部署服务、凭证类型或默认值；启动应先调用
+`deployment-entry.ts`/Workload 装配进入同进程独立有界评分轮询（最多一个在途批次，不阻塞 Workload
+调谐；关闭时停止新 claim、取消模型传输并等待自身在途操作），不新增部署服务、凭证类型或默认值；启动应先调用
 两个 policy loader，非法输入启动失败，运行时读取失败拒绝新访问，DB 清理继续履行已固化义务。
 
 #### 18.4.2 版本、对象与任务绑定
@@ -2757,6 +2758,10 @@ Eval 删除不擅自删除其他业务权威数据；反向引用也不允许重
 版本；有限重试沿同一评分意图并在每次发送前重验权限，绝不重新提交样本业务任务。新评分器或 rubric
 产生新评分记录，历史结论按当前权限回看。业务失败、评分故障、未评分和不适用分开保存；确定性/人工/
 模型结果的聚合遵循固定 rubric，不用错误或缺失充当零分、成功或同条件排名。
+评分结果版本固定终态正文与执行/模型绑定；终态后仅补充操作元数据不改变该版本，重试继续使用原
+outputObjectId。读取中仍核对事件序列，防止正文快照跨提交混合。
+人工评分的 content 与独立 review-context API 分别使用当前 score/review 用途返回当前样本、其
+rubric、固定输出及可选原评分；不要求额外 read/run，不返回同数据集其他样本或私有评分端点/Key。
 
 反馈沿原任务提交主体校验，仅允许本人任务的有用/无用和受控问题分类；汇总绑定实际模型、配置和时间，
 Owner 可看获准汇总但不能下钻他人原会话。实验分析以固定样本集合为分母，同时返回可比较、已评分、缺失、

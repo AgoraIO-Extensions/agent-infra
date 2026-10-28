@@ -6356,6 +6356,7 @@ function normalizeEvaluationExperiments3639(document) {
 		"EvaluationReviewV1",
 		"EvaluationScoreMetadataV1",
 		"EvaluationScoreSubmitV1",
+		"EvaluationScoringContextV1",
 	];
 	const values = Object.fromEntries(
 		schemas.map((name) => [name, document.components?.schemas?.[name]]),
@@ -6370,14 +6371,14 @@ function normalizeEvaluationExperiments3639(document) {
 				paths.map((path) => [path, document.paths[path]]),
 			),
 			schemas: values,
-		}) === "7afb61060c4d2d3d9843f09342b8faf2e2d54f8a7aee46b97cf6bf74d2d198a6"
+		}) === "76c6a5d1cf2bb6e1f2bde32c17efbb4d9781e90dcf6e6e2a9a45887f161b4af4"
 	) {
 		for (const path of paths) delete normalized.paths[path];
 		for (const name of schemas) delete normalized.components.schemas[name];
 	} else if (
 		found.length === 0 &&
 		digest(values) ===
-			"48b47dc538e818b510eb5006b2022788f372a36a269d1f3ac021f174b955ad77"
+			"dc5df9045a8775ab23f5a2fbff32f097c4294eb6079f597446240674404b724f"
 	)
 		for (const name of schemas) delete normalized.components.schemas[name];
 	const scopes = [

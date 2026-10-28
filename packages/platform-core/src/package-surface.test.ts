@@ -326,6 +326,7 @@ describe("platform-core package surface", () => {
 			"projectConversationExecutionV1",
 			"projectConversationMessagesV1",
 			"projectEvaluationExecutionFactsV1",
+			"projectEvaluationScoringContextV1",
 			"projectPlatformAuditQueryDenialV1",
 			"projectPlatformAuditQueryRecordV1",
 			"projectPlatformAuditQuerySummaryV1",

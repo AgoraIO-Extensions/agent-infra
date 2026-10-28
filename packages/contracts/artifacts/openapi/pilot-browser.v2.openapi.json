@@ -6725,6 +6725,264 @@
         ],
         "type": "object"
       },
+      "EvaluationScoringContextV1": {
+        "additionalProperties": false,
+        "properties": {
+          "executionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "experimentId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "output": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "executionId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "resultVersion": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "text": {
+                    "maxLength": 1048576,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text",
+                  "executionId",
+                  "resultVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resultVersion": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "rubric": {
+            "additionalProperties": false,
+            "properties": {
+              "description": {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "description"
+            ],
+            "type": "object"
+          },
+          "sample": {
+            "additionalProperties": false,
+            "properties": {
+              "context": {
+                "anyOf": [
+                  {
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "expectedResult": {
+                "anyOf": [
+                  {
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "input": {
+                "maxLength": 65536,
+                "type": "string"
+              },
+              "taskType": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "input",
+              "context",
+              "expectedResult",
+              "taskType"
+            ],
+            "type": "object"
+          },
+          "sampleTaskId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "reason": {
+                        "maxLength": 1048576,
+                        "type": "string"
+                      },
+                      "status": {
+                        "const": "scored",
+                        "type": "string"
+                      },
+                      "value": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "value",
+                      "reason"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "reason": {
+                        "maxLength": 1048576,
+                        "type": "string"
+                      },
+                      "status": {
+                        "const": "not_applicable",
+                        "type": "string"
+                      },
+                      "value": {
+                        "type": "null"
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "value",
+                      "reason"
+                    ],
+                    "type": "object"
+                  }
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scoreId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "scorer": {
+            "additionalProperties": false,
+            "properties": {
+              "maximum": {
+                "type": "number"
+              },
+              "minimum": {
+                "type": "number"
+              },
+              "passThreshold": {
+                "type": "number"
+              },
+              "scorerId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "version": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "scorerId",
+              "version",
+              "minimum",
+              "maximum",
+              "passThreshold"
+            ],
+            "type": "object"
+          },
+          "status": {
+            "enum": [
+              "waiting_output",
+              "pending",
+              "result_ready",
+              "awaiting_human",
+              "scored",
+              "not_applicable",
+              "failed",
+              "unknown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "scoreId",
+          "revision",
+          "sampleTaskId",
+          "experimentId",
+          "executionId",
+          "status",
+          "resultVersion",
+          "sample",
+          "rubric",
+          "scorer",
+          "output",
+          "score"
+        ],
+        "type": "object"
+      },
       "EvaluationVersionReserveV1": {
         "additionalProperties": false,
         "properties": {
@@ -23632,57 +23890,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "reason": {
-                          "maxLength": 1048576,
-                          "type": "string"
-                        },
-                        "status": {
-                          "const": "scored",
-                          "type": "string"
-                        },
-                        "value": {
-                          "type": "number"
-                        }
-                      },
-                      "required": [
-                        "status",
-                        "value",
-                        "reason"
-                      ],
-                      "type": "object"
-                    },
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "reason": {
-                          "maxLength": 1048576,
-                          "type": "string"
-                        },
-                        "status": {
-                          "const": "not_applicable",
-                          "type": "string"
-                        },
-                        "value": {
-                          "type": "null"
-                        }
-                      },
-                      "required": [
-                        "status",
-                        "value",
-                        "reason"
-                      ],
-                      "type": "object"
-                    }
-                  ],
-                  "type": "object"
+                  "$ref": "#/components/schemas/EvaluationScoringContextV1"
                 }
               }
             },
-            "description": "Current score-purpose controlled content"
+            "description": "Current score-purpose sample/rubric/output context"
           },
           "400": {
             "content": {
@@ -23913,57 +24125,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "reason": {
-                          "maxLength": 1048576,
-                          "type": "string"
-                        },
-                        "status": {
-                          "const": "scored",
-                          "type": "string"
-                        },
-                        "value": {
-                          "type": "number"
-                        }
-                      },
-                      "required": [
-                        "status",
-                        "value",
-                        "reason"
-                      ],
-                      "type": "object"
-                    },
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "reason": {
-                          "maxLength": 1048576,
-                          "type": "string"
-                        },
-                        "status": {
-                          "const": "not_applicable",
-                          "type": "string"
-                        },
-                        "value": {
-                          "type": "null"
-                        }
-                      },
-                      "required": [
-                        "status",
-                        "value",
-                        "reason"
-                      ],
-                      "type": "object"
-                    }
-                  ],
-                  "type": "object"
+                  "$ref": "#/components/schemas/EvaluationScoringContextV1"
                 }
               }
             },
-            "description": "Current review-purpose controlled source score"
+            "description": "Current review-purpose sample/rubric/output and original score"
           },
           "400": {
             "content": {

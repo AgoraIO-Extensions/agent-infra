@@ -6,6 +6,7 @@ import {
 	EvaluationReviewV1Schema,
 	EvaluationScoreMetadataV1Schema,
 	EvaluationScoreSubmitV1Schema,
+	EvaluationScoringContextV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
 	type createEvaluationExperimentsV1,
@@ -181,11 +182,13 @@ export function registerEvaluationExperimentRoutesV1(
 					["content", "review-context"].includes(path[6] ?? "")
 				)
 					return context.json(
-						(await input.scoring.content(
-							trusted,
-							id,
-							path[6] === "review-context" ? "review" : "score",
-						)) as object,
+						EvaluationScoringContextV1Schema.parse(
+							await input.scoring.content(
+								trusted,
+								id,
+								path[6] === "review-context" ? "review" : "score",
+							),
+						),
 					);
 				if (
 					request.method === "GET" &&

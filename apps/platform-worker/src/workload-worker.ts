@@ -220,6 +220,25 @@ export function createPlatformWorkloadWorkerV1(
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let running: Promise<void> | undefined;
 	let closing: Promise<void> | undefined;
+	let scorerTimer: ReturnType<typeof setTimeout> | undefined;
+	let scorerRunning: Promise<void> | undefined;
+	async function pollScorer() {
+		try {
+			await evaluationScoring?.runOnce();
+		} catch {
+			logSafely(
+				JSON.stringify({
+					service: "platform-worker",
+					code: "EVALUATION_SCORE_UNAVAILABLE",
+				}),
+			);
+		} finally {
+			if (!stopped)
+				scorerTimer = setTimeout(() => {
+					scorerRunning = pollScorer();
+				}, pollIntervalMs);
+		}
+	}
 	let tickTail: Promise<void> = Promise.resolve();
 	// 轮询连续推进的步数，达到上限后休眠一次，防止反复到期的步骤形成热循环。
 	let consecutiveSteps = 0;
@@ -248,7 +267,6 @@ export function createPlatformWorkloadWorkerV1(
 				if (!draining) {
 					await files?.runOnce();
 					await evaluation?.runOnce();
-					await evaluationScoring?.runOnce();
 				}
 			}
 		});
@@ -297,23 +315,30 @@ export function createPlatformWorkloadWorkerV1(
 				JSON.stringify({ service: "platform-worker", status: "ready" }),
 			);
 			running = poll();
+			if (evaluationScoring) scorerRunning = pollScorer();
 		},
 		stop() {
 			if (closing) return closing;
 			stopped = true;
 			clearTimeout(timer);
+			clearTimeout(scorerTimer);
+			const drained = Promise.allSettled([
+				evaluationScoring?.close(),
+				scorerRunning,
+				running,
+				tickTail,
+			]);
 			closing = (async () => {
-				try {
-					await running;
-				} finally {
-					await tickTail;
-					await Promise.all([
-						store.close(),
-						files?.close(),
-						evaluation?.close(),
-						evaluationScoring?.close(),
-					]);
-				}
+				const outcomes = await drained;
+				const cleanup = await Promise.allSettled([
+					store.close(),
+					files?.close(),
+					evaluation?.close(),
+				]);
+				const failed = [...outcomes, ...cleanup].find(
+					(result) => result.status === "rejected",
+				);
+				if (failed?.status === "rejected") throw failed.reason;
 			})();
 			return closing;
 		},

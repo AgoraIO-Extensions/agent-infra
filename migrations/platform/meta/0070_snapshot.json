@@ -1,5 +1,5 @@
 {
-  "id": "901c9503-3d52-4c5c-8cd4-3df518d28ac3",
+  "id": "30659e07-05b6-44a1-a3c8-a859b4dbb6dd",
   "prevId": "93251c97-c0ca-4ed7-ac4b-2efcec14dfc6",
   "version": "7",
   "dialect": "postgresql",
@@ -3530,8 +3530,8 @@
         }
       },
       "foreignKeys": {
-        "evaluation_sample_tasks_experiment_id_evaluation_experiments_id_fk": {
-          "name": "evaluation_sample_tasks_experiment_id_evaluation_experiments_id_fk",
+        "evaluation_sample_experiment_fk": {
+          "name": "evaluation_sample_experiment_fk",
           "tableFrom": "evaluation_sample_tasks",
           "tableTo": "evaluation_experiments",
           "schemaTo": "platform",
@@ -3652,8 +3652,8 @@
         }
       },
       "foreignKeys": {
-        "evaluation_score_intents_sample_task_id_evaluation_sample_tasks_id_fk": {
-          "name": "evaluation_score_intents_sample_task_id_evaluation_sample_tasks_id_fk",
+        "evaluation_score_sample_fk": {
+          "name": "evaluation_score_sample_fk",
           "tableFrom": "evaluation_score_intents",
           "tableTo": "evaluation_sample_tasks",
           "schemaTo": "platform",
@@ -3726,8 +3726,8 @@
         }
       },
       "foreignKeys": {
-        "evaluation_score_reviews_score_id_evaluation_score_intents_id_fk": {
-          "name": "evaluation_score_reviews_score_id_evaluation_score_intents_id_fk",
+        "evaluation_review_score_fk": {
+          "name": "evaluation_review_score_fk",
           "tableFrom": "evaluation_score_reviews",
           "tableTo": "evaluation_score_intents",
           "schemaTo": "platform",

@@ -73,6 +73,38 @@ export const EvaluationReviewV1Schema = z.strictObject({
 	scoreRevision: revision,
 	reviewer: EvaluationPrincipalV1Schema,
 });
+export const EvaluationScoringContextV1Schema = z.strictObject({
+	scoreId: id,
+	revision,
+	sampleTaskId: id,
+	experimentId: id,
+	executionId: ref,
+	status: EvaluationScoreMetadataV1Schema.shape.status,
+	resultVersion: ref.nullable(),
+	sample: z.strictObject({
+		id: ref,
+		input: z.string().max(65536),
+		context: z.string().max(65536).nullable(),
+		expectedResult: z.string().max(65536).nullable(),
+		taskType: ref,
+	}),
+	rubric: z.strictObject({ id: ref, description: z.string().max(8192) }),
+	scorer: z.strictObject({
+		scorerId: ref,
+		version: ref,
+		minimum: z.number().finite(),
+		maximum: z.number().finite(),
+		passThreshold: z.number().finite(),
+	}),
+	output: z
+		.strictObject({
+			text: z.string().max(1048576),
+			executionId: ref,
+			resultVersion: ref,
+		})
+		.nullable(),
+	score: EvaluationScoreSubmitV1Schema.shape.result.nullable(),
+});
 export const EvaluationReviewPageV1Schema = z.strictObject({
 	items: z
 		.array(

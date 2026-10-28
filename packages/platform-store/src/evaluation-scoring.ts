@@ -17,6 +17,7 @@ import {
 	parseEvaluationScoreIntentV1,
 	parseEvaluationScoreOutcomeV1,
 	parseEvaluationScorerV1,
+	projectEvaluationScoringContextV1,
 } from "@agent-infra/platform-core";
 import { readCurrentTaskApiUseGrantV1 } from "./application-task-authorization.js";
 import { PostgresEvaluationDataStoreV1 } from "./evaluation-data.js";
@@ -313,8 +314,10 @@ export class PostgresEvaluationScoringV1
 			{ event_payload: { text: string } }[]
 		>`select event_payload from platform.conversation_events where execution_id=${intent.executionId} and event_type='text.delta' order by sequence`;
 		const output = events.map((event) => event.event_payload.text).join("");
+		// Late operation metadata advances the journal cursor, not the frozen answer.
+		const { last_event_sequence: _sequence, ...resultBinding } = execution;
 		const resultVersion = createHash("sha256")
-			.update(JSON.stringify([execution, output]))
+			.update(JSON.stringify([resultBinding, output]))
 			.digest("hex");
 		const object = await this.#derived.write(
 			req,
@@ -562,28 +565,46 @@ export class PostgresEvaluationScoringV1
 		purpose: "score" | "review",
 	) {
 		const { intent } = await this.load(req, id, purpose);
-		if (
-			!intent.reasonObjectId ||
-			!["scored", "not_applicable"].includes(intent.status)
-		)
-			throw new EvaluationDataErrorV1("denied");
-		const value = await this.#derived.read(
-			{
-				...req,
-				credentialScope: purpose === "review" ? "eval:review" : "eval:score",
-			},
-			intent.reasonObjectId,
-			"score",
-		);
-		if (
-			!value ||
-			typeof value !== "object" ||
-			!("status" in value) ||
-			!("value" in value) ||
-			!("reason" in value)
-		)
-			throw new EvaluationDataErrorV1("unavailable");
-		return { status: value.status, value: value.value, reason: value.reason };
+		const source =
+			purpose === "review"
+				? await this.#data.readForReview(
+						req,
+						intent.datasetId,
+						intent.versionId,
+					)
+				: await this.#data.readForScore(
+						req,
+						intent.datasetId,
+						intent.versionId,
+					);
+		const [sample] = await this.#client<
+			{ sample_id: string }[]
+		>`select sample_id from platform.evaluation_sample_tasks where id=${intent.sampleTaskId} and execution_id=${intent.executionId} and experiment_id=${intent.experimentId}`;
+		if (!sample) throw new EvaluationDataErrorV1("denied");
+		const scoped = {
+			...req,
+			credentialScope:
+				purpose === "review"
+					? ("eval:review" as const)
+					: ("eval:score" as const),
+		};
+		const output = intent.outputObjectId
+			? await this.#derived.read(scoped, intent.outputObjectId, "output")
+			: null;
+		const score = intent.reasonObjectId
+			? await this.#derived.read(scoped, intent.reasonObjectId, "score")
+			: null;
+		const context = projectEvaluationScoringContextV1({
+			intent,
+			sampleId: sample.sample_id,
+			source: source.content,
+			output,
+			score,
+		});
+		const current = await this.load(req, id, purpose);
+		if (current.intent.revision !== intent.revision)
+			throw new EvaluationDataErrorV1("conflict");
+		return context;
 	}
 
 	async reviews(

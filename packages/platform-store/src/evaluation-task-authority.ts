@@ -14,6 +14,7 @@ import {
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import type postgres from "postgres";
+import { requireCurrentEvaluationAdmissionV1 } from "./evaluation-task-admission.js";
 import postgresClient from "./observed-postgres.js";
 
 /** Current facts inside the existing Task transaction, never a second authority database. */
@@ -159,9 +160,6 @@ export class PostgresEvaluationTaskAuthorityV1 {
 					tx,
 					boundary,
 					this.options.loadPolicy,
-				);
-				const { requireCurrentEvaluationAdmissionV1 } = await import(
-					"./evaluation-task-admission.js"
 				);
 				await requireCurrentEvaluationAdmissionV1(
 					tx,

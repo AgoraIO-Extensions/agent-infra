@@ -1173,6 +1173,48 @@ export type EvaluationScoreSubmitV1 = {
     };
 };
 
+export type EvaluationScoringContextV1 = {
+    executionId: string;
+    experimentId: string;
+    output: {
+        executionId: string;
+        resultVersion: string;
+        text: string;
+    } | null;
+    resultVersion: string | null;
+    revision: number;
+    rubric: {
+        description: string;
+        id: string;
+    };
+    sample: {
+        context: string | null;
+        expectedResult: string | null;
+        id: string;
+        input: string;
+        taskType: string;
+    };
+    sampleTaskId: string;
+    score: {
+        reason: string;
+        status: 'scored';
+        value: number;
+    } | {
+        reason: string;
+        status: 'not_applicable';
+        value: null;
+    } | null;
+    scoreId: string;
+    scorer: {
+        maximum: number;
+        minimum: number;
+        passThreshold: number;
+        scorerId: string;
+        version: string;
+    };
+    status: 'waiting_output' | 'pending' | 'result_ready' | 'awaiting_human' | 'scored' | 'not_applicable' | 'failed' | 'unknown';
+};
+
 export type EvaluationVersionReserveV1 = {
     expectedRevision: number;
     sourceVersionId: string | null;
@@ -6839,17 +6881,9 @@ export type ReadEvaluationScoreContentV1Error = ReadEvaluationScoreContentV1Erro
 
 export type ReadEvaluationScoreContentV1Responses = {
     /**
-     * Current score-purpose controlled content
+     * Current score-purpose sample/rubric/output context
      */
-    200: {
-        reason: string;
-        status: 'scored';
-        value: number;
-    } | {
-        reason: string;
-        status: 'not_applicable';
-        value: null;
-    };
+    200: EvaluationScoringContextV1;
 };
 
 export type ReadEvaluationScoreContentV1Response = ReadEvaluationScoreContentV1Responses[keyof ReadEvaluationScoreContentV1Responses];
@@ -6952,17 +6986,9 @@ export type ReadEvaluationReviewContextV1Error = ReadEvaluationReviewContextV1Er
 
 export type ReadEvaluationReviewContextV1Responses = {
     /**
-     * Current review-purpose controlled source score
+     * Current review-purpose sample/rubric/output and original score
      */
-    200: {
-        reason: string;
-        status: 'scored';
-        value: number;
-    } | {
-        reason: string;
-        status: 'not_applicable';
-        value: null;
-    };
+    200: EvaluationScoringContextV1;
 };
 
 export type ReadEvaluationReviewContextV1Response = ReadEvaluationReviewContextV1Responses[keyof ReadEvaluationReviewContextV1Responses];

@@ -165,6 +165,7 @@ beforeAll(async () => {
 		{ idx: 67, tag: "0067_configuration_runtime_revision" },
 		{ idx: 68, tag: "0068_database_jit_off" },
 		{ idx: 69, tag: "0069_evaluation_data" },
+		{ idx: 70, tag: "0070_evaluation_experiments" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({

@@ -72,7 +72,9 @@ export class PostgresEvaluationDerivedContentV1
 	) {
 		return kind === "review" || request.credentialScope === "eval:review"
 			? this.#data.authorizeReview(request, datasetId, versionId)
-			: kind === "score" || request.authentication.kind === "score_work"
+			: kind === "score" ||
+					request.credentialScope === "eval:score" ||
+					request.authentication.kind === "score_work"
 				? this.#data.authorizeScore(request, datasetId, versionId)
 				: this.#data.authorizeRun(request, datasetId, versionId);
 	}
@@ -101,7 +103,9 @@ export class PostgresEvaluationDerivedContentV1
 			const check = () =>
 				kind === "review" || request.credentialScope === "eval:review"
 					? data.authorizeReview(request, datasetId, versionId)
-					: kind === "score" || request.authentication.kind === "score_work"
+					: kind === "score" ||
+							request.credentialScope === "eval:score" ||
+							request.authentication.kind === "score_work"
 						? data.authorizeScore(request, datasetId, versionId)
 						: data.authorizeRun(request, datasetId, versionId);
 			const binding = await check();

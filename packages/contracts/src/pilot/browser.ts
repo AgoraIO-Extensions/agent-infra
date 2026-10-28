@@ -88,6 +88,7 @@ import {
 	EvaluationReviewV1Schema,
 	EvaluationScoreMetadataV1Schema,
 	EvaluationScoreSubmitV1Schema,
+	EvaluationScoringContextV1Schema,
 } from "./evaluation-experiments.ts";
 import {
 	MultiServiceAgentSourceV1Schema,
@@ -1595,8 +1596,8 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			requestParams: { path: z.strictObject({ scoreId: z.uuid() }) },
 			responses: {
 				"200": jsonResponse(
-					"Current score-purpose controlled content",
-					EvaluationScoreSubmitV1Schema.shape.result,
+					"Current score-purpose sample/rubric/output context",
+					EvaluationScoringContextV1Schema,
 				),
 				...errorResponses,
 			},
@@ -1609,8 +1610,8 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			requestParams: { path: z.strictObject({ scoreId: z.uuid() }) },
 			responses: {
 				"200": jsonResponse(
-					"Current review-purpose controlled source score",
-					EvaluationScoreSubmitV1Schema.shape.result,
+					"Current review-purpose sample/rubric/output and original score",
+					EvaluationScoringContextV1Schema,
 				),
 				...errorResponses,
 			},
@@ -2880,6 +2881,7 @@ export const pilotBrowserSchemasV2 = {
 	EvaluationScoreSubmitV1: EvaluationScoreSubmitV1Schema,
 	EvaluationReviewV1: EvaluationReviewV1Schema,
 	EvaluationReviewPageV1: EvaluationReviewPageV1Schema,
+	EvaluationScoringContextV1: EvaluationScoringContextV1Schema,
 	EvaluationScoreMetadataV1: EvaluationScoreMetadataV1Schema,
 	EvaluationDatasetContentV1: EvaluationDatasetContentV1Schema,
 	EvaluationDatasetCreateV1: EvaluationDatasetCreateV1Schema,

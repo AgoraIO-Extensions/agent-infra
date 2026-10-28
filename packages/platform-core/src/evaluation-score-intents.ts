@@ -442,3 +442,71 @@ export function parseEvaluationReviewRecordV1(input: unknown) {
 		metadataExpiresAt: value.metadataExpiresAt,
 	};
 }
+
+export function projectEvaluationScoringContextV1(input: {
+	intent: EvaluationScoreIntentV1;
+	sampleId: string;
+	source: import("./evaluation-experiments.js").EvaluationRunSourceV1["content"];
+	output: unknown;
+	score: unknown;
+}) {
+	const { intent } = input;
+	const sample = input.source.samples.find(
+		(value) => value.id === input.sampleId,
+	);
+	const rubric = input.source.rubric.find(
+		(value) => value.id === intent.scorer.rubricId,
+	);
+	if (!sample || !rubric) throw new EvaluationDataErrorV1("denied");
+	let output: {
+		text: string;
+		executionId: string;
+		resultVersion: string;
+	} | null = null;
+	if (input.output !== null) {
+		const value = snapshotObject(input.output, [
+			"text",
+			"executionId",
+			"resultVersion",
+		]);
+		if (
+			typeof value.text !== "string" ||
+			!value.text.isWellFormed() ||
+			Buffer.byteLength(value.text) > intent.scorer.maxInputBytes ||
+			value.executionId !== intent.executionId ||
+			value.resultVersion !== intent.resultVersion
+		)
+			throw new EvaluationDataErrorV1("unavailable");
+		output = {
+			text: value.text,
+			executionId: intent.executionId,
+			resultVersion: value.resultVersion as string,
+		};
+	}
+	const result =
+		input.score === null
+			? null
+			: parseEvaluationScoreOutcomeV1(input.score, intent.scorer);
+	return {
+		scoreId: intent.id,
+		revision: intent.revision,
+		sampleTaskId: intent.sampleTaskId,
+		experimentId: intent.experimentId,
+		executionId: intent.executionId,
+		status: intent.status,
+		resultVersion: intent.resultVersion,
+		sample,
+		rubric,
+		scorer: {
+			scorerId: intent.scorer.scorerId,
+			version: intent.scorer.version,
+			minimum: intent.scorer.minimum,
+			maximum: intent.scorer.maximum,
+			passThreshold: intent.scorer.passThreshold,
+		},
+		output,
+		score: result
+			? { status: result.status, value: result.value, reason: result.reason }
+			: null,
+	};
+}
