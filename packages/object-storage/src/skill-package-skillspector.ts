@@ -293,11 +293,10 @@ export function createSkillSpectorAdapterV1(
 		!Array.isArray(options.requiredAnalyzerIds) ||
 		options.requiredAnalyzerIds.length === 0 ||
 		options.requiredAnalyzerIds.some(
-			(id) =>
-				typeof id !== "string" ||
-				!/^[A-Za-z0-9_.-]{1,128}$/.test(id),
+			(id) => typeof id !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(id),
 		) ||
-		new Set(options.requiredAnalyzerIds).size !== options.requiredAnalyzerIds.length
+		new Set(options.requiredAnalyzerIds).size !==
+			options.requiredAnalyzerIds.length
 	)
 		throw new Error("SKILL_SPECTOR_CONFIG_INVALID");
 	return Object.freeze({
