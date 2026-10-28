@@ -5,6 +5,7 @@ import {
 	ApplicationApiCredentialPageV1Schema,
 	ApplicationApiCredentialResponseV1Schema,
 	ApplicationApiCredentialRevocationV1Schema,
+	ScopedPlatformAuditPageV1Schema,
 } from "@agent-infra/contracts/pilot";
 import type {
 	createLdapIdentityDirectory,
@@ -21,6 +22,11 @@ import {
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.ts";
 import { createRelayKeyEncryptorV1 } from "../../../packages/secret-store/src/relay-key.ts";
+import { createClient } from "../../web/src/pilot/generated/client/index.ts";
+import {
+	getScopedAdministratorAudit,
+	listScopedAdministratorAudit,
+} from "../../web/src/pilot/generated/sdk.gen.ts";
 import { createPlatformApp } from "./app.js";
 import {
 	assemblePlatformApi,
@@ -38,6 +44,7 @@ let assemblyInput: PlatformApiAssemblyInput;
 let server: ReturnType<typeof serve>;
 let baseUrl: string;
 const materials: string[] = [];
+let failDelivery = false;
 const agentModelConfiguration = {
 	options: [
 		{
@@ -79,7 +86,8 @@ const accounts: LdapAccount[] = ["manager", "admin", "recipient"].map(
 		authorizationRevision: "identity-v1",
 	}),
 );
-const token = (user: string) => (user === "admin" ? "b" : "a").repeat(43);
+const token = (user: string) =>
+	(user === "admin" ? "b" : user === "recipient" ? "c" : "a").repeat(43);
 const origin = "https://platform.example.test";
 beforeAll(async () => {
 	database = await startPostgresTestDatabase("issuer-http-1277");
@@ -98,7 +106,7 @@ beforeAll(async () => {
 		} as unknown as ReturnType<typeof createLdapIdentityDirectory>,
 		sessions: {
 			find: async (digest) => {
-				for (const user of ["admin", "manager"]) {
+				for (const user of ["admin", "manager", "recipient"]) {
 					if (createHash("sha256").update(token(user)).digest("hex") === digest)
 						return {
 							uid: `ldap-${user}`,
@@ -187,6 +195,7 @@ beforeAll(async () => {
 			principalType: "application",
 			principalId: "app-1",
 			accept: (_attempt, material) => {
+				if (failDelivery) throw new Error("PRIVATE_DELIVERY_FAILURE");
 				materials.push(material);
 				return true;
 			},
@@ -696,4 +705,264 @@ it("lists and revokes with current browser authority, then rejects only that cre
 	expect(audit).not.toContain(
 		createHash("sha256").update(material).digest("hex"),
 	);
+});
+
+it("reads real application credential producers through scoped admin audit without leaking material", async () => {
+	const client = createClient({ baseUrl });
+	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('empty-audit-app','Empty','manager','v1')`;
+	const empty = await fetch(
+		`${baseUrl}/api/v2/applications/empty-audit-app/credentials`,
+		{ headers: { Cookie: `__Host-platform-session=${token("manager")}` } },
+	);
+	expect(empty.status).toBe(200);
+	expect(
+		ApplicationApiCredentialPageV1Schema.parse(await empty.json()).items,
+	).toEqual([]);
+	const [emptyAudit] =
+		await sql`select details from platform.audit_events where target_id='empty-audit-app' and action='application.credential.metadata.read'`;
+	expect(emptyAudit?.details).toEqual({
+		credentialIds: [],
+		returnedMaterial: false,
+	});
+	const [active] =
+		await sql`select id from platform.platform_api_credentials where principal_id='app-1' and revoked_at is null`;
+	failDelivery = true;
+	try {
+		expect(
+			(
+				await post(
+					"/api/v2/applications/app-1/credentials",
+					{
+						...applicationCredentialCommand,
+						operation: "rotate",
+						credentialId: active?.id,
+					},
+					"manager",
+					"audit-unknown-delivery",
+				)
+			).status,
+		).toBe(503);
+	} finally {
+		failDelivery = false;
+	}
+
+	const actions = [
+		"application.credential.issued",
+		"application.credential.rotated",
+		"application.credential.delivery",
+		"application.credential.metadata.read",
+		"application.credential.revoked",
+	];
+	const rows = await sql<
+		{ id: string; action: string; target_id: string; outcome: string }[]
+	>`
+		select id, action, target_id, outcome from platform.audit_events
+		where action = any(${actions}) order by occurred_at desc, id desc`;
+	expect(new Set(rows.map((row) => row.action))).toEqual(new Set(actions));
+	const headers = { Cookie: `__Host-platform-session=${token("admin")}` };
+	for (const action of actions) {
+		const response = await listScopedAdministratorAudit({
+			client,
+			headers,
+			query: { action: action as "application.credential.issued" },
+		});
+		expect(response.response?.status).toBe(200);
+		const page = response.data;
+		if (!page) throw new Error("Missing audit page");
+		expect(page.items.map((item: { auditId: string }) => item.auditId)).toEqual(
+			rows.filter((row) => row.action === action).map((row) => row.id),
+		);
+	}
+	for (const row of rows) {
+		const response = await getScopedAdministratorAudit({
+			client,
+			headers,
+			path: { auditId: row.id },
+		});
+		expect(response.response?.status).toBe(200);
+		const record = response.data;
+		if (!record) throw new Error("Missing audit detail");
+		expect(record).toMatchObject({
+			action: row.action,
+			actor: { kind: "user", actorId: "manager" },
+			subject: { kind: "application", subjectId: row.target_id },
+			result: row.outcome,
+		});
+		const encoded = JSON.stringify(record);
+		for (const material of materials) {
+			expect(encoded).not.toContain(material);
+			expect(encoded).not.toContain(
+				createHash("sha256").update(material).digest("hex"),
+			);
+		}
+		for (const field of [
+			"details",
+			"credentialId",
+			"attemptId",
+			"grantRevision",
+			"recipient",
+		])
+			expect(record).not.toHaveProperty(field);
+		for (const ownHeaders of [
+			{ Cookie: `__Host-platform-session=${token("manager")}` },
+			{ Cookie: `__Host-platform-session=${token("recipient")}` },
+			{ Authorization: `Bearer papi_${"O".repeat(43)}` },
+		]) {
+			const denied = await fetch(`${baseUrl}/api/v1/audit/${row.id}`, {
+				headers: ownHeaders,
+			});
+			expect(denied.status).toBe(404);
+			const own = await fetch(`${baseUrl}/api/v1/audit?action=${row.action}`, {
+				headers: ownHeaders,
+			});
+			expect(own.status).toBe(200);
+			expect(
+				ScopedPlatformAuditPageV1Schema.parse(await own.json()).items,
+			).toEqual([]);
+		}
+	}
+	expect(
+		rows.some(
+			(row) =>
+				row.action === "application.credential.delivery" &&
+				row.outcome === "failed",
+		),
+	).toBe(true);
+}, 30000);
+
+it("keeps application governance pagination stable and rejects corrupted producer facts", async () => {
+	const headers = { Cookie: `__Host-platform-session=${token("admin")}` };
+	const action = "application.credential.delivery";
+	const rows = await sql<{ id: string; details: Record<string, unknown> }[]>`
+		select id,details from platform.audit_events where action=${action} order by occurred_at desc, id desc`;
+	const seen: string[] = [];
+	let cursor: string | null = null;
+	for (let count = 0; count < 30; count++) {
+		const response = await fetch(
+			`${baseUrl}/api/v3/admin/audit?action=${action}&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+			{ headers },
+		);
+		expect(response.status).toBe(200);
+		const page = ScopedPlatformAuditPageV1Schema.parse(await response.json());
+		seen.push(...page.items.map((item: { auditId: string }) => item.auditId));
+		cursor = page.nextCursor;
+		if (!cursor) break;
+	}
+	expect(seen).toEqual(rows.map((row) => row.id));
+	const row = rows[0];
+	if (!row) throw new Error("Missing real producer fact");
+	for (const mutate of [
+		(d: Record<string, unknown>) => ({ ...d, token: "PRIVATE_AUDIT_SENTINEL" }),
+		(d: Record<string, unknown>) => ({ ...d, returnedMaterial: true }),
+		(d: Record<string, unknown>) => ({
+			...d,
+			recipient: { principalType: "system", principalId: "recipient" },
+		}),
+		(d: Record<string, unknown>) => ({
+			...d,
+			deliveryStatus: "delivery_pending",
+		}),
+	]) {
+		await sql`update platform.audit_events set details=${sql.json(mutate(row.details) as Parameters<typeof sql.json>[0])} where id=${row.id}`;
+		try {
+			for (const suffix of [`/${row.id}`, `?action=${action}`]) {
+				const response = await fetch(`${baseUrl}/api/v3/admin/audit${suffix}`, {
+					headers,
+				});
+				expect(response.status).toBe(503);
+				const text = await response.text();
+				expect(text).not.toContain("PRIVATE_AUDIT_SENTINEL");
+				expect(text).not.toContain("details");
+			}
+		} finally {
+			await sql`update platform.audit_events set details=${sql.json(row.details as Parameters<typeof sql.json>[0])} where id=${row.id}`;
+		}
+	}
+	const first = await fetch(
+		`${baseUrl}/api/v3/admin/audit?action=${action}&limit=1`,
+		{ headers },
+	);
+	const firstBody = await first.json();
+	expect(first.status, JSON.stringify(firstBody)).toBe(200);
+	const firstPage = ScopedPlatformAuditPageV1Schema.parse(firstBody);
+	expect(firstPage.nextCursor).toBeTruthy();
+	if (!firstPage.nextCursor) throw new Error("Missing cursor");
+	const cross = await fetch(
+		`${baseUrl}/api/v1/audit?action=${action}&limit=1&cursor=${encodeURIComponent(firstPage.nextCursor)}`,
+		{ headers: { Cookie: `__Host-platform-session=${token("manager")}` } },
+	);
+	expect([400, 404]).toContain(cross.status);
+	const forged = await fetch(
+		`${baseUrl}/api/v3/admin/audit?cursor=forged-cursor`,
+		{ headers },
+	);
+	expect(forged.status).toBe(404);
+	const admin = accounts.find((account) => account.userId === "admin");
+	if (!admin) throw new Error("Missing admin");
+	const roles = admin.roles;
+	Object.assign(admin, { roles: ["employee"] });
+	try {
+		expect(
+			(await fetch(`${baseUrl}/api/v3/admin/audit/${row.id}`, { headers }))
+				.status,
+		).toBe(404);
+	} finally {
+		Object.assign(admin, { roles });
+	}
+});
+
+it("fails closed for malformed application action bindings and required query audit failure", async () => {
+	const headers = { Cookie: `__Host-platform-session=${token("admin")}` };
+	const actions = [
+		"application.credential.issued",
+		"application.credential.rotated",
+		"application.credential.metadata.read",
+		"application.credential.revoked",
+	];
+	for (const action of actions) {
+		const [row] = await sql<
+			{ id: string; details: Record<string, unknown> }[]
+		>`select id,details from platform.audit_events where action=${action} limit 1`;
+		if (!row) throw new Error("Missing producer record");
+		const invalid = action.endsWith("metadata.read")
+			? { ...row.details, credentialIds: ["a", "a"] }
+			: action.endsWith("revoked")
+				? { ...row.details, credentialIds: [] }
+				: action.endsWith("rotated")
+					? { ...row.details, previousCredentialId: row.details.credentialId }
+					: { ...row.details, deliveryStatus: "accepted" };
+		await sql`update platform.audit_events set details=${sql.json(invalid as Parameters<typeof sql.json>[0])} where id=${row.id}`;
+		try {
+			expect(
+				(await fetch(`${baseUrl}/api/v3/admin/audit/${row.id}`, { headers }))
+					.status,
+			).toBe(503);
+		} finally {
+			await sql`update platform.audit_events set details=${sql.json(row.details as Parameters<typeof sql.json>[0])} where id=${row.id}`;
+		}
+		await sql`update platform.audit_events set actor_type='application' where id=${row.id}`;
+		try {
+			expect(
+				(await fetch(`${baseUrl}/api/v3/admin/audit/${row.id}`, { headers }))
+					.status,
+			).toBe(503);
+		} finally {
+			await sql`update platform.audit_events set actor_type='user' where id=${row.id}`;
+		}
+	}
+	await sql`create function platform.fail_application_audit_query_test() returns trigger language plpgsql as $$ begin if new.action = 'audit.query.completed' then raise exception 'PRIVATE_AUDIT_DATABASE_SENTINEL'; end if; return new; end $$`;
+	await sql`create trigger fail_application_audit_query_test before insert on platform.audit_events for each row execute function platform.fail_application_audit_query_test()`;
+	try {
+		const response = await fetch(
+			`${baseUrl}/api/v3/admin/audit?action=application.credential.issued`,
+			{ headers },
+		);
+		expect(response.status).toBe(503);
+		expect(await response.text()).not.toContain(
+			"PRIVATE_AUDIT_DATABASE_SENTINEL",
+		);
+	} finally {
+		await sql`drop trigger fail_application_audit_query_test on platform.audit_events`;
+		await sql`drop function platform.fail_application_audit_query_test()`;
+	}
 });
