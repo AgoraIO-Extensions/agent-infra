@@ -57,3 +57,15 @@
 | --- | --- | --- | --- |
 | [#3582](https://github.com/AgoraIO-Extensions/agent-infra/pull/3582) | OPEN / BLOCKED | `3284ae2409325d50343779e3057f219aa1d07d17` | Issue Gate、Web unit tests 已通过；Backend integration tests、CI heavy validation、Workload kind 运行中；未解决 review threads 为 0，等待当前 head CI 与合入 |
 | [#3604](https://github.com/AgoraIO-Extensions/agent-infra/pull/3604) | OPEN / BLOCKED | `998813cb477db529ba881b7f15ea1d07c9f7d7ab` | Issue Gate、Web unit tests 已通过；Backend integration tests、CI heavy validation、Workload kind 运行中；未解决 review threads 为 0；auto-merge enrollment 已取消，由原会话跟进 |
+
+## 验收补充：2026-10-28 03:07 UTC
+
+以下新增证据来自 [#3108 验收评论](https://github.com/AgoraIO-Extensions/agent-infra/issues/3108#issuecomment-6459592375)，
+保留上方 02:51 UTC 快照。
+
+- 当前 Claude 会话 `4ddd9702-9589-4232-bfb4-06087b61a6d5` 的 capacity gate 已清除；
+  同一 Sandbox `b0c25b75-52ef-482e-bfed-8c794ce6c5ea` 于 03:05 UTC 就绪。
+- 同一会话两轮 Execution 均为 `completed`，浏览器分别显示 `15`、`17`；
+  受理到完成分别为 7.80 秒、7.61 秒。当前 Claude 会话两轮模型路径通过。
+- 原历史失败会话恢复、模型阶段耗时、首 Token 时间（TTFT）和 gateway/rejection/unknown
+  诊断仍未核验；以上证据不代表 #3108 整体验收通过，原未完成 AC 保持。
