@@ -537,14 +537,21 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 			await tx.execute(
 				sql`delete from platform.evaluation_datasets d where (d.data->>'metadataExpiresAt')::timestamptz <= clock_timestamp() and not exists(select 1 from platform.evaluation_versions v where v.dataset_id=d.id)`,
 			);
+			const decisionAt = (await clock(tx)).toISOString();
 			const intents = await tx
 				.select({ id: outboxItems.id })
 				.from(outboxItems)
 				.where(
 					and(
 						eq(outboxItems.operation, "evaluation.content.delete.v1"),
-						sql`${outboxItems.status} not in ('succeeded','failed')`,
+						// Match outbox.claim eligibility before the batch limit; claim still fences atomically.
+						sql`((${outboxItems.status} in ('pending','retry_scheduled') and ${outboxItems.availableAt} <= ${decisionAt}::timestamptz)
+ or (${outboxItems.status} = 'processing' and ${outboxItems.leaseExpiresAt} <= ${decisionAt}::timestamptz))`,
 					),
+				)
+				.orderBy(
+					sql`case when ${outboxItems.status} = 'processing' then ${outboxItems.leaseExpiresAt} else ${outboxItems.availableAt} end`,
+					outboxItems.id,
 				)
 				.limit(limit);
 			return intents.map((v) => v.id);
