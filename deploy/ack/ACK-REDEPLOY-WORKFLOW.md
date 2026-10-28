@@ -106,7 +106,8 @@ attestation，执行真实 Runtime turn 和事件回读，写入私有 candidate
 模板校验使用同次生成的 `template-model-validation.receipt.json`；详细诊断
 `template-model-preflight.receipt.json` 和 `runtime-capacity.receipt.json` 分别保留运行证据与实测容量，均保持私有。
 
-配置了 `ACK_TEMPLATE_PREFLIGHT_JOBS_FILE` 的 `all` 随后自动执行 `runtime-inputs`。该阶段复用
+`all` 在生成新 preflight receipts 或读取已有 `ACK_TEMPLATE_VALIDATIONS_FILE` 后，均执行
+`runtime-inputs`，并在部署前要求 bootstrap 与 capacity 私有输入。该阶段复用
 `ACK_BOOTSTRAP_INPUTS_FILE`，要求 API、Worker 的 configuration Secret 文件清单都声明
 `template-validation-<templateId>.json` 四个键。Worker capacity key 必须与
 `ACK_WORKLOAD_CAPACITY_FILE` 的 `workerSecretRef` 和 `profilesFile` 对应；候选文件同目录必须有

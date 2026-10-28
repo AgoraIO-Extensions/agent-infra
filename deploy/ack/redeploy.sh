@@ -599,10 +599,8 @@ case "$command" in
 	provision) provision ;;
 	all)
 		require_source_tuple
-		if [[ -n "${ACK_TEMPLATE_PREFLIGHT_JOBS_FILE:-}" ]]; then
-			require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
-			require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
-		fi
+		require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
+		require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
 		if [[ -n "${ACK_BOOTSTRAP_INPUTS_FILE:-}" ]]; then
 			bootstrap_database check
 			bootstrap_inputs apply
@@ -611,10 +609,10 @@ case "$command" in
 		deploy
 		if [[ -n "${ACK_TEMPLATE_PREFLIGHT_JOBS_FILE:-}" ]]; then
 			template_preflight
-			runtime_inputs
 		else
 			require_file ACK_TEMPLATE_VALIDATIONS_FILE "${ACK_TEMPLATE_VALIDATIONS_FILE:-}"
 		fi
+		runtime_inputs
 		if [[ -n "${ACK_CREDENTIAL_BOOTSTRAP_FILE:-}" ]]; then
 			bootstrap_credential
 		fi
