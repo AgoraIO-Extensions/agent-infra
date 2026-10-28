@@ -125,6 +125,137 @@ const connection = new AgentSideConnection(
 					JSON.stringify(params.prompt),
 				);
 			count++;
+			if (process.env.ACP_TEST_MODE === "permission-input") {
+				const scenario = process.env.ACP_TEST_PERMISSION_SCENARIO;
+				const rawInput =
+					scenario === "conflicting-input"
+						? { pattern: "old" }
+						: [
+									"announced-input",
+									"empty-request",
+									"announced-metadata",
+								].includes(scenario) ||
+								scenario.endsWith("-during-authorization")
+							? { pattern: "allowed" }
+							: {};
+				if (scenario !== "unannounced")
+					await connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate: "tool_call",
+							toolCallId: "catalog-tool",
+							title: "grep",
+							kind: "search",
+							status: "pending",
+							rawInput,
+						},
+					});
+				if (scenario === "completed")
+					await connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate: "tool_call_update",
+							toolCallId: "catalog-tool",
+							status: "completed",
+						},
+					});
+				const pendingPermission = connection.requestPermission({
+					sessionId:
+						scenario === "foreign-session" ? "foreign-session" : sessionId,
+					toolCall: {
+						toolCallId: "catalog-tool",
+						title: "human readable search",
+						kind: scenario === "conflicting-kind" ? "execute" : "search",
+						...([
+							"late-notification",
+							"completed-during-wait",
+							"reannounced-during-wait",
+							"still-empty",
+							"empty-request",
+						].includes(scenario)
+							? { rawInput: {} }
+							: scenario === "announced-input"
+								? {}
+								: scenario.endsWith("announced-metadata")
+									? { rawInput: { provider: "synthetic-display-metadata" } }
+									: {
+											rawInput: {
+												pattern:
+													scenario === "denied-input" ? "forbidden" : "allowed",
+											},
+										}),
+					},
+					options: [
+						{ optionId: "allow", name: "Allow once", kind: "allow_once" },
+						{ optionId: "reject", name: "Reject once", kind: "reject_once" },
+					],
+				});
+				if (
+					[
+						"late-notification",
+						"completed-during-wait",
+						"reannounced-during-wait",
+						"late-announced-metadata",
+					].includes(scenario)
+				) {
+					await new Promise((resolve) => setTimeout(resolve, 40));
+					await connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate:
+								scenario === "reannounced-during-wait"
+									? "tool_call"
+									: "tool_call_update",
+							toolCallId: "catalog-tool",
+							...(scenario === "reannounced-during-wait"
+								? { title: "grep", kind: "search", status: "pending" }
+								: {}),
+							...(scenario === "completed-during-wait"
+								? { status: "completed" }
+								: { rawInput: { pattern: "allowed" } }),
+						},
+					});
+				}
+				if (scenario.endsWith("-during-authorization")) {
+					const deadline = Date.now() + 2000;
+					while (
+						!(await readFile(
+							join(process.cwd(), "authorization-entered"),
+						).catch(() => null))
+					) {
+						if (Date.now() > deadline)
+							throw new Error("AUTHORIZER_NOT_ENTERED");
+						await new Promise((resolve) => setTimeout(resolve, 10));
+					}
+					await connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate:
+								scenario === "reannounced-during-authorization"
+									? "tool_call"
+									: "tool_call_update",
+							toolCallId: "catalog-tool",
+							title: "grep",
+							kind: "search",
+							status:
+								scenario === "completed-during-authorization"
+									? "completed"
+									: "pending",
+							rawInput: {
+								pattern:
+									scenario === "conflicting-during-authorization"
+										? "forbidden"
+										: "allowed",
+							},
+						},
+					});
+				}
+				const permission = await pendingPermission;
+				await writeFile(
+					join(process.cwd(), "permission.json"),
+					JSON.stringify(permission),
+				);
+			}
 			if (process.env.ACP_TEST_MODE === "catalog-tools") {
 				const catalog = [
 					["webfetch", "fetch"],

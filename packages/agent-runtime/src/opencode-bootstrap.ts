@@ -338,6 +338,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 					command: options.executable,
 					args: ["acp", "--cwd", join(directory, "workspace")],
 					nativeCommandMode: "opencode",
+					permissionInputSource: "announced",
 					env: {
 						PATH: "/usr/bin:/bin",
 						HOME: resolveOpenCodeSkillHome(directory, options.skillDirectory),

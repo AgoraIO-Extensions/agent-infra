@@ -1,10 +1,141 @@
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { openAcpSession } from "./acp-session.js";
 import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
+
+it.each([
+	"partial-input",
+	"announced-input",
+	"empty-request",
+	"late-notification",
+	"completed-during-wait",
+	"reannounced-during-wait",
+	"still-empty",
+	"denied-input",
+	"conflicting-input",
+	"conflicting-kind",
+	"unannounced",
+	"foreign-session",
+	"completed",
+	"announced-metadata",
+	"late-announced-metadata",
+	"missing-announced-input",
+	"completed-during-authorization",
+	"conflicting-during-authorization",
+	"same-input-during-authorization",
+	"reannounced-during-authorization",
+])(
+	"authorizes only the current announced ACP tool with consistent complete arguments: %s",
+	async (scenario) => {
+		const cwd = await mkdtemp(join(tmpdir(), "acp-permission-input-"));
+		await mkdir(join(cwd, "workspace"));
+		let authorizing = false;
+		const updateObserved = Promise.withResolvers<void>();
+		const authorize = vi.fn(async (tool) => {
+			const allowed =
+				tool.title === "grep" &&
+				tool.kind === "search" &&
+				tool.rawInput?.pattern === "allowed";
+			if (scenario.endsWith("-during-authorization")) {
+				authorizing = true;
+				await writeFile(
+					join(cwd, "workspace", "authorization-entered"),
+					"entered",
+				);
+				await updateObserved.promise;
+			}
+			return allowed;
+		});
+		const session = await openAcpSession({
+			directory: cwd,
+			cwd: join(cwd, "workspace"),
+			launch: {
+				command: process.execPath,
+				args: [
+					fileURLToPath(
+						new URL("./acp-peer.test-support.mjs", import.meta.url),
+					),
+				],
+				env: {
+					ACP_TEST_MODE: "permission-input",
+					ACP_TEST_PERMISSION_SCENARIO: scenario,
+				},
+				authorize,
+				...(scenario.endsWith("announced-metadata") ||
+				scenario === "missing-announced-input"
+					? { permissionInputSource: "announced" as const }
+					: {}),
+			},
+			update: async ({ update }) => {
+				if (
+					authorizing &&
+					(update.sessionUpdate === "tool_call" ||
+						update.sessionUpdate === "tool_call_update")
+				)
+					updateObserved.resolve();
+			},
+		});
+		try {
+			await session.prompt("synthetic permission ordering");
+			const result = JSON.parse(
+				await readFile(join(cwd, "workspace", "permission.json"), "utf8"),
+			);
+			expect(result).toEqual({
+				outcome: {
+					outcome: "selected",
+					optionId: [
+						"partial-input",
+						"announced-input",
+						"empty-request",
+						"late-notification",
+						"announced-metadata",
+						"late-announced-metadata",
+						"same-input-during-authorization",
+					].includes(scenario)
+						? "allow"
+						: "reject",
+				},
+			});
+			if (
+				[
+					"partial-input",
+					"announced-input",
+					"empty-request",
+					"late-notification",
+					"denied-input",
+					"still-empty",
+					"announced-metadata",
+					"late-announced-metadata",
+					"missing-announced-input",
+					"completed-during-authorization",
+					"conflicting-during-authorization",
+					"same-input-during-authorization",
+					"reannounced-during-authorization",
+				].includes(scenario)
+			) {
+				expect(authorize).toHaveBeenCalledExactlyOnceWith({
+					toolCallId: "catalog-tool",
+					title: "grep",
+					kind: "search",
+					rawInput: ["still-empty", "missing-announced-input"].includes(
+						scenario,
+					)
+						? {}
+						: {
+								pattern: scenario === "denied-input" ? "forbidden" : "allowed",
+							},
+				});
+			} else expect(authorize).not.toHaveBeenCalled();
+		} finally {
+			updateObserved.resolve();
+			await session.close();
+			await rm(cwd, { recursive: true, force: true });
+		}
+	},
+);
 
 it("discovers grouped native models, reads the current choice, and rejects choices removed by the peer", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "acp-models-"));
