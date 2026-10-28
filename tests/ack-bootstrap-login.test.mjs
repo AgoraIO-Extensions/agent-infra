@@ -391,6 +391,41 @@ test("rollback preserves a concurrent replacement and leaves publication blocked
 	);
 });
 
+test("backup drift at restore link keeps recovery evidence and publication blocked", async (t) => {
+	const f = await promotionFixture(t);
+	const fs = await import("node:fs/promises");
+	const { promoteLoginOutputs, assertLoginOutputsCommitted } = await import(
+		"../deploy/ack/login-output-promotion.ts"
+	);
+	let published = 0;
+	let changedBackup;
+	await assert.rejects(
+		promoteLoginOutputs(f.config.identityFile, f.before, f.outputs, {
+			rename: fs.rename,
+			link: async (from, to) => {
+				if (String(from).endsWith(".next") && ++published === 2)
+					throw new Error("INJECTED_PROMOTION_FAILURE");
+				if (String(from).endsWith(".before") && to === f.config.identityFile) {
+					changedBackup = from;
+					await fs.writeFile(from, "concurrent-backup-drift", { mode: 0o600 });
+				}
+				return fs.link(from, to);
+			},
+		}),
+		/LOGIN_OUTPUT_RECOVERY_REQUIRED/,
+	);
+	assert(changedBackup);
+	assert.equal(
+		await readFile(changedBackup, "utf8"),
+		"concurrent-backup-drift",
+	);
+	await assert.rejects(
+		assertLoginOutputsCommitted(f.config.identityFile),
+		/PROMOTION_INCOMPLETE/,
+	);
+	await assert.rejects(verifiedLoginCandidate(f.file, source, f.config.origin));
+});
+
 test("incomplete promotion blocks a fresh login before network I/O", async (t) => {
 	const f = await fixture(t);
 	const { mkdir } = await import("node:fs/promises");

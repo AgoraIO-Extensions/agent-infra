@@ -135,9 +135,9 @@ async function rollback(journal: Journal, io: Operations) {
 			if (backup) {
 				if (current === null) {
 					await io.link(entry.backup, entry.file);
-					current = backup;
+					current = await loginOutputBytes(entry.file);
 				}
-				if (!current.equals(backup)) {
+				if (!current || !current.equals(backup)) {
 					conflict = true;
 					continue;
 				}
