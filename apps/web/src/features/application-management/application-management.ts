@@ -1,5 +1,7 @@
 import {
+	ApplicationApiCredentialPageV1Schema,
 	ApplicationApiCredentialResponseV1Schema,
+	ApplicationApiCredentialRevocationV1Schema,
 	ApplicationMetadataV1Schema,
 	ApplicationRegistrationResponseV1Schema,
 	pilotBrowserHttpOpenApiPathsV2,
@@ -12,7 +14,9 @@ import {
 	disableOwnApplicationV2,
 	getOwnApplicationV2,
 	issueOrRotateApplicationApiCredentialV2,
+	listApplicationApiCredentialsV2,
 	registerApplicationV2,
+	revokeApplicationApiCredentialV2,
 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
 	ApplicationMetadataV1,
@@ -180,4 +184,57 @@ export async function issueOrRotateApplicationCredential(
 		});
 	}
 	return result.data;
+}
+
+export async function loadApplicationCredentials(
+	applicationId: string,
+	cursor?: string,
+	client?: Client,
+	signal?: AbortSignal,
+) {
+	const result = await listApplicationApiCredentialsV2({
+		client,
+		signal,
+		path: { applicationId },
+		query: { limit: 20, ...(cursor ? { cursor } : {}) },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	signal?.throwIfAborted();
+	const parsed = ApplicationApiCredentialPageV1Schema.safeParse(result.data);
+	if (
+		result.response?.status !== 200 ||
+		!parsed.success ||
+		parsed.data.items.some((item) => item.applicationId !== applicationId)
+	)
+		throw new Error("无法读取应用凭证，请重新加载确认状态。");
+	return parsed.data;
+}
+export async function revokeApplicationCredential(
+	applicationId: string,
+	credentialId: string,
+	idempotencyKey: string,
+	client?: Client,
+) {
+	const result = await revokeApplicationApiCredentialV2({
+		client,
+		path: { applicationId, credentialId },
+		headers: { "Idempotency-Key": idempotencyKey },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	const parsed = ApplicationApiCredentialRevocationV1Schema.safeParse(
+		result.data,
+	);
+	if (
+		result.response?.status !== 200 ||
+		!parsed.success ||
+		parsed.data.metadata.applicationId !== applicationId ||
+		parsed.data.metadata.credentialId !== credentialId ||
+		parsed.data.metadata.revokedAt === null
+	)
+		throw new Error(
+			"无法确认撤销结果，请重新加载元数据核实后再操作。页面不会自动重试撤销。",
+		);
+	return parsed.data;
 }

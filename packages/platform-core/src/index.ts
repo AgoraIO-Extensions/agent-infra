@@ -65,6 +65,7 @@ export * from "./agent-runtime-presentation.js";
 export * from "./agent-user-manage-grants.js";
 export * from "./agent-user-use-grants.js";
 export * from "./api-audit-identity.js";
+export * from "./application-api-credential-management.js";
 export * from "./application-api-credentials.js";
 export * from "./application-foundation.js";
 export * from "./application-material-grant.js";

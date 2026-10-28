@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
+	type ApplicationApiCredentialManagementTransactionV1,
+	type ApplicationApiCredentialTransactionV1,
 	type ApplicationCredentialAttemptV1,
 	type ApplicationCredentialDeliveryPortV1,
 	createApplicationApiCredentialIssuerV1,
+	createApplicationApiCredentialManagementV1,
 	createApplicationMaterialGrantUseCaseV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
@@ -526,5 +529,322 @@ describe("application issuer with real PostgreSQL and a controlled recipient", (
 		expect(
 			await sql`select id from platform.platform_api_credentials`,
 		).toHaveLength(0);
+	});
+});
+
+describe("application credential metadata and individual revocation", () => {
+	const management = () =>
+		createApplicationApiCredentialManagementV1({
+			store,
+			userDirectory: directory,
+		});
+	async function seed() {
+		await sql`insert into platform.platform_api_credentials (id, principal_type, principal_id, credential_hash, scopes) values ('credential-a','application','app-1',repeat('a', 64), '["agent:read"]'), ('credential-b','application','app-1',repeat('b', 64), '["agent:use"]'), ('credential-other','application','other-app',repeat('c', 64), '["agent:read"]'), ('credential-personal','user','app-1',repeat('d', 64), '["agent:read"]')`;
+	}
+	it("bounds metadata by application/type, paginates, and needs no material grant", async () => {
+		await seed();
+		const first = await management().list(request, { limit: 1 });
+		expect(first.items.map((row) => row.credentialId)).toEqual([
+			"credential-a",
+		]);
+		expect(first.nextCursor).toBe("credential-a");
+		const second = await management().list(request, {
+			limit: 1,
+			cursor: first.nextCursor,
+		});
+		expect(second.items.map((row) => row.credentialId)).toEqual([
+			"credential-b",
+		]);
+		expect(second.nextCursor).toBeNull();
+		const text = JSON.stringify([
+			first,
+			second,
+			await sql`select details from platform.audit_events`,
+		]);
+		expect(text).not.toContain("a".repeat(64));
+		expect(text).not.toContain("credentialHash");
+		await expect(
+			management().list(request, { limit: 101 }),
+		).rejects.toMatchObject({ code: "invalid_input" });
+	});
+	it("serializes concurrent and replayed revoke, preserves siblings, and rejects key reuse", async () => {
+		await seed();
+		const results = await Promise.all([
+			management().revoke(request, "credential-a"),
+			management().revoke(request, "credential-a"),
+		]);
+		expect(results.map((row) => row.replayed).sort()).toEqual([false, true]);
+		expect(results[0]?.metadata.revokedAt).toEqual(
+			results[1]?.metadata.revokedAt,
+		);
+		const duplicate = await management().revoke(
+			{ ...request, idempotencyKey: "another-key" },
+			"credential-a",
+		);
+		expect(duplicate.metadata.revokedAt).toEqual(
+			results[0]?.metadata.revokedAt,
+		);
+		await expect(
+			management().revoke(request, "credential-b"),
+		).rejects.toMatchObject({ code: "idempotency_conflict" });
+		expect(
+			(
+				await sql`select revoked_at from platform.platform_api_credentials where id = 'credential-b'`
+			)[0]?.revoked_at,
+		).toBeNull();
+		expect(
+			(
+				await sql`select * from platform.audit_events where action = 'application.credential.revoked'`
+			).length,
+		).toBe(2);
+	});
+
+	it.each(["revoke", "rotate"] as const)(
+		"serializes overlapping %s-first revocation and rotation with atomic audit",
+		async (firstOperation) => {
+			await grants().grant(grantRequest());
+			const delivery = sink();
+			const issuer = createApplicationApiCredentialIssuerV1({
+				store,
+				userDirectory: directory,
+				delivery: delivery.port,
+			});
+			const issued = await issuer.execute(request, command);
+			const oldId = issued.metadata.credentialId;
+			await sql`insert into platform.platform_api_credentials (id,principal_type,principal_id,credential_hash,scopes) values ('unrelated-credential','application','other-app',repeat('e',64),'["agent:read"]')`;
+			const unchangedSibling =
+				await sql`select * from platform.platform_api_credentials where id = 'unrelated-credential'`;
+			const unchangedGrants =
+				await sql`select * from platform.api_credential_delivery_grants`;
+			const beforeCredentials =
+				await sql`select * from platform.platform_api_credentials order by id`;
+			const beforeAudits =
+				await sql`select * from platform.audit_events order by id`;
+			const beforeReceipts =
+				await sql`select * from platform.idempotency_records order by id`;
+			const beforeCommit = Promise.withResolvers<void>();
+			const releaseCommit = Promise.withResolvers<void>();
+			const secondLockAttempt = Promise.withResolvers<void>();
+			let firstTransaction = true;
+			let secondAcquiredLock = false;
+			type Transaction = ApplicationApiCredentialTransactionV1 &
+				ApplicationApiCredentialManagementTransactionV1;
+			const firstStore = {
+				execute<T>(work: (tx: Transaction) => Promise<T>): Promise<T> {
+					return store.execute(async (tx) => {
+						const result = await work(tx);
+						if (firstTransaction) {
+							firstTransaction = false;
+							beforeCommit.resolve();
+							await releaseCommit.promise;
+						}
+						return result;
+					});
+				},
+			};
+			const secondStore = {
+				execute<T>(work: (tx: Transaction) => Promise<T>): Promise<T> {
+					return store.execute((tx) =>
+						work({
+							...tx,
+							async lockApplication(applicationId) {
+								const locked = tx.lockApplication(applicationId);
+								secondLockAttempt.resolve();
+								const application = await locked;
+								secondAcquiredLock = true;
+								return application;
+							},
+						}),
+					);
+				},
+			};
+			const rotating = createApplicationApiCredentialIssuerV1({
+				store: firstOperation === "rotate" ? firstStore : secondStore,
+				userDirectory: directory,
+				delivery: delivery.port,
+			});
+			const revoking = createApplicationApiCredentialManagementV1({
+				store: firstOperation === "revoke" ? firstStore : secondStore,
+				userDirectory: directory,
+			});
+			const rotate = () =>
+				rotating.execute(
+					{ ...request, idempotencyKey: "overlapping-rotate" },
+					{ ...command, operation: "rotate", credentialId: oldId },
+				);
+			const revoke = () =>
+				revoking.revoke(
+					{ ...request, idempotencyKey: "overlapping-revoke" },
+					oldId,
+				);
+			// The first transaction already holds the production application lock and has written its audit.
+			const first = firstOperation === "revoke" ? revoke() : rotate();
+			await beforeCommit.promise;
+			const second = firstOperation === "revoke" ? rotate() : revoke();
+			const completed = Promise.allSettled([first, second]);
+			try {
+				await secondLockAttempt.promise;
+				expect(secondAcquiredLock).toBe(false);
+				// A separate connection sees neither the first mutation nor its audit/receipt before commit.
+				expect(
+					await sql`select * from platform.platform_api_credentials order by id`,
+				).toEqual(beforeCredentials);
+				expect(
+					await sql`select * from platform.audit_events order by id`,
+				).toEqual(beforeAudits);
+				expect(
+					await sql`select * from platform.idempotency_records order by id`,
+				).toEqual(beforeReceipts);
+			} finally {
+				releaseCommit.resolve();
+				await completed;
+			}
+			const outcomes = await completed;
+			expect(outcomes[0]?.status).toBe("fulfilled");
+			const credentials =
+				await sql`select * from platform.platform_api_credentials where principal_id = 'app-1' order by id`;
+			expect(
+				credentials.find((row) => row.id === oldId)?.revoked_at,
+			).toBeInstanceOf(Date);
+			const audits =
+				await sql`select action,details from platform.audit_events where action in ('application.credential.revoked','application.credential.rotated') order by action`;
+			expect(
+				audits.filter((row) => row.action === "application.credential.revoked"),
+			).toHaveLength(1);
+			expect(
+				audits.find((row) => row.action === "application.credential.revoked")
+					?.details,
+			).toMatchObject({ credentialIds: [oldId], returnedMaterial: false });
+			if (firstOperation === "revoke") {
+				expect(outcomes[1]).toMatchObject({
+					status: "rejected",
+					reason: { code: "idempotency_conflict" },
+				});
+				expect(credentials).toHaveLength(1);
+				expect(delivery.accepted).toHaveLength(1);
+				expect(
+					audits.filter(
+						(row) => row.action === "application.credential.rotated",
+					),
+				).toHaveLength(0);
+				expect(
+					await sql`select * from platform.idempotency_records where idempotency_key = 'overlapping-rotate'`,
+				).toHaveLength(0);
+			} else {
+				expect(outcomes[1]?.status).toBe("fulfilled");
+				expect(credentials).toHaveLength(2);
+				const replacement = credentials.find((row) => row.id !== oldId);
+				expect(replacement?.revoked_at).toBeNull();
+				expect(delivery.accepted).toHaveLength(2);
+				expect(replacement?.credential_hash).toBe(
+					createHash("sha256")
+						.update(delivery.accepted[1] ?? "")
+						.digest("hex"),
+				);
+				expect(
+					audits.filter(
+						(row) => row.action === "application.credential.rotated",
+					),
+				).toHaveLength(1);
+				expect(
+					audits.find((row) => row.action === "application.credential.rotated")
+						?.details,
+				).toMatchObject({
+					credentialId: replacement?.id,
+					previousCredentialId: oldId,
+					returnedMaterial: false,
+				});
+				const replacementBeforeReplay =
+					await sql`select * from platform.platform_api_credentials where id = ${replacement?.id}`;
+				expect(
+					(
+						await revoking.revoke(
+							{ ...request, idempotencyKey: "overlapping-revoke" },
+							oldId,
+						)
+					).replayed,
+				).toBe(true);
+				expect(
+					await sql`select * from platform.platform_api_credentials where id = ${replacement?.id}`,
+				).toEqual(replacementBeforeReplay);
+			}
+			expect(
+				await sql`select * from platform.platform_api_credentials where id = 'unrelated-credential'`,
+			).toEqual(unchangedSibling);
+			expect(
+				await sql`select * from platform.api_credential_delivery_grants`,
+			).toEqual(unchangedGrants);
+			expect(
+				await sql`select * from platform.idempotency_records where idempotency_key = 'overlapping-revoke'`,
+			).toHaveLength(1);
+			const auditText = JSON.stringify(audits);
+			for (const material of delivery.accepted) {
+				expect(auditText).not.toContain(material);
+				expect(auditText).not.toContain(
+					createHash("sha256").update(material).digest("hex"),
+				);
+			}
+		},
+	);
+	it("rejects other applications, personal IDs, missing IDs, removed and disabled managers even on replay", async () => {
+		await seed();
+		for (const id of ["credential-other", "credential-personal", "missing"])
+			await expect(management().revoke(request, id)).rejects.toMatchObject({
+				code: "not_found",
+			});
+		await expect(
+			management().list({ ...request, userId: "unrelated" }, {}),
+		).rejects.toMatchObject({ code: "not_found" });
+		await management().revoke(request, "credential-a");
+		await sql`update platform.platform_applications set responsible_user_id = 'replacement' where id = 'app-1'`;
+		await expect(
+			management().revoke(request, "credential-a"),
+		).rejects.toMatchObject({ code: "not_found" });
+		await sql`update platform.platform_applications set responsible_user_id = 'manager' where id = 'app-1'`;
+		await sql`insert into platform.platform_user_disables (user_id) values ('manager')`;
+		await expect(
+			management().revoke(request, "credential-a"),
+		).rejects.toMatchObject({ code: "forbidden" });
+		await expect(management().list(request, {})).rejects.toMatchObject({
+			code: "forbidden",
+		});
+	});
+	it("rolls back revocation and idempotency when audit fails or current directory authority changes", async () => {
+		await seed();
+		await sql`create function platform.reject_credential_audit() returns trigger language plpgsql as $$ begin raise exception 'audit rejected'; end $$`;
+		await sql`create trigger reject_credential_audit before insert on platform.audit_events for each row execute function platform.reject_credential_audit()`;
+		try {
+			await expect(
+				management().revoke(request, "credential-a"),
+			).rejects.toMatchObject({ code: "unavailable" });
+			await expect(management().list(request, {})).rejects.toMatchObject({
+				code: "unavailable",
+			});
+		} finally {
+			await sql`drop trigger reject_credential_audit on platform.audit_events`;
+			await sql`drop function platform.reject_credential_audit()`;
+		}
+		let checks = 0;
+		const changed = createApplicationApiCredentialManagementV1({
+			store,
+			userDirectory: {
+				resolveUser: async (userId) => ({
+					...(await directory.resolveUser(userId)),
+					authorizationRevision: String(++checks),
+				}),
+			},
+		});
+		await expect(changed.revoke(request, "credential-a")).rejects.toMatchObject(
+			{ code: "forbidden" },
+		);
+		expect(
+			(
+				await sql`select revoked_at from platform.platform_api_credentials where id = 'credential-a'`
+			)[0]?.revoked_at,
+		).toBeNull();
+		expect(await sql`select * from platform.idempotency_records`).toHaveLength(
+			0,
+		);
+		expect(await sql`select * from platform.audit_events`).toHaveLength(0);
 	});
 });

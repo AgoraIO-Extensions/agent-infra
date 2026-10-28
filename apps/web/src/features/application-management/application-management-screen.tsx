@@ -33,6 +33,7 @@ import {
 	useDirectoryNames,
 } from "../directory-names.js";
 import { RecoveryButton } from "../recovery-button.js";
+import { ApplicationCredentialList } from "./application-credential-list.js";
 import { ApplicationCredentialResult } from "./application-credential-result.js";
 import type {
 	ApplicationCredentialRequest,
@@ -361,6 +362,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 	const [credentialResult, setCredentialResult] =
 		useState<ApplicationCredentialResponse | null>(null);
 	const [submitting, setSubmitting] = useState(false);
+	const [credentialRefresh, setCredentialRefresh] = useState(0);
 	// G4-26：签发或轮换成功后焦点交给「应用凭证结果」标题，不随提交按钮的禁用落到 body。
 	const resultHeading = useRef<HTMLHeadingElement>(null);
 	const focusResult = useRef(false);
@@ -425,7 +427,10 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 			// The owner renders mutation errors through actionError.
 		} finally {
 			pending.current = false;
-			if (active.current) setSubmitting(false);
+			if (active.current) {
+				setSubmitting(false);
+				setCredentialRefresh((value) => value + 1);
+			}
 		}
 	}
 
@@ -539,6 +544,10 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 			<DirectoryReadAlert
 				names={[userNames]}
 				recoveryTarget={() => title.current}
+			/>
+			<ApplicationCredentialList
+				key={credentialRefresh}
+				applicationId={application.applicationId}
 			/>
 			{credentialResult ? (
 				<ApplicationCredentialResult

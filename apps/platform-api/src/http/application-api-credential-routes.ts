@@ -1,11 +1,15 @@
 import { OpaqueIdV1Schema } from "@agent-infra/contracts";
 import {
+	ApplicationApiCredentialListQueryV1Schema,
+	ApplicationApiCredentialPageV1Schema,
 	ApplicationApiCredentialRequestV1Schema,
 	ApplicationApiCredentialResponseV1Schema,
+	ApplicationApiCredentialRevocationV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
 	ApplicationApiCredentialErrorV1,
 	type createApplicationApiCredentialIssuerV1,
+	type createApplicationApiCredentialManagementV1,
 } from "@agent-infra/platform-core";
 import type { Hono } from "hono";
 import {
@@ -21,9 +25,108 @@ export function registerApplicationApiCredentialRoutes(
 	app: Hono,
 	input: {
 		readonly identity: IdentityAdapter;
+		readonly management: ReturnType<
+			typeof createApplicationApiCredentialManagementV1
+		>;
 		readonly issuer: ReturnType<typeof createApplicationApiCredentialIssuerV1>;
 	},
 ): void {
+	for (const method of ["get", "delete"] as const) {
+		app[method](
+			method === "get"
+				? "/api/v2/applications/:applicationId/credentials"
+				: "/api/v2/applications/:applicationId/credentials/:credentialId",
+			async (context) => {
+				const request = context.req.raw;
+				const metadata = requestMetadata(request);
+				context.header("Cache-Control", "no-store");
+				context.header("Referrer-Policy", "no-referrer");
+				try {
+					if (request.headers.has("Authorization"))
+						throw new HttpProtocolError(
+							"AUTHENTICATION_REQUIRED",
+							metadata.traceId,
+						);
+					const identity = await resolveIdentity(
+						input.identity,
+						request,
+						metadata.traceId,
+					);
+					const applicationId = OpaqueIdV1Schema.safeParse(
+						context.req.param("applicationId"),
+					);
+					if (!applicationId.success)
+						throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+					const trusted = {
+						...metadata,
+						applicationId: applicationId.data,
+						userId: identity.userId,
+					};
+					const params = new URL(request.url).searchParams;
+					if (method === "get") {
+						if (
+							[...params.keys()].some((key) => params.getAll(key).length !== 1)
+						)
+							throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+						const query = ApplicationApiCredentialListQueryV1Schema.safeParse(
+							Object.fromEntries(params),
+						);
+						if (!query.success)
+							throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+						const result = await input.management.list(trusted, query.data);
+						const response =
+							ApplicationApiCredentialPageV1Schema.safeParse(result);
+						if (!response.success)
+							throw new HttpProtocolError(
+								"DEPENDENCY_UNAVAILABLE",
+								metadata.traceId,
+							);
+						return context.json(response.data, 200);
+					}
+					if (params.size || (await request.text()) !== "")
+						throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+					const credentialId = OpaqueIdV1Schema.safeParse(
+						context.req.param("credentialId"),
+					);
+					if (!credentialId.success)
+						throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+					const result = await input.management.revoke(
+						{
+							...trusted,
+							idempotencyKey: parseIdempotencyKey(request, metadata.traceId),
+						},
+						credentialId.data,
+					);
+					const response =
+						ApplicationApiCredentialRevocationV1Schema.safeParse(result);
+					if (!response.success)
+						throw new HttpProtocolError(
+							"DEPENDENCY_UNAVAILABLE",
+							metadata.traceId,
+						);
+					return context.json(response.data, 200);
+				} catch (error) {
+					const mapped =
+						error instanceof ApplicationApiCredentialErrorV1
+							? new HttpProtocolError(
+									(
+										{
+											invalid_input: "INVALID_REQUEST",
+											forbidden: "AUTHORIZATION_REVOKED",
+											not_found: "RESOURCE_UNAVAILABLE",
+											idempotency_conflict: "CONFLICT",
+											unavailable: "DEPENDENCY_UNAVAILABLE",
+										} as const
+									)[error.code],
+									metadata.traceId,
+								)
+							: error;
+					const protocol = mapCoreError(mapped, metadata.traceId);
+					return context.json(protocol.body, protocol.status);
+				}
+			},
+		);
+	}
 	app.post(
 		"/api/v2/applications/:applicationId/credentials",
 		async (context) => {

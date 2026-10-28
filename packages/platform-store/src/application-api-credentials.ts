@@ -1,14 +1,15 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ApplicationApiCredentialResponseV1Schema } from "@agent-infra/contracts/pilot";
 import {
 	ApplicationApiCredentialErrorV1,
+	type ApplicationApiCredentialManagementTransactionV1,
 	type ApplicationApiCredentialRequestV1,
 	type ApplicationApiCredentialStoreV1,
 	type ApplicationApiCredentialTransactionV1,
 	type ApplicationCredentialSavedReceiptV1,
 	type PersonalApiCredentialMetadataV1,
 } from "@agent-infra/platform-core";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { applicationMaterialGrantTransactionV1 } from "./application-material-grant.js";
 import postgres from "./observed-postgres.js";
@@ -45,9 +46,100 @@ function metadata(
 		lastUsedAt: row.lastUsedAt?.toISOString() ?? null,
 	};
 }
-function operations(tx: Transaction): ApplicationApiCredentialTransactionV1 {
+function operations(
+	tx: Transaction,
+): ApplicationApiCredentialTransactionV1 &
+	ApplicationApiCredentialManagementTransactionV1 {
 	const grants = applicationMaterialGrantTransactionV1(tx);
 	return {
+		async listCredentials(applicationId, limit, afterId) {
+			const rows = await tx
+				.select()
+				.from(platformApiCredentials)
+				.where(
+					and(
+						eq(platformApiCredentials.principalType, "application"),
+						eq(platformApiCredentials.principalId, applicationId),
+						afterId === null
+							? undefined
+							: gt(platformApiCredentials.id, afterId),
+					),
+				)
+				.orderBy(asc(platformApiCredentials.id))
+				.limit(limit);
+			return rows.map(metadata);
+		},
+		async lockCredential(applicationId, credentialId) {
+			const [row] = await tx
+				.select()
+				.from(platformApiCredentials)
+				.where(
+					and(
+						eq(platformApiCredentials.principalType, "application"),
+						eq(platformApiCredentials.principalId, applicationId),
+						eq(platformApiCredentials.id, credentialId),
+					),
+				)
+				.for("update")
+				.limit(1);
+			return row ? metadata(row) : null;
+		},
+		async lockRevocation(request) {
+			// The application advisory lock also serializes revocation keys with issue/rotate.
+			const [row] = await tx
+				.select()
+				.from(idempotencyRecords)
+				.where(
+					and(
+						eq(idempotencyRecords.scopeType, scopeType),
+						eq(idempotencyRecords.scopeId, request.applicationId),
+						eq(idempotencyRecords.actorId, request.userId),
+						eq(
+							idempotencyRecords.commandType,
+							"application.credential.revoked",
+						),
+						eq(idempotencyRecords.idempotencyKey, request.idempotencyKey),
+					),
+				)
+				.for("update")
+				.limit(1);
+			if (!row) return null;
+			const id = row.result?.credentialId;
+			if (
+				row.status !== "completed" ||
+				typeof id !== "string" ||
+				row.requestDigest !== createHash("sha256").update(id).digest("hex")
+			)
+				throw new ApplicationApiCredentialErrorV1("unavailable");
+			return id;
+		},
+		async saveRevocation(request, credentialId) {
+			await tx.insert(idempotencyRecords).values({
+				id: randomUUID(),
+				scopeType,
+				scopeId: request.applicationId,
+				actorId: request.userId,
+				commandType: "application.credential.revoked",
+				idempotencyKey: request.idempotencyKey,
+				requestDigest: createHash("sha256").update(credentialId).digest("hex"),
+				status: "completed",
+				result: { credentialId },
+			});
+		},
+		async recordManagementAudit(request, action, credentialIds) {
+			await tx.insert(auditEvents).values({
+				id: randomUUID(),
+				requestId: request.requestId,
+				traceId: request.traceId,
+				actorType: "user",
+				actorId: request.userId,
+				action,
+				targetType: "application",
+				targetId: request.applicationId,
+				outcome: "succeeded",
+				details: { credentialIds: [...credentialIds], returnedMaterial: false },
+			});
+		},
 		lockUserDisabled: grants.lockUserDisabled,
 		async databaseTime() {
 			const result = await tx.execute(sql`select clock_timestamp() as now`);
@@ -227,7 +319,10 @@ export class PostgresApplicationApiCredentialIssuerStoreV1
 		this.#database = drizzle(this.#client);
 	}
 	execute<T>(
-		work: (tx: ApplicationApiCredentialTransactionV1) => Promise<T>,
+		work: (
+			tx: ApplicationApiCredentialTransactionV1 &
+				ApplicationApiCredentialManagementTransactionV1,
+		) => Promise<T>,
 	): Promise<T> {
 		return this.#database.transaction((tx) => work(operations(tx)));
 	}

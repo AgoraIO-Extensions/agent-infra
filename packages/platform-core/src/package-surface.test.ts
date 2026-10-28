@@ -109,6 +109,7 @@ describe("platform-core package surface", () => {
 			"createAgentDefaultRelayKeyUseCaseV1",
 			"createAgentManagementV1",
 			"createApplicationApiCredentialIssuerV1",
+			"createApplicationApiCredentialManagementV1",
 			"createApplicationFoundationUseCaseV1",
 			"createApplicationMaterialGrantUseCaseV1",
 			"createApplicationModelCandidatesUseCaseV1",

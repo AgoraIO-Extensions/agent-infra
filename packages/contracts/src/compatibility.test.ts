@@ -249,6 +249,15 @@ function compare(current: string, previous = "base") {
 	return comparePaths(fixturePath(current), fixturePath(previous));
 }
 
+/** Restore the issuer-only contract when testing older independent additions. */
+function restorePreApplicationCredentialGovernanceContract(value: {
+	paths: Record<string, Record<string, unknown>>;
+}) {
+	const path = "/api/v2/applications/{applicationId}/credentials";
+	if (value.paths[path]) delete value.paths[path].get;
+	delete value.paths[`${path}/{credentialId}`];
+}
+
 // #3070：Owner 读取的 Agent 投影新增可选管理修订号；还原历史契约时属于后加内容。
 function restorePreManagementRevisionContract(value: {
 	components: {
@@ -4839,6 +4848,69 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the pinned application credential metadata and revocation addition (#3611)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/applications/{applicationId}/credentials";
+		const revokePath = `${path}/{credentialId}`;
+		const previous = structuredClone(current);
+		restorePreApplicationCredentialGovernanceContract(previous);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "application-credential-governance-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					document.paths[path].get.security = [];
+				},
+				(document: typeof current) => {
+					document.paths[revokePath].delete.security = [];
+				},
+				(document: typeof current) => {
+					document.paths[revokePath].delete.parameters.pop();
+				},
+				(document: typeof current) => {
+					document.paths[path].get.parameters[1].schema.maximum = 101;
+				},
+				(document: typeof current) => {
+					document.paths[path].get.responses[200].content[
+						"application/json"
+					].schema.properties.items.items.properties.credential = {
+						type: "string",
+					};
+				},
+				(document: typeof current) => {
+					document.paths[path].post.security = [];
+				},
+				(document: typeof current) => {
+					document.paths[revokePath].post = document.paths[revokePath].delete;
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/admin/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the exact application issuer addition and preserves existing authority", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -4849,6 +4921,7 @@ describe("contract compatibility command", () => {
 				"utf8",
 			),
 		);
+		restorePreApplicationCredentialGovernanceContract(current);
 		const path = "/api/v2/applications/{applicationId}/credentials";
 		const previous = structuredClone(current);
 		delete previous.paths[path];
@@ -4949,6 +5022,7 @@ describe("contract compatibility command", () => {
 				"utf8",
 			),
 		);
+		restorePreApplicationCredentialGovernanceContract(current);
 		restorePreAgentApiManagementContract(current);
 		restorePreManagementRevisionContract(current);
 		// Isolate lifecycle from later personal API/Relay Key and registration additions.

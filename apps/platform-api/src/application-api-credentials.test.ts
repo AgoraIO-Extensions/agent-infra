@@ -1,8 +1,10 @@
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import {
 	AgentApiCreationResponseV1Schema,
+	ApplicationApiCredentialPageV1Schema,
 	ApplicationApiCredentialResponseV1Schema,
+	ApplicationApiCredentialRevocationV1Schema,
 } from "@agent-infra/contracts/pilot";
 import type {
 	createLdapIdentityDirectory,
@@ -602,4 +604,96 @@ it("assembly without a trusted delivery consumer fails closed without issuing", 
 	} finally {
 		await unavailable.close();
 	}
+});
+
+it("lists and revokes with current browser authority, then rejects only that credential at real HTTP authentication", async () => {
+	const applicationId = "governance-app";
+	const credentialId = "governance-credential";
+	const material = `papi_${randomBytes(32).toString("base64url")}`;
+	const siblingMaterial = `papi_${randomBytes(32).toString("base64url")}`;
+	await sql`insert into platform.platform_applications (id,name,responsible_user_id,authorization_revision) values (${applicationId}, 'Governance', 'manager', 'v1')`;
+	await sql`insert into platform.platform_api_credentials (id,principal_type,principal_id,credential_hash,scopes) values (${credentialId},'application',${applicationId},${createHash("sha256").update(material).digest("hex")},'["agent:read"]'), ('governance-sibling','application',${applicationId},${createHash("sha256").update(siblingMaterial).digest("hex")},'["agent:read"]')`;
+	const path = `/api/v2/applications/${applicationId}/credentials`;
+	const headers = {
+		Cookie: `__Host-platform-session=${token("manager")}`,
+		Origin: origin,
+		"Idempotency-Key": "governance-revoke",
+	};
+	const read = () => fetch(`${baseUrl}${path}`, { headers });
+	const [agent] =
+		await sql`select agent_id from platform.agent_applications order by agent_id limit 1`;
+	expect(agent?.agent_id).toBeTruthy();
+	await sql`insert into platform.agent_principal_grants (agent_id,principal_type,principal_id,grant_type,authorization_revision) values (${agent?.agent_id},'application',${applicationId},'manage','v1')`;
+	const outboxBefore =
+		await sql`select * from platform.outbox_items order by id`;
+	const authenticate = (credential: string) =>
+		fetch(`${baseUrl}/api/v2/agents/${agent?.agent_id}/state`, {
+			headers: { Authorization: `Bearer ${credential}` },
+		});
+	expect((await authenticate(material)).status).toBe(200);
+	expect((await authenticate(siblingMaterial)).status).toBe(200);
+	const listed = await read();
+	expect(listed.status).toBe(200);
+	expect(listed.headers.get("Cache-Control")).toBe("no-store");
+	const page = ApplicationApiCredentialPageV1Schema.parse(await listed.json());
+	expect(page.items).toHaveLength(2);
+	expect(JSON.stringify(page)).not.toContain(material);
+	expect(JSON.stringify(page)).not.toContain("credentialHash");
+	expect(
+		(await fetch(`${baseUrl}${path}?principalId=app-1`, { headers })).status,
+	).toBe(400);
+	expect(
+		(await fetch(`${baseUrl}${path}?limit=1&limit=2`, { headers })).status,
+	).toBe(400);
+	expect(
+		(
+			await fetch(`${baseUrl}${path}`, {
+				headers: { ...headers, Authorization: `Bearer ${material}` },
+			})
+		).status,
+	).toBe(401);
+	expect(
+		(
+			await fetch(`${baseUrl}${path}`, {
+				headers: { Cookie: `__Host-platform-session=${token("admin")}` },
+			})
+		).status,
+	).toBe(404);
+	const revoke = (id: string, extra: RequestInit = {}) =>
+		fetch(`${baseUrl}${path}/${id}`, { method: "DELETE", headers, ...extra });
+	expect((await revoke("missing")).status).toBe(404);
+	expect(
+		(
+			await revoke(credentialId, {
+				body: JSON.stringify({ userId: "manager" }),
+			})
+		).status,
+	).toBe(400);
+	const revoked = await revoke(credentialId);
+	expect(revoked.status).toBe(200);
+	expect(
+		ApplicationApiCredentialRevocationV1Schema.parse(await revoked.json())
+			.metadata.revokedAt,
+	).not.toBeNull();
+	expect((await revoke(credentialId)).status).toBe(200);
+	expect((await authenticate(material)).status).toBe(401);
+	expect((await authenticate(siblingMaterial)).status).toBe(200);
+	expect(
+		ApplicationApiCredentialPageV1Schema.parse(
+			await (await read()).json(),
+		).items.find((item) => item.credentialId === credentialId),
+	).toMatchObject({ revokedAt: expect.any(String) });
+	await sql`update platform.platform_applications set responsible_user_id = 'recipient' where id = ${applicationId}`;
+	expect((await read()).status).toBe(404);
+	expect((await revoke(credentialId)).status).toBe(404);
+	expect(await sql`select * from platform.outbox_items order by id`).toEqual(
+		outboxBefore,
+	);
+	const audit = JSON.stringify(
+		await sql`select details from platform.audit_events where target_id = ${applicationId}`,
+	);
+	expect(audit).not.toContain(material);
+	expect(audit).not.toContain(
+		createHash("sha256").update(material).digest("hex"),
+	);
 });
