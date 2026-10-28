@@ -347,7 +347,7 @@ export class PostgresEvaluationScoringV1
 				execution_id: string;
 			}[]
 		>`select status,last_event_sequence,execution_source,model_configuration_revision,model_option_id,reasoning_level,execution_id from platform.conversation_executions where execution_id=${intent.executionId}`;
-		if (!execution || execution.execution_source !== "eval")
+		if (execution?.execution_source !== "eval")
 			throw new EvaluationDataErrorV1("denied");
 		if (!["completed", "failed", "cancelled"].includes(execution.status))
 			return { waiting: true as const, delayMs: intent.scorer.retryDelayMs };
@@ -409,8 +409,7 @@ export class PostgresEvaluationScoringV1
 				{ status: string; last_event_sequence: string }[]
 			>`select status,last_event_sequence from platform.conversation_executions where execution_id=${intent.executionId} for share`;
 			if (
-				!current ||
-				current.status !== "completed" ||
+				current?.status !== "completed" ||
 				current.last_event_sequence !== execution.last_event_sequence ||
 				(latest.resultVersion !== null &&
 					latest.resultVersion !== resultVersion)
@@ -618,6 +617,69 @@ export class PostgresEvaluationScoringV1
 			const binding = await this.#current(tx, req, intent, purpose);
 			return { intent, actor: binding.principal };
 		});
+	}
+	async worklist(
+		req: EvaluationRequestV1,
+		purpose: "score" | "review",
+		limit: number,
+		cursor?: string,
+	) {
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+			throw new EvaluationDataErrorV1("invalid");
+		const principal = await this.#dataStore.authenticate({
+			...req,
+			credentialScope: purpose === "score" ? "eval:score" : "eval:review",
+		});
+		const policy = await this.options.loadDataPolicy();
+		const rows = await this.#client<
+			{ id: string }[]
+		>`select i.id from platform.evaluation_score_intents i where (i.data->>'metadataExpiresAt')::timestamptz>clock_timestamp() ${cursor ? this.#client`and i.id>${cursor}::uuid` : this.#client``} and exists(select 1 from platform.evaluation_grants g where g.dataset_id=(i.data->>'datasetId')::uuid and g.data->'principal'=${this.#client.json(principal)}::jsonb and g.data->>'revoked'='false' and g.data->>'policyId'=${policy.policyId} and (g.data->>'policyRevision')::bigint=${policy.revision} and (g.data->>'expiresAt')::timestamptz>clock_timestamp() and g.data->'versionIds' @> jsonb_build_array(i.data->>'versionId') and g.data->'operations' @> ${this.#client.json([purpose])}::jsonb) order by i.id limit 501`;
+		const items = [];
+		let last: string | null = null;
+		let more = false;
+		for (const row of rows) {
+			if (items.length === limit) {
+				more = true;
+				break;
+			}
+			last = row.id;
+			try {
+				const { intent } = await this.load(req, row.id, purpose);
+				items.push({
+					scoreId: intent.id,
+					source: intent.scorer.implementation.kind,
+					scoringModel:
+						intent.scorer.implementation.kind === "model"
+							? intent.scorer.implementation.modelId
+							: null,
+					sampleTaskId: intent.sampleTaskId,
+					experimentId: intent.experimentId,
+					executionId: intent.executionId,
+					scorerId: intent.scorer.scorerId,
+					scorerVersion: intent.scorer.version,
+					status: intent.status,
+					revision: intent.revision,
+					value: intent.value,
+					passed: intent.passed,
+					failureCode: intent.failureCode,
+					scoreActor: intent.scoreActor,
+				});
+			} catch (error) {
+				if (error instanceof EvaluationDataErrorV1 && error.code === "denied")
+					continue;
+				throw error;
+			}
+		}
+		for (const item of items) await this.load(req, item.scoreId, purpose);
+		await this.#dataStore.authenticate({
+			...req,
+			credentialScope: purpose === "score" ? "eval:score" : "eval:review",
+		});
+		return {
+			purpose,
+			items,
+			nextCursor: more || rows.length === 501 ? last : null,
+		};
 	}
 	async content(
 		req: EvaluationRequestV1,

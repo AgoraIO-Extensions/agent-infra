@@ -21,6 +21,7 @@ export const personalApiCredentialScopesV1 = [
 	"eval:run",
 	"eval:score",
 	"eval:review",
+	"eval:analyze",
 ] as const;
 
 export type PersonalApiCredentialScopeV1 =

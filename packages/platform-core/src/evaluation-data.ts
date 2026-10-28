@@ -51,7 +51,7 @@ export interface EvaluationRequestV1 {
 	requestId: string;
 	traceId: string;
 	/** Fixed by server-only experiment/scoring use cases, never decoded from HTTP. */
-	credentialScope?: "eval:run" | "eval:score" | "eval:review";
+	credentialScope?: "eval:run" | "eval:score" | "eval:review" | "eval:analyze";
 }
 /** The bounded V1 metadata projection must be explicitly approved as a whole. */
 export const evaluationRetainedMetadataFieldsV1 = [
@@ -698,7 +698,7 @@ export function createEvaluationDataV1(options: {
 		request: EvaluationRequestV1,
 		datasetId: string,
 		versionId: string,
-		operation: "read" | "run" | "score" | "review",
+		operation: "read" | "run" | "score" | "review" | "analyze",
 	) {
 		const before = await current(request, async (tx, p) => {
 			const v = await version(tx, datasetId, versionId);
@@ -759,12 +759,14 @@ export function createEvaluationDataV1(options: {
 		request: EvaluationRequestV1,
 		datasetId: string,
 		versionId: string,
-		operation: "run" | "score" | "review",
+		operation: "run" | "score" | "review" | "analyze",
+		metadataOnly = false,
 	) {
 		return current(request, async (tx, p) => {
 			const v = await version(tx, datasetId, versionId);
-			const g = await permission(tx, p, v, operation);
-			if (v.status !== "available" || !v.stored) return fail("denied");
+			const g = await permission(tx, p, v, operation, metadataOnly);
+			if (!metadataOnly && (v.status !== "available" || !v.stored))
+				return fail("denied");
 			return {
 				version: v,
 				grant: g,
@@ -1223,6 +1225,40 @@ export function createEvaluationDataV1(options: {
 			datasetId: string,
 			versionId: string,
 		) => (await readForPurpose(request, datasetId, versionId, "read")).content,
+		readForAnalyze: (
+			request: EvaluationRequestV1,
+			datasetId: string,
+			versionId: string,
+		) =>
+			readForPurpose(
+				{ ...request, credentialScope: "eval:analyze" },
+				datasetId,
+				versionId,
+				"analyze",
+			),
+		authorizeAnalyze: (
+			request: EvaluationRequestV1,
+			datasetId: string,
+			versionId: string,
+		) =>
+			authorizePurpose(
+				{ ...request, credentialScope: "eval:analyze" },
+				datasetId,
+				versionId,
+				"analyze",
+			),
+		authorizeAnalysisMetadata: (
+			request: EvaluationRequestV1,
+			datasetId: string,
+			versionId: string,
+		) =>
+			authorizePurpose(
+				{ ...request, credentialScope: "eval:analyze" },
+				datasetId,
+				versionId,
+				"analyze",
+				true,
+			),
 		readForRun: (
 			request: EvaluationRequestV1,
 			datasetId: string,

@@ -612,6 +612,8 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 					})
 					.onConflictDoNothing();
 			}
+			await tx.execute(sql`delete from platform.idempotency_records where id in(select id from platform.idempotency_records where scope_type='task_feedback' and (result->>'metadataExpiresAt')::timestamptz<=clock_timestamp() order by id limit ${limit} for update skip locked)`);
+			await tx.execute(sql`delete from platform.task_feedback where execution_id in(select execution_id from platform.task_feedback where metadata_expires_at<=clock_timestamp() order by metadata_expires_at,execution_id limit ${limit} for update skip locked)`);
 			await tx.execute(
 				sql`delete from platform.evaluation_score_reviews where (data->>'metadataExpiresAt')::timestamptz<=clock_timestamp()`,
 			);

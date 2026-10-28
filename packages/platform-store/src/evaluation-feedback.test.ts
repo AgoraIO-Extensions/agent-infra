@@ -359,7 +359,10 @@ it.each(["owner", "web"] as const)(
 			await sql`insert into platform.agent_owners(agent_id,owner_id,created_at)values('agent','viewer',now()) on conflict do nothing`;
 		else
 			await sql`insert into platform.agent_availability(agent_id,target_type,target_id)values('agent','user','same') on conflict do nothing`;
-		const state = await readAgentManagementState(drizzle(sql), "agent");
+		const state = await readAgentManagementState(
+			drizzle<Record<string, never>>(sql),
+			"agent",
+		);
 		if (!state) throw new Error("missing fixture state");
 		const admission = new FakeAgentConfigurationAdmissionsV1({
 			...agentConfigurationConformanceAdmissionsV1,

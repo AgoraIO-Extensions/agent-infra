@@ -1,10 +1,15 @@
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { createServer } from "node:http";
 import {
+	EvaluationAnalysisDetailV1Schema,
+	EvaluationAnalysisSummaryV1Schema,
+	EvaluationChoiceCatalogV1Schema,
 	EvaluationExperimentV1Schema,
+	EvaluationHistoryV1Schema,
 	EvaluationReviewV1Schema,
 	EvaluationScoreMetadataV1Schema,
 	EvaluationScoringContextV1Schema,
+	EvaluationWorklistV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { createDeploymentModelCatalogAdapterV1 } from "@agent-infra/model-catalog";
 import {
@@ -73,6 +78,7 @@ const policy = parseEvaluationPolicyV1({
 				"run",
 				"score",
 				"review",
+				"analyze",
 				"manage_grants",
 				"delete",
 			],
@@ -547,6 +553,16 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 			storage,
 			loadPolicy: async () => policy,
 			loadExperimentPolicy: async () => experimentPolicy,
+			loadAnalysisPolicy: async () => ({
+				schemaVersion: 1,
+				policyId: "analysis",
+				revision: 1,
+				validUntil: policy.validUntil,
+				maximumWindowMs: 86400000,
+				maximumTasks: 1000,
+				maximumModelFacts: 10000,
+				feedbackMetadataMs: 600000,
+			}),
 		},
 		admissions: {
 			authorizationAdmission: { authorize: unused },
@@ -1121,6 +1137,68 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 		const [audit] =
 			await sql`select actor_id from platform.audit_events where action='evaluation.score.reviewed' and target_id=${human.id}`;
 		expect(audit?.actor_id).toBe("reviewer");
+		const [datasetRevision] =
+			await sql`select (data->>'revision')::int as revision from platform.evaluation_datasets where id=${command.datasetId}`;
+		await data.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: Number(datasetRevision?.revision),
+			principal: { kind: "user", id: "analyst" },
+			versionIds: [command.versionId],
+			operations: ["analyze"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+		await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)values(${configuration.agentId},'user','analyst','use','analysis-use')`;
+		const getAnalysis = (path: string, user = "analyst") =>
+			fetch(`${baseUrl}${path}`, { headers: { Cookie: `session=${user}` } });
+		const choices = await getAnalysis(
+			`/choices?datasetId=${command.datasetId}&versionId=${command.versionId}`,
+			"runner",
+		);
+		expect(choices.status, await choices.clone().text()).toBe(200);
+		expect(
+			EvaluationChoiceCatalogV1Schema.parse(await choices.json()).variants,
+		).toHaveLength(2);
+		const queue = await getAnalysis("/worklist?purpose=review", "reviewer");
+		expect(queue.status, await queue.clone().text()).toBe(200);
+		expect(
+			EvaluationWorklistV1Schema.parse(await queue.json()).items.length,
+		).toBeGreaterThan(0);
+		const analysis = await getAnalysis(`/analysis/${experiment.experimentId}`);
+		expect(analysis.status, await analysis.clone().text()).toBe(200);
+		const statistics = EvaluationAnalysisSummaryV1Schema.parse(
+			await analysis.json(),
+		);
+		expect(statistics.fixedSamples).toBe(1);
+		expect(statistics.items).toHaveLength(2);
+		expect(statistics.groups).toHaveLength(6);
+		const detail = await getAnalysis(
+			`/analysis/${experiment.experimentId}/samples/${statistics.items[0]?.sampleTaskId}`,
+		);
+
+		expect(detail.status, await detail.clone().text()).toBe(200);
+		expect(
+			EvaluationAnalysisDetailV1Schema.parse(await detail.json()).sample.input,
+		).toBe("synthetic question");
+		expect(
+			(await getAnalysis(`/analysis/${experiment.experimentId}`, "reviewer"))
+				.status,
+		).toBe(404);
+		const previousExperimentPolicy = experimentPolicy;
+		experimentPolicy = {
+			...experimentPolicy,
+			revision: experimentPolicy.revision + 1,
+			variants: [],
+		};
+		try {
+			const history = await getAnalysis("/history?limit=1");
+			expect(history.status, await history.clone().text()).toBe(200);
+			expect(
+				EvaluationHistoryV1Schema.parse(await history.json()).items[0]
+					?.experimentId,
+			).toBe(experiment.experimentId);
+		} finally {
+			experimentPolicy = previousExperimentPolicy;
+		}
+
 		await worker.runOnce();
 		expect(calls).toBe(2);
 		for (const status of [401, 403]) {

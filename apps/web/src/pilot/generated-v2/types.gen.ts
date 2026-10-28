@@ -930,6 +930,270 @@ export type DirectorySearchResponseV1 = {
     query: string;
 };
 
+export type EvaluationAnalysisDetailV1 = {
+    experimentId: string;
+    nextCursor: string | null;
+    sample: {
+        context: string | null;
+        expectedResult: string | null;
+        id: string;
+        input: string;
+        taskType: string;
+    };
+    sampleTaskId: string;
+    scores: Array<{
+        nextReviewCursor: string | null;
+        output: {
+            contentStatus: 'available';
+            value: {
+                executionId: string;
+                resultVersion: string;
+                text: string;
+            };
+        } | {
+            contentStatus: 'expired' | 'deleting' | 'deleted';
+            value: null;
+        } | null;
+        passed: boolean | null;
+        reason: {
+            contentStatus: 'available';
+            value: {
+                passed?: boolean;
+                reason: string;
+                status: 'scored';
+                value: number;
+            } | {
+                passed?: null;
+                reason: string;
+                status: 'not_applicable';
+                value: null;
+            };
+        } | {
+            contentStatus: 'expired' | 'deleting' | 'deleted';
+            value: null;
+        } | null;
+        reviews: Array<{
+            result: {
+                contentStatus: 'available';
+                value: {
+                    passed?: boolean;
+                    reason: string;
+                    status: 'scored';
+                    value: number;
+                } | {
+                    passed?: null;
+                    reason: string;
+                    status: 'not_applicable';
+                    value: null;
+                };
+            } | {
+                contentStatus: 'expired' | 'deleting' | 'deleted';
+                value: null;
+            };
+            reviewId: string;
+            reviewer: {
+                id: string;
+                kind: 'user' | 'application';
+            };
+            scoreId: string;
+            scoreRevision: number;
+        }>;
+        scoreId: string;
+        scorerId: string;
+        scorerVersion: string;
+        scoringModel: string | null;
+        source: 'rule' | 'human' | 'model';
+        status: 'waiting_output' | 'pending' | 'result_ready' | 'awaiting_human' | 'scored' | 'not_applicable' | 'failed' | 'unknown';
+        value: number | null;
+    }>;
+};
+
+export type EvaluationAnalysisSummaryV1 = {
+    contentAvailable: boolean;
+    datasetId: string;
+    experimentId: string;
+    fixedSamples: number;
+    groups: Array<{
+        counts: {
+            businessFailed: number;
+            fixedSamples: number;
+            missing: number;
+            notApplicable: number;
+            notPassed: number;
+            passed: number;
+            scoreError: number;
+            scored: number;
+            unscored: number;
+        };
+        passRate: number | null;
+        scorerId: string;
+        scorerVersion: string;
+        taskTypes: Array<{
+            counts: {
+                businessFailed: number;
+                fixedSamples: number;
+                missing: number;
+                notApplicable: number;
+                notPassed: number;
+                passed: number;
+                scoreError: number;
+                scored: number;
+                unscored: number;
+            };
+            taskType: string | null;
+        }>;
+        variantId: string;
+    }>;
+    items: Array<{
+        actual: {
+            attempts: Array<{
+                attemptRef: string;
+                cachedInputTokens: number | null;
+                condition: {
+                    configVersion: string;
+                    modelId: string;
+                    modelOptionId: string;
+                    reasoningLevel: string | null;
+                };
+                durationMs: number | null;
+                inputTokens: number | null;
+                observed: boolean;
+                operationRef: string;
+                outputTokens: number | null;
+                phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+                sequence: number;
+            }>;
+            cachedInputTokens: {
+                observed: number;
+                total: number;
+                value: number | null;
+            };
+            conditionStatus: 'missing' | 'single' | 'mixed';
+            conditions: Array<{
+                configVersion: string;
+                modelId: string;
+                modelOptionId: string;
+                reasoningLevel: string | null;
+            }>;
+            inputTokens: {
+                observed: number;
+                total: number;
+                value: number | null;
+            };
+            modelDurationMs: {
+                observed: number;
+                total: number;
+                value: number | null;
+            };
+            observedAttempts: number;
+            outputTokens: {
+                observed: number;
+                total: number;
+                value: number | null;
+            };
+        };
+        executionId: string;
+        preparedRuntime: {
+            configurationRevision: number;
+            imageDigest: string;
+            resourceConfigurationHash: string;
+        } | null;
+        requested: {
+            agentId: string;
+            configurationRevision: number;
+            modelOptionId: string | null;
+            reasoningLevel: string | null;
+            toolEnvironment: string;
+            variantId: string;
+        };
+        requestedEvidence: {
+            configurationDigest: string;
+            configurationRevision: number;
+            imageDigest: string;
+            model: {
+                configVersion: string;
+                modelId: string;
+                modelOptionId: string;
+                reasoningLevel: string | null;
+            } | null;
+            templateId: string | null;
+        } | null;
+        sampleId: string;
+        sampleTaskId: string;
+        scores: Array<{
+            failureCode: string | null;
+            passed: boolean | null;
+            scoreId: string;
+            scorerId: string;
+            scorerVersion: string;
+            scoringModel: string | null;
+            source: 'rule' | 'human' | 'model';
+            status: 'waiting_output' | 'pending' | 'result_ready' | 'awaiting_human' | 'scored' | 'not_applicable' | 'failed' | 'unknown';
+            value: number | null;
+        }>;
+        status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
+        taskElapsedMs: number | null;
+        variantId: string;
+    }>;
+    observedAt: string;
+    pairs: Array<{
+        baselineId: string;
+        candidateId: string;
+        counts: {
+            actualDrift: number;
+            comparable: number;
+            conditionsChanged: number;
+            differentEnvironment: number;
+            fixedSamples: number;
+            missingConditions: number;
+            mixedConditions: number;
+            nonTargetDrift: number;
+            unknownTarget: number;
+        };
+        samples: Array<{
+            baseline: string | null;
+            candidate: string | null;
+            conditionsChanged: boolean;
+            sampleId: string;
+            status: 'comparable' | 'missing_conditions' | 'different_environment' | 'mixed_conditions' | 'unknown_target' | 'actual_drift' | 'non_target_drift';
+            taskType: string | null;
+        }>;
+    }>;
+    taskTypesAvailable: boolean;
+    versionId: string;
+};
+
+export type EvaluationChoiceCatalogV1 = {
+    datasetId: string;
+    maximumTasks: number;
+    policyId: string;
+    policyRevision: number;
+    scorers: Array<{
+        maximum: number;
+        minimum: number;
+        passThreshold: number;
+        rubricId: string;
+        scorerId: string;
+        scoringModel: string | null;
+        source: 'rule' | 'human' | 'model';
+        version: string;
+    }>;
+    variants: Array<{
+        agentId: string;
+        billing: {
+            purpose: 'agent-default';
+            subjectId: string;
+        };
+        configurationRevision: number;
+        modelOptionId: string | null;
+        name: string;
+        reasoningLevel: string | null;
+        toolEnvironment: string;
+        variantId: string;
+    }>;
+    versionId: string;
+};
+
 export type EvaluationDatasetContentV1 = {
     provenance: {
         approvalId: string;
@@ -977,6 +1241,7 @@ export type EvaluationDatasetV1 = {
 };
 
 export type EvaluationExperimentCreateV1 = {
+    comparisonTargets?: Array<'model' | 'configuration' | 'template'>;
     datasetId: string;
     scorerRefs: Array<{
         scorerId: string;
@@ -1045,6 +1310,18 @@ export type EvaluationExperimentPageV1 = {
             toolEnvironment: string;
             variantId: string;
         };
+        requestedEvidence?: {
+            configurationDigest: string;
+            configurationRevision: number;
+            imageDigest: string;
+            model: {
+                configVersion: string;
+                modelId: string;
+                modelOptionId: string;
+                reasoningLevel: string | null;
+            } | null;
+            templateId: string | null;
+        };
         sampleId: string;
         sampleTaskId: string;
         scoreIds: Array<string>;
@@ -1054,6 +1331,7 @@ export type EvaluationExperimentPageV1 = {
 };
 
 export type EvaluationExperimentV1 = {
+    comparisonTargets?: Array<'model' | 'configuration' | 'template'>;
     createdAt: string;
     datasetId: string;
     experimentId: string;
@@ -1104,6 +1382,19 @@ export type EvaluationGrantV1 = {
     revision: number;
     revoked: boolean;
     versionIds: Array<string>;
+};
+
+export type EvaluationHistoryV1 = {
+    items: Array<EvaluationExperimentV1>;
+    nextCursor: string | null;
+};
+
+export type EvaluationQueryTooLargeV1 = {
+    code: 'EVALUATION_QUERY_TOO_LARGE';
+    message: 'Query range is too large. Narrow the time window or filters.';
+    retryable: false;
+    schemaVersion: 1;
+    traceId: string;
 };
 
 export type EvaluationReviewPageV1 = {
@@ -1187,6 +1478,8 @@ export type EvaluationScoreMetadataV1 = {
     scoreId: string;
     scorerId: string;
     scorerVersion: string;
+    scoringModel?: string | null;
+    source?: 'rule' | 'human' | 'model';
     status: 'waiting_output' | 'pending' | 'result_ready' | 'awaiting_human' | 'scored' | 'not_applicable' | 'failed' | 'unknown';
     value: number | null;
 };
@@ -1241,6 +1534,8 @@ export type EvaluationScoringContextV1 = {
         minimum: number;
         passThreshold: number;
         scorerId: string;
+        scoringModel?: string | null;
+        source?: 'rule' | 'human' | 'model';
         version: string;
     };
     status: 'waiting_output' | 'pending' | 'result_ready' | 'awaiting_human' | 'scored' | 'not_applicable' | 'failed' | 'unknown';
@@ -1264,6 +1559,12 @@ export type EvaluationVersionV1 = {
     sourceVersionId: string | null;
     status: 'pending' | 'uploading' | 'available' | 'deleting' | 'deleted';
     versionId: string;
+};
+
+export type EvaluationWorklistV1 = {
+    items: Array<EvaluationScoreMetadataV1>;
+    nextCursor: string | null;
+    purpose: 'score' | 'review';
 };
 
 export type ExecutionDetailProjectionV2 = {
@@ -1598,7 +1899,7 @@ export type PersistedConversationEventV2 = PersistedConversationEventV1 | Execut
 
 export type PersonalApiCredentialIssueRequestV1 = {
     expiresAt: string | null;
-    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review'>;
+    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
 };
 
 export type PersonalApiCredentialIssueResponseV1 = {
@@ -1625,12 +1926,12 @@ export type PersonalApiCredentialMetadataV1 = {
     expiresAt: string | null;
     lastUsedAt: string | null;
     revokedAt: string | null;
-    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review'>;
+    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
 };
 
 export type PersonalApiCredentialNarrowRequestV1 = {
     expiresAt?: string;
-    scopes?: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review'>;
+    scopes?: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
 };
 
 export type PersonalApiCredentialNarrowResponseV1 = {
@@ -1656,7 +1957,7 @@ export type PersonalApiIdentityV1 = {
         kind: 'user';
     };
     schemaVersion: 1;
-    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review'>;
+    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
 };
 
 export type PersonalRelayKeyReplaceRequestV1 = {
@@ -2335,6 +2636,91 @@ export type SkillHubVersionMetadataV1 = {
 };
 
 export type SseEventIdV1 = string;
+
+export type TaskFeedbackContextV1 = {
+    categories: Array<'correctness' | 'relevance' | 'instruction_following' | 'format' | 'tool_use' | 'incomplete' | 'performance' | 'other'>;
+    conditionDigest: string;
+    conditions: Array<{
+        configVersion: string;
+        modelId: string;
+        modelOptionId: string;
+        reasoningLevel: string | null;
+    }>;
+    eligibility: 'eligible' | 'not_terminal' | 'offline_evaluation';
+    executionId: string;
+    feedback: TaskFeedbackRecordV1 | null;
+    feedbackCurrent: boolean;
+    revision: number;
+    terminalObservedAt: string | null;
+};
+
+export type TaskFeedbackRecordV1 = {
+    agentId: string;
+    categories: Array<'correctness' | 'relevance' | 'instruction_following' | 'format' | 'tool_use' | 'incomplete' | 'performance' | 'other'>;
+    conditionDigest: string;
+    createdAt: string;
+    executionId: string;
+    metadataExpiresAt: string;
+    policyId: string;
+    policyRevision: number;
+    principal: {
+        id: string;
+        kind: 'user' | 'application';
+    };
+    revision: number;
+    updatedAt: string;
+    useful: boolean;
+};
+
+export type TaskFeedbackSubmitV1 = {
+    categories: Array<'correctness' | 'relevance' | 'instruction_following' | 'format' | 'tool_use' | 'incomplete' | 'performance' | 'other'>;
+    expectedCondition: string;
+    expectedRevision: number;
+    useful: boolean;
+};
+
+export type TaskFeedbackSummaryQueryV1 = {
+    configVersion?: string;
+    from: string;
+    modelId?: string;
+    to: string;
+};
+
+export type TaskFeedbackSummaryV1 = {
+    agentId: string;
+    classification: {
+        correctness: number;
+        format: number;
+        incomplete: number;
+        instruction_following: number;
+        other: number;
+        performance: number;
+        relevance: number;
+        tool_use: number;
+    };
+    conditionChangedTasks: number;
+    conditions: Array<{
+        conditions: Array<{
+            configVersion: string;
+            modelId: string;
+            modelOptionId: string;
+            reasoningLevel: string | null;
+        }>;
+        feedbackTasks: number;
+        tasks: number;
+    }>;
+    eligibleTasks: number;
+    feedbackRate: number | null;
+    feedbackTasks: number;
+    missingActualTasks: number;
+    notUsefulTasks: number;
+    observedAt: string;
+    query: TaskFeedbackSummaryQueryV1;
+    terminalTimeMissingTasks: number;
+    unfeedbackTasks: number;
+    usefulTasks: number;
+    view: 'self' | 'owner';
+};
 
 export type TaskStatusEventV1 = {
     conversationCursor: string;
@@ -4868,6 +5254,63 @@ export type GetAgentDetailV1Responses = {
 
 export type GetAgentDetailV1Response = GetAgentDetailV1Responses[keyof GetAgentDetailV1Responses];
 
+export type ReadTaskFeedbackSummaryV1Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query: {
+        from: string;
+        to: string;
+        modelId?: string;
+        configVersion?: string;
+        view?: 'self' | 'owner';
+    };
+    url: '/api/v2/agents/{agentId}/feedback-summary';
+};
+
+export type ReadTaskFeedbackSummaryV1Errors = {
+    /**
+     * Invalid or oversized query
+     */
+    400: PilotProtocolErrorV1 | EvaluationQueryTooLargeV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadTaskFeedbackSummaryV1Error = ReadTaskFeedbackSummaryV1Errors[keyof ReadTaskFeedbackSummaryV1Errors];
+
+export type ReadTaskFeedbackSummaryV1Responses = {
+    /**
+     * readTaskFeedbackSummaryV1
+     */
+    200: TaskFeedbackSummaryV1;
+};
+
+export type ReadTaskFeedbackSummaryV1Response = ReadTaskFeedbackSummaryV1Responses[keyof ReadTaskFeedbackSummaryV1Responses];
+
 export type ReadAgentFileLimitsV2Data = {
     body?: never;
     path: {
@@ -5446,7 +5889,7 @@ export type ListApplicationApiCredentialsV2Responses = {
             expiresAt: string | null;
             lastUsedAt: string | null;
             revokedAt: string | null;
-            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review'>;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
         }>;
         nextCursor: string | null;
     };
@@ -5462,7 +5905,7 @@ export type IssueOrRotateApplicationApiCredentialV2Data = {
             principalId: string;
             principalType: 'user' | 'application';
         };
-        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review'>;
+        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
     } | {
         credentialId: string;
         expiresAt: string | null;
@@ -5471,7 +5914,7 @@ export type IssueOrRotateApplicationApiCredentialV2Data = {
             principalId: string;
             principalType: 'user' | 'application';
         };
-        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review'>;
+        scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
     };
     headers: {
         'Idempotency-Key': string;
@@ -5537,7 +5980,7 @@ export type IssueOrRotateApplicationApiCredentialV2Responses = {
             expiresAt: string | null;
             lastUsedAt: string | null;
             revokedAt: string | null;
-            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review'>;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
         };
         replayed: boolean;
     };
@@ -5561,7 +6004,7 @@ export type IssueOrRotateApplicationApiCredentialV2Responses = {
             expiresAt: string | null;
             lastUsedAt: string | null;
             revokedAt: string | null;
-            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review'>;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
         };
         replayed: boolean;
     };
@@ -5627,7 +6070,7 @@ export type RevokeApplicationApiCredentialV2Responses = {
             expiresAt: string | null;
             lastUsedAt: string | null;
             revokedAt: string | null;
-            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review'>;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data' | 'eval:run' | 'eval:score' | 'eval:review' | 'eval:analyze'>;
         };
         replayed: boolean;
     };
@@ -6176,6 +6619,166 @@ export type SearchDirectoryV2Responses = {
 };
 
 export type SearchDirectoryV2Response = SearchDirectoryV2Responses[keyof SearchDirectoryV2Responses];
+
+export type ReadEvaluationAnalysisV1Data = {
+    body?: never;
+    path: {
+        experimentId: string;
+    };
+    query?: never;
+    url: '/api/v2/evaluation/analysis/{experimentId}';
+};
+
+export type ReadEvaluationAnalysisV1Errors = {
+    /**
+     * Invalid or oversized query
+     */
+    400: PilotProtocolErrorV1 | EvaluationQueryTooLargeV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadEvaluationAnalysisV1Error = ReadEvaluationAnalysisV1Errors[keyof ReadEvaluationAnalysisV1Errors];
+
+export type ReadEvaluationAnalysisV1Responses = {
+    /**
+     * readEvaluationAnalysisV1
+     */
+    200: EvaluationAnalysisSummaryV1;
+};
+
+export type ReadEvaluationAnalysisV1Response = ReadEvaluationAnalysisV1Responses[keyof ReadEvaluationAnalysisV1Responses];
+
+export type ReadEvaluationAnalysisSampleV1Data = {
+    body?: never;
+    path: {
+        experimentId: string;
+        sampleTaskId: string;
+    };
+    query?: {
+        limit?: number;
+        cursor?: string;
+        scoreId?: string;
+        reviewCursor?: string;
+    };
+    url: '/api/v2/evaluation/analysis/{experimentId}/samples/{sampleTaskId}';
+};
+
+export type ReadEvaluationAnalysisSampleV1Errors = {
+    /**
+     * Invalid or oversized query
+     */
+    400: PilotProtocolErrorV1 | EvaluationQueryTooLargeV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadEvaluationAnalysisSampleV1Error = ReadEvaluationAnalysisSampleV1Errors[keyof ReadEvaluationAnalysisSampleV1Errors];
+
+export type ReadEvaluationAnalysisSampleV1Responses = {
+    /**
+     * readEvaluationAnalysisSampleV1
+     */
+    200: EvaluationAnalysisDetailV1;
+};
+
+export type ReadEvaluationAnalysisSampleV1Response = ReadEvaluationAnalysisSampleV1Responses[keyof ReadEvaluationAnalysisSampleV1Responses];
+
+export type ListEvaluationChoicesV1Data = {
+    body?: never;
+    path?: never;
+    query: {
+        datasetId: string;
+        versionId: string;
+    };
+    url: '/api/v2/evaluation/choices';
+};
+
+export type ListEvaluationChoicesV1Errors = {
+    /**
+     * Invalid or oversized query
+     */
+    400: PilotProtocolErrorV1 | EvaluationQueryTooLargeV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListEvaluationChoicesV1Error = ListEvaluationChoicesV1Errors[keyof ListEvaluationChoicesV1Errors];
+
+export type ListEvaluationChoicesV1Responses = {
+    /**
+     * listEvaluationChoicesV1
+     */
+    200: EvaluationChoiceCatalogV1;
+};
+
+export type ListEvaluationChoicesV1Response = ListEvaluationChoicesV1Responses[keyof ListEvaluationChoicesV1Responses];
 
 export type ListEvaluationDatasetsV1Data = {
     body?: never;
@@ -6817,6 +7420,58 @@ export type CancelEvaluationExperimentV1Responses = {
 
 export type CancelEvaluationExperimentV1Response = CancelEvaluationExperimentV1Responses[keyof CancelEvaluationExperimentV1Responses];
 
+export type ListEvaluationHistoryV1Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        limit?: number;
+        cursor?: string;
+    };
+    url: '/api/v2/evaluation/history';
+};
+
+export type ListEvaluationHistoryV1Errors = {
+    /**
+     * Invalid or oversized query
+     */
+    400: PilotProtocolErrorV1 | EvaluationQueryTooLargeV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListEvaluationHistoryV1Error = ListEvaluationHistoryV1Errors[keyof ListEvaluationHistoryV1Errors];
+
+export type ListEvaluationHistoryV1Responses = {
+    /**
+     * listEvaluationHistoryV1
+     */
+    200: EvaluationHistoryV1;
+};
+
+export type ListEvaluationHistoryV1Response = ListEvaluationHistoryV1Responses[keyof ListEvaluationHistoryV1Responses];
+
 export type ReadEvaluationScoreV1Data = {
     body?: never;
     path: {
@@ -7131,6 +7786,59 @@ export type ReviewEvaluationScoreV1Responses = {
 };
 
 export type ReviewEvaluationScoreV1Response = ReviewEvaluationScoreV1Responses[keyof ReviewEvaluationScoreV1Responses];
+
+export type ListEvaluationWorklistV1Data = {
+    body?: never;
+    path?: never;
+    query: {
+        purpose: 'score' | 'review';
+        limit?: number;
+        cursor?: string;
+    };
+    url: '/api/v2/evaluation/worklist';
+};
+
+export type ListEvaluationWorklistV1Errors = {
+    /**
+     * Invalid or oversized query
+     */
+    400: PilotProtocolErrorV1 | EvaluationQueryTooLargeV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListEvaluationWorklistV1Error = ListEvaluationWorklistV1Errors[keyof ListEvaluationWorklistV1Errors];
+
+export type ListEvaluationWorklistV1Responses = {
+    /**
+     * listEvaluationWorklistV1
+     */
+    200: EvaluationWorklistV1;
+};
+
+export type ListEvaluationWorklistV1Response = ListEvaluationWorklistV1Responses[keyof ListEvaluationWorklistV1Responses];
 
 export type ListPersonalApiCredentialsV2Data = {
     body?: never;
@@ -8557,3 +9265,108 @@ export type RevokeSkillHubVersionV1Responses = {
 };
 
 export type RevokeSkillHubVersionV1Response = RevokeSkillHubVersionV1Responses[keyof RevokeSkillHubVersionV1Responses];
+
+export type ReadTaskFeedbackV1Data = {
+    body?: never;
+    path: {
+        executionId: string;
+    };
+    query?: never;
+    url: '/api/v2/task-feedback/{executionId}';
+};
+
+export type ReadTaskFeedbackV1Errors = {
+    /**
+     * Invalid or oversized query
+     */
+    400: PilotProtocolErrorV1 | EvaluationQueryTooLargeV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadTaskFeedbackV1Error = ReadTaskFeedbackV1Errors[keyof ReadTaskFeedbackV1Errors];
+
+export type ReadTaskFeedbackV1Responses = {
+    /**
+     * readTaskFeedbackV1
+     */
+    200: TaskFeedbackContextV1;
+};
+
+export type ReadTaskFeedbackV1Response = ReadTaskFeedbackV1Responses[keyof ReadTaskFeedbackV1Responses];
+
+export type SubmitTaskFeedbackV1Data = {
+    body: TaskFeedbackSubmitV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        executionId: string;
+    };
+    query?: never;
+    url: '/api/v2/task-feedback/{executionId}';
+};
+
+export type SubmitTaskFeedbackV1Errors = {
+    /**
+     * Invalid or oversized query
+     */
+    400: PilotProtocolErrorV1 | EvaluationQueryTooLargeV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type SubmitTaskFeedbackV1Error = SubmitTaskFeedbackV1Errors[keyof SubmitTaskFeedbackV1Errors];
+
+export type SubmitTaskFeedbackV1Responses = {
+    /**
+     * Task feedback
+     */
+    200: TaskFeedbackRecordV1;
+};
+
+export type SubmitTaskFeedbackV1Response = SubmitTaskFeedbackV1Responses[keyof SubmitTaskFeedbackV1Responses];

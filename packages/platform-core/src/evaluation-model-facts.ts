@@ -143,3 +143,15 @@ export function foldEvaluationModelFactsV1(
 		modelDurationMs: measure("durationMs"),
 	};
 }
+
+/** The budget measures the wire JSON, including escapes and envelope/cursor metadata. */
+export function requireEvaluationResponseBudgetV1<T>(
+	value: T,
+	maximumBytes: number,
+): T {
+	if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1)
+		throw new EvaluationDataErrorV1("invalid");
+	if (Buffer.byteLength(JSON.stringify(value)) > maximumBytes)
+		throw new EvaluationQueryLimitErrorV1();
+	return value;
+}

@@ -70,6 +70,19 @@ import {
 	PilotProtocolErrorV1Schema,
 } from "./errors.ts";
 import {
+	EvaluationAnalysisDetailV1Schema,
+	EvaluationAnalysisSummaryV1Schema,
+	EvaluationChoiceCatalogV1Schema,
+	EvaluationHistoryV1Schema,
+	EvaluationQueryTooLargeV1Schema,
+	EvaluationWorklistV1Schema,
+	TaskFeedbackContextV1Schema,
+	TaskFeedbackRecordV1Schema,
+	TaskFeedbackSubmitV1Schema,
+	TaskFeedbackSummaryQueryV1Schema,
+	TaskFeedbackSummaryV1Schema,
+} from "./evaluation-analysis.ts";
+import {
 	EvaluationDatasetContentV1Schema,
 	EvaluationDatasetCreateV1Schema,
 	EvaluationDatasetPageV1Schema,
@@ -1522,6 +1535,201 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/evaluation/history": {
+		get: {
+			operationId: "listEvaluationHistoryV1",
+			security: agentListSecurity,
+			requestParams: {
+				query: z.strictObject({
+					limit: z.coerce.number().int().min(1).max(100).optional(),
+					cursor: z.uuid().optional(),
+				}),
+			},
+			responses: {
+				"200": jsonResponse(
+					"listEvaluationHistoryV1",
+					EvaluationHistoryV1Schema,
+				),
+				...errorResponses,
+				"400": jsonResponse(
+					"Invalid or oversized query",
+					z.union([
+						PilotProtocolErrorV1Schema,
+						EvaluationQueryTooLargeV1Schema,
+					]),
+				),
+			},
+		},
+	},
+	"/api/v2/evaluation/choices": {
+		get: {
+			operationId: "listEvaluationChoicesV1",
+			security: agentListSecurity,
+			requestParams: {
+				query: z.strictObject({ datasetId: z.uuid(), versionId: z.uuid() }),
+			},
+			responses: {
+				"200": jsonResponse(
+					"listEvaluationChoicesV1",
+					EvaluationChoiceCatalogV1Schema,
+				),
+				...errorResponses,
+				"400": jsonResponse(
+					"Invalid or oversized query",
+					z.union([
+						PilotProtocolErrorV1Schema,
+						EvaluationQueryTooLargeV1Schema,
+					]),
+				),
+			},
+		},
+	},
+	"/api/v2/evaluation/worklist": {
+		get: {
+			operationId: "listEvaluationWorklistV1",
+			security: agentListSecurity,
+			requestParams: {
+				query: z.strictObject({
+					purpose: z.enum(["score", "review"]),
+					limit: z.coerce.number().int().min(1).max(100).optional(),
+					cursor: z.uuid().optional(),
+				}),
+			},
+			responses: {
+				"200": jsonResponse(
+					"listEvaluationWorklistV1",
+					EvaluationWorklistV1Schema,
+				),
+				...errorResponses,
+				"400": jsonResponse(
+					"Invalid or oversized query",
+					z.union([
+						PilotProtocolErrorV1Schema,
+						EvaluationQueryTooLargeV1Schema,
+					]),
+				),
+			},
+		},
+	},
+	"/api/v2/evaluation/analysis/{experimentId}": {
+		get: {
+			operationId: "readEvaluationAnalysisV1",
+			security: agentListSecurity,
+			requestParams: { path: z.strictObject({ experimentId: z.uuid() }) },
+			responses: {
+				"200": jsonResponse(
+					"readEvaluationAnalysisV1",
+					EvaluationAnalysisSummaryV1Schema,
+				),
+				...errorResponses,
+				"400": jsonResponse(
+					"Invalid or oversized query",
+					z.union([
+						PilotProtocolErrorV1Schema,
+						EvaluationQueryTooLargeV1Schema,
+					]),
+				),
+			},
+		},
+	},
+	"/api/v2/evaluation/analysis/{experimentId}/samples/{sampleTaskId}": {
+		get: {
+			operationId: "readEvaluationAnalysisSampleV1",
+			security: agentListSecurity,
+			requestParams: {
+				query: z.strictObject({
+					limit: z.coerce.number().int().min(1).max(100).optional(),
+					cursor: z.uuid().optional(),
+					scoreId: z.uuid().optional(),
+					reviewCursor: z.uuid().optional(),
+				}),
+				path: z.strictObject({
+					experimentId: z.uuid(),
+					sampleTaskId: z.uuid(),
+				}),
+			},
+			responses: {
+				"200": jsonResponse(
+					"readEvaluationAnalysisSampleV1",
+					EvaluationAnalysisDetailV1Schema,
+				),
+				...errorResponses,
+				"400": jsonResponse(
+					"Invalid or oversized query",
+					z.union([
+						PilotProtocolErrorV1Schema,
+						EvaluationQueryTooLargeV1Schema,
+					]),
+				),
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/feedback-summary": {
+		get: {
+			operationId: "readTaskFeedbackSummaryV1",
+			security: agentListSecurity,
+			requestParams: {
+				path: z.strictObject({ agentId: z.string().min(1).max(256) }),
+				query: TaskFeedbackSummaryQueryV1Schema.extend({
+					view: z.enum(["self", "owner"]).optional(),
+				}),
+			},
+			responses: {
+				"200": jsonResponse(
+					"readTaskFeedbackSummaryV1",
+					TaskFeedbackSummaryV1Schema,
+				),
+				...errorResponses,
+				"400": jsonResponse(
+					"Invalid or oversized query",
+					z.union([
+						PilotProtocolErrorV1Schema,
+						EvaluationQueryTooLargeV1Schema,
+					]),
+				),
+			},
+		},
+	},
+	"/api/v2/task-feedback/{executionId}": {
+		get: {
+			operationId: "readTaskFeedbackV1",
+			security: agentListSecurity,
+			requestParams: {
+				path: z.strictObject({ executionId: z.string().min(1).max(256) }),
+			},
+			responses: {
+				"200": jsonResponse("readTaskFeedbackV1", TaskFeedbackContextV1Schema),
+				...errorResponses,
+				"400": jsonResponse(
+					"Invalid or oversized query",
+					z.union([
+						PilotProtocolErrorV1Schema,
+						EvaluationQueryTooLargeV1Schema,
+					]),
+				),
+			},
+		},
+		put: {
+			operationId: "submitTaskFeedbackV1",
+			security: agentListSecurity,
+			requestParams: {
+				header: idempotencyHeader,
+				path: z.strictObject({ executionId: z.string().min(1).max(256) }),
+			},
+			requestBody: requiredJsonRequestBody(TaskFeedbackSubmitV1Schema),
+			responses: {
+				"200": jsonResponse("Task feedback", TaskFeedbackRecordV1Schema),
+				...errorResponses,
+				"400": jsonResponse(
+					"Invalid or oversized query",
+					z.union([
+						PilotProtocolErrorV1Schema,
+						EvaluationQueryTooLargeV1Schema,
+					]),
+				),
+			},
+		},
+	},
 	"/api/v2/evaluation/experiments": {
 		post: {
 			operationId: "createEvaluationExperimentV1",
@@ -2875,6 +3083,17 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	EvaluationQueryTooLargeV1: EvaluationQueryTooLargeV1Schema,
+	EvaluationAnalysisSummaryV1: EvaluationAnalysisSummaryV1Schema,
+	EvaluationAnalysisDetailV1: EvaluationAnalysisDetailV1Schema,
+	EvaluationHistoryV1: EvaluationHistoryV1Schema,
+	EvaluationChoiceCatalogV1: EvaluationChoiceCatalogV1Schema,
+	EvaluationWorklistV1: EvaluationWorklistV1Schema,
+	TaskFeedbackContextV1: TaskFeedbackContextV1Schema,
+	TaskFeedbackSubmitV1: TaskFeedbackSubmitV1Schema,
+	TaskFeedbackRecordV1: TaskFeedbackRecordV1Schema,
+	TaskFeedbackSummaryV1: TaskFeedbackSummaryV1Schema,
+	TaskFeedbackSummaryQueryV1: TaskFeedbackSummaryQueryV1Schema,
 	EvaluationExperimentCreateV1: EvaluationExperimentCreateV1Schema,
 	EvaluationExperimentV1: EvaluationExperimentV1Schema,
 	EvaluationExperimentPageV1: EvaluationExperimentPageV1Schema,

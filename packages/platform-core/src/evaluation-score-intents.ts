@@ -504,6 +504,11 @@ export function projectEvaluationScoringContextV1(input: {
 		sample,
 		rubric,
 		scorer: {
+			source: intent.scorer.implementation.kind,
+			scoringModel:
+				intent.scorer.implementation.kind === "model"
+					? intent.scorer.implementation.modelId
+					: null,
 			scorerId: intent.scorer.scorerId,
 			version: intent.scorer.version,
 			minimum: intent.scorer.minimum,

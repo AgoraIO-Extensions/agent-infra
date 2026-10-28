@@ -30,6 +30,7 @@ import {
 	createPersonalRelayKeyUseCaseV1,
 	createRecentPersonalConversationsUseCaseV1,
 	createSkillHubAgentBindingUseCaseV1,
+	type EvaluationAnalysisPolicyV1,
 	type EvaluationPolicyV1,
 	type FileLimitDeclarationSubjectV1,
 	type FileLimitDeclarationsV1,
@@ -57,8 +58,10 @@ import {
 	type PostgresConversationExecutionOptionsV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
+	PostgresEvaluationAnalysisV1,
 	PostgresEvaluationDataStoreV1,
 	PostgresEvaluationExperimentsV1,
+	PostgresEvaluationFeedbackV1,
 	PostgresEvaluationScoringV1,
 	PostgresEvaluationTaskAuthorityV1,
 	PostgresFileLimitDeclarationStoreV1,
@@ -177,6 +180,7 @@ export interface PlatformApiAssemblyInput {
 		close?: () => Promise<void>;
 		loadPolicy: () => Promise<EvaluationPolicyV1>;
 		loadExperimentPolicy?: () => Promise<unknown>;
+		loadAnalysisPolicy?: () => Promise<EvaluationAnalysisPolicyV1>;
 		storage: ObjectStorageDataV1;
 	};
 	readonly databaseUrl: string;
@@ -382,6 +386,20 @@ export function assemblePlatformApi(
 		: undefined;
 	const evaluationScoring = evaluationOptions
 		? new PostgresEvaluationScoringV1(evaluationOptions)
+		: undefined;
+	const evaluationAnalysis =
+		evaluationOptions && input.evaluation?.loadAnalysisPolicy
+			? new PostgresEvaluationAnalysisV1({
+					...evaluationOptions,
+					loadAnalysisPolicy: input.evaluation.loadAnalysisPolicy,
+				})
+			: undefined;
+	const evaluationFeedback = input.evaluation?.loadAnalysisPolicy
+		? new PostgresEvaluationFeedbackV1({
+				databaseUrl: input.databaseUrl,
+				directory: userDirectory,
+				loadPolicy: input.evaluation.loadAnalysisPolicy,
+			})
 		: undefined;
 	const evaluationTaskAuthority = evaluationOptions
 		? new PostgresEvaluationTaskAuthorityV1({
@@ -1250,6 +1268,15 @@ export function assemblePlatformApi(
 				: {}),
 		},
 		applications: { identity: input.identity, applications },
+		evaluationAnalysis:
+			evaluationAnalysis && evaluationFeedback && evaluationScoring
+				? {
+						identity: input.identity,
+						analysis: evaluationAnalysis,
+						feedback: evaluationFeedback,
+						scoring: evaluationScoring,
+					}
+				: undefined,
 		evaluationExperiments:
 			evaluationOptions &&
 			evaluationExperiments &&
@@ -1448,6 +1475,8 @@ export function assemblePlatformApi(
 		...(evaluationStore ? [evaluationStore] : []),
 		...(evaluationExperiments ? [evaluationExperiments] : []),
 		...(evaluationScoring ? [evaluationScoring] : []),
+		...(evaluationAnalysis ? [evaluationAnalysis] : []),
+		...(evaluationFeedback ? [evaluationFeedback] : []),
 		...(evaluationTaskAuthority ? [evaluationTaskAuthority] : []),
 		...(input.evaluation?.close ? [{ close: input.evaluation.close }] : []),
 		...(installationStore ? [installationStore] : []),

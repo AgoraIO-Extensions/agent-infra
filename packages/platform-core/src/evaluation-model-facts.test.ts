@@ -125,3 +125,16 @@ it("rejects budget overflow, invalid order and changed immutable attempt identit
 		),
 	).toThrow();
 });
+
+it("measures escaped wire JSON exactly and rejects even the first oversized item", async () => {
+	const { requireEvaluationResponseBudgetV1 } = await import(
+		"./evaluation-model-facts.js"
+	);
+	const value = { items: [{ text: '\n\t"\\\u0001' }], nextCursor: null };
+	const exact = Buffer.byteLength(JSON.stringify(value));
+	expect(requireEvaluationResponseBudgetV1(value, exact)).toBe(value);
+	expect(() => requireEvaluationResponseBudgetV1(value, exact - 1)).toThrow(
+		expect.objectContaining({ code: "query_too_large" }),
+	);
+	expect(exact).toBeGreaterThan(Buffer.byteLength(value.items[0]!.text));
+});

@@ -23,6 +23,7 @@ import {
 	resolveCurrentPersonalApiUserV1,
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
+import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import {
 	readCurrentTaskApiUseGrantV1,
 	readCurrentTaskApplicationV1,
@@ -416,6 +417,54 @@ export class PostgresEvaluationExperimentsV1
 				lockAgents: async (ids) => {
 					for (const agentId of ids)
 						await tx`select id from platform.agents where id=${agentId} for share`;
+				},
+				requestedEvidence: async (variant) => {
+					const [row] = await tx<
+						{ configuration: unknown }[]
+					>`select configuration from platform.agent_configuration_revisions where agent_id=${variant.agentId} and revision=${variant.configurationRevision}`;
+					if (!row) throw new EvaluationDataErrorV1("denied");
+					const configuration = decodeVersionedAgentConfigurationRecord(
+						row.configuration,
+					);
+					if (
+						configuration.agentId !== variant.agentId ||
+						configuration.revision !== variant.configurationRevision
+					)
+						throw new EvaluationDataErrorV1("unavailable");
+					const model = configuration.modelConfiguration;
+					const option = model?.options.find(
+						(v) =>
+							v.optionId === (variant.modelOptionId ?? model.defaultOptionId),
+					);
+					return {
+						configurationRevision: configuration.revision,
+						configurationDigest: createHash("sha256")
+							.update(
+								JSON.stringify([
+									configuration.environment,
+									configuration.secrets,
+									configuration.channels,
+									configuration.channelRevision,
+								]),
+							)
+							.digest("hex"),
+						imageDigest: configuration.source.imageDigest,
+						templateId:
+							configuration.source.kind === "standard"
+								? configuration.source.templateId
+								: null,
+						model: option
+							? {
+									configVersion: String(configuration.revision),
+									modelOptionId: option.optionId,
+									modelId: option.modelId,
+									reasoningLevel:
+										variant.reasoningLevel ??
+										model?.defaultReasoningLevel ??
+										null,
+								}
+							: null,
+					};
 				},
 				agentAuthority: async (agentId) => {
 					const grant = await readCurrentTaskApiUseGrantV1(tx, {
