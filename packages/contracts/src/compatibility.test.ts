@@ -6060,3 +6060,53 @@ it("admits only the pinned application model preview (#3146)", async () => {
 		await rm(directory, { recursive: true, force: true });
 	}
 });
+
+it.each(["v1", "v2"])(
+	"admits only personal identity and single Agent read additions (%s, #3625)",
+	async (version) => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					`../artifacts/openapi/pilot-browser.${version}.openapi.json`,
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		if (version === "v1") {
+			previous.components.schemas.ScopedPlatformAuditActionV1.enum =
+				previous.components.schemas.ScopedPlatformAuditActionV1.enum.filter(
+					(action: string) => action !== "api.credential.identity.read",
+				);
+		} else {
+			delete previous.paths["/api/v2/me/api-identity"];
+			delete previous.components.schemas.PersonalApiIdentityV1;
+			delete previous.paths["/api/v2/agents/{agentId}"].get.security;
+			delete previous.paths["/api/v2/agents/{agentId}"].get.description;
+		}
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "personal-identity-compat-"),
+		);
+		const before = resolve(directory, "previous.json");
+		const after = resolve(directory, "current.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const changed = structuredClone(current);
+			if (version === "v1")
+				changed.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+					"unexpected.action",
+				);
+			else changed.paths["/api/v2/me/api-identity"].get.security = [];
+			await writeFile(after, JSON.stringify(changed));
+			expect(comparePaths(after, before).status).toBe(1);
+			await writeFile(before, JSON.stringify(current));
+			await writeFile(after, JSON.stringify(previous));
+			expect(comparePaths(after, before).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	},
+);

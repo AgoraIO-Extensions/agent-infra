@@ -14,6 +14,7 @@ import {
 	AgentProjectionV1Schema,
 	AgentProjectionV2Schema,
 	ApprovalDecisionRequestV1Schema,
+	PersonalApiIdentityV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import type {
@@ -34,6 +35,7 @@ import {
 	agentCreationFailureCategoryV1,
 	isAdministratorAgentReadAllowedV1,
 	isAgentCreationFailureReadAllowedV1,
+	PersonalApiCredentialErrorV1,
 } from "@agent-infra/platform-core";
 import type {
 	AgentManagementAgentProjectionV1,
@@ -222,6 +224,67 @@ function agentListScope(request: Request, traceId: string): "user" | "owner" {
 		fail("INVALID_REQUEST", traceId);
 	}
 	return "owner";
+}
+
+async function personalBearerRead(
+	request: Request,
+	metadata: RequestMetadata,
+	reader: PersonalApiAgentReadUseCaseV1 | undefined,
+	action: "api.agent.metadata.read" | "api.credential.identity.read",
+) {
+	const matched = /^Bearer (papi_[A-Za-z0-9_-]{43})$/.exec(
+		request.headers.get("Authorization") ?? "",
+	);
+	if (!matched || request.headers.has("Cookie")) {
+		await reader?.recordRefusal(metadata, "authentication_required", action);
+		fail("AUTHENTICATION_REQUIRED", metadata.traceId);
+	}
+	if (!reader || !matched[1]) fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+	if (
+		new URL(request.url).search ||
+		request.body !== null ||
+		[
+			"x-user-id",
+			"x-application-id",
+			"x-principal",
+			"x-principal-id",
+			"x-recipient",
+			"x-recipient-user-id",
+			"x-role",
+			"x-roles",
+			"x-scope",
+			"x-agent-id",
+			"x-identity-context",
+		].some((name) => request.headers.has(name))
+	) {
+		await reader.recordRefusal(metadata, "invalid_input", action);
+		fail("INVALID_REQUEST", metadata.traceId);
+	}
+	return { reader, material: matched[1] };
+}
+
+async function projectApiAgent(
+	dependencies: ManagementRouteDependencies,
+	metadata: RequestMetadata,
+	apiUser: CurrentTaskUserV1,
+	agent: AgentManagementAgentProjectionV1,
+) {
+	const project = dependencies.readApiAgentProjection;
+	if (!project) fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+	const value = await project({
+		...metadata,
+		apiUser,
+		agent,
+		requestScope: metadata,
+	});
+	const parsed = AgentProjectionV1Schema.safeParse(value);
+	if (!parsed.success) fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+	const { actions: _actions, ...configuration } = parsed.data.configuration;
+	return AgentProjectionV2Schema.parse({
+		...parsed.data,
+		schemaVersion: 2,
+		configuration,
+	});
 }
 
 function fail(
@@ -1025,6 +1088,7 @@ export function registerV2ManagementRoutes(
 				const { value: body } = await parseJson(
 					context.req.raw,
 					ApprovalDecisionRequestV1Schema,
+					PersonalApiIdentityV1Schema,
 					metadata.traceId,
 				);
 				const applicationId = context.req.param("applicationId");
@@ -1150,6 +1214,20 @@ export function registerV2ManagementRoutes(
 		}),
 	);
 
+	app.get("/api/v2/me/api-identity", (context) =>
+		boundary(context, async (metadata) => {
+			context.header("Cache-Control", "no-store");
+			const { reader, material } = await personalBearerRead(
+				context.req.raw,
+				metadata,
+				dependencies.personalApiAgentRead,
+				"api.credential.identity.read",
+			);
+			const result = await reader.readIdentity(metadata, material);
+			return context.json(PersonalApiIdentityV1Schema.parse(result));
+		}),
+	);
+
 	app.get("/api/v2/agents", (context) =>
 		boundary(context, async (metadata) => {
 			const request = context.req.raw;
@@ -1207,24 +1285,8 @@ export function registerV2ManagementRoutes(
 						const projectedPage = await projectPage(
 							() => dependencies.query.listAgents(apiScope, queryPage),
 							(agent) => agent.agentId,
-							async (agent) => {
-								const value = await project({
-									...metadata,
-									apiUser,
-									agent,
-									requestScope: metadata,
-								});
-								const parsed = AgentProjectionV1Schema.safeParse(value);
-								if (!parsed.success)
-									fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
-								const { actions: _actions, ...configuration } =
-									parsed.data.configuration;
-								return AgentProjectionV2Schema.parse({
-									...parsed.data,
-									schemaVersion: 2,
-									configuration,
-								});
-							},
+							(agent) =>
+								projectApiAgent(dependencies, metadata, apiUser, agent),
 						);
 						return {
 							result: projectedPage,
@@ -1261,6 +1323,36 @@ export function registerV2ManagementRoutes(
 
 	app.get("/api/v2/agents/:agentId", (context) =>
 		boundary(context, async (metadata) => {
+			if (context.req.raw.headers.has("Authorization")) {
+				context.header("Cache-Control", "no-store");
+				const { reader, material } = await personalBearerRead(
+					context.req.raw,
+					metadata,
+					dependencies.personalApiAgentRead,
+					"api.agent.metadata.read",
+				);
+				const result = await reader.readAgents(
+					metadata,
+					material,
+					async (apiUser) => {
+						const agent = await dependencies.query.getAgent(
+							{ kind: "api_user", userId: apiUser.userId },
+							context.req.param("agentId"),
+						);
+						if (!agent) throw new PersonalApiCredentialErrorV1("not_found");
+						return {
+							result: await projectApiAgent(
+								dependencies,
+								metadata,
+								apiUser,
+								agent,
+							),
+							returnedAgentIds: [agent.agentId],
+						};
+					},
+				);
+				return context.json(result);
+			}
 			const identity = await resolveIdentity(
 				dependencies.identity,
 				context.req.raw,
