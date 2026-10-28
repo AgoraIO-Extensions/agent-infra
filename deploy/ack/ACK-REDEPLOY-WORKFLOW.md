@@ -72,7 +72,16 @@ deploy/ack/redeploy.sh capture-inputs
 并依次执行四模板和自定义 ACP 的同一会话多轮旅程。原始 ID 不进入公开 provision receipt。
 旧 Agent 存在与否、当前授权和业务是否成功仍由真实 API 和浏览器检查确定。
 
-自定义 Agent 配置使用 [`custom-agent-web-probe.md`](../../tests/local-real-e2e/custom-agent-web-probe.md) 规定的私有 JSON。`platform-auth` 只适用于已经接入 Platform Auth 的 Agent；自有入口使用 `web`。每份配置必须声明当前来源 commit、不可变 Digest、configuration revision、期望内容 hash 和两个不同主体的私有授权文件。
+自定义 `platform-adapter` Agent 使用当前 ID 绑定生成的 `custom-*.json` Platform 对话蓝图。
+`validate` 必须读取同一源码、同一 Agent 的三轮浏览器 receipt，逐轮检查 SSE、完成状态、刷新恢复
+和跨主体拒绝；不为这类 Agent 要求独立 HTML 入口。缺失、未完成或身份/来源不匹配的 receipt
+都拒绝。
+
+自定义 `self-managed` Agent 仍使用 [`custom-agent-web-probe.md`](../../tests/local-real-e2e/custom-agent-web-probe.md)
+规定的私有 JSON；`ACK_CUSTOM_AGENT_CONFIGS` 只列出这类 Agent，数量必须匹配创建清单。
+全部 custom 都为 `platform-adapter` 时不设置该变量。`platform-auth` 只适用于已经接入
+Platform Auth 的自有入口；其他自有入口使用 `web`。每份配置必须声明来源 commit、不可变
+Digest、configuration revision、期望内容 hash 和两个不同主体的私有授权文件。
 
 `ACK_AGENT_REQUESTS_FILE` 是仓库外的 API 创建/重放清单。每项引用一个 `0600` Bearer credential 文件、一个 `0600` JSON body 文件和固定 `Idempotency-Key`；credential 需要创建和读取 Agent 的权限。body 可以是标准模板或自定义 Agent 的 `POST /api/v2/agents` 请求。脚本只输出 HTTP 状态、状态枚举和 Agent ID 的 SHA-256，不输出 Token、Secret 或响应正文；创建后会轮询 `/state`，直到 `available/ready` 或明确失败/超时。API 创建不需要 Web 审批；需要审批的 Web application 流程仍应由真实管理员完成并回读。
 
@@ -267,6 +276,57 @@ deploy/ack/redeploy.sh bootstrap-inputs
 capacity，禁止手工写数据库补齐。
 
 ### 签发个人 API credential
+
+Fresh 数据库可以先设置 `ACK_LOGIN_BOOTSTRAP_FILE` 并运行 `bootstrap-login`。`all` 在模型
+preflight 后、`runtime-inputs` 前执行此步骤，使用正常 `/auth/login` 和 `/api/v1/session`
+取得当前 canonical user ID。它为每个声明主体创建全新 Cookie context，验证两次 session
+身份一致且主体不同，然后写入私有 storageState、身份候选文件和对应浏览器蓝图。
+HTTPS 必须通过系统信任或 `NODE_EXTRA_CA_CERTS` 验证；不跟随登录重定向。
+
+```json
+{
+  "schemaVersion": 1,
+  "origin": "https://ack.example.test",
+  "identityFile": "/private/ack/login/identities.candidate.json",
+  "identitySecretRef": {
+    "name": "agent-infra-api-configuration",
+    "key": "deployment-identities.json"
+  },
+  "subjects": [
+    {
+      "name": "owner",
+      "loginFile": "/private/ack/login/owner-login",
+      "passwordFile": "/private/ack/login/owner-password",
+      "storageStateFile": "/private/ack/login/owner-state.json"
+    },
+    {
+      "name": "other",
+      "loginFile": "/private/ack/login/other-login",
+      "passwordFile": "/private/ack/login/other-password",
+      "storageStateFile": "/private/ack/login/other-state.json"
+    }
+  ],
+  "blueprints": ["/private/ack/blueprints/codex.json"]
+}
+```
+
+输入文件和输出目录必须在 Git 仓库外，分别使用 `0600` 与 `0700` 权限。`origin` 必须等于
+`ACK_PUBLIC_ORIGIN`。`passwordFile` 的首尾空格属于密码，只去掉文件末尾一个 LF 或 CRLF
+行终止符。为完整验收，`blueprints` 应列出四模板和每个 custom platform-adapter
+的蓝图；每份蓝图的 owner/other `stateFile` 必须对应本次声明的两个不同主体。
+只替换它们的 `userId`，其余对话计划保持原样。
+
+身份候选包含 `schemaVersion/sourceSha/origin/createdAt/subjects`，其中
+`subjects.<name>.userId` 来自服务端 session。`runtime-inputs` 在发布前用私有 Cookie 再核对
+当前 session，只把候选写入已声明的 API Secret `deployment-identities.json` 键并等待 API
+加载。bootstrap 文件清单须事先声明这个键，其初始文件可以是 `{"subjects":{}}`。
+部署自有 `configuration.mjs` 必须明确读取此文件，并仅把原本批准的主体名称映射到现有
+`allowedPrincipals` 和 custom admission 规则；脚本不生成角色、授权列表或修改数据库。
+身份候选十分钟后失效，需重新执行登录步骤。
+
+```bash
+deploy/ack/redeploy.sh bootstrap-login
+```
 
 数据库、迁移和 Platform 就绪后，部署拥有者必须先通过真实 LDAP/浏览器登录生成一个新的
 Playwright `storageState`。工具不会接收 LDAP 密码，也不会模拟登录。将下列私有请求文件
