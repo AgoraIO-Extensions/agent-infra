@@ -159,6 +159,7 @@ function parseNativeReport(
 	value: unknown,
 	binding: Parameters<typeof parseReport>[1],
 	files: readonly { readonly path: string }[],
+	requiredAnalyzerIds: readonly string[],
 ): SkillSpectorScanReportV1 {
 	const report = record(value);
 	const metadata = record(report.metadata);
@@ -234,7 +235,11 @@ function parseNativeReport(
 		)
 			invalid();
 	}
-	if (!completed) invalid();
+	if (
+		!completed ||
+		requiredAnalyzerIds.some((analyzerId) => !ids.has(analyzerId))
+	)
+		invalid();
 	const findings = report.issues.map((value) => {
 		const finding = record(value);
 		if (
@@ -273,6 +278,7 @@ export function createSkillSpectorAdapterV1(
 		engineVersion: string;
 		rulesetDigest: string;
 		timeoutMs: number;
+		requiredAnalyzerIds: readonly string[];
 		stagingRoot?: string;
 	}>,
 ) {
@@ -283,7 +289,15 @@ export function createSkillSpectorAdapterV1(
 		!validDigest(options.rulesetDigest) ||
 		!Number.isSafeInteger(options.timeoutMs) ||
 		options.timeoutMs < 1 ||
-		options.timeoutMs > 300_000
+		options.timeoutMs > 300_000 ||
+		!Array.isArray(options.requiredAnalyzerIds) ||
+		options.requiredAnalyzerIds.length === 0 ||
+		options.requiredAnalyzerIds.some(
+			(id) =>
+				typeof id !== "string" ||
+				!/^[A-Za-z0-9_.-]{1,128}$/.test(id),
+		) ||
+		new Set(options.requiredAnalyzerIds).size !== options.requiredAnalyzerIds.length
 	)
 		throw new Error("SKILL_SPECTOR_CONFIG_INVALID");
 	return Object.freeze({
@@ -357,6 +371,7 @@ export function createSkillSpectorAdapterV1(
 						rulesetDigest: options.rulesetDigest,
 					},
 					prepared.manifest.files,
+					options.requiredAnalyzerIds,
 				);
 				if (findingsExit && report.findingCount === 0) invalid();
 				return report;

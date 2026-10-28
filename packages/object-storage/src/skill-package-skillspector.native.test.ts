@@ -38,6 +38,10 @@ const options = {
 	engineVersion: "2.12.0",
 	rulesetDigest: "a".repeat(64),
 	timeoutMs: 60_000,
+	requiredAnalyzerIds: [
+		"static_patterns_prompt_injection",
+		"semantic_security_discovery",
+	] as const,
 };
 
 function nativeReport() {
@@ -266,6 +270,13 @@ it.each([
 		"missing ledger",
 		(r: ReturnType<typeof nativeReport>) => {
 			r.analysis_completeness.analyzer_statuses = [];
+		},
+	],
+	[
+		"missing required analyzer",
+		(r: ReturnType<typeof nativeReport>) => {
+			r.analysis_completeness.analyzer_statuses =
+				r.analysis_completeness.analyzer_statuses.slice(0, 1);
 		},
 	],
 	[
