@@ -284,10 +284,10 @@ function nativeRules(
 				entries.length > 128
 			)
 				throw new WorkloadKubernetesError("policy");
-			return entries.map(networkRange);
+			return Array.from(entries, networkRange);
 		},
 	);
-	return value.destinations.map((entry) => {
+	return Array.from(value.destinations, (entry) => {
 		if (
 			!entry ||
 			typeof entry !== "object" ||

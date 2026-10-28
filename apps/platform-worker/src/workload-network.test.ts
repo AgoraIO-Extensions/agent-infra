@@ -662,3 +662,14 @@ it("rejects arrays masquerading as native policy objects", () => {
 			} as unknown as WorkloadEgressPolicyV1),
 		).toThrow();
 });
+
+it("rejects sparse native destinations and protected inventory", () => {
+	const nativeEgress = nativeEgressFixture();
+	nativeEgress.protectedNetworks.platformDatabase = new Array(1);
+	expect(() => workloadEgressRulesV1({ nativeEgress })).toThrow();
+	expect(() =>
+		workloadEgressRulesV1({
+			nativeEgress: { ...nativeEgressFixture(), destinations: new Array(1) },
+		}),
+	).toThrow();
+});
