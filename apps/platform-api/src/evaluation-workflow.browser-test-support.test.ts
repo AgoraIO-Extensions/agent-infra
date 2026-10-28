@@ -26,6 +26,14 @@ it("drives production Task/scoring and self feedback through isolated HTTP assem
 				},
 				...(body === undefined ? {} : { body: JSON.stringify(body) }),
 			});
+		for (const path of [
+			"/api/v2/agents",
+			`/api/v2/agents/${fixture.agentId}`,
+		]) {
+			const response = await request(path, "runner");
+			const body = await response.json();
+			expect(response.status, JSON.stringify(body)).toBe(200);
+		}
 		const directory = await request(
 			"/api/v2/directory/search?kind=user&q=eval-runner",
 			"manager",

@@ -364,7 +364,7 @@ export async function startEvaluationWorkflowBrowserFixture() {
 				ids.map((id) => ({
 					userId: id,
 					displayName: id,
-					accountStatus: "active" as const,
+					roles: ["employee" as const],
 				})),
 		};
 		const assembly = assemblePlatformApi({
@@ -420,7 +420,8 @@ export async function startEvaluationWorkflowBrowserFixture() {
 					},
 				},
 				modelOptions: current.modelOptions.map((option) => ({
-					...option,
+					optionId: option.optionId,
+					modelId: option.modelId,
 					displayName: option.modelId,
 					reasoningLevels: [...option.reasoningLevels],
 				})),
