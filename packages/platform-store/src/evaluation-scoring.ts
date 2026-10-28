@@ -14,10 +14,13 @@ import {
 	type EvaluationScoreWorkPortV1,
 	type EvaluationScoringInputV1,
 	parseEvaluationExperimentPolicyV1,
+	parseEvaluationExperimentV1,
 	parseEvaluationReviewRecordV1,
+	parseEvaluationSampleTaskV1,
 	parseEvaluationScoreIntentV1,
 	parseEvaluationScoreOutcomeV1,
 	parseEvaluationScorerV1,
+	planEvaluationCancelledScoreV1,
 	planEvaluationScoreFailureV1,
 	projectEvaluationScoringContextV1,
 } from "@agent-infra/platform-core";
@@ -210,13 +213,83 @@ export class PostgresEvaluationScoringV1
 	async #save(tx: postgres.TransactionSql, intent: EvaluationScoreIntentV1) {
 		await tx`update platform.evaluation_score_intents set status=${intent.status},revision=${intent.revision},result_version=${intent.resultVersion ?? "unobserved"},data=${tx.json(intent as unknown as postgres.JSONValue)} where id=${intent.id}`;
 	}
-	async prepare(lease: EvaluationScoreLeaseV1) {
+	async prepare(
+		lease: EvaluationScoreLeaseV1,
+	): ReturnType<EvaluationScoreWorkPortV1["prepare"]> {
 		const req = request(lease);
-		const intent = await this.#transaction(async (tx) => {
+		const preparation = await this.#transaction(async (tx) => {
 			const value = await this.#lock(tx, lease);
+			const [row] = await tx<
+				{
+					experiment_data: unknown;
+					experiment_status: string;
+					sample_data: unknown;
+					execution_id: string;
+					conversation_id: string;
+					agent_id: string;
+					actor_id: string;
+					principal_type: string;
+					channel_id: string;
+					execution_source: string;
+					task_status: string;
+				}[]
+			>`select e.data as experiment_data,e.status as experiment_status,s.data as sample_data,t.execution_id,t.conversation_id,t.agent_id,t.actor_id,t.principal_type,t.channel_id,t.execution_source,t.status as task_status from platform.evaluation_experiments e join platform.evaluation_sample_tasks s on s.experiment_id=e.id join platform.conversation_executions t on t.execution_id=s.execution_id where e.id=${value.experimentId} and s.id=${value.sampleTaskId} for share of e,s`;
+			if (!row) throw new EvaluationDataErrorV1("denied");
+			const experiment = parseEvaluationExperimentV1(row.experiment_data);
+			const sample = parseEvaluationSampleTaskV1(row.sample_data);
+			if (
+				experiment.experimentId !== value.experimentId ||
+				experiment.status !== row.experiment_status ||
+				experiment.datasetId !== value.datasetId ||
+				experiment.versionId !== value.versionId ||
+				experiment.policyId !== value.policyId ||
+				experiment.policyRevision !== value.policyRevision ||
+				!isDeepStrictEqual(experiment.principal, value.principal) ||
+				sample.sampleTaskId !== value.sampleTaskId ||
+				sample.experimentId !== value.experimentId ||
+				sample.executionId !== value.executionId ||
+				sample.requested.agentId !== value.agentId ||
+				!experiment.sampleIds.includes(sample.sampleId) ||
+				!experiment.variantIds.includes(sample.variantId) ||
+				sample.binding.datasetId !== value.datasetId ||
+				sample.binding.versionId !== value.versionId ||
+				row.execution_id !== value.executionId ||
+				row.conversation_id !== sample.conversationId ||
+				row.agent_id !== value.agentId ||
+				row.actor_id !== value.principal.id ||
+				row.principal_type !== value.principal.kind ||
+				row.channel_id !== "eval" ||
+				row.execution_source !== "eval"
+			)
+				throw new EvaluationDataErrorV1("unavailable");
+			const cancellation = planEvaluationCancelledScoreV1(
+				value,
+				experiment.status,
+				row.task_status,
+			);
+			if (cancellation.outcome === "terminal")
+				return { terminal: true as const };
+			if (cancellation.outcome === "waiting")
+				return { waiting: true as const, delayMs: cancellation.delayMs };
+			if (cancellation.outcome === "settle") {
+				await this.#save(tx, {
+					...value,
+					status: cancellation.status,
+					revision: cancellation.revision,
+					failureCode: cancellation.failureCode,
+					value: null,
+					passed: null,
+				});
+				return { terminal: true as const };
+			}
 			await this.#current(tx, req, value);
-			return value;
+			return { intent: value };
 		});
+		if (preparation.terminal) return { terminal: true };
+		if (preparation.waiting)
+			return { waiting: true, delayMs: preparation.delayMs };
+		const intent = preparation.intent;
+		if (!intent) throw new EvaluationDataErrorV1("unavailable");
 
 		if (intent.status === "unknown") {
 			const recovered = await this.#derivedStore.recover(

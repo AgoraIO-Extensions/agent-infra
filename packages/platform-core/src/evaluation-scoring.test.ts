@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
-import { planEvaluationScoreFailureV1 } from "./evaluation-score-intents.js";
+import {
+	planEvaluationCancelledScoreV1,
+	planEvaluationScoreFailureV1,
+} from "./evaluation-score-intents.js";
 import {
 	parseEvaluationScoreOutcomeV1,
 	parseEvaluationScorerV1,
@@ -221,4 +224,49 @@ it("keeps scoring failure budgets and unknown reconciliation in Core", () => {
 				true,
 			),
 		).toEqual({ state: null, retry: false, delayMs: 17 });
+});
+
+it("settles cancelled experiment metadata without inventing Task or model outcomes", () => {
+	const intent = {
+		status: "waiting_output" as const,
+		revision: 1,
+		scorer: scorer(),
+	};
+	expect(planEvaluationCancelledScoreV1(intent, "active", "completed")).toEqual(
+		{ outcome: "proceed" },
+	);
+	for (const taskStatus of ["waiting", "submitted", "processing", "unknown"])
+		expect(
+			planEvaluationCancelledScoreV1(intent, "cancelled", taskStatus),
+		).toMatchObject({ outcome: "waiting" });
+	for (const taskStatus of ["failed", "cancelled"])
+		expect(
+			planEvaluationCancelledScoreV1(intent, "cancelled", taskStatus),
+		).toEqual({
+			outcome: "settle",
+			status: "not_applicable",
+			revision: 2,
+			failureCode: "TASK_NOT_COMPLETED",
+		});
+	expect(
+		planEvaluationCancelledScoreV1(
+			{ ...intent, status: "awaiting_human" },
+			"cancelled",
+			"completed",
+		),
+	).toMatchObject({ outcome: "settle", failureCode: "EXPERIMENT_CANCELLED" });
+	for (const status of [
+		"scored",
+		"not_applicable",
+		"failed",
+		"unknown",
+		"result_ready",
+	] as const)
+		expect(
+			planEvaluationCancelledScoreV1(
+				{ ...intent, status },
+				"cancelled",
+				"cancelled",
+			),
+		).toEqual({ outcome: "terminal" });
 });

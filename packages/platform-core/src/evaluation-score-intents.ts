@@ -583,3 +583,39 @@ export function planEvaluationScoreFailureV1(
 		delayMs,
 	};
 }
+
+/** Cancellation is metadata control, never new permission to read inputs or send a score. */
+export function planEvaluationCancelledScoreV1(
+	intent: Pick<EvaluationScoreIntentV1, "status" | "revision" | "scorer">,
+	experimentStatus: "active" | "cancelled",
+	taskStatus: string,
+):
+	| { outcome: "proceed" | "terminal" }
+	| { outcome: "waiting"; delayMs: number }
+	| {
+			outcome: "settle";
+			status: "not_applicable";
+			revision: number;
+			failureCode: "TASK_NOT_COMPLETED" | "EXPERIMENT_CANCELLED";
+	  } {
+	if (experimentStatus !== "cancelled") return { outcome: "proceed" };
+	if (
+		["scored", "not_applicable", "failed", "unknown", "result_ready"].includes(
+			intent.status,
+		)
+	)
+		return { outcome: "terminal" };
+	if (["submitted", "waiting", "processing", "unknown"].includes(taskStatus))
+		return { outcome: "waiting", delayMs: intent.scorer.retryDelayMs };
+	if (!["completed", "cancelled", "failed"].includes(taskStatus))
+		throw new EvaluationDataErrorV1("unavailable");
+	return {
+		outcome: "settle",
+		status: "not_applicable",
+		revision: intent.revision + 1,
+		failureCode:
+			taskStatus === "completed"
+				? "EXPERIMENT_CANCELLED"
+				: "TASK_NOT_COMPLETED",
+	};
+}

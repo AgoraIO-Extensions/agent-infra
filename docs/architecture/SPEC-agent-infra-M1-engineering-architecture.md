@@ -2683,7 +2683,13 @@ Eval 幂等回执的保留截止时间不得晚于相关数据集/版本的元�
 
 评分意图有自身的原发起主体、数据/结果版本、评分器不可变配置摘要、状态与期望修订、outbox lease/fence、有限尝试预算和 Agent 默认 Key 四元绑定。模型 Key 在评分意图首次开始时冻结，重试复用该绑定并重验当前使用许可，不借用已终态业务 Execution 的解密授权。部署评分器明确 rule/human/model 类型、rubric ID、分数范围/通过阈值、输入输出字节/token/时限、重试预算；模型类型另绑定当前 Catalog revision、精确 endpoint/model 及允许发送的内容类别。缺政策不推导生产默认评分器或 TTL。人工 score 和独立 review 分别保存不可变结果及操作者；同一原评分操作者不能冒充独立复核人。
 实验取消与受信主体/实验 ID 的 `evaluation.experiment.cancel` 元数据审计同事务提交；审计失败回滚
-实验状态与样本停止，已取消意图重放不重复审计。
+实验状态与样本停止，已取消意图重放不重复审计。取消后的评分仅沿原意图、lease/fence 与实验/样本/
+Execution 的持久绑定收口元数据，不恢复正文、Key 或模型使用权：业务 cancelled/failed 对应尚未
+完成评分为 `not_applicable/TASK_NOT_COMPLETED`；业务已 completed 的未评分意图为
+`not_applicable/EXPERIMENT_CANCELLED`；业务停止尚未确认时继续等待元数据，不伪造 Task 终态。
+既有评分终态以及已发送 unknown、已保存 result_ready 保留原事实和引用，停止取消实验的后续评分
+I/O；已保存 result_ready 的评分 outbox 完成控制收口，但意图仍保留 result_ready 和已知结果引用，
+不冒称 scored，也不得据此重新发送模型。取消不声称未知模型调用从未发生。
 模型发送前 Key/Catalog 等前置失败以可信未发送结果进入有限重试；进入模型传输后失联保留 unknown，
 后续只核实同一派生结果意图，不再调用模型。可信评分 Adapter 从原获准端点直接收到 HTTP 401/403
 时记录 `SCORER_AUTHORIZATION_DENIED` 并结束为 failed，不回退 Key；重定向、普通异常或失联不能

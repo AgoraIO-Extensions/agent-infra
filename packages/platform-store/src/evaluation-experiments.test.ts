@@ -785,7 +785,8 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 				deliveryFence: claim.deliveryFence.toString(),
 			};
 			const prepared = await scoring.prepare(lease);
-			if (!prepared.input || !prepared.intent) throw new Error("input missing");
+			if (!("input" in prepared) || !prepared.input || !prepared.intent)
+				throw new Error("input missing");
 			await scoring.commit(
 				lease,
 				prepared.intent,
@@ -2419,3 +2420,221 @@ it.each(["cancelled", "failed", "unknown"] as const)(
 	},
 	30000,
 );
+
+it("settles whole-experiment cancellation through metadata-only worker control", async () => {
+	const preserved = new Map<string, unknown>();
+	let catalogCalls = 0;
+	let decryptCalls = 0;
+	const worker = createEvaluationScoringWorkerV1({
+		...database,
+		directory,
+		loadDataPolicy: async () => policy,
+		loadExperimentPolicy: async () => experimentPolicy,
+		storage,
+		taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+		batchSize: 100,
+		leaseMs: 30000,
+		retryDelayMs: 1000,
+		catalog: createDeploymentModelCatalogAdapterV1({
+			load: async () => {
+				catalogCalls++;
+				throw new Error("unexpected catalog");
+			},
+		}),
+		decryptor: {
+			decrypt: async () => {
+				decryptCalls++;
+				throw new Error("unexpected decrypt");
+			},
+		},
+	});
+	const ids = [];
+	try {
+		for (const status of ["waiting", "completed", "failed", "unknown"]) {
+			const command = await dataset();
+			await data.grant(request("admin"), randomUUID(), command.datasetId, {
+				expectedRevision: 4,
+				principal: { kind: "user", id: "runner" },
+				versionIds: [command.versionId],
+				operations: ["score"],
+				expiresAt: new Date(Date.now() + 50000).toISOString(),
+			});
+			const experiment = await core.create(
+				request("runner"),
+				randomUUID(),
+				command,
+			);
+			ids.push(experiment.experimentId);
+			const tasks = await experiments.samples(experiment.experimentId, 10);
+			const first = tasks[0];
+			if (!first) throw new Error("missing task");
+			if (status !== "waiting")
+				await sql`update platform.conversation_executions set status=${status} where execution_id=${first.executionId}`;
+			await core.cancel(
+				request("runner"),
+				experiment.experimentId,
+				randomUUID(),
+			);
+			const [grant] =
+				await sql`select data from platform.evaluation_grants where dataset_id=${command.datasetId} and data->'operations' ? 'score'`;
+			await data.revoke(
+				request("admin"),
+				randomUUID(),
+				command.datasetId,
+				grant?.data.grantId,
+				grant?.data.revision,
+			);
+		}
+
+		const preservationCommand = await dataset();
+		const preservationExperiment = await core.create(
+			request("runner"),
+			randomUUID(),
+			{
+				...preservationCommand,
+				scorerRefs: [
+					{ scorerId: "exact", version: "1" },
+					{ scorerId: "human", version: "1" },
+					{ scorerId: "model", version: "1" },
+				],
+			},
+		);
+		ids.push(preservationExperiment.experimentId);
+		const rows =
+			await sql`select i.id,i.data from platform.evaluation_score_intents i join platform.evaluation_sample_tasks s on s.id=i.sample_task_id where s.experiment_id=${preservationExperiment.experimentId} order by i.id`;
+		const statuses = [
+			"scored",
+			"not_applicable",
+			"failed",
+			"unknown",
+			"result_ready",
+			"pending",
+		] as const;
+		for (const [index, row] of rows.entries()) {
+			const status = statuses[index];
+			if (!status) throw new Error("missing status");
+			const value = {
+				...row.data,
+				status,
+				...(status === "scored"
+					? {
+							value: 1,
+							passed: true,
+							scoreActor: { kind: "user", id: "runner" },
+							reasonObjectId: randomUUID(),
+						}
+					: {}),
+				...(status === "result_ready"
+					? { reasonObjectId: randomUUID(), resultVersion: "fixed-result" }
+					: {}),
+				...(status === "unknown" ? { attempts: 1 } : {}),
+			};
+			await sql`update platform.evaluation_score_intents set status=${status},result_version=${value.resultVersion ?? "unobserved"},data=${sql.json(value)} where id=${row.id}`;
+			if (status !== "pending") preserved.set(row.id, value);
+		}
+		await core.cancel(
+			request("runner"),
+			preservationExperiment.experimentId,
+			randomUUID(),
+		);
+
+		let downloads = 0;
+		const download = storage.download;
+		storage.download = async (...args) => {
+			downloads++;
+			return download(...args);
+		};
+		try {
+			for (let round = 0; round < 3; round++) {
+				await sql`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where operation='evaluation.score.v1' and status in('pending','retry_scheduled')`;
+				await worker.runOnce();
+			}
+		} finally {
+			storage.download = download;
+		}
+		const [pending] =
+			await sql`select i.id,i.data from platform.evaluation_score_intents i join platform.outbox_items o on o.scope_id=i.id::text and o.operation='evaluation.score.v1' where i.status='waiting_output' and o.status='retry_scheduled' limit 1`;
+		if (!pending) throw new Error("missing unconfirmed stop");
+		const outbox = createPostgresOutboxStore(database);
+		const metadataStore = new PostgresEvaluationScoringV1({
+			...database,
+			directory,
+			loadDataPolicy: async () => policy,
+			loadExperimentPolicy: async () => experimentPolicy,
+			storage,
+			taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+		});
+		try {
+			const itemId = `evaluation-score:${pending.id}`;
+			await sql`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${itemId}`;
+			const claim = await outbox.claim({
+				itemId,
+				leaseOwner: "binding-probe",
+				leaseDurationMs: 30000,
+			});
+			if (!claim) throw new Error("missing claim");
+			const lease = {
+				intentId: pending.id,
+				itemId,
+				leaseOwner: "binding-probe",
+				deliveryFence: claim.deliveryFence.toString(),
+			};
+			await expect(
+				metadataStore.prepare({
+					...lease,
+					deliveryFence: String(claim.deliveryFence - 1n),
+				}),
+			).rejects.toThrow();
+			await sql`update platform.evaluation_score_intents set data=jsonb_set(data,'{executionId}',to_jsonb(${randomUUID()}::text)) where id=${pending.id}`;
+			try {
+				await expect(metadataStore.prepare(lease)).rejects.toMatchObject({
+					code: "unavailable",
+				});
+			} finally {
+				await sql`update platform.evaluation_score_intents set data=${sql.json(pending.data)} where id=${pending.id}`;
+			}
+			await outbox.scheduleRetry({
+				itemId,
+				leaseOwner: lease.leaseOwner,
+				deliveryFence: claim.deliveryFence,
+				retryDelayMs: 1000,
+				errorCode: "TEST_RESTORE",
+			});
+		} finally {
+			await metadataStore.close();
+			await outbox.close();
+		}
+		const scores =
+			await sql`select i.id,s.experiment_id,e.status as task_status,i.status as score_status,(i.data->>'attempts')::int as attempts,i.data->>'failureCode' as code,o.status as outbox_status from platform.evaluation_score_intents i join platform.evaluation_sample_tasks s on s.id=i.sample_task_id join platform.conversation_executions e on e.execution_id=s.execution_id join platform.outbox_items o on o.scope_id=i.id::text and o.operation='evaluation.score.v1' where s.experiment_id in ${sql(ids)} order by s.experiment_id,e.execution_id`;
+		const taskCount =
+			await sql`select count(*)::int as count from platform.evaluation_sample_tasks where experiment_id in ${sql(ids)}`;
+		expect(downloads).toBe(0);
+		expect(taskCount).toEqual([{ count: 10 }]);
+		expect(
+			await sql`select count(*)::int as count from platform.evaluation_score_intents where status='not_applicable' and (data->'value'<>'null'::jsonb or data->'passed'<>'null'::jsonb)`,
+		).toEqual([{ count: 0 }]);
+		expect(catalogCalls).toBe(0);
+		expect(decryptCalls).toBe(0);
+		for (const row of scores) {
+			if (preserved.has(row.id)) {
+				const [saved] =
+					await sql`select data from platform.evaluation_score_intents where id=${row.id}`;
+				expect(saved?.data).toEqual(preserved.get(row.id));
+				expect(row.outbox_status).toBe("succeeded");
+				continue;
+			}
+			expect(row.score_status).toBe(
+				row.task_status === "unknown" ? "waiting_output" : "not_applicable",
+			);
+			expect(row.code).toBe(
+				row.task_status === "unknown"
+					? null
+					: row.task_status === "completed"
+						? "EXPERIMENT_CANCELLED"
+						: "TASK_NOT_COMPLETED",
+			);
+		}
+	} finally {
+		await worker.close();
+	}
+}, 30000);

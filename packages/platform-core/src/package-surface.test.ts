@@ -313,6 +313,7 @@ describe("platform-core package surface", () => {
 			"planAgentUserUseRevokeV1",
 			"planConversationGenerationConfirmationV1",
 			"planConversationGenerationIsolationV1",
+			"planEvaluationCancelledScoreV1",
 			"planEvaluationScoreFailureV1",
 			"planEvaluationScoreIntentV1",
 			"planSessionSandboxIdleReclaimTransitionV1",
