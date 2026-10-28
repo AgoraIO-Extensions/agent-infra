@@ -1,6 +1,6 @@
 # ACK 重部署案例与迁移顺序（脱敏）
 
-这份记录对应 2026-10-27 的 ACK 重部署演练。所有地址、账号、Token、Cookie、镜像 digest、
+这份记录对应 2026-10-27 至 2026-10-28 的 ACK 重部署演练。所有地址、账号、Token、Cookie、镜像 digest、
 Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本文只记录可复用的因果关系。
 
 ## 已成功的链路
@@ -10,6 +10,7 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 - 按 namespace/cluster UID、ownership label 和精确 Session ECI admission 对象执行破坏性清理；清理后能回读 namespace 已不存在。
 - 空 namespace 重新创建后，API、Web、Worker、Directory 四个 Deployment 均能 rollout 到 `1/1`，HTTPS 根入口返回 `200`，匿名 Agents API 返回 `401`。
 - 正式登录入口、API credential 签发、Relay billing、Relay `/models` 和真实 Codex Runtime model probe 均曾成功；Codex receipt 含 Runtime model fact、完成状态和实际回复 hash。
+- 准备阶段的四个标准模板和两个自定义 ACP Agent 各完成三轮真实浏览器对话，18 轮均匹配 durable model completed facts，并通过刷新恢复和跨主体拒绝。该环境仍含独立更新的业务组件，不能作为同源完整清空重建的成功证据。
 
 ## 失败案例及修复规则
 
@@ -30,6 +31,8 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | GET session 200，写接口却返回 401 | 直接 HTTP 探针遗漏了浏览器 Origin | 遵守浏览器写入的 Origin/CSRF 契约，保留具体失败阶段；不把协议错误归因于密码或 Cookie |
 | 密码正确但自动登录失败 | 对密码文件使用 `trim()` 会删除合法的首尾空格 | 保留密码空格，只按输入约定删除一个末尾 LF/CRLF，并用含空格密码测试真实 HTTP 提交字节 |
 | 登录与模型目录正常，Messages 模型回合却进入 `unknown` | 上游模型请求返回 `502 upstream_error`，目录可见不代表模型可执行 | 保留直接模型请求的 HTTP 状态与脱敏错误类型；真实 Runtime preflight 失败时停止验收，不替换成功记录或把问题归因于登录 |
+| 模型 HTTP 状态为 `200`，Runtime 仍没有文本或完成事件 | SSE 只含 `message_start` 后紧接 `api_error`；实际 native adapter 回读确认上游过载 | 成功必须包含模型完成事实、文本和终态，不能只看 HTTP 状态；使用已批准 Key 的其他可用模型时，先经同一 native adapter 和完整模板 preflight 复验，再更新配置 |
+| 自定义增量镜像的 revision label 看起来仍是旧源码 | OCI 配置继承基础镜像的 revision，后续 overlay 有自己的构建配方和最终 Digest | 分别保留继承的基础 revision、基础 Digest、overlay Dockerfile hash 和最终 OCI Digest；原容量 receipt 保持原字节，不把旧来源改写为最终 Platform 源码 |
 | 新 custom Session 正常，旧失败 Pod 仍反复重启 | 新 Worker 校验新增 Driver，旧 Pod 配置与期望不一致；已停止会话的残留资源需要收敛 | 先回读 Store 的 `desired_state=stopped` 与 Agent/Session 归属，再按 Pod UID 和 resourceVersion 删除精确残留，等待 Worker 自行回读；不手工提升数据库状态 |
 | 本地发布构建只报告退出码 1 | BuildKit 到 Docker Hub 的鉴权连接被重置，构建包装器隐藏了 stderr | 在仓库外保留权限受限的构建诊断；受控增量镜像须固定基镜像、源码与全部变化依赖，回读编译产物哈希，并明确区别于完整发布 manifest |
 | 跨用户 API/SSE 均拒绝且页面没有会话正文，浏览器验收仍失败 | Agent 不可见时页面使用新的无权访问卡，探针只匹配旧的会话失效提示 | 接受两种正式拒绝提示，继续验证 API/SSE 的 403/404、用户消息和助手正文不可见 |
@@ -43,6 +46,7 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | Helm 本地渲染报 `sessionRuntimeScheduling` 不兼容，但目标 ACK 版本支持 | Helm client 默认 Kubernetes 版本与目标 Server 版本不同 | `render_manifest` 先读取目标 Server version，再用 `helm template --kube-version`；不要用本地默认版本判断目标能力 |
 | 更新 private values 后 `bootstrap-inputs` 拒绝覆盖 | bootstrap 工具按 ownership 和 Secret 字节精确比较，既有 Secret 漂移是故障信号 | 对 private 配置变更先删除并重建同一安装拥有的 Secret；不要用 `kubectl apply` 覆盖，也不要把漂移对象收养 |
 | bootstrap database 阶段突然失败且没有业务错误 | private values 文件权限不是 0600，工具在读取前 fail closed | 所有 values、input、credential、body 和 storageState 文件保持当前用户拥有且权限 0600；目录 0700 |
+| 工作流自己创建的 namespace 无法执行 `destroy` | 清理入口要求历史通用标签，bootstrap 只写当前 installation ID 标签 | 清理必须把 namespace 的 `bootstrap-id` 与计划的 installation ID 比较，同时保留 cluster/namespace UID、完整资源清单和两项删除确认；缺失或不同归属在删除前失败 |
 
 ## 可移植的一键顺序
 

@@ -57,6 +57,10 @@ node --experimental-strip-types deploy/ack/run-capsule.ts /private/ack/capsule.j
 其他已声明阶段；所有原有 source/image、ownership 和破坏性清理门禁继续执行。不要把含凭证的
 输入包或 `.resolved-*` 目录提交到 Git、PR 或共享文档。
 
+清理计划的 installation ID 必须与待删除 namespace 的 `agent-infra.agora.io/bootstrap-id`
+一致。它是 `bootstrap-inputs` 写入的安装归属；fresh 输入包中的新 installation ID 不能代替
+旧环境的清理身份。cluster UID 和 namespace UID 仍须与现场完全一致。
+
 上一轮演练的成功与失败因果、以及 fresh 环境的一键顺序，见 [`ACK-REDEPLOY-LESSONS.md`](./ACK-REDEPLOY-LESSONS.md)。
 
 ## 当前输入与已有环境部署
