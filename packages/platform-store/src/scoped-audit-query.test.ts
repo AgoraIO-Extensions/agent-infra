@@ -2068,7 +2068,7 @@ it("projects only registered Eval experiment/scoring targets without exposing co
 		["evaluation.score.completed", "evaluation_score"],
 		["evaluation.score.human", "evaluation_score"],
 		["evaluation.score.reviewed", "evaluation_score"],
-	]) {
+	] as const) {
 		const id = randomUUID();
 		await sql`insert into platform.audit_events(id,trace_id,request_id,actor_type,actor_id,action,target_type,target_id,outcome,details)values(${id},'eval-trace','eval-request','user','eval-operator',${action},${target},'synthetic-ref','succeeded',${sql.json({ purpose: "eval", returnedMaterial: false })})`;
 		const record = await query.getAudit(admin, id, detail, request());

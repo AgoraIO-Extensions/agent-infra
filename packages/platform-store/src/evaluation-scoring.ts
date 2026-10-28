@@ -258,7 +258,7 @@ export class PostgresEvaluationScoringV1
 		>`select status,last_event_sequence,execution_source,model_configuration_revision,model_option_id,reasoning_level,execution_id from platform.conversation_executions where execution_id=${intent.executionId}`;
 		if (!execution || execution.execution_source !== "eval")
 			throw new EvaluationDataErrorV1("denied");
-		if (!["completed", "failed", "stopped"].includes(execution.status))
+		if (!["completed", "failed", "cancelled"].includes(execution.status))
 			return { waiting: true as const, delayMs: intent.scorer.retryDelayMs };
 		if (execution.status !== "completed") {
 			await this.#client.begin(async (tx) => {

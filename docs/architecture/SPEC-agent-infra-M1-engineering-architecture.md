@@ -2694,7 +2694,6 @@ Worker decryptor，并显式配置 taskPolicy、batchSize、leaseMs 和 retryDel
 `deployment-entry.ts`/Workload 装配进入评分轮询，不新增部署服务、凭证类型或默认值；启动应先调用
 两个 policy loader，非法输入启动失败，运行时读取失败拒绝新访问，DB 清理继续履行已固化义务。
 
-
 #### 18.4.2 版本、对象与任务绑定
 
 数据集、样本集合与 rubric 的版本不可变。新版本保存来源版本和必要变更元数据；真实材料导入记录
@@ -2705,7 +2704,6 @@ Runtime 配置修订、镜像 Digest 和资源配置摘要，`preparedRuntime` �
 事件后才标记 `runtimeObserved`。实际模型/工具来自持久操作事件，保留 operation/attempt/sequence、
 阶段、耗时和用量；intent 不算实际已调用，无事实明确为空。单例首屏最多 100 条操作事实，超过时
 `factsTruncated=true`，完整事实继续使用同一 Task 已有事件分页/SSE 入口，仍执行当前 Eval 用途权限。
-
 
 内容使用现有 `ObjectStorageDataV1`，由 Store 保存 Eval 自身的对象引用、版本/etag、大小、Hash、
 媒体类型及生命周期状态；写入和确认复用实际字节/固定对象版本核验，不新建存储 Adapter。Eval 对象

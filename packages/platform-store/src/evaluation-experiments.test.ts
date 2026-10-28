@@ -1799,3 +1799,143 @@ it("serializes a human score with deletion before row locks and denies the losin
 		await outboxes.close();
 	}
 }, 30000);
+
+it.each(["cancelled", "failed", "unknown"] as const)(
+	"settles only real business terminal states for independent scoring: %s",
+	async (status) => {
+		const command = await dataset();
+		const experiment = await core.create(
+			request("runner"),
+			randomUUID(),
+			command,
+		);
+		await data.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: 4,
+			principal: { kind: "user", id: "runner" },
+			versionIds: [command.versionId],
+			operations: ["score"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+		const [task] = await experiments.samples(experiment.experimentId, 10);
+		if (!task) throw new Error("missing task");
+		if (status === "cancelled") {
+			const {
+				createConversationExecutionUseCaseV1,
+				parseTaskAuthorizationBoundaryV1,
+			} = await import("@agent-infra/platform-core");
+			const { PostgresConversationExecutionTransactionV1 } = await import(
+				"./conversation-execution.js"
+			);
+			const [record] =
+				await sql`select boundary from platform.task_authorization_records where execution_id=${task.executionId}`;
+			const boundary = parseTaskAuthorizationBoundaryV1(record?.boundary);
+			const transaction = new PostgresConversationExecutionTransactionV1({
+				...database,
+				userDirectory: directory,
+				evaluationPolicy: {
+					data: async () => policy,
+					experiment: async () => experimentPolicy,
+				},
+			});
+			try {
+				const cancelled = await createConversationExecutionUseCaseV1({
+					transaction,
+					authorization: {
+						authorize: async () => ({
+							outcome: "allowed",
+							authority: {
+								schemaVersion: 1,
+								actorId: "runner",
+								agentId: configuration.agentId,
+								channelId: "eval",
+								authorizationRevision: boundary.agentAuthorizationRevision,
+								supportsSupplementaryInstruction: false,
+								taskBoundary: boundary,
+							},
+						}),
+					},
+				}).stop({
+					schemaVersion: 1,
+					command: "stop",
+					conversationId: task.conversationId,
+					targetExecutionId: task.executionId,
+					idempotencyKey: randomUUID(),
+					requestId: randomUUID(),
+					traceId: randomUUID(),
+				});
+				expect(cancelled.outcome).toBe("accepted");
+			} finally {
+				await transaction.close();
+			}
+		} else
+			await sql`update platform.conversation_executions set status=${status} where execution_id=${task.executionId}`;
+		expect(
+			await sql`select status from platform.conversation_executions where execution_id=${task.executionId}`,
+		).toEqual([{ status }]);
+		expect(
+			await sql`select status from platform.evaluation_experiments where id=${experiment.experimentId}`,
+		).toEqual([{ status: "active" }]);
+		const scoring = new PostgresEvaluationScoringV1({
+			...database,
+			directory,
+			loadDataPolicy: async () => policy,
+			loadExperimentPolicy: async () => experimentPolicy,
+			storage,
+			taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+			model: async () => {
+				throw new Error("Must not send model");
+			},
+		});
+		const outbox = createPostgresOutboxStore(database);
+		try {
+			const [score] =
+				await sql`select id from platform.evaluation_score_intents where sample_task_id=${task.sampleTaskId}`;
+			if (!score) throw new Error("missing score");
+			const itemId = `evaluation-score:${score.id}`;
+			await sql`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${itemId}`;
+			const claim = await outbox.claim({
+				itemId,
+				leaseOwner: "cancelled-score",
+				leaseDurationMs: 30000,
+			});
+			if (!claim) throw new Error("missing lease");
+			const lease = {
+				intentId: score.id,
+				itemId,
+				leaseOwner: "cancelled-score",
+				deliveryFence: claim.deliveryFence.toString(),
+			};
+			const { createEvaluationScoreWorkV1 } = await import(
+				"@agent-infra/platform-core"
+			);
+			const result = await createEvaluationScoreWorkV1(scoring).execute(lease);
+			expect(result.outcome).toBe(
+				status === "unknown" ? "waiting" : "completed",
+			);
+			if (result.outcome === "completed")
+				await outbox.markSucceeded({
+					itemId,
+					leaseOwner: lease.leaseOwner,
+					deliveryFence: claim.deliveryFence,
+				});
+			expect(
+				await sql`select status,data->>'failureCode' as code from platform.evaluation_score_intents where id=${score.id}`,
+			).toEqual([
+				{
+					status: status === "unknown" ? "waiting_output" : "not_applicable",
+					code: status === "unknown" ? null : "TASK_NOT_COMPLETED",
+				},
+			]);
+			expect(
+				await sql`select count(*)::int as count from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId}`,
+			).toEqual([{ count: 2 }]);
+			expect(
+				await sql`select count(*)::int as count from platform.evaluation_derived_objects where version_id=${command.versionId}`,
+			).toEqual([{ count: 0 }]);
+		} finally {
+			await scoring.close();
+			await outbox.close();
+		}
+	},
+	30000,
+);

@@ -2,6 +2,11 @@ import type { ChipTone } from "@/lib/status-tone";
 import type { AuditRecord } from "./audit-query.js";
 
 export const auditActionLabels: Record<AuditRecord["action"], string> = {
+	"evaluation.experiment.create": "创建评测实验",
+	"evaluation.derived.confirm": "确认评测结果内容",
+	"evaluation.score.completed": "完成评测评分",
+	"evaluation.score.human": "提交人工评分",
+	"evaluation.score.reviewed": "提交独立复核",
 	"evaluation.dataset.list": "查看评测集",
 	"evaluation.dataset.create": "创建评测集",
 	"evaluation.version.reserve": "预留评测版本",
@@ -184,6 +189,9 @@ export const auditSubjectLabels: Record<
 	configuration: "配置",
 	api_credential: "API 凭证",
 	application: "应用",
+	evaluation_experiment: "评测实验",
+	evaluation_object: "评测内容",
+	evaluation_score: "评测评分",
 	evaluation_dataset: "评测集",
 };
 
