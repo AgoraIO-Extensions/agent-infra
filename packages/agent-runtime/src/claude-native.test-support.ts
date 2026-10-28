@@ -144,6 +144,11 @@ export async function claudeNativeFixture() {
 					body: value,
 					response,
 				});
+				if (request.url?.startsWith("/v1/messages/count_tokens")) {
+					response.writeHead(200, { "content-type": "application/json" });
+					response.end('{"input_tokens":7}');
+					return;
+				}
 				if (respond)
 					completeClaudeResponse(response, `msg_${calls.length}`, value.model);
 			});

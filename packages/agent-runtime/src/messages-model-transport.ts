@@ -19,6 +19,21 @@ export interface RuntimeMessagesTransportDiagnostic {
 	readonly durationMs: number;
 	readonly statusCode?: number;
 	readonly statusClass?: "1xx" | "2xx" | "3xx" | "4xx" | "5xx";
+	readonly usage?: {
+		readonly inputTokens?: number;
+		readonly outputTokens?: number;
+		readonly cachedInputTokens?: number;
+	};
+}
+
+export type RuntimeMessagesPurpose =
+	| "main"
+	| "web-fetch"
+	| "web-search"
+	| "count-tokens";
+export interface RuntimeMessagesRequest {
+	readonly resolveCredential?: () => Promise<string>;
+	readonly receipt?: RuntimeMessagesTransportOptions["receipt"];
 }
 
 export interface RuntimeMessagesTransportOptions {
@@ -32,6 +47,10 @@ export interface RuntimeMessagesTransportOptions {
 	readonly effort: string;
 	readonly admit: () => Promise<void>;
 	readonly fetch?: typeof fetch;
+	/** Trusted Driver admission per actual HTTP request, never a native-provided identity. */
+	readonly openRequest?: (
+		purpose: RuntimeMessagesPurpose,
+	) => Promise<RuntimeMessagesRequest>;
 	readonly receipt?: (
 		state: "sent" | "completed" | "failed" | "unknown",
 		endTurn: boolean,
@@ -52,11 +71,27 @@ const failureBody = JSON.stringify({
 		message: "Runtime model request failed",
 	},
 });
-function reject(response: ServerResponse, status = 400) {
+function reject(
+	response: ServerResponse,
+	status = 400,
+	capability?: "web-search" | "web-fetch",
+) {
+	const body = capability
+		? JSON.stringify({
+				type: "error",
+				error: {
+					type: "invalid_request_error",
+					message:
+						capability === "web-search"
+							? "Native WebSearch is unavailable from the approved model endpoint."
+							: "Native WebFetch content processing is unavailable from the approved model endpoint.",
+				},
+			})
+		: failureBody;
 	if (!response.headersSent) {
 		response.writeHead(status, { "content-type": "application/json" });
-		response.end(failureBody);
-	} else response.end(`event: error\ndata: ${failureBody}\n\n`);
+		response.end(body);
+	} else response.end(`event: error\ndata: ${body}\n\n`);
 }
 
 /** One Query, one fixed option. No discovery, routing, retries, or user-supplied upstream headers. */
@@ -71,7 +106,7 @@ export async function openRuntimeMessagesTransport(
 					credential: options.credential,
 				});
 	if (
-		(!access && !options.resolveCredential) ||
+		(!access && !options.resolveCredential && !options.openRequest) ||
 		!["api-key", "bearer"].includes(options.authentication) ||
 		!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(options.model) ||
 		!["low", "medium", "high", "xhigh", "max"].includes(options.effort)
@@ -82,7 +117,7 @@ export async function openRuntimeMessagesTransport(
 	const pending = new Set<Promise<void>>();
 	let closed = false;
 	let admitted = false;
-	let active = false;
+	let active = 0;
 	let failure: "failed" | "unknown" | undefined;
 	const server = createServer((request, response) => {
 		const operation = (async () => {
@@ -104,12 +139,12 @@ export async function openRuntimeMessagesTransport(
 				reject(response);
 				return;
 			}
-			if (active) {
+			if (active >= (options.openRequest ? 4 : 1)) {
 				request.resume();
 				reject(response);
 				return;
 			}
-			active = true;
+			active++;
 			const controller = new AbortController();
 			controllers.add(controller);
 			response.once("close", () => {
@@ -118,6 +153,13 @@ export async function openRuntimeMessagesTransport(
 			let sent = false;
 			let stage: RuntimeMessagesTransportStage = "request";
 			let statusCode: number | undefined;
+			let requestContext: RuntimeMessagesRequest | undefined;
+			let usage: RuntimeMessagesTransportDiagnostic["usage"];
+			const receipt: NonNullable<RuntimeMessagesTransportOptions["receipt"]> = (
+				...args
+			) =>
+				(requestContext?.receipt ?? options.receipt)?.(...args) ??
+				Promise.resolve();
 			const startedAt = Date.now();
 			const diagnostic = (): RuntimeMessagesTransportDiagnostic => {
 				const safeStatusCode =
@@ -128,6 +170,7 @@ export async function openRuntimeMessagesTransport(
 					stage,
 					sent,
 					durationMs: Math.max(0, Date.now() - startedAt),
+					...(usage ? { usage } : {}),
 					...(safeStatusCode === undefined
 						? {}
 						: {
@@ -155,6 +198,52 @@ export async function openRuntimeMessagesTransport(
 					),
 				);
 				const counting = request.url?.includes("/count_tokens");
+				const auxiliary =
+					options.client !== "opencode" &&
+					options.client !== "pi" &&
+					options.openRequest &&
+					body.thinking?.type === "disabled";
+				const purpose: RuntimeMessagesPurpose = counting
+					? "count-tokens"
+					: !auxiliary
+						? "main"
+						: Array.isArray(body.tools) &&
+								body.tools.length === 0 &&
+								body.tool_choice === undefined
+							? "web-fetch"
+							: "web-search";
+				if (
+					purpose !== "web-search" &&
+					Array.isArray(body.tools) &&
+					body.tools.some(
+						(tool: { type?: unknown }) =>
+							typeof tool?.type === "string" &&
+							tool.type.startsWith("web_search"),
+					)
+				)
+					throw new Error();
+				if (
+					purpose === "web-search" &&
+					!(
+						Array.isArray(body.tools) &&
+						body.tools.length === 1 &&
+						body.tools[0]?.type === "web_search_20250305" &&
+						body.tools[0]?.name === "web_search" &&
+						Object.keys(body.tools[0]).every((key) =>
+							[
+								"name",
+								"type",
+								"max_uses",
+								"allowed_domains",
+								"blocked_domains",
+								"user_location",
+							].includes(key),
+						) &&
+						body.tool_choice?.type === "tool" &&
+						body.tool_choice?.name === "web_search"
+					)
+				)
+					throw new Error();
 				if (
 					closed ||
 					controller.signal.aborted ||
@@ -163,7 +252,7 @@ export async function openRuntimeMessagesTransport(
 					(!counting &&
 						(body.stream !== true ||
 							body.output_config?.effort !== options.effort ||
-							body.thinking?.type !== "adaptive"))
+							body.thinking?.type !== (auxiliary ? "disabled" : "adaptive")))
 				)
 					throw new Error();
 				const beta = request.headers["anthropic-beta"];
@@ -180,9 +269,12 @@ export async function openRuntimeMessagesTransport(
 					admitted = true;
 				}
 				if (closed || controller.signal.aborted) throw new Error();
+				requestContext = await options.openRequest?.(purpose);
 				stage = "credential";
-				const credential = options.resolveCredential
-					? await options.resolveCredential()
+				const resolveCredential =
+					requestContext?.resolveCredential ?? options.resolveCredential;
+				const credential = resolveCredential
+					? await resolveCredential()
 					: options.credential;
 				const requestAccess = validateModelAccess({
 					endpoint: options.endpoint,
@@ -205,7 +297,8 @@ export async function openRuntimeMessagesTransport(
 					headers["x-api-key"] = requestAccess.credential;
 				else headers.authorization = `Bearer ${requestAccess.credential}`;
 				stage = "upstream_http";
-				if (!counting) await options.receipt?.("sent", false, diagnostic());
+				if (!counting || options.openRequest)
+					await receipt("sent", false, diagnostic());
 				sent = true;
 				const upstream = await (options.fetch ?? fetch)(
 					`${requestAccess.endpoint.replace(/\/$/, "")}${request.url}`,
@@ -221,9 +314,23 @@ export async function openRuntimeMessagesTransport(
 				if (!upstream.ok) {
 					void upstream.body?.cancel().catch(() => {});
 					statusCode = upstream.status;
-					failure = upstream.status >= 500 ? "unknown" : "failed";
-					await options.receipt?.(failure, false, diagnostic());
-					reject(response);
+					const outcome = upstream.status >= 500 ? "unknown" : "failed";
+					await receipt(outcome, false, diagnostic());
+					// A known auxiliary rejection is an ordinary tool failure. An
+					// uncertain send still seals the entire Query against replay.
+					if (
+						![400, 404, 422].includes(upstream.status) ||
+						purpose === "main" ||
+						purpose === "count-tokens"
+					)
+						failure = outcome;
+					reject(
+						response,
+						400,
+						purpose === "web-search" || purpose === "web-fetch"
+							? purpose
+							: undefined,
+					);
 					return;
 				}
 				if (counting) {
@@ -250,6 +357,8 @@ export async function openRuntimeMessagesTransport(
 					)
 						throw new Error();
 					response.writeHead(200, { "content-type": "application/json" });
+					if (options.openRequest)
+						await receipt("completed", false, diagnostic());
 					response.end(JSON.stringify({ input_tokens: value.input_tokens }));
 					return;
 				}
@@ -273,13 +382,11 @@ export async function openRuntimeMessagesTransport(
 					options.model,
 					[requestAccess.credential, requestAccess.endpoint],
 					controller.signal,
-					async (reason) => {
-						await options.receipt?.(
-							"completed",
-							reason === "end_turn",
-							diagnostic(),
-						);
+					async (reason, receivedUsage) => {
+						usage = receivedUsage;
+						await receipt("completed", reason === "end_turn", diagnostic());
 					},
+					purpose === "web-search",
 				);
 			} catch {
 				if (controller.signal.aborted) stage = "abort";
@@ -288,14 +395,14 @@ export async function openRuntimeMessagesTransport(
 				if (!closed && !failure) failure = sent ? "unknown" : "failed";
 				if (failure) {
 					try {
-						await options.receipt?.(failure, false, diagnostic());
+						await receipt(failure, false, diagnostic());
 					} catch {
 						failure = "unknown";
 					}
 				}
 				reject(response);
 			} finally {
-				active = false;
+				active--;
 				controllers.delete(controller);
 			}
 		})();

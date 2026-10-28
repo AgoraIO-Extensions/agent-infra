@@ -672,3 +672,258 @@ it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
 	},
 	45_000,
 );
+
+it.skipIf(!process.env.OPENCODE_EXECUTABLE)(
+	"executes the native OpenCode fetch and todo catalog with stable tool identities",
+	async () => {
+		const { openMessagesRuntimeDriverConformanceFixture } = await import(
+			"./messages-runtime-driver.test-support.js"
+		);
+		const path = await mkdtemp(join(tmpdir(), "opencode-network-catalog-"));
+		let gets = 0;
+		const server = createServer((_request, response) => {
+			gets++;
+			response.writeHead(200, { "content-type": "text/html" });
+			response.end("<html><body>Synthetic OpenCode web content.</body></html>");
+		});
+		await new Promise<void>((resolve) =>
+			server.listen(0, "127.0.0.1", resolve),
+		);
+		const address = server.address();
+		if (!address || typeof address === "string") throw Error();
+		const fixture = await openMessagesRuntimeDriverConformanceFixture(
+			path,
+			false,
+			"opencode",
+		);
+		try {
+			let ref: string | undefined;
+			for (const [name, input, label] of [
+				[
+					"webfetch",
+					{ url: `http://127.0.0.1:${address.port}/`, format: "text" },
+					"WebFetch",
+				],
+				[
+					"todowrite",
+					{
+						todos: [
+							{
+								content: "Synthetic todo",
+								status: "completed",
+								priority: "medium",
+							},
+						],
+					},
+					"TodoWrite",
+				],
+				["glob", { pattern: "*.missing" }, "Glob"],
+				["grep", { pattern: "synthetic-absent" }, "Grep"],
+			] as const) {
+				fixture.nextTool(name, input);
+				const command = {
+					schemaVersion: 2 as const,
+					kind: "submit-turn" as const,
+					agentId: "agent-a",
+					conversationId: "conversation-a",
+					sessionGeneration: 1,
+					executionId: `execution-${name}`,
+					turnId: `turn-${name}`,
+					operationId: `operation-${name}`,
+					input: { text: "synthetic native catalog", attachments: [] },
+					selection: {
+						schemaVersion: 1 as const,
+						modelOptionId: "model-option-primary",
+						reasoningLevel: "high",
+					},
+					...(ref ? { nativeSessionRef: ref } : {}),
+				};
+				const before = fixture.modelRequests().length;
+				const accepted = await fixture.driver.execute(command);
+				ref = accepted.nativeSessionRef;
+				await vi.waitFor(
+					() => expect(fixture.modelRequests().length).toBe(before + 2),
+					{ timeout: 15000 },
+				);
+				await fixture.completeStopAsCompleted();
+				const events = await fixture.driver.replayEvents(
+					ref,
+					command.executionId,
+				);
+				expect(
+					events
+						.filter(
+							(event) => event.type === "tool" && event.payload.name === label,
+						)
+						.map((event) => (event.type === "tool" ? event.payload.phase : "")),
+				).toEqual(["started", "completed"]);
+				await fixture.restart();
+				expect(
+					await fixture.driver.replayEvents(ref, command.executionId),
+				).toEqual(events);
+				expect(fixture.modelRequests()).toHaveLength(before + 2);
+			}
+			expect(gets).toBe(1);
+		} finally {
+			await fixture.close();
+			server.closeAllConnections();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+	60000,
+);
+
+it.skipIf(!process.env.OPENCODE_EXECUTABLE)(
+	"executes model-selected native apply_patch and rejects foreign destinations",
+	async () => {
+		const { openMessagesRuntimeDriverConformanceFixture } = await import(
+			"./messages-runtime-driver.test-support.js"
+		);
+		const root = await mkdtemp(join(tmpdir(), "opencode-patch-native-"));
+		const fixture = await openMessagesRuntimeDriverConformanceFixture(
+			root,
+			false,
+			"opencode",
+			undefined,
+			"gpt-5",
+		);
+		try {
+			let ref: string | undefined;
+			for (const [index, target] of [
+				"allowed.txt",
+				"../../foreign-patch.txt",
+			].entries()) {
+				fixture.nextTool("apply_patch", {
+					patchText: `*** Begin Patch\n*** Add File: ${target}\n+synthetic patch\n*** End Patch`,
+				});
+				const command = {
+					schemaVersion: 2 as const,
+					kind: "submit-turn" as const,
+					agentId: "agent-a",
+					conversationId: "conversation-a",
+					sessionGeneration: 1,
+					executionId: `patch-${index}`,
+					turnId: `patch-turn-${index}`,
+					operationId: `patch-operation-${index}`,
+					input: { text: "synthetic native patch", attachments: [] },
+					selection: {
+						schemaVersion: 1 as const,
+						modelOptionId: "model-option-primary",
+						reasoningLevel: "high",
+					},
+					...(ref ? { nativeSessionRef: ref } : {}),
+				};
+				const before = fixture.modelRequests().length;
+				const accepted = await fixture.driver.execute(command);
+				ref = accepted.nativeSessionRef;
+				await vi.waitFor(
+					() => expect(fixture.modelRequests().length).toBe(before + 2),
+					{ timeout: 15000 },
+				);
+				await fixture.completeStopAsCompleted();
+				const events = await fixture.driver.replayEvents(
+					ref,
+					command.executionId,
+				);
+				expect(
+					events
+						.filter(
+							(event) =>
+								event.type === "tool" && event.payload.name === "ApplyPatch",
+						)
+						.map((event) => (event.type === "tool" ? event.payload.phase : "")),
+				).toEqual(["started", index === 0 ? "completed" : "failed"]);
+				if (index === 0)
+					expect(
+						await readFile(join(root, ref, "workspace/allowed.txt"), "utf8"),
+					).toContain("synthetic patch");
+				else
+					await expect(
+						readFile(join(root, "foreign-patch.txt")),
+					).rejects.toThrow();
+			}
+		} finally {
+			await fixture.close();
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+	45000,
+);
+
+it.skipIf(!process.env.OPENCODE_EXECUTABLE)(
+	"executes fixed anonymous Exa search without forwarding native credentials",
+	async () => {
+		const { nativeNetworkFixture } = await import(
+			"./native-network.test-support.js"
+		);
+		const processModule = await import("./acp-process.js");
+		const { openMessagesRuntimeDriverConformanceFixture } = await import(
+			"./messages-runtime-driver.test-support.js"
+		);
+		const network = await nativeNetworkFixture();
+		const original = processModule.spawnAcpProcess;
+		const spawn = vi
+			.spyOn(processModule, "spawnAcpProcess")
+			.mockImplementation((directory, cwd, launch) =>
+				original(directory, cwd, {
+					...launch,
+					env: { ...launch.env, ...network.env },
+				}),
+			);
+		const path = await mkdtemp(join(tmpdir(), "opencode-search-native-"));
+		const fixture = await openMessagesRuntimeDriverConformanceFixture(
+			path,
+			false,
+			"opencode",
+		);
+		try {
+			fixture.nextTool("websearch", { query: "synthetic native search" });
+			const command = {
+				schemaVersion: 2 as const,
+				kind: "submit-turn" as const,
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "search-execution",
+				turnId: "search-turn",
+				operationId: "search-operation",
+				input: { text: "synthetic search", attachments: [] },
+				selection: {
+					schemaVersion: 1 as const,
+					modelOptionId: "model-option-primary",
+					reasoningLevel: "high",
+				},
+			};
+			const accepted = await fixture.driver.execute(command);
+			await vi.waitFor(() => expect(fixture.modelRequests()).toHaveLength(2), {
+				timeout: 15000,
+			});
+			expect(JSON.stringify(fixture.modelRequests()[1]?.messages)).toContain(
+				"Synthetic anonymous Exa search result",
+			);
+			await fixture.completeStopAsCompleted();
+			expect(network.observed).toEqual([
+				{ host: "mcp.exa.ai", domainCheck: false, credential: false },
+			]);
+			const events = await fixture.driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			expect(
+				events
+					.filter(
+						(event) =>
+							event.type === "tool" && event.payload.name === "WebSearch",
+					)
+					.map((event) => (event.type === "tool" ? event.payload.phase : "")),
+			).toEqual(["started", "completed"]);
+		} finally {
+			await fixture.close();
+			spawn.mockRestore();
+			await network.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+	30000,
+);

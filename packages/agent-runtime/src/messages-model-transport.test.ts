@@ -659,3 +659,270 @@ it("refreshes the OpenCode execution key when a native ACP session is reused", a
 		await transport.close();
 	}
 });
+
+it.each(["allowed", "no-permit", "intent-failed", "revoked", "unknown"])(
+	"gates each auxiliary request before upstream send: %s",
+	async (scenario) => {
+		const order: string[] = [];
+		let sends = 0;
+		const transport = await openRuntimeMessagesTransport({
+			endpoint: "https://model.example.test",
+			credential: "synthetic-provider-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			admit: async () => {},
+			openRequest: async (purpose) => {
+				order.push(purpose);
+				if (scenario === "no-permit" || scenario === "intent-failed")
+					throw Error();
+				order.push("intent");
+				return {
+					resolveCredential: async () => {
+						order.push("current-key");
+						if (scenario === "revoked") throw Error();
+						return "synthetic-provider-credential";
+					},
+					receipt: async (phase, _end, diagnostic) => {
+						order.push(phase);
+						if (phase === "completed")
+							expect(diagnostic?.usage).toEqual({
+								inputTokens: 10,
+								outputTokens: 2,
+							});
+					},
+				};
+			},
+			fetch: async () => {
+				sends++;
+				order.push("fetch");
+				if (scenario === "unknown") throw Error();
+				return new Response(messages(["synthetic auxiliary answer"]), {
+					headers: { "content-type": "text/event-stream" },
+				});
+			},
+		});
+		try {
+			const invoke = () =>
+				fetch(transport.modelAccess.endpoint + "/v1/messages", {
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${transport.modelAccess.credential}`,
+					},
+					body: JSON.stringify({
+						model: "claude-opus-5",
+						messages: [],
+						stream: true,
+						output_config: { effort: "high" },
+						thinking: { type: "disabled" },
+						tools: [],
+					}),
+				});
+			const response = await invoke();
+			await response.text();
+			if (scenario === "allowed") {
+				expect(sends).toBe(1);
+				expect(order).toEqual([
+					"web-fetch",
+					"intent",
+					"current-key",
+					"sent",
+					"fetch",
+					"completed",
+				]);
+			} else if (scenario === "unknown") {
+				expect(sends).toBe(1);
+				expect(transport.failure()).toBe("unknown");
+				await (await invoke()).text();
+				expect(sends).toBe(1);
+			} else {
+				expect(sends).toBe(0);
+				expect(transport.failure()).toBe("failed");
+			}
+		} finally {
+			await transport.close();
+		}
+	},
+);
+
+it.each([
+	"valid",
+	"foreign-id",
+	"truncated",
+	"credential",
+	"unexpected-block",
+	"provider-unavailable",
+	"unknown-provider-error",
+])(
+	"validates the exact provider search response lifecycle: %s",
+	async (scenario) => {
+		const base = messages(["search result"]);
+		const prefix = base.slice(0, base.indexOf("event: content_block_start"));
+		const resultId =
+			scenario === "foreign-id" ? "srvtoolu_foreign" : "srvtoolu_search";
+		const events = [
+			{
+				type: "content_block_start",
+				index: 0,
+				content_block: {
+					type: "server_tool_use",
+					id: "srvtoolu_search",
+					name: scenario === "unexpected-block" ? "other" : "web_search",
+					input: {},
+				},
+			},
+			{
+				type: "content_block_delta",
+				index: 0,
+				delta: {
+					type: "input_json_delta",
+					partial_json: '{"query":"synthetic"}',
+				},
+			},
+			{ type: "content_block_stop", index: 0 },
+			{
+				type: "content_block_start",
+				index: 1,
+				content_block: {
+					type: "web_search_tool_result",
+					tool_use_id: resultId,
+					content: [
+						{
+							type: "web_search_result",
+							url: "https://fixture.invalid",
+							title:
+								scenario === "credential"
+									? "synthetic-provider-credential"
+									: "synthetic",
+							encrypted_content: "encrypted",
+						},
+					],
+				},
+			},
+			{ type: "content_block_stop", index: 1 },
+			{
+				type: "message_delta",
+				delta: { stop_reason: "end_turn", stop_sequence: null },
+				usage: { output_tokens: 3 },
+			},
+			{ type: "message_stop" },
+		];
+		if (
+			scenario === "provider-unavailable" ||
+			scenario === "unknown-provider-error"
+		) {
+			const result = events[3] as { content_block: { content: unknown } };
+			result.content_block.content = {
+				type: "web_search_tool_result_error",
+				error_code:
+					scenario === "provider-unavailable" ? "unavailable" : "arbitrary",
+			};
+		}
+		let stream =
+			prefix +
+			events
+				.map(
+					(event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+				)
+				.join("");
+		if (scenario === "truncated")
+			stream = stream.slice(0, stream.lastIndexOf("event: message_stop"));
+		const transport = await openRuntimeMessagesTransport({
+			endpoint: "https://model.example.test",
+			credential: "synthetic-provider-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			admit: async () => {},
+			openRequest: async (purpose) => {
+				expect(purpose).toBe("web-search");
+				return {};
+			},
+			fetch: async () =>
+				new Response(stream, {
+					headers: { "content-type": "text/event-stream" },
+				}),
+		});
+		try {
+			const response = await fetch(
+				transport.modelAccess.endpoint + "/v1/messages",
+				{
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${transport.modelAccess.credential}`,
+					},
+					body: JSON.stringify({
+						model: "claude-opus-5",
+						messages: [],
+						stream: true,
+						output_config: { effort: "high" },
+						thinking: { type: "disabled" },
+						tools: [{ type: "web_search_20250305", name: "web_search" }],
+						tool_choice: { type: "tool", name: "web_search" },
+					}),
+				},
+			);
+			const text = await response.text();
+			expect(text).not.toContain("synthetic-provider-credential");
+			if (scenario === "valid" || scenario === "provider-unavailable") {
+				expect(text).toContain("web_search_tool_result");
+				expect(transport.failure()).toBeUndefined();
+			} else {
+				expect(transport.failure()).toBe("unknown");
+				expect(text).not.toContain("event: message_stop");
+			}
+		} finally {
+			await transport.close();
+		}
+	},
+);
+
+it.each([401, 403, 429, 500])(
+	"seals an auxiliary authorization or uncertain provider failure without fallback: %s",
+	async (status) => {
+		let sends = 0;
+		const receipts: string[] = [];
+		const transport = await openRuntimeMessagesTransport({
+			endpoint: "https://model.example.test",
+			credential: "synthetic-provider-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			admit: async () => {},
+			openRequest: async () => ({
+				receipt: async (phase) => {
+					receipts.push(phase);
+				},
+			}),
+			fetch: async () => {
+				sends++;
+				return new Response("private-provider-body", { status });
+			},
+		});
+		try {
+			const send = (thinking: string) =>
+				fetch(transport.modelAccess.endpoint + "/v1/messages", {
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${transport.modelAccess.credential}`,
+					},
+					body: JSON.stringify({
+						model: "claude-opus-5",
+						stream: true,
+						messages: [],
+						thinking: { type: thinking },
+						output_config: { effort: "high" },
+						tools: [],
+					}),
+				});
+			const response = await send("disabled");
+			expect(await response.text()).not.toContain("private-provider-body");
+			await (await send("adaptive")).text();
+			expect(sends).toBe(1);
+			expect(receipts).toEqual(["sent", status >= 500 ? "unknown" : "failed"]);
+			expect(transport.failure()).toBe(status >= 500 ? "unknown" : "failed");
+		} finally {
+			await transport.close();
+		}
+	},
+);

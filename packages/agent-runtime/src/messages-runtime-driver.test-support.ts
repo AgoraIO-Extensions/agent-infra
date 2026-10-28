@@ -18,6 +18,7 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 	authorizeModelAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>,
+	primaryModel = "claude-opus-5",
 ) {
 	let loseResult = loseFirstResult;
 	let pendingTool: { name: string; input: Record<string, unknown> } | undefined;
@@ -42,7 +43,7 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 					request.headers.authorization !==
 						`Bearer synthetic-${id}-credential` ||
 					value.model !==
-						(id === "primary" ? "claude-opus-5" : "claude-sonnet-4-6")
+						(id === "primary" ? primaryModel : "claude-sonnet-4-6")
 				) {
 					response.writeHead(403).end();
 					return;
@@ -51,7 +52,7 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 				selections.push({
 					schemaVersion: 1,
 					modelOptionId:
-						value.model === "claude-opus-5"
+						value.model === primaryModel
 							? "model-option-primary"
 							: "model-option-alternate",
 					reasoningLevel: value.output_config.effort,
@@ -130,7 +131,7 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 		defaultReasoningLevel: "high",
 		modelOptions: ["primary", "alternate"].map((id, index) => ({
 			modelOptionId: `model-option-${id}`,
-			model: id === "primary" ? "claude-opus-5" : "claude-sonnet-4-6",
+			model: id === "primary" ? primaryModel : "claude-sonnet-4-6",
 			reasoningLevels: ["low", "high"],
 			endpoint: `http://127.0.0.1:${ports[index]}`,
 			...(authorizeModelAction
