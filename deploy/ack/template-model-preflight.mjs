@@ -34,6 +34,7 @@ export function validateTemplatePreflightJob(value) {
 		"modelId", "modelOptionId", "reasoningLevel", "configurationRevision", "runtimeConfigVersion",
 		"approvedRelayOrigin", "grantPrivateKeyFile", "runtimeServiceTokenFile", "relayKeyFile",
 		"expectedResourceLimits", "expectedNodePrefix", "expectedReply", "placement", "imagePullSecret",
+		"podReadyTimeoutSeconds",
 	]);
 	if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error("JOB_UNBOUNDED");
 	if (
@@ -59,7 +60,10 @@ export function validateTemplatePreflightJob(value) {
 		throw new Error("RELAY_ORIGIN_INVALID");
 	const nodeSelector = value.placement?.nodeSelector;
 	if (!nodeSelector || nodeSelector.type !== "virtual-kubelet") throw new Error("ECI_PLACEMENT_REQUIRED");
-	return value;
+	const podReadyTimeoutSeconds = value.podReadyTimeoutSeconds ?? 900;
+	if (!Number.isSafeInteger(podReadyTimeoutSeconds) || podReadyTimeoutSeconds < 60 || podReadyTimeoutSeconds > 1800 || value.podReadyTimeoutSeconds === null)
+		throw new Error("POD_READY_TIMEOUT_INVALID");
+	return { ...value, podReadyTimeoutSeconds };
 }
 
 async function waitForPort(port, process) {
@@ -168,7 +172,28 @@ async function main(inputPath) {
 		const secret = run([...kubeArgs, "create", "secret", "generic", secretName, `--from-file=service-token=${job.runtimeServiceTokenFile}`, `--from-file=attestation=${attestationFile}`, "--dry-run=client", "-o", "json"]);
 		run([...kubeArgs, "apply", "-f", "-"], secret);
 		run([...kubeArgs, "create", "-f", "-"], JSON.stringify(pod));
-		run([...kubeArgs, "wait", "--for=condition=Ready", `pod/${name}`, "--timeout=180s"]);
+		try {
+			run([...kubeArgs, "wait", "--for=condition=Ready", `pod/${name}`, `--timeout=${job.podReadyTimeoutSeconds}s`]);
+		} catch {
+			const phases = new Set(["Pending", "Running", "Succeeded", "Failed", "Unknown"]);
+			const reasons = new Set(["ContainerCreating", "PodInitializing", "ErrImagePull", "ImagePullBackOff", "CrashLoopBackOff", "CreateContainerConfigError", "CreateContainerError", "RunContainerError", "InvalidImageName"]);
+			let observation = { readback: "unavailable", phase: null, waitingReasons: [] };
+			try {
+				const current = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
+				if (current.metadata?.name === name && current.metadata.labels?.["agent-infra.validation-owner"] === owner &&
+					current.spec?.containers?.length === 1 && current.spec.containers[0].image === job.imageReference) {
+					observation = { readback: "matched", phase: phases.has(current.status?.phase) ? current.status.phase : "Unknown",
+						waitingReasons: [...new Set((current.status?.containerStatuses ?? []).slice(0, 4).flatMap((container) =>
+							container.state?.waiting ? [reasons.has(container.state.waiting.reason) ? container.state.waiting.reason : "Unknown"] : []))] };
+				} else observation.readback = "identity-mismatch";
+			} catch {}
+			await writeFile(join(job.outputDirectory, "pod-readiness-failure.json"), JSON.stringify({
+				schemaVersion: 1, kind: "ack-template-preflight-failure", stage: "pod-ready", templateId: job.templateId,
+				sourceSha: job.sourceCommit, imageDigest: job.imageDigest, podReadyTimeoutSeconds: job.podReadyTimeoutSeconds,
+				...observation, modelCallAttempted: false,
+			}) + "\n", { mode: 0o600, flag: "wx" });
+			throw new Error("TEMPLATE_POD_READINESS_FAILED");
+		}
 		const port = 35000 + Math.floor(Math.random() * 1000);
 		portForward = spawn("kubectl", [...kubeArgs, "port-forward", `pod/${name}`, `${port}:3003`], { stdio: ["ignore", "pipe", "pipe"] });
 		await waitForPort(port, portForward);
