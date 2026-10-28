@@ -365,6 +365,12 @@ export function createEvaluationExperimentsV1(options: {
 						!isDeepStrictEqual(original.principal, source.principal)
 					)
 						throw new EvaluationDataErrorV1("denied");
+					const agentIds = [...new Set(variants.map((v) => v.agentId))].sort();
+					await tx.lockAgents(agentIds);
+					for (const agentId of agentIds)
+						if (!(await tx.agentAuthority(agentId)))
+							throw new EvaluationDataErrorV1("denied");
+					await check();
 					return original;
 				}
 				const experiment: EvaluationExperimentV1 = {

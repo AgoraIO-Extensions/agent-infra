@@ -299,6 +299,23 @@ it("accepts isolated original Tasks and default Key in the same PG transaction w
 	expect(
 		(await core.create(request("runner"), key, command)).experimentId,
 	).toBe(experiment.experimentId);
+	await sql`update platform.agent_principal_grants set revoked_at=clock_timestamp() where principal_type='user' and principal_id='runner' and agent_id=${configuration.agentId} and grant_type='use'`;
+	try {
+		await expect(
+			core.create(request("runner"), key, command),
+		).rejects.toMatchObject({ code: "denied" });
+	} finally {
+		await sql`update platform.agent_principal_grants set revoked_at=null where principal_type='user' and principal_id='runner' and agent_id=${configuration.agentId} and grant_type='use'`;
+	}
+	expect(
+		(await core.create(request("runner"), key, command)).experimentId,
+	).toBe(experiment.experimentId);
+	await expect(
+		core.create(request("runner"), key, {
+			...command,
+			variantIds: [...command.variantIds].reverse(),
+		}),
+	).rejects.toMatchObject({ code: "conflict" });
 	expect(
 		await sql`select id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId}`,
 	).toHaveLength(2);
@@ -384,9 +401,15 @@ it("preserves application subject and eval source for the default Agent Key", as
 		await sql`update platform.agent_principal_grants set revoked_at=clock_timestamp() where principal_type='application' and principal_id='runner' and agent_id=${configuration.agentId} and grant_type='use'`;
 		try {
 			expect((await metadata()).status).toBe(404);
+			expect((await send()).status).toBe(404);
 		} finally {
 			await sql`update platform.agent_principal_grants set revoked_at=null where principal_type='application' and principal_id='runner' and agent_id=${configuration.agentId} and grant_type='use'`;
 		}
+		const restored = await send();
+		expect(restored.status).toBe(201);
+		expect(EvaluationExperimentV1Schema.parse(await restored.json())).toEqual(
+			experiment,
+		);
 	} finally {
 		await new Promise<void>((resolve, reject) =>
 			server.close((error) => (error ? reject(error) : resolve())),
