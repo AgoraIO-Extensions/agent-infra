@@ -137,7 +137,7 @@ function parseReport(
 		policyRevision: report.policyRevision as string,
 		packageDigest: report.packageDigest as string,
 		manifestDigest: report.manifestDigest as string,
-		issuedAt: report.issuedAt as string,
+		issuedAt: new Date(report.issuedAt as string).toISOString(),
 		coverage: report.coverage as SkillSpectorScanReportV1["coverage"],
 		findingCount: parsedFindings.length,
 		findings: Object.freeze(parsedFindings),
@@ -149,7 +149,116 @@ function parseReport(
 	});
 }
 
-/** Execute a pinned SkillSpector adapter. The adapter receives only a staged ZIP and metadata. */
+function record(value: unknown): Record<string, unknown> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
+	return value as Record<string, unknown>;
+}
+
+/** Native 2.x reports describe static coverage; they cannot attest a dynamic probe. */
+function parseNativeReport(
+	value: unknown,
+	binding: Parameters<typeof parseReport>[1],
+	files: readonly { readonly path: string }[],
+): SkillSpectorScanReportV1 {
+	const report = record(value);
+	const metadata = record(report.metadata);
+	const skill = record(report.skill);
+	const coverage = record(report.analysis_completeness);
+	const empty = (value: unknown) => Array.isArray(value) && value.length === 0;
+	if (
+		metadata.skillspector_version !== binding.engineVersion ||
+		metadata.llm_requested !== false ||
+		report.execution_successful !== true ||
+		coverage.execution_successful !== true ||
+		coverage.is_complete !== true ||
+		coverage.status !== "complete" ||
+		coverage.coverage_percent !== 100 ||
+		coverage.total_components !== files.length ||
+		coverage.scanned_components !== files.length ||
+		coverage.fully_inspected_files !== files.length ||
+		coverage.partially_inspected_files !== 0 ||
+		coverage.entirely_uninspected_files !== 0 ||
+		!empty(coverage.ledger_exceptions) ||
+		!empty(coverage.scope_exclusions) ||
+		!empty(coverage.limitations) ||
+		report.suppressed_count !== 0 ||
+		!empty(report.suppressed) ||
+		!Array.isArray(report.issues) ||
+		coverage.findings_before_filtering !== report.issues.length ||
+		coverage.findings_after_filtering !== report.issues.length ||
+		!Array.isArray(report.components) ||
+		!Array.isArray(coverage.analyzer_statuses) ||
+		coverage.analyzer_statuses.length === 0
+	)
+		invalid();
+	const paths = report.components.map((component) => record(component).path);
+	if (
+		paths.length !== files.length ||
+		new Set(paths).size !== files.length ||
+		files.some((file) => !paths.includes(file.path))
+	)
+		invalid();
+	const ids = new Set<string>();
+	let completed = 0;
+	for (const item of coverage.analyzer_statuses) {
+		const analyzer = record(item);
+		const id = analyzer.analyzer_id;
+		const planned = analyzer.planned_work;
+		if (
+			typeof id !== "string" ||
+			!id ||
+			ids.has(id) ||
+			!Number.isSafeInteger(planned) ||
+			(planned as number) < 0 ||
+			analyzer.completed !== planned ||
+			["partial", "skipped", "failed", "unaccounted"].some(
+				(key) => analyzer[key] !== 0,
+			)
+		)
+			invalid();
+		ids.add(id);
+		if (analyzer.status === "completed" && (planned as number) > 0) completed++;
+		else if (
+			planned !== 0 ||
+			!(
+				analyzer.status === "not_applicable" ||
+				(analyzer.status === "disabled" && id.startsWith("semantic_"))
+			)
+		)
+			invalid();
+	}
+	if (!completed) invalid();
+	const findings = report.issues.map((value) => {
+		const finding = record(value);
+		if (
+			typeof finding.id !== "string" ||
+			!/^[A-Za-z0-9_-]{1,128}$/.test(finding.id) ||
+			typeof finding.severity !== "string" ||
+			!Object.hasOwn(severityRank, finding.severity.toLowerCase()) ||
+			typeof finding.category !== "string" ||
+			!finding.category
+		)
+			invalid();
+		return {
+			code: finding.id,
+			severity: finding.severity.toLowerCase(),
+			category: finding.category === "Supply Chain" ? "supply_chain" : "static",
+		};
+	});
+	return parseReport(
+		{
+			schemaVersion: 1,
+			...binding,
+			issuedAt: skill.scanned_at,
+			coverage: "complete",
+			findings,
+			dynamicProbe: { required: false, completed: false, violations: [] },
+		},
+		binding,
+	);
+}
+
+/** Execute the pinned native SkillSpector CLI using static analysis only. */
 export function createSkillSpectorAdapterV1(
 	options: Readonly<{
 		executable: string;
@@ -195,38 +304,55 @@ export function createSkillSpectorAdapterV1(
 					mode: 0o600,
 				});
 				if (sha(input.archiveBytes) !== input.packageDigest) invalid();
+				const prepared = prepareSkillPackageV1({
+					archiveBytes: input.archiveBytes,
+					name: "scanner-input",
+					version: "1.0.0",
+				});
+				let findingsExit = false;
 				const result = await execFile(
 					options.executable,
-					[
-						"scan",
-						"--archive",
-						archive,
-						"--scanner-id",
-						options.scannerId,
-						"--engine-version",
-						options.engineVersion,
-						"--ruleset-digest",
-						options.rulesetDigest,
-						"--package-digest",
-						input.packageDigest,
-						"--manifest-digest",
-						input.manifestDigest,
-						"--policy-revision",
-						input.policyRevision,
-					],
+					["scan", archive, "--no-llm", "--format", "json"],
 					{
 						timeout: options.timeoutMs,
 						maxBuffer: 2_000_000,
 						encoding: "utf8",
+						cwd: staging,
+						env: {
+							...process.env,
+							LANGSMITH_TRACING: "false",
+							LANGCHAIN_TRACING_V2: "false",
+						},
 					},
-				);
-				if (result.stderr || !result.stdout.trim()) invalid();
-				return parseReport(JSON.parse(result.stdout), {
-					...input,
-					scannerId: options.scannerId,
-					engineVersion: options.engineVersion,
-					rulesetDigest: options.rulesetDigest,
+				).catch((error: unknown) => {
+					// Exit 1 is a completed scan with findings; platform policy still decides admission.
+					const failure = record(error);
+					if (
+						failure.code !== 1 ||
+						failure.killed ||
+						failure.signal ||
+						typeof failure.stdout !== "string" ||
+						typeof failure.stderr !== "string"
+					)
+						throw error;
+					findingsExit = true;
+					return { stdout: failure.stdout, stderr: failure.stderr };
 				});
+				if (result.stderr || !result.stdout.trim()) invalid();
+				const report = parseNativeReport(
+					JSON.parse(result.stdout),
+					{
+						packageDigest: input.packageDigest,
+						manifestDigest: input.manifestDigest,
+						policyRevision: input.policyRevision,
+						scannerId: options.scannerId,
+						engineVersion: options.engineVersion,
+						rulesetDigest: options.rulesetDigest,
+					},
+					prepared.manifest.files,
+				);
+				if (findingsExit && report.findingCount === 0) invalid();
+				return report;
 			} finally {
 				await rm(staging, { recursive: true, force: true }).catch(
 					() => undefined,
