@@ -471,7 +471,19 @@ NODE
 	while IFS= read -r config; do
 		[[ -n "$config" ]] || continue
 		[[ -r "$config" ]] || die "custom Agent config is not readable: $config"
-		if ! node --experimental-strip-types "$script" "$config" >"$evidence_dir/custom-agent-$index.json"; then
+		local bound_entry
+		bound_entry=$(node - "$config" <<'NODE'
+const fs = require("node:fs");
+const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+process.stdout.write(value.requestName === undefined ? "false" : "true");
+NODE
+)
+		if [[ "$bound_entry" == true ]]; then
+			if ! node --experimental-strip-types "$repo_root/deploy/ack/self-managed-entry.ts" "$config" \
+				"$ACK_AGENT_REQUESTS_FILE" "$ACK_AGENT_STATE_DIR" "$evidence_dir" "$source_sha" >"$evidence_dir/custom-agent-$index.json"; then
+				die "bound self-managed entry validation failed"
+			fi
+		elif ! node --experimental-strip-types "$script" "$config" >"$evidence_dir/custom-agent-$index.json"; then
 			die "custom Agent probe failed: $config"
 		fi
 		if ! node - "$evidence_dir/custom-agent-$index.json" <<'NODE'
@@ -492,6 +504,8 @@ const hash = value => require("node:crypto").createHash("sha256").update(value).
 const images = new Set(workloads.resources.flatMap(resource => resource.images.map(image => image.digestHash)));
 for (const file of configs.split("\n").filter(Boolean)) {
 		const input = JSON.parse(fs.readFileSync(file, "utf8"));
+		// Bound entry probes already verify the exact Agent's complete workload and imageIDs.
+		if (input.requestName !== undefined) continue;
 		if (!/^sha256:[a-f0-9]{64}$/.test(input.imageDigest) || !images.has(hash(input.imageDigest))) process.exit(1);
 }
 NODE

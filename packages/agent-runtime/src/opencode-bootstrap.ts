@@ -27,6 +27,11 @@ import {
 	nativeShellLauncher,
 } from "./native-shell-admission.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
+import {
+	openCodeFetchAllowed,
+	openCodePatchAllowed,
+	openCodeToolName,
+} from "./opencode-tools.js";
 import { SANDBOX_FILE_INSTRUCTIONS_V1 } from "./sandbox-file-instructions.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
@@ -52,10 +57,14 @@ export async function writeOpenCodePlatformInstructions(
 	const target = join(root, "instructions.md");
 	const temporary = join(root, `.instructions-${randomUUID()}.tmp`);
 	try {
-		await writeFile(temporary, `${SANDBOX_FILE_INSTRUCTIONS_V1}\n`, {
-			flag: "wx",
-			mode: 0o400,
-		});
+		await writeFile(
+			temporary,
+			`${SANDBOX_FILE_INSTRUCTIONS_V1}\nNative websearch uses the fixed anonymous Exa endpoint only when deployment egress permits it. If that endpoint is unavailable, report the capability as unavailable; do not substitute account credentials.\n`,
+			{
+				flag: "wx",
+				mode: 0o400,
+			},
+		);
 		await rename(temporary, target);
 	} catch (error) {
 		await rm(temporary, { force: true }).catch(() => {});
@@ -314,6 +323,9 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 						edit: "ask",
 						glob: "ask",
 						grep: "ask",
+						webfetch: "ask",
+						websearch: "ask",
+						todowrite: "ask",
 						...(shellAvailable ? { bash: "ask" } : {}),
 					},
 					autoupdate: false,
@@ -344,11 +356,51 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 							: {}),
 						OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
 						OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+						OPENCODE_ENABLE_EXA: "true",
+						OPENCODE_WEBSEARCH_PROVIDER: "exa",
 						OPENCODE_DISABLE_AUTOUPDATE: "true",
 						OPENCODE_DISABLE_MODELS_FETCH: "true",
 						OPENCODE_DISABLE_PRUNE: "true",
 					},
 					authorize: async (tool) => {
+						const identity = openCodeToolName(tool);
+						if (identity === "WebSearch")
+							return (
+								!!tool.rawInput &&
+								typeof tool.rawInput === "object" &&
+								"query" in tool.rawInput &&
+								typeof tool.rawInput.query === "string" &&
+								tool.rawInput.query.length <= 8192 &&
+								Object.keys(tool.rawInput).every((key) =>
+									[
+										"query",
+										"numResults",
+										"livecrawl",
+										"type",
+										"contextMaxCharacters",
+									].includes(key),
+								)
+							);
+						if (identity === "WebFetch")
+							return openCodeFetchAllowed(tool.rawInput);
+						if (identity === "TodoWrite")
+							return (
+								!!tool.rawInput &&
+								typeof tool.rawInput === "object" &&
+								"todos" in tool.rawInput &&
+								Array.isArray(tool.rawInput.todos) &&
+								tool.rawInput.todos.length <= 100
+							);
+						if (identity === "ApplyPatch")
+							return (
+								!!tool.rawInput &&
+								typeof tool.rawInput === "object" &&
+								"patchText" in tool.rawInput &&
+								(await openCodePatchAllowed(
+									join(directory, "workspace"),
+									tool.rawInput.patchText,
+								))
+							);
 						if (tool.kind === "execute") {
 							return (
 								shellAvailable &&

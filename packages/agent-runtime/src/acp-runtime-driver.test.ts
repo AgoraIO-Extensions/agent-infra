@@ -2055,3 +2055,28 @@ it("gives an OpenCode peer without image input only the manifest and keeps the w
 		await rm(path, { recursive: true, force: true });
 	}
 });
+
+it.each([false, true])(
+	"keeps native catalog identity trusted and per call across interleaved updates: %s",
+	async (trusted) => {
+		const { events } = await runAcpResultTurn(
+			"catalog-tools",
+			trusted ? { nativeCommandMode: "opencode" } : {},
+		);
+		const names = trusted
+			? ["WebFetch", "Glob", "Grep", "TodoWrite", "ApplyPatch"]
+			: ["unavailable", "unavailable", "unavailable", "unavailable", "Edit"];
+		expect(
+			events
+				.filter((event) => event.type === "tool")
+				.map((event) =>
+					event.type === "tool"
+						? [event.payload.name, event.payload.phase]
+						: [],
+				),
+		).toEqual([
+			...names.map((name) => [name, "started"]),
+			...names.toReversed().map((name) => [name, "completed"]),
+		]);
+	},
+);

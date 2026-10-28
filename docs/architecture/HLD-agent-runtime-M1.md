@@ -739,9 +739,25 @@ before hook 提供 callID 本身不证明其与实际请求的关联；同参数
 | Driver | 启用的原生工具 | 审批与权限应答 | 工具事实来源 |
 | --- | --- | --- | --- |
 | Codex | 官方 lane 放行原生工具的声明与事件：命令执行、补丁与文件变更、列举与搜索、原生 Skill；供应商托管的 `web_search` 不作为 Sandbox 原生工具，随模型请求执行时按平台中介调用路径保存 intent、授权及结果或 unknown | 部署配置固定为不发起审批；若仍收到审批类 server request，只可能是越出 Sandbox 的提权请求，一律拒绝，不判为协议无效；`request_user_input` 回 JSON-RPC 错误 | 原生 item 的开始与完成通知（命令执行、文件变更、搜索、MCP 调用等）；`web_search` 使用模型调用事实 |
-| Claude | 固定 SDK 的 built-in 工具，包括 `Bash`、`Glob`、`Grep`、`Read`、`Write`、`Edit`；网络工具随出站策略与获准端点 | `canUseTool`/PreToolUse 只拒绝越出本 Conversation 文件边界的路径 | SDK 的工具调用与工具结果消息 |
-| OpenCode（ACP） | 固定 release 的 built-in 工具，在原生进程内执行；平台不提供 ACP `fs`/`terminal` client 能力 | `session/request_permission` 对 Sandbox 内操作选择一次性允许，越界拒绝 | ACP `tool_call` 与 `tool_call_update` 的开始与终态 |
-| Pi | 固定版本 `--tools` 中的 built-in 工具，包括 `read`、`write`、`edit`、`bash` | 工具策略只拒绝越出本 Conversation 文件边界的路径 | `tool_execution_start` 与 `tool_execution_end` 事件 |
+| Claude SDK0.3.246/native2.1.246 | `Read`、`Write`、`Edit`、`Glob`、`Grep`、`TodoWrite`；`Bash` 通过固定 Landlock 子边界准入；`WebFetch`/`WebSearch` 沿下述独立模型传输路径启用 | 文件路径与 shell 准入沿既有策略；WebFetch 的直接 GET 受部署出站约束，内容处理辅助模型与 WebSearch 的 provider 请求都须独立模型准入 | 本地工具由已确认原生回报形成 `sandbox-local` 事实；网络工具不能借该标记跳过额外模型 intent |
+| OpenCode1.19.0（ACP） | `read`、`edit`、`write`、`glob`、`grep`、固定子边界 `bash`；`webfetch`、匿名 Exa `websearch`、`todowrite` 与 search 事实；模型 id 含 `gpt-` 且非 `oss`/`gpt-4` 时用 `apply_patch` 代替 edit/write | 平台不提供 ACP `fs`/`terminal`；按实际原生 tool identity 与参数校验批准本 Conversation 操作，patch 的全部路径都须通过；webfetch 是直接 GET，不携带外部账号凭证 | ACP `tool_call`/`tool_call_update` 按 call ID 保留身份与终态；trusted release 的 search/todo/fetch/patch 不显示为 unavailable |
+| Pi0.99.0 | `read`、`write`、`edit`、`find`、`grep`、`ls`；通过准入的扩展 `sandbox_bash` 复用原生 Bash。当前 Linux 镜像不含 PowerShell | 固定工作区文件策略与 Landlock 子进程边界；扩展缺失不得回退 builtin Bash | `tool_execution_start`/`tool_execution_end`，显示实际固定工具身份 |
+
+网络工具与模型接线（#3664）按以下条件交付，不能仅增加 allowlist：
+
+- Claude `WebFetch` 的原生抓取和重定向使用部署批准的网络；其内容处理辅助模型固定到本 Execution
+  已批准的当前模型，不采用原生未批准的默认小模型。固定 native 使用 disabled thinking、当前 effort 与同一已批准模型；该 profile 由受控 native fixture 核对。
+- Claude `WebSearch` 使用获准 Messages endpoint 的原生 server-search 能力；请求与结果块严格验证，
+  不支持该能力的 endpoint 给出受限的不可用原因，不转换成另一个搜索服务或个人凭证。
+- 主请求、后续模型回合和辅助请求分别绑定 operation/attempt、当前 Execution Key 与实际模型；
+  每个发送前保存 intent 并核对当前授权，用量取该响应本身，缺失不补零。原生重试不能清除已发送
+  unknown 或换新身份重放。正文只留业务流，事实只保存关联、阶段、受限失败码与可获计量。
+- OpenCode `websearch` 固定使用该 release 的匿名 Exa 路径 `https://mcp.exa.ai/mcp`；镜像装配只开启
+  这一固定原生 provider，不读取宿主 `EXA_API_KEY`、`PARALLEL_API_KEY`，也不随机切换目标。
+  是否可达由现有部署批准的出网策略决定；默认策略未批准时保持网络拒绝，工具明确报告不可用。
+  该接线不增加网络许可、账号授权或第二套策略开关。
+- 原生 Skill 继续沿已验证 Applied generation 接口，不接管 #3553。需要额外模型的 task/sub-agent、
+  当前未部署的 Linux PowerShell，以及未经验证的 LSP/question 功能不凭导出目录自动启用。
 
 - 凭证：模型传输 token、Connection/MCP/Browser token 和 `AGENT_INFRA_*` 变量不进入工具子进程的
   环境（Codex 通过 shell 环境策略排除，Claude、OpenCode、Pi 由 Driver 在启动原生进程时移出或改经

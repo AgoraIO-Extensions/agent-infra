@@ -51,7 +51,16 @@ export async function customValidationPlan(requestsFile: string, stateDirectory:
 	}
 	if (selfManagedCount > 0 && webConfigs.length === 0) throw new Error("CUSTOM_WEB_PROBES_REQUIRED");
 	assert.equal(webConfigs.length, selfManagedCount, "CUSTOM_WEB_PROBE_COUNT_INVALID");
-	for (const file of webConfigs) await privateJson(file);
+	const boundNames = new Set();
+	for (const file of webConfigs) {
+		const config = await privateJson(file);
+		if (config.requestName !== undefined) {
+			assert(config.schemaVersion === 1 && config.sourceSha === sourceSha && !boundNames.has(config.requestName) &&
+				custom.some(entry => entry.name === config.requestName && entry.mode === "self-managed"), "CUSTOM_ENTRY_REQUEST_BINDING_INVALID");
+			boundNames.add(config.requestName);
+		}
+	}
+	if (boundNames.size > 0) assert.equal(boundNames.size, selfManagedCount, "CUSTOM_ENTRY_BOUND_CONFIGS_REQUIRED");
 	return { schemaVersion: 1, kind: "ack-custom-validation-plan", platformAdapterCount, selfManagedCount, webProbeCount: webConfigs.length,
 		pass: true, webProbesVerified: false, modelCallsVerified: false };
 }

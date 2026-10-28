@@ -18,6 +18,7 @@ import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
 } from "./driver.js";
+import { openCodeToolName } from "./opencode-tools.js";
 import {
 	type NativeSessionOptions,
 	SessionRuntimeDriver,
@@ -272,14 +273,18 @@ export const GenericAcpRuntimeDriver = {
 							if (phases.get(event.toolCallId) !== phase) {
 								phases.set(event.toolCallId, phase);
 								const name =
-									event.kind === "read"
+									toolNames.get(event.toolCallId) ??
+									(launch.nativeCommandMode === "opencode"
+										? openCodeToolName(event)
+										: undefined) ??
+									(event.kind === "read"
 										? "Read"
 										: event.kind === "edit"
 											? "Edit"
 											: event.kind === "execute" &&
 													launch.nativeCommandMode === "opencode"
 												? "Bash"
-												: (toolNames.get(event.toolCallId) ?? "unavailable");
+												: "unavailable");
 								toolNames.set(event.toolCallId, name);
 								await callbacks.update({
 									type: "tool",

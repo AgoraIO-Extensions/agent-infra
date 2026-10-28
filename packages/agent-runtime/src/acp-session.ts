@@ -32,7 +32,7 @@ export interface AcpLaunch {
 	/** A launch can retire reuse after a transport or process failure. */
 	reusable?: () => boolean;
 	authorize?: (
-		tool: Pick<ToolCall, "toolCallId" | "kind" | "rawInput">,
+		tool: Pick<ToolCall, "toolCallId" | "kind" | "rawInput" | "title">,
 	) => Promise<boolean>;
 	/** Session-scoped MCP servers assembled by the trusted Runtime adapter. */
 	mcpServers?: readonly McpServer[];
@@ -81,7 +81,7 @@ export async function openAcpSession(options: {
 	});
 	const tools = new Map<
 		string,
-		Pick<ToolCall, "toolCallId" | "kind" | "rawInput">
+		Pick<ToolCall, "toolCallId" | "kind" | "rawInput" | "title">
 	>();
 	let activeSessionId: string | undefined;
 	let currentRecordOperationFact = options.recordOperationFact;
@@ -134,6 +134,7 @@ export async function openAcpSession(options: {
 				else
 					tools.set(update.toolCallId, {
 						toolCallId: update.toolCallId,
+						title: previous?.title ?? update.title ?? "",
 						kind: update.kind ?? previous?.kind,
 						rawInput: update.rawInput ?? previous?.rawInput,
 					});

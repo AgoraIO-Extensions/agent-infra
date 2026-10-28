@@ -27,6 +27,7 @@ import {
 	standardTemplateDefinitionsV1,
 	standardTemplateReadinessV1,
 	standardTemplateReasoningLevelsV1,
+	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationModelAdmissionPortV2,
@@ -404,9 +405,18 @@ export function createDeploymentAdmissionsV1(
 				!OciImageReferenceV1Schema.safeParse(template.imageReference).success ||
 				template.imageReference.split("@")[1] !== template.imageDigest ||
 				(input.imageRepository !== undefined &&
+					template.modelBinding?.imageRepository === undefined &&
 					repositoryOf(template.imageReference) !== input.imageRepository)
 			)
 				throw new Error();
+			if (template.modelBinding?.imageRepository !== undefined) {
+				validateStandardTemplateModelBindingsV1([template.modelBinding]);
+				if (
+					template.modelBinding.templateId !== template.templateId ||
+					template.modelBinding.imageDigest !== template.imageDigest
+				)
+					throw new Error();
+			}
 			for (const names of [
 				template.allowedEnvironmentKeys,
 				template.allowedSecretKeys,
@@ -685,6 +695,10 @@ export function createDeploymentAdmissionsV1(
 				if (!imageReference) return denied;
 				if (
 					imageRepository !== undefined &&
+					!(
+						selection.kind === "standard" &&
+						template?.modelBinding?.imageRepository !== undefined
+					) &&
 					repositoryOf(imageReference) !== imageRepository
 				)
 					return denied;
