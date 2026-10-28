@@ -3,6 +3,7 @@
 
 import { randomUUID } from "node:crypto";
 import { Readable, Writable } from "node:stream";
+import { isDeepStrictEqual } from "node:util";
 import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import {
 	type ContentBlock,
@@ -21,6 +22,15 @@ import { spawnAcpProcess } from "./acp-process.js";
 import { acpStream } from "./acp-stream.js";
 import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
 import type { NativePromptV1 } from "./session-runtime-driver.js";
+
+function incompleteToolInput(value: unknown) {
+	return (
+		value == null ||
+		(typeof value === "object" &&
+			!Array.isArray(value) &&
+			Object.keys(value).length === 0)
+	);
+}
 
 export interface AcpLaunch {
 	command: string;
@@ -145,16 +155,52 @@ export async function openAcpSession(options: {
 		})
 		.onRequest("session/request_permission", async ({ params }) => {
 			await updates.catch(() => {});
-			const tool = tools.get(params.toolCall.toolCallId);
+			const requestedInput = params.toolCall.rawInput;
+			let tool = tools.get(params.toolCall.toolCallId);
+			const deadline = performance.now() + 1000;
+			while (
+				!processExited &&
+				!loading &&
+				params.sessionId === activeSessionId &&
+				tool &&
+				incompleteToolInput(tool.rawInput) &&
+				incompleteToolInput(requestedInput) &&
+				performance.now() < deadline
+			) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				await updates.catch(() => {});
+				tool = tools.get(params.toolCall.toolCallId);
+			}
+			const previousInput = tool?.rawInput;
+			const incomplete = incompleteToolInput(previousInput);
+			const requestIncomplete = incompleteToolInput(requestedInput);
+			const inputMatches =
+				requestIncomplete ||
+				incomplete ||
+				isDeepStrictEqual(previousInput, requestedInput);
+			const kindMatches =
+				params.toolCall.kind == null || params.toolCall.kind === tool?.kind;
+			// The announced identity remains authoritative. ACP permission requests can
+			// complete arguments before the corresponding tool notification arrives.
+			const permissionTool = tool && {
+				...tool,
+				rawInput:
+					incomplete && !requestIncomplete
+						? structuredClone(requestedInput)
+						: previousInput,
+			};
 			const once = params.options.find(
 				(option) => option.kind === "allow_once",
 			);
 			const allowed =
+				!processExited &&
 				!loading &&
 				params.sessionId === activeSessionId &&
-				tool &&
+				permissionTool &&
 				once &&
-				(await options.launch.authorize?.(tool).catch(() => false));
+				inputMatches &&
+				kindMatches &&
+				(await options.launch.authorize?.(permissionTool).catch(() => false));
 			const rejected = params.options.find(
 				(option) => option.kind === "reject_once",
 			);
