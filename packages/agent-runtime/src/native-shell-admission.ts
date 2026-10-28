@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { constants } from "node:fs";
+import { access, realpath, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 
 export const nativeShellLauncher = "/opt/agent-infra/native-shell.mjs";
@@ -14,6 +16,17 @@ export async function nativeShellAvailable(
 ): Promise<boolean> {
 	if (process.platform !== "linux") return false;
 	try {
+		const metadata = await stat(nativeShellLauncher);
+		if (
+			(await realpath(nativeShellLauncher)) !== nativeShellLauncher ||
+			!metadata.isFile() ||
+			(metadata.mode & 0o022) !== 0 ||
+			(await access(nativeShellLauncher, constants.W_OK).then(
+				() => true,
+				() => false,
+			))
+		)
+			return false;
 		await executeFile(nativeShellLauncher, ["-c", "true"], {
 			cwd: workspace,
 			env: nativeShellLauncherEnvironment(workspace),

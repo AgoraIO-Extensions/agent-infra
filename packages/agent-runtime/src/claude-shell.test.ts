@@ -3,6 +3,7 @@ import {
 	claudeShellAvailable,
 	claudeShellEnvironment,
 } from "./claude-shell.js";
+import { nativeShellAvailable } from "./native-shell-admission.js";
 
 const io = vi.hoisted(() => ({
 	stat: vi.fn(),
@@ -60,5 +61,18 @@ it.each(["missing", "writable", "symlink", "changed", "abi"])(
 			);
 		expect(await claudeShellAvailable("/session/workspace")).toBe(false);
 		if (failure !== "abi") expect(io.execFile).not.toHaveBeenCalled();
+	},
+);
+
+it.each(["missing", "writable", "symlink"])(
+	"shared Pi/OpenCode admission rejects a %s launcher before execution",
+	async (failure) => {
+		installed();
+		if (failure === "missing") io.stat.mockRejectedValue(new Error("ENOENT"));
+		if (failure === "writable") io.access.mockResolvedValue(undefined);
+		if (failure === "symlink")
+			io.realpath.mockResolvedValue("/workspace/override");
+		expect(await nativeShellAvailable("/session/workspace")).toBe(false);
+		expect(io.execFile).not.toHaveBeenCalled();
 	},
 );
