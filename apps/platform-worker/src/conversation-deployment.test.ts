@@ -32,6 +32,7 @@ import {
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { sessionSandboxServiceTokenV1 } from "./session-workload-adapter.js";
+import { nativeEgressFixture } from "./test-support/native-egress.js";
 import {
 	sessionSandboxDeploymentTokenFixture,
 	sessionSandboxModelProjectionFixture,
@@ -221,7 +222,18 @@ describe("production SessionSandbox resource receiver", () => {
 			deployment: customDeployment,
 			modelProjection: null,
 		};
-		await f.receive(customClaim, new AbortController().signal);
+		const receive = createProductionSessionSandboxReceiverV1(
+			{
+				...f.options,
+				policy: { ...f.options.policy, nativeEgress: nativeEgressFixture() },
+			},
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		);
+		await receive(customClaim, new AbortController().signal);
+		const customNetwork = f.resources.get(
+			"NetworkPolicy/sandbox-allocation-a",
+		) as V1NetworkPolicy;
+		expect(JSON.stringify(customNetwork.spec?.egress)).not.toContain("8.8.8.8");
 		const sandboxSecret = f.resources.get(
 			"Secret/sandbox-allocation-a",
 		) as V1Secret;
@@ -375,6 +387,7 @@ describe("production SessionSandbox resource receiver", () => {
 	it("compiles Session egress only from the Worker deployment policy (#1445)", async () => {
 		const f = fixture();
 		const approved = {
+			nativeEgress: nativeEgressFixture(),
 			dnsEgress: [
 				{ namespace: "kube-system", podLabels: { "k8s-app": "kube-dns" } },
 			],
@@ -403,6 +416,10 @@ describe("production SessionSandbox resource receiver", () => {
 				policy: {
 					...f.claim.policy,
 					modelEgress: [{ destination: { ip: "198.51.100.7" }, port: 443 }],
+					nativeEgress: {
+						...nativeEgressFixture(),
+						destinations: [{ destination: { ip: "1.1.1.1" }, port: 443 }],
+					},
 				} as typeof f.claim.policy,
 			},
 			new AbortController().signal,
@@ -1914,4 +1931,64 @@ describe("production SessionSandbox resource receiver", () => {
 		});
 		expect([...f.resources]).toEqual(before);
 	});
+});
+
+it("rejects incomplete native deployment policy before Session writes", () => {
+	const f = fixture();
+	const nativeEgress = nativeEgressFixture();
+	nativeEgress.protectedNetworks.kubernetesApi = [];
+	expect(() =>
+		createProductionSessionSandboxReceiverV1(
+			{ ...f.options, policy: { ...f.options.policy, nativeEgress } },
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		),
+	).toThrow();
+	expect(f.resources.size).toBe(0);
+});
+it("production Session native egress rejects an overlapping allow policy before writing", async () => {
+	const f = fixture();
+	f.client.list = async (kind) =>
+		structuredClone(
+			[...f.resources.values()].filter((value) => value.kind === kind),
+		) as never;
+	f.resources.set("NetworkPolicy/foreign", {
+		apiVersion: "networking.k8s.io/v1",
+		kind: "NetworkPolicy",
+		metadata: { name: "foreign", namespace: f.options.policy.namespace },
+		spec: { podSelector: {}, policyTypes: ["Egress"], egress: [{}] },
+	} as V1NetworkPolicy);
+	const before = structuredClone([...f.resources]);
+	const receive = createProductionSessionSandboxReceiverV1(
+		{
+			...f.options,
+			policy: { ...f.options.policy, nativeEgress: nativeEgressFixture() },
+		},
+		{ serviceToken: sessionSandboxDeploymentTokenFixture },
+	);
+	await expect(
+		receive(f.claim, new AbortController().signal),
+	).rejects.toThrow();
+	expect([...f.resources]).toEqual(before);
+});
+it("native Session policy clones deployment input and detects protected-only policy drift", async () => {
+	const f = fixture();
+	const nativeEgress = nativeEgressFixture();
+	const receive = createProductionSessionSandboxReceiverV1(
+		{ ...f.options, policy: { ...f.options.policy, nativeEgress } },
+		{ serviceToken: sessionSandboxDeploymentTokenFixture },
+	);
+	nativeEgress.destinations[0].destination.ip = "1.1.1.1";
+	await receive(f.claim, new AbortController().signal);
+	const policy = f.resources.get(
+		"NetworkPolicy/sandbox-allocation-a",
+	) as V1NetworkPolicy;
+	expect(JSON.stringify(policy.spec?.egress)).toContain("8.8.8.8/32");
+	expect(JSON.stringify(policy.spec?.egress)).not.toContain("1.1.1.1/32");
+	const changed = nativeEgressFixture();
+	changed.protectedNetworks.platformDatabase = ["10.0.1.0/24"];
+	const next = createProductionSessionSandboxReceiverV1(
+		{ ...f.options, policy: { ...f.options.policy, nativeEgress: changed } },
+		{ serviceToken: sessionSandboxDeploymentTokenFixture },
+	);
+	await expect(next(f.claim, new AbortController().signal)).rejects.toThrow();
 });

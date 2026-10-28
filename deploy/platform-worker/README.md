@@ -346,3 +346,45 @@ export const workloadInput = {
 
 物理 PVC 交付与 Runtime 实际加载仍沿各自装配验证；本消费者的通过只证明原包当前仍获准，
 不能单独证明字节已到 Runtime。
+
+## 标准模板原生通用出网
+
+部署可在私有 `workloadInput.policy` 中配置 `nativeEgress`，允许标准模板的原生网络工具访问
+明确的公网目标；缺省不添加规则，自定义 Agent 不继承此类别。配置只能来自部署，Owner env、
+Runtime 参数和 Store claim 都不能增加目标。该入口不提供 Connection 凭据或调用授权。
+
+```typescript
+nativeEgress: {
+  destinations: [
+    { destination: { ip: "<approved-public-ip>" }, port: 443 },
+    { destination: { cidr: "<approved-public-cidr>" }, port: 443 },
+  ],
+  protectedNetworks: {
+    platformDatabase: ["<platform-database-ip-or-cidr>"],
+    connectionDatabase: ["<connection-database-ip-or-cidr>"],
+    kubernetesApi: ["<all-control-plane-ips-or-cidrs>"],
+    sandboxPodNetworks: ["<all-cluster-pod-cidrs>"],
+  },
+}
+```
+
+以上为需替换的形状说明，不是可直接部署的默认值。每类保护清单必须非空并覆盖实际地址，包括
+DB 或控制平面公开地址；清单缺失、空集合或格式错误都拒绝启用。部署负责人维护完整性，地址
+变化前须更新清单。每类最多 128 项，目标最多 128 项，每项仅允许一个 TCP 端口 1–65535。
+IP 需为公网精确主机；CIDR 需为 canonical 网络地址，IPv4 前缀至少 `/16`、IPv6 至少 `/48`。
+目标与任一保护范围重叠即拒绝整份配置，不通过减去部分网段静默放行。私网、loopback、link-local、
+云元数据以及 IPv4-mapped/translation 等保留地址即使以精确 IP 声明也会拒绝。
+
+Worker 为已验证标准模板的 Agent Workload 和 Session 使用同一声明。配置被捕获后，调用方修改
+原对象不会改变其权限；目标、端口或保护清单变化会使原 NetworkPolicy 的绑定失效，须按正式
+生命周期收敛，不能原地扩张现存 Session。旧 Session 的停止和回收仍使用原身份、fence 与 UID。保护清单按声明内容绑定，重排项目也会保守地判为变更。
+
+NetworkPolicy 是叠加的允许规则，不能把本策略描述为全局显式 deny。启用此类别的生产 Agent/Session
+在写资源和业务观察时拒绝另一条可能匹配其 Pod 的出站 allow policy；读取失败也拒绝。
+部署仍须持续确保其他控制器不会添加重叠策略，保持现有模型、Connection、文件交换和 DNS 的
+获准目标边界。仅存在策略对象、Pod Ready 或 API 返回 401 都不能证明网络隔离生效。
+
+真实验收使用独立、明确授权的 CNI 环境和固定镜像，先证明获准目标可达，再验证两类 DB、全部
+控制平面地址、metadata 和其他 Sandbox 不可达；同时回读所有可能匹配的策略及当前 UID。
+保存源码/镜像/配置摘要与正负探针结果，不保存凭证。受控 Worker 回归不代替此门禁，ACK/ECI
+策略支持不足仍由 #3295 跟进。产品边界见 [ADR-0031](../../docs/adr/0031-enable-native-tools-inside-session-sandbox.md)。

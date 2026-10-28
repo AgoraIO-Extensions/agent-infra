@@ -108,6 +108,8 @@ function validPodSelector(value: Readonly<Record<string, string>> | undefined) {
 }
 
 import {
+	hasAdditionalEgressPolicyV1,
+	nativeEgressPolicyAnnotationV1,
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
@@ -188,14 +190,15 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		diagnostic: MultiServiceHealthDiagnosticV1,
 	) => void;
 }) {
-	const { client, policy } = options;
+	const { client } = options;
+	const policy = structuredClone(options.policy);
 	const multiService = createMultiServiceRuntimeOperations({
 		client,
 		policy,
 		onHealthDiagnostic: options.onHealthDiagnostic,
 	});
 	const connectionInstallationRevision = policy.connectionInstallationRevision;
-	const egress = workloadEgressRulesV1(policy);
+	workloadEgressRulesV1(policy);
 	if (policy.runtimeAuth) validateWorkloadRuntimeAuthV1(policy.runtimeAuth);
 	// #3289：注入文件交换 origin 时必须同时有到该 origin 端口的唯一 egress，反之亦然。
 	if (
@@ -219,6 +222,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				])[0];
 	const templateBinding =
 		standardTemplateBinding ?? modelProjection?.standardTemplateBinding;
+	if (!templateBinding)
+		delete (policy as { nativeEgress?: unknown }).nativeEgress;
+	const egress = workloadEgressRulesV1(policy);
 	const imageRepository =
 		templateBinding?.imageRepository ?? policy.imageRepository;
 	const connection = runtimeConnectionConsumerProjectionV1(
@@ -480,6 +486,21 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			name,
 		);
 		const network = await client.read<V1NetworkPolicy>("NetworkPolicy", name);
+		if (
+			policy.nativeEgress &&
+			hasAdditionalEgressPolicyV1(
+				await client.list<V1NetworkPolicy>("NetworkPolicy", ""),
+				networkPolicy(value),
+			)
+		)
+			return "drifted";
+		if (
+			network?.metadata?.annotations?.[nativeEgressPolicyAnnotationV1] !==
+			networkPolicy(value).metadata?.annotations?.[
+				nativeEgressPolicyAnnotationV1
+			]
+		)
+			return "drifted";
 		const probe = await client.read<V1Service>("Service", `${name}-probe`);
 		const service = await client.read<V1Service>("Service", name);
 		const routeIngress = await client.read<V1Ingress>("Ingress", name);
@@ -1233,6 +1254,15 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			)
 				throw new WorkloadKubernetesError("policy");
 			if (value.replicas !== 0) await assertStandardTemplateSelector(value);
+			if (
+				policy.nativeEgress &&
+				value.replicas !== 0 &&
+				hasAdditionalEgressPolicyV1(
+					await client.list<V1NetworkPolicy>("NetworkPolicy", ""),
+					networkPolicy(value),
+				)
+			)
+				throw new WorkloadKubernetesError("policy");
 			const name = workloadResourceNameV1(value.agentId);
 			const current = await statefulSet(value);
 			// Reject stale work before any partial creation or scale-down. Per-write
@@ -1250,6 +1280,14 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			for (const resource of [current, existingPvc, ...existingResources]) {
 				if (!resource) continue;
 				own(resource, value.agentId, value.workloadRevision, value.fence);
+				if (
+					resource.kind === "NetworkPolicy" &&
+					resource.metadata?.annotations?.[nativeEgressPolicyAnnotationV1] !==
+						networkPolicy(value).metadata?.annotations?.[
+							nativeEgressPolicyAnnotationV1
+						]
+				)
+					throw new WorkloadKubernetesError("conflict");
 				if (resource.metadata?.deletionTimestamp)
 					throw new WorkloadKubernetesError("conflict");
 			}

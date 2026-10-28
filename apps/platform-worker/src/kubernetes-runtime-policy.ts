@@ -47,7 +47,10 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 import { createKubernetesPodValidationV1 } from "./kubernetes-runtime-pod-validation.js";
-import type { workloadEgressRulesV1 } from "./workload-network.js";
+import {
+	nativeEgressPolicyAnnotationsV1,
+	type workloadEgressRulesV1,
+} from "./workload-network.js";
 import {
 	codexContainerBoundaryEnvironmentV1,
 	workloadRuntimeAuthEnvironmentV1,
@@ -656,7 +659,13 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		return {
 			apiVersion: "networking.k8s.io/v1",
 			kind: "NetworkPolicy",
-			metadata: metadata(value),
+			metadata: {
+				...metadata(value),
+				annotations: {
+					...metadata(value).annotations,
+					...nativeEgressPolicyAnnotationsV1(policy.nativeEgress),
+				},
+			},
 			spec: {
 				podSelector: {
 					matchLabels: { [ownerLabel]: workloadResourceNameV1(value.agentId) },

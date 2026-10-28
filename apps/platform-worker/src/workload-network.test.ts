@@ -7,7 +7,10 @@ import {
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
+import { nativeEgressFixture } from "./test-support/native-egress.js";
+import { sessionSandboxModelProjectionFixture } from "./test-support/session-sandbox-v4.js";
 import {
+	hasAdditionalEgressPolicyV1,
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
@@ -396,4 +399,277 @@ describe("deployment-owned Workload egress", () => {
 			).toHaveLength(1);
 		},
 	);
+});
+
+describe("standard native egress", () => {
+	it("compiles explicitly approved public targets", () => {
+		const policy = { nativeEgress: nativeEgressFixture() };
+		expect(workloadEgressRulesV1(policy)).toEqual([
+			{
+				to: [{ ipBlock: { cidr: "8.8.8.8/32" } }],
+				ports: [{ protocol: "TCP", port: 443 }],
+			},
+		]);
+	});
+});
+
+it.each([
+	"10.0.0.1",
+	"169.254.169.254",
+	"100.100.100.200",
+	"127.0.0.1",
+	"0.0.0.0",
+	"192.168.1.1",
+	"224.0.0.1",
+	"::1",
+	"fd00::1",
+	"fe80::1",
+	"::ffff:8.8.8.8",
+	"::ffff:808:808",
+	"64:ff9b::808:808",
+	"2001:db8::1",
+])("refuses native exact-IP reserved/metadata target %s", (ip) => {
+	const nativeEgress = nativeEgressFixture();
+	nativeEgress.destinations[0].destination.ip = ip;
+	expect(() => workloadEgressRulesV1({ nativeEgress })).toThrow();
+});
+it.each([
+	"8.0.0.0/8",
+	"8.8.8.1/24",
+	"0.0.0.0/0",
+	"10.0.0.0/16",
+	"::/0",
+	"2606:4700::/32",
+])("refuses native unsafe CIDR %s", (cidr) => {
+	const nativeEgress = {
+		...nativeEgressFixture(),
+		destinations: [{ destination: { cidr }, port: 443 }],
+	};
+	expect(() => workloadEgressRulesV1({ nativeEgress })).toThrow();
+});
+it("accepts bounded IPv4/IPv6 public CIDRs", () => {
+	const nativeEgress = {
+		...nativeEgressFixture(),
+		destinations: [
+			{ destination: { cidr: "8.8.8.0/24" }, port: 443 },
+			{ destination: { cidr: "2606:4700:4700::/48" }, port: 8443 },
+		],
+	};
+	expect(
+		workloadEgressRulesV1({ nativeEgress }).map(
+			(r) => r.to?.[0]?.ipBlock?.cidr,
+		),
+	).toEqual(["8.8.8.0/24", "2606:4700:4700::/48"]);
+});
+for (const category of [
+	"platformDatabase",
+	"connectionDatabase",
+	"kubernetesApi",
+	"sandboxPodNetworks",
+] as const) {
+	it.each([
+		"missing",
+		"empty",
+		"public host",
+		"overlapping CIDR",
+		"IPv6 overlap",
+	])(`rejects native ${category} %s`, (scenario) => {
+		const nativeEgress = nativeEgressFixture();
+		if (scenario === "missing")
+			Reflect.deleteProperty(nativeEgress.protectedNetworks, category);
+		else if (scenario === "empty")
+			nativeEgress.protectedNetworks[category] = [];
+		else if (scenario === "public host")
+			nativeEgress.protectedNetworks[category] = ["8.8.8.8"];
+		else if (scenario === "IPv6 overlap") {
+			nativeEgress.destinations[0].destination.ip = "2606:4700:4700::1111";
+			nativeEgress.protectedNetworks[category] = ["2606:4700:4700::/48"];
+		} else {
+			Object.assign(nativeEgress, {
+				destinations: [{ destination: { cidr: "8.8.8.0/24" }, port: 443 }],
+			});
+			nativeEgress.protectedNetworks[category] = ["8.8.8.128/25"];
+		}
+		expect(() => workloadEgressRulesV1({ nativeEgress })).toThrow();
+	});
+}
+it.each([0, 65536, 1.5])("rejects native invalid port %s", (port) => {
+	const nativeEgress = nativeEgressFixture();
+	nativeEgress.destinations[0].port = port;
+	expect(() => workloadEgressRulesV1({ nativeEgress })).toThrow();
+});
+it("rejects undeclared native policy and destination keys", () => {
+	for (const mutate of [
+		(p: ReturnType<typeof nativeEgressFixture>) =>
+			Object.assign(p, { caller: true }),
+		(p: ReturnType<typeof nativeEgressFixture>) =>
+			Object.assign(p.protectedNetworks, { extra: [] }),
+		(p: ReturnType<typeof nativeEgressFixture>) =>
+			Object.assign(p.destinations[0].destination, { cidr: "8.8.8.0/24" }),
+		(p: ReturnType<typeof nativeEgressFixture>) =>
+			Object.assign(p, {
+				destinations: [
+					{
+						destination: { namespace: "db", podLabels: { app: "db" } },
+						port: 443,
+					},
+				],
+			}),
+	]) {
+		const nativeEgress = nativeEgressFixture();
+		mutate(nativeEgress);
+		expect(() => workloadEgressRulesV1({ nativeEgress })).toThrow();
+	}
+});
+
+it.each([false, true])(
+	"native egress is granted only to a verified standard Agent (standard=%s)",
+	async (standard) => {
+		const api = fakeKubernetesApi();
+		const desired = workloadDesiredFixture(1, "agent-a", "internal-only");
+		const projection = standard
+			? sessionSandboxModelProjectionFixture({
+					agentId: desired.agentId,
+					configurationRevision: desired.configRevision,
+					imageDigest: desired.imageDigest,
+				})
+			: undefined;
+		const nativeEgress = nativeEgressFixture();
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: api.client,
+			policy: { ...workloadTestPolicy, nativeEgress },
+			modelProjection: projection,
+			probe: async () => true,
+		});
+		const identity = await adapter.apply(desired);
+		const network = await api.client.read<V1NetworkPolicy>(
+			"NetworkPolicy",
+			desired.service.name,
+		);
+		expect(JSON.stringify(network?.spec?.egress).includes("8.8.8.8/32")).toBe(
+			standard,
+		);
+		if (standard) {
+			if (!identity || identity === "pending")
+				throw new Error("Missing identity");
+			const removed = createKubernetesRuntimeAdapterV1({
+				client: api.client,
+				policy: workloadTestPolicy,
+				modelProjection: projection,
+				probe: async () => true,
+			});
+			await expect(removed.apply(desired)).rejects.toThrow();
+			expect(await removed.observe(desired, identity)).toBe("drifted");
+			api.resources.set("NetworkPolicy/other", {
+				kind: "NetworkPolicy",
+				metadata: { name: "other" },
+				spec: { podSelector: {}, egress: [{}] },
+			} as V1NetworkPolicy);
+			api.client.list = async (kind) =>
+				structuredClone(
+					[...api.resources.values()].filter((r) => r.kind === kind),
+				) as never;
+			const writes = api.writes.length;
+			await expect(adapter.apply(desired)).rejects.toThrow();
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			expect(api.writes.length).toBe(writes);
+		}
+	},
+);
+
+it.each([
+	null,
+	[],
+	"native",
+	{ destinations: [], protectedNetworks: [] },
+	{ ...nativeEgressFixture(), destinations: {} },
+	{ ...nativeEgressFixture(), protectedNetworks: [] },
+	{
+		...nativeEgressFixture(),
+		protectedNetworks: {
+			...nativeEgressFixture().protectedNetworks,
+			kubernetesApi: "9.9.9.9",
+		},
+	},
+])("rejects malformed native policy %#", (value) => {
+	expect(() =>
+		workloadEgressRulesV1({
+			nativeEgress: value,
+		} as unknown as WorkloadEgressPolicyV1),
+	).toThrow();
+});
+it.each([undefined, ["Egress"], ["Ingress"]])(
+	"handles additive/default policyTypes %j conservatively",
+	(policyTypes) => {
+		const expected: V1NetworkPolicy = {
+			metadata: { name: "native" },
+			spec: {
+				podSelector: { matchLabels: { session: "a" } },
+				policyTypes: ["Egress"],
+				egress: [],
+			},
+		};
+		const extra: V1NetworkPolicy = {
+			metadata: { name: "other" },
+			spec: {
+				podSelector: {},
+				...(policyTypes ? { policyTypes } : {}),
+				egress: [{}],
+			},
+		};
+		expect(hasAdditionalEgressPolicyV1([extra], expected)).toBe(
+			policyTypes?.[0] !== "Ingress",
+		);
+		expect(
+			hasAdditionalEgressPolicyV1(
+				[
+					{
+						...extra,
+						spec: {
+							...extra.spec,
+							podSelector: { matchLabels: { session: "b" } },
+						},
+					},
+				],
+				expected,
+			),
+		).toBe(false);
+		expect(
+			hasAdditionalEgressPolicyV1(
+				[{ ...extra, spec: { ...extra.spec, podSelector: {}, egress: [] } }],
+				expected,
+			),
+		).toBe(false);
+	},
+);
+
+it("rejects arrays masquerading as native policy objects", () => {
+	const p = nativeEgressFixture();
+	for (const nativeEgress of [
+		Object.assign([], p),
+		{ ...p, protectedNetworks: Object.assign([], p.protectedNetworks) },
+		{ ...p, destinations: [Object.assign([], p.destinations[0])] },
+		{
+			...p,
+			destinations: [
+				{ destination: Object.assign([], { ip: "8.8.8.8" }), port: 443 },
+			],
+		},
+	])
+		expect(() =>
+			workloadEgressRulesV1({
+				nativeEgress,
+			} as unknown as WorkloadEgressPolicyV1),
+		).toThrow();
+});
+
+it("rejects sparse native destinations and protected inventory", () => {
+	const nativeEgress = nativeEgressFixture();
+	nativeEgress.protectedNetworks.platformDatabase = new Array(1);
+	expect(() => workloadEgressRulesV1({ nativeEgress })).toThrow();
+	expect(() =>
+		workloadEgressRulesV1({
+			nativeEgress: { ...nativeEgressFixture(), destinations: new Array(1) },
+		}),
+	).toThrow();
 });

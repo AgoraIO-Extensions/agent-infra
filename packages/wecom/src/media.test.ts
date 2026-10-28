@@ -145,9 +145,12 @@ it.each([
 );
 
 it("folds provider errors and decryption failures into a fixed result", async () => {
+	// Random whole CBC blocks can have valid padding; a partial block always fails.
+	const invalidCiphertext = new Uint8Array(47);
+	expect(() => decryptFile(Buffer.from(invalidCiphertext), aesKey)).toThrow();
 	for (const fetch of [
 		respond("SENTINEL-URL-3227 provider error", { status: 403 }),
-		respond(new Uint8Array(randomBytes(48))),
+		respond(invalidCiphertext),
 		respond(null, { status: 204 }),
 	]) {
 		const result = await downloadWecomMediaV1({
