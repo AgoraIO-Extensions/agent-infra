@@ -87,6 +87,12 @@ it.each([
 	expect(() => parseNativeCapabilityAdmissionRequestV6(value)).toThrow();
 });
 
+it("rejects the signed wire request instead of discarding its Grant", () => {
+	expect(() =>
+		parseNativeCapabilityAdmissionRequestV6(signedRequest),
+	).toThrow();
+});
+
 it("rejects a valid-looking but incorrect parameters digest", () => {
 	const value = { ...request, parametersDigest: "a".repeat(64) };
 	expect(() => parseNativeCapabilityAdmissionRequestV6(value)).toThrow();
