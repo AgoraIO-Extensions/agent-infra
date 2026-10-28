@@ -1,5 +1,9 @@
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { createAppliedRuntimeSkillDirectoryV1 } from "@agent-infra/agent-runtime";
 import { RuntimeSkillHubBindingV1Schema } from "@agent-infra/contracts/runtime";
 import { runtimeModelInjectionV4 } from "@agent-infra/model-catalog";
 import {
@@ -167,7 +171,13 @@ async function skillFixture() {
 			name: "session-notes",
 			version: "1.0.0",
 			entryPath: "SKILL.md",
-			files: [{ path: "SKILL.md", sizeBytes: 1, sha256: "d".repeat(64) }],
+			files: [
+				{
+					path: "SKILL.md",
+					sizeBytes: 1,
+					sha256: createHash("sha256").update("x").digest("hex"),
+				},
+			],
 			packageDigest: "a".repeat(64),
 		},
 		targetPath: ".agents/skills/session-notes",
@@ -287,7 +297,7 @@ describe("production SessionSandbox resource receiver", () => {
 		const container = pod.spec?.containers[0];
 		expect(container?.volumeMounts).toContainEqual({
 			name: "skill-hub",
-			mountPath: "/opt/agent-infra-skill-hub",
+			mountPath: "/opt/agent-infra-skill-hub/.agents",
 			subPath: `generations/${f.binding.generationId}/.agents`,
 			readOnly: true,
 		});
@@ -318,6 +328,34 @@ describe("production SessionSandbox resource receiver", () => {
 				)
 			).status,
 		).toBe("ready");
+	});
+
+	it("mount layout is discoverable by the real Runtime Skill directory", async () => {
+		const f = await skillFixture();
+		await f.receive(f.claim, new AbortController().signal);
+		const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+		const mount = pod.spec?.containers[0]?.volumeMounts?.find(
+			(m) => m.name === "skill-hub",
+		);
+		if (!mount) throw new Error("missing Skill mount");
+		const root = await mkdtemp(join(tmpdir(), "session-skill-layout-"));
+		try {
+			const mounted = join(
+				root,
+				relative("/opt/agent-infra-skill-hub", mount.mountPath),
+			);
+			await mkdir(join(mounted, "skills/session-notes"), { recursive: true });
+			await writeFile(join(mounted, "skills/session-notes/SKILL.md"), "x");
+			const directory = createAppliedRuntimeSkillDirectoryV1({
+				...f.binding,
+				root,
+			});
+			expect(directory.nativeSkillPaths?.()).toEqual([
+				join(await realpath(root), ".agents/skills/session-notes/SKILL.md"),
+			]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 
 	it("shares only immutable packages between independent Session workspaces", async () => {

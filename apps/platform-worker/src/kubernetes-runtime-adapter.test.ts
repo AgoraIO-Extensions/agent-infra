@@ -193,7 +193,7 @@ describe("GA Kubernetes Workload adapter", () => {
 		const mounts = workload?.spec?.template.spec?.containers?.[0]?.volumeMounts;
 		expect(mounts).toContainEqual({
 			name: "data",
-			mountPath: skillHubWorkloadMountRootV1,
+			mountPath: `${skillHubWorkloadMountRootV1}/.agents`,
 			subPath: `generations/${desired.skillGenerationId}/.agents`,
 			readOnly: true,
 		});
@@ -204,7 +204,7 @@ describe("GA Kubernetes Workload adapter", () => {
 		});
 		expect(
 			mounts?.filter(
-				(mount) => mount.mountPath === skillHubWorkloadMountRootV1,
+				(mount) => mount.mountPath === `${skillHubWorkloadMountRootV1}/.agents`,
 			),
 		).toHaveLength(1);
 	});
@@ -220,7 +220,7 @@ describe("GA Kubernetes Workload adapter", () => {
 			| undefined;
 		expect(
 			workload?.spec?.template.spec?.containers?.[0]?.volumeMounts?.some(
-				(mount) => mount.mountPath === skillHubWorkloadMountRootV1,
+				(mount) => mount.mountPath === `${skillHubWorkloadMountRootV1}/.agents`,
 			),
 		).toBe(false);
 	});
@@ -288,7 +288,8 @@ describe("GA Kubernetes Workload adapter", () => {
 			const workload = structuredClone(f.resources.get(key)) as V1StatefulSet;
 			const mount =
 				workload.spec?.template.spec?.containers?.[0]?.volumeMounts?.find(
-					(entry) => entry.mountPath === skillHubWorkloadMountRootV1,
+					(entry) =>
+						entry.mountPath === `${skillHubWorkloadMountRootV1}/.agents`,
 				);
 			if (!mount) throw new Error();
 			mutate(mount);

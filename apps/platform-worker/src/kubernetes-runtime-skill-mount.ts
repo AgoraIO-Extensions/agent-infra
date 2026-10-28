@@ -20,7 +20,7 @@ export function skillHubVolumeMountV1(
 		throw new WorkloadKubernetesError("policy");
 	return {
 		name: "data",
-		mountPath: skillHubWorkloadMountRootV1,
+		mountPath: `${skillHubWorkloadMountRootV1}/.agents`,
 		subPath: `generations/${generationId}/.agents`,
 		readOnly: true,
 	};
