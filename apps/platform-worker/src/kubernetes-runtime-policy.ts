@@ -240,6 +240,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 				: []),
 			...codexContainerBoundaryEnvironmentV1({
 				enabled:
+					standardTemplateBinding !== undefined &&
 					injection !== undefined &&
 					runtimeDriver === "codex" &&
 					policy.codexContainerBoundaryEnabled === true,
