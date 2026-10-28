@@ -18,6 +18,7 @@ import type { ModelAccessValidatorV1 } from "./access.js";
 import {
 	type ModelCatalogAdapterV1,
 	ModelConfigurationErrorV1,
+	type ModelEndpointV1,
 	ModelEndpointV1Schema,
 	modelIdentifier,
 	modelOperationV1,
@@ -380,6 +381,29 @@ export function validateRuntimeModelProjectionV1(
 	}
 }
 
+function revalidateModelEndpoint(
+	saved: ModelEndpointV1,
+	current: ModelEndpointV1,
+	modelId: string,
+) {
+	const endpoint = ModelEndpointV1Schema.parse(current);
+	// ADR-0030: catalog model/level lists do not rewrite an admitted combination.
+	const comparable = {
+		...endpoint,
+		allowedModels: saved.allowedModels,
+		capabilities: {
+			...endpoint.capabilities,
+			reasoningLevels: saved.capabilities.reasoningLevels,
+		},
+	};
+	if (
+		(endpoint.allowedModels !== null &&
+			!endpoint.allowedModels.includes(modelId)) ||
+		!isDeepStrictEqual(comparable, saved)
+	)
+		throw new ModelConfigurationErrorV1();
+}
+
 /** Candidate authorization is refreshed at each durable activation boundary. */
 export async function revalidateRuntimeModelCatalogV1(
 	projection: RuntimeModelProjectionV1,
@@ -395,8 +419,7 @@ export async function revalidateRuntimeModelCatalogV1(
 				},
 				{ signal },
 			);
-			if (!isDeepStrictEqual(endpoint, option.endpoint))
-				throw new ModelConfigurationErrorV1();
+			revalidateModelEndpoint(option.endpoint, endpoint, option.modelId);
 		}
 	});
 }
@@ -611,8 +634,7 @@ export async function revalidateRuntimeModelCatalogV4(
 				},
 				{ signal },
 			);
-			if (!isDeepStrictEqual(endpoint, option.endpoint))
-				throw new ModelConfigurationErrorV1();
+			revalidateModelEndpoint(option.endpoint, endpoint, option.modelId);
 		}
 	});
 }

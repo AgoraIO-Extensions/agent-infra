@@ -13,8 +13,11 @@ import { catalogFixture } from "./catalog.fixture.js";
 import {
 	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
+	type ModelCatalogSnapshotV1,
 	projectRuntimeModelConfigurationV1,
 	projectRuntimeModelConfigurationV4,
+	revalidateRuntimeModelCatalogV1,
+	revalidateRuntimeModelCatalogV4,
 	runtimeModelInjectionV1,
 	runtimeModelInjectionV4,
 	type StandardTemplateModelBindingV1,
@@ -372,6 +375,7 @@ async function projection(
 		| AgentConfigurationRecordV1
 		| AgentConfigurationRecordV2 = configurationV2,
 	binding?: StandardTemplateModelBindingV1,
+	allowedModels: string[] | null = null,
 ) {
 	if (configuration.source.kind !== "standard") throw new Error();
 	return projectRuntimeModelConfigurationV1({
@@ -406,6 +410,7 @@ async function projection(
 				{
 					...catalogFixture().endpoints[0],
 					protocol,
+					allowedModels,
 					...(protocol === "anthropic-messages-v1"
 						? { authentication: "api-key" }
 						: {}),
@@ -576,3 +581,165 @@ it("reads historical tuple-free bytes without rebinding or changing their runtim
 		JSON.parse(runtimeModelInjectionV1(historical).configuration).configVersion,
 	).toBe(`configuration-${content.configurationRevision}-${fingerprint}`);
 });
+
+async function savedCatalogProjection(
+	version: 1 | 4,
+	protocol: "openai-responses-v1" | "anthropic-messages-v1",
+) {
+	const legacy = await projection(
+		protocol,
+		protocol,
+		configurationV2,
+		undefined,
+		["model-a", "retired-model"],
+	);
+	const snapshot: ModelCatalogSnapshotV1 = {
+		...catalogFixture(),
+		schemaVersion: 1,
+		endpoints: legacy.options.map((option) => structuredClone(option.endpoint)),
+	};
+	const binding = legacy.standardTemplateBinding;
+	if (!binding) throw new Error("Missing template binding");
+	const saved =
+		version === 1
+			? legacy
+			: await projectRuntimeModelConfigurationV4({
+					configuration: decodeAgentConfigurationRecordV3({
+						...configurationV2,
+						schemaVersion: 3,
+						modelConfiguration: {
+							catalogRevision: legacy.catalogRevision,
+							defaultOptionId: legacy.defaultOptionId,
+							defaultReasoningLevel: legacy.defaultReasoningLevel,
+							options: legacy.options.map((option) => ({
+								optionId: option.optionId,
+								endpointId: option.endpoint.endpointId,
+								modelId: option.modelId,
+								reasoningLevels: option.reasoningLevels,
+							})),
+						},
+					}),
+					catalog: createFakeModelCatalogAdapterV1(snapshot),
+					standardTemplateBinding: binding,
+					signal: AbortSignal.timeout(1000),
+				});
+	return {
+		saved,
+		snapshot,
+		revalidate: () =>
+			saved.schemaVersion === 4
+				? revalidateRuntimeModelCatalogV4(
+						saved,
+						createFakeModelCatalogAdapterV1(snapshot),
+						AbortSignal.timeout(1000),
+					)
+				: revalidateRuntimeModelCatalogV1(
+						saved,
+						createFakeModelCatalogAdapterV1(snapshot),
+						AbortSignal.timeout(1000),
+					),
+	};
+}
+
+for (const version of [1, 4] as const) {
+	for (const protocol of [
+		"openai-responses-v1",
+		"anthropic-messages-v1",
+	] as const) {
+		it.each([
+			"append model",
+			"unrestricted",
+			"remove unselected model",
+			"reasoning change",
+		] as const)(
+			`revalidates saved V${version} ${protocol} projection after compatible %s`,
+			async (change) => {
+				const { saved, snapshot, revalidate } = await savedCatalogProjection(
+					version,
+					protocol,
+				);
+				const original = JSON.stringify(saved);
+				const endpoint = snapshot.endpoints[0];
+				if (!endpoint) throw new Error("Missing endpoint");
+				if (change === "append model")
+					endpoint.allowedModels?.push("new-model");
+				else if (change === "unrestricted") endpoint.allowedModels = null;
+				else if (change === "remove unselected model")
+					endpoint.allowedModels = ["model-a"];
+				else endpoint.capabilities.reasoningLevels = ["low"];
+				await expect(revalidate()).resolves.toBeUndefined();
+				expect(JSON.stringify(saved)).toBe(original);
+			},
+		);
+		it.each([
+			"selected model removed",
+			"base URL",
+			"origin",
+			"protocol",
+			"authentication",
+			"security",
+			"tools",
+			"streaming",
+			"unavailable",
+			"revision",
+			"expired",
+			"removed",
+		] as const)(
+			`rejects saved V${version} ${protocol} projection after incompatible %s`,
+			async (change) => {
+				const { snapshot, revalidate } = await savedCatalogProjection(
+					version,
+					protocol,
+				);
+				const endpoint = snapshot.endpoints[0];
+				if (!endpoint) throw new Error("Missing endpoint");
+				switch (change) {
+					case "selected model removed":
+						endpoint.allowedModels = ["other-model"];
+						break;
+					case "base URL":
+						endpoint.baseUrl = `${endpoint.origin}/changed/v1`;
+						break;
+					case "origin":
+						endpoint.origin = "https://other.example.test";
+						endpoint.baseUrl = `${endpoint.origin}/v1`;
+						break;
+					case "protocol":
+						endpoint.protocol =
+							protocol === "openai-responses-v1"
+								? "anthropic-messages-v1"
+								: "openai-responses-v1";
+						endpoint.authentication = "bearer";
+						break;
+					case "authentication":
+						endpoint.authentication = "bearer";
+						break;
+					case "security":
+						endpoint.baseUrl = "http://127.0.0.1:8080/v1";
+						endpoint.origin = "http://127.0.0.1:8080";
+						endpoint.security.tls = "loopback-http";
+						break;
+					case "tools":
+					case "streaming":
+						Object.assign(endpoint.capabilities, { [change]: false });
+						break;
+					case "unavailable":
+						endpoint.available = false;
+						break;
+					case "revision":
+						snapshot.revision = "catalog-b";
+						break;
+					case "expired":
+						snapshot.validUntil = Date.now() - 1;
+						break;
+					case "removed":
+						snapshot.endpoints = [];
+						break;
+				}
+				await expect(revalidate()).rejects.toThrow(
+					"MODEL_CONFIGURATION_UNAVAILABLE",
+				);
+			},
+		);
+	}
+}
