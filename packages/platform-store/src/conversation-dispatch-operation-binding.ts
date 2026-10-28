@@ -92,9 +92,20 @@ export async function originalOperationBinding(
 			native.agentId !== base.agentId ||
 			native.actorId !== state.execution.actor_id ||
 			native.channelId !== state.execution.channel_id ||
-			state.execution.model_configuration_revision !== null ||
-			state.execution.model_option_id !== null ||
-			state.execution.reasoning_level !== null ||
+			(native.capabilityKind !== "skill" &&
+				(state.execution.model_configuration_revision !== null ||
+					state.execution.model_option_id !== null ||
+					state.execution.reasoning_level !== null)) ||
+			new Set([
+				state.execution.model_configuration_revision === null,
+				state.execution.model_option_id === null,
+				state.execution.reasoning_level === null,
+			]).size !== 1 ||
+			(state.execution.model_configuration_revision !== null &&
+				(safeCounter(state.execution.model_configuration_revision, 1) ===
+					undefined ||
+					!validText(state.execution.model_option_id) ||
+					!validText(state.execution.reasoning_level))) ||
 			(claim.operation === origin.operation
 				? origin.id !== state.outbox.id ||
 					!isDeepStrictEqual(native, claim.nativeCapability)

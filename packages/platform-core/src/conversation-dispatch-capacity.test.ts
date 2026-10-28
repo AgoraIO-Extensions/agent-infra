@@ -80,6 +80,19 @@ describe("Core dispatch capacity decision", () => {
 			}),
 		).toBe("capacity_unavailable");
 	});
+	it("checks the frozen default Runtime revision for legacy Skills", () => {
+		const native = {
+			...snapshot(),
+			operation: "conversation.native-capability.invoke.v1" as const,
+		};
+		expect(decideConversationDispatchCapacityV1(native)).toBe("admit");
+		expect(
+			decideConversationDispatchCapacityV1({
+				...native,
+				modelConfigurationRevision: 3,
+			}),
+		).toBe("capacity_unavailable");
+	});
 	it("admits a custom Agent without a Platform model configuration", () => {
 		expect(decideConversationDispatchCapacityV1(snapshot("custom"))).toBe(
 			"admit",

@@ -729,6 +729,161 @@ async function commandEffectCounts() {
 }
 
 describe("PostgreSQL Conversation command transaction", () => {
+	it.each(["skill", "command", "custom"] as const)(
+		"freezes only the legacy %s model context and accepts matching model facts",
+		async (kind) => {
+			const nativeAuthority = {
+				...authority,
+				taskBoundary: {
+					schemaVersion: 1 as const,
+					principal: { kind: "user" as const, id: authority.actorId },
+					agentId: authority.agentId,
+					channelId: authority.channelId,
+					identityRevision: "identity-01",
+					agentAuthorizationRevision: authority.authorizationRevision,
+					accessSources: [{ kind: "user" as const, userId: authority.actorId }],
+				},
+			};
+			await persistConformanceModelConfiguration(
+				kind === "custom" ? undefined : conformanceModelConfiguration,
+				nativeAuthority,
+			);
+			const { transaction, useCase } = createConversation(nativeAuthority);
+			const eventTransaction = new PostgresConversationEventTransactionV1({
+				databaseUrl,
+			});
+			const dispatch = new PostgresConversationDispatchStoreV1({ databaseUrl });
+			try {
+				const created = await useCase.createConversation({
+					schemaVersion: 1,
+					agentId: authority.agentId,
+					idempotencyKey: "model-native-create",
+					requestId: "model-native-create",
+					traceId: "model-native-create",
+				});
+				if (created.outcome !== "accepted")
+					throw Error("expected conversation");
+				const command = kind === "command";
+				const metadata = new FakeNativeCapabilityMetadataRevalidationV1({
+					hostScopeRef: null,
+					projection: {
+						selector: command ? "commands" : "skills",
+						revision: "b".repeat(64),
+						capabilities: [
+							command
+								? {
+										id: "a".repeat(64),
+										kind: "command",
+										name: "status",
+										description: "Read status",
+										source: { name: "codex", version: "1" },
+										availability: "available",
+									}
+								: {
+										id: "a".repeat(64),
+										kind: "skill",
+										name: "workspace-summary",
+										description: "Summarize",
+										source: { name: "skill-hub", version: "1" },
+										availability: "discovered",
+									},
+						],
+					},
+				});
+				const admission = createNativeCapabilityAdmissionUseCaseV1({
+					transaction,
+					metadata,
+					authorization: {
+						authorize: async () => ({
+							outcome: "allowed",
+							authority: nativeAuthority,
+						}),
+					},
+					newId: () => "frozen-native-execution",
+				});
+				const request = {
+					schemaVersion: 1 as const,
+					conversationId: created.result.conversationId,
+					capabilityId: "a".repeat(64),
+					directoryRevision: "b".repeat(64),
+					parameters: command ? "" : "summarize",
+					idempotencyKey: "model-native-invoke",
+					requestId: "model-native-invoke",
+					traceId: "model-native-invoke",
+				};
+				await expect(admission.admit(request)).resolves.toMatchObject({
+					outcome: "accepted",
+				});
+				await expect(admission.admit(request)).resolves.toMatchObject({
+					outcome: "replayed",
+				});
+				expect(
+					await client`select model_configuration_revision,model_option_id,reasoning_level from platform.conversation_executions where execution_id='frozen-native-execution'`,
+				).toEqual([
+					{
+						model_configuration_revision: kind === "skill" ? "1" : null,
+						model_option_id: kind === "skill" ? "model_primary" : null,
+						reasoning_level: kind === "skill" ? "low" : null,
+					},
+				]);
+				if (kind === "skill") {
+					await expect
+						.poll(async () => {
+							const [row] =
+								await client`select available_at <= clock_timestamp() as available from platform.outbox_items where id='conversation:native-capability:frozen-native-execution'`;
+							return row?.available;
+						})
+						.toBe(true);
+					const claimed = await dispatch.claim({
+						schemaVersion: 1,
+						itemId: "conversation:native-capability:frozen-native-execution",
+						workerId: "native-model-worker",
+						leaseDurationMs: 30000,
+					});
+					expect(claimed).toMatchObject({ outcome: "claimed" });
+					if (claimed.outcome !== "claimed") throw Error("expected claim");
+					const events = createConversationEventUseCaseV1({
+						transaction: eventTransaction,
+					});
+					await expect(
+						events.persist({
+							schemaVersion: 1,
+							conversationId: request.conversationId,
+							executionId: "frozen-native-execution",
+							sessionGeneration: 1,
+							deliveryFence: claimed.claim.executionDeliveryFence,
+							adapterEventKey: "native-model-intent",
+							runtimeCursor: "native-model-cursor",
+							occurredAt: new Date().toISOString(),
+							event: {
+								type: "execution.operation",
+								schemaVersion: 2,
+								fact: {
+									kind: "model",
+									operationRef: "model-operation",
+									attemptRef: "model-attempt",
+									phase: "intent",
+									model: {
+										configVersion: "configuration-1",
+										modelOptionId: "model_primary",
+										modelId: "gpt-5",
+										reasoningLevel: "low",
+									},
+								},
+							},
+						}),
+					).resolves.toMatchObject({ outcome: "accepted" });
+				}
+			} finally {
+				await Promise.all([
+					transaction.close(),
+					eventTransaction.close(),
+					dispatch.close(),
+				]);
+			}
+		},
+	);
+
 	it("persists and replays one native capability admission atomically, including historical digests (#2950)", async () => {
 		await persistConformanceModelConfiguration(undefined, authority);
 		const { transaction, useCase } = createConversation();

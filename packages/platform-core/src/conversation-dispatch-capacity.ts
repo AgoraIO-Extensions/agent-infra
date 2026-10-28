@@ -37,8 +37,9 @@ export function decideConversationDispatchCapacityV1(
 	const verified = workload.verified;
 	const capacity = verified?.executionCapacity;
 	const modelConfigurationMatches =
-		state.operation === "conversation.native-capability.invoke.v1"
-			? state.modelConfigurationRevision === null
+		state.operation === "conversation.native-capability.invoke.v1" &&
+		state.modelConfigurationRevision === null
+			? true
 			: verified?.configuration.source.kind === "standard"
 				? workload?.sourceConfigurationRevision ===
 					state.modelConfigurationRevision

@@ -496,7 +496,8 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			workload.verified.configuration.revision !==
 				latest.configurationRevision ||
 			(workload.verified.configuration.source.kind === "standard"
-				? !nativeCapability &&
+				? (!nativeCapability ||
+						context.claim.modelConfigurationRevision !== null) &&
 					context.claim.modelConfigurationRevision !==
 						latest.configurationRevision
 				: workload.verified.configuration.source.kind !== "custom" ||

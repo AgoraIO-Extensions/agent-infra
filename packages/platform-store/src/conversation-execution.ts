@@ -458,6 +458,10 @@ export class PostgresConversationExecutionTransactionV1
 			if (!executionBinding)
 				return { outcome: "denied", reason: "authorization_lost" };
 
+			// Legacy Skill requests carry no selection; the native Driver uses the
+			// verified Runtime defaults. Freeze those fields for operation audit matching.
+			const nativeModel =
+				plan.capability.kind === "skill" ? state.modelConfiguration : undefined;
 			const occurredAt = new Date();
 			const reservationId = await reserveIdempotency(transaction, {
 				...idempotencyScope,
@@ -480,7 +484,9 @@ export class PostgresConversationExecutionTransactionV1
 					 ${conversation.sandbox?.sandboxId ?? null}, ${plan.agentId},
 					 ${plan.actorId}, ${plan.channelId}, ${plan.turnId}, 'submitted',
 					 ${plan.sessionGeneration}, 0, ${plan.authorizationRevision},
-					 null, null, null, ${executionBinding.executionSource},
+					 ${nativeModel?.configurationRevision ?? null},
+					 ${nativeModel?.defaultOptionId ?? null},
+					 ${nativeModel?.defaultReasoningLevel ?? null}, ${executionBinding.executionSource},
 					 ${executionBinding.relayKeyBinding?.purpose ?? null},
 					 ${executionBinding.relayKeyBinding?.subjectId ?? null},
 					 ${executionBinding.relayKeyBinding?.keyId ?? null},
