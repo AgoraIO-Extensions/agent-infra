@@ -1413,6 +1413,17 @@ export type PersonalApiCredentialRevokeResponseV1 = {
     replayed: boolean;
 };
 
+export type PersonalApiIdentityV1 = {
+    credentialId: string;
+    expiresAt: string | null;
+    principal: {
+        id: string;
+        kind: 'user';
+    };
+    schemaVersion: 1;
+    scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read' | 'eval:data'>;
+};
+
 export type PersonalRelayKeyReplaceRequestV1 = {
     expectedVersion: number | null;
     /**
@@ -6634,6 +6645,55 @@ export type NarrowPersonalApiCredentialV2Responses = {
 };
 
 export type NarrowPersonalApiCredentialV2Response = NarrowPersonalApiCredentialV2Responses[keyof NarrowPersonalApiCredentialV2Responses];
+
+export type GetPersonalApiIdentityV2Data = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v2/me/api-identity';
+};
+
+export type GetPersonalApiIdentityV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetPersonalApiIdentityV2Error = GetPersonalApiIdentityV2Errors[keyof GetPersonalApiIdentityV2Errors];
+
+export type GetPersonalApiIdentityV2Responses = {
+    /**
+     * Current personal API identity
+     */
+    200: PersonalApiIdentityV1;
+};
+
+export type GetPersonalApiIdentityV2Response = GetPersonalApiIdentityV2Responses[keyof GetPersonalApiIdentityV2Responses];
 
 export type ListRecentPersonalConversationsV2Data = {
     body?: never;

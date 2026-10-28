@@ -4733,6 +4733,51 @@ function isAgentDefaultRelayKeyV2OpenApiAddition(previous, current) {
 }
 
 // #1060 extends only the canonical audit action at its existing schema locations.
+// #3625 permits only the personal identity read and the pinned single-Agent auth addition.
+function isPersonalApiIdentityReadAddition(previous, current) {
+	const normalized = structuredClone(current);
+	const action = "api.credential.identity.read";
+	const oldActions =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	const newActions =
+		normalized.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	if (oldActions && newActions) {
+		if (
+			oldActions.includes(action) ||
+			newActions.filter((value) => value === action).length !== 1
+		)
+			return false;
+		normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+			newActions.filter((value) => value !== action);
+		return sameValue(previous, normalized);
+	}
+	const path = "/api/v2/me/api-identity";
+	const agentPath = "/api/v2/agents/{agentId}";
+	if (
+		previous.paths?.[path] ||
+		previous.components?.schemas?.PersonalApiIdentityV1 ||
+		!previous.paths?.[agentPath]?.get ||
+		previous.paths[agentPath].get.security !== undefined ||
+		previous.paths[agentPath].get.description !== undefined
+	)
+		return false;
+	const addition = {
+		path: current.paths?.[path],
+		schema: current.components?.schemas?.PersonalApiIdentityV1,
+		read: current.paths?.[agentPath]?.get,
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"aae6375ece0b26ff9c49b864cd806974389df47c5b3b7254d60ae9684df9635f"
+	)
+		return false;
+	delete normalized.paths[path];
+	delete normalized.components.schemas.PersonalApiIdentityV1;
+	delete normalized.paths[agentPath].get.security;
+	delete normalized.paths[agentPath].get.description;
+	return sameValue(previous, normalized);
+}
+
 function withoutPersonalApiAgentReadAudit(previous, current) {
 	const normalized = structuredClone(current);
 	let additions = 0;
@@ -6600,6 +6645,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isAdministratorAgentReadV2OpenApiAddition(previous, current) &&
 			!isPersonalApiCredentialV2OpenApiAddition(previous, current) &&
 			!isPersonalApiAgentReadV2OpenApiAddition(previous, current) &&
+			!isPersonalApiIdentityReadAddition(previous, current) &&
 			!isPersonalApiAgentReadAuditOpenApiAddition(previous, current) &&
 			!isPersonalRelayKeyAuditOpenApiAddition(previous, current) &&
 			!isPersonalRelayKeyV2OpenApiAddition(previous, current) &&

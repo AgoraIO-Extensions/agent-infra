@@ -358,6 +358,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/directory/search",
 			"/api/v2/me/api-credentials",
 			"/api/v2/me/api-credentials/{credentialId}",
+			"/api/v2/me/api-identity",
 			"/api/v2/me/conversations/recent",
 			"/api/v2/me/relay-key",
 			"/api/v2/skills",

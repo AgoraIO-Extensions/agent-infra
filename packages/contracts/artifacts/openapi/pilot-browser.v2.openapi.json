@@ -7971,6 +7971,73 @@
         ],
         "type": "object"
       },
+      "PersonalApiIdentityV1": {
+        "additionalProperties": false,
+        "properties": {
+          "credentialId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "expiresAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "principal": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "user",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "scopes": {
+            "items": {
+              "enum": [
+                "agent:create",
+                "agent:manage",
+                "agent:use",
+                "agent:read",
+                "eval:data"
+              ],
+              "type": "string"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "principal",
+          "credentialId",
+          "scopes",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
       "PersonalRelayKeyReplaceRequestV1": {
         "additionalProperties": false,
         "properties": {
@@ -14090,6 +14157,7 @@
     },
     "/api/v2/agents/{agentId}": {
       "get": {
+        "description": "Browser session or personal Bearer. Bearer requires agent:read and current explicit manage or use grant; no Cookie, query, body or self-reported identity. Invisible and missing Agents both return RESOURCE_UNAVAILABLE. Same projection as the personal Bearer list; responses are no-store.",
         "operationId": "getAgentV2",
         "parameters": [
           {
@@ -14183,7 +14251,15 @@
             },
             "description": "Dependency is temporarily unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
+        ]
       }
     },
     "/api/v2/agents/{agentId}/api-manage-grants/{userId}": {
@@ -22546,6 +22622,99 @@
           }
         ],
         "summary": "Restrict one personal credential's scopes or expiry"
+      }
+    },
+    "/api/v2/me/api-identity": {
+      "get": {
+        "description": "Current personal Bearer identity only; no Cookie, query, body or self-reported identity. No agent:read scope or Agent grant required. Scopes are credential limits, not resource grants. Null expiry means no time expiry; revocation and current user state still apply. Responses are no-store.",
+        "operationId": "getPersonalApiIdentityV2",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonalApiIdentityV1"
+                }
+              }
+            },
+            "description": "Current personal API identity"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "platformApiCredential": []
+          }
+        ]
       }
     },
     "/api/v2/me/conversations/recent": {
