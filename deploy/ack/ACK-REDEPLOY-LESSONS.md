@@ -35,6 +35,7 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | custom Agent Workload ready，Session 却报 `RUNTIME_CONFIGURATION_INVALID` | 镜像没有 Driver 默认值，Worker 只为 Agent Workload 注入了 `acp` | Session 也注入服务端已选择的 Driver；用没有镜像默认 Driver 的实际自定义镜像回归 |
 | GET session 200，写接口却返回 401 | 直接 HTTP 探针遗漏了浏览器 Origin | 遵守浏览器写入的 Origin/CSRF 契约，保留具体失败阶段；不把协议错误归因于密码或 Cookie |
 | 密码正确但自动登录失败 | 对密码文件使用 `trim()` 会删除合法的首尾空格 | 保留密码空格，只按输入约定删除一个末尾 LF/CRLF，并用含空格密码测试真实 HTTP 提交字节 |
+| 清空后四模板 preflight 和 Agent 创建都通过，Web 首条消息仍返回 `RESOURCE_UNAVAILABLE` | 创建请求恢复了 Agent 默认 Relay Key，但新数据库里当前用户的个人 Relay Key 未设置；标准模板 Web 执行按主体读取个人 Key | credential bootstrap 可声明私有 `personalRelayKeyFile`，在浏览器验收前通过正式个人 Key API 写入空状态并回读；已有 Key 保留。真实同一会话在补齐个人 Key 后由拒绝变为 `202`，不能把这类问题归因于密码 |
 | 登录与模型目录正常，Messages 模型回合却进入 `unknown` | 上游模型请求返回 `502 upstream_error`，目录可见不代表模型可执行 | 保留直接模型请求的 HTTP 状态与脱敏错误类型；真实 Runtime preflight 失败时停止验收，不替换成功记录或把问题归因于登录 |
 | 模型 HTTP 状态为 `200`，Runtime 仍没有文本或完成事件 | SSE 只含 `message_start` 后紧接 `api_error`；实际 native adapter 回读确认上游过载 | 成功必须包含模型完成事实、文本和终态，不能只看 HTTP 状态；使用已批准 Key 的其他可用模型时，先经同一 native adapter 和完整模板 preflight 复验，再更新配置 |
 | 自定义增量镜像的 revision label 看起来仍是旧源码 | OCI 配置继承基础镜像的 revision，后续 overlay 有自己的构建配方和最终 Digest | 分别保留继承的基础 revision、基础 Digest、overlay Dockerfile hash 和最终 OCI Digest；原容量 receipt 保持原字节，不把旧来源改写为最终 Platform 源码 |

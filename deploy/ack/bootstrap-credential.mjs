@@ -26,7 +26,7 @@ async function privateJson(file, maximum = 1024 * 1024) {
 	} finally { await handle.close(); }
 }
 
-async function privateText(file, maximum = 8192) {
+async function privateText(file, maximum = 8192, pattern = /^papi_[A-Za-z0-9_-]{43}$/u) {
 	if (!isAbsolute(file)) fail("PRIVATE_FILE_INVALID");
 	const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 	try {
@@ -37,7 +37,7 @@ async function privateText(file, maximum = 8192) {
 		const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
 		if (bytesRead !== stat.size || bytesRead > maximum) fail("PRIVATE_FILE_INVALID");
 		const value = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, bytesRead)).trim();
-		if (!/^papi_[A-Za-z0-9_-]{43}$/u.test(value)) fail("OUTPUT_CREDENTIAL_INVALID");
+		if (!pattern.test(value)) fail("PRIVATE_CREDENTIAL_INVALID");
 		return value;
 	} finally { await handle.close(); }
 }
@@ -60,6 +60,7 @@ function parse(input) {
 	);
 	assert(typeof input.storageStateFile === "string" && isAbsolute(input.storageStateFile));
 	assert(typeof input.outputFile === "string" && isAbsolute(input.outputFile));
+	assert(input.personalRelayKeyFile === undefined || (typeof input.personalRelayKeyFile === "string" && isAbsolute(input.personalRelayKeyFile)));
 	assert(Array.isArray(input.scopes) && input.scopes.length > 0 && input.scopes.length <= 4);
 	assert(input.scopes.every((scope) => ["agent:read", "agent:use", "agent:manage", "agent:create"].includes(scope)));
 	assert(new Set(input.scopes).size === input.scopes.length);
@@ -76,12 +77,38 @@ export async function bootstrapCredential(input) {
 	assert(Array.isArray(state.cookies) && Array.isArray(state.origins));
 	assert(state.origins.every((entry) => entry && entry.origin === parsed.origin));
 	const existing = await lstat(parsed.outputFile).catch(() => undefined);
+	const personalKey = parsed.personalRelayKeyFile === undefined ? undefined
+		: await privateText(parsed.personalRelayKeyFile, 8192, /^[\x21-\x7e]{16,8192}$/u);
 	const context = await request.newContext({
 		baseURL: parsed.origin,
 		storageState: state,
 		ignoreHTTPSErrors: false,
 	});
 	try {
+		let personalRelayKey;
+		if (personalKey !== undefined) {
+			const read = async () => {
+				const response = await context.get("/api/v2/me/relay-key", { timeout: 30_000, maxRedirects: 0 });
+				assert.equal(response.status(), 200, "PERSONAL_RELAY_KEY_READ_FAILED");
+				const value = await response.json();
+				assert(value.schemaVersion === 1 && Object.keys(value).sort().join(",") === "isSet,keyVersion,schemaVersion" &&
+					(value.isSet === false ? value.keyVersion === null : value.isSet === true && Number.isSafeInteger(value.keyVersion) && value.keyVersion > 0), "PERSONAL_RELAY_KEY_STATE_INVALID");
+				return value;
+			};
+			const before = await read();
+			let expectedVersion = before.keyVersion;
+			if (!before.isSet) {
+				const response = await context.put("/api/v2/me/relay-key", { headers: { Origin: parsed.origin },
+					data: { expectedVersion: null, keyValue: personalKey }, timeout: 30_000, maxRedirects: 0 });
+				assert.equal(response.status(), 200, "PERSONAL_RELAY_KEY_REPLACE_FAILED");
+				const value = await response.json();
+				assert(value.schemaVersion === 1 && value.isSet === true && Number.isSafeInteger(value.keyVersion) && value.keyVersion > 0, "PERSONAL_RELAY_KEY_REPLACE_INVALID");
+				expectedVersion = value.keyVersion;
+			}
+			const after = await read();
+			assert(after.isSet === true && after.keyVersion === expectedVersion, "PERSONAL_RELAY_KEY_CHANGED");
+			personalRelayKey = { mode: before.isSet ? "existing-retained" : "installed-and-read-back", keyVersion: after.keyVersion };
+		}
 		const response = await context.post("/api/v2/me/api-credentials", {
 			headers: { "Idempotency-Key": parsed.idempotencyKey, Origin: parsed.origin },
 			data: { scopes: parsed.scopes, expiresAt: parsed.expiresAt },
@@ -105,7 +132,8 @@ export async function bootstrapCredential(input) {
 				await rename(temporary, parsed.outputFile);
 			} finally { await unlink(temporary).catch(() => {}); }
 		}
-		return { schemaVersion: 1, kind: "ack-api-credential", status: response.status(), replayed: body.replayed, credentialHash: hash(credential), metadataHash: hash(JSON.stringify(body.metadata ?? {})), businessVerified: false };
+		return { schemaVersion: 1, kind: "ack-api-credential", status: response.status(), replayed: body.replayed, credentialHash: hash(credential), metadataHash: hash(JSON.stringify(body.metadata ?? {})),
+			...(personalRelayKey ? { personalRelayKey } : {}), businessVerified: false };
 	} finally { await context.dispose(); }
 }
 

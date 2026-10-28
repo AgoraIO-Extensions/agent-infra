@@ -446,6 +446,7 @@ Playwright `storageState`。工具不会接收 LDAP 密码，也不会模拟登�
   "schemaVersion": 1,
   "origin": "https://ack.example.test",
   "storageStateFile": "/private/ack/login/owner-state.json",
+  "personalRelayKeyFile": "/private/ack/credentials/owner-relay.key",
   "outputFile": "/private/ack/credentials/owner-create.token",
   "scopes": ["agent:create", "agent:read", "agent:use", "agent:manage"],
   "expiresAt": null,
@@ -453,7 +454,14 @@ Playwright `storageState`。工具不会接收 LDAP 密码，也不会模拟登�
 }
 ```
 
-运行 `bootstrap-credential` 会 POST `/api/v2/me/api-credentials`，把一次性返回的
+`personalRelayKeyFile` 可选；全新数据库中的标准模板 Web 验收必须声明它，复用已授权的个人
+Relay Key 文件。Agent 默认 Relay Key 用于模板配置等路径，不能代替登录用户自己的 Web 执行 Key。
+工具先读取同一登录主体的 `/api/v2/me/relay-key`；未设置时以 `expectedVersion=null` 写入并
+回读 keyVersion，已设置时只保留并回读，不覆盖已有 Key，也不宣称其字节与输入相同。
+冲突、非法状态或失败回读会停止后续 credential 签发。receipt 仅记录 installed/retained 和版本，
+不含个人 Key、Cookie 或用户 ID。最终模型回合仍须验证实际执行成功。
+
+运行 `bootstrap-credential` 随后 POST `/api/v2/me/api-credentials`，把一次性返回的
 `papi_...` 材料原子写入 `outputFile`，receipt 只包含状态和 SHA-256。相同 key 重试时，
 服务器返回 null 材料；只有本地已存在且权限正确的 credential 文件才允许继续。文件随后
 作为 Agent 请求清单的 `credentialFile`，不会复制到 values、Secret、日志或浏览器 evidence。
