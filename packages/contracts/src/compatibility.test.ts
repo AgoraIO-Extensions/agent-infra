@@ -6060,3 +6060,64 @@ it("admits only the pinned application model preview (#3146)", async () => {
 		await rm(directory, { recursive: true, force: true });
 	}
 });
+
+it("admits only application credential audit registration #3626", async () => {
+	const current = JSON.parse(await readFile(pilotBrowserArtifactPath, "utf8"));
+	const previous = structuredClone(current);
+	const additions = [
+		"application.credential.issued",
+		"application.credential.rotated",
+		"application.credential.delivery",
+		"application.credential.metadata.read",
+		"application.credential.revoked",
+	];
+	previous.components.schemas.ScopedPlatformAuditActionV1.enum =
+		previous.components.schemas.ScopedPlatformAuditActionV1.enum.filter(
+			(action: string) => !additions.includes(action),
+		);
+	for (const name of [
+		"ScopedPlatformAuditProjectionV1",
+		"ScopedPlatformAuditProjectionV2",
+	])
+		previous.components.schemas[name].properties.subject.properties.kind.enum =
+			previous.components.schemas[
+				name
+			].properties.subject.properties.kind.enum.filter(
+				(kind: string) => kind !== "application",
+			);
+	const directory = await mkdtemp(resolve(tmpdir(), "application-audit-3626-"));
+	const previousPath = resolve(directory, "previous.json");
+	const currentPath = resolve(directory, "current.json");
+	try {
+		await writeFile(previousPath, JSON.stringify(previous));
+		await writeFile(currentPath, JSON.stringify(current));
+		expect(comparePaths(currentPath, previousPath).status).toBe(0);
+		for (const mutate of [
+			(doc: typeof current) =>
+				doc.components.schemas.ScopedPlatformAuditActionV1.enum.pop(),
+			(doc: typeof current) =>
+				doc.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+					"application.credential.invented",
+				),
+			(doc: typeof current) =>
+				doc.components.schemas.ScopedPlatformAuditActionV1.enum.shift(),
+			(doc: typeof current) => {
+				doc.components.schemas.ScopedPlatformAuditProjectionV1.additionalProperties = true;
+			},
+			(doc: typeof current) =>
+				doc.components.schemas.ScopedPlatformAuditProjectionV1.properties.subject.properties.kind.enum.push(
+					"credential_material",
+				),
+			(doc: typeof current) => {
+				doc.paths["/api/v3/admin/audit"].get.security = [];
+			},
+		]) {
+			const changed = structuredClone(current);
+			mutate(changed);
+			await writeFile(currentPath, JSON.stringify(changed));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});

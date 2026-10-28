@@ -4270,6 +4270,51 @@ function isAdminAuditActionsRegistration2879OpenApiAddition(previous, current) {
 	return isDeepStrictEqual(previous, normalized);
 }
 
+function isApplicationCredentialAudit3626OpenApiAddition(previous, current) {
+	const additions = [
+		"application.credential.issued",
+		"application.credential.rotated",
+		"application.credential.delivery",
+		"application.credential.metadata.read",
+		"application.credential.revoked",
+	];
+	const before =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	const after = current.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	if (
+		!Array.isArray(before) ||
+		!Array.isArray(after) ||
+		additions.some((action) => before.includes(action)) ||
+		!sameValue(after, [...before, ...additions])
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+		structuredClone(before);
+	for (const name of [
+		"ScopedPlatformAuditProjectionV1",
+		"ScopedPlatformAuditProjectionV2",
+	]) {
+		const oldKinds =
+			previous.components?.schemas?.[name]?.properties?.subject?.properties
+				?.kind?.enum;
+		const newKinds =
+			normalized.components?.schemas?.[name]?.properties?.subject?.properties
+				?.kind?.enum;
+		if (
+			!Array.isArray(oldKinds) ||
+			!Array.isArray(newKinds) ||
+			oldKinds.includes("application") ||
+			!sameValue(newKinds, [...oldKinds, "application"])
+		)
+			return false;
+		normalized.components.schemas[
+			name
+		].properties.subject.properties.kind.enum = structuredClone(oldKinds);
+	}
+	return isDeepStrictEqual(previous, normalized);
+}
+
 // #3258 登记企微 /new 开始新会话、会话不可用（#3184）与入站媒体被拒绝（#3241）三个已有写入方的
 // 审计动作。新增枚举值追加在 #2879 的动作之后；用写死 SHA-256 确保任意篡改都会使此门禁失败。
 function isWecomAuditActionsRegistration3258OpenApiAddition(previous, current) {
@@ -6379,6 +6424,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&
 			!isAdminAuditActionsRegistration2879OpenApiAddition(previous, current) &&
 			!isWecomAuditActionsRegistration3258OpenApiAddition(previous, current) &&
+			!isApplicationCredentialAudit3626OpenApiAddition(previous, current) &&
 			!isScopedAuditCredentialSecurityAddition(previous, current) &&
 			!isRuntimeFileExchangeOpenApiAddition(previous, current) &&
 			!isRuntimeFileExchangeV2OpenApiAddition(previous, current) &&

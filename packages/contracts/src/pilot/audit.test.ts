@@ -391,3 +391,31 @@ describe("scoped public audit display-name V2 contract (#2909)", () => {
 		expect(ScopedPlatformAuditProjectionV1Schema.parse(record)).toEqual(record);
 	});
 });
+
+it.each([
+	"application.credential.issued",
+	"application.credential.rotated",
+	"application.credential.delivery",
+	"application.credential.metadata.read",
+	"application.credential.revoked",
+])("publishes bounded application governance %s", (action) => {
+	const input = {
+		...record,
+		action,
+		actor: { kind: "user", actorId: "manager" },
+		subject: { kind: "application", subjectId: "application-a" },
+		result: "succeeded",
+		taskApi: null,
+		originalPrincipal: null,
+		executor: null,
+		operation: null,
+	};
+	expect(ScopedPlatformAuditProjectionV1Schema.parse(input)).toEqual(input);
+	for (const field of ["credential", "credentialHash", "details"])
+		expect(
+			ScopedPlatformAuditProjectionV1Schema.safeParse({
+				...input,
+				[field]: "PRIVATE_SENTINEL",
+			}).success,
+		).toBe(false);
+});
