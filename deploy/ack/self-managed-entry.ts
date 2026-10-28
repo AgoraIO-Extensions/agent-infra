@@ -73,6 +73,8 @@ export function verifyOwnEntryWorkloads(agentId: string, source: Item, origin: s
 		const endpoints = all.EndpointSlice.filter(object => object.metadata.labels?.["kubernetes.io/service-name"] === expected.name);
 		assert(endpoints.length >= 1 && endpoints.every(object => object.metadata.ownerReferences?.some((owner: Item) => owner.uid === service.metadata.uid)));
 		assert(endpoints.some(object => object.endpoints?.some((endpoint: Item) => endpoint.conditions?.ready === true && endpoint.targetRef?.uid === pod.metadata.uid && endpoint.addresses?.includes(pod.status.podIP))));
+		assert(endpoints.every(object => (object.endpoints ?? []).every((endpoint: Item) => endpoint.conditions?.ready === false ||
+			(endpoint.targetRef?.uid === pod.metadata.uid && endpoint.addresses?.length === 1 && endpoint.addresses[0] === pod.status.podIP))), "OWN_ENTRY_UNRELATED_ENDPOINT");
 		assert(service.spec.ports.every((port: Item) => endpoints.some(object => object.ports?.some((endpoint: Item) => endpoint.port === port.targetPort))));
 		for (const endpoint of endpoints) capture(endpoint);
 	}
@@ -123,6 +125,11 @@ export async function browserEntry(origin: string, allowed: string, denied: stri
 	} finally { await browser.close(); }
 }
 
+export function assertOwnEntryUnchanged(before: { resourceIdentityHash: string; configurationRevision: string }, after: { resourceIdentityHash: string; configurationRevision: string }) {
+	assert.equal(after.resourceIdentityHash, before.resourceIdentityHash, "OWN_ENTRY_WORKLOAD_CHANGED");
+	assert.equal(after.configurationRevision, before.configurationRevision, "OWN_ENTRY_CONFIGURATION_REVISION_CHANGED");
+}
+
 export async function validateOwnEntry(configFile: string, requestsFile: string, stateDirectory: string, evidenceDirectory: string, sourceSha: string, read: Read) {
 	const config = await privateJson(configFile), requests = await privateJson(requestsFile), binding = await privateJson(join(stateDirectory, "agent-bindings.json"));
 	assert(Object.keys(config).every(key => ["schemaVersion", "requestName", "sourceSha", "routeHostSuffix", "imageSourceSha", "contentSha256", "issuer", "audience", "signingKeyFile", "browserCertificateFile", "expectedReply"].includes(key)));
@@ -161,7 +168,7 @@ export async function validateOwnEntry(configFile: string, requestsFile: string,
 	assert(boundary.pass, "OWN_ENTRY_BOUNDARY_FAILED");
 	const browser = await browserEntry(origin, allowed, denied, config.browserCertificateFile, config.expectedReply, directory);
 	const after = verifyOwnEntryWorkloads(agentId, body.source, origin, read, body.environment);
-	assert.equal(after.resourceIdentityHash, workload.resourceIdentityHash, "OWN_ENTRY_WORKLOAD_CHANGED");
+	assertOwnEntryUnchanged(workload, after);
 	return { schemaVersion: 1, kind: "ack-self-managed-entry", sourceSha, requestName: config.requestName, agentHash: hash(agentId), originHash: hash(origin),
 		serviceCount: workload.serviceCount, imageDigests: workload.imageDigests, resources: workload.resources, boundary, browser, pass: true };
 }

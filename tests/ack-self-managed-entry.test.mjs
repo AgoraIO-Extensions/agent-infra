@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { verifyOwnEntryWorkloads } from "../deploy/ack/self-managed-entry.ts";
+import {
+	assertOwnEntryUnchanged,
+	verifyOwnEntryWorkloads,
+} from "../deploy/ack/self-managed-entry.ts";
 
 function fixture() {
 	const agentId = "current-private-agent";
@@ -183,6 +186,7 @@ for (const scenario of [
 	"wrong-image",
 	"not-ready",
 	"wrong-endpoint",
+	"additional-ready-endpoint",
 	"wrong-ingress",
 	"revision-drift",
 ]) {
@@ -199,6 +203,12 @@ for (const scenario of [
 			f.inventory.Deployment[1].status.readyReplicas = 0;
 		if (scenario === "wrong-endpoint")
 			f.inventory.EndpointSlice[0].endpoints[0].targetRef.uid = "unrelated-pod";
+		if (scenario === "additional-ready-endpoint")
+			f.inventory.EndpointSlice[0].endpoints.push({
+				conditions: { ready: true },
+				targetRef: { uid: "unrelated-pod" },
+				addresses: ["10.1.1.99"],
+			});
 		if (scenario === "wrong-ingress")
 			f.inventory.Ingress[0].spec.rules[0].http.paths[0].backend.service.name =
 				"unrelated-service";
@@ -208,3 +218,17 @@ for (const scenario of [
 		assert.throws(f.run);
 	});
 }
+
+test("an in-place configuration revision change invalidates the completed browser journey", () => {
+	const f = fixture();
+	const before = f.run();
+	for (const kind of ["Deployment", "Service", "Ingress"])
+		for (const resource of f.inventory[kind])
+			resource.metadata.labels["agent-infra.agora.io/revision"] = "2";
+	const after = f.run();
+	assert.equal(after.resourceIdentityHash, before.resourceIdentityHash);
+	assert.throws(
+		() => assertOwnEntryUnchanged(before, after),
+		/OWN_ENTRY_CONFIGURATION_REVISION_CHANGED/u,
+	);
+});
