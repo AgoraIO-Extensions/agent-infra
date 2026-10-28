@@ -402,7 +402,7 @@ try {
  if (process.env.RUN_EVALUATION === 'true') {
    const storage = await import(${JSON.stringify(new URL("../../../packages/object-storage/dist/index.mjs", import.meta.url).href)});
    storage.requireEvaluationObjectStorageV1(workload.evaluation.storage);
-   console.log(JSON.stringify({batchSize:workload.evaluation.batchSize,timeoutMs:workload.evaluation.timeoutMs,hasCleanupStorage:typeof workload.evaluation.storage.remove==='function'}));
+   console.log(JSON.stringify({batchSize:workload.evaluation.batchSize,timeoutMs:workload.evaluation.timeoutMs,hasCleanupStorage:typeof workload.evaluation.storage.remove==='function',hasScorer:typeof workload.evaluationScoring?.loadExperimentPolicy==='function',scorerLeaseMs:workload.evaluationScoring?.leaseMs,sharedStorage:workload.evaluationScoring?.storage===workload.evaluation.storage}));
    workload.evaluation.closeStorage();process.exit(0);
  }
  if (process.env.RUN_FILE_EXCHANGE === 'true') {
@@ -1129,6 +1129,7 @@ it("passes the deployment-owned Eval factory and cleanup limits through the actu
 import {createEvaluationObjectStorageV1} from ${JSON.stringify(new URL("../../../packages/object-storage/dist/index.mjs", import.meta.url).href)};
 const evaluationStorage=createEvaluationObjectStorageV1({region:'fixture',bucket:'fixture',endpoint:'http://127.0.0.1:1',maxObjectBytes:1024,timeoutMs:1000});
 workloadInput.evaluation={storage:evaluationStorage,batchSize:7,timeoutMs:3000,closeStorage:()=>evaluationStorage.close()};
+workloadInput.evaluationScoring={storage:evaluationStorage,loadDataPolicy:async()=>({}),loadExperimentPolicy:async()=>({}),batchSize:7,leaseMs:30000,retryDelayMs:1000};
 `,
 		);
 		const result = run({ RUN_EVALUATION: "true" });
@@ -1137,6 +1138,9 @@ workloadInput.evaluation={storage:evaluationStorage,batchSize:7,timeoutMs:3000,c
 			batchSize: 7,
 			timeoutMs: 3000,
 			hasCleanupStorage: true,
+			hasScorer: true,
+			scorerLeaseMs: 30000,
+			sharedStorage: true,
 		});
 	} finally {
 		await writeFile(path, original);

@@ -636,7 +636,12 @@ export class PostgresConversationDispatchStoreV1
 			return await databaseOperation(() =>
 				this.#client.begin(async (transaction) => {
 					await transaction`select set_config('lock_timeout', '5s', true)`;
-					return claimWork(transaction, input, this.#userDirectory);
+					return claimWork(
+						transaction,
+						input,
+						this.#userDirectory,
+						this.#evaluationPolicy,
+					);
 				}),
 			);
 		} catch (error) {
@@ -1160,6 +1165,18 @@ export class PostgresConversationDispatchStoreV1
 						}
 						if (!sandboxCurrent)
 							throw new DispatchCapacityUnavailable("sandbox_wait");
+						if (input.claim.channelId === "eval") {
+							const preparedRuntime = {
+								configurationRevision: desired.configRevision,
+								imageDigest: desired.imageDigest,
+								resourceConfigurationHash:
+									workload.verified?.executionCapacity
+										?.resourceConfigurationHash,
+							};
+							const bound =
+								await transaction`update platform.evaluation_sample_tasks set data=jsonb_set(data,'{preparedRuntime}',${transaction.json(preparedRuntime)}) where execution_id=${input.claim.executionId} and (data->'preparedRuntime' is null or data->'preparedRuntime'=${transaction.json(preparedRuntime)}) returning id`;
+							if (bound.length !== 1) throw new StaleDispatchLease();
+						}
 						const original = await originalOperationBinding(
 							transaction,
 							state,

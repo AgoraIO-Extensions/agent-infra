@@ -6,6 +6,7 @@ import {
 import {
 	createEvaluationScoreWorkV1,
 	EvaluationDataErrorV1,
+	EvaluationModelNotSentErrorV1,
 } from "@agent-infra/platform-core";
 import {
 	createPostgresOutboxStore,
@@ -48,49 +49,56 @@ export function createEvaluationScoringWorkerV1(
 			const signal = AbortSignal.timeout(
 				Math.min(scorer.timeoutMs, options.leaseMs),
 			);
-			const first = await store.readKey(lease);
-			const decrypted = await options.decryptor.decrypt({
-				encryptedRecord: first.ciphertext,
-				expectedBinding: first.binding,
-			});
-			if (decrypted.outcome !== "decrypted")
-				throw new EvaluationDataErrorV1("unavailable");
-			const credential = decrypted.plaintext;
+			let sent = false;
 			try {
-				const endpoint = await options.catalog.resolve(
-					{
-						endpointId: scorer.implementation.endpointId,
-						catalogRevision: scorer.implementation.catalogRevision,
-					},
-					{ signal },
-				);
-				await store.readKey(lease);
-				const categories = scorer.implementation.inputCategories;
-				const result = await scoreEvaluationModelV1({
-					endpoint,
-					modelId: scorer.implementation.modelId,
-					credential,
-					rubric: input.rubric,
-					output: input.output,
-					...(categories.includes("sample") ? { sample: input.sample } : {}),
-					...(categories.includes("context") && input.context !== null
-						? { context: input.context }
-						: {}),
-					...(categories.includes("expected") && input.expected !== null
-						? { expected: input.expected }
-						: {}),
-					minimum: scorer.minimum,
-					maximum: scorer.maximum,
-					maxInputBytes: scorer.maxInputBytes,
-					maxOutputBytes: scorer.maxOutputBytes,
-					maxOutputTokens: scorer.implementation.maxOutputTokens,
-					timeoutMs: scorer.timeoutMs,
-					signal,
+				const first = await store.readKey(lease);
+				const decrypted = await options.decryptor.decrypt({
+					encryptedRecord: first.ciphertext,
+					expectedBinding: first.binding,
 				});
-				await store.readKey(lease);
-				return result;
-			} finally {
-				credential.fill(0);
+				if (decrypted.outcome !== "decrypted")
+					throw new EvaluationDataErrorV1("unavailable");
+				const credential = decrypted.plaintext;
+				try {
+					const endpoint = await options.catalog.resolve(
+						{
+							endpointId: scorer.implementation.endpointId,
+							catalogRevision: scorer.implementation.catalogRevision,
+						},
+						{ signal },
+					);
+					await store.readKey(lease);
+					const categories = scorer.implementation.inputCategories;
+					sent = true;
+					const result = await scoreEvaluationModelV1({
+						endpoint,
+						modelId: scorer.implementation.modelId,
+						credential,
+						rubric: input.rubric,
+						output: input.output,
+						...(categories.includes("sample") ? { sample: input.sample } : {}),
+						...(categories.includes("context") && input.context !== null
+							? { context: input.context }
+							: {}),
+						...(categories.includes("expected") && input.expected !== null
+							? { expected: input.expected }
+							: {}),
+						minimum: scorer.minimum,
+						maximum: scorer.maximum,
+						maxInputBytes: scorer.maxInputBytes,
+						maxOutputBytes: scorer.maxOutputBytes,
+						maxOutputTokens: scorer.implementation.maxOutputTokens,
+						timeoutMs: scorer.timeoutMs,
+						signal,
+					});
+					await store.readKey(lease);
+					return result;
+				} finally {
+					credential.fill(0);
+				}
+			} catch (error) {
+				if (!sent) throw new EvaluationModelNotSentErrorV1();
+				throw error;
 			}
 		},
 	});

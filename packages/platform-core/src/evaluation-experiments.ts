@@ -7,7 +7,10 @@ import type {
 } from "./conversation-execution-task.js";
 import type { ConversationExecutionAuthorityV1 } from "./conversation-execution-types.js";
 import { snapshotObject } from "./conversation-execution-values.js";
-import { parseConversationOperationEventV2 } from "./conversation-operation-facts.js";
+import {
+	type ConversationOperationFactV2,
+	parseConversationOperationEventV2,
+} from "./conversation-operation-facts.js";
 import {
 	type createEvaluationDataV1,
 	EvaluationDataErrorV1,
@@ -22,7 +25,10 @@ import {
 	type EvaluationScoreIntentV1,
 	planEvaluationScoreIntentV1,
 } from "./evaluation-score-intents.js";
-import type { EvaluationTaskBindingV1 } from "./evaluation-task-binding.js";
+import {
+	type EvaluationTaskBindingV1,
+	parseEvaluationTaskBindingV1,
+} from "./evaluation-task-binding.js";
 import {
 	type DirectorySnapshotBindingV1,
 	parseTaskAuthorizationBoundaryV1,
@@ -46,6 +52,24 @@ export interface EvaluationExperimentV1 {
 export interface EvaluationSampleTaskV1 {
 	readonly sampleTaskId: string;
 	readonly scoreIds?: readonly string[];
+	readonly preparedRuntime?: {
+		configurationRevision: number;
+		imageDigest: string;
+		resourceConfigurationHash: string;
+	};
+	readonly actual?: {
+		status: string;
+		billing: {
+			purpose: "agent-default";
+			subjectId: string;
+			keyVersion: number;
+		} | null;
+		lastSequence: number;
+		runtimeObserved: boolean;
+		preparedRuntime: EvaluationSampleTaskV1["preparedRuntime"] | null;
+		facts: ReturnType<typeof projectEvaluationExecutionFactsV1>;
+		factsTruncated: boolean;
+	};
 	readonly experimentId: string;
 	readonly sampleId: string;
 	readonly variantId: string;
@@ -158,6 +182,11 @@ export interface EvaluationExperimentTransactionV1 {
 	audit(action: string, targetId: string): Promise<void>;
 }
 export interface EvaluationExperimentTransactionPortV1 {
+	policyCheckpoint(): Promise<{
+		revision: number;
+		digest: string;
+		now: Date;
+	} | null>;
 	target(id: string): Promise<EvaluationExperimentV1 | null>;
 	samples(
 		id: string,
@@ -191,6 +220,36 @@ export function createEvaluationExperimentsV1(options: {
 				return invalid();
 			const experiment = await options.transaction.target(id);
 			if (!experiment) throw new EvaluationDataErrorV1("denied");
+			const checkPolicy = async () => {
+				const policy = await options
+					.loadPolicy()
+					.then(parseEvaluationExperimentPolicyV1)
+					.catch(() => {
+						throw new EvaluationDataErrorV1("unavailable");
+					});
+				const checkpoint = await options.transaction.policyCheckpoint();
+				if (
+					!checkpoint ||
+					policy.policyId !== experiment.policyId ||
+					policy.revision !== experiment.policyRevision ||
+					checkpoint.revision !== policy.revision ||
+					checkpoint.digest !==
+						createHash("sha256").update(JSON.stringify(policy)).digest("hex") ||
+					Date.parse(policy.validUntil) <= +checkpoint.now ||
+					Date.parse(experiment.metadataExpiresAt) <= +checkpoint.now ||
+					experiment.variantIds.some(
+						(id) => !policy.variants.some((v) => v.variantId === id),
+					) ||
+					experiment.scorerRefs.some(
+						(ref) =>
+							!policy.scorers.some(
+								(s) => s.scorerId === ref.scorerId && s.version === ref.version,
+							),
+					)
+				)
+					throw new EvaluationDataErrorV1("denied");
+			};
+			await checkPolicy();
 			const authority = await options.data.authorizeRun(
 				request,
 				experiment.datasetId,
@@ -204,6 +263,7 @@ export function createEvaluationExperimentsV1(options: {
 				experiment.datasetId,
 				experiment.versionId,
 			);
+			await checkPolicy();
 			return {
 				experiment,
 				items: tasks.slice(0, limit).map((task) => ({
@@ -214,6 +274,7 @@ export function createEvaluationExperimentsV1(options: {
 					executionId: task.executionId,
 					scoreIds: task.scoreIds ?? [],
 					requested: task.requested,
+					actual: task.actual ?? null,
 				})),
 				nextCursor:
 					tasks.length > limit
@@ -506,9 +567,20 @@ export function projectEvaluationExecutionFactsV1(
 		sequence: number;
 		phase: string;
 		observed: boolean;
-		[key: string]: unknown;
+		model: Extract<ConversationOperationFactV2, { kind: "model" }>["model"];
+		usage:
+			| Extract<ConversationOperationFactV2, { kind: "model" }>["usage"]
+			| null;
+		durationMs: number | null;
 	}[] = [];
-	const tools: unknown[] = [];
+	const tools: {
+		operationRef: string;
+		attemptRef: string;
+		sequence: number;
+		toolId: string;
+		phase: string;
+		durationMs: number | null;
+	}[] = [];
 	for (const event of events) {
 		if (event.eventType !== "execution.operation") continue;
 		const fact = parseConversationOperationEventV2(event.payload).fact;
@@ -537,5 +609,83 @@ export function projectEvaluationExecutionFactsV1(
 		models,
 		tools,
 		actualModelObserved: models.some((model) => model.observed),
+	};
+}
+
+export function parseEvaluationSampleTaskV1(
+	input: unknown,
+): EvaluationSampleTaskV1 {
+	const x = snapshotObject(
+		input,
+		[
+			"sampleTaskId",
+			"experimentId",
+			"sampleId",
+			"variantId",
+			"conversationId",
+			"executionId",
+			"binding",
+			"requested",
+		],
+		["preparedRuntime"],
+	);
+	const binding = parseEvaluationTaskBindingV1(x.binding);
+	const r = snapshotObject(x.requested, [
+		"variantId",
+		"agentId",
+		"configurationRevision",
+		"modelOptionId",
+		"reasoningLevel",
+		"toolEnvironment",
+	]);
+	if (
+		r.variantId !== binding.variantId ||
+		r.configurationRevision !== binding.configurationRevision ||
+		r.modelOptionId !== binding.modelOptionId ||
+		r.reasoningLevel !== binding.reasoningLevel ||
+		r.toolEnvironment !== binding.toolEnvironment ||
+		x.experimentId !== binding.experimentId ||
+		x.sampleId !== binding.sampleId ||
+		x.variantId !== binding.variantId
+	)
+		throw new EvaluationDataErrorV1("unavailable");
+	let preparedRuntime: EvaluationSampleTaskV1["preparedRuntime"];
+	if (x.preparedRuntime !== undefined) {
+		const p = snapshotObject(x.preparedRuntime, [
+			"configurationRevision",
+			"imageDigest",
+			"resourceConfigurationHash",
+		]);
+		if (
+			p.configurationRevision !== binding.configurationRevision ||
+			typeof p.imageDigest !== "string" ||
+			!/^(?:[^@\s]+@)?sha256:[a-f0-9]{64}$/.test(p.imageDigest) ||
+			typeof p.resourceConfigurationHash !== "string" ||
+			!/^[a-f0-9]{64}$/.test(p.resourceConfigurationHash)
+		)
+			throw new EvaluationDataErrorV1("unavailable");
+		preparedRuntime = {
+			configurationRevision: binding.configurationRevision,
+			imageDigest: p.imageDigest,
+			resourceConfigurationHash: p.resourceConfigurationHash,
+		};
+	}
+	return {
+		sampleTaskId: text(x.sampleTaskId),
+		experimentId: text(x.experimentId),
+		sampleId: text(x.sampleId),
+		variantId: text(x.variantId),
+		conversationId: text(x.conversationId),
+		executionId: text(x.executionId),
+		binding,
+		requested: {
+			variantId: binding.variantId,
+			agentId: text(r.agentId),
+			configurationRevision: binding.configurationRevision,
+			modelOptionId: binding.modelOptionId,
+			reasoningLevel: binding.reasoningLevel,
+			toolEnvironment: binding.toolEnvironment,
+		},
+		...(preparedRuntime ? { preparedRuntime } : {}),
 	};
 }

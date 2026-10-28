@@ -78,6 +78,66 @@ export const EvaluationScorePageV1Schema = z.strictObject({
 	nextCursor: id.nullable(),
 });
 
+const factBase = {
+	operationRef: ref,
+	attemptRef: ref,
+	sequence: z.number().int().nonnegative(),
+	phase: z.enum(["intent", "started", "completed", "failed", "unknown"]),
+	durationMs: z.number().nonnegative().nullable(),
+};
+const actual = z.strictObject({
+	status: z.enum([
+		"waiting",
+		"submitted",
+		"processing",
+		"unknown",
+		"completed",
+		"failed",
+		"cancelled",
+	]),
+	billing: z
+		.strictObject({
+			purpose: z.literal("agent-default"),
+			subjectId: ref,
+			keyVersion: revision,
+		})
+		.nullable(),
+	lastSequence: z.number().int().nonnegative(),
+	runtimeObserved: z.boolean(),
+	preparedRuntime: z
+		.strictObject({
+			configurationRevision: revision,
+			imageDigest: ref,
+			resourceConfigurationHash: ref,
+		})
+		.nullable(),
+	facts: z.strictObject({
+		actualModelObserved: z.boolean(),
+		models: z
+			.array(
+				z.strictObject({
+					...factBase,
+					observed: z.boolean(),
+					model: z.strictObject({
+						configVersion: ref,
+						modelOptionId: ref,
+						modelId: ref,
+						reasoningLevel: ref.optional(),
+					}),
+					usage: z
+						.strictObject({
+							inputTokens: z.number().nonnegative().optional(),
+							outputTokens: z.number().nonnegative().optional(),
+							cachedInputTokens: z.number().nonnegative().optional(),
+						})
+						.nullable(),
+				}),
+			)
+			.max(100),
+		tools: z.array(z.strictObject({ ...factBase, toolId: ref })).max(100),
+	}),
+	factsTruncated: z.boolean(),
+});
 export const EvaluationExperimentPageV1Schema = z.strictObject({
 	experiment: EvaluationExperimentV1Schema,
 	items: z
@@ -89,6 +149,7 @@ export const EvaluationExperimentPageV1Schema = z.strictObject({
 				variantId: ref,
 				conversationId: ref,
 				executionId: ref,
+				actual: actual.nullable(),
 				requested: z.strictObject({
 					variantId: ref,
 					agentId: ref,

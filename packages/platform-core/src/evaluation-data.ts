@@ -17,6 +17,11 @@ export const evaluationAuditActionsV1 = [
 	"evaluation.content.confirm",
 	"evaluation.content.read",
 	"evaluation.content.delete",
+	"evaluation.experiment.create",
+	"evaluation.derived.confirm",
+	"evaluation.score.completed",
+	"evaluation.score.human",
+	"evaluation.score.reviewed",
 ] as const;
 export const evaluationOperationsV1 = [
 	"create",
@@ -155,6 +160,7 @@ export interface EvaluationDataTransactionV1 {
 	receiptExpiresAt: string;
 	authorizationExpiresAt: string;
 	principal: EvaluationPrincipalV1;
+	scoreWorkBinding?: { datasetId: string; versionId: string };
 	bindPolicy(policy: EvaluationPolicyV1): Promise<void>;
 	principalExists(principal: EvaluationPrincipalV1): Promise<boolean>;
 	dataset(id: string): Promise<EvaluationDatasetV1 | null>;
@@ -478,6 +484,7 @@ export function createEvaluationDataV1(options: {
 		scope: string,
 		op: EvaluationOperationV1,
 	) => {
+		if (tx.scoreWorkBinding) return fail("denied");
 		const m = p.managers.find(
 			(m) =>
 				same(m.principal, tx.principal) &&
@@ -512,6 +519,13 @@ export function createEvaluationDataV1(options: {
 		op: EvaluationOperationV1,
 		allowRetired = false,
 	) {
+		if (
+			tx.scoreWorkBinding &&
+			(tx.scoreWorkBinding.datasetId !== v.datasetId ||
+				tx.scoreWorkBinding.versionId !== v.versionId ||
+				op !== "score")
+		)
+			return fail("denied");
 		if (
 			!allowRetired &&
 			(v.status === "deleted" ||

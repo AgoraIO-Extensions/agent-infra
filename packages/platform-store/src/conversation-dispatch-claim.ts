@@ -41,6 +41,7 @@ import {
 	operation,
 	terminal,
 } from "./conversation-dispatch-validation.js";
+import type { EvaluationCurrentPolicyReaderV1 } from "./evaluation-task-authority.js";
 
 /**
  * #2919：payload 已不合当前规则的 native capability 条目（例如 #2951 之前写入的历史参数
@@ -107,6 +108,7 @@ export async function claimWork(
 		readonly leaseDurationMs: number;
 	},
 	userDirectory?: TaskUserDirectoryV1,
+	evaluationPolicy?: EvaluationCurrentPolicyReaderV1,
 ): Promise<ConversationDispatchClaimDecisionV1> {
 	// Application/use governance precedes the original Agent -> Conversation -> Outbox locks.
 	await lockWaitingTaskAuthority(transaction, input.itemId);
@@ -219,6 +221,7 @@ export async function claimWork(
 				state,
 				input.workerId,
 				userDirectory,
+				evaluationPolicy,
 			))
 		)
 			return { outcome: "failed" };

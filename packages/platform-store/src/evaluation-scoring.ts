@@ -5,6 +5,7 @@ import {
 	createEvaluationDerivedContentV1,
 	EvaluationDataErrorV1,
 	type EvaluationHumanScorePortV1,
+	EvaluationModelNotSentErrorV1,
 	type EvaluationRequestV1,
 	type EvaluationScoreIntentV1,
 	type EvaluationScoreLeaseV1,
@@ -380,10 +381,11 @@ export class PostgresEvaluationScoringV1
 			output = await this.options.model(lease, intent, input);
 		} catch (error) {
 			if (
-				error &&
-				typeof error === "object" &&
-				"code" in error &&
-				(error.code === "invalid" || error.code === "invalid_result")
+				error instanceof EvaluationModelNotSentErrorV1 ||
+				(error &&
+					typeof error === "object" &&
+					"code" in error &&
+					(error.code === "invalid" || error.code === "invalid_result"))
 			)
 				await this.#client.begin(async (tx) => {
 					const current = await this.#lock(tx, lease);
@@ -487,11 +489,25 @@ export class PostgresEvaluationScoringV1
 			const intent = await this.#lock(tx, lease);
 			if (["scored", "not_applicable", "failed"].includes(intent.status))
 				return { retry: false, delayMs: intent.scorer.retryDelayMs };
-			if (intent.status === "result_ready")
-				return { retry: true, delayMs: intent.scorer.retryDelayMs };
+			if (intent.status === "result_ready") {
+				const retry = intent.attempts < intent.scorer.maxAttempts;
+				await this.#save(tx, {
+					...intent,
+					attempts: intent.attempts + 1,
+					revision: intent.revision + 1,
+					status: retry ? "result_ready" : "failed",
+					failureCode: code,
+				});
+				return { retry, delayMs: intent.scorer.retryDelayMs };
+			}
+			// Reconcile an unknown send against its stored result; prepare never
+			// sends the model again from unknown.
+
 			const attempts = intent.attempts + (preparationFailure ? 1 : 0);
 			const retry =
-				intent.status !== "unknown" && attempts < intent.scorer.maxAttempts;
+				intent.status === "unknown"
+					? !preparationFailure || attempts < intent.scorer.maxAttempts
+					: attempts < intent.scorer.maxAttempts;
 			await this.#save(tx, {
 				...intent,
 				status:

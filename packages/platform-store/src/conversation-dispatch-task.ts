@@ -44,6 +44,10 @@ export async function lockWaitingTaskAuthority(
 	transaction: Transaction,
 	itemId: string,
 ) {
+	const [evalTask] =
+		await transaction`select 1 from platform.outbox_items o join platform.conversation_executions e on e.execution_id=o.payload->>'executionId' where o.id=${itemId} and e.channel_id='eval'`;
+	if (evalTask)
+		await transaction`select pg_advisory_xact_lock(hashtextextended('evaluation-data-v1',0))`;
 	await transaction`lock table platform.platform_user_disables in share mode`;
 	await transaction`
 		select a.id from platform.platform_applications a

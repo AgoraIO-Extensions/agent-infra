@@ -540,6 +540,12 @@ export function assemblePlatformApi(
 		new PostgresConversationExecutionTransactionV1({
 			databaseUrl: input.databaseUrl,
 			userDirectory,
+			evaluationPolicy: evaluationOptions
+				? {
+						data: evaluationOptions.loadDataPolicy,
+						experiment: evaluationOptions.loadExperimentPolicy,
+					}
+				: undefined,
 			...(input.readRequestedModelDisplayName
 				? { readRequestedModelDisplayName: input.readRequestedModelDisplayName }
 				: {}),

@@ -18,6 +18,12 @@ import {
 	scoreEvaluationRuleV1,
 } from "./evaluation-scoring.js";
 import { parseTaskPrincipalV1 } from "./task-authorization.js";
+/** Trusted model adapter evidence that no request reached the transport. */
+export class EvaluationModelNotSentErrorV1 extends Error {
+	constructor() {
+		super("EVALUATION_MODEL_NOT_SENT");
+	}
+}
 export interface EvaluationScoreIntentV1 {
 	id: string;
 	sampleTaskId: string;
@@ -115,8 +121,15 @@ export function createEvaluationScoreWorkV1(port: EvaluationScoreWorkPortV1) {
 				return { outcome: "waiting", delayMs: prepared.delayMs };
 			if ("terminal" in prepared) return { outcome: "completed" };
 			if ("recovered" in prepared) {
-				await port.commit(lease, prepared.intent, prepared.recovered);
-				return { outcome: "completed" };
+				try {
+					await port.commit(lease, prepared.intent, prepared.recovered);
+					return { outcome: "completed" };
+				} catch {
+					const failure = await port.failed(lease, "SCORER_UNAVAILABLE");
+					return failure.retry
+						? { outcome: "retry", delayMs: failure.delayMs }
+						: { outcome: "completed" };
+				}
 			}
 			const { intent, input } = prepared;
 			if (intent.scorer.implementation.kind === "human")

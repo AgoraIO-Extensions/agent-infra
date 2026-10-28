@@ -282,10 +282,12 @@ export function assemblePlatformFilesV1(input: {
 				if (
 					scope.channelId === "eval" &&
 					(!input.evaluationCurrent ||
-						!(await input.evaluationCurrent(
-							{ actorId: scope.actorId, channelId: "eval" },
-							conversationId,
-						)))
+						!(await input
+							.evaluationCurrent(
+								{ actorId: scope.actorId, channelId: "eval" },
+								conversationId,
+							)
+							.catch(() => false)))
 				)
 					return deny("authorize");
 				return { ...scope, execution: execution ?? null, limits };

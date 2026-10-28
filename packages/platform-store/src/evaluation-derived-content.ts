@@ -81,7 +81,12 @@ export class PostgresEvaluationDerivedContentV1
 		datasetId: string,
 		versionId: string,
 		kind: EvaluationDerivedKindV1,
-		work: (tx: postgres.TransactionSql) => Promise<T>,
+		work: (
+			tx: postgres.TransactionSql,
+			binding: Awaited<
+				ReturnType<PostgresEvaluationDerivedContentV1["authorize"]>
+			>,
+		) => Promise<T>,
 	): Promise<T> {
 		const result = await this.#client.begin(async (tx) => {
 			const store = new PostgresEvaluationDataStoreV1({
@@ -99,8 +104,8 @@ export class PostgresEvaluationDerivedContentV1
 					: kind === "score" || request.authentication.kind === "score_work"
 						? data.authorizeScore(request, datasetId, versionId)
 						: data.authorizeRun(request, datasetId, versionId);
-			await check();
-			const result = await work(tx);
+			const binding = await check();
+			const result = await work(tx, binding);
 			await check();
 			return { value: result };
 		});
@@ -133,7 +138,7 @@ export class PostgresEvaluationDerivedContentV1
 			value.datasetId,
 			value.versionId,
 			value.kind,
-			async (tx) => {
+			async (tx, current) => {
 				const [receipt] = await tx<
 					{
 						result: { objectId: string; expiresAt: string };
@@ -157,6 +162,25 @@ export class PostgresEvaluationDerivedContentV1
 						!["pending", "available"].includes(row.data.status)
 					)
 						throw new EvaluationDataErrorV1("denied");
+					const [clock] = await tx<
+						{ now: Date }[]
+					>`select clock_timestamp() as now`;
+					if (!clock) throw new EvaluationDataErrorV1("unavailable");
+					const expiry = Math.min(
+						Date.parse(row.data.expiresAt),
+						Date.parse(row.data.createdAt) +
+							current.policy.retention[value.kind].contentMs,
+						Date.parse(current.policy.validUntil),
+						Date.parse(current.grant.expiresAt),
+					);
+					if (expiry <= +clock.now) throw new EvaluationDataErrorV1("denied");
+					if (row.data.status === "pending") {
+						row.data.transferUntil = new Date(
+							Math.min(+clock.now + current.policy.transferTimeoutMs, expiry) +
+								5000,
+						).toISOString();
+						await tx`update platform.evaluation_derived_objects set data=${tx.json(row.data as unknown as postgres.JSONValue)} where id=${row.id} and status='pending'`;
+					}
 					return row.data;
 				}
 				await tx`insert into platform.evaluation_derived_objects(id,dataset_id,version_id,kind,status,expires_at,metadata_expires_at,data)values(${value.id},${value.datasetId},${value.versionId},${value.kind},${value.status},${value.expiresAt},${value.metadataExpiresAt},${tx.json(value as unknown as postgres.JSONValue)})`;
@@ -215,7 +239,7 @@ export class PostgresEvaluationDerivedContentV1
 			value.datasetId,
 			value.versionId,
 			value.kind,
-			async (tx) => {
+			async (tx, binding) => {
 				const [row] = await tx<
 					ObjectRow[]
 				>`select * from platform.evaluation_derived_objects where id=${value.id} for update`;
@@ -231,7 +255,7 @@ export class PostgresEvaluationDerivedContentV1
 					throw new EvaluationDataErrorV1("conflict");
 				const result = { ...row.data, status: "available" as const, stored };
 				await tx`update platform.evaluation_derived_objects set status='available',data=${tx.json(result as unknown as postgres.JSONValue)} where id=${value.id}`;
-				await tx`insert into platform.audit_events(id,trace_id,request_id,actor_type,actor_id,action,target_type,target_id,outcome,details)values(${randomUUID()},${request.traceId},${request.requestId},'system','evaluation','evaluation.derived.confirm','evaluation_object',${value.id},'succeeded',${tx.json({ purpose: "eval", returnedMaterial: false })})`;
+				await tx`insert into platform.audit_events(id,trace_id,request_id,actor_type,actor_id,action,target_type,target_id,outcome,details)values(${randomUUID()},${request.traceId},${request.requestId},${binding.principal.kind},${binding.principal.id},'evaluation.derived.confirm','evaluation_object',${value.id},'succeeded',${tx.json({ purpose: "eval", returnedMaterial: false })})`;
 				return result;
 			},
 		);

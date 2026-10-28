@@ -2682,12 +2682,30 @@ Eval 幂等回执的保留截止时间不得晚于相关数据集/版本的元�
 实验受理在原 ConversationTask 事务中为每个样本/基线或候选建立独立 Conversation/Execution、outbox 和 Eval 绑定。`TaskAuthorizationBoundaryV1.evaluation` 仅允许 `channelId=eval`，由服务端绑定 experiment/sample/variant、dataset/version、run grant ID/revision、policy ID/revision、Agent configuration revision、模型选项/推理级别、工具环境及内容截止时间；对应 `eval-use` 来源只保存已核对的 Agent use grant revision。普通 API/Web 不能提交或借用该绑定，Eval 不被归类为 API 渠道。请求条件与实际执行事实分别保存，不允许当前配置漂移悄悄替换基线。Worker 的当前用途回读缺失或不可确认时不投递；读取、SSE、文件及结果提交也使用同一持久绑定复核。
 
 评分意图有自身的原发起主体、数据/结果版本、评分器不可变配置摘要、状态与期望修订、outbox lease/fence、有限尝试预算和 Agent 默认 Key 四元绑定。模型 Key 在评分意图首次开始时冻结，重试复用该绑定并重验当前使用许可，不借用已终态业务 Execution 的解密授权。部署评分器明确 rule/human/model 类型、rubric ID、分数范围/通过阈值、输入输出字节/token/时限、重试预算；模型类型另绑定当前 Catalog revision、精确 endpoint/model 及允许发送的内容类别。缺政策不推导生产默认评分器或 TTL。人工 score 和独立 review 分别保存不可变结果及操作者；同一原评分操作者不能冒充独立复核人。
+模型发送前 Key/Catalog 等前置失败以可信未发送结果进入有限重试；进入模型传输后失联保留 unknown，
+后续只核实同一派生结果意图，不再调用模型。已保存结果的提交恢复也消耗评分器有限尝试预算，耗尽
+保留 failed 与原结果引用，不无限轮询或重建业务执行。
+
+启用实验时，私有 API 配置在 `apiInput.evaluation` 增加每次读取并严格解析的 `loadExperimentPolicy`。
+Worker 私有模块导出 `evaluationPolicy = { data: loadPolicy, experiment: loadExperimentPolicy }`，供
+现有 Conversation Worker 当前用途复核；`workloadInput.evaluationScoring` 使用同一 storage、
+`loadDataPolicy: loadPolicy`、`loadExperimentPolicy`、directory、已有部署 ModelCatalog adapter 与
+Worker decryptor，并显式配置 taskPolicy、batchSize、leaseMs 和 retryDelayMs。该配置经原
+`deployment-entry.ts`/Workload 装配进入评分轮询，不新增部署服务、凭证类型或默认值；启动应先调用
+两个 policy loader，非法输入启动失败，运行时读取失败拒绝新访问，DB 清理继续履行已固化义务。
+
 
 #### 18.4.2 版本、对象与任务绑定
 
 数据集、样本集合与 rubric 的版本不可变。新版本保存来源版本和必要变更元数据；真实材料导入记录
 用途许可及脱敏确认的受控引用，不自动复制线上会话。实验固定基线/候选、同一数据集/rubric 版本、
 评分器版本、工具环境声明与原发起主体，分别保留请求配置和每例实际 Execution 事实。
+实验逐例查询返回请求配置、Task 当前状态及最后事件序号；Worker 首次投递准备在同一事务固定实际
+Runtime 配置修订、镜像 Digest 和资源配置摘要，`preparedRuntime` 只证明投递准备，收到 Runtime
+事件后才标记 `runtimeObserved`。实际模型/工具来自持久操作事件，保留 operation/attempt/sequence、
+阶段、耗时和用量；intent 不算实际已调用，无事实明确为空。单例首屏最多 100 条操作事实，超过时
+`factsTruncated=true`，完整事实继续使用同一 Task 已有事件分页/SSE 入口，仍执行当前 Eval 用途权限。
+
 
 内容使用现有 `ObjectStorageDataV1`，由 Store 保存 Eval 自身的对象引用、版本/etag、大小、Hash、
 媒体类型及生命周期状态；写入和确认复用实际字节/固定对象版本核验，不新建存储 Adapter。Eval 对象

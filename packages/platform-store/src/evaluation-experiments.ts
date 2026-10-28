@@ -14,7 +14,9 @@ import {
 	type EvaluationStorageV1,
 	parseEvaluationExperimentPolicyV1,
 	parseEvaluationExperimentV1,
+	parseEvaluationSampleTaskV1,
 	parseTaskAuthorizationBoundaryV1,
+	projectEvaluationExecutionFactsV1,
 	requireEvaluationExperimentOwnerV1,
 	resolveCurrentPersonalApiUserV1,
 	type TaskUserDirectoryV1,
@@ -45,6 +47,14 @@ export class PostgresEvaluationExperimentsV1
 	async close() {
 		await this.#client.end();
 	}
+	async policyCheckpoint() {
+		const [row] = await this.#client<
+			{ revision: string; digest: string; now: Date }[]
+		>`select revision,digest,clock_timestamp() as now from platform.evaluation_policies where id='experiment'`;
+		return row
+			? { revision: +row.revision, digest: row.digest, now: row.now }
+			: null;
+	}
 	async target(id: string) {
 		const [row] = await this.#client<
 			{ data: unknown }[]
@@ -54,12 +64,65 @@ export class PostgresEvaluationExperimentsV1
 	async samples(id: string, limit: number, cursor?: string) {
 		const rows = await this.#client<
 			{
-				data: import("@agent-infra/platform-core").EvaluationSampleTaskV1;
+				id: string;
+				experiment_id: string;
+				execution_id: string;
+				conversation_id: string;
+				data: unknown;
 				score_ids: string[];
+				status: string;
+				last_sequence: number;
+				runtime_cursor: string | null;
+				relay_key_purpose: string | null;
+				relay_key_subject_id: string | null;
+				relay_key_version: number | null;
 			}[]
-		>`select s.data,array(select i.id::text from platform.evaluation_score_intents i where i.sample_task_id=s.id order by i.id) as score_ids from platform.evaluation_sample_tasks s where experiment_id=${id} ${cursor ? this.#client`and id>${cursor}::uuid` : this.#client``} order by id limit ${limit}`;
-		return rows.map((r) => ({ ...r.data, scoreIds: r.score_ids }));
+		>`select s.id,s.experiment_id,s.execution_id,s.conversation_id,s.data,e.status,e.last_event_sequence::int as last_sequence,e.last_runtime_cursor as runtime_cursor,e.relay_key_purpose,e.relay_key_subject_id,e.relay_key_version::int,array(select i.id::text from platform.evaluation_score_intents i where i.sample_task_id=s.id order by i.id) as score_ids from platform.evaluation_sample_tasks s join platform.conversation_executions e on e.execution_id=s.execution_id where s.experiment_id=${id} ${cursor ? this.#client`and s.id>${cursor}::uuid` : this.#client``} order by s.id limit ${limit}`;
+		const result = [];
+		for (const row of rows) {
+			const task = parseEvaluationSampleTaskV1(row.data);
+			if (
+				task.sampleTaskId !== row.id ||
+				task.experimentId !== row.experiment_id ||
+				task.executionId !== row.execution_id ||
+				task.conversationId !== row.conversation_id
+			)
+				throw new EvaluationDataErrorV1("unavailable");
+			const events = await this.#client<
+				{ sequence: number; event_type: string; event_payload: unknown }[]
+			>`select sequence::int,event_type,event_payload from platform.conversation_events where execution_id=${task.executionId} and sequence<=${row.last_sequence} and event_type='execution.operation' order by sequence limit 101`;
+			result.push({
+				...task,
+				scoreIds: row.score_ids,
+				actual: {
+					status: row.status,
+					billing:
+						row.relay_key_purpose === "agent-default" &&
+						row.relay_key_subject_id &&
+						row.relay_key_version
+							? {
+									purpose: "agent-default" as const,
+									subjectId: row.relay_key_subject_id,
+									keyVersion: row.relay_key_version,
+								}
+							: null,
+					lastSequence: row.last_sequence,
+					runtimeObserved: row.runtime_cursor !== null,
+					preparedRuntime: task.preparedRuntime ?? null,
+					facts: projectEvaluationExecutionFactsV1(
+						events.slice(0, 100).map((e) => ({
+							sequence: e.sequence,
+							eventType: e.event_type,
+							payload: e.event_payload,
+						})),
+					),
+					factsTruncated: events.length > 100,
+				},
+			});
+		}
+		return result;
 	}
+
 	async cancel(request: EvaluationRequestV1, id: string, key: string) {
 		return this.#client.begin(async (tx) => {
 			const store = new PostgresEvaluationDataStoreV1({

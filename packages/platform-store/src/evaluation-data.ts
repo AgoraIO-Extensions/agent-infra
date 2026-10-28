@@ -11,6 +11,7 @@ import {
 	parseEvaluationDatasetV1,
 	parseEvaluationDerivedObjectV1,
 	parseEvaluationGrantV1,
+	parseEvaluationScoreIntentV1,
 	parseEvaluationVersionV1,
 	parseTaskPrincipalV1,
 	requireApiCredentialIdentityV1,
@@ -169,6 +170,7 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 		request: EvaluationRequestV1,
 		work: (tx: EvaluationDataTransactionV1) => Promise<T>,
 		identityOnly = false,
+		requireScope = false,
 	): Promise<T> {
 		try {
 			const workInTransaction = async (tx: Tx) => {
@@ -179,6 +181,9 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 				const now = await clock(tx);
 				if (!Number.isFinite(+now)) throw unavailable();
 				let revalidate: () => Promise<void>;
+				let scoreWorkBinding:
+					| { datasetId: string; versionId: string }
+					| undefined;
 				let principal: EvaluationDataTransactionV1["principal"];
 				if (request.authentication.kind === "score_work") {
 					const work = request.authentication;
@@ -193,7 +198,13 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 							!("principal" in record)
 						)
 							throw unavailable();
-						const actor = parseTaskPrincipalV1(record.principal);
+						const score = parseEvaluationScoreIntentV1(record);
+						if (score.id !== work.intentId) throw unavailable();
+						scoreWorkBinding = {
+							datasetId: score.datasetId,
+							versionId: score.versionId,
+						};
+						const actor = parseTaskPrincipalV1(score.principal);
 						await tx.execute(
 							sql`lock table platform.platform_user_disables in share mode`,
 						);
@@ -324,7 +335,9 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 								disabled,
 								now: await clock(tx),
 							},
-							request.credentialScope ?? "eval:data",
+							identityOnly && !requireScope
+								? null
+								: (request.credentialScope ?? "eval:data"),
 						);
 					};
 					const identity = await check();
@@ -359,6 +372,7 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 					receiptExpiresAt: now.toISOString(),
 					authorizationExpiresAt: now.toISOString(),
 					principal,
+					scoreWorkBinding,
 					async bindPolicy(p: EvaluationPolicyV1) {
 						const digest = createHash("sha256")
 							.update(JSON.stringify(p))
@@ -544,8 +558,13 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 			throw unavailable();
 		}
 	}
-	async authenticate(request: EvaluationRequestV1) {
-		return this.transaction(request, async (tx) => tx.principal, true);
+	async authenticate(request: EvaluationRequestV1, requireScope = false) {
+		return this.transaction(
+			request,
+			async (tx) => tx.principal,
+			true,
+			requireScope,
+		);
 	}
 
 	/** Worker-only metadata sweep; no policy or content authority is needed to fulfill existing expiry. */
@@ -605,10 +624,13 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 				sql`delete from platform.evaluation_score_reviews where (data->>'metadataExpiresAt')::timestamptz<=clock_timestamp()`,
 			);
 			await tx.execute(
+				sql`delete from platform.outbox_items o where o.operation='evaluation.score.v1' and exists(select 1 from platform.evaluation_score_intents s where o.scope_id=s.id::text and (s.data->>'metadataExpiresAt')::timestamptz<=clock_timestamp() and not exists(select 1 from platform.evaluation_score_reviews r where r.score_id=s.id))`,
+			);
+			await tx.execute(
 				sql`delete from platform.evaluation_score_intents s where (s.data->>'metadataExpiresAt')::timestamptz<=clock_timestamp() and not exists(select 1 from platform.evaluation_score_reviews r where r.score_id=s.id)`,
 			);
 			await tx.execute(
-				sql`delete from platform.evaluation_derived_objects d where d.status='deleted' and d.metadata_expires_at<=clock_timestamp() and exists(select 1 from platform.outbox_items o where o.id='evaluation-derived-delete:'||d.id::text and o.status='succeeded')`,
+				sql`with retired as (delete from platform.evaluation_derived_objects d where d.status='deleted' and d.metadata_expires_at<=clock_timestamp() and exists(select 1 from platform.outbox_items o where o.id='evaluation-derived-delete:'||d.id::text and o.status='succeeded') returning id) delete from platform.outbox_items where id in(select 'evaluation-derived-delete:'||id::text from retired)`,
 			);
 			// Retire the entire Eval receipt, including principal, request digest and timestamps.
 			await tx.execute(
