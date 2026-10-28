@@ -56,3 +56,8 @@ OpenCode 1.19.0 候选接线复用同一准入和固定 shell 路径，仅准入
 
 完整 #3218 仍包含 Claude 接线、完整父子边界与恢复矩阵。上述单模板受控调用不等于真实
 模型/外部环境验收，也不能代签其余模板；Draft 验证结果未完成前不得合入或关闭父票 #3202。
+
+Claude 的独立 Linux 探针使用固定 SDK/native 二进制与官方 sandbox：`failIfUnavailable=true`、
+`allowUnsandboxedCommands=false`，凭证环境/配置及 `/proc` 显式拒绝。镜像固定安装其
+`bubblewrap`/`socat` 依赖；既有容器的非 root、只读根、cap-drop/no-new-privileges 不变。
+探针未通过前，不把官方配置字段存在当隔离证明，生产 Claude Bash 继续保持关闭。

@@ -5,7 +5,7 @@ RUN apk add --no-cache 'setpriv=2.42.3-r1'
 FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS builder
 ARG TARGETARCH
 # #3217：ripgrep 供 OpenCode 与 Pi 的原生搜索工具在本地使用，不在运行时下载。
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip util-linux procps ripgrep \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip util-linux procps ripgrep bubblewrap=0.8.0-2+deb12u1 socat=1.7.4.4-2 \
 	&& rm -rf /var/lib/apt/lists/* /var/log/* \
 	&& npm install --global npm@11.19.1 \
 	&& npm install --global pnpm@11.20.0
@@ -54,7 +54,7 @@ ARG SOURCE_COMMIT=unknown
 ARG SOURCE_DATE_EPOCH=0
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"platform-adapter","protocol":"acp","service":{"port":3003},"health":{"path":"/healthz"},"capabilities":{"modelSelection":true,"attachments":true,"resultFiles":true,"connection":false,"supplementaryInstruction":false}}'
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates util-linux tini ripgrep \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates util-linux tini ripgrep bubblewrap=0.8.0-2+deb12u1 socat=1.7.4.4-2 \
 	&& rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache \
 	&& npm install --global npm@11.19.1 --logs-max=0 \
 	&& rm -rf /root/.npm /tmp/node-compile-cache \
