@@ -6,6 +6,96 @@ import { expect, it, vi } from "vitest";
 import { openAcpSession } from "./acp-session.js";
 import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
 
+it.each([
+	"partial-input",
+	"announced-input",
+	"empty-request",
+	"late-notification",
+	"completed-during-wait",
+	"still-empty",
+	"denied-input",
+	"conflicting-input",
+	"conflicting-kind",
+	"unannounced",
+	"foreign-session",
+	"completed",
+])(
+	"authorizes only the current announced ACP tool with consistent complete arguments: %s",
+	async (scenario) => {
+		const cwd = await mkdtemp(join(tmpdir(), "acp-permission-input-"));
+		await mkdir(join(cwd, "workspace"));
+		const authorize = vi.fn(
+			async (tool) =>
+				tool.title === "grep" &&
+				tool.kind === "search" &&
+				tool.rawInput?.pattern === "allowed",
+		);
+		const session = await openAcpSession({
+			directory: cwd,
+			cwd: join(cwd, "workspace"),
+			launch: {
+				command: process.execPath,
+				args: [
+					fileURLToPath(
+						new URL("./acp-peer.test-support.mjs", import.meta.url),
+					),
+				],
+				env: {
+					ACP_TEST_MODE: "permission-input",
+					ACP_TEST_PERMISSION_SCENARIO: scenario,
+				},
+				authorize,
+			},
+			update: async () => {},
+		});
+		try {
+			await session.prompt("synthetic permission ordering");
+			const result = JSON.parse(
+				await readFile(join(cwd, "workspace", "permission.json"), "utf8"),
+			);
+			expect(result).toEqual({
+				outcome: {
+					outcome: "selected",
+					optionId: [
+						"partial-input",
+						"announced-input",
+						"empty-request",
+						"late-notification",
+					].includes(scenario)
+						? "allow"
+						: "reject",
+				},
+			});
+			if (
+				[
+					"partial-input",
+					"announced-input",
+					"empty-request",
+					"late-notification",
+					"denied-input",
+					"still-empty",
+				].includes(scenario)
+			) {
+				expect(authorize).toHaveBeenCalledExactlyOnceWith({
+					toolCallId: "catalog-tool",
+					title: "grep",
+					kind: "search",
+					rawInput:
+						scenario === "still-empty"
+							? {}
+							: {
+									pattern:
+										scenario === "denied-input" ? "forbidden" : "allowed",
+								},
+				});
+			} else expect(authorize).not.toHaveBeenCalled();
+		} finally {
+			await session.close();
+			await rm(cwd, { recursive: true, force: true });
+		}
+	},
+);
+
 it("discovers grouped native models, reads the current choice, and rejects choices removed by the peer", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "acp-models-"));
 	await mkdir(join(cwd, "workspace"));

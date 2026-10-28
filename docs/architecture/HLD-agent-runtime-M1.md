@@ -745,6 +745,13 @@ before hook 提供 callID 本身不证明其与实际请求的关联；同参数
 
 网络工具与模型接线（#3664）按以下条件交付，不能仅增加 allowlist：
 
+ACP 权限应答仍要求当前 Session 中已公告且未完成的 call ID，并保留公告的工具身份。
+固定 OpenCode 可能在参数更新通知到达前发出携带完整参数的权限请求；公告参数缺失或为
+空对象时，用同一次权限请求的参数执行原授权器。已有非空参数或 kind 冲突则拒绝，不能
+用请求中的显示 title 覆盖公告身份，也不能借参数补齐放宽路径、网络或跨 Session 约束。
+两边参数均为空时最多等待一秒接收同一已公告调用的参数更新；空请求不覆盖完整公告，
+等待期间调用完成或进程退出则拒绝。仍无完整参数时由原授权器按当前输入判断，不能默认放行。
+
 - Claude `WebFetch` 的原生抓取和重定向使用部署批准的网络；其内容处理辅助模型固定到本 Execution
   已批准的当前模型，不采用原生未批准的默认小模型。固定 native 使用 disabled thinking、当前 effort 与同一已批准模型；该 profile 由受控 native fixture 核对。
 - Claude `WebSearch` 使用获准 Messages endpoint 的原生 server-search 能力；请求与结果块严格验证，

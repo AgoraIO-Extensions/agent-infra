@@ -125,6 +125,82 @@ const connection = new AgentSideConnection(
 					JSON.stringify(params.prompt),
 				);
 			count++;
+			if (process.env.ACP_TEST_MODE === "permission-input") {
+				const scenario = process.env.ACP_TEST_PERMISSION_SCENARIO;
+				const rawInput =
+					scenario === "conflicting-input"
+						? { pattern: "old" }
+						: ["announced-input", "empty-request"].includes(scenario)
+							? { pattern: "allowed" }
+							: {};
+				if (scenario !== "unannounced")
+					await connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate: "tool_call",
+							toolCallId: "catalog-tool",
+							title: "grep",
+							kind: "search",
+							status: "pending",
+							rawInput,
+						},
+					});
+				if (scenario === "completed")
+					await connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate: "tool_call_update",
+							toolCallId: "catalog-tool",
+							status: "completed",
+						},
+					});
+				const pendingPermission = connection.requestPermission({
+					sessionId:
+						scenario === "foreign-session" ? "foreign-session" : sessionId,
+					toolCall: {
+						toolCallId: "catalog-tool",
+						title: "human readable search",
+						kind: scenario === "conflicting-kind" ? "execute" : "search",
+						...([
+							"late-notification",
+							"completed-during-wait",
+							"still-empty",
+							"empty-request",
+						].includes(scenario)
+							? { rawInput: {} }
+							: scenario === "announced-input"
+								? {}
+								: {
+										rawInput: {
+											pattern:
+												scenario === "denied-input" ? "forbidden" : "allowed",
+										},
+									}),
+					},
+					options: [
+						{ optionId: "allow", name: "Allow once", kind: "allow_once" },
+						{ optionId: "reject", name: "Reject once", kind: "reject_once" },
+					],
+				});
+				if (["late-notification", "completed-during-wait"].includes(scenario)) {
+					await new Promise((resolve) => setTimeout(resolve, 40));
+					await connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate: "tool_call_update",
+							toolCallId: "catalog-tool",
+							...(scenario === "completed-during-wait"
+								? { status: "completed" }
+								: { rawInput: { pattern: "allowed" } }),
+						},
+					});
+				}
+				const permission = await pendingPermission;
+				await writeFile(
+					join(process.cwd(), "permission.json"),
+					JSON.stringify(permission),
+				);
+			}
 			if (process.env.ACP_TEST_MODE === "catalog-tools") {
 				const catalog = [
 					["webfetch", "fetch"],
