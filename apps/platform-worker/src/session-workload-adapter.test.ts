@@ -259,6 +259,16 @@ it("materializes custom Owner Secret values only into the Session Secret", () =>
 		(resource) => resource.kind === "Secret",
 	) as V1Secret;
 	const pod = resources.find((resource) => resource.kind === "Pod") as V1Pod;
+	expect(
+		pod.spec?.containers[0]?.env?.find(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_DRIVER",
+		),
+	).toEqual({ name: "AGENT_INFRA_RUNTIME_DRIVER", value: "acp" });
+	expect(
+		pod.spec?.containers[0]?.env?.some(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_MODEL_CONFIG",
+		),
+	).toBe(false);
 	expect(secret.data?.MODEL_API_KEY).toBe(
 		Buffer.from("redacted-test-value").toString("base64"),
 	);
