@@ -254,6 +254,7 @@ test("private input checks fail before cluster read when invalid and reject stal
 			return {
 				...policy,
 				profiles: [profile],
+				secretRef: { name: "worker-config", key: "capacity.json" },
 				bytes: Buffer.from(
 					JSON.stringify({ schemaVersion: 1, profiles: [profile] }),
 				),
@@ -292,6 +293,19 @@ test("private input checks fail before cluster read when invalid and reject stal
 				() => ({ ...read(), bytes: Buffer.from("stale") }),
 			),
 			/CAPACITY_SECRET_DRIFT/,
+		);
+		await assert.rejects(
+			checkWorkloadCapacity(
+				paths.config,
+				paths.requests,
+				paths.templates,
+				sourceSha,
+				() => ({
+					...read(),
+					secretRef: { name: "other-worker", key: "capacity.json" },
+				}),
+			),
+			/CAPACITY_WORKER_SECRET_BINDING_DRIFT/,
 		);
 		await assert.rejects(
 			checkWorkloadCapacity(

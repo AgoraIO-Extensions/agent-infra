@@ -55,7 +55,9 @@ export function validateCapacityBindings(requests: any[], templates: any[], poli
 		const matchesCapacity = profiles.filter((p) => p.imageDigest === imageDigest && p.resourceProfileRef === policy.resourceProfileRef && p.resourceConfigurationHash === resourcesHash);
 		assert(matchesCapacity.length === 1, "CAPACITY_BINDING_MISSING_OR_AMBIGUOUS");
 		const profile = matchesCapacity[0];
-		assert(profile.schemaVersion === 1 && Number.isSafeInteger(profile.maximumConcurrentExecutions) && profile.maximumConcurrentExecutions > 0 && /^[a-f0-9]{64}$/u.test(profile.conformanceEvidenceHash) && !/^0+$/u.test(profile.conformanceEvidenceHash));
+		// The current preflight contract measures one bounded execution. Do not
+		// accept a larger declared limit without a receipt that measured it.
+		assert(profile.schemaVersion === 1 && profile.maximumConcurrentExecutions === 1 && /^[a-f0-9]{64}$/u.test(profile.conformanceEvidenceHash) && !/^0+$/u.test(profile.conformanceEvidenceHash), "CAPACITY_PROFILE_UNMEASURED");
 		const bytes = evidence.get(imageDigest);
 		assert(bytes && hash(bytes) === profile.conformanceEvidenceHash, "CAPACITY_EVIDENCE_MISMATCH");
 		verifyMeasurement(bytes, imageDigest, policy, profile.maximumConcurrentExecutions);
@@ -64,7 +66,7 @@ export function validateCapacityBindings(requests: any[], templates: any[], poli
 	return { schemaVersion: 1, kind: "ack-workload-capacity", imageCount: checked.size, resourceConfigurationHash: resourcesHash, businessVerified: false };
 }
 
-type WorkerInput = { bytes: Uint8Array; resourceProfileRef: string; resources: unknown; profiles: unknown };
+type WorkerInput = { bytes: Uint8Array; resourceProfileRef: string; resources: unknown; profiles: unknown; secretRef: SecretRef };
 type SecretRef = { name: string; key: string };
 
 export async function checkWorkloadCapacity(configFile: string, requestsFile: string, templatesFile: string, sourceSha: string, readWorker: (ref: SecretRef) => WorkerInput) {
@@ -87,6 +89,7 @@ export async function checkWorkloadCapacity(configFile: string, requestsFile: st
 	const ref = input.workerSecretRef;
 	assert(ref && /^[a-z0-9][a-z0-9.-]{0,252}$/u.test(ref.name) && /^[A-Za-z0-9._-]{1,253}$/u.test(ref.key));
 	const actual = readWorker(ref);
+	assert.deepEqual(actual.secretRef, ref, "CAPACITY_WORKER_SECRET_BINDING_DRIFT");
 	assert.deepEqual(Buffer.from(actual.bytes), bytes, "CAPACITY_SECRET_DRIFT");
 	assert.equal(actual.resourceProfileRef, input.resourceProfileRef, "CAPACITY_WORKER_POLICY_DRIFT");
 	assert.deepEqual(resources(actual.resources), resources(input.resources), "CAPACITY_WORKER_POLICY_DRIFT");
@@ -109,7 +112,7 @@ export function assertWorkerMount(pod: any, secret: any, ref: SecretRef) {
 	const changed = Math.max(Date.parse(secret.metadata.creationTimestamp), ...(secret.metadata.managedFields ?? []).map((f: any) => Date.parse(f.time)));
 	assert(Number.isFinite(changed) && Date.parse(pod.status.startTime) >= changed, "CAPACITY_WORKER_RESTART_REQUIRED");
 	assert(typeof secret.data?.[ref.key] === "string");
-	return { configPath, containerName: container.name };
+	return { configPath, containerName: container.name, secretRef: { name: volume.secret.secretName, key: ref.key } };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -137,7 +140,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			assert(current.metadata.uid === pod.metadata.uid && !current.metadata.deletionTimestamp);
 			const currentSecret = JSON.parse(kubectl(["get", "secret", ref.name, "-o", "json"]));
 			assert(currentSecret.metadata.uid === secret.metadata.uid && currentSecret.metadata.resourceVersion === secret.metadata.resourceVersion);
-			return { ...actual, bytes: Buffer.from(secret.data[ref.key], "base64") };
+			return { ...actual, bytes: Buffer.from(secret.data[ref.key], "base64"), secretRef: mount.secretRef };
 		});
 		process.stdout.write(`${JSON.stringify(result)}\n`);
 	} catch {
