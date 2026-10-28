@@ -2655,3 +2655,128 @@ it("dispatches a V5 Skill with the ordered ids on the same FileBridge port the D
 		relayKey: "synthetic-v5-key",
 	});
 });
+
+it.each(["current", "expired", "revoked-before-send"] as const)(
+	"authorizes real Claude auxiliary requests through the signed V4 Host: %s",
+	async (mode) => {
+		const { createServer } = await import("node:http");
+		const { ClaudeRuntimeDriver } = await import("./claude-runtime-driver.js");
+		const { completeClaudeToolUses, completeClaudeResponse } = await import(
+			"./claude-native.test-support.js"
+		);
+		const directory = await mkdtemp(join(tmpdir(), "claude-host-aux-"));
+		let modelCalls = 0;
+		let clock = now;
+		let host: RuntimeHost | undefined;
+		let driver:
+			| Awaited<ReturnType<typeof ClaudeRuntimeDriver.open>>
+			| undefined;
+		const authorizations: RuntimeExternalActionAuthorization[] = [];
+		const server = createServer(async (request, response) => {
+			let body = "";
+			for await (const chunk of request) body += chunk;
+			const value = JSON.parse(body);
+			modelCalls++;
+			expect(request.headers.authorization).toBe(
+				"Bearer synthetic-pinned-key-k1",
+			);
+			if (modelCalls === 1)
+				completeClaudeToolUses(response, "msg_host_main", value.model, "", [
+					{
+						id: "host-search",
+						name: "WebSearch",
+						input: { query: "synthetic host search" },
+					},
+				]);
+			else
+				completeClaudeResponse(
+					response,
+					`msg_host_${modelCalls}`,
+					value.model,
+					"synthetic host search result",
+				);
+		});
+		await new Promise<void>((resolve) =>
+			server.listen(0, "127.0.0.1", resolve),
+		);
+		const address = server.address();
+		if (!address || typeof address === "string") throw Error();
+		const store = await FileRuntimeStore.open(join(directory, "host.json"));
+		try {
+			driver = await ClaudeRuntimeDriver.open({
+				path: join(directory, "driver"),
+				configVersion: "config-host",
+				defaultModelOptionId: "model-option-primary",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "model-option-primary",
+						model: "claude-opus-5",
+						reasoningLevels: ["high"],
+						endpoint: `http://127.0.0.1:${address.port}`,
+						authentication: "bearer",
+					},
+				],
+				authorizeModelAction: async (action) => {
+					if (!host) throw Error();
+					authorizations.push(action);
+					if (authorizations.length === 2) {
+						await expect(
+							host.authorizeExternalAction({
+								...action,
+								operationRef: "forged-operation",
+							}),
+						).rejects.toThrow();
+						if (mode === "expired") clock = now + 30_001;
+					}
+					const result = await host.authorizeExternalAction(action);
+					if (authorizations.length === 2 && mode === "revoked-before-send")
+						clock = now + 30_001;
+					return result;
+				},
+			});
+			host = await RuntimeHost.open({
+				store,
+				driver,
+				grantValidation: { expectedIssuer: "platform-fixture" },
+				grantValidationV2: {
+					expectedIssuer: "platform-fixture",
+					expectedWorkerId: "worker-fixture",
+					now: () => clock,
+				},
+				allowLegacyBusiness: false,
+				validateGrantV4: createRuntimeExecutionGrantValidatorV4(publicKeys, {
+					expectedIssuer: "platform-fixture",
+					expectedWorkerId: "worker-fixture",
+					now: () => clock,
+				}),
+			});
+			const accepted = await host.submitTurnV4(delivery(submission()));
+			const native = store.nativeSessionRef(accepted.hostSessionRef);
+			if (!native) throw Error();
+			await vi.waitFor(
+				async () =>
+					expect(await driver?.getStatus(native, "execution-1")).toBe(
+						mode === "current" ? "completed" : "failed",
+					),
+				{ timeout: 10000 },
+			);
+			expect(modelCalls).toBe(mode === "current" ? 3 : 1);
+			expect(authorizations).toHaveLength(mode === "current" ? 3 : 2);
+			expect(
+				new Set(authorizations.map((action) => action.operationRef)).size,
+			).toBe(mode === "current" ? 3 : 2);
+			await expect(
+				host.authorizeExternalAction(authorizations[1]!),
+			).rejects.toThrow();
+		} finally {
+			await host?.close();
+			await driver?.close();
+			await store.close();
+			server.closeAllConnections();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await rm(directory, { recursive: true, force: true });
+		}
+	},
+	30000,
+);

@@ -1743,7 +1743,19 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				let phase: "intent" | "started" | "completed" | "failed" | "unknown" =
 					"intent";
 				let startedAt: number | undefined;
+				let revalidate: (() => void) | undefined;
 				return {
+					revalidate: () => {
+						if (
+							this.closed ||
+							file
+								.read()
+								.turns.find((turn) => turn.executionId === command.executionId)
+								?.status !== "running"
+						)
+							throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+						revalidate?.();
+					},
 					resolveCredential: async () => {
 						if (
 							this.closed ||
@@ -1765,6 +1777,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						});
 						if (!authorization?.relayKey)
 							throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+						revalidate = authorization.revalidate;
 						return authorization.relayKey;
 					},
 					receipt: async (response, endTurn, diagnostic) => {

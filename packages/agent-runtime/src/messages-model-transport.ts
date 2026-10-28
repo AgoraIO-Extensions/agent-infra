@@ -33,6 +33,7 @@ export type RuntimeMessagesPurpose =
 	| "count-tokens";
 export interface RuntimeMessagesRequest {
 	readonly resolveCredential?: () => Promise<string>;
+	readonly revalidate?: () => void;
 	readonly receipt?: RuntimeMessagesTransportOptions["receipt"];
 }
 
@@ -299,6 +300,8 @@ export async function openRuntimeMessagesTransport(
 				stage = "upstream_http";
 				if (!counting || options.openRequest)
 					await receipt("sent", false, diagnostic());
+				requestContext?.revalidate?.();
+				if (closed || controller.signal.aborted) throw new Error();
 				sent = true;
 				const upstream = await (options.fetch ?? fetch)(
 					`${requestAccess.endpoint.replace(/\/$/, "")}${request.url}`,

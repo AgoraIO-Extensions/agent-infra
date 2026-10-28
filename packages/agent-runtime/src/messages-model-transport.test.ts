@@ -926,3 +926,62 @@ it.each([401, 403, 429, 500])(
 		}
 	},
 );
+
+it("revalidates after persisted dispatch receipt and before upstream fetch", async () => {
+	let current = true;
+	let sends = 0;
+	const facts: { phase: string; sent: boolean | undefined }[] = [];
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		credential: "synthetic-provider-credential",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {},
+		openRequest: async () => ({
+			revalidate: () => {
+				if (!current) throw Error("revoked");
+			},
+			receipt: async (phase, _end, diagnostic) => {
+				facts.push({ phase, sent: diagnostic?.sent });
+				if (phase === "sent") {
+					await Promise.resolve();
+					current = false;
+				}
+			},
+		}),
+		fetch: async () => {
+			sends++;
+			return new Response(messages(["not reached"]), {
+				headers: { "content-type": "text/event-stream" },
+			});
+		},
+	});
+	try {
+		const response = await fetch(
+			`${transport.modelAccess.endpoint}/v1/messages`,
+			{
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${transport.modelAccess.credential}`,
+				},
+				body: JSON.stringify({
+					model: "claude-opus-5",
+					messages: [],
+					stream: true,
+					output_config: { effort: "high" },
+					thinking: { type: "adaptive" },
+				}),
+			},
+		);
+		await response.text();
+		expect(sends).toBe(0);
+		expect(facts).toEqual([
+			{ phase: "sent", sent: false },
+			{ phase: "failed", sent: false },
+		]);
+		expect(transport.failure()).toBe("failed");
+	} finally {
+		await transport.close();
+	}
+});
