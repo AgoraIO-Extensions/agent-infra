@@ -5,6 +5,7 @@ import {
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
+import { RuntimeNativeCapabilityRequestV6Schema } from "../../contracts/src/runtime/host-v6.js";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.js";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.js";
 import { migratePlatformDatabase } from "./migrate.js";
@@ -76,7 +77,7 @@ const keyBinding = {
 	version: 1,
 };
 function request(executionId = "native-v6-execution") {
-	return {
+	const wireRequest = {
 		schemaVersion: 6 as const,
 		requestId: "native-v6-request",
 		traceId: "native-v6-trace",
@@ -114,8 +115,11 @@ function request(executionId = "native-v6-execution") {
 		},
 		configVersion: "config-1",
 	};
+	RuntimeNativeCapabilityRequestV6Schema.parse(wireRequest);
+	const { grant: _grant, ...context } = wireRequest;
+	return context;
 }
-type PreparedInput = Omit<ReturnType<typeof request>, "grant">;
+type PreparedInput = ReturnType<typeof request>;
 function publicInvocation(
 	input: PreparedInput = request(),
 	idempotencyKey = input.executionId,
@@ -462,7 +466,7 @@ it("returns the original accepted operation after current Key/config and candida
 });
 
 it("persists a prepared operation before any transport Grant is created", async () => {
-	const { grant: _grant, ...prepared } = request();
+	const prepared = request();
 	const result = await useCase().admit(prepared);
 	expect(result.outcome).toBe("accepted");
 	const [row] =

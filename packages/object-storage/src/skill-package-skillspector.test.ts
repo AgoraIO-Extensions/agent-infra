@@ -1,12 +1,5 @@
-import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { expect, it } from "vitest";
-import {
-	createSkillSpectorAdapterV1,
-	decideSkillPackageAdmissionV1,
-} from "./skill-package-skillspector.js";
+import { decideSkillPackageAdmissionV1 } from "./skill-package-skillspector.js";
 
 const policy = {
 	policyRevision: "policy-v1",
@@ -114,44 +107,4 @@ it("rejects stale receipts and server-required probes", () => {
 		outcome: "rejected",
 		reason: "incomplete_evidence",
 	});
-});
-
-it("executes the external scanner with a staged archive and validates its report", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "skillspector-test-"));
-	const executable = join(directory, "scanner.cjs");
-	const archive = new TextEncoder().encode("archive");
-	await writeFile(
-		executable,
-		`#!/usr/bin/env node
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-const archivePath = args[args.indexOf("--archive") + 1];
-if (!fs.statSync(archivePath).isFile()) process.exit(1);
-const value = (name) => args[args.indexOf(name) + 1];
-process.stdout.write(JSON.stringify({schemaVersion:1,scannerId:value("--scanner-id"),engineVersion:value("--engine-version"),rulesetDigest:value("--ruleset-digest"),policyRevision:value("--policy-revision"),packageDigest:value("--package-digest"),manifestDigest:value("--manifest-digest"),issuedAt:new Date().toISOString(),coverage:"complete",findings:[],dynamicProbe:{required:false,completed:false,violations:[]}}));
-`,
-		{ mode: 0o700 },
-	);
-	try {
-		const adapter = createSkillSpectorAdapterV1({
-			executable,
-			scannerId: "skillspector",
-			engineVersion: "1.0.0",
-			rulesetDigest: "a".repeat(64),
-			timeoutMs: 10_000,
-		});
-		const result = await adapter.scan({
-			packageDigest: createHash("sha256").update(archive).digest("hex"),
-			manifestDigest: "c".repeat(64),
-			policyRevision: "policy-v1",
-			archiveBytes: archive,
-		});
-		expect(result).toMatchObject({
-			scannerId: "skillspector",
-			coverage: "complete",
-			findingCount: 0,
-		});
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
 });

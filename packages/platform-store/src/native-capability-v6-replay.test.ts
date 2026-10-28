@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import type { RuntimeNativeCapabilityRequestV6 } from "@agent-infra/contracts/runtime";
 import {
 	nativeCapabilityAdmissionRequestDigestV6,
 	nativeCapabilityOperationDigestV6,
 	parseNativeCapabilityAdmissionRequestV6 as parseProjection,
 } from "@agent-infra/platform-core";
 import { beforeEach, expect, it, vi } from "vitest";
+import type { RuntimeNativeCapabilityRequestV6 } from "../../contracts/src/runtime/host-v6.js";
+import { RuntimeNativeCapabilityRequestV6Schema } from "../../contracts/src/runtime/host-v6.js";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.js";
 import type { Transaction } from "./conversation-execution-common.js";
 
@@ -20,7 +21,7 @@ vi.mock("./conversation-execution-sql.js", async (importOriginal) => ({
 	...sql,
 }));
 
-const request = {
+const signedRequest = {
 	schemaVersion: 6,
 	requestId: "request-1",
 	traceId: "trace-1",
@@ -60,6 +61,10 @@ const request = {
 	configVersion: "configuration-1",
 } as const;
 
+RuntimeNativeCapabilityRequestV6Schema.parse(signedRequest);
+const { grant: _grant, ...unsignedRequest } = signedRequest;
+const request = unsignedRequest as any;
+
 function publicInvocation(
 	input: unknown = request,
 	idempotencyKey = "public-invocation-1",
@@ -82,8 +87,7 @@ function parseNativeCapabilityAdmissionRequestV6(input: unknown) {
 }
 
 function validPlan() {
-	const runtimeRequest: RuntimeNativeCapabilityRequestV6 =
-		structuredClone(request);
+	const runtimeRequest = structuredClone(request);
 	const parsed = parseNativeCapabilityAdmissionRequestV6(request);
 	const authority = {
 		conversationId: request.conversationId,
