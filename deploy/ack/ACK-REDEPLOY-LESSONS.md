@@ -35,6 +35,7 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | 修改 Worker/API Secret 后看起来配置已更新，但 Workload 仍沿用旧状态 | Secret 投影和 Store 中的 Workload UID/镜像/配置 revision 是独立事实；手工重建同名 StatefulSet 会触发 Worker ownership/UID conflict | 配置变更后只通过 Worker reconcile；若必须破坏性清理，删除 namespace/数据库或精确清理全部 owned Workload，再开始新一轮，不要手工复用旧 Agent ID |
 | Custom Agent 有时 `available/ready`，有时 Runtime 立即 `RUNTIME_CONFIGURATION_INVALID` | custom 镜像、Secret schema 和实际 Runtime driver 是同一份准入事实；不同 digest 不能共用标准模板的 readiness 收据 | 每个 custom digest 单独做真实 Workload health/readiness 和模型回合；单个 custom 失败只保留为失败收据，不回填成另一个 custom 的成功 |
 | 本地 preflight runner 从临时目录执行时找不到 `/private/packages/...` | runner 通过相对路径计算仓库根，复制到 `/private/tmp` 后路径闭包失效 | runner 必须从完整 clean worktree 执行，或显式传入来源 worktree；不要把临时复制的 runner 当作可移植收据 |
+| 重跑 preflight 读到旧 checkpoint 或写 receipt 报 `EEXIST` | 私有 job 复用固定输出目录，但每次验证创建新 Pod | 先验证完整四模板 manifest/target 绑定，再每轮自动生成独立私有 job 与输出目录；保留旧证据和原输入 |
 | Helm 本地渲染报 `sessionRuntimeScheduling` 不兼容，但目标 ACK 版本支持 | Helm client 默认 Kubernetes 版本与目标 Server 版本不同 | `render_manifest` 先读取目标 Server version，再用 `helm template --kube-version`；不要用本地默认版本判断目标能力 |
 | 更新 private values 后 `bootstrap-inputs` 拒绝覆盖 | bootstrap 工具按 ownership 和 Secret 字节精确比较，既有 Secret 漂移是故障信号 | 对 private 配置变更先删除并重建同一安装拥有的 Secret；不要用 `kubectl apply` 覆盖，也不要把漂移对象收养 |
 | bootstrap database 阶段突然失败且没有业务错误 | private values 文件权限不是 0600，工具在读取前 fail closed | 所有 values、input、credential、body 和 storageState 文件保持当前用户拥有且权限 0600；目录 0700 |

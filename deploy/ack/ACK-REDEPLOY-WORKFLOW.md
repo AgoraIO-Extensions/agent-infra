@@ -103,6 +103,10 @@ ECI placement，以及 grant private key、Runtime service token 和 Relay key �
 attestation，执行真实 Runtime turn 和事件回读，写入私有 candidate/preflight receipt，随后
 删除 Pod 和 Secret。镜像拉取、Runtime 启动、真实模型、完成事件或 cleanup 任一步失败都会
 让流程失败；它不会复用历史 receipt。
+每次执行先校验四份 job 与发布 manifest、kubeconfig、namespace 的绑定，再在
+`ACK_EVIDENCE_DIR` 下创建独立 `template-run-*` 目录，生成绑定当前 worktree 的 job 副本。
+原 job 的 `outputDirectory` 不用于本轮执行；新 checkpoint、receipt 和诊断日志均写入本轮
+私有目录。重跑不会继承旧 Pod 的进度，也不覆盖旧证据或原始 job 文件。
 模板校验使用同次生成的 `template-model-validation.receipt.json`；详细诊断
 `template-model-preflight.receipt.json` 和 `runtime-capacity.receipt.json` 分别保留运行证据与实测容量，均保持私有。
 
