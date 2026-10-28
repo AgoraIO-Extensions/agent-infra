@@ -90,6 +90,23 @@ service token 永不写入 Sandbox。Session 的 `nativeMetadataWorkerEgress` �
 namespace/pod-label selector 与单一 TCP port，缺失策略保持 NetworkPolicy deny-all，IP/CIDR
 目标会在资源写入前拒绝。
 
+## 已保存模型投影的 Catalog 兼容变化
+
+Worker 在候选激活与 V4 已保存配置重新校验时，仍要求目录 revision 匹配、未过期且端点可用。
+按 [ADR-0030](../../docs/adr/0030-source-standard-template-models-from-relay.md)，以下规则同时适用
+V1/V4 投影的 Catalog 重新校验；不修改原投影、fingerprint、模型选择或 Key 绑定。
+
+| Catalog 变化 | 已保存投影的处理 |
+| --- | --- |
+| `allowedModels` 追加模型、删除未选模型或改为 `null` | 当前限制仍包含每个已保存模型（或不限制）时允许 |
+| `capabilities.reasoningLevels` 变化 | 沿用已保存组合，不按目录档位重新裁剪 |
+| 所选模型被移除、端点移除/不可用、目录 revision 变化或过期 | 拒绝重新校验 |
+| endpoint 身份、URL/origin、协议、认证、安全策略或其余能力字段变化 | 仍按精确绑定拒绝，须重新验证配置 |
+
+兼容变化不会给新模型或新档位增加保存资格，也不会重放已终态或未知执行。新增组合与默认 Key
+替换仍走[保存时真实验证](../platform-api/README.md#标准模板的模型与推理档位)。V1 历史投影可读
+及重新校验不代表允许旧静态 Key 配置接纳新业务执行，迁移边界仍按工程 Spec §10.7。
+
 ## Session Runtime Driver
 
 Session Sandbox 的 Driver 来自部署已信任的标准模板绑定，不能由用户请求选择。
