@@ -242,33 +242,10 @@ template_preflight() {
 	local list_file
 	list_file=$(mktemp)
 	trap 'unlink "$list_file"' EXIT
-	if ! node - "$jobs" >"$list_file" <<'NODE'
-const fs = require("node:fs");
-const file = process.argv[2];
-const value = JSON.parse(fs.readFileSync(file, "utf8"));
-const manifest = JSON.parse(fs.readFileSync(process.env.ACK_TEMPLATE_IMAGE_MANIFEST, "utf8"));
-if (!value || value.schemaVersion !== 1 || !Array.isArray(value.jobs) || value.jobs.length !== 4)
-	process.exit(1);
-if (manifest.schemaVersion !== 1 || manifest.commitSha !== process.env.ACK_SOURCE_SHA || manifest.platform !== "linux/amd64")
-	process.exit(1);
-const seen = new Set();
-const templateIds = new Set();
-for (const job of value.jobs) {
-	if (typeof job !== "string" || !job.startsWith("/") || seen.has(job)) process.exit(1);
-	seen.add(job);
-	const input = JSON.parse(fs.readFileSync(job, "utf8"));
-	const image = manifest.images?.[input.templateId];
-	if (!["codex", "claude", "opencode", "pi"].includes(input.templateId) || templateIds.has(input.templateId) || input.sourceCommit !== process.env.ACK_SOURCE_SHA || !image || input.imageReference !== `${image.repository}@${image.digest}` || input.imageDigest !== image.digest)
-		process.exit(1);
-	templateIds.add(input.templateId);
-	process.stdout.write(`${job}\n`);
-}
-if (seen.size !== 4) process.exit(1);
-NODE
-	then
-		die "template preflight job list is invalid or does not match ACK_SOURCE_SHA"
+	if ! node --experimental-strip-types "$repo_root/deploy/ack/prepare-template-preflight.ts" "$jobs" "$template_manifest" "$evidence_dir" "$repo_root" >"$list_file"; then
+		die "template preflight inputs do not match the source/image/target tuple"
 	fi
-	local job template index=0
+	local job template run_directory index=0
 	while IFS= read -r job; do
 		template=$(node - "$job" <<'NODE'
 const fs = require("node:fs");
@@ -276,7 +253,8 @@ const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 process.stdout.write(value.templateId);
 NODE
 )
-		if ! node --experimental-strip-types "$repo_root/deploy/ack/template-model-preflight.mjs" "$job" >"$evidence_dir/template-preflight-$template.json"; then
+		run_directory=$(dirname "$job")
+		if ! node --experimental-strip-types "$repo_root/deploy/ack/template-model-preflight.mjs" "$job" >"$run_directory/$template.log" 2>&1; then
 			die "real-runtime template preflight failed: $template"
 		fi
 		index=$((index + 1))
