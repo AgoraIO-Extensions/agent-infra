@@ -411,7 +411,22 @@ API 创建许可由部署显式配置获准主体集合，以主体类型和稳�
 
 Agent 资源授权修订与逐主体的 manage/use 授权修订属于不同版本域。独立授权的撤销、重新授予产生新的授权修订；消费者按完整主体类型、稳定 ID、Agent 与授权类型复核当前记录，不能以授权修订等于 Agent 修订判断是否授权。任务边界分别绑定 `agentAuthorizationRevision` 与 `useGrantRevision` 并复验；审计查询使用当前使用权，同时保留原提交主体和执行关联校验。
 
-Agent 元数据的 API 列表读取要求凭证包含 `agent:read`，并仅返回主体当前显式拥有管理或使用授权的 Agent；任一授权有效即可读取元数据，两项均撤销时排除该 Agent。元数据读取不授予管理或使用操作权，Owner 或系统管理员角色不能替代独立 API 授权。无可见 Agent 时返回空页，浏览器发现与 Owner 读取仍按其既有规则执行。
+Agent 元数据的个人 API 列表与单项读取要求凭证包含 `agent:read`，并仅返回主体当前显式拥有管理或使用授权的 Agent；任一授权有效即可读取元数据，两项均撤销时排除该 Agent。元数据读取不授予管理或使用操作权，Owner 或系统管理员角色不能替代独立 API 授权。无可见 Agent 时返回空页，浏览器发现与 Owner 读取仍按其既有规则执行。
+
+个人凭证自查使用 `GET /api/v2/me/api-identity`，仅接受当前个人 Bearer，不接受 Cookie、
+其他凭证类型或调用方选择主体。返回 `schemaVersion: 1`、`principal: { kind: "user", id }`、
+`credentialId`、当前 `scopes` 和 UTC `expiresAt`；`null` 仅表示未设置到期时间，撤销和禁用仍
+生效。稳定主体来自已有用户 ID；凭证引用不作为账号身份。不要求 `agent:read` 或 Agent 授权，
+不返回凭证值、校验摘要或个人资料，不代表 Connection 的身份或授权。
+
+`GET /api/v2/agents/:agentId` 的个人 Bearer 路径使用与列表项相同的 V2 投影及 API 用户查询范围。
+两项读取均复核当前凭证、目录及禁用事实，沿用读取事务和必要审计；提交失败不得返回成功。
+单项读取额外检查上述 `agent:read` 与目标显式授权；已通过身份和范围校验后，不可见或不存在
+均返回 `404 RESOURCE_UNAVAILABLE`。无效凭证返回 `401 AUTHENTICATION_REQUIRED`，禁用主体
+或缺少读取范围返回 `403 FORBIDDEN`，非法输入返回 `400 INVALID_REQUEST`，依赖故障返回
+`503 DEPENDENCY_UNAVAILABLE`。两项 Bearer 请求拒绝混合 Cookie、额外 query/body 和自报身份头，
+响应禁止缓存。浏览器单项读取、`/detail`、管理员入口和凭证管理保持各自认证规则。
+调用步骤见[个人 API 凭证读取联调](../agents/personal-api-read.md)。
 
 | 变化 | API/订阅 | 已受理任务 |
 | --- | --- | --- |
