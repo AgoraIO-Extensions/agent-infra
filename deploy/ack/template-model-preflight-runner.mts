@@ -154,10 +154,12 @@ async function run() {
         // until the already-signed grant is valid there; do not backdate claims
         // or change any Runtime authorization gate/product deadline.
         if (!resume) await waitForHostGrant(grant);
+        if (resume && !Number.isSafeInteger(resume.submittedAt)) fail();
+        const submittedAt = resume?.submittedAt ?? Date.now();
         const accepted = contracts.RuntimeOperationResponseV4Schema.parse(resume?.accepted ?? await post("/internal/runtime/v4/turns", { businessRequest, privateKeyField }));
         if (!resume) {
             await mkdir(c.outputDirectory, {recursive:true,mode:0o700});
-            await writeFile(checkpointPath, JSON.stringify({sourceCommit:c.sourceCommit,imageDigest:c.imageDigest,frozen,authorizationRecordId,accepted})+"\n",{mode:0o600,flag:"wx"});
+            await writeFile(checkpointPath, JSON.stringify({sourceCommit:c.sourceCommit,imageDigest:c.imageDigest,frozen,authorizationRecordId,accepted,submittedAt})+"\n",{mode:0o600,flag:"wx"});
         }
 		if (accepted.operationId !== id || accepted.result.outcome !== "accepted" ||
 			!["running", "completed"].includes(accepted.result.status)) fail();
@@ -231,7 +233,7 @@ async function run() {
 			executionId: id, hostSessionRefSha256: hash(accepted.hostSessionRef),
 			runtimeModuleSha256: c.runtimeModuleSha256, artifactKind: "official-published-runtime", modelFactSource: "protected-driver-journal", modelFactsInV4EventStream: false, replyMatched: true, replySha256: hash(reply.trim()), nativeTelemetryModelIds:[...new Set(modelFacts.map(f=>f.model.modelId))], modelOperationCount: modelFacts.length, modelOperationRefs: modelFacts.map(f => hash(f.operationRef)),
 			modelId: c.modelId, runtimeConfigVersion: c.runtimeConfigVersion,
-			terminalStatus: "completed", cursorSha256: hash(cursor), validatedAt };
+			terminalStatus: "completed", cursorSha256: hash(cursor), submittedAt, validatedAt };
 		await writeFile(join(c.outputDirectory, "template-model-preflight.receipt.json"), JSON.stringify(receipt, null, 2) + "\n", { mode: 0o600, flag: "wx" });
 		await writeFile(join(c.outputDirectory, `template-validation-${c.templateId}.candidate.json`), JSON.stringify(validation, null, 2) + "\n", { mode: 0o600, flag: "wx" });
 		console.log(JSON.stringify({ status: "passed", scope: c.scope, imageDigest: c.imageDigest, executionId: id, outputDirectory: c.outputDirectory }));

@@ -202,6 +202,8 @@ async function main(inputPath) {
 			observed.status.containerStatuses[0].restartCount !== 0 ||
 			measured.imageDigest !== job.imageDigest || measured.sourceCommit !== job.sourceCommit ||
 			measured.terminalStatus !== "completed" || measured.replyMatched !== true ||
+			!Number.isSafeInteger(measured.submittedAt) || !Number.isSafeInteger(measured.validatedAt) ||
+			measured.validatedAt < measured.submittedAt ||
 			!Number.isSafeInteger(measured.modelOperationCount) || measured.modelOperationCount < 1)
 			throw new Error("CAPACITY_MEASUREMENT_INVALID");
 		await writeFile(join(job.outputDirectory, "runtime-capacity.receipt.json"), JSON.stringify({
