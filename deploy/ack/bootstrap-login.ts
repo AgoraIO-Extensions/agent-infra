@@ -98,8 +98,8 @@ export async function bootstrapLogin(configFile: string, sourceSha: string, expe
 		}
 		for (const [index, subject] of config.subjects.entries())
 			assert.equal(await session(contexts[index]), states.get(subject.storageStateFile)!.userId, "LOGIN_SESSION_CHANGED");
-		const candidate = { schemaVersion: 1, sourceSha, origin: config.input.origin, createdAt: Date.now(),
-			subjects: Object.fromEntries(config.subjects.map((s) => [s.name, { userId: states.get(s.storageStateFile)!.userId }])) };
+		const subjects: Record<string, { userId: string }> = Object.fromEntries(config.subjects.map((s) => [s.name, { userId: states.get(s.storageStateFile)!.userId }]));
+		const candidate = { schemaVersion: 1, sourceSha, origin: config.input.origin, createdAt: Date.now(), subjects };
 		const outputs = new Map<string, any>([[config.input.identityFile, candidate]]);
 		for (const [file, value] of states) outputs.set(file, value.state);
 		for (const { file, value } of config.blueprints) outputs.set(file, { ...value,
