@@ -115,6 +115,24 @@ Kubernetes 凭证或模型原始凭据。issuer/UID 映射由 `@agent-infra/plat
 代理令牌正确与否及 PostgreSQL 会话装配属于部署证据；实际 LDAP 登录、
 停用传播、申请审批、Worker Pod/PVC、模型访问和重启持久化须单独实测。
 
+## SkillSpector 原生扫描器
+
+`providerImport.scanner` 可使用 `createSkillSpectorPackageScannerV1` 与
+`createSkillSpectorAdapterV1` 组合，沿用现有发布 supplier。部署必须固定官方 CLI 的版本与规则集，
+`engineVersion` 必须等于原生报告的 `metadata.skillspector_version`；`requiredAnalyzerIds` 必须从
+已固定版本的源码和扫描策略确定，不能从待验报告推导，缺少任何必需账本条目均拒绝。
+`rulesetDigest` 是部署固定的规则集摘要，应包含这些必需分析器与配置，不来自发布请求。
+CLI 以 `scan <archive> --no-llm --format json` 运行，不传平台自定义
+参数，不发送内容给模型。它仍可能按官方行为向 OSV 查询声明的依赖坐标。
+
+只有原生报告的执行成功、完整静态覆盖、逐文件清单与包内文件一致、analyzer 账本无失败/遗漏、
+没有抑制结果时才生成既有扫描回执。退出码 1 的完整发现继续交给平台策略判定；进程错误、超时、
+版本错配及不完整报告拒绝。`SAFE` 文案和退出码 0 不能单独使版本发布。
+
+本适配只证明静态扫描，动态探测永远不会由它写成完成；部署策略要求动态探测时仍拒绝。真实 CLI
+回归可通过仓库外的 `NATIVE_SKILLSPECTOR_EXECUTABLE` 指定固定版本的可执行文件运行。原生 CLI
+与模型/动态执行的验收分别记录，不能把受控报告测试视为真实扫描。
+
 ## Skill 绑定的 Agent Version
 
 Skill 绑定挂在 Agent Version 下。它是整个部署共用的固定值，来源与升级语义见

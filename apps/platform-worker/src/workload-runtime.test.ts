@@ -39,6 +39,7 @@ import {
 	type AgentConfigurationRecordV2,
 	createWorkloadReconciliationV1,
 	decideSessionSandboxDrainObservationV1,
+	decodeAgentConfigurationRecordV3,
 	type SecretActivationCandidateV1,
 	type SecretActivationStorePortV1,
 	type WorkloadReconciliationInputV1,
@@ -629,6 +630,73 @@ function cleanupSecrets(
 }
 
 describe("assembled Workload Runtime contracts", () => {
+	it.each(["allowedModels", "reasoningLevels"] as const)(
+		"keeps the saved V4 candidate through activation after a compatible %s change",
+		async (change) => {
+			const original = standardModelConfiguration();
+			assert(original.modelConfiguration);
+			const configuration = decodeAgentConfigurationRecordV3({
+				...original,
+				schemaVersion: 3,
+				modelConfiguration: {
+					...original.modelConfiguration,
+					options: original.modelConfiguration.options.map(
+						({ credential: _credential, ...option }) => option,
+					),
+				},
+			});
+			const catalog = {
+				...catalogFixture(),
+				endpoints: catalogFixture().endpoints.map((endpoint) => ({
+					...endpoint,
+					allowedModels: ["model-a"],
+				})),
+			};
+			const decrypt = vi.fn();
+			const validate = vi.fn();
+			const f = fixture(
+				{
+					runtimeModelVersion: 4,
+					modelCatalog: createDeploymentModelCatalogAdapterV1({
+						load: async () => catalog,
+					}),
+					decryptor: { decrypt },
+					modelAccess: { validate },
+				},
+				{ configuration },
+			);
+			await f.tick(4);
+			const state = f.state;
+			assert(state?.identity);
+			const savedProjection = structuredClone(state.candidate.modelProjection);
+			expect(savedProjection).toMatchObject({ schemaVersion: 4 });
+			const endpoint = catalog.endpoints[0];
+			assert(endpoint);
+			if (change === "allowedModels") endpoint.allowedModels.push("model-b");
+			else endpoint.capabilities.reasoningLevels = ["low", "max"];
+			const runtime = createWorkloadRuntimeV1(f.options);
+			const input = {
+				configuration,
+				management: f.management,
+				state,
+				requestId: "request-a",
+				traceId: "trace-a",
+			};
+			await expect(runtime.apply(state, false, input)).resolves.toEqual(
+				state.identity,
+			);
+			await expect(runtime.activateSecrets(state, input)).resolves.toBe(
+				"active",
+			);
+			await expect(runtime.promote(state)).resolves.toBeUndefined();
+			await f.tick(5);
+			expect(f.state?.phase).toBe("ready");
+			expect(f.state?.verified?.modelProjection).toEqual(savedProjection);
+			expect(f.state?.candidate.configuration).toEqual(configuration);
+			expect(decrypt).not.toHaveBeenCalled();
+			expect(validate).not.toHaveBeenCalled();
+		},
+	);
 	it.each(["fake", "unknown", "claude"])(
 		"rejects an invalid direct Runtime Driver binding %s before resources",
 		(driver) => {
