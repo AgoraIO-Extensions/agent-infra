@@ -72,7 +72,16 @@ deploy/ack/redeploy.sh capture-inputs
 并依次执行四模板和自定义 ACP 的同一会话多轮旅程。原始 ID 不进入公开 provision receipt。
 旧 Agent 存在与否、当前授权和业务是否成功仍由真实 API 和浏览器检查确定。
 
-自定义 Agent 配置使用 [`custom-agent-web-probe.md`](../../tests/local-real-e2e/custom-agent-web-probe.md) 规定的私有 JSON。`platform-auth` 只适用于已经接入 Platform Auth 的 Agent；自有入口使用 `web`。每份配置必须声明当前来源 commit、不可变 Digest、configuration revision、期望内容 hash 和两个不同主体的私有授权文件。
+自定义 `platform-adapter` Agent 使用当前 ID 绑定生成的 `custom-*.json` Platform 对话蓝图。
+`validate` 必须读取同一源码、同一 Agent 的三轮浏览器 receipt，逐轮检查 SSE、完成状态、刷新恢复
+和跨主体拒绝；不为这类 Agent 要求独立 HTML 入口。缺失、未完成或身份/来源不匹配的 receipt
+都拒绝。
+
+自定义 `self-managed` Agent 仍使用 [`custom-agent-web-probe.md`](../../tests/local-real-e2e/custom-agent-web-probe.md)
+规定的私有 JSON；`ACK_CUSTOM_AGENT_CONFIGS` 只列出这类 Agent，数量必须匹配创建清单。
+全部 custom 都为 `platform-adapter` 时不设置该变量。`platform-auth` 只适用于已经接入
+Platform Auth 的自有入口；其他自有入口使用 `web`。每份配置必须声明来源 commit、不可变
+Digest、configuration revision、期望内容 hash 和两个不同主体的私有授权文件。
 
 `ACK_AGENT_REQUESTS_FILE` 是仓库外的 API 创建/重放清单。每项引用一个 `0600` Bearer credential 文件、一个 `0600` JSON body 文件和固定 `Idempotency-Key`；credential 需要创建和读取 Agent 的权限。body 可以是标准模板或自定义 Agent 的 `POST /api/v2/agents` 请求。脚本只输出 HTTP 状态、状态枚举和 Agent ID 的 SHA-256，不输出 Token、Secret 或响应正文；创建后会轮询 `/state`，直到 `available/ready` 或明确失败/超时。API 创建不需要 Web 审批；需要审批的 Web application 流程仍应由真实管理员完成并回读。
 
