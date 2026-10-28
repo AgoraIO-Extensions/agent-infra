@@ -42,6 +42,8 @@ beforeEach(() => {
 		"fetch",
 		vi.fn(async (input: string | URL | Request) => {
 			const url = directoryRequestUrl(input);
+			if (url.pathname.endsWith("/credentials"))
+				return Response.json({ items: [], nextCursor: null });
 			const ids = url.searchParams.get("ids")?.split(",") ?? [];
 			return Response.json(
 				directorySearchResponse(
@@ -449,7 +451,7 @@ describe("ApplicationManagementScreen", () => {
 			);
 			submitCredential();
 			await screen.findByText(label);
-			expect(screen.getByRole("status").textContent).toContain(
+			expect(screen.getByText(/当前展示原请求的回执/).textContent).toContain(
 				"原请求的回执，未再次签发",
 			);
 			if (status === "unknown")

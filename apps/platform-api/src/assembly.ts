@@ -11,6 +11,7 @@ import {
 	createAgentDefaultRelayKeyUseCaseV1,
 	createAgentManagementV1,
 	createApplicationApiCredentialIssuerV1,
+	createApplicationApiCredentialManagementV1,
 	createApplicationFoundationUseCaseV1,
 	createApplicationMaterialGrantUseCaseV1,
 	createApplicationModelCandidatesUseCaseV1,
@@ -1183,6 +1184,13 @@ export function assemblePlatformApi(
 		applicationApiCredentials: {
 			identity: input.identity,
 			issuer: applicationApiCredentials,
+			management: createApplicationApiCredentialManagementV1({
+				store: applicationApiCredentialStore,
+				userDirectory: {
+					resolveUser: (userId) =>
+						resolveCurrentTaskUser(input.identity, userId, randomUUID()),
+				},
+			}),
 		},
 		applicationMaterialGrants: {
 			identity: input.identity,

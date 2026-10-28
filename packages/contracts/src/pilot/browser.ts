@@ -48,8 +48,11 @@ import {
 	AgentUserUseRevokeResponseV1Schema,
 } from "./agent-user-use-grants.ts";
 import {
+	ApplicationApiCredentialListQueryV1Schema,
+	ApplicationApiCredentialPageV1Schema,
 	ApplicationApiCredentialRequestV1Schema,
 	ApplicationApiCredentialResponseV1Schema,
+	ApplicationApiCredentialRevocationV1Schema,
 } from "./application-api-credentials.ts";
 import {
 	ApplicationMaterialGrantRequestV1Schema,
@@ -1697,7 +1700,47 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			},
 		},
 	},
+
+	"/api/v2/applications/{applicationId}/credentials/{credentialId}": {
+		delete: {
+			operationId: "revokeApplicationApiCredentialV2",
+			summary:
+				"Revoke one application credential without canceling accepted tasks",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({
+					applicationId: pathId(),
+					credentialId: pathId(),
+				}),
+				header: idempotencyHeader,
+			},
+			responses: {
+				"200": jsonResponse(
+					"Revoked credential metadata",
+					ApplicationApiCredentialRevocationV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/applications/{applicationId}/credentials": {
+		get: {
+			operationId: "listApplicationApiCredentialsV2",
+			summary:
+				"Read bounded application credential metadata as the current responsible user",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ applicationId: pathId() }),
+				query: ApplicationApiCredentialListQueryV1Schema,
+			},
+			responses: {
+				"200": jsonResponse(
+					"Credential metadata only",
+					ApplicationApiCredentialPageV1Schema,
+				),
+				...errorResponses,
+			},
+		},
 		post: {
 			operationId: "issueOrRotateApplicationApiCredentialV2",
 			summary:

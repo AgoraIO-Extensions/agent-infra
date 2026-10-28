@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+	ApplicationApiCredentialListQueryV1Schema,
+	ApplicationApiCredentialPageV1Schema,
 	ApplicationApiCredentialRequestV1Schema,
 	ApplicationApiCredentialResponseV1Schema,
+	ApplicationApiCredentialRevocationV1Schema,
 } from "./application-api-credentials.ts";
+import { pilotBrowserHttpOpenApiPathsV2 } from "./browser.ts";
 
 const issue = {
 	operation: "issue",
@@ -97,4 +101,53 @@ describe("application credential management contract", () => {
 			}).success,
 		).toBe(false);
 	});
+});
+
+it("bounds metadata pages, rejects credential material and exposes independent metadata/revoke routes", () => {
+	expect(
+		ApplicationApiCredentialListQueryV1Schema.safeParse({ limit: 101 }).success,
+	).toBe(false);
+	expect(
+		ApplicationApiCredentialListQueryV1Schema.safeParse({ userId: "forged" })
+			.success,
+	).toBe(false);
+	const metadata = {
+		applicationId: "app-1",
+		credentialId: "credential-1",
+		scopes: ["agent:read"],
+		expiresAt: null,
+		revokedAt: null,
+		createdAt: "2026-10-20T00:00:00Z",
+		lastUsedAt: null,
+	};
+	expect(
+		ApplicationApiCredentialPageV1Schema.safeParse({
+			items: [metadata],
+			nextCursor: null,
+		}).success,
+	).toBe(true);
+	for (const key of ["credential", "credentialHash", "encryptedSecret"]) {
+		expect(
+			ApplicationApiCredentialPageV1Schema.safeParse({
+				items: [{ ...metadata, [key]: "forbidden" }],
+				nextCursor: null,
+			}).success,
+		).toBe(false);
+		expect(
+			ApplicationApiCredentialRevocationV1Schema.safeParse({
+				metadata: { ...metadata, [key]: "forbidden" },
+				replayed: false,
+			}).success,
+		).toBe(false);
+	}
+	expect(
+		pilotBrowserHttpOpenApiPathsV2[
+			"/api/v2/applications/{applicationId}/credentials"
+		].get.operationId,
+	).toBe("listApplicationApiCredentialsV2");
+	expect(
+		pilotBrowserHttpOpenApiPathsV2[
+			"/api/v2/applications/{applicationId}/credentials/{credentialId}"
+		].delete.operationId,
+	).toBe("revokeApplicationApiCredentialV2");
 });

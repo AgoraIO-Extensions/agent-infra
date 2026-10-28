@@ -5041,6 +5041,71 @@ export type DisableOwnApplicationV2Responses = {
 
 export type DisableOwnApplicationV2Response = DisableOwnApplicationV2Responses[keyof DisableOwnApplicationV2Responses];
 
+export type ListApplicationApiCredentialsV2Data = {
+    body?: never;
+    path: {
+        applicationId: string;
+    };
+    query?: {
+        limit?: number;
+        cursor?: string;
+    };
+    url: '/api/v2/applications/{applicationId}/credentials';
+};
+
+export type ListApplicationApiCredentialsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListApplicationApiCredentialsV2Error = ListApplicationApiCredentialsV2Errors[keyof ListApplicationApiCredentialsV2Errors];
+
+export type ListApplicationApiCredentialsV2Responses = {
+    /**
+     * Credential metadata only
+     */
+    200: {
+        items: Array<{
+            applicationId: string;
+            createdAt: string;
+            credentialId: string;
+            expiresAt: string | null;
+            lastUsedAt: string | null;
+            revokedAt: string | null;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+        }>;
+        nextCursor: string | null;
+    };
+};
+
+export type ListApplicationApiCredentialsV2Response = ListApplicationApiCredentialsV2Responses[keyof ListApplicationApiCredentialsV2Responses];
+
 export type IssueOrRotateApplicationApiCredentialV2Data = {
     body: {
         expiresAt: string | null;
@@ -5155,6 +5220,72 @@ export type IssueOrRotateApplicationApiCredentialV2Responses = {
 };
 
 export type IssueOrRotateApplicationApiCredentialV2Response = IssueOrRotateApplicationApiCredentialV2Responses[keyof IssueOrRotateApplicationApiCredentialV2Responses];
+
+export type RevokeApplicationApiCredentialV2Data = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        applicationId: string;
+        credentialId: string;
+    };
+    query?: never;
+    url: '/api/v2/applications/{applicationId}/credentials/{credentialId}';
+};
+
+export type RevokeApplicationApiCredentialV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokeApplicationApiCredentialV2Error = RevokeApplicationApiCredentialV2Errors[keyof RevokeApplicationApiCredentialV2Errors];
+
+export type RevokeApplicationApiCredentialV2Responses = {
+    /**
+     * Revoked credential metadata
+     */
+    200: {
+        metadata: {
+            applicationId: string;
+            createdAt: string;
+            credentialId: string;
+            expiresAt: string | null;
+            lastUsedAt: string | null;
+            revokedAt: string | null;
+            scopes: Array<'agent:create' | 'agent:manage' | 'agent:use' | 'agent:read'>;
+        };
+        replayed: boolean;
+    };
+};
+
+export type RevokeApplicationApiCredentialV2Response = RevokeApplicationApiCredentialV2Responses[keyof RevokeApplicationApiCredentialV2Responses];
 
 export type GrantApplicationMaterialV2Data = {
     body: {

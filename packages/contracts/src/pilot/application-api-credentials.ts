@@ -45,3 +45,16 @@ export const ApplicationApiCredentialResponseV1Schema = z.strictObject({
 	delivery: ApplicationCredentialDeliveryReceiptV1Schema,
 	replayed: z.boolean(),
 });
+
+export const ApplicationApiCredentialListQueryV1Schema = z.strictObject({
+	limit: z.coerce.number().int().min(1).max(100).default(20),
+	cursor: OpaqueIdV1Schema.optional(),
+});
+export const ApplicationApiCredentialPageV1Schema = z.strictObject({
+	items: z.array(ApplicationApiCredentialMetadataV1Schema).max(100),
+	nextCursor: OpaqueIdV1Schema.nullable(),
+});
+export const ApplicationApiCredentialRevocationV1Schema = z.strictObject({
+	metadata: ApplicationApiCredentialMetadataV1Schema,
+	replayed: z.boolean(),
+});

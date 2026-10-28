@@ -4,6 +4,7 @@ import {
 	type ApplicationCredentialAttemptV1,
 	type ApplicationCredentialDeliveryPortV1,
 	createApplicationApiCredentialIssuerV1,
+	createApplicationApiCredentialManagementV1,
 	createApplicationMaterialGrantUseCaseV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
@@ -526,5 +527,134 @@ describe("application issuer with real PostgreSQL and a controlled recipient", (
 		expect(
 			await sql`select id from platform.platform_api_credentials`,
 		).toHaveLength(0);
+	});
+});
+
+describe("application credential metadata and individual revocation", () => {
+	const management = () =>
+		createApplicationApiCredentialManagementV1({
+			store,
+			userDirectory: directory,
+		});
+	async function seed() {
+		await sql`insert into platform.platform_api_credentials (id, principal_type, principal_id, credential_hash, scopes) values ('credential-a','application','app-1',repeat('a', 64), '["agent:read"]'), ('credential-b','application','app-1',repeat('b', 64), '["agent:use"]'), ('credential-other','application','other-app',repeat('c', 64), '["agent:read"]'), ('credential-personal','user','app-1',repeat('d', 64), '["agent:read"]')`;
+	}
+	it("bounds metadata by application/type, paginates, and needs no material grant", async () => {
+		await seed();
+		const first = await management().list(request, { limit: 1 });
+		expect(first.items.map((row) => row.credentialId)).toEqual([
+			"credential-a",
+		]);
+		expect(first.nextCursor).toBe("credential-a");
+		const second = await management().list(request, {
+			limit: 1,
+			cursor: first.nextCursor,
+		});
+		expect(second.items.map((row) => row.credentialId)).toEqual([
+			"credential-b",
+		]);
+		expect(second.nextCursor).toBeNull();
+		const text = JSON.stringify([
+			first,
+			second,
+			await sql`select details from platform.audit_events`,
+		]);
+		expect(text).not.toContain("a".repeat(64));
+		expect(text).not.toContain("credentialHash");
+		await expect(
+			management().list(request, { limit: 101 }),
+		).rejects.toMatchObject({ code: "invalid_input" });
+	});
+	it("serializes concurrent and replayed revoke, preserves siblings, and rejects key reuse", async () => {
+		await seed();
+		const results = await Promise.all([
+			management().revoke(request, "credential-a"),
+			management().revoke(request, "credential-a"),
+		]);
+		expect(results.map((row) => row.replayed).sort()).toEqual([false, true]);
+		expect(results[0]?.metadata.revokedAt).toEqual(
+			results[1]?.metadata.revokedAt,
+		);
+		const duplicate = await management().revoke(
+			{ ...request, idempotencyKey: "another-key" },
+			"credential-a",
+		);
+		expect(duplicate.metadata.revokedAt).toEqual(
+			results[0]?.metadata.revokedAt,
+		);
+		await expect(
+			management().revoke(request, "credential-b"),
+		).rejects.toMatchObject({ code: "idempotency_conflict" });
+		expect(
+			(
+				await sql`select revoked_at from platform.platform_api_credentials where id = 'credential-b'`
+			)[0]?.revoked_at,
+		).toBeNull();
+		expect(
+			(
+				await sql`select * from platform.audit_events where action = 'application.credential.revoked'`
+			).length,
+		).toBe(2);
+	});
+	it("rejects other applications, personal IDs, missing IDs, removed and disabled managers even on replay", async () => {
+		await seed();
+		for (const id of ["credential-other", "credential-personal", "missing"])
+			await expect(management().revoke(request, id)).rejects.toMatchObject({
+				code: "not_found",
+			});
+		await expect(
+			management().list({ ...request, userId: "unrelated" }, {}),
+		).rejects.toMatchObject({ code: "not_found" });
+		await management().revoke(request, "credential-a");
+		await sql`update platform.platform_applications set responsible_user_id = 'replacement' where id = 'app-1'`;
+		await expect(
+			management().revoke(request, "credential-a"),
+		).rejects.toMatchObject({ code: "not_found" });
+		await sql`update platform.platform_applications set responsible_user_id = 'manager' where id = 'app-1'`;
+		await sql`insert into platform.platform_user_disables (user_id) values ('manager')`;
+		await expect(
+			management().revoke(request, "credential-a"),
+		).rejects.toMatchObject({ code: "forbidden" });
+		await expect(management().list(request, {})).rejects.toMatchObject({
+			code: "forbidden",
+		});
+	});
+	it("rolls back revocation and idempotency when audit fails or current directory authority changes", async () => {
+		await seed();
+		await sql`create function platform.reject_credential_audit() returns trigger language plpgsql as $$ begin raise exception 'audit rejected'; end $$`;
+		await sql`create trigger reject_credential_audit before insert on platform.audit_events for each row execute function platform.reject_credential_audit()`;
+		try {
+			await expect(
+				management().revoke(request, "credential-a"),
+			).rejects.toMatchObject({ code: "unavailable" });
+			await expect(management().list(request, {})).rejects.toMatchObject({
+				code: "unavailable",
+			});
+		} finally {
+			await sql`drop trigger reject_credential_audit on platform.audit_events`;
+			await sql`drop function platform.reject_credential_audit()`;
+		}
+		let checks = 0;
+		const changed = createApplicationApiCredentialManagementV1({
+			store,
+			userDirectory: {
+				resolveUser: async (userId) => ({
+					...(await directory.resolveUser(userId)),
+					authorizationRevision: String(++checks),
+				}),
+			},
+		});
+		await expect(changed.revoke(request, "credential-a")).rejects.toMatchObject(
+			{ code: "forbidden" },
+		);
+		expect(
+			(
+				await sql`select revoked_at from platform.platform_api_credentials where id = 'credential-a'`
+			)[0]?.revoked_at,
+		).toBeNull();
+		expect(await sql`select * from platform.idempotency_records`).toHaveLength(
+			0,
+		);
+		expect(await sql`select * from platform.audit_events`).toHaveLength(0);
 	});
 });
