@@ -50,7 +50,8 @@ export interface ScopedPlatformAuditProjectionV1 {
 	readonly subject: {
 		readonly kind:
 			| PlatformAuditProjectionV1["subject"]["kind"]
-			| "api_credential";
+			| "api_credential"
+			| "application";
 		readonly subjectId: string;
 	};
 	readonly result: PlatformAuditQueryResultV1;
@@ -420,7 +421,7 @@ function credentialRefusalSummary(
 	return `${row.action}: reason=${details.reason}`;
 }
 
-function agentMetadataSummary(
+function credentialReadSummary(
 	row: Row,
 	scope: PlatformAuditQueryScopeV1,
 ): string {
@@ -445,6 +446,15 @@ function agentMetadataSummary(
 	const details = row.details as Record<string, unknown>;
 	if (row.outcome !== "succeeded")
 		return credentialRefusalSummary(row, details);
+	if (row.action === "api.credential.identity.read") {
+		if (
+			row.actorType !== "user" ||
+			row.targetId === "unknown" ||
+			Object.keys(details).length !== 0
+		)
+			throw new PlatformAuditScopeErrorV1("unavailable");
+		return row.action;
+	}
 	const ids = details.returnedAgentIds;
 	if (
 		row.actorType !== "user" ||
@@ -614,6 +624,114 @@ function agentDefaultRelayKeyReadSummary(
 	return `${row.action}${reason}`;
 }
 
+const applicationCredentialActions = new Set([
+	"application.credential.issued",
+	"application.credential.rotated",
+	"application.credential.delivery",
+	"application.credential.metadata.read",
+	"application.credential.revoked",
+]);
+
+/** Consume only the exact shapes written by the application credential transactions. */
+function applicationCredentialSummary(
+	row: Row,
+	scope: PlatformAuditQueryScopeV1,
+): string {
+	const invalid = (): never => {
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	};
+	if (
+		scope.kind !== "administrator" ||
+		row.source !== "platform" ||
+		row.actorType !== "user" ||
+		row.targetType !== "application" ||
+		!boundedText(row.requestId) ||
+		row.agentId !== null ||
+		row.executionId !== null ||
+		row.conversationId !== null ||
+		row.result !== row.outcome ||
+		typeof row.details !== "object" ||
+		row.details === null ||
+		Array.isArray(row.details)
+	)
+		invalid();
+	const details = row.details as Record<string, unknown>;
+	const exact = (keys: string[]) =>
+		Object.keys(details).length === keys.length &&
+		keys.every((key) => Object.hasOwn(details, key));
+	if (details.returnedMaterial !== false) invalid();
+	if (
+		row.action === "application.credential.metadata.read" ||
+		row.action === "application.credential.revoked"
+	) {
+		const ids = details.credentialIds;
+		if (
+			!exact(["credentialIds", "returnedMaterial"]) ||
+			row.outcome !== "succeeded" ||
+			!Array.isArray(ids) ||
+			ids.length > 100 ||
+			!ids.every(boundedText) ||
+			new Set(ids).size !== ids.length ||
+			(row.action === "application.credential.revoked" && ids.length !== 1)
+		)
+			invalid();
+		return row.action;
+	}
+	const rotated = row.action === "application.credential.rotated";
+	if (
+		!exact([
+			"credentialId",
+			"recipient",
+			"attemptId",
+			"grantRevision",
+			"deliveryStatus",
+			"returnedMaterial",
+			...(rotated ? ["previousCredentialId"] : []),
+		]) ||
+		![details.credentialId, details.attemptId, details.grantRevision].every(
+			boundedText,
+		)
+	)
+		invalid();
+	if (
+		rotated &&
+		(!boundedText(details.previousCredentialId) ||
+			details.previousCredentialId === details.credentialId)
+	)
+		invalid();
+	const recipient = details.recipient;
+	if (
+		typeof recipient !== "object" ||
+		recipient === null ||
+		Array.isArray(recipient)
+	)
+		invalid();
+	const value = recipient as Record<string, unknown>;
+	if (
+		Object.keys(value).length !== 2 ||
+		(value.principalType !== "user" && value.principalType !== "application") ||
+		!boundedText(value.principalId)
+	)
+		invalid();
+	if (row.action === "application.credential.delivery") {
+		if (
+			!(
+				(row.outcome === "succeeded" &&
+					details.deliveryStatus === "accepted") ||
+				(row.outcome === "failed" && details.deliveryStatus === "unknown")
+			)
+		)
+			invalid();
+		return `${row.action}: status=${details.deliveryStatus}`;
+	}
+	if (
+		row.outcome !== "succeeded" ||
+		details.deliveryStatus !== "delivery_pending"
+	)
+		invalid();
+	return row.action;
+}
+
 const skillProjectActions = new Set([
 	"skill.project.create",
 	"skill.project.update",
@@ -682,8 +800,9 @@ function project(
 			? credentialMutationSummary(row, scope)
 			: null;
 	const agentSummary =
-		row.action === "api.agent.metadata.read"
-			? agentMetadataSummary(row, scope)
+		row.action === "api.agent.metadata.read" ||
+		row.action === "api.credential.identity.read"
+			? credentialReadSummary(row, scope)
 			: null;
 	// #2879：Skill 项目动作的 details 校验与摘要
 	const skillProjectSummaryValue = skillProjectActions.has(row.action as never)
@@ -694,13 +813,17 @@ function project(
 		agentDefaultRelayKeyReadActions.has(row.action as never)
 			? agentDefaultRelayKeyReadSummary(row, scope)
 			: null;
+	const applicationSummary = applicationCredentialActions.has(row.action)
+		? applicationCredentialSummary(row, scope)
+		: null;
 	const legacy =
 		executionActions.has(row.action) ||
 		metadataSummary !== null ||
 		mutationSummary !== null ||
 		agentSummary !== null ||
 		skillProjectSummaryValue !== null ||
-		agentDefaultRelayKeyReadSummaryValue !== null
+		agentDefaultRelayKeyReadSummaryValue !== null ||
+		applicationSummary !== null
 			? null
 			: decodePlatformAuditRowV1(row);
 	// The legacy decoder has already validated exact Task API metadata and its
@@ -781,6 +904,7 @@ function project(
 		(metadataSummary === null &&
 			mutationSummary === null &&
 			agentSummary === null &&
+			applicationSummary === null &&
 			![
 				"agent_application",
 				"agent",
@@ -801,6 +925,7 @@ function project(
 		agentSummary ??
 		skillProjectSummaryValue ??
 		agentDefaultRelayKeyReadSummaryValue ??
+		applicationSummary ??
 		(row.action === "audit.query.completed" ||
 		row.action === "audit.query.failed"
 			? projectPlatformAuditQuerySummaryV1(row.action, row.details)

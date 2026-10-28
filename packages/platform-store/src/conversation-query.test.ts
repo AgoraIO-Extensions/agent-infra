@@ -535,6 +535,28 @@ describe("API Conversation principal binding", () => {
 });
 
 describe("PostgreSQL Conversation query", () => {
+	it("reads authorization ownership without waiting for lifecycle display data", async () => {
+		let pending: ReturnType<typeof query.getAuthorizationTarget> | undefined;
+		let completedWhileLocked = false;
+		await client.begin(async (transaction) => {
+			await transaction`lock table platform.outbox_items in access exclusive mode`;
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
+				pending = query.getAuthorizationTarget(actorOne, "conversation-1");
+				completedWhileLocked = await Promise.race([
+					pending.then(() => true),
+					new Promise<false>((resolve) => {
+						timer = setTimeout(() => resolve(false), 1000);
+					}),
+				]);
+			} finally {
+				if (timer) clearTimeout(timer);
+			}
+		});
+		expect(await pending).toEqual({ agentId: "agent-1" });
+		expect(completedWhileLocked).toBe(true);
+	});
+
 	it("projects each Sandbox readiness without hiding authorized history or changing another Session", async () => {
 		const before = await query.get(actorOne, "conversation-1");
 		expect(before?.conversation.sandboxReady).toBe(true);

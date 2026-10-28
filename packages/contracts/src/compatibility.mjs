@@ -4270,6 +4270,56 @@ function isAdminAuditActionsRegistration2879OpenApiAddition(previous, current) {
 	return isDeepStrictEqual(previous, normalized);
 }
 
+function isApplicationCredentialAudit3626OpenApiAddition(previous, current) {
+	const additions = [
+		"application.credential.issued",
+		"application.credential.rotated",
+		"application.credential.delivery",
+		"application.credential.metadata.read",
+		"application.credential.revoked",
+	];
+	const before =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	const after = current.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	if (
+		!Array.isArray(before) ||
+		!Array.isArray(after) ||
+		additions.some((action) => before.includes(action)) ||
+		!sameValue(after, [...before, ...additions])
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+		structuredClone(before);
+	for (const name of [
+		"ScopedPlatformAuditProjectionV1",
+		"ScopedPlatformAuditProjectionV2",
+	]) {
+		if (
+			previous.components?.schemas?.[name] === undefined &&
+			current.components?.schemas?.[name] === undefined
+		)
+			continue;
+		const oldKinds =
+			previous.components?.schemas?.[name]?.properties?.subject?.properties
+				?.kind?.enum;
+		const newKinds =
+			normalized.components?.schemas?.[name]?.properties?.subject?.properties
+				?.kind?.enum;
+		if (
+			!Array.isArray(oldKinds) ||
+			!Array.isArray(newKinds) ||
+			oldKinds.includes("application") ||
+			!sameValue(newKinds, [...oldKinds, "application"])
+		)
+			return false;
+		normalized.components.schemas[
+			name
+		].properties.subject.properties.kind.enum = structuredClone(oldKinds);
+	}
+	return isDeepStrictEqual(previous, normalized);
+}
+
 // #3258 登记企微 /new 开始新会话、会话不可用（#3184）与入站媒体被拒绝（#3241）三个已有写入方的
 // 审计动作。新增枚举值追加在 #2879 的动作之后；用写死 SHA-256 确保任意篡改都会使此门禁失败。
 function isWecomAuditActionsRegistration3258OpenApiAddition(previous, current) {
@@ -4683,6 +4733,51 @@ function isAgentDefaultRelayKeyV2OpenApiAddition(previous, current) {
 }
 
 // #1060 extends only the canonical audit action at its existing schema locations.
+// #3625 permits only the personal identity read and the pinned single-Agent auth addition.
+function isPersonalApiIdentityReadAddition(previous, current) {
+	const normalized = structuredClone(current);
+	const action = "api.credential.identity.read";
+	const oldActions =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	const newActions =
+		normalized.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	if (oldActions && newActions) {
+		if (
+			oldActions.includes(action) ||
+			newActions.filter((value) => value === action).length !== 1
+		)
+			return false;
+		normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+			newActions.filter((value) => value !== action);
+		return sameValue(previous, normalized);
+	}
+	const path = "/api/v2/me/api-identity";
+	const agentPath = "/api/v2/agents/{agentId}";
+	if (
+		previous.paths?.[path] ||
+		previous.components?.schemas?.PersonalApiIdentityV1 ||
+		!previous.paths?.[agentPath]?.get ||
+		previous.paths[agentPath].get.security !== undefined ||
+		previous.paths[agentPath].get.description !== undefined
+	)
+		return false;
+	const addition = {
+		path: current.paths?.[path],
+		schema: current.components?.schemas?.PersonalApiIdentityV1,
+		read: current.paths?.[agentPath]?.get,
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"aae6375ece0b26ff9c49b864cd806974389df47c5b3b7254d60ae9684df9635f"
+	)
+		return false;
+	delete normalized.paths[path];
+	delete normalized.components.schemas.PersonalApiIdentityV1;
+	delete normalized.paths[agentPath].get.security;
+	delete normalized.paths[agentPath].get.description;
+	return sameValue(previous, normalized);
+}
+
 function withoutPersonalApiAgentReadAudit(previous, current) {
 	const normalized = structuredClone(current);
 	let additions = 0;
@@ -6189,6 +6284,95 @@ function findBreakingChanges(previousValue, currentValue) {
 
 function evaluateBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
+	// Compose the reviewed audit extension with earlier independently checked additions.
+	const applicationActions = [
+		"application.credential.issued",
+		"application.credential.rotated",
+		"application.credential.delivery",
+		"application.credential.metadata.read",
+		"application.credential.revoked",
+	];
+	const previousActions =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum ?? [];
+	const currentActions =
+		currentValue.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	if (
+		Array.isArray(currentActions) &&
+		Array.isArray(previousActions) &&
+		sameValue(
+			currentActions.slice(-applicationActions.length),
+			applicationActions,
+		) &&
+		sameValue(
+			previousActions.slice(-applicationActions.length),
+			applicationActions,
+		)
+	) {
+		const priorPrevious = structuredClone(previous);
+		const priorCurrent = structuredClone(currentValue);
+		for (const document of [priorPrevious, priorCurrent]) {
+			document.components.schemas.ScopedPlatformAuditActionV1.enum =
+				document.components.schemas.ScopedPlatformAuditActionV1.enum.slice(
+					0,
+					-applicationActions.length,
+				);
+			for (const name of [
+				"ScopedPlatformAuditProjectionV1",
+				"ScopedPlatformAuditProjectionV2",
+			]) {
+				const kinds =
+					document.components?.schemas?.[name]?.properties?.subject?.properties
+						?.kind?.enum;
+				if (Array.isArray(kinds))
+					document.components.schemas[
+						name
+					].properties.subject.properties.kind.enum = kinds.filter(
+						(kind) => kind !== "application",
+					);
+			}
+		}
+		if (
+			isApplicationCredentialAudit3626OpenApiAddition(
+				priorPrevious,
+				previous,
+			) &&
+			isApplicationCredentialAudit3626OpenApiAddition(
+				priorCurrent,
+				currentValue,
+			)
+		)
+			return findBreakingChanges(priorPrevious, priorCurrent);
+	}
+	if (
+		Array.isArray(currentActions) &&
+		!applicationActions.some((action) => previousActions.includes(action)) &&
+		applicationActions.every((action) => currentActions.includes(action))
+	) {
+		const priorAddition = structuredClone(currentValue);
+		priorAddition.components.schemas.ScopedPlatformAuditActionV1.enum =
+			currentActions.filter((action) => !applicationActions.includes(action));
+		for (const name of [
+			"ScopedPlatformAuditProjectionV1",
+			"ScopedPlatformAuditProjectionV2",
+		]) {
+			const kinds =
+				priorAddition.components?.schemas?.[name]?.properties?.subject
+					?.properties?.kind?.enum;
+			if (Array.isArray(kinds))
+				priorAddition.components.schemas[
+					name
+				].properties.subject.properties.kind.enum = kinds.filter(
+					(kind) => kind !== "application",
+				);
+		}
+		if (
+			isApplicationCredentialAudit3626OpenApiAddition(
+				priorAddition,
+				currentValue,
+			)
+		)
+			return findBreakingChanges(previous, priorAddition);
+	}
 	let current = normalizeQueueFullErrorCodeAddition(
 		previousValue,
 		currentValue,
@@ -6323,6 +6507,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isAdministratorAgentReadV2OpenApiAddition(previous, current) &&
 			!isPersonalApiCredentialV2OpenApiAddition(previous, current) &&
 			!isPersonalApiAgentReadV2OpenApiAddition(previous, current) &&
+			!isPersonalApiIdentityReadAddition(previous, current) &&
 			!isPersonalApiAgentReadAuditOpenApiAddition(previous, current) &&
 			!isPersonalRelayKeyAuditOpenApiAddition(previous, current) &&
 			!isPersonalRelayKeyV2OpenApiAddition(previous, current) &&
@@ -6379,6 +6564,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&
 			!isAdminAuditActionsRegistration2879OpenApiAddition(previous, current) &&
 			!isWecomAuditActionsRegistration3258OpenApiAddition(previous, current) &&
+			!isApplicationCredentialAudit3626OpenApiAddition(previous, current) &&
 			!isScopedAuditCredentialSecurityAddition(previous, current) &&
 			!isRuntimeFileExchangeOpenApiAddition(previous, current) &&
 			!isRuntimeFileExchangeV2OpenApiAddition(previous, current) &&

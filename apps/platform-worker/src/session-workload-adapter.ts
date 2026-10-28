@@ -1,6 +1,11 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { posix } from "node:path";
-import { RuntimeModelConfigurationV4Schema } from "@agent-infra/contracts/runtime";
+import {
+	RuntimeModelConfigurationV4Schema,
+	type RuntimeSkillHubBindingV1,
+	RuntimeSkillHubBindingV1Schema,
+	runtimeSkillHubBindingEnvironmentNameV1,
+} from "@agent-infra/contracts/runtime";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	decideSessionSandboxDrainObservationV1,
@@ -31,10 +36,17 @@ import {
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import {
+	agentAnnotation,
 	agentContainerSecurityContext,
 	agentPodSecurityContext,
+	ownerLabel,
+	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
+import { skillHubVolumeMountV1 } from "./kubernetes-runtime-skill-mount.js";
 import {
+	hasAdditionalEgressPolicyV1,
+	nativeEgressPolicyAnnotationsV1,
+	nativeEgressPolicyAnnotationV1,
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
@@ -186,6 +198,8 @@ export interface SessionSandboxAllocationV1 {
 	 * 此字段为 null；只有 desiredState === "running" 的准备操作才强制要求非 null。
 	 */
 	readonly runtime: SessionSandboxRuntimeInputV1 | null;
+	/** Frozen Hub package input from the Store's verified deployment. */
+	readonly skillHub?: RuntimeSkillHubBindingV1;
 	readonly connectionConsumerSnapshot?: string | null;
 	readonly connectionInstallationRevision?: string | null;
 	readonly resources: {
@@ -337,6 +351,15 @@ function metadata(allocation: SessionSandboxAllocationV1, name: string) {
 }
 
 function validateAllocation(value: SessionSandboxAllocationV1) {
+	if (value.skillHub !== undefined) {
+		const parsed = RuntimeSkillHubBindingV1Schema.safeParse(value.skillHub);
+		if (
+			!parsed.success ||
+			parsed.data.agentId !== value.agentId ||
+			parsed.data.projections.length === 0
+		)
+			throw new WorkloadKubernetesError("policy");
+	}
 	if (
 		value.schemaVersion !== 1 ||
 		!value.agentId ||
@@ -385,6 +408,7 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 		Object.keys(value.egress).some(
 			(key) =>
 				![
+					"nativeEgress",
 					"modelEgress",
 					"connectionEgress",
 					"nativeMetadataWorkerEgress",
@@ -413,6 +437,12 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 			value.runtime.fileExchange?.origin,
 			value.egress.fileExchangeEgress,
 		)
+	)
+		throw new WorkloadKubernetesError("policy");
+	if (
+		value.egress.nativeEgress &&
+		(value.runtime?.custom ||
+			(value.desiredState === "running" && value.runtime === null))
 	)
 		throw new WorkloadKubernetesError("policy");
 	// Rejects any destination the shared Agent-level compiler would reject.
@@ -592,6 +622,14 @@ function runtimeEnvironment(
 		secretKeyRef: { name: allocation.secretName, key, optional: false },
 	});
 	const platform = [
+		...(allocation.skillHub
+			? [
+					{
+						name: runtimeSkillHubBindingEnvironmentNameV1,
+						value: JSON.stringify(allocation.skillHub),
+					},
+				]
+			: []),
 		{ name: "AGENT_INFRA_RUNTIME_AGENT_ID", value: allocation.agentId },
 		{ name: "AGENT_INFRA_RUNTIME_WORKER_ID", value: runtime.workerId },
 		{
@@ -698,6 +736,11 @@ export function sessionSandboxResourcesV1(
 	allocation: SessionSandboxAllocationV1,
 ): SessionSandboxResourceSetV1 {
 	validateAllocation(allocation);
+	const skillMount = allocation.skillHub
+		? skillHubVolumeMountV1({
+				skillGenerationId: allocation.skillHub.generationId,
+			})
+		: null;
 	const custom = customSecretMaterializations.get(allocation);
 	if (
 		allocation.desiredState === "running" &&
@@ -765,7 +808,13 @@ export function sessionSandboxResourcesV1(
 	const policy: V1NetworkPolicy = {
 		apiVersion: "networking.k8s.io/v1",
 		kind: "NetworkPolicy",
-		metadata: metadata(allocation, allocation.networkPolicyName),
+		metadata: {
+			...metadata(allocation, allocation.networkPolicyName),
+			annotations: {
+				...metadata(allocation, allocation.networkPolicyName).annotations,
+				...nativeEgressPolicyAnnotationsV1(allocation.egress.nativeEgress),
+			},
+		},
 		spec: {
 			podSelector: { matchLabels: resourceLabels },
 			policyTypes: ["Ingress", "Egress"],
@@ -819,6 +868,7 @@ export function sessionSandboxResourcesV1(
 						...connection.env,
 					],
 					volumeMounts: [
+						...(skillMount ? [{ ...skillMount, name: "skill-hub" }] : []),
 						...connection.volumeMounts,
 						{ name: "workspace", mountPath: allocation.workspaceMountPath },
 						{ name: runtimeTmpVolume.name, mountPath: "/tmp" },
@@ -840,6 +890,17 @@ export function sessionSandboxResourcesV1(
 				},
 			],
 			volumes: [
+				...(skillMount
+					? [
+							{
+								name: "skill-hub",
+								persistentVolumeClaim: {
+									claimName: `${workloadResourceNameV1(allocation.agentId)}-data`,
+									readOnly: true,
+								},
+							},
+						]
+					: []),
 				...connection.volumes,
 				{
 					name: "workspace",
@@ -1079,6 +1140,11 @@ function resourceSpecMatches(
 			);
 		}
 		case "NetworkPolicy": {
+			if (
+				current.metadata?.annotations?.[nativeEgressPolicyAnnotationV1] !==
+				expected.metadata?.annotations?.[nativeEgressPolicyAnnotationV1]
+			)
+				return false;
 			const actual = (current as V1NetworkPolicy).spec;
 			const wanted = (expected as V1NetworkPolicy).spec;
 			const matchLabels = legacyComparableLabels(
@@ -1203,6 +1269,24 @@ function ownedAtOrBefore(
 export function createSessionSandboxWorkloadAdapterV1(options: {
 	readonly client: WorkerKubernetesClientV1;
 }) {
+	const validateSkillSource = async (
+		allocation: SessionSandboxAllocationV1,
+	) => {
+		if (!allocation.skillHub || allocation.desiredState !== "running") return;
+		const owner = workloadResourceNameV1(allocation.agentId);
+		const name = `${owner}-data`;
+		const source = await options.client.read("PersistentVolumeClaim", name);
+		if (
+			!source?.metadata?.uid ||
+			!source.metadata.resourceVersion ||
+			source.metadata.name !== name ||
+			source.metadata.namespace !== allocation.namespace ||
+			source.metadata.deletionTimestamp ||
+			source.metadata.labels?.[ownerLabel] !== owner ||
+			source.metadata.annotations?.[agentAnnotation] !== allocation.agentId
+		)
+			throw new WorkloadKubernetesError("conflict");
+	};
 	return {
 		/**
 		 * #2917：来源本身已停止（只记录了保留的 PVC）时，不删除任何资源，只读证明停止：
@@ -1386,6 +1470,16 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			if (allocation.desiredState === "running" && allocation.runtime === null)
 				throw new WorkloadKubernetesError("policy");
 			const resources = sessionSandboxResourcesV1(allocation);
+			await validateSkillSource(allocation);
+			if (
+				allocation.desiredState === "running" &&
+				allocation.egress.nativeEgress &&
+				hasAdditionalEgressPolicyV1(
+					await options.client.list<V1NetworkPolicy>("NetworkPolicy", ""),
+					resources.find((r) => r.kind === "NetworkPolicy") as V1NetworkPolicy,
+				)
+			)
+				throw new WorkloadKubernetesError("policy");
 			// Check the complete previous set before any write. A vanished or replaced
 			// instance needs Store-authorized recovery, not implicit allocation here.
 			for (const prior of previous) {
@@ -1507,6 +1601,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			if (options.client.namespace !== allocation.namespace)
 				throw new WorkloadKubernetesError("policy");
 			validateAllocation(allocation);
+			if (purpose === "business") await validateSkillSource(allocation);
 			const resources: SessionSandboxResourceIdentityV1[] = [];
 			let status: SessionSandboxObservationV1["status"] =
 				allocation.desiredState === "stopped" ? "stopped" : "ready";
@@ -1516,6 +1611,18 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					? { ...allocation, desiredState: "stopped" }
 					: allocation,
 			);
+			if (
+				purpose === "business" &&
+				allocation.desiredState === "running" &&
+				allocation.egress.nativeEgress &&
+				hasAdditionalEgressPolicyV1(
+					await options.client.list<V1NetworkPolicy>("NetworkPolicy", ""),
+					expectedResources.find(
+						(r) => r.kind === "NetworkPolicy",
+					) as V1NetworkPolicy,
+				)
+			)
+				throw new WorkloadKubernetesError("policy");
 			// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源没有模型投影，排空 allocation 的
 			// runtime 为 null：当时不创建 Runtime Secret，资源规格也由当时的模板渲染，今天的模板
 			// 复现不了。这类来源的 control 观测只按归属标记与 UID 识别（#2885）。

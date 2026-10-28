@@ -1,7 +1,4 @@
-import {
-	RuntimeSkillHubBindingV1Schema,
-	runtimeSkillHubBindingEnvironmentNameV1,
-} from "@agent-infra/contracts/runtime";
+import { runtimeSkillHubBindingEnvironmentNameV1 } from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
 	validateAgentWorkloadDesiredV1,
@@ -47,7 +44,11 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 import { createKubernetesPodValidationV1 } from "./kubernetes-runtime-pod-validation.js";
-import type { workloadEgressRulesV1 } from "./workload-network.js";
+import { skillHubRuntimeBindingV1 } from "./kubernetes-runtime-skill-mount.js";
+import {
+	nativeEgressPolicyAnnotationsV1,
+	type workloadEgressRulesV1,
+} from "./workload-network.js";
 import {
 	codexContainerBoundaryEnvironmentV1,
 	workloadRuntimeAuthEnvironmentV1,
@@ -75,38 +76,13 @@ export function createWorkloadInteractionOriginV1(input: {
 }
 
 function skillHubRuntimeEnvironmentV1(value: AgentWorkloadDesiredV1) {
-	if (value.skillGenerationId === undefined || value.skills === undefined)
-		return undefined;
-	if (value.skills.length === 0) {
-		if (value.skillAppliedBindings !== undefined)
-			throw new WorkloadKubernetesError("policy");
-		return undefined;
-	}
-	try {
-		const first = value.skills[0];
-		if (
-			!first ||
-			value.skillAppliedBindings === undefined ||
-			typeof value.skillAppliedBindings !== "string"
-		)
-			throw new Error();
-		const appliedBindings = JSON.parse(value.skillAppliedBindings);
-		const binding = RuntimeSkillHubBindingV1Schema.parse({
-			schemaVersion: 1,
-			agentId: value.agentId,
-			agentVersion: first.agentVersion,
-			configurationRevision: value.configRevision,
-			generationId: value.skillGenerationId,
-			projections: value.skills,
-			appliedBindings,
-		});
-		return {
-			name: runtimeSkillHubBindingEnvironmentNameV1,
-			value: JSON.stringify(binding),
-		};
-	} catch {
-		throw new WorkloadKubernetesError("policy");
-	}
+	const binding = skillHubRuntimeBindingV1(value);
+	return binding
+		? {
+				name: runtimeSkillHubBindingEnvironmentNameV1,
+				value: JSON.stringify(binding),
+			}
+		: undefined;
 }
 
 export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
@@ -656,7 +632,13 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		return {
 			apiVersion: "networking.k8s.io/v1",
 			kind: "NetworkPolicy",
-			metadata: metadata(value),
+			metadata: {
+				...metadata(value),
+				annotations: {
+					...metadata(value).annotations,
+					...nativeEgressPolicyAnnotationsV1(policy.nativeEgress),
+				},
+			},
 			spec: {
 				podSelector: {
 					matchLabels: { [ownerLabel]: workloadResourceNameV1(value.agentId) },

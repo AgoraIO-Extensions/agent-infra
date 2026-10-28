@@ -120,6 +120,7 @@ export const platformAuditQueryActionsV1 = [
 	"api.credential.revoked",
 	"api.credential.narrowed",
 	"api.credential.metadata.read",
+	"api.credential.identity.read",
 	"api.credential.delivery.granted",
 	"api.credential.delivery.revoked",
 	"api.agent.grant.granted",
@@ -199,6 +200,11 @@ export const platformAuditQueryActionsV1 = [
 	"wecom.conversation_started",
 	"wecom.conversation_unavailable",
 	"wecom.media_rejected",
+	"application.credential.issued",
+	"application.credential.rotated",
+	"application.credential.delivery",
+	"application.credential.metadata.read",
+	"application.credential.revoked",
 ] as const;
 
 export type PlatformAuditQueryActionV1 =

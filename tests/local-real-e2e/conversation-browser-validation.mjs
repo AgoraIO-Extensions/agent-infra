@@ -39,6 +39,44 @@ export function currentExecutionFrames(events, frames) {
 	return frames.filter((frame) => frame && eventIds.has(frame.id));
 }
 
+/** The observer runs before forwarding a chunk; coalesced frames cannot require an earlier paint. */
+export function assistantDeliveryEvidence(frames, renders, baseline = 0) {
+	if (!Array.isArray(frames) || !Array.isArray(renders)) return null;
+	const textIndex = frames.findIndex(
+		(f) => f.type === "text.delta" && f.textLength > 0,
+	);
+	const terminalIndex = frames.findIndex(
+		(f) => f.type === "execution.status" && f.status === "completed",
+	);
+	if (textIndex < 0 || terminalIndex <= textIndex) return null;
+	const text = frames[textIndex];
+	const terminal = frames[terminalIndex];
+	if (
+		!Number.isFinite(text.at) ||
+		!Number.isFinite(terminal.at) ||
+		text.at > terminal.at ||
+		!Number.isSafeInteger(text.chunkSequence) ||
+		!Number.isSafeInteger(terminal.chunkSequence) ||
+		text.chunkSequence < 1 ||
+		text.chunkSequence > terminal.chunkSequence
+	)
+		return null;
+	const coalesced = text.chunkSequence === terminal.chunkSequence;
+	const rendered = renders.some(
+		(r) =>
+			Number.isFinite(r.at) &&
+			r.at >= text.at &&
+			r.visibleTextLength > baseline &&
+			(coalesced || r.at < terminal.at),
+	);
+	return rendered
+		? {
+				mode: coalesced ? "coalesced" : "incremental",
+				renderedBeforeTerminal: !coalesced,
+			}
+		: null;
+}
+
 export function restoredHistoryPreservesEvents(
 	before,
 	after,

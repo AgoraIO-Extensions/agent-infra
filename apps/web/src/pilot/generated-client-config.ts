@@ -12,6 +12,8 @@ export const createClientConfig: CreateClientConfig = (config) => ({
 			request.method === "GET" &&
 			[
 				"/api/v2/agents",
+				"/api/v2/agents/{agentId}",
+				"/api/v2/me/api-identity",
 				"/api/v1/audit",
 				"/api/v1/audit/{auditId}",
 				"/api/v2/audit",

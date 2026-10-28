@@ -29,10 +29,16 @@ export const auditActionLabels: Record<AuditRecord["action"], string> = {
 	"agent.access.updated": "修改可用范围",
 	"api.access.rejected": "拒绝 API 访问",
 	"api.application.created": "创建应用",
+	"application.credential.issued": "签发应用 API 凭证",
+	"application.credential.rotated": "轮换应用 API 凭证",
+	"application.credential.delivery": "交付应用 API 凭证",
+	"application.credential.metadata.read": "查看应用 API 凭证元数据",
+	"application.credential.revoked": "撤销应用 API 凭证",
 	"api.credential.issued": "签发 API 凭证",
 	"api.credential.revoked": "撤销 API 凭证",
 	"api.credential.narrowed": "收窄个人 API 凭证",
 	"api.credential.metadata.read": "查看个人 API 凭证元数据",
+	"api.credential.identity.read": "查询个人 API 凭证身份",
 	"api.credential.delivery.granted": "授予凭证获取权限",
 	"api.credential.delivery.revoked": "撤销凭证获取权限",
 	"api.agent.grant.granted": "授予 Agent 权限",
@@ -168,6 +174,7 @@ export const auditSubjectLabels: Record<
 	execution: "Execution",
 	configuration: "配置",
 	api_credential: "API 凭证",
+	application: "应用",
 };
 
 /**

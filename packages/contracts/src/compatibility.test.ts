@@ -441,11 +441,36 @@ function restorePreApplicationUseGrantContract(value: {
 		);
 }
 
+// Restore the pre-#3625 surface only for historical guards. The identity tests
+// below independently pin the new endpoint, authentication and audit addition.
+function restorePrePersonalIdentityContract(value: {
+	paths: Record<string, unknown>;
+	components: { schemas: Record<string, unknown> };
+}) {
+	delete value.paths["/api/v2/me/api-identity"];
+	delete value.components.schemas.PersonalApiIdentityV1;
+	const single = value.paths["/api/v2/agents/{agentId}"] as
+		| { get?: { security?: unknown; description?: string } }
+		| undefined;
+	if (single?.get) {
+		delete single.get.security;
+		delete single.get.description;
+	}
+	const actions = value.components.schemas.ScopedPlatformAuditActionV1 as
+		| { enum?: string[] }
+		| undefined;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) => action !== "api.credential.identity.read",
+		);
+}
+
 // Keep earlier pinned guards on their original contracts; the #481 guard is tested separately.
 function restorePreAgentApiManagementContract(value: {
 	paths: Record<string, unknown>;
 	components: { schemas: Record<string, unknown> };
 }) {
+	restorePrePersonalIdentityContract(value);
 	restorePreWecomAuditActionsRegistration3258Contract(value);
 	restorePreAdminAuditActionsRegistration2879Contract(value);
 	restorePreSkillHubAuditContract(value);
@@ -2212,6 +2237,7 @@ describe("contract compatibility command", () => {
 					"utf8",
 				),
 			);
+			restorePrePersonalIdentityContract(current);
 			const previous = structuredClone(current);
 			restorePreAgentApiManagementContract(previous);
 			for (const document of [current, previous]) {
@@ -3295,6 +3321,7 @@ describe("contract compatibility command", () => {
 				),
 			);
 			const current = JSON.parse(await readFile(artifact, "utf8"));
+			restorePrePersonalIdentityContract(current);
 			// This test isolates the credential compatibility contract. Skill Hub reads
 			// have their own pinned-addition test below; keeping them out avoids paying
 			// the subprocess cost for an unrelated contract mutation matrix.
@@ -6055,6 +6082,116 @@ it("admits only the pinned application model preview (#3146)", async () => {
 			mutate(changed);
 			await writeFile(after, JSON.stringify(changed));
 			expect(comparePaths(after, before).status).toBe(1);
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+it.each(["v1", "v2"])(
+	"admits only personal identity and single Agent read additions (%s, #3625)",
+	async (version) => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					`../artifacts/openapi/pilot-browser.${version}.openapi.json`,
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		if (version === "v1") {
+			previous.components.schemas.ScopedPlatformAuditActionV1.enum =
+				previous.components.schemas.ScopedPlatformAuditActionV1.enum.filter(
+					(action: string) => action !== "api.credential.identity.read",
+				);
+		} else {
+			delete previous.paths["/api/v2/me/api-identity"];
+			delete previous.components.schemas.PersonalApiIdentityV1;
+			delete previous.paths["/api/v2/agents/{agentId}"].get.security;
+			delete previous.paths["/api/v2/agents/{agentId}"].get.description;
+		}
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "personal-identity-compat-"),
+		);
+		const before = resolve(directory, "previous.json");
+		const after = resolve(directory, "current.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const changed = structuredClone(current);
+			if (version === "v1")
+				changed.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+					"unexpected.action",
+				);
+			else changed.paths["/api/v2/me/api-identity"].get.security = [];
+			await writeFile(after, JSON.stringify(changed));
+			expect(comparePaths(after, before).status).toBe(1);
+			await writeFile(before, JSON.stringify(current));
+			await writeFile(after, JSON.stringify(previous));
+			expect(comparePaths(after, before).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	},
+);
+it("admits only application credential audit registration #3626", async () => {
+	const current = JSON.parse(await readFile(pilotBrowserArtifactPath, "utf8"));
+	const previous = structuredClone(current);
+	const additions = [
+		"application.credential.issued",
+		"application.credential.rotated",
+		"application.credential.delivery",
+		"application.credential.metadata.read",
+		"application.credential.revoked",
+	];
+	previous.components.schemas.ScopedPlatformAuditActionV1.enum =
+		previous.components.schemas.ScopedPlatformAuditActionV1.enum.filter(
+			(action: string) => !additions.includes(action),
+		);
+	for (const name of [
+		"ScopedPlatformAuditProjectionV1",
+		"ScopedPlatformAuditProjectionV2",
+	])
+		previous.components.schemas[name].properties.subject.properties.kind.enum =
+			previous.components.schemas[
+				name
+			].properties.subject.properties.kind.enum.filter(
+				(kind: string) => kind !== "application",
+			);
+	const directory = await mkdtemp(resolve(tmpdir(), "application-audit-3626-"));
+	const previousPath = resolve(directory, "previous.json");
+	const currentPath = resolve(directory, "current.json");
+	try {
+		await writeFile(previousPath, JSON.stringify(previous));
+		await writeFile(currentPath, JSON.stringify(current));
+		expect(comparePaths(currentPath, previousPath).status).toBe(0);
+		for (const mutate of [
+			(doc: typeof current) =>
+				doc.components.schemas.ScopedPlatformAuditActionV1.enum.pop(),
+			(doc: typeof current) =>
+				doc.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+					"application.credential.invented",
+				),
+			(doc: typeof current) =>
+				doc.components.schemas.ScopedPlatformAuditActionV1.enum.shift(),
+			(doc: typeof current) => {
+				doc.components.schemas.ScopedPlatformAuditProjectionV1.additionalProperties = true;
+			},
+			(doc: typeof current) =>
+				doc.components.schemas.ScopedPlatformAuditProjectionV1.properties.subject.properties.kind.enum.push(
+					"credential_material",
+				),
+			(doc: typeof current) => {
+				doc.paths["/api/v3/admin/audit"].get.security = [];
+			},
+		]) {
+			const changed = structuredClone(current);
+			mutate(changed);
+			await writeFile(currentPath, JSON.stringify(changed));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
 		}
 	} finally {
 		await rm(directory, { recursive: true, force: true });

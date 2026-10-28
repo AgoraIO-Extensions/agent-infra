@@ -35,7 +35,7 @@ const clients = [
 			repositoryRoot,
 			"apps/web/src/pilot/generated-client-config",
 		),
-		dualAuthenticationPaths: ["/api/v2/agents"],
+		dualAuthenticationPaths: ["/api/v2/agents", "/api/v2/agents/{agentId}"],
 	},
 ];
 const command = process.argv[2];
