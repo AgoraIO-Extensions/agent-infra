@@ -103,6 +103,8 @@ ECI placement，以及 grant private key、Runtime service token 和 Relay key �
 attestation，执行真实 Runtime turn 和事件回读，写入私有 candidate/preflight receipt，随后
 删除 Pod 和 Secret。镜像拉取、Runtime 启动、真实模型、完成事件或 cleanup 任一步失败都会
 让流程失败；它不会复用历史 receipt。
+模板校验使用同次生成的 `template-model-validation.receipt.json`；详细诊断
+`template-model-preflight.receipt.json` 和 `runtime-capacity.receipt.json` 分别保留运行证据与实测容量，均保持私有。
 
 清单结构如下，具体 body 和 credential 仍放在仓库外：
 

@@ -4,6 +4,7 @@ import { createHmac, createPrivateKey, createPublicKey, randomUUID } from "node:
 import { execFileSync, spawn } from "node:child_process";
 import { chmod, lstat, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import { templatePreflightValidationReceipt } from "./template-validation.mjs";
 
 const runner = join(import.meta.dirname, "template-model-preflight-runner.mts");
 const templates = new Set(["codex", "claude", "opencode", "pi"]);
@@ -206,6 +207,9 @@ async function main(inputPath) {
 			measured.validatedAt < measured.submittedAt ||
 			!Number.isSafeInteger(measured.modelOperationCount) || measured.modelOperationCount < 1)
 			throw new Error("CAPACITY_MEASUREMENT_INVALID");
+		await writeFile(join(job.outputDirectory, "template-model-validation.receipt.json"),
+			JSON.stringify(templatePreflightValidationReceipt(measured)) + "\n",
+			{ mode: 0o600, flag: "wx" });
 		await writeFile(join(job.outputDirectory, "runtime-capacity.receipt.json"), JSON.stringify({
 			schemaVersion: 1, scope: "ack-runtime-capacity", sourceCommit: job.sourceCommit,
 			imageDigest: job.imageDigest, observedResources: observed.spec.containers[0].resources,

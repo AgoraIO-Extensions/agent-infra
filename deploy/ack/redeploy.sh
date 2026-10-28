@@ -277,7 +277,7 @@ const result = {
 		configurationRevision: job.configurationRevision,
 		modelId: job.modelId,
 		validationFile: `${job.outputDirectory}/template-validation-${job.templateId}.candidate.json`,
-		preflightFile: `${job.outputDirectory}/template-model-preflight.receipt.json`,
+		preflightFile: `${job.outputDirectory}/template-model-validation.receipt.json`,
 	})),
 };
 fs.writeFileSync(output, `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
