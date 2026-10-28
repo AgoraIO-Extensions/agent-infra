@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { TaskProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import type { OperationalEvent } from "@agent-infra/observability";
 import {
@@ -67,6 +68,11 @@ export interface TaskRoutesDependencies extends TaskAccessDependencies {
 		stop: ConversationExecutionUseCaseV1["stop"];
 	};
 	readonly query: {
+		getEvalExecutionControlReference?: (
+			scope: ConversationQueryScopeV1,
+			conversationId: string,
+			executionId: string,
+		) => Promise<{ executionId: string; conversationId: string } | undefined>;
 		getExecution(
 			scope: ConversationQueryScopeV1,
 			conversationId: string,
@@ -91,7 +97,7 @@ export interface TaskRoutesDependencies extends TaskAccessDependencies {
 
 export type TaskRequestAuthority = ConversationExecutionAuthorityV1 & {
 	readonly taskBoundary: TaskAuthorizationBoundaryV1;
-	readonly personalApiAdmissionAuthority: PersonalApiTaskAdmissionAuthorityV1;
+	readonly personalApiAdmissionAuthority?: PersonalApiTaskAdmissionAuthorityV1;
 };
 
 interface TaskRequestAudit {
@@ -204,6 +210,7 @@ export async function resolveAuthority(
 			input.operation === "task.read" ? "agent:read" : "agent:use";
 		const authority = await dependencies.authorize({
 			material: match[1],
+			...requestMetadata(request),
 			operation,
 			...(input.agentId === undefined ? {} : { agentId: input.agentId }),
 			...(input.conversationId === undefined
@@ -212,6 +219,22 @@ export async function resolveAuthority(
 		});
 		if (!authority)
 			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
+
+		if (authority.channelId === "eval") {
+			const boundary = parseTaskAuthorizationBoundaryV1(authority.taskBoundary);
+			if (
+				input.operation === "task.submit" ||
+				!input.conversationId ||
+				!boundary.evaluation ||
+				authority.actorId !== boundary.principal.id ||
+				authority.agentId !== boundary.agentId ||
+				authority.authorizationRevision !==
+					boundary.agentAuthorizationRevision ||
+				boundary.channelId !== "eval"
+			)
+				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
+			return { ...authority, taskBoundary: boundary };
+		}
 		const admission = parsePersonalApiTaskAdmissionAuthorityV1(
 			authority.personalApiAdmissionAuthority,
 		);
@@ -263,9 +286,20 @@ export async function authorize(
 	request: Request,
 ): Promise<TaskRequestAuthority> {
 	const current = await resolveAuthority(dependencies, request, input, traceId);
+	if (initial.channelId === "eval" || current.channelId === "eval") {
+		if (
+			initial.channelId !== current.channelId ||
+			!isDeepStrictEqual(initial.taskBoundary, current.taskBoundary) ||
+			initial.authorizationRevision !== current.authorizationRevision
+		)
+			throw new HttpProtocolError("AUTHORIZATION_REVOKED", traceId);
+		return current;
+	}
 	const before = initial.personalApiAdmissionAuthority;
 	const after = current.personalApiAdmissionAuthority;
 	if (
+		!before ||
+		!after ||
 		before.principal.kind !== after.principal.kind ||
 		before.principal.id !== after.principal.id ||
 		before.credentialId !== after.credentialId ||

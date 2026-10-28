@@ -3080,6 +3080,47 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "evaluation": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "authorizationRecordId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "deliveryFence": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "principal": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "user",
+                              "application"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "id"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "principal",
+                      "authorizationRecordId",
+                      "deliveryFence"
+                    ],
+                    "type": "object"
+                  },
                   "executionId": {
                     "minLength": 1,
                     "type": "string"
@@ -5046,6 +5087,12 @@
           "evaluation.content.confirm",
           "evaluation.content.read",
           "evaluation.content.delete",
+          "evaluation.experiment.create",
+          "evaluation.experiment.cancel",
+          "evaluation.derived.confirm",
+          "evaluation.score.completed",
+          "evaluation.score.human",
+          "evaluation.score.reviewed",
           "application.credential.issued",
           "application.credential.rotated",
           "application.credential.delivery",
@@ -5638,7 +5685,10 @@
                   "configuration",
                   "api_credential",
                   "application",
-                  "evaluation_dataset"
+                  "evaluation_dataset",
+                  "evaluation_experiment",
+                  "evaluation_object",
+                  "evaluation_score"
                 ],
                 "type": "string"
               },
@@ -6321,7 +6371,10 @@
                   "configuration",
                   "api_credential",
                   "application",
-                  "evaluation_dataset"
+                  "evaluation_dataset",
+                  "evaluation_experiment",
+                  "evaluation_object",
+                  "evaluation_score"
                 ],
                 "type": "string"
               },

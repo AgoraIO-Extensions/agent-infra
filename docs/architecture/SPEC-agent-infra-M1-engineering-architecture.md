@@ -2677,11 +2677,48 @@ Eval 幂等回执的保留截止时间不得晚于相关数据集/版本的元�
 
 数据基础模块的 `read` 用例仅校验 `read` 用途。后续实验和评分在该模块的事务/版本/授权边界扩展服务端固定的 `run`、`score`、`review` 或 `analyze` 入口，并与 Execution/fence 绑定；不得借用浏览器 `read` 入口或要求额外授予 `read` 来实现这些独立用途，也不接受客户端自报用途来扩大正文权限。
 
+实验、评分和复核 API 分别要求凭证最大范围 `eval:run`、`eval:score`、`eval:review`；浏览器会话沿相同对象权限边界。最大范围不授予具体数据用途，也不替代当前 Agent 使用权。任务提交为用户和应用均核对精确主体的显式 Agent use grant；应用始终保留应用主体。已受理任务的调用方停止/取消仍按 PRD §7.3 要求当前有效主体、原任务归属、当前 Agent use 授权及 API 凭证的 `eval:run` 范围；数据集 run 用途撤销不要求重新授予正文/运行许可，取消不授权读取已撤正文。凭证范围收窄或 Agent use 撤销后，调用方不得继续取消；撤权后的系统停止/unknown 核实沿独立持久控制记录执行，不借调用方失效权限。
+
+实验受理在原 ConversationTask 事务中为每个样本/基线或候选建立独立 Conversation/Execution、outbox 和 Eval 绑定。`TaskAuthorizationBoundaryV1.evaluation` 仅允许 `channelId=eval`，由服务端绑定 experiment/sample/variant、dataset/version、run grant ID/revision、policy ID/revision、Agent configuration revision、模型选项/推理级别、工具环境及内容截止时间；对应 `eval-use` 来源只保存已核对的 Agent use grant revision。普通 API/Web 不能提交或借用该绑定，Eval 不被归类为 API 渠道。请求条件与实际执行事实分别保存，不允许当前配置漂移悄悄替换基线。Worker 的当前用途回读缺失或不可确认时不投递；读取、SSE、文件及结果提交也使用同一持久绑定复核。
+
+评分意图有自身的原发起主体、数据/结果版本、评分器不可变配置摘要、状态与期望修订、outbox lease/fence、有限尝试预算和 Agent 默认 Key 四元绑定。模型 Key 在评分意图首次开始时冻结，重试复用该绑定并重验当前使用许可，不借用已终态业务 Execution 的解密授权。部署评分器明确 rule/human/model 类型、rubric ID、分数范围/通过阈值、输入输出字节/token/时限、重试预算；模型类型另绑定当前 Catalog revision、精确 endpoint/model 及允许发送的内容类别。缺政策不推导生产默认评分器或 TTL。人工 score 和独立 review 分别保存不可变结果及操作者；同一原评分操作者不能冒充独立复核人。
+实验取消与受信主体/实验 ID 的 `evaluation.experiment.cancel` 元数据审计同事务提交；审计失败回滚
+实验状态与样本停止，已取消意图重放不重复审计。取消后的评分仅沿原意图、lease/fence 与实验/样本/
+Execution 的持久绑定收口元数据，不恢复正文、Key 或模型使用权：业务 cancelled/failed 对应尚未
+完成评分为 `not_applicable/TASK_NOT_COMPLETED`；业务已 completed 的未评分意图为
+`not_applicable/EXPERIMENT_CANCELLED`；业务停止尚未确认时继续等待元数据，不伪造 Task 终态。
+既有评分终态以及已发送 unknown、已保存 result_ready 保留原事实和引用，停止取消实验的后续评分
+I/O；已保存 result_ready 的评分 outbox 完成控制收口，但意图仍保留 result_ready 和已知结果引用，
+不冒称 scored，也不得据此重新发送模型。已结束准备 outbox 的 awaiting_human 意图由同一实验
+取消事务直接收口，并与取消审计共同回滚，不等待已完成的 outbox 再次投递。取消不声称未知模型调用
+从未发生。
+模型发送前 Key/Catalog 等前置失败以可信未发送结果进入有限重试；进入模型传输后失联保留 unknown，
+后续只核实同一派生结果意图，不再调用模型。可信评分 Adapter 从原获准端点直接收到 HTTP 401/403
+时记录 `SCORER_AUTHORIZATION_DENIED` 并结束为 failed，不回退 Key；重定向、普通异常或失联不能
+冒充这种确定拒绝。已保存结果的提交恢复也消耗评分器有限尝试预算，耗尽
+保留 failed 与原结果引用，不无限轮询或重建业务执行。
+
+启用实验时，私有 API 配置在 `apiInput.evaluation` 增加每次读取并严格解析的 `loadExperimentPolicy`。
+Worker 私有模块导出 `evaluationPolicy = { data: loadPolicy, experiment: loadExperimentPolicy }`，供
+现有 Conversation Worker 当前用途复核；`workloadInput.evaluationScoring` 使用同一 storage、
+`loadDataPolicy: loadPolicy`、`loadExperimentPolicy`、directory、已有部署 ModelCatalog adapter 与
+Worker decryptor，并显式配置 taskPolicy、batchSize、leaseMs 和 retryDelayMs。该配置经原
+`deployment-entry.ts`/Workload 装配进入同进程独立有界评分轮询（最多一个在途批次，不阻塞 Workload
+调谐；关闭时停止新 claim、取消模型传输并等待自身在途操作），不新增部署服务、凭证类型或默认值；启动应先调用
+两个 policy loader，非法输入启动失败，运行时读取失败拒绝新访问，DB 清理继续履行已固化义务。
+
 #### 18.4.2 版本、对象与任务绑定
 
 数据集、样本集合与 rubric 的版本不可变。新版本保存来源版本和必要变更元数据；真实材料导入记录
 用途许可及脱敏确认的受控引用，不自动复制线上会话。实验固定基线/候选、同一数据集/rubric 版本、
 评分器版本、工具环境声明与原发起主体，分别保留请求配置和每例实际 Execution 事实。
+实验逐例查询在读取前后同时复核原主体对全部样本 Agent 的当前 use 授权和固定 Task 绑定，
+不因数据 run grant 仍有效而绕过 Agent 撤权；该历史读取不要求实验仍 active 或 Runtime 仍可投递，
+取消本身不撤销仍有效的读取权限。查询返回请求配置、Task 当前状态及最后事件序号；Worker 首次投递准备在同一事务固定实际
+Runtime 配置修订、镜像 Digest 和资源配置摘要，`preparedRuntime` 只证明投递准备，收到 Runtime
+事件后才标记 `runtimeObserved`。实际模型/工具来自持久操作事件，保留 operation/attempt/sequence、
+阶段、耗时和用量；intent 不算实际已调用，无事实明确为空。单例首屏最多 100 条操作事实，超过时
+`factsTruncated=true`，完整事实继续使用同一 Task 已有事件分页/SSE 入口，仍执行当前 Eval 用途权限。
 
 内容使用现有 `ObjectStorageDataV1`，由 Store 保存 Eval 自身的对象引用、版本/etag、大小、Hash、
 媒体类型及生命周期状态；写入和确认复用实际字节/固定对象版本核验，不新建存储 Adapter。Eval 对象
@@ -2698,6 +2735,17 @@ Eval 幂等回执的保留截止时间不得晚于相关数据集/版本的元�
 任务查询、取消、停止及恢复复用原任务 ID、主体和 generation/fence；同一受理意图重放不创建第二个
 样本任务。保存输出副本前再次检查 Eval 权限，原任务内容及其引用仍受原权限保护。共用 Conversation
 读取、SSE、文件与恢复入口也必须识别 Eval 绑定并检查用途权限，不能通过底层任务入口绕过数据撤销。
+Eval 执行文件沿原 V4 Runtime Grant、普通文件对象与 FileAccess 流程；不将 Eval 数据对象当作文件。
+服务端在验签及持久 Task/Execution 核验后，给 `FileExecutionBindingV1` 的可选 `evaluation`
+字段写入 `{ principal: { kind: user|application, id }, authorizationRecordId, deliveryFence }`，
+并由现有 FileAccess 签名器签入 token；字段禁止由上传/访问请求自报，只有 `channelId=eval` 使用，
+Eval 执行文件缺字段时拒绝。普通旧用户文件 token 与 Runtime V4 wire 不变，不新增 token 类型。
+后续每次兑换、PUT、GET 和 complete 都从原 Execution 回读 typed principal、原授权记录、
+generation/fence、stop/终态与当前 Agent use/Eval run 授权；同字符串 ID 的 user/application 不能互换。
+执行文件能力来自当前已验证 Runtime 配置/镜像及文件能力事实，限制仍取既有 Agent/channel/deployment
+FileLimits，不把应用解析为用户，不构造 IdentityContext、Owner 或管理员授权。签名 allowlist、服务/
+Sandbox 凭据与原对象版本核验仍生效；身份、授权、capability、配置或 limit 漂移一律拒绝。
+
 自定义 Agent 只接纳已验证的平台任务能力，`self-managed` 不因声明进入本路径；模板对比沿平台批准的
 测试配置，不授予 Owner 锁定生产旧镜像的能力。
 
@@ -2720,6 +2768,11 @@ Eval 删除不擅自删除其他业务权威数据；反向引用也不允许重
 评分器登记使用不可变 ID/版本、实现或配置摘要、rubric 版本、结果 Schema、有限评分范围和通过规则。
 确定性规则使用固定受控实现，不执行用户上传脚本。人工评分与复核保存各自操作者、依据引用及修订；
 复核操作者须有独立 review 权限，结论独立于原评分，不原地覆盖或冒充其他人的判断。
+独立复核历史通过 `/api/v2/evaluation/scores/{scoreId}/reviews` 读取，按 score 绑定和当前 review
+用途逐项复核；分页最多 100 项且内容合计不超过 2 MiB，超出时返回 nextCursor，已过元数据期限的
+记录不进入页面。返回原 scoreRevision、受信 reviewer 和独立结果，不能用原评分覆盖复核历史。正文先到期或已逻辑删除、
+而元数据仍获准保留时返回 `contentStatus=expired/deleting/deleted` 和 `result=null`；正常正文返回
+`contentStatus=available`。当前 review 授权、对象绑定或存储核验失败仍整体拒绝，不伪装成正文到期。
 
 模型评分还须匹配部署批准的精确 endpoint/model、数据集用途范围、允许发送的内容类别、单次输入/输出
 大小和 deadline。API/Worker 只引用获准评分器，调用方不能指定 URL、认证 Header 或任意评分端点。
@@ -2732,6 +2785,10 @@ Eval 删除不擅自删除其他业务权威数据；反向引用也不允许重
 版本；有限重试沿同一评分意图并在每次发送前重验权限，绝不重新提交样本业务任务。新评分器或 rubric
 产生新评分记录，历史结论按当前权限回看。业务失败、评分故障、未评分和不适用分开保存；确定性/人工/
 模型结果的聚合遵循固定 rubric，不用错误或缺失充当零分、成功或同条件排名。
+评分结果版本固定终态正文与执行/模型绑定；终态后仅补充操作元数据不改变该版本，重试继续使用原
+outputObjectId。读取中仍核对事件序列，防止正文快照跨提交混合。
+人工评分的 content 与独立 review-context API 分别使用当前 score/review 用途返回当前样本、其
+rubric、固定输出及可选原评分；不要求额外 read/run，不返回同数据集其他样本或私有评分端点/Key。
 
 反馈沿原任务提交主体校验，仅允许本人任务的有用/无用和受控问题分类；汇总绑定实际模型、配置和时间，
 Owner 可看获准汇总但不能下钻他人原会话。实验分析以固定样本集合为分母，同时返回可比较、已评分、缺失、

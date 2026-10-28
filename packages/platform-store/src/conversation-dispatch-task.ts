@@ -33,6 +33,10 @@ import {
 	lockOutbox,
 } from "./conversation-dispatch-sql.js";
 import { exactPayload } from "./conversation-dispatch-validation.js";
+import {
+	type EvaluationCurrentPolicyReaderV1,
+	requireCurrentEvaluationTaskV1,
+} from "./evaluation-task-authority.js";
 import { persistTaskControl } from "./task-control-record.js";
 
 /** Governance rows precede Agent/outbox locks; no credential participates in accepted work. */
@@ -40,6 +44,10 @@ export async function lockWaitingTaskAuthority(
 	transaction: Transaction,
 	itemId: string,
 ) {
+	const [evalTask] =
+		await transaction`select 1 from platform.outbox_items o join platform.conversation_executions e on e.execution_id=o.payload->>'executionId' where o.id=${itemId} and e.channel_id='eval'`;
+	if (evalTask)
+		await transaction`select pg_advisory_xact_lock(hashtextextended('evaluation-data-v1',0))`;
 	await transaction`lock table platform.platform_user_disables in share mode`;
 	await transaction`
 		select a.id from platform.platform_applications a
@@ -63,6 +71,7 @@ export async function revalidateWaitingTask(
 	state: DispatchState,
 	workerId: string,
 	userDirectory: TaskUserDirectoryV1 | undefined,
+	evaluationPolicy?: EvaluationCurrentPolicyReaderV1,
 ): Promise<boolean> {
 	const [record] = await transaction<
 		{ id: string; boundary: unknown; revoked_at: Date | null }[]
@@ -151,6 +160,19 @@ export async function revalidateWaitingTask(
 				}
 			}
 		}
+	}
+	if (!revoked && boundary.channelId === "eval") {
+		if (!evaluationPolicy) revoked = true;
+		else
+			try {
+				await requireCurrentEvaluationTaskV1(
+					transaction,
+					boundary,
+					evaluationPolicy,
+				);
+			} catch {
+				revoked = true;
+			}
 	}
 	if (!revoked) return true;
 	if (plan.ensureStop || !state.outbox.request_id)

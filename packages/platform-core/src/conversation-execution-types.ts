@@ -81,12 +81,13 @@ export function conversationExecutionKeySubjectV1(
 			grant.revoked ||
 			grant.agentId !== boundary.agentId ||
 			boundary.accessSources.length !== 1 ||
-			boundary.accessSources[0]?.kind !== "api-use" ||
+			(boundary.accessSources[0]?.kind !== "api-use" &&
+				boundary.accessSources[0]?.kind !== "eval-use") ||
 			boundary.accessSources[0].useGrantRevision !== grant.authorizationRevision
 		)
 			return null;
 		return {
-			executionSource: "platform-api",
+			executionSource: boundary.channelId === "eval" ? "eval" : "platform-api",
 			purpose: "agent-default",
 			subjectId: boundary.agentId,
 		};

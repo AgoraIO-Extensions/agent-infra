@@ -102,7 +102,8 @@ export async function insertTaskAuthorization(
 		!binding ||
 		boundary.principal.kind !== binding.principal_type ||
 		(boundary.principal.kind === "application" &&
-			!isTaskApiChannelV1(boundary.channelId, boundary.principal)) ||
+			!isTaskApiChannelV1(boundary.channelId, boundary.principal) &&
+			boundary.channelId !== "eval") ||
 		boundary.principal.id !== binding.actor_id ||
 		boundary.agentId !== binding.agent_id ||
 		boundary.channelId !== binding.channel_id ||
@@ -626,6 +627,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 						!execution ||
 						boundary.principal.kind !== execution.principalType ||
 						(boundary.principal.kind === "application" &&
+							boundary.channelId !== "eval" &&
 							!isTaskApiChannelV1(boundary.channelId, boundary.principal)) ||
 						boundary.principal.id !== execution.actorId ||
 						boundary.agentId !== execution.agentId ||

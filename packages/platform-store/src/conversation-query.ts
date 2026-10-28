@@ -280,6 +280,10 @@ export type ConversationReplayResultV1 =
 	  };
 
 export interface PostgresConversationQueryOptionsV1 {
+	readonly evaluationCurrent?: (
+		scope: ConversationQueryScopeV1,
+		conversationId: string,
+	) => Promise<boolean>;
 	readonly databaseUrl: string;
 	readonly replayWindow?: number;
 	readonly replayWindowMs?: number;
@@ -586,7 +590,8 @@ function scope(input: ConversationQueryScopeV1): ConversationQueryScopeV1 {
 		if (
 			(api && (!principal || !isTaskApiChannelV1(channelId, principal))) ||
 			(principal &&
-				(principal.id !== actorId || (!api && principal.kind !== "user")))
+				(principal.id !== actorId ||
+					(!api && channelId !== "eval" && principal.kind !== "user")))
 		)
 			return invalidRequest();
 		return { actorId, channelId, ...(principal ? { principal } : {}) };
@@ -1327,6 +1332,7 @@ export async function readPlatformQueueResourceSnapshot(
 }
 
 export class PostgresConversationQueryV1 {
+	readonly #evaluationCurrent: PostgresConversationQueryOptionsV1["evaluationCurrent"];
 	readonly #client: ReturnType<typeof postgres>;
 	readonly #replayWindow: number;
 	readonly #replayWindowMs: number;
@@ -1334,6 +1340,7 @@ export class PostgresConversationQueryV1 {
 	readonly #eventWindowMaxEvents: number;
 
 	constructor(options: PostgresConversationQueryOptionsV1) {
+		this.#evaluationCurrent = options.evaluationCurrent;
 		try {
 			if (
 				!Number.isSafeInteger(options.replayWindow ?? 100) ||
@@ -2222,7 +2229,68 @@ export class PostgresConversationQueryV1 {
 		}
 	}
 
+	async #readEvaluation<T>(
+		input: ConversationQueryScopeV1,
+		conversationId: string,
+		read: () => Promise<T>,
+	): Promise<T | undefined> {
+		const currentScope = scope(input);
+		if (currentScope.channelId !== "eval") return read();
+		if (
+			!this.#evaluationCurrent ||
+			!(await this.#evaluationCurrent(currentScope, conversationId))
+		)
+			return undefined;
+		const value = await read();
+		if (!(await this.#evaluationCurrent(currentScope, conversationId)))
+			return undefined;
+		return value;
+	}
 	async get(
+		input: ConversationQueryScopeV1,
+		id: string,
+		signal?: AbortSignal,
+		options?: ConversationQueryReadOptionsV1,
+	) {
+		return this.#readEvaluation(input, id, () =>
+			this.#get(input, id, signal, options),
+		);
+	}
+	async getProjection(
+		input: ConversationQueryScopeV1,
+		id: string,
+		signal?: AbortSignal,
+	) {
+		return this.#readEvaluation(input, id, () =>
+			this.#getProjection(input, id, signal),
+		);
+	}
+	/** Metadata-only target check after caller cancellation scope/use authorization; never returns content. */
+	async getEvalExecutionControlReference(
+		input: ConversationQueryScopeV1,
+		conversationIdInput: string,
+		executionIdInput: string,
+	) {
+		const trusted = scope(input);
+		if (trusted.channelId !== "eval" || !trusted.principal) return undefined;
+		const conversationId = requestText(conversationIdInput);
+		const executionId = requestText(executionIdInput);
+		const [row] = await this.#client<
+			{ executionId: string; conversationId: string }[]
+		>`select e.execution_id as "executionId",e.conversation_id as "conversationId" from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id and c.actor_id=e.actor_id and c.principal_type=e.principal_type and c.agent_id=e.agent_id and c.channel_id=e.channel_id where e.execution_id=${executionId} and c.id=${conversationId} and e.actor_id=${trusted.actorId} and e.principal_type=${trusted.principal.kind} and e.channel_id='eval' and e.execution_source='eval'`;
+		return row;
+	}
+
+	async getExecution(
+		input: ConversationQueryScopeV1,
+		id: string,
+		executionId: string,
+	) {
+		return this.#readEvaluation(input, id, () =>
+			this.#getExecution(input, id, executionId),
+		);
+	}
+	async #get(
 		inputScope: ConversationQueryScopeV1,
 		conversationIdInput: string,
 		signal?: AbortSignal,
@@ -2287,7 +2355,7 @@ export class PostgresConversationQueryV1 {
 		}
 	}
 
-	async getProjection(
+	async #getProjection(
 		inputScope: ConversationQueryScopeV1,
 		conversationIdInput: string,
 		signal?: AbortSignal,
@@ -2314,7 +2382,7 @@ export class PostgresConversationQueryV1 {
 		}
 	}
 
-	async getExecution(
+	async #getExecution(
 		inputScope: ConversationQueryScopeV1,
 		conversationIdInput: string,
 		executionIdInput: string,
@@ -2359,6 +2427,19 @@ export class PostgresConversationQueryV1 {
 	}
 
 	async #replay(
+		input: ConversationQueryScopeV1,
+		id: string,
+		selector:
+			| { readonly kind: "cursor" | "last-event-id"; readonly value: string }
+			| undefined,
+		executionId?: string,
+		signal?: AbortSignal,
+	) {
+		return this.#readEvaluation(input, id, () =>
+			this.#replayUnchecked(input, id, selector, executionId, signal),
+		);
+	}
+	async #replayUnchecked(
 		inputScope: ConversationQueryScopeV1,
 		conversationIdInput: string,
 		selectorInput:

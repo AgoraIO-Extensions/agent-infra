@@ -35,6 +35,12 @@ export {
 	standardTemplateReasoningLevelsV1,
 } from "./agent-default-candidates.js";
 export * from "./catalog.js";
+export {
+	type EvaluationModelScoreV1,
+	EvaluationModelScoringErrorV1,
+	type EvaluationModelScoringInputV1,
+	scoreEvaluationModelV1,
+} from "./evaluation-scoring.js";
 export { createMessagesModelAccessValidatorV1 } from "./messages-access.js";
 export {
 	createDeploymentModelDisplayNamesV1,

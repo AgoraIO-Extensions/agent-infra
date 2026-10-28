@@ -7,6 +7,10 @@ import {
 } from "@agent-infra/platform-core";
 import { openPostgresWorkloadReconciliationStoreV1 } from "@agent-infra/platform-store";
 import { createEvaluationDataWorkerV1 } from "./evaluation-data-worker.js";
+import {
+	createEvaluationScoringWorkerV1,
+	type EvaluationScoringWorkerOptionsV1,
+} from "./evaluation-scoring-worker.js";
 import { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";
 import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js";
 import {
@@ -18,6 +22,10 @@ import { createWorkloadStepFailureLoggerV1 } from "./workload-step-failure.js";
 export interface PlatformWorkloadWorkerOptionsV1
 	extends Omit<WorkloadRuntimeOptionsV1, "workerId"> {
 	readonly databaseUrl: string;
+	readonly evaluationScoring?: Omit<
+		EvaluationScoringWorkerOptionsV1,
+		"databaseUrl"
+	>;
 	readonly evaluation?: Omit<
 		Parameters<typeof createEvaluationDataWorkerV1>[0],
 		"databaseUrl"
@@ -144,8 +152,16 @@ export function createPlatformWorkloadWorkerV1(
 		| ReturnType<typeof createPlatformFileReconciliationWorkerV1>
 		| undefined;
 	let evaluation: ReturnType<typeof createEvaluationDataWorkerV1> | undefined;
+	let evaluationScoring:
+		| ReturnType<typeof createEvaluationScoringWorkerV1>
+		| undefined;
 	let reconciliation: ReturnType<typeof createWorkloadReconciliationV1>;
 	try {
+		if (options.evaluationScoring)
+			evaluationScoring = createEvaluationScoringWorkerV1({
+				...options.evaluationScoring,
+				databaseUrl: options.databaseUrl,
+			});
 		if (options.evaluation)
 			evaluation = createEvaluationDataWorkerV1({
 				...options.evaluation,
@@ -196,6 +212,7 @@ export function createPlatformWorkloadWorkerV1(
 			store.close(),
 			files?.close(),
 			evaluation?.close(),
+			evaluationScoring?.close(),
 		]);
 		throw error;
 	}
@@ -203,6 +220,25 @@ export function createPlatformWorkloadWorkerV1(
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let running: Promise<void> | undefined;
 	let closing: Promise<void> | undefined;
+	let scorerTimer: ReturnType<typeof setTimeout> | undefined;
+	let scorerRunning: Promise<void> | undefined;
+	async function pollScorer() {
+		try {
+			await evaluationScoring?.runOnce();
+		} catch {
+			logSafely(
+				JSON.stringify({
+					service: "platform-worker",
+					code: "EVALUATION_SCORE_UNAVAILABLE",
+				}),
+			);
+		} finally {
+			if (!stopped)
+				scorerTimer = setTimeout(() => {
+					scorerRunning = pollScorer();
+				}, pollIntervalMs);
+		}
+	}
 	let tickTail: Promise<void> = Promise.resolve();
 	// 轮询连续推进的步数，达到上限后休眠一次，防止反复到期的步骤形成热循环。
 	let consecutiveSteps = 0;
@@ -279,22 +315,30 @@ export function createPlatformWorkloadWorkerV1(
 				JSON.stringify({ service: "platform-worker", status: "ready" }),
 			);
 			running = poll();
+			if (evaluationScoring) scorerRunning = pollScorer();
 		},
 		stop() {
 			if (closing) return closing;
 			stopped = true;
 			clearTimeout(timer);
+			clearTimeout(scorerTimer);
+			const drained = Promise.allSettled([
+				evaluationScoring?.close(),
+				scorerRunning,
+				running,
+				tickTail,
+			]);
 			closing = (async () => {
-				try {
-					await running;
-				} finally {
-					await tickTail;
-					await Promise.all([
-						store.close(),
-						files?.close(),
-						evaluation?.close(),
-					]);
-				}
+				const outcomes = await drained;
+				const cleanup = await Promise.allSettled([
+					store.close(),
+					files?.close(),
+					evaluation?.close(),
+				]);
+				const failed = [...outcomes, ...cleanup].find(
+					(result) => result.status === "rejected",
+				);
+				if (failed?.status === "rejected") throw failed.reason;
 			})();
 			return closing;
 		},

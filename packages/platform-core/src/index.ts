@@ -95,12 +95,19 @@ export * from "./conversation-operation-facts.js";
 export * from "./conversation-read-projection.js";
 export * from "./conversation-recent.js";
 export * from "./evaluation-data.js";
+export * from "./evaluation-derived-content.js";
+export * from "./evaluation-experiment-policy.js";
+export * from "./evaluation-experiments.js";
+export * from "./evaluation-score-intents.js";
+export * from "./evaluation-scoring.js";
+export * from "./evaluation-task-binding.js";
 export * from "./execution-failure.js";
 export {
 	bindInputFileV1,
 	bindNativeTextInputFileV1,
 	createFileAuthorityV1,
 	discardUnboundInputFileV1,
+	type EvaluationFileBindingV1,
 	type FileAccessRecordV1,
 	FileAuthorityError,
 	type FileAuthorityV1,

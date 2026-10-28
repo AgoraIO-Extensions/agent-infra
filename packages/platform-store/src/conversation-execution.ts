@@ -20,6 +20,7 @@ import {
 	type ConversationWithdrawDecisionV1,
 	type CreateConversationDecisionV1,
 	conversationAttachmentMergeWindowMsV1,
+	EvaluationDataErrorV1,
 	type FileRecordV1,
 	isNativeCapabilityModelSelectionCurrentV6,
 	type NativeCapabilityAdmissionDecisionV1,
@@ -41,6 +42,7 @@ import {
 	validateNativeCapabilityInvocationPlanV6,
 	validateNativeCapabilityReplayPlanV6,
 } from "@agent-infra/platform-core";
+import { readCurrentTaskApiUseGrantV1 } from "./application-task-authorization.js";
 import {
 	lockConversation as lockDispatchConversation,
 	lockExecution as lockDispatchExecution,
@@ -120,6 +122,9 @@ import {
 	reserveIdempotency,
 } from "./conversation-execution-sql.js";
 import { submitConversationTask } from "./conversation-execution-task.js";
+import { PostgresEvaluationDataStoreV1 } from "./evaluation-data.js";
+import { requireCurrentEvaluationAdmissionV1 } from "./evaluation-task-admission.js";
+import type { EvaluationCurrentPolicyReaderV1 } from "./evaluation-task-authority.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import postgres from "./observed-postgres.js";
 import {
@@ -296,6 +301,7 @@ function validateNativeAdmissionPlan(
 }
 
 export interface PostgresConversationExecutionOptionsV1 {
+	readonly evaluationPolicy?: EvaluationCurrentPolicyReaderV1;
 	readonly databaseUrl: string;
 	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly readRequestedModelDisplayName?: RequestedModelDisplayNameResolverV1;
@@ -306,6 +312,7 @@ export class PostgresConversationExecutionTransactionV1
 		ConversationExecutionTransactionPortV1,
 		NativeCapabilityAdmissionTransactionPortV6
 {
+	readonly #evaluationPolicy: EvaluationCurrentPolicyReaderV1 | undefined;
 	readonly #client: ReturnType<typeof postgres> | undefined;
 	readonly #existingTransaction: Transaction | undefined;
 	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
@@ -320,12 +327,14 @@ export class PostgresConversationExecutionTransactionV1
 			| PostgresConversationExecutionOptionsV1
 			| {
 					readonly transaction: Transaction;
+					readonly evaluationPolicy?: EvaluationCurrentPolicyReaderV1;
 					readonly userDirectory?: TaskUserDirectoryV1;
 					readonly readRequestedModelDisplayName?: RequestedModelDisplayNameResolverV1;
 					readonly signal?: AbortSignal;
 			  },
 	) {
 		this.#userDirectory = options.userDirectory;
+		this.#evaluationPolicy = options.evaluationPolicy;
 		this.#readRequestedModelDisplayName = options.readRequestedModelDisplayName;
 		if ("transaction" in options) {
 			bindConversationExecutionSignalV1(options.transaction, options.signal);
@@ -1908,6 +1917,8 @@ export class PostgresConversationExecutionTransactionV1
 	async authorizeTaskApi(input: {
 		readonly material: string;
 		readonly operation: "agent:use" | "agent:read";
+		readonly requestId?: string;
+		readonly traceId?: string;
 		readonly agentId?: string;
 		readonly conversationId?: string;
 	}): Promise<ConversationExecutionAuthorityV1 | null> {
@@ -1933,6 +1944,72 @@ export class PostgresConversationExecutionTransactionV1
 				return null;
 			const agentId = text(input.agentId ?? target?.agent_id);
 			const channelId = target?.channel_id ?? "api";
+
+			if (
+				channelId === "eval" &&
+				input.conversationId &&
+				this.#evaluationPolicy
+			) {
+				const evaluationStore = new PostgresEvaluationDataStoreV1({
+					databaseUrl: "postgres://transaction-only",
+					transaction,
+					directory: this.#userDirectory,
+				});
+				const request = {
+					authentication: {
+						kind: "credential" as const,
+						material: input.material,
+					},
+					credentialScope: "eval:run" as const,
+					requestId: input.requestId ?? randomUUID(),
+					traceId: input.traceId ?? randomUUID(),
+				};
+				const actor = await evaluationStore.authenticate(request);
+				const use = await readCurrentTaskApiUseGrantV1(transaction, {
+					principal: actor,
+					agentId,
+				});
+				if (!use || use.revoked) return null;
+				const [row] = await transaction<
+					{ boundary: unknown; revoked_at: Date | null }[]
+				>`select a.boundary,a.revoked_at from platform.task_authorization_records a join platform.conversation_executions e on e.execution_id=a.execution_id where e.conversation_id=${input.conversationId} and e.actor_id=${actor.id} and e.principal_type=${actor.kind} order by e.created_at desc limit 1 for share of a`;
+				if (!row) return null;
+				const boundary = parseTaskAuthorizationBoundaryV1(row.boundary);
+				const authority = {
+					schemaVersion: 1 as const,
+					actorId: actor.id,
+					agentId,
+					channelId: "eval",
+					authorizationRevision: boundary.agentAuthorizationRevision,
+					supportsSupplementaryInstruction: false,
+					taskBoundary: boundary,
+				};
+				if (input.operation === "agent:read") {
+					if (row.revoked_at) return null;
+					try {
+						await requireCurrentEvaluationAdmissionV1(
+							transaction,
+							authority,
+							this.#userDirectory,
+							this.#evaluationPolicy,
+						);
+					} catch (error) {
+						if (
+							error instanceof EvaluationDataErrorV1 &&
+							error.code === "denied"
+						)
+							return null;
+						throw error;
+					}
+				}
+				await evaluationStore.authenticate(request);
+				const finalUse = await readCurrentTaskApiUseGrantV1(transaction, {
+					principal: actor,
+					agentId,
+				});
+				if (!finalUse || finalUse.revoked) return null;
+				return authority;
+			}
 			if (!["api", "api:user", "api:application"].includes(channelId))
 				return null;
 			const admission = await resolvePersonalApiTaskAdmissionAuthorityV1(
@@ -2024,6 +2101,7 @@ export class PostgresConversationExecutionTransactionV1
 				decide,
 				this.#userDirectory,
 				this.#readRequestedModelDisplayName,
+				this.#evaluationPolicy,
 			),
 		);
 	}

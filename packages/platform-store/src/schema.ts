@@ -145,12 +145,22 @@ export {
 
 import {
 	evaluationDatasets,
+	evaluationDerivedObjects,
+	evaluationExperiments,
 	evaluationGrants,
 	evaluationPolicies,
+	evaluationSampleTasks,
+	evaluationScoreIntents,
+	evaluationScoreReviews,
 	evaluationVersions,
 } from "./schema-evaluation.js";
 
 export const platformInfrastructureTables = [
+	evaluationExperiments,
+	evaluationSampleTasks,
+	evaluationScoreIntents,
+	evaluationScoreReviews,
+	evaluationDerivedObjects,
 	evaluationDatasets,
 	evaluationGrants,
 	evaluationPolicies,
@@ -210,8 +220,13 @@ import { sessionSandboxAllocations } from "./schema-session-sandboxes";
 
 export {
 	evaluationDatasets,
+	evaluationDerivedObjects,
+	evaluationExperiments,
 	evaluationGrants,
 	evaluationPolicies,
+	evaluationSampleTasks,
+	evaluationScoreIntents,
+	evaluationScoreReviews,
 	evaluationVersions,
 } from "./schema-evaluation.js";
 export { sessionSandboxAllocations } from "./schema-session-sandboxes";

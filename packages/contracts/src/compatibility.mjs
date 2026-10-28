@@ -6328,6 +6328,133 @@ function normalizeQueueFullErrorCodeAddition(previous, current) {
 	return normalized;
 }
 
+// #3639: allow only the pinned experiment/scoring surface and explicit credential ceilings.
+function normalizeEvaluationExperiments3639(document) {
+	if (
+		!document.openapi ||
+		(!JSON.stringify(document).includes('"eval:run"') &&
+			!JSON.stringify(document).includes('"evaluation.experiment.create"') &&
+			!document.paths?.["/api/v2/evaluation/experiments"])
+	)
+		return document;
+	const normalized = structuredClone(document);
+	const paths = [
+		"/api/v2/evaluation/experiments",
+		"/api/v2/evaluation/experiments/{experimentId}",
+		"/api/v2/evaluation/experiments/{experimentId}/cancel",
+		"/api/v2/evaluation/scores/{scoreId}",
+		"/api/v2/evaluation/scores/{scoreId}/content",
+		"/api/v2/evaluation/scores/{scoreId}/human",
+		"/api/v2/evaluation/scores/{scoreId}/review-context",
+		"/api/v2/evaluation/scores/{scoreId}/reviews",
+	];
+	const schemas = [
+		"EvaluationExperimentCreateV1",
+		"EvaluationExperimentPageV1",
+		"EvaluationExperimentV1",
+		"EvaluationReviewPageV1",
+		"EvaluationReviewV1",
+		"EvaluationScoreMetadataV1",
+		"EvaluationScoreSubmitV1",
+		"EvaluationScoringContextV1",
+	];
+	const values = Object.fromEntries(
+		schemas.map((name) => [name, document.components?.schemas?.[name]]),
+	);
+	const found = paths.filter((path) => document.paths?.[path] !== undefined);
+	const digest = (value) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	if (
+		found.length === paths.length &&
+		digest({
+			paths: Object.fromEntries(
+				paths.map((path) => [path, document.paths[path]]),
+			),
+			schemas: values,
+		}) === "47797d583a9278b24e0e9c673b90ff9a2679f83fe58eb09cbc9babcd1c3f4a9f"
+	) {
+		for (const path of paths) delete normalized.paths[path];
+		for (const name of schemas) delete normalized.components.schemas[name];
+	} else if (
+		found.length === 0 &&
+		digest(values) ===
+			"4a5a5fc404cd05e52ccc841d3f1d882520f63332b247e13400dc7dffa7010435"
+	)
+		for (const name of schemas) delete normalized.components.schemas[name];
+	const scopes = [
+		"agent:create",
+		"agent:manage",
+		"agent:use",
+		"agent:read",
+		"eval:data",
+	];
+	const visit = (value) => {
+		if (!value || typeof value !== "object") return;
+		const scope = value.properties?.scopes;
+		if (
+			scope?.maxItems === 8 &&
+			sameValue(scope.items?.enum, [
+				...scopes,
+				"eval:run",
+				"eval:score",
+				"eval:review",
+			])
+		) {
+			scope.maxItems = 5;
+			scope.items.enum = scopes;
+		}
+		for (const child of Object.values(value)) visit(child);
+	};
+	visit(normalized);
+	const actions = [
+		"evaluation.experiment.create",
+		"evaluation.experiment.cancel",
+		"evaluation.derived.confirm",
+		"evaluation.score.completed",
+		"evaluation.score.human",
+		"evaluation.score.reviewed",
+	];
+	const actionSchema =
+		normalized.components?.schemas?.ScopedPlatformAuditActionV1;
+	if (
+		actionSchema &&
+		actions.every(
+			(action) =>
+				actionSchema.enum?.filter((value) => value === action).length === 1,
+		) &&
+		sameValue(
+			actionSchema.enum.slice(
+				actionSchema.enum.indexOf(actions[0]),
+				actionSchema.enum.indexOf(actions[0]) + actions.length,
+			),
+			actions,
+		)
+	)
+		actionSchema.enum = actionSchema.enum.filter(
+			(action) => !actions.includes(action),
+		);
+	for (const name of [
+		"ScopedPlatformAuditProjectionV1",
+		"ScopedPlatformAuditProjectionV2",
+	]) {
+		const subject =
+			normalized.components?.schemas?.[name]?.properties?.subject?.properties
+				?.kind;
+		const added = [
+			"evaluation_experiment",
+			"evaluation_object",
+			"evaluation_score",
+		];
+		if (
+			added.every(
+				(value) => subject?.enum?.filter((kind) => kind === value).length === 1,
+			)
+		)
+			subject.enum = subject.enum.filter((kind) => !added.includes(kind));
+	}
+	return isDeepStrictEqual(normalized, document) ? document : normalized;
+}
+
 // #3638: exact dataset surface plus the explicit Eval credential/audit additions.
 // Existing paths, actor kinds, security and unrelated schemas still compare normally.
 function normalizeEvaluationData3638(document) {
@@ -6533,8 +6660,9 @@ function evaluationRemoval(previous, current) {
 			current.components?.schemas?.[name]?.properties?.subject?.properties?.kind
 				?.enum ?? [];
 		if (
-			before.includes("evaluation_dataset") &&
-			!after.includes("evaluation_dataset")
+			before.some(
+				(kind) => kind.startsWith("evaluation_") && !after.includes(kind),
+			)
 		)
 			return true;
 	}
@@ -6547,9 +6675,11 @@ function evaluationRemoval(previous, current) {
 		)
 			return false;
 		if (
-			before.properties?.scopes?.items?.enum?.includes("eval:data") &&
-			after.properties?.scopes &&
-			!after.properties.scopes.items?.enum?.includes("eval:data")
+			before.properties?.scopes?.items?.enum?.some(
+				(scope) =>
+					scope.startsWith("eval:") &&
+					!after.properties?.scopes?.items?.enum?.includes(scope),
+			)
 		)
 			return true;
 		return Object.keys(before).some((key) =>
@@ -6559,9 +6689,78 @@ function evaluationRemoval(previous, current) {
 	return removedScope(previous, current);
 }
 
+// Eval FileAccess adds only this signed optional execution tuple; never strip a published binding.
+function normalizeEvaluationFileBinding3639(previous, current) {
+	const before = previous.$defs ?? previous.components?.schemas;
+	const after = current.$defs ?? current.components?.schemas;
+	const prior = before?.FileAccessClaimsV1?.properties?.execution?.anyOf?.find(
+		(value) => value.type === "object",
+	);
+	const next = after?.FileAccessClaimsV1?.properties?.execution?.anyOf?.find(
+		(value) => value.type === "object",
+	);
+	if (
+		(!prior && before?.FileAccessClaimsV1 !== undefined) ||
+		!next ||
+		prior?.properties?.evaluation !== undefined ||
+		next.properties?.evaluation === undefined
+	)
+		return current;
+	if (
+		next.required?.includes("evaluation") ||
+		createHash("sha256")
+			.update(JSON.stringify(next.properties.evaluation))
+			.digest("hex") !==
+			"7a2f1d0e0e654c62461388c7eec6560d9eaea3ad61dbf5ce60a046c0f9e1d683"
+	)
+		return current;
+	const copy = structuredClone(current);
+	const schemas = copy.$defs ?? copy.components.schemas;
+	delete schemas.FileAccessClaimsV1.properties.execution.anyOf.find(
+		(value) => value.type === "object",
+	).properties.evaluation;
+	return copy;
+}
+
 function evaluateBreakingChanges(previousValue, currentValue) {
+	const priorFile = (
+		previousValue.$defs ?? previousValue.components?.schemas
+	)?.FileAccessClaimsV1?.properties?.execution?.anyOf?.find(
+		(value) => value.type === "object",
+	);
+	const nextFile = (
+		currentValue.$defs ?? currentValue.components?.schemas
+	)?.FileAccessClaimsV1?.properties?.execution?.anyOf?.find(
+		(value) => value.type === "object",
+	);
+	if (
+		priorFile &&
+		nextFile &&
+		!priorFile.properties?.evaluation &&
+		nextFile.properties?.evaluation &&
+		(nextFile.required?.includes("evaluation") ||
+			createHash("sha256")
+				.update(JSON.stringify(nextFile.properties.evaluation))
+				.digest("hex") !==
+				"7a2f1d0e0e654c62461388c7eec6560d9eaea3ad61dbf5ce60a046c0f9e1d683")
+	)
+		return ["unapproved Eval FileAccess binding"];
+
+	const evalFiles = normalizeEvaluationFileBinding3639(
+		previousValue,
+		currentValue,
+	);
+	if (evalFiles !== currentValue)
+		return findBreakingChanges(previousValue, evalFiles);
 	if (evaluationRemoval(previousValue, currentValue))
 		return ["removed published Eval contract"];
+	const previousExperiments = normalizeEvaluationExperiments3639(previousValue);
+	const currentExperiments = normalizeEvaluationExperiments3639(currentValue);
+	if (
+		previousExperiments !== previousValue ||
+		currentExperiments !== currentValue
+	)
+		return findBreakingChanges(previousExperiments, currentExperiments);
 	const previousEvaluation = normalizeEvaluationData3638(previousValue);
 	const currentEvaluation = normalizeEvaluationData3638(currentValue);
 	if (

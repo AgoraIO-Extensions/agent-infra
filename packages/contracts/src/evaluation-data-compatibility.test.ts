@@ -26,13 +26,20 @@ it.each(["v1", "v2"])(
 		const removeScopes = (value: unknown): void => {
 			if (!value || typeof value !== "object") return;
 			const object = value as Record<string, unknown>;
-			if (Array.isArray(object.enum) && object.enum.includes("eval:data"))
-				object.enum = object.enum.filter((item) => item !== "eval:data");
+			if (
+				Array.isArray(object.enum) &&
+				object.enum.some(
+					(item) => typeof item === "string" && item.startsWith("eval:"),
+				)
+			)
+				object.enum = object.enum.filter(
+					(item) => typeof item !== "string" || !item.startsWith("eval:"),
+				);
 			const properties = object.properties as
 				| Record<string, { maxItems?: number; items?: { enum?: string[] } }>
 				| undefined;
 			if (
-				properties?.scopes?.maxItems === 5 &&
+				properties?.scopes?.maxItems === 8 &&
 				properties.scopes.items?.enum?.includes("eval:data")
 			)
 				properties.scopes.maxItems = 4;
@@ -52,7 +59,7 @@ it.each(["v1", "v2"])(
 				previous.components.schemas[name]?.properties.subject.properties.kind;
 			if (subject)
 				subject.enum = subject.enum.filter(
-					(value: string) => value !== "evaluation_dataset",
+					(value: string) => !value.startsWith("evaluation_"),
 				);
 		}
 		const directory = await mkdtemp(join(tmpdir(), "evaluation-compat-"));
@@ -88,6 +95,35 @@ it.each(["v1", "v2"])(
 					if (path.startsWith("/api/v2/evaluation/"))
 						delete pathsRemoved.paths[path];
 				expect(await compare(pathsRemoved)).toBe(1);
+				for (const path of [
+					"/api/v2/evaluation/experiments",
+					"/api/v2/evaluation/scores/{scoreId}/human",
+					"/api/v2/evaluation/scores/{scoreId}/reviews",
+				]) {
+					const changed = structuredClone(current);
+					delete changed.paths[path];
+					expect(await compare(changed)).toBe(1);
+				}
+				for (const name of [
+					"EvaluationExperimentPageV1",
+					"EvaluationScoreMetadataV1",
+					"EvaluationReviewV1",
+					"EvaluationReviewPageV1",
+				]) {
+					const changed = structuredClone(current);
+					delete changed.components.schemas[name];
+					expect(await compare(changed)).toBe(1);
+				}
+				for (const scope of ["eval:run", "eval:score", "eval:review"]) {
+					const changed = structuredClone(current);
+					const item =
+						changed.components.schemas.PersonalApiCredentialMetadataV1
+							.properties.scopes;
+					item.items.enum = item.items.enum.filter(
+						(value: string) => value !== scope,
+					);
+					expect(await compare(changed)).toBe(1);
+				}
 				const schemaRemoved = structuredClone(current);
 				delete schemaRemoved.components.schemas.EvaluationVersionV1;
 				expect(await compare(schemaRemoved)).toBe(1);
@@ -108,6 +144,23 @@ it.each(["v1", "v2"])(
 			await writeFile(before, JSON.stringify(previous));
 			if (version === "v2")
 				for (const mutate of [
+					(doc: typeof current) => {
+						doc.paths[
+							"/api/v2/evaluation/scores/{scoreId}/reviews"
+						].get.security = [];
+					},
+					(doc: typeof current) => {
+						doc.paths["/api/v2/evaluation/experiments"].post.security = [];
+					},
+					(doc: typeof current) => {
+						doc.components.schemas.EvaluationScoreSubmitV1.additionalProperties = true;
+					},
+					(doc: typeof current) => {
+						doc.components.schemas.EvaluationExperimentPageV1.properties.items.items.required.pop();
+					},
+					(doc: typeof current) => {
+						doc.components.schemas.PersonalApiCredentialMetadataV1.properties.scopes.items.enum.reverse();
+					},
 					(doc: typeof current) => {
 						doc.paths["/api/v2/evaluation/datasets"].post.security = [];
 					},

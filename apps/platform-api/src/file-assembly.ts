@@ -8,6 +8,7 @@ import type { ObjectStorageDataV1 } from "@agent-infra/object-storage";
 import {
 	createFileAuthorityV1,
 	createFileLimitDeclarationReaderV1,
+	type EvaluationFileBindingV1,
 	type FileAuthorizationPortV1,
 	type FileExecutionV1,
 	type FileLimitDeclarationStoreV1,
@@ -84,6 +85,22 @@ export interface RuntimeFileExchangeCredentialReaderV1 {
 }
 
 export function assemblePlatformFilesV1(input: {
+	evaluationFileCurrent?: (
+		scope: FileScopeV1 & {
+			executionId: string;
+			sessionGeneration: number;
+			evaluation: EvaluationFileBindingV1;
+		},
+		kind: "attachment" | "result",
+	) => Promise<{ configurationRevision: number } | null>;
+	evaluationCurrent?: (
+		scope: {
+			actorId: string;
+			channelId: string;
+			principal?: { kind: "user" | "application"; id: string };
+		},
+		conversationId: string,
+	) => Promise<boolean>;
 	databaseUrl: string;
 	deployment: PlatformFileDeploymentV1;
 	identity: IdentityAdapter;
@@ -211,6 +228,40 @@ export function assemblePlatformFilesV1(input: {
 					const denial = await serviceIdentityDenial(request, execution);
 					if (denial) return deny(denial);
 				}
+				if (execution?.channelId === "eval") {
+					if (!execution.evaluation || !input.evaluationFileCurrent)
+						return deny("task_authorization");
+					const kind = operation === "write" ? "result" : "attachment";
+					const binding = { ...execution, evaluation: execution.evaluation };
+					const current = await input.evaluationFileCurrent(binding, kind);
+					if (!current) return deny("task_authorization");
+					if (!readLimits) return deny("limits");
+					const declared = await readLimits({
+						agentId: execution.agentId,
+						channelId: "eval",
+						configurationRevision: current.configurationRevision,
+						kind,
+					});
+					if (declared.configurationRevision !== current.configurationRevision)
+						return deny("limits");
+					const limits = resolveFileLimitsV1(declared.declarations, new Date());
+					if (!limits) return deny("limits");
+					const final = await input.evaluationFileCurrent(binding, kind);
+					if (
+						!final ||
+						final.configurationRevision !== current.configurationRevision
+					)
+						return deny("task_authorization");
+					return {
+						actorId: execution.actorId,
+						agentId: execution.agentId,
+						channelId: "eval",
+						conversationId,
+						execution,
+						limits,
+					};
+				}
+				if (execution?.evaluation) return deny("boundary");
 				const identity = await resolveIdentity(
 					execution
 						? {
@@ -271,6 +322,17 @@ export function assemblePlatformFilesV1(input: {
 						: null;
 					if (!limits) return deny("limits", failure);
 				}
+				if (
+					scope.channelId === "eval" &&
+					(!input.evaluationCurrent ||
+						!(await input
+							.evaluationCurrent(
+								{ actorId: scope.actorId, channelId: "eval" },
+								conversationId,
+							)
+							.catch(() => false)))
+				)
+					return deny("authorize");
 				return { ...scope, execution: execution ?? null, limits };
 			},
 		};
@@ -437,6 +499,19 @@ export function assemblePlatformFilesV1(input: {
 								execution.authorizationRevision
 						)
 							return deny("boundary");
+						if (
+							boundary.channelId === "eval" &&
+							(!input.evaluationCurrent ||
+								!(await input.evaluationCurrent(
+									{
+										actorId: boundary.principal.id,
+										channelId: "eval",
+										principal: boundary.principal,
+									},
+									claims.conversationId,
+								)))
+						)
+							return deny("task_authorization");
 						return execution;
 					})
 					.catch((error: unknown) => {
@@ -454,6 +529,15 @@ export function assemblePlatformFilesV1(input: {
 						executionId: claims.executionId,
 						sessionGeneration: claims.sessionGeneration,
 						grantId: claims.grantId,
+						...(claims.channelId === "eval"
+							? {
+									evaluation: {
+										principal: claims.principal,
+										authorizationRecordId: claims.authorizationRecordId,
+										deliveryFence: current.deliveryFence,
+									},
+								}
+							: {}),
 						// Only the signed attachment allowlist may be read.
 						attachments: claims.attachments
 							.filter((attachment) => attachment.operations.includes("read"))

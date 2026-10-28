@@ -126,12 +126,15 @@ export function parseState(
 			conversation.channelId === "api" ||
 			conversation.channelId.startsWith("api:");
 		if (
+			(conversation.channelId === "eval" && !principal) ||
 			(api &&
 				(!principal ||
 					!isTaskApiChannelV1(conversation.channelId, principal))) ||
 			(principal &&
 				(principal.id !== conversation.actorId ||
-					(!api && principal.kind !== "user")))
+					(!api &&
+						conversation.channelId !== "eval" &&
+						principal.kind !== "user")))
 		)
 			unavailable();
 		const createdAt = snapshotDate(conversation.createdAt);

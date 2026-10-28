@@ -5,7 +5,12 @@ import { expect, it } from "vitest";
 import { assemblePlatformFilesV1 } from "./file-assembly.ts";
 import { verifyRuntimeExecutionGrantForFilesV4 } from "./file-grants.ts";
 
-function createAssemblyFixture() {
+function createAssemblyFixture(
+	evaluationCurrent?: (
+		scope: { actorId: string; channelId: string },
+		id: string,
+	) => Promise<boolean>,
+) {
 	const keys = generateKeyPairSync("ed25519");
 	const actor = {
 		schemaVersion: 1 as const,
@@ -52,6 +57,7 @@ function createAssemblyFixture() {
 	const credentialReads: unknown[] = [];
 	const authorizedChannels: string[] = [];
 	const assembled = assemblePlatformFilesV1({
+		...(evaluationCurrent ? { evaluationCurrent } : {}),
 		databaseUrl: "postgres://unused:unused@127.0.0.1:1/unused",
 		sandboxCredentials: {
 			async readRuntimeFileExchangeCredentialScopeV1(request) {
@@ -593,3 +599,37 @@ it("fails closed when files are configured without a runtime Worker identity", (
 		}),
 	).toThrow("runtime worker identity");
 });
+
+it.each(["missing", "revoked", "unavailable"] as const)(
+	"denies Eval ordinary file authority when purpose is %s",
+	async (failure) => {
+		let current = true;
+		const fixture = createAssemblyFixture(
+			failure === "missing"
+				? undefined
+				: async () => {
+						if (!current && failure === "unavailable")
+							throw new Error("synthetic policy unavailable");
+						return current;
+					},
+		);
+		fixture.state.channelId = "eval";
+		try {
+			const authorization = fixture.assembled.dependencies.authorization(
+				new Request("https://fixture.test/api/v1/files", {
+					headers: { Cookie: "session=fixture" },
+				}),
+			);
+			if (failure !== "missing")
+				expect(
+					await authorization.authorize("conversation", "read"),
+				).not.toBeNull();
+			current = false;
+			await expect(
+				authorization.authorize("conversation", "read"),
+			).resolves.toBeNull();
+		} finally {
+			await fixture.assembled.close();
+		}
+	},
+);

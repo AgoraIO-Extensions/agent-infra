@@ -1,9 +1,11 @@
 import {
 	bigint,
+	foreignKey,
 	index,
 	jsonb,
 	text,
 	timestamp,
+	uniqueIndex,
 	uuid,
 } from "drizzle-orm/pg-core";
 import { platformSchema as platform } from "./schema-common.js";
@@ -47,4 +49,117 @@ export const evaluationGrants = platform.table(
 		data: jsonb("data").notNull(),
 	},
 	(table) => [index("evaluation_grants_dataset").on(table.datasetId, table.id)],
+);
+
+export const evaluationExperiments = platform.table(
+	"evaluation_experiments",
+	{
+		id: uuid("id").primaryKey(),
+		datasetId: uuid("dataset_id")
+			.notNull()
+			.references(() => evaluationDatasets.id),
+		versionId: uuid("version_id")
+			.notNull()
+			.references(() => evaluationVersions.id),
+		principal: jsonb("principal").notNull(),
+		status: text("status").notNull(),
+		revision: bigint("revision", { mode: "number" }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+		metadataExpiresAt: timestamp("metadata_expires_at", {
+			withTimezone: true,
+		}).notNull(),
+		data: jsonb("data").notNull(),
+	},
+	(t) => [index("evaluation_experiments_principal").on(t.createdAt, t.id)],
+);
+export const evaluationSampleTasks = platform.table(
+	"evaluation_sample_tasks",
+	{
+		id: uuid("id").primaryKey(),
+		experimentId: uuid("experiment_id").notNull(),
+		sampleId: text("sample_id").notNull(),
+		variantId: text("variant_id").notNull(),
+		executionId: text("execution_id"),
+		conversationId: text("conversation_id"),
+		binding: jsonb("binding").notNull(),
+		data: jsonb("data").notNull(),
+	},
+	(t) => [
+		foreignKey({
+			name: "evaluation_sample_experiment_fk",
+			columns: [t.experimentId],
+			foreignColumns: [evaluationExperiments.id],
+		}),
+		uniqueIndex("evaluation_sample_variant_unique").on(
+			t.experimentId,
+			t.sampleId,
+			t.variantId,
+		),
+		uniqueIndex("evaluation_sample_execution_unique").on(t.executionId),
+	],
+);
+export const evaluationScoreIntents = platform.table(
+	"evaluation_score_intents",
+	{
+		id: uuid("id").primaryKey(),
+		sampleTaskId: uuid("sample_task_id").notNull(),
+		resultVersion: text("result_version").notNull(),
+		rubricId: text("rubric_id").notNull(),
+		scorerId: text("scorer_id").notNull(),
+		scorerVersion: text("scorer_version").notNull(),
+		status: text("status").notNull(),
+		revision: bigint("revision", { mode: "number" }).notNull(),
+		data: jsonb("data").notNull(),
+	},
+	(t) => [
+		foreignKey({
+			name: "evaluation_score_sample_fk",
+			columns: [t.sampleTaskId],
+			foreignColumns: [evaluationSampleTasks.id],
+		}),
+		uniqueIndex("evaluation_score_intent_unique").on(
+			t.sampleTaskId,
+			t.resultVersion,
+			t.rubricId,
+			t.scorerId,
+			t.scorerVersion,
+		),
+	],
+);
+export const evaluationScoreReviews = platform.table(
+	"evaluation_score_reviews",
+	{
+		id: uuid("id").primaryKey(),
+		scoreId: uuid("score_id").notNull(),
+		revision: bigint("revision", { mode: "number" }).notNull(),
+		data: jsonb("data").notNull(),
+	},
+	(t) => [
+		foreignKey({
+			name: "evaluation_review_score_fk",
+			columns: [t.scoreId],
+			foreignColumns: [evaluationScoreIntents.id],
+		}),
+		index("evaluation_score_reviews_score").on(t.scoreId, t.id),
+	],
+);
+export const evaluationDerivedObjects = platform.table(
+	"evaluation_derived_objects",
+	{
+		id: uuid("id").primaryKey(),
+		datasetId: uuid("dataset_id")
+			.notNull()
+			.references(() => evaluationDatasets.id),
+		versionId: uuid("version_id")
+			.notNull()
+			.references(() => evaluationVersions.id),
+		kind: text("kind").notNull(),
+		status: text("status").notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		metadataExpiresAt: timestamp("metadata_expires_at", {
+			withTimezone: true,
+		}).notNull(),
+		data: jsonb("data").notNull(),
+	},
+	(t) => [index("evaluation_derived_expiry").on(t.expiresAt, t.id)],
 );

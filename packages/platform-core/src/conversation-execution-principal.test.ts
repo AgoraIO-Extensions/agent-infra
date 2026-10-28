@@ -63,8 +63,8 @@ describe("Conversation API principal parsing", () => {
 		},
 	);
 
-	it("refuses untyped API authority and Conversation state", () => {
-		for (const channelId of ["api", "api:user", "api:application"]) {
+	it("refuses untyped API/Eval authority and Conversation state", () => {
+		for (const channelId of ["api", "api:user", "api:application", "eval"]) {
 			expect(() =>
 				parseAuthority({
 					schemaVersion: 1,

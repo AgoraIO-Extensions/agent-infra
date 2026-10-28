@@ -15,6 +15,13 @@ const fileCleanup = vi.hoisted(() => ({
 	runOnce: vi.fn<() => Promise<boolean>>(),
 	close: vi.fn<() => Promise<void>>(),
 }));
+const scorer = vi.hoisted(() => ({
+	runOnce: vi.fn<() => Promise<void>>(),
+	close: vi.fn<() => Promise<void>>(),
+}));
+vi.mock("./evaluation-scoring-worker.js", () => ({
+	createEvaluationScoringWorkerV1: () => scorer,
+}));
 vi.mock("./file-worker.js", () => ({
 	createPlatformFileReconciliationWorkerV1: () => fileCleanup,
 }));
@@ -57,6 +64,8 @@ function fixture() {
 
 beforeEach(() => {
 	vi.useFakeTimers();
+	scorer.runOnce.mockReset().mockResolvedValue();
+	scorer.close.mockReset().mockResolvedValue();
 	fileCleanup.runOnce.mockReset().mockResolvedValue(true);
 	fileCleanup.close.mockReset().mockResolvedValue();
 	store.opened.mockReset();
@@ -376,4 +385,47 @@ describe("Workload Worker lifecycle", () => {
 		);
 		expect(store.runNext).not.toHaveBeenCalled();
 	});
+});
+
+it("slow scoring leaves Workload polling and manual ticks live and drains its own in-flight work", async () => {
+	const model = Promise.withResolvers<void>();
+	scorer.runOnce.mockReturnValueOnce(model.promise);
+	scorer.close.mockImplementationOnce(async () => {
+		await model.promise;
+	});
+	const worker = createPlatformWorkloadWorkerV1({
+		...fixture(),
+		evaluationScoring: {} as never,
+	});
+	worker.start();
+	await vi.advanceTimersByTimeAsync(50);
+	expect(scorer.runOnce).toHaveBeenCalledOnce();
+	expect(store.runNext.mock.calls.length).toBeGreaterThan(2);
+	await expect(worker.tick()).resolves.toBe("idle");
+	const closing = worker.stop();
+	expect(scorer.close).toHaveBeenCalledOnce();
+	expect(store.close).not.toHaveBeenCalled();
+	model.resolve();
+	await closing;
+	await vi.advanceTimersByTimeAsync(100);
+	expect(scorer.runOnce).toHaveBeenCalledOnce();
+	expect(store.close).toHaveBeenCalledOnce();
+});
+it("observes a scorer close rejection immediately while draining Workload and still closes its store", async () => {
+	const step = Promise.withResolvers<"idle">();
+	store.runNext.mockReturnValueOnce(step.promise);
+	scorer.close.mockRejectedValueOnce(new Error("synthetic close"));
+	const worker = createPlatformWorkloadWorkerV1({
+		...fixture(),
+		evaluationScoring: {} as never,
+	});
+	worker.start();
+	await vi.advanceTimersByTimeAsync(1);
+	const closing = worker.stop();
+	const observed = expect(closing).rejects.toThrow("synthetic close");
+	await vi.advanceTimersByTimeAsync(20);
+	expect(store.close).not.toHaveBeenCalled();
+	step.resolve("idle");
+	await observed;
+	expect(store.close).toHaveBeenCalledOnce();
 });

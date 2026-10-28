@@ -1265,3 +1265,161 @@ it("keeps execution-bound access open while a dispatch is write-ahead unknown an
 		});
 	}
 });
+
+it("binds Eval access replay and completion to the exact typed principal, record and fence", async () => {
+	const store = new FakeFileStoreV1();
+	const scope = {
+		actorId: "same",
+		agentId: "agent",
+		conversationId: "eval-conversation",
+		channelId: "eval",
+	};
+	const principal = { kind: "application" as const, id: "same" };
+	let fence = 1;
+	let recordId = "authorization";
+	const boundary = {
+		schemaVersion: 1,
+		principal,
+		agentId: "agent",
+		channelId: "eval",
+		identityRevision: "identity",
+		agentAuthorizationRevision: "auth",
+		accessSources: [{ kind: "eval-use", useGrantRevision: "use" }],
+		evaluation: {
+			schemaVersion: 1,
+			experimentId: "experiment",
+			sampleId: "sample",
+			variantId: "baseline",
+			datasetId: "dataset",
+			versionId: "version",
+			grantId: "run",
+			grantRevision: 1,
+			policyId: "policy",
+			policyRevision: 1,
+			configurationRevision: 1,
+			modelOptionId: null,
+			reasoningLevel: null,
+			toolEnvironment: "fixture",
+			expiresAt: "2099-01-01T00:00:00.000Z",
+		},
+	};
+	const seed = () => {
+		store.seedExecution({
+			...scope,
+			principal,
+			executionId: "execution",
+			sessionGeneration: 1,
+			deliveryFence: fence,
+			authorizationRevision: "auth",
+			status: "processing",
+			stopPending: false,
+		});
+		store.seedTaskAuthorization({
+			id: recordId,
+			executionId: "execution",
+			revoked: false,
+			boundary,
+		});
+	};
+	store.seedConversation(scope);
+	seed();
+	const descriptor = {
+		name: "fixture.txt",
+		mediaType: "text/plain",
+		sizeBytes: 1,
+		sha256: "a".repeat(64),
+	};
+	const service = createFileAuthorityV1({
+		store,
+		intentTtlMs: 60000,
+		accessTtlMs: 10000,
+		issuer: "fixture",
+		keyVersion: "fixture",
+		storage: {
+			inspect: async () => ({ ...descriptor, etag: "v1", version: "v1" }),
+		},
+	});
+	const authorization = {
+		authorize: async () => ({
+			...scope,
+			execution: {
+				executionId: "execution",
+				sessionGeneration: 1,
+				grantId: "grant",
+				attachments: [],
+				expiresAt: "2099-01-01T00:00:00.000Z",
+				evaluation: {
+					principal,
+					authorizationRecordId: recordId,
+					deliveryFence: fence,
+				},
+			},
+			limits: {
+				revision: "limits",
+				expiresAt: "2099-01-01T00:00:00.000Z",
+				mediaTypes: ["text/plain"],
+				maxBytes: 100,
+			},
+		}),
+	};
+	const file = await service.createResult(
+		{
+			conversationId: scope.conversationId,
+			idempotencyKey: "result",
+			descriptor,
+		},
+		authorization,
+	);
+	const command = {
+		conversationId: scope.conversationId,
+		fileId: file.fileId,
+		operation: "write" as const,
+		idempotencyKey: "access",
+	};
+	const access = await service.issueAccess(command, authorization);
+	expect(access.execution?.evaluation).toEqual({
+		principal,
+		authorizationRecordId: "authorization",
+		deliveryFence: 1,
+	});
+	expect(await service.issueAccess(command, authorization)).toEqual(access);
+	fence = 2;
+	seed();
+	await expect(
+		service.issueAccess(command, authorization),
+	).rejects.toMatchObject({ code: "conflict" });
+	await expect(
+		service.complete(
+			{
+				conversationId: scope.conversationId,
+				fileId: file.fileId,
+				accessId: access.accessId,
+			},
+			authorization,
+		),
+	).rejects.toMatchObject({ code: "denied" });
+	fence = 1;
+	recordId = "replacement-authorization";
+	seed();
+	await expect(
+		service.issueAccess(command, authorization),
+	).rejects.toMatchObject({ code: "conflict" });
+	const foreign = {
+		authorize: async () => {
+			const value = await authorization.authorize();
+			return {
+				...value,
+				execution: {
+					...value.execution,
+					evaluation: {
+						...value.execution.evaluation,
+						principal: { kind: "user" as const, id: "same" },
+					},
+				},
+			};
+		},
+	};
+	await expect(
+		service.issueAccess({ ...command, idempotencyKey: "foreign" }, foreign),
+	).rejects.toMatchObject({ code: "denied" });
+});

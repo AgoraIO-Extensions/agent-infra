@@ -295,6 +295,7 @@ export function createPlatformConversationWorkerV2(
 	const store = openPostgresConversationDispatchStoreV1({
 		databaseUrl: options.databaseUrl,
 		userDirectory: options.directory,
+		evaluationPolicy: options.evaluationPolicy,
 		sandboxPolicy: options.sandboxPolicy,
 	});
 	const taskAuthorizationStore = new PostgresTaskAuthorizationStoreV1({

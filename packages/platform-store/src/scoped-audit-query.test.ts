@@ -2060,3 +2060,32 @@ describe("audit display names follow the querying principal's current access", (
 		expect(failureText(failure)).not.toContain(agentName);
 	});
 });
+
+it("projects only registered Eval experiment/scoring targets without exposing content", async () => {
+	for (const [action, target] of [
+		["evaluation.experiment.create", "evaluation_experiment"],
+		["evaluation.experiment.cancel", "evaluation_experiment"],
+		["evaluation.derived.confirm", "evaluation_object"],
+		["evaluation.score.completed", "evaluation_score"],
+		["evaluation.score.human", "evaluation_score"],
+		["evaluation.score.reviewed", "evaluation_score"],
+	] as const) {
+		const id = randomUUID();
+		await sql`insert into platform.audit_events(id,trace_id,request_id,actor_type,actor_id,action,target_type,target_id,outcome,details)values(${id},'eval-trace','eval-request','user','eval-operator',${action},${target},'synthetic-ref','succeeded',${sql.json({ purpose: "eval", returnedMaterial: false })})`;
+		const record = await query.getAudit(admin, id, detail, request());
+		expect(record).toMatchObject({
+			action,
+			actor: { kind: "user", actorId: "eval-operator" },
+			subject: { kind: target, subjectId: "synthetic-ref" },
+			summary: action,
+		});
+		await sql`update platform.audit_events set target_type='evaluation_dataset' where id=${id}`;
+		await expect(
+			query.getAudit(admin, id, detail, request()),
+		).rejects.toThrow();
+		await sql`update platform.audit_events set target_type=${target},details=details||'{"reason":"must-not-project"}'::jsonb where id=${id}`;
+		await expect(
+			query.getAudit(admin, id, detail, request()),
+		).rejects.toThrow();
+	}
+});

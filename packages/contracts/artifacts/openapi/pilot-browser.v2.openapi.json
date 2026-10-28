@@ -5527,6 +5527,630 @@
         ],
         "type": "object"
       },
+      "EvaluationExperimentCreateV1": {
+        "additionalProperties": false,
+        "properties": {
+          "datasetId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "scorerRefs": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "scorerId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "scorerId",
+                "version"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array"
+          },
+          "variantIds": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 2,
+            "type": "array"
+          },
+          "versionId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "datasetId",
+          "versionId",
+          "variantIds",
+          "scorerRefs"
+        ],
+        "type": "object"
+      },
+      "EvaluationExperimentPageV1": {
+        "additionalProperties": false,
+        "properties": {
+          "experiment": {
+            "$ref": "#/components/schemas/EvaluationExperimentV1"
+          },
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "actual": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "billing": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "keyVersion": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991,
+                                  "type": "integer"
+                                },
+                                "purpose": {
+                                  "const": "agent-default",
+                                  "type": "string"
+                                },
+                                "subjectId": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "purpose",
+                                "subjectId",
+                                "keyVersion"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "facts": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "actualModelObserved": {
+                              "type": "boolean"
+                            },
+                            "models": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "attemptRef": {
+                                    "maxLength": 256,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "durationMs": {
+                                    "anyOf": [
+                                      {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "model": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "configVersion": {
+                                        "maxLength": 256,
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      "modelId": {
+                                        "maxLength": 256,
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      "modelOptionId": {
+                                        "maxLength": 256,
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      "reasoningLevel": {
+                                        "maxLength": 256,
+                                        "minLength": 1,
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "configVersion",
+                                      "modelOptionId",
+                                      "modelId"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "observed": {
+                                    "type": "boolean"
+                                  },
+                                  "operationRef": {
+                                    "maxLength": 256,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "phase": {
+                                    "enum": [
+                                      "intent",
+                                      "started",
+                                      "completed",
+                                      "failed",
+                                      "unknown"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "sequence": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "usage": {
+                                    "anyOf": [
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "cachedInputTokens": {
+                                            "minimum": 0,
+                                            "type": "number"
+                                          },
+                                          "inputTokens": {
+                                            "minimum": 0,
+                                            "type": "number"
+                                          },
+                                          "outputTokens": {
+                                            "minimum": 0,
+                                            "type": "number"
+                                          }
+                                        },
+                                        "type": "object"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "operationRef",
+                                  "attemptRef",
+                                  "sequence",
+                                  "phase",
+                                  "durationMs",
+                                  "observed",
+                                  "model",
+                                  "usage"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 100,
+                              "type": "array"
+                            },
+                            "tools": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "attemptRef": {
+                                    "maxLength": 256,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "durationMs": {
+                                    "anyOf": [
+                                      {
+                                        "minimum": 0,
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "operationRef": {
+                                    "maxLength": 256,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "phase": {
+                                    "enum": [
+                                      "intent",
+                                      "started",
+                                      "completed",
+                                      "failed",
+                                      "unknown"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "sequence": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "toolId": {
+                                    "maxLength": 256,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "operationRef",
+                                  "attemptRef",
+                                  "sequence",
+                                  "phase",
+                                  "durationMs",
+                                  "toolId"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 100,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "actualModelObserved",
+                            "models",
+                            "tools"
+                          ],
+                          "type": "object"
+                        },
+                        "factsTruncated": {
+                          "type": "boolean"
+                        },
+                        "lastSequence": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "preparedRuntime": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "configurationRevision": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991,
+                                  "type": "integer"
+                                },
+                                "imageDigest": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "resourceConfigurationHash": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "configurationRevision",
+                                "imageDigest",
+                                "resourceConfigurationHash"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "runtimeObserved": {
+                          "type": "boolean"
+                        },
+                        "status": {
+                          "enum": [
+                            "waiting",
+                            "submitted",
+                            "processing",
+                            "unknown",
+                            "completed",
+                            "failed",
+                            "cancelled"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "billing",
+                        "lastSequence",
+                        "runtimeObserved",
+                        "preparedRuntime",
+                        "facts",
+                        "factsTruncated"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "conversationId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "requested": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "configurationRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "modelOptionId": {
+                      "anyOf": [
+                        {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reasoningLevel": {
+                      "anyOf": [
+                        {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "toolEnvironment": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "variantId": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "variantId",
+                    "agentId",
+                    "configurationRevision",
+                    "modelOptionId",
+                    "reasoningLevel",
+                    "toolEnvironment"
+                  ],
+                  "type": "object"
+                },
+                "sampleId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "sampleTaskId": {
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                  "type": "string"
+                },
+                "scoreIds": {
+                  "items": {
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                    "type": "string"
+                  },
+                  "maxItems": 100,
+                  "type": "array"
+                },
+                "variantId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "sampleTaskId",
+                "scoreIds",
+                "sampleId",
+                "variantId",
+                "conversationId",
+                "executionId",
+                "actual",
+                "requested"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "experiment",
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "EvaluationExperimentV1": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+            "type": "string"
+          },
+          "datasetId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "experimentId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "metadataExpiresAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+            "type": "string"
+          },
+          "policyId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "policyRevision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "principal": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "user",
+                  "application"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          "revision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "sampleIds": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "scorerRefs": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "scorerId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "scorerId",
+                "version"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "variantIds": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "versionId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "experimentId",
+          "datasetId",
+          "versionId",
+          "principal",
+          "policyId",
+          "policyRevision",
+          "sampleIds",
+          "variantIds",
+          "scorerRefs",
+          "status",
+          "revision",
+          "createdAt",
+          "metadataExpiresAt"
+        ],
+        "type": "object"
+      },
       "EvaluationGrantCreateV1": {
         "additionalProperties": false,
         "properties": {
@@ -5720,6 +6344,364 @@
         ],
         "type": "object"
       },
+      "EvaluationReviewPageV1": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "contentStatus": {
+                      "const": "available",
+                      "type": "string"
+                    },
+                    "result": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "reason": {
+                              "maxLength": 1048576,
+                              "type": "string"
+                            },
+                            "status": {
+                              "const": "scored",
+                              "type": "string"
+                            },
+                            "value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "status",
+                            "value",
+                            "reason"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "reason": {
+                              "maxLength": 1048576,
+                              "type": "string"
+                            },
+                            "status": {
+                              "const": "not_applicable",
+                              "type": "string"
+                            },
+                            "value": {
+                              "type": "null"
+                            }
+                          },
+                          "required": [
+                            "status",
+                            "value",
+                            "reason"
+                          ],
+                          "type": "object"
+                        }
+                      ],
+                      "type": "object"
+                    },
+                    "reviewId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "reviewer": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "user",
+                            "application"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "type": "object"
+                    },
+                    "scoreId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "scoreRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "reviewId",
+                    "scoreId",
+                    "scoreRevision",
+                    "reviewer",
+                    "contentStatus",
+                    "result"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "contentStatus": {
+                      "const": "expired",
+                      "type": "string"
+                    },
+                    "result": {
+                      "type": "null"
+                    },
+                    "reviewId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "reviewer": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "user",
+                            "application"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "type": "object"
+                    },
+                    "scoreId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "scoreRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "reviewId",
+                    "scoreId",
+                    "scoreRevision",
+                    "reviewer",
+                    "contentStatus",
+                    "result"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "contentStatus": {
+                      "const": "deleting",
+                      "type": "string"
+                    },
+                    "result": {
+                      "type": "null"
+                    },
+                    "reviewId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "reviewer": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "user",
+                            "application"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "type": "object"
+                    },
+                    "scoreId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "scoreRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "reviewId",
+                    "scoreId",
+                    "scoreRevision",
+                    "reviewer",
+                    "contentStatus",
+                    "result"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "contentStatus": {
+                      "const": "deleted",
+                      "type": "string"
+                    },
+                    "result": {
+                      "type": "null"
+                    },
+                    "reviewId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "reviewer": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "user",
+                            "application"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "type": "object"
+                    },
+                    "scoreId": {
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                      "type": "string"
+                    },
+                    "scoreRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "reviewId",
+                    "scoreId",
+                    "scoreRevision",
+                    "reviewer",
+                    "contentStatus",
+                    "result"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "EvaluationReviewV1": {
+        "additionalProperties": false,
+        "properties": {
+          "reviewId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "reviewer": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "user",
+                  "application"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          "scoreId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "scoreRevision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "reviewId",
+          "scoreId",
+          "scoreRevision",
+          "reviewer"
+        ],
+        "type": "object"
+      },
       "EvaluationRevisionCommandV1": {
         "additionalProperties": false,
         "properties": {
@@ -5731,6 +6713,457 @@
         },
         "required": [
           "expectedRevision"
+        ],
+        "type": "object"
+      },
+      "EvaluationScoreMetadataV1": {
+        "additionalProperties": false,
+        "properties": {
+          "executionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "experimentId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "failureCode": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "sampleTaskId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "scoreActor": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "user",
+                      "application"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scoreId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "scorerId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "scorerVersion": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "waiting_output",
+              "pending",
+              "result_ready",
+              "awaiting_human",
+              "scored",
+              "not_applicable",
+              "failed",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "scoreId",
+          "sampleTaskId",
+          "experimentId",
+          "executionId",
+          "scorerId",
+          "scorerVersion",
+          "status",
+          "revision",
+          "value",
+          "passed",
+          "failureCode",
+          "scoreActor"
+        ],
+        "type": "object"
+      },
+      "EvaluationScoreSubmitV1": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedRevision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "result": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "maxLength": 1048576,
+                    "type": "string"
+                  },
+                  "status": {
+                    "const": "scored",
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "status",
+                  "value",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "maxLength": 1048576,
+                    "type": "string"
+                  },
+                  "status": {
+                    "const": "not_applicable",
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "status",
+                  "value",
+                  "reason"
+                ],
+                "type": "object"
+              }
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "result"
+        ],
+        "type": "object"
+      },
+      "EvaluationScoringContextV1": {
+        "additionalProperties": false,
+        "properties": {
+          "executionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "experimentId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "output": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "executionId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "resultVersion": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "text": {
+                    "maxLength": 1048576,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text",
+                  "executionId",
+                  "resultVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resultVersion": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "rubric": {
+            "additionalProperties": false,
+            "properties": {
+              "description": {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "description"
+            ],
+            "type": "object"
+          },
+          "sample": {
+            "additionalProperties": false,
+            "properties": {
+              "context": {
+                "anyOf": [
+                  {
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "expectedResult": {
+                "anyOf": [
+                  {
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "input": {
+                "maxLength": 65536,
+                "type": "string"
+              },
+              "taskType": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "input",
+              "context",
+              "expectedResult",
+              "taskType"
+            ],
+            "type": "object"
+          },
+          "sampleTaskId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "reason": {
+                        "maxLength": 1048576,
+                        "type": "string"
+                      },
+                      "status": {
+                        "const": "scored",
+                        "type": "string"
+                      },
+                      "value": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "value",
+                      "reason"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "reason": {
+                        "maxLength": 1048576,
+                        "type": "string"
+                      },
+                      "status": {
+                        "const": "not_applicable",
+                        "type": "string"
+                      },
+                      "value": {
+                        "type": "null"
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "value",
+                      "reason"
+                    ],
+                    "type": "object"
+                  }
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scoreId": {
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "type": "string"
+          },
+          "scorer": {
+            "additionalProperties": false,
+            "properties": {
+              "maximum": {
+                "type": "number"
+              },
+              "minimum": {
+                "type": "number"
+              },
+              "passThreshold": {
+                "type": "number"
+              },
+              "scorerId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "version": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "scorerId",
+              "version",
+              "minimum",
+              "maximum",
+              "passThreshold"
+            ],
+            "type": "object"
+          },
+          "status": {
+            "enum": [
+              "waiting_output",
+              "pending",
+              "result_ready",
+              "awaiting_human",
+              "scored",
+              "not_applicable",
+              "failed",
+              "unknown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "scoreId",
+          "revision",
+          "sampleTaskId",
+          "experimentId",
+          "executionId",
+          "status",
+          "resultVersion",
+          "sample",
+          "rubric",
+          "scorer",
+          "output",
+          "score"
         ],
         "type": "object"
       },
@@ -7727,11 +9160,14 @@
                 "agent:manage",
                 "agent:use",
                 "agent:read",
-                "eval:data"
+                "eval:data",
+                "eval:run",
+                "eval:score",
+                "eval:review"
               ],
               "type": "string"
             },
-            "maxItems": 5,
+            "maxItems": 8,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -7863,11 +9299,14 @@
                 "agent:manage",
                 "agent:use",
                 "agent:read",
-                "eval:data"
+                "eval:data",
+                "eval:run",
+                "eval:score",
+                "eval:review"
               ],
               "type": "string"
             },
-            "maxItems": 5,
+            "maxItems": 8,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -7899,11 +9338,14 @@
                 "agent:manage",
                 "agent:use",
                 "agent:read",
-                "eval:data"
+                "eval:data",
+                "eval:run",
+                "eval:score",
+                "eval:review"
               ],
               "type": "string"
             },
-            "maxItems": 5,
+            "maxItems": 8,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -8019,11 +9461,14 @@
                 "agent:manage",
                 "agent:use",
                 "agent:read",
-                "eval:data"
+                "eval:data",
+                "eval:run",
+                "eval:score",
+                "eval:review"
               ],
               "type": "string"
             },
-            "maxItems": 5,
+            "maxItems": 8,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -18652,11 +20097,14 @@
                                 "agent:manage",
                                 "agent:use",
                                 "agent:read",
-                                "eval:data"
+                                "eval:data",
+                                "eval:run",
+                                "eval:score",
+                                "eval:review"
                               ],
                               "type": "string"
                             },
-                            "maxItems": 5,
+                            "maxItems": 8,
                             "minItems": 1,
                             "type": "array",
                             "uniqueItems": true
@@ -18853,11 +20301,14 @@
                             "agent:manage",
                             "agent:use",
                             "agent:read",
-                            "eval:data"
+                            "eval:data",
+                            "eval:run",
+                            "eval:score",
+                            "eval:review"
                           ],
                           "type": "string"
                         },
-                        "maxItems": 5,
+                        "maxItems": 8,
                         "minItems": 1,
                         "type": "array",
                         "uniqueItems": true
@@ -18922,11 +20373,14 @@
                             "agent:manage",
                             "agent:use",
                             "agent:read",
-                            "eval:data"
+                            "eval:data",
+                            "eval:run",
+                            "eval:score",
+                            "eval:review"
                           ],
                           "type": "string"
                         },
-                        "maxItems": 5,
+                        "maxItems": 8,
                         "minItems": 1,
                         "type": "array",
                         "uniqueItems": true
@@ -19065,11 +20519,14 @@
                               "agent:manage",
                               "agent:use",
                               "agent:read",
-                              "eval:data"
+                              "eval:data",
+                              "eval:run",
+                              "eval:score",
+                              "eval:review"
                             ],
                             "type": "string"
                           },
-                          "maxItems": 5,
+                          "maxItems": 8,
                           "minItems": 1,
                           "type": "array",
                           "uniqueItems": true
@@ -19217,11 +20674,14 @@
                               "agent:manage",
                               "agent:use",
                               "agent:read",
-                              "eval:data"
+                              "eval:data",
+                              "eval:run",
+                              "eval:score",
+                              "eval:review"
                             ],
                             "type": "string"
                           },
-                          "maxItems": 5,
+                          "maxItems": 8,
                           "minItems": 1,
                           "type": "array",
                           "uniqueItems": true
@@ -19432,11 +20892,14 @@
                               "agent:manage",
                               "agent:use",
                               "agent:read",
-                              "eval:data"
+                              "eval:data",
+                              "eval:run",
+                              "eval:score",
+                              "eval:review"
                             ],
                             "type": "string"
                           },
-                          "maxItems": 5,
+                          "maxItems": 8,
                           "minItems": 1,
                           "type": "array",
                           "uniqueItems": true
@@ -22029,6 +23492,1079 @@
               }
             },
             "description": "Eval purpose-bound result"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
+        ]
+      }
+    },
+    "/api/v2/evaluation/experiments": {
+      "post": {
+        "operationId": "createEvaluationExperimentV1",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluationExperimentCreateV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationExperimentV1"
+                }
+              }
+            },
+            "description": "Accepted Eval experiment with isolated original Tasks"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
+        ]
+      }
+    },
+    "/api/v2/evaluation/experiments/{experimentId}": {
+      "get": {
+        "operationId": "readEvaluationExperimentV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experimentId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationExperimentPageV1"
+                }
+              }
+            },
+            "description": "Authorized experiment and bounded task references"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
+        ]
+      }
+    },
+    "/api/v2/evaluation/experiments/{experimentId}/cancel": {
+      "post": {
+        "operationId": "cancelEvaluationExperimentV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experimentId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {},
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationExperimentV1"
+                }
+              }
+            },
+            "description": "Original-subject experiment cancellation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
+        ]
+      }
+    },
+    "/api/v2/evaluation/scores/{scoreId}": {
+      "get": {
+        "operationId": "readEvaluationScoreV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scoreId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationScoreMetadataV1"
+                }
+              }
+            },
+            "description": "Purpose-authorized score metadata"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
+        ]
+      }
+    },
+    "/api/v2/evaluation/scores/{scoreId}/content": {
+      "get": {
+        "operationId": "readEvaluationScoreContentV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scoreId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationScoringContextV1"
+                }
+              }
+            },
+            "description": "Current score-purpose sample/rubric/output context"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
+        ]
+      }
+    },
+    "/api/v2/evaluation/scores/{scoreId}/human": {
+      "post": {
+        "operationId": "submitEvaluationHumanScoreV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scoreId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluationScoreSubmitV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationScoreMetadataV1"
+                }
+              }
+            },
+            "description": "Immutable human score"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
+        ]
+      }
+    },
+    "/api/v2/evaluation/scores/{scoreId}/review-context": {
+      "get": {
+        "operationId": "readEvaluationReviewContextV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scoreId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationScoringContextV1"
+                }
+              }
+            },
+            "description": "Current review-purpose sample/rubric/output and original score"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
+        ]
+      }
+    },
+    "/api/v2/evaluation/scores/{scoreId}/reviews": {
+      "get": {
+        "operationId": "listEvaluationReviewsV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scoreId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationReviewPageV1"
+                }
+              }
+            },
+            "description": "Current review-purpose bounded independent history"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          },
+          {
+            "platformApiCredential": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "reviewEvaluationScoreV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scoreId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluationScoreSubmitV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationReviewV1"
+                }
+              }
+            },
+            "description": "Independent immutable score review"
           },
           "400": {
             "content": {

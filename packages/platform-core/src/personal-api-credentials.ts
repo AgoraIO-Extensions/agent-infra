@@ -18,6 +18,9 @@ export const personalApiCredentialScopesV1 = [
 	"agent:use",
 	"agent:read",
 	"eval:data",
+	"eval:run",
+	"eval:score",
+	"eval:review",
 ] as const;
 
 export type PersonalApiCredentialScopeV1 =

@@ -54,7 +54,7 @@ export const conversations = platformSchema.table(
 		check("conversation_id_non_empty", sql`char_length(${table.id}) > 0`),
 		check(
 			"conversation_principal_type_valid",
-			sql`(${table.principalType} = 'user' AND ${table.channelId} <> 'api:application') OR (${table.principalType} = 'application' AND ${table.channelId} in ('api', 'api:application'))`,
+			sql`(${table.principalType} = 'user' AND ${table.channelId} <> 'api:application') OR (${table.principalType} = 'application' AND ${table.channelId} in ('api', 'api:application', 'eval'))`,
 		),
 		unique("conversation_principal_binding_unique").on(
 			table.id,
@@ -166,7 +166,7 @@ export const conversationExecutions = platformSchema.table(
 		}),
 		check(
 			"conversation_execution_principal_type_valid",
-			sql`(${table.principalType} = 'user' AND ${table.channelId} <> 'api:application') OR (${table.principalType} = 'application' AND ${table.channelId} in ('api', 'api:application'))`,
+			sql`(${table.principalType} = 'user' AND ${table.channelId} <> 'api:application') OR (${table.principalType} = 'application' AND ${table.channelId} in ('api', 'api:application', 'eval'))`,
 		),
 		foreignKey({
 			columns: [

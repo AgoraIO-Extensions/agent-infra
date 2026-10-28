@@ -269,11 +269,18 @@ export function registerTaskRoutes(
 				CancelTaskRequestV1Schema,
 				metadata.traceId,
 			);
-			const detail = await dependencies.query.getExecution(
-				scope(initial),
-				conversationId,
-				executionId,
-			);
+			const detail =
+				initial.channelId === "eval"
+					? await dependencies.query.getEvalExecutionControlReference?.(
+							scope(initial),
+							conversationId,
+							executionId,
+						)
+					: await dependencies.query.getExecution(
+							scope(initial),
+							conversationId,
+							executionId,
+						);
 			if (!detail)
 				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
 			audit.target = {

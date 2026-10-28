@@ -434,7 +434,11 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 				signal,
 			);
 			if (
-				isTaskApiChannelV1(record.boundary.channelId, record.boundary.principal)
+				isTaskApiChannelV1(
+					record.boundary.channelId,
+					record.boundary.principal,
+				) ||
+				record.boundary.channelId === "eval"
 			) {
 				if (!options.resolveCurrentApiUseGrant) unavailable();
 				useGrant = await options.resolveCurrentApiUseGrant(

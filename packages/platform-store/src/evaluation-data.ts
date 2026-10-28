@@ -3,19 +3,29 @@ import {
 	EvaluationDataErrorV1,
 	type EvaluationDataStoreV1,
 	type EvaluationDataTransactionV1,
+	type EvaluationDerivedObjectV1,
 	type EvaluationPolicyV1,
 	type EvaluationRequestV1,
 	type EvaluationVersionV1,
 	PersonalApiCredentialErrorV1,
 	parseEvaluationDatasetV1,
+	parseEvaluationDerivedObjectV1,
 	parseEvaluationGrantV1,
+	parseEvaluationScoreIntentV1,
 	parseEvaluationVersionV1,
+	parseTaskPrincipalV1,
 	requireApiCredentialIdentityV1,
 	resolveCurrentPersonalApiUserV1,
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import { and, eq, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/postgres-js";
+import { PgDialect } from "drizzle-orm/pg-core";
+import {
+	drizzle,
+	PostgresJsSession,
+	PostgresJsTransaction,
+} from "drizzle-orm/postgres-js";
+import type { TransactionSql } from "postgres";
 import postgres from "./observed-postgres.js";
 import {
 	auditEvents,
@@ -27,14 +37,16 @@ import {
 } from "./schema.js";
 import {
 	evaluationDatasets,
+	evaluationDerivedObjects,
 	evaluationGrants,
 	evaluationPolicies,
 	evaluationVersions,
 } from "./schema-evaluation.js";
 
-type Tx = Parameters<
-	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
->[0];
+type Tx = Pick<
+	ReturnType<typeof drizzle>,
+	"execute" | "select" | "insert" | "update" | "delete"
+>;
 const unavailable = () => new EvaluationDataErrorV1("unavailable");
 async function clock(tx: Tx) {
 	const result = await tx.execute<{ time: string }>(
@@ -128,21 +140,39 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 	constructor(
 		private readonly options: {
 			databaseUrl: string;
+			transaction?: TransactionSql;
 			directory?: TaskUserDirectoryV1;
 		},
 	) {
-		this.client = postgres(options.databaseUrl, { max: 4 });
-		this.db = drizzle(this.client);
+		this.client = options.transaction
+			? undefined
+			: postgres(options.databaseUrl, { max: 4 });
+		const connection = options.transaction ?? this.client;
+		if (!connection) throw unavailable();
+		if (options.transaction) {
+			const dialect = new PgDialect();
+			// Same transaction session adapter as workload reconciliation; no pool or nested begin.
+			this.db = new PostgresJsTransaction(
+				dialect,
+				new PostgresJsSession(
+					options.transaction as postgres.Sql & TransactionSql,
+					dialect,
+					undefined,
+				),
+				undefined,
+			);
+		} else this.db = drizzle(connection as postgres.Sql);
 	}
 	async close() {
-		await this.client.end();
+		await this.client?.end();
 	}
 	async transaction<T>(
 		request: EvaluationRequestV1,
 		work: (tx: EvaluationDataTransactionV1) => Promise<T>,
+		identityOnly = false,
 	): Promise<T> {
 		try {
-			return await this.db.transaction(async (tx) => {
+			const workInTransaction = async (tx: Tx) => {
 				await tx.execute(sql`set local statement_timeout='10s'`);
 				await tx.execute(sql`set local lock_timeout='5s'`);
 				// A short metadata transaction; external object transfer never holds this lock.
@@ -150,8 +180,63 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 				const now = await clock(tx);
 				if (!Number.isFinite(+now)) throw unavailable();
 				let revalidate: () => Promise<void>;
+				let scoreWorkBinding:
+					| { datasetId: string; versionId: string }
+					| undefined;
 				let principal: EvaluationDataTransactionV1["principal"];
-				if (request.authentication.kind === "browser") {
+				if (request.authentication.kind === "score_work") {
+					const work = request.authentication;
+					const check = async () => {
+						const records = await tx.execute<{ data: unknown }>(
+							sql`select s.data from platform.evaluation_score_intents s join platform.outbox_items o on o.id='evaluation-score:'||s.id::text where s.id=${work.intentId}::uuid and o.operation='evaluation.score.v1' and o.status='processing' and o.lease_owner=${work.leaseOwner} and o.delivery_fence=${work.deliveryFence}::bigint and o.lease_expires_at>clock_timestamp() for share of s,o`,
+						);
+						const record = records[0]?.data;
+						if (
+							!record ||
+							typeof record !== "object" ||
+							!("principal" in record)
+						)
+							throw unavailable();
+						const score = parseEvaluationScoreIntentV1(record);
+						if (score.id !== work.intentId) throw unavailable();
+						scoreWorkBinding = {
+							datasetId: score.datasetId,
+							versionId: score.versionId,
+						};
+						const actor = parseTaskPrincipalV1(score.principal);
+						await tx.execute(
+							sql`lock table platform.platform_user_disables in share mode`,
+						);
+						if (actor.kind === "user") {
+							const user = await resolveCurrentPersonalApiUserV1(
+								this.options.directory,
+								actor.id,
+							);
+							const disabled = await tx
+								.select()
+								.from(platformUserDisables)
+								.where(eq(platformUserDisables.userId, actor.id));
+							if (!user || disabled.length || user.accountStatus !== "active")
+								throw new EvaluationDataErrorV1("denied");
+							return { actor, revision: user.authorizationRevision };
+						}
+						const [app] = await tx
+							.select()
+							.from(platformApplications)
+							.where(eq(platformApplications.id, actor.id))
+							.for("share");
+						if (!app || app.status !== "active")
+							throw new EvaluationDataErrorV1("denied");
+						return { actor, revision: app.authorizationRevision };
+					};
+					const identity = await check();
+					principal = identity.actor;
+					revalidate = async () => {
+						const current = await check();
+						if (JSON.stringify(current) !== JSON.stringify(identity))
+							throw unavailable();
+					};
+				} else if (request.authentication.kind === "browser") {
 					const userId = request.authentication.userId;
 					await tx.execute(
 						sql`lock table platform.platform_user_disables in share mode`,
@@ -249,7 +334,7 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 								disabled,
 								now: await clock(tx),
 							},
-							"eval:data",
+							request.credentialScope ?? "eval:data",
 						);
 					};
 					const identity = await check();
@@ -284,6 +369,7 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 					receiptExpiresAt: now.toISOString(),
 					authorizationExpiresAt: now.toISOString(),
 					principal,
+					scoreWorkBinding,
 					async bindPolicy(p: EvaluationPolicyV1) {
 						const digest = createHash("sha256")
 							.update(JSON.stringify(p))
@@ -449,10 +535,16 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 				};
 				const result = await work(operations);
 				await revalidate();
-				if (Date.parse(operations.authorizationExpiresAt) <= +(await clock(tx)))
+				if (
+					!identityOnly &&
+					Date.parse(operations.authorizationExpiresAt) <= +(await clock(tx))
+				)
 					throw new EvaluationDataErrorV1("denied");
 				return result;
-			});
+			};
+			return this.options.transaction
+				? await workInTransaction(this.db)
+				: await this.db.transaction(workInTransaction);
 		} catch (error) {
 			if (error instanceof EvaluationDataErrorV1) throw error;
 			if (
@@ -463,6 +555,10 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 			throw unavailable();
 		}
 	}
+	async authenticate(request: EvaluationRequestV1) {
+		return this.transaction(request, async (tx) => tx.principal, true);
+	}
+
 	/** Worker-only metadata sweep; no policy or content authority is needed to fulfill existing expiry. */
 	async expired(limit: number) {
 		return this.db.transaction(async (tx) => {
@@ -483,6 +579,51 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 				await saveVersion(tx, v);
 				await enqueueDelete(tx, v, `evaluation-expiry:${v.versionId}`);
 			}
+
+			const derived = await tx
+				.select()
+				.from(evaluationDerivedObjects)
+				.where(
+					sql`${evaluationDerivedObjects.status} not in ('deleting','deleted') and (${evaluationDerivedObjects.expiresAt}<=clock_timestamp() or exists(select 1 from platform.evaluation_versions v where v.id=${evaluationDerivedObjects.versionId} and v.status in ('deleting','deleted')))`,
+				)
+				.orderBy(
+					evaluationDerivedObjects.expiresAt,
+					evaluationDerivedObjects.id,
+				)
+				.limit(limit)
+				.for("update");
+			for (const row of derived) {
+				const value = parseEvaluationDerivedObjectV1(row.data);
+				value.status = "deleting";
+				await tx
+					.update(evaluationDerivedObjects)
+					.set({ status: "deleting", data: value })
+					.where(eq(evaluationDerivedObjects.id, row.id));
+				await tx
+					.insert(outboxItems)
+					.values({
+						id: `evaluation-derived-delete:${row.id}`,
+						scopeType: "evaluation",
+						scopeId: row.id,
+						operation: "evaluation.derived.delete.v1",
+						traceId: `evaluation-expiry:${row.id}`,
+						payload: { objectId: row.id, objectRef: value.objectRef },
+						availableAt: now,
+					})
+					.onConflictDoNothing();
+			}
+			await tx.execute(
+				sql`delete from platform.evaluation_score_reviews where (data->>'metadataExpiresAt')::timestamptz<=clock_timestamp()`,
+			);
+			await tx.execute(
+				sql`delete from platform.outbox_items o where o.operation='evaluation.score.v1' and exists(select 1 from platform.evaluation_score_intents s where o.scope_id=s.id::text and (s.data->>'metadataExpiresAt')::timestamptz<=clock_timestamp() and not exists(select 1 from platform.evaluation_score_reviews r where r.score_id=s.id))`,
+			);
+			await tx.execute(
+				sql`delete from platform.evaluation_score_intents s where (s.data->>'metadataExpiresAt')::timestamptz<=clock_timestamp() and not exists(select 1 from platform.evaluation_score_reviews r where r.score_id=s.id)`,
+			);
+			await tx.execute(
+				sql`with retired as (delete from platform.evaluation_derived_objects d where d.status='deleted' and d.metadata_expires_at<=clock_timestamp() and exists(select 1 from platform.outbox_items o where o.id='evaluation-derived-delete:'||d.id::text and o.status='succeeded') returning id) delete from platform.outbox_items where id in(select 'evaluation-derived-delete:'||id::text from retired)`,
+			);
 			// Retire the entire Eval receipt, including principal, request digest and timestamps.
 			await tx.execute(
 				sql`delete from platform.idempotency_records where scope_type='evaluation' and (result->>'expiresAt')::timestamptz <= clock_timestamp()`,
@@ -500,6 +641,22 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 				.limit(limit)
 				.for("update");
 			for (const row of retired) {
+				const children = await tx
+					.select({ id: evaluationDerivedObjects.id })
+					.from(evaluationDerivedObjects)
+					.where(eq(evaluationDerivedObjects.versionId, row.id))
+					.limit(1);
+				if (children.length) continue;
+				await tx.execute(
+					sql`delete from platform.evaluation_sample_tasks s where exists(select 1 from platform.evaluation_experiments e where e.id=s.experiment_id and e.version_id=${row.id}) and not exists(select 1 from platform.evaluation_score_intents i where i.sample_task_id=s.id)`,
+				);
+				await tx.execute(
+					sql`delete from platform.evaluation_experiments e where e.version_id=${row.id} and not exists(select 1 from platform.evaluation_sample_tasks s where s.experiment_id=e.id)`,
+				);
+				const remaining = await tx.execute(
+					sql`select id from platform.evaluation_experiments where version_id=${row.id} limit 1`,
+				);
+				if (remaining.length) continue;
 				await tx
 					.update(outboxItems)
 					.set({ payload: { versionId: row.id } })
@@ -543,7 +700,7 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 				.from(outboxItems)
 				.where(
 					and(
-						eq(outboxItems.operation, "evaluation.content.delete.v1"),
+						sql`${outboxItems.operation} in ('evaluation.content.delete.v1','evaluation.derived.delete.v1')`,
 						// Match outbox.claim eligibility before the batch limit; claim still fences atomically.
 						sql`((${outboxItems.status} in ('pending','retry_scheduled') and ${outboxItems.availableAt} <= ${decisionAt}::timestamptz)
  or (${outboxItems.status} = 'processing' and ${outboxItems.leaseExpiresAt} <= ${decisionAt}::timestamptz))`,
@@ -555,6 +712,65 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 				)
 				.limit(limit);
 			return intents.map((v) => v.id);
+		});
+	}
+
+	async cleanupDerived(
+		lease: {
+			itemId: string;
+			leaseOwner: string;
+			deliveryFence: bigint;
+			versionId: string;
+			objectRef: string;
+		},
+		work: (value: EvaluationDerivedObjectV1) => Promise<void>,
+	) {
+		const check = async (tx: Tx) => {
+			const [item] = await tx
+				.select()
+				.from(outboxItems)
+				.where(eq(outboxItems.id, lease.itemId))
+				.for("update");
+			const now = await clock(tx);
+			if (
+				item?.status !== "processing" ||
+				item.operation !== "evaluation.derived.delete.v1" ||
+				item.scopeId !== lease.versionId ||
+				item.leaseOwner !== lease.leaseOwner ||
+				item.deliveryFence !== lease.deliveryFence ||
+				!item.leaseExpiresAt ||
+				item.leaseExpiresAt <= now ||
+				item.payload.objectRef !== lease.objectRef
+			)
+				throw unavailable();
+			const [row] = await tx
+				.select()
+				.from(evaluationDerivedObjects)
+				.where(eq(evaluationDerivedObjects.id, lease.versionId))
+				.for("update");
+			if (!row) throw unavailable();
+			const value = parseEvaluationDerivedObjectV1(row.data);
+			if (
+				value.objectRef !== lease.objectRef ||
+				!["deleting", "deleted"].includes(value.status) ||
+				Date.parse(value.transferUntil) > +now
+			)
+				throw unavailable();
+			return value;
+		};
+		const original = await this.db.transaction(check);
+		if (original.status === "deleted") return;
+		await work(original);
+		await this.db.transaction(async (tx) => {
+			const value = await check(tx);
+			if (JSON.stringify(value) !== JSON.stringify(original))
+				throw unavailable();
+			value.status = "deleted";
+			value.stored = null;
+			await tx
+				.update(evaluationDerivedObjects)
+				.set({ status: "deleted", data: value })
+				.where(eq(evaluationDerivedObjects.id, value.id));
 		});
 	}
 

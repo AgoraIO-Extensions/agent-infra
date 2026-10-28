@@ -355,6 +355,7 @@ export function parseAuthority(
 			!isTaskApiChannelV1(values.channelId, taskBoundary.principal))
 	)
 		invalidInput();
+	if (values.channelId === "eval" && !taskBoundary?.evaluation) invalidInput();
 	const personalApiAdmissionAuthority =
 		values.personalApiAdmissionAuthority === undefined
 			? undefined

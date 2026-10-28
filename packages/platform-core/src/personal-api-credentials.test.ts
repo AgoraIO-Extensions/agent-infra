@@ -7,6 +7,7 @@ import {
 	parsePersonalApiCredentialIssuanceV1,
 	parsePersonalApiCredentialNarrowingV1,
 	parsePersonalApiCredentialRequestV1,
+	parsePersonalApiCredentialScopesV1,
 	personalApiCredentialIssuanceDigestV1,
 	requirePersonalApiCredentialFutureExpiryV1,
 	requirePersonalApiCredentialNarrowingV1,
@@ -352,6 +353,9 @@ describe("personal credential narrowing policy", () => {
 		for (const input of [
 			{ scopes: ["agent:read", "agent:use"] },
 			{ scopes: ["agent:read", "eval:data"] },
+			{ scopes: ["eval:run"] },
+			{ scopes: ["eval:score"] },
+			{ scopes: ["eval:review"] },
 			{ expiresAt: "2031-01-01T00:00:00Z" },
 		])
 			expect(() => apply(input)).toThrow(
@@ -403,4 +407,27 @@ it("issues Eval scope only when explicitly selected and accepts the five-scope e
 			expiresAt: null,
 		}).scopes,
 	).toHaveLength(5);
+});
+
+it("requires explicit independent Eval credential scopes and cannot narrow into extra authority", () => {
+	const scopes = [
+		"agent:create",
+		"agent:manage",
+		"agent:use",
+		"agent:read",
+		"eval:data",
+		"eval:run",
+		"eval:score",
+		"eval:review",
+	];
+	expect(parsePersonalApiCredentialScopesV1(scopes)).toEqual(scopes.toSorted());
+	expect(parsePersonalApiCredentialScopesV1(["eval:data"])).toEqual([
+		"eval:data",
+	]);
+	for (const invalid of [
+		[...scopes, "eval:admin"],
+		["eval:run", "eval:run"],
+		[{ toString: () => "eval:run" }],
+	])
+		expect(() => parsePersonalApiCredentialScopesV1(invalid)).toThrow();
 });

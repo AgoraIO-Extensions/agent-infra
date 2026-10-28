@@ -111,6 +111,7 @@ export function executionPrincipalProjection(
 	});
 	if (
 		principal.kind === "application" &&
+		execution.channel_id !== "eval" &&
 		!isTaskApiChannelV1(execution.channel_id, principal)
 	)
 		throw new TypeError("Stored Execution principal is invalid");

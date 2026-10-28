@@ -174,13 +174,16 @@ describe("ApplicationManagementScreen", () => {
 		// E3-16：权限复选框名称为「{权限}：{应用名}」，与签发个人凭证区的同名复选框区分；
 		// 可见标签与点击标签切换不变。
 		const group = screen.getByRole("group", { name: "权限范围：应用凭证" });
-		expect(within(group).getAllByRole("checkbox")).toHaveLength(5);
+		expect(within(group).getAllByRole("checkbox")).toHaveLength(8);
 		for (const label of [
 			"读取 Agent",
 			"使用 Agent",
 			"管理 Agent",
 			"创建 Agent",
 			"评测数据（仍需用途授权）",
+			"评测运行（仍需用途授权）",
+			"评测评分（仍需用途授权）",
+			"评测复核（仍需用途授权）",
 		]) {
 			const checkbox = within(group).getByRole("checkbox", {
 				name: `${label}：Build service`,

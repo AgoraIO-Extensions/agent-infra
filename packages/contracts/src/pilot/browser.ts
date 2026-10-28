@@ -81,6 +81,16 @@ import {
 	EvaluationVersionV1Schema,
 } from "./evaluation-data.ts";
 import {
+	EvaluationExperimentCreateV1Schema,
+	EvaluationExperimentPageV1Schema,
+	EvaluationExperimentV1Schema,
+	EvaluationReviewPageV1Schema,
+	EvaluationReviewV1Schema,
+	EvaluationScoreMetadataV1Schema,
+	EvaluationScoreSubmitV1Schema,
+	EvaluationScoringContextV1Schema,
+} from "./evaluation-experiments.ts";
+import {
 	MultiServiceAgentSourceV1Schema,
 	MultiServiceResourceCapV1Schema,
 	MultiServiceResourceProfileProjectionV1Schema,
@@ -1512,6 +1522,157 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/evaluation/experiments": {
+		post: {
+			operationId: "createEvaluationExperimentV1",
+			security: agentListSecurity,
+			requestParams: { header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(EvaluationExperimentCreateV1Schema),
+			responses: {
+				"201": jsonResponse(
+					"Accepted Eval experiment with isolated original Tasks",
+					EvaluationExperimentV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/evaluation/experiments/{experimentId}": {
+		get: {
+			operationId: "readEvaluationExperimentV1",
+			security: agentListSecurity,
+			requestParams: {
+				path: z.strictObject({ experimentId: z.uuid() }),
+				query: z.strictObject({
+					limit: z.coerce.number().int().min(1).max(100).optional(),
+					cursor: z.uuid().optional(),
+				}),
+			},
+			responses: {
+				"200": jsonResponse(
+					"Authorized experiment and bounded task references",
+					EvaluationExperimentPageV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/evaluation/experiments/{experimentId}/cancel": {
+		post: {
+			operationId: "cancelEvaluationExperimentV1",
+			security: agentListSecurity,
+			requestBody: requiredJsonRequestBody(z.strictObject({})),
+			requestParams: {
+				path: z.strictObject({ experimentId: z.uuid() }),
+				header: idempotencyHeader,
+			},
+			responses: {
+				"200": jsonResponse(
+					"Original-subject experiment cancellation",
+					EvaluationExperimentV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/evaluation/scores/{scoreId}": {
+		get: {
+			operationId: "readEvaluationScoreV1",
+			security: agentListSecurity,
+			requestParams: { path: z.strictObject({ scoreId: z.uuid() }) },
+			responses: {
+				"200": jsonResponse(
+					"Purpose-authorized score metadata",
+					EvaluationScoreMetadataV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/evaluation/scores/{scoreId}/content": {
+		get: {
+			operationId: "readEvaluationScoreContentV1",
+			security: agentListSecurity,
+			requestParams: { path: z.strictObject({ scoreId: z.uuid() }) },
+			responses: {
+				"200": jsonResponse(
+					"Current score-purpose sample/rubric/output context",
+					EvaluationScoringContextV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/evaluation/scores/{scoreId}/review-context": {
+		get: {
+			operationId: "readEvaluationReviewContextV1",
+			security: agentListSecurity,
+			requestParams: { path: z.strictObject({ scoreId: z.uuid() }) },
+			responses: {
+				"200": jsonResponse(
+					"Current review-purpose sample/rubric/output and original score",
+					EvaluationScoringContextV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+
+	"/api/v2/evaluation/scores/{scoreId}/human": {
+		post: {
+			operationId: "submitEvaluationHumanScoreV1",
+			security: agentListSecurity,
+			requestParams: {
+				path: z.strictObject({ scoreId: z.uuid() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(EvaluationScoreSubmitV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Immutable human score",
+					EvaluationScoreMetadataV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/evaluation/scores/{scoreId}/reviews": {
+		get: {
+			operationId: "listEvaluationReviewsV1",
+			security: agentListSecurity,
+			requestParams: {
+				path: z.strictObject({ scoreId: z.uuid() }),
+				query: z.strictObject({
+					limit: z.coerce.number().int().min(1).max(100).optional(),
+					cursor: z.uuid().optional(),
+				}),
+			},
+			responses: {
+				"200": jsonResponse(
+					"Current review-purpose bounded independent history",
+					EvaluationReviewPageV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		post: {
+			operationId: "reviewEvaluationScoreV1",
+			security: agentListSecurity,
+			requestParams: {
+				path: z.strictObject({ scoreId: z.uuid() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(EvaluationScoreSubmitV1Schema),
+			responses: {
+				"201": jsonResponse(
+					"Independent immutable score review",
+					EvaluationReviewV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+
 	"/api/v2/evaluation/datasets": {
 		get: {
 			operationId: "listEvaluationDatasetsV1",
@@ -2714,6 +2875,14 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	EvaluationExperimentCreateV1: EvaluationExperimentCreateV1Schema,
+	EvaluationExperimentV1: EvaluationExperimentV1Schema,
+	EvaluationExperimentPageV1: EvaluationExperimentPageV1Schema,
+	EvaluationScoreSubmitV1: EvaluationScoreSubmitV1Schema,
+	EvaluationReviewV1: EvaluationReviewV1Schema,
+	EvaluationReviewPageV1: EvaluationReviewPageV1Schema,
+	EvaluationScoringContextV1: EvaluationScoringContextV1Schema,
+	EvaluationScoreMetadataV1: EvaluationScoreMetadataV1Schema,
 	EvaluationDatasetContentV1: EvaluationDatasetContentV1Schema,
 	EvaluationDatasetCreateV1: EvaluationDatasetCreateV1Schema,
 	EvaluationDatasetPageV1: EvaluationDatasetPageV1Schema,

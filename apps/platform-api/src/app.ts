@@ -64,6 +64,7 @@ import {
 	type EvaluationDataRoutesV1,
 	registerEvaluationDataRoutesV1,
 } from "./http/evaluation-data-routes.js";
+import { registerEvaluationExperimentRoutesV1 } from "./http/evaluation-experiment-routes.js";
 import {
 	type FileLimitRoutesDependenciesV1,
 	registerFileLimitRoutesV2,
@@ -174,6 +175,9 @@ type ApiObservability = Pick<
 >;
 
 export interface PlatformAppDependencies {
+	readonly evaluationExperiments?: Parameters<
+		typeof registerEvaluationExperimentRoutesV1
+	>[1];
 	readonly evaluation?: EvaluationDataRoutesV1;
 	readonly connectionInstallations?: ConnectionInstallationRouteDependenciesV1;
 	readonly connectionInstallationCallback?: ConnectionInstallationCallbackRouteDependenciesV1;
@@ -324,6 +328,7 @@ export function createPlatformApp(
 	if (dependencies.applications)
 		registerApplicationRegistrationRoutes(app, dependencies.applications);
 	registerEvaluationDataRoutesV1(app, dependencies.evaluation);
+	registerEvaluationExperimentRoutesV1(app, dependencies.evaluationExperiments);
 	if (dependencies.applicationApiCredentials)
 		registerApplicationApiCredentialRoutes(
 			app,

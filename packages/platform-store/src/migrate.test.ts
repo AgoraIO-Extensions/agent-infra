@@ -2009,6 +2009,7 @@ describe("published Relay authority migration", () => {
 			67,
 			68,
 			69,
+			70,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2083,8 +2084,8 @@ describe("published Relay authority migration", () => {
 			tag: "0063_wecom_outbound_media",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 69,
-			tag: "0069_evaluation_data",
+			idx: 70,
+			tag: "0070_evaluation_experiments",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2377,6 +2378,51 @@ describe("published Relay authority migration", () => {
 				...expectedDelta,
 				columns: [
 					...expectedDelta.columns,
+					...[
+						"id",
+						"dataset_id",
+						"version_id",
+						"kind",
+						"status",
+						"expires_at",
+						"metadata_expires_at",
+						"data",
+					].map((column) => `evaluation_derived_objects:${column}`),
+					...[
+						"id",
+						"dataset_id",
+						"version_id",
+						"principal",
+						"status",
+						"revision",
+						"created_at",
+						"metadata_expires_at",
+						"data",
+					].map((column) => `evaluation_experiments:${column}`),
+					...[
+						"id",
+						"experiment_id",
+						"sample_id",
+						"variant_id",
+						"execution_id",
+						"conversation_id",
+						"binding",
+						"data",
+					].map((column) => `evaluation_sample_tasks:${column}`),
+					...[
+						"id",
+						"sample_task_id",
+						"result_version",
+						"rubric_id",
+						"scorer_id",
+						"scorer_version",
+						"status",
+						"revision",
+						"data",
+					].map((column) => `evaluation_score_intents:${column}`),
+					...["id", "score_id", "revision", "data"].map(
+						(column) => `evaluation_score_reviews:${column}`,
+					),
 					...["id", "scope", "data"].map(
 						(column) => `evaluation_datasets:${column}`,
 					),
@@ -2523,6 +2569,17 @@ describe("published Relay authority migration", () => {
 				].sort(),
 				indexes: [
 					...expectedDelta.indexes,
+					"evaluation_derived_objects:evaluation_derived_objects_pkey",
+					"evaluation_derived_objects:evaluation_derived_expiry",
+					"evaluation_experiments:evaluation_experiments_pkey",
+					"evaluation_experiments:evaluation_experiments_principal",
+					"evaluation_sample_tasks:evaluation_sample_tasks_pkey",
+					"evaluation_sample_tasks:evaluation_sample_variant_unique",
+					"evaluation_sample_tasks:evaluation_sample_execution_unique",
+					"evaluation_score_intents:evaluation_score_intents_pkey",
+					"evaluation_score_intents:evaluation_score_intent_unique",
+					"evaluation_score_reviews:evaluation_score_reviews_pkey",
+					"evaluation_score_reviews:evaluation_score_reviews_score",
 					"evaluation_datasets:evaluation_datasets_pkey",
 					"evaluation_grants:evaluation_grants_pkey",
 					"evaluation_grants:evaluation_grants_dataset",

@@ -148,3 +148,34 @@ it("keeps the explicit Eval envelope separate from every existing Agent scope", 
 		expect.objectContaining({ code: "forbidden" }),
 	);
 });
+it("missing or invalid scopes cannot bypass caller authorization and invalidated identities remain denied", () => {
+	const limited = {
+		...facts,
+		credential: { ...credential, scopes: ["agent:read"] },
+	};
+	for (const scope of [null, undefined, "invented", false])
+		expect(() =>
+			Reflect.apply(requireApiCredentialIdentityV1, undefined, [
+				limited,
+				scope,
+			]),
+		).toThrow();
+	for (const changed of [
+		{ ...limited, disabled: true },
+		{ ...limited, user: { ...user, accountStatus: "disabled" } },
+		{ ...limited, credential: { ...limited.credential, revokedAt: facts.now } },
+		{ ...limited, credential: { ...limited.credential, expiresAt: facts.now } },
+	])
+		expect(() =>
+			requireApiCredentialIdentityV1(changed, "agent:read"),
+		).toThrow();
+	for (const scope of [
+		"eval:data",
+		"eval:run",
+		"eval:score",
+		"eval:review",
+	] as const)
+		expect(() => requireApiCredentialIdentityV1(limited, scope)).toThrow(
+			expect.objectContaining({ code: "forbidden" }),
+		);
+});
