@@ -6421,7 +6421,77 @@ function findBreakingChanges(previousValue, currentValue) {
 	}
 }
 
+function evaluationRemoval(previous, current) {
+	const serialized = JSON.stringify(previous);
+	if (
+		!serialized.includes('"eval:data"') &&
+		!serialized.includes('"evaluation.') &&
+		!serialized.includes('"evaluation_dataset"') &&
+		!Object.keys(previous.components?.schemas ?? {}).some((name) =>
+			name.startsWith("Evaluation"),
+		) &&
+		!Object.keys(previous.paths ?? {}).some((path) =>
+			path.startsWith("/api/v2/evaluation/"),
+		)
+	)
+		return false;
+	for (const [path] of Object.entries(previous.paths ?? {}))
+		if (path.startsWith("/api/v2/evaluation/") && !current.paths?.[path])
+			return true;
+	for (const name of Object.keys(previous.components?.schemas ?? {}))
+		if (name.startsWith("Evaluation") && !current.components?.schemas?.[name])
+			return true;
+	const beforeActions =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum ?? [];
+	const afterActions =
+		current.components?.schemas?.ScopedPlatformAuditActionV1?.enum ?? [];
+	if (
+		beforeActions.some(
+			(action) =>
+				action.startsWith("evaluation.") && !afterActions.includes(action),
+		)
+	)
+		return true;
+	for (const name of [
+		"ScopedPlatformAuditProjectionV1",
+		"ScopedPlatformAuditProjectionV2",
+	]) {
+		const before =
+			previous.components?.schemas?.[name]?.properties?.subject?.properties
+				?.kind?.enum ?? [];
+		const after =
+			current.components?.schemas?.[name]?.properties?.subject?.properties?.kind
+				?.enum ?? [];
+		if (
+			before.includes("evaluation_dataset") &&
+			!after.includes("evaluation_dataset")
+		)
+			return true;
+	}
+	const removedScope = (before, after) => {
+		if (
+			!before ||
+			!after ||
+			typeof before !== "object" ||
+			typeof after !== "object"
+		)
+			return false;
+		if (
+			before.properties?.scopes?.items?.enum?.includes("eval:data") &&
+			after.properties?.scopes &&
+			!after.properties.scopes.items?.enum?.includes("eval:data")
+		)
+			return true;
+		return Object.keys(before).some((key) =>
+			removedScope(before[key], after[key]),
+		);
+	};
+	return removedScope(previous, current);
+}
+
 function evaluateBreakingChanges(previousValue, currentValue) {
+	if (evaluationRemoval(previousValue, currentValue))
+		return ["removed published Eval contract"];
 	const previousEvaluation = normalizeEvaluationData3638(previousValue);
 	const currentEvaluation = normalizeEvaluationData3638(currentValue);
 	if (

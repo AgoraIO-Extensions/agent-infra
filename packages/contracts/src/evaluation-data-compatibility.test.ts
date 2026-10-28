@@ -75,6 +75,37 @@ it.each(["v1", "v2"])(
 		try {
 			await writeFile(before, JSON.stringify(previous));
 			expect(await compare(current)).toBe(0);
+			await writeFile(before, JSON.stringify(current));
+			expect(await compare(current)).toBe(0);
+			expect(await compare(previous)).toBe(1);
+			const scopeRemoved = structuredClone(current);
+			removeScopes(scopeRemoved);
+			if (JSON.stringify(current).includes("eval:data"))
+				expect(await compare(scopeRemoved)).toBe(1);
+			if (version === "v2") {
+				const pathsRemoved = structuredClone(current);
+				for (const path of Object.keys(pathsRemoved.paths))
+					if (path.startsWith("/api/v2/evaluation/"))
+						delete pathsRemoved.paths[path];
+				expect(await compare(pathsRemoved)).toBe(1);
+				const schemaRemoved = structuredClone(current);
+				delete schemaRemoved.components.schemas.EvaluationVersionV1;
+				expect(await compare(schemaRemoved)).toBe(1);
+			} else {
+				const actionRemoved = structuredClone(current);
+				actionRemoved.components.schemas.ScopedPlatformAuditActionV1.enum =
+					actionRemoved.components.schemas.ScopedPlatformAuditActionV1.enum.filter(
+						(action: string) => action !== "evaluation.content.read",
+					);
+				expect(await compare(actionRemoved)).toBe(1);
+				const subjectRemoved = structuredClone(current);
+				subjectRemoved.components.schemas.ScopedPlatformAuditProjectionV1.properties.subject.properties.kind.enum =
+					subjectRemoved.components.schemas.ScopedPlatformAuditProjectionV1.properties.subject.properties.kind.enum.filter(
+						(kind: string) => kind !== "evaluation_dataset",
+					);
+				expect(await compare(subjectRemoved)).toBe(1);
+			}
+			await writeFile(before, JSON.stringify(previous));
 			if (version === "v2")
 				for (const mutate of [
 					(doc: typeof current) => {
