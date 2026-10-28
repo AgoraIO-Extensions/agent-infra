@@ -161,6 +161,40 @@ afterAll(async () => {
 });
 
 describe("formal deployment issued Bearer Agent reads over real PostgreSQL and generated SDK", () => {
+	it("keeps administrator audit readable after successful and rejected identity checks", async () => {
+		const service = await start();
+		const issued = await issue(service);
+		expect(
+			(
+				await getPersonalApiIdentityV2({
+					...service.options,
+					auth: issued.credential,
+				})
+			).response?.status,
+		).toBe(200);
+		expect(
+			(
+				await getPersonalApiIdentityV2({
+					...service.options,
+					auth: `papi_${"u".repeat(43)}`,
+				})
+			).response?.status,
+		).toBe(401);
+		const response = await fetch(
+			`${service.options.baseUrl}/api/v3/admin/audit?action=api.credential.identity.read`,
+			{
+				headers: { Cookie: "__Host-platform-session=session_admin" },
+			},
+		);
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as { items: { result: string }[] };
+		expect(body.items).toHaveLength(2);
+		expect(
+			body.items.map((item: { result: string }) => item.result).sort(),
+		).toEqual(["rejected", "succeeded"]);
+		expect(JSON.stringify(body)).not.toContain(issued.credential);
+	});
+
 	it("keeps stable identity across credentials, narrows current limits and selects Bearer without cookies", async () => {
 		const service = await start();
 		const first = await issue(service, "first", "session_alice", [

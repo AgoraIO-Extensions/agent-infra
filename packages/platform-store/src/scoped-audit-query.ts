@@ -420,7 +420,7 @@ function credentialRefusalSummary(
 	return `${row.action}: reason=${details.reason}`;
 }
 
-function agentMetadataSummary(
+function credentialReadSummary(
 	row: Row,
 	scope: PlatformAuditQueryScopeV1,
 ): string {
@@ -445,6 +445,15 @@ function agentMetadataSummary(
 	const details = row.details as Record<string, unknown>;
 	if (row.outcome !== "succeeded")
 		return credentialRefusalSummary(row, details);
+	if (row.action === "api.credential.identity.read") {
+		if (
+			row.actorType !== "user" ||
+			row.targetId === "unknown" ||
+			Object.keys(details).length !== 0
+		)
+			throw new PlatformAuditScopeErrorV1("unavailable");
+		return row.action;
+	}
 	const ids = details.returnedAgentIds;
 	if (
 		row.actorType !== "user" ||
@@ -682,8 +691,9 @@ function project(
 			? credentialMutationSummary(row, scope)
 			: null;
 	const agentSummary =
-		row.action === "api.agent.metadata.read"
-			? agentMetadataSummary(row, scope)
+		row.action === "api.agent.metadata.read" ||
+		row.action === "api.credential.identity.read"
+			? credentialReadSummary(row, scope)
 			: null;
 	// #2879：Skill 项目动作的 details 校验与摘要
 	const skillProjectSummaryValue = skillProjectActions.has(row.action as never)
