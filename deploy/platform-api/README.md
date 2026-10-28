@@ -94,6 +94,13 @@ API 直接创建 Agent 由 `apiInput.agentApiCreation` 开启。`allowedPrincipa
 只有部署需要不同的 endpoint/模型策略时，才另外提供受审阅的 `candidates` adapter，并且必须同时提供对应的
 保存时验证 `verify`；只提供其一时标准模板的 API 创建失败关闭（见[标准模板的模型与推理档位](#标准模板的模型与推理档位)）。
 
+标准模板使用独立镜像仓库时，部署配置须为每个模板提供 `modelBinding.imageRepository`，
+其 `templateId` 和 `imageDigest` 必须与模板登记一致，并与 Worker 对应的
+`templateModelBindings` 匹配。API 按模板的不可变 `imageReference` 执行 Registry 准入；
+Worker 按受信 `imageRepository` 拉取相同 Digest。它们可使用经部署验证的镜像代理。
+全局 `apiInput.imageRepository` 继续约束 custom 单镜像和多服务镜像；没有显式模板仓库时，
+标准模板也必须属于该全局仓库。不能删除全局仓库配置来迁就多模板，否则多服务无法准入。
+
 Registry 返回的配置 blob 若需跳转到对象存储，部署可通过
 `apiInput.registry.allowedBlobRedirectOrigins` 登记精确 HTTPS origin（例如
 `https://pkg-containers.githubusercontent.com`）。默认不允许跳转；只支持配置 blob 的一次

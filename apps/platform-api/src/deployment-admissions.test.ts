@@ -755,6 +755,90 @@ describe("production deployment admissions", () => {
 			}),
 		).toThrow("PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID");
 	});
+	it("keeps explicitly bound standard repositories alongside the custom multi-service repository", async () => {
+		const f = fixture();
+		const custom = fixture("self-managed");
+		const template = f.input.templates[0];
+		if (!template?.modelBinding) throw new Error("fixture binding missing");
+		const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+			const url = new URL(
+				input instanceof Request ? input.url : input.toString(),
+			);
+			if (url.pathname.startsWith("/v2/custom/")) {
+				url.pathname = url.pathname.replace("/v2/custom/", "/v2/codex/");
+				return custom.fetch(url, init);
+			}
+			return f.fetch(input, init);
+		});
+		const admissions = createDeploymentAdmissionsV1({
+			...f.input,
+			registry: { ...f.input.registry, fetch },
+			imageRepository: "registry.example.test/agents/custom",
+			templates: [
+				{
+					...template,
+					modelBinding: {
+						...template.modelBinding,
+						imageRepository: "registry.example.test/agents/codex",
+					},
+				},
+			],
+		});
+		const standard = await admissions.imageAdmission.admitImage({
+			...request,
+			requested: { kind: "standard", templateId: "codex" },
+		});
+		expect(standard.status).toBe("admitted");
+		const multi = await admissions.imageAdmission.admitImage(
+			multiServiceRequest(twoServiceManifest(custom.imageDigest)),
+		);
+		expect(multi.status).toBe("admitted");
+		const paths = fetch.mock.calls.map(([input]) =>
+			decodeURIComponent(
+				new URL(input instanceof Request ? input.url : input.toString())
+					.pathname,
+			),
+		);
+		expect(paths).toContain(`/v2/codex/manifests/${f.imageDigest}`);
+		expect(paths).toContain(`/v2/custom/manifests/${custom.imageDigest}`);
+		fetch.mockClear();
+		const outside = await admissions.imageAdmission.admitImage({
+			...request,
+			requested: {
+				kind: "custom",
+				interactionMode: "platform-adapter",
+				imageReference: `registry.example.test/agents/outside@${f.imageDigest}`,
+			},
+		});
+		expect(outside.status).toBe("rejected");
+		expect(fetch).not.toHaveBeenCalled();
+	});
+	it.each(["malformed-repository", "digest-mismatch", "template-mismatch"])(
+		"rejects invalid explicit template binding %s before registry access",
+		(scenario) => {
+			const f = fixture();
+			const template = f.input.templates[0];
+			if (!template?.modelBinding) throw new Error("fixture binding missing");
+			const binding = {
+				...template.modelBinding,
+				imageRepository: "registry.example.test/agents/codex",
+			};
+			if (scenario === "malformed-repository")
+				binding.imageRepository = "https://registry.example.test/agents/codex";
+			if (scenario === "digest-mismatch")
+				binding.imageDigest = `sha256:${"f".repeat(64)}`;
+			if (scenario === "template-mismatch")
+				binding.templateId = "another-template";
+			expect(() =>
+				createDeploymentAdmissionsV1({
+					...f.input,
+					imageRepository: "registry.example.test/agents",
+					templates: [{ ...template, modelBinding: binding }],
+				}),
+			).toThrow("PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID");
+			expect(f.fetch).not.toHaveBeenCalled();
+		},
+	);
 	it.each([
 		["missing", { codexModelProfiles: undefined }],
 		["empty", { codexModelProfiles: [] }],
