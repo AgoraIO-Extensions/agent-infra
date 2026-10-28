@@ -1143,3 +1143,99 @@ it.each(["abort", "close"] as const)(
 		}
 	},
 );
+
+it.each([500, 401])(
+	"seals a non-success upstream response before awaiting its failure receipt: %s",
+	async (status) => {
+		let releaseCredential = () => {};
+		const credentialHeld = new Promise<void>((resolve) => {
+			releaseCredential = resolve;
+		});
+		let credentialEntered = () => {};
+		const credentialReady = new Promise<void>((resolve) => {
+			credentialEntered = resolve;
+		});
+		let releaseReceipt = () => {};
+		const receiptHeld = new Promise<void>((resolve) => {
+			releaseReceipt = resolve;
+		});
+		let failureEntered = () => {};
+		const failureReady = new Promise<void>((resolve) => {
+			failureEntered = resolve;
+		});
+		let requests = 0;
+		let sends = 0;
+		const facts: { id: number; phase: string; sent: boolean | undefined }[] =
+			[];
+		const transport = await openRuntimeMessagesTransport({
+			endpoint: "https://model.example.test",
+			credential: "synthetic-provider-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			admit: async () => {},
+			openRequest: async () => {
+				const id = ++requests;
+				return {
+					resolveCredential: async () => {
+						if (id === 1) {
+							credentialEntered();
+							await credentialHeld;
+						}
+						return "synthetic-provider-credential";
+					},
+					receipt: async (phase, _end, diagnostic) => {
+						facts.push({ id, phase, sent: diagnostic?.sent });
+						if (id === 2 && phase !== "sent") {
+							failureEntered();
+							await receiptHeld;
+						}
+					},
+				};
+			},
+			fetch: async () => {
+				sends++;
+				return new Response("synthetic rejected", { status });
+			},
+		});
+		const invoke = () =>
+			fetch(`${transport.modelAccess.endpoint}/v1/messages`, {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${transport.modelAccess.credential}`,
+				},
+				body: JSON.stringify({
+					model: "claude-opus-5",
+					messages: [],
+					stream: true,
+					output_config: { effort: "high" },
+					thinking: { type: "adaptive" },
+				}),
+			}).then((response) => response.text());
+		let first: Promise<string> | undefined;
+		let second: Promise<string> | undefined;
+		try {
+			first = invoke();
+			await credentialReady;
+			second = invoke();
+			await failureReady;
+			releaseCredential();
+			await first;
+			expect(sends).toBe(1);
+			expect(transport.failure()).toBe(status === 500 ? "unknown" : "failed");
+			expect(facts.filter((fact) => fact.id === 1).at(-1)).toEqual({
+				id: 1,
+				phase: "failed",
+				sent: false,
+			});
+			releaseReceipt();
+			await second;
+			expect(transport.failure()).toBe(status === 500 ? "unknown" : "failed");
+		} finally {
+			releaseCredential();
+			releaseReceipt();
+			await Promise.allSettled([first, second]);
+			await transport.close();
+		}
+	},
+);

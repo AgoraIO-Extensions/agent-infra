@@ -330,7 +330,6 @@ export async function openRuntimeMessagesTransport(
 					void upstream.body?.cancel().catch(() => {});
 					statusCode = upstream.status;
 					const outcome = upstream.status >= 500 ? "unknown" : "failed";
-					await receipt(outcome, false, diagnostic());
 					// A known auxiliary rejection is an ordinary tool failure. An
 					// uncertain send still seals the entire Query against replay.
 					if (
@@ -339,6 +338,7 @@ export async function openRuntimeMessagesTransport(
 						purpose === "count-tokens"
 					)
 						seal(outcome);
+					await receipt(outcome, false, diagnostic());
 					reject(
 						response,
 						400,
