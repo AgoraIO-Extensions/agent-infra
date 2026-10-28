@@ -605,10 +605,17 @@ test("failed Secret readback prevents consumer rollout and local input promotion
 for (const fresh of [false, true]) {
 	for (const failPublication of [false, true]) {
 		test(`all publishes ${fresh ? "fresh" : "supplied"} receipts before provisioning (failure=${failPublication})`, async () => {
-			const script = await readFile(new URL("../deploy/ack/redeploy.sh", import.meta.url), "utf8");
-			const dispatch = script.slice(script.indexOf('command=${1:-help}'));
+			const script = await readFile(
+				new URL("../deploy/ack/redeploy.sh", import.meta.url),
+				"utf8",
+			);
+			const dispatch = script.slice(script.indexOf("command=${1:-help}"));
 			// Run the real dispatch with observable external-stage boundaries.
-			const result = spawnSync("bash", ["-c", `
+			const result = spawnSync(
+				"bash",
+				[
+					"-c",
+					`
 set -euo pipefail
 require_source_tuple() { echo source; }
 require_file() { [[ -n "$2" ]]; }
@@ -624,18 +631,23 @@ validate() { echo validate; }
 repo_root=/synthetic
 source_sha=synthetic
 ${dispatch}
-`, "workflow-test", "all"], {
-				encoding: "utf8",
-				env: {
-					...process.env,
-					BASH_ENV: "/dev/null",
-					ACK_TEMPLATE_PREFLIGHT_JOBS_FILE: fresh ? "/synthetic/jobs" : "",
-					ACK_TEMPLATE_VALIDATIONS_FILE: "/synthetic/receipts",
-					ACK_BOOTSTRAP_INPUTS_FILE: "/synthetic/bootstrap",
-					ACK_WORKLOAD_CAPACITY_FILE: "/synthetic/capacity",
-					ACK_CREDENTIAL_BOOTSTRAP_FILE: "",
+`,
+					"workflow-test",
+					"all",
+				],
+				{
+					encoding: "utf8",
+					env: {
+						...process.env,
+						BASH_ENV: "/dev/null",
+						ACK_TEMPLATE_PREFLIGHT_JOBS_FILE: fresh ? "/synthetic/jobs" : "",
+						ACK_TEMPLATE_VALIDATIONS_FILE: "/synthetic/receipts",
+						ACK_BOOTSTRAP_INPUTS_FILE: "/synthetic/bootstrap",
+						ACK_WORKLOAD_CAPACITY_FILE: "/synthetic/capacity",
+						ACK_CREDENTIAL_BOOTSTRAP_FILE: "",
+					},
 				},
-			});
+			);
 			assert.equal(result.status, failPublication ? 1 : 0, result.stderr);
 			const stages = result.stdout.trim().split("\n");
 			assert(stages.includes("publish"));
