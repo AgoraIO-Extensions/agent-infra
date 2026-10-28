@@ -9,16 +9,17 @@ export const createClientConfig: CreateClientConfig = (config) => ({
 	async requestValidator(input) {
 		const request = input as ResolvedRequestOptions;
 		if (
-			request.method === "GET" &&
-			[
-				"/api/v2/agents",
-				"/api/v2/agents/{agentId}",
-				"/api/v2/me/api-identity",
-				"/api/v1/audit",
-				"/api/v1/audit/{auditId}",
-				"/api/v2/audit",
-				"/api/v2/audit/{auditId}",
-			].includes(request.url)
+			request.url.startsWith("/api/v2/evaluation/") ||
+			(request.method === "GET" &&
+				[
+					"/api/v2/agents",
+					"/api/v2/agents/{agentId}",
+					"/api/v2/me/api-identity",
+					"/api/v1/audit",
+					"/api/v1/audit/{auditId}",
+					"/api/v2/audit",
+					"/api/v2/audit/{auditId}",
+				].includes(request.url))
 		) {
 			if (request.headers.has("Authorization")) {
 				if (request.headers.has("Cookie")) {

@@ -757,11 +757,7 @@ export const searchDirectoryV2 = <ThrowOnError extends boolean = false>(options:
  * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
  */
 export const listEvaluationDatasetsV1 = <ThrowOnError extends boolean = false>(options?: Options<ListEvaluationDatasetsV1Data, ThrowOnError>): RequestResult<ListEvaluationDatasetsV1Responses, ListEvaluationDatasetsV1Errors, ThrowOnError> => (options?.client ?? client).get<ListEvaluationDatasetsV1Responses, ListEvaluationDatasetsV1Errors, ThrowOnError>({
-    security: [{
-            in: 'cookie',
-            name: '__Host-platform-session',
-            type: 'apiKey'
-        }, { scheme: 'bearer', type: 'http' }],
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v2/evaluation/datasets',
     ...options
 });
@@ -770,11 +766,7 @@ export const listEvaluationDatasetsV1 = <ThrowOnError extends boolean = false>(o
  * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
  */
 export const createEvaluationDatasetV1 = <ThrowOnError extends boolean = false>(options: Options<CreateEvaluationDatasetV1Data, ThrowOnError>): RequestResult<CreateEvaluationDatasetV1Responses, CreateEvaluationDatasetV1Errors, ThrowOnError> => (options.client ?? client).post<CreateEvaluationDatasetV1Responses, CreateEvaluationDatasetV1Errors, ThrowOnError>({
-    security: [{
-            in: 'cookie',
-            name: '__Host-platform-session',
-            type: 'apiKey'
-        }, { scheme: 'bearer', type: 'http' }],
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v2/evaluation/datasets',
     ...options,
     headers: {
@@ -787,11 +779,7 @@ export const createEvaluationDatasetV1 = <ThrowOnError extends boolean = false>(
  * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
  */
 export const grantEvaluationPurposeV1 = <ThrowOnError extends boolean = false>(options: Options<GrantEvaluationPurposeV1Data, ThrowOnError>): RequestResult<GrantEvaluationPurposeV1Responses, GrantEvaluationPurposeV1Errors, ThrowOnError> => (options.client ?? client).post<GrantEvaluationPurposeV1Responses, GrantEvaluationPurposeV1Errors, ThrowOnError>({
-    security: [{
-            in: 'cookie',
-            name: '__Host-platform-session',
-            type: 'apiKey'
-        }, { scheme: 'bearer', type: 'http' }],
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v2/evaluation/datasets/{datasetId}/grants',
     ...options,
     headers: {
@@ -804,11 +792,7 @@ export const grantEvaluationPurposeV1 = <ThrowOnError extends boolean = false>(o
  * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
  */
 export const revokeEvaluationPurposeV1 = <ThrowOnError extends boolean = false>(options: Options<RevokeEvaluationPurposeV1Data, ThrowOnError>): RequestResult<RevokeEvaluationPurposeV1Responses, RevokeEvaluationPurposeV1Errors, ThrowOnError> => (options.client ?? client).delete<RevokeEvaluationPurposeV1Responses, RevokeEvaluationPurposeV1Errors, ThrowOnError>({
-    security: [{
-            in: 'cookie',
-            name: '__Host-platform-session',
-            type: 'apiKey'
-        }, { scheme: 'bearer', type: 'http' }],
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v2/evaluation/datasets/{datasetId}/grants/{grantId}',
     ...options,
     headers: {
@@ -821,11 +805,7 @@ export const revokeEvaluationPurposeV1 = <ThrowOnError extends boolean = false>(
  * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
  */
 export const reserveEvaluationVersionV1 = <ThrowOnError extends boolean = false>(options: Options<ReserveEvaluationVersionV1Data, ThrowOnError>): RequestResult<ReserveEvaluationVersionV1Responses, ReserveEvaluationVersionV1Errors, ThrowOnError> => (options.client ?? client).post<ReserveEvaluationVersionV1Responses, ReserveEvaluationVersionV1Errors, ThrowOnError>({
-    security: [{
-            in: 'cookie',
-            name: '__Host-platform-session',
-            type: 'apiKey'
-        }, { scheme: 'bearer', type: 'http' }],
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v2/evaluation/datasets/{datasetId}/versions',
     ...options,
     headers: {
@@ -838,11 +818,7 @@ export const reserveEvaluationVersionV1 = <ThrowOnError extends boolean = false>
  * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
  */
 export const confirmEvaluationContentV1 = <ThrowOnError extends boolean = false>(options: Options<ConfirmEvaluationContentV1Data, ThrowOnError>): RequestResult<ConfirmEvaluationContentV1Responses, ConfirmEvaluationContentV1Errors, ThrowOnError> => (options.client ?? client).post<ConfirmEvaluationContentV1Responses, ConfirmEvaluationContentV1Errors, ThrowOnError>({
-    security: [{
-            in: 'cookie',
-            name: '__Host-platform-session',
-            type: 'apiKey'
-        }, { scheme: 'bearer', type: 'http' }],
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/confirm',
     ...options
 });
@@ -851,11 +827,7 @@ export const confirmEvaluationContentV1 = <ThrowOnError extends boolean = false>
  * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
  */
 export const deleteEvaluationContentV1 = <ThrowOnError extends boolean = false>(options: Options<DeleteEvaluationContentV1Data, ThrowOnError>): RequestResult<DeleteEvaluationContentV1Responses, DeleteEvaluationContentV1Errors, ThrowOnError> => (options.client ?? client).delete<DeleteEvaluationContentV1Responses, DeleteEvaluationContentV1Errors, ThrowOnError>({
-    security: [{
-            in: 'cookie',
-            name: '__Host-platform-session',
-            type: 'apiKey'
-        }, { scheme: 'bearer', type: 'http' }],
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/content',
     ...options,
     headers: {
@@ -868,11 +840,7 @@ export const deleteEvaluationContentV1 = <ThrowOnError extends boolean = false>(
  * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
  */
 export const readEvaluationContentV1 = <ThrowOnError extends boolean = false>(options: Options<ReadEvaluationContentV1Data, ThrowOnError>): RequestResult<ReadEvaluationContentV1Responses, ReadEvaluationContentV1Errors, ThrowOnError> => (options.client ?? client).get<ReadEvaluationContentV1Responses, ReadEvaluationContentV1Errors, ThrowOnError>({
-    security: [{
-            in: 'cookie',
-            name: '__Host-platform-session',
-            type: 'apiKey'
-        }, { scheme: 'bearer', type: 'http' }],
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/content',
     ...options
 });
@@ -881,11 +849,7 @@ export const readEvaluationContentV1 = <ThrowOnError extends boolean = false>(op
  * Current browser identity or explicit eval:data credential scope, intersected with deployment manager authority or an exact-version Eval purpose grant.
  */
 export const uploadEvaluationContentV1 = <ThrowOnError extends boolean = false>(options: Options<UploadEvaluationContentV1Data, ThrowOnError>): RequestResult<UploadEvaluationContentV1Responses, UploadEvaluationContentV1Errors, ThrowOnError> => (options.client ?? client).put<UploadEvaluationContentV1Responses, UploadEvaluationContentV1Errors, ThrowOnError>({
-    security: [{
-            in: 'cookie',
-            name: '__Host-platform-session',
-            type: 'apiKey'
-        }, { scheme: 'bearer', type: 'http' }],
+    security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v2/evaluation/datasets/{datasetId}/versions/{versionId}/content',
     ...options,
     headers: {

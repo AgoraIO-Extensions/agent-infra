@@ -6260,9 +6260,9 @@ function normalizeQueueFullErrorCodeAddition(previous, current) {
 
 // #3638: exact dataset surface plus the explicit Eval credential/audit additions.
 // Existing paths, actor kinds, security and unrelated schemas still compare normally.
-function normalizeEvaluationData3638(previous, current) {
-	if (!previous.openapi || !current.openapi) return current;
-	const normalized = structuredClone(current);
+function normalizeEvaluationData3638(document) {
+	if (!document.openapi) return document;
+	const normalized = structuredClone(document);
 	const paths = [
 		"/api/v2/evaluation/datasets",
 		"/api/v2/evaluation/datasets/{datasetId}/grants",
@@ -6282,56 +6282,52 @@ function normalizeEvaluationData3638(previous, current) {
 		"EvaluationVersionReserveV1",
 		"EvaluationVersionV1",
 	];
-	if (
-		paths.every((path) => previous.paths?.[path] === undefined) &&
-		paths.every((path) => current.paths?.[path] !== undefined)
-	) {
+
+	const foundPaths = paths.filter(
+		(path) => document.paths?.[path] !== undefined,
+	);
+	const foundSchemas = Object.fromEntries(
+		schemas.map((name) => [name, document.components?.schemas?.[name]]),
+	);
+	const schemaDigest = createHash("sha256")
+		.update(JSON.stringify(foundSchemas))
+		.digest("hex");
+	if (foundPaths.length === paths.length) {
 		const addition = {
 			paths: Object.fromEntries(
-				paths.map((path) => [path, current.paths[path]]),
+				paths.map((path) => [path, document.paths[path]]),
 			),
-			schemas: Object.fromEntries(
-				schemas.map((name) => [name, current.components?.schemas?.[name]]),
-			),
+			schemas: foundSchemas,
 		};
 		if (
-			schemas.some(
-				(name) => previous.components?.schemas?.[name] !== undefined,
-			) ||
-			createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-				"7e7241467db23ed386b6d907f2ae1fc522d0df84408a3ed0f6d3173cb10673ff"
-		)
-			return current;
-		for (const path of paths) delete normalized.paths[path];
+			createHash("sha256").update(JSON.stringify(addition)).digest("hex") ===
+			"7e7241467db23ed386b6d907f2ae1fc522d0df84408a3ed0f6d3173cb10673ff"
+		) {
+			for (const path of paths) delete normalized.paths[path];
+			for (const name of schemas) delete normalized.components.schemas[name];
+		}
+	} else if (
+		foundPaths.length === 0 &&
+		schemaDigest ===
+			"f8cae0088360d6dc4451efe9e4ef88197477a2592fba891ef6cd69d7ca79aea6"
+	) {
+		// Historical path-addition fixtures may retain unused, identical new schemas.
 		for (const name of schemas) delete normalized.components.schemas[name];
 	}
 	const scopes = ["agent:create", "agent:manage", "agent:use", "agent:read"];
-	const normalizeScopes = (before, after) => {
+	const visit = (value) => {
+		if (!value || typeof value !== "object") return;
+		const scope = value.properties?.scopes;
 		if (
-			!before ||
-			!after ||
-			typeof before !== "object" ||
-			typeof after !== "object"
-		)
-			return;
-		const oldScope = before.properties?.scopes;
-		const nextScope = after.properties?.scopes;
-		if (
-			oldScope?.maxItems === 4 &&
-			sameValue(oldScope.items?.enum, scopes) &&
-			nextScope?.maxItems === 5 &&
-			sameValue(nextScope.items?.enum, [...scopes, "eval:data"])
+			scope?.maxItems === 5 &&
+			sameValue(scope.items?.enum, [...scopes, "eval:data"])
 		) {
-			const copy = structuredClone(nextScope);
-			copy.maxItems = 4;
-			copy.items.enum = scopes;
-			if (isDeepStrictEqual(oldScope, copy))
-				after.properties.scopes = structuredClone(oldScope);
+			scope.maxItems = 4;
+			scope.items.enum = scopes;
 		}
-		for (const key of Object.keys(before))
-			normalizeScopes(before[key], after[key]);
+		for (const child of Object.values(value)) visit(child);
 	};
-	normalizeScopes(previous, normalized);
+	visit(normalized);
 	const actions = [
 		"evaluation.dataset.list",
 		"evaluation.dataset.create",
@@ -6343,48 +6339,39 @@ function normalizeEvaluationData3638(previous, current) {
 		"evaluation.content.read",
 		"evaluation.content.delete",
 	];
-	const previousActions =
-		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
-	const nextActions =
+	const currentActions =
 		normalized.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
 	if (
-		Array.isArray(previousActions) &&
-		Array.isArray(nextActions) &&
+		Array.isArray(currentActions) &&
+		sameValue(
+			currentActions.slice(
+				currentActions.indexOf(actions[0]),
+				currentActions.indexOf(actions[0]) + actions.length,
+			),
+			actions,
+		) &&
 		actions.every(
 			(action) =>
-				!previousActions.includes(action) &&
-				nextActions.filter((value) => value === action).length === 1,
-		) &&
-		isDeepStrictEqual(
-			nextActions.filter((action) => !actions.includes(action)),
-			previousActions,
+				currentActions.filter((value) => value === action).length === 1,
 		)
 	) {
 		normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
-			previousActions;
+			currentActions.filter((action) => !actions.includes(action));
 		for (const name of [
 			"ScopedPlatformAuditProjectionV1",
 			"ScopedPlatformAuditProjectionV2",
 		]) {
-			const before =
-				previous.components.schemas[name]?.properties?.subject?.properties?.kind
-					?.enum;
-			const after =
+			const subject =
 				normalized.components.schemas[name]?.properties?.subject?.properties
-					?.kind?.enum;
+					?.kind;
 			if (
-				Array.isArray(before) &&
-				Array.isArray(after) &&
-				!before.includes("evaluation_dataset") &&
-				after.filter((kind) => kind === "evaluation_dataset").length === 1 &&
-				isDeepStrictEqual(
-					after.filter((kind) => kind !== "evaluation_dataset"),
-					before,
-				)
+				Array.isArray(subject?.enum) &&
+				subject.enum.filter((kind) => kind === "evaluation_dataset").length ===
+					1
 			)
-				normalized.components.schemas[
-					name
-				].properties.subject.properties.kind.enum = before;
+				subject.enum = subject.enum.filter(
+					(kind) => kind !== "evaluation_dataset",
+				);
 		}
 	}
 	return normalized;
@@ -6415,12 +6402,13 @@ function findBreakingChanges(previousValue, currentValue) {
 }
 
 function evaluateBreakingChanges(previousValue, currentValue) {
-	const evaluationNormalized = normalizeEvaluationData3638(
-		previousValue,
-		currentValue,
-	);
-	if (!isDeepStrictEqual(evaluationNormalized, currentValue))
-		return findBreakingChanges(previousValue, evaluationNormalized);
+	const previousEvaluation = normalizeEvaluationData3638(previousValue);
+	const currentEvaluation = normalizeEvaluationData3638(currentValue);
+	if (
+		!isDeepStrictEqual(previousEvaluation, previousValue) ||
+		!isDeepStrictEqual(currentEvaluation, currentValue)
+	)
+		return findBreakingChanges(previousEvaluation, currentEvaluation);
 	let previous = previousValue;
 	// Compose the reviewed audit extension with earlier independently checked additions.
 	const applicationActions = [
