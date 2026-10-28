@@ -495,6 +495,7 @@ jobs:
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
             --tmpfs /tmp:rw,exec,size=512m,mode=1777 \
             --env OPENCODE_EXECUTABLE=/opt/opencode/bin/opencode \
+            --env AGENT_INFRA_NATIVE_SHELL_TEST=1 \
             agent-infra-codex-native-test \
             pnpm --filter @agent-infra/agent-runtime exec vitest run \
             src/acp-runtime-driver.test.ts src/acp-session.test.ts \

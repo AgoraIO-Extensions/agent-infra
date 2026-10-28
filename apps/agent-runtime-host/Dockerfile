@@ -31,6 +31,7 @@ RUN pnpm --fetch-timeout=300000 install --frozen-lockfile --store-dir /pnpm-stor
 
 ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/agent-runtime-host... build
+RUN install -D -m 0555 packages/agent-runtime/dist/native-shell.mjs /opt/agent-infra/native-shell.mjs
 RUN pnpm --config.store-dir=/pnpm-store --config.inject-workspace-packages=true --filter @agent-infra/agent-runtime-host deploy --prod /prod/agent-runtime-host
 RUN rm /prod/agent-runtime-host/pnpm-lock.yaml \
     /prod/agent-runtime-host/pnpm-workspace.yaml \
@@ -68,6 +69,7 @@ ENV PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin
 WORKDIR /app
 COPY --from=builder /opt/codex/ /opt/codex/
 COPY --from=builder /opt/opencode/ /opt/opencode/
+COPY --from=builder /opt/agent-infra/native-shell.mjs /opt/agent-infra/native-shell.mjs
 COPY --from=builder /opt/agent-infra/browser/ /opt/agent-infra/browser/
 COPY --from=builder --chown=0:0 /app/deploy/runtime/skills/workspace-summary/ /opt/codex/agent-infra-skills/workspace-summary/
 COPY --from=builder --chown=0:0 /app/deploy/runtime/skills/workspace-summary.manifest.json /opt/codex/agent-infra-skills/workspace-summary.manifest.json

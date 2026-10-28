@@ -34,3 +34,18 @@ Claude 使用已审核的 SDK 内部 MCP bridge；Host 只把受保护的 client
 | 统一 Host/Grant/Store conformance | [runtime-driver-conformance.test.ts](src/runtime-driver-conformance.test.ts) | 46/46 通过；共享 fixture 覆盖 Pi 与其他 Driver，不代表真实模型或部署授权验收 |
 
 本矩阵只记录固定 Pi 版本与上述测试入口的兼容性。漏洞告警由 GitHub 仓库安全功能维护；标准模板、真实模型、附件、Connection 和生产环境验收仍须按各自的验证入口执行。
+
+## 原生 Shell 子边界验证（#3218）
+
+`native-shell.ts` 是固定 Pi Bash 接缝的候选子进程 launcher。Runtime 镜像将它作为只读可执行文件
+安装到 `/opt/agent-infra/native-shell.mjs`；现有 Linux 原生 conformance 阶段通过
+`AGENT_INFRA_NATIVE_SHELL_TEST=1` 强制执行 `pi-native.test.ts` 的隔离探针。探针直接使用经过
+来源核对的 Pi 原生 Bash 工具，不连接真实模型或业务账号，也不等于完整 Pi CLI/Driver 验收。
+
+launcher 在完整 ABI 5 准入后，只允许本工作区及固定系统只读路径，显式重建工具环境，并以仅继承
+stdio 的新子进程关闭额外 FD 传递。测试覆盖原生/Host/兄弟目录、`/proc`、符号链接、环境启动钩子、
+实际继承 FD 与取消；缺 helper、ABI 或合法目录时拒绝，不使用较弱权限重试。
+
+此阶段不修改 `piWorkspaceToolNames`、Claude 或 OpenCode 权限，不开放任何生产 Bash 工具。
+后续还须通过完整固定 Linux 原生 CLI、模型工具事实、只读 Skill、恢复/取消矩阵，以及 Claude 和
+OpenCode 的受信接缝，才能按 #3218 启用对应工具；单个探针通过不能关闭 #3218 或父票 #3202。

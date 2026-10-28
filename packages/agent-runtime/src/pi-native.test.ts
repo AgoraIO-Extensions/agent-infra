@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { expect, it, vi } from "vitest";
 import type { RuntimeExternalActionAuthorization } from "./driver.js";
 import { openMessagesRuntimeDriverConformanceFixture } from "./messages-runtime-driver.test-support.js";
@@ -162,6 +163,200 @@ it.each([false, true])(
 		} finally {
 			await fixture.close();
 			await rm(path, { recursive: true, force: true });
+		}
+	},
+	30_000,
+);
+
+it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
+	"isolates the pinned Pi Bash tool child from native secrets, files, proc and inherited descriptors",
+	async () => {
+		const { createBashToolDefinition } = await import(
+			"@earendil-works/pi-coding-agent"
+		);
+		const { verifyPiInstallation } = await import("./pi-installation.js");
+		const { nativeShellEnvironment } = await import("./native-shell.js");
+		const { realpath, open, symlink } = await import("node:fs/promises");
+		const { spawn, spawnSync } = await import("node:child_process");
+		await verifyPiInstallation();
+		expect(process.platform).toBe("linux");
+		expect(process.getuid?.()).toBe(1000);
+		const root = await realpath(
+			await mkdtemp(join(tmpdir(), "pi-shell-boundary-")),
+		);
+		const workspace = join(root, "session/workspace");
+		const native = join(root, "session/native");
+		const sibling = join(root, "sibling/workspace");
+		const launcher = "/opt/agent-infra/native-shell.mjs";
+		const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
+		const secret = "synthetic-native-secret-never-in-tool-output";
+		const tokenKeys = [
+			"AGENT_INFRA_PI_MODEL_TOKEN",
+			"AGENT_INFRA_PI_CONNECTION_MCP_TOKEN",
+			"AGENT_INFRA_PI_BROWSER_MCP_TOKEN",
+			"ANTHROPIC_AUTH_TOKEN",
+			"PLATFORM_SERVICE_TOKEN",
+		];
+		for (const path of [workspace, native, sibling])
+			await mkdir(path, { recursive: true });
+		const denied = [
+			join(root, "host-state.json"),
+			join(root, "session/state.json"),
+			join(native, "session.jsonl"),
+			join(sibling, "private.txt"),
+		];
+		for (const path of denied) await writeFile(path, secret);
+		const startupMarker = join(workspace, "startup-ran");
+		const startup = join(root, "malicious-startup");
+		await writeFile(startup, `touch ${startupMarker}`);
+		await writeFile(join(workspace, ".bashrc"), `touch ${startupMarker}`);
+		await symlink(denied[0] as string, join(workspace, "escape"));
+		const environment = {
+			...nativeShellEnvironment(workspace),
+			AGENT_INFRA_NATIVE_SHELL_WORKSPACE: workspace,
+			...Object.fromEntries(tokenKeys.map((key) => [key, secret])),
+			BASH_ENV: startup,
+			NODE_OPTIONS: "",
+		};
+		const tool = createBashToolDefinition(workspace, {
+			shellPath: launcher,
+			spawnHook: ({ command }) => ({
+				command,
+				cwd: workspace,
+				env: environment,
+			}),
+			exposeSessionEnvironment: false,
+		});
+		try {
+			const program = `
+const fs = require("node:fs");
+const denied = ${JSON.stringify([...denied, join(workspace, "escape"), "/proc/self/environ", `/proc/${process.pid}/environ`, `/proc/${process.pid}/mem`, `/proc/${process.pid}/fd/0`])};
+const rejected = p => { try { fs.readFileSync(p); return false; } catch { return true; } };
+const keys = ${JSON.stringify(tokenKeys)};
+fs.writeFileSync("allowed.txt", "allowed");
+process.stdout.write(JSON.stringify({workspace:fs.readFileSync("allowed.txt","utf8")==="allowed",environment:keys.every(k=>!Object.hasOwn(process.env,k)),files:denied.every(rejected),startup:!fs.existsSync(${JSON.stringify(startupMarker)})}));
+`;
+			const context = { cwd: workspace } as ExtensionToolContext;
+			// Rejected launcher inputs must not reach even a local marker write.
+			for (const invalid of [
+				{
+					args: ["-c", "touch invalid-input-ran"],
+					cwd: sibling,
+					env: environment,
+				},
+				{
+					args: ["-c", "touch invalid-input-ran"],
+					cwd: workspace,
+					env: { ...environment, AGENT_INFRA_NATIVE_SHELL_WORKSPACE: root },
+				},
+				{
+					args: ["--rcfile", startup, "-c", "touch invalid-input-ran"],
+					cwd: workspace,
+					env: environment,
+				},
+			]) {
+				const rejected = spawnSync(launcher, invalid.args, {
+					cwd: invalid.cwd,
+					env: invalid.env,
+					encoding: "utf8",
+					timeout: 5000,
+				});
+				expect(rejected.status).toBe(1);
+				expect(rejected.stderr).toBe("RUNTIME_NATIVE_SHELL_UNAVAILABLE\n");
+			}
+			await expect(
+				readFile(join(workspace, "invalid-input-ran")),
+			).rejects.toMatchObject({ code: "ENOENT" });
+			await expect(
+				readFile(join(sibling, "invalid-input-ran")),
+			).rejects.toMatchObject({ code: "ENOENT" });
+			const result = await tool.execute(
+				"synthetic-bash",
+				{
+					command: `/usr/local/bin/node -e ${quote(program)}`,
+					timeout: 10,
+				},
+				undefined,
+				undefined,
+				context,
+			);
+			const output = result.content
+				.map((item) => (item.type === "text" ? item.text : ""))
+				.join("");
+			expect(output).not.toContain(secret);
+			expect(JSON.parse(output)).toEqual({
+				workspace: true,
+				environment: true,
+				files: true,
+				startup: true,
+			});
+			// Exercise an actually inherited secret FD, not just a proc pathname.
+			const descriptor = await open(denied[0] as string, "r");
+			try {
+				const output = await new Promise<string>((accept, reject) => {
+					const fdProbe =
+						'const fs=require("node:fs");let value="closed";try{value=fs.readFileSync(3,"utf8")}catch{};process.stdout.write(value)';
+					const child = spawn(
+						launcher,
+						["-c", `/usr/local/bin/node -e ${quote(fdProbe)}`],
+						{
+							cwd: workspace,
+							env: environment,
+							stdio: ["ignore", "pipe", "pipe", descriptor.fd],
+						},
+					);
+					let text = "";
+					const timeout = setTimeout(() => child.kill("SIGKILL"), 5000);
+					child.stdout?.on("data", (data) => {
+						text += data;
+					});
+					child.stderr?.resume();
+					child.once("error", (error) => {
+						clearTimeout(timeout);
+						reject(error);
+					});
+					child.once("close", (code) => {
+						clearTimeout(timeout);
+						return code === 0
+							? accept(text)
+							: reject(new Error("Shell boundary failed"));
+					});
+				});
+				expect(output).toBe("closed");
+			} finally {
+				await descriptor.close();
+			}
+			const abort = new AbortController();
+			const pending = tool.execute(
+				"synthetic-stop",
+				{
+					command: "touch shell-started; sleep 30; touch stopped-side-effect",
+					timeout: 10,
+				},
+				abort.signal,
+				undefined,
+				context,
+			);
+			for (let attempt = 0; attempt < 100; attempt++) {
+				if (
+					await readFile(join(workspace, "shell-started")).then(
+						() => true,
+						() => false,
+					)
+				)
+					break;
+				await new Promise((accept) => setTimeout(accept, 20));
+			}
+			await expect(
+				readFile(join(workspace, "shell-started")),
+			).resolves.toBeDefined();
+			abort.abort();
+			await expect(pending).rejects.toThrow();
+			await expect(
+				readFile(join(workspace, "stopped-side-effect")),
+			).rejects.toMatchObject({ code: "ENOENT" });
+		} finally {
+			await rm(root, { recursive: true, force: true });
 		}
 	},
 	30_000,
