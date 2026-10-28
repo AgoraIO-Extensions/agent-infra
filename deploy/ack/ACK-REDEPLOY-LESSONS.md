@@ -20,12 +20,15 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | 标准 API Agent 返回通用 `400` | 模型准入先于镜像准入，但请求 source 尚未有 image digest | 预镜像阶段只按受信 template identity 做 keyless admission；最终 image admission 仍绑定 exact digest |
 | 用旧模板 receipt 继续部署新镜像 | receipt 只在 exact image/config tuple 下有效 | 不把历史 receipt、Pod Ready、fixture 或 `/models` 成功当成当前模板验证 |
 | Runtime 探针成功，后续模板校验却报 `PREFLIGHT_UNBOUNDED` | 探针详细记录包含诊断字段，校验入口只接受固定字段集合 | 探针同时生成供校验使用的精简 receipt，生产端与校验端共享字段定义；保留详细记录和独立容量记录 |
+| 新 receipt 在 Worker 校验通过，API 却把四模板判为 `unverified` | API 的旧 `model-catalog` 依赖不支持 receipt 的 provenance 字段，业务组件与工具版本不一致 | 发布时固定所有组件及其依赖来源，部署后调用实际 API 的模板 readiness 回读；不删除 provenance 字段迁就旧消费者 |
+| 自定义镜像可运行且模型测量通过，Platform 创建却报 `OCI_CONFIG_INVALID` | 增量镜像导出成 Docker manifest，平台准入要求 OCI manifest/config/layer media types | 发布显式使用 `oci-mediatypes=true`，先回读远端 manifest/config 类型再做容量测量；格式转换后的新 digest 必须重新实测 |
 | 四模板 preflight 通过，API/Worker 仍未使用本轮验证与容量 | `all` 在 preflight 前部署配置，生成的新候选和容量记录没有自动回写消费者 | `runtime-inputs` 在 preflight 后发布声明的配置键并验证 rollout，再运行 mounted-capacity gate；不用手工复制或修改 Secret |
 | 三个新 Runtime 镜像在 ECI 长时间 `Pulling` | 发布 manifest 可见不等于目标 ECI 节点实际可拉取 | 每个模板先创建独立 ECI preflight Pod；拉取、启动、模型调用任一步失败都停止整个流程 |
 | 只看到 Web/API 健康就宣称完成 | 健康检查没有覆盖 Session、Runtime、模型、持久化和跨主体拒绝 | 业务验收必须包含真实 Session、`text.delta`、完成事件、刷新回读、隔离负例和自定义入口 probe |
 | Agent ready，但会话一直 `AGENT_STARTING` | 新模板 digest 没有相应容量 profile，verified capacity 为空 | `provision` 前检查每个目标的 image/resource/evidence 绑定与挂载 Secret；更新后经正式 lifecycle 刷新，不能直接改 DB |
 | custom Agent Workload ready，Session 却报 `RUNTIME_CONFIGURATION_INVALID` | 镜像没有 Driver 默认值，Worker 只为 Agent Workload 注入了 `acp` | Session 也注入服务端已选择的 Driver；用没有镜像默认 Driver 的实际自定义镜像回归 |
 | GET session 200，写接口却返回 401 | 直接 HTTP 探针遗漏了浏览器 Origin | 遵守浏览器写入的 Origin/CSRF 契约，保留具体失败阶段；不把协议错误归因于密码或 Cookie |
+| 密码正确但自动登录失败 | 对密码文件使用 `trim()` 会删除合法的首尾空格 | 保留密码空格，只按输入约定删除一个末尾 LF/CRLF，并用含空格密码测试真实 HTTP 提交字节 |
 | 登录与模型目录正常，Messages 模型回合却进入 `unknown` | 上游模型请求返回 `502 upstream_error`，目录可见不代表模型可执行 | 保留直接模型请求的 HTTP 状态与脱敏错误类型；真实 Runtime preflight 失败时停止验收，不替换成功记录或把问题归因于登录 |
 | 新 custom Session 正常，旧失败 Pod 仍反复重启 | 新 Worker 校验新增 Driver，旧 Pod 配置与期望不一致；已停止会话的残留资源需要收敛 | 先回读 Store 的 `desired_state=stopped` 与 Agent/Session 归属，再按 Pod UID 和 resourceVersion 删除精确残留，等待 Worker 自行回读；不手工提升数据库状态 |
 | 本地发布构建只报告退出码 1 | BuildKit 到 Docker Hub 的鉴权连接被重置，构建包装器隐藏了 stderr | 在仓库外保留权限受限的构建诊断；受控增量镜像须固定基镜像、源码与全部变化依赖，回读编译产物哈希，并明确区别于完整发布 manifest |
