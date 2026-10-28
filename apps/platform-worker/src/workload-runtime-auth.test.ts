@@ -2,6 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { expect, it } from "vitest";
 import { workloadDesiredFixture } from "./kubernetes.fixture.js";
 import {
+	codexContainerBoundaryEnvironmentV1,
 	fileExchangeOriginPortV1,
 	resolveWorkloadFileExchangeEgressV1,
 	resolveWorkloadFileExchangeOriginV1,
@@ -63,6 +64,37 @@ it("leaves file exchange disabled without an origin", () => {
 			entry.name.startsWith("AGENT_INFRA_RUNTIME_FILE_EXCHANGE_"),
 		),
 	).toBe(false);
+});
+
+it("injects a printable Codex boundary scope and an attestation without exposing the service token", () => {
+	const env = codexContainerBoundaryEnvironmentV1({
+		enabled: true,
+		serviceToken: "worker-service-token",
+		scope: "agent_api_codex",
+	});
+	const values = Object.fromEntries(
+		env.map((entry) => [entry.name, entry.value ?? entry.valueFrom]),
+	);
+	expect(values.AGENT_INFRA_RUNTIME_ISOLATION_MODE).toBe("container-boundary");
+	expect(values.AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED).toBe(
+		"worker-v1",
+	);
+	expect(values.AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE).toBe(
+		"agent_api_codex",
+	);
+	expect(values.AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION).toMatch(
+		/^[A-Za-z0-9_-]{43}$/,
+	);
+	expect(JSON.stringify(env)).not.toContain("worker-service-token");
+});
+
+it("fails closed when an enabled Codex boundary has no Worker service token", () => {
+	expect(() =>
+		codexContainerBoundaryEnvironmentV1({
+			enabled: true,
+			scope: "agent_api_codex",
+		}),
+	).toThrow("policy");
 });
 
 it("resolves the origin from the module or the environment, rejecting duplication and half configuration", () => {

@@ -48,8 +48,10 @@ import {
 } from "./kubernetes-runtime-comparison.js";
 import { createKubernetesPodValidationV1 } from "./kubernetes-runtime-pod-validation.js";
 import type { workloadEgressRulesV1 } from "./workload-network.js";
-import { workloadRuntimeAuthEnvironmentV1 } from "./workload-runtime-auth.js";
-import { containerBoundaryAttestationV1 } from "./container-boundary-attestation.js";
+import {
+	codexContainerBoundaryEnvironmentV1,
+	workloadRuntimeAuthEnvironmentV1,
+} from "./workload-runtime-auth.js";
 
 const routeHostSuffixPattern =
 	/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
@@ -236,32 +238,14 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 			...(runtimeDriver
 				? [{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtimeDriver }]
 				: []),
-			...(injection &&
-				runtimeDriver === "codex" &&
-				policy.codexContainerBoundaryEnabled
-					? [
-							{
-								name: "AGENT_INFRA_RUNTIME_ISOLATION_MODE",
-								value: "container-boundary",
-							},
-							{
-								name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED",
-								value: "worker-v1",
-							},
-							{
-								name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE",
-								value: value.agentId,
-							},
-							{
-								name: "AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION",
-								value: containerBoundaryAttestationV1(
-									dependencies.containerBoundaryServiceToken ??
-										"",
-									value.agentId,
-								),
-							},
-						]
-					: []),
+			...codexContainerBoundaryEnvironmentV1({
+				enabled:
+					injection !== undefined &&
+					runtimeDriver === "codex" &&
+					policy.codexContainerBoundaryEnabled === true,
+				serviceToken: dependencies.containerBoundaryServiceToken,
+				scope: value.agentId,
+			}),
 			...(skillHubRuntime ? [skillHubRuntime] : []),
 			...runtimeAuth,
 			...connection.env,

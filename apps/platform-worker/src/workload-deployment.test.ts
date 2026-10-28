@@ -138,6 +138,7 @@ describe("production Worker deployment", () => {
 		const path = join(directory, "kubeconfig");
 		await writeFile(path, config.exportConfig(), { mode: 0o600 });
 		return {
+			serviceToken: "synthetic-worker-service-token",
 			databaseUrl: "postgresql://worker:synthetic@127.0.0.1/platform",
 			workerId: "worker-a",
 			kubernetes: {
