@@ -35,31 +35,24 @@ Claude 使用已审核的 SDK 内部 MCP bridge；Host 只把受保护的 client
 
 本矩阵只记录固定 Pi 版本与上述测试入口的兼容性。漏洞告警由 GitHub 仓库安全功能维护；标准模板、真实模型、附件、Connection 和生产环境验收仍须按各自的验证入口执行。
 
-## 原生 Shell 子边界验证（#3218）
+## 原生 Shell 子边界（#3218）
 
-`native-shell.ts` 是 Pi 原生 Bash 的子进程 launcher。镜像将它安装为只读可执行文件
-`/opt/agent-infra/native-shell.mjs`，真实安装/ABI5 检查通过后，Pi bootstrap 才允许
-`sandbox_bash`。policy 使用固定上游 `createBashToolDefinition`，保留原生执行、取消和输出逻辑。
-这个注册名避免扩展加载失败时回退到没有子边界的 builtin `bash`；界面工具事实使用 Bash 标签。
+Claude、Pi 与 OpenCode 的原生命令通过镜像内只读 TypeScript launcher 安装完整 ABI5 Landlock
+规则，再启动 Bash。子进程只可写当前 Conversation 的工作区和存在的 canonical memory 目录，
+只读固定系统/Skill 目录；显式环境白名单与仅继承 stdio 的新进程隔断 native/Host 凭证及额外 FD。
+缺 helper、ABI5 或合法目录时拒绝执行，不使用弱权限重试。`/etc/ssl/openssl.cnf` 仅作为不可写
+系统文件提供给 Node/OpenSSL，不开放整个 `/etc`。
 
-launcher 只允许本工作区、固定只读系统/Skill 目录，显式重建环境，并以仅继承 stdio 的新子进程
-隔断额外 FD。缺 helper、ABI5 或合法目录时不提供该能力，每次执行继续重新检查，不使用弱权限
-重试。`/etc/ssl/openssl.cnf` 仅以不可写系统文件的只读授权提供给 Node/OpenSSL，不开放整个 `/etc`。
+- Pi 使用固定上游 `createBashToolDefinition`，保留原生执行、取消和输出逻辑。能力名
+  `sandbox_bash` 避免扩展加载失败时回退到 builtin `bash`；用户工具事实显示 Bash。
+- OpenCode 固定配置的 shell 指向 launcher，ACP execute 只在初始及本次真实准入通过后批准；
+  受信 OpenCode 的 execute 事件映射为 Bash 事实，不改变自定义 ACP 的工具身份。
+- Claude 的固定 `CLAUDE_CODE_SHELL` 指向只读 `native-bash.mjs` alias；声明 Bash 前以及每次
+  权限调用都检查 alias/helper 不可写、无符号链接、内容一致并实际执行 ABI5 准入。原生配置与
+  历史保持在工作区外，shell 临时文件留在工作区。平台后端不要求放宽容器 namespace 权限。
 
-既有 Linux conformance 通过 `AGENT_INFRA_NATIVE_SHELL_TEST=1` 强制执行 Pi 探针：直接固定工具
-覆盖环境/Host/native/兄弟目录、proc、符号链接、继承 FD、非法输入和取消；实际 Pi CLI 通过本地
-模型 fixture 调用同一能力，记录工具事实，并验证重启后不重放和缺失扩展不能回退。
-
-OpenCode 1.19.0 候选接线复用同一准入和固定 shell 路径，仅准入通过才请求 Bash ACP 权限；
-模型 fixture 的真实 ACP Bash 用例验证环境、Host/native/proc 与重启不重放，仍须由 Hosted Linux
-结果确认该固定二进制确实执行受信 shell。
-
-完整 #3218 仍包含 Claude 接线、完整父子边界与恢复矩阵。上述单模板受控调用不等于真实
-模型/外部环境验收，也不能代签其余模板；Draft 验证结果未完成前不得合入或关闭父票 #3202。
-
-Claude 固定版本的官方 namespace sandbox 在当前非 root 安全上下文中不能创建 user namespace。
-候选探针改用同一 Landlock launcher 的只读 `native-bash.mjs` 入口，先执行实际 ABI5 准入，再由
-固定原生 `CLAUDE_CODE_SHELL` 接入；shell 临时文件留在工作区，原生配置与历史不向子进程开放。
-Claude Driver 仅在只读 alias/helper 与实际 ABI5 准入通过后声明 Bash，每次权限调用再次核对；
-缺失、可写、符号链接或内容不一致时不提供 Bash。生产接线仍须通过真实子进程正负例、
-工具事实与恢复矩阵才可交付；工程约束见 [Spec §10.14](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1014-标准模板-session-sandbox-原生工具)。
+既有固定 Linux conformance 通过 `AGENT_INFRA_NATIVE_SHELL_TEST=1` 强制运行三个模板的真实
+原生工具调用。矩阵覆盖环境、Host/native/兄弟目录、proc、符号链接、继承 FD、非法启动输入、
+取消、组合/后台命令、工作区/memory 成功路径、工具事实、重启不重放与准入失效拒绝。受控模型
+fixture 与真实外部模型验收分别记录，不互相代签。工程约束见
+[Spec §10.14](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1014-标准模板-session-sandbox-原生工具)。

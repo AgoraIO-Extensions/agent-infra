@@ -84,7 +84,7 @@ async function probe(environment: NodeJS.ProcessEnv) {
 	});
 }
 
-/** Candidate child boundary for fixed native shell hooks; not production tool admission. */
+/** Per-command child boundary for the fixed native shell entrypoints. */
 export async function nativeShellPlan(
 	workspace: string,
 	cwd: string,

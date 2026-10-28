@@ -281,7 +281,7 @@ function acpResultWriter() {
 
 async function runAcpResultTurn(
 	mode: string,
-	options: { sandboxReferences?: boolean } = {},
+	options: { sandboxReferences?: boolean; nativeCommandMode?: "opencode" } = {},
 ) {
 	const path = await mkdtemp(join(tmpdir(), "acp-result-file-"));
 	const writeResult = acpResultWriter();
@@ -304,6 +304,9 @@ async function runAcpResultTurn(
 				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
 			],
 			env: { ACP_TEST_MODE: mode },
+			...(options.nativeCommandMode
+				? { nativeCommandMode: options.nativeCommandMode }
+				: {}),
 		}),
 	});
 	try {
@@ -371,6 +374,30 @@ async function runAcpResultTurn(
 		await rm(path, { recursive: true, force: true });
 	}
 }
+
+it.each([false, true])(
+	"keeps interleaved tool identities scoped to the trusted OpenCode launch: %s",
+	async (opencode) => {
+		const { events } = await runAcpResultTurn(
+			"interleaved-tools",
+			opencode ? { nativeCommandMode: "opencode" } : {},
+		);
+		expect(
+			events
+				.filter((event) => event.type === "tool")
+				.map((event) =>
+					event.type === "tool"
+						? [event.payload.name, event.payload.phase]
+						: [],
+				),
+		).toEqual([
+			[opencode ? "Bash" : "unavailable", "started"],
+			["Read", "started"],
+			[opencode ? "Bash" : "unavailable", "completed"],
+			["Read", "completed"],
+		]);
+	},
+);
 
 it("does not publish ACP diffs as result files while tool events stay (#3226)", async () => {
 	const { writeResult, events, publicationFacts } =

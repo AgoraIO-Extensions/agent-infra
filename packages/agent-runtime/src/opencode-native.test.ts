@@ -642,7 +642,13 @@ it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
 				accepted.nativeSessionRef,
 				command.executionId,
 			);
-			expect(events.some((event) => event.type === "tool")).toBe(true);
+			expect(
+				events
+					.filter(
+						(event) => event.type === "tool" && event.payload.name === "Bash",
+					)
+					.map((event) => (event.type === "tool" ? event.payload.phase : "")),
+			).toEqual(["started", "completed"]);
 			const calls = await fixture.createdTurnCount();
 			await fixture.restart();
 			expect(
@@ -653,6 +659,12 @@ it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
 			).toBe("completed");
 			expect(await fixture.driver.execute(command)).toEqual(accepted);
 			expect(await fixture.createdTurnCount()).toBe(calls);
+			expect(
+				await fixture.driver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				),
+			).toEqual(events);
 		} finally {
 			await fixture.close();
 			await rm(path, { recursive: true, force: true });

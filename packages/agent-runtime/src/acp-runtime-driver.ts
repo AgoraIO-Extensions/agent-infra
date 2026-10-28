@@ -149,6 +149,7 @@ export const GenericAcpRuntimeDriver = {
 						}
 					: undefined;
 				const phases = new Map<string, string>();
+				const toolNames = new Map<string, string>();
 				const launch = await options.launch(
 					session.directory,
 					selection,
@@ -270,18 +271,23 @@ export const GenericAcpRuntimeDriver = {
 										: "started";
 							if (phases.get(event.toolCallId) !== phase) {
 								phases.set(event.toolCallId, phase);
+								const name =
+									event.kind === "read"
+										? "Read"
+										: event.kind === "edit"
+											? "Edit"
+											: event.kind === "execute" &&
+													launch.nativeCommandMode === "opencode"
+												? "Bash"
+												: (toolNames.get(event.toolCallId) ?? "unavailable");
+								toolNames.set(event.toolCallId, name);
 								await callbacks.update({
 									type: "tool",
 									payload: {
 										toolCallId: createHash("sha256")
 											.update(event.toolCallId)
 											.digest("hex"),
-										name:
-											event.kind === "read"
-												? "Read"
-												: event.kind === "edit"
-													? "Edit"
-													: "unavailable",
+										name,
 										phase,
 									},
 								});
@@ -333,6 +339,7 @@ export const GenericAcpRuntimeDriver = {
 									reasoningLevel: next.selection.reasoningLevel,
 								};
 								phases.clear();
+								toolNames.clear();
 								launch.beginTurn?.();
 							},
 							reuseFor: ({ browser }) => browser === undefined,

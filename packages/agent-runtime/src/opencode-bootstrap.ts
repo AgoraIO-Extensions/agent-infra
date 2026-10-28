@@ -352,6 +352,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 						if (tool.kind === "execute") {
 							return (
 								shellAvailable &&
+								(await nativeShellAvailable(join(directory, "workspace"))) &&
 								!!tool.rawInput &&
 								typeof tool.rawInput === "object" &&
 								"command" in tool.rawInput &&

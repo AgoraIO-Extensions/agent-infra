@@ -125,6 +125,35 @@ const connection = new AgentSideConnection(
 					JSON.stringify(params.prompt),
 				);
 			count++;
+			if (process.env.ACP_TEST_MODE === "interleaved-tools") {
+				for (const update of [
+					{
+						sessionUpdate: "tool_call",
+						toolCallId: "shell",
+						title: "Shell",
+						kind: "execute",
+						status: "in_progress",
+					},
+					{
+						sessionUpdate: "tool_call",
+						toolCallId: "read",
+						title: "Read",
+						kind: "read",
+						status: "in_progress",
+					},
+					{
+						sessionUpdate: "tool_call_update",
+						toolCallId: "shell",
+						status: "completed",
+					},
+					{
+						sessionUpdate: "tool_call_update",
+						toolCallId: "read",
+						status: "completed",
+					},
+				])
+					await connection.sessionUpdate({ sessionId, update });
+			}
 			if (process.env.ACP_TEST_MODE === "foreign-notifications") {
 				for (const update of [
 					{
