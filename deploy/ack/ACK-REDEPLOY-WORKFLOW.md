@@ -145,7 +145,14 @@ Secret，清单和 preflight receipt 仍留在仓库外。
 
 若需要由 `all` 自动生成四份 receipt，`ACK_TEMPLATE_PREFLIGHT_JOBS_FILE` 使用以下私有清单；
 每个 job 文件声明一个当前 source SHA、不可变 Runtime image、template/config/model tuple、
-ECI placement，以及 grant private key、Runtime service token 和 Relay key 的私有文件路径：
+ECI placement，以及 grant private key、Runtime service token 和 Relay key 的私有文件路径。
+
+job 可设置 `podReadyTimeoutSeconds`，默认 900 秒，接受 60–1800 秒的整数。该预算覆盖
+ECI 调度、镜像拉取和容器就绪，独立于 `ACK_HELM_TIMEOUT`。等待失败仍清理本轮临时资源，
+并保存私有 `pod-readiness-failure.json`，记录 source/image、预算和有界 Pod phase/容器 waiting
+reason；这份失败记录明确表示模型调用尚未开始，不保存原始错误或凭证。
+
+四个 job 的清单形状如下：
 
 ```json
 {
