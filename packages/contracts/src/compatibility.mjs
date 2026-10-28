@@ -4295,6 +4295,11 @@ function isApplicationCredentialAudit3626OpenApiAddition(previous, current) {
 		"ScopedPlatformAuditProjectionV1",
 		"ScopedPlatformAuditProjectionV2",
 	]) {
+		if (
+			previous.components?.schemas?.[name] === undefined &&
+			current.components?.schemas?.[name] === undefined
+		)
+			continue;
 		const oldKinds =
 			previous.components?.schemas?.[name]?.properties?.subject?.properties
 				?.kind?.enum;
@@ -6234,6 +6239,95 @@ function findBreakingChanges(previousValue, currentValue) {
 
 function evaluateBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
+	// Compose the reviewed audit extension with earlier independently checked additions.
+	const applicationActions = [
+		"application.credential.issued",
+		"application.credential.rotated",
+		"application.credential.delivery",
+		"application.credential.metadata.read",
+		"application.credential.revoked",
+	];
+	const previousActions =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum ?? [];
+	const currentActions =
+		currentValue.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	if (
+		Array.isArray(currentActions) &&
+		Array.isArray(previousActions) &&
+		sameValue(
+			currentActions.slice(-applicationActions.length),
+			applicationActions,
+		) &&
+		sameValue(
+			previousActions.slice(-applicationActions.length),
+			applicationActions,
+		)
+	) {
+		const priorPrevious = structuredClone(previous);
+		const priorCurrent = structuredClone(currentValue);
+		for (const document of [priorPrevious, priorCurrent]) {
+			document.components.schemas.ScopedPlatformAuditActionV1.enum =
+				document.components.schemas.ScopedPlatformAuditActionV1.enum.slice(
+					0,
+					-applicationActions.length,
+				);
+			for (const name of [
+				"ScopedPlatformAuditProjectionV1",
+				"ScopedPlatformAuditProjectionV2",
+			]) {
+				const kinds =
+					document.components?.schemas?.[name]?.properties?.subject?.properties
+						?.kind?.enum;
+				if (Array.isArray(kinds))
+					document.components.schemas[
+						name
+					].properties.subject.properties.kind.enum = kinds.filter(
+						(kind) => kind !== "application",
+					);
+			}
+		}
+		if (
+			isApplicationCredentialAudit3626OpenApiAddition(
+				priorPrevious,
+				previous,
+			) &&
+			isApplicationCredentialAudit3626OpenApiAddition(
+				priorCurrent,
+				currentValue,
+			)
+		)
+			return findBreakingChanges(priorPrevious, priorCurrent);
+	}
+	if (
+		Array.isArray(currentActions) &&
+		!applicationActions.some((action) => previousActions.includes(action)) &&
+		applicationActions.every((action) => currentActions.includes(action))
+	) {
+		const priorAddition = structuredClone(currentValue);
+		priorAddition.components.schemas.ScopedPlatformAuditActionV1.enum =
+			currentActions.filter((action) => !applicationActions.includes(action));
+		for (const name of [
+			"ScopedPlatformAuditProjectionV1",
+			"ScopedPlatformAuditProjectionV2",
+		]) {
+			const kinds =
+				priorAddition.components?.schemas?.[name]?.properties?.subject
+					?.properties?.kind?.enum;
+			if (Array.isArray(kinds))
+				priorAddition.components.schemas[
+					name
+				].properties.subject.properties.kind.enum = kinds.filter(
+					(kind) => kind !== "application",
+				);
+		}
+		if (
+			isApplicationCredentialAudit3626OpenApiAddition(
+				priorAddition,
+				currentValue,
+			)
+		)
+			return findBreakingChanges(previous, priorAddition);
+	}
 	let current = normalizeQueueFullErrorCodeAddition(
 		previousValue,
 		currentValue,
