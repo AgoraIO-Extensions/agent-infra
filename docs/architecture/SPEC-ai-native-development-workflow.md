@@ -20,6 +20,8 @@ Agent Runtime 或 Connection 的运行职责。
 [`gen-goal-with-roadmap`](../../.agents/skills/gen-goal-with-roadmap/SKILL.md)。该 Skill 只读发现并冻结
 snapshot，生成一个 Coordinator Goal；它不创建 Goal、不修改 Issue/Project、不启动执行，也不绑定个人通知流程。
 生成的 snapshot 可交给本地协调执行入口继续处理，GitHub Issue、依赖、PR、CI 和 Project 仍是事实源。
+已授权范围的多 writer 分派、交接与恢复可使用
+[`coordinate-development`](../../.agents/skills/coordinate-development/SKILL.md)，本地记录不替代权威状态或人工门禁。
 
 ## 3. 需求与文档依据
 
