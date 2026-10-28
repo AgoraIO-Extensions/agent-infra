@@ -1012,4 +1012,89 @@ export function createPlatformApiAssemblyInput(){ const input=base(); return {..
 			await rm(temporary, { recursive: true, force: true });
 		}
 	}, 30000);
+	it("does not retain late deletion receipts beyond the original version metadata deadline", async () => {
+		const { d, v } = await dataset();
+		await grant(d.datasetId, v.versionId);
+		const path = `/${d.datasetId}/versions/${v.versionId}/content`;
+		const uploaded = EvaluationVersionV1Schema.parse(
+			await json(path, "PUT", content, "alice"),
+		);
+		const deadline = new Date(Date.now() + 60000).toISOString();
+		await sql`update platform.evaluation_versions set metadata_expires_at=${deadline}::timestamptz,data=jsonb_set(data,'{metadataExpiresAt}',to_jsonb(${deadline}::text)) where id=${v.versionId}`;
+		await json(
+			path,
+			"DELETE",
+			{ expectedRevision: uploaded.revision },
+			"alice",
+		);
+		const [receipt] =
+			await sql`select result from platform.idempotency_records where scope_type='evaluation' and result->'result'->>'versionId'=${v.versionId} and result->'result'->>'status'='deleting'`;
+		expect(receipt?.result.expiresAt).toBe(deadline);
+	});
+	it("recovers an unobserved upload response from persisted intent after service restart without a second S3 version", async () => {
+		const { d, v } = await dataset();
+		await grant(d.datasetId, v.versionId);
+		const path = `/${d.datasetId}/versions/${v.versionId}/content`;
+		const key = randomUUID();
+		const first = EvaluationVersionV1Schema.parse(
+			await json(path, "PUT", content, "alice", key),
+		);
+		const [original] =
+			await sql`select data from platform.evaluation_versions where id=${v.versionId}`;
+		const restarted = new PostgresEvaluationDataStoreV1({
+			...database,
+			directory: {
+				resolveUser: async (userId) => ({
+					schemaVersion: 1,
+					userId,
+					accountStatus: "active",
+					organizationIds: [],
+					authorizationRevision: "v1",
+				}),
+			},
+		});
+		try {
+			const service = createEvaluationDataV1({
+				store: restarted,
+				storage: storage.storage,
+				loadPolicy: async () => policy,
+			});
+			const request = {
+				authentication: { kind: "browser" as const, userId: "alice" },
+				requestId: randomUUID(),
+				traceId: randomUUID(),
+			};
+			expect(
+				await service.upload(
+					request,
+					key,
+					d.datasetId,
+					v.versionId,
+					new TextEncoder().encode(JSON.stringify(content)),
+				),
+			).toEqual(first);
+			await expect(
+				service.upload(
+					request,
+					key,
+					d.datasetId,
+					v.versionId,
+					new TextEncoder().encode(
+						JSON.stringify({
+							...content,
+							samples: [{ ...content.samples[0], input: "different fixture" }],
+						}),
+					),
+				),
+			).rejects.toMatchObject({ code: "conflict" });
+			const objects = (await storage.storage.scan(null, 100)).objects.filter(
+				(object) => object.objectRef === original?.data.objectRef,
+			);
+			expect(objects.map((object) => object.version)).toEqual([
+				original?.data.stored.version,
+			]);
+		} finally {
+			await restarted.close();
+		}
+	});
 });

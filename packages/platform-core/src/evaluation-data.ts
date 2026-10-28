@@ -489,6 +489,12 @@ export function createEvaluationDataV1(options: {
 				Date.parse(d.metadataExpiresAt),
 			),
 		).toISOString();
+		tx.receiptExpiresAt = new Date(
+			Math.min(
+				Date.parse(tx.receiptExpiresAt),
+				Date.parse(d.metadataExpiresAt),
+			),
+		).toISOString();
 		return d;
 	}
 	async function permission(
@@ -543,7 +549,24 @@ export function createEvaluationDataV1(options: {
 	) {
 		await dataset(tx, datasetId);
 		const v = await tx.version(text(versionId));
-		if (!v || v.datasetId !== datasetId) return fail("denied");
+		if (
+			!v ||
+			v.datasetId !== datasetId ||
+			Date.parse(v.metadataExpiresAt) <= +tx.now
+		)
+			return fail("denied");
+		tx.receiptExpiresAt = new Date(
+			Math.min(
+				Date.parse(tx.receiptExpiresAt),
+				Date.parse(v.metadataExpiresAt),
+			),
+		).toISOString();
+		tx.authorizationExpiresAt = new Date(
+			Math.min(
+				Date.parse(tx.authorizationExpiresAt),
+				Date.parse(v.metadataExpiresAt),
+			),
+		).toISOString();
 		return v;
 	}
 	async function mutate<T>(
