@@ -34,7 +34,10 @@ import type {
 	WithdrawQueuedMessageData,
 	WithdrawQueuedMessageResponse,
 } from "../../pilot/generated/types.gen.js";
-import type { NativeCapabilityInvocationRequestV2 } from "../../pilot/generated-v2/types.gen.js";
+import type {
+	NativeCapabilityInvocationRequestV1,
+	NativeCapabilityInvocationRequestV2,
+} from "../../pilot/generated-v2/types.gen.js";
 import type { CapabilityInvocationBody } from "./conversation-capability-picker.js";
 
 export type ConversationCommandTarget = {
@@ -124,22 +127,20 @@ function failure(status?: number, error?: unknown): ConversationCommandResult {
 	};
 }
 
-/**
- * Invocation V2 的线上请求体还需要请求身份（契约 NativeCapabilityInvocationRequestV2）：
- * idempotencyKey 与请求头一致，requestId / traceId 在本次尝试内生成。V1 请求体保持原样。
- */
+/** 每次调用的请求身份在传输层生成，幂等键与 header 一致；V1 不增加版本或附件字段。 */
 function nativeCapabilityRequestBody(
 	body: NativeCapabilityCommandBody,
 	idempotencyKey: string,
-): NativeCapabilityCommandBody | NativeCapabilityInvocationRequestV2 {
-	if (!("schemaVersion" in body) || body.schemaVersion !== 2) return body;
-	return {
+): NativeCapabilityInvocationRequestV1 | NativeCapabilityInvocationRequestV2 {
+	const request = {
 		...body,
-		attachments: [...body.attachments],
 		idempotencyKey,
 		requestId: crypto.randomUUID(),
 		traceId: crypto.randomUUID(),
-	} satisfies NativeCapabilityInvocationRequestV2;
+	};
+	return "schemaVersion" in request && request.schemaVersion === 2
+		? { ...request, attachments: [...request.attachments] }
+		: request;
 }
 
 /** Only sanitized receipts leave this transport; request text and server error
