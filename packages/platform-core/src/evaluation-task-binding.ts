@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { snapshotObject } from "./conversation-execution-values.js";
 
 /** Server-created durable reference. It carries no dataset content or credential material. */
@@ -93,4 +94,38 @@ export function parseEvaluationTaskBindingV1(
 	)
 		throw new TypeError("Eval Task binding is invalid");
 	return value as unknown as EvaluationTaskBindingV1;
+}
+
+/** File capability readiness is checked for the original executing revision, without user impersonation. */
+export function isEvaluationFileRuntimeCurrentV1(input: {
+	configurationRevision: number;
+	workload:
+		| import("./workload-reconciliation.js").WorkloadReconciliationStateV1
+		| null;
+	status: string;
+	desiredState: string;
+	serviceAvailability: string | null;
+	workloadRevision: number;
+	fence: number;
+	kind: "attachment" | "result";
+}): boolean {
+	const w = input.workload;
+	return (
+		!!w &&
+		input.status === "available" &&
+		input.desiredState === "running" &&
+		input.serviceAvailability === "ready" &&
+		w.phase === "ready" &&
+		!!w.identity &&
+		!!w.verified &&
+		w.verifiedRevision === w.revision &&
+		isDeepStrictEqual(w.candidate, w.verified) &&
+		w.sourceConfigurationRevision === input.configurationRevision &&
+		w.verified.configuration.revision === input.configurationRevision &&
+		w.sourceLifecycleRevision === input.workloadRevision &&
+		w.fence === input.fence &&
+		w.capabilities?.[
+			input.kind === "attachment" ? "attachments" : "resultFiles"
+		] === true
+	);
 }

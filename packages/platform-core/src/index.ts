@@ -107,6 +107,7 @@ export {
 	bindNativeTextInputFileV1,
 	createFileAuthorityV1,
 	discardUnboundInputFileV1,
+	type EvaluationFileBindingV1,
 	type FileAccessRecordV1,
 	FileAuthorityError,
 	type FileAuthorityV1,

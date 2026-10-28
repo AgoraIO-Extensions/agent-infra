@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { createServer } from "node:http";
 import {
 	EvaluationExperimentV1Schema,
@@ -1518,330 +1518,378 @@ it("renews an expired pending-transfer fence on the same derived intent without 
 	}
 }, 30000);
 
-it("dispatches an Eval sample through the existing Task worker authorization and persists controlled Runtime output", async () => {
-	const { workloadDesiredFixture, workloadTestPolicy } = await import(
-		"../../../apps/platform-worker/src/kubernetes.fixture.js"
-	);
-	const { workloadResourceConfigurationHashV1 } = await import(
-		"../../../apps/platform-worker/src/workload-runtime.js"
-	);
-	const { createConversationRuntimeV2 } = await import(
-		"../../../apps/platform-worker/src/conversation-runtime.js"
-	);
-	const { createConversationDispatchUseCaseV1 } = await import(
-		"../../platform-core/src/conversation-dispatch.js"
-	);
-	const { createConversationEventUseCaseV1 } = await import(
-		"../../platform-core/src/conversation-events.js"
-	);
-	const { FakeConversationRuntimeHostV1 } = await import(
-		"../../platform-core/src/fake-conversation-runtime-host.js"
-	);
-	const { PostgresConversationDispatchStoreV1 } = await import(
-		"./conversation-dispatch.js"
-	);
-	const { PostgresConversationEventTransactionV1 } = await import(
-		"./conversation-events.js"
-	);
-	const { PostgresTaskAuthorizationStoreV1 } = await import(
-		"./task-authorization.js"
-	);
-	const { PostgresEvaluationTaskAuthorityV1 } = await import(
-		"./evaluation-task-authority.js"
-	);
-	const { readCurrentTaskApiUseGrantV1 } = await import(
-		"./application-task-authorization.js"
-	);
-	const { markSessionSandboxReadyFixture } = await import(
-		"./session-sandbox.fixture.js"
-	);
-	await sql`insert into platform.agent_owners(agent_id,owner_id,created_at)values(${configuration.agentId},'admin',clock_timestamp()) on conflict do nothing`;
-	const desired = workloadDesiredFixture(
-		configuration.revision,
-		configuration.agentId,
-		"internal-only",
-	);
-	const deployment = {
-		...desired,
-		imageDigest: configuration.source.imageDigest,
-		registryAdmission: {
-			...desired.registryAdmission,
-			immutableDigest: configuration.source.imageDigest,
-			policyEvidence: {
-				...desired.registryAdmission.policyEvidence,
-				imageDigest: configuration.source.imageDigest,
-			},
-		},
-	};
-	const version = {
-		configuration,
-		deployment,
-		executionCapacity: {
-			schemaVersion: 1,
-			imageDigest: deployment.imageDigest,
-			resourceProfileRef: deployment.resourceProfileRef,
-			resourceConfigurationHash:
-				workloadResourceConfigurationHashV1(workloadTestPolicy),
-			maximumConcurrentExecutions: 8,
-			conformanceEvidenceHash: "c".repeat(64),
-		},
-	};
-	const state = {
-		schemaVersion: 1,
-		agentId: configuration.agentId,
-		sourceConfigurationRevision: configuration.revision,
-		sourceLifecycleRevision: 1,
-		revision: 1,
-		fence: 1,
-		phase: "ready",
-		candidate: version,
-		verified: version,
-		verifiedRevision: 1,
-		identity: { uid: "eval-fixture-workload", generation: 1 },
-		rollback: false,
-		failureCode: null,
-		attempts: 0,
-	};
-	await sql`insert into platform.workload_reconciliations(agent_id,revision,state,next_attempt_at)values(${configuration.agentId},1,${sql.json(state as unknown as postgres.JSONValue)},now()) on conflict(agent_id)do update set state=excluded.state`;
-	const command = await dataset();
-	const experiment = await core.create(
-		request("runner"),
-		randomUUID(),
-		command,
-	);
-	await data.grant(request("admin"), randomUUID(), command.datasetId, {
-		expectedRevision: 4,
-		principal: { kind: "user", id: "runner" },
-		versionIds: [command.versionId],
-		operations: ["score"],
-		expiresAt: new Date(Date.now() + 50000).toISOString(),
-	});
-	const [task] = await experiments.samples(experiment.experimentId, 10);
-	if (!task) throw new Error("missing task");
-	await markSessionSandboxReadyFixture(sql, task.conversationId);
-	const evaluationPolicy = {
-		data: async () => policy,
-		experiment: async () => experimentPolicy,
-	};
-	const dispatchStore = new PostgresConversationDispatchStoreV1({
-		...database,
-		userDirectory: directory,
-		evaluationPolicy,
-	});
-	const authStore = new PostgresTaskAuthorizationStoreV1(database);
-	const authority = new PostgresEvaluationTaskAuthorityV1({
-		...database,
-		directory,
-		loadPolicy: evaluationPolicy,
-	});
-	const eventTx = new PostgresConversationEventTransactionV1(database);
-	const signer = generateKeyPairSync("ed25519");
-	const runtime = createConversationRuntimeV2({
-		workerId: "eval-fixture-worker",
-		signing: {
-			issuer: "fixture",
-			workerId: "eval-fixture-worker",
-			keyId: "fixture",
-			privateKey: signer.privateKey,
-		},
-		directory,
-		taskAuthorizationStore: authStore,
-		dispatchStore,
-		channelAuthorizationCurrent: (r) => authority.current(r.boundary),
-		resolveCurrentApiUseGrant: (principal, agentId) =>
-			sql.begin((tx) =>
-				readCurrentTaskApiUseGrantV1(tx, { principal, agentId }),
-			),
-		resolveRuntimeHost: async () => {
-			throw new Error(
-				"Controlled transport does not resolve a deployed Runtime",
-			);
-		},
-	});
-	const host = new FakeConversationRuntimeHostV1();
-	const began = new Date().toISOString();
-	const runtimeEvents: import("../../platform-core/src/conversation-dispatch.js").ConversationRuntimeEvent[] =
-		[
-			...(["intent", "started", "completed"] as const).map((phase, index) => ({
-				schemaVersion: 2 as const,
-				type: "operation" as const,
-				executionId: task.executionId,
-				adapterEventKey: `model-${phase}`,
-				cursor: `model-${index}`,
-				occurredAt: began,
-				payload: {
-					kind: "model" as const,
-					phase,
-					operationRef: "model-op",
-					attemptRef: "model-attempt",
-					...(phase !== "intent" ? { startedAt: began } : {}),
-					...(phase === "completed"
-						? {
-								finishedAt: began,
-								durationMs: 0,
-								usage: { inputTokens: 2, outputTokens: 1 },
-							}
-						: {}),
-					model: {
-						configVersion: "7",
-						modelOptionId: "model_primary",
-						modelId: "actual-fixture-model",
-						reasoningLevel: "low",
-					},
+it.each(["user", "application"] as const)(
+	"dispatches an Eval %s sample through the existing Task worker authorization and persists controlled Runtime output",
+	async (principalKind) => {
+		const { workloadDesiredFixture, workloadTestPolicy } = await import(
+			"../../../apps/platform-worker/src/kubernetes.fixture.js"
+		);
+		const { workloadResourceConfigurationHashV1 } = await import(
+			"../../../apps/platform-worker/src/workload-runtime.js"
+		);
+		const { createConversationRuntimeV2 } = await import(
+			"../../../apps/platform-worker/src/conversation-runtime.js"
+		);
+		const { createConversationDispatchUseCaseV1 } = await import(
+			"../../platform-core/src/conversation-dispatch.js"
+		);
+		const { createConversationEventUseCaseV1 } = await import(
+			"../../platform-core/src/conversation-events.js"
+		);
+		const { FakeConversationRuntimeHostV1 } = await import(
+			"../../platform-core/src/fake-conversation-runtime-host.js"
+		);
+		const { PostgresConversationDispatchStoreV1 } = await import(
+			"./conversation-dispatch.js"
+		);
+		const { PostgresConversationEventTransactionV1 } = await import(
+			"./conversation-events.js"
+		);
+		const { PostgresTaskAuthorizationStoreV1 } = await import(
+			"./task-authorization.js"
+		);
+		const { PostgresEvaluationTaskAuthorityV1 } = await import(
+			"./evaluation-task-authority.js"
+		);
+		const { readCurrentTaskApiUseGrantV1, readCurrentTaskApplicationV1 } =
+			await import("./application-task-authorization.js");
+		const { markSessionSandboxReadyFixture } = await import(
+			"./session-sandbox.fixture.js"
+		);
+		await sql`insert into platform.agent_owners(agent_id,owner_id,created_at)values(${configuration.agentId},'admin',clock_timestamp()) on conflict do nothing`;
+		const desired = workloadDesiredFixture(
+			configuration.revision,
+			configuration.agentId,
+			"internal-only",
+		);
+		const deployment = {
+			...desired,
+			imageDigest: configuration.source.imageDigest,
+			registryAdmission: {
+				...desired.registryAdmission,
+				immutableDigest: configuration.source.imageDigest,
+				policyEvidence: {
+					...desired.registryAdmission.policyEvidence,
+					imageDigest: configuration.source.imageDigest,
 				},
-			})),
-			...(["intent", "started", "completed"] as const).map((phase, index) => ({
-				schemaVersion: 2 as const,
-				type: "operation" as const,
-				executionId: task.executionId,
-				adapterEventKey: `tool-${phase}`,
-				cursor: `tool-${index}`,
-				occurredAt: began,
-				payload: {
-					kind: "tool" as const,
-					phase,
-					operationRef: "tool-op",
-					attemptRef: "tool-attempt",
-					toolId: "fixture.echo",
-					...(phase !== "intent" ? { startedAt: began } : {}),
-					...(phase === "completed"
-						? { finishedAt: began, durationMs: 0 }
-						: {}),
-				},
-			})),
-			{
+			},
+		};
+		const version = {
+			configuration,
+			deployment,
+			executionCapacity: {
 				schemaVersion: 1,
-				type: "text",
-				executionId: task.executionId,
-				adapterEventKey: "eval-output",
-				cursor: "1",
-				occurredAt: new Date().toISOString(),
-				payload: { delta: "yes" },
+				imageDigest: deployment.imageDigest,
+				resourceProfileRef: deployment.resourceProfileRef,
+				resourceConfigurationHash:
+					workloadResourceConfigurationHashV1(workloadTestPolicy),
+				maximumConcurrentExecutions: 8,
+				conformanceEvidenceHash: "c".repeat(64),
 			},
-			{
-				schemaVersion: 1,
-				type: "completed",
-				executionId: task.executionId,
-				adapterEventKey: "eval-completed",
-				cursor: "2",
-				occurredAt: new Date().toISOString(),
-				payload: { status: "completed" },
-			},
-		];
-
-	const dispatch = createConversationDispatchUseCaseV1({
-		store: dispatchStore,
-		authorization: runtime.authorization,
-		runtimeHost: {
-			dispatch: host.dispatch.bind(host),
-			recoverStatus: host.recoverStatus.bind(host),
-			async *events() {
-				yield* runtimeEvents;
-			},
-		},
-		events: createConversationEventUseCaseV1({ transaction: eventTx }),
-	});
-	try {
-		const [outbox] =
-			await sql`select id from platform.outbox_items where scope_id=${task.conversationId} and operation='conversation.turn.submit.v1'`;
-		if (!outbox) throw new Error("missing original Task outbox");
-		await sql`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${outbox.id}`;
-		const result = await dispatch.dispatch({
+		};
+		const state = {
 			schemaVersion: 1,
-			itemId: outbox.id,
-			workerId: "eval-fixture-worker",
+			agentId: configuration.agentId,
+			sourceConfigurationRevision: configuration.revision,
+			sourceLifecycleRevision: 1,
+			revision: 1,
+			fence: 1,
+			phase: "ready",
+			candidate: version,
+			verified: version,
+			verifiedRevision: 1,
+			identity: { uid: "eval-fixture-workload", generation: 1 },
+			rollback: false,
+			failureCode: null,
+			attempts: 0,
+			capabilities: { attachments: true, resultFiles: true },
+		};
+		await sql`insert into platform.workload_reconciliations(agent_id,revision,state,next_attempt_at)values(${configuration.agentId},1,${sql.json(state as unknown as postgres.JSONValue)},now()) on conflict(agent_id)do update set state=excluded.state`;
+		const command = await dataset();
+		let experimentRequest: Parameters<typeof core.create>[0] =
+			request("runner");
+		if (principalKind === "application") {
+			await data.grant(request("admin"), randomUUID(), command.datasetId, {
+				expectedRevision: 4,
+				principal: { kind: "application", id: "runner" },
+				versionIds: [command.versionId],
+				operations: ["run", "score"],
+				expiresAt: new Date(Date.now() + 50000).toISOString(),
+			});
+			const material = `papi_${"W".repeat(43)}`;
+			await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes)values('app-worker-token','application','runner',${createHash("sha256").update(material).digest("hex")},${sql.json(["eval:run", "eval:score"])})`;
+			experimentRequest = {
+				...request("runner"),
+				authentication: { kind: "credential", material },
+			};
+		}
+		const experiment = await core.create(
+			experimentRequest,
+			randomUUID(),
+			command,
+		);
+		await data.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: principalKind === "application" ? 5 : 4,
+			principal: { kind: "user", id: "runner" },
+			versionIds: [command.versionId],
+			operations: ["score"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
 		});
-		expect(result).toMatchObject({ outcome: "accepted" });
-		const page = await core.get(request("runner"), experiment.experimentId);
-		const observed = page.items.find(
-			(item) => item.executionId === task.executionId,
-		)?.actual;
-		expect(observed).toMatchObject({
-			status: "completed",
-			runtimeObserved: true,
-			preparedRuntime: {
-				configurationRevision: configuration.revision,
-				imageDigest: configuration.source.imageDigest,
-			},
-			facts: {
-				actualModelObserved: true,
-				models: expect.arrayContaining([
-					expect.objectContaining({
-						operationRef: "model-op",
-						attemptRef: "model-attempt",
-						phase: "completed",
-						model: expect.objectContaining({ modelId: "actual-fixture-model" }),
-						usage: { inputTokens: 2, outputTokens: 1 },
-					}),
-				]),
-				tools: expect.arrayContaining([
-					expect.objectContaining({
-						toolId: "fixture.echo",
-						phase: "completed",
-					}),
-				]),
-			},
-			factsTruncated: false,
+		const [task] = await experiments.samples(experiment.experimentId, 10);
+		if (!task) throw new Error("missing task");
+		await markSessionSandboxReadyFixture(sql, task.conversationId);
+		const evaluationPolicy = {
+			data: async () => policy,
+			experiment: async () => experimentPolicy,
+		};
+		const dispatchStore = new PostgresConversationDispatchStoreV1({
+			...database,
+			userDirectory: directory,
+			evaluationPolicy,
 		});
-		expect(host.sideEffectCount()).toBe(1);
-		expect(
-			await sql`select delivery_fence::int as fence,status from platform.outbox_items where id=${outbox.id}`,
-		).toEqual([{ fence: 1, status: "succeeded" }]);
-		expect(
-			await sql`select status from platform.conversation_executions where execution_id=${task.executionId}`,
-		).toEqual([{ status: "completed" }]);
-		expect(
-			await sql`select event_payload->>'text' as text from platform.conversation_events where execution_id=${task.executionId} and event_type='text.delta'`,
-		).toEqual([{ text: "yes" }]);
-		const scores = new PostgresEvaluationScoringV1({
+		const authStore = new PostgresTaskAuthorizationStoreV1(database);
+		const authority = new PostgresEvaluationTaskAuthorityV1({
 			...database,
 			directory,
-			loadDataPolicy: async () => policy,
-			loadExperimentPolicy: async () => experimentPolicy,
-			storage,
-			taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
-			model: async () => {
-				throw new Error("Rule never calls model");
+			loadPolicy: evaluationPolicy,
+		});
+		const eventTx = new PostgresConversationEventTransactionV1(database);
+		const signer = generateKeyPairSync("ed25519");
+		const runtime = createConversationRuntimeV2({
+			workerId: "eval-fixture-worker",
+			signing: {
+				issuer: "fixture",
+				workerId: "eval-fixture-worker",
+				keyId: "fixture",
+				privateKey: signer.privateKey,
+			},
+			directory,
+			taskAuthorizationStore: authStore,
+			dispatchStore,
+			channelAuthorizationCurrent: (r) => authority.current(r.boundary),
+			resolveCurrentApplication: (applicationId, agentId) =>
+				sql.begin((tx) =>
+					readCurrentTaskApplicationV1(tx, { applicationId, agentId }),
+				),
+			resolveCurrentApiUseGrant: (principal, agentId) =>
+				sql.begin((tx) =>
+					readCurrentTaskApiUseGrantV1(tx, { principal, agentId }),
+				),
+			resolveRuntimeHost: async () => {
+				throw new Error(
+					"Controlled transport does not resolve a deployed Runtime",
+				);
 			},
 		});
-		const outboxes = createPostgresOutboxStore(database);
+		const fileJourney = await evaluationFileJourney({
+			principalKind,
+			task,
+			command,
+			signer,
+			authority,
+		});
+
+		const host = new FakeConversationRuntimeHostV1();
+		const began = new Date().toISOString();
+		const runtimeEvents: import("../../platform-core/src/conversation-dispatch.js").ConversationRuntimeEvent[] =
+			[
+				...(["intent", "started", "completed"] as const).map(
+					(phase, index) => ({
+						schemaVersion: 2 as const,
+						type: "operation" as const,
+						executionId: task.executionId,
+						adapterEventKey: `model-${phase}`,
+						cursor: `model-${index}`,
+						occurredAt: began,
+						payload: {
+							kind: "model" as const,
+							phase,
+							operationRef: "model-op",
+							attemptRef: "model-attempt",
+							...(phase !== "intent" ? { startedAt: began } : {}),
+							...(phase === "completed"
+								? {
+										finishedAt: began,
+										durationMs: 0,
+										usage: { inputTokens: 2, outputTokens: 1 },
+									}
+								: {}),
+							model: {
+								configVersion: "7",
+								modelOptionId: "model_primary",
+								modelId: "actual-fixture-model",
+								reasoningLevel: "low",
+							},
+						},
+					}),
+				),
+				...(["intent", "started", "completed"] as const).map(
+					(phase, index) => ({
+						schemaVersion: 2 as const,
+						type: "operation" as const,
+						executionId: task.executionId,
+						adapterEventKey: `tool-${phase}`,
+						cursor: `tool-${index}`,
+						occurredAt: began,
+						payload: {
+							kind: "tool" as const,
+							phase,
+							operationRef: "tool-op",
+							attemptRef: "tool-attempt",
+							toolId: "fixture.echo",
+							...(phase !== "intent" ? { startedAt: began } : {}),
+							...(phase === "completed"
+								? { finishedAt: began, durationMs: 0 }
+								: {}),
+						},
+					}),
+				),
+				{
+					schemaVersion: 1,
+					type: "text",
+					executionId: task.executionId,
+					adapterEventKey: "eval-output",
+					cursor: "1",
+					occurredAt: new Date().toISOString(),
+					payload: { delta: "yes" },
+				},
+				{
+					schemaVersion: 1,
+					type: "completed",
+					executionId: task.executionId,
+					adapterEventKey: "eval-completed",
+					cursor: "2",
+					occurredAt: new Date().toISOString(),
+					payload: { status: "completed" },
+				},
+			];
+
+		const dispatch = createConversationDispatchUseCaseV1({
+			store: dispatchStore,
+			authorization: runtime.authorization,
+			runtimeHost: {
+				dispatch: async (request) => {
+					await fileJourney.produceFile(request);
+					return host.dispatch(request);
+				},
+				recoverStatus: host.recoverStatus.bind(host),
+				async *events() {
+					yield* runtimeEvents;
+				},
+			},
+			events: createConversationEventUseCaseV1({ transaction: eventTx }),
+		});
 		try {
-			const [score] =
-				await sql`select id from platform.evaluation_score_intents where sample_task_id=${task.sampleTaskId}`;
-			if (!score) throw new Error("missing score");
-			const itemId = `evaluation-score:${score.id}`;
-			await sql`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${itemId}`;
-			const claim = await outboxes.claim({
-				itemId,
-				leaseOwner: "controlled-score",
-				leaseDurationMs: 30000,
+			const [outbox] =
+				await sql`select id from platform.outbox_items where scope_id=${task.conversationId} and operation='conversation.turn.submit.v1'`;
+			if (!outbox) throw new Error("missing original Task outbox");
+			await sql`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${outbox.id}`;
+			const result = await dispatch.dispatch({
+				schemaVersion: 1,
+				itemId: outbox.id,
+				workerId: "eval-fixture-worker",
 			});
-			if (!claim) throw new Error("missing scorer claim");
-			const { createEvaluationScoreWorkV1 } = await import(
-				"@agent-infra/platform-core"
-			);
+			expect(result).toMatchObject({ outcome: "accepted" });
+			const page = await core.get(experimentRequest, experiment.experimentId);
+			const observed = page.items.find(
+				(item) => item.executionId === task.executionId,
+			)?.actual;
+			expect(observed).toMatchObject({
+				status: "completed",
+				runtimeObserved: true,
+				preparedRuntime: {
+					configurationRevision: configuration.revision,
+					imageDigest: configuration.source.imageDigest,
+				},
+				facts: {
+					actualModelObserved: true,
+					models: expect.arrayContaining([
+						expect.objectContaining({
+							operationRef: "model-op",
+							attemptRef: "model-attempt",
+							phase: "completed",
+							model: expect.objectContaining({
+								modelId: "actual-fixture-model",
+							}),
+							usage: { inputTokens: 2, outputTokens: 1 },
+						}),
+					]),
+					tools: expect.arrayContaining([
+						expect.objectContaining({
+							toolId: "fixture.echo",
+							phase: "completed",
+						}),
+					]),
+				},
+				factsTruncated: false,
+			});
+			expect(host.sideEffectCount()).toBe(1);
+			expect(fileJourney.wasProduced()).toBe(true);
+			await fileJourney.assertTerminal();
 			expect(
-				await createEvaluationScoreWorkV1(scores).execute({
-					intentId: score.id,
+				await sql`select delivery_fence::int as fence,status from platform.outbox_items where id=${outbox.id}`,
+			).toEqual([{ fence: 1, status: "succeeded" }]);
+			expect(
+				await sql`select status from platform.conversation_executions where execution_id=${task.executionId}`,
+			).toEqual([{ status: "completed" }]);
+			expect(
+				await sql`select event_payload->>'text' as text from platform.conversation_events where execution_id=${task.executionId} and event_type='text.delta'`,
+			).toEqual([{ text: "yes" }]);
+			const scores = new PostgresEvaluationScoringV1({
+				...database,
+				directory,
+				loadDataPolicy: async () => policy,
+				loadExperimentPolicy: async () => experimentPolicy,
+				storage,
+				taskPolicy: {
+					maximumWaitingTasksPerAgent: 100,
+					waitingTimeoutMs: 30000,
+				},
+				model: async () => {
+					throw new Error("Rule never calls model");
+				},
+			});
+			const outboxes = createPostgresOutboxStore(database);
+			try {
+				const [score] =
+					await sql`select id from platform.evaluation_score_intents where sample_task_id=${task.sampleTaskId}`;
+				if (!score) throw new Error("missing score");
+				const itemId = `evaluation-score:${score.id}`;
+				await sql`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${itemId}`;
+				const claim = await outboxes.claim({
 					itemId,
 					leaseOwner: "controlled-score",
-					deliveryFence: claim.deliveryFence.toString(),
-				}),
-			).toEqual({ outcome: "completed" });
-			expect(
-				await sql`select status from platform.evaluation_score_intents where id=${score.id}`,
-			).toEqual([{ status: "scored" }]);
+					leaseDurationMs: 30000,
+				});
+				if (!claim) throw new Error("missing scorer claim");
+				const { createEvaluationScoreWorkV1 } = await import(
+					"@agent-infra/platform-core"
+				);
+				expect(
+					await createEvaluationScoreWorkV1(scores).execute({
+						intentId: score.id,
+						itemId,
+						leaseOwner: "controlled-score",
+						deliveryFence: claim.deliveryFence.toString(),
+					}),
+				).toEqual({ outcome: "completed" });
+				expect(
+					await sql`select status from platform.evaluation_score_intents where id=${score.id}`,
+				).toEqual([{ status: "scored" }]);
+			} finally {
+				await scores.close();
+				await outboxes.close();
+			}
 		} finally {
-			await scores.close();
-			await outboxes.close();
+			await fileJourney.close();
+			await eventTx.close();
+			await authStore.close();
+			await dispatchStore.close();
+			await authority.close();
 		}
-	} finally {
-		await eventTx.close();
-		await authStore.close();
-		await dispatchStore.close();
-		await authority.close();
-	}
-}, 30000);
+	},
+	30000,
+);
 
 it.each([
 	"post-send-unknown",
@@ -2654,3 +2702,423 @@ it("settles whole-experiment cancellation through metadata-only worker control",
 		await worker.close();
 	}
 }, 30000);
+
+async function evaluationFileJourney({
+	principalKind,
+	task,
+	command,
+	signer,
+	authority,
+}: {
+	principalKind: "user" | "application";
+	task: Awaited<ReturnType<typeof experiments.samples>>[number];
+	command: Awaited<ReturnType<typeof dataset>>;
+	signer: {
+		privateKey: import("node:crypto").KeyObject;
+		publicKey: import("node:crypto").KeyObject;
+	};
+	authority: import("./evaluation-task-authority.js").PostgresEvaluationTaskAuthorityV1;
+}) {
+	const { assemblePlatformFilesV1 } = await import(
+		"../../../apps/platform-api/src/file-assembly.js"
+	);
+	const { createPlatformHealthApp } = await import(
+		"../../../apps/platform-api/src/app.js"
+	);
+	const { registerFileRoutesV1 } = await import(
+		"../../../apps/platform-api/src/http/file-routes.js"
+	);
+	const { RuntimeBusinessGrantClaimsV4Schema } = await import(
+		"@agent-infra/contracts/runtime"
+	);
+	const { FileAccessResponseV1Schema } = await import(
+		"@agent-infra/contracts/files"
+	);
+	const { sessionSandboxFileExchangeTokenV1 } = await import(
+		"@agent-infra/platform-core"
+	);
+	const fileStorage = await startMinioFileFixtureV1();
+	let actorResolutions = 0;
+	const limits = {
+		revision: "fixture",
+		expiresAt: new Date(Date.now() + 60000).toISOString(),
+		maxBytes: 4096,
+		mediaTypes: ["text/plain"],
+	};
+	const serviceToken = "synthetic-eval-runtime-file-service";
+	const files = assemblePlatformFilesV1({
+		...database,
+		identity: { resolve: async () => null, hydrateUsers: async () => [] },
+		conversationAuthorization: {
+			authorize: async () => {
+				throw new Error("Eval must not impersonate a Web user");
+			},
+		},
+		readCurrentLimits: async () => {
+			throw new Error("Eval must use service-only limits");
+		},
+		evaluationCurrent: authority.conversationCurrent.bind(authority),
+		evaluationFileCurrent: authority.fileCurrent.bind(authority),
+		deployment: {
+			storage: fileStorage.storage,
+			issuer: "file-fixture",
+			keyVersion: "file-fixture",
+			privateKey: signer.privateKey,
+			publicKeys: new Map([["file-fixture", signer.publicKey]]),
+			runtimeIssuer: "fixture",
+			runtimeWorkerId: "eval-fixture-worker",
+			runtimePublicKeys: new Map([["fixture", signer.publicKey]]),
+			intentTtlMs: 60000,
+			accessTtlMs: 30000,
+			maxConcurrentTransfers: 2,
+			services: [{ token: serviceToken, agentIds: [configuration.agentId] }],
+			resolveActor: async () => {
+				actorResolutions++;
+				throw new Error("Application is not a user");
+			},
+			readLimits: async () => ({
+				configurationRevision: configuration.revision,
+				declarations: { agent: limits, channel: limits, deployment: limits },
+			}),
+		},
+	});
+	const fileApp = createPlatformHealthApp();
+	registerFileRoutesV1(fileApp, files.dependencies);
+	const fileServer = serve({
+		fetch: fileApp.fetch,
+		hostname: "127.0.0.1",
+		port: 0,
+	});
+	if (!fileServer.listening)
+		await new Promise<void>((resolve) => fileServer.once("listening", resolve));
+	const fileAddress = fileServer.address();
+	if (!fileAddress || typeof fileAddress === "string")
+		throw new Error("file fixture server");
+	const fileOrigin = `http://127.0.0.1:${fileAddress.port}`;
+	let fileProduced = false;
+	let checkRevokedFile: (() => Promise<void>) | undefined;
+	const produceFile = async (
+		runtimeRequest: import("../../platform-core/src/conversation-dispatch.js").ConversationRuntimeDispatchRequestV1,
+	) => {
+		const [record] =
+			await sql`select id,boundary from platform.task_authorization_records where execution_id=${task.executionId}`;
+		const issuedAt = Date.now() - 1000;
+		const claims = RuntimeBusinessGrantClaimsV4Schema.parse({
+			schemaVersion: 4,
+			issuer: "fixture",
+			audience: "runtime_host",
+			issuedAt,
+			expiresAt: issuedAt + 30000,
+			grantId: randomUUID(),
+			workerId: "eval-fixture-worker",
+			principal: { kind: principalKind, id: "runner" },
+			executionSource: "eval",
+			relayKeyBinding: {
+				purpose: "agent-default",
+				subjectId: configuration.agentId,
+				ciphertextRef: "eval-default",
+				version: 1,
+			},
+			agentId: configuration.agentId,
+			channelId: "eval",
+			conversationId: task.conversationId,
+			executionId: task.executionId,
+			turnId: runtimeRequest.turnId,
+			sessionGeneration: runtimeRequest.sessionGeneration,
+			traceId: runtimeRequest.traceId,
+			hostSessionRef: null,
+			operation: {
+				kind: "execution",
+				id: task.executionId,
+				deliveryFence: runtimeRequest.deliveryFence,
+				executionDeliveryFence: runtimeRequest.deliveryFence,
+			},
+			allowedCommands: ["turn.submit"],
+			purpose: "business",
+			authorizationRecordId: record?.id,
+			attachments: [],
+			requestDigest: "a".repeat(64),
+		});
+		const header = Buffer.from(
+			JSON.stringify({
+				alg: "EdDSA",
+				kid: "fixture",
+				typ: "runtime-execution+jws",
+			}),
+		).toString("base64url");
+		const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
+		const signing = `${header}.${payload}`;
+		const executionGrant = {
+			schemaVersion: 4,
+			format: "runtime-execution-jws",
+			token: `${signing}.${sign(null, Buffer.from(signing), signer.privateKey).toString("base64url")}`,
+		};
+		const [sandbox] =
+			await sql`select sandbox_id,resource_fence,session_generation,resource_policy->>'namespace' as namespace from platform.session_sandbox_allocations where conversation_id=${task.conversationId}`;
+		if (!sandbox) throw new Error("no sandbox");
+		const token = sessionSandboxFileExchangeTokenV1(serviceToken, {
+			sandboxId: sandbox.sandbox_id,
+			namespace: sandbox.namespace,
+			generation: Number(sandbox.session_generation),
+			resourceFence: Number(sandbox.resource_fence),
+		});
+		const text = "synthetic file output";
+		const descriptor = {
+			name: "answer.txt",
+			mediaType: "text/plain",
+			sizeBytes: Buffer.byteLength(text),
+			sha256: createHash("sha256").update(text).digest("hex"),
+		};
+		const key = randomUUID();
+		const exchanged = await fetch(
+			`${fileOrigin}/internal/v1/files/runtime-exchange`,
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/json",
+					"Idempotency-Key": key,
+				},
+				body: JSON.stringify({
+					schemaVersion: 2,
+					executionGrant,
+					idempotencyKey: key,
+					operation: "result",
+					descriptor,
+				}),
+			},
+		);
+		expect(exchanged.status).toBe(200);
+		const access = FileAccessResponseV1Schema.parse(await exchanged.json());
+		const transferHeaders = {
+			Authorization: `Bearer ${token}`,
+			"X-Platform-File-Grant": access.grant.token,
+		};
+		const uploaded = await fetch(`${fileOrigin}${access.path}`, {
+			method: "PUT",
+			headers: { ...transferHeaders, "Content-Type": "text/plain" },
+			body: text,
+		});
+		expect(uploaded.status).toBe(204);
+		const completed = await fetch(
+			`${fileOrigin}/api/v1/conversations/${task.conversationId}/files/${access.file.fileId}/complete`,
+			{
+				method: "POST",
+				headers: {
+					...transferHeaders,
+					"Content-Type": "application/json",
+					"Idempotency-Key": randomUUID(),
+				},
+				body: JSON.stringify({ schemaVersion: 1, accessId: access.accessId }),
+			},
+		);
+		expect(completed.status).toBe(200);
+		const attachmentId = randomUUID();
+		const objectRef = randomUUID();
+		const bodyBytes = new TextEncoder().encode("synthetic input bytes");
+		const inputDescriptor = {
+			name: "input.txt",
+			mediaType: "text/plain",
+			sizeBytes: bodyBytes.length,
+			sha256: createHash("sha256").update(bodyBytes).digest("hex"),
+		};
+		const expiresAt = new Date(Date.now() + 60000).toISOString();
+		await fileStorage.storage.upload({
+			objectRef,
+			descriptor: inputDescriptor,
+			body: new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(bodyBytes);
+					controller.close();
+				},
+			}),
+			expiresAt,
+		});
+		const stored = await fileStorage.storage.inspect(objectRef);
+		if (!stored) throw new Error("input object missing");
+		const file = {
+			actorId: "runner",
+			agentId: configuration.agentId,
+			channelId: "eval",
+			conversationId: task.conversationId,
+			fileId: attachmentId,
+			objectRef,
+			kind: "attachment",
+			idempotencyKey: randomUUID(),
+			descriptor: inputDescriptor,
+			status: "available",
+			executionId: task.executionId,
+			messageId: null,
+			sessionGeneration: runtimeRequest.sessionGeneration,
+			objectVersion: stored.version,
+			etag: stored.etag,
+			createdAt: new Date().toISOString(),
+			expiresAt,
+			updatedAt: new Date().toISOString(),
+			revision: 1,
+		};
+		await sql`insert into platform.files(file_id,conversation_id,actor_id,idempotency_key,record,updated_at)values(${attachmentId},${task.conversationId},'runner',${file.idempotencyKey},${sql.json(file)},clock_timestamp())`;
+		const signGrant = (value: typeof claims) => {
+			const payload = Buffer.from(JSON.stringify(value)).toString("base64url");
+			const content = `${header}.${payload}`;
+			return {
+				schemaVersion: 4,
+				format: "runtime-execution-jws",
+				token: `${content}.${sign(null, Buffer.from(content), signer.privateKey).toString("base64url")}`,
+			};
+		};
+		const readClaims = {
+			...claims,
+			attachments: [{ attachmentId, operations: ["read" as const] }],
+		};
+		const exchangeRead = async (value: typeof readClaims, key = randomUUID()) =>
+			fetch(`${fileOrigin}/internal/v1/files/runtime-exchange`, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/json",
+					"Idempotency-Key": key,
+				},
+				body: JSON.stringify({
+					schemaVersion: 2,
+					executionGrant: signGrant(value),
+					idempotencyKey: key,
+					operation: "read",
+					fileId: attachmentId,
+				}),
+			});
+		const readResponse = await exchangeRead(readClaims);
+		expect(readResponse.status).toBe(200);
+		const readAccess = FileAccessResponseV1Schema.parse(
+			await readResponse.json(),
+		);
+		const read = () =>
+			fetch(`${fileOrigin}${readAccess.path}`, {
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"X-Platform-File-Grant": readAccess.grant.token,
+				},
+			});
+		let response = await read();
+		expect(response.status).toBe(200);
+		expect(Buffer.from(await response.arrayBuffer())).toEqual(
+			Buffer.from(bodyBytes),
+		);
+		expect(
+			(
+				await exchangeRead({
+					...readClaims,
+					principal: {
+						kind: principalKind === "application" ? "user" : "application",
+						id: "runner",
+					},
+				})
+			).status,
+		).toBe(404);
+		const accessClaims = files.dependencies.codec.verify(readAccess.grant);
+		if (!accessClaims.execution?.evaluation)
+			throw new Error("missing signed Eval binding");
+		const forged = files.dependencies.codec.sign({
+			...accessClaims,
+			keyVersion: "file-fixture",
+			idempotencyKey: "forged-fixture",
+			execution: {
+				...accessClaims.execution,
+				evaluation: {
+					...accessClaims.execution.evaluation,
+					principal: {
+						kind: principalKind === "application" ? "user" : "application",
+						id: "runner",
+					},
+				},
+			},
+		});
+		expect(
+			(
+				await fetch(`${fileOrigin}${readAccess.path}`, {
+					headers: {
+						Authorization: `Bearer ${token}`,
+						"X-Platform-File-Grant": forged.token,
+					},
+				})
+			).status,
+		).toBe(404);
+		await sql`update platform.conversation_executions set delivery_fence=delivery_fence+1 where execution_id=${task.executionId}`;
+		try {
+			expect((await read()).status).toBe(404);
+			expect((await exchangeRead(readClaims)).status).toBe(404);
+		} finally {
+			await sql`update platform.conversation_executions set delivery_fence=${runtimeRequest.deliveryFence} where execution_id=${task.executionId}`;
+		}
+		await sql`update platform.agent_principal_grants set revoked_at=clock_timestamp() where agent_id=${configuration.agentId} and principal_type=${principalKind} and principal_id='runner' and grant_type='use'`;
+		try {
+			expect((await read()).status).toBe(404);
+		} finally {
+			await sql`update platform.agent_principal_grants set revoked_at=null where agent_id=${configuration.agentId} and principal_type=${principalKind} and principal_id='runner' and grant_type='use'`;
+		}
+		if (principalKind === "application") {
+			await sql`update platform.platform_applications set status='disabled' where id='runner'`;
+			try {
+				expect((await read()).status).toBe(404);
+			} finally {
+				await sql`update platform.platform_applications set status='active' where id='runner'`;
+			}
+		}
+		const [workload] =
+			await sql`select state from platform.workload_reconciliations where agent_id=${configuration.agentId}`;
+		await sql`update platform.workload_reconciliations set state=jsonb_set(state,'{capabilities,attachments}','false'::jsonb) where agent_id=${configuration.agentId}`;
+		try {
+			expect((await read()).status).toBe(404);
+		} finally {
+			await sql`update platform.workload_reconciliations set state=${sql.json(workload?.state)} where agent_id=${configuration.agentId}`;
+		}
+		await sql`update platform.agents set current_configuration_revision=current_configuration_revision+1 where id=${configuration.agentId}`;
+		try {
+			expect((await read()).status).toBe(404);
+		} finally {
+			await sql`update platform.agents set current_configuration_revision=${configuration.revision} where id=${configuration.agentId}`;
+		}
+		const beforeLimits = limits.maxBytes;
+		limits.maxBytes = 1;
+		try {
+			expect((await read()).status).toBe(404);
+		} finally {
+			limits.maxBytes = beforeLimits;
+		}
+		const oldGrant =
+			await sql`select id,data from platform.evaluation_grants where dataset_id=${command.datasetId} and data->'principal'->>'kind'=${principalKind} and data->'operations' ? 'run'`;
+		const runGrant = oldGrant[0];
+		if (!runGrant) throw new Error("run grant missing");
+		await sql`update platform.evaluation_grants set data=jsonb_set(data,'{expiresAt}',to_jsonb(${new Date(Date.now() - 1).toISOString()}::text)) where id=${runGrant.id}`;
+		try {
+			expect((await read()).status).toBe(404);
+		} finally {
+			await sql`update platform.evaluation_grants set data=${sql.json(runGrant.data)} where id=${runGrant.id}`;
+		}
+		response = await read();
+		expect(response.status).toBe(200);
+		expect(
+			createHash("sha256")
+				.update(Buffer.from(await response.arrayBuffer()))
+				.digest("hex"),
+		).toBe(inputDescriptor.sha256);
+		checkRevokedFile = async () => {
+			expect((await read()).status).toBe(404);
+			expect((await exchangeRead(readClaims)).status).toBe(404);
+		};
+
+		fileProduced = true;
+		expect(actorResolutions).toBe(0);
+	};
+	return {
+		produceFile,
+		wasProduced: () => fileProduced,
+		assertTerminal: () => checkRevokedFile?.(),
+		close: async () => {
+			await files.close();
+			if ("closeAllConnections" in fileServer) fileServer.closeAllConnections();
+			await new Promise<void>((resolve) => fileServer.close(() => resolve()));
+			await fileStorage.close();
+		},
+	};
+}

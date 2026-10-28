@@ -1,4 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { snapshotObject } from "./conversation-execution-values.js";
+import {
+	parseTaskAuthorizationBoundaryV1,
+	parseTaskPrincipalV1,
+	type TaskPrincipalV1,
+} from "./task-authorization.js";
 
 export interface FileScopeV1 {
 	readonly actorId: string;
@@ -18,7 +25,13 @@ export interface FileLimitsV1 {
 	readonly mediaTypes: readonly string[];
 	readonly maxBytes: number;
 }
+export interface EvaluationFileBindingV1 {
+	readonly principal: TaskPrincipalV1;
+	readonly authorizationRecordId: string;
+	readonly deliveryFence: number;
+}
 export interface FileExecutionV1 {
+	readonly evaluation?: EvaluationFileBindingV1;
 	readonly executionId: string;
 	readonly sessionGeneration: number;
 	readonly grantId: string;
@@ -124,6 +137,7 @@ export interface FileAccessRecordV1 extends FileScopeV1 {
 	readonly expiresAt: string;
 	readonly maxBytes: number;
 	readonly execution: {
+		readonly evaluation?: EvaluationFileBindingV1;
 		readonly executionId: string;
 		readonly sessionGeneration: number;
 		readonly grantId: string;
@@ -132,6 +146,7 @@ export interface FileAccessRecordV1 extends FileScopeV1 {
 	readonly idempotencyKey: string;
 }
 export interface FileExecutionStateV1 extends FileScopeV1 {
+	readonly principal?: TaskPrincipalV1;
 	readonly executionId: string;
 	readonly sessionGeneration: number;
 	readonly deliveryFence: number;
@@ -209,6 +224,17 @@ function sameScope(left: FileScopeV1, right: FileScopeV1) {
 		left.channelId === right.channelId &&
 		left.conversationId === right.conversationId
 	);
+}
+function requireFileAuthorityShape(authority: FileAuthorityV1 | null) {
+	if (!authority) return;
+	const binding = authority.execution?.evaluation;
+	if (authority.channelId === "eval" && !binding) denied();
+	if (
+		binding &&
+		(authority.channelId !== "eval" ||
+			binding.principal.id !== authority.actorId)
+	)
+		denied();
 }
 function descriptor(input: FileDescriptorV1): FileDescriptorV1 {
 	if (
@@ -288,6 +314,38 @@ export function createFileAuthorityV1(options: {
 			execution.stopPending
 		)
 			denied();
+		if (authority.channelId === "eval") {
+			const value = snapshotObject(grant.evaluation, [
+				"principal",
+				"authorizationRecordId",
+				"deliveryFence",
+			]);
+			const principal = parseTaskPrincipalV1(value.principal);
+			if (
+				typeof value.authorizationRecordId !== "string" ||
+				!value.authorizationRecordId ||
+				!Number.isSafeInteger(value.deliveryFence) ||
+				Number(value.deliveryFence) < 1 ||
+				execution.deliveryFence !== value.deliveryFence ||
+				!isDeepStrictEqual(execution.principal, principal) ||
+				principal.id !== authority.actorId
+			)
+				denied();
+			const record = await tx.getTaskAuthorization(
+				value.authorizationRecordId,
+				grant.executionId,
+			);
+			if (!record || record.revoked) denied();
+			const boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
+			if (
+				!boundary.evaluation ||
+				boundary.channelId !== "eval" ||
+				boundary.agentId !== authority.agentId ||
+				!isDeepStrictEqual(boundary.principal, principal) ||
+				boundary.agentAuthorizationRevision !== execution.authorizationRevision
+			)
+				denied();
+		} else if (grant.evaluation) denied();
 		return execution;
 	}
 
@@ -304,6 +362,7 @@ export function createFileAuthorityV1(options: {
 			request.conversationId,
 			request.operation,
 		);
+		requireFileAuthorityShape(authority);
 		if (
 			!authority ||
 			!tx.conversation ||
@@ -371,7 +430,11 @@ export function createFileAuthorityV1(options: {
 					access.execution.executionId !== authority.execution.executionId ||
 					access.execution.sessionGeneration !==
 						authority.execution.sessionGeneration ||
-					access.execution.grantId !== authority.execution.grantId
+					access.execution.grantId !== authority.execution.grantId ||
+					!isDeepStrictEqual(
+						access.execution.evaluation,
+						authority.execution.evaluation,
+					)
 				: authority.execution !== null
 		)
 			denied();
@@ -410,6 +473,7 @@ export function createFileAuthorityV1(options: {
 				request.conversationId,
 				"write",
 			);
+			requireFileAuthorityShape(authority);
 			if (
 				!authority ||
 				(kind === "attachment"
@@ -489,6 +553,7 @@ export function createFileAuthorityV1(options: {
 					conversationId,
 					"write",
 				);
+				requireFileAuthorityShape(authority);
 				if (
 					!authority ||
 					authority.execution ||
@@ -514,6 +579,7 @@ export function createFileAuthorityV1(options: {
 					conversationId,
 					"write",
 				);
+				requireFileAuthorityShape(authority);
 				if (
 					!authority ||
 					!tx.conversation ||
@@ -571,7 +637,11 @@ export function createFileAuthorityV1(options: {
 									authority.execution?.executionId ||
 								prior.execution.sessionGeneration !==
 									authority.execution?.sessionGeneration ||
-								prior.execution.grantId !== authority.execution?.grantId
+								prior.execution.grantId !== authority.execution?.grantId ||
+								!isDeepStrictEqual(
+									prior.execution.evaluation,
+									authority.execution?.evaluation,
+								)
 							: authority.execution !== null)
 					)
 						throw new FileAuthorityError("conflict");
@@ -616,6 +686,13 @@ export function createFileAuthorityV1(options: {
 								executionId: authority.execution.executionId,
 								sessionGeneration: authority.execution.sessionGeneration,
 								grantId: authority.execution.grantId,
+								...(authority.execution.evaluation
+									? {
+											evaluation: structuredClone(
+												authority.execution.evaluation,
+											),
+										}
+									: {}),
 							}
 						: null,
 					keyVersion: options.keyVersion,

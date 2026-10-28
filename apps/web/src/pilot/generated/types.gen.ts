@@ -531,6 +531,14 @@ export type FileAccessClaimsV1 = {
     channelId: string;
     conversationId: string;
     execution: {
+        evaluation?: {
+            authorizationRecordId: string;
+            deliveryFence: number;
+            principal: {
+                id: string;
+                kind: 'user' | 'application';
+            };
+        };
         executionId: string;
         grantId: string;
         sessionGeneration: number;

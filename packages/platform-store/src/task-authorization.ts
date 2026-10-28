@@ -627,6 +627,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 						!execution ||
 						boundary.principal.kind !== execution.principalType ||
 						(boundary.principal.kind === "application" &&
+							boundary.channelId !== "eval" &&
 							!isTaskApiChannelV1(boundary.channelId, boundary.principal)) ||
 						boundary.principal.id !== execution.actorId ||
 						boundary.agentId !== execution.agentId ||

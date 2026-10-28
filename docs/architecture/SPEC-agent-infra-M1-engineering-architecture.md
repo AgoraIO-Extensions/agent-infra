@@ -2731,6 +2731,17 @@ Runtime 配置修订、镜像 Digest 和资源配置摘要，`preparedRuntime` �
 任务查询、取消、停止及恢复复用原任务 ID、主体和 generation/fence；同一受理意图重放不创建第二个
 样本任务。保存输出副本前再次检查 Eval 权限，原任务内容及其引用仍受原权限保护。共用 Conversation
 读取、SSE、文件与恢复入口也必须识别 Eval 绑定并检查用途权限，不能通过底层任务入口绕过数据撤销。
+Eval 执行文件沿原 V4 Runtime Grant、普通文件对象与 FileAccess 流程；不将 Eval 数据对象当作文件。
+服务端在验签及持久 Task/Execution 核验后，给 `FileExecutionBindingV1` 的可选 `evaluation`
+字段写入 `{ principal: { kind: user|application, id }, authorizationRecordId, deliveryFence }`，
+并由现有 FileAccess 签名器签入 token；字段禁止由上传/访问请求自报，只有 `channelId=eval` 使用，
+Eval 执行文件缺字段时拒绝。普通旧用户文件 token 与 Runtime V4 wire 不变，不新增 token 类型。
+后续每次兑换、PUT、GET 和 complete 都从原 Execution 回读 typed principal、原授权记录、
+generation/fence、stop/终态与当前 Agent use/Eval run 授权；同字符串 ID 的 user/application 不能互换。
+执行文件能力来自当前已验证 Runtime 配置/镜像及文件能力事实，限制仍取既有 Agent/channel/deployment
+FileLimits，不把应用解析为用户，不构造 IdentityContext、Owner 或管理员授权。签名 allowlist、服务/
+Sandbox 凭据与原对象版本核验仍生效；身份、授权、capability、配置或 limit 漂移一律拒绝。
+
 自定义 Agent 只接纳已验证的平台任务能力，`self-managed` 不因声明进入本路径；模板对比沿平台批准的
 测试配置，不授予 Owner 锁定生产旧镜像的能力。
 

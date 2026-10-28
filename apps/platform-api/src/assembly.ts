@@ -1063,6 +1063,9 @@ export function assemblePlatformApi(
 	}
 	const files = input.files
 		? assemblePlatformFilesV1({
+				evaluationFileCurrent: evaluationTaskAuthority?.fileCurrent.bind(
+					evaluationTaskAuthority,
+				),
 				evaluationCurrent: evaluationTaskAuthority?.conversationCurrent.bind(
 					evaluationTaskAuthority,
 				),

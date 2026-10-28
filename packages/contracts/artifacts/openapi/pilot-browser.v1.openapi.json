@@ -3080,6 +3080,47 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "evaluation": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "authorizationRecordId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "deliveryFence": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "principal": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "user",
+                              "application"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "id"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "principal",
+                      "authorizationRecordId",
+                      "deliveryFence"
+                    ],
+                    "type": "object"
+                  },
                   "executionId": {
                     "minLength": 1,
                     "type": "string"

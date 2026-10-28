@@ -23,28 +23,54 @@ export const FileDescriptorV1Schema = z.strictObject({
 	sizeBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
 	sha256: z.string().regex(/^[a-f0-9]{64}$/),
 });
+const EvaluationFileBindingV1Schema = z.strictObject({
+	principal: z.strictObject({
+		kind: z.enum(["user", "application"]),
+		id: OpaqueIdV1Schema,
+	}),
+	authorizationRecordId: OpaqueIdV1Schema,
+	deliveryFence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+});
 export const FileExecutionBindingV1Schema = z.strictObject({
+	evaluation: EvaluationFileBindingV1Schema.optional(),
 	executionId: OpaqueIdV1Schema,
 	sessionGeneration: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
 	grantId: OpaqueIdV1Schema,
 });
-export const FileAccessClaimsV1Schema = z.strictObject({
-	schemaVersion: z.literal(1),
-	purpose: z.literal("file_access"),
-	issuer: z.string().min(1).max(255),
-	audience: z.literal("platform_files"),
-	accessId: OpaqueIdV1Schema,
-	fileId: OpaqueIdV1Schema,
-	actorId: OpaqueIdV1Schema,
-	agentId: OpaqueIdV1Schema,
-	channelId: OpaqueIdV1Schema,
-	conversationId: OpaqueIdV1Schema,
-	operation: z.enum(["read", "write"]),
-	issuedAt: Rfc3339TimestampV1Schema,
-	expiresAt: Rfc3339TimestampV1Schema,
-	maxBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-	execution: FileExecutionBindingV1Schema.nullable(),
-});
+export const FileAccessClaimsV1Schema = z
+	.strictObject({
+		schemaVersion: z.literal(1),
+		purpose: z.literal("file_access"),
+		issuer: z.string().min(1).max(255),
+		audience: z.literal("platform_files"),
+		accessId: OpaqueIdV1Schema,
+		fileId: OpaqueIdV1Schema,
+		actorId: OpaqueIdV1Schema,
+		agentId: OpaqueIdV1Schema,
+		channelId: OpaqueIdV1Schema,
+		conversationId: OpaqueIdV1Schema,
+		operation: z.enum(["read", "write"]),
+		issuedAt: Rfc3339TimestampV1Schema,
+		expiresAt: Rfc3339TimestampV1Schema,
+		maxBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+		execution: FileExecutionBindingV1Schema.nullable(),
+	})
+	.superRefine((value, context) => {
+		const binding = value.execution?.evaluation;
+		if (
+			binding &&
+			(value.channelId !== "eval" || binding.principal.id !== value.actorId)
+		)
+			context.addIssue({
+				code: "custom",
+				message: "Invalid Eval execution binding",
+			});
+		if (value.channelId === "eval" && !binding)
+			context.addIssue({
+				code: "custom",
+				message: "Eval execution binding is required",
+			});
+	});
 export type FileDescriptorV1 = z.infer<typeof FileDescriptorV1Schema>;
 export type FileAccessClaimsV1 = z.infer<typeof FileAccessClaimsV1Schema>;
 

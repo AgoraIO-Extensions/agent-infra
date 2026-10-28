@@ -6689,7 +6689,69 @@ function evaluationRemoval(previous, current) {
 	return removedScope(previous, current);
 }
 
+// Eval FileAccess adds only this signed optional execution tuple; never strip a published binding.
+function normalizeEvaluationFileBinding3639(previous, current) {
+	const before = previous.$defs ?? previous.components?.schemas;
+	const after = current.$defs ?? current.components?.schemas;
+	const prior = before?.FileAccessClaimsV1?.properties?.execution?.anyOf?.find(
+		(value) => value.type === "object",
+	);
+	const next = after?.FileAccessClaimsV1?.properties?.execution?.anyOf?.find(
+		(value) => value.type === "object",
+	);
+	if (
+		!prior ||
+		!next ||
+		prior.properties?.evaluation !== undefined ||
+		next.properties?.evaluation === undefined
+	)
+		return current;
+	if (
+		next.required?.includes("evaluation") ||
+		createHash("sha256")
+			.update(JSON.stringify(next.properties.evaluation))
+			.digest("hex") !==
+			"7a2f1d0e0e654c62461388c7eec6560d9eaea3ad61dbf5ce60a046c0f9e1d683"
+	)
+		return current;
+	const copy = structuredClone(current);
+	const schemas = copy.$defs ?? copy.components.schemas;
+	delete schemas.FileAccessClaimsV1.properties.execution.anyOf.find(
+		(value) => value.type === "object",
+	).properties.evaluation;
+	return copy;
+}
+
 function evaluateBreakingChanges(previousValue, currentValue) {
+	const priorFile = (
+		previousValue.$defs ?? previousValue.components?.schemas
+	)?.FileAccessClaimsV1?.properties?.execution?.anyOf?.find(
+		(value) => value.type === "object",
+	);
+	const nextFile = (
+		currentValue.$defs ?? currentValue.components?.schemas
+	)?.FileAccessClaimsV1?.properties?.execution?.anyOf?.find(
+		(value) => value.type === "object",
+	);
+	if (
+		priorFile &&
+		nextFile &&
+		!priorFile.properties?.evaluation &&
+		nextFile.properties?.evaluation &&
+		(nextFile.required?.includes("evaluation") ||
+			createHash("sha256")
+				.update(JSON.stringify(nextFile.properties.evaluation))
+				.digest("hex") !==
+				"7a2f1d0e0e654c62461388c7eec6560d9eaea3ad61dbf5ce60a046c0f9e1d683")
+	)
+		return ["unapproved Eval FileAccess binding"];
+
+	const evalFiles = normalizeEvaluationFileBinding3639(
+		previousValue,
+		currentValue,
+	);
+	if (evalFiles !== currentValue)
+		return findBreakingChanges(previousValue, evalFiles);
 	if (evaluationRemoval(previousValue, currentValue))
 		return ["removed published Eval contract"];
 	const previousExperiments = normalizeEvaluationExperiments3639(previousValue);

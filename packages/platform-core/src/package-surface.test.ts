@@ -190,6 +190,7 @@ describe("platform-core package surface", () => {
 			"isBatchableConversationEventV1",
 			"isConfirmedResultFileV1",
 			"isConversationGenerationBarrierConfirmedV1",
+			"isEvaluationFileRuntimeCurrentV1",
 			"isNativeCapabilityModelSelectionCurrentV6",
 			"isPersonalApiAgentMetadataReadAllowedV1",
 			"isPlatformConversationChannelCurrentV1",

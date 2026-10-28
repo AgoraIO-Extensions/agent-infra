@@ -2,6 +2,7 @@ import {
 	FileAuthorityError,
 	type FileStoreV1,
 	type FileTransactionV1,
+	parseTaskPrincipalV1,
 } from "@agent-infra/platform-core";
 import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -70,6 +71,10 @@ export class PostgresFileStoreV1 implements FileStoreV1 {
 							.from(conversationStops)
 							.where(eq(conversationStops.executionId, executionId));
 						return {
+							principal: parseTaskPrincipalV1({
+								kind: row.principalType,
+								id: row.actorId,
+							}),
 							agentId: row.agentId,
 							actorId: row.actorId,
 							channelId: row.channelId,

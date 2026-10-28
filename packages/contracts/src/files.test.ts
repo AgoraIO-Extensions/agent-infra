@@ -328,3 +328,69 @@ describe("file authority wire boundary", () => {
 			});
 	});
 });
+
+it("allows only server-signed Eval execution binding and preserves ordinary legacy claims", () => {
+	const old = {
+		schemaVersion: 1,
+		purpose: "file_access",
+		issuer: "fixture",
+		audience: "platform_files",
+		accessId: "access",
+		fileId: "file",
+		actorId: "same",
+		agentId: "agent",
+		channelId: "web",
+		conversationId: "conversation",
+		operation: "write",
+		issuedAt: "2026-01-01T00:00:00Z",
+		expiresAt: "2099-01-01T00:00:00Z",
+		maxBytes: 5,
+		execution: {
+			executionId: "execution",
+			sessionGeneration: 1,
+			grantId: "grant",
+		},
+	};
+	expect(FileAccessClaimsV1Schema.parse(old)).toEqual(old);
+	const binding = {
+		principal: { kind: "application", id: "same" },
+		authorizationRecordId: "record",
+		deliveryFence: 1,
+	};
+	const current = {
+		...old,
+		channelId: "eval",
+		execution: { ...old.execution, evaluation: binding },
+	};
+	expect(FileAccessClaimsV1Schema.parse(current)).toEqual(current);
+	for (const value of [
+		{ ...current, execution: null },
+		{ ...current, execution: old.execution },
+		{ ...old, execution: current.execution },
+		{
+			...current,
+			execution: {
+				...current.execution,
+				evaluation: {
+					...binding,
+					principal: { kind: "application", id: "foreign" },
+				},
+			},
+		},
+		{
+			...current,
+			execution: {
+				...current.execution,
+				evaluation: { ...binding, deliveryFence: 0 },
+			},
+		},
+		{
+			...current,
+			execution: {
+				...current.execution,
+				evaluation: { ...binding, owner: true },
+			},
+		},
+	])
+		expect(FileAccessClaimsV1Schema.safeParse(value).success).toBe(false);
+});
