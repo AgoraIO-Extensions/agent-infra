@@ -46,6 +46,10 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 
 ## 可移植的一键顺序
 
+自定义 Agent 的验收方式由创建请求的 `interactionMode` 决定：`platform-adapter` 必须验证
+当前 Agent 的三轮 Platform 对话；`self-managed` 必须验证自己的应用入口。之前流程对所有
+custom 都要求 HTML probe，导致 ACP 对话成功后仍无法结束；当前分派保留各自完整的检查。
+
 把所有私有输入放在仓库外的 0600/0700 目录，然后使用同一组环境变量运行：
 
 1. `plan`：校验 clean source、同源 amd64 image manifests、Helm 渲染、Server version 和所有私有依赖，不写集群。
