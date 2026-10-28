@@ -224,6 +224,39 @@ describe("GA Kubernetes Workload adapter", () => {
 			),
 		).toBe(false);
 	});
+	it.each([false, true])(
+		"keeps a valid Skill generation stable across reconciliation (binding=%s)",
+		async (bound) => {
+			const f = fixture();
+			const desired = {
+				...workloadDesiredFixture(),
+				skills: bound ? [skillProjection] : [],
+				skillGenerationId: "a".repeat(64),
+				...(bound
+					? { skillAppliedBindings: JSON.stringify([appliedBinding]) }
+					: {}),
+			};
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			expect(await adapter.observe(desired, identity)).toBe("healthy");
+			const live = {
+				...desired,
+				expectedWorkload: {
+					state: "present" as const,
+					workloadUid: identity.uid,
+					workloadGeneration: identity.generation,
+				},
+			};
+			expect(await adapter.apply(live)).toEqual(identity);
+			const writes = f.writes.length;
+			for (let attempt = 0; attempt < 3; attempt++) {
+				expect(await f.adapter().apply(live)).toEqual(identity);
+				expect(await f.adapter().observe(live, identity)).toBe("healthy");
+			}
+			expect(f.writes).toHaveLength(writes);
+		},
+	);
 
 	it.each([
 		[
@@ -250,6 +283,7 @@ describe("GA Kubernetes Workload adapter", () => {
 			const adapter = f.adapter();
 			const identity = await adapter.apply(desired);
 			if (!identity || identity === "pending") throw new Error();
+			expect(await adapter.observe(desired, identity)).toBe("healthy");
 			const key = `StatefulSet/${desired.service.name}`;
 			const workload = structuredClone(f.resources.get(key)) as V1StatefulSet;
 			const mount =
@@ -263,6 +297,37 @@ describe("GA Kubernetes Workload adapter", () => {
 			await expect(adapter.promote(desired, identity)).rejects.toThrow();
 		},
 	);
+	for (const kind of ["StatefulSet", "Pod"] as const) {
+		it.each(["runtime-data", "missing", "extra"] as const)(
+			`rejects %s Skill mount drift in ${kind}`,
+			async (mode) => {
+				const f = fixture();
+				const desired = {
+					...workloadDesiredFixture(),
+					skills: [],
+					skillGenerationId: "a".repeat(64),
+				};
+				const adapter = f.adapter();
+				const identity = await adapter.apply(desired);
+				if (!identity || identity === "pending") throw new Error();
+				expect(await adapter.observe(desired, identity)).toBe("healthy");
+				const key = `${kind}/${desired.service.name}${kind === "Pod" ? "-0" : ""}`;
+				const resource = structuredClone(f.resources.get(key));
+				const pod =
+					kind === "Pod"
+						? (resource as V1Pod).spec
+						: (resource as V1StatefulSet).spec?.template.spec;
+				const mounts = pod?.containers[0]?.volumeMounts;
+				if (!resource || !mounts?.[0]) throw new Error();
+				if (mode === "runtime-data") mounts[0].subPath = "";
+				else if (mode === "missing") mounts.pop();
+				else mounts.push({ name: "data", mountPath: "/unapproved" });
+				f.resources.set(key, resource);
+				expect(await adapter.observe(desired, identity)).toBe("drifted");
+				await expect(adapter.promote(desired, identity)).rejects.toThrow();
+			},
+		);
+	}
 	it("starts other route closures while a Service operation is pending and waits for its outcome", async () => {
 		const f = fixture();
 		const adapter = f.adapter();

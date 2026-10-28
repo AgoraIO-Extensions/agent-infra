@@ -25,6 +25,10 @@ import {
 	revisionLabel,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
+import {
+	skillHubRuntimeDataSubPathV1,
+	skillHubVolumeMountV1,
+} from "./kubernetes-runtime-skill-mount.js";
 export function createKubernetesPodValidationV1(dependencies: {
 	readonly connectionConsumerControl?: boolean;
 	readonly policy: KubernetesWorkloadPolicyV1;
@@ -458,6 +462,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 			? runtimeConnectionConsumerControlPodV1({ spec: specInput }).spec
 			: specInput;
 		if (hasUnsafePodSpec(pod, expectedIdentity)) return true;
+		const skillHubMount = skillHubVolumeMountV1(value);
 		const container = pod?.containers.find((entry) => entry.name === "agent");
 		const connection = connectionFor(value.agentId);
 		const probe = container?.readinessProbe;
@@ -539,7 +544,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 						name: "data",
 						mountPath: value.persistentVolume.mountPath,
 						readOnly: false,
-						subPath: "",
+						subPath: skillHubMount ? skillHubRuntimeDataSubPathV1 : "",
 						subPathExpr: "",
 						mountPropagation: "None",
 					},
@@ -551,6 +556,9 @@ export function createKubernetesPodValidationV1(dependencies: {
 						subPathExpr: "",
 						mountPropagation: "None",
 					},
+					...(skillHubMount
+						? [{ ...skillHubMount, subPathExpr: "", mountPropagation: "None" }]
+						: []),
 				],
 			) ||
 			pod?.serviceAccountName !== workloadResourceNameV1(value.agentId) ||
