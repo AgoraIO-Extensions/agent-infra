@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
+import { expect, it, vi } from "vitest";
 import {
 	type RuntimeNativeCapabilityRequestV6,
+	RuntimeNativeCapabilityRequestV6Schema,
 	runtimeOperationDigestV6,
-} from "@agent-infra/contracts/runtime";
-
-import { expect, it, vi } from "vitest";
+} from "../../contracts/src/runtime/host-v6.js";
 
 import {
 	createNativeCapabilityAdmissionUseCaseV6,
@@ -17,7 +17,7 @@ import {
 	validateNativeCapabilityInvocationPlanV6,
 } from "./native-capability-admission-v6.js";
 
-const request = {
+const signedRequest = {
 	schemaVersion: 6,
 	requestId: "request-1",
 	traceId: "trace-1",
@@ -57,6 +57,10 @@ const request = {
 	configVersion: "configuration-1",
 } as const;
 
+RuntimeNativeCapabilityRequestV6Schema.parse(signedRequest);
+const { grant: _grant, ...unsignedRequest } = signedRequest;
+const request = unsignedRequest as any;
+
 it("projects V6 request into a Store admission input with frozen selection/config", () => {
 	const parsed = parseNativeCapabilityAdmissionRequestV6(request);
 	expect(parsed).toMatchObject({
@@ -81,6 +85,12 @@ it.each([
 	const value = { ...request } as Record<string, unknown>;
 	delete value[field];
 	expect(() => parseNativeCapabilityAdmissionRequestV6(value)).toThrow();
+});
+
+it("rejects the signed wire request instead of discarding its Grant", () => {
+	expect(() =>
+		parseNativeCapabilityAdmissionRequestV6(signedRequest),
+	).toThrow();
 });
 
 it("rejects a valid-looking but incorrect parameters digest", () => {
@@ -126,8 +136,7 @@ function parseNativeCapabilityAdmissionRequestV6(input: unknown) {
 }
 
 function validPlan() {
-	const runtimeRequest: RuntimeNativeCapabilityRequestV6 =
-		structuredClone(request);
+	const runtimeRequest = structuredClone(request);
 	const parsed = parseNativeCapabilityAdmissionRequestV6(request);
 	const authority = {
 		conversationId: request.conversationId,
@@ -363,7 +372,9 @@ it("stores every frozen binding in the outbox without the transport Grant", asyn
 		hostSessionRef: request.hostSessionRef,
 	});
 	expect(outbox.payload).not.toHaveProperty("grant");
-	expect(JSON.stringify(outbox.payload)).not.toContain(request.grant.token);
+	expect(JSON.stringify(outbox.payload)).not.toContain(
+		signedRequest.grant.token,
+	);
 	expect(Object.isFrozen(outbox.payload)).toBe(true);
 });
 
@@ -481,13 +492,13 @@ it.each([
 );
 
 it("prepares an unsigned plan whose operation digest matches the signed Runtime V6 contract", async () => {
-	const { grant: _grant, ...unsigned } = request;
+	const unsigned = request;
 	const h = admissionHarness();
 	await h.useCase.admit(unsigned);
 	const sent = h.transaction.admitNativeCapabilityV6.mock.calls[0]?.[0];
 	expect(sent?.runtimeRequest).not.toHaveProperty("grant");
 	expect(sent?.plan.operationDigest).toBe(
-		await runtimeOperationDigestV6(request),
+		await runtimeOperationDigestV6(signedRequest),
 	);
 });
 
