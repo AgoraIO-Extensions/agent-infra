@@ -1014,7 +1014,13 @@ it.for([
 			env: {
 				PATH: "/usr/local/bin:/usr/bin:/bin",
 				HOME: join(root, "home"),
-				TMPDIR: join(root, "tmp"),
+				TMPDIR: shell ? workspace : join(root, "tmp"),
+				...(shell
+					? {
+							CLAUDE_CODE_SHELL: "/opt/agent-infra/native-bash.mjs",
+							AGENT_INFRA_NATIVE_SHELL_WORKSPACE: workspace,
+						}
+					: {}),
 				CLAUDE_CONFIG_DIR: config,
 				ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
 				ANTHROPIC_AUTH_TOKEN: secret,
@@ -1035,7 +1041,9 @@ it.for([
 			persistSession: false,
 			maxTurns: 3,
 			sandbox: {
-				enabled: shell,
+				// Verify that Bash spawns use the admitted platform Landlock launcher.
+				// The upstream namespace backend cannot run in this security context.
+				enabled: false,
 				failIfUnavailable: true,
 				allowUnsandboxedCommands: false,
 				autoAllowBashIfSandboxed: true,
