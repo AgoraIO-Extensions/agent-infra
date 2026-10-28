@@ -20,7 +20,7 @@ import { createRelayKeyEncryptorV1 } from "@agent-infra/secret-store";
 import { createRelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 import { serve } from "@hono/node-server";
 import postgres from "postgres";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 import { createPlatformApp } from "../../../apps/platform-api/src/app.js";
 import { assemblePlatformApi } from "../../../apps/platform-api/src/assembly.js";
 import { createEvaluationDataWorkerV1 } from "../../../apps/platform-worker/src/evaluation-data-worker.js";
@@ -210,6 +210,11 @@ beforeAll(async () => {
 		await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)values(${configuration.agentId},${kind},'runner','use','use-1')`;
 	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision)values('runner','App','admin','identity-1')`;
 }, 120000);
+// Each scenario owns its scoring queue; prior failure/recovery scenarios leave durable
+// rows intentionally, but their unrelated work must not enter the next Worker batch.
+beforeEach(async () => {
+	await sql`delete from platform.outbox_items where operation='evaluation.score.v1'`;
+});
 afterAll(async () => {
 	await experiments?.close();
 	await dataStore?.close();
@@ -2539,9 +2544,11 @@ it("settles whole-experiment cancellation through metadata-only worker control",
 		);
 
 		let downloads = 0;
+		const downloadedRefs: string[] = [];
 		const download = storage.download;
 		storage.download = async (...args) => {
 			downloads++;
+			downloadedRefs.push(args[0].objectRef);
 			return download(...args);
 		};
 		try {
@@ -2608,7 +2615,16 @@ it("settles whole-experiment cancellation through metadata-only worker control",
 			await sql`select i.id,s.experiment_id,e.status as task_status,i.status as score_status,(i.data->>'attempts')::int as attempts,i.data->>'failureCode' as code,o.status as outbox_status from platform.evaluation_score_intents i join platform.evaluation_sample_tasks s on s.id=i.sample_task_id join platform.conversation_executions e on e.execution_id=s.execution_id join platform.outbox_items o on o.scope_id=i.id::text and o.operation='evaluation.score.v1' where s.experiment_id in ${sql(ids)} order by s.experiment_id,e.execution_id`;
 		const taskCount =
 			await sql`select count(*)::int as count from platform.evaluation_sample_tasks where experiment_id in ${sql(ids)}`;
-		expect(downloads).toBe(0);
+		const downloadedBindings =
+			await sql`select v.id::text as version_id,v.data->>'objectRef' as object_ref,'source' as kind,e.id::text as experiment_id,e.status from platform.evaluation_versions v left join platform.evaluation_experiments e on e.version_id=v.id where v.data->>'objectRef' in ${sql(downloadedRefs.length ? downloadedRefs : ["none"])} union all select d.version_id::text,d.data->>'objectRef',d.kind,e.id::text,e.status from platform.evaluation_derived_objects d left join platform.evaluation_experiments e on e.version_id=d.version_id where d.data->>'objectRef' in ${sql(downloadedRefs.length ? downloadedRefs : ["none"])}`;
+		expect(
+			downloads,
+			JSON.stringify({
+				cancelledExperimentIds: ids,
+				downloadedRefs,
+				downloadedBindings,
+			}),
+		).toBe(0);
 		expect(taskCount).toEqual([{ count: 10 }]);
 		expect(
 			await sql`select count(*)::int as count from platform.evaluation_score_intents where status='not_applicable' and (data->'value'<>'null'::jsonb or data->'passed'<>'null'::jsonb)`,
