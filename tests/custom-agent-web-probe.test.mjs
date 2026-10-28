@@ -16,6 +16,7 @@ for (const scenario of [
 	"exhausted",
 	"default",
 	"tls",
+	"tls-leaf",
 	"unknown",
 	"http",
 	"content",
@@ -44,17 +45,24 @@ for (const scenario of [
 			calls++;
 			if (
 				calls === 1 &&
-				["recovery", "exhausted", "default", "tls", "unknown"].includes(
-					scenario,
-				)
+				[
+					"recovery",
+					"exhausted",
+					"default",
+					"tls",
+					"tls-leaf",
+					"unknown",
+				].includes(scenario)
 			) {
 				const cause = Object.assign(new Error("SYNTHETIC_ERROR_SECRET"), {
 					code:
 						scenario === "tls"
 							? "CERT_HAS_EXPIRED"
-							: scenario === "unknown"
-								? "SYNTHETIC_UNKNOWN_SECRET"
-								: "EAI_AGAIN",
+							: scenario === "tls-leaf"
+								? "UNABLE_TO_VERIFY_LEAF_SIGNATURE"
+								: scenario === "unknown"
+									? "SYNTHETIC_UNKNOWN_SECRET"
+									: "EAI_AGAIN",
 				});
 				throw new TypeError("SYNTHETIC_ERROR_SECRET", { cause });
 			}
@@ -96,7 +104,7 @@ for (const scenario of [
 		assert.equal(result.results[0].attempts, scenario === "recovery" ? 2 : 1);
 		if (scenario === "recovery")
 			assert.deepEqual(result.results[0].transportFailures, ["EAI_AGAIN"]);
-		if (scenario === "tls")
+		if (scenario.startsWith("tls"))
 			assert.equal(result.results[0].error, "TLS_INVALID");
 		if (scenario === "unknown")
 			assert.equal(result.results[0].error, "TRANSPORT_UNCLASSIFIED");

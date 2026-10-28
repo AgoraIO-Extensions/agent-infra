@@ -141,7 +141,10 @@ function transportFailure(error: unknown): string {
 	const code = value?.cause?.code ?? value?.code;
 	if (typeof code === "string" && transientTransportCodes.has(code))
 		return code;
-	if (typeof code === "string" && /CERT|TLS|SSL|SELF_SIGNED/u.test(code))
+	if (
+		typeof code === "string" &&
+		/CERT|TLS|SSL|SELF_SIGNED|UNABLE_TO_VERIFY/u.test(code)
+	)
 		return "TLS_INVALID";
 	return "TRANSPORT_UNCLASSIFIED";
 }
