@@ -1,0 +1,4 @@
+interface:
+  display_name: "Development coordinator"
+  short_description: "Coordinate bounded development and explicit handoffs"
+  default_prompt: "Use $coordinate-development to coordinate the authorized Issues with current ownership and evidence."
