@@ -119,8 +119,10 @@ Kubernetes 凭证或模型原始凭据。issuer/UID 映射由 `@agent-infra/plat
 
 `providerImport.scanner` 可使用 `createSkillSpectorPackageScannerV1` 与
 `createSkillSpectorAdapterV1` 组合，沿用现有发布 supplier。部署必须固定官方 CLI 的版本与规则集，
-`engineVersion` 必须等于原生报告的 `metadata.skillspector_version`；`rulesetDigest` 是部署固定的
-规则集摘要，不来自发布请求。CLI 以 `scan <archive> --no-llm --format json` 运行，不传平台自定义
+`engineVersion` 必须等于原生报告的 `metadata.skillspector_version`；`requiredAnalyzerIds` 必须从
+已固定版本的源码和扫描策略确定，不能从待验报告推导，缺少任何必需账本条目均拒绝。
+`rulesetDigest` 是部署固定的规则集摘要，应包含这些必需分析器与配置，不来自发布请求。
+CLI 以 `scan <archive> --no-llm --format json` 运行，不传平台自定义
 参数，不发送内容给模型。它仍可能按官方行为向 OSV 查询声明的依赖坐标。
 
 只有原生报告的执行成功、完整静态覆盖、逐文件清单与包内文件一致、analyzer 账本无失败/遗漏、
