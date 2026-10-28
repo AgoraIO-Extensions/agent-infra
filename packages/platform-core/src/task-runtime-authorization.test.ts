@@ -496,6 +496,32 @@ it.each([
 	},
 );
 
+it.each([1, 2, null])(
+	"checks frozen legacy Skill model revision %s on renewal",
+	async (revision) => {
+		const h = harness();
+		Object.assign(h.claim, {
+			operation: "conversation.native-capability.invoke.v1",
+			modelConfigurationRevision: revision,
+		});
+		if (revision === 2)
+			await expect(
+				h.useCase.current(h.context, h.state, "execution.renew", signal()),
+			).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+		else
+			expect(
+				(
+					await h.useCase.current(
+						h.context,
+						h.state,
+						"execution.renew",
+						signal(),
+					)
+				).authority.purpose,
+			).toBe("business");
+	},
+);
+
 it("keeps original custom execution controls during an unverified platform adapter upgrade", async () => {
 	const h = harness();
 	Object.assign(h.claim, { modelConfigurationRevision: null });

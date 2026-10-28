@@ -449,9 +449,10 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 				? stopRequestId !== null ||
 					messageId !== null ||
 					runtimeInput !== null ||
-					modelConfigurationRevision !== null ||
-					modelOptionId !== null ||
-					reasoningLevel !== null
+					(parsedNativeCapability?.capabilityKind !== "skill" &&
+						(modelConfigurationRevision !== null ||
+							modelOptionId !== null ||
+							reasoningLevel !== null))
 				: isStop !== (stopRequestId !== null) ||
 					isStop !== (runtimeInput === null) ||
 					isStop === (messageId !== null)) ||

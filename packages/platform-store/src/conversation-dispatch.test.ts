@@ -725,7 +725,9 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				expect(owned).toMatchObject({
 					executionSource: "web",
 					relayKeyBinding: { purpose: "personal", subjectId: "actor-dispatch" },
-					modelOptionId: null,
+					modelConfigurationRevision: kind === "skill" ? 4 : null,
+					modelOptionId: kind === "skill" ? "model-option-dispatch" : null,
+					reasoningLevel: kind === "skill" ? "medium" : null,
 					input: null,
 				});
 				const before = await store.readRuntimeState({ claim: owned });

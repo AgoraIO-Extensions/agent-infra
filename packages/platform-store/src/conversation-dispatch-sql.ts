@@ -655,6 +655,10 @@ export function bindingMatches(
 		validText(outbox.request_id) &&
 		executionSelectionValid &&
 		(browserHandoff ||
+			// Legacy native payloads do not carry model selection. The immutable
+			// Execution row owns the Skill's frozen default tuple.
+			(selectedOperation === "conversation.native-capability.invoke.v1" &&
+				payload.nativeCapability?.capabilityKind === "skill") ||
 			selectedOperation === "conversation.turn.stop.v1" ||
 			(payload.modelConfigurationRevision === executionModelRevision &&
 				payload.modelOptionId === execution.model_option_id &&
