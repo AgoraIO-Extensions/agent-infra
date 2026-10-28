@@ -625,6 +625,7 @@ function runtimeEnvironment(
 	];
 	if (runtime.custom) {
 		return [
+			{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtime.driver },
 			...platform,
 			...(runtime.nativeMetadataWorkerOrigin === undefined
 				? []

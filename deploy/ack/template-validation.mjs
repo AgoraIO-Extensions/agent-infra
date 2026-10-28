@@ -9,6 +9,23 @@ const templates = ["codex", "claude", "opencode", "pi"];
 const digestPattern = /^sha256:[a-f0-9]{64}$/u;
 const sourcePattern = /^[a-f0-9]{40}$/u;
 const hash = (value) => createHash("sha256").update(value).digest("hex");
+const preflightFields = [
+	"schemaVersion",
+	"scope",
+	"templateId",
+	"sourceCommit",
+	"imageDigest",
+	"configurationRevision",
+	"modelId",
+	"terminalStatus",
+	"modelFactSource",
+	"modelOperationCount",
+	"validatedAt",
+];
+
+export function templatePreflightValidationReceipt(measurement) {
+	return Object.fromEntries(preflightFields.map((field) => [field, measurement[field]]));
+}
 
 function fail(message) {
 	throw new Error(message);
@@ -132,23 +149,7 @@ function parseValidation(value, expected, sourceSha) {
 }
 
 function parsePreflight(value, expected, sourceSha) {
-	const item = exactRecord(
-		value,
-		[
-			"schemaVersion",
-			"scope",
-			"templateId",
-			"sourceCommit",
-			"imageDigest",
-			"configurationRevision",
-			"modelId",
-			"terminalStatus",
-			"modelFactSource",
-			"modelOperationCount",
-			"validatedAt",
-		],
-		"PREFLIGHT",
-	);
+	const item = exactRecord(value, preflightFields, "PREFLIGHT");
 	if (
 		item.schemaVersion !== 1 ||
 		item.scope !== "isolated-template-real-model" ||

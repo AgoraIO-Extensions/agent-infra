@@ -47,6 +47,7 @@ Optional validation inputs:
   ACK_BOOTSTRAP_INPUTS_FILE private Secret/ConfigMap file-reference bundle
   ACK_AGENT_REQUESTS_FILE  private JSON list for API Agent creation/replay
   ACK_TEMPLATE_VALIDATIONS_FILE private four-template validation expectation bundle
+  ACK_WORKLOAD_CAPACITY_FILE private capacity profile/evidence and mounted Secret binding
   ACK_TEMPLATE_PREFLIGHT_JOBS_FILE private JSON list of four template preflight jobs
   ACK_TEMPLATE_IMAGE_MANIFEST private amd64 four-template image manifest
   ACK_CREDENTIAL_BOOTSTRAP_FILE private browser storageState credential request
@@ -276,7 +277,7 @@ const result = {
 		configurationRevision: job.configurationRevision,
 		modelId: job.modelId,
 		validationFile: `${job.outputDirectory}/template-validation-${job.templateId}.candidate.json`,
-		preflightFile: `${job.outputDirectory}/template-model-preflight.receipt.json`,
+		preflightFile: `${job.outputDirectory}/template-model-validation.receipt.json`,
 	})),
 };
 fs.writeFileSync(output, `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
@@ -353,12 +354,20 @@ provision() {
 	require_file ACK_AGENT_REQUESTS_FILE "$requests"
 	prepare_evidence
 	validate_template_receipts
+	validate_workload_capacity
 	[[ -n "${ACK_AGENT_STATE_DIR:-}" && -n "${ACK_BROWSER_BLUEPRINT_DIR:-}" ]] || die "Agent state and browser blueprint directories are required"
 	if ! node "$repo_root/deploy/ack/agent-bindings.ts" provision "$requests" "$ACK_AGENT_STATE_DIR" "$ACK_BROWSER_BLUEPRINT_DIR" "$source_sha" >"$evidence_dir/agent-provision.json"; then
 		die "one or more Agent API creation requests failed; inspect redacted receipt: $evidence_dir/agent-provision.json"
 	fi
 	export ACK_TEMPLATE_CONFIG_DIR="$ACK_AGENT_STATE_DIR/browser"
 	echo "ack-redeploy: Agent provision passed; evidence=$evidence_dir"
+}
+
+validate_workload_capacity() {
+	require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
+	if ! node "$repo_root/deploy/ack/workload-capacity.ts" "$ACK_WORKLOAD_CAPACITY_FILE" "$ACK_AGENT_REQUESTS_FILE" "$ACK_TEMPLATE_VALIDATIONS_FILE" >"$evidence_dir/workload-capacity.json"; then
+		die "Session capacity is missing, ambiguous, unverified, or differs from the mounted Worker Secret"
+	fi
 }
 
 validate_template_receipts() {
