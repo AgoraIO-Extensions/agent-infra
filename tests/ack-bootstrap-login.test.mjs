@@ -37,7 +37,12 @@ async function fixture(t, scenario = "success") {
 			const body = JSON.parse(bytes);
 			const index = ["fixture-owner", "fixture-other"].indexOf(body.login);
 			assert(index >= 0);
-			assert.equal(body.password, `fixture-password-${index}`);
+			assert.equal(
+				body.password,
+				scenario === "whitespace-password"
+					? `  fixture-password-${index}  `
+					: `fixture-password-${index}`,
+			);
 			assert.equal(request.headers.origin, origin);
 			assert.equal(
 				request.headers.cookie,
@@ -111,7 +116,9 @@ async function fixture(t, scenario = "success") {
 			),
 			passwordFile: await save(
 				join(directory, `${name}.password`),
-				`fixture-password-${index}`,
+				scenario === "whitespace-password"
+					? `  fixture-password-${index}  \r\n`
+					: `fixture-password-${index}`,
 			),
 			storageStateFile: await save(join(directory, `${name}.state.json`), {
 				cookies: [{ previous: true }],
@@ -204,6 +211,11 @@ test("the deployment origin must match before any credentials are submitted", as
 		/LOGIN_ORIGIN_MISMATCH/,
 	);
 	assert.equal(f.calls.length, 0);
+});
+
+test("password spaces survive while one terminal file newline is removed", async (t) => {
+	const f = await fixture(t, "whitespace-password");
+	assert.equal((await bootstrapLogin(f.file, source)).loginVerified, true);
 });
 
 for (const scenario of [

@@ -53,7 +53,8 @@ export async function loginConfiguration(file: string) {
 	const logins = new Set();
 	for (const subject of input.subjects) {
 		const login = new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(subject.loginFile)).trim();
-		const password = new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(subject.passwordFile)).trim();
+		// A password file may end in one line terminator; spaces are credential bytes.
+		const password = new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(subject.passwordFile)).replace(/\r?\n$/u, "");
 		assert(login.length > 0 && login.length <= 320 && password.length > 0 && password.length <= 4096 && !logins.has(login), "LOGIN_SUBJECT_INVALID");
 		logins.add(login);
 		subjects.push({ ...subject, login, password });

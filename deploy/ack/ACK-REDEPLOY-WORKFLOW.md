@@ -302,7 +302,8 @@ HTTPS 必须通过系统信任或 `NODE_EXTRA_CA_CERTS` 验证；不跟随登录
 ```
 
 输入文件和输出目录必须在 Git 仓库外，分别使用 `0600` 与 `0700` 权限。`origin` 必须等于
-`ACK_PUBLIC_ORIGIN`。为完整验收，`blueprints` 应列出四模板和每个 custom platform-adapter
+`ACK_PUBLIC_ORIGIN`。`passwordFile` 的首尾空格属于密码，只去掉文件末尾一个 LF 或 CRLF
+行终止符。为完整验收，`blueprints` 应列出四模板和每个 custom platform-adapter
 的蓝图；每份蓝图的 owner/other `stateFile` 必须对应本次声明的两个不同主体。
 只替换它们的 `userId`，其余对话计划保持原样。
 
