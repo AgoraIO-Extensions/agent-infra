@@ -6328,6 +6328,130 @@ function normalizeQueueFullErrorCodeAddition(previous, current) {
 	return normalized;
 }
 
+// #3639: allow only the pinned experiment/scoring surface and explicit credential ceilings.
+function normalizeEvaluationExperiments3639(document) {
+	if (
+		!document.openapi ||
+		(!JSON.stringify(document).includes('"eval:run"') &&
+			!JSON.stringify(document).includes('"evaluation.experiment.create"') &&
+			!document.paths?.["/api/v2/evaluation/experiments"])
+	)
+		return document;
+	const normalized = structuredClone(document);
+	const paths = [
+		"/api/v2/evaluation/experiments",
+		"/api/v2/evaluation/experiments/{experimentId}",
+		"/api/v2/evaluation/experiments/{experimentId}/cancel",
+		"/api/v2/evaluation/scores/{scoreId}",
+		"/api/v2/evaluation/scores/{scoreId}/content",
+		"/api/v2/evaluation/scores/{scoreId}/human",
+		"/api/v2/evaluation/scores/{scoreId}/review-context",
+		"/api/v2/evaluation/scores/{scoreId}/reviews",
+	];
+	const schemas = [
+		"EvaluationExperimentCreateV1",
+		"EvaluationExperimentPageV1",
+		"EvaluationExperimentV1",
+		"EvaluationReviewV1",
+		"EvaluationScoreMetadataV1",
+		"EvaluationScoreSubmitV1",
+	];
+	const values = Object.fromEntries(
+		schemas.map((name) => [name, document.components?.schemas?.[name]]),
+	);
+	const found = paths.filter((path) => document.paths?.[path] !== undefined);
+	const digest = (value) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	if (
+		found.length === paths.length &&
+		digest({
+			paths: Object.fromEntries(
+				paths.map((path) => [path, document.paths[path]]),
+			),
+			schemas: values,
+		}) === "2d0693e02cfd989e3f28c2d3855eddcafed30c8645ad4e5cb361775c0c8b8a9d"
+	) {
+		for (const path of paths) delete normalized.paths[path];
+		for (const name of schemas) delete normalized.components.schemas[name];
+	} else if (
+		found.length === 0 &&
+		digest(values) ===
+			"f42133c0198963e0f346a86e9c798fb632ab2c5cdec20de6353107aca38e8d94"
+	)
+		for (const name of schemas) delete normalized.components.schemas[name];
+	const scopes = [
+		"agent:create",
+		"agent:manage",
+		"agent:use",
+		"agent:read",
+		"eval:data",
+	];
+	const visit = (value) => {
+		if (!value || typeof value !== "object") return;
+		const scope = value.properties?.scopes;
+		if (
+			scope?.maxItems === 8 &&
+			sameValue(scope.items?.enum, [
+				...scopes,
+				"eval:run",
+				"eval:score",
+				"eval:review",
+			])
+		) {
+			scope.maxItems = 5;
+			scope.items.enum = scopes;
+		}
+		for (const child of Object.values(value)) visit(child);
+	};
+	visit(normalized);
+	const actions = [
+		"evaluation.experiment.create",
+		"evaluation.derived.confirm",
+		"evaluation.score.completed",
+		"evaluation.score.human",
+		"evaluation.score.reviewed",
+	];
+	const actionSchema =
+		normalized.components?.schemas?.ScopedPlatformAuditActionV1;
+	if (
+		actionSchema &&
+		actions.every(
+			(action) =>
+				actionSchema.enum?.filter((value) => value === action).length === 1,
+		) &&
+		sameValue(
+			actionSchema.enum.slice(
+				actionSchema.enum.indexOf(actions[0]),
+				actionSchema.enum.indexOf(actions[0]) + actions.length,
+			),
+			actions,
+		)
+	)
+		actionSchema.enum = actionSchema.enum.filter(
+			(action) => !actions.includes(action),
+		);
+	for (const name of [
+		"ScopedPlatformAuditProjectionV1",
+		"ScopedPlatformAuditProjectionV2",
+	]) {
+		const subject =
+			normalized.components?.schemas?.[name]?.properties?.subject?.properties
+				?.kind;
+		const added = [
+			"evaluation_experiment",
+			"evaluation_object",
+			"evaluation_score",
+		];
+		if (
+			added.every(
+				(value) => subject?.enum?.filter((kind) => kind === value).length === 1,
+			)
+		)
+			subject.enum = subject.enum.filter((kind) => !added.includes(kind));
+	}
+	return isDeepStrictEqual(normalized, document) ? document : normalized;
+}
+
 // #3638: exact dataset surface plus the explicit Eval credential/audit additions.
 // Existing paths, actor kinds, security and unrelated schemas still compare normally.
 function normalizeEvaluationData3638(document) {
@@ -6533,8 +6657,9 @@ function evaluationRemoval(previous, current) {
 			current.components?.schemas?.[name]?.properties?.subject?.properties?.kind
 				?.enum ?? [];
 		if (
-			before.includes("evaluation_dataset") &&
-			!after.includes("evaluation_dataset")
+			before.some(
+				(kind) => kind.startsWith("evaluation_") && !after.includes(kind),
+			)
 		)
 			return true;
 	}
@@ -6547,9 +6672,11 @@ function evaluationRemoval(previous, current) {
 		)
 			return false;
 		if (
-			before.properties?.scopes?.items?.enum?.includes("eval:data") &&
-			after.properties?.scopes &&
-			!after.properties.scopes.items?.enum?.includes("eval:data")
+			before.properties?.scopes?.items?.enum?.some(
+				(scope) =>
+					scope.startsWith("eval:") &&
+					!after.properties?.scopes?.items?.enum?.includes(scope),
+			)
 		)
 			return true;
 		return Object.keys(before).some((key) =>
@@ -6562,6 +6689,13 @@ function evaluationRemoval(previous, current) {
 function evaluateBreakingChanges(previousValue, currentValue) {
 	if (evaluationRemoval(previousValue, currentValue))
 		return ["removed published Eval contract"];
+	const previousExperiments = normalizeEvaluationExperiments3639(previousValue);
+	const currentExperiments = normalizeEvaluationExperiments3639(currentValue);
+	if (
+		previousExperiments !== previousValue ||
+		currentExperiments !== currentValue
+	)
+		return findBreakingChanges(previousExperiments, currentExperiments);
 	const previousEvaluation = normalizeEvaluationData3638(previousValue);
 	const currentEvaluation = normalizeEvaluationData3638(currentValue);
 	if (

@@ -53,7 +53,10 @@ export interface ScopedPlatformAuditProjectionV1 {
 			| PlatformAuditProjectionV1["subject"]["kind"]
 			| "api_credential"
 			| "application"
-			| "evaluation_dataset";
+			| "evaluation_dataset"
+			| "evaluation_experiment"
+			| "evaluation_object"
+			| "evaluation_score";
 		readonly subjectId: string;
 	};
 	readonly result: PlatformAuditQueryResultV1;
@@ -824,7 +827,14 @@ function project(
 					scope.kind !== "administrator" ||
 					row.source !== "platform" ||
 					!["user", "application"].includes(row.actorType) ||
-					row.targetType !== "evaluation_dataset" ||
+					row.targetType !==
+						(row.action === "evaluation.experiment.create"
+							? "evaluation_experiment"
+							: row.action === "evaluation.derived.confirm"
+								? "evaluation_object"
+								: row.action.startsWith("evaluation.score.")
+									? "evaluation_score"
+									: "evaluation_dataset") ||
 					row.outcome !== "succeeded" ||
 					row.result !== "succeeded" ||
 					row.agentId !== null ||

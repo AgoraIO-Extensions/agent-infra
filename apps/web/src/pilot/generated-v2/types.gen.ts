@@ -989,6 +989,52 @@ export type EvaluationExperimentCreateV1 = {
 export type EvaluationExperimentPageV1 = {
     experiment: EvaluationExperimentV1;
     items: Array<{
+        actual: {
+            billing: {
+                keyVersion: number;
+                purpose: 'agent-default';
+                subjectId: string;
+            } | null;
+            facts: {
+                actualModelObserved: boolean;
+                models: Array<{
+                    attemptRef: string;
+                    durationMs: number | null;
+                    model: {
+                        configVersion: string;
+                        modelId: string;
+                        modelOptionId: string;
+                        reasoningLevel?: string;
+                    };
+                    observed: boolean;
+                    operationRef: string;
+                    phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+                    sequence: number;
+                    usage: {
+                        cachedInputTokens?: number;
+                        inputTokens?: number;
+                        outputTokens?: number;
+                    } | null;
+                }>;
+                tools: Array<{
+                    attemptRef: string;
+                    durationMs: number | null;
+                    operationRef: string;
+                    phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+                    sequence: number;
+                    toolId: string;
+                }>;
+            };
+            factsTruncated: boolean;
+            lastSequence: number;
+            preparedRuntime: {
+                configurationRevision: number;
+                imageDigest: string;
+                resourceConfigurationHash: string;
+            } | null;
+            runtimeObserved: boolean;
+            status: 'waiting' | 'submitted' | 'processing' | 'unknown' | 'completed' | 'failed' | 'cancelled';
+        } | null;
         conversationId: string;
         executionId: string;
         requested: {
