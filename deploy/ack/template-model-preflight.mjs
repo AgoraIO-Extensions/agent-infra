@@ -149,12 +149,14 @@ async function main(inputPath) {
 		},
 	};
 	if (job.driver === "codex") {
-		const environment = new Map(pod.spec.containers[0].env.map((entry) => [entry.name, entry.value]));
+		const environment = new Map(pod.spec.containers[0].env.map((entry) => [entry.name, entry]));
+		const attestationEntry = environment.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION");
 		if (
-			environment.get("AGENT_INFRA_RUNTIME_ISOLATION_MODE") !== "container-boundary" ||
-			environment.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED") !== "worker-v1" ||
-			environment.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE") !== name ||
-			environment.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ATTESTATION") !== attestation
+			environment.get("AGENT_INFRA_RUNTIME_ISOLATION_MODE")?.value !== "container-boundary" ||
+			environment.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_ENABLED")?.value !== "worker-v1" ||
+			environment.get("AGENT_INFRA_RUNTIME_CONTAINER_BOUNDARY_SCOPE")?.value !== name ||
+			attestationEntry?.valueFrom?.secretKeyRef?.name !== secretName ||
+			attestationEntry?.valueFrom?.secretKeyRef?.key !== "attestation"
 		)
 			throw new Error("CODEX_BOUNDARY_PREFLIGHT_CONFIGURATION_INVALID");
 	}
