@@ -39,6 +39,7 @@ import {
 	sessionSandboxSelectorMatchesV1,
 	sessionSandboxServiceTokenV1,
 } from "./session-workload-adapter.js";
+import { nativeEgressFixture } from "./test-support/native-egress.js";
 import {
 	sessionSandboxDeploymentTokenFixture,
 	sessionSandboxRuntimeInputFixture,
@@ -2817,4 +2818,63 @@ describe("Session Sandbox Runtime file exchange (#3276)", () => {
 			).toBe(before === enabled);
 		},
 	);
+});
+
+describe("native Session policy binding", () => {
+	it.each(["port", "destination", "protection", "removed"])(
+		"rejects %s drift without rewriting native policy",
+		async (change) => {
+			const client = api();
+			const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+			const first = {
+				...allocation,
+				egress: { nativeEgress: nativeEgressFixture() },
+			};
+			await adapter.apply(first);
+			const original = await client.read<V1NetworkPolicy>(
+				"NetworkPolicy",
+				first.networkPolicyName,
+			);
+			const next = structuredClone(first);
+			if (change === "port")
+				next.egress.nativeEgress.destinations[0].port = 8443;
+			if (change === "destination")
+				next.egress.nativeEgress.destinations[0].destination.ip = "1.1.1.1";
+			if (change === "protection")
+				next.egress.nativeEgress.protectedNetworks.platformDatabase = [
+					"10.9.0.0/16",
+				];
+			if (change === "removed")
+				Reflect.deleteProperty(next.egress, "nativeEgress");
+			await expect(adapter.apply(next)).rejects.toThrow();
+			expect(
+				await client.read("NetworkPolicy", first.networkPolicyName),
+			).toEqual(original);
+			const observed = await adapter.observe(next);
+			expect(observed.status).not.toBe("ready");
+		},
+	);
+	it("rejects additive allow rules during native Session observation", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		const input = {
+			...allocation,
+			egress: { nativeEgress: nativeEgressFixture() },
+		};
+		await adapter.apply(input);
+		client.list = async () =>
+			[
+				{
+					kind: "NetworkPolicy",
+					metadata: { name: "foreign" },
+					spec: {
+						podSelector: {
+							matchExpressions: [{ key: "app", operator: "Exists" }],
+						},
+						egress: [{}],
+					},
+				},
+			] as never;
+		await expect(adapter.observe(input)).rejects.toThrow();
+	});
 });

@@ -11,6 +11,8 @@ import {
 	sessionSandboxLabelsV1,
 } from "./session-workload-adapter.js";
 import {
+	nativeEgressPolicyAnnotationsV1,
+	nativeEgressPolicyAnnotationV1,
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
@@ -106,6 +108,7 @@ export function createSessionSandboxEgressV1(options: {
 				labels,
 				annotations: {
 					...sessionSandboxIdentityAnnotationsV1(value),
+					...nativeEgressPolicyAnnotationsV1(profile.nativeEgress),
 					[`${prefix}managed`]: "session-sandbox-egress-v1",
 					[`${prefix}principal-id`]: value.principalId,
 					[`${prefix}fence`]: String(value.fence),
@@ -136,6 +139,8 @@ export function createSessionSandboxEgressV1(options: {
 	) {
 		if (
 			!known ||
+			actual.metadata?.annotations?.[nativeEgressPolicyAnnotationV1] !==
+				desired.metadata?.annotations?.[nativeEgressPolicyAnnotationV1] ||
 			actual.metadata?.uid !== known.uid ||
 			actual.metadata?.name !== known.name ||
 			actual.metadata?.namespace !== desired.metadata?.namespace ||
