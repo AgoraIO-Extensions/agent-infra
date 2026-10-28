@@ -15,6 +15,7 @@ import {
 	claudeNativeFixture,
 	completeClaudeResponse,
 	completeClaudeToolUses,
+	readClaudeFixtureMessage,
 } from "./claude-native.test-support.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
 import {
@@ -932,31 +933,50 @@ it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
 		const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
 		let calls = 0;
 		const requests: Record<string, unknown>[] = [];
+		const fixtureErrors: string[] = [];
+		const requestMetadata: { route: string; method: string; status: number }[] =
+			[];
 		const server = createServer(async (request, response) => {
-			let body = "";
-			for await (const chunk of request) body += chunk;
-			const value = JSON.parse(body);
-			requests.push(value);
-			calls++;
-			completeClaudeToolUses(
-				response,
-				`msg_${calls}`,
-				value.model,
-				"complete",
-				calls === 1
-					? [
-							{
-								id: "isolated-bash",
-								name: "Bash",
-								input: {
-									command: `/usr/local/bin/node -e ${quote(program)}`,
-									timeout: 5000,
-									description: "Verify isolated shell",
+			response.once("finish", () => {
+				if (requestMetadata.length < 32)
+					requestMetadata.push({
+						route:
+							request.url?.split("?")[0] === "/v1/messages"
+								? "messages"
+								: "other",
+						method: request.method === "POST" ? "POST" : "other",
+						status: response.statusCode,
+					});
+			});
+			try {
+				const value = await readClaudeFixtureMessage(request, response);
+				if (!value) return;
+				requests.push(value);
+				calls++;
+				completeClaudeToolUses(
+					response,
+					`msg_${calls}`,
+					value.model,
+					"complete",
+					calls === 1
+						? [
+								{
+									id: "isolated-bash",
+									name: "Bash",
+									input: {
+										command: `/usr/local/bin/node -e ${quote(program)}`,
+										timeout: 5000,
+										description: "Verify isolated shell",
+									},
 								},
-							},
-						]
-					: [],
-			);
+							]
+						: [],
+				);
+			} catch {
+				fixtureErrors.push("synthetic-response-failed");
+				if (!response.headersSent) response.writeHead(500);
+				response.end();
+			}
 		});
 		await new Promise<void>((accept) => server.listen(0, "127.0.0.1", accept));
 		const address = server.address();
@@ -1024,6 +1044,8 @@ it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
 						subtype: message.subtype,
 						is_error: message.is_error,
 					});
+			expect(fixtureErrors).toEqual([]);
+			expect(calls, JSON.stringify(requestMetadata)).toBe(2);
 			expect(outcomes).toEqual([{ subtype: "success", is_error: false }]);
 			expect(
 				JSON.parse(
@@ -1043,3 +1065,50 @@ it.skipIf(process.env.AGENT_INFRA_NATIVE_SHELL_TEST !== "1")(
 	},
 	30_000,
 );
+
+it("rejects non-Messages and malformed requests without stalling the Claude fixture", async () => {
+	const { createServer } = await import("node:http");
+	let calls = 0;
+	const server = createServer(async (request, response) => {
+		const value = await readClaudeFixtureMessage(request, response);
+		if (!value) return;
+		calls++;
+		completeClaudeResponse(response, "synthetic-fixture-response", value.model);
+	});
+	await new Promise<void>((accept) => server.listen(0, "127.0.0.1", accept));
+	try {
+		const address = server.address();
+		if (!address || typeof address === "string")
+			throw new Error("Missing fixture endpoint");
+		const endpoint = `http://127.0.0.1:${address.port}`;
+		for (const [path, method, body, status] of [
+			["/", "GET", undefined, 404],
+			["/v1/messages", "GET", undefined, 404],
+			["/status", "POST", "", 404],
+			["/v1/messages", "POST", "", 400],
+			["/v1/messages", "POST", "{}", 400],
+			["/v1/messages", "POST", "[", 400],
+			["/v1/messages", "POST", "x".repeat(1_048_577), 413],
+		] as const) {
+			const response = await fetch(`${endpoint}${path}`, {
+				method,
+				body,
+				signal: AbortSignal.timeout(1000),
+			});
+			expect(response.status).toBe(status);
+			await response.text();
+		}
+		expect(calls).toBe(0);
+		const response = await fetch(`${endpoint}/v1/messages?beta=true`, {
+			method: "POST",
+			body: JSON.stringify({ model: "synthetic-model", messages: [] }),
+			signal: AbortSignal.timeout(1000),
+		});
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain("message_stop");
+		expect(calls).toBe(1);
+	} finally {
+		server.closeAllConnections();
+		await new Promise<void>((accept) => server.close(() => accept()));
+	}
+});
