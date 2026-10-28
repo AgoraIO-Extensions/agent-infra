@@ -164,7 +164,8 @@ export async function validateOwnEntry(configFile: string, requestsFile: string,
 	const allowedFile = join(directory, "allowed.private"), deniedFile = join(directory, "denied.private");
 	await writeFile(allowedFile, allowed, { mode: 0o600 }); await writeFile(deniedFile, denied, { mode: 0o600 });
 	const boundary = await verifyCustomAgentWeb({ url: `${origin}/app`, sourceSha: config.imageSourceSha, imageDigest: workload.entryDigest,
-		configurationRevision: workload.configurationRevision, contentSha256: config.contentSha256, allowedAuthorizationFile: allowedFile, deniedAuthorizationFile: deniedFile });
+		configurationRevision: workload.configurationRevision, contentSha256: config.contentSha256, allowedAuthorizationFile: allowedFile, deniedAuthorizationFile: deniedFile }, { transportRetryTimeoutMs: 120_000 });
+	await writeFile(join(directory, "boundary.json"), `${JSON.stringify({ schemaVersion: 1, kind: "ack-own-entry-boundary", sourceSha, agentHash: hash(agentId), boundary }, null, 2)}\n`, { mode: 0o600 });
 	assert(boundary.pass, "OWN_ENTRY_BOUNDARY_FAILED");
 	const browser = await browserEntry(origin, allowed, denied, config.browserCertificateFile, config.expectedReply, directory);
 	const after = verifyOwnEntryWorkloads(agentId, body.source, origin, read, body.environment);

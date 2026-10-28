@@ -31,6 +31,7 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | 全部平台服务就绪，标准 Runtime preflight 在模型请求前失败 | 约 697 MiB 的冷镜像仍在正常拉取，旧脚本的固定 180 秒就绪预算已耗尽 | 私有 job 使用有界 `podReadyTimeoutSeconds`，默认 900 秒、范围 60–1800 秒；失败保存 `pod-ready` 阶段和脱敏状态，不能用预热后的旧成功替代新的完整演练 |
 | 新 Worker 从发布仓库长时间拉取，Helm 等待超时 | 同一 Digest 经目标环境已批准的镜像代理能在 ECI 启动，直接拉取路径未完成 | 使用前比较代理 manifest 的真实字节 Digest、config/layer Digest，并回读目标 ECI imageID；保留原发布清单和目标拉取清单及映射证据，只调整仓库地址，不改变源码或 Digest |
 | 只看到 Web/API 健康就宣称完成 | 健康检查没有覆盖 Session、Runtime、模型、持久化和跨主体拒绝 | 业务验收必须包含真实 Session、`text.delta`、完成事件、刷新回读、隔离负例和自定义入口 probe |
+| 多服务已 ready，入口验收只留下通用失败，稍后同环境完整通过 | 客户端请求没有出现在目标 Ingress 日志，旧探针又丢失具体连接错误；不能据此断定 DNS、TLS 或业务故障 | HTTP 边界结果在断言前写入私有 receipt，保留白名单错误码和尝试次数；ACK 只对明确临时 DNS/连接错误最多等待两分钟，所有 HTTP、内容和 TLS 判定保持。诊断重试通过不回填原始完整部署结果 |
 | Agent ready，但会话一直 `AGENT_STARTING` | 新模板 digest 没有相应容量 profile，verified capacity 为空 | `provision` 前检查每个目标的 image/resource/evidence 绑定与挂载 Secret；更新后经正式 lifecycle 刷新，不能直接改 DB |
 | custom Agent Workload ready，Session 却报 `RUNTIME_CONFIGURATION_INVALID` | 镜像没有 Driver 默认值，Worker 只为 Agent Workload 注入了 `acp` | Session 也注入服务端已选择的 Driver；用没有镜像默认 Driver 的实际自定义镜像回归 |
 | GET session 200，写接口却返回 401 | 直接 HTTP 探针遗漏了浏览器 Origin | 遵守浏览器写入的 Origin/CSRF 契约，保留具体失败阶段；不把协议错误归因于密码或 Cookie |

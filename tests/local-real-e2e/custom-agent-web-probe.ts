@@ -118,8 +118,46 @@ export function isHtmlContentType(value: string | null): boolean {
 	return value?.split(";", 1)[0]?.trim().toLowerCase() === "text/html";
 }
 
+const transientTransportCodes = new Set([
+	"EAI_AGAIN",
+	"ENOTFOUND",
+	"ECONNRESET",
+	"ECONNREFUSED",
+	"ETIMEDOUT",
+	"EHOSTUNREACH",
+	"ENETUNREACH",
+	"EPIPE",
+	"UND_ERR_CONNECT_TIMEOUT",
+	"UND_ERR_SOCKET",
+	"REQUEST_TIMEOUT",
+]);
+function transportFailure(error: unknown): string {
+	const value = error as {
+		name?: string;
+		code?: string;
+		cause?: { code?: string };
+	};
+	if (value?.name === "TimeoutError") return "REQUEST_TIMEOUT";
+	const code = value?.cause?.code ?? value?.code;
+	if (typeof code === "string" && transientTransportCodes.has(code))
+		return code;
+	if (typeof code === "string" && /CERT|TLS|SSL|SELF_SIGNED/u.test(code))
+		return "TLS_INVALID";
+	return "TRANSPORT_UNCLASSIFIED";
+}
+
 /** Probe only the protected application request boundary; lifecycle is separate evidence. */
-export async function verifyCustomAgentWeb(input: ProbeInput) {
+export async function verifyCustomAgentWeb(
+	input: ProbeInput,
+	options: { transportRetryTimeoutMs?: number } = {},
+) {
+	const retryTimeout = options.transportRetryTimeoutMs ?? 0;
+	if (
+		!Number.isSafeInteger(retryTimeout) ||
+		retryTimeout < 0 ||
+		retryTimeout > 120_000
+	)
+		throw new Error("TRANSPORT_RETRY_BUDGET_INVALID");
 	const allowed = await readAuthorization(input.allowedAuthorizationFile);
 	const denied = await readAuthorization(input.deniedAuthorizationFile);
 	if (allowed === denied) throw new Error("DISTINCT_PRINCIPALS_REQUIRED");
@@ -144,35 +182,80 @@ export async function verifyCustomAgentWeb(input: ProbeInput) {
 		name: string;
 		status: number | null;
 		pass: boolean;
+		attempts: number;
+		transportFailures: string[];
 		error?: string;
 	}[] = [];
 	for (const probe of cases) {
-		try {
-			const response = await fetch(input.url, {
-				headers: { ...probe.headers, "cache-control": "no-cache" },
-				redirect: "error",
-				signal: AbortSignal.timeout(10_000),
-			});
-			const evidence = await responseEvidence(response, input.contentSha256);
-			const redirected = response.status >= 300 && response.status < 400;
-			const pass =
-				probe.name === "authorized-content"
-					? response.status === 200 &&
-						evidence.matches &&
-						isHtmlContentType(response.headers.get("content-type"))
-					: (response.status === 401 || response.status === 403) &&
-						!redirected &&
-						evidence.bytes === 0;
-			results.push({ name: probe.name, status: response.status, pass });
-		} catch {
-			results.push({
-				name: probe.name,
-				status: null,
-				pass: false,
-				error: "REQUEST_OR_CONTENT_FAILED",
-			});
+		const deadline = Date.now() + retryTimeout;
+		const transportFailures: string[] = [];
+		let attempts = 0;
+		for (;;) {
+			attempts++;
+			let receivedResponse = false;
+			try {
+				const response = await fetch(input.url, {
+					headers: { ...probe.headers, "cache-control": "no-cache" },
+					redirect: "error",
+					signal: AbortSignal.timeout(
+						retryTimeout
+							? Math.max(1, Math.min(10_000, deadline - Date.now()))
+							: 10_000,
+					),
+				});
+				receivedResponse = true;
+				const evidence = await responseEvidence(response, input.contentSha256);
+				const authorized = probe.name === "authorized-content";
+				const expectedStatus = authorized
+					? response.status === 200
+					: response.status === 401 || response.status === 403;
+				const error = !expectedStatus
+					? "HTTP_STATUS_UNEXPECTED"
+					: authorized &&
+							!isHtmlContentType(response.headers.get("content-type"))
+						? "CONTENT_TYPE_MISMATCH"
+						: authorized && !evidence.matches
+							? "CONTENT_HASH_MISMATCH"
+							: !authorized && evidence.bytes !== 0
+								? "UNAUTHORIZED_BODY"
+								: undefined;
+				results.push({
+					name: probe.name,
+					status: response.status,
+					pass: error === undefined,
+					attempts,
+					transportFailures,
+					...(error ? { error } : {}),
+				});
+				break;
+			} catch (error) {
+				const code = receivedResponse
+					? "CONTENT_READ_FAILED"
+					: transportFailure(error);
+				if (!receivedResponse) transportFailures.push(code);
+				if (
+					!receivedResponse &&
+					transientTransportCodes.has(code) &&
+					Date.now() < deadline
+				) {
+					await new Promise((resolve) =>
+						setTimeout(resolve, Math.min(2000, deadline - Date.now())),
+					);
+					if (Date.now() < deadline) continue;
+				}
+				results.push({
+					name: probe.name,
+					status: null,
+					pass: false,
+					attempts,
+					transportFailures,
+					error: code,
+				});
+				break;
+			}
 		}
 	}
+
 	return {
 		kind: "custom-agent-web-content-and-identity-probe",
 		observedAt: new Date().toISOString(),
