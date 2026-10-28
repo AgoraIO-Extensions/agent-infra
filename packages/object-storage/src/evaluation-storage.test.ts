@@ -48,6 +48,27 @@ it("uses the dedicated Eval prefix and inspects/deletes only an explicitly selec
 				ContentType: "application/json",
 			}),
 		);
+		await fixture.client.send(
+			new PutObjectCommand({
+				Bucket: fixture.bucket,
+				Key: `${fixture.prefix}${randomUUID()}`,
+				Body: new TextEncoder().encode('{"unrelated":true}'),
+				ContentType: "application/json",
+			}),
+		);
+		const scoped = await fixture.storage.scan(null, 100, objectRef);
+		expect(scoped.objects).toHaveLength(2);
+		expect(
+			scoped.objects.every((object) => object.objectRef === objectRef),
+		).toBe(true);
+		expect(scoped.cursor).toBeNull();
+		await expect(
+			fixture.storage.scan(
+				JSON.stringify({ key: `${fixture.prefix}${randomUUID()}` }),
+				100,
+				objectRef,
+			),
+		).rejects.toMatchObject({ code: "invalid" });
 		const latest = await fixture.storage.inspect(objectRef);
 		expect(latest?.version).not.toBe(original.version);
 		expect(await fixture.storage.inspect(objectRef, original.version)).toEqual(

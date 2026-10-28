@@ -56,6 +56,7 @@ let disabled = false;
 let afterUpload: (() => Promise<void>) | undefined;
 let afterDownload: (() => Promise<void>) | undefined;
 let afterPolicyRead: (() => Promise<void>) | undefined;
+let firstPolicyOverride: typeof policy | undefined;
 const admin = { kind: "user" as const, id: "admin" };
 const content = {
 	schemaVersion: 1 as const,
@@ -201,6 +202,8 @@ beforeAll(async () => {
 		store,
 		storage: {
 			...storage.storage,
+			inspect: (objectRef, version) =>
+				storage.storage.inspect(objectRef, version),
 			async upload(request) {
 				const result = await storage.storage.upload(request);
 				await afterUpload?.();
@@ -213,7 +216,8 @@ beforeAll(async () => {
 			},
 		},
 		loadPolicy: async () => {
-			const current = policy;
+			const current = firstPolicyOverride ?? policy;
+			firstPolicyOverride = undefined;
 			await afterPolicyRead?.();
 			return current;
 		},
@@ -899,6 +903,11 @@ describe("Eval data authority with real PG and versioned S3", {
 			{ expectedRevision: original.revision },
 			"alice",
 		);
+		const scan = storage.storage.scan;
+		storage.storage.scan = async (cursor, limit, objectRef) => {
+			if (!objectRef) throw new Error("unbounded prefix traversal");
+			return scan(cursor, limit, objectRef);
+		};
 		const remove = storage.storage.remove;
 		const inspect = storage.storage.inspect;
 		const download = storage.storage.download;
@@ -934,6 +943,7 @@ describe("Eval data authority with real PG and versioned S3", {
 			expect(deleted?.status).toBe("deleted");
 			expect(bodyReads).toBe(0);
 		} finally {
+			storage.storage.scan = scan;
 			storage.storage.remove = remove;
 			storage.storage.inspect = inspect;
 			storage.storage.download = download;
@@ -1096,5 +1106,58 @@ export function createPlatformApiAssemblyInput(){ const input=base(); return {..
 		} finally {
 			await restarted.close();
 		}
+	});
+	it("checks upload size against the policy bound inside the transaction before any S3 operation", async () => {
+		const old = policy;
+		policy = { ...old, revision: old.revision + 1, maxContentBytes: 32 };
+		const inspect = storage.storage.inspect;
+		let inspections = 0;
+		try {
+			const { d, v } = await dataset();
+			await grant(d.datasetId, v.versionId);
+			storage.storage.inspect = async (...args) => {
+				inspections++;
+				return inspect(...args);
+			};
+			firstPolicyOverride = {
+				...policy,
+				maxContentBytes: 65536,
+				transferTimeoutMs: 60000,
+			};
+			const result = await call(
+				`/${d.datasetId}/versions/${v.versionId}/content`,
+				"PUT",
+				content,
+				"alice",
+			);
+			expect(result.status).toBe(400);
+			expect(inspections).toBe(0);
+			const [row] =
+				await sql`select status from platform.evaluation_versions where id=${v.versionId}`;
+			expect(row?.status).toBe("pending");
+		} finally {
+			firstPolicyOverride = undefined;
+			storage.storage.inspect = inspect;
+			policy = { ...old, revision: old.revision + 2 };
+		}
+	});
+	it("physically purges expired receipts and refuses a late upload retry to a retired version", async () => {
+		const { d, v } = await dataset();
+		await grant(d.datasetId, v.versionId);
+		const path = `/${d.datasetId}/versions/${v.versionId}/content`;
+		const key = randomUUID();
+		await json(path, "PUT", content, "alice", key);
+		const expired = new Date(Date.now() - 1000).toISOString();
+		await sql`update platform.evaluation_versions set expires_at=${expired}::timestamptz,metadata_expires_at=${expired}::timestamptz,data=jsonb_set(jsonb_set(data,'{expiresAt}',to_jsonb(${expired}::text)),'{metadataExpiresAt}',to_jsonb(${expired}::text)) where id=${v.versionId}`;
+		const rows =
+			await sql`update platform.idempotency_records set result=jsonb_set(result,'{expiresAt}',to_jsonb(${expired}::text)) where scope_type='evaluation' and scope_id=${JSON.stringify({ kind: "user", id: "alice" })} returning id`;
+		expect(rows.length).toBeGreaterThan(0);
+		await worker.runOnce();
+		await worker.runOnce();
+		for (const row of rows)
+			expect(
+				await sql`select * from platform.idempotency_records where id=${row.id}`,
+			).toHaveLength(0);
+		expect((await call(path, "PUT", content, "alice", key)).status).toBe(404);
 	});
 });

@@ -964,6 +964,7 @@ export function createEvaluationDataV1(options: {
 				sha256: createHash("sha256").update(bytes).digest("hex"),
 			};
 			const binding = await current(request, async (tx, policy) => {
+				if (bytes.length > policy.maxContentBytes) return fail("invalid");
 				const v = await version(tx, datasetId, versionId);
 				const g = await permission(tx, policy, v, "import");
 				const d = await dataset(tx, datasetId);
@@ -1013,14 +1014,15 @@ export function createEvaluationDataV1(options: {
 					...binding,
 					transferUntil: v.transferUntil,
 					available: v.status === "available",
+					transferTimeoutMs: policy.transferTimeoutMs,
 				};
 			});
 			const expiresAt = new Date(
 				Math.min(
-					Date.now() + p.transferTimeoutMs,
+					Date.now() + binding.transferTimeoutMs,
 					binding.transferUntil
 						? Date.parse(binding.transferUntil) - 5000
-						: Date.now() + p.transferTimeoutMs,
+						: Date.now() + binding.transferTimeoutMs,
 				),
 			).toISOString();
 			if (binding.available) return this.confirm(request, datasetId, versionId);
@@ -1031,7 +1033,7 @@ export function createEvaluationDataV1(options: {
 						objectRef: binding.objectRef,
 						descriptor,
 						expiresAt,
-						signal: AbortSignal.timeout(p.transferTimeoutMs),
+						signal: AbortSignal.timeout(binding.transferTimeoutMs),
 						body: new ReadableStream({
 							start(controller) {
 								controller.enqueue(bytes);

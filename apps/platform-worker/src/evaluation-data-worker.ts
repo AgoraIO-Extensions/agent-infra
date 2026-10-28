@@ -56,7 +56,7 @@ export function createEvaluationDataWorkerV1(input: {
 						async (version) => {
 							if (version.objectRef !== lease.payload.objectRef)
 								throw new Error("EVALUATION_DELETE_INVALID");
-							// List object-version metadata only: never download or inspect expired content.
+							// List this exact key only, independent of total Eval prefix size; never read bodies.
 							let cursor: string | null = null;
 							let pages = 0;
 							do {
@@ -69,7 +69,11 @@ export function createEvaluationDataWorkerV1(input: {
 									}))
 								)
 									throw new Error("EVALUATION_DELETE_LEASE_LOST");
-								const page = await input.storage.scan(cursor, 100);
+								const page = await input.storage.scan(
+									cursor,
+									100,
+									version.objectRef,
+								);
 								for (const object of page.objects) {
 									if (object.objectRef !== version.objectRef) continue;
 									if (

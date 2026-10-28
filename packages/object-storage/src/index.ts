@@ -53,11 +53,13 @@ export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
 		string,
 		{ bytes: Uint8Array; metadata: StoredFileObjectV1; createdAt: string }
 	>();
-	async scan(cursor: string | null, limit: number) {
+	async scan(cursor: string | null, limit: number, objectRef?: string) {
 		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
 			throw new ObjectStorageError("invalid");
+		if (objectRef !== undefined) requireReference(objectRef);
 		const keys = [...this.objects.keys()]
 			.sort()
+			.filter((key) => objectRef === undefined || key === objectRef)
 			.filter((key) => !cursor || key > cursor)
 			.slice(0, limit);
 		return {

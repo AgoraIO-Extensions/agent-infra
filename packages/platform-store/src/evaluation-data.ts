@@ -483,9 +483,9 @@ export class PostgresEvaluationDataStoreV1 implements EvaluationDataStoreV1 {
 				await saveVersion(tx, v);
 				await enqueueDelete(tx, v, `evaluation-expiry:${v.versionId}`);
 			}
-			// Retain a non-replayable digest tombstone without deleted metadata.
+			// Retire the entire Eval receipt, including principal, request digest and timestamps.
 			await tx.execute(
-				sql`update platform.idempotency_records set result = jsonb_build_object('expiresAt', result->>'expiresAt') where scope_type='evaluation' and (result->>'expiresAt')::timestamptz <= clock_timestamp()`,
+				sql`delete from platform.idempotency_records where scope_type='evaluation' and (result->>'expiresAt')::timestamptz <= clock_timestamp()`,
 			);
 			const retired = await tx
 				.select()

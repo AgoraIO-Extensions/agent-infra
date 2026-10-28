@@ -1,12 +1,21 @@
 import { expect, test } from "@playwright/test";
-import { startEvaluationBrowserFixture } from "../../platform-api/src/evaluation-data.browser-test-support.js";
 
 test("uses the real API, PostgreSQL and S3 for explicit grants, import, revoke and deletion", async ({
 	page,
 	context,
 }) => {
 	test.setTimeout(120000);
-	const fixture = await startEvaluationBrowserFixture();
+	const supportUrl = new URL(
+		"../../platform-api/src/evaluation-data.browser-test-support.ts",
+		import.meta.url,
+	).href;
+	const support = (await import(supportUrl)) as {
+		startEvaluationBrowserFixture(): Promise<{
+			origin: string;
+			close(): Promise<void>;
+		}>;
+	};
+	const fixture = await support.startEvaluationBrowserFixture();
 	try {
 		await context.addCookies([
 			{
