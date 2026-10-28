@@ -158,7 +158,7 @@ test("unmeasured files and evidence for another image/resources cannot authorize
 	}
 	assert.throws(
 		() => check([{ ...profile, maximumConcurrentExecutions: 100 }]),
-		/CAPACITY_EVIDENCE_NOT_MEASURED/,
+		/CAPACITY_PROFILE_UNMEASURED/,
 	);
 });
 
