@@ -23,6 +23,137 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 	(runtime) => {
 		const openNative = (options: OpenCodeRuntimeOptions) =>
 			runtime === "Pi" ? openPiRuntime(options) : openOpenCodeRuntime(options);
+		it.each(["http", "content-type", "stream"] as const)(
+			"persists trusted Messages diagnostics from the real native caller: %s",
+			async (failure) => {
+				const path = await mkdtemp(
+					join(tmpdir(), "messages-caller-diagnostic-"),
+				);
+				let calls = 0;
+				const server = createServer(async (request, response) => {
+					for await (const _chunk of request) {
+						// Consume the real native request without retaining its contents.
+					}
+					calls++;
+					response.writeHead(failure === "http" ? 502 : 200, {
+						"content-type":
+							failure === "stream" ? "text/event-stream" : "application/json",
+					});
+					response.end(
+						failure === "stream"
+							? 'event: error\ndata: {"type":"error","error":{"message":"synthetic private upstream failure"}}\n\n'
+							: JSON.stringify({ error: "synthetic private upstream failure" }),
+					);
+				});
+				await new Promise<void>((resolve) =>
+					server.listen(0, "127.0.0.1", resolve),
+				);
+				const address = server.address();
+				if (!address || typeof address === "string") throw new Error();
+				const driver = await openNative({
+					path,
+					executable: process.env.OPENCODE_EXECUTABLE ?? "",
+					configVersion: "diagnostic-configuration",
+					defaultModelOptionId: "primary",
+					defaultReasoningLevel: "high",
+					modelOptions: [
+						{
+							modelOptionId: "primary",
+							model: "claude-opus-4-6",
+							reasoningLevels: ["high"],
+							endpoint: `http://127.0.0.1:${address.port}`,
+							credential: "synthetic-native-credential",
+							authentication: "bearer",
+						},
+					],
+				});
+				try {
+					const result = await driver.execute({
+						schemaVersion: 2,
+						kind: "submit-turn",
+						agentId: "agent-diagnostic",
+						conversationId: "conversation-diagnostic",
+						sessionGeneration: 1,
+						executionId: "execution-diagnostic",
+						turnId: "turn-diagnostic",
+						operationId: "operation-diagnostic",
+						input: { text: "Return a short answer", attachments: [] },
+						selection: {
+							schemaVersion: 1,
+							modelOptionId: "primary",
+							reasoningLevel: "high",
+						},
+					});
+					expect(result.result.outcome).toBe("accepted");
+					await vi.waitFor(
+						async () => {
+							expect(["failed", "unknown"]).toContain(
+								await driver.getStatus(
+									result.nativeSessionRef,
+									"execution-diagnostic",
+								),
+							);
+						},
+						{ timeout: 20_000 },
+					);
+					expect(calls).toBe(1);
+					const state = JSON.parse(
+						await readFile(
+							join(path, result.nativeSessionRef, "state.json"),
+							"utf8",
+						),
+					);
+					const facts = state.turns[0].operationFacts.filter(
+						(fact: { kind: string }) => fact.kind === "model",
+					);
+					expect(facts.map((fact: { phase: string }) => fact.phase)).toEqual([
+						"intent",
+						"started",
+						runtime === "Pi" ? "failed" : "unknown",
+					]);
+					await vi.waitFor(async () => {
+						const diagnostics = JSON.parse(
+							await readFile(
+								join(
+									path,
+									result.nativeSessionRef,
+									"messages-diagnostics.json",
+								),
+								"utf8",
+							),
+						);
+						expect(JSON.stringify(diagnostics)).not.toMatch(
+							/synthetic-native-credential|synthetic private upstream failure|127\.0\.0\.1/,
+						);
+						expect(diagnostics.entries).toContainEqual(
+							expect.objectContaining({
+								executionId: "execution-diagnostic",
+								operationRef: facts[0].operationRef,
+								attemptRef: facts[0].attemptRef,
+								diagnostic: expect.objectContaining({
+									stage:
+										failure === "http"
+											? "upstream_http"
+											: failure === "content-type"
+												? "upstream_content_type"
+												: "stream_validation",
+									...(failure === "http"
+										? { statusCode: 502, statusClass: "5xx" }
+										: {}),
+									sent: true,
+								}),
+							}),
+						);
+					});
+				} finally {
+					await driver.close();
+					server.closeAllConnections();
+					await new Promise<void>((resolve) => server.close(() => resolve()));
+					await rm(path, { recursive: true, force: true });
+				}
+			},
+			30_000,
+		);
 		it("uses the selected Messages model and effort through the unmodified Runtime and resumes confirmed history", async () => {
 			const path = await mkdtemp(join(tmpdir(), "opencode-native-"));
 			const calls: {
@@ -152,6 +283,37 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 						access(join(path, accepted.nativeSessionRef, "home/.npm/_cacache")),
 					).rejects.toMatchObject({ code: "ENOENT" });
 				}
+				// This journey verifies durable diagnostics before restart; close cancels unfinished observations.
+				await vi.waitFor(async () => {
+					const diagnostics = JSON.parse(
+						await readFile(
+							join(
+								path,
+								accepted.nativeSessionRef,
+								"messages-diagnostics.json",
+							),
+							"utf8",
+						),
+					);
+					const journal = JSON.parse(
+						await readFile(
+							join(path, accepted.nativeSessionRef, "state.json"),
+							"utf8",
+						),
+					);
+					const entry = diagnostics.entries.find(
+						(value: { executionId: string }) =>
+							value.executionId === "execution-a",
+					);
+					expect(entry?.state).toBe("completed");
+					expect(journal.turns[0].operationFacts).toContainEqual(
+						expect.objectContaining({
+							kind: "model",
+							operationRef: entry.operationRef,
+							attemptRef: entry.attemptRef,
+						}),
+					);
+				});
 				await driver.close();
 				driver = await openNative(options);
 				expect(await driver.execute(command)).toEqual(accepted);
@@ -173,6 +335,54 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 					{ timeout: 20_000 },
 				);
 				expect(calls).toHaveLength(2);
+				await driver.execute({
+					...command,
+					nativeSessionRef: accepted.nativeSessionRef,
+					operationId: "operation-c",
+					executionId: "execution-c",
+					turnId: "turn-c",
+				});
+				await vi.waitFor(
+					async () =>
+						expect(
+							await driver.getStatus(accepted.nativeSessionRef, "execution-c"),
+						).toBe("completed"),
+					{ timeout: 20_000 },
+				);
+				expect(calls).toHaveLength(3);
+				await vi.waitFor(async () => {
+					const diagnostics = JSON.parse(
+						await readFile(
+							join(
+								path,
+								accepted.nativeSessionRef,
+								"messages-diagnostics.json",
+							),
+							"utf8",
+						),
+					);
+					const journal = JSON.parse(
+						await readFile(
+							join(path, accepted.nativeSessionRef, "state.json"),
+							"utf8",
+						),
+					);
+					expect(
+						diagnostics.entries.map(
+							(entry: { executionId: string }) => entry.executionId,
+						),
+					).toEqual(["execution-a", "execution-b", "execution-c"]);
+					for (const [index, entry] of diagnostics.entries.entries()) {
+						expect(entry.state).toBe("completed");
+						expect(journal.turns[index].operationFacts).toContainEqual(
+							expect.objectContaining({
+								kind: "model",
+								operationRef: entry.operationRef,
+								attemptRef: entry.attemptRef,
+							}),
+						);
+					}
+				});
 			} finally {
 				await driver.close();
 				server.closeAllConnections();

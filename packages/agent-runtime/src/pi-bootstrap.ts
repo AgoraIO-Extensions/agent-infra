@@ -104,7 +104,13 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 			nativeModelId: `configured/${option.model}`,
 			reasoningLevels: option.reasoningLevels,
 		})),
-		launch: async (directory, selection, admit, resolveModelCredential) => {
+		launch: async (
+			directory,
+			selection,
+			admit,
+			resolveModelCredential,
+			openDiagnosticReceipt,
+		) => {
 			const option = options.modelOptions.find(
 				(option) => option.modelOptionId === selection.modelOptionId,
 			);
@@ -117,6 +123,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 				...option,
 				effort: selection.reasoningLevel,
 				admit,
+				openDiagnosticReceipt,
 				...(resolveModelCredential
 					? { resolveCredential: resolveModelCredential }
 					: {}),

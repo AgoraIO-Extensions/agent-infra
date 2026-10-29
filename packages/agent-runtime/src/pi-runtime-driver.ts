@@ -12,6 +12,7 @@ import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
 } from "./driver.js";
+import type { RuntimeMessagesTransportOptions } from "./messages-model-transport.js";
 import {
 	type NativeProcessLaunch,
 	retireNativeProcess,
@@ -55,6 +56,7 @@ export interface PiRuntimeDriverOptions {
 		selection: RuntimeSelectionV1,
 		admit: () => Promise<void>,
 		resolveModelCredential?: () => Promise<string>,
+		openDiagnosticReceipt?: RuntimeMessagesTransportOptions["openDiagnosticReceipt"],
 	) => Promise<NativeProcessLaunch>;
 }
 
@@ -93,6 +95,7 @@ export const PiRuntimeDriver = {
 					update: session.update,
 					resolveModelCredential: session.resolveModelCredential,
 					recordOperationFact: session.recordOperationFact,
+					openDiagnosticReceipt: session.openDiagnosticReceipt,
 					modelFact: session.modelFact,
 					recordToolOperation: session.recordToolOperation,
 				};
@@ -124,6 +127,7 @@ export const PiRuntimeDriver = {
 					session.selection,
 					() => callbacks.admit(),
 					resolveModelCredential,
+					() => callbacks.openDiagnosticReceipt?.(),
 				);
 				try {
 					if (session.browser) {
@@ -223,6 +227,7 @@ export const PiRuntimeDriver = {
 							callbacks.update = next.update;
 							callbacks.resolveModelCredential = next.resolveModelCredential;
 							callbacks.recordOperationFact = next.recordOperationFact;
+							callbacks.openDiagnosticReceipt = next.openDiagnosticReceipt;
 							callbacks.modelFact = next.modelFact;
 							callbacks.recordToolOperation = next.recordToolOperation;
 						},
