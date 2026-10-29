@@ -56,11 +56,20 @@ test("Worker cache accepts only a valid immutable digest for the input hash", ()
 	);
 });
 
-test("local E2E Harness exposes the staged lifecycle without environment access", async () => {
-	const { stdout } = await execFileAsync(process.execPath, [
-		"deploy/local/e2e-harness.mjs",
-		"help",
-	]);
+test("local E2E Harness exposes the staged lifecycle without environment access", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "harness-help-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const { stdout } = await execFileAsync(
+		process.execPath,
+		["deploy/local/e2e-harness.mjs", "help"],
+		{
+			env: {
+				...process.env,
+				PLATFORM_LOCAL_STATE_DIRECTORY: join(directory, "state"),
+				XDG_STATE_HOME: join(directory, "xdg"),
+			},
+		},
+	);
 	assert.match(
 		stdout,
 		/sync\|images\|build\|deploy\|runtime\|verify\|all\|reset/,
@@ -301,7 +310,9 @@ test("Worker readback rejects old, missing and non-ready Worker containers", asy
 	);
 });
 
-test("Harness rejects unsupported lightweight lane before external commands", async () => {
+test("Harness rejects unsupported lightweight lane before external commands", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "harness-lightweight-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
 	const result = spawnSync(
 		process.execPath,
 		["deploy/local/e2e-harness.mjs", "deploy"],
@@ -309,6 +320,8 @@ test("Harness rejects unsupported lightweight lane before external commands", as
 			encoding: "utf8",
 			env: {
 				...process.env,
+				PLATFORM_LOCAL_STATE_DIRECTORY: join(directory, "state"),
+				XDG_STATE_HOME: join(directory, "xdg"),
 				E2E_HARNESS_LANE: "app",
 				PLATFORM_LOCAL_PROJECT: "agent-infra-e2e",
 				PLATFORM_LOCAL_NAMESPACE: "agent-infra-e2e",
@@ -372,6 +385,7 @@ else process.exit(43);
 			E2E_HARNESS_LANE: "full",
 			E2E_HARNESS_OFFLINE: "true",
 			PLATFORM_LOCAL_STATE_DIRECTORY: state,
+			XDG_STATE_HOME: join(directory, "xdg"),
 			PLATFORM_LOCAL_PROJECT: "agent-infra-e2e",
 			PLATFORM_LOCAL_NAMESPACE: "agent-infra-e2e",
 			PLATFORM_LOCAL_KUBE_CONTEXT: "kind-agent-infra-e2e",
@@ -504,6 +518,7 @@ fs.writeFileSync(statePath, JSON.stringify(images));
 			E2E_HARNESS_LANE: "full",
 			E2E_HARNESS_OFFLINE: "true",
 			PLATFORM_LOCAL_STATE_DIRECTORY: state,
+			XDG_STATE_HOME: join(directory, "xdg"),
 			PLATFORM_LOCAL_PROJECT: "agent-infra-e2e",
 			PLATFORM_LOCAL_NAMESPACE: "agent-infra-e2e",
 			PLATFORM_LOCAL_KUBE_CONTEXT: "kind-agent-infra-e2e",
