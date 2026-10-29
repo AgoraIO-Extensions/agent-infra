@@ -3972,3 +3972,197 @@ it("does not resurrect retired Actions as current comparison configuration", asy
 		await sql`update platform.agent_configuration_revisions set configuration=${sql.json(configuration as unknown as postgres.JSONValue)} where agent_id=${configuration.agentId} and revision=${configuration.revision}`;
 	}
 });
+
+it("bounds retained score conclusions by current policy from their actual creation time", async () => {
+	const { PostgresEvaluationAnalysisV1 } = await import(
+		"./evaluation-analysis.js"
+	);
+	const { createEvaluationScoreWorkV1 } = await import(
+		"@agent-infra/platform-core"
+	);
+	const command = await dataset();
+	const experiment = await core.create(
+		request("runner"),
+		randomUUID(),
+		command,
+	);
+	await data.grant(request("admin"), randomUUID(), command.datasetId, {
+		expectedRevision: 4,
+		principal: { kind: "user", id: "runner" },
+		versionIds: [command.versionId],
+		operations: ["score", "analyze"],
+		expiresAt: new Date(Date.now() + 50000).toISOString(),
+	});
+	const tasks = await experiments.samples(experiment.experimentId, 10);
+	const first = tasks[0];
+	if (!first) throw new Error("missing sample");
+	for (const task of tasks) {
+		await sql`update platform.conversation_executions set status='completed',last_event_sequence=2 where execution_id=${task.executionId}`;
+		await sql`insert into platform.conversation_events(event_id,conversation_id,execution_id,sequence,conversation_cursor,event_type,event_payload,source,adapter_event_key,event_digest,runtime_cursor,occurred_at)values(${randomUUID()},${task.conversationId},${task.executionId},2,2,'text.delta',${sql.json({ type: "text.delta", text: "yes" })},'runtime',${randomUUID()},${"a".repeat(64)},'1',clock_timestamp())`;
+	}
+	const [checkpoint] =
+		await sql`select revision,digest from platform.evaluation_policies where id='active'`;
+	const scoring = new PostgresEvaluationScoringV1({
+		...database,
+		directory,
+		storage,
+		loadDataPolicy: async () => policy,
+		loadExperimentPolicy: async () => experimentPolicy,
+		taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+	});
+	const outbox = createPostgresOutboxStore(database);
+	let currentPolicy = policy;
+	let reads = 0;
+	let stopAt = Number.POSITIVE_INFINITY;
+	let deadline = Number.POSITIVE_INFINITY;
+	let delayed = false;
+	const analysis = new PostgresEvaluationAnalysisV1({
+		...database,
+		storage,
+		directory: {
+			resolveUser: async (id) => {
+				reads++;
+				if (reads === stopAt) {
+					expect(Date.now()).toBeLessThan(deadline);
+					delayed = true;
+					await new Promise((resolve) =>
+						setTimeout(resolve, Math.max(1, deadline - Date.now() + 30)),
+					);
+				}
+				return directory.resolveUser(id);
+			},
+		},
+		loadDataPolicy: async () => currentPolicy,
+		loadExperimentPolicy: async () => experimentPolicy,
+		loadAnalysisPolicy: async () => ({
+			schemaVersion: 1,
+			policyId: "analysis",
+			revision: 1,
+			validUntil: policy.validUntil,
+			maximumWindowMs: 86400000,
+			maximumTasks: 1000,
+			maximumModelFacts: 10000,
+			feedbackMetadataMs: 600000,
+		}),
+		taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+	});
+	const currentData = createEvaluationDataV1({
+		store: dataStore,
+		storage,
+		loadPolicy: async () => currentPolicy,
+	});
+	const publish = async (metadataMs: number) => {
+		currentPolicy = parseEvaluationPolicyV1({
+			...currentPolicy,
+			revision: currentPolicy.revision + 1,
+			retention: {
+				...currentPolicy.retention,
+				score: { ...currentPolicy.retention.score, contentMs: 1, metadataMs },
+			},
+		});
+		const [dataset] =
+			await sql`select data from platform.evaluation_datasets where id=${command.datasetId}`;
+		await currentData.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: dataset?.data.revision,
+			principal: { kind: "user", id: "runner" },
+			versionIds: [command.versionId],
+			operations: ["analyze"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+	};
+	try {
+		// A real later score must not inherit the experiment's earlier creation time.
+		await new Promise((resolve) =>
+			setTimeout(
+				resolve,
+				Math.max(1, Date.parse(experiment.createdAt) + 5100 - Date.now()),
+			),
+		);
+		const [intent] =
+			await sql`select id from platform.evaluation_score_intents where sample_task_id=${first.sampleTaskId}`;
+		if (!intent) throw new Error("missing intent");
+		const itemId = `evaluation-score:${intent.id}`;
+		await sql`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${itemId}`;
+		const claim = await outbox.claim({
+			itemId,
+			leaseOwner: "retention-test",
+			leaseDurationMs: 30000,
+		});
+		if (!claim) throw new Error("missing score claim");
+		expect(
+			await createEvaluationScoreWorkV1(scoring).execute({
+				intentId: intent.id,
+				itemId,
+				leaseOwner: "retention-test",
+				deliveryFence: claim.deliveryFence.toString(),
+			}),
+		).toEqual({ outcome: "completed" });
+		const [produced] =
+			await sql`select i.data as score,o.data as object from platform.evaluation_score_intents i join platform.evaluation_derived_objects o on o.id=(i.data->>'reasonObjectId')::uuid where i.id=${intent.id}`;
+		if (!produced) throw new Error("missing produced score object");
+		expect(produced.score).toMatchObject({
+			status: "scored",
+			value: 1,
+			passed: true,
+		});
+		expect(
+			Date.parse(produced.object.createdAt) -
+				Date.parse(produced.score.createdAt),
+		).toBeGreaterThan(5000);
+		await publish(5000);
+		const call = () =>
+			analysis.summary(request("runner"), experiment.experimentId);
+		const live = await call();
+		expect(
+			live.items
+				.flatMap((item) => item.scores)
+				.filter((score) => score.status === "scored"),
+		).toHaveLength(1);
+		expect(
+			live.items
+				.flatMap((item) => item.scores)
+				.find((score) => score.status === "scored"),
+		).toMatchObject({ value: 1, passed: true });
+		stopAt = reads;
+		reads = 0;
+		deadline = Date.parse(produced.object.createdAt) + 5000;
+		await expect(call()).rejects.toMatchObject({ code: "denied" });
+		expect(delayed).toBe(true);
+		stopAt = Number.POSITIVE_INFINITY;
+		await publish(1);
+		const retired = await call();
+		expect(retired.items).toHaveLength(2);
+		expect(
+			retired.items
+				.flatMap((item) => item.scores)
+				.some((score) => score.scoreId === intent.id),
+		).toBe(false);
+		expect(
+			retired.items
+				.flatMap((item) => item.scores)
+				.every((score) => score.value === null && score.passed === null),
+		).toBe(true);
+		expect(
+			retired.groups.every(
+				(group) =>
+					group.counts.fixedSamples === 1 &&
+					group.counts.unscored + group.counts.missing === 1,
+			),
+		).toBe(true);
+		// Corrupt/missing bindings are not silently classified as expired conclusions.
+		for (const reasonObjectId of [
+			randomUUID(),
+			produced.score.outputObjectId,
+		]) {
+			await sql`update platform.evaluation_score_intents set data=jsonb_set(data,'{reasonObjectId}',to_jsonb(${reasonObjectId}::text)) where id=${intent.id}`;
+			await expect(call()).rejects.toMatchObject({ code: "unavailable" });
+		}
+		await sql`update platform.evaluation_score_intents set data=${sql.json(produced.score)} where id=${intent.id}`;
+	} finally {
+		await analysis.close();
+		await scoring.close();
+		await outbox.close();
+		// Restore only this fixture's policy checkpoint; all writes above used the real policy/grant path.
+		await sql`update platform.evaluation_policies set revision=${checkpoint?.revision},digest=${checkpoint?.digest} where id='active'`;
+	}
+}, 30000);

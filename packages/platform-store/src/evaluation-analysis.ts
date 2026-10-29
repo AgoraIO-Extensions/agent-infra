@@ -7,8 +7,10 @@ import {
 	EvaluationDataErrorV1,
 	type EvaluationDerivedObjectV1,
 	type EvaluationExperimentV1,
+	type EvaluationPolicyV1,
 	EvaluationQueryLimitErrorV1,
 	type EvaluationRequestV1,
+	type EvaluationScoreIntentV1,
 	foldEvaluationModelFactsV1,
 	parseEvaluationAnalysisPolicyV1,
 	parseEvaluationDerivedObjectV1,
@@ -255,6 +257,7 @@ export class PostgresEvaluationAnalysisV1 {
 	async #snapshot(
 		experiment: EvaluationExperimentV1,
 		policy: EvaluationAnalysisPolicyV1,
+		dataPolicy: EvaluationPolicyV1,
 	) {
 		return this.#client.begin(
 			"isolation level repeatable read read only",
@@ -289,20 +292,84 @@ export class PostgresEvaluationAnalysisV1 {
 						status: string;
 						revision: string;
 						data: unknown;
+						object_id: string | null;
+						object_dataset_id: string | null;
+						object_version_id: string | null;
+						object_kind: string | null;
+						object_status: string | null;
+						object_expires_at: Date | null;
+						object_metadata_expires_at: Date | null;
+						object_data: unknown;
 					}[]
-				>`select i.id,i.sample_task_id,i.status,i.revision,i.data from platform.evaluation_score_intents i join platform.evaluation_sample_tasks s on s.id=i.sample_task_id where s.experiment_id=${experiment.experimentId} and (i.data->>'metadataExpiresAt')::timestamptz>clock_timestamp()`;
-				const scores = scoreRows.map((row) => {
+				>`select i.id,i.sample_task_id,i.status,i.revision,i.data,o.id as object_id,o.dataset_id as object_dataset_id,o.version_id as object_version_id,o.kind as object_kind,o.status as object_status,o.expires_at as object_expires_at,o.metadata_expires_at as object_metadata_expires_at,o.data as object_data from platform.evaluation_score_intents i join platform.evaluation_sample_tasks s on s.id=i.sample_task_id left join platform.evaluation_derived_objects o on o.id=(i.data->>'reasonObjectId')::uuid where s.experiment_id=${experiment.experimentId} and (i.data->>'metadataExpiresAt')::timestamptz>clock_timestamp()`;
+				const [clock] = await tx<
+					{ now: Date }[]
+				>`select clock_timestamp() as now`;
+				if (!clock) throw new EvaluationDataErrorV1("unavailable");
+				const scoreObjects = new Map<string, EvaluationDerivedObjectV1>();
+				const scores = scoreRows.flatMap((row) => {
 					const value = parseEvaluationScoreIntentV1(row.data);
 					if (
 						value.id !== row.id ||
+						value.experimentId !== experiment.experimentId ||
+						value.datasetId !== experiment.datasetId ||
+						value.versionId !== experiment.versionId ||
 						value.sampleTaskId !== row.sample_task_id ||
 						value.status !== row.status ||
 						value.revision !== +row.revision
 					)
 						throw new EvaluationDataErrorV1("unavailable");
-					return value;
+					if (value.reasonObjectId) {
+						if (!row.object_data)
+							throw new EvaluationDataErrorV1("unavailable");
+						const object = parseEvaluationDerivedObjectV1(row.object_data);
+						if (
+							object.id !== value.reasonObjectId ||
+							object.id !== row.object_id ||
+							object.datasetId !== value.datasetId ||
+							object.datasetId !== row.object_dataset_id ||
+							object.versionId !== value.versionId ||
+							object.versionId !== row.object_version_id ||
+							object.kind !== "score" ||
+							object.kind !== row.object_kind ||
+							object.status !== row.object_status ||
+							object.expiresAt !== row.object_expires_at?.toISOString() ||
+							object.metadataExpiresAt !==
+								row.object_metadata_expires_at?.toISOString()
+						)
+							throw new EvaluationDataErrorV1("unavailable");
+						// Score conclusions inherit their produced object's metadata clock,
+						// not the older experiment/intent creation time or body expiry.
+						if (
+							Math.min(
+								Date.parse(object.metadataExpiresAt),
+								Date.parse(object.createdAt) +
+									dataPolicy.retention.score.metadataMs,
+							) <= +clock.now
+						)
+							return [];
+						scoreObjects.set(value.id, object);
+					}
+					return [value];
 				});
-				const rows: EvaluationAnalysisTaskV1[] = records.map((row) => {
+				const factsByExecution = new Map<
+					string,
+					{ sequence: number; fact: unknown }[]
+				>();
+				for (const fact of facts) {
+					const group = factsByExecution.get(fact.execution_id) ?? [];
+					group.push({ sequence: fact.sequence, fact: fact.fact });
+					factsByExecution.set(fact.execution_id, group);
+				}
+				const scoresBySample = new Map<string, EvaluationScoreIntentV1[]>();
+				for (const score of scores) {
+					const group = scoresBySample.get(score.sampleTaskId) ?? [];
+					group.push(score);
+					scoresBySample.set(score.sampleTaskId, group);
+				}
+				const rows: (EvaluationAnalysisTaskV1 & {
+					scoreObjects: EvaluationDerivedObjectV1[];
+				})[] = records.map((row) => {
 					const task = parseEvaluationSampleTaskV1(row.data);
 					if (
 						task.sampleTaskId !== row.id ||
@@ -319,9 +386,7 @@ export class PostgresEvaluationAnalysisV1 {
 							executionFailureFactsV1(row),
 						),
 						actual: foldEvaluationModelFactsV1(
-							facts
-								.filter((f) => f.execution_id === row.execution_id)
-								.map((f) => ({ sequence: f.sequence, fact: f.fact })),
+							factsByExecution.get(row.execution_id) ?? [],
 							policy.maximumModelFacts,
 						),
 						taskDurationMs: row.terminal_observed_at
@@ -329,7 +394,13 @@ export class PostgresEvaluationAnalysisV1 {
 								? +row.terminal_observed_at - +row.created_at
 								: null
 							: null,
-						scores: scores.filter((s) => s.sampleTaskId === row.id),
+						scores: scoresBySample.get(row.id) ?? [],
+						scoreObjects: (scoresBySample.get(row.id) ?? []).flatMap(
+							(score) => {
+								const object = scoreObjects.get(score.id);
+								return object ? [object] : [];
+							},
+						),
 					};
 				});
 				return rows;
@@ -341,6 +412,7 @@ export class PostgresEvaluationAnalysisV1 {
 		const tasks = await this.#snapshot(
 			before.experiment,
 			before.analysisPolicy,
+			before.data.policy,
 		);
 		const v = before.data.version;
 		const retention = before.data.policy.retention;
@@ -363,7 +435,9 @@ export class PostgresEvaluationAnalysisV1 {
 		});
 		const final = await this.#current(request, id, {
 			source: source !== null,
-			objects: [],
+			objects: tasks.flatMap((row) =>
+				row.scoreObjects.map((object) => ({ object, available: false })),
+			),
 			metadataExpiresAt: tasks.flatMap((row) =>
 				row.scores.map((score) => score.metadataExpiresAt),
 			),
@@ -439,7 +513,11 @@ export class PostgresEvaluationAnalysisV1 {
 		)
 			throw new EvaluationDataErrorV1("invalid");
 		const before = await this.#current(request, id);
-		const rows = await this.#snapshot(before.experiment, before.analysisPolicy);
+		const rows = await this.#snapshot(
+			before.experiment,
+			before.analysisPolicy,
+			before.data.policy,
+		);
 		const row = rows.find((r) => r.task.sampleTaskId === sampleTaskId);
 		if (!row) throw new EvaluationDataErrorV1("denied");
 		const source = await this.#data.readForAnalyze(
