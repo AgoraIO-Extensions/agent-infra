@@ -8,6 +8,29 @@
 开放 PR **4**。本快照 PR 尚未创建，不计入该数。本次记录 ACK v8 功能验收与实际 session 归属，
 不因每次合入自动创建刷新票。操作顺序见 [Issue 工作指导](issue-work-guidance.md)。
 
+## 当前归属复核与纠正（2026-10-29）
+
+上方及后续列表保留原采集窗口，不表示所有待办都已有当前执行者。此前把历史负责人、待验收和
+外部依赖推断成“仍由原 session 处理”不准确；现以直接回复与当前 PR/工作树交叉回读纠正：
+
+| 范围 | 当前确认 | 下一步 |
+| --- | --- | --- |
+| #3707/#3715 | 原迁移 session 明确持有并正在执行，关联 #3711 | 继续由原 owner 完成；本协调 session 不认领 |
+| #3692 | 原 ACK 性能 session 明确持有并已安排发布后对比 | 保留其共享环境静默窗口，不混入新验收负载 |
+| #3708/#3709 | 原架构 session 明确持有时计入五个已确认项；现已随 #3710 合入并由原 owner 关闭 | 原 owner 负责该 PR 清理，不再计入未完成开发 |
+| #851 | 历史 owner 明确当前无活动 writer，已交接仅 Platform 消费侧调查及状态收口 | 核对完整注册/供应范围与现有规范；不接管 Connection 服务、凭据、Grant 或部署 |
+| #1548 | 历史 owner 明确未继续且未排期剩余矩阵，释放其 writer 与旧本地环境预留 | Coordinator 接收调查/验收筹备；旧证据只作历史，实际运行前核对其他环境 owner；#3553 继续排除 |
+| #2857/#2858/#2983/#2998/#3108/#3230 | 活动迁移及 ACK owner 明确均未认领、未排期；当前没有已确认执行者 | 核对既有验收入口与输入，按可执行步骤安排责任；不能因“待验收”就自动跳过 |
+| #3295/#171/#144 | 依赖或父子关系不证明有执行 owner；ACK 性能 owner 明确未认领 | 分别确定网络环境方案/真实资源核验/父票收口责任，保持未完成项 |
+
+因此，第一次二次确认覆盖的是五项，**不是全部十六项**。另外十一项当时没有当前 owner 或
+未来执行计划的充分证明；随后 #851/#1548 才取得上述有限交接。Coordinator 的整体目标仍未完成。
+
+可执行工作先从 #2858 的真实管理 UI 角色、导航、深链与目录请求回读，以及 #2983 的既有
+`requireThinking` 浏览器入口准备开始；ACK 当前由性能 owner 使用，新的登录、创建、模型和
+生命周期验收须等待其明确释放共享窗口。外部账号/扫码、旧失败会话恢复及未发布合同分别记录
+真实缺口，不据此笼统宣布所有验收不可执行。参考 [Issue 工作指导](issue-work-guidance.md#并行分派入口)。
+
 ## 分类计数
 
 | 类别 | 业务与验收数量 |
@@ -35,7 +58,7 @@
 | Deploy/E2E/Channels | [#2983](https://github.com/AgoraIO-Extensions/agent-infra/issues/2983) | test(e2e): 固定环境验收 DeepSeek 与思考过程（Web 与企微） | ready-for-agent, priority:P1, agent:kiro | DeepSeek/思考过程的 Web 与企微矩阵待验；v8 reasoning 计数为零，不代签 low/high/max、单/群聊和回归 |
 | Platform/Web/Skill | [#2858](https://github.com/AgoraIO-Extensions/agent-infra/issues/2858) | test: accept Platform management Web flow from #535 | agent:codex | 管理 Web/API/PG 完整旅程待验；v8 API 创建/就绪与对话不代替申请审批、Owner 配置及完整页面矩阵 |
 | Runtime/Worker/Core | [#2857](https://github.com/AgoraIO-Extensions/agent-infra/issues/2857) | test: accept Session Sandbox multi-entry isolation from #1253 | agent:codex | 多入口、多 Runtime、重启撤权与隔离矩阵待验；v8 六个 ECI Session 与入口拒绝仅覆盖本轮具体路径 |
-| Platform/Web/Skill | [#1548](https://github.com/AgoraIO-Extensions/agent-infra/issues/1548) | test(skill-hub): accept the deployed lifecycle and Web conversation chain | ready-for-human, priority:P0, agent:kiro | 原 Skill session 持有 lifecycle/Web 验收；本协调 session 保留 #3553 排除，不接管其实现或验收 |
+| Platform/Web/Skill | [#1548](https://github.com/AgoraIO-Extensions/agent-infra/issues/1548) | test(skill-hub): accept the deployed lifecycle and Web conversation chain | ready-for-human, priority:P0, agent:kiro | 历史 Skill 正向验证已结束；当前有限交接见归属复核，#3553 继续排除，完整矩阵与人工签收仍待 |
 | Runtime/Worker/Core | [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) | feat(runtime): deliver standard MCP Agent token client | priority:P0, agent:codex | 平台逐 Agent 安装绑定消费已交付；自动独立 Consumer 注册仍缺 Connection 机器认证合同，个人 Token/管理员 Cookie/DCR ID 不替代 |
 | Deploy/E2E/Channels | [#171](https://github.com/AgoraIO-Extensions/agent-infra/issues/171) | 准备 P0 首发真实环境 ACK tenancy 与访问入口资源 | wayfinder:task, wayfinder, priority:P0, agent:kiro | 原生 blocked_by #3295；网络、存储、Registry、RBAC、DNS/TLS 等原范围仍须当前证据，v8 功能矩阵不能整票关闭 |
 | Workflow/Observability | [#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144) | wayfinder: 形成 Agent 平台 M1 启动与落地路线 | wayfinder:map, wayfinder, priority:P0, agent:codex | 75 个原生子项已分页回读，仅 #171 OPEN；父地图仍等待环境前置及自身范围闭环 |
@@ -52,7 +75,7 @@ Session ID、标签或 idle 状态只提供线索；认领规则见 [工作指�
 | 本地 Agent 迁入 | #3707 / #3711 | 原迁移 session 持有迁入验收、custom-agent-migration 与 personal-api-read 文档；已现场确认不写本表两份全局文档，本协调 session 跳过 |
 | 架构收拢 | #3708/#3709 / #3710 | 原架构 session 持有 metadata transport、client 接线及 ACK binding/消费者；已现场确认不写本表两份全局文档，不操作 ACK 环境，本协调 session 跳过 |
 | ACK 交付与性能 | #3685 已关闭 / #3700 已合入；#3692 OPEN | 原 ACK session 完成 v8 与两份部署文档，保留性能后续及私有包；已确认不写两份全局文档，无未释放资源等待。只读复核和已明确交接的五项 AC-4 更新不扩大后续写权 |
-| Skill 真实验收 | #1548 | 原 Skill session 保留生命周期/Web 旅程；#3553 仍由其他会话跟进 |
+| Skill 真实验收 | #1548 | 历史 owner 已明确释放剩余验收筹备，Coordinator 已接收；旧环境须另核资源占用，#3553 仍排除 |
 | Connection 使用方合同 | #851 | 平台等待已发布的机器注册合同；Connection 服务端、Provider、Grant、凭据与部署仍归原 owner |
 | 状态与交接 | #3712 | Coordinator 仅这两份全局文档；已交叉确认上述活动 owner 无重叠写入。每个 PR 由专属后台 watcher 跟进，合并后单 PR 清理 |
 
