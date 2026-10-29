@@ -5,8 +5,16 @@ import {
 } from "@agent-infra/contracts/pilot";
 import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+	Collapsible,
+	CollapsiblePanel,
+	CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
+import {
+	NativeSelect,
+	NativeSelectOption,
+} from "@/components/ui/native-select";
 import {
 	Table,
 	TableBody,
@@ -233,23 +241,26 @@ function AnalysisResult({
 						通过率只在已评分样本中计算；固定分母和缺失/故障覆盖同时展示，不将缺失或故障记为零分。
 					</p>
 					{data.groups.map((g) => (
-						<details key={`${g.variantId}:${g.scorerId}:types`}>
-							<summary>
+						<Collapsible key={`${g.variantId}:${g.scorerId}:types`}>
+							<CollapsibleTrigger>
 								{g.variantId} / {g.scorerId} 的任务类型分布
-							</summary>
-							<ul>
-								{g.taskTypes.map((t) => (
-									<li key={t.taskType ?? "missing"}>
-										{t.taskType ?? "任务类型不可用"}：固定{" "}
-										{t.counts.fixedSamples}，已评分 {t.counts.scored}，评分故障{" "}
-										{t.counts.scoreError}，业务失败 {t.counts.businessFailed}
-										，缺失 {t.counts.missing}，未评分 {t.counts.unscored}
-										，不适用 {t.counts.notApplicable}，通过 {t.counts.passed}
-										，未通过 {t.counts.notPassed}
-									</li>
-								))}
-							</ul>
-						</details>
+							</CollapsibleTrigger>
+							<CollapsiblePanel>
+								<ul>
+									{g.taskTypes.map((t) => (
+										<li key={t.taskType ?? "missing"}>
+											{t.taskType ?? "任务类型不可用"}：固定{" "}
+											{t.counts.fixedSamples}，已评分 {t.counts.scored}
+											，评分故障 {t.counts.scoreError}，业务失败{" "}
+											{t.counts.businessFailed}
+											，缺失 {t.counts.missing}，未评分 {t.counts.unscored}
+											，不适用 {t.counts.notApplicable}，通过 {t.counts.passed}
+											，未通过 {t.counts.notPassed}
+										</li>
+									))}
+								</ul>
+							</CollapsiblePanel>
+						</Collapsible>
 					))}
 					<h3>可比覆盖</h3>
 					{data.pairs.map((p) => (
@@ -417,9 +428,9 @@ function AnalysisDetail({
 				}}
 			>
 				{[1, 5, 10, 25].map((n) => (
-					<option key={n} value={n}>
+					<NativeSelectOption key={n} value={n}>
 						{n} 条
-					</option>
+					</NativeSelectOption>
 				))}
 			</NativeSelect>
 			<Button variant="ghost" onClick={onClose}>

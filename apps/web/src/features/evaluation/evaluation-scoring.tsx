@@ -9,7 +9,10 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
+import {
+	NativeSelect,
+	NativeSelectOption,
+} from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import {
 	listEvaluationReviewsV1,
@@ -73,8 +76,8 @@ export function EvaluationScoring() {
 					list.clear();
 				}}
 			>
-				<option value="score">评分</option>
-				<option value="review">独立复核</option>
+				<NativeSelectOption value="score">评分</NativeSelectOption>
+				<NativeSelectOption value="review">独立复核</NativeSelectOption>
 			</NativeSelect>
 			<Button
 				variant="outline"
@@ -349,8 +352,10 @@ function ScoreEditor({
 									)
 								}
 							>
-								<option value="scored">评分</option>
-								<option value="not_applicable">不适用</option>
+								<NativeSelectOption value="scored">评分</NativeSelectOption>
+								<NativeSelectOption value="not_applicable">
+									不适用
+								</NativeSelectOption>
 							</NativeSelect>
 							{resultStatus === "scored" && (
 								<>

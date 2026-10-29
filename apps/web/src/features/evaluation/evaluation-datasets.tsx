@@ -9,7 +9,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
+import {
+	NativeSelect,
+	NativeSelectOption,
+} from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import {
 	confirmEvaluationContentV1,
@@ -396,11 +399,11 @@ export function EvaluationDatasets({
 								setVersionId(e.target.value);
 							}}
 						>
-							<option value="">选择此评测集版本</option>
+							<NativeSelectOption value="">选择此评测集版本</NativeSelectOption>
 							{dataset.versions.map((v) => (
-								<option key={v.versionId} value={v.versionId}>
+								<NativeSelectOption key={v.versionId} value={v.versionId}>
 									{v.versionId} · {v.status}
-								</option>
+								</NativeSelectOption>
 							))}
 						</NativeSelect>
 						{application ? (

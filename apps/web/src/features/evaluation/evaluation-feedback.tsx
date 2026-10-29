@@ -3,7 +3,10 @@ import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
+import {
+	NativeSelect,
+	NativeSelectOption,
+} from "@/components/ui/native-select";
 import {
 	Table,
 	TableBody,
@@ -124,8 +127,10 @@ export function EvaluationFeedbackSummary() {
 							agents.clear();
 						}}
 					>
-						<option value="self">本人任务</option>
-						<option value="owner">Owner 获准汇总</option>
+						<NativeSelectOption value="self">本人任务</NativeSelectOption>
+						<NativeSelectOption value="owner">
+							Owner 获准汇总
+						</NativeSelectOption>
 					</NativeSelect>
 				</div>
 				<div>
@@ -139,11 +144,11 @@ export function EvaluationFeedbackSummary() {
 							summary.clear();
 						}}
 					>
-						<option value="">选择当前可见 Agent</option>
+						<NativeSelectOption value="">选择当前可见 Agent</NativeSelectOption>
 						{agents.data?.map((a) => (
-							<option key={a.agentId} value={a.agentId}>
+							<NativeSelectOption key={a.agentId} value={a.agentId}>
 								{a.name}
-							</option>
+							</NativeSelectOption>
 						))}
 					</NativeSelect>
 				</div>

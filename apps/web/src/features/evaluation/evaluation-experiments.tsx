@@ -8,7 +8,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
+import {
+	NativeSelect,
+	NativeSelectOption,
+} from "@/components/ui/native-select";
 import {
 	Table,
 	TableBody,
@@ -191,11 +194,11 @@ export function EvaluationRun({
 					disabled={locked || datasets.loading}
 					onChange={(e) => resetSelection(e.target.value)}
 				>
-					<option value="">选择已导入版本</option>
+					<NativeSelectOption value="">选择已导入版本</NativeSelectOption>
 					{versions.map((v) => (
-						<option key={v.key} value={v.key}>
+						<NativeSelectOption key={v.key} value={v.key}>
 							{v.label}
-						</option>
+						</NativeSelectOption>
 					))}
 				</NativeSelect>
 				{datasets.data && !versions.length && (
@@ -213,12 +216,12 @@ export function EvaluationRun({
 								setCandidates((c) => c.filter((v) => v !== e.target.value));
 							}}
 						>
-							<option value="">选择批准的基线</option>
+							<NativeSelectOption value="">选择批准的基线</NativeSelectOption>
 							{choices.data.variants.map((v) => (
-								<option key={v.variantId} value={v.variantId}>
+								<NativeSelectOption key={v.variantId} value={v.variantId}>
 									{v.name} · {v.modelOptionId ?? "模型未指定"} · 配置{" "}
 									{v.configurationRevision}
-								</option>
+								</NativeSelectOption>
 							))}
 						</NativeSelect>
 						<fieldset disabled={locked} className="space-y-2">
