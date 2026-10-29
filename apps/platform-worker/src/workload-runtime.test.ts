@@ -4927,6 +4927,255 @@ it.each([
 	},
 );
 
+it("reuses signed readiness only inside each ready reconciliation promotion", async () => {
+	const probeRuntime = vi.fn<WorkloadRuntimeOptionsV1["probeRuntime"]>(
+		async () => ({ core: "passed", capabilities: {} }),
+	);
+	const health = vi.fn(async () => new Response("ok"));
+	const f = fixture({ probeRuntime, fetch: health });
+	await f.tick(8);
+	expect(f.state?.phase).toBe("ready");
+	const pod = [...f.resources.values()].find(
+		(resource) => resource.kind === "Pod",
+	);
+	if (!pod?.metadata) throw new Error("Fixture Pod is missing");
+	pod.metadata.resourceVersion = "ready-pod-version";
+	probeRuntime.mockClear();
+	health.mockClear();
+
+	await f.tick(1);
+	expect(probeRuntime).toHaveBeenCalledTimes(2);
+	expect(health).toHaveBeenCalledTimes(3);
+	await f.tick(1);
+	expect(probeRuntime).toHaveBeenCalledTimes(4);
+	expect(health).toHaveBeenCalledTimes(6);
+});
+
+describe("promotion readiness reuse (#3714)", () => {
+	async function ready() {
+		const probeRuntime = vi.fn<WorkloadRuntimeOptionsV1["probeRuntime"]>(
+			async () => ({ core: "passed", capabilities: {} }),
+		);
+		const health = vi.fn(async () => new Response("ok"));
+		const f = fixture({ probeRuntime, fetch: health });
+		await f.tick(8);
+		const state = f.state;
+		if (state?.phase !== "ready" || !state.identity)
+			throw new Error("Fixture did not reach ready");
+		const pod = f.resources.get(
+			`Pod/${workloadResourceNameV1(state.agentId)}-0`,
+		) as V1Pod;
+		if (!pod?.metadata) throw new Error("Fixture Pod is missing");
+		pod.metadata.resourceVersion = "ready-pod-version";
+		const runtime = createWorkloadRuntimeV1(f.options);
+		probeRuntime.mockClear();
+		health.mockClear();
+		return { f, state, runtime, probeRuntime, health, pod };
+	}
+
+	it("probes once in every standalone promotion on the same runtime", async () => {
+		const { state, runtime, probeRuntime, health } = await ready();
+		await expect(runtime.promote(state)).resolves.toBeUndefined();
+		expect(probeRuntime).toHaveBeenCalledTimes(1);
+		expect(health).toHaveBeenCalledTimes(2);
+		await expect(runtime.promote(state)).resolves.toBeUndefined();
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+		expect(health).toHaveBeenCalledTimes(4);
+	});
+
+	it("keeps monitor observations fresh on a long-lived runtime", async () => {
+		const { state, runtime, probeRuntime, health } = await ready();
+		for (let attempt = 1; attempt <= 2; attempt++) {
+			await expect(runtime.observe(state)).resolves.toBe("healthy");
+			await expect(runtime.promote(state)).resolves.toBeUndefined();
+			expect(probeRuntime).toHaveBeenCalledTimes(attempt * 2);
+			expect(health).toHaveBeenCalledTimes(attempt * 3);
+		}
+	});
+
+	async function expectClosed(f: Awaited<ReturnType<typeof ready>>["f"]) {
+		const service = await f.client.read<V1Service>(
+			"Service",
+			workloadResourceNameV1("agent-a"),
+		);
+		expect(service?.spec?.selector?.["agent-infra.agora.io/revision"]).toBe(
+			"closed",
+		);
+	}
+
+	it("rejects a replacement Pod whose fresh signed readiness fails", async () => {
+		const { f, state, runtime, probeRuntime, health } = await ready();
+		probeRuntime
+			.mockImplementationOnce(async () => {
+				const pod = [...f.resources.values()].find(
+					(resource) => resource.kind === "Pod",
+				);
+				if (!pod?.metadata) throw new Error("Fixture Pod is missing");
+				pod.metadata.uid = "replacement-pod";
+				return { core: "passed", capabilities: {} };
+			})
+			.mockResolvedValueOnce({ core: "failed", capabilities: {} });
+		await expect(runtime.promote(state)).rejects.toThrow();
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+		expect(health).toHaveBeenCalledTimes(2);
+		await expectClosed(f);
+	});
+
+	it("rejects a restarted container in the same Pod when fresh readiness fails", async () => {
+		const { f, state, runtime, probeRuntime, health, pod } = await ready();
+		const originalUid = pod.metadata?.uid;
+		probeRuntime
+			.mockImplementationOnce(async () => {
+				if (!pod.metadata || !pod.status)
+					throw new Error("Fixture Pod is missing");
+				pod.metadata.resourceVersion = "restarted-pod-version";
+				pod.status.containerStatuses = [
+					{
+						name: "agent",
+						image: pod.spec?.containers[0]?.image ?? "",
+						imageID: "runtime-image",
+						containerID: "containerd://replacement-container",
+						ready: true,
+						restartCount: 1,
+					},
+				];
+				return { core: "passed", capabilities: {} };
+			})
+			.mockResolvedValueOnce({ core: "failed", capabilities: {} });
+		await expect(runtime.promote(state)).rejects.toThrow();
+		expect(pod.metadata?.uid).toBe(originalUid);
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+		expect(health).toHaveBeenCalledTimes(2);
+		await expectClosed(f);
+	});
+
+	it.each([undefined, ""])(
+		"probes every time when Pod resourceVersion is %j",
+		async (resourceVersion) => {
+			const { state, runtime, probeRuntime, health, pod } = await ready();
+			if (!pod.metadata) throw new Error("Fixture Pod is missing");
+			pod.metadata.resourceVersion = resourceVersion;
+			await expect(runtime.promote(state)).resolves.toBeUndefined();
+			expect(probeRuntime).toHaveBeenCalledTimes(2);
+			expect(health).toHaveBeenCalledTimes(2);
+		},
+	);
+
+	it("reprobes a changed Pod resourceVersion even without a container restart", async () => {
+		const { state, runtime, probeRuntime, pod } = await ready();
+		probeRuntime.mockImplementationOnce(async () => {
+			if (!pod.metadata) throw new Error("Fixture Pod is missing");
+			pod.metadata.resourceVersion = "updated-pod-version";
+			return { core: "passed", capabilities: {} };
+		});
+		await expect(runtime.promote(state)).resolves.toBeUndefined();
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+	});
+
+	it("reprobes when the second observation takes more than five seconds", async () => {
+		const { f, state, runtime, probeRuntime, health } = await ready();
+		let now = 0;
+		const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+		health
+			.mockResolvedValueOnce(new Response("ok"))
+			.mockImplementationOnce(async () => {
+				now = 5_001;
+				return new Response("ok");
+			});
+		probeRuntime
+			.mockResolvedValueOnce({ core: "passed", capabilities: {} })
+			.mockResolvedValueOnce({ core: "failed", capabilities: {} });
+		try {
+			await expect(runtime.promote(state)).rejects.toThrow();
+			expect(probeRuntime).toHaveBeenCalledTimes(2);
+			await expectClosed(f);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	it("rejects failed HTTP health after a signed pass and probes on retry", async () => {
+		const { f, state, runtime, probeRuntime, health } = await ready();
+		health
+			.mockResolvedValueOnce(new Response("ok"))
+			.mockResolvedValueOnce(new Response("unhealthy", { status: 400 }));
+		await expect(runtime.promote(state)).rejects.toThrow();
+		expect(probeRuntime).toHaveBeenCalledTimes(1);
+		expect(health).toHaveBeenCalledTimes(2);
+		await expectClosed(f);
+		await expect(
+			runtime.promote({ ...state, phase: "promoting" }),
+		).resolves.toBeUndefined();
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+		expect(health).toHaveBeenCalledTimes(4);
+	});
+
+	it.each([
+		"uid",
+		"generation",
+		"fence",
+		"revision",
+		"image",
+		"configuration",
+		"route",
+	] as const)(
+		"rejects changed Kubernetes %s after the first signed pass",
+		async (change) => {
+			const { f, state, runtime, probeRuntime } = await ready();
+			probeRuntime.mockImplementationOnce(async () => {
+				const workload = f.resources.get(
+					`StatefulSet/${workloadResourceNameV1(state.agentId)}`,
+				) as V1StatefulSet;
+				const container = workload.spec?.template.spec?.containers[0];
+				if (!workload.metadata || !container)
+					throw new Error("Fixture Workload is missing");
+				if (change === "uid") workload.metadata.uid = "replacement-workload";
+				else if (change === "generation") workload.metadata.generation = 999;
+				else if (change === "fence" || change === "revision") {
+					const pod = f.resources.get(
+						`Pod/${workloadResourceNameV1(state.agentId)}-0`,
+					);
+					if (!pod?.metadata?.annotations || !pod.metadata.labels)
+						throw new Error("Fixture Pod is missing");
+					if (change === "fence")
+						pod.metadata.annotations["agent-infra.agora.io/fence"] = "999";
+					else pod.metadata.labels["agent-infra.agora.io/revision"] = "999";
+				} else if (change === "route") {
+					const service = f.resources.get(
+						`Service/${workloadResourceNameV1(state.agentId)}`,
+					) as V1Service;
+					if (!service.spec) throw new Error("Fixture Service is missing");
+					service.spec.selector = { changed: "true" };
+				} else if (change === "image")
+					container.image = `example.invalid/runtime@sha256:${"b".repeat(64)}`;
+				else container.env = [{ name: "CHANGED", value: "true" }];
+				return { core: "passed", capabilities: {} };
+			});
+			await expect(runtime.promote(state)).rejects.toThrow();
+			expect(probeRuntime).toHaveBeenCalledTimes(1);
+			await expectClosed(f);
+		},
+	);
+
+	it("rejects changed desired inputs instead of reusing a previous promotion", async () => {
+		const { f, state, runtime, probeRuntime } = await ready();
+		await runtime.promote(state);
+		const changed = {
+			...state,
+			candidate: {
+				...state.candidate,
+				deployment: {
+					...validateAgentWorkloadDesiredV1(state.candidate.deployment),
+					env: { CHANGED: "true" },
+				},
+			},
+		};
+		await expect(runtime.promote(changed)).rejects.toThrow();
+		expect(probeRuntime).toHaveBeenCalledTimes(1);
+		await expectClosed(f);
+	});
+});
+
 // #1889：排空路由复核沿用同一进程内最近一次通过的签名 readiness。
 describe("observeForDrain (#1889)", () => {
 	async function ready(overrides: Partial<WorkloadRuntimeOptionsV1> = {}) {

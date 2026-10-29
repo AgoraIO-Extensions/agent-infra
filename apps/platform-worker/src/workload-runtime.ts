@@ -609,8 +609,8 @@ export function createWorkloadRuntimeV1(
 		 * true 时跳过签名 readiness；完整探测通过时以该 Pod 调用 `passed`。
 		 */
 		readiness?: {
-			readonly reuse?: (podUid: string) => boolean;
-			readonly passed?: (podUid: string) => void;
+			readonly reuse?: (podUid: string, podResourceVersion?: string) => boolean;
+			readonly passed?: (podUid: string, podResourceVersion?: string) => void;
 		},
 	) {
 		const modelProjection =
@@ -652,7 +652,7 @@ export function createWorkloadRuntimeV1(
 			modelProjection,
 			standardTemplateBinding,
 			containerBoundaryServiceToken: options.containerBoundaryServiceToken,
-			async probe({ desired, serviceOrigin, podUid }) {
+			async probe({ desired, serviceOrigin, podUid, podResourceVersion }) {
 				let probeStartedAt = performance.now();
 				const observed = (
 					stage: WorkloadProbeObservationV1["stage"],
@@ -732,7 +732,7 @@ export function createWorkloadRuntimeV1(
 				observed("health", "passed");
 				probeStartedAt = performance.now();
 				// 同一 Pod 在有效期内已通过签名 readiness：只保留上面的 /healthz。
-				if (podUid && readiness?.reuse?.(podUid)) {
+				if (podUid && readiness?.reuse?.(podUid, podResourceVersion)) {
 					observed("readiness", "reused");
 					return true;
 				}
@@ -844,7 +844,7 @@ export function createWorkloadRuntimeV1(
 				if (probe.core !== "passed") failed("readiness", "response");
 				else {
 					observed("readiness", "passed");
-					if (podUid) readiness?.passed?.(podUid);
+					if (podUid) readiness?.passed?.(podUid, podResourceVersion);
 				}
 				return probe.core === "passed";
 			},
@@ -1851,7 +1851,34 @@ export function createWorkloadRuntimeV1(
 				if (isMultiService(workload)) await multiService.promote(workload);
 				return;
 			}
-			const adapter = createAdapter(undefined, state);
+			// 只在本次晋升的短窗口内复用未变化 Pod 的证明；仍核对资源与 HTTP health。
+			let pass:
+				| { podUid: string; podResourceVersion: string; passedAt: number }
+				| undefined;
+			const adapter = createAdapter(
+				undefined,
+				state,
+				"authorize",
+				false,
+				undefined,
+				{
+					reuse(podUid, podResourceVersion) {
+						const age = pass ? performance.now() - pass.passedAt : -1;
+						return (
+							pass !== undefined &&
+							podUid === pass.podUid &&
+							podResourceVersion === pass.podResourceVersion &&
+							age >= 0 &&
+							age <= 5_000
+						);
+					},
+					passed(podUid, podResourceVersion) {
+						pass = podResourceVersion
+							? { podUid, podResourceVersion, passedAt: performance.now() }
+							: undefined;
+					},
+				},
+			);
 			await revalidateCandidateCatalog(state);
 			if (!state.identity) throw new Error();
 			if (
