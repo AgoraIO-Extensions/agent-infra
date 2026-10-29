@@ -215,6 +215,9 @@ describe("application session boundary", () => {
 		await waitFor(() =>
 			expect(screen.queryByRole("link", { name: "创建审批" })).toBeNull(),
 		);
+		expect(
+			screen.getByRole("link", { name: "评测" }).getAttribute("href"),
+		).toBe("/eval");
 	});
 	it("recreates the feature cache when the same user gets a new session", async () => {
 		const observed: { user: string; cached: unknown; client: QueryClient }[] =
@@ -642,7 +645,7 @@ describe("session confirmation shell", () => {
 		expect(sidebar?.querySelector(".platform-brand")).toBeTruthy();
 		expect(
 			sidebar?.querySelectorAll(".platform-nav-skeleton .platform-nav-item"),
-		).toHaveLength(11);
+		).toHaveLength(12);
 		expect(screen.queryByRole("navigation", { name: "主导航" })).toBeNull();
 		// 顶栏保留同位置的菜单占位与目标页面包屑。
 		expect(

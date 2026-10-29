@@ -1,32 +1,30 @@
 # 开放 Issue 状态跟进
 
-> 采集回读窗口（as-of）：2026-10-29T05:39:49.939805+00:00 至 2026-10-29T05:39:51.377152+00:00。
-> 来源基线：新 worktree 创建前 fetch 回读的 `origin/main` exact SHA `fe30f2f72b74c7cd99450d4fefd2b1e35a79fca2`。
+> 采集回读窗口（as-of）：2026-10-29T11:18:07.740100+00:00 至 2026-10-29T11:18:09.199823+00:00。
+> 来源基线：新 worktree 创建前 fetch 回读的 `origin/main` exact SHA `f1b3934ab1550496759f644baf167117967d1ebf`。
 > 本文是带时间的快照；动态状态以 GitHub 回读为准，旧 head 或其他环境的结果不代签当前验收。
 
-采集时开放 Issue **18**：业务与验收 **17**，本次快照治理 [#3690](https://github.com/AgoraIO-Extensions/agent-infra/issues/3690) **1**；
-开放 PR **3**。本快照 PR 尚未创建，不计入该数。此次更新记录六张 ACK 开发票关闭、
-Eval 全链路与时钟补证进入 PR、浏览器诊断的显式交接，不因每次合入自动创建下一张刷新票。
-操作顺序见 [Issue 工作指导](issue-work-guidance.md)。
+采集时开放 Issue **16**：业务与验收 **15**，本次阶段治理 [#3697](https://github.com/AgoraIO-Extensions/agent-infra/issues/3697) **1**；
+开放 PR **1**。本快照 PR 尚未创建，不计入该数。本次记录 Eval 开发及父票关闭后的交接阶段，
+不因每次合入自动创建下一张刷新票。操作顺序见 [Issue 工作指导](issue-work-guidance.md)。
 
 ## 分类计数
 
 | 类别 | 业务与验收数量 |
 | --- | ---: |
 | Runtime/Worker/Core | 2 |
-| Deploy/E2E/Channels | 9 |
-| Platform/Web/Skill | 5 |
-| Workflow/Observability | 1 |
+| Deploy/E2E/Channels | 8 |
+| Platform/Web/Skill | 2 |
+| Workflow/Observability | 3 |
 
 ## 明细
 
 | 类别 | Issue | 标题 | 采集时标签 | 下一步与边界 |
 | --- | --- | --- | --- | --- |
-| Platform/Web/Skill | [#3688](https://github.com/AgoraIO-Extensions/agent-infra/issues/3688) | test(web): diagnose intermittent approval journey navigation failures | priority:P1, agent:codex | 原 ACK session 持有审批旅程诊断；复用有界启动观测，未确认白屏根因，不放宽断言、超时或重试 |
-| Deploy/E2E/Channels | [#3686](https://github.com/AgoraIO-Extensions/agent-infra/issues/3686) | fix(ack): bound creation waits and recover uncertain idempotent results | priority:P0, agent:codex | PR #3687 待合并；原 ACK owner 修复创建等待与同一幂等请求的未知结果恢复，当前 CI 失败由 #3688 继续诊断 |
-| Deploy/E2E/Channels | [#3685](https://github.com/AgoraIO-Extensions/agent-infra/issues/3685) | docs(ack): finalize portable redeploy workflow and fresh acceptance evidence | priority:P1, agent:codex | 原 ACK session 持有两份部署文档和最终 fresh-run 证据；完整同源 8 Agent / 18 轮 / 双入口矩阵未代签 |
-| Deploy/E2E/Channels | [#3681](https://github.com/AgoraIO-Extensions/agent-infra/issues/3681) | fix(ack): retain entry probe failures and bound transient connection retries | priority:P0, agent:codex | 生产 PR #3682 已合入；原 owner 显式移交两项时钟边界测试，补证 PR #3689 待 CI/合并；AC-4 留给原 ACK owner |
-| Platform/Web/Skill | [#3640](https://github.com/AgoraIO-Extensions/agent-infra/issues/3640) | feat(eval): deliver comparative analysis feedback and complete Web workflow | priority:P2, agent:codex | 完整分析、反馈与 Web 已提交 PR #3684；当前 CI/复审未收齐，前一 head 有三项浏览器首屏失败，不能提前关闭开发 |
+| Deploy/E2E/Channels | [#3696](https://github.com/AgoraIO-Extensions/agent-infra/issues/3696) | test(ack): allow first browser turn to wait for cold ECI Session readiness | priority:P1, agent:codex | 原 ACK owner 持有首条消息观察器：ECI 冷启动超过默认30秒，正在复用既有180秒阶段预算；真实延迟fixture旧RED/新GREEN及三轮现场诊断不回填失败整轮 |
+| Workflow/Observability | [#3694](https://github.com/AgoraIO-Extensions/agent-infra/issues/3694) | fix(harness): classify deployment Markdown as documentation | priority:P1, agent:codex | PR #3695 待CI/合并；Coordinator独占计划脚本及原测试，修正deploy Markdown误触Docker且漏文档检查，真实部署门禁保留 |
+| Workflow/Observability | [#3692](https://github.com/AgoraIO-Extensions/agent-infra/issues/3692) | perf(ack): establish per-stage latency and resource baselines for fresh deployment | priority:P1, agent:codex | 原 ACK owner 采集分阶段延迟/资源并建立SLO；样本不足或无批准阈值保持未定，不用少量成功样本宣称性能达标 |
+| Deploy/E2E/Channels | [#3685](https://github.com/AgoraIO-Extensions/agent-infra/issues/3685) | docs(ack): finalize portable redeploy workflow and fresh acceptance evidence | priority:P1, agent:codex | 原 ACK owner 持有最终fresh运行与部署文档；前轮功能通过但未满足ECI，后轮正确ECI又触发首消息观察窗口问题，完整合规矩阵仍待收口 |
 | Deploy/E2E/Channels | [#3295](https://github.com/AgoraIO-Extensions/agent-infra/issues/3295) | blocker(ack): Flannel 环境未通过 Worker NetworkPolicy 负向验证 | agent:codex | 真实网络策略负向验收仍开放；需当前获准环境证据，不原地替换其他会话使用的 CNI |
 | Deploy/E2E/Channels | [#3230](https://github.com/AgoraIO-Extensions/agent-infra/issues/3230) | test(e2e): 固定环境 Web 与企微双向文件和图片验收（#3221） | needs-triage, priority:P1, agent:kiro | 固定环境 Web/企微双向文件图片矩阵待验；完整哈希、撤权和跨主体负例不可由局部回执代签 |
 | Deploy/E2E/Channels | [#3108](https://github.com/AgoraIO-Extensions/agent-infra/issues/3108) | acceptance: ACK resumed conversations receive Messages gateway errors | priority:P1, agent:codex | 真实历史会话恢复、Messages 网关错误及完整时延证据待验；旧成功会话不代替当前矩阵 |
@@ -36,21 +34,20 @@ Eval 全链路与时钟补证进入 PR、浏览器诊断的显式交接，不因
 | Runtime/Worker/Core | [#2857](https://github.com/AgoraIO-Extensions/agent-infra/issues/2857) | test: accept Session Sandbox multi-entry isolation from #1253 | agent:codex | Session Sandbox 多入口、多 Runtime、重启撤权和跨主体隔离真实矩阵待验 |
 | Platform/Web/Skill | [#1548](https://github.com/AgoraIO-Extensions/agent-infra/issues/1548) | test(skill-hub): accept the deployed lifecycle and Web conversation chain | ready-for-human, priority:P0, agent:kiro | 原 Skill session 持有真实 lifecycle/Web 验收；#3643/#3652/#3655 已合入，仍保留 #3553 排除 |
 | Runtime/Worker/Core | [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) | feat(runtime): deliver standard MCP Agent token client | priority:P0, agent:codex | 平台已支持批准的逐 Agent 绑定；自动独立 Consumer 注册仍缺 Connection 机器认证合同，不能使用管理员 Cookie 或把 DCR ID 当 Consumer |
-| Platform/Web/Skill | [#485](https://github.com/AgoraIO-Extensions/agent-infra/issues/485) | feat(platform): deliver authorized evaluation and quality analysis | priority:P2, agent:codex | 原生 child #3633/#3638/#3639 已关闭，#3640 开放；等待其合并及父范围复核后关闭开发，真实四模板 AC-6 仍待验 |
 | Deploy/E2E/Channels | [#171](https://github.com/AgoraIO-Extensions/agent-infra/issues/171) | 准备 P0 首发真实环境 ACK tenancy 与访问入口资源 | wayfinder:task, wayfinder, priority:P0, agent:kiro | ACK tenancy、NetworkPolicy、存储、Registry、RBAC、DNS/TLS 真实环境门禁继续由环境 owner 跟进 |
-| Workflow/Observability | [#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144) | wayfinder: 形成 Agent 平台 M1 启动与落地路线 | wayfinder:map, wayfinder, priority:P0, agent:codex | 原生 children 完整回读，仍开放 #171/#485；子项收口后还须核对父票自身范围 |
+| Workflow/Observability | [#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144) | wayfinder: 形成 Agent 平台 M1 启动与落地路线 | wayfinder:map, wayfinder, priority:P0, agent:codex | 全部原生children已分页回读，当前仅#171开放；#485开发已关闭，地图仍须环境前置及自身范围闭环 |
 
 ## 当前分派与文件所有权
 
 | Lane | Primary / PR | 唯一写入范围与下一交付点 |
 | --- | --- | --- |
-| Eval 集成 | #3640 / #3684 | Eval 集成 writer 的 Core/Store/API/Contracts、生成 Client、迁移与 Web 已提交；当前源码冻结供 CI/评审，不以旧 head 通过证明新 head |
-| 浏览器启动诊断 | #3688 | 原 ACK owner 接收既有 page-health 诊断 helper 的后续写权及审批用例；Eval 侧 helper 冻结，不并发修改共享文件。失败取证不等于根因修复 |
-| ACK 时钟补证 | #3681 / #3689 | 原 ACK owner 明确移交既有 custom-agent-web-probe 测试文件的两个边界；补证 writer 已交回 Coordinator，测试提交冻结待 CI |
-| ACK 部署与验收 | #3686 / #3687、#3685 | 原 ACK session 保留创建恢复、私有部署输入、环境和最终真实矩阵；六张已关闭开发票的 AC 仍由此 owner 跟进 |
+| Eval 开发交接 | #3640 / #3684、父 #485 | 已合入并关闭，两个 Project 状态 Done；真实四模板固定集实验与其余未签收 AC 保留。后续新缺口按具名票接收，不重复认领实现 |
+| 开发验证计划 | #3694 / #3695 | Coordinator 仅计划脚本与原测试；部署 Markdown 分类修复已提交，待当前 CI/合并，不碰 ACK 文档或环境 |
+| ECI 首轮观察器 | #3696 | 原 ACK owner 独占真实浏览器探针与 ACK 多轮测试；其他会话只读复核，首轮预算不是产品性能优化 |
+| ACK 部署与验收 | #3685 / #3692 | 原 ACK session 保留私有输入、环境、文档和性能采样；发布来源固定2848503fb，未把新合入Eval算成已部署 |
 | Skill 真实验收 | #1548 | 原 Skill session 保留 lifecycle/Web 旅程；#3553 仍由其他会话跟进 |
-| Connection 使用方合同 | #851 | 平台消费方等待独立 Consumer 机器注册合同；不修改 Connection 服务、Provider/Grant 权威或其 tickets |
-| 状态与交接 | #3690 | Coordinator 仅更新状态文档与边界说明；每个 PR 独立后台 watcher，合入后单 PR cleanup |
+| Connection 使用方合同 | #851 | 平台等待独立 Consumer 机器注册合同；Provider、Grant、凭据与 Connection 部署仍归原 owner |
+| 状态与交接 | #3697 | Coordinator 仅更新本状态文档；每个PR专属后台watcher，合并后单PR清理，不并发抢写他人文件 |
 
 owner 是采集时角色记录，不是跨会话接管授权。新 writer 必须重新确认 exact source、现有修改和显式交接。
 
@@ -58,30 +55,39 @@ owner 是采集时角色记录，不是跨会话接管授权。新 writer 必须
 
 | PR | 采集时 head | 当前证据与下一步 |
 | --- | --- | --- |
-| [#3689](https://github.com/AgoraIO-Extensions/agent-infra/pull/3689) | `e4950140c980cf31267c5e6a20f3f3dd0e61c21c` | OPEN；仅补两项 MockTimers 边界，原文件 13/13 与独立两例通过；正式评审未发现主要问题，当前完整 CI 仍在运行 |
-| [#3687](https://github.com/AgoraIO-Extensions/agent-infra/pull/3687) | `9b0d20899bbeca70886bc9f97f6e1135c3e97b16` | OPEN；原 ACK owner 的创建恢复；当前 head 的浏览器审批用例失败，关联 #3688 诊断，不能以其他检查通过认定可合并 |
-| [#3684](https://github.com/AgoraIO-Extensions/agent-infra/pull/3684) | `87c2ead1e87d606db83ddc1fbb8f37bb4c744357` | OPEN；9b84 的 Web/Backend/Workload 通过、浏览器 1521 通过/120 跳过/3 失败。87c2 仅补启动观测，原双端六例本地通过，当前完整 CI/复审仍待收齐；真实 Eval AC 未签收 |
+| [#3695](https://github.com/AgoraIO-Extensions/agent-infra/pull/3695) | `ae52f4451280b2b45b8af760caa689ff17e14a20` | OPEN；部署 Markdown 计划分类，原4例加新7例共11/11及独立11/11通过；正式复审无主要问题，完整Hosted仍待完成，不豁免脚本变更门禁 |
 
 ## 已关闭开发与待验收
 
-下列六票按负责人“开发完成即可关闭”的授权收口，均回读对应 PR 已合并、最终适用 CI 通过。
-关闭评论保留原 AC 状态和原 ACK owner，不把开发关闭当作最终 fresh-run 通过。
+开发关闭与真实AC签收分开。下列最终交付回读均为MERGED，required CI通过；正文原AC状态保留。
 
-| 已关闭 Issue | 合入 PR | 真实验收仍待 |
+| 已关闭 Issue | 合入 PR | 收口与仍待事项 |
 | --- | --- | --- |
-| #3653 | #3656 | 迁移后的 fresh ACK rehearsal（AC-5） |
-| #3665 | #3666 | 最终 clean ACK 及完整多轮矩阵（AC-4） |
-| #3667 | #3668 | 同源迁移、8 Agent / 18 轮 / 双自有入口；原 AC 勾选状态保留 |
-| #3670 | #3671 | 实际镜像准入及 ACK（AC-4）；批准的同 Digest mirror 由 Worker 独立准入，不强加来源/拉取仓库字符串相等 |
-| #3673 | #3674 | 最终 clean all、18 轮与双入口（AC-4）；个人与默认 Relay Key 用途保持独立 |
-| #3676 | #3678 | 最终 ACK 8 Agent 矩阵（AC-4） |
+| #3640、父 #485 | #3684 | 四个原生开发子票全关闭，父自身实现逐项核对；真实四模板回答/工具固定集两组实验仍待验，未声称ACK已部署Eval |
+| #3693 | #3684 | 对话框初始焦点后单次反向Tab，双端Hosted通过；原CI瞬间焦点来源未完全复现，历史失败保留 |
+| #3681 | #3682 / #3689 | 当前精确时钟边界及原1ms耗尽测试稳定性已交付；AC-4完整fresh ACK仍由#3685跟进 |
+| #3686 | #3687 | 创建原键恢复、有界等待与错误分类已交付；最终八Agent/18轮/双入口AC保留 |
+| #3688 | #3687 | 脚本ERR_NETWORK_CHANGED与Docker夹具清理重叠证据、项目调度隔离及完整Hosted通过；未修改产品重试或放宽断言 |
+| #3653 | #3656 | 迁移后fresh ACK rehearsal（AC-5）仍待 |
+| #3665 | #3666 | 最终clean ACK多轮矩阵（AC-4）仍待 |
+| #3667 | #3668 | 同源迁移、8 Agent /18轮/双自有入口；原AC状态保留 |
+| #3670 | #3671 | 实际镜像准入与ACK（AC-4）仍待；同Digest批准mirror由Worker独立准入 |
+| #3673 | #3674 | 最终clean all及个人/默认Key独立用途验收仍待 |
+| #3676 | #3678 | 最终ACK8Agent矩阵（AC-4）仍待 |
 
-最终 fresh-run 证据与部署文档关联 #3685；没有当前现场结果时不补勾 AC。
+PR #3684 最终 head `7d0bed84cf46eb5b4f48f24e4b3ee7de8928e479` 的 run40855601110 全部门禁通过，
+浏览器1648总项、1528通过、120原规则跳过、0失败、0flaky；六个真实HTTP/PG/S3双端集成用例全部通过。
+执行时序验证普通项目结束后才运行集成桌面与移动端；受控Runtime和评分端点不代签真实四模板AC。
+PR #3689 的同head第二次运行通过，首次独立Skill点击等待失败与限次重验界限保留，不改写为首次即通过。
 
 ## 本批已合入开发交付
 
 | PR | 交付 | merge SHA |
 | --- | --- | --- |
+| [#3684](https://github.com/AgoraIO-Extensions/agent-infra/pull/3684) | feat(eval): complete comparative analysis feedback and Web workflow | `f1b3934ab1550496759f644baf167117967d1ebf` |
+| [#3689](https://github.com/AgoraIO-Extensions/agent-infra/pull/3689) | test(ack): verify retry boundaries and isolate browser fixtures | `d5a9080d7deda41b1349081ad888272a44ac82ad` |
+| [#3687](https://github.com/AgoraIO-Extensions/agent-infra/pull/3687) | fix(ack): recover creation and isolate browser validation | `2848503fb001c03756bbd4a574147930a35870ea` |
+| [#3691](https://github.com/AgoraIO-Extensions/agent-infra/pull/3691) | docs: refresh development closures and acceptance ownership | `a359b17f8d711d79097d3adca4f44c54a0c4dc32` |
 | [#3682](https://github.com/AgoraIO-Extensions/agent-infra/pull/3682) | fix(ack): retain entry failures and bound connection retries | `fe30f2f72b74c7cd99450d4fefd2b1e35a79fca2` |
 | [#3680](https://github.com/AgoraIO-Extensions/agent-infra/pull/3680) | docs: refresh Eval delivery and ownership status | `e65c90c8b12c0f0ee518d50b71ca5773fd2a76e4` |
 | [#3678](https://github.com/AgoraIO-Extensions/agent-infra/pull/3678) | fix(runtime): authorize complete ACP tool arguments | `cd30cb7ccdc64a7b7d50bad2b21cd39971f5f4de` |
@@ -119,12 +125,12 @@ owner 是采集时角色记录，不是跨会话接管授权。新 writer 必须
 
 ## 父子收口与真实验收
 
-- #3198 → #3202/#3203、#3202 → #3218/#3664：子票与父票均已关闭；原生工具开发范围已收口，真实环境矩阵单独记录。
-- #485 的全部原生 children 已回读：#3633/#3638/#3639 已关闭、#3640 开放。父范围包括版本化数据、评分/复核、分析、线上反馈、用途授权、取消/恢复及审计；#3684 合并后还须回读这些交付，不能只按子票数量关闭。真实四模板 AC-6 保持待验。
-- #144 的全部原生 children 已分页回读，仍开放 #171 与 #485；地图自身的范围、依赖、唯一实施归属和阶段验收跟踪也须闭环。关闭 #485 不会自动关闭仍有 #171 的父地图。
-- #3639 开发已随 #3672 合入而关闭；四模板两组真实 Eval AC-5 保留待验。
-- 已关闭 ACK 开发票的最终验收继续由原 owner 跟进；仅当出现明确代码缺口才恢复开发跟踪，不因状态表刷新反复开关票。
-- #851 是尚未满足的外部开发合同依赖；最新只读外部 main `496114fb4c5388866acc15e909dfc13a799c7df9` 未新增 Consumer 机器注册。已有 Platform Provider Actions 不替代机器注册，管理员 Cookie 或 DCR ID 也不能替代独立 Consumer。
-- #3295/#171 是真实环境门禁，不能混称“代码全部完成”。fixture、健康检查、Pod Ready、历史会话和不同 source/image 均不替代当前完整 AC。ACK 验收须先确认对应实现已部署并协调环境 owner。
-- 清理遵循活动进程、未提交内容与所有权预检，不强制删除；具体本机证据保留在私有交接记录。
-- 用户/应用身份、当前凭证 scope、Agent 使用权和独立 Eval 用途分别核验；调用方取消与系统控制分开，真实 AC 状态不由开发测试自动勾选。
+- #485 的原生子票 #3633/#3638/#3639/#3640 全部 CLOSED；父实现范围已独立核对并关闭开发，Project Done。AC-6真实四模板矩阵及其他未签收AC保持原状态。
+- #144 全部原生children已分页回读，当前仅 #171 OPEN；地图的真实环境前置和自身范围仍须闭环，不能因Eval完成直接关闭。
+- #3198 → #3202/#3203、#3202 → #3218/#3664 均已关闭；原生工具开发范围完成，真实矩阵另记。
+- #3639 已随 #3672 合入而关闭；真实四模板两组Eval的AC-5仍待验。#3640的受控HTTP集成不替代它。
+- #851 的最新只读外部main为 `65367b8241498f2737e135ad646ee183190aca57`：新增Provider HTTPS与本人连接Relay Key补填，不提供平台独立Consumer机器注册。管理员Cookie、DCR client_id或补Key浏览器接口均不替代缺失合同。
+- ACK当前发布来源 `2848503fb001c03756bbd4a574147930a35870ea`。前轮功能通过但Session未按要求落ECI，后轮正确ECI的首消息观察默认30秒早于约61秒冷启动；后续补丁三轮成功仅属诊断，不回填原失败整轮。最终同源完整结果由 #3685/#3696 与原环境owner回读，性能目标及样本不足由 #3692保留。
+- #3295/#171 的NetworkPolicy、存储、Registry、RBAC、DNS/TLS等现场证据不能由Pod Ready、健康检查或历史会话替代。验收前确认相应实现已部署，先协调原环境owner。
+- 已完成PR的清理只处理各自工作树/分支，保留不明私有证据、活动进程及无关未提交内容，不执行强制全局清理。
+- 用户/应用身份、凭证scope、Agent使用权与独立Eval用途分别核验；开发关闭不自动勾选真实AC。

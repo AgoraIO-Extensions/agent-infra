@@ -3,7 +3,6 @@ import { expectNoDuplicateControls } from "./page-health";
 import {
 	computed,
 	expectCleanPage,
-	expectEmptyRows,
 	resolved,
 	trackPageErrors,
 } from "./primitive-styles";
@@ -53,13 +52,8 @@ test("evaluation keeps the design heading, notice and in-card segments without s
 		main.getByRole("heading", { level: 1, name: "评测", exact: true }),
 	).toBeVisible();
 
-	// 主操作在页头；接口未接入时不可用，说明在卡片底部。
-	const create = main.getByRole("button", { name: "实验运行待接入" });
-	await expect(create).toBeDisabled();
-	await expect(create).toHaveAttribute(
-		"aria-describedby",
-		"evaluation-pending-note",
-	);
+	const create = main.getByRole("button", { name: "运行与查看实验" });
+	await expect(create).toBeEnabled();
 	expect(
 		await create.evaluate(
 			(element) => element.closest(".page-heading") !== null,
@@ -131,34 +125,27 @@ test("evaluation keeps the design heading, notice and in-card segments without s
 		backgroundColor: "rgba(0, 0, 0, 0)",
 	});
 
-	// 每段各有空态，不出现设计原型里的示例数据。
+	// 各段使用正式入口，未配置服务显示错误，不伪造业务数据。
 	await expect(surface.getByRole("tabpanel", { name: "评测集" })).toContainText(
 		"当前没有可见评测集。",
 	);
 	await expect(main).not.toContainText("支持场景回归集");
 	await idle.click();
 	await expect(surface.getByRole("tabpanel", { name: "实验" })).toContainText(
-		"还没有实验",
+		"运行基线与候选",
 	);
 	await tablist.getByRole("tab", { name: "反馈" }).click();
 	const feedback = surface.getByRole("tabpanel", { name: "反馈" });
-	await expect(feedback).toContainText("还没有主动反馈");
-	// #3037 X-16：标题、说明与操作各占一行均分，取导出稿 eval-feedback-empty 的测量值。
-	await expectEmptyRows(feedback.locator('[data-slot="empty"]'), {
-		icon: null,
-		title: 40.97,
-		description: 89.66,
-		action: 135.03,
-	});
+	await expect(feedback).toContainText("线上主动反馈");
+	await expect(
+		feedback.getByRole("button", { name: "查询反馈汇总" }),
+	).toBeDisabled();
 	await expectCleanPage(page, pageErrors);
-	await surface.getByRole("link", { name: "查看对话反馈" }).click();
-	await expect(page).toHaveURL(/\/agents\?mode=conversation$/);
 	expect(api.writes).toEqual([]);
 });
 
-// #3242 K7-04：分段面板只包一张 14px 圆角的虚线空态，面板取同一圆角：Tab 键从选中的分段进入面板后，
-// 键盘焦点环沿空态外框，不在圆角外露出直角；面板在评测卡片 20px 内边距内，焦点环不越过卡片圆角。
-test("evaluation segment panels take the empty state's 14px radius for the keyboard focus ring (K7-04)", async ({
+// #3242 K7-04：保留分段面板 14px 圆角与键盘焦点环；完整工作区仍处于评测卡片内边距中。
+test("evaluation segment panels retain their rounded keyboard focus ring (K7-04)", async ({
 	page,
 }, info) => {
 	await page.setViewportSize(
@@ -184,22 +171,18 @@ test("evaluation segment panels take the empty state's 14px radius for the keybo
 		await expect(panel).toBeFocused();
 		const ring = await panel.evaluate((element) => {
 			const style = getComputedStyle(element);
-			const empty = element.querySelector<HTMLElement>('[data-slot="empty"]');
+
 			const card = element.closest<HTMLElement>(".evaluation-surface");
-			if (!empty || !card) throw new Error("Missing evaluation panel parts");
+			if (!card) throw new Error("Missing evaluation panel parts");
 			const panelBox = element.getBoundingClientRect();
-			const emptyBox = empty.getBoundingClientRect();
+
 			const cardBox = card.getBoundingClientRect();
 			const reach =
 				Number.parseFloat(style.outlineOffset) +
 				Number.parseFloat(style.outlineWidth);
 			return {
 				radius: style.borderTopLeftRadius,
-				emptyRadius: getComputedStyle(empty).borderTopLeftRadius,
-				// 面板与空态同一外框。
-				sameBox:
-					Math.abs(panelBox.width - emptyBox.width) < 0.5 &&
-					Math.abs(panelBox.height - emptyBox.height) < 0.5,
+
 				outline: [style.outlineStyle, style.outlineWidth, style.outlineOffset],
 				// 焦点环外缘仍在卡片的内边距之内。
 				insideCard:
@@ -211,8 +194,6 @@ test("evaluation segment panels take the empty state's 14px radius for the keybo
 		});
 		expect(ring, `${name} 面板`).toEqual({
 			radius: "14px",
-			emptyRadius: "14px",
-			sameBox: true,
 			outline: ["solid", "2px", "3px"],
 			insideCard: true,
 		});

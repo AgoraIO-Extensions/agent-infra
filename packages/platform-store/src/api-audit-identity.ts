@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import {
 	type ApiAuditCredentialIdentityV1,
 	PersonalApiCredentialErrorV1,
-	requireApiAuditCredentialIdentityV1,
+	type PersonalApiCredentialScopeV1,
+	requireApiCredentialIdentityV1,
 	resolveCurrentPersonalApiUserV1,
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
@@ -24,6 +25,7 @@ export async function resolveApiAuditCredentialIdentityV1(
 	transaction: postgres.TransactionSql,
 	material: string,
 	userDirectory: TaskUserDirectoryV1 | undefined,
+	requiredScope: PersonalApiCredentialScopeV1 = "agent:use",
 ): Promise<{
 	readonly identity: ApiAuditCredentialIdentityV1;
 	/** Call after the last query/audit await, before committing or returning data. */
@@ -100,32 +102,35 @@ export async function resolveApiAuditCredentialIdentityV1(
 				const [clock] = await transaction<
 					{ now: Date }[]
 				>`select clock_timestamp() as now`;
-				return requireApiAuditCredentialIdentityV1({
-					credential: {
-						schemaVersion: 1,
-						credentialId: credential.id,
-						principal: {
-							kind: reference.principal_type,
-							id: reference.principal_id,
+				return requireApiCredentialIdentityV1(
+					{
+						credential: {
+							schemaVersion: 1,
+							credentialId: credential.id,
+							principal: {
+								kind: reference.principal_type,
+								id: reference.principal_id,
+							},
+							scopes: credential.scopes,
+							expiresAt: credential.expires_at,
+							revokedAt: credential.revoked_at,
+							createdAt: credential.created_at,
 						},
-						scopes: credential.scopes,
-						expiresAt: credential.expires_at,
-						revokedAt: credential.revoked_at,
-						createdAt: credential.created_at,
+						...(user ? { user } : {}),
+						...(application
+							? {
+									application: {
+										applicationId: application.id,
+										status: application.status,
+										authorizationRevision: application.authorization_revision,
+									},
+								}
+							: {}),
+						disabled,
+						now: clock?.now ?? new Date(Number.NaN),
 					},
-					...(user ? { user } : {}),
-					...(application
-						? {
-								application: {
-									applicationId: application.id,
-									status: application.status,
-									authorizationRevision: application.authorization_revision,
-								},
-							}
-						: {}),
-					disabled,
-					now: clock?.now ?? new Date(Number.NaN),
-				});
+					requiredScope,
+				);
 			} catch (error) {
 				if (error instanceof PersonalApiCredentialErrorV1) throw error;
 				throw new PersonalApiCredentialErrorV1("unavailable");

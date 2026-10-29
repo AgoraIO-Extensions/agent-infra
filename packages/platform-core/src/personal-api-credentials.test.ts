@@ -419,6 +419,7 @@ it("requires explicit independent Eval credential scopes and cannot narrow into 
 		"eval:run",
 		"eval:score",
 		"eval:review",
+		"eval:analyze",
 	];
 	expect(parsePersonalApiCredentialScopesV1(scopes)).toEqual(scopes.toSorted());
 	expect(parsePersonalApiCredentialScopesV1(["eval:data"])).toEqual([

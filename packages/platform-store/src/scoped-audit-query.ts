@@ -818,6 +818,32 @@ function project(
 		agentDefaultRelayKeyReadActions.has(row.action as never)
 			? agentDefaultRelayKeyReadSummary(row, scope)
 			: null;
+	const feedbackSummary =
+		row.action === "task.feedback.updated"
+			? (() => {
+					const details = row.details;
+					if (
+						row.source !== "platform" ||
+						!["user", "application"].includes(row.actorType) ||
+						row.targetType !== "execution" ||
+						row.executionId !== row.targetId ||
+						row.outcome !== "succeeded" ||
+						row.result !== "succeeded" ||
+						!details ||
+						typeof details !== "object" ||
+						Array.isArray(details) ||
+						Object.keys(details).sort().join(",") !==
+							"returnedMaterial,revision" ||
+						(details as Record<string, unknown>).returnedMaterial !== false ||
+						!Number.isSafeInteger(
+							(details as Record<string, unknown>).revision,
+						) ||
+						Number((details as Record<string, unknown>).revision) < 1
+					)
+						throw new PlatformAuditScopeErrorV1("unavailable");
+					return row.action;
+				})()
+			: null;
 	const evaluationSummary = evaluationAuditActionsV1.some(
 		(action) => action === row.action,
 	)
@@ -866,7 +892,8 @@ function project(
 		skillProjectSummaryValue !== null ||
 		agentDefaultRelayKeyReadSummaryValue !== null ||
 		applicationSummary !== null ||
-		evaluationSummary !== null
+		evaluationSummary !== null ||
+		feedbackSummary !== null
 			? null
 			: decodePlatformAuditRowV1(row);
 	// The legacy decoder has already validated exact Task API metadata and its
@@ -971,6 +998,7 @@ function project(
 		agentDefaultRelayKeyReadSummaryValue ??
 		applicationSummary ??
 		evaluationSummary ??
+		feedbackSummary ??
 		(row.action === "audit.query.completed" ||
 		row.action === "audit.query.failed"
 			? projectPlatformAuditQuerySummaryV1(row.action, row.details)

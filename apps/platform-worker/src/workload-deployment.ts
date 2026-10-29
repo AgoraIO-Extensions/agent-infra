@@ -20,6 +20,7 @@ import {
 	createModelAccessValidatorV1,
 	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
+import { parseEvaluationAnalysisPolicyV1 } from "@agent-infra/platform-core";
 import { createWorkloadSecretKeyringDecryptorV1 } from "@agent-infra/secret-store/worker";
 import { KubeConfig } from "@kubernetes/client-node";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
@@ -122,6 +123,10 @@ export async function createProductionWorkloadWorkerOptionsV1(
 	let stage: WorkloadDeploymentErrorV1["code"] = "WORKER_CONFIGURATION_INVALID";
 	try {
 		signal.throwIfAborted();
+		if (input.evaluation?.loadAnalysisPolicy)
+			parseEvaluationAnalysisPolicyV1(
+				await input.evaluation.loadAnalysisPolicy(),
+			);
 		if (
 			![
 				input.workerId,

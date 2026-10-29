@@ -190,28 +190,31 @@ describe("Original IA workbench navigation", () => {
 	});
 
 	it.each([
-		["/eval", "评测"],
-		["/eval/", "评测"],
-		["/ops", "运维观测"],
-		["/ops/", "运维观测"],
-	])("maps administrator route %s to the system IA", async (entry, label) => {
-		await showShell(true, entry);
-		const system = screen.getByRole("navigation", { name: "系统管理" });
-		expect(
-			within(system)
-				.getByRole("link", { name: label })
-				.getAttribute("aria-current"),
-		).toBe("page");
-		expect(
-			screen.getByText("系统管理", {
-				selector: '[data-slot="breadcrumb-item"]',
-			}),
-		).toBeTruthy();
-		expect(
-			screen.getByText(label, { selector: '[data-slot="breadcrumb-page"]' }),
-		).toBeTruthy();
-		cleanup();
-	});
+		["/eval", "评测", "工作区"],
+		["/eval/", "评测", "工作区"],
+		["/ops", "运维观测", "系统管理"],
+		["/ops/", "运维观测", "系统管理"],
+	])(
+		"maps administrator route %s to the system IA",
+		async (entry, label, group) => {
+			await showShell(true, entry);
+			const system = screen.getByRole("navigation", { name: group });
+			expect(
+				within(system)
+					.getByRole("link", { name: label })
+					.getAttribute("aria-current"),
+			).toBe("page");
+			expect(
+				screen.getByText(group, {
+					selector: '[data-slot="breadcrumb-item"]',
+				}),
+			).toBeTruthy();
+			expect(
+				screen.getByText(label, { selector: '[data-slot="breadcrumb-page"]' }),
+			).toBeTruthy();
+			cleanup();
+		},
+	);
 
 	it.each([
 		"/ops/",
@@ -400,7 +403,7 @@ describe("Original IA workbench navigation", () => {
 	);
 
 	const navigationOrder = {
-		工作区: ["工作台", "Agent 目录", "对话", "Skill Hub"],
+		工作区: ["工作台", "Agent 目录", "对话", "Skill Hub", "评测"],
 		我的管理: [
 			"我的 Agent",
 			"创建申请",
@@ -410,14 +413,7 @@ describe("Original IA workbench navigation", () => {
 			"我的执行审计",
 		],
 		// 设计 renderSidebar：Skill 审核排在 Agent 管理之后。
-		系统管理: [
-			"创建审批",
-			"Agent 管理",
-			"Skill 审核",
-			"评测",
-			"平台审计",
-			"运维观测",
-		],
+		系统管理: ["创建审批", "Agent 管理", "Skill 审核", "平台审计", "运维观测"],
 	} as const;
 	it.each([false, true])(
 		"orders navigation groups and items as designed (administrator=%s)",
@@ -615,9 +611,9 @@ describe("Original IA workbench navigation", () => {
 		},
 		{
 			entry: "/eval",
-			group: "系统管理",
+			group: "工作区",
 			label: "评测",
-			parent: "系统管理",
+			parent: "工作区",
 			title: "评测",
 			documentTitle: "评测 · Agora Agent",
 		},

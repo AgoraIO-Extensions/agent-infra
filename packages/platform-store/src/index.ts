@@ -118,12 +118,14 @@ export {
 	type RuntimeModelDirectoryDispatchRequestResponseV1,
 	readPlatformQueueResourceSnapshot,
 } from "./conversation-query.ts";
+export * from "./evaluation-analysis.js";
 export { PostgresEvaluationDataStoreV1 } from "./evaluation-data.js";
 export { PostgresEvaluationDerivedContentV1 } from "./evaluation-derived-content.js";
 export {
 	type EvaluationExperimentStoreOptionsV1,
 	PostgresEvaluationExperimentsV1,
 } from "./evaluation-experiments.js";
+export * from "./evaluation-feedback.js";
 export { PostgresEvaluationScoringV1 } from "./evaluation-scoring.js";
 export { PostgresEvaluationTaskAuthorityV1 } from "./evaluation-task-authority.js";
 export { PostgresFileLimitDeclarationStoreV1 } from "./file-limit-declarations.js";

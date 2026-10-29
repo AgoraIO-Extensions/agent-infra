@@ -5,7 +5,26 @@ import { EvaluationPrincipalV1Schema } from "./evaluation-data.ts";
 const id = z.uuid();
 const ref = z.string().min(1).max(256);
 const revision = z.number().int().positive();
+export const EvaluationComparisonTargetsV1Schema = z
+	.array(z.enum(["model", "configuration", "template"]))
+	.min(1)
+	.max(3);
+export const EvaluationRequestedEvidenceV1Schema = z.strictObject({
+	configurationRevision: revision,
+	configurationDigest: z.string().regex(/^[a-f0-9]{64}$/),
+	imageDigest: ref,
+	templateId: ref.nullable(),
+	model: z
+		.strictObject({
+			configVersion: ref,
+			modelOptionId: ref,
+			modelId: ref,
+			reasoningLevel: ref.nullable(),
+		})
+		.nullable(),
+});
 export const EvaluationExperimentCreateV1Schema = z.strictObject({
+	comparisonTargets: EvaluationComparisonTargetsV1Schema.optional(),
 	datasetId: id,
 	versionId: id,
 	variantIds: z.array(ref).min(2).max(100),
@@ -15,6 +34,7 @@ export const EvaluationExperimentCreateV1Schema = z.strictObject({
 		.max(100),
 });
 export const EvaluationExperimentV1Schema = z.strictObject({
+	comparisonTargets: EvaluationComparisonTargetsV1Schema.optional(),
 	experimentId: id,
 	datasetId: id,
 	versionId: id,
@@ -45,6 +65,8 @@ export const EvaluationScoreSubmitV1Schema = z.strictObject({
 	]),
 });
 export const EvaluationScoreMetadataV1Schema = z.strictObject({
+	source: z.enum(["rule", "human", "model"]).optional(),
+	scoringModel: ref.nullable().optional(),
 	scoreId: id,
 	sampleTaskId: id,
 	experimentId: id,
@@ -90,6 +112,8 @@ export const EvaluationScoringContextV1Schema = z.strictObject({
 	}),
 	rubric: z.strictObject({ id: ref, description: z.string().max(8192) }),
 	scorer: z.strictObject({
+		source: z.enum(["rule", "human", "model"]).optional(),
+		scoringModel: ref.nullable().optional(),
 		scorerId: ref,
 		version: ref,
 		minimum: z.number().finite(),
@@ -207,6 +231,7 @@ export const EvaluationExperimentPageV1Schema = z.strictObject({
 				conversationId: ref,
 				executionId: ref,
 				actual: actual.nullable(),
+				requestedEvidence: EvaluationRequestedEvidenceV1Schema.optional(),
 				requested: z.strictObject({
 					variantId: ref,
 					agentId: ref,

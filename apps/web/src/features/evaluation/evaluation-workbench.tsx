@@ -1,119 +1,94 @@
-import { Link } from "@tanstack/react-router";
+import { useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button, buttonVariants } from "@/components/ui/button";
-import {
-	Empty,
-	EmptyContent,
-	EmptyDescription,
-	EmptyTitle,
-} from "@/components/ui/empty";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EvaluationAnalysis } from "./evaluation-analysis.js";
 import { EvaluationDatasets } from "./evaluation-datasets.js";
+import { EvaluationRun } from "./evaluation-experiments.js";
+import { EvaluationFeedbackSummary } from "./evaluation-feedback.js";
+import { EvaluationScoring } from "./evaluation-scoring.js";
 
-type EvaluationSection = "datasets" | "experiments" | "feedback";
-
-// 设计 #eval：分段顺序为 评测集 / 实验 / 反馈，默认评测集。评测 API 尚未接入，
-// 每段只显示各自的空态，不展示示例数据（R-03）。
-const sections: Array<{
-	id: EvaluationSection;
-	label: string;
-	emptyTitle: string;
-	emptyDescription: string;
-}> = [
-	{
-		id: "datasets",
-		label: "评测集",
-		emptyTitle: "还没有评测集",
-		emptyDescription:
-			"样本和判定标准按版本保存，接入后在这里显示样本数、版本与授权状态。",
-	},
-	{
-		id: "experiments",
-		label: "实验",
-		emptyTitle: "还没有实验",
-		emptyDescription:
-			"实验固定评测集、Agent 配置和评分版本，接入后在这里显示运行进度与逐例复核。",
-	},
-	{
-		id: "feedback",
-		label: "反馈",
-		emptyTitle: "还没有主动反馈",
-		emptyDescription: "反馈只关联当前用户自己的任务。",
-	},
-];
-
-const pendingNoteId = "evaluation-pending-note";
-
-export function EvaluationWorkbench() {
+type Section = "datasets" | "experiments" | "feedback";
+export function EvaluationWorkbench({
+	currentUserId,
+}: {
+	currentUserId?: string;
+} = {}) {
+	const [section, setSection] = useState<Section>("datasets");
+	const [selected, setSelected] = useState<string | null>(null);
+	const [version, setVersion] = useState<{
+		datasetId: string;
+		versionId: string;
+	} | null>(null);
 	return (
 		<section aria-labelledby="evaluation-heading">
 			<header className="page-heading">
 				<div className="min-w-0">
-					<p className="page-eyebrow">系统管理 / 评测</p>
+					<p className="page-eyebrow">工作区 / 评测</p>
 					<h1 id="evaluation-heading">评测</h1>
 					<p>按固定数据集比较模型或 Agent 配置，保留逐例结果和人工复核。</p>
 				</div>
-				{/* 评测集写入接口未接入：主操作保留在设计位置，但不可用并指向说明。 */}
-				<Button disabled aria-describedby={pendingNoteId}>
-					实验运行待接入
+				<Button onClick={() => setSection("experiments")}>
+					运行与查看实验
 				</Button>
 			</header>
-
-			{/* 静态说明，不设 role。 */}
 			<Alert tone="info">
 				<AlertTitle>评测使用独立授权</AlertTitle>
 				<AlertDescription>
-					不会自动读取个人会话；评测样本、输出与评分理由按评测用途单独授权。
+					不会自动读取个人会话；样本、运行、评分、复核和分析分别按用途授权。费用归于所选
+					Agent 的默认 Key。
 				</AlertDescription>
 			</Alert>
-
 			<div className="evaluation-surface">
-				<Tabs defaultValue="datasets">
+				<Tabs value={section} onValueChange={(v) => setSection(v as Section)}>
 					<TabsList className="evaluation-tabs" aria-label="评测区域">
-						{sections.map((item) => (
-							<TabsTrigger
-								key={item.id}
-								value={item.id}
-								className="evaluation-tab"
-							>
-								{item.label}
+						{(
+							[
+								["datasets", "评测集"],
+								["experiments", "实验"],
+								["feedback", "反馈"],
+							] as const
+						).map(([id, label]) => (
+							<TabsTrigger key={id} value={id} className="evaluation-tab">
+								{label}
 							</TabsTrigger>
 						))}
 					</TabsList>
-					{sections.map((item) => (
-						// 面板只包一张 14px 圆角的虚线空态：面板取同一圆角，键盘焦点环沿空态外框，
-						// 不在圆角外露出直角（#3242 K7-04，同 Skill 详情 tabpanel）。
-						<TabsContent
-							key={item.id}
-							value={item.id}
-							className="rounded-[14px]"
-						>
-							{/* 设计 eval-feedback-empty：标题、说明与操作直接作为空态的网格行（X-16）。 */}
-							{item.id === "datasets" ? (
-								<EvaluationDatasets />
-							) : (
-								<Empty>
-									<EmptyTitle>{item.emptyTitle}</EmptyTitle>
-									<EmptyDescription>{item.emptyDescription}</EmptyDescription>
-									{item.id === "feedback" ? (
-										<EmptyContent>
-											{/* 反馈在对话里提交：先选择 Agent 再进入对话（与导航「对话」一致）。 */}
-											<Link
-												className={buttonVariants({ variant: "outline" })}
-												to="/agents"
-												search={{ mode: "conversation" }}
-											>
-												查看对话反馈
-											</Link>
-										</EmptyContent>
-									) : null}
-								</Empty>
-							)}
-						</TabsContent>
-					))}
+					<TabsContent value="datasets" keepMounted className="rounded-[14px]">
+						<EvaluationDatasets
+							currentUserId={currentUserId}
+							selectedVersion={version}
+							onRun={(datasetId, versionId) => {
+								setVersion({ datasetId, versionId });
+								setSection("experiments");
+							}}
+						/>
+					</TabsContent>
+					<TabsContent
+						value="experiments"
+						keepMounted
+						className="space-y-8 rounded-[14px]"
+					>
+						<EvaluationRun
+							initialVersion={version}
+							onAnalyze={(id) => setSelected(id)}
+						/>
+						<EvaluationScoring />
+						<EvaluationAnalysis
+							selected={selected}
+							onSelect={setSelected}
+							onNewVersion={(datasetId, versionId) => {
+								setVersion({ datasetId, versionId });
+								setSection("datasets");
+							}}
+						/>
+					</TabsContent>
+					<TabsContent value="feedback" keepMounted className="rounded-[14px]">
+						<EvaluationFeedbackSummary />
+					</TabsContent>
 				</Tabs>
-				<p id={pendingNoteId} className="evaluation-note">
-					评测数据读写须由部署启用并显式授权；实验运行、评分和逐例复核仍待接入，不显示示例结果。
+				<p className="evaluation-note">
+					权限或数据发生变化后请刷新。评分故障和未知结果不会计为质量通过；线上主动反馈单独统计。
 				</p>
 			</div>
 		</section>

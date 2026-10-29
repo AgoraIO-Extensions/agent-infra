@@ -12,10 +12,11 @@ const scopes = z
 			"eval:run",
 			"eval:score",
 			"eval:review",
+			"eval:analyze",
 		]),
 	)
 	.min(1)
-	.max(8)
+	.max(9)
 	.refine((values) => new Set(values).size === values.length)
 	.meta({ uniqueItems: true });
 const issuanceExpiry = z

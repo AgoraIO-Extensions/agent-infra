@@ -996,6 +996,8 @@ export function ActiveConversation({
 				)}
 				{timeline.history && (
 					<ConversationMessages
+						feedbackIdentity={identityKey}
+						feedbackDisabled={denied || !timeline.history || readLocked}
 						agentName={agent.name}
 						userName={
 							formatPerson({ displayName: session?.user.displayName }).name

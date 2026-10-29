@@ -34,6 +34,22 @@ import {
 	parseTaskAuthorizationBoundaryV1,
 	parseTaskPrincipalV1,
 } from "./task-authorization.js";
+export type EvaluationComparisonTargetV1 =
+	| "model"
+	| "configuration"
+	| "template";
+export interface EvaluationRequestedEvidenceV1 {
+	configurationRevision: number;
+	configurationDigest: string;
+	imageDigest: string;
+	templateId: string | null;
+	model: {
+		configVersion: string;
+		modelOptionId: string;
+		modelId: string;
+		reasoningLevel: string | null;
+	} | null;
+}
 export interface EvaluationExperimentV1 {
 	readonly experimentId: string;
 	readonly datasetId: string;
@@ -41,6 +57,7 @@ export interface EvaluationExperimentV1 {
 	readonly principal: EvaluationPrincipalV1;
 	readonly policyId: string;
 	readonly policyRevision: number;
+	readonly comparisonTargets?: readonly EvaluationComparisonTargetV1[];
 	readonly sampleIds: readonly string[];
 	readonly variantIds: readonly string[];
 	readonly scorerRefs: readonly { scorerId: string; version: string }[];
@@ -52,6 +69,7 @@ export interface EvaluationExperimentV1 {
 export interface EvaluationSampleTaskV1 {
 	readonly sampleTaskId: string;
 	readonly scoreIds?: readonly string[];
+	readonly requestedEvidence?: EvaluationRequestedEvidenceV1;
 	readonly preparedRuntime?: {
 		configurationRevision: number;
 		imageDigest: string;
@@ -83,6 +101,7 @@ export interface EvaluationExperimentCreateV1 {
 	readonly versionId: string;
 	readonly variantIds: readonly string[];
 	readonly scorerRefs: readonly { scorerId: string; version: string }[];
+	readonly comparisonTargets?: readonly EvaluationComparisonTargetV1[];
 }
 const invalid = (): never => {
 	throw new EvaluationDataErrorV1("invalid");
@@ -95,12 +114,11 @@ function text(v: unknown) {
 export function parseEvaluationExperimentCreateV1(
 	input: unknown,
 ): EvaluationExperimentCreateV1 {
-	const x = snapshotObject(input, [
-		"datasetId",
-		"versionId",
-		"variantIds",
-		"scorerRefs",
-	]);
+	const x = snapshotObject(
+		input,
+		["datasetId", "versionId", "variantIds", "scorerRefs"],
+		["comparisonTargets"],
+	);
 	const variantIds = snapshotAgentManagementDenseArray(x.variantIds, 100).map(
 		text,
 	);
@@ -118,11 +136,16 @@ export function parseEvaluationExperimentCreateV1(
 			.size !== scorerRefs.length
 	)
 		return invalid();
+	const comparisonTargets =
+		x.comparisonTargets === undefined
+			? undefined
+			: parseEvaluationComparisonTargetsV1(x.comparisonTargets);
 	return {
 		datasetId: text(x.datasetId),
 		versionId: text(x.versionId),
 		variantIds,
 		scorerRefs,
+		...(comparisonTargets ? { comparisonTargets } : {}),
 	};
 }
 export function requireEvaluationExperimentSelectionV1(
@@ -161,6 +184,9 @@ export interface EvaluationExperimentTransactionV1 {
 	experiment(id: string): Promise<EvaluationExperimentV1 | null>;
 	saveExperiment(value: EvaluationExperimentV1): Promise<void>;
 	lockAgents(ids: readonly string[]): Promise<void>;
+	requestedEvidence(
+		variant: EvaluationExperimentPolicyV1["variants"][number],
+	): Promise<EvaluationRequestedEvidenceV1>;
 	agentAuthority(agentId: string): Promise<{
 		identityRevision: string;
 		agentRevision: string;
@@ -280,6 +306,9 @@ export function createEvaluationExperimentsV1(options: {
 					executionId: task.executionId,
 					scoreIds: task.scoreIds ?? [],
 					requested: task.requested,
+					...(task.requestedEvidence
+						? { requestedEvidence: task.requestedEvidence }
+						: {}),
 					actual: task.actual ?? null,
 				})),
 				nextCursor:
@@ -381,6 +410,9 @@ export function createEvaluationExperimentsV1(options: {
 					policyId: policy.policyId,
 					policyRevision: policy.revision,
 					sampleIds: source.content.samples.map((s) => s.id),
+					...(command.comparisonTargets
+						? { comparisonTargets: command.comparisonTargets }
+						: {}),
 					variantIds: command.variantIds,
 					scorerRefs: command.scorerRefs,
 					status: "active",
@@ -477,6 +509,7 @@ export function createEvaluationExperimentsV1(options: {
 							executionId: accepted.result.executionId,
 							binding,
 							requested: variant,
+							requestedEvidence: await tx.requestedEvidence(variant),
 						};
 						await tx.saveSample(task);
 						await tx.reserveScores(
@@ -501,21 +534,25 @@ export function createEvaluationExperimentsV1(options: {
 export function parseEvaluationExperimentV1(
 	input: unknown,
 ): EvaluationExperimentV1 {
-	const value = snapshotObject(input, [
-		"experimentId",
-		"datasetId",
-		"versionId",
-		"principal",
-		"policyId",
-		"policyRevision",
-		"sampleIds",
-		"variantIds",
-		"scorerRefs",
-		"status",
-		"revision",
-		"createdAt",
-		"metadataExpiresAt",
-	]);
+	const value = snapshotObject(
+		input,
+		[
+			"experimentId",
+			"datasetId",
+			"versionId",
+			"principal",
+			"policyId",
+			"policyRevision",
+			"sampleIds",
+			"variantIds",
+			"scorerRefs",
+			"status",
+			"revision",
+			"createdAt",
+			"metadataExpiresAt",
+		],
+		["comparisonTargets"],
+	);
 	const principalValue = parseTaskPrincipalV1(value.principal);
 	const command = parseEvaluationExperimentCreateV1({
 		datasetId: value.datasetId,
@@ -550,6 +587,13 @@ export function parseEvaluationExperimentV1(
 	}
 	return {
 		experimentId: text(value.experimentId),
+		...(value.comparisonTargets === undefined
+			? {}
+			: {
+					comparisonTargets: parseEvaluationComparisonTargetsV1(
+						value.comparisonTargets,
+					),
+				}),
 		...command,
 		principal: principalValue,
 		policyId: text(value.policyId),
@@ -639,7 +683,7 @@ export function parseEvaluationSampleTaskV1(
 			"binding",
 			"requested",
 		],
-		["preparedRuntime"],
+		["preparedRuntime", "requestedEvidence"],
 	);
 	const binding = parseEvaluationTaskBindingV1(x.binding);
 	const r = snapshotObject(x.requested, [
@@ -682,6 +726,15 @@ export function parseEvaluationSampleTaskV1(
 			resourceConfigurationHash: p.resourceConfigurationHash,
 		};
 	}
+	const requestedEvidence =
+		x.requestedEvidence === undefined
+			? undefined
+			: parseEvaluationRequestedEvidenceV1(x.requestedEvidence);
+	if (
+		requestedEvidence &&
+		requestedEvidence.configurationRevision !== binding.configurationRevision
+	)
+		throw new EvaluationDataErrorV1("unavailable");
 	return {
 		sampleTaskId: text(x.sampleTaskId),
 		experimentId: text(x.experimentId),
@@ -699,5 +752,64 @@ export function parseEvaluationSampleTaskV1(
 			toolEnvironment: binding.toolEnvironment,
 		},
 		...(preparedRuntime ? { preparedRuntime } : {}),
+		...(requestedEvidence ? { requestedEvidence } : {}),
+	};
+}
+
+export function parseEvaluationComparisonTargetsV1(
+	value: unknown,
+): EvaluationComparisonTargetV1[] {
+	const values = snapshotAgentManagementDenseArray(value, 3).map((v) => {
+		if (v !== "model" && v !== "configuration" && v !== "template")
+			return invalid();
+		return v;
+	});
+	if (!values.length || new Set(values).size !== values.length)
+		return invalid();
+	return values.sort();
+}
+export function parseEvaluationRequestedEvidenceV1(
+	input: unknown,
+): EvaluationRequestedEvidenceV1 {
+	const x = snapshotObject(input, [
+		"configurationRevision",
+		"configurationDigest",
+		"imageDigest",
+		"templateId",
+		"model",
+	]);
+	if (
+		typeof x.configurationRevision !== "number" ||
+		!Number.isSafeInteger(x.configurationRevision) ||
+		x.configurationRevision < 1 ||
+		typeof x.configurationDigest !== "string" ||
+		!/^[a-f0-9]{64}$/.test(x.configurationDigest) ||
+		typeof x.imageDigest !== "string" ||
+		!/^(?:[^@\s]+@)?sha256:[a-f0-9]{64}$/.test(x.imageDigest)
+	)
+		return invalid();
+	const m =
+		x.model === null
+			? null
+			: snapshotObject(x.model, [
+					"configVersion",
+					"modelOptionId",
+					"modelId",
+					"reasoningLevel",
+				]);
+	return {
+		configurationRevision: x.configurationRevision,
+		configurationDigest: x.configurationDigest,
+		imageDigest: x.imageDigest,
+		templateId: x.templateId === null ? null : text(x.templateId),
+		model: m
+			? {
+					configVersion: text(m.configVersion),
+					modelOptionId: text(m.modelOptionId),
+					modelId: text(m.modelId),
+					reasoningLevel:
+						m.reasoningLevel === null ? null : text(m.reasoningLevel),
+				}
+			: null,
 	};
 }

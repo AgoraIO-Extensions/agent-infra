@@ -2,6 +2,7 @@ import type { ChipTone } from "@/lib/status-tone";
 import type { AuditRecord } from "./audit-query.js";
 
 export const auditActionLabels: Record<AuditRecord["action"], string> = {
+	"task.feedback.updated": "更新本人任务反馈",
 	"evaluation.experiment.create": "创建评测实验",
 	"evaluation.experiment.cancel": "取消评测实验",
 	"evaluation.derived.confirm": "确认评测结果内容",

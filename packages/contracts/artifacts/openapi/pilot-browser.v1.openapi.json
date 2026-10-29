@@ -4970,6 +4970,7 @@
       },
       "ScopedPlatformAuditActionV1": {
         "enum": [
+          "task.feedback.updated",
           "skill.version.register",
           "skill.version.review",
           "skill.version.revoke",

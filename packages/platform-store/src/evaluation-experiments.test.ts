@@ -1,10 +1,15 @@
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { createServer } from "node:http";
 import {
+	EvaluationAnalysisDetailV1Schema,
+	EvaluationAnalysisSummaryV1Schema,
+	EvaluationChoiceCatalogV1Schema,
 	EvaluationExperimentV1Schema,
+	EvaluationHistoryV1Schema,
 	EvaluationReviewV1Schema,
 	EvaluationScoreMetadataV1Schema,
 	EvaluationScoringContextV1Schema,
+	EvaluationWorklistV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { createDeploymentModelCatalogAdapterV1 } from "@agent-infra/model-catalog";
 import {
@@ -73,6 +78,7 @@ const policy = parseEvaluationPolicyV1({
 				"run",
 				"score",
 				"review",
+				"analyze",
 				"manage_grants",
 				"delete",
 			],
@@ -349,6 +355,16 @@ it("preserves application subject and eval source for the default Agent Key", as
 			storage,
 			loadPolicy: async () => policy,
 			loadExperimentPolicy: async () => experimentPolicy,
+			loadAnalysisPolicy: async () => ({
+				schemaVersion: 1,
+				policyId: "analysis",
+				revision: 1,
+				validUntil: policy.validUntil,
+				maximumWindowMs: 86400000,
+				maximumTasks: 1000,
+				maximumModelFacts: 10000,
+				feedbackMetadataMs: 600000,
+			}),
 		},
 		admissions: {
 			authorizationAdmission: { authorize: unused },
@@ -392,6 +408,32 @@ it("preserves application subject and eval source for the default Agent Key", as
 		expect(EvaluationExperimentV1Schema.parse(await replay.json())).toEqual(
 			experiment,
 		);
+		await data.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: 5,
+			principal: { kind: "application", id: "runner" },
+			versionIds: [command.versionId],
+			operations: ["analyze"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+		const applicationAnalysis = `papi_${"L".repeat(43)}`;
+		const sameIdUser = `papi_${"M".repeat(43)}`;
+		for (const [id, principalType, token] of [
+			["app-analysis", "application", applicationAnalysis],
+			["same-user-analysis", "user", sameIdUser],
+		] as const)
+			await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes)values(${id},${principalType},'runner',${createHash(
+				"sha256",
+			)
+				.update(token ?? "")
+				.digest("hex")},${sql.json(["eval:analyze"])})`;
+		const analyze = (token: string) =>
+			fetch(
+				`http://127.0.0.1:${address.port}/api/v2/evaluation/analysis/${experiment.experimentId}`,
+				{ headers: { Authorization: `Bearer ${token}` } },
+			);
+		expect((await analyze(applicationAnalysis)).status).toBe(200);
+		expect((await analyze(sameIdUser)).status).toBe(404);
+		expect((await analyze(material)).status).toBe(404);
 		const metadata = () =>
 			fetch(
 				`http://127.0.0.1:${address.port}/api/v2/evaluation/experiments/${experiment.experimentId}`,
@@ -547,6 +589,16 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 			storage,
 			loadPolicy: async () => policy,
 			loadExperimentPolicy: async () => experimentPolicy,
+			loadAnalysisPolicy: async () => ({
+				schemaVersion: 1,
+				policyId: "analysis",
+				revision: 1,
+				validUntil: policy.validUntil,
+				maximumWindowMs: 86400000,
+				maximumTasks: 1000,
+				maximumModelFacts: 10000,
+				feedbackMetadataMs: 600000,
+			}),
 		},
 		admissions: {
 			authorizationAdmission: { authorize: unused },
@@ -1121,6 +1173,143 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 		const [audit] =
 			await sql`select actor_id from platform.audit_events where action='evaluation.score.reviewed' and target_id=${human.id}`;
 		expect(audit?.actor_id).toBe("reviewer");
+		const [datasetRevision] =
+			await sql`select (data->>'revision')::int as revision from platform.evaluation_datasets where id=${command.datasetId}`;
+		await data.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: Number(datasetRevision?.revision),
+			principal: { kind: "user", id: "analyst" },
+			versionIds: [command.versionId],
+			operations: ["analyze"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+		await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)values(${configuration.agentId},'user','analyst','use','analysis-use')`;
+		const getAnalysis = (path: string, user = "analyst") =>
+			fetch(`${baseUrl}${path}`, { headers: { Cookie: `session=${user}` } });
+		const [failedSample] =
+			await sql`select id,execution_id,conversation_id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId} order by id limit 1`;
+		if (!failedSample) throw new Error("missing failure sample");
+		const [priorStatus] =
+			await sql`select status,last_event_sequence from platform.conversation_executions where execution_id=${failedSample.execution_id}`;
+		const failureEvent = randomUUID();
+		const failureSequence = Number(priorStatus?.last_event_sequence) + 1;
+		await sql`update platform.conversation_executions set status='failed',last_event_sequence=${failureSequence} where execution_id=${failedSample.execution_id}`;
+		await sql`insert into platform.conversation_events(event_id,conversation_id,execution_id,sequence,conversation_cursor,event_type,event_payload,source,adapter_event_key,event_digest,occurred_at)values(${failureEvent},${failedSample.conversation_id},${failedSample.execution_id},${failureSequence},999,'task.status',${sql.json({ type: "task.status", status: "failed", reason: "TASK_WAIT_TIMEOUT", raw: "SYNTHETIC-PRIVATE-PROVIDER-FAILURE" })},'platform',${failureEvent},${"e".repeat(64)},clock_timestamp())`;
+		try {
+			const failed = await getAnalysis(`/analysis/${experiment.experimentId}`);
+			expect(failed.status).toBe(200);
+			const report = EvaluationAnalysisSummaryV1Schema.parse(
+				await failed.json(),
+			);
+			expect(
+				report.items.find((item) => item.sampleTaskId === failedSample.id)
+					?.failure,
+			).toMatchObject({ category: "queue_timeout" });
+			const failedDetail = await getAnalysis(
+				`/analysis/${experiment.experimentId}/samples/${failedSample.id}`,
+			);
+			expect(failedDetail.status).toBe(200);
+			const body = await failedDetail.text();
+			expect(body).not.toContain("SYNTHETIC-PRIVATE-PROVIDER-FAILURE");
+			expect(body).not.toContain("TASK_WAIT_TIMEOUT");
+			expect(JSON.parse(body).failure.category).toBe("queue_timeout");
+		} finally {
+			await sql`delete from platform.conversation_events where event_id=${failureEvent}`;
+			await sql`update platform.conversation_executions set status=${priorStatus?.status},last_event_sequence=${Number(priorStatus?.last_event_sequence)} where execution_id=${failedSample.execution_id}`;
+		}
+		const choices = await getAnalysis(
+			`/choices?datasetId=${command.datasetId}&versionId=${command.versionId}`,
+			"runner",
+		);
+		expect(choices.status, await choices.clone().text()).toBe(200);
+		expect(
+			EvaluationChoiceCatalogV1Schema.parse(await choices.json()).variants,
+		).toHaveLength(2);
+		const queue = await getAnalysis("/worklist?purpose=review", "reviewer");
+		expect(queue.status, await queue.clone().text()).toBe(200);
+		expect(
+			EvaluationWorklistV1Schema.parse(await queue.json()).items.length,
+		).toBeGreaterThan(0);
+		const analysis = await getAnalysis(`/analysis/${experiment.experimentId}`);
+		expect(analysis.status, await analysis.clone().text()).toBe(200);
+		const statistics = EvaluationAnalysisSummaryV1Schema.parse(
+			await analysis.json(),
+		);
+		expect(statistics.fixedSamples).toBe(1);
+		expect(statistics.items).toHaveLength(2);
+		expect(statistics.groups).toHaveLength(6);
+		const detail = await getAnalysis(
+			`/analysis/${experiment.experimentId}/samples/${statistics.items[0]?.sampleTaskId}`,
+		);
+
+		expect(detail.status, await detail.clone().text()).toBe(200);
+		expect(
+			EvaluationAnalysisDetailV1Schema.parse(await detail.json()).sample.input,
+		).toBe("synthetic question");
+		expect(
+			(await getAnalysis(`/analysis/${experiment.experimentId}`, "reviewer"))
+				.status,
+		).toBe(404);
+		const previousExperimentPolicy = experimentPolicy;
+		experimentPolicy = {
+			...experimentPolicy,
+			revision: experimentPolicy.revision + 1,
+			variants: [],
+		};
+		try {
+			const history = await getAnalysis("/history?limit=1");
+			expect(history.status, await history.clone().text()).toBe(200);
+			expect(
+				EvaluationHistoryV1Schema.parse(await history.json()).items[0]
+					?.experimentId,
+			).toBe(experiment.experimentId);
+		} finally {
+			experimentPolicy = previousExperimentPolicy;
+		}
+
+		const [liveScore] =
+			await sql`select data from platform.evaluation_score_intents where id=${human.id}`;
+		const [bodyObject] =
+			await sql`select id,data from platform.evaluation_derived_objects where id=${liveScore?.data.outputObjectId}`;
+		const [reasonObject] =
+			await sql`select data from platform.evaluation_derived_objects where id=${liveScore?.data.reasonObjectId}`;
+		if (!bodyObject || !reasonObject)
+			throw new Error("missing controlled objects");
+		for (const lifetime of ["content", "score_metadata"] as const) {
+			const deadline = new Date(Date.now() + 5000).toISOString();
+			if (lifetime === "content")
+				await sql`update platform.evaluation_derived_objects set expires_at=${deadline}::timestamptz,data=jsonb_set(data,'{expiresAt}',to_jsonb(${deadline}::text)) where id=${bodyObject.id}`;
+			else
+				await sql`update platform.evaluation_score_intents set data=jsonb_set(data,'{metadataExpiresAt}',to_jsonb(${deadline}::text)) where id=${human.id}`;
+			const originalDownload = storage.download;
+			let readOutput = false;
+			let delayed = false;
+			storage.download = async (input) => {
+				if (input.objectRef === bodyObject.data.objectRef) readOutput = true;
+				if (input.objectRef === reasonObject.data.objectRef) {
+					delayed = true;
+					await new Promise((resolve) =>
+						setTimeout(
+							resolve,
+							Math.max(1, Date.parse(deadline) - Date.now() + 40),
+						),
+					);
+				}
+				return originalDownload(input);
+			};
+			try {
+				const response = await getAnalysis(
+					`/analysis/${experiment.experimentId}/samples/${human.sample_task_id}?scoreId=${human.id}`,
+				);
+				expect(readOutput).toBe(true);
+				expect(delayed).toBe(true);
+				expect(Date.now() > Date.parse(deadline)).toBe(true);
+				expect(response.status).toBe(404);
+			} finally {
+				storage.download = originalDownload;
+				await sql`update platform.evaluation_derived_objects set expires_at=${bodyObject.data.expiresAt}::timestamptz,data=${sql.json(bodyObject.data)} where id=${bodyObject.id}`;
+				await sql`update platform.evaluation_score_intents set data=${sql.json(liveScore?.data)} where id=${human.id}`;
+			}
+		}
 		await worker.runOnce();
 		expect(calls).toBe(2);
 		for (const status of [401, 403]) {
@@ -3413,3 +3602,709 @@ it.each(["user", "application"] as const)(
 	},
 	30000,
 );
+it("keeps authorized old-version analysis after a new deployment policy and explicit new-version experiment", async () => {
+	const { PostgresEvaluationAnalysisV1 } = await import(
+		"./evaluation-analysis.js"
+	);
+	const command = await dataset();
+	const original = await core.create(request("runner"), randomUUID(), {
+		...command,
+		comparisonTargets: ["model", "configuration"],
+	});
+	const [d] =
+		await sql`select (data->>'revision')::int as revision from platform.evaluation_datasets where id=${command.datasetId}`;
+	const grant = await data.grant(
+		request("admin"),
+		randomUUID(),
+		command.datasetId,
+		{
+			expectedRevision: Number(d?.revision),
+			principal: { kind: "user", id: "analyst-history" },
+			versionIds: [command.versionId],
+			operations: ["analyze"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		},
+	);
+	await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)values(${configuration.agentId},'user','analyst-history','use','history-use')`;
+	const loadAnalysisPolicy = async () => ({
+		schemaVersion: 1 as const,
+		policyId: "analysis",
+		revision: 1,
+		validUntil: policy.validUntil,
+		maximumWindowMs: 86400000,
+		maximumTasks: 1000,
+		maximumModelFacts: 10000,
+		feedbackMetadataMs: 600000,
+	});
+	const analysis = new PostgresEvaluationAnalysisV1({
+		...database,
+		directory,
+		loadDataPolicy: async () => policy,
+		loadExperimentPolicy: async () => experimentPolicy,
+		loadAnalysisPolicy,
+		storage,
+		taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+	});
+	try {
+		expect(
+			(
+				await analysis.summary(
+					request("analyst-history"),
+					original.experimentId,
+				)
+			).groups.every((g) => g.counts.fixedSamples === 1),
+		).toBe(true);
+		const [latest] =
+			await sql`select (data->>'revision')::int as revision from platform.evaluation_datasets where id=${command.datasetId}`;
+		const version = await data.reserve(
+			request("admin"),
+			randomUUID(),
+			command.datasetId,
+			{
+				expectedRevision: Number(latest?.revision),
+				sourceVersionId: command.versionId,
+			},
+		);
+		const [afterReserve] =
+			await sql`select (data->>'revision')::int as revision from platform.evaluation_datasets where id=${command.datasetId}`;
+		await data.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: Number(afterReserve?.revision),
+			principal: { kind: "user", id: "admin" },
+			versionIds: [version.versionId],
+			operations: ["import"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+		await data.upload(
+			request("admin"),
+			randomUUID(),
+			command.datasetId,
+			version.versionId,
+			new TextEncoder().encode(
+				JSON.stringify({
+					schemaVersion: 1,
+					provenance: { approvalId: "synthetic-fixture" },
+					samples: [
+						{
+							id: "one",
+							input: "synthetic changed version",
+							context: null,
+							taskType: "answer",
+							expectedResult: "yes",
+						},
+					],
+					rubric: [{ id: "quality", description: "Exact answer" }],
+				}),
+			),
+		);
+		const [afterUpload] =
+			await sql`select (data->>'revision')::int as revision from platform.evaluation_datasets where id=${command.datasetId}`;
+		await data.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: Number(afterUpload?.revision),
+			principal: { kind: "user", id: "runner" },
+			versionIds: [version.versionId],
+			operations: ["run"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+		const [afterRun] =
+			await sql`select (data->>'revision')::int as revision from platform.evaluation_datasets where id=${command.datasetId}`;
+		await data.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: Number(afterRun?.revision),
+			principal: { kind: "user", id: "analyst-history" },
+			versionIds: [version.versionId],
+			operations: ["analyze"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+		const next = await core.create(request("runner"), randomUUID(), {
+			...command,
+			versionId: version.versionId,
+			comparisonTargets: ["model", "configuration"],
+		});
+		expect(next.experimentId).not.toBe(original.experimentId);
+		const oldPolicy = experimentPolicy;
+		experimentPolicy = {
+			...experimentPolicy,
+			revision: experimentPolicy.revision + 1,
+			variants: [],
+		};
+		try {
+			const page = await analysis.history(request("analyst-history"), 100);
+			expect(page.items.map((i) => i.experimentId)).toEqual(
+				expect.arrayContaining([original.experimentId, next.experimentId]),
+			);
+			expect(
+				(
+					await analysis.summary(
+						request("analyst-history"),
+						original.experimentId,
+					)
+				).versionId,
+			).toBe(command.versionId);
+		} finally {
+			experimentPolicy = oldPolicy;
+		}
+		const [originalVersion] =
+			await sql`select data from platform.evaluation_versions where id=${command.versionId}`;
+		const contentExpired = new Date(Date.now() - 1).toISOString();
+		await sql`update platform.evaluation_versions set expires_at=${contentExpired}::timestamptz,data=jsonb_set(data,'{expiresAt}',to_jsonb(${contentExpired}::text)) where id=${command.versionId}`;
+		try {
+			const retired = await analysis.summary(
+				request("analyst-history"),
+				original.experimentId,
+			);
+			expect(retired.contentAvailable).toBe(false);
+			expect(retired.taskTypesAvailable).toBe(false);
+			expect(retired.fixedSamples).toBe(1);
+			expect(retired.items).toHaveLength(2);
+			await expect(
+				analysis.detail(
+					request("analyst-history"),
+					original.experimentId,
+					retired.items[0]?.sampleTaskId ?? "",
+				),
+			).rejects.toMatchObject({ code: "denied" });
+		} finally {
+			await sql`update platform.evaluation_versions set expires_at=${originalVersion?.data.expiresAt}::timestamptz,data=${sql.json(originalVersion?.data)} where id=${command.versionId}`;
+		}
+		await data.revoke(
+			request("admin"),
+			randomUUID(),
+			command.datasetId,
+			grant.grantId,
+			grant.revision,
+		);
+		await expect(
+			analysis.summary(request("analyst-history"), original.experimentId),
+		).rejects.toMatchObject({ code: "denied" });
+		expect(
+			(await analysis.summary(request("analyst-history"), next.experimentId))
+				.versionId,
+		).toBe(version.versionId);
+	} finally {
+		await analysis.close();
+	}
+}, 30000);
+
+it.each(["summary", "history"] as const)(
+	"denies %s metadata that expires during its last identity await",
+	async (operation) => {
+		const { PostgresEvaluationAnalysisV1 } = await import(
+			"./evaluation-analysis.js"
+		);
+		const command = await dataset();
+		const experiment = await core.create(
+			request("runner"),
+			randomUUID(),
+			command,
+		);
+		await data.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: 4,
+			principal: { kind: "user", id: "late-reader" },
+			versionIds: [command.versionId],
+			operations: ["analyze"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+		await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)values(${configuration.agentId},'user','late-reader','use','late-reader-use') on conflict do nothing`;
+		let reads = 0;
+		let stopAt = Number.POSITIVE_INFINITY;
+		let deadline = Number.POSITIVE_INFINITY;
+		let delayed = false;
+		const analysis = new PostgresEvaluationAnalysisV1({
+			...database,
+			directory: {
+				resolveUser: async (id) => {
+					reads++;
+					if (reads === stopAt) {
+						delayed = true;
+						await new Promise((resolve) =>
+							setTimeout(resolve, Math.max(1, deadline - Date.now() + 30)),
+						);
+					}
+					return directory.resolveUser(id);
+				},
+			},
+			loadDataPolicy: async () => policy,
+			loadExperimentPolicy: async () => experimentPolicy,
+			loadAnalysisPolicy: async () => ({
+				schemaVersion: 1,
+				policyId: "analysis",
+				revision: 1,
+				validUntil: policy.validUntil,
+				maximumWindowMs: 86400000,
+				maximumTasks: 1000,
+				maximumModelFacts: 10000,
+				feedbackMetadataMs: 600000,
+			}),
+			storage,
+			taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+		});
+		const call = () =>
+			operation === "summary"
+				? analysis.summary(request("late-reader"), experiment.experimentId)
+				: analysis.history(request("late-reader"), 100);
+		try {
+			await call();
+			stopAt = reads;
+			reads = 0;
+			deadline = Date.now() + 5000;
+			const expiry = new Date(deadline).toISOString();
+			if (operation === "summary")
+				await sql`update platform.evaluation_score_intents set data=jsonb_set(data,'{metadataExpiresAt}',to_jsonb(${expiry}::text)) where sample_task_id in(select id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId})`;
+			else
+				await sql`update platform.evaluation_experiments set metadata_expires_at=${expiry}::timestamptz,data=jsonb_set(data,'{metadataExpiresAt}',to_jsonb(${expiry}::text)) where id=${experiment.experimentId}`;
+			await expect(call()).rejects.toMatchObject({ code: "denied" });
+			expect(delayed).toBe(true);
+			expect(Date.now()).toBeGreaterThan(deadline);
+		} finally {
+			await analysis.close();
+		}
+	},
+	30000,
+);
+
+it.each(["score", "grant"] as const)(
+	"denies a worklist whose %s expires during its final identity await",
+	async (kind) => {
+		const command = await dataset();
+		const experiment = await core.create(
+			request("runner"),
+			randomUUID(),
+			command,
+		);
+		const reader = `worklist-${kind}`;
+		const grant = await data.grant(
+			request("admin"),
+			randomUUID(),
+			command.datasetId,
+			{
+				expectedRevision: 4,
+				principal: { kind: "user", id: reader },
+				versionIds: [command.versionId],
+				operations: ["score", "review"],
+				expiresAt: new Date(Date.now() + 50000).toISOString(),
+			},
+		);
+		await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)values(${configuration.agentId},'user',${reader},'use','worklist-use')`;
+		let reads = 0;
+		let stopAt = Number.POSITIVE_INFINITY;
+		let deadline = Number.POSITIVE_INFINITY;
+		let delayed = false;
+		const scoring = new PostgresEvaluationScoringV1({
+			...database,
+			directory: {
+				resolveUser: async (id) => {
+					reads++;
+					if (reads === stopAt) {
+						expect(Date.now()).toBeLessThan(deadline);
+						delayed = true;
+						await new Promise((resolve) =>
+							setTimeout(resolve, Math.max(1, deadline - Date.now() + 30)),
+						);
+					}
+					return directory.resolveUser(id);
+				},
+			},
+			loadDataPolicy: async () => policy,
+			loadExperimentPolicy: async () => experimentPolicy,
+			storage,
+			taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+		});
+		const call = () =>
+			scoring.worklist(
+				request(reader),
+				kind === "score" ? "score" : "review",
+				100,
+			);
+		try {
+			const before = await call();
+			expect(before.items).toHaveLength(2);
+			expect(
+				before.items.every(
+					(item) => item.experimentId === experiment.experimentId,
+				),
+			).toBe(true);
+			stopAt = reads;
+			reads = 0;
+			deadline = Date.now() + 5000;
+			const expiry = new Date(deadline).toISOString();
+			if (kind === "score")
+				await sql`update platform.evaluation_score_intents set data=jsonb_set(data,'{metadataExpiresAt}',to_jsonb(${expiry}::text)) where sample_task_id in(select id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId})`;
+			else
+				await sql`update platform.evaluation_grants set data=jsonb_set(data,'{expiresAt}',to_jsonb(${expiry}::text)) where id=${grant.grantId}`;
+			await expect(call()).rejects.toMatchObject({ code: "denied" });
+			expect(delayed).toBe(true);
+			expect(Date.now()).toBeGreaterThan(deadline);
+		} finally {
+			await scoring.close();
+		}
+	},
+	30000,
+);
+
+it("does not resurrect retired Actions as current comparison configuration", async () => {
+	const command = await dataset();
+	const variant = experimentPolicy.variants[0];
+	if (!variant) throw new Error("missing variant fixture");
+	const read = () =>
+		experiments.transaction(request("runner"), command, (tx) =>
+			tx.requestedEvidence(variant),
+		);
+	try {
+		const original = await read();
+		for (const changed of [
+			{
+				...configuration,
+				actions: [
+					{
+						providerId: "github",
+						actionId: "issues.read",
+						actionVersion: "v3",
+					},
+				],
+			},
+			{ ...configuration, actionSetRevision: "actions_2" },
+		]) {
+			await sql`update platform.agent_configuration_revisions set configuration=${sql.json(changed as unknown as postgres.JSONValue)} where agent_id=${configuration.agentId} and revision=${configuration.revision}`;
+			expect((await read()).configurationDigest).toBe(
+				original.configurationDigest,
+			);
+		}
+	} finally {
+		await sql`update platform.agent_configuration_revisions set configuration=${sql.json(configuration as unknown as postgres.JSONValue)} where agent_id=${configuration.agentId} and revision=${configuration.revision}`;
+	}
+});
+
+it("bounds retained score conclusions by current policy from their actual creation time", async () => {
+	const { PostgresEvaluationAnalysisV1 } = await import(
+		"./evaluation-analysis.js"
+	);
+	const { createEvaluationScoreWorkV1 } = await import(
+		"@agent-infra/platform-core"
+	);
+	const command = await dataset();
+	const experiment = await core.create(
+		request("runner"),
+		randomUUID(),
+		command,
+	);
+	await data.grant(request("admin"), randomUUID(), command.datasetId, {
+		expectedRevision: 4,
+		principal: { kind: "user", id: "runner" },
+		versionIds: [command.versionId],
+		operations: ["score", "analyze"],
+		expiresAt: new Date(Date.now() + 50000).toISOString(),
+	});
+	const tasks = await experiments.samples(experiment.experimentId, 10);
+	const first = tasks[0];
+	if (!first) throw new Error("missing sample");
+	for (const task of tasks) {
+		await sql`update platform.conversation_executions set status='completed',last_event_sequence=2 where execution_id=${task.executionId}`;
+		await sql`insert into platform.conversation_events(event_id,conversation_id,execution_id,sequence,conversation_cursor,event_type,event_payload,source,adapter_event_key,event_digest,runtime_cursor,occurred_at)values(${randomUUID()},${task.conversationId},${task.executionId},2,2,'text.delta',${sql.json({ type: "text.delta", text: "yes" })},'runtime',${randomUUID()},${"a".repeat(64)},'1',clock_timestamp())`;
+	}
+	const [checkpoint] =
+		await sql`select revision,digest from platform.evaluation_policies where id='active'`;
+	const scoring = new PostgresEvaluationScoringV1({
+		...database,
+		directory,
+		storage,
+		loadDataPolicy: async () => policy,
+		loadExperimentPolicy: async () => experimentPolicy,
+		taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+	});
+	const outbox = createPostgresOutboxStore(database);
+	let currentPolicy = policy;
+	let reads = 0;
+	let stopAt = Number.POSITIVE_INFINITY;
+	let deadline = Number.POSITIVE_INFINITY;
+	let delayed = false;
+	const analysis = new PostgresEvaluationAnalysisV1({
+		...database,
+		storage,
+		directory: {
+			resolveUser: async (id) => {
+				reads++;
+				if (reads === stopAt) {
+					expect(Date.now()).toBeLessThan(deadline);
+					delayed = true;
+					await new Promise((resolve) =>
+						setTimeout(resolve, Math.max(1, deadline - Date.now() + 30)),
+					);
+				}
+				return directory.resolveUser(id);
+			},
+		},
+		loadDataPolicy: async () => currentPolicy,
+		loadExperimentPolicy: async () => experimentPolicy,
+		loadAnalysisPolicy: async () => ({
+			schemaVersion: 1,
+			policyId: "analysis",
+			revision: 1,
+			validUntil: policy.validUntil,
+			maximumWindowMs: 86400000,
+			maximumTasks: 1000,
+			maximumModelFacts: 10000,
+			feedbackMetadataMs: 600000,
+		}),
+		taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+	});
+	const currentData = createEvaluationDataV1({
+		store: dataStore,
+		storage,
+		loadPolicy: async () => currentPolicy,
+	});
+	const publish = async (metadataMs: number) => {
+		currentPolicy = parseEvaluationPolicyV1({
+			...currentPolicy,
+			revision: currentPolicy.revision + 1,
+			retention: {
+				...currentPolicy.retention,
+				score: { ...currentPolicy.retention.score, contentMs: 1, metadataMs },
+			},
+		});
+		const [dataset] =
+			await sql`select data from platform.evaluation_datasets where id=${command.datasetId}`;
+		await currentData.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: dataset?.data.revision,
+			principal: { kind: "user", id: "runner" },
+			versionIds: [command.versionId],
+			operations: ["analyze"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+	};
+	try {
+		// A real later score must not inherit the experiment's earlier creation time.
+		await new Promise((resolve) =>
+			setTimeout(
+				resolve,
+				Math.max(1, Date.parse(experiment.createdAt) + 5100 - Date.now()),
+			),
+		);
+		const [intent] =
+			await sql`select id from platform.evaluation_score_intents where sample_task_id=${first.sampleTaskId}`;
+		if (!intent) throw new Error("missing intent");
+		const itemId = `evaluation-score:${intent.id}`;
+		await sql`update platform.outbox_items set available_at=clock_timestamp()-interval '1 second' where id=${itemId}`;
+		const claim = await outbox.claim({
+			itemId,
+			leaseOwner: "retention-test",
+			leaseDurationMs: 30000,
+		});
+		if (!claim) throw new Error("missing score claim");
+		expect(
+			await createEvaluationScoreWorkV1(scoring).execute({
+				intentId: intent.id,
+				itemId,
+				leaseOwner: "retention-test",
+				deliveryFence: claim.deliveryFence.toString(),
+			}),
+		).toEqual({ outcome: "completed" });
+		const [produced] =
+			await sql`select i.data as score,o.data as object from platform.evaluation_score_intents i join platform.evaluation_derived_objects o on o.id=(i.data->>'reasonObjectId')::uuid where i.id=${intent.id}`;
+		if (!produced) throw new Error("missing produced score object");
+		expect(produced.score).toMatchObject({
+			status: "scored",
+			value: 1,
+			passed: true,
+		});
+		expect(
+			Date.parse(produced.object.createdAt) -
+				Date.parse(produced.score.createdAt),
+		).toBeGreaterThan(5000);
+		await publish(5000);
+		const call = () =>
+			analysis.summary(request("runner"), experiment.experimentId);
+		const live = await call();
+		expect(
+			live.items
+				.flatMap((item) => item.scores)
+				.filter((score) => score.status === "scored"),
+		).toHaveLength(1);
+		expect(
+			live.items
+				.flatMap((item) => item.scores)
+				.find((score) => score.status === "scored"),
+		).toMatchObject({ value: 1, passed: true });
+		stopAt = reads;
+		reads = 0;
+		deadline = Date.parse(produced.object.createdAt) + 5000;
+		await expect(call()).rejects.toMatchObject({ code: "denied" });
+		expect(delayed).toBe(true);
+		stopAt = Number.POSITIVE_INFINITY;
+		await publish(1);
+		const retired = await call();
+		expect(retired.items).toHaveLength(2);
+		expect(
+			retired.items
+				.flatMap((item) => item.scores)
+				.some((score) => score.scoreId === intent.id),
+		).toBe(false);
+		expect(
+			retired.items
+				.flatMap((item) => item.scores)
+				.every((score) => score.value === null && score.passed === null),
+		).toBe(true);
+		expect(
+			retired.groups.every(
+				(group) =>
+					group.counts.fixedSamples === 1 &&
+					group.counts.unscored + group.counts.missing === 1,
+			),
+		).toBe(true);
+		// Corrupt/missing bindings are not silently classified as expired conclusions.
+		for (const reasonObjectId of [
+			randomUUID(),
+			produced.score.outputObjectId,
+		]) {
+			await sql`update platform.evaluation_score_intents set data=jsonb_set(data,'{reasonObjectId}',to_jsonb(${reasonObjectId}::text)) where id=${intent.id}`;
+			await expect(call()).rejects.toMatchObject({ code: "unavailable" });
+		}
+		await sql`update platform.evaluation_score_intents set data=${sql.json(produced.score)} where id=${intent.id}`;
+	} finally {
+		await analysis.close();
+		await scoring.close();
+		await outbox.close();
+		// Restore only this fixture's policy checkpoint; all writes above used the real policy/grant path.
+		await sql`update platform.evaluation_policies set revision=${checkpoint?.revision},digest=${checkpoint?.digest} where id='active'`;
+	}
+}, 30000);
+
+it("timestamps analysis at its snapshot after facts committed between authorization and reading", async () => {
+	const { PostgresEvaluationAnalysisV1 } = await import(
+		"./evaluation-analysis.js"
+	);
+	const { PostgresConversationEventTransactionV1 } = await import(
+		"./conversation-events.js"
+	);
+	const { markSessionSandboxReadyFixture } = await import(
+		"./session-sandbox.fixture.js"
+	);
+	const { createConversationEventUseCaseV1, parseConversationOperationFactV2 } =
+		await import("@agent-infra/platform-core");
+	const command = await dataset();
+	const experiment = await core.create(
+		request("runner"),
+		randomUUID(),
+		command,
+	);
+	await data.grant(request("admin"), randomUUID(), command.datasetId, {
+		expectedRevision: 4,
+		principal: { kind: "user", id: "runner" },
+		versionIds: [command.versionId],
+		operations: ["analyze"],
+		expiresAt: new Date(Date.now() + 50000).toISOString(),
+	});
+	const [task] = await experiments.samples(experiment.experimentId, 10);
+	if (!task) throw new Error("missing sample");
+	await markSessionSandboxReadyFixture(sql, task.conversationId);
+	const [binding] =
+		await sql`select session_generation,delivery_fence,model_option_id,reasoning_level from platform.conversation_executions where execution_id=${task.executionId}`;
+	if (!binding) throw new Error("missing execution binding");
+	const events = new PostgresConversationEventTransactionV1(database);
+	const eventCore = createConversationEventUseCaseV1({ transaction: events });
+	const analysis = new PostgresEvaluationAnalysisV1({
+		...database,
+		directory,
+		storage,
+		loadDataPolicy: async () => policy,
+		loadExperimentPolicy: async () => experimentPolicy,
+		loadAnalysisPolicy: async () => ({
+			schemaVersion: 1,
+			policyId: "analysis",
+			revision: 1,
+			validUntil: policy.validUntil,
+			maximumWindowMs: 86400000,
+			maximumTasks: 1000,
+			maximumModelFacts: 10000,
+			feedbackMetadataMs: 600000,
+		}),
+		taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+	});
+	const gate = await sql.reserve();
+	let pending:
+		| Promise<Awaited<ReturnType<typeof analysis.summary>>>
+		| undefined;
+	try {
+		await gate`select pg_advisory_lock(36843684)`;
+		// This isolated deferred trigger pauses commit after the authorization clock,
+		// without replacing any production query, event producer, or clock.
+		await sql.unsafe(
+			"create function platform.analysis_snapshot_gate() returns trigger language plpgsql as $$ begin perform pg_advisory_xact_lock(36843684); return new; end $$",
+		);
+		await sql.unsafe(
+			"create constraint trigger analysis_snapshot_gate after insert or update on platform.evaluation_policies deferrable initially deferred for each row execute function platform.analysis_snapshot_gate()",
+		);
+		pending = analysis.summary(request("runner"), experiment.experimentId);
+		const settled = Promise.allSettled([pending]);
+		await expect
+			.poll(async () => {
+				const [row] =
+					await sql`select count(*)::int as count from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and lower(query)='commit'`;
+				return row?.count;
+			})
+			.toBe(1);
+		for (const phase of ["intent", "started"] as const) {
+			const key = randomUUID();
+			expect(
+				(
+					await eventCore.persist({
+						schemaVersion: 1,
+						conversationId: task.conversationId,
+						executionId: task.executionId,
+						sessionGeneration: Number(binding.session_generation),
+						deliveryFence: Number(binding.delivery_fence),
+						adapterEventKey: key,
+						runtimeCursor: key,
+						occurredAt: new Date().toISOString(),
+						event: {
+							schemaVersion: 2,
+							type: "execution.operation",
+							fact: parseConversationOperationFactV2({
+								kind: "model",
+								operationRef: "snapshot-model",
+								attemptRef: "snapshot-attempt",
+								phase,
+								model: {
+									configVersion: String(configuration.revision),
+									modelOptionId: binding.model_option_id,
+									modelId: "snapshot-actual-model",
+									reasoningLevel: binding.reasoning_level,
+								},
+							}),
+						},
+					})
+				).outcome,
+			).toBe("accepted");
+		}
+		const [clock] = await sql<
+			{ milliseconds: number }[]
+		>`select (extract(epoch from clock_timestamp())*1000)::double precision as milliseconds`;
+		if (!clock) throw new Error("missing commit clock");
+		await gate`select pg_advisory_unlock(36843684)`;
+		const result = await pending;
+		await settled;
+		expect(
+			result.items.find((item) => item.sampleTaskId === task.sampleTaskId)
+				?.actual.conditions[0]?.modelId,
+		).toBe("snapshot-actual-model");
+		expect(Date.parse(result.observedAt)).toBeGreaterThanOrEqual(
+			Math.floor(clock.milliseconds),
+		);
+		const detail = await analysis.detail(
+			request("runner"),
+			experiment.experimentId,
+			task.sampleTaskId,
+		);
+		expect(detail.sample.id).toBe("one");
+	} finally {
+		await gate`select pg_advisory_unlock(36843684)`;
+		await pending?.catch(() => undefined);
+		await sql.unsafe(
+			"drop trigger if exists analysis_snapshot_gate on platform.evaluation_policies",
+		);
+		await sql.unsafe(
+			"drop function if exists platform.analysis_snapshot_gate()",
+		);
+		gate.release();
+		await analysis.close();
+		await events.close();
+	}
+}, 30000);

@@ -162,6 +162,11 @@ export function registerEvaluationExperimentRoutesV1(
 					return context.json(
 						EvaluationScoreMetadataV1Schema.parse({
 							scoreId: intent.id,
+							source: intent.scorer.implementation.kind,
+							scoringModel:
+								intent.scorer.implementation.kind === "model"
+									? intent.scorer.implementation.modelId
+									: null,
 							sampleTaskId: intent.sampleTaskId,
 							experimentId: intent.experimentId,
 							executionId: intent.executionId,
@@ -252,6 +257,11 @@ export function registerEvaluationExperimentRoutesV1(
 						return context.json(
 							EvaluationScoreMetadataV1Schema.parse({
 								scoreId: intent.id,
+								source: intent.scorer.implementation.kind,
+								scoringModel:
+									intent.scorer.implementation.kind === "model"
+										? intent.scorer.implementation.modelId
+										: null,
 								sampleTaskId: intent.sampleTaskId,
 								experimentId: intent.experimentId,
 								executionId: intent.executionId,

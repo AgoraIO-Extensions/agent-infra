@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { createLdapIdentityDirectory } from "@agent-infra/identity";
+import { parseEvaluationAnalysisPolicyV1 } from "@agent-infra/platform-core";
 import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
 import { readConnectionConsumerEnvironmentConfigurationV1 } from "./connection-consumer-environment.js";
 import { createProtectedConnectionInstallationForwarder } from "./connection-installation-callback-forwarder.js";
@@ -71,6 +72,11 @@ const environmentConnectionConsumer =
 	connectionConsumerProfileApproval === undefined
 		? readConnectionConsumerEnvironmentConfigurationV1(process.env)
 		: undefined;
+if (apiInput?.evaluation?.loadAnalysisPolicy)
+	parseEvaluationAnalysisPolicyV1(
+		await apiInput.evaluation.loadAnalysisPolicy(),
+	);
+
 const resolvedConnectionConsumerProfile =
 	connectionConsumerProfile ?? environmentConnectionConsumer?.profile;
 const resolvedConnectionConsumerProfileApproval =

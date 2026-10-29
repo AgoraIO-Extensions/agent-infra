@@ -103,6 +103,8 @@ describe("0033 typed generation tombstone upgrade", () => {
 				accepted_original_host_session_ref: null,
 				// #3373：迁移前没有 unknown 的 Execution，新列保持为空。
 				unknown_since: null,
+				// #3640：历史终态没有确认时间，迁移不回填观测事实。
+				terminal_observed_at: null,
 			})),
 		);
 		expect(

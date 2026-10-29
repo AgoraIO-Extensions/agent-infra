@@ -166,6 +166,7 @@ beforeAll(async () => {
 		{ idx: 68, tag: "0068_database_jit_off" },
 		{ idx: 69, tag: "0069_evaluation_data" },
 		{ idx: 70, tag: "0070_evaluation_experiments" },
+		{ idx: 71, tag: "0071_evaluation_analysis_feedback" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
@@ -437,9 +438,16 @@ describe("personal credential disable authority append", () => {
 					}),
 				]),
 			);
-		expect(withoutTypedPrincipal(after.data)).toEqual(
-			withoutTypedPrincipal(before.data),
-		);
+		const expectedData = withoutTypedPrincipal(before.data);
+		if (!expectedData.conversation_executions)
+			throw new Error("Missing historical Execution snapshot");
+		// #3640：逐字段保留旧记录，只增加未观测的终态时间 NULL。
+		expectedData.conversation_executions =
+			expectedData.conversation_executions.map((row) => ({
+				...(row as Record<string, unknown>),
+				terminal_observed_at: null,
+			}));
+		expect(withoutTypedPrincipal(after.data)).toEqual(expectedData);
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		const repeated = await snapshot();
 		expect(repeated).toEqual(after);
