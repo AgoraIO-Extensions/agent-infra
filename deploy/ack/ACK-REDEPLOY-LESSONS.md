@@ -1,6 +1,6 @@
 # ACK 重部署案例与迁移顺序（脱敏）
 
-这份记录对应 2026-10-27 至 2026-10-28 的 ACK 重部署演练。所有地址、账号、Token、Cookie、镜像 digest、
+这份记录对应 2026-10-27 至 2026-10-29 的 ACK 重部署演练。所有地址、账号、Token、Cookie、镜像 digest、
 Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本文只记录可复用的因果关系。
 
 ## 已成功的链路
@@ -42,8 +42,11 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | 自定义增量镜像的 revision label 看起来仍是旧源码 | OCI 配置继承基础镜像的 revision，后续 overlay 有自己的构建配方和最终 Digest | 分别保留继承的基础 revision、基础 Digest、overlay Dockerfile hash 和最终 OCI Digest；原容量 receipt 保持原字节，不把旧来源改写为最终 Platform 源码 |
 | 新 custom Session 正常，旧失败 Pod 仍反复重启 | 新 Worker 校验新增 Driver，旧 Pod 配置与期望不一致；已停止会话的残留资源需要收敛 | 先回读 Store 的 `desired_state=stopped` 与 Agent/Session 归属，再按 Pod UID 和 resourceVersion 删除精确残留，等待 Worker 自行回读；不手工提升数据库状态 |
 | 本地发布构建只报告退出码 1 | BuildKit 到 Docker Hub 的鉴权连接被重置，构建包装器隐藏了 stderr | 在仓库外保留权限受限的构建诊断；受控增量镜像须固定基镜像、源码与全部变化依赖，回读编译产物哈希，并明确区别于完整发布 manifest |
+| 本地依赖安装成功，Docker 内构建仍在 pnpm 下载阶段超时 | 宿主机缓存命中与构建容器的实际网络/依赖下载是两条路径；该次构建没有产出成功镜像 | 保留具体失败阶段和私有日志；部署只消费正式 workflow 已成功发布并回读的同源 OCI manifest，不把宿主机安装成功或旧镜像当作这次 Docker 构建通过 |
+| 本地基镜像解析约六分钟后报 `unable to lease content` | BuildKit 报本次缓存内容 lease 不存在；没有证据进一步断定谁清理了缓存 | 记录该次构建失败及来源，不把它归因于业务代码或改用浮动基镜像；保留共享构建环境，使用正式发布与目标镜像回读验证交付 |
 | 跨用户 API/SSE 均拒绝且页面没有会话正文，浏览器验收仍失败 | Agent 不可见时页面使用新的无权访问卡，探针只匹配旧的会话失效提示 | 接受两种正式拒绝提示，继续验证 API/SSE 的 403/404、用户消息和助手正文不可见 |
 | CI 一直重跑，验证无法结束 | 把 run 的 `updatedAt` 当成心跳，误取消仍在执行的长测试 | 查询当前 job/step；只有终态或明确失联证据才考虑重跑，禁止以轮询超时推断任务已经停止 |
+| 移动端配置页后台重读测试偶发缩短 32px | 测试在 checkbox 更新后立即采样，父表单尚未提交草稿；随后移除“没有需要保存的变更”提示及间距 | 等待保存按钮可用且无变化提示消失，再采样高度/滚动/焦点；保持原断言，不加固定 sleep 或放宽误差 |
 | OpenCode 原生工具测试只有一次模型请求，或文件工具被误拒绝 | 完整参数通知异步到达；权限请求还可能携带 diff/provider 展示元数据，不能一律当作调用参数 | 固定 OpenCode 只采用公告参数并最多等一秒接收更新；通用 ACP 才用请求补齐空参数并拒绝冲突。异步授权后重新核对同一活动公告和参数。必须运行完整原生工具组，四种工具的通过不能代替 read/write/edit/Bash/apply_patch/WebSearch 验证 |
 | 标准 Codex Agent 一直处于 `creating`，Worker 记录 `RUNTIME_READINESS_UNAVAILABLE` | ACK ECI 节点没有可用 Landlock ABI V5；旧 Worker 没有给标准 Codex Workload 注入 Worker-owned `container-boundary` 参数，Runtime 按默认 Landlock 启动并 fail closed | `policy.codexContainerBoundaryEnabled=true` 只允许 Worker 为标准专属 Pod 注入 `container-boundary`、`worker-v1`、可打印 scope 和 HMAC attestation；部署后必须回读 Pod env 和签名 readiness，不能用 healthz 或 Pod Ready 替代 |
 | 破坏性重建数据库后 API credential 能签发，但 Agent API 仍返回 `401` 或 `400` | LDAP 登录会产生新的 canonical Platform user UUID；私有配置里残留的 `allowedPrincipals`、`apiSubjectMap` 或 custom admission principal 与当前主体不一致 | `bootstrap-login` 通过真实 session 生成私有身份候选和新浏览器 state；`runtime-inputs` 校验并发布已声明的身份键，API 私有配置显式映射原本批准的主体，再用当前 credential 验证 create/read |
@@ -77,8 +80,8 @@ custom 都要求 HTML probe，导致 ACP 对话成功后仍无法结束；当前
 3. `bootstrap-database`（fresh 环境）：先启动数据库阶段，验证账号/数据库隔离，再运行 migrations 和 Platform。
 4. `deploy`：Helm 部署并等待 API/Web/Worker/Directory rollout；回读 release revision、镜像和 Pod 证据。
 5. `template-preflight`：对 codex、claude、opencode、pi 各创建一次带 exact image/config tuple 的 ECI Runtime Pod，使用真实 Relay 请求跑一轮模型，生成 candidate validation 和 preflight receipt；所有四份通过且留有有效期后才能继续。设置 `ACK_TEMPLATE_PREFLIGHT_JOBS_FILE` 后，`all` 会自动执行这一阶段并清理临时 Pod；也可以直接提供已经生成的 `ACK_TEMPLATE_VALIDATIONS_FILE`。
-6. `runtime-inputs`（`all` 自动执行）：发布本轮模板验证和实测容量，回读 API/Worker 的配置并等待 rollout，再运行 mounted-capacity gate。
-7. `bootstrap-credential`：使用真实浏览器 storageState 签发一次性 API credential；材料只写私有文件。
+6. `bootstrap-login` / `runtime-inputs`（`all` 自动执行）：正式登录两个主体，发布当前身份、本轮模板验证和实测容量，回读 API/Worker 的配置并等待 rollout，再运行 mounted-capacity gate。
+7. `bootstrap-credential`：使用当前登录 storageState 签发 API credential；声明 `personalRelayKeyFile` 时自动安装缺失的个人 Relay Key 并回读，已有 Key 保留。材料只写私有文件。
 8. `provision`：按固定 Idempotency-Key 创建/重放四个标准 Agent 和自定义 Agent；创建前再次检查四份 template receipt。
 9. `validate`：检查公网入口、四模板真实多轮/持久化/隔离验收和每个自定义 Agent 的真实入口；任一失败即失败。
 10. `cleanup-plan` / `destroy`：只有明确破坏性确认、精确 UID 和完整 ownership 计划都匹配时才执行；完成后回读 namespace 和 Session admission 均不存在。Fresh 安装必须使用新的登录 session、API credential、Agent IDs 和真实 template receipts。

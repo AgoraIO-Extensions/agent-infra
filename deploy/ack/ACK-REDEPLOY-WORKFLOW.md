@@ -1,18 +1,25 @@
-# ACK 重部署工作流（实现中）
+# ACK 重部署工作流
 
 本工作流为清空后重建 ACK 提供可重复的 Platform 部署、四模板真实 Runtime preflight、
 API Agent 创建和入口验收入口；每次真实运行仍必须以当前 source/image/config receipt 为准。
-空环境数据库、真实多轮/闲置恢复、自定义 ACP/多服务完整矩阵和目标绑定的 ECI 执行证据仍需
-在目标集群执行并回读，脚本测试本身不替代这些外部证据。
-
-待完成的外部验收包括：完整空环境演练、真实多轮与闲置恢复、自定义 ACP/多服务完整矩阵，以及目标绑定的 ECI 执行证据。
+每次运行都要回读空环境数据库、真实登录、当前 Agent 的多轮对话和自有入口结果，
+脚本测试本身不替代这些外部证据。最近一次完整演练的范围与结果见
+[`ACK-REDEPLOY-LESSONS.md`](./ACK-REDEPLOY-LESSONS.md)。
 所有 kubeconfig、Secret、Cookie、浏览器 state 和真实环境输入留在仓库外。
 
 入口脚本是 [`redeploy.sh`](./redeploy.sh)。它只接受 immutable image reference，渲染结果仍包含占位值时直接失败；每次运行把脱敏 receipt 写到外部 `ACK_EVIDENCE_DIR`，不会把会话正文或凭证写入仓库。
 
 ## 搬迁私有输入包
 
-在另一台机器检出已发布镜像对应的源码 commit，并安装 Node 24、pnpm 依赖、kubectl 和 Helm。
+在另一台机器检出已发布镜像对应的源码 commit，保持 checkout 干净，并安装 Node 24、pnpm、
+kubectl、Helm 和 curl。先在源码目录执行：
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+pnpm --filter @agent-infra/web exec playwright install chromium
+```
+
 将私有输入包完整复制到 Git 仓库外的 `0700` 目录，文件保持 `0600`，再执行：
 
 ```bash
@@ -42,7 +49,9 @@ node --experimental-strip-types deploy/ack/run-capsule.ts /private/ack/capsule.j
 ```
 
 示例只展示格式；完整输入包仍需后文规定的所有镜像 manifest、四份 job、容量/登录/credential
-配置和六个或更多 Agent 请求及浏览器蓝图。`inputs` 显式列出需要解析路径的 JSON 模板。
+配置和 Agent 请求及浏览器蓝图。完整八 Agent 矩阵包含四个标准模板、两个自定义 ACP、
+一个单服务自有入口和一个 web/api 多服务自有入口；后两者使用自己的入口验证配置。
+`inputs` 显式列出需要解析路径的 JSON 模板。
 模板中的 `@CAPSULE_ROOT@/relative/path` 指向包内路径；目标也在 `inputs` 中时，指向本轮生成
 的 JSON 副本，否则指向包内原始文件或声明的输出目录。job 的 `worktree` 使用 `@SOURCE_ROOT@`。
 证据与原始凭证不需要改写；运行后保留 `.resolved-*` 私有目录用于诊断，原 JSON 模板保持不变。
@@ -60,6 +69,19 @@ node --experimental-strip-types deploy/ack/run-capsule.ts /private/ack/capsule.j
 清理计划的 installation ID 必须与待删除 namespace 的 `agent-infra.agora.io/bootstrap-id`
 一致。它是 `bootstrap-inputs` 写入的安装归属；fresh 输入包中的新 installation ID 不能代替
 旧环境的清理身份。cluster UID 和 namespace UID 仍须与现场完全一致。
+
+对已授权丢弃数据的旧安装，先执行 `plan` 和 `cleanup-plan`，再使用同一份私有包：
+
+```bash
+ACK_CLEAN_CONFIRM=DELETE_ACK_ENV \
+ACK_CLEAN_ALLOW_FOREIGN=DELETE_ALL_ACK_NAMESPACE \
+node --experimental-strip-types deploy/ack/run-capsule.ts /private/ack/capsule.json destroy
+node --experimental-strip-types deploy/ack/run-capsule.ts /private/ack/capsule.json all
+```
+
+确认旧 namespace 已删除后才开始 `all`。新安装使用新的 installation ID、登录状态、API
+credential 和 Agent bindings。`bootstrap-plan` 检查新安装的 ownership，旧 namespace 还在时
+会拒绝不同 installation ID；它应在删除后执行，不能为通过检查而收养旧安装。
 
 上一轮演练的成功与失败因果、以及 fresh 环境的一键顺序，见 [`ACK-REDEPLOY-LESSONS.md`](./ACK-REDEPLOY-LESSONS.md)。
 
@@ -260,22 +282,28 @@ deploy/ack/redeploy.sh all
 缺项则拒绝。每份浏览器蓝图还须含至少两条 `followUpPrompts` 和覆盖全部轮次的
 `expectedReplies`，用于识别后续轮截断。此数量校验不代表模型或自定义业务验收。`provision` 可单独处理清单子集。
 
-脚本按以下顺序运行：
+上述八 Agent 输入包的 `all` 按以下顺序运行：
 
-1. 确认当前 worktree `HEAD` 等于 `ACK_SOURCE_SHA`，渲染 Helm 并拒绝占位值。
-2. 运行 ACK 访问、Secret、目录 source ConfigMap 和 Helm lint 预检。
-3. `helm upgrade --install --wait` 部署 Platform，并逐个等待 API、Web、Worker、Directory rollout。`bootstrap-inputs` 更新私有 Secret 后会显式滚动 API/Worker 并再次等待 rollout，避免进程继续使用旧的 readiness 或 origin。
-4. 保存预期源码 SHA、精确 release 的 Helm revision，以及 workload/Pod 的名称、UID、节点和镜像哈希。原始 env、annotation、事件消息和地址不进入 snapshot；读取失败退出非零。
-5. 按固定 Idempotency-Key 创建尚未绑定的 Agent，已绑定项只读状态；私有目录保留 ID 映射，分享 receipt 仅保存状态/哈希。
-6. 检查公网 Web 为 `200`、匿名 `/api/v2/agents` 为 `401`。
-7. 从私有映射生成当前 Agent ID 的浏览器配置，依次运行四模板和自定义 ACP 的至少三轮旅程；每个 receipt 必须有 `text.delta`、`execution.status=completed`、持久化刷新回读和跨主体拒绝证据。任一模板失败，整次检查失败。该 runner 明确设置 modelCallVerified=false，多轮检查通过仍不能据此宣称真实模型通过。
-8. 对每个自定义 Agent 运行选择的真实入口 probe；`pass` 不等同于生命周期或 Kubernetes 验收，脚本只检查声明 Digest 的哈希是否出现在 workload 回读中，尚不能证明该 workload 对应目标入口。
+1. 确认 clean worktree `HEAD` 等于 `ACK_SOURCE_SHA`，核对同源镜像和全部输入。
+2. 检查 fresh 数据库配置，创建 namespace 与声明的私有依赖，逐个回读 ownership 和字节；启动数据库并验证账号/权限/数据库隔离。
+3. `helm upgrade --install --wait` 执行迁移并部署 Platform，等待 API、Web、Worker、Directory rollout，保存来源、release 和实际 workload/Pod 镜像证据。
+4. 四个标准 Runtime 各执行真实模型 preflight，生成本轮验证与容量记录；任何模板失败即停止。
+5. `bootstrap-login` 用已授权账号通过正式登录接口生成两个主体的当前 session 和私有配置候选。
+6. `runtime-inputs` 发布本轮身份、模板验证和容量输入，回读配置并等待 API/Worker rollout；随后检查实际挂载的容量配置。
+7. `bootstrap-credential` 通过当前 session 签发 API credential；声明了 `personalRelayKeyFile` 时，自动安装缺失的个人 Relay Key 并回读，已有 Key 保留。
+8. 按固定 Idempotency-Key 创建 Agent，回读 `available/ready`，为当前 Agent 生成六份对话配置与自有入口绑定。
+9. 检查公网 Web 为 `200`、匿名 Agents API 为 `401`；四模板和两个自定义 ACP 各运行至少三轮真实浏览器旅程，检查 SSE、完成终态、刷新恢复和跨主体拒绝。
+10. 自有入口验证当前 Agent 的完整 Deployment/Pod/Service/EndpointSlice/Ingress 与 imageID，再执行 HTTP 身份正反例和浏览器登录、后端交互、刷新及无权主体拒绝。
 
 若需要分步执行，使用 `plan`、`deploy`、`provision`、`validate`。
 `plan` 不写集群；渲染配置仅保存在私有临时文件中，命令退出即移除。
-当前 `validate` 是入口检查，未绑定真实模型执行证据和多轮成功。
+对话 runner 的 `modelCallVerified=false` 表示它验证浏览器消费与持久化，不能独立证明模型调用。
+完整验收还要把每轮 Execution hash 与同 Agent/Session、实际 imageID 下的 durable model
+completed facts 匹配；preflight 的模型成功不能代替这些业务回合。刷新恢复也不代表已验证
+长时间闲置后的 Session 重建。
 `ACK_CA_CERT_FILE` 用于 curl；Node probe 信任私有 CA 时另设 `NODE_EXTRA_CA_CERTS`。
-现有浏览器 runner 仍使用自身 TLS 配置，应在完整验收实现时统一。
+正式登录与 Node HTTP 边界使用正常 CA/hostname 校验；自有入口浏览器使用声明 leaf 的 SPKI
+pin。Platform 对话 runner 保留其测试用 `ignoreHTTPSErrors`，结果不证明浏览器系统 CA 信任。
 
 ## 私有依赖供应
 
@@ -517,9 +545,9 @@ PVC、Pod ownership、镜像、账号 verifier/权限和数据库归属，再允
 `databaseOnly=false`，执行迁移并启动平台。已有完整 Platform release 不会被降回数据库阶段；
 遇到外部 PVC、账号漂移或验证失败会停止，不覆盖或清空数据。
 
-本机隔离 PostgreSQL 17 已通过生成密码认证、跨数据库拒绝和运行账号权限负例；
-这不是 ACK PostgreSQL 16 镜像、空环境或模型验收。真实 ACK 演练、fresh DB 后的登录/API
-凭证初始化和完整业务矩阵仍需完成，不能因数据库阶段通过而关闭 #3072。
+本机隔离 PostgreSQL 17 的生成密码认证、跨数据库拒绝和运行账号权限负例，只证明相应
+受控行为。目标 ACK 的数据库、fresh 登录/API credential 与完整业务矩阵分别记录，数据库
+阶段成功不能代替后续业务验收，也不能代替数据备份恢复验证。
 
 ## 清理与恢复门禁
 
@@ -561,11 +589,11 @@ Platform Ready、单次回复与多轮通过分别记录。后续其他 session 
 
 - main 在发布期间多次前进，导致“最新镜像”与部署/运行时绑定混用。脚本要求 `ACK_SOURCE_SHA == HEAD`，并把每次镜像和 Helm 回读放入同一 receipt。
 - Pod Ready、healthz、受控回显和旧会话不能证明业务成功。脚本强制四个新浏览器旅程，要求真实 SSE、落库终态、刷新回读和第二主体拒绝。
-- Pi 曾出现首轮成功、下一轮只返回一个字符、再失败。当前入口要求同一会话至少三轮，各轮验证独立 Execution 与期望回复；受控 Chromium 已覆盖第二轮截断失败，真实 ACK 多轮结果仍待验证。
+- Pi 曾出现首轮成功、下一轮只返回一个字符、再失败。当前入口要求同一会话至少三轮，各轮验证独立 Execution 与期望回复；受控 Chromium 覆盖第二轮截断失败，真实结果按当前运行逐轮记录。
 - Codex 的 ECI/普通节点可能缺少可执行的 Landlock ABI，真实 `setpriv` 预检会失败。脚本不会用 Pi 或受控 fixture 替代 Codex；ACK 的标准 Runtime Pod 可在 `policy.codexContainerBoundaryEnabled=true` 且 Worker 注入匹配 HMAC attestation 时使用 reviewed `container-boundary` 模式。该模式必须先通过 [Runtime 预检](./RUNTIME-PREFLIGHT.md)，再对同一标准 Workload 做签名真实 readiness 和真实模型回合；缺少边界输入时仍应 fail closed，不能从历史 Landlock 失败或 Pod Ready 推断当前方案成功。
-- Fresh 数据库会生成新的 canonical Platform user ID。`allowedPrincipals`、API subject 映射和 custom admission 不能写死历史 UUID；登录后读取当前 session，再更新仓库外私有配置，删除并重建 owned configuration Secret，滚动 API/Worker 后重新签发 credential。
+- Fresh 数据库会生成新的 canonical Platform user ID。`allowedPrincipals`、API subject 映射和 custom admission 不能写死历史 UUID；`bootstrap-login` 读取当前 session，`runtime-inputs` 发布已声明的身份候选并滚动 API/Worker，随后签发新 credential。
 - 标准 Workload 的 Codex boundary 输入由 Worker 在运行时根据当前 Agent ID 生成；私有 values 只打开部署策略开关。任何手工给 Agent Pod 加 `AGENT_INFRA_*` boundary 输入、复用旧 UID 或直接改 StatefulSet 都会破坏 ownership/attestation 验证。
-- 运行时绑定曾指向旧 Digest，旧 Sandbox 进入 `RUNTIME_CONFIGURATION_INVALID`。当前浏览器配置尚未绑定 image/revision；必须补齐这一验证才能排除旧 Sandbox。
+- 运行时绑定曾指向旧 Digest，旧 Sandbox 进入 `RUNTIME_CONFIGURATION_INVALID`。浏览器结果要与当前 Agent、Session Pod UID、imageID、配置来源及 Execution model facts 联合验证，不能只读页面 receipt 排除旧 Sandbox。
 - malformed execution-capacity profile、重复 `templateModelBindings` 和配额耗尽曾阻断全局 workload reconciliation。部署前应从 Worker configuration 中删除坏 profile、确保每个标准模板只有一个当前绑定，并核对 `ResourceQuota hard/used`；现场排查应只读取配额数值与有界故障码；不要导出完整事件消息。
 - ACK registry 对不完整 OCI config 返回 `409`，镜像 mirror tag 写入返回 `405`；发布阶段使用受支持的 GHCR/workflow 路径和完整 Digest，不能把临时 Tag 写入 values。
 - 真实 ECI image pull 可能在短窗口停留 `ContainerCreating`。这只能记为冷启动/镜像交付证据，不能直接判定模型失败；必须等待同一执行的完成事件或明确失败。
@@ -574,4 +602,6 @@ Platform Ready、单次回复与多轮通过分别记录。后续其他 session 
 - 浏览器写请求的直接 HTTP 探针必须携带目标 Origin。GET session 成功而 POST 返回 401 时先核对协议边界，不应先认定密码错误或重启丢 Cookie。
 - CI run 的 `updatedAt` 不是执行心跳。应读取 job 的当前 step 与终态；长测试仍在运行时继续等待，不因顶层时间戳未变就取消重跑。
 
-这套脚本不会替平台创建账号、审批 Agent、生成登录 Cookie、修复内核或伪造模型凭证；这些输入必须由部署拥有者按现有 E2E 配置提供。上述缺口全部完成并通过真实演练后，才能称为一键移植方案。
+部署拥有者仍需提供已授权账号、模型 Key、集群访问和批准的镜像/身份策略。工作流使用这些
+输入自动登录并初始化新安装，不创建企业账号、改变审批规则或绕过内核隔离。可移植输入包
+只解决路径与装配，迁移到新集群后仍须执行该集群的完整验收。
