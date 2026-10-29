@@ -25,7 +25,7 @@ export async function resolveApiAuditCredentialIdentityV1(
 	transaction: postgres.TransactionSql,
 	material: string,
 	userDirectory: TaskUserDirectoryV1 | undefined,
-	requiredScope: PersonalApiCredentialScopeV1 = "agent:read",
+	requiredScope: PersonalApiCredentialScopeV1 = "agent:use",
 ): Promise<{
 	readonly identity: ApiAuditCredentialIdentityV1;
 	/** Call after the last query/audit await, before committing or returning data. */

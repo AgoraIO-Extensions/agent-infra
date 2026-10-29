@@ -45,6 +45,45 @@ it.each([1, 2])(
 				expect(await compare(before, malformed)).toBe(1);
 			}
 			if (version === 2) {
+				const common = structuredClone(after);
+				delete common.paths["/api/v2/evaluation/choices"];
+				expect(await compare(common, after)).toBe(0);
+				for (const mutate of [
+					(v: typeof after) => {
+						v.paths["/api/v2/evaluation/history"].get.security = [];
+					},
+					(v: typeof after) => {
+						v.components.schemas.EvaluationAnalysisSummaryV1.properties.fixedSamples.minimum =
+							-1;
+					},
+				]) {
+					const changed = structuredClone(after);
+					mutate(changed);
+					expect(await compare(common, changed)).toBe(1);
+					const changedBefore = structuredClone(common);
+					mutate(changedBefore);
+					expect(await compare(changedBefore, changed)).toBe(1);
+				}
+				for (const mutate of [
+					(v: typeof after) => {
+						v.components.schemas.PersonalApiCredentialIssueRequestV1.properties.scopes.items.enum =
+							v.components.schemas.PersonalApiCredentialIssueRequestV1.properties.scopes.items.enum.filter(
+								(x: string) => x !== "eval:analyze",
+							);
+					},
+					(v: typeof after) => {
+						delete v.paths["/api/v2/evaluation/history"];
+					},
+					(v: typeof after) => {
+						delete v.components.schemas.PersonalApiCredentialMetadataV1
+							.properties.credentialId;
+					},
+				]) {
+					const changed = structuredClone(after);
+					mutate(changed);
+					expect(await compare(common, changed)).toBe(1);
+				}
+
 				const scope = structuredClone(after);
 				scope.components.schemas.PersonalApiCredentialIssueRequestV1.properties.scopes.items.enum.push(
 					"invented:all",

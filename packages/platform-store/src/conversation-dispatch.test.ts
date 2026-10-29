@@ -78,7 +78,7 @@ afterEach(async () => {
 	await client.unsafe(
 		"drop function if exists platform.conversation_dispatch_failure()",
 	);
-	await client`truncate platform.conversation_generation_tombstones,
+	await client`truncate platform.task_feedback, platform.conversation_generation_tombstones,
 		platform.connection_installation_commands,
 		platform.connection_installation_authorizations,
 		platform.session_sandbox_allocations,

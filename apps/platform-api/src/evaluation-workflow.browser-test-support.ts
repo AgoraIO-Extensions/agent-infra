@@ -11,7 +11,6 @@ import { migratePlatformDatabase } from "@agent-infra/platform-store";
 import { createRelayKeyEncryptorV1 } from "@agent-infra/secret-store";
 import { createRelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 import { serve } from "@hono/node-server";
-import postgres from "postgres";
 import { startMinioFileFixtureV1 } from "../../../packages/object-storage/src/minio.test-support.js";
 import {
 	type ConversationRuntimeEvent,
@@ -27,7 +26,10 @@ import { PostgresConversationDispatchStoreV1 } from "../../../packages/platform-
 import { PostgresConversationEventTransactionV1 } from "../../../packages/platform-store/src/conversation-events.js";
 import { PostgresEvaluationDataStoreV1 } from "../../../packages/platform-store/src/evaluation-data.js";
 import { PostgresEvaluationTaskAuthorityV1 } from "../../../packages/platform-store/src/evaluation-task-authority.js";
-import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
+import {
+	openPostgresTestClient,
+	startPostgresTestDatabase,
+} from "../../../packages/platform-store/src/postgres-test.js";
 import { markSessionSandboxReadyFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.js";
 import { PostgresTaskAuthorizationStoreV1 } from "../../../packages/platform-store/src/task-authorization.js";
 import { createConversationRuntimeV2 } from "../../platform-worker/src/conversation-runtime.js";
@@ -54,7 +56,6 @@ const agentId = "evaluation-browser-agent";
 const fixtureScope = "browser-evaluation";
 const approvalId = "browser-synthetic";
 const workerId = "evaluation-browser-worker";
-const json = (value: unknown) => value as postgres.JSONValue;
 const user = (userId: string) => ({
 	schemaVersion: 1 as const,
 	userId,
@@ -122,7 +123,8 @@ export async function startEvaluationWorkflowBrowserFixture() {
 	};
 	try {
 		await migratePlatformDatabase(database);
-		const sql = postgres(database.databaseUrl, { max: 4 });
+		const sql = openPostgresTestClient(database, 4);
+		const json = (value: unknown) => value as Parameters<typeof sql.json>[0];
 		cleanup.push(() => sql.end());
 		const objects = await startMinioFileFixtureV1("file", "eval");
 		cleanup.push(() => objects.close());

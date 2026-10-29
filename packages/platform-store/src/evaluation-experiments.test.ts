@@ -1275,7 +1275,7 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 		if (!bodyObject || !reasonObject)
 			throw new Error("missing controlled objects");
 		for (const lifetime of ["content", "score_metadata"] as const) {
-			const deadline = new Date(Date.now() + 350).toISOString();
+			const deadline = new Date(Date.now() + 5000).toISOString();
 			if (lifetime === "content")
 				await sql`update platform.evaluation_derived_objects set expires_at=${deadline}::timestamptz,data=jsonb_set(data,'{expiresAt}',to_jsonb(${deadline}::text)) where id=${bodyObject.id}`;
 			else
@@ -3845,7 +3845,7 @@ it.each(["summary", "history"] as const)(
 			await call();
 			stopAt = reads;
 			reads = 0;
-			deadline = Date.now() + 350;
+			deadline = Date.now() + 5000;
 			const expiry = new Date(deadline).toISOString();
 			if (operation === "summary")
 				await sql`update platform.evaluation_score_intents set data=jsonb_set(data,'{metadataExpiresAt}',to_jsonb(${expiry}::text)) where sample_task_id in(select id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId})`;
