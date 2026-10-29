@@ -6,6 +6,8 @@ const port = Number(process.env.WEB_TEST_PORT ?? 43189);
 // 其他用例仍使用未配置入口的默认构建。
 const authPort = Number(process.env.WEB_AUTH_TEST_PORT ?? port + 1000);
 const authSpecs = /(?:^|[/\\])(?:auth|collection-session)\.spec\.ts$/;
+const integrationSpecs =
+	/(?:^|[/\\])(?:evaluation-data|evaluation-workflow|task-feedback)\.spec\.ts$/;
 const desktop = { viewport: { width: 1440, height: 1000 } };
 const mobile = {
 	viewport: { width: 390, height: 844 },
@@ -36,8 +38,12 @@ export default defineConfig({
 		trace: "off",
 	},
 	projects: [
-		{ name: "desktop", testIgnore: authSpecs, use: desktop },
-		{ name: "mobile", testIgnore: authSpecs, use: mobile },
+		{
+			name: "desktop",
+			testIgnore: [authSpecs, integrationSpecs],
+			use: desktop,
+		},
+		{ name: "mobile", testIgnore: [authSpecs, integrationSpecs], use: mobile },
 		{
 			name: "auth-desktop",
 			testMatch: authSpecs,
@@ -47,6 +53,21 @@ export default defineConfig({
 			name: "auth-mobile",
 			testMatch: authSpecs,
 			use: { ...mobile, baseURL: `http://127.0.0.1:${authPort}` },
+		},
+		// Docker fixture start/stop changes Linux interfaces; keep it away from other Chromium requests.
+		{
+			name: "integration-desktop",
+			testMatch: integrationSpecs,
+			dependencies: ["desktop", "mobile", "auth-desktop", "auth-mobile"],
+			workers: 1,
+			use: desktop,
+		},
+		{
+			name: "integration-mobile",
+			testMatch: integrationSpecs,
+			dependencies: ["integration-desktop"],
+			workers: 1,
+			use: mobile,
 		},
 	],
 	webServer: [

@@ -37,6 +37,8 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | GET session 200，写接口却返回 401 | 直接 HTTP 探针遗漏了浏览器 Origin | 遵守浏览器写入的 Origin/CSRF 契约，保留具体失败阶段；不把协议错误归因于密码或 Cookie |
 | 密码正确但自动登录失败 | 对密码文件使用 `trim()` 会删除合法的首尾空格 | 保留密码空格，只按输入约定删除一个末尾 LF/CRLF，并用含空格密码测试真实 HTTP 提交字节 |
 | 清空后四模板 preflight 和 Agent 创建都通过，Web 首条消息仍返回 `RESOURCE_UNAVAILABLE` | 创建请求恢复了 Agent 默认 Relay Key，但新数据库里当前用户的个人 Relay Key 未设置；标准模板 Web 执行按主体读取个人 Key | credential bootstrap 可声明私有 `personalRelayKeyFile`，在浏览器验收前通过正式个人 Key API 写入空状态并回读；已有 Key 保留。真实同一会话在补齐个人 Key 后由拒绝变为 `202`，不能把这类问题归因于密码 |
+| 首项 Agent 创建报连接失败，后续创建连续 `503`，但稍后原 Agent 已存在 | 服务端真实模型验证允许 120 秒，本次创建实际约 72 秒；旧客户端 30 秒中断后继续发送请求，同一凭证行仍被原事务锁住，日志出现 `55P03`。入口 Nginx 也只有 60 秒等待预算，可能先返回 `504`。原幂等键重放能取回原 Agent | 创建使用五分钟总预算；明确连接故障、正式依赖 `503` 或网关 `504` 只用原 key/body/credential 有界重放。身份/TLS/契约错误立即失败，预算耗尽停止后续创建；状态恢复只读已绑定 Agent，不能换 key 重复创建或把诊断恢复写成原完整运行成功 |
+| 重试 fixture 通过，正式 API 的 `503` 却不匹配重试条件 | fixture 与客户端同时假设嵌套 `error.code`，真实协议使用顶层 `code` | 直接复用 `PilotProtocolErrorV1Schema` 验证 `schemaVersion/code/retryable`；正例采用该契约，错误嵌套、不可重试及其他错误码均保留负例 |
 | 登录与模型目录正常，Messages 模型回合却进入 `unknown` | 上游模型请求返回 `502 upstream_error`，目录可见不代表模型可执行 | 保留直接模型请求的 HTTP 状态与脱敏错误类型；真实 Runtime preflight 失败时停止验收，不替换成功记录或把问题归因于登录 |
 | 模型 HTTP 状态为 `200`，Runtime 仍没有文本或完成事件 | SSE 只含 `message_start` 后紧接 `api_error`；实际 native adapter 回读确认上游过载 | 成功必须包含模型完成事实、文本和终态，不能只看 HTTP 状态；使用已批准 Key 的其他可用模型时，先经同一 native adapter 和完整模板 preflight 复验，再更新配置 |
 | 自定义增量镜像的 revision label 看起来仍是旧源码 | OCI 配置继承基础镜像的 revision，后续 overlay 有自己的构建配方和最终 Digest | 分别保留继承的基础 revision、基础 Digest、overlay Dockerfile hash 和最终 OCI Digest；原容量 receipt 保持原字节，不把旧来源改写为最终 Platform 源码 |
@@ -44,6 +46,7 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | 本地发布构建只报告退出码 1 | BuildKit 到 Docker Hub 的鉴权连接被重置，构建包装器隐藏了 stderr | 在仓库外保留权限受限的构建诊断；受控增量镜像须固定基镜像、源码与全部变化依赖，回读编译产物哈希，并明确区别于完整发布 manifest |
 | 跨用户 API/SSE 均拒绝且页面没有会话正文，浏览器验收仍失败 | Agent 不可见时页面使用新的无权访问卡，探针只匹配旧的会话失效提示 | 接受两种正式拒绝提示，继续验证 API/SSE 的 403/404、用户消息和助手正文不可见 |
 | CI 一直重跑，验证无法结束 | 把 run 的 `updatedAt` 当成心跳，误取消仍在执行的长测试 | 查询当前 job/step；只有终态或明确失联证据才考虑重跑，禁止以轮询超时推断任务已经停止 |
+| Linux Hosted 浏览器偶发空白，审批控件超时；本地重复通过 | 当前失败记录确认 54 个脚本请求中 44 个为 `ERR_NETWORK_CHANGED`，React/Router 尚未创建、API 请求为零；时间落在另一 worker 的 PostgreSQL/MinIO 容器清理窗口，默认 bridge 的生命周期会改变宿主网络接口 | 普通浏览器测试保持两个 worker，使用真实 Docker 依赖的评测数据/流程/反馈测试放入独立项目，依次等待普通项目、真实桌面和真实移动端结束；保留全部视口、断言和超时。真实 Playwright 调度回归证明无重叠，完整 Hosted 运行再验证效果，不靠浏览器重载、忽略网络错误或放宽断言通过 |
 | OpenCode 原生工具测试只有一次模型请求，或文件工具被误拒绝 | 完整参数通知异步到达；权限请求还可能携带 diff/provider 展示元数据，不能一律当作调用参数 | 固定 OpenCode 只采用公告参数并最多等一秒接收更新；通用 ACP 才用请求补齐空参数并拒绝冲突。异步授权后重新核对同一活动公告和参数。必须运行完整原生工具组，四种工具的通过不能代替 read/write/edit/Bash/apply_patch/WebSearch 验证 |
 | 标准 Codex Agent 一直处于 `creating`，Worker 记录 `RUNTIME_READINESS_UNAVAILABLE` | ACK ECI 节点没有可用 Landlock ABI V5；旧 Worker 没有给标准 Codex Workload 注入 Worker-owned `container-boundary` 参数，Runtime 按默认 Landlock 启动并 fail closed | `policy.codexContainerBoundaryEnabled=true` 只允许 Worker 为标准专属 Pod 注入 `container-boundary`、`worker-v1`、可打印 scope 和 HMAC attestation；部署后必须回读 Pod env 和签名 readiness，不能用 healthz 或 Pod Ready 替代 |
 | 破坏性重建数据库后 API credential 能签发，但 Agent API 仍返回 `401` 或 `400` | LDAP 登录会产生新的 canonical Platform user UUID；私有配置里残留的 `allowedPrincipals`、`apiSubjectMap` 或 custom admission principal 与当前主体不一致 | `bootstrap-login` 通过真实 session 生成私有身份候选和新浏览器 state；`runtime-inputs` 校验并发布已声明的身份键，API 私有配置显式映射原本批准的主体，再用当前 credential 验证 create/read |

@@ -5,13 +5,127 @@ import { constants } from "node:fs";
 import { open, readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
+import { PilotProtocolErrorV1Schema } from "../../packages/contracts/src/pilot/errors.ts";
 
 type Binding = { name: string; agentId: string; ready: boolean };
+type Clock = {
+	now: () => number;
+	wait: (milliseconds: number) => Promise<void>;
+};
 type Hooks = {
 	onBinding?: (binding: Binding) => Promise<void>;
 	bindings?: Record<string, string>;
 	materials?: Record<string, { token: string; body: unknown }>;
+	clock?: Clock;
 };
+const clock: Clock = {
+	now: () => Math.floor(performance.now()),
+	wait: (milliseconds) =>
+		new Promise((resolve) => setTimeout(resolve, milliseconds)),
+};
+const creationBudgetMs = 300_000;
+const transientCodes = new Set([
+	"EAI_AGAIN",
+	"ENOTFOUND",
+	"ECONNRESET",
+	"ECONNREFUSED",
+	"ETIMEDOUT",
+	"EHOSTUNREACH",
+	"ENETUNREACH",
+	"EPIPE",
+	"UND_ERR_CONNECT_TIMEOUT",
+	"UND_ERR_SOCKET",
+	"REQUEST_TIMEOUT",
+]);
+function transportCode(error: unknown) {
+	const value = error as {
+		name?: string;
+		code?: string;
+		cause?: { code?: string };
+	};
+	if (value?.name === "TimeoutError") return "REQUEST_TIMEOUT";
+	const code = value?.cause?.code ?? value?.code;
+	if (typeof code === "string" && transientCodes.has(code)) return code;
+	if (
+		typeof code === "string" &&
+		/CERT|TLS|SSL|SELF_SIGNED|UNABLE_TO_VERIFY/u.test(code)
+	)
+		return "TLS_INVALID";
+	return "TRANSPORT_UNCLASSIFIED";
+}
+const diagnostics = () => ({
+	attempts: 0,
+	transportFailures: [] as string[],
+	dependencyUnavailableResponses: 0,
+	gatewayTimeoutResponses: 0,
+	budgetExhausted: false,
+});
+
+async function requestJson(
+	url: string,
+	init: RequestInit,
+	deadline: number,
+	attemptLimit: number,
+	time: Clock,
+	evidence: ReturnType<typeof diagnostics>,
+	retry = true,
+) {
+	for (;;) {
+		const remaining = deadline - time.now();
+		if (remaining <= 0) {
+			evidence.budgetExhausted = true;
+			return { response: null, body: null, error: "REQUEST_BUDGET_EXHAUSTED" };
+		}
+		evidence.attempts++;
+		try {
+			const response = await fetch(url, {
+				...init,
+				signal: AbortSignal.timeout(Math.min(attemptLimit, remaining)),
+				redirect: "error",
+			});
+			// Gateway timeout does not tell us whether the API transaction committed.
+			if (response.status === 504) {
+				await response.body?.cancel().catch(() => undefined);
+				evidence.gatewayTimeoutResponses++;
+				if (!retry) return { response, body: null, error: "GATEWAY_TIMEOUT" };
+				await time.wait(Math.max(0, Math.min(1000, deadline - time.now())));
+				continue;
+			}
+			let body: any;
+			try {
+				body = await response.json();
+			} catch (error) {
+				if (
+					error instanceof SyntaxError ||
+					![200, 201].includes(response.status)
+				)
+					return { response, body: null, error: "RESPONSE_INVALID" };
+				throw error;
+			}
+			if (time.now() >= deadline) {
+				evidence.budgetExhausted = true;
+				return { response, body: null, error: "REQUEST_BUDGET_EXHAUSTED" };
+			}
+			const failure = PilotProtocolErrorV1Schema.safeParse(body);
+			if (
+				response.status !== 503 ||
+				!failure.success ||
+				failure.data.code !== "DEPENDENCY_UNAVAILABLE" ||
+				!failure.data.retryable
+			)
+				return { response, body };
+			evidence.dependencyUnavailableResponses++;
+			if (!retry) return { response, body };
+		} catch (error) {
+			const code = transportCode(error);
+			if (!evidence.transportFailures.includes(code))
+				evidence.transportFailures.push(code);
+			if (!transientCodes.has(code) || !retry)
+				return { response: null, body: null, error: code };
+		}
+		await time.wait(Math.max(0, Math.min(1000, deadline - time.now())));
+	}
+}
 
 const digest = (value: string) =>
 	createHash("sha256").update(value).digest("hex");
@@ -60,7 +174,8 @@ function parseInput(value: unknown) {
 	const input = value as Record<string, any>;
 	if (
 		Object.keys(input).some(
-			(key) => !["schemaVersion", "origin", "requests", "waitSeconds"].includes(key),
+			(key) =>
+				!["schemaVersion", "origin", "requests", "waitSeconds"].includes(key),
 		)
 	)
 		fail("CONFIGURATION_INVALID");
@@ -91,7 +206,10 @@ function parseInput(value: unknown) {
 			fail("CONFIGURATION_INVALID");
 		if (
 			Object.keys(request).some(
-				(key) => !["name", "bodyFile", "credentialFile", "idempotencyKey"].includes(key),
+				(key) =>
+					!["name", "bodyFile", "credentialFile", "idempotencyKey"].includes(
+						key,
+					),
 			)
 		)
 			fail("CONFIGURATION_INVALID");
@@ -132,8 +250,10 @@ async function waitForReady(
 	token: string,
 	agentId: string,
 	waitSeconds: number,
+	time: Clock,
 ) {
-	const deadline = Date.now() + waitSeconds * 1000;
+	const deadline = time.now() + waitSeconds * 1000;
+	const evidence = diagnostics();
 	let last: { status: string; serviceAvailability: string | null } = {
 		status: "unknown",
 		serviceAvailability: null,
@@ -152,21 +272,24 @@ async function waitForReady(
 		"unavailable",
 	]);
 	for (;;) {
-		const response = await fetch(
+		const { response, body, error } = await requestJson(
 			`${origin}/api/v2/agents/${encodeURIComponent(agentId)}/state`,
-			{
-				headers: { Authorization: `Bearer ${token}` },
-				signal: AbortSignal.timeout(10_000),
-				redirect: "error",
-			},
+			{ headers: { Authorization: `Bearer ${token}` } },
+			waitSeconds === 0 ? time.now() + 10_000 : deadline,
+			10_000,
+			time,
+			evidence,
+			waitSeconds !== 0,
 		);
-		let body: any = null;
-		try {
-			body = await response!.json();
-		} catch {
-			body = null;
-		}
-		if (response.status === 200 && body && typeof body === "object") {
+		if (error || response?.status !== 200)
+			return {
+				pass: false,
+				state: last,
+				timeout: evidence.budgetExhausted,
+				error: error ?? "STATE_HTTP_REJECTED",
+				evidence,
+			};
+		if (body && typeof body === "object") {
 			if (body.schemaVersion !== 1 || body.agentId !== agentId)
 				fail("STATE_BINDING_INVALID");
 			last = {
@@ -181,23 +304,26 @@ async function waitForReady(
 						: null,
 			};
 			if (last.status === "available" && last.serviceAvailability === "ready")
-				return { pass: true, state: last, timeout: false };
+				return { pass: true, state: last, timeout: false, evidence };
 			if (["creation_failed", "disabled"].includes(last.status))
-				return { pass: false, state: last, timeout: false };
+				return { pass: false, state: last, timeout: false, evidence };
+		} else fail("STATE_BINDING_INVALID");
+		if (time.now() >= deadline) {
+			evidence.budgetExhausted = true;
+			return { pass: false, state: last, timeout: true, evidence };
 		}
-		if (Date.now() >= deadline)
-			return { pass: false, state: last, timeout: true };
-		await new Promise((resolve) => setTimeout(resolve, 1000));
+		await time.wait(Math.min(1000, deadline - time.now()));
 	}
 }
 
 export async function provisionAgents(
 	input: unknown,
-	{ onBinding, bindings = {}, materials = {} }: Hooks = {},
+	{ onBinding, bindings = {}, materials = {}, clock: time = clock }: Hooks = {},
 ) {
 	const parsed = parseInput(input);
 	const results = [];
 	for (const request of parsed.requests) {
+		const creation = diagnostics();
 		try {
 			const frozen = Object.hasOwn(materials, request.name)
 				? materials[request.name]
@@ -211,27 +337,30 @@ export async function provisionAgents(
 			const existingId = Object.hasOwn(bindings, request.name)
 				? bindings[request.name]
 				: undefined;
-			const response = existingId
-				? null
-				: await fetch(`${parsed.origin}/api/v2/agents`, {
-						method: "POST",
-						headers: {
-							Authorization: `Bearer ${token}`,
-							"Content-Type": "application/json",
-							"Idempotency-Key": request.idempotencyKey,
+			// Freeze the original bytes and key: a disconnected caller cannot know whether creation committed.
+			const creationResult = existingId
+				? {
+						response: null,
+						body: { schemaVersion: 1, agentId: existingId },
+						error: undefined,
+					}
+				: await requestJson(
+						`${parsed.origin}/api/v2/agents`,
+						{
+							method: "POST",
+							headers: {
+								Authorization: `Bearer ${token}`,
+								"Content-Type": "application/json",
+								"Idempotency-Key": request.idempotencyKey,
+							},
+							body: JSON.stringify(body),
 						},
-						body: JSON.stringify(body),
-						signal: AbortSignal.timeout(30_000),
-						redirect: "error",
-					});
-			let responseBody: any = null;
-			try {
-				responseBody = existingId
-					? { schemaVersion: 1, agentId: existingId }
-					: await response!.json();
-			} catch {
-				responseBody = null;
-			}
+						time.now() + creationBudgetMs,
+						creationBudgetMs,
+						time,
+						creation,
+					);
+			const { response, body: responseBody } = creationResult;
 			const agentId =
 				responseBody?.schemaVersion === 1 &&
 				typeof responseBody.agentId === "string" &&
@@ -240,6 +369,7 @@ export async function provisionAgents(
 					? responseBody.agentId
 					: undefined;
 			const created =
+				creationResult.error === undefined &&
 				(existingId !== undefined ||
 					response?.status === 201 ||
 					response?.status === 200) &&
@@ -247,23 +377,40 @@ export async function provisionAgents(
 			if (created)
 				await onBinding?.({ name: request.name, agentId, ready: false });
 			const readiness = created
-				? await waitForReady(parsed.origin, token, agentId, parsed.waitSeconds)
-				: { pass: false, state: undefined, timeout: false };
+				? await waitForReady(
+						parsed.origin,
+						token,
+						agentId,
+						parsed.waitSeconds,
+						time,
+					)
+				: {
+						pass: false,
+						state: undefined,
+						timeout: false,
+						error: creationResult.error,
+						evidence: undefined,
+					};
 			if (created && readiness.pass)
 				await onBinding?.({ name: request.name, agentId, ready: true });
 			results.push({
 				name: request.name,
-				status: response?.status ?? 200,
+				status: response?.status ?? (existingId ? 200 : null),
 				pass: created && readiness.pass,
+				creation,
+				...(readiness.evidence ? { readiness: readiness.evidence } : {}),
+				...(readiness.error ? { error: readiness.error } : {}),
 				...(agentId === undefined ? {} : { agentHash: digest(agentId) }),
 				...(readiness.state === undefined ? {} : { state: readiness.state }),
 				...(readiness.timeout === true ? { stateTimeout: true } : {}),
 			});
+			if (!created || !readiness.pass) break;
 		} catch (error) {
 			results.push({
 				name: request.name,
 				status: null,
 				pass: false,
+				creation,
 				error:
 					error instanceof Error &&
 					new Set([
@@ -276,6 +423,7 @@ export async function provisionAgents(
 						? error.message
 						: "REQUEST_FAILED",
 			});
+			break;
 		}
 	}
 	return {
@@ -283,7 +431,10 @@ export async function provisionAgents(
 		kind: "ack-agent-provision",
 		originHash: digest(parsed.origin),
 		results,
-		pass: results.every((result) => result.pass),
+		skippedRequestCount: parsed.requests.length - results.length,
+		pass:
+			results.length === parsed.requests.length &&
+			results.every((result) => result.pass),
 	};
 }
 

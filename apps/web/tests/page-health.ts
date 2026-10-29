@@ -1,4 +1,287 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import {
+	type ConsoleMessage,
+	expect,
+	type Locator,
+	type Page,
+	type Request,
+	type Response,
+	type TestInfo,
+} from "@playwright/test";
+import type { AnyRouter } from "@tanstack/react-router";
+
+/** 白屏失败的有界启动证据；不保存消息、请求正文、Header 或原始异常文本。 */
+export function recordStartupEvidence(page: Page) {
+	const startedAt = Date.now();
+	const events: object[] = [];
+	const counters = () => ({ issued: 0, finished: 0, failed: 0 });
+	const api = counters();
+	const criticalEvents: object[] = [];
+	let criticalDropped = 0;
+	// 脚本事件可能先占满100条；另保留最近20条API状态，缺少单条记录不代表请求未发生。
+	const apiResponses: object[] = [];
+	const requestNavigations = new WeakMap<Request, number>();
+	let dropped = 0;
+	let navigation = 0;
+	let latestNavigation = {
+		navigation,
+		api: counters(),
+		scripts: counters(),
+		scriptEvents: [] as object[],
+		scriptDropped: 0,
+	};
+	const path = (url: string) => {
+		try {
+			const value = new URL(url);
+			return value.protocol === "http:" || value.protocol === "https:"
+				? value.pathname.slice(0, 256)
+				: "non-http";
+		} catch {
+			return "unavailable";
+		}
+	};
+	const isApi = (request: Request) => path(request.url()).startsWith("/api/");
+	const add = (event: { kind: string; [key: string]: unknown }) => {
+		const entry = { elapsedMs: Date.now() - startedAt, navigation, ...event };
+		if (events.length < 100) events.push(entry);
+		else dropped++;
+		if (
+			["request-failed", "page-error", "console-error", "page-crash"].includes(
+				event.kind,
+			)
+		) {
+			criticalEvents.push(entry);
+			if (criticalEvents.length > 20) {
+				criticalEvents.shift();
+				criticalDropped++;
+			}
+		}
+	};
+	const scriptEvent = (event: object) => {
+		latestNavigation.scriptEvents.push({
+			elapsedMs: Date.now() - startedAt,
+			...event,
+		});
+		if (latestNavigation.scriptEvents.length > 20) {
+			latestNavigation.scriptEvents.shift();
+			latestNavigation.scriptDropped++;
+		}
+	};
+	const observe = (value: Request, phase: "issued" | "finished" | "failed") => {
+		const current = requestNavigations.get(value) === navigation;
+		if (isApi(value)) {
+			api[phase]++;
+			if (current) latestNavigation.api[phase]++;
+		}
+		if (current && value.resourceType() === "script") {
+			latestNavigation.scripts[phase]++;
+			scriptEvent({ kind: phase, path: path(value.url()) });
+		}
+	};
+	const request = (value: Request) => {
+		let mainDocument = false;
+		try {
+			mainDocument =
+				value.resourceType() === "document" &&
+				value.isNavigationRequest() &&
+				value.frame() === page.mainFrame();
+		} catch {}
+		if (mainDocument) {
+			navigation++;
+			latestNavigation = {
+				navigation,
+				api: counters(),
+				scripts: counters(),
+				scriptEvents: [],
+				scriptDropped: 0,
+			};
+			add({ kind: "document", path: path(value.url()) });
+		}
+		requestNavigations.set(value, navigation);
+		observe(value, "issued");
+		if (value.resourceType() === "script")
+			add({ kind: "script-request", path: path(value.url()) });
+	};
+	const finished = (value: Request) => {
+		observe(value, "finished");
+		if (["document", "script"].includes(value.resourceType()))
+			add({
+				kind: "finished",
+				navigation: requestNavigations.get(value) ?? navigation,
+				type: value.resourceType(),
+				path: path(value.url()),
+			});
+	};
+	const failed = (value: Request) => {
+		observe(value, "failed");
+		add({
+			kind: "request-failed",
+			navigation: requestNavigations.get(value) ?? navigation,
+			type: value.resourceType(),
+			path: path(value.url()),
+			code:
+				value.failure()?.errorText.match(/^net::ERR_[A-Z_]+$/)?.[0] ?? "other",
+		});
+	};
+	const response = (value: Response) => {
+		const type = value.request().resourceType();
+		if (isApi(value.request())) {
+			apiResponses.push({
+				navigation: requestNavigations.get(value.request()) ?? navigation,
+				path: path(value.url()),
+				status: value.status(),
+			});
+			if (apiResponses.length > 20) apiResponses.shift();
+		}
+		const mediaType = value.headers()["content-type"]?.split(";", 1)[0]?.trim();
+		const contentType = [
+			"text/html",
+			"text/javascript",
+			"application/javascript",
+			"application/json",
+			"text/css",
+			"application/octet-stream",
+		].includes(mediaType ?? "")
+			? mediaType
+			: "other";
+		if (
+			type === "script" &&
+			requestNavigations.get(value.request()) === navigation
+		)
+			scriptEvent({
+				kind: "response",
+				path: path(value.url()),
+				status: value.status(),
+				contentType,
+			});
+		if (type === "document" || type === "script" || isApi(value.request()))
+			add({
+				kind: "response",
+				navigation: requestNavigations.get(value.request()) ?? navigation,
+				type,
+				path: path(value.url()),
+				status: value.status(),
+				contentType,
+			});
+	};
+	const pageError = (error: Error) => {
+		const category =
+			/dynamically imported module|module script|MIME type/i.test(error.message)
+				? "module-load"
+				: /unexpected token|syntax/i.test(error.message)
+					? "syntax"
+					: "runtime";
+		add({ kind: "page-error", category });
+	};
+	const consoleError = (message: ConsoleMessage) => {
+		if (message.type() !== "error") return;
+		const location = message.location();
+		add({
+			kind: "console-error",
+			path: path(location.url),
+			line: location.lineNumber,
+			column: location.columnNumber,
+		});
+	};
+	const crash = () => add({ kind: "page-crash" });
+	page.on("request", request);
+	page.on("requestfinished", finished);
+	page.on("requestfailed", failed);
+	page.on("response", response);
+	page.on("pageerror", pageError);
+	page.on("console", consoleError);
+	page.on("crash", crash);
+	const dispose = () => {
+		page.off("request", request);
+		page.off("requestfinished", finished);
+		page.off("requestfailed", failed);
+		page.off("response", response);
+		page.off("pageerror", pageError);
+		page.off("console", consoleError);
+		page.off("crash", crash);
+	};
+	return {
+		dispose,
+		async attach(info: TestInfo) {
+			const document = await page
+				.evaluate(() => {
+					const app = window.document.getElementById("app");
+					const router = (
+						window as typeof window & { __TSR_ROUTER__?: AnyRouter }
+					).__TSR_ROUTER__;
+					const matches = (value: unknown) =>
+						Array.isArray(value)
+							? {
+									count: value.length,
+									statuses: value
+										.slice(0, 64)
+										.map((match) =>
+											[
+												"pending",
+												"success",
+												"error",
+												"redirected",
+												"notFound",
+											].includes(match?.status)
+												? match.status
+												: "other",
+										),
+								}
+							: null;
+					let routing: Record<string, unknown> = { present: Boolean(router) };
+					try {
+						if (router)
+							routing = {
+								present: true,
+								status: ["pending", "idle"].includes(router.state.status)
+									? router.state.status
+									: "other",
+								isLoading:
+									typeof router.state.isLoading === "boolean"
+										? router.state.isLoading
+										: null,
+								isTransitioning:
+									typeof router.state.isTransitioning === "boolean"
+										? router.state.isTransitioning
+										: null,
+								matches: matches(router.state.matches),
+								pendingMatches: matches(router.stores?.pendingMatches?.get()),
+							};
+					} catch {
+						routing = { present: true, unreadable: true };
+					}
+					return {
+						readyState: window.document.readyState,
+						appChildren: app?.childElementCount ?? null,
+						bodyTextLength: window.document.body?.innerText.length ?? null,
+						reactRootCreated: app
+							? Object.getOwnPropertyNames(app).some((key) =>
+									key.startsWith("__reactContainer$"),
+								)
+							: false,
+						router: routing,
+					};
+				})
+				.catch(() => null);
+			await info
+				.attach("startup-evidence", {
+					body: JSON.stringify({
+						path: path(page.url()),
+						navigation,
+						document,
+						api,
+						apiResponses,
+						latestNavigation,
+						criticalEvents,
+						criticalDropped,
+						events,
+						dropped,
+					}),
+					contentType: "application/json",
+				})
+				.catch(() => undefined);
+		},
+	};
+}
 
 // 同页同名控件检查（#3040 AC-2）、动作后的焦点采样（#3235）与请求进行中的焦点（#3242）；
 // 控制台错误与横向溢出用 primitive-styles 的 expectCleanPage。
