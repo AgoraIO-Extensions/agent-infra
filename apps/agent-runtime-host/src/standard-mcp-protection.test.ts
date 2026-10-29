@@ -1,7 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ fs: vi.fn(), process: vi.fn() }));
-vi.mock("node:fs", () => ({ readFileSync: mocks.fs }));
+vi.mock("node:fs", async (importOriginal) => ({
+	...(await importOriginal<typeof import("node:fs")>()),
+	readFileSync: mocks.fs,
+}));
 vi.mock("./process-protection.js", () => ({
 	assertRuntimeProcessProtection: mocks.process,
 }));
