@@ -148,7 +148,7 @@ export class PostgresEvaluationAnalysisV1 {
 				});
 				if (!grant || grant.revoked) throw new EvaluationDataErrorV1("denied");
 			}
-			const final = await (content
+			const final = await (content && content.source !== false
 				? service.authorizeAnalyze
 				: service.authorizeAnalysisMetadata)(
 				request,

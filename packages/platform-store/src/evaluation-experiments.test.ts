@@ -3742,6 +3742,29 @@ it("keeps authorized old-version analysis after a new deployment policy and expl
 		} finally {
 			experimentPolicy = oldPolicy;
 		}
+		const [originalVersion] =
+			await sql`select data from platform.evaluation_versions where id=${command.versionId}`;
+		const contentExpired = new Date(Date.now() - 1).toISOString();
+		await sql`update platform.evaluation_versions set expires_at=${contentExpired}::timestamptz,data=jsonb_set(data,'{expiresAt}',to_jsonb(${contentExpired}::text)) where id=${command.versionId}`;
+		try {
+			const retired = await analysis.summary(
+				request("analyst-history"),
+				original.experimentId,
+			);
+			expect(retired.contentAvailable).toBe(false);
+			expect(retired.taskTypesAvailable).toBe(false);
+			expect(retired.fixedSamples).toBe(1);
+			expect(retired.items).toHaveLength(2);
+			await expect(
+				analysis.detail(
+					request("analyst-history"),
+					original.experimentId,
+					retired.items[0]?.sampleTaskId ?? "",
+				),
+			).rejects.toMatchObject({ code: "denied" });
+		} finally {
+			await sql`update platform.evaluation_versions set expires_at=${originalVersion?.data.expiresAt}::timestamptz,data=${sql.json(originalVersion?.data)} where id=${command.versionId}`;
+		}
 		await data.revoke(
 			request("admin"),
 			randomUUID(),
