@@ -137,6 +137,81 @@ for (const scenario of [
 	});
 }
 
+for (const budget of [5000, 2000]) {
+	test(`entry retry clock respects the 2000ms boundary with a ${budget}ms budget`, async (t) => {
+		const directory = await mkdtemp(join(tmpdir(), "entry-retry-clock-"));
+		t.after(() => rm(directory, { recursive: true, force: true }));
+		const allowed = "Bearer SYNTHETIC_ALLOWED_CLOCK";
+		const content = "<html>synthetic clock fixture</html>";
+		const input = {
+			url: "https://entry.example.test/app",
+			sourceSha: "a".repeat(40),
+			imageDigest: `sha256:${"b".repeat(64)}`,
+			configurationRevision: "clock-fixture",
+			contentSha256: createHash("sha256").update(content).digest("hex"),
+			allowedAuthorizationFile: join(directory, "allowed"),
+			deniedAuthorizationFile: join(directory, "denied"),
+		};
+		await writeFile(input.allowedAuthorizationFile, allowed, { mode: 0o600 });
+		await writeFile(
+			input.deniedAuthorizationFile,
+			"Bearer SYNTHETIC_DENIED_CLOCK",
+			{ mode: 0o600 },
+		);
+		const start = Date.UTC(2026, 9, 29);
+		t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: start });
+		const calls = [];
+		const firstRequest = Promise.withResolvers();
+		t.mock.method(globalThis, "fetch", async (_url, options) => {
+			calls.push(Date.now() - start);
+			assert(options.signal instanceof AbortSignal);
+			if (calls.length === 1) {
+				firstRequest.resolve();
+				throw new TypeError("synthetic transport failure", {
+					cause: Object.assign(new Error("synthetic cause"), {
+						code: "EAI_AGAIN",
+					}),
+				});
+			}
+			const authorized = options.headers.authorization === allowed;
+			return new Response(authorized ? content : "", {
+				status: authorized ? 200 : 403,
+				headers: { "content-type": "text/html" },
+			});
+		});
+		const pending = verifyCustomAgentWeb(input, {
+			transportRetryTimeoutMs: budget,
+		});
+		await firstRequest.promise;
+		// setImmediate is not mocked: settle the rejected fetch and install its retry timer.
+		await new Promise(setImmediate);
+		assert.deepEqual(calls, [0]);
+		t.mock.timers.tick(1999);
+		await new Promise(setImmediate);
+		assert.deepEqual(calls, [0]);
+		t.mock.timers.tick(1);
+		const result = await pending;
+		const retry = budget > 2000;
+		assert.deepEqual(
+			calls,
+			retry ? [0, 2000, 2000, 2000, 2000, 2000] : [0, 2000, 2000, 2000, 2000],
+		);
+		assert.equal(result.pass, retry);
+		assert.deepEqual(result.results[0], {
+			name: "anonymous",
+			status: retry ? 403 : null,
+			pass: retry,
+			attempts: retry ? 2 : 1,
+			transportFailures: ["EAI_AGAIN"],
+			...(retry ? {} : { error: "EAI_AGAIN" }),
+		});
+		assert.equal(result.results.length, 5);
+		assert(
+			result.results.slice(1).every((item) => item.pass && item.attempts === 1),
+		);
+	});
+}
+
 test("detects permissive and leaking HTTPS custom-Web services", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "custom-agent-web-probe-"));
 	let server;
