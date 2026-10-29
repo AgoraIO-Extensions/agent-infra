@@ -532,6 +532,8 @@ export function workloadRetryDelayMsV1(
 
 export function openPostgresWorkloadReconciliationStoreV1(options: {
 	readonly databaseUrl: string;
+	/** Fixed Worker lanes; omitted selection retains mixed scheduling. */
+	readonly selection?: "lifecycle" | "monitor";
 	readonly runtimeModelVersion?: 4;
 	readonly retryDelayMs?: number;
 	readonly monitorDelayMs?: number;
@@ -539,6 +541,14 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 	/** Defaults to 30 minutes; `null` disables automatic idle reclaim. */
 	readonly idleSandboxReclaimAfterMs?: number | null;
 }): WorkloadReconciliationStorePortV1 & { close(): Promise<void> } {
+	if (
+		options.selection !== undefined &&
+		options.selection !== "lifecycle" &&
+		options.selection !== "monitor"
+	)
+		throw new TypeError("Invalid Workload selection");
+	const activeSelection =
+		options.selection === undefined ? null : options.selection === "lifecycle";
 	if (
 		options.runtimeModelVersion !== undefined &&
 		options.runtimeModelVersion !== 4
@@ -619,6 +629,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 				) schedule
 				where (ap.approval_revision is not null or ap.creation_channel = 'api')
 				and a.id <> all(${sql.array(excluded as string[])}::text[])
+				and (${activeSelection}::boolean is null or schedule.active = ${activeSelection}::boolean)
 				and (
 					(w.agent_id is null and ap.status <> 'creation_failed')
 					or w.next_attempt_at <= clock_timestamp()

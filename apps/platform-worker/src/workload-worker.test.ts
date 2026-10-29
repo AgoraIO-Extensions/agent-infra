@@ -11,7 +11,15 @@ const store = vi.hoisted(() => ({
 	runNext: vi.fn<() => Promise<"idle" | "advanced">>(),
 	close: vi.fn<() => Promise<void>>(),
 }));
+const monitorStore = vi.hoisted(() => ({
+	runNext: vi.fn<() => Promise<"idle" | "advanced">>(),
+	close: vi.fn<() => Promise<void>>(),
+}));
 const fileCleanup = vi.hoisted(() => ({
+	runOnce: vi.fn<() => Promise<boolean>>(),
+	close: vi.fn<() => Promise<void>>(),
+}));
+const evaluation = vi.hoisted(() => ({
 	runOnce: vi.fn<() => Promise<boolean>>(),
 	close: vi.fn<() => Promise<void>>(),
 }));
@@ -25,10 +33,17 @@ vi.mock("./evaluation-scoring-worker.js", () => ({
 vi.mock("./file-worker.js", () => ({
 	createPlatformFileReconciliationWorkerV1: () => fileCleanup,
 }));
+vi.mock("./evaluation-data-worker.js", () => ({
+	createEvaluationDataWorkerV1: () => evaluation,
+}));
 vi.mock("@agent-infra/platform-store", () => ({
-	openPostgresWorkloadReconciliationStoreV1: () => {
-		store.opened();
-		return store;
+	openPostgresWorkloadReconciliationStoreV1: (options: {
+		selection?: string;
+	}) => {
+		return (
+			store.opened(options) ??
+			(options.selection === "monitor" ? monitorStore : store)
+		);
 	},
 }));
 
@@ -68,13 +83,142 @@ beforeEach(() => {
 	scorer.close.mockReset().mockResolvedValue();
 	fileCleanup.runOnce.mockReset().mockResolvedValue(true);
 	fileCleanup.close.mockReset().mockResolvedValue();
+	evaluation.runOnce.mockReset().mockResolvedValue(true);
+	evaluation.close.mockReset().mockResolvedValue();
 	store.opened.mockReset();
 	store.runNext.mockReset().mockResolvedValue("idle");
 	store.close.mockReset().mockResolvedValue();
+	monitorStore.runNext.mockReset().mockResolvedValue("idle");
+	monitorStore.close.mockReset().mockResolvedValue();
 });
 afterEach(() => vi.useRealTimers());
 
 describe("Workload Worker lifecycle", () => {
+	it("advances a newly due lifecycle while another Agent monitor remains in flight", async () => {
+		const monitor = Promise.withResolvers<"idle">();
+		monitorStore.runNext.mockReturnValueOnce(monitor.promise);
+		// The previous mixed poller first selects the only due work: this monitor.
+		store.opened.mockImplementation((options: { selection?: string }) =>
+			options.selection === undefined ? monitorStore : undefined,
+		);
+		let lifecycleDue = false;
+		let advanced = false;
+		store.runNext.mockImplementation(async () => {
+			if (!lifecycleDue) return "idle";
+			lifecycleDue = false;
+			advanced = true;
+			return "advanced";
+		});
+		const worker = createPlatformWorkloadWorkerV1(fixture());
+		try {
+			worker.start();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(monitorStore.runNext).toHaveBeenCalledOnce();
+			lifecycleDue = true;
+			await vi.advanceTimersByTimeAsync(10);
+			expect(advanced).toBe(true);
+			expect(monitorStore.runNext).toHaveBeenCalledOnce();
+		} finally {
+			monitor.resolve("idle");
+			await worker.stop();
+		}
+	});
+
+	it("keeps manual fallback in the two polling slots and drains it before closing", async () => {
+		const lifecycle = Promise.withResolvers<"idle">();
+		const monitor = Promise.withResolvers<"idle">();
+		const fallback = Promise.withResolvers<"advanced">();
+		store.runNext.mockReturnValueOnce(lifecycle.promise);
+		monitorStore.runNext
+			.mockReturnValueOnce(monitor.promise)
+			.mockReturnValueOnce(fallback.promise);
+		const worker = createPlatformWorkloadWorkerV1(fixture());
+		worker.start();
+		await vi.advanceTimersByTimeAsync(1);
+		const manual = worker.tick();
+		const stopped = worker.stop();
+		try {
+			await vi.advanceTimersByTimeAsync(100);
+			expect(store.runNext).toHaveBeenCalledOnce();
+			expect(monitorStore.runNext).toHaveBeenCalledOnce();
+			lifecycle.resolve("idle");
+			await vi.advanceTimersByTimeAsync(1);
+			expect(store.runNext).toHaveBeenCalledTimes(2);
+			expect(monitorStore.runNext).toHaveBeenCalledOnce();
+			monitor.resolve("idle");
+			await vi.advanceTimersByTimeAsync(1);
+			expect(monitorStore.runNext).toHaveBeenCalledTimes(2);
+			expect(store.close).not.toHaveBeenCalled();
+			expect(monitorStore.close).not.toHaveBeenCalled();
+			fallback.resolve("advanced");
+			await expect(manual).resolves.toBe("advanced");
+			await stopped;
+			expect(store.close).toHaveBeenCalledOnce();
+			expect(monitorStore.close).toHaveBeenCalledOnce();
+		} finally {
+			lifecycle.resolve("idle");
+			monitor.resolve("idle");
+			fallback.resolve("advanced");
+			await manual;
+			await stopped;
+		}
+	});
+
+	it("closes the lifecycle Store if opening the monitor Store fails", async () => {
+		store.opened.mockImplementation((options: { selection?: string }) => {
+			if (options.selection === "monitor")
+				throw new Error("monitor open failed");
+		});
+		expect(() => createPlatformWorkloadWorkerV1(fixture())).toThrow(
+			"monitor open failed",
+		);
+		expect(store.close).toHaveBeenCalledOnce();
+	});
+
+	it("bounds both pollers independently without duplicating maintenance", async () => {
+		store.runNext.mockResolvedValue("advanced");
+		monitorStore.runNext.mockResolvedValue("advanced");
+		const worker = createPlatformWorkloadWorkerV1({
+			...fixture(),
+			pollIntervalMs: 1000,
+			files: {} as never,
+			evaluation: {} as never,
+		});
+		worker.start();
+		await vi.advanceTimersByTimeAsync(100);
+		expect(store.runNext).toHaveBeenCalledTimes(20);
+		expect(monitorStore.runNext).toHaveBeenCalledTimes(20);
+		expect(fileCleanup.runOnce).toHaveBeenCalledOnce();
+		expect(evaluation.runOnce).toHaveBeenCalledOnce();
+		await vi.advanceTimersByTimeAsync(850);
+		expect(store.runNext).toHaveBeenCalledTimes(20);
+		expect(monitorStore.runNext).toHaveBeenCalledTimes(20);
+		await worker.stop();
+		expect(store.close).toHaveBeenCalledOnce();
+		expect(monitorStore.close).toHaveBeenCalledOnce();
+		expect(fileCleanup.close).toHaveBeenCalledOnce();
+		expect(evaluation.close).toHaveBeenCalledOnce();
+	});
+
+	it("recovers a failed monitor independently and closes both Stores after a close failure", async () => {
+		monitorStore.runNext.mockRejectedValueOnce(
+			new Error("private monitor error"),
+		);
+		monitorStore.close.mockRejectedValueOnce(new Error("monitor close failed"));
+		const options = fixture();
+		const worker = createPlatformWorkloadWorkerV1(options);
+		worker.start();
+		await vi.advanceTimersByTimeAsync(10);
+		expect(store.runNext).toHaveBeenCalledTimes(2);
+		expect(monitorStore.runNext).toHaveBeenCalledTimes(2);
+		expect(options.log.mock.calls.join()).not.toContain(
+			"private monitor error",
+		);
+		await expect(worker.stop()).rejects.toThrow("monitor close failed");
+		expect(store.close).toHaveBeenCalledOnce();
+		expect(monitorStore.close).toHaveBeenCalledOnce();
+		await expect(worker.tick()).rejects.toThrow("Platform Worker is stopped");
+	});
 	it.each(["none", "callback", "logger"])(
 		"forwards diagnostics independently of %s failure",
 		async (failure) => {

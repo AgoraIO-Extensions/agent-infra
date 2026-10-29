@@ -315,6 +315,263 @@ describe("lifecycle scheduling (#3722)", () => {
 			: Math.round((row?.milliseconds ?? Number.NaN) / 1000) * 1000;
 	}
 
+	describe("bounded lanes (#3732)", () => {
+		let lifecycle: ReturnType<typeof openPostgresWorkloadReconciliationStoreV1>;
+		let monitor: ReturnType<typeof openPostgresWorkloadReconciliationStoreV1>;
+		beforeEach(() => {
+			lifecycle = openPostgresWorkloadReconciliationStoreV1({
+				...database,
+				selection: "lifecycle",
+			});
+			monitor = openPostgresWorkloadReconciliationStoreV1({
+				...database,
+				selection: "monitor",
+			});
+		});
+		afterEach(async () => {
+			await Promise.all([lifecycle.close(), monitor.close()]);
+		});
+
+		it("rejects an unknown selection before opening a poller", () => {
+			expect(() =>
+				openPostgresWorkloadReconciliationStoreV1({
+					...database,
+					selection: "unknown" as never,
+				}),
+			).toThrow("Invalid Workload selection");
+		});
+
+		it("advances another Agent while its monitor remains in flight", async () => {
+			await seedAgent("agent-a", "applying");
+			await seedAgent("agent-b", "ready");
+			await sql`update platform.workload_reconciliations set next_attempt_at = clock_timestamp() + interval '1 hour' where agent_id = 'agent-a'`;
+			const started = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			let monitorFinished = false;
+			const pending = monitor.runNext("worker-monitor", async (input) => {
+				expect(input.management.agentId).toBe("agent-b");
+				started.resolve();
+				await release.promise;
+				monitorFinished = true;
+				if (!input.state) throw new Error();
+				return input.state;
+			});
+			await started.promise;
+			try {
+				await sql`update platform.workload_reconciliations set next_attempt_at = clock_timestamp() where agent_id = 'agent-a'`;
+				const worker = createWorkloadReconciliationV1({
+					store: lifecycle,
+					runtime: runtime(),
+				});
+				for (const phase of ["observing", "activating", "promoting", "ready"]) {
+					expect(await worker.tick("worker-lifecycle")).toBe("advanced");
+					expect(
+						(
+							await sql`select state from platform.workload_reconciliations where agent_id = 'agent-a'`
+						)[0]?.state.phase,
+					).toBe(phase);
+					expect(monitorFinished).toBe(false);
+				}
+			} finally {
+				release.resolve();
+				await pending;
+			}
+		});
+
+		it.each(["configuration", "fence"] as const)(
+			"keeps the same Agent locked across lanes and discards a monitor after %s changes",
+			async (change) => {
+				const original = await seedAgent("agent-a", "ready");
+				const started = Promise.withResolvers<void>();
+				const release = Promise.withResolvers<void>();
+				const pending = monitor.runNext("worker-monitor", async (input) => {
+					started.resolve();
+					await release.promise;
+					if (!input.state) throw new Error();
+					return { ...input.state, attempts: 1 };
+				});
+				await started.promise;
+				try {
+					if (change === "configuration") {
+						const configuration = {
+							...original.candidate.configuration,
+							revision: 2,
+						};
+						await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) values ('agent-a', 2, 'fixture', ${sql.json(configuration as unknown as postgres.JSONValue)}, now())`;
+						await sql`update platform.agents set current_configuration_revision = 2 where id = 'agent-a'`;
+					} else {
+						await sql`update platform.agent_applications set fence = 2, management_revision = 2 where agent_id = 'agent-a'`;
+					}
+					await sql`insert into platform.outbox_items(id, scope_type, scope_id, operation, payload, trace_id) values ('restart-a', 'agent', 'agent-a', 'agent.workload.reconcile.v1', '{}', 'trace-restart')`;
+					const concurrent = vi.fn();
+					expect(await lifecycle.runNext("worker-lifecycle", concurrent)).toBe(
+						"idle",
+					);
+					expect(concurrent).not.toHaveBeenCalled();
+				} finally {
+					release.resolve();
+					await pending;
+				}
+				expect(
+					(
+						await sql`select state from platform.workload_reconciliations where agent_id = 'agent-a'`
+					)[0]?.state,
+				).toEqual(original);
+				expect(
+					await createWorkloadReconciliationV1({
+						store: lifecycle,
+						runtime: runtime(),
+					}).tick("worker-lifecycle"),
+				).toBe("advanced");
+				expect(
+					(
+						await sql`select state from platform.workload_reconciliations where agent_id = 'agent-a'`
+					)[0]?.state,
+				).toMatchObject(
+					change === "configuration"
+						? { sourceConfigurationRevision: 2, fence: 1 }
+						: { sourceConfigurationRevision: 1, fence: 2 },
+				);
+			},
+		);
+
+		it("selects missing state only for lifecycle and terminal states only for monitors", async () => {
+			const unexpected = vi.fn();
+			expect(await monitor.runNext("worker-monitor", unexpected)).toBe("idle");
+			expect(unexpected).not.toHaveBeenCalled();
+			expect(
+				await lifecycle.runNext("worker-lifecycle", async (input) =>
+					preflightState(input),
+				),
+			).toBe("advanced");
+			await sql`delete from platform.workload_reconciliations`;
+			for (const [agentId, phase] of [
+				["agent-a", "ready"],
+				["agent-b", "rejected"],
+				["agent-c", "stopped"],
+				["agent-d", "failed"],
+			] as const)
+				await seedAgent(agentId, phase);
+			expect(await lifecycle.runNext("worker-lifecycle", unexpected)).toBe(
+				"idle",
+			);
+			expect(unexpected).not.toHaveBeenCalled();
+			const seen: string[] = [];
+			for (let index = 0; index < 4; index++) {
+				await expect(
+					monitor.runNext("worker-monitor", async (input) => {
+						seen.push(input.management.agentId);
+						throw new Error(
+							"observe selection without changing terminal state",
+						);
+					}),
+				).rejects.toThrow("Workload reconciliation persistence failed");
+			}
+			expect(seen).toEqual(["agent-a", "agent-b", "agent-c", "agent-d"]);
+		});
+
+		it("keeps unknown phases in lifecycle selection and rotates after decoding fails", async () => {
+			await seedAgent("agent-a", "applying");
+			await seedAgent("agent-b", "applying");
+			await sql`update platform.workload_reconciliations set state = jsonb_set(state, '{phase}', '"unknown"') where agent_id = 'agent-a'`;
+			expect(await monitor.runNext("worker-monitor", vi.fn())).toBe("idle");
+			await expect(
+				lifecycle.runNext("worker-lifecycle", vi.fn()),
+			).rejects.toThrow("Workload reconciliation persistence failed");
+			const selected = vi.fn(async (input: WorkloadReconciliationInputV1) => {
+				if (!input.state) throw new Error();
+				return input.state;
+			});
+			expect(await lifecycle.runNext("worker-lifecycle", selected)).toBe(
+				"advanced",
+			);
+			expect(selected.mock.calls[0]?.[0].management.agentId).toBe("agent-b");
+		});
+
+		it.each(["pending", "retry_scheduled", "processing"] as const)(
+			"admits only matching claimable %s intents to lifecycle",
+			async (status) => {
+				for (const agentId of ["agent-a", "agent-b", "agent-c", "agent-d"])
+					await seedAgent(agentId, "ready");
+				for (const [agentId, scope, operation, delay] of [
+					[
+						"agent-a",
+						"conversation",
+						"agent.workload.reconcile.v1",
+						-3_600_000,
+					],
+					["agent-b", "agent", "agent.unrelated.v1", -3_600_000],
+					["agent-c", "agent", "agent.workload.reconcile.v1", 3_600_000],
+					["agent-d", "agent", "agent.configuration.revised.v1", -3_600_000],
+				] as const) {
+					await sql`insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, status, available_at, lease_owner, lease_expires_at) values (${`intent-${agentId}`}, ${scope}, ${agentId}, ${operation}, '{}', 'trace-a', ${status}, clock_timestamp() + ${delay} * interval '1 millisecond', ${status === "processing" ? "old-worker" : null}, case when ${status} = 'processing' then clock_timestamp() + ${delay} * interval '1 millisecond' else null end)`;
+				}
+				const seen: string[] = [];
+				for (let index = 0; index < 3; index++) {
+					expect(
+						await monitor.runNext("worker-monitor", async (input) => {
+							seen.push(input.management.agentId);
+							if (!input.state) throw new Error();
+							return input.state;
+						}),
+					).toBe("advanced");
+				}
+				expect(seen).toEqual(["agent-a", "agent-b", "agent-c"]);
+				expect(await monitor.runNext("worker-monitor", vi.fn())).toBe("idle");
+				expect(
+					await lifecycle.runNext("worker-lifecycle", async (input) => {
+						expect(input.management.agentId).toBe("agent-d");
+						if (!input.state) throw new Error();
+						return input.state;
+					}),
+				).toBe("advanced");
+				expect(await lifecycle.runNext("worker-lifecycle", vi.fn())).toBe(
+					"idle",
+				);
+				expect(
+					await sql`select scope_id, status from platform.outbox_items where scope_id <> 'agent-d' order by scope_id`,
+				).toEqual([
+					{ scope_id: "agent-a", status },
+					{ scope_id: "agent-b", status },
+					{ scope_id: "agent-c", status },
+				]);
+			},
+		);
+
+		it.each(["lifecycle", "monitor"] as const)(
+			"rotates past busy and malformed Agents within the %s lane",
+			async (selection) => {
+				const phase = selection === "lifecycle" ? "applying" : "ready";
+				await seedAgent("agent-a", phase);
+				await seedAgent("agent-b", phase);
+				await seedAgent("agent-c", phase);
+				const held = heldStep();
+				const pending = store.runNext("worker-holder", held.step);
+				await held.started;
+				try {
+					await sql`update platform.agent_configuration_revisions set configuration = jsonb_build_object('schemaVersion', 1, 'agentId', agent_id, 'revision', revision) where agent_id = 'agent-b'`;
+					const lane = selection === "lifecycle" ? lifecycle : monitor;
+					await expect(lane.runNext("worker-lane", vi.fn())).rejects.toThrow(
+						"Workload reconciliation persistence failed",
+					);
+					const selected = vi.fn(
+						async (input: WorkloadReconciliationInputV1) => {
+							if (!input.state) throw new Error();
+							return input.state;
+						},
+					);
+					expect(await lane.runNext("worker-lane", selected)).toBe("advanced");
+					expect(selected.mock.calls[0]?.[0].management.agentId).toBe(
+						"agent-c",
+					);
+				} finally {
+					held.release();
+					await pending;
+				}
+			},
+		);
+	});
+
 	it("advances successive Core lifecycle steps before a slow ready monitor", async () => {
 		await seedAgent("agent-a", "applying");
 		await seedAgent("agent-b", "ready");

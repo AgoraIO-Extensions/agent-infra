@@ -143,11 +143,13 @@ export function createPlatformWorkloadWorkerV1(
 		},
 	});
 	const store = openPostgresWorkloadReconciliationStoreV1({
+		selection: "lifecycle",
 		databaseUrl: options.databaseUrl,
 		runtimeModelVersion: options.runtimeModelVersion,
 		retryDelayMs: pollIntervalMs,
 		idleSandboxReclaimAfterMs: options.idleSandboxReclaimAfterMs,
 	});
+	let monitorStore: typeof store | undefined;
 	let files:
 		| ReturnType<typeof createPlatformFileReconciliationWorkerV1>
 		| undefined;
@@ -156,7 +158,15 @@ export function createPlatformWorkloadWorkerV1(
 		| ReturnType<typeof createEvaluationScoringWorkerV1>
 		| undefined;
 	let reconciliation: ReturnType<typeof createWorkloadReconciliationV1>;
+	let monitorReconciliation: typeof reconciliation;
 	try {
+		monitorStore = openPostgresWorkloadReconciliationStoreV1({
+			databaseUrl: options.databaseUrl,
+			runtimeModelVersion: options.runtimeModelVersion,
+			retryDelayMs: pollIntervalMs,
+			idleSandboxReclaimAfterMs: options.idleSandboxReclaimAfterMs,
+			selection: "monitor",
+		});
 		if (options.evaluationScoring)
 			evaluationScoring = createEvaluationScoringWorkerV1({
 				...options.evaluationScoring,
@@ -172,44 +182,52 @@ export function createPlatformWorkloadWorkerV1(
 				...options.files,
 				databaseUrl: options.databaseUrl,
 			});
-		const observedStore: WorkloadReconciliationStorePortV1 = {
-			async runNext(workerId, step) {
-				const startedAt = performance.now();
-				let event: Parameters<WorkloadTelemetry["record"]>[0] | undefined;
-				const result = await store.runNext(workerId, async (input) => {
-					const next = await step(input);
-					const code = workloadFailureCode(next);
-					event = {
-						stage: "workload",
-						outcome: code ? "failed" : "completed",
-						...(code ? { code } : {}),
-						requestId: input.requestId,
-						traceId: input.traceId,
-						agentId: input.management.agentId,
-					};
-					return next;
-				});
-				if (event)
-					observeWorkload(options.observability, {
-						...event,
-						durationMs: performance.now() - startedAt,
-					});
-				return result;
-			},
-		};
-		reconciliation = createWorkloadReconciliationV1({
-			store: observedStore,
-			runtime,
-			maximumAttempts: options.maximumAttempts,
-			maximumApplyAttempts: options.maximumApplyAttempts,
-			maximumObserveAttempts: options.maximumObserveAttempts,
-			probeFailureThreshold: options.probeFailureThreshold,
-			// 步骤里的异常被调谐吞掉后只会重试或终止；这里记录有界原因（不含正文）。
-			onStepFailure: createWorkloadStepFailureLoggerV1({ log: logSafely }),
-		});
+		function createReconciliation(selectedStore: typeof store) {
+			const observedStore: WorkloadReconciliationStorePortV1 = {
+				async runNext(workerId, step) {
+					const startedAt = performance.now();
+					let event: Parameters<WorkloadTelemetry["record"]>[0] | undefined;
+					const result = await selectedStore.runNext(
+						workerId,
+						async (input) => {
+							const next = await step(input);
+							const code = workloadFailureCode(next);
+							event = {
+								stage: "workload",
+								outcome: code ? "failed" : "completed",
+								...(code ? { code } : {}),
+								requestId: input.requestId,
+								traceId: input.traceId,
+								agentId: input.management.agentId,
+							};
+							return next;
+						},
+					);
+					if (event)
+						observeWorkload(options.observability, {
+							...event,
+							durationMs: performance.now() - startedAt,
+						});
+					return result;
+				},
+			};
+			return createWorkloadReconciliationV1({
+				store: observedStore,
+				runtime,
+				maximumAttempts: options.maximumAttempts,
+				maximumApplyAttempts: options.maximumApplyAttempts,
+				maximumObserveAttempts: options.maximumObserveAttempts,
+				probeFailureThreshold: options.probeFailureThreshold,
+				// 步骤里的异常被调谐吞掉后只会重试或终止；这里记录有界原因（不含正文）。
+				onStepFailure: createWorkloadStepFailureLoggerV1({ log: logSafely }),
+			});
+		}
+		reconciliation = createReconciliation(store);
+		monitorReconciliation = createReconciliation(monitorStore);
 	} catch (error) {
 		void Promise.allSettled([
 			store.close(),
+			monitorStore?.close(),
 			files?.close(),
 			evaluation?.close(),
 			evaluationScoring?.close(),
@@ -217,8 +235,6 @@ export function createPlatformWorkloadWorkerV1(
 		throw error;
 	}
 	let stopped = false;
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	let running: Promise<void> | undefined;
 	let closing: Promise<void> | undefined;
 	let scorerTimer: ReturnType<typeof setTimeout> | undefined;
 	let scorerRunning: Promise<void> | undefined;
@@ -239,99 +255,131 @@ export function createPlatformWorkloadWorkerV1(
 				}, pollIntervalMs);
 		}
 	}
-	let tickTail: Promise<void> = Promise.resolve();
-	// 轮询连续推进的步数，达到上限后休眠一次，防止反复到期的步骤形成热循环。
-	let consecutiveSteps = 0;
-	function enqueueTick(polling = false) {
-		const result = tickTail.then(async () => {
-			let outcome: "idle" | "advanced" | undefined;
-			const startedAt = performance.now();
-			try {
-				outcome = await reconciliation.tick(workerId);
-				return outcome;
-			} catch (error) {
-				observeWorkload(options.observability, {
-					stage: "workload",
-					outcome: "failed",
-					code: "WORKLOAD_UNAVAILABLE",
-					durationMs: performance.now() - startedAt,
-				});
-				throw error;
-			} finally {
-				// 连续推进期间暂缓文件清理，在本轮休眠前运行一次，不随步数放大
-				// 存储扫描（#2295）；手动 tick 与失败后照常清理。
-				const draining =
-					polling &&
-					outcome === "advanced" &&
-					consecutiveSteps + 1 < maximumConsecutiveStepsV1;
-				if (!draining) {
-					await files?.runOnce();
-					await evaluation?.runOnce();
+	function createPoller(current: typeof reconciliation, maintenance: boolean) {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let running: Promise<void> | undefined;
+		let tickTail: Promise<void> = Promise.resolve();
+		// 轮询连续推进的步数，达到上限后休眠一次，防止反复到期的步骤形成热循环。
+		let consecutiveSteps = 0;
+		function enqueueTick(polling = false) {
+			const result = tickTail.then(async () => {
+				let outcome: "idle" | "advanced" | undefined;
+				const startedAt = performance.now();
+				try {
+					outcome = await current.tick(workerId);
+					return outcome;
+				} catch (error) {
+					observeWorkload(options.observability, {
+						stage: "workload",
+						outcome: "failed",
+						code: "WORKLOAD_UNAVAILABLE",
+						durationMs: performance.now() - startedAt,
+					});
+					throw error;
+				} finally {
+					// 连续推进期间暂缓文件清理，在本轮休眠前运行一次，不随步数放大
+					// 存储扫描（#2295）；手动 tick 与失败后照常清理。
+					const draining =
+						polling &&
+						outcome === "advanced" &&
+						consecutiveSteps + 1 < maximumConsecutiveStepsV1;
+					if (maintenance && !draining) {
+						await files?.runOnce();
+						await evaluation?.runOnce();
+					}
 				}
-			}
-		});
-		tickTail = result.then(
-			() => undefined,
-			() => undefined,
-		);
-		return result;
-	}
-	async function poll() {
-		let advanced = false;
-		try {
-			advanced = (await enqueueTick(true)) === "advanced";
-		} catch {
-			logSafely(
-				JSON.stringify({
-					service: "platform-worker",
-					status: "retrying",
-					code: "WORKLOAD_RECONCILIATION_UNAVAILABLE",
-				}),
+			});
+			tickTail = result.then(
+				() => undefined,
+				() => undefined,
 			);
+			return result;
 		}
-		// 刚推进一步时立即处理下一个已到期的 Workload；所有 Agent 共用这条串行
-		// 队列，固定休眠会让创建中的步骤排在复核之后（#2295）。单个 Agent 两步之间
-		// 的间隔仍由 Store 的重试与复核时间控制。
-		consecutiveSteps = advanced ? consecutiveSteps + 1 : 0;
-		const drain = advanced && consecutiveSteps < maximumConsecutiveStepsV1;
-		if (!drain) consecutiveSteps = 0;
-		if (!stopped)
-			timer = setTimeout(
-				() => {
-					running = poll();
-				},
-				drain ? 0 : pollIntervalMs,
-			);
+		async function poll() {
+			let advanced = false;
+			try {
+				advanced = (await enqueueTick(true)) === "advanced";
+			} catch {
+				logSafely(
+					JSON.stringify({
+						service: "platform-worker",
+						status: "retrying",
+						code: "WORKLOAD_RECONCILIATION_UNAVAILABLE",
+					}),
+				);
+			}
+			// 每条通道独立、有界地连续推进；同 Agent 的互斥与重试仍由 Store 控制。
+			consecutiveSteps = advanced ? consecutiveSteps + 1 : 0;
+			const drain = advanced && consecutiveSteps < maximumConsecutiveStepsV1;
+			if (!drain) consecutiveSteps = 0;
+			if (!stopped)
+				timer = setTimeout(
+					() => {
+						running = poll();
+					},
+					drain ? 0 : pollIntervalMs,
+				);
+		}
+		return {
+			tick: () => enqueueTick(),
+			start() {
+				if (!running) running = poll();
+			},
+			drain() {
+				clearTimeout(timer);
+				return Promise.all([running, tickTail]);
+			},
+		};
 	}
+	// 独立 Store 持不同 advisory-lock 连接，两个通道仍在同一 Agent 锁下互斥。
+	const lifecycle = createPoller(reconciliation, true);
+	const monitor = createPoller(monitorReconciliation, false);
+	const manualTicks = new Set<Promise<void>>();
+	let started = false;
 	return {
 		tick: () => {
 			if (stopped)
 				return Promise.reject(new Error("Platform Worker is stopped"));
-			return enqueueTick();
+			const result = lifecycle
+				.tick()
+				.then((outcome) => (outcome === "advanced" ? outcome : monitor.tick()));
+			const completion = result.then(
+				() => {
+					manualTicks.delete(completion);
+				},
+				() => {
+					manualTicks.delete(completion);
+				},
+			);
+			manualTicks.add(completion);
+			return result;
 		},
 		start() {
-			if (running || stopped) return;
+			if (started || stopped) return;
+			started = true;
 			logSafely(
 				JSON.stringify({ service: "platform-worker", status: "ready" }),
 			);
-			running = poll();
+			lifecycle.start();
+			monitor.start();
 			if (evaluationScoring) scorerRunning = pollScorer();
 		},
 		stop() {
 			if (closing) return closing;
 			stopped = true;
-			clearTimeout(timer);
 			clearTimeout(scorerTimer);
 			const drained = Promise.allSettled([
 				evaluationScoring?.close(),
 				scorerRunning,
-				running,
-				tickTail,
+				lifecycle.drain(),
+				monitor.drain(),
+				...manualTicks,
 			]);
 			closing = (async () => {
 				const outcomes = await drained;
 				const cleanup = await Promise.allSettled([
 					store.close(),
+					monitorStore?.close(),
 					files?.close(),
 					evaluation?.close(),
 				]);
