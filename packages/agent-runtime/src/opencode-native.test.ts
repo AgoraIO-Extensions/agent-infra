@@ -283,6 +283,37 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 						access(join(path, accepted.nativeSessionRef, "home/.npm/_cacache")),
 					).rejects.toMatchObject({ code: "ENOENT" });
 				}
+				// This journey verifies durable diagnostics before restart; close cancels unfinished observations.
+				await vi.waitFor(async () => {
+					const diagnostics = JSON.parse(
+						await readFile(
+							join(
+								path,
+								accepted.nativeSessionRef,
+								"messages-diagnostics.json",
+							),
+							"utf8",
+						),
+					);
+					const journal = JSON.parse(
+						await readFile(
+							join(path, accepted.nativeSessionRef, "state.json"),
+							"utf8",
+						),
+					);
+					const entry = diagnostics.entries.find(
+						(value: { executionId: string }) =>
+							value.executionId === "execution-a",
+					);
+					expect(entry?.state).toBe("completed");
+					expect(journal.turns[0].operationFacts).toContainEqual(
+						expect.objectContaining({
+							kind: "model",
+							operationRef: entry.operationRef,
+							attemptRef: entry.attemptRef,
+						}),
+					);
+				});
 				await driver.close();
 				driver = await openNative(options);
 				expect(await driver.execute(command)).toEqual(accepted);
