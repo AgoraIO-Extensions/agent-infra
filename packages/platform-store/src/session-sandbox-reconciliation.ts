@@ -813,14 +813,23 @@ export async function recordSandboxObservation(
 		),
 	});
 	const [lastChange] = await transaction<
-		{ progress: string | null; attempt: string | null }[]
-	>`select details->>'progress' as progress, details->>'progressAttempt' as attempt
+		{
+			progress: string | null;
+			attempt: string | null;
+			status: string | null;
+			ageMs: number;
+		}[]
+	>`select details->>'progress' as progress, details->>'progressAttempt' as attempt,
+		details->>'status' as status,
+		extract(epoch from (clock_timestamp() - occurred_at)) * 1000 as "ageMs"
 		from platform.conversation_audit_events
 		where conversation_id = ${context.sandbox.sessionId}
 			and action = 'conversation.sandbox.observed'
 			and details->>'sandboxId' = ${context.sandbox.sandboxId}
 			and details->>'sessionGeneration' = ${String(context.sandbox.generation)}
+			and details->>'resourceFence' = ${String(claim.resourceFence)}
 		order by occurred_at desc, id desc limit 1`;
+	const auditAgeMs = Number(lastChange?.ageMs);
 	const retry = decideSessionSandboxRetryV1({
 		previous: lastChange && {
 			progress: lastChange.progress,
@@ -829,6 +838,19 @@ export async function recordSandboxObservation(
 		progress,
 		attemptCount: Number(context.outbox.attempt_count),
 		status: decision.status,
+		normalPrepareAgeMs:
+			claim.purpose === "prepare" &&
+			claim.desiredState === "running" &&
+			decision.status === "observed" &&
+			observation.failureCode === undefined &&
+			(observation.waitingReason === "ContainerCreating" ||
+				observation.waitingReason === "PodInitializing") &&
+			observation.resources.length === 6 &&
+			lastChange?.status === "observed" &&
+			Number.isFinite(auditAgeMs) &&
+			auditAgeMs >= 0
+				? auditAgeMs
+				: undefined,
 	});
 	const recorded = await transaction`update platform.outbox_items
 		set payload = payload || ${transaction.json((nextLifecycle ? { lifecycle: nextLifecycle } : {}) as unknown as Parameters<typeof transaction.json>[0])},
