@@ -7,14 +7,28 @@ import {
 	type Response,
 	type TestInfo,
 } from "@playwright/test";
+import type { AnyRouter } from "@tanstack/react-router";
 
 /** 白屏失败的有界启动证据；不保存消息、请求正文、Header 或原始异常文本。 */
 export function recordStartupEvidence(page: Page) {
 	const startedAt = Date.now();
 	const events: object[] = [];
-	const api = { issued: 0, finished: 0, failed: 0 };
+	const counters = () => ({ issued: 0, finished: 0, failed: 0 });
+	const api = counters();
+	const criticalEvents: object[] = [];
+	let criticalDropped = 0;
+	// 脚本事件可能先占满100条；另保留最近20条API状态，缺少单条记录不代表请求未发生。
+	const apiResponses: object[] = [];
+	const requestNavigations = new WeakMap<Request, number>();
 	let dropped = 0;
 	let navigation = 0;
+	let latestNavigation = {
+		navigation,
+		api: counters(),
+		scripts: counters(),
+		scriptEvents: [] as object[],
+		scriptDropped: 0,
+	};
 	const path = (url: string) => {
 		try {
 			const value = new URL(url);
@@ -26,33 +40,82 @@ export function recordStartupEvidence(page: Page) {
 		}
 	};
 	const isApi = (request: Request) => path(request.url()).startsWith("/api/");
-	const add = (event: object) => {
-		if (events.length < 100)
-			events.push({ elapsedMs: Date.now() - startedAt, navigation, ...event });
+	const add = (event: { kind: string; [key: string]: unknown }) => {
+		const entry = { elapsedMs: Date.now() - startedAt, navigation, ...event };
+		if (events.length < 100) events.push(entry);
 		else dropped++;
-	};
-	const request = (value: Request) => {
-		if (isApi(value)) api.issued++;
-		if (value.resourceType() === "script")
-			add({ kind: "script-request", path: path(value.url()) });
-		if (value.resourceType() === "document") {
-			navigation++;
-			add({ kind: "document", path: path(value.url()) });
+		if (
+			["request-failed", "page-error", "console-error", "page-crash"].includes(
+				event.kind,
+			)
+		) {
+			criticalEvents.push(entry);
+			if (criticalEvents.length > 20) {
+				criticalEvents.shift();
+				criticalDropped++;
+			}
 		}
 	};
+	const scriptEvent = (event: object) => {
+		latestNavigation.scriptEvents.push({
+			elapsedMs: Date.now() - startedAt,
+			...event,
+		});
+		if (latestNavigation.scriptEvents.length > 20) {
+			latestNavigation.scriptEvents.shift();
+			latestNavigation.scriptDropped++;
+		}
+	};
+	const observe = (value: Request, phase: "issued" | "finished" | "failed") => {
+		const current = requestNavigations.get(value) === navigation;
+		if (isApi(value)) {
+			api[phase]++;
+			if (current) latestNavigation.api[phase]++;
+		}
+		if (current && value.resourceType() === "script") {
+			latestNavigation.scripts[phase]++;
+			scriptEvent({ kind: phase, path: path(value.url()) });
+		}
+	};
+	const request = (value: Request) => {
+		let mainDocument = false;
+		try {
+			mainDocument =
+				value.resourceType() === "document" &&
+				value.isNavigationRequest() &&
+				value.frame() === page.mainFrame();
+		} catch {}
+		if (mainDocument) {
+			navigation++;
+			latestNavigation = {
+				navigation,
+				api: counters(),
+				scripts: counters(),
+				scriptEvents: [],
+				scriptDropped: 0,
+			};
+			add({ kind: "document", path: path(value.url()) });
+		}
+		requestNavigations.set(value, navigation);
+		observe(value, "issued");
+		if (value.resourceType() === "script")
+			add({ kind: "script-request", path: path(value.url()) });
+	};
 	const finished = (value: Request) => {
-		if (isApi(value)) api.finished++;
+		observe(value, "finished");
 		if (["document", "script"].includes(value.resourceType()))
 			add({
 				kind: "finished",
+				navigation: requestNavigations.get(value) ?? navigation,
 				type: value.resourceType(),
 				path: path(value.url()),
 			});
 	};
 	const failed = (value: Request) => {
-		if (isApi(value)) api.failed++;
+		observe(value, "failed");
 		add({
 			kind: "request-failed",
+			navigation: requestNavigations.get(value) ?? navigation,
 			type: value.resourceType(),
 			path: path(value.url()),
 			code:
@@ -61,6 +124,14 @@ export function recordStartupEvidence(page: Page) {
 	};
 	const response = (value: Response) => {
 		const type = value.request().resourceType();
+		if (isApi(value.request())) {
+			apiResponses.push({
+				navigation: requestNavigations.get(value.request()) ?? navigation,
+				path: path(value.url()),
+				status: value.status(),
+			});
+			if (apiResponses.length > 20) apiResponses.shift();
+		}
 		const mediaType = value.headers()["content-type"]?.split(";", 1)[0]?.trim();
 		const contentType = [
 			"text/html",
@@ -72,9 +143,20 @@ export function recordStartupEvidence(page: Page) {
 		].includes(mediaType ?? "")
 			? mediaType
 			: "other";
-		if (type === "document" || type === "script")
+		if (
+			type === "script" &&
+			requestNavigations.get(value.request()) === navigation
+		)
+			scriptEvent({
+				kind: "response",
+				path: path(value.url()),
+				status: value.status(),
+				contentType,
+			});
+		if (type === "document" || type === "script" || isApi(value.request()))
 			add({
 				kind: "response",
+				navigation: requestNavigations.get(value.request()) ?? navigation,
 				type,
 				path: path(value.url()),
 				status: value.status(),
@@ -121,19 +203,76 @@ export function recordStartupEvidence(page: Page) {
 		dispose,
 		async attach(info: TestInfo) {
 			const document = await page
-				.evaluate(() => ({
-					readyState: window.document.readyState,
-					appChildren:
-						window.document.getElementById("app")?.childElementCount ?? null,
-					bodyTextLength: window.document.body?.innerText.length ?? null,
-				}))
+				.evaluate(() => {
+					const app = window.document.getElementById("app");
+					const router = (
+						window as typeof window & { __TSR_ROUTER__?: AnyRouter }
+					).__TSR_ROUTER__;
+					const matches = (value: unknown) =>
+						Array.isArray(value)
+							? {
+									count: value.length,
+									statuses: value
+										.slice(0, 64)
+										.map((match) =>
+											[
+												"pending",
+												"success",
+												"error",
+												"redirected",
+												"notFound",
+											].includes(match?.status)
+												? match.status
+												: "other",
+										),
+								}
+							: null;
+					let routing: Record<string, unknown> = { present: Boolean(router) };
+					try {
+						if (router)
+							routing = {
+								present: true,
+								status: ["pending", "idle"].includes(router.state.status)
+									? router.state.status
+									: "other",
+								isLoading:
+									typeof router.state.isLoading === "boolean"
+										? router.state.isLoading
+										: null,
+								isTransitioning:
+									typeof router.state.isTransitioning === "boolean"
+										? router.state.isTransitioning
+										: null,
+								matches: matches(router.state.matches),
+								pendingMatches: matches(router.stores?.pendingMatches?.get()),
+							};
+					} catch {
+						routing = { present: true, unreadable: true };
+					}
+					return {
+						readyState: window.document.readyState,
+						appChildren: app?.childElementCount ?? null,
+						bodyTextLength: window.document.body?.innerText.length ?? null,
+						reactRootCreated: app
+							? Object.getOwnPropertyNames(app).some((key) =>
+									key.startsWith("__reactContainer$"),
+								)
+							: false,
+						router: routing,
+					};
+				})
 				.catch(() => null);
 			await info
 				.attach("startup-evidence", {
 					body: JSON.stringify({
 						path: path(page.url()),
+						navigation,
 						document,
 						api,
+						apiResponses,
+						latestNavigation,
+						criticalEvents,
+						criticalDropped,
 						events,
 						dropped,
 					}),
