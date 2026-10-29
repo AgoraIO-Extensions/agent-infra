@@ -33,7 +33,7 @@ test("real purpose-isolated evaluation, version history and online feedback", as
 		if (path === "/eval") {
 			const nav = page.getByRole("navigation", { name: "工作区", exact: true });
 			const entry = nav.getByRole("link", { name: "评测", exact: true });
-			if (info.project.name === "mobile")
+			if (info.project.use.isMobile === true)
 				await page.getByRole("button", { name: /打开导航/ }).click();
 			await entry.click();
 		}
