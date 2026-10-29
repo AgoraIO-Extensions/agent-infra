@@ -7991,3 +7991,21 @@ for (const status of [403, 401] as const)
 			});
 			await expectCleanPage(page, errors);
 		});
+
+// 首屏偶发白屏的失败证据，保留原断言、超时和执行并发。
+const startupEvidence = new WeakMap<
+	Page,
+	ReturnType<typeof recordStartupEvidence>
+>();
+test.beforeEach(async ({ page }, info) => {
+	if (
+		info.title ===
+		"directory search and transient submission recover on desktop and mobile"
+	)
+		startupEvidence.set(page, recordStartupEvidence(page));
+});
+test.afterEach(async ({ page }, info) => {
+	const startup = startupEvidence.get(page);
+	if (info.status !== info.expectedStatus) await startup?.attach(info);
+	startup?.dispose();
+});

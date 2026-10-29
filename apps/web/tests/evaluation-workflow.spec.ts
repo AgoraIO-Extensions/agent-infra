@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import type { EvaluationBrowserFixture } from "./evaluation-fixture.js";
+import { recordStartupEvidence } from "./page-health.js";
 
 type Fixture = EvaluationBrowserFixture;
 
@@ -342,6 +343,7 @@ test("real purpose-isolated evaluation, version history and online feedback", as
 		expect(fixture.runtimeCalls()).toBeGreaterThan(0);
 		await expectNoHorizontalOverflow(page);
 	} catch (error) {
+		await startupEvidence.get(page)?.attach(info);
 		if (!page.isClosed()) {
 			await info.attach("synthetic-page", {
 				body: await page.locator("body").innerText(),
@@ -358,6 +360,8 @@ test("real purpose-isolated evaluation, version history and online feedback", as
 		});
 		throw error;
 	} finally {
+		startupEvidence.get(page)?.dispose();
+		startupEvidence.delete(page);
 		try {
 			if (!page.isClosed()) await page.goto("about:blank");
 		} finally {
@@ -386,3 +390,21 @@ async function firstEventChunk(body: ReadableStream<Uint8Array>) {
 		await reader.cancel();
 	}
 }
+
+// 首屏偶发白屏的失败证据，保留原断言、超时和执行并发。
+const startupEvidence = new WeakMap<
+	Page,
+	ReturnType<typeof recordStartupEvidence>
+>();
+test.beforeEach(async ({ page }, info) => {
+	if (
+		info.title ===
+		"real purpose-isolated evaluation, version history and online feedback"
+	)
+		startupEvidence.set(page, recordStartupEvidence(page));
+});
+test.afterEach(async ({ page }, info) => {
+	const startup = startupEvidence.get(page);
+	if (info.status !== info.expectedStatus) await startup?.attach(info);
+	startup?.dispose();
+});

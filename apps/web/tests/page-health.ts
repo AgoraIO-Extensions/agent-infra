@@ -33,6 +33,8 @@ export function recordStartupEvidence(page: Page) {
 	};
 	const request = (value: Request) => {
 		if (isApi(value)) api.issued++;
+		if (value.resourceType() === "script")
+			add({ kind: "script-request", path: path(value.url()) });
 		if (value.resourceType() === "document") {
 			navigation++;
 			add({ kind: "document", path: path(value.url()) });
@@ -40,6 +42,12 @@ export function recordStartupEvidence(page: Page) {
 	};
 	const finished = (value: Request) => {
 		if (isApi(value)) api.finished++;
+		if (["document", "script"].includes(value.resourceType()))
+			add({
+				kind: "finished",
+				type: value.resourceType(),
+				path: path(value.url()),
+			});
 	};
 	const failed = (value: Request) => {
 		if (isApi(value)) api.failed++;
