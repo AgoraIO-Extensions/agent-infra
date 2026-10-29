@@ -14,6 +14,27 @@ import { fixture } from "./kubernetes-runtime-adapter.fixture.js";
 import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
 
 describe("GA Kubernetes Workload adapter", () => {
+	it("creates Agent templates and Pods with a one-second readiness interval", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const workload = await f.client.read<V1StatefulSet>(
+			"StatefulSet",
+			desired.service.name,
+		);
+		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
+		for (const spec of [workload?.spec?.template.spec, pod?.spec]) {
+			expect(spec?.containers[0]?.readinessProbe).toEqual({
+				httpGet: { path: "/healthz", port: 8080 },
+				timeoutSeconds: 5,
+				failureThreshold: 3,
+				periodSeconds: 1,
+			});
+		}
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+	});
 	it.each([
 		["access mode", undefined, { accessModes: ["ReadWriteMany"] }],
 		["block volume mode", undefined, { volumeMode: "Block" }],
@@ -343,61 +364,64 @@ describe("GA Kubernetes Workload adapter", () => {
 			expect(await adapter.observe(desired, identity)).toBe("drifted");
 		},
 	);
-	it("accepts defaulted container probes and rejects readiness handler overrides", async () => {
-		const f = fixture();
-		const desired = workloadDesiredFixture();
-		const adapter = f.adapter();
-		const identity = await adapter.apply(desired);
-		if (!identity || identity === "pending") throw new Error();
-		const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
-		if (!pod?.spec) throw new Error();
-		const container = pod.spec.containers[0];
-		if (!container) throw new Error();
-		const defaulted = {
-			...container,
-			imagePullPolicy: "IfNotPresent",
-			terminationMessagePath: "/dev/termination-log",
-			terminationMessagePolicy: "File",
-			readinessProbe: {
-				...container.readinessProbe,
-				initialDelaySeconds: 0,
-				periodSeconds: 10,
-				successThreshold: 1,
-				httpGet: {
-					...container.readinessProbe?.httpGet,
-					path: desired.health.path,
-					port: desired.service.port,
-					scheme: "HTTP",
-				},
+	for (const kind of ["StatefulSet", "Pod"] as const) {
+		it.each([undefined, 1, 10] as const)(
+			`accepts ${kind} readiness period %s and rejects other probe drift`,
+			async (periodSeconds) => {
+				const f = fixture();
+				const desired = workloadDesiredFixture();
+				const adapter = f.adapter();
+				const identity = await adapter.apply(desired);
+				if (!identity || identity === "pending") throw new Error();
+				const name = `${desired.service.name}${kind === "Pod" ? "-0" : ""}`;
+				const original = await f.client.read<V1Pod | V1StatefulSet>(kind, name);
+				const resource = structuredClone(original);
+				const spec =
+					kind === "Pod"
+						? (resource as V1Pod)?.spec
+						: (resource as V1StatefulSet)?.spec?.template.spec;
+				const container = spec?.containers[0];
+				if (!resource || !container?.readinessProbe) throw new Error();
+				container.imagePullPolicy = "IfNotPresent";
+				container.terminationMessagePath = "/dev/termination-log";
+				container.terminationMessagePolicy = "File";
+				const defaulted = {
+					...container.readinessProbe,
+					initialDelaySeconds: 0,
+					periodSeconds,
+					successThreshold: 1,
+					httpGet: {
+						path: desired.health.path,
+						port: desired.service.port,
+						scheme: "HTTP",
+					},
+				};
+				container.readinessProbe = defaulted;
+				f.resources.set(`${kind}/${name}`, resource);
+				expect(await adapter.observe(desired, identity)).toBe("healthy");
+				for (const override of [
+					{ exec: { command: ["sh", "-c", "touch /tmp/injected"] } },
+					{ tcpSocket: { port: 8080 } },
+					{ httpGet: { ...defaulted.httpGet, host: "foreign.test" } },
+					{ httpGet: { ...defaulted.httpGet, path: "/other" } },
+					{ httpGet: { ...defaulted.httpGet, port: 8081 } },
+					{ httpGet: { ...defaulted.httpGet, scheme: "HTTPS" } },
+					{ periodSeconds: 2 },
+					{ periodSeconds: 5 },
+					{ timeoutSeconds: 1 },
+					{ failureThreshold: 1 },
+					{ successThreshold: 2 },
+					{ initialDelaySeconds: 1 },
+					{ terminationGracePeriodSeconds: 1 },
+				]) {
+					container.readinessProbe = { ...defaulted, ...override };
+					f.probe.mockClear();
+					expect(await adapter.observe(desired, identity)).toBe("drifted");
+					expect(f.probe).not.toHaveBeenCalled();
+				}
 			},
-		};
-		f.resources.set(`Pod/${desired.service.name}-0`, {
-			...pod,
-			spec: { ...pod.spec, containers: [defaulted] },
-		} as V1Pod);
-		expect(await adapter.observe(desired, identity)).toBe("healthy");
-		for (const override of [
-			{ exec: { command: ["sh", "-c", "touch /tmp/injected"] } },
-			{
-				httpGet: { ...defaulted.readinessProbe.httpGet, host: "foreign.test" },
-			},
-			{ periodSeconds: 1 },
-		]) {
-			f.resources.set(`Pod/${desired.service.name}-0`, {
-				...pod,
-				spec: {
-					...pod.spec,
-					containers: [
-						{
-							...defaulted,
-							readinessProbe: { ...defaulted.readinessProbe, ...override },
-						},
-					],
-				},
-			} as V1Pod);
-			expect(await adapter.observe(desired, identity)).toBe("drifted");
-		}
-	});
+		);
+	}
 	it("repairs unsafe StatefulSet drift and rejects unsafe observed Pods", async () => {
 		const f = fixture();
 		const desired = workloadDesiredFixture();

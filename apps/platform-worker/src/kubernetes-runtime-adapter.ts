@@ -328,9 +328,32 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			},
 		};
 		if (!current) return client.create(object);
+		let expected: KubernetesObject = object;
 		if (
-			current.metadata?.annotations?.[fingerprintAnnotation] === hash &&
-			containsDesired(current, object) &&
+			kind === "StatefulSet" &&
+			current.metadata?.annotations?.[fingerprintAnnotation] !== hash &&
+			((current as V1StatefulSet).spec?.template.spec?.containers[0]
+				?.readinessProbe?.periodSeconds ?? 10) === 10
+		) {
+			// Preserve an unchanged legacy workload until its next lifecycle change.
+			const legacy = structuredClone(object) as V1StatefulSet;
+			const probe = legacy.spec?.template.spec?.containers[0]?.readinessProbe;
+			if (probe?.periodSeconds === 1) {
+				delete probe.periodSeconds;
+				legacy.metadata = {
+					...legacy.metadata,
+					annotations: {
+						...legacy.metadata?.annotations,
+						[fingerprintAnnotation]: resourceFingerprint(legacy),
+					},
+				};
+				expected = legacy;
+			}
+		}
+		if (
+			current.metadata?.annotations?.[fingerprintAnnotation] ===
+				expected.metadata?.annotations?.[fingerprintAnnotation] &&
+			containsDesired(current, expected) &&
 			(!["Service", "NetworkPolicy"].includes(kind) ||
 				hasSafeRoutingMetadata(value, current)) &&
 			(kind !== "ServiceAccount" ||
@@ -1579,6 +1602,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 										},
 										timeoutSeconds: value.health.timeoutSeconds,
 										failureThreshold: value.health.failureThreshold,
+										periodSeconds: 1,
 									},
 									securityContext: agentContainerSecurityContext(),
 									volumeMounts: [

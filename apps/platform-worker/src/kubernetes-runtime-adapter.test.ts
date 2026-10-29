@@ -22,8 +22,215 @@ import {
 	createKubernetesRuntimeAdapterV1,
 	skillHubWorkloadMountRootV1,
 } from "./kubernetes-runtime-adapter.js";
+import {
+	fingerprintAnnotation,
+	resourceFingerprint,
+} from "./kubernetes-runtime-comparison.js";
+
+async function legacyReadinessFixture(periodSeconds?: 10) {
+	const f = fixture();
+	const create = vi.spyOn(f.client, "create");
+	const desired = workloadDesiredFixture();
+	const adapter = f.adapter();
+	const identity = await adapter.apply(desired);
+	if (!identity || identity === "pending") throw new Error();
+	const original = create.mock.calls.find(
+		([object]) => object.kind === "StatefulSet",
+	)?.[0] as V1StatefulSet | undefined;
+	const legacy = structuredClone(original);
+	const probe = legacy?.spec?.template.spec?.containers[0]?.readinessProbe;
+	if (!legacy?.metadata?.annotations || !probe) throw new Error();
+	delete probe.periodSeconds;
+	// Hash the pre-API legacy shape before Kubernetes defaults or server metadata.
+	legacy.metadata.annotations[fingerprintAnnotation] =
+		resourceFingerprint(legacy);
+	if (periodSeconds !== undefined) probe.periodSeconds = periodSeconds;
+	const workload = await f.client.read<V1StatefulSet>(
+		"StatefulSet",
+		desired.service.name,
+	);
+	const pod = await f.client.read<V1Pod>("Pod", `${desired.service.name}-0`);
+	if (!workload?.metadata || !pod?.spec) throw new Error();
+	f.resources.set(`StatefulSet/${desired.service.name}`, {
+		...workload,
+		metadata: {
+			...workload.metadata,
+			annotations: legacy.metadata.annotations,
+		},
+		spec: legacy.spec,
+	} as V1StatefulSet);
+	f.resources.set(`Pod/${desired.service.name}-0`, {
+		...pod,
+		spec: {
+			...pod.spec,
+			containers: pod.spec.containers.map((container) => ({
+				...container,
+				readinessProbe: structuredClone(probe),
+			})),
+		},
+	} as V1Pod);
+	return { ...f, adapter, desired, identity };
+}
 
 describe("GA Kubernetes Workload adapter", () => {
+	it.each([undefined, 10] as const)(
+		"preserves legacy readiness period %s without reconciliation writes",
+		async (periodSeconds) => {
+			const f = await legacyReadinessFixture(periodSeconds);
+			const before = structuredClone(f.resources);
+			const writes = f.writes.length;
+			for (let attempt = 0; attempt < 2; attempt++) {
+				expect(await f.adapter.observe(f.desired, f.identity)).toBe("healthy");
+				expect(await f.adapter.apply(f.desired)).toEqual(f.identity);
+				expect(f.writes).toHaveLength(writes);
+				expect(f.resources).toEqual(before);
+			}
+		},
+	);
+	it("repairs a new template downgraded to ten seconds without its legacy fingerprint", async () => {
+		const f = fixture();
+		const adapter = f.adapter();
+		const desired = workloadDesiredFixture();
+		await adapter.apply(desired);
+		const workload = await f.client.read<V1StatefulSet>(
+			"StatefulSet",
+			desired.service.name,
+		);
+		const probe = workload?.spec?.template.spec?.containers[0]?.readinessProbe;
+		if (!workload || !probe) throw new Error();
+		probe.periodSeconds = 10;
+		f.resources.set(`StatefulSet/${desired.service.name}`, workload);
+		const writes = f.writes.length;
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		expect(f.writes.length).toBeGreaterThan(writes);
+		expect(
+			(await f.client.read<V1StatefulSet>("StatefulSet", desired.service.name))
+				?.spec?.template.spec?.containers[0]?.readinessProbe?.periodSeconds,
+		).toBe(1);
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+	});
+	it.each(["stop/start", "revision", "fence", "configuration"] as const)(
+		"uses one-second readiness after a legacy workload %s change",
+		async (change) => {
+			const f = await legacyReadinessFixture(10);
+			const oldPod = await f.client.read<V1Pod>(
+				"Pod",
+				`${f.desired.service.name}-0`,
+			);
+			if (change === "stop/start") {
+				const stopped = { ...f.desired, desiredState: "stopped", replicas: 0 };
+				expect(await f.adapter.apply(stopped)).toBe("pending");
+				await f.adapter.apply(stopped);
+				expect(
+					await f.client.read("Pod", `${f.desired.service.name}-0`),
+				).toBeNull();
+			}
+			const next =
+				change === "revision"
+					? workloadDesiredFixture(2)
+					: change === "fence"
+						? { ...f.desired, fence: 2 }
+						: change === "configuration"
+							? {
+									...f.desired,
+									configRevision: 2,
+									workloadRevision: 2,
+									fence: 2,
+									env: { LOG_LEVEL: "debug" },
+								}
+							: f.desired;
+			let identity = await f.adapter.apply(next);
+			if (identity === "pending") identity = await f.adapter.apply(next);
+			if (!identity || identity === "pending") throw new Error();
+			const current = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				next.service.name,
+			);
+			const pod = await f.client.read<V1Pod>("Pod", `${next.service.name}-0`);
+			expect(
+				current?.spec?.template.spec?.containers[0]?.readinessProbe
+					?.periodSeconds,
+			).toBe(1);
+			expect(pod?.spec?.containers[0]?.readinessProbe?.periodSeconds).toBe(1);
+			expect(pod?.metadata?.uid).not.toBe(oldPod?.metadata?.uid);
+			expect(await f.adapter.observe(next, identity)).toBe("healthy");
+		},
+	);
+	it.each([
+		"fingerprint",
+		"missing fingerprint",
+		"period",
+		"unsafe template",
+		"probe handler",
+		"missing probe",
+		"desired annotation",
+	] as const)(
+		"repairs legacy %s drift instead of reusing the old fingerprint",
+		async (drift) => {
+			const f = await legacyReadinessFixture(10);
+			const workload = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				f.desired.service.name,
+			);
+			const podSpec = workload?.spec?.template.spec;
+			const probe = podSpec?.containers[0]?.readinessProbe;
+			if (!workload?.metadata?.annotations || !podSpec || !probe)
+				throw new Error();
+			if (drift === "fingerprint")
+				workload.metadata.annotations[fingerprintAnnotation] = "forged";
+			if (drift === "missing fingerprint")
+				delete workload.metadata.annotations[fingerprintAnnotation];
+			if (drift === "period") probe.periodSeconds = 1;
+			if (drift === "unsafe template") podSpec.hostPID = true;
+			if (drift === "probe handler") probe.exec = { command: ["true"] };
+			if (drift === "missing probe")
+				delete podSpec.containers[0]?.readinessProbe;
+			if (drift === "desired annotation")
+				workload.metadata.annotations["agent-infra.agora.io/desired"] = "{}";
+			f.resources.set(`StatefulSet/${f.desired.service.name}`, workload);
+			const writes = f.writes.length;
+			const identity = await f.adapter.apply(f.desired);
+			if (!identity || identity === "pending") throw new Error();
+			expect(f.writes.length).toBeGreaterThan(writes);
+			expect(await f.adapter.observe(f.desired, identity)).toBe("healthy");
+			const repaired = await f.client.read<V1StatefulSet>(
+				"StatefulSet",
+				f.desired.service.name,
+			);
+			expect(
+				repaired?.spec?.template.spec?.containers[0]?.readinessProbe
+					?.periodSeconds,
+			).toBe(1);
+		},
+	);
+	it("requires Pod Ready and signed readiness before promoting a legacy workload", async () => {
+		const f = await legacyReadinessFixture(10);
+		const pod = await f.client.read<V1Pod>(
+			"Pod",
+			`${f.desired.service.name}-0`,
+		);
+		if (!pod) throw new Error();
+		f.resources.set(`Pod/${f.desired.service.name}-0`, {
+			...pod,
+			status: {
+				...pod.status,
+				conditions: [{ type: "Ready", status: "False" }],
+			},
+		} as V1Pod);
+		expect(await f.adapter.observe(f.desired, f.identity)).toBe("pending");
+		await expect(f.adapter.promote(f.desired, f.identity)).rejects.toThrow();
+		expect(f.probe).not.toHaveBeenCalled();
+		f.resources.set(`Pod/${f.desired.service.name}-0`, pod);
+		f.probe.mockResolvedValue(false);
+		expect(await f.adapter.observe(f.desired, f.identity)).toBe("unhealthy");
+		await expect(f.adapter.promote(f.desired, f.identity)).rejects.toThrow();
+		expect(await f.client.read("Ingress", f.desired.route.name)).toBeNull();
+		expect(
+			(await f.client.read<V1Service>("Service", f.desired.service.name))?.spec
+				?.selector?.["agent-infra.agora.io/revision"],
+		).toBe("closed");
+	});
 	it("allows the Platform API selector only for platform-auth routes", async () => {
 		const platformAuthFixture = fixture();
 		const platformAuth = workloadDesiredFixture(1, "agent-a", "platform-auth");
