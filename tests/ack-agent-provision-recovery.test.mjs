@@ -158,6 +158,35 @@ test("a legitimate 72-second creation remains inside the client budget", async (
 	assert.equal(result.results[0].creation.attempts, 1);
 });
 
+test("a connection lost while consuming the committed response body is replayed", async (t) => {
+	const f = fixture();
+	let posts = 0;
+	t.mock.method(globalThis, "fetch", async (_url, options) => {
+		if (options.method !== "POST") return Response.json(state);
+		if (++posts === 1)
+			return new Response(
+				new ReadableStream({
+					start(controller) {
+						controller.error(
+							new TypeError("SYNTHETIC_ERROR_SECRET", {
+								cause: { code: "UND_ERR_SOCKET" },
+							}),
+						);
+					},
+				}),
+				{ status: 201 },
+			);
+		return Response.json({ ...created, replayed: true });
+	});
+	const result = await provisionAgents(input, f.options);
+	assert.equal(result.pass, true);
+	assert.equal(posts, 2);
+	assert.deepEqual(result.results[0].creation.transportFailures, [
+		"UND_ERR_SOCKET",
+	]);
+	assertPrivate(result);
+});
+
 test("exhausted creation budget never sends a later Agent request", async (t) => {
 	const f = fixture();
 	const calls = [];
@@ -267,6 +296,32 @@ test("zero readiness wait remains a single observation", async (t) => {
 	assert.equal(result.pass, false);
 	assert.equal(calls, 1);
 });
+
+for (const status of [401, 403, 503]) {
+	test(`a failed ${status} response body cannot authorize a transport retry`, async (t) => {
+		const f = fixture();
+		let calls = 0;
+		t.mock.method(globalThis, "fetch", async () => {
+			calls++;
+			return new Response(
+				new ReadableStream({
+					start(controller) {
+						controller.error(
+							new TypeError("SYNTHETIC_ERROR_SECRET", {
+								cause: { code: "UND_ERR_SOCKET" },
+							}),
+						);
+					},
+				}),
+				{ status },
+			);
+		});
+		const result = await provisionAgents(input, f.options);
+		assert.equal(result.pass, false);
+		assert.equal(calls, 1);
+		assertPrivate(result);
+	});
+}
 
 for (const scenario of ["wrong-agent", "forbidden", "expired-budget"]) {
 	test(`state read cannot convert ${scenario} to success`, async (t) => {

@@ -84,8 +84,10 @@ async function requestJson(
 			let body: any;
 			try {
 				body = await response.json();
-			} catch {
-				return { response, body: null, error: "RESPONSE_INVALID" };
+			} catch (error) {
+				if (error instanceof SyntaxError || ![200, 201].includes(response.status))
+					return { response, body: null, error: "RESPONSE_INVALID" };
+				throw error;
 			}
 			if (time.now() >= deadline) {
 				evidence.budgetExhausted = true;
