@@ -40,6 +40,7 @@ import {
 	expectNoDuplicateControls,
 	holdRequests,
 	pinElement,
+	recordStartupEvidence,
 } from "./page-health";
 import { duplicateControlNames } from "./page-hygiene";
 import {
@@ -7982,3 +7983,21 @@ for (const status of [403, 401] as const)
 			});
 			await expectCleanPage(page, errors);
 		});
+
+// #3688：原审批旅程失败时保留有界启动证据，保留原断言、超时和操作流程。
+const approvalStartupEvidence = new WeakMap<
+	Page,
+	ReturnType<typeof recordStartupEvidence>
+>();
+test.beforeEach(async ({ page }, info) => {
+	if (
+		info.title ===
+		"administrator rejection, approval, empty queue and pending controls"
+	)
+		approvalStartupEvidence.set(page, recordStartupEvidence(page));
+});
+test.afterEach(async ({ page }, info) => {
+	const startup = approvalStartupEvidence.get(page);
+	if (info.status !== info.expectedStatus) await startup?.attach(info);
+	startup?.dispose();
+});
