@@ -32,6 +32,7 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | 新 Worker 从发布仓库长时间拉取，Helm 等待超时 | 同一 Digest 经目标环境已批准的镜像代理能在 ECI 启动，直接拉取路径未完成 | 使用前比较代理 manifest 的真实字节 Digest、config/layer Digest，并回读目标 ECI imageID；保留原发布清单和目标拉取清单及映射证据，只调整仓库地址，不改变源码或 Digest |
 | 只看到 Web/API 健康就宣称完成 | 健康检查没有覆盖 Session、Runtime、模型、持久化和跨主体拒绝 | 业务验收必须包含真实 Session、`text.delta`、完成事件、刷新回读、隔离负例和自定义入口 probe |
 | 四模板 ECI preflight 和十八轮业务对话均通过，但业务 Session 实际在 ECS | private values 保留了关闭的 `sessionRuntimeScheduling.enabled`；Worker 自身或独立 preflight 的 ECI placement 不会自动传递给 Session | 要求 ECI 的输入包在运行前断言开关与架构，渲染策略及绑定；最终按每个业务 Session 的实际 Pod UID、imageID 和 Node 标签回读，不能用 preflight 节点替代。原完整运行保留为业务通过、ECI 验收失败，不回填成功 |
+| 八 Agent 已 ready，首个 ECI 对话在 `submit` 阶段超时 | 实际 Session Pod 冷启动约 62 秒，页面等其就绪后才发消息；浏览器观察器默认 30 秒先退出 | 只为首轮消息响应设置 180 秒单阶段观察上限；保留创建、后续轮与全部成功/隔离断言。真实 Chromium 31 秒准备回归证明旧探针失败、新探针完成三轮；当前 ECI 诊断也完成三轮模型事实。等待预算修复不等于冷启动性能优化，也不回填原失败完整运行 |
 | 多服务已 ready，入口验收只留下通用失败，稍后同环境完整通过 | 客户端请求没有出现在目标 Ingress 日志，旧探针又丢失具体连接错误；不能据此断定 DNS、TLS 或业务故障 | HTTP 边界结果在断言前写入私有 receipt，保留白名单错误码和尝试次数；ACK 只对明确临时 DNS/连接错误最多等待两分钟，所有 HTTP、内容和 TLS 判定保持。诊断重试通过不回填原始完整部署结果 |
 | Agent ready，但会话一直 `AGENT_STARTING` | 新模板 digest 没有相应容量 profile，verified capacity 为空 | `provision` 前检查每个目标的 image/resource/evidence 绑定与挂载 Secret；更新后经正式 lifecycle 刷新，不能直接改 DB |
 | custom Agent Workload ready，Session 却报 `RUNTIME_CONFIGURATION_INVALID` | 镜像没有 Driver 默认值，Worker 只为 Agent Workload 注入了 `acp` | Session 也注入服务端已选择的 Driver；用没有镜像默认 Driver 的实际自定义镜像回归 |
