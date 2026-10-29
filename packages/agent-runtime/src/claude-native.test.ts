@@ -282,15 +282,31 @@ it("reconciles native completion after a crash before normalized text and termin
 	const file = join(f.path, first.nativeSessionRef, "state.json");
 	const state = JSON.parse(await readFile(file, "utf8"));
 	state.turns[0].status = "running";
-	state.turns[0].events = state.turns[0].events.filter(
-		(event: { type: string }) => event.type === "status",
+	// Keep the durable prefix, including model facts before the normalized answer.
+	const normalizedAnswer = state.turns[0].events.findIndex(
+		(event: { type: string }) =>
+			event.type === "text" || event.type === "completed",
 	);
+	expect(normalizedAnswer).toBeGreaterThan(0);
+	state.turns[0].events = state.turns[0].events.slice(0, normalizedAnswer);
+	const durablePrefix = structuredClone(state.turns[0].events);
 	state.sequence = state.turns[0].events.length;
 	await writeFile(file, JSON.stringify(state));
 	await f.restart();
 	expect(
 		await f.driver.getStatus(first.nativeSessionRef, command.executionId),
 	).toBe("completed");
+	const recoveredEvents = await f.driver.replayEvents(
+		first.nativeSessionRef,
+		command.executionId,
+	);
+	expect(recoveredEvents.slice(0, durablePrefix.length)).toEqual(durablePrefix);
+	expect(
+		recoveredEvents
+			.filter((event) => event.type === "operation")
+			.map((event) => event.payload),
+	).toEqual(state.turns[0].operationFacts);
+
 	const events = await f.driver.replayEvents(
 		first.nativeSessionRef,
 		command.executionId,
