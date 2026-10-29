@@ -5632,6 +5632,101 @@ describe("observeForDrain (#1889)", () => {
 		expect(probeRuntime).toHaveBeenCalledTimes(3);
 	});
 
+	it.each(["completed", "overlapped"] as const)(
+		"keeps a newer drain proof when an older %s step later fails",
+		async (previous) => {
+			const { state, monitor, drain, probeRuntime } = await ready();
+			const entered = Promise.withResolvers<void>();
+			const response =
+				Promise.withResolvers<Awaited<ReturnType<typeof probeRuntime>>>();
+			probeRuntime.mockImplementationOnce(() => {
+				entered.resolve();
+				return response.promise;
+			});
+			let late: ReturnType<typeof monitor.observe> | undefined;
+			await monitor.runReconciliationStep(state, async () => {
+				late = monitor.observe(state);
+				await entered.promise;
+				if (previous === "overlapped") await monitor.observe(state);
+			});
+			await monitor.runReconciliationStep(state, () => monitor.observe(state));
+			const signedBeforeFailure = probeRuntime.mock.calls.length;
+			response.resolve({ core: "failed", capabilities: {} });
+			await expect(late).resolves.toBe("unhealthy");
+			await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+			expect(probeRuntime).toHaveBeenCalledTimes(signedBeforeFailure);
+		},
+	);
+
+	it("invalidates a pre-existing drain proof when observations overlap", async () => {
+		const { state, monitor, drain, probeRuntime } = await ready();
+		await monitor.observe(state);
+		const entered = Promise.withResolvers<void>();
+		const response =
+			Promise.withResolvers<Awaited<ReturnType<typeof probeRuntime>>>();
+		probeRuntime.mockImplementationOnce(() => {
+			entered.resolve();
+			return response.promise;
+		});
+		await monitor.runReconciliationStep(state, async () => {
+			const late = monitor.observe(state);
+			await entered.promise;
+			await expect(monitor.observe(state)).resolves.toBe("healthy");
+			response.resolve({ core: "failed", capabilities: {} });
+			await expect(late).resolves.toBe("unhealthy");
+		});
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(4);
+	});
+
+	it("invalidates a pre-existing drain proof after a current scoped failure", async () => {
+		const { state, monitor, drain, probeRuntime } = await ready();
+		await monitor.observe(state);
+		probeRuntime.mockResolvedValueOnce({ core: "failed", capabilities: {} });
+		await monitor.runReconciliationStep(state, async () => {
+			await expect(monitor.observe(state)).resolves.toBe("unhealthy");
+		});
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(3);
+	});
+
+	it("invalidates a drain proof when a current failed observation's input changed", async () => {
+		const { state, monitor, drain, probeRuntime } = await ready();
+		await monitor.observe(state);
+		await monitor.runReconciliationStep(state, async () => {
+			probeRuntime.mockImplementationOnce(async () => {
+				Object.assign(state, { attempts: 1 });
+				return { core: "failed", capabilities: {} };
+			});
+			await expect(monitor.observe(state)).resolves.toBe("unhealthy");
+		});
+		await expect(
+			drain.observeForDrain({ ...state, attempts: 0 }),
+		).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(3);
+	});
+
+	it("invalidates the previous drain proof when a step leaves an observation unfinished", async () => {
+		const { state, monitor, drain, probeRuntime } = await ready();
+		await monitor.observe(state);
+		const entered = Promise.withResolvers<void>();
+		const response =
+			Promise.withResolvers<Awaited<ReturnType<typeof probeRuntime>>>();
+		probeRuntime.mockImplementationOnce(() => {
+			entered.resolve();
+			return response.promise;
+		});
+		let late: ReturnType<typeof monitor.observe> | undefined;
+		await monitor.runReconciliationStep(state, async () => {
+			late = monitor.observe(state);
+			await entered.promise;
+		});
+		response.resolve({ core: "failed", capabilities: {} });
+		await expect(late).resolves.toBe("unhealthy");
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(3);
+	});
+
 	it("limits reuse to drain commands", () => {
 		expect([...drainCacheableCommands].sort()).toEqual([
 			"events.ack",

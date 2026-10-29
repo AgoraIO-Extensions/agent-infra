@@ -1072,7 +1072,10 @@ export function createWorkloadRuntimeV1(
 		if (scope) {
 			scope.pass = undefined;
 			// Overlapping observations invalidate reuse for the rest of this step.
-			if (++scope.observing > 1) scope.active = false;
+			if (++scope.observing > 1 && scope.active) {
+				readinessLedger.forget(scope.state?.agentId ?? state.agentId);
+				scope.active = false;
+			}
 		}
 		try {
 			observedCapabilities.delete(state);
@@ -1143,10 +1146,12 @@ export function createWorkloadRuntimeV1(
 			)
 				observedCapabilities.set(state, capabilities);
 			// 只有 ready 阶段的完整观测（含签名 readiness）通过才记录；
-			// 任何未通过的完整观测都清除该 Agent 的记录，排空随即回到完整探测。
+			// 当前观测失败即清除记录；失效步骤的晚到失败不能清除后来建立的记录。
 			const binding = readinessBinding(state);
-			if (health !== "healthy") readinessLedger.forget(state.agentId);
-			else if (
+			if (health !== "healthy") {
+				if (!scope || (scope.active && scope.sequence === sequence))
+					readinessLedger.forget(state.agentId);
+			} else if (
 				current &&
 				state.phase === "ready" &&
 				binding &&
@@ -1238,6 +1243,8 @@ export function createWorkloadRuntimeV1(
 				return await stepScope.run(scope, step);
 			} finally {
 				// Async children inherit ALS after the callback returns; invalidate them too.
+				if (scope.active && scope.observing > 0 && scope.state)
+					readinessLedger.forget(scope.state.agentId);
 				scope.active = false;
 				scope.sequence++;
 				scope.pass = undefined;
