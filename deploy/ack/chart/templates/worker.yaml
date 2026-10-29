@@ -91,5 +91,47 @@ spec:
           secret: {secretName: {{ .Values.secrets.workerDirectoryRead }}, items: [{key: read-token, path: read-token}]}
         - name: directory-ca
           secret: {secretName: {{ .Values.secrets.workerCa }}, items: [{key: ca.crt, path: ca.crt}]}
-
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-infra-worker-internal
+  labels: {{- include "ack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: platform-worker
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: agent-infra
+    app.kubernetes.io/component: platform-worker
+  ports: [{name: http, protocol: TCP, port: 3004, targetPort: 3004}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-infra-worker-internal
+  labels: {{- include "ack.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: agent-infra
+      app.kubernetes.io/component: platform-worker
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: agent-infra
+              app.kubernetes.io/component: platform-api
+      ports: [{protocol: TCP, port: 3004}]
+    # Host current-confirmation callbacks share this authenticated listener.
+    - from:
+        - podSelector:
+            matchLabels:
+              agent-infra.agora.io/managed: session-sandbox-v1
+            matchExpressions:
+              - {key: agent-infra.agora.io/sandbox-id, operator: Exists}
+              - {key: agent-infra.agora.io/agent-ref, operator: Exists}
+              - {key: agent-infra.agora.io/session-ref, operator: Exists}
+              - {key: agent-infra.agora.io/generation, operator: Exists}
+      ports: [{protocol: TCP, port: 3004}]
 {{- end }}
