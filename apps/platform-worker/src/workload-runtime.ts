@@ -1851,7 +1851,21 @@ export function createWorkloadRuntimeV1(
 				if (isMultiService(workload)) await multiService.promote(workload);
 				return;
 			}
-			const adapter = createAdapter(undefined, state);
+			// 只在本次晋升内复用同一 Pod 的签名证明；每次观察仍核对资源与 HTTP health。
+			let passedPodUid: string | undefined;
+			const adapter = createAdapter(
+				undefined,
+				state,
+				"authorize",
+				false,
+				undefined,
+				{
+					reuse: (podUid) => podUid === passedPodUid,
+					passed(podUid) {
+						passedPodUid = podUid;
+					},
+				},
+			);
 			await revalidateCandidateCatalog(state);
 			if (!state.identity) throw new Error();
 			if (
