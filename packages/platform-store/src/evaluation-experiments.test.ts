@@ -4166,3 +4166,145 @@ it("bounds retained score conclusions by current policy from their actual creati
 		await sql`update platform.evaluation_policies set revision=${checkpoint?.revision},digest=${checkpoint?.digest} where id='active'`;
 	}
 }, 30000);
+
+it("timestamps analysis at its snapshot after facts committed between authorization and reading", async () => {
+	const { PostgresEvaluationAnalysisV1 } = await import(
+		"./evaluation-analysis.js"
+	);
+	const { PostgresConversationEventTransactionV1 } = await import(
+		"./conversation-events.js"
+	);
+	const { markSessionSandboxReadyFixture } = await import(
+		"./session-sandbox.fixture.js"
+	);
+	const { createConversationEventUseCaseV1, parseConversationOperationFactV2 } =
+		await import("@agent-infra/platform-core");
+	const command = await dataset();
+	const experiment = await core.create(
+		request("runner"),
+		randomUUID(),
+		command,
+	);
+	await data.grant(request("admin"), randomUUID(), command.datasetId, {
+		expectedRevision: 4,
+		principal: { kind: "user", id: "runner" },
+		versionIds: [command.versionId],
+		operations: ["analyze"],
+		expiresAt: new Date(Date.now() + 50000).toISOString(),
+	});
+	const [task] = await experiments.samples(experiment.experimentId, 10);
+	if (!task) throw new Error("missing sample");
+	await markSessionSandboxReadyFixture(sql, task.conversationId);
+	const [binding] =
+		await sql`select session_generation,delivery_fence,model_option_id,reasoning_level from platform.conversation_executions where execution_id=${task.executionId}`;
+	if (!binding) throw new Error("missing execution binding");
+	const events = new PostgresConversationEventTransactionV1(database);
+	const eventCore = createConversationEventUseCaseV1({ transaction: events });
+	const analysis = new PostgresEvaluationAnalysisV1({
+		...database,
+		directory,
+		storage,
+		loadDataPolicy: async () => policy,
+		loadExperimentPolicy: async () => experimentPolicy,
+		loadAnalysisPolicy: async () => ({
+			schemaVersion: 1,
+			policyId: "analysis",
+			revision: 1,
+			validUntil: policy.validUntil,
+			maximumWindowMs: 86400000,
+			maximumTasks: 1000,
+			maximumModelFacts: 10000,
+			feedbackMetadataMs: 600000,
+		}),
+		taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+	});
+	const gate = await sql.reserve();
+	let pending:
+		| Promise<Awaited<ReturnType<typeof analysis.summary>>>
+		| undefined;
+	try {
+		await gate`select pg_advisory_lock(36843684)`;
+		// This isolated deferred trigger pauses commit after the authorization clock,
+		// without replacing any production query, event producer, or clock.
+		await sql.unsafe(
+			"create function platform.analysis_snapshot_gate() returns trigger language plpgsql as $$ begin perform pg_advisory_xact_lock(36843684); return new; end $$",
+		);
+		await sql.unsafe(
+			"create constraint trigger analysis_snapshot_gate after insert or update on platform.evaluation_policies deferrable initially deferred for each row execute function platform.analysis_snapshot_gate()",
+		);
+		pending = analysis.summary(request("runner"), experiment.experimentId);
+		const settled = Promise.allSettled([pending]);
+		await expect
+			.poll(async () => {
+				const [row] =
+					await sql`select count(*)::int as count from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and lower(query)='commit'`;
+				return row?.count;
+			})
+			.toBe(1);
+		for (const phase of ["intent", "started"] as const) {
+			const key = randomUUID();
+			expect(
+				(
+					await eventCore.persist({
+						schemaVersion: 1,
+						conversationId: task.conversationId,
+						executionId: task.executionId,
+						sessionGeneration: Number(binding.session_generation),
+						deliveryFence: Number(binding.delivery_fence),
+						adapterEventKey: key,
+						runtimeCursor: key,
+						occurredAt: new Date().toISOString(),
+						event: {
+							schemaVersion: 2,
+							type: "execution.operation",
+							fact: parseConversationOperationFactV2({
+								kind: "model",
+								operationRef: "snapshot-model",
+								attemptRef: "snapshot-attempt",
+								phase,
+								model: {
+									configVersion: String(configuration.revision),
+									modelOptionId: binding.model_option_id,
+									modelId: "snapshot-actual-model",
+									reasoningLevel: binding.reasoning_level,
+								},
+							}),
+						},
+					})
+				).outcome,
+			).toBe("accepted");
+		}
+		const [clock] = await sql<
+			{ milliseconds: number }[]
+		>`select (extract(epoch from clock_timestamp())*1000)::double precision as milliseconds`;
+		if (!clock) throw new Error("missing commit clock");
+		await gate`select pg_advisory_unlock(36843684)`;
+		const result = await pending;
+		await settled;
+		expect(
+			result.items.find((item) => item.sampleTaskId === task.sampleTaskId)
+				?.actual.conditions[0]?.modelId,
+		).toBe("snapshot-actual-model");
+		expect(Date.parse(result.observedAt)).toBeGreaterThanOrEqual(
+			Math.floor(clock.milliseconds),
+		);
+		const detail = await analysis.detail(
+			request("runner"),
+			experiment.experimentId,
+			task.sampleTaskId,
+		);
+		expect(detail.sample.id).toBe("one");
+	} finally {
+		await gate`select pg_advisory_unlock(36843684)`;
+		await pending?.catch(() => undefined);
+		await sql.unsafe(
+			"drop trigger if exists analysis_snapshot_gate on platform.evaluation_policies",
+		);
+		await sql.unsafe(
+			"drop function if exists platform.analysis_snapshot_gate()",
+		);
+		gate.release();
+		await analysis.close();
+		await events.close();
+	}
+}, 30000);

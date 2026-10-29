@@ -262,6 +262,10 @@ export class PostgresEvaluationAnalysisV1 {
 		return this.#client.begin(
 			"isolation level repeatable read read only",
 			async (tx) => {
+				const [observation] = await tx<
+					{ now: Date }[]
+				>`select statement_timestamp() as now`;
+				if (!observation) throw new EvaluationDataErrorV1("unavailable");
 				const records = await tx<
 					({
 						id: string;
@@ -403,13 +407,13 @@ export class PostgresEvaluationAnalysisV1 {
 						),
 					};
 				});
-				return rows;
+				return { rows, observedAt: observation.now.toISOString() };
 			},
 		);
 	}
 	async summary(request: EvaluationRequestV1, id: string) {
 		const before = await this.#current(request, id);
-		const tasks = await this.#snapshot(
+		const { rows: tasks, observedAt } = await this.#snapshot(
 			before.experiment,
 			before.analysisPolicy,
 			before.data.policy,
@@ -461,7 +465,7 @@ export class PostgresEvaluationAnalysisV1 {
 
 		return {
 			...result,
-			observedAt: before.now.toISOString(),
+			observedAt,
 			contentAvailable,
 			items: tasks.map((row) => ({
 				sampleTaskId: row.task.sampleTaskId,
@@ -513,7 +517,7 @@ export class PostgresEvaluationAnalysisV1 {
 		)
 			throw new EvaluationDataErrorV1("invalid");
 		const before = await this.#current(request, id);
-		const rows = await this.#snapshot(
+		const { rows } = await this.#snapshot(
 			before.experiment,
 			before.analysisPolicy,
 			before.data.policy,
