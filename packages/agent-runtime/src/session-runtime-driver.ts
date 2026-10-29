@@ -15,6 +15,7 @@ import {
 	RuntimeEventSchema,
 	type RuntimeEventV1,
 	RuntimeEventV1Schema,
+	RuntimeEventV2Schema,
 	RuntimeFileEventV2Schema,
 	type RuntimeOperationFactV2,
 	RuntimeOperationFactV2Schema,
@@ -85,6 +86,7 @@ import {
 import {
 	appendTurnOperationFactV1,
 	isTurnResultPublicationV1,
+	publishTurnOperationFactsV1,
 	settleTurnResultPublicationV1,
 	type TurnResultPublicationV1,
 } from "./turn-result-publication.js";
@@ -298,7 +300,7 @@ interface Turn {
 	nativeStopReason?: string;
 	nativeCheckpoint?: string;
 	nativeTerminalCheckpoint?: string;
-	/** V1 events plus #3226 V2 result-file events; each keeps its original version. */
+	/** V1 events plus V2 operation and result-file events retain their original versions. */
 	events: RuntimeEvent[];
 	/** Durable metadata-only facts emitted by shared non-Codex operation adapters. */
 	operationFacts?: RuntimeOperationFactV2[];
@@ -325,13 +327,15 @@ function uncertainOperationFacts(turn: Turn) {
 function appendUnknownOperationFacts(
 	turn: Turn,
 	facts: readonly RuntimeOperationFactV2[],
+	journal: { sequence: number },
+	cursorPrefix: string,
 ) {
 	if (!facts.length) return;
 	const now = new Date().toISOString();
 	for (const fact of facts) {
 		if (fact.phase === "unknown") continue;
-		turn.operationFacts ??= [];
-		turn.operationFacts.push(
+		appendTurnOperationFactV1(
+			turn,
 			RuntimeOperationFactV2Schema.parse({
 				...fact,
 				phase: "unknown",
@@ -346,6 +350,8 @@ function appendUnknownOperationFacts(
 					: {}),
 				failureCode: "recovery_unconfirmed",
 			}),
+			journal,
+			cursorPrefix,
 		);
 	}
 }
@@ -558,8 +564,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					"Runtime operation fact is no longer current",
 					409,
 				);
-			appendTurnOperationFactV1(turn, fact);
+			appendTurnOperationFactV1(turn, fact, state, this.options.cursorPrefix);
 		});
+		for (const wake of this.waiters.get(file.read().binding.ref) ?? []) wake();
 	}
 	static async open(options: SessionRuntimeDriverOptions) {
 		if (
@@ -783,6 +790,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						!RuntimeSelectionV1Schema.safeParse(turn.selection).success ||
 						executions.has(turn.executionId) ||
 						turns.has(turn.turnId) ||
+						(!terminal(turn.status) &&
+							!turn.events.some((event) => event.type === "completed") &&
+							turn !== state.turns.at(-1)) ||
 						!operationKeys.has(turn.operationKey) ||
 						!["submit-turn", "native-command"].includes(
 							JSON.parse(turn.operationKey)[0],
@@ -807,7 +817,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							(completed && !(event.type === "status" && !corrected)) ||
 							!RuntimeEventSchema.safeParse(event).success ||
 							(event.schemaVersion === 2 &&
-								!RuntimeFileEventV2Schema.safeParse(event).success) ||
+								!RuntimeFileEventV2Schema.safeParse(event).success &&
+								!RuntimeEventV2Schema.safeParse(event).success) ||
 							event.executionId !== turn.executionId ||
 							event.cursor !== `${this.options.cursorPrefix}-${sequence}` ||
 							eventKeys.has(event.adapterEventKey)
@@ -874,8 +885,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				await file.update((draft) => {
 					const sessionCancelled = this.cancelled(binding.ref);
 					for (const turn of draft.turns) {
+						publishTurnOperationFactsV1(turn, draft, this.options.cursorPrefix);
 						// #3226：发布中断的引用先沿已保存进度收敛（不重发），再按原规则处理 Turn。
-						if (!terminal(turn.status)) settleTurnResultPublicationV1(turn);
+						if (!terminal(turn.status))
+							settleTurnResultPublicationV1(
+								turn,
+								draft,
+								this.options.cursorPrefix,
+							);
 						const uncertainOperations = uncertainOperationFacts(turn);
 						// #3226：结果发布已沿原意图收敛，unknown 的发布不阻塞已完成的原生 Turn。
 						const uncertainTools = uncertainOperations.filter(
@@ -886,7 +903,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						const hold =
 							turn.unknownHold || uncertainTools.length > 0 || sessionCancelled;
 						if (turn.status === "running" && hold) {
-							appendUnknownOperationFacts(turn, uncertainTools);
+							appendUnknownOperationFacts(
+								turn,
+								uncertainTools,
+								draft,
+								this.options.cursorPrefix,
+							);
 							draft.sequence++;
 							turn.events.push(
 								RuntimeEventV1Schema.parse({
@@ -902,7 +924,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							turn.status = "unknown";
 							turn.unknownHold = true;
 						} else if (turn.status === "unknown" && hold) {
-							appendUnknownOperationFacts(turn, uncertainTools);
+							appendUnknownOperationFacts(
+								turn,
+								uncertainTools,
+								draft,
+								this.options.cursorPrefix,
+							);
 							turn.unknownHold = true;
 							if (!hasUnknownStatusEvent(turn)) {
 								draft.sequence++;
@@ -1096,6 +1123,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 									appendUnknownOperationFacts(
 										turn,
 										uncertainOperationFacts(turn),
+										draft,
+										this.options.cursorPrefix,
 									);
 							});
 							await this.status(file, recoverable.executionId, "unknown");
@@ -2027,7 +2056,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				(entry) => entry.executionId === executionId,
 			);
 			if (!draft || terminal(draft.status) || draft.resultPublication) return;
-			for (const fact of settled.facts) appendTurnOperationFactV1(draft, fact);
+			for (const fact of settled.facts)
+				appendTurnOperationFactV1(
+					draft,
+					fact,
+					state,
+					this.options.cursorPrefix,
+				);
 			draft.resultPublication = {
 				plan: settled.plan,
 				stopReason,
@@ -2098,9 +2133,17 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							draft.unknownHold
 						)
 							conflict();
-						for (const fact of facts) appendTurnOperationFactV1(draft, fact);
+						for (const fact of facts)
+							appendTurnOperationFactV1(
+								draft,
+								fact,
+								state,
+								this.options.cursorPrefix,
+							);
 						draft.resultPublication.plan = next;
 					});
+					for (const wake of this.waiters.get(file.read().binding.ref) ?? [])
+						wake();
 				},
 			},
 		});

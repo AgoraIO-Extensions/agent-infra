@@ -892,6 +892,15 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 		expect(
 			persisted.turns[0]?.operationFacts?.every((fact) => !fact.model?.text),
 		).toBe(true);
+		const modelEvents = (
+			await driver.replayEvents(accepted.nativeSessionRef, command.executionId)
+		).filter(
+			(event) => event.type === "operation" && event.payload.kind === "model",
+		);
+		expect(modelEvents.map((event) => event.payload)).toEqual(
+			persisted.turns[0]?.operationFacts,
+		);
+
 		const commands = await driver.discoverNativeCommands(
 			commandRead(accepted.nativeSessionRef),
 		);
@@ -1041,6 +1050,17 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 		await driver.close();
 		driver = await ClaudeRuntimeDriver.open(options);
 		expect(await driver.execute(command)).toEqual(accepted);
+		expect(
+			(
+				await driver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				)
+			).filter(
+				(event) => event.type === "operation" && event.payload.kind === "model",
+			),
+		).toEqual(modelEvents);
+
 		const next = {
 			...command,
 			operationId: "operation-b",

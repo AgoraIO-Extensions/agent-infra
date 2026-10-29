@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type {
+	RuntimeEvent,
 	RuntimeSelectionV1,
 	RuntimeSubmitTurnRequestV1,
 	RuntimeSubmitTurnRequestV2,
@@ -433,10 +434,78 @@ describe("Runtime Driver shared conformance", () => {
 				controller.signal,
 			);
 			const iterator = stream[Symbol.asyncIterator]();
-			expect(await iterator.next()).toMatchObject({
+			const prefix: RuntimeEvent[] = [];
+			if (name === "Claude" || name === "Pi" || name === "OpenCode") {
+				const intent = await iterator.next();
+				expect(intent).toMatchObject({
+					done: false,
+					value: {
+						schemaVersion: 2,
+						executionId: request.executionId,
+						type: "operation",
+						payload: {
+							kind: "model",
+							phase: "intent",
+							operationRef: expect.any(String),
+							attemptRef: expect.any(String),
+							model: {
+								configVersion: "conformance-1",
+								modelOptionId: "model-option-primary",
+							},
+						},
+					},
+				});
+				if (intent.done) throw new Error("model intent stream ended early");
+				prefix.push(intent.value);
+			}
+			let running = await iterator.next();
+			if (running.value?.type === "operation") {
+				const intent = prefix[0];
+				if (intent?.type !== "operation")
+					throw new Error("model started without intent");
+				expect(running).toMatchObject({
+					done: false,
+					value: {
+						schemaVersion: 2,
+						executionId: request.executionId,
+						type: "operation",
+						payload: {
+							...intent.payload,
+							phase: "started",
+							startedAt: expect.any(String),
+						},
+					},
+				});
+				if (running.done) throw new Error("running status stream ended early");
+				prefix.push(running.value);
+				running = await iterator.next();
+			}
+			expect(running).toMatchObject({
 				done: false,
 				value: { type: "status", payload: { status: "running" } },
 			});
+			if (running.done) throw new Error("running status stream ended early");
+			prefix.push(running.value);
+			expect(running.value).toEqual(replay.events[0]);
+			expect(new Set(prefix.map((event) => event.cursor)).size).toBe(
+				prefix.length,
+			);
+			expect(new Set(prefix.map((event) => event.adapterEventKey)).size).toBe(
+				prefix.length,
+			);
+			const repeated = (
+				await host.streamEvents(
+					{
+						...context,
+						requestId: "request-conformance-repeat-prefix",
+						grant: runtimeGrantFixture(context, ["events.replay"]),
+					},
+					controller.signal,
+				)
+			)[Symbol.asyncIterator]();
+			for (const event of prefix)
+				expect(await repeated.next()).toEqual({ done: false, value: event });
+			await repeated.return?.();
 			controller.abort();
 			await iterator.return?.();
 			expect(
