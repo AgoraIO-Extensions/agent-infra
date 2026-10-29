@@ -470,7 +470,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 			...port,
 			protocol: port.protocol ?? "TCP",
 		}));
-		// API-server defaults are allowed; additional handlers and HTTP overrides are not.
+		// API-server defaults and legacy cadence are allowed; other probe fields stay exact.
 		const expectedProbe = {
 			httpGet: {
 				path: value.health.path,
@@ -480,7 +480,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 			timeoutSeconds: value.health.timeoutSeconds,
 			failureThreshold: value.health.failureThreshold,
 			initialDelaySeconds: 0,
-			periodSeconds: 10,
+			periodSeconds: (probe?.periodSeconds ?? 10) === 10 ? 10 : 1,
 			successThreshold: 1,
 		};
 		return (
