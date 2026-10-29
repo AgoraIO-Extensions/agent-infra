@@ -1214,15 +1214,19 @@ describe("session sandbox workload adapter", () => {
 		const container = pod.status.containerStatuses?.[0];
 		if (!container) throw new Error("Missing Session Pod container status");
 		container.state = { waiting: { reason: "ContainerCreating" } };
-		expect(await adapter.observe(allocation)).toMatchObject({
+		const creating = await adapter.observe(allocation);
+		expect(creating).toMatchObject({
 			status: "observed",
 			waitingReason: "ContainerCreating",
 		});
+		expect(creating).not.toHaveProperty("failureCode");
 		container.state = { waiting: { reason: "PodInitializing" } };
-		expect(await adapter.observe(allocation)).toMatchObject({
+		const initializing = await adapter.observe(allocation);
+		expect(initializing).toMatchObject({
 			status: "observed",
 			waitingReason: "PodInitializing",
 		});
+		expect(initializing).not.toHaveProperty("failureCode");
 		container.state = {
 			waiting: { reason: "ImagePullBackOff", message: "secret" },
 		};
