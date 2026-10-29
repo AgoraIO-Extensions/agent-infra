@@ -8000,7 +8000,9 @@ const startupEvidence = new WeakMap<
 test.beforeEach(async ({ page }, info) => {
 	if (
 		info.title ===
-		"directory search and transient submission recover on desktop and mobile"
+			"directory search and transient submission recover on desktop and mobile" ||
+		info.title ===
+			"administrator rejection, approval, empty queue and pending controls"
 	)
 		startupEvidence.set(page, recordStartupEvidence(page));
 });
