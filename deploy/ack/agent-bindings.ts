@@ -29,6 +29,67 @@ type State = {
 type Binding = { name: string; agentId: string; ready: boolean };
 const hash = (value: string) =>
 	createHash("sha256").update(value).digest("hex");
+type RequestBody = {
+	name: string;
+	body: Record<string, any>;
+	idempotencyKey: string;
+};
+
+async function bindingState(
+	origin: string,
+	bodies: RequestBody[],
+	stateDirectory: string,
+	sourceSha: string,
+	allowMissing = false,
+): Promise<State> {
+	const requestHash = hash(JSON.stringify({ origin, bodies }));
+	const file = join(stateDirectory, "agent-bindings.json");
+	const exists = await lstat(file).catch((error) => {
+		if (error.code !== "ENOENT") throw error;
+		return undefined;
+	});
+	if (!exists && allowMissing)
+		return { schemaVersion: 1, origin, sourceSha, requestHash, agents: {} };
+	const state = await privateJson(file);
+	assert(
+		state.schemaVersion === 1 &&
+			state.origin === origin &&
+			state.sourceSha === sourceSha &&
+			state.requestHash === requestHash &&
+			state.agents,
+		"AGENT_BINDING_INVALID",
+	);
+	return state;
+}
+
+/** Read only request bodies and their bound facts; credentials and blueprints stay with their callers. */
+export async function readAgentBindings(
+	input: {
+		origin: string;
+		requests: { name: string; bodyFile: string; idempotencyKey: string }[];
+	},
+	stateDirectory: string,
+	sourceSha: string,
+) {
+	const bodies = await Promise.all(
+		input.requests.map(async (request) => ({
+			name: request.name,
+			body: await privateJson(request.bodyFile),
+			idempotencyKey: request.idempotencyKey,
+		})),
+	);
+	const state = await bindingState(
+		input.origin,
+		bodies,
+		stateDirectory,
+		sourceSha,
+	);
+	return bodies.map((request) => ({
+		...request,
+		binding: state.agents[request.name],
+	}));
+}
+
 const templates = ["codex", "claude", "opencode", "pi"];
 
 async function privateDirectory(directory: string) {
@@ -163,41 +224,27 @@ export async function provisionWithBindings(
 					customCount >= 2,
 			);
 		}
-		const requestHash = hash(JSON.stringify({ origin: input.origin, bodies }));
 		const stateFile = join(directory, "agent-bindings.json");
-		let state: State = {
-			schemaVersion: 1,
-			origin: input.origin,
+		const state = await bindingState(
+			input.origin,
+			bodies,
+			directory,
 			sourceSha,
-			requestHash,
-			agents: {},
-		};
-		const exists = await lstat(stateFile).catch((error) => {
-			if (error.code !== "ENOENT") throw error;
-			return undefined;
-		});
-		if (exists) {
-			state = await privateJson(stateFile);
+			true,
+		);
+		assert(
+			state.agents &&
+				typeof state.agents === "object" &&
+				!Array.isArray(state.agents),
+		);
+		for (const [name, entry] of Object.entries(state.agents)) {
 			assert(
-				state.schemaVersion === 1 &&
-					state.origin === input.origin &&
-					state.sourceSha === sourceSha &&
-					state.requestHash === requestHash,
+				seen.has(name) &&
+					typeof entry.agentId === "string" &&
+					entry.agentId.length > 0 &&
+					entry.agentId.length <= 256 &&
+					typeof entry.ready === "boolean",
 			);
-			assert(
-				state.agents &&
-					typeof state.agents === "object" &&
-					!Array.isArray(state.agents),
-			);
-			for (const [name, entry] of Object.entries(state.agents)) {
-				assert(
-					seen.has(name) &&
-						typeof entry.agentId === "string" &&
-						entry.agentId.length > 0 &&
-						entry.agentId.length <= 256 &&
-						typeof entry.ready === "boolean",
-				);
-			}
 		}
 		if (checkOnly)
 			return {
