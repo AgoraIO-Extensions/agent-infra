@@ -6,7 +6,132 @@ import { createServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { parseInput } from "./local-real-e2e/custom-agent-web-probe.ts";
+import {
+	parseInput,
+	verifyCustomAgentWeb,
+} from "./local-real-e2e/custom-agent-web-probe.ts";
+
+for (const scenario of [
+	"recovery",
+	"exhausted",
+	"default",
+	"tls",
+	"tls-leaf",
+	"unknown",
+	"http",
+	"content",
+	"leak",
+	"body-error",
+]) {
+	test(`entry transport evidence preserves the boundary: ${scenario}`, async (t) => {
+		const directory = await mkdtemp(join(tmpdir(), "entry-transport-"));
+		t.after(() => rm(directory, { recursive: true, force: true }));
+		const allowed = "Bearer SYNTHETIC_ALLOWED_SECRET";
+		const denied = "Bearer SYNTHETIC_DENIED_SECRET";
+		const content = "<html>synthetic private application</html>";
+		const input = {
+			url: "https://entry.example.test/app",
+			sourceSha: "a".repeat(40),
+			imageDigest: `sha256:${"b".repeat(64)}`,
+			configurationRevision: "workload-1",
+			contentSha256: createHash("sha256").update(content).digest("hex"),
+			allowedAuthorizationFile: join(directory, "allowed"),
+			deniedAuthorizationFile: join(directory, "denied"),
+		};
+		await writeFile(input.allowedAuthorizationFile, allowed, { mode: 0o600 });
+		await writeFile(input.deniedAuthorizationFile, denied, { mode: 0o600 });
+		let calls = 0;
+		t.mock.method(globalThis, "fetch", async (_url, options) => {
+			calls++;
+			if (
+				calls === 1 &&
+				[
+					"recovery",
+					"exhausted",
+					"default",
+					"tls",
+					"tls-leaf",
+					"unknown",
+				].includes(scenario)
+			) {
+				const cause = Object.assign(new Error("SYNTHETIC_ERROR_SECRET"), {
+					code:
+						scenario === "tls"
+							? "CERT_HAS_EXPIRED"
+							: scenario === "tls-leaf"
+								? "UNABLE_TO_VERIFY_LEAF_SIGNATURE"
+								: scenario === "unknown"
+									? "SYNTHETIC_UNKNOWN_SECRET"
+									: "EAI_AGAIN",
+				});
+				throw new TypeError("SYNTHETIC_ERROR_SECRET", { cause });
+			}
+			assert(options.signal instanceof AbortSignal);
+			if (calls === 1 && scenario === "http")
+				return new Response("", { status: 503 });
+			if (calls === 1 && scenario === "body-error")
+				return new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.error(new Error("SYNTHETIC_ERROR_SECRET"));
+						},
+					}),
+					{ status: 401 },
+				);
+			const authorized = options.headers.authorization === allowed;
+			return new Response(
+				authorized
+					? scenario === "content"
+						? "wrong"
+						: content
+					: scenario === "leak"
+						? content
+						: "",
+				{
+					status: authorized ? 200 : 403,
+					headers: { "content-type": "text/html" },
+				},
+			);
+		});
+		const result = await verifyCustomAgentWeb(
+			input,
+			scenario === "default"
+				? {}
+				: { transportRetryTimeoutMs: scenario === "exhausted" ? 1 : 5000 },
+		);
+		assert.equal(result.pass, scenario === "recovery");
+		assert.equal(calls, scenario === "recovery" ? 6 : 5);
+		assert.equal(result.results[0].attempts, scenario === "recovery" ? 2 : 1);
+		if (scenario === "recovery")
+			assert.deepEqual(result.results[0].transportFailures, ["EAI_AGAIN"]);
+		if (scenario.startsWith("tls"))
+			assert.equal(result.results[0].error, "TLS_INVALID");
+		if (scenario === "unknown")
+			assert.equal(result.results[0].error, "TRANSPORT_UNCLASSIFIED");
+		if (scenario === "http")
+			assert.equal(result.results[0].error, "HTTP_STATUS_UNEXPECTED");
+		if (scenario === "content")
+			assert.equal(result.results.at(-1).error, "CONTENT_HASH_MISMATCH");
+		if (scenario === "leak")
+			assert.equal(result.results[0].error, "UNAUTHORIZED_BODY");
+		if (scenario === "body-error")
+			assert.equal(result.results[0].error, "CONTENT_READ_FAILED");
+		for (const secret of [
+			allowed,
+			denied,
+			content,
+			"SYNTHETIC_ERROR_SECRET",
+			"SYNTHETIC_UNKNOWN_SECRET",
+			input.url,
+		])
+			assert.equal(JSON.stringify(result).includes(secret), false);
+		for (const budget of [-1, 120001, 1.5, Number.NaN])
+			await assert.rejects(
+				verifyCustomAgentWeb(input, { transportRetryTimeoutMs: budget }),
+				/TRANSPORT_RETRY_BUDGET_INVALID/u,
+			);
+	});
+}
 
 test("detects permissive and leaking HTTPS custom-Web services", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "custom-agent-web-probe-"));

@@ -1475,6 +1475,11 @@ test("a background reread of the saved Key candidates keeps the picker through a
 	);
 	await mini.click();
 	await expect(mini).toBeChecked();
+	// #3683：选择器的 effect 随后提交父草稿；等页脚移除「无变更」再记录后台重读基准。
+	await expect(
+		page.getByRole("button", { name: "保存配置", exact: true }),
+	).toBeEnabled();
+	await expect(page.locator("#agent-configuration-unchanged")).toHaveCount(0);
 	await mini.focus();
 	await expectBackgroundRereadKeeps(page, {
 		path: "/api/v2/agents/agent-pilot-1/default-relay-key/display-candidates",

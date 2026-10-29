@@ -1,8 +1,20 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import {
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
 	assertOwnEntryUnchanged,
+	validateOwnEntry,
 	verifyOwnEntryWorkloads,
 } from "../deploy/ack/self-managed-entry.ts";
 
@@ -231,4 +243,116 @@ test("an in-place configuration revision change invalidates the completed browse
 		() => assertOwnEntryUnchanged(before, after),
 		/OWN_ENTRY_CONFIGURATION_REVISION_CHANGED/u,
 	);
+});
+
+test("a failed own-entry HTTP boundary is retained privately before rejecting the browser journey", async (t) => {
+	const f = fixture();
+	const sourceSha = "c".repeat(40);
+	const directory = await mkdtemp(join(tmpdir(), "entry-boundary-receipt-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const state = join(directory, "state");
+	const evidence = join(directory, "evidence");
+	await mkdir(state);
+	await mkdir(evidence);
+	const write = async (name, value) => {
+		const file = join(directory, name);
+		await writeFile(
+			file,
+			typeof value === "string" ? value : JSON.stringify(value),
+			{ mode: 0o600 },
+		);
+		return file;
+	};
+	const credential = "SYNTHETIC_API_SECRET";
+	const body = { source: f.source };
+	const request = {
+		name: "own-multi",
+		bodyFile: await write("body.json", body),
+		credentialFile: await write("credential", credential),
+		idempotencyKey: "synthetic-idempotency",
+	};
+	const requests = {
+		origin: "https://platform.example.test",
+		requests: [request],
+	};
+	await write("state/agent-bindings.json", {
+		sourceSha,
+		origin: requests.origin,
+		agents: { "own-multi": { agentId: f.agentId, ready: true } },
+		requestHash: createHash("sha256")
+			.update(
+				JSON.stringify({
+					origin: requests.origin,
+					bodies: [
+						{
+							name: request.name,
+							body,
+							idempotencyKey: request.idempotencyKey,
+						},
+					],
+				}),
+			)
+			.digest("hex"),
+	});
+	const { privateKey } = generateKeyPairSync("ed25519");
+	const config = {
+		schemaVersion: 1,
+		sourceSha,
+		imageSourceSha: sourceSha,
+		contentSha256: "d".repeat(64),
+		requestName: "own-multi",
+		routeHostSuffix: "apps.example.test",
+		issuer: "fixture",
+		audience: "fixture",
+		expectedReply: "fixture",
+		signingKeyFile: await write(
+			"key",
+			privateKey.export({ type: "pkcs8", format: "pem" }),
+		),
+		browserCertificateFile: join(directory, "unused-cert"),
+	};
+	let requestsObserved = 0;
+	t.mock.method(globalThis, "fetch", async (url) => {
+		requestsObserved++;
+		return String(url).includes("/api/v2/agents/")
+			? Response.json({
+					agentId: f.agentId,
+					managementStatus: "available",
+					serviceAvailability: "ready",
+					source: f.source,
+					interactionUrl: f.origin,
+				})
+			: new Response("", { status: 503 });
+	});
+	await assert.rejects(
+		validateOwnEntry(
+			await write("config.json", config),
+			await write("requests.json", requests),
+			state,
+			evidence,
+			sourceSha,
+			(kind) => f.inventory[kind],
+		),
+		/OWN_ENTRY_BOUNDARY_FAILED/u,
+	);
+	assert.equal(requestsObserved, 6);
+	const [entry] = await readdir(evidence);
+	const file = join(evidence, entry, "boundary.json");
+	const receipt = JSON.parse(await readFile(file, "utf8"));
+	assert.equal(receipt.sourceSha, sourceSha);
+	assert.equal(
+		receipt.agentHash,
+		createHash("sha256").update(f.agentId).digest("hex"),
+	);
+	assert.equal(receipt.boundary.pass, false);
+	assert.equal(receipt.boundary.results.length, 5);
+	assert(
+		receipt.boundary.results.every(
+			(result) =>
+				result.error === "HTTP_STATUS_UNEXPECTED" && result.attempts === 1,
+		),
+	);
+	assert.equal((await stat(file)).mode & 0o077, 0);
+	for (const secret of [credential, f.agentId, f.origin, "PRIVATE KEY"])
+		assert.equal(JSON.stringify(receipt).includes(secret), false);
 });
