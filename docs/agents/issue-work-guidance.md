@@ -1,7 +1,7 @@
 # Issue 工作指导
 
 > 适用范围：`AgoraIO-Extensions/agent-infra` 当前开放 Issue。本文把实时清单转成可执行的分派规则；具体产品结论仍以 PRD、工程 Spec、HLD 和 Issue 正文为准。
-> 最新时间、基线、标签与 PR head/merge 证据统一见 [状态跟进](issue-status-tracking.md)。
+> 最新时间、基线、标签、逐票责任与 PR head/merge 证据统一见 [状态跟进](issue-status-tracking.md)。
 
 ## 四类工作边界
 
@@ -39,7 +39,8 @@ GitHub、当前 branch/worktree 和最新 main，再完成两次交叉确认：
 旧验收回执、验收标签和外部依赖都不能替代当前 owner 的确认；没有回复既不证明仍持有，也不
 证明已释放。外部条件与 owner 分列：未确认执行者的项目继续核对可执行入口和输入，寻找不依赖
 缺失条件的下一步，不把整组待验收票自动排除。取得有限调查/状态交接时，写实现或操作环境仍须
-另核该范围与当前占用。
+另核该范围与当前占用。每个待办都须留下下一动作、缺失输入及可定位证据；
+只有 owner 明确接受了具体执行范围和窗口，才记录为已排期。
 
 每条 lane 独占已声明文件。缺失内部接口若已在 Issue Scope 中授权，属于待实现内容；只有实际
 产品/架构冲突或外部输入缺失才记录 blocker，不将缺失代码本身当作外部审批门禁。
@@ -48,9 +49,9 @@ GitHub、当前 branch/worktree 和最新 main，再完成两次交叉确认：
 
 - `ready-for-agent` 只表示可以开始契约复核，不代表依赖已满足。
 - `needs-triage` 先由协调者补齐问题、范围、验证和 blocker；不得直接认领。
-- `ready-for-human`、真实部署、真实浏览器、外部账号和人工决策保持人工门禁；代码测试通过不等于验收完成。
+- `ready-for-human` 按 [Triage Labels](triage-labels.md) 仅作人工处理/验证标记；真实部署、浏览器、外部账号与人工决策按各票签收要求取证，代码测试不代替。
 - 同一文件、同一部署单元或同一 Issue 只能有一个写 owner；依赖关系写回 Issue 或 PR，不在状态表里推测。
-- 每次状态更新必须带日期、证据链接、准确的 head/PR 状态和未完成 AC；不使用“看起来完成”“CI 绿色”作为完成依据。
+- 每次状态更新必须带采集窗口、证据链接、准确的 head/merge/PR 状态和未完成 AC；业务待办与本次治理票分别计数。已结束的 lane 移入交付记录，当前分派表只保留实际责任。
 
 ## 权威来源
 
@@ -66,6 +67,8 @@ GitHub、当前 branch/worktree 和最新 main，再完成两次交叉确认：
 开发 PR 的准确状态、日期、head SHA、merge SHA、Issue AC 链接统一见
 [开发 PR 回读](issue-status-tracking.md#开发-pr-回读)，不在此重复维护历史 SHA。
 发现代码遗漏或回归继续修复并恢复跟踪，不把真实验收延期当成代码缺口已完成。
+验收前回读 PRD/Spec 及适用 ADR 的当前范围，核对真实输入和部署来源；错误模板、旧协议或
+缺声明导致的失败先定位并保留，不扩大需求或绕过准入来取得通过。
 
 标签遵循 [Issue Tracker](issue-tracker.md#agent-provenance) 与
 [Triage Labels](triage-labels.md)。新建 Issue/PR 显式传入唯一 `agent:*` 来源标签，
