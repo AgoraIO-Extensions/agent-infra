@@ -20,6 +20,14 @@ pnpm build
 pnpm --filter @agent-infra/web exec playwright install chromium
 ```
 
+脱敏 capsule 模板见 [`capsule.example.json`](./capsule.example.json)。复制到仓库外的 0700
+目录后，只填入同一 capsule 目录下的私有输入文件和实际 `sourceSha`；不要把 kubeconfig、
+Secret、Cookie、storageState、数据库 URL 或普通会话正文写回仓库。准备完成后用同一入口执行：
+
+```bash
+node --experimental-strip-types deploy/ack/run-capsule.ts /private/ack/capsule.json all
+```
+
 将私有输入包完整复制到 Git 仓库外的 `0700` 目录，文件保持 `0600`，再执行：
 
 ```bash

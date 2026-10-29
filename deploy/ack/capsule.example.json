@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "0123456789abcdef0123456789abcdef01234567",
+  "inputs": [
+    "bootstrap-inputs.json",
+    "values.fresh.json",
+    "platform-images.json",
+    "runtime-host-manifest.json",
+    "templates-amd64.json",
+    "template-preflight-jobs.json",
+    "template-validations.json",
+    "workload-capacity.json",
+    "login-bootstrap.json",
+    "credential-bootstrap.json",
+    "agent-requests.json",
+    "cleanup-plan.json",
+    "custom/own-single.json",
+    "custom/own-multi.json"
+  ],
+  "directories": [
+    "state",
+    "browser",
+    "credentials",
+    "custom",
+    "evidence"
+  ],
+  "environment": {
+    "ACK_KUBECONFIG": "@CAPSULE_ROOT@/kubeconfig",
+    "ACK_NAMESPACE": "agent-infra",
+    "ACK_RELEASE": "agent-infra-ack",
+    "ACK_VALUES_FILE": "@CAPSULE_ROOT@/values.fresh.json",
+    "ACK_IMAGE_MANIFEST": "@CAPSULE_ROOT@/platform-images.json",
+    "ACK_RUNTIME_IMAGE_MANIFEST": "@CAPSULE_ROOT@/runtime-host-manifest.json",
+    "ACK_TEMPLATE_IMAGE_MANIFEST": "@CAPSULE_ROOT@/templates-amd64.json",
+    "ACK_TEMPLATE_PREFLIGHT_JOBS_FILE": "@CAPSULE_ROOT@/template-preflight-jobs.json",
+    "ACK_TEMPLATE_VALIDATIONS_FILE": "@CAPSULE_ROOT@/template-validations.json",
+    "ACK_WORKLOAD_CAPACITY_FILE": "@CAPSULE_ROOT@/workload-capacity.json",
+    "ACK_BOOTSTRAP_INPUTS_FILE": "@CAPSULE_ROOT@/bootstrap-inputs.json",
+    "ACK_LOGIN_BOOTSTRAP_FILE": "@CAPSULE_ROOT@/login-bootstrap.json",
+    "ACK_CREDENTIAL_BOOTSTRAP_FILE": "@CAPSULE_ROOT@/credential-bootstrap.json",
+    "ACK_AGENT_REQUESTS_FILE": "@CAPSULE_ROOT@/agent-requests.json",
+    "ACK_CLEANUP_PLAN_FILE": "@CAPSULE_ROOT@/cleanup-plan.json",
+    "ACK_AGENT_STATE_DIR": "@CAPSULE_ROOT@/state",
+    "ACK_BROWSER_BLUEPRINT_DIR": "@CAPSULE_ROOT@/browser",
+    "ACK_CUSTOM_AGENT_CONFIGS": [
+      "@CAPSULE_ROOT@/custom/own-single.json",
+      "@CAPSULE_ROOT@/custom/own-multi.json"
+    ],
+    "ACK_CUSTOM_AGENT_PROBE": "web",
+    "ACK_PUBLIC_ORIGIN": "https://ack.example.test",
+    "ACK_CA_CERT_FILE": "@CAPSULE_ROOT@/ack-ca.crt",
+    "ACK_EVIDENCE_DIR": "@CAPSULE_ROOT@/evidence"
+  }
+}
