@@ -24,13 +24,11 @@ describe("EvaluationWorkbench", () => {
 				"按固定数据集比较模型或 Agent 配置，保留逐例结果和人工复核。",
 			),
 		).toBeTruthy();
-		// R-03：主操作在页头；实验运行接口未接入，按钮不可用并由说明解释原因。
-		const create = screen.getByRole("button", { name: "实验运行待接入" });
-		expect(create.hasAttribute("disabled")).toBe(true);
-		const note = document.getElementById(
-			create.getAttribute("aria-describedby") ?? "",
-		);
-		expect(note?.textContent).toContain("仍待接入");
+		expect(
+			screen
+				.getByRole("button", { name: "运行与查看实验" })
+				.hasAttribute("disabled"),
+		).toBe(false);
 		expect(screen.getByText("评测使用独立授权")).toBeTruthy();
 		// 设计没有视图标签，也不显示示例数据。
 		expect(screen.queryByText("管理员视图")).toBeNull();
@@ -57,13 +55,13 @@ describe("EvaluationWorkbench", () => {
 		);
 
 		fireEvent.click(screen.getByRole("tab", { name: "实验" }));
-		expect(screen.getByRole("tabpanel").textContent).toContain("还没有实验");
+		expect(screen.getByRole("tabpanel").textContent).toContain(
+			"运行基线与候选",
+		);
 
 		fireEvent.click(screen.getByRole("tab", { name: "反馈" }));
 		const panel = screen.getByRole("tabpanel");
-		expect(panel.textContent).toContain("还没有主动反馈");
-		expect(
-			screen.getByRole("link", { name: "查看对话反馈" }).getAttribute("href"),
-		).toBe("/agents?mode=conversation");
+		expect(panel.textContent).toContain("线上主动反馈");
+		expect(screen.getByLabelText("查看范围")).toBeTruthy();
 	});
 });

@@ -74,3 +74,11 @@ export async function startPostgresTestDatabase(
 		throw error;
 	}
 }
+
+/** Raw client only for the owned isolated database used by cross-app test fixtures. */
+export function openPostgresTestClient(
+	database: PostgresTestDatabase,
+	max = 4,
+) {
+	return postgres(database.databaseUrl, { max });
+}

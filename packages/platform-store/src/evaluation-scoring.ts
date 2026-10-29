@@ -15,6 +15,7 @@ import {
 	type EvaluationScoringInputV1,
 	parseEvaluationExperimentPolicyV1,
 	parseEvaluationExperimentV1,
+	parseEvaluationPolicyV1,
 	parseEvaluationReviewRecordV1,
 	parseEvaluationSampleTaskV1,
 	parseEvaluationScoreIntentV1,
@@ -347,7 +348,7 @@ export class PostgresEvaluationScoringV1
 				execution_id: string;
 			}[]
 		>`select status,last_event_sequence,execution_source,model_configuration_revision,model_option_id,reasoning_level,execution_id from platform.conversation_executions where execution_id=${intent.executionId}`;
-		if (!execution || execution.execution_source !== "eval")
+		if (execution?.execution_source !== "eval")
 			throw new EvaluationDataErrorV1("denied");
 		if (!["completed", "failed", "cancelled"].includes(execution.status))
 			return { waiting: true as const, delayMs: intent.scorer.retryDelayMs };
@@ -409,8 +410,7 @@ export class PostgresEvaluationScoringV1
 				{ status: string; last_event_sequence: string }[]
 			>`select status,last_event_sequence from platform.conversation_executions where execution_id=${intent.executionId} for share`;
 			if (
-				!current ||
-				current.status !== "completed" ||
+				current?.status !== "completed" ||
 				current.last_event_sequence !== execution.last_event_sequence ||
 				(latest.resultVersion !== null &&
 					latest.resultVersion !== resultVersion)
@@ -618,6 +618,145 @@ export class PostgresEvaluationScoringV1
 			const binding = await this.#current(tx, req, intent, purpose);
 			return { intent, actor: binding.principal };
 		});
+	}
+	async worklist(
+		req: EvaluationRequestV1,
+		purpose: "score" | "review",
+		limit: number,
+		cursor?: string,
+	) {
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+			throw new EvaluationDataErrorV1("invalid");
+		const principal = await this.#dataStore.authenticate({
+			...req,
+			credentialScope: purpose === "score" ? "eval:score" : "eval:review",
+		});
+		const policy = parseEvaluationPolicyV1(await this.options.loadDataPolicy());
+		if (Date.parse(policy.validUntil) <= Date.now())
+			throw new EvaluationDataErrorV1("denied");
+		const rows = await this.#client<
+			{ id: string }[]
+		>`select i.id from platform.evaluation_score_intents i where (i.data->>'metadataExpiresAt')::timestamptz>clock_timestamp() ${cursor ? this.#client`and i.id>${cursor}::uuid` : this.#client``} and exists(select 1 from platform.evaluation_grants g where g.dataset_id=(i.data->>'datasetId')::uuid and g.data->'principal'=${this.#client.json(principal)}::jsonb and g.data->>'revoked'='false' and g.data->>'policyId'=${policy.policyId} and (g.data->>'policyRevision')::bigint=${policy.revision} and (g.data->>'expiresAt')::timestamptz>clock_timestamp() and g.data->'versionIds' @> jsonb_build_array(i.data->>'versionId') and g.data->'operations' @> ${this.#client.json([purpose])}::jsonb) order by i.id limit 501`;
+		const items = [];
+		const selected: EvaluationScoreIntentV1[] = [];
+		let last: string | null = null;
+		let more = false;
+		for (const row of rows) {
+			if (items.length === limit) {
+				more = true;
+				break;
+			}
+			last = row.id;
+			try {
+				const { intent } = await this.load(req, row.id, purpose);
+				selected.push(intent);
+				items.push({
+					scoreId: intent.id,
+					source: intent.scorer.implementation.kind,
+					scoringModel:
+						intent.scorer.implementation.kind === "model"
+							? intent.scorer.implementation.modelId
+							: null,
+					sampleTaskId: intent.sampleTaskId,
+					experimentId: intent.experimentId,
+					executionId: intent.executionId,
+					scorerId: intent.scorer.scorerId,
+					scorerVersion: intent.scorer.version,
+					status: intent.status,
+					revision: intent.revision,
+					value: intent.value,
+					passed: intent.passed,
+					failureCode: intent.failureCode,
+					scoreActor: intent.scoreActor,
+				});
+			} catch (error) {
+				if (error instanceof EvaluationDataErrorV1 && error.code === "denied")
+					continue;
+				throw error;
+			}
+		}
+		// Keep every returned row and authority in one transaction through the final
+		// identity await; the existing DataStore gate checks the earliest deadline afterwards.
+		await this.#transaction(async (tx) => {
+			const store = new PostgresEvaluationDataStoreV1({
+				...this.options,
+				transaction: tx,
+			});
+			await store.transaction(
+				{
+					...req,
+					credentialScope: purpose === "score" ? "eval:score" : "eval:review",
+				},
+				async (authority) => {
+					if (!isDeepStrictEqual(authority.principal, principal))
+						throw new EvaluationDataErrorV1("denied");
+					await authority.bindPolicy(policy);
+					const deadlines = [Date.parse(policy.validUntil)];
+					for (const agentId of [
+						...new Set(selected.map((intent) => intent.agentId)),
+					].sort())
+						await tx`select id from platform.agents where id=${agentId} for share`;
+					const experimentPolicy = parseEvaluationExperimentPolicyV1(
+						await this.options.loadExperimentPolicy(),
+					);
+					deadlines.push(Date.parse(experimentPolicy.validUntil));
+					for (const original of selected) {
+						const [row] = await tx<
+							ScoreRow[]
+						>`select * from platform.evaluation_score_intents where id=${original.id} for share`;
+						if (!row) throw new EvaluationDataErrorV1("denied");
+						const intent = decodeScore(row);
+						if (!isDeepStrictEqual(intent, original))
+							throw new EvaluationDataErrorV1("denied");
+						const binding = await this.#current(tx, req, intent, purpose);
+						if (!isDeepStrictEqual(binding.policy, policy))
+							throw new EvaluationDataErrorV1("denied");
+						const dataset = await authority.dataset(intent.datasetId);
+						const [experiment] = await tx<
+							{ data: unknown }[]
+						>`select data from platform.evaluation_experiments where id=${intent.experimentId} for share`;
+						if (!dataset || !experiment)
+							throw new EvaluationDataErrorV1("denied");
+						deadlines.push(
+							Date.parse(intent.metadataExpiresAt),
+							Date.parse(dataset.metadataExpiresAt),
+							Date.parse(
+								parseEvaluationExperimentV1(experiment.data).metadataExpiresAt,
+							),
+							Date.parse(binding.grant.expiresAt),
+							Date.parse(binding.version.metadataExpiresAt),
+							Date.parse(binding.version.expiresAt),
+							Date.parse(binding.version.createdAt) +
+								policy.retention.samples.contentMs,
+							Date.parse(binding.version.createdAt) +
+								policy.retention.rubric.contentMs,
+							Date.parse(experimentPolicy.validUntil),
+						);
+					}
+					if (
+						!isDeepStrictEqual(
+							policy,
+							parseEvaluationPolicyV1(await this.options.loadDataPolicy()),
+						) ||
+						!isDeepStrictEqual(
+							experimentPolicy,
+							parseEvaluationExperimentPolicyV1(
+								await this.options.loadExperimentPolicy(),
+							),
+						)
+					)
+						throw new EvaluationDataErrorV1("denied");
+					authority.authorizationExpiresAt = new Date(
+						Math.min(...deadlines),
+					).toISOString();
+				},
+			);
+		});
+		return {
+			purpose,
+			items,
+			nextCursor: more || rows.length === 501 ? last : null,
+		};
 	}
 	async content(
 		req: EvaluationRequestV1,

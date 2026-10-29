@@ -54,7 +54,7 @@ test("uses the real API, PostgreSQL and S3 for explicit grants, import, revoke a
 		await page.getByRole("button", { name: "创建空评测集" }).click();
 		await page.getByRole("button", { name: "预留新版本" }).click();
 		await page.getByRole("button", { name: "选择此版本" }).click();
-		await page.getByLabel("接收主体稳定 ID").fill("browser-admin");
+		await page.getByRole("button", { name: "选择当前用户" }).click();
 		await page
 			.getByLabel("授权到期时间（UTC ISO）")
 			.fill(new Date(Date.now() + 300000).toISOString());
@@ -91,8 +91,14 @@ test("uses the real API, PostgreSQL and S3 for explicit grants, import, revoke a
 		await page.getByRole("button", { name: "确认删除" }).click();
 		await expect(page.getByRole("button", { name: "读取内容" })).toBeDisabled();
 	} finally {
-		await page.goto("about:blank");
-		await page.unrouteAll({ behavior: "wait" });
-		await fixture.close();
+		try {
+			if (!page.isClosed()) await page.goto("about:blank");
+		} finally {
+			try {
+				await page.unrouteAll({ behavior: "ignoreErrors" });
+			} finally {
+				await fixture.close();
+			}
+		}
 	}
 });

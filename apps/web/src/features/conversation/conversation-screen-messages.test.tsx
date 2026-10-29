@@ -2,12 +2,22 @@ import {
 	ConversationDetailProjectionV2Schema,
 	PersistedConversationEventV2Schema,
 } from "@agent-infra/contracts/pilot";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { client } from "../../pilot/generated-v2/client.gen.js";
 import { ConversationMessages } from "./conversation-screen-messages.js";
 import { history, timestamp } from "./conversation-test-fixtures.js";
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	vi.unstubAllGlobals();
+});
 
 type Status = "processing" | "completed";
 
@@ -56,9 +66,11 @@ function timeline(
 	messages: ReturnType<typeof message>[],
 	events: ReturnType<typeof fact>[],
 	stopExecution?: string,
+	feedbackIdentity?: string,
 ) {
 	render(
 		<ConversationMessages
+			feedbackIdentity={feedbackIdentity}
 			agentName="Agent"
 			userName="用户"
 			history={ConversationDetailProjectionV2Schema.parse({
@@ -210,4 +222,71 @@ describe("supplementary instructions in the timeline (#3449 N16-01)", () => {
 			"Agent的消息",
 		]);
 	});
+});
+
+it("binds feedback to the selected historical answer version", async () => {
+	const paths: string[] = [];
+	client.setConfig({
+		baseUrl: "https://platform.test",
+		fetch: (input, init) => globalThis.fetch(input, init),
+	});
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: RequestInfo | URL) => {
+			const request = input instanceof Request ? input : new Request(input);
+			paths.push(new URL(request.url).pathname);
+			return Response.json({
+				executionId: paths.at(-1)?.split("/").at(-1),
+				eligibility: "eligible",
+				terminalObservedAt: null,
+				conditions: [],
+				conditionDigest: "a".repeat(64),
+				revision: 0,
+				feedback: null,
+				feedbackCurrent: false,
+				categories: [],
+			});
+		}),
+	);
+	timeline(
+		[
+			message("q1", "user", "Question", "completed", "original"),
+			{
+				...message(
+					"a1",
+					"assistant",
+					"Original answer",
+					"completed",
+					"original",
+					"q1",
+				),
+				isCurrentAnswer: false,
+			},
+			{
+				...message(
+					"a2",
+					"assistant",
+					"Regenerated answer",
+					"completed",
+					"regenerated",
+					"q1",
+				),
+				answerVersion: 2,
+			},
+		],
+		[],
+		undefined,
+		"viewer-generation",
+	);
+	fireEvent.click(screen.getByRole("button", { name: /任务反馈/ }));
+	await screen.findByRole("button", { name: "提交反馈" });
+	expect(paths).toEqual(["/api/v2/task-feedback/regenerated"]);
+	fireEvent.click(screen.getByRole("button", { name: "上一个回答版本" }));
+	expect(screen.queryByRole("button", { name: "提交反馈" })).toBeNull();
+	fireEvent.click(screen.getByRole("button", { name: /任务反馈/ }));
+	await screen.findByRole("button", { name: "提交反馈" });
+	expect(paths).toEqual([
+		"/api/v2/task-feedback/regenerated",
+		"/api/v2/task-feedback/original",
+	]);
 });

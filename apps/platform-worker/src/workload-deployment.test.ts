@@ -212,6 +212,21 @@ describe("production Worker deployment", () => {
 			).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
 		},
 	);
+	it("validates an explicitly configured analysis policy before any workload dependency", async () => {
+		const configured = await input();
+		await expect(
+			createProductionWorkloadWorkerOptionsV1({
+				...configured,
+				evaluation: {
+					storage: {} as never,
+					batchSize: 1,
+					timeoutMs: 1000,
+					loadAnalysisPolicy: async () => ({}) as never,
+				},
+			}),
+		).rejects.toMatchObject({ code: "WORKER_CONFIGURATION_INVALID" });
+	});
+
 	it("passes a validated deployment-owned file reconciliation adapter", async () => {
 		const deployment = await input();
 		const files = {

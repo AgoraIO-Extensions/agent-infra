@@ -153,6 +153,7 @@ import {
 	evaluationScoreIntents,
 	evaluationScoreReviews,
 	evaluationVersions,
+	taskFeedback,
 } from "./schema-evaluation.js";
 
 export const platformInfrastructureTables = [
@@ -165,6 +166,7 @@ export const platformInfrastructureTables = [
 	evaluationGrants,
 	evaluationPolicies,
 	evaluationVersions,
+	taskFeedback,
 	connectionInstallationAuthorizations,
 	connectionInstallationCommands,
 	platformUserDisables,
@@ -228,5 +230,6 @@ export {
 	evaluationScoreIntents,
 	evaluationScoreReviews,
 	evaluationVersions,
+	taskFeedback,
 } from "./schema-evaluation.js";
 export { sessionSandboxAllocations } from "./schema-session-sandboxes";

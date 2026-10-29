@@ -174,6 +174,7 @@ it("missing or invalid scopes cannot bypass caller authorization and invalidated
 		"eval:run",
 		"eval:score",
 		"eval:review",
+		"eval:analyze",
 	] as const)
 		expect(() => requireApiCredentialIdentityV1(limited, scope)).toThrow(
 			expect.objectContaining({ code: "forbidden" }),

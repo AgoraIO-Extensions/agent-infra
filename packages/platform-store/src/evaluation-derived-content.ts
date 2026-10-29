@@ -70,13 +70,15 @@ export class PostgresEvaluationDerivedContentV1
 		versionId: string,
 		kind: EvaluationDerivedKindV1,
 	) {
-		return kind === "review" || request.credentialScope === "eval:review"
-			? this.#data.authorizeReview(request, datasetId, versionId)
-			: kind === "score" ||
-					request.credentialScope === "eval:score" ||
-					request.authentication.kind === "score_work"
-				? this.#data.authorizeScore(request, datasetId, versionId)
-				: this.#data.authorizeRun(request, datasetId, versionId);
+		return request.credentialScope === "eval:analyze"
+			? this.#data.authorizeAnalyze(request, datasetId, versionId)
+			: kind === "review" || request.credentialScope === "eval:review"
+				? this.#data.authorizeReview(request, datasetId, versionId)
+				: kind === "score" ||
+						request.credentialScope === "eval:score" ||
+						request.authentication.kind === "score_work"
+					? this.#data.authorizeScore(request, datasetId, versionId)
+					: this.#data.authorizeRun(request, datasetId, versionId);
 	}
 	async #transaction<T>(
 		request: EvaluationRequestV1,

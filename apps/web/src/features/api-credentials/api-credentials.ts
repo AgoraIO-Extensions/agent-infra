@@ -35,6 +35,7 @@ export const personalApiCredentialScopes = [
 	"eval:run",
 	"eval:score",
 	"eval:review",
+	"eval:analyze",
 ] as const;
 
 export type PersonalApiCredentialScope =
@@ -52,6 +53,7 @@ export const personalApiCredentialScopeLabels: Record<
 	"eval:run": "评测运行（仍需用途授权）",
 	"eval:score": "评测评分（仍需用途授权）",
 	"eval:review": "评测复核（仍需用途授权）",
+	"eval:analyze": "评测分析（仍需用途授权）",
 };
 
 export type ApiCredentialsState =

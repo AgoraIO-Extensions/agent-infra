@@ -138,7 +138,7 @@ async function seed(
 		values (${`conversation:turn:${executionId}`}, 'conversation', ${conversationId}, 'conversation.turn.submit.v1', ${sql.json({ schemaVersion: 1, conversationId, executionId, messageId: `message-${name}`, turnId: metadata.turnId, sessionGeneration: 3, modelConfigurationRevision: 7, modelOptionId: "original-model", reasoningLevel: "medium" })}, ${metadata.traceId}, ${metadata.requestId})`;
 }
 
-async function snapshotHistory() {
+async function snapshotHistory(legacyExecutionRows = false) {
 	const snapshots: unknown[] = [];
 	for (const table of [
 		"agents",
@@ -151,7 +151,7 @@ async function snapshotHistory() {
 		"idempotency_records",
 		"outbox_items",
 	]) {
-		const record =
+		let record =
 			table === "conversation_executions"
 				? "to_jsonb(record) - 'principal_type' - 'task_wait_order' - 'task_wait_deadline' - 'execution_source' - 'relay_key_purpose' - 'relay_key_subject_id' - 'relay_key_id' - 'relay_key_version' - 'runtime_submit_protocol' - 'original_operation_digest' - 'original_submit_host_session_ref' - 'sandbox_id' - 'accepted_original_host_session_ref' - 'unknown_since'"
 				: table === "conversations"
@@ -159,9 +159,12 @@ async function snapshotHistory() {
 					: table === "outbox_items"
 						? "to_jsonb(record) - 'trace_parent'"
 						: "to_jsonb(record)";
+		// 仅升级前的期望快照补 NULL；升级后的实际值仍逐字段比较。
+		if (legacyExecutionRows && table === "conversation_executions")
+			record = `(${record}) || '{"terminal_observed_at":null}'::jsonb`;
 		snapshots.push(
 			await sql.unsafe(
-				`select ${record}::text as value from platform.${table} record order by ${record}::text`,
+				`select (${record})::text as value from platform.${table} record order by (${record})::text`,
 			),
 		);
 	}
@@ -207,7 +210,7 @@ beforeAll(async () => {
 		await seed(name, "completed");
 	await seed("recovery", "unknown", "principal");
 	await seed("unproven", "processing", "unproven");
-	const before = await snapshotHistory();
+	const before = await snapshotHistory(true);
 	await sql`create schema platform_migrations`;
 	await sql`create table platform_migrations.history (id serial primary key, hash text not null, created_at bigint)`;
 	for (const entry of previous)

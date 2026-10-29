@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
+import { readEvaluationBaseline } from "./test/evaluation-baseline.js";
 
-it.each(["v1", "v2"])(
+it.each(["v1", "v2"] as const)(
 	"accepts only the reviewed Eval addition in %s and preserves old authority contracts",
 	async (version) => {
 		const current = JSON.parse(
@@ -17,7 +18,7 @@ it.each(["v1", "v2"])(
 				"utf8",
 			),
 		);
-		const previous = structuredClone(current);
+		const previous = await readEvaluationBaseline(version);
 		for (const path of Object.keys(previous.paths))
 			if (path.startsWith("/api/v2/evaluation/")) delete previous.paths[path];
 		for (const name of Object.keys(previous.components.schemas))

@@ -43,7 +43,7 @@ export const navigationGroups: readonly {
 	{
 		label: "工作区",
 		administratorOnly: false,
-		items: ["workbench", "agents", "chat", "skills"],
+		items: ["workbench", "agents", "chat", "skills", "eval"],
 	},
 	{
 		label: "我的管理",
@@ -65,7 +65,6 @@ export const navigationGroups: readonly {
 			"approvals",
 			"admin-agents",
 			"skill-reviews",
-			"eval",
 			"platform-audit",
 			"ops",
 		],

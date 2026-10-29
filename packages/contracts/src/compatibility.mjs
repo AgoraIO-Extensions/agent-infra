@@ -6722,7 +6722,313 @@ function normalizeEvaluationFileBinding3639(previous, current) {
 	return copy;
 }
 
+// #3640: normalize only reviewed additions; common published additions remain guarded.
+const evaluationAnalysis3640Patches = [
+	[
+		"components::schemas::ScopedPlatformAuditActionV1::enum",
+		"c6f4d831ed4b5e545cc05f631c59d6bc1196774f46dfeb44f90ed399b002ea78",
+		"audit",
+	],
+	[
+		"paths::/api/v2/applications/{applicationId}/credentials::get::responses::200::content::application/json::schema::properties::items::items::properties::scopes::items::enum",
+		"9503fb646dd1ed2b04d5046dc8f6a97af92750569dd23db69c94bf72f50f6f55",
+		"scope",
+	],
+	[
+		"paths::/api/v2/applications/{applicationId}/credentials::get::responses::200::content::application/json::schema::properties::items::items::properties::scopes::maxItems",
+		"19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7",
+		"maximum",
+	],
+	[
+		"paths::/api/v2/applications/{applicationId}/credentials::post::requestBody::content::application/json::schema::oneOf",
+		"46406cc3e6019a504d0b91e6977ec7056480d3b26e405f1ffa2e1068488238bf",
+		"nestedScopes",
+	],
+	[
+		"paths::/api/v2/applications/{applicationId}/credentials::post::responses::200::content::application/json::schema::properties::metadata::properties::scopes::items::enum",
+		"9503fb646dd1ed2b04d5046dc8f6a97af92750569dd23db69c94bf72f50f6f55",
+		"scope",
+	],
+	[
+		"paths::/api/v2/applications/{applicationId}/credentials::post::responses::200::content::application/json::schema::properties::metadata::properties::scopes::maxItems",
+		"19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7",
+		"maximum",
+	],
+	[
+		"paths::/api/v2/applications/{applicationId}/credentials::post::responses::201::content::application/json::schema::properties::metadata::properties::scopes::items::enum",
+		"9503fb646dd1ed2b04d5046dc8f6a97af92750569dd23db69c94bf72f50f6f55",
+		"scope",
+	],
+	[
+		"paths::/api/v2/applications/{applicationId}/credentials::post::responses::201::content::application/json::schema::properties::metadata::properties::scopes::maxItems",
+		"19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7",
+		"maximum",
+	],
+	[
+		"paths::/api/v2/applications/{applicationId}/credentials/{credentialId}::delete::responses::200::content::application/json::schema::properties::metadata::properties::scopes::items::enum",
+		"9503fb646dd1ed2b04d5046dc8f6a97af92750569dd23db69c94bf72f50f6f55",
+		"scope",
+	],
+	[
+		"paths::/api/v2/applications/{applicationId}/credentials/{credentialId}::delete::responses::200::content::application/json::schema::properties::metadata::properties::scopes::maxItems",
+		"19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7",
+		"maximum",
+	],
+	[
+		"paths::/api/v2/agents/{agentId}/feedback-summary",
+		"27fe0a205d1b4995e5e412d83cfd68cb98516de0dbe38dc539175d09d9d2634c",
+		"remove",
+	],
+	[
+		"paths::/api/v2/evaluation/analysis/{experimentId}",
+		"3486a78567ec08488b9560c0aeba34f22e233d00051627e6c49808b0fd942a36",
+		"remove",
+	],
+	[
+		"paths::/api/v2/evaluation/analysis/{experimentId}/samples/{sampleTaskId}",
+		"35f2df79b742e329a369dc12a4122b279400b7e98a55099f2c01d89336fe7398",
+		"remove",
+	],
+	[
+		"paths::/api/v2/evaluation/choices",
+		"7f0eb40b4b1570523352e5d65a4e091dd43c1ae60b394fbe502d7c6d1b263019",
+		"remove",
+	],
+	[
+		"paths::/api/v2/evaluation/history",
+		"cdccacd6f64fabfc33a73c7a29c3985c7e6d0f2fa490e66d0f5317848bfa72b9",
+		"remove",
+	],
+	[
+		"paths::/api/v2/evaluation/worklist",
+		"72a46d54335b0937a618ccdb41bf5f9755930cb09841843b0d0494b9c94a060c",
+		"remove",
+	],
+	[
+		"paths::/api/v2/task-feedback/{executionId}",
+		"f890b41b80eb0b0382aeabf18f118b45513eb649b7670e65a68476c8c5902661",
+		"remove",
+	],
+	[
+		"components::schemas::EvaluationExperimentCreateV1::properties::comparisonTargets",
+		"867f6bbfa43d9bf8c1a809ceec249f791308a3789d9993eae5c79d465892779c",
+		"remove",
+	],
+	[
+		"components::schemas::EvaluationExperimentPageV1::properties::items::items::properties::requestedEvidence",
+		"45f4b2607e92d1064a785a489a1beb00c00c057f45f61697085791507623c3f3",
+		"remove",
+	],
+	[
+		"components::schemas::EvaluationExperimentV1::properties::comparisonTargets",
+		"867f6bbfa43d9bf8c1a809ceec249f791308a3789d9993eae5c79d465892779c",
+		"remove",
+	],
+	[
+		"components::schemas::EvaluationScoreMetadataV1::properties::scoringModel",
+		"8b88a9e6ad3b46c5e5cc91f3ab29817118f458caca109b2d28e98b0140f05119",
+		"remove",
+	],
+	[
+		"components::schemas::EvaluationScoreMetadataV1::properties::source",
+		"6cca557709c4c2203450a02ad4acaa211e2ecdeffdb0c0b5a2a6050ca709151b",
+		"remove",
+	],
+	[
+		"components::schemas::EvaluationScoringContextV1::properties::scorer::properties::scoringModel",
+		"8b88a9e6ad3b46c5e5cc91f3ab29817118f458caca109b2d28e98b0140f05119",
+		"remove",
+	],
+	[
+		"components::schemas::EvaluationScoringContextV1::properties::scorer::properties::source",
+		"6cca557709c4c2203450a02ad4acaa211e2ecdeffdb0c0b5a2a6050ca709151b",
+		"remove",
+	],
+	[
+		"components::schemas::PersonalApiCredentialIssueRequestV1::properties::scopes::items::enum",
+		"9503fb646dd1ed2b04d5046dc8f6a97af92750569dd23db69c94bf72f50f6f55",
+		"scope",
+	],
+	[
+		"components::schemas::PersonalApiCredentialIssueRequestV1::properties::scopes::maxItems",
+		"19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7",
+		"maximum",
+	],
+	[
+		"components::schemas::PersonalApiCredentialMetadataV1::properties::scopes::items::enum",
+		"9503fb646dd1ed2b04d5046dc8f6a97af92750569dd23db69c94bf72f50f6f55",
+		"scope",
+	],
+	[
+		"components::schemas::PersonalApiCredentialMetadataV1::properties::scopes::maxItems",
+		"19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7",
+		"maximum",
+	],
+	[
+		"components::schemas::PersonalApiCredentialNarrowRequestV1::properties::scopes::items::enum",
+		"9503fb646dd1ed2b04d5046dc8f6a97af92750569dd23db69c94bf72f50f6f55",
+		"scope",
+	],
+	[
+		"components::schemas::PersonalApiCredentialNarrowRequestV1::properties::scopes::maxItems",
+		"19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7",
+		"maximum",
+	],
+	[
+		"components::schemas::PersonalApiIdentityV1::properties::scopes::items::enum",
+		"9503fb646dd1ed2b04d5046dc8f6a97af92750569dd23db69c94bf72f50f6f55",
+		"scope",
+	],
+	[
+		"components::schemas::PersonalApiIdentityV1::properties::scopes::maxItems",
+		"19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7",
+		"maximum",
+	],
+	[
+		"components::schemas::EvaluationAnalysisDetailV1",
+		"d09d7d642eaa23f2aa3b5a6aebf9828391f64031239bc525970941be1da4e3c5",
+		"remove",
+	],
+	[
+		"components::schemas::EvaluationAnalysisSummaryV1",
+		"eaaeb00dddc096b14a999cabb5cfcf603165089e2901ede1a4d2c21f09adeaf1",
+		"remove",
+	],
+	[
+		"components::schemas::EvaluationChoiceCatalogV1",
+		"413723ebb4e7140ff473ee545915be3cff6540cb69a9adee12ee1edc67286255",
+		"remove",
+	],
+	[
+		"components::schemas::EvaluationHistoryV1",
+		"d7feecb62cda8ef6077cb14e419bcc3425ca93df4229f210cd56d10a59f533fd",
+		"remove",
+	],
+	[
+		"components::schemas::EvaluationQueryTooLargeV1",
+		"6b78e3339df5dc6fa8e4652bbb0a569956110d5c4d0e9cbfabaf4c711e3c4c7f",
+		"remove",
+	],
+	[
+		"components::schemas::EvaluationWorklistV1",
+		"e9506e7542f35202e29e3522ae29fe475fa4c97f0422c3f896a19d090d746b04",
+		"remove",
+	],
+	[
+		"components::schemas::TaskFeedbackContextV1",
+		"1c356b31c8e45f2e8f812945444b00a2b6e42a185a67dbd93648c6966142f359",
+		"remove",
+	],
+	[
+		"components::schemas::TaskFeedbackRecordV1",
+		"ea265c52bcb28ba638d7058acbc6cfbc3a8c61755c889c8f99cd95e5963a1e1c",
+		"remove",
+	],
+	[
+		"components::schemas::TaskFeedbackSubmitV1",
+		"a851f2a57625a93d0a00c217ca0dc3546906733921b6bd579f18b5819c082709",
+		"remove",
+	],
+	[
+		"components::schemas::TaskFeedbackSummaryQueryV1",
+		"4d4f06a8fbf82d40df8da3aa89b73cd8746bdf6d934546f53b59866b3e59884a",
+		"remove",
+	],
+	[
+		"components::schemas::TaskFeedbackSummaryV1",
+		"6eff11c474a4cbc4ce7d32fa8a2fa697bbc29b70e22ec77afd3ae36ab999adbc",
+		"remove",
+	],
+].map(([path, pin, operation]) => ({ path: path.split("::"), pin, operation }));
+function normalizeEvaluationAnalysis3640(previous, current) {
+	if (!current.openapi || !previous.openapi) return { previous, current };
+	const serialized = JSON.stringify([previous, current]);
+	if (
+		!serialized.includes('"eval:analyze"') &&
+		!serialized.includes('"task.feedback.updated"')
+	)
+		return { previous, current };
+	const digest = (value) =>
+		value === undefined
+			? null
+			: createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	const read = (doc, path) => path.reduce((value, key) => value?.[key], doc);
+	const matches = (value, patch) =>
+		patch.operation === "audit"
+			? Array.isArray(value) &&
+				value[0] === "task.feedback.updated" &&
+				value.filter((v) => v === "task.feedback.updated").length === 1
+			: digest(value) === patch.pin;
+	const writes = [];
+	for (const patch of evaluationAnalysis3640Patches) {
+		const before = read(previous, patch.path);
+		const after = read(current, patch.path);
+		if (
+			patch.operation === "remove" &&
+			[before, after].some(
+				(value) => value !== undefined && !matches(value, patch),
+			)
+		)
+			return { removed: true };
+		if (
+			patch.path.at(-1) === "enum" &&
+			[before, after].some(
+				(value) =>
+					Array.isArray(value) &&
+					value.includes("eval:analyze") &&
+					!matches(value, patch),
+			)
+		)
+			return { removed: true };
+		if (matches(before, patch) && !matches(after, patch))
+			return { removed: true };
+		if (matches(before, patch)) writes.push(["previous", patch]);
+		if (matches(after, patch)) writes.push(["current", patch]);
+	}
+	if (!writes.length) return { previous, current };
+	const result = {
+		previous: structuredClone(previous),
+		current: structuredClone(current),
+	};
+	for (const [side, patch] of writes) {
+		const parent = read(result[side], patch.path.slice(0, -1));
+		const key = patch.path.at(-1);
+		if (patch.operation === "audit") parent[key] = parent[key].slice(1);
+		else if (patch.operation === "remove") delete parent[key];
+		else if (patch.operation === "scope")
+			parent[key] = parent[key].slice(0, -1);
+		else if (patch.operation === "maximum") parent[key] = 8;
+		else {
+			const stripScopes = (value) => {
+				if (!value || typeof value !== "object") return;
+				const scope = value.properties?.scopes;
+				if (
+					scope?.maxItems === 9 &&
+					scope.items?.enum?.at(-1) === "eval:analyze"
+				) {
+					scope.maxItems = 8;
+					scope.items.enum.pop();
+				}
+				for (const child of Object.values(value)) stripScopes(child);
+			};
+			stripScopes(parent[key]);
+		}
+	}
+	return result;
+}
+
 function evaluateBreakingChanges(previousValue, currentValue) {
+	const analysis3640 = normalizeEvaluationAnalysis3640(
+		previousValue,
+		currentValue,
+	);
+	if (analysis3640.removed)
+		return ["removed or changed published Eval analysis contract"];
+	if (
+		analysis3640.previous !== previousValue ||
+		analysis3640.current !== currentValue
+	)
+		return findBreakingChanges(analysis3640.previous, analysis3640.current);
 	const priorFile = (
 		previousValue.$defs ?? previousValue.components?.schemas
 	)?.FileAccessClaimsV1?.properties?.execution?.anyOf?.find(

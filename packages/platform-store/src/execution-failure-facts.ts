@@ -14,12 +14,15 @@ type Database = ReturnType<typeof postgres> | postgres.TransactionSql;
  *
  * 片段假定 `platform.conversation_executions` 的别名为 `e`，只在执行失败时读取。
  */
-export function executionFailureFactsSql(database: Database) {
+export function executionFailureFactsSql(
+	database: Database,
+	boundToExecutionSequence = false,
+) {
 	return database`
 		case when e.status = 'failed' then (
 			select t.event_payload ->> 'reason'
 			from platform.conversation_events t
-			where t.execution_id = e.execution_id
+			where t.execution_id = e.execution_id ${boundToExecutionSequence ? database`and t.sequence<=e.last_event_sequence` : database``}
 				and t.event_type = 'task.status'
 				and t.event_payload ->> 'status' = 'failed'
 			order by t.sequence desc
@@ -44,7 +47,7 @@ export function executionFailureFactsSql(database: Database) {
 		case when e.status = 'failed' then (
 			select t.event_payload ->> 'code'
 			from platform.conversation_events t
-			where t.execution_id = e.execution_id
+			where t.execution_id = e.execution_id ${boundToExecutionSequence ? database`and t.sequence<=e.last_event_sequence` : database``}
 				and t.event_type = 'conversation.error'
 			order by t.sequence desc
 			limit 1
@@ -52,7 +55,7 @@ export function executionFailureFactsSql(database: Database) {
 		case when e.status = 'failed' then (
 			select t.event_payload -> 'fact' ->> 'failureCode'
 			from platform.conversation_events t
-			where t.execution_id = e.execution_id
+			where t.execution_id = e.execution_id ${boundToExecutionSequence ? database`and t.sequence<=e.last_event_sequence` : database``}
 				and t.event_type = 'execution.operation'
 				and t.event_payload -> 'fact' ->> 'kind' = 'model'
 				and t.event_payload -> 'fact' ->> 'phase' = 'failed'

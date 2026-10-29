@@ -61,6 +61,10 @@ import {
 	registerDirectoryRoutes,
 } from "./http/directory-routes.js";
 import {
+	type EvaluationAnalysisRoutesV1,
+	registerEvaluationAnalysisRoutesV1,
+} from "./http/evaluation-analysis-routes.js";
+import {
 	type EvaluationDataRoutesV1,
 	registerEvaluationDataRoutesV1,
 } from "./http/evaluation-data-routes.js";
@@ -175,6 +179,7 @@ type ApiObservability = Pick<
 >;
 
 export interface PlatformAppDependencies {
+	readonly evaluationAnalysis?: EvaluationAnalysisRoutesV1;
 	readonly evaluationExperiments?: Parameters<
 		typeof registerEvaluationExperimentRoutesV1
 	>[1];
@@ -329,6 +334,7 @@ export function createPlatformApp(
 		registerApplicationRegistrationRoutes(app, dependencies.applications);
 	registerEvaluationDataRoutesV1(app, dependencies.evaluation);
 	registerEvaluationExperimentRoutesV1(app, dependencies.evaluationExperiments);
+	registerEvaluationAnalysisRoutesV1(app, dependencies.evaluationAnalysis);
 	if (dependencies.applicationApiCredentials)
 		registerApplicationApiCredentialRoutes(
 			app,
