@@ -484,6 +484,7 @@ describe("Runtime Driver shared conformance", () => {
 				done: false,
 				value: { type: "status", payload: { status: "running" } },
 			});
+			if (running.done) throw new Error("running status stream ended early");
 			prefix.push(running.value);
 			expect(running.value).toEqual(replay.events[0]);
 			expect(new Set(prefix.map((event) => event.cursor)).size).toBe(
