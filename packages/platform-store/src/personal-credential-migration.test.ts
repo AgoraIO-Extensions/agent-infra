@@ -439,6 +439,8 @@ describe("personal credential disable authority append", () => {
 				]),
 			);
 		const expectedData = withoutTypedPrincipal(before.data);
+		if (!expectedData.conversation_executions)
+			throw new Error("Missing historical Execution snapshot");
 		// #3640：逐字段保留旧记录，只增加未观测的终态时间 NULL。
 		expectedData.conversation_executions =
 			expectedData.conversation_executions.map((row) => ({
