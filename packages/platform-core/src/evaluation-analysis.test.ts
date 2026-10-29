@@ -163,6 +163,7 @@ it.each([
 	"actual_model",
 	"actual_image",
 	"configuration",
+	"resources",
 	"template",
 	"mixed",
 ] as const)("does not claim a same-condition comparison for %s", (mode) => {
@@ -188,6 +189,14 @@ it.each([
 			requestedEvidence: {
 				...b.task.requestedEvidence!,
 				configurationDigest: "b".repeat(64),
+			},
+		};
+	if (mode === "resources")
+		b.task = {
+			...b.task,
+			preparedRuntime: {
+				...b.task.preparedRuntime!,
+				resourceConfigurationHash: "different",
 			},
 		};
 	if (mode === "template")
@@ -216,6 +225,13 @@ it("allows only explicitly combined target changes after each actual side matche
 			...b.task.requestedEvidence!,
 			configurationDigest: "b".repeat(64),
 			model: { ...b.task.requestedEvidence!.model!, modelId: "candidate" },
+		},
+	};
+	b.task = {
+		...b.task,
+		preparedRuntime: {
+			...b.task.preparedRuntime!,
+			resourceConfigurationHash: "changed",
 		},
 	};
 	b.actual = {

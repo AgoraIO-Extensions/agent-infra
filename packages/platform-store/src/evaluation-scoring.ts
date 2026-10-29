@@ -638,6 +638,7 @@ export class PostgresEvaluationScoringV1
 			{ id: string }[]
 		>`select i.id from platform.evaluation_score_intents i where (i.data->>'metadataExpiresAt')::timestamptz>clock_timestamp() ${cursor ? this.#client`and i.id>${cursor}::uuid` : this.#client``} and exists(select 1 from platform.evaluation_grants g where g.dataset_id=(i.data->>'datasetId')::uuid and g.data->'principal'=${this.#client.json(principal)}::jsonb and g.data->>'revoked'='false' and g.data->>'policyId'=${policy.policyId} and (g.data->>'policyRevision')::bigint=${policy.revision} and (g.data->>'expiresAt')::timestamptz>clock_timestamp() and g.data->'versionIds' @> jsonb_build_array(i.data->>'versionId') and g.data->'operations' @> ${this.#client.json([purpose])}::jsonb) order by i.id limit 501`;
 		const items = [];
+		const selected: EvaluationScoreIntentV1[] = [];
 		let last: string | null = null;
 		let more = false;
 		for (const row of rows) {
@@ -648,6 +649,7 @@ export class PostgresEvaluationScoringV1
 			last = row.id;
 			try {
 				const { intent } = await this.load(req, row.id, purpose);
+				selected.push(intent);
 				items.push({
 					scoreId: intent.id,
 					source: intent.scorer.implementation.kind,
@@ -673,19 +675,83 @@ export class PostgresEvaluationScoringV1
 				throw error;
 			}
 		}
-		for (const item of items) await this.load(req, item.scoreId, purpose);
-		await this.#dataStore.authenticate({
-			...req,
-			credentialScope: purpose === "score" ? "eval:score" : "eval:review",
+		// Keep every returned row and authority in one transaction through the final
+		// identity await; the existing DataStore gate checks the earliest deadline afterwards.
+		await this.#transaction(async (tx) => {
+			const store = new PostgresEvaluationDataStoreV1({
+				...this.options,
+				transaction: tx,
+			});
+			await store.transaction(
+				{
+					...req,
+					credentialScope: purpose === "score" ? "eval:score" : "eval:review",
+				},
+				async (authority) => {
+					if (!isDeepStrictEqual(authority.principal, principal))
+						throw new EvaluationDataErrorV1("denied");
+					await authority.bindPolicy(policy);
+					const deadlines = [Date.parse(policy.validUntil)];
+					for (const agentId of [
+						...new Set(selected.map((intent) => intent.agentId)),
+					].sort())
+						await tx`select id from platform.agents where id=${agentId} for share`;
+					const experimentPolicy = parseEvaluationExperimentPolicyV1(
+						await this.options.loadExperimentPolicy(),
+					);
+					deadlines.push(Date.parse(experimentPolicy.validUntil));
+					for (const original of selected) {
+						const [row] = await tx<
+							ScoreRow[]
+						>`select * from platform.evaluation_score_intents where id=${original.id} for share`;
+						if (!row) throw new EvaluationDataErrorV1("denied");
+						const intent = decodeScore(row);
+						if (!isDeepStrictEqual(intent, original))
+							throw new EvaluationDataErrorV1("denied");
+						const binding = await this.#current(tx, req, intent, purpose);
+						if (!isDeepStrictEqual(binding.policy, policy))
+							throw new EvaluationDataErrorV1("denied");
+						const dataset = await authority.dataset(intent.datasetId);
+						const [experiment] = await tx<
+							{ data: unknown }[]
+						>`select data from platform.evaluation_experiments where id=${intent.experimentId} for share`;
+						if (!dataset || !experiment)
+							throw new EvaluationDataErrorV1("denied");
+						deadlines.push(
+							Date.parse(intent.metadataExpiresAt),
+							Date.parse(dataset.metadataExpiresAt),
+							Date.parse(
+								parseEvaluationExperimentV1(experiment.data).metadataExpiresAt,
+							),
+							Date.parse(binding.grant.expiresAt),
+							Date.parse(binding.version.metadataExpiresAt),
+							Date.parse(binding.version.expiresAt),
+							Date.parse(binding.version.createdAt) +
+								policy.retention.samples.contentMs,
+							Date.parse(binding.version.createdAt) +
+								policy.retention.rubric.contentMs,
+							Date.parse(experimentPolicy.validUntil),
+						);
+					}
+					if (
+						!isDeepStrictEqual(
+							policy,
+							parseEvaluationPolicyV1(await this.options.loadDataPolicy()),
+						) ||
+						!isDeepStrictEqual(
+							experimentPolicy,
+							parseEvaluationExperimentPolicyV1(
+								await this.options.loadExperimentPolicy(),
+							),
+						)
+					)
+						throw new EvaluationDataErrorV1("denied");
+					authority.authorizationExpiresAt = new Date(
+						Math.min(...deadlines),
+					).toISOString();
+				},
+			);
 		});
-		if (
-			!isDeepStrictEqual(
-				policy,
-				parseEvaluationPolicyV1(await this.options.loadDataPolicy()),
-			) ||
-			Date.parse(policy.validUntil) <= Date.now()
-		)
-			throw new EvaluationDataErrorV1("denied");
 		return {
 			purpose,
 			items,

@@ -3860,3 +3860,115 @@ it.each(["summary", "history"] as const)(
 	},
 	30000,
 );
+
+it.each(["score", "grant"] as const)(
+	"denies a worklist whose %s expires during its final identity await",
+	async (kind) => {
+		const command = await dataset();
+		const experiment = await core.create(
+			request("runner"),
+			randomUUID(),
+			command,
+		);
+		const reader = `worklist-${kind}`;
+		const grant = await data.grant(
+			request("admin"),
+			randomUUID(),
+			command.datasetId,
+			{
+				expectedRevision: 4,
+				principal: { kind: "user", id: reader },
+				versionIds: [command.versionId],
+				operations: ["score", "review"],
+				expiresAt: new Date(Date.now() + 50000).toISOString(),
+			},
+		);
+		await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)values(${configuration.agentId},'user',${reader},'use','worklist-use')`;
+		let reads = 0;
+		let stopAt = Number.POSITIVE_INFINITY;
+		let deadline = Number.POSITIVE_INFINITY;
+		let delayed = false;
+		const scoring = new PostgresEvaluationScoringV1({
+			...database,
+			directory: {
+				resolveUser: async (id) => {
+					reads++;
+					if (reads === stopAt) {
+						expect(Date.now()).toBeLessThan(deadline);
+						delayed = true;
+						await new Promise((resolve) =>
+							setTimeout(resolve, Math.max(1, deadline - Date.now() + 30)),
+						);
+					}
+					return directory.resolveUser(id);
+				},
+			},
+			loadDataPolicy: async () => policy,
+			loadExperimentPolicy: async () => experimentPolicy,
+			storage,
+			taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+		});
+		const call = () =>
+			scoring.worklist(
+				request(reader),
+				kind === "score" ? "score" : "review",
+				100,
+			);
+		try {
+			const before = await call();
+			expect(before.items).toHaveLength(2);
+			expect(
+				before.items.every(
+					(item) => item.experimentId === experiment.experimentId,
+				),
+			).toBe(true);
+			stopAt = reads;
+			reads = 0;
+			deadline = Date.now() + 5000;
+			const expiry = new Date(deadline).toISOString();
+			if (kind === "score")
+				await sql`update platform.evaluation_score_intents set data=jsonb_set(data,'{metadataExpiresAt}',to_jsonb(${expiry}::text)) where sample_task_id in(select id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId})`;
+			else
+				await sql`update platform.evaluation_grants set data=jsonb_set(data,'{expiresAt}',to_jsonb(${expiry}::text)) where id=${grant.grantId}`;
+			await expect(call()).rejects.toMatchObject({ code: "denied" });
+			expect(delayed).toBe(true);
+			expect(Date.now()).toBeGreaterThan(deadline);
+		} finally {
+			await scoring.close();
+		}
+	},
+	30000,
+);
+
+it("does not resurrect retired Actions as current comparison configuration", async () => {
+	const command = await dataset();
+	const variant = experimentPolicy.variants[0];
+	if (!variant) throw new Error("missing variant fixture");
+	const read = () =>
+		experiments.transaction(request("runner"), command, (tx) =>
+			tx.requestedEvidence(variant),
+		);
+	try {
+		const original = await read();
+		for (const changed of [
+			{
+				...configuration,
+				actions: [
+					{
+						providerId: "github",
+						actionId: "issues.read",
+						actionVersion: "v3",
+					},
+				],
+			},
+			{ ...configuration, actionSetRevision: "actions_2" },
+		]) {
+			await sql`update platform.agent_configuration_revisions set configuration=${sql.json(changed as unknown as postgres.JSONValue)} where agent_id=${configuration.agentId} and revision=${configuration.revision}`;
+			expect((await read()).configurationDigest).toBe(
+				original.configurationDigest,
+			);
+		}
+	} finally {
+		await sql`update platform.agent_configuration_revisions set configuration=${sql.json(configuration as unknown as postgres.JSONValue)} where agent_id=${configuration.agentId} and revision=${configuration.revision}`;
+	}
+});

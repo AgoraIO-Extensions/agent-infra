@@ -640,3 +640,55 @@ it("does not create earlier deletion obligations from stale or expired analysis 
 		await cleanup.close();
 	}
 });
+
+it("bounds candidate scanning before actual-model filtering without truncating the denominator", async () => {
+	const from = new Date().toISOString();
+	const ids = [await seed("application"), await seed("application")];
+	for (const [index, id] of ids.entries()) {
+		const fact = {
+			kind: "model",
+			operationRef: "operation",
+			attemptRef: "attempt",
+			phase: "started",
+			model: {
+				configVersion: "7",
+				modelOptionId: "option",
+				modelId: `budget-model-${index}`,
+			},
+		};
+		await sql`insert into platform.conversation_events(event_id,conversation_id,execution_id,sequence,conversation_cursor,event_type,event_payload,source,adapter_event_key,event_digest,runtime_cursor,occurred_at)values(${randomUUID()},${id},${id},1,1,'execution.operation',${JSON.stringify({ schemaVersion: 2, type: "execution.operation", fact })}::text::jsonb,'runtime',${randomUUID()},${"a".repeat(64)},'1',clock_timestamp())`;
+		await sql`update platform.conversation_executions set last_event_sequence=1 where execution_id=${id}`;
+	}
+	const query = {
+		from,
+		to: new Date(Date.now() + 1000).toISOString(),
+		modelId: "budget-model-0",
+		configVersion: "7",
+	};
+	let current = { ...policy, revision: 10, maximumTasks: 1 };
+	const bounded = new PostgresEvaluationFeedbackV1({
+		...database,
+		directory,
+		loadPolicy: async () => current,
+	});
+	try {
+		await expect(
+			bounded.summary(request("application"), "agent", "self", query),
+		).rejects.toMatchObject({ code: "query_too_large" });
+		current = { ...current, revision: 11, maximumTasks: 2 };
+		const result = await bounded.summary(
+			request("application"),
+			"agent",
+			"self",
+			query,
+		);
+		expect(result.eligibleTasks).toBe(1);
+		expect(result.feedbackTasks).toBe(0);
+		current = { ...current, revision: 12, maximumModelFacts: 1 };
+		await expect(
+			bounded.summary(request("application"), "agent", "self", query),
+		).rejects.toMatchObject({ code: "query_too_large" });
+	} finally {
+		await bounded.close();
+	}
+});

@@ -2815,7 +2815,8 @@ Owner 可看获准汇总但不能下钻他人原会话。实验分析以固定�
 
 实验显式声明可组合的比较目标维度 model/configuration/template。受理时从当时已批准的 Agent
 配置冻结每变体的非敏感 requestedEvidence：模型选项到 modelId/推理级别的映射、配置修订及摘要、
-模板/镜像标识；该证据不来自请求任意字段，也不重新定义 Runtime 权威。每侧实际条件先与各自冻结
+模板/镜像标识；该证据不来自请求任意字段，也不重新定义 Runtime 权威。实际 Runtime 的
+resourceConfigurationHash 属于 configuration 比较维度，未声明该维度时资源配置差异不可比。每侧实际条件先与各自冻结
 请求证据核对；非目标维度漂移标为不可比，实际缺失或旧样本没有足够冻结映射标为 unknown，不能
 猜测 modelId 或把条件变化默认视为合法比较。模型 attempt 耗时之和可能包含并行，只标为模型累计
 耗时；任务受理到确认终态的墙钟跨度另列，缺少可信边界时为空。
@@ -2857,7 +2858,8 @@ Execution 集合，再关联有效反馈；无反馈不丢出分母，重复反�
 或正文下钻入口；应用不能借责任人身份成为 Owner。查询结束后重新核对当前 Owner/使用权与身份。
 
 分析与反馈沿现有私有配置显式提供查询预算（maximumWindowMs、maximumTasks、maximumModelFacts）
-及反馈 metadataMs 保留期限，无生产默认保留期限。预算约束完整查询而非分母：超出任何预算明确返回
+及反馈 metadataMs 保留期限，无生产默认保留期限。maximumTasks/maximumModelFacts 限制实际模型/配置
+筛选前的候选任务及受控模型事实扫描；不能用请求模型预筛替代实际事实折叠。预算约束完整查询而非分母：超出任何预算明确返回
 query_too_large，不能截断后给出部分反馈率。私有 API 的 `evaluation.loadAnalysisPolicy` 与 Worker 的
 `workloadInput.evaluation.loadAnalysisPolicy` 使用同一部署政策；反馈当前行和幂等回执的到期清理由现有 Worker 履行，
 不得保留不受政策约束的无限主体/摘要。反馈元数据独立于离线内容，不自动导入评测集；所有新增审计

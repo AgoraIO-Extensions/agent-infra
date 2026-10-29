@@ -142,7 +142,9 @@ function comparability(
 		(!targets.includes("template") &&
 			(ae.imageDigest !== be.imageDigest || ae.templateId !== be.templateId)) ||
 		(!targets.includes("configuration") &&
-			ae.configurationDigest !== be.configurationDigest) ||
+			(ae.configurationDigest !== be.configurationDigest ||
+				a.task.preparedRuntime.resourceConfigurationHash !==
+					b.task.preparedRuntime.resourceConfigurationHash)) ||
 		(!targets.includes("model") &&
 			!isDeepStrictEqual(
 				[ae.model.modelId, ae.model.reasoningLevel],
