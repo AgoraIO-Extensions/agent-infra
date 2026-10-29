@@ -25,7 +25,7 @@ import type {
 } from "@agent-infra/platform-store";
 import type { Context, Hono } from "hono";
 import { z } from "zod";
-import { requireApiManagementMaterial } from "./agent-api-management-support.js";
+import { requireApiCredentialMaterial } from "./agent-api-management-support.js";
 import {
 	HttpProtocolError,
 	parseIdempotencyKey,
@@ -90,7 +90,7 @@ export function registerEvaluationAnalysisRoutesV1(
 				authentication: request.headers.has("Authorization")
 					? {
 							kind: "credential",
-							material: requireApiManagementMaterial(request, metadata.traceId),
+							material: requireApiCredentialMaterial(request, metadata.traceId),
 						}
 					: {
 							kind: "browser",
