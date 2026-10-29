@@ -2,8 +2,8 @@
 
 本入口用于把一个已能执行真实业务的本地 Agent 迁入平台，并核对哪些步骤可以使用 API Token
 完成。产品边界见[自定义 Agent](../prd/PRD-agent-platform-M1.md#5-自定义-agent)，
-机器契约以 [Platform OpenAPI](../../packages/contracts/artifacts/openapi/pilot-browser.v2.openapi.json)
-和[任务契约](../../packages/contracts/src/pilot/task.ts)为准。
+机器契约以 [Agent 管理 V2 OpenAPI](../../packages/contracts/artifacts/openapi/pilot-browser.v2.openapi.json)
+和[任务 V1 OpenAPI](../../packages/contracts/artifacts/openapi/pilot-browser.v1.openapi.json)为准。
 
 ## 选择交互入口
 
@@ -85,7 +85,8 @@ Workload 就绪分别记录，只有真实业务操作完成才能证明该用�
 ## 执行业务、重启与更新
 
 自有入口使用应用自己的访问地址、身份和业务协议执行与本地基线相同的用例。平台入口通过
-验证后，可用 `POST /api/v1/agents/{agentId}/tasks` 提交文本任务：
+验证后，可用 `POST /api/v1/agents/{agentId}/tasks` 提交文本任务。请求使用 Bearer Token、
+`Content-Type: application/json` 和该任务独立的 `Idempotency-Key`：
 
 ```json
 {"schemaVersion":1,"text":"本次已定义的业务输入"}
@@ -93,7 +94,9 @@ Workload 就绪分别记录，只有真实业务操作完成才能证明该用�
 
 任务受理返回 202 及 `conversationId`、`executionId`。随后读取
 `/api/v1/conversations/{conversationId}/tasks/{executionId}`，通过该路径的 `/events`
-订阅 SSE，通过 `/cancel` 请求取消。同会话后续任务在提交体中带上 `conversationId`。
+订阅 SSE。取消使用 `POST` 请求该路径的 `/cancel`，携带 Bearer Token、
+`Content-Type: application/json`、取消操作独立的 `Idempotency-Key` 和
+`{"schemaVersion":1}` 请求体。同会话后续任务在提交体中带上 `conversationId`，使用新的任务幂等键。
 核对实际输出和终态；取消受理不是停止确认，结果不明不能记为成功。
 
 | 后续操作 | 当前入口与核对方式 |
