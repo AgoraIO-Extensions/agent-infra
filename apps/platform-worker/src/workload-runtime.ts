@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { discoverRuntimeBrowserCapabilityV1 } from "@agent-infra/agent-runtime";
@@ -521,6 +522,10 @@ export const drainCacheableCommands = new Set([
 export function createWorkloadRuntimeV1(
 	options: WorkloadRuntimeOptionsV1,
 ): WorkloadRuntimePortV1 & {
+	runReconciliationStep<T>(
+		state: WorkloadReconciliationStateV1 | null,
+		step: () => Promise<T>,
+	): Promise<T>;
 	observeVerifiedControl(
 		state: WorkloadReconciliationStateV1,
 	): ReturnType<WorkloadRuntimePortV1["observe"]>;
@@ -558,6 +563,25 @@ export function createWorkloadRuntimeV1(
 		WorkloadReconciliationStateV1,
 		WorkloadCapabilitiesV1
 	>();
+	type ReadinessPass = {
+		podUid: string;
+		podResourceVersion: string;
+		passedAt: number;
+	};
+	type StepScope = {
+		state: WorkloadReconciliationStateV1 | null;
+		snapshot: WorkloadReconciliationStateV1 | null;
+		active: boolean;
+		sequence: number;
+		observing: number;
+		promoted: boolean;
+		pass?: ReadinessPass;
+	};
+	const stepScope = new AsyncLocalStorage<StepScope>();
+	const matchesStep = (
+		scope: StepScope,
+		state: WorkloadReconciliationStateV1,
+	) => scope.state === state && isDeepStrictEqual(scope.snapshot, state);
 	// 排空复用的签名 readiness 记录；部署装配时与 Workload 监测共享（#1889）。
 	const readinessLedger =
 		options.readinessLedger ?? createWorkloadReadinessLedgerV1();
@@ -1041,59 +1065,120 @@ export function createWorkloadRuntimeV1(
 	async function observe(
 		state: WorkloadReconciliationStateV1,
 		browserBinding?: BrowserCapabilityBindingV1,
+		reconciliationObservation = false,
 	) {
-		observedCapabilities.delete(state);
-		if (!state.identity) return "pending" as const;
-		const observedWorkload = desired(state);
-		if (isMultiService(observedWorkload)) {
-			const health = await multiService.observe(
-				observedWorkload,
-				state.identity,
-			);
-			// 多服务 Agent 是自有交互入口，没有平台适配能力；与单镜像 self-managed
-			// 一致，只对完全相同的一次健康晋升尝试保留空能力集。
-			if (health === "healthy" && state.phase === "promoting")
-				observedCapabilities.set(state, RuntimeCapabilitySetV1Schema.parse({}));
-			return health;
+		const scope = stepScope.getStore();
+		const sequence = scope ? ++scope.sequence : 0;
+		if (scope) {
+			scope.pass = undefined;
+			// Overlapping observations invalidate reuse for the rest of this step.
+			if (++scope.observing > 1 && scope.active) {
+				readinessLedger.forget(scope.state?.agentId ?? state.agentId);
+				scope.active = false;
+			}
 		}
-		if (state.phase === "ready" && candidateKeyless(state))
-			await revalidateCandidateCatalog(state, true);
-		let capabilities: WorkloadCapabilitiesV1 | undefined;
-		let passedPodUid: string | undefined;
-		const observation = createAdapter(
-			(value) => {
-				capabilities = value;
-			},
-			state,
-			"authorize",
-			false,
-			browserBinding,
-			{
-				passed(podUid) {
-					passedPodUid = podUid;
+		try {
+			observedCapabilities.delete(state);
+			if (!state.identity) return "pending" as const;
+			const observedWorkload = desired(state);
+			if (isMultiService(observedWorkload)) {
+				const health = await multiService.observe(
+					observedWorkload,
+					state.identity,
+				);
+				// 多服务 Agent 是自有交互入口，没有平台适配能力；与单镜像 self-managed
+				// 一致，只对完全相同的一次健康晋升尝试保留空能力集。
+				if (
+					health === "healthy" &&
+					state.phase === "promoting" &&
+					(!scope ||
+						(scope.active &&
+							scope.sequence === sequence &&
+							matchesStep(scope, state)))
+				)
+					observedCapabilities.set(
+						state,
+						RuntimeCapabilitySetV1Schema.parse({}),
+					);
+				return health;
+			}
+			if (state.phase === "ready" && candidateKeyless(state))
+				await revalidateCandidateCatalog(state, true);
+			let capabilities: WorkloadCapabilitiesV1 | undefined;
+			let passedPodUid: string | undefined;
+			let passed: ReadinessPass | undefined;
+			const observation = createAdapter(
+				(value) => {
+					capabilities = value;
 				},
-			},
-		);
-		const health = await observation.observe(
-			desired(state),
-			state.identity,
-			routeSelectorMode(state),
-			state.phase === "observing" ? "activation" : "required",
-		);
-		if (health === "healthy" && state.phase === "promoting" && capabilities)
-			observedCapabilities.set(state, capabilities);
-		// 只有 ready 阶段的完整观测（含签名 readiness）通过才记录；
-		// 任何未通过的完整观测都清除该 Agent 的记录，排空随即回到完整探测。
-		const binding = readinessBinding(state);
-		if (health !== "healthy") readinessLedger.forget(state.agentId);
-		else if (state.phase === "ready" && binding && passedPodUid && capabilities)
-			readinessLedger.record(binding, {
-				podUid: passedPodUid,
-				passedAt: Date.now(),
-			});
-		return health;
+				state,
+				"authorize",
+				false,
+				browserBinding,
+				{
+					passed(podUid, podResourceVersion) {
+						passedPodUid = podUid;
+						if (podResourceVersion)
+							passed = {
+								podUid,
+								podResourceVersion,
+								passedAt: performance.now(),
+							};
+					},
+				},
+			);
+			const health = await observation.observe(
+				desired(state),
+				state.identity,
+				routeSelectorMode(state),
+				state.phase === "observing" ? "activation" : "required",
+			);
+			const current =
+				!scope ||
+				(scope.active &&
+					scope.sequence === sequence &&
+					matchesStep(scope, state));
+			if (
+				current &&
+				health === "healthy" &&
+				state.phase === "promoting" &&
+				capabilities
+			)
+				observedCapabilities.set(state, capabilities);
+			// 只有 ready 阶段的完整观测（含签名 readiness）通过才记录；
+			// 当前观测失败即清除记录；失效步骤的晚到失败不能清除后来建立的记录。
+			const binding = readinessBinding(state);
+			if (health !== "healthy") {
+				if (!scope || (scope.active && scope.sequence === sequence))
+					readinessLedger.forget(state.agentId);
+			} else if (
+				current &&
+				state.phase === "ready" &&
+				binding &&
+				passedPodUid &&
+				capabilities
+			)
+				readinessLedger.record(binding, {
+					podUid: passedPodUid,
+					passedAt: Date.now(),
+				});
+			if (
+				reconciliationObservation &&
+				scope?.active &&
+				!scope.promoted &&
+				scope.sequence === sequence &&
+				health === "healthy" &&
+				passed &&
+				browserBinding === undefined &&
+				["promoting", "ready", "rejected"].includes(state.phase) &&
+				matchesStep(scope, state)
+			)
+				scope.pass = passed;
+			return health;
+		} finally {
+			if (scope) scope.observing--;
+		}
 	}
-
 	/**
 	 * 排空路径的路由复核（#1889）：Workload 为 ready、attempts 为 0，且同一
 	 * Pod UID/generation、Workload revision 与 fence 在一个监测周期内通过过签名
@@ -1145,6 +1230,28 @@ export function createWorkloadRuntimeV1(
 		return health;
 	}
 	return {
+		async runReconciliationStep(state, step) {
+			const scope: StepScope = {
+				state,
+				snapshot: structuredClone(state),
+				active: true,
+				sequence: 0,
+				observing: 0,
+				promoted: false,
+			};
+			try {
+				return await stepScope.run(scope, step);
+			} finally {
+				// Async children inherit ALS after the callback returns; invalidate them too.
+				if (scope.active && scope.observing > 0 && scope.state)
+					readinessLedger.forget(scope.state.agentId);
+				scope.active = false;
+				scope.sequence++;
+				scope.pass = undefined;
+				scope.state = null;
+				scope.snapshot = null;
+			}
+		},
 		async capabilities(state) {
 			const capabilities = observedCapabilities.get(state);
 			if (!capabilities)
@@ -1757,7 +1864,7 @@ export function createWorkloadRuntimeV1(
 			return health === "unreachable" ? observe(state, browserBinding) : health;
 		},
 		async observe(state) {
-			return observe(state);
+			return observe(state, undefined, true);
 		},
 		async observeForDrain(state, browserBinding) {
 			return observeForDrain(state, browserBinding);
@@ -1845,6 +1952,20 @@ export function createWorkloadRuntimeV1(
 			return "active";
 		},
 		async promote(state) {
+			const scope = stepScope.getStore();
+			let pass =
+				scope?.active &&
+				!scope.promoted &&
+				scope.observing === 0 &&
+				matchesStep(scope, state)
+					? scope.pass
+					: undefined;
+			const sequence = scope ? ++scope.sequence : 0;
+			let scopedPass = pass !== undefined;
+			if (scope) {
+				scope.pass = undefined;
+				scope.promoted = true;
+			}
 			assertCandidateMaterializationAllowed(state);
 			if ("manifest" in state.candidate.configuration.source) {
 				const workload = desired(state);
@@ -1852,9 +1973,6 @@ export function createWorkloadRuntimeV1(
 				return;
 			}
 			// 只在本次晋升的短窗口内复用未变化 Pod 的证明；仍核对资源与 HTTP health。
-			let pass:
-				| { podUid: string; podResourceVersion: string; passedAt: number }
-				| undefined;
 			const adapter = createAdapter(
 				undefined,
 				state,
@@ -1866,6 +1984,10 @@ export function createWorkloadRuntimeV1(
 						const age = pass ? performance.now() - pass.passedAt : -1;
 						return (
 							pass !== undefined &&
+							(!scopedPass ||
+								(scope?.active === true &&
+									scope.sequence === sequence &&
+									matchesStep(scope, state))) &&
 							podUid === pass.podUid &&
 							podResourceVersion === pass.podResourceVersion &&
 							age >= 0 &&
@@ -1873,6 +1995,7 @@ export function createWorkloadRuntimeV1(
 						);
 					},
 					passed(podUid, podResourceVersion) {
+						scopedPass = false;
 						pass = podResourceVersion
 							? { podUid, podResourceVersion, passedAt: performance.now() }
 							: undefined;
