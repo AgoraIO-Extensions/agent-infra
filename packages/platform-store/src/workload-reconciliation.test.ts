@@ -26,6 +26,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
 	afterAll,
+	afterEach,
 	beforeAll,
 	beforeEach,
 	describe,
@@ -252,6 +253,369 @@ function runtime(): WorkloadRuntimePortV1 {
 		cleanup: async () => true,
 	};
 }
+
+describe("lifecycle scheduling (#3722)", () => {
+	let store: ReturnType<typeof openPostgresWorkloadReconciliationStoreV1>;
+	beforeEach(async () => {
+		await sql`delete from platform.outbox_items`;
+		store = openPostgresWorkloadReconciliationStoreV1({
+			...database,
+			retryDelayMs: 1_000,
+			monitorDelayMs: 30_000,
+		});
+	});
+	afterEach(async () => store.close());
+
+	async function seedAgent(
+		agentId: string,
+		phase: WorkloadReconciliationStateV1["phase"],
+	) {
+		const [source] = await sql<
+			{
+				configuration: WorkloadReconciliationStateV1["candidate"]["configuration"];
+			}[]
+		>`select configuration from platform.agent_configuration_revisions where agent_id = 'agent-a' and revision = 1`;
+		if (!source) throw new Error();
+		const configuration = { ...source.configuration, agentId };
+		if (agentId !== "agent-a") {
+			await sql`insert into platform.agents (id, current_configuration_revision, authorization_revision) values (${agentId}, 1, ${`authorization-${agentId}`})`;
+			await sql`insert into platform.agent_applications (id, agent_id, applicant_id, name, description, status, trace_id, request_id, submitted_at, management_revision, approval_revision, desired_state, workload_revision, fence) values (${`application-${agentId}`}, ${agentId}, 'owner-a', 'Agent', 'Fixture', 'creating', 'trace-a', 'request-a', now(), 1, 1, 'running', 1, 1)`;
+			await sql`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, configuration, created_at) values (${agentId}, 1, 'fixture', ${sql.json(configuration as unknown as postgres.JSONValue)}, now())`;
+			await sql`insert into platform.agent_owners (agent_id, owner_id, created_at) values (${agentId}, 'owner-a', now())`;
+		}
+		const candidate = { configuration, deployment: { admitted: true } };
+		const state: WorkloadReconciliationStateV1 = {
+			schemaVersion: 1,
+			agentId,
+			sourceConfigurationRevision: 1,
+			sourceLifecycleRevision: 1,
+			revision: 1,
+			fence: 1,
+			phase,
+			candidate,
+			verified: phase === "ready" ? candidate : null,
+			verifiedRevision: phase === "ready" ? 1 : null,
+			identity: { uid: `uid-${agentId}`, generation: 1 },
+			rollback: false,
+			failureCode: null,
+			attempts: 0,
+		};
+		await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${agentId}, 1, ${sql.json(state as unknown as postgres.JSONValue)}, clock_timestamp())`;
+		return state;
+	}
+
+	async function scheduledDelay(agentId = "agent-a") {
+		const [row] = await sql<{ milliseconds: number; due: boolean }[]>`
+			select next_attempt_at <= clock_timestamp() as due,
+				extract(epoch from (next_attempt_at - updated_at))::float8 * 1000 as milliseconds
+			from platform.workload_reconciliations where agent_id = ${agentId}
+		`;
+		return row?.due
+			? 0
+			: Math.round((row?.milliseconds ?? Number.NaN) / 1000) * 1000;
+	}
+
+	it("advances successive Core lifecycle steps before a slow ready monitor", async () => {
+		await seedAgent("agent-a", "applying");
+		await seedAgent("agent-b", "ready");
+		const monitorStarted = Promise.withResolvers<void>();
+		const releaseMonitor = Promise.withResolvers<void>();
+		const worker = createWorkloadReconciliationV1({
+			store,
+			runtime: {
+				...runtime(),
+				observe: async (state) => {
+					if (state.agentId === "agent-b") {
+						monitorStarted.resolve();
+						await releaseMonitor.promise;
+					}
+					return "healthy";
+				},
+			},
+		});
+		let pending: Promise<"idle" | "advanced"> | undefined;
+		try {
+			for (const phase of ["observing", "activating", "promoting", "ready"]) {
+				await sql`update platform.workload_reconciliations set next_attempt_at = clock_timestamp() where agent_id = 'agent-a'`;
+				pending = worker.tick("worker-lifecycle");
+				expect(
+					await Promise.race([
+						pending,
+						monitorStarted.promise.then(() => "monitor-blocked"),
+					]),
+				).toBe("advanced");
+				expect(
+					(
+						await sql`select state from platform.workload_reconciliations where agent_id = 'agent-a'`
+					)[0]?.state.phase,
+				).toBe(phase);
+			}
+			expect(await scheduledDelay()).toBe(30_000);
+			pending = worker.tick("worker-lifecycle");
+			await monitorStarted.promise;
+		} finally {
+			releaseMonitor.resolve();
+			await pending;
+		}
+	});
+
+	it("continues new Core lifecycle phases immediately with the production retry delay", async () => {
+		const worker = createWorkloadReconciliationV1({
+			store,
+			runtime: runtime(),
+		});
+		for (const phase of [
+			"preflight",
+			"closing",
+			"applying",
+			"observing",
+			"activating",
+			"promoting",
+			"ready",
+		]) {
+			expect(await worker.tick("worker-progress")).toBe("advanced");
+			expect(
+				(
+					await sql`select state from platform.workload_reconciliations where agent_id = 'agent-a'`
+				)[0]?.state.phase,
+			).toBe(phase);
+			expect(await scheduledDelay()).toBe(phase === "ready" ? 30_000 : 0);
+		}
+	});
+
+	it("round-robins both classes with at most four due lifecycle selections per monitor", async () => {
+		for (const [agentId, phase] of [
+			["agent-a", "applying"],
+			["agent-b", "ready"],
+			["agent-c", "closing"],
+			["agent-d", "ready"],
+			["agent-f", "ready"],
+		] as const)
+			await seedAgent(agentId, phase);
+		const seen: string[] = [];
+		for (let tick = 0; tick < 15; tick++) {
+			await sql`update platform.workload_reconciliations set next_attempt_at = clock_timestamp()`;
+			expect(
+				await store.runNext("worker-fair", async (input) => {
+					seen.push(input.management.agentId);
+					if (!input.state) throw new Error();
+					return input.state;
+				}),
+			).toBe("advanced");
+		}
+		expect(seen).toEqual([
+			"agent-a",
+			"agent-c",
+			"agent-a",
+			"agent-c",
+			"agent-b",
+			"agent-a",
+			"agent-c",
+			"agent-a",
+			"agent-c",
+			"agent-d",
+			"agent-a",
+			"agent-c",
+			"agent-a",
+			"agent-c",
+			"agent-f",
+		]);
+	});
+
+	it.each(["busy", "malformed"] as const)(
+		"counts a %s lifecycle selection toward fairness and advances its cursor",
+		async (unavailable) => {
+			await seedAgent("agent-a", "applying");
+			const held = heldStep();
+			let pending: Promise<"idle" | "advanced"> | undefined;
+			if (unavailable === "busy") {
+				pending = second.runNext("worker-holder", held.step);
+				await held.started;
+			}
+			try {
+				await seedAgent("agent-b", "ready");
+				await seedAgent("agent-c", "applying");
+				if (unavailable === "malformed")
+					await sql`update platform.agent_configuration_revisions set configuration = jsonb_build_object('schemaVersion', 1, 'agentId', agent_id, 'revision', revision) where agent_id = 'agent-a'`;
+				const seen: string[] = [];
+				for (let tick = 0; tick < 3; tick++) {
+					await sql`update platform.workload_reconciliations set next_attempt_at = clock_timestamp() where agent_id = 'agent-c'`;
+					if (unavailable === "malformed" && tick < 2)
+						await expect(
+							store.runNext("worker-fair", async () => {
+								throw new Error("must not enter");
+							}),
+						).rejects.toThrow("Workload reconciliation persistence failed");
+					await store.runNext("worker-fair", async (input) => {
+						seen.push(input.management.agentId);
+						if (!input.state) throw new Error();
+						return input.state;
+					});
+				}
+				expect(seen).toEqual(["agent-c", "agent-c", "agent-b"]);
+			} finally {
+				held.release();
+				await pending;
+			}
+		},
+	);
+
+	it("rotates past a malformed monitor while lifecycle traffic remains due", async () => {
+		await seedAgent("agent-a", "applying");
+		await seedAgent("agent-b", "ready");
+		await seedAgent("agent-d", "ready");
+		await sql`update platform.agent_configuration_revisions set configuration = jsonb_build_object('schemaVersion', 1, 'agentId', agent_id, 'revision', revision) where agent_id = 'agent-b'`;
+		const seen: string[] = [];
+		for (let tick = 0; tick < 10; tick++) {
+			await sql`update platform.workload_reconciliations set next_attempt_at = clock_timestamp() where agent_id = 'agent-a'`;
+			const result = store.runNext("worker-monitor-fair", async (input) => {
+				seen.push(input.management.agentId);
+				if (!input.state) throw new Error();
+				return input.state;
+			});
+			if (tick === 4)
+				await expect(result).rejects.toThrow(
+					"Workload reconciliation persistence failed",
+				);
+			else expect(await result).toBe("advanced");
+		}
+		expect(seen).toEqual([...Array<string>(8).fill("agent-a"), "agent-d"]);
+	});
+
+	it.each(["pending", "retry_scheduled", "processing"] as const)(
+		"prioritizes only a claimable %s Agent intent with matching scope and operation",
+		async (status) => {
+			for (const agentId of [
+				"agent-a",
+				"agent-b",
+				"agent-c",
+				"agent-d",
+				"agent-e",
+				"agent-f",
+			])
+				await seedAgent(agentId, "ready");
+			await sql`update platform.workload_reconciliations set next_attempt_at = clock_timestamp() + interval '1 hour' where agent_id <> 'agent-a'`;
+			for (const [agentId, scope, operation, delay] of [
+				["agent-b", "conversation", "agent.workload.reconcile.v1", -3_600_000],
+				["agent-c", "agent", "agent.unrelated.v1", -3_600_000],
+				["agent-d", "agent", "agent.workload.reconcile.v1", 3_600_000],
+				["agent-e", "agent", "agent.configuration.revised.v1", -3_600_000],
+			] as const) {
+				await sql`insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, status, available_at, lease_owner, lease_expires_at)
+					values (${`task-${agentId}`}, ${scope}, ${agentId}, ${operation}, '{}', 'trace-a', ${status}, clock_timestamp() + ${delay} * interval '1 millisecond', ${status === "processing" ? "old-worker" : null}, case when ${status} = 'processing' then clock_timestamp() + ${delay} * interval '1 millisecond' else null end)`;
+			}
+			const seen: string[] = [];
+			for (let tick = 0; tick < 2; tick++) {
+				expect(
+					await store.runNext("worker-intent", async (input) => {
+						seen.push(input.management.agentId);
+						if (!input.state) throw new Error();
+						return input.state;
+					}),
+				).toBe("advanced");
+			}
+			expect(seen).toEqual(["agent-e", "agent-a"]);
+			expect(
+				await store.runNext("worker-intent", async () => {
+					throw new Error("not due");
+				}),
+			).toBe("idle");
+			expect(
+				await sql`select scope_id, status from platform.outbox_items where scope_id <> 'agent-e' order by scope_id`,
+			).toEqual([
+				{ scope_id: "agent-b", status },
+				{ scope_id: "agent-c", status },
+				{ scope_id: "agent-d", status },
+			]);
+		},
+	);
+
+	it.each(["identity", "candidate"] as const)(
+		"immediately continues real same-phase %s progress but delays an unchanged result",
+		async (progress) => {
+			await seedAgent("agent-a", "applying");
+			const worker = createWorkloadReconciliationV1({
+				store,
+				runtime: {
+					...runtime(),
+					apply: async (state) => ({
+						status: "prepared",
+						candidate:
+							progress === "candidate"
+								? {
+										...state.candidate,
+										deployment: { admitted: true, applied: true },
+									}
+								: state.candidate,
+						identity:
+							progress === "identity"
+								? { uid: "new-uid", generation: 2 }
+								: state.identity,
+					}),
+				},
+			});
+			expect(await worker.tick("worker-progress")).toBe("advanced");
+			expect(await scheduledDelay()).toBe(0);
+			expect(await worker.tick("worker-progress")).toBe("advanced");
+			expect(await scheduledDelay()).toBe(1_000);
+			expect(await worker.tick("worker-progress")).toBe("idle");
+		},
+	);
+
+	it("keeps pending and failed cleanup or close steps at their existing retry intervals", async () => {
+		const original = await seedAgent("agent-a", "applying");
+		for (const phase of [
+			"applying",
+			"observing",
+			"closing",
+			"cleaning",
+		] as const) {
+			const state = {
+				...original,
+				phase,
+				attempts: phase === "closing" || phase === "cleaning" ? 5 : 0,
+			};
+			await sql`update platform.workload_reconciliations set state = ${sql.json(state as unknown as postgres.JSONValue)}, next_attempt_at = clock_timestamp()`;
+			const worker = createWorkloadReconciliationV1({
+				store,
+				runtime: {
+					...runtime(),
+					apply: async () => "pending",
+					observe: async () => "pending",
+					closeRoute: async () => {
+						throw new Error("temporary failure");
+					},
+				},
+			});
+			expect(await worker.tick("worker-pending")).toBe("advanced");
+			expect(await scheduledDelay()).toBe(
+				phase === "closing" || phase === "cleaning" ? 2_000 : 1_000,
+			);
+			expect(await worker.tick("worker-pending")).toBe("idle");
+		}
+	});
+
+	it("does not treat cleared attempts or refreshed capability observations as progress", async () => {
+		const state = await seedAgent("agent-a", "applying");
+		await sql`update platform.workload_reconciliations set state = ${sql.json({ ...state, attempts: 3 } as unknown as postgres.JSONValue)}`;
+		expect(
+			await store.runNext("worker-observation", async (input) => {
+				if (!input.state) throw new Error();
+				return {
+					...input.state,
+					attempts: 0,
+					capabilities: {
+						browser: {
+							status: "available",
+							observedAt: new Date().toISOString(),
+						},
+					},
+				};
+			}),
+		).toBe("advanced");
+		expect(await scheduledDelay()).toBe(1_000);
+	});
+});
 
 function secretCryptoFixture() {
 	const { privateKey, publicKey } = generateKeyPairSync("rsa", {
@@ -2840,6 +3204,8 @@ describe("PostgreSQL Workload steps", () => {
 				)[0],
 			).toMatchObject({ status: "pending", attempt_count: 0 });
 			await sql`update platform.agent_configuration_revisions set configuration = ${sql.json(source.configuration)} where agent_id = 'agent-a'`;
+			// The completed lifecycle burst first owes agent-b a monitor turn.
+			await worker.tick("single-worker");
 			await worker.tick("single-worker");
 			expect(
 				(
