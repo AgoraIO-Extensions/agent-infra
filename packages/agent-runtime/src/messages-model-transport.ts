@@ -26,6 +26,12 @@ export interface RuntimeMessagesTransportDiagnostic {
 	};
 }
 
+export type RuntimeMessagesDiagnosticReceipt = (
+	state: "sent" | "completed" | "failed" | "unknown",
+	endTurn: boolean,
+	diagnostic: RuntimeMessagesTransportDiagnostic,
+) => Promise<void>;
+
 export type RuntimeMessagesPurpose =
 	| "main"
 	| "web-fetch"
@@ -48,6 +54,10 @@ export interface RuntimeMessagesTransportOptions {
 	readonly effort: string;
 	readonly admit: () => Promise<void>;
 	readonly fetch?: typeof fetch;
+	/** Observation only: capture a trusted binding without changing request admission. */
+	readonly openDiagnosticReceipt?: () =>
+		| RuntimeMessagesDiagnosticReceipt
+		| undefined;
 	/** Trusted Driver admission per actual HTTP request, never a native-provided identity. */
 	readonly openRequest?: (
 		purpose: RuntimeMessagesPurpose,
@@ -116,6 +126,7 @@ export async function openRuntimeMessagesTransport(
 	const token = randomBytes(32).toString("hex");
 	const controllers = new Set<AbortController>();
 	const pending = new Set<Promise<void>>();
+	const pendingDiagnostics = new Set<Promise<void>>();
 	let closed = false;
 	let admitted = false;
 	let active = 0;
@@ -149,6 +160,13 @@ export async function openRuntimeMessagesTransport(
 				return;
 			}
 			active++;
+			let diagnosticReceipt: RuntimeMessagesDiagnosticReceipt | undefined;
+			try {
+				if (!request.url?.includes("/count_tokens"))
+					diagnosticReceipt = options.openDiagnosticReceipt?.();
+			} catch {
+				// Diagnostics cannot authorize, retry, or fail a model request.
+			}
 			const controller = new AbortController();
 			controllers.add(controller);
 			response.once("close", () => {
@@ -163,11 +181,25 @@ export async function openRuntimeMessagesTransport(
 				if (closed || failure || controller.signal.aborted)
 					throw new Error("RUNTIME_MODEL_QUERY_SEALED");
 			};
-			const receipt: NonNullable<RuntimeMessagesTransportOptions["receipt"]> = (
-				...args
-			) =>
-				(requestContext?.receipt ?? options.receipt)?.(...args) ??
-				Promise.resolve();
+			const receipt: NonNullable<
+				RuntimeMessagesTransportOptions["receipt"]
+			> = async (...args) => {
+				await (requestContext?.receipt ?? options.receipt)?.(...args);
+				if (args[2] && diagnosticReceipt && pendingDiagnostics.size < 16) {
+					try {
+						const recording = Promise.resolve(
+							diagnosticReceipt(args[0], args[1], args[2]),
+						);
+						pendingDiagnostics.add(recording);
+						void recording.then(
+							() => pendingDiagnostics.delete(recording),
+							() => pendingDiagnostics.delete(recording),
+						);
+					} catch {
+						// A failed observation must not alter the transport outcome.
+					}
+				}
+			};
 			const startedAt = Date.now();
 			const diagnostic = (): RuntimeMessagesTransportDiagnostic => {
 				const safeStatusCode =

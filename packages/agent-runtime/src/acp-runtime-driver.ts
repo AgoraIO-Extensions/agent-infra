@@ -18,6 +18,7 @@ import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
 } from "./driver.js";
+import type { RuntimeMessagesTransportOptions } from "./messages-model-transport.js";
 import { openCodeToolName } from "./opencode-tools.js";
 import {
 	type NativeSessionOptions,
@@ -76,6 +77,7 @@ export interface GenericAcpRuntimeDriverOptions {
 		selection: RuntimeSelectionV1,
 		admit: () => Promise<void>,
 		resolveModelCredential?: () => Promise<string>,
+		openDiagnosticReceipt?: RuntimeMessagesTransportOptions["openDiagnosticReceipt"],
 	) => Promise<AcpLaunch>;
 }
 
@@ -129,6 +131,7 @@ export const GenericAcpRuntimeDriver = {
 					resultBlock: session.resultBlock,
 					resolveModelCredential: session.resolveModelCredential,
 					recordOperationFact: session.recordOperationFact,
+					openDiagnosticReceipt: session.openDiagnosticReceipt,
 					modelFact: {
 						configVersion: options.configVersion,
 						modelOptionId: selection.modelOptionId,
@@ -156,6 +159,7 @@ export const GenericAcpRuntimeDriver = {
 					selection,
 					() => callbacks.admit(),
 					resolveModelCredential,
+					() => callbacks.openDiagnosticReceipt?.(),
 				);
 				const executionBrowser = session.browser;
 				const executionCapability =
@@ -328,6 +332,7 @@ export const GenericAcpRuntimeDriver = {
 								callbacks.resultBlock = next.resultBlock;
 								callbacks.resolveModelCredential = next.resolveModelCredential;
 								callbacks.recordOperationFact = next.recordOperationFact;
+								callbacks.openDiagnosticReceipt = next.openDiagnosticReceipt;
 								const nextOption = options.modelOptions.find(
 									(option) =>
 										option.modelOptionId === next.selection.modelOptionId,

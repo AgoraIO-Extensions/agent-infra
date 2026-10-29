@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
 	openRuntimeMessagesTransport,
 	type RuntimeMessagesTransportDiagnostic,
@@ -1235,6 +1235,260 @@ it.each([500, 401])(
 			releaseCredential();
 			releaseReceipt();
 			await Promise.allSettled([first, second]);
+			await transport.close();
+		}
+	},
+);
+
+async function diagnosticRequest(
+	transport: Awaited<ReturnType<typeof openRuntimeMessagesTransport>>,
+	counting = false,
+) {
+	const response = await fetch(
+		`${transport.modelAccess.endpoint}/v1/messages${counting ? "/count_tokens" : ""}`,
+		{
+			method: "POST",
+			headers: { authorization: `Bearer ${transport.modelAccess.credential}` },
+			body: JSON.stringify({
+				model: "claude-opus-5",
+				messages: [],
+				...(counting
+					? {}
+					: {
+							output_config: { effort: "high" },
+							thinking: { type: "adaptive" },
+							stream: true,
+						}),
+			}),
+		},
+	);
+	return { status: response.status, text: await response.text() };
+}
+
+it.each(["factory-throw", "sink-reject", "sink-hang"])(
+	"diagnostic %s cannot change a successful response or block close",
+	async (mode) => {
+		let sends = 0;
+		let observations = 0;
+		const transport = await openRuntimeMessagesTransport({
+			endpoint: "https://model.example.test",
+			credential: "synthetic-provider-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			admit: async () => {},
+			openDiagnosticReceipt: () => {
+				if (mode === "factory-throw") throw Error("synthetic-private-failure");
+				return async () => {
+					observations++;
+					if (mode === "sink-reject") throw Error("synthetic-private-failure");
+					await new Promise<void>(() => {});
+				};
+			},
+			fetch: async () => {
+				sends++;
+				return new Response(messages(["OK"]), {
+					headers: { "content-type": "text/event-stream" },
+				});
+			},
+		});
+		try {
+			const response = await diagnosticRequest(transport);
+			expect(response.status).toBe(200);
+			expect(response.text).toContain('"type":"message_stop"');
+			expect(response.text).not.toContain("synthetic-private");
+			expect(sends).toBe(1);
+			expect(transport.failure()).toBeUndefined();
+			expect(observations).toBe(mode === "factory-throw" ? 0 : 2);
+			await transport.close();
+		} finally {
+			await transport.close();
+		}
+	},
+);
+
+it("bounds detached diagnostic work and never associates count_tokens with a Turn", async () => {
+	let opens = 0;
+	let pending = 0;
+	let sends = 0;
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		credential: "synthetic-provider-credential",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {},
+		openDiagnosticReceipt: () => {
+			opens++;
+			return async () => {
+				pending++;
+				await new Promise<void>(() => {});
+			};
+		},
+		fetch: async (url) => {
+			sends++;
+			return String(url).includes("count_tokens")
+				? new Response('{"input_tokens":3}', {
+						headers: { "content-type": "application/json" },
+					})
+				: new Response(messages(["OK"]), {
+						headers: { "content-type": "text/event-stream" },
+					});
+		},
+	});
+	try {
+		expect((await diagnosticRequest(transport, true)).status).toBe(200);
+		expect(opens).toBe(0);
+		for (let index = 0; index < 12; index++)
+			expect((await diagnosticRequest(transport)).status).toBe(200);
+		expect(sends).toBe(13);
+		expect(opens).toBe(12);
+		expect(pending).toBe(16);
+		expect(transport.failure()).toBeUndefined();
+	} finally {
+		await transport.close();
+	}
+});
+
+it("freezes the diagnostic sink at HTTP start without increasing the original one-request limit", async () => {
+	let current = "original";
+	let release!: () => void;
+	let entered!: () => void;
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const ready = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	const events: { binding: string; state: string }[] = [];
+	let sends = 0;
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		credential: "synthetic-provider-credential",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {},
+		openDiagnosticReceipt: () => {
+			const binding = current;
+			return async (state) => {
+				events.push({ binding, state });
+			};
+		},
+		fetch: async () => {
+			sends++;
+			entered();
+			await held;
+			return new Response(messages(["OK"]), {
+				headers: { "content-type": "text/event-stream" },
+			});
+		},
+	});
+	const first = diagnosticRequest(transport);
+	try {
+		await ready;
+		current = "following";
+		expect((await diagnosticRequest(transport)).status).toBe(400);
+		expect(sends).toBe(1);
+		release();
+		expect((await first).status).toBe(200);
+		expect(events).toEqual([
+			{ binding: "original", state: "sent" },
+			{ binding: "original", state: "completed" },
+		]);
+		transport.beginTurn();
+		expect((await diagnosticRequest(transport)).status).toBe(200);
+		expect(events.slice(2)).toEqual([
+			{ binding: "following", state: "sent" },
+			{ binding: "following", state: "completed" },
+		]);
+	} finally {
+		release();
+		await first;
+		await transport.close();
+	}
+});
+
+it.each(["request", "admission", "credential", "transport", "abort"] as const)(
+	"observes the %s failure without changing sending or unknown semantics",
+	async (stage) => {
+		const diagnostics: RuntimeMessagesTransportDiagnostic[] = [];
+		let sends = 0;
+		let started!: () => void;
+		const ready = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const transport = await openRuntimeMessagesTransport({
+			endpoint: "https://model.example.test",
+			credential: "synthetic-provider-credential",
+			authentication: "bearer",
+			model: "claude-opus-5",
+			effort: "high",
+			admit: async () => {
+				if (stage === "admission") throw Error("synthetic-private-admission");
+			},
+			...(stage === "credential"
+				? {
+						resolveCredential: async () => {
+							throw Error("synthetic-private-key");
+						},
+					}
+				: {}),
+			openDiagnosticReceipt: () => async (_state, _end, diagnostic) => {
+				diagnostics.push(diagnostic);
+			},
+			fetch: async (_url, options) => {
+				sends++;
+				started();
+				if (stage === "transport")
+					throw Error("https://synthetic-key@private.invalid");
+				return new Promise<Response>((_resolve, reject) => {
+					options?.signal?.addEventListener(
+						"abort",
+						() => reject(Error("synthetic abort")),
+						{ once: true },
+					);
+				});
+			},
+		});
+		const controller = new AbortController();
+		const request = fetch(`${transport.modelAccess.endpoint}/v1/messages`, {
+			method: "POST",
+			signal: controller.signal,
+			headers: { authorization: `Bearer ${transport.modelAccess.credential}` },
+			body:
+				stage === "request"
+					? "not-json"
+					: JSON.stringify({
+							model: "claude-opus-5",
+							messages: [],
+							stream: true,
+							thinking: { type: "adaptive" },
+							output_config: { effort: "high" },
+						}),
+		})
+			.then((response) => response.text())
+			.catch(() => "");
+		try {
+			if (stage === "abort") {
+				await ready;
+				controller.abort();
+			}
+			const body = await request;
+			await vi.waitFor(() => expect(diagnostics.at(-1)?.stage).toBe(stage));
+			expect(diagnostics.at(-1)?.sent).toBe(
+				stage === "transport" || stage === "abort",
+			);
+			expect(sends).toBe(stage === "transport" || stage === "abort" ? 1 : 0);
+			expect(transport.failure()).toBe(
+				stage === "transport" || stage === "abort" ? "unknown" : "failed",
+			);
+			expect(JSON.stringify(diagnostics) + body).not.toMatch(
+				/synthetic-private|synthetic-key|private.invalid/,
+			);
+		} finally {
+			controller.abort();
+			await request;
 			await transport.close();
 		}
 	},

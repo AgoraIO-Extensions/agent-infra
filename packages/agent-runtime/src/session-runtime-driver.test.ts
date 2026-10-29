@@ -1,5 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	cp,
+	lstat,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
@@ -12,6 +22,10 @@ import type {
 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
+import type {
+	RuntimeMessagesDiagnosticReceipt,
+	RuntimeMessagesTransportDiagnostic,
+} from "./messages-model-transport.js";
 import {
 	createRuntimeFileResultReceiptV1,
 	type RuntimeFileBridgePortV1,
@@ -1898,3 +1912,502 @@ it("converges an ordinary interrupted Turn to unknown without recovery evidence"
 		await rm(path, { recursive: true, force: true });
 	}
 });
+
+const transportDiagnostic: RuntimeMessagesTransportDiagnostic = {
+	stage: "upstream_http",
+	sent: true,
+	statusCode: 502,
+	statusClass: "5xx",
+	durationMs: 12,
+};
+async function diagnosticFixture() {
+	const path = await mkdtemp(join(tmpdir(), "session-messages-diagnostic-"));
+	const receipts: {
+		executionId: string;
+		operationRef: string;
+		attemptRef: string;
+		receipt: RuntimeMessagesDiagnosticReceipt;
+		options: NativeSessionOptions;
+	}[] = [];
+	let prompts = 0;
+	const openSession = async (
+		initial: NativeSessionOptions,
+	): Promise<NativeSession> => {
+		let current = initial;
+		return {
+			nativeId: "diagnostic-native",
+			select: async () => {},
+			cancel: async () => {},
+			close: async () => {},
+			reusable: () => true,
+			startTurn: (next) => {
+				current = next;
+			},
+			prompt: async () => {
+				const options = current;
+				expect(options.openDiagnosticReceipt?.()).toBeUndefined();
+				const model = options.modelFact?.();
+				if (!model) throw Error("missing trusted model");
+				const operationRef = randomUUID();
+				const attemptRef = randomUUID();
+				await options.recordOperationFact?.({
+					kind: "model",
+					operationRef,
+					attemptRef,
+					phase: "intent",
+					model,
+				});
+				await options.recordOperationFact?.({
+					kind: "model",
+					operationRef,
+					attemptRef,
+					phase: "started",
+					model,
+				});
+				const receipt = options.openDiagnosticReceipt?.();
+				if (!receipt || !options.executionId)
+					throw Error("missing diagnostic binding");
+				receipts.push({
+					executionId: options.executionId,
+					operationRef,
+					attemptRef,
+					receipt,
+					options,
+				});
+				await options.admit();
+				prompts++;
+				await options.recordOperationFact?.({
+					kind: "model",
+					operationRef,
+					attemptRef,
+					phase: "completed",
+					model,
+				});
+				expect(options.openDiagnosticReceipt?.()).toBeUndefined();
+				return { stopReason: "completed" };
+			},
+		};
+	};
+	let runtime = await driver(path, openSession);
+	let ref: string | undefined;
+	return {
+		path,
+		receipts,
+		get runtime() {
+			return runtime;
+		},
+		get prompts() {
+			return prompts;
+		},
+		async turn(index: number) {
+			const request = command([]);
+			if (request.kind !== "submit-turn") throw Error();
+			const result = await runtime.execute({
+				...request,
+				...(ref ? { nativeSessionRef: ref } : {}),
+				executionId: `execution-${index}`,
+				turnId: `turn-${index}`,
+				operationId: `operation-${index}`,
+			});
+			ref = result.nativeSessionRef;
+			await vi.waitFor(async () =>
+				expect(await runtime.getStatus(ref ?? "", `execution-${index}`)).toBe(
+					"completed",
+				),
+			);
+			return {
+				state: join(path, ref, "state.json"),
+				diagnostics: join(path, ref, "messages-diagnostics.json"),
+			};
+		},
+		async restart() {
+			await runtime.close();
+			runtime = await driver(path, openSession);
+		},
+		async close() {
+			await runtime.close();
+			await rm(path, { recursive: true, force: true });
+		},
+	};
+}
+
+it("keeps late Messages diagnostics bound to the original Turn across reuse and restart", async () => {
+	const fixture = await diagnosticFixture();
+	try {
+		const files = await fixture.turn(1);
+		await fixture.turn(2);
+		const before = await readFile(files.state, "utf8");
+		const first = fixture.receipts[0];
+		const second = fixture.receipts[1];
+		if (!first || !second) throw Error();
+		await second.receipt("unknown", false, transportDiagnostic);
+		await first.receipt("unknown", false, transportDiagnostic);
+		await first.receipt("sent", false, {
+			stage: "upstream_http",
+			sent: false,
+			durationMs: 0,
+		});
+		let saved = JSON.parse(await readFile(files.diagnostics, "utf8"));
+		expect(
+			saved.entries.map((entry: { executionId: string }) => entry.executionId),
+		).toEqual(["execution-2", "execution-1"]);
+		expect(saved.entries[1]).toMatchObject({
+			operationRef: first.operationRef,
+			attemptRef: first.attemptRef,
+		});
+		expect(saved.entries[0]).toMatchObject({
+			operationRef: second.operationRef,
+			attemptRef: second.attemptRef,
+		});
+		expect((await lstat(files.diagnostics)).mode & 0o077).toBe(0);
+		expect(await readFile(files.state, "utf8")).toBe(before);
+		await fixture.restart();
+		await fixture.turn(3);
+		await fixture.receipts[2]?.receipt("unknown", false, transportDiagnostic);
+		saved = JSON.parse(await readFile(files.diagnostics, "utf8"));
+		expect(
+			saved.entries.map((entry: { executionId: string }) => entry.executionId),
+		).toEqual(["execution-2", "execution-1", "execution-3"]);
+		expect(fixture.prompts).toBe(3);
+	} finally {
+		await fixture.close();
+	}
+});
+
+it("rejects arbitrary Messages diagnostic fields while preserving authoritative facts", async () => {
+	const fixture = await diagnosticFixture();
+	try {
+		const files = await fixture.turn(1);
+		const captured = fixture.receipts[0];
+		if (!captured) throw Error();
+		const before = await readFile(files.state, "utf8");
+		for (const invalid of [
+			{
+				...transportDiagnostic,
+				headers: { Authorization: "synthetic-secret" },
+			},
+			{ ...transportDiagnostic, stage: "https://key@private.invalid" },
+			{ ...transportDiagnostic, statusClass: "2xx" },
+			{ ...transportDiagnostic, durationMs: Number.POSITIVE_INFINITY },
+		])
+			await captured.receipt(
+				"unknown",
+				false,
+				invalid as RuntimeMessagesTransportDiagnostic,
+			);
+		await captured.receipt("unknown", false, {
+			...transportDiagnostic,
+			usage: { inputTokens: 1 },
+		});
+		const raw = await readFile(files.diagnostics, "utf8");
+		expect(raw).not.toMatch(/synthetic-secret|private\.invalid|headers|usage/);
+		expect(JSON.parse(raw).entries).toHaveLength(1);
+		expect(await readFile(files.state, "utf8")).toBe(before);
+	} finally {
+		await fixture.close();
+	}
+});
+
+it.each([
+	"symlink",
+	"malformed",
+	"oversized",
+	"foreign-binding",
+	"too-many",
+	"public-mode",
+	"read-only-mode",
+	"writable-directory",
+] as const)(
+	"disables the %s Messages sidecar without blocking the next Turn",
+	async (mode) => {
+		const fixture = await diagnosticFixture();
+		try {
+			const files = await fixture.turn(1);
+			const captured = fixture.receipts[0];
+			if (!captured) throw Error();
+			const before = await readFile(files.state, "utf8");
+			const foreign = join(fixture.path, "foreign.json");
+			const entry = {
+				requestRef: randomUUID(),
+				executionId: captured.executionId,
+				operationRef: captured.operationRef,
+				attemptRef: captured.attemptRef,
+				state: "unknown",
+				diagnostic: transportDiagnostic,
+			};
+			if (mode === "symlink") {
+				await writeFile(foreign, "unchanged", { mode: 0o600 });
+				await symlink(foreign, files.diagnostics);
+			} else
+				await writeFile(
+					files.diagnostics,
+					mode === "malformed"
+						? "{}"
+						: mode === "oversized"
+							? "界".repeat(90_000)
+							: JSON.stringify({
+									schemaVersion: 1,
+									entries:
+										mode === "too-many"
+											? Array.from({ length: 129 }, () => ({
+													...entry,
+													requestRef: randomUUID(),
+												}))
+											: [
+													{
+														...entry,
+														...(mode === "foreign-binding"
+															? { executionId: "other-execution" }
+															: {}),
+													},
+												],
+								}),
+					{ mode: 0o600 },
+				);
+			if (mode === "public-mode") await chmod(files.diagnostics, 0o644);
+			if (mode === "read-only-mode") await chmod(files.diagnostics, 0o400);
+			if (mode === "writable-directory")
+				await chmod(captured.options.directory, 0o777);
+			const original = await readFile(files.diagnostics, "utf8");
+			await captured.receipt("unknown", false, transportDiagnostic);
+			expect(await readFile(files.diagnostics, "utf8")).toBe(original);
+			expect(await readFile(files.state, "utf8")).toBe(before);
+			await fixture.turn(2);
+			await fixture.receipts[1]?.receipt("unknown", false, transportDiagnostic);
+			expect(await readFile(files.diagnostics, "utf8")).toBe(original);
+			expect(fixture.prompts).toBe(2);
+		} finally {
+			await fixture.close();
+		}
+	},
+);
+
+it("contains a poisoned Messages sidecar without poisoning the execution journal", async () => {
+	const fixture = await diagnosticFixture();
+	try {
+		const files = await fixture.turn(1);
+		const captured = fixture.receipts[0];
+		if (!captured) throw Error();
+		await captured.receipt("sent", false, {
+			stage: "upstream_http",
+			sent: false,
+			durationMs: 0,
+		});
+		const prototype = DurableJsonFile.prototype as unknown as {
+			path: string;
+			persist(serialized: string): Promise<void>;
+		};
+		const persist = prototype.persist;
+		const failing = vi.spyOn(prototype, "persist").mockImplementation(function (
+			this: typeof prototype,
+			serialized,
+		) {
+			if (this.path.endsWith("messages-diagnostics.json"))
+				return Promise.reject(
+					Error("synthetic-secret https://private.invalid"),
+				);
+			return persist.call(this, serialized);
+		});
+		try {
+			await captured.receipt("unknown", false, transportDiagnostic);
+			await fixture.turn(2);
+			await fixture.receipts[1]?.receipt("unknown", false, transportDiagnostic);
+			expect(fixture.prompts).toBe(2);
+			expect(
+				await fixture.runtime.getStatus(
+					captured.options.runtimeSessionRef,
+					"execution-1",
+				),
+			).toBe("completed");
+			expect(await readFile(files.diagnostics, "utf8")).not.toMatch(
+				/synthetic-secret|private.invalid/,
+			);
+		} finally {
+			failing.mockRestore();
+		}
+	} finally {
+		await fixture.close();
+	}
+});
+
+it("bounds queued Messages diagnostics and leaves close independent of a hung sidecar", async () => {
+	const fixture = await diagnosticFixture();
+	let release!: () => void;
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	try {
+		const files = await fixture.turn(1);
+		const captured = fixture.receipts[0];
+		if (!captured) throw Error();
+		await captured.receipt("sent", false, {
+			stage: "upstream_http",
+			sent: false,
+			durationMs: 0,
+		});
+		let updates = 0;
+		const prototype = DurableJsonFile.prototype as unknown as {
+			path: string;
+			update(change: unknown): Promise<void>;
+		};
+		const update = prototype.update;
+		const blocked = vi.spyOn(prototype, "update").mockImplementation(function (
+			this: typeof prototype,
+			change,
+		) {
+			if (this.path.endsWith("messages-diagnostics.json")) {
+				updates++;
+				return held;
+			}
+			return update.call(this, change);
+		});
+		const receipts = Array.from({ length: 40 }, () =>
+			captured.receipt("unknown", false, transportDiagnostic),
+		);
+		try {
+			await vi.waitFor(() => expect(updates).toBe(16));
+			await fixture.turn(2);
+			await fixture.runtime.close();
+			expect(captured.options.openDiagnosticReceipt?.()).toBeUndefined();
+			await captured.receipt("unknown", false, transportDiagnostic);
+			expect(updates).toBe(16);
+		} finally {
+			release();
+			await Promise.all(receipts);
+			blocked.mockRestore();
+		}
+		expect(
+			JSON.parse(await readFile(files.diagnostics, "utf8")).entries,
+		).toHaveLength(1);
+	} finally {
+		release?.();
+		await fixture.close();
+	}
+});
+
+it("bounds Messages sidecar records across restart without rewriting the main journal", async () => {
+	const fixture = await diagnosticFixture();
+	try {
+		const files = await fixture.turn(1);
+		const captured = fixture.receipts[0];
+		if (!captured) throw Error();
+		const original = await readFile(files.state, "utf8");
+		await captured.receipt("unknown", false, transportDiagnostic);
+		const saved = JSON.parse(await readFile(files.diagnostics, "utf8"));
+		const entries = Array.from({ length: 128 }, () => ({
+			...saved.entries[0],
+			requestRef: randomUUID(),
+		}));
+		await fixture.restart();
+		await writeFile(
+			files.diagnostics,
+			JSON.stringify({ schemaVersion: 1, entries }),
+			{ mode: 0o600 },
+		);
+		await fixture.turn(2);
+		await fixture.receipts[1]?.receipt("unknown", false, transportDiagnostic);
+		const next = JSON.parse(await readFile(files.diagnostics, "utf8"));
+		expect(next.entries).toHaveLength(128);
+		expect(next.entries[0].requestRef).toBe(entries[1].requestRef);
+		expect(next.entries.at(-1).executionId).toBe("execution-2");
+		expect((await lstat(files.diagnostics)).size).toBeLessThanOrEqual(262_144);
+		const after = JSON.parse(await readFile(files.state, "utf8"));
+		expect(after.turns[0]).toEqual(JSON.parse(original).turns[0]);
+	} finally {
+		await fixture.close();
+	}
+});
+
+it.each(["initialization", "persist"] as const)(
+	"does not overwrite a reopened Session diagnostic with older detached %s",
+	async (stage) => {
+		const fixture = await diagnosticFixture();
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let entered!: () => void;
+		const blocked = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		try {
+			const files = await fixture.turn(1);
+			const first = fixture.receipts[0];
+			if (!first) throw Error();
+			if (stage === "persist")
+				await first.receipt("sent", false, {
+					stage: "upstream_http",
+					sent: false,
+					durationMs: 0,
+				});
+			const prototype = DurableJsonFile.prototype as unknown as {
+				path: string;
+				persist(serialized: string): Promise<void>;
+			};
+			const persist = prototype.persist;
+			let oldWrite = true;
+			const pending = vi
+				.spyOn(prototype, "persist")
+				.mockImplementation(async function (
+					this: typeof prototype,
+					serialized,
+				) {
+					if (this.path.endsWith("messages-diagnostics.json") && oldWrite) {
+						oldWrite = false;
+						entered();
+						await held;
+					}
+					await persist.call(this, serialized);
+				});
+			let late: Promise<void> | undefined;
+			try {
+				late = first.receipt("unknown", false, transportDiagnostic);
+				await blocked;
+				await fixture.restart();
+				await fixture.turn(2);
+				await fixture.receipts[1]?.receipt(
+					"unknown",
+					false,
+					transportDiagnostic,
+				);
+				if (stage === "initialization")
+					await expect(
+						readFile(files.diagnostics, "utf8"),
+					).rejects.toMatchObject({ code: "ENOENT" });
+				else
+					expect(
+						JSON.parse(await readFile(files.diagnostics, "utf8")).entries.map(
+							(entry: { executionId: string }) => entry.executionId,
+						),
+					).toEqual(["execution-1"]);
+				expect(fixture.prompts).toBe(2);
+				release();
+				await late;
+				await vi.waitFor(async () => {
+					await fixture.receipts[1]?.receipt(
+						"unknown",
+						false,
+						transportDiagnostic,
+					);
+					expect(
+						JSON.parse(await readFile(files.diagnostics, "utf8")).entries.map(
+							(entry: { executionId: string }) => entry.executionId,
+						),
+					).toContain("execution-2");
+				});
+				expect(
+					JSON.parse(await readFile(files.diagnostics, "utf8")).entries.map(
+						(entry: { executionId: string }) => entry.executionId,
+					),
+				).toContain("execution-2");
+			} finally {
+				release();
+				await late;
+				pending.mockRestore();
+			}
+		} finally {
+			release?.();
+			await fixture.close();
+		}
+	},
+);

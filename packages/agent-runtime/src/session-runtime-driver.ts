@@ -24,6 +24,7 @@ import {
 	type RuntimeStatusV1,
 	RuntimeStatusV1Schema,
 } from "@agent-infra/contracts/runtime";
+import { z } from "zod";
 import type { BrowserHandoffRecordV1 } from "./browser-handoff.js";
 import { createCodexBrowserToolDescriptorsV1 } from "./codex-browser-tools.js";
 import type {
@@ -51,6 +52,10 @@ import {
 } from "./driver-operation.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
+import type {
+	RuntimeMessagesDiagnosticReceipt,
+	RuntimeMessagesTransportOptions,
+} from "./messages-model-transport.js";
 import {
 	projectNativeMetadataCommandsV1,
 	projectNativeMetadataSkillsV1,
@@ -204,6 +209,7 @@ export interface NativeSessionOptions {
 	readonly recordOperationFact?: (
 		fact: RuntimeOperationFactV2,
 	) => Promise<void>;
+	readonly openDiagnosticReceipt?: RuntimeMessagesTransportOptions["openDiagnosticReceipt"];
 	readonly modelFact?: () =>
 		| Extract<RuntimeOperationFactV2, { kind: "model" }>["model"]
 		| undefined;
@@ -415,8 +421,56 @@ const unknownResult = {
 	message: "Runtime command acceptance could not be confirmed",
 } as const;
 
+const messagesDiagnosticSchema = z
+	.strictObject({
+		stage: z.enum([
+			"request",
+			"admission",
+			"credential",
+			"upstream_http",
+			"upstream_content_type",
+			"stream_validation",
+			"transport",
+			"abort",
+		]),
+		sent: z.boolean(),
+		durationMs: z.number().int().nonnegative().safe(),
+		statusCode: z.number().int().min(100).max(599).optional(),
+		statusClass: z.enum(["1xx", "2xx", "3xx", "4xx", "5xx"]).optional(),
+	})
+	.refine(
+		(value) =>
+			value.statusClass ===
+			(value.statusCode === undefined
+				? undefined
+				: `${Math.floor(value.statusCode / 100)}xx`),
+	);
+const messagesDiagnosticEntrySchema = z.strictObject({
+	requestRef: z.uuid(),
+	executionId: z.string().min(1).max(256),
+	operationRef: z.uuid(),
+	attemptRef: z.uuid(),
+	state: z.enum(["sent", "completed", "failed", "unknown"]),
+	diagnostic: messagesDiagnosticSchema,
+});
+const messagesDiagnosticsSchema = z.strictObject({
+	schemaVersion: z.literal(1),
+	entries: z.array(messagesDiagnosticEntrySchema).max(128),
+});
+type MessagesDiagnosticEntry = z.infer<typeof messagesDiagnosticEntrySchema>;
+type MessagesDiagnostics = z.infer<typeof messagesDiagnosticsSchema>;
+// This only coordinates detached diagnostics during same-process Session reopen.
+// The authoritative Session still requires its existing single writer.
+const messagesDiagnosticOwners = new Map<string, object>();
+
 export class SessionRuntimeDriver implements RuntimeDriver {
 	private readonly files = new Map<string, Promise<DurableJsonFile<Session>>>();
+	private readonly diagnosticFiles = new Map<
+		string,
+		Promise<DurableJsonFile<MessagesDiagnostics>>
+	>();
+	private readonly diagnosticReservations = new Map<string, object>();
+	private diagnosticWrites = 0;
 	private readonly locks = new Map<string, Promise<unknown>>();
 	private readonly handles = new Map<string, Handle>();
 	private readonly waiters = new Map<string, Set<() => void>>();
@@ -567,6 +621,110 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			appendTurnOperationFactV1(turn, fact, state, this.options.cursorPrefix);
 		});
 		for (const wake of this.waiters.get(file.read().binding.ref) ?? []) wake();
+	}
+	/** Best-effort diagnostics never share the authoritative journal's failure state. */
+	private async recordMessagesDiagnostic(
+		file: DurableJsonFile<Session>,
+		entry: MessagesDiagnosticEntry,
+	) {
+		if (this.closed || this.diagnosticWrites >= 16) return;
+		this.diagnosticWrites++;
+		try {
+			const state = file.read();
+			const matches = (value: MessagesDiagnosticEntry) =>
+				state.turns.some(
+					(turn) =>
+						turn.executionId === value.executionId &&
+						turn.operationFacts?.some(
+							(fact) =>
+								fact.kind === "model" &&
+								fact.operationRef === value.operationRef &&
+								fact.attemptRef === value.attemptRef,
+						),
+				);
+			if (!matches(entry)) return;
+			let diagnosticFile = this.diagnosticFiles.get(state.binding.ref);
+			if (!diagnosticFile) {
+				const target = join(
+					this.options.path,
+					state.binding.ref,
+					"messages-diagnostics.json",
+				);
+				if (messagesDiagnosticOwners.has(target)) return;
+				const reservation = {};
+				messagesDiagnosticOwners.set(target, reservation);
+				this.diagnosticReservations.set(state.binding.ref, reservation);
+				diagnosticFile = (async () => {
+					const directory = join(this.options.path, state.binding.ref);
+					if ((await realpath(directory)) !== directory) throw new Error();
+					const directoryStat = await lstat(directory);
+					if (
+						!directoryStat.isDirectory() ||
+						directoryStat.uid !== process.getuid?.() ||
+						(directoryStat.mode & 0o022) !== 0
+					)
+						throw new Error();
+					const target = join(directory, "messages-diagnostics.json");
+					const stat = await lstat(target).catch(
+						(error: NodeJS.ErrnoException) => {
+							if (error.code === "ENOENT") return undefined;
+							throw error;
+						},
+					);
+					if (
+						stat &&
+						(!stat.isFile() ||
+							stat.isSymbolicLink() ||
+							stat.uid !== process.getuid?.() ||
+							stat.size > 262_144 ||
+							(stat.mode & 0o777) !== 0o600)
+					)
+						throw new Error();
+					const diagnostics = await DurableJsonFile.open<MessagesDiagnostics>(
+						target,
+						{ schemaVersion: 1, entries: [] },
+					);
+					try {
+						const saved = messagesDiagnosticsSchema.parse(diagnostics.read());
+						if (
+							new Set(saved.entries.map((value) => value.requestRef)).size !==
+								saved.entries.length ||
+							!saved.entries.every(matches)
+						)
+							throw new Error();
+					} catch (error) {
+						await diagnostics.close();
+						throw error;
+					}
+					return diagnostics;
+				})();
+				void diagnosticFile.catch(() => {
+					if (messagesDiagnosticOwners.get(target) === reservation)
+						messagesDiagnosticOwners.delete(target);
+				});
+				this.diagnosticFiles.set(state.binding.ref, diagnosticFile);
+			}
+			const diagnostics = await diagnosticFile;
+			if (this.closed) return;
+			await diagnostics.update((draft) => {
+				const index = draft.entries.findIndex(
+					(value) => value.requestRef === entry.requestRef,
+				);
+				if (index >= 0) {
+					if (draft.entries[index]?.state !== "sent") return;
+					draft.entries[index] = entry;
+				} else {
+					draft.entries.push(entry);
+					if (draft.entries.length > 128) draft.entries.shift();
+				}
+				if (Buffer.byteLength(`${JSON.stringify(draft)}\n`) > 262_144)
+					throw new Error();
+			});
+		} catch {
+			// A malformed or failed sidecar disables diagnostics, not the original Turn.
+		} finally {
+			this.diagnosticWrites--;
+		}
 	}
 	static async open(options: SessionRuntimeDriverOptions) {
 		if (
@@ -1696,6 +1854,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			toolFacts.delete(toolCallId);
 		};
 		let native: NativeSession;
+		let modelDiagnosticBinding:
+			| { operationRef: string; attemptRef: string }
+			| undefined;
 		try {
 			const sessionOptions: NativeSessionOptions = {
 				directory,
@@ -1745,8 +1906,54 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				},
 				...(resolveModelCredential ? { resolveModelCredential } : {}),
 				...(browser ? { browser } : {}),
-				recordOperationFact: (fact) =>
-					this.recordFact(file, command.executionId, fact),
+				recordOperationFact: async (fact) => {
+					await this.recordFact(file, command.executionId, fact);
+					if (
+						fact.kind === "model" &&
+						["intent", "started"].includes(fact.phase)
+					)
+						modelDiagnosticBinding = {
+							operationRef: fact.operationRef,
+							attemptRef: fact.attemptRef,
+						};
+					else if (
+						fact.kind === "model" &&
+						modelDiagnosticBinding?.operationRef === fact.operationRef &&
+						modelDiagnosticBinding.attemptRef === fact.attemptRef
+					)
+						modelDiagnosticBinding = undefined;
+				},
+				openDiagnosticReceipt: () => {
+					if (!modelDiagnosticBinding || this.closed) return undefined;
+					const current = file
+						.snapshot()
+						.turns.find((turn) => turn.executionId === command.executionId);
+					if (!current || terminal(current.status) || current.unknownHold)
+						return undefined;
+					const binding = {
+						...modelDiagnosticBinding,
+						executionId: command.executionId,
+						requestRef: randomUUID(),
+					};
+					const receipt: RuntimeMessagesDiagnosticReceipt = async (
+						response,
+						_endTurn,
+						diagnostic,
+					) => {
+						try {
+							const { usage: _usage, ...fields } = diagnostic;
+							const entry = messagesDiagnosticEntrySchema.parse({
+								...binding,
+								state: response,
+								diagnostic: fields,
+							});
+							await this.recordMessagesDiagnostic(file, entry);
+						} catch {
+							// Never persist arbitrary fields or change execution after a diagnostic error.
+						}
+					};
+					return receipt;
+				},
 				recordToolOperation,
 				modelFact: () => ({
 					configVersion: this.options.configVersion,
@@ -2272,10 +2479,28 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		this.closing ??= (async () => {
 			for (const waiters of this.waiters.values())
 				for (const wake of waiters) wake();
-			await Promise.allSettled([...this.pending]);
-			await Promise.all(
-				[...this.handles.keys()].map((ref) => this.retire(ref)),
-			);
+			try {
+				await Promise.allSettled([...this.pending]);
+				await Promise.all(
+					[...this.handles.keys()].map((ref) => this.retire(ref)),
+				);
+			} finally {
+				for (const [ref, file] of this.diagnosticFiles) {
+					const target = join(
+						this.options.path,
+						ref,
+						"messages-diagnostics.json",
+					);
+					const reservation = this.diagnosticReservations.get(ref);
+					void file
+						.then((value) => value.close())
+						.catch(() => {})
+						.finally(() => {
+							if (messagesDiagnosticOwners.get(target) === reservation)
+								messagesDiagnosticOwners.delete(target);
+						});
+				}
+			}
 		})();
 		return this.closing;
 	}
