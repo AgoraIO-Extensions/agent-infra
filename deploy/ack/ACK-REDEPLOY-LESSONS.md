@@ -31,6 +31,7 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | 全部平台服务就绪，标准 Runtime preflight 在模型请求前失败 | 约 697 MiB 的冷镜像仍在正常拉取，旧脚本的固定 180 秒就绪预算已耗尽 | 私有 job 使用有界 `podReadyTimeoutSeconds`，默认 900 秒、范围 60–1800 秒；失败保存 `pod-ready` 阶段和脱敏状态，不能用预热后的旧成功替代新的完整演练 |
 | 新 Worker 从发布仓库长时间拉取，Helm 等待超时 | 同一 Digest 经目标环境已批准的镜像代理能在 ECI 启动，直接拉取路径未完成 | 使用前比较代理 manifest 的真实字节 Digest、config/layer Digest，并回读目标 ECI imageID；保留原发布清单和目标拉取清单及映射证据，只调整仓库地址，不改变源码或 Digest |
 | 只看到 Web/API 健康就宣称完成 | 健康检查没有覆盖 Session、Runtime、模型、持久化和跨主体拒绝 | 业务验收必须包含真实 Session、`text.delta`、完成事件、刷新回读、隔离负例和自定义入口 probe |
+| 四模板 ECI preflight 和十八轮业务对话均通过，但业务 Session 实际在 ECS | private values 保留了关闭的 `sessionRuntimeScheduling.enabled`；Worker 自身或独立 preflight 的 ECI placement 不会自动传递给 Session | 要求 ECI 的输入包在运行前断言开关与架构，渲染策略及绑定；最终按每个业务 Session 的实际 Pod UID、imageID 和 Node 标签回读，不能用 preflight 节点替代。原完整运行保留为业务通过、ECI 验收失败，不回填成功 |
 | 多服务已 ready，入口验收只留下通用失败，稍后同环境完整通过 | 客户端请求没有出现在目标 Ingress 日志，旧探针又丢失具体连接错误；不能据此断定 DNS、TLS 或业务故障 | HTTP 边界结果在断言前写入私有 receipt，保留白名单错误码和尝试次数；ACK 只对明确临时 DNS/连接错误最多等待两分钟，所有 HTTP、内容和 TLS 判定保持。诊断重试通过不回填原始完整部署结果 |
 | Agent ready，但会话一直 `AGENT_STARTING` | 新模板 digest 没有相应容量 profile，verified capacity 为空 | `provision` 前检查每个目标的 image/resource/evidence 绑定与挂载 Secret；更新后经正式 lifecycle 刷新，不能直接改 DB |
 | custom Agent Workload ready，Session 却报 `RUNTIME_CONFIGURATION_INVALID` | 镜像没有 Driver 默认值，Worker 只为 Agent Workload 注入了 `acp` | Session 也注入服务端已选择的 Driver；用没有镜像默认 Driver 的实际自定义镜像回归 |
@@ -60,6 +61,7 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | Helm 本地渲染报 `sessionRuntimeScheduling` 不兼容，但目标 ACK 版本支持 | Helm client 默认 Kubernetes 版本与目标 Server 版本不同 | `render_manifest` 先读取目标 Server version，再用 `helm template --kube-version`；不要用本地默认版本判断目标能力 |
 | 更新 private values 后 `bootstrap-inputs` 拒绝覆盖 | bootstrap 工具按 ownership 和 Secret 字节精确比较，既有 Secret 漂移是故障信号 | 对 private 配置变更先删除并重建同一安装拥有的 Secret；不要用 `kubectl apply` 覆盖，也不要把漂移对象收养 |
 | bootstrap database 阶段突然失败且没有业务错误 | private values 文件权限不是 0600，工具在读取前 fail closed | 所有 values、input、credential、body 和 storageState 文件保持当前用户拥有且权限 0600；目录 0700 |
+| fresh 输入包在删除前被 Helm Schema 拒绝 | 新安装 ID 写入了不支持的 `bootstrap.installationId`，且数据库归属仍可能沿用旧值 | 新身份同时写入 bootstrap 输入的 `installationId` 与 values 的 `postgres.bootstrapInstallationId`；删除前渲染并核对 StatefulSet/PVC 的归属标签，不能放宽 Schema 或把旧 namespace 收养为新安装 |
 | 工作流自己创建的 namespace 无法执行 `destroy` | 清理入口要求历史通用标签，bootstrap 只写当前 installation ID 标签 | 清理必须把 namespace 的 `bootstrap-id` 与计划的 installation ID 比较，同时保留 cluster/namespace UID、完整资源清单和两项删除确认；缺失或不同归属在删除前失败 |
 
 ## 可移植的一键顺序

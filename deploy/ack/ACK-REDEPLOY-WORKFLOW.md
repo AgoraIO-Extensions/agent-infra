@@ -51,6 +51,11 @@ node --experimental-strip-types deploy/ack/run-capsule.ts /private/ack/capsule.j
 示例只展示格式；完整输入包仍需后文规定的所有镜像 manifest、四份 job、容量/登录/credential
 配置和 Agent 请求及浏览器蓝图。完整八 Agent 矩阵包含四个标准模板、两个自定义 ACP、
 一个单服务自有入口和一个 web/api 多服务自有入口；后两者使用自己的入口验证配置。
+要求业务 Session 使用 ECI 时，private values 必须显式设置
+`sessionRuntimeScheduling.enabled=true` 和匹配镜像的 `architecture`，并满足
+[Session ECI 调度](./ACK-E2E-DEPLOYMENT.md#session-runtime-的-eci-调度)的集群版本要求。
+`plan` 的渲染结果应包含策略及绑定；最终按业务 Session Pod UID 回读实际 Node 标签和 imageID。
+Worker 自身或独立 Runtime preflight 位于 ECI，均不能代替业务 Session 的节点证据。
 `inputs` 显式列出需要解析路径的 JSON 模板。
 模板中的 `@CAPSULE_ROOT@/relative/path` 指向包内路径；目标也在 `inputs` 中时，指向本轮生成
 的 JSON 副本，否则指向包内原始文件或声明的输出目录。job 的 `worktree` 使用 `@SOURCE_ROOT@`。
@@ -612,3 +617,20 @@ Platform Ready、单次回复与多轮通过分别记录。后续其他 session 
 部署拥有者仍需提供已授权账号、模型 Key、集群访问和批准的镜像/身份策略。工作流使用这些
 输入自动登录并初始化新安装，不创建企业账号、改变审批规则或绕过内核隔离。可移植输入包
 只解决路径与装配，迁移到新集群后仍须执行该集群的完整验收。
+
+## 各环节性能回读
+
+功能通过后仍需分别记录 CI/镜像发布、初始化与迁移、Pod 创建到 Ready、模型预检、Agent
+创建、登录与 API 读取、首轮和后续轮的受理/首文本/完成，以及自有入口的实际交互耗时。
+记录当前源码、镜像、采样窗口、样本数和冷/暖缓存是否已知，原始账号、地址、ID 和正文不进入
+分享结果。CPU/内存样本要同时保留配置请求值与限制；低负载采样不代表峰值、CPU 限流或并发容量。
+
+浏览器旅程已有 `browserClickToAcceptedMs`、`browserClickToFirstTextMs` 和
+`browserClickToCompletedMs`。它们是客户端观察的总时间，不能通过相减推定真实排队、Session
+准备或模型执行耗时。没有对应阶段事实时，原 `null` 保持未知并进入后续性能 Issue。
+
+[Core Web Vitals](https://web.dev/articles/vitals) 的 LCP 2.5 秒、INP 200 毫秒、CLS 0.1
+目标针对按移动端/桌面分组的真实用户第 75 百分位；不能套作 API 或模型响应阈值，也不能由
+少量自动化页面样本代签。服务延迟目标应按用户需求、负载与测量窗口制定，参见
+[SRE 的 SLI/SLO 定义](https://sre.google/sre-book/service-level-objectives/)。
+当前缺少可比负载、内部阶段归因或合理阈值的项目由 #3692 跟踪，不用增加等待预算冒充性能优化。
