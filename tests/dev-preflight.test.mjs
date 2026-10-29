@@ -53,6 +53,50 @@ test("validation plan keeps Markdown checks for mixed changes", () => {
 	);
 });
 
+test("deployment Markdown uses documentation checks without image builds", () => {
+	const plan = validationPlan(
+		[
+			"deploy/ack/ACK-REDEPLOY-WORKFLOW.md",
+			"deploy/ack/ACK-REDEPLOY-LESSONS.md",
+		],
+		sourceSha,
+	);
+	assert.deepEqual(plan.required, [
+		"git diff --check",
+		"markdownlint",
+		"markdown-link-check",
+	]);
+});
+
+test("deployment Markdown does not trigger Docker in mixed non-deployment work", () => {
+	const plan = validationPlan(
+		["deploy/local/E2E-HARNESS.md", "scripts/dev-preflight.mjs"],
+		sourceSha,
+	);
+	assert.ok(plan.required.includes("markdownlint"));
+	assert.ok(plan.required.includes("markdown-link-check"));
+	assert.ok(plan.required.includes("pnpm test:meta"));
+	assert.equal(plan.required.includes("pnpm docker:build"), false);
+});
+
+for (const file of [
+	"deploy/ack/redeploy.sh",
+	"deploy/helm/agent-infra/values.yaml",
+	"deploy/runtime/Dockerfile",
+	"apps/web/src/main.tsx",
+	"pnpm-lock.yaml",
+]) {
+	test(`deployment Markdown preserves required build gates for ${file}`, () => {
+		const plan = validationPlan(
+			["deploy/local/E2E-HARNESS.md", file],
+			sourceSha,
+		);
+		assert.ok(plan.required.includes("markdownlint"));
+		assert.ok(plan.required.includes("markdown-link-check"));
+		assert.ok(plan.required.includes("pnpm docker:build"));
+	});
+}
+
 test("worktree verification rejects a stale HEAD", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "agent-infra-dev-preflight-"));
 	try {
