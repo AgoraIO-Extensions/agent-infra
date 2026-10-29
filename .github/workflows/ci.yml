@@ -102,7 +102,7 @@ jobs:
             workload=true
             images="$all_images"
           else
-            if ! files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA"); then
+            if ! files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA"); then
               echo '::warning::Unable to classify changed paths; running full validation.'
               source=true
               web=true

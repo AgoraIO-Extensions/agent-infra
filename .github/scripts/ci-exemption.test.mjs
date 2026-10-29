@@ -6,11 +6,86 @@ import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import YAML from "yaml";
+import { imageNames } from "../../deploy/release/image-manifest.mjs";
 
 const exec = promisify(execFile);
 const workflow = YAML.parse(await fs.readFile(".github/workflows/ci.yml", "utf8"));
 const exemption = workflow.jobs["ci-exemption"];
 const step = exemption.steps.find((value) => value.id === "label");
+
+async function runScopeStep({
+  changedPath = "docs/change.md",
+  event = "pull_request",
+  invalidHead = false,
+  unrelated = false,
+} = {}) {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ci-scope-"));
+  const git = (...args) => exec("git", ["-c", "commit.gpgsign=false", ...args], { cwd: directory });
+  try {
+    await git("init", "--quiet", "--initial-branch=main");
+    await git("config", "user.name", "CI fixture");
+    await git("config", "user.email", "ci-fixture@example.invalid");
+    await git("config", "core.hooksPath", "/dev/null");
+    await fs.mkdir(path.join(directory, "deploy/release"), { recursive: true });
+    await fs.copyFile("deploy/release/image-manifest.mjs", path.join(directory, "deploy/release/image-manifest.mjs"));
+    await git("add", ".");
+    await git("commit", "--quiet", "-m", "common base");
+    await git("branch", "pr");
+    await fs.mkdir(path.join(directory, "apps/platform-worker"), { recursive: true });
+    await fs.writeFile(path.join(directory, "apps/platform-worker/main-only.ts"), "export const mainOnly = true;\n");
+    await git("add", ".");
+    await git("commit", "--quiet", "-m", "main advances independently");
+    const base = (await git("rev-parse", "HEAD")).stdout.trim();
+    if (unrelated) await git("checkout", "--quiet", "--orphan", "unrelated");
+    else await git("checkout", "--quiet", "pr");
+    await fs.mkdir(path.dirname(path.join(directory, changedPath)), { recursive: true });
+    await fs.writeFile(path.join(directory, changedPath), "PR change\n");
+    await git("add", ".");
+    await git("commit", "--quiet", "-m", "PR change");
+    const head = (await git("rev-parse", "HEAD")).stdout.trim();
+    const output = path.join(directory, "output");
+    const scope = workflow.jobs.changes.steps.find((value) => value.id === "scope");
+    const { stdout } = await exec("bash", ["--noprofile", "--norc", "-c", scope.run], {
+      cwd: directory,
+      env: {
+        ...process.env,
+        EVENT_NAME: event,
+        BASE_SHA: base,
+        HEAD_SHA: invalidHead ? "0".repeat(40) : head,
+        GITHUB_OUTPUT: output,
+      },
+    });
+    return { stdout, output: await fs.readFile(output, "utf8") };
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+}
+
+test("PR documentation excludes source changes made only on main", async () => {
+  const result = await runScopeStep();
+  assert.equal(result.output, "source=false\nweb=false\nruntime=false\nworkload=false\nimages=\n");
+});
+
+test("PR Web changes retain their lanes and images without main-only Worker changes", async () => {
+  const result = await runScopeStep({ changedPath: "apps/web/pr-change.ts" });
+  assert.equal(result.output, "source=true\nweb=true\nruntime=false\nworkload=false\nimages=web,agent-runtime-host\n");
+});
+
+test("main pushes retain full validation regardless of PR path scope", async () => {
+  const result = await runScopeStep({ event: "push" });
+  assert.equal(result.output, `source=true\nweb=true\nruntime=true\nworkload=true\nimages=${imageNames.join(",")}\n`);
+});
+
+for (const [name, options] of [
+  ["missing commit", { invalidHead: true }],
+  ["unrelated histories", { unrelated: true }],
+]) {
+  test(`PR classification falls back to full validation for ${name}`, async () => {
+    const result = await runScopeStep(options);
+    assert.match(result.stdout, /Unable to classify changed paths; running full validation/);
+    assert.equal(result.output, `source=true\nweb=true\nruntime=true\nworkload=true\nimages=${imageNames.join(",")}\n`);
+  });
+}
 
 async function runLabelStep({ event = "pull_request", liveSkip = false, apiFails = false }) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ci-exemption-"));

@@ -330,6 +330,8 @@ async function run(input, evidence) {
 							/^\/api\/v1\/conversations\/[^/]+\/messages$/.test(
 								new URL(response.url()).pathname,
 							),
+						// The page sends only after its new Session finishes preparing.
+						{ timeout: 180_000 },
 					),
 					page.getByRole("button", { name: "发送", exact: true }).click(),
 				]);
