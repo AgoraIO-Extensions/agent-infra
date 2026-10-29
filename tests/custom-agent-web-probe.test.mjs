@@ -40,6 +40,8 @@ for (const scenario of [
 		};
 		await writeFile(input.allowedAuthorizationFile, allowed, { mode: 0o600 });
 		await writeFile(input.deniedAuthorizationFile, denied, { mode: 0o600 });
+		if (scenario === "exhausted")
+			t.mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 9, 29) });
 		let calls = 0;
 		t.mock.method(globalThis, "fetch", async (_url, options) => {
 			calls++;
@@ -54,6 +56,8 @@ for (const scenario of [
 					"unknown",
 				].includes(scenario)
 			) {
+				// Model the failed request consuming its entire one-millisecond budget.
+				if (scenario === "exhausted") t.mock.timers.tick(1);
 				const cause = Object.assign(new Error("SYNTHETIC_ERROR_SECRET"), {
 					code:
 						scenario === "tls"
