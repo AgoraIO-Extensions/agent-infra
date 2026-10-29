@@ -1,21 +1,16 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
+import { readEvaluationBaseline } from "./test/evaluation-baseline.js";
 
-it.each([1, 2])(
+it.each([1, 2] as const)(
 	"only admits the approved analysis/feedback addition for pilot v%s",
 	async (version) => {
 		const repo = resolve(import.meta.dirname, "../../..");
 		const name = `packages/contracts/artifacts/openapi/pilot-browser.v${version}.openapi.json`;
-		const before = JSON.parse(
-			execFileSync(
-				"git",
-				["show", `b1049e631f9e8b6e69c8dc791867894aac779531:${name}`],
-				{ cwd: repo, maxBuffer: 16 * 1024 * 1024, encoding: "utf8" },
-			),
-		);
+		const before = await readEvaluationBaseline(`v${version}`);
 		const after = JSON.parse(await readFile(join(repo, name), "utf8"));
 		const dir = await mkdtemp(join(tmpdir(), "evaluation-analysis-compat-"));
 		async function compare(a: unknown, b: unknown) {

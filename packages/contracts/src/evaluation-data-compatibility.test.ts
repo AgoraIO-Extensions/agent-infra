@@ -1,11 +1,12 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
+import { readEvaluationBaseline } from "./test/evaluation-baseline.js";
 
-it.each(["v1", "v2"])(
+it.each(["v1", "v2"] as const)(
 	"accepts only the reviewed Eval addition in %s and preserves old authority contracts",
 	async (version) => {
 		const current = JSON.parse(
@@ -17,20 +18,7 @@ it.each(["v1", "v2"])(
 				"utf8",
 			),
 		);
-		const previous = JSON.parse(
-			execFileSync(
-				"git",
-				[
-					"show",
-					`b1049e631f9e8b6e69c8dc791867894aac779531:packages/contracts/artifacts/openapi/pilot-browser.${version}.openapi.json`,
-				],
-				{
-					cwd: fileURLToPath(new URL("../../..", import.meta.url)),
-					encoding: "utf8",
-					maxBuffer: 16 * 1024 * 1024,
-				},
-			),
-		);
+		const previous = await readEvaluationBaseline(version);
 		for (const path of Object.keys(previous.paths))
 			if (path.startsWith("/api/v2/evaluation/")) delete previous.paths[path];
 		for (const name of Object.keys(previous.components.schemas))
