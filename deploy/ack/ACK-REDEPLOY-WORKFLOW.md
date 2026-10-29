@@ -162,6 +162,11 @@ EndpointSlice、Ingress 和实际 imageID。它不接受任意旧 URL 或仅在�
 运行 Chromium 登录、按钮调用内部 API、刷新和拒绝无权主体的旅程。截图保存在私有证据目录。
 这不是操作系统 CA 安装或通用浏览器信任验收；不能据此宣称公共 CA 已签发。
 
+每次 HTTP 边界检查先写私有 `own-entry-*/boundary.json`，包含来源、Agent hash、各请求状态、
+尝试次数与白名单连接错误码。ACK 对每项明确临时 DNS/连接错误最多等待两分钟；单次请求
+最多十秒。TLS 错误、未知错误、任何已收到的 HTTP 响应或内容校验失败不重试，原身份
+正反例全部保留。通用 custom Web probe 默认仍只请求一次。
+
 示例源码和构建方式见 [自有入口示例](../../tests/fixtures/custom-agent-web/README.md#签名身份与多服务示例)。
 受控本地测试不替代实际镜像发布、平台创建、入口和多服务调用证据。
 
