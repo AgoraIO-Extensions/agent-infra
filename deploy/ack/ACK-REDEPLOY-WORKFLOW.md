@@ -88,6 +88,12 @@ node --experimental-strip-types deploy/ack/run-capsule.ts /private/ack/capsule.j
 credential 和 Agent bindings。`bootstrap-plan` 检查新安装的 ownership，旧 namespace 还在时
 会拒绝不同 installation ID；它应在删除后执行，不能为通过检查而收养旧安装。
 
+已经执行的包保留本轮 `state`、`evidence` 和私有解析副本用于审计。准备下一次 fresh 重建时，
+使用独立新包：清理输入绑定现场旧安装，新 ID 同时写入 bootstrap 输入和
+`postgres.bootstrapInstallationId`，登录/credential/Agent 输出目录为空，创建使用新的幂等键。
+不要覆盖已验收包的证据，也不要把旧 cleanup UID 当作当前安装。文档后续修订不改变
+`capsule.json.sourceSha` 与已发布镜像的绑定；实际执行仍检出该运行源码。
+
 上一轮演练的成功与失败因果、以及 fresh 环境的一键顺序，见 [`ACK-REDEPLOY-LESSONS.md`](./ACK-REDEPLOY-LESSONS.md)。
 
 ## 当前输入与已有环境部署
@@ -313,6 +319,9 @@ deploy/ack/redeploy.sh all
 完整验收还要把每轮 Execution hash 与同 Agent/Session、实际 imageID 下的 durable model
 completed facts 匹配；preflight 的模型成功不能代替这些业务回合。刷新恢复也不代表已验证
 长时间闲置后的 Session 重建。
+该业务矩阵也不覆盖 ACK 网络策略的完整负向验收：普通节点 API allow/Web deny/恢复与 ECI
+独立 deny/allow/恢复仍按 #3295 和 [Runtime 隔离预检](./RUNTIME-PREFLIGHT.md)核验。
+ECI 节点归属、Pod Ready 和浏览器跨主体拒绝，均不能替代 NetworkPolicy 的真实拒绝流量证据。
 `ACK_CA_CERT_FILE` 用于 curl；Node probe 信任私有 CA 时另设 `NODE_EXTRA_CA_CERTS`。
 正式登录与 Node HTTP 边界使用正常 CA/hostname 校验；自有入口浏览器使用声明 leaf 的 SPKI
 pin。Platform 对话 runner 保留其测试用 `ignoreHTTPSErrors`，结果不证明浏览器系统 CA 信任。

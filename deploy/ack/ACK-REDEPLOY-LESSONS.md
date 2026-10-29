@@ -12,6 +12,73 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 - 正式登录入口、API credential 签发、Relay billing、Relay `/models` 和真实 Codex Runtime model probe 均曾成功；Codex receipt 含 Runtime model fact、完成状态和实际回复 hash。
 - 准备阶段的四个标准模板和两个自定义 ACP Agent 各完成三轮真实浏览器对话，18 轮均匹配 durable model completed facts，并通过刷新恢复和跨主体拒绝。该环境仍含独立更新的业务组件，不能作为同源完整清空重建的成功证据。
 
+## 本轮完整清空重建
+
+2026-10-29 13:50 UTC，运行源码 `192bb8c87ad4cfe5eb28e6b1e3617d8bd5dc2705` 的
+一次完整 `all` 和独立现场审计均通过。正式镜像来自
+[发布运行 40871922225](https://github.com/AgoraIO-Extensions/agent-infra/actions/runs/40871922225)，
+八个 amd64 OCI 镜像分别核对来源与 Digest；镜像代理只改变拉取地址，原发布清单保留。
+自定义镜像保留各自的基础源码与 overlay 来源，未改写为 Platform 源码。
+
+旧平台 namespace、Session 调度策略及关联 PV 删除后，回读平台 namespace/PV 均为零。
+新 namespace 和 installation ID 重新初始化数据库，三个角色、两个数据库和两项迁移 Job
+通过；迁移 Pod 的归属、退出码与实际 imageID 均已核对。四个平台 Deployment 均为 `1/1`，
+17 个声明配置对象的 52 个键与私有输入逐字节匹配。两个主体正式登录、个人 Relay Key
+自动安装及回读、六份容量输入挂载均通过。
+
+| Agent | 本轮业务结果 | 当前执行绑定 |
+| --- | --- | --- |
+| Codex | 三轮通过，模型 `gpt-5.6-sol` | 三个模型完成事实，当前 Session/Pod/imageID/ECI 匹配 |
+| Claude | 三轮通过，模型 `deepseek-flash` | 同上 |
+| OpenCode | 三轮通过，模型 `deepseek-flash` | 同上 |
+| Pi | 三轮通过，模型 `deepseek-flash` | 同上 |
+| 自定义 ACP r2 | 三轮通过，模型 `deepseek-flash` | 同上，保留独立自定义镜像来源 |
+| 自定义 ACP r3 | 三轮通过，模型 `deepseek-flash` | 同上，保留独立自定义镜像来源 |
+| 单服务自有入口 | HTTP 身份正反例、浏览器登录/后端交互/刷新/拒绝均通过 | 当前 Workload、Pod、Service、EndpointSlice、Ingress 和 imageID 匹配 |
+| web/api 双服务自有入口 | 同上，两个服务均就绪 | 同上，入口与后端拓扑匹配 |
+
+八次创建均首次返回 `201`，没有依赖重试或网关 `504`。六个对话 Agent 共 18 轮，逐轮保留
+SSE、完成终态、刷新恢复和跨主体拒绝，并与同一 Execution 的 18 个 durable model completed
+facts 对应。两个自有入口各验证匿名、伪造身份、错误凭证、无权凭证和允许访问五种 HTTP 情况，
+再执行真实浏览器交互。全过程使用一次新安装的自动流程，没有中途手工修补集群状态。
+其中十轮短回复的文本与终态同批到达，按既有 coalesced delivery 规则校验；本轮没有工具或
+reasoning 事件，不据此扩展为工具、思考过程或全部逐帧增量渲染的验收。
+
+此前“业务通过但 Session 位于 ECS”的运行、首次 ECI 观察窗口超时的运行，以及修复后的诊断
+均独立保留；它们不回填本轮结果。该结果仅覆盖八 Agent 功能矩阵，不代签 #3295 网络策略
+拒绝流量、长期闲置恢复或其他历史验收项。
+
+脱敏证据索引保留如下 SHA-256；原始凭据、地址及普通会话正文仍仅在私有包中：
+
+| 证据 | SHA-256 |
+| --- | --- |
+| 独立现场审计 | `515940f50a7f81a21d75616e67bf7f009007afebea60f56ac5e8f145445c070e` |
+| 浏览器与模型汇总 | `21581652e78da5bfb28e27a27724a349ad4a5cf6d6a58ef6fd8d41b117afca53` |
+| 六个业务 ECI 绑定 | `79e8032658ef1c8830fe04b5f5cae2fe70a4e4a28013f6f0735f50adc5beef82` |
+| 性能汇总 | `017f30b780778ec40d801456bacc8089c73ed076f647b12f545c028c43cca9a2` |
+| 证据文件索引 | `091cf0e352b38b0f4bf5f1ff0a3c249bd15e6c7aa843d4ba7eb6194122c0471f` |
+
+## 本轮性能观察
+
+以下均为这次有限负载的实测。资源采样共 2024 条，API/Worker 窗口 CPU 峰值约为
+509/500m，接近配置的 500m 限制；内存峰值约为 148/332Mi，对应 512Mi 限制。
+窗口样本不能证明 CPU 限流、生产尾延迟或并发容量。完整明细和未定 SLO 由 #3692 跟踪。
+
+| 环节 | 本轮观察 | 解释边界 |
+| --- | --- | --- |
+| CI / 正式发布 | Heavy 56 分 28 秒；Platform amd64 8 分 34 秒、Runtime amd64 27 分 31 秒 | CI 记录测试 head，发布记录运行源码；并行任务不相加为用户延迟 |
+| 完整 `all` | 约 59 分 36 秒 | 包含冷交付、迁移、创建和串行验收 |
+| 两迁移 Job | Platform 269 秒、Directory 83 秒 | 包含 Pod 镜像拉取，不能视为 SQL 执行时长 |
+| ECI 模板 Pod / 模型预检 | Pod 创建到 Ready 189–338 秒；模型阶段 4.765–14.102 秒 | 分别计时，冷镜像交付是优化候选 |
+| 业务 Session / 首轮对话 | Pod 到 Ready 44–54 秒；点击到受理 61.6–66.5 秒、首文本 69.3–89.7 秒 | 六个新 Session；内部准备、排队、模型耗时未独立归因 |
+| 后续轮对话 | 受理 0.226–0.448 秒，首文本 6.294–11.263 秒 | 十二轮同 Session 样本，非生产分位数 |
+| 登录 / 授权 API | 登录 `204`，391 毫秒；会话/Agent 状态读取中位数 102/193 毫秒 | 登录一次，两个 API 各十次；均验证当前身份/状态 |
+| Web / 自有入口 | 页面 LCP 观察 0.628–0.992 秒；入口按钮到后端结果 47–80 毫秒 | 每视口/入口三次，非现场 Core Web Vitals 合规 |
+| Agent 记录到 Pod 创建 | 六对话 12.9–27.9 秒；单入口约 194 秒、双入口约 169 秒 | DB 时间戳不等于 HTTP 受理/提交时间；Pod 前等待仍需归因 |
+
+首轮冷启动、自有入口创建前等待和 CPU 接近限制需要进一步分析；本轮没有通过增加观察
+超时来宣称性能改善。功能验收通过与性能达标分别记录。
+
 ## 失败案例及修复规则
 
 | 现象 | 根因 | 固化到工作流的规则 |
@@ -30,6 +97,7 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | 三个新 Runtime 镜像在 ECI 长时间 `Pulling` | 发布 manifest 可见不等于目标 ECI 节点实际可拉取 | 每个模板先创建独立 ECI preflight Pod；拉取、启动、模型调用任一步失败都停止整个流程 |
 | 全部平台服务就绪，标准 Runtime preflight 在模型请求前失败 | 约 697 MiB 的冷镜像仍在正常拉取，旧脚本的固定 180 秒就绪预算已耗尽 | 私有 job 使用有界 `podReadyTimeoutSeconds`，默认 900 秒、范围 60–1800 秒；失败保存 `pod-ready` 阶段和脱敏状态，不能用预热后的旧成功替代新的完整演练 |
 | 新 Worker 从发布仓库长时间拉取，Helm 等待超时 | 同一 Digest 经目标环境已批准的镜像代理能在 ECI 启动，直接拉取路径未完成 | 使用前比较代理 manifest 的真实字节 Digest、config/layer Digest，并回读目标 ECI imageID；保留原发布清单和目标拉取清单及映射证据，只调整仓库地址，不改变源码或 Digest |
+| 从已有代理拉取输入包升级源码时，删除前校验发现旧 Digest 残留 | 输入更新器只映射 preflight 的代理完整引用，API 的模板配置仍引用原发布仓库；只替换独立 Digest 字段不能更新完整引用 | 同时依据保留的原发布清单和实际拉取引用生成映射，核对旧来源与 Digest，验证全部配置不再包含旧绑定后才写入新输入。保留失败日志，不删除旧环境或放宽来源校验 |
 | 只看到 Web/API 健康就宣称完成 | 健康检查没有覆盖 Session、Runtime、模型、持久化和跨主体拒绝 | 业务验收必须包含真实 Session、`text.delta`、完成事件、刷新回读、隔离负例和自定义入口 probe |
 | 四模板 ECI preflight 和十八轮业务对话均通过，但业务 Session 实际在 ECS | private values 保留了关闭的 `sessionRuntimeScheduling.enabled`；Worker 自身或独立 preflight 的 ECI placement 不会自动传递给 Session | 要求 ECI 的输入包在运行前断言开关与架构，渲染策略及绑定；最终按每个业务 Session 的实际 Pod UID、imageID 和 Node 标签回读，不能用 preflight 节点替代。原完整运行保留为业务通过、ECI 验收失败，不回填成功 |
 | 八 Agent 已 ready，首个 ECI 对话在 `submit` 阶段超时 | 实际 Session Pod 冷启动约 62 秒，页面等其就绪后才发消息；浏览器观察器默认 30 秒先退出 | 只为首轮消息响应设置 180 秒单阶段观察上限；保留创建、后续轮与全部成功/隔离断言。真实 Chromium 31 秒准备回归证明旧探针失败、新探针完成三轮；当前 ECI 诊断也完成三轮模型事实。等待预算修复不等于冷启动性能优化，也不回填原失败完整运行 |
@@ -37,6 +105,7 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | Agent ready，但会话一直 `AGENT_STARTING` | 新模板 digest 没有相应容量 profile，verified capacity 为空 | `provision` 前检查每个目标的 image/resource/evidence 绑定与挂载 Secret；更新后经正式 lifecycle 刷新，不能直接改 DB |
 | custom Agent Workload ready，Session 却报 `RUNTIME_CONFIGURATION_INVALID` | 镜像没有 Driver 默认值，Worker 只为 Agent Workload 注入了 `acp` | Session 也注入服务端已选择的 Driver；用没有镜像默认 Driver 的实际自定义镜像回归 |
 | GET session 200，写接口却返回 401 | 直接 HTTP 探针遗漏了浏览器 Origin | 遵守浏览器写入的 Origin/CSRF 契约，保留具体失败阶段；不把协议错误归因于密码或 Cookie |
+| 原 ACK 入口拒绝 `/auth/login`，本地配置可登录 | Web Nginx 未注入 API proxy token，并覆盖了外部 HTTPS 转发标记 | Web entrypoint 从声明 Secret 渲染 token，正确传递 HTTPS 标记；重建后必须通过正式登录、会话 Cookie 和授权 API 回读，不能只验证页面可打开，历史修复见 [ACK 部署记录](./ACK-E2E-DEPLOYMENT.md) |
 | 密码正确但自动登录失败 | 对密码文件使用 `trim()` 会删除合法的首尾空格 | 保留密码空格，只按输入约定删除一个末尾 LF/CRLF，并用含空格密码测试真实 HTTP 提交字节 |
 | 清空后四模板 preflight 和 Agent 创建都通过，Web 首条消息仍返回 `RESOURCE_UNAVAILABLE` | 创建请求恢复了 Agent 默认 Relay Key，但新数据库里当前用户的个人 Relay Key 未设置；标准模板 Web 执行按主体读取个人 Key | credential bootstrap 可声明私有 `personalRelayKeyFile`，在浏览器验收前通过正式个人 Key API 写入空状态并回读；已有 Key 保留。真实同一会话在补齐个人 Key 后由拒绝变为 `202`，不能把这类问题归因于密码 |
 | 首项 Agent 创建报连接失败，后续创建连续 `503`，但稍后原 Agent 已存在 | 服务端真实模型验证允许 120 秒，本次创建实际约 72 秒；旧客户端 30 秒中断后继续发送请求，同一凭证行仍被原事务锁住，日志出现 `55P03`。入口 Nginx 也只有 60 秒等待预算，可能先返回 `504`。原幂等键重放能取回原 Agent | 创建使用五分钟总预算；明确连接故障、正式依赖 `503` 或网关 `504` 只用原 key/body/credential 有界重放。身份/TLS/契约错误立即失败，预算耗尽停止后续创建；状态恢复只读已绑定 Agent，不能换 key 重复创建或把诊断恢复写成原完整运行成功 |
@@ -50,6 +119,9 @@ Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本
 | 本地基镜像解析约六分钟后报 `unable to lease content` | BuildKit 报本次缓存内容 lease 不存在；没有证据进一步断定谁清理了缓存 | 记录该次构建失败及来源，不把它归因于业务代码或改用浮动基镜像；保留共享构建环境，使用正式发布与目标镜像回读验证交付 |
 | 跨用户 API/SSE 均拒绝且页面没有会话正文，浏览器验收仍失败 | Agent 不可见时页面使用新的无权访问卡，探针只匹配旧的会话失效提示 | 接受两种正式拒绝提示，继续验证 API/SSE 的 403/404、用户消息和助手正文不可见 |
 | CI 一直重跑，验证无法结束 | 把 run 的 `updatedAt` 当成心跳，误取消仍在执行的长测试 | 查询当前 job/step；只有终态或明确失联证据才考虑重跑，禁止以轮询超时推断任务已经停止 |
+| 仅修改部署 Markdown，却要求 Docker 构建或跳过文档检查 | 开发验证计划只识别固定文档目录，部署目录中的 Markdown 被当作部署代码 | 按 Markdown 文件类型选择格式/链接检查；真实部署脚本、清单、应用或依赖变更仍保留原门禁，见 #3694 |
+| GitHub 显示纯文档 PR，CI 却跑全部代码任务 | CI 用 base/head 两点比较，落后 main 的分支把 main 独有代码算作删除 | 分类比较 PR merge base 到 head，并用真实分叉 Git 仓库回归；不能靠跳过 CI 或重跑掩盖比较范围错误，见 #3701 |
+| 隔离 worktree 的 Harness 测试读到其他 worktree 的 source pin | 用例继承宿主默认状态目录，预期缺少 pin，实际读到已有环境的 pin | 测试使用自己的临时状态目录并确认外部 pin 未变；原失败记录与隔离复验分开，禁止删除真实环境的状态文件来让测试通过，见 #3703 |
 | 移动端配置页后台重读测试偶发缩短 32px | 测试在 checkbox 更新后立即采样，父表单尚未提交草稿；随后移除“没有需要保存的变更”提示及间距 | 等待保存按钮可用且无变化提示消失，再采样高度/滚动/焦点；保持原断言，不加固定 sleep 或放宽误差 |
 | Linux Hosted 浏览器偶发空白，审批控件超时；本地重复通过 | 当前失败记录确认 54 个脚本请求中 44 个为 `ERR_NETWORK_CHANGED`，React/Router 尚未创建、API 请求为零；时间落在另一 worker 的 PostgreSQL/MinIO 容器清理窗口，默认 bridge 的生命周期会改变宿主网络接口 | 普通浏览器测试保持两个 worker，使用真实 Docker 依赖的评测数据/流程/反馈测试放入独立项目，依次等待普通项目、真实桌面和真实移动端结束；保留全部视口、断言和超时。真实 Playwright 调度回归证明无重叠，完整 Hosted 运行再验证效果，不靠浏览器重载、忽略网络错误或放宽断言通过 |
 | OpenCode 原生工具测试只有一次模型请求，或文件工具被误拒绝 | 完整参数通知异步到达；权限请求还可能携带 diff/provider 展示元数据，不能一律当作调用参数 | 固定 OpenCode 只采用公告参数并最多等一秒接收更新；通用 ACP 才用请求补齐空参数并拒绝冲突。异步授权后重新核对同一活动公告和参数。必须运行完整原生工具组，四种工具的通过不能代替 read/write/edit/Bash/apply_patch/WebSearch 验证 |
