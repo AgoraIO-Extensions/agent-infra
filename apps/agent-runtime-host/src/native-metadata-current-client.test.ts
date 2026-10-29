@@ -75,3 +75,96 @@ describe("Runtime native metadata current client", () => {
 		).resolves.toEqual({ outcome: "unavailable" });
 	});
 });
+
+it.each([200, 201, 403])(
+	"preserves current-confirmation status %i without a media check",
+	async (status) => {
+		const result = { outcome: "allowed", request };
+		const client = createRuntimeNativeMetadataCurrentClientV1({
+			baseUrl: "http://worker",
+			serviceToken: "token",
+			fetch: async () =>
+				new Response(JSON.stringify(result), {
+					status,
+					headers: { "content-type": "text/plain" },
+				}),
+		});
+		await expect(
+			client.check({
+				request,
+				apiRequestSourceRef: "source",
+				signal: new AbortController().signal,
+			}),
+		).resolves.toEqual(status === 403 ? { outcome: "unavailable" } : result);
+	},
+);
+
+it("releases an unread rejected response even when cancellation fails", async () => {
+	let canceled = false;
+	const client = createRuntimeNativeMetadataCurrentClientV1({
+		baseUrl: "http://worker",
+		serviceToken: "token",
+		fetch: async () =>
+			new Response(
+				new ReadableStream({
+					cancel() {
+						canceled = true;
+						throw new Error("private cancellation failure");
+					},
+				}),
+				{ status: 503 },
+			),
+	});
+	await expect(
+		client.check({
+			request,
+			apiRequestSourceRef: "source",
+			signal: new AbortController().signal,
+		}),
+	).resolves.toEqual({ outcome: "unavailable" });
+	expect(canceled).toBe(true);
+});
+
+it.each([65_536, 65_537])(
+	"retains the Host current response budget at %i bytes",
+	async (size) => {
+		const result = { outcome: "allowed", request };
+		const json = JSON.stringify(result);
+		const client = createRuntimeNativeMetadataCurrentClientV1({
+			baseUrl: "http://worker",
+			serviceToken: "token",
+			fetch: async () => new Response(json + " ".repeat(size - json.length)),
+		});
+		await expect(
+			client.check({
+				request,
+				apiRequestSourceRef: "source",
+				signal: new AbortController().signal,
+			}),
+		).resolves.toEqual(size === 65_536 ? result : { outcome: "unavailable" });
+	},
+);
+
+it("retains replacement UTF-8 decoding for a matching Host binding", async () => {
+	const live = { ...request, traceId: "replacement-�" };
+	const result = { outcome: "allowed", request: live };
+	const raw = new TextEncoder().encode(JSON.stringify(result));
+	const marker = raw.indexOf(0xef);
+	const bytes = new Uint8Array([
+		...raw.slice(0, marker),
+		0xff,
+		...raw.slice(marker + 3),
+	]);
+	const client = createRuntimeNativeMetadataCurrentClientV1({
+		baseUrl: "http://worker",
+		serviceToken: "token",
+		fetch: async () => new Response(bytes),
+	});
+	await expect(
+		client.check({
+			request: live,
+			apiRequestSourceRef: "source",
+			signal: new AbortController().signal,
+		}),
+	).resolves.toEqual(result);
+});

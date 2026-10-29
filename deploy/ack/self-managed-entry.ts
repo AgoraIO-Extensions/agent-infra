@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readAgentBindings } from "./agent-bindings.ts";
 import { execFileSync } from "node:child_process";
 import { createHash, createPrivateKey, sign, X509Certificate } from "node:crypto";
 import { chmod, mkdtemp, writeFile } from "node:fs/promises";
@@ -8,6 +7,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseAllDocuments } from "yaml";
 import { readAuthorization, verifyCustomAgentWeb } from "../../tests/local-real-e2e/custom-agent-web-probe.ts";
+import { readAgentBindings } from "./agent-bindings.ts";
 import { privateBytes, privateJson } from "./private-input.ts";
 
 const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");

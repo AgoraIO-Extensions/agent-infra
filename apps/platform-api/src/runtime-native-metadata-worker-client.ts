@@ -1,57 +1,15 @@
-import { Buffer } from "node:buffer";
 import {
 	type PlatformNativeMetadataReadRequestV1,
 	PlatformNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataProofMaximumLifetimeMsV1,
 	RuntimeNativeMetadataReadResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
+import { createNativeMetadataJsonTransport } from "@agent-infra/native-metadata-transport";
 
 const maximumResponseBytes = 1_048_576;
 // Current-confirmation callbacks share the original request's fixed deadline.
 // A shorter transport default can reject a healthy chain before that deadline.
 const transportTimeoutMs = RuntimeNativeMetadataProofMaximumLifetimeMsV1;
-
-function endpoint(baseUrl: string) {
-	let origin: URL;
-	try {
-		origin = new URL(baseUrl);
-	} catch {
-		throw new TypeError("Platform Worker base URL is invalid");
-	}
-	if (
-		origin.protocol !== "http:" ||
-		origin.username ||
-		origin.password ||
-		(origin.pathname !== "/" && origin.pathname !== "") ||
-		origin.search ||
-		origin.hash
-	)
-		throw new TypeError("Platform Worker base URL is invalid");
-	return new URL(
-		"internal/platform-worker/v1/native-metadata",
-		`${origin.origin}/`,
-	);
-}
-
-async function responseText(response: Response) {
-	const reader = response.body?.getReader();
-	if (!reader) throw new Error("PLATFORM_WORKER_UNAVAILABLE");
-	const chunks: Uint8Array[] = [];
-	let bytes = 0;
-	try {
-		for (;;) {
-			const next = await reader.read();
-			if (next.done) break;
-			bytes += next.value.byteLength;
-			if (bytes > maximumResponseBytes)
-				throw new Error("PLATFORM_WORKER_UNAVAILABLE");
-			chunks.push(next.value);
-		}
-		return Buffer.concat(chunks, bytes).toString("utf8");
-	} finally {
-		await reader.cancel().catch(() => undefined);
-	}
-}
 
 /** API → fixed Worker gateway transport; API never creates a native proof. */
 export function createPlatformWorkerNativeMetadataGatewayClientV1(options: {
@@ -60,10 +18,13 @@ export function createPlatformWorkerNativeMetadataGatewayClientV1(options: {
 	readonly fetch?: typeof fetch;
 	readonly transportTimeoutMs?: number;
 }) {
-	if (!/^[\x21-\x7e]{1,8192}$/.test(options.serviceToken))
-		throw new TypeError("Platform Worker service token is invalid");
-	const url = endpoint(options.baseUrl);
-	const fetcher = options.fetch ?? fetch;
+	const post = createNativeMetadataJsonTransport({
+		...options,
+		peer: "Platform Worker",
+		path: "internal/platform-worker/v1/native-metadata",
+		maximumResponseBytes,
+		strictJson: false,
+	});
 	const timeoutMs = options.transportTimeoutMs ?? transportTimeoutMs;
 	if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000)
 		throw new TypeError("Platform Worker transport timeout is invalid");
@@ -76,27 +37,12 @@ export function createPlatformWorkerNativeMetadataGatewayClientV1(options: {
 			const transportSignal = signal
 				? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
 				: AbortSignal.timeout(timeoutMs);
-			let response: Response | undefined;
 			try {
-				response = await fetcher(url, {
-					method: "POST",
-					redirect: "error",
-					credentials: "omit",
-					headers: {
-						authorization: `Bearer ${options.serviceToken}`,
-						"content-type": "application/json",
-						accept: "application/json",
-					},
-					body: JSON.stringify(request),
+				const response = await post(JSON.stringify(request), {
 					signal: transportSignal,
 				});
-				if (!response.ok || response.redirected)
-					throw new Error("PLATFORM_WORKER_UNAVAILABLE");
-				return RuntimeNativeMetadataReadResponseV1Schema.parse(
-					JSON.parse(await responseText(response)),
-				);
+				return RuntimeNativeMetadataReadResponseV1Schema.parse(response.value);
 			} catch {
-				await response?.body?.cancel().catch(() => undefined);
 				throw new Error("PLATFORM_WORKER_UNAVAILABLE");
 			}
 		},

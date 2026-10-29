@@ -21,7 +21,8 @@
 		"@agent-infra/wecom": "workspace:*",
 		"@kubernetes/client-node": "2.0.0",
 		"undici": "7.29.1",
-		"yaml": "2.8.3"
+		"yaml": "2.8.3",
+		"@agent-infra/native-metadata-transport": "workspace:*"
 	},
 	"scripts": {
 		"build": "tsdown",
