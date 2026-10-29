@@ -932,6 +932,7 @@ export type DirectorySearchResponseV1 = {
 
 export type EvaluationAnalysisDetailV1 = {
     experimentId: string;
+    failure: ExecutionFailureProjectionV1 | null;
     nextCursor: string | null;
     sample: {
         context: string | null;
@@ -1093,6 +1094,7 @@ export type EvaluationAnalysisSummaryV1 = {
             };
         };
         executionId: string;
+        failure: ExecutionFailureProjectionV1 | null;
         preparedRuntime: {
             configurationRevision: number;
             imageDigest: string;

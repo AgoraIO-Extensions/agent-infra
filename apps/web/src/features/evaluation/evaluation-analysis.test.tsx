@@ -88,6 +88,7 @@ const summary = {
 			variantId: "base",
 			executionId: "exec",
 			status: "completed",
+			failure: null,
 			requested: {
 				variantId: "base",
 				agentId: "agent",
@@ -131,6 +132,7 @@ it("uses independent score and per-score review cursors, and clears detail on au
 			return Response.json({
 				experimentId: eid,
 				sampleTaskId: tid,
+				failure: null,
 				sample: {
 					id: "sample",
 					input: "Sensitive sample",
@@ -202,4 +204,73 @@ it("uses independent score and per-score review cursors, and clears detail on au
 				u.pathname.includes("/reviews"),
 		),
 	).toBe(false);
+});
+it("shows the controlled business failure separately from scoring faults", async () => {
+	const id = "00000000-0000-4000-8000-000000000001";
+	const measure = { value: null, observed: 0, total: 0 };
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input) =>
+			String(input instanceof Request ? input.url : input).includes("/history")
+				? Response.json({ items: [], nextCursor: null })
+				: Response.json({
+						experimentId: id,
+						datasetId: id,
+						versionId: id,
+						fixedSamples: 1,
+						observedAt: "2026-10-29T00:00:00.000Z",
+						contentAvailable: false,
+						taskTypesAvailable: false,
+						groups: [],
+						pairs: [],
+						items: [
+							{
+								sampleTaskId: id,
+								sampleId: "one",
+								variantId: "base",
+								executionId: "execution",
+								status: "failed",
+								failure: {
+									category: "queue_timeout",
+									message: "排队超过等待时限，本条消息未处理，请稍后重新发送",
+								},
+								requested: {
+									variantId: "base",
+									agentId: "agent",
+									configurationRevision: 1,
+									modelOptionId: null,
+									reasoningLevel: null,
+									toolEnvironment: "controlled",
+								},
+								requestedEvidence: null,
+								preparedRuntime: null,
+								actual: {
+									attempts: [],
+									observedAttempts: 0,
+									conditions: [],
+									conditionStatus: "missing",
+									inputTokens: measure,
+									outputTokens: measure,
+									cachedInputTokens: measure,
+									modelDurationMs: measure,
+								},
+								taskElapsedMs: null,
+								scores: [],
+							},
+						],
+					}),
+		),
+	);
+	render(
+		<EvaluationAnalysis
+			selected={id}
+			onSelect={() => {}}
+			onNewVersion={() => {}}
+		/>,
+	);
+	expect(
+		await screen.findByText(
+			"业务失败原因：排队超过等待时限，本条消息未处理，请稍后重新发送",
+		),
+	).not.toBeNull();
 });

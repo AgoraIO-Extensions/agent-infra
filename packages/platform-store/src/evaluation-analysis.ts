@@ -18,14 +18,21 @@ import {
 	parseEvaluationReviewRecordV1,
 	parseEvaluationSampleTaskV1,
 	parseEvaluationScoreIntentV1,
+	projectEvaluationBusinessFailureV1,
 	requireEvaluationResponseBudgetV1,
 	summarizeEvaluationExperimentV1,
 } from "@agent-infra/platform-core";
+import type { TransactionSql } from "postgres";
 import { readCurrentTaskApiUseGrantV1 } from "./application-task-authorization.js";
 import { PostgresEvaluationDataStoreV1 } from "./evaluation-data.js";
 import { PostgresEvaluationDerivedContentV1 } from "./evaluation-derived-content.js";
 import type { EvaluationExperimentStoreOptionsV1 } from "./evaluation-experiments.js";
 import { bindEvaluationAnalysisPolicyV1 } from "./evaluation-feedback.js";
+import {
+	type ExecutionFailureFactRowV1,
+	executionFailureFactsSql,
+	executionFailureFactsV1,
+} from "./execution-failure-facts.js";
 import postgres from "./observed-postgres.js";
 
 export interface EvaluationAnalysisStoreOptionsV1
@@ -66,14 +73,16 @@ export class PostgresEvaluationAnalysisV1 {
 		request: EvaluationRequestV1,
 		id: string,
 		content?: {
+			source?: boolean;
 			objects: readonly {
 				object: EvaluationDerivedObjectV1;
 				available: boolean;
 			}[];
 			metadataExpiresAt: readonly string[];
 		},
+		transaction?: TransactionSql,
 	) {
-		return this.#client.begin(async (tx) => {
+		const read = async (tx: TransactionSql) => {
 			await tx`select pg_advisory_xact_lock(hashtextextended('evaluation-data-v1',0))`;
 			const { policy: analysisPolicy } = await bindEvaluationAnalysisPolicyV1(
 				tx,
@@ -203,13 +212,14 @@ export class PostgresEvaluationAnalysisV1 {
 				if (
 					Date.parse(final.policy.validUntil) <= +fresh.now ||
 					Date.parse(final.grant.expiresAt) <= +fresh.now ||
-					Math.min(
-						Date.parse(final.version.expiresAt),
-						Date.parse(final.version.createdAt) +
-							final.policy.retention.samples.contentMs,
-						Date.parse(final.version.createdAt) +
-							final.policy.retention.rubric.contentMs,
-					) <= +fresh.now
+					(content.source !== false &&
+						Math.min(
+							Date.parse(final.version.expiresAt),
+							Date.parse(final.version.createdAt) +
+								final.policy.retention.samples.contentMs,
+							Date.parse(final.version.createdAt) +
+								final.policy.retention.rubric.contentMs,
+						) <= +fresh.now)
 				)
 					throw new EvaluationDataErrorV1("denied");
 				if (
@@ -236,7 +246,8 @@ export class PostgresEvaluationAnalysisV1 {
 				}
 			}
 			return { experiment, data, analysisPolicy, now: now.now };
-		});
+		};
+		return transaction ? read(transaction) : this.#client.begin(read);
 	}
 	async #snapshot(
 		experiment: EvaluationExperimentV1,
@@ -246,7 +257,7 @@ export class PostgresEvaluationAnalysisV1 {
 			"isolation level repeatable read read only",
 			async (tx) => {
 				const records = await tx<
-					{
+					({
 						id: string;
 						data: unknown;
 						execution_id: string;
@@ -255,8 +266,8 @@ export class PostgresEvaluationAnalysisV1 {
 						created_at: Date;
 						terminal_observed_at: Date | null;
 						last_sequence: number;
-					}[]
-				>`select s.id,s.data,s.execution_id,s.conversation_id,e.status,e.created_at,e.terminal_observed_at,e.last_event_sequence::int as last_sequence from platform.evaluation_sample_tasks s join platform.conversation_executions e on e.execution_id=s.execution_id where s.experiment_id=${experiment.experimentId} order by s.id limit ${policy.maximumTasks + 1}`;
+					} & ExecutionFailureFactRowV1)[]
+				>`select s.id,s.data,s.execution_id,s.conversation_id,e.status,e.created_at,e.terminal_observed_at,e.last_event_sequence::int as last_sequence,${executionFailureFactsSql(tx, true)} from platform.evaluation_sample_tasks s join platform.conversation_executions e on e.execution_id=s.execution_id where s.experiment_id=${experiment.experimentId} order by s.id limit ${policy.maximumTasks + 1}`;
 				if (records.length > policy.maximumTasks)
 					throw new EvaluationQueryLimitErrorV1();
 				const ids = records.map((r) => r.execution_id);
@@ -300,6 +311,10 @@ export class PostgresEvaluationAnalysisV1 {
 					return {
 						task,
 						status: row.status,
+						failure: projectEvaluationBusinessFailureV1(
+							row.status,
+							executionFailureFactsV1(row),
+						),
 						actual: foldEvaluationModelFactsV1(
 							facts
 								.filter((f) => f.execution_id === row.execution_id)
@@ -343,7 +358,13 @@ export class PostgresEvaluationAnalysisV1 {
 				? new Map(source.content.samples.map((s) => [s.id, s.taskType]))
 				: null,
 		});
-		const final = await this.#current(request, id);
+		const final = await this.#current(request, id, {
+			source: source !== null,
+			objects: [],
+			metadataExpiresAt: tasks.flatMap((row) =>
+				row.scores.map((score) => score.metadataExpiresAt),
+			),
+		});
 		if (
 			!isDeepStrictEqual(before.experiment, final.experiment) ||
 			!isDeepStrictEqual(before.data.policy, final.data.policy) ||
@@ -360,8 +381,7 @@ export class PostgresEvaluationAnalysisV1 {
 			)
 		)
 			throw new EvaluationDataErrorV1("denied");
-		if (source)
-			await this.#data.authorizeAnalyze(request, v.datasetId, v.versionId);
+
 		return {
 			...result,
 			observedAt: before.now.toISOString(),
@@ -372,6 +392,7 @@ export class PostgresEvaluationAnalysisV1 {
 				variantId: row.task.variantId,
 				executionId: row.task.executionId,
 				status: row.status,
+				failure: row.failure ?? null,
 				requested: row.task.requested,
 				requestedEvidence: row.task.requestedEvidence ?? null,
 				preparedRuntime: row.task.preparedRuntime ?? null,
@@ -582,7 +603,14 @@ export class PostgresEvaluationAnalysisV1 {
 		)
 			throw new EvaluationDataErrorV1("denied");
 		return requireEvaluationResponseBudgetV1(
-			{ experimentId: id, sampleTaskId, sample, scores, nextCursor },
+			{
+				experimentId: id,
+				sampleTaskId,
+				sample,
+				scores,
+				nextCursor,
+				failure: row.failure ?? null,
+			},
 			maximum,
 		);
 	}
@@ -748,25 +776,57 @@ export class PostgresEvaluationAnalysisV1 {
 				throw error;
 			}
 		}
-		for (const item of items) await this.#current(request, item.experimentId);
-		const final = await this.#dataStore.authenticate({
-			...request,
-			credentialScope: "eval:analyze",
-		});
-		if (
-			!isDeepStrictEqual(principal, final) ||
-			!isDeepStrictEqual(
-				policy,
-				parseEvaluationPolicyV1(await this.options.loadDataPolicy()),
-			) ||
-			!isDeepStrictEqual(
-				budget,
-				parseEvaluationAnalysisPolicyV1(
-					await this.options.loadAnalysisPolicy(),
-				),
+		await this.#client.begin(async (tx) => {
+			await tx`select pg_advisory_xact_lock(hashtextextended('evaluation-data-v1',0))`;
+			const reader = new PostgresEvaluationDataStoreV1({
+				...this.options,
+				transaction: tx,
+			});
+			const final = await reader.authenticate({
+				...request,
+				credentialScope: "eval:analyze",
+			});
+			if (!isDeepStrictEqual(principal, final))
+				throw new EvaluationDataErrorV1("denied");
+			const deadlines: number[] = [
+				Date.parse(policy.validUntil),
+				Date.parse(budget.validUntil),
+			];
+			for (const item of items) {
+				const checked = await this.#current(
+					request,
+					item.experimentId,
+					undefined,
+					tx,
+				);
+				deadlines.push(
+					Date.parse(checked.experiment.metadataExpiresAt),
+					Date.parse(checked.data.version.metadataExpiresAt),
+					Date.parse(checked.data.grant.expiresAt),
+					Date.parse(checked.data.policy.validUntil),
+				);
+			}
+			await reader.authenticate({
+				...request,
+				credentialScope: "eval:analyze",
+			});
+			if (
+				!isDeepStrictEqual(
+					policy,
+					parseEvaluationPolicyV1(await this.options.loadDataPolicy()),
+				) ||
+				!isDeepStrictEqual(
+					budget,
+					parseEvaluationAnalysisPolicyV1(
+						await this.options.loadAnalysisPolicy(),
+					),
+				)
 			)
-		)
-			throw new EvaluationDataErrorV1("denied");
+				throw new EvaluationDataErrorV1("denied");
+			const [now] = await tx<{ now: Date }[]>`select clock_timestamp() as now`;
+			if (!now || deadlines.some((deadline) => deadline <= +now.now))
+				throw new EvaluationDataErrorV1("denied");
+		});
 		return {
 			items,
 			nextCursor:

@@ -420,7 +420,7 @@ it("preserves application subject and eval source for the default Agent Key", as
 		for (const [id, principalType, token] of [
 			["app-analysis", "application", applicationAnalysis],
 			["same-user-analysis", "user", sameIdUser],
-		])
+		] as const)
 			await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes)values(${id},${principalType},'runner',${createHash(
 				"sha256",
 			)
@@ -1185,6 +1185,37 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 		await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)values(${configuration.agentId},'user','analyst','use','analysis-use')`;
 		const getAnalysis = (path: string, user = "analyst") =>
 			fetch(`${baseUrl}${path}`, { headers: { Cookie: `session=${user}` } });
+		const [failedSample] =
+			await sql`select id,execution_id,conversation_id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId} order by id limit 1`;
+		if (!failedSample) throw new Error("missing failure sample");
+		const [priorStatus] =
+			await sql`select status,last_event_sequence from platform.conversation_executions where execution_id=${failedSample.execution_id}`;
+		const failureEvent = randomUUID();
+		const failureSequence = Number(priorStatus?.last_event_sequence) + 1;
+		await sql`update platform.conversation_executions set status='failed',last_event_sequence=${failureSequence} where execution_id=${failedSample.execution_id}`;
+		await sql`insert into platform.conversation_events(event_id,conversation_id,execution_id,sequence,conversation_cursor,event_type,event_payload,source,adapter_event_key,event_digest,occurred_at)values(${failureEvent},${failedSample.conversation_id},${failedSample.execution_id},${failureSequence},999,'task.status',${sql.json({ type: "task.status", status: "failed", reason: "TASK_WAIT_TIMEOUT", raw: "SYNTHETIC-PRIVATE-PROVIDER-FAILURE" })},'platform',${failureEvent},${"e".repeat(64)},clock_timestamp())`;
+		try {
+			const failed = await getAnalysis(`/analysis/${experiment.experimentId}`);
+			expect(failed.status).toBe(200);
+			const report = EvaluationAnalysisSummaryV1Schema.parse(
+				await failed.json(),
+			);
+			expect(
+				report.items.find((item) => item.sampleTaskId === failedSample.id)
+					?.failure,
+			).toMatchObject({ category: "queue_timeout" });
+			const failedDetail = await getAnalysis(
+				`/analysis/${experiment.experimentId}/samples/${failedSample.id}`,
+			);
+			expect(failedDetail.status).toBe(200);
+			const body = await failedDetail.text();
+			expect(body).not.toContain("SYNTHETIC-PRIVATE-PROVIDER-FAILURE");
+			expect(body).not.toContain("TASK_WAIT_TIMEOUT");
+			expect(JSON.parse(body).failure.category).toBe("queue_timeout");
+		} finally {
+			await sql`delete from platform.conversation_events where event_id=${failureEvent}`;
+			await sql`update platform.conversation_executions set status=${priorStatus?.status},last_event_sequence=${Number(priorStatus?.last_event_sequence)} where execution_id=${failedSample.execution_id}`;
+		}
 		const choices = await getAnalysis(
 			`/choices?datasetId=${command.datasetId}&versionId=${command.versionId}`,
 			"runner",
@@ -3729,3 +3760,80 @@ it("keeps authorized old-version analysis after a new deployment policy and expl
 		await analysis.close();
 	}
 }, 30000);
+
+it.each(["summary", "history"] as const)(
+	"denies %s metadata that expires during its last identity await",
+	async (operation) => {
+		const { PostgresEvaluationAnalysisV1 } = await import(
+			"./evaluation-analysis.js"
+		);
+		const command = await dataset();
+		const experiment = await core.create(
+			request("runner"),
+			randomUUID(),
+			command,
+		);
+		await data.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: 4,
+			principal: { kind: "user", id: "late-reader" },
+			versionIds: [command.versionId],
+			operations: ["analyze"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+		await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)values(${configuration.agentId},'user','late-reader','use','late-reader-use') on conflict do nothing`;
+		let reads = 0;
+		let stopAt = Number.POSITIVE_INFINITY;
+		let deadline = Number.POSITIVE_INFINITY;
+		let delayed = false;
+		const analysis = new PostgresEvaluationAnalysisV1({
+			...database,
+			directory: {
+				resolveUser: async (id) => {
+					reads++;
+					if (reads === stopAt) {
+						delayed = true;
+						await new Promise((resolve) =>
+							setTimeout(resolve, Math.max(1, deadline - Date.now() + 30)),
+						);
+					}
+					return directory.resolveUser(id);
+				},
+			},
+			loadDataPolicy: async () => policy,
+			loadExperimentPolicy: async () => experimentPolicy,
+			loadAnalysisPolicy: async () => ({
+				schemaVersion: 1,
+				policyId: "analysis",
+				revision: 1,
+				validUntil: policy.validUntil,
+				maximumWindowMs: 86400000,
+				maximumTasks: 1000,
+				maximumModelFacts: 10000,
+				feedbackMetadataMs: 600000,
+			}),
+			storage,
+			taskPolicy: { maximumWaitingTasksPerAgent: 100, waitingTimeoutMs: 30000 },
+		});
+		const call = () =>
+			operation === "summary"
+				? analysis.summary(request("late-reader"), experiment.experimentId)
+				: analysis.history(request("late-reader"), 100);
+		try {
+			await call();
+			stopAt = reads;
+			reads = 0;
+			deadline = Date.now() + 350;
+			const expiry = new Date(deadline).toISOString();
+			if (operation === "summary")
+				await sql`update platform.evaluation_score_intents set data=jsonb_set(data,'{metadataExpiresAt}',to_jsonb(${expiry}::text)) where sample_task_id in(select id from platform.evaluation_sample_tasks where experiment_id=${experiment.experimentId})`;
+			else
+				await sql`update platform.evaluation_experiments set metadata_expires_at=${expiry}::timestamptz,data=jsonb_set(data,'{metadataExpiresAt}',to_jsonb(${expiry}::text)) where id=${experiment.experimentId}`;
+			await expect(call()).rejects.toMatchObject({ code: "denied" });
+			expect(delayed).toBe(true);
+			expect(Date.now()).toBeGreaterThan(deadline);
+		} finally {
+			await analysis.close();
+		}
+	},
+	30000,
+);

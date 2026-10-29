@@ -6,6 +6,11 @@ import type {
 } from "./evaluation-experiments.js";
 import type { EvaluationModelFactsV1 } from "./evaluation-model-facts.js";
 import type { EvaluationScoreIntentV1 } from "./evaluation-score-intents.js";
+import {
+	classifyExecutionFailureV1,
+	type ExecutionFailureFactsV1,
+	executionFailureMessageV1,
+} from "./execution-failure.js";
 
 export type EvaluationAnalysisCategoryV1 =
 	| "scored"
@@ -19,6 +24,10 @@ export interface EvaluationAnalysisTaskV1 {
 	status: string;
 	actual: EvaluationModelFactsV1;
 	taskDurationMs: number | null;
+	failure?: {
+		category: ReturnType<typeof classifyExecutionFailureV1>;
+		message: string;
+	} | null;
 	scores: readonly EvaluationScoreIntentV1[];
 }
 export interface EvaluationAnalysisCountsV1 {
@@ -278,4 +287,13 @@ export function summarizeEvaluationExperimentV1(input: {
 		pairs,
 		taskTypesAvailable: input.taskTypes !== null,
 	};
+}
+
+export function projectEvaluationBusinessFailureV1(
+	status: string,
+	facts: ExecutionFailureFactsV1,
+) {
+	if (status !== "failed") return null;
+	const category = classifyExecutionFailureV1(facts);
+	return { category, message: executionFailureMessageV1(category) };
 }

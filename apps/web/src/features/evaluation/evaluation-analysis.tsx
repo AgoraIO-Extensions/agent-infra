@@ -315,6 +315,7 @@ function AnalysisResult({
 								实际配置修订：
 								{item.preparedRuntime?.configurationRevision ?? "缺失"}
 							</p>
+							{item.failure && <p>业务失败原因：{item.failure.message}</p>}
 							<ActualFacts facts={item.actual} />
 							{item.scores.map((s) => (
 								<p key={s.scoreId}>
@@ -450,6 +451,7 @@ function AnalysisDetail({
 					<p className="whitespace-pre-wrap break-words">
 						预期结果：{d.sample.expectedResult ?? "未提供"}
 					</p>
+					{d.failure && <p>业务失败原因：{d.failure.message}</p>}
 					{d.scores.map((s) => (
 						<article key={s.scoreId} className="space-y-2 border-t pt-3">
 							<h4>

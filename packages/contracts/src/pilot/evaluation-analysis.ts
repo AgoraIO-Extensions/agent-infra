@@ -6,6 +6,7 @@ import {
 	EvaluationRequestedEvidenceV1Schema,
 	EvaluationScoreMetadataV1Schema,
 } from "./evaluation-experiments.ts";
+import { ExecutionFailureProjectionV1Schema } from "./execution-progress.ts";
 
 const ref = z.string().min(1).max(256);
 const count = z.number().int().nonnegative();
@@ -233,6 +234,7 @@ export const EvaluationAnalysisSummaryV1Schema = z.strictObject({
 					.nullable(),
 				actual: EvaluationModelFactsV1Schema,
 				taskElapsedMs: count.nullable(),
+				failure: ExecutionFailureProjectionV1Schema.nullable(),
 				scores: z.array(score),
 			}),
 		)
@@ -277,6 +279,7 @@ export const EvaluationAnalysisReviewV1Schema = z.strictObject({
 	result: retainedScore,
 });
 export const EvaluationAnalysisDetailV1Schema = z.strictObject({
+	failure: ExecutionFailureProjectionV1Schema.nullable(),
 	nextCursor: z.uuid().nullable(),
 	experimentId: z.uuid(),
 	sampleTaskId: z.uuid(),
