@@ -1,6 +1,26 @@
-import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
+import type {
+	RuntimeEvent,
+	RuntimeOperationFactV2,
+} from "@agent-infra/contracts/runtime";
 import { expect, it } from "vitest";
-import { appendTurnOperationFactV1 } from "./turn-result-publication.js";
+import {
+	appendTurnOperationFactV1,
+	publishTurnOperationFactsV1,
+} from "./turn-result-publication.js";
+
+function journalTurn() {
+	return {
+		executionId: "execution",
+		events: [] as RuntimeEvent[],
+		operationFacts: [] as RuntimeOperationFactV2[],
+		sequence: 0,
+	};
+}
+const append = (
+	turn: ReturnType<typeof journalTurn>,
+	fact: RuntimeOperationFactV2,
+	localTool = false,
+) => appendTurnOperationFactV1(turn, fact, turn, "fixture", localTool);
 
 const tool = {
 	kind: "tool" as const,
@@ -9,13 +29,13 @@ const tool = {
 	attemptRef: "attempt",
 };
 it("allows only trusted local tool observations to start without intent", () => {
-	const turn: { operationFacts?: RuntimeOperationFactV2[] } = {};
-	appendTurnOperationFactV1(
+	const turn = journalTurn();
+	append(
 		turn,
 		{ ...tool, executionBoundary: "sandbox-local", phase: "started" },
 		true,
 	);
-	appendTurnOperationFactV1(turn, {
+	append(turn, {
 		...tool,
 		executionBoundary: "sandbox-local",
 		phase: "completed",
@@ -24,9 +44,7 @@ it("allows only trusted local tool observations to start without intent", () => 
 		"started",
 		"completed",
 	]);
-	expect(() =>
-		appendTurnOperationFactV1(turn, { ...tool, phase: "started" }, true),
-	).toThrow();
+	expect(() => append(turn, { ...tool, phase: "started" }, true)).toThrow();
 });
 it("keeps mediated model and tool operations intent-first", () => {
 	for (const toolId of [
@@ -36,17 +54,17 @@ it("keeps mediated model and tool operations intent-first", () => {
 		"browser.click",
 	])
 		expect(() =>
-			appendTurnOperationFactV1({}, { ...tool, toolId, phase: "started" }),
+			append(journalTurn(), { ...tool, toolId, phase: "started" }),
 		).toThrow("must start with intent");
 	expect(() =>
-		appendTurnOperationFactV1({}, { ...tool, phase: "intent" }, true),
+		append(journalTurn(), { ...tool, phase: "intent" }, true),
 	).toThrow();
 	expect(() =>
-		appendTurnOperationFactV1({}, { ...tool, phase: "completed" }, true),
+		append(journalTurn(), { ...tool, phase: "completed" }, true),
 	).toThrow();
 	expect(() =>
-		appendTurnOperationFactV1(
-			{},
+		append(
+			journalTurn(),
 			{
 				kind: "model",
 				operationRef: "model",
@@ -61,21 +79,70 @@ it("keeps mediated model and tool operations intent-first", () => {
 			true,
 		),
 	).toThrow();
-	const turn: { operationFacts?: RuntimeOperationFactV2[] } = {};
-	appendTurnOperationFactV1(turn, {
+	const turn = journalTurn();
+	append(turn, {
 		...tool,
 		toolId: "workspace.publish_result_file",
 		phase: "intent",
 	});
-	appendTurnOperationFactV1(turn, {
+	append(turn, {
 		...tool,
 		toolId: "workspace.publish_result_file",
 		phase: "started",
 	});
-	appendTurnOperationFactV1(turn, {
+	append(turn, {
 		...tool,
 		toolId: "workspace.publish_result_file",
 		phase: "completed",
 	});
 	expect(turn.operationFacts).toHaveLength(3);
+});
+
+it("publishes a legacy unsealed fact suffix once without changing existing cursors", () => {
+	const turn = journalTurn();
+	const intent = { ...tool, phase: "intent" as const };
+	append(turn, intent);
+	const first = structuredClone(turn.events[0]);
+	turn.operationFacts.push({
+		...tool,
+		phase: "started",
+		startedAt: "2026-01-01T00:00:00.000Z",
+	});
+	publishTurnOperationFactsV1(turn, turn, "fixture");
+	expect(turn.events).toHaveLength(2);
+	expect(turn.events[0]).toEqual(first);
+	expect(turn.events[1]).toMatchObject({
+		schemaVersion: 2,
+		type: "operation",
+		cursor: "fixture-2",
+		payload: { phase: "started" },
+	});
+	const published = structuredClone(turn);
+	publishTurnOperationFactsV1(turn, turn, "fixture");
+	expect(turn).toEqual(published);
+});
+it("rejects a conflicting published payload even with the same operation and phase", () => {
+	const turn = journalTurn();
+	append(turn, { ...tool, phase: "intent" });
+	turn.operationFacts[0] = { ...tool, toolId: "other", phase: "intent" };
+	expect(() => publishTurnOperationFactsV1(turn, turn, "fixture")).toThrow(
+		"does not match its journal",
+	);
+});
+it("preserves a sealed legacy turn instead of appending facts after its terminal event", () => {
+	const turn = journalTurn();
+	turn.operationFacts.push({ ...tool, phase: "intent" });
+	turn.sequence = 1;
+	turn.events.push({
+		schemaVersion: 1,
+		type: "completed",
+		cursor: "fixture-1",
+		adapterEventKey: "terminal",
+		executionId: turn.executionId,
+		occurredAt: "2026-01-01T00:00:00.000Z",
+		payload: { status: "completed" },
+	});
+	const original = structuredClone(turn);
+	publishTurnOperationFactsV1(turn, turn, "fixture");
+	expect(turn).toEqual(original);
 });

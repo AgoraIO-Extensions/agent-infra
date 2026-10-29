@@ -251,6 +251,11 @@ it("publishes sandbox: references from the final answer before the terminal even
 			"started",
 			"completed",
 		]);
+		expect(
+			events
+				.filter((event) => event.type === "operation")
+				.map((event) => event.payload),
+		).toEqual(turn?.operationFacts);
 		expect(turn?.resultPublication?.plan.settled).toBe(true);
 	} finally {
 		await runtime.close();
@@ -341,6 +346,11 @@ it("settles an interrupted publication on restart without republishing (#3226)",
 				"execution-a",
 			);
 			expect(events.some((event) => event.type === "file")).toBe(false);
+			expect(
+				events
+					.filter((event) => event.type === "operation")
+					.map((event) => event.payload),
+			).toEqual((await turnState(restarted))?.operationFacts);
 			const facts = (await turnState(restarted))?.operationFacts?.filter(
 				(fact) => fact.toolId === "workspace.publish_result_file",
 			);
@@ -993,6 +1003,351 @@ it("keeps text-only turns working without a file bridge", async () => {
 	}
 });
 
+it("replays committed operation facts with stable cursors across restart", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-fact-replay-"));
+	let release = () => {};
+	const openSession = vi.fn(async (options: NativeSessionOptions) => ({
+		nativeId: "native-facts",
+		select: async () => {},
+		prompt: async () => {
+			await options.admit();
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			return { stopReason: "completed" };
+		},
+		cancel: async () => {},
+		close: async () => {},
+	}));
+	let runtime = await driver(path, openSession);
+	try {
+		const accepted = await runtime.execute(command([]));
+		const input = {
+			nativeSessionRef: accepted.nativeSessionRef,
+			executionId: "execution-a",
+		};
+		const model = {
+			kind: "model" as const,
+			operationRef: "model-operation",
+			attemptRef: "model-attempt",
+			model: {
+				configVersion: "configuration-a",
+				modelOptionId: "primary",
+				modelId: "fixture-model",
+			},
+		};
+		const facts = [
+			{ ...model, phase: "intent" as const },
+			{
+				...model,
+				phase: "started" as const,
+				startedAt: "2026-01-01T00:00:00.000Z",
+			},
+			{
+				...model,
+				phase: "completed" as const,
+				startedAt: "2026-01-01T00:00:00.000Z",
+				finishedAt: "2026-01-01T00:00:01.000Z",
+				durationMs: 1000,
+			},
+		] as const;
+		for (const fact of facts)
+			await runtime.recordOperationFact({ ...input, fact });
+		await runtime.recordOperationFact({ ...input, fact: facts[2] });
+		const replay = await runtime.replayEvents(
+			input.nativeSessionRef,
+			input.executionId,
+		);
+		const operations = replay.filter((event) => event.type === "operation");
+		expect(operations.map((event) => event.payload)).toEqual(facts);
+		const firstOperation = operations[0];
+		if (!firstOperation) throw new Error("missing operation event");
+		expect(new Set(replay.map((event) => event.cursor)).size).toBe(
+			replay.length,
+		);
+		expect(new Set(replay.map((event) => event.adapterEventKey)).size).toBe(
+			replay.length,
+		);
+		const journal = JSON.parse(
+			await readFile(join(path, input.nativeSessionRef, "state.json"), "utf8"),
+		);
+		expect(journal.turns[0].operationFacts).toEqual(facts);
+		expect(journal.turns[0].events).toEqual(replay);
+		release();
+		await vi.waitFor(async () =>
+			expect(
+				await runtime.getStatus(input.nativeSessionRef, input.executionId),
+			).toBe("completed"),
+		);
+		const completedReplay = await runtime.replayEvents(
+			input.nativeSessionRef,
+			input.executionId,
+		);
+		await runtime.close();
+		runtime = await driver(path, openSession);
+		expect(
+			await runtime.replayEvents(input.nativeSessionRef, input.executionId),
+		).toEqual(completedReplay);
+		expect(
+			await runtime.replayEvents(
+				input.nativeSessionRef,
+				input.executionId,
+				firstOperation.cursor,
+			),
+		).toEqual(
+			completedReplay.slice(
+				completedReplay.findIndex(
+					(event) => event.cursor === firstOperation.cursor,
+				) + 1,
+			),
+		);
+		await expect(
+			runtime.recordOperationFact({ ...input, fact: facts[2] }),
+		).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+		expect(openSession).toHaveBeenCalledTimes(1);
+		const secondCommand = {
+			...command([]),
+			nativeSessionRef: input.nativeSessionRef,
+			executionId: "execution-b",
+			turnId: "turn-b",
+			operationId: "operation-b",
+		};
+		await runtime.execute(secondCommand);
+		for (const fact of facts)
+			await runtime.recordOperationFact({
+				...input,
+				executionId: secondCommand.executionId,
+				fact,
+			});
+		release();
+		await vi.waitFor(async () =>
+			expect(
+				await runtime.getStatus(
+					input.nativeSessionRef,
+					secondCommand.executionId,
+				),
+			).toBe("completed"),
+		);
+		const secondReplay = await runtime.replayEvents(
+			input.nativeSessionRef,
+			secondCommand.executionId,
+		);
+		await runtime.close();
+		runtime = await driver(path, openSession);
+		expect(
+			await runtime.replayEvents(input.nativeSessionRef, input.executionId),
+		).toEqual(completedReplay);
+		expect(
+			await runtime.replayEvents(
+				input.nativeSessionRef,
+				secondCommand.executionId,
+			),
+		).toEqual(secondReplay);
+		const file = join(path, input.nativeSessionRef, "state.json");
+		await runtime.close();
+		const legacy = JSON.parse(await readFile(file, "utf8"));
+		let sequence = 0;
+		for (const turn of legacy.turns) {
+			turn.events = turn.events.filter(
+				(event: { type: string }) => event.type !== "operation",
+			);
+			for (const event of turn.events) event.cursor = `test-${++sequence}`;
+		}
+		legacy.sequence = sequence;
+		await writeFile(file, `${JSON.stringify(legacy)}\n`);
+		const legacyBytes = await readFile(file, "utf8");
+		runtime = await driver(path, openSession);
+		expect(
+			(
+				await runtime.replayEvents(input.nativeSessionRef, input.executionId)
+			).every((event) => event.type !== "operation"),
+		).toBe(true);
+		expect(await readFile(file, "utf8")).toBe(legacyBytes);
+		await runtime.close();
+		// A previous unsealed Turn cannot precede an already accepted later Turn.
+		legacy.turns[0].events.pop();
+		legacy.turns[0].status = "running";
+		delete legacy.turns[0].nativeStopReason;
+		sequence = 0;
+		for (const turn of legacy.turns)
+			for (const event of turn.events) event.cursor = `test-${++sequence}`;
+		legacy.sequence = sequence;
+		await writeFile(file, `${JSON.stringify(legacy)}\n`);
+		const invalidBytes = await readFile(file, "utf8");
+		runtime = await driver(path, openSession);
+		await expect(
+			runtime.replayEvents(input.nativeSessionRef, input.executionId),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		expect(await readFile(file, "utf8")).toBe(invalidBytes);
+	} finally {
+		release();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("wakes a fact subscriber only after the same journal commit is acknowledged", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-fact-subscription-"));
+	let releasePrompt = () => {};
+	const runtime = await driver(path, async (options) => ({
+		nativeId: "native-subscription",
+		select: async () => {},
+		prompt: async () => {
+			await options.admit();
+			await new Promise<void>((resolve) => {
+				releasePrompt = resolve;
+			});
+			return { stopReason: "completed" };
+		},
+		cancel: async () => {},
+		close: async () => {},
+	}));
+	const persistence = DurableJsonFile.prototype as unknown as {
+		persist: (serialized: string) => Promise<void>;
+	};
+	const original = persistence.persist;
+	let enterCommit = () => {};
+	const commitEntered = new Promise<void>((resolve) => {
+		enterCommit = resolve;
+	});
+	let releaseCommit = () => {};
+	const commitGate = new Promise<void>((resolve) => {
+		releaseCommit = resolve;
+	});
+	const controller = new AbortController();
+	let persist: ReturnType<typeof vi.spyOn> | undefined;
+	try {
+		const accepted = await runtime.execute(command([]));
+		const before = await runtime.replayEvents(
+			accepted.nativeSessionRef,
+			"execution-a",
+		);
+		const subscription = await runtime.subscribeEvents(
+			accepted.nativeSessionRef,
+			"execution-a",
+			before.at(-1)?.cursor,
+			controller.signal,
+		);
+		const iterator = subscription[Symbol.asyncIterator]();
+		let visible = false;
+		const next = iterator.next().then((value) => {
+			visible = true;
+			return value;
+		});
+		persist = vi
+			.spyOn(persistence, "persist")
+			.mockImplementation(async function (
+				this: DurableJsonFile<unknown>,
+				serialized,
+			) {
+				if (serialized.includes("model-pending-commit")) {
+					enterCommit();
+					await commitGate;
+				}
+				return original.call(this, serialized);
+			});
+		const write = runtime.recordOperationFact({
+			nativeSessionRef: accepted.nativeSessionRef,
+			executionId: "execution-a",
+			fact: {
+				kind: "model",
+				operationRef: "model-pending-commit",
+				attemptRef: "attempt",
+				phase: "intent",
+				model: {
+					configVersion: "configuration-a",
+					modelOptionId: "primary",
+					modelId: "fixture",
+				},
+			},
+		});
+		await commitEntered;
+		expect(
+			await runtime.replayEvents(accepted.nativeSessionRef, "execution-a"),
+		).toEqual(before);
+		expect(visible).toBe(false);
+		releaseCommit();
+		await write;
+		await vi.waitFor(() => expect(visible).toBe(true));
+		expect((await next).value).toMatchObject({
+			schemaVersion: 2,
+			type: "operation",
+			payload: { operationRef: "model-pending-commit" },
+		});
+		controller.abort();
+		await iterator.return?.();
+	} finally {
+		controller.abort();
+		releaseCommit();
+		releasePrompt();
+		persist?.mockRestore();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("does not expose a fact or consume a cursor when its durable commit fails", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-fact-persistence-"));
+	let releasePrompt = () => {};
+	const runtime = await driver(path, async (options) => ({
+		nativeId: "native-persistence",
+		select: async () => {},
+		prompt: async () => {
+			await options.admit();
+			await new Promise<void>((resolve) => {
+				releasePrompt = resolve;
+			});
+			return { stopReason: "completed" };
+		},
+		cancel: async () => {},
+		close: async () => {},
+	}));
+	const persistence = DurableJsonFile.prototype as unknown as {
+		persist: (serialized: string) => Promise<void>;
+	};
+	const original = persistence.persist;
+	let persist: ReturnType<typeof vi.spyOn> | undefined;
+	try {
+		const accepted = await runtime.execute(command([]));
+		const file = join(path, accepted.nativeSessionRef, "state.json");
+		const before = await readFile(file, "utf8");
+		persist = vi.spyOn(persistence, "persist").mockImplementation(function (
+			this: DurableJsonFile<unknown>,
+			serialized,
+		) {
+			if (serialized.includes("model-failed-commit"))
+				return Promise.reject(new Error("synthetic commit failure"));
+			return original.call(this, serialized);
+		});
+		await expect(
+			runtime.recordOperationFact({
+				nativeSessionRef: accepted.nativeSessionRef,
+				executionId: "execution-a",
+				fact: {
+					kind: "model",
+					operationRef: "model-failed-commit",
+					attemptRef: "attempt",
+					phase: "intent",
+					model: {
+						configVersion: "configuration-a",
+						modelOptionId: "primary",
+						modelId: "fixture",
+					},
+				},
+			}),
+		).rejects.toThrow("synthetic commit failure");
+		expect(await readFile(file, "utf8")).toBe(before);
+		await expect(
+			runtime.replayEvents(accepted.nativeSessionRef, "execution-a"),
+		).rejects.toThrow("requires recovery");
+	} finally {
+		releasePrompt();
+		persist?.mockRestore();
+		await runtime.close().catch(() => {});
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it("durably acknowledges non-Codex operation facts with ordered phase transitions", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-operation-facts-"));
 	let sessionOptions: NativeSessionOptions | undefined;
@@ -1265,6 +1620,81 @@ it("lets a protected unknown hold supersede a racing terminal status", async () 
 	}
 });
 
+it("preserves sealed legacy event cursors while retaining a recovered unknown hold", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-sealed-legacy-hold-"));
+	let options: NativeSessionOptions | undefined;
+	let runtime = await driver(path, async (input) => {
+		options = input;
+		return {
+			nativeId: "native-legacy",
+			select: async () => {},
+			prompt: async () => ({ stopReason: "completed" }),
+			cancel: async () => {},
+			close: async () => {},
+		};
+	});
+	try {
+		const accepted = await runtime.execute(command([]));
+		await vi.waitFor(async () =>
+			expect(
+				await runtime.getStatus(accepted.nativeSessionRef, "execution-a"),
+			).toBe("completed"),
+		);
+		await options?.markUnknown?.();
+		await runtime.close();
+		const file = join(path, accepted.nativeSessionRef, "state.json");
+		const legacy = JSON.parse(await readFile(file, "utf8"));
+		legacy.turns[0].operationFacts = [
+			{
+				kind: "tool",
+				operationRef: "legacy-tool",
+				attemptRef: "legacy-attempt",
+				phase: "intent",
+				toolId: "filesystem.write",
+			},
+		];
+		await writeFile(file, `${JSON.stringify(legacy)}\n`);
+		const events = structuredClone(legacy.turns[0].events);
+		const openSession = vi.fn(async (input: NativeSessionOptions) => {
+			await expect(input.admit()).rejects.toThrow();
+			return {
+				nativeId: "native-legacy",
+				select: async () => {},
+				prompt: async () => {
+					throw new Error("must not replay a protected operation");
+				},
+				cancel: async () => {},
+				close: async () => {},
+			};
+		});
+		runtime = await driver(path, openSession);
+		expect(
+			await runtime.getStatus(accepted.nativeSessionRef, "execution-a"),
+		).toBe("unknown");
+		expect(
+			await runtime.replayEvents(accepted.nativeSessionRef, "execution-a"),
+		).toEqual(events);
+		const recovered = JSON.parse(await readFile(file, "utf8"));
+		expect(recovered.turns[0].unknownHold).toBe(true);
+		expect(recovered.turns[0].operationFacts.at(-1)).toMatchObject({
+			phase: "unknown",
+			failureCode: "recovery_unconfirmed",
+		});
+		expect(recovered.sequence).toBe(legacy.sequence);
+		await runtime.close();
+		runtime = await driver(path, openSession);
+		expect(
+			await runtime.replayEvents(accepted.nativeSessionRef, "execution-a"),
+		).toEqual(events);
+		expect(
+			await runtime.getStatus(accepted.nativeSessionRef, "execution-a"),
+		).toBe("unknown");
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it("normalizes an interrupted Turn into an unknown hold before recovery", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-recovery-unknown-hold-"));
 	let sessionOptions: NativeSessionOptions | undefined;
@@ -1341,6 +1771,12 @@ it("normalizes an interrupted Turn into an unknown hold before recovery", async 
 				phase: "unknown",
 				failureCode: "recovery_unconfirmed",
 			});
+			expect(
+				(await recovered.replayEvents(record.nativeSessionRef, "execution-a"))
+					.filter((event) => event.type === "operation")
+					.map((event) => event.payload.phase),
+			).toEqual(["intent", "unknown"]);
+
 			await recovered.close();
 			const legacyUnknown = persisted;
 			if (!legacyUnknown.turns[0]) throw new Error("missing recovered turn");
@@ -1351,7 +1787,11 @@ it("normalizes an interrupted Turn into an unknown hold before recovery", async 
 			legacyFact.phase = "started";
 			delete legacyFact.failureCode;
 			legacyUnknown.turns[0].events.pop();
-			legacyUnknown.sequence--;
+			// Legacy facts were journal-only; remove the new projection as well.
+			legacyUnknown.turns[0].events = legacyUnknown.turns[0].events.filter(
+				(event) => event.type !== "operation",
+			);
+			legacyUnknown.sequence = legacyUnknown.turns[0].events.length;
 			await writeFile(
 				join(path, record.nativeSessionRef, "state.json"),
 				JSON.stringify(legacyUnknown),

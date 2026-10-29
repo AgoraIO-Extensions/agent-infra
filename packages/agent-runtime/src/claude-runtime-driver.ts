@@ -26,6 +26,7 @@ import {
 	RuntimeEventSchema,
 	type RuntimeEventV1,
 	RuntimeEventV1Schema,
+	RuntimeEventV2Schema,
 	RuntimeFileEventV2Schema,
 	RuntimeModelConfigurationV3Schema,
 	type RuntimeOperationFactV2,
@@ -129,6 +130,7 @@ import {
 import {
 	appendTurnOperationFactV1,
 	isTurnResultPublicationV1,
+	publishTurnOperationFactsV1,
 	settleTurnResultPublicationV1,
 	type TurnResultPublicationV1,
 } from "./turn-result-publication.js";
@@ -316,7 +318,7 @@ interface Turn {
 	status: RuntimeStatusV1;
 	/** An uncertain Connection operation permanently occupies this Turn after restart. */
 	unknownHold?: true;
-	/** V1 events plus #3226 V2 result-file events; each keeps its original version. */
+	/** V1 events plus V2 operation and result-file events retain their original versions. */
 	events: RuntimeEvent[];
 	/** Durable metadata-only facts emitted at the Claude model/tool boundary. */
 	operationFacts?: RuntimeOperationFactV2[];
@@ -836,8 +838,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					"Runtime operation fact is no longer current",
 					409,
 				);
-			appendTurnOperationFactV1(turn, fact, localTool);
+			appendTurnOperationFactV1(turn, fact, state, "claude", localTool);
 		});
+		for (const wake of this.waiters.get(file.read().binding.ref) ?? []) wake();
 	}
 	private constructor(
 		private readonly options: ClaudeRuntimeDriverOptions,
@@ -1154,7 +1157,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							(completed && !(event.type === "status" && !corrected)) ||
 							!RuntimeEventSchema.safeParse(event).success ||
 							(event.schemaVersion === 2 &&
-								!RuntimeFileEventV2Schema.safeParse(event).success) ||
+								!RuntimeFileEventV2Schema.safeParse(event).success &&
+								!RuntimeEventV2Schema.safeParse(event).success) ||
 							event.executionId !== turn.executionId ||
 							!Number.isSafeInteger(cursorNumber) ||
 							cursorNumber < 1 ||
@@ -1195,11 +1199,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					unavailable();
 				await file.update((state) => {
 					for (const turn of state.turns) {
+						publishTurnOperationFactsV1(turn, state, "claude");
 						normalizeClaudeUncertainConnectionOperations(turn);
 						// #3226：SDK result 已确认、发布中断的 Turn 沿已保存的进度收敛（不重发），
 						// 收敛后按原生 completed 写终态；其余未终结 Turn 仍按原规则处理。
 						if (!terminal(turn.status) && turn.resultPublication) {
-							settleTurnResultPublicationV1(turn);
+							settleTurnResultPublicationV1(turn, state, "claude");
 							if (turn.status === "running" && !turn.unknownHold) {
 								state.sequence++;
 								turn.events.push(
@@ -2505,9 +2510,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 								"Runtime operation fact is no longer current",
 								409,
 							);
-						for (const fact of facts) appendTurnOperationFactV1(draft, fact);
+						for (const fact of facts)
+							appendTurnOperationFactV1(draft, fact, state, "claude");
 						draft.resultPublication.plan = next;
 					});
+					for (const wake of this.waiters.get(file.read().binding.ref) ?? [])
+						wake();
 				},
 			},
 		});
