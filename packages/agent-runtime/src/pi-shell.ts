@@ -1,4 +1,3 @@
-import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	nativeShellAvailable,
 	nativeShellLauncher,
@@ -10,6 +9,9 @@ export { nativeShellAvailable as piNativeShellAvailable } from "./native-shell-a
 
 export async function createPiNativeShellTool(workspace: string) {
 	if (!(await nativeShellAvailable(workspace))) return undefined;
+	const { createBashToolDefinition } = await import(
+		"@earendil-works/pi-coding-agent"
+	);
 	const tool = createBashToolDefinition(workspace, {
 		shellPath: nativeShellLauncher,
 		exposeSessionEnvironment: false,
