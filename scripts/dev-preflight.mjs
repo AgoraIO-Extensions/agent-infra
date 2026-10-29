@@ -61,14 +61,10 @@ function changedFiles(base) {
 
 export function validationPlan(files, sourceSha) {
 	const names = [...files];
-	const docsOnly =
-		names.length > 0 &&
-		names.every((file) =>
-			/^(README\.md|AGENTS\.md|\.github\/.*\.md|docs\/.*\.md)$/.test(file),
-		);
-	const markdownChanged = names.some((file) =>
-		/^(README\.md|AGENTS\.md|\.github\/.*\.md|docs\/.*\.md)$/.test(file),
-	);
+	const isMarkdown = (file) =>
+		/^(README\.md|AGENTS\.md|(?:\.github|docs|deploy)\/.*\.md)$/.test(file);
+	const docsOnly = names.length > 0 && names.every(isMarkdown);
+	const markdownChanged = names.some(isMarkdown);
 	const workflowChanged = names.some(
 		(file) =>
 			file.startsWith(".github/workflows/") ||
@@ -81,8 +77,10 @@ export function validationPlan(files, sourceSha) {
 	const dependencyChanged = names.some((file) =>
 		/(^|\/)(package\.json|pnpm-lock\.yaml|turbo\.json)$/.test(file),
 	);
-	const deployChanged = names.some((file) =>
-		/^(deploy|docker-compose\.ya?ml|Dockerfile)/.test(file),
+	const deployChanged = names.some(
+		(file) =>
+			!isMarkdown(file) &&
+			/^(deploy|docker-compose\.ya?ml|Dockerfile)/.test(file),
 	);
 	const required = new Set(["git diff --check"]);
 	const skipped = [];
