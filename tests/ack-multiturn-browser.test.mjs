@@ -56,6 +56,7 @@ document.querySelector("button").onclick=async()=>{
  if(!conversation){
   conversation=(await (await fetch("/api/v1/agents/agent/conversations",{method:"POST"})).json()).conversationId;
   window.history.replaceState(null,"","?conversation="+conversation);
+  await new Promise(resolve=>setTimeout(resolve,SESSION_PREPARATION_MS));
  }
  const accepted=await (await fetch("/api/v1/conversations/"+conversation+"/messages",{method:"POST",body:JSON.stringify({text})})).json();
  const node=addMessage("assistant","");
@@ -74,8 +75,12 @@ document.querySelector("button").onclick=async()=>{
 load();
 </script>`;
 
-for (const truncate of [false, true]) {
-	test(`controlled browser runs same-session turns (truncate second reply=${truncate})`, {
+for (const { truncate, sessionPreparationMs } of [
+	{ truncate: false, sessionPreparationMs: 0 },
+	{ truncate: true, sessionPreparationMs: 0 },
+	{ truncate: false, sessionPreparationMs: 31_000 },
+]) {
+	test(`controlled browser runs same-session turns (truncate second reply=${truncate}, preparation=${sessionPreparationMs}ms)`, {
 		// biome-ignore lint/suspicious/noUndeclaredEnvVars: This opt-in test runs via node --test outside Turbo.
 		skip: process.env.ACK_BROWSER_FIXTURE_TEST !== "1",
 		timeout: 60_000,
@@ -103,7 +108,10 @@ for (const truncate of [false, true]) {
 				response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
 				return response.end(
 					owner
-						? html
+						? html.replace(
+								"SESSION_PREPARATION_MS",
+								String(sessionPreparationMs),
+							)
 						: "<p>当前登录或访问权限已失效，请重新登录或返回 Agent 目录。</p>",
 				);
 			}
@@ -232,6 +240,11 @@ for (const truncate of [false, true]) {
 			assert.equal(status, truncate ? 1 : 0);
 			assert.equal(result.completedTurnCount, truncate ? 1 : 3);
 			assert.equal(result.result, truncate ? "failed" : "passed");
+			if (sessionPreparationMs > 0)
+				assert(
+					result.turns[0].timings.browserClickToAcceptedMs >=
+						sessionPreparationMs,
+				);
 			if (truncate) assert.equal(result.turns[1].result, "failed");
 			assert.equal(
 				new Set(result.turns.map((turn) => turn.conversationHash)).size,
