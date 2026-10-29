@@ -284,7 +284,19 @@ export class PostgresEvaluationFeedbackV1 implements TaskFeedbackPortV1 {
 			await identity.revalidate();
 			// Configuration access updates hold this same Agent row while replacing owners/availability.
 			await tx`select id from platform.agents where id=${row.agent_id} for share`;
-			await this.#task(tx, executionId, identity.principal);
+			// Event persistence takes FOR UPDATE on this Execution. KEY SHARE also
+			// matches the write's existing FK lock without upgrading past a queued writer.
+			await tx`select execution_id from platform.conversation_executions where execution_id=${executionId} for key share`;
+			const committedTarget = await this.#target(
+				tx,
+				await this.#task(tx, executionId, identity.principal),
+				policy.maximumModelFacts,
+			);
+			if (
+				taskFeedbackConditionDigestV1(committedTarget) !==
+				taskFeedbackConditionDigestV1(target)
+			)
+				throw new EvaluationDataErrorV1("denied");
 			const [endClock] = await tx<
 				{ now: Date }[]
 			>`select clock_timestamp() as now`;

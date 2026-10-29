@@ -689,6 +689,176 @@ it("bounds candidate scanning before actual-model filtering without truncating t
 			bounded.summary(request("application"), "agent", "self", query),
 		).rejects.toMatchObject({ code: "query_too_large" });
 	} finally {
+		policy.revision = current.revision + 1;
 		await bounded.close();
 	}
 });
+
+it.each([
+	["read", "changed"],
+	["write", "changed"],
+	["read", "usage"],
+	["write", "usage"],
+] as const)(
+	"rechecks %s feedback against %s facts appended during final identity validation",
+	async (operation, change) => {
+		const {
+			createConversationEventUseCaseV1,
+			parseConversationOperationFactV2,
+		} = await import("@agent-infra/platform-core");
+		const { PostgresConversationEventTransactionV1 } = await import(
+			"./conversation-events.js"
+		);
+		const { seedSessionSandboxFixture } = await import(
+			"./session-sandbox.fixture.js"
+		);
+		const id = await seed("user");
+		await seedSessionSandboxFixture(sql, id);
+		await sql`update platform.conversation_executions set model_configuration_revision=7,model_option_id='option',reasoning_level='low' where execution_id=${id}`;
+		await sql`insert into platform.audit_events(id,trace_id,request_id,actor_type,actor_id,agent_id,action,target_type,target_id,outcome,details)select ${randomUUID()},'fixture-trace','fixture-request','user','same','agent','task.authorization.accepted','execution',execution_id,'succeeded',jsonb_build_object('authorizationRecordId',id) from platform.task_authorization_records where execution_id=${id}`;
+		const events = new PostgresConversationEventTransactionV1(database);
+		const eventCore = createConversationEventUseCaseV1({ transaction: events });
+		const model = {
+			kind: "model",
+			operationRef: "late-model",
+			attemptRef: "original",
+			model: {
+				configVersion: "7",
+				modelOptionId: "option",
+				modelId: "actual",
+				reasoningLevel: "low",
+			},
+		};
+		const append = async (phase: string) => {
+			const key = randomUUID();
+			const result = await eventCore.persist({
+				schemaVersion: 1,
+				conversationId: id,
+				executionId: id,
+				sessionGeneration: 1,
+				deliveryFence: 1,
+				adapterEventKey: key,
+				runtimeCursor: key,
+				occurredAt: new Date().toISOString(),
+				event: {
+					schemaVersion: 2,
+					type: "execution.operation",
+					fact: parseConversationOperationFactV2({
+						...model,
+						phase,
+						...(phase === "completed"
+							? { usage: { inputTokens: 3, outputTokens: 2 } }
+							: {}),
+					}),
+				},
+			});
+			expect(result.outcome).toBe("accepted");
+		};
+		let calls = 0;
+		let stopAt = Number.POSITIVE_INFINITY;
+		let appended = false;
+		let pendingAppend: Promise<void> | undefined;
+		let appendError: unknown;
+		const guarded = new PostgresEvaluationFeedbackV1({
+			...database,
+			loadPolicy: async () => policy,
+			directory: {
+				resolveUser: async (userId) => {
+					calls++;
+					if (calls === stopAt) {
+						const phase = change === "changed" ? "started" : "completed";
+						if (operation === "read") {
+							await append(phase);
+							appended = true;
+						} else {
+							// The write's FK KEY SHARE already serializes the producer. Observe
+							// its real lock wait, release this transaction, then await the append.
+							pendingAppend = append(phase).then(
+								() => {
+									appended = true;
+								},
+								(error) => {
+									appendError = error;
+								},
+							);
+							await expect
+								.poll(async () => {
+									const [waiting] =
+										await sql`select count(*)::int as count from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and query like '%for update of e%'`;
+									return waiting?.count;
+								})
+								.toBe(1);
+							expect(appended).toBe(false);
+						}
+					}
+					return directory.resolveUser(userId);
+				},
+			},
+		});
+		const actor: EvaluationRequestV1 = {
+			authentication: { kind: "browser", userId: "same" },
+			requestId: randomUUID(),
+			traceId: randomUUID(),
+		};
+		try {
+			await append("intent");
+			if (change === "usage") await append("started");
+			const initial = await core.get(actor, id);
+			const command = {
+				expectedRevision: 0,
+				expectedCondition: initial.conditionDigest,
+				useful: true,
+				categories: [],
+			};
+			if (operation === "read")
+				await core.submit(actor, id, randomUUID(), command);
+			// Observe the unchanged call path; pause the final identity revalidation,
+			// before the last channel-use directory read, without changing production clocks.
+			await guarded.transaction(actor, id, operation, async () => null);
+			stopAt = calls - 1;
+			calls = 0;
+			const target = createTaskFeedbackV1(guarded);
+			const pending =
+				operation === "read"
+					? target.get(actor, id)
+					: target.submit(actor, id, randomUUID(), command);
+			if (operation === "read" && change === "changed")
+				await expect(pending).rejects.toMatchObject({ code: "denied" });
+			else {
+				const result = await pending;
+				expect(result).toBeDefined();
+				if (operation === "read")
+					expect(result).toMatchObject({
+						feedbackCurrent: true,
+						conditionDigest: initial.conditionDigest,
+					});
+			}
+			await pendingAppend;
+			expect(appendError).toBeUndefined();
+			expect(appended).toBe(true);
+			const [execution] =
+				await sql`select last_event_sequence from platform.conversation_executions where execution_id=${id}`;
+			expect(Number(execution?.last_event_sequence)).toBe(
+				change === "changed" ? 2 : 3,
+			);
+			if (operation === "write") {
+				expect((await core.get(actor, id)).feedbackCurrent).toBe(
+					change === "usage",
+				);
+				expect(
+					await sql`select execution_id from platform.task_feedback where execution_id=${id}`,
+				).toHaveLength(1);
+				expect(
+					await sql`select id from platform.idempotency_records where scope_type='task_feedback' and scope_id=${id}`,
+				).toHaveLength(1);
+				expect(
+					await sql`select id from platform.audit_events where action='task.feedback.updated' and target_id=${id}`,
+				).toHaveLength(1);
+			}
+		} finally {
+			await guarded.close();
+			await events.close();
+		}
+	},
+	30000,
+);
