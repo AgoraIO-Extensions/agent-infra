@@ -41,6 +41,10 @@
 流程分别处理。当前创建契约没有源码目录、Git URL、外部 Agent URL 或原生历史导入字段，
 不能把新建空 Agent 当成完整迁移。
 
+需要独立验证迁入流程时，可使用[自有入口发票参考应用](../../tests/fixtures/custom-agent-invoice/README.md)。
+它实际调用模型并持久化业务结果，使用应用自身的身份；受控测试、本地真实模型和平台部署
+必须分别验收，不能把参考应用迁入成功推导为用户现有工程已迁入。
+
 ## 创建与幂等重放
 
 调用 `POST /api/v2/agents`，使用 `Authorization: Bearer <API Token>`、
