@@ -30,6 +30,7 @@ import {
 	expectFocusSettled,
 	holdRequests,
 	pinElement,
+	recordStartupEvidence,
 } from "./page-health";
 import { duplicateControlNames } from "./page-hygiene";
 import { expectCleanPage, trackPageErrors } from "./primitive-styles";
@@ -1111,32 +1112,40 @@ test("a 401 re-login that finds the session expired hands focus to the login pag
 
 test("keyboard recovery from the 401 re-login moves focus to the workbench h1, not body", async ({
 	page,
-}) => {
-	const fixture = await workbenchFixture(page, {
-		administrator: true,
-		attention: true,
-		collectionStatus: 401,
-	});
-	await page.goto("/");
-	const main = page.locator("main");
-	// 工作台统一落到页面 h1：401「重新登录」一次恢复多个分区，没有唯一的恢复分区。
-	const heading = main.getByRole("heading", {
-		level: 1,
-		name: "选择一个 Agent 开始工作。",
-	});
-	const relogin = main.getByRole("button", { name: "重新登录", exact: true });
-	await relogin.focus();
-	await expect(relogin).toBeFocused();
-	fixture.restoreCollections();
-	await page.keyboard.press("Enter");
-	await expect(relogin).toHaveCount(0);
-	await expect(main.getByText(/无法读取，请重新登录。$/)).toHaveCount(0);
-	await expect(heading).toBeFocused();
-	await expect(heading).toHaveAttribute("tabindex", "-1");
-	expect(
-		await page.evaluate(() => document.activeElement === document.body),
-	).toBe(false);
-	expect(fixture.unexpected).toEqual([]);
+}, info) => {
+	const startup = recordStartupEvidence(page);
+	try {
+		const fixture = await workbenchFixture(page, {
+			administrator: true,
+			attention: true,
+			collectionStatus: 401,
+		});
+		await page.goto("/");
+		const main = page.locator("main");
+		// 工作台统一落到页面 h1：401「重新登录」一次恢复多个分区，没有唯一的恢复分区。
+		const heading = main.getByRole("heading", {
+			level: 1,
+			name: "选择一个 Agent 开始工作。",
+		});
+		const relogin = main.getByRole("button", { name: "重新登录", exact: true });
+		await relogin.focus();
+		await expect(relogin).toBeFocused();
+		fixture.restoreCollections();
+		await page.keyboard.press("Enter");
+		await expect(relogin).toHaveCount(0);
+		await expect(main.getByText(/无法读取，请重新登录。$/)).toHaveCount(0);
+		await expect(heading).toBeFocused();
+		await expect(heading).toHaveAttribute("tabindex", "-1");
+		expect(
+			await page.evaluate(() => document.activeElement === document.body),
+		).toBe(false);
+		expect(fixture.unexpected).toEqual([]);
+	} catch (error) {
+		await startup.attach(info);
+		throw error;
+	} finally {
+		startup.dispose();
+	}
 });
 
 test("keyboard reload of a failed recent section moves focus to the workbench h1, not body", async ({

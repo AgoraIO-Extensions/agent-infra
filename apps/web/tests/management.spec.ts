@@ -40,6 +40,7 @@ import {
 	expectNoDuplicateControls,
 	holdRequests,
 	pinElement,
+	recordStartupEvidence,
 } from "./page-health";
 import { duplicateControlNames } from "./page-hygiene";
 import {
@@ -1995,66 +1996,74 @@ for (const viewport of [
 		page,
 	}, info) => {
 		test.skip(info.project.name !== "mobile", "Narrow viewport tier");
-		await page.setViewportSize(viewport);
-		await fixture(page, "owner");
-		const narrow = viewport.width <= 374;
-		const gutter = narrow ? 12 : 16;
-		const fullWidth = viewport.width - gutter * 2;
-		for (const { path, actions } of [
-			{ path: "/agents", actions: ["创建申请"] },
-			{ path: "/my-agents", actions: ["新建申请"] },
-			{ path: "/agents/agent-pilot-1", actions: ["开始对话", "Owner 配置"] },
-			{
-				path: "/agents/agent-pilot-1/configuration",
-				actions: ["返回 Agent 详情"],
-			},
-			{
-				path: "/my-agents/application-browser-1",
-				actions: ["返回我的 Agent", "修改申请", "撤回申请"],
-			},
-			{ path: "/my-agents/new", actions: [] },
-		]) {
-			await page.goto(path);
-			const heading = page.locator("main .page-heading").first();
-			await expect(heading).toBeVisible();
-			// N-03：创建申请页头没有任何操作。
-			if (actions.length === 0) {
-				await expect(page.getByLabel("Agent 名称")).toBeVisible();
-				await expect(heading.locator("a, button")).toHaveCount(0);
+		const startup = recordStartupEvidence(page);
+		try {
+			await page.setViewportSize(viewport);
+			await fixture(page, "owner");
+			const narrow = viewport.width <= 374;
+			const gutter = narrow ? 12 : 16;
+			const fullWidth = viewport.width - gutter * 2;
+			for (const { path, actions } of [
+				{ path: "/agents", actions: ["创建申请"] },
+				{ path: "/my-agents", actions: ["新建申请"] },
+				{ path: "/agents/agent-pilot-1", actions: ["开始对话", "Owner 配置"] },
+				{
+					path: "/agents/agent-pilot-1/configuration",
+					actions: ["返回 Agent 详情"],
+				},
+				{
+					path: "/my-agents/application-browser-1",
+					actions: ["返回我的 Agent", "修改申请", "撤回申请"],
+				},
+				{ path: "/my-agents/new", actions: [] },
+			]) {
+				await page.goto(path);
+				const heading = page.locator("main .page-heading").first();
+				await expect(heading).toBeVisible();
+				// N-03：创建申请页头没有任何操作。
+				if (actions.length === 0) {
+					await expect(page.getByLabel("Agent 名称")).toBeVisible();
+					await expect(heading.locator("a, button")).toHaveCount(0);
+				}
+				await expect(page.locator(".platform-topbar")).toHaveCSS(
+					"padding-left",
+					narrow ? "12px" : "18px",
+				);
+				await expect(page.locator(".platform-topbar")).toHaveCSS(
+					"padding-right",
+					narrow ? "12px" : "18px",
+				);
+				await expect(page.locator("main.platform-content")).toHaveCSS(
+					"padding-left",
+					`${gutter}px`,
+				);
+				for (const name of actions) {
+					const action = heading
+						// 撤回申请是 ConfirmDialog 触发器（data-slot=dialog-trigger），按按钮类名匹配。
+						.locator('[data-slot="button"], [class~="group/button"]')
+						.filter({ hasText: name });
+					await expect(action).toHaveCount(1);
+					const width = (await action.boundingBox())?.width ?? 0;
+					if (narrow)
+						expect(
+							Math.abs(width - fullWidth),
+							`${path} ${name}`,
+						).toBeLessThanOrEqual(1);
+					else expect(width, `${path} ${name}`).toBeLessThan(fullWidth - 1);
+				}
+				expect(
+					await page.evaluate(
+						() => document.documentElement.scrollWidth <= innerWidth,
+					),
+				).toBe(true);
 			}
-			await expect(page.locator(".platform-topbar")).toHaveCSS(
-				"padding-left",
-				narrow ? "12px" : "18px",
-			);
-			await expect(page.locator(".platform-topbar")).toHaveCSS(
-				"padding-right",
-				narrow ? "12px" : "18px",
-			);
-			await expect(page.locator("main.platform-content")).toHaveCSS(
-				"padding-left",
-				`${gutter}px`,
-			);
-			for (const name of actions) {
-				const action = heading
-					// 撤回申请是 ConfirmDialog 触发器（data-slot=dialog-trigger），按按钮类名匹配。
-					.locator('[data-slot="button"], [class~="group/button"]')
-					.filter({ hasText: name });
-				await expect(action).toHaveCount(1);
-				const width = (await action.boundingBox())?.width ?? 0;
-				if (narrow)
-					expect(
-						Math.abs(width - fullWidth),
-						`${path} ${name}`,
-					).toBeLessThanOrEqual(1);
-				else expect(width, `${path} ${name}`).toBeLessThan(fullWidth - 1);
-			}
-			expect(
-				await page.evaluate(
-					() => document.documentElement.scrollWidth <= innerWidth,
-				),
-			).toBe(true);
+			if (narrow) await capture(page, info, `narrow-tier-${viewport.width}`);
+		} catch (error) {
+			await startup.attach(info);
+			throw error;
+		} finally {
+			startup.dispose();
 		}
-		if (narrow) await capture(page, info, `narrow-tier-${viewport.width}`);
 	});
 }
 

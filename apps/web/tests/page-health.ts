@@ -1,4 +1,140 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import {
+	type ConsoleMessage,
+	expect,
+	type Locator,
+	type Page,
+	type Request,
+	type Response,
+	type TestInfo,
+} from "@playwright/test";
+
+/** 白屏失败的有界启动证据；不保存消息、请求正文、Header 或原始异常文本。 */
+export function recordStartupEvidence(page: Page) {
+	const startedAt = Date.now();
+	const events: object[] = [];
+	const api = { issued: 0, finished: 0, failed: 0 };
+	let dropped = 0;
+	let navigation = 0;
+	const path = (url: string) => {
+		try {
+			const value = new URL(url);
+			return value.protocol === "http:" || value.protocol === "https:"
+				? value.pathname.slice(0, 256)
+				: "non-http";
+		} catch {
+			return "unavailable";
+		}
+	};
+	const isApi = (request: Request) => path(request.url()).startsWith("/api/");
+	const add = (event: object) => {
+		if (events.length < 100)
+			events.push({ elapsedMs: Date.now() - startedAt, navigation, ...event });
+		else dropped++;
+	};
+	const request = (value: Request) => {
+		if (isApi(value)) api.issued++;
+		if (value.resourceType() === "document") {
+			navigation++;
+			add({ kind: "document", path: path(value.url()) });
+		}
+	};
+	const finished = (value: Request) => {
+		if (isApi(value)) api.finished++;
+	};
+	const failed = (value: Request) => {
+		if (isApi(value)) api.failed++;
+		add({
+			kind: "request-failed",
+			type: value.resourceType(),
+			path: path(value.url()),
+			code:
+				value.failure()?.errorText.match(/^net::ERR_[A-Z_]+$/)?.[0] ?? "other",
+		});
+	};
+	const response = (value: Response) => {
+		const type = value.request().resourceType();
+		const mediaType = value.headers()["content-type"]?.split(";", 1)[0]?.trim();
+		const contentType = [
+			"text/html",
+			"text/javascript",
+			"application/javascript",
+			"application/json",
+			"text/css",
+			"application/octet-stream",
+		].includes(mediaType ?? "")
+			? mediaType
+			: "other";
+		if (type === "document" || type === "script")
+			add({
+				kind: "response",
+				type,
+				path: path(value.url()),
+				status: value.status(),
+				contentType,
+			});
+	};
+	const pageError = (error: Error) => {
+		const category =
+			/dynamically imported module|module script|MIME type/i.test(error.message)
+				? "module-load"
+				: /unexpected token|syntax/i.test(error.message)
+					? "syntax"
+					: "runtime";
+		add({ kind: "page-error", category });
+	};
+	const consoleError = (message: ConsoleMessage) => {
+		if (message.type() !== "error") return;
+		const location = message.location();
+		add({
+			kind: "console-error",
+			path: path(location.url),
+			line: location.lineNumber,
+			column: location.columnNumber,
+		});
+	};
+	const crash = () => add({ kind: "page-crash" });
+	page.on("request", request);
+	page.on("requestfinished", finished);
+	page.on("requestfailed", failed);
+	page.on("response", response);
+	page.on("pageerror", pageError);
+	page.on("console", consoleError);
+	page.on("crash", crash);
+	const dispose = () => {
+		page.off("request", request);
+		page.off("requestfinished", finished);
+		page.off("requestfailed", failed);
+		page.off("response", response);
+		page.off("pageerror", pageError);
+		page.off("console", consoleError);
+		page.off("crash", crash);
+	};
+	return {
+		dispose,
+		async attach(info: TestInfo) {
+			const document = await page
+				.evaluate(() => ({
+					readyState: window.document.readyState,
+					appChildren:
+						window.document.getElementById("app")?.childElementCount ?? null,
+					bodyTextLength: window.document.body?.innerText.length ?? null,
+				}))
+				.catch(() => null);
+			await info
+				.attach("startup-evidence", {
+					body: JSON.stringify({
+						path: path(page.url()),
+						document,
+						api,
+						events,
+						dropped,
+					}),
+					contentType: "application/json",
+				})
+				.catch(() => undefined);
+		},
+	};
+}
 
 // 同页同名控件检查（#3040 AC-2）、动作后的焦点采样（#3235）与请求进行中的焦点（#3242）；
 // 控制台错误与横向溢出用 primitive-styles 的 expectCleanPage。

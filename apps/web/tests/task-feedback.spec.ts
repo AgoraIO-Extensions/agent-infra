@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { EvaluationBrowserFixture } from "./evaluation-fixture.js";
+import { recordStartupEvidence } from "./page-health.js";
 
 test("a real completed Web task exposes feedback on its historical reply", async ({
 	page,
@@ -7,17 +8,20 @@ test("a real completed Web task exposes feedback on its historical reply", async
 }, info) => {
 	test.setTimeout(90_000);
 	page.setDefaultTimeout(15_000);
-	const support = (await import(
-		new URL(
-			"../../platform-api/src/evaluation-workflow.browser-test-support.ts",
-			import.meta.url,
-		).href
-	)) as {
-		startEvaluationWorkflowBrowserFixture: () => Promise<EvaluationBrowserFixture>;
-	};
-	const fixture = await support.startEvaluationWorkflowBrowserFixture();
+	const startup = recordStartupEvidence(page);
+	let close = async () => {};
 	const statuses: { path: string; status: number }[] = [];
 	try {
+		const support = (await import(
+			new URL(
+				"../../platform-api/src/evaluation-workflow.browser-test-support.ts",
+				import.meta.url,
+			).href
+		)) as {
+			startEvaluationWorkflowBrowserFixture: () => Promise<EvaluationBrowserFixture>;
+		};
+		const fixture = await support.startEvaluationWorkflowBrowserFixture();
+		close = () => fixture.close();
 		const task = await fixture.createOnlineTask();
 		await context.addCookies([
 			{
@@ -81,6 +85,7 @@ test("a real completed Web task exposes feedback on its historical reply", async
 			fullPage: true,
 		});
 	} catch (error) {
+		await startup.attach(info);
 		if (!page.isClosed())
 			await info.attach("synthetic-page", {
 				body: await page.locator("body").innerText(),
@@ -98,7 +103,8 @@ test("a real completed Web task exposes feedback on its historical reply", async
 			try {
 				await page.unrouteAll({ behavior: "ignoreErrors" });
 			} finally {
-				await fixture.close();
+				startup.dispose();
+				await close();
 			}
 		}
 	}
