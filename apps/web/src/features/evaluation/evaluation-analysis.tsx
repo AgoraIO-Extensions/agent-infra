@@ -23,6 +23,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+import { Timestamp } from "@/components/ui/timestamp";
 import {
 	listEvaluationHistoryV1,
 	readEvaluationAnalysisSampleV1,
@@ -90,7 +91,7 @@ export function EvaluationAnalysis({
 						className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
 					>
 						<span className="min-w-0 break-all">
-							{new Date(e.createdAt).toLocaleString()} · {e.sampleIds.length}{" "}
+							<Timestamp value={e.createdAt} /> · {e.sampleIds.length}{" "}
 							个固定样本 · {e.variantIds.length} 个变体 ·{" "}
 							{e.status === "cancelled" ? "已取消" : "已受理"} · 版本{" "}
 							{e.versionId}
@@ -195,7 +196,7 @@ function AnalysisResult({
 				<>
 					<p>
 						固定样本集合：{data.fixedSamples}；观察时间：
-						{new Date(data.observedAt).toLocaleString()}
+						<Timestamp value={data.observedAt} />
 						。结果以本次读取时间为准，刷新后可能变化。
 					</p>
 					{!data.contentAvailable && (

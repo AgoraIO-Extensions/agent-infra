@@ -1,9 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
-import type { startEvaluationWorkflowBrowserFixture } from "../../platform-api/src/evaluation-workflow.browser-test-support.js";
+import type { EvaluationBrowserFixture } from "./evaluation-fixture.js";
 
-type Fixture = Awaited<
-	ReturnType<typeof startEvaluationWorkflowBrowserFixture>
->;
+type Fixture = EvaluationBrowserFixture;
 
 test("real purpose-isolated evaluation, version history and online feedback", async ({
 	page,
@@ -17,7 +15,7 @@ test("real purpose-isolated evaluation, version history and online feedback", as
 			import.meta.url,
 		).href
 	)) as {
-		startEvaluationWorkflowBrowserFixture: typeof startEvaluationWorkflowBrowserFixture;
+		startEvaluationWorkflowBrowserFixture: () => Promise<EvaluationBrowserFixture>;
 	};
 	const fixture = await support.startEvaluationWorkflowBrowserFixture();
 	const requests: { method: string; path: string; status: number }[] = [];
