@@ -5,6 +5,7 @@ import { constants } from "node:fs";
 import { open, readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
+import { PilotProtocolErrorV1Schema } from "../../packages/contracts/src/pilot/errors.ts";
 
 type Binding = { name: string; agentId: string; ready: boolean };
 type Clock = {
@@ -94,7 +95,10 @@ async function requestJson(
 			try {
 				body = await response.json();
 			} catch (error) {
-				if (error instanceof SyntaxError || ![200, 201].includes(response.status))
+				if (
+					error instanceof SyntaxError ||
+					![200, 201].includes(response.status)
+				)
 					return { response, body: null, error: "RESPONSE_INVALID" };
 				throw error;
 			}
@@ -102,9 +106,12 @@ async function requestJson(
 				evidence.budgetExhausted = true;
 				return { response, body: null, error: "REQUEST_BUDGET_EXHAUSTED" };
 			}
+			const failure = PilotProtocolErrorV1Schema.safeParse(body);
 			if (
 				response.status !== 503 ||
-				body?.error?.code !== "DEPENDENCY_UNAVAILABLE"
+				!failure.success ||
+				failure.data.code !== "DEPENDENCY_UNAVAILABLE" ||
+				!failure.data.retryable
 			)
 				return { response, body };
 			evidence.dependencyUnavailableResponses++;

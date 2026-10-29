@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import { provisionAgents } from "../deploy/ack/provision-agents.ts";
+import { PilotProtocolErrorV1Schema } from "../packages/contracts/src/pilot/errors.ts";
 
+const dependencyUnavailable = PilotProtocolErrorV1Schema.parse({
+	schemaVersion: 1,
+	code: "DEPENDENCY_UNAVAILABLE",
+	retryable: true,
+	message: "SYNTHETIC_ERROR_SECRET",
+	traceId: "trace-controlled-dependency",
+});
 const token = "SYNTHETIC_PRIVATE_CREDENTIAL";
 const body = {
 	schemaVersion: 3,
@@ -90,7 +98,7 @@ test("committed HTTP creation with a lost response replays the same request unti
 		res.setHeader("content-type", "application/json");
 		if (received.length === 2) {
 			res.statusCode = 503;
-			res.end(JSON.stringify({ error: { code: "DEPENDENCY_UNAVAILABLE" } }));
+			res.end(JSON.stringify(dependencyUnavailable));
 			return;
 		}
 		res.end(JSON.stringify({ ...created, replayed: true }));
@@ -175,10 +183,7 @@ test("a gateway 504 replays the original key while the server completes creation
 			);
 		}
 		if (calls.length === 2)
-			return Response.json(
-				{ error: { code: "DEPENDENCY_UNAVAILABLE" } },
-				{ status: 503 },
-			);
+			return Response.json(dependencyUnavailable, { status: 503 });
 		return Response.json({ ...created, replayed: true });
 	});
 	const result = await provisionAgents(input, f.options);
@@ -230,10 +235,7 @@ test("exhausted creation budget never sends a later Agent request", async (t) =>
 	t.mock.method(globalThis, "fetch", async (_url, options) => {
 		calls.push(new Headers(options.headers).get("idempotency-key"));
 		f.advance(100_000);
-		return Response.json(
-			{ error: { code: "DEPENDENCY_UNAVAILABLE" } },
-			{ status: 503 },
-		);
+		return Response.json(dependencyUnavailable, { status: 503 });
 	});
 	const result = await provisionAgents(
 		{
@@ -319,6 +321,26 @@ test("an existing binding recovers a transient state read without recreating the
 	assert.equal(calls, 2);
 	assertPrivate(result);
 });
+
+for (const payload of [
+	{ error: { code: "DEPENDENCY_UNAVAILABLE" } },
+	{ ...dependencyUnavailable, retryable: false },
+	{ ...dependencyUnavailable, schemaVersion: 2 },
+	{ ...dependencyUnavailable, code: "INTERNAL_ERROR" },
+]) {
+	test(`503 recovery requires the official retryable dependency contract: ${JSON.stringify(payload)}`, async (t) => {
+		const f = fixture();
+		let calls = 0;
+		t.mock.method(globalThis, "fetch", async () => {
+			calls++;
+			return Response.json(payload, { status: 503 });
+		});
+		const result = await provisionAgents(input, f.options);
+		assert.equal(result.pass, false);
+		assert.equal(calls, 1);
+		assertPrivate(result);
+	});
+}
 
 test("zero readiness wait remains a single observation", async (t) => {
 	const f = fixture({ bindings: { first: created.agentId } });
