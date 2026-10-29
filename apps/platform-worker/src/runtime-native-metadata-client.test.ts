@@ -207,3 +207,46 @@ describe("Worker native metadata gateway with its real HTTP client", () => {
 		}
 	});
 });
+
+it.each(["text/plain", "application/json"])(
+	"preserves Host media policy and base pathname for %s",
+	async (media) => {
+		const f = await fixture("status");
+		try {
+			let target = "";
+			const client = createWorkerRuntimeNativeMetadataClientV1({
+				baseUrl: "http://host/prefix",
+				serviceToken: "token",
+				fetch: async (url) => {
+					target = String(url);
+					return new Response(
+						JSON.stringify({ ...f.binding, projection: f.projection }),
+						{ headers: { "content-type": media } },
+					);
+				},
+			});
+			const result = client.read({
+				...f.binding,
+				proof: {
+					schemaVersion: 1,
+					format: "native-metadata-jws",
+					token: "proof",
+				},
+			});
+			if (media === "application/json")
+				await expect(result).resolves.toEqual({
+					...f.binding,
+					projection: f.projection,
+				});
+			else
+				await expect(result).rejects.toThrow(
+					"RUNTIME_NATIVE_METADATA_UNAVAILABLE",
+				);
+			expect(target).toBe(
+				"http://host/prefix/internal/runtime/v1/native-metadata",
+			);
+		} finally {
+			await f.close();
+		}
+	},
+);

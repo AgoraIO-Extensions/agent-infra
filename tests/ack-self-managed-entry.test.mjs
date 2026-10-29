@@ -13,6 +13,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+	privateJson,
+	provisionWithBindings,
+} from "../deploy/ack/agent-bindings.ts";
+import {
 	assertOwnEntryUnchanged,
 	validateOwnEntry,
 	verifyOwnEntryWorkloads,
@@ -245,14 +249,14 @@ test("an in-place configuration revision change invalidates the completed browse
 	);
 });
 
-test("a failed own-entry HTTP boundary is retained privately before rejecting the browser journey", async (t) => {
+async function entryFixture(t) {
 	const f = fixture();
 	const sourceSha = "c".repeat(40);
 	const directory = await mkdtemp(join(tmpdir(), "entry-boundary-receipt-"));
 	t.after(() => rm(directory, { recursive: true, force: true }));
 	const state = join(directory, "state");
 	const evidence = join(directory, "evidence");
-	await mkdir(state);
+	await mkdir(state, { mode: 0o700 });
 	await mkdir(evidence);
 	const write = async (name, value) => {
 		const file = join(directory, name);
@@ -272,28 +276,29 @@ test("a failed own-entry HTTP boundary is retained privately before rejecting th
 		idempotencyKey: "synthetic-idempotency",
 	};
 	const requests = {
+		schemaVersion: 1,
+		waitSeconds: 0,
 		origin: "https://platform.example.test",
 		requests: [request],
 	};
-	await write("state/agent-bindings.json", {
-		sourceSha,
-		origin: requests.origin,
-		agents: { "own-multi": { agentId: f.agentId, ready: true } },
-		requestHash: createHash("sha256")
-			.update(
-				JSON.stringify({
-					origin: requests.origin,
-					bodies: [
-						{
-							name: request.name,
-							body,
-							idempotencyKey: request.idempotencyKey,
-						},
-					],
-				}),
-			)
-			.digest("hex"),
-	});
+	const requestsFile = await write("requests.json", requests);
+	t.mock.method(globalThis, "fetch", async (_url, init) =>
+		Response.json(
+			{
+				schemaVersion: 1,
+				agentId: f.agentId,
+				status: "available",
+				serviceAvailability: "ready",
+			},
+			{ status: init.method === "POST" ? 201 : 200 },
+		),
+	);
+	assert.equal(
+		(await provisionWithBindings(requestsFile, state, directory, sourceSha))
+			.pass,
+		true,
+	);
+	t.mock.restoreAll();
 	const { privateKey } = generateKeyPairSync("ed25519");
 	const config = {
 		schemaVersion: 1,
@@ -311,6 +316,71 @@ test("a failed own-entry HTTP boundary is retained privately before rejecting th
 		),
 		browserCertificateFile: join(directory, "unused-cert"),
 	};
+	const configFile = await write("config.json", config);
+	return {
+		...f,
+		sourceSha,
+		state,
+		evidence,
+		write,
+		credential,
+		requests,
+		run: () =>
+			validateOwnEntry(
+				configFile,
+				requestsFile,
+				state,
+				evidence,
+				sourceSha,
+				(kind) => f.inventory[kind],
+			),
+	};
+}
+
+for (const drift of [
+	"schema-missing",
+	"schema-unknown",
+	"source",
+	"origin",
+	"body",
+	"name",
+	"idempotency",
+	"missing-entry",
+	"not-ready",
+]) {
+	test(`writer binding rejects ${drift} before own-entry networking`, async (t) => {
+		const f = await entryFixture(t);
+		const binding = await privateJson(join(f.state, "agent-bindings.json"));
+		if (drift === "schema-missing") delete binding.schemaVersion;
+		if (drift === "schema-unknown") binding.schemaVersion = 2;
+		if (drift === "source") binding.sourceSha = "f".repeat(40);
+		if (drift === "origin") binding.origin = "https://other.example.test";
+		if (drift === "body")
+			await f.write("body.json", { source: f.source, name: "changed" });
+		if (drift === "name") f.requests.requests[0].name = "changed";
+		if (drift === "idempotency")
+			f.requests.requests[0].idempotencyKey = "changed-key";
+		if (drift === "missing-entry") delete binding.agents["own-multi"];
+		if (drift === "not-ready") binding.agents["own-multi"].ready = false;
+		await f.write("requests.json", f.requests);
+		await f.write("state/agent-bindings.json", binding);
+		let calls = 0;
+		t.mock.method(globalThis, "fetch", async () => {
+			calls++;
+			throw new Error("network must not run");
+		});
+		await assert.rejects(f.run());
+		assert.equal(calls, 0);
+	});
+}
+
+test("a failed own-entry HTTP boundary is retained privately before rejecting the browser journey", async (t) => {
+	const f = await entryFixture(t);
+	const { sourceSha, evidence, credential } = f;
+	// This consumer owns only the selected record, not the writer's whole map.
+	const binding = await privateJson(join(f.state, "agent-bindings.json"));
+	binding.agents.unselected = { agentId: 123, ready: false };
+	await f.write("state/agent-bindings.json", binding);
 	let requestsObserved = 0;
 	t.mock.method(globalThis, "fetch", async (url) => {
 		requestsObserved++;
@@ -324,17 +394,7 @@ test("a failed own-entry HTTP boundary is retained privately before rejecting th
 				})
 			: new Response("", { status: 503 });
 	});
-	await assert.rejects(
-		validateOwnEntry(
-			await write("config.json", config),
-			await write("requests.json", requests),
-			state,
-			evidence,
-			sourceSha,
-			(kind) => f.inventory[kind],
-		),
-		/OWN_ENTRY_BOUNDARY_FAILED/u,
-	);
+	await assert.rejects(f.run(), /OWN_ENTRY_BOUNDARY_FAILED/u);
 	assert.equal(requestsObserved, 6);
 	const [entry] = await readdir(evidence);
 	const file = join(evidence, entry, "boundary.json");

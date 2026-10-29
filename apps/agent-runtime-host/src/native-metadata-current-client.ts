@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer";
 import {
 	type NativeMetadataCurrentRequestV1,
 	NativeMetadataCurrentRequestV1Schema,
@@ -6,6 +5,7 @@ import {
 	NativeMetadataCurrentResponseV1Schema,
 	runtimeNativeMetadataRequestSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
+import { createNativeMetadataJsonTransport } from "@agent-infra/native-metadata-transport";
 
 const path = "internal/platform-worker/v1/native-metadata/current";
 const maximumResponseBytes = 64 * 1024;
@@ -18,57 +18,19 @@ function binding(
 	return rest;
 }
 
-function endpoint(baseUrl: string) {
-	let origin: URL;
-	try {
-		origin = new URL(baseUrl);
-	} catch {
-		throw new TypeError("Platform Worker base URL is invalid");
-	}
-	if (
-		origin.protocol !== "http:" ||
-		origin.username ||
-		origin.password ||
-		(origin.pathname !== "/" && origin.pathname !== "") ||
-		origin.search ||
-		origin.hash
-	)
-		throw new TypeError("Platform Worker base URL is invalid");
-	return new URL(path, `${origin.origin}/`);
-}
-
-async function responseText(response: Response) {
-	const reader = response.body?.getReader();
-	if (!reader) throw new Error("RUNTIME_NATIVE_METADATA_UNAVAILABLE");
-	const chunks: Uint8Array[] = [];
-	let bytes = 0;
-	try {
-		for (;;) {
-			const next = await reader.read();
-			if (next.value) {
-				bytes += next.value.byteLength;
-				if (bytes > maximumResponseBytes)
-					throw new Error("RUNTIME_NATIVE_METADATA_UNAVAILABLE");
-				chunks.push(next.value);
-			}
-			if (next.done) break;
-		}
-		return Buffer.concat(chunks, bytes).toString("utf8");
-	} finally {
-		await reader.cancel().catch(() => undefined);
-	}
-}
-
 /** Host → fixed Worker current-confirmation transport. */
 export function createRuntimeNativeMetadataCurrentClientV1(options: {
 	readonly baseUrl: string;
 	readonly serviceToken: string;
 	readonly fetch?: typeof fetch;
 }) {
-	if (!/^[\x21-\x7e]{1,8192}$/.test(options.serviceToken))
-		throw new TypeError("Platform Worker service token is invalid");
-	const url = endpoint(options.baseUrl);
-	const fetcher = options.fetch ?? fetch;
+	const post = createNativeMetadataJsonTransport({
+		...options,
+		peer: "Platform Worker",
+		path: path,
+		maximumResponseBytes,
+		strictJson: false,
+	});
 	return {
 		async check(input: {
 			readonly request: NativeMetadataCurrentRequestV1;
@@ -95,24 +57,15 @@ export function createRuntimeNativeMetadataCurrentClientV1(options: {
 					input.signal,
 					AbortSignal.timeout(timeoutMs),
 				]);
-				const response = await fetcher(url, {
-					method: "POST",
-					redirect: "error",
-					credentials: "omit",
-					headers: {
-						authorization: `Bearer ${options.serviceToken}`,
-						"content-type": "application/json",
-						accept: "application/json",
-					},
-					body: JSON.stringify({
+				const response = await post(
+					JSON.stringify({
 						apiRequestSourceRef: input.apiRequestSourceRef,
 						request: metadataRequest,
 					}),
-					signal,
-				});
-				if (!response.ok || response.redirected) throw new Error();
+					{ signal },
+				);
 				const result = NativeMetadataCurrentResponseV1Schema.parse(
-					JSON.parse(await responseText(response)),
+					response.value,
 				);
 				if (
 					result.outcome === "allowed" &&

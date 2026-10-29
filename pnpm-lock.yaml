@@ -105,6 +105,9 @@ importers:
       '@agent-infra/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@agent-infra/native-metadata-transport':
+        specifier: workspace:*
+        version: link:../../packages/native-metadata-transport
       '@hono/node-server':
         specifier: ^2.0.12
         version: 2.1.0(hono@4.13.7)
@@ -182,6 +185,9 @@ importers:
       '@agent-infra/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
+      '@agent-infra/native-metadata-transport':
+        specifier: workspace:*
+        version: link:../../packages/native-metadata-transport
       '@agent-infra/object-storage':
         specifier: workspace:*
         version: link:../../packages/object-storage
@@ -258,6 +264,9 @@ importers:
       '@agent-infra/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
+      '@agent-infra/native-metadata-transport':
+        specifier: workspace:*
+        version: link:../../packages/native-metadata-transport
       '@agent-infra/object-storage':
         specifier: workspace:*
         version: link:../../packages/object-storage
@@ -651,6 +660,21 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@30.0.1)(vite@8.2.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.8.3))
+
+  packages/native-metadata-transport:
+    devDependencies:
+      '@agent-infra/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.3
+      tsdown:
+        specifier: 0.22.14
+        version: 0.22.14(tsx@4.23.5)(typescript@6.0.3)
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
 
   packages/object-storage:
     dependencies:

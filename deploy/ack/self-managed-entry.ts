@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseAllDocuments } from "yaml";
 import { readAuthorization, verifyCustomAgentWeb } from "../../tests/local-real-e2e/custom-agent-web-probe.ts";
+import { readAgentBindings } from "./agent-bindings.ts";
 import { privateBytes, privateJson } from "./private-input.ts";
 
 const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
@@ -131,18 +132,18 @@ export function assertOwnEntryUnchanged(before: { resourceIdentityHash: string; 
 }
 
 export async function validateOwnEntry(configFile: string, requestsFile: string, stateDirectory: string, evidenceDirectory: string, sourceSha: string, read: Read) {
-	const config = await privateJson(configFile), requests = await privateJson(requestsFile), binding = await privateJson(join(stateDirectory, "agent-bindings.json"));
+	const config = await privateJson(configFile), requests = await privateJson(requestsFile);
 	assert(Object.keys(config).every(key => ["schemaVersion", "requestName", "sourceSha", "routeHostSuffix", "imageSourceSha", "contentSha256", "issuer", "audience", "signingKeyFile", "browserCertificateFile", "expectedReply"].includes(key)));
 	assert(config.schemaVersion === 1 && config.sourceSha === sourceSha && /^[a-f0-9]{40}$/u.test(config.imageSourceSha) && /^[a-f0-9]{64}$/u.test(config.contentSha256));
 	assert(/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(config.requestName) && [config.issuer, config.audience].every(value => typeof value === "string" && value.length > 0 && value.length <= 256));
 	assert(/^[a-z0-9][a-z0-9.-]+$/u.test(config.routeHostSuffix) && typeof config.expectedReply === "string" && config.expectedReply.length <= 256);
-	assert(binding.sourceSha === sourceSha && binding.origin === requests.origin && binding.agents[config.requestName]?.ready === true);
 	const selected = requests.requests.filter((item: Item) => item.name === config.requestName); assert.equal(selected.length, 1);
-	const bodies = await Promise.all(requests.requests.map(async (item: Item) => ({ name: item.name, body: await privateJson(item.bodyFile), idempotencyKey: item.idempotencyKey })));
-	assert.equal(binding.requestHash, hash(JSON.stringify({ origin: requests.origin, bodies })));
-	const body = bodies.find(item => item.name === config.requestName)!.body;
+	const bodies = await readAgentBindings(requests, stateDirectory, sourceSha);
+	const bound = bodies.find(item => item.name === config.requestName)!;
+	assert(bound.binding?.ready === true);
+	const body = bound.body;
 	assert(body.source?.interactionMode === "self-managed" && body.source.identityResponsibility === "self-managed");
-	const agentId = binding.agents[config.requestName].agentId;
+	const agentId = bound.binding.agentId;
 	const token = await readAuthorization(selected[0].credentialFile);
 	const response = await fetch(`${requests.origin}/api/v2/agents/${encodeURIComponent(agentId)}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000), redirect: "error" });
 	assert.equal(response.status, 200); const agent = await response.json();

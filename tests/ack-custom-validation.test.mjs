@@ -5,6 +5,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import {
+	privateJson,
+	provisionWithBindings,
+} from "../deploy/ack/agent-bindings.ts";
 import { customValidationPlan } from "../deploy/ack/custom-validation.ts";
 
 const sourceSha = "a".repeat(40);
@@ -33,25 +37,51 @@ async function fixture(t, mode = "platform-adapter") {
 		idempotencyKey: "custom-one-create",
 	};
 	const origin = "https://platform.example.test";
-	const config = { schemaVersion: 1, origin, requests: [request] };
-	const requestsFile = join(root, "requests.json");
-	await writeFile(requestsFile, JSON.stringify(config), { mode: 0o600 });
-	const binding = {
+	const config = {
 		schemaVersion: 1,
 		origin,
-		sourceSha,
-		requestHash: hash(
-			JSON.stringify({
-				origin,
-				bodies: [
-					{ name: request.name, body, idempotencyKey: request.idempotencyKey },
-				],
-			}),
-		),
-		agents: { [request.name]: { agentId: "private-agent-one", ready: true } },
+		waitSeconds: 0,
+		requests: [request],
 	};
+	const requestsFile = join(root, "requests.json");
+	await writeFile(requestsFile, JSON.stringify(config), { mode: 0o600 });
+	await writeFile(request.credentialFile, "synthetic-create-token", {
+		mode: 0o600,
+	});
+	const browserState = join(root, "browser-state.json");
+	await writeFile(browserState, JSON.stringify({ cookies: [], origins: [] }), {
+		mode: 0o600,
+	});
+	await writeFile(
+		join(root, "custom-custom-one.json"),
+		JSON.stringify({
+			origin,
+			prompt: "first",
+			followUpPrompts: ["second", "third"],
+			expectedReplies: ["one", "two", "three"],
+			owner: { userId: "owner", stateFile: browserState },
+			other: { userId: "other", stateFile: browserState },
+		}),
+		{ mode: 0o600 },
+	);
+	t.mock.method(globalThis, "fetch", async (_url, init) =>
+		Response.json(
+			{
+				schemaVersion: 1,
+				agentId: "private-agent-one",
+				status: "available",
+				serviceAvailability: "ready",
+			},
+			{ status: init.method === "POST" ? 201 : 200 },
+		),
+	);
+	assert.equal(
+		(await provisionWithBindings(requestsFile, state, root, sourceSha)).pass,
+		true,
+	);
+	t.mock.restoreAll();
 	const bindingFile = join(state, "agent-bindings.json");
-	await writeFile(bindingFile, JSON.stringify(binding), { mode: 0o600 });
+	const binding = await privateJson(bindingFile);
 	const receipt = {
 		result: "passed",
 		commit: sourceSha,
@@ -183,6 +213,12 @@ test("changed requests, unknown modes, absent custom Agents and extra Web probes
 	f.body.source = { kind: "standard", templateId: "codex" };
 	await f.save(f.bodyFile, f.body);
 	await assert.rejects(f.run());
+	f.body.source = {
+		kind: "custom",
+		interactionMode: "platform-adapter",
+		imageReference: `registry.example.test/custom@sha256:${"b".repeat(64)}`,
+	};
+	await f.save(f.bodyFile, f.body);
 	f.binding.agents["custom-one"].ready = false;
 	await f.save(f.bindingFile, f.binding);
 	await assert.rejects(f.run());
@@ -252,3 +288,50 @@ validate_custom_agents
 			await assert.rejects(readFile(join(f.root, "calls")), { code: "ENOENT" });
 	});
 }
+
+for (const drift of [
+	"schema-missing",
+	"schema-unknown",
+	"source",
+	"origin",
+	"body",
+	"name",
+	"idempotency",
+	"missing-entry",
+	"empty-id",
+	"not-ready",
+]) {
+	test(`writer binding rejects ${drift} before custom receipt consumption`, async (t) => {
+		const f = await fixture(t);
+		if (drift === "schema-missing") delete f.binding.schemaVersion;
+		if (drift === "schema-unknown") f.binding.schemaVersion = 2;
+		if (drift === "source") f.binding.sourceSha = "f".repeat(40);
+		if (drift === "origin") f.binding.origin = "https://other.example.test";
+		if (drift === "body") {
+			f.body.name = "changed";
+			await f.save(f.bodyFile, f.body);
+		}
+		if (drift === "name") f.config.requests[0].name = "changed";
+		if (drift === "idempotency")
+			f.config.requests[0].idempotencyKey = "changed-key";
+		if (drift === "missing-entry") delete f.binding.agents["custom-one"];
+		if (drift === "empty-id") f.binding.agents["custom-one"].agentId = "";
+		if (drift === "not-ready") f.binding.agents["custom-one"].ready = false;
+		await f.save(f.requestsFile, f.config);
+		await f.save(f.bindingFile, f.binding);
+		await rm(f.receiptFile);
+		await assert.rejects(f.run(), (error) => error.code === "ERR_ASSERTION");
+	});
+}
+
+test("custom validation keeps its nonempty ID policy and ignores unselected records", async (t) => {
+	const f = await fixture(t);
+	// The writer caps IDs at 256; this consumer historically accepts any nonempty ID.
+	const id = "a".repeat(257);
+	f.binding.agents["custom-one"].agentId = id;
+	f.binding.agents.unselected = { agentId: 123, ready: false };
+	f.receipt.agentHash = hash(id);
+	await f.save(f.bindingFile, f.binding);
+	await f.save(f.receiptFile, f.receipt);
+	assert.equal((await f.run()).pass, true);
+});

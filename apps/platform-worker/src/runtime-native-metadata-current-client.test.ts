@@ -248,3 +248,67 @@ describe("Platform API native metadata current client", () => {
 		).resolves.toEqual({ outcome: "unavailable" });
 	});
 });
+
+it.each(["text/plain", "application/json"])(
+	"retains strict current-confirmation media policy for %s",
+	async (media) => {
+		const now = Date.now();
+		const live = { ...request, readStartedAt: now, expiresAt: now + 30_000 };
+		const result = { outcome: "allowed", request: live };
+		await expect(
+			client(
+				async () =>
+					new Response(JSON.stringify(result), {
+						headers: { "content-type": media },
+					}),
+			).check({ request: live, apiRequestSourceRef: "source" }),
+		).resolves.toEqual(
+			media === "application/json" ? result : { outcome: "unavailable" },
+		);
+	},
+);
+
+it.each([65_536, 65_537])(
+	"retains the %i-byte current response budget",
+	async (size) => {
+		const now = Date.now();
+		const live = { ...request, readStartedAt: now, expiresAt: now + 30_000 };
+		const result = { outcome: "allowed", request: live };
+		const json = JSON.stringify(result);
+		await expect(
+			client(
+				async () =>
+					new Response(json + " ".repeat(size - json.length), {
+						headers: { "content-type": "application/json" },
+					}),
+			).check({ request: live, apiRequestSourceRef: "source" }),
+		).resolves.toEqual(size === 65_536 ? result : { outcome: "unavailable" });
+	},
+);
+
+it("rejects malformed UTF-8 before it can match the current binding", async () => {
+	const now = Date.now();
+	const live = {
+		...request,
+		traceId: "replacement-�",
+		readStartedAt: now,
+		expiresAt: now + 30_000,
+	};
+	const raw = new TextEncoder().encode(
+		JSON.stringify({ outcome: "allowed", request: live }),
+	);
+	const marker = raw.indexOf(0xef);
+	const bytes = new Uint8Array([
+		...raw.slice(0, marker),
+		0xff,
+		...raw.slice(marker + 3),
+	]);
+	await expect(
+		client(
+			async () =>
+				new Response(bytes, {
+					headers: { "content-type": "application/json" },
+				}),
+		).check({ request: live, apiRequestSourceRef: "source" }),
+	).resolves.toEqual({ outcome: "unavailable" });
+});

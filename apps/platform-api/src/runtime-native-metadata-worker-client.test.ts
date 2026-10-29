@@ -130,3 +130,56 @@ describe("Platform Worker native metadata gateway client", () => {
 		expect(Date.now() - started).toBeLessThan(1_000);
 	});
 });
+
+it("retains permissive media and UTF-8 decoding at the Worker gateway", async () => {
+	const changed = { ...response, traceId: "replacement-�" };
+	const raw = new TextEncoder().encode(JSON.stringify(changed));
+	const marker = raw.indexOf(0xef);
+	const bytes = new Uint8Array([
+		...raw.slice(0, marker),
+		0xff,
+		...raw.slice(marker + 3),
+	]);
+	const client = createPlatformWorkerNativeMetadataGatewayClientV1({
+		baseUrl: "http://worker",
+		serviceToken: "token",
+		fetch: async () =>
+			new Response(bytes, { headers: { "content-type": "text/plain" } }),
+	});
+	await expect(client.read(request)).resolves.toEqual(changed);
+});
+
+it.each([1_048_576, 1_048_577])(
+	"bounds the streamed Worker response at %i bytes",
+	async (size) => {
+		let canceled = false;
+		const json = JSON.stringify(response);
+		const bytes = new TextEncoder().encode(
+			json + " ".repeat(size - json.length),
+		);
+		const client = createPlatformWorkerNativeMetadataGatewayClientV1({
+			baseUrl: "http://worker",
+			serviceToken: "token",
+			fetch: async () =>
+				new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.enqueue(bytes);
+							if (size === 1_048_576) controller.close();
+						},
+						cancel() {
+							canceled = true;
+						},
+					}),
+				),
+		});
+		if (size === 1_048_576)
+			await expect(client.read(request)).resolves.toEqual(response);
+		else {
+			await expect(client.read(request)).rejects.toThrow(
+				"PLATFORM_WORKER_UNAVAILABLE",
+			);
+			expect(canceled).toBe(true);
+		}
+	},
+);
