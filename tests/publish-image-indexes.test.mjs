@@ -14,6 +14,7 @@ const root = resolve(import.meta.dirname, "..");
 const sha = "1".repeat(40);
 const prefix = "registry.example/agent-infra";
 const names = [
+	"agent-runtime-host",
 	"agent-runtime-codex",
 	"agent-runtime-claude",
 	"agent-runtime-opencode",
@@ -128,7 +129,7 @@ if(args[1] === 'imagetools' && args[2] === 'inspect') console.log(JSON.stringify
 			.split("\n")
 			.map(JSON.parse);
 		const creates = calls.filter((args) => args[2] === "create");
-		assert.equal(creates.length, 5);
+		assert.equal(creates.length, 6);
 		for (const [index, args] of creates.entries())
 			assert.deepEqual(args, [
 				"buildx",
@@ -154,7 +155,7 @@ if(args[1] === 'imagetools' && args[2] === 'inspect') console.log(JSON.stringify
 		const latestCalls = releaseCalls.filter(
 			(args) => args[2] === "create" && args[4].endsWith(":latest"),
 		);
-		assert.equal(latestCalls.length, 5);
+		assert.equal(latestCalls.length, 6);
 		const versionIndexes = release.stdout
 			.trim()
 			.split("\n")

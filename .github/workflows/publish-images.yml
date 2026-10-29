@@ -74,6 +74,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           node deploy/release/build-images.mjs "$RUNNER_TEMP/templates.json" \
             --images=codex,claude,opencode,pi
+          node deploy/release/build-images.mjs "$RUNNER_TEMP/runtime-host.json" \
+            --images=runtimeHost
           node deploy/release/build-images.mjs "$RUNNER_TEMP/custom-agent-base.json" \
             --custom-base-image
       - name: Upload template receipts
@@ -84,6 +86,8 @@ jobs:
           path: |
             ${{ runner.temp }}/templates.json
             ${{ runner.temp }}/templates.json.runtime-probe.json
+            ${{ runner.temp }}/runtime-host.json
+            ${{ runner.temp }}/runtime-host.json.runtime-probe.json
             ${{ runner.temp }}/custom-agent-base.json
 
   infrastructure-index:
@@ -116,8 +120,9 @@ jobs:
       - name: Publish multi-architecture indexes
         run: |
           node deploy/release/publish-image-indexes.mjs "$IMAGE_TAG" \
-            agent-runtime-codex,agent-runtime-claude,agent-runtime-opencode,agent-runtime-pi,custom-agent-base \
+            agent-runtime-host,agent-runtime-codex,agent-runtime-claude,agent-runtime-opencode,agent-runtime-pi,custom-agent-base \
             "$RUNNER_TEMP/receipts"/*/templates.json \
+			"$RUNNER_TEMP/receipts"/*/runtime-host.json \
             "$RUNNER_TEMP/receipts"/*/custom-agent-base.json
 
   platform:
