@@ -25,7 +25,15 @@
 
 当前 lane、primary Issue/PR、文件 owner 和下一交付点集中维护在
 [状态跟进的分派表](issue-status-tracking.md#当前分派与文件所有权)。该表带采集窗口；认领前回读
-GitHub、当前 branch/worktree 和最新 main，确认没有其他 writer，再冻结本次范围。
+GitHub、当前 branch/worktree 和最新 main，再完成两次交叉确认：
+
+1. 从 Issue 完整范围、原生依赖、关联 PR 当前 head/文件和工作树修改确认已有任务边界。
+2. 从活动 session 的实际工作与负责人直接回复确认当前 writer；核对其分支/文件范围，不仅依据正文 Session ID、标签、空 assignee 或 idle 状态。
+
+带 `session-owned` 的票由原 session 持有，即使同时有 `ready-for-agent` 也排除在其他 session 的
+分派范围。确需接手时先取得明确交接，记录旧/新 writer、精确文件/资源、完成项和下一步，再由
+新 writer 回读并确认接收；未确认时只做不依赖其写权的只读调查。接管影响原 owner 继续工作时，
+主动通知对方已接收的范围、完成状态及资源释放，避免两边等待或重复写入。
 
 每条 lane 独占已声明文件。缺失内部接口若已在 Issue Scope 中授权，属于待实现内容；只有实际
 产品/架构冲突或外部输入缺失才记录 blocker，不将缺失代码本身当作外部审批门禁。
