@@ -6,6 +6,7 @@ import {
 	mkdir,
 	mkdtemp,
 	readFile,
+	rename,
 	rm,
 	symlink,
 	writeFile,
@@ -22,6 +23,8 @@ import type {
 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
+import * as diagnosticFiles from "./messages-diagnostic-file.js";
+import { MessagesDiagnosticFile } from "./messages-diagnostic-file.js";
 import type {
 	RuntimeMessagesDiagnosticReceipt,
 	RuntimeMessagesTransportDiagnostic,
@@ -2193,21 +2196,13 @@ it("contains a poisoned Messages sidecar without poisoning the execution journal
 			sent: false,
 			durationMs: 0,
 		});
-		const prototype = DurableJsonFile.prototype as unknown as {
+		const prototype = MessagesDiagnosticFile.prototype as unknown as {
 			path: string;
 			persist(serialized: string): Promise<void>;
 		};
-		const persist = prototype.persist;
-		const failing = vi.spyOn(prototype, "persist").mockImplementation(function (
-			this: typeof prototype,
-			serialized,
-		) {
-			if (this.path.endsWith("messages-diagnostics.json"))
-				return Promise.reject(
-					Error("synthetic-secret https://private.invalid"),
-				);
-			return persist.call(this, serialized);
-		});
+		const failing = vi
+			.spyOn(prototype, "persist")
+			.mockRejectedValue(Error("synthetic-secret https://private.invalid"));
 		try {
 			await captured.receipt("unknown", false, transportDiagnostic);
 			await fixture.turn(2);
@@ -2246,20 +2241,13 @@ it("bounds queued Messages diagnostics and leaves close independent of a hung si
 			durationMs: 0,
 		});
 		let updates = 0;
-		const prototype = DurableJsonFile.prototype as unknown as {
+		const prototype = MessagesDiagnosticFile.prototype as unknown as {
 			path: string;
 			update(change: unknown): Promise<void>;
 		};
-		const update = prototype.update;
-		const blocked = vi.spyOn(prototype, "update").mockImplementation(function (
-			this: typeof prototype,
-			change,
-		) {
-			if (this.path.endsWith("messages-diagnostics.json")) {
-				updates++;
-				return held;
-			}
-			return update.call(this, change);
+		const blocked = vi.spyOn(prototype, "update").mockImplementation(() => {
+			updates++;
+			return held;
 		});
 		const receipts = Array.from({ length: 40 }, () =>
 			captured.receipt("unknown", false, transportDiagnostic),
@@ -2340,7 +2328,7 @@ it.each(["initialization", "persist"] as const)(
 					sent: false,
 					durationMs: 0,
 				});
-			const prototype = DurableJsonFile.prototype as unknown as {
+			const prototype = MessagesDiagnosticFile.prototype as unknown as {
 				path: string;
 				persist(serialized: string): Promise<void>;
 			};
@@ -2352,12 +2340,23 @@ it.each(["initialization", "persist"] as const)(
 					this: typeof prototype,
 					serialized,
 				) {
-					if (this.path.endsWith("messages-diagnostics.json") && oldWrite) {
+					if (stage === "persist" && oldWrite) {
 						oldWrite = false;
 						entered();
 						await held;
 					}
 					await persist.call(this, serialized);
+				});
+			const opener = MessagesDiagnosticFile.open;
+			const pendingOpen = vi
+				.spyOn(MessagesDiagnosticFile, "open")
+				.mockImplementation(async (directory, initial) => {
+					if (stage === "initialization" && oldWrite) {
+						oldWrite = false;
+						entered();
+						await held;
+					}
+					return opener(directory, initial);
 				});
 			let late: Promise<void> | undefined;
 			try {
@@ -2404,10 +2403,169 @@ it.each(["initialization", "persist"] as const)(
 				release();
 				await late;
 				pending.mockRestore();
+				pendingOpen.mockRestore();
 			}
 		} finally {
 			release?.();
 			await fixture.close();
+		}
+	},
+);
+
+it("does not redirect a diagnostic write after the checked Session directory is replaced", async () => {
+	const fixture = await diagnosticFixture();
+	const outside = await mkdtemp(join(tmpdir(), "diagnostic-outside-"));
+	let displaced: string | undefined;
+	let originalDirectory: string | undefined;
+	const open = MessagesDiagnosticFile.open;
+	try {
+		await fixture.turn(1);
+		const captured = fixture.receipts[0];
+		if (!captured) throw Error();
+		const original = JSON.stringify({ schemaVersion: 1, entries: [] });
+		await writeFile(join(outside, "messages-diagnostics.json"), original, {
+			mode: 0o600,
+		});
+		const swapping = vi
+			.spyOn(MessagesDiagnosticFile, "open")
+			.mockImplementation(async (target, initial) => {
+				if (target.sessionRef === captured.options.runtimeSessionRef) {
+					originalDirectory = captured.options.directory;
+					displaced = `${originalDirectory}-before-swap`;
+					await rename(originalDirectory, displaced);
+					await symlink(outside, originalDirectory);
+				}
+				return open(target, initial);
+			});
+		try {
+			await captured.receipt("unknown", false, transportDiagnostic);
+			expect(originalDirectory).toBe(captured.options.directory);
+			expect(
+				await readFile(join(outside, "messages-diagnostics.json"), "utf8"),
+			).toBe(original);
+		} finally {
+			swapping.mockRestore();
+		}
+	} finally {
+		if (originalDirectory && displaced) {
+			await rm(originalDirectory);
+			await rename(displaced, originalDirectory);
+		}
+		await fixture.close();
+		await rm(outside, { recursive: true });
+	}
+});
+
+it.each(["captured", "initial-failure"] as const)(
+	"does not recapture diagnostic identity after authoritative reopen: %s",
+	async (mode) => {
+		const path = await mkdtemp(join(tmpdir(), "session-diagnostic-reopen-"));
+		let options: NativeSessionOptions | undefined;
+		let receipt: RuntimeMessagesDiagnosticReceipt | undefined;
+		let entered!: () => void;
+		const ready = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const capture = diagnosticFiles.captureMessagesDiagnosticDirectory;
+		const capturing = vi
+			.spyOn(diagnosticFiles, "captureMessagesDiagnosticDirectory")
+			.mockImplementation(async (...args) => {
+				if (mode === "initial-failure" && capturing.mock.calls.length === 1)
+					throw Error("initial diagnostic capture rejected");
+				return capture(...args);
+			});
+		const runtime = await driver(path, async (session) => {
+			options = session;
+			return {
+				nativeId: "same-original-native",
+				select: async () => {},
+				cancel: async () => {},
+				close: async () => {},
+				prompt: async () => {
+					await session.admit();
+					const model = session.modelFact?.();
+					if (!model) throw Error();
+					const operationRef = randomUUID();
+					const attemptRef = randomUUID();
+					await session.recordOperationFact?.({
+						kind: "model",
+						operationRef,
+						attemptRef,
+						phase: "intent",
+						model,
+					});
+					await session.recordOperationFact?.({
+						kind: "model",
+						operationRef,
+						attemptRef,
+						phase: "started",
+						model,
+					});
+					receipt = session.openDiagnosticReceipt?.();
+					entered();
+					await held;
+					return { stopReason: "cancelled" };
+				},
+			};
+		});
+		const original = (
+			DurableJsonFile.prototype as unknown as {
+				path: string;
+				persist(serialized: string): Promise<void>;
+			}
+		).persist;
+		let moved: string | undefined;
+		const pending = runtime.execute(command([]));
+		try {
+			await ready;
+			const accepted = await pending;
+			if (!options || !receipt) throw Error();
+			const originalDirectory = options.directory;
+			moved = originalDirectory + "-original";
+			let failed = false;
+			const breaking = vi
+				.spyOn(
+					DurableJsonFile.prototype as unknown as {
+						path: string;
+						persist(serialized: string): Promise<void>;
+					},
+					"persist",
+				)
+				.mockImplementation(async function (
+					this: { path: string },
+					serialized,
+				) {
+					if (!failed && this.path === join(originalDirectory, "state.json")) {
+						failed = true;
+						await rename(originalDirectory, moved ?? "");
+						await cp(moved ?? "", originalDirectory, { recursive: true });
+						throw Error("synthetic main-journal persistence failure");
+					}
+					return original.call(this, serialized);
+				});
+			try {
+				await options.markUnknown?.();
+				await receipt("unknown", false, transportDiagnostic);
+				expect(capturing).toHaveBeenCalledTimes(1);
+				await expect(
+					readFile(join(originalDirectory, "messages-diagnostics.json")),
+				).rejects.toMatchObject({ code: "ENOENT" });
+				expect(
+					await runtime.getStatus(accepted.nativeSessionRef, "execution-a"),
+				).toBe("unknown");
+			} finally {
+				breaking.mockRestore();
+			}
+		} finally {
+			release();
+			await pending;
+			await runtime.close();
+			capturing.mockRestore();
+			await rm(path, { recursive: true, force: true });
 		}
 	},
 );

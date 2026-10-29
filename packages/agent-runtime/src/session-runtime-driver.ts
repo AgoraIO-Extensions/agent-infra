@@ -52,6 +52,11 @@ import {
 } from "./driver-operation.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
+import {
+	captureMessagesDiagnosticDirectory,
+	type MessagesDiagnosticDirectory,
+	MessagesDiagnosticFile,
+} from "./messages-diagnostic-file.js";
 import type {
 	RuntimeMessagesDiagnosticReceipt,
 	RuntimeMessagesTransportOptions,
@@ -467,10 +472,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	private readonly files = new Map<string, Promise<DurableJsonFile<Session>>>();
 	private readonly diagnosticFiles = new Map<
 		string,
-		Promise<DurableJsonFile<MessagesDiagnostics>>
+		Promise<MessagesDiagnosticFile<MessagesDiagnostics>>
 	>();
 	private readonly diagnosticReservations = new Map<string, object>();
 	private diagnosticWrites = 0;
+	private readonly diagnosticDirectories = new Map<
+		string,
+		MessagesDiagnosticDirectory | undefined
+	>();
 	private readonly locks = new Map<string, Promise<unknown>>();
 	private readonly handles = new Map<string, Handle>();
 	private readonly waiters = new Map<string, Set<() => void>>();
@@ -654,36 +663,18 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				const reservation = {};
 				messagesDiagnosticOwners.set(target, reservation);
 				this.diagnosticReservations.set(state.binding.ref, reservation);
+				const directory = this.diagnosticDirectories.get(state.binding.ref);
+				if (!directory) {
+					messagesDiagnosticOwners.delete(target);
+					this.diagnosticReservations.delete(state.binding.ref);
+					return;
+				}
 				diagnosticFile = (async () => {
-					const directory = join(this.options.path, state.binding.ref);
-					if ((await realpath(directory)) !== directory) throw new Error();
-					const directoryStat = await lstat(directory);
-					if (
-						!directoryStat.isDirectory() ||
-						directoryStat.uid !== process.getuid?.() ||
-						(directoryStat.mode & 0o022) !== 0
-					)
-						throw new Error();
-					const target = join(directory, "messages-diagnostics.json");
-					const stat = await lstat(target).catch(
-						(error: NodeJS.ErrnoException) => {
-							if (error.code === "ENOENT") return undefined;
-							throw error;
-						},
-					);
-					if (
-						stat &&
-						(!stat.isFile() ||
-							stat.isSymbolicLink() ||
-							stat.uid !== process.getuid?.() ||
-							stat.size > 262_144 ||
-							(stat.mode & 0o777) !== 0o600)
-					)
-						throw new Error();
-					const diagnostics = await DurableJsonFile.open<MessagesDiagnostics>(
-						target,
-						{ schemaVersion: 1, entries: [] },
-					);
+					const diagnostics =
+						await MessagesDiagnosticFile.open<MessagesDiagnostics>(directory, {
+							schemaVersion: 1,
+							entries: [],
+						});
 					try {
 						const saved = messagesDiagnosticsSchema.parse(diagnostics.read());
 						if (
@@ -863,6 +854,20 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			file = (async () => {
 				const directory = join(this.options.path, binding.ref);
 				if ((await realpath(directory)) !== directory) unavailable();
+				if (!this.diagnosticDirectories.has(binding.ref)) {
+					this.diagnosticDirectories.set(binding.ref, undefined);
+					try {
+						this.diagnosticDirectories.set(
+							binding.ref,
+							await captureMessagesDiagnosticDirectory(
+								this.options.path,
+								binding.ref,
+							),
+						);
+					} catch {
+						// Observation setup must not change the authoritative Session's recovery.
+					}
+				}
 				if (
 					!(
 						await lstat(join(this.options.path, binding.ref, "state.json"))
