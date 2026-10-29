@@ -862,3 +862,138 @@ it.each([
 	},
 	30000,
 );
+
+it.each([
+	["self", "changed"],
+	["owner", "changed"],
+	["self", "usage"],
+	["owner", "usage"],
+] as const)(
+	"timestamps the %s summary snapshot before later %s model evidence",
+	async (view, change) => {
+		const {
+			createConversationEventUseCaseV1,
+			parseConversationOperationFactV2,
+		} = await import("@agent-infra/platform-core");
+		const { PostgresConversationEventTransactionV1 } = await import(
+			"./conversation-events.js"
+		);
+		const { seedSessionSandboxFixture } = await import(
+			"./session-sandbox.fixture.js"
+		);
+		const id = await seed("user");
+		await seedSessionSandboxFixture(sql, id);
+		await sql`update platform.conversation_executions set model_configuration_revision=7,model_option_id='option',reasoning_level='low' where execution_id=${id}`;
+		await sql`insert into platform.audit_events(id,trace_id,request_id,actor_type,actor_id,agent_id,action,target_type,target_id,outcome,details)select ${randomUUID()},'fixture-trace','fixture-request','user','same','agent','task.authorization.accepted','execution',execution_id,'succeeded',jsonb_build_object('authorizationRecordId',id) from platform.task_authorization_records where execution_id=${id}`;
+		const events = new PostgresConversationEventTransactionV1(database);
+		const eventCore = createConversationEventUseCaseV1({ transaction: events });
+		const append = async (phase: "intent" | "started" | "completed") => {
+			const key = randomUUID();
+			expect(
+				(
+					await eventCore.persist({
+						schemaVersion: 1,
+						conversationId: id,
+						executionId: id,
+						sessionGeneration: 1,
+						deliveryFence: 1,
+						adapterEventKey: key,
+						runtimeCursor: key,
+						occurredAt: new Date().toISOString(),
+						event: {
+							schemaVersion: 2,
+							type: "execution.operation",
+							fact: parseConversationOperationFactV2({
+								kind: "model",
+								operationRef: "summary-model",
+								attemptRef: "original",
+								phase,
+								model: {
+									configVersion: "7",
+									modelOptionId: "option",
+									modelId: id,
+									reasoningLevel: "low",
+								},
+								...(phase === "completed"
+									? { usage: { inputTokens: 7, outputTokens: 2 } }
+									: {}),
+							}),
+						},
+					})
+				).outcome,
+			).toBe("accepted");
+		};
+		let calls = 0;
+		let stopAt = Number.POSITIVE_INFINITY;
+		let committedAt: number | undefined;
+		const guarded = new PostgresEvaluationFeedbackV1({
+			...database,
+			loadPolicy: async () => policy,
+			directory: {
+				resolveUser: async (userId) => {
+					calls++;
+					if (calls === stopAt) {
+						await append(change === "changed" ? "started" : "completed");
+						const [clock] = await sql<
+							{ milliseconds: number }[]
+						>`select (extract(epoch from clock_timestamp()) * 1000)::double precision as milliseconds`;
+						if (!clock || !Number.isFinite(clock.milliseconds))
+							throw new Error("missing database clock");
+						committedAt = clock.milliseconds;
+						// Preserve millisecond ordering after PostgreSQL's microsecond timestamp is serialized.
+						await sql`select pg_sleep(0.003)`;
+					}
+					return directory.resolveUser(userId);
+				},
+			},
+		});
+		const self: EvaluationRequestV1 = {
+			authentication: { kind: "browser", userId: "same" },
+			requestId: randomUUID(),
+			traceId: randomUUID(),
+		};
+		const actor: EvaluationRequestV1 =
+			view === "self"
+				? self
+				: { ...self, authentication: { kind: "browser", userId: "owner" } };
+		try {
+			await append("intent");
+			if (change === "usage") await append("started");
+			const context = await core.get(self, id);
+			await core.submit(self, id, randomUUID(), {
+				expectedRevision: 0,
+				expectedCondition: context.conditionDigest,
+				useful: true,
+				categories: [],
+			});
+			const query = {
+				from: new Date(Date.now() - 60000).toISOString(),
+				to: new Date(Date.now() + 60000).toISOString(),
+				modelId: id,
+			};
+			const baseline = await guarded.summary(actor, "agent", view, query);
+			stopAt = calls;
+			calls = 0;
+			const during = await guarded.summary(actor, "agent", view, query);
+			expect(Number.isFinite(committedAt)).toBe(true);
+			if (!committedAt) throw new Error("missing committed model evidence");
+			const { observedAt: beforeTime, ...beforeCounts } = baseline;
+			const { observedAt, ...duringCounts } = during;
+			expect(duringCounts).toEqual(beforeCounts);
+			expect(Date.parse(observedAt)).toBeGreaterThanOrEqual(
+				Date.parse(beforeTime),
+			);
+			expect(Date.parse(observedAt)).toBeLessThan(committedAt);
+			const after = await guarded.summary(actor, "agent", view, query);
+			expect(after.eligibleTasks).toBe(1);
+			expect(after.feedbackTasks).toBe(change === "changed" ? 0 : 1);
+			expect(after.conditionChangedTasks).toBe(change === "changed" ? 1 : 0);
+			expect(during.eligibleTasks).toBe(change === "changed" ? 0 : 1);
+			expect(JSON.stringify(after)).not.toContain(`"executionId"`);
+		} finally {
+			await guarded.close();
+			await events.close();
+		}
+	},
+	30000,
+);

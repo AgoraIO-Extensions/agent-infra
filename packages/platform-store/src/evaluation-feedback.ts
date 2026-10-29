@@ -399,6 +399,11 @@ export class PostgresEvaluationFeedbackV1 implements TaskFeedbackPortV1 {
 		const snapshot = await this.#client.begin(
 			"isolation level repeatable read read only",
 			async (tx) => {
+				// Identify this consistent read, not the later authority/retention check.
+				const [observation] = await tx<
+					{ now: Date }[]
+				>`select statement_timestamp() as now`;
+				if (!observation) throw new EvaluationDataErrorV1("unavailable");
 				const { query, policy, principal } = before;
 				const tasks = await tx<
 					TaskRow[]
@@ -464,7 +469,7 @@ export class PostgresEvaluationFeedbackV1 implements TaskFeedbackPortV1 {
 						throw new EvaluationDataErrorV1("unavailable");
 					return { target, feedback };
 				});
-				return { rows, ids };
+				return { rows, ids, observedAt: observation.now.toISOString() };
 			},
 		);
 		if (view === "self") {
@@ -523,7 +528,7 @@ export class PostgresEvaluationFeedbackV1 implements TaskFeedbackPortV1 {
 			before.policy,
 			finalNow,
 		);
-		return { ...result, agentId, view, observedAt: finalNow.toISOString() };
+		return { ...result, agentId, view, observedAt: snapshot.observedAt };
 	}
 	async purgeExpired(limit: number) {
 		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
