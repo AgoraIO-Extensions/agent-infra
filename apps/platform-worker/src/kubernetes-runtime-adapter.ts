@@ -185,6 +185,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		readonly serviceOrigin: string;
 		/** 本次观测到的唯一就绪 Pod，用于绑定签名 readiness 结果（#1889）。 */
 		readonly podUid?: string;
+		readonly podResourceVersion?: string;
 	}) => Promise<boolean>;
 	readonly onHealthDiagnostic?: (
 		diagnostic: MultiServiceHealthDiagnosticV1,
@@ -669,6 +670,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				// In-cluster plaintext (ADR-0020); authorization stays token + Grant.
 				serviceOrigin: `http://${workloadResourceNameV1(value.agentId)}-probe.${policy.namespace}.svc:${value.service.port}`,
 				...(pod.metadata?.uid ? { podUid: pod.metadata.uid } : {}),
+				...(pod.metadata?.resourceVersion
+					? { podResourceVersion: pod.metadata.resourceVersion }
+					: {}),
 			}))
 				? "healthy"
 				: "unhealthy";

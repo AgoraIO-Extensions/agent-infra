@@ -4935,6 +4935,11 @@ it("reuses signed readiness only inside each ready reconciliation promotion", as
 	const f = fixture({ probeRuntime, fetch: health });
 	await f.tick(8);
 	expect(f.state?.phase).toBe("ready");
+	const pod = [...f.resources.values()].find(
+		(resource) => resource.kind === "Pod",
+	);
+	if (!pod?.metadata) throw new Error("Fixture Pod is missing");
+	pod.metadata.resourceVersion = "ready-pod-version";
 	probeRuntime.mockClear();
 	health.mockClear();
 
@@ -4957,10 +4962,15 @@ describe("promotion readiness reuse (#3714)", () => {
 		const state = f.state;
 		if (state?.phase !== "ready" || !state.identity)
 			throw new Error("Fixture did not reach ready");
+		const pod = f.resources.get(
+			`Pod/${workloadResourceNameV1(state.agentId)}-0`,
+		) as V1Pod;
+		if (!pod?.metadata) throw new Error("Fixture Pod is missing");
+		pod.metadata.resourceVersion = "ready-pod-version";
 		const runtime = createWorkloadRuntimeV1(f.options);
 		probeRuntime.mockClear();
 		health.mockClear();
-		return { f, state, runtime, probeRuntime, health };
+		return { f, state, runtime, probeRuntime, health, pod };
 	}
 
 	it("probes once in every standalone promotion on the same runtime", async () => {
@@ -5009,6 +5019,79 @@ describe("promotion readiness reuse (#3714)", () => {
 		expect(probeRuntime).toHaveBeenCalledTimes(2);
 		expect(health).toHaveBeenCalledTimes(2);
 		await expectClosed(f);
+	});
+
+	it("rejects a restarted container in the same Pod when fresh readiness fails", async () => {
+		const { f, state, runtime, probeRuntime, health, pod } = await ready();
+		const originalUid = pod.metadata?.uid;
+		probeRuntime
+			.mockImplementationOnce(async () => {
+				if (!pod.metadata || !pod.status)
+					throw new Error("Fixture Pod is missing");
+				pod.metadata.resourceVersion = "restarted-pod-version";
+				pod.status.containerStatuses = [
+					{
+						name: "agent",
+						image: pod.spec?.containers[0]?.image ?? "",
+						imageID: "runtime-image",
+						containerID: "containerd://replacement-container",
+						ready: true,
+						restartCount: 1,
+					},
+				];
+				return { core: "passed", capabilities: {} };
+			})
+			.mockResolvedValueOnce({ core: "failed", capabilities: {} });
+		await expect(runtime.promote(state)).rejects.toThrow();
+		expect(pod.metadata?.uid).toBe(originalUid);
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+		expect(health).toHaveBeenCalledTimes(2);
+		await expectClosed(f);
+	});
+
+	it.each([undefined, ""])(
+		"probes every time when Pod resourceVersion is %j",
+		async (resourceVersion) => {
+			const { state, runtime, probeRuntime, health, pod } = await ready();
+			if (!pod.metadata) throw new Error("Fixture Pod is missing");
+			pod.metadata.resourceVersion = resourceVersion;
+			await expect(runtime.promote(state)).resolves.toBeUndefined();
+			expect(probeRuntime).toHaveBeenCalledTimes(2);
+			expect(health).toHaveBeenCalledTimes(2);
+		},
+	);
+
+	it("reprobes a changed Pod resourceVersion even without a container restart", async () => {
+		const { state, runtime, probeRuntime, pod } = await ready();
+		probeRuntime.mockImplementationOnce(async () => {
+			if (!pod.metadata) throw new Error("Fixture Pod is missing");
+			pod.metadata.resourceVersion = "updated-pod-version";
+			return { core: "passed", capabilities: {} };
+		});
+		await expect(runtime.promote(state)).resolves.toBeUndefined();
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+	});
+
+	it("reprobes when the second observation takes more than five seconds", async () => {
+		const { f, state, runtime, probeRuntime, health } = await ready();
+		let now = 0;
+		const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+		health
+			.mockResolvedValueOnce(new Response("ok"))
+			.mockImplementationOnce(async () => {
+				now = 5_001;
+				return new Response("ok");
+			});
+		probeRuntime
+			.mockResolvedValueOnce({ core: "passed", capabilities: {} })
+			.mockResolvedValueOnce({ core: "failed", capabilities: {} });
+		try {
+			await expect(runtime.promote(state)).rejects.toThrow();
+			expect(probeRuntime).toHaveBeenCalledTimes(2);
+			await expectClosed(f);
+		} finally {
+			clock.mockRestore();
+		}
 	});
 
 	it("rejects failed HTTP health after a signed pass and probes on retry", async () => {
