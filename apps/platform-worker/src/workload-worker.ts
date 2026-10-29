@@ -190,7 +190,10 @@ export function createPlatformWorkloadWorkerV1(
 					const result = await selectedStore.runNext(
 						workerId,
 						async (input) => {
-							const next = await step(input);
+							const next = await runtime.runReconciliationStep(
+								input.state,
+								() => step(input),
+							);
 							const code = workloadFailureCode(next);
 							event = {
 								stage: "workload",

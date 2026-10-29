@@ -392,7 +392,7 @@ function fixture(
 	let state: WorkloadReconciliationStateV1 | null = null;
 	let management: WorkloadReconciliationInputV1["management"] = {
 		schemaVersion: 1,
-		agentId: "agent-a",
+		agentId: configuration.agentId,
 		applicationId: "application-a",
 		applicantId: "owner-a",
 		ownerIds: ["owner-a"],
@@ -4973,6 +4973,40 @@ describe("promotion readiness reuse (#3714)", () => {
 		return { f, state, runtime, probeRuntime, health, pod };
 	}
 
+	it.each(["promoting", "ready", "rejected"] as const)(
+		"reuses the full observation only within a real %s reconciliation step (#3735)",
+		async (phase) => {
+			const { f, state, runtime, probeRuntime, health } = await ready();
+			const inputState = { ...state, phase };
+
+			let next: WorkloadReconciliationStateV1 | undefined;
+			const core = createWorkloadReconciliationV1({
+				runtime,
+				store: {
+					async runNext(_workerId, step) {
+						const run = () =>
+							step({
+								state: inputState,
+								configuration: inputState.candidate.configuration,
+								management: f.management,
+								requestId: "step-proof-request",
+								traceId: "step-proof-trace",
+							});
+						next = await runtime.runReconciliationStep(inputState, run);
+						return "advanced";
+					},
+				},
+			});
+			// Intentionally keep both the Runtime and the exact input state across ticks.
+			for (let tick = 1; tick <= 2; tick++) {
+				await expect(core.tick("worker-a")).resolves.toBe("advanced");
+				expect(next?.phase).toBe(phase === "promoting" ? "ready" : phase);
+				expect(probeRuntime).toHaveBeenCalledTimes(tick);
+				expect(health).toHaveBeenCalledTimes(tick * 3);
+			}
+		},
+	);
+
 	it("probes once in every standalone promotion on the same runtime", async () => {
 		const { state, runtime, probeRuntime, health } = await ready();
 		await expect(runtime.promote(state)).resolves.toBeUndefined();
@@ -4981,6 +5015,264 @@ describe("promotion readiness reuse (#3714)", () => {
 		await expect(runtime.promote(state)).resolves.toBeUndefined();
 		expect(probeRuntime).toHaveBeenCalledTimes(2);
 		expect(health).toHaveBeenCalledTimes(4);
+	});
+
+	it("consumes the step proof once and never carries it into another scope", async () => {
+		const { state, runtime, probeRuntime, health } = await ready();
+		await runtime.runReconciliationStep(state, async () => {
+			await runtime.observe(state);
+			await runtime.promote(state);
+			expect(probeRuntime).toHaveBeenCalledTimes(1);
+			await runtime.promote(state);
+			expect(probeRuntime).toHaveBeenCalledTimes(2);
+		});
+		await runtime.runReconciliationStep(state, () => runtime.promote(state));
+		expect(probeRuntime).toHaveBeenCalledTimes(3);
+		expect(health).toHaveBeenCalledTimes(7);
+	});
+
+	it.each(["return", "throw"] as const)(
+		"invalidates inherited async work after the step callback %s",
+		async (ending) => {
+			const { state, runtime, probeRuntime } = await ready();
+			const resume = Promise.withResolvers<void>();
+			let child: Promise<void> | undefined;
+			const scoped = runtime.runReconciliationStep(state, async () => {
+				await runtime.observe(state);
+				child = resume.promise.then(() => runtime.promote(state));
+				if (ending === "throw") throw new Error("step failed");
+			});
+			if (ending === "throw")
+				await expect(scoped).rejects.toThrow("step failed");
+			else await scoped;
+			resume.resolve();
+			await child;
+			expect(probeRuntime).toHaveBeenCalledTimes(2);
+		},
+	);
+
+	it("does not publish a late observation after its step has returned", async () => {
+		const { state: readyState, runtime, probeRuntime } = await ready();
+		const state = { ...readyState, phase: "promoting" as const };
+		await runtime.closeRoute(state);
+		const entered = Promise.withResolvers<void>();
+		const response =
+			Promise.withResolvers<Awaited<ReturnType<typeof probeRuntime>>>();
+		probeRuntime.mockImplementationOnce(() => {
+			entered.resolve();
+			return response.promise;
+		});
+		let observation: ReturnType<typeof runtime.observe> | undefined;
+		await runtime.runReconciliationStep(state, async () => {
+			observation = runtime.observe(state);
+			await entered.promise;
+		});
+		response.resolve({ core: "passed", capabilities: {} });
+		await expect(observation).resolves.toBe("healthy");
+		await expect(runtime.capabilities(state)).rejects.toThrow();
+		await runtime.runReconciliationStep(state, () => runtime.promote(state));
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+	});
+
+	it("poisons overlapping observations so late success cannot replace a later failure", async () => {
+		const { state: readyState, runtime, probeRuntime } = await ready();
+		const state = { ...readyState, phase: "promoting" as const };
+		await runtime.closeRoute(state);
+		const entered = Promise.withResolvers<void>();
+		const response =
+			Promise.withResolvers<Awaited<ReturnType<typeof probeRuntime>>>();
+		probeRuntime
+			.mockImplementationOnce(() => {
+				entered.resolve();
+				return response.promise;
+			})
+			.mockResolvedValueOnce({ core: "failed", capabilities: {} });
+		await runtime.runReconciliationStep(state, async () => {
+			const late = runtime.observe(state);
+			await entered.promise;
+			await expect(runtime.observe(state)).resolves.toBe("unhealthy");
+			response.resolve({ core: "passed", capabilities: {} });
+			await expect(late).resolves.toBe("healthy");
+			await expect(runtime.capabilities(state)).rejects.toThrow();
+			await runtime.promote(state);
+		});
+		expect(probeRuntime).toHaveBeenCalledTimes(3);
+	});
+
+	it.each([
+		"resource-version",
+		"pod-uid",
+		"missing-version",
+		"expired",
+		"clock-backward",
+		"binding",
+	] as const)("refreshes a step proof after %s changes", async (change) => {
+		const { state, runtime, probeRuntime, health, pod } = await ready();
+		let now = 100;
+		const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+		try {
+			await runtime.runReconciliationStep(state, async () => {
+				await runtime.observe(state);
+				if (!pod.metadata) throw new Error("Fixture Pod is missing");
+				if (change === "resource-version")
+					pod.metadata.resourceVersion = "new-version";
+				if (change === "pod-uid") pod.metadata.uid = "new-pod";
+				if (change === "missing-version") delete pod.metadata.resourceVersion;
+				if (change === "expired") now += 5_001;
+				if (change === "clock-backward") now--;
+				// A non-deployment binding change still invalidates the complete snapshot.
+				if (change === "binding") Object.assign(state, { attempts: 1 });
+				await runtime.promote(state);
+			});
+			expect(probeRuntime).toHaveBeenCalledTimes(
+				change === "missing-version" ? 3 : 2,
+			);
+			expect(health).toHaveBeenCalledTimes(3);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	it("does not extend the signed timestamp after a reused observation", async () => {
+		const { state, runtime, probeRuntime, health } = await ready();
+		let now = 0;
+		const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+		try {
+			await runtime.runReconciliationStep(state, async () => {
+				await runtime.observe(state);
+				health
+					.mockImplementationOnce(async () => {
+						now = 4_999;
+						return new Response("ok");
+					})
+					.mockImplementationOnce(async () => {
+						now = 5_001;
+						return new Response("ok");
+					});
+				await runtime.promote(state);
+			});
+			expect(probeRuntime).toHaveBeenCalledTimes(2);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	it("rechecks the consumed proof binding after promotion awaits", async () => {
+		const { state, runtime, probeRuntime, health } = await ready();
+		await runtime.runReconciliationStep(state, async () => {
+			await runtime.observe(state);
+			health.mockImplementationOnce(async () => {
+				Object.assign(state, { attempts: 1 });
+				return new Response("ok");
+			});
+			await runtime.promote(state);
+		});
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not create step proofs from drain observations or another Runtime", async () => {
+		const { f, state, runtime, probeRuntime } = await ready();
+		await runtime.runReconciliationStep(state, async () => {
+			await runtime.observeForDrain(state);
+			await runtime.promote(state);
+		});
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+		const otherRuntime = createWorkloadRuntimeV1(f.options);
+		await runtime.runReconciliationStep(state, async () => {
+			await runtime.observe(state);
+			await otherRuntime.promote(state);
+		});
+		expect(probeRuntime).toHaveBeenCalledTimes(4);
+	});
+
+	it("isolates interleaved Agent steps on the same long-lived Runtime", async () => {
+		const { f, state, runtime, probeRuntime, health } = await ready();
+		const other = fixture(
+			{},
+			{ configuration: configurationFixture({ agentId: "agent-b" }) },
+		);
+		await other.tick(8);
+		if (other.state?.phase !== "ready")
+			throw new Error("Other Agent is not ready");
+		for (const resource of other.resources.values()) {
+			if (resource.kind === "Pod" && resource.metadata)
+				resource.metadata.resourceVersion = "other-pod-version";
+			f.seed(resource);
+		}
+		const entered = Promise.withResolvers<void>();
+		const response =
+			Promise.withResolvers<Awaited<ReturnType<typeof probeRuntime>>>();
+		probeRuntime.mockImplementationOnce(() => {
+			entered.resolve();
+			return response.promise;
+		});
+		const first = runtime.runReconciliationStep(state, async () => {
+			await runtime.observe(state);
+			await runtime.promote(state);
+		});
+		await entered.promise;
+		const otherState = other.state;
+		await runtime.runReconciliationStep(otherState, async () => {
+			await runtime.observe(otherState);
+			await runtime.promote(otherState);
+		});
+		response.resolve({ core: "passed", capabilities: {} });
+		await first;
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+		expect(health).toHaveBeenCalledTimes(6);
+	});
+
+	it("invalidates a consumed proof if its step ends while promotion is awaiting health", async () => {
+		const { state, runtime, probeRuntime, health } = await ready();
+		const entered = Promise.withResolvers<void>();
+		const response = Promise.withResolvers<Response>();
+		let promoting: Promise<void> | undefined;
+		await runtime.runReconciliationStep(state, async () => {
+			await runtime.observe(state);
+			health.mockImplementationOnce(() => {
+				entered.resolve();
+				return response.promise;
+			});
+			promoting = runtime.promote(state);
+			await entered.promise;
+		});
+		response.resolve(new Response("ok"));
+		await promoting;
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+	});
+
+	it("clears a prior observation on failure and consumes a failed promotion's proof", async () => {
+		const { state, runtime, probeRuntime, health } = await ready();
+		await runtime.runReconciliationStep(state, async () => {
+			await runtime.observe(state);
+			health.mockResolvedValueOnce(new Response("bad", { status: 400 }));
+			await expect(runtime.observe(state)).resolves.toBe("unhealthy");
+			await runtime.promote(state);
+		});
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+		await runtime.runReconciliationStep(state, async () => {
+			await runtime.observe(state);
+			health.mockResolvedValueOnce(new Response("bad", { status: 400 }));
+			await expect(runtime.promote(state)).rejects.toThrow();
+			await runtime.promote({ ...state, phase: "promoting" });
+		});
+		expect(probeRuntime).toHaveBeenCalledTimes(4);
+	});
+
+	it("does not reuse an observing phase or a different state object", async () => {
+		const { state, runtime, probeRuntime } = await ready();
+		await runtime.runReconciliationStep(state, async () => {
+			await runtime.observe(state);
+			await runtime.promote(structuredClone(state));
+		});
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+		const observing = { ...state, phase: "observing" as const };
+		await runtime.closeRoute(observing);
+		await runtime.runReconciliationStep(observing, async () => {
+			await runtime.observe(observing);
+			await runtime.promote(observing);
+		});
+		expect(probeRuntime).toHaveBeenCalledTimes(4);
 	});
 
 	it("keeps monitor observations fresh on a long-lived runtime", async () => {

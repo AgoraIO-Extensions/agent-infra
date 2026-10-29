@@ -1,4 +1,8 @@
 import type { OperationalEvent } from "@agent-infra/observability";
+import type {
+	WorkloadReconciliationInputV1,
+	WorkloadReconciliationStorePortV1,
+} from "@agent-infra/platform-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	fakeKubernetesApi,
@@ -8,11 +12,11 @@ import {
 
 const store = vi.hoisted(() => ({
 	opened: vi.fn(),
-	runNext: vi.fn<() => Promise<"idle" | "advanced">>(),
+	runNext: vi.fn<WorkloadReconciliationStorePortV1["runNext"]>(),
 	close: vi.fn<() => Promise<void>>(),
 }));
 const monitorStore = vi.hoisted(() => ({
-	runNext: vi.fn<() => Promise<"idle" | "advanced">>(),
+	runNext: vi.fn<WorkloadReconciliationStorePortV1["runNext"]>(),
 	close: vi.fn<() => Promise<void>>(),
 }));
 const fileCleanup = vi.hoisted(() => ({
@@ -219,6 +223,75 @@ describe("Workload Worker lifecycle", () => {
 		expect(monitorStore.close).toHaveBeenCalledOnce();
 		await expect(worker.tick()).rejects.toThrow("Platform Worker is stopped");
 	});
+	it.each(["lifecycle", "monitor"] as const)(
+		"wraps the actual %s Store callback and Core step in a fresh Runtime scope",
+		async (lane) => {
+			const configuration: WorkloadReconciliationInputV1["configuration"] = {
+				schemaVersion: 2,
+				agentId: "agent-a",
+				revision: 1,
+				source: {
+					kind: "custom",
+					imageDigest: `sha256:${"a".repeat(64)}`,
+					admissionRevision: "admission-a",
+					interactionMode: "platform-adapter",
+					connectionEnabled: false,
+				},
+				modelConfiguration: null,
+				environment: [],
+				secrets: [],
+				channels: [],
+				channelRevision: "channels-a",
+			};
+			const input: WorkloadReconciliationInputV1 = {
+				state: null,
+				configuration,
+				management: {
+					schemaVersion: 1,
+					agentId: configuration.agentId,
+					applicationId: "application-a",
+					applicantId: "owner-a",
+					ownerIds: ["owner-a"],
+					availability: [],
+					decisionReason: null,
+					revision: 1,
+					workloadRevision: 1,
+					fence: 1,
+					status: "creating",
+					desiredState: "running",
+					serviceAvailability: "updating",
+					approvalRevision: 1,
+					failureCode: null,
+				},
+				requestId: "request-a",
+				traceId: "trace-a",
+			};
+			const selected = lane === "lifecycle" ? store : monitorStore;
+			selected.runNext.mockImplementation(async (_workerId, step) => {
+				const state = await step(input);
+				expect(state.phase).toBe("preflight");
+				return "advanced";
+			});
+			const worker = createPlatformWorkloadWorkerV1(fixture());
+			const runtime = vi
+				.mocked(createWorkloadRuntimeV1)
+				.mock.results.at(-1)?.value;
+			if (!runtime) throw new Error("Runtime was not created");
+			const scoped = vi.spyOn(runtime, "runReconciliationStep");
+			try {
+				await worker.tick();
+				await worker.tick();
+				expect(scoped).toHaveBeenCalledTimes(2);
+				for (const [state, callback] of scoped.mock.calls) {
+					expect(state).toBe(input.state);
+					expect(callback).toBeTypeOf("function");
+				}
+				expect(scoped.mock.calls[0]?.[1]).not.toBe(scoped.mock.calls[1]?.[1]);
+			} finally {
+				await worker.stop();
+			}
+		},
+	);
 	it.each(["none", "callback", "logger"])(
 		"forwards diagnostics independently of %s failure",
 		async (failure) => {
