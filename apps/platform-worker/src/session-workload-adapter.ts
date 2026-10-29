@@ -1702,11 +1702,10 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 							(entry) => entry.name === "agent",
 						);
 						const podWaitingReason = container?.state?.waiting?.reason;
-						if (
+						const normalWaitingReason =
 							podWaitingReason === "ContainerCreating" ||
-							podWaitingReason === "PodInitializing"
-						)
-							waitingReason = podWaitingReason;
+							podWaitingReason === "PodInitializing";
+						if (normalWaitingReason) waitingReason = podWaitingReason;
 						const terminatedReason = container?.lastState?.terminated?.reason;
 						if (
 							podWaitingReason === "ErrImagePull" ||
@@ -1717,7 +1716,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						else if (podWaitingReason === "CreateContainerConfigError")
 							failureCode = "runtime.configuration";
 						else if (
-							podWaitingReason ||
+							(podWaitingReason && !normalWaitingReason) ||
 							terminatedReason ||
 							pod.status?.phase === "Failed"
 						)
