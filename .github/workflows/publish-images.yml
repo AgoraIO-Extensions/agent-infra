@@ -122,7 +122,7 @@ jobs:
           node deploy/release/publish-image-indexes.mjs "$IMAGE_TAG" \
             agent-runtime-host,agent-runtime-codex,agent-runtime-claude,agent-runtime-opencode,agent-runtime-pi,custom-agent-base \
             "$RUNNER_TEMP/receipts"/*/templates.json \
-			"$RUNNER_TEMP/receipts"/*/runtime-host.json \
+            "$RUNNER_TEMP/receipts"/*/runtime-host.json \
             "$RUNNER_TEMP/receipts"/*/custom-agent-base.json
 
   platform:
