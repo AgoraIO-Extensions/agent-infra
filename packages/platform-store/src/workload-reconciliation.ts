@@ -451,6 +451,27 @@ const workloadStepLockNamespace = "agent-infra:workload-reconciliation:";
 const workloadWriteBackLockTimeout = "5s";
 /** Bound how many in-flight Agents one poll skips before reporting idle. */
 const maximumBusyWorkloadSelections = 8;
+/** Give due monitors a turn even while lifecycle work remains due. */
+const maximumLifecycleSelections = 4;
+
+function workloadMadeProgress(
+	previous: WorkloadReconciliationStateV1 | null,
+	next: WorkloadReconciliationStateV1,
+): boolean {
+	// Attempt counts and refreshed observations alone must not create a hot loop.
+	return (
+		next.attempts === 0 &&
+		(previous === null ||
+			next.phase !== previous.phase ||
+			next.revision !== previous.revision ||
+			next.fence !== previous.fence ||
+			next.sourceConfigurationRevision !==
+				previous.sourceConfigurationRevision ||
+			next.sourceLifecycleRevision !== previous.sourceLifecycleRevision ||
+			!isDeepStrictEqual(next.identity, previous.identity) ||
+			!isDeepStrictEqual(next.candidate, previous.candidate))
+	);
+}
 
 function applicationSubmissionPayloadMatches(
 	payload: Record<string, unknown>,
@@ -554,7 +575,9 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 	)
 		throw new TypeError("Invalid Workload poll interval");
 	// Fairness is local to this live poller; restart begins a new rotation.
-	let lastSelectedAgentId: string | null = null;
+	let lastLifecycleAgentId: string | null = null;
+	let lastMonitorAgentId: string | null = null;
+	let lifecycleSelections = 0;
 
 	/**
 	 * Short Agent-locked read: select a due Agent, take its step lock, read the
@@ -575,31 +598,54 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 			// Secret activation. SKIP LOCKED lets other Workers progress.
 			// Workload 只消费 Runtime 输入：调谐读取当前配置修订行指向的 Runtime 修订，
 			// 只改渠道等非 Runtime 输入的配置修订不产生新的调谐意图（ADR-0028）。
-			const [agent] = await sql<{ id: string; runtime_revision: string }[]>`
+			const [agent] = await sql<
+				{ id: string; runtime_revision: string; active: boolean }[]
+			>`
 				select a.id, coalesce((select cr.runtime_revision from platform.agent_configuration_revisions cr
 					where cr.agent_id = a.id and cr.revision = a.current_configuration_revision
-				), a.current_configuration_revision)::text as runtime_revision from platform.agents a
+				), a.current_configuration_revision)::text as runtime_revision, schedule.active from platform.agents a
 				join platform.agent_applications ap on ap.agent_id = a.id
 				left join platform.workload_reconciliations w on w.agent_id = a.id
+				cross join lateral (
+					select exists (select 1 from platform.outbox_items o where o.scope_type = 'agent'
+						and o.scope_id = a.id
+						and o.operation in ('agent.application.submitted.v1', 'agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
+						and ((o.status in ('pending', 'retry_scheduled') and o.available_at <= clock_timestamp())
+							or (o.status = 'processing' and o.lease_expires_at <= clock_timestamp()))) as has_intent
+				) wakeup
+				cross join lateral (
+					select w.agent_id is null or wakeup.has_intent
+						or coalesce(w.state->>'phase', '') not in ('ready', 'rejected', 'stopped', 'failed') as active
+				) schedule
 				where (ap.approval_revision is not null or ap.creation_channel = 'api')
 				and a.id <> all(${sql.array(excluded as string[])}::text[])
 				and (
 					(w.agent_id is null and ap.status <> 'creation_failed')
 					or w.next_attempt_at <= clock_timestamp()
-					or exists (select 1 from platform.outbox_items o where o.scope_type = 'agent'
-						and o.scope_id = a.id
-						and o.operation in ('agent.application.submitted.v1', 'agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
-						and ((o.status in ('pending', 'retry_scheduled') and o.available_at <= clock_timestamp())
-							or (o.status = 'processing' and o.lease_expires_at <= clock_timestamp())))
+					or wakeup.has_intent
 				) order by
-					case when ${lastSelectedAgentId}::text is null or a.id > ${lastSelectedAgentId} then 0 else 1 end,
+					case when schedule.active = ${lifecycleSelections < maximumLifecycleSelections} then 0 else 1 end,
+					case when schedule.active then
+						case when ${lastLifecycleAgentId}::text is null or a.id > ${lastLifecycleAgentId} then 0 else 1 end
+					else
+						case when ${lastMonitorAgentId}::text is null or a.id > ${lastMonitorAgentId} then 0 else 1 end
+					end,
 					a.id
 				limit 1 for update of a skip locked
 			`;
 			if (!agent) return null;
 			// Selection advances even when decoding or persistence rolls back,
 			// so a malformed Agent cannot starve the rest of this poller.
-			lastSelectedAgentId = agent.id;
+			if (agent.active) {
+				lastLifecycleAgentId = agent.id;
+				lifecycleSelections = Math.min(
+					lifecycleSelections + 1,
+					maximumLifecycleSelections,
+				);
+			} else {
+				lastMonitorAgentId = agent.id;
+				lifecycleSelections = 0;
+			}
 			if (inFlight.has(agent.id)) return { busy: agent.id };
 			const key = `${workloadStepLockNamespace}${agent.id}`;
 			const [lock] = await lockClient<
@@ -1008,7 +1054,9 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						next.phase,
 					)
 						? monitorDelayMs
-						: workloadRetryDelayMsV1(next, retryDelayMs);
+						: workloadMadeProgress(state, next)
+							? 0
+							: workloadRetryDelayMsV1(next, retryDelayMs);
 					await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${agentId}, ${next.revision}, ${sql.json(next as unknown as postgres.JSONValue)}, clock_timestamp() + ${delay} * interval '1 millisecond') on conflict (agent_id) do update set revision = excluded.revision, state = excluded.state, next_attempt_at = excluded.next_attempt_at, updated_at = clock_timestamp()`;
 					// Idle Session Sandboxes follow a ready verified deployment in
 					// this same transaction; periodic monitor write-backs retry the
