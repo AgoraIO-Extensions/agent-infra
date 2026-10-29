@@ -19,7 +19,7 @@
 3. 刷新 `origin/main`，建立独立 worktree 和分支；冻结本 lane 的 Issue、文件和部署资源所有权。不得覆盖其他 lane 的脏工作树或分支。
 4. 实现最小直接改动，优先补边界和负向测试；把受控 fixture、focused test、Hosted CI、真实部署/浏览器/外部账号证据分开记录。
 5. 提交 Conventional Commit，创建 PR 时带 Issue 链接、变更边界、验证命令、剩余 blocker 和回滚风险；PR 创建后交给 CI watcher，合并确认后交给 merged-PR cleanup。
-6. 完整开发工作完成即可关闭 development Issue；创建 PR 或部分 slice 不足以证明完整开发范围完成。真实验收 AC 保留原状态，后续由负责人统一跟进。父 Issue 只有在全部开发子项完成且无自身独立开发缺口时关闭。
+6. 完整开发工作完成即可关闭 development Issue；创建 PR 或部分 slice 不足以证明完整开发范围完成。真实验收 AC 保留原状态，在关闭说明中链接继续持有验收的 owner 与后续票；不得把开发关闭写成验收通过。父 Issue 只有在全部开发子项完成且无自身独立开发缺口时关闭。
 
 ## 并行分派入口
 
