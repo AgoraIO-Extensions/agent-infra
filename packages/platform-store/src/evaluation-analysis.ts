@@ -210,6 +210,9 @@ export class PostgresEvaluationAnalysisV1 {
 				>`select clock_timestamp() as now`;
 				if (!fresh) throw new EvaluationDataErrorV1("unavailable");
 				if (
+					Date.parse(analysisPolicy.validUntil) <= +fresh.now ||
+					Date.parse(experiment.metadataExpiresAt) <= +fresh.now ||
+					Date.parse(final.version.metadataExpiresAt) <= +fresh.now ||
 					Date.parse(final.policy.validUntil) <= +fresh.now ||
 					Date.parse(final.grant.expiresAt) <= +fresh.now ||
 					(content.source !== false &&
