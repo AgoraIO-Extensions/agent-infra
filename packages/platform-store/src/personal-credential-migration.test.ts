@@ -438,9 +438,14 @@ describe("personal credential disable authority append", () => {
 					}),
 				]),
 			);
-		expect(withoutTypedPrincipal(after.data)).toEqual(
-			withoutTypedPrincipal(before.data),
-		);
+		const expectedData = withoutTypedPrincipal(before.data);
+		// #3640：逐字段保留旧记录，只增加未观测的终态时间 NULL。
+		expectedData.conversation_executions =
+			expectedData.conversation_executions.map((row) => ({
+				...(row as Record<string, unknown>),
+				terminal_observed_at: null,
+			}));
+		expect(withoutTypedPrincipal(after.data)).toEqual(expectedData);
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		const repeated = await snapshot();
 		expect(repeated).toEqual(after);
