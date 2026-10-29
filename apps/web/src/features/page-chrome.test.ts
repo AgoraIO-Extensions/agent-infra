@@ -25,6 +25,22 @@ function samplePath(file: string): string {
 }
 
 describe("page chrome route table", () => {
+	it("exposes evaluation once in the employee workspace without exposing admin routes", () => {
+		const groups = navigationGroups.filter((g) => g.items.includes("eval"));
+		expect(groups).toHaveLength(1);
+		expect(groups[0]).toMatchObject({
+			label: "工作区",
+			administratorOnly: false,
+		});
+		expect(resolvePageChrome({ pathname: "/eval" })).toMatchObject({
+			crumbParent: "工作区",
+			title: "评测",
+		});
+		expect(
+			navigationGroups.find((g) => g.items.includes("admin-agents"))
+				?.administratorOnly,
+		).toBe(true);
+	});
 	it("finds the file routes it is checking", () => {
 		expect(routeFiles.length).toBeGreaterThan(15);
 		expect(routeFiles.map(samplePath)).toContain("/chat/sample-id/sample-id");

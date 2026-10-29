@@ -69,6 +69,7 @@ import {
 	executionResultFiles,
 	sandboxReferenceIndex,
 } from "./sandbox-references.js";
+import { TaskFeedback } from "./task-feedback.js";
 
 /** 一条时间线中缓存的内联图片读取结果上限（每项不超过预览上限）。 */
 const maxCachedInlineImages = 32;
@@ -127,8 +128,12 @@ export function ConversationMessages({
 	executionNotice,
 	withdraw,
 	modelOptions = [],
+	feedbackIdentity,
+	feedbackDisabled,
 	trailing,
 }: {
+	feedbackIdentity?: string;
+	feedbackDisabled?: boolean;
 	agentName: string;
 	/** 当前会话用户的显示名：个人对话只对本人可见，用户消息的发送者就是当前用户（CH-08）。 */
 	userName: string;
@@ -323,6 +328,19 @@ export function ConversationMessages({
 			regenerate={regenerate}
 			regeneratePending={regeneratePending}
 			onExecution={onExecution}
+			feedback={
+				feedbackIdentity &&
+				executionId &&
+				status &&
+				["completed", "failed", "cancelled"].includes(status) ? (
+					<TaskFeedback
+						key={`${feedbackIdentity}:${executionId}`}
+						executionId={executionId}
+						objectName={objectName}
+						disabled={feedbackDisabled}
+					/>
+				) : undefined
+			}
 			stop={
 				stop && executionId && stop.executionId === executionId
 					? stop
@@ -525,25 +543,37 @@ export function ConversationMessages({
 						{message.text}
 					</p>
 					{queued ? (
-						<QueuedMessageStatus
-							state={queued}
-							objectName={objectName}
-							withdraw={
-								withdraw && queued.status === "waiting" && message.executionId
-									? {
-											messageId: message.messageId,
-											pending:
-												withdraw.pendingExecutionId === message.executionId,
-											disabled: withdraw.disabled,
-											onWithdraw: () => {
-												withdrawFocus.current = message.messageId;
-												withdraw.onWithdraw(message.executionId as string);
-											},
-										}
-									: undefined
-							}
-							onResend={() => onResend(message.text)}
-						/>
+						<>
+							<QueuedMessageStatus
+								state={queued}
+								objectName={objectName}
+								withdraw={
+									withdraw && queued.status === "waiting" && message.executionId
+										? {
+												messageId: message.messageId,
+												pending:
+													withdraw.pendingExecutionId === message.executionId,
+												disabled: withdraw.disabled,
+												onWithdraw: () => {
+													withdrawFocus.current = message.messageId;
+													withdraw.onWithdraw(message.executionId as string);
+												},
+											}
+										: undefined
+								}
+								onResend={() => onResend(message.text)}
+							/>
+							{feedbackIdentity &&
+								message.executionId &&
+								queued.status !== "waiting" && (
+									<TaskFeedback
+										key={`${feedbackIdentity}:${message.executionId}`}
+										executionId={message.executionId}
+										objectName={objectName}
+										disabled={feedbackDisabled}
+									/>
+								)}
+						</>
 					) : (
 						/* 时间线里的历史记录：与回复卡的失败状态行一样不设 live role（B-10）。 */
 						message.status === "failed" && (
@@ -735,6 +765,7 @@ function AssistantReply({
 	versions,
 	thinking,
 	files,
+	feedback,
 }: {
 	articleRef: (node: HTMLElement | null) => void;
 	agentName: string;
@@ -767,6 +798,7 @@ function AssistantReply({
 		onOpenChange: (open: boolean) => void;
 	};
 	files?: ReplyResultFiles;
+	feedback?: ReactNode;
 }) {
 	const pending =
 		status === "waiting" || status === "submitted" || status === "processing";
@@ -962,6 +994,7 @@ function AssistantReply({
 					</Button>
 				</div>
 			)}
+			{feedback}
 			{versions}
 		</MessageFrame>
 	);

@@ -5,9 +5,11 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import {
 	confirmEvaluationContentV1,
@@ -20,10 +22,31 @@ import {
 	revokeEvaluationPurposeV1,
 	uploadEvaluationContentV1,
 } from "../../pilot/generated-v2/sdk.gen.js";
+import { DirectoryPicker } from "../directory-fields.js";
 
 type Page = ReturnType<typeof EvaluationDatasetPageV1Schema.parse>;
-export function EvaluationDatasets() {
+const purposeOptions = [
+	{ id: "import", label: "导入" },
+	{ id: "read", label: "读取内容" },
+	{ id: "run", label: "运行" },
+	{ id: "score", label: "评分" },
+	{ id: "review", label: "独立复核" },
+	{ id: "analyze", label: "分析" },
+	{ id: "manage_grants", label: "管理授权" },
+	{ id: "delete", label: "删除" },
+] as const;
+export function EvaluationDatasets({
+	selectedVersion,
+	onRun,
+	currentUserId,
+}: {
+	selectedVersion?: { datasetId: string; versionId: string } | null;
+	onRun?: (datasetId: string, versionId: string) => void;
+	currentUserId?: string;
+} = {}) {
 	const readGeneration = useRef(0);
+	const mounted = useRef(true);
+	const commandInFlight = useRef(false);
 	const intentKey = useRef(crypto.randomUUID());
 	const pendingIntent = useRef<
 		(() => Promise<{ error?: unknown; response?: Response }>) | null
@@ -38,12 +61,23 @@ export function EvaluationDatasets() {
 	const [expiresAt, setExpiresAt] = useState("");
 	const [application, setApplication] = useState(false);
 	const [versionId, setVersionId] = useState("");
-	const [operations, setOperations] = useState("import,read,delete");
+	const [selectedDatasetId, setSelectedDatasetId] = useState("");
+	const [operations, setOperations] = useState<
+		Array<(typeof purposeOptions)[number]["id"]>
+	>(["import", "read", "delete"]);
+	useEffect(() => {
+		if (selectedVersion) {
+			setSelectedDatasetId(selectedVersion.datasetId);
+			setVersionId(selectedVersion.versionId);
+		}
+	}, [selectedVersion]);
 	const [json, setJson] = useState("");
 	const [content, setContent] = useState("");
 	const reload = useCallback(async () => {
 		const generation = ++readGeneration.current;
 		setContent("");
+		setPage(null);
+		if (!commandInFlight.current) setBusy(false);
 		const r = await listEvaluationDatasetsV1({
 			responseStyle: "fields",
 			throwOnError: false,
@@ -59,14 +93,20 @@ export function EvaluationDatasets() {
 		setPage(data.data);
 	}, []);
 	useEffect(() => {
-		void reload().catch((e) => setMessage(e.message));
+		mounted.current = true;
+		void reload().catch((e) => {
+			if (mounted.current) setMessage(e.message);
+		});
 		return () => {
+			mounted.current = false;
 			readGeneration.current++;
 		};
 	}, [reload]);
 	async function command(
 		run: () => Promise<{ error?: unknown; response?: Response }>,
 	) {
+		if (commandInFlight.current || !mounted.current) return;
+		commandInFlight.current = true;
 		pendingIntent.current = run;
 		setBusy(true);
 		readGeneration.current++;
@@ -74,6 +114,7 @@ export function EvaluationDatasets() {
 		setContent("");
 		try {
 			const r = await run();
+			if (!mounted.current) return;
 			if (r.error) {
 				if (
 					!uncertain &&
@@ -95,12 +136,14 @@ export function EvaluationDatasets() {
 				setMessage("操作已完成，但列表刷新失败，请手动刷新。"),
 			);
 		} catch {
+			if (!mounted.current) return;
 			setUncertain(true);
 			setMessage(
 				"操作未确认；刷新不会解除待确认状态。可使用同一请求标识重放原操作，不会自动重试写入。",
 			);
 		} finally {
-			setBusy(false);
+			commandInFlight.current = false;
+			if (mounted.current) setBusy(false);
 		}
 	}
 	const headers = () => ({ "Idempotency-Key": intentKey.current });
@@ -167,7 +210,7 @@ export function EvaluationDatasets() {
 			{page?.items.map((dataset) => (
 				<section
 					key={dataset.datasetId}
-					className="space-y-3 rounded border p-4"
+					className="min-w-0 space-y-3 break-words rounded border p-4"
 					aria-label={dataset.name}
 				>
 					<h3>{dataset.name}</h3>
@@ -201,10 +244,43 @@ export function EvaluationDatasets() {
 							<Button
 								variant="outline"
 								disabled={busy || uncertain}
-								onClick={() => setVersionId(version.versionId)}
+								onClick={() => {
+									setSelectedDatasetId(dataset.datasetId);
+									setVersionId(version.versionId);
+								}}
 							>
 								选择此版本
 							</Button>
+							<Button
+								variant="outline"
+								disabled={busy || uncertain}
+								aria-label={`基于版本 ${version.versionId} 创建新版本`}
+								onClick={() =>
+									void command(() =>
+										reserveEvaluationVersionV1({
+											...options,
+											path: { datasetId: dataset.datasetId },
+											body: {
+												expectedRevision: dataset.revision,
+												sourceVersionId: version.versionId,
+											},
+											headers: headers(),
+										}),
+									)
+								}
+							>
+								基于此版本创建新版本
+							</Button>
+							{onRun && (
+								<Button
+									variant="outline"
+									disabled={busy || uncertain || version.status !== "available"}
+									aria-label={`运行版本 ${version.versionId}`}
+									onClick={() => onRun(dataset.datasetId, version.versionId)}
+								>
+									用此版本运行实验
+								</Button>
+							)}
 							<Button
 								variant="outline"
 								disabled={busy || uncertain || version.status !== "available"}
@@ -232,7 +308,9 @@ export function EvaluationDatasets() {
 											setContent("");
 											setMessage("内容不可用或用途授权已撤销。");
 										})
-										.finally(() => setBusy(false));
+										.finally(() => {
+											if (generation === readGeneration.current) setBusy(false);
+										});
 								}}
 							>
 								读取内容
@@ -286,9 +364,7 @@ export function EvaluationDatasets() {
 						className="space-y-2"
 						onSubmit={(e) => {
 							e.preventDefault();
-							const ops = operations.split(",").map((s) => s.trim()) as Array<
-								"import" | "read" | "delete"
-							>;
+
 							void command(() =>
 								grantEvaluationPurposeV1({
 									...options,
@@ -300,7 +376,7 @@ export function EvaluationDatasets() {
 											id: recipient,
 										},
 										versionIds: [versionId],
-										operations: ops,
+										operations: [...operations],
 										expiresAt,
 									},
 									headers: headers(),
@@ -309,34 +385,93 @@ export function EvaluationDatasets() {
 						}}
 					>
 						<Label htmlFor={`version-${dataset.datasetId}`}>
-							待授权版本 ID
+							待授权或导入版本
 						</Label>
-						<Input
+						<NativeSelect
 							id={`version-${dataset.datasetId}`}
-							value={versionId}
-							onChange={(e) => setVersionId(e.target.value)}
-						/>
-						<Label htmlFor={`recipient-${dataset.datasetId}`}>
-							接收主体稳定 ID
-						</Label>
-						<Input
-							id={`recipient-${dataset.datasetId}`}
-							value={recipient}
-							onChange={(e) => setRecipient(e.target.value)}
-						/>
+							value={selectedDatasetId === dataset.datasetId ? versionId : ""}
+							disabled={busy || uncertain}
+							onChange={(e) => {
+								setSelectedDatasetId(dataset.datasetId);
+								setVersionId(e.target.value);
+							}}
+						>
+							<option value="">选择此评测集版本</option>
+							{dataset.versions.map((v) => (
+								<option key={v.versionId} value={v.versionId}>
+									{v.versionId} · {v.status}
+								</option>
+							))}
+						</NativeSelect>
+						{application ? (
+							<>
+								<Label htmlFor={`recipient-${dataset.datasetId}`}>
+									已登记应用的稳定 ID
+								</Label>
+								<Input
+									id={`recipient-${dataset.datasetId}`}
+									value={recipient}
+									disabled={busy || uncertain}
+									onChange={(e) => setRecipient(e.target.value)}
+								/>
+							</>
+						) : (
+							<DirectoryPicker
+								id={`recipient-${dataset.datasetId}`}
+								label="授权接收用户"
+								help="从目录选择一名用户；授予用途不改变其 Agent 使用权。"
+								kind="user"
+								value={recipient}
+								disabled={busy || uncertain}
+								closeOnSelect
+								onChange={(_value, selection) =>
+									setRecipient(selection.at(-1)?.id ?? "")
+								}
+							/>
+						)}
+						{!application && currentUserId && (
+							<Button
+								variant="outline"
+								disabled={busy || uncertain}
+								onClick={() => setRecipient(currentUserId)}
+							>
+								选择当前用户
+							</Button>
+						)}
 						<Button
 							type="button"
 							variant="outline"
-							onClick={() => setApplication(!application)}
+							onClick={() => {
+								setApplication(!application);
+								setRecipient("");
+							}}
 						>
 							主体类型：{application ? "应用" : "用户"}
 						</Button>
-						<Label htmlFor={`ops-${dataset.datasetId}`}>操作（逗号分隔）</Label>
-						<Input
-							id={`ops-${dataset.datasetId}`}
-							value={operations}
-							onChange={(e) => setOperations(e.target.value)}
-						/>
+						<fieldset
+							className="grid gap-3 sm:grid-cols-2"
+							disabled={busy || uncertain}
+						>
+							<legend>明确授予的用途</legend>
+							{purposeOptions.map((p) => (
+								<Label
+									className="flex min-h-11 items-center gap-3"
+									key={p.id}
+									htmlFor={`eval-purpose-${dataset.datasetId}-${p.id}`}
+								>
+									<Checkbox
+										id={`eval-purpose-${dataset.datasetId}-${p.id}`}
+										checked={operations.includes(p.id)}
+										onCheckedChange={(checked) =>
+											setOperations((v) =>
+												checked ? [...v, p.id] : v.filter((id) => id !== p.id),
+											)
+										}
+									/>
+									{p.label}
+								</Label>
+							))}
+						</fieldset>
 						<Label htmlFor={`expiry-${dataset.datasetId}`}>
 							授权到期时间（UTC ISO）
 						</Label>
@@ -348,7 +483,13 @@ export function EvaluationDatasets() {
 						<Button
 							type="submit"
 							disabled={
-								busy || uncertain || !recipient || !versionId || !expiresAt
+								busy ||
+								uncertain ||
+								!recipient ||
+								!versionId ||
+								selectedDatasetId !== dataset.datasetId ||
+								!operations.length ||
+								!expiresAt
 							}
 						>
 							显式授予用途权限
@@ -356,7 +497,7 @@ export function EvaluationDatasets() {
 					</form>
 					{dataset.grants.map((g) => (
 						<div key={g.grantId}>
-							<span>
+							<span className="break-all">
 								{g.principal.kind}:{g.principal.id} · {g.operations.join(", ")}{" "}
 								· {g.revoked ? "已撤销" : "有效期至"} {g.expiresAt}
 							</span>
@@ -418,7 +559,13 @@ export function EvaluationDatasets() {
 						/>
 						<Button
 							type="submit"
-							disabled={busy || uncertain || !versionId || !json}
+							disabled={
+								busy ||
+								uncertain ||
+								!versionId ||
+								selectedDatasetId !== dataset.datasetId ||
+								!json
+							}
 						>
 							导入所选版本
 						</Button>
@@ -427,7 +574,7 @@ export function EvaluationDatasets() {
 			))}
 			{content && (
 				<section aria-label="已授权评测内容">
-					<pre className="whitespace-pre-wrap">{content}</pre>
+					<pre className="whitespace-pre-wrap break-words">{content}</pre>
 					<Button
 						onClick={() => {
 							readGeneration.current++;
