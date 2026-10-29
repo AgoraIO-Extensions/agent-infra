@@ -1010,10 +1010,9 @@ test("keeps browser records in a read-only dialog without squeezing the thread (
 	const close = dialog
 		.locator('[data-slot="dialog-footer"]')
 		.getByRole("button", { name: "关闭" });
-	for (let index = 0; index < 8; index += 1) {
-		if (await close.evaluate((node) => node === document.activeElement)) break;
-		await page.keyboard.press("Shift+Tab");
-	}
+	// The dialog's initial focus and focus guard settle asynchronously.
+	await expect(dialog).toBeFocused();
+	await page.keyboard.press("Shift+Tab");
 	await expect(close).toBeFocused();
 	await page.keyboard.press("Escape");
 	await expect(dialog).toHaveCount(0);
