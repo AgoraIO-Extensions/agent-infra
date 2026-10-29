@@ -1128,6 +1128,102 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		return { work, itemId, store };
 	}
 
+	it("uses the normal prepare window only for current healthy startup evidence (#3739)", async () => {
+		const { itemId, store, work } =
+			await seedSandboxPrepareIntent("normal-window");
+		const delays: number[] = [];
+		let sandboxId = "";
+		try {
+			for (let index = 0; index < 7; index += 1) {
+				if (index > 0)
+					await client`update platform.outbox_items set available_at = now() where id = ${itemId}`;
+				const claim = await store.claimSandboxReconciliation({
+					schemaVersion: 1,
+					itemId,
+					workerId: "normal-window-worker",
+					leaseDurationMs: 30_000,
+				});
+				if (!claim) throw new Error("Expected Sandbox claim");
+				sandboxId = claim.sandbox.sandboxId;
+				const resources = claim.previousObservation?.resources ?? [];
+				expect(resources).toHaveLength(6);
+				expect(
+					await store.recordSandboxObservation({
+						claim,
+						observation: {
+							status: "observed",
+							waitingReason: "ContainerCreating",
+							resources,
+						},
+					}),
+				).toBe("committed");
+				const [row] = await client<{ delayMs: number }[]>`
+					select extract(epoch from (available_at - clock_timestamp())) * 1000 as "delayMs"
+					from platform.outbox_items where id = ${itemId}`;
+				delays.push(Number(row?.delayMs));
+			}
+			expect(delays[6]).toBeLessThanOrEqual(1_000);
+
+			// Unknown evidence closes the window and returns to exponential pacing.
+			for (let index = 0; index < 7; index += 1) {
+				await client`update platform.outbox_items set available_at = now() where id = ${itemId}`;
+				const claim = await store.claimSandboxReconciliation({
+					schemaVersion: 1,
+					itemId,
+					workerId: "normal-window-unknown-worker",
+					leaseDurationMs: 30_000,
+				});
+				if (!claim) throw new Error("Expected unknown claim");
+				const resources = claim.previousObservation?.resources ?? [];
+				expect(
+					await store.recordSandboxObservation({
+						claim,
+						observation: { status: "unknown", resources },
+					}),
+				).toBe("unknown");
+			}
+			const [unknownDelay] = await client<{ delayMs: number }[]>`
+				select extract(epoch from (available_at - clock_timestamp())) * 1000 as "delayMs" from platform.outbox_items where id = ${itemId}`;
+			expect(Number(unknownDelay?.delayMs)).toBeGreaterThan(1_000);
+			// A new valid observed event reopens a current normal window.
+			await client`update platform.outbox_items set available_at = now() where id = ${itemId}`;
+			const reopened = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "normal-window-reopen-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (!reopened) throw new Error("Expected reopen claim");
+			const reopenedResources = reopened.previousObservation?.resources ?? [];
+			expect(
+				await store.recordSandboxObservation({
+					claim: reopened,
+					observation: {
+						status: "observed",
+						waitingReason: "PodInitializing",
+						resources: reopenedResources,
+					},
+				}),
+			).toBe("committed");
+			const [reopenedDelay] = await client<{ delayMs: number }[]>`
+				select extract(epoch from (available_at - clock_timestamp())) * 1000 as "delayMs" from platform.outbox_items where id = ${itemId}`;
+			expect(Number(reopenedDelay?.delayMs)).toBeLessThanOrEqual(1_000);
+			const [explain] =
+				await client`explain (format json) select details->>'progress'
+				from platform.conversation_audit_events
+				where conversation_id = ${work.conversationId}
+					and action = 'conversation.sandbox.observed'
+					and details->>'sandboxId' = ${sandboxId}
+					and details->>'sessionGeneration' = '1'
+					and details->>'resourceFence' = '1'
+				order by occurred_at desc, id desc limit 1`;
+			const plan = JSON.stringify(explain?.["QUERY PLAN"] ?? explain);
+			expect(plan).toMatch(/conversation_audit_conversation_idx|Index Scan/i);
+		} finally {
+			await store.close();
+		}
+	});
+
 	it.each(["workload", "configuration"] as const)(
 		"defers waiting Sandbox claims before taking Agent locks across Worker restarts (%s, #3461)",
 		async (waitingFor) => {

@@ -116,6 +116,14 @@ export interface SessionSandboxReconciliationClaimV1 {
 
 export interface SessionSandboxObservationV1 {
 	readonly status: "observed" | "ready" | "stopped" | "unknown";
+	/** Pod startup state used only to bound normal prepare observation. */
+	readonly waitingReason?:
+		| "ContainerCreating"
+		| "PodInitializing"
+		| "ImagePullBackOff"
+		| "ErrImagePull"
+		| "InvalidImageName"
+		| "CreateContainerConfigError";
 	/** Bounded startup evidence from the Pod status; never a log message. */
 	readonly failureCode?:
 		| "eci.image_pull"
@@ -459,6 +467,8 @@ export function decideSessionSandboxRetryV1(input: {
 	readonly progress: string;
 	readonly attemptCount: unknown;
 	readonly status: string;
+	/** Internal normal-prepare observation window; never a user-facing SLO. */
+	readonly normalPrepareAgeMs?: number;
 }): { readonly changed: boolean; readonly delayMs: number } {
 	const { previous } = input;
 	const attemptCount = input.attemptCount;
@@ -469,13 +479,23 @@ export function decideSessionSandboxRetryV1(input: {
 		(previous.attempt as number) >= 0 &&
 		Number.isSafeInteger(attemptCount) &&
 		(attemptCount as number) > (previous.attempt as number);
+	const normalPrepareWindow =
+		Number.isFinite(input.normalPrepareAgeMs) &&
+		(input.normalPrepareAgeMs ?? -1) >= 0 &&
+		(input.normalPrepareAgeMs ?? Number.POSITIVE_INFINITY) <= 60_000;
 	return {
 		changed: !unchanged,
-		delayMs: unchanged
-			? sessionSandboxRetryDelayMsV1(
-					// 同一次停滞里的重试序号；乱序或异常的计数不会给出非法值。
-					Math.max(1, (attemptCount as number) - (previous.attempt as number)),
-				)
-			: sessionSandboxRetryBaseDelayMsV1,
+		delayMs:
+			unchanged && normalPrepareWindow
+				? sessionSandboxRetryBaseDelayMsV1
+				: unchanged
+					? sessionSandboxRetryDelayMsV1(
+							// 同一次停滞里的重试序号；乱序或异常的计数不会给出非法值。
+							Math.max(
+								1,
+								(attemptCount as number) - (previous.attempt as number),
+							),
+						)
+					: sessionSandboxRetryBaseDelayMsV1,
 	};
 }

@@ -680,6 +680,15 @@ Sandbox 身份、ServiceAccount、通用出网或网络可达均不授予 Connec
 | unknown 或恢复失败 | 超时不证明停止；原 Sandbox 保留核实证据和占用，不换实例重放。代次提升必须等待原 cancellation barrier 确认，详见 Runtime HLD §7.3；其他 Session 不受牵连。 |
 | 跨主体/Session 访问 | 查询、订阅、文件、控制和 Runtime 投递均复核主体及完整对象绑定；同主体另一 Session 也不得直接访问本 Sandbox。拒绝不泄漏对象存在性。 |
 
+正常 prepare 的有限观察例外：当 claim purpose 为 `prepare`、期望状态为运行中、Sandbox 的
+generation/resourceFence 与 claim 一致、六类资源身份完整、最近一次持久观测为 `observed` 且没有
+failureCode，并且 Pod waiting reason 精确为 `ContainerCreating` 或 `PodInitializing` 时，Worker
+可以用当前 generation/fence 绑定的 `conversation.sandbox.observed` 审计 occurred_at 作为持久锚，
+在最多 60 秒的内部观察窗口内将下一次正常观察安排为约 1 秒。该 60 秒是观察窗口上限，不是
+性能 SLO 或用户等待承诺。缺少锚、锚在未来、unknown/已知失败、drain、身份缺失、generation/fence
+变化或窗口超时均沿原有有界退避；该例外不改变 Session 串行准入、lease、abort、CAS、fence、
+unknown 或恢复屏障。每次 claim 保留一次 apply 和一次完整 observe，不能以高频读取替代持久重试。
+
 新的已验证 Workload 状态提交时，同一事务按 Agent → 会话 → Sandbox 分配 → 调谐 outbox 的
 加锁顺序，为 policy 已过期的空闲 Sandbox 写入升级意图：`resourceFence + 1`、目标保持运行，
 沿上文排空规则生成 `stopReceipt` 后，以新 policy 在同一 Sandbox ID、资源名和 PVC 上重新准备。

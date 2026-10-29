@@ -483,6 +483,32 @@ describe("Session Sandbox reconcile retry pacing (#2456)", () => {
 			).toEqual({ changed: false, delayMs: 60_000 });
 	});
 
+	it("keeps a normal observed prepare window at the base delay", () => {
+		const progress = progressOf({ status: "observed" });
+		for (const age of [0, 1_000, 30_000, 60_000]) {
+			expect(
+				decideSessionSandboxRetryV1({
+					previous: { progress, attempt: 10 },
+					progress,
+					attemptCount: 16,
+					status: "observed",
+					normalPrepareAgeMs: age,
+				}),
+			).toEqual({ changed: false, delayMs: 1_000 });
+		}
+		for (const age of [-1, 60_001, Number.NaN, Number.POSITIVE_INFINITY]) {
+			expect(
+				decideSessionSandboxRetryV1({
+					previous: { progress, attempt: 10 },
+					progress,
+					attemptCount: 16,
+					status: "observed",
+					normalPrepareAgeMs: age,
+				}).delayMs,
+			).toBe(2_000);
+		}
+	});
+
 	it("treats an unrecognized previous record as a change", () => {
 		const progress = progressOf();
 		for (const previous of [

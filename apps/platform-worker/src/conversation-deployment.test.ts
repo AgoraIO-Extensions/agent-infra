@@ -66,8 +66,16 @@ const fileExchangeEgressFixture = [
 
 function fixture() {
 	const api = fakeKubernetesApi();
+	let podReads = 0;
 	const client = {
 		...api.client,
+		async read<T extends KubernetesObject>(
+			kind: Parameters<typeof api.client.read>[0],
+			name: string,
+		): Promise<T | null> {
+			if (kind === "Pod") podReads += 1;
+			return api.client.read<T>(kind, name);
+		},
 		async deleteResult(resource: Parameters<typeof api.client.delete>[0]) {
 			await api.client.delete(resource);
 			return "acknowledged" as const;
@@ -143,6 +151,7 @@ function fixture() {
 		client,
 		claim,
 		options,
+		podReads: () => podReads,
 		receive: createProductionSessionSandboxReceiverV1(options, {
 			serviceToken: sessionSandboxDeploymentTokenFixture,
 		}),
@@ -289,6 +298,14 @@ function drainClaim(
 }
 
 describe("production SessionSandbox resource receiver", () => {
+	it("performs one full observe after apply instead of a hot 100ms loop (#3739)", async () => {
+		const f = fixture();
+		const observed = await f.receive(f.claim, new AbortController().signal);
+		expect(observed.status).toBe("observed");
+		// One read can come from apply's ownership check; no 100ms observe loop follows.
+		expect(f.podReads()).toBeLessThanOrEqual(2);
+	});
+
 	it("carries the verified Hub generation to the Session without sharing its workspace", async () => {
 		const f = await skillFixture();
 		const signal = new AbortController().signal;
@@ -790,7 +807,7 @@ describe("production SessionSandbox resource receiver", () => {
 			observed.resources.map(({ uid }) => uid),
 		);
 	});
-	it("waits briefly for a Pod readiness edge within the receiver lease", async () => {
+	it("returns one observed Pod check to durable pacing instead of a hot loop", async () => {
 		const f = fixture();
 		let podReads = 0;
 		const originalRead = f.client.read.bind(f.client);
@@ -798,18 +815,12 @@ describe("production SessionSandbox resource receiver", () => {
 			const current = await originalRead(kind, name);
 			if (kind === "Pod" && current) {
 				podReads++;
-				if (podReads >= 2) {
-					(current as V1Pod).status = {
-						phase: "Running",
-						conditions: [{ type: "Ready", status: "True" }],
-					};
-				}
 			}
 			return current;
 		}) as typeof f.client.read;
 		const observed = await f.receive(f.claim, new AbortController().signal);
-		expect(observed.status).toBe("ready");
-		expect(podReads).toBeGreaterThanOrEqual(2);
+		expect(observed.status).toBe("observed");
+		expect(podReads).toBeLessThanOrEqual(2);
 	});
 
 	it.each(["claude", "acp", "pi"] as const)(

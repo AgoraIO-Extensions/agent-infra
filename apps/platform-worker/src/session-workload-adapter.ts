@@ -1606,6 +1606,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			let status: SessionSandboxObservationV1["status"] =
 				allocation.desiredState === "stopped" ? "stopped" : "ready";
 			let failureCode: SessionSandboxObservationV1["failureCode"];
+			let waitingReason: SessionSandboxObservationV1["waitingReason"];
 			const expectedResources = sessionSandboxResourcesV1(
 				purpose === "control"
 					? { ...allocation, desiredState: "stopped" }
@@ -1700,18 +1701,23 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						const container = pod.status?.containerStatuses?.find(
 							(entry) => entry.name === "agent",
 						);
-						const waitingReason = container?.state?.waiting?.reason;
+						const podWaitingReason = container?.state?.waiting?.reason;
+						if (
+							podWaitingReason === "ContainerCreating" ||
+							podWaitingReason === "PodInitializing"
+						)
+							waitingReason = podWaitingReason;
 						const terminatedReason = container?.lastState?.terminated?.reason;
 						if (
-							waitingReason === "ErrImagePull" ||
-							waitingReason === "ImagePullBackOff" ||
-							waitingReason === "InvalidImageName"
+							podWaitingReason === "ErrImagePull" ||
+							podWaitingReason === "ImagePullBackOff" ||
+							podWaitingReason === "InvalidImageName"
 						)
 							failureCode = "eci.image_pull";
-						else if (waitingReason === "CreateContainerConfigError")
+						else if (podWaitingReason === "CreateContainerConfigError")
 							failureCode = "runtime.configuration";
 						else if (
-							waitingReason ||
+							podWaitingReason ||
 							terminatedReason ||
 							pod.status?.phase === "Failed"
 						)
@@ -1723,6 +1729,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				status:
 					purpose === "control" && status === "ready" ? "observed" : status,
 				...(failureCode === undefined ? {} : { failureCode }),
+				...(waitingReason === undefined ? {} : { waitingReason }),
 				resources,
 			};
 		},
