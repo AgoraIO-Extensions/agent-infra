@@ -31,3 +31,5 @@ Cookie security 选项，不要将会话值作为 Bearer。
 
 记录联调环境、源码版本、请求路径、响应状态及 request/trace 引用，避免记录凭证。
 远端证书问题单独登记；本地 HTTP 集成通过不等于远端 Connection 已接通。
+
+需要创建并迁入自建 Agent 时，继续使用[迁入与 API 验证流程](custom-agent-migration.md)。
