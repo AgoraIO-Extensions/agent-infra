@@ -1286,6 +1286,10 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 			storage.download = async (input) => {
 				if (input.objectRef === bodyObject.data.objectRef) readOutput = true;
 				if (input.objectRef === reasonObject.data.objectRef) {
+					const chunks: Uint8Array[] = [];
+					for await (const chunk of await originalDownload(input))
+						chunks.push(chunk);
+					// Delay after S3 completes so this exercises final TTL checks, not transfer timeout.
 					delayed = true;
 					await new Promise((resolve) =>
 						setTimeout(
@@ -1293,6 +1297,12 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 							Math.max(1, Date.parse(deadline) - Date.now() + 40),
 						),
 					);
+					return new ReadableStream<Uint8Array>({
+						start(controller) {
+							for (const chunk of chunks) controller.enqueue(chunk);
+							controller.close();
+						},
+					});
 				}
 				return originalDownload(input);
 			};
