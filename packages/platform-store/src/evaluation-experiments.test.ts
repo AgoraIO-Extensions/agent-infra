@@ -355,6 +355,16 @@ it("preserves application subject and eval source for the default Agent Key", as
 			storage,
 			loadPolicy: async () => policy,
 			loadExperimentPolicy: async () => experimentPolicy,
+			loadAnalysisPolicy: async () => ({
+				schemaVersion: 1,
+				policyId: "analysis",
+				revision: 1,
+				validUntil: policy.validUntil,
+				maximumWindowMs: 86400000,
+				maximumTasks: 1000,
+				maximumModelFacts: 10000,
+				feedbackMetadataMs: 600000,
+			}),
 		},
 		admissions: {
 			authorizationAdmission: { authorize: unused },
@@ -398,6 +408,32 @@ it("preserves application subject and eval source for the default Agent Key", as
 		expect(EvaluationExperimentV1Schema.parse(await replay.json())).toEqual(
 			experiment,
 		);
+		await data.grant(request("admin"), randomUUID(), command.datasetId, {
+			expectedRevision: 5,
+			principal: { kind: "application", id: "runner" },
+			versionIds: [command.versionId],
+			operations: ["analyze"],
+			expiresAt: new Date(Date.now() + 50000).toISOString(),
+		});
+		const applicationAnalysis = `papi_${"L".repeat(43)}`;
+		const sameIdUser = `papi_${"M".repeat(43)}`;
+		for (const [id, principalType, token] of [
+			["app-analysis", "application", applicationAnalysis],
+			["same-user-analysis", "user", sameIdUser],
+		])
+			await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes)values(${id},${principalType},'runner',${createHash(
+				"sha256",
+			)
+				.update(token ?? "")
+				.digest("hex")},${sql.json(["eval:analyze"])})`;
+		const analyze = (token: string) =>
+			fetch(
+				`http://127.0.0.1:${address.port}/api/v2/evaluation/analysis/${experiment.experimentId}`,
+				{ headers: { Authorization: `Bearer ${token}` } },
+			);
+		expect((await analyze(applicationAnalysis)).status).toBe(200);
+		expect((await analyze(sameIdUser)).status).toBe(404);
+		expect((await analyze(material)).status).toBe(404);
 		const metadata = () =>
 			fetch(
 				`http://127.0.0.1:${address.port}/api/v2/evaluation/experiments/${experiment.experimentId}`,
@@ -1207,35 +1243,41 @@ it("executes rule/human/model scorers and independent review on one terminal bus
 			await sql`select data from platform.evaluation_derived_objects where id=${liveScore?.data.reasonObjectId}`;
 		if (!bodyObject || !reasonObject)
 			throw new Error("missing controlled objects");
-		const deadline = new Date(Date.now() + 350).toISOString();
-		await sql`update platform.evaluation_derived_objects set expires_at=${deadline}::timestamptz,data=jsonb_set(data,'{expiresAt}',to_jsonb(${deadline}::text)) where id=${bodyObject.id}`;
-		const originalDownload = storage.download;
-		let readOutput = false;
-		let delayed = false;
-		storage.download = async (input) => {
-			if (input.objectRef === bodyObject.data.objectRef) readOutput = true;
-			if (input.objectRef === reasonObject.data.objectRef) {
-				delayed = true;
-				await new Promise((resolve) =>
-					setTimeout(
-						resolve,
-						Math.max(1, Date.parse(deadline) - Date.now() + 40),
-					),
+		for (const lifetime of ["content", "score_metadata"] as const) {
+			const deadline = new Date(Date.now() + 350).toISOString();
+			if (lifetime === "content")
+				await sql`update platform.evaluation_derived_objects set expires_at=${deadline}::timestamptz,data=jsonb_set(data,'{expiresAt}',to_jsonb(${deadline}::text)) where id=${bodyObject.id}`;
+			else
+				await sql`update platform.evaluation_score_intents set data=jsonb_set(data,'{metadataExpiresAt}',to_jsonb(${deadline}::text)) where id=${human.id}`;
+			const originalDownload = storage.download;
+			let readOutput = false;
+			let delayed = false;
+			storage.download = async (input) => {
+				if (input.objectRef === bodyObject.data.objectRef) readOutput = true;
+				if (input.objectRef === reasonObject.data.objectRef) {
+					delayed = true;
+					await new Promise((resolve) =>
+						setTimeout(
+							resolve,
+							Math.max(1, Date.parse(deadline) - Date.now() + 40),
+						),
+					);
+				}
+				return originalDownload(input);
+			};
+			try {
+				const response = await getAnalysis(
+					`/analysis/${experiment.experimentId}/samples/${human.sample_task_id}?scoreId=${human.id}`,
 				);
+				expect(readOutput).toBe(true);
+				expect(delayed).toBe(true);
+				expect(Date.now() > Date.parse(deadline)).toBe(true);
+				expect(response.status).toBe(404);
+			} finally {
+				storage.download = originalDownload;
+				await sql`update platform.evaluation_derived_objects set expires_at=${bodyObject.data.expiresAt}::timestamptz,data=${sql.json(bodyObject.data)} where id=${bodyObject.id}`;
+				await sql`update platform.evaluation_score_intents set data=${sql.json(liveScore?.data)} where id=${human.id}`;
 			}
-			return originalDownload(input);
-		};
-		try {
-			const response = await getAnalysis(
-				`/analysis/${experiment.experimentId}/samples/${human.sample_task_id}?scoreId=${human.id}`,
-			);
-			expect(readOutput).toBe(true);
-			expect(delayed).toBe(true);
-			expect(Date.now() > Date.parse(deadline)).toBe(true);
-			expect(response.status).toBe(404);
-		} finally {
-			storage.download = originalDownload;
-			await sql`update platform.evaluation_derived_objects set expires_at=${bodyObject.data.expiresAt}::timestamptz,data=${sql.json(bodyObject.data)} where id=${bodyObject.id}`;
 		}
 		await worker.runOnce();
 		expect(calls).toBe(2);

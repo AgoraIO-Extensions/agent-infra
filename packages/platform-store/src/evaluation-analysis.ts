@@ -65,7 +65,13 @@ export class PostgresEvaluationAnalysisV1 {
 	async #current(
 		request: EvaluationRequestV1,
 		id: string,
-		content?: readonly EvaluationDerivedObjectV1[],
+		content?: {
+			objects: readonly {
+				object: EvaluationDerivedObjectV1;
+				available: boolean;
+			}[];
+			metadataExpiresAt: readonly string[];
+		},
 	) {
 		return this.#client.begin(async (tx) => {
 			await tx`select pg_advisory_xact_lock(hashtextextended('evaluation-data-v1',0))`;
@@ -158,7 +164,7 @@ export class PostgresEvaluationAnalysisV1 {
 			)
 				throw new EvaluationDataErrorV1("denied");
 			if (content) {
-				for (const original of content) {
+				for (const { object: original, available } of content.objects) {
 					const [record] = await tx<
 						{
 							id: string;
@@ -186,7 +192,7 @@ export class PostgresEvaluationAnalysisV1 {
 						throw new EvaluationDataErrorV1("unavailable");
 					if (
 						!isDeepStrictEqual(object, original) ||
-						object.status !== "available"
+						(available && object.status !== "available")
 					)
 						throw new EvaluationDataErrorV1("denied");
 				}
@@ -206,13 +212,23 @@ export class PostgresEvaluationAnalysisV1 {
 					) <= +fresh.now
 				)
 					throw new EvaluationDataErrorV1("denied");
-				for (const object of content) {
+				if (
+					content.metadataExpiresAt.some(
+						(deadline) => Date.parse(deadline) <= +fresh.now,
+					)
+				)
+					throw new EvaluationDataErrorV1("denied");
+				for (const { object, available } of content.objects) {
 					const retention = final.policy.retention[object.kind];
 					if (
 						Math.min(
-							Date.parse(object.expiresAt),
+							...(available
+								? [
+										Date.parse(object.expiresAt),
+										Date.parse(object.createdAt) + retention.contentMs,
+									]
+								: []),
 							Date.parse(object.metadataExpiresAt),
-							Date.parse(object.createdAt) + retention.contentMs,
 							Date.parse(object.createdAt) + retention.metadataMs,
 						) <= +fresh.now
 					)
@@ -412,7 +428,12 @@ export class PostgresEvaluationAnalysisV1 {
 		);
 		if (!sample) throw new EvaluationDataErrorV1("unavailable");
 		const scoped = { ...request, credentialScope: "eval:analyze" as const };
-		const returned: EvaluationDerivedObjectV1[] = [];
+		const objects = new Map<
+			string,
+			{ object: EvaluationDerivedObjectV1; available: boolean }
+		>();
+		const returnedIds = new Set<string>();
+		const metadataExpiresAt: string[] = [];
 		const readRetained = async (expected: {
 			id: string;
 			datasetId: string;
@@ -422,7 +443,10 @@ export class PostgresEvaluationAnalysisV1 {
 			const object = await this.#derivedStore.get(expected.id);
 			if (!object) throw new EvaluationDataErrorV1("unavailable");
 			const result = await this.#derived.readRetained(scoped, expected);
-			if (result.contentStatus === "available") returned.push(object);
+			objects.set(object.id, {
+				object,
+				available: result.contentStatus === "available",
+			});
 			return result;
 		};
 		const candidates = row.scores
@@ -485,6 +509,7 @@ export class PostgresEvaluationAnalysisV1 {
 				{ id: string; score_id: string; data: unknown }[]
 			>`select id,score_id,data from platform.evaluation_score_reviews where score_id=${score.id} and (data->>'metadataExpiresAt')::timestamptz>clock_timestamp() ${page.reviewCursor ? this.#client`and id>${page.reviewCursor}::uuid` : this.#client``} order by id limit 101`;
 			const reviews = [];
+			const reviewBindings: { objectId: string; expiresAt: string }[] = [];
 			let nextReviewCursor: string | null = null;
 			for (const record of reviewRows) {
 				if (reviews.length === 100) {
@@ -525,11 +550,32 @@ export class PostgresEvaluationAnalysisV1 {
 				}
 				used += bytes;
 				reviews.push(entry);
+				reviewBindings.push({
+					objectId: review.objectId,
+					expiresAt: review.metadataExpiresAt,
+				});
 			}
 			if (nextCursor) break;
 			scores.push({ ...item, reviews, nextReviewCursor });
+			metadataExpiresAt.push(
+				score.metadataExpiresAt,
+				...reviewBindings.map((binding) => binding.expiresAt),
+			);
+			for (const objectId of [
+				score.outputObjectId,
+				score.reasonObjectId,
+				...reviewBindings.map((binding) => binding.objectId),
+			])
+				if (objectId) returnedIds.add(objectId);
 		}
-		const after = await this.#current(request, id, returned);
+		const after = await this.#current(request, id, {
+			objects: [...returnedIds].map((id) => {
+				const value = objects.get(id);
+				if (!value) throw new EvaluationDataErrorV1("unavailable");
+				return value;
+			}),
+			metadataExpiresAt,
+		});
 		if (
 			!isDeepStrictEqual(before.data.policy, after.data.policy) ||
 			before.data.grant.revision !== after.data.grant.revision
