@@ -56,6 +56,7 @@ const diagnostics = () => ({
 	attempts: 0,
 	transportFailures: [] as string[],
 	dependencyUnavailableResponses: 0,
+	gatewayTimeoutResponses: 0,
 	budgetExhausted: false,
 });
 
@@ -81,6 +82,14 @@ async function requestJson(
 				signal: AbortSignal.timeout(Math.min(attemptLimit, remaining)),
 				redirect: "error",
 			});
+			// Gateway timeout does not tell us whether the API transaction committed.
+			if (response.status === 504) {
+				await response.body?.cancel().catch(() => undefined);
+				evidence.gatewayTimeoutResponses++;
+				if (!retry) return { response, body: null, error: "GATEWAY_TIMEOUT" };
+				await time.wait(Math.max(0, Math.min(1000, deadline - time.now())));
+				continue;
+			}
 			let body: any;
 			try {
 				body = await response.json();

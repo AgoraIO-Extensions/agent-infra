@@ -173,7 +173,7 @@ EndpointSlice、Ingress 和实际 imageID。它不接受任意旧 URL 或仅在�
 `ACK_AGENT_REQUESTS_FILE` 是仓库外的 API 创建/重放清单。每项引用一个 `0600` Bearer credential 文件、一个 `0600` JSON body 文件和固定 `Idempotency-Key`；credential 需要创建和读取 Agent 的权限。body 可以是标准模板或自定义 Agent 的 `POST /api/v2/agents` 请求。脚本只输出 HTTP 状态、状态枚举和 Agent ID 的 SHA-256，不输出 Token、Secret 或响应正文；创建后会轮询 `/state`，直到 `available/ready` 或明确失败/超时。API 创建不需要 Web 审批；需要审批的 Web application 流程仍应由真实管理员完成并回读。
 
 每项创建请求有五分钟总预算，覆盖保存模型配置时最多两分钟的真实验证。明确连接/超时错误，
-以及正式 API 的 `503 DEPENDENCY_UNAVAILABLE`，只在剩余预算内重放原请求；URL、credential、
+以及正式 API 的 `503 DEPENDENCY_UNAVAILABLE` 或网关 `504`，只在剩余预算内重放原请求；URL、credential、
 Idempotency-Key 和 JSON 字节不变。不能因客户端中断就认定服务器没有创建 Agent。
 身份拒绝、幂等冲突、TLS/未知错误和无效响应不重试。失败或预算耗尽后停止后续创建，receipt
 记录尝试次数、白名单错误和未执行数量；已有 binding 只读取原 Agent。就绪轮询的连接重试

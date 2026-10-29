@@ -158,6 +158,43 @@ test("a legitimate 72-second creation remains inside the client budget", async (
 	assert.equal(result.results[0].creation.attempts, 1);
 });
 
+test("a gateway 504 replays the original key while the server completes creation", async (t) => {
+	const f = fixture();
+	const calls = [];
+	t.mock.method(globalThis, "fetch", async (_url, options) => {
+		if (options.method !== "POST") return Response.json(state);
+		calls.push({
+			body: options.body,
+			key: new Headers(options.headers).get("idempotency-key"),
+		});
+		if (calls.length === 1) {
+			f.advance(60_000);
+			return new Response(
+				"<html>SYNTHETIC_ERROR_SECRET gateway timeout</html>",
+				{ status: 504 },
+			);
+		}
+		if (calls.length === 2)
+			return Response.json(
+				{ error: { code: "DEPENDENCY_UNAVAILABLE" } },
+				{ status: 503 },
+			);
+		return Response.json({ ...created, replayed: true });
+	});
+	const result = await provisionAgents(input, f.options);
+	assert.equal(result.pass, true);
+	assert.equal(calls.length, 3);
+	assert(
+		calls.every(
+			(call) =>
+				call.key === request.idempotencyKey &&
+				call.body === JSON.stringify(body),
+		),
+	);
+	assert.equal(result.results[0].creation.gatewayTimeoutResponses, 1);
+	assertPrivate(result);
+});
+
 test("a connection lost while consuming the committed response body is replayed", async (t) => {
 	const f = fixture();
 	let posts = 0;
