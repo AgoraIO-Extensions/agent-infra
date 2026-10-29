@@ -57,13 +57,23 @@ export function requireApiManagementMaterial(
 	request: Request,
 	traceId: string,
 ): string {
+	const material = requireApiCredentialMaterial(request, traceId);
+	if (new URL(request.url).search)
+		throw new HttpProtocolError("INVALID_REQUEST", traceId);
+	return material;
+}
+
+/** Routes using this parser must validate their own query schema. */
+export function requireApiCredentialMaterial(
+	request: Request,
+	traceId: string,
+): string {
 	const match = /^Bearer (papi_[A-Za-z0-9_-]{43})$/i.exec(
 		request.headers.get("Authorization") ?? "",
 	);
 	if (!match?.[1] || request.headers.has("Cookie"))
 		throw new HttpProtocolError("AUTHENTICATION_REQUIRED", traceId);
 	if (
-		new URL(request.url).search ||
 		[
 			"x-user-id",
 			"x-application-id",
