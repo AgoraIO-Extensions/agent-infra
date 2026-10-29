@@ -2225,7 +2225,7 @@ it("contains a poisoned Messages sidecar without poisoning the execution journal
 	}
 });
 
-it("bounds queued Messages diagnostics and leaves close independent of a hung sidecar", async () => {
+it("bounds admitted Messages diagnostics while the observation sink is occupied", async () => {
 	const fixture = await diagnosticFixture();
 	let release!: () => void;
 	const held = new Promise<void>((resolve) => {
@@ -2310,10 +2310,6 @@ it.each(["initialization", "persist"] as const)(
 	"does not overwrite a reopened Session diagnostic with older detached %s",
 	async (stage) => {
 		const fixture = await diagnosticFixture();
-		let release!: () => void;
-		const held = new Promise<void>((resolve) => {
-			release = resolve;
-		});
 		let entered!: () => void;
 		const blocked = new Promise<void>((resolve) => {
 			entered = resolve;
@@ -2330,6 +2326,7 @@ it.each(["initialization", "persist"] as const)(
 				});
 			const prototype = MessagesDiagnosticFile.prototype as unknown as {
 				path: string;
+				signal: AbortSignal;
 				persist(serialized: string): Promise<void>;
 			};
 			const persist = prototype.persist;
@@ -2343,20 +2340,28 @@ it.each(["initialization", "persist"] as const)(
 					if (stage === "persist" && oldWrite) {
 						oldWrite = false;
 						entered();
-						await held;
+						await new Promise<void>((resolve) => {
+							this.signal.addEventListener("abort", () => resolve(), {
+								once: true,
+							});
+						});
 					}
 					await persist.call(this, serialized);
 				});
 			const opener = MessagesDiagnosticFile.open;
 			const pendingOpen = vi
 				.spyOn(MessagesDiagnosticFile, "open")
-				.mockImplementation(async (directory, initial) => {
+				.mockImplementation(async (directory, initial, signal) => {
 					if (stage === "initialization" && oldWrite) {
 						oldWrite = false;
 						entered();
-						await held;
+						await new Promise<void>((resolve) => {
+							signal?.addEventListener("abort", () => resolve(), {
+								once: true,
+							});
+						});
 					}
-					return opener(directory, initial);
+					return opener(directory, initial, signal);
 				});
 			let late: Promise<void> | undefined;
 			try {
@@ -2369,18 +2374,12 @@ it.each(["initialization", "persist"] as const)(
 					false,
 					transportDiagnostic,
 				);
-				if (stage === "initialization")
-					await expect(
-						readFile(files.diagnostics, "utf8"),
-					).rejects.toMatchObject({ code: "ENOENT" });
-				else
-					expect(
-						JSON.parse(await readFile(files.diagnostics, "utf8")).entries.map(
-							(entry: { executionId: string }) => entry.executionId,
-						),
-					).toEqual(["execution-1"]);
+				expect(
+					JSON.parse(await readFile(files.diagnostics, "utf8")).entries.map(
+						(entry: { executionId: string }) => entry.executionId,
+					),
+				).toContain("execution-2");
 				expect(fixture.prompts).toBe(2);
-				release();
 				await late;
 				await vi.waitFor(async () => {
 					await fixture.receipts[1]?.receipt(
@@ -2400,13 +2399,11 @@ it.each(["initialization", "persist"] as const)(
 					),
 				).toContain("execution-2");
 			} finally {
-				release();
 				await late;
 				pending.mockRestore();
 				pendingOpen.mockRestore();
 			}
 		} finally {
-			release?.();
 			await fixture.close();
 		}
 	},

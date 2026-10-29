@@ -32,6 +32,9 @@ const race = vi.hoisted(() => ({
 	beforeSpawn: undefined as undefined | (() => void),
 	mutate: undefined as undefined | (() => Promise<void>),
 	children: [] as { exited: boolean }[],
+	openBarrier: undefined as
+		| undefined
+		| ((handle: import("node:fs/promises").FileHandle) => Promise<void>),
 }));
 vi.mock("node:child_process", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:child_process")>();
@@ -92,12 +95,28 @@ vi.mock("node:child_process", async (importOriginal) => {
 		}) as unknown as typeof actual.spawn,
 	};
 });
+vi.mock("node:fs/promises", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs/promises")>();
+	return {
+		...actual,
+		open: async (...args: Parameters<typeof actual.open>) => {
+			const handle = await actual.open(...args);
+			const barrier = race.openBarrier;
+			if (barrier) {
+				race.openBarrier = undefined;
+				await barrier(handle);
+			}
+			return handle;
+		},
+	};
+});
 afterEach(() => {
 	race.marker = "";
 	race.inject = "";
 	race.beforeSpawn = undefined;
 	race.mutate = undefined;
 	race.children = [];
+	race.openBarrier = undefined;
 });
 
 async function fixture() {
@@ -446,6 +465,235 @@ it("measures a normal read and two atomic writes without a resident child", asyn
 			}),
 		);
 	} finally {
+		await f.close();
+	}
+});
+
+it.each([
+	"initialization",
+	"before-write",
+	"after-write",
+	"native-close-error",
+] as const)(
+	"quiesces a Session diagnostic child before close permits immediate directory removal: %s",
+	async (stage) => {
+		const { SessionRuntimeDriver } = await import(
+			"./session-runtime-driver.js"
+		);
+		const root = await realpath(
+			await mkdtemp(join(tmpdir(), "diagnostic-close-race-")),
+		);
+		let receipt:
+			| import("./messages-model-transport.js").RuntimeMessagesDiagnosticReceipt
+			| undefined;
+		let entered!: () => void;
+		const ready = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const runtime = await SessionRuntimeDriver.open({
+			path: root,
+			configVersion: "close-configuration",
+			defaultModelOptionId: "primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "primary",
+					nativeModelId: "configured/model",
+					reasoningLevels: ["high"],
+				},
+			],
+			cursorPrefix: "test",
+			retireSession: async () => {},
+			completionStatus: () => "completed",
+			openSession: async (options) => ({
+				nativeId: "native-close",
+				select: async () => {},
+				cancel: async () => {},
+				close: async () => {
+					if (stage === "native-close-error")
+						throw Error("synthetic native close failure");
+				},
+				prompt: async () => {
+					const model = options.modelFact?.();
+					if (!model) throw Error();
+					const operationRef = randomUUID();
+					const attemptRef = randomUUID();
+					await options.recordOperationFact?.({
+						kind: "model",
+						operationRef,
+						attemptRef,
+						phase: "intent",
+						model,
+					});
+					await options.recordOperationFact?.({
+						kind: "model",
+						operationRef,
+						attemptRef,
+						phase: "started",
+						model,
+					});
+					receipt = options.openDiagnosticReceipt?.();
+					await options.admit();
+					await options.recordOperationFact?.({
+						kind: "model",
+						operationRef,
+						attemptRef,
+						phase: "completed",
+						model,
+					});
+					return { stopReason: "completed" };
+				},
+			}),
+		});
+		let recording: Promise<void> | undefined;
+		try {
+			const accepted = await runtime.execute({
+				schemaVersion: 2,
+				kind: "submit-turn",
+				agentId: "agent-close",
+				conversationId: "conversation-close",
+				sessionGeneration: 1,
+				executionId: "execution-close",
+				turnId: "turn-close",
+				operationId: "operation-close",
+				input: { text: "synthetic input", attachments: [] },
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "primary",
+					reasoningLevel: "high",
+				},
+			});
+			await vi.waitFor(async () =>
+				expect(
+					await runtime.getStatus(accepted.nativeSessionRef, "execution-close"),
+				).toBe("completed"),
+			);
+			if (!receipt) throw Error();
+			if (stage !== "initialization")
+				await receipt("sent", false, {
+					stage: "upstream_http",
+					sent: false,
+					durationMs: 0,
+				});
+			race.marker =
+				stage === "initialization"
+					? "if(value.operation==='read'){"
+					: stage === "after-write"
+						? "fs.renameSync(tmp,leaf);"
+						: "tmp='.'+leaf";
+			race.mutate = () => {
+				entered();
+				return held;
+			};
+			recording = receipt("unknown", false, {
+				stage: "upstream_http",
+				sent: true,
+				statusCode: 502,
+				statusClass: "5xx",
+				durationMs: 2,
+			});
+			await ready;
+			const closing = runtime.close();
+			expect(runtime.close()).toBe(closing);
+			if (stage === "native-close-error")
+				await expect(closing).rejects.toThrow("synthetic native close failure");
+			else await closing;
+			expect(race.children.at(-1)?.exited).toBe(true);
+			await rm(root, { recursive: true });
+			await recording;
+			await expect(
+				readFile(
+					join(root, accepted.nativeSessionRef, "messages-diagnostics.json"),
+				),
+			).rejects.toMatchObject({ code: "ENOENT" });
+		} finally {
+			release();
+			await recording;
+			await runtime.close().catch(() => {});
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+);
+
+it("cancels a pending root open before any child can spawn", async () => {
+	const f = await fixture();
+	let entered!: () => void;
+	const ready = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	let release!: () => void;
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let fd: import("node:fs/promises").FileHandle | undefined;
+	const controller = new AbortController();
+	try {
+		race.openBarrier = async (handle) => {
+			fd = handle;
+			entered();
+			await held;
+		};
+		const opening = MessagesDiagnosticFile.open(
+			f.directory,
+			{},
+			controller.signal,
+		);
+		const failed = expect(opening).rejects.toBeDefined();
+		await ready;
+		controller.abort();
+		release();
+		await failed;
+		expect(race.children).toHaveLength(0);
+		await expect(fd?.stat()).rejects.toMatchObject({ code: "EBADF" });
+	} finally {
+		release();
+		await f.close();
+	}
+});
+
+it("drops queued diagnostic updates and reaps the active writer before close", async () => {
+	const f = await fixture();
+	let entered!: () => void;
+	const ready = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	let release!: () => void;
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let file: MessagesDiagnosticFile<{ phase: string }> | undefined;
+	try {
+		file = await MessagesDiagnosticFile.open(f.directory, { phase: "initial" });
+		race.marker = "tmp='.'+leaf";
+		race.mutate = () => {
+			entered();
+			return held;
+		};
+		const first = file.update((value) => {
+			value.phase = "first";
+		});
+		const result = first.catch(() => {});
+		await ready;
+		const queued = Array.from({ length: 8 }, () =>
+			file?.update((value) => {
+				value.phase = "queued";
+			}),
+		);
+		const closing = file.close();
+		expect(file.close()).toBe(closing);
+		await closing;
+		await result;
+		await Promise.all(queued);
+		expect(race.children).toHaveLength(2);
+		expect(race.children.every((child) => child.exited)).toBe(true);
+		await rm(join(f.root, f.ref), { recursive: true });
+	} finally {
+		release();
+		await file?.close();
 		await f.close();
 	}
 });

@@ -475,6 +475,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		Promise<MessagesDiagnosticFile<MessagesDiagnostics>>
 	>();
 	private readonly diagnosticReservations = new Map<string, object>();
+	private readonly diagnosticControllers = new Map<string, AbortController>();
 	private diagnosticWrites = 0;
 	private readonly diagnosticDirectories = new Map<
 		string,
@@ -669,12 +670,18 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					this.diagnosticReservations.delete(state.binding.ref);
 					return;
 				}
+				const controller = new AbortController();
+				this.diagnosticControllers.set(state.binding.ref, controller);
 				diagnosticFile = (async () => {
 					const diagnostics =
-						await MessagesDiagnosticFile.open<MessagesDiagnostics>(directory, {
-							schemaVersion: 1,
-							entries: [],
-						});
+						await MessagesDiagnosticFile.open<MessagesDiagnostics>(
+							directory,
+							{
+								schemaVersion: 1,
+								entries: [],
+							},
+							controller.signal,
+						);
 					try {
 						const saved = messagesDiagnosticsSchema.parse(diagnostics.read());
 						if (
@@ -2481,6 +2488,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	}
 	close() {
 		this.closed = true;
+		for (const controller of this.diagnosticControllers.values())
+			controller.abort();
 		this.closing ??= (async () => {
 			for (const waiters of this.waiters.values())
 				for (const wake of waiters) wake();
@@ -2490,21 +2499,22 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					[...this.handles.keys()].map((ref) => this.retire(ref)),
 				);
 			} finally {
-				for (const [ref, file] of this.diagnosticFiles) {
-					const target = join(
-						this.options.path,
-						ref,
-						"messages-diagnostics.json",
-					);
-					const reservation = this.diagnosticReservations.get(ref);
-					void file
-						.then((value) => value.close())
-						.catch(() => {})
-						.finally(() => {
+				await Promise.allSettled(
+					[...this.diagnosticFiles].map(async ([ref, file]) => {
+						const target = join(
+							this.options.path,
+							ref,
+							"messages-diagnostics.json",
+						);
+						const reservation = this.diagnosticReservations.get(ref);
+						try {
+							await (await file).close();
+						} finally {
 							if (messagesDiagnosticOwners.get(target) === reservation)
 								messagesDiagnosticOwners.delete(target);
-						});
-				}
+						}
+					}),
+				);
 			}
 		})();
 		return this.closing;

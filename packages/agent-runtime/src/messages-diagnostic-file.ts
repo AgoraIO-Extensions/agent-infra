@@ -108,11 +108,15 @@ async function operation(
 	directory: MessagesDiagnosticDirectory,
 	method: "read" | "write",
 	serialized?: string,
+	signal?: AbortSignal,
 ) {
+	signal?.throwIfAborted();
 	const root = await open(directory.root, directoryFlags);
 	try {
+		signal?.throwIfAborted();
 		if (!same(await root.stat({ bigint: true }), directory.rootIdentity))
 			throw unavailable();
+		signal?.throwIfAborted();
 		const input = JSON.stringify({
 			...directory,
 			root: undefined,
@@ -141,6 +145,7 @@ async function operation(
 				failed = true;
 				child.kill("SIGKILL");
 			};
+			signal?.addEventListener("abort", stop, { once: true });
 			// Diagnostic I/O is best effort and detached; this only bounds its owned child.
 			const timer = setTimeout(stop, 5000);
 			outputStream.on("data", (chunk) => {
@@ -154,6 +159,7 @@ async function operation(
 			});
 			child.once("close", (code) => {
 				clearTimeout(timer);
+				signal?.removeEventListener("abort", stop);
 				if (failed || code !== 0) reject(unavailable());
 				else {
 					try {
@@ -167,7 +173,8 @@ async function operation(
 					}
 				}
 			});
-			inputStream.end(input);
+			if (signal?.aborted) stop();
+			else inputStream.end(input);
 		});
 	} finally {
 		await root.close();
@@ -182,12 +189,24 @@ export class MessagesDiagnosticFile<T> {
 	private constructor(
 		private readonly directory: MessagesDiagnosticDirectory,
 		private state: T,
+		private readonly controller: AbortController,
+		private readonly signal: AbortSignal,
 	) {}
-	static async open<T>(directory: MessagesDiagnosticDirectory, initial: T) {
-		const result = await operation(directory, "read");
+	static async open<T>(
+		directory: MessagesDiagnosticDirectory,
+		initial: T,
+		parentSignal?: AbortSignal,
+	) {
+		const controller = new AbortController();
+		const signal = parentSignal
+			? AbortSignal.any([controller.signal, parentSignal])
+			: controller.signal;
+		const result = await operation(directory, "read", undefined, signal);
 		return new MessagesDiagnosticFile(
 			directory,
 			result === "-" ? structuredClone(initial) : (JSON.parse(result) as T),
+			controller,
+			signal,
 		);
 	}
 	read() {
@@ -197,6 +216,8 @@ export class MessagesDiagnosticFile<T> {
 	update(change: (draft: T) => void) {
 		if (this.closed) return Promise.reject(unavailable());
 		const pending = this.queue.then(async () => {
+			if (this.closed) return;
+			this.signal.throwIfAborted();
 			if (this.poisoned) throw unavailable();
 			const draft = structuredClone(this.state);
 			change(draft);
@@ -214,10 +235,11 @@ export class MessagesDiagnosticFile<T> {
 		return pending;
 	}
 	private async persist(serialized: string) {
-		await operation(this.directory, "write", serialized);
+		await operation(this.directory, "write", serialized, this.signal);
 	}
 	close() {
 		this.closed = true;
+		this.controller.abort();
 		return this.queue;
 	}
 }
