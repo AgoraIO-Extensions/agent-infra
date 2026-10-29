@@ -323,3 +323,15 @@ for (const drift of [
 		await assert.rejects(f.run(), (error) => error.code === "ERR_ASSERTION");
 	});
 }
+
+test("custom validation keeps its nonempty ID policy and ignores unselected records", async (t) => {
+	const f = await fixture(t);
+	// The writer caps IDs at 256; this consumer historically accepts any nonempty ID.
+	const id = "a".repeat(257);
+	f.binding.agents["custom-one"].agentId = id;
+	f.binding.agents.unselected = { agentId: 123, ready: false };
+	f.receipt.agentHash = hash(id);
+	await f.save(f.bindingFile, f.binding);
+	await f.save(f.receiptFile, f.receipt);
+	assert.equal((await f.run()).pass, true);
+});

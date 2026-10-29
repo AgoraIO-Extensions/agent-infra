@@ -377,6 +377,10 @@ for (const drift of [
 test("a failed own-entry HTTP boundary is retained privately before rejecting the browser journey", async (t) => {
 	const f = await entryFixture(t);
 	const { sourceSha, evidence, credential } = f;
+	// This consumer owns only the selected record, not the writer's whole map.
+	const binding = await privateJson(join(f.state, "agent-bindings.json"));
+	binding.agents.unselected = { agentId: 123, ready: false };
+	await f.write("state/agent-bindings.json", binding);
 	let requestsObserved = 0;
 	t.mock.method(globalThis, "fetch", async (url) => {
 		requestsObserved++;
