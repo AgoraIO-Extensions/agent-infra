@@ -164,6 +164,15 @@ export function parseSessionSandboxReserveConfigurationV1(
 		parseSessionSandboxReserveConfigurationV1({
 			...value,
 			enabled: true,
+			maximumReserves: Math.max(
+				1,
+				value.maximumReserves,
+				...value.profiles.map((profile) => profile.maximum),
+			),
+			maximumConcurrentCreates: Math.max(1, value.maximumConcurrentCreates),
+			ttlMs: Math.max(1, value.ttlMs),
+			cooldownMs: Math.max(1, value.cooldownMs),
+			failureBackoffMs: Math.max(1, value.failureBackoffMs),
 		});
 		return structuredClone(value);
 	}
@@ -264,6 +273,9 @@ export function canReleaseSessionSandboxReserveV1(input: {
 }): boolean {
 	return (
 		input.status === "retiring" &&
+		input.operations.every(
+			(operation) => operation.writeCompletion === "response",
+		) &&
 		sessionSandboxReserveResourceKindsV1.every((kind) => {
 			const creates = input.operations.filter(
 				(o) => o.kind === kind && o.operation === "create",
@@ -280,9 +292,12 @@ export function canReleaseSessionSandboxReserveV1(input: {
 									d.kind === kind &&
 									d.operation === "delete" &&
 									d.status === "confirmed" &&
+									d.writeCompletion === "response" &&
 									d.absent &&
 									d.resource?.uid === o.resource?.uid &&
-									d.resource?.resourceVersion === o.resource?.resourceVersion,
+									d.resource?.kind === o.resource?.kind &&
+									d.resource?.name === o.resource?.name &&
+									d.resource?.namespace === o.resource?.namespace,
 							)),
 				)
 			);
