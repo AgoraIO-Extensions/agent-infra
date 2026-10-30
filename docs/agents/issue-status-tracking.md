@@ -1,7 +1,7 @@
 # 开放 Issue 状态跟进
 
-> GitHub 清单采集时间：2026-10-30T19:35:00Z。
-> 当前来源：fresh-fetched `origin/main` exact SHA `e4aa8ca36a35a9b7b02d0fcf906ccc0e33be5b25`。
+> GitHub 清单采集时间：2026-10-30T19:37:00Z。
+> 当前来源：fresh-fetched `origin/main` exact SHA `3b1fda4f3b267ae86ce0964ce4c9d09045ad8fcc`。
 > 这是有时间边界的状态快照，不是写入授权；执行前必须重新回读 Issue 正文、评论、依赖、关联 PR、当前 worktree 和 session owner。通用分派规则见 [Issue 工作指导](issue-work-guidance.md)。
 
 本次全量开放 Issue **17**，开放 PR **0**。#3553 明确排除。开放清单为：#3786、#3783、#3779、#3777、#3747、#3692、#3295、#3230、#3108、#2998、#2983、#2858、#2857、#1548、#851、#171、#144。
@@ -43,7 +43,7 @@
 
 ## 当前证据与交付记录
 
-- Root `main` 与 `origin/main` 当前均为 `e4aa8ca36a35a9b7b02d0fcf906ccc0e33be5b25`，根目录仅保留既有未跟踪 `.scratch/`；其他 worktree 不因 idle 或 clean 自动释放 owner。
+- Root `main` 与 `origin/main` 当前均为 `3b1fda4f3b267ae86ce0964ce4c9d09045ad8fcc`，根目录仅保留既有未跟踪 `.scratch/`；其他 worktree 不因 idle 或 clean 自动释放 owner。
 - PR #3789 的 migration 0073 将新 Session allocation 的 `admission_profile_digest` 作为可空、不可猜补的创建时事实；Store PostgreSQL focused 27/27、Core reserve 5/5、migration contract、API deployment、Core/Store build/types/迁移 drift 及当前 Hosted required checks 已通过。旧 Hosted Backend 的迁移期望失败已在最终 head 修正。
 - PR #3788 的 Worker follow-up 已合入 `985c16229571437affed57b9447ff20038e37306`，Issue #3778 已关闭；140/140 focused tests、Biome、Worker types 和 Hosted required checks 通过。ACK 验收与动态 reserve 真实证据仍由 #3779 跟踪。
 - PR #3789 已合入 `4ea71ed3c941d92fbf1fd815835e46c5a857094b`；revision fencing、migration 0073、DELETE/late-response recovery 和 Store Hosted checks 已完成，但 #3777 复核后因开发级并发/authority/fence 证据不足重新打开，Worker owner 可从新 main 接收 #851 AC-11/12。
