@@ -8,7 +8,10 @@
 
 Agent 级 Pod/PVC 加目录或原生 thread 分离，不能提供跨 Runtime、同主体不同 Session 的完整
 进程、工作区和凭据隔离。采用每 Session 唯一 Sandbox，代价是每会话独立计算/存储资源及
-迁移成本；继续使用现有 Platform DB、Worker 与 RuntimeHost，不增加调度服务、CRD 或资源池。
+迁移成本；继续使用现有 Platform DB、Worker 与 RuntimeHost，不增加调度服务或 CRD。
+新会话的有界预留实例遵循[工程 Spec §10.1.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#新会话预留实例)；
+其领取只发生一次，不能把已使用的运行实例或工作区交给另一会话。取舍见
+[ADR-0036](0036-bounded-session-sandbox-reserves.md)。
 自有 Web 的会话归属不改变，不能将其应用 Session 自动解释为 Platform Session。
 
 ## 历史边界

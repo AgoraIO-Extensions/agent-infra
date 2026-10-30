@@ -1034,7 +1034,7 @@ RuntimeHost 在 M1 中是 Agent Infra 的内部深 Module，同时作为未来�
 ### 12.3 M1 非目标
 
 - M1 不创建独立开源仓库，不发布公共 npm package，不选择开源 license，也不承诺公共 SemVer 或跨仓支持周期。
-- M1 不为未来开源增加本机 Desktop daemon、通用远程 daemon、ContainerLauncher、调度器、warm pool、动态 Driver/plugin registry 或任意 persistence/transport 抽象。
+- M1 不为未来开源增加本机 Desktop daemon、通用远程 daemon、ContainerLauncher、调度器、通用 warm pool、动态 Driver/plugin registry 或任意 persistence/transport 抽象。用于新会话启动的有界预留实例只消费[工程 Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#新会话预留实例)；固定最终身份，领取前没有业务 Session 或 Execution，领取后沿原 Host/Driver 准入，不新增通用身份重绑或跨会话原生进程复用接口。
 - M1 不因为潜在抽取而改变 PRD、四个标准模板、Platform/Connection 授权、Kubernetes 部署、平台历史权威或现有验收范围。
 - 只有出现 Agent Infra 以外的真实 consumer、内部 Interface 经多个上游升级保持稳定，并完成独立安全、维护和供应链评审后，后续决策才能批准抽取。
 

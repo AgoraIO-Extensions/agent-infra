@@ -564,7 +564,7 @@ Web 打开新会话先完成持久分配和实例准备，就绪前该会话只�
 有界等待规则触发分配，就绪前不投递。已有 Session 的可用性只由自身实例决定；Agent 级
 修订验证通过不能覆盖实例失败，单个实例失败也不能将其他就绪会话判为不可用。
 
-Worker 只消费已提交分配，按 Sandbox 串行调谐并校验原 Agent 管理资格。资源名、selector、
+Worker 消费已提交的 Session 分配，或下述「新会话预留实例」的独立预留事实，按 Sandbox 串行调谐并校验原 Agent 管理资格。资源名、selector、
 ownership、UID、Runtime/Workload 修订和租约/fence 必须绑定同一 Sandbox、Session 和代次；
 仅按 Agent ID 选择 Service、PVC 或清理集合不再足够。旧代次、外部同名对象和归属不明的资源
 均拒绝接管；部分创建失败从原分配幂等恢复，不删除其他 Sandbox。只有实例身份、路由、健康、
@@ -656,7 +656,7 @@ intent 重试。每次 progress 写回必须重新取得并校验当前 outbox l
 控制授权仍只允许原执行的停止、核实和屏障，不恢复业务使用权，不成为 Connection 授权。
 新增绑定由原契约 owner 发布版本化 Schema，并同步签发方、Host、文件数据面及消费者；不得
 静默改变既有 V1/V2/V4 wire 含义或兼容性放行无 Sandbox 的新业务调用。readiness 不创建
-业务 Execution；只对已分配实例作只读检查，不能用其授权读取会话或调用模型/工具。
+业务 Execution；只对已分配实例或部署批准的未领取预留实例作只读检查，不能用其授权读取会话或调用模型/工具。
 
 部署批准的出站策略由 Worker 按 Sandbox 落实，默认拒绝未批准目标；始终允许集群 DNS、获准模型
 和独立 Connection endpoint，部署还可以批准供标准模板原生工具直接出网的通用目标
@@ -716,6 +716,84 @@ Sandbox policy 是否过期无关；所属 Agent 的管理状态不是可用且�
 本契约不授予数据删除或破坏性迁移权限。历史与实施交接见
 [ADR: Session-owned Sandbox](../adr/0017-session-owned-sandbox-isolation.md)。
 
+##### 新会话预留实例
+
+预留实例只减少新 Session 的计算、镜像和 Host 准备等待。Platform DB 保存独立预留事实，
+现有 Worker 调谐原六类 Kubernetes 资源；不新增调度服务、CRD、Redis 权威或 Runtime 身份重绑接口。
+默认关闭。部署显式批准可用 Agent/模板、不可变配置和资源预算后，才允许准备未领取实例。
+已存在或空闲回收的 Session 继续使用原 Sandbox/PVC，不从此路径替换实例或重放执行。
+决策取舍和实施验收见 [ADR-0036](../adr/0036-bounded-session-sandbox-reserves.md)。
+
+**预留身份与授权。** 服务端为每个预留事实生成最终 `sessionId`、`sandboxId`，
+从首次创建 Pod 起使用该组 ID；领取不改名、不改标签中的身份，也不重新生成 Codex 的
+`agentId:sessionId` 容器边界 attestation。预留 Session ID 尚不是 Conversation，不能出现在
+用户历史、业务路由或授权查询结果中。预留表不伪造主体、渠道或 `system` Conversation，
+不向当前要求真实 Conversation 外键的 `session_sandbox_allocations` 填入占位行。
+领取前的调谐使用独立预留输入，不能以伪造的 `SessionSandboxBindingV1` 通过旧路径校验。
+
+第一阶段只接受当前获准标准模板的 verified V4 无 Key 模型投影；每项预留固定到一个 Agent，
+不能跨 Agent 共用。匹配依据包括 Runtime/Workload 修订、管理 fence、镜像 Digest、资源与存储
+规格、env 摘要、模型投影、只读 Skill generation、Connection Consumer 配置、网络策略及
+Runtime 签名/传输配置版本；任一影响实际 Pod 输入或授权的修订改变，未领取项立即失去领取资格。
+custom Owner Secret、自有交互入口及不满足这些条件的模板保持原准备路径，不自动扩展预热资格。
+
+未领取实例只有全新专属 PVC、原临时目录及已验证的只读 Skill 挂载；不复制业务工作区、
+原生会话历史或个人记忆。Secret 只能包含该 Sandbox 的派生服务凭据、无 Key 模型投影及
+适用的文件交换 token/容器边界 attestation；不包含部署级服务 token、个人/默认 Relay Key、
+Owner Secret、Connection 凭证或业务 Grant。传输 token 不授予业务权限；文件、模型、
+Connection 和 native callback 入口在没有真实当前 allocation/Execution 时必须拒绝。
+预留 readiness 只验证该独占实例，不建立业务 Execution、原生业务 Session 或模型调用。
+既有只读 readiness wire 若不能表达此用途，必须先补独立契约评审，不能伪造主体或扩大 Grant。
+
+**创建、领取与回收。** 预留事实包含不可变 ID/profile、`preparing/ready/claimed/retiring/unknown`
+状态、当前 lease/delivery fence、逐资源 UID/resourceVersion、待核实操作及期限。它只负责未领取
+资源；业务会话状态仍只由原 Conversation/allocation 保存。创建前持久化资源意图，调谐采用
+固定名称的幂等 create，不修改未知或不同 UID 的对象。六类资源、Host readiness、隔离及全部
+创建意图已确认、没有未完成或结果不明的资源写操作时，才能以当前 lease/CAS 标记 `ready`。
+启动时产生的受控 Host 元数据可以保留，但不得存在业务 Session、Execution 或用户文件。
+
+新会话按原入口事务先核验当前主体、Agent、渠道和幂等记录。只有创建新 Conversation 的分支
+可以 `FOR UPDATE SKIP LOCKED` 选择匹配 `ready` 项；续接、重试和恢复不得重新领取。事务中
+同时完成 `ready → claimed` CAS、真实 Conversation、allocation、原 outbox、审计和幂等结果，
+保持最终 ID 对不变。行锁顺序沿原入口锁序，预留行在末端领取；补充/淘汰路径不得持有预留行后
+反向锁 Conversation。事务回滚不留下部分主体绑定，幂等重放返回原 ID；没有匹配项时按原流程
+新分配并准备，不在事务中等待预留资源或调用 Kubernetes。
+
+预留资源首次准备使用 `generation=1`、`resourceFence=1`，与首次正式准备的目标值相同。
+领取保留它们以及已回读的逐资源身份；不能重置为 0、盲目加一使 immutable Secret 失配，或把
+旧 Pod 的观测复制成新 Pod。预留 lease/delivery fence 是另一项控制权限，领取时撤销；
+后续 Session 生命周期按原 generation/resourceFence 与 stopReceipt 推进。领取后的 Worker
+必须沿当前主体授权重读实际六类资源、profile、路由和 Runtime readiness 后才写入业务 `ready`；
+预留 `ready` 不是已授权 Session 的就绪回执，不能仅为满足延迟目标跳过真实检查。
+
+淘汰必须先在同一预留行上赢得 `ready/preparing/unknown → retiring` CAS，再持久化每项
+条件删除意图并发送 DELETE；`retiring` 不回到 `ready`。这样领取和淘汰只有一个赢家，
+提前缓存的列表或过期 lease 不授予清理权。领取前若有任何未决资源写操作，保持不可领取；
+旧 create 只能针对原名称幂等创建，不能 replace、patch 或 delete 已领取资源。`claimed` 后
+预留清理器永远不再操作该组资源，包括因禁用预热、缩容、过期或 Worker 重启触发的清理。
+已领取实例发生故障，沿原会话恢复，不能归还池、换一项重新领取或释放未知执行占用。
+
+未领取项退出时，按自身原始 UID/resourceVersion 删除六类资源，包括从未交付用户的空 PVC，
+回读全部 absence 后才释放占用。结果不明保留 `unknown`、原意图与预算，继续有界收敛；
+若已被领取、发现业务绑定或同名不同 UID，清理拒绝。正式 Session 的 PVC 保留规则不变。
+
+**有界补充与扩缩。** 部署策略声明允许的 profile、每项最小/最大备用数、总备用数、
+部署总 CPU/内存/PVC 预算、创建并发、过期时长、缩容冷却和失败退避。缺少上限不启用。
+`ready + preparing` 计入补充目标，`unknown + retiring` 仍占预算；不得在每轮重复创建同一缺额。
+领取只将占用从预留事实转入 allocation，不释放部署总预算。补充与普通新会话的资源预留
+使用同一事务预算锁，统计全部有效 allocation 与未交付预留项且不重复计数，不能靠 CPU
+低利用率或 Pod 删除请求已发出来认定有空闲配额。存量占用超过预算时停止新增，不能驱逐在用会话。
+
+目标备用数按同 profile 的新会话到达率、实际补充耗时和小额突发余量计算，并夹在批准的
+最小/最大值与剩余总预算内。重放请求、授权失败不计新增需求；预留领取和冷路径需求均计入。
+补充采样不足时使用保守的已观察上界，不把少数样本称为生产分位数。成功领取触发后台唤醒；
+多 Worker 用持久 lease/CAS 与同一预算避免重复补充，失败退避、并发限制和 profile 公平性均保留。
+缩容只淘汰未领取实例，使用冷却窗口防止反复创建/删除；一次停用以总目标 0 排空，已领取会话不受影响。
+
+业务就绪、首次实际投递、模型首字分别测量。预热命中只指实际使用了同一预留 Pod/PVC UID，
+不能用提前返回 202、镜像缓存命中或领取后重建 Pod 代替。按四模板、空池、突发耗尽和旧会话
+恢复分别报告命中率、阶段耗时、成功率及资源占用；池补满期间仍可能冷启动。
+
 ### 10.2 期望状态
 
 Platform DB 保存：
@@ -753,7 +831,7 @@ Session Sandbox 的停止与资源缺失按 §10.1.1 核实，不能要求未使
 运行中期望不能接受该结果；资源期望身份、归属、fence 或路由关闭校验失败仍返回失败，
 不能以资源缺失掩盖拒绝或不完整操作。保留的持久卷不因该结果被删除。
 
-Platform DB 的 outbox 保证状态变更和投递可恢复；outbox 写入事务提交后，数据库向 Worker 发出不含业务内容的唤醒提示，Worker 收到后立即发现待投递项，提示丢失时按固定轮询发现，认领、租约和 fence 校验不变。API 任务在同一 Store 内另保存受理顺序、等待期限和调度状态，由 Dispatch 实施第 12.4 节的有界等待。M1 不提供通用队列管理、优先级、定时调度、资源池或调用方逐任务执行时限参数。Session Sandbox 的空闲计算回收仅按 §10.1.1 的生命周期规则执行，不构成通用调度器或 Agent 级自动休眠。
+Platform DB 的 outbox 保证状态变更和投递可恢复；outbox 写入事务提交后，数据库向 Worker 发出不含业务内容的唤醒提示，Worker 收到后立即发现待投递项，提示丢失时按固定轮询发现，认领、租约和 fence 校验不变。API 任务在同一 Store 内另保存受理顺序、等待期限和调度状态，由 Dispatch 实施第 12.4 节的有界等待。M1 不提供通用队列管理、优先级、定时调度、通用资源池或调用方逐任务执行时限参数。新会话的有限预留只按 §10.1.1 执行，领取后仍由原会话/任务调度。Session Sandbox 的空闲计算回收仅按该节生命周期规则执行，不构成通用调度器或 Agent 级自动休眠。
 
 ### 10.3 并发与 Leader
 

@@ -75,7 +75,7 @@
 - **合并窗口内把接收失败的附件当作空附件并入任务，或只凭失败说明单独调用 Agent。** 前者让 Agent 误以为附件已到达，后者产生没有用户意图的任务。ADR-0032 的单独失败回复保留，失败信息只随用户随后的文字交给 Agent。
 - **回复超时后以主动消息补发最终答案。** 需要先核实企微长连接主动发送的能力与限额；核实前只在当前 stream 定稿，不承诺补发。
 - **企微撤回排队消息。** M1 只在 Web 提供撤回入口；企微的排队消息只会开始处理、超时或被取消。
-- **沙箱自行保活与 Sandbox 预热池。** 前者绕开平台的回收与授权边界；后者按 Owner 决策 Q3 不进入 M1（参照 Magic 的 [WarmPoolSandboxDomainService.php](https://github.com/dtyq/magic/blob/f9973c5cfe5d668867b1a8dc5c50e4be5081ee56/backend/super-magic-module/src/Domain/SuperAgent/Service/WarmPoolSandboxDomainService.php#L275-L375)）。
+- **沙箱自行保活。** 它绕开平台的回收与授权边界，仍不采用。新会话的有界预留实例改由 [ADR-0036](0036-bounded-session-sandbox-reserves.md) 及其引用的 PRD/工程 Spec 约束，不复用已使用的会话实例。
 
 ## 影响
 
