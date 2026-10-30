@@ -146,6 +146,63 @@ describe("Task router/factory with actual Bearer and PostgreSQL", () => {
 			)
 			.toBe(1);
 	});
+	it("streams a durable unknown status without changing the accepted task", async () => {
+		await sql`
+			insert into platform.conversation_events
+				(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+				 conversation_cursor, event_type, event_payload, event_digest,
+				 runtime_cursor, occurred_at, source)
+			values
+				('unknown-status-application', 'conversation-application', 'execution-application',
+				 'unknown-status-application', 2, 2, 'execution.status',
+				 ${sql.json({ type: "execution.status", status: "unknown" })}, ${"a".repeat(64)},
+				 null, now(), 'platform')
+		`;
+		await sql`
+			update platform.conversations
+			set last_conversation_cursor = 2
+			where id = 'conversation-application'
+		`;
+		await sql`
+			update platform.conversation_executions
+			set status = 'unknown', last_event_sequence = 2
+			where execution_id = 'execution-application'
+		`;
+		const before = await sql`
+			select status, attempt_count
+			from platform.outbox_items
+			where scope_id = 'conversation-application'
+		`;
+		const controller = new AbortController();
+		const response = await app(dependencies()).request(
+			`${path("application")}/events`,
+			{ headers: headers("application"), signal: controller.signal },
+		);
+		expect(response.status).toBe(200);
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("Missing task event stream");
+		const decoder = new TextDecoder();
+		let output = "";
+		for (
+			let attempt = 0;
+			attempt < 3 && !output.includes('"unknown"');
+			attempt++
+		) {
+			const chunk = await reader.read();
+			output += decoder.decode(chunk.value);
+		}
+		expect(output).toContain('"type":"execution.status"');
+		expect(output).toContain('"status":"unknown"');
+		controller.abort();
+		await reader.cancel();
+		expect(
+			await sql`
+				select status, attempt_count
+				from platform.outbox_items
+				where scope_id = 'conversation-application'
+			`,
+		).toEqual(before);
+	});
 	it("consumes the original deployment loader and production assembly over real HTTP with typed Bearer isolation", async () => {
 		const moduleSpecifier = new URL(
 			"../../../tests/fixtures/personal-credential-deployment.ts",
