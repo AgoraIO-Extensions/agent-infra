@@ -1178,7 +1178,14 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		const statistics = await reserve.store.statistics({ windowMs: 300000 });
 		expect(statistics).toMatchObject({
 			windowMs: 300000,
-			profiles: expect.any(Array),
+			profiles: [
+				expect.objectContaining({
+					profileDigest: reserve.lease.profile.digest,
+					currentProfileDigest: reserve.lease.profile.digest,
+					newSessionCount: 0,
+					claimedCount: 0,
+				}),
+			],
 		});
 	});
 	it("lists every page while target is zero and rejects out-of-bound page sizes", async () => {
