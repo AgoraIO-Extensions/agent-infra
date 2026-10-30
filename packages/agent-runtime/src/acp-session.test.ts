@@ -398,3 +398,56 @@ it("rejects structured image content when the ACP peer does not negotiate image 
 		await rm(cwd, { recursive: true, force: true });
 	}
 });
+
+it("bounds a hanging ACP prompt and retires the native process", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "acp-prompt-timeout-"));
+	await mkdir(join(cwd, "workspace"));
+	const session = await openAcpSession({
+		directory: cwd,
+		cwd: join(cwd, "workspace"),
+		launch: {
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "ignore-cancel" },
+			promptTimeoutMs: 25,
+		},
+		update: async () => {},
+	});
+	try {
+		await expect(session.prompt("hang")).rejects.toThrow(
+			"RUNTIME_ACP_PROMPT_TIMEOUT",
+		);
+		await expect(session.exited).resolves.toBeNull();
+	} finally {
+		await session.close();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+it("clears the ACP prompt deadline after a normal response", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "acp-prompt-deadline-"));
+	await mkdir(join(cwd, "workspace"));
+	const session = await openAcpSession({
+		directory: cwd,
+		cwd: join(cwd, "workspace"),
+		launch: {
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "custom-acp" },
+			promptTimeoutMs: 1_000,
+		},
+		update: async () => {},
+	});
+	try {
+		await expect(session.prompt("complete")).resolves.toMatchObject({
+			stopReason: "end_turn",
+		});
+	} finally {
+		await session.close();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
