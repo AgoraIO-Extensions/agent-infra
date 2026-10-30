@@ -1,21 +1,29 @@
-# ACK 真实环境 E2E 部署记录（脱敏）
+# ACK 部署前提与历史 E2E 记录（脱敏）
 
-本文件只保留 ACK 真实环境 E2E 的部署方式和验收结论。真实 LB IP、企微 Corp ID、镜像
+本文保留早期 ACK 试部署记录及仍适用的配置前提；历史状态不代表当前集群或新版本已验收。
+新部署、搬迁和清空后重建以[ACK 重部署工作流](./ACK-REDEPLOY-WORKFLOW.md)及其
+`run-capsule.ts` / `redeploy.sh` 入口为准，每轮重新核对 source/image/config 和真实业务证据。
+真实 LB IP、企微 Corp ID、镜像
 digest、Secret 名和集群细节属于部署机器状态，只允许出现在仓库外的 private env/values；
 仓库内 chart 和脚本使用占位符，`deploy.sh` 会拒绝未替换的占位值。不要把真实值补回本文件。
 
-## 入口
+## 历史入口
 
-- 前端：`https://<ACK_LB_IP>/`，HTTP 备用入口 `http://<ACK_LB_IP>/`。
-- HTTPS 使用 ACK Ingress LoadBalancer 和临时自签名证书，证书的 SAN 为该 LB IP。
-- IngressClass 由集群提供，本次使用 ACK 的 `new-magic-nginx`。
+- 早期前端使用 `https://<ACK_LB_IP>/`，并配置了 HTTP 入口；新部署按其实际 HTTPS Origin 验证，不能用 HTTP 回退绕过证书错误。
+- 早期 HTTPS 使用 ACK Ingress LoadBalancer 和临时自签名证书，证书的 SAN 为该 LB IP；新部署证书必须匹配实际主机名。
+- IngressClass 由目标集群提供，名称放在 private values 中。
 - ACK kubeconfig 使用仓库外受保护副本，不写入仓库。
 
-浏览器第一次访问 HTTPS 会提示自签名证书。前端构建注入了 `/auth/login` 和 `/auth/logout`，Web 的 `/api/*`、`/auth/*` 由 Nginx 反代到 `agent-infra-api`。
+浏览器信任与 HTTP 探针信任分别验证；私有 CA 的配置见下文。Web 的 `/api/*`、`/auth/*`
+由 Nginx 反代到 `agent-infra-api`，路径可达不等于真实登录成功。
 
-## 已部署组件
+## 历史试部署组件与当前 Chart 前提
 
-Namespace 示例为 `agent-infra`。首次试部署使用受控 raw manifests，不是 Helm release；ACK 专用 Helm wrapper 见 [`deploy/ack/chart`](./chart)，它复用现有 E2E Secret、目录 source ConfigMap 和 GHCR immutable image，真实环境值只放在仓库外 private values。默认 `migrations.enabled=false`、`postgres.enabled=false`，适合接管已初始化的 ACK 数据库；全新集群可显式开启 PostgreSQL 和 migrations。当前线上资源仍由 raw manifests 管理，wrapper 已完成 `helm lint`、渲染校验和 ACK server dry-run。
+Namespace 示例为 `agent-infra`。首次试部署使用受控 raw manifests，不是 Helm release；
+这不描述当前安装。ACK 专用 Chart 见 [`chart`](./chart)，其依赖和 immutable image 由
+仓库外 private values 指定。默认 `migrations.enabled=false`、`postgres.enabled=false`；
+全新安装按重部署工作流显式配置 PostgreSQL 和 migrations，已有环境先核对实际 Helm/资源
+归属，不能因历史记录而接管或覆盖已有对象。
 
 Chart 默认声明 `agent-infra-ack-quota` ResourceQuota：25 个 PVC、500Gi 请求存储、30 个 Pod 和 50 个 Service，覆盖保留的 Session Sandbox PVC。接管已有 namespace 前必须核对 quota 的 `hard/used`，不能用默认值覆盖其他租户的预算；Chart 不删除历史 PVC，回收由 Session Sandbox 生命周期负责。
 
@@ -33,7 +41,9 @@ Chart 默认声明 `agent-infra-ack-quota` ResourceQuota：25 个 PVC、500Gi �
 | Enterprise Directory Sync | `1/1 Running` | 使用 E2E source adapter；HTTPS Service |
 | Directory migration | `Complete` | 独立 migration Job |
 
-目录同步 `/readyz` 返回 `200`，快照有效（成员与部门数量属于环境数据，不写入仓库）。Worker 通过 ACK Service 名称访问目录；保留了 E2E 证书的 `enterprise-directory-sync` SAN，并创建了同名 Service alias。
+上表是早期运行观察，不是当前就绪清单。该轮目录同步 `/readyz` 返回 `200`，快照有效
+（成员与部门数量不写入仓库）。当时 Worker 通过 ACK Service 名称访问目录，并保留了
+E2E 证书的 `enterprise-directory-sync` SAN 和同名 Service alias；迁移时重新核对实际名称与证书。
 
 ## Session Runtime 的 ECI 调度
 
@@ -88,26 +98,42 @@ Runtime image 必须是 `architecture` 对应的不可变 manifest Digest。
 
 ## 镜像
 
-镜像只引用 immutable digest；当前 ACK 使用的 amd64 digest 由仓库外 private values 提供，仓库 chart 默认值为占位 digest，`deploy.sh` 会拒绝未替换的占位值。GHCR 的 Web/API/Worker package 为 public；目录和 PostgreSQL package 受组织可见性策略影响，因此 ACK 使用只包含 GHCR 凭据的 Kubernetes pull Secret `ack-ghcr-pull`。
+镜像只引用 immutable digest，由仓库外 private values 提供；Chart 默认占位 digest 会被
+部署入口拒绝。实际 package 可见性与拉取权限应按目标环境回读；需要认证时使用声明的
+Kubernetes pull Secret，不能由历史可见性推断当前可拉取。发布凭据的 Actions Write 与
+部署拉取权限是两个独立条件，详见[发布与拉取](./ACK-REDEPLOY-WORKFLOW.md)。
 
 ## 验证
 
+使用 private env 中声明的精确 Origin、kubeconfig 与 namespace。私有 CA 示例：
+
 ```bash
-curl -k -I https://<ACK_LB_IP>/
-curl -k https://<ACK_LB_IP>/api/v2/agents
-kubectl -n <ACK_NAMESPACE> get deploy,pod,job,svc,ingress,pvc -o wide
+curl --cacert "$ACK_CA_CERT_FILE" -I "${ACK_PUBLIC_ORIGIN%/}/"
+curl --cacert "$ACK_CA_CERT_FILE" "${ACK_PUBLIC_ORIGIN%/}/api/v2/agents"
+kubectl --kubeconfig "$ACK_KUBECONFIG" -n "$ACK_NAMESPACE" get deploy,pod,job,svc,ingress,pvc
 ```
 
-已验证：
+使用系统信任链时省略 `--cacert`，保留主机名校验；Node probe 的私有 CA 使用
+`NODE_EXTRA_CA_CERTS`。这些是连通性检查，未登录的 `401` 不证明账号密码、Session 或授权 API 可用。
+
+早期记录中的验证结果：
 
 - 前端 HTTPS 返回 `200`；
 - `/api/v2/agents` 未登录返回 `401 AUTHENTICATION_REQUIRED`；
 - API、Web、PostgreSQL、Directory Sync 和 ECI Worker 均已运行；
 - Platform/Directory migration 均完成；
 - Directory `/readyz` 返回 `200`，快照有效。
-- `helm lint deploy/helm/agent-infra` 和 `helm lint deploy/ack/chart` 均通过；ACK 当前 `helm list -n agent-infra` 为空，线上资源仍是 raw manifests。
+- 当时 `helm lint deploy/helm/agent-infra` 和 `helm lint deploy/ack/chart` 均通过，`helm list` 为空；这是早期 raw-manifest 安装的事实，不可作为新部署归属判断。
 - `helm template ack-e2e deploy/ack/chart --set ingress.enabled=false | kubectl apply --dry-run=server -f -` 通过 ACK API 校验；Ingress 因线上已有同名 wildcard 路由未在该 dry-run 中重复提交；Helm wrapper 对 ACK Ingress 开启 HTTP→HTTPS 重定向，`publicOrigin` 由每个环境的实际 LB 地址填写。登录回归探针：无 Origin 的合成请求会被安全边界拒绝；带 `Origin: https://<ACK_LB_IP>` 的合成请求到达 LDAP 校验并返回 `401`，证明 Web→API token 和 HTTPS 转发链路已打通。
 
-## 仍需真实业务验收
+## 每轮部署的真实业务验收
 
-登录入口已经配置。此前 ACK Web Nginx 未注入 API proxy token 且覆盖了外部 HTTPS 标记，导致 `/auth/login` 被 API 安全边界拒绝；现已通过 Web entrypoint 从 Secret 渲染 token，并保留/设置 HTTPS 转发标记。实际账号登录仍依赖 E2E 配置中的 LDAP endpoint、用户凭据和网络可达性；本次没有读取或生成用户密码，也没有伪造登录成功。Runtime Host 已补齐 ACK 所需的 amd64 版本并完成 ECI 启动探针：在 ECI virtual-kubelet 节点上成功拉取并启动，返回 `status=ready`、`port=3003`。探针使用合成配置，不能替代真实用户 Agent Workload 验收；真实首通仍需终端用户登录、Relay 和模型凭据。
+早期 Web Nginx 未注入 API proxy token 且覆盖外部 HTTPS 标记，导致 `/auth/login` 被安全
+边界拒绝。Web entrypoint 从 Secret 渲染 token 并保留 HTTPS 转发标记修复了该接入缺口，
+但入口修复、匿名 `401` 和合成 Runtime 启动探针都不能代替真实登录与业务结果。
+
+每轮按[重部署工作流](./ACK-REDEPLOY-WORKFLOW.md)回读真实登录、Session、授权 API、
+四模板真实模型完成事实、当前自定义 Agent 的多轮对话及单/多服务自有入口。
+实际 Pod/imageID、主体/Session 绑定与 source/config 必须对应本轮；旧成功、Pod Ready 和
+文档中的历史状态不能填入新运行的验收结果。API 模型目录等可选配置的迁移要求见
+[配置模块与模型目录](./ACK-REDEPLOY-WORKFLOW.md#配置模块与模型目录)。

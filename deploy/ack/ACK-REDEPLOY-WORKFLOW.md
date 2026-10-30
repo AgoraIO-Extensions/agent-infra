@@ -406,6 +406,25 @@ deploy/ack/redeploy.sh bootstrap-inputs
 
 已有环境的 `preflight.sh` 只读检查依赖，不会在连接失败时创建 namespace。
 
+### 配置模块与模型目录
+
+`capture-inputs` 保存配置字节，`bootstrap-inputs` 校验文件/挂载/归属；两者都不会执行或
+升级自有配置模块。更换 API/Worker 镜像后，须按对应 source 的
+[API 配置契约](../platform-api/README.md)和 [Worker 配置契约](../platform-worker/README.md)
+核对所需导出，不能从旧输入包、镜像发布成功或 Pod Ready 推断业务能力已接通。
+
+需要平台会话模型选择时，API 可以使用显式 `modelSelection` reader，或配置 `modelDirectory`
+由正式装配创建 reader；两种来源不能同时提供。`savedKeyCandidates` 读取已保存 Agent 默认
+Key 的候选 metadata，与会话模型目录是不同入口，配置前者不会自动启用后者。
+只有实际 Worker 已在同一受认证内部服务提供两个入口时，才可以在私有配置中复用同一
+`{ baseUrl, serviceToken }` 输入；否则使用各自声明的服务配置，不能猜测端口或复制外部凭证。
+同时核对 Worker 的实际监听配置、Service 和 NetworkPolicy，不将内部服务暴露给浏览器或 Agent。
+
+该能力还依赖当前 Runtime Manifest、已验证部署和原生能力，reader 配置本身不保证可用。
+部署后用真实授权主体回读目标 Agent 的能力与模型选项，再完成实际会话任务；直接 Runtime
+模型请求或四模板 preflight 成功不能代替 API 能力投影。输入变更须进入新的私有 capsule，
+并按现有归属/漂移及 rollout 规则执行，不能只修现场 Secret 或覆盖旧运行证据。
+
 ## 新环境的 API 凭证
 
 ### 创建 Agent 前的 Session 容量检查
