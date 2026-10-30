@@ -174,13 +174,9 @@ export function validateWorkflowDocuments(workflows) {
   const templateBuild = templates?.steps?.find((step) => step.run?.includes("--images="));
   const templateMatrix = templates?.strategy?.matrix?.include;
   const smokeInput = publish?.on?.workflow_dispatch?.inputs?.smoke;
-  const packageAccess = templates?.steps?.find((step) => step.name === "Verify RuntimeHost package workflow access");
   if (publish?.env?.IMAGE_TAG !== "${{ github.event_name == 'workflow_dispatch' && inputs.smoke && format('smoke-{0}-{1}', github.run_id, github.run_attempt) || github.ref == 'refs/heads/main' && 'main' || github.ref_name }}" ||
       !templateBuild?.run?.includes("--images=codex,claude,opencode,pi") ||
       !templateBuild?.run?.includes("--custom-base-image") ||
-      packageAccess?.env?.GH_TOKEN !== "${{ github.token }}" ||
-      !packageAccess?.run?.includes("agent-runtime-host") ||
-      !packageAccess?.run?.includes("AgoraIO-Extensions/agent-infra") ||
       smokeInput?.type !== "boolean" ||
       smokeInput?.default !== false ||
       !String(templates?.if ?? "").includes("inputs.smoke == true") ||

@@ -7,7 +7,7 @@ API Agent 创建和入口验收入口；每次真实运行仍必须以当前 sou
 [`ACK-REDEPLOY-LESSONS.md`](./ACK-REDEPLOY-LESSONS.md)。
 所有 kubeconfig、Secret、Cookie、浏览器 state 和真实环境输入留在仓库外。
 
-入口脚本是 [`redeploy.sh`](./redeploy.sh)。它只接受 immutable image reference，渲染结果仍包含占位值时直接失败；每次运行把脱敏 receipt 写到外部 `ACK_EVIDENCE_DIR`，不会把会话正文或凭证写入仓库。`ACK_RUNTIME_IMAGE_MANIFEST` 可直接指向发布工作流生成的 `runtime-host.json`（读取 `images.runtimeHost`）；旧的顶层 `repository`/`digest` 形状仍兼容，但正式 `images` 存在且无效时不会回退到旧字段。
+入口脚本是 [`redeploy.sh`](./redeploy.sh)。它只接受 immutable image reference，渲染结果仍包含占位值时直接失败；每次运行把脱敏 receipt 写到外部 `ACK_EVIDENCE_DIR`，不会把会话正文或凭证写入仓库。
 
 ## 搬迁私有输入包
 
@@ -108,6 +108,27 @@ credential 和 Agent bindings。`bootstrap-plan` 检查新安装的 ownership，
 
 在目标机器准备 Node 24、`kubectl`、Helm、`curl` 和 Git。先从最终发布 commit 的 clean checkout 构建并发布 `web`、`platform-api`、`platform-worker`、`enterprise-directory-sync`、RuntimeHost 以及四个标准 Runtime 的 amd64 immutable manifest。自定义 Agent 也必须先取得部署批准的 OCI Digest；Tag 不能作为部署输入。
 
+发布流程可先从已审查分支运行完整 smoke：
+
+```bash
+gh workflow run publish-images.yml --ref main -f smoke=true
+```
+
+该命令为每个原生架构依次构建、探测并推送四模板、RuntimeHost 和 custom base，随后验证
+六个双架构索引。标签固定为 `smoke-<run_id>-<attempt>`，不会更新 `main` 或 `latest`。
+`publish_platform=true` 可同时产生 Platform 收据；ACK 仍要求所有部署输入绑定同一源码。
+选择分支后必须回读 run 的 `headSha`，不能把此时后来前进的 main 当作运行来源。
+收据按 attempt 隔离；失败后完整重跑 workflow，不能只重跑失败架构后混用旧 attempt 收据。
+失败运行中的部分 artifact 只用于诊断；两个架构及索引全部成功后才接受发布结果。
+
+GHCR 包的 source 关联与 `Manage Actions access` 是不同设置。关联名称或可见性不证明
+workflow 能写入；已有包需明确允许本仓库 Actions Write，首次发布按组织创建包规则检查。
+不要通过改为公开或替换凭据绕过问题。实际 push 是最终权限证据，失败日志只输出白名单类别。
+
+`ACK_RUNTIME_IMAGE_MANIFEST` 直接使用 amd64 发布 artifact 中的 `runtime-host.json`，
+读取 `images.runtimeHost`。旧的顶层 `repository`/`digest` 形状仍支持相同的 schema、
+source 和架构校验；正式 `images` 存在且无效时不能回退旧字段。无需人工重写收据。
+
 仓库外准备以下配置与发布 receipt：
 
 ```bash
@@ -115,7 +136,7 @@ export ACK_KUBECONFIG=/private/ack/kubeconfig
 export ACK_VALUES_FILE=/private/ack/values.yaml
 export ACK_SOURCE_SHA=0123456789abcdef0123456789abcdef01234567
 export ACK_IMAGE_MANIFEST=/private/ack/platform-images.json
-export ACK_RUNTIME_IMAGE_MANIFEST=/private/ack/runtime-host-manifest.json
+export ACK_RUNTIME_IMAGE_MANIFEST=/private/ack/runtime-host.json
 export ACK_PUBLIC_ORIGIN=https://ack.example.test
 export ACK_CA_CERT_FILE=/private/ack/ack-ca.pem
 export ACK_AGENT_STATE_DIR=/private/ack/agent-state
