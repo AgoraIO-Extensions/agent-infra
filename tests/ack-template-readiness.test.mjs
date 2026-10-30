@@ -5,7 +5,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { validateTemplatePreflightJob } from "../deploy/ack/template-model-preflight.mjs";
+import * as preflight from "../deploy/ack/template-model-preflight.mjs";
+
+const { projectPodStartupReceipt, validateTemplatePreflightJob } = preflight;
 
 const script = new URL(
 	"../deploy/ack/template-model-preflight.mjs",
@@ -37,6 +39,210 @@ const baseJob = {
 	expectedResourceLimits: { cpu: "1", memory: "2Gi" },
 	placement: { nodeSelector: { type: "virtual-kubelet" } },
 };
+
+const expectedPod = {
+	name: "ack-preflight-claude-fixture",
+	owner: "fixture-owner",
+};
+const startupPod = {
+	metadata: {
+		name: expectedPod.name,
+		namespace: baseJob.namespace,
+		uid: "pod-uid-3771",
+		creationTimestamp: "2026-10-30T00:00:00Z",
+		labels: {
+			"agent-infra.validation-source": baseJob.sourceCommit,
+			"agent-infra.validation-owner": expectedPod.owner,
+			"agent-infra.validation-scope": baseJob.scope,
+		},
+	},
+	spec: { containers: [{ name: "runtime", image: baseJob.imageReference }] },
+	status: {
+		containerStatuses: [
+			{
+				name: "runtime",
+				state: { running: { startedAt: "2026-10-30T00:00:10Z" } },
+			},
+		],
+		conditions: [
+			{
+				type: "Ready",
+				status: "True",
+				lastTransitionTime: "2026-10-30T00:00:12Z",
+			},
+		],
+	},
+};
+const event = (reason, at = "2026-10-30T00:00:01Z", extra = {}) => ({
+	involvedObject: { kind: "Pod", uid: startupPod.metadata.uid },
+	type: "Normal",
+	reason,
+	eventTime: at,
+	...extra,
+});
+const project = (events, pod = startupPod, job = baseJob) =>
+	projectPodStartupReceipt({ job, expectedPod, pod, events });
+
+test("startup receipt distinguishes partial cache hits from real image presence", () => {
+	const receipt = project([
+		event("SuccessfulHitImageCache"),
+		event("ImageCacheNotFullMatch"),
+		event("ImageCacheAutoCreated"),
+		event("ImageCacheAutoEliminated"),
+		event("Pulling"),
+		event("Pulled", "2026-10-30T00:00:05Z"),
+	]);
+	assert.equal(receipt.sourceCommit, baseJob.sourceCommit);
+	assert.equal(receipt.imageDigest, baseJob.imageDigest);
+	assert.match(receipt.podUidSha256, /^[a-f0-9]{64}$/u);
+	assert.deepEqual(receipt.durationsSeconds, {
+		createToContainer: 10,
+		createToReady: 12,
+		containerToReady: 2,
+	});
+	assert.deepEqual(receipt.cache, {
+		hit: true,
+		partialMatch: true,
+		autoCreated: true,
+		autoEvicted: true,
+		imageAlreadyPresent: false,
+	});
+	assert.deepEqual(receipt.pull, { status: "observed", seconds: 4 });
+	const already = project([
+		event("Pulled", "2026-10-30T00:00:05Z", {
+			message: `Container image "${baseJob.imageReference}" already present on machine`,
+		}),
+	]);
+	assert.equal(already.cache.imageAlreadyPresent, true);
+	assert.deepEqual(already.pull, { status: "unknown", seconds: null });
+	assert.equal(
+		project([event("SuccessfulHitImageCache")]).cache.imageAlreadyPresent,
+		null,
+	);
+});
+
+test("missing events and wrong-UID events cannot manufacture a cache miss or pull proof", () => {
+	for (const events of [
+		undefined,
+		[],
+		[
+			event("Pulled", undefined, {
+				involvedObject: { kind: "Pod", uid: "another-pod" },
+			}),
+		],
+	]) {
+		const receipt = project(events);
+		assert.equal(
+			receipt.eventRead,
+			events === undefined ? "unavailable" : "unknown",
+		);
+		assert.deepEqual(receipt.cache, {
+			hit: null,
+			partialMatch: null,
+			autoCreated: null,
+			autoEvicted: null,
+			imageAlreadyPresent: null,
+		});
+		assert.deepEqual(receipt.pull, { status: "unknown", seconds: null });
+	}
+});
+
+test("startup binding rejects wrong owner, name, source, image, or extra containers", () => {
+	for (const mutate of [
+		(pod) => {
+			pod.metadata.name = "ack-preflight-other";
+		},
+		(pod) => {
+			pod.metadata.namespace = "another-namespace";
+		},
+		(pod) => {
+			pod.metadata.labels["agent-infra.validation-owner"] = "another-owner";
+		},
+		(pod) => {
+			pod.metadata.labels["agent-infra.validation-source"] = "f".repeat(40);
+		},
+		(pod) => {
+			pod.spec.containers[0].image = "wrong-image";
+		},
+		(pod) => {
+			pod.spec.containers.push({ ...pod.spec.containers[0] });
+		},
+		(pod) => {
+			delete pod.metadata.uid;
+		},
+	]) {
+		const pod = structuredClone(startupPod);
+		mutate(pod);
+		assert.throws(() => project([], pod), /STARTUP_RECEIPT_BINDING_INVALID/u);
+	}
+	assert.throws(
+		() => project([], startupPod, { ...baseJob, sourceCommit: "f".repeat(40) }),
+		/STARTUP_RECEIPT_BINDING_INVALID/u,
+	);
+});
+
+test("missing, invalid, backwards, or unbounded times remain diagnostic unknown", () => {
+	for (const invalid of [
+		undefined,
+		"private-secret-value",
+		"2026-02-30T00:00:00Z",
+		"2026-10-29T00:00:00Z",
+		"2026-11-30T00:00:00Z",
+	]) {
+		const pod = structuredClone(startupPod);
+		pod.status.conditions[0].lastTransitionTime = invalid;
+		const receipt = project([], pod);
+		assert.equal(receipt.timingReadback, "unknown");
+		assert.deepEqual(receipt.durationsSeconds, {
+			createToContainer: null,
+			createToReady: null,
+			containerToReady: null,
+		});
+	}
+	for (const events of [
+		[event("Pulling", "bad-time"), event("Pulled", "2026-10-30T00:00:05Z")],
+		[
+			event("Pulling", "2026-10-30T00:00:05Z"),
+			event("Pulled", "2026-10-30T00:00:01Z"),
+		],
+		[event("Pulling"), event("Pulled", "2026-11-30T00:00:05Z")],
+	])
+		assert.deepEqual(project(events).pull, {
+			status: "unknown",
+			seconds: null,
+		});
+});
+
+test("startup projection outputs only allowlisted fields even from sensitive events", () => {
+	const marker = "private-secret-cache-id-message";
+	const pod = structuredClone(startupPod);
+	pod.spec.containers[0].env = [{ name: "TOKEN", value: marker }];
+	const receipt = project(
+		[
+			event("SuccessfulHitImageCache", undefined, {
+				message: marker,
+				metadata: { name: marker },
+				count: marker,
+			}),
+			event(marker, undefined, { message: marker }),
+			event("Pulled", undefined, {
+				message: `Container image "${marker}" already present on machine`,
+			}),
+		],
+		pod,
+	);
+	const serialized = JSON.stringify(receipt);
+	for (const raw of [
+		marker,
+		pod.metadata.name,
+		pod.metadata.namespace,
+		pod.metadata.uid,
+		expectedPod.owner,
+		baseJob.imageReference,
+	])
+		assert.equal(serialized.includes(raw), false);
+	assert.equal(receipt.cache.imageAlreadyPresent, null);
+});
 
 test("template readiness budget defaults and bounds are validated without changing the input", () => {
 	assert.equal(
@@ -80,6 +286,8 @@ for (const scenario of [
 	"readback-failed",
 	"identity-drift",
 	"ready-continues",
+	"ready-events-unavailable",
+	"ready-events-other-pod",
 	"invalid-budget",
 ]) {
 	test(`template readiness executes and cleans its owned resources: ${scenario}`, async (t) => {
@@ -122,11 +330,13 @@ const log=${JSON.stringify(log)},state=${JSON.stringify(state)};
 fs.appendFileSync(log,JSON.stringify(args)+'\\n');
 if(args.includes('create')&&args.includes('secret')){console.log('{}');process.exit(0);}
 if(args.includes('apply')){fs.readFileSync(0);process.exit(0);}
-if(args.includes('create')){fs.writeFileSync(state,fs.readFileSync(0));process.exit(0);}
-if(args.includes('wait')){if(scenario==='ready-continues')process.exit(0);console.error(secret);process.exit(1);}
+if(args.includes('create')){const pod=JSON.parse(fs.readFileSync(0));pod.metadata.uid='fixture-pod-uid';pod.metadata.creationTimestamp='2026-10-30T00:00:00Z';fs.writeFileSync(state,JSON.stringify(pod));process.exit(0);}
+if(args.includes('wait')){if(scenario.startsWith('ready-'))process.exit(0);console.error(secret);process.exit(1);}
+if(args.includes('events')){if(scenario==='ready-events-unavailable'){console.error(secret);process.exit(1);}console.log(JSON.stringify({items:scenario==='ready-events-other-pod'?[{involvedObject:{kind:'Pod',uid:'other-pod'},type:'Normal',reason:'Pulled',message:secret}]:[]}));process.exit(0);}
 if(args.includes('get')){
  if(scenario==='readback-failed'){console.error(secret);process.exit(1);}
  const pod=JSON.parse(fs.readFileSync(state));pod.status={phase:'Pending',containerStatuses:[{state:{waiting:{reason:scenario==='unsafe-reason'?secret:'ContainerCreating',message:secret}}}]};
+ if(scenario.startsWith('ready-'))pod.status={phase:'Running',containerStatuses:[{name:'runtime',imageID:'docker-pullable://runtime@sha256:'+'c'.repeat(64),state:{running:{startedAt:'2026-10-30T00:00:10Z'}}}],conditions:[{type:'Ready',status:'True',lastTransitionTime:'2026-10-30T00:00:12Z'}]};
  if(scenario==='identity-drift')pod.metadata.labels['agent-infra.validation-owner']='different-owner';
  console.log(JSON.stringify(pod));process.exit(0);
 }
@@ -166,8 +376,24 @@ if(args.includes('port-forward')){console.error(secret);process.exit(1);}
 			["secret", pod.metadata.name],
 		]);
 		const receiptFile = join(output, "pod-readiness-failure.json");
-		if (scenario === "ready-continues") {
+		if (scenario.startsWith("ready-")) {
 			assert(calls.some((args) => args.includes("port-forward")));
+			const startup = JSON.parse(
+				await readFile(join(output, "pod-startup.receipt.json"), "utf8"),
+			);
+			assert.equal(startup.sourceCommit, job.sourceCommit);
+			assert.equal(startup.durationsSeconds.createToReady, 12);
+			assert.equal(
+				startup.eventRead,
+				scenario === "ready-events-unavailable" ? "unavailable" : "unknown",
+			);
+			assert.equal(JSON.stringify(startup).includes(secret), false);
+			assert.equal(startup.cache.imageAlreadyPresent, null);
+			assert(
+				calls.some((args) =>
+					args.includes("involvedObject.uid=fixture-pod-uid"),
+				),
+			);
 			await assert.rejects(readFile(receiptFile), { code: "ENOENT" });
 			return;
 		}

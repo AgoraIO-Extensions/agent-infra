@@ -79,6 +79,15 @@ reasoning 事件，不据此扩展为工具、思考过程或全部逐帧增量�
 首轮冷启动、自有入口创建前等待和 CPU 接近限制需要进一步分析；本轮没有通过增加观察
 超时来宣称性能改善。功能验收通过与性能达标分别记录。
 
+模板模型预检在 Pod Ready 后另写 `pod-startup.receipt.json`：绑定本次 job 的
+source/template/image 和实际 Pod UID 哈希，记录创建、容器启动、Ready 及镜像拉取阶段。
+临时 Pod 的 source 标签只用于本次观察归属，不替代已有镜像和模型来源校验。
+`SuccessfulHitImageCache` 与 `ImageCacheNotFullMatch` 可以同时出现，不能据缓存命中事件
+宣称没有下载；只有同 UID 的精确 `Pulled` 已存在消息才投影为 `imageAlreadyPresent=true`。
+事件读取失败、缺少相关事件或时间无效时保留 unknown/null，不推断 cache miss、零耗时或性能达标。
+收据不包含 Pod/Namespace 名、缓存 ID、原始事件消息或凭据；原模型、validation、capacity
+收据及资源清理规则保持独立。
+
 ## 失败案例及修复规则
 
 | 现象 | 根因 | 固化到工作流的规则 |

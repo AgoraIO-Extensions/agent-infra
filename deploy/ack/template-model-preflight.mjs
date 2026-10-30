@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHmac, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
+import { createHash, createHmac, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { chmod, lstat, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
@@ -12,6 +12,88 @@ const templates = new Set(["codex", "claude", "opencode", "pi"]);
 const digestPattern = /^sha256:[a-f0-9]{64}$/u;
 const sourcePattern = /^[a-f0-9]{40}$/u;
 const namePattern = /^ack-preflight-[a-z0-9-]+$/u;
+const startupEventReasons = new Set([
+	"Pulling", "Pulled", "SuccessfulHitImageCache", "ImageCacheNotFullMatch",
+	"ImageCacheAutoCreated", "ImageCacheAutoEliminated",
+]);
+const timestampMs = (value) => {
+	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/u.test(value)) return null;
+	const parsed = Date.parse(value);
+	return Number.isFinite(parsed) && parsed >= 0 && new Date(parsed).toISOString().slice(0, 19) === value.slice(0, 19) ? parsed : null;
+};
+const iso = (value) => value === null ? null : new Date(value).toISOString();
+const durationSeconds = (from, to, maximum) =>
+	from === null || to === null || to < from || to - from > maximum * 1000 ? null : (to - from) / 1000;
+
+export function projectPodStartupReceipt({ job: input, expectedPod, pod, events }) {
+	const job = validateTemplatePreflightJob(input);
+	const uid = pod?.metadata?.uid;
+	if (!expectedPod || pod?.metadata?.name !== expectedPod.name || pod?.metadata?.namespace !== job.namespace ||
+		pod?.metadata?.labels?.["agent-infra.validation-owner"] !== expectedPod.owner ||
+		pod?.metadata?.labels?.["agent-infra.validation-source"] !== job.sourceCommit ||
+		pod?.metadata?.labels?.["agent-infra.validation-scope"] !== job.scope ||
+		pod?.spec?.containers?.length !== 1 || pod.spec.containers[0].name !== "runtime" ||
+		pod.spec.containers[0].image !== job.imageReference || typeof uid !== "string" || !uid)
+		throw new Error("STARTUP_RECEIPT_BINDING_INVALID");
+	const maximum = job.podReadyTimeoutSeconds + 60;
+	const created = timestampMs(pod.metadata.creationTimestamp);
+	const runtime = pod.status?.containerStatuses?.find((container) => container.name === "runtime");
+	const started = timestampMs(runtime?.state?.running?.startedAt);
+	const ready = timestampMs(pod.status?.conditions?.find((condition) => condition.type === "Ready" && condition.status === "True")?.lastTransitionTime);
+	const timingsKnown = durationSeconds(created, started, maximum) !== null && durationSeconds(started, ready, maximum) !== null && durationSeconds(created, ready, maximum) !== null;
+	const matching = Array.isArray(events) && events.length <= 256 ? events.filter((event) =>
+		event?.involvedObject?.uid === uid && event.involvedObject.kind === "Pod" &&
+		startupEventReasons.has(event.reason) && ["Normal", "Warning"].includes(event.type)) : [];
+	const projected = matching.map((event) => {
+		const first = timestampMs(event.firstTimestamp ?? event.eventTime);
+		const last = timestampMs(event.lastTimestamp ?? event.series?.lastObservedTime ?? event.eventTime ?? event.firstTimestamp);
+		const valid = created !== null && ready !== null && first !== null && last !== null && first >= created && last >= first && last <= ready;
+		return { reason: event.reason, type: event.type, firstAt: valid ? iso(first) : null, lastAt: valid ? iso(last) : null };
+	});
+	const eventRead = !Array.isArray(events) ? "unavailable" : matching.length === 0 ? "unknown" : "observed";
+	const hasReason = (reason) => eventRead === "observed" ? projected.some((event) => event.reason === reason) : null;
+	const pulling = projected.filter((event) => event.reason === "Pulling");
+	const pulled = projected.filter((event) => event.reason === "Pulled");
+	const pullStart = pulling.length === 1 ? timestampMs(pulling[0].firstAt) : null;
+	const pullEnd = pulled.length === 1 ? timestampMs(pulled[0].lastAt) : null;
+	// A cache-hit event can coexist with an image download; only the exact Pulled message proves presence.
+	const alreadyPresent = matching.some((event) => event.reason === "Pulled" && event.message === `Container image "${job.imageReference}" already present on machine`);
+	const pullSeconds = durationSeconds(pullStart, pullEnd, maximum);
+	return {
+		schemaVersion: 1, kind: "ack-template-pod-startup", sourceCommit: job.sourceCommit,
+		templateId: job.templateId, imageDigest: job.imageDigest,
+		podUidSha256: createHash("sha256").update(uid).digest("hex"),
+		timingReadback: timingsKnown ? "observed" : "unknown",
+		timestamps: { createdAt: iso(created), containerStartedAt: iso(started), readyAt: iso(ready) },
+		durationsSeconds: {
+			createToContainer: timingsKnown ? durationSeconds(created, started, maximum) : null,
+			createToReady: timingsKnown ? durationSeconds(created, ready, maximum) : null,
+			containerToReady: timingsKnown ? durationSeconds(started, ready, maximum) : null,
+		},
+		eventRead, events: projected,
+		cache: {
+			hit: hasReason("SuccessfulHitImageCache"), partialMatch: hasReason("ImageCacheNotFullMatch"),
+			autoCreated: hasReason("ImageCacheAutoCreated"), autoEvicted: hasReason("ImageCacheAutoEliminated"),
+			imageAlreadyPresent: alreadyPresent ? true : pullSeconds !== null ? false : null,
+		},
+		pull: { status: pullSeconds !== null ? "observed" : "unknown", seconds: pullSeconds },
+	};
+}
+
+async function writePodStartupReceipt(job, expectedPod, pod) {
+	let events;
+	try {
+		const value = JSON.parse(run([
+			"--kubeconfig", job.kubeconfig, "-n", job.namespace, "get", "events",
+			"--field-selector", `involvedObject.uid=${pod.metadata.uid}`, "-o", "json",
+		], undefined, 5_000));
+		if (Array.isArray(value.items)) events = value.items;
+	} catch {}
+	await writeFile(join(job.outputDirectory, "pod-startup.receipt.json"), `${JSON.stringify(
+		projectPodStartupReceipt({ job, expectedPod, pod, events }), null, 2,
+	)}\n`, { mode: 0o600, flag: "wx" });
+}
+
 const privateFile = async (path, label) => {
 	if (!isAbsolute(path)) throw new Error(`${label}_PATH_INVALID`);
 	const stat = await lstat(path);
@@ -19,9 +101,10 @@ const privateFile = async (path, label) => {
 		throw new Error(`${label}_FILE_INVALID`);
 	return readFile(path);
 };
-const run = (args, input) =>
+const run = (args, input, timeout) =>
 	execFileSync("kubectl", args, {
 		input,
+		timeout,
 		encoding: "utf8",
 		stdio: ["pipe", "pipe", "pipe"],
 	});
@@ -118,6 +201,7 @@ async function main(inputPath) {
 		metadata: { name, namespace: job.namespace, labels: {
 			"agent-infra.validation-owner": owner,
 			"agent-infra.validation-scope": job.scope,
+			"agent-infra.validation-source": job.sourceCommit,
 		} },
 		spec: {
 			automountServiceAccountToken: false,
@@ -194,10 +278,11 @@ async function main(inputPath) {
 			}) + "\n", { mode: 0o600, flag: "wx" });
 			throw new Error("TEMPLATE_POD_READINESS_FAILED");
 		}
+		const measurementPod = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
+		await writePodStartupReceipt(job, { name, owner }, measurementPod);
 		const port = 35000 + Math.floor(Math.random() * 1000);
 		portForward = spawn("kubectl", [...kubeArgs, "port-forward", `pod/${name}`, `${port}:3003`], { stdio: ["ignore", "pipe", "pipe"] });
 		await waitForPort(port, portForward);
-		const measurementPod = JSON.parse(run([...kubeArgs, "get", "pod", name, "-o", "json"]));
 		const actualModuleHash = run([...kubeArgs, "exec", name, "--", "node", "-e", "console.log(require('node:crypto').createHash('sha256').update(require('node:fs').readFileSync('/app/node_modules/@agent-infra/agent-runtime/dist/index.mjs')).digest('hex'))"]).trim();
 		const runnerJob = {
 			schemaVersion: 1, scope: job.scope, kubeconfig: job.kubeconfig, namespace: job.namespace,
