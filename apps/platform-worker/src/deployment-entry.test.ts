@@ -877,24 +877,44 @@ export const connectionInstallation = {
 });
 
 it.each([
+	"export const connectionInstallation = null;",
+	"export const connectionInstallation = 'malformed';",
+	"export const connectionInstallation = [];",
+	"export const connectionInstallation = { configuration: {} };",
 	"export const connectionInstallation = { configuration: {}, authorize: true };",
 	"export const connectionInstallation = { configuration: {}, authorize: () => {}, extra: true };",
 	"export const connectionInstallation = { configurationsByAgent: { 'agent-a': {} } };",
-])("rejects malformed installation producer configuration", async (entry) => {
-	const path = join(directory, "configuration.mjs");
-	const original = await readFile(path, "utf8");
-	await writeFile(path, `${original}\n${entry}\n`);
-	try {
-		const result = run();
-		expect(result.status).toBe(1);
-		expect(JSON.parse(result.stdout)).toEqual({
-			error: "CONNECTION_INSTALLATION_UNAVAILABLE",
-			calls: [],
-		});
-	} finally {
-		await writeFile(path, original);
-	}
-});
+])(
+	"disables malformed installation producer configuration without stopping ordinary assembly (%#)",
+	async (entry) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		await writeFile(path, `${original}\n${entry}\n`);
+		try {
+			const result = run({ RUN_INSTALLATION_MAP: "true" });
+			expect(result.status, result.stderr).toBe(0);
+			expect(JSON.parse(result.stdout)).toEqual({
+				hasCommandStore: false,
+				configurations: null,
+				workloadReady: true,
+				shared: null,
+			});
+			await writeFile(
+				path,
+				`${original.replace('"egressEnforced":true', '"egressEnforced":false')}\n${entry}\n`,
+			);
+			const control = run({ RUN_INVALID_PROFILE: "true" });
+			expect(control.status, control.stderr).toBe(0);
+			expect(JSON.parse(control.stdout)).toEqual({
+				control: "original-control",
+				business: "CONNECTION_CONSUMER_PROFILE_UNAVAILABLE",
+				snapshot: null,
+			});
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
 
 it("keeps the original control resolver when configured approval is unavailable", async () => {
 	const path = join(directory, "configuration.mjs");
@@ -1044,65 +1064,81 @@ it("rejects the internal policy selector override before constructing dependenci
 	}
 });
 
-it("assembles the command Store and independent OAuth configurations in per-Agent mode", async () => {
-	const path = join(directory, "configuration.mjs");
-	const original = await readFile(path, "utf8");
-	const profileB = {
-		...connectionConsumerProfile,
-		schemaVersion: 1 as const,
-		consumerId: "consumer-b",
-	};
-	const approvalB = {
-		...connectionConsumerApproval,
-		configFingerprint: connectionConsumerProfileFingerprintV1(profileB),
-	};
-	const configurationFor = (clientId: string, fingerprint: string) => ({
-		schemaVersion: 1,
-		ref: clientId,
-		revision: "r1",
-		clientId,
-		callbackUrl: "https://platform.example.test/connection/callback",
-		issuer: "https://connection.example.test/",
-		authorizationEndpoint: "https://connection.example.test/oauth/authorize",
-		tokenEndpoint: "https://connection.example.test/oauth/token",
-		revocationEndpoint: "https://connection.example.test/oauth/revoke",
-		resource: "https://connection.example.test/mcp/v1",
-		scope: "mcp",
-		configFingerprint: fingerprint,
-		source: connectionConsumerApproval.source,
-		runtimeOrigin: "https://runtime.example.test:3443/",
-	});
-	const configurationsByAgent = {
-		"agent-a": configurationFor(
-			"client-a",
-			connectionConsumerApproval.configFingerprint,
-		),
-		"agent-b": configurationFor("client-b", approvalB.configFingerprint),
-	};
-	try {
-		await writeFile(
-			path,
-			`${original}
+it.each(["valid", "bad configuration", "bad Agent ID", "shared fallback"])(
+	"assembles per-Agent installation only when the whole input is valid (%s)",
+	async (mode) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		const profileB = {
+			...connectionConsumerProfile,
+			schemaVersion: 1 as const,
+			consumerId: "consumer-b",
+		};
+		const approvalB = {
+			...connectionConsumerApproval,
+			configFingerprint: connectionConsumerProfileFingerprintV1(profileB),
+		};
+		const configurationFor = (clientId: string, fingerprint: string) => ({
+			schemaVersion: 1,
+			ref: clientId,
+			revision: "r1",
+			clientId,
+			callbackUrl: "https://platform.example.test/connection/callback",
+			issuer: "https://connection.example.test/",
+			authorizationEndpoint: "https://connection.example.test/oauth/authorize",
+			tokenEndpoint: "https://connection.example.test/oauth/token",
+			revocationEndpoint: "https://connection.example.test/oauth/revoke",
+			resource: "https://connection.example.test/mcp/v1",
+			scope: "mcp",
+			configFingerprint: fingerprint,
+			source: connectionConsumerApproval.source,
+			runtimeOrigin: "https://runtime.example.test:3443/",
+		});
+		const configurationsByAgent = {
+			"agent-a": configurationFor(
+				"client-a",
+				connectionConsumerApproval.configFingerprint,
+			),
+			"agent-b": configurationFor("client-b", approvalB.configFingerprint),
+		};
+		const installation: Record<string, unknown> = { configurationsByAgent };
+		if (mode === "bad configuration")
+			installation.configurationsByAgent = {
+				...configurationsByAgent,
+				"agent-b": {},
+			};
+		if (mode === "bad Agent ID")
+			installation.configurationsByAgent = {
+				...configurationsByAgent,
+				"bad id": configurationsByAgent["agent-b"],
+			};
+		if (mode === "shared fallback")
+			installation.configuration = configurationsByAgent["agent-a"];
+		try {
+			await writeFile(
+				path,
+				`${original}
 export const connectionConsumerProfilesByAgent=${JSON.stringify({ "agent-a": { profile: connectionConsumerProfile, approval: connectionConsumerApproval }, "agent-b": { profile: profileB, approval: approvalB } })};
 export const connectionInstallationSuppliesByAgent=${JSON.stringify({ "agent-a": { ref: "installation-a", revision: "r1" }, "agent-b": { ref: "installation-b", revision: "r1" } })};
-export const connectionInstallation=${JSON.stringify({ configurationsByAgent })};
+export const connectionInstallation=${JSON.stringify(installation)};
 `,
-		);
-		const result = run({
-			RUN_CLOSE_INSTALLATION: "true",
-			RUN_INSTALLATION_MAP: "true",
-		});
-		expect(result.status, result.stderr).toBe(0);
-		expect(JSON.parse(result.stdout)).toEqual({
-			hasCommandStore: true,
-			configurations: configurationsByAgent,
-			workloadReady: true,
-			shared: null,
-		});
-	} finally {
-		await writeFile(path, original);
-	}
-});
+			);
+			const result = run({
+				RUN_CLOSE_INSTALLATION: "true",
+				RUN_INSTALLATION_MAP: "true",
+			});
+			expect(result.status, result.stderr).toBe(0);
+			expect(JSON.parse(result.stdout)).toEqual({
+				hasCommandStore: mode === "valid",
+				configurations: mode === "valid" ? configurationsByAgent : null,
+				workloadReady: true,
+				shared: null,
+			});
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
 
 it("keeps ordinary Workload assembly but disables per-Agent OAuth without per-Agent profiles", async () => {
 	const path = join(directory, "configuration.mjs");
