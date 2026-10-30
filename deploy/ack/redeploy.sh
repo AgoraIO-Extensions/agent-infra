@@ -97,22 +97,7 @@ NODE
 	then
 		die "ACK_IMAGE_MANIFEST does not match ACK_SOURCE_SHA/linux-amd64 or lacks platform image digests"
 	fi
-	if ! node - "$runtime_manifest" "$source_sha" <<'NODE'
-const fs = require("node:fs");
-const [file, source] = process.argv.slice(2);
-const value = JSON.parse(fs.readFileSync(file, "utf8"));
-const nested = value.images?.runtimeHost;
-const runtime = nested ? { ...nested, schemaVersion: value.schemaVersion, commitSha: value.commitSha, platform: value.platform } : value;
-if (
-	runtime.schemaVersion !== 1 ||
-	runtime.commitSha !== source ||
-	runtime.platform !== "linux/amd64" ||
-	typeof runtime.repository !== "string" ||
-	!/^sha256:[0-9a-f]{64}$/u.test(runtime.digest ?? "")
-)
-	process.exit(1);
-NODE
-	then
+	if ! node "$repo_root/deploy/ack/redeploy-evidence.ts" runtime-manifest "$runtime_manifest" "$source_sha"; then
 		die "ACK_RUNTIME_IMAGE_MANIFEST does not match ACK_SOURCE_SHA/linux-amd64"
 	fi
 }

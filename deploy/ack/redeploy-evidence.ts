@@ -15,17 +15,14 @@ const components = {
 	enterpriseDirectorySync: "agent-infra-directory",
 };
 
-export function normalizeRuntimeImageManifest(value: RecordValue): RecordValue {
-	if (value.images !== undefined) {
-		const nested = value.images?.runtimeHost;
-		assert(nested !== undefined);
-		assert(value.schemaVersion === 1 && value.platform === "linux/amd64");
-		assert(typeof value.commitSha === "string" && /^[a-f0-9]{40}$/u.test(value.commitSha));
-		assert(nested && typeof nested.repository === "string" && /^sha256:[0-9a-f]{64}$/u.test(nested.digest ?? ""));
-		return { schemaVersion: 1, commitSha: value.commitSha, platform: value.platform, repository: nested.repository, digest: nested.digest };
-	}
-	assert(typeof value.repository === "string" && /^sha256:[0-9a-f]{64}$/u.test(value.digest ?? ""));
-	return value;
+export function normalizeRuntimeImageManifest(value: RecordValue, sourceSha: string): RecordValue {
+	assert(value && typeof value === "object" && !Array.isArray(value));
+	assert(typeof sourceSha === "string" && /^[a-f0-9]{40}$/u.test(sourceSha));
+	assert(value.schemaVersion === 1 && value.platform === "linux/amd64" && value.commitSha === sourceSha);
+	const image = Object.hasOwn(value, "images") ? value.images?.runtimeHost : value;
+	assert(image && typeof image.repository === "string" && typeof image.digest === "string");
+	assert.match(`${image.repository}@${image.digest}`, immutable);
+	return { schemaVersion: 1, commitSha: sourceSha, platform: value.platform, repository: image.repository, digest: image.digest };
 }
 
 export function validateRenderedImages(
@@ -33,7 +30,8 @@ export function validateRenderedImages(
 	platform: RecordValue,
 	runtime: RecordValue,
 ) {
-	runtime = normalizeRuntimeImageManifest(runtime);
+	assert(platform.schemaVersion === 1 && platform.platform === "linux/amd64");
+	runtime = normalizeRuntimeImageManifest(runtime, platform.commitSha);
 	const documents = parseAllDocuments(text).map((document) => {
 		assert.equal(document.errors.length, 0);
 		return document.toJSON() as RecordValue;
@@ -114,10 +112,13 @@ export function projectSnapshot(
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	try {
 		const [mode, ...args] = process.argv.slice(2);
-		if (mode === "render") {
+		if (mode === "runtime-manifest") {
+			const [file, source] = args;
+			normalizeRuntimeImageManifest(JSON.parse(readFileSync(file, "utf8")), source);
+		} else if (mode === "render") {
 			const [rendered, platform, runtime] = args;
 			validateRenderedImages(readFileSync(rendered, "utf8"),
-				JSON.parse(readFileSync(platform, "utf8")), normalizeRuntimeImageManifest(JSON.parse(readFileSync(runtime, "utf8"))));
+				JSON.parse(readFileSync(platform, "utf8")), JSON.parse(readFileSync(runtime, "utf8")));
 		} else if (mode === "snapshot") {
 			const [namespace, release, source] = args;
 			const run = (command: string, argv: string[]) => JSON.parse(execFileSync(command, argv, {
