@@ -83,7 +83,14 @@ export interface SessionSandboxReserveOperationV1 {
 	/** Original identity for conditional DELETE; confirmed actual identity for CREATE. */
 	readonly resource: SessionSandboxResourceIdentityV1 | null;
 	readonly absent: boolean;
+	/** Terminal response from the original create/delete call, distinct from observation. */
+	readonly writeCompletion: "pending" | "response";
+	readonly writer: { readonly owner: string; readonly fence: number };
 }
+export type SessionSandboxReserveOperationInputV1 = Omit<
+	SessionSandboxReserveOperationV1,
+	"writeCompletion" | "writer"
+>;
 /** This independent lease is revoked on claim; it is not generation/resourceFence. */
 export interface SessionSandboxReserveLeaseV1 {
 	readonly sandboxId: string;
@@ -123,18 +130,46 @@ export function parseSessionSandboxReserveConfigurationV1(
 	value: SessionSandboxReserveConfigurationV1,
 ): SessionSandboxReserveConfigurationV1 {
 	const positive = (n: number) => Number.isSafeInteger(n) && n > 0;
-	const cost = (v: SessionSandboxResourceBudgetV1) =>
-		v &&
-		Object.values(v).length === 3 &&
-		[v.cpuMillis, v.memoryBytes, v.storageBytes].every(positive);
+	const nonNegative = (n: number) => Number.isSafeInteger(n) && n >= 0;
+	const budget = (v: SessionSandboxResourceBudgetV1, allowZero: boolean) =>
+		!!v &&
+		Object.keys(v).length === 3 &&
+		[v.cpuMillis, v.memoryBytes, v.storageBytes].every(
+			allowZero ? nonNegative : positive,
+		);
 	if (
 		!value ||
 		value.schemaVersion !== 1 ||
 		typeof value.enabled !== "boolean" ||
 		!positive(value.revision) ||
 		!/^[a-z0-9][a-z0-9-]{0,62}$/.test(value.namespace) ||
-		!cost(value.totalBudget) ||
+		!budget(value.totalBudget, !value.enabled) ||
 		!Array.isArray(value.resourceCosts) ||
+		!Array.isArray(value.profiles)
+	)
+		throw new TypeError("Session reserve deployment configuration is invalid");
+	if (!value.enabled) {
+		if (
+			value.resourceCosts.length === 0 &&
+			value.profiles.length === 0 &&
+			[
+				value.maximumReserves,
+				value.maximumConcurrentCreates,
+				value.ttlMs,
+				value.cooldownMs,
+				value.failureBackoffMs,
+			].every(nonNegative)
+		)
+			return structuredClone(value);
+		// A disabled policy may retain full immutable facts so existing charges remain auditable.
+		parseSessionSandboxReserveConfigurationV1({
+			...value,
+			enabled: true,
+		});
+		return structuredClone(value);
+	}
+	const cost = (v: SessionSandboxResourceBudgetV1) => budget(v, false);
+	if (
 		!value.resourceCosts.length ||
 		new Set(value.resourceCosts.map((c) => c.resourceConfigurationHash))
 			.size !== value.resourceCosts.length ||
@@ -150,7 +185,6 @@ export function parseSessionSandboxReserveConfigurationV1(
 			value.cooldownMs,
 			value.failureBackoffMs,
 		].every(positive) ||
-		!Array.isArray(value.profiles) ||
 		new Set(value.profiles.map((p) => p.agentId)).size !==
 			value.profiles.length ||
 		value.profiles.some(
@@ -205,7 +239,7 @@ export function canReadySessionSandboxReserveV1(input: {
 	businessStateAbsent: boolean;
 }): boolean {
 	return (
-		(input.status === "preparing" || input.status === "unknown") &&
+		input.status === "preparing" &&
 		input.bootstrapReady &&
 		input.businessStateAbsent &&
 		input.operations.length === 6 &&
@@ -216,6 +250,7 @@ export function canReadySessionSandboxReserveV1(input: {
 						o.kind === kind &&
 						o.operation === "create" &&
 						o.status === "confirmed" &&
+						o.writeCompletion === "response" &&
 						o.resource?.kind === kind &&
 						o.resource.uid &&
 						o.resource.resourceVersion &&
@@ -238,8 +273,9 @@ export function canReleaseSessionSandboxReserveV1(input: {
 				creates.length <= 1 &&
 				creates.every(
 					(o) =>
-						o.status === "rejected" ||
+						(o.status === "rejected" && o.writeCompletion === "response") ||
 						(o.status === "confirmed" &&
+							o.writeCompletion === "response" &&
 							input.operations.some(
 								(d) =>
 									d.kind === kind &&

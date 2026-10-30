@@ -22,10 +22,13 @@ import {
 	type SessionSandboxReserveClaimV1,
 	type SessionSandboxReserveConfigurationV1,
 	type SessionSandboxReserveLeaseV1,
+	type SessionSandboxReserveOperationInputV1,
 	type SessionSandboxReserveOperationV1,
 	type SessionSandboxReserveProfileV1,
 	type SessionSandboxReserveStatusV1,
 	type SessionSandboxResourceBudgetV1,
+	type SessionSandboxResourceIdentityV1,
+	type SessionSandboxVerifiedPolicyV1,
 	sessionSandboxBudgetFitsV1,
 	sessionSandboxReserveDigestV1,
 	sessionSandboxReserveResourceKindsV1,
@@ -223,6 +226,7 @@ async function lockBudget(
 				configuration: SessionSandboxReserveConfigurationV1;
 			}[]
 		>`select revision, configuration from platform.session_sandbox_budgets where namespace = ${config.namespace} for update`;
+		if (!previous && !config.enabled) return null;
 		if (
 			previous &&
 			(Number(previous.revision) > config.revision ||
@@ -346,7 +350,7 @@ export async function admitNewSessionSandboxV1(
 			};
 		}
 	}
-	if (config) {
+	if (config?.enabled) {
 		const [workload] = await tx<
 			{ resource_hash: string | null }[]
 		>`select state->'verified'->'executionCapacity'->>'resourceConfigurationHash' as resource_hash from platform.workload_reconciliations where agent_id = ${authority.agentId}`;
@@ -392,6 +396,62 @@ export async function reserveSessionSandboxResumeBudgetV1(
 	)
 		unavailable();
 	await tx`update platform.session_sandbox_resource_charges set compute_released = false where sandbox_id = ${sandboxId}`;
+}
+
+/** Rechecks the deployment budget before an original Session preparation/recovery write. */
+export async function reserveSessionSandboxPreparationBudgetV1(
+	tx: Transaction,
+	sandboxId: string,
+	policy: SessionSandboxVerifiedPolicyV1,
+): Promise<void> {
+	const config = await lockBudget(tx);
+	if (!config) return;
+	if (policy.namespace !== config.namespace) unavailable();
+	const approved = config.resourceCosts.find(
+		(c) => c.resourceConfigurationHash === policy.resourceConfigurationHash,
+	);
+	if (!approved) unavailable();
+	const [row] = await tx<
+		{ resources: SessionSandboxResourceBudgetV1; compute_released: boolean }[]
+	>`select resources, compute_released from platform.session_sandbox_resource_charges where sandbox_id = ${sandboxId}`;
+	if (!row) unavailable();
+	const resources = {
+		cpuMillis: Math.max(row.resources.cpuMillis, approved.resources.cpuMillis),
+		memoryBytes: Math.max(
+			row.resources.memoryBytes,
+			approved.resources.memoryBytes,
+		),
+		storageBytes: Math.max(
+			row.resources.storageBytes,
+			approved.resources.storageBytes,
+		),
+	};
+	const added = {
+		cpuMillis:
+			resources.cpuMillis -
+			(row.compute_released ? 0 : row.resources.cpuMillis),
+		memoryBytes:
+			resources.memoryBytes -
+			(row.compute_released ? 0 : row.resources.memoryBytes),
+		storageBytes: resources.storageBytes - row.resources.storageBytes,
+	};
+	if (
+		!sessionSandboxBudgetFitsV1(
+			config.totalBudget,
+			await usedBudget(tx, config.namespace),
+			added,
+		)
+	)
+		unavailable();
+	await tx`update platform.session_sandbox_resource_charges set resources = ${tx.json(resources as unknown as Json)}, compute_released = false where sandbox_id = ${sandboxId}`;
+}
+/** Releases CPU/memory only after a durable stop receipt; retained PVC remains charged. */
+export async function releaseSessionSandboxComputeBudgetV1(
+	tx: Transaction,
+	sandboxId: string,
+): Promise<void> {
+	await lockBudget(tx);
+	await tx`update platform.session_sandbox_resource_charges ch set compute_released = true from platform.session_sandbox_allocations a where ch.sandbox_id = ${sandboxId} and a.sandbox_id = ch.sandbox_id and a.status = 'stopped' and a.desired_state = 'stopped' and exists(select 1 from platform.outbox_items o where o.scope_type = 'conversation' and o.scope_id = a.conversation_id and o.operation = 'conversation.sandbox.reconcile.v1' and o.payload->'lifecycle'->'stopReceipt'->>'sandboxId' = a.sandbox_id and o.payload->'lifecycle'->'stopReceipt'->>'sessionId' = a.conversation_id and o.payload->'lifecycle'->'stopReceipt'->>'targetGeneration' = a.session_generation::text and o.payload->'lifecycle'->'stopReceipt'->>'targetResourceFence' = a.resource_fence::text)`;
 }
 
 /** Worker #3778 consumes this independent conditional store; it never receives business principals or credentials. */
@@ -522,7 +582,7 @@ export class PostgresSessionSandboxReserveStoreV1 {
 	}
 	async recordIntent(
 		lease: SessionSandboxReserveLeaseV1,
-		operation: SessionSandboxReserveOperationV1,
+		operation: SessionSandboxReserveOperationInputV1,
 	): Promise<boolean> {
 		return this.#mutate(lease, async (tx, row) => {
 			if (
@@ -551,13 +611,18 @@ export class PostgresSessionSandboxReserveStoreV1 {
 						)
 			)
 				return false;
-			await tx`update platform.session_sandbox_reserves set operations = ${tx.json([...row.operations, operation] as unknown as Json)}, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
+			const intent: SessionSandboxReserveOperationV1 = {
+				...operation,
+				writeCompletion: "pending",
+				writer: { owner: lease.leaseOwner, fence: lease.deliveryFence },
+			};
+			await tx`update platform.session_sandbox_reserves set operations = ${tx.json([...row.operations, intent] as unknown as Json)}, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
 			return true;
 		});
 	}
 	async recordResult(
 		lease: SessionSandboxReserveLeaseV1,
-		operation: SessionSandboxReserveOperationV1,
+		operation: SessionSandboxReserveOperationInputV1,
 	): Promise<boolean> {
 		return this.#mutate(lease, async (tx, row) => {
 			const before = row.operations.find(
@@ -585,9 +650,7 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			// A create absence never proves the attempt has finished. Only observed UID or definite create rejection does.
 			if (
 				operation.operation === "create" &&
-				(operation.absent ||
-					(operation.status === "confirmed" && !operation.resource) ||
-					(operation.status === "rejected" && operation.resource !== null))
+				(operation.absent || operation.status !== "unknown")
 			)
 				return false;
 			if (
@@ -598,12 +661,103 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			)
 				return false;
 			const operations = row.operations.map((o) =>
-				o.attemptId === operation.attemptId ? operation : o,
+				o.attemptId === operation.attemptId
+					? {
+							...operation,
+							writer: before.writer,
+							writeCompletion:
+								operation.operation === "delete" &&
+								operation.status === "confirmed"
+									? "response"
+									: before.writeCompletion,
+						}
+					: o,
 			);
 			await tx`update platform.session_sandbox_reserves set operations = ${tx.json(operations as unknown as Json)}, status = case when status = 'retiring' then status when ${operation.status} = 'unknown' then 'unknown' else status end, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
 			return true;
 		});
 	}
+
+	async recordCreateResponse(
+		lease: SessionSandboxReserveLeaseV1,
+		input: {
+			attemptId: string;
+			response: "created" | "rejected";
+			resource: SessionSandboxResourceIdentityV1 | null;
+		},
+	): Promise<boolean> {
+		return this.#client.begin(async (tx) => {
+			await lockBudget(tx, this.#configuration);
+			const [row] = await tx<
+				ReserveRow[]
+			>`select * from platform.session_sandbox_reserves where sandbox_id = ${lease.sandboxId} and status in ('preparing','unknown','retiring') and retired_at is null for update`;
+			const before = row?.operations.find(
+				(o) => o.attemptId === input.attemptId,
+			);
+			if (
+				!row ||
+				!before ||
+				before.operation !== "create" ||
+				before.writeCompletion !== "pending" ||
+				before.writer.owner !== lease.leaseOwner ||
+				before.writer.fence !== lease.deliveryFence ||
+				!["pending", "unknown"].includes(before.status)
+			)
+				return false;
+			if (
+				input.response === "created"
+					? !input.resource ||
+						input.resource.kind !== before.kind ||
+						input.resource.name !== before.name ||
+						input.resource.namespace !== row.namespace ||
+						!input.resource.uid ||
+						!input.resource.resourceVersion ||
+						(before.resource && before.resource.uid !== input.resource.uid)
+					: input.resource !== null || before.resource !== null
+			)
+				return false;
+			const completed: SessionSandboxReserveOperationV1 = {
+				...before,
+				status: input.response === "created" ? "confirmed" : "rejected",
+				resource: input.resource,
+				writeCompletion: "response",
+			};
+			await tx`update platform.session_sandbox_reserves set operations = ${tx.json(row.operations.map((o) => (o.attemptId === before.attemptId ? completed : o)) as unknown as Json)}, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
+			return true;
+		});
+	}
+
+	async recordObservation(
+		lease: SessionSandboxReserveLeaseV1,
+		resource: SessionSandboxResourceIdentityV1,
+	): Promise<boolean> {
+		return this.#mutate(lease, async (tx, row) => {
+			const before = row.operations.find(
+				(o) => o.operation === "create" && o.kind === resource.kind,
+			);
+			if (
+				!before ||
+				!resource.uid ||
+				!resource.resourceVersion ||
+				resource.namespace !== row.namespace ||
+				resource.name !== before.name ||
+				(before.resource && before.resource.uid !== resource.uid) ||
+				before.status === "rejected" ||
+				row.operations.some(
+					(o) => o.operation === "delete" && o.kind === resource.kind,
+				)
+			)
+				return false;
+			const observed: SessionSandboxReserveOperationV1 = {
+				...before,
+				resource,
+				status: before.writeCompletion === "response" ? "confirmed" : "unknown",
+			};
+			await tx`update platform.session_sandbox_reserves set operations = ${tx.json(row.operations.map((o) => (o.attemptId === before.attemptId ? observed : o)) as unknown as Json)}, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
+			return true;
+		});
+	}
+
 	async markReady(
 		lease: SessionSandboxReserveLeaseV1,
 		evidence: { bootstrapReady: boolean; businessStateAbsent: boolean },

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
 	canReadySessionSandboxReserveV1,
 	canReleaseSessionSandboxReserveV1,
+	parseSessionSandboxReserveConfigurationV1,
 	sessionSandboxBudgetFitsV1,
+	sessionSandboxReserveResourceKindsV1,
 } from "./session-sandbox-reserves.js";
 
 describe("Session reserve admission", () => {
@@ -23,11 +25,54 @@ describe("Session reserve admission", () => {
 			),
 		).toBe(true);
 	});
+	it("accepts an empty explicit disabled configuration", () => {
+		expect(() =>
+			parseSessionSandboxReserveConfigurationV1({
+				schemaVersion: 1,
+				enabled: false,
+				revision: 1,
+				namespace: "reserve-test",
+				totalBudget: { cpuMillis: 0, memoryBytes: 0, storageBytes: 0 },
+				resourceCosts: [],
+				maximumReserves: 0,
+				maximumConcurrentCreates: 0,
+				ttlMs: 0,
+				cooldownMs: 0,
+				failureBackoffMs: 0,
+				profiles: [],
+			}),
+		).not.toThrow();
+	});
 	it("never promotes incomplete/unknown creates or a retiring reserve", () => {
 		expect(
 			canReadySessionSandboxReserveV1({
 				status: "preparing",
 				operations: [],
+				bootstrapReady: true,
+				businessStateAbsent: true,
+			}),
+		).toBe(false);
+		const operations = sessionSandboxReserveResourceKindsV1.map((kind) => ({
+			attemptId: kind,
+			operation: "create" as const,
+			kind,
+			name: `sandbox-${kind}`,
+			status: "confirmed" as const,
+			resource: {
+				kind,
+				namespace: "ns",
+				name: `sandbox-${kind}`,
+				uid: kind,
+				resourceVersion: "1",
+			},
+			absent: false,
+			writeCompletion: "response" as const,
+			writer: { owner: "worker", fence: 1 },
+		}));
+		expect(
+			canReadySessionSandboxReserveV1({
+				status: "unknown",
+				operations,
 				bootstrapReady: true,
 				businessStateAbsent: true,
 			}),
