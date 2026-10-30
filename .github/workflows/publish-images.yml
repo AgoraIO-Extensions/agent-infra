@@ -84,10 +84,11 @@ jobs:
           node deploy/release/build-images.mjs "$RUNNER_TEMP/custom-agent-base.json" \
             --custom-base-image
       - name: Upload template receipts
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         with:
-          if-no-files-found: error
-          name: template-images-${{ matrix.architecture }}-${{ github.sha }}
+          if-no-files-found: warn
+          name: template-images-${{ matrix.architecture }}-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/templates.json
             ${{ runner.temp }}/templates.json.runtime-probe.json
@@ -112,7 +113,7 @@ jobs:
       - name: Download verified image receipts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: template-images-*-${{ github.sha }}
+          pattern: template-images-*-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/receipts
       - name: Set up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3

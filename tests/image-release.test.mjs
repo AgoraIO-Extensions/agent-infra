@@ -719,23 +719,73 @@ test("standard template publication uses stable architecture tags and preserves 
 	}
 });
 
-test("publication push failures emit a redacted category and stop before remote readback", async () => {
+test("publication push failures emit redacted categories and stop before remote readback", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "agent-infra-push-failure-"));
 	try {
 		await fakes(directory);
-		await writeFile(join(directory, "docker-state.json"), "{}");
-		const manifestPath = join(directory, "images.json");
-		const result = build(manifestPath, directory, {
-			FAKE_PUSH_FAILURE_IMAGE: "agent-runtime-host",
-			FAKE_PUSH_SENTINEL: "credential-sentinel-must-not-appear",
-		}, "registry.example/agent-infra", ["--images=runtimeHost"]);
-		assert.notEqual(result.status, 0);
-		assert.match(result.stderr, /"phase":"publish\.failure"/);
-		assert.match(result.stderr, /"category":"unknown"/);
-		assert.match(result.stderr, new RegExp(`"image":"runtimeHost"`));
-		assert.doesNotMatch(result.stderr, /credential-sentinel-must-not-appear/);
-		assert.doesNotMatch(result.stderr, /manifest inspect/);
-		await assert.rejects(access(manifestPath));
+		const sentinel = "credential-sentinel-must-not-appear";
+		for (const [index, [error, category]] of [
+			["denied: permission_denied: write_package", "authorization"],
+			["unauthorized: authentication required", "authorization"],
+			["unexpected status: 403 Forbidden", "authorization"],
+			["dial tcp: connection reset by peer", "network"],
+			["TLS handshake timeout", "network"],
+			[
+				"unexpected protocol failure; permission/network fields unset",
+				"unknown",
+			],
+		].entries()) {
+			await writeFile(join(directory, "docker-state.json"), "{}");
+			await writeFile(join(directory, "docker.log"), "");
+			const manifestPath = join(directory, `images-${index}.json`);
+			const validContext = index % 2 === 0;
+			const result = build(
+				manifestPath,
+				directory,
+				{
+					FAKE_PUSH_FAILURE_IMAGE: "agent-runtime-host",
+					FAKE_PUSH_SENTINEL: `${error}\n${sentinel}`,
+					GITHUB_JOB: validContext ? "infrastructure" : `invalid/${sentinel}`,
+					GITHUB_RUN_ID: validContext ? "123456789" : sentinel,
+					GITHUB_RUN_ATTEMPT: validContext ? "2" : `2\n${sentinel}`,
+				},
+				"registry.example/agent-infra",
+				["--images=runtimeHost"],
+			);
+			assert.notEqual(result.status, 0);
+			const diagnosticLine = result.stderr
+				.split("\n")
+				.find((line) => line.startsWith("{"));
+			assert.ok(diagnosticLine, result.stderr);
+			const diagnostic = JSON.parse(diagnosticLine);
+			assert.deepEqual(diagnostic, {
+				phase: "publish.failure",
+				step: "image.push",
+				category,
+				image: "runtimeHost",
+				platform: "linux/amd64",
+				commitSha,
+				...(validContext
+					? { job: "infrastructure", runId: "123456789", runAttempt: "2" }
+					: {}),
+			});
+			assert.ok(!`${result.stdout}${result.stderr}`.includes(sentinel));
+			assert.ok(
+				!result.stderr.includes(error),
+				"raw Docker stderr must not be emitted",
+			);
+			await assert.rejects(access(manifestPath));
+			await assert.rejects(access(`${manifestPath}.runtime-probe.json`));
+			const calls = (await readFile(join(directory, "docker.log"), "utf8"))
+				.trim()
+				.split("\n")
+				.map(JSON.parse);
+			assert.equal(calls.filter((args) => args[0] === "push").length, 1);
+			assert.ok(
+				!calls.some((args) => args[0] === "manifest"),
+				"failed push must not reach remote readback",
+			);
+		}
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

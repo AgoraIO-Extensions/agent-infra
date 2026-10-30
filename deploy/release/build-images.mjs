@@ -440,8 +440,8 @@ async function buildImage({
 
 function publishFailureCategory(stderr) {
 	const text = String(stderr ?? "").toLowerCase();
-	if (/unauthori[sz]ed|denied|forbidden|permission|access denied/.test(text)) return "authorization";
-	if (/timeout|timed out|connection|network|dns|eof|tls|reset|unavailable/.test(text)) return "network";
+	if (/\b(?:unauthori[sz]ed|denied|forbidden|permission_denied|insufficient_scope)\b/.test(text)) return "authorization";
+	if (/\b(?:timeout|timed out|connection (?:refused|reset|closed)|network is unreachable|no such host|unexpected eof|tls handshake|context deadline exceeded|service unavailable)\b/.test(text)) return "network";
 	return "unknown";
 }
 
@@ -461,10 +461,14 @@ function publishImage({ image, builtImage, registryInsecure, git, commitSha, pla
 		timeoutMs: timeoutMs.publish,
 		onFailure: (stderr) => console.error(JSON.stringify({
 			phase: "publish.failure",
+			step: "image.push",
 			category: publishFailureCategory(stderr),
 			image: image.key,
 			platform,
 			commitSha,
+			job: ["infrastructure", "platform"].includes(process.env.GITHUB_JOB) ? process.env.GITHUB_JOB : undefined,
+			runId: /^[1-9][0-9]{0,19}$/.test(process.env.GITHUB_RUN_ID ?? "") ? process.env.GITHUB_RUN_ID : undefined,
+			runAttempt: /^[1-9][0-9]{0,5}$/.test(process.env.GITHUB_RUN_ATTEMPT ?? "") ? process.env.GITHUB_RUN_ATTEMPT : undefined,
 		})),
 	});
 	console.info(JSON.stringify({ phase: "publish.push.complete", image: image.key, reference: builtImage.reference }));

@@ -83,6 +83,10 @@ reasoning 事件，不据此扩展为工具、思考过程或全部逐帧增量�
 
 | 现象 | 根因 | 固化到工作流的规则 |
 | --- | --- | --- |
+| 发布日志含 Docker healthcheck 警告，被误判为构建失败 | 完整相位日志显示四模板已成功构建、探测及 push；实际退出在 RuntimeHost push，原命令又隐藏了 stderr | 按 build/probe/push/readback 分段归因；push 只输出固定错误类别和来源信息，不打印原始错误。出现警告不能代替定位退出命令，也不能以升级 Action 或重跑成功倒推根因 |
+| 模板能 push，已有 RuntimeHost package 却无法发布 | 不同 GHCR package 的来源关联和 Actions 写入权限可能不同；OCI source label 不会自动修复已有 package 的授权 | 核对目标 package 的仓库关联与 Actions 权限，镜像声明 source label；用 `smoke=true` 的独立标签实际执行四模板、RuntimeHost、自定义 base 和双架构索引。单个模板成功不能代替全链路成功 |
+| 后续镜像失败后，已写出的模板收据也丢失 | artifact 上传步骤默认仅在前置步骤成功时执行 | 未取消的失败运行也保留部分收据，并按 attempt 隔离；索引 job 仍要求两个架构完整成功，部分收据只作诊断 |
+| YAML 修改通过文本检查，发布工作流却无法解析 | block scalar 中混入了少于首行缩进的制表符 | 提交前执行 workflow policy 的 YAML 解析和 actionlint；`git diff --check` 不能代替语法校验 |
 | 修改配置 Secret 后 API 仍使用旧 origin/模板状态 | Kubernetes Secret 投影更新不会重载已经启动的 Node 模块 | `bootstrap-inputs apply` 后显式滚动 API/Worker，并等待两者 rollout |
 | 部署一段时间后四模板重新变成 `stale` | Real-runtime validation receipt 有有效期；旧 receipt 不能授权新部署 | 创建 Agent 前验证四份 receipt 的来源 SHA、镜像、Driver、revision、model、状态和剩余有效期 |
 | 标准 API Agent 返回通用 `400` | 模型准入先于镜像准入，但请求 source 尚未有 image digest | 预镜像阶段只按受信 template identity 做 keyless admission；最终 image admission 仍绑定 exact digest |
