@@ -568,6 +568,16 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		expect(
 			new Set([...page.items, ...next.items].map((item) => item.sandboxId)),
 		).toEqual(new Set([first, second]));
+		await create(execution(), "user-a", "web", "reserve-demand");
+		expect(await store.statistics({ windowMs: 60_000 })).toMatchObject({
+			profiles: [
+				expect.objectContaining({
+					agentId: "agent",
+					newSessionCount: 1,
+					claimedCount: 0,
+				}),
+			],
+		});
 	});
 	it("records DELETE acknowledgement versus absence and permits a fresh same-UID retry after rejection", async () => {
 		const reserve = await ready();
@@ -593,6 +603,11 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			absent: false,
 		};
 		expect(await reserve.store.recordIntent(cleanup, acknowledged)).toBe(true);
+		expect(
+			await reserve.store.recordDeleteObservation(cleanup, {
+				attemptId: acknowledged.attemptId,
+			}),
+		).toBe(false);
 		expect(
 			await reserve.store.recordDeleteResponse(cleanup, {
 				attemptId: acknowledged.attemptId,
@@ -891,7 +906,10 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		});
 		expect(inspected).not.toHaveProperty("leaseOwner");
 		const statistics = await reserve.store.statistics({ windowMs: 300000 });
-		expect(statistics).toMatchObject({ windowMs: 300000, profiles: expect.any(Array) });
+		expect(statistics).toMatchObject({
+			windowMs: 300000,
+			profiles: expect.any(Array),
+		});
 	});
 	it("uses the real API task admission branch, replay and continuation without re-claim", async () => {
 		const reserve = await ready();

@@ -559,7 +559,13 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			updatedAt: Date;
 		}[]
 	> {
-		return this.listPage({ limit: 100 }).then((page) => page.items);
+		let page = await this.listPage({ limit: 100 });
+		const items = [...page.items];
+		while (page.nextCursor !== null) {
+			page = await this.listPage({ cursor: page.nextCursor, limit: 100 });
+			items.push(...page.items);
+		}
+		return items;
 	}
 	async listPage(
 		input: { readonly cursor?: string; readonly limit?: number } = {},
@@ -615,41 +621,87 @@ export class PostgresSessionSandboxReserveStoreV1 {
 	async statistics(input: { readonly windowMs: number }) {
 		if (!Number.isSafeInteger(input.windowMs) || input.windowMs < 1)
 			unavailable();
-		const observedAt = new Date();
-		const rows = await this.#client<
-			{
-				agentId: string;
-				profileDigest: string | null;
-				newSessionCount: string;
-				claimedCount: string;
-			}[]
-		>`
-				with demand as (
-					select agent_id, count(distinct conversation_id)::text as new_session_count
+		return this.#client.begin(async (tx) => {
+			const observedAt = new Date();
+			const currentDigests = new Map<string, string>();
+			if (this.#configuration.enabled) {
+				for (const profile of this.#configuration.profiles) {
+					const current = await readCurrentSessionSandboxReserveProfileV1(
+						tx,
+						profile.agentId,
+						this.#configuration,
+					);
+					if (current) {
+						currentDigests.set(
+							`${profile.agentId}:${profile.resourceConfigurationHash}`,
+							current.profile.digest,
+						);
+					}
+				}
+			}
+			const [demandRows, refillRows] = await Promise.all([
+				tx<
+					{
+						agentId: string;
+						resourceConfigurationHash: string | null;
+						newSessionCount: string;
+					}[]
+				>`select agent_id as "agentId", resource_policy->>'resourceConfigurationHash' as "resourceConfigurationHash", count(distinct conversation_id)::text as "newSessionCount"
 					from platform.session_sandbox_allocations
 					where created_at >= clock_timestamp() - ${input.windowMs} * interval '1 millisecond'
-					group by agent_id
-				), refills as (
-					select agent_id, profile_digest, count(distinct sandbox_id)::text as claimed_count
+					group by agent_id, resource_policy->>'resourceConfigurationHash'`,
+				tx<
+					{
+						agentId: string;
+						profileDigest: string;
+						resourceConfigurationHash: string | null;
+						claimedCount: string;
+					}[]
+				>`select agent_id as "agentId", profile_digest as "profileDigest", profile->'policy'->>'resourceConfigurationHash' as "resourceConfigurationHash", count(distinct sandbox_id)::text as "claimedCount"
 					from platform.session_sandbox_reserves
 					where claimed_at >= clock_timestamp() - ${input.windowMs} * interval '1 millisecond'
-					group by agent_id, profile_digest
-				)
-				select coalesce(demand.agent_id, refills.agent_id) as "agentId",
-					refills.profile_digest as "profileDigest",
-					coalesce(demand.new_session_count, '0') as "newSessionCount",
-					coalesce(refills.claimed_count, '0') as "claimedCount"
-				from demand
-				full join refills on refills.agent_id = demand.agent_id`;
-		return {
-			observedAt,
-			windowMs: input.windowMs,
-			profiles: rows.map((row) => ({
-				...row,
-				newSessionCount: Number(row.newSessionCount),
-				claimedCount: Number(row.claimedCount),
-			})),
-		};
+					group by agent_id, profile_digest, profile->'policy'->>'resourceConfigurationHash'`,
+			]);
+			const demand = new Map(
+				demandRows.map((row) => [
+					`${row.agentId}:${row.resourceConfigurationHash ?? ""}`,
+					Number(row.newSessionCount),
+				]),
+			);
+			const profiles = refillRows.map((row) => {
+				const key = `${row.agentId}:${row.resourceConfigurationHash ?? ""}`;
+				const currentDigest = currentDigests.get(key);
+				return {
+					agentId: row.agentId,
+					profileDigest: row.profileDigest,
+					resourceConfigurationHash: row.resourceConfigurationHash,
+					newSessionCount:
+						currentDigest === row.profileDigest ? (demand.get(key) ?? 0) : 0,
+					claimedCount: Number(row.claimedCount),
+				};
+			});
+			for (const row of demandRows) {
+				const key = `${row.agentId}:${row.resourceConfigurationHash ?? ""}`;
+				const currentDigest = currentDigests.get(key) ?? null;
+				if (
+					!profiles.some(
+						(profile) =>
+							profile.agentId === row.agentId &&
+							profile.resourceConfigurationHash === row.resourceConfigurationHash &&
+							profile.profileDigest === currentDigest,
+					)
+				) {
+					profiles.push({
+						agentId: row.agentId,
+						profileDigest: currentDigest,
+						resourceConfigurationHash: row.resourceConfigurationHash,
+						newSessionCount: Number(row.newSessionCount),
+						claimedCount: 0,
+					});
+				}
+			}
+			return { observedAt, windowMs: input.windowMs, profiles };
+		});
 	}
 	async renewLease(
 		lease: SessionSandboxReserveLeaseV1,
@@ -970,6 +1022,7 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				before.operation !== "delete" ||
 				before.absent ||
 				!before.resource ||
+				before.writeCompletion !== "response" ||
 				!["pending", "unknown", "confirmed", "rejected"].includes(before.status)
 			)
 				return false;
