@@ -427,7 +427,7 @@ else process.exit(43);
 	}
 });
 
-test("build reuses dependency-equivalent Worker and writes only an image overlay", async () => {
+test("build reuses dependency-equivalent Worker and verify binds current-profile images", async () => {
 	const { cp, mkdir, chmod, symlink, stat } = await import("node:fs/promises");
 	const { resolve } = await import("node:path");
 	const directory = await mkdtemp(join(tmpdir(), "harness-build-"));
@@ -454,6 +454,10 @@ test("build reuses dependency-equivalent Worker and writes only an image overlay
 			JSON.stringify({ private: true }),
 		);
 		await writeFile(join(repository, ".gitignore"), "node_modules/\n");
+		await writeFile(
+			join(repository, "deploy/local/platform.sh"),
+			"#!/usr/bin/env bash\nprintf '%s\\n' fixture-component-bindings-applied >&2\nexit 17\n",
+		);
 		for (const service of [
 			"web",
 			"platform-api",
@@ -558,6 +562,82 @@ fs.writeFileSync(statePath, JSON.stringify(images));
 			initialCalls.some((args) => args[0] === "push"),
 			false,
 		);
+		await writeFile(
+			join(state, `infrastructure-${sha}.json`),
+			JSON.stringify({
+				images: {
+					runtimeHost: {
+						repository: "registry.example/runtime",
+						digest: digest("a"),
+					},
+				},
+			}),
+		);
+		await writeFile(log, "");
+		// Stop at the platform boundary: only real CLI image rebinding is under test.
+		await assert.rejects(cli("verify"), (error) => {
+			assert.match(error.stderr, /fixture-component-bindings-applied/);
+			return true;
+		});
+		const cachePath = join(state, "component-image-cache.json");
+		const cache = JSON.parse(await readFile(cachePath, "utf8"));
+		const bindingCalls = (await readFile(log, "utf8"))
+			.trim()
+			.split("\n")
+			.map(JSON.parse);
+		assert.deepEqual(
+			bindingCalls.filter((args) => args[0] === "tag"),
+			[
+				"web",
+				"platform-api",
+				"platform-worker",
+				"enterprise-directory-sync",
+			].map((service) => {
+				const entry = Object.entries(cache.components).find(([key]) =>
+					key.startsWith(`${first.profile}:${service}:`),
+				)?.[1];
+				assert.ok(entry);
+				return ["tag", entry.imageId, `agent-infra-e2e-${service}`];
+			}),
+		);
+		const webKey = Object.keys(cache.components).find((key) =>
+			key.startsWith(`${first.profile}:web:`),
+		);
+		assert.ok(webKey);
+		const webEntry = cache.components[webKey];
+		delete cache.components[webKey];
+		cache.components[webKey.replace(first.profile, "other-profile")] = {
+			...webEntry,
+			profile: "other-profile",
+		};
+		await writeFile(cachePath, JSON.stringify(cache));
+		await writeFile(log, "");
+		await assert.rejects(cli("verify"), (error) => {
+			assert.match(error.stderr, /Component binding is missing for web/);
+			assert.doesNotMatch(error.stderr, /fixture-component-bindings-applied/);
+			return true;
+		});
+		assert.equal(
+			(await readFile(log, "utf8"))
+				.split("\n")
+				.filter(Boolean)
+				.map(JSON.parse)
+				.some((args) => args[0] === "tag"),
+			false,
+		);
+		delete cache.components[webKey.replace(first.profile, "other-profile")];
+		cache.components[webKey] = webEntry;
+		await writeFile(cachePath, JSON.stringify(cache));
+		const existingImages = await readFile(imageState, "utf8");
+		const missingImage = JSON.parse(existingImages);
+		delete missingImage[webEntry.imageId];
+		await writeFile(imageState, JSON.stringify(missingImage));
+		await assert.rejects(cli("verify"), (error) => {
+			assert.match(error.stderr, /Component image is unavailable for web/);
+			assert.doesNotMatch(error.stderr, /fixture-component-bindings-applied/);
+			return true;
+		});
+		await writeFile(imageState, existingImages);
 		await writeFile(join(repository, "apps/web/ui.txt"), "changed web");
 		await writeFile(
 			join(repository, "packages/unused/unused.txt"),
