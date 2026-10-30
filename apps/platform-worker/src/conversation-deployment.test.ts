@@ -1,7 +1,14 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { createAppliedRuntimeSkillDirectoryV1 } from "@agent-infra/agent-runtime";
 import { RuntimeSkillHubBindingV1Schema } from "@agent-infra/contracts/runtime";
