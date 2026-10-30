@@ -569,6 +569,74 @@ afterAll(async () => {
 });
 // Identity/registry/catalog are controlled deployment inputs. Core, Store, loader and HTTP are real.
 describe("production API lifecycle over HTTP and PostgreSQL", () => {
+	it("exposes model selection when the production model directory reader is wired", async () => {
+		const configuration = {
+			agentId: "agent_01",
+			revision: 1,
+			source: {
+				kind: "custom" as const,
+				interactionMode: "platform-adapter" as const,
+				connectionEnabled: false,
+			},
+			modelOptions: [],
+		} as never;
+		const management = {} as never;
+		const apiUser = {
+			schemaVersion: 1 as const,
+			userId: "alice",
+			accountStatus: "active" as const,
+			organizationIds: ["org-a"],
+			authorizationRevision: "identity-a",
+		};
+		const presentModelSelection = async (
+			input: ProductionPlatformApiInputV1,
+		) => {
+			const assembly = createProductionPlatformApiAssemblyInputV1(input);
+			if (typeof assembly.presentAgent === "function")
+				throw new Error("Expected production presentation factory");
+			const configurationQuery = {
+				readRuntimePresentation: async () => ({
+					outcome: "found" as const,
+					channels: [],
+					sourceReference: "sha256:source",
+					capabilities: { modelSelection: true },
+					interactionUrl: null,
+				}),
+			} as unknown as PostgresAgentConfigurationQueryV1;
+			const present = assembly.presentAgent.create({
+				configurationQuery,
+			});
+			if (!assembly.requestScope)
+				throw new Error("Expected production request scope");
+			let modelSelection: boolean | undefined;
+			await assembly.requestScope(
+				new Request("https://platform.example.test/api/v2/agents/agent_01"),
+				async () => {
+					modelSelection = (
+						await present({
+							agentId: "agent_01",
+							configuration,
+							management,
+							apiUser,
+						})
+					).capabilities.modelSelection;
+					return new Response(null);
+				},
+			);
+			if (modelSelection === undefined)
+				throw new Error("Expected model selection capability");
+			return modelSelection;
+		};
+		const modelDirectory = {
+			baseUrl: "http://platform-worker.local",
+			serviceToken: "worker-token",
+		} satisfies NonNullable<ProductionPlatformApiInputV1["modelDirectory"]>;
+		expect(
+			await presentModelSelection({ ...fixture.input, modelDirectory }),
+		).toBe(true);
+		expect(await presentModelSelection(fixture.input)).toBe(false);
+	});
+
 	it("creates, approves and configures an Agent without pretending its Workload is ready", async () => {
 		const empty = await snapshot();
 		expect(empty.agents).toEqual([]);
