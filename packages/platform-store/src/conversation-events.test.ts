@@ -589,6 +589,42 @@ describe("PostgreSQL actual operation facts and necessary audits", () => {
 					event: { sequence: index + 1 },
 				});
 			}
+			const [completedModelEvent] = await client`
+				select source, runtime_cursor, event_payload
+				from platform.conversation_events
+				where execution_id = ${fixture.executionId}
+					and event_type = 'execution.operation'
+					and event_payload->'fact'->>'kind' = 'model'
+					and event_payload->'fact'->>'phase' = 'completed'
+				order by sequence desc limit 1
+			`;
+			expect(completedModelEvent).toMatchObject({
+				source: "runtime",
+				runtime_cursor: expect.any(String),
+				event_payload: {
+					type: "execution.operation",
+					fact: {
+						kind: "model",
+						phase: "completed",
+						model: { modelOptionId: "custom-primary" },
+					},
+				},
+			});
+			const [completedModelAudit] = await client`
+				select details
+				from platform.audit_events
+				where target_id = ${fixture.executionId}
+					and action = 'execution.operation.observed'
+					and details->'fact'->>'phase' = 'completed'
+				order by occurred_at desc limit 1
+			`;
+			expect(completedModelAudit?.details).toMatchObject({
+				executor: "platform_worker",
+				fact: {
+					kind: "model",
+					model: { modelOptionId: "custom-primary" },
+				},
+			});
 			expect(await fixture.snapshot()).toMatchObject({
 				events: commands.length,
 				audits: 3,
