@@ -36,6 +36,7 @@ Required for plan/deploy/validate:
   ACK_SOURCE_SHA   exact 40-hex commit used to build the immutable images
   ACK_IMAGE_MANIFEST private platform-amd64 image manifest JSON for that commit
   ACK_RUNTIME_IMAGE_MANIFEST private amd64 RuntimeHost manifest JSON for that commit
+                           (also accepts published runtime-host.json images.runtimeHost shape)
 
 Optional validation inputs:
   ACK_TEMPLATE_CONFIG_DIR  directory containing codex.json, claude.json,
@@ -96,20 +97,7 @@ NODE
 	then
 		die "ACK_IMAGE_MANIFEST does not match ACK_SOURCE_SHA/linux-amd64 or lacks platform image digests"
 	fi
-	if ! node - "$runtime_manifest" "$source_sha" <<'NODE'
-const fs = require("node:fs");
-const [file, source] = process.argv.slice(2);
-const value = JSON.parse(fs.readFileSync(file, "utf8"));
-if (
-	value.schemaVersion !== 1 ||
-	value.commitSha !== source ||
-	value.platform !== "linux/amd64" ||
-	typeof value.repository !== "string" ||
-	!/^sha256:[0-9a-f]{64}$/u.test(value.digest ?? "")
-)
-	process.exit(1);
-NODE
-	then
+	if ! node "$repo_root/deploy/ack/redeploy-evidence.ts" runtime-manifest "$runtime_manifest" "$source_sha"; then
 		die "ACK_RUNTIME_IMAGE_MANIFEST does not match ACK_SOURCE_SHA/linux-amd64"
 	fi
 }

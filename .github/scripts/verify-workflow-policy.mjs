@@ -173,9 +173,14 @@ export function validateWorkflowDocuments(workflows) {
   const templates = publish?.jobs?.infrastructure;
   const templateBuild = templates?.steps?.find((step) => step.run?.includes("--images="));
   const templateMatrix = templates?.strategy?.matrix?.include;
-  if (publish?.env?.IMAGE_TAG !== "${{ github.ref == 'refs/heads/main' && 'main' || github.ref_name }}" ||
+  const smokeInput = publish?.on?.workflow_dispatch?.inputs?.smoke;
+  if (publish?.env?.IMAGE_TAG !== "${{ github.event_name == 'workflow_dispatch' && inputs.smoke && format('smoke-{0}-{1}', github.run_id, github.run_attempt) || github.ref == 'refs/heads/main' && 'main' || github.ref_name }}" ||
       !templateBuild?.run?.includes("--images=codex,claude,opencode,pi") ||
       !templateBuild?.run?.includes("--custom-base-image") ||
+      smokeInput?.type !== "boolean" ||
+      smokeInput?.default !== false ||
+      !String(templates?.if ?? "").includes("inputs.smoke == true") ||
+      !publish?.jobs?.["infrastructure-index"]?.steps?.some((step) => step.run?.includes("published-indexes.jsonl")) ||
       !sameObject(publish?.concurrency, {group: "publish-images-${{ github.ref }}", "cancel-in-progress": false}) ||
       templates?.["runs-on"] !== "${{ matrix.runner }}" ||
       JSON.stringify(templateMatrix) !== JSON.stringify([

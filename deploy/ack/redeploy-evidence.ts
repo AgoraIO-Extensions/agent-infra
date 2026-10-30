@@ -15,11 +15,23 @@ const components = {
 	enterpriseDirectorySync: "agent-infra-directory",
 };
 
+export function normalizeRuntimeImageManifest(value: RecordValue, sourceSha: string): RecordValue {
+	assert(value && typeof value === "object" && !Array.isArray(value));
+	assert(typeof sourceSha === "string" && /^[a-f0-9]{40}$/u.test(sourceSha));
+	assert(value.schemaVersion === 1 && value.platform === "linux/amd64" && value.commitSha === sourceSha);
+	const image = Object.hasOwn(value, "images") ? value.images?.runtimeHost : value;
+	assert(image && typeof image.repository === "string" && typeof image.digest === "string");
+	assert.match(`${image.repository}@${image.digest}`, immutable);
+	return { schemaVersion: 1, commitSha: sourceSha, platform: value.platform, repository: image.repository, digest: image.digest };
+}
+
 export function validateRenderedImages(
 	text: string,
 	platform: RecordValue,
 	runtime: RecordValue,
 ) {
+	assert(platform.schemaVersion === 1 && platform.platform === "linux/amd64");
+	runtime = normalizeRuntimeImageManifest(runtime, platform.commitSha);
 	const documents = parseAllDocuments(text).map((document) => {
 		assert.equal(document.errors.length, 0);
 		return document.toJSON() as RecordValue;
@@ -100,7 +112,10 @@ export function projectSnapshot(
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	try {
 		const [mode, ...args] = process.argv.slice(2);
-		if (mode === "render") {
+		if (mode === "runtime-manifest") {
+			const [file, source] = args;
+			normalizeRuntimeImageManifest(JSON.parse(readFileSync(file, "utf8")), source);
+		} else if (mode === "render") {
 			const [rendered, platform, runtime] = args;
 			validateRenderedImages(readFileSync(rendered, "utf8"),
 				JSON.parse(readFileSync(platform, "utf8")), JSON.parse(readFileSync(runtime, "utf8")));

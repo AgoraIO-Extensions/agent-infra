@@ -8,6 +8,11 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
+      smoke:
+        description: Run the two-architecture release smoke with an isolated tag
+        required: false
+        type: boolean
+        default: false
       publish_platform:
         description: Publish Platform business images as well
         required: false
@@ -24,12 +29,12 @@ concurrency:
 
 env:
   IMAGE_REPOSITORY_PREFIX: ghcr.io/agoraio-extensions/agent-infra
-  IMAGE_TAG: ${{ github.ref == 'refs/heads/main' && 'main' || github.ref_name }}
+  IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.smoke && format('smoke-{0}-{1}', github.run_id, github.run_attempt) || github.ref == 'refs/heads/main' && 'main' || github.ref_name }}
 
 jobs:
   infrastructure:
     name: Standard template images (${{ matrix.platform }})
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.smoke == true)
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -55,7 +60,7 @@ jobs:
         with:
           node-version: 24
       - name: Set up Docker OCI image store
-        uses: docker/setup-docker-action@e43656e248c0bd0647d3f5c195d116aacf6fcaf4 # v4
+        uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5 # v5.6.0
         with:
           daemon-config: |
             {"features":{"containerd-snapshotter":true,"cdi":false}}
@@ -79,10 +84,11 @@ jobs:
           node deploy/release/build-images.mjs "$RUNNER_TEMP/custom-agent-base.json" \
             --custom-base-image
       - name: Upload template receipts
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         with:
-          if-no-files-found: error
-          name: template-images-${{ matrix.architecture }}-${{ github.sha }}
+          if-no-files-found: warn
+          name: template-images-${{ matrix.architecture }}-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/templates.json
             ${{ runner.temp }}/templates.json.runtime-probe.json
@@ -107,7 +113,7 @@ jobs:
       - name: Download verified image receipts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: template-images-*-${{ github.sha }}
+          pattern: template-images-*-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/receipts
       - name: Set up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -119,11 +125,19 @@ jobs:
         run: echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
       - name: Publish multi-architecture indexes
         run: |
+          set -o pipefail
           node deploy/release/publish-image-indexes.mjs "$IMAGE_TAG" \
             agent-runtime-host,agent-runtime-codex,agent-runtime-claude,agent-runtime-opencode,agent-runtime-pi,custom-agent-base \
             "$RUNNER_TEMP/receipts"/*/templates.json \
             "$RUNNER_TEMP/receipts"/*/runtime-host.json \
-            "$RUNNER_TEMP/receipts"/*/custom-agent-base.json
+            "$RUNNER_TEMP/receipts"/*/custom-agent-base.json \
+            | tee "$RUNNER_TEMP/published-indexes.jsonl"
+      - name: Upload published index receipts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          if-no-files-found: error
+          name: published-indexes-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/published-indexes.jsonl
 
   platform:
     name: Platform business images (${{ matrix.platform }})
@@ -155,7 +169,7 @@ jobs:
         with:
           node-version: 24
       - name: Set up Docker OCI image store
-        uses: docker/setup-docker-action@e43656e248c0bd0647d3f5c195d116aacf6fcaf4 # v4
+        uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5 # v5.6.0
         with:
           daemon-config: |
             {"features":{"containerd-snapshotter":true,"cdi":false}}
