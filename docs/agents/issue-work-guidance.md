@@ -51,6 +51,7 @@ GitHub、当前 branch/worktree 和最新 main，再完成两次交叉确认：
 ## 分派与状态更新规则
 
 - `ready-for-agent` 只表示可以开始契约复核，不代表依赖已满足。
+- Hosted CI 失败按 exact head 和失败步骤分类；main focused 通过不能覆盖 Hosted 失败，只有新终态证据才能改变该 PR 的验证结论。
 - `needs-triage` 先由协调者补齐问题、范围、验证和 blocker；不得直接认领。
 - `ready-for-human` 按 [Triage Labels](triage-labels.md) 仅作人工处理/验证标记；真实部署、浏览器、外部账号与人工决策按各票签收要求取证，代码测试不代替。
 - 同一文件、同一部署单元或同一 Issue 只能有一个写 owner；依赖关系写回 Issue 或 PR，不在状态表里推测。

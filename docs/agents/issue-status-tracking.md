@@ -1,10 +1,10 @@
 # 开放 Issue 状态跟进
 
-> 本次回读截止（as-of）：2026-10-30T05:05:00+00:00。
-> 来源基线：创建 worktree 前 fetch 回读的 `origin/main` exact SHA `ce2a4f59c928473ff02e15c82d426b28727a774a`。
+> 本次回读截止（as-of）：2026-10-30T06:05:00+00:00。
+> 来源基线：创建 worktree 前 fetch 回读的 `origin/main` exact SHA `4f348ad5a21dd55d31bd7d666845089ca1c4d2b1`。
 > 本文是带时间的分派快照；执行前重新回读 GitHub、来源和资源占用，按 [Issue 工作指导](issue-work-guidance.md) 确认边界。
 
-采集时开放 Issue **15**：业务与验收 **14**，本次文档治理 [#3760](https://github.com/AgoraIO-Extensions/agent-infra/issues/3760) **1**。
+采集时开放 Issue **15**：业务与验收 **14**，本次文档治理 [#3762](https://github.com/AgoraIO-Extensions/agent-infra/issues/3762) **1**。
 开发 child #3752/#3756 已分别由 PR #3754/#3757 合入并自动关闭；开放 PR 仅剩 Draft [#3751](https://github.com/AgoraIO-Extensions/agent-infra/pull/3751)，head `22ad52ee060bf8c213e932a8ef13b0e0988325d1`。
 本快照自身 PR 尚未创建，不计入开放 PR 数量。PR head 或新票变化后重新采集，不能用此表覆盖 GitHub。
 
@@ -35,7 +35,7 @@ Connection 服务端、Provider/Grant/凭据和共享部署资源不随 Platform
 
 | Issue / 类别 | 采集时标签 | 当前责任 | 下一动作与证据边界 |
 | --- | --- | --- | --- |
-| [#3741](https://github.com/AgoraIO-Extensions/agent-infra/issues/3741) / Deploy/E2E/Channels | priority:P1, agent:codex | 发布 owner 当前实现 | PR #3751 保持 Draft。完整日志已将失败定位到 RuntimeHost publication；补安全错误分类和同 runner 连续模板/custom-base/index 发布 smoke，不把 healthcheck 警告或 Action 升级当已证根因。 |
+| [#3741](https://github.com/AgoraIO-Extensions/agent-infra/issues/3741) / Deploy/E2E/Channels | priority:P1, agent:codex | 发布 owner 当前实现 | PR #3751 保持 Draft。RuntimeHost 两架构 push 已确认 authorization 失败；需要 package admin 为本仓库设置 Manage Actions access=Write。Hosted Backend 的既有 codex-runtime-driver 断言与 Heavy 的 task-feedback reload 旅程失败独立处理，不将其混入发布生产改动。 |
 | [#3692](https://github.com/AgoraIO-Extensions/agent-infra/issues/3692) / Workflow/Observability | priority:P1, agent:codex | 同一 ACK 发布/性能 owner 持有 | 继续同来源、同负载的阶段时延与资源基线；依赖发布产物与最终部署组合，不以本地主干或 Pod Ready 签性能验收。 |
 | [#3747](https://github.com/AgoraIO-Extensions/agent-infra/issues/3747) / Runtime/Worker/Core | priority:P1, agent:codex, session-owned | Runtime owner 当前调查；子项 #3756 由同一 session 独占 | API projection 子项 #3756 已由 PR #3757 合入并关闭，父票不因 child 合入而关闭。#3750 已合入，但 custom child digest、同绑定 readiness/Store/API 投影及真实 ACP 结果仍缺。 |
 | [#3295](https://github.com/AgoraIO-Extensions/agent-infra/issues/3295) / Deploy/E2E/Channels | agent:codex | 原网络 session 已确认接回只读方案筹备 | 普通节点需要支持 policy 的目标环境与具名实施 owner；ECI 可独立核 VirtualNode/Poseidon 前提。分开验证 allow/deny/recovery；迁移、费用和窗口未落实，现有 Flannel 不原地换 CNI。 |
@@ -51,18 +51,20 @@ Connection 服务端、Provider/Grant/凭据和共享部署资源不随 Platform
 | [#3230](https://github.com/AgoraIO-Extensions/agent-infra/issues/3230) / Deploy/E2E/Channels | ready-for-human, priority:P1, agent:kiro | 协调者持有文件验收筹备；声明输入待落实 | 三个已授权管理 GET 的404已定位为精确范围声明缺失。先落实类型、字节上限、有效期与当前 revision，经正式API写入再验 Web/企微文件矩阵；不自行选择限额绕过声明。 |
 
 源码写入边界：已合入的 #3754 仅修复 `deploy/local/e2e-harness.mjs` 与 `tests/local-e2e-harness.test.mjs`；已合入的 #3757 仅修复 `apps/platform-api/src/deployment.ts` 与对应 production regression；
-发布票 #3741 的发布 workflow 与相应 smoke 由发布 owner 管理；本次 #3760 仅两份 Issue 指导/状态文档。
+发布票 #3741 的发布 workflow 与相应 smoke 由发布 owner 管理；本次 #3762 仅两份 Issue 指导/状态文档。
 其他验收发现实现缺口时先冻结具体文件，再按 primary Issue 开发；不因筹备交接取得重叠写权。
 每个新 PR 委派后台 watcher，确认合入后委派单 PR 清理，协调者继续其他可执行项。
 
 ## 当前证据与输入
 
+- [#3741 的 package 访问复核](https://github.com/AgoraIO-Extensions/agent-infra/issues/3741#issuecomment-6515821908)：用户已授权写权限，但 package 仍未完成 Manage Actions access；`repository=null` 只说明未关联，权限根因以隔离 smoke 的 authorization 失败为准。当前没有可用已登录 GitHub UI，未改可见性、仓库默认权限或 ACK。
+- [#3751 当前 Hosted run](https://github.com/AgoraIO-Extensions/agent-infra/actions/runs/41006192728)：Backend 唯一失败为 codex-runtime-driver.test.ts 的 completed/operation 断言（2509 passed/1 failed/34 skipped），main focused 600/600 通过；Heavy 唯一失败为 task-feedback.spec.ts reload 后缺任务反馈按钮（1524 passed/1 failed/120 skipped）。失败保留并由各 owner 分类，不能宣称全绿。
 - [#3295 的新筹备回执](https://github.com/AgoraIO-Extensions/agent-infra/issues/3295#issuecomment-6514019169)、[#2857 的接收范围](https://github.com/AgoraIO-Extensions/agent-infra/issues/2857#issuecomment-6514023205) 和 [#2998 的输入核查](https://github.com/AgoraIO-Extensions/agent-infra/issues/2998#issuecomment-6514023230) 已公开回读；均明确实际筹备范围和下一交付，未签真实 AC。
 - [#851 的新合同交接](https://github.com/AgoraIO-Extensions/agent-infra/issues/851#issuecomment-6513921407)：公开合同仍只有浏览器管理员注册和固定 Consumer 的 DCR；业务 Agent ID 与内部注册身份不能混为一谈。先确定机器身份、准确语义、幂等/unknown 恢复和受保护交付合同；已有批准安装配置独立核对，不用管理员 Cookie、共享 Consumer 或旧测试输入替代。
 - [#2858 的当前管理前置](https://github.com/AgoraIO-Extensions/agent-infra/issues/2858#issuecomment-6513990960)：正式登录与已有 Agent 候选读取通过，四模板申请 readiness 已过期。本地主干 d970fd06 不等于当前全部部署组件来源；未执行新的申请/Workload 或共享配置更新。
 - [#3108 的当前 main 审计](https://github.com/AgoraIO-Extensions/agent-infra/issues/3108#issuecomment-6513762537)：诊断开发已交付，剩余原会话/PVC 恢复与完整时延需要当前部署事实。只完成新会话或历史模型时延不能代签。
 - [#3747 的能力路径核查](https://github.com/AgoraIO-Extensions/agent-infra/issues/3747#issuecomment-6513894681)：可选能力投影、模型目录装配和真实 ACP 结果分别取证；超时修复合入没有证明新镜像或真实任务已通过。其 API projection 子项 [#3756](https://github.com/AgoraIO-Extensions/agent-infra/issues/3756) / [#3757](https://github.com/AgoraIO-Extensions/agent-infra/pull/3757) 独立推进，父票仍保留运行时验收。
-- [#3754](https://github.com/AgoraIO-Extensions/agent-infra/pull/3754) 已合入 `ce2a4f59` 并关闭 #3752；[#3757](https://github.com/AgoraIO-Extensions/agent-infra/pull/3757) 已合入 `cd16f38f` 并关闭 #3756。Draft [#3751](https://github.com/AgoraIO-Extensions/agent-infra/pull/3751) 仍等待 Hosted CI，不能以 pending、旧 receipt 或局部通过关闭 #3741。
+- [#3754](https://github.com/AgoraIO-Extensions/agent-infra/pull/3754) 已合入 `ce2a4f59` 并关闭 #3752；[#3757](https://github.com/AgoraIO-Extensions/agent-infra/pull/3757) 已合入 `cd16f38f` 并关闭 #3756。Draft [#3751](https://github.com/AgoraIO-Extensions/agent-infra/pull/3751) 当前 Hosted Backend/Heavy 已失败，不能以 main focused 通过或旧 receipt 关闭 #3741。
 - #2983 按 [ADR-0026](../adr/0026-show-model-reasoning-as-conversation-content.md) 的 Codex 范围和 [ADR-0030](../adr/0030-source-standard-template-models-from-relay.md) 的默认 Key `/models`、保存时协议验证执行。[候选与待决策略](https://github.com/AgoraIO-Extensions/agent-infra/issues/2983#issuecomment-6503038688) 尚未 apply，旧烘焙目录不是当前前置。
 - [#3230 的管理路由复核](https://github.com/AgoraIO-Extensions/agent-infra/issues/3230#issuecomment-6502573560) 已区分精确声明缺失404与权限拒绝403，不外推整张表为空或数据面关闭；三方限制仍需有效输入。
 - #1548、#2857、#2998 的四模板、外部签名/Provider、隔离、官方扫码和机器人计数各自取真实证据；历史正向链、健康状态、输入筹备和代码合入均不签未运行矩阵。
