@@ -3,6 +3,7 @@ import {
 	executionProgressPhaseV1,
 	executionToolDisplayNameV1,
 } from "@agent-infra/contracts/pilot";
+import type { SessionSandboxReserveConfigurationV1 } from "@agent-infra/platform-core";
 import {
 	createConversationExecutionUseCaseV1,
 	createWecomAuthorizationV1,
@@ -240,6 +241,9 @@ export class PostgresWecomChannelV1
 {
 	readonly #sql: ReturnType<typeof postgres>;
 	readonly #databaseUrl: string;
+	readonly #sessionSandboxReserves:
+		| SessionSandboxReserveConfigurationV1
+		| undefined;
 	readonly #acceptSettlements = new Set<Promise<void>>();
 	#closed = false;
 	readonly #management: PostgresAgentManagementTransactionV1;
@@ -251,6 +255,7 @@ export class PostgresWecomChannelV1
 		| undefined;
 	readonly #observe: (status: WecomDeliveryStatusV1) => void;
 	constructor(options: {
+		readonly sessionSandboxReserves?: SessionSandboxReserveConfigurationV1;
 		readonly databaseUrl: string;
 		readonly userDirectory?: TaskUserDirectoryV1;
 		readonly identity: WecomIdentityPortV1;
@@ -259,6 +264,7 @@ export class PostgresWecomChannelV1
 		readonly observe?: (status: WecomDeliveryStatusV1) => void;
 	}) {
 		if (!options.identity) throw new Error("WeCom identity is required");
+		this.#sessionSandboxReserves = options.sessionSandboxReserves;
 		this.#connectionHolderId = options.connectionHolderId ?? null;
 		this.#userDirectory = options.userDirectory;
 		this.#identity = options.identity;
@@ -640,6 +646,7 @@ export class PostgresWecomChannelV1
 				createConversationExecutionUseCaseV1({
 					transaction: new PostgresConversationExecutionTransactionV1({
 						transaction: business,
+						sessionSandboxReserves: this.#sessionSandboxReserves,
 						userDirectory: this.#userDirectory,
 						signal,
 					}),

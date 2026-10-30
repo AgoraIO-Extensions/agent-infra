@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type {
 	ConversationExecutionAuthorityV1,
 	ConversationExecutionConversationStateV1,
@@ -9,6 +10,7 @@ import type {
 	ConversationStopDecisionV1,
 	ConversationStopWritePlanV1,
 	CreateConversationWritePlanV1,
+	SessionSandboxBindingV1,
 } from "@agent-infra/platform-core";
 import {
 	conversationAttachmentMergeMaxCountV1,
@@ -120,6 +122,7 @@ function validateModelSelectionFallback(
 export function validateCreatePlan(
 	value: unknown,
 	request: CreateRequest,
+	expectedSandbox?: SessionSandboxBindingV1,
 ): CreateConversationWritePlanV1 {
 	const authority = parseAuthority(request.authority);
 	const input = exactRecord(value, [
@@ -135,6 +138,7 @@ export function validateCreatePlan(
 	const result = parseCreatedResult(input.result);
 	const idempotency = parseIdempotency(input.idempotency, true);
 	if (
+		(expectedSandbox && !isDeepStrictEqual(sandbox, expectedSandbox)) ||
 		sandbox.sessionId !== conversation.conversationId ||
 		sandbox.agentId !== authority.agentId ||
 		sandbox.principal.id !== authority.actorId ||

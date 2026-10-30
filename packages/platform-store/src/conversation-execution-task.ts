@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import type {
 	ConversationExecutionAuthorityV1,
 	ConversationTaskAdmissionStateV1,
 	ConversationTaskAdmissionTransactionPortV1,
 	ConversationTaskSubmitResultV1,
+	SessionSandboxReserveConfigurationV1,
 	TaskApiChannelV1,
 	TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
@@ -41,6 +43,10 @@ import {
 	readSessionSandboxBinding,
 	requestSessionSandboxResume,
 } from "./session-sandbox.js";
+import {
+	admitNewSessionSandboxV1,
+	adoptSessionSandboxReserveV1,
+} from "./session-sandbox-reserves.js";
 import { insertTaskAuthorization } from "./task-authorization.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
@@ -251,6 +257,7 @@ export async function submitConversationTask(
 	userDirectory: TaskUserDirectoryV1 | undefined,
 	readDisplayName?: RequestedModelDisplayNameResolverV1,
 	evaluationPolicy?: EvaluationCurrentPolicyReaderV1,
+	sessionSandboxReserves?: SessionSandboxReserveConfigurationV1,
 ): ReturnType<ConversationTaskAdmissionTransactionPortV1["submitTask"]> {
 	const authority = parseAuthority(request.authority);
 	const principal = authority.taskBoundary?.principal;
@@ -354,7 +361,6 @@ export async function submitConversationTask(
 	const decision = decide(state);
 	if ("outcome" in decision) return decision;
 	let plan = decision;
-	const statusEvent = plan.statusEvent;
 	if (plan.relayKeyBinding !== null) unavailable();
 	const selected = await currentConversationExecutionRelayKeyBindingV1(
 		transaction,
@@ -366,6 +372,28 @@ export async function submitConversationTask(
 	);
 	if (!selected) return { outcome: "denied", reason: "relay_key_unavailable" };
 	if (selected.executionSource !== plan.executionSource) unavailable();
+	const reservationId = await reserveIdempotency(transaction, {
+		...scope,
+		requestDigest: request.requestDigest,
+		occurredAt: plan.acceptedAt,
+	});
+	if (!reservationId) unavailable();
+	const admission = !conversation
+		? await admitNewSessionSandboxV1(
+				transaction,
+				authority,
+				parseSessionSandboxBindingV1(plan.sandbox),
+				sessionSandboxReserves,
+			)
+		: null;
+	if (admission && admission.binding.sandboxId !== plan.sandbox?.sandboxId) {
+		const adopted = decide({ ...state, newSandbox: admission.binding });
+		if ("outcome" in adopted) unavailable();
+		plan = adopted;
+	}
+	if (admission && !isDeepStrictEqual(plan.sandbox, admission.binding))
+		unavailable();
+	const statusEvent = plan.statusEvent;
 	plan = { ...plan, relayKeyBinding: selected.relayKeyBinding };
 	const finalCursor =
 		plan.modelSelectionFallback?.timelineEvent.conversationCursor ??
@@ -397,12 +425,6 @@ export async function submitConversationTask(
 		executionId: plan.executionId,
 		messageId: plan.messageId,
 	};
-	const reservationId = await reserveIdempotency(transaction, {
-		...scope,
-		requestDigest: request.requestDigest,
-		occurredAt: plan.acceptedAt,
-	});
-	if (!reservationId) unavailable();
 	if (plan.createConversation) {
 		const binding = parseSessionSandboxBindingV1(plan.sandbox);
 		if (
@@ -429,6 +451,7 @@ export async function submitConversationTask(
 			traceId: request.command.traceId,
 			occurredAt: plan.acceptedAt,
 		});
+		if (admission) await adoptSessionSandboxReserveV1(transaction, admission);
 	} else {
 		await transaction`
 			update platform.conversations

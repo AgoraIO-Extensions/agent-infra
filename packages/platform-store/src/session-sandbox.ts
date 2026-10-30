@@ -11,6 +11,7 @@ import {
 	type SessionSandboxRuntimeStateV1,
 } from "@agent-infra/platform-core";
 import type { Transaction } from "./conversation-execution-common.js";
+import { reserveSessionSandboxResumeBudgetV1 } from "./session-sandbox-reserves.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
 /** Read-only history: missing allocation is not Runtime readiness or command authority.
@@ -298,6 +299,10 @@ export async function requestSessionSandboxResume(
 		row.status === "succeeded" || row.status === "retry_scheduled";
 	if (!reopened && !["pending", "processing"].includes(row.status))
 		return false;
+	await reserveSessionSandboxResumeBudgetV1(
+		transaction,
+		lifecycle.source.sandbox.sandboxId,
+	);
 	const updated = await transaction`
 		update platform.outbox_items
 		set payload = payload || ${transaction.json({

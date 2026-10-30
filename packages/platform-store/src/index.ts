@@ -235,3 +235,4 @@ export {
 	openPostgresWorkloadStateReaderV1,
 	type PostgresWorkloadStateReaderV1,
 } from "./workload-reconciliation.js";
+export { PostgresSessionSandboxReserveStoreV1, type SessionSandboxReserveWorkerClaimV1 } from "./session-sandbox-reserves.js";
