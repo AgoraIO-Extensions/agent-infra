@@ -395,9 +395,15 @@ const connectionInstallationRevision = perAgentConsumerSelection
 			connectionInstallationSupply,
 			connectionConsumerSnapshot,
 		);
-const connectionInstallation = resolveConnectionInstallation(
-	configuredConnectionInstallation,
-);
+let connectionInstallation: DeploymentConfiguration["connectionInstallation"];
+try {
+	connectionInstallation = resolveConnectionInstallation(
+		configuredConnectionInstallation,
+	);
+} catch {
+	// Invalid installation input must not stop ordinary work or original control.
+	connectionInstallation = undefined;
+}
 const connectionConsumer = connectionConsumerSnapshot
 	? JSON.parse(connectionConsumerSnapshot)
 	: undefined;
