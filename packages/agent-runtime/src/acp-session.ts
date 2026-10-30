@@ -36,6 +36,8 @@ export interface AcpLaunch {
 	command: string;
 	args: string[];
 	env: NodeJS.ProcessEnv;
+	/** Bound a native prompt so a stuck model transport cannot block RuntimeHost replay forever. */
+	promptTimeoutMs?: number;
 	close?: () => Promise<void>;
 	/** Reset per-execution transport state before reusing this native session. */
 	beginTurn?: () => void;
@@ -422,22 +424,59 @@ export async function openAcpSession(options: {
 						model: fact,
 					});
 				try {
-					const response = await connection.agent.request("session/prompt", {
-						sessionId: nativeId,
-						prompt: content,
-					});
-					await updates;
-					if (fact && writeFact)
-						await writeFact({
-							kind: "model",
-							operationRef,
-							attemptRef,
-							phase: "completed",
-							finishedAt: new Date().toISOString(),
-							durationMs: Math.max(0, Date.now() - startedAt),
-							model: fact,
+					const timeoutMs = options.launch.promptTimeoutMs ?? 30_000;
+					if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
+						throw new Error("RUNTIME_ACP_PROMPT_TIMEOUT_INVALID");
+					let timer: ReturnType<typeof setTimeout> | undefined;
+					let timedOut = false;
+					const timeoutError = new Error("RUNTIME_ACP_PROMPT_TIMEOUT");
+					const request = (async () => {
+						const response = await connection.agent.request("session/prompt", {
+							sessionId: nativeId,
+							prompt: content,
 						});
-					return response as { stopReason: string; checkpoint?: string };
+						await updates;
+						return response;
+					})().catch((error) => {
+						if (timedOut) throw timeoutError;
+						throw error;
+					});
+					const deadline = new Promise<never>((_, reject) => {
+						timer = setTimeout(() => {
+							timedOut = true;
+							void (async () => {
+								await Promise.race([
+									Promise.resolve(
+										connection.agent.notify("session/cancel", {
+											sessionId: nativeId,
+										}),
+									).catch(() => undefined),
+									new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
+								]);
+								await Promise.race([
+									close().catch(() => undefined),
+									new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+								]);
+								reject(timeoutError);
+							})();
+						}, timeoutMs);
+					});
+					try {
+						const response = await Promise.race([request, deadline]);
+						if (fact && writeFact)
+							await writeFact({
+								kind: "model",
+								operationRef,
+								attemptRef,
+								phase: "completed",
+								finishedAt: new Date().toISOString(),
+								durationMs: Math.max(0, Date.now() - startedAt),
+								model: fact,
+							});
+						return response as { stopReason: string; checkpoint?: string };
+					} finally {
+						if (timer) clearTimeout(timer);
+					}
 				} catch (error) {
 					if (fact && writeFact)
 						await writeFact({
