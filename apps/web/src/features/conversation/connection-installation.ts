@@ -2,6 +2,7 @@ import { ConnectionInstallationProjectionV1Schema } from "@agent-infra/contracts
 import type { Client } from "../../pilot/generated-v2/client/index.js";
 import {
 	beginPlatformConnectionInstallationV1,
+	confirmPlatformConnectionInstallationV1,
 	readPlatformConnectionInstallationV1,
 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
@@ -63,9 +64,17 @@ export function safeConnectionAuthorizationUrl(
 
 const invalidResponseMessage = "CONNECTION_INSTALLATION_INVALID_RESPONSE";
 
-function projection(value: unknown): ConnectionInstallationProjectionV1 {
+function projection(
+	value: unknown,
+	authorizationId?: string,
+): ConnectionInstallationProjectionV1 {
 	const parsed = ConnectionInstallationProjectionV1Schema.safeParse(value);
-	if (!parsed.success) throw new Error(invalidResponseMessage);
+	if (
+		!parsed.success ||
+		(authorizationId !== undefined &&
+			parsed.data.authorizationId !== authorizationId)
+	)
+		throw new Error(invalidResponseMessage);
 	return parsed.data;
 }
 
@@ -110,6 +119,29 @@ export async function beginConnectionInstallation(options: {
 	return stateFromProjection(projection(result.data));
 }
 
+export async function confirmConnectionInstallation(options: {
+	client?: Client;
+	authorizationId: string;
+	idempotencyKey: string;
+	signal?: AbortSignal;
+}): Promise<ConnectionInstallationState> {
+	const result = await confirmPlatformConnectionInstallationV1({
+		client: options.client,
+		signal: options.signal,
+		responseStyle: "fields",
+		throwOnError: false,
+		headers: connectionRequestHeaders(options.idempotencyKey),
+		path: { authorizationId: options.authorizationId },
+		body: { schemaVersion: 1 },
+	});
+	if (result.response?.status !== 202 || !result.data)
+		return {
+			kind: "unavailable",
+			retryable: retryable(result.response?.status),
+		};
+	return stateFromProjection(projection(result.data, options.authorizationId));
+}
+
 export async function readConnectionInstallation(options: {
 	client?: Client;
 	authorizationId: string;
@@ -132,5 +164,5 @@ export async function readConnectionInstallation(options: {
 				error: result.error,
 			}),
 		};
-	return stateFromProjection(projection(result.data));
+	return stateFromProjection(projection(result.data, options.authorizationId));
 }
