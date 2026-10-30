@@ -2,12 +2,14 @@ import { beforeEach, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
 	beginPlatformConnectionInstallationV1: vi.fn(),
+	confirmPlatformConnectionInstallationV1: vi.fn(),
 	readPlatformConnectionInstallationV1: vi.fn(),
 }));
 vi.mock("../../pilot/generated-v2/sdk.gen.js", () => api);
 
 import {
 	beginConnectionInstallation,
+	confirmConnectionInstallation,
 	connectionRequestHeaders,
 	readConnectionInstallation,
 	safeConnectionAuthorizationUrl,
@@ -83,6 +85,69 @@ it("maps status reads and fails closed on invalid responses", async () => {
 		readConnectionInstallation({ authorizationId: "authorization-1" }),
 	).rejects.toThrow("CONNECTION_INSTALLATION_INVALID_RESPONSE");
 });
+
+it("confirms an installation with an explicit idempotent command", async () => {
+	api.confirmPlatformConnectionInstallationV1.mockResolvedValue({
+		response: { status: 202 },
+		data: {
+			schemaVersion: 1,
+			authorizationId: "authorization-1",
+			status: "confirmed",
+			expiresAt: Date.now() + 10_000,
+		},
+	});
+	await expect(
+		confirmConnectionInstallation({
+			authorizationId: "authorization-1",
+			idempotencyKey: "confirm-retry-key",
+		}),
+	).resolves.toMatchObject({ kind: "confirmed" });
+	expect(api.confirmPlatformConnectionInstallationV1).toHaveBeenCalledWith(
+		expect.objectContaining({
+			body: { schemaVersion: 1 },
+			path: { authorizationId: "authorization-1" },
+			headers: {
+				"X-Platform-CSRF": "1",
+				"Idempotency-Key": "confirm-retry-key",
+			},
+		}),
+	);
+});
+
+it.each(["confirm", "read"] as const)(
+	"rejects another installation or credential material in a %s response",
+	async (command) => {
+		const request =
+			command === "confirm"
+				? confirmConnectionInstallation
+				: readConnectionInstallation;
+		const mock =
+			command === "confirm"
+				? api.confirmPlatformConnectionInstallationV1
+				: api.readPlatformConnectionInstallationV1;
+		for (const fields of [
+			{ authorizationId: "other-authorization" },
+			{ token: "secret-material" },
+		]) {
+			mock.mockResolvedValue({
+				response: { status: command === "confirm" ? 202 : 200 },
+				data: {
+					schemaVersion: 1,
+					authorizationId: "authorization-1",
+					status: "confirmed",
+					expiresAt: Date.now() + 10_000,
+					...fields,
+				},
+			});
+			await expect(
+				request({
+					authorizationId: "authorization-1",
+					idempotencyKey: "confirm-key",
+				}),
+			).rejects.toThrow("CONNECTION_INSTALLATION_INVALID_RESPONSE");
+		}
+	},
+);
 
 it("rejects response fields that could contain credential material", async () => {
 	api.readPlatformConnectionInstallationV1.mockResolvedValue({

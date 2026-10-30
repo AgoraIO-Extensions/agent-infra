@@ -30,9 +30,10 @@ const authorizationUrl =
 	"https://connection.test/oauth/authorize?state=browser";
 const beginPath = "/api/connection-installations";
 const statusPath = `${beginPath}/${authorizationId}`;
+const confirmPath = `${statusPath}/confirm`;
 
 interface ObservedInstallationRequest {
-	readonly command: "begin" | "status";
+	readonly command: "begin" | "status" | "confirm";
 	readonly method: string;
 	readonly accepted: boolean;
 	readonly origin: string | undefined;
@@ -120,18 +121,27 @@ function authorizationNeededExecution() {
 	});
 }
 
-async function openExecutionDetails(page: Page) {
+async function openExecutionDetails(
+	page: Page,
+	pendingConfirmationResponse = false,
+) {
+	let confirmed = false;
 	const observed: ObservedInstallationRequest[] = [];
 	await keepConversationStreamOpen(page);
 	await page.route(/\/api\//, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
-		if (path === beginPath || path === statusPath) {
+		if (path === beginPath || path === statusPath || path === confirmPath) {
 			const headers = request.headers();
 			const publicOrigin = new URL(page.url()).origin;
 			const accepted = browserGateAccepts(headers, publicOrigin);
 			observed.push({
-				command: path === beginPath ? "begin" : "status",
+				command:
+					path === beginPath
+						? "begin"
+						: path === confirmPath
+							? "confirm"
+							: "status",
 				method: request.method(),
 				accepted,
 				origin: headers.origin,
@@ -146,14 +156,19 @@ async function openExecutionDetails(page: Page) {
 				});
 				return;
 			}
-			await route.fulfill(
-				path === beginPath
-					? {
-							status: 202,
-							json: installationProjection("awaiting_confirmation"),
-						}
-					: { status: 200, json: installationProjection("confirmed") },
-			);
+			if (path === confirmPath) {
+				expect(request.postDataJSON()).toEqual({ schemaVersion: 1 });
+				expect(headers["idempotency-key"]).toBeTruthy();
+				confirmed = true;
+			}
+			await route.fulfill({
+				status: path === statusPath ? 200 : 202,
+				json: installationProjection(
+					confirmed && !(path === confirmPath && pendingConfirmationResponse)
+						? "confirmed"
+						: "awaiting_confirmation",
+				),
+			});
 			return;
 		}
 		if (path === "/api/v1/session")
@@ -207,7 +222,7 @@ async function openExecutionDetails(page: Page) {
 	return observed;
 }
 
-test("begins and polls a Connection installation through the browser Origin gate", async ({
+test("requires an explicit confirmation through the browser Origin gate", async ({
 	page,
 }) => {
 	const observed = await openExecutionDetails(page);
@@ -216,13 +231,32 @@ test("begins and polls a Connection installation through the browser Origin gate
 	await expect(
 		details.getByText("等待 Connection 确认", { exact: true }),
 	).toBeVisible();
-	// The panel's own bounded poll reads the status, without any mocked header.
-	await expect(details.getByText("已确认", { exact: true })).toBeVisible({
-		timeout: 15_000,
-	});
+	// A status read cannot grant the user's confirmation.
+	await expect
+		.poll(
+			() => observed.filter((request) => request.command === "status").length,
+		)
+		.toBeGreaterThan(0);
+	expect(observed.some((request) => request.command === "confirm")).toBe(false);
+	await expect(details.getByText("已确认", { exact: true })).toHaveCount(0);
+	await details.getByRole("button", { name: "确认安装", exact: true }).click();
+	await expect(details.getByText("已确认", { exact: true })).toBeVisible();
 
 	const publicOrigin = new URL(page.url()).origin;
-	const [begin, ...statuses] = observed;
+	const [begin] = observed;
+	const statuses = observed.filter((request) => request.command === "status");
+	const confirmations = observed.filter(
+		(request) => request.command === "confirm",
+	);
+	expect(confirmations).toHaveLength(1);
+	expect(confirmations[0]).toMatchObject({
+		method: "POST",
+		accepted: true,
+		origin: publicOrigin,
+		csrf: "1",
+	});
+	expect(confirmations[0]?.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
+	expect(confirmations[0]?.idempotencyKey).not.toBe(begin?.idempotencyKey);
 	expect(begin).toMatchObject({
 		command: "begin",
 		method: "POST",
@@ -282,7 +316,7 @@ test("keeps Origin and Sec-Fetch-Site browser-owned on same-origin POSTs", async
 			csrf: headerValue(request.headers, "x-platform-csrf"),
 		});
 		response.writeHead(
-			accepted ? (request.url === beginPath ? 202 : 200) : 403,
+			accepted ? (request.url === statusPath ? 200 : 202) : 403,
 			{
 				"content-type": "application/json",
 			},
@@ -297,7 +331,11 @@ test("keeps Origin and Sec-Fetch-Site browser-owned on same-origin POSTs", async
 	try {
 		await page.goto(`${origin}/installation-probe`);
 		const responses = await page.evaluate(
-			async (paths: { readonly begin: string; readonly status: string }) => {
+			async (paths: {
+				readonly begin: string;
+				readonly status: string;
+				readonly confirm: string;
+			}) => {
 				// Forged values prove that the browser, not JavaScript, decides these
 				// headers: the page cannot widen its own authorization gate.
 				const forge = {
@@ -317,12 +355,17 @@ test("keeps Origin and Sec-Fetch-Site browser-owned on same-origin POSTs", async
 					method: "POST",
 					headers: forge,
 				});
-				return [begin.status, status.status];
+				const confirmation = await fetch(paths.confirm, {
+					method: "POST",
+					headers: { ...forge, "Idempotency-Key": "confirm-probe-key" },
+					body: JSON.stringify({ schemaVersion: 1 }),
+				});
+				return [begin.status, status.status, confirmation.status];
 			},
-			{ begin: beginPath, status: statusPath },
+			{ begin: beginPath, status: statusPath, confirm: confirmPath },
 		);
-		expect(responses).toEqual([202, 200]);
-		expect(wire).toHaveLength(2);
+		expect(responses).toEqual([202, 200, 202]);
+		expect(wire).toHaveLength(3);
 		for (const request of wire) {
 			expect(request.origin).toBe(origin);
 			expect(request.secFetchSite).toBe("same-origin");
@@ -349,11 +392,12 @@ test("querying the installation status keeps focus on the pending button, then o
 }, info) => {
 	await acceptanceViewport(page, info);
 	const errors = trackPageErrors(page);
-	await openExecutionDetails(page);
+	await openExecutionDetails(page, true);
 	// 在 fixture 之后注册（后注册的路由先处理）：状态读取全部挂起。
 	const statusRead = await holdRequests(page, "POST", statusPath);
 	const details = page.getByRole("dialog", { name: "执行详情" });
 	await details.getByRole("button", { name: "开始安装", exact: true }).click();
+	await details.getByRole("button", { name: "确认安装", exact: true }).click();
 	const query = await pinElement(
 		details.getByRole("button", { name: "查询状态", exact: true }),
 		"connection-status",
@@ -438,15 +482,18 @@ test("beginning an installation keeps focus on the same step button while prepar
 
 // #3433（轮询全量收口）：安装状态轮询按 #3418 的轮询规则。可重试的失败（503、网络中断）保留「等待 Connection
 // 确认」并按原节奏继续、不另加提示，读到「已确认」（终态）后停止；不可重试的失败（401、404、响应无效）停止轮询，
-// 显示「Connection 安装暂不可用。」，同一个步骤按钮原地换成「开始安装」，焦点留在它上面、不落到 body。两视口一致。
+// 显示「Connection 安装暂不可用。」，步骤按钮保留原安装的「查询状态」，不重新发起安装。两视口一致。
 test("the installation status poll continues through retryable failures and stops at the terminal state (#3433)", async ({
 	page,
 }, info) => {
 	await acceptanceViewport(page, info);
 	const errors = trackPageErrors(page);
-	await openExecutionDetails(page);
+	const observed = await openExecutionDetails(page, true);
 	const reads: string[] = [];
 	await page.route(statusPath, (route) => {
+		expect(observed.some((request) => request.command === "confirm")).toBe(
+			true,
+		);
 		const step = ["503", "network", "awaiting"][reads.length] ?? "confirmed";
 		reads.push(step);
 		if (step === "network") return route.abort("internetdisconnected");
@@ -469,6 +516,8 @@ test("the installation status poll continues through retryable failures and stop
 	);
 	await step.click();
 	await expect(step).toHaveAccessibleName("查询状态");
+	await details.getByRole("button", { name: "确认安装", exact: true }).click();
+	await step.focus();
 	await expect.poll(() => reads.length, { timeout: 8_000 }).toBe(2);
 	// 两次可重试的失败之后仍在等待确认，不另加提示，焦点仍在步骤按钮上。
 	await expect(
@@ -525,7 +574,7 @@ for (const failure of ["401", "404", "invalid"] as const)
 		await expect(
 			details.getByText("等待 Connection 确认", { exact: true }),
 		).toHaveCount(0);
-		await expect(step).toHaveAccessibleName("开始安装");
+		await expect(step).toHaveAccessibleName("查询状态");
 		await expectFocusSettled(step, `安装状态轮询 ${failure} 后`);
 		await page.waitForTimeout(4_500);
 		expect(reads, "不可重试的失败之后不再轮询").toBe(1);
@@ -536,3 +585,79 @@ for (const failure of ["401", "404", "invalid"] as const)
 		).toBe(true);
 		await expectCleanPage(page, errors);
 	});
+
+test("confirmation keeps focus while pending and returns it to the persistent step button", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const errors = trackPageErrors(page);
+	const observed = await openExecutionDetails(page);
+	const confirmation = await holdRequests(page, "POST", confirmPath);
+	const details = page.getByRole("dialog", { name: "执行详情" });
+	await details.getByRole("button", { name: "开始安装", exact: true }).click();
+	const step = await pinElement(
+		details.getByRole("button", { name: "查询状态", exact: true }),
+		"installation-step-confirm",
+	);
+	const confirm = await pinElement(
+		details.getByRole("button", { name: "确认安装", exact: true }),
+		"installation-confirm",
+	);
+	await confirm.focus();
+	await page.keyboard.press("Enter");
+	await expect(confirm).toHaveText("确认中");
+	await expectFocusableBusy(confirm, "确认 Connection 安装");
+	await page.keyboard.press("Enter");
+	await expect(step).toHaveAttribute("aria-disabled", "true");
+	confirmation.release();
+	await expect(details.getByText("已确认", { exact: true })).toBeVisible();
+	await expect(confirm).toHaveCount(0);
+	await expect(step).toHaveAccessibleName("重新开始");
+	await expectFocusSettled(step, "确认安装完成后");
+	expect(
+		observed.filter((request) => request.command === "confirm"),
+	).toHaveLength(1);
+	await expectCleanPage(page, errors);
+});
+
+test("a lost confirmation response keeps the original installation and retries only on click with the same key", async ({
+	page,
+}, info) => {
+	await acceptanceViewport(page, info);
+	const observed = await openExecutionDetails(page);
+	const confirmationKeys: string[] = [];
+	await page.route(confirmPath, async (route) => {
+		const key = route.request().headers()["idempotency-key"];
+		expect(key).toBeTruthy();
+		confirmationKeys.push(key ?? "");
+		if (confirmationKeys.length === 1)
+			return route.abort("internetdisconnected");
+		return route.fallback();
+	});
+	const details = page.getByRole("dialog", { name: "执行详情" });
+	await details.getByRole("button", { name: "开始安装", exact: true }).click();
+	await details.getByRole("button", { name: "确认安装", exact: true }).click();
+	await expect(
+		details.getByText("确认结果尚未核实，请查询原安装状态。"),
+	).toBeVisible();
+	await expect(
+		details.getByRole("button", { name: "重新开始", exact: true }),
+	).toHaveCount(0);
+	await page.waitForTimeout(2_500);
+	expect(confirmationKeys).toHaveLength(1);
+	await details.getByRole("button", { name: "查询状态", exact: true }).click();
+	await expect(
+		details.getByText("确认结果尚未核实，请查询原安装状态。"),
+	).toHaveCount(0);
+	expect(confirmationKeys).toHaveLength(1);
+	await details.getByRole("button", { name: "确认安装", exact: true }).click();
+	await expect(details.getByText("已确认", { exact: true })).toBeVisible();
+	expect(confirmationKeys).toHaveLength(2);
+	expect(confirmationKeys[1]).toBe(confirmationKeys[0]);
+	expect(
+		observed.filter((request) => request.command === "begin"),
+	).toHaveLength(1);
+	expect(
+		observed.filter((request) => request.command === "status").length,
+	).toBeGreaterThan(0);
+});
