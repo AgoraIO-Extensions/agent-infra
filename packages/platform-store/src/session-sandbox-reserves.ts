@@ -46,6 +46,17 @@ export interface SessionSandboxReserveWorkerClaimV1
 	readonly deployment: AgentWorkloadDesiredV1 | null;
 	readonly modelProjection: RuntimeModelProjectionV4 | null;
 }
+/** Read-only reserve state; it deliberately carries no worker lease or delivery fence. */
+export type SessionSandboxReserveInspectionV1 = Omit<
+	SessionSandboxReserveWorkerClaimV1,
+	"leaseOwner" | "deliveryFence"
+> & {
+	readonly currentProfileDigest: string | null;
+};
+export type SessionSandboxReserveDeleteResponseV1 =
+	| "acknowledged"
+	| "absent"
+	| "rejected";
 interface ReserveRow {
 	sandbox_id: string;
 	session_id: string;
@@ -61,6 +72,7 @@ interface ReserveRow {
 }
 export interface SessionSandboxAdmissionV1 {
 	readonly binding: SessionSandboxBindingV1;
+	readonly admissionProfileDigest: string | null;
 	readonly profile: SessionSandboxReserveProfileV1 | null;
 	readonly observation: SessionSandboxObservationV1 | null;
 }
@@ -210,44 +222,97 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 	}
 }
 
+interface StoredReservePolicy extends SessionSandboxReserveConfigurationV1 {
+	/** Accounting survives disabling the reserve controller; never accepted from deployment input. */
+	readonly reserveAccounting?: Pick<
+		SessionSandboxReserveConfigurationV1,
+		"totalBudget" | "resourceCosts"
+	>;
+}
+function decodeReservePolicy(value: StoredReservePolicy) {
+	const { reserveAccounting, ...submitted } = value;
+	const policy = parseSessionSandboxReserveConfigurationV1(submitted);
+	const accounting = reserveAccounting ?? policy;
+	const effective = parseSessionSandboxReserveConfigurationV1({
+		...policy,
+		totalBudget: accounting.totalBudget,
+		resourceCosts: accounting.resourceCosts,
+	});
+	return {
+		policy,
+		effective,
+		hasAccounting: policy.enabled || reserveAccounting !== undefined,
+	};
+}
+async function lockReserveBudget(tx: Transaction) {
+	await tx`select pg_advisory_xact_lock(pg_catalog.hashtextextended('session-sandbox:deployment-budget', 0))`;
+}
+/** Persist control revision separately from the retained accounting facts. No resource charge is released here. */
+async function applyReserveConfiguration(
+	tx: Transaction,
+	configured: SessionSandboxReserveConfigurationV1,
+) {
+	await lockReserveBudget(tx);
+	const { reserveAccounting: _ignored, ...input } =
+		configured as StoredReservePolicy;
+	const config = parseSessionSandboxReserveConfigurationV1(input);
+	const rows = await tx<
+		{
+			namespace: string;
+			revision: number;
+			configuration: StoredReservePolicy;
+		}[]
+	>`
+		select namespace, revision, configuration from platform.session_sandbox_budgets for update`;
+	if (rows.length > 1 || (rows[0] && rows[0].namespace !== config.namespace))
+		unavailable();
+	const previous = rows[0];
+	const decoded = previous ? decodeReservePolicy(previous.configuration) : null;
+	if (!previous && !config.enabled) return null;
+	if (
+		previous &&
+		(Number(previous.revision) > config.revision ||
+			(Number(previous.revision) === config.revision &&
+				!isDeepStrictEqual(decoded?.policy, config)))
+	)
+		unavailable();
+	if (previous && Number(previous.revision) === config.revision) return decoded;
+	const persisted: StoredReservePolicy =
+		!config.enabled && decoded?.hasAccounting
+			? {
+					...config,
+					reserveAccounting: {
+						totalBudget: decoded.effective.totalBudget,
+						resourceCosts: decoded.effective.resourceCosts,
+					},
+				}
+			: config;
+	await tx`insert into platform.session_sandbox_budgets (namespace, revision, configuration, updated_at)
+		values (${config.namespace}, ${config.revision}, ${tx.json(persisted as unknown as Json)}, clock_timestamp())
+		on conflict(namespace) do update set revision=excluded.revision, configuration=excluded.configuration, updated_at=excluded.updated_at`;
+	return decodeReservePolicy(persisted);
+}
 /** One transaction lock is shared by cold allocation, replenishment, claim, resume and retirement. */
 async function lockBudget(
 	tx: Transaction,
 	configured?: SessionSandboxReserveConfigurationV1,
 ) {
-	await tx`select pg_advisory_xact_lock(pg_catalog.hashtextextended('session-sandbox:deployment-budget', 0))`;
-	let configuredPolicy: SessionSandboxReserveConfigurationV1 | undefined;
-	if (configured) {
-		const config = parseSessionSandboxReserveConfigurationV1(configured);
-		const [previous] = await tx<
-			{
-				revision: number;
-				configuration: SessionSandboxReserveConfigurationV1;
-			}[]
-		>`select revision, configuration from platform.session_sandbox_budgets where namespace = ${config.namespace} for update`;
-		if (!previous && !config.enabled) return null;
-		if (
-			previous &&
-			(Number(previous.revision) > config.revision ||
-				(Number(previous.revision) === config.revision &&
-					!isDeepStrictEqual(previous.configuration, config)))
-		)
-			unavailable();
-		configuredPolicy =
-			previous && !config.enabled ? previous.configuration : config;
-		if (config.enabled)
-			await tx`insert into platform.session_sandbox_budgets (namespace, revision, configuration, updated_at) values (${config.namespace}, ${config.revision}, ${tx.json(config as unknown as Json)}, clock_timestamp()) on conflict(namespace) do update set revision = excluded.revision, configuration = excluded.configuration, updated_at = excluded.updated_at`;
-	}
+	await lockReserveBudget(tx);
+	if (configured) await applyReserveConfiguration(tx, configured);
 	const rows = await tx<
-		{ configuration: SessionSandboxReserveConfigurationV1 }[]
+		{ configuration: StoredReservePolicy }[]
 	>`select configuration from platform.session_sandbox_budgets for update`;
 	if (!rows.length) return null;
 	if (rows.length !== 1) unavailable();
-	const config =
-		configuredPolicy ??
-		parseSessionSandboxReserveConfigurationV1(
-			(rows[0] ?? unavailable()).configuration,
-		);
+	const {
+		policy,
+		effective: config,
+		hasAccounting,
+	} = decodeReservePolicy((rows[0] ?? unavailable()).configuration);
+	// Never-enabled default-off has no accounting policy and must preserve the existing cold path.
+	if (!hasAccounting) return null;
+	// Disabled mode fences new reserve use but never revalidates or rewrites existing allocation charges.
+	if (!policy.enabled) return { ...config, enabled: false };
 	// Missing original resource policy or unapproved costs cannot be guessed during rollout.
 	const uncharged = await tx<
 		{ sandbox_id: string; resource_hash: string | null }[]
@@ -271,7 +336,7 @@ async function lockBudget(
    and o.payload->'lifecycle'->'stopReceipt'->>'sessionId' = a.conversation_id
    and o.payload->'lifecycle'->'stopReceipt'->>'targetGeneration' = a.session_generation::text
    and o.payload->'lifecycle'->'stopReceipt'->>'targetResourceFence' = a.resource_fence::text)`;
-	return config;
+	return { ...config, enabled: policy.enabled };
 }
 async function usedBudget(
 	tx: Transaction,
@@ -350,6 +415,7 @@ export async function admitNewSessionSandboxV1(
 			};
 			return {
 				binding,
+				admissionProfileDigest: current.profile.digest,
 				profile: current.profile,
 				observation: {
 					status: "observed",
@@ -373,12 +439,24 @@ export async function admitNewSessionSandboxV1(
 			current?.profile.resources ?? cost.resources,
 		);
 	}
-	return { binding: fallback, profile: null, observation: null };
+	return {
+		binding: fallback,
+		admissionProfileDigest: current?.profile.digest ?? null,
+		profile: null,
+		observation: null,
+	};
 }
 export async function adoptSessionSandboxReserveV1(
 	tx: Transaction,
 	admission: SessionSandboxAdmissionV1,
 ): Promise<void> {
+	if (admission.admissionProfileDigest !== null) {
+		const rows = await tx`update platform.session_sandbox_allocations
+			set admission_profile_digest = ${admission.admissionProfileDigest}
+			where sandbox_id = ${admission.binding.sandboxId} and conversation_id = ${admission.binding.sessionId}
+				and session_generation = 1 and admission_profile_digest is null returning sandbox_id`;
+		if (rows.length !== 1) unavailable();
+	}
 	if (!admission.profile || !admission.observation) return;
 	const changed =
 		await tx`update platform.session_sandbox_allocations set resource_fence = 1, resource_policy = ${tx.json(admission.profile.policy as unknown as Json)}, resource_observation = ${tx.json(admission.observation as unknown as Json)}, status = 'allocated' where sandbox_id = ${admission.binding.sandboxId} and conversation_id = ${admission.binding.sessionId} and session_generation = 1 returning sandbox_id`;
@@ -475,6 +553,20 @@ export class PostgresSessionSandboxReserveStoreV1 {
 		);
 		this.#client = postgres(options.databaseUrl, { max: 5 });
 	}
+	async applyConfiguration(): Promise<void> {
+		await this.#client.begin(async (tx) => {
+			await applyReserveConfiguration(tx, this.#configuration);
+		});
+	}
+
+	async #readConfiguration(tx: Transaction) {
+		const [row] = await tx<{ configuration: StoredReservePolicy }[]>`
+			select configuration from platform.session_sandbox_budgets where namespace = ${this.#configuration.namespace}`;
+		return row
+			? decodeReservePolicy(row.configuration).policy
+			: this.#configuration;
+	}
+
 	async close() {
 		await this.#client.end();
 	}
@@ -489,8 +581,137 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			updatedAt: Date;
 		}[]
 	> {
-		return this
-			.#client`select sandbox_id as "sandboxId", agent_id as "agentId", profile_digest as "profileDigest", status, expires_at as "expiresAt", created_at as "createdAt", updated_at as "updatedAt" from platform.session_sandbox_reserves where status <> 'claimed' and retired_at is null order by created_at limit ${this.#configuration.maximumReserves}`;
+		let page = await this.listPage({ limit: 100 });
+		const items = [...page.items];
+		while (page.nextCursor !== null) {
+			page = await this.listPage({ cursor: page.nextCursor, limit: 100 });
+			items.push(...page.items);
+		}
+		return items;
+	}
+	async listPage(
+		input: { readonly cursor?: string; readonly limit?: number } = {},
+	) {
+		const limit = input.limit === undefined ? 100 : input.limit;
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) unavailable();
+		const cursor = input.cursor ?? "";
+		const rows = await this.#client<
+			{
+				sandboxId: string;
+				agentId: string;
+				profileDigest: string;
+				status: SessionSandboxReserveStatusV1;
+				expiresAt: Date;
+				createdAt: Date;
+				updatedAt: Date;
+			}[]
+		>`select sandbox_id as "sandboxId", agent_id as "agentId", profile_digest as "profileDigest", status, expires_at as "expiresAt", created_at as "createdAt", updated_at as "updatedAt" from platform.session_sandbox_reserves where status <> 'claimed' and retired_at is null and (${cursor} = '' or sandbox_id > ${cursor}) order by sandbox_id limit ${limit + 1}`;
+		const hasMore = rows.length > limit;
+		const items = hasMore ? rows.slice(0, limit) : rows;
+		const last = items.at(-1);
+		return { items, nextCursor: hasMore && last ? last.sandboxId : null };
+	}
+	async inspect(
+		sandboxId: string,
+	): Promise<SessionSandboxReserveInspectionV1 | null> {
+		return this.#client.begin(async (tx) => {
+			const [row] = await tx<ReserveRow[]>`
+				select * from platform.session_sandbox_reserves
+				where sandbox_id = ${sandboxId} and retired_at is null`;
+			if (!row) return null;
+			const current = await readCurrentSessionSandboxReserveProfileV1(
+				tx,
+				row.agent_id,
+				await this.#readConfiguration(tx),
+			);
+			return {
+				sandboxId: row.sandbox_id,
+				sessionId: row.session_id,
+				agentId: row.agent_id,
+				generation: 1,
+				resourceFence: 1,
+				status: row.status,
+				profile: row.profile,
+				operations: row.operations,
+				expiresAt: row.expires_at,
+				deployment: current?.deployment ?? null,
+				modelProjection: current?.modelProjection ?? null,
+				currentProfileDigest: current?.profile.digest ?? null,
+			};
+		});
+	}
+	async statistics(input: { readonly windowMs: number }) {
+		if (!Number.isSafeInteger(input.windowMs) || input.windowMs < 1)
+			unavailable();
+		return this.#client.begin(async (tx) => {
+			const [clock] = await tx<
+				{ observed_at: Date }[]
+			>`select clock_timestamp() as observed_at`;
+			const observedAt = clock?.observed_at ?? unavailable();
+			const rows = await tx<
+				{
+					agentId: string;
+					profileDigest: string | null;
+					newSessionCount: string;
+					claimedCount: string;
+				}[]
+			>`
+				select a.agent_id as "agentId", a.admission_profile_digest as "profileDigest",
+					count(*)::text as "newSessionCount",
+					count(r.sandbox_id)::text as "claimedCount"
+				from platform.session_sandbox_allocations a
+				left join platform.session_sandbox_reserves r on r.sandbox_id = a.sandbox_id
+					and r.session_id = a.conversation_id and r.agent_id = a.agent_id
+					and r.status = 'claimed' and r.profile_digest = a.admission_profile_digest
+				where a.created_at >= ${observedAt}::timestamptz - ${input.windowMs} * interval '1 millisecond'
+					and a.created_at <= ${observedAt}
+				group by a.agent_id, a.admission_profile_digest
+				order by a.agent_id, a.admission_profile_digest nulls last`;
+			const configuration = await this.#readConfiguration(tx);
+			const currentDigests = new Map<string, string | null>();
+			for (const agentId of [
+				...new Set([
+					...rows.map((row) => row.agentId),
+					...configuration.profiles.map((profile) => profile.agentId),
+				]),
+			].sort()) {
+				const current = await readCurrentSessionSandboxReserveProfileV1(
+					tx,
+					agentId,
+					configuration,
+				);
+				currentDigests.set(agentId, current?.profile.digest ?? null);
+			}
+			const profiles = rows.map((row) => ({
+				...row,
+				currentProfileDigest: currentDigests.get(row.agentId) ?? null,
+				newSessionCount: Number(row.newSessionCount),
+				claimedCount: Number(row.claimedCount),
+			}));
+			for (const [agentId, currentProfileDigest] of currentDigests) {
+				if (
+					currentProfileDigest &&
+					!profiles.some(
+						(profile) =>
+							profile.agentId === agentId &&
+							profile.profileDigest === currentProfileDigest,
+					)
+				) {
+					profiles.push({
+						agentId,
+						profileDigest: currentProfileDigest,
+						currentProfileDigest,
+						newSessionCount: 0,
+						claimedCount: 0,
+					});
+				}
+			}
+			return {
+				observedAt,
+				windowMs: input.windowMs,
+				profiles,
+			};
+		});
 	}
 	async renewLease(
 		lease: SessionSandboxReserveLeaseV1,
@@ -593,17 +814,35 @@ export class PostgresSessionSandboxReserveStoreV1 {
 		operation: SessionSandboxReserveOperationInputV1,
 	): Promise<boolean> {
 		return this.#mutate(lease, async (tx, row) => {
+			const sameOperation = row.operations.filter(
+				(o) => o.kind === operation.kind && o.operation === operation.operation,
+			);
 			if (
 				!sessionSandboxReserveResourceKindsV1.includes(operation.kind) ||
 				operation.status !== "pending" ||
 				operation.absent ||
 				!operation.attemptId ||
 				operation.name !== `sandbox-${row.sandbox_id}` ||
-				row.operations.some(
+				row.operations.some((o) => o.attemptId === operation.attemptId)
+			)
+				return false;
+			if (
+				sameOperation.some(
 					(o) =>
-						o.attemptId === operation.attemptId ||
-						(o.kind === operation.kind && o.operation === operation.operation),
+						operation.operation !== "delete" ||
+						o.status !== "rejected" ||
+						o.writeCompletion !== "response",
 				)
+			)
+				return false;
+			if (
+				operation.operation === "delete" &&
+				(sameOperation.length >= 3 ||
+					sameOperation.some(
+						(prior) =>
+							prior.resource?.resourceVersion ===
+							operation.resource?.resourceVersion,
+					))
 			)
 				return false;
 			if (
@@ -611,10 +850,16 @@ export class PostgresSessionSandboxReserveStoreV1 {
 					? row.status === "retiring" || operation.resource !== null
 					: row.status !== "retiring" ||
 						!operation.resource ||
+						!operation.resource.uid ||
+						!operation.resource.resourceVersion ||
+						operation.resource.kind !== operation.kind ||
+						operation.resource.name !== operation.name ||
+						operation.resource.namespace !== row.namespace ||
 						!row.operations.some(
 							(o) =>
 								o.operation === "create" &&
 								o.status === "confirmed" &&
+								o.writeCompletion === "response" &&
 								isDeepStrictEqual(o.resource, operation.resource),
 						)
 			)
@@ -638,9 +883,12 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			);
 			if (
 				!before ||
+				before.writer.owner !== lease.leaseOwner ||
+				before.writer.fence !== lease.deliveryFence ||
+				before.writeCompletion !== "pending" ||
 				!["pending", "unknown"].includes(before.status) ||
-				!["confirmed", "unknown", "rejected"].includes(operation.status) ||
-				(before.status === "unknown" && operation.status === "rejected") ||
+				operation.status !== "unknown" ||
+				operation.absent ||
 				before.operation !== operation.operation ||
 				before.kind !== operation.kind ||
 				before.name !== operation.name
@@ -663,9 +911,7 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				return false;
 			if (
 				operation.operation === "delete" &&
-				(!isDeepStrictEqual(operation.resource, before.resource) ||
-					operation.status === "rejected" ||
-					(operation.status === "confirmed" && !operation.absent))
+				!isDeepStrictEqual(operation.resource, before.resource)
 			)
 				return false;
 			const operations = row.operations.map((o) =>
@@ -673,11 +919,7 @@ export class PostgresSessionSandboxReserveStoreV1 {
 					? {
 							...operation,
 							writer: before.writer,
-							writeCompletion:
-								operation.operation === "delete" &&
-								operation.status === "confirmed"
-									? "response"
-									: before.writeCompletion,
+							writeCompletion: before.writeCompletion,
 						}
 					: o,
 			);
@@ -695,7 +937,7 @@ export class PostgresSessionSandboxReserveStoreV1 {
 		},
 	): Promise<boolean> {
 		return this.#client.begin(async (tx) => {
-			await lockBudget(tx, this.#configuration);
+			await lockBudget(tx);
 			const [row] = await tx<
 				ReserveRow[]
 			>`select * from platform.session_sandbox_reserves where sandbox_id = ${lease.sandboxId} and status in ('preparing','unknown','retiring') and retired_at is null for update`;
@@ -730,7 +972,93 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				resource: input.resource,
 				writeCompletion: "response",
 			};
-			await tx`update platform.session_sandbox_reserves set operations = ${tx.json(row.operations.map((o) => (o.attemptId === before.attemptId ? completed : o)) as unknown as Json)}, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
+			const operations = row.operations.map((o) =>
+				o.attemptId === before.attemptId ? completed : o,
+			);
+			const settled = operations.every(
+				(operation) => operation.writeCompletion === "response",
+			);
+			const status =
+				row.status === "unknown" && settled ? "preparing" : row.status;
+			await tx`update platform.session_sandbox_reserves set operations = ${tx.json(operations as unknown as Json)}, status = ${status}, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
+			return true;
+		});
+	}
+
+	async recordDeleteResponse(
+		lease: SessionSandboxReserveLeaseV1,
+		input: {
+			attemptId: string;
+			response: SessionSandboxReserveDeleteResponseV1;
+			resource: SessionSandboxResourceIdentityV1;
+		},
+	): Promise<boolean> {
+		return this.#client.begin(async (tx) => {
+			await lockBudget(tx);
+			const [row] = await tx<ReserveRow[]>`
+				select * from platform.session_sandbox_reserves
+				where sandbox_id = ${lease.sandboxId}
+					and status = 'retiring' and retired_at is null
+				for update`;
+			const before = row?.operations.find(
+				(operation) => operation.attemptId === input.attemptId,
+			);
+			if (
+				!row ||
+				before?.operation !== "delete" ||
+				before.writeCompletion !== "pending" ||
+				!before.resource ||
+				before.writer.owner !== lease.leaseOwner ||
+				before.writer.fence !== lease.deliveryFence ||
+				!isDeepStrictEqual(before.resource, input.resource)
+			)
+				return false;
+			const completed: SessionSandboxReserveOperationV1 = {
+				...before,
+				status: input.response === "rejected" ? "rejected" : "confirmed",
+				absent: input.response === "absent",
+				writeCompletion: "response",
+			};
+			await tx`update platform.session_sandbox_reserves set operations = ${tx.json(row.operations.map((operation) => (operation.attemptId === before.attemptId ? completed : operation)) as unknown as Json)}, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
+			return true;
+		});
+	}
+
+	/** GET absence is release evidence only after the original DELETE response settles. */
+	async recordDeleteObservation(
+		lease: SessionSandboxReserveLeaseV1,
+		input: { readonly attemptId: string },
+	): Promise<boolean> {
+		return this.#mutate(lease, async (tx, row) => {
+			const before = row.operations.find(
+				(operation) => operation.attemptId === input.attemptId,
+			);
+			if (
+				row.status !== "retiring" ||
+				before?.operation !== "delete" ||
+				before.absent ||
+				!before.resource ||
+				before.writeCompletion !== "response" ||
+				!["confirmed", "rejected"].includes(before.status)
+			)
+				return false;
+			if (
+				row.operations.some(
+					(operation) =>
+						operation !== before &&
+						operation.operation === "delete" &&
+						operation.kind === before.kind &&
+						(operation.status !== "rejected" ||
+							operation.writeCompletion !== "response"),
+				)
+			)
+				return false;
+			const observed: SessionSandboxReserveOperationV1 = {
+				...before,
+				status: "confirmed",
+				absent: true,
+			};
+			await tx`update platform.session_sandbox_reserves set operations = ${tx.json(row.operations.map((operation) => (operation.attemptId === before.attemptId ? observed : operation)) as unknown as Json)}, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
 			return true;
 		});
 	}
@@ -752,7 +1080,10 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				(before.resource && before.resource.uid !== resource.uid) ||
 				before.status === "rejected" ||
 				row.operations.some(
-					(o) => o.operation === "delete" && o.kind === resource.kind,
+					(o) =>
+						o.operation === "delete" &&
+						o.kind === resource.kind &&
+						(o.status !== "rejected" || o.writeCompletion !== "response"),
 				)
 			)
 				return false;

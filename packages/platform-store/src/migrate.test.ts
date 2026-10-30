@@ -2012,6 +2012,7 @@ describe("published Relay authority migration", () => {
 			70,
 			71,
 			72,
+			73,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2086,8 +2087,8 @@ describe("published Relay authority migration", () => {
 			tag: "0063_wecom_outbound_media",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 72,
-			tag: "0072_session_sandbox_reserves",
+			idx: 73,
+			tag: "0073_session_admission_profile",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2523,6 +2524,7 @@ describe("published Relay authority migration", () => {
 					...[
 						"actor_id",
 						"agent_id",
+						"admission_profile_digest",
 						"channel_id",
 						"conversation_id",
 						"created_at",

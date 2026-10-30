@@ -35,6 +35,7 @@ import {
 
 export interface WecomWorkerDeploymentV1 {
 	readonly identity: WecomIdentityPortV1;
+	readonly sessionSandboxReserves?: import("@agent-infra/platform-core").SessionSandboxReserveConfigurationV1;
 	readonly connectionAuthorization?: WecomConnectionAuthorizationPortV1;
 	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly observe: (status: WecomDeliveryStatusV1) => void;
@@ -57,6 +58,7 @@ export function createPlatformWecomWorkerV1(
 	const store = new PostgresWecomChannelV1({
 		connectionHolderId,
 		databaseUrl: options.databaseUrl,
+		sessionSandboxReserves: options.sessionSandboxReserves,
 		userDirectory: options.userDirectory,
 		identity: options.identity,
 		connectionAuthorization: options.connectionAuthorization,

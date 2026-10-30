@@ -4,6 +4,10 @@ import type {
 	AgentDefaultRelayKeyEndpointPolicyV1,
 	StandardTemplateModelBindingV1,
 } from "@agent-infra/model-catalog";
+import {
+	parseSessionSandboxReserveConfigurationV1,
+	type SessionSandboxReserveConfigurationV1,
+} from "@agent-infra/platform-core";
 import { PostgresEvaluationTaskAuthorityV1 } from "@agent-infra/platform-store";
 import {
 	createRuntimeConnectionConsumerSnapshotV1,
@@ -49,6 +53,7 @@ import {
 } from "./workload-runtime-auth.js";
 
 type DeploymentConfiguration = {
+	readonly sessionSandboxReserves?: SessionSandboxReserveConfigurationV1;
 	readonly evaluationPolicy?: {
 		data: () => Promise<
 			import("@agent-infra/platform-core").EvaluationPolicyV1
@@ -203,6 +208,7 @@ function resolveConnectionInstallation(
 // Deployment-owned code supplies current IdentityAdapter facts and Worker-only material.
 // The adjacent configuration.mjs is mounted by the deployment, never bundled into the image.
 const {
+	sessionSandboxReserves: configuredSessionSandboxReserves,
 	evaluationPolicy,
 	workloadInput: configuredWorkloadInput,
 	signing,
@@ -226,6 +232,13 @@ const {
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
+
+const sessionSandboxReserves =
+	configuredSessionSandboxReserves === undefined
+		? undefined
+		: parseSessionSandboxReserveConfigurationV1(
+				configuredSessionSandboxReserves,
+			);
 
 function nativeMetadataGatewayPortFromEnvironment() {
 	const enabled = process.env.PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED;
@@ -535,6 +548,7 @@ async function createPrepared(signal: AbortSignal) {
 	const wecomDeployment = createWecomDeploymentCoordinatorV1({
 		databaseUrl: workload.databaseUrl,
 		configuration: wecom,
+		sessionSandboxReserves,
 	});
 	const resolveRuntimeHost =
 		conversationDeployment.createProductionConversationRuntimeResolverV2({
@@ -744,6 +758,30 @@ async function createConversationPrepared(signal: AbortSignal) {
 function prepare(signal: AbortSignal) {
 	prepared ??= createPrepared(signal);
 	return prepared;
+}
+
+/** Production reserve loop uses the same admitted workload inputs and keyless projection contract. */
+export async function createPlatformSessionReserveWorkerOptionsV1(
+	signal: AbortSignal,
+) {
+	signal.throwIfAborted();
+	if (sessionSandboxReserves === undefined) return undefined;
+	const { createSessionSandboxReserveAdapterV1 } = await import(
+		"./session-reserve-adapter.js"
+	);
+	const deployment = await prepare(signal);
+	signal.throwIfAborted();
+	if (sessionSandboxReserves.namespace !== deployment.workload.policy.namespace)
+		throw new Error("SESSION_RESERVE_DEPLOYMENT_CONFIGURATION_INVALID");
+	return {
+		databaseUrl: deployment.workload.databaseUrl,
+		configuration: sessionSandboxReserves,
+		adapter: createSessionSandboxReserveAdapterV1({
+			workload: deployment.workload,
+			serviceToken,
+		}),
+		signal,
+	};
 }
 
 export async function createPlatformWorkloadWorkerOptionsV1(

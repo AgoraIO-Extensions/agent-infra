@@ -138,6 +138,27 @@ describe("explicit custom Agent deployment ports", () => {
 		});
 	});
 
+	it("passes trusted Session reserve configuration through production assembly", () => {
+		const reserve = {
+			schemaVersion: 1,
+			enabled: false,
+			revision: 1,
+			namespace: "platform",
+			totalBudget: { cpuMillis: 1, memoryBytes: 1, storageBytes: 1 },
+			resourceCosts: [],
+			maximumReserves: 0,
+			maximumConcurrentCreates: 0,
+			ttlMs: 1,
+			cooldownMs: 1,
+			failureBackoffMs: 1,
+			profiles: [],
+		} as ProductionPlatformApiInputV1["sessionSandboxReserves"];
+		const input = { ...fixture.input, sessionSandboxReserves: reserve };
+		expect(
+			createProductionPlatformApiAssemblyInputV1(input).sessionSandboxReserves,
+		).toBe(reserve);
+	});
+
 	it("rejects a duplicate file data plane authority", () => {
 		const files = {} as ProductionPlatformApiInputV1["files"];
 		expect(() =>

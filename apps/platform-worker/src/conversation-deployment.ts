@@ -37,6 +37,7 @@ import {
 	isNativeMetadataWorkerOriginV1,
 	type SessionSandboxAllocationV1,
 	type SessionSandboxCustomSecretMaterializationV1,
+	type SessionSandboxResourceInputV1,
 	type SessionSandboxRuntimeInputV1,
 	sessionSandboxIdentityAnnotationsV1,
 	sessionSandboxLabelsMatchV1,
@@ -552,9 +553,9 @@ function sessionSandboxEgressPolicyV1(
 	};
 }
 
-/** One deployment capture shared by Session reception and read-only route checks. */
-function createSessionSandboxAllocationResolverV1(
-	workload: WorkloadRuntimeOptionsV1,
+/** Shared immutable resource inputs for real Sessions and unclaimed reserves. */
+export function createSessionSandboxResourceInputResolverV1(
+	workload: Pick<WorkloadRuntimeOptionsV1, "policy" | "templateModelBindings">,
 	options: { readonly serviceToken: string },
 ) {
 	const egressPolicy = structuredClone(workload.policy);
@@ -567,7 +568,10 @@ function createSessionSandboxAllocationResolverV1(
 	 * the Worker's runtime auth (#1466). Anything else fails before any write.
 	 */
 	const runtimeFor = (
-		binding: SessionSandboxReconciliationClaimV1["sandbox"],
+		binding: Omit<
+			SessionSandboxReconciliationClaimV1["sandbox"],
+			"principal" | "channelId"
+		>,
 		policy: SessionSandboxReconciliationClaimV1["policy"],
 		deployment: AgentWorkloadDesiredV1,
 		modelProjection: unknown,
@@ -710,8 +714,11 @@ function createSessionSandboxAllocationResolverV1(
 			...fileExchange(),
 		};
 	};
-	const allocationFor = async (
-		binding: SessionSandboxReconciliationClaimV1["sandbox"],
+	const resourceFor = (
+		binding: Omit<
+			SessionSandboxReconciliationClaimV1["sandbox"],
+			"principal" | "channelId"
+		>,
 		policy: SessionSandboxReconciliationClaimV1["policy"],
 		deployment: AgentWorkloadDesiredV1,
 		modelProjection: unknown,
@@ -719,7 +726,7 @@ function createSessionSandboxAllocationResolverV1(
 		generation: number,
 		resourceFence: number,
 		requireCurrentTemplateTrust = true,
-	): Promise<SessionSandboxAllocationV1> => {
+	): SessionSandboxResourceInputV1 => {
 		const projectedTemplateId =
 			modelProjection &&
 			typeof modelProjection === "object" &&
@@ -744,9 +751,14 @@ function createSessionSandboxAllocationResolverV1(
 				`${workloadResourceNameV1(binding.agentId)}-data`
 		)
 			throw new WorkloadKubernetesError("policy");
-		const allocation: SessionSandboxAllocationV1 = {
+		const allocation: SessionSandboxResourceInputV1 = {
 			...(skillHub ? { skillHub } : {}),
-			...binding,
+			schemaVersion: binding.schemaVersion,
+			agentId: binding.agentId,
+			sessionId: binding.sessionId,
+			sandboxId: binding.sandboxId,
+			resourceName: binding.resourceName,
+			workspaceScope: binding.workspaceScope,
 			generation,
 			resourceFence,
 			namespace: policy.namespace,
@@ -782,6 +794,43 @@ function createSessionSandboxAllocationResolverV1(
 			storageClassName: workload.policy.storageClassName,
 			workspaceMountPath: "/workspace",
 			desiredState,
+		};
+		return allocation;
+	};
+	return resourceFor;
+}
+
+function createSessionSandboxAllocationResolverV1(
+	workload: WorkloadRuntimeOptionsV1,
+	options: { readonly serviceToken: string },
+) {
+	const resourceFor = createSessionSandboxResourceInputResolverV1(
+		workload,
+		options,
+	);
+	return async (
+		binding: SessionSandboxReconciliationClaimV1["sandbox"],
+		policy: SessionSandboxReconciliationClaimV1["policy"],
+		deployment: AgentWorkloadDesiredV1,
+		modelProjection: unknown,
+		desiredState: "running" | "stopped",
+		generation: number,
+		resourceFence: number,
+		requireCurrentTemplateTrust = true,
+	): Promise<SessionSandboxAllocationV1> => {
+		const allocation: SessionSandboxAllocationV1 = {
+			...resourceFor(
+				binding,
+				policy,
+				deployment,
+				modelProjection,
+				desiredState,
+				generation,
+				resourceFence,
+				requireCurrentTemplateTrust,
+			),
+			principal: binding.principal,
+			channelId: binding.channelId,
 		};
 		if (
 			allocation.runtime?.custom &&
@@ -852,7 +901,6 @@ function createSessionSandboxAllocationResolverV1(
 		}
 		return allocation;
 	};
-	return allocationFor;
 }
 
 /** 停止回执保留的资源：从未记录 PVC 的部分准备来源没有（#2918）。 */

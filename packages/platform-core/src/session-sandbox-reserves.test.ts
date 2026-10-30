@@ -3,6 +3,7 @@ import {
 	canReadySessionSandboxReserveV1,
 	canReleaseSessionSandboxReserveV1,
 	parseSessionSandboxReserveConfigurationV1,
+	type SessionSandboxReserveOperationV1,
 	sessionSandboxBudgetFitsV1,
 	sessionSandboxReserveResourceKindsV1,
 } from "./session-sandbox-reserves.js";
@@ -92,6 +93,68 @@ describe("Session reserve admission", () => {
 		).toBe(false);
 		expect(
 			canReleaseSessionSandboxReserveV1({ status: "claimed", operations: [] }),
+		).toBe(false);
+	});
+	it("requires settled same-UID DELETE evidence before releasing a confirmed create", () => {
+		const created: SessionSandboxReserveOperationV1 = {
+			attemptId: "create-pod",
+			operation: "create",
+			kind: "Pod",
+			name: "sandbox-pod",
+			status: "confirmed",
+			resource: {
+				kind: "Pod",
+				namespace: "ns",
+				name: "sandbox-pod",
+				uid: "original-pod",
+				resourceVersion: "1",
+			},
+			absent: false,
+			writeCompletion: "response",
+			writer: { owner: "worker", fence: 1 },
+		};
+		const deleted: SessionSandboxReserveOperationV1 = {
+			...created,
+			attemptId: "delete-pod",
+			operation: "delete",
+			absent: true,
+		};
+		const release = (operation: SessionSandboxReserveOperationV1) =>
+			canReleaseSessionSandboxReserveV1({
+				status: "retiring",
+				operations: [created, operation],
+			});
+		expect(release(deleted)).toBe(true);
+		expect(release({ ...deleted, writeCompletion: "pending" })).toBe(false);
+		expect(release({ ...deleted, absent: false })).toBe(false);
+		expect(release({ ...deleted, status: "unknown" })).toBe(false);
+		expect(
+			canReleaseSessionSandboxReserveV1({
+				status: "retiring",
+				operations: [
+					created,
+					deleted,
+					{
+						...deleted,
+						attemptId: "delete-retry-pending",
+						status: "pending",
+						absent: false,
+						writeCompletion: "pending",
+					},
+				],
+			}),
+		).toBe(false);
+		expect(
+			release({
+				...deleted,
+				resource: {
+					kind: "Pod",
+					namespace: "ns",
+					name: created.name,
+					uid: "replacement-pod",
+					resourceVersion: "2",
+				},
+			}),
 		).toBe(false);
 	});
 });

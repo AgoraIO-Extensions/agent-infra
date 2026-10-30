@@ -49,8 +49,8 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@agent-infra/platform-store", () => ({
 	PostgresWecomChannelV1: class {
-		constructor() {
-			mocks.storeOpen();
+		constructor(options: unknown) {
+			mocks.storeOpen(options);
 		}
 		close = mocks.close;
 		scopeForExecution = mocks.scopeForExecution;
@@ -753,5 +753,36 @@ it("drives streaming progress only through long-connection reply routes (#3377)"
 		expect(await withoutConnections.progress()).toBe(0);
 	} finally {
 		await withoutConnections.close();
+	}
+});
+
+it("threads the same trusted reserve configuration to the real WeCom Store seam", async () => {
+	const configuration = {
+		schemaVersion: 1,
+		revision: 1,
+		enabled: false,
+		namespace: "test",
+		totalBudget: { cpuMillis: 0, memoryBytes: 0, storageBytes: 0 },
+		resourceCosts: [],
+		profiles: [],
+		maximumReserves: 0,
+		maximumConcurrentCreates: 0,
+		ttlMs: 0,
+		cooldownMs: 0,
+		failureBackoffMs: 0,
+	} as const;
+	const worker = createPlatformWecomWorkerV1({
+		databaseUrl: "postgres://fixture",
+		sessionSandboxReserves: configuration,
+		identity: { resolveSender: async () => null, activeUsers: async () => [] },
+		observe: () => {},
+		sender: { send: async () => "failed" },
+	});
+	try {
+		expect(mocks.storeOpen).toHaveBeenCalledWith(
+			expect.objectContaining({ sessionSandboxReserves: configuration }),
+		);
+	} finally {
+		await worker.close();
 	}
 });

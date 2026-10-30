@@ -146,7 +146,7 @@ function create(
 		traceId: "trace",
 	});
 }
-async function ready(store = reserves()) {
+async function prepared(store = reserves()) {
 	const sandboxId = await store.prepare("agent");
 	expect(sandboxId).toBeTypeOf("string");
 	const lease = await store.claimLease({
@@ -180,18 +180,22 @@ async function ready(store = reserves()) {
 			}),
 		).toBe(true);
 	}
-	expect(
-		await store.markReady(lease, {
-			bootstrapReady: true,
-			businessStateAbsent: true,
-		}),
-	).toBe(true);
 	return {
 		store,
 		lease,
 		sandboxId: sandboxId as string,
 		sessionId: lease.sessionId,
 	};
+}
+async function ready(store = reserves()) {
+	const reserve = await prepared(store);
+	expect(
+		await store.markReady(reserve.lease, {
+			bootstrapReady: true,
+			businessStateAbsent: true,
+		}),
+	).toBe(true);
+	return reserve;
 }
 beforeAll(async () => {
 	database = await startPostgresTestDatabase("reserves-3777");
@@ -504,6 +508,460 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			await sql`select released from platform.session_sandbox_resource_charges`,
 		).toEqual([{ released: false }]);
 	});
+	it("restores an unknown reserve to preparing only after every original create response settles", async () => {
+		const store = reserves();
+		const sandboxId = await store.prepare("agent");
+		if (!sandboxId) throw new Error();
+		const lease = await store.claimLease({
+			sandboxId,
+			workerId: "late-response",
+			leaseDurationMs: 30000,
+		});
+		if (!lease) throw new Error();
+		const operation: SessionSandboxReserveOperationInputV1 = {
+			attemptId: "late-pod",
+			operation: "create",
+			kind: "Pod",
+			name: `sandbox-${sandboxId}`,
+			status: "pending",
+			resource: null,
+			absent: false,
+		};
+		expect(await store.recordIntent(lease, operation)).toBe(true);
+		expect(
+			await store.recordResult(lease, { ...operation, status: "unknown" }),
+		).toBe(true);
+		expect(
+			await store.recordCreateResponse(lease, {
+				attemptId: operation.attemptId,
+				response: "created",
+				resource: {
+					kind: "Pod",
+					name: operation.name,
+					namespace: config.namespace,
+					uid: "late-pod-uid",
+					resourceVersion: "7",
+				},
+			}),
+		).toBe(true);
+		expect(
+			await sql`select status from platform.session_sandbox_reserves`,
+		).toEqual([{ status: "preparing" }]);
+	});
+	it("accepts late original responses after lease takeover without restoring the original writer's authority", async () => {
+		const store = reserves();
+		const sandboxId = await store.prepare("agent");
+		if (!sandboxId) throw new Error("Expected reserve");
+		const original = await store.claimLease({
+			sandboxId,
+			workerId: "original-writer",
+			leaseDurationMs: 30000,
+		});
+		if (!original) throw new Error("Expected original lease");
+		const intents: SessionSandboxReserveOperationInputV1[] =
+			sessionSandboxReserveResourceKindsV1.map((kind) => ({
+				attemptId: `late-${kind}`,
+				operation: "create",
+				kind,
+				name: `sandbox-${sandboxId}`,
+				status: "pending",
+				resource: null,
+				absent: false,
+			}));
+		for (const intent of intents) {
+			expect(await store.recordIntent(original, intent)).toBe(true);
+			expect(
+				await store.recordResult(original, { ...intent, status: "unknown" }),
+			).toBe(true);
+		}
+		await sql`update platform.session_sandbox_reserves set lease_expires_at = clock_timestamp() - interval '1 second' where sandbox_id = ${sandboxId}`;
+		const current = await store.claimLease({
+			sandboxId,
+			workerId: "recovery-writer",
+			leaseDurationMs: 30000,
+		});
+		if (!current) throw new Error("Expected recovery lease");
+		expect(current.deliveryFence).toBeGreaterThan(original.deliveryFence);
+		expect(await store.renewLease(original, 30000)).toBe(false);
+		for (const [index, intent] of intents.entries()) {
+			const resource = {
+				kind: intent.kind,
+				name: intent.name,
+				namespace: config.namespace,
+				uid: `${intent.kind}-late-uid`,
+				resourceVersion: "2",
+			};
+			expect(await store.recordObservation(original, resource)).toBe(false);
+			expect(await store.recordObservation(current, resource)).toBe(true);
+			expect(
+				await store.markReady(current, {
+					bootstrapReady: true,
+					businessStateAbsent: true,
+				}),
+			).toBe(false);
+			expect(
+				await store.recordCreateResponse(current, {
+					attemptId: intent.attemptId,
+					response: "created",
+					resource,
+				}),
+			).toBe(false);
+			expect(
+				await store.recordCreateResponse(original, {
+					attemptId: intent.attemptId,
+					response: "created",
+					resource,
+				}),
+			).toBe(true);
+			expect((await store.inspect(sandboxId))?.status).toBe(
+				index === intents.length - 1 ? "preparing" : "unknown",
+			);
+		}
+		expect(
+			await store.markReady(original, {
+				bootstrapReady: true,
+				businessStateAbsent: true,
+			}),
+		).toBe(false);
+		expect(
+			await store.markReady(current, {
+				bootstrapReady: true,
+				businessStateAbsent: true,
+			}),
+		).toBe(true);
+		expect(await create()).toMatchObject({
+			outcome: "accepted",
+			result: { conversationId: original.sessionId },
+		});
+	});
+	it.each(["disabled", "profile-drift"])(
+		"does not mark completed creates ready after %s",
+		async (change) => {
+			const reserve = await prepared();
+			let store = reserve.store;
+			if (change === "disabled") {
+				store = reserves({ ...config, enabled: false, revision: 2 });
+				await store.applyConfiguration();
+				await expect(reserve.store.prepare("agent")).rejects.toThrow();
+			} else {
+				await sql`update platform.workload_reconciliations set state = jsonb_set(state, '{verified,deployment,env,LOG_LEVEL}', '"debug"')`;
+			}
+			expect(
+				await store.markReady(reserve.lease, {
+					bootstrapReady: true,
+					businessStateAbsent: true,
+				}),
+			).toBe(false);
+			expect((await store.inspect(reserve.sandboxId))?.status).toBe(
+				"preparing",
+			);
+			expect(
+				await sql`select released from platform.session_sandbox_resource_charges where sandbox_id = ${reserve.sandboxId}`,
+			).toEqual([{ released: false }]);
+		},
+	);
+	it("keeps read-only inspection lease-free and paginates old reserves while disabled", async () => {
+		const store = reserves();
+		const first = await store.prepare("agent");
+		const second = await store.prepare("agent");
+		if (!first || !second) throw new Error();
+		const inspection = await store.inspect(first);
+		expect(inspection).toMatchObject({
+			sandboxId: first,
+			status: "preparing",
+			currentProfileDigest: inspection?.profile.digest,
+		});
+		expect(inspection).not.toHaveProperty("leaseOwner");
+		expect(inspection).not.toHaveProperty("deliveryFence");
+		const disabled = reserves({ ...config, enabled: false, revision: 2 });
+		const page = await disabled.listPage({ limit: 1 });
+		expect(page.items).toHaveLength(1);
+		expect(page.nextCursor).toBeTypeOf("string");
+		const next = await disabled.listPage({
+			cursor: page.nextCursor ?? undefined,
+		});
+		expect(next.items).toHaveLength(1);
+		expect(
+			new Set([...page.items, ...next.items].map((item) => item.sandboxId)),
+		).toEqual(new Set([first, second]));
+		await create(execution(), "user-a", "web", "reserve-demand");
+		expect(await store.statistics({ windowMs: 60_000 })).toMatchObject({
+			profiles: [
+				expect.objectContaining({
+					agentId: "agent",
+					newSessionCount: 1,
+					claimedCount: 0,
+				}),
+			],
+		});
+	});
+	it("records DELETE acknowledgement versus absence and permits a fresh same-UID retry after rejection", async () => {
+		const reserve = await ready();
+		expect(await reserve.store.retire(reserve.sandboxId)).toBe(true);
+		const cleanup = await reserve.store.claimLease({
+			sandboxId: reserve.sandboxId,
+			workerId: "cleanup-response",
+			leaseDurationMs: 30000,
+		});
+		if (!cleanup) throw new Error();
+		const pod = cleanup.operations.find(
+			(operation) =>
+				operation.operation === "create" && operation.kind === "Pod",
+		);
+		if (!pod?.resource) throw new Error();
+		const acknowledged: SessionSandboxReserveOperationInputV1 = {
+			attemptId: "delete-ack",
+			operation: "delete",
+			kind: "Pod",
+			name: pod.resource.name,
+			status: "pending",
+			resource: pod.resource,
+			absent: false,
+		};
+		expect(await reserve.store.recordIntent(cleanup, acknowledged)).toBe(true);
+		expect(
+			await reserve.store.recordDeleteObservation(cleanup, {
+				attemptId: acknowledged.attemptId,
+			}),
+		).toBe(false);
+		expect(
+			await reserve.store.recordDeleteResponse(cleanup, {
+				attemptId: acknowledged.attemptId,
+				response: "acknowledged",
+				resource: pod.resource,
+			}),
+		).toBe(true);
+		let [row] =
+			await sql`select operations from platform.session_sandbox_reserves`;
+		let deleteFact = row?.operations.find(
+			(
+				operation: SessionSandboxReserveOperationInputV1 & {
+					writeCompletion?: string;
+				},
+			) => operation.attemptId === acknowledged.attemptId,
+		);
+		expect(deleteFact).toMatchObject({
+			status: "confirmed",
+			absent: false,
+			writeCompletion: "response",
+		});
+		expect(
+			await reserve.store.recordDeleteObservation(cleanup, {
+				attemptId: acknowledged.attemptId,
+			}),
+		).toBe(true);
+		[row] = await sql`select operations from platform.session_sandbox_reserves`;
+		deleteFact = row?.operations.find(
+			(
+				operation: SessionSandboxReserveOperationInputV1 & {
+					writeCompletion?: string;
+				},
+			) => operation.attemptId === acknowledged.attemptId,
+		);
+		expect(deleteFact).toMatchObject({
+			status: "confirmed",
+			absent: true,
+			writeCompletion: "response",
+		});
+
+		const retryReserve = await ready(reserves());
+		expect(await retryReserve.store.retire(retryReserve.sandboxId)).toBe(true);
+		const retryLease = await retryReserve.store.claimLease({
+			sandboxId: retryReserve.sandboxId,
+			workerId: "cleanup-retry",
+			leaseDurationMs: 30000,
+		});
+		if (!retryLease) throw new Error();
+		const retryPod = retryLease.operations.find(
+			(operation) =>
+				operation.operation === "create" && operation.kind === "Pod",
+		);
+		if (!retryPod?.resource) throw new Error();
+		const rejected: SessionSandboxReserveOperationInputV1 = {
+			attemptId: "delete-rejected",
+			operation: "delete",
+			kind: "Pod",
+			name: retryPod.resource.name,
+			status: "pending",
+			resource: retryPod.resource,
+			absent: false,
+		};
+		expect(await retryReserve.store.recordIntent(retryLease, rejected)).toBe(
+			true,
+		);
+		expect(
+			await retryReserve.store.recordDeleteResponse(retryLease, {
+				attemptId: rejected.attemptId,
+				response: "rejected",
+				resource: retryPod.resource,
+			}),
+		).toBe(true);
+		const refreshed = { ...retryPod.resource, resourceVersion: "9" };
+		expect(
+			await retryReserve.store.recordIntent(retryLease, {
+				...rejected,
+				attemptId: "delete-unobserved-version",
+				resource: refreshed,
+			}),
+		).toBe(false);
+		expect(
+			await retryReserve.store.recordIntent(retryLease, {
+				...rejected,
+				attemptId: "delete-repeated-version",
+			}),
+		).toBe(false);
+		expect(
+			await retryReserve.store.recordObservation(retryLease, {
+				...refreshed,
+				uid: "replacement-pod",
+			}),
+		).toBe(false);
+		expect(
+			await retryReserve.store.recordObservation(retryLease, refreshed),
+		).toBe(true);
+		expect(
+			await retryReserve.store.recordIntent(retryLease, {
+				...rejected,
+				attemptId: "delete-retry",
+				resource: refreshed,
+			}),
+		).toBe(true);
+		expect(
+			await retryReserve.store.recordDeleteResponse(retryLease, {
+				attemptId: "delete-retry",
+				response: "rejected",
+				resource: refreshed,
+			}),
+		).toBe(true);
+		const latest = { ...refreshed, resourceVersion: "10" };
+		expect(await retryReserve.store.recordObservation(retryLease, latest)).toBe(
+			true,
+		);
+		expect(
+			await retryReserve.store.recordIntent(retryLease, {
+				...rejected,
+				attemptId: "delete-third",
+				resource: latest,
+			}),
+		).toBe(true);
+		expect(
+			await retryReserve.store.recordDeleteResponse(retryLease, {
+				attemptId: "delete-third",
+				response: "rejected",
+				resource: latest,
+			}),
+		).toBe(true);
+		const beyondLimit = { ...latest, resourceVersion: "11" };
+		expect(
+			await retryReserve.store.recordObservation(retryLease, beyondLimit),
+		).toBe(true);
+		expect(
+			await retryReserve.store.recordIntent(retryLease, {
+				...rejected,
+				attemptId: "delete-fourth",
+				resource: beyondLimit,
+			}),
+		).toBe(false);
+		expect(await retryReserve.store.finishRetirement(retryLease)).toBe(false);
+	});
+	it.each(["acknowledged", "rejected"] as const)(
+		"releases only after original DELETE responses (%s) settle and every UID is observed absent",
+		async (response) => {
+			const reserve = await ready();
+			expect(await reserve.store.retire(reserve.sandboxId)).toBe(true);
+			const original = await reserve.store.claimLease({
+				sandboxId: reserve.sandboxId,
+				workerId: "delete-writer",
+				leaseDurationMs: 30000,
+			});
+			if (!original) throw new Error("Expected cleanup lease");
+			const deletes: SessionSandboxReserveOperationInputV1[] =
+				original.operations.map((operation) => ({
+					...operation,
+					attemptId: `delete-${operation.kind}`,
+					operation: "delete",
+					status: "pending",
+					absent: false,
+				}));
+			for (const operation of deletes) {
+				expect(await reserve.store.recordIntent(original, operation)).toBe(
+					true,
+				);
+				expect(
+					await reserve.store.recordDeleteObservation(original, {
+						attemptId: operation.attemptId,
+					}),
+				).toBe(false);
+				expect(
+					await reserve.store.recordResult(original, {
+						...operation,
+						status: "unknown",
+					}),
+				).toBe(true);
+				expect(
+					await reserve.store.recordIntent(original, {
+						...operation,
+						attemptId: `${operation.attemptId}-duplicate`,
+					}),
+				).toBe(false);
+			}
+			await sql`update platform.session_sandbox_reserves set lease_expires_at = clock_timestamp() - interval '1 second' where sandbox_id = ${reserve.sandboxId}`;
+			const current = await reserve.store.claimLease({
+				sandboxId: reserve.sandboxId,
+				workerId: "delete-recovery",
+				leaseDurationMs: 30000,
+			});
+			if (!current) throw new Error("Expected new cleanup lease");
+			for (const operation of deletes) {
+				if (!operation.resource) throw new Error("Expected DELETE identity");
+				expect(await reserve.store.finishRetirement(current)).toBe(false);
+				expect(
+					await reserve.store.recordDeleteObservation(current, {
+						attemptId: operation.attemptId,
+					}),
+				).toBe(false);
+				expect(
+					await reserve.store.recordResult(current, {
+						...operation,
+						status: "confirmed",
+						absent: true,
+					}),
+				).toBe(false);
+				expect(
+					await reserve.store.recordDeleteResponse(current, {
+						attemptId: operation.attemptId,
+						response,
+						resource: operation.resource,
+					}),
+				).toBe(false);
+				expect(
+					await reserve.store.recordDeleteResponse(original, {
+						attemptId: operation.attemptId,
+						response,
+						resource: operation.resource,
+					}),
+				).toBe(true);
+				expect(await reserve.store.finishRetirement(current)).toBe(false);
+				expect(
+					await reserve.store.recordDeleteObservation(original, {
+						attemptId: operation.attemptId,
+					}),
+				).toBe(false);
+				expect(
+					await reserve.store.recordDeleteObservation(current, {
+						attemptId: operation.attemptId,
+					}),
+				).toBe(true);
+			}
+			expect(await reserve.store.finishRetirement(original)).toBe(false);
+			expect(await reserve.store.finishRetirement(current)).toBe(true);
+			expect(await reserve.store.finishRetirement(current)).toBe(false);
+			expect(await reserve.store.inspect(reserve.sandboxId)).toBeNull();
+			expect(
+				await sql`select released from platform.session_sandbox_resource_charges where sandbox_id = ${reserve.sandboxId}`,
+			).toEqual([{ released: true }]);
+		},
+	);
 	it("serializes claim versus retirement; the loser cannot clean an adopted resource", async () => {
 		const reserve = await ready();
 		const [created, retired] = await Promise.all([
@@ -703,6 +1161,146 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		expect(
 			await sql`select status from platform.session_sandbox_reserves`,
 		).toEqual([{ status: "ready" }]);
+	});
+	it("lists with a bounded cursor and exposes lease-free inspection/statistics", async () => {
+		const reserve = await ready();
+		const page = await reserve.store.listPage({ limit: 1 });
+		expect(page.items).toHaveLength(1);
+		expect(page.items[0]?.sandboxId).toBe(reserve.sandboxId);
+		expect(page.nextCursor).toBeNull();
+		const inspected = await reserve.store.inspect(reserve.sandboxId);
+		expect(inspected).toMatchObject({
+			sandboxId: reserve.sandboxId,
+			sessionId: reserve.sessionId,
+			status: "ready",
+		});
+		expect(inspected).not.toHaveProperty("leaseOwner");
+		const statistics = await reserve.store.statistics({ windowMs: 300000 });
+		expect(statistics).toMatchObject({
+			windowMs: 300000,
+			profiles: [
+				expect.objectContaining({
+					profileDigest: reserve.lease.profile.digest,
+					currentProfileDigest: reserve.lease.profile.digest,
+					newSessionCount: 0,
+					claimedCount: 0,
+				}),
+			],
+		});
+	});
+	it("lists every page while target is zero and rejects out-of-bound page sizes", async () => {
+		const reserve = await prepared();
+		await sql`insert into platform.session_sandbox_reserves (sandbox_id, session_id, agent_id, namespace, profile_digest, profile, status, operations, expires_at, created_at, updated_at)
+			select gen_random_uuid()::text, 'pagination-' || sequence.value, agent_id, namespace, profile_digest, profile, 'preparing', '[]'::jsonb, expires_at, created_at, updated_at
+			from platform.session_sandbox_reserves cross join generate_series(1, 104) sequence(value) where sandbox_id = ${reserve.sandboxId}`;
+		const disabled = reserves({
+			...config,
+			enabled: false,
+			revision: 2,
+			totalBudget: { cpuMillis: 0, memoryBytes: 0, storageBytes: 0 },
+			resourceCosts: [],
+			profiles: [],
+			maximumReserves: 0,
+			maximumConcurrentCreates: 0,
+		});
+		await disabled.applyConfiguration();
+		const all = await disabled.list();
+		expect(all).toHaveLength(105);
+		expect(new Set(all.map((item) => item.sandboxId)).size).toBe(105);
+		const first = await disabled.listPage({ limit: 100 });
+		expect(first.items).toHaveLength(100);
+		expect(first.nextCursor).toBe(first.items.at(-1)?.sandboxId);
+		const last = await disabled.listPage({
+			cursor: first.nextCursor ?? undefined,
+			limit: 100,
+		});
+		expect(last.items).toHaveLength(5);
+		expect(last.nextCursor).toBeNull();
+		expect([...first.items, ...last.items]).toEqual(all);
+		for (const limit of [0, -1, 101, 1.5]) {
+			await expect(disabled.listPage({ limit })).rejects.toThrow();
+		}
+		expect(await disabled.retire(reserve.sandboxId)).toBe(true);
+		expect(
+			await disabled.claimLease({
+				sandboxId: reserve.sandboxId,
+				workerId: "disabled-drain",
+				leaseDurationMs: 30000,
+			}),
+		).toMatchObject({ status: "retiring" });
+	});
+	it("attributes cold and claimed demand to their immutable admission profile across revisions", async () => {
+		expect(
+			await create(execution(null), "user-a", "web", "legacy-demand"),
+		).toMatchObject({ outcome: "accepted" });
+		const first = await ready();
+		expect(
+			await create(execution(), "user-a", "web", "claim-v1"),
+		).toMatchObject({
+			outcome: "accepted",
+			result: { conversationId: first.sessionId },
+		});
+		expect(await create(execution(), "user-a", "web", "cold-v1")).toMatchObject(
+			{ outcome: "accepted" },
+		);
+		const configuration = { ...config, revision: 2 };
+		const second = await ready(reserves(configuration));
+		expect(second.lease.profile.digest).not.toBe(first.lease.profile.digest);
+		expect(
+			await create(execution(configuration), "user-a", "web", "claim-v2"),
+		).toMatchObject({
+			outcome: "accepted",
+			result: { conversationId: second.sessionId },
+		});
+		expect(
+			await create(execution(configuration), "user-a", "web", "cold-v2"),
+		).toMatchObject({ outcome: "accepted" });
+		expect(
+			await create(execution(configuration), "user-a", "web", "cold-v2"),
+		).toMatchObject({ outcome: "replayed" });
+		const statistics = await second.store.statistics({ windowMs: 60000 });
+		expect(statistics.observedAt).toBeInstanceOf(Date);
+		expect(statistics.profiles).toHaveLength(3);
+		expect(statistics.profiles).toEqual(
+			expect.arrayContaining([
+				{
+					agentId: "agent",
+					profileDigest: first.lease.profile.digest,
+					currentProfileDigest: second.lease.profile.digest,
+					newSessionCount: 2,
+					claimedCount: 1,
+				},
+				{
+					agentId: "agent",
+					profileDigest: second.lease.profile.digest,
+					currentProfileDigest: second.lease.profile.digest,
+					newSessionCount: 2,
+					claimedCount: 1,
+				},
+				{
+					agentId: "agent",
+					profileDigest: null,
+					currentProfileDigest: second.lease.profile.digest,
+					newSessionCount: 1,
+					claimedCount: 0,
+				},
+			]),
+		);
+		expect(
+			statistics.profiles.reduce(
+				(count, profile) => count + profile.newSessionCount,
+				0,
+			),
+		).toBe(5);
+		expect(
+			await sql`select admission_profile_digest, count(*)::int as count from platform.session_sandbox_allocations group by admission_profile_digest`,
+		).toEqual(
+			expect.arrayContaining([
+				{ admission_profile_digest: first.lease.profile.digest, count: 2 },
+				{ admission_profile_digest: second.lease.profile.digest, count: 2 },
+				{ admission_profile_digest: null, count: 1 },
+			]),
+		);
 	});
 	it("uses the real API task admission branch, replay and continuation without re-claim", async () => {
 		const reserve = await ready();

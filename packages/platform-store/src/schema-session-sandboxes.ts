@@ -37,6 +37,7 @@ export const sessionSandboxAllocations = platformSchema.table(
 			.default("running"),
 		resourcePolicy: jsonb("resource_policy"),
 		resourceObservation: jsonb("resource_observation"),
+		admissionProfileDigest: text("admission_profile_digest"),
 	},
 	(table) => [
 		uniqueIndex("session_sandbox_conversation_unique").on(table.conversationId),
