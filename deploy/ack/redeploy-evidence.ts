@@ -16,8 +16,9 @@ const components = {
 };
 
 export function normalizeRuntimeImageManifest(value: RecordValue): RecordValue {
-	const nested = value.images?.runtimeHost;
-	if (nested !== undefined) {
+	if (value.images !== undefined) {
+		const nested = value.images?.runtimeHost;
+		assert(nested !== undefined);
 		assert(value.schemaVersion === 1 && value.platform === "linux/amd64");
 		assert(typeof value.commitSha === "string" && /^[a-f0-9]{40}$/u.test(value.commitSha));
 		assert(nested && typeof nested.repository === "string" && /^sha256:[0-9a-f]{64}$/u.test(nested.digest ?? ""));

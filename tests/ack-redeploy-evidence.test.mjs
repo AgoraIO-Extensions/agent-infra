@@ -112,6 +112,9 @@ test("accepts the official RuntimeHost publication receipt shape and rejects inv
 	assert.throws(() =>
 		normalizeRuntimeImageManifest({ ...published, images: {} }),
 	);
+	assert.throws(() =>
+		normalizeRuntimeImageManifest({ ...f.runtime, images: {} }),
+	);
 });
 
 test("binding rejects duplicate components, duplicate runtime env and mutable init images", () => {
