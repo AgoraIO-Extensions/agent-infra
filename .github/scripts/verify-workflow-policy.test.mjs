@@ -259,3 +259,12 @@ test("requires an isolated release smoke input and index receipt artifact", asyn
     );
   assert.ok(validateWorkflowDocuments(restored).some((error) => error.includes("standard templates")));
 });
+
+test("requires the RuntimeHost package access preflight", async () => {
+  const workflows = await actualWorkflows();
+  const publish = workflows["publish-images.yml"];
+  publish.jobs.infrastructure.steps = publish.jobs.infrastructure.steps.filter(
+    (step) => step.name !== "Verify RuntimeHost package workflow access",
+  );
+  assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("standard templates")));
+});

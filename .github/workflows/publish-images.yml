@@ -72,6 +72,17 @@ jobs:
         env:
           GHCR_TOKEN: ${{ github.token }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
+      - name: Verify RuntimeHost package workflow access
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          linked_repository=$(gh api \
+            orgs/AgoraIO-Extensions/packages/container/agent-infra%2Fagent-runtime-host \
+            --jq '.repository.full_name // ""')
+          if [ "$linked_repository" != "AgoraIO-Extensions/agent-infra" ]; then
+            echo "RuntimeHost package is not linked for this workflow; grant this repository Write under Manage Actions access." >&2
+            exit 1
+          fi
       - name: Build and publish standard templates and custom base
         env:
           PLATFORM: ${{ matrix.platform }}
