@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +15,7 @@ import { RuntimeManifestV1Schema } from "@agent-infra/contracts/workload";
 import { expect, it, vi } from "vitest";
 import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
 import type { RuntimeNativeSkillCommandV1 } from "./driver.js";
+import { DurableJsonFile } from "./durable-json.js";
 import {
 	createRuntimeFileResultReceiptV1,
 	RuntimeFileInputRejectedError,
@@ -565,6 +574,204 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 		).toBe("synthetic result 2");
 	} finally {
 		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("persists a cancelled text burst within a bounded commit count and reopens its original journal", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-burst-durable-"));
+	const canonicalPath = await realpath(path);
+	const options = {
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "burst-cancel", ACP_TEST_BURST_CHUNKS: "200" },
+		}),
+	};
+	let driver = await GenericAcpRuntimeDriver.open(options);
+	const persistence = DurableJsonFile.prototype as unknown as {
+		path: string;
+		persist(serialized: string): Promise<void>;
+	};
+	const original = persistence.persist;
+	const tailEntered = Promise.withResolvers<void>();
+	const commitTail = Promise.withResolvers<void>();
+	const budgetExceeded = Promise.withResolvers<never>();
+	void budgetExceeded.promise.catch(() => {});
+	let commits = 0;
+	let tailBlocked = false;
+	let exceeded = false;
+	const persist = vi
+		.spyOn(persistence, "persist")
+		.mockImplementation(async function (this: { path: string }, serialized) {
+			if (
+				this.path.startsWith(`${canonicalPath}/`) &&
+				this.path.endsWith("/state.json") &&
+				serialized.includes("burst-prefix|")
+			) {
+				if (++commits > 80) {
+					exceeded = true;
+					const error = new Error("ACP_TEXT_DURABLE_COMMIT_BUDGET_EXCEEDED");
+					budgetExceeded.reject(error);
+					throw error;
+				}
+				if (!tailBlocked && serialized.includes("cancel-tail|")) {
+					tailBlocked = true;
+					tailEntered.resolve();
+					await commitTail.promise;
+				}
+			}
+			return original.call(this, serialized);
+		});
+	try {
+		const command = {
+			schemaVersion: 2 as const,
+			kind: "submit-turn" as const,
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 3,
+			executionId: "execution-a",
+			turnId: "turn-a",
+			operationId: "operation-a",
+			input: { text: "synthetic burst", attachments: [] },
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		};
+		const acceptedPromise = driver.execute(command);
+		let nativeSessionRef: string | undefined;
+		await vi.waitFor(async () => {
+			const index = JSON.parse(
+				await readFile(join(path, "index.json"), "utf8"),
+			);
+			nativeSessionRef = index.sessions?.[0]?.ref;
+			expect(nativeSessionRef).toEqual(expect.any(String));
+		});
+		const directory = join(path, nativeSessionRef as string);
+		const workspace = join(directory, "workspace");
+		await mkdir(workspace, { recursive: true });
+		await writeFile(join(workspace, "burst-start"), "start");
+		const accepted = await acceptedPromise;
+		await vi.waitFor(async () =>
+			expect(await readFile(join(workspace, "burst-ready"), "utf8")).toBe(
+				"ready",
+			),
+		);
+		const stopCommand = {
+			schemaVersion: 1 as const,
+			kind: "stop" as const,
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			sessionGeneration: command.sessionGeneration,
+			executionId: command.executionId,
+			turnId: command.turnId,
+			operationId: "stop-a",
+			nativeSessionRef: accepted.nativeSessionRef,
+		};
+		const stopped = driver.execute(stopCommand);
+		void stopped.catch(() => {});
+		await Promise.race([tailEntered.promise, budgetExceeded.promise]);
+		expect(await readFile(join(workspace, "cancel-seen.json"), "utf8")).toBe(
+			"true",
+		);
+		const beforeCommit = JSON.parse(
+			await readFile(join(directory, "state.json"), "utf8"),
+		);
+		expect(beforeCommit.turns[0].status).toBe("running");
+		expect(
+			beforeCommit.turns[0].events.some(
+				(event: { type: string }) => event.type === "completed",
+			),
+		).toBe(false);
+		expect(JSON.stringify(beforeCommit)).not.toContain("cancel-tail|");
+		commitTail.resolve();
+		expect(
+			(await Promise.race([stopped, budgetExceeded.promise])).result,
+		).toEqual({ outcome: "accepted", status: "cancelled" });
+		expect(
+			await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).toBe("cancelled");
+		const events = await driver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		const boundary = events.findIndex((event) => event.type === "tool");
+		expect(boundary).toBeGreaterThan(0);
+		const text = (values: typeof events) =>
+			values
+				.flatMap((event) =>
+					event.type === "text" ? [event.payload.delta] : [],
+				)
+				.join("");
+		expect(text(events.slice(0, boundary))).toBe(
+			`burst-prefix|${"😀0123456789".repeat(4 * 100)}`,
+		);
+		expect(text(events.slice(boundary + 1))).toBe(
+			`metadata|${"😀0123456789".repeat(4 * 100)}cancel-tail|`,
+		);
+		expect(
+			events.every((event) => event.executionId === command.executionId),
+		).toBe(true);
+		expect(new Set(events.map((event) => event.cursor)).size).toBe(
+			events.length,
+		);
+		expect(events.at(-1)).toMatchObject({
+			type: "completed",
+			payload: { status: "cancelled" },
+		});
+		const facts = events.flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "model"
+				? [event.payload]
+				: [],
+		);
+		expect(facts.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"completed",
+		]);
+		expect(facts[2]).toMatchObject({
+			operationRef: facts[1]?.operationRef,
+			attemptRef: facts[1]?.attemptRef,
+			startedAt: facts[1]?.startedAt,
+		});
+		expect(commits).toBeLessThanOrEqual(80);
+		await driver.close();
+		driver = await GenericAcpRuntimeDriver.open(options);
+		expect(await driver.execute(command)).toEqual(accepted);
+		expect(
+			await driver.getStatus(accepted.nativeSessionRef, command.executionId),
+		).toBe("cancelled");
+		expect(
+			await driver.replayEvents(accepted.nativeSessionRef, command.executionId),
+		).toEqual(events);
+		expect(await driver.lookupOperation(stopCommand)).toMatchObject({
+			state: "found",
+			record: { result: { outcome: "accepted", status: "cancelled" } },
+		});
+		expect(
+			JSON.parse(await readFile(join(workspace, "session.json"), "utf8")).count,
+		).toBe(1);
+	} finally {
+		commitTail.resolve();
+		persist.mockRestore();
+		await driver.close().catch((error) => {
+			if (!exceeded) throw error;
+		});
 		await rm(path, { recursive: true, force: true });
 	}
 });

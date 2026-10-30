@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
+import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { expect, it, vi } from "vitest";
 import { openAcpSession } from "./acp-session.js";
 import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
@@ -337,6 +338,114 @@ it("filters foreign-session text and tool notifications before the Driver callba
 	} finally {
 		await session.close();
 		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+it("drains a bounded text burst across ordering barriers before confirming cancellation", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "acp-text-burst-"));
+	const cwd = join(directory, "workspace");
+	await mkdir(cwd);
+	const entered = Promise.withResolvers<void>();
+	const commit = Promise.withResolvers<void>();
+	const notifications: SessionNotification[] = [];
+	const facts: RuntimeOperationFactV2[] = [];
+	let callbacks = 0;
+	let finished = false;
+	const session = await openAcpSession({
+		directory,
+		cwd,
+		launch: {
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "burst-cancel" },
+		},
+		update: async (notification) => {
+			notifications.push(notification);
+		},
+		updateBatch: async (batch) => {
+			if (++callbacks > 8) throw new Error("ACP_TEXT_COMMIT_BUDGET_EXCEEDED");
+			if (callbacks === 1) {
+				entered.resolve();
+				await commit.promise;
+			}
+			notifications.push(...batch);
+		},
+		modelFact: () => ({
+			configVersion: "burst-fixture",
+			modelOptionId: "primary",
+			modelId: "fixture-model",
+		}),
+		recordOperationFact: async (fact) => {
+			facts.push(fact);
+		},
+	});
+	const prompt = session.prompt("synthetic burst").finally(() => {
+		finished = true;
+	});
+	void prompt.catch(() => {});
+	try {
+		await entered.promise;
+		await writeFile(join(cwd, "burst-start"), "start");
+		await vi.waitFor(async () =>
+			expect(await readFile(join(cwd, "burst-ready"), "utf8")).toBe("ready"),
+		);
+		await session.cancel();
+		await vi.waitFor(async () =>
+			expect(await readFile(join(cwd, "cancel-seen.json"), "utf8")).toBe(
+				"true",
+			),
+		);
+		expect(finished).toBe(false);
+		expect(facts.map((fact) => fact.phase)).toEqual(["intent", "started"]);
+		expect(notifications).toHaveLength(0);
+		commit.resolve();
+		await expect(prompt).resolves.toEqual({ stopReason: "cancelled" });
+		const text = (values: SessionNotification[]) =>
+			values.flatMap(({ update }) =>
+				update.sessionUpdate === "agent_message_chunk" &&
+				update.content.type === "text"
+					? [update.content.text]
+					: [],
+			);
+		const boundary = notifications.findIndex(
+			({ update }) => update.sessionUpdate === "tool_call",
+		);
+		expect(text(notifications.slice(0, boundary)).join("")).toBe(
+			`burst-prefix|${"😀0123456789".repeat(4 * 500)}`,
+		);
+		expect(notifications[boundary + 1]?.update).toEqual({
+			sessionUpdate: "agent_message_chunk",
+			content: { type: "text", text: "metadata|" },
+		});
+		expect(
+			JSON.parse(await readFile(join(cwd, "burst-permission.json"), "utf8")),
+		).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+		expect(text(notifications.slice(boundary + 1)).join("")).toBe(
+			`metadata|${"😀0123456789".repeat(4 * 500)}cancel-tail|`,
+		);
+		expect(
+			text(notifications).every(
+				(value) => Buffer.byteLength(value, "utf8") <= 16 * 1024,
+			),
+		).toBe(true);
+		expect(callbacks).toBeLessThanOrEqual(8);
+		expect(facts.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"completed",
+		]);
+		expect(facts[2]).toMatchObject({
+			operationRef: facts[1]?.operationRef,
+			attemptRef: facts[1]?.attemptRef,
+			startedAt: facts[1]?.startedAt,
+		});
+	} finally {
+		commit.resolve();
+		await session.close();
+		await prompt.catch(() => {});
+		await rm(directory, { recursive: true, force: true });
 	}
 });
 

@@ -230,6 +230,10 @@ export interface NativeSessionOptions {
 	 */
 	readonly resultBlock?: (block: SandboxResultBlockV1) => void;
 	update: (event?: Pick<RuntimeEventV1, "type" | "payload">) => Promise<void>;
+	/** Batch a durable write while preserving one Runtime event per native notification. */
+	updateBatch?: (
+		events: readonly Pick<RuntimeEventV1, "type" | "payload">[],
+	) => Promise<void>;
 }
 export interface NativeSession {
 	nativeId: string;
@@ -1998,6 +2002,67 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					)
 						await this.status(file, command.executionId, "running");
 					if (event) await this.event(file, command.executionId, event);
+					admitted();
+				},
+				updateBatch: async (events) => {
+					if (
+						!dispatched ||
+						unknownHold ||
+						unknownMarking ||
+						events.length === 0
+					)
+						return;
+					await file.update((state) => {
+						const turn = state.turns.find(
+							(entry) => entry.executionId === command.executionId,
+						);
+						if (!turn || terminal(turn.status) || turn.unknownHold) return;
+						const record = result(command, state.binding.ref, {
+							outcome: "accepted",
+							status: "running",
+						});
+						let operation = state.operations.find(
+							(entry) => entry.key === operationKey(command),
+						);
+						if (!operation) {
+							operation = {
+								key: operationKey(command),
+								digest: digest(command),
+							};
+							state.operations.push(operation);
+						}
+						operation.record = record;
+						if (turn.status !== "running") {
+							state.sequence++;
+							turn.events.push(
+								RuntimeEventV1Schema.parse({
+									schemaVersion: 1,
+									executionId: command.executionId,
+									adapterEventKey: randomUUID(),
+									cursor: `${this.options.cursorPrefix}-${state.sequence}`,
+									occurredAt: new Date().toISOString(),
+									type: "status",
+									payload: { status: "running" },
+								}),
+							);
+							turn.status = "running";
+						}
+						for (const event of events) {
+							state.sequence++;
+							turn.events.push(
+								RuntimeEventV1Schema.parse({
+									schemaVersion: 1,
+									executionId: command.executionId,
+									adapterEventKey: randomUUID(),
+									cursor: `${this.options.cursorPrefix}-${state.sequence}`,
+									occurredAt: new Date().toISOString(),
+									...event,
+								}),
+							);
+						}
+					});
+					for (const wake of this.waiters.get(file.read().binding.ref) ?? [])
+						wake();
 					admitted();
 				},
 			};

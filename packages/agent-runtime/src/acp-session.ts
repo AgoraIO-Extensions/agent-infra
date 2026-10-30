@@ -62,6 +62,10 @@ export async function openAcpSession(options: {
 	/** Cancel initialization before a native Session handle is available. */
 	signal?: AbortSignal;
 	update: (notification: SessionNotification) => Promise<void>;
+	/** Batch only the durable write; each notification remains an independent journal event. */
+	updateBatch?: (
+		notifications: readonly SessionNotification[],
+	) => Promise<void>;
 	recordOperationFact?: (fact: RuntimeOperationFactV2) => Promise<void>;
 	modelFact?: () =>
 		| Extract<RuntimeOperationFactV2, { kind: "model" }>["model"]
@@ -85,6 +89,9 @@ export async function openAcpSession(options: {
 	});
 	const { child, exited } = native;
 	let updates = Promise.resolve();
+	let pendingText:
+		| { notifications: SessionNotification[]; text: string; bytes: number }
+		| undefined;
 	let loading = true;
 	let commandDirectory: AcpNativeCommandDirectoryV1 | undefined;
 	let commandDirectoryUnavailable = false;
@@ -104,6 +111,11 @@ export async function openAcpSession(options: {
 	const connection = client({ name: "agent-infra" })
 		.onNotification("session/update", async ({ params }) => {
 			const update = params.update;
+			if (
+				params.sessionId === activeSessionId &&
+				update.sessionUpdate !== "agent_message_chunk"
+			)
+				pendingText = undefined;
 			if (update.sessionUpdate === "available_commands_update") {
 				if (activeSessionId === undefined) {
 					if (commandDirectoryUnavailable) return;
@@ -160,10 +172,38 @@ export async function openAcpSession(options: {
 					});
 			}
 
-			updates = updates.then(() => options.update(params));
+			// 只合并尚未开始保存的连续文本；acpStream 已限定输入字段，其他通知保留顺序屏障。
+			const text =
+				update.sessionUpdate === "agent_message_chunk" &&
+				update.content.type === "text" &&
+				update.content.text.length > 0
+					? update.content.text
+					: undefined;
+			const bytes = text === undefined ? 0 : Buffer.byteLength(text, "utf8");
+			if (text !== undefined && bytes <= 16 * 1024) {
+				if (pendingText && pendingText.bytes + bytes <= 16 * 1024) {
+					pendingText.notifications.push(params);
+					pendingText.text += text;
+					pendingText.bytes += bytes;
+				} else {
+					const queued = { notifications: [params], text, bytes };
+					pendingText = queued;
+					updates = updates.then(async () => {
+						if (pendingText === queued) pendingText = undefined;
+						if (options.updateBatch)
+							return options.updateBatch(queued.notifications);
+						for (const notification of queued.notifications)
+							await options.update(notification);
+					});
+				}
+			} else {
+				pendingText = undefined;
+				updates = updates.then(() => options.update(params));
+			}
 			await updates.catch(() => {});
 		})
 		.onRequest("session/request_permission", async ({ params }) => {
+			if (params.sessionId === activeSessionId) pendingText = undefined;
 			await updates.catch(() => {});
 			const requestedInput =
 				options.launch.permissionInputSource === "announced"

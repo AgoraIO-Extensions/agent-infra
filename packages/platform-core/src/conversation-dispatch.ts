@@ -284,10 +284,11 @@ export function createConversationDispatchUseCaseV1(
 			...(claim.runtimeCursor ? { afterCursor: claim.runtimeCursor } : {}),
 			runtimeGrant: authority.runtimeGrant,
 		};
-		// Renews the business authority while the original Turn runs. A refusal
-		// is resolved by the drain below rather than failing the Turn.
+		// A pending stop drains under control authority and only renews its Store lease.
+		// Business renewal refusals are resolved below rather than failing the Turn.
 		const renewBusinessAuthority =
 			!claim.metadataRecovery &&
+			!claim.stopPending &&
 			!authority.controlOnly &&
 			dependencies.runtimeHost.renewAuthorization
 				? async (signal: AbortSignal) => {
