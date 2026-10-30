@@ -244,6 +244,33 @@ test("startup projection outputs only allowlisted fields even from sensitive eve
 	assert.equal(receipt.cache.imageAlreadyPresent, null);
 });
 
+test("an already-present message with invalid event times cannot prove cache or image state", () => {
+	const message = `Container image "${baseJob.imageReference}" already present on machine`;
+	for (const invalid of [
+		{ eventTime: "invalid-time" },
+		{ eventTime: "2026-10-29T00:00:00Z" },
+		{ eventTime: "2026-10-30T00:00:13Z" },
+		{
+			firstTimestamp: "2026-10-30T00:00:05Z",
+			lastTimestamp: "2026-10-30T00:00:01Z",
+		},
+		{
+			firstTimestamp: "2026-10-30T00:00:01Z",
+			lastTimestamp: "2026-10-30T00:00:05Z",
+			eventTime: "invalid-time",
+		},
+	]) {
+		const receipt = project([
+			event("SuccessfulHitImageCache"),
+			event("Pulled", undefined, { message, ...invalid }),
+		]);
+		assert.equal(receipt.eventRead, "unknown");
+		assert.equal(receipt.cache.imageAlreadyPresent, null);
+		assert.equal(receipt.cache.hit, null);
+		assert.deepEqual(receipt.pull, { status: "unknown", seconds: null });
+	}
+});
+
 test("template readiness budget defaults and bounds are validated without changing the input", () => {
 	assert.equal(
 		validateTemplatePreflightJob(baseJob).podReadyTimeoutSeconds,

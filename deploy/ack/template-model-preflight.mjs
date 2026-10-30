@@ -44,21 +44,26 @@ export function projectPodStartupReceipt({ job: input, expectedPod, pod, events 
 	const matching = Array.isArray(events) && events.length <= 256 ? events.filter((event) =>
 		event?.involvedObject?.uid === uid && event.involvedObject.kind === "Pod" &&
 		startupEventReasons.has(event.reason) && ["Normal", "Warning"].includes(event.type)) : [];
-	const projected = matching.map((event) => {
+	const timedEvents = matching.map((event) => {
 		const first = timestampMs(event.firstTimestamp ?? event.eventTime);
 		const last = timestampMs(event.lastTimestamp ?? event.series?.lastObservedTime ?? event.eventTime ?? event.firstTimestamp);
-		const valid = created !== null && ready !== null && first !== null && last !== null && first >= created && last >= first && last <= ready;
-		return { reason: event.reason, type: event.type, firstAt: valid ? iso(first) : null, lastAt: valid ? iso(last) : null };
+		const times = [event.firstTimestamp, event.lastTimestamp, event.eventTime, event.series?.lastObservedTime]
+			.filter((value) => value !== undefined && value !== null).map(timestampMs);
+		const valid = created !== null && ready !== null && first !== null && last !== null && last >= first &&
+			times.every((time) => time !== null && time >= created && time <= ready);
+		return { event, valid, first, last };
 	});
-	const eventRead = !Array.isArray(events) ? "unavailable" : matching.length === 0 ? "unknown" : "observed";
+	const eventRead = !Array.isArray(events) ? "unavailable" : matching.length === 0 || timedEvents.some((event) => !event.valid) ? "unknown" : "observed";
+	const projected = timedEvents.filter(({ valid }) => valid).map(({ event, first, last }) =>
+		({ reason: event.reason, type: event.type, firstAt: iso(first), lastAt: iso(last) }));
 	const hasReason = (reason) => eventRead === "observed" ? projected.some((event) => event.reason === reason) : null;
 	const pulling = projected.filter((event) => event.reason === "Pulling");
 	const pulled = projected.filter((event) => event.reason === "Pulled");
 	const pullStart = pulling.length === 1 ? timestampMs(pulling[0].firstAt) : null;
 	const pullEnd = pulled.length === 1 ? timestampMs(pulled[0].lastAt) : null;
 	// A cache-hit event can coexist with an image download; only the exact Pulled message proves presence.
-	const alreadyPresent = matching.some((event) => event.reason === "Pulled" && event.message === `Container image "${job.imageReference}" already present on machine`);
-	const pullSeconds = durationSeconds(pullStart, pullEnd, maximum);
+	const alreadyPresent = eventRead === "observed" && timedEvents.some(({ event }) => event.reason === "Pulled" && event.message === `Container image "${job.imageReference}" already present on machine`);
+	const pullSeconds = eventRead === "observed" ? durationSeconds(pullStart, pullEnd, maximum) : null;
 	return {
 		schemaVersion: 1, kind: "ack-template-pod-startup", sourceCommit: job.sourceCommit,
 		templateId: job.templateId, imageDigest: job.imageDigest,
