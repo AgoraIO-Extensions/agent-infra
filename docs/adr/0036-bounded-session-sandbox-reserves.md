@@ -10,6 +10,8 @@
 采用按 Agent 及已验证配置准备的新会话预留实例。提前生成最终 Session/Sandbox ID 对，
 Pod 使用最终身份，真实用户领取时保持 ID、Pod 和 PVC 不变。沿现有 Platform DB/Worker
 实现一次性分配，首阶段只支持无 Owner Secret 的标准模板，不增加通用 Runtime 身份重绑接口。
+首版只预先完成计算、镜像和 Host bootstrap。原生 Session 仍在真实授权投递时准备，其等待
+完整计入可执行耗时；不能将预留池命中或 `/healthz` 当作原生进程已暖。
 
 ## 选择理由
 
@@ -64,8 +66,8 @@ env、卷与 immutable Secret，但需要独立预留事实和原 Conversation �
 1. `platform-core`/`platform-store` 与 migration：预留事实、预算、原入口事务领取，保留
    Conversation 复合外键与原幂等；真实 PostgreSQL 并发、失败恢复和隔离测试。
 2. `platform-worker` 与部署配置：未领取资源准备、原始 UID 接收、条件清理、容量补充和
-   关闭；复用现有资源/授权规则，不以假主体适配旧 claim。若现有 Runtime readiness 不能
-   表达预留用途，先交明确的独立契约修订，不暗改原 Grant。
+   关闭；首版只检查六资源、Host bootstrap 与无业务状态，不以假主体适配旧 claim，
+   不使用 Agent 级 readiness JWS 代替预留授权。原生进程预热或新探测 wire 留待单独评审。
 3. 部署与业务验收：真实 ACK 中受上限约束的同源对照，完整功能回归、成本与可比耗时；
    未达到目标时保留指标与问题，不以文档、Pod Ready 或合成 receipt 关闭性能父票。
 

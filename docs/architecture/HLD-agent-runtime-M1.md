@@ -388,7 +388,7 @@ API 默认新建提交主体在目标 Agent 下的 Conversation；显式续接�
 - 同一 Conversation 同时只允许一个活跃 Turn。
 - Web 初始 Execution 与 Turn outbox 原子提交即占用本 Conversation 的执行位置；API 等待 Execution 只有在 Dispatch 原子准入后才占用。该位置覆盖尚未投递、接受结果不确定、运行中和取消待确认；确认无剩余 Runtime 副作用且终态持久化后才能释放。待核实不能被当作可释放终态。
 - Web/托管渠道在 Conversation 被占用时，同一 `actorId` 的新消息按[工程 Spec §12.5](SPEC-agent-infra-M1-engineering-architecture.md#125-执行中消息的补充指令与排队)依次作为补充指令、进入有界排队或返回繁忙；占用者属于其他 `actorId` 时返回繁忙。任何新消息都不能启动第二个 Turn。API 同会话后续任务按 8.4 有界等待，不自动转换为补充指令；已合法绑定当前 Turn 的 Web 补充指令仍可处理。
-- 不同 Conversation 在各自独立 Sandbox 内、按 Agent 已验证容量并行，Dispatch 在 Platform DB 以原子条件预留和释放容量，不把未经验证的并发下推给 Driver。Adapter 不以 Agent 全局锁替代会话隔离；不新增资源池、优先级、定时任务或第二套排队权威。Web/渠道排队复用 API 等待任务的持久字段与认领决策，不是第二套排队权威。
+- 不同 Conversation 在各自独立 Sandbox 内、按 Agent 已验证容量并行，Dispatch 在 Platform DB 以原子条件预留和释放容量，不把未经验证的并发下推给 Driver。Adapter 不以 Agent 全局锁替代会话隔离；不新增通用资源池、优先级、定时任务或第二套排队权威。新会话的有界预留只按[工程 Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#新会话预留实例)准备独占实例，领取后沿原 Dispatch；它不增加 Driver 并发或任务排队权威。Web/渠道排队复用 API 等待任务的持久字段与认领决策，不是第二套排队权威。
 
 ### 7.3 重启恢复
 

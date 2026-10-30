@@ -656,7 +656,7 @@ intent 重试。每次 progress 写回必须重新取得并校验当前 outbox l
 控制授权仍只允许原执行的停止、核实和屏障，不恢复业务使用权，不成为 Connection 授权。
 新增绑定由原契约 owner 发布版本化 Schema，并同步签发方、Host、文件数据面及消费者；不得
 静默改变既有 V1/V2/V4 wire 含义或兼容性放行无 Sandbox 的新业务调用。readiness 不创建
-业务 Execution；只对已分配实例或部署批准的未领取预留实例作只读检查，不能用其授权读取会话或调用模型/工具。
+业务 Execution；只对已分配实例作只读检查，不能用其授权读取会话或调用模型/工具。
 
 部署批准的出站策略由 Worker 按 Sandbox 落实，默认拒绝未批准目标；始终允许集群 DNS、获准模型
 和独立 Connection endpoint，部署还可以批准供标准模板原生工具直接出网的通用目标
@@ -742,29 +742,33 @@ custom Owner Secret、自有交互入口及不满足这些条件的模板保持�
 适用的文件交换 token/容器边界 attestation；不包含部署级服务 token、个人/默认 Relay Key、
 Owner Secret、Connection 凭证或业务 Grant。传输 token 不授予业务权限；文件、模型、
 Connection 和 native callback 入口在没有真实当前 allocation/Execution 时必须拒绝。
-预留 readiness 只验证该独占实例，不建立业务 Execution、原生业务 Session 或模型调用。
-既有只读 readiness wire 若不能表达此用途，必须先补独立契约评审，不能伪造主体或扩大 Grant。
+首版预留只验证实际六资源、Host bootstrap `/healthz` 及无业务状态，不建立业务 Execution、
+原生业务 Session 或模型调用。Session Pod 未装配 Agent 级 `READINESS_BINDING`，其 JWS
+绑定 Agent/Workload 而非预留 Sandbox，不能复用它冒充预留原生就绪授权。首版不扩展该 wire；
+若后续需要预热原生进程或新的签名预留探测，须另行完成契约评审及原生状态隔离验收。
 
 **创建、领取与回收。** 预留事实包含不可变 ID/profile、`preparing/ready/claimed/retiring/unknown`
 状态、当前 lease/delivery fence、逐资源 UID/resourceVersion、待核实操作及期限。它只负责未领取
 资源；业务会话状态仍只由原 Conversation/allocation 保存。创建前持久化资源意图，调谐采用
-固定名称的幂等 create，不修改未知或不同 UID 的对象。六类资源、Host readiness、隔离及全部
+固定名称的幂等 create，不修改未知或不同 UID 的对象。六类资源、Host bootstrap、隔离及全部
 创建意图已确认、没有未完成或结果不明的资源写操作时，才能以当前 lease/CAS 标记 `ready`。
 启动时产生的受控 Host 元数据可以保留，但不得存在业务 Session、Execution 或用户文件。
 
 新会话按原入口事务先核验当前主体、Agent、渠道和幂等记录。只有创建新 Conversation 的分支
 可以 `FOR UPDATE SKIP LOCKED` 选择匹配 `ready` 项；续接、重试和恢复不得重新领取。事务中
 同时完成 `ready → claimed` CAS、真实 Conversation、allocation、原 outbox、审计和幂等结果，
-保持最终 ID 对不变。行锁顺序沿原入口锁序，预留行在末端领取；补充/淘汰路径不得持有预留行后
-反向锁 Conversation。事务回滚不留下部分主体绑定，幂等重放返回原 ID；没有匹配项时按原流程
+保持最终 ID 对不变。沿原入口先取得主体/Agent/Conversation/幂等所需的既有锁，再取预算锁，
+最后取预留行锁；补充、领取、淘汰及释放预算都采用同一顺序，不能持预留行反向取预算或业务锁。
+事务回滚不留下部分主体绑定，幂等重放返回原 ID；没有匹配项时按原流程
 新分配并准备，不在事务中等待预留资源或调用 Kubernetes。
 
 预留资源首次准备使用 `generation=1`、`resourceFence=1`，与首次正式准备的目标值相同。
 领取保留它们以及已回读的逐资源身份；不能重置为 0、盲目加一使 immutable Secret 失配，或把
 旧 Pod 的观测复制成新 Pod。预留 lease/delivery fence 是另一项控制权限，领取时撤销；
 后续 Session 生命周期按原 generation/resourceFence 与 stopReceipt 推进。领取后的 Worker
-必须沿当前主体授权重读实际六类资源、profile、路由和 Runtime readiness 后才写入业务 `ready`；
-预留 `ready` 不是已授权 Session 的就绪回执，不能仅为满足延迟目标跳过真实检查。
+必须沿当前主体授权重读实际六类资源、profile、路由，并完成原会话准备路径的全部检查后才写入
+业务 `ready`。首次实际投递仍执行原 Runtime 授权、准入与原生准备，耗时计入真实可执行指标；
+不以预留 `ready` 声称原生进程已暖，也不能为满足延迟目标跳过检查或提前记就绪。
 
 淘汰必须先在同一预留行上赢得 `ready/preparing/unknown → retiring` CAS，再持久化每项
 条件删除意图并发送 DELETE；`retiring` 不回到 `ready`。这样领取和淘汰只有一个赢家，
@@ -774,7 +778,9 @@ Connection 和 native callback 入口在没有真实当前 allocation/Execution 
 已领取实例发生故障，沿原会话恢复，不能归还池、换一项重新领取或释放未知执行占用。
 
 未领取项退出时，按自身原始 UID/resourceVersion 删除六类资源，包括从未交付用户的空 PVC，
-回读全部 absence 后才释放占用。结果不明保留 `unknown`、原意图与预算，继续有界收敛；
+已确认原创建操作不再可能迟到写入，并回读全部 absence 后才释放占用。待核实的 create
+不能仅因一次 GET absence 判为结束；保留原 attempt、不可领取状态与预算，核实迟到资源后
+沿原淘汰意图清理。结果不明保留 `unknown`、原意图与预算，继续有界收敛；
 若已被领取、发现业务绑定或同名不同 UID，清理拒绝。正式 Session 的 PVC 保留规则不变。
 
 **有界补充与扩缩。** 部署策略声明允许的 profile、每项最小/最大备用数、总备用数、
@@ -782,7 +788,8 @@ Connection 和 native callback 入口在没有真实当前 allocation/Execution 
 `ready + preparing` 计入补充目标，`unknown + retiring` 仍占预算；不得在每轮重复创建同一缺额。
 领取只将占用从预留事实转入 allocation，不释放部署总预算。补充与普通新会话的资源预留
 使用同一事务预算锁，统计全部有效 allocation 与未交付预留项且不重复计数，不能靠 CPU
-低利用率或 Pod 删除请求已发出来认定有空闲配额。存量占用超过预算时停止新增，不能驱逐在用会话。
+低利用率或 Pod 删除请求已发出来认定有空闲配额。正式会话经 stopReceipt 确认计算资源已回收后
+可以释放对应 CPU/内存占用，保留的 PVC 仍占存储预算。存量占用超过预算时停止新增，不能驱逐在用会话。
 
 目标备用数按同 profile 的新会话到达率、实际补充耗时和小额突发余量计算，并夹在批准的
 最小/最大值与剩余总预算内。重放请求、授权失败不计新增需求；预留领取和冷路径需求均计入。
