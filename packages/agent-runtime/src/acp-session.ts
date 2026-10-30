@@ -441,7 +441,7 @@ export async function openAcpSession(options: {
 							void connection.agent
 								.notify("session/cancel", { sessionId: nativeId })
 								.catch(() => undefined);
-							void close();
+							void close().catch(() => undefined);
 							reject(new Error("RUNTIME_ACP_PROMPT_TIMEOUT"));
 						}, timeoutMs);
 					});
