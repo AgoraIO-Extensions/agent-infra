@@ -2364,6 +2364,12 @@ describe("Conversation Worker dispatch", () => {
 				},
 			);
 			const h = setup({ runtimeHost });
+			const binding = {
+				conversationId: "conversation-1",
+				executionId: "execution-1",
+				sessionGeneration: 1,
+				hostSessionRef: "host-session-conversation-1",
+			};
 			const persist = h.events.persist.bind(h.events);
 			let failed = false;
 			h.events.persist = async (command) => {
@@ -2378,8 +2384,32 @@ describe("Conversation Worker dispatch", () => {
 			});
 			expect(acknowledged).toEqual([]);
 			expect(h.store.current.runtimeCursor).toBe("cursor-3");
+			expect(h.events.persisted.map(({ event }) => event)).toEqual([
+				{ type: "execution.status", status: "processing" },
+				{ type: "text.delta", text: "part 2" },
+				{ type: "text.delta", text: "part 3" },
+			]);
+			expect(h.store).toMatchObject({
+				errorCode: "EVENT_PERSISTENCE_UNAVAILABLE",
+				outboxStatus: "retry_scheduled",
+				current: {
+					...binding,
+					executionStatus: "unknown",
+					deliveryFence: 2,
+					executionDeliveryFence: 2,
+				},
+			});
 			await expect(dispatch(h.useCase)).resolves.toMatchObject({
 				outcome: "accepted",
+			});
+			expect(h.store).toMatchObject({
+				outboxStatus: "succeeded",
+				current: {
+					...binding,
+					executionStatus: "completed",
+					deliveryFence: 3,
+					executionDeliveryFence: 3,
+				},
 			});
 			// The resumed claim first confirms what the failed attempt committed.
 			expect(acknowledged).toEqual(["cursor-3", "cursor-5"]);
@@ -2627,6 +2657,82 @@ describe("Conversation Worker dispatch", () => {
 			});
 		});
 	});
+
+	it.each([
+		["running", "processing", false, false],
+		["pending stop", "processing", true, false],
+		["unknown pending stop", "unknown", true, false],
+		["pending stop after lease loss", "unknown", true, true],
+	] as const)(
+		"keeps a re-claimed %s drain leased without renewing stopped business authority",
+		async (_name, executionStatus, stopPending, loseLease) => {
+			vi.useFakeTimers();
+			const store = new MemoryDispatchStore(
+				claim({
+					executionStatus,
+					stopPending,
+					hostSessionRef: "host-session-conversation-1",
+				}),
+			);
+			const renewLease = vi.spyOn(store, "renew");
+			const submit = vi.fn();
+			const acknowledge = vi.fn(async () => {});
+			const renewAuthorization = vi.fn(async () => {
+				if (stopPending)
+					throw new ConversationRuntimeHostError("AUTHORIZATION_REVOKED", true);
+			});
+			let reading = false;
+			const runtimeHost: ConversationRuntimeHostPortV1 = {
+				dispatch: submit,
+				recoverStatus: vi.fn(),
+				async recoverOriginalStatus() {
+					return {
+						schemaVersion: 2,
+						hostSessionRef: "host-session-conversation-1",
+						executionId: "execution-1",
+						outcome: "found",
+						status: "running",
+					};
+				},
+				renewAuthorization,
+				async *events(_request, signal) {
+					reading = true;
+					await new Promise((resolve) => setTimeout(resolve, 250));
+					signal?.throwIfAborted();
+					yield runtimeEvent(1);
+				},
+				acknowledge,
+			};
+			const events = new MemoryEvents(store);
+			const useCase = createConversationDispatchUseCaseV1(
+				{ store, authorization: authorization(), runtimeHost, events },
+				{ leaseDurationMs: 300, retryDelayMs: 0 },
+			);
+			try {
+				const draining = dispatch(useCase);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(reading).toBe(true);
+				if (loseLease) {
+					store.current = { ...store.current, leaseOwner: "another-worker" };
+					store.renewable = false;
+				}
+				await vi.advanceTimersByTimeAsync(250);
+				expect(await draining).toMatchObject({
+					outcome: loseLease ? "stale" : "accepted",
+				});
+				expect(submit).not.toHaveBeenCalled();
+				expect(renewAuthorization).toHaveBeenCalledTimes(stopPending ? 0 : 3);
+				expect(renewLease).toHaveBeenCalledTimes(loseLease ? 2 : 3);
+				expect(events.persisted).toHaveLength(loseLease ? 0 : 1);
+				expect(acknowledge).toHaveBeenCalledTimes(loseLease ? 0 : 1);
+				expect(store.current.executionStatus).toBe(
+					loseLease ? "processing" : "completed",
+				);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
 
 	describe("finished Turn drain after a refused renewal (#1554)", () => {
 		const hostSessionRef = "host-session-conversation-1";

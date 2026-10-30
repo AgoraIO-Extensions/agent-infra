@@ -354,6 +354,79 @@ const connection = new AgentSideConnection(
 				join(process.cwd(), "session.json"),
 				JSON.stringify({ ...previous, sessionId, count }),
 			);
+			if (process.env.ACP_TEST_MODE === "burst-cancel") {
+				const finished = new Promise((resolve) => {
+					finishPrompt = resolve;
+				});
+				let permission;
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "agent_message_chunk",
+						content: { type: "text", text: "burst-prefix|" },
+					},
+				});
+				while (
+					!(await readFile(join(process.cwd(), "burst-start")).catch(
+						() => null,
+					))
+				)
+					await new Promise((resolve) => setTimeout(resolve, 5));
+				const chunks = Number(process.env.ACP_TEST_BURST_CHUNKS ?? 1000);
+				for (let index = 0; index < chunks; index++) {
+					if (index === Math.floor(chunks / 2)) {
+						await connection.sessionUpdate({
+							sessionId,
+							update: {
+								sessionUpdate: "tool_call",
+								toolCallId: "burst-boundary",
+								title: "Read",
+								kind: "read",
+								status: "completed",
+							},
+						});
+						await connection.sessionUpdate({
+							sessionId,
+							update: {
+								sessionUpdate: "agent_message_chunk",
+								content: {
+									type: "text",
+									text: "metadata|",
+									annotations: { priority: 0.5 },
+								},
+							},
+						});
+						permission = connection.requestPermission({
+							sessionId,
+							toolCall: {
+								toolCallId: "burst-boundary",
+								title: "Read",
+								kind: "read",
+							},
+							options: [
+								{
+									optionId: "reject",
+									name: "Reject once",
+									kind: "reject_once",
+								},
+							],
+						});
+					}
+					await connection.sessionUpdate({
+						sessionId,
+						update: {
+							sessionUpdate: "agent_message_chunk",
+							content: { type: "text", text: "😀0123456789".repeat(4) },
+						},
+					});
+				}
+				await writeFile(join(process.cwd(), "burst-ready"), "ready");
+				await writeFile(
+					join(process.cwd(), "burst-permission.json"),
+					JSON.stringify(await permission),
+				);
+				return finished;
+			}
 			await connection.sessionUpdate({
 				sessionId,
 				update: {
@@ -465,6 +538,16 @@ const connection = new AgentSideConnection(
 		},
 		cancel: async () => {
 			if (process.env.ACP_TEST_MODE === "ignore-cancel") return;
+			if (process.env.ACP_TEST_MODE === "burst-cancel") {
+				await writeFile(join(process.cwd(), "cancel-seen.json"), "true");
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "agent_message_chunk",
+						content: { type: "text", text: "cancel-tail|" },
+					},
+				});
+			}
 			if (process.env.ACP_TEST_MODE === "delayed-cancel")
 				setTimeout(() => finishPrompt?.({ stopReason: "cancelled" }), 2200);
 			else finishPrompt?.({ stopReason: "cancelled" });

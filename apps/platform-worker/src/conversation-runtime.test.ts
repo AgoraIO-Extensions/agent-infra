@@ -1291,11 +1291,14 @@ describe("Trusted conversation Runtime adapter", () => {
 			const persisted: string[] = [];
 			const acknowledged: string[] = [];
 			const reachedControl = Promise.withResolvers<void>();
+			let resumedControlReached = false;
+			const releaseResumedControl = Promise.withResolvers<void>();
+			const leaseDurationMs = 3_000;
 			const store: ConversationDispatchStorePortV1 = {
 				async claim() {
 					owned = true;
 					status = "processing";
-					leaseExpiresAt = Date.now() + 30_000;
+					leaseExpiresAt = Date.now() + leaseDurationMs;
 					attempts += 1;
 					return {
 						outcome: "claimed",
@@ -1310,7 +1313,7 @@ describe("Trusted conversation Runtime adapter", () => {
 				},
 				renew: vi.fn(async () => {
 					if (!owned) return false;
-					leaseExpiresAt = Date.now() + 30_000;
+					leaseExpiresAt = Date.now() + leaseDurationMs;
 					return true;
 				}),
 				async prepareRuntimeDispatch() {
@@ -1390,6 +1393,23 @@ describe("Trusted conversation Runtime adapter", () => {
 				`id: ${event.cursor}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 			h.fetcher.mockImplementation(async (url, init) => {
 				const body = JSON.parse(init?.body as string);
+				if (
+					stop === "pending" &&
+					attempts === 2 &&
+					((pause === "stream" && String(url).endsWith("/events/stream")) ||
+						(pause === "ack" && String(url).endsWith("/events/ack")))
+				) {
+					resumedControlReached = true;
+					await new Promise<void>((resolve, reject) => {
+						init?.signal?.throwIfAborted();
+						void releaseResumedControl.promise.then(resolve);
+						init?.signal?.addEventListener(
+							"abort",
+							() => reject(new Error("resumed control drain aborted")),
+							{ once: true },
+						);
+					});
+				}
 				if (String(url).endsWith("/status"))
 					return new Response(
 						JSON.stringify({
@@ -1504,7 +1524,7 @@ describe("Trusted conversation Runtime adapter", () => {
 						},
 					},
 				},
-				{ leaseDurationMs: 30_000, retryDelayMs: 0 },
+				{ leaseDurationMs, retryDelayMs: 0 },
 			);
 			try {
 				const command = {
@@ -1515,7 +1535,7 @@ describe("Trusted conversation Runtime adapter", () => {
 				const dispatch = useCase.dispatch(command);
 				await reachedControl.promise;
 				if (pause === "lost lease") owned = false;
-				await vi.advanceTimersByTimeAsync(10_000);
+				await vi.advanceTimersByTimeAsync(1_000);
 				expect(await dispatch).toMatchObject(
 					pause === "lost lease"
 						? { outcome: "stale" }
@@ -1526,7 +1546,7 @@ describe("Trusted conversation Runtime adapter", () => {
 				expect(store.retry).toHaveBeenCalledWith(
 					expect.objectContaining({ transition: {} }),
 				);
-				expect(Date.now()).toBe(now + 10_000);
+				expect(Date.now()).toBe(now + 1_000);
 				// One renewal before the drain; the heartbeat then finds the stop.
 				if (pause === "lost lease") {
 					expect(renewAuthorization).toHaveBeenCalledTimes(1);
@@ -1539,11 +1559,31 @@ describe("Trusted conversation Runtime adapter", () => {
 				expect(h.state.runtimeCursor).toBe(
 					pause === "ack" ? "tool" : "started",
 				);
-				Object.assign(h.state, {
-					executionStatus: "cancelled",
-					stopPending: false,
-				});
-				expect(await useCase.dispatch(command)).toMatchObject({
+				if (stop === "cancelled") {
+					Object.assign(h.state, {
+						executionStatus: "cancelled",
+						stopPending: false,
+					});
+				}
+				const resumed = useCase.dispatch(command);
+				if (stop === "pending") {
+					let settled = false;
+					void resumed.then(() => {
+						settled = true;
+					});
+					await vi.advanceTimersByTimeAsync(2_000);
+					expect(resumedControlReached).toBe(true);
+					expect(settled).toBe(false);
+					expect(store.renew).toHaveBeenCalledTimes(3);
+					expect(renewAuthorization).toHaveBeenCalledTimes(2);
+					expect(leaseExpiresAt).toBe(Date.now() + leaseDurationMs);
+					expect(h.state).toMatchObject({
+						executionStatus: "processing",
+						stopPending: true,
+					});
+					releaseResumedControl.resolve();
+				}
+				expect(await resumed).toMatchObject({
 					outcome: "accepted",
 				});
 				expect(persisted).toEqual(["started", "tool", "cancelled"]);
@@ -1574,14 +1614,24 @@ describe("Trusted conversation Runtime adapter", () => {
 					calls.findIndex((call) => call.url.endsWith("/events/stream")),
 				);
 				for (const { body } of calls
-					.filter((call) => call.url.endsWith("/events/stream"))
+					.filter(
+						(call) =>
+							call.url.endsWith("/events/stream") ||
+							call.url.endsWith("/events/ack"),
+					)
 					.slice(1)) {
-					expect(verify(body.grant).claims.purpose).toBe("control");
+					expect(verify(body.grant).claims).toMatchObject({
+						purpose: "control",
+						executionId: h.claim.executionId,
+						turnId: h.claim.turnId,
+						sessionGeneration: h.claim.sessionGeneration,
+					});
 					expect(body.operation.executionDeliveryFence).toBe(
 						h.claim.executionDeliveryFence,
 					);
 				}
 			} finally {
+				releaseResumedControl.resolve();
 				h.runtime.close();
 				renewAuthorization.mockRestore();
 				vi.useRealTimers();

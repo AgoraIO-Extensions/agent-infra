@@ -119,7 +119,13 @@ export const GenericAcpRuntimeDriver = {
 						: ["max_tokens", "max_turn_requests", "refusal"].includes(reason)
 							? "failed"
 							: "unknown",
-			openSession: async ({ selection, admit, update, ...session }) => {
+			openSession: async ({
+				selection,
+				admit,
+				update,
+				updateBatch,
+				...session
+			}) => {
 				const modelOption = options.modelOptions.find(
 					(option) => option.modelOptionId === selection.modelOptionId,
 				);
@@ -128,6 +134,7 @@ export const GenericAcpRuntimeDriver = {
 				const callbacks = {
 					admit,
 					update,
+					updateBatch,
 					resultBlock: session.resultBlock,
 					resolveModelCredential: session.resolveModelCredential,
 					recordOperationFact: session.recordOperationFact,
@@ -303,6 +310,21 @@ export const GenericAcpRuntimeDriver = {
 							}
 						} else await callbacks.update();
 					},
+					updateBatch: async (notifications) => {
+						const events = notifications.flatMap(({ update: event }) =>
+							event.sessionUpdate === "agent_message_chunk" &&
+							event.content.type === "text" &&
+							event.content.text
+								? [
+										{
+											type: "text" as const,
+											payload: { delta: event.content.text },
+										},
+									]
+								: [],
+						);
+						if (events.length > 0) await callbacks.updateBatch?.(events);
+					},
 				});
 				nativeCancel = native.cancel;
 				nativeClose = native.close;
@@ -329,6 +351,7 @@ export const GenericAcpRuntimeDriver = {
 								native.startTurn?.(next);
 								callbacks.admit = next.admit;
 								callbacks.update = next.update;
+								callbacks.updateBatch = next.updateBatch;
 								callbacks.resultBlock = next.resultBlock;
 								callbacks.resolveModelCredential = next.resolveModelCredential;
 								callbacks.recordOperationFact = next.recordOperationFact;
