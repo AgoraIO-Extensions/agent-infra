@@ -84,6 +84,7 @@ export async function startMinioFileFixtureV1(
 			timeoutMs: 10000,
 		});
 		return {
+			containerName: name,
 			configuration: {
 				endpoint,
 				region: "us-east-1",
