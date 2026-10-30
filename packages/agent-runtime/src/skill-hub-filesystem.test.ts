@@ -4,6 +4,7 @@ import {
 	mkdir,
 	mkdtemp,
 	realpath,
+	rename,
 	rm,
 	symlink,
 	writeFile,
@@ -11,6 +12,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { claudeNativeSkillLaunchOptions } from "./claude-runtime-driver.js";
+import { piNativeSkillArguments } from "./pi-bootstrap.js";
 import {
 	createFilesystemRuntimeSkillDirectoryV1,
 	RuntimeSkillDirectoryErrorV1,
@@ -55,6 +58,20 @@ const projection = {
 	},
 };
 
+function expectNativeRejected(
+	directory: ReturnType<typeof createFilesystemRuntimeSkillDirectoryV1>,
+) {
+	expect(() => directory.nativeSkillPaths?.()).toThrow(
+		RuntimeSkillDirectoryErrorV1,
+	);
+	expect(() => claudeNativeSkillLaunchOptions(directory)).toThrow(
+		RuntimeSkillDirectoryErrorV1,
+	);
+	expect(() => piNativeSkillArguments(directory)).toThrow(
+		RuntimeSkillDirectoryErrorV1,
+	);
+}
+
 async function fixture() {
 	const root = await realpath(
 		await mkdtemp(join(tmpdir(), "runtime-skill-root-")),
@@ -98,6 +115,18 @@ it("reads byte-identical verified Skill files from the mounted generation", asyn
 			projections: [f.input],
 		});
 		expect(directory.findSkills()).toHaveLength(1);
+		expect(directory.nativeSkillPaths?.()).toEqual([
+			join(f.root, ".agents/skills/workspace-summary/SKILL.md"),
+		]);
+		expect(claudeNativeSkillLaunchOptions(directory)).toEqual({
+			additionalDirectories: [f.root],
+			skills: ["workspace-summary"],
+		});
+		expect(piNativeSkillArguments(directory)).toEqual([
+			"--no-skills",
+			"--skill",
+			join(f.root, ".agents/skills/workspace-summary/SKILL.md"),
+		]);
 		await expect(
 			directory.readSkill("workspace-summary", "SKILL.md"),
 		).resolves.toEqual(new TextEncoder().encode(content));
@@ -149,6 +178,7 @@ it("rejects a symlink at the manifest-listed SKILL.md", async () => {
 		await rm(skillFile);
 		await symlink(targetFile, skillFile);
 		await chmod(skillRoot, 0o555);
+		expectNativeRejected(directory);
 		await expect(
 			directory.readSkill("workspace-summary", "SKILL.md"),
 		).rejects.toThrow(RuntimeSkillDirectoryErrorV1);
@@ -179,6 +209,7 @@ it("rejects a hardlink at the manifest-listed SKILL.md", async () => {
 		await rm(skillFile);
 		await link(targetFile, skillFile);
 		await chmod(skillRoot, 0o555);
+		expectNativeRejected(directory);
 		await expect(
 			directory.readSkill("workspace-summary", "SKILL.md"),
 		).rejects.toThrow(RuntimeSkillDirectoryErrorV1);
@@ -200,10 +231,134 @@ it("rejects a writable manifest-listed SKILL.md", async () => {
 		const skillRoot = join(f.root, ".agents", "skills", "workspace-summary");
 		const skillFile = join(skillRoot, "SKILL.md");
 		await chmod(skillFile, 0o644);
+		expectNativeRejected(directory);
 		await expect(
 			directory.readSkill("workspace-summary", "SKILL.md"),
 		).rejects.toThrow(RuntimeSkillDirectoryErrorV1);
 	} finally {
+		await removeFixture(f.root);
+	}
+});
+
+it.each(["", ".agents", ".agents/skills", ".agents/skills/workspace-summary"])(
+	"rejects a writable directory in native Skill path: %s",
+	async (relativePath) => {
+		const f = await fixture();
+		try {
+			const directory = createFilesystemRuntimeSkillDirectoryV1({
+				root: f.root,
+				agentId: "agent-a",
+				agentVersion: "version-a",
+				generationId: "e".repeat(64),
+				projections: [f.input],
+			});
+			await chmod(join(f.root, relativePath), 0o755);
+			expectNativeRejected(directory);
+			await expect(
+				directory.readSkill("workspace-summary", "SKILL.md"),
+			).rejects.toThrow(RuntimeSkillDirectoryErrorV1);
+		} finally {
+			await removeFixture(f.root);
+		}
+	},
+);
+
+it("rejects a symlinked native Skill directory even when its target stays within the root", async () => {
+	const f = await fixture();
+	try {
+		const directory = createFilesystemRuntimeSkillDirectoryV1({
+			root: f.root,
+			agentId: "agent-a",
+			agentVersion: "version-a",
+			generationId: "e".repeat(64),
+			projections: [f.input],
+		});
+		const parent = join(f.root, ".agents/skills");
+		const skill = join(parent, "workspace-summary");
+		const target = join(parent, "linked-target");
+		await chmod(parent, 0o755);
+		await rename(skill, target);
+		await symlink(target, skill);
+		await chmod(parent, 0o555);
+		expectNativeRejected(directory);
+		await expect(
+			directory.readSkill("workspace-summary", "SKILL.md"),
+		).rejects.toThrow(RuntimeSkillDirectoryErrorV1);
+	} finally {
+		await removeFixture(f.root);
+	}
+});
+
+it("applies the configured resource limit to native Skill entry reads", async () => {
+	const f = await fixture();
+	try {
+		const directory = createFilesystemRuntimeSkillDirectoryV1({
+			root: f.root,
+			agentId: "agent-a",
+			agentVersion: "version-a",
+			generationId: "e".repeat(64),
+			projections: [f.input],
+			maximumResourceBytes: 4,
+		});
+		expectNativeRejected(directory);
+		await expect(
+			directory.readSkill("workspace-summary", "SKILL.md"),
+		).rejects.toThrow(RuntimeSkillDirectoryErrorV1);
+	} finally {
+		await removeFixture(f.root);
+	}
+});
+
+it.each(["missing", "digest-drift", "size-drift"])(
+	"keeps a changed native entry unavailable: %s",
+	async (fault) => {
+		const f = await fixture();
+		try {
+			const directory = createFilesystemRuntimeSkillDirectoryV1({
+				root: f.root,
+				agentId: "agent-a",
+				agentVersion: "version-a",
+				generationId: "e".repeat(64),
+				projections: [f.input],
+			});
+			const parent = join(f.root, ".agents/skills/workspace-summary");
+			const file = join(parent, "SKILL.md");
+			if (fault === "missing") {
+				await chmod(parent, 0o755);
+				await rm(file);
+				await chmod(parent, 0o555);
+			} else {
+				await chmod(file, 0o644);
+				await writeFile(
+					file,
+					fault === "digest-drift"
+						? "x".repeat(Buffer.byteLength(content))
+						: `${content}extra`,
+				);
+				await chmod(file, 0o444);
+			}
+			expectNativeRejected(directory);
+		} finally {
+			await removeFixture(f.root);
+		}
+	},
+);
+
+it("rejects a symlinked native root without following its alias", async () => {
+	const f = await fixture();
+	const alias = `${f.root}-alias`;
+	try {
+		await symlink(f.root, alias);
+		const directory = createFilesystemRuntimeSkillDirectoryV1({
+			root: alias,
+			agentId: "agent-a",
+			agentVersion: "version-a",
+			generationId: "e".repeat(64),
+			projections: [f.input],
+		});
+		expectNativeRejected(directory);
+	} finally {
+		await rm(alias, { force: true });
 		await removeFixture(f.root);
 	}
 });
