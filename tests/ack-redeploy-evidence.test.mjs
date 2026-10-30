@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { stringify } from "yaml";
 import {
+	normalizeRuntimeImageManifest,
 	projectSnapshot,
 	validateRenderedImages,
 } from "../deploy/ack/redeploy-evidence.ts";
@@ -80,6 +81,36 @@ test("structural image binding accepts exact components and rejects swapped imag
 			valid.platform,
 			valid.runtime,
 		),
+	);
+});
+
+test("accepts the official RuntimeHost publication receipt shape and rejects invalid nested bindings", () => {
+	const f = fixture();
+	const published = {
+		schemaVersion: 1,
+		commitSha: "a".repeat(40),
+		platform: "linux/amd64",
+		images: { runtimeHost: f.runtime },
+	};
+	assert.deepEqual(normalizeRuntimeImageManifest(published), {
+		schemaVersion: 1,
+		commitSha: "a".repeat(40),
+		platform: "linux/amd64",
+		...f.runtime,
+	});
+	assert.throws(() =>
+		normalizeRuntimeImageManifest({ ...published, platform: "linux/arm64" }),
+	);
+	assert.throws(() =>
+		normalizeRuntimeImageManifest({
+			...published,
+			images: {
+				runtimeHost: { repository: f.runtime.repository, digest: "latest" },
+			},
+		}),
+	);
+	assert.throws(() =>
+		normalizeRuntimeImageManifest({ ...published, images: {} }),
 	);
 });
 
@@ -211,10 +242,10 @@ test("plan does not report success on cluster failure or retain raw rendered val
 	await writeFile(
 		runtime,
 		JSON.stringify({
-			...f.runtime,
 			schemaVersion: 1,
 			commitSha: source,
 			platform: "linux/amd64",
+			images: { runtimeHost: f.runtime },
 		}),
 	);
 	await writeFile(values, "{}");

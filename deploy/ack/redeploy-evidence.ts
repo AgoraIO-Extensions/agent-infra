@@ -15,11 +15,24 @@ const components = {
 	enterpriseDirectorySync: "agent-infra-directory",
 };
 
+export function normalizeRuntimeImageManifest(value: RecordValue): RecordValue {
+	const nested = value.images?.runtimeHost;
+	if (nested !== undefined) {
+		assert(value.schemaVersion === 1 && value.platform === "linux/amd64");
+		assert(typeof value.commitSha === "string" && /^[a-f0-9]{40}$/u.test(value.commitSha));
+		assert(nested && typeof nested.repository === "string" && /^sha256:[0-9a-f]{64}$/u.test(nested.digest ?? ""));
+		return { schemaVersion: 1, commitSha: value.commitSha, platform: value.platform, repository: nested.repository, digest: nested.digest };
+	}
+	assert(typeof value.repository === "string" && /^sha256:[0-9a-f]{64}$/u.test(value.digest ?? ""));
+	return value;
+}
+
 export function validateRenderedImages(
 	text: string,
 	platform: RecordValue,
 	runtime: RecordValue,
 ) {
+	runtime = normalizeRuntimeImageManifest(runtime);
 	const documents = parseAllDocuments(text).map((document) => {
 		assert.equal(document.errors.length, 0);
 		return document.toJSON() as RecordValue;
@@ -103,7 +116,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		if (mode === "render") {
 			const [rendered, platform, runtime] = args;
 			validateRenderedImages(readFileSync(rendered, "utf8"),
-				JSON.parse(readFileSync(platform, "utf8")), JSON.parse(readFileSync(runtime, "utf8")));
+				JSON.parse(readFileSync(platform, "utf8")), normalizeRuntimeImageManifest(JSON.parse(readFileSync(runtime, "utf8"))));
 		} else if (mode === "snapshot") {
 			const [namespace, release, source] = args;
 			const run = (command: string, argv: string[]) => JSON.parse(execFileSync(command, argv, {

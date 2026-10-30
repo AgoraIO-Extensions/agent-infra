@@ -36,6 +36,7 @@ Required for plan/deploy/validate:
   ACK_SOURCE_SHA   exact 40-hex commit used to build the immutable images
   ACK_IMAGE_MANIFEST private platform-amd64 image manifest JSON for that commit
   ACK_RUNTIME_IMAGE_MANIFEST private amd64 RuntimeHost manifest JSON for that commit
+                           (also accepts published runtime-host.json images.runtimeHost shape)
 
 Optional validation inputs:
   ACK_TEMPLATE_CONFIG_DIR  directory containing codex.json, claude.json,
@@ -100,12 +101,14 @@ NODE
 const fs = require("node:fs");
 const [file, source] = process.argv.slice(2);
 const value = JSON.parse(fs.readFileSync(file, "utf8"));
+const nested = value.images?.runtimeHost;
+const runtime = nested ? { ...nested, commitSha: value.commitSha, platform: value.platform } : value;
 if (
-	value.schemaVersion !== 1 ||
-	value.commitSha !== source ||
-	value.platform !== "linux/amd64" ||
-	typeof value.repository !== "string" ||
-	!/^sha256:[0-9a-f]{64}$/u.test(value.digest ?? "")
+	runtime.schemaVersion !== undefined && runtime.schemaVersion !== 1 ||
+	runtime.commitSha !== source ||
+	runtime.platform !== "linux/amd64" ||
+	typeof runtime.repository !== "string" ||
+	!/^sha256:[0-9a-f]{64}$/u.test(runtime.digest ?? "")
 )
 	process.exit(1);
 NODE
