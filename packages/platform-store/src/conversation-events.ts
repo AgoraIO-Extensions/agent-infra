@@ -20,6 +20,7 @@ import {
 	parseTaskAuthorizationBoundaryV1,
 	requireConversationOperationSuccessorV2,
 } from "@agent-infra/platform-core";
+import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import postgres from "./observed-postgres.js";
 import { readSessionSandboxBinding } from "./session-sandbox.js";
 
@@ -49,6 +50,11 @@ interface ExecutionRow {
 	readonly channel_id: string;
 	readonly model_option_id: string | null;
 	readonly reasoning_level: string | null;
+	readonly runtime_submit_protocol: string | null;
+	/** Runtime configuration pinned by the original Session Sandbox. */
+	readonly runtime_configuration: unknown;
+	readonly runtime_configuration_revision: string | null;
+	readonly runtime_image_digest: string | null;
 }
 
 interface EventRow {
@@ -604,12 +610,18 @@ async function readExecution(
 	const rows = await transaction<ExecutionRow[]>`
 		select e.execution_id, e.conversation_id, e.session_generation, e.delivery_fence,
 			e.last_event_sequence, e.agent_id, e.actor_id, e.channel_id,
-			e.model_option_id, e.reasoning_level
+			e.model_option_id, e.reasoning_level, e.runtime_submit_protocol,
+			configuration.configuration as runtime_configuration,
+			a.resource_policy->>'configurationRevision' as runtime_configuration_revision,
+			a.resource_policy->>'imageDigest' as runtime_image_digest
 		from platform.conversation_executions e
 		join platform.session_sandbox_allocations a
 			on a.conversation_id = e.conversation_id and a.sandbox_id = e.sandbox_id
 			and a.agent_id = e.agent_id and a.actor_id = e.actor_id
 			and a.principal_type = e.principal_type and a.channel_id = e.channel_id
+		left join platform.agent_configuration_revisions configuration
+			on configuration.agent_id = e.agent_id
+			and configuration.revision::text = a.resource_policy->>'configurationRevision'
 		where e.execution_id = ${executionId} and e.conversation_id = ${conversationId}
 		for update of e
 	`;
@@ -754,12 +766,35 @@ async function insertOperationAudit(
 		record.agent_id !== boundary.agentId
 	)
 		unavailable();
-	if (
-		fact.kind === "model" &&
-		(fact.model.modelOptionId !== execution.model_option_id ||
-			fact.model.reasoningLevel !== (execution.reasoning_level ?? undefined))
-	)
-		unavailable();
+	if (fact.kind === "model") {
+		const hasStoredSelection =
+			execution.model_option_id !== null || execution.reasoning_level !== null;
+		if (
+			hasStoredSelection &&
+			(fact.model.modelOptionId !== execution.model_option_id ||
+				fact.model.reasoningLevel !== (execution.reasoning_level ?? undefined))
+		)
+			unavailable();
+		if (!hasStoredSelection) {
+			// Custom defaults belong to the admitted Runtime. Resolve its pinned
+			// configuration, never the Agent's current revision or the event's claim.
+			const configuration = decodeVersionedAgentConfigurationRecord(
+				execution.runtime_configuration,
+			);
+			if (
+				execution.runtime_submit_protocol !== "v2" ||
+				configuration.schemaVersion !== 2 ||
+				configuration.agentId !== execution.agent_id ||
+				String(configuration.revision) !==
+					execution.runtime_configuration_revision ||
+				configuration.source.kind !== "custom" ||
+				configuration.source.interactionMode !== "platform-adapter" ||
+				configuration.source.imageDigest !== execution.runtime_image_digest ||
+				configuration.modelConfiguration !== null
+			)
+				unavailable();
+		}
+	}
 	// This outcome describes reliable observation, never model/tool success.
 	// The actual operation result remains the explicit fact.phase, including unknown.
 	await transaction`
