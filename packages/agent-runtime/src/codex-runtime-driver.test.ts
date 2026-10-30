@@ -4085,99 +4085,171 @@ describe("Codex Runtime Driver", () => {
 		).resolves.not.toContainEqual(expect.objectContaining({ type: "file" }));
 	});
 
-	it("publishes sandbox: references from the final agentMessage before turn/completed (#3226)", async () => {
-		const f = await codexReferenceFixture();
-		await f.bridge.emitAgentMessageCompleted(
-			[
-				"Generated with the shell: ![chart](sandbox:out/chart.png)",
-				"and [report](sandbox:/out/report.pdf).",
-				"",
-				"    [indented](sandbox:out/ignored.png)",
-				"",
-				"Code: [driver.ts](src/driver.ts)",
-			].join("\n"),
-		);
-		await f.bridge.emitTurnCompleted("completed");
-		await vi.waitFor(
-			async () =>
+	it.each([false, true])(
+		"publishes sandbox: references from the final agentMessage before turn/completed (#3226, persist held before replay: %s)",
+		async (holdTerminalPersist) => {
+			const f = await codexReferenceFixture();
+			const releaseTerminalPersist = Promise.withResolvers<void>();
+			let terminalPersistHeld = false;
+			let firstReplay:
+				| Awaited<ReturnType<CodexRuntimeDriver["replayEvents"]>>
+				| undefined;
+			if (holdTerminalPersist) {
+				const originalPersist = (
+					DurableJsonFile.prototype as unknown as {
+						persist: (serialized: string) => Promise<void>;
+					}
+				).persist;
+				vi.spyOn(
+					DurableJsonFile.prototype as unknown as {
+						persist: (serialized: string) => Promise<void>;
+					},
+					"persist",
+				).mockImplementation(async function (
+					this: DurableJsonFile<unknown>,
+					serialized,
+				) {
+					// Disk can expose completed before the committed replay snapshot advances.
+					await originalPersist.call(this, serialized);
+					const state = JSON.parse(serialized) as StoredCodexDriverState;
+					if (
+						!terminalPersistHeld &&
+						state.sessions?.[f.accepted.nativeSessionRef]?.executions?.[
+							f.command.executionId
+						]?.status === "completed"
+					) {
+						terminalPersistHeld = true;
+						await releaseTerminalPersist.promise;
+					}
+				});
+				const replay = f.driver.replayEvents.bind(f.driver);
+				vi.spyOn(f.driver, "replayEvents").mockImplementation(
+					async (...args) => {
+						try {
+							const events = await replay(...args);
+							firstReplay ??= events;
+							return events;
+						} finally {
+							releaseTerminalPersist.resolve();
+						}
+					},
+				);
+			}
+			try {
+				await f.bridge.emitAgentMessageCompleted(
+					[
+						"Generated with the shell: ![chart](sandbox:out/chart.png)",
+						"and [report](sandbox:/out/report.pdf).",
+						"",
+						"    [indented](sandbox:out/ignored.png)",
+						"",
+						"Code: [driver.ts](src/driver.ts)",
+					].join("\n"),
+				);
+				await f.bridge.emitTurnCompleted("completed");
+				if (holdTerminalPersist)
+					await vi.waitFor(() => expect(terminalPersistHeld).toBe(true), {
+						timeout: 10_000,
+					});
+				const events = await vi.waitFor(
+					async () => {
+						const replayed = await f.driver.replayEvents(
+							f.accepted.nativeSessionRef,
+							f.command.executionId,
+						);
+						expect(replayed.at(-1)).toMatchObject({
+							type: "completed",
+							payload: { status: "completed" },
+						});
+						return replayed;
+					},
+					{ timeout: 10_000 },
+				);
 				expect(
 					await persistedExecutionStatus(
 						f.path,
 						f.accepted.nativeSessionRef,
 						f.command.executionId,
 					),
-				).toBe("completed"),
-			{ timeout: 10_000 },
-		);
-		expect(
-			f.writeResult.mock.calls.map((call) => [
-				call[0].mediaType,
-				call[0].sha256,
-				call[2],
-			]),
-		).toEqual([
-			[
-				"image/png",
-				createHash("sha256").update(codexPng).digest("hex"),
-				{ workspaceReference: "out/chart.png" },
-			],
-			[
-				"application/pdf",
-				createHash("sha256").update(codexPdf).digest("hex"),
-				{ workspaceReference: "out/report.pdf" },
-			],
-		]);
-		const events = await f.driver.replayEvents(
-			f.accepted.nativeSessionRef,
-			f.command.executionId,
-		);
-		expect(
-			events
-				.filter((event) => event.type === "file")
-				.map((event) => [event.schemaVersion, event.payload]),
-		).toEqual([
-			[
-				2,
-				{
-					fileId: "result-file-codex-1",
-					name: "chart.png",
-					mimeType: "image/png",
-					sizeBytes: codexPng.byteLength,
-					workspaceReference: "out/chart.png",
-				},
-			],
-			[
-				2,
-				{
-					fileId: "result-file-codex-2",
-					name: "report.pdf",
-					mimeType: "application/pdf",
-					sizeBytes: codexPdf.byteLength,
-					workspaceReference: "out/report.pdf",
-				},
-			],
-		]);
-		expect(events.at(-1)).toMatchObject({
-			type: "completed",
-			payload: { status: "completed" },
-		});
-		const publication = events.flatMap((event) =>
-			event.type === "operation" &&
-			event.payload.kind === "tool" &&
-			event.payload.toolId === "workspace.publish_result_file"
-				? [event.payload]
-				: [],
-		);
-		expect(publication.map((fact) => fact.phase)).toEqual([
-			"intent",
-			"started",
-			"completed",
-			"intent",
-			"started",
-			"completed",
-		]);
-		expect(JSON.stringify(publication)).not.toMatch(/chart|report|out\//);
-	});
+				).toBe("completed");
+				if (holdTerminalPersist) {
+					expect(firstReplay).not.toContainEqual(
+						expect.objectContaining({ type: "completed" }),
+					);
+					expect(firstReplay?.at(-1)).toMatchObject({
+						type: "operation",
+						payload: {
+							kind: "tool",
+							toolId: "workspace.publish_result_file",
+							phase: "completed",
+						},
+					});
+				}
+				expect(
+					f.writeResult.mock.calls.map((call) => [
+						call[0].mediaType,
+						call[0].sha256,
+						call[2],
+					]),
+				).toEqual([
+					[
+						"image/png",
+						createHash("sha256").update(codexPng).digest("hex"),
+						{ workspaceReference: "out/chart.png" },
+					],
+					[
+						"application/pdf",
+						createHash("sha256").update(codexPdf).digest("hex"),
+						{ workspaceReference: "out/report.pdf" },
+					],
+				]);
+				expect(
+					events
+						.filter((event) => event.type === "file")
+						.map((event) => [event.schemaVersion, event.payload]),
+				).toEqual([
+					[
+						2,
+						{
+							fileId: "result-file-codex-1",
+							name: "chart.png",
+							mimeType: "image/png",
+							sizeBytes: codexPng.byteLength,
+							workspaceReference: "out/chart.png",
+						},
+					],
+					[
+						2,
+						{
+							fileId: "result-file-codex-2",
+							name: "report.pdf",
+							mimeType: "application/pdf",
+							sizeBytes: codexPdf.byteLength,
+							workspaceReference: "out/report.pdf",
+						},
+					],
+				]);
+				const publication = events.flatMap((event) =>
+					event.type === "operation" &&
+					event.payload.kind === "tool" &&
+					event.payload.toolId === "workspace.publish_result_file"
+						? [event.payload]
+						: [],
+				);
+				expect(publication.map((fact) => fact.phase)).toEqual([
+					"intent",
+					"started",
+					"completed",
+					"intent",
+					"started",
+					"completed",
+				]);
+				expect(JSON.stringify(publication)).not.toMatch(/chart|report|out\//);
+			} finally {
+				releaseTerminalPersist.resolve();
+			}
+		},
+	);
 
 	it("fails references outside the workspace and keeps the Turn completed (#3226)", async () => {
 		const f = await codexReferenceFixture();
