@@ -764,6 +764,7 @@ test("publication push failures emit redacted categories and stop before remote 
 				category,
 				image: "runtimeHost",
 				platform: "linux/amd64",
+				source: commitSha,
 				commitSha,
 				...(validContext
 					? { job: "infrastructure", runId: "123456789", runAttempt: "2" }
