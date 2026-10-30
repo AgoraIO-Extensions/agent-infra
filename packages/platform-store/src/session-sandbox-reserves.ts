@@ -670,7 +670,10 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			const configuration = await this.#readConfiguration(tx);
 			const currentDigests = new Map<string, string | null>();
 			for (const agentId of [
-				...new Set(rows.map((row) => row.agentId)),
+				...new Set([
+					...rows.map((row) => row.agentId),
+					...configuration.profiles.map((profile) => profile.agentId),
+				]),
 			].sort()) {
 				const current = await readCurrentSessionSandboxReserveProfileV1(
 					tx,
@@ -679,15 +682,34 @@ export class PostgresSessionSandboxReserveStoreV1 {
 				);
 				currentDigests.set(agentId, current?.profile.digest ?? null);
 			}
+			const profiles = rows.map((row) => ({
+				...row,
+				currentProfileDigest: currentDigests.get(row.agentId) ?? null,
+				newSessionCount: Number(row.newSessionCount),
+				claimedCount: Number(row.claimedCount),
+			}));
+			for (const [agentId, currentProfileDigest] of currentDigests) {
+				if (
+					currentProfileDigest &&
+					!profiles.some(
+						(profile) =>
+							profile.agentId === agentId &&
+							profile.profileDigest === currentProfileDigest,
+					)
+				) {
+					profiles.push({
+						agentId,
+						profileDigest: currentProfileDigest,
+						currentProfileDigest,
+						newSessionCount: 0,
+						claimedCount: 0,
+					});
+				}
+			}
 			return {
 				observedAt,
 				windowMs: input.windowMs,
-				profiles: rows.map((row) => ({
-					...row,
-					currentProfileDigest: currentDigests.get(row.agentId) ?? null,
-					newSessionCount: Number(row.newSessionCount),
-					claimedCount: Number(row.claimedCount),
-				})),
+				profiles,
 			};
 		});
 	}
