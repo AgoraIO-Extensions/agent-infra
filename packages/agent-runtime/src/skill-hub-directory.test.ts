@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SkillWorkloadProjectionV1Schema } from "@agent-infra/contracts";
@@ -199,7 +199,15 @@ it("rejects an oversized resource returned by the adapter", async () => {
 });
 
 it("derives fixed native Skill entry paths from the verified filesystem root", async () => {
-	const root = await mkdtemp(join(tmpdir(), "native-skill-root-"));
+	const root = realpathSync(
+		await mkdtemp(join(tmpdir(), "native-skill-root-")),
+	);
+	const directories = [
+		root,
+		join(root, ".agents"),
+		join(root, ".agents/skills"),
+		join(root, ".agents/skills/workspace-summary"),
+	];
 	const bytes = new TextEncoder().encode("summary");
 	try {
 		await mkdir(join(root, ".agents/skills/workspace-summary"), {
@@ -208,7 +216,9 @@ it("derives fixed native Skill entry paths from the verified filesystem root", a
 		await writeFile(
 			join(root, ".agents/skills/workspace-summary/SKILL.md"),
 			bytes,
+			{ mode: 0o444 },
 		);
+		for (const path of directories) await chmod(path, 0o555);
 		const nativeProjection = SkillWorkloadProjectionV1Schema.parse({
 			...projection,
 			manifest: {
@@ -234,6 +244,7 @@ it("derives fixed native Skill entry paths from the verified filesystem root", a
 			join(realpathSync(root), ".agents/skills/workspace-summary/SKILL.md"),
 		]);
 	} finally {
+		for (const path of directories) await chmod(path, 0o755);
 		await rm(root, { recursive: true });
 	}
 });

@@ -114,6 +114,9 @@ COPY --from=builder --chown=node:node /app/apps/agent-runtime-host/start-runtime
 RUN chmod 0755 ./start-runtime-host.sh \
     && chmod 0555 /opt/agent-infra/browser
 RUN mkdir -p /var/lib/agent-runtime && chown node:node /var/lib/agent-runtime
+# Kubernetes mounts only .agents; seal its image-owned parent as well.
+RUN mkdir -p /opt/agent-infra-skill-hub/.agents \
+    && chmod 0555 /opt/agent-infra-skill-hub /opt/agent-infra-skill-hub/.agents
 RUN mkdir -p /etc/agent-infra/legacy-migration \
     && chown root:root /etc/agent-infra /etc/agent-infra/legacy-migration \
     && chmod 0555 /etc/agent-infra /etc/agent-infra/legacy-migration

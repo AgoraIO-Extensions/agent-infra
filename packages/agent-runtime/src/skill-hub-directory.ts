@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { constants, lstatSync, readFileSync, realpathSync } from "node:fs";
+import {
+	closeSync,
+	constants,
+	fstatSync,
+	lstatSync,
+	openSync,
+	readSync,
+	realpathSync,
+} from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import {
@@ -447,40 +455,111 @@ export function createFilesystemRuntimeSkillDirectoryV1(input: {
 		nativeRoot,
 		findSkills: directory.findSkills,
 		nativeSkillPaths(): readonly string[] {
-			const resolvedRoot = realpathSync(nativeRoot);
-			return directory.findSkills().map((entry) => {
-				const path = resolve(nativeRoot, entry.targetPath, "SKILL.md");
-				const relativePath = relative(nativeRoot, path);
-				if (
-					relativePath === "" ||
-					relativePath.startsWith("..") ||
-					isAbsolute(relativePath)
-				)
-					unavailable();
-				const projection = byName.get(entry.name);
-				const file = projection?.manifest.files.find(
-					(value) => value.path === projection.manifest.entryPath,
-				);
-				if (projection?.manifest.entryPath !== "SKILL.md" || !file)
-					unavailable();
-				const stat = lstatSync(path);
-				if (!stat.isFile() || stat.isSymbolicLink()) unavailable();
-				const actualPath = realpathSync(path);
-				const actualRelativePath = relative(resolvedRoot, actualPath);
-				if (
-					actualRelativePath === "" ||
-					actualRelativePath.startsWith("..") ||
-					isAbsolute(actualRelativePath)
-				)
-					unavailable();
-				const bytes = readFileSync(path);
-				if (
-					bytes.byteLength !== file.sizeBytes ||
-					createHash("sha256").update(bytes).digest("hex") !== file.sha256
-				)
-					unavailable();
-				return actualPath;
-			});
+			try {
+				const resolvedRoot = realpathSync(nativeRoot);
+				if (resolvedRoot !== nativeRoot) unavailable();
+				return directory.findSkills().map((entry) => {
+					const path = resolve(nativeRoot, entry.targetPath, "SKILL.md");
+					const relativePath = relative(nativeRoot, path);
+					if (
+						relativePath === "" ||
+						relativePath.startsWith("..") ||
+						isAbsolute(relativePath)
+					)
+						unavailable();
+					const projection = byName.get(entry.name);
+					const file = projection?.manifest.files.find(
+						(value) => value.path === projection.manifest.entryPath,
+					);
+					if (projection?.manifest.entryPath !== "SKILL.md" || !file)
+						unavailable();
+					const stat = lstatSync(path);
+					if (
+						!stat.isFile() ||
+						stat.isSymbolicLink() ||
+						stat.nlink !== 1 ||
+						stat.mode & 0o222 ||
+						stat.size !== file.sizeBytes ||
+						file.sizeBytes >
+							(input.maximumResourceBytes ?? defaultMaxResourceBytes)
+					)
+						unavailable();
+					for (
+						let parent = resolve(path, "..");
+						;
+						parent = resolve(parent, "..")
+					) {
+						const info = lstatSync(parent);
+						if (
+							!info.isDirectory() ||
+							info.isSymbolicLink() ||
+							info.mode & 0o222
+						)
+							unavailable();
+						if (parent === nativeRoot) break;
+					}
+					const actualPath = realpathSync(path);
+					const actualRelativePath = relative(resolvedRoot, actualPath);
+					if (
+						actualRelativePath === "" ||
+						actualRelativePath.startsWith("..") ||
+						isAbsolute(actualRelativePath)
+					)
+						unavailable();
+					const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+					try {
+						const opened = fstatSync(fd);
+						if (
+							!opened.isFile() ||
+							opened.ino !== stat.ino ||
+							opened.dev !== stat.dev ||
+							opened.nlink !== 1 ||
+							opened.mode & 0o222 ||
+							opened.size !== file.sizeBytes
+						)
+							unavailable();
+						const bytes = Buffer.alloc(file.sizeBytes + 1);
+						let length = 0;
+						while (length < bytes.length) {
+							const count = readSync(
+								fd,
+								bytes,
+								length,
+								bytes.length - length,
+								length,
+							);
+							if (count === 0) break;
+							length += count;
+						}
+						const after = fstatSync(fd);
+						const current = lstatSync(path);
+						if (
+							length !== file.sizeBytes ||
+							!current.isFile() ||
+							current.isSymbolicLink() ||
+							current.ino !== opened.ino ||
+							current.dev !== opened.dev ||
+							current.nlink !== 1 ||
+							current.mode & 0o222 ||
+							current.size !== opened.size ||
+							after.nlink !== 1 ||
+							after.mode & 0o222 ||
+							after.size !== opened.size ||
+							after.mtimeMs !== opened.mtimeMs ||
+							after.ctimeMs !== opened.ctimeMs ||
+							createHash("sha256")
+								.update(bytes.subarray(0, length))
+								.digest("hex") !== file.sha256
+						)
+							unavailable();
+						return actualPath;
+					} finally {
+						closeSync(fd);
+					}
+				});
+			} catch {
+				unavailable();
+			}
 		},
 		async readSkill(name: string, relativePath: string): Promise<Uint8Array> {
 			const projection = byName.get(name);
