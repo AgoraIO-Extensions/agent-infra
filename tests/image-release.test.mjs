@@ -100,7 +100,13 @@ if (args[0] === "image" && args[1] === "inspect") {
   process.exit(0);
 }
 if (args[0] === "load" && args[1] === "--input") process.exit(0);
-if (args[0] === "push") process.exit(0);
+if (args[0] === "push") {
+  if (process.env.FAKE_PUSH_FAILURE_IMAGE && args[1]?.includes(process.env.FAKE_PUSH_FAILURE_IMAGE)) {
+    console.error(process.env.FAKE_PUSH_SENTINEL ?? "synthetic-push-error");
+    process.exit(1);
+  }
+  process.exit(0);
+}
 if (args[0] === "manifest" && args[1] === "inspect") {
   const digest = process.env.FAKE_REMOTE_DIGEST ?? "sha256:" + createHash("sha256").update(args.at(-1) + ":stable").digest("hex");
   console.log(JSON.stringify({ Descriptor: { digest } }));
@@ -176,6 +182,16 @@ test("image build validates reproducibility and read-only non-root execution", a
 		/LABEL org\.opencontainers\.image\.source="https:\/\/github\.com\/AgoraIO-Extensions\/agent-infra"/,
 		"Directory image must identify its source repository for GHCR package linking",
 	);
+	for (const dockerfile of [
+		"apps/agent-runtime-host/Dockerfile",
+		"deploy/images/custom-agent-base/Dockerfile",
+	]) {
+		assert.match(
+			await readFile(join(repositoryRoot, dockerfile), "utf8"),
+			/LABEL org\.opencontainers\.image\.source="https:\/\/github\.com\/AgoraIO-Extensions\/agent-infra"/,
+			`${dockerfile} must identify its source repository for GHCR package linking`,
+		);
+	}
 	const directory = await mkdtemp(join(tmpdir(), "agent-infra-images-"));
 	const ignoredContextPath = resolve(
 		repositoryRoot,
@@ -698,6 +714,28 @@ test("standard template publication uses stable architecture tags and preserves 
 		assert.ok(
 			!calls.some((args) => args[0] === "push" && args[1].includes(commitSha)),
 		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("publication push failures emit a redacted category and stop before remote readback", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "agent-infra-push-failure-"));
+	try {
+		await fakes(directory);
+		await writeFile(join(directory, "docker-state.json"), "{}");
+		const manifestPath = join(directory, "images.json");
+		const result = build(manifestPath, directory, {
+			FAKE_PUSH_FAILURE_IMAGE: "agent-runtime-host",
+			FAKE_PUSH_SENTINEL: "credential-sentinel-must-not-appear",
+		}, "registry.example/agent-infra", ["--images=runtimeHost"]);
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /"phase":"publish\.failure"/);
+		assert.match(result.stderr, /"category":"unknown"/);
+		assert.match(result.stderr, new RegExp(`"image":"runtimeHost"`));
+		assert.doesNotMatch(result.stderr, /credential-sentinel-must-not-appear/);
+		assert.doesNotMatch(result.stderr, /manifest inspect/);
+		await assert.rejects(access(manifestPath));
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

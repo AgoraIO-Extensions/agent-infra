@@ -438,7 +438,14 @@ async function buildImage({
 	};
 }
 
-function publishImage({ image, builtImage, registryInsecure, git, commitSha }) {
+function publishFailureCategory(stderr) {
+	const text = String(stderr ?? "").toLowerCase();
+	if (/unauthori[sz]ed|denied|forbidden|permission|access denied/.test(text)) return "authorization";
+	if (/timeout|timed out|connection|network|dns|eof|tls|reset|unavailable/.test(text)) return "network";
+	return "unknown";
+}
+
+function publishImage({ image, builtImage, registryInsecure, git, commitSha, platform }) {
 	console.info(JSON.stringify({ phase: "publish.start", image: image.key, reference: builtImage.reference }));
 	const docker = process.env.DOCKER_BIN ?? "docker";
 	assertCheckout(git, commitSha);
@@ -452,6 +459,13 @@ function publishImage({ image, builtImage, registryInsecure, git, commitSha }) {
 		cwd: repositoryRoot,
 		name: `${image.key} image publication`,
 		timeoutMs: timeoutMs.publish,
+		onFailure: (stderr) => console.error(JSON.stringify({
+			phase: "publish.failure",
+			category: publishFailureCategory(stderr),
+			image: image.key,
+			platform,
+			commitSha,
+		})),
 	});
 	console.info(JSON.stringify({ phase: "publish.push.complete", image: image.key, reference: builtImage.reference }));
 	assertCheckout(git, commitSha);
@@ -605,6 +619,7 @@ async function main() {
 				registryInsecure,
 				git,
 				commitSha,
+				platform,
 			});
 		}
 		assertCheckout(git, commitSha);

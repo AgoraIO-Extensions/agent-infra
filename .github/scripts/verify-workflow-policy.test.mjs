@@ -246,3 +246,16 @@ test("main image publication rejects business images, ambiguous tags and invalid
     assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("standard templates")));
   }
 });
+
+test("requires an isolated release smoke input and index receipt artifact", async () => {
+  const workflows = await actualWorkflows();
+  const publish = workflows["publish-images.yml"];
+  publish.on.workflow_dispatch.inputs.smoke = { type: "string", default: false };
+  assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("standard templates")));
+  const restored = await actualWorkflows();
+  restored["publish-images.yml"].jobs["infrastructure-index"].steps =
+    restored["publish-images.yml"].jobs["infrastructure-index"].steps.filter(
+      (step) => !step.run?.includes("published-indexes.jsonl"),
+    );
+  assert.ok(validateWorkflowDocuments(restored).some((error) => error.includes("standard templates")));
+});

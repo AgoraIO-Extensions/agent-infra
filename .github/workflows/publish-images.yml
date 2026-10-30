@@ -8,6 +8,11 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
+      smoke:
+        description: Run the two-architecture release smoke with an isolated tag
+        required: false
+        type: boolean
+        default: false
       publish_platform:
         description: Publish Platform business images as well
         required: false
@@ -24,12 +29,12 @@ concurrency:
 
 env:
   IMAGE_REPOSITORY_PREFIX: ghcr.io/agoraio-extensions/agent-infra
-  IMAGE_TAG: ${{ github.ref == 'refs/heads/main' && 'main' || github.ref_name }}
+  IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.smoke && format('smoke-{0}-{1}', github.run_id, github.run_attempt) || github.ref == 'refs/heads/main' && 'main' || github.ref_name }}
 
 jobs:
   infrastructure:
     name: Standard template images (${{ matrix.platform }})
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.smoke == true)
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -119,11 +124,19 @@ jobs:
         run: echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
       - name: Publish multi-architecture indexes
         run: |
+          set -o pipefail
           node deploy/release/publish-image-indexes.mjs "$IMAGE_TAG" \
             agent-runtime-host,agent-runtime-codex,agent-runtime-claude,agent-runtime-opencode,agent-runtime-pi,custom-agent-base \
             "$RUNNER_TEMP/receipts"/*/templates.json \
             "$RUNNER_TEMP/receipts"/*/runtime-host.json \
-            "$RUNNER_TEMP/receipts"/*/custom-agent-base.json
+            "$RUNNER_TEMP/receipts"/*/custom-agent-base.json \
+            | tee "$RUNNER_TEMP/published-indexes.jsonl"
+      - name: Upload published index receipts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          if-no-files-found: error
+          name: published-indexes-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/published-indexes.jsonl
 
   platform:
     name: Platform business images (${{ matrix.platform }})

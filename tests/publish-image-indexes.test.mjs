@@ -178,6 +178,7 @@ if(args[1] === 'imagetools' && args[2] === 'inspect') console.log(JSON.stringify
 		for (const [tag, ref] of [
 			["v1.2.4-rc.1", "refs/tags/v1.2.4-rc.1"],
 			["v1.2.4", "refs/heads/main"],
+			["smoke-123-1", "refs/heads/fix/3741-docker-setup-v5"],
 		]) {
 			await rm(log, { force: true });
 			const result = run({ GITHUB_REF: ref }, tag);
