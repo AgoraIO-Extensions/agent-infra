@@ -83,6 +83,8 @@ export interface ProductionPlatformApiInputV1
 		DeploymentAdmissionInputV1,
 		"currentIdentity" | "currentApiPrincipal"
 	> {
+	/** Trusted deployment-owned reserve policy; never populated from an HTTP request. */
+	readonly sessionSandboxReserves?: PlatformApiAssemblyInput["sessionSandboxReserves"];
 	readonly agentApiCreation?: {
 		readonly allowedPrincipals: NonNullable<
 			PlatformApiAssemblyInput["agentApiCreation"]
@@ -547,6 +549,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 		return { ...authority, users };
 	};
 	return {
+		...(input.sessionSandboxReserves
+			? { sessionSandboxReserves: input.sessionSandboxReserves }
+			: {}),
 		...(input.connectionInstallation
 			? {
 					connectionInstallation: {

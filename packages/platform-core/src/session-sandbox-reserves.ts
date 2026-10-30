@@ -164,6 +164,15 @@ export function parseSessionSandboxReserveConfigurationV1(
 		parseSessionSandboxReserveConfigurationV1({
 			...value,
 			enabled: true,
+			maximumReserves: Math.max(
+				1,
+				value.maximumReserves,
+				...value.profiles.map((profile) => profile.maximum),
+			),
+			maximumConcurrentCreates: Math.max(1, value.maximumConcurrentCreates),
+			ttlMs: Math.max(1, value.ttlMs),
+			cooldownMs: Math.max(1, value.cooldownMs),
+			failureBackoffMs: Math.max(1, value.failureBackoffMs),
 		});
 		return structuredClone(value);
 	}
@@ -281,8 +290,7 @@ export function canReleaseSessionSandboxReserveV1(input: {
 									d.operation === "delete" &&
 									d.status === "confirmed" &&
 									d.absent &&
-									d.resource?.uid === o.resource?.uid &&
-									d.resource?.resourceVersion === o.resource?.resourceVersion,
+									d.resource?.uid === o.resource?.uid,
 							)),
 				)
 			);
