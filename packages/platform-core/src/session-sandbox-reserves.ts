@@ -138,8 +138,7 @@ export function parseSessionSandboxReserveConfigurationV1(
 			allowZero ? nonNegative : positive,
 		);
 	if (
-		!value ||
-		value.schemaVersion !== 1 ||
+		value?.schemaVersion !== 1 ||
 		typeof value.enabled !== "boolean" ||
 		!positive(value.revision) ||
 		!/^[a-z0-9][a-z0-9-]{0,62}$/.test(value.namespace) ||

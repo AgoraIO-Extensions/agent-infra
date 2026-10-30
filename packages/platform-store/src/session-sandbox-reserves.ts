@@ -124,8 +124,7 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 	>`select state from platform.workload_reconciliations where agent_id = ${agentId} for share`;
 	const decoded = decodePersistedWorkloadStateV1(workload?.state, agentId);
 	if (
-		!management ||
-		management.status !== "available" ||
+		management?.status !== "available" ||
 		management.desired_state !== "running" ||
 		!decoded ||
 		decoded.legacy ||
@@ -139,8 +138,7 @@ export async function readCurrentSessionSandboxReserveProfileV1(
 	const verified = decoded.state.verified;
 	const configuration = agent?.runtimeConfiguration;
 	if (
-		!configuration ||
-		configuration.source.kind !== "standard" ||
+		configuration?.source.kind !== "standard" ||
 		configuration.secrets.length ||
 		configuration.source.templateId !== approved.templateId ||
 		configuration.source.imageDigest !== approved.imageDigest ||
@@ -218,6 +216,7 @@ async function lockBudget(
 	configured?: SessionSandboxReserveConfigurationV1,
 ) {
 	await tx`select pg_advisory_xact_lock(pg_catalog.hashtextextended('session-sandbox:deployment-budget', 0))`;
+	let configuredPolicy: SessionSandboxReserveConfigurationV1 | undefined;
 	if (configured) {
 		const config = parseSessionSandboxReserveConfigurationV1(configured);
 		const [previous] = await tx<
@@ -234,24 +233,33 @@ async function lockBudget(
 					!isDeepStrictEqual(previous.configuration, config)))
 		)
 			unavailable();
-		await tx`insert into platform.session_sandbox_budgets (namespace, revision, configuration, updated_at) values (${config.namespace}, ${config.revision}, ${tx.json(config as unknown as Json)}, clock_timestamp()) on conflict(namespace) do update set revision = excluded.revision, configuration = excluded.configuration, updated_at = excluded.updated_at`;
+		configuredPolicy =
+			previous && !config.enabled ? previous.configuration : config;
+		if (config.enabled)
+			await tx`insert into platform.session_sandbox_budgets (namespace, revision, configuration, updated_at) values (${config.namespace}, ${config.revision}, ${tx.json(config as unknown as Json)}, clock_timestamp()) on conflict(namespace) do update set revision = excluded.revision, configuration = excluded.configuration, updated_at = excluded.updated_at`;
 	}
 	const rows = await tx<
 		{ configuration: SessionSandboxReserveConfigurationV1 }[]
 	>`select configuration from platform.session_sandbox_budgets for update`;
 	if (!rows.length) return null;
 	if (rows.length !== 1) unavailable();
-	const config = parseSessionSandboxReserveConfigurationV1(
-		(rows[0] ?? unavailable()).configuration,
-	);
+	const config =
+		configuredPolicy ??
+		parseSessionSandboxReserveConfigurationV1(
+			(rows[0] ?? unavailable()).configuration,
+		);
 	// Missing original resource policy or unapproved costs cannot be guessed during rollout.
 	const uncharged = await tx<
 		{ sandbox_id: string; resource_hash: string | null }[]
 	>`select a.sandbox_id, a.resource_policy->>'resourceConfigurationHash' as resource_hash from platform.session_sandbox_allocations a where not exists(select 1 from platform.session_sandbox_resource_charges ch where ch.sandbox_id = a.sandbox_id)`;
 	for (const allocation of uncharged) {
-		const cost = config.resourceCosts.find(
-			(c) => c.resourceConfigurationHash === allocation.resource_hash,
-		);
+		const cost = allocation.resource_hash
+			? config.resourceCosts.find(
+					(c) => c.resourceConfigurationHash === allocation.resource_hash,
+				)
+			: config.resourceCosts.length === 1
+				? config.resourceCosts[0]
+				: undefined;
 		if (!cost) unavailable();
 		await tx`insert into platform.session_sandbox_resource_charges (sandbox_id, namespace, resources) values (${allocation.sandbox_id}, ${config.namespace}, ${tx.json(cost.resources as unknown as Json)})`;
 	}
@@ -350,7 +358,7 @@ export async function admitNewSessionSandboxV1(
 			};
 		}
 	}
-	if (config?.enabled) {
+	if (configured?.enabled && config?.enabled) {
 		const [workload] = await tx<
 			{ resource_hash: string | null }[]
 		>`select state->'verified'->'executionCapacity'->>'resourceConfigurationHash' as resource_hash from platform.workload_reconciliations where agent_id = ${authority.agentId}`;
@@ -386,7 +394,7 @@ export async function reserveSessionSandboxResumeBudgetV1(
 	const [row] = await tx<
 		{ resources: SessionSandboxResourceBudgetV1; compute_released: boolean }[]
 	>`select resources, compute_released from platform.session_sandbox_resource_charges where sandbox_id = ${sandboxId}`;
-	if (!row || !row.compute_released) return;
+	if (!row?.compute_released) return;
 	if (
 		!sessionSandboxBudgetFitsV1(
 			config.totalBudget,

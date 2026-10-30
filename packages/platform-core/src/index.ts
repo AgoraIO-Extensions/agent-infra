@@ -176,6 +176,7 @@ export {
 export * from "./session-sandbox-credential.js";
 export * from "./session-sandbox-lifecycle.js";
 export * from "./session-sandbox-reconciliation.js";
+export * from "./session-sandbox-reserves.js";
 export * from "./skill-hub.js";
 export * from "./skill-hub-agent-binding.js";
 export * from "./skill-hub-installation.js";
@@ -226,4 +227,3 @@ export * from "./wecom-setup.js";
 export * from "./wecom-setup-activation.js";
 export * from "./workload-reconciliation.js";
 export { parseWorkloadSecretRecoveriesV1 } from "./workload-secret-recovery.js";
-export * from "./session-sandbox-reserves.js";

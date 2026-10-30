@@ -31,7 +31,11 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.js";
-import { PostgresSessionSandboxReserveStoreV1 } from "./session-sandbox-reserves.js";
+import {
+	PostgresSessionSandboxReserveStoreV1,
+	releaseSessionSandboxComputeBudgetV1,
+	reserveSessionSandboxPreparationBudgetV1,
+} from "./session-sandbox-reserves.js";
 
 const imageDigest = `sha256:${"a".repeat(64)}`;
 const resourceHash = "b".repeat(64);
@@ -533,13 +537,116 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			await sql`select released,compute_released from platform.session_sandbox_resource_charges`,
 		).toEqual([{ released: false, compute_released: false }]);
 	});
-	it("does not guess unknown legacy allocation costs on enable", async () => {
+	it("uses the sole approved cost for a legacy allocation without resource policy", async () => {
 		const legacy = execution(null);
 		await create(legacy);
-		await expect(reserves().prepare("agent")).rejects.toThrow();
+		await expect(reserves().prepare("agent")).resolves.toBeTypeOf("string");
 		expect(
-			await sql`select 1 from platform.session_sandbox_reserves`,
-		).toHaveLength(0);
+			await sql`select status from platform.session_sandbox_reserves`,
+		).toEqual([{ status: "preparing" }]);
+	});
+	it("retains PVC after a stop receipt and gates original-Sandbox preparation on the compute budget", async () => {
+		const bounded = {
+			...config,
+			totalBudget: { ...resources, storageBytes: resources.storageBytes * 2 },
+		};
+		const original = await ready(reserves(bounded));
+		expect(await create(execution(bounded))).toMatchObject({
+			outcome: "accepted",
+			result: { conversationId: original.sessionId },
+		});
+		const receipt = {
+			schemaVersion: 1,
+			sandboxId: original.sandboxId,
+			sessionId: original.sessionId,
+			sourceGeneration: 1,
+			sourceResourceFence: 1,
+			targetGeneration: 1,
+			targetResourceFence: 1,
+		};
+		await sql`update platform.session_sandbox_allocations set status = 'stopped', desired_state = 'stopped' where sandbox_id = ${original.sandboxId}`;
+		await sql`update platform.outbox_items set payload = payload || ${sql.json({ lifecycle: { stopReceipt: receipt } })} where scope_type = 'conversation' and scope_id = ${original.sessionId} and operation = 'conversation.sandbox.reconcile.v1'`;
+		await sql.begin((tx) =>
+			releaseSessionSandboxComputeBudgetV1(tx, original.sandboxId),
+		);
+		expect(
+			await sql`select compute_released, released, resources from platform.session_sandbox_resource_charges where sandbox_id = ${original.sandboxId}`,
+		).toEqual([{ compute_released: true, released: false, resources }]);
+		const replacement = await create(
+			execution(bounded),
+			"user-b",
+			"web",
+			"replacement",
+		);
+		expect(replacement).toMatchObject({ outcome: "accepted" });
+		const replacementId =
+			"result" in replacement ? replacement.result.conversationId : undefined;
+		if (!replacementId) throw new Error("Expected replacement conversation");
+		const [replacementAllocation] =
+			await sql`select sandbox_id, resource_fence from platform.session_sandbox_allocations where conversation_id = ${replacementId}`;
+		if (!replacementAllocation)
+			throw new Error("Expected replacement allocation");
+		await expect(
+			sql.begin((tx) =>
+				reserveSessionSandboxPreparationBudgetV1(
+					tx,
+					original.sandboxId,
+					original.lease.profile.policy,
+				),
+			),
+		).rejects.toThrow();
+		await sql`update platform.session_sandbox_allocations set status = 'stopped', desired_state = 'stopped' where sandbox_id = ${replacementAllocation.sandbox_id}`;
+		await sql`update platform.outbox_items set payload = payload || ${sql.json({ lifecycle: { stopReceipt: { sandboxId: replacementAllocation.sandbox_id, sessionId: replacementId, targetGeneration: 1, targetResourceFence: Number(replacementAllocation.resource_fence) } } })} where scope_type = 'conversation' and scope_id = ${replacementId} and operation = 'conversation.sandbox.reconcile.v1'`;
+		await sql.begin((tx) =>
+			releaseSessionSandboxComputeBudgetV1(
+				tx,
+				replacementAllocation.sandbox_id,
+			),
+		);
+		await sql.begin((tx) =>
+			reserveSessionSandboxPreparationBudgetV1(
+				tx,
+				original.sandboxId,
+				original.lease.profile.policy,
+			),
+		);
+		expect(
+			await sql`select compute_released, released, resources from platform.session_sandbox_resource_charges where sandbox_id = ${original.sandboxId}`,
+		).toEqual([{ compute_released: false, released: false, resources }]);
+		expect(
+			await sql`select sandbox_id, conversation_id from platform.session_sandbox_allocations order by conversation_id`,
+		).toHaveLength(2);
+		expect(
+			await sql`select compute_released from platform.session_sandbox_resource_charges where sandbox_id = ${replacementAllocation.sandbox_id}`,
+		).toEqual([{ compute_released: true }]);
+	});
+	it("rejects absence and stale generation/fence as compute-release authority", async () => {
+		const original = await ready();
+		await create();
+		await sql`update platform.session_sandbox_allocations set status = 'stopped', desired_state = 'stopped', resource_observation = '{"status":"stopped","resources":[]}'::jsonb where sandbox_id = ${original.sandboxId}`;
+		for (const stopReceipt of [
+			null,
+			{
+				sandboxId: original.sandboxId,
+				sessionId: original.sessionId,
+				targetGeneration: 2,
+				targetResourceFence: 1,
+			},
+			{
+				sandboxId: original.sandboxId,
+				sessionId: original.sessionId,
+				targetGeneration: 1,
+				targetResourceFence: 2,
+			},
+		]) {
+			await sql`update platform.outbox_items set payload = payload || ${sql.json({ lifecycle: { stopReceipt } })} where scope_type = 'conversation' and scope_id = ${original.sessionId} and operation = 'conversation.sandbox.reconcile.v1'`;
+			await sql.begin((tx) =>
+				releaseSessionSandboxComputeBudgetV1(tx, original.sandboxId),
+			);
+			expect(
+				await sql`select compute_released, released from platform.session_sandbox_resource_charges where sandbox_id = ${original.sandboxId}`,
+			).toEqual([{ compute_released: false, released: false }]);
+		}
 	});
 	it("never-enabled default-off preserves the cold path without a budget gate or ledger", async () => {
 		const off = { ...config, enabled: false };
@@ -556,6 +663,34 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		expect(
 			await sql`select 1 from platform.session_sandbox_resource_charges`,
 		).toHaveLength(0);
+	});
+	it("disabling after an existing cold allocation preserves its ledger and permits original preparation", async () => {
+		const first = await create(
+			execution(config),
+			"user-a",
+			"web",
+			"disable-sequence",
+		);
+		const firstId = "result" in first ? first.result.conversationId : undefined;
+		if (!firstId) throw new Error("Expected first conversation");
+		const off = { ...config, enabled: false, revision: 2 };
+		await create(execution(off), "user-a", "web", "disable-existing");
+		const [allocation] =
+			await sql`select sandbox_id from platform.session_sandbox_allocations where conversation_id = ${firstId}`;
+		if (!allocation) throw new Error("Expected first allocation");
+		await sql.begin((tx) =>
+			reserveSessionSandboxPreparationBudgetV1(tx, allocation.sandbox_id, {
+				namespace: config.namespace,
+				resourceConfigurationHash: resourceHash,
+				configurationRevision: 1,
+				workloadRevision: 1,
+				managementFence: 1,
+				imageDigest,
+			}),
+		);
+		expect(
+			await sql`select released from platform.session_sandbox_resource_charges where sandbox_id = ${allocation.sandbox_id}`,
+		).toEqual([{ released: false }]);
 	});
 	it("default-off keeps ready reserves unclaimed", async () => {
 		const reserve = await ready();
