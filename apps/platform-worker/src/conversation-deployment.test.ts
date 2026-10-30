@@ -1,5 +1,5 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -355,14 +355,22 @@ describe("production SessionSandbox resource receiver", () => {
 			(m) => m.name === "skill-hub",
 		);
 		if (!mount) throw new Error("missing Skill mount");
-		const root = await mkdtemp(join(tmpdir(), "session-skill-layout-"));
+		const root = await realpath(
+			await mkdtemp(join(tmpdir(), "session-skill-layout-")),
+		);
 		try {
-			const mounted = join(
-				root,
-				relative("/opt/agent-infra-skill-hub", mount.mountPath),
-			);
+			expect(mount.mountPath).toBe("/opt/agent-infra-skill-hub/.agents");
+			const mounted = join(root, ".agents");
 			await mkdir(join(mounted, "skills/session-notes"), { recursive: true });
-			await writeFile(join(mounted, "skills/session-notes/SKILL.md"), "x");
+			const skillFile = join(mounted, "skills/session-notes/SKILL.md");
+			await writeFile(skillFile, "x", { mode: 0o444 });
+			for (const path of [
+				root,
+				mounted,
+				join(mounted, "skills"),
+				join(mounted, "skills/session-notes"),
+			])
+				await chmod(path, 0o555);
 			const directory = createAppliedRuntimeSkillDirectoryV1({
 				...f.binding,
 				root,
@@ -371,6 +379,13 @@ describe("production SessionSandbox resource receiver", () => {
 				join(await realpath(root), ".agents/skills/session-notes/SKILL.md"),
 			]);
 		} finally {
+			for (const path of [
+				root,
+				join(root, ".agents"),
+				join(root, ".agents/skills"),
+				join(root, ".agents/skills/session-notes"),
+			])
+				await chmod(path, 0o755).catch(() => {});
 			await rm(root, { recursive: true, force: true });
 		}
 	});
