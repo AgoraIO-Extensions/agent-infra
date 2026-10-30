@@ -362,12 +362,15 @@ it("drains a bounded text burst across ordering barriers before confirming cance
 			env: { ACP_TEST_MODE: "burst-cancel" },
 		},
 		update: async (notification) => {
+			notifications.push(notification);
+		},
+		updateBatch: async (batch) => {
 			if (++callbacks > 8) throw new Error("ACP_TEXT_COMMIT_BUDGET_EXCEEDED");
 			if (callbacks === 1) {
 				entered.resolve();
 				await commit.promise;
 			}
-			notifications.push(notification);
+			notifications.push(...batch);
 		},
 		modelFact: () => ({
 			configVersion: "burst-fixture",

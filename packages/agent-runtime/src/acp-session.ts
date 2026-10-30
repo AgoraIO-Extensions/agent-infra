@@ -188,17 +188,12 @@ export async function openAcpSession(options: {
 				} else {
 					const queued = { notifications: [params], text, bytes };
 					pendingText = queued;
-					updates = updates.then(() => {
+					updates = updates.then(async () => {
 						if (pendingText === queued) pendingText = undefined;
 						if (options.updateBatch)
 							return options.updateBatch(queued.notifications);
-						return options.update({
-							sessionId: params.sessionId,
-							update: {
-								sessionUpdate: "agent_message_chunk",
-								content: { type: "text", text: queued.text },
-							},
-						});
+						for (const notification of queued.notifications)
+							await options.update(notification);
 					});
 				}
 			} else {
