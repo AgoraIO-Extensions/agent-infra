@@ -26,7 +26,7 @@ export function sessionSandboxReserveTargetV1(input: {
 				);
 	return Math.min(
 		input.maximum,
-		Math.max(input.minimum, duringRefill > 0 ? duringRefill + 1 : 0),
+		Math.max(input.minimum, input.newSessionCount > 0 ? duringRefill + 1 : 0),
 	);
 }
 /** Deployment module input, never accepted from a Conversation command. Versions cover all secret-derived inputs without exposing them. */

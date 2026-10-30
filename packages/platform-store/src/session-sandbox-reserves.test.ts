@@ -1354,6 +1354,29 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			}),
 		]);
 	});
+	it("starts a first sample from zero minimum and clamps demand to the remaining deployment budget", async () => {
+		const bounded = {
+			...config,
+			totalBudget: { cpuMillis: 2000, memoryBytes: 2048, storageBytes: 4096 },
+			profiles: config.profiles.map((p) => ({ ...p, minimum: 0 })),
+		};
+		expect(await create(execution(bounded))).toMatchObject({
+			outcome: "accepted",
+		});
+		const store = reserves(bounded);
+		expect(await store.reconcileCapacity("agent")).toMatchObject({
+			target: 1,
+			prepared: 1,
+		});
+		expect(await store.reconcileCapacity("agent")).toMatchObject({
+			target: 1,
+			prepared: 0,
+		});
+		expect(await store.list()).toHaveLength(1);
+		expect(
+			await sql`select count(*)::int as count from platform.session_sandbox_resource_charges where not released`,
+		).toEqual([{ count: 2 }]);
+	});
 	it("includes high-hit demand and the measured upper bound, then avoids concurrent overfill", async () => {
 		const store = reserves();
 		for (let i = 0; i < 3; i++) {

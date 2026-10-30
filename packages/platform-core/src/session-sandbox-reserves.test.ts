@@ -187,6 +187,18 @@ describe("observed Session reserve sizing", () => {
 			}),
 		).toBe(10);
 	});
+	it("bootstraps one measured reserve for new demand when the approved minimum is zero", () => {
+		expect(
+			sessionSandboxReserveTargetV1({
+				minimum: 0,
+				maximum: 4,
+				newSessionCount: 1,
+				windowMs: 60_000,
+				replenishmentUpperBoundMs: null,
+			}),
+		).toBe(1);
+	});
+
 	it("keeps sparse samples as observed bounds and uses the approved minimum without measurements or arrivals", () => {
 		const demand = {
 			minimum: 2,
