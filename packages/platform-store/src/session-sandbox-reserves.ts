@@ -32,6 +32,7 @@ import {
 	sessionSandboxBudgetFitsV1,
 	sessionSandboxReserveDigestV1,
 	sessionSandboxReserveResourceKindsV1,
+	sessionSandboxReserveTargetV1,
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import { agentManagementStateJsonSql } from "./agent-management-state-sql.js";
@@ -69,6 +70,82 @@ interface ReserveRow {
 	lease_owner: string | null;
 	delivery_fence: number | string;
 	expires_at: Date;
+}
+interface ReserveSizing {
+	profileDigest: string;
+	target: number;
+	lowTarget: number | null;
+	lowSince: number | null;
+}
+async function readReserveStatistics(
+	tx: Transaction,
+	windowMs: number,
+	agentId: string | null = null,
+) {
+	const [clock] = await tx<
+		{ observed_at: Date }[]
+	>`select clock_timestamp() as observed_at`;
+	const observedAt = clock?.observed_at ?? unavailable();
+	const rows = await tx<
+		{
+			agentId: string;
+			profileDigest: string | null;
+			newSessionCount: string;
+			claimedCount: string;
+			replenishmentCount: string;
+			replenishmentUpperBoundMs: string | null;
+		}[]
+	>`
+		with demand as (
+			select a.agent_id, a.admission_profile_digest as profile_digest,
+				count(*) as arrivals, count(r.sandbox_id) as claims
+			from platform.session_sandbox_allocations a
+			left join platform.session_sandbox_reserves r on r.sandbox_id = a.sandbox_id
+				and r.session_id = a.conversation_id and r.agent_id = a.agent_id
+				and r.status = 'claimed' and r.profile_digest = a.admission_profile_digest
+			where a.created_at >= ${observedAt}::timestamptz - ${windowMs} * interval '1 millisecond'
+				and a.created_at <= ${observedAt}
+				and (${agentId}::text is null or a.agent_id = ${agentId})
+			group by a.agent_id, a.admission_profile_digest
+		), replenishment as (
+			select agent_id, profile_digest, count(*) as samples,
+				max(extract(epoch from (ready_at - created_at)) * 1000) as upper_bound_ms
+			from platform.session_sandbox_reserves
+			where ready_at >= ${observedAt}::timestamptz - ${windowMs} * interval '1 millisecond'
+				and ready_at <= ${observedAt} and ready_at >= created_at
+				and (${agentId}::text is null or agent_id = ${agentId})
+			group by agent_id, profile_digest
+		)
+		select coalesce(d.agent_id, r.agent_id) as "agentId",
+			coalesce(d.profile_digest, r.profile_digest) as "profileDigest",
+			coalesce(d.arrivals, 0)::text as "newSessionCount",
+			coalesce(d.claims, 0)::text as "claimedCount",
+			coalesce(r.samples, 0)::text as "replenishmentCount",
+			r.upper_bound_ms::text as "replenishmentUpperBoundMs"
+		from demand d full join replenishment r on r.agent_id = d.agent_id and r.profile_digest = d.profile_digest
+		order by 1, 2 nulls last`;
+	return {
+		observedAt,
+		windowMs,
+		profiles: rows.map((row) => ({
+			...row,
+			newSessionCount: Number(row.newSessionCount),
+			claimedCount: Number(row.claimedCount),
+			replenishmentCount: Number(row.replenishmentCount),
+			replenishmentUpperBoundMs:
+				row.replenishmentUpperBoundMs === null
+					? null
+					: Number(row.replenishmentUpperBoundMs),
+		})),
+	};
+}
+async function retireReserve(
+	tx: Transaction,
+	sandboxId: string,
+): Promise<boolean> {
+	const rows =
+		await tx`update platform.session_sandbox_reserves r set status = 'retiring', lease_owner = null, lease_expires_at = null, delivery_fence = delivery_fence + 1, updated_at = clock_timestamp() where sandbox_id = ${sandboxId} and status in ('preparing','ready','unknown') and retired_at is null and not exists(select 1 from platform.session_sandbox_allocations a where a.sandbox_id = r.sandbox_id) and not exists(select 1 from platform.conversations c where c.id = r.session_id) returning sandbox_id`;
+	return rows.length === 1;
 }
 export interface SessionSandboxAdmissionV1 {
 	readonly binding: SessionSandboxBindingV1;
@@ -288,7 +365,7 @@ async function applyReserveConfiguration(
 			: config;
 	await tx`insert into platform.session_sandbox_budgets (namespace, revision, configuration, updated_at)
 		values (${config.namespace}, ${config.revision}, ${tx.json(persisted as unknown as Json)}, clock_timestamp())
-		on conflict(namespace) do update set revision=excluded.revision, configuration=excluded.configuration, updated_at=excluded.updated_at`;
+		on conflict(namespace) do update set revision=excluded.revision, configuration=excluded.configuration, reserve_sizing=excluded.reserve_sizing, updated_at=excluded.updated_at`;
 	return decodeReservePolicy(persisted);
 }
 /** One transaction lock is shared by cold allocation, replenishment, claim, resume and retirement. */
@@ -643,29 +720,10 @@ export class PostgresSessionSandboxReserveStoreV1 {
 		if (!Number.isSafeInteger(input.windowMs) || input.windowMs < 1)
 			unavailable();
 		return this.#client.begin(async (tx) => {
-			const [clock] = await tx<
-				{ observed_at: Date }[]
-			>`select clock_timestamp() as observed_at`;
-			const observedAt = clock?.observed_at ?? unavailable();
-			const rows = await tx<
-				{
-					agentId: string;
-					profileDigest: string | null;
-					newSessionCount: string;
-					claimedCount: string;
-				}[]
-			>`
-				select a.agent_id as "agentId", a.admission_profile_digest as "profileDigest",
-					count(*)::text as "newSessionCount",
-					count(r.sandbox_id)::text as "claimedCount"
-				from platform.session_sandbox_allocations a
-				left join platform.session_sandbox_reserves r on r.sandbox_id = a.sandbox_id
-					and r.session_id = a.conversation_id and r.agent_id = a.agent_id
-					and r.status = 'claimed' and r.profile_digest = a.admission_profile_digest
-				where a.created_at >= ${observedAt}::timestamptz - ${input.windowMs} * interval '1 millisecond'
-					and a.created_at <= ${observedAt}
-				group by a.agent_id, a.admission_profile_digest
-				order by a.agent_id, a.admission_profile_digest nulls last`;
+			const { observedAt, profiles: rows } = await readReserveStatistics(
+				tx,
+				input.windowMs,
+			);
 			const configuration = await this.#readConfiguration(tx);
 			const currentDigests = new Map<string, string | null>();
 			for (const agentId of [
@@ -702,6 +760,8 @@ export class PostgresSessionSandboxReserveStoreV1 {
 						currentProfileDigest,
 						newSessionCount: 0,
 						claimedCount: 0,
+						replenishmentCount: 0,
+						replenishmentUpperBoundMs: null,
 					});
 				}
 			}
@@ -733,23 +793,117 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			);
 			const config = await lockBudget(tx, this.#configuration);
 			if (!current || !config?.enabled) return null;
+			return this.#prepare(tx, config, current.profile);
+		});
+	}
+	async #prepare(
+		tx: Transaction,
+		config: SessionSandboxReserveConfigurationV1,
+		profile: SessionSandboxReserveProfileV1,
+	): Promise<string | null> {
+		const approved =
+			config.profiles.find((p) => p.agentId === profile.agentId) ??
+			unavailable();
+		const [count] = await tx<
+			{ total: string; profile: string; preparing: string }[]
+		>`select count(*)::text as total, count(*) filter(where profile_digest = ${profile.digest})::text as profile, count(*) filter(where status in ('preparing','unknown') or (status = 'retiring' and exists(select 1 from jsonb_array_elements(operations) o where o->>'operation' = 'create' and o->>'writeCompletion' <> 'response')))::text as preparing from platform.session_sandbox_reserves where status <> 'claimed' and retired_at is null`;
+		if (
+			!count ||
+			Number(count.total) >= config.maximumReserves ||
+			Number(count.profile) >= approved.maximum ||
+			Number(count.preparing) >= config.maximumConcurrentCreates
+		)
+			return null;
+		const sandboxId = randomUUID();
+		const sessionId = randomUUID();
+		await charge(tx, config, sandboxId, profile.resources);
+		await tx`insert into platform.session_sandbox_reserves (sandbox_id, session_id, agent_id, namespace, profile_digest, profile, status, operations, expires_at, created_at, updated_at) values (${sandboxId}, ${sessionId}, ${profile.agentId}, ${config.namespace}, ${profile.digest}, ${tx.json(profile as unknown as Json)}, 'preparing', '[]', clock_timestamp() + ${config.ttlMs} * interval '1 millisecond', clock_timestamp(), clock_timestamp())`;
+		return sandboxId;
+	}
+	/** One locked decision owns the target, cooldown, retire CAS and refill across Worker restarts. */
+	async reconcileCapacity(
+		agentId: string,
+	): Promise<{ target: number; prepared: number; retired: number }> {
+		return this.#client.begin(async (tx) => {
+			const current = await readCurrentSessionSandboxReserveProfileV1(
+				tx,
+				agentId,
+				this.#configuration,
+			);
+			const config = await lockBudget(tx, this.#configuration);
+			if (!current || !config?.enabled)
+				return { target: 0, prepared: 0, retired: 0 };
 			const approved =
 				config.profiles.find((p) => p.agentId === agentId) ?? unavailable();
-			const [count] = await tx<
-				{ total: string; profile: string; preparing: string }[]
-			>`select count(*)::text as total, count(*) filter(where profile_digest = ${current.profile.digest})::text as profile, count(*) filter(where status in ('preparing','unknown'))::text as preparing from platform.session_sandbox_reserves where status <> 'claimed' and retired_at is null`;
-			if (
-				!count ||
-				Number(count.total) >= config.maximumReserves ||
-				Number(count.profile) >= approved.maximum ||
-				Number(count.preparing) >= config.maximumConcurrentCreates
-			)
-				return null;
-			const sandboxId = randomUUID();
-			const sessionId = randomUUID();
-			await charge(tx, config, sandboxId, current.profile.resources);
-			await tx`insert into platform.session_sandbox_reserves (sandbox_id, session_id, agent_id, namespace, profile_digest, profile, status, operations, expires_at, created_at, updated_at) values (${sandboxId}, ${sessionId}, ${agentId}, ${config.namespace}, ${current.profile.digest}, ${tx.json(current.profile as unknown as Json)}, 'preparing', '[]', clock_timestamp() + ${config.ttlMs} * interval '1 millisecond', clock_timestamp(), clock_timestamp())`;
-			return sandboxId;
+			const statistics = await readReserveStatistics(tx, 60_000, agentId);
+			const sample = statistics.profiles.find(
+				(row) => row.profileDigest === current.profile.digest,
+			);
+			const active = await tx<
+				{ sandbox_id: string }[]
+			>`select sandbox_id from platform.session_sandbox_reserves where agent_id = ${agentId} and namespace = ${config.namespace} and profile_digest = ${current.profile.digest} and status in ('ready','preparing') and retired_at is null order by created_at desc, sandbox_id for update`;
+			const [total] = await tx<
+				{ count: string }[]
+			>`select count(*)::text as count from platform.session_sandbox_reserves where status <> 'claimed' and retired_at is null`;
+			const used = await usedBudget(tx, config.namespace);
+			const capacity = Math.max(
+				0,
+				Math.min(
+					config.maximumReserves - Number(total?.count ?? 0) + active.length,
+					...(["cpuMillis", "memoryBytes", "storageBytes"] as const).map(
+						(key) =>
+							active.length +
+							Math.floor(
+								(config.totalBudget[key] - used[key]) /
+									current.profile.resources[key],
+							),
+					),
+				),
+			);
+			const target = Math.min(
+				capacity,
+				sessionSandboxReserveTargetV1({
+					minimum: approved.minimum,
+					maximum: approved.maximum,
+					windowMs: statistics.windowMs,
+					newSessionCount: sample?.newSessionCount ?? 0,
+					replenishmentUpperBoundMs: sample?.replenishmentUpperBoundMs ?? null,
+				}),
+			);
+			const [budget] = await tx<
+				{ reserve_sizing: Record<string, ReserveSizing> }[]
+			>`select reserve_sizing from platform.session_sandbox_budgets where namespace = ${config.namespace}`;
+			const sizing = budget?.reserve_sizing ?? {};
+			const previous = sizing[agentId];
+			const time = statistics.observedAt.getTime();
+			const low = active.length > target;
+			const lowSince = low
+				? previous?.profileDigest === current.profile.digest &&
+					previous.lowSince !== null &&
+					previous.lowTarget !== null &&
+					target === previous.lowTarget
+					? previous.lowSince
+					: time
+				: null;
+			sizing[agentId] = {
+				profileDigest: current.profile.digest,
+				target,
+				lowTarget: low ? target : null,
+				lowSince,
+			};
+			await tx`update platform.session_sandbox_budgets set reserve_sizing = ${tx.json(sizing as unknown as Json)} where namespace = ${config.namespace}`;
+			let retired = 0;
+			if (lowSince !== null && time - lowSince >= config.cooldownMs) {
+				for (const row of active.slice(0, active.length - target)) {
+					if (await retireReserve(tx, row.sandbox_id)) retired++;
+				}
+			}
+			const prepared =
+				active.length < target &&
+				(await this.#prepare(tx, config, current.profile))
+					? 1
+					: 0;
+			return { target, prepared, retired };
 		});
 	}
 	async claimLease(input: {
@@ -1130,16 +1284,14 @@ export class PostgresSessionSandboxReserveStoreV1 {
 			const business =
 				await tx`select 1 from platform.conversations where id = ${row.session_id} union all select 1 from platform.session_sandbox_allocations where sandbox_id = ${row.sandbox_id}`;
 			if (business.length) return false;
-			await tx`update platform.session_sandbox_reserves set status = 'ready', lease_owner = null, lease_expires_at = null, delivery_fence = delivery_fence + 1, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
+			await tx`update platform.session_sandbox_reserves set status = 'ready', ready_at = coalesce(ready_at, clock_timestamp()), lease_owner = null, lease_expires_at = null, delivery_fence = delivery_fence + 1, updated_at = clock_timestamp() where sandbox_id = ${row.sandbox_id}`;
 			return true;
 		});
 	}
 	async retire(sandboxId: string): Promise<boolean> {
 		return this.#client.begin(async (tx) => {
 			await lockBudget(tx, this.#configuration);
-			const rows =
-				await tx`update platform.session_sandbox_reserves r set status = 'retiring', lease_owner = null, lease_expires_at = null, delivery_fence = delivery_fence + 1, updated_at = clock_timestamp() where sandbox_id = ${sandboxId} and status in ('preparing','ready','unknown') and retired_at is null and not exists(select 1 from platform.session_sandbox_allocations a where a.sandbox_id = r.sandbox_id) and not exists(select 1 from platform.conversations c where c.id = r.session_id) returning sandbox_id`;
-			return rows.length === 1;
+			return retireReserve(tx, sandboxId);
 		});
 	}
 	async finishRetirement(

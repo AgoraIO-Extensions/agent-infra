@@ -1,0 +1,2 @@
+ALTER TABLE "platform"."session_sandbox_budgets" ADD COLUMN "reserve_sizing" jsonb DEFAULT '{}'::jsonb NOT NULL;--> statement-breakpoint
+ALTER TABLE "platform"."session_sandbox_reserves" ADD COLUMN "ready_at" timestamp with time zone;

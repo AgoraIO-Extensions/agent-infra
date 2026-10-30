@@ -6,6 +6,7 @@ import {
 	type SessionSandboxReserveOperationV1,
 	sessionSandboxBudgetFitsV1,
 	sessionSandboxReserveResourceKindsV1,
+	sessionSandboxReserveTargetV1,
 } from "./session-sandbox-reserves.js";
 
 describe("Session reserve admission", () => {
@@ -156,5 +157,61 @@ describe("Session reserve admission", () => {
 				},
 			}),
 		).toBe(false);
+	});
+});
+
+describe("observed Session reserve sizing", () => {
+	it("uses arrival rate times observed refill duration plus one burst slot", () => {
+		const demand = {
+			minimum: 1,
+			maximum: 10,
+			newSessionCount: 6,
+			windowMs: 60_000,
+		};
+		expect(
+			sessionSandboxReserveTargetV1({
+				...demand,
+				replenishmentUpperBoundMs: 1000,
+			}),
+		).toBe(2);
+		expect(
+			sessionSandboxReserveTargetV1({
+				...demand,
+				replenishmentUpperBoundMs: 30_000,
+			}),
+		).toBe(4);
+		expect(
+			sessionSandboxReserveTargetV1({
+				...demand,
+				replenishmentUpperBoundMs: 300_000,
+			}),
+		).toBe(10);
+	});
+	it("keeps sparse samples as observed bounds and uses the approved minimum without measurements or arrivals", () => {
+		const demand = {
+			minimum: 2,
+			maximum: 4,
+			newSessionCount: 60,
+			windowMs: 60_000,
+		};
+		expect(
+			sessionSandboxReserveTargetV1({
+				...demand,
+				replenishmentUpperBoundMs: null,
+			}),
+		).toBe(2);
+		expect(
+			sessionSandboxReserveTargetV1({
+				...demand,
+				replenishmentUpperBoundMs: 2500,
+			}),
+		).toBe(4);
+		expect(
+			sessionSandboxReserveTargetV1({
+				...demand,
+				newSessionCount: 0,
+				replenishmentUpperBoundMs: 30_000,
+			}),
+		).toBe(2);
 	});
 });

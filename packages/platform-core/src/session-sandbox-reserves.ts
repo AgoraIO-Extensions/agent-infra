@@ -9,6 +9,26 @@ export interface SessionSandboxResourceBudgetV1 {
 	readonly memoryBytes: number;
 	readonly storageBytes: number;
 }
+/** The observed maximum remains conservative for sparse samples; it is not a population percentile. */
+export function sessionSandboxReserveTargetV1(input: {
+	minimum: number;
+	maximum: number;
+	newSessionCount: number;
+	windowMs: number;
+	replenishmentUpperBoundMs: number | null;
+}): number {
+	const duringRefill =
+		input.replenishmentUpperBoundMs === null
+			? 0
+			: Math.ceil(
+					(input.newSessionCount * input.replenishmentUpperBoundMs) /
+						input.windowMs,
+				);
+	return Math.min(
+		input.maximum,
+		Math.max(input.minimum, duringRefill > 0 ? duringRefill + 1 : 0),
+	);
+}
 /** Deployment module input, never accepted from a Conversation command. Versions cover all secret-derived inputs without exposing them. */
 export interface SessionSandboxReserveConfigurationV1 {
 	readonly schemaVersion: 1;
