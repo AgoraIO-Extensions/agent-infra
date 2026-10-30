@@ -102,9 +102,9 @@ const fs = require("node:fs");
 const [file, source] = process.argv.slice(2);
 const value = JSON.parse(fs.readFileSync(file, "utf8"));
 const nested = value.images?.runtimeHost;
-const runtime = nested ? { ...nested, commitSha: value.commitSha, platform: value.platform } : value;
+const runtime = nested ? { ...nested, schemaVersion: value.schemaVersion, commitSha: value.commitSha, platform: value.platform } : value;
 if (
-	runtime.schemaVersion !== undefined && runtime.schemaVersion !== 1 ||
+	runtime.schemaVersion !== 1 ||
 	runtime.commitSha !== source ||
 	runtime.platform !== "linux/amd64" ||
 	typeof runtime.repository !== "string" ||
