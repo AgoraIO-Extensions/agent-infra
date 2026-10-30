@@ -9,6 +9,7 @@ import { conversationEventConformanceV1 } from "@agent-infra/platform-core/testi
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import {
 	conversationEventWakeChannelV1,
 	PostgresCommitWakeupListenerV1,
@@ -413,6 +414,7 @@ async function customDefaultOperationFixture() {
 	await client`
 		update platform.conversation_executions
 		set authorization_revision = ${`custom-authorization-${customFixture}`}
+			, runtime_submit_protocol = 'v2', original_operation_digest = ${"c".repeat(43)}
 		where execution_id = ${ids.executionId}
 	`;
 	const authorizationRecordId = `authorization_${ids.executionId}`;
@@ -465,6 +467,11 @@ async function customDefaultOperationFixture() {
 	};
 	return {
 		...ids,
+		agentId: customAgentId,
+		actorId: customActorId,
+		channelId: customChannelId,
+		authorizationRecordId,
+		configuration: customConfiguration,
 		fact,
 		events,
 		snapshot,
@@ -476,25 +483,98 @@ describe("PostgreSQL actual operation facts and necessary audits", () => {
 	it("persists a custom Runtime default-model fact without inventing Platform selection", async () => {
 		const fixture = await customDefaultOperationFixture();
 		try {
-			await expect(
-				fixture.events.persist({
-					...eventInput(
-						fixture.conversationId,
-						fixture.executionId,
-						"custom-operation-intent",
-					),
-					event: {
-						type: "execution.operation",
-						schemaVersion: 2,
-						fact: fixture.fact,
-					},
-				}),
-			).resolves.toMatchObject({ outcome: "accepted", event: { sequence: 1 } });
-			expect(await fixture.snapshot()).toMatchObject({
-				events: 1,
-				audits: 1,
-				sequence: 1,
+			// The current Agent may advance; original Runtime events remain tied to
+			// the Sandbox's prepared revision, not that newer configuration.
+			const laterConfiguration = {
+				...fixture.configuration,
+				revision: 8,
+				source: {
+					...fixture.configuration.source,
+					imageDigest: `sha256:${"d".repeat(64)}`,
+				},
+			};
+			await client`insert into platform.agent_configuration_revisions
+				(agent_id, revision, runtime_revision, source_reference, created_at, configuration)
+				values (${fixture.agentId}, 8, 8, ${laterConfiguration.source.imageDigest}, now(), ${client.json(laterConfiguration)})`;
+			await client`update platform.agents set current_configuration_revision=8 where id=${fixture.agentId}`;
+			const modelEvent = (phase: "intent" | "started" | "completed") => ({
+				type: "execution.operation" as const,
+				schemaVersion: 2 as const,
+				fact: { ...fixture.fact, phase },
 			});
+			const commands = [
+				modelEvent("intent"),
+				modelEvent("started"),
+				{
+					type: "text.delta" as const,
+					text: "Synthetic invoice total: 498.42",
+				},
+				modelEvent("completed"),
+				{ type: "execution.status" as const, status: "completed" as const },
+			].map((event, index) => ({
+				...eventInput(
+					fixture.conversationId,
+					fixture.executionId,
+					`custom-${index}`,
+				),
+				event,
+				...(event.type === "execution.status"
+					? {
+							transition: {
+								executionStatus: "completed" as const,
+								conversationStatus: "ready" as const,
+							},
+						}
+					: {}),
+			}));
+			for (const [index, command] of commands.entries()) {
+				await expect(fixture.events.persist(command)).resolves.toMatchObject({
+					outcome: "accepted",
+					event: { sequence: index + 1 },
+				});
+			}
+			expect(await fixture.snapshot()).toMatchObject({
+				events: 5,
+				audits: 3,
+				sequence: 5,
+			});
+			const [execution] = await client`
+				select status, model_option_id, reasoning_level, last_runtime_cursor
+				from platform.conversation_executions where execution_id = ${fixture.executionId}
+			`;
+			expect(execution).toEqual({
+				status: "completed",
+				model_option_id: null,
+				reasoning_level: null,
+				last_runtime_cursor: "runtime_cursor_custom-4",
+			});
+			const query = new PostgresConversationQueryV1({ databaseUrl });
+			try {
+				const history = await query.get(
+					{ actorId: fixture.actorId, channelId: fixture.channelId },
+					fixture.conversationId,
+				);
+				expect(history).toBeDefined();
+				expect(JSON.stringify(history)).toContain(
+					"Synthetic invoice total: 498.42",
+				);
+			} finally {
+				await query.close();
+			}
+			const recovered = openEvents(`${fixture.executionId}-recovery`);
+			try {
+				for (const command of commands)
+					await expect(
+						recovered.events.persist(command),
+					).resolves.toMatchObject({ outcome: "replayed" });
+				expect(await fixture.snapshot()).toMatchObject({
+					events: 5,
+					audits: 3,
+					sequence: 5,
+				});
+			} finally {
+				await recovered.close();
+			}
 		} finally {
 			await fixture.close();
 		}
@@ -523,38 +603,165 @@ describe("PostgreSQL actual operation facts and necessary audits", () => {
 		}
 	});
 
-	it("keeps an explicit custom Execution selection bound to its selected model", async () => {
-		const fixture = await customDefaultOperationFixture();
-		try {
-			await client`
+	it.each(["model", "reasoning"])(
+		"rejects custom explicit %s selection drift",
+		async (field) => {
+			const fixture = await customDefaultOperationFixture();
+			try {
+				await client`
 				update platform.conversation_executions
 				set model_configuration_revision = 7,
-					model_option_id = 'explicit-option', reasoning_level = 'medium'
+					model_option_id = ${field === "model" ? "explicit-option" : "owner-deepseek-flash"},
+					reasoning_level = ${field === "reasoning" ? "medium" : "high"}
 				where execution_id = ${fixture.executionId}
 			`;
-			await expect(
-				fixture.events.persist({
+				await expect(
+					fixture.events.persist({
+						...eventInput(
+							fixture.conversationId,
+							fixture.executionId,
+							"custom-explicit-mismatch",
+						),
+						event: {
+							type: "execution.operation",
+							schemaVersion: 2,
+							fact: fixture.fact,
+						},
+					}),
+				).rejects.toMatchObject({ code: "unavailable" });
+				expect(await fixture.snapshot()).toMatchObject({
+					events: 0,
+					audits: 0,
+					sequence: 0,
+				});
+			} finally {
+				await fixture.close();
+			}
+		},
+	);
+
+	it.each([
+		"missing revision",
+		"image mismatch",
+		"invalid configuration",
+		"unbound protocol",
+		"standard source",
+		"self-managed source",
+	])(
+		"rejects custom default-model facts with %s without advancing events or audits",
+		async (failure) => {
+			const fixture = await customDefaultOperationFixture();
+			try {
+				if (failure === "missing revision")
+					await client`update platform.session_sandbox_allocations
+						set resource_policy=jsonb_set(resource_policy,'{configurationRevision}','8')
+						where conversation_id=${fixture.conversationId}`;
+				if (failure === "image mismatch")
+					await client`update platform.session_sandbox_allocations
+						set resource_policy=jsonb_set(resource_policy,'{imageDigest}',${JSON.stringify(`sha256:${"d".repeat(64)}`)}::jsonb)
+						where conversation_id=${fixture.conversationId}`;
+				if (failure === "invalid configuration")
+					await client`update platform.agent_configuration_revisions
+						set configuration=jsonb_set(configuration,'{source,admissionRevision}','null')
+						where agent_id=${fixture.agentId} and revision=7`;
+				if (failure === "unbound protocol")
+					await client`update platform.conversation_executions
+						set runtime_submit_protocol=null,original_operation_digest=null
+						where execution_id=${fixture.executionId}`;
+				if (failure === "standard source") {
+					const standard = {
+						...structuredClone(agentConfigurationConformanceRecordV1),
+						agentId: fixture.agentId,
+						source: {
+							...structuredClone(agentConfigurationConformanceRecordV1.source),
+							imageDigest: fixture.configuration.source.imageDigest,
+						},
+					};
+					await client`update platform.agent_configuration_revisions
+					set configuration=${client.json(standard as unknown as Parameters<typeof client.json>[0])}
+						where agent_id=${fixture.agentId} and revision=7`;
+				}
+				if (failure === "self-managed source")
+					await client`update platform.agent_configuration_revisions
+						set configuration=jsonb_set(configuration,'{source}',${client.json({
+							...fixture.configuration.source,
+							interactionMode: "self-managed",
+							identityResponsibility: "self-managed",
+						})}::jsonb)
+						where agent_id=${fixture.agentId} and revision=7`;
+				await expect(
+					fixture.events.persist({
+						...eventInput(
+							fixture.conversationId,
+							fixture.executionId,
+							"invalid-default",
+						),
+						event: {
+							type: "execution.operation",
+							schemaVersion: 2,
+							fact: fixture.fact,
+						},
+					}),
+				).rejects.toMatchObject({ code: "unavailable" });
+				expect(await fixture.snapshot()).toMatchObject({
+					sequence: 0,
+					audits: 0,
+					events: 0,
+				});
+			} finally {
+				await fixture.close();
+			}
+		},
+	);
+
+	it.each(["principal", "agent", "session", "fence"])(
+		"does not use custom default-model handling to bypass %s binding",
+		async (binding) => {
+			const fixture = await customDefaultOperationFixture();
+			try {
+				if (binding === "principal" || binding === "agent") {
+					const change =
+						binding === "principal"
+							? {
+									principal: { kind: "user", id: "other-actor" },
+									accessSources: [{ kind: "user", userId: "other-actor" }],
+								}
+							: { agentId: "another-agent" };
+					await client`update platform.task_authorization_records
+						set boundary=boundary || ${client.json(change)}::jsonb where id=${fixture.authorizationRecordId}`;
+				}
+				const command = {
 					...eventInput(
 						fixture.conversationId,
 						fixture.executionId,
-						"custom-explicit-mismatch",
+						"wrong-binding",
 					),
+					...(binding === "session" ? { sessionGeneration: 2 } : {}),
+					...(binding === "fence" ? { deliveryFence: 4 } : {}),
 					event: {
-						type: "execution.operation",
-						schemaVersion: 2,
+						type: "execution.operation" as const,
+						schemaVersion: 2 as const,
 						fact: fixture.fact,
 					},
-				}),
-			).rejects.toMatchObject({ code: "unavailable" });
-			expect(await fixture.snapshot()).toMatchObject({
-				events: 0,
-				audits: 0,
-				sequence: 0,
-			});
-		} finally {
-			await fixture.close();
-		}
-	});
+				};
+				if (binding === "session" || binding === "fence")
+					await expect(fixture.events.persist(command)).resolves.toMatchObject({
+						outcome: "stale",
+					});
+				else
+					await expect(fixture.events.persist(command)).rejects.toMatchObject({
+						code: "unavailable",
+					});
+				expect(await fixture.snapshot()).toMatchObject({
+					sequence: 0,
+					audits: 0,
+					events: 0,
+				});
+			} finally {
+				await fixture.close();
+			}
+		},
+	);
 
 	it("rejects reuse of an older attempt after intervening completed attempts without changing events or audits", async () => {
 		const fixture = await operationFixture();

@@ -20,6 +20,7 @@ import {
 	parseTaskAuthorizationBoundaryV1,
 	requireConversationOperationSuccessorV2,
 } from "@agent-infra/platform-core";
+import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import postgres from "./observed-postgres.js";
 import { readSessionSandboxBinding } from "./session-sandbox.js";
 
@@ -49,8 +50,11 @@ interface ExecutionRow {
 	readonly channel_id: string;
 	readonly model_option_id: string | null;
 	readonly reasoning_level: string | null;
-	/** Runtime source at the immutable Sandbox configuration revision. */
-	readonly runtime_source_kind: "standard" | "custom" | null;
+	readonly runtime_submit_protocol: string | null;
+	/** Runtime configuration pinned by the original Session Sandbox. */
+	readonly runtime_configuration: unknown;
+	readonly runtime_configuration_revision: string | null;
+	readonly runtime_image_digest: string | null;
 }
 
 interface EventRow {
@@ -606,8 +610,10 @@ async function readExecution(
 	const rows = await transaction<ExecutionRow[]>`
 		select e.execution_id, e.conversation_id, e.session_generation, e.delivery_fence,
 			e.last_event_sequence, e.agent_id, e.actor_id, e.channel_id,
-			e.model_option_id, e.reasoning_level
-			, configuration.configuration->'source'->>'kind' as runtime_source_kind
+			e.model_option_id, e.reasoning_level, e.runtime_submit_protocol,
+			configuration.configuration as runtime_configuration,
+			a.resource_policy->>'configurationRevision' as runtime_configuration_revision,
+			a.resource_policy->>'imageDigest' as runtime_image_digest
 		from platform.conversation_executions e
 		join platform.session_sandbox_allocations a
 			on a.conversation_id = e.conversation_id and a.sandbox_id = e.sandbox_id
@@ -615,11 +621,7 @@ async function readExecution(
 			and a.principal_type = e.principal_type and a.channel_id = e.channel_id
 		left join platform.agent_configuration_revisions configuration
 			on configuration.agent_id = e.agent_id
-			and configuration.revision = case
-				when a.resource_policy->>'configurationRevision' ~ '^[0-9]+$'
-					then (a.resource_policy->>'configurationRevision')::bigint
-				else null
-			end
+			and configuration.revision::text = a.resource_policy->>'configurationRevision'
 		where e.execution_id = ${executionId} and e.conversation_id = ${conversationId}
 		for update of e
 	`;
@@ -773,11 +775,25 @@ async function insertOperationAudit(
 				fact.model.reasoningLevel !== (execution.reasoning_level ?? undefined))
 		)
 			unavailable();
-		// A custom Runtime owns its model configuration. The Platform Execution
-		// intentionally has no model-selection columns for that path, so its
-		// operation fact is checked against the immutable custom source above.
-		if (!hasStoredSelection && execution.runtime_source_kind !== "custom")
-			unavailable();
+		if (!hasStoredSelection) {
+			// Custom defaults belong to the admitted Runtime. Resolve its pinned
+			// configuration, never the Agent's current revision or the event's claim.
+			const configuration = decodeVersionedAgentConfigurationRecord(
+				execution.runtime_configuration,
+			);
+			if (
+				execution.runtime_submit_protocol !== "v2" ||
+				configuration.schemaVersion !== 2 ||
+				configuration.agentId !== execution.agent_id ||
+				String(configuration.revision) !==
+					execution.runtime_configuration_revision ||
+				configuration.source.kind !== "custom" ||
+				configuration.source.interactionMode !== "platform-adapter" ||
+				configuration.source.imageDigest !== execution.runtime_image_digest ||
+				configuration.modelConfiguration !== null
+			)
+				unavailable();
+		}
 	}
 	// This outcome describes reliable observation, never model/tool success.
 	// The actual operation result remains the explicit fact.phase, including unknown.
