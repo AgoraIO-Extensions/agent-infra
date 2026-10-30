@@ -440,9 +440,8 @@ it("recovers only the original control ref through production Worker/Core and Po
 						expect(paths).toEqual([
 							"original-binding",
 							"status",
-							// The resumed drain's renewal finds the revocation and only
-							// latches the Host through a control status read (#1888).
-							"status",
+							// The pending-stop claim renews only its Store lease; it does not
+							// renew the revoked business grant before control drain.
 							"events/ack",
 							"events/stream",
 							"stops",
