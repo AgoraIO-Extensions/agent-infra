@@ -592,28 +592,40 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			input: ProductionPlatformApiInputV1,
 		) => {
 			const assembly = createProductionPlatformApiAssemblyInputV1(input);
+			if (typeof assembly.presentAgent === "function")
+				throw new Error("Expected production presentation factory");
+			const configurationQuery = {
+				readRuntimePresentation: async () => ({
+					outcome: "found" as const,
+					channels: [],
+					sourceReference: "sha256:source",
+					capabilities: { modelSelection: true },
+					interactionUrl: null,
+				}),
+			} as unknown as PostgresAgentConfigurationQueryV1;
 			const present = assembly.presentAgent.create({
-				configurationQuery: {
-					readRuntimePresentation: async () => ({
-						outcome: "found" as const,
-						channels: [],
-						sourceReference: "sha256:source",
-						capabilities: { modelSelection: true },
-						interactionUrl: null,
-					}),
-				},
+				configurationQuery,
 			});
-			const result = await assembly.requestScope(
+			if (!assembly.requestScope)
+				throw new Error("Expected production request scope");
+			let modelSelection: boolean | undefined;
+			await assembly.requestScope(
 				new Request("https://platform.example.test/api/v2/agents/agent_01"),
-				() =>
-					present({
-						agentId: "agent_01",
-						configuration,
-						management,
-						apiUser,
-					}),
+				async () => {
+					modelSelection = (
+						await present({
+							agentId: "agent_01",
+							configuration,
+							management,
+							apiUser,
+						})
+					).capabilities.modelSelection;
+					return new Response(null);
+				},
 			);
-			return result.capabilities.modelSelection;
+			if (modelSelection === undefined)
+				throw new Error("Expected model selection capability");
+			return modelSelection;
 		};
 		const modelDirectory = {
 			baseUrl: "http://platform-worker.local",
