@@ -268,7 +268,6 @@ async function applyReserveConfiguration(
 		unavailable();
 	const previous = rows[0];
 	const decoded = previous ? decodeReservePolicy(previous.configuration) : null;
-	if (!previous && !config.enabled) return null;
 	if (
 		previous &&
 		(Number(previous.revision) > config.revision ||
