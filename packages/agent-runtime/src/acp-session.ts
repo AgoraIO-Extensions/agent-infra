@@ -428,6 +428,8 @@ export async function openAcpSession(options: {
 					if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
 						throw new Error("RUNTIME_ACP_PROMPT_TIMEOUT_INVALID");
 					let timer: ReturnType<typeof setTimeout> | undefined;
+					let timedOut = false;
+					const timeoutError = new Error("RUNTIME_ACP_PROMPT_TIMEOUT");
 					const request = (async () => {
 						const response = await connection.agent.request("session/prompt", {
 							sessionId: nativeId,
@@ -435,14 +437,28 @@ export async function openAcpSession(options: {
 						});
 						await updates;
 						return response;
-					})();
+					})().catch((error) => {
+						if (timedOut) throw timeoutError;
+						throw error;
+					});
 					const deadline = new Promise<never>((_, reject) => {
 						timer = setTimeout(() => {
-							void connection.agent
-								.notify("session/cancel", { sessionId: nativeId })
-								.catch(() => undefined);
-							void close().catch(() => undefined);
-							reject(new Error("RUNTIME_ACP_PROMPT_TIMEOUT"));
+							timedOut = true;
+							void (async () => {
+								await Promise.race([
+									Promise.resolve(
+										connection.agent.notify("session/cancel", {
+											sessionId: nativeId,
+										}),
+									).catch(() => undefined),
+									new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
+								]);
+								await Promise.race([
+									close().catch(() => undefined),
+									new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+								]);
+								reject(timeoutError);
+							})();
 						}, timeoutMs);
 					});
 					try {
