@@ -1,14 +1,21 @@
-import { expect, test } from "@playwright/test";
+import {
+	type Browser,
+	type BrowserContext,
+	expect,
+	type Page,
+	test,
+} from "@playwright/test";
 import type { EvaluationBrowserFixture } from "./evaluation-fixture.js";
 import { recordStartupEvidence } from "./page-health.js";
 
 test("a real completed Web task exposes feedback on its historical reply", async ({
-	page,
-	context,
+	playwright,
 }, info) => {
 	test.setTimeout(90_000);
-	page.setDefaultTimeout(15_000);
-	const startup = recordStartupEvidence(page);
+	let browser: Browser | undefined;
+	let page: Page | undefined;
+	let context: BrowserContext | undefined;
+	let startup: ReturnType<typeof recordStartupEvidence> | undefined;
 	let close = async () => {};
 	const statuses: { path: string; status: number }[] = [];
 	try {
@@ -20,8 +27,14 @@ test("a real completed Web task exposes feedback on its historical reply", async
 		)) as {
 			startEvaluationWorkflowBrowserFixture: () => Promise<EvaluationBrowserFixture>;
 		};
+		// The fixture waits for its owned veth peers before Chromium starts.
 		const fixture = await support.startEvaluationWorkflowBrowserFixture();
 		close = () => fixture.close();
+		browser = await playwright.chromium.launch();
+		context = await browser.newContext();
+		page = await context.newPage();
+		page.setDefaultTimeout(15_000);
+		startup = recordStartupEvidence(page);
 		const task = await fixture.createOnlineTask();
 		await context.addCookies([
 			{
@@ -85,8 +98,8 @@ test("a real completed Web task exposes feedback on its historical reply", async
 			fullPage: true,
 		});
 	} catch (error) {
-		await startup.attach(info);
-		if (!page.isClosed())
+		if (startup) await startup.attach(info);
+		if (page && !page.isClosed())
 			await info.attach("synthetic-page", {
 				body: await page.locator("body").innerText(),
 				contentType: "text/plain",
@@ -98,13 +111,24 @@ test("a real completed Web task exposes feedback on its historical reply", async
 		throw error;
 	} finally {
 		try {
-			if (!page.isClosed()) await page.goto("about:blank");
+			if (page && !page.isClosed()) await page.goto("about:blank");
 		} finally {
 			try {
-				await page.unrouteAll({ behavior: "ignoreErrors" });
+				if (page) await page.unrouteAll({ behavior: "ignoreErrors" });
 			} finally {
-				startup.dispose();
-				await close();
+				try {
+					startup?.dispose();
+				} finally {
+					try {
+						await context?.close();
+					} finally {
+						try {
+							await browser?.close();
+						} finally {
+							await close();
+						}
+					}
+				}
 			}
 		}
 	}

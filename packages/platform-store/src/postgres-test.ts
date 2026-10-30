@@ -13,6 +13,7 @@ const database = "platform_test";
 
 export interface PostgresTestDatabase {
 	databaseUrl: string;
+	containerName: string;
 	stop(): Promise<void>;
 }
 
@@ -62,7 +63,7 @@ export async function startPostgresTestDatabase(
 			try {
 				await client`select 1`;
 				await client.end();
-				return { databaseUrl, stop };
+				return { databaseUrl, containerName, stop };
 			} catch {
 				await client.end({ timeout: 0 });
 				await new Promise((resolve) => setTimeout(resolve, 250));

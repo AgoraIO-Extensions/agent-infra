@@ -41,6 +41,7 @@ import {
 import { workloadResourceConfigurationHashV1 } from "../../platform-worker/src/workload-runtime.js";
 import { createPlatformApp } from "./app.js";
 import { assemblePlatformApi } from "./assembly.js";
+import { waitForOwnedContainerNetworkReady } from "./evaluation-browser-network.js";
 
 const roles = {
 	manager: "eval-manager",
@@ -128,6 +129,10 @@ export async function startEvaluationWorkflowBrowserFixture() {
 		cleanup.push(() => sql.end());
 		const objects = await startMinioFileFixtureV1("file", "eval");
 		cleanup.push(() => objects.close());
+		await waitForOwnedContainerNetworkReady([
+			{ containerName: database.containerName },
+			{ containerName: objects.containerName },
+		]);
 		const storage = objects.storage;
 		const validUntil = new Date(Date.now() + 30 * 60000).toISOString();
 		const retention = {
