@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtemp, readdir, writeFile } from "node:fs/promises";
+import {
+	copyFile,
+	mkdir,
+	mkdtemp,
+	readdir,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,6 +20,12 @@ import {
 } from "../deploy/ack/redeploy-evidence.ts";
 
 const digest = `sha256:${"a".repeat(64)}`;
+const sourceSha = "a".repeat(40);
+const provenance = {
+	schemaVersion: 1,
+	commitSha: sourceSha,
+	platform: "linux/amd64",
+};
 const pairs = [
 	["web", "agent-infra-web"],
 	["platformApi", "agent-infra-api"],
@@ -20,6 +34,7 @@ const pairs = [
 ];
 function fixture() {
 	const platform = {
+		...provenance,
 		images: Object.fromEntries(
 			pairs.map(([key]) => [
 				key,
@@ -27,7 +42,11 @@ function fixture() {
 			]),
 		),
 	};
-	const runtime = { repository: "registry.example/runtime", digest };
+	const runtime = {
+		...provenance,
+		repository: "registry.example/runtime",
+		digest,
+	};
 	const documents = pairs.map(([key, name]) => ({
 		apiVersion: "apps/v1",
 		kind: "Deployment",
@@ -92,29 +111,109 @@ test("accepts the official RuntimeHost publication receipt shape and rejects inv
 		platform: "linux/amd64",
 		images: { runtimeHost: f.runtime },
 	};
-	assert.deepEqual(normalizeRuntimeImageManifest(published), {
+	assert.deepEqual(normalizeRuntimeImageManifest(published, sourceSha), {
 		schemaVersion: 1,
 		commitSha: "a".repeat(40),
 		platform: "linux/amd64",
 		...f.runtime,
 	});
 	assert.throws(() =>
-		normalizeRuntimeImageManifest({ ...published, platform: "linux/arm64" }),
+		normalizeRuntimeImageManifest(
+			{ ...published, platform: "linux/arm64" },
+			sourceSha,
+		),
 	);
 	assert.throws(() =>
-		normalizeRuntimeImageManifest({
-			...published,
-			images: {
-				runtimeHost: { repository: f.runtime.repository, digest: "latest" },
+		normalizeRuntimeImageManifest(
+			{
+				...published,
+				images: {
+					runtimeHost: { repository: f.runtime.repository, digest: "latest" },
+				},
 			},
-		}),
+			sourceSha,
+		),
 	);
 	assert.throws(() =>
-		normalizeRuntimeImageManifest({ ...published, images: {} }),
+		normalizeRuntimeImageManifest({ ...published, images: {} }, sourceSha),
 	);
 	assert.throws(() =>
-		normalizeRuntimeImageManifest({ ...f.runtime, images: {} }),
+		normalizeRuntimeImageManifest({ ...f.runtime, images: {} }, sourceSha),
 	);
+});
+
+test("render rejects wrong source and invalid provenance in both RuntimeHost receipt formats", () => {
+	const f = fixture();
+	for (const nested of [true, false]) {
+		const receipt = nested
+			? {
+					...provenance,
+					images: { runtimeHost: { repository: f.runtime.repository, digest } },
+				}
+			: { ...f.runtime };
+		validateRenderedImages(f.render(), f.platform, receipt);
+		for (const invalid of [
+			{ ...receipt, schemaVersion: 2 },
+			{ ...receipt, schemaVersion: undefined },
+			{ ...receipt, commitSha: "b".repeat(40) },
+			{ ...receipt, platform: "linux/arm64" },
+		])
+			assert.throws(() =>
+				validateRenderedImages(f.render(), f.platform, invalid),
+			);
+	}
+});
+
+test("RuntimeHost CLI accepts original release receipts and rejects invalid shapes without leaking input", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "ack-runtime-receipt-"));
+	try {
+		const input = join(directory, "runtime-host.json");
+		const runtime = {
+			...provenance,
+			images: {
+				runtimeHost: { repository: "registry.example/runtime", digest },
+			},
+		};
+		const run = () =>
+			spawnSync(
+				process.execPath,
+				[
+					join(import.meta.dirname, "../deploy/ack/redeploy-evidence.ts"),
+					"runtime-manifest",
+					input,
+					sourceSha,
+				],
+				{ encoding: "utf8" },
+			);
+		for (const valid of [runtime, fixture().runtime]) {
+			await writeFile(input, JSON.stringify(valid));
+			const result = run();
+			assert.equal(result.status, 0, result.stderr);
+			assert.equal(result.stdout, "");
+		}
+		for (const invalid of [
+			{ ...runtime, schemaVersion: undefined },
+			{ ...runtime, commitSha: "b".repeat(40) },
+			{ ...runtime, platform: "linux/arm64" },
+			{ ...fixture().runtime, images: {} },
+			{ ...fixture().runtime, images: null },
+			{
+				...runtime,
+				images: {
+					runtimeHost: { repository: "credential-canary", digest: "latest" },
+				},
+			},
+			null,
+		]) {
+			await writeFile(input, JSON.stringify(invalid));
+			const result = run();
+			assert.equal(result.status, 1);
+			assert.equal(result.stdout, "");
+			assert.equal(result.stderr, "ACK_EVIDENCE_VALIDATION_FAILED\n");
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
 });
 
 test("binding rejects duplicate components, duplicate runtime env and mutable init images", () => {
@@ -221,67 +320,130 @@ test("CLI refuses unavailable cluster evidence without retaining raw command err
 	assert.equal(result.stderr, "ACK_EVIDENCE_VALIDATION_FAILED\n");
 });
 
-test("plan does not report success on cluster failure or retain raw rendered values as evidence", async () => {
+test("plan consumes the original RuntimeHost artifact and rejects invalid input before touching the cluster", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "ack-plan-"));
-	const f = fixture();
-	const root = join(import.meta.dirname, "..");
-	const source = execFileSync("git", ["rev-parse", "HEAD"], {
-		cwd: root,
-		encoding: "utf8",
-	}).trim();
-	const platform = join(directory, "platform.json");
-	const runtime = join(directory, "runtime.json");
-	const values = join(directory, "values.yaml");
-	const rendered = join(directory, "input-rendered.yaml");
-	await writeFile(
-		platform,
-		JSON.stringify({
-			...f.platform,
-			schemaVersion: 1,
-			commitSha: source,
-			platform: "linux/amd64",
-		}),
-	);
-	await writeFile(
-		runtime,
-		JSON.stringify({
-			schemaVersion: 1,
-			commitSha: source,
-			platform: "linux/amd64",
-			images: { runtimeHost: f.runtime },
-		}),
-	);
-	await writeFile(values, "{}");
-	await writeFile(rendered, f.render());
-	await writeFile(
-		join(directory, "helm"),
-		'#!/bin/sh\ncase "$1" in\ntemplate) /bin/cat "$ACK_TEST_RENDER";;\nlint) exit 0;;\n*) echo "TOKEN=private-canary" >&2; exit 1;;\nesac\n',
-		{ mode: 0o700 },
-	);
-	const evidence = join(directory, "evidence");
-	const result = spawnSync("bash", ["deploy/ack/redeploy.sh", "plan"], {
-		cwd: root,
-		encoding: "utf8",
-		env: {
-			...process.env,
-			PATH: `${directory}:${process.env.PATH}`,
-			ACK_TEST_RENDER: rendered,
-			ACK_KUBECONFIG: "/dev/null",
-			ACK_VALUES_FILE: values,
-			ACK_SOURCE_SHA: source,
-			ACK_IMAGE_MANIFEST: platform,
-			ACK_RUNTIME_IMAGE_MANIFEST: runtime,
-			ACK_EVIDENCE_DIR: evidence,
-		},
-	});
-	assert.notEqual(result.status, 0);
-	assert(!result.stdout.includes("plan passed"));
-	assert(!result.stderr.includes("private-canary"));
-	let entries = [];
 	try {
-		entries = await readdir(evidence);
-	} catch (error) {
-		assert.equal(error.code, "ENOENT");
+		const root = join(directory, "source");
+		const bin = join(directory, "bin");
+		await mkdir(join(root, "deploy/ack/chart"), { recursive: true });
+		await mkdir(bin);
+		for (const file of ["redeploy.sh", "redeploy-evidence.ts"])
+			await copyFile(
+				join(import.meta.dirname, "../deploy/ack", file),
+				join(root, "deploy/ack", file),
+			);
+		await symlink(
+			join(import.meta.dirname, "../node_modules"),
+			join(root, "node_modules"),
+		);
+		await writeFile(join(root, ".gitignore"), "node_modules\n");
+		await writeFile(join(root, "package.json"), '{"type":"module"}');
+		const git = (args) =>
+			execFileSync("git", args, {
+				cwd: root,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"],
+			}).trim();
+		git(["init", "--template=", "-q"]);
+		git(["add", "."]);
+		git([
+			"-c",
+			"user.name=fixture",
+			"-c",
+			"user.email=fixture@example.invalid",
+			"-c",
+			"commit.gpgsign=false",
+			"commit",
+			"-qm",
+			"test fixture",
+		]);
+		const source = git(["rev-parse", "HEAD"]);
+		const f = fixture();
+		const platform = join(directory, "platform.json");
+		const runtime = join(directory, "runtime-host.json");
+		const values = join(directory, "values.yaml");
+		const rendered = join(directory, "input-rendered.yaml");
+		const log = join(directory, "cluster.log");
+		const metadata = { ...provenance, commitSha: source };
+		await writeFile(platform, JSON.stringify({ ...f.platform, ...metadata }));
+		await writeFile(values, "{}");
+		await writeFile(rendered, f.render());
+		await writeFile(
+			join(bin, "helm"),
+			`#!/bin/sh
+case "$1" in
+template) cat "$ACK_TEST_RENDER";;
+lint) exit 0;;
+list) printf '[]';;
+*) exit 1;;
+esac
+`,
+			{ mode: 0o700 },
+		);
+		await writeFile(
+			join(bin, "kubectl"),
+			`#!/bin/sh
+printf "called\\n" >> "$ACK_TEST_LOG"
+if [ "$ACK_TEST_CLUSTER_FAIL" = 1 ]; then echo "TOKEN=private-canary" >&2; exit 1; fi
+case " $* " in
+*" version "*) printf '{"serverVersion":{"gitVersion":"v1.36.1"}}';;
+*) printf '{"items":[]}';;
+esac
+`,
+			{ mode: 0o700 },
+		);
+		const evidence = join(directory, "evidence");
+		const run = (extra = {}) =>
+			spawnSync("bash", ["deploy/ack/redeploy.sh", "plan"], {
+				cwd: root,
+				encoding: "utf8",
+				env: {
+					...process.env,
+					PATH: `${bin}:${process.env.PATH}`,
+					ACK_CHART_DIR: join(root, "deploy/ack/chart"),
+					ACK_TEST_RENDER: rendered,
+					ACK_TEST_LOG: log,
+					ACK_KUBECONFIG: "/dev/null",
+					ACK_VALUES_FILE: values,
+					ACK_SOURCE_SHA: source,
+					ACK_IMAGE_MANIFEST: platform,
+					ACK_RUNTIME_IMAGE_MANIFEST: runtime,
+					ACK_EVIDENCE_DIR: evidence,
+					...extra,
+				},
+			});
+		const published = {
+			...metadata,
+			images: { runtimeHost: { repository: f.runtime.repository, digest } },
+		};
+		const legacy = { ...metadata, repository: f.runtime.repository, digest };
+		for (const valid of [published, legacy]) {
+			await writeFile(runtime, JSON.stringify(valid));
+			const result = run();
+			assert.equal(result.status, 0, result.stderr);
+			assert.match(result.stdout, /plan passed/);
+			assert(!(await readdir(evidence)).includes("rendered.yaml"));
+		}
+		for (const invalid of [
+			{ ...published, commitSha: "b".repeat(40) },
+			{ ...published, schemaVersion: undefined },
+			{ ...published, platform: "linux/arm64" },
+			{ ...legacy, images: {} },
+		]) {
+			await rm(log, { force: true });
+			await writeFile(runtime, JSON.stringify(invalid));
+			const result = run();
+			assert.notEqual(result.status, 0);
+			assert.match(result.stderr, /ACK_RUNTIME_IMAGE_MANIFEST does not match/);
+			assert(!(await readdir(directory)).includes("cluster.log"));
+		}
+		await writeFile(runtime, JSON.stringify(published));
+		const failure = run({ ACK_TEST_CLUSTER_FAIL: "1" });
+		assert.notEqual(failure.status, 0);
+		assert.match(failure.stderr, /ACK_CLUSTER_VERSION_READ_FAILED/);
+		assert(!failure.stdout.includes("plan passed"));
+		assert(!failure.stderr.includes("private-canary"));
+	} finally {
+		await rm(directory, { recursive: true, force: true });
 	}
-	assert(!entries.includes("rendered.yaml"));
 });
