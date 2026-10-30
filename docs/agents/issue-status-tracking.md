@@ -84,7 +84,6 @@ Connection 服务端、Provider/Grant/凭据和共享部署资源不随 Platform
 | [#3746](https://github.com/AgoraIO-Extensions/agent-infra/pull/3746) / [#3745](https://github.com/AgoraIO-Extensions/agent-infra/issues/3745) | `1de89cf36e5d0ea3aeee642c2dd4a83aa56e7511` | `505c6cfd35611f8d0843239de4163655b2686640` | 正常 ContainerCreating/PodInitializing 不记为 startup failure；真实部署另验。 |
 | [#3744](https://github.com/AgoraIO-Extensions/agent-infra/pull/3744) / [#3743](https://github.com/AgoraIO-Extensions/agent-infra/issues/3743) | `4faa006ed61260c6c70d453bc563ee910684bb65` | `0a02c0f6dab7b477f2bc659fb29227b9664909c3` | RuntimeHost manifest 发布入口；实际发布 receipts 与失败仍由 #3741 跟进。 |
 | [#3750](https://github.com/AgoraIO-Extensions/agent-infra/pull/3750) / [#3749](https://github.com/AgoraIO-Extensions/agent-infra/issues/3749) | `cca2e7b1662939085a9db4b1cf652b7847268928` | `d970fd06bf63fc3962b68b1f8a626db5b63e836e` | ACP prompt 挂起有界化；#3747 继续 custom Agent 能力路径验收。 |
-
 | [#3754](https://github.com/AgoraIO-Extensions/agent-infra/pull/3754) / [#3752](https://github.com/AgoraIO-Extensions/agent-infra/issues/3752) | `b251546631060cc5f1838a9f1171187300fce5b7` | `ce2a4f59c928473ff02e15c82d426b28727a774a` | Harness cache rebinding修复；真实 Docker 补验曾受依赖下载超时影响，开发票已关闭，部署/验收不代签。 |
 | [#3757](https://github.com/AgoraIO-Extensions/agent-infra/pull/3757) / [#3756](https://github.com/AgoraIO-Extensions/agent-infra/issues/3756) | `d1e472562ae40bd07ab9920c3efc05c15919b5e2` | `cd16f38f1698c307dd3d2779cfbb8dfa97e49d43` | modelDirectory capability projection修复；父 #3747 的 Runtime execution acceptance 继续 OPEN。 |
 
