@@ -125,7 +125,24 @@ function fixture(
 	let leaseCurrent = true;
 	let retired = row.status === "retiring";
 	const store = {
+		applyConfiguration: vi.fn(async () => {}),
 		list: vi.fn(async () => [structuredClone(row)]),
+		listPage: vi.fn(async () => ({
+			items: [structuredClone(row)],
+			nextCursor: null,
+		})),
+		inspect: vi.fn(async () => null),
+		statistics: vi.fn(async () => ({
+			observedAt: new Date(now),
+			windowMs: 60_000,
+			profiles: [] as {
+				agentId: string;
+				profileDigest: string | null;
+				currentProfileDigest: string | null;
+				newSessionCount: number;
+				claimedCount: number;
+			}[],
+		})),
 		prepare: vi.fn(async () => null as string | null),
 		claimLease: vi.fn(async () =>
 			leaseCurrent
@@ -170,6 +187,29 @@ function fixture(
 				(entry) => entry.attemptId === operation.attemptId,
 			);
 			if (previous) Object.assign(previous, operation);
+			return leaseCurrent;
+		}),
+		recordDeleteResponse: vi.fn(async (_lease, input) => {
+			calls.push(`delete-response:${input.response}`);
+			const operation = claim.operations.find(
+				(entry) => entry.attemptId === input.attemptId,
+			);
+			if (!operation) return false;
+			Object.assign(operation, {
+				status: input.response === "rejected" ? "rejected" : "confirmed",
+				absent: input.response === "absent",
+				resource: input.resource,
+				writeCompletion: "response",
+			});
+			return leaseCurrent;
+		}),
+		recordDeleteObservation: vi.fn(async (_lease, input) => {
+			calls.push(`delete-observation:${input.attemptId}`);
+			const operation = claim.operations.find(
+				(entry) => entry.attemptId === input.attemptId,
+			);
+			if (operation?.writeCompletion !== "response") return false;
+			Object.assign(operation, { status: "confirmed", absent: true });
 			return leaseCurrent;
 		}),
 		markReady: vi.fn(async () => {
@@ -295,6 +335,28 @@ describe("Session reserve Worker", () => {
 		);
 		expect(f.store.recordCreateResponse).toHaveBeenCalledTimes(6);
 		expect(f.store.markReady).toHaveBeenCalledOnce();
+		expect(f.store.applyConfiguration).toHaveBeenCalledOnce();
+	});
+
+	it("uses current-profile demand statistics to refill up to the bounded concurrency", async () => {
+		const f = fixture();
+		f.store.statistics.mockResolvedValue({
+			observedAt: new Date(),
+			windowMs: 60_000,
+			profiles: [
+				{
+					agentId: "agent",
+					profileDigest: f.claim.profile.digest,
+					currentProfileDigest: f.claim.profile.digest,
+					newSessionCount: 3,
+					claimedCount: 0,
+				},
+			],
+		});
+		f.store.prepare.mockResolvedValue("next-reserve");
+		await f.worker.reconcile();
+		expect(f.store.statistics).toHaveBeenCalledWith({ windowMs: 60_000 });
+		expect(f.store.prepare).toHaveBeenCalledTimes(2);
 	});
 
 	it("never resends a create with an unknown response or upgrades observation into completion", async () => {
@@ -430,6 +492,11 @@ describe("Session reserve Worker", () => {
 			expect(f.calls.indexOf(`intent:delete:${kind}`)).toBeLessThan(
 				f.calls.indexOf(`delete:${kind}`),
 			);
+		expect(f.store.recordDeleteResponse).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ response: "acknowledged" }),
+		);
+		expect(f.store.recordDeleteObservation).toHaveBeenCalled();
 		expect(f.store.finishRetirement).toHaveBeenCalledOnce();
 	});
 
@@ -497,7 +564,7 @@ describe("Session reserve Worker", () => {
 		expect(f.store.finishRetirement).not.toHaveBeenCalled();
 	});
 
-	it("keeps delete uncertainty until actual absence without claiming a DELETE acknowledgement", async () => {
+	it("keeps delete uncertainty until a terminal DELETE response", async () => {
 		const f = fixture({ status: "retiring" });
 		confirmed(f);
 		f.adapter.remove.mockImplementationOnce(async (_claim, resource) => {
@@ -517,21 +584,50 @@ describe("Session reserve Worker", () => {
 		expect(f.store.finishRetirement).not.toHaveBeenCalled();
 		f.setNow(11_001);
 		await f.worker.reconcile();
-		expect(f.store.recordResult).toHaveBeenCalledWith(
-			expect.anything(),
-			expect.objectContaining({
-				operation: "delete",
-				kind: "Pod",
-				status: "confirmed",
-				absent: true,
-			}),
-		);
+		expect(f.store.recordDeleteObservation).not.toHaveBeenCalled();
 		expect(
 			f.adapter.remove.mock.calls.filter(
 				([, resource]) => resource.kind === "Pod",
 			),
 		).toHaveLength(1);
-		expect(f.store.finishRetirement).toHaveBeenCalledOnce();
+		expect(f.store.finishRetirement).not.toHaveBeenCalled();
+	});
+
+	it("records a DELETE rejection and retries the same UID with a refreshed version", async () => {
+		const f = fixture({ status: "retiring" });
+		confirmed(f);
+		let rejected = true;
+		f.adapter.remove.mockImplementation(async (_claim, resource) => {
+			if (resource.kind === "Pod" && rejected) {
+				rejected = false;
+				throw new WorkloadKubernetesError("conflict", {
+					status: 409,
+					verb: "delete",
+					kind: "Pod",
+				});
+			}
+			f.objects.delete(resource.kind);
+			return "acknowledged" as const;
+		});
+		await f.worker.reconcile();
+		expect(f.store.recordDeleteResponse).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ response: "rejected" }),
+		);
+		const pod = f.objects.get("Pod");
+		if (!pod?.metadata) throw new Error("Pod fixture missing");
+		pod.metadata.resourceVersion = "2";
+		f.setNow(12_001);
+		await f.worker.reconcile();
+		expect(
+			f.adapter.remove.mock.calls.filter(
+				([, resource]) => resource.kind === "Pod",
+			),
+		).toHaveLength(2);
+		expect(f.store.recordDeleteResponse).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ response: "acknowledged" }),
+		);
 	});
 
 	it("records an original late create response after lease loss without sending another create", async () => {

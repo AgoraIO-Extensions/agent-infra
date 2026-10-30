@@ -59,7 +59,9 @@ export type SessionSandboxReserveAdapterResourceV1 =
 export type SessionSandboxReserveObservationV1 = Omit<
 	SessionSandboxReserveWorkerClaimV1,
 	"leaseOwner" | "deliveryFence"
->;
+> & {
+	readonly currentProfileDigest?: string | null;
+};
 
 function reserveEgressPolicy(
 	policy: KubernetesWorkloadPolicyV1,

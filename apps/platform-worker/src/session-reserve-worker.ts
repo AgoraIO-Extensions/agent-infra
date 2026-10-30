@@ -14,6 +14,7 @@ import {
 } from "@agent-infra/platform-store";
 import type { KubernetesObject } from "@kubernetes/client-node";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
+import type { SessionSandboxReserveObservationV1 } from "./session-reserve-adapter.js";
 
 type Claim = SessionSandboxReserveWorkerClaimV1;
 type Kind = SessionSandboxReserveResourceKindV1;
@@ -21,6 +22,10 @@ type Operation = SessionSandboxReserveOperationV1;
 export type SessionReserveStoreV1 = Pick<
 	PostgresSessionSandboxReserveStoreV1,
 	| "list"
+	| "listPage"
+	| "inspect"
+	| "statistics"
+	| "applyConfiguration"
 	| "prepare"
 	| "claimLease"
 	| "renewLease"
@@ -28,6 +33,8 @@ export type SessionReserveStoreV1 = Pick<
 	| "recordObservation"
 	| "recordCreateResponse"
 	| "recordResult"
+	| "recordDeleteResponse"
+	| "recordDeleteObservation"
 	| "markReady"
 	| "retire"
 	| "finishRetirement"
@@ -37,7 +44,7 @@ export type SessionReserveStoreV1 = Pick<
 export interface SessionReserveAdapterV1 {
 	render(claim: Claim): Promise<readonly KubernetesObject[]>;
 	read(
-		claim: Claim,
+		claim: SessionSandboxReserveObservationV1,
 		kind: Kind,
 		signal?: AbortSignal,
 	): Promise<KubernetesObject | null>;
@@ -52,7 +59,7 @@ export interface SessionReserveAdapterV1 {
 		signal?: AbortSignal,
 	): Promise<"acknowledged" | "absent">;
 	bootstrap(
-		claim: Claim,
+		claim: SessionSandboxReserveObservationV1,
 		resources: readonly KubernetesObject[],
 		signal?: AbortSignal,
 	): Promise<{ bootstrapReady: boolean; businessStateAbsent: boolean }>;
@@ -114,6 +121,13 @@ function definiteCreateRejection(error: unknown) {
 		[400, 401, 403, 404, 405, 413, 415, 422].includes(error.details.status ?? 0)
 	);
 }
+function definiteDeleteRejection(error: unknown) {
+	return (
+		error instanceof WorkloadKubernetesError &&
+		error.details.verb === "delete" &&
+		error.details.status === 409
+	);
+}
 function input(operation: Operation): SessionSandboxReserveOperationInputV1 {
 	const { writeCompletion: _completion, writer: _writer, ...value } = operation;
 	return value;
@@ -164,6 +178,7 @@ export function createPlatformSessionReserveWorkerV1(options: {
 	let closing: Promise<void> | undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let profileCursor = 0;
+	let configurationApplied = false;
 	const backoff = new Map<string, number>();
 	const report = () => {
 		try {
@@ -177,6 +192,11 @@ export function createPlatformSessionReserveWorkerV1(options: {
 			key,
 			now() + Math.max(configuration.failureBackoffMs, pollIntervalMs),
 		);
+	async function ensureConfiguration() {
+		if (configurationApplied) return;
+		await store.applyConfiguration();
+		configurationApplied = true;
+	}
 	async function withLease(
 		claim: Claim,
 		action: (guard: () => Promise<void>) => Promise<void>,
@@ -364,6 +384,38 @@ export function createPlatformSessionReserveWorkerV1(options: {
 		)
 			await retire(claim);
 	}
+	async function inspectReady(
+		row: Awaited<
+			ReturnType<PostgresSessionSandboxReserveStoreV1["list"]>
+		>[number],
+		result: SessionReserveReconcileResultV1,
+	) {
+		const inspection = await store.inspect(row.sandboxId);
+		if (
+			inspection?.status !== "ready" ||
+			inspection.currentProfileDigest !== row.profileDigest ||
+			!inspection.deployment ||
+			!inspection.modelProjection
+		) {
+			if (await store.retire(row.sandboxId)) result.retired++;
+			return;
+		}
+		try {
+			for (const kind of creationOrder) {
+				const current = await adapter.read(
+					inspection,
+					kind,
+					abortController.signal,
+				);
+				if (!current) {
+					if (await store.retire(row.sandboxId)) result.retired++;
+					return;
+				}
+			}
+		} catch {
+			if (await store.retire(row.sandboxId)) result.retired++;
+		}
+	}
 	async function clean(
 		claim: Claim,
 		result: SessionReserveReconcileResultV1,
@@ -402,11 +454,55 @@ export function createPlatformSessionReserveWorkerV1(options: {
 			if (object && object.metadata?.uid !== create.resource.uid)
 				throw new WorkloadKubernetesError("conflict");
 			if (deletion?.status === "confirmed") {
-				if (object) throw new WorkloadKubernetesError("conflict");
-				continue;
+				if (deletion.absent) {
+					if (object) throw new WorkloadKubernetesError("conflict");
+					continue;
+				}
+				if (!object) {
+					await guard();
+					if (
+						!(await store.recordDeleteObservation(claim, {
+							attemptId: deletion.attemptId,
+						}))
+					)
+						throw new LeaseLost();
+					continue;
+				}
+				return;
+			}
+			if (deletion?.status === "unknown") {
+				// The original DELETE has no terminal response. A GET cannot close it.
+				return;
+			}
+			let deleteResource = create.resource;
+			if (deletion?.status === "rejected") {
+				if (!object) {
+					await guard();
+					if (
+						!(await store.recordDeleteObservation(claim, {
+							attemptId: deletion.attemptId,
+						}))
+					)
+						throw new LeaseLost();
+					continue;
+				}
+				if (
+					claim.operations.filter(
+						(operation) =>
+							operation.operation === "delete" &&
+							operation.kind === kind &&
+							operation.status === "rejected",
+					).length >= 3
+				)
+					throw new WorkloadKubernetesError("conflict");
+				deleteResource = identity(claim, object);
+				await guard();
+				if (!(await store.recordObservation(claim, deleteResource)))
+					throw new LeaseLost();
+				deletion = undefined;
 			}
 			if (!deletion) {
-				const resource = object ? identity(claim, object) : create.resource;
+				const resource = object ? identity(claim, object) : deleteResource;
 				if (object && !(await store.recordObservation(claim, resource)))
 					throw new LeaseLost();
 				const intent: SessionSandboxReserveOperationInputV1 = {
@@ -427,42 +523,69 @@ export function createPlatformSessionReserveWorkerV1(options: {
 				};
 			}
 			if (!deletion.resource) throw new WorkloadKubernetesError("conflict");
-			if (object) {
-				if (
-					object.metadata?.resourceVersion !== deletion.resource.resourceVersion
-				)
-					throw new WorkloadKubernetesError("conflict");
+			if (
+				object &&
+				object.metadata?.resourceVersion !== deletion.resource.resourceVersion
+			)
+				throw new WorkloadKubernetesError("conflict");
+			let deleteResponse: "acknowledged" | "absent" | undefined;
+			await guard();
+			try {
+				const response = await adapter.remove(
+					claim,
+					deletion.resource,
+					abortController.signal,
+				);
+				deleteResponse = response;
 				await guard();
-				try {
-					await adapter.remove(
-						claim,
-						deletion.resource,
-						abortController.signal,
-					);
-				} catch (error) {
-					await store.recordResult(claim, {
+				if (
+					!(await store.recordDeleteResponse(claim, {
+						attemptId: deletion.attemptId,
+						response,
+						resource: deletion.resource,
+					}))
+				)
+					throw new LeaseLost();
+			} catch (error) {
+				if (error instanceof LeaseLost) throw error;
+				if (definiteDeleteRejection(error)) {
+					if (
+						!(await store.recordDeleteResponse(claim, {
+							attemptId: deletion.attemptId,
+							response: "rejected",
+							resource: deletion.resource,
+						}))
+					)
+						throw new LeaseLost();
+				} else if (
+					!(await store.recordResult(claim, {
 						...input(deletion),
 						status: "unknown",
-					});
-					throw error;
-				}
+					}))
+				)
+					throw new LeaseLost();
+				throw error;
 			}
 			await guard();
-			if (await adapter.read(claim, kind, abortController.signal)) return;
-			if (
-				!(await store.recordResult(claim, {
-					...input(deletion),
-					status: "confirmed",
-					absent: true,
-				}))
-			)
-				throw new LeaseLost();
+			if (!(await adapter.read(claim, kind, abortController.signal))) {
+				if (deleteResponse !== "absent") {
+					if (
+						!(await store.recordDeleteObservation(claim, {
+							attemptId: deletion.attemptId,
+						}))
+					)
+						throw new LeaseLost();
+				}
+				continue;
+			}
+			return;
 		}
 		await guard();
 		if (await store.finishRetirement(claim)) result.retired++;
 	}
 	async function run(): Promise<SessionReserveReconcileResultV1> {
 		const result = emptyResult();
+		await ensureConfiguration();
 		const rows = await store.list();
 		for (const row of rows) {
 			if (stopped) break;
@@ -478,7 +601,11 @@ export function createPlatformSessionReserveWorkerV1(options: {
 					row.status !== "retiring"
 				) {
 					if (!(await store.retire(row.sandboxId))) continue;
-				} else if (row.status === "ready" || row.status === "claimed") continue;
+				} else if (row.status === "claimed") continue;
+				else if (row.status === "ready") {
+					await inspectReady(row, result);
+					continue;
+				}
 				const claim = await store.claimLease({
 					sandboxId: row.sandboxId,
 					workerId,
@@ -503,24 +630,60 @@ export function createPlatformSessionReserveWorkerV1(options: {
 		if (stopped || !configuration.enabled || !configuration.profiles.length)
 			return result;
 		const current = await store.list();
+		let statistics:
+			| Awaited<ReturnType<PostgresSessionSandboxReserveStoreV1["statistics"]>>
+			| undefined;
+		try {
+			statistics = await store.statistics({ windowMs: 60_000 });
+		} catch {
+			report();
+		}
 		const profiles = configuration.profiles;
 		for (let offset = 0; offset < profiles.length; offset++) {
 			const profile = profiles[(profileCursor + offset) % profiles.length];
 			if (!profile || stopped) break;
 			if ((backoff.get(profile.agentId) ?? 0) > now()) continue;
+			const demand = statistics?.profiles.find(
+				(sample) =>
+					sample.agentId === profile.agentId &&
+					sample.profileDigest === sample.currentProfileDigest,
+			);
+			const target = Math.min(
+				profile.maximum,
+				Math.max(
+					profile.minimum,
+					profile.minimum +
+						Math.max(
+							0,
+							(demand?.newSessionCount ?? 0) - (demand?.claimedCount ?? 0),
+						),
+				),
+			);
 			const count = current.filter(
 				(row) =>
 					row.agentId === profile.agentId &&
-					["ready", "preparing"].includes(row.status),
+					["ready", "preparing"].includes(row.status) &&
+					(!demand || row.profileDigest === demand.profileDigest),
 			).length;
-			if (count >= profile.minimum) continue;
-			try {
-				if (await store.prepare(profile.agentId)) result.prepared++;
-				else defer(profile.agentId);
-			} catch {
-				result.unavailable++;
-				defer(profile.agentId);
-				report();
+			let missing = Math.max(0, target - count);
+			while (
+				missing > 0 &&
+				result.prepared < configuration.maximumConcurrentCreates
+			) {
+				try {
+					if (await store.prepare(profile.agentId)) {
+						result.prepared++;
+						missing--;
+					} else {
+						defer(profile.agentId);
+						break;
+					}
+				} catch {
+					result.unavailable++;
+					defer(profile.agentId);
+					report();
+					break;
+				}
 			}
 			if (result.prepared >= configuration.maximumConcurrentCreates) break;
 		}
