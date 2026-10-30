@@ -761,13 +761,14 @@ async function applyWorkerBinding(source) {
 
 async function applyComponentBindings(source) {
 	const platform = dockerPlatform();
+	const profile = targetProfile();
 	const cache = await readCache(join(stateRoot, "component-image-cache.json"), {
 		schemaVersion: 1,
 		components: {},
 	});
 	for (const service of ["web", "platform-api", "platform-worker", "enterprise-directory-sync"]) {
 		const input = await componentInputForSource(source, service, platform);
-		const entry = cache.components?.[`${service}:${input.inputHash}`];
+		const entry = cache.components?.[`${profile}:${service}:${input.inputHash}`];
 		if (!entry?.imageId || entry.platform !== platform)
 			fail(`Component binding is missing for ${service} at ${source.sha}`);
 		const image = inspectLocalImage(entry.imageId);
