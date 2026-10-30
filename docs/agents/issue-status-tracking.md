@@ -1,15 +1,15 @@
 # 开放 Issue 状态跟进
 
-> GitHub 清单采集时间：2026-10-30T19:01:07Z。
-> 当前来源：fresh-fetched `origin/main` exact SHA `985c16229571437affed57b9447ff20038e37306`。
+> GitHub 清单采集时间：2026-10-30T19:29:10Z。
+> 当前来源：fresh-fetched `origin/main` exact SHA `4ea71ed3c941d92fbf1fd815835e46c5a857094b`。
 > 这是有时间边界的状态快照，不是写入授权；执行前必须重新回读 Issue 正文、评论、依赖、关联 PR、当前 worktree 和 session owner。通用分派规则见 [Issue 工作指导](issue-work-guidance.md)。
 
 本次全量开放 Issue **17**，开放 PR **2**。#3553 明确排除。开放清单为：#3786、#3783、#3779、#3777、#3747、#3692、#3295、#3230、#3108、#2998、#2983、#2858、#2857、#1548、#851、#171、#144。
 
 开放 PR：
 
-- [#3789](https://github.com/AgoraIO-Extensions/agent-infra/pull/3789) Ready，`fix/3777-reserve-recovery`，head `d3e3f0c0d48105c1134e03ed44b5c1815a46d3b1`，base `985c16229571437affed57b9447ff20038e37306`；review threads 已解决，Hosted Backend/Heavy/Workload 仍在运行。
-- [#3792](https://github.com/AgoraIO-Extensions/agent-infra/pull/3792) Ready，`fix/851-web-install-confirm`，head `3db0db88229609d9949f7ac336b0c4b37d959df0`，base `985c16229571437affed57b9447ff20038e37306`；Web/PR-Agent 已通过，Backend/Heavy 仍在运行，AC-10 浏览器验证标记 `ready-for-human`。
+- [#3792](https://github.com/AgoraIO-Extensions/agent-infra/pull/3792) Ready，`fix/851-web-install-confirm`，head `3db0db88229609d9949f7ac336b0c4b37d959df0`，base `985c16229571437affed57b9447ff20038e37306`；Web/Backend/PR-Agent 已通过，Heavy 仍在运行，AC-10 浏览器验证标记 `ready-for-human`。
+- [#3793](https://github.com/AgoraIO-Extensions/agent-infra/pull/3793) Ready，`docs/issue-status-refresh-20261031`，head `1cd6a76d3ea2eb5dabf0ae9e69535b7306bebb2d`，base `985c16229571437affed57b9447ff20038e37306`；快照已随 main merge `4ea71ed3c` 刷新，Hosted checks 已通过并等待合入。
 
 ## 分类计数
 
@@ -26,8 +26,8 @@
 
 | Issue / 类别 | 当前 owner / 归属证据 | 状态与下一动作 | 主要边界 |
 | --- | --- | --- | --- |
-| [#3777](https://github.com/AgoraIO-Extensions/agent-infra/issues/3777) / Runtime/Worker/Core | recovery writer 已将 Store/Core 修复推至 PR #3789 head `d3e3f0c0d`；ROOT 只做收口 | revision fencing、migration 0073、DELETE 终态/同 UID 版本重试、late create、profile-aware statistics 已在 head；Hosted Backend/Workload 仍在运行，合入前不关闭 | 只改 Core/Store/API trusted assembly；Worker #3778 已合入并关闭；ACK 验收保留在 #3779 |
-| [#3779](https://github.com/AgoraIO-Extensions/agent-infra/issues/3779) / Deploy/E2E/Channels | #3778 已合入关闭；#3777 recovery 尚待合入；由性能/ACK owner 协调 | 等 #3777 合入后固定 capsule、namespace、source/image/config tuple，做 warm latency/isolation/depletion 实证 | 不把设计 PR、Worker 单测或历史 PodReady 当验收 |
+| [#3777](https://github.com/AgoraIO-Extensions/agent-infra/issues/3777) / Runtime/Worker/Core | recovery PR #3789 已合入；复核后重新打开，当前 coordinator/Store writer 继续补开发级并发/authority/fence 回归 | 保留 OPEN：当前 authority/profile/idempotency gate、同锁序与 durable facts、parallel/race/rollback/unknown 矩阵仍未充分证明；ACK 验收另在 #3779 | 不改 Worker/ACK；不把 merge 或历史 CI 代签未证明 AC |
+| [#3779](https://github.com/AgoraIO-Extensions/agent-infra/issues/3779) / Deploy/E2E/Channels | #3778 已关闭；#3777 的开发级补缺仍在收口；由性能/ACK owner 协调，已标 `ready-for-human` | 待 #3777 开发缺口收口后固定 capsule、namespace、source/image/config tuple，做 warm latency/isolation/depletion 实证 | 不把设计 PR、Worker 单测或历史 PodReady 当验收 |
 | [#3783](https://github.com/AgoraIO-Extensions/agent-infra/issues/3783) / Deploy/E2E/Channels | 私有 ACK API/Worker adapter 的原 owner 范围；当前没有公开 handoff | Directory-only identity 资格修复仍 OPEN；先由原 owner 完成代码/负向检查，其他 session 不接管 | 保留历史 canonical ID；不伪造 LDAP UID、不改 Directory/LDAP/Provider |
 | [#3747](https://github.com/AgoraIO-Extensions/agent-infra/issues/3747) / Runtime/Worker/Core | `session-owned`，Exclusive-Owner-Session-ID `01a187db-3f47-72e1-8855-dd94cae95dc3` | 跳过接管；当前已有真实 API task/续接/取消回执，SSE 中间 unknown 由 #3786 独立跟进 | 不重放旧 execution、不改 ACK overlay；只有原 session 或用户明确转交可继续 |
 | [#3786](https://github.com/AgoraIO-Extensions/agent-infra/issues/3786) / Runtime/Worker/Core | `session-owned`，Exclusive-Owner-Session-ID `01a187db-3f47-72e1-8855-dd94cae95dc3` | 跳过接管；PR #3787 已合入，当前仍缺新镜像上的续接/重放/隔离/取消和清理回执 | 不重放 #3747 旧 execution；只有原 session 或用户明确转交可继续 |
@@ -40,16 +40,17 @@
 | [#2858](https://github.com/AgoraIO-Extensions/agent-infra/issues/2858) / Platform/Web/Skill | ROOT 持有管理流程验收协调 | 正式登录/授权读回通过，但四模板 `readiness=stale`、`revision=null`；待正式模板刷新后跑申请→修改→驳回→重提→撤回及跨主体矩阵 | 不用占位镜像、复用幂等键或 409 伪造产品缺陷 |
 | [#2857](https://github.com/AgoraIO-Extensions/agent-infra/issues/2857) / Runtime/Worker/Core | ROOT 持有验收筹备；#1548 owner 仍持有 `local-e2e-01a094f5` Harness 写入 | 等 #1548 Harness 修复和明确执行窗口；再固定两个主体、两个 Agent、三入口，做隔离/并发/重启/撤权/旧代次矩阵 | 不接管 #1548 Harness、ACK 环境或 #3553 |
 | [#1548](https://github.com/AgoraIO-Extensions/agent-infra/issues/1548) / Platform/Web/Skill | `agent:kiro`、`ready-for-human`；原 owner 已释放旧 writer，当前协调者只做筹备 | 缺获准 Provider/source/signature/approval、Skill materializer/Applied tuple 和四模板恢复/撤销/隔离/UI 真实链；#3752/#3754 只修 Harness cache | 不把发布成功、镜像 digest 或 fixture 链当完整 Skill 验收 |
-| [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) / Runtime/Worker/Core | Web confirm slice 已交 PR #3792；Worker AC-11/12 已由原 Worker owner 明确接收，待 #3789 cleanup 后从最新 main 开发 | PR #3792 只覆盖显式确认；浏览器 AC-10 待人审，Worker installation 隔离、自动 Consumer 注册、生产供应和真实 MCP/Provider 仍 OPEN | 不扩写 Connection、不代持 token、不使用管理员 Cookie |
+| [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) / Runtime/Worker/Core | Web confirm slice 已交 PR #3792；#3789 cleanup 已完成，原 Worker owner 已接收 AC-11/12 | PR #3792 只覆盖显式确认；浏览器 AC-10 待人审，Worker installation 隔离、自动 Consumer 注册、生产供应和真实 MCP/Provider 仍 OPEN | 不扩写 Connection、不代持 token、不使用管理员 Cookie |
 | [#171](https://github.com/AgoraIO-Extensions/agent-infra/issues/171) / Deploy/E2E/Channels | assignee `LichKing-2234`、`wayfinder:task`；ACK 环境 owner 负责资源窗口 | 原生 blocked_by #3295；除网络外仍需 StorageClass/PVC、Registry pull、RBAC、DNS/TLS、入口和 `can-i` 回执 | 资源筹备不等于真实环境交付；父 #144 保持 OPEN |
 | [#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144) / Workflow/Observability | assignee `LichKing-2234`、`wayfinder:map`；协调者复核父子范围 | #171/#3295 和自身路线/环境/跨系统交接未完成；所有开发 child 与真实验收必须分别回读后再审父票 | #3553 明确排除；不能按已关闭 child 数量关父票 |
 
 ## 当前证据与交付记录
 
-- Root `main` 与 `origin/main` 当前均为 `985c16229571437affed57b9447ff20038e37306`，根目录仅保留既有未跟踪 `.scratch/`；其他 worktree 不因 idle 或 clean 自动释放 owner。
-- PR #3789 的 migration 0073 将新 Session allocation 的 `admission_profile_digest` 作为可空、不可猜补的创建时事实；Store PostgreSQL focused 26/26、Core reserve 5/5、migration contract 52/52、API deployment 78/78、Core/Store build/types/迁移 drift 通过。旧 Hosted Backend 曾因迁移测试期望只列到 0072 失败；该失败已由当前 head 的测试期望修正，新 Hosted run 正在运行。
+- Root `main` 与 `origin/main` 当前均为 `4ea71ed3c941d92fbf1fd815835e46c5a857094b`，根目录仅保留既有未跟踪 `.scratch/`；其他 worktree 不因 idle 或 clean 自动释放 owner。
+- PR #3789 的 migration 0073 将新 Session allocation 的 `admission_profile_digest` 作为可空、不可猜补的创建时事实；Store PostgreSQL focused 27/27、Core reserve 5/5、migration contract、API deployment、Core/Store build/types/迁移 drift 及当前 Hosted required checks 已通过。旧 Hosted Backend 的迁移期望失败已在最终 head 修正。
 - PR #3788 的 Worker follow-up 已合入 `985c16229571437affed57b9447ff20038e37306`，Issue #3778 已关闭；140/140 focused tests、Biome、Worker types 和 Hosted required checks 通过。ACK 验收与动态 reserve 真实证据仍由 #3779 跟踪。
-- PR #3792 的 Web confirm slice 基于 `985c16229571437affed57b9447ff20038e37306`，28 个 focused Vitest、Web build/types、Biome 和 diff-check 通过；本机缺 pinned Chromium，11 个 Playwright 测试未启动，PR 保留 `ready-for-human`，不代签 AC-10。
+- PR #3789 已合入 `4ea71ed3c941d92fbf1fd815835e46c5a857094b`；revision fencing、migration 0073、DELETE/late-response recovery 和 Store Hosted checks 已完成，但 #3777 复核后因开发级并发/authority/fence 证据不足重新打开，Worker owner 可从新 main 接收 #851 AC-11/12。
+- PR #3792 的 Web confirm slice 基于 `985c16229571437affed57b9447ff20038e37306`，28 个 focused Vitest、Web build/types、Biome 和 diff-check 通过；本机缺 pinned Chromium，11 个 Playwright 测试未启动，Hosted Heavy 仍在运行，PR 保留 `ready-for-human`，不代签 AC-10。
 - PR #3791 已合入并完成专属清理；本次快照只更新 GitHub 当前 Issue/PR 状态，不把历史快照或旧 session receipt 作为实时 owner 证据。
 - 已合入的相关交付：PR #3787 merge `9ef35544bf1a30780c9e455678a375ccf6a82ad8`（ACP operation start time）；PR #3785 merge `5264fbbac6351ec84cb90cb5310fe5e78fc6ac4b`（Session reserve 初始 Core/Store，后续 recovery 已重开 #3777）；PR #3784 merge `cd1a518ea67515f99dddce3881f1630402d13346`；设计 PR #3775 merge `0d78b7849a40d69aca474716b397841f228942b1`。合入不等于父票真实 ACK 验收。
 - PR #3776、#3768 等历史开发交付均已按 exact head/Hosted receipt 独立回读；本快照不把其本地 arm64 下载失败改写为通过。
