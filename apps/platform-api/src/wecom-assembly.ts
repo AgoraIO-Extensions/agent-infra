@@ -1,3 +1,4 @@
+import type { SessionSandboxReserveConfigurationV1 } from "@agent-infra/platform-core";
 import {
 	createWecomAuthorizationV1,
 	createWecomChannelV1,
@@ -18,6 +19,7 @@ import {
 } from "@agent-infra/wecom";
 import type { WecomRoutesDependenciesV1 } from "./http/wecom-routes.js";
 export interface WecomApiDeploymentV1 {
+	readonly sessionSandboxReserves?: SessionSandboxReserveConfigurationV1;
 	readonly identity: WecomIdentityPortV1;
 	readonly connectionAuthorization?: WecomConnectionAuthorizationPortV1;
 	readonly userDirectory?: TaskUserDirectoryV1;
@@ -45,6 +47,7 @@ export function assembleWecomApiV1(
 		deployment.identity,
 		deployment.userDirectory,
 		deployment.connectionAuthorization,
+		deployment.sessionSandboxReserves,
 	);
 	const { store, authorization } = receipts;
 	// #3375：与 Web 读取同一 Runtime 展示投影中的补充指令能力。
@@ -89,8 +92,10 @@ export function assembleWecomReceiptApiV1(
 	identity: WecomIdentityPortV1,
 	userDirectory?: TaskUserDirectoryV1,
 	connectionAuthorization?: WecomConnectionAuthorizationPortV1,
+	sessionSandboxReserves?: SessionSandboxReserveConfigurationV1,
 ) {
 	const store = new PostgresWecomChannelV1({
+		sessionSandboxReserves,
 		databaseUrl,
 		userDirectory,
 		identity,

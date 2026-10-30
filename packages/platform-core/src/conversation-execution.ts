@@ -374,9 +374,10 @@ export function createConversationExecutionUseCaseV1(
 				return normalizeCreateDecision(
 					await dependencies.transaction.createConversation(
 						{ command, authority, requestDigest },
-						() => {
+						(reservedSandbox) => {
 							const occurredAt = safeNow(now);
-							const conversationId = nextOpaqueId(newId);
+							const conversationId =
+								reservedSandbox?.sessionId ?? nextOpaqueId(newId);
 							const result: ConversationCreatedResultV1 = {
 								schemaVersion: 1,
 								conversationId,
@@ -385,10 +386,9 @@ export function createConversationExecutionUseCaseV1(
 							};
 							return {
 								schemaVersion: 1,
-								sandbox: createSessionSandboxBindingV1(
-									authority,
-									conversationId,
-								),
+								sandbox:
+									reservedSandbox ??
+									createSessionSandboxBindingV1(authority, conversationId),
 								conversation: {
 									schemaVersion: 1,
 									conversationId,

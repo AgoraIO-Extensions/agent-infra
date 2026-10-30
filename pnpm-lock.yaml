@@ -785,6 +785,9 @@ importers:
       '@agent-infra/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@agent-infra/model-catalog':
+        specifier: workspace:*
+        version: link:../model-catalog
       '@agent-infra/platform-core':
         specifier: workspace:*
         version: link:../platform-core
@@ -801,9 +804,6 @@ importers:
       '@agent-infra/image-registry':
         specifier: workspace:*
         version: link:../image-registry
-      '@agent-infra/model-catalog':
-        specifier: workspace:*
-        version: link:../model-catalog
       '@agent-infra/secret-store':
         specifier: workspace:*
         version: link:../secret-store

@@ -143,6 +143,7 @@ interface AssemblyQueries {
 }
 
 export interface PlatformApiAssemblyInput {
+	readonly sessionSandboxReserves?: import("@agent-infra/platform-core").SessionSandboxReserveConfigurationV1;
 	readonly connectionInstallation?: {
 		readonly publicOrigin: string;
 		readonly configuration?: RuntimeOAuthConfigurationV1;
@@ -556,6 +557,7 @@ export function assemblePlatformApi(
 	});
 	const conversationTransaction =
 		new PostgresConversationExecutionTransactionV1({
+			sessionSandboxReserves: input.sessionSandboxReserves,
 			databaseUrl: input.databaseUrl,
 			userDirectory,
 			evaluationPolicy: evaluationOptions

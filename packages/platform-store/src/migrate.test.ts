@@ -2011,6 +2011,7 @@ describe("published Relay authority migration", () => {
 			69,
 			70,
 			71,
+			72,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2085,8 +2086,8 @@ describe("published Relay authority migration", () => {
 			tag: "0063_wecom_outbound_media",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 71,
-			tag: "0071_evaluation_analysis_feedback",
+			idx: 72,
+			tag: "0072_session_sandbox_reserves",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2375,6 +2376,47 @@ describe("published Relay authority migration", () => {
 			expectedDelta.checks.push(
 				"agent_applications:agent_application_creation_provenance",
 				"agent_applications:agent_application_management_state_valid",
+			);
+			expectedDelta.columns.push(
+				...["namespace", "revision", "configuration", "updated_at"].map(
+					(name) => `session_sandbox_budgets:${name}`,
+				),
+				...[
+					"sandbox_id",
+					"session_id",
+					"agent_id",
+					"namespace",
+					"profile_digest",
+					"profile",
+					"status",
+					"operations",
+					"lease_owner",
+					"lease_expires_at",
+					"delivery_fence",
+					"expires_at",
+					"created_at",
+					"updated_at",
+					"claimed_at",
+					"retired_at",
+				].map((name) => `session_sandbox_reserves:${name}`),
+				...[
+					"sandbox_id",
+					"namespace",
+					"resources",
+					"compute_released",
+					"released",
+				].map((name) => `session_sandbox_resource_charges:${name}`),
+			);
+			expectedDelta.checks.push(
+				...["fence_safe", "id_uuid", "status_valid"].map(
+					(name) => `session_sandbox_reserves:session_sandbox_reserve_${name}`,
+				),
+			);
+			expectedDelta.indexes.push(
+				"session_sandbox_budgets:session_sandbox_budgets_pkey",
+				"session_sandbox_reserves:session_sandbox_reserve_session_unique",
+				"session_sandbox_reserves:session_sandbox_reserves_pkey",
+				"session_sandbox_resource_charges:session_sandbox_resource_charges_pkey",
 			);
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,

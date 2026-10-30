@@ -37,6 +37,10 @@ import {
 	readCurrentTaskApplicationV1,
 } from "./application-task-authorization.js";
 import { lockConversation, lockOutbox } from "./conversation-dispatch-sql.js";
+import {
+	releaseSessionSandboxComputeBudgetV1,
+	reserveSessionSandboxPreparationBudgetV1,
+} from "./session-sandbox-reserves.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
 type Transaction = postgres.TransactionSql;
@@ -519,6 +523,12 @@ export async function claimSandboxReconciliation(
 		wait("policy_changed");
 		return null;
 	}
+	if (context.purpose === "prepare")
+		await reserveSessionSandboxPreparationBudgetV1(
+			transaction,
+			sandbox.sandboxId,
+			context.policy,
+		);
 	const resourceFence = Math.max(1, Number(allocation.resource_fence));
 	const deliveryFence = Number(outbox.delivery_fence) + 1;
 	if (
@@ -864,6 +874,11 @@ export async function recordSandboxObservation(
 	await transaction`update platform.session_sandbox_allocations set status = ${decision.status},
 		resource_observation = ${transaction.json(decision.observation as unknown as Parameters<typeof transaction.json>[0])},
 		updated_at = clock_timestamp() where sandbox_id = ${claim.sandbox.sandboxId}`;
+	if (stopReceipt)
+		await releaseSessionSandboxComputeBudgetV1(
+			transaction,
+			claim.sandbox.sandboxId,
+		);
 	if (retry.changed)
 		await transaction`insert into platform.conversation_audit_events
 		(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at, details)

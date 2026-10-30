@@ -201,6 +201,10 @@ export {
 } from "./secret-key-rotation.ts";
 export { requestSessionSandboxResume } from "./session-sandbox.js";
 export type { SessionSandboxClaimWaitReasonV1 } from "./session-sandbox-reconciliation.js";
+export {
+	PostgresSessionSandboxReserveStoreV1,
+	type SessionSandboxReserveWorkerClaimV1,
+} from "./session-sandbox-reserves.js";
 export { PostgresSkillHubLifecycleV1 } from "./skill-hub.js";
 export {
 	PostgresSkillHubAgentBindingAdmissionV1,

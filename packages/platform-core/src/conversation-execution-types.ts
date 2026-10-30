@@ -813,7 +813,9 @@ export interface ConversationExecutionTransactionPortV1 {
 			readonly authority: ConversationExecutionAuthorityV1;
 			readonly requestDigest: string;
 		},
-		decide: () => CreateConversationWritePlanV1,
+		decide: (
+			sandbox?: SessionSandboxBindingV1,
+		) => CreateConversationWritePlanV1,
 	): Promise<CreateConversationDecisionV1>;
 	readConversation(
 		request: {

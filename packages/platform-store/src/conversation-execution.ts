@@ -34,8 +34,10 @@ import {
 	PersonalApiCredentialErrorV1,
 	parseConversationOperationEventV2,
 	parseNativeCapabilityAttachmentsV1,
+	parseSessionSandboxReserveConfigurationV1,
 	parseTaskAuthorizationBoundaryV1,
 	planTaskSystemControlV1,
+	type SessionSandboxReserveConfigurationV1,
 	type TaskApiAuditPlanV1,
 	type TaskApiChannelV1,
 	type TaskUserDirectoryV1,
@@ -140,6 +142,11 @@ import {
 	insertSessionSandboxBinding,
 	requestSessionSandboxResume,
 } from "./session-sandbox.js";
+import {
+	admitNewSessionSandboxV1,
+	adoptSessionSandboxReserveV1,
+	lockSessionSandboxCreateAuthorityV1,
+} from "./session-sandbox-reserves.js";
 import { writeTaskApiAuditV1 } from "./task-api-audit.js";
 import { insertTaskAuthorization } from "./task-authorization.js";
 
@@ -301,6 +308,7 @@ function validateNativeAdmissionPlan(
 }
 
 export interface PostgresConversationExecutionOptionsV1 {
+	readonly sessionSandboxReserves?: SessionSandboxReserveConfigurationV1;
 	readonly evaluationPolicy?: EvaluationCurrentPolicyReaderV1;
 	readonly databaseUrl: string;
 	readonly userDirectory?: TaskUserDirectoryV1;
@@ -312,6 +320,9 @@ export class PostgresConversationExecutionTransactionV1
 		ConversationExecutionTransactionPortV1,
 		NativeCapabilityAdmissionTransactionPortV6
 {
+	readonly #sessionSandboxReserves:
+		| SessionSandboxReserveConfigurationV1
+		| undefined;
 	readonly #evaluationPolicy: EvaluationCurrentPolicyReaderV1 | undefined;
 	readonly #client: ReturnType<typeof postgres> | undefined;
 	readonly #existingTransaction: Transaction | undefined;
@@ -327,12 +338,18 @@ export class PostgresConversationExecutionTransactionV1
 			| PostgresConversationExecutionOptionsV1
 			| {
 					readonly transaction: Transaction;
+					readonly sessionSandboxReserves?: SessionSandboxReserveConfigurationV1;
 					readonly evaluationPolicy?: EvaluationCurrentPolicyReaderV1;
 					readonly userDirectory?: TaskUserDirectoryV1;
 					readonly readRequestedModelDisplayName?: RequestedModelDisplayNameResolverV1;
 					readonly signal?: AbortSignal;
 			  },
 	) {
+		this.#sessionSandboxReserves = options.sessionSandboxReserves
+			? parseSessionSandboxReserveConfigurationV1(
+					options.sessionSandboxReserves,
+				)
+			: undefined;
 		this.#userDirectory = options.userDirectory;
 		this.#evaluationPolicy = options.evaluationPolicy;
 		this.#readRequestedModelDisplayName = options.readRequestedModelDisplayName;
@@ -979,6 +996,15 @@ export class PostgresConversationExecutionTransactionV1
 			if (request.command.agentId !== authority.agentId) {
 				return { outcome: "denied" };
 			}
+			if (
+				this.#sessionSandboxReserves?.enabled &&
+				!(await lockSessionSandboxCreateAuthorityV1(
+					transaction,
+					authority,
+					this.#userDirectory,
+				))
+			)
+				return { outcome: "denied" };
 			const scope = {
 				scopeType: "agent",
 				scopeId: createIdempotencyScopeId(
@@ -999,7 +1025,7 @@ export class PostgresConversationExecutionTransactionV1
 				await requireCreateReplay(transaction, result, authority);
 				return { outcome: "replayed", result };
 			}
-			const plan = validateCreatePlan(decide(), request);
+			let plan = validateCreatePlan(decide(), request);
 			const occurredAt = plan.conversation.createdAt;
 			const reservationId = await reserveIdempotency(transaction, {
 				...scope,
@@ -1017,6 +1043,19 @@ export class PostgresConversationExecutionTransactionV1
 				await requireCreateReplay(transaction, result, authority);
 				return { outcome: "replayed", result };
 			}
+			const admission = await admitNewSessionSandboxV1(
+				transaction,
+				authority,
+				plan.sandbox,
+				this.#sessionSandboxReserves,
+			);
+			if (admission.binding.sandboxId !== plan.sandbox.sandboxId)
+				plan = validateCreatePlan(
+					decide(admission.binding),
+					request,
+					admission.binding,
+				);
+
 			await awaitConversationExecutionQueryV1(
 				transaction,
 				transaction`
@@ -1041,6 +1080,7 @@ export class PostgresConversationExecutionTransactionV1
 				traceId: request.command.traceId,
 				occurredAt,
 			});
+			await adoptSessionSandboxReserveV1(transaction, admission);
 			await completeIdempotency(
 				transaction,
 				reservationId,
@@ -2102,6 +2142,7 @@ export class PostgresConversationExecutionTransactionV1
 				this.#userDirectory,
 				this.#readRequestedModelDisplayName,
 				this.#evaluationPolicy,
+				this.#sessionSandboxReserves,
 			),
 		);
 	}

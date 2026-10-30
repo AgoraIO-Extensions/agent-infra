@@ -44,6 +44,7 @@ export interface ConversationTaskSubmitCommandV1 {
 }
 
 export interface ConversationTaskAdmissionStateV1 {
+	readonly newSandbox?: SessionSandboxBindingV1;
 	readonly agent: {
 		readonly status: string;
 		readonly desiredState: string | null;
@@ -422,7 +423,9 @@ export function createConversationTaskAdmissionUseCaseV1(
 						)
 							unavailable();
 						const conversationId =
-							conversation?.conversationId ?? nextOpaqueId(newId);
+							conversation?.conversationId ??
+							state.newSandbox?.sessionId ??
+							nextOpaqueId(newId);
 						const executionId = nextOpaqueId(newId);
 						const turnId = nextOpaqueId(newId);
 						const messageId = nextOpaqueId(newId);
@@ -457,7 +460,8 @@ export function createConversationTaskAdmissionUseCaseV1(
 							conversationId,
 							sandbox: conversation
 								? null
-								: createSessionSandboxBindingV1(authority, conversationId),
+								: (state.newSandbox ??
+									createSessionSandboxBindingV1(authority, conversationId)),
 							createConversation: !conversation,
 							executionId,
 							turnId,

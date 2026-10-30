@@ -51,6 +51,11 @@ import {
 	taskControlRecords,
 } from "./schema-operations";
 import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
+import {
+	sessionSandboxBudgets,
+	sessionSandboxReserves,
+	sessionSandboxResourceCharges,
+} from "./schema-session-sandbox-reserves.js";
 import { browserSessions } from "./schema-sessions";
 
 export {
@@ -191,6 +196,9 @@ export const platformInfrastructureTables = [
 	conversations,
 	conversationExecutions,
 	sessionSandboxAllocations,
+	sessionSandboxBudgets,
+	sessionSandboxReserves,
+	sessionSandboxResourceCharges,
 	taskAuthorizationRecords,
 	taskControlRecords,
 	conversationGenerationTombstones,
@@ -232,4 +240,5 @@ export {
 	evaluationVersions,
 	taskFeedback,
 } from "./schema-evaluation.js";
+export * from "./schema-session-sandbox-reserves.js";
 export { sessionSandboxAllocations } from "./schema-session-sandboxes";

@@ -23,6 +23,7 @@
 	},
 	"dependencies": {
 		"@agent-infra/contracts": "workspace:*",
+		"@agent-infra/model-catalog": "workspace:*",
 		"@agent-infra/platform-core": "workspace:*",
 		"drizzle-orm": "catalog:",
 		"postgres": "catalog:"
@@ -30,7 +31,6 @@
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",
 		"@agent-infra/image-registry": "workspace:*",
-		"@agent-infra/model-catalog": "workspace:*",
 		"@agent-infra/secret-store": "workspace:*",
 		"@types/node": "catalog:",
 		"@types/ws": "8.18.1",
