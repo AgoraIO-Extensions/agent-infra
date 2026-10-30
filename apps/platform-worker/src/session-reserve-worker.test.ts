@@ -201,7 +201,7 @@ function fixture(
 				resource: input.resource,
 				writeCompletion: "response",
 			});
-			return leaseCurrent;
+			return true;
 		}),
 		recordDeleteObservation: vi.fn(async (_lease, input) => {
 			calls.push(`delete-observation:${input.attemptId}`);
@@ -597,6 +597,7 @@ describe("Session reserve Worker", () => {
 		const f = fixture({ status: "retiring" });
 		confirmed(f);
 		let rejected = true;
+		let acknowledged = false;
 		f.adapter.remove.mockImplementation(async (_claim, resource) => {
 			if (resource.kind === "Pod" && rejected) {
 				rejected = false;
@@ -605,6 +606,10 @@ describe("Session reserve Worker", () => {
 					verb: "delete",
 					kind: "Pod",
 				});
+			}
+			if (resource.kind === "Pod" && !acknowledged) {
+				acknowledged = true;
+				return "acknowledged" as const;
 			}
 			f.objects.delete(resource.kind);
 			return "acknowledged" as const;
@@ -624,6 +629,25 @@ describe("Session reserve Worker", () => {
 				([, resource]) => resource.kind === "Pod",
 			),
 		).toHaveLength(2);
+		expect(f.store.recordDeleteResponse).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ response: "acknowledged" }),
+		);
+		f.objects.delete("Pod");
+		f.setNow(13_001);
+		await f.worker.reconcile();
+		expect(f.store.recordDeleteObservation).toHaveBeenCalled();
+	});
+
+	it("persists a successful DELETE response even when lease renewal is lost afterward", async () => {
+		const f = fixture({ status: "retiring" });
+		confirmed(f);
+		f.adapter.remove.mockImplementationOnce(async (_claim, resource) => {
+			f.objects.delete(resource.kind);
+			f.expireLease();
+			return "acknowledged" as const;
+		});
+		await f.worker.reconcile();
 		expect(f.store.recordDeleteResponse).toHaveBeenCalledWith(
 			expect.anything(),
 			expect.objectContaining({ response: "acknowledged" }),

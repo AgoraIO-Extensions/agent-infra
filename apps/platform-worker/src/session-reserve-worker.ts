@@ -447,7 +447,7 @@ export function createPlatformSessionReserveWorkerV1(options: {
 				continue;
 			}
 			if (!create.resource) throw new WorkloadKubernetesError("conflict");
-			let deletion = claim.operations.find(
+			let deletion = claim.operations.findLast(
 				(operation) =>
 					operation.kind === kind && operation.operation === "delete",
 			);
@@ -537,7 +537,6 @@ export function createPlatformSessionReserveWorkerV1(options: {
 					abortController.signal,
 				);
 				deleteResponse = response;
-				await guard();
 				if (
 					!(await store.recordDeleteResponse(claim, {
 						attemptId: deletion.attemptId,
@@ -576,6 +575,7 @@ export function createPlatformSessionReserveWorkerV1(options: {
 					)
 						throw new LeaseLost();
 				}
+				await guard();
 				continue;
 			}
 			return;
