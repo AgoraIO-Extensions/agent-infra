@@ -1106,7 +1106,7 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			).toEqual([{ compute_released: false, released: false }]);
 		}
 	});
-	it("never-enabled default-off preserves the cold path without a budget gate or ledger", async () => {
+	it("never-enabled default-off preserves the cold path without charging resources", async () => {
 		const off = { ...config, enabled: false };
 		const result = await create(
 			execution(off),
@@ -1117,10 +1117,19 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		expect(result.outcome).toBe("accepted");
 		expect(
 			await sql`select 1 from platform.session_sandbox_budgets`,
-		).toHaveLength(0);
+		).toHaveLength(1);
 		expect(
 			await sql`select 1 from platform.session_sandbox_resource_charges`,
 		).toHaveLength(0);
+	});
+	it("persists a first disabled revision and fences an older enabled process", async () => {
+		const off = { ...config, enabled: false, revision: 7 };
+		const disabled = reserves(off);
+		await disabled.applyConfiguration();
+		expect(
+			await sql`select revision, configuration->>'enabled' as enabled from platform.session_sandbox_budgets`,
+		).toEqual([{ revision: "7", enabled: "false" }]);
+		await expect(reserves(config).prepare("agent")).rejects.toThrow();
 	});
 	it("disabling after an existing cold allocation preserves its ledger and permits original preparation", async () => {
 		const first = await create(
