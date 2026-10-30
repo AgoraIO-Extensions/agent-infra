@@ -759,3 +759,46 @@ describe("Platform Worker production V2 lifecycle", () => {
 		expect(workload.stop).toHaveBeenCalledOnce();
 	});
 });
+
+it("stops reserve replenishment before draining conversations and closes each loop once", async () => {
+	const order: string[] = [];
+	const loop = (name: string) => ({
+		stop: vi.fn(async () => {
+			order.push(name);
+		}),
+	});
+	const reserve = loop("reserves");
+	const conversation = {
+		...loop("conversation"),
+		status: () => "running" as const,
+	};
+	const worker = await startPlatformWorkerFromDeploymentV2({
+		startPrimary: () => loop("primary"),
+		startWorkload: async () => loop("workload"),
+		startReserves: async () => reserve,
+		startConversation: async () => conversation,
+	});
+	const stopping = worker.stop();
+	expect(worker.stop()).toBe(stopping);
+	await stopping;
+	expect(order).toEqual(["reserves", "conversation", "workload", "primary"]);
+	expect(reserve.stop).toHaveBeenCalledOnce();
+});
+it("closes reserve resources if later conversation startup fails", async () => {
+	const reserve = { stop: vi.fn(async () => {}) };
+	const workload = { stop: vi.fn(async () => {}) };
+	const primary = { stop: vi.fn(async () => {}) };
+	await expect(
+		startPlatformWorkerFromDeploymentV2({
+			startPrimary: () => primary,
+			startWorkload: async () => workload,
+			startReserves: async () => reserve,
+			startConversation: async () => {
+				throw new Error("conversation-start-failed");
+			},
+		}),
+	).rejects.toThrow("conversation-start-failed");
+	expect(reserve.stop).toHaveBeenCalledOnce();
+	expect(workload.stop).toHaveBeenCalledOnce();
+	expect(primary.stop).toHaveBeenCalledOnce();
+});
