@@ -365,7 +365,7 @@ async function applyReserveConfiguration(
 			: config;
 	await tx`insert into platform.session_sandbox_budgets (namespace, revision, configuration, updated_at)
 		values (${config.namespace}, ${config.revision}, ${tx.json(persisted as unknown as Json)}, clock_timestamp())
-		on conflict(namespace) do update set revision=excluded.revision, configuration=excluded.configuration, reserve_sizing=excluded.reserve_sizing, updated_at=excluded.updated_at`;
+		on conflict(namespace) do update set revision=excluded.revision, configuration=excluded.configuration, updated_at=excluded.updated_at`;
 	return decodeReservePolicy(persisted);
 }
 /** One transaction lock is shared by cold allocation, replenishment, claim, resume and retirement. */

@@ -1134,6 +1134,22 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		).toEqual([{ revision: "7", enabled: "false" }]);
 		await expect(reserves(config).prepare("agent")).rejects.toThrow();
 	});
+	it("preserves cooldown timing when a control revision changes without reserve sizing input", async () => {
+		const first = reserves();
+		await first.applyConfiguration();
+		await sql`update platform.session_sandbox_budgets set reserve_sizing = ${sql.json({
+			agent: {
+				profileDigest: "profile-v1",
+				target: 1,
+				lowTarget: 1,
+				lowSince: 1234,
+			},
+		})}`;
+		await reserves({ ...config, revision: 2 }).applyConfiguration();
+		const [budget] = await sql<{ reserve_sizing: { agent: { lowSince: number } } }[]>`
+			select reserve_sizing from platform.session_sandbox_budgets`;
+		expect(budget?.reserve_sizing.agent.lowSince).toBe(1234);
+	});
 	it("disabling after an existing cold allocation preserves its ledger and permits original preparation", async () => {
 		const first = await create(
 			execution(config),
