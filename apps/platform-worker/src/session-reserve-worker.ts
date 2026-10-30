@@ -470,8 +470,8 @@ export function createPlatformSessionReserveWorkerV1(options: {
 				}
 				return;
 			}
-			if (deletion?.status === "unknown") {
-				// The original DELETE has no terminal response. A GET cannot close it.
+			if (deletion?.status === "unknown" || deletion?.status === "pending") {
+				// An existing DELETE intent may already have reached the provider. Never resend it.
 				return;
 			}
 			let deleteResource = create.resource;

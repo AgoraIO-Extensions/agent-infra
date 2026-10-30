@@ -654,6 +654,30 @@ describe("Session reserve Worker", () => {
 		);
 	});
 
+	it("does not resend a DELETE whose intent is still pending after a crash", async () => {
+		const f = fixture({ status: "retiring" });
+		confirmed(f);
+		const pod = f.claim.operations.find(
+			(operation) =>
+				operation.operation === "create" && operation.kind === "Pod",
+		);
+		if (!pod?.resource) throw new Error("Pod fixture missing");
+		(f.claim.operations as SessionSandboxReserveOperationV1[]).push({
+			attemptId: "pending-delete",
+			operation: "delete",
+			kind: "Pod",
+			name: pod.resource.name,
+			status: "pending",
+			resource: pod.resource,
+			absent: false,
+			writeCompletion: "pending",
+			writer: { owner: "old-worker", fence: 1 },
+		});
+		await f.worker.reconcile();
+		expect(f.adapter.remove).not.toHaveBeenCalled();
+		expect(f.store.finishRetirement).not.toHaveBeenCalled();
+	});
+
 	it("records an original late create response after lease loss without sending another create", async () => {
 		vi.useFakeTimers();
 		const f = fixture();
