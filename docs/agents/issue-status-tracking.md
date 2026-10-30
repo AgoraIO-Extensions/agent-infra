@@ -1,21 +1,21 @@
 # 开放 Issue 状态跟进
 
-> GitHub 清单采集时间：2026-10-30T17:01:46Z。
-> 当前来源：fresh-fetched `origin/main` exact SHA `9ef35544bf1a30780c9e455678a375ccf6a82ad8`。
+> GitHub 清单采集时间：2026-10-30T18:16:37Z。
+> 当前来源：fresh-fetched `origin/main` exact SHA `6d7371f10d1c76dfaf9a4179b0c307a48482baaf`。
 > 这是有时间边界的状态快照，不是写入授权；执行前必须重新回读 Issue 正文、评论、依赖、关联 PR、当前 worktree 和 session owner。通用分派规则见 [Issue 工作指导](issue-work-guidance.md)。
 
-本次全量开放 Issue **17**，开放 PR **2**。#3553 明确排除。开放清单为：#3783、#3779、#3778、#3777、#3747、#3692、#3295、#3230、#3108、#2998、#2983、#2858、#2857、#1548、#851、#171、#144。
+本次全量开放 Issue **18**，开放 PR **2**。#3553 明确排除。开放清单为：#3786、#3783、#3779、#3778、#3777、#3747、#3692、#3295、#3230、#3108、#2998、#2983、#2858、#2857、#1548、#851、#171、#144。
 
 开放 PR：
 
-- [#3789](https://github.com/AgoraIO-Extensions/agent-infra/pull/3789) Draft，`fix/3777-reserve-recovery`，head `b11a9d915bad623b23a8b539a1ea4a91f0cee5b2`，base `9ef35544bf1a30780c9e455678a375ccf6a82ad8`；Store/Core recovery，Hosted Web 已通过，Backend/Heavy/Workload 仍在运行。
-- [#3788](https://github.com/AgoraIO-Extensions/agent-infra/pull/3788) Draft，`feat/3778-session-reserve-worker`，head `b14b2e1328a684b6edf2a77f230f3fcc26852e1c`，base `9ef35544bf1a30780c9e455678a375ccf6a82ad8`；Worker follow-up，Hosted Backend/Heavy/Workload 仍在运行。
+- [#3789](https://github.com/AgoraIO-Extensions/agent-infra/pull/3789) Ready，`fix/3777-reserve-recovery`，head `b11a9d915bad623b23a8b539a1ea4a91f0cee5b2`，base `9ef35544bf1a30780c9e455678a375ccf6a82ad8`；Hosted checks 已通过，但仍有一个未解决的非过期 review thread，暂不合入。
+- [#3788](https://github.com/AgoraIO-Extensions/agent-infra/pull/3788) Ready，`feat/3778-session-reserve-worker`，head `abc28b2e06fefa42a3ef24de47be2fe260a3fee9`，base `9ef35544bf1a30780c9e455678a375ccf6a82ad8`；Hosted Web/Backend/Workload 已通过，Heavy 仍在运行。
 
 ## 分类计数
 
 | 类别 | Issue 数量 | Issue |
 | --- | ---: | --- |
-| Runtime/Worker/Core | 6 | #3777、#3778、#3747、#3108、#851、#2857 |
+| Runtime/Worker/Core | 7 | #3786、#3777、#3778、#3747、#3108、#851、#2857 |
 | Deploy/E2E/Channels | 6 | #3779、#3783、#3295、#3230、#2998、#171 |
 | Platform/Web/Skill | 3 | #1548、#2983、#2858 |
 | Workflow/Observability | 2 | #3692、#144 |
@@ -31,6 +31,7 @@
 | [#3779](https://github.com/AgoraIO-Extensions/agent-infra/issues/3779) / Deploy/E2E/Channels | #3777/#3778 完成前不启动接受性写入；由性能/ACK owner 协调 | 被 #3777、#3778 阻塞；待两项合入后固定 capsule、namespace、source/image/config tuple，做 warm latency/isolation/depletion 实证 | 不把设计 PR、Worker 单测或历史 PodReady 当验收 |
 | [#3783](https://github.com/AgoraIO-Extensions/agent-infra/issues/3783) / Deploy/E2E/Channels | 私有 ACK API/Worker adapter 的原 owner 范围；当前没有公开 handoff | Directory-only identity 资格修复仍 OPEN；先由原 owner 完成代码/负向检查，其他 session 不接管 | 保留历史 canonical ID；不伪造 LDAP UID、不改 Directory/LDAP/Provider |
 | [#3747](https://github.com/AgoraIO-Extensions/agent-infra/issues/3747) / Runtime/Worker/Core | `session-owned`，Exclusive-Owner-Session-ID `01a187db-3f47-72e1-8855-dd94cae95dc3` | 跳过接管；当前已有真实 API task/续接/取消回执，SSE 中间 unknown 由 #3786 独立跟进 | 不重放旧 execution、不改 ACK overlay；只有原 session 或用户明确转交可继续 |
+| [#3786](https://github.com/AgoraIO-Extensions/agent-infra/issues/3786) / Runtime/Worker/Core | `session-owned`，Exclusive-Owner-Session-ID `01a187db-3f47-72e1-8855-dd94cae95dc3` | 跳过接管；PR #3787 已合入，当前仍缺新镜像上的续接/重放/隔离/取消和清理回执 | 不重放 #3747 旧 execution；只有原 session 或用户明确转交可继续 |
 | [#3692](https://github.com/AgoraIO-Extensions/agent-infra/issues/3692) / Workflow/Observability | assignee `LichKing-2234`，ACK 性能 owner | 757 四模板真实 preflight 和有限样本已回读；仍缺 fresh deployment 的分阶段、资源和负载基线，不能称 p95/SLO 达标 | 采集排队、准备、Pod、首字、完成分段；保留样本边界 |
 | [#3295](https://github.com/AgoraIO-Extensions/agent-infra/issues/3295) / Deploy/E2E/Channels | 网络 owner 仅接收只读方案筹备，未取得 CNI/集群写权 | Flannel 不能证明 NetworkPolicy 生效；需受支持 Terway/ECI Poseidon 目标和云侧 addon 回执，再跑 allow/deny/recovery | 不原地切 CNI，不改共享集群 |
 | [#3230](https://github.com/AgoraIO-Extensions/agent-infra/issues/3230) / Deploy/E2E/Channels | `agent:kiro`、`ready-for-human`；声明写入和固定环境 owner 未落实 | 三个 FileLimits 管理 GET 当前均 404；先取得批准的类型/上限/有效期/revision，再由声明 owner 写入并跑 Web/企微双向文件矩阵 | 404、fixture 或历史登录态不能签收文件验收 |
@@ -46,9 +47,9 @@
 
 ## 当前证据与交付记录
 
-- Root `main` 与 `origin/main` 当前均为 `9ef35544bf1a30780c9e455678a375ccf6a82ad8`，根目录仅保留既有未跟踪 `.scratch/`；其他 worktree 不因 idle 或 clean 自动释放 owner。
+- Root `main` 与 `origin/main` 当前均为 `6d7371f10d1c76dfaf9a4179b0c307a48482baaf`，根目录仅保留既有未跟踪 `.scratch/`；其他 worktree 不因 idle 或 clean 自动释放 owner。
 - PR #3789 的 migration 0073 将新 Session allocation 的 `admission_profile_digest` 作为可空、不可猜补的创建时事实；Store PostgreSQL focused 26/26、Core reserve 5/5、migration contract 52/52、API deployment 78/78、Core/Store build/types/迁移 drift 通过。旧 Hosted Backend 曾因迁移测试期望只列到 0072 失败；该失败已由当前 head 的测试期望修正，新 Hosted run 正在运行。
-- PR #3788 的 Worker follow-up 基于已合入 Store recovery contract；138/138 focused tests、Biome、Worker types 通过。其 Hosted CI 仍在运行；PR 保持 Draft，不声称 Worker/ACK 验收完成。
+- PR #3788 的 Worker follow-up 基于已合入 Store recovery contract；当前 head `abc28b2e06fefa42a3ef24de47be2fe260a3fee9`，140/140 focused tests、Biome、Worker types 已通过。其 Hosted Heavy 仍在运行；PR 已 Ready，不声称 Worker/ACK 验收完成。
 - 已合入的相关交付：PR #3787 merge `9ef35544bf1a30780c9e455678a375ccf6a82ad8`（ACP operation start time）；PR #3785 merge `5264fbbac6351ec84cb90cb5310fe5e78fc6ac4b`（Session reserve 初始 Core/Store，后续 recovery 已重开 #3777）；PR #3784 merge `cd1a518ea67515f99dddce3881f1630402d13346`；设计 PR #3775 merge `0d78b7849a40d69aca474716b397841f228942b1`。合入不等于父票真实 ACK 验收。
 - PR #3776、#3768 等历史开发交付均已按 exact head/Hosted receipt 独立回读；本快照不把其本地 arm64 下载失败改写为通过。
 
