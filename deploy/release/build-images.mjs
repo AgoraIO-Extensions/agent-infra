@@ -465,6 +465,7 @@ function publishImage({ image, builtImage, registryInsecure, git, commitSha, pla
 			category: publishFailureCategory(stderr),
 			image: image.key,
 			platform,
+			source: commitSha,
 			commitSha,
 			job: ["infrastructure", "platform"].includes(process.env.GITHUB_JOB) ? process.env.GITHUB_JOB : undefined,
 			runId: /^[1-9][0-9]{0,19}$/.test(process.env.GITHUB_RUN_ID ?? "") ? process.env.GITHUB_RUN_ID : undefined,
