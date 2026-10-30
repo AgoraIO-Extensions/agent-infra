@@ -49,6 +49,8 @@ interface ExecutionRow {
 	readonly channel_id: string;
 	readonly model_option_id: string | null;
 	readonly reasoning_level: string | null;
+	/** Runtime source at the immutable Sandbox configuration revision. */
+	readonly runtime_source_kind: "standard" | "custom" | null;
 }
 
 interface EventRow {
@@ -605,11 +607,19 @@ async function readExecution(
 		select e.execution_id, e.conversation_id, e.session_generation, e.delivery_fence,
 			e.last_event_sequence, e.agent_id, e.actor_id, e.channel_id,
 			e.model_option_id, e.reasoning_level
+			, configuration.configuration->'source'->>'kind' as runtime_source_kind
 		from platform.conversation_executions e
 		join platform.session_sandbox_allocations a
 			on a.conversation_id = e.conversation_id and a.sandbox_id = e.sandbox_id
 			and a.agent_id = e.agent_id and a.actor_id = e.actor_id
 			and a.principal_type = e.principal_type and a.channel_id = e.channel_id
+		left join platform.agent_configuration_revisions configuration
+			on configuration.agent_id = e.agent_id
+			and configuration.revision = case
+				when a.resource_policy->>'configurationRevision' ~ '^[0-9]+$'
+					then (a.resource_policy->>'configurationRevision')::bigint
+				else null
+			end
 		where e.execution_id = ${executionId} and e.conversation_id = ${conversationId}
 		for update of e
 	`;
@@ -754,12 +764,21 @@ async function insertOperationAudit(
 		record.agent_id !== boundary.agentId
 	)
 		unavailable();
-	if (
-		fact.kind === "model" &&
-		(fact.model.modelOptionId !== execution.model_option_id ||
-			fact.model.reasoningLevel !== (execution.reasoning_level ?? undefined))
-	)
-		unavailable();
+	if (fact.kind === "model") {
+		const hasStoredSelection =
+			execution.model_option_id !== null || execution.reasoning_level !== null;
+		if (
+			hasStoredSelection &&
+			(fact.model.modelOptionId !== execution.model_option_id ||
+				fact.model.reasoningLevel !== (execution.reasoning_level ?? undefined))
+		)
+			unavailable();
+		// A custom Runtime owns its model configuration. The Platform Execution
+		// intentionally has no model-selection columns for that path, so its
+		// operation fact is checked against the immutable custom source above.
+		if (!hasStoredSelection && execution.runtime_source_kind !== "custom")
+			unavailable();
+	}
 	// This outcome describes reliable observation, never model/tool success.
 	// The actual operation result remains the explicit fact.phase, including unknown.
 	await transaction`

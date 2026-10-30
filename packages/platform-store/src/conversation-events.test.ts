@@ -28,6 +28,7 @@ let client: PostgresClient;
 let databaseUrl = "";
 let testDatabase: PostgresTestDatabase | undefined;
 let nextFixture = 1;
+let nextCustomFixture = 1;
 
 const conformanceConversationId = "conversation_event_fixture";
 const conformanceExecutionId = "execution_event_fixture";
@@ -211,7 +212,11 @@ conversationEventConformanceV1("PostgreSQL", async () => {
 	};
 });
 
-async function seedConversation(): Promise<{
+async function seedConversation(
+	agentId = "agent_event",
+	actorId = "actor_event",
+	channelId = "channel_event",
+): Promise<{
 	readonly conversationId: string;
 	readonly executionId: string;
 }> {
@@ -224,7 +229,7 @@ async function seedConversation(): Promise<{
 			 host_session_ref, authorization_revision, last_conversation_cursor,
 			 created_at, updated_at)
 		values
-			(${conversationId}, 'agent_event', 'actor_event', 'channel_event', 'active', 3,
+			(${conversationId}, ${agentId}, ${actorId}, ${channelId}, 'active', 3,
 			 null, 'authorization_event', 0, now(), now())
 	`;
 	await client`
@@ -233,8 +238,8 @@ async function seedConversation(): Promise<{
 			 status, session_generation, delivery_fence, authorization_revision,
 			 created_at, updated_at)
 		values
-			(${executionId}, ${conversationId}, 'agent_event', 'actor_event',
-			 'channel_event', 'turn_event', 'unknown', 3, 5,
+			(${executionId}, ${conversationId}, ${agentId}, ${actorId},
+			 ${channelId}, 'turn_event', 'unknown', 3, 5,
 			 'authorization_event', now(), now())
 	`;
 	await seedSessionSandboxFixture(client, conversationId);
@@ -357,7 +362,200 @@ async function operationFixture(withProvenance = true) {
 	};
 }
 
+async function customDefaultOperationFixture() {
+	const customFixture = nextCustomFixture++;
+	const customAgentId = `custom_agent_event_${customFixture}`;
+	const customActorId = `custom_actor_event_${customFixture}`;
+	const customChannelId = `custom_channel_event_${customFixture}`;
+	const ids = await seedConversation(
+		customAgentId,
+		customActorId,
+		customChannelId,
+	);
+	const customConfiguration = {
+		schemaVersion: 2,
+		agentId: customAgentId,
+		revision: 7,
+		source: {
+			kind: "custom",
+			imageDigest: `sha256:${"c".repeat(64)}`,
+			admissionRevision: "custom-image-policy",
+			interactionMode: "platform-adapter",
+			connectionEnabled: false,
+		},
+		modelConfiguration: null,
+		environment: [],
+		secrets: [],
+		channels: [],
+		channelRevision: "channels-1",
+	};
+	await client`
+		insert into platform.agents
+			(id, current_configuration_revision, created_at, authorization_revision)
+		values (${customConfiguration.agentId}, 7, now(), ${`custom-authorization-${customFixture}`})
+	`;
+	await client`
+		insert into platform.agent_configuration_revisions
+			(agent_id, revision, runtime_revision, source_reference, created_at, configuration)
+		values (${customConfiguration.agentId}, 7, 7, ${customConfiguration.source.imageDigest}, now(), ${client.json(customConfiguration)})
+	`;
+	await client`
+		update platform.session_sandbox_allocations
+		set resource_policy = ${client.json({
+			configurationRevision: 7,
+			workloadRevision: 1,
+			managementFence: 1,
+			imageDigest: customConfiguration.source.imageDigest,
+			resourceConfigurationHash: "resource-hash",
+		})}
+		where conversation_id = ${ids.conversationId}
+	`;
+	await client`
+		update platform.conversation_executions
+		set authorization_revision = ${`custom-authorization-${customFixture}`}
+		where execution_id = ${ids.executionId}
+	`;
+	const authorizationRecordId = `authorization_${ids.executionId}`;
+	await client`
+		insert into platform.task_authorization_records (id, execution_id, boundary)
+		values (${authorizationRecordId}, ${ids.executionId}, ${client.json({
+			schemaVersion: 1,
+			principal: { kind: "user", id: customActorId },
+			agentId: customAgentId,
+			channelId: customChannelId,
+			identityRevision: "identity-1",
+			agentAuthorizationRevision: `custom-authorization-${customFixture}`,
+			accessSources: [{ kind: "user", userId: customActorId }],
+		})})
+	`;
+	await client`
+		insert into platform.audit_events
+			(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
+			values (${`acceptance_${ids.executionId}`}, 'trace-custom', 'user', ${customActorId}, 'task.authorization.accepted', 'execution',
+			${ids.executionId}, 'succeeded', 'request-custom', ${customAgentId}, ${client.json({ authorizationRecordId })})
+	`;
+	const transaction = new PostgresConversationEventTransactionV1({
+		databaseUrl,
+	});
+	let counter = 1;
+	const events = createConversationEventUseCaseV1(
+		{ transaction },
+		{ newId: () => `${ids.executionId}_event_${counter++}` },
+	);
+	const fact: ConversationOperationFactV2 = {
+		kind: "model",
+		operationRef: "custom-model-operation-1",
+		attemptRef: "custom-attempt-1",
+		phase: "intent",
+		model: {
+			configVersion: "custom-runtime-r5",
+			modelOptionId: "owner-deepseek-flash",
+			modelId: "anthropic_deepseek-flash",
+			reasoningLevel: "high",
+		},
+	};
+	const snapshot = async () => {
+		const [row] = await client`
+			select e.last_event_sequence::int as sequence,
+				(select count(*)::int from platform.conversation_events where execution_id = e.execution_id) as events,
+				(select count(*)::int from platform.audit_events where target_id = e.execution_id and action = 'execution.operation.observed') as audits
+			from platform.conversation_executions e where e.execution_id = ${ids.executionId}
+		`;
+		return row;
+	};
+	return {
+		...ids,
+		fact,
+		events,
+		snapshot,
+		close: () => transaction.close(),
+	};
+}
+
 describe("PostgreSQL actual operation facts and necessary audits", () => {
+	it("persists a custom Runtime default-model fact without inventing Platform selection", async () => {
+		const fixture = await customDefaultOperationFixture();
+		try {
+			await expect(
+				fixture.events.persist({
+					...eventInput(
+						fixture.conversationId,
+						fixture.executionId,
+						"custom-operation-intent",
+					),
+					event: {
+						type: "execution.operation",
+						schemaVersion: 2,
+						fact: fixture.fact,
+					},
+				}),
+			).resolves.toMatchObject({ outcome: "accepted", event: { sequence: 1 } });
+			expect(await fixture.snapshot()).toMatchObject({
+				events: 1,
+				audits: 1,
+				sequence: 1,
+			});
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("rejects a model fact when the execution has no selection and no trusted custom source", async () => {
+		const fixture = await operationFixture();
+		try {
+			await client`
+				update platform.conversation_executions
+				set model_configuration_revision = null, model_option_id = null, reasoning_level = null
+				where execution_id = ${fixture.executionId}
+			`;
+			await expect(
+				fixture.events.persist(fixture.command()),
+			).rejects.toMatchObject({
+				code: "unavailable",
+			});
+			expect(await fixture.snapshot()).toMatchObject({
+				events: 0,
+				audits: 0,
+				sequence: 0,
+			});
+		} finally {
+			await fixture.close();
+		}
+	});
+
+	it("keeps an explicit custom Execution selection bound to its selected model", async () => {
+		const fixture = await customDefaultOperationFixture();
+		try {
+			await client`
+				update platform.conversation_executions
+				set model_configuration_revision = 7,
+					model_option_id = 'explicit-option', reasoning_level = 'medium'
+				where execution_id = ${fixture.executionId}
+			`;
+			await expect(
+				fixture.events.persist({
+					...eventInput(
+						fixture.conversationId,
+						fixture.executionId,
+						"custom-explicit-mismatch",
+					),
+					event: {
+						type: "execution.operation",
+						schemaVersion: 2,
+						fact: fixture.fact,
+					},
+				}),
+			).rejects.toMatchObject({ code: "unavailable" });
+			expect(await fixture.snapshot()).toMatchObject({
+				events: 0,
+				audits: 0,
+				sequence: 0,
+			});
+		} finally {
+			await fixture.close();
+		}
+	});
+
 	it("rejects reuse of an older attempt after intervening completed attempts without changing events or audits", async () => {
 		const fixture = await operationFixture();
 		try {
