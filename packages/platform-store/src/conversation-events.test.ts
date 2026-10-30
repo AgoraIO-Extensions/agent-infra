@@ -1,15 +1,25 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	type ConversationEventTransactionPortV1,
 	type ConversationEventUseCaseV1,
 	type ConversationOperationFactV2,
 	createConversationEventUseCaseV1,
 	type FileRecordV1,
+	parseConversationOperationFactV2,
 } from "@agent-infra/platform-core";
 import { conversationEventConformanceV1 } from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { GenericAcpRuntimeDriver } from "../../agent-runtime/src/acp-runtime-driver.ts";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
+import {
+	normalizedEvent,
+	transitionFromEvent,
+} from "../../platform-core/src/conversation-dispatch-transition.ts";
 import {
 	conversationEventWakeChannelV1,
 	PostgresCommitWakeupListenerV1,
@@ -482,6 +492,32 @@ async function customDefaultOperationFixture() {
 describe("PostgreSQL actual operation facts and necessary audits", () => {
 	it("persists a custom Runtime default-model fact without inventing Platform selection", async () => {
 		const fixture = await customDefaultOperationFixture();
+		const path = await mkdtemp(join(tmpdir(), "custom-acp-store-"));
+		const driver = await GenericAcpRuntimeDriver.open({
+			path,
+			configVersion: "custom-runtime-r5",
+			defaultModelOptionId: "custom-primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "custom-primary",
+					nativeModelId: "fixture/custom-model",
+					reasoningLevels: ["high"],
+				},
+			],
+			launch: async () => ({
+				command: process.execPath,
+				args: [
+					fileURLToPath(
+						new URL(
+							"../../agent-runtime/src/acp-peer.test-support.mjs",
+							import.meta.url,
+						),
+					),
+				],
+				env: { ACP_TEST_MODE: "custom-acp", NATIVE_PEER_KEEP_ALIVE: "true" },
+			}),
+		});
 		try {
 			// The current Agent may advance; original Runtime events remain tied to
 			// the Sandbox's prepared revision, not that newer configuration.
@@ -497,36 +533,56 @@ describe("PostgreSQL actual operation facts and necessary audits", () => {
 				(agent_id, revision, runtime_revision, source_reference, created_at, configuration)
 				values (${fixture.agentId}, 8, 8, ${laterConfiguration.source.imageDigest}, now(), ${client.json(laterConfiguration)})`;
 			await client`update platform.agents set current_configuration_revision=8 where id=${fixture.agentId}`;
-			const modelEvent = (phase: "intent" | "started" | "completed") => ({
-				type: "execution.operation" as const,
-				schemaVersion: 2 as const,
-				fact: { ...fixture.fact, phase },
-			});
-			const commands = [
-				modelEvent("intent"),
-				modelEvent("started"),
-				{
-					type: "text.delta" as const,
-					text: "Synthetic invoice total: 498.42",
+			const accepted = await driver.execute({
+				schemaVersion: 2,
+				kind: "submit-turn",
+				agentId: fixture.agentId,
+				conversationId: fixture.conversationId,
+				sessionGeneration: 3,
+				executionId: fixture.executionId,
+				turnId: "turn_event",
+				operationId: "custom-operation",
+				input: { text: "controlled fixture prompt", attachments: [] },
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "custom-primary",
+					reasoningLevel: "high",
 				},
-				modelEvent("completed"),
-				{ type: "execution.status" as const, status: "completed" as const },
-			].map((event, index) => ({
-				...eventInput(
-					fixture.conversationId,
-					fixture.executionId,
-					`custom-${index}`,
-				),
-				event,
-				...(event.type === "execution.status"
-					? {
-							transition: {
-								executionStatus: "completed" as const,
-								conversationStatus: "ready" as const,
-							},
-						}
-					: {}),
-			}));
+			});
+			await vi.waitFor(async () =>
+				expect(
+					await driver.getStatus(
+						accepted.nativeSessionRef,
+						fixture.executionId,
+					),
+				).toBe("completed"),
+			);
+			const runtimeEvents = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				fixture.executionId,
+			);
+			const commands = runtimeEvents.map((runtimeEvent) => {
+				const event = normalizedEvent(
+					runtimeEvent.type === "operation"
+						? {
+								...runtimeEvent,
+								payload: parseConversationOperationFactV2(runtimeEvent.payload),
+							}
+						: runtimeEvent,
+				);
+				const transition = transitionFromEvent(event);
+				return {
+					...eventInput(
+						fixture.conversationId,
+						fixture.executionId,
+						runtimeEvent.cursor,
+					),
+					runtimeCursor: runtimeEvent.cursor,
+					occurredAt: runtimeEvent.occurredAt,
+					event,
+					...(transition ? { transition } : {}),
+				};
+			});
 			for (const [index, command] of commands.entries()) {
 				await expect(fixture.events.persist(command)).resolves.toMatchObject({
 					outcome: "accepted",
@@ -534,9 +590,9 @@ describe("PostgreSQL actual operation facts and necessary audits", () => {
 				});
 			}
 			expect(await fixture.snapshot()).toMatchObject({
-				events: 5,
+				events: commands.length,
 				audits: 3,
-				sequence: 5,
+				sequence: commands.length,
 			});
 			const [execution] = await client`
 				select status, model_option_id, reasoning_level, last_runtime_cursor
@@ -546,7 +602,7 @@ describe("PostgreSQL actual operation facts and necessary audits", () => {
 				status: "completed",
 				model_option_id: null,
 				reasoning_level: null,
-				last_runtime_cursor: "runtime_cursor_custom-4",
+				last_runtime_cursor: runtimeEvents.at(-1)?.cursor,
 			});
 			const query = new PostgresConversationQueryV1({ databaseUrl });
 			try {
@@ -556,7 +612,7 @@ describe("PostgreSQL actual operation facts and necessary audits", () => {
 				);
 				expect(history).toBeDefined();
 				expect(JSON.stringify(history)).toContain(
-					"Synthetic invoice total: 498.42",
+					"controlled custom ACP result 1",
 				);
 			} finally {
 				await query.close();
@@ -568,14 +624,16 @@ describe("PostgreSQL actual operation facts and necessary audits", () => {
 						recovered.events.persist(command),
 					).resolves.toMatchObject({ outcome: "replayed" });
 				expect(await fixture.snapshot()).toMatchObject({
-					events: 5,
+					events: commands.length,
 					audits: 3,
-					sequence: 5,
+					sequence: commands.length,
 				});
 			} finally {
 				await recovered.close();
 			}
 		} finally {
+			await driver.close();
+			await rm(path, { recursive: true, force: true });
 			await fixture.close();
 		}
 	});

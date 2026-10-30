@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { expect, it, vi } from "vitest";
 import { openAcpSession } from "./acp-session.js";
 import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
@@ -402,6 +403,7 @@ it("rejects structured image content when the ACP peer does not negotiate image 
 it("bounds a hanging ACP prompt and retires the native process", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "acp-prompt-timeout-"));
 	await mkdir(join(cwd, "workspace"));
+	const facts: RuntimeOperationFactV2[] = [];
 	const session = await openAcpSession({
 		directory: cwd,
 		cwd: join(cwd, "workspace"),
@@ -414,12 +416,31 @@ it("bounds a hanging ACP prompt and retires the native process", async () => {
 			promptTimeoutMs: 25,
 		},
 		update: async () => {},
+		modelFact: () => ({
+			configVersion: "timeout-fixture",
+			modelOptionId: "primary",
+			modelId: "fixture-model",
+		}),
+		recordOperationFact: async (fact) => {
+			facts.push(fact);
+		},
 	});
 	try {
 		await expect(session.prompt("hang")).rejects.toThrow(
 			"RUNTIME_ACP_PROMPT_TIMEOUT",
 		);
 		await expect(session.exited).resolves.toBeNull();
+		expect(facts.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"unknown",
+		]);
+		expect(facts[1]?.startedAt).toEqual(expect.any(String));
+		expect(facts[2]).toMatchObject({
+			operationRef: facts[1]?.operationRef,
+			attemptRef: facts[1]?.attemptRef,
+			startedAt: facts[1]?.startedAt,
+		});
 	} finally {
 		await session.close();
 		await rm(cwd, { recursive: true, force: true });
