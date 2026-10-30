@@ -273,6 +273,9 @@ export function canReleaseSessionSandboxReserveV1(input: {
 }): boolean {
 	return (
 		input.status === "retiring" &&
+		input.operations.every(
+			(operation) => operation.writeCompletion === "response",
+		) &&
 		sessionSandboxReserveResourceKindsV1.every((kind) => {
 			const creates = input.operations.filter(
 				(o) => o.kind === kind && o.operation === "create",
@@ -289,8 +292,12 @@ export function canReleaseSessionSandboxReserveV1(input: {
 									d.kind === kind &&
 									d.operation === "delete" &&
 									d.status === "confirmed" &&
+									d.writeCompletion === "response" &&
 									d.absent &&
-									d.resource?.uid === o.resource?.uid,
+									d.resource?.uid === o.resource?.uid &&
+									d.resource?.kind === o.resource?.kind &&
+									d.resource?.name === o.resource?.name &&
+									d.resource?.namespace === o.resource?.namespace,
 							)),
 				)
 			);
