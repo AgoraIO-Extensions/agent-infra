@@ -49,6 +49,7 @@ function requireWecomConfiguration(value: unknown): WecomConfiguration {
 export function createWecomDeploymentCoordinatorV1(options: {
 	readonly databaseUrl: string;
 	readonly configuration: unknown;
+	readonly sessionSandboxReserves?: import("@agent-infra/platform-core").SessionSandboxReserveConfigurationV1;
 }) {
 	let worker: WecomWorker | undefined;
 	return {
@@ -78,6 +79,7 @@ export function createWecomDeploymentCoordinatorV1(options: {
 				const started = createPlatformWecomWorkerV1({
 					...configuration,
 					databaseUrl: options.databaseUrl,
+					sessionSandboxReserves: options.sessionSandboxReserves,
 				});
 				worker = started;
 				return {

@@ -97,7 +97,7 @@ export interface SessionSandboxCustomSecretMaterializationV1 {
 }
 
 const customSecretMaterializations = new WeakMap<
-	SessionSandboxAllocationV1,
+	SessionSandboxResourceInputV1,
 	SessionSandboxCustomSecretMaterializationV1
 >();
 
@@ -210,6 +210,16 @@ export interface SessionSandboxAllocationV1 {
 	readonly storageClassName?: string;
 	readonly desiredState: "running" | "stopped";
 }
+
+/**
+ * Resource-only input for a pre-created reserve. It deliberately omits the
+ * principal and channel: an unclaimed reserve is not a Platform Conversation
+ * and must never be represented as one with a synthetic principal.
+ */
+export type SessionSandboxResourceInputV1 = Omit<
+	SessionSandboxAllocationV1,
+	"principal" | "channelId"
+>;
 
 export type SessionSandboxResourceSetV1 = readonly [
 	V1ServiceAccount,
@@ -334,10 +344,25 @@ function legacyComparableLabels(
 	return legacy;
 }
 
-const labels = (allocation: SessionSandboxAllocationV1) =>
-	sessionSandboxLabelsV1(allocation);
+const labels = (
+	allocation: Pick<
+		SessionSandboxAllocationV1,
+		"agentId" | "sessionId" | "sandboxId" | "generation"
+	>,
+) => sessionSandboxLabelsV1(allocation);
 
-function metadata(allocation: SessionSandboxAllocationV1, name: string) {
+function metadata(
+	allocation: Pick<
+		SessionSandboxAllocationV1,
+		| "namespace"
+		| "agentId"
+		| "sessionId"
+		| "sandboxId"
+		| "generation"
+		| "resourceFence"
+	>,
+	name: string,
+) {
 	return {
 		namespace: allocation.namespace,
 		name,
@@ -350,7 +375,7 @@ function metadata(allocation: SessionSandboxAllocationV1, name: string) {
 	};
 }
 
-function validateAllocation(value: SessionSandboxAllocationV1) {
+function validateResourceInput(value: SessionSandboxResourceInputV1) {
 	if (value.skillHub !== undefined) {
 		const parsed = RuntimeSkillHubBindingV1Schema.safeParse(value.skillHub);
 		if (
@@ -365,10 +390,6 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 		!value.agentId ||
 		!value.sessionId ||
 		!value.sandboxId ||
-		!value.principal?.id ||
-		(value.principal.kind !== "user" &&
-			value.principal.kind !== "application") ||
-		!value.channelId ||
 		value.resourceName !== `sandbox-${value.sandboxId}` ||
 		value.workspaceScope !== value.sandboxId ||
 		!Number.isSafeInteger(value.generation) ||
@@ -453,6 +474,17 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 	if (value.runtime !== null) {
 		validateRuntimeInput(value.runtime);
 	}
+}
+
+function validateAllocation(value: SessionSandboxAllocationV1) {
+	if (
+		!value.principal?.id ||
+		(value.principal.kind !== "user" &&
+			value.principal.kind !== "application") ||
+		!value.channelId
+	)
+		throw new WorkloadKubernetesError("policy");
+	validateResourceInput(value);
 }
 
 const requiredRuntimeInputKeys = [
@@ -612,7 +644,7 @@ function validateNativeMetadataWorkerEgressV1(
 
 /** Runtime Host inputs; both credentials are references into this Sandbox's Secret. */
 function runtimeEnvironment(
-	allocation: SessionSandboxAllocationV1,
+	allocation: SessionSandboxResourceInputV1,
 	custom?: SessionSandboxCustomSecretMaterializationV1,
 ): V1EnvVar[] {
 	// 排空（drain-only）allocation 的 runtime 为 null：stopped 状态不创建资源，无需环境变量。
@@ -732,10 +764,9 @@ function runtimeEnvironment(
 	];
 }
 
-export function sessionSandboxResourcesV1(
-	allocation: SessionSandboxAllocationV1,
+function renderSessionSandboxResourcesV1(
+	allocation: SessionSandboxResourceInputV1,
 ): SessionSandboxResourceSetV1 {
-	validateAllocation(allocation);
 	const skillMount = allocation.skillHub
 		? skillHubVolumeMountV1({
 				skillGenerationId: allocation.skillHub.generationId,
@@ -979,6 +1010,55 @@ export function sessionSandboxResourcesV1(
 	return [account, pvc, policy, service, secret, pod];
 }
 
+export function sessionSandboxResourcesV1(
+	allocation: SessionSandboxAllocationV1,
+): SessionSandboxResourceSetV1 {
+	validateAllocation(allocation);
+	return renderSessionSandboxResourcesV1(allocation);
+}
+
+/** Render the same six resource contract for an unclaimed reserve. */
+export function sessionSandboxReserveResourcesV1(
+	input: SessionSandboxResourceInputV1,
+): SessionSandboxResourceSetV1 {
+	if (
+		"principal" in input ||
+		"channelId" in input ||
+		input.generation !== 1 ||
+		input.resourceFence !== 1 ||
+		input.desiredState !== "running" ||
+		!input.runtime ||
+		input.runtime.custom
+	)
+		throw new WorkloadKubernetesError("policy");
+	validateResourceInput(input);
+	return renderSessionSandboxResourcesV1(input);
+}
+
+/** Same strict spec/identity checks used by the existing Session adapter. */
+export function sessionSandboxResourceMatchesV1(
+	current: KubernetesObject,
+	expected: KubernetesObject,
+	input: SessionSandboxResourceInputV1,
+): boolean {
+	return (
+		current.kind === expected.kind &&
+		current.metadata?.namespace === input.namespace &&
+		current.metadata?.name === input.resourceName &&
+		!!current.metadata.uid &&
+		!!current.metadata.resourceVersion &&
+		!current.metadata.deletionTimestamp &&
+		Object.entries(expected.metadata?.labels ?? {}).every(
+			([name, value]) => current.metadata?.labels?.[name] === value,
+		) &&
+		Object.entries(expected.metadata?.annotations ?? {}).every(
+			([name, value]) => current.metadata?.annotations?.[name] === value,
+		) &&
+		owned(current, expected, input) &&
+		resourceSpecMatches(current, expected)
+	);
+}
+
 function pvcSpecMatches(
 	current: KubernetesObject,
 	expected: V1PersistentVolumeClaim,
@@ -1210,7 +1290,7 @@ function normalizeNetworkPolicySpec(spec: V1NetworkPolicy["spec"]) {
 function owned(
 	current: KubernetesObject,
 	expected: KubernetesObject,
-	allocation: SessionSandboxAllocationV1,
+	allocation: SessionSandboxResourceInputV1,
 ) {
 	const currentLabels = current.metadata?.labels ?? {};
 	const expectedLabels = expected.metadata?.labels ?? {};

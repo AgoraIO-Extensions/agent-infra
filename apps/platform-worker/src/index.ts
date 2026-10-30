@@ -16,6 +16,7 @@ import {
 	startPlatformWorkerInternalGatewayServerV1,
 } from "./runtime-native-metadata-server.js";
 import { createPlatformSavedKeyCandidatesOptionsV1 } from "./saved-key-candidates-deployment.js";
+import { startPlatformSessionReserveWorkerFromDeploymentV1 } from "./session-reserve-deployment.js";
 import { startPlatformWecomWorkerFromDeploymentV1 } from "./wecom-deployment.js";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
 
@@ -39,6 +40,8 @@ export * from "./runtime-native-metadata-server.js";
 export * from "./saved-key-candidates-deployment.js";
 export * from "./saved-key-candidates-production.js";
 export * from "./saved-key-candidates-service.js";
+export * from "./session-reserve-deployment.js";
+export * from "./session-reserve-worker.js";
 export * from "./skill-materialization.js";
 export * from "./skill-materializer-production-assembly.js";
 export * from "./skill-materializer-store-adapter.js";
@@ -297,6 +300,9 @@ export async function startPlatformWorkerFromDeploymentV2(
 			stop(): Promise<void>;
 		}>;
 		readonly startWecom?: () => Promise<{ stop(): Promise<void> }>;
+		readonly startReserves?: () => Promise<
+			{ stop(): Promise<void> } | undefined
+		>;
 		readonly observabilityOptions?: Omit<ObservabilityOptions, "service">;
 	} = {},
 ) {
@@ -325,6 +331,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 		  }
 		| undefined;
 	let wecom: { stop(): Promise<void> } | undefined;
+	let reserves: { stop(): Promise<void> } | undefined;
 	try {
 		const workloadStartedAt = performance.now();
 		try {
@@ -359,6 +366,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 			}
 			throw error;
 		}
+		reserves = await options.startReserves?.();
 		wecom = await options.startWecom?.();
 		conversation = await (
 			options.startConversation ??
@@ -380,6 +388,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 					const results: PromiseSettledResult<void>[] = [];
 					try {
 						for (const stop of [
+							...(reserves ? [reserves.stop.bind(reserves)] : []),
 							() => conversation?.stop(),
 							() => wecom?.stop(),
 							() => workload?.stop(),
@@ -411,6 +420,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 			Promise.resolve().then(() => workload?.stop()),
 			Promise.resolve().then(() => conversation?.stop()),
 			Promise.resolve().then(() => wecom?.stop()),
+			Promise.resolve().then(() => reserves?.stop()),
 		]);
 		await observability.close();
 		throw error;
@@ -441,6 +451,11 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 			});
 			return primary;
 		},
+		startReserves: () =>
+			startPlatformSessionReserveWorkerFromDeploymentV1(
+				undefined,
+				termination.signal,
+			),
 		startConversation: (observability) =>
 			startPlatformConversationWorkerFromDeploymentV2(
 				undefined,

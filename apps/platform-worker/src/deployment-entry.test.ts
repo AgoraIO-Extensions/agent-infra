@@ -61,6 +61,10 @@ beforeAll(async () => {
 			].join("\n")}\n`,
 		);
 	directory = await mkdtemp(join(tmpdir(), "worker-binding-"));
+	await writeFile(
+		join(directory, "session-reserve-adapter.js"),
+		"export const createSessionSandboxReserveAdapterV1 = (options) => ({ input: options });\n",
+	);
 	const source = await readFile(
 		new URL("./deployment-entry.ts", import.meta.url),
 		"utf8",
@@ -396,6 +400,11 @@ try {
  if (process.env.RUN_NATIVE_PORTS === 'true') {
    const options = await entry.createPlatformNativeMetadataGatewayOptionsV1(signal);
    console.log(JSON.stringify(options?.ports ?? null));
+   process.exit(0);
+ }
+ if (process.env.RUN_RESERVE_OPTIONS === "true") {
+   const reserves = await entry.createPlatformSessionReserveWorkerOptionsV1(signal);
+   console.log(JSON.stringify({ configured: reserves !== undefined, namespace: reserves?.configuration.namespace, enabled: reserves?.configuration.enabled, databaseUrl: reserves?.databaseUrl }));
    process.exit(0);
  }
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
@@ -1143,6 +1152,55 @@ workloadInput.evaluationScoring={storage:evaluationStorage,loadDataPolicy:async(
 			sharedStorage: true,
 			hasAnalysisPolicy: true,
 		});
+	} finally {
+		await writeFile(path, original);
+	}
+});
+
+it("keeps the production reserve factory disabled when no policy is mounted", () => {
+	const result = run({ RUN_RESERVE_OPTIONS: "true" });
+	expect(result.status, result.stderr).toBe(0);
+	expect(JSON.parse(result.stdout)).toEqual({ configured: false });
+});
+it("accepts explicit disabled policy for draining but rejects a different namespace", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	const policy = {
+		schemaVersion: 1,
+		revision: 1,
+		enabled: false,
+		namespace: "worker-binding",
+		totalBudget: { cpuMillis: 0, memoryBytes: 0, storageBytes: 0 },
+		resourceCosts: [],
+		profiles: [],
+		maximumReserves: 0,
+		maximumConcurrentCreates: 0,
+		ttlMs: 0,
+		cooldownMs: 0,
+		failureBackoffMs: 0,
+	};
+	try {
+		await writeFile(
+			path,
+			`${original}\nexport const sessionSandboxReserves = ${JSON.stringify(policy)};\n`,
+		);
+		const valid = run({ RUN_RESERVE_OPTIONS: "true" });
+		expect(valid.status, valid.stderr).toBe(0);
+		expect(JSON.parse(valid.stdout)).toEqual({
+			configured: true,
+			enabled: false,
+			namespace: "worker-binding",
+			databaseUrl: database,
+		});
+		await writeFile(
+			path,
+			`${original}\nexport const sessionSandboxReserves = ${JSON.stringify({ ...policy, namespace: "foreign" })};\n`,
+		);
+		const invalid = run({ RUN_RESERVE_OPTIONS: "true" });
+		expect(invalid.status).toBe(1);
+		expect(JSON.parse(invalid.stdout).error).toBe(
+			"SESSION_RESERVE_DEPLOYMENT_CONFIGURATION_INVALID",
+		);
 	} finally {
 		await writeFile(path, original);
 	}

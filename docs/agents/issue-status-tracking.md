@@ -1,90 +1,64 @@
 # 开放 Issue 状态跟进
 
-> GitHub 清单采集时间：2026-10-30T09:19:02Z。
-> 开发来源：fresh-fetched `origin/main` exact SHA `07f7bb4d11474f09db184571c8e9d9ec4b7a5770`。
-> 本文是有时间边界的分派快照；执行前按 [Issue 工作指导](issue-work-guidance.md) 重新回读 GitHub、当前来源与资源归属。
+> GitHub 清单采集时间：2026-10-30T18:16:37Z。
+> 当前来源：fresh-fetched `origin/main` exact SHA `6d7371f10d1c76dfaf9a4179b0c307a48482baaf`。
+> 这是有时间边界的状态快照，不是写入授权；执行前必须重新回读 Issue 正文、评论、依赖、关联 PR、当前 worktree 和 session owner。通用分派规则见 [Issue 工作指导](issue-work-guidance.md)。
 
-采集时开放 Issue **17**：业务、开发与验收 **16**，本次文档治理 [#3772](https://github.com/AgoraIO-Extensions/agent-infra/issues/3772) **1**。
-开放 PR 只有 Draft [#3769](https://github.com/AgoraIO-Extensions/agent-infra/pull/3769)，head `d0ea3aab1452bceaddb846355003da5cc6d30653`；本快照自身 PR 尚未创建，不计入该数量。
+本次全量开放 Issue **18**，开放 PR **2**。#3553 明确排除。开放清单为：#3786、#3783、#3779、#3778、#3777、#3747、#3692、#3295、#3230、#3108、#2998、#2983、#2858、#2857、#1548、#851、#171、#144。
 
-## 当前归属复核与纠正
+开放 PR：
 
-下表的执行责任来自 Issue/PR/工作树交叉核对和负责人直接回复。只读筹备、当前实现与真实验收
-排期分开记录；历史 Session ID、标签、空 assignee 和 idle 都不是接管依据。
-PR 观察交给后台 watcher，合入后交给单 PR cleanup；协调者继续可执行的开发与交接。
-
-GHCR RuntimeHost 的 Manage Actions access 已直接核实为 Write，当时无需修改权限；
-仓库 source 关联字段本身不证明 ACL。发布 PR 已取得最终提交的双架构 smoke，旧权限阻塞不再成立。
-本轮还纠正了“Hosted 只是部分镜像”的过宽判断：按各 PR 实际分类与构建回执逐一核对目标，
-不能用任务名称推断覆盖，也不能将 Hosted amd64 成功改写为本地 Compose/arm64 成功。
+- [#3789](https://github.com/AgoraIO-Extensions/agent-infra/pull/3789) Ready，`fix/3777-reserve-recovery`，head `b11a9d915bad623b23a8b539a1ea4a91f0cee5b2`，base `9ef35544bf1a30780c9e455678a375ccf6a82ad8`；Hosted checks 已通过，但仍有一个未解决的非过期 review thread，暂不合入。
+- [#3788](https://github.com/AgoraIO-Extensions/agent-infra/pull/3788) Ready，`feat/3778-session-reserve-worker`，head `abc28b2e06fefa42a3ef24de47be2fe260a3fee9`，base `9ef35544bf1a30780c9e455678a375ccf6a82ad8`；Hosted Web/Backend/Workload 已通过，Heavy 仍在运行。
 
 ## 分类计数
 
-| 类别 | 业务、开发与验收数量 |
-| --- | ---: |
-| Runtime/Worker/Core | 3 |
-| Deploy/E2E/Channels | 7 |
-| Platform/Web/Skill | 2 |
-| Workflow/Observability | 4 |
+| 类别 | Issue 数量 | Issue |
+| --- | ---: | --- |
+| Runtime/Worker/Core | 7 | #3786、#3777、#3778、#3747、#3108、#851、#2857 |
+| Deploy/E2E/Channels | 6 | #3779、#3783、#3295、#3230、#2998、#171 |
+| Platform/Web/Skill | 3 | #1548、#2983、#2858 |
+| Workflow/Observability | 2 | #3692、#144 |
 
-## 当前分派与文件所有权
+数量按 Issue 主范围计；父票和验收票继续独立记录，不因开发 child 合入自动关闭。
 
-| Issue / 类别 | 采集时标签 | 当前责任 | 下一动作与证据边界 |
+## 当前分派与下一动作
+
+| Issue / 类别 | 当前 owner / 归属证据 | 状态与下一动作 | 主要边界 |
 | --- | --- | --- | --- |
-| [#3764](https://github.com/AgoraIO-Extensions/agent-infra/issues/3764) / Workflow/Observability | ready-for-agent, priority:P1, agent:codex | 协调者的 Web 测试 writer 当前交付；后台 watcher 观察 PR #3769 | 真实 Linux 原症状复现、最终 desktop/mobile 回归、独立审阅已通过；PR #3769 保持 Draft，待其 exact-head Hosted 镜像和最终门禁。两次本地完整构建的下载失败保留，成功子目标与整条命令结果分开。 |
-| [#3771](https://github.com/AgoraIO-Extensions/agent-infra/issues/3771) / Workflow/Observability | priority:P1, agent:codex | ACK 发布/性能 owner 已接收，准备实现 | 只改模板预检脚本、对应回归和部署教训三文件；增加绑定 Pod/source/image 的脱敏启动收据。尚无 PR；不把诊断能力当作已降低启动耗时。 |
-| [#3741](https://github.com/AgoraIO-Extensions/agent-infra/issues/3741) / Deploy/E2E/Channels | priority:P1, agent:codex | ACK 发布 owner 持有收口 | PR #3751 已合入；最终 source 字段反馈已由 #3767 / PR #3768 合入并关闭 child。采集时父票仍 OPEN，等待原 owner 回读自身剩余范围并回填，不能只凭 review job 成功关闭。 |
-| [#3692](https://github.com/AgoraIO-Extensions/agent-infra/issues/3692) / Workflow/Observability | priority:P1, agent:codex | 同一 ACK 性能 owner 当前执行 | 同 source757 四模板真实模型预检通过，临时 Pod/Secret 已清理；一次 Codex 对照显示 PodReady 102→52秒，N=1，不是 SLO。#3771 补自动采集；完整新部署、资源与负载基线仍待。 |
-| [#3747](https://github.com/AgoraIO-Extensions/agent-infra/issues/3747) / Runtime/Worker/Core | priority:P1, agent:codex, session-owned | Runtime 原 owner 独占 session-owned 范围 | #3756 / PR #3757 能力投影开发已完成。source96c2 候选已发布并远端核 Digest；QEMU readiness 503 与版本命令耗时只构成环境线索。原生 amd64 临时验证由原 owner 执行，环境 owner 只协调窗口，不覆盖现有 Agent 或共享允许列表。 |
-| [#3295](https://github.com/AgoraIO-Extensions/agent-infra/issues/3295) / Deploy/E2E/Channels | agent:codex | 网络 owner 已接收只读方案筹备；未承诺实施窗口 | ECI Poseidon 前提可单独评估；普通 Flannel 节点完整 allow/deny/recovery 需要受支持目标。云资源实施 owner、目标与迁移窗口尚缺，不原地切 CNI。 |
-| [#171](https://github.com/AgoraIO-Extensions/agent-infra/issues/171) / Deploy/E2E/Channels | wayfinder:task, wayfinder, priority:P0, agent:kiro | 网络筹备 owner 协调依赖；资源实施 owner 未落实 | 原生 blocked_by #3295；网络之外仍需存储、Registry、RBAC、DNS/TLS 与访问入口证据。筹备接收不代表环境已交付。 |
-| [#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144) / Workflow/Observability | wayfinder:map, wayfinder, priority:P0, agent:codex | 协调者复核父子范围，网络 owner 承接环境筹备 | 原生子项仅 #171 OPEN；父票自身路线、环境与跨系统交接范围仍未完成，不能只按已关闭 child 数量关票。 |
-| [#1548](https://github.com/AgoraIO-Extensions/agent-infra/issues/1548) / Platform/Web/Skill | ready-for-human, priority:P0, agent:kiro | Skill Hub 原 owner 已唤醒并实际准备候选 | Harness cache 修复 #3752 已完成；新 source757 API 候选及组件输入闭包已核。四模板发布/ECI 模型预检可供准备，但新 Skill 业务链、恢复/撤销/隔离/UI、外部包签名与审批仍须各自证据。 |
-| [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) / Runtime/Worker/Core | priority:P0, agent:codex | 协调者持有 Platform 消费侧调查，原消费 owner 已明确交接 | 逐 Agent 安装配置开发 #3427 已交付；自动 Consumer 注册仍缺 Connection 机器认证、幂等/unknown 恢复与受保护秘密交付合同。两个 Agent 的已批准安装映射可独立准备，当前输入未核实；不改服务端、Provider/Grant 或凭据。 |
-| [#2857](https://github.com/AgoraIO-Extensions/agent-infra/issues/2857) / Runtime/Worker/Core | agent:codex | 原验收 owner 已接收筹备，无完整矩阵排期 | 确认同来源窗口后，验证双主体/双 Agent/三入口/多 Runtime 的隔离、并发、重启、撤权和恢复。旧端口、idle 和健康状态不表示环境写权已释放。 |
-| [#2998](https://github.com/AgoraIO-Extensions/agent-infra/issues/2998) / Deploy/E2E/Channels | agent:codex | 同一验收 owner 已接收真实输入核查 | 仍需真实企业主体、官方扫码和机器人计数权限，再执行绑定/重试/撤销矩阵；输入筹备不等于客户端验收完成。 |
-| [#2858](https://github.com/AgoraIO-Extensions/agent-infra/issues/2858) / Platform/Web/Skill | agent:codex | 协调者持有管理流程验收 | 已有正式登录与授权 API 读回；现有标准模板配置曾 stale/revision=null，新候选预检不刷新已部署配置。等待正式模板就绪后验证申请、驳回、重提、撤回及跨主体/UI刷新。 |
-| [#3108](https://github.com/AgoraIO-Extensions/agent-infra/issues/3108) / Deploy/E2E/Channels | priority:P1, agent:codex | 协调者持有恢复验收；开发审计已完成 | Pi/OpenCode 诊断 #3734 已合入；仍需当前部署组合和原保留会话/PVC 的恢复证据，不能用新会话或旧时延代签。 |
-| [#2983](https://github.com/AgoraIO-Extensions/agent-infra/issues/2983) / Deploy/E2E/Channels | ready-for-human, priority:P1, agent:kiro | 协调者持有筹备；模型目录策略待决定 | Responses/high 候选能力已测，部署 allowedModels 扩展仍未批准；保持 ADR-0026/0030 的 Codex 范围，补多轮 reasoning、刷新/隔离和企微真实证据，不用其他模板成功代签。 |
-| [#3230](https://github.com/AgoraIO-Extensions/agent-infra/issues/3230) / Deploy/E2E/Channels | ready-for-human, priority:P1, agent:kiro | 协调者持有文件验收筹备；声明输入未落实 | 已授权管理 GET 的三处404对应精确 FileLimits 声明缺失；需有效类型、字节上限、有效期和 revision 后经正式 API 写入，再跑 Web/企微双向文件和跨主体负向矩阵。 |
+| [#3777](https://github.com/AgoraIO-Extensions/agent-infra/issues/3777) / Runtime/Worker/Core | 原 owner 已将 Store/Core recovery 生产写权显式交给 ROOT；测试由受监督 writer 完成 | PR #3789 仍 Draft；migration 0073、DELETE 终态/同 UID 版本重试、late create、profile-aware statistics 已在 head `b11a9d915`；等待 Hosted 终态和独立 review，不能关闭 | 只改 Core/Store/API trusted assembly；不包含 Worker/ACK；AC 仍有未勾选项 |
+| [#3778](https://github.com/AgoraIO-Extensions/agent-infra/issues/3778) / Runtime/Worker/Core | 原性能/Worker session `01a17acb-4309-7b62-b94e-d5056faa7778` 持有 Worker writer；ROOT 已通过 Issue 评论交接 Store contract | PR #3788 Draft，head `b14b2e132`；138/138 focused tests、Biome、Worker types 已通过，等待 Hosted 和 review | 不修改 recovery worktree；不写 ACK/Kubernetes；完成后再审 #3779 |
+| [#3779](https://github.com/AgoraIO-Extensions/agent-infra/issues/3779) / Deploy/E2E/Channels | #3777/#3778 完成前不启动接受性写入；由性能/ACK owner 协调 | 被 #3777、#3778 阻塞；待两项合入后固定 capsule、namespace、source/image/config tuple，做 warm latency/isolation/depletion 实证 | 不把设计 PR、Worker 单测或历史 PodReady 当验收 |
+| [#3783](https://github.com/AgoraIO-Extensions/agent-infra/issues/3783) / Deploy/E2E/Channels | 私有 ACK API/Worker adapter 的原 owner 范围；当前没有公开 handoff | Directory-only identity 资格修复仍 OPEN；先由原 owner 完成代码/负向检查，其他 session 不接管 | 保留历史 canonical ID；不伪造 LDAP UID、不改 Directory/LDAP/Provider |
+| [#3747](https://github.com/AgoraIO-Extensions/agent-infra/issues/3747) / Runtime/Worker/Core | `session-owned`，Exclusive-Owner-Session-ID `01a187db-3f47-72e1-8855-dd94cae95dc3` | 跳过接管；当前已有真实 API task/续接/取消回执，SSE 中间 unknown 由 #3786 独立跟进 | 不重放旧 execution、不改 ACK overlay；只有原 session 或用户明确转交可继续 |
+| [#3786](https://github.com/AgoraIO-Extensions/agent-infra/issues/3786) / Runtime/Worker/Core | `session-owned`，Exclusive-Owner-Session-ID `01a187db-3f47-72e1-8855-dd94cae95dc3` | 跳过接管；PR #3787 已合入，当前仍缺新镜像上的续接/重放/隔离/取消和清理回执 | 不重放 #3747 旧 execution；只有原 session 或用户明确转交可继续 |
+| [#3692](https://github.com/AgoraIO-Extensions/agent-infra/issues/3692) / Workflow/Observability | assignee `LichKing-2234`，ACK 性能 owner | 757 四模板真实 preflight 和有限样本已回读；仍缺 fresh deployment 的分阶段、资源和负载基线，不能称 p95/SLO 达标 | 采集排队、准备、Pod、首字、完成分段；保留样本边界 |
+| [#3295](https://github.com/AgoraIO-Extensions/agent-infra/issues/3295) / Deploy/E2E/Channels | 网络 owner 仅接收只读方案筹备，未取得 CNI/集群写权 | Flannel 不能证明 NetworkPolicy 生效；需受支持 Terway/ECI Poseidon 目标和云侧 addon 回执，再跑 allow/deny/recovery | 不原地切 CNI，不改共享集群 |
+| [#3230](https://github.com/AgoraIO-Extensions/agent-infra/issues/3230) / Deploy/E2E/Channels | `agent:kiro`、`ready-for-human`；声明写入和固定环境 owner 未落实 | 三个 FileLimits 管理 GET 当前均 404；先取得批准的类型/上限/有效期/revision，再由声明 owner 写入并跑 Web/企微双向文件矩阵 | 404、fixture 或历史登录态不能签收文件验收 |
+| [#3108](https://github.com/AgoraIO-Extensions/agent-infra/issues/3108) / Runtime/Worker/Core | ROOT 持有恢复验收协调；开发诊断 PR #3734 已合入 | 缺当前部署 tuple 和原 retained Session/PVC 的新回执；保留历史 Messages gateway failure，不用新会话代签恢复 | 不操作未交接的 ACK session/PVC |
+| [#2998](https://github.com/AgoraIO-Extensions/agent-infra/issues/2998) / Deploy/E2E/Channels | ROOT 持有输入核查和验收筹备；原 owner 已释放旧执行租约 | 缺获准企业微信主体、官方扫码窗口、机器人计数/标识读取权限；未执行登录、扫码或机器人写入 | 不用 mock、截图、旧 Cookie 或历史 Session ID |
+| [#2983](https://github.com/AgoraIO-Extensions/agent-infra/issues/2983) / Platform/Web/Skill | `agent:kiro`、`ready-for-human`；共享 allowedModels 决策未签收 | DeepSeek Responses high 的只读能力已证实；仍缺正式 allowedModels 批准、low/high/max 三档 reasoning、刷新/隔离和企微真实回执 | 不改 catalog/Secret，不用 Claude thinking 代签 Codex 范围 |
+| [#2858](https://github.com/AgoraIO-Extensions/agent-infra/issues/2858) / Platform/Web/Skill | ROOT 持有管理流程验收协调 | 正式登录/授权读回通过，但四模板 `readiness=stale`、`revision=null`；待正式模板刷新后跑申请→修改→驳回→重提→撤回及跨主体矩阵 | 不用占位镜像、复用幂等键或 409 伪造产品缺陷 |
+| [#2857](https://github.com/AgoraIO-Extensions/agent-infra/issues/2857) / Runtime/Worker/Core | ROOT 持有验收筹备；#1548 owner 仍持有 `local-e2e-01a094f5` Harness 写入 | 等 #1548 Harness 修复和明确执行窗口；再固定两个主体、两个 Agent、三入口，做隔离/并发/重启/撤权/旧代次矩阵 | 不接管 #1548 Harness、ACK 环境或 #3553 |
+| [#1548](https://github.com/AgoraIO-Extensions/agent-infra/issues/1548) / Platform/Web/Skill | `agent:kiro`、`ready-for-human`；原 owner 已释放旧 writer，当前协调者只做筹备 | 缺获准 Provider/source/signature/approval、Skill materializer/Applied tuple 和四模板恢复/撤销/隔离/UI 真实链；#3752/#3754 只修 Harness cache | 不把发布成功、镜像 digest 或 fixture 链当完整 Skill 验收 |
+| [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) / Runtime/Worker/Core | ROOT 持有 Platform 消费侧调查；Connection 服务端、Provider/Grant/凭据不在授权范围 | 自动 Consumer 注册仍缺机器认证、幂等/unknown 恢复和受保护秘密交付合同；继续只读复核和 Platform 侧方案 | 不扩写 Connection、不代持 token、不使用管理员 Cookie |
+| [#171](https://github.com/AgoraIO-Extensions/agent-infra/issues/171) / Deploy/E2E/Channels | assignee `LichKing-2234`、`wayfinder:task`；ACK 环境 owner 负责资源窗口 | 原生 blocked_by #3295；除网络外仍需 StorageClass/PVC、Registry pull、RBAC、DNS/TLS、入口和 `can-i` 回执 | 资源筹备不等于真实环境交付；父 #144 保持 OPEN |
+| [#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144) / Workflow/Observability | assignee `LichKing-2234`、`wayfinder:map`；协调者复核父子范围 | #171/#3295 和自身路线/环境/跨系统交接未完成；所有开发 child 与真实验收必须分别回读后再审父票 | #3553 明确排除；不能按已关闭 child 数量关父票 |
 
-源码写入边界：#3764 的六个测试/测试支持文件由其 writer 独占；#3771 的模板启动收据三文件由
-ACK owner 独占；本次 #3772 只写本文。#851 仅移交 Platform 消费调查，不移交 Connection
-服务端、Provider、Grant 或凭据。新发现实现缺口先冻结具体 primary Issue 与文件，避免重叠。
+## 当前证据与交付记录
 
-环境写权按明确窗口交接。专用浏览器/构建环境的失败与停机回执单独保留；ACK 模板预检和
-自定义候选探针使用各自临时资源，不推定取得现有业务配置、PVC 或全环境的写权。
+- Root `main` 与 `origin/main` 当前均为 `6d7371f10d1c76dfaf9a4179b0c307a48482baaf`，根目录仅保留既有未跟踪 `.scratch/`；其他 worktree 不因 idle 或 clean 自动释放 owner。
+- PR #3789 的 migration 0073 将新 Session allocation 的 `admission_profile_digest` 作为可空、不可猜补的创建时事实；Store PostgreSQL focused 26/26、Core reserve 5/5、migration contract 52/52、API deployment 78/78、Core/Store build/types/迁移 drift 通过。旧 Hosted Backend 曾因迁移测试期望只列到 0072 失败；该失败已由当前 head 的测试期望修正，新 Hosted run 正在运行。
+- PR #3788 的 Worker follow-up 基于已合入 Store recovery contract；当前 head `abc28b2e06fefa42a3ef24de47be2fe260a3fee9`，140/140 focused tests、Biome、Worker types 已通过。其 Hosted Heavy 仍在运行；PR 已 Ready，不声称 Worker/ACK 验收完成。
+- 已合入的相关交付：PR #3787 merge `9ef35544bf1a30780c9e455678a375ccf6a82ad8`（ACP operation start time）；PR #3785 merge `5264fbbac6351ec84cb90cb5310fe5e78fc6ac4b`（Session reserve 初始 Core/Store，后续 recovery 已重开 #3777）；PR #3784 merge `cd1a518ea67515f99dddce3881f1630402d13346`；设计 PR #3775 merge `0d78b7849a40d69aca474716b397841f228942b1`。合入不等于父票真实 ACK 验收。
+- PR #3776、#3768 等历史开发交付均已按 exact head/Hosted receipt 独立回读；本快照不把其本地 arm64 下载失败改写为通过。
 
-## 当前证据与输入
+## 分派与收口规则
 
-- [#3741 权限实证](https://github.com/AgoraIO-Extensions/agent-infra/issues/3741#issuecomment-6516320903)与 [PR #3751](https://github.com/AgoraIO-Extensions/agent-infra/pull/3751)：最终 head `baaffa8796566017a86b1963d9e5e6bc97df5189` 的 [smoke 41016731756](https://github.com/AgoraIO-Extensions/agent-infra/actions/runs/41016731756) 成功，双架构模板、RuntimeHost/custom-base、六索引均有远端读回。source 字段反馈另由 PR #3768 交付；代码合入与 ACK fresh redeploy 分开。
-- [#3692 的现场预检](https://github.com/AgoraIO-Extensions/agent-infra/issues/3692#issuecomment-6518950864)：固定 source757 的四模板真实模型预检通过，现有平台 Deployment spec 未变；新模板验证、一次冷暖对照和最终新版本部署不是同一结论，限时预检收据过期需重新执行。
-- [#3764 网络采样](https://github.com/AgoraIO-Extensions/agent-infra/issues/3764#issuecomment-6517928339)与 [PR #3769](https://github.com/AgoraIO-Extensions/agent-infra/pull/3769)：真实 PG/MinIO fixture 的 veth 地址初始化晚于 HTTP-ready；最终 desktop/mobile 在地址就绪后启动独立 Chromium并通过原反馈/reload断言。PR 的 Hosted 最终构建仍未完成；本地外部下载失败保留。
-- [#851 合同交接](https://github.com/AgoraIO-Extensions/agent-infra/issues/851#issuecomment-6513921407)：Connection source `15fa28bb954b16b4a1df506ebae9ea4605fcb141` 的管理员浏览器注册与固定 Consumer DCR，不等于 Platform 独立 Consumer 的机器注册合同。服务端责任线已定位，尚无新合同交付承诺；不使用管理员 Cookie 或旧测试 Consumer 绕过。
-- [#3295 方案筹备](https://github.com/AgoraIO-Extensions/agent-infra/issues/3295#issuecomment-6514019169)、[#2857 接收](https://github.com/AgoraIO-Extensions/agent-infra/issues/2857#issuecomment-6514023205)与 [#2998 输入核查](https://github.com/AgoraIO-Extensions/agent-infra/issues/2998#issuecomment-6514023230)各自只有明确记录的范围，没有因此签真实 AC。
-- [#2858 管理前置](https://github.com/AgoraIO-Extensions/agent-infra/issues/2858#issuecomment-6513990960)：已有正式登录/授权读回；[此前占位镜像与幂等键使用的更正](https://github.com/AgoraIO-Extensions/agent-infra/issues/2858#issuecomment-6514370066)明确：用占位镜像且复用幂等键改变请求得到的409，不足以证明合法部署准入缺陷，不能作为产品 bug 证据。
-- [#3108 恢复审计](https://github.com/AgoraIO-Extensions/agent-infra/issues/3108#issuecomment-6513762537)、[#2983 模型策略](https://github.com/AgoraIO-Extensions/agent-infra/issues/2983#issuecomment-6503038688)与 [#3230 声明回读](https://github.com/AgoraIO-Extensions/agent-infra/issues/3230#issuecomment-6502573560)保留具体缺失输入，不把整组待验收票等同于开发已全部完成。
+1. 标签、历史 Session ID、空 assignee、idle、旧验收 receipt 和 clean worktree 都不能证明当前 owner 或可接管；必须回读 Issue/PR/branch/worktree，并取得明确执行权/环境租约 handoff。
+2. `session-owned` Issue（包括 #3747；当前 #3783 的私有 adapter 范围也保留原 owner）由原 session 持有；未交接时只做只读审计并通知 owner，不创建实现分支。
+3. 只有一个 writer 修改同一文件/部署单元。PR 创建后交给后台 watcher；确认 merge 后交给对应单 PR cleanup。开发 Issue 可在完整开发范围交付后关闭，真实验收 AC 继续留在原票或后续验收票；父票还需复核自身范围。
+4. #3777/#3778/#3779 是同一 reserve 链的独立 Store、Worker、ACK 验收阶段；子项合入不自动关闭父票。#3553 不在本轮任何分派或清理范围。
+5. 采集失败、环境缺口、Hosted CI 在跑和历史证据都要单独标注；不能用本地 focused tests、Pod Ready、fixture、旧 SHA 或评论意图替代当前外部证据。
 
-## 开发 PR 回读
-
-下列开发 PR 在本轮已回读 MERGED。head 与 merge 分列；不以此签父票的真实外部验收。
-
-| PR / 开发 Issue | 最终 head | merge SHA | 交付与验证边界 |
-| --- | --- | --- | --- |
-| [#3754](https://github.com/AgoraIO-Extensions/agent-infra/pull/3754) / [#3752](https://github.com/AgoraIO-Extensions/agent-infra/issues/3752) | `b251546631060cc5f1838a9f1171187300fce5b7` | `ce2a4f59c928473ff02e15c82d426b28727a774a` | Harness cache rebinding；其自身 [run40996635464 attempt2](https://github.com/AgoraIO-Extensions/agent-infra/actions/runs/40996635464/attempts/2) 的六个 amd64 镜像覆盖全部 Compose runtime 目标。本地 arm64 下载超时仍保留，AC已据精确 Hosted 证据回填。 |
-| [#3757](https://github.com/AgoraIO-Extensions/agent-infra/pull/3757) / [#3756](https://github.com/AgoraIO-Extensions/agent-infra/issues/3756) | `d1e472562ae40bd07ab9920c3efc05c15919b5e2` | `cd16f38f1698c307dd3d2779cfbb8dfa97e49d43` | modelDirectory capability projection；开发票 CLOSED，父 #3747 仍保留运行时验收。 |
-| [#3751](https://github.com/AgoraIO-Extensions/agent-infra/pull/3751) / [#3741](https://github.com/AgoraIO-Extensions/agent-infra/issues/3741) | `baaffa8796566017a86b1963d9e5e6bc97df5189` | `7579266349289423e6121cd66130b31964c484ae` | 发布 smoke 与 ACK receipt 消费；后续诊断字段修复见 #3768，采集时父票仍待最终回填。 |
-| [#3766](https://github.com/AgoraIO-Extensions/agent-infra/pull/3766) / [#3765](https://github.com/AgoraIO-Extensions/agent-infra/issues/3765) | `f648a53ae3f08c4b45cce87695769a3d8d4dc6fb` | `ae52aa4f7a3bd8568de9c26dc35489321e1fb4b7` | completed replay 竞态测试：确定性 RED/GREEN、601 tests、本地完整五镜像、Hosted和审阅通过；Issue CLOSED、AC全勾。 |
-| [#3770](https://github.com/AgoraIO-Extensions/agent-infra/pull/3770) / [#3760](https://github.com/AgoraIO-Extensions/agent-infra/issues/3760) | `19e9f68dcce837e72f872ef0b8714eaa112e14f8` | `a1263c677cba33e80773f95372fa5ff98a38a254` | 修复旧表格空行与通用规则中的快照编号；#3761 两条原生 review threads 已解决，AC和清理回读完成。 |
-| [#3768](https://github.com/AgoraIO-Extensions/agent-infra/pull/3768) / [#3767](https://github.com/AgoraIO-Extensions/agent-infra/issues/3767) | `0e1f0ee45007afe57f5b2d72a43bd3f760ea3db8` | `07f7bb4d11474f09db184571c8e9d9ec4b7a5770` | 发布诊断补 source，保留 commitSha；[run41022351174](https://github.com/AgoraIO-Extensions/agent-infra/actions/runs/41022351174) 六个 amd64 镜像、完整 tree/lock/source 回执已独立核验。本地 arm64 命令下载失败不改写；开发票 CLOSED、AC全勾。 |
-
-## 父子收口与真实验收
-
-- #144 的开放原生子项仍为 #171，#171 原生依赖为 #3295；父票自身范围和环境交付未完成，继续 OPEN。
-- #851 的 AC-5–7 安装配置开发已交付，但自动注册仍有未完成开发与外部合同；不能将整票归为“只差 AC”。
-- #1548、#3747、#2857 等真实验收与已关闭开发 child 分开签收；四模板预检不能替代新 Skill、原会话恢复、外部 Provider 或跨主体矩阵。
-- #3553 由其他 session 跟进，继续明确排除。`ready-for-human` 只作人工处理/验证标记，不新增 required merge gate。
-- 历史闭票审计仍有未完成项；本轮开发票 AC 回填不代表全仓闭票已全部验收。没有全量当前证据时不报告“零未完成”。
-
-历史 ACK 部署来源见 [部署总结](../../deploy/ack/ACK-REDEPLOY-LESSONS.md#本轮完整清空重建)。
-当前 main、固定发布 source757、自定义候选 source96c2 和现有部署 tuple 不可互换。
+正式产品/架构结论仍以 [Agent 平台 M1 PRD](../prd/PRD-agent-platform-M1.md)、[Connection M1 PRD](../prd/PRD-connection-M1.md)、工程 [Spec](../architecture/SPEC-agent-infra-M1-engineering-architecture.md)、[AI 开发流程 Spec](../architecture/SPEC-ai-native-development-workflow.md) 和适用 HLD/ADR 为准。
