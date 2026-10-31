@@ -202,6 +202,49 @@ test("all ownership and byte conflicts are detected before creating earlier miss
 	assert.equal(f.writes.length, 0);
 });
 
+test("bootstrap refuses to recreate a missing Secret referenced by an existing Deployment", async () => {
+	const f = await fixture();
+	await bootstrapInputs(f.config, f.rendered, f.kubectl, true);
+	const live = {
+		kind: "Deployment",
+		metadata: { name: "current-api" },
+		spec: {
+			template: {
+				spec: {
+					containers: [
+						{
+							name: "api",
+							env: [
+								{
+									name: "TOKEN",
+									valueFrom: {
+										secretKeyRef: { name: "renamed-token", key: "token" },
+									},
+								},
+							],
+						},
+					],
+				},
+			},
+		},
+	};
+	f.objects.set("deployment/current-api", live);
+	f.objects.delete("Secret/renamed-token");
+	const writesBefore = f.writes.length;
+	for (const apply of [false, true])
+		await assert.rejects(
+			bootstrapInputs(
+				f.config,
+				`${f.rendered}\n---\n${stringify(live)}`,
+				f.kubectl,
+				apply,
+			),
+			/BOOTSTRAP_ACTIVE_SECRET_MISSING/,
+		);
+	assert.equal(f.writes.length, writesBefore);
+	assert.equal(f.objects.has("Secret/renamed-token"), false);
+});
+
 test("namespace UID changes invalidate an in-flight apply; private file permission errors reject local input", async () => {
 	const f = await fixture();
 	f.objects.set("namespace/rebuild-test", {

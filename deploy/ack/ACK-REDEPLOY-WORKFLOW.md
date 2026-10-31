@@ -294,18 +294,26 @@ attestation，执行真实 Runtime turn 和事件回读，写入私有 candidate
 Deployment mount，再带 resourceVersion 更新，回读 Secret 后让 API/Worker 加载新配置。
 内容 hash 注解使相同输入无需再次更新或滚动；上次 rollout 中断时可用同一组仍有效的 receipts
 重试并等待收敛。任何配置漂移、回读或 rollout 失败均停止后续 provisioning。
-完成后还必须通过 Worker 的 mounted-capacity gate。此步骤不签发登录会话、不修改 principal
-映射，也不代表真实模型或完整重建验收已经通过。
+完成后还必须通过 Worker 的 mounted-capacity gate。此步骤不改变角色授权，也不代表真实模型
+或完整重建验收已经通过。
 
 运行中的 API/Worker configuration Secret 禁止手工 `kubectl delete/create`。删除会让挂载窗口
 变成 `FailedMount`，并可能令登录和首屏请求同时不可用；portable 流程只允许在同一 UID、同一
 bootstrap owner 下原地 `replace`，再等待 rollout。缺失、UID/owner 漂移、回读不一致或 rollout
-中断都 fail closed，不执行后续 provisioning。`runtime-inputs.json` 成功时包含
-`status=passed`；失败时只写入脱敏的 `status=failed`、有限 `failureCode`、
-`mutationStatus`（`preflight`、`secret-write`、`local-promotion` 或 `rollout`）和准确的
-`recoveryRequired`；重跑后的成功 receipt 才能证明恢复，不能用页面 200、匿名 401 或历史
-receipt 代替。配置了 `ACK_LOGIN_BOOTSTRAP_FILE` 时，Secret rollout 完成后还会用本轮私有
-storageState 再读一次真实 `/api/v1/session`；该回读失败不会生成成功 receipt。
+中断都 fail closed，不执行后续 provisioning。`all` 和 `runtime-inputs apply` 必须声明
+`ACK_LOGIN_BOOTSTRAP_FILE`，缺失时在写入前拒绝。rollout 完成后先验证已有会话仍有效，再为
+每个声明主体使用空 Cookie context 重新 `POST /auth/login`，核对新 Cookie、两次
+`GET /api/v1/session` 与本轮身份候选一致；不改写候选或 storageState。登录后再次核对配置
+Secret 的 UID、归属、版本及字节。任一步失败都不能产生 `loginVerified=true` 的成功回执。
+
+失败回执包含白名单 `failureCode`、当前 `phase` 和 `mutationStatus`：`not-applied` 表示本次
+尚未尝试配置写入，`attempted` 表示配置写请求已发起但未确认，`applied` 表示已确认配置写入。
+后两种失败要求恢复检查。只读 plan 和输入未变的重跑可能为 `not-applied`，它不证明过去没有
+故障。进程异常中断且没有输出时，shell 保留 `mutationStatus=unknown` 的失败回执。
+每次执行单独保留 `runtime-inputs.<attempt>`，`runtime-inputs.json` 指向最新结果的副本；
+恢复后的成功不会覆盖先前失败。页面 200、匿名 401、旧 Cookie 或历史回执不能代替新登录。
+`bootstrap-inputs` 同样会在写入前拒绝重建既有 Deployment 仍引用的缺失 Secret；该错误需要
+核对现场与恢复计划，不能通过重跑 bootstrap 换一个 Secret UID 来绕过。
 
 ```bash
 deploy/ack/redeploy.sh runtime-inputs

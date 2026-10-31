@@ -76,11 +76,7 @@ function sessionCookie(state: any, origin: string) {
 		(url.protocol !== "https:" || cookies[0].secure === true) && cookies[0].sameSite === "Lax" && /^[A-Za-z0-9_-]{43}$/u.test(cookies[0].value), "LOGIN_COOKIE_INVALID");
 }
 
-export async function bootstrapLogin(configFile: string, sourceSha: string, expectedOrigin?: string) {
-	assert(/^[a-f0-9]{40}$/u.test(sourceSha));
-	const config = await loginConfiguration(configFile);
-	await assertLoginOutputsCommitted(config.input.identityFile);
-	if (expectedOrigin !== undefined) assert.equal(config.input.origin, expectedOrigin, "LOGIN_ORIGIN_MISMATCH");
+async function freshLoginStates(config: Awaited<ReturnType<typeof loginConfiguration>>) {
 	const contexts: any[] = [];
 	const states = new Map<string, { userId: string; state: any }>();
 	try {
@@ -98,17 +94,42 @@ export async function bootstrapLogin(configFile: string, sourceSha: string, expe
 		}
 		for (const [index, subject] of config.subjects.entries())
 			assert.equal(await session(contexts[index]), states.get(subject.storageStateFile)!.userId, "LOGIN_SESSION_CHANGED");
-		const subjects: Record<string, { userId: string }> = Object.fromEntries(config.subjects.map((s) => [s.name, { userId: states.get(s.storageStateFile)!.userId }]));
-		const candidate = { schemaVersion: 1, sourceSha, origin: config.input.origin, createdAt: Date.now(), subjects };
-		const outputs = new Map<string, any>([[config.input.identityFile, candidate]]);
-		for (const [file, value] of states) outputs.set(file, value.state);
-		for (const { file, value } of config.blueprints) outputs.set(file, { ...value,
-			owner: { ...value.owner, userId: states.get(value.owner.stateFile)!.userId },
-			other: { ...value.other, userId: states.get(value.other.stateFile)!.userId } });
-		await promoteLoginOutputs(config.input.identityFile, config.before, outputs);
-		return { schemaVersion: 1, kind: "ack-bootstrap-login", subjectCount: states.size, blueprintCount: config.blueprints.length,
-			originHash: hash(config.input.origin), subjects: Object.values(candidate.subjects).map((s) => ({ userHash: hash(s.userId) })), loginVerified: true, businessVerified: false };
+		return states;
 	} finally { await Promise.allSettled(contexts.map((c) => c.dispose())); }
+}
+
+export async function bootstrapLogin(configFile: string, sourceSha: string, expectedOrigin?: string) {
+	assert(/^[a-f0-9]{40}$/u.test(sourceSha));
+	const config = await loginConfiguration(configFile);
+	await assertLoginOutputsCommitted(config.input.identityFile);
+	if (expectedOrigin !== undefined) assert.equal(config.input.origin, expectedOrigin, "LOGIN_ORIGIN_MISMATCH");
+	const states = await freshLoginStates(config);
+	const subjects: Record<string, { userId: string }> = Object.fromEntries(config.subjects.map((s) => [s.name, { userId: states.get(s.storageStateFile)!.userId }]));
+	const candidate = { schemaVersion: 1, sourceSha, origin: config.input.origin, createdAt: Date.now(), subjects };
+	const outputs = new Map<string, any>([[config.input.identityFile, candidate]]);
+	for (const [file, value] of states) outputs.set(file, value.state);
+	for (const { file, value } of config.blueprints) outputs.set(file, { ...value,
+		owner: { ...value.owner, userId: states.get(value.owner.stateFile)!.userId },
+		other: { ...value.other, userId: states.get(value.other.stateFile)!.userId } });
+	await promoteLoginOutputs(config.input.identityFile, config.before, outputs);
+	return { schemaVersion: 1, kind: "ack-bootstrap-login", subjectCount: states.size, blueprintCount: config.blueprints.length,
+		originHash: hash(config.input.origin), subjects: Object.values(candidate.subjects).map((s) => ({ userHash: hash(s.userId) })), loginVerified: true, businessVerified: false };
+}
+
+/** Verify new login after rollout without replacing the candidate or its stored sessions. */
+export async function verifyLoginAfterRollout(configFile: string, sourceSha: string, origin: string, expectedCandidate: Buffer) {
+	const current = await verifiedLoginCandidate(configFile, sourceSha, origin);
+	assert(current.bytes.equals(expectedCandidate), "LOGIN_CANDIDATE_CHANGED");
+	const candidate = JSON.parse(expectedCandidate.toString("utf8"));
+	const config = await loginConfiguration(configFile);
+	assert(config.input.origin === origin, "LOGIN_ORIGIN_MISMATCH");
+	assert((await privateBytes(config.input.identityFile)).equals(expectedCandidate), "LOGIN_CANDIDATE_CHANGED");
+	const states = await freshLoginStates(config);
+	for (const subject of config.subjects)
+		assert(states.get(subject.storageStateFile)?.userId === candidate.subjects[subject.name]?.userId, "LOGIN_CANDIDATE_SESSION_MISMATCH");
+	await assertLoginOutputsCommitted(config.input.identityFile);
+	for (const [file, before] of config.before) assert.deepEqual(await loginOutputBytes(file), before, "LOGIN_OUTPUT_CHANGED");
+	return { loginVerified: true, sessionVerified: true, subjectCount: states.size };
 }
 
 export async function verifiedLoginCandidate(configFile: string, sourceSha: string, origin: string) {

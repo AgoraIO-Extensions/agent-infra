@@ -20,13 +20,39 @@ type Files = {
 	requests: string;
 	login?: string;
 };
-type RuntimeInputMutationStatus =
-	| "not-applied"
-	| "preflight"
-	| "secret-write"
-	| "local-promotion"
-	| "rollout"
-	| "verified";
+type PublicationProgress = {
+	phase: "preflight" | "secret-write" | "local-promotion" | "rollout" | "login" | "verification";
+	mutationStatus: "not-applied" | "attempted" | "applied";
+};
+const failureCodes = new Set([
+	"RUNTIME_INPUTS_INVALID", "RUNTIME_INPUT_LOGIN_REQUIRED", "RUNTIME_INPUT_CLUSTER_DRIFT",
+	"RUNTIME_INPUT_NAMESPACE_OWNER_INVALID", "RUNTIME_INPUT_NAMESPACE_DRIFT",
+	"RUNTIME_INPUT_SECRET_MISSING", "RUNTIME_INPUT_SECRET_UNAVAILABLE", "RUNTIME_INPUT_SECRET_OWNER_INVALID",
+	"RUNTIME_INPUT_SECRET_DRIFT", "RUNTIME_INPUT_SECRET_VERSION_DRIFT", "RUNTIME_INPUT_SECRET_READBACK_FAILED",
+	"RUNTIME_INPUT_SECRET_CHANGED_DURING_ROLLOUT", "RUNTIME_INPUT_CONSUMER_INVALID", "RUNTIME_INPUT_CONSUMER_MISSING",
+	"RUNTIME_INPUT_CONFIGURATION_MOUNT_INVALID", "RUNTIME_INPUT_CONSUMER_DRIFT",
+	"RUNTIME_INPUT_CONSUMER_VERSION_DRIFT", "RUNTIME_INPUT_CONSUMER_ROLLOUT_FAILED", "RUNTIME_INPUT_LOCAL_DRIFT",
+	"RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED", "RUNTIME_INPUT_TEMPLATE_TARGET_MISSING", "RUNTIME_INPUT_TEMPLATE_REQUEST_MISSING",
+	"RUNTIME_INPUT_CAPACITY_TUPLE_INVALID", "RUNTIME_INPUT_CAPACITY_AMBIGUOUS", "RUNTIME_INPUT_CAPACITY_TARGET_INVALID",
+	"RUNTIME_INPUT_IDENTITY_TARGET_INVALID", "RUNTIME_INPUT_IDENTITY_TARGET_MISSING",
+	"RUNTIME_INPUT_FILE_BINDING_CONFLICT", "RUNTIME_INPUT_FILE_INSIDE_WORKTREE",
+	"LOGIN_AUTHENTICATION_FAILED", "LOGIN_SESSION_READ_FAILED", "LOGIN_SESSION_INVALID", "LOGIN_COOKIE_INVALID",
+	"LOGIN_SESSION_CHANGED", "LOGIN_SUBJECTS_NOT_DISTINCT", "LOGIN_CANDIDATE_INVALID", "LOGIN_CANDIDATE_CHANGED",
+	"LOGIN_CANDIDATE_SESSION_MISMATCH", "LOGIN_OUTPUT_CHANGED", "LOGIN_OUTPUT_PROMOTION_INCOMPLETE", "LOGIN_ORIGIN_MISMATCH",
+]);
+class RuntimeInputPublicationError extends Error {
+	readonly receipt: PublicationProgress & {
+		schemaVersion: number; kind: string; status: string; failureCode: string;
+		recoveryRequired: boolean; loginVerified: boolean; businessVerified: boolean;
+	};
+	constructor(error: unknown, progress: PublicationProgress) {
+		const code = error instanceof Error ? error.message.split("\n", 1)[0] ?? "" : "";
+		const failureCode = failureCodes.has(code) ? code : "RUNTIME_INPUTS_INVALID";
+		super(failureCode);
+		this.receipt = { schemaVersion: 1, kind: "ack-runtime-inputs", status: "failed", failureCode,
+			...progress, recoveryRequired: progress.mutationStatus !== "not-applied", loginVerified: false, businessVerified: false };
+	}
+}
 const ownerLabel = "agent-infra.agora.io/bootstrap-id";
 const revisionAnnotation = "agent-infra.agora.io/runtime-inputs-hash";
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -83,9 +109,11 @@ async function prepare(files: Files, rendered: string, sourceSha: string) {
 			writes.set(file, { before, after });
 		}
 	};
+	let loginCandidate: Buffer | undefined;
 	if (files.login) {
 		const { verifiedLoginCandidate } = await import("./bootstrap-login.ts");
 		const candidate = await verifiedLoginCandidate(files.login, sourceSha, requests.origin);
+		loginCandidate = candidate.bytes;
 		const api = consumers.find((c) => c.component === "api")!;
 		assert(candidate.secretRef.name === api.secretName && candidate.secretRef.key === "deployment-identities.json", "RUNTIME_INPUT_IDENTITY_TARGET_INVALID");
 		const secret = secrets.find((s) => s.desired.metadata.name === api.secretName)!;
@@ -146,23 +174,21 @@ async function prepare(files: Files, rendered: string, sourceSha: string) {
 	await stageFile(capacity.profilesFile, profileBytes);
 	workerSecret.desired.data[capacity.workerSecretRef.key] = profileBytes.toString("base64");
 	await stageFile(files.capacity, jsonBytes({ ...capacity, evidence: [...evidenceFiles].map(([imageDigest, file]) => ({ imageDigest, file })) }));
-	return { bootstrap, consumers, secrets, writes };
+	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin };
 }
 
 export async function publishRuntimeInputs(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, apply = false, timeout = "300s") {
-	const mutation = { status: (apply ? "preflight" : "not-applied") as RuntimeInputMutationStatus };
+	const progress: PublicationProgress = { phase: "preflight", mutationStatus: "not-applied" };
 	try {
-		const result = await publishRuntimeInputsUnsafe(files, rendered, sourceSha, kubectl, apply, timeout, mutation);
-		return { ...result, mutationStatus: mutation.status };
+		assert(!apply || files.login, "RUNTIME_INPUT_LOGIN_REQUIRED");
+		const result = await publishRuntimeInputsWithProgress(files, rendered, sourceSha, kubectl, apply, timeout, progress);
+		return { ...result, mutationStatus: progress.mutationStatus };
 	} catch (error) {
-		if (error && typeof error === "object")
-			Object.defineProperty(error, "runtimeInputMutationStatus", { value: mutation.status, enumerable: false });
-		throw error;
+		throw new RuntimeInputPublicationError(error, progress);
 	}
 }
 
-async function publishRuntimeInputsUnsafe(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, apply: boolean, timeout: string, mutation: { status: RuntimeInputMutationStatus }) {
-	const requestInput = await privateJson(files.requests);
+async function publishRuntimeInputsWithProgress(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, apply: boolean, timeout: string, progress: PublicationProgress) {
 	const plan = await prepare(files, rendered, sourceSha);
 	const { namespace, clusterUid, installationId } = plan.bootstrap;
 	const read = (kind: string, name: string, scoped = true) => JSON.parse(kubectl([
@@ -176,17 +202,20 @@ async function publishRuntimeInputsUnsafe(files: Files, rendered: string, source
 		assert(current.metadata?.uid === ns.metadata.uid && current.metadata.labels?.[ownerLabel] === installationId, "RUNTIME_INPUT_NAMESPACE_DRIFT");
 	};
 	const readSecret = (name: string) => {
+		let raw: string;
 		try {
-			return read("secret", name);
+			raw = kubectl(["-n", namespace, "get", "secret", name, "--ignore-not-found", "-o", "json"]);
 		} catch {
-			// A missing configuration Secret is an outage risk; keep the failure bounded and do not let kubectl output leak.
-			throw new Error("RUNTIME_INPUT_SECRET_MISSING");
+			throw new Error("RUNTIME_INPUT_SECRET_UNAVAILABLE");
 		}
+		assert(raw?.trim(), "RUNTIME_INPUT_SECRET_MISSING");
+		try { return JSON.parse(raw); }
+		catch { throw new Error("RUNTIME_INPUT_SECRET_UNAVAILABLE"); }
 	};
 	const secrets = plan.secrets.map((entry) => {
 		const current = readSecret(entry.desired.metadata.name);
 		assert(current.kind === "Secret" && current.metadata?.name === entry.desired.metadata.name && current.metadata.namespace === namespace && current.metadata.uid && current.metadata.resourceVersion &&
-			current.metadata.labels?.[ownerLabel] === installationId && current.type === "Opaque" && !current.immutable, "RUNTIME_INPUT_SECRET_OWNER_INVALID");
+			current.metadata.labels?.[ownerLabel] === installationId && !current.metadata.deletionTimestamp && current.type === "Opaque" && !current.immutable, "RUNTIME_INPUT_SECRET_OWNER_INVALID");
 		assert(isDeepStrictEqual(current.data, entry.before.data) || isDeepStrictEqual(current.data, entry.desired.data), "RUNTIME_INPUT_SECRET_DRIFT");
 		return { ...entry, current, verifiedVersion: current.metadata.resourceVersion, changed: !isDeepStrictEqual(current.data, entry.desired.data) };
 	});
@@ -198,58 +227,79 @@ async function publishRuntimeInputsUnsafe(files: Files, rendered: string, source
 		const revision = hash(JSON.stringify(Object.entries(data).sort(([a], [b]) => a.localeCompare(b))));
 		return { ...entry, current, revision, changed: current.spec.template.metadata?.annotations?.[revisionAnnotation] !== revision };
 	});
+	const assertPublishedSecrets = () => {
+		assertNamespace();
+		for (const secret of secrets) {
+			const current = readSecret(secret.current.metadata.name);
+			assert(current.metadata?.uid === secret.current.metadata.uid && current.metadata.resourceVersion === secret.verifiedVersion &&
+				current.metadata.labels?.[ownerLabel] === installationId && !current.metadata.deletionTimestamp &&
+				isDeepStrictEqual(current.data, secret.desired.data), "RUNTIME_INPUT_SECRET_CHANGED_DURING_ROLLOUT");
+		}
+	};
 	if (apply) {
 		for (const [file, bytes] of plan.writes) assert.deepEqual(await privateBytes(file), bytes.before, "RUNTIME_INPUT_LOCAL_DRIFT");
-		mutation.status = "secret-write";
+		progress.phase = "secret-write";
 		for (const secret of secrets) {
 			assertNamespace();
 			const current = readSecret(secret.current.metadata.name);
-			assert(current.metadata.uid === secret.current.metadata.uid && current.metadata.resourceVersion === secret.current.metadata.resourceVersion, "RUNTIME_INPUT_SECRET_VERSION_DRIFT");
-			if (secret.changed) kubectl(["-n", namespace, "replace", "--field-manager=agent-infra-runtime-inputs", "-f", "-"],
-				JSON.stringify({ ...current, data: secret.desired.data }));
-			const observed = read("secret", current.metadata.name);
-			assert(observed.metadata.uid === current.metadata.uid && observed.metadata.labels?.[ownerLabel] === installationId &&
+			assert(current.metadata.uid === secret.current.metadata.uid && current.metadata.resourceVersion === secret.current.metadata.resourceVersion &&
+				current.metadata.labels?.[ownerLabel] === installationId && !current.metadata.deletionTimestamp, "RUNTIME_INPUT_SECRET_VERSION_DRIFT");
+			if (secret.changed) {
+				progress.mutationStatus = "attempted";
+				kubectl(["-n", namespace, "replace", "--field-manager=agent-infra-runtime-inputs", "-f", "-"],
+					JSON.stringify({ ...current, data: secret.desired.data }));
+			}
+			const observed = readSecret(current.metadata.name);
+			assert(observed.metadata.uid === current.metadata.uid && observed.metadata.labels?.[ownerLabel] === installationId && !observed.metadata.deletionTimestamp &&
 				isDeepStrictEqual(observed.data, secret.desired.data), "RUNTIME_INPUT_SECRET_READBACK_FAILED");
 			secret.verifiedVersion = observed.metadata.resourceVersion;
+			if (secret.changed) progress.mutationStatus = "applied";
 		}
-		mutation.status = "local-promotion";
+		assertPublishedSecrets();
+		progress.phase = "local-promotion";
 		for (const [file, bytes] of plan.writes) {
 			assert.deepEqual(await privateBytes(file), bytes.before, "RUNTIME_INPUT_LOCAL_DRIFT");
 			if (bytes.before.equals(bytes.after)) continue;
 			const temporary = `${file}.runtime-inputs-${randomUUID()}`;
-			try { await writeFile(temporary, bytes.after, { mode: 0o600, flag: "wx" }); await rename(temporary, file); }
+			try {
+				progress.mutationStatus = "attempted";
+				await writeFile(temporary, bytes.after, { mode: 0o600, flag: "wx" });
+				await rename(temporary, file);
+				progress.mutationStatus = "applied";
+			}
 			finally { await unlink(temporary).catch(() => {}); }
 		}
-		mutation.status = "rollout";
+		progress.phase = "rollout";
 		for (const consumer of consumers) {
 			assertNamespace();
 			const current = read("deployment", consumer.name);
 			assert(current.metadata.uid === consumer.current.metadata.uid && current.metadata.resourceVersion === consumer.current.metadata.resourceVersion, "RUNTIME_INPUT_CONSUMER_VERSION_DRIFT");
-			if (consumer.changed) kubectl(["-n", namespace, "patch", "deployment", consumer.name, "--type=merge", "-p", JSON.stringify({
-				metadata: { uid: current.metadata.uid, resourceVersion: current.metadata.resourceVersion },
-				spec: { template: { metadata: { annotations: { [revisionAnnotation]: consumer.revision } } } },
-			})]);
+			assertPublishedSecrets();
+			if (consumer.changed) {
+				progress.mutationStatus = "attempted";
+				kubectl(["-n", namespace, "patch", "deployment", consumer.name, "--type=merge", "-p", JSON.stringify({
+					metadata: { uid: current.metadata.uid, resourceVersion: current.metadata.resourceVersion },
+					spec: { template: { metadata: { annotations: { [revisionAnnotation]: consumer.revision } } } },
+				})]);
+				progress.mutationStatus = "applied";
+			}
 			kubectl(["-n", namespace, "rollout", "status", `deployment/${consumer.name}`, `--timeout=${timeout}`]);
 			const observed = read("deployment", consumer.name);
 			assert(observed.metadata.uid === current.metadata.uid && observed.spec.template.metadata.annotations?.[revisionAnnotation] === consumer.revision &&
-				observed.status?.observedGeneration === observed.metadata.generation && observed.status.updatedReplicas === 1 && observed.status.availableReplicas === 1,
+				observed.status?.observedGeneration === observed.metadata.generation && observed.status.updatedReplicas === 1 && observed.status.availableReplicas === 1 && observed.status.readyReplicas === 1,
 				"RUNTIME_INPUT_CONSUMER_ROLLOUT_FAILED");
+			assertPublishedSecrets();
 		}
-		assertNamespace();
-		for (const secret of secrets) {
-			const current = read("secret", secret.current.metadata.name);
-			assert(current.metadata.uid === secret.current.metadata.uid && current.metadata.resourceVersion === secret.verifiedVersion &&
-				isDeepStrictEqual(current.data, secret.desired.data), "RUNTIME_INPUT_SECRET_CHANGED_DURING_ROLLOUT");
-		}
-		if (files.login) {
-			const { verifiedLoginCandidate } = await import("./bootstrap-login.ts");
-			await verifiedLoginCandidate(files.login, sourceSha, requestInput.origin);
-		}
-		mutation.status = "verified";
+		progress.phase = "login";
+		assert(files.login && plan.loginCandidate, "RUNTIME_INPUT_LOGIN_REQUIRED");
+		const { verifyLoginAfterRollout } = await import("./bootstrap-login.ts");
+		await verifyLoginAfterRollout(files.login, sourceSha, plan.origin, plan.loginCandidate);
+		progress.phase = "verification";
+		assertPublishedSecrets();
 	}
 	return { schemaVersion: 1, kind: "ack-runtime-inputs", status: "passed", mode: apply ? "applied-and-read-back" : "read-only-plan", sourceSha,
 		secretCount: secrets.length, changedSecretCount: secrets.filter((s) => s.changed).length,
-		rolloutCount: consumers.filter((c) => c.changed).length, templateCount: 4, businessVerified: false };
+		rolloutCount: consumers.filter((c) => c.changed).length, templateCount: 4, loginVerified: apply, businessVerified: false };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -265,14 +315,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		const result = await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined }, await readFile(rendered, "utf8"), source, run, mode === "apply");
 		process.stdout.write(`${JSON.stringify(result)}\n`);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : "";
-		const failureCode = /^[A-Z][A-Z0-9_]{0,63}$/u.test(message) ? message : "RUNTIME_INPUTS_INVALID";
-		const mutationStatus = error && typeof error === "object" &&
-			typeof (error as { runtimeInputMutationStatus?: unknown }).runtimeInputMutationStatus === "string"
-			? (error as { runtimeInputMutationStatus: RuntimeInputMutationStatus }).runtimeInputMutationStatus
-			: "preflight";
-		const recoveryRequired = ["secret-write", "local-promotion", "rollout"].includes(mutationStatus);
-		process.stdout.write(`${JSON.stringify({ schemaVersion: 1, kind: "ack-runtime-inputs", status: "failed", failureCode, mutationStatus, recoveryRequired })}\n`);
+		const failure = error instanceof RuntimeInputPublicationError ? error :
+			new RuntimeInputPublicationError(error, { phase: "preflight", mutationStatus: "not-applied" });
+		process.stdout.write(`${JSON.stringify(failure.receipt)}\n`);
 		process.stderr.write("ACK_RUNTIME_INPUTS_INVALID\n");
 		process.exitCode = 1;
 	}
