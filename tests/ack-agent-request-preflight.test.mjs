@@ -59,6 +59,85 @@ test("validates custom self-managed request without reading credentials", async 
 	assert(!JSON.stringify(result).includes("private-credential"));
 });
 
+test("validates standard, platform-adapter, single-entry and multi-service shapes", async (t) => {
+	const f = await fixture(t);
+	const standard = await f.write("standard.json", {
+		schemaVersion: 3,
+		name: "standard",
+		description: "standard request",
+		source: { kind: "standard", templateId: "codex" },
+		coOwnerIds: [],
+		availability: [],
+		environment: [],
+		secrets: [],
+		modelConfiguration: {
+			options: [
+				{
+					optionId: "default",
+					endpointId: "relay",
+					modelId: "model",
+					reasoningLevels: ["low"],
+				},
+			],
+			defaultOptionId: "default",
+			defaultReasoningLevel: "low",
+		},
+		defaultRelayKey: "private-model-key-123456",
+	});
+	const adapter = await f.write("adapter.json", {
+		...baseBody,
+		name: "adapter",
+		source: {
+			kind: "custom",
+			imageReference: "ghcr.io/example/adapter@sha256:" + "b".repeat(64),
+			interactionMode: "platform-adapter",
+		},
+	});
+	const multi = await f.write("multi.json", {
+		...baseBody,
+		name: "multi",
+		source: {
+			kind: "custom",
+			interactionMode: "self-managed",
+			identityResponsibility: "self-managed",
+			manifest: "apiVersion: v1\nkind: ConfigMap\n",
+		},
+	});
+	const requests = await f.write("matrix.json", {
+		schemaVersion: 1,
+		requests: [
+			{
+				name: "standard",
+				bodyFile: standard,
+				credentialFile: f.credentialFile,
+				idempotencyKey: "standard-v1",
+			},
+			{
+				name: "adapter",
+				bodyFile: adapter,
+				credentialFile: f.credentialFile,
+				idempotencyKey: "adapter-v1",
+			},
+			{
+				name: "single",
+				bodyFile: f.bodyFile,
+				credentialFile: f.credentialFile,
+				idempotencyKey: "single-v1",
+			},
+			{
+				name: "multi",
+				bodyFile: multi,
+				credentialFile: f.credentialFile,
+				idempotencyKey: "multi-v1",
+			},
+		],
+	});
+	const result = await validateAgentRequestFile(requests);
+	assert.equal(result.status, "passed");
+	assert.deepEqual(result.sourceKinds, ["custom", "standard"]);
+	assert.equal(result.requestCount, 4);
+});
+
 test("rejects multi-service manifest combined with imageReference", async (t) => {
 	const f = await fixture(t);
 	await f.write("body.json", {
