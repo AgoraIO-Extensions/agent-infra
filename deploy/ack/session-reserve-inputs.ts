@@ -8,6 +8,7 @@ import {
 } from "../../packages/platform-core/src/session-sandbox-reserves.ts";
 import { privateBytes, privateJson } from "./private-input.ts";
 import { validateCapacityBindings } from "./workload-capacity.ts";
+import { posix } from "node:path";
 
 type Json = Record<string, any>;
 type ReadJson = (file: string) => Promise<Json>;
@@ -53,7 +54,12 @@ function workerConfigurationMount(pod: Json, secretName: string) {
 			if (typeof module !== "string" || !module.startsWith("file:///")) continue;
 			const modulePath = decodeURIComponent(new URL(module).pathname);
 			const expected = mount.mountPath.endsWith(`/${mount.subPath}`) ? mount.mountPath : (mount.mountPath.endsWith("/") ? `${mount.mountPath}${mount.subPath}` : `${mount.mountPath}/${mount.subPath}`);
-			if (modulePath !== expected) continue;
+			// The ACK chart starts `deployment.mjs`, which imports the separately mounted
+			// `configuration.mjs` subPath. Older local fixtures used the configuration
+			// module itself as the entrypoint; accept both while keeping the same Secret
+			// volume, readOnly mount and exact subPath binding.
+			const deploymentModule = posix.join(posix.dirname(expected), "deployment.mjs");
+			if (modulePath !== expected && modulePath !== deploymentModule) continue;
 			assert(typeof mount.subPath === "string" && /^[A-Za-z0-9._-]+$/u.test(mount.subPath), "CAPSULE_RESERVE_CONFIGURATION_MOUNT_INVALID");
 			return { containerName: container.name, key: mount.subPath, mount, volume };
 		}

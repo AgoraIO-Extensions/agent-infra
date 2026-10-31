@@ -169,6 +169,44 @@ test("the runner invokes the existing workflow without shell interpolation and r
 	);
 });
 
+test("successful runtime stages promote generated JSON inputs and preserve the source template", async (t) => {
+	const f = await fixture(t);
+	const template = { schemaVersion: 1, sourceSha: f.sourceSha, templates: [] };
+	await mkdir(join(f.capsule, "state"), { mode: 0o700 });
+	await f.save("state/template-validations.json", template);
+	f.value.inputs.push("state/template-validations.json");
+	f.value.environment.ACK_TEMPLATE_VALIDATIONS_FILE =
+		"@CAPSULE_ROOT@/state/template-validations.json";
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		`#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == runtime-inputs ]]
+cat > "$ACK_TEMPLATE_VALIDATIONS_FILE" <<'JSON'
+{"schemaVersion":1,"sourceSha":"${f.sourceSha}","templates":[{"templateId":"codex"}]}
+JSON
+`,
+		{ mode: 0o700 },
+	);
+	await f.save("capsule.json", f.value);
+	const before = await readFile(
+		join(f.capsule, "state/template-validations.json"),
+	);
+	const result = await runCapsule(f.manifest, "runtime-inputs", f.source);
+	assert.equal(result.exitCode, 0);
+	assert.deepEqual(
+		await readFile(join(f.capsule, "state/template-validations.json")),
+		Buffer.from(
+			`{"schemaVersion":1,"sourceSha":"${f.sourceSha}","templates":[{"templateId":"codex"}]}\n`,
+		),
+	);
+	assert.notDeepEqual(
+		await readFile(join(f.capsule, "state/template-validations.json")),
+		before,
+	);
+	assert.deepEqual(result.promotedInputs, ["state/template-validations.json"]);
+});
+
 async function reserveFixture(t, enabled = false) {
 	const f = await fixture(t);
 	const resources = {

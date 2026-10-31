@@ -139,6 +139,19 @@ snapshot() {
 	node "$repo_root/deploy/ack/redeploy-evidence.ts" snapshot "$namespace" "$release" "$source_sha" >"$evidence_dir/$prefix.json"
 }
 
+configuration_source_preflight() {
+	if [[ -z "${ACK_BOOTSTRAP_INPUTS_FILE:-}" || -z "${ACK_TEMPLATE_IMAGE_MANIFEST:-}" ]]; then
+		return 0
+	fi
+	require_file ACK_BOOTSTRAP_INPUTS_FILE "$ACK_BOOTSTRAP_INPUTS_FILE"
+	require_file ACK_TEMPLATE_IMAGE_MANIFEST "$ACK_TEMPLATE_IMAGE_MANIFEST"
+	if ! node --experimental-strip-types "$repo_root/deploy/ack/configuration-source-preflight.ts" \
+		"$ACK_BOOTSTRAP_INPUTS_FILE" "$runtime_manifest" "$ACK_TEMPLATE_IMAGE_MANIFEST" "$source_sha" \
+		"$evidence_dir/configuration-source-preflight.json" >"$evidence_dir/configuration-source-preflight.stdout"; then
+		die "source-bound configuration preflight failed; no Helm write was attempted"
+	fi
+}
+
 bootstrap_inputs() {
 	require_source_tuple
 	require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
@@ -343,6 +356,7 @@ deploy() {
 	render_manifest "$rendered_manifest"
 	unlink "$rendered_manifest"
 	trap - EXIT
+	configuration_source_preflight
 	"$repo_root/deploy/ack/preflight.sh"
 	export KUBECONFIG="$ACK_KUBECONFIG"
 	helm upgrade --install "$release" "$chart_dir" \

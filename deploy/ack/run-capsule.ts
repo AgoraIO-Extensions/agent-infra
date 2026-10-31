@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { privateJson } from "./private-input.ts";
@@ -23,6 +23,18 @@ const variables = new Set([
 const capsulePrefix = "@CAPSULE_ROOT@/";
 const sourceToken = "@SOURCE_ROOT@";
 
+type MaterializedCapsule = {
+	environment: Record<string, string>;
+	inputCount: number;
+	sourceSha: string;
+	reserve?: Awaited<ReturnType<typeof prepareReserveInput>>;
+	canonicalRoot: string;
+	runDirectory: string;
+	inputs: string[];
+	resolvedFiles: Map<string, string>;
+	canonicalBefore: Map<string, Buffer | null>;
+};
+
 function relativePath(value: unknown): string {
 	assert(typeof value === "string" && value.length > 0 && value.length <= 1024 && !isAbsolute(value) && !/[\\\0\r\n]/u.test(value));
 	assert(value.split("/").every((part) => part.length > 0 && part !== "." && part !== ".."), "CAPSULE_PATH_INVALID");
@@ -41,7 +53,7 @@ async function inspectPath(root: string, relative: string, mayCreate = false) {
 	}
 }
 
-export async function materializeCapsule(manifestFile: string, sourceRoot: string, readWorker?: ReadReserveWorker) {
+export async function materializeCapsule(manifestFile: string, sourceRoot: string, readWorker?: ReadReserveWorker): Promise<MaterializedCapsule> {
 	assert(isAbsolute(manifestFile) && isAbsolute(sourceRoot));
 	assert(resolve(manifestFile) === manifestFile && resolve(sourceRoot) === sourceRoot);
 	const root = dirname(manifestFile);
@@ -112,6 +124,13 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 	// All inputs are checked before creating a generated run or invoking any deployment command.
 	const runDirectory = await mkdtemp(join(canonicalRoot, ".resolved-"));
 	const resolvedFiles = new Map([...files.keys()].map((relative) => [relative, join(runDirectory, relative)]));
+	const canonicalBefore = new Map<string, Buffer | null>();
+	for (const relative of files.keys()) {
+		canonicalBefore.set(relative, await readFile(join(canonicalRoot, relative)).catch((error) => {
+			if (error?.code === "ENOENT") return null;
+			throw error;
+		}));
+	}
 	const inputDirectories = new Set<string>();
 	for (const file of files.keys()) {
 		let parent = dirname(file);
@@ -153,12 +172,51 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 	}
 	const environment: Record<string, string> = { ACK_SOURCE_SHA: sourceSha };
 	for (const [name, value] of Object.entries(materialize(input.environment))) environment[name] = Array.isArray(value) ? value.join("\n") : value as string;
-	return { environment, inputCount: files.size, sourceSha, reserve };
+	return { environment, inputCount: files.size, sourceSha, reserve, canonicalRoot, runDirectory, inputs: [...files.keys()], resolvedFiles, canonicalBefore };
+}
+
+function promotionTargets(command: string, inputs: string[]) {
+	const targets = new Set<string>();
+	if (["bootstrap-login", "all"].includes(command))
+		for (const input of inputs) if (input.startsWith("blueprints/") && input.endsWith(".json")) targets.add(input);
+	if (["template-preflight", "runtime-inputs", "all"].includes(command)) {
+		for (const input of ["state/template-validations.json", "inputs/bootstrap.json", "inputs/capacity.json"])
+			if (inputs.includes(input)) targets.add(input);
+	}
+	return [...targets];
+}
+
+async function promoteGeneratedInputs(materialized: MaterializedCapsule, command: string) {
+	const promoted: string[] = [];
+	for (const relative of promotionTargets(command, materialized.inputs)) {
+		const source = materialized.resolvedFiles.get(relative);
+		if (!source) continue;
+		const destination = join(materialized.canonicalRoot, relative);
+		const before = materialized.canonicalBefore.get(relative) ?? null;
+		const current = await readFile(destination).catch((error) => {
+			if (error?.code === "ENOENT") return null;
+			throw error;
+		});
+		assert((current === null && before === null) || (current !== null && before !== null && current.equals(before)), "CAPSULE_OUTPUT_LOCAL_DRIFT");
+		const bytes = await readFile(source);
+		if (current?.equals(bytes)) continue;
+		await inspectPath(materialized.canonicalRoot, dirname(relative), true);
+		const temporary = `${destination}.promotion-${process.pid}-${Date.now()}`;
+		try {
+			await writeFile(temporary, bytes, { mode: 0o600, flag: "wx" });
+			await rename(temporary, destination);
+		} finally {
+			await unlink(temporary).catch(() => undefined);
+		}
+		promoted.push(relative);
+	}
+	return promoted;
 }
 
 export async function runCapsule(manifest: string, command: string, sourceRoot: string, readWorker?: ReadReserveWorker) {
 	assert(commands.has(command), "CAPSULE_COMMAND_INVALID");
-	const { environment, inputCount, sourceSha, reserve } = await materializeCapsule(manifest, sourceRoot, readWorker);
+	const materialized = await materializeCapsule(manifest, sourceRoot, readWorker);
+	const { environment, inputCount, sourceSha, reserve } = materialized;
 	const inherited = { ...process.env };
 	for (const key of Object.keys(inherited)) if ((key.startsWith("ACK_") && !["ACK_CLEAN_CONFIRM", "ACK_CLEAN_ALLOW_FOREIGN"].includes(key)) || key === "NODE_EXTRA_CA_CERTS") delete inherited[key];
 	const child = spawn("bash", [join(sourceRoot, "deploy/ack/redeploy.sh"), command], { cwd: sourceRoot, env: { ...inherited, ...environment }, stdio: "inherit" });
@@ -170,7 +228,8 @@ export async function runCapsule(manifest: string, command: string, sourceRoot: 
 		assert(actual?.configurationHash === reserve.receipt.configHash && actual.configuration?.revision === reserve.receipt.revision && actual.configuration?.enabled === reserve.receipt.enabled && actual.sourceSha === reserve.receipt.sourceSha, "CAPSULE_RESERVE_ADOPTION_MISMATCH");
 		mountedInputVerified = true;
 	}
-	return { schemaVersion: 1, kind: "ack-portable-capsule", sourceSha, inputCount, command, exitCode, ...(reserve ? { reserve: { ...reserve.receipt, mountedInputVerified } } : {}) };
+	const promotedInputs = exitCode === 0 ? await promoteGeneratedInputs(materialized, command) : [];
+	return { schemaVersion: 1, kind: "ack-portable-capsule", sourceSha, inputCount, command, exitCode, promotedInputs, ...(reserve ? { reserve: { ...reserve.receipt, mountedInputVerified } } : {}) };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
