@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -338,7 +339,7 @@ test("Harness rejects unsupported lightweight lane before external commands", as
 	);
 });
 
-test("split Harness stages keep the synchronized SHA and skip cached digest pulls", async () => {
+test("split Harness stages keep the synchronized SHA and skip cached digest pulls", async (t) => {
 	const { cp, mkdir, chmod } = await import("node:fs/promises");
 	const directory = await mkdtemp(join(tmpdir(), "harness-command-"));
 	const repository = join(directory, "repo");
@@ -357,6 +358,19 @@ test("split Harness stages keep the synchronized SHA and skip cached digest pull
 				join("deploy/local", name),
 				join(repository, "deploy/local", name),
 			);
+		await mkdir(join(repository, "deploy/release"), { recursive: true });
+		await writeFile(
+			join(repository, "deploy/release/build-images.mjs"),
+			`
+import fs from "node:fs";
+if (process.env.DOCKER_CONTEXT !== "fixture") throw new Error("FALLBACK_WRONG_DOCKER_CONTEXT");
+fs.appendFileSync(process.env.TEST_FALLBACK_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
+const names = {runtimeHost:"agent-runtime-host", codex:"agent-runtime-codex", claude:"agent-runtime-claude", opencode:"agent-runtime-opencode", pi:"agent-runtime-pi", customBase:"custom-agent-base"};
+const keys = process.argv.includes("--custom-base-image") ? ["customBase"] : process.argv.find(x => x.startsWith("--images=")).slice(9).split(",");
+const images = Object.fromEntries(keys.map(key => [key, {repository:process.env.IMAGE_REPOSITORY_PREFIX + "/" + names[key], digest:"sha256:${"a".repeat(64)}"}]));
+fs.writeFileSync(process.argv[2], JSON.stringify({images}));
+`,
+		);
 		await runGit(["init", "-b", "main"]);
 		await runGit(["config", "user.name", "Harness test"]);
 		await runGit(["config", "user.email", "harness@example.invalid"]);
@@ -372,7 +386,9 @@ test("split Harness stages keep the synchronized SHA and skip cached digest pull
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.TEST_DOCKER_LOG, JSON.stringify(args) + "\\n");
-if (args.includes("--raw")) console.log(JSON.stringify({mediaType:"application/vnd.oci.image.manifest.v1+json"}));
+if (args.includes("--raw") && process.env.TEST_INDEX_FILE) process.stdout.write(fs.readFileSync(process.env.TEST_INDEX_FILE));
+else if (args.includes("--raw")) console.log(JSON.stringify({mediaType:"application/vnd.oci.image.manifest.v1+json"}));
+else if (args.includes("imagetools") && process.env.TEST_NO_IMAGE_TAGS === "1") process.exit(1);
 else if(args.includes("imagetools")) console.log("Digest: sha256:${"a".repeat(64)}");
 else if(args.includes("info")) console.log("aarch64");
 else if(args.includes("inspect")) console.log("[{}]");
@@ -392,12 +408,14 @@ else process.exit(43);
 			PLATFORM_LOCAL_DOCKER_CONTEXT: "fixture",
 			DOCKER_BIN: bin,
 			TEST_DOCKER_LOG: log,
+			TEST_FALLBACK_LOG: join(directory, "fallback.log"),
+			DOCKER_CONTEXT: "foreign-default",
 		};
-		const cli = (action) =>
+		const cli = (action, overrides = {}) =>
 			execFileAsync(
 				process.execPath,
 				["deploy/local/e2e-harness.mjs", action],
-				{ cwd: repository, env },
+				{ cwd: repository, env: { ...env, ...overrides } },
 			);
 		await cli("sync");
 		const tree = (await runGit(["rev-parse", "HEAD^{tree}"])).stdout.trim();
@@ -420,6 +438,142 @@ else process.exit(43);
 			await readFile(join(state, `infrastructure-${sha}.json`), "utf8"),
 		);
 		assert.equal(manifest.sourceRevision, sha);
+		const names = [
+			"agent-runtime-host",
+			"agent-runtime-codex",
+			"agent-runtime-claude",
+			"agent-runtime-opencode",
+			"agent-runtime-pi",
+			"custom-agent-base",
+		];
+		const indexRaw = JSON.stringify({
+			mediaType: "application/vnd.oci.image.index.v1+json",
+			manifests: [
+				{
+					mediaType: "application/vnd.oci.image.manifest.v1+json",
+					digest: digest("b"),
+					platform: { os: "linux", architecture: "arm64" },
+				},
+			],
+		});
+		const indexDigest = `sha256:${createHash("sha256").update(indexRaw).digest("hex")}`;
+		const receipts = names.map((name) => ({
+			commitSha: sha,
+			reference: `ghcr.io/agoraio-extensions/agent-infra/${name}:main`,
+			digest: indexDigest,
+			indexDigest,
+			platformDigests: { "linux/arm64": digest("b") },
+		}));
+		const receiptPath = join(directory, "published-indexes.jsonl");
+		const indexPath = join(directory, "index.json");
+		await writeFile(indexPath, indexRaw);
+		const receiptEnv = {
+			E2E_HARNESS_PUBLISHED_INDEXES_FILE: receiptPath,
+			TEST_INDEX_FILE: indexPath,
+			TEST_NO_IMAGE_TAGS: "1",
+		};
+		const writeReceipts = (values) =>
+			writeFile(
+				receiptPath,
+				`${values.map((row) => JSON.stringify(row)).join("\n")}\n`,
+			);
+		await t.test(
+			"published receipts resolve six current-source Runtime child digests without tag lookup",
+			async () => {
+				await writeReceipts(receipts);
+				await writeFile(log, "");
+				await cli("images", receiptEnv);
+				const resolved = JSON.parse(
+					await readFile(join(state, `infrastructure-${sha}.json`), "utf8"),
+				);
+				assert.equal(Object.keys(resolved.images).length, 6);
+				assert.ok(
+					Object.values(resolved.images).every(
+						(image) => image.digest === digest("b"),
+					),
+				);
+				assert.equal(resolved.images.platformWorker, undefined);
+				const receiptCalls = (await readFile(log, "utf8"))
+					.trim()
+					.split("\n")
+					.map(JSON.parse);
+				assert.ok(
+					receiptCalls.every(
+						(args) => args[0] === "--context" && args[1] === "fixture",
+					),
+				);
+				assert.ok(
+					receiptCalls
+						.filter((args) => args.includes("imagetools"))
+						.every((args) => args.at(-1).includes("@sha256:")),
+				);
+			},
+		);
+		for (const [name, rows] of [
+			[
+				"wrong source",
+				receipts.map((row) => ({ ...row, commitSha: "0".repeat(40) })),
+			],
+			[
+				"wrong repository",
+				receipts.map((row) => ({
+					...row,
+					reference: row.reference.replace("agoraio-extensions", "foreign"),
+				})),
+			],
+			["missing template", receipts.slice(1)],
+			["duplicate template", [...receipts, receipts[0]]],
+			[
+				"wrong architecture",
+				receipts.map((row) => ({
+					...row,
+					platformDigests: { "linux/amd64": digest("b") },
+				})),
+			],
+			[
+				"child mismatch",
+				receipts.map((row) => ({
+					...row,
+					platformDigests: { "linux/arm64": digest("c") },
+				})),
+			],
+			[
+				"index mismatch",
+				receipts.map((row) => ({
+					...row,
+					digest: digest("c"),
+					indexDigest: digest("c"),
+				})),
+			],
+		])
+			await t.test(
+				`published receipts reject ${name} without fallback`,
+				async () => {
+					await writeReceipts(rows);
+					await assert.rejects(
+						cli("images", receiptEnv),
+						/Published image receipt/,
+					);
+					await assert.rejects(readFile(env.TEST_FALLBACK_LOG), {
+						code: "ENOENT",
+					});
+				},
+			);
+		await t.test(
+			"missing immutable tags build only Runtime images in the declared Docker context",
+			async () => {
+				await cli("images", { TEST_NO_IMAGE_TAGS: "1" });
+				const builds = (await readFile(env.TEST_FALLBACK_LOG, "utf8"))
+					.trim()
+					.split("\n")
+					.map(JSON.parse);
+				assert.equal(builds.length, 2);
+				assert.ok(
+					builds[0].includes("--images=runtimeHost,codex,claude,opencode,pi"),
+				);
+				assert.ok(builds[1].includes("--custom-base-image"));
+			},
+		);
 		await writeFile(join(state, "source-pin.json"), "{");
 		await assert.rejects(cli("images"), /Source pin is unreadable or invalid/);
 	} finally {

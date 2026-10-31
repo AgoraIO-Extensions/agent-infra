@@ -41,20 +41,29 @@ Docker context 所在 VM 的系统时钟不能回拨：Worker 签发的 Runtime 
 
 ## 镜像来源
 
-四个标准 Runtime 模板（Codex、Claude、OpenCode、Pi）共用 Runtime Host 的已验证镜像
-闭包；Kubernetes 调度 Worker、目录同步和 Sandbox/Base 镜像属于基础设施镜像集合。它们
-优先从公开 GHCR 的 `sha-<sourceRevision>` tag 读取并立即回读 Digest。GHCR 缺少当前
-开发分支的基础设施镜像时，Harness 可以用当前架构在干净临时 worktree 中本地构建并推送
-到 GHCR，再按 Digest 使用；不会从当前脏目录发送 Docker context。
+四个标准 Runtime 模板（Codex、Claude、OpenCode、Pi）、Runtime Host 和 Sandbox/Base
+分别保留镜像 Digest，由 main push、release tag 或手动触发 `publish-images` workflow 发布。
+Web、API、Worker 和目录同步属于业务镜像，只在 release tag 或手动
+`publish_platform=true` 时发布；本地 E2E 从固定源码构建这四个业务组件。
 
-Kubernetes 调度 Worker、目录同步、Runtime Host 和 Sandbox/Base 镜像属于基础设施集合，
-由 main push、release tag 或手动触发 `publish-images` workflow 发布。Platform Web/API 等
-业务镜像不由 main push 发布，只有 release tag 或手动 `publish_platform=true` 才发布；本地
-E2E 始终按当前 worktree 的 Platform 源码构建它们。
+发布流程仅保留 `main` 浮动 tag 时，先从固定源码对应的成功 workflow run 下载
+`published-indexes-<sourceRevision>-<attempt>` artifact，并设置
+`E2E_HARNESS_PUBLISHED_INDEXES_FILE=/absolute/path/to/published-indexes.jsonl`。
+该文件必须来自已确认的官方发布 run。Harness 要求六个 Runtime 镜像的 `commitSha`
+与本次 source pin 一致，回读不可变 index 的原始摘要，并核对当前架构 child digest；
+缺项、重复项、来源、架构或摘要不符直接失败，不回退构建，也不信任浮动 tag。
+
+未指定发布回执时，Harness 尝试 GHCR 的 `sha-<sourceRevision>` 和 `<sourceRevision>`
+源码 tag。缺少镜像时，只在指定的 `PLATFORM_LOCAL_DOCKER_CONTEXT` 中从干净临时
+worktree 构建和推送 Runtime 集合，不触发 Worker 或目录同步的发布构建。
 
 GitHub workflow 为基础设施镜像发布 `linux/amd64` 和 `linux/arm64`，并生成多架构 index。
-业务镜像只有 release/tag 或手动 `publish_platform=true` 才进入发布 job。tag 只用于定位，
-Helm、Worker 和 Agent 配置始终使用不可变 Digest。
+tag 只用于定位，Helm、Worker 和 Agent 配置始终使用不可变 Digest。
+
+构建代理须覆盖 Docker 客户端的 registry 授权请求与 builder 的基础镜像下载；
+`E2E_HARNESS_BUILD_PROXY` 传入的 build args 只覆盖构建步骤。可以为本次具名 Docker
+context 配置专用 BuildKit builder，并通过 `BUILDX_BUILDER` 选择它；不要修改其他
+context 或默认 daemon 来规避下载失败。
 
 ## 命令
 
