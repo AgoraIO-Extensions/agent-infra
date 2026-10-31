@@ -199,7 +199,13 @@ export async function prepareReserveInput(environment: Record<string, string>, s
 	if (configuration.profiles.length > 0) {
 		if (actual) {
 			const capacity = await readJson(environment.ACK_WORKLOAD_CAPACITY_FILE);
-			assert.deepEqual(actual.policy.resources, capacity.resources, "CAPSULE_RESERVE_RESOURCE_POLICY_DRIFT");
+			// Workload policy also carries ephemeral-storage, while the portable
+			// capacity contract intentionally binds the CPU/memory pair only.
+			const comparable = (value: Json) => ({
+				requests: { cpu: value?.requests?.cpu, memory: value?.requests?.memory },
+				limits: { cpu: value?.limits?.cpu, memory: value?.limits?.memory },
+			});
+			assert.deepEqual(comparable(actual.policy.resources), comparable(capacity.resources), "CAPSULE_RESERVE_RESOURCE_POLICY_DRIFT");
 			assert.equal(actual.policy.resourceProfileRef, capacity.resourceProfileRef, "CAPSULE_RESERVE_RESOURCE_POLICY_DRIFT");
 			for (const cost of configuration.resourceCosts) assert.deepEqual(cost.resources, actual.resourceCosts, "CAPSULE_RESERVE_COST_UNVERIFIED");
 		}

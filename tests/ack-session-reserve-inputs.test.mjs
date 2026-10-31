@@ -78,6 +78,10 @@ async function fixture(t, scenario = "ok") {
 		},
 		resourceCosts: { cpuMillis: 1000, memoryBytes: 1024, storageBytes: 1024 },
 	};
+	if (scenario === "ephemeral-storage") {
+		actual.policy.resources.requests["ephemeral-storage"] = "1Ki";
+		actual.policy.resources.limits["ephemeral-storage"] = "1Ki";
+	}
 	if (scenario === "missing-source") delete actual.sourceSha;
 	const pod = {
 		metadata: {
@@ -262,6 +266,11 @@ test("production readback accepts the ACK chart deployment entrypoint", async (t
 	const actual = await runReadback(t, "deployment-entrypoint");
 	assert.equal(actual.configuration?.revision, 2);
 	assert.equal(actual.sourceSha, sourceSha);
+});
+
+test("production readback ignores the workload-only ephemeral-storage field", async (t) => {
+	const actual = await runReadback(t, "ephemeral-storage");
+	assert.equal(actual.configuration?.revision, 2);
 });
 
 for (const scenario of [
