@@ -4,6 +4,12 @@ import { lstat, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/pr
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { privateJson } from "./private-input.ts";
+import { sessionSandboxReserveDigestV1 } from "../../packages/platform-core/src/session-sandbox-reserves.ts";
+import {
+	prepareReserveInput,
+	readReserveWorker,
+	type ReadReserveWorker,
+} from "./session-reserve-inputs.ts";
 
 const commands = new Set(["plan", "bootstrap-plan", "bootstrap-inputs", "bootstrap-database", "template-preflight", "bootstrap-login", "runtime-inputs", "bootstrap-credential", "provision", "validate", "cleanup-plan", "destroy", "all"]);
 const variables = new Set([
@@ -35,7 +41,7 @@ async function inspectPath(root: string, relative: string, mayCreate = false) {
 	}
 }
 
-export async function materializeCapsule(manifestFile: string, sourceRoot: string) {
+export async function materializeCapsule(manifestFile: string, sourceRoot: string, readWorker?: ReadReserveWorker) {
 	assert(isAbsolute(manifestFile) && isAbsolute(sourceRoot));
 	assert(resolve(manifestFile) === manifestFile && resolve(sourceRoot) === sourceRoot);
 	const root = dirname(manifestFile);
@@ -86,6 +92,23 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 		const output = directories.some((dir: string) => relative === dir || relative.startsWith(`${dir}/`));
 		await inspectPath(canonicalRoot, relative, output);
 	}
+	const original = (value: any): any => {
+		if (typeof value === "string" && value.startsWith(capsulePrefix)) return join(canonicalRoot, relativePath(value.slice(capsulePrefix.length)));
+		if (Array.isArray(value)) return value.map(original);
+		if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, original(child)]));
+		return value;
+	};
+	let reserve: Awaited<ReturnType<typeof prepareReserveInput>> | undefined;
+	if (input.environment.ACK_SESSION_RESERVES_FILE !== undefined) {
+		const reserveReference = input.environment.ACK_SESSION_RESERVES_FILE.slice(capsulePrefix.length);
+		const bootstrapReference = input.environment.ACK_BOOTSTRAP_INPUTS_FILE?.slice(capsulePrefix.length);
+		assert(files.has(reserveReference) && files.has(bootstrapReference), "CAPSULE_RESERVE_DECLARED_INPUT_REQUIRED");
+		reserve = await prepareReserveInput(original(input.environment), sourceSha, {
+			readJson: async (file) => original(await privateJson(file)),
+			readWorker,
+		});
+		assert(sessionSandboxReserveDigestV1(files.get(reserveReference)) === reserve.receipt.configHash, "CAPSULE_RESERVE_INPUT_CHANGED");
+	}
 	// All inputs are checked before creating a generated run or invoking any deployment command.
 	const runDirectory = await mkdtemp(join(canonicalRoot, ".resolved-"));
 	const resolvedFiles = new Map([...files.keys()].map((relative) => [relative, join(runDirectory, relative)]));
@@ -111,32 +134,43 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 	for (const [relative, value] of files) {
 		const target = resolvedFiles.get(relative)!;
 		await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-		await writeFile(target, `${JSON.stringify(materialize(value), null, 2)}\n`, { mode: 0o600, flag: "wx" });
+		const resolved = materialize(value);
+		if (reserve && target === materialize(input.environment.ACK_BOOTSTRAP_INPUTS_FILE)) {
+			const worker = resolved.objects.find((object: any) => object.kind === "Secret" && object.name === reserve.workerSecretName);
+			if (reserve.observed?.storedReserveBytes) {
+				const baseline = join(runDirectory, ".session-reserves-before.json");
+				assert(!files.has(".session-reserves-before.json"), "CAPSULE_RESERVE_INPUT_CONFLICT");
+				await writeFile(baseline, reserve.observed.storedReserveBytes, { mode: 0o600, flag: "wx" });
+				worker.files["session-reserves.json"] = baseline;
+			} else if (reserve.observed) {
+				// Bootstrap verifies the existing Secret; runtime-inputs publishes the candidate later.
+				assert(worker.files["session-reserves.json"] === undefined, "CAPSULE_RESERVE_BASELINE_MISSING");
+			} else {
+				worker.files["session-reserves.json"] = materialize(input.environment.ACK_SESSION_RESERVES_FILE);
+			}
+		}
+		await writeFile(target, `${JSON.stringify(resolved, null, 2)}\n`, { mode: 0o600, flag: "wx" });
 	}
 	const environment: Record<string, string> = { ACK_SOURCE_SHA: sourceSha };
 	for (const [name, value] of Object.entries(materialize(input.environment))) environment[name] = Array.isArray(value) ? value.join("\n") : value as string;
-	return { environment, inputCount: files.size, sourceSha };
+	return { environment, inputCount: files.size, sourceSha, reserve };
 }
 
-export async function runCapsule(manifest: string, command: string, sourceRoot: string) {
+export async function runCapsule(manifest: string, command: string, sourceRoot: string, readWorker?: ReadReserveWorker) {
 	assert(commands.has(command), "CAPSULE_COMMAND_INVALID");
-	const { environment, inputCount, sourceSha } = await materializeCapsule(manifest, sourceRoot);
-	if (environment.ACK_SESSION_RESERVES_FILE !== undefined) {
-		assert(environment.ACK_BOOTSTRAP_INPUTS_FILE, "CAPSULE_RESERVE_BOOTSTRAP_MISSING");
-		const bootstrap = JSON.parse(await readFile(environment.ACK_BOOTSTRAP_INPUTS_FILE, "utf8"));
-		const worker = bootstrap.objects?.find(
-			(object: any) => object.kind === "Secret" && object.name.endsWith("-worker-configuration"),
-		);
-		assert(worker?.files && typeof worker.files === "object", "CAPSULE_RESERVE_WORKER_SECRET_MISSING");
-		assert(worker.files["session-reserves.json"] === undefined || worker.files["session-reserves.json"] === environment.ACK_SESSION_RESERVES_FILE, "CAPSULE_RESERVE_INPUT_CONFLICT");
-		worker.files["session-reserves.json"] = environment.ACK_SESSION_RESERVES_FILE;
-		await writeFile(environment.ACK_BOOTSTRAP_INPUTS_FILE, `${JSON.stringify(bootstrap, null, 2)}\n`, { mode: 0o600 });
-	}
+	const { environment, inputCount, sourceSha, reserve } = await materializeCapsule(manifest, sourceRoot, readWorker);
 	const inherited = { ...process.env };
 	for (const key of Object.keys(inherited)) if ((key.startsWith("ACK_") && !["ACK_CLEAN_CONFIRM", "ACK_CLEAN_ALLOW_FOREIGN"].includes(key)) || key === "NODE_EXTRA_CA_CERTS") delete inherited[key];
 	const child = spawn("bash", [join(sourceRoot, "deploy/ack/redeploy.sh"), command], { cwd: sourceRoot, env: { ...inherited, ...environment }, stdio: "inherit" });
 	const exitCode = await new Promise<number>((resolve, reject) => { child.once("error", reject); child.once("exit", (code) => resolve(code ?? 1)); });
-	return { schemaVersion: 1, kind: "ack-portable-capsule", sourceSha, inputCount, command, exitCode };
+	let mountedInputVerified = false;
+	if (exitCode === 0 && reserve && ["all", "runtime-inputs", "provision", "validate"].includes(command)) {
+		const bootstrap = JSON.parse(await readFile(environment.ACK_BOOTSTRAP_INPUTS_FILE!, "utf8"));
+		const actual = (readWorker ?? readReserveWorker)(environment, bootstrap, reserve.workerSecretName);
+		assert(actual?.configurationHash === reserve.receipt.configHash && actual.configuration?.revision === reserve.receipt.revision && actual.configuration?.enabled === reserve.receipt.enabled && actual.sourceSha === reserve.receipt.sourceSha, "CAPSULE_RESERVE_ADOPTION_MISMATCH");
+		mountedInputVerified = true;
+	}
+	return { schemaVersion: 1, kind: "ack-portable-capsule", sourceSha, inputCount, command, exitCode, ...(reserve ? { reserve: { ...reserve.receipt, mountedInputVerified } } : {}) };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

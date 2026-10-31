@@ -10,6 +10,7 @@ import { prepareBootstrapInputs } from "./bootstrap-inputs.ts";
 import { privateBytes, privateJson } from "./private-input.ts";
 import { validateTemplateValidationExpectations } from "./template-validation.mjs";
 import { validateCapacityBindings } from "./workload-capacity.ts";
+import { prepareReserveInput, readReserveWorker } from "./session-reserve-inputs.ts";
 
 type ObjectRecord = Record<string, any>;
 type Kubectl = (args: string[], input?: string) => string;
@@ -19,6 +20,7 @@ type Files = {
 	capacity: string;
 	requests: string;
 	login?: string;
+	reserves?: string;
 };
 type PublicationProgress = {
 	phase: "preflight" | "secret-write" | "local-promotion" | "rollout" | "login" | "verification";
@@ -74,7 +76,7 @@ function configurationSecret(deployment: ObjectRecord, component: "api" | "worke
 	return volume.secret.secretName as string;
 }
 
-async function prepare(files: Files, rendered: string, sourceSha: string) {
+async function prepare(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl) {
 	const bootstrap = await privateJson(files.bootstrap);
 	const templates = await privateJson(files.templates);
 	const capacity = await privateJson(files.capacity);
@@ -174,6 +176,28 @@ async function prepare(files: Files, rendered: string, sourceSha: string) {
 	await stageFile(capacity.profilesFile, profileBytes);
 	workerSecret.desired.data[capacity.workerSecretRef.key] = profileBytes.toString("base64");
 	await stageFile(files.capacity, jsonBytes({ ...capacity, evidence: [...evidenceFiles].map(([imageDigest, file]) => ({ imageDigest, file })) }));
+	if (files.reserves) {
+		await prepareReserveInput({
+			ACK_BOOTSTRAP_INPUTS_FILE: files.bootstrap,
+			ACK_SESSION_RESERVES_FILE: files.reserves,
+			ACK_NAMESPACE: bootstrap.namespace,
+			ACK_WORKLOAD_CAPACITY_FILE: files.capacity,
+			ACK_TEMPLATE_VALIDATIONS_FILE: files.templates,
+		}, sourceSha, {
+			workerSecretName: worker.secretName,
+			requireAdoption: false,
+			readWorker: (environment, input, name) => readReserveWorker({ ...environment, ACK_SOURCE_SHA: sourceSha }, input, name, kubectl, false),
+		});
+		const bytes = await privateBytes(files.reserves);
+		const target = workerSecret.files["session-reserves.json"] ?? files.reserves;
+		await stageFile(target, bytes);
+		workerSecret.desired.data["session-reserves.json"] = bytes.toString("base64");
+		if (!workerSecret.files["session-reserves.json"]) {
+			const publishedBootstrap = structuredClone(bootstrap);
+			publishedBootstrap.objects.find((object: any) => object.kind === "Secret" && object.name === worker.secretName).files["session-reserves.json"] = target;
+			await stageFile(files.bootstrap, jsonBytes(publishedBootstrap));
+		}
+	}
 	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin };
 }
 
@@ -189,7 +213,7 @@ export async function publishRuntimeInputs(files: Files, rendered: string, sourc
 }
 
 async function publishRuntimeInputsWithProgress(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, apply: boolean, timeout: string, progress: PublicationProgress) {
-	const plan = await prepare(files, rendered, sourceSha);
+	const plan = await prepare(files, rendered, sourceSha, kubectl);
 	const { namespace, clusterUid, installationId } = plan.bootstrap;
 	const read = (kind: string, name: string, scoped = true) => JSON.parse(kubectl([
 		...(scoped ? ["-n", namespace] : []), "get", kind, name, "-o", "json",
@@ -312,7 +336,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			input, encoding: "utf8", timeout: args.includes("rollout") ? 310_000 : 30_000,
 			maxBuffer: 16 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
 		});
-		const result = await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined }, await readFile(rendered, "utf8"), source, run, mode === "apply");
+		const result = await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, await readFile(rendered, "utf8"), source, run, mode === "apply");
 		process.stdout.write(`${JSON.stringify(result)}\n`);
 	} catch (error) {
 		const failure = error instanceof RuntimeInputPublicationError ? error :

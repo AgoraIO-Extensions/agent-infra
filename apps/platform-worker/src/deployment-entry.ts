@@ -8,6 +8,7 @@ import type {
 import {
 	parseSessionSandboxReserveConfigurationV1,
 	type SessionSandboxReserveConfigurationV1,
+	sessionSandboxReserveDigestV1,
 } from "@agent-infra/platform-core";
 import { PostgresEvaluationTaskAuthorityV1 } from "@agent-infra/platform-store";
 import {
@@ -16,6 +17,7 @@ import {
 } from "./connection-consumer-projection.js";
 import * as conversationDeployment from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
+import { quantityRatio } from "./kubernetes-runtime-comparison.js";
 import {
 	createPlatformNativeMetadataGatewayAssemblyV1,
 	type PlatformWorkerNativeMetadataGatewayPortsV1,
@@ -254,15 +256,77 @@ function reserveConfigurationFromDeploymentFile():
 	}
 }
 
-const configuredSessionSandboxReserves =
-	configuredSessionSandboxReservesFromModule ??
+// A mounted capsule file must not be shadowed by a stale module export.
+const configuredSessionSandboxReservesFromFile =
 	reserveConfigurationFromDeploymentFile();
+const configuredSessionSandboxReserves =
+	configuredSessionSandboxReservesFromFile ??
+	configuredSessionSandboxReservesFromModule;
+const { sourceSha: _reserveSource, ...reserveConfiguration } =
+	(configuredSessionSandboxReserves ??
+		{}) as SessionSandboxReserveConfigurationV1 & { sourceSha?: string };
 const sessionSandboxReserves =
 	configuredSessionSandboxReserves === undefined
 		? undefined
 		: parseSessionSandboxReserveConfigurationV1(
-				configuredSessionSandboxReserves,
+				reserveConfiguration as SessionSandboxReserveConfigurationV1,
 			);
+if (
+	configuredSessionSandboxReservesFromFile !== undefined &&
+	configuredSessionSandboxReservesFromModule !== undefined &&
+	sessionSandboxReserveDigestV1(sessionSandboxReserves) !==
+		sessionSandboxReserveDigestV1(
+			parseSessionSandboxReserveConfigurationV1(
+				configuredSessionSandboxReservesFromModule,
+			),
+		)
+) {
+	throw new Error("SESSION_RESERVE_DEPLOYMENT_CONFIGURATION_CONFLICT");
+}
+
+/** Private deployment readback: the same loader as the production reserve loop. */
+export function readPlatformSessionReserveDeploymentV1() {
+	const policy = configuredWorkloadInput.policy;
+	const quantity = (value: string, scale: bigint) => {
+		const ratio = quantityRatio(value);
+		if (!ratio || ratio[0] <= 0n)
+			throw new Error("SESSION_RESERVE_RESOURCE_COST_INVALID");
+		const count = (ratio[0] * scale + ratio[1] - 1n) / ratio[1];
+		if (count > BigInt(Number.MAX_SAFE_INTEGER))
+			throw new Error("SESSION_RESERVE_RESOURCE_COST_INVALID");
+		return Number(count);
+	};
+	return {
+		source:
+			configuredSessionSandboxReservesFromFile === undefined
+				? "module"
+				: "file",
+		sourceSha:
+			(
+				configuredSessionSandboxReservesFromFile as
+					| (SessionSandboxReserveConfigurationV1 & { sourceSha?: string })
+					| undefined
+			)?.sourceSha ?? null,
+		configuration: sessionSandboxReserves ?? null,
+		configurationHash:
+			configuredSessionSandboxReservesFromFile === undefined
+				? null
+				: sessionSandboxReserveDigestV1(
+						configuredSessionSandboxReservesFromFile,
+					),
+		policy: {
+			namespace: policy.namespace,
+			resourceProfileRef: policy.resourceProfileRef,
+			resources: policy.resources,
+			storageSize: policy.storageSize,
+		},
+		resourceCosts: {
+			cpuMillis: quantity(policy.resources.limits.cpu, 1000n),
+			memoryBytes: quantity(policy.resources.limits.memory, 1n),
+			storageBytes: quantity(policy.storageSize, 1n),
+		},
+	};
+}
 
 function nativeMetadataGatewayPortFromEnvironment() {
 	const enabled = process.env.PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED;
