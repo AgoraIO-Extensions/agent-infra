@@ -85,7 +85,7 @@ export function readReserveWorker(environment: Record<string, string>, bootstrap
 	const requireAdoption = typeof options === "boolean" ? options : options.requireAdoption !== false;
 	const { ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace } = environment;
 	assert(kubeconfig && namespace);
-	const kubectl = execute ?? ((args: string[], input?: string) => execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=20s", "-n", namespace, ...args], { input, encoding: "utf8", timeout: 30_000, maxBuffer: 2 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] }));
+	const kubectl = execute ?? ((args: string[], input?: string) => execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=45s", "-n", namespace, ...args], { input, encoding: "utf8", timeout: 60_000, maxBuffer: 2 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] }));
 	const namespaceBytes = kubectl(["get", "namespace", namespace, "--ignore-not-found", "-o", "json"]);
 	if (!namespaceBytes.trim()) return null;
 	const ns = JSON.parse(namespaceBytes);

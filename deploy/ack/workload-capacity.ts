@@ -120,7 +120,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		const [config, requests, templates] = process.argv.slice(2);
 		const { ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace, ACK_SOURCE_SHA: source } = process.env;
 		assert(kubeconfig && namespace && source && config && requests && templates);
-		const kubectl = (args: string[]) => execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=20s", "-n", namespace, ...args], { encoding: "utf8", timeout: 30_000, maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+		const kubectl = (args: string[]) => execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=45s", "-n", namespace, ...args], { encoding: "utf8", timeout: 60_000, maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
 		const result = await checkWorkloadCapacity(config, requests, templates, source, (ref) => {
 			const deployment = JSON.parse(kubectl(["get", "deployment", "agent-infra-worker", "-o", "json"]));
 			assert(deployment.status?.observedGeneration === deployment.metadata.generation && deployment.status.updatedReplicas === 1 && deployment.status.availableReplicas === 1);
