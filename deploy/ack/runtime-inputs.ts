@@ -20,6 +20,13 @@ type Files = {
 	requests: string;
 	login?: string;
 };
+type RuntimeInputMutationStatus =
+	| "not-applied"
+	| "preflight"
+	| "secret-write"
+	| "local-promotion"
+	| "rollout"
+	| "verified";
 const ownerLabel = "agent-infra.agora.io/bootstrap-id";
 const revisionAnnotation = "agent-infra.agora.io/runtime-inputs-hash";
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -143,6 +150,19 @@ async function prepare(files: Files, rendered: string, sourceSha: string) {
 }
 
 export async function publishRuntimeInputs(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, apply = false, timeout = "300s") {
+	const mutation = { status: (apply ? "preflight" : "not-applied") as RuntimeInputMutationStatus };
+	try {
+		const result = await publishRuntimeInputsUnsafe(files, rendered, sourceSha, kubectl, apply, timeout, mutation);
+		return { ...result, mutationStatus: mutation.status };
+	} catch (error) {
+		if (error && typeof error === "object")
+			Object.defineProperty(error, "runtimeInputMutationStatus", { value: mutation.status, enumerable: false });
+		throw error;
+	}
+}
+
+async function publishRuntimeInputsUnsafe(files: Files, rendered: string, sourceSha: string, kubectl: Kubectl, apply: boolean, timeout: string, mutation: { status: RuntimeInputMutationStatus }) {
+	const requestInput = await privateJson(files.requests);
 	const plan = await prepare(files, rendered, sourceSha);
 	const { namespace, clusterUid, installationId } = plan.bootstrap;
 	const read = (kind: string, name: string, scoped = true) => JSON.parse(kubectl([
@@ -180,6 +200,7 @@ export async function publishRuntimeInputs(files: Files, rendered: string, sourc
 	});
 	if (apply) {
 		for (const [file, bytes] of plan.writes) assert.deepEqual(await privateBytes(file), bytes.before, "RUNTIME_INPUT_LOCAL_DRIFT");
+		mutation.status = "secret-write";
 		for (const secret of secrets) {
 			assertNamespace();
 			const current = readSecret(secret.current.metadata.name);
@@ -191,6 +212,7 @@ export async function publishRuntimeInputs(files: Files, rendered: string, sourc
 				isDeepStrictEqual(observed.data, secret.desired.data), "RUNTIME_INPUT_SECRET_READBACK_FAILED");
 			secret.verifiedVersion = observed.metadata.resourceVersion;
 		}
+		mutation.status = "local-promotion";
 		for (const [file, bytes] of plan.writes) {
 			assert.deepEqual(await privateBytes(file), bytes.before, "RUNTIME_INPUT_LOCAL_DRIFT");
 			if (bytes.before.equals(bytes.after)) continue;
@@ -198,6 +220,7 @@ export async function publishRuntimeInputs(files: Files, rendered: string, sourc
 			try { await writeFile(temporary, bytes.after, { mode: 0o600, flag: "wx" }); await rename(temporary, file); }
 			finally { await unlink(temporary).catch(() => {}); }
 		}
+		mutation.status = "rollout";
 		for (const consumer of consumers) {
 			assertNamespace();
 			const current = read("deployment", consumer.name);
@@ -218,6 +241,11 @@ export async function publishRuntimeInputs(files: Files, rendered: string, sourc
 			assert(current.metadata.uid === secret.current.metadata.uid && current.metadata.resourceVersion === secret.verifiedVersion &&
 				isDeepStrictEqual(current.data, secret.desired.data), "RUNTIME_INPUT_SECRET_CHANGED_DURING_ROLLOUT");
 		}
+		if (files.login) {
+			const { verifiedLoginCandidate } = await import("./bootstrap-login.ts");
+			await verifiedLoginCandidate(files.login, sourceSha, requestInput.origin);
+		}
+		mutation.status = "verified";
 	}
 	return { schemaVersion: 1, kind: "ack-runtime-inputs", status: "passed", mode: apply ? "applied-and-read-back" : "read-only-plan", sourceSha,
 		secretCount: secrets.length, changedSecretCount: secrets.filter((s) => s.changed).length,
@@ -239,7 +267,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "";
 		const failureCode = /^[A-Z][A-Z0-9_]*$/u.test(message) ? message : "RUNTIME_INPUTS_INVALID";
-		process.stdout.write(`${JSON.stringify({ schemaVersion: 1, kind: "ack-runtime-inputs", status: "failed", failureCode, mutationStatus: "unknown", recoveryRequired: true })}\n`);
+		const mutationStatus = error && typeof error === "object" &&
+			typeof (error as { runtimeInputMutationStatus?: unknown }).runtimeInputMutationStatus === "string"
+			? (error as { runtimeInputMutationStatus: RuntimeInputMutationStatus }).runtimeInputMutationStatus
+			: "preflight";
+		const recoveryRequired = ["secret-write", "local-promotion", "rollout"].includes(mutationStatus);
+		process.stdout.write(`${JSON.stringify({ schemaVersion: 1, kind: "ack-runtime-inputs", status: "failed", failureCode, mutationStatus, recoveryRequired })}\n`);
 		process.stderr.write("ACK_RUNTIME_INPUTS_INVALID\n");
 		process.exitCode = 1;
 	}

@@ -583,8 +583,8 @@ test("runtime-inputs CLI emits only a bounded failure receipt", () => {
 		kind: "ack-runtime-inputs",
 		status: "failed",
 		failureCode: "RUNTIME_INPUTS_INVALID",
-		mutationStatus: "unknown",
-		recoveryRequired: true,
+		mutationStatus: "preflight",
+		recoveryRequired: false,
 	});
 });
 
@@ -647,9 +647,29 @@ test("a concurrent Secret edit during rollout cannot be reported as published in
 	);
 });
 
-for (const wrongTarget of [false, true]) {
-	test(`publication binds a verified login candidate to the API configuration only (wrongTarget=${wrongTarget})`, async (t) => {
+test("a Secret delete and recreate during rollout cannot be reported as published inputs", async (t) => {
+	const f = await fixture(t);
+	f.beforeCall((args) => {
+		if (args.includes("rollout") && args.includes("deployment/agent-infra-api")) {
+			const current = f.cluster.get("secret/api-config");
+			f.cluster.delete("secret/api-config");
+			f.cluster.set("secret/api-config", {
+				...structuredClone(current),
+				metadata: { ...current.metadata, uid: "recreated-secret-uid", resourceVersion: "99" },
+			});
+		}
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/SECRET_CHANGED_DURING_ROLLOUT/,
+	);
+});
+
+for (const scenario of ["correct", "wrongTarget", "post-rollout-session"]) {
+	test(`publication binds a verified login candidate (${scenario})`, async (t) => {
 		const f = await fixture(t);
+		const wrongTarget = scenario === "wrongTarget";
+		let failSessionAfterRollout = false;
 		const server = createServer(async (request, response) => {
 			if (request.url === "/auth/login") {
 				let body = "";
@@ -658,6 +678,11 @@ for (const wrongTarget of [false, true]) {
 				response.writeHead(204, {
 					"Set-Cookie": `__Host-platform-session=${token.repeat(43)}; Path=/; HttpOnly; SameSite=Lax`,
 				});
+				response.end();
+				return;
+			}
+			if (failSessionAfterRollout) {
+				response.writeHead(503);
 				response.end();
 				return;
 			}
@@ -726,8 +751,18 @@ for (const wrongTarget of [false, true]) {
 				/IDENTITY_TARGET_INVALID/,
 			);
 			assert.equal(f.mutations.length, 0);
+		} else if (scenario === "post-rollout-session") {
+			f.beforeCall((args) => {
+				if (args.includes("rollout") && args.includes("deployment/agent-infra-api"))
+					failSessionAfterRollout = true;
+			});
+			await assert.rejects(
+				publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+				/LOGIN_SESSION_READ_FAILED/,
+			);
 		} else {
-			await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+			const result = await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+			assert.equal(result.mutationStatus, "verified");
 			assert.deepEqual(
 				Buffer.from(
 					f.cluster.get("secret/api-config").data["deployment-identities.json"],
