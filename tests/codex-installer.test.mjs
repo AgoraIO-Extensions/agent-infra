@@ -236,6 +236,134 @@ globalThis.fetch = async (url) => ${catalogFetch} new Response(url.endsWith(".ta
 		},
 	);
 
+test("upstream installer retries an interrupted pinned archive", async () => {
+	const root = await mkdtemp(join(tmpdir(), "codex-installer-retry-"));
+	const destination = join(root, "installed");
+	try {
+		const installer = await stageInstaller(root);
+		const binary = Buffer.from("synthetic retry bytes");
+		const name = "codex-test";
+		await writeFile(join(root, name), binary);
+		const archive = join(root, "archive.tar.gz");
+		execFileSync("tar", ["-czf", archive, "-C", root, name]);
+		const archiveBytes = await readFile(archive);
+		const archiveHash = digest(archiveBytes);
+		const trace = join(root, "download-trace");
+		await writeFile(
+			join(root, "packages/agent-runtime/src/codex-release.json"),
+			JSON.stringify({
+				provenance: { upstreamTag: "test", upstreamCommit },
+				artifacts: {
+					amd64: {
+						name,
+						archiveSha256: archiveHash,
+						executableSha256: digest(binary),
+					},
+				},
+				codeModeHostArtifacts: {
+					amd64: {
+						name,
+						archiveSha256: archiveHash,
+						executableSha256: digest(binary),
+					},
+				},
+				legal: { LICENSE: digest("synthetic license") },
+			}),
+		);
+		const preload = join(root, "download-fixture.mjs");
+		await writeFile(
+			preload,
+			`import { readFile, writeFile } from "node:fs/promises";
+let calls = 0;
+globalThis.fetch = async (url) => {
+  if (url === ${JSON.stringify(upstreamCatalogUrl)}) return new Response(${JSON.stringify(upstreamCatalog)});
+  if (url.endsWith(".tar.gz")) {
+    calls++; await writeFile(${JSON.stringify(trace)}, String(calls));
+    if (calls === 1) return new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1,2,3])); controller.error(Object.assign(new Error("terminated"), { cause: { code: "UND_ERR_SOCKET" } })); } }), { status: 200 });
+    return new Response(await readFile(${JSON.stringify(archive)}));
+  }
+  return new Response("synthetic license");
+};`,
+		);
+		execFileSync(
+			process.execPath,
+			["--import", preload, installer, "amd64", destination],
+			{ stdio: "pipe" },
+		);
+		assert.equal(Number(await readFile(trace, "utf8")), 3);
+		assert.deepEqual(await readFile(join(destination, "bin/codex")), binary);
+		assert.deepEqual(
+			await readFile(join(destination, "bin/codex-code-mode-host")),
+			binary,
+		);
+	} finally {
+		await cleanFixture(root);
+	}
+});
+
+test("upstream installer retries a connect timeout before Codex headers", async () => {
+	const root = await mkdtemp(
+		join(tmpdir(), "codex-installer-connect-timeout-"),
+	);
+	const destination = join(root, "installed");
+	try {
+		const installer = await stageInstaller(root);
+		const binary = Buffer.from("synthetic connect timeout bytes");
+		const name = "codex-test";
+		await writeFile(join(root, name), binary);
+		const archive = join(root, "archive.tar.gz");
+		execFileSync("tar", ["-czf", archive, "-C", root, name]);
+		const archiveBytes = await readFile(archive);
+		const archiveHash = digest(archiveBytes);
+		await writeFile(
+			join(root, "packages/agent-runtime/src/codex-release.json"),
+			JSON.stringify({
+				provenance: { upstreamTag: "test", upstreamCommit },
+				artifacts: {
+					amd64: {
+						name,
+						archiveSha256: archiveHash,
+						executableSha256: digest(binary),
+					},
+				},
+				codeModeHostArtifacts: {
+					amd64: {
+						name,
+						archiveSha256: archiveHash,
+						executableSha256: digest(binary),
+					},
+				},
+				legal: { LICENSE: digest("synthetic license") },
+			}),
+		);
+		const trace = join(root, "download-trace");
+		const preload = join(root, "download-fixture.mjs");
+		await writeFile(
+			preload,
+			`import { readFile, writeFile } from "node:fs/promises";
+let calls = 0;
+globalThis.fetch = async (url) => {
+  if (url === ${JSON.stringify(upstreamCatalogUrl)}) return new Response(${JSON.stringify(upstreamCatalog)});
+  if (url.endsWith(".tar.gz")) {
+    calls++; await writeFile(${JSON.stringify(trace)}, String(calls));
+    if (calls === 1) throw new TypeError("transport", { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } });
+    return new Response(await readFile(${JSON.stringify(archive)}));
+  }
+  return new Response("synthetic license");
+};`,
+		);
+		execFileSync(
+			process.execPath,
+			["--import", preload, installer, "amd64", destination],
+			{ stdio: "pipe" },
+		);
+		assert.equal(Number(await readFile(trace, "utf8")), 3);
+		assert.deepEqual(await readFile(join(destination, "bin/codex")), binary);
+	} finally {
+		await cleanFixture(root);
+	}
+});
+
 test("upstream installer validates the archive member before replacing an existing install", async () => {
 	const root = await mkdtemp(join(tmpdir(), "codex-installer-invalid-member-"));
 	const destination = join(root, "installed");
