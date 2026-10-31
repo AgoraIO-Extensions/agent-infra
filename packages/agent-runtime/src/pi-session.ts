@@ -419,6 +419,7 @@ export async function openPiSession(
 								operationRef: modelOperation.operationRef,
 								attemptRef: modelOperation.attemptRef,
 								phase: failed ? "failed" : "completed",
+								startedAt: new Date(modelOperation.startedAt).toISOString(),
 								finishedAt: new Date().toISOString(),
 								durationMs: Math.max(0, Date.now() - modelOperation.startedAt),
 								...(failed
@@ -715,6 +716,7 @@ export async function openPiSession(
 								operationRef,
 								attemptRef,
 								phase: "failed",
+								startedAt: new Date(startedAt).toISOString(),
 								finishedAt: new Date().toISOString(),
 								durationMs: Math.max(0, Date.now() - startedAt),
 								failureCode: "operation_failed",
