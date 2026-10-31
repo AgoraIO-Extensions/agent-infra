@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { request as httpsRequest } from "node:https";
 import {
 	chmod,
@@ -42,9 +43,11 @@ const ghcrPrefix =
 	process.env.AGENT_INFRA_GHCR_PREFIX ??
 	"ghcr.io/agoraio-extensions/agent-infra";
 const infrastructureImages = [
-	["platformWorker", "platform-worker"],
-	["enterpriseDirectorySync", "enterprise-directory-sync"],
 	["runtimeHost", "agent-runtime-host"],
+	["codex", "agent-runtime-codex"],
+	["claude", "agent-runtime-claude"],
+	["opencode", "agent-runtime-opencode"],
+	["pi", "agent-runtime-pi"],
 	["customBase", "custom-agent-base"],
 ];
 
@@ -266,12 +269,60 @@ function pullDigest(repository, sha) {
 	const digest =
 		readImageDigest(tag) ?? readImageDigest(`${repository}:${sha}`);
 	if (!digest) return null;
+	return pullImage(repository, digest);
+}
+
+function pullImage(repository, digest) {
 	if (!tryDocker(["image", "inspect", `${repository}@${digest}`])) {
 		docker(["pull", `${repository}@${digest}`]);
 	} else {
 		console.log(`Image cache hit ${repository}@${digest}`);
 	}
 	return { repository, digest };
+}
+
+async function readPublishedImages(source, path) {
+	if (!isAbsolute(path)) fail("Published image receipt path must be absolute");
+	let rows;
+	try {
+		const raw = await readFile(path, "utf8");
+		if (raw.length > 1024 * 1024) throw new Error("receipt too large");
+		rows = raw.trim().split("\n").map((line) => JSON.parse(line));
+	} catch {
+		fail("Published image receipt is unreadable or invalid");
+	}
+	const platform = dockerPlatform();
+	const selected = new Map();
+	const digestPattern = /^sha256:[a-f0-9]{64}$/u;
+	for (const row of rows) {
+		const entry = infrastructureImages.find(([, name]) =>
+			typeof row?.reference === "string" && row.reference.startsWith(`${ghcrPrefix}/${name}:`));
+		if (!entry || row.commitSha !== source.sha || selected.has(entry[0]) ||
+			!digestPattern.test(row.indexDigest) || row.digest !== row.indexDigest ||
+			!digestPattern.test(row.platformDigests?.[platform]) ||
+			(row.platforms && row.platforms[platform] !== row.platformDigests[platform]))
+			fail("Published image receipt source, repository, platform or digest is invalid");
+		selected.set(entry[0], {
+			repository: `${ghcrPrefix}/${entry[1]}`,
+			indexDigest: row.indexDigest,
+			digest: row.platformDigests[platform],
+		});
+	}
+	if (selected.size !== infrastructureImages.length)
+		fail("Published image receipt is missing a Runtime image");
+	// A receipt selects the immutable index; its live contents must bind the child.
+	for (const binding of selected.values()) {
+		const raw = tryDocker(["buildx", "imagetools", "inspect", "--raw", `${binding.repository}@${binding.indexDigest}`]);
+		try {
+			if (!raw || `sha256:${createHash("sha256").update(raw).digest("hex")}` !== binding.indexDigest ||
+				selectPlatformManifest(JSON.parse(raw), platform) !== binding.digest)
+				throw new Error("index mismatch");
+		} catch {
+			fail("Published image receipt does not match the registry platform manifest");
+		}
+	}
+	return Object.fromEntries([...selected].map(([key, binding]) =>
+		[key, { ...pullImage(binding.repository, binding.digest), indexDigest: binding.indexDigest }]));
 }
 
 function dockerPlatform() {
@@ -300,13 +351,14 @@ async function buildInfrastructureLocally(sha) {
 			IMAGE_REPOSITORY_PREFIX: ghcrPrefix,
 			PLATFORM: normalizedPlatform,
 			GIT_BIN: process.env.GIT_BIN ?? "git",
+			DOCKER_CONTEXT: process.env.PLATFORM_LOCAL_DOCKER_CONTEXT,
 		};
 		command(
 			process.execPath,
 			[
 				join(worktree, "deploy/release/build-images.mjs"),
 				manifestPath,
-				"--images=platformWorker,enterpriseDirectorySync,runtimeHost",
+				"--images=runtimeHost,codex,claude,opencode,pi",
 			],
 			{
 				cwd: worktree,
@@ -340,21 +392,15 @@ async function buildInfrastructureLocally(sha) {
 }
 
 async function resolveInfrastructureImages(source) {
-	const images = {};
-	for (const [key, name] of infrastructureImages) {
-		const resolved = pullDigest(`${ghcrPrefix}/${name}`, source.sha);
-		if (resolved) images[key] = resolved;
-	}
-	if (
-		images.runtimeHost === undefined ||
-		infrastructureImages.some(([key]) => !images[key])
-	) {
-		const context = await cleanContext(source.sha);
-		try {
-			Object.assign(images, await buildInfrastructureLocally(source.sha));
-		} finally {
-			await rm(context, { recursive: true, force: true });
+	const receiptPath = process.env.E2E_HARNESS_PUBLISHED_INDEXES_FILE;
+	const images = receiptPath ? await readPublishedImages(source, receiptPath) : {};
+	if (!receiptPath) {
+		for (const [key, name] of infrastructureImages) {
+			const resolved = pullDigest(`${ghcrPrefix}/${name}`, source.sha);
+			if (resolved) images[key] = resolved;
 		}
+		if (infrastructureImages.some(([key]) => !images[key]))
+			Object.assign(images, await buildInfrastructureLocally(source.sha));
 	}
 	const missing = infrastructureImages
 		.filter(([key]) => !images[key])

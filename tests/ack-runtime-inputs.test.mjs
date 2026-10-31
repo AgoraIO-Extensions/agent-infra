@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -128,7 +135,91 @@ async function fixture(t) {
 		minValidityMs: 60_000,
 		templates,
 	});
-	await save(files.requests, { schemaVersion: 1, requests });
+	const httpCalls = [];
+	const httpState = { rolledOut: false, failure: null, onFreshLogin: () => {} };
+	const server = createServer(async (request, response) => {
+		httpCalls.push({
+			method: request.method,
+			url: request.url,
+			rolledOut: httpState.rolledOut,
+		});
+		if (request.url === "/auth/login") {
+			assert.equal(
+				request.headers.cookie,
+				undefined,
+				"fresh login must not reuse storageState",
+			);
+			if (httpState.rolledOut && httpState.failure === "login") {
+				response.writeHead(503).end();
+				return;
+			}
+			let body = "";
+			for await (const chunk of request) body += chunk;
+			const input = JSON.parse(body);
+			assert.equal(input.password, " fixture-password ");
+			const token = input.login === "fixture-owner" ? "A" : "B";
+			if (httpState.rolledOut) httpState.onFreshLogin();
+			response
+				.writeHead(204, {
+					"Set-Cookie": `__Host-platform-session=${token.repeat(43)}; Path=/; HttpOnly; SameSite=Lax`,
+				})
+				.end();
+			return;
+		}
+		assert.equal(request.url, "/api/v1/session");
+		if (httpState.rolledOut && httpState.failure === "session") {
+			response.writeHead(503).end();
+			return;
+		}
+		const digit = request.headers.cookie?.includes("B".repeat(43)) ? "2" : "1";
+		response.writeHead(200, { "Content-Type": "application/json" }).end(
+			JSON.stringify({
+				schemaVersion: 1,
+				user: {
+					userId: `${digit.repeat(8)}-${digit.repeat(4)}-${digit.repeat(4)}-${digit.repeat(4)}-${digit.repeat(12)}`,
+				},
+			}),
+		);
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	t.after(async () => {
+		server.closeAllConnections();
+		await new Promise((resolve) => server.close(resolve));
+	});
+	const origin = `http://127.0.0.1:${server.address().port}`;
+	await save(files.requests, { schemaVersion: 1, origin, requests });
+	const subjects = [];
+	for (const name of ["owner", "other"])
+		subjects.push({
+			name,
+			loginFile: await save(
+				join(directory, `${name}.login`),
+				`fixture-${name}`,
+			),
+			passwordFile: await save(
+				join(directory, `${name}.password`),
+				" fixture-password \n",
+			),
+			storageStateFile: join(directory, `${name}.state`),
+		});
+	const identityTarget = await save(
+		join(directory, "deployment-identities.json"),
+		{ subjects: {} },
+	);
+	const loginConfig = {
+		schemaVersion: 1,
+		origin,
+		identityFile: join(directory, "identity-candidate.json"),
+		subjects,
+		blueprints: [],
+		identitySecretRef: {
+			name: "api-config",
+			key: "deployment-identities.json",
+		},
+	};
+	files.login = await save(join(directory, "login.json"), loginConfig);
+	await bootstrapLogin(files.login, source, origin);
 	const objects = [];
 	for (const component of ["api", "worker"]) {
 		const inputs = {
@@ -148,6 +239,8 @@ async function fixture(t) {
 			});
 		}
 		if (component === "worker") inputs["capacity.json"] = profilesFile;
+		if (component === "api")
+			inputs["deployment-identities.json"] = identityTarget;
 		objects.push({
 			kind: "Secret",
 			name: `${component}-config`,
@@ -233,6 +326,7 @@ async function fixture(t) {
 				observedGeneration: 1,
 				updatedReplicas: 1,
 				availableReplicas: 1,
+				readyReplicas: 1,
 			};
 		cluster.set(`${item.kind.toLowerCase()}/${item.metadata.name}`, item);
 	}
@@ -287,7 +381,10 @@ async function fixture(t) {
 			mutations.push(`patch:${name}`);
 			return JSON.stringify(current);
 		}
-		if (verb === "rollout") return "success";
+		if (verb === "rollout") {
+			httpState.rolledOut = true;
+			return "success";
+		}
 		throw Error("unexpected kubectl operation");
 	};
 	return {
@@ -300,6 +397,9 @@ async function fixture(t) {
 		bootstrap,
 		save,
 		kubectl,
+		httpCalls,
+		httpState,
+		loginConfig,
 		beforeCall(fn) {
 			beforeCall = fn;
 		},
@@ -387,6 +487,8 @@ test("fresh measured outputs reach both consumers and pass the capacity gate; re
 	);
 	assert.equal(repeated.changedSecretCount, 0);
 	assert.equal(repeated.rolloutCount, 0);
+	assert.equal(repeated.mutationStatus, "not-applied");
+	assert.equal(repeated.loginVerified, true);
 	assert.equal(f.mutations.length, mutationCount);
 });
 
@@ -528,6 +630,280 @@ test("resourceVersion drift cannot overwrite a concurrently changed configuratio
 	assert.equal(f.mutations.length, 0);
 });
 
+test("a missing configuration Secret fails closed before any write", async (t) => {
+	const f = await fixture(t);
+	f.cluster.delete("secret/api-config");
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/RUNTIME_INPUT_SECRET_MISSING/,
+	);
+	assert.equal(f.mutations.length, 0);
+});
+
+test("a configuration Secret UID replacement fails closed before replacement", async (t) => {
+	const f = await fixture(t);
+	let apiReads = 0;
+	f.beforeCall((args) => {
+		if (
+			args.includes("get") &&
+			args.includes("secret") &&
+			args.includes("api-config") &&
+			++apiReads === 2
+		)
+			f.cluster.get("secret/api-config").metadata.uid =
+				"replacement-secret-uid";
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		(error) => {
+			assert.equal(
+				error.receipt.failureCode,
+				"RUNTIME_INPUT_SECRET_VERSION_DRIFT",
+			);
+			assert.equal(error.receipt.mutationStatus, "not-applied");
+			assert.equal(error.receipt.recoveryRequired, false);
+			return true;
+		},
+	);
+	assert.equal(f.mutations.length, 0);
+});
+
+test("apply without login inputs fails before cluster access", async (t) => {
+	const f = await fixture(t);
+	delete f.files.login;
+	let reads = 0;
+	f.beforeCall(() => {
+		reads++;
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/RUNTIME_INPUT_LOGIN_REQUIRED/,
+	);
+	assert.equal(reads, 0);
+	assert.equal(f.mutations.length, 0);
+});
+
+test("a frozen uppercase upstream error is redacted instead of treated as a protocol code", async (t) => {
+	const f = await fixture(t);
+	f.beforeCall(() => {
+		throw Object.freeze(new Error("UPPERCASE_PRIVATE_CREDENTIAL"));
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		(error) => {
+			assert.equal(error.receipt.failureCode, "RUNTIME_INPUTS_INVALID");
+			assert.equal(error.receipt.mutationStatus, "not-applied");
+			assert(!JSON.stringify(error).includes("UPPERCASE_PRIVATE_CREDENTIAL"));
+			return true;
+		},
+	);
+});
+
+test("an unavailable Secret read is not reported as a missing Secret", async (t) => {
+	const f = await fixture(t);
+	f.beforeCall((args) => {
+		if (args.includes("secret")) throw new Error("PRIVATE_KUBECTL_DIAGNOSTIC");
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/RUNTIME_INPUT_SECRET_UNAVAILABLE/,
+	);
+	assert.equal(f.mutations.length, 0);
+});
+
+test("a rejected first replace is an attempted mutation with recovery needed", async (t) => {
+	const f = await fixture(t);
+	f.beforeCall((args) => {
+		if (args.includes("replace")) throw new Error("upstream failed");
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		(error) => {
+			assert.equal(error.receipt.mutationStatus, "attempted");
+			assert.equal(error.receipt.phase, "secret-write");
+			assert.equal(error.receipt.recoveryRequired, true);
+			return true;
+		},
+	);
+	assert.equal(f.mutations.length, 0);
+});
+
+test("a missing Secret immediately before rollout prevents all Deployment patches", async (t) => {
+	const f = await fixture(t);
+	let apiReads = 0;
+	f.beforeCall((args) => {
+		if (
+			args.includes("get") &&
+			args.includes("deployment") &&
+			args.includes("agent-infra-api") &&
+			++apiReads === 2
+		)
+			f.cluster.delete("secret/api-config");
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/RUNTIME_INPUT_SECRET_MISSING/,
+	);
+	assert(!f.mutations.some((m) => m.startsWith("patch:")));
+});
+
+test("a Secret replacement during fresh login invalidates publication", async (t) => {
+	const f = await fixture(t);
+	f.httpState.onFreshLogin = () => {
+		f.cluster.get("secret/api-config").metadata.uid = "changed-during-login";
+	};
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/RUNTIME_INPUT_SECRET_CHANGED_DURING_ROLLOUT/,
+	);
+});
+
+test("a Secret UID change after replace is not reported as a successful rollout", async (t) => {
+	const f = await fixture(t);
+	f.afterReplace((object) => {
+		object.metadata.uid = "replacement-secret-uid";
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/SECRET_READBACK_FAILED/,
+	);
+	assert(f.mutations.every((value) => value.startsWith("replace:")));
+	assert(!f.mutations.some((value) => value.startsWith("patch:")));
+});
+
+test("runtime-inputs CLI emits only a bounded failure receipt", () => {
+	const result = spawnSync(
+		process.execPath,
+		["--experimental-strip-types", "deploy/ack/runtime-inputs.ts", "invalid"],
+		{ encoding: "utf8" },
+	);
+	assert.notEqual(result.status, 0);
+	assert.equal(result.stderr.trim(), "ACK_RUNTIME_INPUTS_INVALID");
+	assert.deepEqual(JSON.parse(result.stdout), {
+		schemaVersion: 1,
+		kind: "ack-runtime-inputs",
+		status: "failed",
+		failureCode: "RUNTIME_INPUTS_INVALID",
+		phase: "preflight",
+		mutationStatus: "not-applied",
+		recoveryRequired: false,
+		loginVerified: false,
+		businessVerified: false,
+	});
+});
+
+test("the runtime-inputs shell keeps a failed attempt when a later run succeeds", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "ack-runtime-receipts-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const script = await readFile(
+		new URL("../deploy/ack/redeploy.sh", import.meta.url),
+		"utf8",
+	);
+	const command = script.slice(
+		script.indexOf("runtime_inputs() {"),
+		script.indexOf("template_preflight() {"),
+	);
+	const receipts = [];
+	for (const success of [false, true]) {
+		const receipt = {
+			schemaVersion: 1,
+			kind: "ack-runtime-inputs",
+			status: success ? "passed" : "failed",
+			mutationStatus: success ? "not-applied" : "attempted",
+			loginVerified: success,
+		};
+		receipts.push(receipt);
+		const result = spawnSync(
+			"bash",
+			[
+				"-c",
+				`
+set -euo pipefail
+umask 077
+require_source_tuple() { :; }
+require_file() { :; }
+prepare_evidence() { :; }
+render_manifest() { :; }
+validate_workload_capacity() { :; }
+die() { exit 2; }
+node() { printf '%s\\n' "$MOCK_RECEIPT"; return "$MOCK_EXIT"; }
+repo_root=/synthetic
+evidence_dir=$ACK_EVIDENCE_DIR
+${command}
+runtime_inputs
+`,
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					BASH_ENV: "/dev/null",
+					ACK_EVIDENCE_DIR: directory,
+					ACK_BOOTSTRAP_INPUTS_FILE: "/synthetic/bootstrap",
+					ACK_LOGIN_BOOTSTRAP_FILE: "/synthetic/login",
+					ACK_TEMPLATE_VALIDATIONS_FILE: "/synthetic/templates",
+					ACK_WORKLOAD_CAPACITY_FILE: "/synthetic/capacity",
+					ACK_AGENT_REQUESTS_FILE: "/synthetic/requests",
+					MOCK_RECEIPT: JSON.stringify(receipt),
+					MOCK_EXIT: success ? "0" : "1",
+				},
+			},
+		);
+		assert.equal(result.status, success ? 0 : 2, result.stderr);
+	}
+	const attempts = (await readdir(directory)).filter(
+		(name) =>
+			name.startsWith("runtime-inputs.") && name !== "runtime-inputs.json",
+	);
+	assert.equal(attempts.length, 2);
+	const actual = await Promise.all(
+		attempts.map(async (name) =>
+			JSON.parse(await readFile(join(directory, name))),
+		),
+	);
+	for (const receipt of receipts)
+		assert(actual.some((r) => JSON.stringify(r) === JSON.stringify(receipt)));
+	assert.deepEqual(
+		JSON.parse(await readFile(join(directory, "runtime-inputs.json"))),
+		receipts[1],
+	);
+});
+
+test("all rejects missing login inputs before any cluster mutation", async () => {
+	const script = await readFile(
+		new URL("../deploy/ack/redeploy.sh", import.meta.url),
+		"utf8",
+	);
+	const dispatch = script.slice(script.indexOf("command=${1:-help}"));
+	const result = spawnSync(
+		"bash",
+		[
+			"-c",
+			`
+set -euo pipefail
+require_source_tuple() { :; }
+require_file() { [[ -n "$2" ]]; }
+bootstrap_database() { echo mutation; }
+${dispatch}
+`,
+			"test",
+			"all",
+		],
+		{
+			encoding: "utf8",
+			env: {
+				...process.env,
+				BASH_ENV: "/dev/null",
+				ACK_BOOTSTRAP_INPUTS_FILE: "/synthetic/bootstrap",
+				ACK_WORKLOAD_CAPACITY_FILE: "/synthetic/capacity",
+				ACK_LOGIN_BOOTSTRAP_FILE: "",
+			},
+		},
+	);
+	assert.notEqual(result.status, 0);
+	assert.equal(result.stdout, "");
+});
+
 test("namespace replacement invalidates the plan before the first Secret write", async (t) => {
 	const f = await fixture(t);
 	let namespaceReads = 0;
@@ -555,7 +931,7 @@ test("an interrupted rollout resumes without replacing verified Secrets again", 
 	});
 	await assert.rejects(
 		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
-		/rollout interrupted/,
+		/RUNTIME_INPUTS_INVALID/,
 	);
 	assert.equal(f.mutations.filter((m) => m.startsWith("replace:")).length, 2);
 	f.beforeCall(() => {});
@@ -587,93 +963,90 @@ test("a concurrent Secret edit during rollout cannot be reported as published in
 	);
 });
 
-for (const wrongTarget of [false, true]) {
-	test(`publication binds a verified login candidate to the API configuration only (wrongTarget=${wrongTarget})`, async (t) => {
-		const f = await fixture(t);
-		const server = createServer(async (request, response) => {
-			if (request.url === "/auth/login") {
-				let body = "";
-				for await (const chunk of request) body += chunk;
-				const token = JSON.parse(body).login === "fixture-owner" ? "A" : "B";
-				response.writeHead(204, {
-					"Set-Cookie": `__Host-platform-session=${token.repeat(43)}; Path=/; HttpOnly; SameSite=Lax`,
-				});
-				response.end();
-				return;
-			}
-			const digit = request.headers.cookie?.includes("B".repeat(43))
-				? "2"
-				: "1";
-			response.writeHead(200, { "Content-Type": "application/json" });
-			response.end(
-				JSON.stringify({
-					schemaVersion: 1,
-					user: {
-						userId: `${digit.repeat(8)}-${digit.repeat(4)}-${digit.repeat(4)}-${digit.repeat(4)}-${digit.repeat(12)}`,
-					},
-				}),
-			);
-		});
-		server.listen(0, "127.0.0.1");
-		await once(server, "listening");
-		t.after(async () => {
-			server.closeAllConnections();
-			await new Promise((resolve) => server.close(resolve));
-		});
-		const origin = `http://127.0.0.1:${server.address().port}`;
-		const directory = join(f.files.bootstrap, "..");
-		const subjects = [];
-		for (const name of ["owner", "other"])
-			subjects.push({
-				name,
-				loginFile: await f.save(
-					join(directory, `${name}.login`),
-					`fixture-${name}`,
-				),
-				passwordFile: await f.save(
-					join(directory, `${name}.password`),
-					"fixture-password",
-				),
-				storageStateFile: join(directory, `${name}.state`),
+test("a Secret delete and recreate during rollout cannot be reported as published inputs", async (t) => {
+	const f = await fixture(t);
+	f.beforeCall((args) => {
+		if (
+			args.includes("rollout") &&
+			args.includes("deployment/agent-infra-api")
+		) {
+			const current = f.cluster.get("secret/api-config");
+			f.cluster.delete("secret/api-config");
+			f.cluster.set("secret/api-config", {
+				...structuredClone(current),
+				metadata: {
+					...current.metadata,
+					uid: "recreated-secret-uid",
+					resourceVersion: "99",
+				},
 			});
-		const target = await f.save(join(directory, "deployment-identities.json"), {
-			subjects: {},
-		});
-		f.bootstrap.objects[0].files["deployment-identities.json"] = target;
-		await f.save(f.files.bootstrap, f.bootstrap);
-		f.cluster.get("secret/api-config").data["deployment-identities.json"] = (
-			await readFile(target)
-		).toString("base64");
-		const requests = JSON.parse(await readFile(f.files.requests));
-		requests.origin = origin;
-		await f.save(f.files.requests, requests);
-		const config = {
-			schemaVersion: 1,
-			origin,
-			identityFile: join(directory, "identity-candidate.json"),
-			subjects,
-			blueprints: [],
-			identitySecretRef: {
-				name: wrongTarget ? "worker-config" : "api-config",
-				key: "deployment-identities.json",
-			},
-		};
-		f.files.login = await f.save(join(directory, "login.json"), config);
-		await bootstrapLogin(f.files.login, source);
-		if (wrongTarget) {
+		}
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/SECRET_CHANGED_DURING_ROLLOUT/,
+	);
+});
+
+for (const scenario of ["correct", "wrongTarget", "login", "session"]) {
+	test(`publication requires post-rollout login and session (${scenario})`, async (t) => {
+		const f = await fixture(t);
+		const beforeCandidate = await readFile(f.loginConfig.identityFile);
+		const beforeStates = await Promise.all(
+			f.loginConfig.subjects.map((s) => readFile(s.storageStateFile)),
+		);
+		if (scenario === "wrongTarget") {
+			f.loginConfig.identitySecretRef.name = "worker-config";
+			await f.save(f.files.login, f.loginConfig);
 			await assert.rejects(
 				publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
 				/IDENTITY_TARGET_INVALID/,
 			);
 			assert.equal(f.mutations.length, 0);
+		} else if (scenario !== "correct") {
+			f.httpState.failure = scenario;
+			await assert.rejects(
+				publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+				(error) => {
+					assert.equal(error.receipt.phase, "login");
+					assert.equal(error.receipt.recoveryRequired, true);
+					assert.equal(error.receipt.loginVerified, false);
+					assert.equal(
+						error.receipt.failureCode,
+						scenario === "login"
+							? "LOGIN_AUTHENTICATION_FAILED"
+							: "LOGIN_SESSION_READ_FAILED",
+					);
+					return true;
+				},
+			);
 		} else {
-			await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+			const result = await publishRuntimeInputs(
+				f.files,
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			);
+			assert.equal(result.mutationStatus, "applied");
+			assert.equal(result.loginVerified, true);
+			const afterRollout = f.httpCalls.filter((c) => c.rolledOut);
+			assert.equal(
+				afterRollout.filter(
+					(c) => c.method === "POST" && c.url === "/auth/login",
+				).length,
+				2,
+			);
+			assert.equal(
+				afterRollout.filter((c) => c.url === "/api/v1/session").length,
+				6,
+			);
 			assert.deepEqual(
 				Buffer.from(
 					f.cluster.get("secret/api-config").data["deployment-identities.json"],
 					"base64",
 				),
-				await readFile(config.identityFile),
+				beforeCandidate,
 			);
 			assert.equal(
 				f.cluster.get("secret/worker-config").data[
@@ -681,11 +1054,17 @@ for (const wrongTarget of [false, true]) {
 				],
 				undefined,
 			);
-			assert.deepEqual(
-				await readFile(target),
-				await readFile(config.identityFile),
-			);
 		}
+		assert.deepEqual(
+			await readFile(f.loginConfig.identityFile),
+			beforeCandidate,
+		);
+		assert.deepEqual(
+			await Promise.all(
+				f.loginConfig.subjects.map((s) => readFile(s.storageStateFile)),
+			),
+			beforeStates,
+		);
 	});
 }
 
