@@ -183,6 +183,10 @@ function promotionTargets(command: string, inputs: string[]) {
 		for (const input of ["state/template-validations.json", "inputs/bootstrap.json", "inputs/capacity.json"])
 			if (inputs.includes(input)) targets.add(input);
 	}
+	if (["bootstrap-credential", "provision"].includes(command)) {
+		for (const input of ["inputs/credential.json", "inputs/requests.json"])
+			if (inputs.includes(input)) targets.add(input);
+	}
 	return [...targets];
 }
 

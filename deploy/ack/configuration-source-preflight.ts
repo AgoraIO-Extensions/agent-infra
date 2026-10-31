@@ -45,6 +45,8 @@ export async function validateConfigurationSourceBindings(
 		const worker = new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(fileReference(bootstrap, "agent-infra-worker-configuration", "configuration.mjs")));
 		const api = new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(fileReference(bootstrap, "agent-infra-api-configuration", "configuration.mjs")));
 		if (!worker.includes(`runtimeDigest!==\"${runtimeDigest}\"`)) return failure("CONFIG_RUNTIME_DIGEST_MISMATCH", "worker runtime binding differs from the published RuntimeHost digest");
+		const apiRuntimeBinding = /(?:runtimeDigest|AGENT_INFRA_RUNTIME_IMAGE_DIGEST|agent-runtime-host@sha256:|runtimeHost[^\n]*sha256:)/u.test(api);
+		if (apiRuntimeBinding && !api.includes(runtimeDigest)) return failure("CONFIG_RUNTIME_DIGEST_MISMATCH", "API runtime binding differs from the published RuntimeHost digest");
 		for (const [templateId, digest] of Object.entries(expectedTemplates)) {
 			const escapedTemplate = templateId.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 			const escapedDigest = digest.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");

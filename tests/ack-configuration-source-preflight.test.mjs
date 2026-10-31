@@ -125,3 +125,21 @@ test("source configuration preflight rejects an active template digest drift", a
 	assert.equal(receipt.status, "failed");
 	assert.equal(receipt.failureCode, "CONFIG_TEMPLATE_DIGEST_MISMATCH");
 });
+
+test("source configuration preflight rejects an API RuntimeHost reference drift", async (t) => {
+	const f = await fixture(t);
+	const api = await readFile(f.api, "utf8");
+	await writeFile(
+		f.api,
+		`${api}\nconst runtimeHost = "ghcr.io/example/agent-runtime-host@sha256:${"8".repeat(64)}";\n`,
+		{ mode: 0o600 },
+	);
+	const receipt = await validateConfigurationSourceBindings(
+		f.bootstrap,
+		f.runtime,
+		f.templates,
+		sourceSha,
+	);
+	assert.equal(receipt.status, "failed");
+	assert.equal(receipt.failureCode, "CONFIG_RUNTIME_DIGEST_MISMATCH");
+});
