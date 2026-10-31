@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	chmod,
 	cp,
@@ -80,6 +81,7 @@ printf '%s\\n' "$1" > "$ACK_EVIDENCE_DIR/executed"
 		worktree: "@SOURCE_ROOT@",
 	});
 	await save("bootstrap.json", {
+		namespace: "agent-infra",
 		childFile: "@CAPSULE_ROOT@/request.json",
 		files: { key: "@CAPSULE_ROOT@/credential" },
 	});
@@ -165,15 +167,104 @@ test("the runner invokes the existing workflow without shell interpolation and r
 	);
 });
 
-test("capsule injects the private reserve file into the deployment-owned Worker Secret", async (t) => {
+async function reserveFixture(t, enabled = false) {
 	const f = await fixture(t);
-	await f.save("session-reserves.json", {
+	const resources = {
+		requests: { cpu: "100m", memory: "128Mi" },
+		limits: { cpu: "1", memory: "2Gi" },
+	};
+	const resourceProfileRef = "small";
+	const resourceConfigurationHash = createHash("sha256")
+		.update(JSON.stringify({ resourceProfileRef, ...resources }))
+		.digest("hex");
+	const imageDigest = `sha256:${"a".repeat(64)}`;
+	const costs = {
+		cpuMillis: 1000,
+		memoryBytes: 2 * 1024 ** 3,
+		storageBytes: 1024 ** 3,
+	};
+	const measurement = {
 		schemaVersion: 1,
-		enabled: false,
+		sourceCommit: f.sourceSha,
+		scope: "ack-runtime-capacity",
+		imageDigest,
+		maximumConcurrentExecutions: 1,
+		observedResources: resources,
+		terminalStatus: "completed",
+		replyMatched: true,
+		modelOperationCount: 1,
+		submittedAt: 1000,
+		completedAt: 2000,
+	};
+	const bytes = JSON.stringify(measurement);
+	await f.save("measurement.json", bytes);
+	await f.save("capacity-profiles.json", {
+		schemaVersion: 1,
+		profiles: [
+			{
+				schemaVersion: 1,
+				imageDigest,
+				resourceProfileRef,
+				resourceConfigurationHash,
+				maximumConcurrentExecutions: 1,
+				conformanceEvidenceHash: createHash("sha256")
+					.update(bytes)
+					.digest("hex"),
+			},
+		],
+	});
+	await f.save("workload-capacity.json", {
+		schemaVersion: 1,
+		sourceSha: f.sourceSha,
+		resourceProfileRef,
+		resources,
+		profilesFile: "@CAPSULE_ROOT@/capacity-profiles.json",
+		evidence: [{ imageDigest, file: "@CAPSULE_ROOT@/measurement.json" }],
+	});
+	await f.save("templates.json", {
+		schemaVersion: 1,
+		sourceSha: f.sourceSha,
+		templates: [{ templateId: "codex", imageDigest }],
+	});
+	const reserve = {
+		schemaVersion: 1,
+		sourceSha: f.sourceSha,
+		enabled,
 		revision: 2,
 		namespace: "agent-infra",
-	});
+		totalBudget: enabled
+			? costs
+			: { cpuMillis: 0, memoryBytes: 0, storageBytes: 0 },
+		resourceCosts: enabled
+			? [{ resourceConfigurationHash, resources: costs }]
+			: [],
+		maximumReserves: enabled ? 1 : 0,
+		maximumConcurrentCreates: enabled ? 1 : 0,
+		ttlMs: 1000,
+		cooldownMs: 1000,
+		failureBackoffMs: 1000,
+		profiles: enabled
+			? [
+					{
+						agentId: "agent-a",
+						templateId: "codex",
+						imageDigest,
+						resourceConfigurationHash,
+						resources: costs,
+						storageConfigurationVersion: "storage-v1",
+						networkPolicyVersion: "network-v1",
+						signingConfigurationVersion: "signing-v1",
+						transportConfigurationVersion: "transport-v1",
+						connectionConfigurationVersion: "connection-v1",
+						minimum: 1,
+						maximum: 1,
+					},
+				]
+			: [],
+	};
+	await f.save("session-reserves.json", reserve);
 	await f.save("bootstrap.json", {
+		namespace: "agent-infra",
 		objects: [
 			{
 				kind: "Secret",
@@ -182,12 +273,177 @@ test("capsule injects the private reserve file into the deployment-owned Worker 
 			},
 		],
 	});
-	f.value.inputs = ["bootstrap.json", "request.json", "session-reserves.json"];
-	f.value.environment.ACK_SESSION_RESERVES_FILE =
-		"@CAPSULE_ROOT@/session-reserves.json";
+	f.value.inputs.push(
+		"session-reserves.json",
+		"workload-capacity.json",
+		"templates.json",
+	);
+	Object.assign(f.value.environment, {
+		ACK_NAMESPACE: "agent-infra",
+		ACK_WORKLOAD_CAPACITY_FILE: "@CAPSULE_ROOT@/workload-capacity.json",
+		ACK_TEMPLATE_VALIDATIONS_FILE: "@CAPSULE_ROOT@/templates.json",
+		ACK_SESSION_RESERVES_FILE: "@CAPSULE_ROOT@/session-reserves.json",
+	});
 	await f.save("capsule.json", f.value);
-	const result = await runCapsule(f.manifest, "plan", f.source);
+	const actual = {
+		configuration: null,
+		configurationHash: null,
+		policy: {
+			namespace: "agent-infra",
+			resourceProfileRef,
+			resources,
+			storageSize: "1Gi",
+		},
+		resourceCosts: costs,
+	};
+	const canonical = (value) =>
+		Array.isArray(value)
+			? value.map(canonical)
+			: value && typeof value === "object"
+				? Object.fromEntries(
+						Object.entries(value)
+							.sort(([a], [b]) => a.localeCompare(b))
+							.map(([key, child]) => [key, canonical(child)]),
+					)
+				: value;
+	actual.configurationHash = createHash("sha256")
+		.update(JSON.stringify(canonical(reserve)))
+		.digest("hex");
+	const { sourceSha: _reserveSource, ...parsedReserve } = reserve;
+	actual.configuration = parsedReserve;
+	return { ...f, reserve, actual, readWorker: () => actual };
+}
+
+test("default-disabled capsule injects one source-bound reserve file without changing original input", async (t) => {
+	const f = await reserveFixture(t);
+	const before = await readFile(join(f.capsule, "bootstrap.json"));
+	const result = await runCapsule(f.manifest, "plan", f.source, () => null);
 	assert.equal(result.exitCode, 0);
+	assert.equal(result.reserve.revision, 2);
+	assert.equal(result.reserve.enabled, false);
+	assert.deepEqual(await readFile(join(f.capsule, "bootstrap.json")), before);
+});
+
+test("enabled pilot requires current measured resources and emits no profile identities", async (t) => {
+	const f = await reserveFixture(t, true);
+	const result = await runCapsule(f.manifest, "plan", f.source, f.readWorker);
+	assert.equal(result.exitCode, 0);
+	assert.equal(result.reserve.revision, 2);
+	assert.equal(result.reserve.enabled, true);
+	assert(!JSON.stringify(result).includes("agent-a"));
+});
+
+test("all performs an exact post-run reserve adoption readback", async (t) => {
+	const f = await reserveFixture(t, true);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		'#!/usr/bin/env bash\nset -euo pipefail\nprintf \'%s\\n\' "$1" > "$ACK_EVIDENCE_DIR/executed"\n',
+		{ mode: 0o700 },
+	);
+	const result = await runCapsule(f.manifest, "all", f.source, f.readWorker);
+	assert.equal(result.exitCode, 0);
+	assert.equal(result.reserve.mountedInputVerified, true);
+	const stale = { ...f.actual, configuration: { ...f.reserve, revision: 1 } };
+	await assert.rejects(
+		runCapsule(f.manifest, "all", f.source, () => stale),
+		/CAPSULE_RESERVE_ADOPTION_MISMATCH/,
+	);
+});
+
+for (const scenario of [
+	"source",
+	"namespace",
+	"revision",
+	"hash",
+	"unverified-hash",
+	"extra-field",
+	"profile-digest",
+	"unverified-cost",
+	"no-worker",
+	"old-revision",
+	"same-revision-drift",
+	"measurement-source",
+	"model-facts",
+	"duplicate-secret",
+]) {
+	test(`reserve ${scenario} is rejected before materialization or any workflow write`, async (t) => {
+		const f = await reserveFixture(t, true);
+		let readWorker = f.readWorker;
+		if (scenario === "source") f.reserve.sourceSha = "f".repeat(40);
+		if (scenario === "namespace") f.reserve.namespace = "other";
+		if (scenario === "revision") f.reserve.revision = -1;
+		if (scenario === "hash")
+			f.reserve.profiles[0].resourceConfigurationHash = "invalid";
+		if (scenario === "unverified-hash") {
+			f.reserve.profiles[0].resourceConfigurationHash = "b".repeat(64);
+			f.reserve.resourceCosts[0].resourceConfigurationHash = "b".repeat(64);
+		}
+		if (scenario === "extra-field") f.reserve.credential = "sentinel";
+		if (scenario === "profile-digest")
+			f.reserve.profiles[0].digest = "b".repeat(64);
+		if (scenario === "unverified-cost")
+			f.actual.resourceCosts = {
+				...f.actual.resourceCosts,
+				storageBytes: 2 * 1024 ** 3,
+			};
+		if (scenario === "no-worker") readWorker = () => null;
+		if (["old-revision", "same-revision-drift"].includes(scenario)) {
+			const { sourceSha, ...configuration } = structuredClone(f.reserve);
+			f.actual.configuration = {
+				...configuration,
+				revision: scenario === "old-revision" ? 3 : 2,
+				ttlMs: 1001,
+			};
+		}
+		if (["measurement-source", "model-facts"].includes(scenario)) {
+			const measurement = JSON.parse(
+				await readFile(join(f.capsule, "measurement.json"), "utf8"),
+			);
+			if (scenario === "measurement-source")
+				measurement.sourceCommit = "b".repeat(40);
+			else measurement.modelOperationCount = 0;
+			const bytes = JSON.stringify(measurement);
+			await f.save("measurement.json", bytes);
+			const profiles = JSON.parse(
+				await readFile(join(f.capsule, "capacity-profiles.json"), "utf8"),
+			);
+			profiles.profiles[0].conformanceEvidenceHash = createHash("sha256")
+				.update(bytes)
+				.digest("hex");
+			await f.save("capacity-profiles.json", profiles);
+		}
+		if (scenario === "duplicate-secret")
+			await f.save("bootstrap.json", {
+				namespace: "agent-infra",
+				objects: ["a", "b"].map((name) => ({
+					kind: "Secret",
+					name: `${name}-worker-configuration`,
+					files: {},
+				})),
+			});
+		await f.save("session-reserves.json", f.reserve);
+		await assert.rejects(runCapsule(f.manifest, "plan", f.source, readWorker));
+		assert(
+			!(await readdir(f.capsule)).some((name) => name.startsWith(".resolved-")),
+		);
+		await assert.rejects(readFile(join(f.capsule, "evidence/executed")), {
+			code: "ENOENT",
+		});
+	});
+}
+
+test("higher disabled revision preserves accounting facts while stale enabled revision is rejected", async (t) => {
+	const f = await reserveFixture(t, true);
+	const { sourceSha, ...configuration } = structuredClone(f.reserve);
+	f.actual.configuration = configuration;
+	f.reserve.enabled = false;
+	f.reserve.revision = 3;
+	await f.save("session-reserves.json", f.reserve);
+	assert.equal(
+		(await runCapsule(f.manifest, "plan", f.source, f.readWorker)).reserve
+			.enabled,
+		false,
+	);
 });
 
 for (const scenario of [

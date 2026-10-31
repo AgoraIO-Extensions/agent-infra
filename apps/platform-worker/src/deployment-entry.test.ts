@@ -228,6 +228,16 @@ beforeAll(async () => {
 			target: "node24",
 		},
 	);
+	await build({
+		entryPoints: [
+			new URL("./kubernetes-runtime-comparison.ts", import.meta.url).pathname,
+		],
+		bundle: true,
+		packages: "external",
+		platform: "node",
+		format: "esm",
+		outfile: join(directory, "kubernetes-runtime-comparison.js"),
+	});
 	await writeFile(join(directory, "package.json"), '{"type":"module"}');
 	await writeFile(join(directory, "deployment.mjs"), code);
 	await writeFile(
@@ -404,7 +414,7 @@ try {
  }
  if (process.env.RUN_RESERVE_OPTIONS === "true") {
    const reserves = await entry.createPlatformSessionReserveWorkerOptionsV1(signal);
-   console.log(JSON.stringify({ configured: reserves !== undefined, namespace: reserves?.configuration.namespace, enabled: reserves?.configuration.enabled, databaseUrl: reserves?.databaseUrl }));
+   console.log(JSON.stringify({ configured: reserves !== undefined, namespace: reserves?.configuration.namespace, revision: reserves?.configuration.revision, enabled: reserves?.configuration.enabled, databaseUrl: reserves?.databaseUrl }));
    process.exit(0);
  }
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
@@ -512,6 +522,58 @@ it("loads reserve policy from a deployment file when the module omits it", async
 		namespace: "worker-binding",
 		enabled: false,
 	});
+});
+
+it("explicit reserve file rejects a conflicting module policy", async () => {
+	const configurationPath = join(directory, "configuration.mjs");
+	const original = await readFile(configurationPath, "utf8");
+	const reserveFile = join(directory, "session-reserves-explicit.json");
+	await writeFile(
+		reserveFile,
+		JSON.stringify({
+			schemaVersion: 1,
+			enabled: false,
+			revision: 9,
+			namespace: "worker-binding",
+			totalBudget: { cpuMillis: 0, memoryBytes: 0, storageBytes: 0 },
+			resourceCosts: [],
+			maximumReserves: 0,
+			maximumConcurrentCreates: 0,
+			ttlMs: 0,
+			cooldownMs: 0,
+			failureBackoffMs: 0,
+			profiles: [],
+		}),
+	);
+	await writeFile(
+		configurationPath,
+		`${original}\nexport const sessionSandboxReserves = ${JSON.stringify({
+			schemaVersion: 1,
+			enabled: false,
+			revision: 2,
+			namespace: "worker-binding",
+			totalBudget: { cpuMillis: 0, memoryBytes: 0, storageBytes: 0 },
+			resourceCosts: [],
+			maximumReserves: 0,
+			maximumConcurrentCreates: 0,
+			ttlMs: 0,
+			cooldownMs: 0,
+			failureBackoffMs: 0,
+			profiles: [],
+		})};\n`,
+	);
+	try {
+		const result = run({
+			RUN_RESERVE_OPTIONS: "true",
+			PLATFORM_WORKER_SESSION_RESERVES_FILE: reserveFile,
+		});
+		expect(result.status).not.toBe(0);
+		expect(`${result.stdout}${result.stderr}`).toContain(
+			"SESSION_RESERVE_DEPLOYMENT_CONFIGURATION_CONFLICT",
+		);
+	} finally {
+		await writeFile(configurationPath, original);
+	}
 });
 
 it("fails closed when an explicit reserve file is missing", () => {
@@ -1270,6 +1332,7 @@ it("accepts explicit disabled policy for draining but rejects a different namesp
 		expect(JSON.parse(valid.stdout)).toEqual({
 			configured: true,
 			enabled: false,
+			revision: 1,
 			namespace: "worker-binding",
 			databaseUrl: database,
 		});
