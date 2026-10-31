@@ -462,7 +462,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 			account.kind === "ServiceAccount" &&
 			account.automountServiceAccountToken === false &&
 			(account.secrets?.length ?? 0) === 0 &&
-			(account.imagePullSecrets?.length ?? 0) === 0 &&
+			hasSameStructure(account.imagePullSecrets ?? [], []) &&
 			hasSameStructure(account.metadata?.labels, expected.labels) &&
 			containsDesired(account.metadata?.annotations, expected.annotations) &&
 			Object.keys(account.metadata?.annotations ?? {}).every(

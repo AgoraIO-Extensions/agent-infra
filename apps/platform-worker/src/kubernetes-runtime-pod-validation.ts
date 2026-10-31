@@ -270,7 +270,12 @@ export function createKubernetesPodValidationV1(dependencies: {
 			) ||
 			hasUnexpectedIdentity ||
 			!hasSameStructure(pod?.securityContext, agentPodSecurityContext()) ||
-			(pod?.imagePullSecrets?.length ?? 0) > 0 ||
+			!hasSameStructure(
+				pod?.imagePullSecrets ?? [],
+				policy.imagePullSecretName
+					? [{ name: policy.imagePullSecretName }]
+					: [],
+			) ||
 			(pod?.initContainers?.length ?? 0) > 0 ||
 			(pod?.ephemeralContainers?.length ?? 0) > 0 ||
 			pod?.containers.some((container) => {
@@ -440,7 +445,12 @@ export function createKubernetesPodValidationV1(dependencies: {
 		return (
 			!hasSafePodMetadata(value, template?.metadata) ||
 			hasDriftedPodSpec(value, pod) ||
-			(pod?.imagePullSecrets?.length ?? 0) > 0 ||
+			!hasSameStructure(
+				pod?.imagePullSecrets ?? [],
+				policy.imagePullSecretName
+					? [{ name: policy.imagePullSecretName }]
+					: [],
+			) ||
 			Object.keys(pod?.nodeSelector ?? {}).length > 0 ||
 			(pod?.tolerations?.length ?? 0) > 0 ||
 			pod?.affinity !== undefined ||

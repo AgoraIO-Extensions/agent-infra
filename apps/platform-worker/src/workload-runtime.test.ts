@@ -561,6 +561,21 @@ it("binds a verified Skill generation into Workload Desired and Applied", async 
 	});
 });
 
+it("publishes the deployment-owned image pull Secret without mounting it", async () => {
+	const f = fixture({
+		policy: { ...workloadTestPolicy, imagePullSecretName: "ack-ghcr-pull" },
+	});
+	await f.tick(8);
+	const workload = await f.client.read<V1StatefulSet>(
+		"StatefulSet",
+		workloadResourceNameV1("agent-a"),
+	);
+	expect(workload?.spec?.template.spec?.imagePullSecrets).toEqual([
+		{ name: "ack-ghcr-pull" },
+	]);
+	expect(workload?.spec?.template.spec?.containers[0]?.envFrom).toEqual([]);
+});
+
 function secretConfiguration(
 	overrides: Partial<AgentConfigurationRecordV2> = {},
 ): AgentConfigurationRecordV2 {
