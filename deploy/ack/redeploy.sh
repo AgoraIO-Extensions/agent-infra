@@ -212,6 +212,7 @@ bootstrap_login() {
 runtime_inputs() {
 	require_source_tuple
 	require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
+	require_file ACK_LOGIN_BOOTSTRAP_FILE "${ACK_LOGIN_BOOTSTRAP_FILE:-}"
 	require_file ACK_TEMPLATE_VALIDATIONS_FILE "${ACK_TEMPLATE_VALIDATIONS_FILE:-}"
 	require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
 	require_file ACK_AGENT_REQUESTS_FILE "${ACK_AGENT_REQUESTS_FILE:-}"
@@ -219,11 +220,18 @@ runtime_inputs() {
 	rendered_manifest=$(mktemp)
 	trap 'unlink "$rendered_manifest"' EXIT
 	render_manifest "$rendered_manifest"
+	local attempt_receipt
+	attempt_receipt=$(mktemp "$evidence_dir/runtime-inputs.XXXXXXXX")
 	if ! node "$repo_root/deploy/ack/runtime-inputs.ts" apply "$ACK_BOOTSTRAP_INPUTS_FILE" \
 		"$ACK_TEMPLATE_VALIDATIONS_FILE" "$ACK_WORKLOAD_CAPACITY_FILE" "$ACK_AGENT_REQUESTS_FILE" \
-		"$rendered_manifest" >"$evidence_dir/runtime-inputs.json"; then
+		"$rendered_manifest" >"$attempt_receipt"; then
+		if [[ ! -s "$attempt_receipt" ]]; then
+			printf '%s\n' '{"schemaVersion":1,"kind":"ack-runtime-inputs","status":"failed","failureCode":"RUNTIME_INPUTS_INTERRUPTED","mutationStatus":"unknown","recoveryRequired":true,"loginVerified":false,"businessVerified":false}' >"$attempt_receipt"
+		fi
+		cp "$attempt_receipt" "$evidence_dir/runtime-inputs.json"
 		die "fresh Runtime inputs could not be published and read back"
 	fi
+	cp "$attempt_receipt" "$evidence_dir/runtime-inputs.json"
 	unlink "$rendered_manifest"
 	trap - EXIT
 	validate_workload_capacity
@@ -603,6 +611,7 @@ case "$command" in
 		require_source_tuple
 		require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
 		require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
+		require_file ACK_LOGIN_BOOTSTRAP_FILE "${ACK_LOGIN_BOOTSTRAP_FILE:-}"
 		if [[ -n "${ACK_BOOTSTRAP_INPUTS_FILE:-}" ]]; then
 			bootstrap_database check
 			bootstrap_inputs apply

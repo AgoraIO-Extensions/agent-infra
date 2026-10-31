@@ -330,6 +330,18 @@ export async function bootstrapInputs(
 			sameData(object, objects[index]);
 		}
 	});
+	const missingSecrets = new Set(objects.filter((object, index) => object.kind === "Secret" && !existing[index]).map((object) => object.metadata.name));
+	if (namespace && missingSecrets.size > 0) {
+		for (const document of parseAllDocuments(rendered)) {
+			const desired = document.toJSON();
+			if (desired?.kind !== "Deployment" || !desired.metadata?.name) continue;
+			const live = read("deployment", desired.metadata.name, input.namespace);
+			if (!live) continue;
+			// Bootstrap cannot repair a deleted live credential by silently creating a new identity.
+			assert(!requiredInputs(JSON.stringify(live)).some((dependency) =>
+				dependency.kind === "Secret" && missingSecrets.has(dependency.name)), "BOOTSTRAP_ACTIVE_SECRET_MISSING");
+		}
+	}
 	if (apply) {
 		if (!namespace) {
 			kubectl(
