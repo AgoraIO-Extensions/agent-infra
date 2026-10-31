@@ -25,10 +25,10 @@ test("ACK API and Worker keep one serving Pod during a rollout", () => {
 			strategy: document.spec.strategy,
 		}));
 
-	assert.deepEqual(
-		deployments.map(({ name }) => name).sort(),
-		["agent-infra-api", "agent-infra-worker"],
-	);
+	assert.deepEqual(deployments.map(({ name }) => name).sort(), [
+		"agent-infra-api",
+		"agent-infra-worker",
+	]);
 	for (const deployment of deployments) {
 		assert.equal(deployment.strategy?.type, "RollingUpdate");
 		assert.equal(deployment.strategy?.rollingUpdate?.maxUnavailable, 0);
