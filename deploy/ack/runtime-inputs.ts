@@ -155,8 +155,16 @@ export async function publishRuntimeInputs(files: Files, rendered: string, sourc
 		const current = read("namespace", namespace, false);
 		assert(current.metadata?.uid === ns.metadata.uid && current.metadata.labels?.[ownerLabel] === installationId, "RUNTIME_INPUT_NAMESPACE_DRIFT");
 	};
+	const readSecret = (name: string) => {
+		try {
+			return read("secret", name);
+		} catch {
+			// A missing configuration Secret is an outage risk; keep the failure bounded and do not let kubectl output leak.
+			throw new Error("RUNTIME_INPUT_SECRET_MISSING");
+		}
+	};
 	const secrets = plan.secrets.map((entry) => {
-		const current = read("secret", entry.desired.metadata.name);
+		const current = readSecret(entry.desired.metadata.name);
 		assert(current.kind === "Secret" && current.metadata?.name === entry.desired.metadata.name && current.metadata.namespace === namespace && current.metadata.uid && current.metadata.resourceVersion &&
 			current.metadata.labels?.[ownerLabel] === installationId && current.type === "Opaque" && !current.immutable, "RUNTIME_INPUT_SECRET_OWNER_INVALID");
 		assert(isDeepStrictEqual(current.data, entry.before.data) || isDeepStrictEqual(current.data, entry.desired.data), "RUNTIME_INPUT_SECRET_DRIFT");
@@ -174,7 +182,7 @@ export async function publishRuntimeInputs(files: Files, rendered: string, sourc
 		for (const [file, bytes] of plan.writes) assert.deepEqual(await privateBytes(file), bytes.before, "RUNTIME_INPUT_LOCAL_DRIFT");
 		for (const secret of secrets) {
 			assertNamespace();
-			const current = read("secret", secret.current.metadata.name);
+			const current = readSecret(secret.current.metadata.name);
 			assert(current.metadata.uid === secret.current.metadata.uid && current.metadata.resourceVersion === secret.current.metadata.resourceVersion, "RUNTIME_INPUT_SECRET_VERSION_DRIFT");
 			if (secret.changed) kubectl(["-n", namespace, "replace", "--field-manager=agent-infra-runtime-inputs", "-f", "-"],
 				JSON.stringify({ ...current, data: secret.desired.data }));
@@ -211,7 +219,7 @@ export async function publishRuntimeInputs(files: Files, rendered: string, sourc
 				isDeepStrictEqual(current.data, secret.desired.data), "RUNTIME_INPUT_SECRET_CHANGED_DURING_ROLLOUT");
 		}
 	}
-	return { schemaVersion: 1, kind: "ack-runtime-inputs", mode: apply ? "applied-and-read-back" : "read-only-plan", sourceSha,
+	return { schemaVersion: 1, kind: "ack-runtime-inputs", status: "passed", mode: apply ? "applied-and-read-back" : "read-only-plan", sourceSha,
 		secretCount: secrets.length, changedSecretCount: secrets.filter((s) => s.changed).length,
 		rolloutCount: consumers.filter((c) => c.changed).length, templateCount: 4, businessVerified: false };
 }
@@ -228,7 +236,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		});
 		const result = await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined }, await readFile(rendered, "utf8"), source, run, mode === "apply");
 		process.stdout.write(`${JSON.stringify(result)}\n`);
-	} catch {
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "";
+		const failureCode = /^[A-Z][A-Z0-9_]*$/u.test(message) ? message : "RUNTIME_INPUTS_INVALID";
+		process.stdout.write(`${JSON.stringify({ schemaVersion: 1, kind: "ack-runtime-inputs", status: "failed", failureCode, mutationStatus: "unknown", recoveryRequired: true })}\n`);
 		process.stderr.write("ACK_RUNTIME_INPUTS_INVALID\n");
 		process.exitCode = 1;
 	}

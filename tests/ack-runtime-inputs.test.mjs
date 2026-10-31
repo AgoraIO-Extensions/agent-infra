@@ -528,6 +528,66 @@ test("resourceVersion drift cannot overwrite a concurrently changed configuratio
 	assert.equal(f.mutations.length, 0);
 });
 
+test("a missing configuration Secret fails closed before any write", async (t) => {
+	const f = await fixture(t);
+	f.cluster.delete("secret/api-config");
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/RUNTIME_INPUT_SECRET_MISSING/,
+	);
+	assert.equal(f.mutations.length, 0);
+});
+
+test("a configuration Secret UID replacement fails closed before replacement", async (t) => {
+	const f = await fixture(t);
+	let apiReads = 0;
+	f.beforeCall((args) => {
+		if (
+			args.includes("get") &&
+			args.includes("secret") &&
+			args.includes("api-config") &&
+			++apiReads === 2
+		)
+			f.cluster.get("secret/api-config").metadata.uid = "replacement-secret-uid";
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/SECRET_VERSION_DRIFT/,
+	);
+	assert.equal(f.mutations.length, 0);
+});
+
+test("a Secret UID change after replace is not reported as a successful rollout", async (t) => {
+	const f = await fixture(t);
+	f.afterReplace((object) => {
+		object.metadata.uid = "replacement-secret-uid";
+	});
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/SECRET_READBACK_FAILED/,
+	);
+	assert(f.mutations.every((value) => value.startsWith("replace:")));
+	assert(!f.mutations.some((value) => value.startsWith("patch:")));
+});
+
+test("runtime-inputs CLI emits only a bounded failure receipt", () => {
+	const result = spawnSync(
+		process.execPath,
+		["--experimental-strip-types", "deploy/ack/runtime-inputs.ts", "invalid"],
+		{ encoding: "utf8" },
+	);
+	assert.notEqual(result.status, 0);
+	assert.equal(result.stderr.trim(), "ACK_RUNTIME_INPUTS_INVALID");
+	assert.deepEqual(JSON.parse(result.stdout), {
+		schemaVersion: 1,
+		kind: "ack-runtime-inputs",
+		status: "failed",
+		failureCode: "RUNTIME_INPUTS_INVALID",
+		mutationStatus: "unknown",
+		recoveryRequired: true,
+	});
+});
+
 test("namespace replacement invalidates the plan before the first Secret write", async (t) => {
 	const f = await fixture(t);
 	let namespaceReads = 0;

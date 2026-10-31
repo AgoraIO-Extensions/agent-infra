@@ -297,6 +297,14 @@ Deployment mount，再带 resourceVersion 更新，回读 Secret 后让 API/Work
 完成后还必须通过 Worker 的 mounted-capacity gate。此步骤不签发登录会话、不修改 principal
 映射，也不代表真实模型或完整重建验收已经通过。
 
+运行中的 API/Worker configuration Secret 禁止手工 `kubectl delete/create`。删除会让挂载窗口
+变成 `FailedMount`，并可能令登录和首屏请求同时不可用；portable 流程只允许在同一 UID、同一
+bootstrap owner 下原地 `replace`，再等待 rollout。缺失、UID/owner 漂移、回读不一致或 rollout
+中断都 fail closed，不执行后续 provisioning。`runtime-inputs.json` 成功时包含
+`status=passed`；失败时只写入脱敏的 `status=failed`、有限 `failureCode`、
+`mutationStatus=unknown` 和 `recoveryRequired=true`，重跑后的成功 receipt 才能证明恢复，不能
+用页面 200、匿名 401 或历史 receipt 代替。
+
 ```bash
 deploy/ack/redeploy.sh runtime-inputs
 ```
