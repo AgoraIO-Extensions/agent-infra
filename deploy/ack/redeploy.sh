@@ -305,6 +305,14 @@ capture_inputs() {
 	echo "ack-redeploy: existing ACK inputs captured read-only; source-bound image manifests remain required; capsule=$output"
 }
 
+preflight_agent_requests() {
+	require_file ACK_AGENT_REQUESTS_FILE "${ACK_AGENT_REQUESTS_FILE:-}"
+	prepare_evidence
+	if ! node --experimental-strip-types "$repo_root/deploy/ack/agent-request-preflight.ts" "$ACK_AGENT_REQUESTS_FILE" >"$evidence_dir/agent-request-preflight.json"; then
+		die "Agent request shape preflight failed; no cluster write was attempted"
+	fi
+}
+
 cleanup_plan() {
 	require_file ACK_CLEANUP_PLAN_FILE "${ACK_CLEANUP_PLAN_FILE:-}"
 	prepare_evidence
@@ -612,6 +620,7 @@ case "$command" in
 		require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
 		require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
 		require_file ACK_LOGIN_BOOTSTRAP_FILE "${ACK_LOGIN_BOOTSTRAP_FILE:-}"
+		preflight_agent_requests
 		if [[ -n "${ACK_BOOTSTRAP_INPUTS_FILE:-}" ]]; then
 			bootstrap_database check
 			bootstrap_inputs apply

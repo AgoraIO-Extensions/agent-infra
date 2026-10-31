@@ -1104,6 +1104,7 @@ set -euo pipefail
 require_source_tuple() { echo source; }
 require_file() { [[ -n "$2" ]]; }
 bootstrap_database() { echo database; }
+preflight_agent_requests() { echo request-preflight; }
 bootstrap_inputs() { echo bootstrap; }
 deploy() { echo deploy; }
 template_preflight() { echo preflight; }
@@ -1129,6 +1130,7 @@ ${dispatch}
 						ACK_TEMPLATE_VALIDATIONS_FILE: "/synthetic/receipts",
 						ACK_BOOTSTRAP_INPUTS_FILE: "/synthetic/bootstrap",
 						ACK_WORKLOAD_CAPACITY_FILE: "/synthetic/capacity",
+						ACK_AGENT_REQUESTS_FILE: "/synthetic/requests",
 						ACK_CREDENTIAL_BOOTSTRAP_FILE: "",
 						ACK_LOGIN_BOOTSTRAP_FILE: "/synthetic/login",
 					},
