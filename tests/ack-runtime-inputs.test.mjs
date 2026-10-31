@@ -548,7 +548,8 @@ test("a configuration Secret UID replacement fails closed before replacement", a
 			args.includes("api-config") &&
 			++apiReads === 2
 		)
-			f.cluster.get("secret/api-config").metadata.uid = "replacement-secret-uid";
+			f.cluster.get("secret/api-config").metadata.uid =
+				"replacement-secret-uid";
 	});
 	await assert.rejects(
 		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
@@ -650,12 +651,19 @@ test("a concurrent Secret edit during rollout cannot be reported as published in
 test("a Secret delete and recreate during rollout cannot be reported as published inputs", async (t) => {
 	const f = await fixture(t);
 	f.beforeCall((args) => {
-		if (args.includes("rollout") && args.includes("deployment/agent-infra-api")) {
+		if (
+			args.includes("rollout") &&
+			args.includes("deployment/agent-infra-api")
+		) {
 			const current = f.cluster.get("secret/api-config");
 			f.cluster.delete("secret/api-config");
 			f.cluster.set("secret/api-config", {
 				...structuredClone(current),
-				metadata: { ...current.metadata, uid: "recreated-secret-uid", resourceVersion: "99" },
+				metadata: {
+					...current.metadata,
+					uid: "recreated-secret-uid",
+					resourceVersion: "99",
+				},
 			});
 		}
 	});
@@ -753,7 +761,10 @@ for (const scenario of ["correct", "wrongTarget", "post-rollout-session"]) {
 			assert.equal(f.mutations.length, 0);
 		} else if (scenario === "post-rollout-session") {
 			f.beforeCall((args) => {
-				if (args.includes("rollout") && args.includes("deployment/agent-infra-api"))
+				if (
+					args.includes("rollout") &&
+					args.includes("deployment/agent-infra-api")
+				)
 					failSessionAfterRollout = true;
 			});
 			await assert.rejects(
@@ -761,7 +772,13 @@ for (const scenario of ["correct", "wrongTarget", "post-rollout-session"]) {
 				/LOGIN_SESSION_READ_FAILED/,
 			);
 		} else {
-			const result = await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+			const result = await publishRuntimeInputs(
+				f.files,
+				f.rendered,
+				source,
+				f.kubectl,
+				true,
+			);
 			assert.equal(result.mutationStatus, "verified");
 			assert.deepEqual(
 				Buffer.from(
