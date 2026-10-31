@@ -139,7 +139,9 @@ test("the same capsule relocates without editing source templates or credential 
 test("the runner invokes the existing workflow without shell interpolation and returns its exit", async (t) => {
 	const f = await fixture(t);
 	const previous = {
+		// biome-ignore lint/suspicious/noUndeclaredEnvVars: standalone capsule test outside Turbo.
 		ACK_RUNTIME_IMAGE_MANIFEST: process.env.ACK_RUNTIME_IMAGE_MANIFEST,
+		// biome-ignore lint/suspicious/noUndeclaredEnvVars: standalone capsule test outside Turbo.
 		ACK_CHART_DIR: process.env.ACK_CHART_DIR,
 	};
 	process.env.ACK_RUNTIME_IMAGE_MANIFEST =
@@ -322,12 +324,22 @@ test("an update preserves the observed Secret bytes for bootstrap while keeping 
 	f.actual.storedReserveBytes = before;
 	f.reserve.revision += 1;
 	await f.save("session-reserves.json", f.reserve);
-	const { environment } = await materializeCapsule(f.manifest, f.source, f.readWorker);
-	const bootstrap = JSON.parse(await readFile(environment.ACK_BOOTSTRAP_INPUTS_FILE, "utf8"));
+	const { environment } = await materializeCapsule(
+		f.manifest,
+		f.source,
+		f.readWorker,
+	);
+	const bootstrap = JSON.parse(
+		await readFile(environment.ACK_BOOTSTRAP_INPUTS_FILE, "utf8"),
+	);
 	const baseline = bootstrap.objects[0].files["session-reserves.json"];
 	assert.notEqual(baseline, environment.ACK_SESSION_RESERVES_FILE);
 	assert.deepEqual(await readFile(baseline), before);
-	assert.equal(JSON.parse(await readFile(environment.ACK_SESSION_RESERVES_FILE, "utf8")).revision, 3);
+	assert.equal(
+		JSON.parse(await readFile(environment.ACK_SESSION_RESERVES_FILE, "utf8"))
+			.revision,
+		3,
+	);
 });
 
 test("default-disabled capsule injects one source-bound reserve file without changing original input", async (t) => {
@@ -368,12 +380,28 @@ test("all performs an exact post-run reserve adoption readback", async (t) => {
 
 test("disabling reserves requires post-run adoption and a source-bound readback", async (t) => {
 	const f = await reserveFixture(t, false);
-	await writeFile(join(f.source, "deploy/ack/redeploy.sh"), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o700 });
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		"#!/usr/bin/env bash\nexit 0\n",
+		{ mode: 0o700 },
+	);
 	const success = await runCapsule(f.manifest, "all", f.source, f.readWorker);
 	assert.equal(success.reserve.mountedInputVerified, true);
-	const stale = { ...f.actual, configuration: { ...f.actual.configuration, revision: 1 } };
-	await assert.rejects(runCapsule(f.manifest, "all", f.source, () => stale), /CAPSULE_RESERVE_ADOPTION_MISMATCH/);
-	await assert.rejects(runCapsule(f.manifest, "all", f.source, () => ({ ...f.actual, sourceSha: undefined })), /CAPSULE_RESERVE_ADOPTION_MISMATCH/);
+	const stale = {
+		...f.actual,
+		configuration: { ...f.actual.configuration, revision: 1 },
+	};
+	await assert.rejects(
+		runCapsule(f.manifest, "all", f.source, () => stale),
+		/CAPSULE_RESERVE_ADOPTION_MISMATCH/,
+	);
+	await assert.rejects(
+		runCapsule(f.manifest, "all", f.source, () => ({
+			...f.actual,
+			sourceSha: undefined,
+		})),
+		/CAPSULE_RESERVE_ADOPTION_MISMATCH/,
+	);
 });
 
 for (const scenario of [

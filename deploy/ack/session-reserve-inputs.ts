@@ -174,7 +174,7 @@ export async function prepareReserveInput(environment: Record<string, string>, s
 			: readReserveWorker(environment, bootstrap, worker.name, options.kubectl, { requireAdoption: options.requireAdoption !== false });
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "";
-		if (!configuration.enabled && options.readWorker === undefined && message === "RESERVE_READBACK_UNAVAILABLE") {
+		if (!configuration.enabled && message === "RESERVE_READBACK_UNAVAILABLE") {
 			actual = null;
 			legacyReadbackUnavailable = true;
 		} else throw error;
