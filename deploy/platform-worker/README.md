@@ -131,6 +131,22 @@ Codex 使用 `openai-responses-v1`；Claude、OpenCode（`acp`）与 Pi 使用
 `topology.kubernetes.io/region` 和 `topology.kubernetes.io/zone`。默认不接受额外标签。
 此配置只允许运行中 Pod 携带这些标签，不改变模板、Agent 身份、revision 或 Pod spec 校验。
 
+## 私有 Registry 镜像拉取
+
+私有镜像需要同时配置 Registry Adapter 的读取认证和 kubelet 的镜像拉取认证。
+`workloadInput.policy.imagePullSecretName` 指向目标 namespace 中预先创建的部署 Secret；
+Worker 将该名称写入单镜像 Workload、Session Sandbox、未领取 reserve，以及多服务
+Deployment、StatefulSet 和迁移 Job 的 `imagePullSecrets`。未配置时保持公共 Registry 的行为。
+
+这个名称只能来自部署策略，Owner 请求和 System Manifest 不能指定或覆盖它。凭据内容只供
+kubelet 使用，不挂载到 Agent 容器，不写入 env、Session Secret、日志或 API 响应。
+观察和 reserve 收养会核对精确引用；修改部署配置前须处理已有 Pod 的配置差异，不能把旧 Pod
+自动判定为符合新策略。迁移 Job 的镜像同样使用批准的 repository 和不可变 Digest。
+
+Registry token/manifest 返回成功只证明 Adapter 可以读取镜像；最终仍须验证实际 Pod 拉取、
+Runtime readiness 和业务交互。Pod 事件中的匿名 token `401` 也可能是 Pod 没有携带拉取
+Secret，不能据此判定现有凭据无效。
+
 ## 多服务资源档位
 
 `workloadInput.policy.multiServiceResourceProfiles` 与 `workloadInput.policy.multiServiceResourceCap`

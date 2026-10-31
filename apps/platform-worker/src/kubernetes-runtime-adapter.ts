@@ -67,6 +67,7 @@ import {
 	secretIdAnnotation,
 	secretUidAnnotation,
 	secretVersionAnnotation,
+	workloadImagePullSpecV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 import { createKubernetesWorkloadPolicyHelpersV1 } from "./kubernetes-runtime-policy.js";
@@ -195,12 +196,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 }) {
 	const { client } = options;
 	const policy = structuredClone(options.policy);
-	if (
-		policy.imagePullSecretName !== undefined &&
-		(!/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(policy.imagePullSecretName) ||
-			policy.imagePullSecretName.length > 253)
-	)
-		throw new WorkloadKubernetesError("policy");
+	workloadImagePullSpecV1(policy.imagePullSecretName);
 	const multiService = createMultiServiceRuntimeOperations({
 		client,
 		policy,
@@ -1584,11 +1580,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						spec: {
 							serviceAccountName: name,
 							automountServiceAccountToken: false,
-							...(policy.imagePullSecretName
-								? {
-										imagePullSecrets: [{ name: policy.imagePullSecretName }],
-									}
-								: {}),
+							...workloadImagePullSpecV1(policy.imagePullSecretName),
 							securityContext: {
 								runAsNonRoot: true,
 								runAsUser: 1000,

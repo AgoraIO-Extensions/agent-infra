@@ -774,6 +774,7 @@ export function createSessionSandboxResourceInputResolverV1(
 				templateBinding !== undefined,
 			),
 			imageDigest: `${templateBinding?.imageRepository ?? workload.policy.imageRepository}@${deployment.imageDigest}`,
+			imagePullSecretName: workload.policy.imagePullSecretName,
 			containerPort: deployment.service.port,
 			env: deployment.env,
 			// V4-only: a static-key or missing projection fails before any write.

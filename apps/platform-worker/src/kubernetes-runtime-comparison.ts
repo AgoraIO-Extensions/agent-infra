@@ -10,7 +10,22 @@ import type {
 	V1PodSpec,
 	V1Service,
 } from "@kubernetes/client-node";
+import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import type { KubernetesWorkloadPolicyV1 } from "./kubernetes-runtime-adapter.js";
+
+/** Only the kubelet receives this reference; containers never receive its data. */
+export function workloadImagePullSpecV1(
+	name?: string,
+): Pick<V1PodSpec, "imagePullSecrets"> {
+	if (name === undefined) return {};
+	if (
+		typeof name !== "string" ||
+		!/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(name) ||
+		name.length > 253
+	)
+		throw new WorkloadKubernetesError("policy");
+	return { imagePullSecrets: [{ name }] };
+}
 
 export const ownerLabel = "agent-infra.agora.io/agent";
 export const revisionLabel = "agent-infra.agora.io/revision";

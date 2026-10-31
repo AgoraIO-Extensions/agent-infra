@@ -566,6 +566,57 @@ describe("session sandbox workload adapter", () => {
 		])
 			expect(() => sessionSandboxResourcesV1(input)).toThrow();
 	});
+	it.each([undefined, "registry-pull"])(
+		"enforces deployment pull policy %s without exposing the credential to the Session",
+		async (imagePullSecretName) => {
+			const selected = { ...allocation, imagePullSecretName };
+			const client = api();
+			const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+			await adapter.apply(selected);
+			const pod = await client.read<V1Pod>("Pod", selected.podName);
+			if (!pod?.spec) throw new Error("missing Pod");
+			const expected = imagePullSecretName
+				? [{ name: imagePullSecretName }]
+				: [];
+			expect(pod.spec.imagePullSecrets ?? []).toEqual(expected);
+			pod.status = {
+				phase: "Running",
+				conditions: [{ type: "Ready", status: "True" }],
+			};
+			expect((await adapter.observe(selected)).status).toBe("ready");
+			expect(
+				JSON.stringify([
+					pod.spec.containers,
+					pod.spec.volumes,
+					await client.read("ServiceAccount", selected.serviceAccountName),
+					await client.read("Secret", selected.secretName),
+				]),
+			).not.toContain("registry-pull");
+			for (const changed of [
+				[],
+				[{ name: "foreign-pull" }],
+				[{ name: "registry-pull" }, { name: "registry-pull" }],
+			]) {
+				if (JSON.stringify(changed) === JSON.stringify(expected)) continue;
+				pod.spec.imagePullSecrets = changed;
+				expect((await adapter.observe(selected)).status).toBe("unknown");
+				await expect(adapter.apply(selected)).rejects.toThrow();
+			}
+		},
+	);
+
+	it.each(["", "other/secret", "UPPER", "x".repeat(254)])(
+		"rejects invalid Session pull secret %s before writing resources",
+		async (imagePullSecretName) => {
+			const client = api();
+			const selected = { ...allocation, imagePullSecretName };
+			await expect(
+				createSessionSandboxWorkloadAdapterV1({ client }).apply(selected),
+			).rejects.toThrow();
+			expect(client.resources.size).toBe(0);
+		},
+	);
+
 	it("renders one Pod, Service, SA, retained PVC, isolated NetworkPolicy and own Secret with allocation fence", () => {
 		const resources = sessionSandboxResourcesV1(allocation);
 		expect(resources.map((resource) => resource.kind)).toEqual([
