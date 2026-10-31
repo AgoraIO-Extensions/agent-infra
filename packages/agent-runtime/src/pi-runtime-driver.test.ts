@@ -445,11 +445,15 @@ it.each([false, true])(
 					"utf8",
 				),
 			) as {
-				turns: { operationFacts?: { phase: string }[] }[];
+				turns: { operationFacts?: { phase: string; startedAt?: string }[] }[];
 			};
-			expect(
-				persisted.turns[0]?.operationFacts?.map((fact) => fact.phase),
-			).toEqual(["intent", "started", "completed"]);
+			const operationFacts = persisted.turns[0]?.operationFacts ?? [];
+			expect(operationFacts.map((fact) => fact.phase)).toEqual([
+				"intent",
+				"started",
+				"completed",
+			]);
+			expect(operationFacts[2]?.startedAt).toBe(operationFacts[1]?.startedAt);
 			const events = await f.driver.replayEvents(
 				result.nativeSessionRef,
 				command.executionId,
