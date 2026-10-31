@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { privateJson } from "./private-input.ts";
@@ -11,6 +11,7 @@ const variables = new Set([
 	"ACK_TEMPLATE_IMAGE_MANIFEST", "ACK_TEMPLATE_PREFLIGHT_JOBS_FILE", "ACK_TEMPLATE_VALIDATIONS_FILE", "ACK_WORKLOAD_CAPACITY_FILE",
 	"ACK_PUBLIC_ORIGIN", "ACK_CA_CERT_FILE", "ACK_EVIDENCE_DIR", "ACK_BOOTSTRAP_INPUTS_FILE", "ACK_CREDENTIAL_BOOTSTRAP_FILE",
 	"ACK_LOGIN_BOOTSTRAP_FILE", "ACK_AGENT_REQUESTS_FILE", "ACK_AGENT_STATE_DIR", "ACK_BROWSER_BLUEPRINT_DIR", "ACK_TEMPLATE_CONFIG_DIR",
+	"ACK_SESSION_RESERVES_FILE",
 	"ACK_CUSTOM_AGENT_CONFIGS", "ACK_CUSTOM_AGENT_PROBE", "ACK_CLEANUP_PLAN_FILE", "ACK_HELM_TIMEOUT", "NODE_EXTRA_CA_CERTS",
 ]);
 const capsulePrefix = "@CAPSULE_ROOT@/";
@@ -120,6 +121,17 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 export async function runCapsule(manifest: string, command: string, sourceRoot: string) {
 	assert(commands.has(command), "CAPSULE_COMMAND_INVALID");
 	const { environment, inputCount, sourceSha } = await materializeCapsule(manifest, sourceRoot);
+	if (environment.ACK_SESSION_RESERVES_FILE !== undefined) {
+		assert(environment.ACK_BOOTSTRAP_INPUTS_FILE, "CAPSULE_RESERVE_BOOTSTRAP_MISSING");
+		const bootstrap = JSON.parse(await readFile(environment.ACK_BOOTSTRAP_INPUTS_FILE, "utf8"));
+		const worker = bootstrap.objects?.find(
+			(object: any) => object.kind === "Secret" && object.name.endsWith("-worker-configuration"),
+		);
+		assert(worker?.files && typeof worker.files === "object", "CAPSULE_RESERVE_WORKER_SECRET_MISSING");
+		assert(worker.files["session-reserves.json"] === undefined || worker.files["session-reserves.json"] === environment.ACK_SESSION_RESERVES_FILE, "CAPSULE_RESERVE_INPUT_CONFLICT");
+		worker.files["session-reserves.json"] = environment.ACK_SESSION_RESERVES_FILE;
+		await writeFile(environment.ACK_BOOTSTRAP_INPUTS_FILE, `${JSON.stringify(bootstrap, null, 2)}\n`, { mode: 0o600 });
+	}
 	const inherited = { ...process.env };
 	for (const key of Object.keys(inherited)) if ((key.startsWith("ACK_") && !["ACK_CLEAN_CONFIRM", "ACK_CLEAN_ALLOW_FOREIGN"].includes(key)) || key === "NODE_EXTRA_CA_CERTS") delete inherited[key];
 	const child = spawn("bash", [join(sourceRoot, "deploy/ack/redeploy.sh"), command], { cwd: sourceRoot, env: { ...inherited, ...environment }, stdio: "inherit" });

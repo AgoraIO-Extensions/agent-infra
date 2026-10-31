@@ -483,6 +483,51 @@ it("uses the selected deployment database for all Worker consumers and prepares 
 	});
 });
 
+it("loads reserve policy from a deployment file when the module omits it", async () => {
+	const reserveFile = join(directory, "session-reserves.json");
+	await writeFile(
+		reserveFile,
+		JSON.stringify({
+			schemaVersion: 1,
+			enabled: false,
+			revision: 2,
+			namespace: "worker-binding",
+			totalBudget: { cpuMillis: 0, memoryBytes: 0, storageBytes: 0 },
+			resourceCosts: [],
+			maximumReserves: 0,
+			maximumConcurrentCreates: 0,
+			ttlMs: 0,
+			cooldownMs: 0,
+			failureBackoffMs: 0,
+			profiles: [],
+		}),
+	);
+	const result = run({
+		RUN_RESERVE_OPTIONS: "true",
+		PLATFORM_WORKER_SESSION_RESERVES_FILE: reserveFile,
+	});
+	expect(result.status, result.stderr).toBe(0);
+	expect(JSON.parse(result.stdout)).toMatchObject({
+		configured: true,
+		namespace: "worker-binding",
+		enabled: false,
+	});
+});
+
+it("fails closed when an explicit reserve file is missing", () => {
+	const result = run({
+		RUN_RESERVE_OPTIONS: "true",
+		PLATFORM_WORKER_SESSION_RESERVES_FILE: join(
+			directory,
+			"missing-reserves.json",
+		),
+	});
+	expect(result.status).not.toBe(0);
+	expect(`${result.stdout}${result.stderr}`).toContain(
+		"SESSION_RESERVE_DEPLOYMENT_CONFIGURATION_MISSING",
+	);
+});
+
 it("projects distinct approved consumers and installations by Agent", async () => {
 	const configurationPath = join(directory, "configuration.mjs");
 	const original = await readFile(configurationPath, "utf8");
