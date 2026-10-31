@@ -395,6 +395,7 @@ describe("platform-core package surface", () => {
 			"sessionSandboxReconcileProgressV1",
 			"sessionSandboxReserveDigestV1",
 			"sessionSandboxReserveResourceKindsV1",
+			"sessionSandboxReserveTargetV1",
 			"sessionSandboxRetryDelayMsV1",
 			"shouldContinueSessionSandboxPreparationV1",
 			"skillHubInstallationStatesV1",

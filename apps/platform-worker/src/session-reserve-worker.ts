@@ -24,9 +24,8 @@ export type SessionReserveStoreV1 = Pick<
 	| "list"
 	| "listPage"
 	| "inspect"
-	| "statistics"
 	| "applyConfiguration"
-	| "prepare"
+	| "reconcileCapacity"
 	| "claimLease"
 	| "renewLease"
 	| "recordIntent"
@@ -629,55 +628,17 @@ export function createPlatformSessionReserveWorkerV1(options: {
 		}
 		if (stopped || !configuration.enabled || !configuration.profiles.length)
 			return result;
-		const current = await store.list();
-		let statistics:
-			| Awaited<ReturnType<PostgresSessionSandboxReserveStoreV1["statistics"]>>
-			| undefined;
-		try {
-			statistics = await store.statistics({ windowMs: 60_000 });
-		} catch {
-			report();
-		}
 		const profiles = configuration.profiles;
 		for (let offset = 0; offset < profiles.length; offset++) {
 			const profile = profiles[(profileCursor + offset) % profiles.length];
 			if (!profile || stopped) break;
 			if ((backoff.get(profile.agentId) ?? 0) > now()) continue;
-			const demand = statistics?.profiles.find(
-				(sample) =>
-					sample.agentId === profile.agentId &&
-					sample.profileDigest === sample.currentProfileDigest,
-			);
-			const target = Math.min(
-				profile.maximum,
-				Math.max(
-					profile.minimum,
-					profile.minimum +
-						Math.max(
-							0,
-							(demand?.newSessionCount ?? 0) - (demand?.claimedCount ?? 0),
-						),
-				),
-			);
-			const count = current.filter(
-				(row) =>
-					row.agentId === profile.agentId &&
-					["ready", "preparing"].includes(row.status) &&
-					(!demand || row.profileDigest === demand.profileDigest),
-			).length;
-			let missing = Math.max(0, target - count);
-			while (
-				missing > 0 &&
-				result.prepared < configuration.maximumConcurrentCreates
-			) {
+			while (result.prepared < configuration.maximumConcurrentCreates) {
 				try {
-					if (await store.prepare(profile.agentId)) {
-						result.prepared++;
-						missing--;
-					} else {
-						defer(profile.agentId);
-						break;
-					}
+					const capacity = await store.reconcileCapacity(profile.agentId);
+					result.prepared += capacity.prepared;
+					result.retired += capacity.retired;
+					if (!capacity.prepared) break;
 				} catch {
 					result.unavailable++;
 					defer(profile.agentId);

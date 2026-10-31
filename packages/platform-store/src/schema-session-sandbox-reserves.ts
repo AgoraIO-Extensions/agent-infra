@@ -18,6 +18,7 @@ export const sessionSandboxBudgets = platformSchema.table(
 		revision: bigint("revision", { mode: "number" }).notNull(),
 		configuration: jsonb("configuration").notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+		reserveSizing: jsonb("reserve_sizing").notNull().default({}),
 	},
 );
 export const sessionSandboxResourceCharges = platformSchema.table(
@@ -51,6 +52,7 @@ export const sessionSandboxReserves = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
 		claimedAt: timestamp("claimed_at", { withTimezone: true }),
 		retiredAt: timestamp("retired_at", { withTimezone: true }),
+		readyAt: timestamp("ready_at", { withTimezone: true }),
 	},
 	(table) => [
 		uniqueIndex("session_sandbox_reserve_session_unique").on(table.sessionId),

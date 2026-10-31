@@ -131,19 +131,17 @@ function fixture(
 			items: [structuredClone(row)],
 			nextCursor: null,
 		})),
-		inspect: vi.fn(async () => null),
-		statistics: vi.fn(async () => ({
-			observedAt: new Date(now),
-			windowMs: 60_000,
-			profiles: [] as {
-				agentId: string;
-				profileDigest: string | null;
-				currentProfileDigest: string | null;
-				newSessionCount: number;
-				claimedCount: number;
-			}[],
+		inspect: vi.fn(
+			async () =>
+				null as
+					| import("@agent-infra/platform-store").SessionSandboxReserveInspectionV1
+					| null,
+		),
+		reconcileCapacity: vi.fn(async (_agentId: string) => ({
+			target: 1,
+			prepared: 0,
+			retired: 0,
 		})),
-		prepare: vi.fn(async () => null as string | null),
 		claimLease: vi.fn(async () =>
 			leaseCurrent
 				? structuredClone({
@@ -338,25 +336,38 @@ describe("Session reserve Worker", () => {
 		expect(f.store.applyConfiguration).toHaveBeenCalledOnce();
 	});
 
-	it("uses current-profile demand statistics to refill up to the bounded concurrency", async () => {
+	it("consumes locked sizing decisions and bounds each refill pass", async () => {
 		const f = fixture();
-		f.store.statistics.mockResolvedValue({
-			observedAt: new Date(),
-			windowMs: 60_000,
-			profiles: [
-				{
-					agentId: "agent",
-					profileDigest: f.claim.profile.digest,
-					currentProfileDigest: f.claim.profile.digest,
-					newSessionCount: 3,
-					claimedCount: 0,
-				},
-			],
+		f.store.reconcileCapacity.mockResolvedValue({
+			target: 3,
+			prepared: 1,
+			retired: 0,
 		});
-		f.store.prepare.mockResolvedValue("next-reserve");
-		await f.worker.reconcile();
-		expect(f.store.statistics).toHaveBeenCalledWith({ windowMs: 60_000 });
-		expect(f.store.prepare).toHaveBeenCalledTimes(2);
+		expect(await f.worker.reconcile()).toMatchObject({ prepared: 2 });
+		expect(f.store.reconcileCapacity).toHaveBeenCalledTimes(2);
+		expect(f.store.reconcileCapacity).toHaveBeenCalledWith("agent");
+	});
+	it("continues capacity reconciliation for healthy ready reserves and reports cooldown retirement", async () => {
+		const f = fixture({ status: "ready" });
+		confirmed(f);
+		f.store.inspect.mockResolvedValue({
+			...f.claim,
+			currentProfileDigest: f.claim.profile.digest,
+		});
+		f.store.reconcileCapacity.mockResolvedValueOnce({
+			target: 1,
+			prepared: 0,
+			retired: 0,
+		});
+		expect(await f.worker.reconcile()).toMatchObject({ retired: 0 });
+		f.setNow(11_001);
+		f.store.reconcileCapacity.mockResolvedValueOnce({
+			target: 1,
+			prepared: 0,
+			retired: 2,
+		});
+		expect(await f.worker.reconcile()).toMatchObject({ retired: 2 });
+		expect(f.store.retire).not.toHaveBeenCalled();
 	});
 
 	it("never resends a create with an unknown response or upgrades observation into completion", async () => {
@@ -508,7 +519,7 @@ describe("Session reserve Worker", () => {
 		f.store.retire.mockResolvedValue(false);
 		await f.worker.reconcile();
 		expect(f.adapter.remove).not.toHaveBeenCalled();
-		expect(f.store.prepare).not.toHaveBeenCalled();
+		expect(f.store.reconcileCapacity).not.toHaveBeenCalled();
 	});
 
 	it("does not release a retiring reserve while an old create may still complete", async () => {
@@ -721,26 +732,28 @@ describe("Session reserve Worker", () => {
 		expect(log.mock.calls).toEqual([["SESSION_RESERVE_RECONCILE_UNAVAILABLE"]]);
 	});
 
-	it("backs off unavailable replenishment and does not create from repeated empty-list polls", async () => {
+	it("rechecks the durable target on empty-list polls without scheduling creates itself", async () => {
 		const f = fixture();
 		f.store.list.mockResolvedValue([]);
 		await f.worker.reconcile();
 		await f.worker.reconcile();
-		expect(f.store.prepare).toHaveBeenCalledOnce();
+		expect(f.store.reconcileCapacity).toHaveBeenCalledTimes(2);
 		f.setNow(11_001);
 		await f.worker.reconcile();
-		expect(f.store.prepare).toHaveBeenCalledTimes(2);
+		expect(f.store.reconcileCapacity).toHaveBeenCalledTimes(3);
 	});
 
 	it("backs off failed profiles without hiding the failed attempt or using private error text", async () => {
 		const f = fixture();
 		f.store.list.mockResolvedValue([]);
-		f.store.prepare.mockRejectedValue(new Error("private database credential"));
+		f.store.reconcileCapacity.mockRejectedValue(
+			new Error("private database credential"),
+		);
 		await f.worker.reconcile();
 		await f.worker.reconcile();
-		expect(f.store.prepare).toHaveBeenCalledOnce();
+		expect(f.store.reconcileCapacity).toHaveBeenCalledOnce();
 		f.setNow(11_001);
 		await f.worker.reconcile();
-		expect(f.store.prepare).toHaveBeenCalledTimes(2);
+		expect(f.store.reconcileCapacity).toHaveBeenCalledTimes(2);
 	});
 });

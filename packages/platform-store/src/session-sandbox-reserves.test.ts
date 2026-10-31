@@ -24,6 +24,7 @@ import {
 	expect,
 	it,
 } from "vitest";
+import { createPlatformSessionReserveWorkerV1 } from "../../../apps/platform-worker/src/session-reserve-worker.js";
 import { catalogFixture } from "../../model-catalog/src/catalog.fixture.js";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.js";
 import { migratePlatformDatabase } from "./migrate.js";
@@ -691,6 +692,8 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 					agentId: "agent",
 					newSessionCount: 1,
 					claimedCount: 0,
+					replenishmentCount: 0,
+					replenishmentUpperBoundMs: null,
 				}),
 			],
 		});
@@ -1131,6 +1134,26 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		).toEqual([{ revision: "7", enabled: "false" }]);
 		await expect(reserves(config).prepare("agent")).rejects.toThrow();
 	});
+	it("preserves cooldown timing when a control revision changes without reserve sizing input", async () => {
+		const first = reserves();
+		await first.applyConfiguration();
+		await sql`update platform.session_sandbox_budgets set reserve_sizing = ${sql.json(
+			{
+				agent: {
+					profileDigest: "profile-v1",
+					target: 1,
+					lowTarget: 1,
+					lowSince: 1234,
+				},
+			},
+		)}`;
+		await reserves({ ...config, revision: 2 }).applyConfiguration();
+		const [budget] = await sql<
+			{ reserve_sizing: { agent: { lowSince: number } } }[]
+		>`
+			select reserve_sizing from platform.session_sandbox_budgets`;
+		expect(budget?.reserve_sizing.agent.lowSince).toBe(1234);
+	});
 	it("disabling after an existing cold allocation preserves its ledger and permits original preparation", async () => {
 		const first = await create(
 			execution(config),
@@ -1197,6 +1220,87 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			],
 		});
 	});
+	it("real Worker shrinks three healthy ready reserves after cooldown and drains disabled immediately", async () => {
+		const store = reserves();
+		await ready(store);
+		await ready(store);
+		await ready(store);
+		const adapter = {
+			render: async () => [],
+			read: async () => ({ kind: "Pod" }),
+			create: async () => {
+				throw new Error("Unexpected create");
+			},
+			remove: async () => "absent" as const,
+			bootstrap: async () => ({
+				bootstrapReady: true,
+				businessStateAbsent: true,
+			}),
+		};
+		const worker = createPlatformSessionReserveWorkerV1({
+			databaseUrl: database.databaseUrl,
+			configuration: config,
+			store,
+			adapter,
+		});
+		try {
+			expect(await worker.reconcile()).toMatchObject({ retired: 0 });
+			expect(
+				(await store.list()).filter((row) => row.status === "ready"),
+			).toHaveLength(3);
+			await sql`update platform.session_sandbox_budgets set reserve_sizing = jsonb_set(reserve_sizing, '{agent,lowSince}', to_jsonb((extract(epoch from clock_timestamp()) * 1000 - 2000)::bigint))`;
+			expect(await worker.reconcile()).toMatchObject({ retired: 2 });
+			expect(
+				(await store.list()).filter((row) => row.status === "ready"),
+			).toHaveLength(1);
+		} finally {
+			await worker.stop();
+		}
+		const disabled = {
+			...config,
+			enabled: false,
+			revision: 2,
+			cooldownMs: 60_000,
+		};
+		const drain = createPlatformSessionReserveWorkerV1({
+			databaseUrl: database.databaseUrl,
+			configuration: disabled,
+			adapter,
+		});
+		try {
+			await drain.reconcile();
+			expect(
+				(await reserves(disabled).list()).every(
+					(row) => row.status === "retiring",
+				),
+			).toBe(true);
+		} finally {
+			await drain.stop();
+		}
+	});
+	it("shrinks three healthy ready reserves to one only after a persisted cooldown", async () => {
+		const store = reserves();
+		await ready(store);
+		await ready(store);
+		await ready(store);
+		expect(await store.reconcileCapacity("agent")).toMatchObject({
+			target: 1,
+			retired: 0,
+			prepared: 0,
+		});
+		expect(
+			(await store.list()).filter((row) => row.status === "ready"),
+		).toHaveLength(3);
+		await sql`update platform.session_sandbox_budgets set reserve_sizing = jsonb_set(reserve_sizing, '{agent,lowSince}', to_jsonb((extract(epoch from clock_timestamp()) * 1000 - 2000)::bigint))`;
+		expect(await reserves().reconcileCapacity("agent")).toMatchObject({
+			target: 1,
+			retired: 2,
+			prepared: 0,
+		});
+		expect(
+			(await store.list()).filter((row) => row.status === "ready"),
+		).toHaveLength(1);
+	});
 	it("lists every page while target is zero and rejects out-of-bound page sizes", async () => {
 		const reserve = await prepared();
 		await sql`insert into platform.session_sandbox_reserves (sandbox_id, session_id, agent_id, namespace, profile_digest, profile, status, operations, expires_at, created_at, updated_at)
@@ -1238,6 +1342,215 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 			}),
 		).toMatchObject({ status: "retiring" });
 	});
+	it("keeps first ready timing through claim and restart, excluding unknown historical ready times", async () => {
+		const first = await ready();
+		const second = await ready(first.store);
+		const [before] =
+			await sql`select created_at, ready_at from platform.session_sandbox_reserves where sandbox_id = ${first.sandboxId}`;
+		expect(before?.ready_at).toBeInstanceOf(Date);
+		expect(
+			await first.store.markReady(first.lease, {
+				bootstrapReady: true,
+				businessStateAbsent: true,
+			}),
+		).toBe(false);
+		expect(await create()).toMatchObject({
+			outcome: "accepted",
+			result: { conversationId: first.sessionId },
+		});
+		await sql`update platform.session_sandbox_reserves set ready_at = null where sandbox_id = ${second.sandboxId}`;
+		expect(
+			(
+				await sql`select created_at, ready_at from platform.session_sandbox_reserves where sandbox_id = ${first.sandboxId}`
+			)[0],
+		).toEqual(before);
+		const statistics = await reserves().statistics({ windowMs: 60_000 });
+		expect(statistics.profiles).toEqual([
+			expect.objectContaining({
+				newSessionCount: 1,
+				claimedCount: 1,
+				replenishmentCount: 1,
+				replenishmentUpperBoundMs: expect.any(Number),
+			}),
+		]);
+	});
+	it("starts a first sample from zero minimum and clamps demand to the remaining deployment budget", async () => {
+		const bounded = {
+			...config,
+			totalBudget: { cpuMillis: 2000, memoryBytes: 2048, storageBytes: 4096 },
+			profiles: config.profiles.map((p) => ({ ...p, minimum: 0 })),
+		};
+		expect(await create(execution(bounded))).toMatchObject({
+			outcome: "accepted",
+		});
+		const store = reserves(bounded);
+		expect(await store.reconcileCapacity("agent")).toMatchObject({
+			target: 1,
+			prepared: 1,
+		});
+		expect(await store.reconcileCapacity("agent")).toMatchObject({
+			target: 1,
+			prepared: 0,
+		});
+		expect(await store.list()).toHaveLength(1);
+		expect(
+			await sql`select count(*)::int as count from platform.session_sandbox_resource_charges where not released`,
+		).toEqual([{ count: 2 }]);
+	});
+	it("includes high-hit demand and the measured upper bound, then avoids concurrent overfill", async () => {
+		const store = reserves();
+		for (let i = 0; i < 3; i++) {
+			await ready(store);
+			expect(
+				await create(execution(), "user-a", "web", `hit-${i}`),
+			).toMatchObject({ outcome: "accepted" });
+		}
+		await sql`update platform.session_sandbox_reserves set created_at = ready_at - interval '30 seconds'`;
+		expect((await store.statistics({ windowMs: 60_000 })).profiles).toEqual([
+			expect.objectContaining({
+				newSessionCount: 3,
+				claimedCount: 3,
+				replenishmentCount: 3,
+				replenishmentUpperBoundMs: 30_000,
+			}),
+		]);
+		const decisions = await Promise.all(
+			Array.from({ length: 8 }, () => reserves().reconcileCapacity("agent")),
+		);
+		expect(decisions.every((decision) => decision.target === 3)).toBe(true);
+		expect(decisions.reduce((n, decision) => n + decision.prepared, 0)).toBe(2);
+		expect(await store.list()).toHaveLength(2);
+	});
+	it("does not over-shrink with concurrent Workers and a competing real claim", async () => {
+		const store = reserves();
+		await ready(store);
+		await ready(store);
+		await ready(store);
+		await store.reconcileCapacity("agent");
+		await sql`update platform.session_sandbox_budgets set reserve_sizing = jsonb_set(reserve_sizing, '{agent,lowSince}', to_jsonb((extract(epoch from clock_timestamp()) * 1000 - 2000)::bigint))`;
+		const decisions = await Promise.all(
+			Array.from({ length: 8 }, () => reserves().reconcileCapacity("agent")),
+		);
+		expect(decisions.reduce((n, decision) => n + decision.retired, 0)).toBe(2);
+		expect(
+			(await store.list()).filter((row) => row.status === "ready"),
+		).toHaveLength(1);
+		const [claim] = await Promise.all([
+			create(),
+			reserves().reconcileCapacity("agent"),
+		]);
+		expect(claim).toMatchObject({ outcome: "accepted" });
+		expect(
+			await sql`select count(*)::int as count from platform.session_sandbox_reserves r join platform.session_sandbox_allocations a on a.sandbox_id = r.sandbox_id where r.status <> 'claimed'`,
+		).toEqual([{ count: 0 }]);
+	});
+	it("restarts cooldown after demand rises and falls again", async () => {
+		const store = reserves();
+		await ready(store);
+		await ready(store);
+		await ready(store);
+		await store.reconcileCapacity("agent");
+		await sql`update platform.session_sandbox_budgets set reserve_sizing = jsonb_set(reserve_sizing, '{agent,lowSince}', to_jsonb((extract(epoch from clock_timestamp()) * 1000 - 2000)::bigint))`;
+		await create();
+		expect(await store.reconcileCapacity("agent")).toMatchObject({
+			target: 2,
+			retired: 0,
+		});
+		await sql`update platform.session_sandbox_allocations set created_at = clock_timestamp() - interval '2 minutes'`;
+		expect(await reserves().reconcileCapacity("agent")).toMatchObject({
+			target: 1,
+			retired: 0,
+		});
+		expect(
+			(await store.list()).filter((row) => row.status === "ready"),
+		).toHaveLength(2);
+	});
+	it("retains unresolved retiring creates in concurrency and resource budgets", async () => {
+		const bounded = {
+			...config,
+			maximumConcurrentCreates: 1,
+			profiles: config.profiles.map((p) => ({ ...p, minimum: 0 })),
+		};
+		const store = reserves(bounded);
+		const sandboxId = await store.prepare("agent");
+		if (!sandboxId) throw new Error("Expected reserve");
+		const lease = await store.claimLease({
+			sandboxId,
+			workerId: "worker",
+			leaseDurationMs: 30_000,
+		});
+		if (!lease) throw new Error("Expected lease");
+		expect(
+			await store.recordIntent(lease, {
+				attemptId: "pending-pvc",
+				operation: "create",
+				kind: "PersistentVolumeClaim",
+				name: `sandbox-${sandboxId}`,
+				status: "pending",
+				resource: null,
+				absent: false,
+			}),
+		).toBe(true);
+		await store.reconcileCapacity("agent");
+		await sql`update platform.session_sandbox_budgets set reserve_sizing = jsonb_set(reserve_sizing, '{agent,lowSince}', to_jsonb((extract(epoch from clock_timestamp()) * 1000 - 2000)::bigint))`;
+		expect(await store.reconcileCapacity("agent")).toMatchObject({
+			target: 0,
+			retired: 1,
+		});
+		expect(await store.prepare("agent")).toBeNull();
+		expect(
+			await sql`select released from platform.session_sandbox_resource_charges where sandbox_id = ${sandboxId}`,
+		).toEqual([{ released: false }]);
+		const retiring = await store.claimLease({
+			sandboxId,
+			workerId: "next-worker",
+			leaseDurationMs: 30_000,
+		});
+		if (!retiring) throw new Error("Expected retiring lease");
+		expect(await store.finishRetirement(retiring)).toBe(false);
+		expect(
+			await store.recordCreateResponse(lease, {
+				attemptId: "pending-pvc",
+				response: "rejected",
+				resource: null,
+			}),
+		).toBe(true);
+		expect(await store.finishRetirement(retiring)).toBe(true);
+		expect(await store.prepare("agent")).toBeTypeOf("string");
+	});
+	it("isolates sizing and timing across profile changes and fences a restarted old configuration", async () => {
+		const old = await ready();
+		await ready(old.store);
+		await ready(old.store);
+		await old.store.reconcileCapacity("agent");
+		const next = reserves({ ...config, revision: 2 });
+		await next.applyConfiguration();
+		expect(await next.reconcileCapacity("agent")).toMatchObject({
+			target: 1,
+			prepared: 1,
+			retired: 0,
+		});
+		await expect(old.store.reconcileCapacity("agent")).rejects.toThrow();
+		const rows = (await next.statistics({ windowMs: 60_000 })).profiles;
+		expect(rows).toContainEqual(
+			expect.objectContaining({
+				profileDigest: old.lease.profile.digest,
+				replenishmentCount: 3,
+			}),
+		);
+		expect(rows).toContainEqual(
+			expect.objectContaining({
+				replenishmentCount: 0,
+				replenishmentUpperBoundMs: null,
+			}),
+		);
+		const [budget] =
+			await sql`select reserve_sizing from platform.session_sandbox_budgets`;
+		expect(budget?.reserve_sizing.agent.lowSince).toBeNull();
+		expect(budget?.reserve_sizing.agent.profileDigest).not.toBe(
+			old.lease.profile.digest,
+		);
+	});
 	it("attributes cold and claimed demand to their immutable admission profile across revisions", async () => {
 		expect(
 			await create(execution(null), "user-a", "web", "legacy-demand"),
@@ -1278,6 +1591,8 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 					currentProfileDigest: second.lease.profile.digest,
 					newSessionCount: 2,
 					claimedCount: 1,
+					replenishmentCount: 1,
+					replenishmentUpperBoundMs: expect.any(Number),
 				},
 				{
 					agentId: "agent",
@@ -1285,6 +1600,8 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 					currentProfileDigest: second.lease.profile.digest,
 					newSessionCount: 2,
 					claimedCount: 1,
+					replenishmentCount: 1,
+					replenishmentUpperBoundMs: expect.any(Number),
 				},
 				{
 					agentId: "agent",
@@ -1292,6 +1609,8 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 					currentProfileDigest: second.lease.profile.digest,
 					newSessionCount: 1,
 					claimedCount: 0,
+					replenishmentCount: 0,
+					replenishmentUpperBoundMs: null,
 				},
 			]),
 		);

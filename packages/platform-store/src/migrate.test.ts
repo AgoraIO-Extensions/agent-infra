@@ -2013,6 +2013,7 @@ describe("published Relay authority migration", () => {
 			71,
 			72,
 			73,
+			74,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2087,8 +2088,8 @@ describe("published Relay authority migration", () => {
 			tag: "0063_wecom_outbound_media",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 73,
-			tag: "0073_session_admission_profile",
+			idx: 74,
+			tag: "0074_reserve_replenishment_timing",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2379,9 +2380,13 @@ describe("published Relay authority migration", () => {
 				"agent_applications:agent_application_management_state_valid",
 			);
 			expectedDelta.columns.push(
-				...["namespace", "revision", "configuration", "updated_at"].map(
-					(name) => `session_sandbox_budgets:${name}`,
-				),
+				...[
+					"namespace",
+					"revision",
+					"configuration",
+					"reserve_sizing",
+					"updated_at",
+				].map((name) => `session_sandbox_budgets:${name}`),
 				...[
 					"sandbox_id",
 					"session_id",
@@ -2397,6 +2402,7 @@ describe("published Relay authority migration", () => {
 					"expires_at",
 					"created_at",
 					"updated_at",
+					"ready_at",
 					"claimed_at",
 					"retired_at",
 				].map((name) => `session_sandbox_reserves:${name}`),
