@@ -32,6 +32,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.js";
+import { claimSandboxReconciliation } from "./session-sandbox-reconciliation.js";
 import {
 	PostgresSessionSandboxReserveStoreV1,
 	releaseSessionSandboxComputeBudgetV1,
@@ -1181,6 +1182,117 @@ describe("real PostgreSQL reserve/Conversation transactions", () => {
 		expect(
 			await sql`select released from platform.session_sandbox_resource_charges where sandbox_id = ${allocation.sandbox_id}`,
 		).toEqual([{ released: false }]);
+	});
+	it.each([false, true])(
+		"prepares new cold Sessions after disabling reserves (zeroed input: %s)",
+		async (zeroed) => {
+			await create(execution(), "user-a", "web", "charged-before-disable");
+			const off = {
+				...config,
+				enabled: false,
+				revision: 2,
+				...(zeroed
+					? {
+							totalBudget: { cpuMillis: 0, memoryBytes: 0, storageBytes: 0 },
+							resourceCosts: [],
+							profiles: [],
+							maximumReserves: 0,
+							maximumConcurrentCreates: 0,
+						}
+					: {}),
+			};
+			const created = await create(
+				execution(off),
+				"user-b",
+				"web",
+				"cold-after-disable",
+			);
+			if (created.outcome !== "accepted")
+				throw new Error("Expected cold Session");
+			const conversationId = created.result.conversationId;
+			const [allocation] =
+				await sql`select sandbox_id from platform.session_sandbox_allocations where conversation_id = ${conversationId}`;
+			const [outbox] =
+				await sql`select id from platform.outbox_items where scope_id = ${conversationId} and operation = 'conversation.sandbox.reconcile.v1'`;
+			if (!allocation || !outbox)
+				throw new Error("Expected original Sandbox intent");
+			const charges =
+				await sql`select * from platform.session_sandbox_resource_charges`;
+			expect(charges).toHaveLength(1);
+			expect(charges[0]?.sandbox_id).not.toBe(allocation.sandbox_id);
+			const claim = await sql.begin((tx) =>
+				claimSandboxReconciliation(
+					tx,
+					{
+						itemId: outbox.id,
+						workerId: "cold-worker",
+						leaseDurationMs: 30000,
+					},
+					{
+						namespace: config.namespace,
+						resourceConfigurationHash: resourceHash,
+					},
+					directory,
+				),
+			);
+			expect(claim).toMatchObject({
+				sandbox: {
+					sandboxId: allocation.sandbox_id,
+					sessionId: conversationId,
+					generation: 1,
+				},
+				resourceFence: 1,
+				deliveryFence: 1,
+				execution: null,
+				purpose: "prepare",
+			});
+			expect(
+				await sql`select * from platform.session_sandbox_resource_charges`,
+			).toEqual(charges);
+			expect(
+				await sql`select status, attempt_count from platform.outbox_items where id = ${outbox.id}`,
+			).toEqual([{ status: "processing", attempt_count: 1 }]);
+			await expect(
+				create(execution(off), "user-b", "web", "cold-after-disable"),
+			).resolves.toMatchObject({
+				outcome: "replayed",
+				result: { conversationId },
+			});
+		},
+	);
+	it("still rejects unapproved resources for charged Sessions after disabling", async () => {
+		const reserve = await ready();
+		await create();
+		await reserves({
+			...config,
+			enabled: false,
+			revision: 2,
+		}).applyConfiguration();
+		const charges =
+			await sql`select * from platform.session_sandbox_resource_charges`;
+		await expect(
+			sql.begin((tx) =>
+				reserveSessionSandboxPreparationBudgetV1(tx, reserve.sandboxId, {
+					...reserve.lease.profile.policy,
+					resourceConfigurationHash: "c".repeat(64),
+				}),
+			),
+		).rejects.toThrow();
+		expect(
+			await sql`select * from platform.session_sandbox_resource_charges`,
+		).toEqual(charges);
+	});
+	it("still rejects a missing charge while reserves are enabled", async () => {
+		const reserve = await ready();
+		await expect(
+			sql.begin((tx) =>
+				reserveSessionSandboxPreparationBudgetV1(
+					tx,
+					"00000000-0000-4000-8000-000000000000",
+					reserve.lease.profile.policy,
+				),
+			),
+		).rejects.toThrow();
 	});
 	it("default-off keeps ready reserves unclaimed", async () => {
 		const reserve = await ready();

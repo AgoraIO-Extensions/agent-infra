@@ -569,14 +569,16 @@ export async function reserveSessionSandboxPreparationBudgetV1(
 	const config = await lockBudget(tx);
 	if (!config) return;
 	if (policy.namespace !== config.namespace) unavailable();
+	const [row] = await tx<
+		{ resources: SessionSandboxResourceBudgetV1; compute_released: boolean }[]
+	>`select resources, compute_released from platform.session_sandbox_resource_charges where sandbox_id = ${sandboxId}`;
+	// Disabled admission leaves new cold Sessions uncharged; retained charges still enforce their budget.
+	if (!row && !config.enabled) return;
+	if (!row) unavailable();
 	const approved = config.resourceCosts.find(
 		(c) => c.resourceConfigurationHash === policy.resourceConfigurationHash,
 	);
 	if (!approved) unavailable();
-	const [row] = await tx<
-		{ resources: SessionSandboxResourceBudgetV1; compute_released: boolean }[]
-	>`select resources, compute_released from platform.session_sandbox_resource_charges where sandbox_id = ${sandboxId}`;
-	if (!row) unavailable();
 	const resources = {
 		cpuMillis: Math.max(row.resources.cpuMillis, approved.resources.cpuMillis),
 		memoryBytes: Math.max(
