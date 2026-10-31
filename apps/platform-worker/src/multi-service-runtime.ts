@@ -34,6 +34,7 @@ import {
 	fingerprintAnnotation,
 	ownerLabel,
 	revisionLabel,
+	workloadImagePullSpecV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 
@@ -44,6 +45,7 @@ export type MultiServiceDesired = AgentWorkloadDesiredV1 & {
 export interface MultiServiceRuntimePolicyV1 {
 	readonly namespace: string;
 	readonly imageRepository?: string;
+	readonly imagePullSecretName?: string;
 	readonly storageSize?: string;
 	readonly storageClassName?: string;
 	readonly routeHostSuffix: string;
@@ -89,6 +91,7 @@ export function resolveMultiServiceResourceConfigurationV1(
 	policy: MultiServiceRuntimePolicyV1,
 ): MultiServiceResourceConfigurationV1 {
 	try {
+		workloadImagePullSpecV1(policy.imagePullSecretName);
 		return parseMultiServiceResourceConfigurationV1({
 			profiles: policy.multiServiceResourceProfiles,
 			cap: policy.multiServiceResourceCap,
@@ -334,6 +337,7 @@ function deployment(
 				metadata: { labels },
 				spec: {
 					...resource.spec.template.spec,
+					...workloadImagePullSpecV1(policy.imagePullSecretName),
 					securityContext: agentPodSecurityContext(),
 					...(volumes ? { volumes } : {}),
 					containers: resource.spec.template.spec.containers.map(
@@ -432,6 +436,7 @@ function statefulSet(
 				metadata: { labels },
 				spec: {
 					...resource.spec.template.spec,
+					...workloadImagePullSpecV1(policy.imagePullSecretName),
 					securityContext: agentPodSecurityContext(),
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
@@ -524,6 +529,7 @@ function migrationJob(
 		{ kind: "Job" }
 	>,
 	resources: MultiServiceResourceConfigurationV1,
+	policy: MultiServiceRuntimePolicyV1,
 ): V1Job {
 	const profile = profileForWorkload(value, resource, resources);
 	const labels = {
@@ -542,6 +548,7 @@ function migrationJob(
 				metadata: { labels },
 				spec: {
 					...resource.spec.template.spec,
+					...workloadImagePullSpecV1(policy.imagePullSecretName),
 					securityContext: agentPodSecurityContext(),
 					restartPolicy: "Never",
 					serviceAccountName: workloadResourceNameV1(value.agentId),
@@ -549,6 +556,7 @@ function migrationJob(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
+							image: imageReference(policy, container.image),
 							resources: profile.resources,
 							securityContext: agentContainerSecurityContext(),
 							ports: container.ports?.map((port) => ({
@@ -703,6 +711,11 @@ export function createMultiServiceRuntimeOperations(options: {
 }) {
 	const { client } = options;
 	const resources = resolveMultiServiceResourceConfigurationV1(options.policy);
+	const imagePullSecrets =
+		workloadImagePullSpecV1(options.policy.imagePullSecretName)
+			.imagePullSecrets ?? [];
+	const matchesImagePullSecrets = (spec: V1PodSpec | undefined) =>
+		!!spec && isDeepStrictEqual(spec.imagePullSecrets ?? [], imagePullSecrets);
 	const resourceName = (value: MultiServiceDesired, name: string) =>
 		serviceResourceName(value.agentId, name);
 	const manifestPvc = (value: MultiServiceDesired, name: string) =>
@@ -813,7 +826,11 @@ export function createMultiServiceRuntimeOperations(options: {
 			}
 			return current;
 		}
-		if (object.kind === "Job") return current;
+		if (object.kind === "Job") {
+			if (!matchesImagePullSecrets((current as V1Job).spec?.template.spec))
+				throw new Error("multi-service migration pull policy drifted");
+			return current;
+		}
 		if (current.kind === "PersistentVolumeClaim") {
 			const currentPvc = current as unknown as V1PersistentVolumeClaim;
 			const declaredPvc = manifestPvc(value, current.metadata?.name ?? "");
@@ -1018,7 +1035,7 @@ export function createMultiServiceRuntimeOperations(options: {
 			if (migration?.kind === "Job") {
 				await put(migrationNetworkPolicy(value), value, ownership);
 				const job = await put(
-					migrationJob(value, migration, resources),
+					migrationJob(value, migration, resources, options.policy),
 					value,
 					ownership,
 				);
@@ -1101,6 +1118,13 @@ export function createMultiServiceRuntimeOperations(options: {
 					await emitHealthDiagnostic(value, "migration_missing");
 					return "unreachable" as const;
 				}
+				if (
+					!owned(job, value) ||
+					!matchesImagePullSecrets(job.spec?.template.spec)
+				) {
+					await emitHealthDiagnostic(value, "workload_drifted");
+					return "drifted" as const;
+				}
 				if (jobFailed(job)) {
 					await emitHealthDiagnostic(value, "migration_failed");
 					return "unhealthy" as const;
@@ -1117,7 +1141,12 @@ export function createMultiServiceRuntimeOperations(options: {
 					resource.kind,
 					serviceResourceName(value.agentId, resource.metadata.name),
 				);
-				if (!current || !owned(current, value)) return "drifted" as const;
+				if (
+					!current ||
+					!owned(current, value) ||
+					!matchesImagePullSecrets(current.spec?.template.spec)
+				)
+					return "drifted" as const;
 				// 工作负载还在启动：与单镜像路径一致返回 pending，由调谐按重试上限等待，
 				// 而不是在第一次观测时就判定失败。
 				if (

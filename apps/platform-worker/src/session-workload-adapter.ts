@@ -40,6 +40,7 @@ import {
 	agentContainerSecurityContext,
 	agentPodSecurityContext,
 	ownerLabel,
+	workloadImagePullSpecV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 import { skillHubVolumeMountV1 } from "./kubernetes-runtime-skill-mount.js";
@@ -188,6 +189,8 @@ export interface SessionSandboxAllocationV1 {
 	 */
 	readonly egress: WorkloadEgressPolicyV1;
 	readonly imageDigest: string;
+	/** Deployment-owned kubelet pull reference, never copied into Runtime inputs. */
+	readonly imagePullSecretName?: string;
 	readonly authorizedIngressSelector: Readonly<Record<string, string>>;
 	readonly containerPort: number;
 	readonly workspaceMountPath: string;
@@ -376,6 +379,7 @@ function metadata(
 }
 
 function validateResourceInput(value: SessionSandboxResourceInputV1) {
+	workloadImagePullSpecV1(value.imagePullSecretName);
 	if (value.skillHub !== undefined) {
 		const parsed = RuntimeSkillHubBindingV1Schema.safeParse(value.skillHub);
 		if (
@@ -881,6 +885,7 @@ function renderSessionSandboxResourcesV1(
 			// Other Sandboxes' Service addresses are not injected into this one.
 			enableServiceLinks: false,
 			restartPolicy: "Always",
+			...workloadImagePullSpecV1(allocation.imagePullSecretName),
 			// Same non-root identity as the Agent-level Workload (#1466).
 			securityContext: agentPodSecurityContext(),
 			containers: [
@@ -1113,6 +1118,8 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 			.sort((left, right) => left.name.localeCompare(right.name));
 	return (
 		currentSpec.serviceAccountName === expectedSpec.serviceAccountName &&
+		stableJson(currentSpec.imagePullSecrets ?? []) ===
+			stableJson(expectedSpec.imagePullSecrets ?? []) &&
 		currentSpec.automountServiceAccountToken ===
 			expectedSpec.automountServiceAccountToken &&
 		currentSpec.enableServiceLinks === expectedSpec.enableServiceLinks &&

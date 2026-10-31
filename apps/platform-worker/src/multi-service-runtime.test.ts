@@ -405,6 +405,95 @@ function markWorkloadsReady(fake: ReturnType<typeof fakeClient>) {
 }
 
 describe("multi-service resource policy", () => {
+	it.each([undefined, "registry-pull"])(
+		"uses deployment pull policy %s for every workload and migration",
+		async (imagePullSecretName) => {
+			const fake = fakeClient();
+			const policy = {
+				...basePolicy,
+				storageSize: "1Gi",
+				imageRepository: "registry.example.test/custom",
+				imagePullSecretName,
+			};
+			const operations = createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy,
+			});
+			const value = desired(
+				MultiServiceManifestDocumentV1Schema.parse({
+					...statefulManifest,
+					resources: [
+						...statefulManifest.resources,
+						...migrationManifest.resources.filter((r) => r.kind === "Job"),
+					],
+				}),
+			);
+			if (!isMultiService(value))
+				throw new Error("multi-service fixture invalid");
+			await operations.apply(value);
+			const job = [...fake.resources.values()].find(
+				(r) => r.kind === "Job",
+			) as V1Job;
+			job.status = { succeeded: 1 };
+			const identity = await operations.apply(value);
+			markWorkloadsReady(fake);
+			expect(await operations.observe(value, identity)).toBe("healthy");
+			for (const kind of ["Deployment", "StatefulSet", "Job"]) {
+				const resource = [...fake.resources.values()].find(
+					(r) => r.kind === kind,
+				) as V1Deployment | V1StatefulSet | V1Job;
+				const spec = resource.spec?.template.spec;
+				if (!spec) throw new Error("workload fixture missing");
+				const expected = imagePullSecretName
+					? [{ name: imagePullSecretName }]
+					: [];
+				expect(spec.imagePullSecrets ?? []).toEqual(expected);
+				for (const container of spec.containers)
+					expect(container.image).toMatch(
+						/^registry\.example\.test\/custom@sha256:[a-f0-9]{64}$/,
+					);
+				expect(JSON.stringify([spec.containers, spec.volumes])).not.toContain(
+					"registry-pull",
+				);
+				for (const changed of [
+					[],
+					[{ name: "foreign-pull" }],
+					[{ name: "registry-pull" }, { name: "registry-pull" }],
+				]) {
+					if (JSON.stringify(changed) === JSON.stringify(expected)) continue;
+					spec.imagePullSecrets = changed;
+					expect(await operations.observe(value, identity)).toBe("drifted");
+					if (kind === "Job")
+						await expect(operations.apply(value)).rejects.toThrow(
+							"pull policy drifted",
+						);
+				}
+				spec.imagePullSecrets = expected;
+			}
+			expect(
+				JSON.stringify(
+					[...fake.resources.values()].filter(
+						(r) => r.kind === "ServiceAccount" || r.kind === "Secret",
+					),
+				),
+			).not.toContain("registry-pull");
+		},
+	);
+
+	it.each(["", "other/secret", "UPPER", "x".repeat(254)])(
+		"rejects invalid deployment pull secret %s before Kubernetes calls",
+		(imagePullSecretName) => {
+			const recorded = recordingClient(fakeClient().client);
+			expect(() =>
+				createMultiServiceRuntimeOperations({
+					client: recorded.client,
+					policy: { ...basePolicy, imagePullSecretName },
+				}),
+			).toThrow();
+			expect(recorded.calls).toEqual([]);
+		},
+	);
+
 	it("resolves the deployment profiles behind the contract default", () => {
 		expect(
 			resolveMultiServiceResourceConfigurationV1(basePolicy),

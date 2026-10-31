@@ -305,6 +305,24 @@ function drainClaim(
 }
 
 describe("production SessionSandbox resource receiver", () => {
+	it("takes the image pull Secret only from deployment policy", async () => {
+		const f = fixture();
+		const receive = createProductionSessionSandboxReceiverV1(
+			{
+				...f.options,
+				policy: { ...f.options.policy, imagePullSecretName: "registry-pull" },
+			},
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		);
+		const forgedClaim = { ...f.claim, imagePullSecretName: "untrusted-pull" };
+		expect(
+			(await receive(forgedClaim, new AbortController().signal)).status,
+		).toBe("observed");
+		const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+		expect(pod.spec?.imagePullSecrets).toEqual([{ name: "registry-pull" }]);
+		expect(JSON.stringify(pod.spec?.containers)).not.toContain("registry-pull");
+	});
+
 	it("performs one full observe after apply instead of a hot 100ms loop (#3739)", async () => {
 		const f = fixture();
 		const observed = await f.receive(f.claim, new AbortController().signal);

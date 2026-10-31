@@ -235,6 +235,34 @@ function fixture(driver: "codex" | "claude" | "acp" | "pi" = "codex") {
 	};
 }
 describe("Session reserve resource adapter", () => {
+	it("uses the deployment pull Secret for reserves and rejects changed references before bootstrap", async () => {
+		const f = fixture();
+		Object.assign(f.options.workload.policy, {
+			imagePullSecretName: "registry-pull",
+		});
+		const objects = await f.ready();
+		const pod = required(
+			f.objects.get(`Pod/sandbox-${f.claim.sandboxId}`),
+		) as V1Pod;
+		const spec = required(pod.spec);
+		expect(spec.imagePullSecrets).toEqual([{ name: "registry-pull" }]);
+		expect((await f.adapter.bootstrap(f.claim, objects)).bootstrapReady).toBe(
+			true,
+		);
+		for (const changed of [
+			[],
+			[{ name: "foreign-pull" }],
+			[{ name: "registry-pull" }, { name: "registry-pull" }],
+		]) {
+			spec.imagePullSecrets = changed;
+			f.fetch.mockClear();
+			await expect(f.adapter.bootstrap(f.claim, objects)).rejects.toMatchObject(
+				{ code: "conflict" },
+			);
+			expect(f.fetch).not.toHaveBeenCalled();
+		}
+	});
+
 	it("renders the identical six resource contract without a principal or channel", async () => {
 		const f = fixture();
 		const input = createSessionSandboxReserveResourceInputV1(
