@@ -125,6 +125,8 @@ export { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 export { skillHubWorkloadMountRootV1 } from "./kubernetes-runtime-skill-mount.js";
 
 export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
+	/** Deployment-owned pull Secret used only for private Workload images. */
+	readonly imagePullSecretName?: string;
 	/** Explicit deployment approval for the Codex container-boundary mode. */
 	readonly codexContainerBoundaryEnabled?: boolean;
 	/** Validated deployment copy, never an Agent/request environment value. */
@@ -193,6 +195,12 @@ export function createKubernetesRuntimeAdapterV1(options: {
 }) {
 	const { client } = options;
 	const policy = structuredClone(options.policy);
+	if (
+		policy.imagePullSecretName !== undefined &&
+		(!/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(policy.imagePullSecretName) ||
+			policy.imagePullSecretName.length > 253)
+	)
+		throw new WorkloadKubernetesError("policy");
 	const multiService = createMultiServiceRuntimeOperations({
 		client,
 		policy,
@@ -1576,6 +1584,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 						spec: {
 							serviceAccountName: name,
 							automountServiceAccountToken: false,
+							...(policy.imagePullSecretName
+								? {
+										imagePullSecrets: [{ name: policy.imagePullSecretName }],
+									}
+								: {}),
 							securityContext: {
 								runAsNonRoot: true,
 								runAsUser: 1000,
