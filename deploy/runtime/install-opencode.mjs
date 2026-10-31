@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 const releasePath = new URL("../../packages/agent-runtime/src/opencode-release.json", import.meta.url);
 const release = JSON.parse(await readFile(releasePath, "utf8"));
@@ -10,10 +11,45 @@ const [architecture, destination, libc = "musl", ...extra] = process.argv.slice(
 const artifact = release.artifacts[`linux-${architecture === "amd64" ? "x64" : architecture}${libc === "musl" ? "-musl" : ""}`];
 if (!artifact || !destination || !["musl", "gnu"].includes(libc) || extra.length) throw new Error("usage: install-opencode.mjs <amd64|arm64> <destination> [musl|gnu]");
 const directory = await mkdtemp(join(tmpdir(), "opencode-install-"));
+
+const downloadBudgetMs = 300_000;
+const downloadAttempts = 3;
+const retryableTransportCodes = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE", "UND_ERR_SOCKET"]);
+function retryableTransportError(error) {
+	const seen = new Set();
+	for (let current = error; current && !seen.has(current); current = current.cause) {
+		seen.add(current);
+		if (retryableTransportCodes.has(current.code)) return true;
+	}
+	return false;
+}
+
+async function downloadArchive(url) {
+	// One signal covers headers, all body reads and backoff; retries do not reset the budget.
+	const signal = AbortSignal.timeout(downloadBudgetMs);
+	const unavailable = new Error("OpenCode release asset unavailable");
+	for (let attempt = 1; attempt <= downloadAttempts; attempt++) {
+		let response;
+		try {
+			response = await fetch(url, { signal });
+			if (!response.ok) {
+				await response.body?.cancel().catch(() => undefined);
+				throw unavailable;
+			}
+			return Buffer.from(await response.arrayBuffer());
+		} catch (error) {
+			await response?.body?.cancel().catch(() => undefined);
+			if (error === unavailable) throw error;
+			if (signal.aborted || !retryableTransportError(error) || attempt === downloadAttempts) throw new Error("OpenCode release asset download failed");
+			try { await delay(250 * attempt, undefined, { signal }); }
+			catch { throw new Error("OpenCode release asset download failed"); }
+		}
+	}
+	throw new Error("OpenCode release asset download failed");
+}
+
 try {
-	const response = await fetch(artifact.tarball, { signal: AbortSignal.timeout(300_000) });
-	if (!response.ok) throw new Error("OpenCode release asset unavailable");
-	const bytes = Buffer.from(await response.arrayBuffer());
+	const bytes = await downloadArchive(artifact.tarball);
 	if (createHash("sha256").update(bytes).digest("hex") !== artifact.archiveSha256 || `sha512-${createHash("sha512").update(bytes).digest("base64")}` !== artifact.integrity) throw new Error("OpenCode archive checksum mismatch");
 	const archive = join(directory, "release.tgz");
 	await writeFile(archive, bytes);
