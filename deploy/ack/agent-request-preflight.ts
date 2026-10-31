@@ -43,6 +43,8 @@ export async function validateAgentRequestFile(file: string) {
 		return failure(input?.requests?.length > 20 ? "REQUEST_FILE_TOO_MANY" : "REQUEST_FILE_INVALID");
 	const bodyHashes: string[] = [];
 	const sourceKinds = new Set<string>();
+	const names = new Set<string>();
+	const idempotencyKeys = new Set<string>();
 	for (const [index, request] of input.requests.entries()) {
 		if (
 			!request ||
@@ -53,11 +55,17 @@ export async function validateAgentRequestFile(file: string) {
 			typeof request.name !== "string" ||
 			!/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(request.name) ||
 			typeof request.bodyFile !== "string" ||
+			request.bodyFile.length === 0 ||
 			typeof request.credentialFile !== "string" ||
+			request.credentialFile.length === 0 ||
 			typeof request.idempotencyKey !== "string" ||
-			!/^[\x21-\x7e]{8,256}$/u.test(request.idempotencyKey)
+			!/^[\x21-\x7e]{8,256}$/u.test(request.idempotencyKey) ||
+			names.has(request.name) ||
+			idempotencyKeys.has(request.idempotencyKey)
 		)
 			return failure("REQUEST_ENTRY_INVALID", index);
+		names.add(request.name);
+		idempotencyKeys.add(request.idempotencyKey);
 		let body: unknown;
 		try {
 			body = await privateJson(request.bodyFile);

@@ -205,6 +205,67 @@ test("rejects more than twenty requests before reading any body", async (t) => {
 	assert.equal(result.failureCode, "REQUEST_FILE_TOO_MANY");
 });
 
+test("rejects duplicate names, idempotency keys and empty paths before reading bodies", async (t) => {
+	const f = await fixture(t);
+	const duplicateName = await f.write("duplicate-name.json", {
+		schemaVersion: 1,
+		requests: [
+			{
+				name: "same",
+				bodyFile: f.bodyFile,
+				credentialFile: f.credentialFile,
+				idempotencyKey: "same-key-v1",
+			},
+			{
+				name: "same",
+				bodyFile: f.bodyFile,
+				credentialFile: f.credentialFile,
+				idempotencyKey: "other-key-v1",
+			},
+		],
+	});
+	assert.equal(
+		(await validateAgentRequestFile(duplicateName)).failureCode,
+		"REQUEST_ENTRY_INVALID",
+	);
+	const duplicateKey = await f.write("duplicate-key.json", {
+		schemaVersion: 1,
+		requests: [
+			{
+				name: "first",
+				bodyFile: f.bodyFile,
+				credentialFile: f.credentialFile,
+				idempotencyKey: "same-key-v1",
+			},
+			{
+				name: "second",
+				bodyFile: f.bodyFile,
+				credentialFile: f.credentialFile,
+				idempotencyKey: "same-key-v1",
+			},
+		],
+	});
+	assert.equal(
+		(await validateAgentRequestFile(duplicateKey)).failureCode,
+		"REQUEST_ENTRY_INVALID",
+	);
+	const emptyPath = await f.write("empty-path.json", {
+		schemaVersion: 1,
+		requests: [
+			{
+				name: "empty",
+				bodyFile: "",
+				credentialFile: f.credentialFile,
+				idempotencyKey: "empty-key-v1",
+			},
+		],
+	});
+	assert.equal(
+		(await validateAgentRequestFile(emptyPath)).failureCode,
+		"REQUEST_ENTRY_INVALID",
+	);
+});
+
 test("CLI exits before deployment when the formal request schema rejects a body", async (t) => {
 	const f = await fixture(t);
 	await f.write("body.json", {
