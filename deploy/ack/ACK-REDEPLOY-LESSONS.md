@@ -148,6 +148,8 @@ source/template/image 和实际 Pod UID 哈希，记录创建、容器启动、R
 | 重跑 preflight 读到旧 checkpoint 或写 receipt 报 `EEXIST` | 私有 job 复用固定输出目录，但每次验证创建新 Pod | 先验证完整四模板 manifest/target 绑定，再每轮自动生成独立私有 job 与输出目录；保留旧证据和原输入 |
 | Helm 本地渲染报 `sessionRuntimeScheduling` 不兼容，但目标 ACK 版本支持 | Helm client 默认 Kubernetes 版本与目标 Server 版本不同 | `render_manifest` 先读取目标 Server version，再用 `helm template --kube-version`；不要用本地默认版本判断目标能力 |
 | 更新 private values 后 `bootstrap-inputs` 拒绝覆盖 | bootstrap 工具按 ownership 和 Secret 字节精确比较，既有 Secret 漂移是故障信号 | 对 private 配置变更先删除并重建同一安装拥有的 Secret；不要用 `kubectl apply` 覆盖，也不要把漂移对象收养 |
+| 更新 API/Worker Secret 后登录短暂不可用 | ACK chart 的单副本 Deployment 使用 `Recreate`，旧 Pod 会在新 Pod Ready 前被删除 | API/Worker 使用 `RollingUpdate(maxUnavailable=0,maxSurge=1)`；每次配置 rollout 都回读 Ready 连续性，并用正式登录探针验证 |
+| 四模板创建成功，custom Agent 在 Registry admission 返回 `400` 或 `401` | GHCR custom 包是 `internal` 且当前 API 没有可读该包的 approved credential/link；匿名标准镜像可用不代表 custom 包可读 | 保持 Registry admission fail-closed；为 custom 包准备已批准的 repository link 或 `read:packages` credential，回读 immutable manifest/config 后再创建，不把包改 public 或用 fixture 绕过 |
 | bootstrap database 阶段突然失败且没有业务错误 | private values 文件权限不是 0600，工具在读取前 fail closed | 所有 values、input、credential、body 和 storageState 文件保持当前用户拥有且权限 0600；目录 0700 |
 | fresh 输入包在删除前被 Helm Schema 拒绝 | 新安装 ID 写入了不支持的 `bootstrap.installationId`，且数据库归属仍可能沿用旧值 | 新身份同时写入 bootstrap 输入的 `installationId` 与 values 的 `postgres.bootstrapInstallationId`；删除前渲染并核对 StatefulSet/PVC 的归属标签，不能放宽 Schema 或把旧 namespace 收养为新安装 |
 | 工作流自己创建的 namespace 无法执行 `destroy` | 清理入口要求历史通用标签，bootstrap 只写当前 installation ID 标签 | 清理必须把 namespace 的 `bootstrap-id` 与计划的 installation ID 比较，同时保留 cluster/namespace UID、完整资源清单和两项删除确认；缺失或不同归属在删除前失败 |
