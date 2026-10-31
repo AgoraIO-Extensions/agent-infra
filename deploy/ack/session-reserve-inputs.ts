@@ -7,7 +7,7 @@ import {
 	type SessionSandboxReserveConfigurationV1,
 } from "../../packages/platform-core/src/session-sandbox-reserves.ts";
 import { privateBytes, privateJson } from "./private-input.ts";
-import { assertWorkerMount, validateCapacityBindings } from "./workload-capacity.ts";
+import { validateCapacityBindings } from "./workload-capacity.ts";
 
 type Json = Record<string, any>;
 type ReadJson = (file: string) => Promise<Json>;
@@ -24,13 +24,41 @@ export type ReserveWorker = {
 	policy: { namespace: string; resourceProfileRef: string; resources: Json; storageSize: string };
 	resourceCosts: { cpuMillis: number; memoryBytes: number; storageBytes: number };
 	configurationHash: string | null;
+	storedReserveBytes: Uint8Array | null;
 };
 export type ReadReserveWorker = (environment: Record<string, string>, bootstrap: Json, secretName: string) => ReserveWorker | null;
+export type ReserveKubectl = (args: string[], input?: string) => string;
+export type ReserveReadbackOptions = { requireAdoption?: boolean };
 const configKeys = ["schemaVersion", "enabled", "revision", "namespace", "totalBudget", "resourceCosts", "maximumReserves", "maximumConcurrentCreates", "ttlMs", "cooldownMs", "failureBackoffMs", "profiles"];
 const runtimeInputsAnnotation = "agent-infra.agora.io/runtime-inputs-hash";
 const profileKeys = ["agentId", "templateId", "imageDigest", "resourceConfigurationHash", "resources", "storageConfigurationVersion", "networkPolicyVersion", "signingConfigurationVersion", "transportConfigurationVersion", "connectionConfigurationVersion", "minimum", "maximum"];
 function keys(value: unknown, allowed: string[]) {
 	assert(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every((key) => allowed.includes(key)), "CAPSULE_RESERVE_EXTRA_FIELD");
+}
+
+function hashSecretData(data: Record<string, string> | undefined) {
+	return createHash("sha256")
+		.update(JSON.stringify(Object.entries(data ?? {}).sort(([a], [b]) => a.localeCompare(b))))
+		.digest("hex");
+}
+
+function workerConfigurationMount(pod: Json, secretName: string) {
+	const containers = [...(pod.spec?.containers ?? []), ...(pod.spec?.initContainers ?? [])];
+	for (const container of containers) {
+		for (const mount of container.volumeMounts ?? []) {
+			if (!mount.readOnly || mount.subPath === undefined) continue;
+			const volume = (pod.spec?.volumes ?? []).find((entry: Json) => entry.name === mount.name);
+			if (volume?.secret?.secretName !== secretName) continue;
+			const module = container.env?.find((entry: Json) => entry.name === "PLATFORM_WORKER_DEPLOYMENT_MODULE")?.value;
+			if (typeof module !== "string" || !module.startsWith("file:///")) continue;
+			const modulePath = decodeURIComponent(new URL(module).pathname);
+			const expected = mount.mountPath.endsWith(`/${mount.subPath}`) ? mount.mountPath : (mount.mountPath.endsWith("/") ? `${mount.mountPath}${mount.subPath}` : `${mount.mountPath}/${mount.subPath}`);
+			if (modulePath !== expected) continue;
+			assert(typeof mount.subPath === "string" && /^[A-Za-z0-9._-]+$/u.test(mount.subPath), "CAPSULE_RESERVE_CONFIGURATION_MOUNT_INVALID");
+			return { containerName: container.name, key: mount.subPath, mount, volume };
+		}
+	}
+	throw new Error("CAPSULE_RESERVE_CONFIGURATION_MOUNT_INVALID");
 }
 
 export function parseReserveInput(input: Json, sourceSha: string, namespace: string) {
@@ -47,14 +75,21 @@ export function parseReserveInput(input: Json, sourceSha: string, namespace: str
 }
 
 /** Read only: the existing mount/Pod restart checks bind the loaded policy to its Secret. */
-export function readReserveWorker(environment: Record<string, string>, bootstrap: Json, secretName: string): ReserveWorker | null {
+export function readReserveWorker(environment: Record<string, string>, bootstrap: Json, secretName: string, execute?: ReserveKubectl, options: ReserveReadbackOptions | boolean = {}): ReserveWorker | null {
+	const requireAdoption = typeof options === "boolean" ? options : options.requireAdoption !== false;
 	const { ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace } = environment;
 	assert(kubeconfig && namespace);
-	const kubectl = (args: string[]) => execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=20s", "-n", namespace, ...args], { encoding: "utf8", timeout: 30_000, maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+	const kubectl = execute ?? ((args: string[], input?: string) => execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=20s", "-n", namespace, ...args], { input, encoding: "utf8", timeout: 30_000, maxBuffer: 2 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] }));
 	const namespaceBytes = kubectl(["get", "namespace", namespace, "--ignore-not-found", "-o", "json"]);
 	if (!namespaceBytes.trim()) return null;
 	const ns = JSON.parse(namespaceBytes);
+	const clusterBytes = kubectl(["get", "namespace", "kube-system", "--ignore-not-found", "-o", "json"]);
+	assert(clusterBytes.trim(), "CAPSULE_RESERVE_CLUSTER_MISSING");
+	const cluster = JSON.parse(clusterBytes);
+	assert(cluster.metadata?.uid === bootstrap.clusterUid, "CAPSULE_RESERVE_CLUSTER_MISMATCH");
 	assert(ns.metadata?.labels?.["agent-infra.agora.io/bootstrap-id"] === bootstrap.installationId, "CAPSULE_RESERVE_NAMESPACE_OWNER_MISMATCH");
+	const namespaceUid = ns.metadata?.uid;
+	assert(typeof namespaceUid === "string" && namespaceUid.length > 0, "CAPSULE_RESERVE_NAMESPACE_UID_MISSING");
 	const workerBytes = kubectl(["get", "deployment", "agent-infra-worker", "--ignore-not-found", "-o", "json"]);
 	if (!workerBytes.trim()) return null;
 	const deployment = JSON.parse(workerBytes);
@@ -68,34 +103,47 @@ export function readReserveWorker(environment: Record<string, string>, bootstrap
 	assert(replicaSet.metadata.uid === owner.uid && replicaSet.metadata.ownerReferences?.some((entry: any) => entry.kind === "Deployment" && entry.controller && entry.uid === deployment.metadata.uid));
 	const secret = JSON.parse(kubectl(["get", "secret", secretName, "-o", "json", "--show-managed-fields=true"]));
 	assert(secret.metadata.labels?.["agent-infra.agora.io/bootstrap-id"] === bootstrap.installationId);
-	const mount = assertWorkerMount(pod, secret, { name: secretName, key: "configuration.mjs" });
+	const mount = workerConfigurationMount(pod, secretName);
 	const reserveMount = pod.spec.containers?.find((container: any) => container.name === mount.containerName)?.volumeMounts?.find((entry: any) => entry.mountPath === "/var/run/agent-infra/deployment");
 	assert(reserveMount?.readOnly && reserveMount.subPath === undefined && pod.spec.volumes?.some((volume: any) => volume.name === reserveMount.name && volume.secret?.secretName === secretName), "CAPSULE_RESERVE_MOUNT_INVALID");
-	const secretHash = createHash("sha256").update(JSON.stringify(Object.entries(secret.data ?? {}).sort(([a], [b]) => a.localeCompare(b)))).digest("hex");
-	assert(deployment.spec.template.metadata?.annotations?.[runtimeInputsAnnotation] === secretHash, "CAPSULE_RESERVE_TEMPLATE_SECRET_HASH_MISMATCH");
+	const secretHash = hashSecretData(secret.data);
 	const script = `const entry=await import(process.env.PLATFORM_WORKER_DEPLOYMENT_MODULE); if(typeof entry.readPlatformSessionReserveDeploymentV1!=="function") throw Error("RESERVE_READBACK_UNAVAILABLE"); console.log(JSON.stringify(entry.readPlatformSessionReserveDeploymentV1()));process.exit(0);`;
 	const actual = JSON.parse(kubectl(["exec", pod.metadata.name, "-c", mount.containerName, "--", "node", "--input-type=module", "-e", script]));
-	assert(actual.policy?.namespace === namespace && actual.configuration?.namespace === namespace, "CAPSULE_RESERVE_NAMESPACE_READBACK_MISMATCH");
+	assert(actual.policy?.namespace === namespace && (actual.configuration === null || actual.configuration?.namespace === namespace), "CAPSULE_RESERVE_NAMESPACE_READBACK_MISMATCH");
+	if (environment.ACK_SOURCE_SHA !== undefined) assert(actual.sourceSha === environment.ACK_SOURCE_SHA, "CAPSULE_RESERVE_SOURCE_READBACK_MISMATCH");
+	if (!requireAdoption) {
+		const storedReserveBytes = secret.data?.["session-reserves.json"] ? Buffer.from(secret.data["session-reserves.json"], "base64") : null;
+		return { ...actual, storedReserveBytes };
+	}
+	assert(deployment.spec.template.metadata?.annotations?.[runtimeInputsAnnotation] === secretHash, "CAPSULE_RESERVE_TEMPLATE_SECRET_HASH_MISMATCH");
+	assert(replicaSet.spec?.template?.metadata?.annotations?.[runtimeInputsAnnotation] === secretHash, "CAPSULE_RESERVE_REPLICASET_SECRET_HASH_MISMATCH");
+	assert(pod.metadata?.annotations?.[runtimeInputsAnnotation] === secretHash, "CAPSULE_RESERVE_POD_SECRET_HASH_MISMATCH");
 	const current = JSON.parse(kubectl(["get", "pod", pod.metadata.name, "-o", "json"]));
+	const currentDeployment = JSON.parse(kubectl(["get", "deployment", "agent-infra-worker", "-o", "json"]));
+	const currentReplicaSet = JSON.parse(kubectl(["get", "replicaset", owner.name, "-o", "json"]));
 	const currentSecret = JSON.parse(kubectl(["get", "secret", secretName, "-o", "json"]));
-	assert(current.metadata.uid === pod.metadata.uid && !current.metadata.deletionTimestamp && current.status?.startTime && pod.status?.startTime === current.status.startTime && currentSecret.metadata.uid === secret.metadata.uid && currentSecret.metadata.resourceVersion === secret.metadata.resourceVersion, "CAPSULE_RESERVE_READBACK_DRIFT");
-	if (secret.data["session-reserves.json"]) assert(actual.configurationHash === sessionSandboxReserveDigestV1(JSON.parse(Buffer.from(secret.data["session-reserves.json"], "base64").toString("utf8"))), "CAPSULE_RESERVE_MOUNT_DRIFT");
-	return actual;
+	const endNamespace = JSON.parse(kubectl(["get", "namespace", namespace, "--ignore-not-found", "-o", "json"]));
+	assert(endNamespace.metadata?.uid === namespaceUid && !endNamespace.metadata?.deletionTimestamp, "CAPSULE_RESERVE_NAMESPACE_REPLACED");
+	assert(current.metadata.uid === pod.metadata.uid && !current.metadata.deletionTimestamp && current.status?.startTime && pod.status?.startTime === current.status.startTime && currentDeployment.metadata.uid === deployment.metadata.uid && currentReplicaSet.metadata.uid === replicaSet.metadata.uid && currentSecret.metadata.uid === secret.metadata.uid && currentSecret.metadata.resourceVersion === secret.metadata.resourceVersion && !currentSecret.metadata.deletionTimestamp, "CAPSULE_RESERVE_READBACK_DRIFT");
+	assert(currentDeployment.spec.template.metadata?.annotations?.[runtimeInputsAnnotation] === secretHash && currentReplicaSet.spec?.template?.metadata?.annotations?.[runtimeInputsAnnotation] === secretHash && current.metadata?.annotations?.[runtimeInputsAnnotation] === secretHash, "CAPSULE_RESERVE_TEMPLATE_SECRET_HASH_CHANGED");
+	const storedReserveBytes = secret.data?.["session-reserves.json"] ? Buffer.from(secret.data["session-reserves.json"], "base64") : null;
+	if (storedReserveBytes) assert(actual.configurationHash === sessionSandboxReserveDigestV1(JSON.parse(storedReserveBytes.toString("utf8"))), "CAPSULE_RESERVE_MOUNT_DRIFT");
+	return { ...actual, storedReserveBytes };
 }
 
-export async function prepareReserveInput(environment: Record<string, string>, sourceSha: string, options: { readJson?: ReadJson; readWorker?: ReadReserveWorker } = {}) {
+export async function prepareReserveInput(environment: Record<string, string>, sourceSha: string, options: { readJson?: ReadJson; readWorker?: ReadReserveWorker; workerSecretName?: string; requireAdoption?: boolean; kubectl?: ReserveKubectl; baselineReserveBytes?: Uint8Array | null } = {}) {
 	const readJson = options.readJson ?? privateJson;
 	assert(environment.ACK_SESSION_RESERVES_FILE && environment.ACK_BOOTSTRAP_INPUTS_FILE && environment.ACK_NAMESPACE, "CAPSULE_RESERVE_INPUT_MISSING");
 	const input = await readJson(environment.ACK_SESSION_RESERVES_FILE);
 	const configuration = parseReserveInput(input, sourceSha, environment.ACK_NAMESPACE);
 	const bootstrap = await readJson(environment.ACK_BOOTSTRAP_INPUTS_FILE);
 	assert(bootstrap.namespace === configuration.namespace && Array.isArray(bootstrap.objects), "CAPSULE_RESERVE_BOOTSTRAP_INVALID");
-	const workers = bootstrap.objects.filter((object: any) => object.kind === "Secret" && typeof object.name === "string" && object.name.endsWith("-worker-configuration"));
+	const workers = bootstrap.objects.filter((object: any) => object.kind === "Secret" && typeof object.name === "string" && (options.workerSecretName ? object.name === options.workerSecretName : object.name.endsWith("-worker-configuration")));
 	assert(workers.length === 1 && workers[0].files && typeof workers[0].files === "object", "CAPSULE_RESERVE_WORKER_SECRET_AMBIGUOUS");
 	const worker = workers[0];
 	const bindings = bootstrap.objects.filter((object: any) => object.files?.["session-reserves.json"] !== undefined);
 	assert(bindings.length <= 1 && (bindings.length === 0 || bindings[0] === worker), "CAPSULE_RESERVE_INPUT_DUPLICATE");
-	assert(worker.files["session-reserves.json"] === undefined || worker.files["session-reserves.json"] === environment.ACK_SESSION_RESERVES_FILE, "CAPSULE_RESERVE_INPUT_CONFLICT");
+	const existingReserveBinding = worker.files["session-reserves.json"];
 	if (configuration.profiles.length > 0) {
 		assert(environment.ACK_WORKLOAD_CAPACITY_FILE && environment.ACK_TEMPLATE_VALIDATIONS_FILE, "CAPSULE_RESERVE_CAPACITY_INPUT_MISSING");
 		const capacity = await readJson(environment.ACK_WORKLOAD_CAPACITY_FILE);
@@ -118,8 +166,26 @@ export async function prepareReserveInput(environment: Record<string, string>, s
 		const verified = validateCapacityBindings(requests, templates.templates, capacity, profiles.profiles, evidence);
 		assert(configuration.resourceCosts.every((cost) => cost.resourceConfigurationHash === verified.resourceConfigurationHash), "CAPSULE_RESERVE_RESOURCE_HASH_MISMATCH");
 	}
-	const actual = (options.readWorker ?? readReserveWorker)(environment, bootstrap, worker.name);
+	let actual: ReserveWorker | null;
+	let legacyReadbackUnavailable = false;
+	try {
+		actual = options.readWorker
+			? options.readWorker(environment, bootstrap, worker.name)
+			: readReserveWorker(environment, bootstrap, worker.name, options.kubectl, { requireAdoption: options.requireAdoption !== false });
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "";
+		if (!configuration.enabled && options.readWorker === undefined && message === "RESERVE_READBACK_UNAVAILABLE") {
+			actual = null;
+			legacyReadbackUnavailable = true;
+		} else throw error;
+	}
+	if (actual && options.readWorker === undefined && environment.ACK_SOURCE_SHA !== undefined)
+		assert(actual.sourceSha === environment.ACK_SOURCE_SHA, "CAPSULE_RESERVE_SOURCE_READBACK_MISMATCH");
 	if (configuration.enabled) assert(actual, "CAPSULE_RESERVE_APPROVED_WORKER_REQUIRED");
+	if (existingReserveBinding !== undefined && existingReserveBinding !== environment.ACK_SESSION_RESERVES_FILE) {
+		const baselineBytes = options.baselineReserveBytes ?? await privateBytes(existingReserveBinding);
+		assert(actual?.storedReserveBytes !== undefined && Buffer.compare(Buffer.from(baselineBytes), Buffer.from(actual.storedReserveBytes ?? [])) === 0, "CAPSULE_RESERVE_INPUT_BASELINE_MISMATCH");
+	}
 	if (actual?.configuration) {
 		assert(configuration.revision > actual.configuration.revision || (configuration.revision === actual.configuration.revision && sessionSandboxReserveDigestV1(configuration) === sessionSandboxReserveDigestV1(actual.configuration)), "CAPSULE_RESERVE_REVISION_DRIFT");
 	}
@@ -132,5 +198,5 @@ export async function prepareReserveInput(environment: Record<string, string>, s
 		}
 	}
 	const receipt: ReserveInputReceipt = { sourceSha, namespace: configuration.namespace, revision: configuration.revision, enabled: configuration.enabled, configHash: sessionSandboxReserveDigestV1(input) };
-	return { receipt, workerSecretName: worker.name };
+	return { receipt, workerSecretName: worker.name, actual, observed: actual, storedReserveBytes: actual?.storedReserveBytes ?? null, legacyReadbackUnavailable };
 }

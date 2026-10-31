@@ -311,8 +311,24 @@ async function reserveFixture(t, enabled = false) {
 		.digest("hex");
 	const { sourceSha: _reserveSource, ...parsedReserve } = reserve;
 	actual.configuration = parsedReserve;
+	actual.sourceSha = f.sourceSha;
+	actual.storedReserveBytes = Buffer.from(JSON.stringify(reserve));
 	return { ...f, reserve, actual, readWorker: () => actual };
 }
+
+test("an update preserves the observed Secret bytes for bootstrap while keeping the new reserve candidate separate", async (t) => {
+	const f = await reserveFixture(t, true);
+	const before = Buffer.from(`  ${JSON.stringify(f.reserve)}\n`);
+	f.actual.storedReserveBytes = before;
+	f.reserve.revision += 1;
+	await f.save("session-reserves.json", f.reserve);
+	const { environment } = await materializeCapsule(f.manifest, f.source, f.readWorker);
+	const bootstrap = JSON.parse(await readFile(environment.ACK_BOOTSTRAP_INPUTS_FILE, "utf8"));
+	const baseline = bootstrap.objects[0].files["session-reserves.json"];
+	assert.notEqual(baseline, environment.ACK_SESSION_RESERVES_FILE);
+	assert.deepEqual(await readFile(baseline), before);
+	assert.equal(JSON.parse(await readFile(environment.ACK_SESSION_RESERVES_FILE, "utf8")).revision, 3);
+});
 
 test("default-disabled capsule injects one source-bound reserve file without changing original input", async (t) => {
 	const f = await reserveFixture(t);
@@ -348,6 +364,16 @@ test("all performs an exact post-run reserve adoption readback", async (t) => {
 		runCapsule(f.manifest, "all", f.source, () => stale),
 		/CAPSULE_RESERVE_ADOPTION_MISMATCH/,
 	);
+});
+
+test("disabling reserves requires post-run adoption and a source-bound readback", async (t) => {
+	const f = await reserveFixture(t, false);
+	await writeFile(join(f.source, "deploy/ack/redeploy.sh"), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o700 });
+	const success = await runCapsule(f.manifest, "all", f.source, f.readWorker);
+	assert.equal(success.reserve.mountedInputVerified, true);
+	const stale = { ...f.actual, configuration: { ...f.actual.configuration, revision: 1 } };
+	await assert.rejects(runCapsule(f.manifest, "all", f.source, () => stale), /CAPSULE_RESERVE_ADOPTION_MISMATCH/);
+	await assert.rejects(runCapsule(f.manifest, "all", f.source, () => ({ ...f.actual, sourceSha: undefined })), /CAPSULE_RESERVE_ADOPTION_MISMATCH/);
 });
 
 for (const scenario of [

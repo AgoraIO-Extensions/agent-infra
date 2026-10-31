@@ -4,6 +4,7 @@ import { lstat, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/pr
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { privateJson } from "./private-input.ts";
+import { sessionSandboxReserveDigestV1 } from "../../packages/platform-core/src/session-sandbox-reserves.ts";
 import {
 	prepareReserveInput,
 	readReserveWorker,
@@ -106,9 +107,7 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 			readJson: async (file) => original(await privateJson(file)),
 			readWorker,
 		});
-		const bootstrap = files.get(bootstrapReference);
-		const worker = bootstrap.objects.find((object: any) => object.kind === "Secret" && object.name === reserve!.workerSecretName);
-		worker.files["session-reserves.json"] = input.environment.ACK_SESSION_RESERVES_FILE;
+		assert(sessionSandboxReserveDigestV1(files.get(reserveReference)) === reserve.receipt.configHash, "CAPSULE_RESERVE_INPUT_CHANGED");
 	}
 	// All inputs are checked before creating a generated run or invoking any deployment command.
 	const runDirectory = await mkdtemp(join(canonicalRoot, ".resolved-"));
@@ -135,7 +134,22 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 	for (const [relative, value] of files) {
 		const target = resolvedFiles.get(relative)!;
 		await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-		await writeFile(target, `${JSON.stringify(materialize(value), null, 2)}\n`, { mode: 0o600, flag: "wx" });
+		const resolved = materialize(value);
+		if (reserve && target === materialize(input.environment.ACK_BOOTSTRAP_INPUTS_FILE)) {
+			const worker = resolved.objects.find((object: any) => object.kind === "Secret" && object.name === reserve.workerSecretName);
+			if (reserve.observed?.storedReserveBytes) {
+				const baseline = join(runDirectory, ".session-reserves-before.json");
+				assert(!files.has(".session-reserves-before.json"), "CAPSULE_RESERVE_INPUT_CONFLICT");
+				await writeFile(baseline, reserve.observed.storedReserveBytes, { mode: 0o600, flag: "wx" });
+				worker.files["session-reserves.json"] = baseline;
+			} else if (reserve.observed) {
+				// Bootstrap verifies the existing Secret; runtime-inputs publishes the candidate later.
+				assert(worker.files["session-reserves.json"] === undefined, "CAPSULE_RESERVE_BASELINE_MISSING");
+			} else {
+				worker.files["session-reserves.json"] = materialize(input.environment.ACK_SESSION_RESERVES_FILE);
+			}
+		}
+		await writeFile(target, `${JSON.stringify(resolved, null, 2)}\n`, { mode: 0o600, flag: "wx" });
 	}
 	const environment: Record<string, string> = { ACK_SOURCE_SHA: sourceSha };
 	for (const [name, value] of Object.entries(materialize(input.environment))) environment[name] = Array.isArray(value) ? value.join("\n") : value as string;
@@ -150,10 +164,10 @@ export async function runCapsule(manifest: string, command: string, sourceRoot: 
 	const child = spawn("bash", [join(sourceRoot, "deploy/ack/redeploy.sh"), command], { cwd: sourceRoot, env: { ...inherited, ...environment }, stdio: "inherit" });
 	const exitCode = await new Promise<number>((resolve, reject) => { child.once("error", reject); child.once("exit", (code) => resolve(code ?? 1)); });
 	let mountedInputVerified = false;
-	if (exitCode === 0 && reserve?.receipt.enabled && ["all", "runtime-inputs", "provision", "validate"].includes(command)) {
+	if (exitCode === 0 && reserve && ["all", "runtime-inputs", "provision", "validate"].includes(command)) {
 		const bootstrap = JSON.parse(await readFile(environment.ACK_BOOTSTRAP_INPUTS_FILE!, "utf8"));
 		const actual = (readWorker ?? readReserveWorker)(environment, bootstrap, reserve.workerSecretName);
-		assert(actual?.configurationHash === reserve.receipt.configHash && actual.configuration?.revision === reserve.receipt.revision && actual.configuration?.enabled === reserve.receipt.enabled && (actual.sourceSha === undefined || actual.sourceSha === reserve.receipt.sourceSha), "CAPSULE_RESERVE_ADOPTION_MISMATCH");
+		assert(actual?.configurationHash === reserve.receipt.configHash && actual.configuration?.revision === reserve.receipt.revision && actual.configuration?.enabled === reserve.receipt.enabled && actual.sourceSha === reserve.receipt.sourceSha, "CAPSULE_RESERVE_ADOPTION_MISMATCH");
 		mountedInputVerified = true;
 	}
 	return { schemaVersion: 1, kind: "ack-portable-capsule", sourceSha, inputCount, command, exitCode, ...(reserve ? { reserve: { ...reserve.receipt, mountedInputVerified } } : {}) };
