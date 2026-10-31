@@ -39,11 +39,8 @@ metadata:
     app.kubernetes.io/component: platform-worker
 spec:
   replicas: 1
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+  # A single Worker must not overlap itself while claiming queued work.
+  strategy: {type: Recreate}
   selector:
     matchLabels:
       app.kubernetes.io/name: agent-infra

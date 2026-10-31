@@ -29,9 +29,10 @@ test("ACK API and Worker keep one serving Pod during a rollout", () => {
 		"agent-infra-api",
 		"agent-infra-worker",
 	]);
-	for (const deployment of deployments) {
-		assert.equal(deployment.strategy?.type, "RollingUpdate");
-		assert.equal(deployment.strategy?.rollingUpdate?.maxUnavailable, 0);
-		assert.equal(deployment.strategy?.rollingUpdate?.maxSurge, 1);
-	}
+	const api = deployments.find(({ name }) => name === "agent-infra-api");
+	assert.equal(api?.strategy?.type, "RollingUpdate");
+	assert.equal(api?.strategy?.rollingUpdate?.maxUnavailable, 0);
+	assert.equal(api?.strategy?.rollingUpdate?.maxSurge, 1);
+	const worker = deployments.find(({ name }) => name === "agent-infra-worker");
+	assert.equal(worker?.strategy?.type, "Recreate");
 });
