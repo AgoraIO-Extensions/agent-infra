@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
 	buildCodexModelCatalog,
 	sha256,
@@ -58,14 +59,39 @@ async function removeIsolatedTree(path) {
 	await rm(path, { recursive: true, force: true });
 }
 
-async function downloadBytes(url, expected) {
-	const response = await fetch(url, { signal: AbortSignal.timeout(300_000) });
-	if (!response.ok) throw new Error("Codex release asset unavailable");
-	const bytes = Buffer.from(await response.arrayBuffer());
-	if (sha256(bytes) !== expected) {
-		throw new Error("Codex release asset checksum mismatch");
+const downloadBudgetMs = 300_000;
+const downloadAttempts = 3;
+const retryableTransportCodes = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT"]);
+function retryableTransportError(error) {
+	const seen = new Set();
+	for (let current = error; current && !seen.has(current); current = current.cause) {
+		seen.add(current);
+		if (retryableTransportCodes.has(current.code)) return true;
 	}
-	return bytes;
+	return false;
+}
+async function downloadBytes(url, expected) {
+	const signal = AbortSignal.timeout(downloadBudgetMs);
+	const unavailable = new Error("Codex release asset unavailable");
+	for (let attempt = 1; attempt <= downloadAttempts; attempt++) {
+		try {
+			const response = await fetch(url, { signal });
+			if (!response.ok) {
+				await response.body?.cancel().catch(() => undefined);
+				throw unavailable;
+			}
+			const bytes = Buffer.from(await response.arrayBuffer());
+			if (sha256(bytes) !== expected) throw new Error("Codex release asset checksum mismatch");
+			return bytes;
+		} catch (error) {
+			if (error === unavailable || error?.message === "Codex release asset checksum mismatch") throw error;
+			if (signal.aborted || !retryableTransportError(error) || attempt === downloadAttempts)
+				throw new Error("Codex release asset download failed");
+			try { await delay(250 * attempt, undefined, { signal }); }
+			catch { throw new Error("Codex release asset download failed"); }
+		}
+	}
+	throw new Error("Codex release asset download failed");
 }
 
 async function download(url, expected, path) {
