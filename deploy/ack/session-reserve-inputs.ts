@@ -169,9 +169,11 @@ export async function prepareReserveInput(environment: Record<string, string>, s
 	let actual: ReserveWorker | null;
 	let legacyReadbackUnavailable = false;
 	try {
-		actual = options.readWorker
+		actual = configuration.enabled || options.readWorker !== undefined
+			? options.readWorker
 			? options.readWorker(environment, bootstrap, worker.name)
-			: readReserveWorker(environment, bootstrap, worker.name, options.kubectl, { requireAdoption: options.requireAdoption !== false });
+			: readReserveWorker(environment, bootstrap, worker.name, options.kubectl, { requireAdoption: options.requireAdoption !== false })
+			: null;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "";
 		if (!configuration.enabled && message === "RESERVE_READBACK_UNAVAILABLE") {
@@ -179,8 +181,7 @@ export async function prepareReserveInput(environment: Record<string, string>, s
 			legacyReadbackUnavailable = true;
 		} else throw error;
 	}
-	if (actual && options.readWorker === undefined && environment.ACK_SOURCE_SHA !== undefined)
-		assert(actual.sourceSha === environment.ACK_SOURCE_SHA, "CAPSULE_RESERVE_SOURCE_READBACK_MISMATCH");
+	if (actual) assert(actual.sourceSha === sourceSha, "CAPSULE_RESERVE_SOURCE_READBACK_MISMATCH");
 	if (configuration.enabled) assert(actual, "CAPSULE_RESERVE_APPROVED_WORKER_REQUIRED");
 	if (existingReserveBinding !== undefined && existingReserveBinding !== environment.ACK_SESSION_RESERVES_FILE) {
 		const baselineBytes = options.baselineReserveBytes ?? await privateBytes(existingReserveBinding);

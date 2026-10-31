@@ -186,7 +186,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		}, sourceSha, {
 			workerSecretName: worker.secretName,
 			requireAdoption: false,
-			readWorker: (environment, input, name) => readReserveWorker(environment, input, name, kubectl, false),
+			readWorker: (environment, input, name) => readReserveWorker({ ...environment, ACK_SOURCE_SHA: sourceSha }, input, name, kubectl, false),
 		});
 		const bytes = await privateBytes(files.reserves);
 		const target = workerSecret.files["session-reserves.json"] ?? files.reserves;

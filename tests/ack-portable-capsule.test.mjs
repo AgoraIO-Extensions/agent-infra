@@ -400,7 +400,7 @@ test("disabling reserves requires post-run adoption and a source-bound readback"
 			...f.actual,
 			sourceSha: undefined,
 		})),
-		/CAPSULE_RESERVE_ADOPTION_MISMATCH/,
+		/CAPSULE_RESERVE_SOURCE_READBACK_MISMATCH/,
 	);
 });
 
