@@ -169,6 +169,81 @@ test("the runner invokes the existing workflow without shell interpolation and r
 	);
 });
 
+test("successful runtime stages promote generated JSON inputs and preserve the source template", async (t) => {
+	const f = await fixture(t);
+	const template = { schemaVersion: 1, sourceSha: f.sourceSha, templates: [] };
+	await mkdir(join(f.capsule, "state"), { mode: 0o700 });
+	await f.save("state/template-validations.json", template);
+	f.value.inputs.push("state/template-validations.json");
+	f.value.environment.ACK_TEMPLATE_VALIDATIONS_FILE =
+		"@CAPSULE_ROOT@/state/template-validations.json";
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		`#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == runtime-inputs ]]
+cat > "$ACK_TEMPLATE_VALIDATIONS_FILE" <<'JSON'
+{"schemaVersion":1,"sourceSha":"${f.sourceSha}","templates":[{"templateId":"codex"}]}
+JSON
+`,
+		{ mode: 0o700 },
+	);
+	await f.save("capsule.json", f.value);
+	const before = await readFile(
+		join(f.capsule, "state/template-validations.json"),
+	);
+	const result = await runCapsule(f.manifest, "runtime-inputs", f.source);
+	assert.equal(result.exitCode, 0);
+	assert.deepEqual(
+		await readFile(join(f.capsule, "state/template-validations.json")),
+		Buffer.from(
+			`{"schemaVersion":1,"sourceSha":"${f.sourceSha}","templates":[{"templateId":"codex"}]}\n`,
+		),
+	);
+	assert.notDeepEqual(
+		await readFile(join(f.capsule, "state/template-validations.json")),
+		before,
+	);
+	assert.deepEqual(result.promotedInputs, ["state/template-validations.json"]);
+});
+
+for (const command of ["bootstrap-credential", "provision"]) {
+	test(`${command} promotes its declared generated input`, async (t) => {
+		const f = await fixture(t);
+		const relative =
+			command === "bootstrap-credential"
+				? "inputs/credential.json"
+				: "inputs/requests.json";
+		await mkdir(join(f.capsule, "inputs"), { mode: 0o700 });
+		await f.save(relative, { original: true });
+		f.value.inputs.push(relative);
+		f.value.environment[
+			command === "bootstrap-credential"
+				? "ACK_CREDENTIAL_BOOTSTRAP_FILE"
+				: "ACK_AGENT_REQUESTS_FILE"
+		] = `@CAPSULE_ROOT@/${relative}`;
+		await writeFile(
+			join(f.source, "deploy/ack/redeploy.sh"),
+			`#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == ${command} ]]
+cat > "${command === "bootstrap-credential" ? "$ACK_CREDENTIAL_BOOTSTRAP_FILE" : "$ACK_AGENT_REQUESTS_FILE"}" <<'JSON'
+{"generated":true}
+JSON
+`,
+			{ mode: 0o700 },
+		);
+		await f.save("capsule.json", f.value);
+		const result = await runCapsule(f.manifest, command, f.source);
+		assert.equal(result.exitCode, 0);
+		assert.deepEqual(
+			JSON.parse(await readFile(join(f.capsule, relative), "utf8")),
+			{ generated: true },
+		);
+		assert.deepEqual(result.promotedInputs, [relative]);
+	});
+}
+
 async function reserveFixture(t, enabled = false) {
 	const f = await fixture(t);
 	const resources = {

@@ -333,7 +333,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		assert(["plan", "apply"].includes(mode) && source && kubeconfig && namespace);
 		assert((await privateJson(bootstrap)).namespace === namespace);
 		const run: Kubectl = (args, input) => execFileSync("kubectl", ["--kubeconfig", kubeconfig, ...args], {
-			input, encoding: "utf8", timeout: args.includes("rollout") ? 310_000 : 30_000,
+			input, encoding: "utf8", timeout: args.includes("rollout") ? 310_000 : args.includes("exec") ? 60_000 : 30_000,
 			maxBuffer: 16 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
 		});
 		const result = await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, await readFile(rendered, "utf8"), source, run, mode === "apply");

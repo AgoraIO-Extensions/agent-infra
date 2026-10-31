@@ -8,6 +8,7 @@ import {
 } from "../../packages/platform-core/src/session-sandbox-reserves.ts";
 import { privateBytes, privateJson } from "./private-input.ts";
 import { validateCapacityBindings } from "./workload-capacity.ts";
+import { posix } from "node:path";
 
 type Json = Record<string, any>;
 type ReadJson = (file: string) => Promise<Json>;
@@ -53,7 +54,12 @@ function workerConfigurationMount(pod: Json, secretName: string) {
 			if (typeof module !== "string" || !module.startsWith("file:///")) continue;
 			const modulePath = decodeURIComponent(new URL(module).pathname);
 			const expected = mount.mountPath.endsWith(`/${mount.subPath}`) ? mount.mountPath : (mount.mountPath.endsWith("/") ? `${mount.mountPath}${mount.subPath}` : `${mount.mountPath}/${mount.subPath}`);
-			if (modulePath !== expected) continue;
+			// The ACK chart starts `deployment.mjs`, which imports the separately mounted
+			// `configuration.mjs` subPath. Older local fixtures used the configuration
+			// module itself as the entrypoint; accept both while keeping the same Secret
+			// volume, readOnly mount and exact subPath binding.
+			const deploymentModule = posix.join(posix.dirname(expected), "deployment.mjs");
+			if (modulePath !== expected && modulePath !== deploymentModule) continue;
 			assert(typeof mount.subPath === "string" && /^[A-Za-z0-9._-]+$/u.test(mount.subPath), "CAPSULE_RESERVE_CONFIGURATION_MOUNT_INVALID");
 			return { containerName: container.name, key: mount.subPath, mount, volume };
 		}
@@ -79,7 +85,7 @@ export function readReserveWorker(environment: Record<string, string>, bootstrap
 	const requireAdoption = typeof options === "boolean" ? options : options.requireAdoption !== false;
 	const { ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace } = environment;
 	assert(kubeconfig && namespace);
-	const kubectl = execute ?? ((args: string[], input?: string) => execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=20s", "-n", namespace, ...args], { input, encoding: "utf8", timeout: 30_000, maxBuffer: 2 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] }));
+	const kubectl = execute ?? ((args: string[], input?: string) => execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=45s", "-n", namespace, ...args], { input, encoding: "utf8", timeout: 60_000, maxBuffer: 2 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] }));
 	const namespaceBytes = kubectl(["get", "namespace", namespace, "--ignore-not-found", "-o", "json"]);
 	if (!namespaceBytes.trim()) return null;
 	const ns = JSON.parse(namespaceBytes);
@@ -193,7 +199,13 @@ export async function prepareReserveInput(environment: Record<string, string>, s
 	if (configuration.profiles.length > 0) {
 		if (actual) {
 			const capacity = await readJson(environment.ACK_WORKLOAD_CAPACITY_FILE);
-			assert.deepEqual(actual.policy.resources, capacity.resources, "CAPSULE_RESERVE_RESOURCE_POLICY_DRIFT");
+			// Workload policy also carries ephemeral-storage, while the portable
+			// capacity contract intentionally binds the CPU/memory pair only.
+			const comparable = (value: Json) => ({
+				requests: { cpu: value?.requests?.cpu, memory: value?.requests?.memory },
+				limits: { cpu: value?.limits?.cpu, memory: value?.limits?.memory },
+			});
+			assert.deepEqual(comparable(actual.policy.resources), comparable(capacity.resources), "CAPSULE_RESERVE_RESOURCE_POLICY_DRIFT");
 			assert.equal(actual.policy.resourceProfileRef, capacity.resourceProfileRef, "CAPSULE_RESERVE_RESOURCE_POLICY_DRIFT");
 			for (const cost of configuration.resourceCosts) assert.deepEqual(cost.resources, actual.resourceCosts, "CAPSULE_RESERVE_COST_UNVERIFIED");
 		}

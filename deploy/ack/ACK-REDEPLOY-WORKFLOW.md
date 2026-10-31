@@ -79,6 +79,19 @@ Worker 自身或独立 Runtime preflight 位于 ECI，均不能代替业务 Sess
 其他已声明阶段；所有原有 source/image、ownership 和破坏性清理门禁继续执行。不要把含凭证的
 输入包或 `.resolved-*` 目录提交到 Git、PR 或共享文档。
 
+每轮成功阶段只 promotion 自己声明的生成输入：`bootstrap-login`/`all` 回写当前蓝图，
+`template-preflight`/`runtime-inputs` 回写模板 validation、capacity 和 bootstrap JSON。
+promotion 先比较 canonical 文件在本轮开始时的字节；期间被其他进程改动就以
+`CAPSULE_OUTPUT_LOCAL_DRIFT` 失败，不能覆盖手工输入。原始模板保持不变，receipt 返回本轮
+实际回写的相对路径，下一阶段直接消费同一组来源/身份/容量事实。
+
+`deploy` 在 Helm 写入前还会检查 API/Worker `configuration.mjs` 的活动 RuntimeHost 和四模板
+digest 是否与当前 source-bound manifest 一致。配置仍指向旧 digest 时会生成固定的
+`CONFIG_RUNTIME_DIGEST_MISMATCH` 或 `CONFIG_TEMPLATE_DIGEST_MISMATCH`，停在 preflight，
+不会先切换镜像再让 Worker CrashLoop。reserve readback 绑定同一个只读 Secret volume、
+`configuration.mjs` subPath 以及 chart 的 `deployment.mjs` entrypoint；任一绑定缺失或跨 Secret
+都拒绝。
+
 清理计划的 installation ID 必须与待删除 namespace 的 `agent-infra.agora.io/bootstrap-id`
 一致。它是 `bootstrap-inputs` 写入的安装归属；fresh 输入包中的新 installation ID 不能代替
 旧环境的清理身份。cluster UID 和 namespace UID 仍须与现场完全一致。

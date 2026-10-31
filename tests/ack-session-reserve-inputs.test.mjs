@@ -41,10 +41,14 @@ async function fixture(t, scenario = "ok") {
 		JSON.stringify({ namespaceReads: 0, secretReads: 0 }),
 		{ mode: 0o600 },
 	);
+	const deploymentEntrypoint = scenario === "deployment-entrypoint";
+	const configurationKey = deploymentEntrypoint
+		? "configuration.mjs"
+		: "custom.mjs";
 	const secretData = {
-		"custom.mjs": Buffer.from("export const configuration = {};\n").toString(
-			"base64",
-		),
+		[configurationKey]: Buffer.from(
+			"export const configuration = {};\n",
+		).toString("base64"),
 		"session-reserves.json": Buffer.from(JSON.stringify(reserve)).toString(
 			"base64",
 		),
@@ -74,6 +78,10 @@ async function fixture(t, scenario = "ok") {
 		},
 		resourceCosts: { cpuMillis: 1000, memoryBytes: 1024, storageBytes: 1024 },
 	};
+	if (scenario === "ephemeral-storage") {
+		actual.policy.resources.requests["ephemeral-storage"] = "1Ki";
+		actual.policy.resources.limits["ephemeral-storage"] = "1Ki";
+	}
 	if (scenario === "missing-source") delete actual.sourceSha;
 	const pod = {
 		metadata: {
@@ -97,14 +105,18 @@ async function fixture(t, scenario = "ok") {
 					env: [
 						{
 							name: "PLATFORM_WORKER_DEPLOYMENT_MODULE",
-							value: "file:///app/dist/custom.mjs",
+							value: deploymentEntrypoint
+								? "file:///app/dist/deployment.mjs"
+								: "file:///app/dist/custom.mjs",
 						},
 					],
 					volumeMounts: [
 						{
 							name: "worker-config",
-							mountPath: "/app/dist/custom.mjs",
-							subPath: "custom.mjs",
+							mountPath: deploymentEntrypoint
+								? "/app/dist/configuration.mjs"
+								: "/app/dist/custom.mjs",
+							subPath: configurationKey,
 							readOnly: true,
 						},
 						{
@@ -248,6 +260,17 @@ test("production readback accepts the full Secret hash and dynamic configuration
 	assert.equal(actual.configuration?.revision, 2);
 	assert.equal(actual.sourceSha, sourceSha);
 	assert(actual.storedReserveBytes instanceof Uint8Array);
+});
+
+test("production readback accepts the ACK chart deployment entrypoint", async (t) => {
+	const actual = await runReadback(t, "deployment-entrypoint");
+	assert.equal(actual.configuration?.revision, 2);
+	assert.equal(actual.sourceSha, sourceSha);
+});
+
+test("production readback ignores the workload-only ephemeral-storage field", async (t) => {
+	const actual = await runReadback(t, "ephemeral-storage");
+	assert.equal(actual.configuration?.revision, 2);
 });
 
 for (const scenario of [
