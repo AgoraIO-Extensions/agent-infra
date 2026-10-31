@@ -266,7 +266,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		process.stdout.write(`${JSON.stringify(result)}\n`);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "";
-		const failureCode = /^[A-Z][A-Z0-9_]*$/u.test(message) ? message : "RUNTIME_INPUTS_INVALID";
+		const failureCode = /^[A-Z][A-Z0-9_]{0,63}$/u.test(message) ? message : "RUNTIME_INPUTS_INVALID";
 		const mutationStatus = error && typeof error === "object" &&
 			typeof (error as { runtimeInputMutationStatus?: unknown }).runtimeInputMutationStatus === "string"
 			? (error as { runtimeInputMutationStatus: RuntimeInputMutationStatus }).runtimeInputMutationStatus
