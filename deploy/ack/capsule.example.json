@@ -14,6 +14,7 @@
     "credential-bootstrap.json",
     "agent-requests.json",
     "cleanup-plan.json",
+    "session-reserves.json",
     "custom/own-single.json",
     "custom/own-multi.json"
   ],
@@ -40,6 +41,7 @@
     "ACK_CREDENTIAL_BOOTSTRAP_FILE": "@CAPSULE_ROOT@/credential-bootstrap.json",
     "ACK_AGENT_REQUESTS_FILE": "@CAPSULE_ROOT@/agent-requests.json",
     "ACK_CLEANUP_PLAN_FILE": "@CAPSULE_ROOT@/cleanup-plan.json",
+    "ACK_SESSION_RESERVES_FILE": "@CAPSULE_ROOT@/session-reserves.json",
     "ACK_AGENT_STATE_DIR": "@CAPSULE_ROOT@/state",
     "ACK_BROWSER_BLUEPRINT_DIR": "@CAPSULE_ROOT@/browser",
     "ACK_CUSTOM_AGENT_CONFIGS": [

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { RuntimeOAuthConfigurationV1Schema } from "@agent-infra/contracts/runtime";
 import type {
 	AgentDefaultRelayKeyEndpointPolicyV1,
@@ -208,7 +209,7 @@ function resolveConnectionInstallation(
 // Deployment-owned code supplies current IdentityAdapter facts and Worker-only material.
 // The adjacent configuration.mjs is mounted by the deployment, never bundled into the image.
 const {
-	sessionSandboxReserves: configuredSessionSandboxReserves,
+	sessionSandboxReserves: configuredSessionSandboxReservesFromModule,
 	evaluationPolicy,
 	workloadInput: configuredWorkloadInput,
 	signing,
@@ -233,6 +234,29 @@ const {
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
 
+function reserveConfigurationFromDeploymentFile():
+	| SessionSandboxReserveConfigurationV1
+	| undefined {
+	const file =
+		process.env.PLATFORM_WORKER_SESSION_RESERVES_FILE ??
+		"/var/run/agent-infra/deployment/session-reserves.json";
+	if (!existsSync(file)) {
+		if (process.env.PLATFORM_WORKER_SESSION_RESERVES_FILE !== undefined)
+			throw new Error("SESSION_RESERVE_DEPLOYMENT_CONFIGURATION_MISSING");
+		return undefined;
+	}
+	try {
+		return JSON.parse(
+			readFileSync(file, "utf8"),
+		) as SessionSandboxReserveConfigurationV1;
+	} catch {
+		throw new Error("SESSION_RESERVE_DEPLOYMENT_CONFIGURATION_INVALID");
+	}
+}
+
+const configuredSessionSandboxReserves =
+	configuredSessionSandboxReservesFromModule ??
+	reserveConfigurationFromDeploymentFile();
 const sessionSandboxReserves =
 	configuredSessionSandboxReserves === undefined
 		? undefined

@@ -31,6 +31,10 @@ set -euo pipefail
 [[ "$ACK_PUBLIC_ORIGIN" == 'https://platform.example.test' ]]
 [[ "$ACK_KUBECONFIG" == *'private inputs/kubeconfig' ]]
 [[ -r "$ACK_BOOTSTRAP_INPUTS_FILE" ]]
+if [[ -n "\${ACK_SESSION_RESERVES_FILE+x}" ]]; then
+  [[ -r "$ACK_SESSION_RESERVES_FILE" ]]
+  grep -q 'session-reserves.json' "$ACK_BOOTSTRAP_INPUTS_FILE"
+fi
 [[ -z "\${ACK_RUNTIME_IMAGE_MANIFEST+x}" ]]
 [[ -z "\${ACK_CHART_DIR+x}" ]]
 printf '%s\\n' "$1" > "$ACK_EVIDENCE_DIR/executed"
@@ -159,6 +163,31 @@ test("the runner invokes the existing workflow without shell interpolation and r
 		runCapsule(f.manifest, "plan; touch unwanted", f.source),
 		/CAPSULE_COMMAND_INVALID/,
 	);
+});
+
+test("capsule injects the private reserve file into the deployment-owned Worker Secret", async (t) => {
+	const f = await fixture(t);
+	await f.save("session-reserves.json", {
+		schemaVersion: 1,
+		enabled: false,
+		revision: 2,
+		namespace: "agent-infra",
+	});
+	await f.save("bootstrap.json", {
+		objects: [
+			{
+				kind: "Secret",
+				name: "test-worker-configuration",
+				files: { "configuration.mjs": "@CAPSULE_ROOT@/credential" },
+			},
+		],
+	});
+	f.value.inputs = ["bootstrap.json", "request.json", "session-reserves.json"];
+	f.value.environment.ACK_SESSION_RESERVES_FILE =
+		"@CAPSULE_ROOT@/session-reserves.json";
+	await f.save("capsule.json", f.value);
+	const result = await runCapsule(f.manifest, "plan", f.source);
+	assert.equal(result.exitCode, 0);
 });
 
 for (const scenario of [
