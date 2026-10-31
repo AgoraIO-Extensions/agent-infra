@@ -93,6 +93,7 @@ source/template/image 和实际 Pod UID 哈希，记录创建、容器启动、R
 | 现象 | 根因 | 固化到工作流的规则 |
 | --- | --- | --- |
 | 发布日志含 Docker healthcheck 警告，被误判为构建失败 | 完整相位日志显示四模板已成功构建、探测及 push；实际退出在 RuntimeHost push，原命令又隐藏了 stderr | 按 build/probe/push/readback 分段归因；push 只输出固定错误类别和来源信息，不打印原始错误。出现警告不能代替定位退出命令，也不能以升级 Action 或重跑成功倒推根因 |
+| 固定 OpenCode arm64 下载在收到部分归档后因连接被远端关闭而失败 | 安装器原来只做一次 fetch/arrayBuffer，未对可重试的 `UND_ERR_SOCKET` 保留总预算内的重试 | 固定版本、URL、TLS 和 SHA-256/SHA-512/可执行文件校验保持不变；仅对明确的连接中断做最多三次有界重试，丢弃部分字节，HTTP/TLS/校验错误立即失败。Hosted 构建与本地网络失败分开记录 |
 | 模板能 push，已有 RuntimeHost package 却无法发布 | 不同 GHCR package 的来源关联和 Actions 写入权限可能不同；OCI source label 不会自动修复已有 package 的授权 | 核对目标 package 的仓库关联与 Actions 权限，镜像声明 source label；用 `smoke=true` 的独立标签实际执行四模板、RuntimeHost、自定义 base 和双架构索引。单个模板成功不能代替全链路成功 |
 | 后续镜像失败后，已写出的模板收据也丢失 | artifact 上传步骤默认仅在前置步骤成功时执行 | 未取消的失败运行也保留部分收据，并按 attempt 隔离；索引 job 仍要求两个架构完整成功，部分收据只作诊断 |
 | 使用包的 source 关联作为 Actions 权限门禁 | 仓库关联与显式 Actions Write 独立；未关联或首次发布不等于没有写权限 | 不把 metadata 回读当作权限判定；真实 push 验证写入，允许 package admin 仅授予目标仓库 Write |
