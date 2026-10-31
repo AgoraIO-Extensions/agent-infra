@@ -39,6 +39,7 @@ metadata:
     app.kubernetes.io/component: platform-worker
 spec:
   replicas: 1
+  # A single Worker must not overlap itself while claiming queued work.
   strategy: {type: Recreate}
   selector:
     matchLabels:
