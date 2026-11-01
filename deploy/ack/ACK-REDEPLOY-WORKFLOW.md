@@ -330,6 +330,16 @@ Deployment mount，再带 resourceVersion 更新，回读 Secret 后让 API/Work
 完成后还必须通过 Worker 的 mounted-capacity gate。此步骤不改变角色授权，也不代表真实模型
 或完整重建验收已经通过。
 
+Custom `platform-adapter` 的第一份容量收据不能由 Platform Agent 反向产生，否则会形成“创建前
+要求 capacity、测量又要求已创建 Agent”的循环。`custom-model-preflight.mts` 提供独立测量 seam：
+它只创建带 ownership/source label 的临时 Runtime Pod，不创建 Platform Agent、Session、Service、
+Ingress 或数据库记录；测量请求使用 custom HTTP V3 与 Worker Runtime Grant V2 application principal，
+不使用标准模板 V4 `keyBinding`、`executionSource` 或 Relay Key。成功时生成
+`isolated-custom-runtime-capacity` 收据，绑定 source、不可变 child digest、实际 Pod UID/资源、单次
+真实模型完成事实、回复摘要和 `maximumConcurrentExecutions=1`；失败、unknown、错误 Grant、跨绑定或
+清理失败均保留有界失败证据并拒绝接入。该收据随后才可进入 `runtime-inputs` 和正式 `provision`，
+不能用 Pod Ready、fixture 或手工数据库行替代。
+
 运行中的 API/Worker configuration Secret 禁止手工 `kubectl delete/create`。删除会让挂载窗口
 变成 `FailedMount`，并可能令登录和首屏请求同时不可用；portable 流程只允许在同一 UID、同一
 bootstrap owner 下原地 `replace`，再等待 rollout。缺失、UID/owner 漂移、回读不一致或 rollout
@@ -570,6 +580,18 @@ Key 的候选 metadata，与会话模型目录是不同入口，配置前者不�
 纯 Pod-ready、任意文件、缺少模型事实或把容量扩大到测量上限以上都不能通过。
 更新配置后须等待 Worker rollout；已有 Agent 通过正式 lifecycle 重启重新生成 verified
 capacity，禁止手工写数据库补齐。
+
+隔离 producer 的 job 输入只引用仓库外的 kubeconfig、Grant 私钥和 Runtime service-token 文件，
+不把这些值写入收据。获准执行窗口可运行：
+
+```bash
+node --experimental-strip-types deploy/ack/custom-model-preflight.mts /private/ack/custom-capacity-job.json
+```
+
+该命令先创建带 owner/source 的临时 Pod，执行错误 token 与跨绑定拒绝，再通过 custom HTTP V3 /
+Grant V2 发送一条无工具副作用请求，回读完成事件、模型 fact、回复和实际资源，最后按同一 Pod UID
+删除 Pod/Secret。成功才写入 `isolated-custom-runtime-capacity` receipt；失败会原子留下失败回执，
+不会创建 Platform Agent、Session、Ingress 或数据库记录。
 
 ### 签发个人 API credential
 
