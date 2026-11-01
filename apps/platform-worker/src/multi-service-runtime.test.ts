@@ -920,7 +920,9 @@ describe("multi-service runtime operations", () => {
 		const identity = await operations.apply(value);
 		markWorkloadsReady(fake);
 		const rehydrated = desired(
-			JSON.parse(JSON.stringify(sortKeys(value.multiService))) as typeof manifest,
+			JSON.parse(
+				JSON.stringify(sortKeys(value.multiService)),
+			) as typeof manifest,
 		);
 		if (!isMultiService(rehydrated))
 			throw new Error("multi-service fixture rehydration invalid");
