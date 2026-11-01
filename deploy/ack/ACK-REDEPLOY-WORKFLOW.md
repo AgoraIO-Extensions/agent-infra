@@ -75,6 +75,14 @@ Worker 自身或独立 Runtime preflight 位于 ECI，均不能代替业务 Sess
 接受的换行列表。旧 shell 中的 ACK 配置不参与此次运行；删除确认只接受调用方明确设置的
 `ACK_CLEAN_CONFIRM` 和 `ACK_CLEAN_ALLOW_FOREIGN`，输入包不能内置这两个变量。
 
+启用 Session reserve 时，capsule 同时声明 `ACK_SESSION_RESERVE_PLAN_FILE` 和
+`ACK_SESSION_RESERVES_FILE`。前者是当前 source 下默认关闭的预算/策略文件，后者可指向同一
+输入文件。`all` 先完成 Agent provision，再按本轮 `agent-bindings.json` 中四个标准模板的
+ready ID 生成 enabled revision，并把同一份配置通过 `runtime-inputs` 发布到 API 与 Worker；
+它不会把历史 Agent ID 写回 capsule，也不会把生成后的 reserve 文件提升为下一轮的静态输入。
+最终 receipt 必须回读 Worker/API 的 Secret hash、revision、Pod/PVC UID 和未领取业务状态。
+custom ACP 与 self-managed 入口保持原冷路径，不进入 reserve profile。
+
 第三个参数可选择既有 `plan`、`deploy`、`bootstrap-login`、`runtime-inputs`、`provision`、`validate` 或
 其他已声明阶段；所有原有 source/image、ownership 和破坏性清理门禁继续执行。不要把含凭证的
 输入包或 `.resolved-*` 目录提交到 Git、PR 或共享文档。

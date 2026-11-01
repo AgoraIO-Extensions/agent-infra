@@ -55,6 +55,7 @@ Optional validation inputs:
   ACK_CREDENTIAL_BOOTSTRAP_FILE private browser storageState credential request
   ACK_LOGIN_BOOTSTRAP_FILE private existing login inputs and identity output binding
   ACK_CLEANUP_PLAN_FILE    private cluster/namespace ownership input for cleanup-plan
+  ACK_SESSION_RESERVE_PLAN_FILE private default-off reserve plan; all binds ready standard Agents before publication
   ACK_AGENT_STATE_DIR      external existing 0700 directory for private ID bindings
   ACK_BROWSER_BLUEPRINT_DIR private browser configs without a fixed Agent ID
   ACK_CAPTURE_DIR          external 0700 directory for read-only ACK input capture
@@ -427,6 +428,25 @@ validate_workload_capacity() {
 	fi
 }
 
+bind_session_reserves() {
+	[[ -n "${ACK_SESSION_RESERVE_PLAN_FILE:-}" && -n "${ACK_SESSION_RESERVES_FILE:-}" ]] || return 0
+	require_file ACK_SESSION_RESERVE_PLAN_FILE "$ACK_SESSION_RESERVE_PLAN_FILE"
+	require_file ACK_SESSION_RESERVES_FILE "$ACK_SESSION_RESERVES_FILE"
+	local profiles
+	profiles=$(node - "$ACK_WORKLOAD_CAPACITY_FILE" <<'NODE'
+const fs=require("node:fs");
+const value=JSON.parse(fs.readFileSync(process.argv[2],"utf8"));
+process.stdout.write(value.profilesFile);
+NODE
+)
+	if ! node --experimental-strip-types "$repo_root/deploy/ack/bind-session-reserves.ts" \
+		"$ACK_SESSION_RESERVE_PLAN_FILE" "$ACK_AGENT_STATE_DIR/agent-bindings.json" \
+		"$ACK_TEMPLATE_VALIDATIONS_FILE" "$ACK_WORKLOAD_CAPACITY_FILE" "$profiles" "$source_sha" \
+		>"$evidence_dir/session-reserve-bind.json"; then
+		die "fresh standard Agent bindings could not produce an approved reserve configuration"
+	fi
+}
+
 validate_template_receipts() {
 	local expectations=${ACK_TEMPLATE_VALIDATIONS_FILE:-}
 	require_file ACK_TEMPLATE_VALIDATIONS_FILE "$expectations"
@@ -686,12 +706,18 @@ case "$command" in
 		if [[ -n "${ACK_CUSTOM_CAPACITY_JOB_FILE:-}" ]]; then
 			custom_preflight
 		fi
-		runtime_inputs
 		if [[ -n "${ACK_CREDENTIAL_BOOTSTRAP_FILE:-}" ]]; then
 			bootstrap_credential
 		fi
-		node "$repo_root/deploy/ack/agent-bindings.ts" check "${ACK_AGENT_REQUESTS_FILE:-}" "${ACK_AGENT_STATE_DIR:-}" "${ACK_BROWSER_BLUEPRINT_DIR:-}" "$source_sha" >/dev/null
-		provision
+		if [[ -n "${ACK_SESSION_RESERVE_PLAN_FILE:-}" ]]; then
+			provision
+			bind_session_reserves
+			runtime_inputs
+		else
+			runtime_inputs
+			node "$repo_root/deploy/ack/agent-bindings.ts" check "${ACK_AGENT_REQUESTS_FILE:-}" "${ACK_AGENT_STATE_DIR:-}" "${ACK_BROWSER_BLUEPRINT_DIR:-}" "$source_sha" >/dev/null
+			provision
+		fi
 		validate
 		;;
 	*) usage; die "unknown command: $command" ;;

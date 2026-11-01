@@ -71,6 +71,20 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		throw new Error(
 			"configuration reload and template receipt gates are missing",
 		);
+	const chart = await readFile(
+		join(root, "deploy/ack/chart/templates/worker.yaml"),
+		"utf8",
+	);
+	if (!chart.includes("resources: [endpoints]\n    verbs: [get, list, watch]"))
+		throw new Error(
+			"Worker reserve readback requires namespaced Endpoints get permission",
+		);
+	if (
+		chart.match(
+			/resources: \[endpoints\][\s\S]{0,80}verbs: \[[^\]]*(create|delete|patch|update)/,
+		)
+	)
+		throw new Error("Worker Endpoints permission must remain read-only");
 	const allBlock = source.slice(source.indexOf("\n\tall)"));
 	if (
 		allBlock.indexOf("bootstrap_credential") >

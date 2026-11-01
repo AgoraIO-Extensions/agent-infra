@@ -19,7 +19,7 @@ const variables = new Set([
 	"ACK_TEMPLATE_IMAGE_MANIFEST", "ACK_TEMPLATE_PREFLIGHT_JOBS_FILE", "ACK_TEMPLATE_VALIDATIONS_FILE", "ACK_WORKLOAD_CAPACITY_FILE", "ACK_CUSTOM_CAPACITY_JOB_FILE",
 	"ACK_PUBLIC_ORIGIN", "ACK_CA_CERT_FILE", "ACK_EVIDENCE_DIR", "ACK_BOOTSTRAP_INPUTS_FILE", "ACK_CREDENTIAL_BOOTSTRAP_FILE",
 	"ACK_LOGIN_BOOTSTRAP_FILE", "ACK_AGENT_REQUESTS_FILE", "ACK_AGENT_STATE_DIR", "ACK_BROWSER_BLUEPRINT_DIR", "ACK_TEMPLATE_CONFIG_DIR",
-	"ACK_SESSION_RESERVES_FILE",
+	"ACK_SESSION_RESERVES_FILE", "ACK_SESSION_RESERVE_PLAN_FILE",
 	"ACK_CUSTOM_AGENT_CONFIGS", "ACK_CUSTOM_AGENT_PROBE", "ACK_CLEANUP_PLAN_FILE", "ACK_HELM_TIMEOUT", "NODE_EXTRA_CA_CERTS",
 ]);
 const capsulePrefix = "@CAPSULE_ROOT@/";
@@ -287,16 +287,27 @@ export async function runCapsule(manifest: string, command: string, sourceRoot: 
 	const child = spawn("bash", [join(sourceRoot, "deploy/ack/redeploy.sh"), command], { cwd: sourceRoot, env: { ...inherited, ...environment }, stdio: "inherit" });
 	const exitCode = await new Promise<number>((resolve, reject) => { child.once("error", reject); child.once("exit", (code) => resolve(code ?? 1)); });
 	let mountedInputVerified = false;
-	if (exitCode === 0 && reserve && ["all", "runtime-inputs", "provision", "validate"].includes(command)) {
+	let adoptedReserve = reserve;
+	if (exitCode === 0 && reserve && command === "all" && reserve.receipt.enabled === false) {
+		const resolved = await privateJson(environment.ACK_SESSION_RESERVES_FILE!);
+		if (resolved.enabled === true) {
+			const rebound = await prepareReserveInput(environment, sourceSha, {
+				readJson: privateJson,
+				readWorker,
+			});
+			adoptedReserve = { ...reserve, ...rebound, observed: rebound.actual, storedReserveBytes: rebound.storedReserveBytes };
+		}
+	}
+	if (exitCode === 0 && adoptedReserve && ["all", "runtime-inputs", "provision", "validate"].includes(command)) {
 		const bootstrap = JSON.parse(await readFile(environment.ACK_BOOTSTRAP_INPUTS_FILE!, "utf8"));
-		const actual = (readWorker ?? readReserveWorker)(environment, bootstrap, reserve.workerSecretName);
-		assert(actual?.configurationHash === reserve.receipt.configHash && actual.configuration?.revision === reserve.receipt.revision && actual.configuration?.enabled === reserve.receipt.enabled && actual.sourceSha === reserve.receipt.sourceSha, "CAPSULE_RESERVE_ADOPTION_MISMATCH");
-		const api = (readApi ?? readReserveApi)(environment, bootstrap, reserve.apiSecretName);
-		assert(api?.configurationHash === reserve.receipt.configHash && api.configuration?.revision === reserve.receipt.revision && api.configuration?.enabled === reserve.receipt.enabled && api.sourceSha === reserve.receipt.sourceSha, "CAPSULE_RESERVE_API_ADOPTION_MISMATCH");
+		const actual = (readWorker ?? readReserveWorker)(environment, bootstrap, adoptedReserve.workerSecretName);
+		assert(actual?.configurationHash === adoptedReserve.receipt.configHash && actual.configuration?.revision === adoptedReserve.receipt.revision && actual.configuration?.enabled === adoptedReserve.receipt.enabled && actual.sourceSha === adoptedReserve.receipt.sourceSha, "CAPSULE_RESERVE_ADOPTION_MISMATCH");
+		const api = (readApi ?? readReserveApi)(environment, bootstrap, adoptedReserve.apiSecretName);
+		assert(api?.configurationHash === adoptedReserve.receipt.configHash && api.configuration?.revision === adoptedReserve.receipt.revision && api.configuration?.enabled === adoptedReserve.receipt.enabled && api.sourceSha === adoptedReserve.receipt.sourceSha, "CAPSULE_RESERVE_API_ADOPTION_MISMATCH");
 		mountedInputVerified = true;
 	}
 	const promotedInputs = exitCode === 0 ? await promoteGeneratedInputs(materialized, command) : [];
-	return { schemaVersion: 1, kind: "ack-portable-capsule", sourceSha, inputCount, command, exitCode, promotedInputs, ...(reserve ? { reserve: { ...reserve.receipt, mountedInputVerified } } : {}) };
+	return { schemaVersion: 1, kind: "ack-portable-capsule", sourceSha, inputCount, command, exitCode, promotedInputs, ...(adoptedReserve ? { reserve: { ...adoptedReserve.receipt, mountedInputVerified } } : {}) };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
