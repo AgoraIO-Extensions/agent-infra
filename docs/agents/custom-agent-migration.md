@@ -5,6 +5,8 @@
 机器契约以 [Agent 管理 V2 OpenAPI](../../packages/contracts/artifacts/openapi/pilot-browser.v2.openapi.json)
 和[任务 V1 OpenAPI](../../packages/contracts/artifacts/openapi/pilot-browser.v1.openapi.json)为准。
 
+冻结版本的真实能力矩阵、复现步骤和限制见[API 迁入验收报告（2026-11-01）](custom-agent-migration-acceptance-20261101.md)。
+
 ## 选择交互入口
 
 | 本地应用的目标 | 创建时选择 | 业务验收入口 |
