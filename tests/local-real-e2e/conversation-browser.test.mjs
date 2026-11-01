@@ -11,10 +11,87 @@ import {
 	assistantDeliveryEvidence,
 	currentExecutionEvents,
 	currentExecutionFrames,
+	modelStartObservationMs,
 	restoredHistoryPreservesEvents,
 } from "./conversation-browser-validation.mjs";
 
 const script = join(import.meta.dirname, "conversation-browser.mjs");
+
+const modelStarted = {
+	eventId: "model-start-1",
+	executionId: "execution-1",
+	type: "execution.operation",
+	payload: { kind: "model", phase: "started" },
+};
+const modelStartedFrame = {
+	id: modelStarted.eventId,
+	executionId: modelStarted.executionId,
+	type: modelStarted.type,
+	at: 140.5,
+};
+
+test("model-start timing uses the first persisted attempt and earliest matching observation", () => {
+	const second = { ...modelStarted, eventId: "model-start-2" };
+	assert.equal(
+		modelStartObservationMs(
+			[modelStarted, second],
+			[
+				{ ...modelStartedFrame, at: 180 },
+				{ ...modelStartedFrame, id: second.eventId, at: 160 },
+				modelStartedFrame,
+			],
+			100,
+		),
+		40.5,
+	);
+	assert.equal(
+		modelStartObservationMs(
+			[modelStarted, second],
+			[{ ...modelStartedFrame, id: second.eventId, at: 160 }],
+			100,
+		),
+		null,
+	);
+});
+
+test("model-start timing cannot substitute intent, processing, completion or tool starts", () => {
+	for (const event of [
+		{ ...modelStarted, payload: { kind: "model", phase: "intent" } },
+		{ ...modelStarted, payload: { kind: "model", phase: "completed" } },
+		{ ...modelStarted, payload: { kind: "tool", phase: "started" } },
+		{
+			...modelStarted,
+			type: "execution.status",
+			payload: { status: "processing" },
+		},
+	]) {
+		assert.equal(
+			modelStartObservationMs([event], [modelStartedFrame], 100),
+			null,
+		);
+	}
+});
+
+test("model-start timing rejects absent, foreign and invalid-clock observations", () => {
+	for (const frame of [
+		{ ...modelStartedFrame, id: "unpersisted-event" },
+		{ ...modelStartedFrame, executionId: "another-execution" },
+		{ ...modelStartedFrame, type: "text.delta" },
+		{ ...modelStartedFrame, at: 99 },
+		{ ...modelStartedFrame, at: Number.NaN },
+		{ ...modelStartedFrame, at: Number.POSITIVE_INFINITY },
+	]) {
+		assert.equal(modelStartObservationMs([modelStarted], [frame], 100), null);
+	}
+	assert.equal(modelStartObservationMs([modelStarted], [], 100), null);
+	assert.equal(modelStartObservationMs([], [modelStartedFrame], 100), null);
+	for (const clickedAt of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+		assert.equal(
+			modelStartObservationMs([modelStarted], [modelStartedFrame], clickedAt),
+			null,
+		);
+	}
+});
 
 test("coalesced text and completion wait for the current reply to render after delivery", () => {
 	const frames = [
