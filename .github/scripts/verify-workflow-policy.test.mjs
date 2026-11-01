@@ -43,7 +43,7 @@ test("native gates reject dispatch, extra jobs, and expanded permissions", async
 test("publishes repository validation through the CI workflow and check", async () => {
   const workflows = await actualWorkflows();
   assert.equal(workflows["ci.yml"]?.name, "CI");
-  assert.equal(workflows["ci.yml"]?.jobs?.ci?.name, "CI");
+  assert.deepEqual(validateWorkflowDocuments(workflows), []);
   assert.equal(workflows["docs-ci.yml"], undefined);
 
   workflows["ci.yml"].jobs.ci.name = "Docs CI";
@@ -414,5 +414,23 @@ test("release policy rejects missing input validation and unbound Platform artif
     const workflows = await actualWorkflows();
     mutate(workflows["publish-images.yml"]);
     assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("raw source validation and attempt-bound")));
+  }
+});
+
+test("CI policy rejects weakened metadata routing and same-name skipped checks", async () => {
+  for (const mutate of [
+    (workflow) => { workflow.jobs.ci.name = "CI"; },
+    (workflow) => { workflow.jobs.ci.name = "${{ github.event.label.name != 'ci:skip' && 'CI metadata event ignored' || 'CI' }}"; },
+    (workflow) => { workflow.concurrency.group = "ci-${{ github.event.pull_request.number || github.ref }}"; },
+    (workflow) => { workflow.concurrency["cancel-in-progress"] = false; },
+    (workflow) => { workflow.jobs["ci-exemption"].if = "${{ true }}"; },
+    (workflow) => { workflow.jobs.changes.if = "${{ always() && !cancelled() }}"; },
+    (workflow) => { workflow.jobs.ci_heavy.if = workflow.jobs["ci-exemption"].if; },
+    (workflow) => { workflow.jobs.ci.if = "${{ false }}"; },
+    (workflow) => { workflow.jobs.ci.name = workflow.jobs.ci.name.replace("github.event.label.name != '' && ", ""); },
+  ]) {
+    const workflows = await actualWorkflows();
+    mutate(workflows["ci.yml"]);
+    assert(validateWorkflowDocuments(workflows).some((error) => error.startsWith("CI")));
   }
 });
