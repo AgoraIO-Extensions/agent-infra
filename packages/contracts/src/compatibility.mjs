@@ -2020,6 +2020,38 @@ function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// Adds the manifest-only custom Agent lifecycle command. Keep this additive:
+// the existing image command and all other lifecycle variants must remain
+// byte-for-byte compatible with the previous schema.
+function isCustomManifestLifecycleCommandOpenApiAddition(previous, current) {
+	const name = "AgentLifecycleCommandRequestV1";
+	const previousSchema = previous.components?.schemas?.[name];
+	const currentSchema = current.components?.schemas?.[name];
+	if (!previousSchema || !currentSchema) return false;
+	const branch = currentSchema.oneOf?.find(
+		(option) =>
+			option?.properties?.command?.const === "upgrade_custom_manifest",
+	);
+	if (
+		!branch ||
+		previousSchema.oneOf?.some(
+			(option) =>
+				option?.properties?.command?.const === "upgrade_custom_manifest",
+		) ||
+		createHash("sha256").update(JSON.stringify(branch)).digest("hex") !==
+			"4bf149881b4e6581445ef7a8f8bdeb8d39fc18b3c84a02306f73621e311a0d78"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.components.schemas[name].oneOf = normalized.components.schemas[
+		name
+	].oneOf.filter(
+		(option) =>
+			option?.properties?.command?.const !== "upgrade_custom_manifest",
+	);
+	return sameValue(previous, normalized);
+}
+
 // #2618 adds a disjoint accepted envelope to the existing lifecycle 202
 // response. It does not narrow the existing AgentProjectionV2 response.
 function isAgentLifecycleAcceptedResponseOpenApiAddition(previous, current) {
@@ -7292,6 +7324,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isApplicationCredentialGovernanceV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationDisableV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
+			!isCustomManifestLifecycleCommandOpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
 			!isMultiServiceResourceProfileOpenApiAddition(previous, current) &&
 			!isTemplateReadinessV2OpenApiAddition(previous, current) &&
