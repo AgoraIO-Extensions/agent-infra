@@ -135,3 +135,15 @@ curl --silent --show-error --fail-with-body \
 [sse]: https://github.com/AgoraIO-Extensions/agent-infra/issues/3786#issuecomment-6559420536
 [cancel]: https://github.com/AgoraIO-Extensions/agent-infra/issues/3854#issuecomment-6559421852
 [own]: https://github.com/AgoraIO-Extensions/agent-infra/issues/3837#issuecomment-6557583559
+
+## 后续 ACK 重建复核（source `a17531d4…`）
+
+B 后续重建使用 source `a17531d4c937575de272c785b70bc040c7d16345`。本段只记录后续复核，不回写或替代前一冻结 source 的原始证据：
+
+- API image `sha256:21bf388eec6420ff7f4659a2e05789bf8b835fd125136ed0b0f18ab9b7d75fc0`；Worker image `sha256:b6603dd0650461bac15e76f39507de94ff4a4fc4eb89894dc2ef975aa7aace23`。
+- custom `platform-adapter` child `sha256:bb7661a4a703165fdee9d8efa1eb9bc28d09715238a1669f3a892ac78d785083`；原幂等键重放 200、同一 Agent ID，Agent 为 `available/ready`。
+- multi `self-managed` 使用 manifest-only body；原幂等键重放 200、同一 Agent ID；2-service 自有入口通过真实登录、后端读取、刷新和拒绝负例。
+- adapter 首轮、续接、游标重放完成；取消最终 API/DB 为 `cancelled`，Runtime terminal、stop/turn outbox 和 lease 已回读。原观察器失败记录保留。
+- 复核回执：`recheck.receipt.json` SHA `d496a68b1ccdd5ab81d8d4b5b449b030adcd8f0096c6c65049e56d53c260a7c6`；self-managed `custom-agent-0/1.json` SHA `b872cccc808421c2ca551bf69063d257a91c33cd39b19b89ed83d2e3a7060f03` / `8eca6816951a54d0ff949ea02d7824829c4cfe4de26e70c803f9aba04747a309`。
+
+本段不声明镜像升级：升级需要 B 提供不同的获准 replacement digest；同一 digest 重用不是升级，也不扩展到全量 ACK 重建、性能 SLA 或普通 Chrome/public CA。
