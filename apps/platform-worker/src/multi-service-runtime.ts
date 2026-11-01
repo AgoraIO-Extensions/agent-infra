@@ -140,8 +140,29 @@ function routePeer(policy: MultiServiceRuntimePolicyV1) {
 		: podSelector;
 }
 
+/**
+ * PostgreSQL JSONB does not preserve the insertion order of object keys. The
+ * same admitted manifest can therefore come back from the store with a
+ * different JSON.stringify result. Ownership annotations must survive that
+ * round trip, so fingerprint JSON by sorted object keys while preserving
+ * array order.
+ */
+function canonicalFingerprintValue(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(canonicalFingerprintValue);
+	if (value !== null && typeof value === "object") {
+		return Object.fromEntries(
+			Object.entries(value as Record<string, unknown>)
+				.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+				.map(([key, child]) => [key, canonicalFingerprintValue(child)]),
+		);
+	}
+	return value;
+}
+
 function fingerprint(value: unknown): string {
-	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	return createHash("sha256")
+		.update(JSON.stringify(canonicalFingerprintValue(value)))
+		.digest("hex");
 }
 
 function profileForWorkload(

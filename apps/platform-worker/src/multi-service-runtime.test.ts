@@ -404,7 +404,43 @@ function markWorkloadsReady(fake: ReturnType<typeof fakeClient>) {
 			};
 }
 
+function reorderObjectKeys(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(reorderObjectKeys);
+	if (value !== null && typeof value === "object") {
+		return Object.fromEntries(
+			Object.entries(value as Record<string, unknown>)
+				.reverse()
+				.map(([key, child]) => [key, reorderObjectKeys(child)]),
+		);
+	}
+	return value;
+}
+
 describe("multi-service resource policy", () => {
+	it("keeps ownership after a JSONB key-order round trip", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: { ...basePolicy, storageSize: "1Gi" },
+		});
+		const original = desired();
+		if (!isMultiService(original))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(original);
+		markWorkloadsReady(fake);
+
+		// PostgreSQL JSONB can return the same manifest with a different object
+		// key order. A second observation must still recognize the owned workload.
+		const reordered = desired(
+			MultiServiceManifestDocumentV1Schema.parse(
+				reorderObjectKeys(original.multiService),
+			),
+		);
+		expect(await operations.observe(reordered, { uid: "u", generation: 1 })).toBe(
+			"healthy",
+		);
+	});
+
 	it.each([undefined, "registry-pull"])(
 		"uses deployment pull policy %s for every workload and migration",
 		async (imagePullSecretName) => {
