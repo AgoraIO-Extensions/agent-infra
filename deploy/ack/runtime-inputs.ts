@@ -11,7 +11,8 @@ import { privateBytes, privateJson } from "./private-input.ts";
 import { validateTemplateValidationExpectations } from "./template-validation.mjs";
 import { validateCapacityBindings } from "./workload-capacity.ts";
 import { ApiRolloutObservationError, apiReplicaTarget, apiRolloutTools, observeApiRollout } from "./api-rollout-observation.ts";
-import { prepareReserveInput, readReserveWorker } from "./session-reserve-inputs.ts";
+import { prepareReserveInput, readReserveApi, readReserveWorker } from "./session-reserve-inputs.ts";
+import { sessionSandboxReserveDigestV1 } from "../../packages/platform-core/src/session-sandbox-reserves.ts";
 
 type ObjectRecord = Record<string, any>;
 type Kubectl = (args: string[], input?: string) => string;
@@ -29,6 +30,7 @@ type PublicationProgress = {
 };
 const failureCodes = new Set([
 	"RUNTIME_INPUTS_INVALID", "RUNTIME_INPUT_LOGIN_REQUIRED", "RUNTIME_INPUT_CLUSTER_DRIFT",
+	"RUNTIME_INPUT_RESERVE_CONSUMER_MISMATCH",
 	"RUNTIME_INPUT_NAMESPACE_OWNER_INVALID", "RUNTIME_INPUT_NAMESPACE_DRIFT",
 	"RUNTIME_INPUT_SECRET_MISSING", "RUNTIME_INPUT_SECRET_UNAVAILABLE", "RUNTIME_INPUT_SECRET_OWNER_INVALID",
 	"RUNTIME_INPUT_SECRET_DRIFT", "RUNTIME_INPUT_SECRET_VERSION_DRIFT", "RUNTIME_INPUT_SECRET_READBACK_FAILED",
@@ -189,18 +191,24 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 			ACK_TEMPLATE_VALIDATIONS_FILE: files.templates,
 		}, sourceSha, {
 			workerSecretName: worker.secretName,
+			apiSecretName: consumers.find((c) => c.component === "api")!.secretName,
 			requireAdoption: false,
 			readWorker: (environment, input, name) => readReserveWorker({ ...environment, ACK_SOURCE_SHA: sourceSha }, input, name, kubectl, false),
 		});
 		const bytes = await privateBytes(files.reserves);
-		const target = workerSecret.files["session-reserves.json"] ?? files.reserves;
-		await stageFile(target, bytes);
-		workerSecret.desired.data["session-reserves.json"] = bytes.toString("base64");
-		if (!workerSecret.files["session-reserves.json"]) {
-			const publishedBootstrap = structuredClone(bootstrap);
-			publishedBootstrap.objects.find((object: any) => object.kind === "Secret" && object.name === worker.secretName).files["session-reserves.json"] = target;
-			await stageFile(files.bootstrap, jsonBytes(publishedBootstrap));
+		const publishedBootstrap = structuredClone(bootstrap);
+		let changedBindings = false;
+		for (const consumer of consumers) {
+			const secret = secrets.find((s) => s.desired.metadata.name === consumer.secretName)!;
+			const target = secret.files["session-reserves.json"] ?? files.reserves;
+			await stageFile(target, bytes);
+			secret.desired.data["session-reserves.json"] = bytes.toString("base64");
+			if (!secret.files["session-reserves.json"]) {
+				publishedBootstrap.objects.find((object: any) => object.kind === "Secret" && object.name === consumer.secretName).files["session-reserves.json"] = target;
+				changedBindings = true;
+			}
 		}
+		if (changedBindings) await stageFile(files.bootstrap, jsonBytes(publishedBootstrap));
 	}
 	return { bootstrap, consumers, secrets, writes, loginCandidate, origin: requests.origin };
 }
@@ -364,7 +372,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		}
 		const observed = mode === "apply" ? await observeApiRollout({ ...apiRolloutTools(kubeconfig, namespace, 600_000), sourceSha: source, desiredReplicas: apiReplicaTarget(manifest), timeoutMs: 600_000 }, publish) : null;
 		const result = observed ? { ...observed.value, apiRollout: observed.receipt } : await publish();
-		process.stdout.write(`${JSON.stringify(result)}\n`);
+		let reserveConsumersVerified = false;
+		if (mode === "apply" && process.env.ACK_SESSION_RESERVES_FILE) {
+			const input = await privateJson(bootstrap);
+			const expected = await privateJson(process.env.ACK_SESSION_RESERVES_FILE);
+			const documents = parseAllDocuments(manifest).map((doc) => doc.toJSON());
+			for (const component of ["api", "worker"] as const) {
+				const deployment = documents.find((doc) => doc?.kind === "Deployment" && doc.metadata?.name === `agent-infra-${component}`);
+				const readConsumer = component === "api" ? readReserveApi : readReserveWorker;
+				const actual = readConsumer({ ACK_SOURCE_SHA: source, ACK_NAMESPACE: namespace, ACK_KUBECONFIG: kubeconfig }, input, configurationSecret(deployment, component), run);
+				assert(actual?.sourceSha === source && actual.configurationHash === sessionSandboxReserveDigestV1(expected) && actual.configuration?.revision === expected.revision && actual.configuration?.enabled === expected.enabled, "RUNTIME_INPUT_RESERVE_CONSUMER_MISMATCH");
+			}
+			reserveConsumersVerified = true;
+		}
+		process.stdout.write(`${JSON.stringify({ ...result, reserveConsumersVerified })}\n`);
 	} catch (error) {
 		const operationError = error instanceof ApiRolloutObservationError ? error.operationError : error;
 		const failure = operationError instanceof RuntimeInputPublicationError ? operationError :

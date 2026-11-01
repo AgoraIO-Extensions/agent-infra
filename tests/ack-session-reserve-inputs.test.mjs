@@ -286,6 +286,7 @@ test("disabled reserve checks a distinct baseline against the live Secret", asyn
 		clusterUid: "cluster-uid",
 		installationId,
 		objects: [
+			{ kind: "Secret", name: "agent-infra-api-configuration", files: {} },
 			{
 				kind: "Secret",
 				name: secretName,

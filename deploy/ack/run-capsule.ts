@@ -7,7 +7,9 @@ import { privateJson } from "./private-input.ts";
 import { sessionSandboxReserveDigestV1 } from "../../packages/platform-core/src/session-sandbox-reserves.ts";
 import {
 	prepareReserveInput,
+	readReserveApi,
 	readReserveWorker,
+	type ReadReserveApi,
 	type ReadReserveWorker,
 } from "./session-reserve-inputs.ts";
 
@@ -165,6 +167,9 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 		const resolved = materialize(value);
 		if (reserve && target === materialize(input.environment.ACK_BOOTSTRAP_INPUTS_FILE)) {
 			const worker = resolved.objects.find((object: any) => object.kind === "Secret" && object.name === reserve.workerSecretName);
+			const api = resolved.objects.find((object: any) => object.kind === "Secret" && object.name === reserve.apiSecretName);
+			const apiHadReserveBinding = api?.files?.["session-reserves.json"] !== undefined;
+			assert(worker?.files && api?.files, "CAPSULE_RESERVE_CONSUMER_SECRET_MISSING");
 			if (reserve.observed?.storedReserveBytes) {
 				const baseline = join(runDirectory, ".session-reserves-before.json");
 				assert(!files.has(".session-reserves-before.json"), "CAPSULE_RESERVE_INPUT_CONFLICT");
@@ -176,6 +181,10 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 			} else {
 				worker.files["session-reserves.json"] = materialize(input.environment.ACK_SESSION_RESERVES_FILE);
 			}
+			if (!reserve.observed && worker.files["session-reserves.json"] !== undefined)
+				api.files["session-reserves.json"] = worker.files["session-reserves.json"];
+			else if (reserve.observed?.storedReserveBytes && apiHadReserveBinding)
+				api.files["session-reserves.json"] = worker.files["session-reserves.json"];
 		}
 		await writeFile(target, `${JSON.stringify(resolved, null, 2)}\n`, { mode: 0o600, flag: "wx" });
 	}
@@ -269,7 +278,7 @@ async function promoteGeneratedInputs(materialized: MaterializedCapsule, command
 	return promoted;
 }
 
-export async function runCapsule(manifest: string, command: string, sourceRoot: string, readWorker?: ReadReserveWorker) {
+export async function runCapsule(manifest: string, command: string, sourceRoot: string, readWorker?: ReadReserveWorker, readApi?: ReadReserveApi) {
 	assert(commands.has(command), "CAPSULE_COMMAND_INVALID");
 	const materialized = await materializeCapsule(manifest, sourceRoot, readWorker);
 	const { environment, inputCount, sourceSha, reserve } = materialized;
@@ -282,6 +291,8 @@ export async function runCapsule(manifest: string, command: string, sourceRoot: 
 		const bootstrap = JSON.parse(await readFile(environment.ACK_BOOTSTRAP_INPUTS_FILE!, "utf8"));
 		const actual = (readWorker ?? readReserveWorker)(environment, bootstrap, reserve.workerSecretName);
 		assert(actual?.configurationHash === reserve.receipt.configHash && actual.configuration?.revision === reserve.receipt.revision && actual.configuration?.enabled === reserve.receipt.enabled && actual.sourceSha === reserve.receipt.sourceSha, "CAPSULE_RESERVE_ADOPTION_MISMATCH");
+		const api = (readApi ?? readReserveApi)(environment, bootstrap, reserve.apiSecretName);
+		assert(api?.configurationHash === reserve.receipt.configHash && api.configuration?.revision === reserve.receipt.revision && api.configuration?.enabled === reserve.receipt.enabled && api.sourceSha === reserve.receipt.sourceSha, "CAPSULE_RESERVE_API_ADOPTION_MISMATCH");
 		mountedInputVerified = true;
 	}
 	const promotedInputs = exitCode === 0 ? await promoteGeneratedInputs(materialized, command) : [];

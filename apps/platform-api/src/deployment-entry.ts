@@ -20,6 +20,7 @@ import {
 	createProductionSingleAgentTemplateReleaseAppV1,
 	type ProductionTemplateUpgradeInputV2,
 } from "./index.js";
+import { loadPlatformApiSessionReserveDeploymentV1 } from "./session-reserve-deployment.js";
 
 interface DeploymentStandardTemplateReleaseInputV1 {
 	readonly target: Parameters<
@@ -66,6 +67,17 @@ const {
 	directorySearch,
 	standardTemplateReleaseInput,
 } = await import(configurationModule);
+
+const sessionReserveDeployment =
+	await loadPlatformApiSessionReserveDeploymentV1(
+		apiInput?.sessionSandboxReserves,
+		process.env.PLATFORM_API_SESSION_RESERVES_FILE,
+	);
+
+/** Private deployment readback; never registered as an HTTP route. */
+export function readPlatformSessionReserveDeploymentV1() {
+	return structuredClone(sessionReserveDeployment);
+}
 
 const environmentConnectionConsumer =
 	connectionConsumerProfile === undefined &&
@@ -303,6 +315,13 @@ export function createPlatformApiAssemblyInput() {
 	});
 	return createProductionPlatformApiAssemblyInputV1({
 		...configuredApiInput,
+		...(sessionReserveDeployment.configuration
+			? {
+					sessionSandboxReserves: structuredClone(
+						sessionReserveDeployment.configuration,
+					),
+				}
+			: {}),
 
 		userGovernance,
 		directory: { identity: browser.identity, search: directorySearch },
