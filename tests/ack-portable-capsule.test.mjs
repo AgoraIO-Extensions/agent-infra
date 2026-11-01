@@ -393,6 +393,129 @@ async function reserveFixture(t, enabled = false) {
 	return { ...f, reserve, actual, readWorker: () => actual };
 }
 
+test("promoted configuration paths remain relocatable across successful stages", async (t) => {
+	const f = await fixture(t);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		[
+			"#!/usr/bin/env bash",
+			"set -euo pipefail",
+			"node -e 'const fs=require(\"node:fs\");const f=process.env.ACK_BOOTSTRAP_INPUTS_FILE;const v=JSON.parse(fs.readFileSync(f));v.generated=true;fs.writeFileSync(f,JSON.stringify(v));'",
+		].join("\n"),
+		{ mode: 0o700 },
+	);
+	const result = await runCapsule(f.manifest, "runtime-inputs", f.source);
+	assert.equal(result.exitCode, 0);
+	const saved = JSON.parse(await readFile(join(f.capsule, "bootstrap.json")));
+	assert.equal(saved.generated, true);
+	assert.equal(saved.childFile, "@CAPSULE_ROOT@/request.json");
+	const relocated = join(f.root, "moved capsule");
+	await cp(f.capsule, relocated, {
+		recursive: true,
+		filter: (file) => !file.includes(".resolved-"),
+	});
+	await rm(f.capsule, { recursive: true });
+	const next = await materializeCapsule(
+		join(relocated, "capsule.json"),
+		f.source,
+	);
+	const bootstrap = JSON.parse(
+		await readFile(next.environment.ACK_BOOTSTRAP_INPUTS_FILE),
+	);
+	const request = JSON.parse(await readFile(bootstrap.childFile));
+	assert.equal(
+		request.credentialFile,
+		join(await realpath(relocated), "credential"),
+	);
+});
+
+test("first-run generated template expectations are resolved on the next stage after relocation", async (t) => {
+	const f = await fixture(t);
+	f.value.environment.ACK_TEMPLATE_VALIDATIONS_FILE =
+		"@CAPSULE_ROOT@/state/generated-templates.json";
+	f.value.environment.ACK_AGENT_STATE_DIR = "@CAPSULE_ROOT@/state";
+	await f.save("capsule.json", f.value);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		[
+			"#!/usr/bin/env bash",
+			"set -euo pipefail",
+			"umask 077",
+			"[[ \"$ACK_AGENT_STATE_DIR\" != *'/.resolved-'* ]]",
+			"node -e 'const fs=require(\"node:fs\");fs.writeFileSync(process.env.ACK_TEMPLATE_VALIDATIONS_FILE,JSON.stringify({validationFile:process.env.ACK_KUBECONFIG}));'",
+		].join("\n"),
+		{ mode: 0o700 },
+	);
+	const first = await runCapsule(f.manifest, "template-preflight", f.source);
+	assert.equal(first.exitCode, 0);
+	const saved = JSON.parse(
+		await readFile(join(f.capsule, "state/generated-templates.json")),
+	);
+	assert.equal(saved.validationFile, "@CAPSULE_ROOT@/kubeconfig");
+	const relocated = join(f.root, "moved generated outputs");
+	await cp(f.capsule, relocated, {
+		recursive: true,
+		filter: (file) => !file.includes(".resolved-"),
+	});
+	await rm(f.capsule, { recursive: true });
+	const next = await materializeCapsule(
+		join(relocated, "capsule.json"),
+		f.source,
+	);
+	const expectations = JSON.parse(
+		await readFile(next.environment.ACK_TEMPLATE_VALIDATIONS_FILE),
+	);
+	assert.equal(
+		expectations.validationFile,
+		join(await realpath(relocated), "kubeconfig"),
+	);
+});
+
+test("promotion preserves concurrent canonical edits and rejects undeclared temporary outputs", async (t) => {
+	for (const scenario of ["canonical-edit", "temporary-output"]) {
+		const f = await fixture(t);
+		const action =
+			scenario === "canonical-edit"
+				? "fs.writeFileSync(f.split('/.resolved-')[0]+'/bootstrap.json',JSON.stringify({concurrent:true}));"
+				: "const v=JSON.parse(fs.readFileSync(f));v.output=require('node:path').dirname(f)+'/undeclared.json';fs.writeFileSync(f,JSON.stringify(v));";
+		await writeFile(
+			join(f.source, "deploy/ack/redeploy.sh"),
+			"#!/usr/bin/env bash\nset -euo pipefail\nnode - <<'JS'\nconst fs=require('node:fs');const f=process.env.ACK_BOOTSTRAP_INPUTS_FILE;\n" +
+				action +
+				"\nJS\n",
+			{ mode: 0o700 },
+		);
+		await assert.rejects(
+			runCapsule(f.manifest, "runtime-inputs", f.source),
+			scenario === "canonical-edit"
+				? /CAPSULE_OUTPUT_LOCAL_DRIFT/
+				: /CAPSULE_OUTPUT_UNDECLARED_PATH/,
+		);
+		const current = JSON.parse(
+			await readFile(join(f.capsule, "bootstrap.json")),
+		);
+		if (scenario === "canonical-edit") assert.equal(current.concurrent, true);
+		else assert.equal(current.output, undefined);
+	}
+});
+
+test("directory environment paths stay canonical while file inputs use the resolved run", async (t) => {
+	const f = await fixture(t);
+	f.value.directories.push("state/agents");
+	f.value.environment.ACK_AGENT_STATE_DIR = "@CAPSULE_ROOT@/state/agents";
+	await mkdir(join(f.capsule, "state/agents"), {
+		mode: 0o700,
+		recursive: true,
+	});
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		'#!/usr/bin/env bash\nset -euo pipefail\n[[ "$ACK_AGENT_STATE_DIR" == *\'/private inputs/state/agents\' ]]\nmkdir -p "$ACK_AGENT_STATE_DIR"\n',
+		{ mode: 0o700 },
+	);
+	await f.save("capsule.json", f.value);
+	assert.equal((await runCapsule(f.manifest, "plan", f.source)).exitCode, 0);
+});
+
 test("an update preserves the observed Secret bytes for bootstrap while keeping the new reserve candidate separate", async (t) => {
 	const f = await reserveFixture(t, true);
 	const before = Buffer.from(`  ${JSON.stringify(f.reserve)}\n`);

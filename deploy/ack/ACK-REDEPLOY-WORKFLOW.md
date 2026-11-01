@@ -67,7 +67,7 @@ Worker 自身或独立 Runtime preflight 位于 ECI，均不能代替业务 Sess
 `inputs` 显式列出需要解析路径的 JSON 模板。
 模板中的 `@CAPSULE_ROOT@/relative/path` 指向包内路径；目标也在 `inputs` 中时，指向本轮生成
 的 JSON 副本，否则指向包内原始文件或声明的输出目录。job 的 `worktree` 使用 `@SOURCE_ROOT@`。
-证据与原始凭证不需要改写；运行后保留 `.resolved-*` 私有目录用于诊断，原 JSON 模板保持不变。
+证据与原始凭证不需要改写；运行后保留 `.resolved-*` 私有目录用于诊断。
 
 `directories` 声明允许创建的输出目录，例如浏览器 state、API credential 和证据目录。
 除这些目录内的预期输出外，所有引用必须事先存在；符号链接、越界路径、公开权限和未知
@@ -79,16 +79,20 @@ Worker 自身或独立 Runtime preflight 位于 ECI，均不能代替业务 Sess
 其他已声明阶段；所有原有 source/image、ownership 和破坏性清理门禁继续执行。不要把含凭证的
 输入包或 `.resolved-*` 目录提交到 Git、PR 或共享文档。
 
-每轮成功阶段只 promotion 自己声明的生成输入：`bootstrap-login`/`all` 回写当前蓝图，
-`template-preflight`/`runtime-inputs` 回写模板 validation、capacity 和 bootstrap JSON。
+每轮成功阶段只回写自己声明的生成输入：`bootstrap-login` 回写当前蓝图，
+`template-preflight` 回写模板索引，`runtime-inputs` 回写 capacity 和 bootstrap JSON，
+`bootstrap-credential`/`provision` 回写凭证请求和创建清单，`all` 覆盖上述输出。
+文件路径由环境变量绑定识别，支持平铺或分目录的输入包。声明在输出目录中的
+`ACK_TEMPLATE_VALIDATIONS_FILE` 可以首次不存在；生成后自动作为 JSON 输入解析。
 promotion 先比较 canonical 文件在本轮开始时的字节；期间被其他进程改动就以
-`CAPSULE_OUTPUT_LOCAL_DRIFT` 失败，不能覆盖手工输入。原始模板保持不变，receipt 返回本轮
-实际回写的相对路径，下一阶段直接消费同一组来源/身份/容量事实。
+`CAPSULE_OUTPUT_LOCAL_DRIFT` 失败，不能覆盖手工输入。回写前把本轮解析路径恢复为
+`@CAPSULE_ROOT@`/`@SOURCE_ROOT@` 引用，不能依赖旧 `.resolved-*` 目录或原机器绝对路径。
+receipt 返回本轮实际回写的相对路径；未声明的临时输出引用会失败。
 
-`deploy` 在 Helm 写入前还会检查 API/Worker `configuration.mjs` 的活动 RuntimeHost 和四模板
+`plan`、`bootstrap-inputs` 和 `all` 在任何配置或数据库写入前检查 API/Worker `configuration.mjs` 的活动 RuntimeHost 和四模板
 digest 是否与当前 source-bound manifest 一致。配置仍指向旧 digest 时会生成固定的
 `CONFIG_RUNTIME_DIGEST_MISMATCH` 或 `CONFIG_TEMPLATE_DIGEST_MISMATCH`，停在 preflight，
-不会先切换镜像再让 Worker CrashLoop。reserve readback 绑定同一个只读 Secret volume、
+`deploy` 在 Helm 前再次检查。reserve readback 绑定同一个只读 Secret volume、
 `configuration.mjs` subPath 以及 chart 的 `deployment.mjs` entrypoint；任一绑定缺失或跨 Secret
 都拒绝。
 

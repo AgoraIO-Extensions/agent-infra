@@ -84,8 +84,9 @@ export function parseReserveInput(input: Json, sourceSha: string, namespace: str
 export function readReserveWorker(environment: Record<string, string>, bootstrap: Json, secretName: string, execute?: ReserveKubectl, options: ReserveReadbackOptions | boolean = {}): ReserveWorker | null {
 	const requireAdoption = typeof options === "boolean" ? options : options.requireAdoption !== false;
 	const { ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace } = environment;
-	assert(kubeconfig && namespace);
-	const kubectl = execute ?? ((args: string[], input?: string) => execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=45s", "-n", namespace, ...args], { input, encoding: "utf8", timeout: 60_000, maxBuffer: 2 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] }));
+	assert(namespace && (execute || kubeconfig), "CAPSULE_RESERVE_TARGET_MISSING");
+	const run = execute ?? ((args: string[], input?: string) => execFileSync("kubectl", ["--kubeconfig", kubeconfig, "--request-timeout=45s", ...args], { input, encoding: "utf8", timeout: 60_000, maxBuffer: 2 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] }));
+	const kubectl: ReserveKubectl = (args, input) => run(["-n", namespace, ...args], input);
 	const namespaceBytes = kubectl(["get", "namespace", namespace, "--ignore-not-found", "-o", "json"]);
 	if (!namespaceBytes.trim()) return null;
 	const ns = JSON.parse(namespaceBytes);
@@ -175,7 +176,8 @@ export async function prepareReserveInput(environment: Record<string, string>, s
 	let actual: ReserveWorker | null;
 	let legacyReadbackUnavailable = false;
 	try {
-		actual = configuration.enabled || options.readWorker !== undefined
+		actual = configuration.enabled || options.readWorker !== undefined ||
+			(existingReserveBinding !== undefined && existingReserveBinding !== environment.ACK_SESSION_RESERVES_FILE)
 			? options.readWorker
 			? options.readWorker(environment, bootstrap, worker.name)
 			: readReserveWorker(environment, bootstrap, worker.name, options.kubectl, { requireAdoption: options.requireAdoption !== false })

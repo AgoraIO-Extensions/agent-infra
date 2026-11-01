@@ -140,7 +140,7 @@ snapshot() {
 }
 
 configuration_source_preflight() {
-	if [[ -z "${ACK_BOOTSTRAP_INPUTS_FILE:-}" || -z "${ACK_TEMPLATE_IMAGE_MANIFEST:-}" ]]; then
+	if [[ -z "${ACK_BOOTSTRAP_INPUTS_FILE:-}" ]]; then
 		return 0
 	fi
 	require_file ACK_BOOTSTRAP_INPUTS_FILE "$ACK_BOOTSTRAP_INPUTS_FILE"
@@ -159,6 +159,7 @@ bootstrap_inputs() {
 	rendered_manifest=$(mktemp)
 	trap 'unlink "$rendered_manifest"' EXIT
 	render_manifest "$rendered_manifest"
+	configuration_source_preflight
 	node "$repo_root/deploy/ack/bootstrap-inputs.ts" "$1" "$ACK_BOOTSTRAP_INPUTS_FILE" "$rendered_manifest" >"$evidence_dir/bootstrap-inputs.json"
 	if [[ "$1" == apply ]]; then
 		restart_config_consumers
@@ -341,6 +342,7 @@ plan() {
 	rendered_manifest=$(mktemp)
 	trap 'unlink "$rendered_manifest"' EXIT
 	render_manifest "$rendered_manifest"
+	configuration_source_preflight
 	unlink "$rendered_manifest"
 	trap - EXIT
 	helm lint "$chart_dir" --values "$values_file" --strict >/dev/null 2>&1 || die "HELM_LINT_FAILED"
@@ -634,6 +636,8 @@ case "$command" in
 		require_file ACK_BOOTSTRAP_INPUTS_FILE "${ACK_BOOTSTRAP_INPUTS_FILE:-}"
 		require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
 		require_file ACK_LOGIN_BOOTSTRAP_FILE "${ACK_LOGIN_BOOTSTRAP_FILE:-}"
+		prepare_evidence
+		configuration_source_preflight
 		preflight_agent_requests
 		if [[ -n "${ACK_BOOTSTRAP_INPUTS_FILE:-}" ]]; then
 			bootstrap_database check
