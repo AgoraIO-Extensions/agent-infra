@@ -31,6 +31,11 @@
       "required": ["keyVersions"],
       "properties": {"keyVersions": {"type": "string", "pattern": "^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$"}}
     },
+    "replicas": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"api": {"type": "integer", "minimum": 2, "maximum": 10}}
+    },
     "publicOrigin": {"type": "string", "pattern": "^https://"},
     "directory": {"type": "object", "required": ["corpId", "sourceConfigMap", "sourceModule", "runtimeDatabaseRole"]},
     "scheduling": {"type": "object"},

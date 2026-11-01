@@ -18,7 +18,7 @@ metadata:
   labels: {{- include "ack.labels" . | nindent 4 }}
     app.kubernetes.io/component: platform-api
 spec:
-  replicas: 1
+  replicas: {{ .Values.replicas.api | default 2 }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
