@@ -136,6 +136,17 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	const bodies = await Promise.all(requests.requests.map((r: any) => privateJson(r.bodyFile)));
 	assert(templates.templates.every((t: any) => bodies.some((b: any) => b.source?.kind === "standard" && b.source.templateId === t.templateId)), "RUNTIME_INPUT_TEMPLATE_REQUEST_MISSING");
 	let profiles = profilesDocument.profiles;
+	if (capacity.candidateProfilesFile !== undefined && capacity.candidateProfilesFile !== capacity.profilesFile) {
+		assert(!Object.values(files).includes(capacity.candidateProfilesFile) && !bootstrap.objects.some((o: any) => Object.values(o.files ?? {}).includes(capacity.candidateProfilesFile)), "RUNTIME_INPUT_CAPACITY_TARGET_INVALID");
+		const candidate = await privateJson(capacity.candidateProfilesFile);
+		assert(candidate.schemaVersion === 1 && Array.isArray(candidate.profiles), "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
+		for (const profile of candidate.profiles) {
+			const existing = profiles.filter((p: any) => p.imageDigest === profile.imageDigest && p.resourceProfileRef === profile.resourceProfileRef && p.resourceConfigurationHash === profile.resourceConfigurationHash);
+			assert(existing.length <= 1, "RUNTIME_INPUT_CAPACITY_AMBIGUOUS");
+			if (existing.length) assert.deepEqual(existing[0], profile, "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
+			else profiles = [...profiles, profile];
+		}
+	}
 	const resources = {
 		requests: { cpu: capacity.resources?.requests?.cpu, memory: capacity.resources?.requests?.memory },
 		limits: { cpu: capacity.resources?.limits?.cpu, memory: capacity.resources?.limits?.memory },
@@ -194,6 +205,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	assert(workerSecret.files[capacity.workerSecretRef.key] === capacity.profilesFile, "RUNTIME_INPUT_CAPACITY_TARGET_INVALID");
 	const profileBytes = jsonBytes({ ...profilesDocument, profiles });
 	await stageFile(capacity.profilesFile, profileBytes);
+	if (capacity.candidateProfilesFile !== undefined) await stageFile(capacity.candidateProfilesFile, profileBytes);
 	workerSecret.desired.data[capacity.workerSecretRef.key] = profileBytes.toString("base64");
 	await stageFile(files.capacity, jsonBytes({ ...capacity, evidence: [...evidenceFiles].map(([imageDigest, file]) => ({ imageDigest, file })) }));
 	if (files.reserves) {

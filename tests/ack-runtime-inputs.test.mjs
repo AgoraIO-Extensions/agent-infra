@@ -796,74 +796,92 @@ test("runtime-inputs with reserves uses its configured executor and namespace be
 	);
 });
 
-test("publishing standard measurements preserves a separately measured custom image", async (t) => {
-	const f = await fixture(t);
-	const imageDigest = `sha256:${"e".repeat(64)}`;
-	const receiptFile = join(
-		f.capacity.profilesFile,
-		"..",
-		"custom-measurement.json",
-	);
-	const now = Date.now();
-	await f.save(receiptFile, {
-		schemaVersion: 1,
-		scope: "isolated-custom-runtime-capacity",
-		imageDigest,
-		maximumConcurrentExecutions: 1,
-		terminalStatus: "completed",
-		replyMatched: true,
-		submittedAt: now - 2_000,
-		completedAt: now - 1_000,
-		observedResources: resources,
-		modelFacts: [{ kind: "model", phase: "completed" }],
-	});
-	const hash = (value) => createHash("sha256").update(value).digest("hex");
-	const profile = {
-		schemaVersion: 1,
-		imageDigest,
-		resourceProfileRef: f.capacity.resourceProfileRef,
-		resourceConfigurationHash: hash(
-			JSON.stringify({
-				resourceProfileRef: f.capacity.resourceProfileRef,
-				...resources,
+for (const separateCandidate of [false, true])
+	test(`publishing standard measurements preserves custom capacity (separate candidate=${separateCandidate})`, async (t) => {
+		const f = await fixture(t);
+		const imageDigest = `sha256:${"e".repeat(64)}`;
+		const receiptFile = join(
+			f.capacity.profilesFile,
+			"..",
+			"custom-measurement.json",
+		);
+		const now = Date.now();
+		await f.save(receiptFile, {
+			schemaVersion: 1,
+			scope: "isolated-custom-runtime-capacity",
+			imageDigest,
+			maximumConcurrentExecutions: 1,
+			terminalStatus: "completed",
+			replyMatched: true,
+			submittedAt: now - 2_000,
+			completedAt: now - 1_000,
+			observedResources: resources,
+			modelFacts: [{ kind: "model", phase: "completed" }],
+		});
+		const hash = (value) => createHash("sha256").update(value).digest("hex");
+		const profile = {
+			schemaVersion: 1,
+			imageDigest,
+			resourceProfileRef: f.capacity.resourceProfileRef,
+			resourceConfigurationHash: hash(
+				JSON.stringify({
+					resourceProfileRef: f.capacity.resourceProfileRef,
+					...resources,
+				}),
+			),
+			maximumConcurrentExecutions: 1,
+			conformanceEvidenceHash: hash(await readFile(receiptFile)),
+		};
+		const baselineFile = f.capacity.profilesFile;
+		const candidateFile = separateCandidate
+			? join(dirname(baselineFile), "candidate.json")
+			: baselineFile;
+		if (separateCandidate) f.capacity.candidateProfilesFile = candidateFile;
+		await f.save(candidateFile, {
+			schemaVersion: 1,
+			profiles: [profile],
+		});
+		if (!separateCandidate)
+			f.cluster.get("secret/worker-config").data["capacity.json"] = (
+				await readFile(baselineFile)
+			).toString("base64");
+		f.capacity.evidence.push({ imageDigest, file: receiptFile });
+		await f.save(f.files.capacity, f.capacity);
+		const requests = JSON.parse(await readFile(f.files.requests));
+		requests.requests.push({
+			bodyFile: await f.save(join(receiptFile, "..", "custom-request.json"), {
+				source: {
+					kind: "custom",
+					interactionMode: "platform-adapter",
+					imageReference: `registry.example.test/custom@${imageDigest}`,
+				},
 			}),
-		),
-		maximumConcurrentExecutions: 1,
-		conformanceEvidenceHash: hash(await readFile(receiptFile)),
-	};
-	await f.save(f.capacity.profilesFile, {
-		schemaVersion: 1,
-		profiles: [profile],
+		});
+		await f.save(f.files.requests, requests);
+		await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+		const after = JSON.parse(await readFile(f.capacity.profilesFile));
+		assert.equal(after.profiles.length, 5);
+		assert.deepEqual(
+			await readFile(candidateFile),
+			await readFile(baselineFile),
+		);
+		assert.deepEqual(
+			Buffer.from(
+				f.cluster.get("secret/worker-config").data["capacity.json"],
+				"base64",
+			),
+			await readFile(baselineFile),
+		);
+		assert.deepEqual(
+			after.profiles.find((p) => p.imageDigest === imageDigest),
+			profile,
+		);
+		const capacity = JSON.parse(await readFile(f.files.capacity));
+		assert.equal(
+			capacity.evidence.find((e) => e.imageDigest === imageDigest).file,
+			receiptFile,
+		);
 	});
-	f.cluster.get("secret/worker-config").data["capacity.json"] = (
-		await readFile(f.capacity.profilesFile)
-	).toString("base64");
-	f.capacity.evidence.push({ imageDigest, file: receiptFile });
-	await f.save(f.files.capacity, f.capacity);
-	const requests = JSON.parse(await readFile(f.files.requests));
-	requests.requests.push({
-		bodyFile: await f.save(join(receiptFile, "..", "custom-request.json"), {
-			source: {
-				kind: "custom",
-				interactionMode: "platform-adapter",
-				imageReference: `registry.example.test/custom@${imageDigest}`,
-			},
-		}),
-	});
-	await f.save(f.files.requests, requests);
-	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
-	const after = JSON.parse(await readFile(f.capacity.profilesFile));
-	assert.equal(after.profiles.length, 5);
-	assert.deepEqual(
-		after.profiles.find((p) => p.imageDigest === imageDigest),
-		profile,
-	);
-	const capacity = JSON.parse(await readFile(f.files.capacity));
-	assert.equal(
-		capacity.evidence.find((e) => e.imageDigest === imageDigest).file,
-		receiptFile,
-	);
-});
 
 for (const scenario of [
 	"owner",
@@ -873,6 +891,8 @@ for (const scenario of [
 	"consumer-mount",
 	"undeclared-template-key",
 	"capacity-target-key",
+	"candidate-control-file-alias",
+	"candidate-bound-key-alias",
 	"measured-resources",
 	"unmeasured-capacity",
 ]) {
@@ -899,6 +919,25 @@ for (const scenario of [
 		if (scenario === "capacity-target-key") {
 			f.capacity.workerSecretRef.key = "private-input";
 			await f.save(f.files.capacity, f.capacity);
+		}
+		if (scenario === "candidate-control-file-alias") {
+			f.capacity.candidateProfilesFile = f.files.capacity;
+			await f.save(f.files.capacity, { ...f.capacity, profiles: [] });
+		}
+		if (scenario === "candidate-bound-key-alias") {
+			const other = await f.save(
+				join(dirname(f.capacity.profilesFile), "other.json"),
+				{ schemaVersion: 1, profiles: [] },
+			);
+			f.bootstrap.objects.find((o) => o.name === "worker-config").files[
+				"other.json"
+			] = other;
+			f.cluster.get("secret/worker-config").data["other.json"] = (
+				await readFile(other)
+			).toString("base64");
+			f.capacity.candidateProfilesFile = other;
+			await f.save(f.files.capacity, f.capacity);
+			await f.save(f.files.bootstrap, f.bootstrap);
 		}
 		if (scenario.startsWith("measured") || scenario === "unmeasured-capacity") {
 			const path = join(
@@ -1178,7 +1217,7 @@ test("all rejects missing login inputs before any cluster mutation", async () =>
 		new URL("../deploy/ack/redeploy.sh", import.meta.url),
 		"utf8",
 	);
-	const dispatch = script.slice(script.indexOf("command=${1:-help}"));
+	const dispatch = script.slice(script.indexOf("\ncommand="));
 	const result = spawnSync(
 		"bash",
 		[
@@ -1397,7 +1436,7 @@ for (const fresh of [false, true]) {
 				new URL("../deploy/ack/redeploy.sh", import.meta.url),
 				"utf8",
 			);
-			const dispatch = script.slice(script.indexOf("command=${1:-help}"));
+			const dispatch = script.slice(script.indexOf("\ncommand="));
 			// Run the real dispatch with observable external-stage boundaries.
 			const result = spawnSync(
 				"bash",
@@ -1411,6 +1450,7 @@ prepare_evidence() { :; }
 configuration_source_preflight() { echo config-preflight; }
 bootstrap_database() { echo database; }
 preflight_agent_requests() { echo request-preflight; }
+reserve_plan_preflight() { :; }
 bootstrap_inputs() { echo bootstrap; }
 deploy() { echo deploy; }
 template_preflight() { echo preflight; }
@@ -1545,3 +1585,114 @@ for (const scenario of ["missing-login", "invalid-templates"]) {
 		await assert.rejects(readFile(marker), { code: "ENOENT" });
 	});
 }
+
+for (const failure of [
+	"none",
+	"plan",
+	"initial-publication",
+	"binding",
+	"reserve-publication",
+	"readiness",
+]) {
+	test(`fresh all preserves publication and reserve ordering (${failure})`, async () => {
+		const source = await readFile(
+			new URL("../deploy/ack/redeploy.sh", import.meta.url),
+			"utf8",
+		);
+		const dispatch = source.slice(source.indexOf("\ncommand="));
+		const result = spawnSync(
+			"bash",
+			[
+				"-c",
+				`
+set -euo pipefail
+require_source_tuple() { :; }
+require_file() { [[ -n "$2" ]]; }
+prepare_evidence() { :; }
+configuration_source_preflight() { :; }
+preflight_agent_requests() { :; }
+reserve_plan_preflight() { echo plan; ${failure === "plan" ? "return 1" : ":"}; }
+bootstrap_database() { echo database; }
+bootstrap_inputs() { echo bootstrap; }
+deploy() { echo deploy; }
+template_preflight() { echo templates; }
+bootstrap_login() { echo login; }
+publications=0
+runtime_inputs() { publications=$((publications+1)); echo publish-$publications; ${failure === "initial-publication" ? '[[ "$publications" != 1 ]]' : failure === "reserve-publication" ? '[[ "$publications" != 2 ]]' : ":"}; }
+bootstrap_credential() { [[ "$publications" == 1 ]]; echo credential; }
+node() { :; }
+provision() { [[ "$publications" == 1 ]]; echo provision; }
+bind_session_reserves() { echo bind; ${failure === "binding" ? "return 1" : ":"}; }
+wait_session_reserves() { [[ "$publications" == 2 ]]; echo ready; ${failure === "readiness" ? "return 1" : ":"}; }
+validate() { echo validate; }
+repo_root=/fixture
+source_sha=fixture
+${dispatch}
+`,
+				"test",
+				"all",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					PATH: process.env.PATH,
+					BASH_ENV: "/dev/null",
+					ACK_BOOTSTRAP_INPUTS_FILE: "/fixture/bootstrap",
+					ACK_WORKLOAD_CAPACITY_FILE: "/fixture/capacity",
+					ACK_LOGIN_BOOTSTRAP_FILE: "/fixture/login",
+					ACK_CREDENTIAL_BOOTSTRAP_FILE: "/fixture/credential",
+					ACK_TEMPLATE_PREFLIGHT_JOBS_FILE: "/fixture/jobs",
+					ACK_SESSION_RESERVE_PLAN_FILE: "/fixture/plan",
+				},
+			},
+		);
+		const stages = result.stdout.trim().split("\n");
+		assert.equal(result.status, failure === "none" ? 0 : 1, result.stderr);
+		if (failure === "none")
+			assert.deepEqual(stages, [
+				"plan",
+				"database",
+				"bootstrap",
+				"database",
+				"deploy",
+				"templates",
+				"login",
+				"publish-1",
+				"credential",
+				"provision",
+				"bind",
+				"login",
+				"publish-2",
+				"ready",
+				"validate",
+			]);
+		else assert(!stages.includes("validate"));
+		if (failure === "plan") assert(!stages.includes("bootstrap"));
+		if (failure === "initial-publication")
+			assert(!stages.includes("credential") && !stages.includes("provision"));
+		if (failure === "binding") assert(!stages.includes("publish-2"));
+		if (failure === "reserve-publication") assert(!stages.includes("ready"));
+	});
+}
+
+test("a candidate cannot replace an already approved capacity profile", async (t) => {
+	const f = await fixture(t);
+	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+	const baseline = await readFile(f.capacity.profilesFile);
+	const candidate = JSON.parse(baseline);
+	candidate.profiles[0].conformanceEvidenceHash = "f".repeat(64);
+	const file = await f.save(
+		join(dirname(f.capacity.profilesFile), "conflicting-candidate.json"),
+		candidate,
+	);
+	const input = JSON.parse(await readFile(f.files.capacity));
+	input.candidateProfilesFile = file;
+	await f.save(f.files.capacity, input);
+	const mutations = f.mutations.length;
+	await assert.rejects(
+		publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+		/RUNTIME_INPUT_CAPACITY_TUPLE_INVALID/,
+	);
+	assert.equal(f.mutations.length, mutations);
+	assert.deepEqual(await readFile(f.capacity.profilesFile), baseline);
+});

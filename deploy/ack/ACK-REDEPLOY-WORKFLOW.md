@@ -75,13 +75,20 @@ Worker 自身或独立 Runtime preflight 位于 ECI，均不能代替业务 Sess
 接受的换行列表。旧 shell 中的 ACK 配置不参与此次运行；删除确认只接受调用方明确设置的
 `ACK_CLEAN_CONFIRM` 和 `ACK_CLEAN_ALLOW_FOREIGN`，输入包不能内置这两个变量。
 
-启用 Session reserve 时，capsule 同时声明 `ACK_SESSION_RESERVE_PLAN_FILE` 和
-`ACK_SESSION_RESERVES_FILE`。前者是当前 source 下默认关闭的预算/策略文件，后者可指向同一
-输入文件。`all` 先完成 Agent provision，再按本轮 `agent-bindings.json` 中四个标准模板的
-ready ID 生成 enabled revision，并把同一份配置通过 `runtime-inputs` 发布到 API 与 Worker；
-它不会把历史 Agent ID 写回 capsule，也不会把生成后的 reserve 文件提升为下一轮的静态输入。
-最终 receipt 必须回读 Worker/API 的 Secret hash、revision、Pod/PVC UID 和未领取业务状态。
-custom ACP 与 self-managed 入口保持原冷路径，不进入 reserve profile。
+启用 Session reserve 时，capsule 在 `inputs` 中分别声明 `ACK_SESSION_RESERVE_PLAN_FILE` 和
+`ACK_SESSION_RESERVES_FILE`，两个路径不能相同。计划使用现有 reserve 配置格式及 `sourceSha`，
+明确指定 `enabled=true`、revision、预算、配置版本及每项 minimum/maximum；每个 profile 用
+创建清单中的 `requestName` 替代 `agentId`，其 templateId 和 digest 必须匹配同源模板发布清单。
+初始 reserve 文件为默认关闭的较低 revision。API/Worker 配置模块不再另行导出硬编码的
+`sessionSandboxReserves`；两端都以挂载文件为准。
+
+`all` 在部署前检查计划来源和模板绑定，先发布模板/容量与身份，再签发凭证并 provision。
+随后按本轮 source、请求正文和幂等键绑定的 ready Agent ID 生成 reserve 配置，刷新登录，
+通过 `runtime-inputs` 发布到 API/Worker，并等待每个当前 profile 的 Store ready 数达到声明
+minimum 后才进行浏览器验收。计划不改写，成功后的 reserve 输出回写到本轮 capsule，供
+后续 `validate` 使用。清空重建使用同一原始输入包的空状态副本，不沿用历史 Agent bindings。
+ready 数不代表原生会话或模型已就绪；性能验收仍须证明实际领取保持同一 Pod/PVC UID。
+custom ACP 与 self-managed 入口保持原准备路径，不进入 reserve profile。
 
 第三个参数可选择既有 `plan`、`deploy`、`bootstrap-login`、`runtime-inputs`、`provision`、`validate` 或
 其他已声明阶段；所有原有 source/image、ownership 和破坏性清理门禁继续执行。不要把含凭证的
@@ -89,7 +96,7 @@ custom ACP 与 self-managed 入口保持原冷路径，不进入 reserve profile
 
 每轮成功阶段只回写自己声明的生成输入：`bootstrap-login` 回写当前蓝图，
 `template-preflight` 回写模板索引，`custom-preflight` 回写 capacity 索引及已声明的 profiles JSON，
-`runtime-inputs` 回写 capacity、profiles 和 bootstrap JSON，
+`runtime-inputs` 回写 capacity、profiles、candidate profiles 和 bootstrap JSON，
 `bootstrap-credential`/`provision` 回写凭证请求和创建清单，`all` 覆盖上述输出。
 文件路径由环境变量绑定识别，支持平铺或分目录的输入包。声明在输出目录中的
 `ACK_TEMPLATE_VALIDATIONS_FILE` 可以首次不存在；生成后自动作为 JSON 输入解析。
@@ -588,6 +595,14 @@ Key 的候选 metadata，与会话模型目录是不同入口，配置前者不�
 纯 Pod-ready、任意文件、缺少模型事实或把容量扩大到测量上限以上都不能通过。
 更新配置后须等待 Worker rollout；已有 Agent 通过正式 lifecycle 重启重新生成 verified
 capacity，禁止手工写数据库补齐。
+
+在同一次 `all` 中新测量 custom 容量时，capacity 输入另声明 `candidateProfilesFile`，并把该
+JSON 放入 capsule 的 `inputs`。它以 `{"schemaVersion":1,"profiles":[]}` 初始化，独立于
+bootstrap 的 `profilesFile`。custom producer 只写候选文件；`runtime-inputs` 保留已发布的批准，
+合并通过证据校验的新 profile 后，按原 Secret UID/resourceVersion 和字节基线发布，并同步两份
+本地 profiles。候选不得改变已有批准或覆盖其他 Secret 键。已有测量输入可保留原单文件形式。
+custom job 的 OCI manifest/config 与测量收据须保留原始字节，通过包内文件引用读取，不能列入
+会重新序列化 JSON 的 `inputs`；只有需要解析路径的 JSON 模板进入该列表。
 
 ### 隔离 custom 容量测量
 

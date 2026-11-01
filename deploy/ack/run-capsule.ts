@@ -7,6 +7,7 @@ import { privateJson } from "./private-input.ts";
 import { sessionSandboxReserveDigestV1 } from "../../packages/platform-core/src/session-sandbox-reserves.ts";
 import {
 	prepareReserveInput,
+	parseReserveInput,
 	readReserveApi,
 	readReserveWorker,
 	type ReadReserveApi,
@@ -120,6 +121,9 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 		return value;
 	};
 	let reserve: Awaited<ReturnType<typeof prepareReserveInput>> | undefined;
+	if (input.environment.ACK_SESSION_RESERVE_PLAN_FILE !== undefined) {
+		assert(input.environment.ACK_SESSION_RESERVES_FILE && input.environment.ACK_SESSION_RESERVE_PLAN_FILE !== input.environment.ACK_SESSION_RESERVES_FILE && files.has(input.environment.ACK_SESSION_RESERVE_PLAN_FILE.slice(capsulePrefix.length)), "CAPSULE_RESERVE_PLAN_DECLARED_INPUT_REQUIRED");
+	}
 	if (input.environment.ACK_SESSION_RESERVES_FILE !== undefined) {
 		const reserveReference = input.environment.ACK_SESSION_RESERVES_FILE.slice(capsulePrefix.length);
 		const bootstrapReference = input.environment.ACK_BOOTSTRAP_INPUTS_FILE?.slice(capsulePrefix.length);
@@ -170,10 +174,11 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 			const api = resolved.objects.find((object: any) => object.kind === "Secret" && object.name === reserve.apiSecretName);
 			assert(worker?.files && api?.files, "CAPSULE_RESERVE_CONSUMER_SECRET_MISSING");
 			const apiHadReserveBinding = api.files["session-reserves.json"] !== undefined;
-			if (reserve.observed?.storedReserveBytes) {
+			if (reserve.observed?.storedReserveBytes || (!reserve.observed && input.environment.ACK_SESSION_RESERVE_PLAN_FILE)) {
 				const baseline = join(runDirectory, ".session-reserves-before.json");
 				assert(!files.has(".session-reserves-before.json"), "CAPSULE_RESERVE_INPUT_CONFLICT");
-				await writeFile(baseline, reserve.observed.storedReserveBytes, { mode: 0o600, flag: "wx" });
+				const bytes = reserve.observed?.storedReserveBytes ?? `${JSON.stringify(files.get(input.environment.ACK_SESSION_RESERVES_FILE.slice(capsulePrefix.length)), null, 2)}\n`;
+				await writeFile(baseline, bytes, { mode: 0o600, flag: "wx" });
 				worker.files["session-reserves.json"] = baseline;
 			} else if (reserve.observed) {
 				// Bootstrap verifies the existing Secret; runtime-inputs publishes the candidate later.
@@ -212,13 +217,14 @@ async function promotionTargets(command: string, materialized: MaterializedCapsu
 	if (["template-preflight", "runtime-inputs", "all"].includes(command)) add("ACK_TEMPLATE_VALIDATIONS_FILE");
 	if (["runtime-inputs", "all"].includes(command)) {
 		add("ACK_BOOTSTRAP_INPUTS_FILE");
+		if (command === "all" && environment.ACK_SESSION_RESERVE_PLAN_FILE) add("ACK_SESSION_RESERVES_FILE");
 	}
 	if (["custom-preflight", "runtime-inputs", "all"].includes(command)) {
 		add("ACK_WORKLOAD_CAPACITY_FILE");
 		const capacityFile = environment.ACK_WORKLOAD_CAPACITY_FILE;
 		if (capacityFile) {
 			const capacity = await privateJson(capacityFile);
-			for (const [relative, file] of resolvedFiles) if (file === capacity.profilesFile) targets.add(relative);
+			for (const [relative, file] of resolvedFiles) if (file === capacity.profilesFile || file === capacity.candidateProfilesFile) targets.add(relative);
 		}
 	}
 	if (["bootstrap-credential", "provision", "all"].includes(command)) {
@@ -287,27 +293,25 @@ export async function runCapsule(manifest: string, command: string, sourceRoot: 
 	const child = spawn("bash", [join(sourceRoot, "deploy/ack/redeploy.sh"), command], { cwd: sourceRoot, env: { ...inherited, ...environment }, stdio: "inherit" });
 	const exitCode = await new Promise<number>((resolve, reject) => { child.once("error", reject); child.once("exit", (code) => resolve(code ?? 1)); });
 	let mountedInputVerified = false;
-	let adoptedReserve = reserve;
-	if (exitCode === 0 && reserve && command === "all" && reserve.receipt.enabled === false) {
-		const resolved = await privateJson(environment.ACK_SESSION_RESERVES_FILE!);
-		if (resolved.enabled === true) {
-			const rebound = await prepareReserveInput(environment, sourceSha, {
-				readJson: privateJson,
-				readWorker,
-			});
-			adoptedReserve = { ...reserve, ...rebound, observed: rebound.actual, storedReserveBytes: rebound.storedReserveBytes };
-		}
+	let reserveReceipt = reserve?.receipt;
+	if (exitCode === 0 && reserve && command === "all" && environment.ACK_SESSION_RESERVE_PLAN_FILE) {
+		const { resolveReserveConfiguration } = await import("./bind-session-reserves.ts");
+		const expected = await resolveReserveConfiguration(environment, sourceSha);
+		const bound = await privateJson(environment.ACK_SESSION_RESERVES_FILE);
+		assert(sessionSandboxReserveDigestV1(bound) === sessionSandboxReserveDigestV1(expected), "CAPSULE_RESERVE_PLAN_ADOPTION_MISMATCH");
+		const configuration = parseReserveInput(bound, sourceSha, environment.ACK_NAMESPACE);
+		reserveReceipt = { sourceSha, namespace: configuration.namespace, revision: configuration.revision, enabled: configuration.enabled, configHash: sessionSandboxReserveDigestV1(bound) };
 	}
-	if (exitCode === 0 && adoptedReserve && ["all", "runtime-inputs", "provision", "validate"].includes(command)) {
+	if (exitCode === 0 && reserve && reserveReceipt && ["all", "runtime-inputs", "provision", "validate"].includes(command)) {
 		const bootstrap = JSON.parse(await readFile(environment.ACK_BOOTSTRAP_INPUTS_FILE!, "utf8"));
-		const actual = (readWorker ?? readReserveWorker)(environment, bootstrap, adoptedReserve.workerSecretName);
-		assert(actual?.configurationHash === adoptedReserve.receipt.configHash && actual.configuration?.revision === adoptedReserve.receipt.revision && actual.configuration?.enabled === adoptedReserve.receipt.enabled && actual.sourceSha === adoptedReserve.receipt.sourceSha, "CAPSULE_RESERVE_ADOPTION_MISMATCH");
-		const api = (readApi ?? readReserveApi)(environment, bootstrap, adoptedReserve.apiSecretName);
-		assert(api?.configurationHash === adoptedReserve.receipt.configHash && api.configuration?.revision === adoptedReserve.receipt.revision && api.configuration?.enabled === adoptedReserve.receipt.enabled && api.sourceSha === adoptedReserve.receipt.sourceSha, "CAPSULE_RESERVE_API_ADOPTION_MISMATCH");
+		const actual = (readWorker ?? readReserveWorker)(environment, bootstrap, reserve.workerSecretName);
+		assert(actual?.configurationHash === reserveReceipt.configHash && actual.configuration?.revision === reserveReceipt.revision && actual.configuration?.enabled === reserveReceipt.enabled && actual.sourceSha === reserveReceipt.sourceSha, "CAPSULE_RESERVE_ADOPTION_MISMATCH");
+		const api = (readApi ?? readReserveApi)(environment, bootstrap, reserve.apiSecretName);
+		assert(api?.configurationHash === reserveReceipt.configHash && api.configuration?.revision === reserveReceipt.revision && api.configuration?.enabled === reserveReceipt.enabled && api.sourceSha === reserveReceipt.sourceSha, "CAPSULE_RESERVE_API_ADOPTION_MISMATCH");
 		mountedInputVerified = true;
 	}
 	const promotedInputs = exitCode === 0 ? await promoteGeneratedInputs(materialized, command) : [];
-	return { schemaVersion: 1, kind: "ack-portable-capsule", sourceSha, inputCount, command, exitCode, promotedInputs, ...(adoptedReserve ? { reserve: { ...adoptedReserve.receipt, mountedInputVerified } } : {}) };
+	return { schemaVersion: 1, kind: "ack-portable-capsule", sourceSha, inputCount, command, exitCode, promotedInputs, ...(reserveReceipt ? { reserve: { ...reserveReceipt, mountedInputVerified } } : {}) };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

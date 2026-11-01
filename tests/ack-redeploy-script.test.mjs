@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { parse } from "yaml";
 
 const root = join(import.meta.dirname, "..");
 const script = join(root, "deploy/ack/redeploy.sh");
@@ -75,16 +76,13 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		join(root, "deploy/ack/chart/templates/worker.yaml"),
 		"utf8",
 	);
-	if (!chart.includes("resources: [endpoints]\n    verbs: [get, list, watch]"))
-		throw new Error(
-			"Worker reserve readback requires namespaced Endpoints get permission",
-		);
-	if (
-		chart.match(
-			/resources: \[endpoints\][\s\S]{0,80}verbs: \[[^\]]*(create|delete|patch|update)/,
-		)
-	)
-		throw new Error("Worker Endpoints permission must remain read-only");
+	const role = parse(
+		chart.split("---").find((document) => /^kind: Role$/m.test(document)),
+	);
+	assert.deepEqual(
+		role.rules.filter((rule) => rule.resources.includes("endpoints")),
+		[{ apiGroups: [""], resources: ["endpoints"], verbs: ["get"] }],
+	);
 	const allBlock = source.slice(source.indexOf("\n\tall)"));
 	if (
 		allBlock.indexOf("bootstrap_credential") >
