@@ -451,7 +451,14 @@ RuntimeHost 在读取附件或运行命令前校验签名、签发方、audience
 Worker 的控制请求仍须对原 verified 目标完成完整签名 readiness，不能使用业务探测缓存代替。
 同一次准备中的前置路由核对与最终签名探测按
 [Runtime HLD §8.2](HLD-agent-runtime-M1.md#82-事件去重) 分工；前置观测不是授权或就绪证明，
-最终探测和其后的当前授权、租约及 fence 复核均通过后才可发送。
+固定为有界三阶段，并在每次返回前复核当前授权、`agentId`、`conversationId`、`executionId`、
+`sessionGeneration`、Host Session/native thread、Turn、operation/attempt、`stopRequestId`、
+独立 stop fence、Workload UID/generation/revision/Digest、当前 Pod 和精确路由。最终探测使用
+本控制请求唯一的 readiness request/grant/operation；最终探测和其后的当前授权、租约及 fence
+复核均通过后才可发送。任何探测失败、超时、不可达或绑定变化只结束本次 prepare，保留原
+stop intent、lease、stop barrier 和 Session/Execution 占用，运行中停止进入 pending/unknown 并
+沿原执行恢复，未开始停止沿原未投递取消路径收敛；不能发 stopReceipt、释放占用、创建新
+Session/Execution 或开始下一任务，也不能读取业务 readiness ledger 或复用其他控制请求的结果。
 
 历史执行主体缺失时，只能依据部署受信的原 producer 证据建立原主体与对象绑定，不能按
 当前角色补造原受理范围。只有完整原授权边界可恢复业务授权记录；仅能证明主体时，将原
