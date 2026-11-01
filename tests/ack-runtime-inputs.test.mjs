@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { prepareBootstrapInputs } from "../deploy/ack/bootstrap-inputs.ts";
 import { bootstrapLogin } from "../deploy/ack/bootstrap-login.ts";
@@ -493,6 +493,215 @@ test("fresh measured outputs reach both consumers and pass the capacity gate; re
 	assert.equal(repeated.loginVerified, true);
 	assert.equal(f.mutations.length, mutationCount);
 });
+
+async function refreshMeasurements(f, { sourceSha = source, codexImage } = {}) {
+	const templates = [];
+	for (const expected of f.templates) {
+		const old = JSON.parse(await readFile(expected.validationFile));
+		const imageDigest =
+			expected.templateId === "codex" && codexImage
+				? codexImage
+				: expected.imageDigest;
+		const validation = {
+			...old,
+			sourceCommit: sourceSha,
+			imageDigest,
+			executionId: `refreshed-${old.executionId}`,
+			validatedAt: old.validatedAt + 1,
+		};
+		const output = join(
+			dirname(f.files.templates),
+			"refreshed",
+			expected.templateId,
+		);
+		const validationFile = await f.save(
+			join(output, "candidate.json"),
+			validation,
+		);
+		const preflightFile = await f.save(
+			join(output, "validation.json"),
+			templatePreflightValidationReceipt({
+				...validation,
+				scope: "isolated-template-real-model",
+				terminalStatus: "completed",
+				modelFactSource: "protected-driver-journal",
+				modelOperationCount: 1,
+			}),
+		);
+		const previous = JSON.parse(
+			await readFile(
+				join(dirname(expected.validationFile), "runtime-capacity.receipt.json"),
+			),
+		);
+		await f.save(join(output, "runtime-capacity.receipt.json"), {
+			...previous,
+			sourceCommit: sourceSha,
+			imageDigest,
+			submittedAt: previous.submittedAt + 1,
+			completedAt: validation.validatedAt,
+		});
+		templates.push({ ...expected, imageDigest, validationFile, preflightFile });
+	}
+	await f.save(f.files.templates, {
+		schemaVersion: 1,
+		sourceSha,
+		minValidityMs: 60_000,
+		templates,
+	});
+	return templates;
+}
+
+test("a new template validation preserves the approved capacity bytes and evidence references", async (t) => {
+	const f = await fixture(t);
+	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+	const approved = await readFile(f.capacity.profilesFile);
+	const capacityBefore = await readFile(f.files.capacity);
+	const templates = await refreshMeasurements(f);
+	const result = await publishRuntimeInputs(
+		f.files,
+		f.rendered,
+		source,
+		f.kubectl,
+		true,
+	);
+	assert.equal(result.status, "passed");
+	assert.deepEqual(await readFile(f.capacity.profilesFile), approved);
+	assert.deepEqual(await readFile(f.files.capacity), capacityBefore);
+	assert.deepEqual(
+		Buffer.from(
+			f.cluster.get("secret/worker-config").data["capacity.json"],
+			"base64",
+		),
+		approved,
+	);
+	for (const template of templates) {
+		for (const component of ["api", "worker"])
+			assert.deepEqual(
+				Buffer.from(
+					f.cluster.get(`secret/${component}-config`).data[
+						`template-validation-${template.templateId}.json`
+					],
+					"base64",
+				),
+				await readFile(template.validationFile),
+			);
+	}
+});
+
+test("a new template image receives a new capacity approval without replacing other approvals", async (t) => {
+	const f = await fixture(t);
+	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+	const approved = JSON.parse(await readFile(f.capacity.profilesFile)).profiles;
+	const codexImage = `sha256:${"b".repeat(64)}`;
+	const templates = await refreshMeasurements(f, { codexImage });
+	await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+	const profiles = JSON.parse(await readFile(f.capacity.profilesFile)).profiles;
+	assert.equal(profiles.length, 5);
+	for (const profile of approved)
+		assert(profiles.some((p) => JSON.stringify(p) === JSON.stringify(profile)));
+	const file = join(
+		dirname(templates[0].validationFile),
+		"runtime-capacity.receipt.json",
+	);
+	assert.equal(
+		profiles.find((p) => p.imageDigest === codexImage).conformanceEvidenceHash,
+		createHash("sha256")
+			.update(await readFile(file))
+			.digest("hex"),
+	);
+});
+
+for (const scenario of [
+	"missing-reference",
+	"missing-file",
+	"changed-bytes",
+	"wrong-source",
+	"wrong-resources",
+	"unmeasured",
+	"new-source",
+	"fresh-expired",
+	"fresh-resources",
+	"fresh-failed",
+	"fresh-source",
+]) {
+	test(`template refresh rejects ${scenario} evidence before writes`, async (t) => {
+		const f = await fixture(t);
+		await publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true);
+		const sourceSha = scenario === "new-source" ? "b".repeat(40) : source;
+		const templates = await refreshMeasurements(f, { sourceSha });
+		const capacity = JSON.parse(await readFile(f.files.capacity));
+		const original = capacity.evidence[0].file;
+		if (scenario === "missing-reference") {
+			capacity.evidence.shift();
+			await f.save(f.files.capacity, capacity);
+		} else if (scenario === "missing-file") {
+			await rm(original);
+		} else if (scenario === "changed-bytes") {
+			await writeFile(original, `${await readFile(original, "utf8")} `);
+		} else if (
+			["wrong-source", "wrong-resources", "unmeasured"].includes(scenario)
+		) {
+			const measured = JSON.parse(await readFile(original));
+			if (scenario === "wrong-source") measured.sourceCommit = "b".repeat(40);
+			if (scenario === "wrong-resources")
+				measured.observedResources.limits.cpu = "2";
+			if (scenario === "unmeasured") measured.modelOperationCount = 0;
+			await f.save(original, measured);
+			const profiles = JSON.parse(await readFile(f.capacity.profilesFile));
+			profiles.profiles[0].conformanceEvidenceHash = createHash("sha256")
+				.update(await readFile(original))
+				.digest("hex");
+			await f.save(f.capacity.profilesFile, profiles);
+			f.cluster.get("secret/worker-config").data["capacity.json"] = (
+				await readFile(f.capacity.profilesFile)
+			).toString("base64");
+		} else if (scenario === "new-source") {
+			await f.save(f.files.capacity, { ...capacity, sourceSha });
+			await bootstrapLogin(f.files.login, sourceSha, f.loginConfig.origin);
+		} else if (scenario === "fresh-expired") {
+			const validation = JSON.parse(
+				await readFile(templates[0].validationFile),
+			);
+			await f.save(templates[0].validationFile, {
+				...validation,
+				validUntil: Date.now() - 1,
+			});
+		} else {
+			const file = join(
+				dirname(templates[0].validationFile),
+				"runtime-capacity.receipt.json",
+			);
+			const measured = JSON.parse(await readFile(file));
+			if (scenario === "fresh-resources")
+				measured.observedResources.limits.cpu = "2";
+			if (scenario === "fresh-failed") measured.terminalStatus = "failed";
+			if (scenario === "fresh-source") measured.sourceCommit = "b".repeat(40);
+			await f.save(file, measured);
+		}
+		const before = await Promise.all(
+			[
+				f.capacity.profilesFile,
+				f.files.capacity,
+				...f.bootstrap.objects.flatMap((o) => Object.values(o.files)),
+			].map((p) => readFile(p)),
+		);
+		const mutationCount = f.mutations.length;
+		await assert.rejects(
+			publishRuntimeInputs(f.files, f.rendered, sourceSha, f.kubectl, true),
+		);
+		assert.equal(f.mutations.length, mutationCount);
+		assert.deepEqual(
+			await Promise.all(
+				[
+					f.capacity.profilesFile,
+					f.files.capacity,
+					...f.bootstrap.objects.flatMap((o) => Object.values(o.files)),
+				].map((p) => readFile(p)),
+			),
+			before,
+		);
+	});
+}
 
 test("runtime-inputs with reserves uses its configured executor and namespace before applying", async (t) => {
 	const f = await fixture(t);

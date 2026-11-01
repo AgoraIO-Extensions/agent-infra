@@ -130,6 +130,9 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	}
 	const profilesDocument = await privateJson(capacity.profilesFile);
 	assert(profilesDocument.schemaVersion === 1 && Array.isArray(profilesDocument.profiles));
+	assert(requests.schemaVersion === 1 && Array.isArray(requests.requests));
+	const bodies = await Promise.all(requests.requests.map((r: any) => privateJson(r.bodyFile)));
+	assert(templates.templates.every((t: any) => bodies.some((b: any) => b.source?.kind === "standard" && b.source.templateId === t.templateId)), "RUNTIME_INPUT_TEMPLATE_REQUEST_MISSING");
 	let profiles = profilesDocument.profiles;
 	const resources = {
 		requests: { cpu: capacity.resources?.requests?.cpu, memory: capacity.resources?.requests?.memory },
@@ -157,20 +160,31 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		assert(measured.scope === "ack-runtime-capacity" && measured.sourceCommit === sourceSha &&
 			measured.imageDigest === expected.imageDigest && measured.completedAt === preflight.validatedAt &&
 			measured.modelOperationCount === preflight.modelOperationCount, "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
-		const matches = (p: any) => p.imageDigest === expected.imageDigest && p.resourceProfileRef === capacity.resourceProfileRef && p.resourceConfigurationHash === resourceConfigurationHash;
-		assert(profiles.filter(matches).length <= 1, "RUNTIME_INPUT_CAPACITY_AMBIGUOUS");
-		profiles = [...profiles.filter((p: any) => !matches(p)), {
+		const request = bodies.find((b: any) => b.source?.kind === "standard" && b.source.templateId === expected.templateId);
+		const freshProfile = {
 			schemaVersion: 1, imageDigest: expected.imageDigest, resourceProfileRef: capacity.resourceProfileRef,
 			resourceConfigurationHash, maximumConcurrentExecutions: 1, conformanceEvidenceHash: hash(measuredBytes),
-		}];
-		evidenceFiles.set(expected.imageDigest, file);
+		};
+		validateCapacityBindings([request], [expected], capacity, [freshProfile], new Map([[expected.imageDigest, measuredBytes]]));
+		const matches = (p: any) => p.imageDigest === expected.imageDigest && p.resourceProfileRef === capacity.resourceProfileRef && p.resourceConfigurationHash === resourceConfigurationHash;
+		const approved = profiles.filter(matches);
+		assert(approved.length <= 1, "RUNTIME_INPUT_CAPACITY_AMBIGUOUS");
+		if (approved.length === 0) {
+			profiles = [...profiles, freshProfile];
+			evidenceFiles.set(expected.imageDigest, file);
+		} else {
+			// Workload dispatch binds the full approval; refreshing validation must not revoke it.
+			const previousFile = evidenceFiles.get(expected.imageDigest);
+			assert(typeof previousFile === "string", "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
+			const previousBytes = await privateBytes(previousFile);
+			const previous = JSON.parse(previousBytes.toString("utf8"));
+			assert(previous.scope === "ack-runtime-capacity" && previous.sourceCommit === sourceSha, "RUNTIME_INPUT_CAPACITY_TUPLE_INVALID");
+			validateCapacityBindings([request], [expected], capacity, approved, new Map([[expected.imageDigest, previousBytes]]));
+		}
 	}
 	assert(evidenceFiles.size <= 64 && profiles.length <= 64);
 	const evidence = new Map<string, Uint8Array>();
 	for (const [digest, file] of evidenceFiles) evidence.set(digest, await privateBytes(file));
-	assert(requests.schemaVersion === 1 && Array.isArray(requests.requests));
-	const bodies = await Promise.all(requests.requests.map((r: any) => privateJson(r.bodyFile)));
-	assert(templates.templates.every((t: any) => bodies.some((b: any) => b.source?.kind === "standard" && b.source.templateId === t.templateId)), "RUNTIME_INPUT_TEMPLATE_REQUEST_MISSING");
 	validateCapacityBindings(bodies, templates.templates, capacity, profiles, evidence);
 	const worker = consumers.find((c) => c.component === "worker")!;
 	assert(capacity.workerSecretRef?.name === worker.secretName);
