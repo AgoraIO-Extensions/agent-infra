@@ -228,7 +228,7 @@ function portableValue(value: any, materialized: MaterializedCapsule): any {
 }
 
 async function promoteGeneratedInputs(materialized: MaterializedCapsule, command: string) {
-	const promoted: string[] = [];
+	const plans: Array<{ relative: string; destination: string; bytes: Buffer }> = [];
 	for (const relative of promotionTargets(command, materialized)) {
 		const source = materialized.resolvedFiles.get(relative);
 		if (!source) continue;
@@ -244,6 +244,10 @@ async function promoteGeneratedInputs(materialized: MaterializedCapsule, command
 		if (current && JSON.stringify(JSON.parse(current.toString("utf8"))) === JSON.stringify(value)) continue;
 		const bytes = JSON.stringify(raw) === JSON.stringify(value) ? await readFile(source) : Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
 		await inspectPath(materialized.canonicalRoot, relative, true);
+		plans.push({ relative, destination, bytes });
+	}
+	const promoted: string[] = [];
+	for (const { relative, destination, bytes } of plans) {
 		const temporary = `${destination}.promotion-${process.pid}-${Date.now()}`;
 		try {
 			await writeFile(temporary, bytes, { mode: 0o600, flag: "wx" });

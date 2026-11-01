@@ -499,6 +499,53 @@ test("promotion preserves concurrent canonical edits and rejects undeclared temp
 	}
 });
 
+test("promotion preflights every target before changing the first canonical file", async (t) => {
+	const f = await fixture(t);
+	await mkdir(join(f.capsule, "inputs"), { mode: 0o700 });
+	await mkdir(join(f.capsule, "state"), { mode: 0o700 });
+	await f.save("state/template-validations.json", { original: "template" });
+	await f.save("inputs/bootstrap.json", { original: "bootstrap" });
+	await f.save("inputs/capacity.json", { original: "capacity" });
+	f.value.inputs.push(
+		"state/template-validations.json",
+		"inputs/bootstrap.json",
+		"inputs/capacity.json",
+	);
+	f.value.environment.ACK_TEMPLATE_VALIDATIONS_FILE =
+		"@CAPSULE_ROOT@/state/template-validations.json";
+	f.value.environment.ACK_BOOTSTRAP_INPUTS_FILE =
+		"@CAPSULE_ROOT@/inputs/bootstrap.json";
+	f.value.environment.ACK_WORKLOAD_CAPACITY_FILE =
+		"@CAPSULE_ROOT@/inputs/capacity.json";
+	await f.save("capsule.json", f.value);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		[
+			"#!/usr/bin/env bash",
+			"set -euo pipefail",
+			"printf '%s\\n' '{\"generated\":true}' > \"$ACK_TEMPLATE_VALIDATIONS_FILE\"",
+			`(sleep 0.1; printf '%s\\n' '{"concurrent":true}' > '${join(f.capsule, "inputs/capacity.json")}') &`,
+			"sleep 0.2",
+			"printf '%s\\n' '{\"generated-capacity\":true}' > \"$ACK_WORKLOAD_CAPACITY_FILE\"",
+		].join("\n"),
+		{ mode: 0o700 },
+	);
+	await assert.rejects(
+		runCapsule(f.manifest, "runtime-inputs", f.source),
+		/CAPSULE_OUTPUT_LOCAL_DRIFT/,
+	);
+	assert.deepEqual(
+		JSON.parse(
+			await readFile(join(f.capsule, "state/template-validations.json")),
+		),
+		{ original: "template" },
+	);
+	assert.deepEqual(
+		JSON.parse(await readFile(join(f.capsule, "inputs/capacity.json"))),
+		{ concurrent: true },
+	);
+});
+
 test("directory environment paths stay canonical while file inputs use the resolved run", async (t) => {
 	const f = await fixture(t);
 	f.value.directories.push("state/agents");
