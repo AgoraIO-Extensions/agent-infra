@@ -348,6 +348,18 @@ Secret 的 UID、归属、版本及字节。任一步失败都不能产生 `logi
 `bootstrap-inputs` 同样会在写入前拒绝重建既有 Deployment 仍引用的缺失 Secret；该错误需要
 核对现场与恢复计划，不能通过重跑 bootstrap 换一个 Secret UID 来绕过。
 
+API 和 Worker 分别按渲染清单声明的副本数验证；Worker 仍必须为 1。现场副本数在写入前、
+rollout 后或新登录后漂移都失败。`plan`/`deployed` 快照区分渲染的 desired、副本声明和
+现场 observed/updated/available/ready；没有现场对象或状态时记为 null。
+
+配置 restart、Helm deploy 和 `runtime-inputs apply` 在变更前开启 API Deployment watch，
+从初始 ADDED 事件覆盖到变更后回读的同一 resourceVersion，保留最小 available 副本数。
+零可用副本、UID/副本漂移、watch 中断、无法覆盖终态版本或超时均留下失败/unknown 回执；
+全新安装没有旧 API 时记为 `not-applicable-new-deployment`。独立回执为
+`api-rollout-configuration.json`、`api-rollout-deploy.json`，runtime-inputs 内嵌 `apiRollout`。
+这些只是 Deployment 事件窗口证据，`httpAvailabilityVerified=false`；不能据此证明 HTTP
+全程可用。空 Cookie 的两主体登录及 session 回读仍由已有登录 gate 独立完成。
+
 ```bash
 deploy/ack/redeploy.sh runtime-inputs
 ```
