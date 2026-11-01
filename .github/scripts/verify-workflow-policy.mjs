@@ -191,7 +191,7 @@ export function validateWorkflowDocuments(workflows) {
       Object.hasOwn(dispatchInputs ?? {}, "publish_platform") ||
       !String(templates?.if ?? "").includes("inputs.full_release == true") ||
       !String(publish?.jobs?.platform?.if ?? "").includes("inputs.full_release == true") ||
-      !sameObject(publish?.concurrency, {group: "publish-images-${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}", "cancel-in-progress": true}) ||
+      !sameObject(publish?.concurrency, {group: "publish-images-${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}", "cancel-in-progress": false}) ||
       sourceCheckouts.some((step) => step.with?.ref !== sourceRef) ||
       !JSON.stringify(publish?.jobs?.["infrastructure-index"] ?? {}).includes("$RELEASE_SOURCE_SHA") ||
       !JSON.stringify(publish?.jobs?.["platform-index"] ?? {}).includes("$RELEASE_SOURCE_SHA")) {
@@ -211,6 +211,24 @@ export function validateWorkflowDocuments(workflows) {
         step.uses?.startsWith("actions/setup-node@") &&
         step.uses !== "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"))) {
     errors.push("Publish images must publish standard templates with stable main tags and valid native build setup");
+  }
+  const platformUpload = publish?.jobs?.platform?.steps?.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  const platformIndexSteps = publish?.jobs?.["platform-index"]?.steps ?? [];
+  const platformDownload = platformIndexSteps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
+  const platformIndexUpload = platformIndexSteps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  if ([templates, publish?.jobs?.platform].some((job) =>
+      job?.steps?.[0]?.name !== "Validate release source" ||
+      !sameObject(job?.steps?.[0]?.env, {
+        FULL_RELEASE: "${{ inputs.full_release }}", INPUT_SOURCE_SHA: "${{ inputs.source_sha }}",
+      })) ||
+      platformUpload?.with?.name !== "platform-images-${{ matrix.architecture }}-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_attempt }}" ||
+      platformDownload?.with?.pattern !== "platform-images-*-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_attempt }}" ||
+      platformDownload?.with?.["run-id"] !== undefined ||
+      platformIndexUpload?.with?.name !== "published-platform-indexes-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_attempt }}" ||
+      platformIndexUpload?.with?.path !== "${{ runner.temp }}/published-platform-indexes.jsonl" ||
+      platformIndexUpload?.with?.["if-no-files-found"] !== "error" ||
+      platformIndexUpload?.if !== undefined) {
+    errors.push("Publish images must retain raw source validation and attempt-bound Platform receipts");
   }
   return errors;
 }

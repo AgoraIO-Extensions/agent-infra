@@ -130,9 +130,15 @@ gh workflow run publish-images.yml --ref main \
   -f source_sha="$SOURCE_SHA"
 ```
 
-回读 run 的 `headSha`、输入 `source_sha`、全部架构 receipts 和两个 index receipts；ACK 只消费这个 run 产生的 immutable bundle。相同 source 的重复 full release 会进入同一 source concurrency group，旧尝试会被取消，不得混用不同 run 的 artifacts。
+`full_release=true` 的原始 `source_sha` 必须是 40 位小写十六进制 SHA，缺失、分支名或短 SHA
+会在 checkout 前拒绝。回读 run 的 `headSha`、输入 `source_sha`、全部架构 receipts 和两个
+index receipts；ACK 只消费这个 run 产生的 immutable bundle。
 
-发布 smoke 仍是独立的只读/诊断入口，不产生 Platform 收据：
+相同 source 的 full release 在同一 concurrency group 排队，不取消进行中的构建；不同 source
+可以并行，并使用各自的 `release-<source_sha>` Tag。发起前先查同源 run：运行中就等待，已成功
+就复用其完整 immutable bundle，避免重复 dispatch。不得混用不同 run 或 attempt 的 artifacts。
+
+发布 smoke 是独立的诊断入口，会构建并推送隔离 Tag 的镜像；单独设置 `smoke=true` 不产生 Platform 收据：
 
 ```bash
 gh workflow run publish-images.yml --ref main -f smoke=true
@@ -141,7 +147,7 @@ gh workflow run publish-images.yml --ref main -f smoke=true
 该命令为每个原生架构依次构建、探测并推送四模板、RuntimeHost 和 custom base，随后验证
 六个双架构索引。标签固定为 `smoke-<run_id>-<attempt>`，不会更新 `main` 或 `latest`。
 tag 发布仍由 tag push 显式触发，并保留原有 latest promotion 门禁；普通 `main` push 不再自动启动重复的 standard build。选择 workflow 的 `source_sha` 后必须回读 run 的 `headSha`、checkout source 和每份 receipt，不能把此时后来前进的 main 当作运行来源。
-收据按 attempt 隔离；失败后完整重跑 workflow，不能只重跑失败架构后混用旧 attempt 收据。
+Platform 和 template 的架构收据及 index artifacts 均按 source + attempt 隔离，并只从同一 run 下载；失败后完整重跑 workflow，不能只重跑失败架构后混用旧 attempt 收据。
 失败运行中的部分 artifact 只用于诊断；两个架构及索引全部成功后才接受发布结果。
 
 GHCR 包的 source 关联与 `Manage Actions access` 是不同设置。关联名称或可见性不证明

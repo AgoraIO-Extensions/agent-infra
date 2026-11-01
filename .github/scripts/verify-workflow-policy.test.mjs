@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -255,7 +256,7 @@ test("full release is one exact-source dispatch and keeps tag and smoke routes e
   assert.deepEqual(publish.on.push, { tags: ["v*"] });
   assert.deepEqual(publish.concurrency, {
     group: "publish-images-${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}",
-    "cancel-in-progress": true,
+    "cancel-in-progress": false,
   });
   assert.deepEqual(publish.on.workflow_dispatch.inputs.full_release, {
     description: "Build Platform, standard and runtime images from one exact source commit",
@@ -322,4 +323,96 @@ test("requires an isolated release smoke input and index receipt artifact", asyn
       (step) => !step.run?.includes("published-indexes.jsonl"),
     );
   assert.ok(validateWorkflowDocuments(restored).some((error) => error.includes("standard templates")));
+});
+
+test("release jobs reject invalid raw source input before checkout and accept a separately pinned source", async () => {
+  const publish = (await actualWorkflows())["publish-images.yml"];
+  const dispatchSha = "a".repeat(40);
+  const selectedSha = "b".repeat(40);
+  for (const jobName of ["infrastructure", "platform"]) {
+    const steps = publish.jobs[jobName].steps;
+    const validation = steps.find((step) => step.name === "Validate release source");
+    assert.ok(validation, `${jobName} has no source validation before checkout`);
+    assert.equal(steps[0], validation);
+    assert.deepEqual(validation.env, {
+      FULL_RELEASE: "${{ inputs.full_release }}",
+      INPUT_SOURCE_SHA: "${{ inputs.source_sha }}",
+    });
+    for (const raw of ["", "main", "b".repeat(7), "b".repeat(40) + "\n", "x\n" + selectedSha]) {
+      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", validation.run], {
+        encoding: "utf8",
+        env: { ...process.env, FULL_RELEASE: "true", INPUT_SOURCE_SHA: raw,
+          GITHUB_SHA: dispatchSha, RELEASE_SOURCE_SHA: raw || dispatchSha },
+      });
+      assert.notEqual(result.status, 0, `${jobName} accepted invalid raw input`);
+      assert.doesNotMatch(result.stderr, /x\n/);
+    }
+    for (const [fullRelease, raw, resolved] of [
+      ["true", dispatchSha, dispatchSha],
+      ["true", selectedSha, selectedSha],
+      ["false", "", dispatchSha],
+    ]) {
+      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", validation.run], {
+        encoding: "utf8",
+        env: { ...process.env, FULL_RELEASE: fullRelease, INPUT_SOURCE_SHA: raw,
+          GITHUB_SHA: dispatchSha, RELEASE_SOURCE_SHA: resolved },
+      });
+      assert.equal(result.status, 0, result.stderr);
+    }
+  }
+});
+
+test("Platform index publication retains JSONL and propagates publisher failure through tee", async () => {
+  const publish = (await actualWorkflows())["publish-images.yml"];
+  const steps = publish.jobs["platform-index"].steps;
+  const publication = steps.find((step) => step.name === "Publish multi-architecture Platform indexes");
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), "platform-index-workflow-"));
+  try {
+    const source = "b".repeat(40);
+    const receipt = JSON.stringify({ commitSha: source, digest: `sha256:${"c".repeat(64)}` });
+    await fs.writeFile(path.join(temp, "node"), '#!/bin/bash\ntest "$GITHUB_SHA" = "$EXPECTED_SOURCE" || exit 92\nprintf "%s\\n" "$PUBLISHER_RECEIPT"\nexit "$PUBLISHER_EXIT"\n', { mode: 0o700 });
+    for (const status of [0, 23]) {
+      const result = spawnSync("bash", ["-e", "-c", publication.run], {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${temp}:${process.env.PATH}`, RUNNER_TEMP: temp,
+          GITHUB_SHA: "a".repeat(40), RELEASE_SOURCE_SHA: source, IMAGE_TAG: `release-${source}`,
+          EXPECTED_SOURCE: source, PUBLISHER_EXIT: String(status), PUBLISHER_RECEIPT: receipt },
+      });
+      assert.equal(result.status, status, result.stderr);
+      assert.equal(await fs.readFile(path.join(temp, "published-platform-indexes.jsonl"), "utf8"), `${receipt}\n`);
+    }
+    const upload = steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+    assert.ok(steps.indexOf(upload) > steps.indexOf(publication));
+    assert.equal(upload.if, undefined, "failed index publication must not upload a success artifact");
+    assert.equal(upload.with["if-no-files-found"], "error");
+    assert.equal(upload.with.path, "${{ runner.temp }}/published-platform-indexes.jsonl");
+    assert.equal(upload.with.name, "published-platform-indexes-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_attempt }}");
+    const architectureUpload = publish.jobs.platform.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+    const download = steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
+    assert.equal(architectureUpload.with.name, "platform-images-${{ matrix.architecture }}-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_attempt }}");
+    assert.equal(download.with.pattern, "platform-images-*-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_attempt }}");
+    assert.equal(download.with["run-id"], undefined, "receipts must come from this run");
+  } finally {
+    await fs.rm(temp, { recursive: true, force: true });
+  }
+});
+
+test("release policy rejects missing input validation and unbound Platform artifacts", async () => {
+  for (const mutate of [
+    (workflow) => { workflow.jobs.infrastructure.steps.shift(); },
+    (workflow) => { workflow.jobs.platform.steps[0].env.INPUT_SOURCE_SHA = "${{ env.RELEASE_SOURCE_SHA }}"; },
+    (workflow) => {
+      workflow.jobs.platform.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"))
+        .with.name = "platform-images-${{ matrix.architecture }}-${{ env.RELEASE_SOURCE_SHA }}";
+    },
+    (workflow) => {
+      workflow.jobs["platform-index"].steps.find((step) => step.uses?.startsWith("actions/download-artifact@"))
+        .with.pattern = "platform-images-*-${{ env.RELEASE_SOURCE_SHA }}";
+    },
+    (workflow) => { workflow.jobs["platform-index"].steps.pop(); },
+  ]) {
+    const workflows = await actualWorkflows();
+    mutate(workflows["publish-images.yml"]);
+    assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("raw source validation and attempt-bound")));
+  }
 });
