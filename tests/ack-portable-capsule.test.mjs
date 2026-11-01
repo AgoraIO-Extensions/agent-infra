@@ -359,6 +359,11 @@ async function reserveFixture(t, enabled = false) {
 				name: "test-worker-configuration",
 				files: { "configuration.mjs": "@CAPSULE_ROOT@/credential" },
 			},
+			{
+				kind: "Secret",
+				name: "test-api-configuration",
+				files: { "configuration.mjs": "@CAPSULE_ROOT@/credential" },
+			},
 		],
 	});
 	f.value.inputs.push(
@@ -401,8 +406,43 @@ async function reserveFixture(t, enabled = false) {
 	actual.configuration = parsedReserve;
 	actual.sourceSha = f.sourceSha;
 	actual.storedReserveBytes = Buffer.from(JSON.stringify(reserve));
-	return { ...f, reserve, actual, readWorker: () => actual };
+	return {
+		...f,
+		reserve,
+		actual,
+		readWorker: () => actual,
+		readApi: () => ({ ...actual, replicas: 2 }),
+	};
 }
+
+test("reserve materialization includes the same input in API and Worker configuration", async (t) => {
+	const f = await reserveFixture(t);
+	const result = await materializeCapsule(f.manifest, f.source);
+	const materialized = JSON.parse(
+		await readFile(result.environment.ACK_BOOTSTRAP_INPUTS_FILE),
+	);
+	for (const object of materialized.objects)
+		assert.equal(
+			object.files["session-reserves.json"],
+			result.environment.ACK_SESSION_RESERVES_FILE,
+		);
+});
+
+test("Worker reserve adoption alone cannot sign a stale API consumer", async (t) => {
+	const f = await reserveFixture(t);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		"#!/usr/bin/env bash\nexit 0\n",
+		{ mode: 0o700 },
+	);
+	await assert.rejects(
+		runCapsule(f.manifest, "all", f.source, f.readWorker, () => ({
+			...f.actual,
+			configurationHash: "0".repeat(64),
+		})),
+		/CAPSULE_RESERVE_API_ADOPTION_MISMATCH/,
+	);
+});
 
 test("promoted configuration paths remain relocatable across successful stages", async (t) => {
 	const f = await fixture(t);
@@ -672,7 +712,13 @@ test("all performs an exact post-run reserve adoption readback", async (t) => {
 		'#!/usr/bin/env bash\nset -euo pipefail\nprintf \'%s\\n\' "$1" > "$ACK_EVIDENCE_DIR/executed"\n',
 		{ mode: 0o700 },
 	);
-	const result = await runCapsule(f.manifest, "all", f.source, f.readWorker);
+	const result = await runCapsule(
+		f.manifest,
+		"all",
+		f.source,
+		f.readWorker,
+		f.readApi,
+	);
 	assert.equal(result.exitCode, 0);
 	assert.equal(result.reserve.mountedInputVerified, true);
 	const stale = { ...f.actual, configuration: { ...f.reserve, revision: 1 } };
@@ -689,7 +735,13 @@ test("disabling reserves requires post-run adoption and a source-bound readback"
 		"#!/usr/bin/env bash\nexit 0\n",
 		{ mode: 0o700 },
 	);
-	const success = await runCapsule(f.manifest, "all", f.source, f.readWorker);
+	const success = await runCapsule(
+		f.manifest,
+		"all",
+		f.source,
+		f.readWorker,
+		f.readApi,
+	);
 	assert.equal(success.reserve.mountedInputVerified, true);
 	const stale = {
 		...f.actual,

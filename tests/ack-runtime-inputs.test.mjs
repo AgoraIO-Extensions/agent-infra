@@ -790,6 +790,10 @@ test("runtime-inputs with reserves uses its configured executor and namespace be
 		).enabled,
 		false,
 	);
+	assert.equal(
+		f.cluster.get("secret/api-config").data["session-reserves.json"],
+		f.cluster.get("secret/worker-config").data["session-reserves.json"],
+	);
 });
 
 test("publishing standard measurements preserves a separately measured custom image", async (t) => {
