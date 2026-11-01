@@ -79,8 +79,8 @@ Worker 自身或独立 Runtime preflight 位于 ECI，均不能代替业务 Sess
 `ACK_SESSION_RESERVES_FILE`，两个路径不能相同。计划使用现有 reserve 配置格式及 `sourceSha`，
 明确指定 `enabled=true`、revision、预算、配置版本及每项 minimum/maximum；每个 profile 用
 创建清单中的 `requestName` 替代 `agentId`，其 templateId 和 digest 必须匹配同源模板发布清单。
-初始 reserve 文件为默认关闭的较低 revision。API/Worker 配置模块不再另行导出硬编码的
-`sessionSandboxReserves`；两端都以挂载文件为准。
+初始 reserve 文件为默认关闭的较低 revision。API/Worker 配置模块 fallback 可以保留，
+但声明的挂载文件优先；两端都必须以同一份挂载文件为准。
 
 `all` 在部署前检查计划来源和模板绑定，先发布模板/容量与身份，再签发凭证并 provision。
 随后按本轮 source、请求正文和幂等键绑定的 ready Agent ID 生成 reserve 配置，刷新登录，
