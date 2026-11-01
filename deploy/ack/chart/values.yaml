@@ -36,6 +36,10 @@ encryption:
   keyVersion: key-v1
 worker:
   keyVersions: key-v1
+replicas:
+  # API configuration Secret updates require a rollout. Keep two serving Pods
+  # so RollingUpdate(maxUnavailable=0) has a live endpoint throughout it.
+  api: 2
 publicOrigin: https://ack.example.invalid
 directory:
   corpId: ww0000000000000000
