@@ -940,7 +940,7 @@ function readbackFixture(change = () => {}) {
 	const state = {
 		config,
 		effective: structuredClone(config),
-		candidates: ["111", "222", "self", "444"],
+		candidates: ["1", "111", "222", "self", "444"],
 		command: "node\0--disable-sigusr1\0/app/dist/index.mjs\0",
 		cwd: "/app",
 		option: "custom:model",
@@ -951,6 +951,10 @@ function readbackFixture(change = () => {}) {
 	const effective = JSON.stringify(state.effective);
 	const entry = `AGENT_INFRA_RUNTIME_MODEL_CONFIG=${effective}\0`;
 	const files = new Map([
+		[
+			"/proc/1/cmdline",
+			"/usr/bin/tini\0-s\0--\0/usr/local/bin/node\0--disable-sigusr1\0/app/dist/index.mjs\0",
+		],
 		["/runtime.mjs", moduleBytes],
 		["/config.json", configBytes],
 		["/proc/111/cmdline", state.command],
@@ -1015,7 +1019,7 @@ function readbackFixture(change = () => {}) {
 	};
 }
 
-test("Runtime readback binds the sole Host process effective config to approved bytes without exposing its environment", () => {
+test("Runtime readback excludes the tini launcher and binds the Node Host config without exposing its environment", () => {
 	const f = readbackFixture();
 	const result = f.run();
 	assert.deepEqual(JSON.parse(result), {

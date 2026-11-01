@@ -240,7 +240,7 @@ const candidates=fs.readdirSync('/proc').filter(pid=>{
  if(!/^[0-9]+$/.test(pid)||Number(pid)===process.pid)return false;
  try{
   const argv=fs.readFileSync('/proc/'+pid+'/cmdline','utf8').split('\\0');
-  return argv.includes('--disable-sigusr1')&&(argv.includes('/app/dist/index.mjs')||(argv.includes('dist/index.mjs')&&fs.readlinkSync('/proc/'+pid+'/cwd')==='/app'));
+  return argv[0]?.split('/').at(-1)==='node'&&argv.includes('--disable-sigusr1')&&(argv.includes('/app/dist/index.mjs')||(argv.includes('dist/index.mjs')&&fs.readlinkSync('/proc/'+pid+'/cwd')==='/app'));
  }catch{return false;}
 });
 if(candidates.length!==1)process.exit(2);
