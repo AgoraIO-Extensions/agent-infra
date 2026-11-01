@@ -18,7 +18,7 @@ async function load(input: Inputs) {
 	const capacityBytes = await privateBytes(input.capacityFile);
 	const capacity = JSON.parse(capacityBytes.toString("utf8"));
 	const requests = await privateJson(input.requestsFile);
-	assert(capacity.schemaVersion === 1 && capacity.sourceSha === input.sourceSha && requests.schemaVersion === 1 && requests.sourceSha === input.sourceSha && Array.isArray(requests.requests), "CUSTOM_CAPACITY_SOURCE_MISMATCH");
+	assert(capacity.schemaVersion === 1 && capacity.sourceSha === input.sourceSha && requests.schemaVersion === 1 && Array.isArray(requests.requests), "CUSTOM_CAPACITY_SOURCE_MISMATCH");
 	assert(Array.isArray(capacity.evidence) && capacity.evidence.length <= 64 && new Set(capacity.evidence.map((e: any) => e.imageDigest)).size === capacity.evidence.length, "CUSTOM_CAPACITY_EVIDENCE_AMBIGUOUS");
 	const profilesBytes = await privateBytes(capacity.profilesFile);
 	const profiles = JSON.parse(profilesBytes.toString("utf8"));

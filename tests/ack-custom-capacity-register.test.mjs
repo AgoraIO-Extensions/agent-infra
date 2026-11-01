@@ -14,6 +14,7 @@ import {
 	registerCustomCapacity,
 	runCustomCapacityPreflight,
 } from "../deploy/ack/custom-capacity-register.mts";
+import { parseInput as parseProvisionInput } from "../deploy/ack/provision-agents.ts";
 import { runCapsule } from "../deploy/ack/run-capsule.ts";
 
 async function fixture(t) {
@@ -96,16 +97,36 @@ async function fixture(t) {
 	};
 	const capacityFile = await save(join(root, "capacity.json"), capacity);
 	const bodyFile = await save(join(root, "request.json"), {
+		schemaVersion: 1,
+		name: "custom-capacity-fixture",
+		description: "Controlled custom capacity fixture",
 		source: {
 			kind: "custom",
 			interactionMode: "platform-adapter",
 			imageReference: job.imageReference,
 		},
+		coOwnerIds: [],
+		availability: [],
+		actions: [],
+		environment: [],
+		secrets: [],
 	});
+	const credentialFile = await save(
+		join(root, "credential"),
+		Buffer.from("fixture-only"),
+	);
 	const requestsFile = await save(join(root, "requests.json"), {
 		schemaVersion: 1,
-		sourceSha: source,
-		requests: [{ bodyFile }],
+		origin: "https://platform.example.test",
+		waitSeconds: 0,
+		requests: [
+			{
+				name: "custom-capacity",
+				bodyFile,
+				credentialFile,
+				idempotencyKey: "custom-capacity-fixture",
+			},
+		],
 	});
 	const input = {
 		jobFile,
@@ -217,6 +238,61 @@ test("a complete unregistered receipt is registered without a second model reque
 		"registered",
 	);
 });
+
+test("the same canonical request file passes provisioning configuration validation and capacity registration", async (t) => {
+	const f = await fixture(t);
+	const bytes = await readFile(f.input.requestsFile);
+	const requests = JSON.parse(bytes);
+	assert.equal(Object.hasOwn(requests, "sourceSha"), false);
+	const planned = parseProvisionInput(requests);
+	assert.equal(planned.origin, requests.origin);
+	assert.deepEqual(planned.requests, requests.requests);
+	assert.throws(
+		() => parseProvisionInput({ ...requests, sourceSha: f.input.sourceSha }),
+		/CONFIGURATION_INVALID/,
+	);
+	await f.produce();
+	assert.equal(
+		(await runCustomCapacityPreflight(f.input, () => assert.fail("submitted")))
+			.status,
+		"registered",
+	);
+	assert.deepEqual(await readFile(f.input.requestsFile), bytes);
+});
+
+for (const sourceInput of ["job", "capacity", "cli"]) {
+	test(`wrong ${sourceInput} source is rejected before submission or registration`, async (t) => {
+		const f = await fixture(t);
+		const foreignSource = "2".repeat(40);
+		if (sourceInput === "job")
+			await f.save(f.input.jobFile, { ...f.job, sourceCommit: foreignSource });
+		if (sourceInput === "capacity")
+			await f.save(f.input.capacityFile, {
+				...f.capacity,
+				sourceSha: foreignSource,
+			});
+		const before = await Promise.all([
+			readFile(f.input.capacityFile),
+			readFile(f.profilesFile),
+		]);
+		await assert.rejects(
+			runCustomCapacityPreflight(
+				sourceInput === "cli"
+					? { ...f.input, sourceSha: foreignSource }
+					: f.input,
+				() => assert.fail("submitted"),
+			),
+			/CUSTOM_CAPACITY_(?:TARGET|SOURCE)_MISMATCH/,
+		);
+		assert.deepEqual(
+			await Promise.all([
+				readFile(f.input.capacityFile),
+				readFile(f.profilesFile),
+			]),
+			before,
+		);
+	});
+}
 
 test("rematerializing local paths preserves an approved measurement without resubmission", async (t) => {
 	const f = await fixture(t);
