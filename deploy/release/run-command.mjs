@@ -13,7 +13,7 @@ export function runCommand(command, args, options) {
 		.filter(Boolean)
 		.join(" ");
 	if (result.error?.code === "ETIMEDOUT") {
-		options.onFailure?.(failureDetail);
+		options.onFailure?.("ETIMEDOUT");
 		throw new Error(`${options.name} timed out`);
 	}
 	if (result.error) {
