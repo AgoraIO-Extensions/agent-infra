@@ -10,6 +10,7 @@ import { prepareBootstrapInputs } from "./bootstrap-inputs.ts";
 import { privateBytes, privateJson } from "./private-input.ts";
 import { validateTemplateValidationExpectations } from "./template-validation.mjs";
 import { validateCapacityBindings } from "./workload-capacity.ts";
+import { ApiRolloutObservationError, apiReplicaTarget, apiRolloutTools, observeApiRollout } from "./api-rollout-observation.ts";
 import { prepareReserveInput, readReserveWorker } from "./session-reserve-inputs.ts";
 
 type ObjectRecord = Record<string, any>;
@@ -33,6 +34,7 @@ const failureCodes = new Set([
 	"RUNTIME_INPUT_SECRET_DRIFT", "RUNTIME_INPUT_SECRET_VERSION_DRIFT", "RUNTIME_INPUT_SECRET_READBACK_FAILED",
 	"RUNTIME_INPUT_SECRET_CHANGED_DURING_ROLLOUT", "RUNTIME_INPUT_CONSUMER_INVALID", "RUNTIME_INPUT_CONSUMER_MISSING",
 	"RUNTIME_INPUT_CONFIGURATION_MOUNT_INVALID", "RUNTIME_INPUT_CONSUMER_DRIFT",
+	"RUNTIME_INPUT_REPLICA_COUNT_INVALID", "RUNTIME_INPUT_REPLICA_DRIFT",
 	"RUNTIME_INPUT_CONSUMER_VERSION_DRIFT", "RUNTIME_INPUT_CONSUMER_ROLLOUT_FAILED", "RUNTIME_INPUT_LOCAL_DRIFT",
 	"RUNTIME_INPUT_TEMPLATE_VALIDATION_FAILED", "RUNTIME_INPUT_TEMPLATE_TARGET_MISSING", "RUNTIME_INPUT_TEMPLATE_REQUEST_MISSING",
 	"RUNTIME_INPUT_CAPACITY_TUPLE_INVALID", "RUNTIME_INPUT_CAPACITY_AMBIGUOUS", "RUNTIME_INPUT_CAPACITY_TARGET_INVALID",
@@ -92,7 +94,9 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 		const name = `agent-infra-${component}`;
 		const deployment = documents.find((d) => d.kind === "Deployment" && d.metadata?.name === name);
 		assert(deployment, "RUNTIME_INPUT_CONSUMER_MISSING");
-		return { name, component, secretName: configurationSecret(deployment, component) };
+		const replicas = deployment.spec?.replicas ?? 1;
+		assert(Number.isSafeInteger(replicas) && replicas > 0 && replicas <= 10 && (component !== "worker" || replicas === 1), "RUNTIME_INPUT_REPLICA_COUNT_INVALID");
+		return { name, component, replicas, secretName: configurationSecret(deployment, component) };
 	});
 	const secrets = [...new Set(consumers.map((c) => c.secretName))].map((name) => {
 		const object = objects.find((o) => o.kind === "Secret" && o.metadata.name === name);
@@ -247,9 +251,10 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		const current = read("deployment", entry.name);
 		assert(current.kind === "Deployment" && current.metadata?.name === entry.name && current.metadata.uid && current.metadata.resourceVersion && current.metadata.namespace === namespace &&
 			configurationSecret(current, entry.component) === entry.secretName, "RUNTIME_INPUT_CONSUMER_DRIFT");
+		assert((current.spec?.replicas ?? 1) === entry.replicas, "RUNTIME_INPUT_REPLICA_DRIFT");
 		const data = secrets.find((s) => s.desired.metadata.name === entry.secretName)!.desired.data;
 		const revision = hash(JSON.stringify(Object.entries(data).sort(([a], [b]) => a.localeCompare(b))));
-		return { ...entry, current, revision, changed: current.spec.template.metadata?.annotations?.[revisionAnnotation] !== revision };
+		return { ...entry, current, observed: current, revision, changed: current.spec.template.metadata?.annotations?.[revisionAnnotation] !== revision };
 	});
 	const assertPublishedSecrets = () => {
 		assertNamespace();
@@ -298,6 +303,7 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			assertNamespace();
 			const current = read("deployment", consumer.name);
 			assert(current.metadata.uid === consumer.current.metadata.uid && current.metadata.resourceVersion === consumer.current.metadata.resourceVersion, "RUNTIME_INPUT_CONSUMER_VERSION_DRIFT");
+			assert((current.spec?.replicas ?? 1) === consumer.replicas, "RUNTIME_INPUT_REPLICA_DRIFT");
 			assertPublishedSecrets();
 			if (consumer.changed) {
 				progress.mutationStatus = "attempted";
@@ -310,8 +316,10 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 			kubectl(["-n", namespace, "rollout", "status", `deployment/${consumer.name}`, `--timeout=${timeout}`]);
 			const observed = read("deployment", consumer.name);
 			assert(observed.metadata.uid === current.metadata.uid && observed.spec.template.metadata.annotations?.[revisionAnnotation] === consumer.revision &&
-				observed.status?.observedGeneration === observed.metadata.generation && observed.status.updatedReplicas === 1 && observed.status.availableReplicas === 1 && observed.status.readyReplicas === 1,
+				(observed.spec?.replicas ?? 1) === consumer.replicas && observed.status?.observedGeneration === observed.metadata.generation &&
+				observed.status.updatedReplicas === consumer.replicas && observed.status.availableReplicas === consumer.replicas && observed.status.readyReplicas === consumer.replicas,
 				"RUNTIME_INPUT_CONSUMER_ROLLOUT_FAILED");
+			consumer.observed = observed;
 			assertPublishedSecrets();
 		}
 		progress.phase = "login";
@@ -320,13 +328,22 @@ async function publishRuntimeInputsWithProgress(files: Files, rendered: string, 
 		await verifyLoginAfterRollout(files.login, sourceSha, plan.origin, plan.loginCandidate);
 		progress.phase = "verification";
 		assertPublishedSecrets();
+		for (const consumer of consumers) {
+			const current = read("deployment", consumer.name);
+			assert(current.metadata.uid === consumer.current.metadata.uid && (current.spec?.replicas ?? 1) === consumer.replicas && current.spec.template.metadata.annotations?.[revisionAnnotation] === consumer.revision, "RUNTIME_INPUT_REPLICA_DRIFT");
+			assert(current.status?.observedGeneration === current.metadata.generation && current.status.updatedReplicas === consumer.replicas && current.status.availableReplicas === consumer.replicas && current.status.readyReplicas === consumer.replicas, "RUNTIME_INPUT_CONSUMER_ROLLOUT_FAILED");
+			consumer.observed = current;
+		}
 	}
 	return { schemaVersion: 1, kind: "ack-runtime-inputs", status: "passed", mode: apply ? "applied-and-read-back" : "read-only-plan", sourceSha,
 		secretCount: secrets.length, changedSecretCount: secrets.filter((s) => s.changed).length,
+		consumers: consumers.map((c) => ({ component: c.component, desiredReplicas: c.replicas, declaredReplicas: c.observed.spec?.replicas ?? 1, updatedReplicas: c.observed.status?.updatedReplicas ?? null, availableReplicas: c.observed.status?.availableReplicas ?? null, readyReplicas: c.observed.status?.readyReplicas ?? null })),
 		rolloutCount: consumers.filter((c) => c.changed).length, templateCount: 4, loginVerified: apply, businessVerified: false };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+	let operationStarted = false;
+	let appliedResult: Awaited<ReturnType<typeof publishRuntimeInputs>> | undefined;
 	try {
 		const [mode, bootstrap, templates, capacity, requests, rendered] = process.argv.slice(2);
 		const { ACK_SOURCE_SHA: source, ACK_KUBECONFIG: kubeconfig, ACK_NAMESPACE: namespace } = process.env;
@@ -336,12 +353,24 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			input, encoding: "utf8", timeout: args.includes("rollout") ? 310_000 : args.includes("exec") ? 60_000 : 30_000,
 			maxBuffer: 16 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"],
 		});
-		const result = await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, await readFile(rendered, "utf8"), source, run, mode === "apply");
+		const manifest = await readFile(rendered, "utf8");
+		const publish = async () => {
+			operationStarted = true;
+			return appliedResult = await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE || undefined, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, mode === "apply");
+		};
+		if (mode === "apply") {
+			assert(process.env.ACK_LOGIN_BOOTSTRAP_FILE, "RUNTIME_INPUT_LOGIN_REQUIRED");
+			await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, false);
+		}
+		const observed = mode === "apply" ? await observeApiRollout({ ...apiRolloutTools(kubeconfig, namespace, 600_000), sourceSha: source, desiredReplicas: apiReplicaTarget(manifest), timeoutMs: 600_000 }, publish) : null;
+		const result = observed ? { ...observed.value, apiRollout: observed.receipt } : await publish();
 		process.stdout.write(`${JSON.stringify(result)}\n`);
 	} catch (error) {
-		const failure = error instanceof RuntimeInputPublicationError ? error :
-			new RuntimeInputPublicationError(error, { phase: "preflight", mutationStatus: "not-applied" });
-		process.stdout.write(`${JSON.stringify(failure.receipt)}\n`);
+		const operationError = error instanceof ApiRolloutObservationError ? error.operationError : error;
+		const failure = operationError instanceof RuntimeInputPublicationError ? operationError :
+			new RuntimeInputPublicationError(operationError, { phase: operationStarted ? "verification" : "preflight", mutationStatus: appliedResult?.mutationStatus ?? (operationStarted ? "attempted" : "not-applied") });
+		const receipt = { ...failure.receipt, ...(error instanceof ApiRolloutObservationError ? { apiRollout: error.receipt } : {}) };
+		process.stdout.write(`${JSON.stringify(receipt)}\n`);
 		process.stderr.write("ACK_RUNTIME_INPUTS_INVALID\n");
 		process.exitCode = 1;
 	}

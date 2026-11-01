@@ -73,12 +73,16 @@ export function projectSnapshot(
 	release: string,
 	namespace: string,
 	sourceSha: string,
+	rendered?: string,
 ) {
 	assert.match(sourceSha, /^[a-f0-9]{40}$/u);
 	assert(Array.isArray(helm) && Array.isArray(resources.items));
 	const releases = helm.filter((item) => item.name === release);
 	assert(releases.length <= 1);
 	const revision = releases.length ? Number(releases[0].revision) : null;
+	const api = resources.items.find((item: RecordValue) => item.kind === "Deployment" && item.metadata?.name === components.platformApi);
+	const desiredApi = rendered === undefined ? null : parseAllDocuments(rendered).map((document) => { assert.equal(document.errors.length, 0); return document.toJSON(); }).find((item) => item?.kind === "Deployment" && item.metadata?.name === components.platformApi);
+	const count = (value: unknown) => Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : null;
 	assert(revision === null || (Number.isSafeInteger(revision) && revision > 0));
 	return {
 		schemaVersion: 1,
@@ -89,6 +93,7 @@ export function projectSnapshot(
 		namespaceHash: hash(namespace),
 		helmRevision: revision,
 		businessVerified: false,
+		apiReplicas: { desired: desiredApi ? count(desiredApi.spec?.replicas ?? 1) : null, declared: api ? count(api.spec?.replicas ?? 1) : null, observed: count(api?.status?.replicas), updated: count(api?.status?.updatedReplicas), available: count(api?.status?.availableReplicas), ready: count(api?.status?.readyReplicas), generation: count(api?.metadata?.generation), observedGeneration: count(api?.status?.observedGeneration) },
 		resources: resources.items.map((item: RecordValue) => {
 			const kind = ["Deployment", "StatefulSet", "Pod", "Job", "PersistentVolumeClaim"].includes(item.kind)
 				? item.kind : "other";
@@ -120,14 +125,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 			validateRenderedImages(readFileSync(rendered, "utf8"),
 				JSON.parse(readFileSync(platform, "utf8")), JSON.parse(readFileSync(runtime, "utf8")));
 		} else if (mode === "snapshot") {
-			const [namespace, release, source] = args;
+			const [namespace, release, source, rendered] = args;
 			const run = (command: string, argv: string[]) => JSON.parse(execFileSync(command, argv, {
 				encoding: "utf8", timeout: 30_000, maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
 			}));
 			const helm = run("helm", ["list", "-n", namespace, "-o", "json"]);
 			const resources = run("kubectl", ["--request-timeout=20s", "-n", namespace,
 				"get", "deploy,statefulset,pod,job,pvc", "-o", "json"]);
-			process.stdout.write(`${JSON.stringify(projectSnapshot(helm, resources, release, namespace, source), null, 2)}\n`);
+			process.stdout.write(`${JSON.stringify(projectSnapshot(helm, resources, release, namespace, source, rendered ? readFileSync(rendered, "utf8") : undefined), null, 2)}\n`);
 		} else throw new Error("MODE_INVALID");
 	} catch {
 		process.stderr.write("ACK_EVIDENCE_VALIDATION_FAILED\n");
