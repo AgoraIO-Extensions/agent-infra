@@ -83,6 +83,23 @@ node deploy/local/e2e-harness.mjs app
 依赖闭包、目标架构、registry 和 target profile。不同 state directory 指向同一 Docker/Kubernetes
 环境时仍共享环境锁，不能借此并行写入固定环境。
 
+只有 Harness 工具需要修复、应用源码和产物已经冻结时，可从工具 worktree 恢复原 source：
+
+```bash
+E2E_HARNESS_SOURCE_ROOT=/absolute/frozen-worktree \
+E2E_HARNESS_SOURCE_REVISION="$FROZEN_APP_SHA" \
+node deploy/local/e2e-harness.mjs build
+```
+
+`FROZEN_APP_SHA` 必须为原应用的 40 位 commit SHA。两个输入须同时提供，source 必须是同一
+Git repository 的完整 worktree root，已有 source pin、干净 HEAD 和期望 SHA 必须一致。
+该模式只用于分阶段命令，拒绝 `sync` 和 `all`，不追随新的 upstream。
+执行前还会确认工具来自已跟踪的干净 Git root，拒绝 dirty 或未知工具身份。
+`deployment-receipt.json` 分别记录应用 source 和执行前冻结的工具 revision、dirty 状态与脚本摘要；
+工具版本不能成为旧镜像的来源。运行中工具被编辑或提交时，保留初始身份，并以
+`toolingDrift: true` 和 `toolingAfter` 明确标识变化；该回执不能用于验收，不能把最初执行归到新工具。
+原有组件输入、目标 profile 和镜像验证仍然执行。
+
 默认使用完整 Harness。确认共享 base receipt、独立端口、TLS 和 loopback API 后，只有 Web-only
 变更可以运行 `node deploy/local/e2e-harness.mjs app`；涉及 API、Worker、Runtime、目录、身份、
 迁移、共享 Secret 或未知影响时必须使用完整流程。App lane 不执行迁移、不写共享 Kubernetes
@@ -101,6 +118,8 @@ Platform Worker 业务镜像默认不会被 Harness 推送到外部 registry。�
 registry 拉取，必须显式设置 `E2E_HARNESS_LOCAL_WORKER_REPOSITORY`，并确保它与 Worker values
 中的 repository 相同；推送和 digest 回读失败时 Harness 直接停止。配置 overlay 只包含
 Worker repository/digest，权限为 `0600`，不会复制完整私有 values。
+Worker 回读校验 manifest 原始字节摘要及实际镜像架构；Docker 的 Image ID 可以是相同
+manifest digest 或旧 image store 的 config digest，其他身份及多架构 index 均拒绝。
 
 ## Runtime 部署材料
 

@@ -9,6 +9,7 @@ import {
 	mkdtemp,
 	readFile,
 	readdir,
+	realpath,
 	rm,
 	writeFile,
 } from "node:fs/promises";
@@ -30,7 +31,10 @@ import {
 	workerInputHash,
 } from "./harness-image-cache.mjs";
 
-const repositoryRoot = resolve(import.meta.dirname, "../..");
+const toolingRoot = resolve(import.meta.dirname, "../..");
+let repositoryRoot = resolve(process.env.E2E_HARNESS_SOURCE_ROOT ?? toolingRoot);
+let validatedSource;
+let toolingSnapshot;
 const stateRoot = resolve(
 	process.env.PLATFORM_LOCAL_STATE_DIRECTORY ??
 		join(
@@ -199,14 +203,40 @@ async function readSourcePin() {
 		fail("Source pin is invalid or belongs to another worktree");
 	if (trackedChanges().length || git(["rev-parse", "HEAD"]) !== pin.sha)
 		fail("Source changed after sync; commit changes and sync again");
+	if (process.env.E2E_HARNESS_SOURCE_ROOT && pin.sha !== process.env.E2E_HARNESS_SOURCE_REVISION)
+		fail("Frozen source revision does not match the existing source pin");
+	validatedSource = pin;
 	return pin;
+}
+
+async function validateFrozenSource(action) {
+	const root = process.env.E2E_HARNESS_SOURCE_ROOT;
+	const revision = process.env.E2E_HARNESS_SOURCE_REVISION;
+	if (root === undefined && revision === undefined) return;
+	if (!root || !isAbsolute(root) || !/^[a-f0-9]{40}$/.test(revision ?? ""))
+		fail("Frozen source requires an absolute Git root and expected 40-hex revision");
+	if (action === "sync" || action === "all")
+		fail("Frozen source only supports staged commands after source synchronization");
+	try {
+		const sourceRoot = await realpath(repositoryRoot);
+		const gitRoot = await realpath(git(["rev-parse", "--show-toplevel"]));
+		const commonArgs = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
+		const sourceCommon = await realpath(git(commonArgs));
+		const toolingCommon = await realpath(git(commonArgs, { cwd: toolingRoot }));
+		if (sourceRoot !== gitRoot || sourceCommon !== toolingCommon) throw new Error();
+		repositoryRoot = sourceRoot;
+	} catch {
+		fail("Frozen source must be a root worktree of the tooling repository");
+	}
+	await readSourcePin();
 }
 
 async function resolveSource(action) {
 	if (action !== "sync" && action !== "all") return readSourcePin();
 	const source = syncSource();
 	await saveSourcePin(source);
-	return { ...source, repositoryRoot };
+	validatedSource = { ...source, repositoryRoot };
+	return validatedSource;
 }
 
 async function cleanContext(sha) {
@@ -739,7 +769,14 @@ async function resolveWorkerBinding(image, component, profile) {
 			"application/vnd.docker.distribution.manifest.v2+json"
 	)
 		fail("Worker binding must use a single-platform manifest");
-	if (manifest.config?.digest !== component.imageId)
+	// Containerd image stores identify images by manifest; classic stores use config.
+	if (
+		!/^sha256:[a-f0-9]{64}$/.test(manifest.config?.digest ?? "") ||
+		`sha256:${createHash("sha256").update(raw).digest("hex")}` !== digest ||
+		(component.imageId !== digest && manifest.config.digest !== component.imageId) ||
+		image.Id !== component.imageId ||
+		`${image.Os}/${image.Architecture}` !== component.platform
+	)
 		fail("Worker registry manifest does not match the built image");
 	const cachePath = join(stateRoot, "worker-image-cache.json");
 	const cache = await readCache(cachePath, { schemaVersion: 1, worker: {} });
@@ -1119,14 +1156,44 @@ async function acquireLock() {
 	return async () => rm(lock, { recursive: true, force: true });
 }
 
+async function readToolingIdentity() {
+	try {
+		const options = { cwd: toolingRoot };
+		const revision = git(["rev-parse", "HEAD"], options);
+		if (!/^[a-f0-9]{40}$/.test(revision) ||
+			await realpath(git(["rev-parse", "--show-toplevel"], options)) !== await realpath(toolingRoot) ||
+			await realpath(import.meta.filename) !== await realpath(join(toolingRoot, "deploy/local/e2e-harness.mjs"))) return null;
+		const names = ["e2e-harness.mjs", "runtime-material.mjs", "harness-image-cache.mjs"];
+		git(["ls-files", "--error-unmatch", "--", ...names.map((name) => `deploy/local/${name}`)], options);
+		const files = Object.fromEntries(await Promise.all(
+			names.map(async (name) =>
+				[name, createHash("sha256").update(await readFile(join(toolingRoot, "deploy/local", name))).digest("hex")]),
+		));
+		return {
+			repositoryRoot: toolingRoot,
+			revision,
+			dirty: git(["status", "--porcelain", "--untracked-files=no"], options).length > 0,
+			files,
+		};
+	} catch {
+		return null;
+	}
+}
+
 async function writeRunReceipt(status, action, error) {
 	try {
 		await mkdir(stateRoot, { recursive: true });
+		const toolingAfter = await readToolingIdentity();
+		const toolingDrift = !!toolingSnapshot && JSON.stringify(toolingSnapshot) !== JSON.stringify(toolingAfter);
 		const receipt = {
 			schemaVersion: 1,
 			status,
 			action,
 			profile: targetProfile(),
+			source: validatedSource ? { revision: validatedSource.sha, repositoryRoot } : null,
+			tooling: toolingSnapshot ?? null,
+			toolingDrift,
+			...(toolingDrift ? { toolingAfter } : {}),
 			...(error
 				? {
 					errorClass: error instanceof Error ? error.name : "Error",
@@ -1203,10 +1270,12 @@ function usage() {
 	console.log(
 		"Usage: node deploy/local/e2e-harness.mjs <sync|images|build|deploy|runtime|verify|all|reset|app>",
 	);
+	console.log("Frozen source: set E2E_HARNESS_SOURCE_ROOT and E2E_HARNESS_SOURCE_REVISION to resume staged commands using an existing source pin.");
 }
 
 async function main() {
 	const action = process.argv[2] ?? "all";
+	toolingSnapshot = await readToolingIdentity();
 	if (action === "help" || action === "--help") {
 		usage();
 		return;
@@ -1228,6 +1297,11 @@ async function main() {
 		process.exitCode = 2;
 		return;
 	}
+	if (!toolingSnapshot) fail("Tooling source identity is unknown");
+	await validateFrozenSource(action);
+	if (!process.env.E2E_HARNESS_SOURCE_ROOT && !["sync", "all", "runtime", "reset"].includes(action))
+		await readSourcePin();
+	if (toolingSnapshot.dirty) fail("Tooling source has dirty tracked changes");
 	if (action === "reset" || action === "runtime") {
 		assertFixedEnvironment();
 		const release = await acquireLock();
