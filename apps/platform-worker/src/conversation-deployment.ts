@@ -358,17 +358,19 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				};
 			}
 			// observe checks actual ownership, UID/generation, Pod/spec/Secret/network
-			// drift, health and signed Runtime readiness; it never changes resources.
+			// drift and health; the final control resolution adds signed Runtime readiness.
 			// 排空路径（business purpose + events.persist/events.ack/execution.renew）
 			// 与同一次准备内的前置解析复用最近一次通过的签名 readiness，仅核对 K8s 路由与
-			// Pod 就绪；提交等命令在发送前最后一次解析、以及 control 用途始终做完整签名探测。
+			// Pod 就绪；提交等命令和 control 用途的发送前最后一次解析做完整签名探测。
 			const isDrainPath =
 				input.purpose === "business" &&
 				((drainCacheableCommands as ReadonlySet<string>).has(input.command) ||
 					// 同一次准备内的前置解析；发送前最后一次解析仍做完整探测（#2134）。
 					input.reuseSignedReadiness === true);
 			const health = await (input.purpose === "control"
-				? runtime.observeVerifiedControl(state)
+				? input.skipControlReadiness === true
+					? runtime.observeVerifiedControlRoute(state)
+					: runtime.observeVerifiedControl(state)
 				: isDrainPath
 					? runtime.observeForDrain(state, sessionBrowserBinding)
 					: sessionBrowserBinding

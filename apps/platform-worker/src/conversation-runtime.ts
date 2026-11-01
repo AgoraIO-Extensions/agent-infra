@@ -68,6 +68,19 @@ export type ConversationRuntimeStateV2 = TaskRuntimeRecoveryStateV1 & {
 	readonly originalSubmitHostSessionRef?: string | null;
 };
 
+function executionStatusTerminal(
+	status: ConversationRuntimeStateV2["executionStatus"],
+) {
+	return (
+		status === "completed" || status === "failed" || status === "cancelled"
+	);
+}
+
+function stopPreparationBinding(state: ConversationRuntimeStateV2) {
+	// Stop has its own fence; committed events may advance the original cursor.
+	return { ...state, runtimeCursor: null };
+}
+
 export type ConversationDrainStageOutcomeV1 =
 	| "completed"
 	| "failed"
@@ -170,6 +183,8 @@ export interface ConversationRuntimeOptionsV2 {
 		 * readiness（#2134）；未设置时按命令执行完整观测。
 		 */
 		readonly reuseSignedReadiness?: true;
+		/** Control preparation preflight: verify the live route without readiness signing. */
+		readonly skipControlReadiness?: true;
 		/** Require a fresh Session Sandbox resource receipt for a control route. */
 		readonly requireSandboxObservation?: true;
 	}) => Promise<{
@@ -520,6 +535,9 @@ export function createConversationRuntimeV2(
 				command,
 				// 签名 readiness 只要求在发送前最后一次解析（postTarget）执行（#2134）。
 				reuseSignedReadiness: true,
+				...(authority.purpose === "control"
+					? { skipControlReadiness: true as const }
+					: {}),
 			}),
 			signal,
 		);
@@ -571,6 +589,9 @@ export function createConversationRuntimeV2(
 				purpose: finalRoute.authority.purpose,
 				command,
 				reuseSignedReadiness: true,
+				...(finalRoute.authority.purpose === "control"
+					? { skipControlReadiness: true as const }
+					: {}),
 			}),
 			signal,
 		);
@@ -602,6 +623,8 @@ export function createConversationRuntimeV2(
 			await control(context, "stop", signal);
 			unavailable("RUNTIME_ROUTE_STALE");
 		}
+		const beforeFinalControl =
+			command === "turn.stop" ? structuredClone(state) : undefined;
 		let routeObservedAt = finalTargetObservedAt;
 		let postTarget = finalTarget;
 		const canReuseFinalTarget =
@@ -639,6 +662,14 @@ export function createConversationRuntimeV2(
 		)
 			unavailable("RUNTIME_ROUTE_STALE");
 		state = await stateFor(context, signal);
+		if (
+			beforeFinalControl &&
+			!isDeepStrictEqual(
+				stopPreparationBinding(state),
+				stopPreparationBinding(beforeFinalControl),
+			)
+		)
+			unavailable("RUNTIME_FENCE_STALE");
 		const afterTargetRoute = await current(context, state, command, signal);
 		if (
 			afterTargetRoute.authority.purpose !== postTargetRoute.authority.purpose
@@ -833,6 +864,36 @@ export function createConversationRuntimeV2(
 		if (routeObservedAt !== undefined)
 			prepared.routeProof.observedAt = routeObservedAt;
 	}
+	async function assertStopPrepared(
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		signal: AbortSignal,
+	) {
+		const state = await stateFor(prepared.context, signal);
+		const decision = await current(
+			prepared.context,
+			state,
+			"turn.stop",
+			signal,
+		);
+		if (
+			!isDeepStrictEqual(decision.authority, prepared.authority) ||
+			!isDeepStrictEqual(decision.record, prepared.route)
+		)
+			unavailable("RUNTIME_ROUTE_STALE");
+		// Store revalidates the original claim's lease and both delivery fences
+		// after the authorization await. Only committed cursor progress may differ.
+		const fenced = await stateFor(prepared.context, signal);
+		if (
+			executionStatusTerminal(fenced.executionStatus) ||
+			!isDeepStrictEqual(
+				stopPreparationBinding(fenced),
+				stopPreparationBinding(prepared.state),
+			)
+		)
+			unavailable("RUNTIME_FENCE_STALE");
+		signal.throwIfAborted();
+	}
+
 	/** Continue an event drain with the route it already proved (#1525). Each
 	 * V4 read or ACK re-checks the current authorization, Platform route record
 	 * and fenced state in `assertCurrentPrepared` before it leaves the Worker,
@@ -1671,6 +1732,10 @@ export function createConversationRuntimeV2(
 				return { ...response, schemaVersion: body.selection ? 2 : 1 };
 			}
 			if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+			if (request.operation === "turn.stop")
+				await assertStopPrepared(prepared, active).catch((error: unknown) => {
+					throw unsentFailure(error);
+				});
 			if (request.operation === "turn.supplement") {
 				if (
 					!context.claim.input ||

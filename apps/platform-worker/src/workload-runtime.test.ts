@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash, createPublicKey, generateKeyPairSync } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -71,6 +71,7 @@ import {
 	createProductionConversationRuntimeResolverV2,
 	createProductionSessionSandboxReceiverV1,
 } from "./conversation-deployment.js";
+import { createConversationRuntimeV2 } from "./conversation-runtime.js";
 import {
 	fakeKubernetesApi,
 	workloadRegistryFixture,
@@ -86,6 +87,7 @@ import {
 	sessionSandboxLabelsV1,
 	sessionSandboxServiceTokenV1,
 } from "./session-workload-adapter.js";
+import { runtimeV4Harness } from "./test-support/runtime-v4.js";
 import {
 	sessionSandboxModelProjectionFixture,
 	sessionSandboxTemplateBindingFixture,
@@ -5483,6 +5485,174 @@ describe("promotion readiness reuse (#3714)", () => {
 	});
 });
 
+it.each(["passed", "failed", "missing", "timeout"] as const)(
+	"runs one signed readiness across the real three-stage control preparation: %s (#3854)",
+	async (readinessOutcome) => {
+		const h = runtimeV4Harness("stop");
+		const signing = h.options.signing;
+		const probeRuntime = vi.fn<WorkloadRuntimeOptionsV1["probeRuntime"]>(
+			async () => ({ core: "passed", capabilities: {} }),
+		);
+		const health = vi.fn(async () => new Response("ok"));
+		const f = fixture(
+			{
+				workerId: signing.workerId,
+				probeRuntime,
+				fetch: health,
+				policy: {
+					...workloadTestPolicy,
+					runtimeAuth: {
+						workerId: signing.workerId,
+						grantIssuer: signing.issuer,
+						grantKeyId: signing.keyId,
+						grantPublicKey: createPublicKey(signing.privateKey)
+							.export({ type: "spki", format: "pem" })
+							.toString(),
+						serviceTokenSecret: { name: "transport", key: "token" },
+					},
+				},
+			},
+			{ configuration: configurationFixture({ agentId: h.claim.agentId }) },
+		);
+		await f.tick(8);
+		const ready = f.state;
+		if (ready?.phase !== "ready" || !ready.verified)
+			throw new Error("Fixture is not ready");
+		const deployment = validateAgentWorkloadDesiredV1(
+			ready.verified.deployment,
+		);
+		const sandbox = {
+			schemaVersion: 1 as const,
+			sandboxId: "sandbox-control",
+			sessionId: h.claim.conversationId,
+			agentId: h.claim.agentId,
+			principal: { kind: "user" as const, id: h.claim.actorId },
+			channelId: h.claim.channelId,
+			generation: h.claim.sessionGeneration,
+			resourceName: "sandbox-control",
+			workspaceScope: "sandbox-control",
+		};
+		const labels = { ...sessionSandboxLabelsV1(sandbox) };
+		const service = await f.client.create<V1Service>({
+			apiVersion: "v1",
+			kind: "Service",
+			metadata: {
+				name: sandbox.resourceName,
+				namespace: f.options.policy.namespace,
+				labels,
+				annotations: {
+					...sessionSandboxIdentityAnnotationsV1(sandbox),
+					"agent-infra.agora.io/managed": "session-sandbox-v1",
+					"agent-infra.agora.io/fence": "1",
+				},
+			},
+			spec: {
+				type: "ClusterIP",
+				selector: labels,
+				ports: [
+					{
+						name: "runtime",
+						port: deployment.service.port,
+						targetPort: deployment.service.port,
+					},
+				],
+			},
+		});
+		Object.assign(h.state, {
+			stopPending: true,
+			sandboxResource: {
+				sandbox,
+				resourceFence: 1,
+				desiredState: "running",
+				status: "ready",
+				policy: {
+					namespace: f.options.policy.namespace,
+					resourceConfigurationHash: workloadResourceConfigurationHashV1(
+						f.options.policy,
+					),
+					configurationRevision: ready.sourceConfigurationRevision,
+					workloadRevision: deployment.workloadRevision,
+					managementFence: 1,
+					imageDigest: deployment.imageDigest,
+				},
+				observation: {
+					status: "ready",
+					resources: [
+						{
+							kind: "Service",
+							namespace: f.options.policy.namespace,
+							name: sandbox.resourceName,
+							uid: service.metadata?.uid,
+							resourceVersion: service.metadata?.resourceVersion,
+						},
+					],
+				},
+			},
+		});
+		h.setRecord({ ...h.record(), workload: ready });
+		const resolveRuntimeHost = vi.fn(
+			createProductionConversationRuntimeResolverV2({
+				workload: f.options,
+				signing,
+				serviceToken: "synthetic-transport",
+			}),
+		);
+		const observations: Array<{ operationRef: string; durationMs: number }> =
+			[];
+		const runtime = createConversationRuntimeV2({
+			...h.options,
+			resolveRuntimeHost,
+			recordDrainStage: (event) => observations.push(event),
+		});
+		let elapsed = 0;
+		const clock = vi
+			.spyOn(performance, "now")
+			.mockImplementation(() => elapsed);
+		probeRuntime.mockClear();
+		health.mockClear();
+		probeRuntime.mockImplementation(async () => {
+			elapsed += 4000;
+			if (readinessOutcome === "missing") return undefined as never;
+			if (readinessOutcome === "timeout")
+				throw new WorkloadProbeIncompleteErrorV1("readiness", "timeout");
+			return { core: readinessOutcome, capabilities: {} };
+		});
+		try {
+			const decision = await runtime.authorization.authorize({
+				...h.claim,
+				claim: h.claim,
+			});
+			if (decision.outcome !== "allowed")
+				throw new Error("Fixture authorization failed");
+			const dispatch = runtime.runtimeHost.dispatch(
+				h.request(decision.authority.runtimeGrant),
+			);
+			if (readinessOutcome === "passed") await dispatch;
+			else
+				await expect(dispatch).rejects.toMatchObject({
+					code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+					notSent: true,
+				});
+			expect({
+				routes: resolveRuntimeHost.mock.calls.length,
+				health: health.mock.calls.length,
+				signedProbes: probeRuntime.mock.calls.length,
+				prepareMs: observations
+					.filter((event) => event.operationRef === "drain.prepare")
+					.map((event) => event.durationMs),
+			}).toEqual({ routes: 3, health: 3, signedProbes: 1, prepareMs: [4000] });
+			if (readinessOutcome === "passed") {
+				expect(h.fetcher).toHaveBeenCalledTimes(1);
+				expect(h.sent().url).toContain("/stops");
+			} else expect(h.fetcher).not.toHaveBeenCalled();
+		} finally {
+			clock.mockRestore();
+			runtime.close();
+			h.runtime.close();
+		}
+	},
+);
+
 // #1889：排空路由复核沿用同一进程内最近一次通过的签名 readiness。
 describe("observeForDrain (#1889)", () => {
 	async function ready(overrides: Partial<WorkloadRuntimeOptionsV1> = {}) {
@@ -5519,6 +5689,32 @@ describe("observeForDrain (#1889)", () => {
 		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
 		expect(probeRuntime).toHaveBeenCalledTimes(1);
 		expect(health).toHaveBeenCalledTimes(3);
+	});
+
+	it("keeps control preflight route-only and leaves signed readiness to the final phase", async () => {
+		const { state, drain, probeRuntime, health } = await ready();
+		await expect(drain.observeVerifiedControlRoute(state)).resolves.toBe(
+			"healthy",
+		);
+		expect(probeRuntime).not.toHaveBeenCalled();
+		expect(health).toHaveBeenCalled();
+		await expect(drain.observeVerifiedControl(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not let control preflight hide a live route change", async () => {
+		const { f, state, drain, probeRuntime } = await ready();
+		const service = [...f.resources.values()].find(
+			(resource) =>
+				resource.kind === "Service" &&
+				resource.metadata?.name?.startsWith("agent-a"),
+		) as V1Service | undefined;
+		if (!service?.spec) throw new Error("Fixture Service is missing");
+		service.spec.selector = { changed: "true" };
+		await expect(drain.observeVerifiedControlRoute(state)).resolves.toBe(
+			"drifted",
+		);
+		expect(probeRuntime).not.toHaveBeenCalled();
 	});
 
 	it("records bounded health/readiness timing and reuse observations (#3303)", async () => {

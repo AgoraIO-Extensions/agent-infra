@@ -34,7 +34,7 @@ export const signing = {
 };
 export const grantSigner = createWorkerRuntimeGrantSignerV4(signing);
 export function runtimeV4Harness(
-	operation: "submit" | "supplement" = "submit",
+	operation: "submit" | "supplement" | "stop" = "submit",
 ) {
 	let clock = time;
 	const instanceSigning = { ...signing, now: () => clock };
@@ -45,7 +45,9 @@ export function runtimeV4Harness(
 		operation:
 			operation === "submit"
 				? "conversation.turn.submit.v1"
-				: "conversation.turn.supplement.v1",
+				: operation === "supplement"
+					? "conversation.turn.supplement.v1"
+					: "conversation.turn.stop.v1",
 		requestId: "request",
 		traceId: "trace",
 		agentId: "agent",
@@ -56,7 +58,7 @@ export function runtimeV4Harness(
 		executionId: "execution",
 		turnId: "turn",
 		messageId: "message",
-		stopRequestId: null,
+		stopRequestId: operation === "stop" ? "stop" : null,
 		sessionGeneration: 1,
 		deliveryFence: 2,
 		executionDeliveryFence: 2,
@@ -73,7 +75,10 @@ export function runtimeV4Harness(
 		},
 		hostSessionRef: "host",
 		runtimeCursor: null,
-		input: { text: "original accepted input", attachments: [] },
+		input:
+			operation === "stop"
+				? null
+				: { text: "original accepted input", attachments: [] },
 		executionStatus: "processing",
 		stopPending: false,
 	};
@@ -299,13 +304,20 @@ export function runtimeV4Harness(
 					operation: "turn.submit",
 					input: claim.input ?? { text: "", attachments: [] },
 				}
-			: {
-					...base,
-					operation: "turn.supplement",
-					messageId: "message",
-					executionDeliveryFence: 2,
-					input: claim.input ?? { text: "", attachments: [] },
-				};
+			: operation === "supplement"
+				? {
+						...base,
+						operation: "turn.supplement",
+						messageId: "message",
+						executionDeliveryFence: 2,
+						input: claim.input ?? { text: "", attachments: [] },
+					}
+				: {
+						...base,
+						operation: "turn.stop",
+						stopRequestId: "stop",
+						executionDeliveryFence: 2,
+					};
 	}
 	function events(runtimeGrant: unknown): ConversationRuntimeEventRequestV1 {
 		return {
