@@ -192,11 +192,11 @@ binding service secret。Platform API/Worker 不读取或转交该 secret，也�
 Worker 的同源 `connectionInstallation` 可以只导出 `configuration`；默认确认 producer
 读取 Platform DB 的这份事实，在 `finalCheck` 后再次核对原用户、权限、Execution、Pod、
 代次与 profile/config。已 configured 的外部 `authorize` 接收合同仍可使用；缺失或漂移时
-不发新安装请求。本片的 Worker drain 只领取已确认的单一 confirm 命令，并以 commandId、
-attemptId、attemptOwner 做 CAS；任何 sending/unknown 阻断同一安装的后续发送，进程崩溃或
-超时会把过期 sending 固化为 unknown。begin 命令暂不领取，因为其 authorizationUrl 必须
-沿 callback-only 合同转交给原用户；在该结果接收片合入前保持 pending，不把 begin 标记完成。
-这里只接上确认事实与安全 drain，callback 瞬时转交继续按
+不发新安装请求。Worker drain 按原 Execution 有界领取 pending 的 `begin` 和 `confirm`
+命令，并以 commandId、attemptId、attemptOwner 做 CAS；`begin` 的结果只保存已
+校验的 authorizationUrl、期限和 callback state hash，`confirm` 仍必须先有用户的明确确认。
+任何 sending/unknown 阻断同一安装的后续发送，进程崩溃或超时会把过期 sending 固化为
+unknown；不因未知结果自动换 key 重发。callback 瞬时转交继续按
 [工程 Spec §13.5.6](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)
 实施，生产 Token/ConsumerInstance/真实保护门禁仍沿
 [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) 保留。
