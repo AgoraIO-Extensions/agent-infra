@@ -103,10 +103,30 @@ async function fixture(t) {
 	await mkdir(stateDirectory, { mode: 0o700 });
 	const stateFile = join(stateDirectory, "agent-bindings.json");
 	await writeFile(stateFile, JSON.stringify(state), { mode: 0o600 });
+	const profilesFile = await save("profiles.json", {
+		schemaVersion: 1,
+		sourceSha,
+		profiles: profiles.map(({ requestName, ...profile }) => ({
+			...profile,
+			resourceConfigurationHash: "b".repeat(64),
+			conformanceEvidenceHash: "c".repeat(64),
+		})),
+	});
+	const capacityFile = await save("capacity.json", {
+		schemaVersion: 1,
+		sourceSha,
+		resourceProfileRef: "ack-small",
+		resources: {
+			requests: { cpu: "100m", memory: "128Mi" },
+			limits: { cpu: "1", memory: "2Gi" },
+		},
+		profilesFile,
+	});
 	const environment = {
 		ACK_NAMESPACE: "agent-infra",
 		ACK_SESSION_RESERVE_PLAN_FILE: await save("plan.json", plan),
 		ACK_AGENT_REQUESTS_FILE: await save("requests.json", requests),
+		ACK_WORKLOAD_CAPACITY_FILE: capacityFile,
 		ACK_TEMPLATE_IMAGE_MANIFEST: await save("images.json", {
 			schemaVersion: 1,
 			commitSha: sourceSha,

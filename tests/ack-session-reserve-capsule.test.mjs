@@ -138,6 +138,21 @@ NODE
 			platform: "linux/amd64",
 			images: { codex: { digest: plan.profiles[0].imageDigest } },
 		});
+		const profilesFile = await save("profiles.json", {
+			schemaVersion: 1,
+			sourceSha,
+			profiles: [],
+		});
+		await save("capacity.json", {
+			schemaVersion: 1,
+			sourceSha,
+			resourceProfileRef: "ack-small",
+			resources: {
+				requests: { cpu: "100m", memory: "128Mi" },
+				limits: { cpu: "1", memory: "2Gi" },
+			},
+			profilesFile,
+		});
 		await save("state/agent-bindings.json", {
 			schemaVersion: 1,
 			sourceSha,
@@ -165,6 +180,8 @@ NODE
 				"reserves.json",
 				"requests.json",
 				"images.json",
+				"capacity.json",
+				"profiles.json",
 				"request.json",
 				"bootstrap.json",
 			],
@@ -176,6 +193,7 @@ NODE
 				ACK_SESSION_RESERVES_FILE: "@CAPSULE_ROOT@/reserves.json",
 				ACK_AGENT_REQUESTS_FILE: "@CAPSULE_ROOT@/requests.json",
 				ACK_TEMPLATE_IMAGE_MANIFEST: "@CAPSULE_ROOT@/images.json",
+				ACK_WORKLOAD_CAPACITY_FILE: "@CAPSULE_ROOT@/capacity.json",
 				ACK_AGENT_STATE_DIR: "@CAPSULE_ROOT@/state",
 				ACK_EVIDENCE_DIR: "@CAPSULE_ROOT@/evidence",
 			},

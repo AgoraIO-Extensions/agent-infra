@@ -203,7 +203,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	assert(capacity.workerSecretRef?.name === worker.secretName);
 	const workerSecret = secrets.find((s) => s.desired.metadata.name === worker.secretName)!;
 	assert(workerSecret.files[capacity.workerSecretRef.key] === capacity.profilesFile, "RUNTIME_INPUT_CAPACITY_TARGET_INVALID");
-	const profileBytes = jsonBytes({ ...profilesDocument, profiles });
+	const profileBytes = jsonBytes({ ...profilesDocument, sourceSha, profiles });
 	await stageFile(capacity.profilesFile, profileBytes);
 	if (capacity.candidateProfilesFile !== undefined) await stageFile(capacity.candidateProfilesFile, profileBytes);
 	workerSecret.desired.data[capacity.workerSecretRef.key] = profileBytes.toString("base64");

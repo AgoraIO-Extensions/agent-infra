@@ -127,7 +127,11 @@ async function fixture(t, apiReplicas = 1) {
 		workerSecretRef: { name: "worker-config", key: "capacity.json" },
 		evidence: [],
 	};
-	await save(profilesFile, { schemaVersion: 1, profiles: [] });
+	await save(profilesFile, {
+		schemaVersion: 1,
+		sourceSha: source,
+		profiles: [],
+	});
 	await save(files.capacity, capacity);
 	await save(files.templates, {
 		schemaVersion: 1,
@@ -1618,12 +1622,12 @@ deploy() { echo deploy; }
 template_preflight() { echo templates; }
 bootstrap_login() { echo login; }
 publications=0
-runtime_inputs() { publications=$((publications+1)); echo publish-$publications; ${failure === "initial-publication" ? '[[ "$publications" != 1 ]]' : failure === "reserve-publication" ? '[[ "$publications" != 2 ]]' : ":"}; }
+runtime_inputs() { publications=$((publications+1)); echo publish-$publications; ${failure === "initial-publication" || failure === "reserve-publication" ? '[[ "$publications" != 1 ]]' : ":"}; }
 bootstrap_credential() { [[ "$publications" == 1 ]]; echo credential; }
 node() { :; }
 provision() { [[ "$publications" == 1 ]]; echo provision; }
 bind_session_reserves() { echo bind; ${failure === "binding" ? "return 1" : ":"}; }
-wait_session_reserves() { [[ "$publications" == 2 ]]; echo ready; ${failure === "readiness" ? "return 1" : ":"}; }
+wait_session_reserves() { [[ "$publications" == 1 ]]; echo ready; ${failure === "readiness" ? "return 1" : ":"}; }
 validate() { echo validate; }
 repo_root=/fixture
 source_sha=fixture
@@ -1657,20 +1661,23 @@ ${dispatch}
 				"deploy",
 				"templates",
 				"login",
-				"publish-1",
 				"credential",
 				"provision",
 				"bind",
-				"login",
-				"publish-2",
+				"publish-1",
 				"ready",
 				"validate",
 			]);
 		else assert(!stages.includes("validate"));
 		if (failure === "plan") assert(!stages.includes("bootstrap"));
 		if (failure === "initial-publication")
-			assert(!stages.includes("credential") && !stages.includes("provision"));
-		if (failure === "binding") assert(!stages.includes("publish-2"));
+			assert(
+				stages.includes("credential") &&
+					stages.includes("provision") &&
+					stages.includes("bind") &&
+					!stages.includes("validate"),
+			);
+		if (failure === "binding") assert(!stages.includes("publish-1"));
 		if (failure === "reserve-publication") assert(!stages.includes("ready"));
 	});
 }

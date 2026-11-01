@@ -17,7 +17,11 @@ export async function readReservePlan(environment: Record<string, string>, sourc
 	const plan = await privateJson(environment.ACK_SESSION_RESERVE_PLAN_FILE);
 	const requests = parseInput(await privateJson(environment.ACK_AGENT_REQUESTS_FILE));
 	const images = await privateJson(environment.ACK_TEMPLATE_IMAGE_MANIFEST);
+	const capacity = await privateJson(environment.ACK_WORKLOAD_CAPACITY_FILE);
+	const profilesFile = capacity.profilesFile;
+	const profilesDocument = await privateJson(profilesFile);
 	assert(images.schemaVersion === 1 && images.commitSha === sourceSha && images.platform === "linux/amd64", "ACK_RESERVE_PLAN_SOURCE_INVALID");
+	assert(capacity.sourceSha === sourceSha && profilesDocument.sourceSha === sourceSha && Array.isArray(profilesDocument.profiles), "RESERVE_CAPACITY_INVALID");
 	assert(plan.enabled === true && Array.isArray(plan.profiles) && plan.profiles.length >= 1 && plan.profiles.length <= 4, "ACK_RESERVE_PLAN_INVALID");
 	const names = new Set<string>();
 	const profiles = [];
@@ -43,9 +47,12 @@ export async function readReservePlan(environment: Record<string, string>, sourc
 export async function resolveReserveConfiguration(environment: Record<string, string>, sourceSha: string) {
 	const { plan, requests } = await readReservePlan(environment, sourceSha);
 	const bindings = await readAgentBindings(requests, environment.ACK_AGENT_STATE_DIR, sourceSha);
+	const agentIds = new Set<string>();
 	const profiles = plan.profiles.map(({ requestName, ...approved }: Json) => {
 		const selected = bindings.find(r => r.name === requestName);
 		assert(selected?.binding?.ready === true && typeof selected.binding.agentId === "string" && selected.binding.agentId.length > 0 && selected.binding.agentId.length <= 256, "ACK_RESERVE_AGENT_NOT_READY");
+		assert(!agentIds.has(selected.binding.agentId), "ACK_RESERVE_AGENT_DUPLICATE");
+		agentIds.add(selected.binding.agentId);
 		return { ...approved, agentId: selected.binding.agentId };
 	});
 	return { ...plan, profiles };
