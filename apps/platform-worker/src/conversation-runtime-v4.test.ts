@@ -1657,6 +1657,27 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			}
 		});
 
+		it("allows a stop when only the original Execution cursor advances", async () => {
+			const h = runtimeV4Harness("stop");
+			try {
+				Object.assign(h.state, { stopPending: true });
+				const reference = await h.authorize();
+				let routes = 0;
+				h.resolveRuntimeHost.mockImplementation(async () => {
+					routes++;
+					if (routes === 2)
+						Object.assign(h.state, { runtimeCursor: "cursor-advanced" });
+					return { ...h.target };
+				});
+				await expect(
+					h.runtime.runtimeHost.dispatch(h.request(reference)),
+				).resolves.toMatchObject({ result: { outcome: "accepted" } });
+				expect(h.fetcher).toHaveBeenCalled();
+			} finally {
+				h.runtime.close();
+			}
+		});
+
 		it("ACKs under the stop control Grant when the stop lands during the ACK's preparation", async () => {
 			const h = runtimeV4Harness();
 			try {

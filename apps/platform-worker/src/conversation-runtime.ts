@@ -82,7 +82,6 @@ function stopPreparationBinding(state: ConversationRuntimeStateV2) {
 		executionStatus: state.executionStatus,
 		hostSessionRef: state.hostSessionRef,
 		originalSubmitHostSessionRef: state.originalSubmitHostSessionRef,
-		runtimeCursor: state.runtimeCursor,
 		runtimeSubmitProtocol: state.runtimeSubmitProtocol,
 		generationIsolation: state.generationIsolation,
 		sandbox: sandbox
