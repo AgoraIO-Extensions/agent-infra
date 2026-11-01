@@ -35,11 +35,21 @@ async function fixture(t) {
 				`{"templateId":"${Object.keys(digests)[index]}","imageDigest":"${digest}"}`,
 		)
 		.join(",");
+	const customDigest = `sha256:${"5".repeat(64)}`;
 	const worker = await save(
 		"worker.mjs",
 		`const runtimeDigest=process.env.AGENT_INFRA_RUNTIME_IMAGE_DIGEST;if(runtimeDigest!=="${`sha256:${"9".repeat(64)}`}")throw Error();const templateModelBindings:[${templateBindings}],`,
 	);
+	await writeFile(
+		worker,
+		`${await readFile(worker, "utf8")}const customDigests=["${customDigest}"];\n`,
+		{ mode: 0o600 },
+	);
 	const api = await save("api.mjs", `const templates: [${templateBindings}],`);
+	const apiEntrypoint = await save(
+		"api-entrypoint.mjs",
+		`const customDigests=["${customDigest}"];`,
+	);
 	const bootstrap = await save("bootstrap.json", {
 		schemaVersion: 1,
 		objects: [
@@ -51,7 +61,10 @@ async function fixture(t) {
 			{
 				kind: "Secret",
 				name: "agent-infra-api-configuration",
-				files: { "configuration.mjs": api },
+				files: {
+					"configuration.mjs": api,
+					"api-configuration.mjs": apiEntrypoint,
+				},
 			},
 		],
 	});
@@ -77,7 +90,7 @@ async function fixture(t) {
 			]),
 		),
 	});
-	return { root, bootstrap, runtime, templates, worker, api };
+	return { root, bootstrap, runtime, templates, worker, api, apiEntrypoint };
 }
 
 test("source configuration preflight accepts active runtime/template bindings", async (t) => {
@@ -142,4 +155,19 @@ test("source configuration preflight rejects an API RuntimeHost reference drift"
 	);
 	assert.equal(receipt.status, "failed");
 	assert.equal(receipt.failureCode, "CONFIG_RUNTIME_DIGEST_MISMATCH");
+});
+
+test("source configuration preflight rejects stale API custom admission digests", async (t) => {
+	const f = await fixture(t);
+	await writeFile(f.apiEntrypoint, "const customDigests=[];\n", {
+		mode: 0o600,
+	});
+	const receipt = await validateConfigurationSourceBindings(
+		f.bootstrap,
+		f.runtime,
+		f.templates,
+		sourceSha,
+	);
+	assert.equal(receipt.status, "failed");
+	assert.equal(receipt.failureCode, "CONFIG_CUSTOM_DIGEST_MISMATCH");
 });

@@ -7,6 +7,7 @@ const failureCodes = [
 	"CONFIG_SOURCE_INPUT_INVALID",
 	"CONFIG_RUNTIME_DIGEST_MISMATCH",
 	"CONFIG_TEMPLATE_DIGEST_MISMATCH",
+	"CONFIG_CUSTOM_DIGEST_MISMATCH",
 ] as const;
 type FailureCode = (typeof failureCodes)[number];
 
@@ -19,6 +20,14 @@ function fileReference(input: any, name: string, key: string) {
 	const file = object?.files?.[key];
 	assert(typeof file === "string", "CONFIG_SOURCE_INPUT_INVALID");
 	return file;
+}
+
+function customDigests(source: string) {
+	const declared = source.match(/customDigests\s*=\s*\[((?:.|\n)*?)\]/u)?.[1];
+	const inline = source.match(
+		/usage\s*===\s*["']custom-agent["'][\s\S]{0,6000}?\[((?:.|\n)*?)\]\.includes\(input\.immutableDigest\)/u,
+	)?.[1];
+	return new Set((declared ?? inline ?? "").match(/sha256:[0-9a-f]{64}/gu) ?? []);
 }
 
 export async function validateConfigurationSourceBindings(
@@ -44,6 +53,14 @@ export async function validateConfigurationSourceBindings(
 			assert(/^sha256:[a-f0-9]{64}$/u.test(expectedTemplates[templateId] ?? ""));
 		const worker = new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(fileReference(bootstrap, "agent-infra-worker-configuration", "configuration.mjs")));
 		const api = new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(fileReference(bootstrap, "agent-infra-api-configuration", "configuration.mjs")));
+		const apiEntrypointFile = bootstrap.objects?.find((entry: any) => entry.kind === "Secret" && entry.name === "agent-infra-api-configuration")?.files?.["api-configuration.mjs"];
+		if (typeof apiEntrypointFile === "string") {
+			const apiEntrypoint = new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(apiEntrypointFile));
+			const workerCustomDigests = customDigests(worker);
+			const apiCustomDigests = customDigests(apiEntrypoint);
+			if ([...workerCustomDigests].some((digest) => !apiCustomDigests.has(digest)))
+				return failure("CONFIG_CUSTOM_DIGEST_MISMATCH", "API and Worker custom admission digests differ");
+		}
 		if (!worker.includes(`runtimeDigest!==\"${runtimeDigest}\"`)) return failure("CONFIG_RUNTIME_DIGEST_MISMATCH", "worker runtime binding differs from the published RuntimeHost digest");
 		const apiRuntimeBinding = /(?:runtimeDigest|AGENT_INFRA_RUNTIME_IMAGE_DIGEST|agent-runtime-host@sha256:|runtimeHost[^\n]*sha256:)/u.test(api);
 		if (apiRuntimeBinding && !api.includes(runtimeDigest)) return failure("CONFIG_RUNTIME_DIGEST_MISMATCH", "API runtime binding differs from the published RuntimeHost digest");
