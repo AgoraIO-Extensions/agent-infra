@@ -153,6 +153,12 @@ function createApp(
 		revision: 4,
 		changedFields: ["source"],
 	});
+	const upgradeCustomManifest = vi.fn().mockResolvedValue({
+		schemaVersion: 1,
+		agentId: "agent-1",
+		revision: 4,
+		changedFields: ["source"],
+	});
 	const listApplications = vi.fn().mockResolvedValue({
 		items: [applicationRecord],
 		nextAfterId: null,
@@ -198,7 +204,7 @@ function createApp(
 		foundation: { submit },
 		revision: { revise },
 		management: { executeManagementCommand },
-		configuration: { upgradeCustomImage },
+		configuration: { upgradeCustomImage, upgradeCustomManifest },
 		query: { listApplications, getApplication, listAgents, getAgent },
 		allocateApplicationIds,
 		prepareSecretReplacements,
@@ -212,6 +218,7 @@ function createApp(
 		executeManagementCommand,
 		updateConfiguration,
 		upgradeCustomImage,
+		upgradeCustomManifest,
 		listApplications,
 		getApplication,
 		listAgents,

@@ -1629,7 +1629,10 @@ describe("creation failure category route (#3034)", () => {
 			foundation: { submit: unavailable },
 			revision: { revise: unavailable },
 			management: { executeManagementCommand: unavailable },
-			configuration: { upgradeCustomImage: unavailable },
+			configuration: {
+				upgradeCustomImage: unavailable,
+				upgradeCustomManifest: unavailable,
+			},
 			query: {
 				listApplications: unavailable,
 				getApplication: unavailable,

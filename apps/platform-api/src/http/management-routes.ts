@@ -105,9 +105,8 @@ export interface ManagementRouteDependencies {
 	>;
 	readonly configuration: Pick<
 		AgentConfigurationUseCaseV1,
-		"upgradeCustomImage"
-	> &
-		Partial<Pick<AgentConfigurationUseCaseV1, "upgradeCustomManifest">>;
+		"upgradeCustomImage" | "upgradeCustomManifest"
+	>;
 	readonly query: ManagementQuery;
 	readonly allocateApplicationIds: (input: {
 		readonly identity: IdentityContext;
@@ -850,11 +849,7 @@ export function registerManagementRoutes(
 						},
 					);
 				} else {
-					const upgradeCustomManifest =
-						dependencies.configuration.upgradeCustomManifest;
-					if (!upgradeCustomManifest)
-						fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
-					await upgradeCustomManifest(
+					await dependencies.configuration.upgradeCustomManifest(
 						{
 							schemaVersion: 1,
 							agentId,
