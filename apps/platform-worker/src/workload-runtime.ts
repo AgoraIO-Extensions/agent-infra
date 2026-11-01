@@ -529,6 +529,10 @@ export function createWorkloadRuntimeV1(
 	observeVerifiedControl(
 		state: WorkloadReconciliationStateV1,
 	): ReturnType<WorkloadRuntimePortV1["observe"]>;
+	/** Bounded control preflight: route/health only, without a readiness Grant. */
+	observeVerifiedControlRoute(
+		state: WorkloadReconciliationStateV1,
+	): ReturnType<WorkloadRuntimePortV1["observe"]>;
 	observeSession(
 		state: WorkloadReconciliationStateV1,
 		browserBinding: BrowserCapabilityBindingV1,
@@ -1229,6 +1233,53 @@ export function createWorkloadRuntimeV1(
 			});
 		return health;
 	}
+	async function observeVerifiedControl(
+		state: WorkloadReconciliationStateV1,
+		signedReadiness: boolean,
+	) {
+		if (!state.identity || !state.verified || state.verifiedRevision === null)
+			return "pending" as const;
+		const deployment = validateAgentWorkloadDesiredV1(
+			state.verified.deployment,
+		);
+		if (
+			deployment.agentId !== state.agentId ||
+			state.verified.configuration.agentId !== state.agentId ||
+			deployment.configRevision !== state.verified.configuration.revision ||
+			deployment.imageDigest !== state.verified.configuration.source.imageDigest
+		)
+			return "drifted" as const;
+		const observation = createAdapter(
+			undefined,
+			{ candidate: state.verified },
+			"authorize",
+			true,
+			undefined,
+			signedReadiness ? undefined : { reuse: () => true },
+		);
+		const original = validateAgentWorkloadDesiredV1({
+			...deployment,
+			workloadRevision: state.verifiedRevision,
+			expectedWorkload: {
+				state: "present",
+				workloadUid: state.identity.uid,
+				workloadGeneration: state.identity.generation,
+			},
+		});
+		// Before route closure, controls use the verified business route directly.
+		if (state.phase === "ready" || state.phase === "preflight")
+			return observation.observe(original, state.identity, "open", "required");
+		const health = await observation.observe(
+			original,
+			state.identity,
+			"closed",
+			"required",
+			{ workloadRevision: state.revision, fence: state.fence },
+		);
+		return state.phase === "closing" && health === "drifted"
+			? observation.observe(original, state.identity, "open", "required")
+			: health;
+	}
 	return {
 		async runReconciliationStep(state, step) {
 			const scope: StepScope = {
@@ -1806,54 +1857,10 @@ export function createWorkloadRuntimeV1(
 			return identity;
 		},
 		async observeVerifiedControl(state) {
-			if (!state.identity || !state.verified || state.verifiedRevision === null)
-				return "pending";
-			const deployment = validateAgentWorkloadDesiredV1(
-				state.verified.deployment,
-			);
-			if (
-				deployment.agentId !== state.agentId ||
-				state.verified.configuration.agentId !== state.agentId ||
-				deployment.configRevision !== state.verified.configuration.revision ||
-				deployment.imageDigest !==
-					state.verified.configuration.source.imageDigest
-			)
-				return "drifted";
-			const observation = createAdapter(
-				undefined,
-				{
-					candidate: state.verified,
-				},
-				"authorize",
-				true,
-			);
-			const original = validateAgentWorkloadDesiredV1({
-				...deployment,
-				workloadRevision: state.verifiedRevision,
-				expectedWorkload: {
-					state: "present",
-					workloadUid: state.identity.uid,
-					workloadGeneration: state.identity.generation,
-				},
-			});
-			// Before route closure, controls use the verified business route directly.
-			if (state.phase === "ready" || state.phase === "preflight")
-				return observation.observe(
-					original,
-					state.identity,
-					"open",
-					"required",
-				);
-			const health = await observation.observe(
-				original,
-				state.identity,
-				"closed",
-				"required",
-				{ workloadRevision: state.revision, fence: state.fence },
-			);
-			return state.phase === "closing" && health === "drifted"
-				? observation.observe(original, state.identity, "open", "required")
-				: health;
+			return observeVerifiedControl(state, true);
+		},
+		async observeVerifiedControlRoute(state) {
+			return observeVerifiedControl(state, false);
 		},
 		async observeSession(state, browserBinding) {
 			// A newly started Runtime Host can miss the first bounded /healthz

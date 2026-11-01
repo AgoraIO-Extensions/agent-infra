@@ -170,6 +170,8 @@ export interface ConversationRuntimeOptionsV2 {
 		 * readiness（#2134）；未设置时按命令执行完整观测。
 		 */
 		readonly reuseSignedReadiness?: true;
+		/** Control preparation preflight: verify the live route without readiness signing. */
+		readonly skipControlReadiness?: true;
 		/** Require a fresh Session Sandbox resource receipt for a control route. */
 		readonly requireSandboxObservation?: true;
 	}) => Promise<{
@@ -520,6 +522,9 @@ export function createConversationRuntimeV2(
 				command,
 				// 签名 readiness 只要求在发送前最后一次解析（postTarget）执行（#2134）。
 				reuseSignedReadiness: true,
+				...(authority.purpose === "control"
+					? { skipControlReadiness: true as const }
+					: {}),
 			}),
 			signal,
 		);
@@ -571,6 +576,9 @@ export function createConversationRuntimeV2(
 				purpose: finalRoute.authority.purpose,
 				command,
 				reuseSignedReadiness: true,
+				...(finalRoute.authority.purpose === "control"
+					? { skipControlReadiness: true as const }
+					: {}),
 			}),
 			signal,
 		);

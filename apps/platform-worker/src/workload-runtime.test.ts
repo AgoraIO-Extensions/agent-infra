@@ -5521,6 +5521,32 @@ describe("observeForDrain (#1889)", () => {
 		expect(health).toHaveBeenCalledTimes(3);
 	});
 
+	it("keeps control preflight route-only and leaves signed readiness to the final phase", async () => {
+		const { state, drain, probeRuntime, health } = await ready();
+		await expect(drain.observeVerifiedControlRoute(state)).resolves.toBe(
+			"healthy",
+		);
+		expect(probeRuntime).not.toHaveBeenCalled();
+		expect(health).toHaveBeenCalled();
+		await expect(drain.observeVerifiedControl(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not let control preflight hide a live route change", async () => {
+		const { f, state, drain, probeRuntime } = await ready();
+		const service = [...f.resources.values()].find(
+			(resource) =>
+				resource.kind === "Service" &&
+				resource.metadata?.name?.startsWith("agent-a"),
+		) as V1Service | undefined;
+		if (!service?.spec) throw new Error("Fixture Service is missing");
+		service.spec.selector = { changed: "true" };
+		await expect(drain.observeVerifiedControlRoute(state)).resolves.toBe(
+			"drifted",
+		);
+		expect(probeRuntime).not.toHaveBeenCalled();
+	});
+
 	it("records bounded health/readiness timing and reuse observations (#3303)", async () => {
 		const observations: Array<Record<string, unknown>> = [];
 		const { state, monitor, drain } = await ready({

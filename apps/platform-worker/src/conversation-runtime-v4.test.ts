@@ -1613,6 +1613,28 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			}
 		});
 
+		it("marks only the first two control route resolutions as readiness preflight", async () => {
+			const h = runtimeV4Harness();
+			try {
+				Object.assign(h.state, { stopPending: true });
+				const reference = await h.authorize();
+				terminalReads(h);
+				const stream = h.runtime.runtimeHost
+					.events(h.events(reference))
+					[Symbol.asyncIterator]();
+				expect((await stream.next()).value).toEqual(terminal);
+				const controlCalls = h.resolveRuntimeHost.mock.calls
+					.map(([input]) => input)
+					.filter((input) => input.purpose === "control");
+				expect(
+					controlCalls.slice(0, 3).map((input) => input.skipControlReadiness),
+				).toEqual([true, true, undefined]);
+				await stream.return?.();
+			} finally {
+				h.runtime.close();
+			}
+		});
+
 		it("ACKs under the stop control Grant when the stop lands during the ACK's preparation", async () => {
 			const h = runtimeV4Harness();
 			try {

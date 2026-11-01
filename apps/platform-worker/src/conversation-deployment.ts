@@ -368,7 +368,9 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					// 同一次准备内的前置解析；发送前最后一次解析仍做完整探测（#2134）。
 					input.reuseSignedReadiness === true);
 			const health = await (input.purpose === "control"
-				? runtime.observeVerifiedControl(state)
+				? input.skipControlReadiness === true
+					? runtime.observeVerifiedControlRoute(state)
+					: runtime.observeVerifiedControl(state)
 				: isDrainPath
 					? runtime.observeForDrain(state, sessionBrowserBinding)
 					: sessionBrowserBinding
