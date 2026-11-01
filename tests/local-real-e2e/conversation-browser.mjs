@@ -11,6 +11,7 @@ import {
 	assistantDeliveryEvidence,
 	currentExecutionEvents,
 	currentExecutionFrames,
+	modelStartObservationMs,
 	restoredHistoryPreservesEvents,
 } from "./conversation-browser-validation.mjs";
 
@@ -567,6 +568,11 @@ async function run(input, evidence) {
 			assertTurnReply(renderedAnswer, turn.expectedReply);
 			evidence.timings = {
 				browserClickToAcceptedMs: Math.max(0, acceptedAt - clickedAt),
+				browserClickToModelStartObservedMs: modelStartObservationMs(
+					events,
+					currentFrames,
+					clickedAt,
+				),
 				browserClickToFirstTextMs: firstFrame.at - clickedAt,
 				browserClickToCompletedMs: terminalFrame.at - clickedAt,
 				modelDurationMs: null,
