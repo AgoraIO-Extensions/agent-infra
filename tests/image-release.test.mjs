@@ -73,6 +73,7 @@ if (args[0] === "buildx" && args[1] === "build") {
     if (!existsSync(join(context, path))) process.exit(92);
   }
   if (!existsSync(args[args.indexOf("--file") + 1])) process.exit(93);
+  if (process.env.FAKE_BUILD_FAILURE_STDERR) { console.error(process.env.FAKE_BUILD_FAILURE_STDERR); process.exit(96); }
   const metadata = args[args.indexOf("--metadata-file") + 1];
   const tag = args[args.indexOf("--tag") + 1];
   const statePath = process.env.FAKE_DOCKER_STATE;
@@ -787,6 +788,55 @@ test("publication push failures emit redacted categories and stop before remote 
 				"failed push must not reach remote readback",
 			);
 		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("image Buildx failures emit redacted runner categories before publication", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "agent-infra-build-failure-"));
+	try {
+		await fakes(directory);
+		await writeFile(join(directory, "docker-state.json"), "{}");
+		const sentinel = "buildkit-runner-credential-sentinel";
+		const result = build(
+			join(directory, "images.json"),
+			directory,
+			{
+				FAKE_BUILD_FAILURE_STDERR: `BuildKit: only one connection allowed\n${sentinel}`,
+			},
+			"registry.example/agent-infra",
+			["--images=runtimeHost"],
+		);
+		assert.notEqual(result.status, 0);
+		const diagnostic = result.stderr
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line.startsWith("{"))
+			.map((line) => JSON.parse(line))
+			.find((line) => line.phase === "build.failure");
+		assert.deepEqual(diagnostic, {
+			phase: "build.failure",
+			step: "image.build",
+			category: "runner",
+			image: "runtimeHost",
+			platform: "linux/amd64",
+			source: commitSha,
+			commitSha,
+		});
+		assert.ok(!`${result.stdout}${result.stderr}`.includes(sentinel));
+		await assert.rejects(access(join(directory, "images.json")));
+		const calls = (await readFile(join(directory, "docker.log"), "utf8"))
+			.trim()
+			.split("\n")
+			.filter(Boolean)
+			.map(JSON.parse);
+		assert.equal(
+			calls.filter((args) => args[0] === "buildx" && args[1] === "build")
+				.length,
+			1,
+		);
+		assert.equal(calls.filter((args) => args[0] === "push").length, 0);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

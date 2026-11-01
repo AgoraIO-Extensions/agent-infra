@@ -335,6 +335,18 @@ async function buildImage({
 				env: { ...process.env, BUILDX_GIT_INFO: "false" },
 				name: `${image.key} image build ${pass}`,
 				timeoutMs: timeoutMs.build,
+				onFailure: (stderr) => console.error(JSON.stringify({
+					phase: "build.failure",
+					step: "image.build",
+					category: buildFailureCategory(stderr),
+					image: image.key,
+					platform,
+					source: commitSha,
+					commitSha,
+					job: ["infrastructure", "platform"].includes(process.env.GITHUB_JOB) ? process.env.GITHUB_JOB : undefined,
+					runId: /^[1-9][0-9]{0,19}$/.test(process.env.GITHUB_RUN_ID ?? "") ? process.env.GITHUB_RUN_ID : undefined,
+					runAttempt: /^[1-9][0-9]{0,5}$/.test(process.env.GITHUB_RUN_ATTEMPT ?? "") ? process.env.GITHUB_RUN_ATTEMPT : undefined,
+				})),
 			},
 		);
 		assertCheckout(git, commitSha);
@@ -443,6 +455,14 @@ function publishFailureCategory(stderr) {
 	if (/\b(?:unauthori[sz]ed|denied|forbidden|permission_denied|insufficient_scope)\b/.test(text)) return "authorization";
 	if (/\b(?:timeout|timed out|connection (?:refused|reset|closed)|network is unreachable|no such host|unexpected eof|tls handshake|context deadline exceeded|service unavailable)\b/.test(text)) return "network";
 	return "unknown";
+}
+
+function buildFailureCategory(stderr) {
+	const text = String(stderr ?? "").toLowerCase();
+	if (/\b(?:timeout|timed out|context deadline exceeded)\b/.test(text)) return "timeout";
+	if (/\b(?:http\/\d(?:\.\d)?\s+\d{3}|status code\s*[:=]?\s*\d{3}|service unavailable)\b/.test(text)) return "http";
+	if (/\b(?:buildkit|buildx|docker (?:daemon|engine)|only one connection|unable to lease|runner|no space left on device)\b/.test(text)) return "runner";
+	return "transport";
 }
 
 function publishImage({ image, builtImage, registryInsecure, git, commitSha, platform }) {

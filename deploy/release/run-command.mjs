@@ -10,10 +10,12 @@ export function runCommand(command, args, options) {
 		timeout: options.timeoutMs,
 	});
 	if (result.error?.code === "ETIMEDOUT") {
+		options.onFailure?.(result.stderr);
 		throw new Error(`${options.name} timed out`);
 	}
 	if (result.error) throw new Error(`${options.name} could not start`);
 	if (result.signal) {
+		options.onFailure?.(result.stderr);
 		throw new Error(`${options.name} terminated by ${result.signal}`);
 	}
 	if (result.status !== 0) {
