@@ -30,7 +30,7 @@ const resources = {
 	limits: { cpu: "1", memory: "2Gi" },
 };
 
-async function fixture(t) {
+async function fixture(t, apiReplicas = 1) {
 	const directory = await mkdtemp(join(tmpdir(), "ack-runtime-inputs-"));
 	t.after(() => rm(directory, { recursive: true, force: true }));
 	const save = async (path, value) => {
@@ -260,6 +260,7 @@ async function fixture(t) {
 		kind: "Deployment",
 		metadata: { name: `agent-infra-${component}`, namespace },
 		spec: {
+			replicas: component === "api" ? apiReplicas : 1,
 			template: {
 				metadata: {},
 				spec: {
@@ -324,9 +325,10 @@ async function fixture(t) {
 		if (item.kind === "Deployment")
 			item.status = {
 				observedGeneration: 1,
-				updatedReplicas: 1,
-				availableReplicas: 1,
-				readyReplicas: 1,
+				replicas: item.spec.replicas,
+				updatedReplicas: item.spec.replicas,
+				availableReplicas: item.spec.replicas,
+				readyReplicas: item.spec.replicas,
 			};
 		cluster.set(`${item.kind.toLowerCase()}/${item.metadata.name}`, item);
 	}
@@ -1244,4 +1246,89 @@ ${dispatch}
 			}
 		});
 	}
+}
+
+test("two-replica API runtime inputs reach readiness while Worker remains single-replica", async (t) => {
+	const f = await fixture(t, 2);
+	const result = await publishRuntimeInputs(
+		f.files,
+		f.rendered,
+		source,
+		f.kubectl,
+		true,
+	);
+	assert.equal(result.status, "passed");
+	assert.equal(result.loginVerified, true);
+	assert.equal(f.cluster.get("deployment/agent-infra-api").spec.replicas, 2);
+	assert.equal(f.cluster.get("deployment/agent-infra-worker").spec.replicas, 1);
+});
+
+for (const scenario of ["before-write", "after-rollout", "during-login"]) {
+	test(`API replica drift is rejected ${scenario}`, async (t) => {
+		const f = await fixture(t, 2);
+		const api = f.cluster.get("deployment/agent-infra-api");
+		if (scenario === "before-write") api.spec.replicas = 3;
+		if (scenario === "after-rollout")
+			f.beforeCall((args) => {
+				if (args.includes("rollout")) api.spec.replicas = 3;
+			});
+		if (scenario === "during-login")
+			f.httpState.onFreshLogin = () => {
+				api.spec.replicas = 3;
+			};
+		await assert.rejects(
+			publishRuntimeInputs(f.files, f.rendered, source, f.kubectl, true),
+			/RUNTIME_INPUT_(REPLICA_DRIFT|CONSUMER_ROLLOUT_FAILED)/,
+		);
+		if (scenario === "before-write") assert.equal(f.mutations.length, 0);
+	});
+}
+
+for (const scenario of ["missing-login", "invalid-templates"]) {
+	test(`CLI apply preserves not-applied preflight receipt for ${scenario} without starting watch`, async (t) => {
+		const f = await fixture(t, 2);
+		if (scenario === "invalid-templates") await f.save(f.files.templates, {});
+		const manifest = await f.save(
+			join(f.files.bootstrap, "../rendered.json"),
+			f.rendered,
+		);
+		const bin = join(f.files.bootstrap, "../bin");
+		await mkdir(bin);
+		const marker = join(bin, "called");
+		await writeFile(
+			join(bin, "kubectl"),
+			`#!/bin/sh\ntouch '${marker}'\nexit 1\n`,
+			{ mode: 0o700 },
+		);
+		const result = spawnSync(
+			process.execPath,
+			[
+				"deploy/ack/runtime-inputs.ts",
+				"apply",
+				f.files.bootstrap,
+				f.files.templates,
+				f.files.capacity,
+				f.files.requests,
+				manifest,
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					PATH: `${bin}:${process.env.PATH}`,
+					ACK_SOURCE_SHA: source,
+					ACK_NAMESPACE: namespace,
+					ACK_KUBECONFIG: join(bin, "kubeconfig"),
+					ACK_LOGIN_BOOTSTRAP_FILE:
+						scenario === "missing-login" ? "" : f.files.login,
+				},
+			},
+		);
+		assert.equal(result.status, 1);
+		const receipt = JSON.parse(result.stdout);
+		assert.equal(receipt.phase, "preflight");
+		assert.equal(receipt.mutationStatus, "not-applied");
+		assert.equal(receipt.recoveryRequired, false);
+		await assert.rejects(readFile(marker), { code: "ENOENT" });
+	});
 }

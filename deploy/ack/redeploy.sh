@@ -136,7 +136,7 @@ let data="";process.stdin.on("data", chunk=>data+=chunk).on("end",()=>{
 snapshot() {
 	local prefix=${1:-snapshot}
 	export KUBECONFIG="$ACK_KUBECONFIG"
-	node "$repo_root/deploy/ack/redeploy-evidence.ts" snapshot "$namespace" "$release" "$source_sha" >"$evidence_dir/$prefix.json"
+	node "$repo_root/deploy/ack/redeploy-evidence.ts" snapshot "$namespace" "$release" "$source_sha" "${2:-}" >"$evidence_dir/$prefix.json"
 }
 
 configuration_source_preflight() {
@@ -186,7 +186,13 @@ restart_config_consumers() {
 		chmod 600 "$evidence_dir/configuration-rollout.json"
 		return
 	fi
-	kubectl -n "$namespace" rollout restart "${deployments[@]}" >/dev/null
+	if [[ " ${deployments[*]} " == *" deployment/agent-infra-api "* ]]; then
+		node "$repo_root/deploy/ack/api-rollout-observation.ts" "$namespace" live \
+			"$evidence_dir/api-rollout-configuration.json" "$timeout" -- \
+			kubectl -n "$namespace" rollout restart "${deployments[@]}" >/dev/null
+	else
+		kubectl -n "$namespace" rollout restart "${deployments[@]}" >/dev/null
+	fi
 	for component in "${deployments[@]}"; do
 		kubectl -n "$namespace" rollout status "$component" --timeout="$timeout" >/dev/null
 	done
@@ -343,10 +349,10 @@ plan() {
 	trap 'unlink "$rendered_manifest"' EXIT
 	render_manifest "$rendered_manifest"
 	configuration_source_preflight
+	helm lint "$chart_dir" --values "$values_file" --strict >/dev/null 2>&1 || die "HELM_LINT_FAILED"
+	snapshot plan "$rendered_manifest"
 	unlink "$rendered_manifest"
 	trap - EXIT
-	helm lint "$chart_dir" --values "$values_file" --strict >/dev/null 2>&1 || die "HELM_LINT_FAILED"
-	snapshot plan
 	echo "ack-redeploy: plan passed; evidence=$evidence_dir"
 }
 
@@ -356,12 +362,12 @@ deploy() {
 	rendered_manifest=$(mktemp)
 	trap 'unlink "$rendered_manifest"' EXIT
 	render_manifest "$rendered_manifest"
-	unlink "$rendered_manifest"
-	trap - EXIT
 	configuration_source_preflight
 	"$repo_root/deploy/ack/preflight.sh"
 	export KUBECONFIG="$ACK_KUBECONFIG"
-	helm upgrade --install "$release" "$chart_dir" \
+	node "$repo_root/deploy/ack/api-rollout-observation.ts" "$namespace" "$rendered_manifest" \
+		"$evidence_dir/api-rollout-deploy.json" "$timeout" -- \
+		helm upgrade --install "$release" "$chart_dir" \
 		--namespace "$namespace" \
 		--create-namespace \
 		--values "$values_file" \
@@ -372,7 +378,9 @@ deploy() {
 	kubectl -n "$namespace" rollout status deployment/agent-infra-web --timeout="$timeout"
 	kubectl -n "$namespace" rollout status deployment/agent-infra-worker --timeout="$timeout"
 	kubectl -n "$namespace" rollout status deployment/agent-infra-directory --timeout="$timeout"
-	snapshot deployed
+	snapshot deployed "$rendered_manifest"
+	unlink "$rendered_manifest"
+	trap - EXIT
 	echo "ack-redeploy: deploy passed; evidence=$evidence_dir"
 }
 

@@ -374,7 +374,8 @@ export function registerTaskRoutes(
 				}
 			}
 			const pollIntervalMs = dependencies.streamPollIntervalMs ?? 1000;
-			const readTimeoutMs = dependencies.streamReadTimeoutMs ?? 1000;
+			// Allow bounded Store latency without ending the stream before its next event.
+			const readTimeoutMs = dependencies.streamReadTimeoutMs ?? 5000;
 			if (
 				!Number.isInteger(pollIntervalMs) ||
 				pollIntervalMs < 1 ||

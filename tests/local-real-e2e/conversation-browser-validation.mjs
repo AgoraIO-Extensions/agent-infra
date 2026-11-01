@@ -39,6 +39,42 @@ export function currentExecutionFrames(events, frames) {
 	return frames.filter((frame) => frame && eventIds.has(frame.id));
 }
 
+/** Current persisted events identify the first model start; browser time includes delivery latency. */
+export function modelStartObservationMs(events, frames, clickedAt) {
+	if (
+		!Array.isArray(events) ||
+		!Array.isArray(frames) ||
+		!Number.isFinite(clickedAt) ||
+		clickedAt < 0
+	)
+		return null;
+	const started = events.find(
+		(event) =>
+			event?.type === "execution.operation" &&
+			event.payload?.kind === "model" &&
+			event.payload.phase === "started",
+	);
+	if (
+		typeof started?.eventId !== "string" ||
+		!started.eventId ||
+		typeof started.executionId !== "string" ||
+		!started.executionId
+	)
+		return null;
+	const observed = frames.filter(
+		(frame) =>
+			frame?.id === started.eventId &&
+			frame.executionId === started.executionId &&
+			frame.type === "execution.operation",
+	);
+	if (
+		observed.length === 0 ||
+		observed.some((frame) => !Number.isFinite(frame.at) || frame.at < clickedAt)
+	)
+		return null;
+	return Math.min(...observed.map((frame) => frame.at)) - clickedAt;
+}
+
 /** The observer runs before forwarding a chunk; coalesced frames cannot require an earlier paint. */
 export function assistantDeliveryEvidence(frames, renders, baseline = 0) {
 	if (!Array.isArray(frames) || !Array.isArray(renders)) return null;

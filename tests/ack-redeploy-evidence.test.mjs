@@ -529,3 +529,47 @@ esac
 		await rm(directory, { recursive: true, force: true });
 	}
 });
+
+test("plan/deploy snapshots distinguish rendered targets from observed replica counts", () => {
+	const f = fixture();
+	f.documents[1].spec.replicas = 2;
+	const live = structuredClone(f.documents[1]);
+	live.spec.replicas = 1;
+	live.metadata.generation = 4;
+	live.status = {
+		replicas: 1,
+		updatedReplicas: 0,
+		availableReplicas: 1,
+		readyReplicas: 1,
+		observedGeneration: 3,
+	};
+	const result = projectSnapshot(
+		[],
+		{ items: [live] },
+		"target",
+		"test",
+		sourceSha,
+		f.render(),
+	);
+	assert.deepEqual(result.apiReplicas, {
+		desired: 2,
+		declared: 1,
+		observed: 1,
+		updated: 0,
+		available: 1,
+		ready: 1,
+		generation: 4,
+		observedGeneration: 3,
+	});
+	const fresh = projectSnapshot(
+		[],
+		{ items: [] },
+		"target",
+		"test",
+		sourceSha,
+		f.render(),
+	);
+	assert.equal(fresh.apiReplicas.desired, 2);
+	assert.equal(fresh.apiReplicas.observed, null);
+	assert.equal(fresh.apiReplicas.ready, null);
+});

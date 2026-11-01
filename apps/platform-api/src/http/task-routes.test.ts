@@ -1,4 +1,6 @@
+import { setTimeout as delay } from "node:timers/promises";
 import type { OperationalEvent } from "@agent-infra/observability";
+import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import type { TaskRoutesDependencies } from "./task-routes.js";
@@ -228,6 +230,113 @@ describe("task projection excludes reasoning (#2979)", () => {
 			text: "private summary",
 		}),
 	];
+
+	it("keeps the task stream open for a bounded slow Store replay", async () => {
+		const controller = new AbortController();
+		const base = dependencies();
+		const { streamReadTimeoutMs: _timeout, ...withoutInjectedTimeout } = base;
+		const replayExecution = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [],
+				resumeCursor: "cursor-0",
+			})
+			.mockImplementationOnce(async () => {
+				await delay(1200);
+				return {
+					outcome: "events" as const,
+					events: [events[0]],
+					resumeCursor: "cursor-1",
+				};
+			});
+		const testApp = app({
+			...withoutInjectedTimeout,
+			authorize: vi.fn().mockResolvedValue(readAuthority),
+			query: { ...withoutInjectedTimeout.query, replayExecution },
+		});
+		const server = serve({
+			fetch: testApp.fetch,
+			hostname: "127.0.0.1",
+			port: 0,
+		});
+		try {
+			if (!server.listening)
+				await new Promise<void>((resolve) => server.once("listening", resolve));
+			const address = server.address();
+			if (!address || typeof address === "string")
+				throw new Error("Missing test listener");
+			const response = await fetch(
+				`http://127.0.0.1:${address.port}${eventsPath}`,
+				{ headers, signal: controller.signal },
+			);
+			expect(response.status).toBe(200);
+			const reader = response.body?.getReader();
+			if (!reader) throw new Error("Missing SSE body");
+			let body = "";
+			for (
+				let attempt = 0;
+				attempt < 4 && !body.includes('"eventId":"event-1"');
+				attempt++
+			) {
+				const next = await reader.read();
+				if (next.done) break;
+				body += new TextDecoder().decode(next.value);
+			}
+			await reader.cancel();
+			expect(body).toContain('"eventId":"event-1"');
+		} finally {
+			controller.abort();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	});
+
+	it.each(["timeout", "cancel"] as const)(
+		"discards a late replay after the task stream %s",
+		async (ending) => {
+			const controller = new AbortController();
+			const observations: OperationalEvent[] = [];
+			const deps = dependencies(undefined, observations);
+			let release!: (value: unknown) => void;
+			const pending = new Promise((resolve) => {
+				release = resolve;
+			});
+			const replayExecution = vi
+				.fn()
+				.mockResolvedValueOnce({
+					outcome: "events",
+					events: [],
+					resumeCursor: "cursor-0",
+				})
+				.mockReturnValueOnce(pending);
+			const response = await app({
+				...deps,
+				streamReadTimeoutMs: ending === "timeout" ? 10 : undefined,
+				authorize: vi.fn().mockResolvedValue(readAuthority),
+				query: { ...deps.query, replayExecution },
+			}).request(eventsPath, { headers, signal: controller.signal });
+			expect(response.status).toBe(200);
+			const body = response.text();
+			await vi.waitFor(() => expect(replayExecution).toHaveBeenCalledTimes(2));
+			if (ending === "cancel") controller.abort();
+			const text = await body;
+			release({
+				outcome: "events",
+				events: [events[0]],
+				resumeCursor: "cursor-1",
+			});
+			await delay(0);
+			expect(text).not.toContain('"eventId":"event-1"');
+			expect(replayExecution).toHaveBeenCalledTimes(2);
+			expect(observations).toContainEqual(
+				expect.objectContaining({
+					stage: "sse",
+					operationRef: "sse.ended",
+					outcome: ending === "timeout" ? "failed" : "completed",
+				}),
+			);
+		},
+	);
 
 	it("keeps task output and events to the answer only", async () => {
 		const deps: TaskRoutesDependencies = {

@@ -571,6 +571,14 @@ test("promotion canonicalizes source descendants and rejects the resolved root",
 		await readFile(join(f.capsule, "state/generated.json")),
 	);
 	assert.equal(saved.sourceFile, "@SOURCE_ROOT@/deploy/ack/redeploy.sh");
+	const resolved = await materializeCapsule(f.manifest, f.source);
+	const resolvedGenerated = JSON.parse(
+		await readFile(resolved.environment.ACK_TEMPLATE_VALIDATIONS_FILE),
+	);
+	assert.equal(
+		resolvedGenerated.sourceFile,
+		join(f.source, "deploy/ack/redeploy.sh"),
+	);
 	await writeFile(
 		join(f.source, "deploy/ack/redeploy.sh"),
 		[
