@@ -183,6 +183,8 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 	workerSecret.desired.data[capacity.workerSecretRef.key] = profileBytes.toString("base64");
 	await stageFile(files.capacity, jsonBytes({ ...capacity, evidence: [...evidenceFiles].map(([imageDigest, file]) => ({ imageDigest, file })) }));
 	if (files.reserves) {
+		const apiConsumer = consumers.find((c) => c.component === "api");
+		assert(apiConsumer, "RUNTIME_INPUT_CONSUMER_MISSING");
 		await prepareReserveInput({
 			ACK_BOOTSTRAP_INPUTS_FILE: files.bootstrap,
 			ACK_SESSION_RESERVES_FILE: files.reserves,
@@ -191,7 +193,7 @@ async function prepare(files: Files, rendered: string, sourceSha: string, kubect
 			ACK_TEMPLATE_VALIDATIONS_FILE: files.templates,
 		}, sourceSha, {
 			workerSecretName: worker.secretName,
-			apiSecretName: consumers.find((c) => c.component === "api")!.secretName,
+			apiSecretName: apiConsumer.secretName,
 			requireAdoption: false,
 			readWorker: (environment, input, name) => readReserveWorker({ ...environment, ACK_SOURCE_SHA: sourceSha }, input, name, kubectl, false),
 		});
