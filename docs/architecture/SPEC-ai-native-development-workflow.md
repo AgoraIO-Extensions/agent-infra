@@ -98,8 +98,8 @@ Issue Gate 在 PR 的 opened、reopened、synchronize、edited 和 ready_for_rev
 #### 7.2.1 CI 豁免
 
 具有 PR 标签管理权限的维护者可添加 `ci:skip`，豁免该 PR 的 `CI` workflow 中的仓库检查与
-Workload kind。标签使用 GitHub 原生权限管理；AI 不得自行添加豁免标签。检查以原生 `skipped`
-结束并满足 required `CI`，运行摘要明确记录豁免，不作为测试通过的证据。
+Workload kind。标签使用 GitHub 原生权限管理；AI 不得自行添加豁免标签。被豁免的检查 job 以原生
+`skipped` 结束；`CI` 汇总 job 仅报告已豁免并满足 required check，不作为测试通过的证据。
 
 添加、移除 `ci:skip` 标签及新提交都会重新运行 workflow，执行时回读当前标签；重跑旧事件也不能复用
 已撤销的标签。CI 执行中添加标签会取消同一 PR、同一 head 的旧运行，再发布豁免结果。
@@ -108,9 +108,10 @@ Workload kind。标签使用 GitHub 原生权限管理；AI 不得自行添加�
 CODEOWNER approval、conversation resolution 与 PR review 不受该标签影响。
 
 其他已知标签的增删不取消或替换正在执行、等待中的 CI，也不运行仓库检查。此类事件使用
-独立并发组，汇总 job 使用非必需名称 `CI metadata event ignored`；不能发布名为 `CI` 的
-skipped 检查替代缺失或失败的验证。标签名缺失的事件仍运行正常检查。并发组、job 入口与
-汇总名称使用同一事件判定，真实验证路径继续发布原 required `CI`。
+独立并发组；仅汇总 job 执行轻量状态报告，以非必需名称 `CI metadata event ignored` 结束，
+不能发布名为 `CI` 的 skipped 检查替代缺失或失败的验证。汇总 job 必须执行，确保 GitHub
+求值动态名称，而不是在跳过 job 时将表达式原文当作检查名。标签名缺失的事件仍运行正常检查。
+并发组、仓库 job 入口、汇总步骤与名称使用同一事件判定，真实验证路径继续发布原 required `CI`。
 
 ### 7.3 Automated PR Review
 

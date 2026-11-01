@@ -427,6 +427,10 @@ test("CI policy rejects weakened metadata routing and same-name skipped checks",
     (workflow) => { workflow.jobs.changes.if = "${{ always() && !cancelled() }}"; },
     (workflow) => { workflow.jobs.ci_heavy.if = workflow.jobs["ci-exemption"].if; },
     (workflow) => { workflow.jobs.ci.if = "${{ false }}"; },
+    (workflow) => { workflow.jobs.ci.if = workflow.jobs.ci_heavy.if; },
+    (workflow) => { workflow.jobs.ci.steps.find((step) => step.name === "Report CI waiver").if = "${{ true }}"; },
+    (workflow) => { workflow.jobs.ci.steps.find((step) => step.name === "Require CI lanes").if = "${{ false }}"; },
+    (workflow) => { workflow.jobs.ci.steps[0] = workflow.jobs.ci.steps[1]; },
     (workflow) => { workflow.jobs.ci.name = workflow.jobs.ci.name.replace("github.event.label.name != '' && ", ""); },
   ]) {
     const workflows = await actualWorkflows();

@@ -14,7 +14,6 @@ const CI_JOB_CONDITIONS = {
   "web-tests": "!cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true'",
   "backend-tests": "!cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true'",
   "ci_heavy": "always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true')",
-  "ci": "always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true')",
   "workload-kind": "!cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true')",
 };
 
@@ -114,13 +113,26 @@ export function validateWorkflowDocuments(workflows) {
     group: `\${{ ${CI_METADATA_EVENT} && format('ci-metadata-{0}', github.run_id) || format('ci-{0}', github.event.pull_request.number || github.ref) }}`,
     "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
   })) errors.push("CI must isolate unrelated label events from validation concurrency");
-  if (Object.keys(ci?.jobs ?? {}).sort().join() !== Object.keys(CI_JOB_CONDITIONS).sort().join())
+  if (Object.keys(ci?.jobs ?? {}).sort().join() !== [...Object.keys(CI_JOB_CONDITIONS), "ci"].sort().join())
     errors.push("CI jobs must retain the guarded validation lanes");
   for (const [name, condition] of Object.entries(CI_JOB_CONDITIONS)) {
     const expected = `\${{ !(${CI_METADATA_EVENT})${condition ? ` && ${condition}` : ""} }}`;
     if (ci?.jobs?.[name]?.if !== expected)
       errors.push(`CI/${name}: job admission must retain the exact metadata guard and validation condition`);
   }
+  if (ci?.jobs?.ci?.if !== "${{ always() && !cancelled() }}")
+    errors.push("CI aggregate must run to evaluate its name for metadata and waiver events");
+  const validationEvent = `!(${CI_METADATA_EVENT}) && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true')`;
+  const aggregateConditions = {
+    "Require CI lanes": `\${{ ${validationEvent} && (needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && ((needs.changes.outputs.web == 'true' && needs.web-tests.result != 'success') || needs.backend-tests.result != 'success'))) }}`,
+    "Report completed CI lanes": `\${{ ${validationEvent} }}`,
+    "Report ignored metadata event": `\${{ ${CI_METADATA_EVENT} }}`,
+    "Report CI waiver": `\${{ !(${CI_METADATA_EVENT}) && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip == 'true' }}`,
+  };
+  const aggregateSteps = ci?.jobs?.ci?.steps ?? [];
+  if (aggregateSteps.map((step) => step.name).sort().join() !== Object.keys(aggregateConditions).sort().join() ||
+      aggregateSteps.some((step) => !Object.hasOwn(aggregateConditions, step.name) || step.if !== aggregateConditions[step.name]))
+    errors.push("CI aggregate must separate validation, metadata and live-waiver reporting");
   for (const [name, workflow] of Object.entries(workflows)) {
     const runName = workflow["run-name"];
     if (typeof runName !== "string" || !runName.includes(" | ") ||
