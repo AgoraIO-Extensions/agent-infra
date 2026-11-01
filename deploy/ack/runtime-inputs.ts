@@ -360,7 +360,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		};
 		if (mode === "apply") {
 			assert(process.env.ACK_LOGIN_BOOTSTRAP_FILE, "RUNTIME_INPUT_LOGIN_REQUIRED");
-			await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run);
+			await publishRuntimeInputs({ bootstrap, templates, capacity, requests, login: process.env.ACK_LOGIN_BOOTSTRAP_FILE, reserves: process.env.ACK_SESSION_RESERVES_FILE || undefined }, manifest, source, run, false);
 		}
 		const observed = mode === "apply" ? await observeApiRollout({ ...apiRolloutTools(kubeconfig, namespace, 600_000), sourceSha: source, desiredReplicas: apiReplicaTarget(manifest), timeoutMs: 600_000 }, publish) : null;
 		const result = observed ? { ...observed.value, apiRollout: observed.receipt } : await publish();
