@@ -459,9 +459,9 @@ function publishFailureCategory(stderr) {
 
 function buildFailureCategory(stderr) {
 	const text = String(stderr ?? "").toLowerCase();
-	if (/\b(?:timeout|timed out|context deadline exceeded)\b/.test(text)) return "timeout";
+	if (/\b(?:etimedout|timeout|timed out|context deadline exceeded)\b/.test(text)) return "timeout";
 	if (/\b(?:http\/\d(?:\.\d)?\s+|status code\s*[:=]?\s*|unexpected status[^\n]*\b)[45]\d{2}\b/.test(text)) return "http";
-	if (/\b(?:buildkit|buildx|docker (?:daemon|engine)|only one connection|unable to lease|runner|no space left on device)\b/.test(text)) return "runner";
+	if (/\b(?:buildkit|buildx|docker (?:daemon|engine)|only one connection|unable to lease|runner|no space left on device|eacces|enoent|sig(?:kill|term))\b/.test(text)) return "runner";
 	return "transport";
 }
 

@@ -9,17 +9,23 @@ export function runCommand(command, args, options) {
 		stdio: ["ignore", "pipe", "pipe"],
 		timeout: options.timeoutMs,
 	});
+	const failureDetail = [result.stderr, result.error?.code, result.signal]
+		.filter(Boolean)
+		.join(" ");
 	if (result.error?.code === "ETIMEDOUT") {
-		options.onFailure?.(result.stderr);
+		options.onFailure?.(failureDetail);
 		throw new Error(`${options.name} timed out`);
 	}
-	if (result.error) throw new Error(`${options.name} could not start`);
+	if (result.error) {
+		options.onFailure?.(failureDetail);
+		throw new Error(`${options.name} could not start`);
+	}
 	if (result.signal) {
-		options.onFailure?.(result.stderr);
+		options.onFailure?.(failureDetail);
 		throw new Error(`${options.name} terminated by ${result.signal}`);
 	}
 	if (result.status !== 0) {
-		options.onFailure?.(result.stderr);
+		options.onFailure?.(failureDetail);
 		throw new Error(`${options.name} failed with exit status ${result.status}`);
 	}
 	return options.trimOutput === false ? result.stdout : result.stdout.trim();

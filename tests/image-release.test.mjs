@@ -796,6 +796,7 @@ test("publication push failures emit redacted categories and stop before remote 
 for (const [failure, category] of [
 	["BuildKit: only one connection allowed", "runner"],
 	["unexpected status from GET request: 403 Forbidden", "http"],
+	["__missing_docker_binary__", "runner"],
 ])
 	test(`image Buildx failures emit redacted ${category} categories before publication`, async () => {
 		const directory = await mkdtemp(
@@ -809,7 +810,9 @@ for (const [failure, category] of [
 				join(directory, "images.json"),
 				directory,
 				{
-					FAKE_BUILD_FAILURE_STDERR: `${failure}\n${sentinel}`,
+					...(failure === "__missing_docker_binary__"
+						? { DOCKER_BIN: join(directory, "missing-docker") }
+						: { FAKE_BUILD_FAILURE_STDERR: `${failure}\n${sentinel}` }),
 				},
 				"registry.example/agent-infra",
 				["--images=runtimeHost"],
@@ -832,17 +835,19 @@ for (const [failure, category] of [
 			});
 			assert.ok(!`${result.stdout}${result.stderr}`.includes(sentinel));
 			await assert.rejects(access(join(directory, "images.json")));
-			const calls = (await readFile(join(directory, "docker.log"), "utf8"))
-				.trim()
-				.split("\n")
-				.filter(Boolean)
-				.map(JSON.parse);
-			assert.equal(
-				calls.filter((args) => args[0] === "buildx" && args[1] === "build")
-					.length,
-				1,
-			);
-			assert.equal(calls.filter((args) => args[0] === "push").length, 0);
+			if (failure !== "__missing_docker_binary__") {
+				const calls = (await readFile(join(directory, "docker.log"), "utf8"))
+					.trim()
+					.split("\n")
+					.filter(Boolean)
+					.map(JSON.parse);
+				assert.equal(
+					calls.filter((args) => args[0] === "buildx" && args[1] === "build")
+						.length,
+					1,
+				);
+				assert.equal(calls.filter((args) => args[0] === "push").length, 0);
+			}
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
