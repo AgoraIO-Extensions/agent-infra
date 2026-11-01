@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -581,7 +581,7 @@ else process.exit(43);
 	}
 });
 
-test("build reuses dependency-equivalent Worker and verify binds current-profile images", async () => {
+test("build reuses dependency-equivalent Worker and verify binds current-profile images", async (t) => {
 	const { cp, mkdir, chmod, symlink, stat } = await import("node:fs/promises");
 	const { resolve } = await import("node:path");
 	const directory = await mkdtemp(join(tmpdir(), "harness-build-"));
@@ -660,12 +660,16 @@ const args = process.argv.slice(4);
 fs.appendFileSync(process.env.TEST_DOCKER_LOG, JSON.stringify(args) + "\\n");
 const statePath = process.env.TEST_IMAGE_STATE;
 const images = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf8")) : {};
-const image = {Id:"sha256:${"b".repeat(64)}", RepoDigests:["registry.example/worker@sha256:${"a".repeat(64)}"]};
+const configDigest = process.env.TEST_CONFIG_DIGEST ?? "sha256:${"b".repeat(64)}";
+const raw = JSON.stringify({mediaType:process.env.TEST_MANIFEST_TYPE ?? "application/vnd.oci.image.manifest.v1+json", config:{digest:configDigest}});
+const manifestDigest = "sha256:" + require("node:crypto").createHash("sha256").update(raw).digest("hex");
+const id = process.env.TEST_IMAGE_ID === "manifest" ? manifestDigest : process.env.TEST_IMAGE_ID === "foreign" ? "sha256:${"c".repeat(64)}" : configDigest;
+const image = {Id:id,Os:"linux",Architecture:process.env.TEST_IMAGE_ARCH ?? "arm64",RepoDigests:["registry.example/worker@"+manifestDigest]};
 if(args[0] === "info") console.log("aarch64");
 else if(args[0] === "image" && args[1] === "inspect") { if(!images[args[2]]) process.exit(1); console.log(JSON.stringify([images[args[2]]])); }
 else if(args[0] === "build") { images[args[args.indexOf("--tag")+1]] = image; images[image.Id] = image; }
 else if(args[0] === "tag") { if(!images[args[1]]) process.exit(44); images[args[2]] = images[args[1]]; }
-else if(args.includes("--raw")) console.log(JSON.stringify({mediaType:"application/vnd.oci.image.manifest.v1+json", config:{digest:image.Id}}));
+else if(args.includes("--raw")) process.stdout.write(raw + (process.env.TEST_CHANGED_MANIFEST ? "\\n" : ""));
 else process.exit(43);
 fs.writeFileSync(statePath, JSON.stringify(images));
 `,
@@ -686,12 +690,15 @@ fs.writeFileSync(statePath, JSON.stringify(images));
 			TEST_DOCKER_LOG: log,
 			TEST_IMAGE_STATE: imageState,
 		};
-		const cli = (action) =>
-			execFileAsync(
-				process.execPath,
-				["deploy/local/e2e-harness.mjs", action],
-				{ cwd: repository, env },
-			);
+		const cli = (
+			action,
+			overrides = {},
+			entrypoint = "deploy/local/e2e-harness.mjs",
+		) =>
+			execFileAsync(process.execPath, [entrypoint, action], {
+				cwd: repository,
+				env: { ...env, ...overrides },
+			});
 		await cli("sync");
 		await cli("build");
 		const first = JSON.parse(
@@ -820,6 +827,145 @@ fs.writeFileSync(statePath, JSON.stringify(images));
 				.find((args) => args[0] === "build")
 				.includes("agent-infra-e2e-web"),
 			true,
+		);
+		for (const [name, overrides, allowed] of [
+			["manifest identity", { TEST_IMAGE_ID: "manifest" }, true],
+			["foreign image identity", { TEST_IMAGE_ID: "foreign" }, false],
+			["changed registry bytes", { TEST_CHANGED_MANIFEST: "true" }, false],
+			["wrong image architecture", { TEST_IMAGE_ARCH: "amd64" }, false],
+			[
+				"malformed config digest",
+				{ TEST_IMAGE_ID: "manifest", TEST_CONFIG_DIGEST: "not-a-digest" },
+				false,
+			],
+			[
+				"index manifest",
+				{
+					TEST_IMAGE_ID: "manifest",
+					TEST_MANIFEST_TYPE: "application/vnd.oci.image.index.v1+json",
+				},
+				false,
+			],
+		])
+			await t.test(`Worker registry binding: ${name}`, async () => {
+				const caseState = join(directory, name.replaceAll(" ", "-"));
+				const caseEnv = {
+					...overrides,
+					PLATFORM_LOCAL_STATE_DIRECTORY: caseState,
+					TEST_IMAGE_STATE: `${caseState}.images.json`,
+				};
+				await cli("sync", caseEnv);
+				if (allowed) {
+					await cli("build", caseEnv);
+					const binding = JSON.parse(
+						await readFile(
+							join(caseState, `platform-images-${nextSha}.json`),
+							"utf8",
+						),
+					);
+					assert.equal(binding.worker.imageId, binding.worker.digest);
+				} else {
+					await assert.rejects(
+						cli("build", caseEnv),
+						/Worker (registry manifest|binding)/,
+					);
+					await assert.rejects(
+						readFile(join(caseState, `platform-images-${nextSha}.json`)),
+						{ code: "ENOENT" },
+					);
+				}
+			});
+		const tooling = join(directory, "tooling");
+		const toolingSha = (
+			await runGit([
+				"commit-tree",
+				`${nextSha}^{tree}`,
+				"-p",
+				nextSha,
+				"-m",
+				"tooling revision",
+			])
+		).stdout.trim();
+		await runGit(["worktree", "add", "--detach", tooling, toolingSha]);
+		const frozenEnv = {
+			E2E_HARNESS_SOURCE_ROOT: repository,
+			E2E_HARNESS_SOURCE_REVISION: nextSha,
+		};
+		const frozenCli = (action, overrides = {}) =>
+			cli(
+				action,
+				{ ...frozenEnv, ...overrides },
+				join(tooling, "deploy/local/e2e-harness.mjs"),
+			);
+		await t.test(
+			"updated tooling resumes the frozen source cache and records both identities",
+			async () => {
+				await writeFile(log, "");
+				await frozenCli("build");
+				const receipt = JSON.parse(
+					await readFile(join(state, "deployment-receipt.json"), "utf8"),
+				);
+				assert.equal(receipt.source.revision, nextSha);
+				assert.equal(receipt.source.repositoryRoot, await realpath(repository));
+				assert.equal(receipt.tooling.revision, toolingSha);
+				assert.equal(receipt.tooling.dirty, false);
+				assert.equal(
+					receipt.tooling.files["e2e-harness.mjs"],
+					createHash("sha256")
+						.update(
+							await readFile(join(tooling, "deploy/local/e2e-harness.mjs")),
+						)
+						.digest("hex"),
+				);
+				const resumeCalls = (await readFile(log, "utf8"))
+					.trim()
+					.split("\n")
+					.map(JSON.parse);
+				assert.equal(
+					resumeCalls.some((args) => args[0] === "build" || args[0] === "push"),
+					false,
+				);
+				assert.equal(
+					(await runGit(["rev-parse", "HEAD"])).stdout.trim(),
+					nextSha,
+				);
+			},
+		);
+		for (const [name, overrides] of [
+			["wrong source SHA", { E2E_HARNESS_SOURCE_REVISION: "0".repeat(40) }],
+			["missing expected SHA", { E2E_HARNESS_SOURCE_REVISION: "" }],
+			["relative source path", { E2E_HARNESS_SOURCE_ROOT: "." }],
+			[
+				"nested source path",
+				{ E2E_HARNESS_SOURCE_ROOT: join(repository, "apps/web") },
+			],
+			["unrelated repository", { E2E_HARNESS_SOURCE_ROOT: resolve(".") }],
+		])
+			await t.test(`frozen source rejects ${name}`, async () => {
+				await assert.rejects(frozenCli("build", overrides), /Frozen source/);
+			});
+		await t.test(
+			"frozen source rejects dirty source, foreign pins and source synchronization",
+			async () => {
+				const sourceFile = join(repository, "apps/web/ui.txt");
+				const original = await readFile(sourceFile);
+				await writeFile(sourceFile, "uncommitted change");
+				await assert.rejects(frozenCli("build"), /Source changed after sync/);
+				await writeFile(sourceFile, original);
+				const pinPath = join(state, "source-pin.json");
+				const pin = await readFile(pinPath, "utf8");
+				await writeFile(
+					pinPath,
+					JSON.stringify({ ...JSON.parse(pin), repositoryRoot: tooling }),
+				);
+				await assert.rejects(
+					frozenCli("build"),
+					/Source pin is invalid or belongs to another worktree/,
+				);
+				await writeFile(pinPath, pin);
+				await assert.rejects(frozenCli("sync"), /Frozen source/);
+				await assert.rejects(frozenCli("all"), /Frozen source/);
+			},
 		);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
