@@ -53,13 +53,18 @@ export async function validateConfigurationSourceBindings(
 			assert(/^sha256:[a-f0-9]{64}$/u.test(expectedTemplates[templateId] ?? ""));
 		const worker = new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(fileReference(bootstrap, "agent-infra-worker-configuration", "configuration.mjs")));
 		const api = new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(fileReference(bootstrap, "agent-infra-api-configuration", "configuration.mjs")));
+		const workerCustomDigests = customDigests(worker);
 		const apiEntrypointFile = bootstrap.objects?.find((entry: any) => entry.kind === "Secret" && entry.name === "agent-infra-api-configuration")?.files?.["api-configuration.mjs"];
 		if (typeof apiEntrypointFile === "string") {
 			const apiEntrypoint = new TextDecoder("utf-8", { fatal: true }).decode(await privateBytes(apiEntrypointFile));
-			const workerCustomDigests = customDigests(worker);
 			const apiCustomDigests = customDigests(apiEntrypoint);
-			if ([...workerCustomDigests].some((digest) => !apiCustomDigests.has(digest)))
+			if (
+				workerCustomDigests.size !== apiCustomDigests.size ||
+				[...workerCustomDigests].some((digest) => !apiCustomDigests.has(digest))
+			)
 				return failure("CONFIG_CUSTOM_DIGEST_MISMATCH", "API and Worker custom admission digests differ");
+		} else if (workerCustomDigests.size > 0) {
+			return failure("CONFIG_CUSTOM_DIGEST_MISMATCH", "API custom admission entrypoint is missing");
 		}
 		if (!worker.includes(`runtimeDigest!==\"${runtimeDigest}\"`)) return failure("CONFIG_RUNTIME_DIGEST_MISMATCH", "worker runtime binding differs from the published RuntimeHost digest");
 		const apiRuntimeBinding = /(?:runtimeDigest|AGENT_INFRA_RUNTIME_IMAGE_DIGEST|agent-runtime-host@sha256:|runtimeHost[^\n]*sha256:)/u.test(api);

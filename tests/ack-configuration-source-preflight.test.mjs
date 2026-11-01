@@ -13,7 +13,7 @@ const digests = {
 	pi: `sha256:${"4".repeat(64)}`,
 };
 
-async function fixture(t) {
+async function fixture(t, { custom = true, apiEntrypointEnabled = true } = {}) {
 	const root = await mkdtemp(join(tmpdir(), "ack-config-source-"));
 	t.after(() =>
 		import("node:fs/promises").then(({ rm }) =>
@@ -40,16 +40,19 @@ async function fixture(t) {
 		"worker.mjs",
 		`const runtimeDigest=process.env.AGENT_INFRA_RUNTIME_IMAGE_DIGEST;if(runtimeDigest!=="${`sha256:${"9".repeat(64)}`}")throw Error();const templateModelBindings:[${templateBindings}],`,
 	);
-	await writeFile(
-		worker,
-		`${await readFile(worker, "utf8")}const customDigests=["${customDigest}"];\n`,
-		{ mode: 0o600 },
-	);
+	if (custom)
+		await writeFile(
+			worker,
+			`${await readFile(worker, "utf8")}const customDigests=["${customDigest}"];\n`,
+			{ mode: 0o600 },
+		);
 	const api = await save("api.mjs", `const templates: [${templateBindings}],`);
-	const apiEntrypoint = await save(
-		"api-entrypoint.mjs",
-		`const customDigests=["${customDigest}"];`,
-	);
+	const apiEntrypoint = apiEntrypointEnabled
+		? await save(
+				"api-entrypoint.mjs",
+				`const customDigests=["${customDigest}"];`,
+			)
+		: undefined;
 	const bootstrap = await save("bootstrap.json", {
 		schemaVersion: 1,
 		objects: [
@@ -63,7 +66,7 @@ async function fixture(t) {
 				name: "agent-infra-api-configuration",
 				files: {
 					"configuration.mjs": api,
-					"api-configuration.mjs": apiEntrypoint,
+					...(apiEntrypoint ? { "api-configuration.mjs": apiEntrypoint } : {}),
 				},
 			},
 		],
@@ -90,7 +93,16 @@ async function fixture(t) {
 			]),
 		),
 	});
-	return { root, bootstrap, runtime, templates, worker, api, apiEntrypoint };
+	return {
+		root,
+		bootstrap,
+		runtime,
+		templates,
+		worker,
+		api,
+		apiEntrypoint,
+		customDigest,
+	};
 }
 
 test("source configuration preflight accepts active runtime/template bindings", async (t) => {
@@ -162,6 +174,46 @@ test("source configuration preflight rejects stale API custom admission digests"
 	await writeFile(f.apiEntrypoint, "const customDigests=[];\n", {
 		mode: 0o600,
 	});
+	const receipt = await validateConfigurationSourceBindings(
+		f.bootstrap,
+		f.runtime,
+		f.templates,
+		sourceSha,
+	);
+	assert.equal(receipt.status, "failed");
+	assert.equal(receipt.failureCode, "CONFIG_CUSTOM_DIGEST_MISMATCH");
+});
+
+test("source configuration preflight rejects API custom admission extras", async (t) => {
+	const f = await fixture(t);
+	await writeFile(
+		f.apiEntrypoint,
+		`const customDigests=["${f.customDigest}","sha256:${"6".repeat(64)}"];\n`,
+		{ mode: 0o600 },
+	);
+	const receipt = await validateConfigurationSourceBindings(
+		f.bootstrap,
+		f.runtime,
+		f.templates,
+		sourceSha,
+	);
+	assert.equal(receipt.status, "failed");
+	assert.equal(receipt.failureCode, "CONFIG_CUSTOM_DIGEST_MISMATCH");
+});
+
+test("source configuration preflight accepts legacy inputs without custom admission", async (t) => {
+	const f = await fixture(t, { custom: false, apiEntrypointEnabled: false });
+	const receipt = await validateConfigurationSourceBindings(
+		f.bootstrap,
+		f.runtime,
+		f.templates,
+		sourceSha,
+	);
+	assert.equal(receipt.status, "passed");
+});
+
+test("source configuration preflight rejects a missing API entrypoint when Worker admits custom images", async (t) => {
+	const f = await fixture(t, { apiEntrypointEnabled: false });
 	const receipt = await validateConfigurationSourceBindings(
 		f.bootstrap,
 		f.runtime,
