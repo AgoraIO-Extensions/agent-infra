@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+	chmod,
 	copyFile,
 	mkdir,
 	mkdtemp,
 	readdir,
+	readFile,
 	rm,
 	symlink,
 	writeFile,
@@ -327,7 +329,12 @@ test("plan consumes the original RuntimeHost artifact and rejects invalid input 
 		const bin = join(directory, "bin");
 		await mkdir(join(root, "deploy/ack/chart"), { recursive: true });
 		await mkdir(bin);
-		for (const file of ["redeploy.sh", "redeploy-evidence.ts"])
+		for (const file of [
+			"redeploy.sh",
+			"redeploy-evidence.ts",
+			"configuration-source-preflight.ts",
+			"private-input.ts",
+		])
 			await copyFile(
 				join(import.meta.dirname, "../deploy/ack", file),
 				join(root, "deploy/ack", file),
@@ -393,8 +400,8 @@ esac
 			{ mode: 0o700 },
 		);
 		const evidence = join(directory, "evidence");
-		const run = (extra = {}) =>
-			spawnSync("bash", ["deploy/ack/redeploy.sh", "plan"], {
+		const run = (extra = {}, command = "plan") =>
+			spawnSync("bash", ["deploy/ack/redeploy.sh", command], {
 				cwd: root,
 				encoding: "utf8",
 				env: {
@@ -438,6 +445,81 @@ esac
 			assert(!(await readdir(directory)).includes("cluster.log"));
 		}
 		await writeFile(runtime, JSON.stringify(published));
+		const bootstrap = join(directory, "bootstrap.json");
+		const templatesFile = join(directory, "templates.json");
+		const workerConfig = join(directory, "worker.mjs");
+		const apiConfig = join(directory, "api.mjs");
+		await writeFile(workerConfig, "private-config-sentinel", { mode: 0o600 });
+		await writeFile(apiConfig, "private-config-sentinel", { mode: 0o600 });
+		await writeFile(
+			bootstrap,
+			JSON.stringify({
+				schemaVersion: 1,
+				objects: [
+					{
+						kind: "Secret",
+						name: "agent-infra-worker-configuration",
+						files: { "configuration.mjs": workerConfig },
+					},
+					{
+						kind: "Secret",
+						name: "agent-infra-api-configuration",
+						files: { "configuration.mjs": apiConfig },
+					},
+				],
+			}),
+			{ mode: 0o600 },
+		);
+		await writeFile(
+			templatesFile,
+			JSON.stringify({
+				...metadata,
+				images: Object.fromEntries(
+					["codex", "claude", "opencode", "pi"].map((id) => [id, { digest }]),
+				),
+			}),
+			{ mode: 0o600 },
+		);
+		await chmod(runtime, 0o600);
+		const invalidConfiguration = run({
+			ACK_BOOTSTRAP_INPUTS_FILE: bootstrap,
+			ACK_TEMPLATE_IMAGE_MANIFEST: templatesFile,
+		});
+		assert.notEqual(invalidConfiguration.status, 0);
+		assert.equal(
+			JSON.parse(
+				await readFile(join(evidence, "configuration-source-preflight.json")),
+			).failureCode,
+			"CONFIG_RUNTIME_DIGEST_MISMATCH",
+		);
+		assert(!invalidConfiguration.stderr.includes("private-config-sentinel"));
+		const missingTemplateManifest = run({
+			ACK_BOOTSTRAP_INPUTS_FILE: bootstrap,
+			ACK_TEMPLATE_IMAGE_MANIFEST: "",
+		});
+		assert.notEqual(missingTemplateManifest.status, 0);
+		assert.match(missingTemplateManifest.stderr, /ACK_TEMPLATE_IMAGE_MANIFEST/);
+		await rm(log, { force: true });
+		const rejectedAll = run(
+			{
+				ACK_BOOTSTRAP_INPUTS_FILE: bootstrap,
+				ACK_TEMPLATE_IMAGE_MANIFEST: templatesFile,
+				ACK_LOGIN_BOOTSTRAP_FILE: bootstrap,
+				ACK_WORKLOAD_CAPACITY_FILE: bootstrap,
+			},
+			"all",
+		);
+		assert.notEqual(rejectedAll.status, 0);
+		assert.equal(
+			JSON.parse(
+				await readFile(join(evidence, "configuration-source-preflight.json")),
+			).failureCode,
+			"CONFIG_RUNTIME_DIGEST_MISMATCH",
+		);
+		assert(
+			!(await readdir(directory)).includes("cluster.log"),
+			"all must reject configuration before any cluster call",
+		);
 		const failure = run({ ACK_TEST_CLUSTER_FAIL: "1" });
 		assert.notEqual(failure.status, 0);
 		assert.match(failure.stderr, /ACK_CLUSTER_VERSION_READ_FAILED/);

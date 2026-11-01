@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { readReserveWorker } from "../deploy/ack/session-reserve-inputs.ts";
+import {
+	prepareReserveInput,
+	readReserveWorker,
+} from "../deploy/ack/session-reserve-inputs.ts";
 import { sessionSandboxReserveDigestV1 } from "../packages/platform-core/src/session-sandbox-reserves.ts";
 
 const sourceSha = "a".repeat(40);
@@ -231,7 +235,7 @@ process.exit(1);
 	return { dir, fixturePath, kubectl };
 }
 
-async function runReadback(t, scenario = "ok") {
+async function runReadback(t, scenario = "ok", injected = false) {
 	const f = await fixture(t, scenario);
 	const previousPath = process.env.PATH;
 	// biome-ignore lint/suspicious/noUndeclaredEnvVars: fake kubectl fixture outside Turbo.
@@ -246,14 +250,68 @@ async function runReadback(t, scenario = "ok") {
 	});
 	return readReserveWorker(
 		{
-			ACK_KUBECONFIG: join(f.dir, "kubeconfig"),
+			...(injected ? {} : { ACK_KUBECONFIG: join(f.dir, "kubeconfig") }),
 			ACK_NAMESPACE: namespace,
 			ACK_SOURCE_SHA: sourceSha,
 		},
 		{ clusterUid: "cluster-uid", installationId },
 		secretName,
+		injected
+			? (args) => {
+					assert.deepEqual(args.slice(0, 2), ["-n", namespace]);
+					return execFileSync(f.kubectl, args, { encoding: "utf8" });
+				}
+			: undefined,
 	);
 }
+
+test("injected readback uses the explicit namespace without requiring a second kubeconfig", async (t) => {
+	const actual = await runReadback(t, "deployment-entrypoint", true);
+	assert.equal(actual.sourceSha, sourceSha);
+});
+
+test("disabled reserve checks a distinct baseline against the live Secret", async (t) => {
+	const f = await fixture(t);
+	const baseline = join(f.dir, "baseline.json");
+	await writeFile(baseline, JSON.stringify(reserve), { mode: 0o600 });
+	const env = {
+		ACK_NAMESPACE: namespace,
+		ACK_SESSION_RESERVES_FILE: join(f.dir, "candidate.json"),
+		ACK_BOOTSTRAP_INPUTS_FILE: join(f.dir, "bootstrap.json"),
+		ACK_KUBECONFIG: join(f.dir, "kubeconfig"),
+	};
+	const desired = { ...reserve, enabled: false, revision: 3 };
+	const bootstrap = {
+		namespace,
+		clusterUid: "cluster-uid",
+		installationId,
+		objects: [
+			{
+				kind: "Secret",
+				name: secretName,
+				files: {
+					"configuration.mjs": "unused",
+					"session-reserves.json": baseline,
+				},
+			},
+		],
+	};
+	let executions = 0;
+	const result = await prepareReserveInput(env, sourceSha, {
+		readJson: async (file) =>
+			file === env.ACK_SESSION_RESERVES_FILE ? desired : bootstrap,
+		kubectl: (args) => {
+			if (args.includes("exec")) executions++;
+			return execFileSync(f.kubectl, args, {
+				encoding: "utf8",
+				env: { ...process.env, FAKE_FIXTURE: f.fixturePath },
+			});
+		},
+	});
+	assert.equal(executions, 1);
+	assert.equal(result.receipt.enabled, false);
+	assert.deepEqual(result.storedReserveBytes, await readFile(baseline));
+});
 
 test("production readback accepts the full Secret hash and dynamic configuration subPath", async (t) => {
 	const actual = await runReadback(t);
