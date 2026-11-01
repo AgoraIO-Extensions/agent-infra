@@ -70,7 +70,8 @@ function fixture(scenario = "ok") {
 		},
 		status: {
 			phase: "Running",
-			containerStatuses: [{ name: "platform-api", ready: true }],
+			startTime: "2026-11-01T00:00:00Z",
+			containerStatuses: [{ name: "platform-api", ready: true, restartCount: 0 }],
 		},
 		spec: {
 			containers: [
@@ -179,6 +180,12 @@ function fixture(scenario = "ok") {
 			const pod = structuredClone(pods.find((p) => p.metadata.name === name));
 			if (scenario === "pod-drift" && execs.length)
 				pod.metadata.uid = "replacement";
+			if (scenario === "post-exec-owner" && execs.length)
+				pod.metadata.ownerReferences[0].uid = "foreign-rs";
+			if (scenario === "post-exec-restart" && execs.length)
+				pod.status.containerStatuses[0].restartCount = 1;
+			if (scenario === "post-exec-ready" && execs.length)
+				pod.status.containerStatuses[0].ready = false;
 			return JSON.stringify(pod);
 		}
 		throw new Error("UNEXPECTED_KUBE_READ");
@@ -226,6 +233,9 @@ for (const scenario of [
 	"deployment-drift",
 	"secret-drift",
 	"pod-drift",
+	"post-exec-owner",
+	"post-exec-restart",
+	"post-exec-ready",
 ]) {
 	test(`API reserve adoption rejects ${scenario}`, () => {
 		const f = fixture(scenario);

@@ -168,8 +168,8 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 		if (reserve && target === materialize(input.environment.ACK_BOOTSTRAP_INPUTS_FILE)) {
 			const worker = resolved.objects.find((object: any) => object.kind === "Secret" && object.name === reserve.workerSecretName);
 			const api = resolved.objects.find((object: any) => object.kind === "Secret" && object.name === reserve.apiSecretName);
-			const apiHadReserveBinding = api?.files?.["session-reserves.json"] !== undefined;
 			assert(worker?.files && api?.files, "CAPSULE_RESERVE_CONSUMER_SECRET_MISSING");
+			const apiHadReserveBinding = api.files["session-reserves.json"] !== undefined;
 			if (reserve.observed?.storedReserveBytes) {
 				const baseline = join(runDirectory, ".session-reserves-before.json");
 				assert(!files.has(".session-reserves-before.json"), "CAPSULE_RESERVE_INPUT_CONFLICT");
