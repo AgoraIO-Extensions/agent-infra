@@ -24,6 +24,7 @@ const capsulePrefix = "@CAPSULE_ROOT@/";
 const sourceToken = "@SOURCE_ROOT@";
 
 type MaterializedCapsule = {
+	sourceRoot: string;
 	environment: Record<string, string>;
 	inputCount: number;
 	sourceSha: string;
@@ -77,14 +78,20 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 		if (!["ACK_NAMESPACE", "ACK_RELEASE", "ACK_PUBLIC_ORIGIN", "ACK_CUSTOM_AGENT_PROBE", "ACK_HELM_TIMEOUT"].includes(name))
 			for (const path of Array.isArray(value) ? value : [value]) assert(path === "" || (typeof path === "string" && path.startsWith(capsulePrefix)), "CAPSULE_ENVIRONMENT_PATH_INVALID");
 	}
+	const directories = input.directories.map(relativePath);
+	const generated = input.environment.ACK_TEMPLATE_VALIDATIONS_FILE?.slice(capsulePrefix.length);
+	const optionalOutput = typeof generated === "string" && directories.some((dir: string) => generated.startsWith(`${dir}/`)) ? generated : undefined;
+	const declaredInputs = [...new Set<string>([...input.inputs, ...(optionalOutput ? [optionalOutput] : [])])];
 	const files = new Map<string, any>();
-	for (const relative of input.inputs) {
+	for (const relative of declaredInputs) {
 		relativePath(relative);
 		assert(relative.endsWith(".json") && join(root, relative) !== manifestFile);
-		await inspectPath(canonicalRoot, relative);
-		files.set(relative, await privateJson(join(canonicalRoot, relative)));
+		await inspectPath(canonicalRoot, relative, relative === optionalOutput);
+		files.set(relative, await privateJson(join(canonicalRoot, relative)).catch((error) => {
+			if (relative === optionalOutput && error.code === "ENOENT") return null;
+			throw error;
+		}));
 	}
-	const directories = input.directories.map(relativePath);
 	for (const path of directories) {
 		assert(!input.inputs.includes(path) && !input.inputs.some((file: string) => path.startsWith(`${file}/`)));
 		await inspectPath(canonicalRoot, path, true);
@@ -95,7 +102,7 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 		if (typeof value === "string") {
 			assert(!value.includes("\0"));
 			if (value.startsWith(capsulePrefix)) references.add(relativePath(value.slice(capsulePrefix.length)));
-			else assert(!value.includes("@CAPSULE_ROOT@") && (!value.includes(sourceToken) || value === sourceToken), "CAPSULE_REFERENCE_INVALID");
+			else assert(!value.includes("@CAPSULE_ROOT@") && (!value.includes(sourceToken) || value === sourceToken || value.startsWith(`${sourceToken}/`)), "CAPSULE_REFERENCE_INVALID");
 		} else if (Array.isArray(value)) for (const child of value) collect(child, depth + 1);
 		else if (value && typeof value === "object") for (const child of Object.values(value)) collect(child, depth + 1);
 	};
@@ -153,6 +160,7 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 	for (const [relative, value] of files) {
 		const target = resolvedFiles.get(relative)!;
 		await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+		if (value === null && relative === optionalOutput) continue;
 		const resolved = materialize(value);
 		if (reserve && target === materialize(input.environment.ACK_BOOTSTRAP_INPUTS_FILE)) {
 			const worker = resolved.objects.find((object: any) => object.kind === "Secret" && object.name === reserve.workerSecretName);
@@ -171,28 +179,58 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 		await writeFile(target, `${JSON.stringify(resolved, null, 2)}\n`, { mode: 0o600, flag: "wx" });
 	}
 	const environment: Record<string, string> = { ACK_SOURCE_SHA: sourceSha };
-	for (const [name, value] of Object.entries(materialize(input.environment))) environment[name] = Array.isArray(value) ? value.join("\n") : value as string;
-	return { environment, inputCount: files.size, sourceSha, reserve, canonicalRoot, runDirectory, inputs: [...files.keys()], resolvedFiles, canonicalBefore };
+	const canonicalDirectories = new Set(["ACK_AGENT_STATE_DIR", "ACK_EVIDENCE_DIR"]);
+	for (const [name, value] of Object.entries(input.environment)) {
+		if (canonicalDirectories.has(name) && typeof value === "string" && value.startsWith(capsulePrefix))
+			environment[name] = join(canonicalRoot, relativePath(value.slice(capsulePrefix.length)));
+		else {
+			const resolved = materialize(value);
+			environment[name] = Array.isArray(resolved) ? resolved.join("\n") : resolved as string;
+		}
+	}
+	return { environment, inputCount: files.size, sourceSha, sourceRoot, reserve, canonicalRoot, runDirectory, inputs: [...files.keys()], resolvedFiles, canonicalBefore };
 }
 
-function promotionTargets(command: string, inputs: string[]) {
+function promotionTargets(command: string, materialized: MaterializedCapsule) {
+	const { environment, resolvedFiles, inputs } = materialized;
 	const targets = new Set<string>();
+	const add = (variable: string) => {
+		for (const [relative, file] of resolvedFiles) if (file === environment[variable]) targets.add(relative);
+	};
 	if (["bootstrap-login", "all"].includes(command))
 		for (const input of inputs) if (input.startsWith("blueprints/") && input.endsWith(".json")) targets.add(input);
-	if (["template-preflight", "runtime-inputs", "all"].includes(command)) {
-		for (const input of ["state/template-validations.json", "inputs/bootstrap.json", "inputs/capacity.json"])
-			if (inputs.includes(input)) targets.add(input);
+	if (["template-preflight", "runtime-inputs", "all"].includes(command)) add("ACK_TEMPLATE_VALIDATIONS_FILE");
+	if (["runtime-inputs", "all"].includes(command)) {
+		add("ACK_BOOTSTRAP_INPUTS_FILE");
+		add("ACK_WORKLOAD_CAPACITY_FILE");
 	}
-	if (["bootstrap-credential", "provision"].includes(command)) {
-		for (const input of ["inputs/credential.json", "inputs/requests.json"])
-			if (inputs.includes(input)) targets.add(input);
+	if (["bootstrap-credential", "provision", "all"].includes(command)) {
+		add("ACK_CREDENTIAL_BOOTSTRAP_FILE");
+		add("ACK_AGENT_REQUESTS_FILE");
 	}
 	return [...targets];
 }
 
+function portableValue(value: any, materialized: MaterializedCapsule): any {
+	const { canonicalRoot, runDirectory, sourceRoot, environment, resolvedFiles } = materialized;
+	if (typeof value === "string") {
+		if (value === sourceRoot) return sourceToken;
+		if (value.startsWith(`${sourceRoot}/`)) return `${sourceToken}/${value.slice(sourceRoot.length + 1)}`;
+		if (value === join(runDirectory, ".session-reserves-before.json"))
+			return portableValue(environment.ACK_SESSION_RESERVES_FILE, materialized);
+		for (const [relative, file] of resolvedFiles) if (value === file) return capsulePrefix + relative;
+		assert(value !== runDirectory && !value.startsWith(`${runDirectory}/`), "CAPSULE_OUTPUT_UNDECLARED_PATH");
+		if (value.startsWith(`${canonicalRoot}/`)) return capsulePrefix + value.slice(canonicalRoot.length + 1);
+		return value;
+	}
+	if (Array.isArray(value)) return value.map((child) => portableValue(child, materialized));
+	if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, portableValue(child, materialized)]));
+	return value;
+}
+
 async function promoteGeneratedInputs(materialized: MaterializedCapsule, command: string) {
-	const promoted: string[] = [];
-	for (const relative of promotionTargets(command, materialized.inputs)) {
+	const plans: Array<{ relative: string; destination: string; bytes: Buffer }> = [];
+	for (const relative of promotionTargets(command, materialized)) {
 		const source = materialized.resolvedFiles.get(relative);
 		if (!source) continue;
 		const destination = join(materialized.canonicalRoot, relative);
@@ -202,9 +240,15 @@ async function promoteGeneratedInputs(materialized: MaterializedCapsule, command
 			throw error;
 		});
 		assert((current === null && before === null) || (current !== null && before !== null && current.equals(before)), "CAPSULE_OUTPUT_LOCAL_DRIFT");
-		const bytes = await readFile(source);
-		if (current?.equals(bytes)) continue;
-		await inspectPath(materialized.canonicalRoot, dirname(relative), true);
+		const raw = await privateJson(source);
+		const value = portableValue(raw, materialized);
+		if (current && JSON.stringify(JSON.parse(current.toString("utf8"))) === JSON.stringify(value)) continue;
+		const bytes = JSON.stringify(raw) === JSON.stringify(value) ? await readFile(source) : Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+		await inspectPath(materialized.canonicalRoot, relative, true);
+		plans.push({ relative, destination, bytes });
+	}
+	const promoted: string[] = [];
+	for (const { relative, destination, bytes } of plans) {
 		const temporary = `${destination}.promotion-${process.pid}-${Date.now()}`;
 		try {
 			await writeFile(temporary, bytes, { mode: 0o600, flag: "wx" });

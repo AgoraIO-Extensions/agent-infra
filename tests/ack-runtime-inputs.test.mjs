@@ -492,6 +492,95 @@ test("fresh measured outputs reach both consumers and pass the capacity gate; re
 	assert.equal(f.mutations.length, mutationCount);
 });
 
+test("runtime-inputs with reserves uses its configured executor and namespace before applying", async (t) => {
+	const f = await fixture(t);
+	f.files.reserves = await f.save(join(f.files.bootstrap, "../reserves.json"), {
+		schemaVersion: 1,
+		sourceSha: source,
+		namespace,
+		enabled: false,
+		revision: 1,
+		totalBudget: { cpuMillis: 0, memoryBytes: 0, storageBytes: 0 },
+		resourceCosts: [],
+		profiles: [],
+		maximumReserves: 0,
+		maximumConcurrentCreates: 0,
+		ttlMs: 1000,
+		cooldownMs: 1000,
+		failureBackoffMs: 1000,
+	});
+	const deployment = f.cluster.get("deployment/agent-infra-worker");
+	const pod = {
+		metadata: {
+			name: "worker-pod",
+			uid: "pod-uid",
+			namespace,
+			ownerReferences: [
+				{
+					kind: "ReplicaSet",
+					name: "worker-rs",
+					uid: "rs-uid",
+					controller: true,
+				},
+			],
+		},
+		spec: structuredClone(deployment.spec.template.spec),
+	};
+	pod.spec.containers[0].volumeMounts.push({
+		name: "configuration",
+		readOnly: true,
+		mountPath: "/var/run/agent-infra/deployment",
+	});
+	f.cluster.set("replicaset/worker-rs", {
+		metadata: {
+			uid: "rs-uid",
+			ownerReferences: [
+				{ kind: "Deployment", controller: true, uid: deployment.metadata.uid },
+			],
+		},
+	});
+	let executions = 0;
+	const kubectl = (args, input) => {
+		if (!args.includes("namespace"))
+			assert.deepEqual(args.slice(0, 2), ["-n", namespace]);
+		if (args.includes("pods")) return JSON.stringify({ items: [pod] });
+		if (args.includes("exec")) {
+			executions++;
+			return JSON.stringify({
+				sourceSha: source,
+				configuration: null,
+				configurationHash: null,
+				policy: { namespace, resources },
+				resourceCosts: {},
+			});
+		}
+		return f.kubectl(args, input);
+	};
+	const plan = await publishRuntimeInputs(f.files, f.rendered, source, kubectl);
+	assert.equal(plan.status, "passed");
+	assert.equal(executions, 1);
+	assert.deepEqual(f.mutations, []);
+	const applied = await publishRuntimeInputs(
+		f.files,
+		f.rendered,
+		source,
+		kubectl,
+		true,
+	);
+	assert.equal(applied.status, "passed");
+	assert.equal(applied.loginVerified, true);
+	assert.equal(executions, 2);
+	assert.equal(
+		JSON.parse(
+			Buffer.from(
+				f.cluster.get("secret/worker-config").data["session-reserves.json"],
+				"base64",
+			),
+		).enabled,
+		false,
+	);
+});
+
 test("publishing standard measurements preserves a separately measured custom image", async (t) => {
 	const f = await fixture(t);
 	const imageDigest = `sha256:${"e".repeat(64)}`;
@@ -1103,6 +1192,8 @@ for (const fresh of [false, true]) {
 set -euo pipefail
 require_source_tuple() { echo source; }
 require_file() { [[ -n "$2" ]]; }
+prepare_evidence() { :; }
+configuration_source_preflight() { echo config-preflight; }
 bootstrap_database() { echo database; }
 preflight_agent_requests() { echo request-preflight; }
 bootstrap_inputs() { echo bootstrap; }
@@ -1139,6 +1230,7 @@ ${dispatch}
 			assert.equal(result.status, failPublication ? 1 : 0, result.stderr);
 			const stages = result.stdout.trim().split("\n");
 			assert(stages.includes("publish"));
+			assert(stages.indexOf("config-preflight") < stages.indexOf("bootstrap"));
 			assert(stages.indexOf("login") < stages.indexOf("publish"));
 			assert.equal(stages.includes("preflight"), fresh);
 			if (failPublication) {

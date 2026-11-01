@@ -393,6 +393,216 @@ async function reserveFixture(t, enabled = false) {
 	return { ...f, reserve, actual, readWorker: () => actual };
 }
 
+test("promoted configuration paths remain relocatable across successful stages", async (t) => {
+	const f = await fixture(t);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		[
+			"#!/usr/bin/env bash",
+			"set -euo pipefail",
+			"node -e 'const fs=require(\"node:fs\");const f=process.env.ACK_BOOTSTRAP_INPUTS_FILE;const v=JSON.parse(fs.readFileSync(f));v.generated=true;fs.writeFileSync(f,JSON.stringify(v));'",
+		].join("\n"),
+		{ mode: 0o700 },
+	);
+	const result = await runCapsule(f.manifest, "runtime-inputs", f.source);
+	assert.equal(result.exitCode, 0);
+	const saved = JSON.parse(await readFile(join(f.capsule, "bootstrap.json")));
+	assert.equal(saved.generated, true);
+	assert.equal(saved.childFile, "@CAPSULE_ROOT@/request.json");
+	const relocated = join(f.root, "moved capsule");
+	await cp(f.capsule, relocated, {
+		recursive: true,
+		filter: (file) => !file.includes(".resolved-"),
+	});
+	await rm(f.capsule, { recursive: true });
+	const next = await materializeCapsule(
+		join(relocated, "capsule.json"),
+		f.source,
+	);
+	const bootstrap = JSON.parse(
+		await readFile(next.environment.ACK_BOOTSTRAP_INPUTS_FILE),
+	);
+	const request = JSON.parse(await readFile(bootstrap.childFile));
+	assert.equal(
+		request.credentialFile,
+		join(await realpath(relocated), "credential"),
+	);
+});
+
+test("first-run generated template expectations are resolved on the next stage after relocation", async (t) => {
+	const f = await fixture(t);
+	f.value.environment.ACK_TEMPLATE_VALIDATIONS_FILE =
+		"@CAPSULE_ROOT@/state/generated-templates.json";
+	f.value.environment.ACK_AGENT_STATE_DIR = "@CAPSULE_ROOT@/state";
+	await f.save("capsule.json", f.value);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		[
+			"#!/usr/bin/env bash",
+			"set -euo pipefail",
+			"umask 077",
+			"[[ \"$ACK_AGENT_STATE_DIR\" != *'/.resolved-'* ]]",
+			"node -e 'const fs=require(\"node:fs\");fs.writeFileSync(process.env.ACK_TEMPLATE_VALIDATIONS_FILE,JSON.stringify({validationFile:process.env.ACK_KUBECONFIG}));'",
+		].join("\n"),
+		{ mode: 0o700 },
+	);
+	const first = await runCapsule(f.manifest, "template-preflight", f.source);
+	assert.equal(first.exitCode, 0);
+	const saved = JSON.parse(
+		await readFile(join(f.capsule, "state/generated-templates.json")),
+	);
+	assert.equal(saved.validationFile, "@CAPSULE_ROOT@/kubeconfig");
+	const relocated = join(f.root, "moved generated outputs");
+	await cp(f.capsule, relocated, {
+		recursive: true,
+		filter: (file) => !file.includes(".resolved-"),
+	});
+	await rm(f.capsule, { recursive: true });
+	const next = await materializeCapsule(
+		join(relocated, "capsule.json"),
+		f.source,
+	);
+	const expectations = JSON.parse(
+		await readFile(next.environment.ACK_TEMPLATE_VALIDATIONS_FILE),
+	);
+	assert.equal(
+		expectations.validationFile,
+		join(await realpath(relocated), "kubeconfig"),
+	);
+});
+
+test("promotion preserves concurrent canonical edits and rejects undeclared temporary outputs", async (t) => {
+	for (const scenario of ["canonical-edit", "temporary-output"]) {
+		const f = await fixture(t);
+		const action =
+			scenario === "canonical-edit"
+				? "fs.writeFileSync(f.split('/.resolved-')[0]+'/bootstrap.json',JSON.stringify({concurrent:true}));"
+				: "const v=JSON.parse(fs.readFileSync(f));v.output=require('node:path').dirname(f)+'/undeclared.json';fs.writeFileSync(f,JSON.stringify(v));";
+		await writeFile(
+			join(f.source, "deploy/ack/redeploy.sh"),
+			"#!/usr/bin/env bash\nset -euo pipefail\nnode - <<'JS'\nconst fs=require('node:fs');const f=process.env.ACK_BOOTSTRAP_INPUTS_FILE;\n" +
+				action +
+				"\nJS\n",
+			{ mode: 0o700 },
+		);
+		await assert.rejects(
+			runCapsule(f.manifest, "runtime-inputs", f.source),
+			scenario === "canonical-edit"
+				? /CAPSULE_OUTPUT_LOCAL_DRIFT/
+				: /CAPSULE_OUTPUT_UNDECLARED_PATH/,
+		);
+		const current = JSON.parse(
+			await readFile(join(f.capsule, "bootstrap.json")),
+		);
+		if (scenario === "canonical-edit") assert.equal(current.concurrent, true);
+		else assert.equal(current.output, undefined);
+	}
+});
+
+test("promotion preflights every target before changing the first canonical file", async (t) => {
+	const f = await fixture(t);
+	await mkdir(join(f.capsule, "inputs"), { mode: 0o700 });
+	await mkdir(join(f.capsule, "state"), { mode: 0o700 });
+	await f.save("state/template-validations.json", { original: "template" });
+	await f.save("inputs/bootstrap.json", { original: "bootstrap" });
+	await f.save("inputs/capacity.json", { original: "capacity" });
+	f.value.inputs.push(
+		"state/template-validations.json",
+		"inputs/bootstrap.json",
+		"inputs/capacity.json",
+	);
+	f.value.environment.ACK_TEMPLATE_VALIDATIONS_FILE =
+		"@CAPSULE_ROOT@/state/template-validations.json";
+	f.value.environment.ACK_BOOTSTRAP_INPUTS_FILE =
+		"@CAPSULE_ROOT@/inputs/bootstrap.json";
+	f.value.environment.ACK_WORKLOAD_CAPACITY_FILE =
+		"@CAPSULE_ROOT@/inputs/capacity.json";
+	await f.save("capsule.json", f.value);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		[
+			"#!/usr/bin/env bash",
+			"set -euo pipefail",
+			"printf '%s\\n' '{\"generated\":true}' > \"$ACK_TEMPLATE_VALIDATIONS_FILE\"",
+			`(sleep 0.1; printf '%s\\n' '{"concurrent":true}' > '${join(f.capsule, "inputs/capacity.json")}') &`,
+			"sleep 0.2",
+			"printf '%s\\n' '{\"generated-capacity\":true}' > \"$ACK_WORKLOAD_CAPACITY_FILE\"",
+		].join("\n"),
+		{ mode: 0o700 },
+	);
+	await assert.rejects(
+		runCapsule(f.manifest, "runtime-inputs", f.source),
+		/CAPSULE_OUTPUT_LOCAL_DRIFT/,
+	);
+	assert.deepEqual(
+		JSON.parse(
+			await readFile(join(f.capsule, "state/template-validations.json")),
+		),
+		{ original: "template" },
+	);
+	assert.deepEqual(
+		JSON.parse(await readFile(join(f.capsule, "inputs/capacity.json"))),
+		{ concurrent: true },
+	);
+});
+
+test("promotion canonicalizes source descendants and rejects the resolved root", async (t) => {
+	const f = await fixture(t);
+	await mkdir(join(f.capsule, "state"), { mode: 0o700 });
+	await f.save("state/generated.json", {
+		sourceFile: "@SOURCE_ROOT@/deploy/ack/redeploy.sh",
+	});
+	f.value.inputs.push("state/generated.json");
+	f.value.environment.ACK_TEMPLATE_VALIDATIONS_FILE =
+		"@CAPSULE_ROOT@/state/generated.json";
+	await f.save("capsule.json", f.value);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		[
+			"#!/usr/bin/env bash",
+			"set -euo pipefail",
+			`printf '%s\\n' '{"sourceFile":"${f.source}/deploy/ack/redeploy.sh"}' > "$ACK_TEMPLATE_VALIDATIONS_FILE"`,
+		].join("\n"),
+		{ mode: 0o700 },
+	);
+	const result = await runCapsule(f.manifest, "template-preflight", f.source);
+	assert.equal(result.exitCode, 0);
+	const saved = JSON.parse(
+		await readFile(join(f.capsule, "state/generated.json")),
+	);
+	assert.equal(saved.sourceFile, "@SOURCE_ROOT@/deploy/ack/redeploy.sh");
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		[
+			"#!/usr/bin/env bash",
+			"set -euo pipefail",
+			`root=$(dirname "$(dirname "$ACK_TEMPLATE_VALIDATIONS_FILE")"); printf '%s\\n' '{"sourceFile":"'"$root"'"}' > "$ACK_TEMPLATE_VALIDATIONS_FILE"`,
+		].join("\n"),
+		{ mode: 0o700 },
+	);
+	await assert.rejects(
+		runCapsule(f.manifest, "template-preflight", f.source),
+		/CAPSULE_OUTPUT_UNDECLARED_PATH/,
+	);
+});
+
+test("directory environment paths stay canonical while file inputs use the resolved run", async (t) => {
+	const f = await fixture(t);
+	f.value.directories.push("state/agents");
+	f.value.environment.ACK_AGENT_STATE_DIR = "@CAPSULE_ROOT@/state/agents";
+	await mkdir(join(f.capsule, "state/agents"), {
+		mode: 0o700,
+		recursive: true,
+	});
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		'#!/usr/bin/env bash\nset -euo pipefail\n[[ "$ACK_AGENT_STATE_DIR" == *\'/private inputs/state/agents\' ]]\nmkdir -p "$ACK_AGENT_STATE_DIR"\n',
+		{ mode: 0o700 },
+	);
+	await f.save("capsule.json", f.value);
+	assert.equal((await runCapsule(f.manifest, "plan", f.source)).exitCode, 0);
+});
+
 test("an update preserves the observed Secret bytes for bootstrap while keeping the new reserve candidate separate", async (t) => {
 	const f = await reserveFixture(t, true);
 	const before = Buffer.from(`  ${JSON.stringify(f.reserve)}\n`);
