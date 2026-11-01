@@ -146,6 +146,7 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 	const materialize = (value: any): any => {
 		if (typeof value === "string") {
 			if (value === sourceToken) return sourceRoot;
+			if (value.startsWith(`${sourceToken}/`)) return join(sourceRoot, relativePath(value.slice(sourceToken.length + 1)));
 			if (value.startsWith(capsulePrefix)) {
 				const relative = value.slice(capsulePrefix.length);
 				return resolvedFiles.get(relative) ?? join(inputDirectories.has(relative) ? runDirectory : canonicalRoot, relative);
