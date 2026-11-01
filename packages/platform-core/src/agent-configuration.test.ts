@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	agentConfigurationConformanceAdmissionsV1,
 	agentConfigurationConformanceRecordV1,
+	agentConfigurationCustomImageRecordV1,
 	agentConfigurationCustomImageUpgradeConformance,
 	agentConfigurationUseCaseConformance,
 } from "./agent-configuration.conformance.ts";
@@ -517,6 +518,60 @@ describe("Custom Agent image upgrade conformance", () => {
 			close: async () => undefined,
 		};
 	});
+});
+
+it("upgrades a multi-service manifest only through the manifest command", async () => {
+	const currentSource = {
+		kind: "custom" as const,
+		imageDigest: `sha256:${"b".repeat(64)}`,
+		admissionRevision: "multi_service_policy_1",
+		interactionMode: "self-managed" as const,
+		identityResponsibility: "self-managed" as const,
+		connectionEnabled: false as const,
+		manifest: '{"schemaVersion":1,"entryServiceName":"api"}',
+	};
+	const selection = {
+		kind: "custom" as const,
+		manifest: '{"schemaVersion":1,"entryServiceName":"api-v2"}',
+		interactionMode: "self-managed" as const,
+		identityResponsibility: "self-managed" as const,
+	};
+	const source = {
+		...currentSource,
+		imageDigest: `sha256:${"c".repeat(64)}`,
+		admissionRevision: "multi_service_policy_2",
+		manifest: selection.manifest,
+	};
+	const harness = createHarness({
+		record: { ...agentConfigurationCustomImageRecordV1, source: currentSource },
+		admissions: { images: [{ selection, source }] },
+	});
+	await expect(
+		harness.useCase.upgradeCustomManifest(
+			{
+				schemaVersion: 1,
+				agentId: "agent_01",
+				manifest: selection.manifest,
+				idempotencyKey: "manifest-upgrade-01",
+				requestId: "request_manifest_upgrade",
+				traceId: "trace_manifest_upgrade",
+			},
+			actor,
+		),
+	).resolves.toMatchObject({ changedFields: ["source"] });
+	await expect(
+		harness.useCase.upgradeCustomImage(
+			{
+				schemaVersion: 1,
+				agentId: "agent_01",
+				imageReference: "registry.example/agent:v2",
+				idempotencyKey: "image-downgrade-01",
+				requestId: "request_image_downgrade",
+				traceId: "trace_image_downgrade",
+			},
+			actor,
+		),
+	).rejects.toMatchObject({ code: "not_admitted" });
 });
 
 it("snapshots custom image upgrade commands and rejects hostile accessors", async () => {

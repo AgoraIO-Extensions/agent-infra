@@ -553,6 +553,11 @@ export const AgentLifecycleCommandRequestV1Schema = z.discriminatedUnion(
 			command: z.literal("upgrade_custom_image"),
 			imageReference: nonEmptyString(),
 		}),
+		z.strictObject({
+			schemaVersion: SchemaVersionV1Schema,
+			command: z.literal("upgrade_custom_manifest"),
+			manifest: z.string().min(1).max(262_144),
+		}),
 	],
 );
 

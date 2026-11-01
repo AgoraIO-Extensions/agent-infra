@@ -197,6 +197,7 @@ function createApp(
 		.mockResolvedValue({ applicationId: "application-1", agentId: "agent-1" });
 	const revise = vi.fn().mockResolvedValue({});
 	const upgradeCustomImage = vi.fn().mockResolvedValue({});
+	const upgradeCustomManifest = vi.fn().mockResolvedValue({});
 
 	const resolve = options.identityFailure
 		? vi.fn().mockRejectedValue(new Error("private identity detail"))
@@ -222,7 +223,7 @@ function createApp(
 		applicationModelCandidates: options.applicationModelCandidates,
 		revision: { revise },
 		management: { executeManagementCommand },
-		configuration: { upgradeCustomImage },
+		configuration: { upgradeCustomImage, upgradeCustomManifest },
 		query: { listApplications, getApplication, listAgents, getAgent },
 		allocateApplicationIds,
 		prepareSecretReplacements: vi.fn().mockResolvedValue({ secrets: [] }),
@@ -248,6 +249,7 @@ function createApp(
 		readApplicationProjection,
 		readApiAgentProjection,
 		upgradeCustomImage,
+		upgradeCustomManifest,
 	};
 }
 
@@ -1106,6 +1108,34 @@ describe("lifecycle command failures are observable (#2569)", () => {
 			replayed: false,
 		});
 		expect(upgradeCustomImage).toHaveBeenCalledOnce();
+	});
+
+	it("routes a custom manifest upgrade to the manifest lifecycle command", async () => {
+		const { app, upgradeCustomManifest } = createApp();
+		const manifest = '{"schemaVersion":1,"entryServiceName":"api"}';
+		const response = await app.request(
+			"/api/v2/agents/agent-private-1/lifecycle",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					command: "upgrade_custom_manifest",
+					manifest,
+				}),
+			},
+		);
+
+		expect(response.status).toBe(202);
+		expect(upgradeCustomManifest).toHaveBeenCalledOnce();
+		expect(upgradeCustomManifest).toHaveBeenCalledWith(
+			expect.objectContaining({
+				schemaVersion: 1,
+				agentId: "agent-private-1",
+				manifest,
+			}),
+			expect.objectContaining({ schemaVersion: 1, actorId: "user-1" }),
+		);
 	});
 
 	it("does not let a failed projection cache mask a denied command", async () => {

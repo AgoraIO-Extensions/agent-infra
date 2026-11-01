@@ -20,6 +20,7 @@ import type {
 	UpdateAgentConfigurationCommandV3,
 	UpdateAgentConfigurationCommandV4,
 	UpgradeCustomAgentImageCommandV1,
+	UpgradeCustomAgentManifestCommandV1,
 } from "./agent-configuration-types.js";
 import {
 	compareText,
@@ -792,6 +793,40 @@ export function parseUpgradeCustomImageCommand(
 		schemaVersion: 1,
 		agentId: values.agentId,
 		imageReference: values.imageReference,
+		idempotencyKey: values.idempotencyKey,
+		requestId: values.requestId,
+		traceId: values.traceId,
+	};
+}
+
+export function parseUpgradeCustomManifestCommand(
+	command: unknown,
+): UpgradeCustomAgentManifestCommandV1 {
+	const values = exactObject(command, [
+		"schemaVersion",
+		"agentId",
+		"manifest",
+		"idempotencyKey",
+		"requestId",
+		"traceId",
+	]);
+	if (
+		values.schemaVersion !== 1 ||
+		!isText(values.agentId, idMaxBytes) ||
+		typeof values.manifest !== "string" ||
+		values.manifest.length < 1 ||
+		values.manifest.length > 262_144 ||
+		!isText(values.idempotencyKey, 128) ||
+		!/^[A-Za-z0-9._~-]{1,128}$/.test(values.idempotencyKey) ||
+		!isText(values.requestId, idMaxBytes) ||
+		!isText(values.traceId, idMaxBytes)
+	) {
+		invalidCommand();
+	}
+	return {
+		schemaVersion: 1,
+		agentId: values.agentId,
+		manifest: values.manifest,
 		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
 		traceId: values.traceId,
