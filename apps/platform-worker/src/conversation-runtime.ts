@@ -77,21 +77,8 @@ function executionStatusTerminal(
 }
 
 function stopPreparationBinding(state: ConversationRuntimeStateV2) {
-	const sandbox = state.sandboxResource;
-	return {
-		executionStatus: state.executionStatus,
-		hostSessionRef: state.hostSessionRef,
-		originalSubmitHostSessionRef: state.originalSubmitHostSessionRef,
-		runtimeSubmitProtocol: state.runtimeSubmitProtocol,
-		generationIsolation: state.generationIsolation,
-		sandbox: sandbox
-			? {
-					sandbox: sandbox.sandbox,
-					resourceFence: sandbox.resourceFence,
-					policy: sandbox.policy,
-				}
-			: null,
-	};
+	// Stop has its own fence; committed events may advance the original cursor.
+	return { ...state, runtimeCursor: null };
 }
 
 export type ConversationDrainStageOutcomeV1 =
@@ -636,6 +623,8 @@ export function createConversationRuntimeV2(
 			await control(context, "stop", signal);
 			unavailable("RUNTIME_ROUTE_STALE");
 		}
+		const beforeFinalControl =
+			command === "turn.stop" ? structuredClone(state) : undefined;
 		let routeObservedAt = finalTargetObservedAt;
 		let postTarget = finalTarget;
 		const canReuseFinalTarget =
@@ -673,6 +662,14 @@ export function createConversationRuntimeV2(
 		)
 			unavailable("RUNTIME_ROUTE_STALE");
 		state = await stateFor(context, signal);
+		if (
+			beforeFinalControl &&
+			!isDeepStrictEqual(
+				stopPreparationBinding(state),
+				stopPreparationBinding(beforeFinalControl),
+			)
+		)
+			unavailable("RUNTIME_FENCE_STALE");
 		const afterTargetRoute = await current(context, state, command, signal);
 		if (
 			afterTargetRoute.authority.purpose !== postTargetRoute.authority.purpose
@@ -880,20 +877,23 @@ export function createConversationRuntimeV2(
 		);
 		if (
 			!isDeepStrictEqual(decision.authority, prepared.authority) ||
-			!isDeepStrictEqual(decision.record, prepared.route) ||
-			executionStatusTerminal(state.executionStatus) ||
+			!isDeepStrictEqual(decision.record, prepared.route)
+		)
+			unavailable("RUNTIME_ROUTE_STALE");
+		// Store revalidates the original claim's lease and both delivery fences
+		// after the authorization await. Only committed cursor progress may differ.
+		const fenced = await stateFor(prepared.context, signal);
+		if (
+			executionStatusTerminal(fenced.executionStatus) ||
 			!isDeepStrictEqual(
-				stopPreparationBinding(state),
+				stopPreparationBinding(fenced),
 				stopPreparationBinding(prepared.state),
 			)
 		)
-			unavailable("RUNTIME_ROUTE_STALE");
-		// The stopRequestId and both delivery fences remain bound to the immutable
-		// claim; current() rechecks the live control record/lease before this final
-		// send-time state read. A natural terminal or barrier change must win over
-		// a late stop and keep the original Execution/Session occupied.
+			unavailable("RUNTIME_FENCE_STALE");
 		signal.throwIfAborted();
 	}
+
 	/** Continue an event drain with the route it already proved (#1525). Each
 	 * V4 read or ACK re-checks the current authorization, Platform route record
 	 * and fenced state in `assertCurrentPrepared` before it leaves the Worker,
@@ -1733,7 +1733,9 @@ export function createConversationRuntimeV2(
 			}
 			if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
 			if (request.operation === "turn.stop")
-				await assertStopPrepared(prepared, active);
+				await assertStopPrepared(prepared, active).catch((error: unknown) => {
+					throw unsentFailure(error);
+				});
 			if (request.operation === "turn.supplement") {
 				if (
 					!context.claim.input ||

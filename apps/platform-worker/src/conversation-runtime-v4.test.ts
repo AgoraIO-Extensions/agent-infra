@@ -1636,47 +1636,54 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			}
 		});
 
-		it("rejects a stop that loses the execution to a natural terminal after final readiness", async () => {
-			const h = runtimeV4Harness("stop");
-			try {
-				Object.assign(h.state, { stopPending: true });
-				const reference = await h.authorize();
-				let routes = 0;
-				h.resolveRuntimeHost.mockImplementation(async () => {
-					routes++;
-					if (routes === 2)
-						Object.assign(h.state, { executionStatus: "completed" });
-					return { ...h.target };
-				});
-				await expect(
-					h.runtime.runtimeHost.dispatch(h.request(reference)),
-				).rejects.toMatchObject({ code: "RUNTIME_ROUTE_STALE" });
-				expect(h.fetcher).not.toHaveBeenCalled();
-			} finally {
-				h.runtime.close();
-			}
-		});
-
-		it("allows a stop when only the original Execution cursor advances", async () => {
-			const h = runtimeV4Harness("stop");
-			try {
-				Object.assign(h.state, { stopPending: true });
-				const reference = await h.authorize();
-				let routes = 0;
-				h.resolveRuntimeHost.mockImplementation(async () => {
-					routes++;
-					if (routes === 2)
-						Object.assign(h.state, { runtimeCursor: "cursor-advanced" });
-					return { ...h.target };
-				});
-				await expect(
-					h.runtime.runtimeHost.dispatch(h.request(reference)),
-				).resolves.toMatchObject({ result: { outcome: "accepted" } });
-				expect(h.fetcher).toHaveBeenCalled();
-			} finally {
-				h.runtime.close();
-			}
-		});
+		it.each(
+			(["cursor", "terminal", "host", "barrier"] as const).flatMap((change) =>
+				([1, 2, 3] as const).map((read) => [change, read] as const),
+			),
+		)(
+			"rechecks %s at state read %s after final readiness before stop send",
+			async (change, read) => {
+				const h = runtimeV4Harness("stop");
+				try {
+					Object.assign(h.state, { stopPending: true });
+					const reference = await h.authorize();
+					let readsAfterRoutes = 0;
+					h.dispatchStore.readRuntimeState.mockImplementation(async () => {
+						// First read after route 3 becomes prepared.state. The next
+						// read starts the stop's send-time authorization recheck.
+						if (
+							h.resolveRuntimeHost.mock.calls.length === 3 &&
+							++readsAfterRoutes === read
+						) {
+							if (change === "cursor")
+								Object.assign(h.state, { runtimeCursor: "cursor-advanced" });
+							else if (change === "terminal")
+								Object.assign(h.state, { executionStatus: "completed" });
+							else if (change === "host")
+								Object.assign(h.state, { hostSessionRef: "replacement-host" });
+							else Object.assign(h.state, { stopPending: false });
+						}
+						return h.state;
+					});
+					const dispatch = h.runtime.runtimeHost.dispatch(h.request(reference));
+					if (change === "cursor") {
+						await expect(dispatch).resolves.toMatchObject({
+							result: { outcome: "accepted" },
+						});
+						expect(h.fetcher).toHaveBeenCalledTimes(1);
+						expect(h.sent().url).toContain("/stops");
+					} else {
+						await expect(dispatch).rejects.toMatchObject({
+							code: expect.stringMatching(/^RUNTIME_(FENCE|ROUTE)_STALE$/),
+							notSent: true,
+						});
+						expect(h.fetcher).not.toHaveBeenCalled();
+					}
+				} finally {
+					h.runtime.close();
+				}
+			},
+		);
 
 		it("ACKs under the stop control Grant when the stop lands during the ACK's preparation", async () => {
 			const h = runtimeV4Harness();

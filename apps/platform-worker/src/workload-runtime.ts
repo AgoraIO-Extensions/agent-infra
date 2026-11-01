@@ -637,6 +637,8 @@ export function createWorkloadRuntimeV1(
 		 * true 时跳过签名 readiness；完整探测通过时以该 Pod 调用 `passed`。
 		 */
 		readiness?: {
+			/** A control preparation's preflight has no signed readiness result. */
+			readonly defer?: true;
 			readonly reuse?: (podUid: string, podResourceVersion?: string) => boolean;
 			readonly passed?: (podUid: string, podResourceVersion?: string) => void;
 		},
@@ -758,6 +760,7 @@ export function createWorkloadRuntimeV1(
 					return true;
 				}
 				observed("health", "passed");
+				if (readiness?.defer) return true;
 				probeStartedAt = performance.now();
 				// 同一 Pod 在有效期内已通过签名 readiness：只保留上面的 /healthz。
 				if (podUid && readiness?.reuse?.(podUid, podResourceVersion)) {
@@ -1255,7 +1258,7 @@ export function createWorkloadRuntimeV1(
 			"authorize",
 			true,
 			undefined,
-			signedReadiness ? undefined : { reuse: () => true },
+			signedReadiness ? undefined : { defer: true },
 		);
 		const original = validateAgentWorkloadDesiredV1({
 			...deployment,

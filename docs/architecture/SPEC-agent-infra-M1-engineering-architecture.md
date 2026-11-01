@@ -454,10 +454,10 @@ Worker 的控制请求仍须对原 verified 目标完成完整签名 readiness�
 固定为有界三阶段，并在每次返回前复核当前授权、`agentId`、`conversationId`、`executionId`、
 `sessionGeneration`、Host Session Ref、Native Session ID、Sandbox ID/PVC、Turn、operation/attempt、
 Execution deliveryFence、`stopRequestId`、独立 stop fence、Workload UID/generation/revision/Digest、
-当前 Pod 和精确路由。最终探测使用
-本控制请求唯一的 readiness request/grant/operation；最终探测和其后的当前授权、租约及 fence
-复核均通过后才可发送。任何探测失败、超时、不可达或绑定变化只结束本次 prepare，保留原
-stop intent、lease、stop barrier 和 Session/Execution 占用，运行中停止进入 pending/unknown 并
+当前 Pod 和精确路由。最终探测独立生成新的 readiness `requestId`/`grantId`，不扩展下述
+Workload Readiness Grant 的字段或用途；控制对象绑定继续由 control Grant 与既有 Store/Host
+校验完成。最终探测和其后的当前授权、租约及 fence 复核均通过后才可发送。任何探测失败、超时、不可达或绑定变化只结束本次 prepare，保留原
+stop intent、stop barrier 和 Session/Execution 占用，并按原 lease/CAS 条件进入重试或恢复，运行中停止进入 pending/unknown 并
 沿原执行恢复，未开始停止沿原未投递取消路径收敛；最终探测后到发送前若自然完成、generation
 tombstone 或 cancellation barrier 变化，保留实际终态/unknown，不以迟到 stop 覆盖；不能发
 stopReceipt、释放占用、创建新 Session/Execution 或开始下一任务，也不能读取业务 readiness
