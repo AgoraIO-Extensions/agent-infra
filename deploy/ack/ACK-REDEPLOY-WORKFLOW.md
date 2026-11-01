@@ -75,7 +75,7 @@ Worker 自身或独立 Runtime preflight 位于 ECI，均不能代替业务 Sess
 接受的换行列表。旧 shell 中的 ACK 配置不参与此次运行；删除确认只接受调用方明确设置的
 `ACK_CLEAN_CONFIRM` 和 `ACK_CLEAN_ALLOW_FOREIGN`，输入包不能内置这两个变量。
 
-第三个参数可选择既有 `plan`、`bootstrap-login`、`runtime-inputs`、`provision`、`validate` 或
+第三个参数可选择既有 `plan`、`deploy`、`bootstrap-login`、`runtime-inputs`、`provision`、`validate` 或
 其他已声明阶段；所有原有 source/image、ownership 和破坏性清理门禁继续执行。不要把含凭证的
 输入包或 `.resolved-*` 目录提交到 Git、PR 或共享文档。
 

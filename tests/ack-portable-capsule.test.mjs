@@ -28,7 +28,7 @@ async function fixture(t) {
 	await mkdir(capsule, { mode: 0o700 });
 	const script = `#!/usr/bin/env bash
 set -euo pipefail
-[[ "$1" == plan ]]
+[[ "$1" == plan || "$1" == deploy ]]
 [[ "$ACK_PUBLIC_ORIGIN" == 'https://platform.example.test' ]]
 [[ "$ACK_KUBECONFIG" == *'private inputs/kubeconfig' ]]
 [[ -r "$ACK_BOOTSTRAP_INPUTS_FILE" ]]
@@ -166,6 +166,17 @@ test("the runner invokes the existing workflow without shell interpolation and r
 	await assert.rejects(
 		runCapsule(f.manifest, "plan; touch unwanted", f.source),
 		/CAPSULE_COMMAND_INVALID/,
+	);
+});
+
+test("the runner exposes the existing deploy stage", async (t) => {
+	const f = await fixture(t);
+	const result = await runCapsule(f.manifest, "deploy", f.source);
+	assert.equal(result.exitCode, 0);
+	assert.equal(result.command, "deploy");
+	assert.equal(
+		await readFile(join(f.capsule, "evidence/executed"), "utf8"),
+		"deploy\n",
 	);
 });
 
