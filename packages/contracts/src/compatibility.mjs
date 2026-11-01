@@ -1971,6 +1971,16 @@ function isAgentLifecycleV2OpenApiAddition(previous, current) {
 		current.paths["/api/v2/agents"]?.get,
 	);
 	const normalized = structuredClone(current);
+	// The original lifecycle addition predates the manifest command. Keep its
+	// historical hash stable when the previous fixture has no lifecycle schema.
+	const lifecycleSchema =
+		normalized.components?.schemas?.AgentLifecycleCommandRequestV1;
+	if (lifecycleSchema?.oneOf) {
+		lifecycleSchema.oneOf = lifecycleSchema.oneOf.filter(
+			(option) =>
+				option?.properties?.command?.const !== "upgrade_custom_manifest",
+		);
+	}
 	// #2618 adds an additive accepted envelope to the existing lifecycle 202
 	// response. Keep the original #2618 lifecycle addition hash stable while
 	// allowing this later response branch to be reviewed independently.
