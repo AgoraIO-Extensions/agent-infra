@@ -17,12 +17,14 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Metadata events must not replace even a pending validation run.
+  group: ${{ github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip' && format('ci-metadata-{0}', github.run_id) || format('ci-{0}', github.event.pull_request.number || github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci-exemption:
     name: Check CI exemption
+    if: ${{ !(github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions:
@@ -55,7 +57,7 @@ jobs:
   changes:
     name: Classify changes
     needs: ci-exemption
-    if: ${{ always() && !cancelled() }}
+    if: ${{ !(github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip') && always() && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions:
@@ -209,7 +211,7 @@ jobs:
   web-tests:
     name: Web unit tests
     needs: [ci-exemption, changes]
-    if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' }}
+    if: ${{ !(github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip') && !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -239,7 +241,7 @@ jobs:
   backend-tests:
     name: Backend integration tests
     needs: [ci-exemption, changes]
-    if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}
+    if: ${{ !(github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip') && !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -272,7 +274,7 @@ jobs:
     name: CI heavy validation
     needs: [ci-exemption, changes]
     # Failure to read the label must run CI, never grant an exemption.
-    if: ${{ always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
+    if: ${{ !(github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip') && always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -846,14 +848,15 @@ jobs:
           fi
 
   ci:
-    name: CI
+    # Run the aggregate so GitHub evaluates its name for metadata and waiver events.
+    name: ${{ github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip' && 'CI metadata event ignored' || 'CI' }}
     needs: [ci-exemption, changes, web-tests, backend-tests, ci_heavy]
-    if: ${{ always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require CI lanes
-        if: ${{ needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && ((needs.changes.outputs.web == 'true' && needs.web-tests.result != 'success') || needs.backend-tests.result != 'success')) }}
+        if: ${{ !(github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip') && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && ((needs.changes.outputs.web == 'true' && needs.web-tests.result != 'success') || needs.backend-tests.result != 'success'))) }}
         run: |
           echo "Required CI lane failed or was unavailable."
           echo "ci-exemption=${{ needs.ci-exemption.result }}"
@@ -863,13 +866,21 @@ jobs:
           echo "ci_heavy=${{ needs.ci_heavy.result }}"
           exit 1
       - name: Report completed CI lanes
+        if: ${{ !(github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip') && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
         run: |
           echo "CI lanes passed: web=${{ needs.web-tests.result }}, backend=${{ needs.backend-tests.result }}, heavy=${{ needs.ci_heavy.result }}"
+
+      - name: Report ignored metadata event
+        if: ${{ github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip' }}
+        run: echo 'Unrelated label event ignored; the existing required CI check is unchanged.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Report CI waiver
+        if: ${{ !(github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip') && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip == 'true' }}
+        run: echo 'CI and Workload kind waived by the live ci:skip label; tests did not run.' >> "$GITHUB_STEP_SUMMARY"
 
   workload-kind:
     name: Workload kind
     needs: [ci-exemption, changes]
-    if: ${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true') }}
+    if: ${{ !(github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip') && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
