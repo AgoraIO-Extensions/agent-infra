@@ -1626,10 +1626,32 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 				const controlCalls = h.resolveRuntimeHost.mock.calls
 					.map(([input]) => input)
 					.filter((input) => input.purpose === "control");
+				expect(controlCalls).toHaveLength(3);
 				expect(
 					controlCalls.slice(0, 3).map((input) => input.skipControlReadiness),
 				).toEqual([true, true, undefined]);
 				await stream.return?.();
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("rejects a stop that loses the execution to a natural terminal after final readiness", async () => {
+			const h = runtimeV4Harness("stop");
+			try {
+				Object.assign(h.state, { stopPending: true });
+				const reference = await h.authorize();
+				let routes = 0;
+				h.resolveRuntimeHost.mockImplementation(async () => {
+					routes++;
+					if (routes === 2)
+						Object.assign(h.state, { executionStatus: "completed" });
+					return { ...h.target };
+				});
+				await expect(
+					h.runtime.runtimeHost.dispatch(h.request(reference)),
+				).rejects.toMatchObject({ code: "RUNTIME_ROUTE_STALE" });
+				expect(h.fetcher).not.toHaveBeenCalled();
 			} finally {
 				h.runtime.close();
 			}

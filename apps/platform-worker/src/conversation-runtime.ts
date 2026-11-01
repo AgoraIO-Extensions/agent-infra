@@ -68,6 +68,33 @@ export type ConversationRuntimeStateV2 = TaskRuntimeRecoveryStateV1 & {
 	readonly originalSubmitHostSessionRef?: string | null;
 };
 
+function executionStatusTerminal(
+	status: ConversationRuntimeStateV2["executionStatus"],
+) {
+	return (
+		status === "completed" || status === "failed" || status === "cancelled"
+	);
+}
+
+function stopPreparationBinding(state: ConversationRuntimeStateV2) {
+	const sandbox = state.sandboxResource;
+	return {
+		executionStatus: state.executionStatus,
+		hostSessionRef: state.hostSessionRef,
+		originalSubmitHostSessionRef: state.originalSubmitHostSessionRef,
+		runtimeCursor: state.runtimeCursor,
+		runtimeSubmitProtocol: state.runtimeSubmitProtocol,
+		generationIsolation: state.generationIsolation,
+		sandbox: sandbox
+			? {
+					sandbox: sandbox.sandbox,
+					resourceFence: sandbox.resourceFence,
+					policy: sandbox.policy,
+				}
+			: null,
+	};
+}
+
 export type ConversationDrainStageOutcomeV1 =
 	| "completed"
 	| "failed"
@@ -840,6 +867,33 @@ export function createConversationRuntimeV2(
 		signal.throwIfAborted();
 		if (routeObservedAt !== undefined)
 			prepared.routeProof.observedAt = routeObservedAt;
+	}
+	async function assertStopPrepared(
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		signal: AbortSignal,
+	) {
+		const state = await stateFor(prepared.context, signal);
+		const decision = await current(
+			prepared.context,
+			state,
+			"turn.stop",
+			signal,
+		);
+		if (
+			!isDeepStrictEqual(decision.authority, prepared.authority) ||
+			!isDeepStrictEqual(decision.record, prepared.route) ||
+			executionStatusTerminal(state.executionStatus) ||
+			!isDeepStrictEqual(
+				stopPreparationBinding(state),
+				stopPreparationBinding(prepared.state),
+			)
+		)
+			unavailable("RUNTIME_ROUTE_STALE");
+		// The stopRequestId and both delivery fences remain bound to the immutable
+		// claim; current() rechecks the live control record/lease before this final
+		// send-time state read. A natural terminal or barrier change must win over
+		// a late stop and keep the original Execution/Session occupied.
+		signal.throwIfAborted();
 	}
 	/** Continue an event drain with the route it already proved (#1525). Each
 	 * V4 read or ACK re-checks the current authorization, Platform route record
@@ -1679,6 +1733,8 @@ export function createConversationRuntimeV2(
 				return { ...response, schemaVersion: body.selection ? 2 : 1 };
 			}
 			if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+			if (request.operation === "turn.stop")
+				await assertStopPrepared(prepared, active);
 			if (request.operation === "turn.supplement") {
 				if (
 					!context.claim.input ||
