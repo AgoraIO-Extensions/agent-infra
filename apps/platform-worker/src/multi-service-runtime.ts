@@ -141,7 +141,18 @@ function routePeer(policy: MultiServiceRuntimePolicyV1) {
 }
 
 function fingerprint(value: unknown): string {
-	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	const canonicalize = (input: unknown): unknown => {
+		if (Array.isArray(input)) return input.map(canonicalize);
+		if (!input || typeof input !== "object") return input;
+		return Object.fromEntries(
+			Object.entries(input as Record<string, unknown>)
+				.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+				.map(([key, entry]) => [key, canonicalize(entry)]),
+		);
+	};
+	return createHash("sha256")
+		.update(JSON.stringify(canonicalize(value)))
+		.digest("hex");
 }
 
 function profileForWorkload(
