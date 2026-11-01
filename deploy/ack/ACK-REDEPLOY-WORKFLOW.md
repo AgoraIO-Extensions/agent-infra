@@ -183,7 +183,7 @@ export ACK_TEMPLATE_IMAGE_MANIFEST=/private/ack/templates-amd64.json
 export ACK_EVIDENCE_DIR=/private/ack/evidence/$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
-`ACK_VALUES_FILE` 从 [`values.ack.example.yaml`](./values.ack.example.yaml) 复制并替换所有镜像、Ingress、Corp ID 和 Secret **名称**。`ACK_IMAGE_MANIFEST` 和 `ACK_RUNTIME_IMAGE_MANIFEST` 必须是同一 `ACK_SOURCE_SHA` 生成的 `linux/amd64` Platform/Runtime manifest；Runtime manifest 可直接使用发布工作流的 `runtime-host.json`（读取 `images.runtimeHost`）；脚本会将 digest 逐项与渲染后的 Helm image 和 Runtime 输入绑定。HTTPS 探针默认使用系统 CA；自签名 ACK 入口必须提供仓库外的 `ACK_CA_CERT_FILE`，脚本不会跳过证书验证。Secret 内容通过 E2E/private 配置在目标集群预先创建，不能写进 values 或 Git。已有数据库环境保持 `postgres.enabled=false`、`migrations.enabled=false`；全新环境必须先单独评审数据库和 migration，再开启这两个开关。
+`ACK_VALUES_FILE` 从 [`values.ack.example.yaml`](./values.ack.example.yaml) 复制并替换所有镜像、Ingress、Corp ID 和 Secret **名称**。`ACK_IMAGE_MANIFEST` 和 `ACK_RUNTIME_IMAGE_MANIFEST` 必须是同一 `ACK_SOURCE_SHA` 生成的 `linux/amd64` Platform/Runtime manifest；Runtime manifest 可直接使用发布工作流的 `runtime-host.json`（读取 `images.runtimeHost`）；脚本会将 digest 逐项与渲染后的 Helm image 和 Runtime 输入绑定。curl 探针默认使用客户端 CA 库；私有 CA 的诊断路径可提供仓库外的 `ACK_CA_CERT_FILE`，但其成功不证明普通浏览器信任。公共入口签收还需完成[独立 TLS 验收](#公共入口-tls-验收与续期)。Secret 内容通过 E2E/private 配置在目标集群预先创建，不能写进 values 或 Git。已有数据库环境保持 `postgres.enabled=false`、`migrations.enabled=false`；全新环境必须先单独评审数据库和 migration，再开启这两个开关。
 
 如果需要从现有 ACK 生成迁移 capsule，可先执行只读采集：
 
@@ -405,6 +405,48 @@ ECI 节点归属、Pod Ready 和浏览器跨主体拒绝，均不能替代 Netwo
 `ACK_CA_CERT_FILE` 用于 curl；Node probe 信任私有 CA 时另设 `NODE_EXTRA_CA_CERTS`。
 正式登录与 Node HTTP 边界使用正常 CA/hostname 校验；自有入口浏览器使用声明 leaf 的 SPKI
 pin。Platform 对话 runner 保留其测试用 `ignoreHTTPSErrors`，结果不证明浏览器系统 CA 信任。
+`all`/`validate` 的业务旅程成功不能代签下述公共入口 TLS 门禁。
+
+## 公共入口 TLS 验收与续期
+
+Platform 公共入口必须通过目标客户端默认的系统/浏览器信任校验。以下证据分别记录，不能
+相互代替；指定 CA 或公钥固定的探针成功，不表示普通用户的浏览器能打开入口。
+
+| 路径 | 现有配置 | 能证明的范围 |
+| --- | --- | --- |
+| 指定 CA 的 HTTP/登录探针 | curl 的 `ACK_CA_CERT_FILE`、Node 的 `NODE_EXTRA_CA_CERTS` | 在显式提供的信任根下完成 TLS/hostname 与相应接口验证 |
+| 自有入口浏览器探针 | 声明 leaf 的 SPKI pin | 固定公钥例外下的业务旅程，不证明默认信任链 |
+| Platform 对话 runner | 测试用 `ignoreHTTPSErrors` | 浏览器业务流程，不证明证书有效或可信 |
+| 普通 Chrome 与默认 CA 客户端 | 不导入本轮私有 CA、不添加临时信任例外、不关闭证书校验 | 公共入口的默认信任门禁；登录另需真实账号和 session 回读 |
+
+公共入口签收至少保留三项当前证据：
+
+1. 以 `ACK_PUBLIC_ORIGIN` 的实际主机名和 SNI 检查服务端返回的证书：SAN 匹配、当前时间处于
+   `notBefore`/`notAfter` 内、所需中间证书齐全，链能在目标客户端默认信任库下验证到受信任根。
+   记录校验时间、证书指纹、有效期和各项结果；旧证书文件或本地签发成功不能证明入口已经切换。
+2. 单独运行默认 CA 的 HTTPS 探针，不传 `--cacert`/`--insecure`，排除命令行与环境中的额外 CA
+   覆盖。例如下面只读探针禁用 curl 用户配置；curl 和 Chrome 可能采用不同信任库，仍须分别验证。
+3. 在普通 Chrome 的新会话中打开同一入口，不使用忽略证书错误的启动参数或浏览器 context，
+   不绕过证书拦截。以已有合法账号正常登录，验证会话 Cookie 的存在及安全属性、session `200`
+   和登录后的受保护页面。仅首页 `200`、匿名接口 `401` 或旧 Cookie 成功均不足以签收。
+
+```bash
+env -u CURL_CA_BUNDLE -u SSL_CERT_FILE -u SSL_CERT_DIR \
+  curl -q --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+  --output /dev/null --write-out '%{http_code}\n' "${ACK_PUBLIC_ORIGIN%/}/"
+```
+
+证书通过私有 values 的 `ingress.tlsSecret` 引用；`ACK_BOOTSTRAP_INPUTS_FILE` 中对应对象使用
+相同 Secret 名、`secretType: "kubernetes.io/tls"`，`files` 的 `tls.crt` 指向 leaf 与所需中间链，
+`tls.key` 指向匹配私钥。路径使用 `@CAPSULE_ROOT@`，材料留在仓库外的 `0700` 目录和 `0600`
+文件中。采集 capsule 只保留当时的证书快照，不会签发或续期；每次移植/重部署前重新检查
+域名、有效期、链和输入引用，过期或已进入声明的临期窗口时先由环境 owner 更新材料。
+
+ACK 环境 owner 在私有交接记录中明确证书供应/续期执行方、到期告警阈值、检查频率和轮换
+窗口；不能假定 chart 自带 ACME 或自动续期。续期后按已授权的 Secret 更新流程发布，核对
+实际入口的新证书，再重复上述默认信任和登录验证，并更新可移植包，防止下一轮部署恢复旧证书。
+仅清理本次创建的 ACME challenge 资源；自有入口、Directory 信任和其他 namespace 保持原 owner。
+公开回执只保留必要的脱敏校验结果，不包含私钥、ACME 账号材料、密码、Cookie 值或会话正文。
 
 ## 私有依赖供应
 

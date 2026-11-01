@@ -111,6 +111,8 @@ source/template/image 和实际 Pod UID 哈希，记录创建、容器启动、R
 | 多服务资源逐个符合 schema，API 仍返回 `400` | 提交了多个 YAML document；平台接收的是单个包含 `schemaVersion`、`entryServiceName` 和 `resources` 的 System Manifest | 验证实际提交的整个文档格式与拓扑，不能只校验解析后手工拼装的资源数组 |
 | 多服务资源与 Pod 已 Ready，Agent 却在 `applying`/`observing` 间循环且没有 Ingress | Kubernetes SDK 将 `imagePullSecrets` 反序列化为 `V1LocalObjectReference` 实例；严格深比较把与部署策略同名的普通对象判为不同。正式校验后的 manifest hash 实际一致 | 复用结构比较函数，按相同字段和值校验拉取凭据引用；用真实 SDK 反序列化对象回归 Deployment、StatefulSet 和迁移 Job，并保留缺失、替换和重复引用的拒绝。只读 `observe=healthy` 后仍须发布新 Worker，完成入口和浏览器验收 |
 | Node HTTPS 正常，严格客户端仍拒绝私有证书 | leaf 缺少 Authority Key Identifier，或 CA 缺少 Key Usage；叠加系统默认 OpenSSL 扩展还会生成重复扩展 | 用显式 CA/leaf 扩展配置生成证书，包含 CA Key Usage、SKI/AKI 和入口 SAN；发布前用严格链与 hostname 校验，不能关闭 TLS 验证 |
+| 指定私有 CA 的登录探针成功，普通 Chrome 却报 `NET::ERR_CERT_AUTHORITY_INVALID` | 探针使用额外 CA 或公钥固定，浏览器默认信任库未接受当前证书链；这不能证明历史登录失败由 API rollout 引起 | 保留当前 TLS 失败，不以脚本成功代签普通浏览器；按[公共入口 TLS 验收](./ACK-REDEPLOY-WORKFLOW.md#公共入口-tls-验收与续期)分别核对默认信任、SAN/链/有效期与真实登录。修复结果须有现场回执 |
+| 移植输入包仍携带旧证书，或换证后下一轮部署恢复旧材料 | capsule 采集的是静态文件，不负责证书签发和续期 | 环境 owner 明确续期与临期告警责任；核对 `ingress.tlsSecret`、bootstrap `tls.crt`/`tls.key` 与入口实际证书，并更新私有可移植输入；过期材料不得用于新的验收 |
 | 四模板 preflight 通过，API/Worker 仍未使用本轮验证与容量 | `all` 在 preflight 前部署配置，生成的新候选和容量记录没有自动回写消费者 | `runtime-inputs` 在 preflight 后发布声明的配置键并验证 rollout，再运行 mounted-capacity gate；不用手工复制或修改 Secret |
 | 三个新 Runtime 镜像在 ECI 长时间 `Pulling` | 发布 manifest 可见不等于目标 ECI 节点实际可拉取 | 每个模板先创建独立 ECI preflight Pod；拉取、启动、模型调用任一步失败都停止整个流程 |
 | 全部平台服务就绪，标准 Runtime preflight 在模型请求前失败 | 约 697 MiB 的冷镜像仍在正常拉取，旧脚本的固定 180 秒就绪预算已耗尽 | 私有 job 使用有界 `podReadyTimeoutSeconds`，默认 900 秒、范围 60–1800 秒；失败保存 `pod-ready` 阶段和脱敏状态，不能用预热后的旧成功替代新的完整演练 |
