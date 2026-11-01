@@ -102,7 +102,7 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 		if (typeof value === "string") {
 			assert(!value.includes("\0"));
 			if (value.startsWith(capsulePrefix)) references.add(relativePath(value.slice(capsulePrefix.length)));
-			else assert(!value.includes("@CAPSULE_ROOT@") && (!value.includes(sourceToken) || value === sourceToken), "CAPSULE_REFERENCE_INVALID");
+			else assert(!value.includes("@CAPSULE_ROOT@") && (!value.includes(sourceToken) || value === sourceToken || value.startsWith(`${sourceToken}/`)), "CAPSULE_REFERENCE_INVALID");
 		} else if (Array.isArray(value)) for (const child of value) collect(child, depth + 1);
 		else if (value && typeof value === "object") for (const child of Object.values(value)) collect(child, depth + 1);
 	};
@@ -215,10 +215,11 @@ function portableValue(value: any, materialized: MaterializedCapsule): any {
 	const { canonicalRoot, runDirectory, sourceRoot, environment, resolvedFiles } = materialized;
 	if (typeof value === "string") {
 		if (value === sourceRoot) return sourceToken;
+		if (value.startsWith(`${sourceRoot}/`)) return `${sourceToken}/${value.slice(sourceRoot.length + 1)}`;
 		if (value === join(runDirectory, ".session-reserves-before.json"))
 			return portableValue(environment.ACK_SESSION_RESERVES_FILE, materialized);
 		for (const [relative, file] of resolvedFiles) if (value === file) return capsulePrefix + relative;
-		assert(!value.startsWith(`${runDirectory}/`), "CAPSULE_OUTPUT_UNDECLARED_PATH");
+		assert(value !== runDirectory && !value.startsWith(`${runDirectory}/`), "CAPSULE_OUTPUT_UNDECLARED_PATH");
 		if (value.startsWith(`${canonicalRoot}/`)) return capsulePrefix + value.slice(canonicalRoot.length + 1);
 		return value;
 	}

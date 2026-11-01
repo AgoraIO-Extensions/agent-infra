@@ -546,6 +546,46 @@ test("promotion preflights every target before changing the first canonical file
 	);
 });
 
+test("promotion canonicalizes source descendants and rejects the resolved root", async (t) => {
+	const f = await fixture(t);
+	await mkdir(join(f.capsule, "state"), { mode: 0o700 });
+	await f.save("state/generated.json", {
+		sourceFile: "@SOURCE_ROOT@/deploy/ack/redeploy.sh",
+	});
+	f.value.inputs.push("state/generated.json");
+	f.value.environment.ACK_TEMPLATE_VALIDATIONS_FILE =
+		"@CAPSULE_ROOT@/state/generated.json";
+	await f.save("capsule.json", f.value);
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		[
+			"#!/usr/bin/env bash",
+			"set -euo pipefail",
+			`printf '%s\\n' '{"sourceFile":"${f.source}/deploy/ack/redeploy.sh"}' > "$ACK_TEMPLATE_VALIDATIONS_FILE"`,
+		].join("\n"),
+		{ mode: 0o700 },
+	);
+	const result = await runCapsule(f.manifest, "template-preflight", f.source);
+	assert.equal(result.exitCode, 0);
+	const saved = JSON.parse(
+		await readFile(join(f.capsule, "state/generated.json")),
+	);
+	assert.equal(saved.sourceFile, "@SOURCE_ROOT@/deploy/ack/redeploy.sh");
+	await writeFile(
+		join(f.source, "deploy/ack/redeploy.sh"),
+		[
+			"#!/usr/bin/env bash",
+			"set -euo pipefail",
+			`root=$(dirname "$(dirname "$ACK_TEMPLATE_VALIDATIONS_FILE")"); printf '%s\\n' '{"sourceFile":"'"$root"'"}' > "$ACK_TEMPLATE_VALIDATIONS_FILE"`,
+		].join("\n"),
+		{ mode: 0o700 },
+	);
+	await assert.rejects(
+		runCapsule(f.manifest, "template-preflight", f.source),
+		/CAPSULE_OUTPUT_UNDECLARED_PATH/,
+	);
+});
+
 test("directory environment paths stay canonical while file inputs use the resolved run", async (t) => {
 	const f = await fixture(t);
 	f.value.directories.push("state/agents");
