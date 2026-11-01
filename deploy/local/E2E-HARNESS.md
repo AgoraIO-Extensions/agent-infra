@@ -42,9 +42,9 @@ Docker context 所在 VM 的系统时钟不能回拨：Worker 签发的 Runtime 
 ## 镜像来源
 
 四个标准 Runtime 模板（Codex、Claude、OpenCode、Pi）、Runtime Host 和 Sandbox/Base
-分别保留镜像 Digest，由 main push、release tag 或手动触发 `publish-images` workflow 发布。
-Web、API、Worker 和目录同步属于业务镜像，只在 release tag 或手动
-`publish_platform=true` 时发布；本地 E2E 从固定源码构建这四个业务组件。
+分别保留镜像 Digest，由 release tag、smoke dispatch 或 full release dispatch 触发的
+`publish-images` workflow 发布。Web、API、Worker 和目录同步属于业务镜像，只在 release tag
+或 full release dispatch 时发布；本地 E2E 从固定源码构建这四个业务组件。
 
 发布流程仅保留 `main` 浮动 tag 时，先从固定源码对应的成功 workflow run 下载
 `published-indexes-<sourceRevision>-<attempt>` artifact，并设置

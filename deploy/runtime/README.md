@@ -37,7 +37,7 @@ Node 绝对路径（`--dev <path>`）；需要自动构建时另开
 
 ## 自动发布
 
-main 的 `Publish images` 自动发布以下五个镜像到
+`Publish images` 的 tag push、smoke dispatch 和 full release dispatch 发布以下五个镜像到
 `ghcr.io/agoraio-extensions/agent-infra/`，每个镜像以固定 `main` Tag 合并
 `linux/amd64` 与 `linux/arm64`：
 
@@ -51,13 +51,15 @@ main 的 `Publish images` 自动发布以下五个镜像到
 只标识构建用途，不提供默认 Driver，不替代部署 Registry 的模板、Digest、Driver 与协议绑定。
 `custom-agent-base` 是[自定义父镜像](../images/custom-agent-base/README.md)，不包含 RuntimeHost。
 
-main 只更新固定 Tag，不创建 commit SHA Tag；两个架构的中间 Tag 分别为
-`main-linux-amd64`、`main-linux-arm64`。索引从本次构建回执里的不可变 Digest 合并并回读，
-构建来源仍保存在 OCI revision label 与 Actions 回执中。GHCR 可保留旧的无 Tag 版本；固定 Tag
-不等于删除历史 Digest。模板目录及部署继续保存经过原有准入的不可变 Digest，不直接跟随 Tag。
+full release dispatch 接收一个精确的 `source_sha`，并使用 `release-<source_sha>` Tag；两个架构的
+中间 Tag 分别为对应的 `release-<source_sha>-linux-amd64`、`release-<source_sha>-linux-arm64`。
+索引从本次构建回执里的不可变 Digest 合并并回读，构建来源仍保存在 OCI revision label 与
+Actions 回执中。GHCR 可保留旧的无 Tag 版本；固定 Tag 不等于删除历史 Digest。模板目录及部署
+继续保存经过原有准入的不可变 Digest，不直接跟随 Tag。
 
-Web、Platform API、Worker、目录同步镜像只在 `v*` Tag 或显式手动设置
-`publish_platform=true` 时发布。版本 Tag 使用版本名，main 手动发布使用 `main`。
+Web、Platform API、Worker、目录同步镜像只在 `v*` Tag 或 full release dispatch 时发布。
+full release 的 Platform 与 standard/runtime 镜像、两组 index 和 receipts 属于同一 source-bound
+workflow run；普通 `main` push 不会重复构建 standard 镜像。
 例如推送 Git Tag `v1.2.3` 时，五个模板/base 镜像的版本引用均为 `:v1.2.3`；
 后续 `main` 或 `v1.2.4` 发布不覆盖 `:v1.2.3`。稳定 Git Tag（`vMAJOR.MINOR.PATCH`）
 的所有版本索引校验通过后，将 `:latest` 更新到同一索引 Digest 并回读比对；例如稳定版本

@@ -243,8 +243,72 @@ test("main image publication rejects business images, ambiguous tags and invalid
   ]) {
     const workflows = await actualWorkflows();
     mutate(workflows["publish-images.yml"]);
-    assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("standard templates")));
+    assert.ok(validateWorkflowDocuments(workflows).some((error) =>
+      error.includes("standard templates") || error.includes("source-bound full release"),
+    ));
   }
+});
+
+test("full release is one exact-source dispatch and keeps tag and smoke routes explicit", async () => {
+  const workflows = await actualWorkflows();
+  const publish = workflows["publish-images.yml"];
+  assert.deepEqual(publish.on.push, { tags: ["v*"] });
+  assert.deepEqual(publish.concurrency, {
+    group: "publish-images-${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}",
+    "cancel-in-progress": true,
+  });
+  assert.deepEqual(publish.on.workflow_dispatch.inputs.full_release, {
+    description: "Build Platform, standard and runtime images from one exact source commit",
+    required: false,
+    type: "boolean",
+    default: false,
+  });
+  assert.deepEqual(publish.on.workflow_dispatch.inputs.source_sha, {
+    description: "Exact 40-hex commit to publish when full_release is enabled",
+    required: false,
+    type: "string",
+    default: "",
+  });
+  assert.equal(publish.on.workflow_dispatch.inputs.publish_platform, undefined);
+  for (const job of Object.values(publish.jobs)) {
+    const checkout = job.steps?.find((step) => step.uses?.startsWith("actions/checkout@"));
+    if (checkout) {
+      assert.equal(
+        checkout.with.ref,
+        "${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}",
+      );
+    }
+  }
+  assert.match(publish.jobs.infrastructure.if, /inputs.full_release == true/);
+  assert.match(publish.jobs.platform.if, /inputs.full_release == true/);
+
+  const concurrencyDrift = await actualWorkflows();
+  concurrencyDrift["publish-images.yml"].concurrency = {
+    group: "publish-images-${{ github.ref }}",
+    "cancel-in-progress": false,
+  };
+  assert.ok(
+    validateWorkflowDocuments(concurrencyDrift).some((error) =>
+      error.includes("one source-bound full release dispatch"),
+    ),
+  );
+
+  const invalid = await actualWorkflows();
+  invalid["publish-images.yml"].on.push.branches = ["main"];
+  assert.ok(
+    validateWorkflowDocuments(invalid).some((error) =>
+      error.includes("one source-bound full release dispatch"),
+    ),
+  );
+  const sourceDrift = await actualWorkflows();
+  sourceDrift["publish-images.yml"].jobs.infrastructure.steps.find((step) =>
+    step.uses?.startsWith("actions/checkout@"),
+  ).with.ref = "${{ github.sha }}";
+  assert.ok(
+    validateWorkflowDocuments(sourceDrift).some((error) =>
+      error.includes("one source-bound full release dispatch"),
+    ),
+  );
 });
 
 test("requires an isolated release smoke input and index receipt artifact", async () => {

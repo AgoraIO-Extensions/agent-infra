@@ -173,15 +173,35 @@ export function validateWorkflowDocuments(workflows) {
   const templates = publish?.jobs?.infrastructure;
   const templateBuild = templates?.steps?.find((step) => step.run?.includes("--images="));
   const templateMatrix = templates?.strategy?.matrix?.include;
-  const smokeInput = publish?.on?.workflow_dispatch?.inputs?.smoke;
-  if (publish?.env?.IMAGE_TAG !== "${{ github.event_name == 'workflow_dispatch' && inputs.smoke && format('smoke-{0}-{1}', github.run_id, github.run_attempt) || github.ref == 'refs/heads/main' && 'main' || github.ref_name }}" ||
-      !templateBuild?.run?.includes("--images=codex,claude,opencode,pi") ||
+  const dispatchInputs = publish?.on?.workflow_dispatch?.inputs;
+  const smokeInput = dispatchInputs?.smoke;
+  const fullReleaseInput = dispatchInputs?.full_release;
+  const sourceShaInput = dispatchInputs?.source_sha;
+  const sourceRef = "${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}";
+  const sourceSha = "${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}";
+  const sourceCheckouts = Object.values(publish?.jobs ?? {})
+    .flatMap((job) => (job.steps ?? []).filter((step) => step.uses?.startsWith("actions/checkout@")));
+  if (publish?.on?.push?.branches ||
+      publish?.env?.RELEASE_SOURCE_SHA !== sourceSha ||
+      publish?.env?.IMAGE_TAG !== "${{ github.event_name == 'workflow_dispatch' && inputs.smoke && format('smoke-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'workflow_dispatch' && inputs.full_release && format('release-{0}', inputs.source_sha) || github.ref_name }}" ||
+      fullReleaseInput?.type !== "boolean" ||
+      fullReleaseInput?.default !== false ||
+      sourceShaInput?.type !== "string" ||
+      sourceShaInput?.default !== "" ||
+      Object.hasOwn(dispatchInputs ?? {}, "publish_platform") ||
+      !String(templates?.if ?? "").includes("inputs.full_release == true") ||
+      !String(publish?.jobs?.platform?.if ?? "").includes("inputs.full_release == true") ||
+      !sameObject(publish?.concurrency, {group: "publish-images-${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}", "cancel-in-progress": true}) ||
+      sourceCheckouts.some((step) => step.with?.ref !== sourceRef) ||
+      !JSON.stringify(publish?.jobs?.["infrastructure-index"] ?? {}).includes("$RELEASE_SOURCE_SHA") ||
+      !JSON.stringify(publish?.jobs?.["platform-index"] ?? {}).includes("$RELEASE_SOURCE_SHA")) {
+    errors.push("Publish images must use one source-bound full release dispatch");
+  }
+  if (!templateBuild?.run?.includes("--images=codex,claude,opencode,pi") ||
       !templateBuild?.run?.includes("--custom-base-image") ||
       smokeInput?.type !== "boolean" ||
       smokeInput?.default !== false ||
-      !String(templates?.if ?? "").includes("inputs.smoke == true") ||
       !publish?.jobs?.["infrastructure-index"]?.steps?.some((step) => step.run?.includes("published-indexes.jsonl")) ||
-      !sameObject(publish?.concurrency, {group: "publish-images-${{ github.ref }}", "cancel-in-progress": false}) ||
       templates?.["runs-on"] !== "${{ matrix.runner }}" ||
       JSON.stringify(templateMatrix) !== JSON.stringify([
         {platform: "linux/amd64", architecture: "amd64", runner: "ubuntu-24.04"},
