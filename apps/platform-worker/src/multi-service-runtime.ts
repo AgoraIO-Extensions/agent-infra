@@ -32,6 +32,7 @@ import {
 	agentPodSecurityContext,
 	desiredAnnotation,
 	fingerprintAnnotation,
+	hasSameStructure,
 	ownerLabel,
 	revisionLabel,
 	workloadImagePullSpecV1,
@@ -715,7 +716,7 @@ export function createMultiServiceRuntimeOperations(options: {
 		workloadImagePullSpecV1(options.policy.imagePullSecretName)
 			.imagePullSecrets ?? [];
 	const matchesImagePullSecrets = (spec: V1PodSpec | undefined) =>
-		!!spec && isDeepStrictEqual(spec.imagePullSecrets ?? [], imagePullSecrets);
+		!!spec && hasSameStructure(spec.imagePullSecrets ?? [], imagePullSecrets);
 	const resourceName = (value: MultiServiceDesired, name: string) =>
 		serviceResourceName(value.agentId, name);
 	const manifestPvc = (value: MultiServiceDesired, name: string) =>

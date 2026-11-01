@@ -109,6 +109,7 @@ source/template/image 和实际 Pod UID 哈希，记录创建、容器启动、R
 | 自定义镜像可运行且模型测量通过，Platform 创建却报 `OCI_CONFIG_INVALID` | 增量镜像导出成 Docker manifest，平台准入要求 OCI manifest/config/layer media types | 发布显式使用 `oci-mediatypes=true`，先回读远端 manifest/config 类型再做容量测量；格式转换后的新 digest 必须重新实测 |
 | 四模板独立仓库可用，单服务 custom 成功，多服务却在准入阶段返回 `400` | 多服务依赖全局 custom 镜像仓库；旧 API 又强制标准模板也属于该仓库，部署为兼容四模板移除了全局值 | 显式模板仓库绑定按自己的 image/reference/Digest 校验，custom 单镜像和多服务继续限定全局仓库；通过真实 Registry 请求验证两条路径并存 |
 | 多服务资源逐个符合 schema，API 仍返回 `400` | 提交了多个 YAML document；平台接收的是单个包含 `schemaVersion`、`entryServiceName` 和 `resources` 的 System Manifest | 验证实际提交的整个文档格式与拓扑，不能只校验解析后手工拼装的资源数组 |
+| 多服务资源与 Pod 已 Ready，Agent 却在 `applying`/`observing` 间循环且没有 Ingress | Kubernetes SDK 将 `imagePullSecrets` 反序列化为 `V1LocalObjectReference` 实例；严格深比较把与部署策略同名的普通对象判为不同。正式校验后的 manifest hash 实际一致 | 复用结构比较函数，按相同字段和值校验拉取凭据引用；用真实 SDK 反序列化对象回归 Deployment、StatefulSet 和迁移 Job，并保留缺失、替换和重复引用的拒绝。只读 `observe=healthy` 后仍须发布新 Worker，完成入口和浏览器验收 |
 | Node HTTPS 正常，严格客户端仍拒绝私有证书 | leaf 缺少 Authority Key Identifier，或 CA 缺少 Key Usage；叠加系统默认 OpenSSL 扩展还会生成重复扩展 | 用显式 CA/leaf 扩展配置生成证书，包含 CA Key Usage、SKI/AKI 和入口 SAN；发布前用严格链与 hostname 校验，不能关闭 TLS 验证 |
 | 四模板 preflight 通过，API/Worker 仍未使用本轮验证与容量 | `all` 在 preflight 前部署配置，生成的新候选和容量记录没有自动回写消费者 | `runtime-inputs` 在 preflight 后发布声明的配置键并验证 rollout，再运行 mounted-capacity gate；不用手工复制或修改 Secret |
 | 三个新 Runtime 镜像在 ECI 长时间 `Pulling` | 发布 manifest 可见不等于目标 ECI 节点实际可拉取 | 每个模板先创建独立 ECI preflight Pod；拉取、启动、模型调用任一步失败都停止整个流程 |

@@ -14,6 +14,7 @@ import type {
 	V1PersistentVolumeClaim,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
+import { ObjectSerializer } from "@kubernetes/client-node/dist/gen/models/ObjectSerializer.js";
 import { describe, expect, it } from "vitest";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
@@ -406,7 +407,7 @@ function markWorkloadsReady(fake: ReturnType<typeof fakeClient>) {
 
 describe("multi-service resource policy", () => {
 	it.each([undefined, "registry-pull"])(
-		"uses deployment pull policy %s for every workload and migration",
+		"uses deployment pull policy %s for SDK-deserialized workloads and migration",
 		async (imagePullSecretName) => {
 			const fake = fakeClient();
 			const policy = {
@@ -415,8 +416,22 @@ describe("multi-service resource policy", () => {
 				imageRepository: "registry.example.test/custom",
 				imagePullSecretName,
 			};
+			const client: WorkerKubernetesClientV1 = {
+				...fake.client,
+				async read(kind, name) {
+					const resource = await fake.client.read(kind, name);
+					const type = `V1${kind}`;
+					return resource
+						? ObjectSerializer.deserialize(
+								ObjectSerializer.serialize(resource, type, ""),
+								type,
+								"",
+							)
+						: null;
+				},
+			};
 			const operations = createMultiServiceRuntimeOperations({
-				client: fake.client,
+				client,
 				policy,
 			});
 			const value = desired(
