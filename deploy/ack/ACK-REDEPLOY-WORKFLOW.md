@@ -80,7 +80,8 @@ Worker 自身或独立 Runtime preflight 位于 ECI，均不能代替业务 Sess
 输入包或 `.resolved-*` 目录提交到 Git、PR 或共享文档。
 
 每轮成功阶段只回写自己声明的生成输入：`bootstrap-login` 回写当前蓝图，
-`template-preflight` 回写模板索引，`runtime-inputs` 回写 capacity 和 bootstrap JSON，
+`template-preflight` 回写模板索引，`custom-preflight` 回写 capacity 索引及已声明的 profiles JSON，
+`runtime-inputs` 回写 capacity、profiles 和 bootstrap JSON，
 `bootstrap-credential`/`provision` 回写凭证请求和创建清单，`all` 覆盖上述输出。
 文件路径由环境变量绑定识别，支持平铺或分目录的输入包。声明在输出目录中的
 `ACK_TEMPLATE_VALIDATIONS_FILE` 可以首次不存在；生成后自动作为 JSON 输入解析。
@@ -330,6 +331,15 @@ Deployment mount，再带 resourceVersion 更新，回读 Secret 后让 API/Work
 完成后还必须通过 Worker 的 mounted-capacity gate。此步骤不改变角色授权，也不代表真实模型
 或完整重建验收已经通过。
 
+Custom `platform-adapter` 的第一份容量收据不能由 Platform Agent 反向产生，否则会形成“创建前
+要求 capacity、测量又要求已创建 Agent”的循环。独立 CLI
+[`custom-model-preflight.mts`](./custom-model-preflight.mts) 为获准 custom ACP 镜像测量单执行容量；
+私有 job、执行与收据登记步骤见[隔离 custom 容量测量](#隔离-custom-容量测量)。显式设置
+`ACK_CUSTOM_CAPACITY_JOB_FILE` 后，`all` 在 `runtime-inputs` 前执行 `custom-preflight`；也可先
+单独运行该阶段。未声明 job 时不自动测量，缺失容量证据仍会阻止正式 `provision`。
+这一步不创建 Platform Agent、业务 Session、用户 Grant、Service、Ingress 或数据库记录，
+不能替代业务、浏览器、隔离或取消验收，也不能用 Pod Ready、fixture 或手工数据库行代签。
+
 运行中的 API/Worker configuration Secret 禁止手工 `kubectl delete/create`。删除会让挂载窗口
 变成 `FailedMount`，并可能令登录和首屏请求同时不可用；portable 流程只允许在同一 UID、同一
 bootstrap owner 下原地 `replace`，再等待 rollout。缺失、UID/owner 漂移、回读不一致或 rollout
@@ -570,6 +580,102 @@ Key 的候选 metadata，与会话模型目录是不同入口，配置前者不�
 纯 Pod-ready、任意文件、缺少模型事实或把容量扩大到测量上限以上都不能通过。
 更新配置后须等待 Worker rollout；已有 Agent 通过正式 lifecycle 重启重新生成 verified
 capacity，禁止手工写数据库补齐。
+
+### 隔离 custom 容量测量
+
+该入口只测量 `platform-adapter` / ACP 的 `linux/amd64` child image；`self-managed` 不适用。
+实际执行仍由现有 ACK owner 持有获准窗口、应用验证身份和私有输入。工具 checkout 与
+`sourceWorktree` 必须属于同一仓库且保持干净，后者的 `HEAD` 必须等于被测应用的
+`sourceCommit`。工具 revision、文件哈希和应用 source 分别记录，不能将旧镜像或收据重标为
+当前源码。工具从该 checkout 的 client、Grant signer、contracts 和 platform-core 源文件装配
+测量代码，并记录 bundle 哈希；不能依赖另一份 checkout 或旧构建目录的产物。
+
+私有 job 使用 `schemaVersion: 1`、`scope: "isolated-custom-runtime-capacity"`，完整字段以
+[`custom-capacity-inputs.mts`](./custom-capacity-inputs.mts) 为准：
+
+| 字段 | 输入约束 |
+| --- | --- |
+| `sourceCommit`、`sourceWorktree` | 被测应用的 40 位 commit 与对应源码 checkout 的绝对路径 |
+| `imageReference`、`imageDigest`、`parentImageReference`、`platform` | 获准 child 和 parent 的完整 `repository@sha256:…` 引用；`imageDigest` 为 child digest；平台固定为 `linux/amd64` |
+| `childManifestFile`、`imageConfigFile`、`parentManifestFile` | 从获准 registry 按 digest 导出的原始 child manifest、child config 和 parent manifest 文件，不能重新序列化 |
+| `recipeFile`、`recipeSha256` | 获准构建 recipe 的文件与完整字节 SHA-256 |
+| `runtimeModuleSha256`、`modelConfigurationSha256`、`modelConfigurationPath` | 镜像内 Runtime 模块与模型配置的预期 SHA-256；配置路径位于容器 `/opt/custom-agent/` 下 |
+| `customEnvironmentFile` | 私有 JSON 对象，只允许 `CUSTOM_*` 字符串键值，不允许覆盖 Runtime 身份或 Grant 配置 |
+| `kubeconfig`、`namespace`、`imagePullSecret` | 获准集群输入与 namespace；可选 `imagePullSecret` 仅引用既有 Secret 名称 |
+| `outputDirectory`、`operatorApprovalRef` | 本次尝试独立的私有输出目录与审批引用 |
+| `resourceProfileRef`、`resources` | 与 Worker policy 相同；当前 requests 固定为 CPU `100m`、内存 `128Mi`，limits 为 CPU `1`、内存 `2Gi` |
+| `modelOptionId`、`reasoningLevel`、`runtimeConfigVersion`、`expectedModelId` | 获准模型选项、推理级别、配置版本和真实模型 ID，必须与容器配置及完成事件一致 |
+| `timeoutSeconds`、`placement` | 总测量期限为 60–1800 秒；显式提供 `nodeSelector` 与 `tolerations`，selector 必须含 `kubernetes.io/arch: amd64` |
+
+主机输入文件使用绝对路径，保存在仓库外的 `0700` 目录中，文件由执行用户拥有并保持 `0600`；
+不要使用符号链接。输出目录同样为仓库外 `0700` 目录，每次尝试使用新目录，不能覆盖已有
+`measurement/`。源码 checkout 与镜像内 `modelConfigurationPath` 不属于私有文件输入。
+OCI 文件校验使用原始字节 digest、config 的 `linux/amd64` 架构与 source label、ACP Runtime
+Manifest、非 root 用户和 parent layer 前缀；mutable tag 或只填写 digest 字符串不能通过。
+这些内容校验不能代替 owner 对镜像来源与执行窗口的批准。
+
+准备依赖并由 owner 进入获准执行窗口后，可直接测量：
+
+```bash
+node --experimental-strip-types deploy/ack/custom-model-preflight.mts /private/ack/custom-capacity-job.json
+```
+
+命令为本次测量生成临时 Grant 签名密钥和 Runtime service token，
+不接收标准模板 Relay Key。它复用 custom HTTP V3 client、Worker Runtime Grant V2 signer 和
+共享 schemas，以独立 application principal 执行错误 token、跨绑定拒绝检查及一条要求回复
+`READY` 的合成任务，不使用 V4 `keyBinding` 或 `executionSource`。事件读取沿用正式
+`/v3/events/stream`，校验同一 execution、operation、attempt 和模型身份；同时回读容器内
+Runtime/配置字节、运行进程的有效模型配置、Pod UID、source label、
+`status.containerStatuses[].imageID`、节点架构和实际 requests/limits。
+
+所有测量操作共享总 deadline；SIGINT/SIGTERM 进入独立的有界清理。删除前重新验证
+owner/source/scope，以 UID 和 resourceVersion 作为删除前置条件，等待本次 Pod/Secret 消失；
+归属漂移时保留资源并失败。成功清理后才原子写入 `measurement/runtime-capacity.receipt.json`
+和 `measurement/capacity-profile.json`，文件均为 `0600`。收据只签
+`maximumConcurrentExecutions=1`，保留真实模型完成事实、回复摘要及工具/应用来源，业务验收
+标志仍为 `false`。测量开始后的失败保留 `failure.json` 和已有 checkpoint；输入校验失败可能
+只有白名单错误码。失败、unknown、超时、清理失败或中断均不能登记为成功，也不能重放旧
+checkpoint；恢复前核对残留资源，再用独立目录开始新尝试。
+
+正式接线使用以下阶段，未测量时执行一次 producer，已有本次完整成功结果时只登记：
+
+```bash
+export ACK_SOURCE_SHA=0123456789abcdef0123456789abcdef01234567
+export ACK_KUBECONFIG=/private/ack/kubeconfig
+export ACK_CUSTOM_CAPACITY_JOB_FILE=/private/ack/custom-capacity-job.json
+deploy/ack/redeploy.sh custom-preflight
+```
+
+单独执行 `custom-preflight` 时，从工具 checkout 运行，`ACK_SOURCE_SHA` 指定获准被测应用的
+commit，job 的 `sourceWorktree` 指向同仓库中固定该 commit 的干净 worktree；两者 revision
+可以不同。该阶段不要求 Platform/RuntimeHost 发布 manifest，但仍要求已声明的 namespace、
+capacity 和 Agent 请求文件，以及 producer 的工具/应用来源验证。`all` 与 capsule 继续遵守
+原部署 source 契约：运行 checkout、`ACK_SOURCE_SHA` / `capsule.sourceSha` 必须一致。
+
+该阶段校验 job 与当前 source、namespace、kubeconfig、Agent 请求、resource policy 和成功
+收据的绑定，复用原 `validateCapacityBindings` 验证，再把该 digest 的唯一 profile 合入
+`ACK_WORKLOAD_CAPACITY_FILE.profilesFile`，把原 receipt 文件路径加入 `evidence`。它保留其他
+镜像记录，也不替换已合法登记的同 digest 收据；重复相同输入直接复用。profile 的
+`conformanceEvidenceHash` 是 receipt **完整原始字节**的 SHA-256，包含末尾换行；不要重排
+JSON、包装为其他对象或重算对象 hash。job 原始字节哈希保留审计；复用按排除本地文件路径的
+批准字段哈希核对，允许 capsule 重新 materialize。source、镜像、配置哈希、资源或审批字段
+变化后不能复用旧结果。私有环境与 kubeconfig 另按原始字节哈希核对；只移动路径、保留字节
+可以复用，修改内容或旧收据缺少这两个哈希均拒绝，不能自动补填旧测量。
+
+登记只写本地私有文件，以独占锁和逐文件字节比较防止并发覆盖。先写 profile，再登记 evidence；
+中断后没有完整 evidence 的输入仍不能通过原 gate。保留本次成功测量后重跑只恢复登记，
+不重新请求模型；失败或只有 checkpoint 的 `measurement/` 必须先由 owner 核对残留资源。
+异常退出留下登记锁时，也须确认没有活动登记进程并核对私有文件后再移除锁。
+
+capsule 的 `inputs` 需声明 job、capacity 索引和 profiles JSON，`directories` 声明本次输出
+目录；环境增加 `ACK_CUSTOM_CAPACITY_JOB_FILE`。OCI manifests/config、recipe 和私有环境文件
+保留原始字节，不加入会重新序列化的 `inputs`。`custom-preflight`、`runtime-inputs` 和 `all`
+成功后均回写已声明的 profiles；receipt 保留在私有输出目录，路径恢复为 capsule 引用。
+
+随后使用既有 `runtime-inputs` 发布 Worker capacity 配置，再执行 `provision`。只有该消费者
+负责配置 Secret 与实际挂载验证；`evidence=[]`、缺失 profile、字节变化或容量扩大仍拒绝创建
+Agent。真实测量、消费者验证及业务验收必须分别留证，文档和自动化测试通过均不表示真实 ACK
+验收完成。
 
 ### 签发个人 API credential
 

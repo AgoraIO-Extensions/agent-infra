@@ -11,10 +11,10 @@ import {
 	type ReadReserveWorker,
 } from "./session-reserve-inputs.ts";
 
-const commands = new Set(["plan", "bootstrap-plan", "bootstrap-inputs", "bootstrap-database", "template-preflight", "bootstrap-login", "runtime-inputs", "bootstrap-credential", "deploy", "provision", "validate", "cleanup-plan", "destroy", "all"]);
+const commands = new Set(["plan", "bootstrap-plan", "bootstrap-inputs", "bootstrap-database", "template-preflight", "custom-preflight", "bootstrap-login", "runtime-inputs", "bootstrap-credential", "deploy", "provision", "validate", "cleanup-plan", "destroy", "all"]);
 const variables = new Set([
 	"ACK_KUBECONFIG", "ACK_NAMESPACE", "ACK_RELEASE", "ACK_VALUES_FILE", "ACK_IMAGE_MANIFEST", "ACK_RUNTIME_IMAGE_MANIFEST",
-	"ACK_TEMPLATE_IMAGE_MANIFEST", "ACK_TEMPLATE_PREFLIGHT_JOBS_FILE", "ACK_TEMPLATE_VALIDATIONS_FILE", "ACK_WORKLOAD_CAPACITY_FILE",
+	"ACK_TEMPLATE_IMAGE_MANIFEST", "ACK_TEMPLATE_PREFLIGHT_JOBS_FILE", "ACK_TEMPLATE_VALIDATIONS_FILE", "ACK_WORKLOAD_CAPACITY_FILE", "ACK_CUSTOM_CAPACITY_JOB_FILE",
 	"ACK_PUBLIC_ORIGIN", "ACK_CA_CERT_FILE", "ACK_EVIDENCE_DIR", "ACK_BOOTSTRAP_INPUTS_FILE", "ACK_CREDENTIAL_BOOTSTRAP_FILE",
 	"ACK_LOGIN_BOOTSTRAP_FILE", "ACK_AGENT_REQUESTS_FILE", "ACK_AGENT_STATE_DIR", "ACK_BROWSER_BLUEPRINT_DIR", "ACK_TEMPLATE_CONFIG_DIR",
 	"ACK_SESSION_RESERVES_FILE",
@@ -192,7 +192,7 @@ export async function materializeCapsule(manifestFile: string, sourceRoot: strin
 	return { environment, inputCount: files.size, sourceSha, sourceRoot, reserve, canonicalRoot, runDirectory, inputs: [...files.keys()], resolvedFiles, canonicalBefore };
 }
 
-function promotionTargets(command: string, materialized: MaterializedCapsule) {
+async function promotionTargets(command: string, materialized: MaterializedCapsule) {
 	const { environment, resolvedFiles, inputs } = materialized;
 	const targets = new Set<string>();
 	const add = (variable: string) => {
@@ -203,7 +203,14 @@ function promotionTargets(command: string, materialized: MaterializedCapsule) {
 	if (["template-preflight", "runtime-inputs", "all"].includes(command)) add("ACK_TEMPLATE_VALIDATIONS_FILE");
 	if (["runtime-inputs", "all"].includes(command)) {
 		add("ACK_BOOTSTRAP_INPUTS_FILE");
+	}
+	if (["custom-preflight", "runtime-inputs", "all"].includes(command)) {
 		add("ACK_WORKLOAD_CAPACITY_FILE");
+		const capacityFile = environment.ACK_WORKLOAD_CAPACITY_FILE;
+		if (capacityFile) {
+			const capacity = await privateJson(capacityFile);
+			for (const [relative, file] of resolvedFiles) if (file === capacity.profilesFile) targets.add(relative);
+		}
 	}
 	if (["bootstrap-credential", "provision", "all"].includes(command)) {
 		add("ACK_CREDENTIAL_BOOTSTRAP_FILE");
@@ -231,7 +238,7 @@ function portableValue(value: any, materialized: MaterializedCapsule): any {
 
 async function promoteGeneratedInputs(materialized: MaterializedCapsule, command: string) {
 	const plans: Array<{ relative: string; destination: string; bytes: Buffer }> = [];
-	for (const relative of promotionTargets(command, materialized)) {
+	for (const relative of await promotionTargets(command, materialized)) {
 		const source = materialized.resolvedFiles.get(relative);
 		if (!source) continue;
 		const destination = join(materialized.canonicalRoot, relative);
