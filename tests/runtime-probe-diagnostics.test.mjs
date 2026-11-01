@@ -104,6 +104,36 @@ test("ordinary command failures never expose stderr and successful output is unc
 	);
 });
 
+test("command timeout and startup failures retain bounded runner diagnostics", () => {
+	let timeoutDiagnostic;
+	assert.throws(
+		() =>
+			runCommand(process.execPath, ["-e", "setTimeout(() => {}, 10000)"], {
+				name: "Timeout command",
+				timeoutMs: 20,
+				onFailure: (detail) => {
+					timeoutDiagnostic = detail;
+				},
+			}),
+		/Timeout command timed out/,
+	);
+	assert.equal(timeoutDiagnostic, "ETIMEDOUT");
+
+	let startupDiagnostic;
+	assert.throws(
+		() =>
+			runCommand("/private/missing-agent-infra-command", [], {
+				name: "Startup command",
+				timeoutMs: 1000,
+				onFailure: (detail) => {
+					startupDiagnostic = detail;
+				},
+			}),
+		/Startup command could not start/,
+	);
+	assert.match(startupDiagnostic, /ENOENT/);
+});
+
 test("cancellation diagnostic distinguishes order from terminal result without copying arbitrary status", () => {
 	for (const stage of [
 		"model-cancellation-close-before-confirmation",
