@@ -1,20 +1,25 @@
 name: Publish images
 run-name: >-
-  ${{ github.event_name }} | publish-images | ${{ github.ref_name }}
+  ${{ github.event_name }} | publish-images | ${{ github.ref_name }} |
+  ${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
-      smoke:
-        description: Run the two-architecture release smoke with an isolated tag
+      full_release:
+        description: Build Platform, standard and runtime images from one exact source commit
         required: false
         type: boolean
         default: false
-      publish_platform:
-        description: Publish Platform business images as well
+      source_sha:
+        description: Exact 40-hex commit to publish when full_release is enabled
+        required: false
+        type: string
+        default: ""
+      smoke:
+        description: Run the two-architecture release smoke with an isolated tag
         required: false
         type: boolean
         default: false
@@ -24,17 +29,18 @@ permissions:
   packages: write
 
 concurrency:
-  group: publish-images-${{ github.ref }}
-  cancel-in-progress: false
+  group: publish-images-${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}
+  cancel-in-progress: true
 
 env:
   IMAGE_REPOSITORY_PREFIX: ghcr.io/agoraio-extensions/agent-infra
-  IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.smoke && format('smoke-{0}-{1}', github.run_id, github.run_attempt) || github.ref == 'refs/heads/main' && 'main' || github.ref_name }}
+  RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}
+  IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.smoke && format('smoke-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'workflow_dispatch' && inputs.full_release && format('release-{0}', inputs.source_sha) || github.ref_name }}
 
 jobs:
   infrastructure:
     name: Standard template images (${{ matrix.platform }})
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.smoke == true)
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && (inputs.smoke == true || inputs.full_release == true))
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -54,7 +60,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -75,8 +81,13 @@ jobs:
       - name: Build and publish standard templates and custom base
         env:
           PLATFORM: ${{ matrix.platform }}
+          RELEASE_SOURCE_SHA: ${{ env.RELEASE_SOURCE_SHA }}
         run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if [ "${{ inputs.full_release }}" = "true" ] && ! printf '%s' "$RELEASE_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "full_release requires a 40-hex source_sha" >&2
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
           node deploy/release/build-images.mjs "$RUNNER_TEMP/templates.json" \
             --images=codex,claude,opencode,pi
           node deploy/release/build-images.mjs "$RUNNER_TEMP/runtime-host.json" \
@@ -88,7 +99,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         with:
           if-no-files-found: warn
-          name: template-images-${{ matrix.architecture }}-${{ github.sha }}-${{ github.run_attempt }}
+          name: template-images-${{ matrix.architecture }}-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/templates.json
             ${{ runner.temp }}/templates.json.runtime-probe.json
@@ -105,7 +116,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -113,7 +124,7 @@ jobs:
       - name: Download verified image receipts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: template-images-*-${{ github.sha }}-${{ github.run_attempt }}
+          pattern: template-images-*-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/receipts
       - name: Set up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -126,7 +137,7 @@ jobs:
       - name: Publish multi-architecture indexes
         run: |
           set -o pipefail
-          node deploy/release/publish-image-indexes.mjs "$IMAGE_TAG" \
+          GITHUB_SHA="$RELEASE_SOURCE_SHA" node deploy/release/publish-image-indexes.mjs "$IMAGE_TAG" \
             agent-runtime-host,agent-runtime-codex,agent-runtime-claude,agent-runtime-opencode,agent-runtime-pi,custom-agent-base \
             "$RUNNER_TEMP/receipts"/*/templates.json \
             "$RUNNER_TEMP/receipts"/*/runtime-host.json \
@@ -136,14 +147,14 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         with:
           if-no-files-found: error
-          name: published-indexes-${{ github.sha }}-${{ github.run_attempt }}
+          name: published-indexes-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/published-indexes.jsonl
 
   platform:
     name: Platform business images (${{ matrix.platform }})
     if: >-
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
-      (github.event_name == 'workflow_dispatch' && inputs.publish_platform == true)
+      (github.event_name == 'workflow_dispatch' && inputs.full_release == true)
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -163,7 +174,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -184,15 +195,20 @@ jobs:
       - name: Build and publish Platform images
         env:
           PLATFORM: ${{ matrix.platform }}
+          RELEASE_SOURCE_SHA: ${{ env.RELEASE_SOURCE_SHA }}
         run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if [ "${{ inputs.full_release }}" = "true" ] && ! printf '%s' "$RELEASE_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "full_release requires a 40-hex source_sha" >&2
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
           node deploy/release/build-images.mjs "$RUNNER_TEMP/platform-images.json" \
             --images=web,platformApi,platformWorker,enterpriseDirectorySync
       - name: Upload Platform receipts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         with:
           if-no-files-found: error
-          name: platform-images-${{ matrix.architecture }}-${{ github.sha }}
+          name: platform-images-${{ matrix.architecture }}-${{ env.RELEASE_SOURCE_SHA }}
           path: |
             ${{ runner.temp }}/platform-images.json
 
@@ -200,7 +216,7 @@ jobs:
     name: Publish Platform indexes
     if: >-
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
-      (github.event_name == 'workflow_dispatch' && inputs.publish_platform == true)
+      (github.event_name == 'workflow_dispatch' && inputs.full_release == true)
     needs: platform
     runs-on: ubuntu-24.04
     steps:
@@ -208,7 +224,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.full_release && inputs.source_sha || github.sha }}
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -216,7 +232,7 @@ jobs:
       - name: Download verified image receipts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: platform-images-*-${{ github.sha }}
+          pattern: platform-images-*-${{ env.RELEASE_SOURCE_SHA }}
           path: ${{ runner.temp }}/receipts
       - name: Set up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -228,6 +244,6 @@ jobs:
         run: echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
       - name: Publish multi-architecture Platform indexes
         run: |
-          node deploy/release/publish-image-indexes.mjs "$IMAGE_TAG" \
+          GITHUB_SHA="$RELEASE_SOURCE_SHA" node deploy/release/publish-image-indexes.mjs "$IMAGE_TAG" \
             web,platform-api,platform-worker,enterprise-directory-sync \
             "$RUNNER_TEMP/receipts"/*/platform-images.json

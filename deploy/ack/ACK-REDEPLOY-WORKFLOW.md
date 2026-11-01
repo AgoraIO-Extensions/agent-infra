@@ -121,7 +121,18 @@ credential 和 Agent bindings。`bootstrap-plan` 检查新安装的 ownership，
 
 在目标机器准备 Node 24、`kubectl`、Helm、`curl` 和 Git。先从最终发布 commit 的 clean checkout 构建并发布 `web`、`platform-api`、`platform-worker`、`enterprise-directory-sync`、RuntimeHost 以及四个标准 Runtime 的 amd64 immutable manifest。自定义 Agent 也必须先取得部署批准的 OCI Digest；Tag 不能作为部署输入。
 
-发布流程可先从已审查分支运行完整 smoke：
+正式 ACK 发布应使用一个明确的 full release run，把 Platform、RuntimeHost、四个标准 Runtime、custom base 以及两组 indexes 绑定在同一源码和同一 workflow receipt bundle 中。先固定要发布的 clean commit，再从 `main` 触发 workflow；workflow 会 checkout `source_sha`，不会使用触发时后来移动的分支头：
+
+```bash
+SOURCE_SHA="$(git rev-parse origin/main)"
+gh workflow run publish-images.yml --ref main \
+  -f full_release=true \
+  -f source_sha="$SOURCE_SHA"
+```
+
+回读 run 的 `headSha`、输入 `source_sha`、全部架构 receipts 和两个 index receipts；ACK 只消费这个 run 产生的 immutable bundle。相同 source 的重复 full release 会进入同一 source concurrency group，旧尝试会被取消，不得混用不同 run 的 artifacts。
+
+发布 smoke 仍是独立的只读/诊断入口，不产生 Platform 收据：
 
 ```bash
 gh workflow run publish-images.yml --ref main -f smoke=true
@@ -129,8 +140,7 @@ gh workflow run publish-images.yml --ref main -f smoke=true
 
 该命令为每个原生架构依次构建、探测并推送四模板、RuntimeHost 和 custom base，随后验证
 六个双架构索引。标签固定为 `smoke-<run_id>-<attempt>`，不会更新 `main` 或 `latest`。
-`publish_platform=true` 可同时产生 Platform 收据；ACK 仍要求所有部署输入绑定同一源码。
-选择分支后必须回读 run 的 `headSha`，不能把此时后来前进的 main 当作运行来源。
+tag 发布仍由 tag push 显式触发，并保留原有 latest promotion 门禁；普通 `main` push 不再自动启动重复的 standard build。选择 workflow 的 `source_sha` 后必须回读 run 的 `headSha`、checkout source 和每份 receipt，不能把此时后来前进的 main 当作运行来源。
 收据按 attempt 隔离；失败后完整重跑 workflow，不能只重跑失败架构后混用旧 attempt 收据。
 失败运行中的部分 artifact 只用于诊断；两个架构及索引全部成功后才接受发布结果。
 

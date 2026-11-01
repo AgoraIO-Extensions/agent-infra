@@ -68,7 +68,7 @@ test("publication metadata selects architecture manifests and rejects the index 
 	);
 });
 
-test("index publication uses same-source architecture Digests and fails closed on missing or mixed receipts", async () => {
+test("full-release index publication uses same-source architecture digests and fails closed on missing or mixed receipts", async () => {
 	const temp = await mkdtemp(join(tmpdir(), "agent-infra-indexes-"));
 	try {
 		const receipts = ["amd64", "arm64"].map((arch, index) => ({
