@@ -71,7 +71,9 @@ function fixture(scenario = "ok") {
 		status: {
 			phase: "Running",
 			startTime: "2026-11-01T00:00:00Z",
-			containerStatuses: [{ name: "platform-api", ready: true, restartCount: 0 }],
+			containerStatuses: [
+				{ name: "platform-api", ready: true, restartCount: 0 },
+			],
 		},
 		spec: {
 			containers: [
