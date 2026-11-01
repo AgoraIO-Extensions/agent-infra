@@ -28,7 +28,7 @@ die() {
 
 usage() {
 	cat <<'EOF'
-Usage: deploy/ack/redeploy.sh <capture-inputs|plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|template-preflight|bootstrap-login|runtime-inputs|bootstrap-credential|cleanup-plan|deploy|provision|validate|clean|destroy|all>
+Usage: deploy/ack/redeploy.sh <capture-inputs|plan|bootstrap-plan|bootstrap-inputs|bootstrap-database|template-preflight|custom-preflight|bootstrap-login|runtime-inputs|bootstrap-credential|cleanup-plan|deploy|provision|validate|clean|destroy|all>
 
 Required for plan/deploy/validate:
   ACK_KUBECONFIG   private kubeconfig path
@@ -50,6 +50,7 @@ Optional validation inputs:
   ACK_TEMPLATE_VALIDATIONS_FILE private four-template validation expectation bundle
   ACK_WORKLOAD_CAPACITY_FILE private capacity profile/evidence and mounted Secret binding
   ACK_TEMPLATE_PREFLIGHT_JOBS_FILE private JSON list of four template preflight jobs
+  ACK_CUSTOM_CAPACITY_JOB_FILE private custom ACP capacity job; optional for all
   ACK_TEMPLATE_IMAGE_MANIFEST private amd64 four-template image manifest
   ACK_CREDENTIAL_BOOTSTRAP_FILE private browser storageState credential request
   ACK_LOGIN_BOOTSTRAP_FILE private existing login inputs and identity output binding
@@ -227,6 +228,26 @@ bootstrap_login() {
 	if ! node "$repo_root/deploy/ack/bootstrap-login.ts" "$ACK_LOGIN_BOOTSTRAP_FILE" >"$evidence_dir/login.json"; then
 		die "fresh login or private identity preparation failed"
 	fi
+}
+
+custom_preflight() {
+	[[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || die "ACK_SOURCE_SHA must be the 40-hex application commit"
+	require_file ACK_KUBECONFIG "${ACK_KUBECONFIG:-}"
+	require_file ACK_CUSTOM_CAPACITY_JOB_FILE "${ACK_CUSTOM_CAPACITY_JOB_FILE:-}"
+	require_file ACK_WORKLOAD_CAPACITY_FILE "${ACK_WORKLOAD_CAPACITY_FILE:-}"
+	require_file ACK_AGENT_REQUESTS_FILE "${ACK_AGENT_REQUESTS_FILE:-}"
+	prepare_evidence
+	local attempt_receipt
+	attempt_receipt=$(mktemp "$evidence_dir/custom-preflight.XXXXXXXX")
+	if ! node --experimental-strip-types "$repo_root/deploy/ack/custom-capacity-register.mts" \
+		"$ACK_CUSTOM_CAPACITY_JOB_FILE" "$ACK_WORKLOAD_CAPACITY_FILE" "$ACK_AGENT_REQUESTS_FILE" \
+		"$source_sha" "$ACK_KUBECONFIG" "$namespace" >"$attempt_receipt"; then
+		if [[ ! -s "$attempt_receipt" ]]; then
+			printf '%s\n' '{"status":"failed","code":"CUSTOM_CAPACITY_INTERRUPTED","recoveryRequired":true,"businessVerified":false}' >"$attempt_receipt"
+		fi
+		die "custom capacity measurement or registration failed; inspect the private attempt receipt"
+	fi
+	echo "ack-redeploy: custom capacity registered; mounted Worker verification remains required"
 }
 
 runtime_inputs() {
@@ -632,6 +653,7 @@ case "$command" in
 	bootstrap-credential) bootstrap_credential ;;
 	bootstrap-login) bootstrap_login ;;
 	template-preflight) template_preflight ;;
+	custom-preflight) custom_preflight ;;
 	runtime-inputs) runtime_inputs ;;
 	cleanup-plan) cleanup_plan ;;
 	deploy) deploy ;;
@@ -660,6 +682,9 @@ case "$command" in
 		fi
 		if [[ -n "${ACK_LOGIN_BOOTSTRAP_FILE:-}" ]]; then
 			bootstrap_login
+		fi
+		if [[ -n "${ACK_CUSTOM_CAPACITY_JOB_FILE:-}" ]]; then
+			custom_preflight
 		fi
 		runtime_inputs
 		if [[ -n "${ACK_CREDENTIAL_BOOTSTRAP_FILE:-}" ]]; then

@@ -168,7 +168,7 @@ export async function readPrivateText(
 	}
 }
 
-function parseInput(value: unknown) {
+export function parseInput(value: unknown) {
 	if (!value || typeof value !== "object" || Array.isArray(value))
 		fail("CONFIGURATION_INVALID");
 	const input = value as Record<string, any>;
