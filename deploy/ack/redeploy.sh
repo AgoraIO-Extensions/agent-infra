@@ -55,6 +55,7 @@ Optional validation inputs:
   ACK_CREDENTIAL_BOOTSTRAP_FILE private browser storageState credential request
   ACK_LOGIN_BOOTSTRAP_FILE private existing login inputs and identity output binding
   ACK_CLEANUP_PLAN_FILE    private cluster/namespace ownership input for cleanup-plan
+  ACK_SESSION_RESERVE_PLAN_FILE private approved policy with requestName bindings; all enables it after provisioning
   ACK_AGENT_STATE_DIR      external existing 0700 directory for private ID bindings
   ACK_BROWSER_BLUEPRINT_DIR private browser configs without a fixed Agent ID
   ACK_CAPTURE_DIR          external 0700 directory for read-only ACK input capture
@@ -371,6 +372,7 @@ plan() {
 	render_manifest "$rendered_manifest"
 	configuration_source_preflight
 	helm lint "$chart_dir" --values "$values_file" --strict >/dev/null 2>&1 || die "HELM_LINT_FAILED"
+	reserve_plan_preflight
 	snapshot plan "$rendered_manifest"
 	unlink "$rendered_manifest"
 	trap - EXIT
@@ -425,6 +427,25 @@ validate_workload_capacity() {
 	if ! node "$repo_root/deploy/ack/workload-capacity.ts" "$ACK_WORKLOAD_CAPACITY_FILE" "$ACK_AGENT_REQUESTS_FILE" "$ACK_TEMPLATE_VALIDATIONS_FILE" >"$evidence_dir/workload-capacity.json"; then
 		die "Session capacity is missing, ambiguous, unverified, or differs from the mounted Worker Secret"
 	fi
+}
+
+reserve_plan_preflight() {
+	[[ -n "${ACK_SESSION_RESERVE_PLAN_FILE:-}" ]] || return 0
+	require_file ACK_SESSION_RESERVE_PLAN_FILE "$ACK_SESSION_RESERVE_PLAN_FILE"
+	require_file ACK_SESSION_RESERVES_FILE "${ACK_SESSION_RESERVES_FILE:-}"
+	if ! node --experimental-strip-types "$repo_root/deploy/ack/bind-session-reserves.ts" check >"$evidence_dir/session-reserve-plan.json"; then
+		die "reserve plan source, template or request binding is invalid; no deployment was attempted"
+	fi
+}
+
+bind_session_reserves() {
+	node --experimental-strip-types "$repo_root/deploy/ack/bind-session-reserves.ts" bind >"$evidence_dir/session-reserve-bind.json" \
+		|| die "fresh Agent bindings could not produce the approved reserve configuration"
+}
+
+wait_session_reserves() {
+	node --experimental-strip-types "$repo_root/deploy/ack/bind-session-reserves.ts" wait >"$evidence_dir/session-reserve-ready.json" \
+		|| die "approved reserve minimum is not ready"
 }
 
 validate_template_receipts() {
@@ -669,6 +690,7 @@ case "$command" in
 		prepare_evidence
 		configuration_source_preflight
 		preflight_agent_requests
+		reserve_plan_preflight
 		if [[ -n "${ACK_BOOTSTRAP_INPUTS_FILE:-}" ]]; then
 			bootstrap_database check
 			bootstrap_inputs apply
@@ -686,12 +708,19 @@ case "$command" in
 		if [[ -n "${ACK_CUSTOM_CAPACITY_JOB_FILE:-}" ]]; then
 			custom_preflight
 		fi
-		runtime_inputs
 		if [[ -n "${ACK_CREDENTIAL_BOOTSTRAP_FILE:-}" ]]; then
 			bootstrap_credential
 		fi
-		node "$repo_root/deploy/ack/agent-bindings.ts" check "${ACK_AGENT_REQUESTS_FILE:-}" "${ACK_AGENT_STATE_DIR:-}" "${ACK_BROWSER_BLUEPRINT_DIR:-}" "$source_sha" >/dev/null
-		provision
+		if [[ -n "${ACK_SESSION_RESERVE_PLAN_FILE:-}" ]]; then
+			provision
+			bind_session_reserves
+			runtime_inputs
+			wait_session_reserves
+		else
+			runtime_inputs
+			node "$repo_root/deploy/ack/agent-bindings.ts" check "${ACK_AGENT_REQUESTS_FILE:-}" "${ACK_AGENT_STATE_DIR:-}" "${ACK_BROWSER_BLUEPRINT_DIR:-}" "$source_sha" >/dev/null
+			provision
+		fi
 		validate
 		;;
 	*) usage; die "unknown command: $command" ;;

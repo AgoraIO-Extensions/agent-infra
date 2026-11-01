@@ -226,6 +226,31 @@ test("fresh custom measurement registers raw bytes and preserves prior profiles/
 	assert.equal(submissions, 1);
 });
 
+test("custom measurement updates its candidate without changing the published bootstrap profiles", async (t) => {
+	const f = await fixture(t);
+	const baseline = await readFile(f.profilesFile);
+	const candidateProfilesFile = await f.save(
+		join(f.root, "candidate-profiles.json"),
+		baseline,
+	);
+	await f.save(f.input.capacityFile, { ...f.capacity, candidateProfilesFile });
+	const result = await runCustomCapacityPreflight(f.input, f.produce);
+	assert.equal(result.status, "registered");
+	assert.deepEqual(await readFile(f.profilesFile), baseline);
+	const candidate = JSON.parse(await readFile(candidateProfilesFile));
+	assert.equal(candidate.profiles.length, 2);
+	assert.deepEqual(candidate.profiles[0], f.otherProfile);
+	assert.equal(
+		(
+			await runCustomCapacityPreflight(f.input, () =>
+				assert.fail("resubmitted"),
+			)
+		).status,
+		"reused",
+	);
+	assert.deepEqual(await readFile(f.profilesFile), baseline);
+});
+
 test("a complete unregistered receipt is registered without a second model request", async (t) => {
 	const f = await fixture(t);
 	await f.produce();

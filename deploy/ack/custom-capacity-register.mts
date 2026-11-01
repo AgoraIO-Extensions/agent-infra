@@ -20,13 +20,14 @@ async function load(input: Inputs) {
 	const requests = await privateJson(input.requestsFile);
 	assert(capacity.schemaVersion === 1 && capacity.sourceSha === input.sourceSha && requests.schemaVersion === 1 && Array.isArray(requests.requests), "CUSTOM_CAPACITY_SOURCE_MISMATCH");
 	assert(Array.isArray(capacity.evidence) && capacity.evidence.length <= 64 && new Set(capacity.evidence.map((e: any) => e.imageDigest)).size === capacity.evidence.length, "CUSTOM_CAPACITY_EVIDENCE_AMBIGUOUS");
-	const profilesBytes = await privateBytes(capacity.profilesFile);
+	const profilesFile = capacity.candidateProfilesFile ?? capacity.profilesFile;
+	const profilesBytes = await privateBytes(profilesFile);
 	const profiles = JSON.parse(profilesBytes.toString("utf8"));
 	assert(profiles.schemaVersion === 1 && Array.isArray(profiles.profiles) && profiles.profiles.length <= 64, "CUSTOM_CAPACITY_PROFILES_INVALID");
 	assert(capacity.resourceProfileRef === job.resourceProfileRef, "CUSTOM_CAPACITY_POLICY_MISMATCH");
 	assert.deepEqual(capacity.resources, job.resources, "CUSTOM_CAPACITY_POLICY_MISMATCH");
-	assert(input.capacityFile !== capacity.profilesFile, "CUSTOM_CAPACITY_PATH_CONFLICT");
-	for (const file of [input.capacityFile, capacity.profilesFile]) {
+	assert(![input.capacityFile, input.jobFile, input.requestsFile, job.customEnvironmentFile, job.kubeconfig, job.childManifestFile, job.imageConfigFile, job.parentManifestFile, job.recipeFile].includes(profilesFile), "CUSTOM_CAPACITY_PATH_CONFLICT");
+	for (const file of [input.capacityFile, profilesFile]) {
 		let insideGit = false;
 		try { insideGit = execFileSync("git", ["-C", dirname(file), "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] }).trim() === "true"; } catch {}
 		assert(!insideGit, "CUSTOM_CAPACITY_INPUT_IN_GIT");
@@ -34,7 +35,7 @@ async function load(input: Inputs) {
 	const bodies = await Promise.all(requests.requests.map((request: any) => privateJson(request.bodyFile)));
 	const selected = bodies.filter((body: any) => body.source?.kind === "custom" && body.source.interactionMode === "platform-adapter" && body.source.imageReference === job.imageReference);
 	assert(selected.length > 0, "CUSTOM_CAPACITY_REQUEST_MISSING");
-	return { job, jobBytes, capacity, capacityBytes, profiles, profilesBytes, selected };
+	return { job, jobBytes, capacity, capacityBytes, profilesFile, profiles, profilesBytes, selected };
 }
 
 async function verifyReceipt(state: Awaited<ReturnType<typeof load>>, bytes: Buffer, profile: any) {
@@ -91,7 +92,7 @@ export async function registerCustomCapacity(input: Inputs) {
 		assert(profiles.profiles.length <= 64 && capacity.evidence.length <= 64, "CUSTOM_CAPACITY_INPUT_LIMIT");
 		assert((await privateBytes(input.jobFile)).equals(state.jobBytes), "CUSTOM_CAPACITY_JOB_DRIFT");
 		assert((await privateBytes(input.capacityFile)).equals(state.capacityBytes), "CUSTOM_CAPACITY_INPUT_DRIFT");
-		await replace(state.capacity.profilesFile, state.profilesBytes, prior.length ? state.profilesBytes : evidenceBytes(profiles));
+		await replace(state.profilesFile, state.profilesBytes, prior.length ? state.profilesBytes : evidenceBytes(profiles));
 		// Publish the evidence reference last; interrupted writes cannot pass the existing gate.
 		await replace(input.capacityFile, state.capacityBytes, evidenceBytes(capacity));
 		assert((await privateBytes(receiptFile)).equals(bytes), "CUSTOM_CAPACITY_RECEIPT_DRIFT");
@@ -112,7 +113,7 @@ export async function runCustomCapacityPreflight(input: Inputs, measure?: (jobFi
 		await execute(input.jobFile);
 	}
 	assert((await privateBytes(input.jobFile)).equals(state.jobBytes), "CUSTOM_CAPACITY_JOB_DRIFT");
-	assert((await privateBytes(input.capacityFile)).equals(state.capacityBytes) && (await privateBytes(state.capacity.profilesFile)).equals(state.profilesBytes), "CUSTOM_CAPACITY_INPUT_DRIFT");
+	assert((await privateBytes(input.capacityFile)).equals(state.capacityBytes) && (await privateBytes(state.profilesFile)).equals(state.profilesBytes), "CUSTOM_CAPACITY_INPUT_DRIFT");
 	return registerCustomCapacity(input);
 }
 

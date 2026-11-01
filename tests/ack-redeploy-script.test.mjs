@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { parse } from "yaml";
 
 const root = join(import.meta.dirname, "..");
 const script = join(root, "deploy/ack/redeploy.sh");
@@ -71,6 +72,17 @@ test("ACK re-deploy script is executable shell and exposes bounded commands", as
 		throw new Error(
 			"configuration reload and template receipt gates are missing",
 		);
+	const chart = await readFile(
+		join(root, "deploy/ack/chart/templates/worker.yaml"),
+		"utf8",
+	);
+	const role = parse(
+		chart.split("---").find((document) => /^kind: Role$/m.test(document)),
+	);
+	assert.deepEqual(
+		role.rules.filter((rule) => rule.resources.includes("endpoints")),
+		[{ apiGroups: [""], resources: ["endpoints"], verbs: ["get"] }],
+	);
 	const allBlock = source.slice(source.indexOf("\n\tall)"));
 	if (
 		allBlock.indexOf("bootstrap_credential") >
