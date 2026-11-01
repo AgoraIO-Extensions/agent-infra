@@ -575,7 +575,10 @@ test("promotion canonicalizes source descendants and rejects the resolved root",
 	const resolvedGenerated = JSON.parse(
 		await readFile(resolved.environment.ACK_TEMPLATE_VALIDATIONS_FILE),
 	);
-	assert.equal(resolvedGenerated.sourceFile, join(f.source, "deploy/ack/redeploy.sh"));
+	assert.equal(
+		resolvedGenerated.sourceFile,
+		join(f.source, "deploy/ack/redeploy.sh"),
+	);
 	await writeFile(
 		join(f.source, "deploy/ack/redeploy.sh"),
 		[
