@@ -34,6 +34,7 @@ import {
 const toolingRoot = resolve(import.meta.dirname, "../..");
 let repositoryRoot = resolve(process.env.E2E_HARNESS_SOURCE_ROOT ?? toolingRoot);
 let validatedSource;
+let toolingSnapshot;
 const stateRoot = resolve(
 	process.env.PLATFORM_LOCAL_STATE_DIRECTORY ??
 		join(
@@ -1155,27 +1156,44 @@ async function acquireLock() {
 	return async () => rm(lock, { recursive: true, force: true });
 }
 
+async function readToolingIdentity() {
+	try {
+		const options = { cwd: toolingRoot };
+		const revision = git(["rev-parse", "HEAD"], options);
+		if (!/^[a-f0-9]{40}$/.test(revision) ||
+			await realpath(git(["rev-parse", "--show-toplevel"], options)) !== await realpath(toolingRoot) ||
+			await realpath(import.meta.filename) !== await realpath(join(toolingRoot, "deploy/local/e2e-harness.mjs"))) return null;
+		const names = ["e2e-harness.mjs", "runtime-material.mjs", "harness-image-cache.mjs"];
+		git(["ls-files", "--error-unmatch", "--", ...names.map((name) => `deploy/local/${name}`)], options);
+		const files = Object.fromEntries(await Promise.all(
+			names.map(async (name) =>
+				[name, createHash("sha256").update(await readFile(join(toolingRoot, "deploy/local", name))).digest("hex")]),
+		));
+		return {
+			repositoryRoot: toolingRoot,
+			revision,
+			dirty: git(["status", "--porcelain", "--untracked-files=no"], options).length > 0,
+			files,
+		};
+	} catch {
+		return null;
+	}
+}
+
 async function writeRunReceipt(status, action, error) {
 	try {
 		await mkdir(stateRoot, { recursive: true });
-		const toolingRevision = tryCommand(process.env.GIT_BIN ?? "git", ["rev-parse", "HEAD"], { cwd: toolingRoot });
-		const toolingChanges = tryCommand(process.env.GIT_BIN ?? "git", ["status", "--porcelain", "--untracked-files=no"], { cwd: toolingRoot });
-		const toolingFiles = Object.fromEntries(await Promise.all(
-			["e2e-harness.mjs", "runtime-material.mjs", "harness-image-cache.mjs"].map(async (name) =>
-				[name, createHash("sha256").update(await readFile(join(toolingRoot, "deploy/local", name))).digest("hex")]),
-		));
+		const toolingAfter = await readToolingIdentity();
+		const toolingDrift = !!toolingSnapshot && JSON.stringify(toolingSnapshot) !== JSON.stringify(toolingAfter);
 		const receipt = {
 			schemaVersion: 1,
 			status,
 			action,
 			profile: targetProfile(),
 			source: validatedSource ? { revision: validatedSource.sha, repositoryRoot } : null,
-			tooling: {
-				repositoryRoot: toolingRoot,
-				revision: toolingRevision?.trim() ?? null,
-				dirty: toolingChanges === null ? null : toolingChanges.trim().length > 0,
-				files: toolingFiles,
-			},
+			tooling: toolingSnapshot ?? null,
+			toolingDrift,
+			...(toolingDrift ? { toolingAfter } : {}),
 			...(error
 				? {
 					errorClass: error instanceof Error ? error.name : "Error",
@@ -1257,6 +1275,7 @@ function usage() {
 
 async function main() {
 	const action = process.argv[2] ?? "all";
+	toolingSnapshot = await readToolingIdentity();
 	if (action === "help" || action === "--help") {
 		usage();
 		return;
@@ -1278,7 +1297,11 @@ async function main() {
 		process.exitCode = 2;
 		return;
 	}
+	if (!toolingSnapshot) fail("Tooling source identity is unknown");
 	await validateFrozenSource(action);
+	if (!process.env.E2E_HARNESS_SOURCE_ROOT && !["sync", "all", "runtime", "reset"].includes(action))
+		await readSourcePin();
+	if (toolingSnapshot.dirty) fail("Tooling source has dirty tracked changes");
 	if (action === "reset" || action === "runtime") {
 		assertFixedEnvironment();
 		const release = await acquireLock();

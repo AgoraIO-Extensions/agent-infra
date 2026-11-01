@@ -658,6 +658,11 @@ test("build reuses dependency-equivalent Worker and verify binds current-profile
 const fs = require("node:fs");
 const args = process.argv.slice(4);
 fs.appendFileSync(process.env.TEST_DOCKER_LOG, JSON.stringify(args) + "\\n");
+if (args[0] === "info" && process.env.TEST_TOOLING_CHANGE && !fs.existsSync(process.env.TEST_TOOLING_MARKER)) {
+  fs.writeFileSync(process.env.TEST_TOOLING_MARKER, "changed");
+  if (process.env.TEST_TOOLING_CHANGE === "edit") fs.appendFileSync(process.env.TEST_TOOLING_ROOT + "/deploy/local/e2e-harness.mjs", "\\n// tooling drift\\n");
+  else require("node:child_process").execFileSync("git", ["commit", "--allow-empty", "-m", "tooling changed during execution"], {cwd:process.env.TEST_TOOLING_ROOT,stdio:"ignore"});
+}
 const statePath = process.env.TEST_IMAGE_STATE;
 const images = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, "utf8")) : {};
 const configDigest = process.env.TEST_CONFIG_DIGEST ?? "sha256:${"b".repeat(64)}";
@@ -967,6 +972,81 @@ fs.writeFileSync(statePath, JSON.stringify(images));
 				await assert.rejects(frozenCli("all"), /Frozen source/);
 			},
 		);
+		await t.test(
+			"dirty tooling rejects before Docker actions even when the frozen application is clean",
+			async () => {
+				const file = join(tooling, "deploy/local/e2e-harness.mjs");
+				const original = await readFile(file);
+				try {
+					await writeFile(file, `${original}\n// uncommitted tooling\n`);
+					await writeFile(log, "");
+					await assert.rejects(frozenCli("build"), /Tooling source.*dirty/);
+					assert.equal(await readFile(log, "utf8"), "");
+				} finally {
+					await writeFile(file, original);
+				}
+			},
+		);
+		await t.test(
+			"unknown tooling outside Git rejects before Docker actions",
+			async () => {
+				const unknown = join(directory, "unknown-tooling/deploy/local");
+				await mkdir(unknown, { recursive: true });
+				for (const name of [
+					"e2e-harness.mjs",
+					"runtime-material.mjs",
+					"harness-image-cache.mjs",
+				])
+					await cp(join(tooling, "deploy/local", name), join(unknown, name));
+				await writeFile(log, "");
+				await assert.rejects(
+					cli("build", frozenEnv, join(unknown, "e2e-harness.mjs")),
+					/Tooling source|Frozen source/,
+				);
+				assert.equal(await readFile(log, "utf8"), "");
+			},
+		);
+		for (const change of ["edit", "commit"])
+			await t.test(
+				`tooling ${change} during execution retains initial provenance and marks drift`,
+				async () => {
+					const file = join(tooling, "deploy/local/e2e-harness.mjs");
+					const original = await readFile(file);
+					const originalHash = createHash("sha256")
+						.update(original)
+						.digest("hex");
+					try {
+						await frozenCli("build", {
+							TEST_TOOLING_CHANGE: change,
+							TEST_TOOLING_ROOT: tooling,
+							TEST_TOOLING_MARKER: join(directory, `changed-${change}`),
+						});
+						const receipt = JSON.parse(
+							await readFile(join(state, "deployment-receipt.json"), "utf8"),
+						);
+						assert.equal(receipt.tooling.revision, toolingSha);
+						assert.equal(receipt.tooling.dirty, false);
+						assert.equal(
+							receipt.tooling.files["e2e-harness.mjs"],
+							originalHash,
+						);
+						assert.equal(receipt.toolingDrift, true);
+						assert.equal(receipt.source.revision, nextSha);
+						if (change === "edit") {
+							assert.equal(receipt.toolingAfter.dirty, true);
+							assert.notEqual(
+								receipt.toolingAfter.files["e2e-harness.mjs"],
+								originalHash,
+							);
+						} else assert.notEqual(receipt.toolingAfter.revision, toolingSha);
+					} finally {
+						await writeFile(file, original);
+						await execFileAsync("git", ["checkout", "--detach", toolingSha], {
+							cwd: tooling,
+						});
+					}
+				},
+			);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

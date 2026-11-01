@@ -94,8 +94,11 @@ node deploy/local/e2e-harness.mjs build
 `FROZEN_APP_SHA` 必须为原应用的 40 位 commit SHA。两个输入须同时提供，source 必须是同一
 Git repository 的完整 worktree root，已有 source pin、干净 HEAD 和期望 SHA 必须一致。
 该模式只用于分阶段命令，拒绝 `sync` 和 `all`，不追随新的 upstream。
-`deployment-receipt.json` 分别记录应用 source 和工具 revision、dirty 状态与脚本摘要；工具版本
-不能成为旧镜像的来源。原有组件输入、目标 profile 和镜像验证仍然执行。
+执行前还会确认工具来自已跟踪的干净 Git root，拒绝 dirty 或未知工具身份。
+`deployment-receipt.json` 分别记录应用 source 和执行前冻结的工具 revision、dirty 状态与脚本摘要；
+工具版本不能成为旧镜像的来源。运行中工具被编辑或提交时，保留初始身份，并以
+`toolingDrift: true` 和 `toolingAfter` 明确标识变化；该回执不能用于验收，不能把最初执行归到新工具。
+原有组件输入、目标 profile 和镜像验证仍然执行。
 
 默认使用完整 Harness。确认共享 base receipt、独立端口、TLS 和 loopback API 后，只有 Web-only
 变更可以运行 `node deploy/local/e2e-harness.mjs app`；涉及 API、Worker、Runtime、目录、身份、
