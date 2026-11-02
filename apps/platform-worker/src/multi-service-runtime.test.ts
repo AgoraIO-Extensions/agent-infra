@@ -16,7 +16,10 @@ import type {
 } from "@kubernetes/client-node";
 import { ObjectSerializer } from "@kubernetes/client-node/dist/gen/models/ObjectSerializer.js";
 import { describe, expect, it } from "vitest";
-import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
+import {
+	WorkloadKubernetesError,
+	type WorkerKubernetesClientV1,
+} from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 import {
 	createMultiServiceRuntimeOperations,
@@ -548,6 +551,42 @@ describe("multi-service resource policy", () => {
 		expect(recorded.calls).not.toContain(
 			`replace Deployment/${workloadResourceNameV1("agent-a")}-web`,
 		);
+	});
+
+	it("re-reads and retries a Deployment update after a Kubernetes conflict", async () => {
+		const fake = fakeClient();
+		let conflictInjected = false;
+		const replace = fake.client.replace.bind(fake.client);
+		const conflicted: WorkerKubernetesClientV1 = {
+			...fake.client,
+			async replace(object) {
+				if (object.kind === "Deployment" && !conflictInjected) {
+					conflictInjected = true;
+					throw new WorkloadKubernetesError("conflict", {
+						status: 409,
+						kind: "Deployment",
+						verb: "update",
+					});
+				}
+				return replace(object);
+			},
+		};
+		const operations = createMultiServiceRuntimeOperations({
+			client: conflicted,
+			policy: basePolicy,
+		});
+		const value = desired();
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(value);
+		const key = `Deployment/${workloadResourceNameV1("agent-a")}-web`;
+		const live = fake.resources.get(key) as V1Deployment;
+		fake.resources.set(key, {
+			...live,
+			spec: { ...live.spec, replicas: 2 },
+		} as V1Deployment);
+		await operations.apply(value);
+		expect(conflictInjected).toBe(true);
 	});
 
 	it.each([
