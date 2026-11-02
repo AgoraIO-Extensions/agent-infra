@@ -159,6 +159,7 @@ export function createWorkspaceSnapshotServiceV1(
 				| Awaited<ReturnType<WorkspaceSnapshotSpoolV1["spool"]>>
 				| undefined;
 			let objectRef: string | undefined;
+			let objectVersion: string | undefined;
 			try {
 				spool = await options.spool.spool(input.body, 2 * 1024 ** 3);
 				const archive: WorkspaceSnapshotArchiveDescriptorV1 =
@@ -181,6 +182,7 @@ export function createWorkspaceSnapshotServiceV1(
 					expiresAt: new Date(now().getTime() + 5 * 60_000).toISOString(),
 					body: spool.replay(),
 				});
+				objectVersion = stored.version;
 				const record: WorkspaceSnapshotRecordV1 = {
 					snapshotId: `snapshot_${randomUUID()}`,
 					ownerType: principal.kind,
@@ -207,7 +209,7 @@ export function createWorkspaceSnapshotServiceV1(
 			} catch (error) {
 				if (objectRef) {
 					try {
-						await options.storage.remove(objectRef, "");
+						await options.storage.remove(objectRef, objectVersion ?? "");
 					} catch {}
 				}
 				throw new WorkspaceSnapshotServiceErrorV1(errorCode(error));
