@@ -414,6 +414,119 @@ interface MultiServiceOwnershipOptionsV1 {
 	readonly allowOwnershipTransition?: boolean;
 }
 
+// Compare only after applying known API defaults; unknown or nondefault fields still drift.
+function defaultImagePullPolicy(image?: string) {
+	if (image?.includes("@")) return "IfNotPresent";
+	const reference = image?.slice(image.lastIndexOf("/") + 1) ?? "";
+	const tagIndex = reference.lastIndexOf(":");
+	const tag = tagIndex >= 0 ? reference.slice(tagIndex + 1) : undefined;
+	return tag === undefined || tag === "latest" ? "Always" : "IfNotPresent";
+}
+
+function normalizedWorkloadSpec(workload: V1Deployment | V1StatefulSet) {
+	const spec = workload.spec;
+	if (!spec?.template.spec) return spec;
+	const pod = spec.template.spec;
+	const probe = (value: V1Container["readinessProbe"]) =>
+		value && {
+			initialDelaySeconds: 0,
+			timeoutSeconds: 1,
+			periodSeconds: 10,
+			successThreshold: 1,
+			failureThreshold: 3,
+			...value,
+			...(value.httpGet
+				? { httpGet: { path: "/", scheme: "HTTP", ...value.httpGet } }
+				: {}),
+		};
+	const container = (value: V1Container) => ({
+		imagePullPolicy: defaultImagePullPolicy(value.image),
+		terminationMessagePath: "/dev/termination-log",
+		terminationMessagePolicy: "File",
+		...value,
+		envFrom: value.envFrom ?? [],
+		ports: (value.ports ?? []).map((port) => ({ protocol: "TCP", ...port })),
+		readinessProbe: probe(value.readinessProbe),
+		livenessProbe: probe(value.livenessProbe),
+		startupProbe: probe(value.startupProbe),
+	});
+	const defaults =
+		workload.kind === "Deployment"
+			? {
+					progressDeadlineSeconds: 600,
+					strategy: { type: "RollingUpdate" },
+				}
+			: {
+					podManagementPolicy: "OrderedReady",
+					updateStrategy: { type: "RollingUpdate" },
+					ordinals: { start: 0 },
+				};
+	const normalized = {
+		replicas: 1,
+		revisionHistoryLimit: 10,
+		...defaults,
+		...spec,
+		template: {
+			...spec.template,
+			spec: {
+				dnsPolicy: "ClusterFirst",
+				restartPolicy: "Always",
+				schedulerName: "default-scheduler",
+				terminationGracePeriodSeconds: 30,
+				...pod,
+				containers: pod.containers.map(container),
+				initContainers: (pod.initContainers ?? []).map(container),
+				volumes: (pod.volumes ?? []).map((volume) => ({
+					...volume,
+					...(volume.configMap
+						? { configMap: { defaultMode: 420, ...volume.configMap } }
+						: {}),
+					...(volume.secret
+						? { secret: { defaultMode: 420, ...volume.secret } }
+						: {}),
+					...(volume.projected
+						? { projected: { defaultMode: 420, ...volume.projected } }
+						: {}),
+					...(volume.downwardAPI
+						? { downwardAPI: { defaultMode: 420, ...volume.downwardAPI } }
+						: {}),
+				})),
+			},
+		},
+	};
+	if (workload.kind === "Deployment") {
+		const strategy = (spec as V1Deployment["spec"])?.strategy;
+		Object.assign(normalized, {
+			strategy: {
+				type: "RollingUpdate",
+				...strategy,
+				...((strategy?.type ?? "RollingUpdate") === "RollingUpdate"
+					? {
+							rollingUpdate: {
+								maxSurge: "25%",
+								maxUnavailable: "25%",
+								...strategy?.rollingUpdate,
+							},
+						}
+					: {}),
+			},
+		});
+	} else {
+		const strategy = (spec as V1StatefulSet["spec"])?.updateStrategy;
+		Object.assign(normalized, {
+			updateStrategy: {
+				type: "RollingUpdate",
+				...strategy,
+				...((strategy?.type ?? "RollingUpdate") === "RollingUpdate"
+					? { rollingUpdate: { partition: 0, ...strategy?.rollingUpdate } }
+					: {}),
+			},
+		});
+	}
+	// The client deserializes omitted optional fields as undefined.
+	return JSON.parse(JSON.stringify(normalized)) as unknown;
+}
+
 function deployment(
 	value: MultiServiceDesired,
 	resource: Extract<
@@ -963,8 +1076,8 @@ export function createMultiServiceRuntimeOperations(options: {
 		if (
 			(object.kind === "Deployment" || object.kind === "StatefulSet") &&
 			isDeepStrictEqual(
-				(current as T & { spec?: unknown }).spec,
-				(object as T & { spec?: unknown }).spec,
+				normalizedWorkloadSpec(current as V1Deployment | V1StatefulSet),
+				normalizedWorkloadSpec(object as V1Deployment | V1StatefulSet),
 			) &&
 			Object.entries(object.metadata?.labels ?? {}).every(
 				([key, expected]) => current.metadata?.labels?.[key] === expected,
