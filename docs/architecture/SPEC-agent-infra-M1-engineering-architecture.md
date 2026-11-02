@@ -1410,6 +1410,139 @@ Session Sandbox，以及 §10.9 等各 Driver 的 Conversation 文件边界。�
 - **不变。** 跨 Conversation 与跨 Session 隔离及其负向验收、§10.8 的模型错误脱敏、Connection 授权，
   以及 §10.11 对私有 lane 的要求（只用于平台中介调用）均保持不变。
 
+### 10.15 工作区快照（M1.1）
+
+本节落实 [PRD 5.8](../prd/PRD-agent-platform-M1.md#58-工作区快照m11)，决策见
+[ADR-0037](../adr/0037-content-addressed-workspace-snapshots.md)。仅自定义 Agent 启用，
+不改变 M1 标准模板、备用实例、Session 主键和现有可写卷。快照不是 File Grant、Skill 包、
+镜像或业务数据备份，不能复用这些资源的授权作为快照授权。
+
+#### 10.15.1 接收与内容寻址
+
+`platform-api` 接收经过认证的 V2 上传流，Core 决定主体、配额与幂等，Store 保存快照元数据、
+配置引用及审计；对象存储保存不可变字节。使用既有部署单元与对象存储 Adapter，
+不新增平台 Build Service，不读取 Connection 数据库或保存 Provider Credential。
+
+- `POST /api/v2/workspace-snapshots` 使用 Bearer 凭证、必填 `Idempotency-Key`、
+  `Content-Type: application/x-tar` 和 `X-Content-SHA256`。内容为 gzip 压缩的 tar；
+  SHA-256 对传输的归档字节计算，响应 `digest` 为 `sha256:<hex>`。接收端流式计算，
+  不信任客户端的长度或摘要，不把整个上限归档缓存在内存。
+- 接收先保留上传配额，写入不可公开的临时对象；解压校验通过后固定对象版本，再用短事务
+  原子保存 ready 元数据、幂等结果、配额和审计。事务失败的对象只能由未发布对象清理器回收，
+  不能成为可绑定的快照；不能因同摘要命中另一主体的对象而跳过授权、配额或内容验证。
+  上传中断释放预约；持久预约有期限，并由恢复任务核实后释放，不能重复计费或无限占用。
+- `snapshotId` 是主体范围内资源身份，digest 只标识字节，不授予读取权限。保存上传主体、
+  归档大小、解压大小、文件数、对象版本、来源、创建时间和状态；客户端不能指定存储位置。
+- 同一主体与幂等键绑定方法、来源元数据和实际内容摘要。重放仍认证、验证上传字节，
+  返回同一 snapshotId（首次 201、重放 200）；不同内容或元数据返回 409。摘要不符为 422，
+  超限为 413，非法结构/明显凭据为 422，限流为 429，错误只含稳定白名单码。
+- `GET /api/v2/workspace-snapshots` 分页列出本人元数据；`GET .../{id}` 返回本人快照详情及
+  有权查看的绑定引用；`DELETE .../{id}` 仅删除无任何有效引用的本人快照，存在引用返回 409。
+  删除先持久标记、禁止新绑定，再幂等删除对象并记录结果；重复删除本人 tombstone 返回成功。
+  无权访问与未知 ID 使用同一 `RESOURCE_UNAVAILABLE`，不得通过摘要探测其他主体内容。
+  不提供内容下载。Web 使用既有浏览器认证/CSRF 路径访问相同 Core 用例，不能把 Cookie
+  当成 Bearer；API credential 继续检查操作范围和主体有效性。
+
+上传来源为直接上传，或受信 Builder/CI 产出。仓库来源记录清除 userinfo/query/fragment 的
+仓库标识、commit SHA、产出摘要及真实 Connection 调用关联。关联按
+[Connection PRD §9](../prd/PRD-connection-M1.md#9-web-与审计)和
+[Connection HLD §3](HLD-connection-M1.md#3-系统上下文)的既有独立授权边界消费；关联 ID
+本身不是授权证明。服务端核验受信生产者、当前主体、产物摘要和授权调用的绑定后才接受
+仓库来源，不接受客户端自报 Grant、Token 或 URL 作为证明。未经核验不能标记为 Builder
+来源；直接上传仍按完整接收门禁处理。运行期只读取平台存储的对象版本，不访问外部 Git。
+
+#### 10.15.2 归档与配额门禁
+
+归档须非空、只有一个根目录。校验全部有效 tar header（含扩展 header），拒绝绝对路径、
+`..`、NUL、重复路径、路径类型冲突、设备/FIFO/socket、越界链接、稀疏文件与未知条目类型。
+内部相对符号链接和硬链接只有在完整链接图解析后仍位于本根、无循环且目标有效时才接受；
+解包不能沿已写出的链接创建后续条目。文件名按 UTF-8 校验，单路径最多 1024 字节，
+最多 100,000 个条目；流式累计实际展开字节，不能依赖 header 声明避免解压炸弹。
+解包不保留 UID/GID、setuid/setgid、扩展 ACL 或 capabilities，只保留普通文件所需可执行位。
+
+接收端对条目流检测明显私钥、云 AccessKey、GitHub/GitLab Token 等凭据模式，包含跨块匹配；
+命中只记录固定错误码，不回显路径、命中值或正文。materializer 独立重验摘要与结构，
+不能因接收端曾成功而接受损坏对象。配额按 PRD 5.8 执行；主体累计包括尚未清理的 tombstone
+和上传预约，Agent 同时校验归档与展开大小。限流/并发、上传超时、临时空间、保留期及
+解包资源预算由部署配置且在启动时校验；并发预约、绑定及删除须在 Store 事务内防止竞态。
+
+#### 10.15.3 配置绑定与权限
+
+V2 自定义 `source` 增加 `workspaceSnapshots: [{snapshotId, name}]`，不接受客户端 digest、
+mountPath 或 archiveLocation。name 使用 1–63 字符 Kubernetes DNS label 且在集合内唯一，
+挂载路径唯一派生为 `/opt/agent/workspaces/<name>`。标准模板严格拒绝此字段，
+多服务 manifest 白名单不增加用户卷或 init container 字段；已有 mount 与快照根相同、
+为其祖先或后代均拒绝，保留 `/workspace`、`/tmp`、`/data` 和 Skill 根。
+
+Core 校验快照属于当前上传主体，且主体具备目标 Agent 的创建/配置权限；创建申请提交和
+审批受理均重验申请主体及引用有效性，审批管理员不变成快照 owner。共同 Owner 可以保留
+已授权版本的原引用，但不能据此读取、追加、替换或解绑别人的快照；系统管理员治理操作
+也不授予快照内容权限。回滚既有 Agent 的受信历史版本沿原配置授权，只恢复原绑定，
+不能附带引入新 snapshotId；该行为不开放个人快照资源的管理权限。
+
+配置事务按稳定顺序锁定主体配额、快照和 Agent，保存不可变的
+`{snapshotId, name, digest, sizeBytes, unpackedSizeBytes}`、配置/Runtime 修订、必要审计与 outbox。
+申请也持有引用。失败不得产生半成品 Agent 或悬挂引用；并发 DELETE/GC 不能删除待提交绑定。
+API/浏览器投影仅包含获准元数据，不返回对象 key、签名 URL、内容或内部校验报告。
+变更快照集合推进 Runtime 修订；在执行排空后重新准备原 Sandbox，不热替换正在执行的输入。
+当前、候选和保留历史修订分别持有引用，回滚沿原版本恢复；旧缓存不可通过新挂载读取。
+
+#### 10.15.4 Worker 物化与网络
+
+Worker 从服务端持久配置构造 Workload/Sandbox 的快照输入，结合当前 Agent、Session、
+namespace、修订和 fence 校验；请求、Runtime 回包和 Pod annotation 都不能扩大来源或路径。
+部署绑定固定 digest 的平台 TypeScript materializer 镜像、资源额度和对象存储精确出网目标。
+Worker 签发绑定单对象版本、只读方法和短期限的 URL，经仅 init container 挂载的专属 Secret
+交付；不写入参数、annotation、普通 env、日志或业务容器。长期签名凭据仅在 Worker，
+短期授权过期后沿原 fence 重新准备，不能放宽目标或静默回退。
+
+| 入口 | 平台物化资源 | 业务容器挂载 |
+| --- | --- | --- |
+| self-managed 单镜像 | Agent 专属 RWO retain 缓存卷，按部署 storage profile 创建 | 只挂当前修订所需子目录，只读 |
+| platform-adapter Session | 每个 Sandbox 独立、有 sizeLimit 的 emptyDir；验证 Workload 使用独立临时卷 | 本 Session 只读；不共享 RWO 缓存 |
+| self-managed 多服务 | 每个 Deployment/StatefulSet/迁移 Job 的 Pod 独立 emptyDir | 每个 workload 容器同路径只读；迁移 Job 仍不挂业务 PVC |
+
+materializer 先下载到私有临时目录，验证后原子发布内容与 `.snapshot-digest` 标记；标记位于
+平台缓存元数据区，不能被归档文件覆盖。缓存命中必须同时匹配已验证完整内容和版本，
+部分下载不能当作命中。切换在旧执行/Pod 排空后完成；旧缓存不挂给新版本，清理失败时
+拒绝开放新路由。停止再启动可复用同 Agent 完整缓存；Session emptyDir 丢失后按相同版本
+重新下载。所有卷继续核对真实 UID/ownership/fence，不能引用外来或另一 Agent 的同名卷。
+
+materializer 使用既有非 root、只读根文件系统、无额外 capabilities 和禁用 Kubernetes
+token 的安全配置。Agent 容器的快照 volumeMount 必须 `readOnly: true`，且不能挂载其
+父目录或签名授权 Secret。实际 Pod 的 init container、image digest、参数、卷、挂载与
+安全配置须与平台期望逐项匹配，漂移拒绝就绪。
+
+物化出网只允许部署批准的对象存储目标和必要 DNS，禁止任意公网、外部 Git、Kubernetes API
+和数据库。NetworkPolicy 作用于整个 Pod，不能声称它隔离 init 与业务容器；业务容器即使能
+到达对象端点，也不能取得 init 专属短期授权或读取对象。真实环境须同时验证目标限制及
+未授权对象读取被拒绝，不新增模型/Connection 出网权限。
+
+下载、结构、摘要、限额和授权失败使用固定原因码，进入现有有界重试、不可用和候选失败恢复
+流程。物化完成不是业务 ready；仍须通过原镜像/Runtime/业务探测。只记录快照 ID、摘要、
+字节数、耗时、尝试次数及原因码；不记录文件路径、内容、签名 URL 或原始异常。
+
+#### 10.15.5 保留、清理与验收
+
+未引用快照默认保留 7 天，部署可配置并向上传者展示到期时间；引用计数覆盖待审批申请、
+当前/候选/保留历史配置。解绑只创建新版本，不销毁历史引用；现阶段没有 Agent 删除 API，
+不能为 GC 伪造删除事实。部署受控数据清理释放过期申请/历史配置引用后，Worker 才可
+事务认领过期未引用快照、标记 deleting、幂等删除对象并写审计；在途物化授权有效期内
+不删除对象。失败保留 tombstone 与待重试事实，不能提前减去存储用量或报告删除成功。
+将来的 Agent 删除使用同一引用释放规则，不能级联删除另一 Agent 仍引用的快照。
+
+对象存储使用部署加密、私有 bucket 与最小权限，API 只写接收对象、Worker 只读物化并执行
+受控 GC；凭据不进入 Agent。观测包含主体用量、物化时延/失败率/重试、GC 延迟与失败，
+指标不以用户路径或内容作 label。读取元数据及绑定变化同样写入既有审计，必要审计失败
+不返回虚假成功。
+
+确定性测试覆盖归档、幂等/并发配额、owner/co-owner/admin/其他主体、原子引用、三类挂载、
+缓存恢复、签名过期、漂移和 GC；kind 验证实际只读与隔离。ACK 在包含完整实现的 current-main
+独立 namespace 中，以 repo + 小环境快照验证 platform-adapter 真实任务及多服务自有入口、
+升级/回滚/停启/回收、两主体隔离、内容泄漏和无快照基线对比。保留 source SHA、镜像 digest、
+Agent/Session/Execution/Pod UID、快照归档与内容树摘要及真实输出。fixture、Pod Ready、历史
+回执不能替代该证据；最终人工签收独立完成。
+
 ## 11. Agent Runtime 边界
 
 ### 11.1 Platform Conversation Contract
