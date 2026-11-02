@@ -169,7 +169,10 @@ import {
 	type WecomRoutesDependenciesV1,
 } from "./http/wecom-routes.js";
 import { registerWecomSetupRoutesV1 } from "./http/wecom-setup-routes.js";
-import { registerWorkspaceSnapshotRoutesV1, type WorkspaceSnapshotRouteDependenciesV1 } from "./http/workspace-snapshot-routes.js";
+import {
+	registerWorkspaceSnapshotRoutesV1,
+	type WorkspaceSnapshotRouteDependenciesV1,
+} from "./http/workspace-snapshot-routes.js";
 import { SseResourceTracker } from "./sse-resource-tracker.js";
 
 export const platformApiService = "platform-api";

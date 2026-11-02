@@ -202,7 +202,13 @@ function parseSourceSelection(
 			manifest: base.manifest,
 			interactionMode: "self-managed",
 			identityResponsibility: "self-managed",
-			workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
+			...(base.workspaceSnapshots === undefined
+				? {}
+				: {
+						workspaceSnapshots: parseWorkspaceSnapshots(
+							base.workspaceSnapshots,
+						),
+					}),
 		};
 	}
 	if (
@@ -227,7 +233,13 @@ function parseSourceSelection(
 			imageReference: base.imageReference,
 			interactionMode: "self-managed",
 			identityResponsibility: base.identityResponsibility,
-			workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
+			...(base.workspaceSnapshots === undefined
+				? {}
+				: {
+						workspaceSnapshots: parseWorkspaceSnapshots(
+							base.workspaceSnapshots,
+						),
+					}),
 		};
 	}
 	if (
@@ -238,7 +250,11 @@ function parseSourceSelection(
 		kind: "custom",
 		imageReference: base.imageReference,
 		interactionMode: "platform-adapter",
-		workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
+		...(base.workspaceSnapshots === undefined
+			? {}
+			: {
+					workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
+				}),
 	};
 }
 
@@ -302,7 +318,13 @@ export function parseAdmittedSource(
 			identityResponsibility: "self-managed",
 			connectionEnabled: false,
 			manifest: base.manifest,
-			workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
+			...(base.workspaceSnapshots === undefined
+				? {}
+				: {
+						workspaceSnapshots: parseWorkspaceSnapshots(
+							base.workspaceSnapshots,
+						),
+					}),
 		};
 	}
 	if (base.kind === "standard") {
@@ -347,7 +369,13 @@ export function parseAdmittedSource(
 			interactionMode: "self-managed",
 			identityResponsibility: base.identityResponsibility,
 			connectionEnabled: base.connectionEnabled,
-			workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
+			...(base.workspaceSnapshots === undefined
+				? {}
+				: {
+						workspaceSnapshots: parseWorkspaceSnapshots(
+							base.workspaceSnapshots,
+						),
+					}),
 		};
 	}
 	if (
@@ -360,7 +388,11 @@ export function parseAdmittedSource(
 		admissionRevision: base.admissionRevision,
 		interactionMode: "platform-adapter",
 		connectionEnabled: base.connectionEnabled,
-		workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
+		...(base.workspaceSnapshots === undefined
+			? {}
+			: {
+					workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
+				}),
 	};
 }
 
