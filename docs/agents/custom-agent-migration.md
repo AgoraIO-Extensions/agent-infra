@@ -141,18 +141,18 @@ Workload 就绪分别记录，只有真实业务操作完成才能证明该用�
 
 ## 本轮冻结结论（2026-11-02）
 
-目标源码为 `bcf3a6618f0c99975cf5a78a5079e0b211a601ba`，整体验收未完成。
-候选容量回执及与源码绑定的 Runtime 测量已通过，但尚未形成固定的两个 Agent 业务验证窗口。
-迁入脚本已加入私有回执；回执存在、接口受理和候选测量不能替代目标源码的真实业务验收。
+源码冻结为 `a6ed4ebc6d586ca5b0be2d4745dc5fe60f41871e`。在 B 的 rebuild 窗口未形成可用回执后，
+按授权在独立环境完成了两个 Agent 的迁入、业务链路和升级验收；B 的 `agent-infra` 环境仍不计入本次
+验收。独立环境的验收回执包含 source-bound bindings、Owner session、幂等重放、运行中取消排空、
+实际 Sandbox imageID 和 readiness 读回。
 
 | 范围 | 状态 | 已有证据与边界 |
 | --- | --- | --- |
-| 多服务 manifest 升级 | 代码已验证 | [PR #3866](https://github.com/AgoraIO-Extensions/agent-infra/pull/3866) 的代码基线 `af1aa3039b2d109e36a6c30f07c45cc1b3932bb6` 通过 155 项聚焦测试；生产准入实现接 Core 的测试覆盖换行 JSON、pretty JSON、YAML，以及请求替换、canonical 内容替换和缺失绑定的拒绝；不证明实际 Workload 升级成功 |
-| 目标环境与容量 | 环境阻塞 | 有效 Worker capacity profiles 仍为四个标准模板；曾因 `SESSION_RESERVE_DEPLOYMENT_CONFIGURATION_CONFLICT` 反复退出，候选容量回执尚不等于运行配置已生效 |
-| 平台入口单服务临时探针 | 环境阻塞 | 旧镜像探针取得 201，重放为 200 且 Agent ID 相同；随后旧 Runtime Pod 退出，不能作为目标源码绑定的迁入验收 |
-| 自有入口多服务临时探针 | 环境阻塞 | 旧镜像探针取得 201、重放 200，并曾就绪；Task API 返回 503 `RUNTIME_UNAVAILABLE`。这既不证明平台任务能力，也不替代固定新环境中的自有入口真实业务 |
-| 固定新环境中的自有入口业务 | 未测试 | 尚无该环境的真实业务完成证据，不能从 ready 或管理接口推导成功 |
-| 真实升级与升级失败恢复 | 未测试 | 尚无获批的替换镜像 Digest 和 Owner 验证窗口；代码测试不代签运行升级或回滚 |
+| 多服务 manifest 升级代码 | 已合入 | [PR #3866](https://github.com/AgoraIO-Extensions/agent-infra/pull/3866) 已合入，Backend integration CI 和 hosted checks 全部通过；实际 Workload 仍需绑定固定环境验收 |
+| 独立环境单服务 platform-adapter | 已验证 | Agent 创建返回 201，固定幂等键重放返回 200；首轮、续接、运行中取消排空和取消后任务均完成；Owner lifecycle 将 `sha256:5811e3c9baeee6bf81f89d41cd1247210f63cf11a8b878fad1b981ef6521586d` 升级到获准的 `sha256:48cde4417085e594130eae5d22cf50f19e88b7234c7128f7d1088ff71a0ce76b`，实际 Sandbox imageID、`available` 和 `ready` 均匹配 |
+| 独立环境多服务 self-managed | 已验证 | 完整 manifest 通过 Owner `upgrade_custom_manifest` 更新；入口服务使用 StatefulSet 与 PVC，另一个服务使用 Deployment；两项服务的 imageID、Endpoint、Ingress、浏览器登录、后端交互、刷新和拒绝访问均通过 |
+| replacement 容量与运行配置 | 已验证 | replacement 镜像的 Runtime 测量返回 completed、READY 和 model facts；容量配置发布到 Worker 并完成挂载读回；升级后的两个 Session Sandbox 均为 Ready 且使用目标 digest |
+| B 的 `a17531d4…` rebuild-01/rebuild-02 | 未签收 | 当前只读检查没有得到两个 rebuild 的完整 source-bound bindings、业务回执和发布窗口；不能用独立 fallback 回执冒充 B 环境签收 |
 
 多服务升级由 Owner 浏览器会话调用 `POST /api/v2/agents/{agentId}/lifecycle`，
 提交 `schemaVersion: 1`、`command: "upgrade_custom_manifest"` 和完整 `manifest`。
