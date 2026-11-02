@@ -19,6 +19,7 @@ export interface WorkspaceSnapshotRouteDependenciesV1 {
 		digest: string;
 		source: unknown;
 		body: ReadableStream<Uint8Array>;
+		signal?: AbortSignal;
 	}): Promise<{ record: WorkspaceSnapshotRecordV1; replayed: boolean }>;
 	list(material: string): Promise<readonly WorkspaceSnapshotRecordV1[]>;
 	get(
@@ -50,6 +51,11 @@ export function registerWorkspaceSnapshotRoutesV1(
 	app: Hono,
 	dependencies: WorkspaceSnapshotRouteDependenciesV1,
 ) {
+	app.use("/api/v2/workspace-snapshots*", async (context, next) => {
+		context.header("Cache-Control", "private, no-store");
+		context.header("Referrer-Policy", "no-referrer");
+		await next();
+	});
 	app.post("/api/v2/workspace-snapshots", async (context) => {
 		const metadata = requestMetadata(context.req.raw);
 		try {
@@ -74,6 +80,7 @@ export function registerWorkspaceSnapshotRoutesV1(
 				digest: `sha256:${digest}`,
 				source: parsed.source,
 				body: context.req.raw.body,
+				signal: context.req.raw.signal,
 			});
 			return context.json(
 				projection(result.record),
@@ -107,7 +114,14 @@ export function registerWorkspaceSnapshotRoutesV1(
 					),
 				} as const;
 				const protocol = mapped[error.code];
-				return context.json(protocol.body, protocol.status);
+				return context.json(
+					protocol.body,
+					error.code === "quota_exceeded"
+						? 413
+						: error.code === "invalid_archive"
+							? 422
+							: protocol.status,
+				);
 			}
 			return context.json(
 				new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId).body,

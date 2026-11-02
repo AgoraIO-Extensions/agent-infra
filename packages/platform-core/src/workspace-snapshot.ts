@@ -15,6 +15,11 @@ export type WorkspaceSnapshotErrorCodeV1 =
 	| "duplicate_name"
 	| "reserved_mount_path"
 	| "snapshot_limit_exceeded"
+	| "invalid_input"
+	| "conflict"
+	| "quota_exceeded"
+	| "not_found"
+	| "unavailable"
 	| "bound";
 
 export class WorkspaceSnapshotBindingErrorV1 extends Error {
