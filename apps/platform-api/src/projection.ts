@@ -2,6 +2,7 @@ import {
 	AgentApplicationProjectionV1Schema,
 	AgentDetailProjectionV1Schema,
 	AgentProjectionV1Schema,
+	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import type {
@@ -27,6 +28,7 @@ type ApplicationProjection = ReturnType<
 	typeof AgentApplicationProjectionV1Schema.parse
 >;
 type AgentProjection = ReturnType<typeof AgentProjectionV1Schema.parse>;
+type AgentProjectionV2 = ReturnType<typeof AgentProjectionV2Schema.parse>;
 type AgentDetailProjection = ReturnType<
 	typeof AgentDetailProjectionV1Schema.parse
 >;
@@ -73,7 +75,7 @@ interface ApiProjectionMetadata {
 
 function sourceMatches(
 	configuration: AgentConfigurationProjectionV1,
-	source: AgentProjection["source"],
+	source: AgentProjectionV2["source"],
 ): boolean {
 	if (configuration.source.kind !== source.kind) return false;
 	if (configuration.source.kind === "standard") {
@@ -82,6 +84,7 @@ function sourceMatches(
 			source.templateId === configuration.source.templateId
 		);
 	}
+
 	if (source.kind !== "custom") return false;
 	return (
 		source.interactionMode === configuration.source.interactionMode &&
@@ -119,6 +122,47 @@ export function createPlatformProjectionReaders(
 			byOwners.set(key, hydrated);
 		}
 		return hydrated;
+	}
+
+	async function projectAgentInternal(
+		agent: AgentManagementAgentProjectionV1,
+		metadata: ProjectionMetadata | ApiProjectionMetadata,
+		version: 1 | 2,
+	): Promise<AgentProjection | AgentProjectionV2> {
+		try {
+			const { presentation, wire } = await configurationProjection(
+				agent.agentId,
+				agent.management,
+				metadata,
+			);
+			const value = {
+				schemaVersion: version,
+				agentId: agent.agentId,
+				name: agent.name,
+				description: agent.description,
+				source: presentation.source,
+				managementStatus: agent.management.status,
+				serviceAvailability: agent.management.serviceAvailability,
+				configuration:
+					version === 2
+						? (() => {
+								const { actions: _actions, ...configuration } = wire;
+								return configuration;
+							})()
+						: wire,
+				capabilities: {
+					...presentation.capabilities,
+					nativeMetadata: dependencies.nativeMetadataAvailable === true,
+				},
+				interactionUrl: presentation.interactionUrl,
+			};
+			return version === 2
+				? AgentProjectionV2Schema.parse(value)
+				: AgentProjectionV1Schema.parse(value);
+		} catch (error) {
+			recordHttpFailureContext({ failureStep: "projection.read", error });
+			throw error;
+		}
 	}
 
 	async function configurationProjection(
@@ -181,31 +225,17 @@ export function createPlatformProjectionReaders(
 		agent: AgentManagementAgentProjectionV1,
 		metadata: ProjectionMetadata | ApiProjectionMetadata,
 	): Promise<AgentProjection> {
-		try {
-			const { presentation, wire } = await configurationProjection(
-				agent.agentId,
-				agent.management,
-				metadata,
-			);
-			return AgentProjectionV1Schema.parse({
-				schemaVersion: 1,
-				agentId: agent.agentId,
-				name: agent.name,
-				description: agent.description,
-				source: presentation.source,
-				managementStatus: agent.management.status,
-				serviceAvailability: agent.management.serviceAvailability,
-				configuration: wire,
-				capabilities: {
-					...presentation.capabilities,
-					nativeMetadata: dependencies.nativeMetadataAvailable === true,
-				},
-				interactionUrl: presentation.interactionUrl,
-			});
-		} catch (error) {
-			recordHttpFailureContext({ failureStep: "projection.read", error });
-			throw error;
-		}
+		return (await projectAgentInternal(agent, metadata, 1)) as AgentProjection;
+	}
+	async function projectAgentV2(
+		agent: AgentManagementAgentProjectionV1,
+		metadata: ProjectionMetadata | ApiProjectionMetadata,
+	): Promise<AgentProjectionV2> {
+		return (await projectAgentInternal(
+			agent,
+			metadata,
+			2,
+		)) as AgentProjectionV2;
 	}
 
 	return {
@@ -257,6 +287,13 @@ export function createPlatformProjectionReaders(
 			},
 		): Promise<AgentProjection> {
 			return projectAgent(input.agent, input);
+		},
+		async readApiAgentProjectionV2(
+			input: ApiProjectionMetadata & {
+				readonly agent: AgentManagementAgentProjectionV1;
+			},
+		) {
+			return projectAgentV2(input.agent, input);
 		},
 		async readApplicationProjection(
 			input: ProjectionMetadata & {
@@ -310,6 +347,15 @@ export function createPlatformProjectionReaders(
 			}
 			return projectAgent(input.agent, input);
 		},
+		async readManagementAgentProjectionV2(
+			input: ProjectionMetadata & {
+				readonly agent?: AgentManagementAgentProjectionV1;
+			},
+		) {
+			if (!input.agent)
+				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", input.traceId);
+			return projectAgentV2(input.agent, input);
+		},
 
 		async readConfigurationAgentProjection(
 			input: ProjectionMetadata & { readonly agentId: string },
@@ -322,6 +368,18 @@ export function createPlatformProjectionReaders(
 				input.agentId,
 			);
 			return agent ? projectAgent(agent, input) : null;
+		},
+		async readConfigurationAgentProjectionV2(
+			input: ProjectionMetadata & { readonly agentId: string },
+		) {
+			const scope = input.identity.roles.includes("system_admin")
+				? ({ kind: "administrator" } as const)
+				: ({ kind: "owner", ownerId: input.identity.userId } as const);
+			const agent = await dependencies.managementQuery.getAgent(
+				scope,
+				input.agentId,
+			);
+			return agent ? projectAgentV2(agent, input) : null;
 		},
 	};
 }
