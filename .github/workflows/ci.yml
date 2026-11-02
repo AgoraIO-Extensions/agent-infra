@@ -284,8 +284,27 @@ jobs:
         run: pnpm check-types
       - name: Run pure package tests in parallel
         run: pnpm test:packages:parallel
-      - name: Run database and backend tests serially
-        run: pnpm test:packages:serial && pnpm test:apps:backend
+      - name: Run database and backend tests in parallel lanes
+        run: |
+          logs="$RUNNER_TEMP/backend-test-lanes"
+          mkdir -p "$logs"
+          # contracts 的 test 脚本会先重建 dist；等它落盘后再启动第二条轨道，
+          # 避免其他包在构建产物重建期间读取 dist。
+          pnpm test:packages:serial:contracts > "$logs/contracts.log" 2>&1 &
+          contracts_pid=$!
+          sleep 30
+          (pnpm test:packages:serial:rest && pnpm test:apps:backend) > "$logs/backend.log" 2>&1 &
+          backend_pid=$!
+          status=0
+          wait "$contracts_pid" || status=1
+          wait "$backend_pid" || status=1
+          echo "::group::contracts lane log"
+          cat "$logs/contracts.log"
+          echo "::endgroup::"
+          echo "::group::backend lane log"
+          cat "$logs/backend.log"
+          echo "::endgroup::"
+          exit "$status"
 
   ci_heavy:
     name: CI heavy validation
