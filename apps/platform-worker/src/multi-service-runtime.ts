@@ -178,6 +178,15 @@ function matchesEnvironmentSecrets(
 	);
 }
 
+function referencesSecret(spec: V1PodSpec | undefined, secretName: string) {
+	return [...(spec?.initContainers ?? []), ...(spec?.containers ?? [])].some(
+		(container) =>
+			container.envFrom?.some(
+				(entry) => entry.secretRef?.name === secretName,
+			) ?? false,
+	);
+}
+
 function memberResources(value: MultiServiceDesired) {
 	return value.multiService.resources.filter(
 		(resource) =>
@@ -1670,7 +1679,7 @@ export function createMultiServiceRuntimeOperations(options: {
 				if (
 					!current ||
 					!owned(current, value) ||
-					matchesEnvironmentSecrets(value, current.spec?.template.spec)
+					referencesSecret(current.spec?.template.spec, ref.name)
 				)
 					return false;
 			}
