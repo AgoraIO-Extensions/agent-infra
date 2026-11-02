@@ -1,5 +1,7 @@
 # ACK 重部署案例与迁移顺序（脱敏）
 
+性能样本、分位数口径及后续测量方案见 [ACK 性能报告](ACK-PERFORMANCE-REPORT.md)。
+
 这份记录对应 2026-10-27 至 2026-10-30 的 ACK 重部署演练。所有地址、账号、Token、Cookie、镜像 digest、
 Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本文只记录可复用的因果关系。
 
