@@ -322,9 +322,9 @@ function createPilotAgentMockServer(
 			const response = scenario.listMyWorkspaceSnapshots
 				? resolveResponse(scenario.listMyWorkspaceSnapshots, request)
 				: {
-				status: 200,
-				body: [],
-				};
+						status: 200,
+						body: [],
+					};
 			validateResponse(listMyWorkspaceSnapshotsOperation, response);
 			return jsonResponse(response);
 		}
