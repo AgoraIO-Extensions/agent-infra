@@ -88,10 +88,43 @@ source/template/image 和实际 Pod UID 哈希，记录创建、容器启动、R
 收据不包含 Pod/Namespace 名、缓存 ID、原始事件消息或凭据；原模型、validation、capacity
 收据及资源清理规则保持独立。
 
+## Reserve 性能观察与后续方案
+
+2026-11-02，source `0788e7eeddbf2aa31ac1a6e7ce99c0ebd2ab1e42` 的浏览器实测如下。
+分位数采用 nearest rank；四个标准 Agent、两个自定义 ACP 各三轮，仅代表有限负载。
+标准首字 p50 15.25 秒未达到 ≤3 秒目标。本轮按数据、已试方案和后续方案收口，不代签达标。
+该运行经过人工恢复，不计入 #3829 的两次干净重建。
+
+| 分组 | N | 点击到受理 p50/p95（ms） | 点击到首文本 p50/p95（ms） |
+| --- | --- | --- | --- |
+| 标准首轮 | 4 | 2348.8 / 3009.4 | 15253.8 / 20599.7 |
+| 自定义首轮 | 2 | 80972.1 / 81458.0 | 97677.3 / 127322.2 |
+| 同 Session 后续轮 | 12 | 449.5 / 1159.9 | 6494.4 / 15916.5 |
+
+已试标准 Session reserve 和 Worker CPU 0.5→2。此前 source `a17531d4c937575de272c785b70bc040c7d16345`
+四个冷首轮的受理 p50/p95 为 144401.3/146578.2 ms，首字为 151895.1/165347.6 ms。
+源码、资源、reserve、测量时段和 Provider 负载同时变化，只能作观察对比，不能单独归因某项优化。
+自定义首轮约 81 秒的受理前准备尚未拆开；增加等待预算不算优化。
+
+同一 18-execution cohort 的边界占比为 submit 前 4.43%、`runtime.submit` 内 50.55%、
+submit 后 45.02%；DB/Worker 时钟未校准，不能视为严格关键路径归因。accepted→claim 使用
+first authorization-start proxy，最大 348 ms，不是独立 claim 或纯排队计时。OpenCode/Pi
+首轮 submit 分别为 11221/9868 ms，包含 Host/Driver admission、prepare/route 与状态查询，
+不是原生初始化或 Provider TTFT。18 个 Driver completed facts 的 duration p50 为 2686 ms、
+范围 1580–14328 ms，使用 Driver 自身计时，与跨进程墙钟段分别记录。
+
+下一方案先补 Host dispatch/Driver execute/getStatus、native 初始化、Provider request-start
+到 first-token，以及事件交付/持久化的同域计时；自定义首轮补 202 之前的准备和缺失的 route
+观测。固定源码、镜像、配置、资源、模型和到达轨迹后做单变量对照，再选择优化点。若原生初始化
+占主导，再评审预热的生命周期、身份隔离、凭据和资源释放合同。Redis 未实现，当前证据不支持
+优先投入；先补计时与对照，再按工程 Spec 评估。#3779 的隔离、耗尽和清理仍需各自直接证据。
+
 ## 失败案例及修复规则
 
 | 现象 | 根因 | 固化到工作流的规则 |
 | --- | --- | --- |
+| 合法 custom 模型事件被时间校验拒绝 | Runtime 与测量进程时钟不同；事件按 cursor 排列，不保证 `occurredAt` 全局单调 | 保留 schema、执行绑定、cursor/phase、同域 started/finished 与 duration 校验；不以本机 `now` 或提交时间验证远端时间。测量提交/观察完成用本机同一时钟，原始模型事实不改写 |
+| 网络探针基线阶段出现 `ECONNRESET` | 客户端连通后关闭连接，TCP 替身未处理 socket error 导致进程退出 | 处理连接错误后重跑真实 ECI 基线；基线通过不代表 NetworkPolicy 生效。本次 ingress deny 13 次仍连通，allow/recovery/egress 未执行，不能回填为隔离通过 |
 | 发布日志含 Docker healthcheck 警告，被误判为构建失败 | 完整相位日志显示四模板已成功构建、探测及 push；实际退出在 RuntimeHost push，原命令又隐藏了 stderr | 按 build/probe/push/readback 分段归因；push 只输出固定错误类别和来源信息，不打印原始错误。出现警告不能代替定位退出命令，也不能以升级 Action 或重跑成功倒推根因 |
 | 固定 Codex arm64 下载在连接建立阶段超时而失败 | Codex 安装器原来只做一次固定归档请求，没有对明确的连接中断保留总预算内的重试 | Codex 归档、法律文件和模型目录继续使用原始固定 URL 与摘要；仅对明确的连接错误做最多三次有界重试，HTTP/TLS/校验错误立即失败。不要把 Codex 下载成功推断成 OpenCode 或完整镜像构建成功 |
 | 固定 OpenCode arm64 下载在收到部分归档后因连接被远端关闭而失败 | 安装器原来只做一次 fetch/arrayBuffer，未对可重试的 `UND_ERR_SOCKET` 保留总预算内的重试 | 固定版本、URL、TLS 和 SHA-256/SHA-512/可执行文件校验保持不变；仅对明确的连接中断做最多三次有界重试，丢弃部分字节，HTTP/TLS/校验错误立即失败。Hosted 构建与本地网络失败分开记录 |
@@ -111,7 +144,7 @@ source/template/image 和实际 Pod UID 哈希，记录创建、容器启动、R
 | 多服务资源逐个符合 schema，API 仍返回 `400` | 提交了多个 YAML document；平台接收的是单个包含 `schemaVersion`、`entryServiceName` 和 `resources` 的 System Manifest | 验证实际提交的整个文档格式与拓扑，不能只校验解析后手工拼装的资源数组 |
 | 多服务资源与 Pod 已 Ready，Agent 却在 `applying`/`observing` 间循环且没有 Ingress | Kubernetes SDK 将 `imagePullSecrets` 反序列化为 `V1LocalObjectReference` 实例；严格深比较把与部署策略同名的普通对象判为不同。正式校验后的 manifest hash 实际一致 | 复用结构比较函数，按相同字段和值校验拉取凭据引用；用真实 SDK 反序列化对象回归 Deployment、StatefulSet 和迁移 Job，并保留缺失、替换和重复引用的拒绝。只读 `observe=healthy` 后仍须发布新 Worker，完成入口和浏览器验收 |
 | Node HTTPS 正常，严格客户端仍拒绝私有证书 | leaf 缺少 Authority Key Identifier，或 CA 缺少 Key Usage；叠加系统默认 OpenSSL 扩展还会生成重复扩展 | 用显式 CA/leaf 扩展配置生成证书，包含 CA Key Usage、SKI/AKI 和入口 SAN；发布前用严格链与 hostname 校验，不能关闭 TLS 验证 |
-| 指定私有 CA 的登录探针成功，普通 Chrome 却报 `NET::ERR_CERT_AUTHORITY_INVALID` | 探针使用额外 CA 或公钥固定，浏览器默认信任库未接受当前证书链；这不能证明历史登录失败由 API rollout 引起 | 保留当前 TLS 失败，不以脚本成功代签普通浏览器；按[公共入口 TLS 验收](./ACK-REDEPLOY-WORKFLOW.md#公共入口-tls-验收与续期)分别核对默认信任、SAN/链/有效期与真实登录。修复结果须有现场回执 |
+| 指定私有 CA 的登录探针成功，普通 Chrome 却报 `NET::ERR_CERT_AUTHORITY_INVALID` | 探针和普通浏览器使用不同的信任配置；脚本成功不能证明默认浏览器已信任 | 按声明的默认或受控客户端模式签收。受控模式必须在新浏览器中实际导入交付 CA，保持 TLS/hostname 校验，完成登录/session/Cookie/刷新，并保留无 CA 和错误 hostname 拒绝；不使用证书忽略或 SPKI 例外，不把受控通过写成公网默认信任通过 |
 | 移植输入包仍携带旧证书，或换证后下一轮部署恢复旧材料 | capsule 采集的是静态文件，不负责证书签发和续期 | 环境 owner 明确续期与临期告警责任；核对 `ingress.tlsSecret`、bootstrap `tls.crt`/`tls.key` 与入口实际证书，并更新私有可移植输入；过期材料不得用于新的验收 |
 | 四模板 preflight 通过，API/Worker 仍未使用本轮验证与容量 | `all` 在 preflight 前部署配置，生成的新候选和容量记录没有自动回写消费者 | `runtime-inputs` 在 preflight 后发布声明的配置键并验证 rollout，再运行 mounted-capacity gate；不用手工复制或修改 Secret |
 | 三个新 Runtime 镜像在 ECI 长时间 `Pulling` | 发布 manifest 可见不等于目标 ECI 节点实际可拉取 | 每个模板先创建独立 ECI preflight Pod；拉取、启动、模型调用任一步失败都停止整个流程 |
@@ -174,6 +207,14 @@ source/template/image 和实际 Pod UID 哈希，记录创建、容器启动、R
 | bootstrap database 阶段突然失败且没有业务错误 | private values 文件权限不是 0600，工具在读取前 fail closed | 所有 values、input、credential、body 和 storageState 文件保持当前用户拥有且权限 0600；目录 0700 |
 | fresh 输入包在删除前被 Helm Schema 拒绝 | 新安装 ID 写入了不支持的 `bootstrap.installationId`，且数据库归属仍可能沿用旧值 | 新身份同时写入 bootstrap 输入的 `installationId` 与 values 的 `postgres.bootstrapInstallationId`；删除前渲染并核对 StatefulSet/PVC 的归属标签，不能放宽 Schema 或把旧 namespace 收养为新安装 |
 | 工作流自己创建的 namespace 无法执行 `destroy` | 清理入口要求历史通用标签，bootstrap 只写当前 installation ID 标签 | 清理必须把 namespace 的 `bootstrap-id` 与计划的 installation ID 比较，同时保留 cluster/namespace UID、完整资源清单和两项删除确认；缺失或不同归属在删除前失败 |
+
+## 受控浏览器 TLS 结果
+
+2026-11-02，隔离 Chromium/NSS 信任库导入部署 CA 后，真实 UI 登录 `204`，session 与刷新后
+session 均为 `200`，身份和 Cookie 安全属性匹配。无 CA 返回 `ERR_CERT_AUTHORITY_INVALID`；
+同 leaf 的 loopback 错误 hostname 返回 `ERR_CERT_COMMON_NAME_INVALID`，未发送 HTTP 请求。
+客户端固定 hostname 到声明 IP 并使用 HTTP/1.1，没有 TLS 忽略或 SPKI 例外，临时资源已清理。
+Issue #3846 按该受控范围收口；默认公网信任和远端错误 hostname 的 Ingress 行为未由此验收。
 
 ## 可移植的一键顺序
 

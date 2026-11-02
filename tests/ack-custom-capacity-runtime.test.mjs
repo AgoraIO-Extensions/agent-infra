@@ -298,7 +298,7 @@ test("real HTTP verifies V3 schemas and Grant V2 signature/binding before one su
 	assert.equal(result.executionId, f.state.executionId);
 	assert.equal(result.hostSessionRef, "accepted-host");
 	assert.equal(result.submittedAt, iso(0));
-	assert.equal(result.completedAt, iso(5));
+	assert.equal(result.completedAt, iso(10));
 	assert.equal(result.replyMatched, true);
 	assert.equal(
 		result.replySha256,
@@ -328,6 +328,49 @@ test("ACP duration sampled one millisecond after finishedAt remains a valid comp
 	const result = await f.run();
 	assert.equal(result.replyMatched, true);
 	assert.equal(result.modelFacts[1].payload.durationMs, 3);
+	assert.equal(f.state.acks.at(-1), "cursor-5");
+});
+
+for (const offset of [-1_000, 1_000]) {
+	test(`accepts Runtime clock offset ${offset}ms from the measuring process`, async (t) => {
+		const f = await setup(t, {
+			mutateEvents(wire) {
+				for (const event of wire) {
+					event.occurredAt = new Date(
+						Date.parse(event.occurredAt) + offset,
+					).toISOString();
+					for (const field of ["startedAt", "finishedAt"])
+						if (event.payload[field])
+							event.payload[field] = new Date(
+								Date.parse(event.payload[field]) + offset,
+							).toISOString();
+				}
+			},
+		});
+		const result = await f.run();
+		assert.equal(result.replyMatched, true);
+		assert.equal(result.submittedAt, iso(0));
+		assert.equal(result.completedAt, iso(10));
+		assert.equal(f.state.checkpoints.at(-1).completedAt, iso(10));
+		assert.deepEqual(
+			result.modelFacts,
+			f.state.wire.filter(
+				(event) =>
+					event.type === "operation" && event.payload.phase !== "intent",
+			),
+		);
+		assert.equal(f.state.acks.at(-1), "cursor-5");
+	});
+}
+
+test("accepts cursor-ordered events whose Runtime occurredAt values move backwards", async (t) => {
+	const f = await setup(t, {
+		mutateEvents(wire) {
+			wire[2].occurredAt = iso(1);
+		},
+	});
+	const result = await f.run();
+	assert.equal(result.replyMatched, true);
 	assert.equal(f.state.acks.at(-1), "cursor-5");
 });
 
@@ -514,16 +557,16 @@ for (const [name, mutate, code] of [
 		"CUSTOM_CAPACITY_MODEL_FACT_INVALID",
 	],
 	[
-		"future event",
+		"invalid event timestamp",
 		(e) => {
-			e[0].occurredAt = iso(30_000);
+			e[0].occurredAt = "invalid-timestamp";
 		},
-		"CUSTOM_CAPACITY_EVENT_TIME_INVALID",
+		"CUSTOM_CAPACITY_EVENT_INVALID",
 	],
 	[
-		"pre-submit fact",
+		"started fact after its event",
 		(e) => {
-			e[1].payload.startedAt = iso(-1);
+			e[1].payload.startedAt = iso(3);
 		},
 		"CUSTOM_CAPACITY_EVENT_TIME_INVALID",
 	],

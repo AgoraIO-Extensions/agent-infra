@@ -278,7 +278,6 @@ export async function measureCustomRuntime(options: CustomRuntimeOptions) {
 		let completedAt: string | undefined;
 		const modelFacts: RuntimeEventV2[] = [];
 		let intent: RuntimeEventV2 | undefined;
-		let lastTime = Date.parse(submittedAt);
 		const cursors = new Set<string>();
 		const eventKeys = new Set<string>();
 		const persist = async (nextCursor: string | null) => {
@@ -351,9 +350,9 @@ export async function measureCustomRuntime(options: CustomRuntimeOptions) {
 					)
 						fail("CUSTOM_CAPACITY_EVENT_BINDING_INVALID");
 					const eventTime = Date.parse(event.occurredAt);
-					if (eventTime < lastTime || eventTime > now())
+					// Runtime timestamps use its own clock; replay ordering is cursor-based.
+					if (!Number.isFinite(eventTime))
 						fail("CUSTOM_CAPACITY_EVENT_TIME_INVALID");
-					lastTime = eventTime;
 					cursors.add(event.cursor);
 					eventKeys.add(event.adapterEventKey);
 					if (event.type === "operation") {
@@ -384,11 +383,7 @@ export async function measureCustomRuntime(options: CustomRuntimeOptions) {
 							intent = event;
 						} else {
 							const started = Date.parse(fact.startedAt ?? "");
-							if (
-								!Number.isFinite(started) ||
-								started < Date.parse(submittedAt) ||
-								started > eventTime
-							)
+							if (!Number.isFinite(started) || started > eventTime)
 								fail("CUSTOM_CAPACITY_EVENT_TIME_INVALID");
 							if (fact.phase === "started") {
 								if (
@@ -431,7 +426,8 @@ export async function measureCustomRuntime(options: CustomRuntimeOptions) {
 							reply.trim() !== options.expectedReply
 						)
 							fail("CUSTOM_CAPACITY_COMPLETION_INVALID");
-						completedAt = event.occurredAt;
+						// Capacity elapsed time uses the same measuring clock as submittedAt.
+						completedAt = new Date(now()).toISOString();
 					} else if (event.type !== "reasoning")
 						fail("CUSTOM_CAPACITY_UNEXPECTED_EVENT");
 					await persist(event.cursor);
