@@ -21,6 +21,11 @@
 !.env.example
 *.local
 
+# Local agent scratch space, one-off scripts, and progress notes
+/.scratch/
+/.tmp-*
+/status.md
+
 # Editors and operating systems
 .DS_Store
 .idea/
