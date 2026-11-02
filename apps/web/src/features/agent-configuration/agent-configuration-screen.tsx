@@ -432,6 +432,7 @@ export function AgentConfigurationScreen({
 		commandError && commandError !== resolvedConflict
 			? saveFailure(commandError, savePath)
 			: null;
+	const customSource = agent.source.kind === "custom" ? agent.source : null;
 	const reloadSavedModels = async () => {
 		if (!onReloadSavedRelayKey || reloadingSavedModels) return;
 		const conflict = commandError;
@@ -584,11 +585,16 @@ export function AgentConfigurationScreen({
 							identityKey={session.session.user.userId}
 							sourceKind="custom"
 							client={generatedV2Client}
-							selected={agent.source.workspaceSnapshots}
+							selected={agent.source.workspaceSnapshots ?? []}
 							onChange={(workspaceSnapshots) =>
 								onSave({
 									schemaVersion: 2,
-									source: { ...agent.source, workspaceSnapshots },
+									source: customSource
+										? {
+												...customSource,
+												workspaceSnapshots: [...workspaceSnapshots],
+											}
+										: undefined,
 								})
 							}
 						/>
