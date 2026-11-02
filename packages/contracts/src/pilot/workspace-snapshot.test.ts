@@ -17,7 +17,15 @@ const metadata = {
 	source: { kind: "direct-upload" as const },
 	createdAt: "2026-11-02T00:00:00.000Z",
 	status: "ready" as const,
-	bindings: [{ snapshotId: "snapshot-1", name: "repo" }],
+	bindings: [
+		{
+			agentId: "agent-1",
+			configurationRevision: 1,
+			name: "repo",
+			digest,
+			sizeBytes: 10,
+		},
+	],
 };
 
 describe("workspace snapshot contract", () => {

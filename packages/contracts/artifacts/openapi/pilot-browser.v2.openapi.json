@@ -16142,7 +16142,41 @@
         "properties": {
           "bindings": {
             "items": {
-              "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+              "additionalProperties": false,
+              "properties": {
+                "agentId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "configurationRevision": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "digest": {
+                  "pattern": "^sha256:[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "name": {
+                  "maxLength": 63,
+                  "minLength": 1,
+                  "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                  "type": "string"
+                },
+                "sizeBytes": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "agentId",
+                "configurationRevision",
+                "name",
+                "digest",
+                "sizeBytes"
+              ],
+              "type": "object"
             },
             "type": "array"
           },

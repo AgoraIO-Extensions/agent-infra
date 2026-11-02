@@ -40,7 +40,15 @@ export const WorkspaceSnapshotMetadataV1Schema = z.strictObject({
 	source: WorkspaceSnapshotSourceV1Schema,
 	createdAt: Rfc3339TimestampV1Schema,
 	status: z.enum(["ready", "deleting", "deleted"]),
-	bindings: z.array(WorkspaceSnapshotBindingV1Schema),
+	bindings: z.array(
+		z.strictObject({
+			agentId: OpaqueIdV1Schema,
+			configurationRevision: z.number().int().positive().safe(),
+			name,
+			digest,
+			sizeBytes,
+		}),
+	),
 });
 export const WorkspaceSnapshotUploadRequestV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),

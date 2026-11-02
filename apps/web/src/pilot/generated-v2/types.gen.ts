@@ -2802,7 +2802,13 @@ export type WorkspaceSnapshotBindingV1 = {
 };
 
 export type WorkspaceSnapshotMetadataV1 = {
-    bindings: Array<WorkspaceSnapshotBindingV1>;
+    bindings: Array<{
+        agentId: string;
+        configurationRevision: number;
+        digest: string;
+        name: string;
+        sizeBytes: number;
+    }>;
     createdAt: string;
     digest: string;
     fileCount: number;

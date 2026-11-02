@@ -72,6 +72,7 @@ import {
 	PostgresScopedPlatformAuditQueryV1,
 	PostgresSkillHubAgentBindingAdmissionV1,
 	PostgresTaskAuthorizationStoreV1,
+	PostgresWorkspaceSnapshotUploadStoreV1,
 } from "@agent-infra/platform-store";
 import {
 	createWecomChannelAdmissionV1,
@@ -136,11 +137,11 @@ import {
 	assembleWecomSetupApiV1,
 	type WecomBotQrConfigurationV1,
 } from "./wecom-setup-assembly.js";
-import { createWorkspaceSnapshotCredentialResolverV1 } from "./workspace-snapshot-credential-resolver.js";
 import {
 	createWorkspaceSnapshotServiceV1,
 	type WorkspaceSnapshotServiceOptionsV1,
 } from "./workspace-snapshot-service.js";
+import { createWorkspaceSnapshotFileSpoolV1 } from "./workspace-snapshot-spool.js";
 
 type Admissions = Omit<AgentConfigurationUseCaseDependenciesV1, "transaction">;
 
@@ -158,10 +159,11 @@ export interface PlatformApiAssemblyInput {
 	/** Deployment-owned object storage/spool/store/quota; absent keeps snapshot routes disabled. */
 	readonly workspaceSnapshotDeployment?: Omit<
 		WorkspaceSnapshotServiceOptionsV1,
-		"credentials"
-	> & {
-		readonly credentials?: WorkspaceSnapshotServiceOptionsV1["credentials"];
-	};
+		"credentials" | "store" | "quota"
+	> &
+		Partial<
+			Pick<WorkspaceSnapshotServiceOptionsV1, "credentials" | "store" | "quota">
+		>;
 	readonly sessionSandboxReserves?: import("@agent-infra/platform-core").SessionSandboxReserveConfigurationV1;
 	readonly connectionInstallation?: {
 		readonly publicOrigin: string;
@@ -574,15 +576,37 @@ export function assemblePlatformApi(
 		transaction: personalApiCredentialStore,
 		userDirectory,
 	});
-	const workspaceSnapshotService = input.workspaceSnapshotDeployment
-		? createWorkspaceSnapshotServiceV1({
-				...input.workspaceSnapshotDeployment,
-				credentials:
-					input.workspaceSnapshotDeployment.credentials ??
-					createWorkspaceSnapshotCredentialResolverV1({
-						personalApiAgentRead,
-					}),
-			})
+	const snapshotStore = input.workspaceSnapshotDeployment
+		? new PostgresWorkspaceSnapshotUploadStoreV1(input.databaseUrl)
+		: undefined;
+	const snapshotSpool = input.workspaceSnapshotDeployment
+		? (input.workspaceSnapshotDeployment.spool ??
+			createWorkspaceSnapshotFileSpoolV1())
+		: undefined;
+	function snapshotServiceFor(material: string) {
+		const deployment = input.workspaceSnapshotDeployment;
+		if (!deployment || !snapshotStore)
+			throw new Error("Snapshot deployment unavailable");
+		const bound = snapshotStore.forCredential(material, userDirectory);
+		return createWorkspaceSnapshotServiceV1({
+			...deployment,
+			spool: snapshotSpool,
+			credentials: deployment.credentials ?? bound.credentials,
+			store: deployment.store ?? bound.store,
+			quota: deployment.quota ?? bound.quota,
+		});
+	}
+	const workspaceSnapshotService:
+		| WorkspaceSnapshotRouteDependenciesV1
+		| undefined = input.workspaceSnapshotDeployment
+		? {
+				upload: (request) =>
+					snapshotServiceFor(request.material).upload(request),
+				list: (material) => snapshotServiceFor(material).list(material),
+				get: (material, id) => snapshotServiceFor(material).get(material, id),
+				remove: (material, id) =>
+					snapshotServiceFor(material).remove(material, id),
+			}
 		: undefined;
 	const conversationTransaction =
 		new PostgresConversationExecutionTransactionV1({
@@ -1486,6 +1510,7 @@ export function assemblePlatformApi(
 			: {}),
 	};
 	const adapters = [
+		...(snapshotStore ? [snapshotStore] : []),
 		...(wecomReceipts ? [wecomReceipts] : []),
 		...(wecomSetup ? [wecomSetup] : []),
 		...(wecom ? [wecom] : []),
