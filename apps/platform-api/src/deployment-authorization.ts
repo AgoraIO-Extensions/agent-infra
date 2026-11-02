@@ -51,6 +51,7 @@ export function createDeploymentAuthorizationAdmission(input: {
 				new URL(currentRequest.url).pathname ===
 					"/api/v2/agent-applications/model-candidates"
 			) {
+				if (request.actorId !== identity.userId) return rejected;
 				// 预览只读取候选，路由生成的临时 Agent ID 尚无持久化 Owner。
 				return {
 					...rejected,

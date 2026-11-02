@@ -1894,6 +1894,7 @@ export function createWorkloadRuntimeV1(
 				if (multiServiceRuntime)
 					await multiServiceRuntime.bindSecretFence(
 						requireMultiWorkload(),
+						identity,
 						repaired.reference.name,
 						repaired.activationFence.fence,
 						repaired.secretUid,
@@ -1983,6 +1984,7 @@ export function createWorkloadRuntimeV1(
 						if (multiServiceRuntime)
 							await multiServiceRuntime.bindSecretFence(
 								requireMultiWorkload(),
+								identity,
 								candidate.kubernetesSecretRef.name,
 								candidate.fence,
 								secretUid,

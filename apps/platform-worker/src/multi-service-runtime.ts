@@ -1430,6 +1430,7 @@ export function createMultiServiceRuntimeOperations(options: {
 		},
 		async bindSecretFence(
 			value: MultiServiceDesired,
+			expectedEntryIdentity: { uid: string; generation: number },
 			secretName: string,
 			fence: number,
 			secretUid: string,
@@ -1519,7 +1520,12 @@ export function createMultiServiceRuntimeOperations(options: {
 			);
 			if (
 				!currentEntryAfter?.metadata?.uid ||
-				!currentEntryAfter.metadata.resourceVersion
+				!currentEntryAfter.metadata.resourceVersion ||
+				!owned(currentEntryAfter, value) ||
+				currentEntryAfter.metadata.deletionTimestamp ||
+				currentEntryAfter.metadata.uid !== expectedEntryIdentity.uid ||
+				currentEntryAfter.metadata.generation !==
+					expectedEntryIdentity.generation
 			)
 				throw new Error("multi-service entry identity unavailable");
 			await client.replace({
