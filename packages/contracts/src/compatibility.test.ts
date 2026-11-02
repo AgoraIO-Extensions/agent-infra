@@ -1,8 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
@@ -43,53 +42,11 @@ function removePublishedLocalToolBoundary(schema: unknown) {
 }
 
 function comparePaths(current: string, previous: string) {
-	const directory = mkdtempSync(join(tmpdir(), "workspace-snapshot-compat-"));
-	const normalize = (source: string, target: string) => {
-		const document = JSON.parse(readFileSync(source, "utf8")) as {
-			paths: Record<string, unknown>;
-			components: { schemas: Record<string, unknown> };
-		};
-		delete document.paths["/api/v2/workspace-snapshots"];
-		delete document.paths["/api/v2/workspace-snapshots/{snapshotId}"];
-		for (const name of [
-			"WorkspaceSnapshotBindingV1",
-			"WorkspaceSnapshotMetadataV1",
-			"WorkspaceSnapshotSourceV1",
-			"WorkspaceSnapshotUploadRequestV1",
-		])
-			delete document.components.schemas[name];
-		const removeFields = (value: unknown): void => {
-			if (Array.isArray(value)) {
-				for (const item of value) removeFields(item);
-				return;
-			}
-			if (!value || typeof value !== "object") return;
-			const object = value as Record<string, unknown>;
-			delete object.workspaceSnapshots;
-			for (const child of Object.values(object)) removeFields(child);
-		};
-		removeFields(document);
-		writeFileSync(target, JSON.stringify(document));
-	};
-	const normalizedPrevious = join(directory, "previous.json");
-	const normalizedCurrent = join(directory, "current.json");
-	normalize(previous, normalizedPrevious);
-	normalize(current, normalizedCurrent);
-	try {
-		return spawnSync(
-			process.execPath,
-			[
-				cliPath,
-				"--previous",
-				normalizedPrevious,
-				"--current",
-				normalizedCurrent,
-			],
-			{ encoding: "utf8" },
-		);
-	} finally {
-		rmSync(directory, { recursive: true, force: true });
-	}
+	return spawnSync(
+		process.execPath,
+		[cliPath, "--previous", previous, "--current", current],
+		{ encoding: "utf8" },
+	);
 }
 
 /** Build a baseline before Platform task facts were published to Web readers. */
@@ -5251,7 +5208,8 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/applications/{applicationId}/material-grant" &&
 				path !==
 					"/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}" &&
-				!path.startsWith("/api/v2/conversations/")
+				!path.startsWith("/api/v2/conversations/") &&
+				!path.startsWith("/api/v2/workspace-snapshots")
 			)
 				delete previous.paths[path];
 		}

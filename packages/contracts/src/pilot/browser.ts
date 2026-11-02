@@ -229,21 +229,27 @@ export const AgentSourceInputV1Schema = z.union([
 		imageReference: nonEmptyString(),
 		interactionMode: z.literal("self-managed"),
 		identityResponsibility: z.enum(["self-managed", "platform-managed"]),
-		workspaceSnapshots: z
-			.array(WorkspaceSnapshotBindingV1Schema)
-			.max(4)
-			.optional(),
 	}),
 	z.strictObject({
 		kind: z.literal("custom"),
 		imageReference: nonEmptyString(),
 		interactionMode: z.literal("platform-adapter"),
-		workspaceSnapshots: z
-			.array(WorkspaceSnapshotBindingV1Schema)
-			.max(4)
-			.optional(),
 	}),
 	MultiServiceAgentSourceV1Schema,
+]);
+
+/** V2 adds workspace inputs while published V1 inputs remain unchanged. */
+const workspaceSnapshotSourceShape = {
+	workspaceSnapshots: z
+		.array(WorkspaceSnapshotBindingV1Schema)
+		.max(4)
+		.optional(),
+};
+export const AgentSourceInputV2Schema = z.union([
+	AgentSourceInputV1Schema.options[0],
+	AgentSourceInputV1Schema.options[1].extend(workspaceSnapshotSourceShape),
+	AgentSourceInputV1Schema.options[2].extend(workspaceSnapshotSourceShape),
+	AgentSourceInputV1Schema.options[3].extend(workspaceSnapshotSourceShape),
 ]);
 
 export const ModelOptionInputV1Schema = z.strictObject({
@@ -435,7 +441,7 @@ export const AgentApplicationCreateRequestV2Schema =
 				templateId: OpaqueIdV1Schema,
 				templateRevision: OpaqueIdV1Schema.optional(),
 			}),
-			...AgentSourceInputV1Schema.options.slice(1),
+			...AgentSourceInputV2Schema.options.slice(1),
 		]),
 		defaultRelayKey: nonEmptyString().meta({ writeOnly: true }).optional(),
 	});
@@ -445,7 +451,7 @@ const [
 	selfManagedSource,
 	platformAdapterSource,
 	multiServiceSource,
-] = AgentSourceInputV1Schema.options;
+] = AgentSourceInputV2Schema.options;
 const AgentApiCreationCustomRequestV1Schema =
 	AgentApplicationCreateRequestV2Schema.omit({
 		modelConfiguration: true,
@@ -514,7 +520,7 @@ export const AgentApplicationUpdateRequestV2Schema =
 				templateId: OpaqueIdV1Schema,
 				templateRevision: OpaqueIdV1Schema.optional(),
 			}),
-			...AgentSourceInputV1Schema.options.slice(1),
+			...AgentSourceInputV2Schema.options.slice(1),
 		]),
 		...defaultRelayKeyReplacementShape,
 	});
@@ -536,10 +542,12 @@ export const AgentConfigurationProjectionV2Schema =
 export const AgentApplicationProjectionV2Schema =
 	AgentApplicationProjectionV1Schema.extend({
 		schemaVersion: z.literal(2),
+		source: AgentSourceInputV2Schema,
 		configuration: AgentConfigurationProjectionV2Schema,
 	});
 export const AgentProjectionV2Schema = AgentProjectionV1Schema.extend({
 	schemaVersion: z.literal(2),
+	source: AgentSourceInputV2Schema,
 	configuration: AgentConfigurationProjectionV2Schema,
 	/**
 	 * Agent 当前管理修订号，只返回给该 Agent 的 Owner（#3070）。
