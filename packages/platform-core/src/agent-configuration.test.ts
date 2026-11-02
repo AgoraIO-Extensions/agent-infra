@@ -574,6 +574,41 @@ it("upgrades a multi-service manifest only through the manifest command", async 
 	).rejects.toMatchObject({ code: "not_admitted" });
 });
 
+it("rejects a manifest source admission whose canonical content differs", async () => {
+	const requested = {
+		kind: "custom" as const,
+		manifest: '{"schemaVersion":1,"entryServiceName":"api"}',
+		interactionMode: "self-managed" as const,
+		identityResponsibility: "self-managed" as const,
+	};
+	const admitted = {
+		kind: "custom" as const,
+		imageDigest: `sha256:${"c".repeat(64)}`,
+		admissionRevision: "multi_service_policy_2",
+		interactionMode: "self-managed" as const,
+		identityResponsibility: "self-managed" as const,
+		connectionEnabled: false as const,
+		manifest: '{"schemaVersion":1,"entryServiceName":"other"}',
+	};
+	const harness = createHarness({
+		record: {
+			...agentConfigurationCustomImageRecordV1,
+			source: {
+				...admitted,
+				imageDigest: `sha256:${"b".repeat(64)}`,
+				admissionRevision: "multi_service_policy_1",
+			},
+		},
+		admissions: { images: [{ selection: requested, source: admitted }] },
+	});
+	await expect(
+		harness.useCase.update(
+			{ ...command, changes: { source: requested } },
+			actor,
+		),
+	).rejects.toMatchObject({ code: "not_admitted" });
+});
+
 it("snapshots custom image upgrade commands and rejects hostile accessors", async () => {
 	const record: AgentConfigurationRecordV2 = {
 		...agentConfigurationConformanceRecordV1,

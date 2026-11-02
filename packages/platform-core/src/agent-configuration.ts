@@ -389,7 +389,9 @@ function createAgentConfigurationUseCaseV1Internal(
 						admittedSource.templateId === changes.source.templateId
 					: admittedSource.kind === "custom" &&
 						admittedSource.interactionMode === changes.source.interactionMode &&
-						(!("manifest" in changes.source) || "manifest" in admittedSource) &&
+						(!("manifest" in changes.source) ||
+							("manifest" in admittedSource &&
+								admittedSource.manifest === changes.source.manifest)) &&
 						(changes.source.interactionMode === "platform-adapter" ||
 							(admittedSource.interactionMode === "self-managed" &&
 								admittedSource.identityResponsibility ===
