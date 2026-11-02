@@ -381,6 +381,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/me/api-identity",
 			"/api/v2/me/conversations/recent",
 			"/api/v2/me/relay-key",
+			"/api/v2/me/workspace-snapshots",
 			"/api/v2/skills",
 			"/api/v2/skills/imports",
 			"/api/v2/skills/installations",
@@ -398,7 +399,6 @@ describe("standard contract artifacts", () => {
 			"/api/v2/skills/versions/{skillVersionId}/review",
 			"/api/v2/skills/versions/{skillVersionId}/revoke",
 			"/api/v2/task-feedback/{executionId}",
-			"/api/v2/me/workspace-snapshots",
 			"/api/v2/workspace-snapshots",
 			"/api/v2/workspace-snapshots/{snapshotId}",
 		]);
