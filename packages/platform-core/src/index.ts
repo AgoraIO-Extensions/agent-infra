@@ -60,8 +60,6 @@ export {
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.js";
 export * from "./agent-creation-failure.js";
-export * from "./workspace-snapshot.js";
-export * from "./workspace-snapshot-archive.js";
 export * from "./agent-default-relay-key.js";
 export * from "./agent-management.js";
 export { parseAgentManagementPortState } from "./agent-management-input.js";
@@ -230,3 +228,6 @@ export * from "./wecom-setup.js";
 export * from "./wecom-setup-activation.js";
 export * from "./workload-reconciliation.js";
 export { parseWorkloadSecretRecoveriesV1 } from "./workload-secret-recovery.js";
+export * from "./workspace-snapshot.js";
+export * from "./workspace-snapshot-archive.js";
+export * from "./workspace-snapshot-security.js";
