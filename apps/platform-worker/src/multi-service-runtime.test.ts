@@ -282,7 +282,7 @@ function desired(multiService = manifest) {
 	});
 }
 
-function fakeClient() {
+function fakeClient(options: { bumpGeneration?: boolean } = {}) {
 	const resources = new Map<string, KubernetesObject>();
 	const client: WorkerKubernetesClientV1 = {
 		namespace: "agents",
@@ -321,7 +321,9 @@ function fakeClient() {
 						object.metadata?.resourceVersion ??
 						current?.metadata?.resourceVersion,
 					generation:
-						object.metadata?.generation ?? current?.metadata?.generation ?? 1,
+						object.metadata?.generation ??
+						(current?.metadata?.generation ?? 0) +
+							(options.bumpGeneration && current ? 1 : 0),
 				},
 			};
 			resources.set(`${object.kind}/${object.metadata?.name}`, replaced);
@@ -591,6 +593,24 @@ describe("multi-service resource policy", () => {
 			expect(recorded.calls).toContain(`replace Deployment/${name}`);
 		},
 	);
+
+	it("does not self-trigger the entry snapshot generation", async () => {
+		const fake = fakeClient({ bumpGeneration: true });
+		const recorded = recordingClient(fake.client);
+		const operations = createMultiServiceRuntimeOperations({
+			client: recorded.client,
+			policy: basePolicy,
+		});
+		const value = desired();
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(value);
+		recorded.calls.length = 0;
+		await operations.apply(value);
+		expect(recorded.calls).not.toContain(
+			"replace Deployment/" + workloadResourceNameV1("agent-a") + "-web",
+		);
+	});
 
 	it.each([
 		[

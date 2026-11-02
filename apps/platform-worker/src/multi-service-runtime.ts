@@ -194,6 +194,15 @@ function memberResources(value: MultiServiceDesired) {
 	);
 }
 
+function snapshotMemberResources(
+	value: MultiServiceDesired,
+	entryName: string,
+) {
+	return memberResources(value).filter(
+		(resource) => resource.metadata.name !== entryName,
+	);
+}
+
 type MemberIdentitySnapshot = Record<
 	string,
 	{ readonly uid: string; readonly generation: number }
@@ -1376,7 +1385,10 @@ export function createMultiServiceRuntimeOperations(options: {
 			)
 				throw new Error("multi-service entry generation unavailable");
 			const identities: MemberIdentitySnapshot = {};
-			for (const member of memberResources(value)) {
+			for (const member of snapshotMemberResources(
+				value,
+				entry.metadata.name,
+			)) {
 				const currentMember = await client.read<V1Deployment | V1StatefulSet>(
 					member.kind as "Deployment" | "StatefulSet",
 					serviceResourceName(value.agentId, member.metadata.name),
@@ -1475,13 +1487,15 @@ export function createMultiServiceRuntimeOperations(options: {
 					!matchesEnvironmentSecrets(value, current.spec?.template.spec)
 				)
 					return "drifted" as const;
-				const memberIdentity = snapshot[resource.metadata.name];
-				if (
-					!memberIdentity ||
-					current.metadata?.uid !== memberIdentity.uid ||
-					current.metadata.generation !== memberIdentity.generation
-				)
-					return "drifted" as const;
+				if (resource.metadata.name !== entry.metadata.name) {
+					const memberIdentity = snapshot[resource.metadata.name];
+					if (
+						!memberIdentity ||
+						current.metadata?.uid !== memberIdentity.uid ||
+						current.metadata.generation !== memberIdentity.generation
+					)
+						return "drifted" as const;
+				}
 				// 工作负载还在启动：与单镜像路径一致返回 pending，由调谐按重试上限等待，
 				// 而不是在第一次观测时就判定失败。
 				if (
