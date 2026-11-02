@@ -316,6 +316,15 @@ export interface UpgradeCustomAgentImageCommandV1 {
 	readonly traceId: string;
 }
 
+export interface UpgradeCustomAgentManifestCommandV1 {
+	readonly schemaVersion: 1;
+	readonly agentId: string;
+	readonly manifest: string;
+	readonly idempotencyKey: string;
+	readonly requestId: string;
+	readonly traceId: string;
+}
+
 /** An immutable, deployment-owned publication target; never an Owner update intent. */
 export interface StandardTemplateReleaseTargetV1 {
 	readonly schemaVersion: 1;
@@ -528,6 +537,11 @@ export interface AgentConfigurationImageAdmissionPortV1 {
 				readonly agentId: string;
 				readonly requestId: string;
 				readonly source: AgentConfigurationSourceV1;
+				/** Internal admission binding for manifest raw input and canonical JSON. */
+				readonly manifestBinding?: {
+					readonly requestedSha256: string;
+					readonly canonicalSha256: string;
+				};
 		  }
 		| {
 				readonly schemaVersion: 1;
@@ -664,6 +678,10 @@ export interface AgentConfigurationUseCaseV1 {
 
 	upgradeCustomImage(
 		command: UpgradeCustomAgentImageCommandV1,
+		actorContext: AgentConfigurationActorContextV1,
+	): Promise<AgentConfigurationResultV1>;
+	upgradeCustomManifest(
+		command: UpgradeCustomAgentManifestCommandV1,
 		actorContext: AgentConfigurationActorContextV1,
 	): Promise<AgentConfigurationResultV1>;
 }

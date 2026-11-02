@@ -54,7 +54,7 @@ export type AgentApplicationDecision =
 
 export type AgentLifecycleCommand = Exclude<
 	AgentLifecycleCommandRequestV1["command"],
-	"upgrade_custom_image"
+	"upgrade_custom_image" | "upgrade_custom_manifest"
 >;
 
 export type AgentLifecycleCommandResult =

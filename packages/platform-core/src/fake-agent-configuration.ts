@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import {
@@ -269,6 +270,10 @@ export interface FakeAgentConfigurationAdmissionsOptionsV1 {
 			AgentConfigurationImageAdmissionPortV1["admitImage"]
 		>[0]["requested"];
 		readonly source: AgentConfigurationRecordV2["source"];
+		readonly manifestBinding?: {
+			readonly requestedSha256: string;
+			readonly canonicalSha256: string;
+		};
 	}[];
 	readonly mismatchedAdmission?:
 		| "authorization"
@@ -331,6 +336,20 @@ export class FakeAgentConfigurationAdmissionsV1
 					agentId: this.#resultAgentId("image", input.agentId),
 					requestId: input.requestId,
 					source: structuredClone(admission.source),
+					...(admission.manifestBinding
+						? { manifestBinding: structuredClone(admission.manifestBinding) }
+						: "manifest" in admission.source && "manifest" in input.requested
+							? {
+									manifestBinding: {
+										requestedSha256: createHash("sha256")
+											.update(input.requested.manifest)
+											.digest("hex"),
+										canonicalSha256: createHash("sha256")
+											.update(admission.source.manifest)
+											.digest("hex"),
+									},
+								}
+							: {}),
 				}
 			: {
 					schemaVersion: 1,

@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
 import { MultiServiceResourceProfileAnnotationV1 } from "@agent-infra/contracts/pilot";
 import { standardTemplateReadinessV1 } from "@agent-infra/model-catalog";
-import type {
-	AgentConfigurationModelInputV1,
-	AgentConfigurationModelV1,
-	AgentConfigurationSourceV1,
+import {
+	type AgentConfigurationModelInputV1,
+	type AgentConfigurationModelV1,
+	type AgentConfigurationSourceV1,
+	createAgentConfigurationUseCaseV1,
 } from "@agent-infra/platform-core";
+import { FakeAgentConfigurationTransactionV1 } from "@agent-infra/platform-core/testing";
 import { describe, expect, it, vi } from "vitest";
+import { stringify as stringifyYaml } from "yaml";
 import {
 	createDeploymentAdmissionsV1,
 	createDeploymentConfigurationProjectionV2,
@@ -482,9 +485,128 @@ describe("production deployment admissions", () => {
 			"manifest" in result.source
 		) {
 			expect(JSON.parse(result.source.manifest)).toEqual(JSON.parse(manifest));
+			expect(result.manifestBinding).toEqual({
+				requestedSha256: digest(manifest).slice("sha256:".length),
+				canonicalSha256: digest(result.source.manifest).slice("sha256:".length),
+			});
 		}
 		expect(f.fetch).toHaveBeenCalled();
 	});
+
+	it.each([
+		"newline",
+		"pretty-json",
+		"yaml",
+		"replaced-request",
+		"replaced-canonical",
+		"missing-binding",
+	] as const)(
+		"executes the production manifest admission through Core: %s",
+		async (scenario) => {
+			const f = fixture("self-managed");
+			const admissions = createDeploymentAdmissionsV1({
+				...f.input,
+				imageRepository: "registry.example.test/agents/codex",
+			});
+			const original = twoServiceManifest(f.imageDigest);
+			const initial = await admissions.imageAdmission.admitImage(
+				multiServiceRequest(original),
+			);
+			if (initial.status !== "admitted" || !("manifest" in initial.source))
+				throw new Error("Expected production manifest admission");
+			const document = JSON.parse(initial.source.manifest);
+			document.resources.find(
+				(resource: { kind: string }) => resource.kind === "ConfigMap",
+			).spec.data["app.conf"] = "port=8080\nmode=updated\n";
+			const canonical = JSON.stringify(document);
+			const manifest =
+				scenario === "yaml"
+					? stringifyYaml(document)
+					: scenario === "pretty-json"
+						? `${JSON.stringify(document, null, 2)}\n`
+						: `${canonical}\n`;
+			const transaction = new FakeAgentConfigurationTransactionV1({
+				schemaVersion: 2,
+				agentId: request.agentId,
+				revision: 1,
+				source: initial.source,
+				modelConfiguration: null,
+				environment: [],
+				secrets: [],
+				channels: [],
+				channelRevision: "channels-a",
+			});
+			const admitImage = vi.fn<typeof admissions.imageAdmission.admitImage>(
+				async (input) => {
+					const result = await admissions.imageAdmission.admitImage(
+						scenario === "replaced-request"
+							? { ...input, requested: multiServiceRequest(original).requested }
+							: input,
+					);
+					if (result.status !== "admitted") return result;
+					if (scenario === "replaced-canonical")
+						return { ...result, source: initial.source };
+					if (scenario === "missing-binding") {
+						const { manifestBinding: _binding, ...unbound } = result;
+						return unbound;
+					}
+					return result;
+				},
+			);
+			const core = createAgentConfigurationUseCaseV1({
+				...admissions,
+				transaction,
+				imageAdmission: { admitImage },
+				authorizationAdmission: {
+					async authorize(input) {
+						return {
+							schemaVersion: 1,
+							status: "admitted",
+							agentId: input.agentId,
+							actorId: input.actorId,
+							authorizationRevision: "authorization_9",
+						};
+					},
+				},
+			});
+			const upgraded = core.upgradeCustomManifest(
+				{
+					...request,
+					manifest,
+					idempotencyKey: `manifest-${scenario}`,
+				},
+				{
+					schemaVersion: 1,
+					actorId: actor.userId,
+					rawRequestDigest: digest(manifest).slice("sha256:".length),
+				},
+			);
+			if (scenario.startsWith("replaced-") || scenario === "missing-binding") {
+				await expect(upgraded).rejects.toMatchObject({ code: "not_admitted" });
+				expect(transaction.snapshot()).toMatchObject({
+					configuration: { revision: 1, source: initial.source },
+					commitCount: 0,
+					outboxCount: 0,
+					auditCount: 0,
+				});
+			} else {
+				await expect(upgraded).resolves.toMatchObject({
+					revision: 2,
+					changedFields: ["source"],
+				});
+				expect(transaction.snapshot()).toMatchObject({
+					configuration: {
+						revision: 2,
+						source: { manifest: canonical, imageDigest: digest(canonical) },
+					},
+					commitCount: 1,
+					outboxCount: 1,
+					auditCount: 1,
+				});
+			}
+			expect(admitImage).toHaveBeenCalledOnce();
+		},
+	);
 
 	it("admits one StatefulSet service with a PVC in the multi-service contract", async () => {
 		const f = fixture("self-managed");

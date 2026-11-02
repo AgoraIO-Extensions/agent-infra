@@ -17,6 +17,7 @@ import type {
 	LegacyUpdateAgentConfigurationCommandV1,
 	UpdateAgentConfigurationCommandV2,
 	UpgradeCustomAgentImageCommandV1,
+	UpgradeCustomAgentManifestCommandV1,
 } from "./agent-configuration-types.js";
 import {
 	denseArray,
@@ -91,6 +92,24 @@ export function customImageUpgradeRequestDigest(
 			actorId: actor.actorId,
 			rawRequestDigest: actor.rawRequestDigest,
 			imageReference: command.imageReference,
+		});
+	} catch {
+		invalidCommand();
+	}
+}
+
+export function customManifestUpgradeRequestDigest(
+	command: UpgradeCustomAgentManifestCommandV1,
+	actor: AgentConfigurationActorContextV1,
+): string {
+	try {
+		return platformIdempotencyV1.canonicalRequestDigest({
+			schemaVersion: 1,
+			operation: "agent.configuration.custom-manifest.upgrade.v1",
+			agentId: command.agentId,
+			actorId: actor.actorId,
+			rawRequestDigest: actor.rawRequestDigest,
+			manifest: command.manifest,
 		});
 	} catch {
 		invalidCommand();

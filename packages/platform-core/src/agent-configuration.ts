@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	parseAdmittedModel,
 	parseChannelDecision,
@@ -21,10 +22,12 @@ import {
 	parseReleaseStandardTemplateCommand,
 	parseSavedKeyUpdateCommand,
 	parseUpgradeCustomImageCommand,
+	parseUpgradeCustomManifestCommand,
 } from "./agent-configuration-input.js";
 import {
 	agentConfigurationRuntimeInputChangedV1,
 	customImageUpgradeRequestDigest,
+	customManifestUpgradeRequestDigest,
 	parseResult,
 	parseTransactionCommitDecision,
 	parseTransactionReadDecision,
@@ -157,6 +160,7 @@ export {
 	type UpdateAgentConfigurationCommandV3,
 	type UpdateAgentConfigurationCommandV4,
 	type UpgradeCustomAgentImageCommandV1,
+	type UpgradeCustomAgentManifestCommandV1,
 } from "./agent-configuration-types.js";
 
 function createAgentConfigurationUseCaseV1Internal(
@@ -379,6 +383,8 @@ function createAgentConfigurationUseCaseV1Internal(
 				);
 			const admittedSource =
 				admission.status === "admitted" ? admission.source : current.source;
+			const manifestBinding =
+				admission.status === "admitted" ? admission.manifestBinding : undefined;
 			const selectionMatches =
 				changes.source.kind === admittedSource.kind &&
 				(changes.source.kind === "standard"
@@ -386,6 +392,16 @@ function createAgentConfigurationUseCaseV1Internal(
 						admittedSource.templateId === changes.source.templateId
 					: admittedSource.kind === "custom" &&
 						admittedSource.interactionMode === changes.source.interactionMode &&
+						(!("manifest" in changes.source) ||
+							("manifest" in admittedSource &&
+								manifestBinding?.requestedSha256 ===
+									createHash("sha256")
+										.update(changes.source.manifest)
+										.digest("hex") &&
+								manifestBinding.canonicalSha256 ===
+									createHash("sha256")
+										.update(admittedSource.manifest)
+										.digest("hex"))) &&
 						(changes.source.interactionMode === "platform-adapter" ||
 							(admittedSource.interactionMode === "self-managed" &&
 								admittedSource.identityResponsibility ===
@@ -1041,6 +1057,9 @@ function createAgentConfigurationUseCaseV1Internal(
 					if (current.source.kind !== "custom") {
 						throw new AgentConfigurationError("not_admitted");
 					}
+					if ("manifest" in current.source) {
+						throw new AgentConfigurationError("not_admitted");
+					}
 					if (current.source.interactionMode === "self-managed") {
 						const identityResponsibility =
 							current.source.identityResponsibility;
@@ -1061,6 +1080,31 @@ function createAgentConfigurationUseCaseV1Internal(
 							kind: "custom",
 							imageReference: command.imageReference,
 							interactionMode: "platform-adapter",
+						},
+					};
+				},
+				true,
+			);
+		},
+		async upgradeCustomManifest(commandInput, actorContextInput) {
+			const command = parseUpgradeCustomManifestCommand(commandInput);
+			const actorContext = parseActorContext(actorContextInput);
+			return await execute(
+				command,
+				actorContext,
+				customManifestUpgradeRequestDigest(command, actorContext),
+				(current) => {
+					if (
+						current.source.kind !== "custom" ||
+						!("manifest" in current.source)
+					)
+						throw new AgentConfigurationError("not_admitted");
+					return {
+						source: {
+							kind: "custom",
+							manifest: command.manifest,
+							interactionMode: "self-managed",
+							identityResponsibility: "self-managed",
 						},
 					};
 				},

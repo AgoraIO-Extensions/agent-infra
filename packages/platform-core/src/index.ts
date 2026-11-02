@@ -48,6 +48,7 @@ export type {
 	UpdateAgentConfigurationCommandV3,
 	UpdateAgentConfigurationCommandV4,
 	UpgradeCustomAgentImageCommandV1,
+	UpgradeCustomAgentManifestCommandV1,
 } from "./agent-configuration.js";
 export {
 	AgentConfigurationError,

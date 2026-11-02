@@ -237,6 +237,10 @@ export type AgentLifecycleCommandRequestV1 = {
     command: 'upgrade_custom_image';
     imageReference: string;
     schemaVersion: 1;
+} | {
+    command: 'upgrade_custom_manifest';
+    manifest: string;
+    schemaVersion: 1;
 };
 
 export type AgentProjectionV1 = {

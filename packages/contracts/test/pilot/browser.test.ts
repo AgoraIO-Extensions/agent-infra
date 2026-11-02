@@ -361,6 +361,13 @@ describe("Pilot browser contracts", () => {
 			}),
 		).toMatchObject({ command: "upgrade_custom_image" });
 		expect(
+			AgentLifecycleCommandRequestV1Schema.parse({
+				schemaVersion: 1,
+				command: "upgrade_custom_manifest",
+				manifest: '{"schemaVersion":1}',
+			}),
+		).toMatchObject({ command: "upgrade_custom_manifest" });
+		expect(
 			AgentLifecycleCommandRequestV1Schema.safeParse({
 				schemaVersion: 1,
 				command: "upgrade_custom_image",

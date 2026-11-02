@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	parseAdmittedModel,
 	parseChannelDecision,
@@ -131,6 +132,10 @@ async function completeInitialAgentConfigurationAdmissionV1(
 		throw new AgentConfigurationError("platform_identity_entry_unavailable");
 	const source =
 		imageAdmission.status === "admitted" ? imageAdmission.source : undefined;
+	const manifestBinding =
+		imageAdmission.status === "admitted"
+			? imageAdmission.manifestBinding
+			: undefined;
 	const selectionMatches =
 		source !== undefined &&
 		command.source.kind === source.kind &&
@@ -139,6 +144,15 @@ async function completeInitialAgentConfigurationAdmissionV1(
 				command.source.templateId === source.templateId
 			: source.kind === "custom" &&
 				source.interactionMode === command.source.interactionMode &&
+				(!("manifest" in command.source) ||
+					("manifest" in source &&
+						typeof source.manifest === "string" &&
+						manifestBinding?.requestedSha256 ===
+							createHash("sha256")
+								.update(command.source.manifest)
+								.digest("hex") &&
+						manifestBinding.canonicalSha256 ===
+							createHash("sha256").update(source.manifest).digest("hex"))) &&
 				(command.source.interactionMode === "platform-adapter" ||
 					(source.interactionMode === "self-managed" &&
 						source.identityResponsibility ===

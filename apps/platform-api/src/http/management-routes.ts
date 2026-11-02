@@ -105,7 +105,7 @@ export interface ManagementRouteDependencies {
 	>;
 	readonly configuration: Pick<
 		AgentConfigurationUseCaseV1,
-		"upgradeCustomImage"
+		"upgradeCustomImage" | "upgradeCustomManifest"
 	>;
 	readonly query: ManagementQuery;
 	readonly allocateApplicationIds: (input: {
@@ -828,22 +828,43 @@ export function registerManagementRoutes(
 				context.req.raw,
 				metadata.traceId,
 			);
-			if (body.command === "upgrade_custom_image") {
-				await dependencies.configuration.upgradeCustomImage(
-					{
-						schemaVersion: 1,
-						agentId,
-						imageReference: body.imageReference,
-						idempotencyKey,
-						requestId: metadata.requestId,
-						traceId: metadata.traceId,
-					},
-					{
-						schemaVersion: 1,
-						actorId: identity.userId,
-						rawRequestDigest,
-					},
-				);
+			if (
+				body.command === "upgrade_custom_image" ||
+				body.command === "upgrade_custom_manifest"
+			) {
+				if (body.command === "upgrade_custom_image") {
+					await dependencies.configuration.upgradeCustomImage(
+						{
+							schemaVersion: 1,
+							agentId,
+							imageReference: body.imageReference,
+							idempotencyKey,
+							requestId: metadata.requestId,
+							traceId: metadata.traceId,
+						},
+						{
+							schemaVersion: 1,
+							actorId: identity.userId,
+							rawRequestDigest,
+						},
+					);
+				} else {
+					await dependencies.configuration.upgradeCustomManifest(
+						{
+							schemaVersion: 1,
+							agentId,
+							manifest: body.manifest,
+							idempotencyKey,
+							requestId: metadata.requestId,
+							traceId: metadata.traceId,
+						},
+						{
+							schemaVersion: 1,
+							actorId: identity.userId,
+							rawRequestDigest,
+						},
+					);
+				}
 				const projectionScope = identity.roles.includes("system_admin")
 					? ({ kind: "administrator" } as const)
 					: ownerScope(identity);

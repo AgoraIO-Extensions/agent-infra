@@ -5274,6 +5274,45 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the additive custom manifest lifecycle variant", async () => {
+		for (const version of ["v1", "v2"] as const) {
+			const current = JSON.parse(
+				await readFile(
+					new URL(
+						`../artifacts/openapi/pilot-browser.${version}.openapi.json`,
+						import.meta.url,
+					),
+					"utf8",
+				),
+			);
+			const previous = structuredClone(current);
+			previous.components.schemas.AgentLifecycleCommandRequestV1.oneOf =
+				previous.components.schemas.AgentLifecycleCommandRequestV1.oneOf.filter(
+					(option: { properties?: { command?: { const?: string } } }) =>
+						option.properties?.command?.const !== "upgrade_custom_manifest",
+				);
+			const directory = await mkdtemp(
+				resolve(tmpdir(), `agent-infra-manifest-lifecycle-${version}-`),
+			);
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			try {
+				await writeFile(previousPath, JSON.stringify(previous), "utf8");
+				await writeFile(currentPath, JSON.stringify(current), "utf8");
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				const changed = structuredClone(current);
+				changed.components.schemas.AgentLifecycleCommandRequestV1.oneOf.find(
+					(option: { properties?: { command?: { const?: string } } }) =>
+						option.properties?.command?.const === "upgrade_custom_manifest",
+				).properties.manifest.maxLength = 262_143;
+				await writeFile(currentPath, JSON.stringify(changed), "utf8");
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			} finally {
+				await rm(directory, { recursive: true, force: true });
+			}
+		}
+	});
+
 	it("admits only the existing resource-unavailable response added to V2 SSE", async () => {
 		const current = JSON.parse(
 			await readFile(
