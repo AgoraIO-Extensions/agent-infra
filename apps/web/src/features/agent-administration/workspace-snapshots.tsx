@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LoadingLine } from "@/components/ui/spinner";
 import type {
@@ -226,7 +227,7 @@ export function WorkspaceSnapshotsPanel({
 										选择
 									</Label>
 									{selectedIds.has(snapshot.snapshotId) ? (
-										<input
+										<Input
 											aria-label={`快照挂载名称 ${snapshot.snapshotId}`}
 											className="h-8 w-28 rounded border border-border px-2 text-xs"
 											disabled={disabled || snapshots.remove.isPending}
