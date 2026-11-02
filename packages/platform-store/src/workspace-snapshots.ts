@@ -6,11 +6,14 @@ import {
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
-import { workspaceSnapshots } from "./schema.js";
+import { workspaceSnapshotBindings, workspaceSnapshots } from "./schema.js";
 
 type Owner = { ownerType: "user" | "application"; ownerId: string };
 type Row = typeof workspaceSnapshots.$inferSelect;
-function record(row: Row): WorkspaceSnapshotRecordV1 {
+function record(
+	row: Row,
+	bindings: WorkspaceSnapshotRecordV1["bindings"] = [],
+): WorkspaceSnapshotRecordV1 {
 	return {
 		snapshotId: row.id,
 		ownerType: row.ownerType as Owner["ownerType"],
@@ -25,6 +28,7 @@ function record(row: Row): WorkspaceSnapshotRecordV1 {
 		objectVersion: row.objectVersion,
 		status: row.status as WorkspaceSnapshotRecordV1["status"],
 		createdAt: row.createdAt.toISOString(),
+		bindings,
 	};
 }
 export class PostgresWorkspaceSnapshotStoreV1
@@ -73,7 +77,24 @@ export class PostgresWorkspaceSnapshotStoreV1
 					eq(workspaceSnapshots.ownerId, owner.ownerId),
 				),
 			);
-		return rows.map(record);
+		return Promise.all(
+			rows.map(async (row) =>
+				record(
+					row,
+					await this.#database
+						.select({
+							agentId: workspaceSnapshotBindings.agentId,
+							configurationRevision:
+								workspaceSnapshotBindings.configurationRevision,
+							name: workspaceSnapshotBindings.name,
+							digest: workspaceSnapshotBindings.digest,
+							sizeBytes: workspaceSnapshotBindings.sizeBytes,
+						})
+						.from(workspaceSnapshotBindings)
+						.where(eq(workspaceSnapshotBindings.snapshotId, row.id)),
+				),
+			),
+		);
 	}
 	async get(owner: Owner, snapshotId: string) {
 		const [row] = await this.#database
@@ -87,9 +108,26 @@ export class PostgresWorkspaceSnapshotStoreV1
 				),
 			)
 			.limit(1);
-		return row ? record(row) : null;
+		if (!row) return null;
+		const bindings = await this.#database
+			.select({
+				agentId: workspaceSnapshotBindings.agentId,
+				configurationRevision: workspaceSnapshotBindings.configurationRevision,
+				name: workspaceSnapshotBindings.name,
+				digest: workspaceSnapshotBindings.digest,
+				sizeBytes: workspaceSnapshotBindings.sizeBytes,
+			})
+			.from(workspaceSnapshotBindings)
+			.where(eq(workspaceSnapshotBindings.snapshotId, row.id));
+		return record(row, bindings);
 	}
 	async remove(owner: Owner, snapshotId: string) {
+		const [binding] = await this.#database
+			.select({ snapshotId: workspaceSnapshotBindings.snapshotId })
+			.from(workspaceSnapshotBindings)
+			.where(eq(workspaceSnapshotBindings.snapshotId, snapshotId))
+			.limit(1);
+		if (binding) throw new WorkspaceSnapshotErrorV1("bound");
 		const [row] = await this.#database
 			.update(workspaceSnapshots)
 			.set({ status: "deleted", deletedAt: new Date() })

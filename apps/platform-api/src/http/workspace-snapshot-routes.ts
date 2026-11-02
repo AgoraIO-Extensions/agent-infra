@@ -41,7 +41,7 @@ function projection(record: WorkspaceSnapshotRecordV1) {
 		source: record.source,
 		createdAt: record.createdAt,
 		status: record.status,
-		bindings: [],
+		bindings: record.bindings,
 	});
 }
 

@@ -18,6 +18,7 @@ const record = {
 	objectVersion: "version-1",
 	status: "ready" as const,
 	createdAt: "2026-11-02T00:00:00.000Z",
+	bindings: [],
 };
 
 function fixture() {
