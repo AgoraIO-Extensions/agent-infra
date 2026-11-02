@@ -24,6 +24,7 @@ import {
 	type MultiServiceRuntimePolicyV1,
 	resolveMultiServiceResourceConfigurationV1,
 } from "./multi-service-runtime.js";
+import { projectWorkspaceSnapshotMaterializerV1 } from "./workspace-snapshot-materializer.js";
 
 const manifest = MultiServiceManifestDocumentV1Schema.parse({
 	schemaVersion: 1,
@@ -420,6 +421,61 @@ function markWorkloadsReady(fake: ReturnType<typeof fakeClient>) {
 }
 
 describe("multi-service resource policy", () => {
+	it("injects the platform snapshot projection into every workload and migration Pod", async () => {
+		const fake = fakeClient();
+		const projection = projectWorkspaceSnapshotMaterializerV1(
+			[
+				{
+					snapshotId: "snapshot-a",
+					name: "repo",
+					digest: `sha256:${"a".repeat(64)}`,
+					sizeBytes: 128,
+					objectRef: "object-a",
+					signedUrl: "https://objects.example.test/snapshot-a",
+					expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				},
+			],
+			{
+				imageDigest: `sha256:${"b".repeat(64)}`,
+				cacheSizeLimit: "2Gi",
+				credentialSecretName: "snapshot-credentials",
+			},
+		);
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: { ...basePolicy, workspaceSnapshotProjection: projection },
+		});
+		const value = desired(migrationManifest);
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(value);
+		for (const resource of fake.resources.values()) {
+			if (
+				resource.kind !== "Deployment" &&
+				resource.kind !== "StatefulSet" &&
+				resource.kind !== "Job"
+			)
+				continue;
+			const spec = (resource as V1Deployment | V1StatefulSet | V1Job).spec
+				?.template?.spec;
+			if (!spec) throw new Error("missing PodTemplate");
+			expect(spec.initContainers?.map(({ name }) => name)).toContain(
+				"workspace-snapshot-materializer",
+			);
+			expect(spec.volumes?.map(({ name }) => name)).toContain(
+				"workspace-snapshots",
+			);
+			expect(
+				spec.containers.every((container) =>
+					container.volumeMounts?.some(
+						(mount) =>
+							mount.mountPath === "/opt/agent/workspaces/repo" &&
+							mount.readOnly === true,
+					),
+				),
+			).toBe(true);
+		}
+	});
 	it.each([undefined, "registry-pull"])(
 		"uses deployment pull policy %s for SDK-deserialized workloads and migration",
 		async (imagePullSecretName) => {
@@ -471,7 +527,8 @@ describe("multi-service resource policy", () => {
 				const resource = [...fake.resources.values()].find(
 					(r) => r.kind === kind,
 				) as V1Deployment | V1StatefulSet | V1Job;
-				const spec = resource.spec?.template.spec;
+				const spec = (resource as V1Deployment | V1StatefulSet | V1Job).spec
+					?.template?.spec;
 				if (!spec) throw new Error("workload fixture missing");
 				const expected = imagePullSecretName
 					? [{ name: imagePullSecretName }]
