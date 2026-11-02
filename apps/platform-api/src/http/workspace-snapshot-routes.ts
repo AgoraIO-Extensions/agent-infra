@@ -15,7 +15,18 @@ export interface WorkspaceSnapshotRouteDependenciesV1 {
 }
 
 function projection(record: WorkspaceSnapshotRecordV1) {
-	return WorkspaceSnapshotMetadataV1Schema.parse({ ...record, bindings: [] });
+	return WorkspaceSnapshotMetadataV1Schema.parse({
+		snapshotId: record.snapshotId,
+		digest: record.digest,
+		sizeBytes: record.sizeBytes,
+		unpackedSizeBytes: record.unpackedSizeBytes,
+		fileCount: record.fileCount,
+		mediaType: record.mediaType,
+		source: record.source,
+		createdAt: record.createdAt,
+		status: record.status,
+		bindings: [],
+	});
 }
 
 export function registerWorkspaceSnapshotRoutesV1(app: Hono, dependencies: WorkspaceSnapshotRouteDependenciesV1) {
