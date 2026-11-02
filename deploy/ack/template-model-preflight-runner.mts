@@ -7,6 +7,7 @@ import { readFile, mkdir, writeFile, lstat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import * as contracts from "../../packages/contracts/src/runtime/index.ts";
 import {createWorkerRuntimeGrantSignerV4} from "../../apps/platform-worker/src/runtime-grant-signer-v4.ts";
+import { createTemplateExecutionRenewal } from "./template-execution-renewal.mts";
 
 let stage = "configuration";
 let lastHttpStatus: number | undefined;
@@ -88,10 +89,11 @@ async function run() {
 		!selected.reasoningLevels.includes(c.reasoningLevel) || selected.protocol !== c.protocol) fail();
 	stage = "signer-load";
 
-	const signer = createWorkerRuntimeGrantSignerV4({
+	const signing = {
 		issuer: c.grantIssuer, workerId: c.workerId, keyId: c.grantKeyId,
 		privateKey: createPrivateKey(await privateFile(c.grantPrivateKeyFile)),
-	});
+	};
+	const signer = createWorkerRuntimeGrantSignerV4(signing);
 	stage = "private-inputs-check";
 	const serviceToken = (await privateFile(c.runtimeServiceTokenFile)).trim();
 	const relayKey = (await privateFile(c.relayKeyFile)).trim();
@@ -167,8 +169,17 @@ async function run() {
 		let completed = false;
         let reply = "";
 		const modelFacts: any[] = [];
+		const renew = createTemplateExecutionRenewal({
+			request: unsigned, hostSessionRef: accepted.hostSessionRef,
+			authorizationRecordId, initialExpiresAt: resume ? Date.now() : claims.expiresAt,
+			signing: {
+				...signing,
+				now: () => Date.now(),
+			}, signal: controller.signal, waitForHostGrant, post,
+		});
 		stage = "actual-runtime-events";
 		while (!completed) {
+			await renew();
 			const read = contracts.RuntimeEventReadRequestV4Schema.parse({
 				...frozen, schemaVersion: 4, requestId: randomUUID(),
 				hostSessionRef: accepted.hostSessionRef,

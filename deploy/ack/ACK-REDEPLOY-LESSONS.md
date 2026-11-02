@@ -123,6 +123,7 @@ first authorization-start proxy，最大 348 ms，不是独立 claim 或纯排�
 
 | 现象 | 根因 | 固化到工作流的规则 |
 | --- | --- | --- |
+| 标准模型预检在长轮询中收到 `RUNTIME_GRANT_INVALID` | 新事件 Grant 有效但未续期原执行业务租约 | 在现有 bounded event-read loop 中按原 execution/host/fence 使用 V3 `execution.renew` + Grant V2；失败、abort 或 stop 保持 fail-closed，不延长 Grant TTL |
 | 合法 custom 模型事件被时间校验拒绝 | Runtime 与测量进程时钟不同；事件按 cursor 排列，不保证 `occurredAt` 全局单调 | 保留 schema、执行绑定、cursor/phase、同域 started/finished 与 duration 校验；不以本机 `now` 或提交时间验证远端时间。测量提交/观察完成用本机同一时钟，原始模型事实不改写 |
 | 网络探针基线阶段出现 `ECONNRESET` | 客户端连通后关闭连接，TCP 替身未处理 socket error 导致进程退出 | 处理连接错误后重跑真实 ECI 基线；基线通过不代表 NetworkPolicy 生效。本次 ingress deny 13 次仍连通，allow/recovery/egress 未执行，不能回填为隔离通过 |
 | 发布日志含 Docker healthcheck 警告，被误判为构建失败 | 完整相位日志显示四模板已成功构建、探测及 push；实际退出在 RuntimeHost push，原命令又隐藏了 stderr | 按 build/probe/push/readback 分段归因；push 只输出固定错误类别和来源信息，不打印原始错误。出现警告不能代替定位退出命令，也不能以升级 Action 或重跑成功倒推根因 |
