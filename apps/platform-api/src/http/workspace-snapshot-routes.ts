@@ -4,6 +4,7 @@ import {
 } from "@agent-infra/contracts/pilot";
 import type { WorkspaceSnapshotRecordV1 } from "@agent-infra/platform-core";
 import type { Hono } from "hono";
+import { WorkspaceSnapshotServiceErrorV1 } from "../workspace-snapshot-service.js";
 import { requireApiCredentialMaterial } from "./agent-api-management-support.js";
 import {
 	HttpProtocolError,
@@ -81,6 +82,33 @@ export function registerWorkspaceSnapshotRoutesV1(
 		} catch (error) {
 			if (error instanceof HttpProtocolError)
 				return context.json(error.body, error.status);
+			if (error instanceof WorkspaceSnapshotServiceErrorV1) {
+				const mapped = {
+					authentication_required: new HttpProtocolError(
+						"AUTHENTICATION_REQUIRED",
+						metadata.traceId,
+					),
+					forbidden: new HttpProtocolError(
+						"RESOURCE_UNAVAILABLE",
+						metadata.traceId,
+					),
+					conflict: new HttpProtocolError("CONFLICT", metadata.traceId),
+					quota_exceeded: new HttpProtocolError(
+						"INVALID_REQUEST",
+						metadata.traceId,
+					),
+					invalid_archive: new HttpProtocolError(
+						"INVALID_REQUEST",
+						metadata.traceId,
+					),
+					unavailable: new HttpProtocolError(
+						"DEPENDENCY_UNAVAILABLE",
+						metadata.traceId,
+					),
+				} as const;
+				const protocol = mapped[error.code];
+				return context.json(protocol.body, protocol.status);
+			}
 			return context.json(
 				new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId).body,
 				503,
@@ -99,6 +127,18 @@ export function registerWorkspaceSnapshotRoutesV1(
 				200,
 			);
 		} catch (error) {
+			if (error instanceof WorkspaceSnapshotServiceErrorV1) {
+				const protocol =
+					error.code === "authentication_required"
+						? new HttpProtocolError("AUTHENTICATION_REQUIRED", metadata.traceId)
+						: error.code === "forbidden"
+							? new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId)
+							: new HttpProtocolError(
+									"DEPENDENCY_UNAVAILABLE",
+									metadata.traceId,
+								);
+				return context.json(protocol.body, protocol.status);
+			}
 			const protocol =
 				error instanceof HttpProtocolError
 					? error
@@ -121,6 +161,18 @@ export function registerWorkspaceSnapshotRoutesV1(
 				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
 			return context.json(projection(value), 200);
 		} catch (error) {
+			if (error instanceof WorkspaceSnapshotServiceErrorV1) {
+				const protocol =
+					error.code === "authentication_required"
+						? new HttpProtocolError("AUTHENTICATION_REQUIRED", metadata.traceId)
+						: error.code === "forbidden"
+							? new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId)
+							: new HttpProtocolError(
+									"DEPENDENCY_UNAVAILABLE",
+									metadata.traceId,
+								);
+				return context.json(protocol.body, protocol.status);
+			}
 			const protocol =
 				error instanceof HttpProtocolError
 					? error
@@ -141,6 +193,18 @@ export function registerWorkspaceSnapshotRoutesV1(
 			);
 			return context.json(projection(value), 200);
 		} catch (error) {
+			if (error instanceof WorkspaceSnapshotServiceErrorV1) {
+				const protocol =
+					error.code === "authentication_required"
+						? new HttpProtocolError("AUTHENTICATION_REQUIRED", metadata.traceId)
+						: error.code === "forbidden"
+							? new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId)
+							: new HttpProtocolError(
+									"DEPENDENCY_UNAVAILABLE",
+									metadata.traceId,
+								);
+				return context.json(protocol.body, protocol.status);
+			}
 			const protocol =
 				error instanceof HttpProtocolError
 					? error
