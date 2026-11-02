@@ -5,8 +5,8 @@ import {
 import { and, eq, inArray } from "drizzle-orm";
 import type { drizzle } from "drizzle-orm/postgres-js";
 import {
-	agentOwners,
 	agentApplications,
+	agentOwners,
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
 } from "./schema.js";

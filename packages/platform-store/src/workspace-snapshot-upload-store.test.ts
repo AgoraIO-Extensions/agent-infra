@@ -213,7 +213,12 @@ describe("workspace snapshot publication on PostgreSQL", () => {
 	it("rejects binding a snapshot to an agent owned by another subject", async () => {
 		const who = owner();
 		const other = owner();
-		const value = await store.create(input(who), who, "binding-owner", requestDigest);
+		const value = await store.create(
+			input(who),
+			who,
+			"binding-owner",
+			requestDigest,
+		);
 		const agent = randomUUID();
 		await db`insert into platform.agents (id) values (${agent})`;
 		await db`insert into platform.agent_owners (agent_id,owner_id,created_at) values (${agent},${other.id},now())`;
