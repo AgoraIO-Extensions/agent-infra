@@ -145,8 +145,11 @@ export function createPlatformProjectionReaders(
 						? presentation.source
 						: presentation.source.kind === "custom"
 							? (() => {
-									const { workspaceSnapshots: _snapshots, ...source } =
-										presentation.source;
+									const source = { ...presentation.source } as Record<
+										string,
+										unknown
+									>;
+									delete source.workspaceSnapshots;
 									return source;
 								})()
 							: presentation.source,
