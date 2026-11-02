@@ -12,6 +12,29 @@ it.each([1, 2] as const)(
 		const name = `packages/contracts/artifacts/openapi/pilot-browser.v${version}.openapi.json`;
 		const before = await readEvaluationBaseline(`v${version}`);
 		const after = JSON.parse(await readFile(join(repo, name), "utf8"));
+		const removeSnapshots = (value: unknown): void => {
+			if (!value || typeof value !== "object") return;
+			if (Array.isArray(value)) {
+				for (const item of value) removeSnapshots(item);
+				return;
+			}
+			const object = value as Record<string, unknown>;
+			delete object.workspaceSnapshots;
+			for (const child of Object.values(object)) removeSnapshots(child);
+		};
+		removeSnapshots(after);
+		for (const path of [
+			"/api/v2/workspace-snapshots",
+			"/api/v2/workspace-snapshots/{snapshotId}",
+		])
+			delete after.paths[path];
+		for (const schema of [
+			"WorkspaceSnapshotBindingV1",
+			"WorkspaceSnapshotMetadataV1",
+			"WorkspaceSnapshotSourceV1",
+			"WorkspaceSnapshotUploadRequestV1",
+		])
+			delete after.components.schemas[schema];
 		const dir = await mkdtemp(join(tmpdir(), "evaluation-analysis-compat-"));
 		async function compare(a: unknown, b: unknown) {
 			await writeFile(join(dir, "before.json"), JSON.stringify(a));

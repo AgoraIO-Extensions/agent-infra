@@ -398,6 +398,8 @@ describe("standard contract artifacts", () => {
 			"/api/v2/skills/versions/{skillVersionId}/review",
 			"/api/v2/skills/versions/{skillVersionId}/revoke",
 			"/api/v2/task-feedback/{executionId}",
+			"/api/v2/workspace-snapshots",
+			"/api/v2/workspace-snapshots/{snapshotId}",
 		]);
 		const nativeCapability =
 			artifacts.pilotBrowserOpenapiV2.paths[
