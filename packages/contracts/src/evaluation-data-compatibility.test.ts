@@ -18,6 +18,7 @@ it.each(["v1", "v2"] as const)(
 				"utf8",
 			),
 		);
+		delete current.paths["/api/v2/me/workspace-snapshots"];
 		const previous = await readEvaluationBaseline(version);
 		for (const path of Object.keys(previous.paths))
 			if (path.startsWith("/api/v2/evaluation/")) delete previous.paths[path];

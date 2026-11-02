@@ -7063,6 +7063,10 @@ function normalizeEvaluationAnalysis3640(previous, current) {
 // with earlier pinned additions. Authority, limits and metadata stay exact.
 const workspaceSnapshot3871Pins = [
 	[
+		["paths", "/api/v2/me/workspace-snapshots"],
+		"32b54f72f684d9607355413157b6b9067850b06f78739f2c0467833fe254534d",
+	],
+	[
 		["paths", "/api/v2/workspace-snapshots"],
 		"efa2bca5745eccf38c916f7c3b9acb848d3690267c7d354758f97fc290bdbf64",
 	],

@@ -12,6 +12,7 @@ it.each([1, 2] as const)(
 		const name = `packages/contracts/artifacts/openapi/pilot-browser.v${version}.openapi.json`;
 		const before = await readEvaluationBaseline(`v${version}`);
 		const after = JSON.parse(await readFile(join(repo, name), "utf8"));
+		delete after.paths["/api/v2/me/workspace-snapshots"];
 		const dir = await mkdtemp(join(tmpdir(), "evaluation-analysis-compat-"));
 		async function compare(a: unknown, b: unknown) {
 			await writeFile(join(dir, "before.json"), JSON.stringify(a));
