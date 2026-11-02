@@ -951,6 +951,17 @@ export function createMultiServiceRuntimeOperations(options: {
 				throw new Error("multi-service migration pull policy drifted");
 			return current;
 		}
+		if (
+			(object.kind === "Deployment" || object.kind === "StatefulSet") &&
+			isDeepStrictEqual(current.spec, object.spec) &&
+			Object.entries(object.metadata?.labels ?? {}).every(
+				([key, expected]) => current.metadata?.labels?.[key] === expected,
+			) &&
+			Object.entries(object.metadata?.annotations ?? {}).every(
+				([key, expected]) => current.metadata?.annotations?.[key] === expected,
+			)
+		)
+			return current;
 		if (current.kind === "PersistentVolumeClaim") {
 			const currentPvc = current as unknown as V1PersistentVolumeClaim;
 			const declaredPvc = manifestPvc(value, current.metadata?.name ?? "");
@@ -1260,6 +1271,12 @@ export function createMultiServiceRuntimeOperations(options: {
 			}
 			if (!current.metadata.resourceVersion)
 				throw new Error("multi-service entry resource version unavailable");
+			const memberSnapshot = JSON.stringify(identities);
+			if (
+				current.metadata.annotations?.[memberIdentityAnnotation] ===
+				memberSnapshot
+			)
+				return { uid: current.metadata.uid, generation: generation as number };
 			await client.replace({
 				...current,
 				metadata: {
@@ -1268,7 +1285,7 @@ export function createMultiServiceRuntimeOperations(options: {
 					resourceVersion: current.metadata.resourceVersion,
 					annotations: {
 						...current.metadata.annotations,
-						[memberIdentityAnnotation]: JSON.stringify(identities),
+						[memberIdentityAnnotation]: memberSnapshot,
 					},
 				},
 			});
