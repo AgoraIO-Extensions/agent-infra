@@ -355,7 +355,8 @@ for (const offset of [-1_000, 1_000]) {
 		assert.deepEqual(
 			result.modelFacts,
 			f.state.wire.filter(
-				(event) => event.type === "operation" && event.payload.phase !== "intent",
+				(event) =>
+					event.type === "operation" && event.payload.phase !== "intent",
 			),
 		);
 		assert.equal(f.state.acks.at(-1), "cursor-5");
