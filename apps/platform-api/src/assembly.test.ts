@@ -214,6 +214,20 @@ describe("Platform API production assembly", () => {
 			},
 		};
 		const assembly = assemblePlatformApi(baseInput);
+		// The snapshot surface is fail-closed: no deployment boundary means no route dependency.
+		expect(assembly.dependencies.workspaceSnapshots).toBeUndefined();
+		const snapshotBoundary = {
+			upload: vi.fn(),
+			list: vi.fn(),
+			get: vi.fn(),
+			remove: vi.fn(),
+		};
+		const configured = assemblePlatformApi({
+			...baseInput,
+			workspaceSnapshots: snapshotBoundary,
+		});
+		expect(configured.dependencies.workspaceSnapshots).toBe(snapshotBoundary);
+		await configured.close();
 		expect(assembly.dependencies.conversation.modelSelection).toBe(
 			modelSelection,
 		);
