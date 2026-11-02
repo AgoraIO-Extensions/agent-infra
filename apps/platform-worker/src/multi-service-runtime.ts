@@ -28,8 +28,8 @@ import type {
 	V1StatefulSet,
 } from "@kubernetes/client-node";
 import {
-	WorkloadKubernetesError,
 	type WorkerKubernetesClientV1,
+	WorkloadKubernetesError,
 } from "./kubernetes-client.js";
 import {
 	agentAnnotation,

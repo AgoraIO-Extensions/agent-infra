@@ -17,8 +17,8 @@ import type {
 import { ObjectSerializer } from "@kubernetes/client-node/dist/gen/models/ObjectSerializer.js";
 import { describe, expect, it } from "vitest";
 import {
-	WorkloadKubernetesError,
 	type WorkerKubernetesClientV1,
+	WorkloadKubernetesError,
 } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 import {
