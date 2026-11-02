@@ -32122,17 +32122,6 @@
               "minLength": 1,
               "type": "string"
             }
-          },
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9._~-]+$",
-              "type": "string"
-            }
           }
         ],
         "responses": {

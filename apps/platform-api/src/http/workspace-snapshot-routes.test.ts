@@ -55,7 +55,7 @@ describe("workspace snapshot HTTP boundary", () => {
 				bindings: [],
 			},
 		]);
-		expect(f.deps.list).toHaveBeenCalledWith(material);
+		expect(f.deps.list).toHaveBeenCalledWith(material, expect.any(Object));
 		expect(text).not.toContain("object-1");
 	});
 

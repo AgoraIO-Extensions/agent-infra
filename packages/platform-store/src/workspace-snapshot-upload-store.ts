@@ -184,7 +184,10 @@ export class PostgresWorkspaceSnapshotUploadStoreV1
 	forCredential(
 		material: string,
 		directory?: TaskUserDirectoryV1,
-		metadata = { requestId: randomUUID(), traceId: randomUUID() },
+		metadata: { requestId: string; traceId: string } = {
+			requestId: randomUUID(),
+			traceId: randomUUID(),
+		},
 	) {
 		const auth: Authorization = { material, directory, ...metadata };
 		return {

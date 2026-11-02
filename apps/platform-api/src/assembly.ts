@@ -583,11 +583,18 @@ export function assemblePlatformApi(
 		? (input.workspaceSnapshotDeployment.spool ??
 			createWorkspaceSnapshotFileSpoolV1())
 		: undefined;
-	function snapshotServiceFor(material: string) {
+	function snapshotServiceFor(
+		material: string,
+		metadata?: { requestId: string; traceId: string },
+	) {
 		const deployment = input.workspaceSnapshotDeployment;
 		if (!deployment || !snapshotStore)
 			throw new Error("Snapshot deployment unavailable");
-		const bound = snapshotStore.forCredential(material, userDirectory);
+		const bound = snapshotStore.forCredential(
+			material,
+			userDirectory,
+			metadata,
+		);
 		return createWorkspaceSnapshotServiceV1({
 			...deployment,
 			spool: snapshotSpool,
@@ -601,11 +608,13 @@ export function assemblePlatformApi(
 		| undefined = input.workspaceSnapshotDeployment
 		? {
 				upload: (request) =>
-					snapshotServiceFor(request.material).upload(request),
-				list: (material) => snapshotServiceFor(material).list(material),
-				get: (material, id) => snapshotServiceFor(material).get(material, id),
-				remove: (material, id) =>
-					snapshotServiceFor(material).remove(material, id),
+					snapshotServiceFor(request.material, request).upload(request),
+				list: (material, metadata) =>
+					snapshotServiceFor(material, metadata).list(material),
+				get: (material, id, metadata) =>
+					snapshotServiceFor(material, metadata).get(material, id),
+				remove: (material, id, metadata) =>
+					snapshotServiceFor(material, metadata).remove(material, id),
 			}
 		: undefined;
 	const conversationTransaction =

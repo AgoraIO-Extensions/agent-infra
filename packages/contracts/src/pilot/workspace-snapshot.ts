@@ -136,7 +136,6 @@ export const workspaceSnapshotOpenApiPathsV1 = {
 			security: [{ platformApiCredential: ["agent:manage"] }],
 			requestParams: {
 				path: z.strictObject({ snapshotId: OpaqueIdV1Schema }),
-				header: z.strictObject({ "Idempotency-Key": IdempotencyKeyV1Schema }),
 			},
 			responses: {
 				"200": response(

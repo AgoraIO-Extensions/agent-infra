@@ -20,6 +20,7 @@ import type {
 	UpdateAgentConfigurationCommandV3,
 	UpdateAgentConfigurationCommandV4,
 	UpgradeCustomAgentImageCommandV1,
+	UpgradeCustomAgentManifestCommandV1,
 	WorkspaceSnapshotBindingV1,
 } from "./agent-configuration-types.js";
 import {
@@ -164,7 +165,7 @@ function parseSourceSelection(
 			"manifest",
 			"interactionMode",
 			"identityResponsibility",
-		"workspaceSnapshots",
+			"workspaceSnapshots",
 		],
 	);
 	if (base.kind === "standard") {
@@ -192,7 +193,8 @@ function parseSourceSelection(
 			base.manifest.length > 262_144 ||
 			base.interactionMode !== "self-managed" ||
 			base.identityResponsibility !== "self-managed" ||
-			Object.keys(base).length !== (base.workspaceSnapshots === undefined ? 4 : 5)
+			Object.keys(base).length !==
+				(base.workspaceSnapshots === undefined ? 4 : 5)
 		)
 			invalidCommand();
 		return {
@@ -215,7 +217,8 @@ function parseSourceSelection(
 		if (
 			(base.identityResponsibility !== "self-managed" &&
 				base.identityResponsibility !== "platform-managed") ||
-			Object.keys(base).length !== (base.workspaceSnapshots === undefined ? 4 : 5)
+			Object.keys(base).length !==
+				(base.workspaceSnapshots === undefined ? 4 : 5)
 		) {
 			invalidCommand();
 		}
@@ -227,7 +230,10 @@ function parseSourceSelection(
 			workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
 		};
 	}
-	if (Object.keys(base).length !== (base.workspaceSnapshots === undefined ? 3 : 4)) invalidCommand();
+	if (
+		Object.keys(base).length !== (base.workspaceSnapshots === undefined ? 3 : 4)
+	)
+		invalidCommand();
 	return {
 		kind: "custom",
 		imageReference: base.imageReference,
@@ -265,7 +271,7 @@ export function parseAdmittedSource(
 			"manifest",
 			"interactionMode",
 			"identityResponsibility",
-		"workspaceSnapshots",
+			"workspaceSnapshots",
 		],
 	);
 	if (
@@ -284,7 +290,8 @@ export function parseAdmittedSource(
 			base.interactionMode !== "self-managed" ||
 			base.identityResponsibility !== "self-managed" ||
 			base.connectionEnabled !== false ||
-			Object.keys(base).length !== (base.workspaceSnapshots === undefined ? 7 : 8)
+			Object.keys(base).length !==
+				(base.workspaceSnapshots === undefined ? 7 : 8)
 		)
 			invalidCommand();
 		return {
@@ -328,7 +335,8 @@ export function parseAdmittedSource(
 		if (
 			(base.identityResponsibility !== "self-managed" &&
 				base.identityResponsibility !== "platform-managed") ||
-			Object.keys(base).length !== (base.workspaceSnapshots === undefined ? 6 : 7)
+			Object.keys(base).length !==
+				(base.workspaceSnapshots === undefined ? 6 : 7)
 		) {
 			invalidCommand();
 		}
@@ -342,7 +350,10 @@ export function parseAdmittedSource(
 			workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
 		};
 	}
-	if (Object.keys(base).length !== (base.workspaceSnapshots === undefined ? 5 : 6)) invalidCommand();
+	if (
+		Object.keys(base).length !== (base.workspaceSnapshots === undefined ? 5 : 6)
+	)
+		invalidCommand();
 	return {
 		kind: "custom",
 		imageDigest: base.imageDigest,
@@ -825,6 +836,40 @@ export function parseUpgradeCustomImageCommand(
 		schemaVersion: 1,
 		agentId: values.agentId,
 		imageReference: values.imageReference,
+		idempotencyKey: values.idempotencyKey,
+		requestId: values.requestId,
+		traceId: values.traceId,
+	};
+}
+
+export function parseUpgradeCustomManifestCommand(
+	command: unknown,
+): UpgradeCustomAgentManifestCommandV1 {
+	const values = exactObject(command, [
+		"schemaVersion",
+		"agentId",
+		"manifest",
+		"idempotencyKey",
+		"requestId",
+		"traceId",
+	]);
+	if (
+		values.schemaVersion !== 1 ||
+		!isText(values.agentId, idMaxBytes) ||
+		typeof values.manifest !== "string" ||
+		values.manifest.length < 1 ||
+		values.manifest.length > 262_144 ||
+		!isText(values.idempotencyKey, 128) ||
+		!/^[A-Za-z0-9._~-]{1,128}$/.test(values.idempotencyKey) ||
+		!isText(values.requestId, idMaxBytes) ||
+		!isText(values.traceId, idMaxBytes)
+	) {
+		invalidCommand();
+	}
+	return {
+		schemaVersion: 1,
+		agentId: values.agentId,
+		manifest: values.manifest,
 		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
 		traceId: values.traceId,

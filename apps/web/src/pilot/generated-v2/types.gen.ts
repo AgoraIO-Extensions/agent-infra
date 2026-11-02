@@ -9593,9 +9593,6 @@ export type UploadWorkspaceSnapshotV1Response = UploadWorkspaceSnapshotV1Respons
 
 export type DeleteWorkspaceSnapshotV1Data = {
     body?: never;
-    headers: {
-        'Idempotency-Key': string;
-    };
     path: {
         snapshotId: string;
     };

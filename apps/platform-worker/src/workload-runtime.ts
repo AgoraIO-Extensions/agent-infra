@@ -661,6 +661,10 @@ export function createWorkloadRuntimeV1(
 			readonly passed?: (podUid: string, podResourceVersion?: string) => void;
 		},
 	) {
+		const snapshotProjection = state
+			? (workspaceSnapshotProjections.get(state.candidate) ??
+				options.workspaceSnapshotProjection)
+			: options.workspaceSnapshotProjection;
 		const modelProjection =
 			state?.candidate.configuration.source.kind === "standard"
 				? candidateKeyless(state)
@@ -699,7 +703,7 @@ export function createWorkloadRuntimeV1(
 			onHealthDiagnostic: options.onHealthDiagnostic,
 			modelProjection,
 			standardTemplateBinding,
-			workspaceSnapshotProjection: options.workspaceSnapshotProjection,
+			workspaceSnapshotProjection: snapshotProjection,
 			containerBoundaryServiceToken: options.containerBoundaryServiceToken,
 			async probe({ desired, serviceOrigin, podUid, podResourceVersion }) {
 				let probeStartedAt = performance.now();
@@ -900,6 +904,28 @@ export function createWorkloadRuntimeV1(
 			},
 		});
 	}
+	const workspaceSnapshotProjections = new WeakMap<
+		WorkloadReconciliationStateV1["candidate"],
+		WorkspaceSnapshotPodProjectionV1
+	>();
+	function multiServiceFor(
+		state?: Pick<WorkloadReconciliationStateV1, "candidate">,
+	) {
+		const workspaceSnapshotProjection = state
+			? (workspaceSnapshotProjections.get(state.candidate) ??
+				options.workspaceSnapshotProjection)
+			: options.workspaceSnapshotProjection;
+		if (workspaceSnapshotProjection === options.workspaceSnapshotProjection)
+			return multiService;
+		return createMultiServiceRuntimeOperations({
+			client: options.client,
+			policy: {
+				...options.policy,
+				workspaceSnapshotProjection,
+			},
+			onHealthDiagnostic: options.onHealthDiagnostic,
+		});
+	}
 	const adapter = createAdapter();
 	function isUnmaterializedInitialWorkload(
 		state: WorkloadReconciliationStateV1,
@@ -1041,7 +1067,7 @@ export function createWorkloadRuntimeV1(
 		if (!input.secrets) return false;
 		const workload = desired(state);
 		const multiServiceRuntime = isMultiService(workload)
-			? multiService
+			? multiServiceFor(state)
 			: undefined;
 		for (const { record } of bindings) {
 			const reference = recordReference(record);
@@ -1117,7 +1143,7 @@ export function createWorkloadRuntimeV1(
 			if (!state.identity) return "pending" as const;
 			const observedWorkload = desired(state);
 			if (isMultiService(observedWorkload)) {
-				const health = await multiService.observe(
+				const health = await multiServiceFor(state).observe(
 					observedWorkload,
 					state.identity,
 				);
@@ -1370,6 +1396,14 @@ export function createWorkloadRuntimeV1(
 						fence: state.fence,
 						bindings: snapshotBindings,
 					});
+					if (!snapshotMaterialization.projection)
+						throw new WorkloadPreflightRejectedErrorV1(
+							"snapshot-materialization",
+						);
+					workspaceSnapshotProjections.set(
+						state.candidate,
+						snapshotMaterialization.projection,
+					);
 				} catch {
 					throw new WorkloadPreflightRejectedErrorV1(
 						"snapshot-materialization",
@@ -1790,7 +1824,7 @@ export function createWorkloadRuntimeV1(
 				const workload = desired(state);
 				if (
 					!isMultiService(workload) ||
-					!(await multiService.closeRoute(workload, {
+					!(await multiServiceFor(state).closeRoute(workload, {
 						allowOwnershipTransition: true,
 					}))
 				)
@@ -1812,7 +1846,7 @@ export function createWorkloadRuntimeV1(
 				if (isUnmaterializedInitialWorkload(state)) return true;
 				const workload = desired(state);
 				if (!isMultiService(workload)) return false;
-				return multiService.cleanupMigration(workload);
+				return multiServiceFor(state).cleanupMigration(workload);
 			}
 			return true;
 		},
@@ -1821,10 +1855,10 @@ export function createWorkloadRuntimeV1(
 				if (isUnmaterializedInitialWorkload(state)) return null;
 				const workload = desired(state);
 				if (!isMultiService(workload)) return null;
-				await multiService.closeRoute(workload, {
+				await multiServiceFor(state).closeRoute(workload, {
 					allowOwnershipTransition: true,
 				});
-				return multiService.scaleDown(workload);
+				return multiServiceFor(state).scaleDown(workload);
 			}
 			if (stopped)
 				return createAdapter().scaleDownAgent(
@@ -1837,7 +1871,7 @@ export function createWorkloadRuntimeV1(
 			await revalidateCandidateCatalog(state);
 			const workload = desired(state);
 			const multiServiceRuntime = isMultiService(workload)
-				? multiService
+				? multiServiceFor(state)
 				: undefined;
 			const multiWorkload = multiServiceRuntime
 				? (workload as MultiServiceDesired)
@@ -1923,7 +1957,7 @@ export function createWorkloadRuntimeV1(
 			}
 			let identity: { uid: string; generation: number };
 			if (isMultiService(workload)) {
-				const applied = await multiService.apply(workload, {
+				const applied = await multiServiceFor(state).apply(workload, {
 					allowOwnershipTransition: true,
 				});
 				if (applied === "pending") return "pending";
@@ -2006,7 +2040,7 @@ export function createWorkloadRuntimeV1(
 			if (!pending.length) return "active";
 			const workload = desired(state);
 			const multiServiceRuntime = isMultiService(workload)
-				? multiService
+				? multiServiceFor(state)
 				: undefined;
 			const multiWorkload = multiServiceRuntime
 				? (workload as MultiServiceDesired)
@@ -2121,7 +2155,8 @@ export function createWorkloadRuntimeV1(
 			assertCandidateMaterializationAllowed(state);
 			if ("manifest" in state.candidate.configuration.source) {
 				const workload = desired(state);
-				if (isMultiService(workload)) await multiService.promote(workload);
+				if (isMultiService(workload))
+					await multiServiceFor(state).promote(workload);
 				return;
 			}
 			// 只在本次晋升的短窗口内复用未变化 Pod 的证明；仍核对资源与 HTTP health。
@@ -2192,7 +2227,7 @@ export function createWorkloadRuntimeV1(
 				if (isUnmaterializedInitialWorkload(state)) return true;
 				const workload = desired(state);
 				if (!isMultiService(workload)) return false;
-				resourcesRemoved = await multiService.cleanupAgent(
+				resourcesRemoved = await multiServiceFor(state).cleanupAgent(
 					workload,
 					deleteNewVolume,
 					{ allowOwnershipTransition: true },

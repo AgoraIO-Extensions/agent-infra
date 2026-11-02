@@ -15,20 +15,27 @@ import {
 export interface WorkspaceSnapshotRouteDependenciesV1 {
 	upload(input: {
 		material: string;
+		requestId: string;
+		traceId: string;
 		idempotencyKey: string;
 		digest: string;
 		source: unknown;
 		body: ReadableStream<Uint8Array>;
 		signal?: AbortSignal;
 	}): Promise<{ record: WorkspaceSnapshotRecordV1; replayed: boolean }>;
-	list(material: string): Promise<readonly WorkspaceSnapshotRecordV1[]>;
+	list(
+		material: string,
+		metadata?: { requestId: string; traceId: string },
+	): Promise<readonly WorkspaceSnapshotRecordV1[]>;
 	get(
 		material: string,
 		snapshotId: string,
+		metadata?: { requestId: string; traceId: string },
 	): Promise<WorkspaceSnapshotRecordV1 | null>;
 	remove(
 		material: string,
 		snapshotId: string,
+		metadata?: { requestId: string; traceId: string },
 	): Promise<WorkspaceSnapshotRecordV1>;
 }
 
@@ -76,6 +83,8 @@ export function registerWorkspaceSnapshotRoutesV1(
 			});
 			const result = await dependencies.upload({
 				material,
+				requestId: metadata.requestId,
+				traceId: metadata.traceId,
 				idempotencyKey: parseIdempotencyKey(context.req.raw, metadata.traceId),
 				digest: `sha256:${digest}`,
 				source: parsed.source,
@@ -137,7 +146,7 @@ export function registerWorkspaceSnapshotRoutesV1(
 				metadata.traceId,
 			);
 			return context.json(
-				(await dependencies.list(material)).map(projection),
+				(await dependencies.list(material, metadata)).map(projection),
 				200,
 			);
 		} catch (error) {
@@ -170,6 +179,7 @@ export function registerWorkspaceSnapshotRoutesV1(
 			const value = await dependencies.get(
 				material,
 				context.req.param("snapshotId"),
+				metadata,
 			);
 			if (!value)
 				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
@@ -204,6 +214,7 @@ export function registerWorkspaceSnapshotRoutesV1(
 			const value = await dependencies.remove(
 				material,
 				context.req.param("snapshotId"),
+				metadata,
 			);
 			return context.json(projection(value), 200);
 		} catch (error) {
