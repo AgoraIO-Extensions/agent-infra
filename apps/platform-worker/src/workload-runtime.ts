@@ -1347,6 +1347,7 @@ export function createWorkloadRuntimeV1(
 			return capabilities;
 		},
 		async preflight(input, state) {
+			activeSnapshotProjection = undefined;
 			const configuration = state.candidate.configuration;
 			const snapshotBindings =
 				configuration.source.kind === "custom"
