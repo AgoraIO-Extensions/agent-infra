@@ -185,9 +185,9 @@ test("CI waiver transitions cancel older PR runs and retain checks on lookup fai
   assert.equal(exemption.outputs.skip, "${{ steps.label.outputs.skip }}");
   assert.equal(workflow.jobs.ci.name, `\${{ ${metadataEvent} && 'CI metadata event ignored' || 'CI' }}`);
   assert.deepEqual(workflow.jobs.ci.needs,
-    ["ci-exemption", "changes", "web-tests", "backend-tests", "ci_heavy"]);
+    ["ci-exemption", "changes", "web-tests", "backend-tests", "backend-package-tests", "backend-contracts-tests", "ci_heavy"]);
 	assert.equal(workflow.jobs.ci.steps.find((value) => value.name === "Require CI lanes").if,
-		guarded("(needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && ((needs.changes.outputs.web == 'true' && needs.web-tests.result != 'success') || needs.backend-tests.result != 'success')))"));
+		guarded("(needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && ((needs.changes.outputs.web == 'true' && needs.web-tests.result != 'success') || needs.backend-tests.result != 'success' || needs.backend-package-tests.result != 'success' || needs.backend-contracts-tests.result != 'success')))"));
   assert.equal(workflow.jobs.ci.if, "${{ always() && !cancelled() }}");
   assert.equal(workflow.jobs["ci_heavy"].name, "CI heavy validation");
   assert.deepEqual(workflow.jobs["ci_heavy"].needs, ["ci-exemption", "changes"]);
@@ -204,7 +204,7 @@ test("CI waiver transitions cancel older PR runs and retain checks on lookup fai
   assert.equal(workflow.jobs["workload-kind"].if,
     guarded("!cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true')"));
   assert.equal(workflow.jobs.changes.name, "Classify changes");
-  assert.equal(workflow.jobs["web-tests"].name, "Web unit tests");
+  assert.equal(workflow.jobs["web-tests"].name, "Web validation");
   assert.equal(workflow.jobs["backend-tests"].name, "Backend integration tests");
 });
 

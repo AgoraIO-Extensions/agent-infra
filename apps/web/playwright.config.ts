@@ -18,7 +18,9 @@ const mobile = {
 export default defineConfig({
 	testDir: "./tests",
 	fullyParallel: true,
-	workers: 2,
+	// CI 使用 4 vCPU 的 ubuntu-24.04 标准 runner；浏览器用例以等待 UI/网络为主，
+	// 4 workers 可缩短墙钟时间，串行项目仍单独覆盖 workers。
+	workers: 4,
 	forbidOnly: !!process.env.CI,
 	reporter: [["list"], ["html", { open: "never" }]],
 	metadata: {
