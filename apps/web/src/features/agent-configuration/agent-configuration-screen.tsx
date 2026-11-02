@@ -5,12 +5,13 @@ import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { useSubmitFocus } from "@/hooks/use-submit-focus";
-
+import { client as generatedV2Client } from "../../pilot/generated-v2/client.gen.js";
 import type {
 	AgentApiLifecycleAcceptedResponseV1,
 	AgentConfigurationUpdateRequestV2Writable,
 	AgentProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
+import { WorkspaceSnapshotsPanel } from "../agent-administration/workspace-snapshots.js";
 import type { BrowserSessionState } from "../browser-session.js";
 import { AccessDeniedCard } from "../page-state-card.js";
 import {
@@ -576,6 +577,13 @@ export function AgentConfigurationScreen({
 							error={imageError}
 							onUpgradeImage={onUpgradeImage}
 							upgrading={upgradingImage}
+						/>
+					) : null}
+					{agent.source.kind === "custom" && session.kind === "ready" ? (
+						<WorkspaceSnapshotsPanel
+							identityKey={session.session.user.userId}
+							sourceKind="custom"
+							client={generatedV2Client}
 						/>
 					) : null}
 					<div className="form-footer configuration-form-footer">
