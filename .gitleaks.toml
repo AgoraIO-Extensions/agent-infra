@@ -1,0 +1,50 @@
+title = "agent-infra secret scanning config"
+
+# Use the shipped rule set and only add repository-specific allowlists below.
+[extend]
+useDefault = true
+
+# Synthetic credentials that are intentionally committed as test fixtures or
+# documentation examples. Real credentials must never be allowlisted here:
+# rotate them first, then remove them from history.
+[[allowlists]]
+description = "audited synthetic test fixtures"
+regexTarget = "match"
+regexes = [
+	'''AKIAIOSFODNN7EXAMPLE''',
+	'''glpat-01234567890123456789''',
+	'''(?i)(?:synthetic|sentinel|fixture|canary)[-_][A-Za-z0-9_-]{4,}''',
+	'''eyJhbGciOiJFZERTQSJ9\.eyJzdWIiOiJhY3Rvci0xIn0\.c2lnbmF0dXJl''',
+]
+
+# Domain-specific false positives audited when this config was introduced.
+# Keep this list narrow: it must never cover a value that could carry a real
+# credential.
+[[allowlists]]
+description = "audited generic-api-key false positives in source code"
+targetRules = ["generic-api-key"]
+regexTarget = "match"
+regexes = [
+	'''(?i)\b(?:inputTokens|outputTokens|cachedInputTokens|defaultRelayKey|idempotencyKey)\b''',
+	'''credential -> application/use''',
+	'''runtime-host\.v[0-9]\.openapi\.json''',
+]
+
+[[allowlists]]
+description = "audited bitbucket rule false positive on a class name"
+targetRules = ["bitbucket-client-id"]
+regexTarget = "match"
+regexes = [
+	'''BitbucketServerAdapter''',
+]
+
+# The generic-api-key rule produces false positives on test fixtures and
+# generated API types. Provider-specific rules still scan those paths.
+[[allowlists]]
+description = "generic-api-key false positives in tests and generated API types"
+targetRules = ["generic-api-key"]
+paths = [
+	'''(^|/)(tests?|__tests__)/''',
+	'''\.(test|spec)\.(?:[cm]?[jt]sx?)$''',
+	'''\.gen\.ts$''',
+]

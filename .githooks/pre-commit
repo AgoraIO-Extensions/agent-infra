@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Local secret scan for staged changes. Enable per clone with:
+#   git config core.hooksPath .githooks
+# CI runs the authoritative check in .github/workflows/secret-scan.yml.
+set -euo pipefail
+
+repository_root="$(git rev-parse --show-toplevel)"
+cd "${repository_root}"
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+	printf 'gitleaks is not installed; skipping the local secret scan.\n' >&2
+	printf 'Install it with "brew install gitleaks". CI still scans this change.\n' >&2
+	exit 0
+fi
+
+gitleaks git . --config .gitleaks.toml --redact --no-banner --staged

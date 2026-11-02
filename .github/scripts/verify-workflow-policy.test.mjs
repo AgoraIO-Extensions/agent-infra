@@ -56,7 +56,7 @@ test("publishes repository validation through the CI workflow and check", async 
 
 test("requires safe machine-parseable run names for every workflow", async () => {
   const workflows = await actualWorkflows();
-  assert.equal(Object.keys(workflows).length, 6);
+  assert.equal(Object.keys(workflows).length, 7);
   assert.ok(
     Object.values(workflows).every(
       (workflow) =>
