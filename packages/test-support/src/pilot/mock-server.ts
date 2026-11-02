@@ -319,10 +319,12 @@ function createPilotAgentMockServer(
 			url.pathname === "/api/v2/me/workspace-snapshots" &&
 			listMyWorkspaceSnapshotsOperation
 		) {
-			const response = scenario.listMyWorkspaceSnapshots ?? {
+			const response = scenario.listMyWorkspaceSnapshots
+				? resolveResponse(scenario.listMyWorkspaceSnapshots, request)
+				: {
 				status: 200,
 				body: [],
-			};
+				};
 			validateResponse(listMyWorkspaceSnapshotsOperation, response);
 			return jsonResponse(response);
 		}
