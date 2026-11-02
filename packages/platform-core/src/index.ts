@@ -230,4 +230,5 @@ export * from "./workload-reconciliation.js";
 export { parseWorkloadSecretRecoveriesV1 } from "./workload-secret-recovery.js";
 export * from "./workspace-snapshot.js";
 export * from "./workspace-snapshot-archive.js";
+export * from "./workspace-snapshot-gc.js";
 export * from "./workspace-snapshot-security.js";
