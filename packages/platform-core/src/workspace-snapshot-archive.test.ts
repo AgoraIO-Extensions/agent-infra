@@ -10,6 +10,10 @@ function header(name: string, size: number, type: string) {
 	value.write(name, 0, "utf8");
 	value.write(`00000000000${size.toString(8)}`.slice(-11), 124, "ascii");
 	value[156] = type.charCodeAt(0);
+	value.write("        ", 148, "ascii");
+	let checksum = 0;
+	for (const byte of value) checksum += byte;
+	value.write(`${checksum.toString(8).padStart(6, "0")}\0 `, 148, "ascii");
 	return value;
 }
 function archive(content: string, name = "root/repo.txt") {

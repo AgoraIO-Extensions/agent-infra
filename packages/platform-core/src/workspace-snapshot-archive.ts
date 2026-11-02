@@ -25,6 +25,14 @@ function octal(value: Buffer): number {
 	return Number.parseInt(text, 8);
 }
 
+function validHeaderChecksum(header: Buffer): boolean {
+	const expected = octal(header.subarray(148, 156));
+	let actual = 0;
+	for (let index = 0; index < header.length; index += 1)
+		actual += index >= 148 && index < 156 ? 0x20 : (header[index] ?? 0);
+	return actual === expected;
+}
+
 function pathName(header: Buffer): string {
 	const name = header.subarray(0, 100).toString("utf8").replace(/\0.*$/s, "");
 	const prefix = header
@@ -110,6 +118,8 @@ export async function validateWorkspaceSnapshotArchiveV1(
 				finished = true;
 				break;
 			}
+			if (!validHeaderChecksum(header))
+				throw new WorkspaceSnapshotErrorV1("invalid_name");
 			const path = pathName(header);
 			const size = octal(header.subarray(124, 136));
 			const type = String.fromCharCode(header[156] ?? 0);
