@@ -1652,6 +1652,24 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				},
 			};
 			if (options.workspaceSnapshotProjection) {
+				const projection = options.workspaceSnapshotProjection;
+				const manifestSecretName =
+					projection.volumes.find(
+						(volume) => volume.name === "workspace-snapshot-credentials",
+					)?.secret?.secretName ?? "workspace-snapshot-credentials";
+				const manifestSecret = await client.read<V1Secret>(
+					"Secret",
+					manifestSecretName,
+				);
+				const secret: V1Secret = {
+					apiVersion: "v1",
+					kind: "Secret",
+					metadata: { ...manifestSecret?.metadata, name: manifestSecretName },
+					type: "Opaque",
+					stringData: { "manifest.json": projection.manifest },
+				};
+				if (manifestSecret) await client.replace(secret);
+				else await client.create(secret);
 				const workloadSpec = workload.spec;
 				const podSpec = workloadSpec?.template?.spec;
 				if (!podSpec) throw new WorkloadKubernetesError("policy");
