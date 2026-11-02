@@ -1661,23 +1661,20 @@ ${dispatch}
 				"deploy",
 				"templates",
 				"login",
+				"publish-1",
 				"credential",
 				"provision",
 				"bind",
-				"publish-1",
+				"publish-2",
 				"ready",
 				"validate",
 			]);
 		else assert(!stages.includes("validate"));
 		if (failure === "plan") assert(!stages.includes("bootstrap"));
 		if (failure === "initial-publication")
-			assert(
-				stages.includes("credential") &&
-					stages.includes("provision") &&
-					stages.includes("bind") &&
-					!stages.includes("validate"),
-			);
-		if (failure === "binding") assert(!stages.includes("publish-1"));
+			assert(!stages.includes("credential") && !stages.includes("provision"));
+		if (failure === "binding")
+			assert(stages.includes("publish-1") && !stages.includes("publish-2"));
 		if (failure === "reserve-publication") assert(!stages.includes("ready"));
 	});
 }
