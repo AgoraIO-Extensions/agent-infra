@@ -31,6 +31,19 @@ node scripts/dev-preflight.mjs plan
 输出包含 `sourceSha`、`required` 和 `skipped`。`skipped` 每项必须带 reason；跳过不是通过，
 receipt 只表示选择结果。命令复用仓库已有检查，不删除安全、类型、测试、构建或部署门禁。
 
+## Secret 扫描
+
+- 本地提交前（可选、推荐）：执行 `git config core.hooksPath .githooks` 为当前 clone 启用
+  `.githooks/pre-commit`。hook 在检测到 `gitleaks` 时扫描 staged 变更；未安装时给出提示并以 CI 为准。
+- CI：`.github/workflows/secret-scan.yml` 使用 `.gitleaks.toml`，PR 扫描 `base..head`，main push
+  扫描 `before..after`；gitleaks 版本和 sha256 固定在工作流内。
+- `.gitleaks.toml` 只 allowlist 已审计的合成测试夹具和历史误报；真实凭证不得加入 allowlist，
+  必须先轮换、再从历史中移除。
+- `.scratch/`、`.tmp-*` 和根目录 `status.md` 已被 `.gitignore` 忽略；不要把机器状态、会话日志或
+  个人路径加入提交。
+- GitHub 原生 secret scanning + push protection 仍是 provider 已知格式凭证的第一道门禁；本地和
+  CI 扫描覆盖仓库配置与自定义规则，不替代原生门禁。
+
 ## 适用性
 
 本仓库采用人工监督的本地 Agent 开发。外部要求后台 implementer/merger subagent、无人值守

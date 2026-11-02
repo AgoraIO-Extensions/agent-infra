@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import YAML from "yaml";
 
-const REQUIRED_WORKFLOWS = ["auto-merge.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml"];
+const REQUIRED_WORKFLOWS = ["auto-merge.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml", "secret-scan.yml"];
 
 // Keep the ignored-event boundary identical for concurrency, admission and the
 // aggregate name: skipped metadata must never publish a required CI check.
