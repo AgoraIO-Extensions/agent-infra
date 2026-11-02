@@ -106,6 +106,7 @@ import type { NativeMetadataRoutesDependenciesV1 } from "./http/native-metadata-
 import type { SkillHubAgentBindingRoutesDependenciesV1 } from "./http/skill-hub-agent-binding-routes.js";
 import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
 import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
+import type { WorkspaceSnapshotRouteDependenciesV1 } from "./http/workspace-snapshot-routes.js";
 import { createNativeCapabilityMetadataRevalidationV1 } from "./native-capability-metadata.js";
 import {
 	createPlatformProjectionReaders,
@@ -143,6 +144,12 @@ interface AssemblyQueries {
 }
 
 export interface PlatformApiAssemblyInput {
+	/**
+	 * Optional fail-closed deployment boundary. The deployment must supply the
+	 * credential resolver, archive validator, object storage transaction, quota,
+	 * owner authorization and audit implementation; assembly never invents them.
+	 */
+	readonly workspaceSnapshots?: WorkspaceSnapshotRouteDependenciesV1;
 	readonly sessionSandboxReserves?: import("@agent-infra/platform-core").SessionSandboxReserveConfigurationV1;
 	readonly connectionInstallation?: {
 		readonly publicOrigin: string;
@@ -1103,6 +1110,9 @@ export function assemblePlatformApi(
 		: undefined;
 	readFileLimits = files?.readLimits;
 	const dependencies: PlatformAppDependencies = {
+		...(input.workspaceSnapshots
+			? { workspaceSnapshots: input.workspaceSnapshots }
+			: {}),
 		...(installationStore &&
 		installationCallbackConfiguration &&
 		input.connectionInstallation
