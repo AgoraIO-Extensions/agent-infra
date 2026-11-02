@@ -35,17 +35,38 @@ function fixture() {
 describe("workspace snapshot HTTP boundary", () => {
 	it("requires bearer credentials and returns metadata only", async () => {
 		const f = fixture();
-		const response = await f.app.request("/api/v2/workspace-snapshots", { headers: { Authorization: `Bearer ${material}` } });
+		const response = await f.app.request("/api/v2/workspace-snapshots", {
+			headers: { Authorization: `Bearer ${material}` },
+		});
 		expect(response.status).toBe(200);
 		const text = await response.text();
-		expect(JSON.parse(text)).toEqual([{ snapshotId: record.snapshotId, digest: record.digest, sizeBytes: record.sizeBytes, unpackedSizeBytes: record.unpackedSizeBytes, fileCount: record.fileCount, mediaType: record.mediaType, source: record.source, createdAt: record.createdAt, status: record.status, bindings: [] }]);
+		expect(JSON.parse(text)).toEqual([
+			{
+				snapshotId: record.snapshotId,
+				digest: record.digest,
+				sizeBytes: record.sizeBytes,
+				unpackedSizeBytes: record.unpackedSizeBytes,
+				fileCount: record.fileCount,
+				mediaType: record.mediaType,
+				source: record.source,
+				createdAt: record.createdAt,
+				status: record.status,
+				bindings: [],
+			},
+		]);
 		expect(f.deps.list).toHaveBeenCalledWith(material);
 		expect(text).not.toContain("object-1");
 	});
 
 	it("rejects cookies and mixed identity headers before calling the store", async () => {
 		const f = fixture();
-		const response = await f.app.request("/api/v2/workspace-snapshots", { headers: { Authorization: `Bearer ${material}`, Cookie: "session=caller", "X-User-Id": "other" } });
+		const response = await f.app.request("/api/v2/workspace-snapshots", {
+			headers: {
+				Authorization: `Bearer ${material}`,
+				Cookie: "session=caller",
+				"X-User-Id": "other",
+			},
+		});
 		expect(response.status).toBeGreaterThanOrEqual(400);
 		expect(f.deps.list).not.toHaveBeenCalled();
 	});
