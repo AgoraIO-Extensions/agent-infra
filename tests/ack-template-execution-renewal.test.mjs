@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
+import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -356,6 +357,25 @@ test("real Host rejects the expired execution lease then accepts after V3 renewa
 		),
 		(error) => error.diagnostic === "event-authority-expired",
 	);
+	const server = createServer(async (incoming, response) => {
+		const chunks = [];
+		for await (const chunk of incoming) chunks.push(chunk);
+		const body = JSON.parse(Buffer.concat(chunks).toString());
+		assert.equal(incoming.url, "/internal/runtime/v3/authorizations/renew");
+		const renewed = await host.renewAuthorizationV3(
+			body,
+			hostRuntime.createRuntimeExecutionGrantVerifierV2(publicKeys)(body.grant),
+		);
+		response.writeHead(200, { "content-type": "application/json" });
+		response.end(JSON.stringify(renewed));
+	});
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	t.after(
+		async () =>
+			new Promise((resolve, reject) =>
+				server.close((error) => (error ? reject(error) : resolve())),
+			),
+	);
 	const renew = createTemplateExecutionRenewal({
 		request,
 		hostSessionRef: accepted.hostSessionRef,
@@ -364,15 +384,14 @@ test("real Host rejects the expired execution lease then accepts after V3 renewa
 		signing,
 		signal: new AbortController().signal,
 		waitForHostGrant: async () => {},
-		post: async (path, body) => {
-			assert.equal(path, "/internal/runtime/v3/authorizations/renew");
-			return host.renewAuthorizationV3(
-				body,
-				hostRuntime.createRuntimeExecutionGrantVerifierV2(publicKeys)(
-					body.grant,
-				),
-			);
-		},
+		post: async (path, body) =>
+			(
+				await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify(body),
+				})
+			).json(),
 	});
 	await renew();
 	const recovered = await eventGrant();
