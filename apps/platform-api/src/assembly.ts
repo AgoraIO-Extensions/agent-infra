@@ -136,6 +136,11 @@ import {
 	assembleWecomSetupApiV1,
 	type WecomBotQrConfigurationV1,
 } from "./wecom-setup-assembly.js";
+import { createWorkspaceSnapshotCredentialResolverV1 } from "./workspace-snapshot-credential-resolver.js";
+import {
+	createWorkspaceSnapshotServiceV1,
+	type WorkspaceSnapshotServiceOptionsV1,
+} from "./workspace-snapshot-service.js";
 
 type Admissions = Omit<AgentConfigurationUseCaseDependenciesV1, "transaction">;
 
@@ -150,6 +155,13 @@ export interface PlatformApiAssemblyInput {
 	 * owner authorization and audit implementation; assembly never invents them.
 	 */
 	readonly workspaceSnapshots?: WorkspaceSnapshotRouteDependenciesV1;
+	/** Deployment-owned object storage/spool/store/quota; absent keeps snapshot routes disabled. */
+	readonly workspaceSnapshotDeployment?: Omit<
+		WorkspaceSnapshotServiceOptionsV1,
+		"credentials"
+	> & {
+		readonly credentials?: WorkspaceSnapshotServiceOptionsV1["credentials"];
+	};
 	readonly sessionSandboxReserves?: import("@agent-infra/platform-core").SessionSandboxReserveConfigurationV1;
 	readonly connectionInstallation?: {
 		readonly publicOrigin: string;
@@ -562,6 +574,16 @@ export function assemblePlatformApi(
 		transaction: personalApiCredentialStore,
 		userDirectory,
 	});
+	const workspaceSnapshotService = input.workspaceSnapshotDeployment
+		? createWorkspaceSnapshotServiceV1({
+				...input.workspaceSnapshotDeployment,
+				credentials:
+					input.workspaceSnapshotDeployment.credentials ??
+					createWorkspaceSnapshotCredentialResolverV1({
+						personalApiAgentRead,
+					}),
+			})
+		: undefined;
 	const conversationTransaction =
 		new PostgresConversationExecutionTransactionV1({
 			sessionSandboxReserves: input.sessionSandboxReserves,
@@ -1110,8 +1132,11 @@ export function assemblePlatformApi(
 		: undefined;
 	readFileLimits = files?.readLimits;
 	const dependencies: PlatformAppDependencies = {
-		...(input.workspaceSnapshots
-			? { workspaceSnapshots: input.workspaceSnapshots }
+		...(input.workspaceSnapshots || workspaceSnapshotService
+			? {
+					workspaceSnapshots:
+						input.workspaceSnapshots ?? workspaceSnapshotService,
+				}
 			: {}),
 		...(installationStore &&
 		installationCallbackConfiguration &&
