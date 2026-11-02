@@ -27,7 +27,10 @@ import type {
 	V1ServiceAccount,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
-import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
+import {
+	type WorkerKubernetesClientV1,
+	WorkloadKubernetesError,
+} from "./kubernetes-client.js";
 import {
 	agentAnnotation,
 	agentContainerSecurityContext,
@@ -975,6 +978,58 @@ export function createMultiServiceRuntimeOperations(options: {
 				resource.kind === "PersistentVolumeClaim" &&
 				resourceName(value, resource.metadata.name) === name,
 		);
+	const sameWorkloadShape = (
+		current: KubernetesObject,
+		desired: KubernetesObject,
+	) =>
+		isDeepStrictEqual(
+			current.kind === "Deployment" || current.kind === "StatefulSet"
+				? normalizedWorkloadSpec(current as V1Deployment | V1StatefulSet)
+				: (current as KubernetesObject & { spec?: unknown }).spec,
+			desired.kind === "Deployment" || desired.kind === "StatefulSet"
+				? normalizedWorkloadSpec(desired as V1Deployment | V1StatefulSet)
+				: (desired as KubernetesObject & { spec?: unknown }).spec,
+		) &&
+		Object.entries(desired.metadata?.labels ?? {}).every(
+			([key, expected]) => current.metadata?.labels?.[key] === expected,
+		) &&
+		Object.entries(desired.metadata?.annotations ?? {}).every(
+			([key, expected]) => current.metadata?.annotations?.[key] === expected,
+		);
+	async function replaceWorkloadWithConflictRetry<T extends KubernetesObject>(
+		desired: T,
+		current: T,
+		value: MultiServiceDesired,
+	) {
+		let live = current;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			if (sameWorkloadShape(live, desired)) return live;
+			try {
+				return await client.replace({
+					...desired,
+					metadata: {
+						...desired.metadata,
+						uid: live.metadata?.uid,
+						resourceVersion: live.metadata?.resourceVersion,
+					},
+				});
+			} catch (error) {
+				if (
+					!(error instanceof WorkloadKubernetesError) ||
+					error.code !== "conflict" ||
+					attempt === 2
+				)
+					throw error;
+				const refreshed = await client.read<T>(
+					desired.kind as never,
+					desired.metadata?.name ?? "",
+				);
+				if (!refreshed || !owned(refreshed, value)) throw error;
+				live = refreshed;
+			}
+		}
+		throw new Error("multi-service conflict retry exhausted");
+	}
 	async function emitHealthDiagnostic(
 		value: MultiServiceDesired,
 		stage: MultiServiceHealthDiagnosticV1["stage"],
@@ -1084,16 +1139,7 @@ export function createMultiServiceRuntimeOperations(options: {
 		}
 		if (
 			(object.kind === "Deployment" || object.kind === "StatefulSet") &&
-			isDeepStrictEqual(
-				normalizedWorkloadSpec(current as V1Deployment | V1StatefulSet),
-				normalizedWorkloadSpec(object as V1Deployment | V1StatefulSet),
-			) &&
-			Object.entries(object.metadata?.labels ?? {}).every(
-				([key, expected]) => current.metadata?.labels?.[key] === expected,
-			) &&
-			Object.entries(object.metadata?.annotations ?? {}).every(
-				([key, expected]) => current.metadata?.annotations?.[key] === expected,
-			)
+			sameWorkloadShape(current, object)
 		)
 			return current;
 		if (current.kind === "PersistentVolumeClaim") {
@@ -1115,6 +1161,12 @@ export function createMultiServiceRuntimeOperations(options: {
 			current.kind === "PersistentVolumeClaim"
 				? (current as unknown as V1PersistentVolumeClaim)
 				: undefined;
+		if (
+			(object.kind === "Deployment" || object.kind === "StatefulSet") &&
+			current.metadata?.resourceVersion &&
+			current.metadata.uid
+		)
+			return replaceWorkloadWithConflictRetry(object, current, value);
 		if (current.metadata?.resourceVersion && current.metadata.uid)
 			return client.replace({
 				...object,
@@ -1414,18 +1466,22 @@ export function createMultiServiceRuntimeOperations(options: {
 				memberSnapshot
 			)
 				return { uid: current.metadata.uid, generation: generation as number };
-			await client.replace({
-				...current,
-				metadata: {
-					...current.metadata,
-					uid: current.metadata.uid,
-					resourceVersion: current.metadata.resourceVersion,
-					annotations: {
-						...current.metadata.annotations,
-						[memberIdentityAnnotation]: memberSnapshot,
+			await replaceWorkloadWithConflictRetry(
+				{
+					...current,
+					metadata: {
+						...current.metadata,
+						uid: current.metadata.uid,
+						resourceVersion: current.metadata.resourceVersion,
+						annotations: {
+							...current.metadata.annotations,
+							[memberIdentityAnnotation]: memberSnapshot,
+						},
 					},
 				},
-			});
+				current,
+				value,
+			);
 			return { uid: current.metadata.uid, generation: generation as number };
 		},
 		async observe(
@@ -1617,19 +1673,23 @@ export function createMultiServiceRuntimeOperations(options: {
 					current.metadata.annotations[uk] !== secretUid
 				)
 					throw new Error("multi-service Secret UID fence drifted");
-				await client.replace({
-					...current,
-					metadata: {
-						...current.metadata,
-						resourceVersion: current.metadata.resourceVersion,
-						uid: current.metadata.uid,
-						annotations: {
-							...current.metadata.annotations,
-							[fk]: String(fence),
-							[uk]: secretUid,
+				await replaceWorkloadWithConflictRetry(
+					{
+						...current,
+						metadata: {
+							...current.metadata,
+							resourceVersion: current.metadata.resourceVersion,
+							uid: current.metadata.uid,
+							annotations: {
+								...current.metadata.annotations,
+								[fk]: String(fence),
+								[uk]: secretUid,
+							},
 						},
 					},
-				});
+					current,
+					value,
+				);
 			}
 			for (const member of members) {
 				const current = await client.read<V1Deployment | V1StatefulSet>(
@@ -1684,18 +1744,22 @@ export function createMultiServiceRuntimeOperations(options: {
 					expectedEntryIdentity.generation
 			)
 				throw new Error("multi-service entry identity unavailable");
-			await client.replace({
-				...currentEntryAfter,
-				metadata: {
-					...currentEntryAfter.metadata,
-					uid: currentEntryAfter.metadata.uid,
-					resourceVersion: currentEntryAfter.metadata.resourceVersion,
-					annotations: {
-						...currentEntryAfter.metadata.annotations,
-						[memberIdentityAnnotation]: serializeMemberSnapshot(identities),
+			await replaceWorkloadWithConflictRetry(
+				{
+					...currentEntryAfter,
+					metadata: {
+						...currentEntryAfter.metadata,
+						uid: currentEntryAfter.metadata.uid,
+						resourceVersion: currentEntryAfter.metadata.resourceVersion,
+						annotations: {
+							...currentEntryAfter.metadata.annotations,
+							[memberIdentityAnnotation]: serializeMemberSnapshot(identities),
+						},
 					},
 				},
-			});
+				currentEntryAfter,
+				value,
+			);
 		},
 		async observeSecretFence(
 			value: MultiServiceDesired,
