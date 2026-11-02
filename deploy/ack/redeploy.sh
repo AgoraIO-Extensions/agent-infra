@@ -702,12 +702,10 @@ case "$command" in
 		else
 			require_file ACK_TEMPLATE_VALIDATIONS_FILE "${ACK_TEMPLATE_VALIDATIONS_FILE:-}"
 		fi
-		if [[ -n "${ACK_LOGIN_BOOTSTRAP_FILE:-}" ]]; then
-			bootstrap_login
-		fi
 		if [[ -n "${ACK_CUSTOM_CAPACITY_JOB_FILE:-}" ]]; then
 			custom_preflight
 		fi
+		bootstrap_login
 		runtime_inputs
 		if [[ -n "${ACK_CREDENTIAL_BOOTSTRAP_FILE:-}" ]]; then
 			bootstrap_credential
@@ -716,6 +714,7 @@ case "$command" in
 		provision
 		if [[ -n "${ACK_SESSION_RESERVE_PLAN_FILE:-}" ]]; then
 			bind_session_reserves
+			bootstrap_login
 			runtime_inputs
 			wait_session_reserves
 		else

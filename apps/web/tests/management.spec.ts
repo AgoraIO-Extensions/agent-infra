@@ -6475,7 +6475,11 @@ test.describe("final acceptance Y shell and directory", () => {
 		await expect(icons).toHaveCount(2);
 		for (const icon of await icons.all()) {
 			const box = await icon.boundingBox();
-			expect([box?.width, box?.height]).toEqual([17, 17]);
+			if (!box) throw new Error("Expected icon geometry");
+			// 并行 worker 下 Chromium 可能返回 16.99998 这类亚像素尺寸，按 0.5px 容差断言，
+			// 与本用例顶部菜单/面包屑几何断言保持一致。
+			expect(Math.abs(box.width - 17)).toBeLessThanOrEqual(0.5);
+			expect(Math.abs(box.height - 17)).toBeLessThanOrEqual(0.5);
 		}
 	});
 

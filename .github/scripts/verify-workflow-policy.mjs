@@ -13,6 +13,8 @@ const CI_JOB_CONDITIONS = {
   "changes": "always() && !cancelled()",
   "web-tests": "!cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true'",
   "backend-tests": "!cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true'",
+  "backend-package-tests": "!cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true'",
+  "backend-contracts-tests": "!cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true'",
   "ci_heavy": "always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true')",
   "workload-kind": "!cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true')",
 };
@@ -124,7 +126,7 @@ export function validateWorkflowDocuments(workflows) {
     errors.push("CI aggregate must run to evaluate its name for metadata and waiver events");
   const validationEvent = `!(${CI_METADATA_EVENT}) && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true')`;
   const aggregateConditions = {
-    "Require CI lanes": `\${{ ${validationEvent} && (needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && ((needs.changes.outputs.web == 'true' && needs.web-tests.result != 'success') || needs.backend-tests.result != 'success'))) }}`,
+    "Require CI lanes": `\${{ ${validationEvent} && (needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && ((needs.changes.outputs.web == 'true' && needs.web-tests.result != 'success') || needs.backend-tests.result != 'success' || needs.backend-package-tests.result != 'success' || needs.backend-contracts-tests.result != 'success'))) }}`,
     "Report completed CI lanes": `\${{ ${validationEvent} }}`,
     "Report ignored metadata event": `\${{ ${CI_METADATA_EVENT} }}`,
     "Report CI waiver": `\${{ !(${CI_METADATA_EVENT}) && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip == 'true' }}`,
