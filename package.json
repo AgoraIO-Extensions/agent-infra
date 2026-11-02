@@ -37,7 +37,8 @@
 		"docker:up": "docker compose up -d --build",
 		"docker:down": "docker compose down",
 		"docker:logs": "docker compose logs -f",
-		"test:packages:serial:contracts": "pnpm --workspace-concurrency=1 --filter @agent-infra/agent-runtime --filter @agent-infra/contracts --filter @agent-infra/enterprise-directory-store --filter @agent-infra/platform-core --filter @agent-infra/platform-store --filter @agent-infra/test-support test"
+		"test:packages:serial:contracts": "pnpm --workspace-concurrency=1 --filter @agent-infra/agent-runtime --filter @agent-infra/contracts --filter @agent-infra/enterprise-directory-store --filter @agent-infra/platform-core --filter @agent-infra/platform-store --filter @agent-infra/test-support test",
+		"test:packages:serial:rest": "pnpm --workspace-concurrency=1 --filter @agent-infra/agent-runtime --filter @agent-infra/contracts --filter @agent-infra/enterprise-directory-store --filter @agent-infra/platform-core --filter @agent-infra/platform-store --filter @agent-infra/test-support test"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.6",
