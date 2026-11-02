@@ -233,8 +233,8 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Build Web dependencies
-        run: pnpm exec turbo run build --filter=@agent-infra/web
+      - name: Build applications and workspace packages
+        run: pnpm build
       - name: Run Web tests
         run: pnpm test:apps:web
       - name: Cache Playwright browsers
