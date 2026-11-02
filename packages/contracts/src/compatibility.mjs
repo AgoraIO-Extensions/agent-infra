@@ -7097,6 +7097,7 @@ const workspaceSnapshot3871SourceSchemas = [
 	"AgentApplicationProjectionV2",
 	"AgentProjectionV2",
 	"AgentDetailProjectionV1",
+	"AgentConfigurationUpdateRequestV2",
 ];
 function normalizeWorkspaceSnapshot3871(previous, current) {
 	if (!previous.openapi || !current.openapi) return { previous, current };
@@ -7118,6 +7119,19 @@ function normalizeWorkspaceSnapshot3871(previous, current) {
 				return undefined;
 		}
 		const normalized = structuredClone(doc);
+		const update =
+			normalized.components.schemas.AgentConfigurationUpdateRequestV2;
+		if (update?.properties?.source !== undefined) {
+			if (
+				update.required?.includes("source") ||
+				createHash("sha256")
+					.update(JSON.stringify(update.properties.source))
+					.digest("hex") !==
+					"f063d4188082f704a9a23b02bf579b64fc33bfb295b98953520c6c78554b9903"
+			)
+				return undefined;
+			delete update.properties.source;
+		}
 		const sources = workspaceSnapshot3871SourceSchemas.map(
 			(name) => normalized.components.schemas[name]?.properties?.source,
 		);
