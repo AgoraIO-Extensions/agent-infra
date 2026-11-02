@@ -17,6 +17,7 @@ type PilotAgentMockResponderV1<TArgs extends readonly unknown[]> =
 
 export type PilotAgentMockServerScenarioV1 = {
 	readonly getCurrentSession?: PilotAgentMockResponderV1<[Request]>;
+	readonly listMyWorkspaceSnapshots?: PilotAgentMockResponderV1<[Request]>;
 	readonly getDeploymentConfiguration?: PilotAgentMockResponderV1<[Request]>;
 	readonly listAgents: PilotAgentMockResponderV1<[Request]>;
 	readonly getAgent: PilotAgentMockResponderV1<[Request, string]>;
@@ -160,6 +161,10 @@ function createPilotAgentMockServer(
 	}
 	const listAgentsOperation = operation("/api/v1/agents", "get");
 	const getCurrentSessionOperation = operation("/api/v1/session", "get");
+	const listMyWorkspaceSnapshotsOperation =
+		version === 2
+			? operation("/api/v2/me/workspace-snapshots", "get")
+			: undefined;
 	const getDeploymentConfigurationOperation =
 		version === 2
 			? operation("/api/v2/deployment/configuration", "get")
@@ -228,6 +233,11 @@ function createPilotAgentMockServer(
 		);
 	}
 	validateStaticResponse(scenario.listAgents, listAgentsOperation);
+	if (listMyWorkspaceSnapshotsOperation)
+		validateStaticResponse(
+			scenario.listMyWorkspaceSnapshots,
+			listMyWorkspaceSnapshotsOperation,
+		);
 	validateStaticResponse(scenario.getAgent, getAgentOperation);
 	if (getAgentDetailOperation) {
 		validateStaticResponse(scenario.getAgentDetail, getAgentDetailOperation);
@@ -302,6 +312,18 @@ function createPilotAgentMockServer(
 			const response =
 				typeof responder === "function" ? responder(request) : responder;
 			validateResponse(getCurrentSessionOperation, response);
+			return jsonResponse(response);
+		}
+		if (
+			request.method === "GET" &&
+			url.pathname === "/api/v2/me/workspace-snapshots" &&
+			listMyWorkspaceSnapshotsOperation
+		) {
+			const response = scenario.listMyWorkspaceSnapshots ?? {
+				status: 200,
+				body: [],
+			};
+			validateResponse(listMyWorkspaceSnapshotsOperation, response);
 			return jsonResponse(response);
 		}
 
