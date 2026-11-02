@@ -39,7 +39,6 @@ import {
 	registerApplicationRegistrationRoutes,
 } from "./http/application-registration-routes.js";
 import { HttpProtocolError, requestMetadata } from "./http/common.js";
-import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import {
 	type ConnectionInstallationCallbackRouteDependenciesV1,
 	registerConnectionInstallationCallbackRoutesV1,
@@ -157,7 +156,10 @@ import {
 	registerUserGovernanceRoutes,
 	type UserGovernanceRoutesDependencies,
 } from "./http/user-governance-routes.js";
-import { registerV2ConfigurationRoutes } from "./http/v2-configuration-routes.js";
+import {
+	type ConfigurationRoutesDependencies,
+	registerV2ConfigurationRoutes,
+} from "./http/v2-configuration-routes.js";
 import {
 	type ManagementRouteDependencies,
 	registerV2ManagementRoutes,

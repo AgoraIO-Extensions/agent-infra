@@ -1,5 +1,6 @@
 import {
 	AgentApplicationProjectionV1Schema,
+	AgentApplicationProjectionV2Schema,
 	AgentDetailProjectionV1Schema,
 	AgentProjectionV1Schema,
 	AgentProjectionV2Schema,
@@ -40,7 +41,7 @@ export type PresentPlatformAgent = (input: {
 	/** Server-authenticated personal API reader; never a browser identity. */
 	readonly apiUser?: CurrentTaskUserV1;
 }) => Promise<{
-	readonly source: AgentProjection["source"];
+	readonly source: AgentProjectionV2["source"];
 	readonly resourceProfile: ApplicationProjection["resourceProfile"];
 	readonly modelOptions: AgentProjection["configuration"]["modelOptions"];
 	readonly channels: AgentProjection["configuration"]["channels"];
@@ -92,6 +93,14 @@ function sourceMatches(
 			source.identityResponsibility ===
 				configuration.source.identityResponsibility)
 	);
+}
+
+function legacySource(
+	source: AgentProjectionV2["source"],
+): AgentProjection["source"] {
+	if (source.kind === "standard") return source;
+	const { workspaceSnapshots: _snapshots, ...legacy } = source;
+	return legacy;
 }
 
 export function createPlatformProjectionReaders(
@@ -250,6 +259,54 @@ export function createPlatformProjectionReaders(
 		)) as AgentProjectionV2;
 	}
 
+	async function projectApplication(
+		input: ProjectionMetadata & {
+			readonly application?: AgentManagementApplicationProjectionV1;
+		},
+		version: 1 | 2,
+	) {
+		if (!input.application) {
+			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", input.traceId);
+		}
+		const { presentation, wire } = await configurationProjection(
+			input.application.agentId,
+			input.application.management,
+			input,
+		);
+		const [applicant] = await owners(
+			input.requestScope ?? input,
+			[input.application.applicantId],
+			input.traceId,
+		);
+		const { actions: _actions, ...configurationV2 } = wire;
+		const value = {
+			schemaVersion: version,
+			applicationId: input.application.applicationId,
+			agentId: input.application.agentId,
+			name: input.application.name,
+			description: input.application.description,
+			source:
+				version === 1 ? legacySource(presentation.source) : presentation.source,
+			status: input.application.management.status,
+			resourceProfile: presentation.resourceProfile,
+			configuration: version === 1 ? wire : configurationV2,
+			submittedAt: input.application.submittedAt.toISOString(),
+			updatedAt: (
+				input.application.updatedAt ?? input.application.submittedAt
+			).toISOString(),
+			applicant,
+			decision: input.application.decision
+				? {
+						decidedAt: input.application.decision.decidedAt.toISOString(),
+						reason: input.application.decision.reason,
+					}
+				: null,
+		};
+		return version === 1
+			? AgentApplicationProjectionV1Schema.parse(value)
+			: AgentApplicationProjectionV2Schema.parse(value);
+	}
+
 	return {
 		/**
 		 * Agent 详情（#2910）：与 readManagementAgentProjection 相同的可见性与配置读取，
@@ -312,41 +369,14 @@ export function createPlatformProjectionReaders(
 				readonly application?: AgentManagementApplicationProjectionV1;
 			},
 		): Promise<ApplicationProjection> {
-			if (!input.application) {
-				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", input.traceId);
-			}
-			const { presentation, wire } = await configurationProjection(
-				input.application.agentId,
-				input.application.management,
-				input,
-			);
-			const [applicant] = await owners(
-				input.requestScope ?? input,
-				[input.application.applicantId],
-				input.traceId,
-			);
-			return AgentApplicationProjectionV1Schema.parse({
-				schemaVersion: 1,
-				applicationId: input.application.applicationId,
-				agentId: input.application.agentId,
-				name: input.application.name,
-				description: input.application.description,
-				source: presentation.source,
-				status: input.application.management.status,
-				resourceProfile: presentation.resourceProfile,
-				configuration: wire,
-				submittedAt: input.application.submittedAt.toISOString(),
-				updatedAt: (
-					input.application.updatedAt ?? input.application.submittedAt
-				).toISOString(),
-				applicant,
-				decision: input.application.decision
-					? {
-							decidedAt: input.application.decision.decidedAt.toISOString(),
-							reason: input.application.decision.reason,
-						}
-					: null,
-			});
+			return (await projectApplication(input, 1)) as ApplicationProjection;
+		},
+		async readApplicationProjectionV2(
+			input: ProjectionMetadata & {
+				readonly application?: AgentManagementApplicationProjectionV1;
+			},
+		) {
+			return projectApplication(input, 2);
 		},
 
 		async readManagementAgentProjection(

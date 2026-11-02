@@ -1326,12 +1326,15 @@ export function assemblePlatformApi(
 			allocateApplicationIds: input.allocateApplicationIds,
 			prepareSecretReplacements: input.prepareApplicationSecrets,
 			readApplicationProjection: projections.readApplicationProjection,
+			readApplicationProjectionV2: projections.readApplicationProjectionV2,
 			readAgentProjection: projections.readManagementAgentProjection,
+			readAgentProjectionV2: projections.readManagementAgentProjectionV2,
 			readAgentDetailProjection: projections.readAgentDetailProjection,
 			readWorkloadFailureReason: (agentId) =>
 				managementQuery.getWorkloadFailureReason(agentId),
 			personalApiAgentRead,
 			readApiAgentProjection: projections.readApiAgentProjection,
+			readApiAgentProjectionV2: projections.readApiAgentProjectionV2,
 			...(input.validateDefaultRelayKey
 				? { validateDefaultRelayKey: input.validateDefaultRelayKey }
 				: {}),
@@ -1343,6 +1346,7 @@ export function assemblePlatformApi(
 			configurationQuery,
 			prepareSecretReplacements: input.prepareConfigurationSecrets,
 			readAgentProjection: projections.readConfigurationAgentProjection,
+			readAgentProjectionV2: projections.readConfigurationAgentProjectionV2,
 			...(savedKeyCandidatesTransport
 				? { savedKeyCandidates: savedKeyCandidatesTransport }
 				: {}),
