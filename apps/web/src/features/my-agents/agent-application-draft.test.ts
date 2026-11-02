@@ -152,6 +152,33 @@ describe("Agent application draft", () => {
 		);
 	});
 
+	it("omits server service summaries when editing a projected multi-service application", () => {
+		const source = {
+			kind: "custom" as const,
+			interactionMode: "self-managed" as const,
+			identityResponsibility: "self-managed" as const,
+			manifest: "schemaVersion: 1\nentryServiceName: web\nresources: []",
+			services: [{ name: "web", resourceProfileRef: "small", entry: true }],
+		};
+		const original = structuredClone(source);
+		const body = buildAgentApplicationRequest("update", {
+			...standardCreateDraft,
+			sourceKind: "custom-multi-service",
+			source,
+			manifest: "ignored changed source",
+			configureModels: false,
+			models: [],
+			secrets: [],
+		});
+		expect(body.source).toEqual({
+			kind: source.kind,
+			interactionMode: source.interactionMode,
+			identityResponsibility: source.identityResponsibility,
+			manifest: source.manifest,
+		});
+		expect(source).toEqual(original);
+	});
+
 	it("marks only duplicated model options on their model fields", () => {
 		const errors = validateAgentApplicationDraft(
 			{

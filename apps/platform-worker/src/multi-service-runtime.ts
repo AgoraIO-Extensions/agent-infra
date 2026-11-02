@@ -20,7 +20,9 @@ import type {
 	V1Job,
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
+	V1Pod,
 	V1PodSpec,
+	V1Secret,
 	V1Service,
 	V1ServiceAccount,
 	V1StatefulSet,
@@ -35,6 +37,11 @@ import {
 	hasSameStructure,
 	ownerLabel,
 	revisionLabel,
+	secretConfigRevisionAnnotation,
+	secretFenceAnnotation,
+	secretIdAnnotation,
+	secretUidAnnotation,
+	secretVersionAnnotation,
 	workloadImagePullSpecV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
@@ -42,6 +49,8 @@ import {
 export type MultiServiceDesired = AgentWorkloadDesiredV1 & {
 	multiService: NonNullable<AgentWorkloadDesiredV1["multiService"]>;
 };
+
+const memberIdentityAnnotation = "agent-infra.agora.io/multi-service-members";
 
 export interface MultiServiceRuntimePolicyV1 {
 	readonly namespace: string;
@@ -125,6 +134,104 @@ function serviceResourceName(agentId: string, name: string): string {
 
 function serviceLabel(name: string): string {
 	return name.length <= 63 ? name : name.slice(0, 63);
+}
+
+function entryWorkloadResource(value: MultiServiceDesired) {
+	const service = value.multiService.resources.find(
+		(resource) =>
+			resource.kind === "Service" &&
+			resource.metadata.name === value.multiService.entryServiceName,
+	);
+	if (service?.kind !== "Service")
+		throw new Error("multi-service entry is unavailable");
+	const matches = value.multiService.resources.filter(
+		(resource) =>
+			(resource.kind === "Deployment" || resource.kind === "StatefulSet") &&
+			Object.entries(service.spec.selector).every(
+				([key, expected]) =>
+					resource.spec.template.metadata.labels[key] === expected,
+			),
+	);
+	const resource = matches[0];
+	if (
+		matches.length !== 1 ||
+		!resource ||
+		(resource.kind !== "Deployment" && resource.kind !== "StatefulSet")
+	)
+		throw new Error("multi-service entry is ambiguous");
+	return resource;
+}
+
+function environmentSecrets(value: MultiServiceDesired) {
+	return value.secretRefs.map((ref) => ({
+		secretRef: { name: ref.name, optional: false },
+	}));
+}
+
+function matchesEnvironmentSecrets(
+	value: MultiServiceDesired,
+	spec: V1PodSpec | undefined,
+) {
+	const expected = environmentSecrets(value);
+	return (spec?.containers ?? []).every((container) =>
+		isDeepStrictEqual(container.envFrom ?? [], expected),
+	);
+}
+
+function memberResources(value: MultiServiceDesired) {
+	return value.multiService.resources.filter(
+		(resource) =>
+			resource.kind === "Deployment" || resource.kind === "StatefulSet",
+	);
+}
+
+type MemberIdentitySnapshot = Record<
+	string,
+	{ readonly uid: string; readonly generation: number }
+>;
+function parseMemberSnapshot(value: unknown): MemberIdentitySnapshot | null {
+	if (typeof value !== "string") return null;
+	try {
+		const parsed = JSON.parse(value) as Record<string, unknown>;
+		if (!parsed || Array.isArray(parsed)) return null;
+		const result: MemberIdentitySnapshot = {};
+		for (const [name, item] of Object.entries(parsed)) {
+			if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+			const { uid, generation } = item as Record<string, unknown>;
+			if (
+				typeof uid !== "string" ||
+				!uid ||
+				!Number.isSafeInteger(generation) ||
+				(generation as number) < 1
+			)
+				return null;
+			result[name] = { uid, generation: generation as number };
+		}
+		return result;
+	} catch {
+		return null;
+	}
+}
+
+function memberSelector(
+	value: MultiServiceDesired,
+	member: MultiServiceDesired["multiService"]["resources"][number],
+) {
+	if (member.kind !== "Deployment" && member.kind !== "StatefulSet")
+		return undefined;
+	const service = value.multiService.resources.find(
+		(resource) =>
+			resource.kind === "Service" &&
+			Object.entries(resource.spec.selector).every(
+				([key, expected]) =>
+					member.spec.template.metadata.labels[key] === expected,
+			),
+	);
+	return service?.kind === "Service"
+		? Object.entries(service.spec.selector)
+				.map(([key, expected]) => `${key}=${expected}`)
+				.join(",")
+		: undefined;
 }
 
 function routePeer(policy: MultiServiceRuntimePolicyV1) {
@@ -344,6 +451,7 @@ function deployment(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
+							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
 							securityContext: agentContainerSecurityContext(),
@@ -442,6 +550,7 @@ function statefulSet(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
+							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
 							securityContext: agentContainerSecurityContext(),
@@ -557,6 +666,7 @@ function migrationJob(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
+							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
 							securityContext: agentContainerSecurityContext(),
@@ -1040,11 +1150,7 @@ export function createMultiServiceRuntimeOperations(options: {
 					value,
 					ownership,
 				);
-				if (!jobSucceeded(job as V1Job))
-					return {
-						uid: workloadResourceNameV1(value.agentId),
-						generation: value.workloadRevision,
-					};
+				if (!jobSucceeded(job as V1Job)) return "pending" as const;
 			}
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "PersistentVolumeClaim")
@@ -1103,14 +1209,65 @@ export function createMultiServiceRuntimeOperations(options: {
 						ownership,
 					);
 			}
-			return {
-				uid: workloadResourceNameV1(value.agentId),
-				generation: value.workloadRevision,
-			};
+			const entry = entryWorkloadResource(value);
+			const current = await client.read<V1Deployment | V1StatefulSet>(
+				entry.kind,
+				serviceResourceName(value.agentId, entry.metadata.name),
+			);
+			if (
+				!current ||
+				!owned(current, value) ||
+				current.metadata?.deletionTimestamp ||
+				!current.metadata?.uid ||
+				!Number.isSafeInteger(current.metadata.generation) ||
+				(current.metadata.generation ?? 0) < 1
+			)
+				throw new Error("multi-service entry identity unavailable");
+			const generation = current.metadata.generation;
+			if (
+				typeof generation !== "number" ||
+				!Number.isSafeInteger(generation) ||
+				generation < 1
+			)
+				throw new Error("multi-service entry generation unavailable");
+			const identities: MemberIdentitySnapshot = {};
+			for (const member of memberResources(value)) {
+				const currentMember = await client.read<V1Deployment | V1StatefulSet>(
+					member.kind as "Deployment" | "StatefulSet",
+					serviceResourceName(value.agentId, member.metadata.name),
+				);
+				const memberGeneration = currentMember?.metadata?.generation;
+				if (
+					!currentMember?.metadata?.uid ||
+					typeof memberGeneration !== "number" ||
+					!Number.isSafeInteger(memberGeneration) ||
+					memberGeneration < 1
+				)
+					throw new Error("multi-service consumer generation unavailable");
+				identities[member.metadata.name] = {
+					uid: currentMember.metadata.uid,
+					generation: memberGeneration,
+				};
+			}
+			if (!current.metadata.resourceVersion)
+				throw new Error("multi-service entry resource version unavailable");
+			await client.replace({
+				...current,
+				metadata: {
+					...current.metadata,
+					uid: current.metadata.uid,
+					resourceVersion: current.metadata.resourceVersion,
+					annotations: {
+						...current.metadata.annotations,
+						[memberIdentityAnnotation]: JSON.stringify(identities),
+					},
+				},
+			});
+			return { uid: current.metadata.uid, generation: generation as number };
 		},
 		async observe(
 			value: MultiServiceDesired,
-			_identity: { uid: string; generation: number },
+			identity: { uid: string; generation: number } | "pending",
 		) {
 			const migration = migrationResource(value);
 			if (migration?.kind === "Job") {
@@ -1135,6 +1292,24 @@ export function createMultiServiceRuntimeOperations(options: {
 					return "unreachable" as const;
 				}
 			}
+			if (identity === "pending") return "pending" as const;
+			const entry = entryWorkloadResource(value);
+			const currentEntry = await client.read<V1Deployment | V1StatefulSet>(
+				entry.kind,
+				serviceResourceName(value.agentId, entry.metadata.name),
+			);
+			if (
+				!currentEntry ||
+				!owned(currentEntry, value) ||
+				currentEntry.metadata?.deletionTimestamp ||
+				currentEntry.metadata?.uid !== identity.uid ||
+				currentEntry.metadata.generation !== identity.generation
+			)
+				return "drifted" as const;
+			const snapshot = parseMemberSnapshot(
+				currentEntry.metadata.annotations?.[memberIdentityAnnotation],
+			);
+			if (!snapshot) return "drifted" as const;
 			for (const resource of value.multiService.resources) {
 				if (resource.kind !== "Deployment" && resource.kind !== "StatefulSet")
 					continue;
@@ -1145,7 +1320,15 @@ export function createMultiServiceRuntimeOperations(options: {
 				if (
 					!current ||
 					!owned(current, value) ||
-					!matchesImagePullSecrets(current.spec?.template.spec)
+					!matchesImagePullSecrets(current.spec?.template.spec) ||
+					!matchesEnvironmentSecrets(value, current.spec?.template.spec)
+				)
+					return "drifted" as const;
+				const memberIdentity = snapshot[resource.metadata.name];
+				if (
+					!memberIdentity ||
+					current.metadata?.uid !== memberIdentity.uid ||
+					current.metadata.generation !== memberIdentity.generation
 				)
 					return "drifted" as const;
 				// 工作负载还在启动：与单镜像路径一致返回 pending，由调谐按重试上限等待，
@@ -1185,6 +1368,303 @@ export function createMultiServiceRuntimeOperations(options: {
 		},
 		async promote(value: MultiServiceDesired) {
 			await put(ingress(value, options.policy), value);
+		},
+		async materializeSecret(
+			value: MultiServiceDesired,
+			name: string,
+			key: string,
+			plaintext: Uint8Array,
+		) {
+			const ref = value.secretRefs.find((entry) => entry.name === name);
+			if (!ref) throw new Error("multi-service Secret reference unavailable");
+			const object: V1Secret = {
+				apiVersion: "v1",
+				kind: "Secret",
+				type: "Opaque",
+				immutable: true,
+				metadata: {
+					...metadata(value, name),
+					annotations: {
+						...metadata(value, name).annotations,
+						[secretIdAnnotation]: ref.secretId,
+						[secretVersionAnnotation]: String(ref.secretVersion),
+						[secretConfigRevisionAnnotation]: String(ref.configRevision),
+					},
+				},
+				data: { [key]: Buffer.from(plaintext).toString("base64") },
+			};
+			const current = await client.read<V1Secret>("Secret", name);
+			if (!current)
+				return (
+					(await client.create(object)).metadata?.uid ??
+					(async () => {
+						const live = await client.read<V1Secret>("Secret", name);
+						if (!live?.metadata?.uid)
+							throw new Error("multi-service Secret UID unavailable");
+						return live.metadata.uid;
+					})()
+				);
+			if (
+				!current.metadata?.uid ||
+				current.immutable !== true ||
+				current.type !== "Opaque" ||
+				current.metadata.annotations?.[agentAnnotation] !== value.agentId ||
+				current.metadata.annotations?.[secretIdAnnotation] !== ref.secretId ||
+				current.metadata.annotations?.[secretVersionAnnotation] !==
+					String(ref.secretVersion) ||
+				current.metadata.annotations?.[secretConfigRevisionAnnotation] !==
+					String(ref.configRevision) ||
+				!isDeepStrictEqual(current.data ?? {}, object.data)
+			)
+				throw new Error("multi-service Secret drifted");
+			return current.metadata.uid;
+		},
+		async bindSecretFence(
+			value: MultiServiceDesired,
+			secretName: string,
+			fence: number,
+			secretUid: string,
+		) {
+			const members = memberResources(value);
+			if (!members.length)
+				throw new Error("multi-service Secret consumers unavailable");
+			const identities: MemberIdentitySnapshot = {};
+			for (const member of members) {
+				const kind = member.kind as "Deployment" | "StatefulSet";
+				const name = serviceResourceName(value.agentId, member.metadata.name);
+				const current = await client.read<V1Deployment | V1StatefulSet>(
+					kind,
+					name,
+				);
+				if (
+					!current?.metadata?.uid ||
+					!current.metadata.resourceVersion ||
+					!owned(current, value) ||
+					!Number.isSafeInteger(current.metadata.generation) ||
+					(current.metadata.generation ?? 0) < 1
+				)
+					throw new Error("multi-service consumer identity unavailable");
+				const fk = secretFenceAnnotation(secretName);
+				const uk = secretUidAnnotation(secretName);
+				if (
+					current.metadata.annotations?.[uk] &&
+					current.metadata.annotations[uk] !== secretUid
+				)
+					throw new Error("multi-service Secret UID fence drifted");
+				await client.replace({
+					...current,
+					metadata: {
+						...current.metadata,
+						resourceVersion: current.metadata.resourceVersion,
+						uid: current.metadata.uid,
+						annotations: {
+							...current.metadata.annotations,
+							[fk]: String(fence),
+							[uk]: secretUid,
+						},
+					},
+				});
+			}
+			for (const member of members) {
+				const current = await client.read<V1Deployment | V1StatefulSet>(
+					member.kind as "Deployment" | "StatefulSet",
+					serviceResourceName(value.agentId, member.metadata.name),
+				);
+				if (
+					!current?.metadata?.uid ||
+					current.metadata.annotations?.[secretFenceAnnotation(secretName)] !==
+						String(fence) ||
+					current.metadata.annotations?.[secretUidAnnotation(secretName)] !==
+						secretUid ||
+					!matchesEnvironmentSecrets(value, current.spec?.template.spec)
+				)
+					throw new Error("multi-service Secret fence readback drifted");
+			}
+			for (const member of members) {
+				const current = await client.read<V1Deployment | V1StatefulSet>(
+					member.kind as "Deployment" | "StatefulSet",
+					serviceResourceName(value.agentId, member.metadata.name),
+				);
+				if (
+					!current?.metadata?.uid ||
+					!Number.isSafeInteger(current.metadata.generation) ||
+					(current.metadata.generation ?? 0) < 1
+				)
+					throw new Error("multi-service consumer generation unavailable");
+				const generation = current.metadata.generation;
+				if (
+					typeof generation !== "number" ||
+					!Number.isSafeInteger(generation) ||
+					generation < 1
+				)
+					throw new Error("multi-service consumer generation unavailable");
+				identities[member.metadata.name] = {
+					uid: current.metadata.uid,
+					generation: generation as number,
+				};
+			}
+			const entryAfter = entryWorkloadResource(value);
+			const currentEntryAfter = await client.read<V1Deployment | V1StatefulSet>(
+				entryAfter.kind,
+				serviceResourceName(value.agentId, entryAfter.metadata.name),
+			);
+			if (
+				!currentEntryAfter?.metadata?.uid ||
+				!currentEntryAfter.metadata.resourceVersion
+			)
+				throw new Error("multi-service entry identity unavailable");
+			await client.replace({
+				...currentEntryAfter,
+				metadata: {
+					...currentEntryAfter.metadata,
+					uid: currentEntryAfter.metadata.uid,
+					resourceVersion: currentEntryAfter.metadata.resourceVersion,
+					annotations: {
+						...currentEntryAfter.metadata.annotations,
+						[memberIdentityAnnotation]: JSON.stringify(identities),
+					},
+				},
+			});
+		},
+		async observeSecretFence(
+			value: MultiServiceDesired,
+			secretName: string,
+			fence: number,
+		) {
+			const secret = await client.read<V1Secret>("Secret", secretName);
+			if (!secret?.metadata?.uid || secret.metadata.deletionTimestamp)
+				return false;
+			const secretUid = secret.metadata.uid;
+			for (const member of memberResources(value)) {
+				const current = await client.read<V1Deployment | V1StatefulSet>(
+					member.kind as "Deployment" | "StatefulSet",
+					serviceResourceName(value.agentId, member.metadata.name),
+				);
+				if (
+					!current?.metadata?.uid ||
+					!owned(current, value) ||
+					current.metadata.annotations?.[secretFenceAnnotation(secretName)] !==
+						String(fence) ||
+					current.metadata.annotations?.[secretUidAnnotation(secretName)] !==
+						secretUid ||
+					!matchesEnvironmentSecrets(value, current.spec?.template.spec)
+				)
+					return false;
+				const selector = memberSelector(value, member);
+				if (!selector) return false;
+				const pods = (
+					await client.list<V1Pod>(
+						"Pod",
+						`${ownerLabel}=${workloadResourceNameV1(value.agentId)}`,
+					)
+				).filter(
+					(pod) =>
+						pod.metadata?.labels?.["agent-infra.agora.io/service"] ===
+						serviceLabel(member.metadata.name),
+				);
+				if (pods.length !== 1) return false;
+				const pod = pods.at(0);
+				if (!pod) return false;
+				if (
+					pod.metadata?.deletionTimestamp ||
+					pod.status?.phase !== "Running" ||
+					!pod.status?.containerStatuses?.every(
+						(status: { ready?: boolean }) => status.ready,
+					) ||
+					!matchesEnvironmentSecrets(value, pod.spec)
+				)
+					return false;
+			}
+			const entry = entryWorkloadResource(value);
+			const currentEntry = await client.read<V1Deployment | V1StatefulSet>(
+				entry.kind,
+				serviceResourceName(value.agentId, entry.metadata.name),
+			);
+			if (!currentEntry?.metadata?.uid || !currentEntry.metadata.generation)
+				return false;
+			const snapshot = parseMemberSnapshot(
+				currentEntry.metadata.annotations?.[memberIdentityAnnotation],
+			);
+			if (!snapshot) return false;
+			for (const member of memberResources(value)) {
+				const identity = snapshot[member.metadata.name];
+				const current = await client.read<V1Deployment | V1StatefulSet>(
+					member.kind as "Deployment" | "StatefulSet",
+					serviceResourceName(value.agentId, member.metadata.name),
+				);
+				if (
+					!identity ||
+					current?.metadata?.uid !== identity.uid ||
+					current.metadata.generation !== identity.generation
+				)
+					return false;
+			}
+			return true;
+		},
+		async observeActiveImmutableSecret(
+			value: MultiServiceDesired,
+			ref: AgentWorkloadDesiredV1["secretRefs"][number],
+			activationFence: {
+				readonly workloadUid: string;
+				readonly workloadGeneration: number;
+				readonly fence: number;
+			},
+		) {
+			if (!ref.name) return false;
+			const entry = entryWorkloadResource(value);
+			const currentEntry = await client.read<V1Deployment | V1StatefulSet>(
+				entry.kind,
+				serviceResourceName(value.agentId, entry.metadata.name),
+			);
+			if (
+				!currentEntry?.metadata?.uid ||
+				currentEntry.metadata.uid !== activationFence.workloadUid ||
+				currentEntry.metadata.generation !== activationFence.workloadGeneration
+			)
+				return false;
+			return this.observeSecretFence(value, ref.name, activationFence.fence);
+		},
+		async removeImmutableSecret(
+			value: MultiServiceDesired,
+			ref: AgentWorkloadDesiredV1["secretRefs"][number],
+			activationFence?: {
+				readonly workloadUid: string;
+				readonly workloadGeneration: number;
+				readonly fence: number;
+			},
+		) {
+			const secret = await client.read<V1Secret>("Secret", ref.name);
+			if (!secret) return true;
+			if (
+				activationFence &&
+				!(await this.observeSecretFence(value, ref.name, activationFence.fence))
+			)
+				return false;
+			const pods = await client.list<V1Pod>(
+				"Pod",
+				`${ownerLabel}=${workloadResourceNameV1(value.agentId)}`,
+			);
+			if (
+				pods.some(
+					(pod) =>
+						!pod.metadata?.deletionTimestamp &&
+						pod.spec?.containers?.some((container) =>
+							container.envFrom?.some(
+								(entry) => entry.secretRef?.name === ref.name,
+							),
+						),
+				)
+			)
+				return false;
+			if (
+				!secret.metadata?.uid ||
+				secret.immutable !== true ||
+				secret.type !== "Opaque" ||
+				!owned(secret, value)
+			)
+				return false;
+			await client.delete(secret);
+			return (await client.read<V1Secret>("Secret", ref.name)) === null;
 		},
 		async closeRoute(
 			value: MultiServiceDesired,

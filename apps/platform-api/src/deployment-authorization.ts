@@ -48,6 +48,19 @@ export function createDeploymentAuthorizationAdmission(input: {
 			}
 			if (
 				currentRequest.method === "POST" &&
+				new URL(currentRequest.url).pathname ===
+					"/api/v2/agent-applications/model-candidates"
+			) {
+				// 预览只读取候选，路由生成的临时 Agent ID 尚无持久化 Owner。
+				return {
+					...rejected,
+					status: "admitted",
+					authorizationRevision: identity.authorizationRevision,
+					authorityContext,
+				};
+			}
+			if (
+				currentRequest.method === "POST" &&
 				new URL(currentRequest.url).pathname === "/api/v2/agent-applications"
 			) {
 				const ids = await allocateDeploymentApplicationIds({

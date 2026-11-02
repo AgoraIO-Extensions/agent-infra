@@ -63,6 +63,7 @@ import type { MultiServiceHealthDiagnosticV1 } from "./multi-service-runtime.js"
 import {
 	createMultiServiceRuntimeOperations,
 	isMultiService,
+	type MultiServiceDesired,
 } from "./multi-service-runtime.js";
 import { runtimeFetch } from "./runtime-transport.js";
 import {
@@ -1021,6 +1022,9 @@ export function createWorkloadRuntimeV1(
 		if (!bindings.length) return true;
 		if (!input.secrets) return false;
 		const workload = desired(state);
+		const multiServiceRuntime = isMultiService(workload)
+			? multiService
+			: undefined;
 		for (const { record } of bindings) {
 			const reference = recordReference(record);
 			const activationFence = cleanupActivationFence(record, reference);
@@ -1043,11 +1047,17 @@ export function createWorkloadRuntimeV1(
 								candidate.lifecycleState !== record.lifecycleState
 							)
 								return false;
-							return adapter.removeImmutableSecret(
-								workload,
-								reference,
-								activationFence,
-							);
+							return multiServiceRuntime
+								? multiServiceRuntime.removeImmutableSecret(
+										workload as MultiServiceDesired,
+										reference,
+										activationFence ?? undefined,
+									)
+								: adapter.removeImmutableSecret(
+										workload,
+										reference,
+										activationFence,
+									);
 						},
 					},
 				},
@@ -1772,11 +1782,19 @@ export function createWorkloadRuntimeV1(
 			const adapter = createAdapter(undefined, state);
 			await revalidateCandidateCatalog(state);
 			const workload = desired(state);
-			if (isMultiService(workload))
-				return multiService.apply(workload, {
-					allowOwnershipTransition: true,
-				});
-			await adapter.assertStandardTemplateSelector(workload);
+			const multiServiceRuntime = isMultiService(workload)
+				? multiService
+				: undefined;
+			const multiWorkload = multiServiceRuntime
+				? (workload as MultiServiceDesired)
+				: undefined;
+			const requireMultiWorkload = () => {
+				if (!multiWorkload)
+					throw new Error("multi-service workload unavailable");
+				return multiWorkload;
+			};
+			if (!multiServiceRuntime)
+				await adapter.assertStandardTemplateSelector(workload);
 			const activeBindingsToRepair: {
 				readonly reference: SecretActivationReferenceV1;
 				readonly activationFence: NonNullable<
@@ -1793,15 +1811,20 @@ export function createWorkloadRuntimeV1(
 				const activationFence = activeSecretFence(record, reference);
 				if (record.lifecycleState === "active" && !activationFence)
 					throw new Error("Active Workload Secret fence is unavailable");
-				if (
-					activationFence &&
-					(await adapter.observeActiveImmutableSecret(
-						workload,
-						reference,
-						activationFence,
-					))
-				)
-					continue;
+				if (activationFence) {
+					const active = multiServiceRuntime
+						? await multiServiceRuntime.observeActiveImmutableSecret(
+								requireMultiWorkload(),
+								reference,
+								activationFence,
+							)
+						: await adapter.observeActiveImmutableSecret(
+								workload,
+								reference,
+								activationFence,
+							);
+					if (active) continue;
+				}
 				const decryption = await options.decryptor.decrypt({
 					encryptedRecord: record,
 					traceId: input.traceId,
@@ -1820,13 +1843,20 @@ export function createWorkloadRuntimeV1(
 						record.crypto.wrappingKeyVersion,
 						"succeeded",
 					);
-					const secretUid = await adapter.applyImmutableSecret(
-						workload,
-						reference.name,
-						secretDataKey(record.name),
-						decryption.plaintext,
-						activationFence ?? undefined,
-					);
+					const secretUid = multiServiceRuntime
+						? await multiServiceRuntime.materializeSecret(
+								requireMultiWorkload(),
+								reference.name,
+								secretDataKey(record.name),
+								decryption.plaintext,
+							)
+						: await adapter.applyImmutableSecret(
+								workload,
+								reference.name,
+								secretDataKey(record.name),
+								decryption.plaintext,
+								activationFence ?? undefined,
+							);
 					if (activationFence)
 						activeBindingsToRepair.push({
 							reference,
@@ -1837,25 +1867,45 @@ export function createWorkloadRuntimeV1(
 					decryption.plaintext.fill(0);
 				}
 			}
-			const result = await adapter.reconcile(workload);
-			if (result.status !== "applied") return "pending";
-			const identity = {
-				uid: result.workloadUid,
-				generation: result.workloadGeneration,
-			};
+			let identity: { uid: string; generation: number };
+			if (isMultiService(workload)) {
+				const applied = await multiService.apply(workload, {
+					allowOwnershipTransition: true,
+				});
+				if (applied === "pending") return "pending";
+				identity = {
+					uid: applied.uid,
+					generation: applied.generation as number,
+				};
+			} else {
+				const result = await adapter.reconcile(workload);
+				if (result.status !== "applied") return "pending";
+				identity = {
+					uid: result.workloadUid,
+					generation: result.workloadGeneration,
+				};
+			}
 			for (const repaired of activeBindingsToRepair) {
 				if (
 					repaired.activationFence.workloadUid !== identity.uid ||
 					identity.generation < repaired.activationFence.workloadGeneration
 				)
 					throw new Error("Active Workload Secret fence is unavailable");
-				await adapter.bindSecretFence(
-					workload,
-					identity,
-					repaired.reference.name,
-					repaired.activationFence.fence,
-					repaired.secretUid,
-				);
+				if (multiServiceRuntime)
+					await multiServiceRuntime.bindSecretFence(
+						requireMultiWorkload(),
+						repaired.reference.name,
+						repaired.activationFence.fence,
+						repaired.secretUid,
+					);
+				else
+					await adapter.bindSecretFence(
+						workload,
+						identity,
+						repaired.reference.name,
+						repaired.activationFence.fence,
+						repaired.secretUid,
+					);
 			}
 			return identity;
 		},
@@ -1900,25 +1950,51 @@ export function createWorkloadRuntimeV1(
 				.map(({ record }) => record);
 			if (!pending.length) return "active";
 			const workload = desired(state);
+			const multiServiceRuntime = isMultiService(workload)
+				? multiService
+				: undefined;
+			const multiWorkload = multiServiceRuntime
+				? (workload as MultiServiceDesired)
+				: undefined;
+			const requireMultiWorkload = () => {
+				if (!multiWorkload)
+					throw new Error("multi-service workload unavailable");
+				return multiWorkload;
+			};
 			const identity = state.identity;
 			const activation = createSecretActivationUseCaseV1({
 				store: input.secrets.store,
 				decryptor: options.decryptor,
 				kubernetes: {
 					async applyCandidate(candidate) {
-						const secretUid = await adapter.applyImmutableSecret(
-							workload,
-							candidate.kubernetesSecretRef.name,
-							secretDataKey(candidate.secretKey),
-							candidate.plaintext,
-						);
-						await adapter.bindSecretFence(
-							workload,
-							identity,
-							candidate.kubernetesSecretRef.name,
-							candidate.fence,
-							secretUid,
-						);
+						const secretUid = multiServiceRuntime
+							? await multiServiceRuntime.materializeSecret(
+									requireMultiWorkload(),
+									candidate.kubernetesSecretRef.name,
+									secretDataKey(candidate.secretKey),
+									candidate.plaintext,
+								)
+							: await adapter.applyImmutableSecret(
+									workload,
+									candidate.kubernetesSecretRef.name,
+									secretDataKey(candidate.secretKey),
+									candidate.plaintext,
+								);
+						if (multiServiceRuntime)
+							await multiServiceRuntime.bindSecretFence(
+								requireMultiWorkload(),
+								candidate.kubernetesSecretRef.name,
+								candidate.fence,
+								secretUid,
+							);
+						else
+							await adapter.bindSecretFence(
+								workload,
+								identity,
+								candidate.kubernetesSecretRef.name,
+								candidate.fence,
+								secretUid,
+							);
 						return {
 							outcome: "applied",
 							workloadUid: identity.uid,
@@ -1927,12 +2003,18 @@ export function createWorkloadRuntimeV1(
 					},
 					async observeCandidate(candidate) {
 						if (
-							!(await adapter.observeSecretFence(
-								workload,
-								identity,
-								candidate.kubernetesSecretRef.name,
-								candidate.activationFence.fence,
-							))
+							!(await (multiServiceRuntime
+								? multiServiceRuntime.observeSecretFence(
+										requireMultiWorkload(),
+										candidate.kubernetesSecretRef.name,
+										candidate.activationFence.fence,
+									)
+								: adapter.observeSecretFence(
+										workload,
+										identity,
+										candidate.kubernetesSecretRef.name,
+										candidate.activationFence.fence,
+									)))
 						)
 							return { status: "pending" };
 						return {
