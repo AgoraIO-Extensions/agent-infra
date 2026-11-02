@@ -57,6 +57,10 @@ import {
 	sessionSandboxResourceCharges,
 } from "./schema-session-sandbox-reserves.js";
 import { browserSessions } from "./schema-sessions";
+import {
+	workspaceSnapshotBindings,
+	workspaceSnapshots,
+} from "./schema-workspace-snapshots";
 
 export {
 	connectionInstallationAuthorizations,
@@ -147,6 +151,10 @@ export {
 	skillHubSkills,
 	skillHubVersions,
 } from "./schema-skill-hub";
+export {
+	workspaceSnapshotBindings,
+	workspaceSnapshots,
+} from "./schema-workspace-snapshots";
 
 import {
 	evaluationDatasets,
@@ -224,6 +232,8 @@ export const platformInfrastructureTables = [
 	skillHubInstallations,
 	skillHubAgentBindings,
 	skillHubProjectContents,
+	workspaceSnapshots,
+	workspaceSnapshotBindings,
 ] as const;
 
 import { sessionSandboxAllocations } from "./schema-session-sandboxes";

@@ -48,6 +48,7 @@ import {
 	platformUserDisables,
 } from "./schema.js";
 import { insertPendingSecretRecordAttachments } from "./secret-records.js";
+import { insertWorkspaceSnapshotBindingsV1 } from "./workspace-snapshot-binding-writes.js";
 
 export interface PostgresApplicationFoundationOptions {
 	readonly databaseUrl: string;
@@ -418,6 +419,16 @@ async function persistApplicationFoundationRowsV1(
 			createdAt: plan.access.createdAt,
 		})),
 	);
+	await insertWorkspaceSnapshotBindingsV1(transaction, {
+		agentId: plan.agent.agentId,
+		configurationRevision: plan.configurationRevision.revision,
+		ownerId:
+			"auditEvent" in plan
+				? plan.auditEvent.actorId
+				: (plan.access.ownerIds[0] ?? plan.application.applicantId),
+		ownerType: "creator" in plan && plan.creator.kind === "application" ? "application" : "user",
+		configuration,
+	});
 	if (plan.access.availability.length > 0) {
 		await transaction.insert(agentAvailability).values(
 			plan.access.availability.map((target) => ({
