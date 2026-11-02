@@ -76,6 +76,7 @@ import {
 	workloadProbeIncompleteReasonV1,
 } from "./workload-probe-failure.js";
 import { WorkloadStepErrorV1 } from "./workload-step-failure.js";
+import type { WorkspaceSnapshotPodProjectionV1 } from "./workspace-snapshot-materializer.js";
 
 export type WorkloadBrowserBindingResolverV1 = (input: {
 	readonly agentId: string;
@@ -108,6 +109,8 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly fetch?: typeof fetch;
 	/** Deployment-owned Session binding for the current Browser Sandbox. */
 	readonly browserBinding?: WorkloadBrowserBindingResolverV1;
+	/** Server-derived snapshot projection; request/runtime/annotation inputs are never accepted. */
+	readonly workspaceSnapshotProjection?: WorkspaceSnapshotPodProjectionV1;
 	/** Bounded multi-service health facts; recording is observational only. */
 	readonly onHealthDiagnostic?: (
 		diagnostic: MultiServiceHealthDiagnosticV1,
@@ -681,6 +684,7 @@ export function createWorkloadRuntimeV1(
 			onHealthDiagnostic: options.onHealthDiagnostic,
 			modelProjection,
 			standardTemplateBinding,
+			workspaceSnapshotProjection: options.workspaceSnapshotProjection,
 			containerBoundaryServiceToken: options.containerBoundaryServiceToken,
 			async probe({ desired, serviceOrigin, podUid, podResourceVersion }) {
 				let probeStartedAt = performance.now();

@@ -80,6 +80,10 @@ import {
 	isMultiService,
 	type MultiServiceHealthDiagnosticV1,
 } from "./multi-service-runtime.js";
+import {
+	applyWorkspaceSnapshotProjectionV1,
+	type WorkspaceSnapshotPodProjectionV1,
+} from "./workspace-snapshot-materializer.js";
 
 const selectorNamePattern = /^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/;
 const selectorPrefixPattern =
@@ -181,6 +185,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		| RuntimeModelProjectionV4;
 	/** Candidate-owned trusted tuple; never a global policy Driver. */
 	readonly standardTemplateBinding?: StandardTemplateModelBindingV1;
+	/** Server-derived snapshot materialization; absent means no snapshot input. */
+	readonly workspaceSnapshotProjection?: WorkspaceSnapshotPodProjectionV1;
 	/** Deployment-owned service token retained in Worker memory for attestation only. */
 	readonly containerBoundaryServiceToken?: string;
 	readonly probe: (input: {
@@ -1641,6 +1647,15 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					},
 				},
 			};
+			if (options.workspaceSnapshotProjection) {
+				const workloadSpec = workload.spec;
+				const podSpec = workloadSpec?.template?.spec;
+				if (!podSpec) throw new WorkloadKubernetesError("policy");
+				workloadSpec.template.spec = applyWorkspaceSnapshotProjectionV1(
+					podSpec,
+					options.workspaceSnapshotProjection,
+				);
+			}
 			const applied = await put(workload, value);
 			if (!applied.metadata?.uid || !applied.metadata.generation)
 				throw new WorkloadKubernetesError("unavailable");
