@@ -50,6 +50,7 @@ export interface ConfigurationRoutesDependencies {
 		readonly requestId: string;
 		readonly traceId: string;
 	}) => Promise<unknown | null>;
+	readonly readAgentProjectionV2?: ConfigurationRoutesDependencies["readAgentProjection"];
 	readonly prepareSecretReplacements: (input: {
 		readonly agentId: string;
 		readonly configurationRevision: number;
@@ -482,7 +483,9 @@ export function registerV2ConfigurationRoutes(
 		}
 		let projection: unknown | null;
 		try {
-			projection = await dependencies.readAgentProjection({
+			projection = await (
+				dependencies.readAgentProjectionV2 ?? dependencies.readAgentProjection
+			)({
 				agentId: agentId,
 				identity,
 				requestId: metadata.requestId,
@@ -494,6 +497,8 @@ export function registerV2ConfigurationRoutes(
 		if (!projection) {
 			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
 		}
+		if (dependencies.readAgentProjectionV2)
+			return context.json(AgentProjectionV2Schema.parse(projection));
 		const parsed = AgentProjectionV1Schema.safeParse(projection);
 		if (!parsed.success) {
 			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
