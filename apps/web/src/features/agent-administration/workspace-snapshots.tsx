@@ -197,24 +197,48 @@ export function WorkspaceSnapshotsPanel({
 								</div>
 							</div>
 							{onChange ? (
-								<Label variant="option" className="text-xs">
-									<Checkbox
-										checked={selectedIds.has(snapshot.snapshotId)}
-										disabled={snapshots.remove.isPending}
-										onCheckedChange={(checked) => {
-											const next = selected.filter(
-												(binding) => binding.snapshotId !== snapshot.snapshotId,
-											);
-											if (checked)
-												next.push({
-													snapshotId: snapshot.snapshotId,
-													name: snapshot.bindings[0]?.name ?? "repo",
-												});
-											onChange(next);
-										}}
-									/>
-									选择
-								</Label>
+								<div className="flex items-center gap-2">
+									<Label variant="option" className="text-xs">
+										<Checkbox
+											checked={selectedIds.has(snapshot.snapshotId)}
+											disabled={snapshots.remove.isPending}
+											onCheckedChange={(checked) => {
+												const next = selected.filter(
+													(binding) =>
+														binding.snapshotId !== snapshot.snapshotId,
+												);
+												if (checked)
+													next.push({
+														snapshotId: snapshot.snapshotId,
+														name: snapshot.bindings[0]?.name ?? "repo",
+													});
+												onChange(next);
+											}}
+										/>
+										选择
+									</Label>
+									{selectedIds.has(snapshot.snapshotId) ? (
+										<input
+											aria-label={`快照挂载名称 ${snapshot.snapshotId}`}
+											className="h-8 w-28 rounded border border-border px-2 text-xs"
+											value={
+												selected.find(
+													(binding) =>
+														binding.snapshotId === snapshot.snapshotId,
+												)?.name ?? ""
+											}
+											onChange={(event) =>
+												onChange(
+													selected.map((binding) =>
+														binding.snapshotId === snapshot.snapshotId
+															? { ...binding, name: event.target.value }
+															: binding,
+													),
+												)
+											}
+										/>
+									) : null}
+								</div>
 							) : null}
 							<Button
 								variant="outline"
@@ -223,7 +247,7 @@ export function WorkspaceSnapshotsPanel({
 									snapshots.remove.isPending || snapshot.bindings.length > 0
 								}
 								title={
-									snapshot.bindings.length > 0 ? "仍有 Agent 绑定" : "解绑快照"
+									snapshot.bindings.length > 0 ? "仍有 Agent 绑定" : "删除快照"
 								}
 								onClick={() =>
 									void snapshots.remove.mutateAsync({
@@ -232,7 +256,7 @@ export function WorkspaceSnapshotsPanel({
 									})
 								}
 							>
-								解绑
+								删除
 							</Button>
 						</li>
 					))}
