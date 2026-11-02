@@ -422,14 +422,8 @@ async function persistApplicationFoundationRowsV1(
 	await insertWorkspaceSnapshotBindingsV1(transaction, {
 		agentId: plan.agent.agentId,
 		configurationRevision: plan.configurationRevision.revision,
-		ownerId:
-			"auditEvent" in plan
-				? plan.auditEvent.actorId
-				: (plan.access.ownerIds[0] ?? plan.application.applicantId),
-		ownerType:
-			"creator" in plan && plan.creator.kind === "application"
-				? "application"
-				: "user",
+		ownerId: "creator" in plan ? plan.creator.id : plan.auditEvent.actorId,
+		ownerType: "creator" in plan ? plan.creator.kind : "user",
 		configuration,
 	});
 	if (plan.access.availability.length > 0) {

@@ -8,10 +8,11 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
 import {
 	agentConfigurationRevisions,
-	agentOwners,
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
 } from "./schema.js";
+
+import { assertWorkspaceSnapshotTargetOwnerV1 } from "./workspace-snapshot-binding-writes.js";
 
 type BindingRow = typeof workspaceSnapshotBindings.$inferSelect;
 
@@ -38,22 +39,22 @@ export class PostgresWorkspaceSnapshotBindingStoreV1
 						eq(workspaceSnapshots.status, "ready"),
 					),
 				)
-				.for("update")
 				.limit(1);
 			if (!snapshot) throw new WorkspaceSnapshotBindingErrorV1("not_found");
 
-			const [owner] = await transaction
-				.select({ ownerId: agentOwners.ownerId })
-				.from(agentOwners)
+			await assertWorkspaceSnapshotTargetOwnerV1(transaction, input);
+			const [current] = await transaction
+				.select({ id: workspaceSnapshots.id })
+				.from(workspaceSnapshots)
 				.where(
 					and(
-						eq(agentOwners.agentId, input.agentId),
-						eq(agentOwners.ownerId, input.ownerId),
+						eq(workspaceSnapshots.id, snapshot.id),
+						eq(workspaceSnapshots.status, "ready"),
 					),
 				)
 				.for("share")
 				.limit(1);
-			if (!owner) throw new WorkspaceSnapshotBindingErrorV1("forbidden");
+			if (!current) throw new WorkspaceSnapshotBindingErrorV1("not_found");
 
 			const [revision] = await transaction
 				.select({ agentId: agentConfigurationRevisions.agentId })
@@ -114,6 +115,7 @@ export class PostgresWorkspaceSnapshotBindingStoreV1
 		input: Parameters<WorkspaceSnapshotBindingStoreV1["unbind"]>[0],
 	): Promise<void> {
 		await this.#database.transaction(async (transaction) => {
+			await assertWorkspaceSnapshotTargetOwnerV1(transaction, input);
 			const [snapshot] = await transaction
 				.select({ id: workspaceSnapshots.id })
 				.from(workspaceSnapshots)

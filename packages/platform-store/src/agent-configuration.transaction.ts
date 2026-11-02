@@ -40,7 +40,6 @@ import {
 	wecomSetupSessions,
 } from "./schema.js";
 import { insertPendingSecretRecordAttachments } from "./secret-records.js";
-import { insertWorkspaceSnapshotBindingsV1 } from "./workspace-snapshot-binding-writes.js";
 
 export class PostgresAgentConfigurationTransactionV1
 	implements AgentConfigurationTransactionPortV1
@@ -434,13 +433,6 @@ export class PostgresAgentConfigurationTransactionV1
 				) {
 					throw new StaleAgentConfigurationCommit();
 				}
-				await insertWorkspaceSnapshotBindingsV1(transaction, {
-					agentId: plan.agentId,
-					configurationRevision: plan.nextRevision,
-					ownerId: plan.auditEvent.actorId,
-					ownerType: "user",
-					configuration,
-				});
 				await insertPendingSecretRecordAttachments(
 					transaction,
 					attachments,

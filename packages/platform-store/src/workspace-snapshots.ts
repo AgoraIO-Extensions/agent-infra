@@ -122,26 +122,41 @@ export class PostgresWorkspaceSnapshotStoreV1
 		return record(row, bindings);
 	}
 	async remove(owner: Owner, snapshotId: string) {
-		const [binding] = await this.#database
-			.select({ snapshotId: workspaceSnapshotBindings.snapshotId })
-			.from(workspaceSnapshotBindings)
-			.where(eq(workspaceSnapshotBindings.snapshotId, snapshotId))
-			.limit(1);
-		if (binding) throw new WorkspaceSnapshotErrorV1("bound");
-		const [row] = await this.#database
-			.update(workspaceSnapshots)
-			.set({ status: "deleted", deletedAt: new Date() })
-			.where(
-				and(
-					eq(workspaceSnapshots.id, snapshotId),
-					eq(workspaceSnapshots.ownerType, owner.ownerType),
-					eq(workspaceSnapshots.ownerId, owner.ownerId),
-					eq(workspaceSnapshots.status, "ready"),
-				),
-			)
-			.returning();
-		if (!row) throw new WorkspaceSnapshotErrorV1("invalid_name");
-		return record(row);
+		return this.#database.transaction(async (transaction) => {
+			const [row] = await transaction
+				.select()
+				.from(workspaceSnapshots)
+				.where(
+					and(
+						eq(workspaceSnapshots.id, snapshotId),
+						eq(workspaceSnapshots.ownerType, owner.ownerType),
+						eq(workspaceSnapshots.ownerId, owner.ownerId),
+						eq(workspaceSnapshots.status, "ready"),
+					),
+				)
+				.for("update")
+				.limit(1);
+			if (!row) throw new WorkspaceSnapshotErrorV1("invalid_name");
+			const [binding] = await transaction
+				.select({ snapshotId: workspaceSnapshotBindings.snapshotId })
+				.from(workspaceSnapshotBindings)
+				.where(eq(workspaceSnapshotBindings.snapshotId, snapshotId))
+				.for("share")
+				.limit(1);
+			if (binding) throw new WorkspaceSnapshotErrorV1("bound");
+			const [deleted] = await transaction
+				.update(workspaceSnapshots)
+				.set({ status: "deleted", deletedAt: new Date() })
+				.where(
+					and(
+						eq(workspaceSnapshots.id, snapshotId),
+						eq(workspaceSnapshots.status, "ready"),
+					),
+				)
+				.returning();
+			if (!deleted) throw new WorkspaceSnapshotErrorV1("invalid_name");
+			return record(deleted);
+		});
 	}
 	async close() {
 		await this.#client.end();
