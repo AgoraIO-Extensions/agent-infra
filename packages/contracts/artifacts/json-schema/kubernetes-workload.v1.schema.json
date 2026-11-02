@@ -2526,52 +2526,6 @@
               "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer"
-            },
-            "workspaceSnapshots": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "digest": {
-                    "pattern": "^sha256:[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "mountPath": {
-                    "pattern": "^\\/opt\\/agent\\/workspaces\\/[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "name": {
-                    "maxLength": 63,
-                    "minLength": 1,
-                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "objectRef": {
-                    "maxLength": 512,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "sizeBytes": {
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991,
-                    "type": "integer"
-                  },
-                  "snapshotId": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "snapshotId",
-                  "name",
-                  "digest",
-                  "sizeBytes",
-                  "mountPath",
-                  "objectRef"
-                ],
-                "type": "object"
-              },
-              "maxItems": 4,
-              "type": "array"
             }
           },
           "required": [
@@ -5125,52 +5079,6 @@
               "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer"
-            },
-            "workspaceSnapshots": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "digest": {
-                    "pattern": "^sha256:[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "mountPath": {
-                    "pattern": "^\\/opt\\/agent\\/workspaces\\/[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "name": {
-                    "maxLength": 63,
-                    "minLength": 1,
-                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "objectRef": {
-                    "maxLength": 512,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "sizeBytes": {
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991,
-                    "type": "integer"
-                  },
-                  "snapshotId": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "snapshotId",
-                  "name",
-                  "digest",
-                  "sizeBytes",
-                  "mountPath",
-                  "objectRef"
-                ],
-                "type": "object"
-              },
-              "maxItems": 4,
-              "type": "array"
             }
           },
           "required": [
@@ -7724,52 +7632,6 @@
               "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer"
-            },
-            "workspaceSnapshots": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "digest": {
-                    "pattern": "^sha256:[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "mountPath": {
-                    "pattern": "^\\/opt\\/agent\\/workspaces\\/[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "name": {
-                    "maxLength": 63,
-                    "minLength": 1,
-                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "objectRef": {
-                    "maxLength": 512,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "sizeBytes": {
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991,
-                    "type": "integer"
-                  },
-                  "snapshotId": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "snapshotId",
-                  "name",
-                  "digest",
-                  "sizeBytes",
-                  "mountPath",
-                  "objectRef"
-                ],
-                "type": "object"
-              },
-              "maxItems": 4,
-              "type": "array"
             }
           },
           "required": [
@@ -10318,52 +10180,6 @@
               "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer"
-            },
-            "workspaceSnapshots": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "digest": {
-                    "pattern": "^sha256:[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "mountPath": {
-                    "pattern": "^\\/opt\\/agent\\/workspaces\\/[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "name": {
-                    "maxLength": 63,
-                    "minLength": 1,
-                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "objectRef": {
-                    "maxLength": 512,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "sizeBytes": {
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991,
-                    "type": "integer"
-                  },
-                  "snapshotId": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "snapshotId",
-                  "name",
-                  "digest",
-                  "sizeBytes",
-                  "mountPath",
-                  "objectRef"
-                ],
-                "type": "object"
-              },
-              "maxItems": 4,
-              "type": "array"
             }
           },
           "required": [
@@ -12912,52 +12728,6 @@
               "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer"
-            },
-            "workspaceSnapshots": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "digest": {
-                    "pattern": "^sha256:[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "mountPath": {
-                    "pattern": "^\\/opt\\/agent\\/workspaces\\/[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "name": {
-                    "maxLength": 63,
-                    "minLength": 1,
-                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "objectRef": {
-                    "maxLength": 512,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "sizeBytes": {
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991,
-                    "type": "integer"
-                  },
-                  "snapshotId": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "snapshotId",
-                  "name",
-                  "digest",
-                  "sizeBytes",
-                  "mountPath",
-                  "objectRef"
-                ],
-                "type": "object"
-              },
-              "maxItems": 4,
-              "type": "array"
             }
           },
           "required": [
@@ -15506,52 +15276,6 @@
               "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer"
-            },
-            "workspaceSnapshots": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "digest": {
-                    "pattern": "^sha256:[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "mountPath": {
-                    "pattern": "^\\/opt\\/agent\\/workspaces\\/[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "name": {
-                    "maxLength": 63,
-                    "minLength": 1,
-                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "objectRef": {
-                    "maxLength": 512,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "sizeBytes": {
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991,
-                    "type": "integer"
-                  },
-                  "snapshotId": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "snapshotId",
-                  "name",
-                  "digest",
-                  "sizeBytes",
-                  "mountPath",
-                  "objectRef"
-                ],
-                "type": "object"
-              },
-              "maxItems": 4,
-              "type": "array"
             }
           },
           "required": [
@@ -18118,52 +17842,6 @@
               "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer"
-            },
-            "workspaceSnapshots": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "digest": {
-                    "pattern": "^sha256:[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "mountPath": {
-                    "pattern": "^\\/opt\\/agent\\/workspaces\\/[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "name": {
-                    "maxLength": 63,
-                    "minLength": 1,
-                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "objectRef": {
-                    "maxLength": 512,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "sizeBytes": {
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991,
-                    "type": "integer"
-                  },
-                  "snapshotId": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "snapshotId",
-                  "name",
-                  "digest",
-                  "sizeBytes",
-                  "mountPath",
-                  "objectRef"
-                ],
-                "type": "object"
-              },
-              "maxItems": 4,
-              "type": "array"
             }
           },
           "required": [
@@ -20730,52 +20408,6 @@
               "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer"
-            },
-            "workspaceSnapshots": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "digest": {
-                    "pattern": "^sha256:[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "mountPath": {
-                    "pattern": "^\\/opt\\/agent\\/workspaces\\/[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "name": {
-                    "maxLength": 63,
-                    "minLength": 1,
-                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "objectRef": {
-                    "maxLength": 512,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "sizeBytes": {
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991,
-                    "type": "integer"
-                  },
-                  "snapshotId": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "snapshotId",
-                  "name",
-                  "digest",
-                  "sizeBytes",
-                  "mountPath",
-                  "objectRef"
-                ],
-                "type": "object"
-              },
-              "maxItems": 4,
-              "type": "array"
             }
           },
           "required": [
@@ -23342,52 +22974,6 @@
               "maximum": 9007199254740991,
               "minimum": 0,
               "type": "integer"
-            },
-            "workspaceSnapshots": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "digest": {
-                    "pattern": "^sha256:[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "mountPath": {
-                    "pattern": "^\\/opt\\/agent\\/workspaces\\/[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "name": {
-                    "maxLength": 63,
-                    "minLength": 1,
-                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                    "type": "string"
-                  },
-                  "objectRef": {
-                    "maxLength": 512,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "sizeBytes": {
-                    "exclusiveMinimum": 0,
-                    "maximum": 9007199254740991,
-                    "type": "integer"
-                  },
-                  "snapshotId": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "snapshotId",
-                  "name",
-                  "digest",
-                  "sizeBytes",
-                  "mountPath",
-                  "objectRef"
-                ],
-                "type": "object"
-              },
-              "maxItems": 4,
-              "type": "array"
             }
           },
           "required": [

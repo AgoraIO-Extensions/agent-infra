@@ -45,10 +45,6 @@ import {
 	workloadImagePullSpecV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
-import {
-	applyWorkspaceSnapshotProjectionV1,
-	type WorkspaceSnapshotPodProjectionV1,
-} from "./workspace-snapshot-materializer.js";
 
 export type MultiServiceDesired = AgentWorkloadDesiredV1 & {
 	multiService: NonNullable<AgentWorkloadDesiredV1["multiService"]>;
@@ -71,19 +67,6 @@ export interface MultiServiceRuntimePolicyV1 {
 	/** 必须与 API `apiInput` 中的同名配置一致；省略时使用合约默认值。 */
 	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
 	readonly multiServiceResourceCap?: MultiServiceResourceCapV1;
-	readonly workspaceSnapshotProjection?: WorkspaceSnapshotPodProjectionV1;
-}
-
-function applyWorkspaceSnapshotToPodSpecV1(
-	spec: V1PodSpec,
-	policy: MultiServiceRuntimePolicyV1,
-): V1PodSpec {
-	return policy.workspaceSnapshotProjection
-		? applyWorkspaceSnapshotProjectionV1(
-				spec,
-				policy.workspaceSnapshotProjection,
-			)
-		: spec;
 }
 
 export type MultiServiceHealthDiagnosticV1 = {
@@ -460,7 +443,7 @@ function deployment(
 			},
 		};
 	});
-	const result: V1Deployment = {
+	return {
 		apiVersion: "apps/v1",
 		kind: "Deployment",
 		metadata: metadata(value, name, resource.metadata.name),
@@ -498,12 +481,6 @@ function deployment(
 			},
 		},
 	};
-	const resultSpec = result.spec;
-	const podSpec = resultSpec?.template?.spec;
-	if (!resultSpec || !podSpec)
-		throw new Error("multi-service pod spec missing");
-	resultSpec.template.spec = applyWorkspaceSnapshotToPodSpecV1(podSpec, policy);
-	return result;
 }
 
 function configMap(
@@ -561,7 +538,7 @@ function statefulSet(
 	const profile = profileForWorkload(value, resource, resources);
 	const podSpecWithVolumes = resource.spec.template
 		.spec as typeof resource.spec.template.spec & Pick<V1PodSpec, "volumes">;
-	const result: V1StatefulSet = {
+	return {
 		apiVersion: "apps/v1",
 		kind: "StatefulSet",
 		metadata: metadata(value, name, resource.metadata.name),
@@ -621,12 +598,6 @@ function statefulSet(
 			},
 		},
 	};
-	const resultSpec = result.spec;
-	const podSpec = resultSpec?.template?.spec;
-	if (!resultSpec || !podSpec)
-		throw new Error("multi-service pod spec missing");
-	resultSpec.template.spec = applyWorkspaceSnapshotToPodSpecV1(podSpec, policy);
-	return result;
 }
 
 function persistentVolumeClaim(
@@ -685,7 +656,7 @@ function migrationJob(
 		[ownerLabel]: workloadResourceNameV1(value.agentId),
 		"agent-infra.agora.io/service": "migration",
 	};
-	const result: V1Job = {
+	return {
 		apiVersion: "batch/v1",
 		kind: "Job",
 		metadata: metadata(value, migrationJobName(value), "migration"),
@@ -718,12 +689,6 @@ function migrationJob(
 			},
 		},
 	};
-	const resultSpec = result.spec;
-	const podSpec = resultSpec?.template?.spec;
-	if (!resultSpec || !podSpec)
-		throw new Error("multi-service pod spec missing");
-	resultSpec.template.spec = applyWorkspaceSnapshotToPodSpecV1(podSpec, policy);
-	return result;
 }
 
 function migrationNetworkPolicy(value: MultiServiceDesired): V1NetworkPolicy {

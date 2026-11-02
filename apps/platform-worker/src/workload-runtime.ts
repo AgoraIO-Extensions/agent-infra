@@ -77,10 +77,6 @@ import {
 	workloadProbeIncompleteReasonV1,
 } from "./workload-probe-failure.js";
 import { WorkloadStepErrorV1 } from "./workload-step-failure.js";
-import type {
-	WorkspaceSnapshotMaterializerInputV1,
-	WorkspaceSnapshotPodProjectionV1,
-} from "./workspace-snapshot-materializer.js";
 
 export type WorkloadBrowserBindingResolverV1 = (input: {
 	readonly agentId: string;
@@ -113,19 +109,6 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly fetch?: typeof fetch;
 	/** Deployment-owned Session binding for the current Browser Sandbox. */
 	readonly browserBinding?: WorkloadBrowserBindingResolverV1;
-	/** Server-derived snapshot projection; request/runtime/annotation inputs are never accepted. */
-	readonly workspaceSnapshotProjection?: WorkspaceSnapshotPodProjectionV1;
-	/** Resolves persisted snapshot bindings to immutable materializer inputs. */
-	readonly workspaceSnapshotResolver?: (input: {
-		readonly agentId: string;
-		readonly configurationRevision: number;
-		readonly workloadRevision: number;
-		readonly fence: number;
-		readonly bindings: readonly { snapshotId: string; name: string }[];
-	}) => Promise<{
-		readonly inputs: readonly WorkspaceSnapshotMaterializerInputV1[];
-		readonly projection?: WorkspaceSnapshotPodProjectionV1;
-	}>;
 	/** Bounded multi-service health facts; recording is observational only. */
 	readonly onHealthDiagnostic?: (
 		diagnostic: MultiServiceHealthDiagnosticV1,
@@ -661,10 +644,6 @@ export function createWorkloadRuntimeV1(
 			readonly passed?: (podUid: string, podResourceVersion?: string) => void;
 		},
 	) {
-		const snapshotProjection = state
-			? (workspaceSnapshotProjections.get(state.candidate) ??
-				options.workspaceSnapshotProjection)
-			: options.workspaceSnapshotProjection;
 		const modelProjection =
 			state?.candidate.configuration.source.kind === "standard"
 				? candidateKeyless(state)
@@ -703,7 +682,6 @@ export function createWorkloadRuntimeV1(
 			onHealthDiagnostic: options.onHealthDiagnostic,
 			modelProjection,
 			standardTemplateBinding,
-			workspaceSnapshotProjection: snapshotProjection,
 			containerBoundaryServiceToken: options.containerBoundaryServiceToken,
 			async probe({ desired, serviceOrigin, podUid, podResourceVersion }) {
 				let probeStartedAt = performance.now();
@@ -904,28 +882,6 @@ export function createWorkloadRuntimeV1(
 			},
 		});
 	}
-	const workspaceSnapshotProjections = new WeakMap<
-		WorkloadReconciliationStateV1["candidate"],
-		WorkspaceSnapshotPodProjectionV1
-	>();
-	function multiServiceFor(
-		state?: Pick<WorkloadReconciliationStateV1, "candidate">,
-	) {
-		const workspaceSnapshotProjection = state
-			? (workspaceSnapshotProjections.get(state.candidate) ??
-				options.workspaceSnapshotProjection)
-			: options.workspaceSnapshotProjection;
-		if (workspaceSnapshotProjection === options.workspaceSnapshotProjection)
-			return multiService;
-		return createMultiServiceRuntimeOperations({
-			client: options.client,
-			policy: {
-				...options.policy,
-				workspaceSnapshotProjection,
-			},
-			onHealthDiagnostic: options.onHealthDiagnostic,
-		});
-	}
 	const adapter = createAdapter();
 	function isUnmaterializedInitialWorkload(
 		state: WorkloadReconciliationStateV1,
@@ -1067,7 +1023,7 @@ export function createWorkloadRuntimeV1(
 		if (!input.secrets) return false;
 		const workload = desired(state);
 		const multiServiceRuntime = isMultiService(workload)
-			? multiServiceFor(state)
+			? multiService
 			: undefined;
 		for (const { record } of bindings) {
 			const reference = recordReference(record);
@@ -1143,7 +1099,7 @@ export function createWorkloadRuntimeV1(
 			if (!state.identity) return "pending" as const;
 			const observedWorkload = desired(state);
 			if (isMultiService(observedWorkload)) {
-				const health = await multiServiceFor(state).observe(
+				const health = await multiService.observe(
 					observedWorkload,
 					state.identity,
 				);
@@ -1372,44 +1328,6 @@ export function createWorkloadRuntimeV1(
 		},
 		async preflight(input, state) {
 			const configuration = state.candidate.configuration;
-			const snapshotBindings =
-				configuration.source.kind === "custom"
-					? (configuration.source.workspaceSnapshots ?? [])
-					: [];
-			let snapshotMaterialization:
-				| Awaited<
-						ReturnType<
-							NonNullable<WorkloadRuntimeOptionsV1["workspaceSnapshotResolver"]>
-						>
-				  >
-				| undefined;
-			if (snapshotBindings.length > 0) {
-				if (!options.workspaceSnapshotResolver)
-					throw new WorkloadPreflightRejectedErrorV1(
-						"snapshot-materialization",
-					);
-				try {
-					snapshotMaterialization = await options.workspaceSnapshotResolver({
-						agentId: state.agentId,
-						configurationRevision: configuration.revision,
-						workloadRevision: state.revision,
-						fence: state.fence,
-						bindings: snapshotBindings,
-					});
-					if (!snapshotMaterialization.projection)
-						throw new WorkloadPreflightRejectedErrorV1(
-							"snapshot-materialization",
-						);
-					workspaceSnapshotProjections.set(
-						state.candidate,
-						snapshotMaterialization.projection,
-					);
-				} catch {
-					throw new WorkloadPreflightRejectedErrorV1(
-						"snapshot-materialization",
-					);
-				}
-			}
 			// 平台身份入口需要部署提供可信的路由集成；没有时是确定性的策略拒绝（#3034）。
 			// 在 Registry 准入、模型投影和任何 Kubernetes 写入之前结束，不消耗重试预算。
 			if (
@@ -1532,9 +1450,6 @@ export function createWorkloadRuntimeV1(
 						desiredState: "running",
 						replicas: 1,
 						multiService: multiServiceManifest,
-						...(snapshotMaterialization
-							? { workspaceSnapshots: snapshotMaterialization.inputs }
-							: {}),
 					});
 					return { configuration, deployment };
 				} catch {
@@ -1798,9 +1713,6 @@ export function createWorkloadRuntimeV1(
 								skillGenerationId: materializedSkills.generationId,
 							}
 						: {}),
-					...(snapshotMaterialization
-						? { workspaceSnapshots: snapshotMaterialization.inputs }
-						: {}),
 					desiredState: "running",
 					replicas: 1,
 				});
@@ -1824,7 +1736,7 @@ export function createWorkloadRuntimeV1(
 				const workload = desired(state);
 				if (
 					!isMultiService(workload) ||
-					!(await multiServiceFor(state).closeRoute(workload, {
+					!(await multiService.closeRoute(workload, {
 						allowOwnershipTransition: true,
 					}))
 				)
@@ -1846,7 +1758,7 @@ export function createWorkloadRuntimeV1(
 				if (isUnmaterializedInitialWorkload(state)) return true;
 				const workload = desired(state);
 				if (!isMultiService(workload)) return false;
-				return multiServiceFor(state).cleanupMigration(workload);
+				return multiService.cleanupMigration(workload);
 			}
 			return true;
 		},
@@ -1855,10 +1767,10 @@ export function createWorkloadRuntimeV1(
 				if (isUnmaterializedInitialWorkload(state)) return null;
 				const workload = desired(state);
 				if (!isMultiService(workload)) return null;
-				await multiServiceFor(state).closeRoute(workload, {
+				await multiService.closeRoute(workload, {
 					allowOwnershipTransition: true,
 				});
-				return multiServiceFor(state).scaleDown(workload);
+				return multiService.scaleDown(workload);
 			}
 			if (stopped)
 				return createAdapter().scaleDownAgent(
@@ -1871,7 +1783,7 @@ export function createWorkloadRuntimeV1(
 			await revalidateCandidateCatalog(state);
 			const workload = desired(state);
 			const multiServiceRuntime = isMultiService(workload)
-				? multiServiceFor(state)
+				? multiService
 				: undefined;
 			const multiWorkload = multiServiceRuntime
 				? (workload as MultiServiceDesired)
@@ -1957,7 +1869,7 @@ export function createWorkloadRuntimeV1(
 			}
 			let identity: { uid: string; generation: number };
 			if (isMultiService(workload)) {
-				const applied = await multiServiceFor(state).apply(workload, {
+				const applied = await multiService.apply(workload, {
 					allowOwnershipTransition: true,
 				});
 				if (applied === "pending") return "pending";
@@ -2040,7 +1952,7 @@ export function createWorkloadRuntimeV1(
 			if (!pending.length) return "active";
 			const workload = desired(state);
 			const multiServiceRuntime = isMultiService(workload)
-				? multiServiceFor(state)
+				? multiService
 				: undefined;
 			const multiWorkload = multiServiceRuntime
 				? (workload as MultiServiceDesired)
@@ -2155,8 +2067,7 @@ export function createWorkloadRuntimeV1(
 			assertCandidateMaterializationAllowed(state);
 			if ("manifest" in state.candidate.configuration.source) {
 				const workload = desired(state);
-				if (isMultiService(workload))
-					await multiServiceFor(state).promote(workload);
+				if (isMultiService(workload)) await multiService.promote(workload);
 				return;
 			}
 			// 只在本次晋升的短窗口内复用未变化 Pod 的证明；仍核对资源与 HTTP health。
@@ -2227,7 +2138,7 @@ export function createWorkloadRuntimeV1(
 				if (isUnmaterializedInitialWorkload(state)) return true;
 				const workload = desired(state);
 				if (!isMultiService(workload)) return false;
-				resourcesRemoved = await multiServiceFor(state).cleanupAgent(
+				resourcesRemoved = await multiService.cleanupAgent(
 					workload,
 					deleteNewVolume,
 					{ allowOwnershipTransition: true },

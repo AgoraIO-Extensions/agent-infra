@@ -55,10 +55,6 @@ import {
 	isFileExchangeOriginV1,
 	isWorkloadFileExchangeEgressCurrentV1,
 } from "./workload-runtime-auth.js";
-import {
-	applyWorkspaceSnapshotProjectionV1,
-	type WorkspaceSnapshotPodProjectionV1,
-} from "./workspace-snapshot-materializer.js";
 
 /**
  * Runtime inputs for one Session Sandbox (#1466). `modelConfiguration` and
@@ -216,8 +212,6 @@ export interface SessionSandboxAllocationV1 {
 	readonly storageSize: string;
 	readonly storageClassName?: string;
 	readonly desiredState: "running" | "stopped";
-	/** Server-derived Session snapshot projection; never accepted from Runtime. */
-	readonly workspaceSnapshotProjection?: WorkspaceSnapshotPodProjectionV1;
 }
 
 /**
@@ -952,13 +946,6 @@ function renderSessionSandboxResourcesV1(
 			],
 		},
 	};
-	if (allocation.workspaceSnapshotProjection) {
-		if (!pod.spec) throw new WorkloadKubernetesError("policy");
-		pod.spec = applyWorkspaceSnapshotProjectionV1(
-			pod.spec,
-			allocation.workspaceSnapshotProjection,
-		);
-	}
 	const secret: V1Secret = {
 		apiVersion: "v1",
 		kind: "Secret",

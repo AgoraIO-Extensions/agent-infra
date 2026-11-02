@@ -8,6 +8,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
 import {
 	agentConfigurationRevisions,
+	agentOwners,
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
 } from "./schema.js";
@@ -40,6 +41,19 @@ export class PostgresWorkspaceSnapshotBindingStoreV1
 				.for("update")
 				.limit(1);
 			if (!snapshot) throw new WorkspaceSnapshotBindingErrorV1("not_found");
+
+			const [owner] = await transaction
+				.select({ ownerId: agentOwners.ownerId })
+				.from(agentOwners)
+				.where(
+					and(
+						eq(agentOwners.agentId, input.agentId),
+						eq(agentOwners.ownerId, input.ownerId),
+					),
+				)
+				.for("share")
+				.limit(1);
+			if (!owner) throw new WorkspaceSnapshotBindingErrorV1("forbidden");
 
 			const [revision] = await transaction
 				.select({ agentId: agentConfigurationRevisions.agentId })

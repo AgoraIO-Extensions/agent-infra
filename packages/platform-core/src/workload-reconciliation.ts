@@ -261,7 +261,6 @@ export class WorkloadPreflightRejectedErrorV1 extends Error {
 		| "secret-bindings"
 		| "registry-admission"
 		| "model-projection"
-		| "snapshot-materialization"
 		| "desired-workload"
 		| undefined;
 	constructor(
@@ -269,7 +268,6 @@ export class WorkloadPreflightRejectedErrorV1 extends Error {
 			| "secret-bindings"
 			| "registry-admission"
 			| "model-projection"
-			| "snapshot-materialization"
 			| "desired-workload",
 	) {
 		super("Workload preflight rejected");

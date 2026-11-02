@@ -10,11 +10,13 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.js";
+import { PostgresWorkspaceSnapshotBindingStoreV1 } from "./workspace-snapshot-bindings.js";
 import { PostgresWorkspaceSnapshotUploadStoreV1 } from "./workspace-snapshot-upload-store.js";
 
 let database: PostgresTestDatabase;
 let db: ReturnType<typeof postgres>;
 let store: PostgresWorkspaceSnapshotUploadStoreV1;
+let bindingStore: PostgresWorkspaceSnapshotBindingStoreV1;
 beforeAll(async () => {
 	// An explicitly owned local PG is useful on hosts without a Docker daemon; never use a shared DB.
 	const url = process.env.WORKSPACE_SNAPSHOT_TEST_DATABASE_URL;
@@ -34,9 +36,13 @@ beforeAll(async () => {
 	await migratePlatformDatabase(database);
 	db = postgres(database.databaseUrl, { max: 8 });
 	store = new PostgresWorkspaceSnapshotUploadStoreV1(database.databaseUrl);
+	bindingStore = new PostgresWorkspaceSnapshotBindingStoreV1(
+		database.databaseUrl,
+	);
 }, 120_000);
 afterAll(async () => {
 	await store?.close();
+	await bindingStore?.close();
 	await db?.end();
 	await database?.stop();
 });
@@ -203,6 +209,40 @@ describe("workspace snapshot publication on PostgreSQL", () => {
 			"deleting",
 		);
 		expect((await store.read(who)).ownerStoredBytes).toBe(32);
+	});
+	it("rejects binding a snapshot to an agent owned by another subject", async () => {
+		const who = owner();
+		const other = owner();
+		const value = await store.create(
+			input(who),
+			who,
+			"binding-owner",
+			requestDigest,
+		);
+		const agent = randomUUID();
+		await db`insert into platform.agents (id) values (${agent})`;
+		await db`insert into platform.agent_owners (agent_id,owner_id,created_at) values (${agent},${who.id},now())`;
+		await db`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,created_at,runtime_revision) values (${agent},1,'synthetic',now(),1)`;
+		await expect(
+			bindingStore.bind({
+				ownerType: other.kind,
+				ownerId: other.id,
+				snapshotId: value.snapshotId,
+				agentId: agent,
+				configurationRevision: 1,
+				name: "repo",
+			}),
+		).rejects.toMatchObject({ code: "forbidden" });
+		await expect(
+			bindingStore.bind({
+				ownerType: who.kind,
+				ownerId: who.id,
+				snapshotId: value.snapshotId,
+				agentId: agent,
+				configurationRevision: 1,
+				name: "repo",
+			}),
+		).resolves.toMatchObject({ agentId: agent, name: "repo" });
 	});
 	it("authenticates user/application scopes and rejects revoked or misattributed writes in the commit transaction", async () => {
 		const person = owner();
