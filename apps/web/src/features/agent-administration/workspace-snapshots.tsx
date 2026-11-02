@@ -112,6 +112,10 @@ type WorkspaceSnapshotsPanelProps = {
 	readonly identityKey: string;
 	readonly sourceKind: "standard" | "custom";
 	readonly client?: Client;
+	readonly selected?: readonly { snapshotId: string; name: string }[];
+	readonly onChange?: (
+		bindings: readonly { snapshotId: string; name: string }[],
+	) => void;
 };
 
 /** Metadata-only snapshot management. Standard templates explicitly cannot bind snapshots. */
@@ -119,6 +123,8 @@ export function WorkspaceSnapshotsPanel({
 	identityKey,
 	sourceKind,
 	client,
+	selected = [],
+	onChange,
 }: WorkspaceSnapshotsPanelProps) {
 	const snapshots = useWorkspaceSnapshots({ identityKey, client });
 	if (sourceKind === "standard") {
@@ -153,6 +159,7 @@ export function WorkspaceSnapshotsPanel({
 		);
 	}
 	const values = snapshots.data?.snapshots ?? [];
+	const selectedIds = new Set(selected.map(({ snapshotId }) => snapshotId));
 	return (
 		<Card aria-label="工作区快照">
 			<div className="flex items-center justify-between gap-3">
@@ -187,6 +194,27 @@ export function WorkspaceSnapshotsPanel({
 									{snapshot.bindings.length} 个绑定
 								</div>
 							</div>
+							{onChange ? (
+								<label className="flex items-center gap-2 text-xs">
+									<input
+										type="checkbox"
+										checked={selectedIds.has(snapshot.snapshotId)}
+										disabled={snapshots.remove.isPending}
+										onChange={(event) => {
+											const next = selected.filter(
+												(binding) => binding.snapshotId !== snapshot.snapshotId,
+											);
+											if (event.currentTarget.checked)
+												next.push({
+													snapshotId: snapshot.snapshotId,
+													name: snapshot.bindings[0]?.name ?? "repo",
+												});
+											onChange(next);
+										}}
+									/>
+									选择
+								</label>
+							) : null}
 							<Button
 								variant="outline"
 								size="sm"

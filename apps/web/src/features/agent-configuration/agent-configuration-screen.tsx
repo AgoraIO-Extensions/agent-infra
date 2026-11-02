@@ -584,6 +584,13 @@ export function AgentConfigurationScreen({
 							identityKey={session.session.user.userId}
 							sourceKind="custom"
 							client={generatedV2Client}
+							selected={agent.source.workspaceSnapshots}
+							onChange={(workspaceSnapshots) =>
+								onSave({
+									schemaVersion: 2,
+									source: { ...agent.source, workspaceSnapshots },
+								})
+							}
 						/>
 					) : null}
 					<div className="form-footer configuration-form-footer">
