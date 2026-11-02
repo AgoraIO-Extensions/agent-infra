@@ -220,14 +220,22 @@ export function registerWorkspaceSnapshotRoutesV1(
 		} catch (error) {
 			if (error instanceof WorkspaceSnapshotServiceErrorV1) {
 				const protocol =
-					error.code === "authentication_required"
-						? new HttpProtocolError("AUTHENTICATION_REQUIRED", metadata.traceId)
-						: error.code === "forbidden"
-							? new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId)
-							: new HttpProtocolError(
-									"DEPENDENCY_UNAVAILABLE",
+					error.code === "conflict"
+						? new HttpProtocolError("CONFLICT", metadata.traceId)
+						: error.code === "authentication_required"
+							? new HttpProtocolError(
+									"AUTHENTICATION_REQUIRED",
 									metadata.traceId,
-								);
+								)
+							: error.code === "forbidden"
+								? new HttpProtocolError(
+										"RESOURCE_UNAVAILABLE",
+										metadata.traceId,
+									)
+								: new HttpProtocolError(
+										"DEPENDENCY_UNAVAILABLE",
+										metadata.traceId,
+									);
 				return context.json(protocol.body, protocol.status);
 			}
 			const protocol =

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
+import { WorkspaceSnapshotServiceErrorV1 } from "../workspace-snapshot-service.js";
 import { registerWorkspaceSnapshotRoutesV1 } from "./workspace-snapshot-routes.js";
 
 const material = `papi_${"A".repeat(43)}`;
@@ -34,6 +35,21 @@ function fixture() {
 }
 
 describe("workspace snapshot HTTP boundary", () => {
+	it("returns a bounded conflict when an attached snapshot cannot be deleted", async () => {
+		const f = fixture();
+		f.deps.remove.mockRejectedValueOnce(
+			new WorkspaceSnapshotServiceErrorV1("conflict"),
+		);
+		const response = await f.app.request(
+			"/api/v2/workspace-snapshots/snapshot-1",
+			{
+				method: "DELETE",
+				headers: { Authorization: `Bearer ${material}` },
+			},
+		);
+		expect(response.status).toBe(409);
+		expect(await response.json()).toMatchObject({ retryable: false });
+	});
 	it("requires bearer credentials and returns metadata only", async () => {
 		const f = fixture();
 		const response = await f.app.request("/api/v2/workspace-snapshots", {
