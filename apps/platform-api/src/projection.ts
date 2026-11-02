@@ -140,7 +140,16 @@ export function createPlatformProjectionReaders(
 				agentId: agent.agentId,
 				name: agent.name,
 				description: agent.description,
-				source: presentation.source,
+				source:
+					version === 2
+						? presentation.source
+						: presentation.source.kind === "custom"
+							? (() => {
+									const { workspaceSnapshots: _snapshots, ...source } =
+										presentation.source;
+									return source;
+								})()
+							: presentation.source,
 				managementStatus: agent.management.status,
 				serviceAvailability: agent.management.serviceAvailability,
 				configuration:
