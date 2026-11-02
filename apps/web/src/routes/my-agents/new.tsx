@@ -48,6 +48,11 @@ function NewAgentApplicationRoute() {
 	return (
 		<main className="platform-content management-content">
 			<AgentApplicationSubmissionScreen
+				identityKey={
+					session.state.kind === "ready"
+						? session.state.session.user.userId
+						: undefined
+				}
 				connectionUrl={
 					session.state.kind === "ready"
 						? connectionEntryUrl(session.state.connection)
