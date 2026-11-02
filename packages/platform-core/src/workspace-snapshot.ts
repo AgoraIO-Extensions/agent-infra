@@ -17,6 +17,15 @@ export type WorkspaceSnapshotErrorCodeV1 =
 	| "snapshot_limit_exceeded"
 	| "bound";
 
+export class WorkspaceSnapshotBindingErrorV1 extends Error {
+	constructor(
+		readonly code: "forbidden" | "conflict" | "quota_exceeded" | "not_found",
+	) {
+		super(code);
+		this.name = "WorkspaceSnapshotBindingErrorV1";
+	}
+}
+
 export class WorkspaceSnapshotErrorV1 extends Error {
 	readonly code: WorkspaceSnapshotErrorCodeV1;
 	constructor(code: WorkspaceSnapshotErrorCodeV1) {
@@ -63,6 +72,43 @@ export interface WorkspaceSnapshotStoreV1 {
 		owner: { ownerType: "user" | "application"; ownerId: string },
 		snapshotId: string,
 	): Promise<WorkspaceSnapshotRecordV1>;
+}
+
+export interface WorkspaceSnapshotBindingStoreV1 {
+	bind(input: {
+		readonly ownerType: "user" | "application";
+		readonly ownerId: string;
+		readonly snapshotId: string;
+		readonly agentId: string;
+		readonly configurationRevision: number;
+		readonly name: string;
+	}): Promise<WorkspaceSnapshotRecordV1["bindings"][number]>;
+	unbind(input: {
+		readonly ownerType: "user" | "application";
+		readonly ownerId: string;
+		readonly snapshotId: string;
+		readonly agentId: string;
+		readonly configurationRevision: number;
+	}): Promise<void>;
+}
+
+export function assertWorkspaceSnapshotBindingQuotaV1(input: {
+	readonly existingCount: number;
+	readonly existingBytes: number;
+	readonly nextBytes: number;
+}): void {
+	if (
+		!Number.isSafeInteger(input.existingCount) ||
+		!Number.isSafeInteger(input.existingBytes) ||
+		!Number.isSafeInteger(input.nextBytes) ||
+		input.existingCount < 0 ||
+		input.existingBytes < 0 ||
+		input.nextBytes <= 0 ||
+		input.existingCount >= workspaceSnapshotLimitsV1.maxSnapshotsPerAgent ||
+		input.existingBytes + input.nextBytes >
+			workspaceSnapshotLimitsV1.maxUnpackedBytes
+	)
+		throw new WorkspaceSnapshotBindingErrorV1("quota_exceeded");
 }
 
 const snapshotName = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;

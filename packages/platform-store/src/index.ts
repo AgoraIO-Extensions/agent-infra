@@ -35,7 +35,6 @@ export {
 	PostgresApplicationMaterialGrantStoreV1,
 } from "./application-material-grant.ts";
 export { PostgresApplicationRegistrationStoreV1 } from "./application-registration.ts";
-export { PostgresWorkspaceSnapshotStoreV1 } from "./workspace-snapshots.ts";
 export {
 	ApplicationRevisionStoreError,
 	type PostgresApplicationRevisionOptionsV1,
@@ -242,3 +241,5 @@ export {
 	openPostgresWorkloadStateReaderV1,
 	type PostgresWorkloadStateReaderV1,
 } from "./workload-reconciliation.js";
+export { PostgresWorkspaceSnapshotBindingStoreV1 } from "./workspace-snapshot-bindings.ts";
+export { PostgresWorkspaceSnapshotStoreV1 } from "./workspace-snapshots.ts";
