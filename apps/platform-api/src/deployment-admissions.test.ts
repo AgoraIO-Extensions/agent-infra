@@ -1152,6 +1152,21 @@ describe("production deployment admissions", () => {
 			},
 		});
 		expect(authorize.mock.calls[0]?.[0].usage).toBe("custom-agent");
+		const snapshotBinding = { snapshotId: "snapshot_01", name: "repo" };
+		const withSnapshot = await admissions.imageAdmission.admitImage({
+			...request,
+			requested: {
+				kind: "custom",
+				imageReference,
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+				workspaceSnapshots: [snapshotBinding],
+			},
+		});
+		expect(withSnapshot).toMatchObject({
+			status: "admitted",
+			source: { workspaceSnapshots: [snapshotBinding] },
+		});
 		for (const requested of [
 			{ kind: "standard", templateId: "codex" } as const,
 			{

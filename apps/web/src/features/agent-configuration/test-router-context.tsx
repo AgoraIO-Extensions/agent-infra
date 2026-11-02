@@ -1,3 +1,8 @@
+import type { QueryClient } from "@tanstack/react-query";
+import {
+	QueryClient as QueryClientImpl,
+	QueryClientProvider,
+} from "@tanstack/react-query";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -13,8 +18,10 @@ import { ToastProvider } from "@/components/ui/toast";
  */
 export function ConfigurationTestProviders({
 	children,
+	queryClient,
 }: {
 	children: ReactNode;
+	queryClient?: QueryClient;
 }) {
 	const [router] = useState(() =>
 		createRouter({
@@ -22,9 +29,15 @@ export function ConfigurationTestProviders({
 			history: createMemoryHistory({ initialEntries: ["/"] }),
 		}),
 	);
+	const [ownedQueryClient] = useState(
+		() =>
+			new QueryClientImpl({ defaultOptions: { queries: { retry: false } } }),
+	);
 	return (
 		<RouterContextProvider router={router}>
-			<ToastProvider>{children}</ToastProvider>
+			<QueryClientProvider client={queryClient ?? ownedQueryClient}>
+				<ToastProvider>{children}</ToastProvider>
+			</QueryClientProvider>
 		</RouterContextProvider>
 	);
 }

@@ -58,6 +58,14 @@ describe("Agent application draft", () => {
 		);
 	});
 
+	it("keeps snapshots out of standard-template requests even when a draft contains an earlier selection", () => {
+		const request = buildAgentApplicationRequest("create", {
+			...standardCreateDraft,
+			workspaceSnapshots: [{ snapshotId: "snapshot-repo", name: "repo" }],
+		});
+		expect(request.source).toEqual({ kind: "standard", templateId: "codex" });
+	});
+
 	it("requires inline YAML for a multi-service draft", () => {
 		const errors = validateAgentApplicationDraft(
 			{

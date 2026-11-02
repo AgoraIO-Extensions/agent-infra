@@ -1,6 +1,7 @@
 import {
 	AgentProjectionV1Schema,
 	AgentResourceProfileProjectionV1Schema,
+	type AgentSourceInputV2Schema,
 	MultiServiceManifestDocumentV1Schema,
 	type MultiServiceServiceProjectionV1,
 	multiServiceServiceProjectionsV1,
@@ -8,6 +9,7 @@ import {
 import type { ModelDisplayNameLookupV1 } from "@agent-infra/model-catalog";
 import type { PostgresAgentConfigurationQueryV1 } from "@agent-infra/platform-store";
 import { parseAllDocuments } from "yaml";
+import type { z } from "zod";
 
 import type { createDeploymentIdentityScope } from "./deployment-identity.js";
 import {
@@ -19,6 +21,7 @@ import type { IdentityContext } from "./http/identity.js";
 import type { PresentPlatformAgent } from "./projection.js";
 
 type Presentation = Awaited<ReturnType<PresentPlatformAgent>>;
+type AgentSourceV2 = z.infer<typeof AgentSourceInputV2Schema>;
 
 function canonicalHttpsOrigin(value: unknown): value is string {
 	if (typeof value !== "string" || value.length === 0) return false;
@@ -89,7 +92,7 @@ export function createDeploymentPresentation(input: {
 			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
 		}
 		const source = configuration.source;
-		let browserSource: Presentation["source"];
+		let browserSource: AgentSourceV2;
 		if (source.kind === "standard") {
 			browserSource = { kind: "standard", templateId: source.templateId };
 		} else if (source.manifest !== undefined) {
@@ -120,6 +123,9 @@ export function createDeploymentPresentation(input: {
 				interactionMode: "self-managed",
 				identityResponsibility: "self-managed",
 				...(services ? { services: [...services] } : {}),
+				...(source.workspaceSnapshots === undefined
+					? {}
+					: { workspaceSnapshots: [...source.workspaceSnapshots] }),
 			};
 		} else if (source.interactionMode === "self-managed") {
 			if (!source.identityResponsibility) {
@@ -130,12 +136,18 @@ export function createDeploymentPresentation(input: {
 				imageReference: `${input.imageRepository}@${runtime.sourceReference}`,
 				interactionMode: "self-managed",
 				identityResponsibility: source.identityResponsibility,
+				...(source.workspaceSnapshots === undefined
+					? {}
+					: { workspaceSnapshots: [...source.workspaceSnapshots] }),
 			};
 		} else {
 			browserSource = {
 				kind: "custom",
 				imageReference: `${input.imageRepository}@${runtime.sourceReference}`,
 				interactionMode: "platform-adapter",
+				...(source.workspaceSnapshots === undefined
+					? {}
+					: { workspaceSnapshots: [...source.workspaceSnapshots] }),
 			};
 		}
 		const verified = runtime.capabilities;

@@ -39,7 +39,12 @@ import type {
 	AgentApplicationUpdateRequestV2Writable,
 	DeploymentConfigurationProjectionV2,
 	DeploymentModelEndpointProjectionV2,
+	WorkspaceSnapshotBindingV1,
 } from "../../pilot/generated-v2/types.gen.js";
+import {
+	WorkspaceSnapshotsPanel,
+	workspaceSnapshotBindingError,
+} from "../agent-administration/workspace-snapshots.js";
 import type { AgentDefaultRelayKeyCheck } from "../agent-configuration/agent-configuration.js";
 import { useKeylessKeyCheck } from "../agent-configuration/use-keyless-key-check.js";
 import { agentSourceReferenceLabel } from "../agent-management-status.js";
@@ -82,6 +87,7 @@ import {
 } from "./use-application-model-candidates.js";
 
 type AgentApplicationFormProps = {
+	identityKey?: string;
 	cancelAction?: ReactNode;
 	connectionUrl?: string;
 	/**
@@ -867,6 +873,15 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const [sourceKind, setSourceKind] = useState<AgentApplicationSourceKind>(() =>
 		sourceKindFor(application?.source),
 	);
+	const [workspaceSnapshots, setWorkspaceSnapshots] = useState<
+		readonly WorkspaceSnapshotBindingV1[]
+	>(() =>
+		application?.source.kind === "custom"
+			? (application.source.workspaceSnapshots ?? []).map(
+					({ snapshotId, name }) => ({ snapshotId, name }),
+				)
+			: [],
+	);
 	const [imageReference, setImageReference] = useState(
 		application?.source.kind === "custom"
 			? agentSourceReferenceLabel(application)
@@ -1411,6 +1426,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						dismissServerFormError();
 						setSourceKind(kind);
 						if (kind === "standard") {
+							setWorkspaceSnapshots([]);
+							clearFieldErrors("workspaceSnapshots");
 							if (models.length === 0) setModels([blankModel()]);
 							if (sourceKind !== "standard") setConfigureModels(true);
 						}
@@ -1750,6 +1767,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			environment,
 			secrets,
 			source: application?.source,
+			workspaceSnapshots:
+				workspaceSnapshots.length > 0 ||
+				(application?.source.kind === "custom" &&
+					application.source.workspaceSnapshots !== undefined)
+					? workspaceSnapshots
+					: undefined,
 			configureModels,
 			models,
 			defaultModelOptionId,
@@ -1769,6 +1792,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			staleModel,
 			staleModelIndexes,
 		});
+		if (sourceKind !== "standard") {
+			const snapshotError = workspaceSnapshotBindingError(workspaceSnapshots);
+			if (snapshotError) errors.workspaceSnapshots = snapshotError;
+		}
 		if (sourceKind === "custom-multi-service") {
 			const parsed = parseMultiServiceManifest(manifest);
 			if (!parsed.ok) errors.manifest = parsed.message;
@@ -1899,6 +1926,26 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							/>
 						</Field>
 						{sourceFields}
+						{sourceKind !== "standard" && props.identityKey ? (
+							<fieldset
+								className="sm:col-span-2"
+								id={fieldId("workspaceSnapshots")}
+								tabIndex={-1}
+								aria-label="工作区快照选择"
+							>
+								<WorkspaceSnapshotsPanel
+									identityKey={props.identityKey}
+									sourceKind="custom"
+									selected={workspaceSnapshots}
+									disabled={props.submitting}
+									onChange={(value) => {
+										setWorkspaceSnapshots(value);
+										clearFieldErrors("workspaceSnapshots");
+										dismissServerFormError();
+									}}
+								/>
+							</fieldset>
+						) : null}
 						<section
 							aria-labelledby="application-connection-heading"
 							className="space-y-3 rounded-lg border border-border bg-muted/20 p-4 sm:col-span-2"

@@ -2,6 +2,7 @@ import type {
 	AgentApplicationCreateRequestV2Writable,
 	AgentApplicationProjectionV2,
 	AgentApplicationUpdateRequestV2Writable,
+	WorkspaceSnapshotBindingV1,
 } from "../../pilot/generated-v2/types.gen.js";
 
 export type AgentApplicationSourceKind =
@@ -43,6 +44,7 @@ export type AgentApplicationFormDraft = {
 	templateId: string;
 	templateRevision?: string;
 	userAvailabilityIds: string;
+	workspaceSnapshots?: readonly WorkspaceSnapshotBindingV1[];
 };
 
 export function splitValues(value: string) {
@@ -288,13 +290,20 @@ function requestBody(
 	draft: AgentApplicationFormDraft,
 	replacement?: AgentApplicationKeyReplacement,
 ) {
-	const source: AgentApplicationCreateRequestV2Writable["source"] =
+	const selectedSource: AgentApplicationCreateRequestV2Writable["source"] =
 		(draft.source?.kind === "custom" && "manifest" in draft.source
 			? {
 					kind: draft.source.kind,
 					interactionMode: draft.source.interactionMode,
 					identityResponsibility: draft.source.identityResponsibility,
 					manifest: draft.source.manifest,
+					...(draft.source.workspaceSnapshots === undefined
+						? {}
+						: {
+								workspaceSnapshots: draft.source.workspaceSnapshots.map(
+									({ snapshotId, name }) => ({ snapshotId, name }),
+								),
+							}),
 				}
 			: draft.source) ??
 		(draft.sourceKind === "standard"
@@ -324,6 +333,15 @@ function requestBody(
 							interactionMode: "self-managed",
 							identityResponsibility: draft.identityResponsibility,
 						});
+	const source =
+		selectedSource.kind === "custom" && draft.workspaceSnapshots !== undefined
+			? {
+					...selectedSource,
+					workspaceSnapshots: draft.workspaceSnapshots.map(
+						({ snapshotId, name }) => ({ snapshotId, name }),
+					),
+				}
+			: selectedSource;
 	const modelConfiguration = showsModelConfiguration(
 		mode,
 		draft.sourceKind,

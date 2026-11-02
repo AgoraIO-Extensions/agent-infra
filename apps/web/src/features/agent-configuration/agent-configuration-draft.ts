@@ -30,6 +30,7 @@ export type AgentConfigurationDraft = {
 	models: readonly AgentConfigurationModelDraft[];
 	organizationAvailabilityIds: string;
 	replaceModels: boolean;
+	workspaceSnapshots: readonly { snapshotId: string; name: string }[];
 	userAvailabilityIds: string;
 };
 
@@ -59,6 +60,10 @@ export function configurationDraftFromAgent(
 		models: [],
 		defaultModelOptionId: "",
 		defaultReasoningLevel: "",
+		workspaceSnapshots:
+			agent.source.kind === "custom"
+				? (agent.source.workspaceSnapshots ?? [])
+				: [],
 		environment: agent.configuration.environment.map((entry) => ({
 			name: entry.name,
 			value: entry.value,
@@ -131,6 +136,16 @@ export function buildAgentConfigurationRequest(
 		...(modelConfiguration === undefined ? {} : { modelConfiguration }),
 		...(environment === undefined ? {} : { environment }),
 		...(draft.channels === undefined ? {} : { channels: draft.channels }),
+		...(agent.source.kind === "custom" &&
+		JSON.stringify(draft.workspaceSnapshots) !==
+			JSON.stringify(agent.source.workspaceSnapshots ?? [])
+			? {
+					source: {
+						...agent.source,
+						workspaceSnapshots: [...draft.workspaceSnapshots],
+					},
+				}
+			: {}),
 	};
 }
 
@@ -170,6 +185,11 @@ export function agentConfigurationDraftChanged(
 			),
 		);
 	if (targets(request) !== targets(baseline)) return true;
+	if (
+		JSON.stringify(request.source ?? null) !==
+		JSON.stringify(baseline.source ?? null)
+	)
+		return true;
 	const next = request.modelConfiguration;
 	if (next === undefined) return false;
 	const current = agent.configuration;
