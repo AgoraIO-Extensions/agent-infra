@@ -14,7 +14,8 @@ export type WorkspaceSnapshotErrorCodeV1 =
 	| "invalid_name"
 	| "duplicate_name"
 	| "reserved_mount_path"
-	| "snapshot_limit_exceeded";
+	| "snapshot_limit_exceeded"
+	| "bound";
 
 export class WorkspaceSnapshotErrorV1 extends Error {
 	readonly code: WorkspaceSnapshotErrorCodeV1;
@@ -39,6 +40,13 @@ export interface WorkspaceSnapshotRecordV1 {
 	readonly objectVersion: string;
 	readonly status: "ready" | "deleting" | "deleted";
 	readonly createdAt: string;
+	readonly bindings: readonly {
+		readonly agentId: string;
+		readonly configurationRevision: number;
+		readonly name: string;
+		readonly digest: string;
+		readonly sizeBytes: number;
+	}[];
 }
 
 export interface WorkspaceSnapshotStoreV1 {
