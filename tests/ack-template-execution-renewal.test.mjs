@@ -152,6 +152,32 @@ test("renewal abort fails closed and does not report success", async () => {
 	assert.equal(posts, 0);
 });
 
+test("renewal timeout cancels the attempt before posting", async () => {
+	let posts = 0;
+	const renew = createTemplateExecutionRenewal({
+		request: baseRequest(),
+		hostSessionRef: "host",
+		authorizationRecordId: "authorization",
+		initialExpiresAt: 1_800_000_030_000,
+		signing: {
+			issuer: "issuer",
+			workerId: "worker",
+			keyId: "key",
+			privateKey: keys.privateKey,
+			now: () => 1_800_000_015_000,
+		},
+		signal: new AbortController().signal,
+		timeoutMs: 10,
+		waitForHostGrant: async () => new Promise(() => {}),
+		post: async () => {
+			posts++;
+			return {};
+		},
+	});
+	await assert.rejects(renew, /TEMPLATE_EXECUTION_RENEWAL_TIMEOUT/);
+	assert.equal(posts, 0);
+});
+
 test("renewal rejects wrong execution and expired response", async () => {
 	let now = 1_800_000_000_000;
 	for (const response of [
