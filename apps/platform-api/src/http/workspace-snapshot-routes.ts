@@ -16,7 +16,9 @@ import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 export interface WorkspaceSnapshotRouteDependenciesV1 {
 	browser?: {
 		readonly identity: IdentityAdapter;
-		readonly list(userId: string): Promise<readonly WorkspaceSnapshotRecordV1[]>;
+		readonly list: (
+			userId: string,
+		) => Promise<readonly WorkspaceSnapshotRecordV1[]>;
 	};
 	upload(input: {
 		material: string;
@@ -64,18 +66,19 @@ export function registerWorkspaceSnapshotRoutesV1(
 	dependencies: WorkspaceSnapshotRouteDependenciesV1,
 ) {
 	if (dependencies.browser) {
+		const browser = dependencies.browser;
 		app.get("/api/v2/me/workspace-snapshots", async (context) => {
 			const metadata = requestMetadata(context.req.raw);
 			try {
 				if (context.req.header("authorization") || context.req.raw.body)
 					throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
 				const identity = await resolveIdentity(
-					dependencies.browser.identity,
+					browser.identity,
 					context.req.raw,
 					metadata.traceId,
 				);
 				return context.json(
-					(await dependencies.browser.list(identity.userId)).map(projection),
+					(await browser.list(identity.userId)).map(projection),
 					200,
 				);
 			} catch (error) {
