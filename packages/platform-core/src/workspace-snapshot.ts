@@ -58,6 +58,48 @@ export interface WorkspaceSnapshotRecordV1 {
 	}[];
 }
 
+export interface WorkspaceSnapshotPrincipalV1 {
+	readonly kind: "user" | "application";
+	readonly id: string;
+	readonly scopes: readonly string[];
+}
+
+export interface WorkspaceSnapshotUploadStoreV1 {
+	findIdempotency(
+		owner: WorkspaceSnapshotPrincipalV1,
+		key: string,
+	): Promise<{
+		readonly requestDigest: string;
+		readonly record: WorkspaceSnapshotRecordV1;
+	} | null>;
+	create(
+		record: WorkspaceSnapshotRecordV1,
+		owner: WorkspaceSnapshotPrincipalV1,
+		idempotencyKey: string,
+		requestDigest: string,
+	): Promise<WorkspaceSnapshotRecordV1>;
+	list(
+		owner: WorkspaceSnapshotPrincipalV1,
+	): Promise<readonly WorkspaceSnapshotRecordV1[]>;
+	get(
+		owner: WorkspaceSnapshotPrincipalV1,
+		snapshotId: string,
+	): Promise<WorkspaceSnapshotRecordV1 | null>;
+	remove(
+		owner: WorkspaceSnapshotPrincipalV1,
+		snapshotId: string,
+	): Promise<WorkspaceSnapshotRecordV1>;
+}
+
+export interface WorkspaceSnapshotQuotaReaderV1 {
+	read(owner: WorkspaceSnapshotPrincipalV1): Promise<{
+		readonly ownerStoredBytes: number;
+		readonly agentArchiveBytes: number;
+		readonly agentUnpackedBytes: number;
+		readonly agentBindingCount: number;
+	}>;
+}
+
 export interface WorkspaceSnapshotStoreV1 {
 	create(record: WorkspaceSnapshotRecordV1): Promise<WorkspaceSnapshotRecordV1>;
 	list(owner: {
