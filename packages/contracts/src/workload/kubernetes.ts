@@ -226,13 +226,20 @@ const desiredWorkloadBaseV1Schema = z.strictObject({
 	/** Parsed, immutable multi-service resource description for the Worker. */
 	multiService: MultiServiceManifestDocumentV1Schema.optional(),
 	/** Server-derived immutable snapshot inputs; requests and Runtime replies cannot set this field. */
-	workspaceSnapshots: z.array(z.strictObject({
-		...WorkspaceSnapshotBindingV1Schema.shape,
-		digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
-		sizeBytes: z.number().int().positive().safe(),
-		mountPath: z.string().regex(/^\/opt\/agent\/workspaces\/[a-z0-9]([-a-z0-9]*[a-z0-9])?$/),
-		objectRef: z.string().min(1).max(512),
-	})).max(4).optional(),
+	workspaceSnapshots: z
+		.array(
+			z.strictObject({
+				...WorkspaceSnapshotBindingV1Schema.shape,
+				digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+				sizeBytes: z.number().int().positive().safe(),
+				mountPath: z
+					.string()
+					.regex(/^\/opt\/agent\/workspaces\/[a-z0-9]([-a-z0-9]*[a-z0-9])?$/),
+				objectRef: z.string().min(1).max(512),
+			}),
+		)
+		.max(4)
+		.optional(),
 });
 
 const platformAdapterWorkloadBaseV1Schema = desiredWorkloadBaseV1Schema.extend({

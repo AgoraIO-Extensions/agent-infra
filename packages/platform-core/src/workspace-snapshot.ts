@@ -43,9 +43,18 @@ export interface WorkspaceSnapshotRecordV1 {
 
 export interface WorkspaceSnapshotStoreV1 {
 	create(record: WorkspaceSnapshotRecordV1): Promise<WorkspaceSnapshotRecordV1>;
-	list(owner: { ownerType: "user" | "application"; ownerId: string }): Promise<readonly WorkspaceSnapshotRecordV1[]>;
-	get(owner: { ownerType: "user" | "application"; ownerId: string }, snapshotId: string): Promise<WorkspaceSnapshotRecordV1 | null>;
-	remove(owner: { ownerType: "user" | "application"; ownerId: string }, snapshotId: string): Promise<WorkspaceSnapshotRecordV1>;
+	list(owner: {
+		ownerType: "user" | "application";
+		ownerId: string;
+	}): Promise<readonly WorkspaceSnapshotRecordV1[]>;
+	get(
+		owner: { ownerType: "user" | "application"; ownerId: string },
+		snapshotId: string,
+	): Promise<WorkspaceSnapshotRecordV1 | null>;
+	remove(
+		owner: { ownerType: "user" | "application"; ownerId: string },
+		snapshotId: string,
+	): Promise<WorkspaceSnapshotRecordV1>;
 }
 
 const snapshotName = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
@@ -56,7 +65,9 @@ export function workspaceSnapshotMountPathV1(name: string): string {
 	if (!snapshotName.test(name) || Buffer.byteLength(name) > 63)
 		throw new WorkspaceSnapshotErrorV1("invalid_name");
 	const path = `/opt/agent/workspaces/${name}`;
-	if (reservedRoots.some((root) => path === root || path.startsWith(`${root}/`)))
+	if (
+		reservedRoots.some((root) => path === root || path.startsWith(`${root}/`))
+	)
 		throw new WorkspaceSnapshotErrorV1("reserved_mount_path");
 	return path;
 }
@@ -87,7 +98,6 @@ export function validateWorkspaceSnapshotDigestV1(
 	if (!digest.test(expected))
 		throw new WorkspaceSnapshotErrorV1("invalid_digest");
 	const actual = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-	if (actual !== expected)
-		throw new WorkspaceSnapshotErrorV1("invalid_digest");
+	if (actual !== expected) throw new WorkspaceSnapshotErrorV1("invalid_digest");
 	return actual;
 }
