@@ -204,7 +204,7 @@ test("CI waiver transitions cancel older PR runs and retain checks on lookup fai
   assert.equal(workflow.jobs["workload-kind"].if,
     guarded("!cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true')"));
   assert.equal(workflow.jobs.changes.name, "Classify changes");
-  assert.equal(workflow.jobs["web-tests"].name, "Web unit tests");
+  assert.equal(workflow.jobs["web-tests"].name, "Web validation");
   assert.equal(workflow.jobs["backend-tests"].name, "Backend integration tests");
 });
 

@@ -209,11 +209,11 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   web-tests:
-    name: Web unit tests
+    name: Web validation
     needs: [ci-exemption, changes]
     if: ${{ !(github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && github.event.label.name != 'ci:skip') && !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -233,10 +233,27 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Build Web dependencies
-        run: pnpm exec turbo run build --filter=@agent-infra/web
+      - name: Build applications and workspace packages
+        run: pnpm build
       - name: Run Web tests
         run: pnpm test:apps:web
+      - name: Cache Playwright browsers
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install browser for Web validation
+        run: pnpm --filter @agent-infra/web exec playwright install --with-deps chromium
+      - name: Validate Web management journeys
+        run: pnpm --filter @agent-infra/web test:browser
+      - name: Upload Web browser evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-management-${{ github.event.pull_request.head.sha || github.sha }}
+          path: apps/web/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
 
   backend-tests:
     name: Backend integration tests
@@ -509,30 +526,6 @@ jobs:
       - name: Smoke test applications
         if: ${{ needs.changes.outputs.source == 'true' }}
         run: pnpm smoke
-
-      - name: Cache Playwright browsers
-        if: ${{ needs.changes.outputs.web == 'true' }}
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
-
-      - name: Install browser for Web validation
-        if: ${{ needs.changes.outputs.web == 'true' }}
-        run: pnpm --filter @agent-infra/web exec playwright install --with-deps chromium
-
-      - name: Validate Web management journeys
-        if: ${{ needs.changes.outputs.web == 'true' }}
-        run: pnpm --filter @agent-infra/web test:browser
-
-      - name: Upload Web browser evidence
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: web-management-${{ github.event.pull_request.head.sha || github.sha }}
-          path: apps/web/playwright-report/
-          if-no-files-found: ignore
-          retention-days: 14
 
       - name: Build deployment images
         id: images
