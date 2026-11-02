@@ -419,15 +419,15 @@ deploy/ack/redeploy.sh all
 
 上述八 Agent 输入包的 `all` 按以下顺序运行：
 
-1. 确认 clean worktree `HEAD` 等于 `ACK_SOURCE_SHA`，核对同源镜像和全部输入。
+1. 确认 clean worktree `HEAD` 等于 `ACK_SOURCE_SHA`；在任何集群写入前检查镜像/配置来源、创建请求和 reserve 计划。
 2. 检查 fresh 数据库配置，创建 namespace 与声明的私有依赖，逐个回读 ownership 和字节；启动数据库并验证账号/权限/数据库隔离。
 3. `helm upgrade --install --wait` 执行迁移并部署 Platform，等待 API、Web、Worker、Directory rollout，保存来源、release 和实际 workload/Pod 镜像证据。
-4. 四个标准 Runtime 各执行真实模型 preflight，生成本轮验证与容量记录；任何模板失败即停止。
-5. `bootstrap-login` 用已授权账号通过正式登录接口生成两个主体的当前 session 和私有配置候选。
+4. 四个标准 Runtime 各执行真实模型 preflight；声明 custom capacity job 时，在创建 Agent 前用隔离 Pod 实测并清理，生成本轮验证与候选容量；任一失败即停止。
+5. 容量测量完成后立即 `bootstrap-login`，通过正式登录接口生成两个主体的当前 session 和私有配置候选，保留登录新鲜度校验。
 6. `runtime-inputs` 发布本轮身份、模板验证和容量输入，回读配置并等待 API/Worker rollout；随后检查实际挂载的容量配置。
 7. `bootstrap-credential` 通过当前 session 签发 API credential；声明了 `personalRelayKeyFile` 时，自动安装缺失的个人 Relay Key 并回读，已有 Key 保留。
 8. 按固定 Idempotency-Key 创建 Agent，回读 `available/ready`，为当前 Agent 生成六份对话配置与自有入口绑定。
-9. 检查公网 Web 为 `200`、匿名 Agents API 为 `401`；四模板和两个自定义 ACP 各运行至少三轮真实浏览器旅程，检查 SSE、完成终态、刷新恢复和跨主体拒绝。
+9. 声明 reserve 计划时绑定本轮 ready Agent，再次新登录后发布 reserve 配置，验证 API/Worker 消费并等待 minimum ready。随后检查 Web `200`、匿名 Agents API `401`；四模板和两个自定义 ACP 各运行至少三轮真实浏览器旅程，检查 SSE、完成终态、刷新恢复和跨主体拒绝。
 10. 自有入口验证当前 Agent 的完整 Deployment/Pod/Service/EndpointSlice/Ingress 与 imageID，再执行 HTTP 身份正反例和浏览器登录、后端交互、刷新及无权主体拒绝。
 
 若需要分步执行，使用 `plan`、`deploy`、`provision`、`validate`。
@@ -446,8 +446,10 @@ pin。Platform 对话 runner 保留其测试用 `ignoreHTTPSErrors`，结果不�
 
 ## 公共入口 TLS 验收与续期
 
-Platform 公共入口必须通过目标客户端默认的系统/浏览器信任校验。以下证据分别记录，不能
-相互代替；指定 CA 或公钥固定的探针成功，不表示普通用户的浏览器能打开入口。
+Platform 公共入口按 owner 声明的默认系统/浏览器信任或受控客户端信任模式验收。两种模式
+都必须保持证书链、有效期和 hostname 校验，并完成真实新登录、Cookie 安全属性、session
+回读和刷新验证。受控客户端通过不表示公网默认浏览器直接信任；指定 CA、公钥固定和测试用
+忽略证书错误的 runner 各自只证明其声明范围。
 
 | 路径 | 现有配置 | 能证明的范围 |
 | --- | --- | --- |
@@ -455,17 +457,22 @@ Platform 公共入口必须通过目标客户端默认的系统/浏览器信任�
 | 自有入口浏览器探针 | 声明 leaf 的 SPKI pin | 固定公钥例外下的业务旅程，不证明默认信任链 |
 | Platform 对话 runner | 测试用 `ignoreHTTPSErrors` | 浏览器业务流程，不证明证书有效或可信 |
 | 普通 Chrome 与默认 CA 客户端 | 不导入本轮私有 CA、不添加临时信任例外、不关闭证书校验 | 公共入口的默认信任门禁；登录另需真实账号和 session 回读 |
+| 明确声明的受控浏览器 | 新进程/隔离信任库导入交付 CA；不使用证书忽略或 SPKI 例外 | 在交付信任配置下完成 TLS/hostname 与登录验收，不证明公网默认信任 |
 
-公共入口签收至少保留三项当前证据：
+公共入口签收记录所选信任模式，并保留以下当前证据：
 
 1. 以 `ACK_PUBLIC_ORIGIN` 的实际主机名和 SNI 检查服务端返回的证书：SAN 匹配、当前时间处于
-   `notBefore`/`notAfter` 内、所需中间证书齐全，链能在目标客户端默认信任库下验证到受信任根。
-   记录校验时间、证书指纹、有效期和各项结果；旧证书文件或本地签发成功不能证明入口已经切换。
-2. 单独运行默认 CA 的 HTTPS 探针，不传 `--cacert`/`--insecure`，排除命令行与环境中的额外 CA
-   覆盖。例如下面只读探针禁用 curl 用户配置；curl 和 Chrome 可能采用不同信任库，仍须分别验证。
-3. 在普通 Chrome 的新会话中打开同一入口，不使用忽略证书错误的启动参数或浏览器 context，
-   不绕过证书拦截。以已有合法账号正常登录，验证会话 Cookie 的存在及安全属性、session `200`
-   和登录后的受保护页面。仅首页 `200`、匿名接口 `401` 或旧 Cookie 成功均不足以签收。
+   `notBefore`/`notAfter` 内、所需中间证书齐全。默认模式使用默认信任库，受控模式核对交付 CA
+   的摘要、指纹和实际导入结果。记录校验时间、leaf/CA 指纹与结果；旧文件不能证明当前入口。
+2. 使用全新浏览器进程和空会话完成真实 UI 登录，验证登录响应、session `200`、当前身份匹配、
+   Cookie 的 `Secure`/`HttpOnly`/`SameSite` 属性及刷新后的 session。不得使用 `ignoreHTTPSErrors`、
+   证书忽略启动参数、绕过拦截或 SPKI 例外。
+3. 受控模式增加无 CA 拒绝及错误 hostname 拒绝；loopback 错误 hostname 对照必须标明范围，
+   不能冒充 ACK Ingress 路由验收。记录必要的 DNS 映射和 HTTP 协议配置，回执不记录凭据、
+   Cookie 值或响应正文，并清理临时客户端资源。
+
+以下探针用于默认信任模式；其失败不否定已明确选择的受控客户端结果，也不能被受控结果
+回填为默认信任通过。curl 和浏览器可能采用不同信任库，仍须分别验证。
 
 ```bash
 env -u CURL_CA_BUNDLE -u SSL_CERT_FILE -u SSL_CERT_DIR \
@@ -479,9 +486,12 @@ env -u CURL_CA_BUNDLE -u SSL_CERT_FILE -u SSL_CERT_DIR \
 文件中。采集 capsule 只保留当时的证书快照，不会签发或续期；每次移植/重部署前重新检查
 域名、有效期、链和输入引用，过期或已进入声明的临期窗口时先由环境 owner 更新材料。
 
+受控客户端包只含公共 CA、允许的 origin、摘要/指纹、有效期与导入说明，不含私钥。CA 使用
+capsule 内显式文件引用。每次移植或轮换后在新隔离信任库导入，并重复正反例与真实登录。
+
 ACK 环境 owner 在私有交接记录中明确证书供应/续期执行方、到期告警阈值、检查频率和轮换
 窗口；不能假定 chart 自带 ACME 或自动续期。续期后按已授权的 Secret 更新流程发布，核对
-实际入口的新证书，再重复上述默认信任和登录验证，并更新可移植包，防止下一轮部署恢复旧证书。
+实际入口的新证书，再重复所选信任模式的 TLS 正反例和新登录验证，并更新可移植包，防止下一轮部署恢复旧证书。
 仅清理本次创建的 ACME challenge 资源；自有入口、Directory 信任和其他 namespace 保持原 owner。
 公开回执只保留必要的脱敏校验结果，不包含私钥、ACME 账号材料、密码、Cookie 值或会话正文。
 
@@ -925,3 +935,9 @@ Platform Ready、单次回复与多轮通过分别记录。后续其他 session 
 少量自动化页面样本代签。服务延迟目标应按用户需求、负载与测量窗口制定，参见
 [SRE 的 SLI/SLO 定义](https://sre.google/sre-book/service-level-objectives/)。
 当前缺少可比负载、内部阶段归因或合理阈值的项目由 #3692 跟踪，不用增加等待预算冒充性能优化。
+
+性能报告分别写数据、已试方案和下一步方案，参见[reserve 观察](./ACK-REDEPLOY-LESSONS.md#reserve-性能观察与后续方案)。
+每组保留样本数、分位数方法与冷暖条件；多条件变化只作观察对比。`runtime.submit` 不能直接
+命名为 native init 或 Provider TTFT，嵌套 prepare/route/host-read/persist 不能相加。
+Driver duration 与 PostgreSQL、Worker、浏览器时钟分别记录；缺少独立计时仍标未知。
+报告完成不等于 ≤3 秒、生产 p95 或两次干净重建通过，也不代签 #3779 的隔离、耗尽和清理。
