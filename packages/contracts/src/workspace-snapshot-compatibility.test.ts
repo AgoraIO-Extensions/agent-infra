@@ -17,6 +17,7 @@ it("admits only the approved V2 snapshot addition and preserves its published au
 	);
 	const previous = structuredClone(current);
 	for (const path of [
+		"/api/v2/me/workspace-snapshots",
 		"/api/v2/workspace-snapshots",
 		"/api/v2/workspace-snapshots/{snapshotId}",
 	])
