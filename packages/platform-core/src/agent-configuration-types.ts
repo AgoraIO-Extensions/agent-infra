@@ -12,6 +12,11 @@ import type {
 } from "./secret-record-attachments.js";
 import type { SkillHubAgentBindingWriteV1 } from "./skill-hub-agent-binding.js";
 
+export interface WorkspaceSnapshotBindingV1 {
+	readonly snapshotId: string;
+	readonly name: string;
+}
+
 export type AgentConfigurationSourceV1 =
 	| {
 			readonly kind: "standard";
@@ -30,6 +35,7 @@ export type AgentConfigurationSourceV1 =
 			readonly interactionMode: "self-managed" | "platform-adapter";
 			readonly identityResponsibility?: "self-managed" | "platform-managed";
 			readonly connectionEnabled: boolean;
+			readonly workspaceSnapshots?: readonly WorkspaceSnapshotBindingV1[];
 	  }
 	| {
 			readonly kind: "custom";
@@ -39,6 +45,7 @@ export type AgentConfigurationSourceV1 =
 			readonly identityResponsibility: "self-managed";
 			readonly connectionEnabled: false;
 			readonly manifest: string;
+			readonly workspaceSnapshots?: readonly WorkspaceSnapshotBindingV1[];
 	  };
 
 export interface AgentConfigurationSecretMetadataV1 {
@@ -153,17 +160,20 @@ export type AgentConfigurationSourceSelectionV1 =
 			readonly imageReference: string;
 			readonly interactionMode: "self-managed";
 			readonly identityResponsibility: "self-managed" | "platform-managed";
+				readonly workspaceSnapshots?: readonly WorkspaceSnapshotBindingV1[];
 	  }
 	| {
 			readonly kind: "custom";
 			readonly manifest: string;
 			readonly interactionMode: "self-managed";
 			readonly identityResponsibility: "self-managed";
+				readonly workspaceSnapshots?: readonly WorkspaceSnapshotBindingV1[];
 	  }
 	| {
 			readonly kind: "custom";
 			readonly imageReference: string;
 			readonly interactionMode: "platform-adapter";
+				readonly workspaceSnapshots?: readonly WorkspaceSnapshotBindingV1[];
 	  };
 
 export interface AgentConfigurationModelInputV1 {

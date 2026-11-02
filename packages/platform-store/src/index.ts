@@ -35,6 +35,7 @@ export {
 	PostgresApplicationMaterialGrantStoreV1,
 } from "./application-material-grant.ts";
 export { PostgresApplicationRegistrationStoreV1 } from "./application-registration.ts";
+export { PostgresWorkspaceSnapshotStoreV1 } from "./workspace-snapshots.ts";
 export {
 	ApplicationRevisionStoreError,
 	type PostgresApplicationRevisionOptionsV1,
