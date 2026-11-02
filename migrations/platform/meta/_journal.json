@@ -498,6 +498,13 @@
       "when": 1793389882709,
       "tag": "0074_reserve_replenishment_timing",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1793587900876,
+      "tag": "0075_workspace_snapshots",
+      "breakpoints": true
     }
   ]
 }

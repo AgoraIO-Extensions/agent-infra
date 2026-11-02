@@ -169,6 +169,7 @@ import {
 	type WecomRoutesDependenciesV1,
 } from "./http/wecom-routes.js";
 import { registerWecomSetupRoutesV1 } from "./http/wecom-setup-routes.js";
+import { registerWorkspaceSnapshotRoutesV1, type WorkspaceSnapshotRouteDependenciesV1 } from "./http/workspace-snapshot-routes.js";
 import { SseResourceTracker } from "./sse-resource-tracker.js";
 
 export const platformApiService = "platform-api";
@@ -238,6 +239,7 @@ export interface PlatformAppDependencies {
 	readonly skillHubAgentBindings?: SkillHubAgentBindingRoutesDependenciesV1;
 	readonly skillHubImport?: SkillHubImportRoutesDependenciesV1;
 	readonly userGovernance?: UserGovernanceRoutesDependencies;
+	readonly workspaceSnapshots?: WorkspaceSnapshotRouteDependenciesV1;
 }
 
 export function createPlatformHealthApp(observability?: ApiObservability) {
@@ -317,6 +319,8 @@ export function createPlatformApp(
 	if (dependencies.agentDefaultRelayKeys)
 		registerAgentDefaultRelayKeyRoutes(app, dependencies.agentDefaultRelayKeys);
 	registerV2ManagementRoutes(app, dependencies.management);
+	if (dependencies.workspaceSnapshots)
+		registerWorkspaceSnapshotRoutesV1(app, dependencies.workspaceSnapshots);
 	if (dependencies.agentApiCreation)
 		registerAgentApiCreationRoutes(app, dependencies.agentApiCreation);
 	if (dependencies.agentApplicationGrants)

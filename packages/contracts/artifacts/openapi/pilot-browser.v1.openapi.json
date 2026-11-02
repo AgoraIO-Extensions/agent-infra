@@ -239,6 +239,30 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -263,6 +287,30 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -316,6 +364,30 @@
                       "type": "object"
                     },
                     "maxItems": 64,
+                    "type": "array"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
                     "type": "array"
                   }
                 },
@@ -490,6 +562,30 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -514,6 +610,30 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -567,6 +687,30 @@
                       "type": "object"
                     },
                     "maxItems": 64,
+                    "type": "array"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
                     "type": "array"
                   }
                 },
@@ -834,6 +978,30 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -858,6 +1026,30 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -911,6 +1103,30 @@
                       "type": "object"
                     },
                     "maxItems": 64,
+                    "type": "array"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
                     "type": "array"
                   }
                 },
@@ -1857,6 +2073,30 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -1881,6 +2121,30 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -1934,6 +2198,30 @@
                       "type": "object"
                     },
                     "maxItems": 64,
+                    "type": "array"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
                     "type": "array"
                   }
                 },

@@ -125,6 +125,11 @@ import {
 	PersonalRelayKeyStateV1Schema,
 } from "./personal-relay-key.ts";
 import { WecomApplicationCredentialsV1Schema } from "./wecom-application.ts";
+import {
+	WorkspaceSnapshotBindingV1Schema,
+	workspaceSnapshotOpenApiPathsV1,
+	workspaceSnapshotSchemasV1,
+} from "./workspace-snapshot.ts";
 
 const nonEmptyString = () => z.string().min(1);
 const idArray = () => z.array(OpaqueIdV1Schema);
@@ -224,11 +229,13 @@ export const AgentSourceInputV1Schema = z.union([
 		imageReference: nonEmptyString(),
 		interactionMode: z.literal("self-managed"),
 		identityResponsibility: z.enum(["self-managed", "platform-managed"]),
+		workspaceSnapshots: z.array(WorkspaceSnapshotBindingV1Schema).max(4).optional(),
 	}),
 	z.strictObject({
 		kind: z.literal("custom"),
 		imageReference: nonEmptyString(),
 		interactionMode: z.literal("platform-adapter"),
+		workspaceSnapshots: z.array(WorkspaceSnapshotBindingV1Schema).max(4).optional(),
 	}),
 	MultiServiceAgentSourceV1Schema,
 ]);
@@ -1535,6 +1542,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	...workspaceSnapshotOpenApiPathsV1,
 	"/api/v2/evaluation/history": {
 		get: {
 			operationId: "listEvaluationHistoryV1",
@@ -3083,6 +3091,7 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	...workspaceSnapshotSchemasV1,
 	EvaluationQueryTooLargeV1: EvaluationQueryTooLargeV1Schema,
 	EvaluationAnalysisSummaryV1: EvaluationAnalysisSummaryV1Schema,
 	EvaluationAnalysisDetailV1: EvaluationAnalysisDetailV1Schema,

@@ -392,6 +392,7 @@ export const MultiServiceAgentSourceV1Schema = z.strictObject({
 	interactionMode: z.literal("self-managed"),
 	identityResponsibility: z.literal("self-managed"),
 	manifest: z.string().min(1).max(262_144),
+	workspaceSnapshots: z.array(z.strictObject({ snapshotId: OpaqueIdV1Schema, name: kubernetesName })).max(4).optional(),
 	/** Server-derived service/profile summary; omitted on create requests. */
 	services: z.array(MultiServiceServiceProjectionV1Schema).max(64).optional(),
 });

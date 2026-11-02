@@ -139,6 +139,13 @@
                       "kind": {
                         "const": "custom",
                         "type": "string"
+                      },
+                      "workspaceSnapshots": {
+                        "items": {
+                          "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                        },
+                        "maxItems": 4,
+                        "type": "array"
                       }
                     },
                     "required": [
@@ -163,6 +170,13 @@
                       "kind": {
                         "const": "custom",
                         "type": "string"
+                      },
+                      "workspaceSnapshots": {
+                        "items": {
+                          "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                        },
+                        "maxItems": 4,
+                        "type": "array"
                       }
                     },
                     "required": [
@@ -216,6 +230,30 @@
                           "type": "object"
                         },
                         "maxItems": 64,
+                        "type": "array"
+                      },
+                      "workspaceSnapshots": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "name": {
+                              "maxLength": 63,
+                              "minLength": 1,
+                              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                              "type": "string"
+                            },
+                            "snapshotId": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "snapshotId",
+                            "name"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 4,
                         "type": "array"
                       }
                     },
@@ -877,6 +915,13 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -901,6 +946,13 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -954,6 +1006,30 @@
                       "type": "object"
                     },
                     "maxItems": 64,
+                    "type": "array"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
                     "type": "array"
                   }
                 },
@@ -1297,6 +1373,13 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -1321,6 +1404,13 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -1374,6 +1464,30 @@
                       "type": "object"
                     },
                     "maxItems": 64,
+                    "type": "array"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
                     "type": "array"
                   }
                 },
@@ -1663,6 +1777,13 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -1687,6 +1808,13 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -1740,6 +1868,30 @@
                       "type": "object"
                     },
                     "maxItems": 64,
+                    "type": "array"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
                     "type": "array"
                   }
                 },
@@ -2962,6 +3114,13 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -2986,6 +3145,13 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -3039,6 +3205,30 @@
                       "type": "object"
                     },
                     "maxItems": 64,
+                    "type": "array"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
                     "type": "array"
                   }
                 },
@@ -3632,6 +3822,13 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -3656,6 +3853,13 @@
                   "kind": {
                     "const": "custom",
                     "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -3709,6 +3913,30 @@
                       "type": "object"
                     },
                     "maxItems": 64,
+                    "type": "array"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "maxLength": 63,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                          "type": "string"
+                        },
+                        "snapshotId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snapshotId",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 4,
                     "type": "array"
                   }
                 },
@@ -15862,6 +16090,160 @@
           "type",
           "reason",
           "resumeCursor"
+        ],
+        "type": "object"
+      },
+      "WorkspaceSnapshotBindingV1": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 63,
+            "minLength": 1,
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+            "type": "string"
+          },
+          "snapshotId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "snapshotId",
+          "name"
+        ],
+        "type": "object"
+      },
+      "WorkspaceSnapshotMetadataV1": {
+        "additionalProperties": false,
+        "properties": {
+          "bindings": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+            },
+            "type": "array"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+            "type": "string"
+          },
+          "digest": {
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "fileCount": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "mediaType": {
+            "const": "application/x-tar+gzip",
+            "type": "string"
+          },
+          "sizeBytes": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          "snapshotId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/WorkspaceSnapshotSourceV1"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "deleting",
+              "deleted"
+            ],
+            "type": "string"
+          },
+          "unpackedSizeBytes": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "snapshotId",
+          "digest",
+          "sizeBytes",
+          "unpackedSizeBytes",
+          "fileCount",
+          "mediaType",
+          "source",
+          "createdAt",
+          "status",
+          "bindings"
+        ],
+        "type": "object"
+      },
+      "WorkspaceSnapshotSourceV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "direct-upload",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "commitSha": {
+                "pattern": "^[0-9a-f]{40}$",
+                "type": "string"
+              },
+              "connectionCallReference": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "builder-connection",
+                "type": "string"
+              },
+              "repository": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "repository",
+              "commitSha",
+              "connectionCallReference"
+            ],
+            "type": "object"
+          }
+        ],
+        "type": "object"
+      },
+      "WorkspaceSnapshotUploadRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "source": {
+            "$ref": "#/components/schemas/WorkspaceSnapshotSourceV1",
+            "default": {
+              "kind": "direct-upload"
+            }
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "source"
         ],
         "type": "object"
       }
@@ -31394,6 +31776,537 @@
           },
           {
             "platformApiCredential": []
+          }
+        ]
+      }
+    },
+    "/api/v2/workspace-snapshots": {
+      "get": {
+        "operationId": "listWorkspaceSnapshotsV1",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceSnapshotMetadataV1"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Snapshot metadata"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource conflicts with an existing binding"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Snapshot exceeds a configured limit"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Snapshot archive or digest is invalid"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Upload rate limit exceeded"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "platformApiCredential": [
+              "agent:read"
+            ]
+          }
+        ],
+        "summary": "List workspace snapshot metadata owned by the current subject"
+      },
+      "post": {
+        "description": "Bearer credential only. The server calculates the SHA-256 while streaming the gzip tar archive; content is never returned or exposed for download.",
+        "operationId": "uploadWorkspaceSnapshotV1",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Content-SHA256",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/x-tar+gzip": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSnapshotMetadataV1"
+                }
+              }
+            },
+            "description": "Idempotent replay"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSnapshotMetadataV1"
+                }
+              }
+            },
+            "description": "Snapshot accepted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource conflicts with an existing binding"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Snapshot exceeds a configured limit"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Snapshot archive or digest is invalid"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Upload rate limit exceeded"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "platformApiCredential": [
+              "agent:create"
+            ]
+          }
+        ],
+        "summary": "Upload an immutable workspace snapshot archive"
+      }
+    },
+    "/api/v2/workspace-snapshots/{snapshotId}": {
+      "delete": {
+        "operationId": "deleteWorkspaceSnapshotV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "snapshotId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSnapshotMetadataV1"
+                }
+              }
+            },
+            "description": "Snapshot deletion accepted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource conflicts with an existing binding"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Snapshot exceeds a configured limit"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Snapshot archive or digest is invalid"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Upload rate limit exceeded"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "platformApiCredential": [
+              "agent:manage"
+            ]
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getWorkspaceSnapshotV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "snapshotId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSnapshotMetadataV1"
+                }
+              }
+            },
+            "description": "Snapshot metadata"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource conflicts with an existing binding"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Snapshot exceeds a configured limit"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Snapshot archive or digest is invalid"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Upload rate limit exceeded"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "platformApiCredential": [
+              "agent:read"
+            ]
           }
         ]
       }

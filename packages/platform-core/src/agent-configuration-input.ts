@@ -20,6 +20,7 @@ import type {
 	UpdateAgentConfigurationCommandV3,
 	UpdateAgentConfigurationCommandV4,
 	UpgradeCustomAgentImageCommandV1,
+	WorkspaceSnapshotBindingV1,
 } from "./agent-configuration-types.js";
 import {
 	compareText,
@@ -39,6 +40,28 @@ import {
 	maxSecretReplacements,
 	valueMaxBytes,
 } from "./agent-configuration-values.js";
+
+const workspaceSnapshotNamePattern = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+const workspaceSnapshotMountRoots = ["/workspace", "/tmp", "/data"];
+function parseWorkspaceSnapshots(input: unknown): WorkspaceSnapshotBindingV1[] {
+	if (input === undefined) return [];
+	const values = denseArray(input, 4).map((entry) => {
+		const value = exactObject(entry, ["snapshotId", "name"]);
+		if (
+			!isText(value.snapshotId, idMaxBytes) ||
+			!isText(value.name, 63) ||
+			!workspaceSnapshotNamePattern.test(value.name) ||
+			workspaceSnapshotMountRoots.some(
+				(root) => `/opt/agent/workspaces/${value.name}` === root,
+			)
+		)
+			invalidCommand();
+		return { snapshotId: value.snapshotId, name: value.name };
+	});
+	if (new Set(values.map(({ name }) => name)).size !== values.length)
+		invalidCommand();
+	return values.toSorted((left, right) => compareText(left.name, right.name));
+}
 
 function parseModelConfiguration(
 	input: unknown,
@@ -141,11 +164,13 @@ function parseSourceSelection(
 			"manifest",
 			"interactionMode",
 			"identityResponsibility",
+		"workspaceSnapshots",
 		],
 	);
 	if (base.kind === "standard") {
 		if (
 			!isText(base.templateId, idMaxBytes) ||
+			base.workspaceSnapshots !== undefined ||
 			(base.templateRevision !== undefined &&
 				!isText(base.templateRevision, idMaxBytes)) ||
 			Object.keys(base).length !== (base.templateRevision === undefined ? 2 : 3)
@@ -167,7 +192,7 @@ function parseSourceSelection(
 			base.manifest.length > 262_144 ||
 			base.interactionMode !== "self-managed" ||
 			base.identityResponsibility !== "self-managed" ||
-			Object.keys(base).length !== 4
+			Object.keys(base).length !== (base.workspaceSnapshots === undefined ? 4 : 5)
 		)
 			invalidCommand();
 		return {
@@ -175,6 +200,7 @@ function parseSourceSelection(
 			manifest: base.manifest,
 			interactionMode: "self-managed",
 			identityResponsibility: "self-managed",
+			workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
 		};
 	}
 	if (
@@ -189,7 +215,7 @@ function parseSourceSelection(
 		if (
 			(base.identityResponsibility !== "self-managed" &&
 				base.identityResponsibility !== "platform-managed") ||
-			Object.keys(base).length !== 4
+			Object.keys(base).length !== (base.workspaceSnapshots === undefined ? 4 : 5)
 		) {
 			invalidCommand();
 		}
@@ -198,13 +224,15 @@ function parseSourceSelection(
 			imageReference: base.imageReference,
 			interactionMode: "self-managed",
 			identityResponsibility: base.identityResponsibility,
+			workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
 		};
 	}
-	if (Object.keys(base).length !== 3) invalidCommand();
+	if (Object.keys(base).length !== (base.workspaceSnapshots === undefined ? 3 : 4)) invalidCommand();
 	return {
 		kind: "custom",
 		imageReference: base.imageReference,
 		interactionMode: "platform-adapter",
+		workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
 	};
 }
 
@@ -237,6 +265,7 @@ export function parseAdmittedSource(
 			"manifest",
 			"interactionMode",
 			"identityResponsibility",
+		"workspaceSnapshots",
 		],
 	);
 	if (
@@ -255,7 +284,7 @@ export function parseAdmittedSource(
 			base.interactionMode !== "self-managed" ||
 			base.identityResponsibility !== "self-managed" ||
 			base.connectionEnabled !== false ||
-			Object.keys(base).length !== 7
+			Object.keys(base).length !== (base.workspaceSnapshots === undefined ? 7 : 8)
 		)
 			invalidCommand();
 		return {
@@ -266,11 +295,13 @@ export function parseAdmittedSource(
 			identityResponsibility: "self-managed",
 			connectionEnabled: false,
 			manifest: base.manifest,
+			workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
 		};
 	}
 	if (base.kind === "standard") {
 		if (
 			!isText(base.templateId, idMaxBytes) ||
+			base.workspaceSnapshots !== undefined ||
 			Object.keys(base).length !== 8
 		) {
 			invalidCommand();
@@ -297,7 +328,7 @@ export function parseAdmittedSource(
 		if (
 			(base.identityResponsibility !== "self-managed" &&
 				base.identityResponsibility !== "platform-managed") ||
-			Object.keys(base).length !== 6
+			Object.keys(base).length !== (base.workspaceSnapshots === undefined ? 6 : 7)
 		) {
 			invalidCommand();
 		}
@@ -308,15 +339,17 @@ export function parseAdmittedSource(
 			interactionMode: "self-managed",
 			identityResponsibility: base.identityResponsibility,
 			connectionEnabled: base.connectionEnabled,
+			workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
 		};
 	}
-	if (Object.keys(base).length !== 5) invalidCommand();
+	if (Object.keys(base).length !== (base.workspaceSnapshots === undefined ? 5 : 6)) invalidCommand();
 	return {
 		kind: "custom",
 		imageDigest: base.imageDigest,
 		admissionRevision: base.admissionRevision,
 		interactionMode: "platform-adapter",
 		connectionEnabled: base.connectionEnabled,
+		workspaceSnapshots: parseWorkspaceSnapshots(base.workspaceSnapshots),
 	};
 }
 

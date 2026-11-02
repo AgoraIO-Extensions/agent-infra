@@ -59,6 +59,7 @@ export {
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.js";
 export * from "./agent-creation-failure.js";
+export * from "./workspace-snapshot.js";
 export * from "./agent-default-relay-key.js";
 export * from "./agent-management.js";
 export { parseAgentManagementPortState } from "./agent-management-input.js";
