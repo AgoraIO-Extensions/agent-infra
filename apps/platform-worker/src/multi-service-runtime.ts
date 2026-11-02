@@ -1528,6 +1528,7 @@ export function createMultiServiceRuntimeOperations(options: {
 		},
 		async observeSecretFence(
 			value: MultiServiceDesired,
+			identity: { uid: string; generation: number },
 			secretName: string,
 			fence: number,
 		) {
@@ -1582,6 +1583,11 @@ export function createMultiServiceRuntimeOperations(options: {
 			);
 			if (!currentEntry?.metadata?.uid || !currentEntry.metadata.generation)
 				return false;
+			if (
+				currentEntry.metadata.uid !== identity.uid ||
+				currentEntry.metadata.generation !== identity.generation
+			)
+				return false;
 			const snapshot = parseMemberSnapshot(
 				currentEntry.metadata.annotations?.[memberIdentityAnnotation],
 			);
@@ -1622,7 +1628,15 @@ export function createMultiServiceRuntimeOperations(options: {
 				currentEntry.metadata.generation !== activationFence.workloadGeneration
 			)
 				return false;
-			return this.observeSecretFence(value, ref.name, activationFence.fence);
+			return this.observeSecretFence(
+				value,
+				{
+					uid: activationFence.workloadUid,
+					generation: activationFence.workloadGeneration,
+				},
+				ref.name,
+				activationFence.fence,
+			);
 		},
 		async removeImmutableSecret(
 			value: MultiServiceDesired,
@@ -1637,9 +1651,29 @@ export function createMultiServiceRuntimeOperations(options: {
 			if (!secret) return true;
 			if (
 				activationFence &&
-				!(await this.observeSecretFence(value, ref.name, activationFence.fence))
+				!(await this.observeSecretFence(
+					value,
+					{
+						uid: activationFence.workloadUid,
+						generation: activationFence.workloadGeneration,
+					},
+					ref.name,
+					activationFence.fence,
+				))
 			)
 				return false;
+			for (const member of memberResources(value)) {
+				const current = await client.read<V1Deployment | V1StatefulSet>(
+					member.kind as "Deployment" | "StatefulSet",
+					serviceResourceName(value.agentId, member.metadata.name),
+				);
+				if (
+					!current ||
+					!owned(current, value) ||
+					matchesEnvironmentSecrets(value, current.spec?.template.spec)
+				)
+					return false;
+			}
 			const pods = await client.list<V1Pod>(
 				"Pod",
 				`${ownerLabel}=${workloadResourceNameV1(value.agentId)}`,
