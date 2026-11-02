@@ -229,13 +229,19 @@ export const AgentSourceInputV1Schema = z.union([
 		imageReference: nonEmptyString(),
 		interactionMode: z.literal("self-managed"),
 		identityResponsibility: z.enum(["self-managed", "platform-managed"]),
-		workspaceSnapshots: z.array(WorkspaceSnapshotBindingV1Schema).max(4).optional(),
+		workspaceSnapshots: z
+			.array(WorkspaceSnapshotBindingV1Schema)
+			.max(4)
+			.optional(),
 	}),
 	z.strictObject({
 		kind: z.literal("custom"),
 		imageReference: nonEmptyString(),
 		interactionMode: z.literal("platform-adapter"),
-		workspaceSnapshots: z.array(WorkspaceSnapshotBindingV1Schema).max(4).optional(),
+		workspaceSnapshots: z
+			.array(WorkspaceSnapshotBindingV1Schema)
+			.max(4)
+			.optional(),
 	}),
 	MultiServiceAgentSourceV1Schema,
 ]);

@@ -160,20 +160,20 @@ export type AgentConfigurationSourceSelectionV1 =
 			readonly imageReference: string;
 			readonly interactionMode: "self-managed";
 			readonly identityResponsibility: "self-managed" | "platform-managed";
-				readonly workspaceSnapshots?: readonly WorkspaceSnapshotBindingV1[];
+			readonly workspaceSnapshots?: readonly WorkspaceSnapshotBindingV1[];
 	  }
 	| {
 			readonly kind: "custom";
 			readonly manifest: string;
 			readonly interactionMode: "self-managed";
 			readonly identityResponsibility: "self-managed";
-				readonly workspaceSnapshots?: readonly WorkspaceSnapshotBindingV1[];
+			readonly workspaceSnapshots?: readonly WorkspaceSnapshotBindingV1[];
 	  }
 	| {
 			readonly kind: "custom";
 			readonly imageReference: string;
 			readonly interactionMode: "platform-adapter";
-				readonly workspaceSnapshots?: readonly WorkspaceSnapshotBindingV1[];
+			readonly workspaceSnapshots?: readonly WorkspaceSnapshotBindingV1[];
 	  };
 
 export interface AgentConfigurationModelInputV1 {
