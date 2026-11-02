@@ -13,7 +13,7 @@ regexTarget = "match"
 regexes = [
 	'''AKIAIOSFODNN7EXAMPLE''',
 	'''glpat-01234567890123456789''',
-	'''(?i)(?:synthetic|sentinel|fixture|canary)[-_][A-Za-z0-9_-]{4,}''',
+	'''synthetic-relay-key-v4''',
 	'''eyJhbGciOiJFZERTQSJ9\.eyJzdWIiOiJhY3Rvci0xIn0\.c2lnbmF0dXJl''',
 ]
 
