@@ -127,3 +127,28 @@ Workload 就绪分别记录，只有真实业务操作完成才能证明该用�
 能力矩阵使用“已验证、失败、配置或环境阻塞、产品不支持、未测试”区分结果。已有 fixture、
 历史回执和静态接口检查不能替代本次业务证据。缺少真实应用或授权环境时保留待验收项；
 发现缺口后先记录复现与最小建议，另行确定产品变更范围。
+
+## 本轮冻结结论（2026-11-02）
+
+目标源码为 `bcf3a6618f0c99975cf5a78a5079e0b211a601ba`，整体验收未完成。
+候选容量回执及与源码绑定的 Runtime 测量已通过，但尚未形成固定的两个 Agent 业务验证窗口。
+迁入脚本已加入私有回执；回执存在、接口受理和候选测量不能替代目标源码的真实业务验收。
+
+| 范围 | 状态 | 已有证据与边界 |
+| --- | --- | --- |
+| 多服务 manifest 升级 | 代码已验证 | [PR #3866](https://github.com/AgoraIO-Extensions/agent-infra/pull/3866) 的代码基线 `af1aa3039b2d109e36a6c30f07c45cc1b3932bb6` 通过 155 项聚焦测试；生产准入实现接 Core 的测试覆盖换行 JSON、pretty JSON、YAML，以及请求替换、canonical 内容替换和缺失绑定的拒绝；不证明实际 Workload 升级成功 |
+| 目标环境与容量 | 环境阻塞 | 有效 Worker capacity profiles 仍为四个标准模板；曾因 `SESSION_RESERVE_DEPLOYMENT_CONFIGURATION_CONFLICT` 反复退出，候选容量回执尚不等于运行配置已生效 |
+| 平台入口单服务临时探针 | 环境阻塞 | 旧镜像探针取得 201，重放为 200 且 Agent ID 相同；随后旧 Runtime Pod 退出，不能作为目标源码绑定的迁入验收 |
+| 自有入口多服务临时探针 | 环境阻塞 | 旧镜像探针取得 201、重放 200，并曾就绪；Task API 返回 503 `RUNTIME_UNAVAILABLE`。这既不证明平台任务能力，也不替代固定新环境中的自有入口真实业务 |
+| 固定新环境中的自有入口业务 | 未测试 | 尚无该环境的真实业务完成证据，不能从 ready 或管理接口推导成功 |
+| 真实升级与升级失败恢复 | 未测试 | 尚无获批的替换镜像 Digest 和 Owner 验证窗口；代码测试不代签运行升级或回滚 |
+
+多服务升级由 Owner 浏览器会话调用 `POST /api/v2/agents/{agentId}/lifecycle`，
+提交 `schemaVersion: 1`、`command: "upgrade_custom_manifest"` 和完整 `manifest`。
+该命令仅允许 manifest 型 Agent 更新整个 manifest；`upgrade_custom_image` 拒绝 manifest 型来源。
+此入口不扩大 Token `/commands` 的能力或认证范围。
+
+`99971f2222ed23f30418255a03838023cb154388`、`a17531d4c937575de272c785b70bc040c7d16345`
+的成功回执保留为历史，不替代本轮目标源码的验收。
+[#3108](https://github.com/AgoraIO-Extensions/agent-infra/issues/3108) 已按三条 retained 恢复路径
+物理不可恢复的处置结论关闭；原失败与不可恢复证据保留，不把新会话成功记为原会话恢复。
