@@ -708,18 +708,18 @@ case "$command" in
 		if [[ -n "${ACK_CUSTOM_CAPACITY_JOB_FILE:-}" ]]; then
 			custom_preflight
 		fi
+		runtime_inputs
 		if [[ -n "${ACK_CREDENTIAL_BOOTSTRAP_FILE:-}" ]]; then
 			bootstrap_credential
 		fi
+		node "$repo_root/deploy/ack/agent-bindings.ts" check "${ACK_AGENT_REQUESTS_FILE:-}" "${ACK_AGENT_STATE_DIR:-}" "${ACK_BROWSER_BLUEPRINT_DIR:-}" "$source_sha" >/dev/null
+		provision
 		if [[ -n "${ACK_SESSION_RESERVE_PLAN_FILE:-}" ]]; then
-			provision
 			bind_session_reserves
 			runtime_inputs
 			wait_session_reserves
 		else
-			runtime_inputs
-			node "$repo_root/deploy/ack/agent-bindings.ts" check "${ACK_AGENT_REQUESTS_FILE:-}" "${ACK_AGENT_STATE_DIR:-}" "${ACK_BROWSER_BLUEPRINT_DIR:-}" "$source_sha" >/dev/null
-			provision
+			:
 		fi
 		validate
 		;;
