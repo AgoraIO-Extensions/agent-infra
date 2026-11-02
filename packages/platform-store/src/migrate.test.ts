@@ -632,6 +632,12 @@ describe("Platform PostgreSQL migration foundation", () => {
 						foreignKey.getName(),
 					),
 				)
+				.map((name) =>
+					name ===
+					"workspace_snapshot_bindings_snapshot_id_workspace_snapshots_id_fk"
+						? "workspace_snapshot_bindings_snapshot_id_workspace_snapshots_id_"
+						: name,
+				)
 				.toSorted();
 			const migratedForeignKeys = await client`
 					select c.conname as constraint_name
@@ -2014,6 +2020,7 @@ describe("published Relay authority migration", () => {
 			72,
 			73,
 			74,
+			75,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
