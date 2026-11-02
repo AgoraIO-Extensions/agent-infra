@@ -41,6 +41,7 @@ export interface WorkloadStepFailureClassV1 {
 		| "secret-bindings"
 		| "registry-admission"
 		| "model-projection"
+		| "snapshot-materialization"
 		| "desired-workload";
 	/** 仅 Kubernetes 错误：HTTP 状态、资源种类与动词，不含响应体或资源名。 */
 	readonly kubernetes?: WorkloadKubernetesFailureDetailsV1;
