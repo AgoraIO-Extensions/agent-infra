@@ -91,6 +91,7 @@ function configurationChanges(
 	preparedModelCredentialOptionIds: ReadonlySet<string>,
 ) {
 	return {
+		...(input.source === undefined ? {} : { source: input.source }),
 		...(input.coOwnerIds === undefined ? {} : { coOwnerIds: input.coOwnerIds }),
 		...(input.availability === undefined
 			? {}

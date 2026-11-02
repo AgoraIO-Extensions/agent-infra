@@ -11,8 +11,13 @@ import {
 	parseIdempotencyKey,
 	requestMetadata,
 } from "./common.js";
+import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 
 export interface WorkspaceSnapshotRouteDependenciesV1 {
+	browser?: {
+		readonly identity: IdentityAdapter;
+		readonly list(userId: string): Promise<readonly WorkspaceSnapshotRecordV1[]>;
+	};
 	upload(input: {
 		material: string;
 		requestId: string;
@@ -58,6 +63,30 @@ export function registerWorkspaceSnapshotRoutesV1(
 	app: Hono,
 	dependencies: WorkspaceSnapshotRouteDependenciesV1,
 ) {
+	if (dependencies.browser) {
+		app.get("/api/v2/me/workspace-snapshots", async (context) => {
+			const metadata = requestMetadata(context.req.raw);
+			try {
+				if (context.req.header("authorization") || context.req.raw.body)
+					throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+				const identity = await resolveIdentity(
+					dependencies.browser.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				return context.json(
+					(await dependencies.browser.list(identity.userId)).map(projection),
+					200,
+				);
+			} catch (error) {
+				const protocol =
+					error instanceof HttpProtocolError
+						? error
+						: new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+				return context.json(protocol.body, protocol.status);
+			}
+		});
+	}
 	app.use("/api/v2/workspace-snapshots*", async (context, next) => {
 		context.header("Cache-Control", "private, no-store");
 		context.header("Referrer-Policy", "no-referrer");

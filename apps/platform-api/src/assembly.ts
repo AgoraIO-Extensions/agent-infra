@@ -617,6 +617,16 @@ export function assemblePlatformApi(
 					snapshotServiceFor(material, metadata).remove(material, id),
 			}
 		: undefined;
+	if (workspaceSnapshotService && snapshotStore)
+		workspaceSnapshotService.browser = {
+			identity: input.identity,
+			list: (userId) =>
+				snapshotStore.list({
+					kind: "user",
+					id: userId,
+					scopes: ["agent:read"],
+				}),
+		};
 	const conversationTransaction =
 		new PostgresConversationExecutionTransactionV1({
 			sessionSandboxReserves: input.sessionSandboxReserves,
