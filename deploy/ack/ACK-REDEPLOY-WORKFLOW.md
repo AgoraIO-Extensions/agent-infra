@@ -1,5 +1,7 @@
 # ACK 重部署工作流
 
+性能样本、分位数口径及后续测量方案见 [ACK 性能报告](ACK-PERFORMANCE-REPORT.md)。
+
 本工作流为清空后重建 ACK 提供可重复的 Platform 部署、四模板真实 Runtime preflight、
 API Agent 创建和入口验收入口；每次真实运行仍必须以当前 source/image/config receipt 为准。
 每次运行都要回读空环境数据库、真实登录、当前 Agent 的多轮对话和自有入口结果，
