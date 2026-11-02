@@ -581,6 +581,7 @@ export function createWorkloadRuntimeV1(
 		onHealthDiagnostic: options.onHealthDiagnostic,
 	});
 	const fetcher = options.fetch ?? globalThis.fetch;
+	let activeSnapshotProjection: WorkspaceSnapshotPodProjectionV1 | undefined;
 	const observedCapabilities = new WeakMap<
 		WorkloadReconciliationStateV1,
 		WorkloadCapabilitiesV1
@@ -699,7 +700,8 @@ export function createWorkloadRuntimeV1(
 			onHealthDiagnostic: options.onHealthDiagnostic,
 			modelProjection,
 			standardTemplateBinding,
-			workspaceSnapshotProjection: options.workspaceSnapshotProjection,
+			workspaceSnapshotProjection:
+				activeSnapshotProjection ?? options.workspaceSnapshotProjection,
 			containerBoundaryServiceToken: options.containerBoundaryServiceToken,
 			async probe({ desired, serviceOrigin, podUid, podResourceVersion }) {
 				let probeStartedAt = performance.now();
@@ -1370,6 +1372,8 @@ export function createWorkloadRuntimeV1(
 						fence: state.fence,
 						bindings: snapshotBindings,
 					});
+					if (snapshotMaterialization.projection)
+						activeSnapshotProjection = snapshotMaterialization.projection;
 				} catch {
 					throw new WorkloadPreflightRejectedErrorV1(
 						"snapshot-materialization",
@@ -1499,7 +1503,14 @@ export function createWorkloadRuntimeV1(
 						replicas: 1,
 						multiService: multiServiceManifest,
 						...(snapshotMaterialization
-							? { workspaceSnapshots: snapshotMaterialization.inputs }
+							? {
+									workspaceSnapshots: snapshotMaterialization.inputs.map(
+										(input) => ({
+											...input,
+											mountPath: `/opt/agent/workspaces/${input.name}`,
+										}),
+									),
+								}
 							: {}),
 					});
 					return { configuration, deployment };
@@ -1765,7 +1776,14 @@ export function createWorkloadRuntimeV1(
 							}
 						: {}),
 					...(snapshotMaterialization
-						? { workspaceSnapshots: snapshotMaterialization.inputs }
+						? {
+								workspaceSnapshots: snapshotMaterialization.inputs.map(
+									(input) => ({
+										...input,
+										mountPath: `/opt/agent/workspaces/${input.name}`,
+									}),
+								),
+							}
 						: {}),
 					desiredState: "running",
 					replicas: 1,
