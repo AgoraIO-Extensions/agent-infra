@@ -426,6 +426,7 @@ async function persistApplicationFoundationRowsV1(
 			"auditEvent" in plan
 				? plan.auditEvent.actorId
 				: (plan.access.ownerIds[0] ?? plan.application.applicantId),
+		ownerType: "creator" in plan && plan.creator.kind === "application" ? "application" : "user",
 		configuration,
 	});
 	if (plan.access.availability.length > 0) {

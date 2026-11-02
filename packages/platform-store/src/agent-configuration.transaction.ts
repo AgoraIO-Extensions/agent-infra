@@ -438,6 +438,7 @@ export class PostgresAgentConfigurationTransactionV1
 					agentId: plan.agentId,
 					configurationRevision: plan.nextRevision,
 					ownerId: plan.auditEvent.actorId,
+					ownerType: "user",
 					configuration,
 				});
 				await insertPendingSecretRecordAttachments(

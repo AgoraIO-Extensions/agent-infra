@@ -213,31 +213,32 @@ describe("workspace snapshot publication on PostgreSQL", () => {
 	it("rejects binding a snapshot to an agent owned by another subject", async () => {
 		const who = owner();
 		const other = owner();
-		const value = await store.create(
-			input(who),
-			who,
-			"binding-owner",
-			requestDigest,
-		);
+		const value = await store.create(input(who), who, "binding-owner", requestDigest);
 		const agent = randomUUID();
 		await db`insert into platform.agents (id) values (${agent})`;
-		await db`insert into platform.agent_owners (agent_id,owner_id,created_at) values (${agent},${who.id},now())`;
+		await db`insert into platform.agent_owners (agent_id,owner_id,created_at) values (${agent},${other.id},now())`;
 		await db`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,created_at,runtime_revision) values (${agent},1,'synthetic',now(),1)`;
 		await expect(
 			bindingStore.bind({
-				ownerType: other.kind,
-				ownerId: other.id,
+				ownerType: who.kind,
+				ownerId: who.id,
 				snapshotId: value.snapshotId,
 				agentId: agent,
 				configurationRevision: 1,
 				name: "repo",
 			}),
 		).rejects.toMatchObject({ code: "forbidden" });
+		const otherValue = await store.create(
+			input(other),
+			other,
+			"binding-owner-other",
+			requestDigest,
+		);
 		await expect(
 			bindingStore.bind({
-				ownerType: who.kind,
-				ownerId: who.id,
-				snapshotId: value.snapshotId,
+				ownerType: other.kind,
+				ownerId: other.id,
+				snapshotId: otherValue.snapshotId,
 				agentId: agent,
 				configurationRevision: 1,
 				name: "repo",

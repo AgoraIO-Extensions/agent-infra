@@ -2,10 +2,11 @@ import {
 	type AgentConfigurationRecord,
 	assertWorkspaceSnapshotBindingQuotaV1,
 } from "@agent-infra/platform-core";
-import { and, eq, inArray, or } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { drizzle } from "drizzle-orm/postgres-js";
 import {
 	agentOwners,
+	agentApplications,
 	workspaceSnapshotBindings,
 	workspaceSnapshots,
 } from "./schema.js";
@@ -21,6 +22,7 @@ export async function insertWorkspaceSnapshotBindingsV1(
 		readonly agentId: string;
 		readonly configurationRevision: number;
 		readonly ownerId: string;
+		readonly ownerType: "user" | "application";
 		readonly configuration: AgentConfigurationRecord;
 	},
 ): Promise<void> {
@@ -30,17 +32,31 @@ export async function insertWorkspaceSnapshotBindingsV1(
 			: [];
 	if (bindings.length === 0) return;
 
-	const [owner] = await transaction
-		.select({ ownerId: agentOwners.ownerId })
-		.from(agentOwners)
-		.where(
-			and(
-				eq(agentOwners.agentId, input.agentId),
-				eq(agentOwners.ownerId, input.ownerId),
-			),
-		)
-		.for("share")
-		.limit(1);
+	const [owner] =
+		input.ownerType === "user"
+			? await transaction
+					.select({ ownerId: agentOwners.ownerId })
+					.from(agentOwners)
+					.where(
+						and(
+							eq(agentOwners.agentId, input.agentId),
+							eq(agentOwners.ownerId, input.ownerId),
+						),
+					)
+					.for("share")
+					.limit(1)
+			: await transaction
+					.select({ ownerId: agentApplications.creatorPrincipalId })
+					.from(agentApplications)
+					.where(
+						and(
+							eq(agentApplications.agentId, input.agentId),
+							eq(agentApplications.creatorPrincipalType, "application"),
+							eq(agentApplications.creatorPrincipalId, input.ownerId),
+						),
+					)
+					.for("share")
+					.limit(1);
 	if (!owner) throw new Error("workspace snapshot target owner is unavailable");
 
 	const ids = bindings.map(({ snapshotId }) => snapshotId);
@@ -55,11 +71,8 @@ export async function insertWorkspaceSnapshotBindingsV1(
 		.from(workspaceSnapshots)
 		.where(
 			and(
+				eq(workspaceSnapshots.ownerType, input.ownerType),
 				eq(workspaceSnapshots.ownerId, input.ownerId),
-				or(
-					eq(workspaceSnapshots.ownerType, "user"),
-					eq(workspaceSnapshots.ownerType, "application"),
-				),
 				eq(workspaceSnapshots.status, "ready"),
 				inArray(workspaceSnapshots.id, ids),
 			),
