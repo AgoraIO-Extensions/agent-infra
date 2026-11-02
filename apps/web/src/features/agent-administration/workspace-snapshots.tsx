@@ -10,13 +10,13 @@ import type {
 } from "../../pilot/generated-v2/client/index.js";
 import {
 	deleteWorkspaceSnapshotV1,
-	listWorkspaceSnapshotsV1,
+	listMyWorkspaceSnapshotsV1,
 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
 	DeleteWorkspaceSnapshotV1Errors,
 	DeleteWorkspaceSnapshotV1Responses,
-	ListWorkspaceSnapshotsV1Errors,
-	ListWorkspaceSnapshotsV1Responses,
+	ListMyWorkspaceSnapshotsV1Errors,
+	ListMyWorkspaceSnapshotsV1Responses,
 	WorkspaceSnapshotMetadataV1,
 } from "../../pilot/generated-v2/types.gen.js";
 
@@ -39,11 +39,11 @@ export async function loadWorkspaceSnapshots(
 ): Promise<WorkspaceSnapshotsState> {
 	const result: Awaited<
 		RequestResult<
-			ListWorkspaceSnapshotsV1Responses,
-			ListWorkspaceSnapshotsV1Errors,
+			ListMyWorkspaceSnapshotsV1Responses,
+			ListMyWorkspaceSnapshotsV1Errors,
 			false
 		>
-	> = await listWorkspaceSnapshotsV1<false>({
+	> = await listMyWorkspaceSnapshotsV1<false>({
 		client,
 		signal,
 		responseStyle: "fields",
