@@ -157,6 +157,7 @@ function snapshotAdmissionDecision<
 	optionalKeys: readonly string[] = [],
 	/** 每个准入端口只接受自己声明的拒绝原因，其余原因视为依赖返回非法值。 */
 	rejectionReasons: readonly Reason[] = [],
+	admittedOptionalKeys: readonly string[] = [],
 ):
 	| {
 			status: "rejected";
@@ -206,7 +207,7 @@ function snapshotAdmissionDecision<
 		requireAgentManagementExactKeys(values, [
 			...common,
 			...admittedKeys,
-			...optionalKeys.filter((key) => Object.hasOwn(values, key)),
+			...admittedOptionalKeys.filter((key) => Object.hasOwn(values, key)),
 		]);
 		return {
 			status: "admitted",
@@ -228,6 +229,7 @@ export function parseImageDecision(
 			"multi_service_resource_cap_exceeded",
 			"platform_identity_entry_unavailable",
 		],
+		["manifestBinding"],
 	);
 	return decision.status === "rejected"
 		? { schemaVersion: 1, ...decision }
