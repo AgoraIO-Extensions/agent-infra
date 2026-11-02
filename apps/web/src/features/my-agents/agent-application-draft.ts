@@ -289,7 +289,14 @@ function requestBody(
 	replacement?: AgentApplicationKeyReplacement,
 ) {
 	const source: AgentApplicationCreateRequestV2Writable["source"] =
-		draft.source ??
+		(draft.source?.kind === "custom" && "manifest" in draft.source
+			? {
+					kind: draft.source.kind,
+					interactionMode: draft.source.interactionMode,
+					identityResponsibility: draft.source.identityResponsibility,
+					manifest: draft.source.manifest,
+				}
+			: draft.source) ??
 		(draft.sourceKind === "standard"
 			? {
 					kind: "standard",

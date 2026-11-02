@@ -3054,6 +3054,93 @@ describe("assembled Workload Runtime contracts", () => {
 			"Runtime capabilities are unavailable",
 		);
 	});
+	it("materializes multi-service Owner Secrets before creating their consumers", async () => {
+		const record = pendingSecretRecord();
+		const f = fixture(
+			{
+				decryptor: {
+					async decrypt() {
+						return {
+							outcome: "decrypted",
+							plaintext: new TextEncoder().encode("controlled-secret-value"),
+						};
+					},
+				},
+			},
+			{
+				configuration: secretConfiguration({
+					source: multiServiceConfigurationFixture().source,
+				}),
+				secrets: cleanupSecrets(secretCleanupStore(record)),
+			},
+		);
+		await f.tick(4);
+		const deployment = f.state?.candidate.deployment;
+		assert(deployment);
+		const ref = validateAgentWorkloadDesiredV1(deployment).secretRefs[0];
+		assert(ref);
+		const secretIndex = f.writes.findIndex(
+			(object) =>
+				object.kind === "Secret" && object.metadata?.name === ref.name,
+		);
+		const workloadIndex = f.writes.findIndex(
+			(object) => object.kind === "Deployment",
+		);
+		expect(workloadIndex).toBeGreaterThanOrEqual(0);
+		expect(secretIndex).toBeGreaterThanOrEqual(0);
+		expect(secretIndex).toBeLessThan(workloadIndex);
+		for (const object of f.resources.values()) {
+			if (object.kind !== "Deployment") continue;
+			for (const container of (object as V1Deployment).spec?.template.spec
+				?.containers ?? [])
+				expect(container.envFrom).toContainEqual({
+					secretRef: { name: ref.name, optional: false },
+				});
+		}
+	});
+	it("binds multi-service activation to the actual entry workload identity", async () => {
+		const f = fixture(
+			{},
+			{ configuration: multiServiceConfigurationFixture() },
+		);
+		await f.tick(4);
+		const entry = await f.client.read<V1Deployment>(
+			"Deployment",
+			`${workloadResourceNameV1("agent-a")}-web`,
+		);
+		assert(entry?.metadata?.uid && entry.metadata.generation);
+		expect(f.state?.identity).toEqual({
+			uid: entry.metadata.uid,
+			generation: entry.metadata.generation,
+		});
+	});
+	it("rejects non-entry UID replacement even when metadata is copied", async () => {
+		const f = fixture(
+			{},
+			{ configuration: multiServiceConfigurationFixture() },
+		);
+		await f.tick(10);
+		const state = f.state;
+		assert(state?.identity && state.candidate.deployment);
+		const worker = [...f.resources.values()].find(
+			(object) =>
+				object.kind === "Deployment" &&
+				object.metadata?.name?.endsWith("-worker"),
+		);
+		if (!worker?.metadata?.name)
+			throw new Error("worker Deployment fixture missing");
+		f.resources.set(`Deployment/${worker.metadata.name}`, {
+			...worker,
+			metadata: {
+				...worker.metadata,
+				uid: "replacement-worker-uid",
+				resourceVersion: "replacement-rv",
+				generation: 2,
+			},
+		});
+		const runtime = createWorkloadRuntimeV1(f.options);
+		expect(await runtime.observe(state)).toBe("drifted");
+	});
 	it("promotes a multi-service Agent with an empty capability set and publishes its entry route", async () => {
 		const f = fixture(
 			{},

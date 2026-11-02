@@ -304,14 +304,28 @@ function fakeClient() {
 					...object.metadata,
 					uid: `${object.kind}-${object.metadata?.name}`,
 					resourceVersion: "1",
+					generation: 1,
 				},
 			};
 			resources.set(`${object.kind}/${object.metadata?.name}`, stored);
 			return stored;
 		},
 		async replace(object) {
-			resources.set(`${object.kind}/${object.metadata?.name}`, object);
-			return object;
+			const current = resources.get(`${object.kind}/${object.metadata?.name}`);
+			const replaced = {
+				...object,
+				metadata: {
+					...object.metadata,
+					uid: object.metadata?.uid ?? current?.metadata?.uid,
+					resourceVersion:
+						object.metadata?.resourceVersion ??
+						current?.metadata?.resourceVersion,
+					generation:
+						object.metadata?.generation ?? current?.metadata?.generation ?? 1,
+				},
+			};
+			resources.set(`${object.kind}/${object.metadata?.name}`, replaced);
+			return replaced;
 		},
 		async delete(object) {
 			resources.delete(`${object.kind}/${object.metadata?.name}`);
@@ -623,7 +637,7 @@ describe("multi-service resource policy", () => {
 		const value = desired(databaseManifest);
 		if (!isMultiService(value))
 			throw new Error("multi-service fixture invalid");
-		await operations.apply(value);
+		const identity = await operations.apply(value);
 		expect(storedPvc(fake)?.spec?.resources?.requests?.storage).toBe("5Gi");
 		const statefulSet = fake.resources.get(
 			`StatefulSet/${workloadResourceNameV1("agent-a")}-web`,
@@ -632,9 +646,7 @@ describe("multi-service resource policy", () => {
 			databaseProfile.resources,
 		);
 		markWorkloadsReady(fake);
-		expect(await operations.observe(value, { uid: "u", generation: 1 })).toBe(
-			"healthy",
-		);
+		expect(await operations.observe(value, identity)).toBe("healthy");
 	});
 
 	it("sizes each PVC from the profile of the StatefulSet that owns it (#2523)", async () => {
@@ -677,7 +689,7 @@ describe("multi-service resource policy", () => {
 		const value = desired(twoStateful);
 		if (!isMultiService(value))
 			throw new Error("multi-service fixture invalid");
-		await operations.apply(value);
+		const identity = await operations.apply(value);
 		const prefix = workloadResourceNameV1("agent-a");
 		const storage = (name: string) =>
 			(
@@ -688,9 +700,7 @@ describe("multi-service resource policy", () => {
 		expect(storage("web-data")).toBe("5Gi");
 		expect(storage("worker-data")).toBe("2Gi");
 		markWorkloadsReady(fake);
-		expect(await operations.observe(value, { uid: "u", generation: 1 })).toBe(
-			"healthy",
-		);
+		expect(await operations.observe(value, identity)).toBe("healthy");
 	});
 
 	it("falls back to the deployment storage size when the StatefulSet profile has none", async () => {
@@ -731,11 +741,9 @@ describe("multi-service resource policy", () => {
 		const value = desired(statefulManifest);
 		if (!isMultiService(value))
 			throw new Error("multi-service fixture invalid");
-		await fallback.apply(value);
+		const identity = await fallback.apply(value);
 		markWorkloadsReady(fake);
-		expect(await fallback.observe(value, { uid: "u", generation: 1 })).toBe(
-			"healthy",
-		);
+		expect(await fallback.observe(value, identity)).toBe("healthy");
 
 		// 集群中的 PVC 被改成与策略不同的大小。
 		const pvc = storedPvc(fake);
@@ -750,9 +758,7 @@ describe("multi-service resource policy", () => {
 		await expect(fallback.apply(value)).rejects.toThrow(
 			"multi-service PVC drifted",
 		);
-		expect(await fallback.observe(value, { uid: "u", generation: 1 })).toBe(
-			"unhealthy",
-		);
+		expect(await fallback.observe(value, identity)).toBe("unhealthy");
 
 		// 部署改为由 StatefulSet 档位声明 5Gi 后，按旧策略创建的 1Gi PVC 同样视为漂移。
 		const profiledFake = fakeClient();
@@ -769,7 +775,7 @@ describe("multi-service resource policy", () => {
 		const databaseValue = desired(databaseManifest);
 		if (!isMultiService(databaseValue))
 			throw new Error("multi-service fixture invalid");
-		await before.apply(databaseValue);
+		const databaseIdentity = await before.apply(databaseValue);
 		markWorkloadsReady(profiledFake);
 		expect(storedPvc(profiledFake)?.spec?.resources?.requests?.storage).toBe(
 			"1Gi",
@@ -782,9 +788,9 @@ describe("multi-service resource policy", () => {
 				storageSize: "1Gi",
 			},
 		});
-		expect(
-			await after.observe(databaseValue, { uid: "u", generation: 1 }),
-		).toBe("unhealthy");
+		expect(await after.observe(databaseValue, databaseIdentity)).toBe(
+			"unhealthy",
+		);
 		await expect(after.apply(databaseValue)).rejects.toThrow(
 			"multi-service PVC drifted",
 		);
@@ -1306,7 +1312,7 @@ describe("multi-service runtime operations", () => {
 		});
 		if (!job) throw new Error("migration Job fixture missing");
 		job.status = { succeeded: 1 };
-		expect(await operations.observe(value, identity)).toBe("drifted");
+		expect(await operations.observe(value, identity)).toBe("pending");
 		await operations.apply(value);
 		expect(
 			[...fake.resources.values()].some(

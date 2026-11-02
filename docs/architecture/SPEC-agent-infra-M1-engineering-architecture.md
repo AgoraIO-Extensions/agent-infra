@@ -941,6 +941,8 @@ Platform Secret 使用项目内置密文、部署加密公钥和 Worker-only 解
 
 StatefulSet 的逐 Secret activation-fence 旁持久保存实际 Secret UID；创建或可信解密后精确值校验返回的 UID，在再次校验 live 对象身份后与 fence 通过 resourceVersion CAS 一起绑定，调谐保留两者。观察、active 复用和带 activation-fence 的回收必须匹配 live UID；删除使用 UID/resourceVersion 前置条件。历史缺失 UID 绑定时不授权元数据快速复用或删除，须先沿既有解密与精确值校验路径，再绑定同一实际 UID 与原 activation fence；不得仅凭名称或 annotation 回填身份。此内部 Kubernetes 绑定不改变公开 V1 Secret fence 或数据库记录。
 
+多服务 Agent 同样遵守上述物化、激活和回收规则。现有 V1 fence 的 Workload UID/generation 使用入口 Service 唯一关联的 Deployment 或 StatefulSet 的实际身份，不使用合成组名代替 UID。Worker 在创建候选消费者前物化所需 Secret，并在所有消费该 Secret 的成员上通过 UID/resourceVersion CAS 绑定逐 Secret activation-fence 与实际 Secret UID；观察、active 复用和回收须回读完整成员集合、各自的 Runtime 修订与管理 fence、实际 Pod 引用及健康状态。任一成员缺失、身份或绑定漂移时继续关闭路由，入口成员成功不能代替全组成功；仍有成员引用的 Secret 不得回收。跨资源逐项 CAS 不承诺分布式原子性，中断后沿同一持久 fence 重新核验全部成员，不凭入口绑定补写重建成员的身份。
+
 已有 active 绑定对应的对象缺失或同名对象 UID 改变时，Worker 必须保持路由关闭，并从 Platform DB 的原始密文记录可信解密、审计，创建或精确校验同一完整 Secret reference 的 immutable Opaque 对象及全部数据。仅当 StatefulSet UID 与持久 activation fence 匹配、generation 未回退、逐 Secret activation fence 与原值精确相等且当前管理 fence 校验通过时，才可在再次回读确认已验证的 live Secret UID 后，通过 StatefulSet resourceVersion CAS 更新 UID 绑定。同名 live 对象的新 UID 证明旧 UID 已不再占据该名称；创建后崩溃的重试仍须重新完成可信值校验，不依赖进程内标记。此路径不修改原 Secret 版本、密文或 activation fence，不重新激活；普通绑定、观察、元数据复用与回收不得据此放宽 UID 校验，任一校验或 CAS 失败继续关闭路由并重试。
 
 已验证 Workload 的 StatefulSet 本身缺失时，原 activation fence 不授权新 StatefulSet。
