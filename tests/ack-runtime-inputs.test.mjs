@@ -1593,8 +1593,10 @@ for (const scenario of ["missing-login", "invalid-templates"]) {
 for (const failure of [
 	"none",
 	"plan",
+	"initial-login",
 	"initial-publication",
 	"binding",
+	"reserve-login",
 	"reserve-publication",
 	"readiness",
 ]) {
@@ -1620,14 +1622,18 @@ bootstrap_database() { echo database; }
 bootstrap_inputs() { echo bootstrap; }
 deploy() { echo deploy; }
 template_preflight() { echo templates; }
-bootstrap_login() { echo login; }
+now=0
+login_at=-600001
+logins=0
+custom_preflight() { now=$((now+600001)); echo custom; }
+bootstrap_login() { logins=$((logins+1)); echo login-$logins; ${failure === "initial-login" ? '[[ "$logins" != 1 ]] || return 1' : failure === "reserve-login" ? '[[ "$logins" != 2 ]] || return 1' : ":"}; login_at=$now; }
 publications=0
-runtime_inputs() { publications=$((publications+1)); echo publish-$publications; ${failure === "initial-publication" || failure === "reserve-publication" ? '[[ "$publications" != 1 ]]' : ":"}; }
+runtime_inputs() { [[ $((now-login_at)) -lt 600000 ]] || return 1; publications=$((publications+1)); echo publish-$publications; ${failure === "initial-publication" ? '[[ "$publications" != 1 ]]' : failure === "reserve-publication" ? '[[ "$publications" != 2 ]]' : ":"}; }
 bootstrap_credential() { [[ "$publications" == 1 ]]; echo credential; }
 node() { :; }
-provision() { [[ "$publications" == 1 ]]; echo provision; }
+provision() { [[ "$publications" == 1 ]]; now=$((now+600001)); echo provision; }
 bind_session_reserves() { echo bind; ${failure === "binding" ? "return 1" : ":"}; }
-wait_session_reserves() { [[ "$publications" == 1 ]]; echo ready; ${failure === "readiness" ? "return 1" : ":"}; }
+wait_session_reserves() { [[ "$publications" == 2 ]] || return 1; echo ready; ${failure === "readiness" ? "return 1" : ":"}; }
 validate() { echo validate; }
 repo_root=/fixture
 source_sha=fixture
@@ -1646,6 +1652,7 @@ ${dispatch}
 					ACK_LOGIN_BOOTSTRAP_FILE: "/fixture/login",
 					ACK_CREDENTIAL_BOOTSTRAP_FILE: "/fixture/credential",
 					ACK_TEMPLATE_PREFLIGHT_JOBS_FILE: "/fixture/jobs",
+					ACK_CUSTOM_CAPACITY_JOB_FILE: "/fixture/custom",
 					ACK_SESSION_RESERVE_PLAN_FILE: "/fixture/plan",
 				},
 			},
@@ -1660,21 +1667,26 @@ ${dispatch}
 				"database",
 				"deploy",
 				"templates",
-				"login",
+				"custom",
+				"login-1",
 				"publish-1",
 				"credential",
 				"provision",
 				"bind",
+				"login-2",
 				"publish-2",
 				"ready",
 				"validate",
 			]);
 		else assert(!stages.includes("validate"));
 		if (failure === "plan") assert(!stages.includes("bootstrap"));
+		if (failure === "initial-login") assert(!stages.includes("publish-1"));
 		if (failure === "initial-publication")
 			assert(!stages.includes("credential") && !stages.includes("provision"));
 		if (failure === "binding")
 			assert(stages.includes("publish-1") && !stages.includes("publish-2"));
+		if (failure === "reserve-login")
+			assert(stages.includes("bind") && !stages.includes("publish-2"));
 		if (failure === "reserve-publication") assert(!stages.includes("ready"));
 	});
 }
