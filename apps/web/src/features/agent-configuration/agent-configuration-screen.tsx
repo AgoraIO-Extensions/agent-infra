@@ -584,6 +584,7 @@ export function AgentConfigurationScreen({
 							identityKey={session.session.user.userId}
 							sourceKind="custom"
 							client={generatedV2Client}
+							disabled={isDisabled}
 							selected={agent.source.workspaceSnapshots ?? []}
 							onChange={(workspaceSnapshots) =>
 								setDraft((current) => ({

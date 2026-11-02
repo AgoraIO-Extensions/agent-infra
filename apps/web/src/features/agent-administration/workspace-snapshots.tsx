@@ -82,9 +82,11 @@ export async function unbindWorkspaceSnapshot(
 export function useWorkspaceSnapshots({
 	identityKey,
 	client,
+	enabled = true,
 }: {
 	identityKey: string;
 	client?: Client;
+	enabled?: boolean;
 }) {
 	const queryClient = useQueryClient();
 	const queryKey = useMemo(
@@ -94,7 +96,7 @@ export function useWorkspaceSnapshots({
 	const query = useQuery({
 		queryKey,
 		queryFn: ({ signal }) => loadWorkspaceSnapshots(client, signal),
-		enabled: Boolean(identityKey),
+		enabled: enabled && Boolean(identityKey),
 		retry: false,
 	});
 	const remove = useMutation({
@@ -114,6 +116,7 @@ type WorkspaceSnapshotsPanelProps = {
 	readonly identityKey: string;
 	readonly sourceKind: "standard" | "custom";
 	readonly client?: Client;
+	readonly disabled?: boolean;
 	readonly selected?: readonly { snapshotId: string; name: string }[];
 	readonly onChange?: (
 		bindings: readonly { snapshotId: string; name: string }[],
@@ -125,10 +128,15 @@ export function WorkspaceSnapshotsPanel({
 	identityKey,
 	sourceKind,
 	client,
+	disabled = false,
 	selected = [],
 	onChange,
 }: WorkspaceSnapshotsPanelProps) {
-	const snapshots = useWorkspaceSnapshots({ identityKey, client });
+	const snapshots = useWorkspaceSnapshots({
+		identityKey,
+		client,
+		enabled: sourceKind === "custom",
+	});
 	if (sourceKind === "standard") {
 		return (
 			<Card aria-label="工作区快照">
@@ -201,7 +209,7 @@ export function WorkspaceSnapshotsPanel({
 									<Label variant="option" className="text-xs">
 										<Checkbox
 											checked={selectedIds.has(snapshot.snapshotId)}
-											disabled={snapshots.remove.isPending}
+											disabled={disabled || snapshots.remove.isPending}
 											onCheckedChange={(checked) => {
 												const next = selected.filter(
 													(binding) =>
@@ -221,6 +229,7 @@ export function WorkspaceSnapshotsPanel({
 										<input
 											aria-label={`快照挂载名称 ${snapshot.snapshotId}`}
 											className="h-8 w-28 rounded border border-border px-2 text-xs"
+											disabled={disabled || snapshots.remove.isPending}
 											value={
 												selected.find(
 													(binding) =>
@@ -244,7 +253,9 @@ export function WorkspaceSnapshotsPanel({
 								variant="outline"
 								size="sm"
 								disabled={
-									snapshots.remove.isPending || snapshot.bindings.length > 0
+									disabled ||
+									snapshots.remove.isPending ||
+									snapshot.bindings.length > 0
 								}
 								title={
 									snapshot.bindings.length > 0 ? "仍有 Agent 绑定" : "删除快照"

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
 	loadWorkspaceSnapshots,
@@ -52,6 +52,66 @@ describe("workspace snapshots panel", () => {
 		);
 		expect(screen.getByText(/sha256:aaaa/)).toBeTruthy();
 		expect(screen.queryByText(/archive|repo content/i)).toBeNull();
+	});
+
+	it("selects a named binding and clears it to unbind", () => {
+		const client = {} as never;
+		const onChange = vi.fn();
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		queryClient.setQueryData(["workspace-snapshots", "u1"], {
+			kind: "ready",
+			snapshots: [snapshot],
+		});
+		const view = render(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceSnapshotsPanel
+					identityKey="u1"
+					sourceKind="custom"
+					client={client}
+					onChange={onChange}
+				/>
+			</QueryClientProvider>,
+		);
+
+		const checkbox = screen.getByRole("checkbox");
+		fireEvent.click(checkbox);
+		expect(onChange).toHaveBeenLastCalledWith([
+			{ snapshotId: "snap-1", name: "repo" },
+		]);
+
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceSnapshotsPanel
+					identityKey="u1"
+					sourceKind="custom"
+					client={client}
+					selected={[{ snapshotId: "snap-1", name: "repo" }]}
+					onChange={onChange}
+				/>
+			</QueryClientProvider>,
+		);
+		fireEvent.change(screen.getByLabelText("快照挂载名称 snap-1"), {
+			target: { value: "venv" },
+		});
+		expect(onChange).toHaveBeenLastCalledWith([
+			{ snapshotId: "snap-1", name: "venv" },
+		]);
+
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<WorkspaceSnapshotsPanel
+					identityKey="u1"
+					sourceKind="custom"
+					client={client}
+					selected={[{ snapshotId: "snap-1", name: "venv" }]}
+					onChange={onChange}
+				/>
+			</QueryClientProvider>,
+		);
+		fireEvent.click(screen.getByRole("checkbox"));
+		expect(onChange).toHaveBeenLastCalledWith([]);
 	});
 
 	it("maps non-200 list responses to unavailable", async () => {
