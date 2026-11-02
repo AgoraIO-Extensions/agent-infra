@@ -40,6 +40,28 @@ test("ACK API and Worker keep one serving Pod during a rollout", () => {
 	assert.equal(worker?.replicas, 1);
 });
 
+test("ACK Worker RoleBinding binds the Worker ServiceAccount in the release namespace", () => {
+	const output = execFileSync(
+		"helm",
+		["template", "ack-rbac-test", chart, "--namespace", "agent-infra"],
+		{ encoding: "utf8" },
+	);
+	const binding = parseAllDocuments(output)
+		.map((document) => document.toJSON())
+		.find(
+			(document) =>
+				document?.kind === "RoleBinding" &&
+				document?.metadata?.name === "agent-infra-worker",
+		);
+	assert.deepEqual(binding?.subjects, [
+			{
+				kind: "ServiceAccount",
+				name: "agent-infra-worker",
+				namespace: "agent-infra",
+			},
+	]);
+});
+
 test("ACK API replica count can be raised in a private values file", () => {
 	const output = execFileSync(
 		"helm",
