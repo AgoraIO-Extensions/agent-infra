@@ -532,6 +532,24 @@ describe("multi-service resource policy", () => {
 		});
 	});
 
+	it("does not rewrite the entry workload when a repeated apply has the same member snapshot", async () => {
+		const fake = fakeClient();
+		const recorded = recordingClient(fake.client);
+		const operations = createMultiServiceRuntimeOperations({
+			client: recorded.client,
+			policy: basePolicy,
+		});
+		const value = desired();
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(value);
+		recorded.calls.length = 0;
+		await operations.apply(value);
+		expect(recorded.calls).not.toContain(
+			`replace Deployment/${workloadResourceNameV1("agent-a")}-web`,
+		);
+	});
+
 	it.each([
 		[
 			"duplicate profile IDs",

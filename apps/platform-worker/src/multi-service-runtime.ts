@@ -198,6 +198,15 @@ type MemberIdentitySnapshot = Record<
 	string,
 	{ readonly uid: string; readonly generation: number }
 >;
+function serializeMemberSnapshot(identities: MemberIdentitySnapshot) {
+	return JSON.stringify(
+		Object.fromEntries(
+			Object.entries(identities).sort(([left], [right]) =>
+				left.localeCompare(right),
+			),
+		),
+	);
+}
 function parseMemberSnapshot(value: unknown): MemberIdentitySnapshot | null {
 	if (typeof value !== "string") return null;
 	try {
@@ -951,6 +960,20 @@ export function createMultiServiceRuntimeOperations(options: {
 				throw new Error("multi-service migration pull policy drifted");
 			return current;
 		}
+		if (
+			(object.kind === "Deployment" || object.kind === "StatefulSet") &&
+			isDeepStrictEqual(
+				(current as T & { spec?: unknown }).spec,
+				(object as T & { spec?: unknown }).spec,
+			) &&
+			Object.entries(object.metadata?.labels ?? {}).every(
+				([key, expected]) => current.metadata?.labels?.[key] === expected,
+			) &&
+			Object.entries(object.metadata?.annotations ?? {}).every(
+				([key, expected]) => current.metadata?.annotations?.[key] === expected,
+			)
+		)
+			return current;
 		if (current.kind === "PersistentVolumeClaim") {
 			const currentPvc = current as unknown as V1PersistentVolumeClaim;
 			const declaredPvc = manifestPvc(value, current.metadata?.name ?? "");
@@ -1260,6 +1283,12 @@ export function createMultiServiceRuntimeOperations(options: {
 			}
 			if (!current.metadata.resourceVersion)
 				throw new Error("multi-service entry resource version unavailable");
+			const memberSnapshot = serializeMemberSnapshot(identities);
+			if (
+				current.metadata.annotations?.[memberIdentityAnnotation] ===
+				memberSnapshot
+			)
+				return { uid: current.metadata.uid, generation: generation as number };
 			await client.replace({
 				...current,
 				metadata: {
@@ -1268,7 +1297,7 @@ export function createMultiServiceRuntimeOperations(options: {
 					resourceVersion: current.metadata.resourceVersion,
 					annotations: {
 						...current.metadata.annotations,
-						[memberIdentityAnnotation]: JSON.stringify(identities),
+						[memberIdentityAnnotation]: memberSnapshot,
 					},
 				},
 			});
@@ -1536,7 +1565,7 @@ export function createMultiServiceRuntimeOperations(options: {
 					resourceVersion: currentEntryAfter.metadata.resourceVersion,
 					annotations: {
 						...currentEntryAfter.metadata.annotations,
-						[memberIdentityAnnotation]: JSON.stringify(identities),
+						[memberIdentityAnnotation]: serializeMemberSnapshot(identities),
 					},
 				},
 			});
