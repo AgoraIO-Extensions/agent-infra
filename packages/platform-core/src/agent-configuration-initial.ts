@@ -143,6 +143,10 @@ async function completeInitialAgentConfigurationAdmissionV1(
 			? source.kind === "standard" &&
 				command.source.templateId === source.templateId
 			: source.kind === "custom" &&
+				sameValue(
+					source.workspaceSnapshots ?? [],
+					command.source.workspaceSnapshots ?? [],
+				) &&
 				source.interactionMode === command.source.interactionMode &&
 				(!("manifest" in command.source) ||
 					("manifest" in source &&

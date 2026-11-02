@@ -24,5 +24,12 @@
 			"cache": false,
 			"persistent": true
 		}
-	}
+	},
+	"globalPassThroughEnv": [
+		"CUSTOM_ENTRY_ROLE",
+		"HOSTNAME",
+		"CUSTOM_ENTRY_ISSUER",
+		"CUSTOM_ENTRY_AUDIENCE",
+		"CUSTOM_ENTRY_PUBLIC_KEY"
+	]
 }

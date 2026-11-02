@@ -241,3 +241,6 @@ export {
 	openPostgresWorkloadStateReaderV1,
 	type PostgresWorkloadStateReaderV1,
 } from "./workload-reconciliation.js";
+export { PostgresWorkspaceSnapshotBindingStoreV1 } from "./workspace-snapshot-bindings.ts";
+export { PostgresWorkspaceSnapshotUploadStoreV1 } from "./workspace-snapshot-upload-store.ts";
+export { PostgresWorkspaceSnapshotStoreV1 } from "./workspace-snapshots.ts";
