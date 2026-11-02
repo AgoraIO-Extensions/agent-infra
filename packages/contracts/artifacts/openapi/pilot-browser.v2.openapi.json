@@ -2322,6 +2322,140 @@
               "type": "object"
             },
             "type": "array"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "identityResponsibility": {
+                    "enum": [
+                      "self-managed",
+                      "platform-managed"
+                    ],
+                    "type": "string"
+                  },
+                  "imageReference": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "imageReference",
+                  "interactionMode",
+                  "identityResponsibility"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "imageReference": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "platform-adapter",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "imageReference",
+                  "interactionMode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "identityResponsibility": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  },
+                  "manifest": {
+                    "maxLength": 262144,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entry": {
+                          "type": "boolean"
+                        },
+                        "name": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "resourceProfileRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "resourceProfileRef",
+                        "entry"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
+                  },
+                  "workspaceSnapshots": {
+                    "items": {
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "interactionMode",
+                  "identityResponsibility",
+                  "manifest"
+                ],
+                "type": "object"
+              }
+            ]
           }
         },
         "required": [
@@ -29530,6 +29664,122 @@
           }
         ],
         "summary": "Set or replace the current browser user's personal Relay Key"
+      }
+    },
+    "/api/v2/me/workspace-snapshots": {
+      "get": {
+        "operationId": "listMyWorkspaceSnapshotsV1",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceSnapshotMetadataV1"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Snapshot metadata"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource conflicts with an existing binding"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Snapshot exceeds a configured limit"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Snapshot archive or digest is invalid"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Upload rate limit exceeded"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ],
+        "summary": "List workspace snapshot metadata for the authenticated browser user"
       }
     },
     "/api/v2/skills": {

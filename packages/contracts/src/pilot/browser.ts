@@ -527,6 +527,11 @@ export const AgentApplicationUpdateRequestV2Schema =
 const AgentConfigurationUpdateRequestV2BaseSchema =
 	AgentConfigurationUpdateRequestV1Schema.omit({ actions: true }).extend({
 		schemaVersion: z.literal(2),
+		source: z.union([
+			AgentSourceInputV2Schema.options[1],
+			AgentSourceInputV2Schema.options[2],
+			AgentSourceInputV2Schema.options[3],
+		]).optional(),
 		...defaultRelayKeyReplacementShape,
 	});
 export const AgentConfigurationUpdateRequestV4Schema =

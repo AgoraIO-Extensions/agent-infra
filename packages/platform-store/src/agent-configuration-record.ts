@@ -90,6 +90,19 @@ function policyKeys(input: unknown): string[] {
 	return values.toSorted(compare);
 }
 
+function workspaceSnapshotBindings(input: unknown) {
+	const bindings = array(input, 4).map((entry) => {
+		const binding = object(entry, ["snapshotId", "name"]);
+		const snapshotId = text(binding.snapshotId);
+		const name = text(binding.name, 63);
+		if (!/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(name)) invalid();
+		return { snapshotId, name };
+	});
+	if (new Set(bindings.map(({ name }) => name)).size !== bindings.length)
+		invalid();
+	return bindings.toSorted((left, right) => compare(left.name, right.name));
+}
+
 function source(input: unknown): AgentConfigurationSourceV1 {
 	if (!input || typeof input !== "object" || Array.isArray(input)) invalid();
 	const kind = (input as Record<string, unknown>).kind;
@@ -123,7 +136,15 @@ function source(input: unknown): AgentConfigurationSourceV1 {
 		};
 	}
 
+	const snapshots = Object.hasOwn(input, "workspaceSnapshots")
+		? {
+				workspaceSnapshots: workspaceSnapshotBindings(
+					(input as Record<string, unknown>).workspaceSnapshots,
+				),
+			}
+		: {};
 	const common = [
+		...Object.keys(snapshots),
 		"kind",
 		"imageDigest",
 		"admissionRevision",
@@ -158,6 +179,7 @@ function source(input: unknown): AgentConfigurationSourceV1 {
 			identityResponsibility: "self-managed",
 			connectionEnabled: false,
 			manifest: value.manifest,
+			...snapshots,
 		};
 	}
 	const keys =
@@ -185,6 +207,7 @@ function source(input: unknown): AgentConfigurationSourceV1 {
 			...base,
 			interactionMode,
 			connectionEnabled: value.connectionEnabled,
+			...snapshots,
 		};
 	}
 	if (
@@ -198,6 +221,7 @@ function source(input: unknown): AgentConfigurationSourceV1 {
 		interactionMode,
 		identityResponsibility: value.identityResponsibility,
 		connectionEnabled: value.connectionEnabled,
+		...snapshots,
 	};
 }
 

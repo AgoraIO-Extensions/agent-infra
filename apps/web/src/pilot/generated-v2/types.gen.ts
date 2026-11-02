@@ -394,6 +394,29 @@ export type AgentConfigurationUpdateRequestV2 = {
     secrets?: Array<{
         name: string;
     }>;
+    source?: {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    };
 };
 
 export type AgentCreationFailureCategoryV1 = 'configuration_rejected' | 'health_check_failed' | 'deployment_unavailable';
@@ -3066,6 +3089,29 @@ export type AgentConfigurationUpdateRequestV2Writable = {
         name: string;
         value: string;
     }>;
+    source?: {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    };
 };
 
 export type BeginPlatformConnectionInstallationV1Data = {
@@ -8400,6 +8446,63 @@ export type ReplacePersonalRelayKeyV2Responses = {
 };
 
 export type ReplacePersonalRelayKeyV2Response = ReplacePersonalRelayKeyV2Responses[keyof ReplacePersonalRelayKeyV2Responses];
+
+export type ListMyWorkspaceSnapshotsV1Data = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v2/me/workspace-snapshots';
+};
+
+export type ListMyWorkspaceSnapshotsV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Resource conflicts with an existing binding
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Snapshot exceeds a configured limit
+     */
+    413: PilotProtocolErrorV1;
+    /**
+     * Snapshot archive or digest is invalid
+     */
+    422: PilotProtocolErrorV1;
+    /**
+     * Upload rate limit exceeded
+     */
+    429: PilotProtocolErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListMyWorkspaceSnapshotsV1Error = ListMyWorkspaceSnapshotsV1Errors[keyof ListMyWorkspaceSnapshotsV1Errors];
+
+export type ListMyWorkspaceSnapshotsV1Responses = {
+    /**
+     * Snapshot metadata
+     */
+    200: Array<WorkspaceSnapshotMetadataV1>;
+};
+
+export type ListMyWorkspaceSnapshotsV1Response = ListMyWorkspaceSnapshotsV1Responses[keyof ListMyWorkspaceSnapshotsV1Responses];
 
 export type ListSkillHubVersionsV1Data = {
     body?: never;
