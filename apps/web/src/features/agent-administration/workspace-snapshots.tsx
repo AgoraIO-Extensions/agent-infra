@@ -3,6 +3,8 @@ import { useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { LoadingLine } from "@/components/ui/spinner";
 import type {
 	Client,
@@ -195,16 +197,15 @@ export function WorkspaceSnapshotsPanel({
 								</div>
 							</div>
 							{onChange ? (
-								<label className="flex items-center gap-2 text-xs">
-									<input
-										type="checkbox"
+								<Label variant="option" className="text-xs">
+									<Checkbox
 										checked={selectedIds.has(snapshot.snapshotId)}
 										disabled={snapshots.remove.isPending}
-										onChange={(event) => {
+										onCheckedChange={(checked) => {
 											const next = selected.filter(
 												(binding) => binding.snapshotId !== snapshot.snapshotId,
 											);
-											if (event.currentTarget.checked)
+											if (checked)
 												next.push({
 													snapshotId: snapshot.snapshotId,
 													name: snapshot.bindings[0]?.name ?? "repo",
@@ -213,7 +214,7 @@ export function WorkspaceSnapshotsPanel({
 										}}
 									/>
 									选择
-								</label>
+								</Label>
 							) : null}
 							<Button
 								variant="outline"
