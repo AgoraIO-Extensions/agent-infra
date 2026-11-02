@@ -88,10 +88,14 @@ export const workspaceSnapshotOpenApiPathsV1 = {
 	"/api/v2/me/workspace-snapshots": {
 		get: {
 			operationId: "listMyWorkspaceSnapshotsV1",
-			summary: "List workspace snapshot metadata for the authenticated browser user",
+			summary:
+				"List workspace snapshot metadata for the authenticated browser user",
 			security: [{ PlatformSession: [] }],
 			responses: {
-				"200": response("Snapshot metadata", z.array(WorkspaceSnapshotMetadataV1Schema)),
+				"200": response(
+					"Snapshot metadata",
+					z.array(WorkspaceSnapshotMetadataV1Schema),
+				),
 				...errorResponses,
 			},
 		},
