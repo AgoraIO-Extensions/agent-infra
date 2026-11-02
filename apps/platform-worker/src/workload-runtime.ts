@@ -2006,7 +2006,10 @@ export function createWorkloadRuntimeV1(
 							!(await (multiServiceRuntime
 								? multiServiceRuntime.observeSecretFence(
 										requireMultiWorkload(),
-										identity,
+										{
+											uid: candidate.activationFence.workloadUid,
+											generation: candidate.activationFence.workloadGeneration,
+										},
 										candidate.kubernetesSecretRef.name,
 										candidate.activationFence.fence,
 									)
