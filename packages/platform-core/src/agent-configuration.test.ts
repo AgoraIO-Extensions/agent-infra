@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -599,7 +600,22 @@ it("rejects a manifest source admission whose canonical content differs", async 
 				admissionRevision: "multi_service_policy_1",
 			},
 		},
-		admissions: { images: [{ selection: requested, source: admitted }] },
+		admissions: {
+			images: [
+				{
+					selection: requested,
+					source: admitted,
+					manifestBinding: {
+						requestedSha256: createHash("sha256")
+							.update(requested.manifest)
+							.digest("hex"),
+						canonicalSha256: createHash("sha256")
+							.update(requested.manifest)
+							.digest("hex"),
+					},
+				},
+			],
+		},
 	});
 	await expect(
 		harness.useCase.update(

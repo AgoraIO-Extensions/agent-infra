@@ -642,6 +642,12 @@ export function createDeploymentAdmissionsV1(
 					return {
 						...correlation(request),
 						status: "admitted",
+						manifestBinding: {
+							requestedSha256: createHash("sha256")
+								.update(selection.manifest)
+								.digest("hex"),
+							canonicalSha256: imageDigest.slice("sha256:".length),
+						},
 						source: {
 							kind: "custom",
 							imageDigest,

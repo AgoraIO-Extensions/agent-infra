@@ -537,6 +537,11 @@ export interface AgentConfigurationImageAdmissionPortV1 {
 				readonly agentId: string;
 				readonly requestId: string;
 				readonly source: AgentConfigurationSourceV1;
+				/** Internal admission binding for manifest raw input and canonical JSON. */
+				readonly manifestBinding?: {
+					readonly requestedSha256: string;
+					readonly canonicalSha256: string;
+				};
 		  }
 		| {
 				readonly schemaVersion: 1;

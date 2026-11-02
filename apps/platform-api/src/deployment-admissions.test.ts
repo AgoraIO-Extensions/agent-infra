@@ -7,6 +7,7 @@ import type {
 	AgentConfigurationSourceV1,
 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
+import { stringify as stringifyYaml } from "yaml";
 import {
 	createDeploymentAdmissionsV1,
 	createDeploymentConfigurationProjectionV2,
@@ -482,8 +483,39 @@ describe("production deployment admissions", () => {
 			"manifest" in result.source
 		) {
 			expect(JSON.parse(result.source.manifest)).toEqual(JSON.parse(manifest));
+			expect(result.manifestBinding).toEqual({
+				requestedSha256: digest(manifest).slice("sha256:".length),
+				canonicalSha256: digest(result.source.manifest).slice("sha256:".length),
+			});
 		}
 		expect(f.fetch).toHaveBeenCalled();
+	});
+
+	it("binds newline, pretty JSON and YAML to one canonical manifest", async () => {
+		const f = fixture("self-managed");
+		const admissions = createDeploymentAdmissionsV1({
+			...f.input,
+			imageRepository: "registry.example.test/agents/codex",
+		});
+		const canonical = twoServiceManifest(f.imageDigest);
+		for (const manifest of [
+			`${canonical}\n`,
+			`${JSON.stringify(JSON.parse(canonical), null, 2)}\n`,
+			stringifyYaml(JSON.parse(canonical)),
+		]) {
+			const result = await admissions.imageAdmission.admitImage(
+				multiServiceRequest(manifest),
+			);
+			expect(result).toMatchObject({ status: "admitted" });
+			if (result.status === "admitted" && result.source.kind === "custom") {
+				expect(result.manifestBinding?.canonicalSha256).toBe(
+					digest(result.source.manifest).slice("sha256:".length),
+				);
+				expect(result.manifestBinding?.requestedSha256).toBe(
+					digest(manifest).slice("sha256:".length),
+				);
+			}
+		}
 	});
 
 	it("admits one StatefulSet service with a PVC in the multi-service contract", async () => {

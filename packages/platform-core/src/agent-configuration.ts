@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	parseAdmittedModel,
 	parseChannelDecision,
@@ -382,6 +383,8 @@ function createAgentConfigurationUseCaseV1Internal(
 				);
 			const admittedSource =
 				admission.status === "admitted" ? admission.source : current.source;
+			const manifestBinding =
+				admission.status === "admitted" ? admission.manifestBinding : undefined;
 			const selectionMatches =
 				changes.source.kind === admittedSource.kind &&
 				(changes.source.kind === "standard"
@@ -391,7 +394,14 @@ function createAgentConfigurationUseCaseV1Internal(
 						admittedSource.interactionMode === changes.source.interactionMode &&
 						(!("manifest" in changes.source) ||
 							("manifest" in admittedSource &&
-								admittedSource.manifest === changes.source.manifest)) &&
+								manifestBinding?.requestedSha256 ===
+									createHash("sha256")
+										.update(changes.source.manifest)
+										.digest("hex") &&
+								manifestBinding.canonicalSha256 ===
+									createHash("sha256")
+										.update(admittedSource.manifest)
+										.digest("hex"))) &&
 						(changes.source.interactionMode === "platform-adapter" ||
 							(admittedSource.interactionMode === "self-managed" &&
 								admittedSource.identityResponsibility ===

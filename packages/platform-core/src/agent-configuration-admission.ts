@@ -203,7 +203,11 @@ function snapshotAdmissionDecision<
 			};
 		}
 		if (values.status !== "admitted") invalidCommand();
-		requireAgentManagementExactKeys(values, [...common, ...admittedKeys]);
+		requireAgentManagementExactKeys(values, [
+			...common,
+			...admittedKeys,
+			...optionalKeys.filter((key) => Object.hasOwn(values, key)),
+		]);
 		return {
 			status: "admitted",
 			agentId: values.agentId,
@@ -219,7 +223,7 @@ export function parseImageDecision(
 	const decision = snapshotAdmissionDecision(
 		input,
 		["source"],
-		["reason"],
+		["reason", "manifestBinding"],
 		[
 			"multi_service_resource_cap_exceeded",
 			"platform_identity_entry_unavailable",
@@ -227,13 +231,41 @@ export function parseImageDecision(
 	);
 	return decision.status === "rejected"
 		? { schemaVersion: 1, ...decision }
-		: dependencyValue(() => ({
-				schemaVersion: 1,
-				status: "admitted",
-				agentId: decision.agentId,
-				requestId: decision.requestId,
-				source: parseAdmittedSource(decision.values.source),
-			}));
+		: dependencyValue(() => {
+				const source = parseAdmittedSource(decision.values.source);
+				if (Object.hasOwn(decision.values, "manifestBinding")) {
+					const binding = exactObject(decision.values.manifestBinding, [
+						"requestedSha256",
+						"canonicalSha256",
+					]);
+					if (
+						!("manifest" in source) ||
+						typeof binding.requestedSha256 !== "string" ||
+						!/^[a-f0-9]{64}$/.test(binding.requestedSha256) ||
+						typeof binding.canonicalSha256 !== "string" ||
+						!/^[a-f0-9]{64}$/.test(binding.canonicalSha256)
+					)
+						invalidCommand();
+					return {
+						schemaVersion: 1,
+						status: "admitted" as const,
+						agentId: decision.agentId,
+						requestId: decision.requestId,
+						source,
+						manifestBinding: {
+							requestedSha256: binding.requestedSha256,
+							canonicalSha256: binding.canonicalSha256,
+						},
+					};
+				}
+				return {
+					schemaVersion: 1,
+					status: "admitted" as const,
+					agentId: decision.agentId,
+					requestId: decision.requestId,
+					source,
+				};
+			});
 }
 
 export function parseModelDecision(
