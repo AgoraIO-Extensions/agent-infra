@@ -18,7 +18,19 @@ it.each(["v1", "v2"] as const)(
 				"utf8",
 			),
 		);
-		delete current.paths["/api/v2/me/workspace-snapshots"];
+		for (const path of [
+			"/api/v2/me/workspace-snapshots",
+			"/api/v2/workspace-snapshots",
+			"/api/v2/workspace-snapshots/{snapshotId}",
+		])
+			delete current.paths[path];
+		for (const name of [
+			"WorkspaceSnapshotBindingV1",
+			"WorkspaceSnapshotSourceV1",
+			"WorkspaceSnapshotMetadataV1",
+			"WorkspaceSnapshotUploadRequestV1",
+		])
+			delete current.components.schemas[name];
 		const previous = await readEvaluationBaseline(version);
 		for (const path of Object.keys(previous.paths))
 			if (path.startsWith("/api/v2/evaluation/")) delete previous.paths[path];
