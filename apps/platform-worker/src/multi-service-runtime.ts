@@ -198,6 +198,15 @@ type MemberIdentitySnapshot = Record<
 	string,
 	{ readonly uid: string; readonly generation: number }
 >;
+function serializeMemberSnapshot(identities: MemberIdentitySnapshot) {
+	return JSON.stringify(
+		Object.fromEntries(
+			Object.entries(identities).sort(([left], [right]) =>
+				left.localeCompare(right),
+			),
+		),
+	);
+}
 function parseMemberSnapshot(value: unknown): MemberIdentitySnapshot | null {
 	if (typeof value !== "string") return null;
 	try {
@@ -1274,7 +1283,7 @@ export function createMultiServiceRuntimeOperations(options: {
 			}
 			if (!current.metadata.resourceVersion)
 				throw new Error("multi-service entry resource version unavailable");
-			const memberSnapshot = JSON.stringify(identities);
+			const memberSnapshot = serializeMemberSnapshot(identities);
 			if (
 				current.metadata.annotations?.[memberIdentityAnnotation] ===
 				memberSnapshot
@@ -1556,7 +1565,7 @@ export function createMultiServiceRuntimeOperations(options: {
 					resourceVersion: currentEntryAfter.metadata.resourceVersion,
 					annotations: {
 						...currentEntryAfter.metadata.annotations,
-						[memberIdentityAnnotation]: JSON.stringify(identities),
+						[memberIdentityAnnotation]: serializeMemberSnapshot(identities),
 					},
 				},
 			});
