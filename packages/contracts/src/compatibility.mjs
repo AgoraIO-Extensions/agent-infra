@@ -7059,7 +7059,126 @@ function normalizeEvaluationAnalysis3640(previous, current) {
 	return result;
 }
 
+// #3871: only the reviewed V2 resource and optional custom-source bindings compose
+// with earlier pinned additions. Authority, limits and metadata stay exact.
+const workspaceSnapshot3871Pins = [
+	[
+		["paths", "/api/v2/me/workspace-snapshots"],
+		"32b54f72f684d9607355413157b6b9067850b06f78739f2c0467833fe254534d",
+	],
+	[
+		["paths", "/api/v2/workspace-snapshots"],
+		"efa2bca5745eccf38c916f7c3b9acb848d3690267c7d354758f97fc290bdbf64",
+	],
+	[
+		["paths", "/api/v2/workspace-snapshots/{snapshotId}"],
+		"4798d61ef38a915ad427a406e0361bce86cfa4da551879890b4be22fd8866217",
+	],
+	[
+		["components", "schemas", "WorkspaceSnapshotBindingV1"],
+		"9056e3686a524a59ff95e6f1651538835c2435b83b01b3245432777e11adf0be",
+	],
+	[
+		["components", "schemas", "WorkspaceSnapshotSourceV1"],
+		"bf967d593fc1395eea24f7eb781ead34ea8268a5f2fc7d7943c726f1e47995e0",
+	],
+	[
+		["components", "schemas", "WorkspaceSnapshotMetadataV1"],
+		"43b3780aca521544ac325ef2fede8defab8e8b7bedccb973338f4ecfc71ac295",
+	],
+	[
+		["components", "schemas", "WorkspaceSnapshotUploadRequestV1"],
+		"7dc5c0c9fa3f55ad8d513410769e436273969eb1774b2a388dc4df7dc13c4b9f",
+	],
+];
+const workspaceSnapshot3871SourceSchemas = [
+	"AgentApplicationCreateRequestV2",
+	"AgentApplicationUpdateRequestV2",
+	"AgentApplicationProjectionV2",
+	"AgentProjectionV2",
+	"AgentDetailProjectionV1",
+	"AgentConfigurationUpdateRequestV2",
+];
+function normalizeWorkspaceSnapshot3871(previous, current) {
+	if (!previous.openapi || !current.openapi) return { previous, current };
+	const read = (doc, path) => path.reduce((value, key) => value?.[key], doc);
+	const present = (doc) =>
+		workspaceSnapshot3871Pins.some(([path]) => read(doc, path) !== undefined);
+	const before = present(previous);
+	const after = present(current);
+	if (!before && !after) return { previous, current };
+	if (before && !after) return { invalid: true };
+	const normalize = (doc) => {
+		if (!present(doc)) return doc;
+		for (const [path, pin] of workspaceSnapshot3871Pins) {
+			const value = read(doc, path);
+			if (
+				value === undefined ||
+				createHash("sha256").update(JSON.stringify(value)).digest("hex") !== pin
+			)
+				return undefined;
+		}
+		const normalized = structuredClone(doc);
+		const update =
+			normalized.components.schemas.AgentConfigurationUpdateRequestV2;
+		if (update?.properties?.source !== undefined) {
+			if (
+				update.required?.includes("source") ||
+				createHash("sha256")
+					.update(JSON.stringify(update.properties.source))
+					.digest("hex") !==
+					"f063d4188082f704a9a23b02bf579b64fc33bfb295b98953520c6c78554b9903"
+			)
+				return undefined;
+			delete update.properties.source;
+		}
+		const sources = workspaceSnapshot3871SourceSchemas.map(
+			(name) => normalized.components.schemas[name]?.properties?.source,
+		);
+		sources.push(
+			normalized.components.schemas.AgentApiCreationRequestV1?.anyOf?.[0]
+				?.properties?.source,
+		);
+		for (const source of sources) {
+			if (source === undefined) continue;
+			if (!Array.isArray(source.anyOf)) return undefined;
+			for (const option of source.anyOf) {
+				const binding = option.properties?.workspaceSnapshots;
+				if (option.properties?.kind?.const !== "custom") {
+					if (binding !== undefined) return undefined;
+					continue;
+				}
+				if (
+					option.required?.includes("workspaceSnapshots") ||
+					!isDeepStrictEqual(binding, {
+						items: { $ref: "#/components/schemas/WorkspaceSnapshotBindingV1" },
+						maxItems: 4,
+						type: "array",
+					})
+				)
+					return undefined;
+				delete option.properties.workspaceSnapshots;
+			}
+		}
+		for (const [path] of workspaceSnapshot3871Pins)
+			delete read(normalized, path.slice(0, -1))[path.at(-1)];
+		return normalized;
+	};
+	const normalizedPrevious = normalize(previous);
+	const normalizedCurrent = normalize(current);
+	if (!normalizedPrevious || !normalizedCurrent) return { invalid: true };
+	return { previous: normalizedPrevious, current: normalizedCurrent };
+}
+
 function evaluateBreakingChanges(previousValue, currentValue) {
+	const snapshots = normalizeWorkspaceSnapshot3871(previousValue, currentValue);
+	if (snapshots.invalid)
+		return ["removed or changed published workspace snapshot contract"];
+	if (
+		snapshots.previous !== previousValue ||
+		snapshots.current !== currentValue
+	)
+		return findBreakingChanges(snapshots.previous, snapshots.current);
 	const analysis3640 = normalizeEvaluationAnalysis3640(
 		previousValue,
 		currentValue,

@@ -131,6 +131,7 @@ export interface ManagementRouteDependencies {
 			readonly requestScope?: object;
 		},
 	) => Promise<unknown>;
+	readonly readApiAgentProjectionV2?: ManagementRouteDependencies["readApiAgentProjection"];
 	readonly foundation: Pick<ApplicationFoundationUseCaseV1, "submit">;
 	readonly applicationModelCandidates?: ReturnType<
 		typeof createApplicationModelCandidatesUseCaseV1
@@ -162,9 +163,11 @@ export interface ManagementRouteDependencies {
 	readonly readApplicationProjection: (
 		input: ProjectionInput<AgentManagementApplicationProjectionV1>,
 	) => Promise<unknown>;
+	readonly readApplicationProjectionV2?: ManagementRouteDependencies["readApplicationProjection"];
 	readonly readAgentProjection: (
 		input: ProjectionInput<AgentManagementAgentProjectionV1>,
 	) => Promise<unknown>;
+	readonly readAgentProjectionV2?: ManagementRouteDependencies["readAgentProjection"];
 	/** Agent 详情（#2910）：Owner 附带当前有效状态；未装配时详情入口返回依赖不可用。 */
 	readonly readAgentDetailProjection?: (
 		input: ProjectionInput<AgentManagementAgentProjectionV1>,
@@ -271,7 +274,9 @@ async function projectApiAgent(
 	apiUser: CurrentTaskUserV1,
 	agent: AgentManagementAgentProjectionV1,
 ) {
-	const project = dependencies.readApiAgentProjection;
+	const project =
+		dependencies.readApiAgentProjectionV2 ??
+		dependencies.readApiAgentProjection;
 	if (!project) fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 	const value = await project({
 		...metadata,
@@ -279,6 +284,8 @@ async function projectApiAgent(
 		agent,
 		requestScope: metadata,
 	});
+	if (dependencies.readApiAgentProjectionV2)
+		return AgentProjectionV2Schema.parse(value);
 	const parsed = AgentProjectionV1Schema.safeParse(value);
 	if (!parsed.success) fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 	const { actions: _actions, ...configuration } = parsed.data.configuration;
@@ -346,7 +353,10 @@ async function projectApplication(
 ): Promise<ApplicationProjection> {
 	let value: unknown;
 	try {
-		value = await dependencies.readApplicationProjection({
+		value = await (
+			dependencies.readApplicationProjectionV2 ??
+			dependencies.readApplicationProjection
+		)({
 			application,
 			identity,
 			requestScope: metadata,
@@ -358,6 +368,8 @@ async function projectApplication(
 		if (error instanceof StaleProjectionError) throw error;
 		fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 	}
+	if (dependencies.readApplicationProjectionV2)
+		return AgentApplicationProjectionV2Schema.parse(value);
 	const parsed = AgentApplicationProjectionV1Schema.safeParse(value);
 	if (!parsed.success) fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 	const { actions: _actions, ...configuration } = parsed.data.configuration;
@@ -376,7 +388,9 @@ async function projectAgent(
 ): Promise<AgentProjection> {
 	let value: unknown;
 	try {
-		value = await dependencies.readAgentProjection({
+		value = await (
+			dependencies.readAgentProjectionV2 ?? dependencies.readAgentProjection
+		)({
 			agent,
 			identity,
 			requestScope: metadata,
@@ -387,6 +401,16 @@ async function projectAgent(
 		// 快照过期原样抛出，由读取路由决定是否重读（#2661）。
 		if (error instanceof StaleProjectionError) throw error;
 		fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+	}
+	if (dependencies.readAgentProjectionV2) {
+		const parsed = AgentProjectionV2Schema.parse(value);
+		const { managementRevision: _revision, ...projection } = parsed;
+		return {
+			...projection,
+			...(agent.management.ownerIds.includes(identity.userId)
+				? { managementRevision: agent.management.revision }
+				: {}),
+		};
 	}
 	const parsed = AgentProjectionV1Schema.safeParse(value);
 	if (!parsed.success) fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);

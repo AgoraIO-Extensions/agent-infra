@@ -8015,3 +8015,79 @@ test.afterEach(async ({ page }, info) => {
 	if (info.status !== info.expectedStatus) await startup?.attach(info);
 	startup?.dispose();
 });
+
+test("workspace snapshot selection and unbinding save through configuration", async ({
+	page,
+}, info) => {
+	const errors = trackPageErrors(page);
+	const api = await fixture(page);
+	api.customAgent();
+	const snapshot = {
+		snapshotId: "snap-browser-1",
+		digest: `sha256:${"a".repeat(64)}`,
+		sizeBytes: 12,
+		unpackedSizeBytes: 20,
+		fileCount: 1,
+		mediaType: "application/x-tar+gzip",
+		source: { kind: "direct-upload" },
+		createdAt: "2026-11-02T00:00:00.000Z",
+		status: "ready",
+		bindings: [],
+	};
+	await page.route("**/api/v2/me/workspace-snapshots", async (route) => {
+		expect(route.request().headers().authorization).toBeUndefined();
+		await route.fulfill({ json: [snapshot] });
+	});
+	const requests: unknown[] = [];
+	let savedProjection = AgentProjectionV2Schema.parse({
+		...pilotFakeScenariosV2.starting.response.body,
+		source: {
+			kind: "custom",
+			imageReference: "registry.example/agent:v1",
+			interactionMode: "platform-adapter",
+		},
+	});
+	await page.route("**/api/v2/agents/agent-pilot-1", (route) =>
+		route.fulfill({ json: savedProjection }),
+	);
+	await page.route(
+		"**/api/v2/agents/agent-pilot-1/configuration",
+		async (route) => {
+			if (route.request().method() !== "PUT") {
+				await route.fallback();
+				return;
+			}
+			const body = route.request().postDataJSON();
+			requests.push(body);
+			savedProjection = AgentProjectionV2Schema.parse({
+				...savedProjection,
+				source: body.source,
+			});
+			await route.fulfill({ json: savedProjection });
+		},
+	);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const checkbox = page.getByRole("checkbox", {
+		name: "选择快照 snap-browser-1",
+	});
+	await checkbox.check();
+	await expect(checkbox).toBeChecked();
+	await page.getByLabel("快照挂载名称 snap-browser-1").fill("venv");
+	expect(requests).toHaveLength(0);
+	await page.getByRole("button", { name: "保存配置" }).click();
+	await expect(toastHost(page)).toHaveText("配置已保存，Secret 值不会回显");
+	expect(requests[0]).toMatchObject({
+		source: {
+			workspaceSnapshots: [{ snapshotId: "snap-browser-1", name: "venv" }],
+		},
+	});
+	await expect(checkbox).toBeChecked();
+	await capture(page, info, "workspace-snapshot-bound");
+	await checkbox.uncheck();
+	await page.getByRole("button", { name: "保存配置" }).click();
+	await expect.poll(() => requests.length).toBe(2);
+	expect(requests[1]).toMatchObject({ source: { workspaceSnapshots: [] } });
+	await expect(checkbox).not.toBeChecked();
+	await expect(page.getByRole("button", { name: "删除快照" })).toHaveCount(0);
+	await expectCleanPage(page, errors);
+});

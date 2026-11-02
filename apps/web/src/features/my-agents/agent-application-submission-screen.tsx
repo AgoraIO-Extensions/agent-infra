@@ -30,6 +30,7 @@ type RequestError = Error & {
 type AgentApplicationSubmissionScreenProps =
 	| {
 			connectionUrl?: string;
+			identityKey?: string;
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			error?: RequestError | null;
 			mode: "create";
@@ -47,6 +48,7 @@ type AgentApplicationSubmissionScreenProps =
 			action: AgentApplicationEditAction;
 			application: AgentApplicationProjectionV2;
 			connectionUrl?: string;
+			identityKey?: string;
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			error?: RequestError | null;
 			mode: "update";
@@ -210,11 +212,7 @@ export function AgentApplicationSubmissionScreen(
 					) : null}
 					{props.result ? null : (
 						<AgentApplicationForm
-							key={
-								props.mode === "update"
-									? props.application.applicationId
-									: "create"
-							}
+							key={`${props.identityKey ?? ""}:${props.mode === "update" ? props.application.applicationId : "create"}`}
 							{...props}
 							cancelAction={cancelAction}
 							serverError={props.error}

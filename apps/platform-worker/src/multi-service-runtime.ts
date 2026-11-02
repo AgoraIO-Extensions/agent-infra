@@ -197,6 +197,15 @@ function memberResources(value: MultiServiceDesired) {
 	);
 }
 
+function snapshotMemberResources(
+	value: MultiServiceDesired,
+	entryName: string,
+) {
+	return memberResources(value).filter(
+		(resource) => resource.metadata.name !== entryName,
+	);
+}
+
 type MemberIdentitySnapshot = Record<
 	string,
 	{ readonly uid: string; readonly generation: number }
@@ -415,6 +424,119 @@ function ownedByAgent(resource: KubernetesObject, value: MultiServiceDesired) {
 
 interface MultiServiceOwnershipOptionsV1 {
 	readonly allowOwnershipTransition?: boolean;
+}
+
+// Compare only after applying known API defaults; unknown or nondefault fields still drift.
+function defaultImagePullPolicy(image?: string) {
+	if (image?.includes("@")) return "IfNotPresent";
+	const reference = image?.slice(image.lastIndexOf("/") + 1) ?? "";
+	const tagIndex = reference.lastIndexOf(":");
+	const tag = tagIndex >= 0 ? reference.slice(tagIndex + 1) : undefined;
+	return tag === undefined || tag === "latest" ? "Always" : "IfNotPresent";
+}
+
+function normalizedWorkloadSpec(workload: V1Deployment | V1StatefulSet) {
+	const spec = workload.spec;
+	if (!spec?.template.spec) return spec;
+	const pod = spec.template.spec;
+	const probe = (value: V1Container["readinessProbe"]) =>
+		value && {
+			initialDelaySeconds: 0,
+			timeoutSeconds: 1,
+			periodSeconds: 10,
+			successThreshold: 1,
+			failureThreshold: 3,
+			...value,
+			...(value.httpGet
+				? { httpGet: { path: "/", scheme: "HTTP", ...value.httpGet } }
+				: {}),
+		};
+	const container = (value: V1Container) => ({
+		imagePullPolicy: defaultImagePullPolicy(value.image),
+		terminationMessagePath: "/dev/termination-log",
+		terminationMessagePolicy: "File",
+		...value,
+		envFrom: value.envFrom ?? [],
+		ports: (value.ports ?? []).map((port) => ({ protocol: "TCP", ...port })),
+		readinessProbe: probe(value.readinessProbe),
+		livenessProbe: probe(value.livenessProbe),
+		startupProbe: probe(value.startupProbe),
+	});
+	const defaults =
+		workload.kind === "Deployment"
+			? {
+					progressDeadlineSeconds: 600,
+					strategy: { type: "RollingUpdate" },
+				}
+			: {
+					podManagementPolicy: "OrderedReady",
+					updateStrategy: { type: "RollingUpdate" },
+					ordinals: { start: 0 },
+				};
+	const normalized = {
+		replicas: 1,
+		revisionHistoryLimit: 10,
+		...defaults,
+		...spec,
+		template: {
+			...spec.template,
+			spec: {
+				dnsPolicy: "ClusterFirst",
+				restartPolicy: "Always",
+				schedulerName: "default-scheduler",
+				terminationGracePeriodSeconds: 30,
+				...pod,
+				containers: pod.containers.map(container),
+				initContainers: (pod.initContainers ?? []).map(container),
+				volumes: (pod.volumes ?? []).map((volume) => ({
+					...volume,
+					...(volume.configMap
+						? { configMap: { defaultMode: 420, ...volume.configMap } }
+						: {}),
+					...(volume.secret
+						? { secret: { defaultMode: 420, ...volume.secret } }
+						: {}),
+					...(volume.projected
+						? { projected: { defaultMode: 420, ...volume.projected } }
+						: {}),
+					...(volume.downwardAPI
+						? { downwardAPI: { defaultMode: 420, ...volume.downwardAPI } }
+						: {}),
+				})),
+			},
+		},
+	};
+	if (workload.kind === "Deployment") {
+		const strategy = (spec as V1Deployment["spec"])?.strategy;
+		Object.assign(normalized, {
+			strategy: {
+				type: "RollingUpdate",
+				...strategy,
+				...((strategy?.type ?? "RollingUpdate") === "RollingUpdate"
+					? {
+							rollingUpdate: {
+								maxSurge: "25%",
+								maxUnavailable: "25%",
+								...strategy?.rollingUpdate,
+							},
+						}
+					: {}),
+			},
+		});
+	} else {
+		const strategy = (spec as V1StatefulSet["spec"])?.updateStrategy;
+		Object.assign(normalized, {
+			updateStrategy: {
+				type: "RollingUpdate",
+				...strategy,
+				...((strategy?.type ?? "RollingUpdate") === "RollingUpdate"
+					? { rollingUpdate: { partition: 0, ...strategy?.rollingUpdate } }
+					: {}),
+			},
+		});
+	}
+	// The client deserializes omitted optional fields as undefined.
+	return JSON.parse(JSON.stringify(normalized)) as unknown;
 }
 
 function deployment(
@@ -861,8 +983,12 @@ export function createMultiServiceRuntimeOperations(options: {
 		desired: KubernetesObject,
 	) =>
 		isDeepStrictEqual(
-			(current as KubernetesObject & { spec?: unknown }).spec,
-			(desired as KubernetesObject & { spec?: unknown }).spec,
+			current.kind === "Deployment" || current.kind === "StatefulSet"
+				? normalizedWorkloadSpec(current as V1Deployment | V1StatefulSet)
+				: (current as KubernetesObject & { spec?: unknown }).spec,
+			desired.kind === "Deployment" || desired.kind === "StatefulSet"
+				? normalizedWorkloadSpec(desired as V1Deployment | V1StatefulSet)
+				: (desired as KubernetesObject & { spec?: unknown }).spec,
 		) &&
 		Object.entries(desired.metadata?.labels ?? {}).every(
 			([key, expected]) => current.metadata?.labels?.[key] === expected,
@@ -1311,7 +1437,10 @@ export function createMultiServiceRuntimeOperations(options: {
 			)
 				throw new Error("multi-service entry generation unavailable");
 			const identities: MemberIdentitySnapshot = {};
-			for (const member of memberResources(value)) {
+			for (const member of snapshotMemberResources(
+				value,
+				entry.metadata.name,
+			)) {
 				const currentMember = await client.read<V1Deployment | V1StatefulSet>(
 					member.kind as "Deployment" | "StatefulSet",
 					serviceResourceName(value.agentId, member.metadata.name),
@@ -1414,13 +1543,15 @@ export function createMultiServiceRuntimeOperations(options: {
 					!matchesEnvironmentSecrets(value, current.spec?.template.spec)
 				)
 					return "drifted" as const;
-				const memberIdentity = snapshot[resource.metadata.name];
-				if (
-					!memberIdentity ||
-					current.metadata?.uid !== memberIdentity.uid ||
-					current.metadata.generation !== memberIdentity.generation
-				)
-					return "drifted" as const;
+				if (resource.metadata.name !== entry.metadata.name) {
+					const memberIdentity = snapshot[resource.metadata.name];
+					if (
+						!memberIdentity ||
+						current.metadata?.uid !== memberIdentity.uid ||
+						current.metadata.generation !== memberIdentity.generation
+					)
+						return "drifted" as const;
+				}
 				// 工作负载还在启动：与单镜像路径一致返回 pending，由调谐按重试上限等待，
 				// 而不是在第一次观测时就判定失败。
 				if (

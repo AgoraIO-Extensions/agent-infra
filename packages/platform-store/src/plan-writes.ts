@@ -26,6 +26,7 @@ import {
 	skillHubVersions,
 } from "./schema.js";
 import { persistSessionSandboxManagementIntents } from "./session-sandbox-management.js";
+import { insertWorkspaceSnapshotBindingsV1 } from "./workspace-snapshot-binding-writes.js";
 
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
@@ -173,6 +174,14 @@ export async function advanceAgentConfigurationRevision(
 			createdAt: plan.auditEvent.occurredAt,
 		});
 	}
+	await insertWorkspaceSnapshotBindingsV1(transaction, {
+		agentId: plan.agentId,
+		configurationRevision: plan.nextRevision,
+		previousConfigurationRevision: plan.baseRevision,
+		ownerType: "user",
+		ownerId: plan.auditEvent.actorId,
+		configuration,
+	});
 	const advanced = await transaction
 		.update(agents)
 		.set({

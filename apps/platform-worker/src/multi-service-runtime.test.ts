@@ -285,7 +285,7 @@ function desired(multiService = manifest) {
 	});
 }
 
-function fakeClient() {
+function fakeClient(options: { bumpGeneration?: boolean } = {}) {
 	const resources = new Map<string, KubernetesObject>();
 	const client: WorkerKubernetesClientV1 = {
 		namespace: "agents",
@@ -324,7 +324,9 @@ function fakeClient() {
 						object.metadata?.resourceVersion ??
 						current?.metadata?.resourceVersion,
 					generation:
-						object.metadata?.generation ?? current?.metadata?.generation ?? 1,
+						object.metadata?.generation ??
+						(current?.metadata?.generation ?? 0) +
+							(options.bumpGeneration && current ? 1 : 0),
 				},
 			};
 			resources.set(`${object.kind}/${object.metadata?.name}`, replaced);
@@ -535,8 +537,68 @@ describe("multi-service resource policy", () => {
 		});
 	});
 
-	it("does not rewrite the entry workload when a repeated apply has the same member snapshot", async () => {
-		const fake = fakeClient();
+	it.each([false, true])(
+		"converges repeated apply with API defaults=%s",
+		async (defaults) => {
+			const fake = fakeClient();
+			const recorded = recordingClient(fake.client);
+			const operations = createMultiServiceRuntimeOperations({
+				client: recorded.client,
+				policy: basePolicy,
+			});
+			const value = desired();
+			if (!isMultiService(value))
+				throw new Error("multi-service fixture invalid");
+			await operations.apply(value);
+			const name = `${workloadResourceNameV1("agent-a")}-web`;
+			let current = fake.resources.get(`Deployment/${name}`) as V1Deployment;
+			if (defaults) {
+				const spec = current.spec;
+				if (!spec) throw new Error("missing workload spec");
+				spec.progressDeadlineSeconds = 600;
+				spec.revisionHistoryLimit = 10;
+				spec.strategy = {
+					type: "RollingUpdate",
+					rollingUpdate: { maxSurge: "25%", maxUnavailable: "25%" },
+				};
+				const pod = spec.template.spec;
+				if (!pod) throw new Error("missing pod spec");
+				Object.assign(pod, {
+					dnsPolicy: "ClusterFirst",
+					restartPolicy: "Always",
+					schedulerName: "default-scheduler",
+					terminationGracePeriodSeconds: 30,
+				});
+				for (const container of pod.containers) {
+					Object.assign(container, {
+						imagePullPolicy: "IfNotPresent",
+						terminationMessagePath: "/dev/termination-log",
+						terminationMessagePolicy: "File",
+					});
+					delete container.envFrom;
+					for (const port of container.ports ?? []) port.protocol = "TCP";
+				}
+			}
+			current = ObjectSerializer.deserialize(
+				JSON.parse(JSON.stringify(current)),
+				"V1Deployment",
+				"",
+			);
+			fake.resources.set(`Deployment/${name}`, current);
+			recorded.calls.length = 0;
+			await operations.apply(value);
+			expect(recorded.calls).not.toContain(`replace Deployment/${name}`);
+			// Drift in an owned field must still be repaired.
+			if (!current.spec) throw new Error("missing workload spec");
+			current.spec.replicas = 0;
+			recorded.calls.length = 0;
+			await operations.apply(value);
+			expect(recorded.calls).toContain(`replace Deployment/${name}`);
+		},
+	);
+
+	it("does not self-trigger the entry snapshot generation", async () => {
+		const fake = fakeClient({ bumpGeneration: true });
 		const recorded = recordingClient(fake.client);
 		const operations = createMultiServiceRuntimeOperations({
 			client: recorded.client,
@@ -549,7 +611,7 @@ describe("multi-service resource policy", () => {
 		recorded.calls.length = 0;
 		await operations.apply(value);
 		expect(recorded.calls).not.toContain(
-			`replace Deployment/${workloadResourceNameV1("agent-a")}-web`,
+			"replace Deployment/" + workloadResourceNameV1("agent-a") + "-web",
 		);
 	});
 

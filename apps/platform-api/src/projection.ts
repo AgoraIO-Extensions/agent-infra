@@ -1,7 +1,9 @@
 import {
 	AgentApplicationProjectionV1Schema,
+	AgentApplicationProjectionV2Schema,
 	AgentDetailProjectionV1Schema,
 	AgentProjectionV1Schema,
+	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import type {
@@ -27,6 +29,7 @@ type ApplicationProjection = ReturnType<
 	typeof AgentApplicationProjectionV1Schema.parse
 >;
 type AgentProjection = ReturnType<typeof AgentProjectionV1Schema.parse>;
+type AgentProjectionV2 = ReturnType<typeof AgentProjectionV2Schema.parse>;
 type AgentDetailProjection = ReturnType<
 	typeof AgentDetailProjectionV1Schema.parse
 >;
@@ -38,7 +41,7 @@ export type PresentPlatformAgent = (input: {
 	/** Server-authenticated personal API reader; never a browser identity. */
 	readonly apiUser?: CurrentTaskUserV1;
 }) => Promise<{
-	readonly source: AgentProjection["source"];
+	readonly source: AgentProjectionV2["source"];
 	readonly resourceProfile: ApplicationProjection["resourceProfile"];
 	readonly modelOptions: AgentProjection["configuration"]["modelOptions"];
 	readonly channels: AgentProjection["configuration"]["channels"];
@@ -73,7 +76,7 @@ interface ApiProjectionMetadata {
 
 function sourceMatches(
 	configuration: AgentConfigurationProjectionV1,
-	source: AgentProjection["source"],
+	source: AgentProjectionV2["source"],
 ): boolean {
 	if (configuration.source.kind !== source.kind) return false;
 	if (configuration.source.kind === "standard") {
@@ -82,6 +85,7 @@ function sourceMatches(
 			source.templateId === configuration.source.templateId
 		);
 	}
+
 	if (source.kind !== "custom") return false;
 	return (
 		source.interactionMode === configuration.source.interactionMode &&
@@ -89,6 +93,14 @@ function sourceMatches(
 			source.identityResponsibility ===
 				configuration.source.identityResponsibility)
 	);
+}
+
+function legacySource(
+	source: AgentProjectionV2["source"],
+): AgentProjection["source"] {
+	if (source.kind === "standard") return source;
+	const { workspaceSnapshots: _snapshots, ...legacy } = source;
+	return legacy;
 }
 
 export function createPlatformProjectionReaders(
@@ -119,6 +131,59 @@ export function createPlatformProjectionReaders(
 			byOwners.set(key, hydrated);
 		}
 		return hydrated;
+	}
+
+	async function projectAgentInternal(
+		agent: AgentManagementAgentProjectionV1,
+		metadata: ProjectionMetadata | ApiProjectionMetadata,
+		version: 1 | 2,
+	): Promise<AgentProjection | AgentProjectionV2> {
+		try {
+			const { presentation, wire } = await configurationProjection(
+				agent.agentId,
+				agent.management,
+				metadata,
+			);
+			const value = {
+				schemaVersion: version,
+				agentId: agent.agentId,
+				name: agent.name,
+				description: agent.description,
+				source:
+					version === 2
+						? presentation.source
+						: presentation.source.kind === "custom"
+							? (() => {
+									const source = { ...presentation.source } as Record<
+										string,
+										unknown
+									>;
+									delete source.workspaceSnapshots;
+									return source;
+								})()
+							: presentation.source,
+				managementStatus: agent.management.status,
+				serviceAvailability: agent.management.serviceAvailability,
+				configuration:
+					version === 2
+						? (() => {
+								const { actions: _actions, ...configuration } = wire;
+								return configuration;
+							})()
+						: wire,
+				capabilities: {
+					...presentation.capabilities,
+					nativeMetadata: dependencies.nativeMetadataAvailable === true,
+				},
+				interactionUrl: presentation.interactionUrl,
+			};
+			return version === 2
+				? AgentProjectionV2Schema.parse(value)
+				: AgentProjectionV1Schema.parse(value);
+		} catch (error) {
+			recordHttpFailureContext({ failureStep: "projection.read", error });
+			throw error;
+		}
 	}
 
 	async function configurationProjection(
@@ -181,31 +246,65 @@ export function createPlatformProjectionReaders(
 		agent: AgentManagementAgentProjectionV1,
 		metadata: ProjectionMetadata | ApiProjectionMetadata,
 	): Promise<AgentProjection> {
-		try {
-			const { presentation, wire } = await configurationProjection(
-				agent.agentId,
-				agent.management,
-				metadata,
-			);
-			return AgentProjectionV1Schema.parse({
-				schemaVersion: 1,
-				agentId: agent.agentId,
-				name: agent.name,
-				description: agent.description,
-				source: presentation.source,
-				managementStatus: agent.management.status,
-				serviceAvailability: agent.management.serviceAvailability,
-				configuration: wire,
-				capabilities: {
-					...presentation.capabilities,
-					nativeMetadata: dependencies.nativeMetadataAvailable === true,
-				},
-				interactionUrl: presentation.interactionUrl,
-			});
-		} catch (error) {
-			recordHttpFailureContext({ failureStep: "projection.read", error });
-			throw error;
+		return (await projectAgentInternal(agent, metadata, 1)) as AgentProjection;
+	}
+	async function projectAgentV2(
+		agent: AgentManagementAgentProjectionV1,
+		metadata: ProjectionMetadata | ApiProjectionMetadata,
+	): Promise<AgentProjectionV2> {
+		return (await projectAgentInternal(
+			agent,
+			metadata,
+			2,
+		)) as AgentProjectionV2;
+	}
+
+	async function projectApplication(
+		input: ProjectionMetadata & {
+			readonly application?: AgentManagementApplicationProjectionV1;
+		},
+		version: 1 | 2,
+	) {
+		if (!input.application) {
+			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", input.traceId);
 		}
+		const { presentation, wire } = await configurationProjection(
+			input.application.agentId,
+			input.application.management,
+			input,
+		);
+		const [applicant] = await owners(
+			input.requestScope ?? input,
+			[input.application.applicantId],
+			input.traceId,
+		);
+		const { actions: _actions, ...configurationV2 } = wire;
+		const value = {
+			schemaVersion: version,
+			applicationId: input.application.applicationId,
+			agentId: input.application.agentId,
+			name: input.application.name,
+			description: input.application.description,
+			source:
+				version === 1 ? legacySource(presentation.source) : presentation.source,
+			status: input.application.management.status,
+			resourceProfile: presentation.resourceProfile,
+			configuration: version === 1 ? wire : configurationV2,
+			submittedAt: input.application.submittedAt.toISOString(),
+			updatedAt: (
+				input.application.updatedAt ?? input.application.submittedAt
+			).toISOString(),
+			applicant,
+			decision: input.application.decision
+				? {
+						decidedAt: input.application.decision.decidedAt.toISOString(),
+						reason: input.application.decision.reason,
+					}
+				: null,
+		};
+		return version === 1
+			? AgentApplicationProjectionV1Schema.parse(value)
+			: AgentApplicationProjectionV2Schema.parse(value);
 	}
 
 	return {
@@ -258,46 +357,26 @@ export function createPlatformProjectionReaders(
 		): Promise<AgentProjection> {
 			return projectAgent(input.agent, input);
 		},
+		async readApiAgentProjectionV2(
+			input: ApiProjectionMetadata & {
+				readonly agent: AgentManagementAgentProjectionV1;
+			},
+		) {
+			return projectAgentV2(input.agent, input);
+		},
 		async readApplicationProjection(
 			input: ProjectionMetadata & {
 				readonly application?: AgentManagementApplicationProjectionV1;
 			},
 		): Promise<ApplicationProjection> {
-			if (!input.application) {
-				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", input.traceId);
-			}
-			const { presentation, wire } = await configurationProjection(
-				input.application.agentId,
-				input.application.management,
-				input,
-			);
-			const [applicant] = await owners(
-				input.requestScope ?? input,
-				[input.application.applicantId],
-				input.traceId,
-			);
-			return AgentApplicationProjectionV1Schema.parse({
-				schemaVersion: 1,
-				applicationId: input.application.applicationId,
-				agentId: input.application.agentId,
-				name: input.application.name,
-				description: input.application.description,
-				source: presentation.source,
-				status: input.application.management.status,
-				resourceProfile: presentation.resourceProfile,
-				configuration: wire,
-				submittedAt: input.application.submittedAt.toISOString(),
-				updatedAt: (
-					input.application.updatedAt ?? input.application.submittedAt
-				).toISOString(),
-				applicant,
-				decision: input.application.decision
-					? {
-							decidedAt: input.application.decision.decidedAt.toISOString(),
-							reason: input.application.decision.reason,
-						}
-					: null,
-			});
+			return (await projectApplication(input, 1)) as ApplicationProjection;
+		},
+		async readApplicationProjectionV2(
+			input: ProjectionMetadata & {
+				readonly application?: AgentManagementApplicationProjectionV1;
+			},
+		) {
+			return projectApplication(input, 2);
 		},
 
 		async readManagementAgentProjection(
@@ -309,6 +388,15 @@ export function createPlatformProjectionReaders(
 				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", input.traceId);
 			}
 			return projectAgent(input.agent, input);
+		},
+		async readManagementAgentProjectionV2(
+			input: ProjectionMetadata & {
+				readonly agent?: AgentManagementAgentProjectionV1;
+			},
+		) {
+			if (!input.agent)
+				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", input.traceId);
+			return projectAgentV2(input.agent, input);
 		},
 
 		async readConfigurationAgentProjection(
@@ -322,6 +410,18 @@ export function createPlatformProjectionReaders(
 				input.agentId,
 			);
 			return agent ? projectAgent(agent, input) : null;
+		},
+		async readConfigurationAgentProjectionV2(
+			input: ProjectionMetadata & { readonly agentId: string },
+		) {
+			const scope = input.identity.roles.includes("system_admin")
+				? ({ kind: "administrator" } as const)
+				: ({ kind: "owner", ownerId: input.identity.userId } as const);
+			const agent = await dependencies.managementQuery.getAgent(
+				scope,
+				input.agentId,
+			);
+			return agent ? projectAgentV2(agent, input) : null;
 		},
 	};
 }

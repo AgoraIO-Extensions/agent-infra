@@ -632,6 +632,12 @@ describe("Platform PostgreSQL migration foundation", () => {
 						foreignKey.getName(),
 					),
 				)
+				.map((name) =>
+					name ===
+					"workspace_snapshot_bindings_snapshot_id_workspace_snapshots_id_fk"
+						? "workspace_snapshot_bindings_snapshot_id_workspace_snapshots_id_"
+						: name,
+				)
 				.toSorted();
 			const migratedForeignKeys = await client`
 					select c.conname as constraint_name
@@ -2014,6 +2020,7 @@ describe("published Relay authority migration", () => {
 			72,
 			73,
 			74,
+			75,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2088,8 +2095,8 @@ describe("published Relay authority migration", () => {
 			tag: "0063_wecom_outbound_media",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 74,
-			tag: "0074_reserve_replenishment_timing",
+			idx: 75,
+			tag: "0075_workspace_snapshots",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2424,6 +2431,49 @@ describe("published Relay authority migration", () => {
 				"session_sandbox_reserves:session_sandbox_reserve_session_unique",
 				"session_sandbox_reserves:session_sandbox_reserves_pkey",
 				"session_sandbox_resource_charges:session_sandbox_resource_charges_pkey",
+			);
+			expectedDelta.checks.push(
+				"workspace_snapshot_bindings:workspace_snapshot_binding_digest_format",
+				"workspace_snapshot_bindings:workspace_snapshot_binding_name",
+				"workspace_snapshots:workspace_snapshot_digest_format",
+				"workspace_snapshots:workspace_snapshot_owner_type",
+				"workspace_snapshots:workspace_snapshot_sizes_positive",
+				"workspace_snapshots:workspace_snapshot_status",
+			);
+			expectedDelta.columns.push(
+				...[
+					"agent_id",
+					"configuration_revision",
+					"created_at",
+					"digest",
+					"name",
+					"size_bytes",
+					"snapshot_id",
+				].map((name) => `workspace_snapshot_bindings:${name}`),
+				...[
+					"created_at",
+					"deleted_at",
+					"digest",
+					"file_count",
+					"id",
+					"media_type",
+					"object_ref",
+					"object_version",
+					"owner_id",
+					"owner_type",
+					"size_bytes",
+					"source",
+					"status",
+					"unpacked_size_bytes",
+				].map((name) => `workspace_snapshots:${name}`),
+			);
+			expectedDelta.indexes.push(
+				"workspace_snapshot_bindings:workspace_snapshot_agent_name_revision_unique",
+				"workspace_snapshot_bindings:workspace_snapshot_binding_agent_idx",
+				"workspace_snapshot_bindings:workspace_snapshot_bindings_snapshot_id_agent_id_configuration_",
+				"workspace_snapshots:workspace_snapshot_owner_id_unique",
+				"workspace_snapshots:workspace_snapshot_owner_idx",
+				"workspace_snapshots:workspace_snapshots_pkey",
 			);
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,

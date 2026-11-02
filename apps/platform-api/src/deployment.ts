@@ -123,6 +123,8 @@ export interface ProductionPlatformApiInputV1
 	/** Deployment-owned ObjectStorage/file authority adapter for Web and Runtime exchange. */
 	readonly evaluation?: PlatformApiAssemblyInput["evaluation"];
 	readonly files?: PlatformApiAssemblyInput["files"];
+	/** Explicit deployment-owned snapshot store; file exchange limits remain independent. */
+	readonly workspaceSnapshotDeployment?: PlatformApiAssemblyInput["workspaceSnapshotDeployment"];
 	readonly databaseUrl: string;
 	readonly taskAdmissionPolicy: PlatformApiAssemblyInput["taskAdmissionPolicy"];
 	/** Same immutable image repository used by the Worker's resource policy. */
@@ -635,6 +637,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 			: {}),
 		...(input.wecomBotQr ? { wecomBotQr: input.wecomBotQr } : {}),
 		...(input.files ? { files: input.files } : {}),
+		...(input.workspaceSnapshotDeployment
+			? { workspaceSnapshotDeployment: input.workspaceSnapshotDeployment }
+			: {}),
 		...(input.evaluation ? { evaluation: input.evaluation } : {}),
 		...(input.agentVersion !== undefined
 			? { agentVersion: input.agentVersion }

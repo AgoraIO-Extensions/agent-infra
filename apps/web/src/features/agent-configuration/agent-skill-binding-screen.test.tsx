@@ -97,7 +97,9 @@ function renderScreen(overrides: Partial<Props> = {}) {
 	// 页面里的站内链接是路由 Link：提供路由上下文（含 ToastProvider）生成 href。
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<QueryClientProvider client={queryClient}>
-			<ConfigurationTestProviders>{children}</ConfigurationTestProviders>
+			<ConfigurationTestProviders queryClient={queryClient}>
+				{children}
+			</ConfigurationTestProviders>
 		</QueryClientProvider>
 	);
 	const view = render(<AgentSkillBindingScreen {...props} />, { wrapper });

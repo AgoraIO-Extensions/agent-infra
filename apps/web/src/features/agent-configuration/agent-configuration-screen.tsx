@@ -5,12 +5,16 @@ import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { useSubmitFocus } from "@/hooks/use-submit-focus";
-
+import { client as generatedV2Client } from "../../pilot/generated-v2/client.gen.js";
 import type {
 	AgentApiLifecycleAcceptedResponseV1,
 	AgentConfigurationUpdateRequestV2Writable,
 	AgentProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
+import {
+	WorkspaceSnapshotsPanel,
+	workspaceSnapshotBindingError,
+} from "../agent-administration/workspace-snapshots.js";
 import type { BrowserSessionState } from "../browser-session.js";
 import { AccessDeniedCard } from "../page-state-card.js";
 import {
@@ -356,7 +360,13 @@ export function AgentConfigurationScreen({
 		savedRelayKeyCandidates.length > 0;
 	const submitConfiguration = () => {
 		// 镜像升级在途时整页保存暂停（同一个 mutation 一次只受理一个命令）。
-		if (isDisabled || !hasChanges || upgradingImage) return;
+		if (
+			isDisabled ||
+			!hasChanges ||
+			upgradingImage ||
+			workspaceSnapshotBindingError(draft.workspaceSnapshots)
+		)
+			return;
 		setSavedModelsReloaded(false);
 		const request = buildAgentConfigurationRequest(draft, agent);
 		if (!request.coOwnerIds?.length) {
@@ -576,6 +586,21 @@ export function AgentConfigurationScreen({
 							error={imageError}
 							onUpgradeImage={onUpgradeImage}
 							upgrading={upgradingImage}
+						/>
+					) : null}
+					{agent.source.kind === "custom" && session.kind === "ready" ? (
+						<WorkspaceSnapshotsPanel
+							identityKey={session.session.user.userId}
+							sourceKind="custom"
+							client={generatedV2Client}
+							disabled={isDisabled || upgradingImage}
+							selected={draft.workspaceSnapshots}
+							onChange={(workspaceSnapshots) =>
+								setDraft((current) => ({
+									...current,
+									workspaceSnapshots: [...workspaceSnapshots],
+								}))
+							}
 						/>
 					) : null}
 					<div className="form-footer configuration-form-footer">

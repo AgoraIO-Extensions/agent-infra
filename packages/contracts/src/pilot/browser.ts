@@ -125,6 +125,11 @@ import {
 	PersonalRelayKeyStateV1Schema,
 } from "./personal-relay-key.ts";
 import { WecomApplicationCredentialsV1Schema } from "./wecom-application.ts";
+import {
+	WorkspaceSnapshotBindingV1Schema,
+	workspaceSnapshotOpenApiPathsV1,
+	workspaceSnapshotSchemasV1,
+} from "./workspace-snapshot.ts";
 
 const nonEmptyString = () => z.string().min(1);
 const idArray = () => z.array(OpaqueIdV1Schema);
@@ -231,6 +236,20 @@ export const AgentSourceInputV1Schema = z.union([
 		interactionMode: z.literal("platform-adapter"),
 	}),
 	MultiServiceAgentSourceV1Schema,
+]);
+
+/** V2 adds workspace inputs while published V1 inputs remain unchanged. */
+const workspaceSnapshotSourceShape = {
+	workspaceSnapshots: z
+		.array(WorkspaceSnapshotBindingV1Schema)
+		.max(4)
+		.optional(),
+};
+export const AgentSourceInputV2Schema = z.union([
+	AgentSourceInputV1Schema.options[0],
+	AgentSourceInputV1Schema.options[1].extend(workspaceSnapshotSourceShape),
+	AgentSourceInputV1Schema.options[2].extend(workspaceSnapshotSourceShape),
+	AgentSourceInputV1Schema.options[3].extend(workspaceSnapshotSourceShape),
 ]);
 
 export const ModelOptionInputV1Schema = z.strictObject({
@@ -422,7 +441,7 @@ export const AgentApplicationCreateRequestV2Schema =
 				templateId: OpaqueIdV1Schema,
 				templateRevision: OpaqueIdV1Schema.optional(),
 			}),
-			...AgentSourceInputV1Schema.options.slice(1),
+			...AgentSourceInputV2Schema.options.slice(1),
 		]),
 		defaultRelayKey: nonEmptyString().meta({ writeOnly: true }).optional(),
 	});
@@ -432,7 +451,7 @@ const [
 	selfManagedSource,
 	platformAdapterSource,
 	multiServiceSource,
-] = AgentSourceInputV1Schema.options;
+] = AgentSourceInputV2Schema.options;
 const AgentApiCreationCustomRequestV1Schema =
 	AgentApplicationCreateRequestV2Schema.omit({
 		modelConfiguration: true,
@@ -501,13 +520,20 @@ export const AgentApplicationUpdateRequestV2Schema =
 				templateId: OpaqueIdV1Schema,
 				templateRevision: OpaqueIdV1Schema.optional(),
 			}),
-			...AgentSourceInputV1Schema.options.slice(1),
+			...AgentSourceInputV2Schema.options.slice(1),
 		]),
 		...defaultRelayKeyReplacementShape,
 	});
 const AgentConfigurationUpdateRequestV2BaseSchema =
 	AgentConfigurationUpdateRequestV1Schema.omit({ actions: true }).extend({
 		schemaVersion: z.literal(2),
+		source: z
+			.union([
+				AgentSourceInputV2Schema.options[1],
+				AgentSourceInputV2Schema.options[2],
+				AgentSourceInputV2Schema.options[3],
+			])
+			.optional(),
 		...defaultRelayKeyReplacementShape,
 	});
 export const AgentConfigurationUpdateRequestV4Schema =
@@ -523,10 +549,12 @@ export const AgentConfigurationProjectionV2Schema =
 export const AgentApplicationProjectionV2Schema =
 	AgentApplicationProjectionV1Schema.extend({
 		schemaVersion: z.literal(2),
+		source: AgentSourceInputV2Schema,
 		configuration: AgentConfigurationProjectionV2Schema,
 	});
 export const AgentProjectionV2Schema = AgentProjectionV1Schema.extend({
 	schemaVersion: z.literal(2),
+	source: AgentSourceInputV2Schema,
 	configuration: AgentConfigurationProjectionV2Schema,
 	/**
 	 * Agent 当前管理修订号，只返回给该 Agent 的 Owner（#3070）。
@@ -1540,6 +1568,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	...workspaceSnapshotOpenApiPathsV1,
 	"/api/v2/evaluation/history": {
 		get: {
 			operationId: "listEvaluationHistoryV1",
@@ -3088,6 +3117,7 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	...workspaceSnapshotSchemasV1,
 	EvaluationQueryTooLargeV1: EvaluationQueryTooLargeV1Schema,
 	EvaluationAnalysisSummaryV1: EvaluationAnalysisSummaryV1Schema,
 	EvaluationAnalysisDetailV1: EvaluationAnalysisDetailV1Schema,

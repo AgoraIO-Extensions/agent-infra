@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+	AgentSourceInputV2Schema,
 	calculateMultiServiceResourceCapacityV1,
 	DeploymentConfigurationProjectionV2Schema,
 	defaultMultiServiceResourceProfileV1,
-	MultiServiceAgentSourceV1Schema,
 	MultiServiceManifestDocumentV1Schema,
 	MultiServiceMaxWorkloadsV1,
 	type MultiServiceResourceCapV1,
@@ -580,7 +580,7 @@ export function createDeploymentAdmissionsV1(
 				}).source;
 				if (!selection) return denied;
 				if ("manifest" in selection) {
-					if (!MultiServiceAgentSourceV1Schema.safeParse(selection).success)
+					if (!AgentSourceInputV2Schema.safeParse(selection).success)
 						return denied;
 					const multiServiceManifest = parseMultiServiceManifest(
 						selection.manifest,
@@ -662,6 +662,13 @@ export function createDeploymentAdmissionsV1(
 							// This makes the admitted resource set immutable and ensures that
 							// equivalent YAML cannot change after admission.
 							manifest: canonicalManifest,
+							...(selection.workspaceSnapshots === undefined
+								? {}
+								: {
+										workspaceSnapshots: structuredClone(
+											selection.workspaceSnapshots,
+										),
+									}),
 						},
 					};
 				}
@@ -772,6 +779,13 @@ export function createDeploymentAdmissionsV1(
 						connectionEnabled:
 							manifest.interactionMode === "platform-adapter" &&
 							manifest.capabilities?.connection === true,
+						...(selection.workspaceSnapshots === undefined
+							? {}
+							: {
+									workspaceSnapshots: structuredClone(
+										selection.workspaceSnapshots,
+									),
+								}),
 					},
 				};
 			},

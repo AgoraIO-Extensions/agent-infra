@@ -391,6 +391,10 @@ function createAgentConfigurationUseCaseV1Internal(
 					? admittedSource.kind === "standard" &&
 						admittedSource.templateId === changes.source.templateId
 					: admittedSource.kind === "custom" &&
+						sameValue(
+							admittedSource.workspaceSnapshots ?? [],
+							changes.source.workspaceSnapshots ?? [],
+						) &&
 						admittedSource.interactionMode === changes.source.interactionMode &&
 						(!("manifest" in changes.source) ||
 							("manifest" in admittedSource &&
@@ -1069,6 +1073,9 @@ function createAgentConfigurationUseCaseV1Internal(
 						return {
 							source: {
 								kind: "custom",
+								...(current.source.workspaceSnapshots === undefined
+									? {}
+									: { workspaceSnapshots: current.source.workspaceSnapshots }),
 								imageReference: command.imageReference,
 								interactionMode: "self-managed",
 								identityResponsibility,
@@ -1078,6 +1085,9 @@ function createAgentConfigurationUseCaseV1Internal(
 					return {
 						source: {
 							kind: "custom",
+							...(current.source.workspaceSnapshots === undefined
+								? {}
+								: { workspaceSnapshots: current.source.workspaceSnapshots }),
 							imageReference: command.imageReference,
 							interactionMode: "platform-adapter",
 						},
@@ -1102,6 +1112,9 @@ function createAgentConfigurationUseCaseV1Internal(
 					return {
 						source: {
 							kind: "custom",
+							...(current.source.workspaceSnapshots === undefined
+								? {}
+								: { workspaceSnapshots: current.source.workspaceSnapshots }),
 							manifest: command.manifest,
 							interactionMode: "self-managed",
 							identityResponsibility: "self-managed",

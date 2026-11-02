@@ -28,10 +28,12 @@ export type AgentApiCreationRequestV1 = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -42,6 +44,7 @@ export type AgentApiCreationRequestV1 = {
             name: string;
             resourceProfileRef: string;
         }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 } | {
     availability: Array<{
@@ -156,10 +159,12 @@ export type AgentApplicationCreateRequestV2 = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -170,6 +175,7 @@ export type AgentApplicationCreateRequestV2 = {
             name: string;
             resourceProfileRef: string;
         }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 };
 
@@ -232,10 +238,12 @@ export type AgentApplicationProjectionV2 = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -246,6 +254,7 @@ export type AgentApplicationProjectionV2 = {
             name: string;
             resourceProfileRef: string;
         }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
     status: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
     submittedAt: string;
@@ -292,10 +301,12 @@ export type AgentApplicationUpdateRequestV2 = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -306,6 +317,7 @@ export type AgentApplicationUpdateRequestV2 = {
             name: string;
             resourceProfileRef: string;
         }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 };
 
@@ -382,6 +394,29 @@ export type AgentConfigurationUpdateRequestV2 = {
     secrets?: Array<{
         name: string;
     }>;
+    source?: {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    };
 };
 
 export type AgentCreationFailureCategoryV1 = 'configuration_rejected' | 'health_check_failed' | 'deployment_unavailable';
@@ -505,10 +540,12 @@ export type AgentDetailProjectionV1 = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -519,6 +556,7 @@ export type AgentDetailProjectionV1 = {
             name: string;
             resourceProfileRef: string;
         }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 };
 
@@ -622,10 +660,12 @@ export type AgentProjectionV2 = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -636,6 +676,7 @@ export type AgentProjectionV2 = {
             name: string;
             resourceProfileRef: string;
         }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 };
 
@@ -2760,6 +2801,44 @@ export type TimelineReloadSignalV1 = {
     type: 'timeline.reload';
 };
 
+export type WorkspaceSnapshotBindingV1 = {
+    name: string;
+    snapshotId: string;
+};
+
+export type WorkspaceSnapshotMetadataV1 = {
+    bindings: Array<{
+        agentId: string;
+        configurationRevision: number;
+        digest: string;
+        name: string;
+        sizeBytes: number;
+    }>;
+    createdAt: string;
+    digest: string;
+    fileCount: number;
+    mediaType: 'application/x-tar+gzip';
+    sizeBytes: number;
+    snapshotId: string;
+    source: WorkspaceSnapshotSourceV1;
+    status: 'ready' | 'deleting' | 'deleted';
+    unpackedSizeBytes: number;
+};
+
+export type WorkspaceSnapshotSourceV1 = {
+    kind: 'direct-upload';
+} | {
+    commitSha: string;
+    connectionCallReference: string;
+    kind: 'builder-connection';
+    repository: string;
+};
+
+export type WorkspaceSnapshotUploadRequestV1 = {
+    schemaVersion: 1;
+    source: WorkspaceSnapshotSourceV1;
+};
+
 export type AgentApiCreationRequestV1Writable = {
     availability: Array<{
         kind: 'user';
@@ -2786,10 +2865,12 @@ export type AgentApiCreationRequestV1Writable = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -2800,6 +2881,7 @@ export type AgentApiCreationRequestV1Writable = {
             name: string;
             resourceProfileRef: string;
         }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 } | {
     availability: Array<{
@@ -2879,10 +2961,12 @@ export type AgentApplicationCreateRequestV2Writable = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -2893,6 +2977,7 @@ export type AgentApplicationCreateRequestV2Writable = {
             name: string;
             resourceProfileRef: string;
         }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 };
 
@@ -2944,10 +3029,12 @@ export type AgentApplicationUpdateRequestV2Writable = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -2958,6 +3045,7 @@ export type AgentApplicationUpdateRequestV2Writable = {
             name: string;
             resourceProfileRef: string;
         }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 };
 
@@ -3001,6 +3089,29 @@ export type AgentConfigurationUpdateRequestV2Writable = {
         name: string;
         value: string;
     }>;
+    source?: {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
+    };
 };
 
 export type BeginPlatformConnectionInstallationV1Data = {
@@ -8336,6 +8447,63 @@ export type ReplacePersonalRelayKeyV2Responses = {
 
 export type ReplacePersonalRelayKeyV2Response = ReplacePersonalRelayKeyV2Responses[keyof ReplacePersonalRelayKeyV2Responses];
 
+export type ListMyWorkspaceSnapshotsV1Data = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v2/me/workspace-snapshots';
+};
+
+export type ListMyWorkspaceSnapshotsV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Resource conflicts with an existing binding
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Snapshot exceeds a configured limit
+     */
+    413: PilotProtocolErrorV1;
+    /**
+     * Snapshot archive or digest is invalid
+     */
+    422: PilotProtocolErrorV1;
+    /**
+     * Upload rate limit exceeded
+     */
+    429: PilotProtocolErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListMyWorkspaceSnapshotsV1Error = ListMyWorkspaceSnapshotsV1Errors[keyof ListMyWorkspaceSnapshotsV1Errors];
+
+export type ListMyWorkspaceSnapshotsV1Responses = {
+    /**
+     * Snapshot metadata
+     */
+    200: Array<WorkspaceSnapshotMetadataV1>;
+};
+
+export type ListMyWorkspaceSnapshotsV1Response = ListMyWorkspaceSnapshotsV1Responses[keyof ListMyWorkspaceSnapshotsV1Responses];
+
 export type ListSkillHubVersionsV1Data = {
     body?: never;
     path?: never;
@@ -9376,3 +9544,243 @@ export type SubmitTaskFeedbackV1Responses = {
 };
 
 export type SubmitTaskFeedbackV1Response = SubmitTaskFeedbackV1Responses[keyof SubmitTaskFeedbackV1Responses];
+
+export type ListWorkspaceSnapshotsV1Data = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v2/workspace-snapshots';
+};
+
+export type ListWorkspaceSnapshotsV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Resource conflicts with an existing binding
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Snapshot exceeds a configured limit
+     */
+    413: PilotProtocolErrorV1;
+    /**
+     * Snapshot archive or digest is invalid
+     */
+    422: PilotProtocolErrorV1;
+    /**
+     * Upload rate limit exceeded
+     */
+    429: PilotProtocolErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListWorkspaceSnapshotsV1Error = ListWorkspaceSnapshotsV1Errors[keyof ListWorkspaceSnapshotsV1Errors];
+
+export type ListWorkspaceSnapshotsV1Responses = {
+    /**
+     * Snapshot metadata
+     */
+    200: Array<WorkspaceSnapshotMetadataV1>;
+};
+
+export type ListWorkspaceSnapshotsV1Response = ListWorkspaceSnapshotsV1Responses[keyof ListWorkspaceSnapshotsV1Responses];
+
+export type UploadWorkspaceSnapshotV1Data = {
+    body: unknown;
+    headers: {
+        'Idempotency-Key': string;
+        'X-Content-SHA256': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/workspace-snapshots';
+};
+
+export type UploadWorkspaceSnapshotV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Resource conflicts with an existing binding
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Snapshot exceeds a configured limit
+     */
+    413: PilotProtocolErrorV1;
+    /**
+     * Snapshot archive or digest is invalid
+     */
+    422: PilotProtocolErrorV1;
+    /**
+     * Upload rate limit exceeded
+     */
+    429: PilotProtocolErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type UploadWorkspaceSnapshotV1Error = UploadWorkspaceSnapshotV1Errors[keyof UploadWorkspaceSnapshotV1Errors];
+
+export type UploadWorkspaceSnapshotV1Responses = {
+    /**
+     * Idempotent replay
+     */
+    200: WorkspaceSnapshotMetadataV1;
+    /**
+     * Snapshot accepted
+     */
+    201: WorkspaceSnapshotMetadataV1;
+};
+
+export type UploadWorkspaceSnapshotV1Response = UploadWorkspaceSnapshotV1Responses[keyof UploadWorkspaceSnapshotV1Responses];
+
+export type DeleteWorkspaceSnapshotV1Data = {
+    body?: never;
+    path: {
+        snapshotId: string;
+    };
+    query?: never;
+    url: '/api/v2/workspace-snapshots/{snapshotId}';
+};
+
+export type DeleteWorkspaceSnapshotV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Resource conflicts with an existing binding
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Snapshot exceeds a configured limit
+     */
+    413: PilotProtocolErrorV1;
+    /**
+     * Snapshot archive or digest is invalid
+     */
+    422: PilotProtocolErrorV1;
+    /**
+     * Upload rate limit exceeded
+     */
+    429: PilotProtocolErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type DeleteWorkspaceSnapshotV1Error = DeleteWorkspaceSnapshotV1Errors[keyof DeleteWorkspaceSnapshotV1Errors];
+
+export type DeleteWorkspaceSnapshotV1Responses = {
+    /**
+     * Snapshot deletion accepted
+     */
+    200: WorkspaceSnapshotMetadataV1;
+};
+
+export type DeleteWorkspaceSnapshotV1Response = DeleteWorkspaceSnapshotV1Responses[keyof DeleteWorkspaceSnapshotV1Responses];
+
+export type GetWorkspaceSnapshotV1Data = {
+    body?: never;
+    path: {
+        snapshotId: string;
+    };
+    query?: never;
+    url: '/api/v2/workspace-snapshots/{snapshotId}';
+};
+
+export type GetWorkspaceSnapshotV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Resource conflicts with an existing binding
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Snapshot exceeds a configured limit
+     */
+    413: PilotProtocolErrorV1;
+    /**
+     * Snapshot archive or digest is invalid
+     */
+    422: PilotProtocolErrorV1;
+    /**
+     * Upload rate limit exceeded
+     */
+    429: PilotProtocolErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetWorkspaceSnapshotV1Error = GetWorkspaceSnapshotV1Errors[keyof GetWorkspaceSnapshotV1Errors];
+
+export type GetWorkspaceSnapshotV1Responses = {
+    /**
+     * Snapshot metadata
+     */
+    200: WorkspaceSnapshotMetadataV1;
+};
+
+export type GetWorkspaceSnapshotV1Response = GetWorkspaceSnapshotV1Responses[keyof GetWorkspaceSnapshotV1Responses];
