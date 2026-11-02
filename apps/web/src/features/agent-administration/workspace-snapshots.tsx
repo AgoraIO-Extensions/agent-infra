@@ -1,5 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -11,13 +12,8 @@ import type {
 	Client,
 	RequestResult,
 } from "../../pilot/generated-v2/client/index.js";
-import {
-	deleteWorkspaceSnapshotV1,
-	listMyWorkspaceSnapshotsV1,
-} from "../../pilot/generated-v2/sdk.gen.js";
+import { listMyWorkspaceSnapshotsV1 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
-	DeleteWorkspaceSnapshotV1Errors,
-	DeleteWorkspaceSnapshotV1Responses,
 	ListMyWorkspaceSnapshotsV1Errors,
 	ListMyWorkspaceSnapshotsV1Responses,
 	WorkspaceSnapshotMetadataV1,
@@ -57,29 +53,6 @@ export async function loadWorkspaceSnapshots(
 	return { kind: "ready", snapshots: result.data };
 }
 
-export async function unbindWorkspaceSnapshot(
-	snapshotId: string,
-	idempotencyKey: string,
-	client?: Client,
-): Promise<WorkspaceSnapshotMetadataV1> {
-	const result: Awaited<
-		RequestResult<
-			DeleteWorkspaceSnapshotV1Responses,
-			DeleteWorkspaceSnapshotV1Errors,
-			false
-		>
-	> = await deleteWorkspaceSnapshotV1<false>({
-		client,
-		path: { snapshotId },
-		headers: { "Idempotency-Key": idempotencyKey },
-		responseStyle: "fields",
-		throwOnError: false,
-	});
-	if (result.response?.status !== 200 || !result.data)
-		throw new Error("Workspace snapshot could not be unbound");
-	return result.data;
-}
-
 export function useWorkspaceSnapshots({
 	identityKey,
 	client,
@@ -89,7 +62,6 @@ export function useWorkspaceSnapshots({
 	client?: Client;
 	enabled?: boolean;
 }) {
-	const queryClient = useQueryClient();
 	const queryKey = useMemo(
 		() => ["workspace-snapshots", identityKey],
 		[identityKey],
@@ -100,17 +72,7 @@ export function useWorkspaceSnapshots({
 		enabled: enabled && Boolean(identityKey),
 		retry: false,
 	});
-	const remove = useMutation({
-		mutationFn: ({
-			snapshotId,
-			idempotencyKey,
-		}: {
-			snapshotId: string;
-			idempotencyKey: string;
-		}) => unbindWorkspaceSnapshot(snapshotId, idempotencyKey, client),
-		onSuccess: () => queryClient.invalidateQueries({ queryKey }),
-	});
-	return { ...query, remove, queryKey };
+	return { ...query, queryKey };
 }
 
 type WorkspaceSnapshotsPanelProps = {
@@ -150,15 +112,17 @@ export function WorkspaceSnapshotsPanel({
 	}
 	if (snapshots.isLoading)
 		return <LoadingLine aria-label="正在读取工作区快照" />;
-	if (snapshots.data?.kind === "unavailable") {
+	if (snapshots.isError || snapshots.data?.kind === "unavailable") {
 		return (
 			<Card aria-label="工作区快照">
 				<h3 className="font-medium text-sm">工作区快照</h3>
 				<p className="mt-1 text-muted-foreground text-sm">
 					暂时无法读取快照元数据。
 				</p>
-				{snapshots.data.retryable ? (
+				{snapshots.isError ||
+				(snapshots.data?.kind === "unavailable" && snapshots.data.retryable) ? (
 					<Button
+						type="button"
 						variant="outline"
 						size="sm"
 						onClick={() => void snapshots.refetch()}
@@ -177,7 +141,7 @@ export function WorkspaceSnapshotsPanel({
 				<div>
 					<h3 className="font-medium text-sm">工作区快照</h3>
 					<p className="mt-1 text-muted-foreground text-sm">
-						平台托管、内容寻址、只读挂载。仅显示元数据。
+						选择快照并设置挂载名称。保存后生效，取消选择可解绑。
 					</p>
 				</div>
 				<Badge variant="tag">{values.length} 个</Badge>
@@ -189,28 +153,37 @@ export function WorkspaceSnapshotsPanel({
 					{values.map((snapshot) => (
 						<li
 							key={snapshot.snapshotId}
-							className="flex items-center justify-between gap-3 rounded border border-border p-3"
+							className="flex flex-wrap items-center justify-between gap-3 rounded border border-border p-3"
 						>
 							<div className="min-w-0">
 								<div className="flex items-center gap-2">
-									<strong className="truncate">
+									<strong className="break-all">{snapshot.snapshotId}</strong>
+									<span>
 										{snapshot.bindings
 											.map((binding) => binding.name)
 											.join(", ") || "未绑定"}
-									</strong>
+									</span>
 									<Badge variant="tag">{snapshot.status}</Badge>
 								</div>
-								<div className="mt-1 text-muted-foreground text-xs">
+								<div className="mt-1 break-all text-muted-foreground text-xs">
 									{snapshot.digest} · {snapshot.sizeBytes} bytes ·{" "}
 									{snapshot.bindings.length} 个绑定
 								</div>
 							</div>
 							{onChange ? (
 								<div className="flex items-center gap-2">
-									<Label variant="option" className="text-xs">
+									<Label
+										variant="option"
+										htmlFor={`workspace-snapshot-${snapshot.snapshotId}`}
+									>
 										<Checkbox
+											id={`workspace-snapshot-${snapshot.snapshotId}`}
 											checked={selectedIds.has(snapshot.snapshotId)}
-											disabled={disabled || snapshots.remove.isPending}
+											disabled={
+												disabled ||
+												(!selectedIds.has(snapshot.snapshotId) &&
+													(snapshot.status !== "ready" || selected.length >= 4))
+											}
 											onCheckedChange={(checked) => {
 												const next = selected.filter(
 													(binding) =>
@@ -219,18 +192,27 @@ export function WorkspaceSnapshotsPanel({
 												if (checked)
 													next.push({
 														snapshotId: snapshot.snapshotId,
-														name: snapshot.bindings[0]?.name ?? "repo",
+														name:
+															["repo", "repo-2", "repo-3", "repo-4"].find(
+																(name) =>
+																	!selected.some(
+																		(binding) => binding.name === name,
+																	),
+															) ?? "repo",
 													});
 												onChange(next);
 											}}
 										/>
-										选择
+										选择快照 {snapshot.snapshotId}
 									</Label>
 									{selectedIds.has(snapshot.snapshotId) ? (
 										<Input
 											aria-label={`快照挂载名称 ${snapshot.snapshotId}`}
-											className="h-8 w-28 rounded border border-border px-2 text-xs"
-											disabled={disabled || snapshots.remove.isPending}
+											className="w-36"
+											required
+											maxLength={63}
+											pattern="[a-z0-9]((?:[a-z0-9]|-)*[a-z0-9])?"
+											disabled={disabled}
 											value={
 												selected.find(
 													(binding) =>
@@ -250,30 +232,32 @@ export function WorkspaceSnapshotsPanel({
 									) : null}
 								</div>
 							) : null}
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={
-									disabled ||
-									snapshots.remove.isPending ||
-									snapshot.bindings.length > 0
-								}
-								title={
-									snapshot.bindings.length > 0 ? "仍有 Agent 绑定" : "删除快照"
-								}
-								onClick={() =>
-									void snapshots.remove.mutateAsync({
-										snapshotId: snapshot.snapshotId,
-										idempotencyKey: crypto.randomUUID(),
-									})
-								}
-							>
-								删除
-							</Button>
 						</li>
 					))}
 				</ul>
 			)}
+			{workspaceSnapshotBindingError(selected) ? (
+				<Alert role="alert" tone="danger" className="mt-3">
+					<AlertDescription>
+						{workspaceSnapshotBindingError(selected)}
+					</AlertDescription>
+				</Alert>
+			) : null}
 		</Card>
 	);
+}
+
+export function workspaceSnapshotBindingError(
+	bindings: readonly { snapshotId: string; name: string }[],
+): string | undefined {
+	if (bindings.length > 4) return "最多选择 4 个快照。";
+	if (
+		bindings.some(
+			({ name }) =>
+				name.length > 63 || !/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(name),
+		)
+	)
+		return "挂载名称须为 1 至 63 个小写字母、数字或连字符，且以字母或数字开头和结尾。";
+	if (new Set(bindings.map(({ name }) => name)).size !== bindings.length)
+		return "快照挂载名称不能重复。";
 }

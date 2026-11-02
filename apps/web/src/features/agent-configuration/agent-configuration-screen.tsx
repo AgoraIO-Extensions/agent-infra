@@ -11,7 +11,10 @@ import type {
 	AgentConfigurationUpdateRequestV2Writable,
 	AgentProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
-import { WorkspaceSnapshotsPanel } from "../agent-administration/workspace-snapshots.js";
+import {
+	WorkspaceSnapshotsPanel,
+	workspaceSnapshotBindingError,
+} from "../agent-administration/workspace-snapshots.js";
 import type { BrowserSessionState } from "../browser-session.js";
 import { AccessDeniedCard } from "../page-state-card.js";
 import {
@@ -357,7 +360,13 @@ export function AgentConfigurationScreen({
 		savedRelayKeyCandidates.length > 0;
 	const submitConfiguration = () => {
 		// 镜像升级在途时整页保存暂停（同一个 mutation 一次只受理一个命令）。
-		if (isDisabled || !hasChanges || upgradingImage) return;
+		if (
+			isDisabled ||
+			!hasChanges ||
+			upgradingImage ||
+			workspaceSnapshotBindingError(draft.workspaceSnapshots)
+		)
+			return;
 		setSavedModelsReloaded(false);
 		const request = buildAgentConfigurationRequest(draft, agent);
 		if (!request.coOwnerIds?.length) {
@@ -584,8 +593,8 @@ export function AgentConfigurationScreen({
 							identityKey={session.session.user.userId}
 							sourceKind="custom"
 							client={generatedV2Client}
-							disabled={isDisabled}
-							selected={agent.source.workspaceSnapshots ?? []}
+							disabled={isDisabled || upgradingImage}
+							selected={draft.workspaceSnapshots}
 							onChange={(workspaceSnapshots) =>
 								setDraft((current) => ({
 									...current,
