@@ -953,7 +953,10 @@ export function createMultiServiceRuntimeOperations(options: {
 		}
 		if (
 			(object.kind === "Deployment" || object.kind === "StatefulSet") &&
-			isDeepStrictEqual(current.spec, object.spec) &&
+			isDeepStrictEqual(
+				(current as T & { spec?: unknown }).spec,
+				(object as T & { spec?: unknown }).spec,
+			) &&
 			Object.entries(object.metadata?.labels ?? {}).every(
 				([key, expected]) => current.metadata?.labels?.[key] === expected,
 			) &&
