@@ -55,6 +55,50 @@ const request = {
 };
 
 describe("deployment authorization admission", () => {
+	it("admits authenticated model preview before an Agent exists without granting mutation authority", async () => {
+		const readVersionedAuthority = vi
+			.fn()
+			.mockResolvedValue({ outcome: "unavailable" });
+		const admission = createDeploymentAuthorizationAdmission({
+			identityScope: scope,
+			configurationQuery: { readVersionedAuthority },
+			loadAuthorityContext: async () => authorityContext,
+		});
+		const preview = { ...request, agentId: "unpersisted-preview-id" };
+		await scope.requestScope(
+			new Request(
+				"https://platform.test/api/v2/agent-applications/model-candidates",
+				{ method: "POST" },
+			),
+			async () => {
+				expect(await admission.authorize(preview)).toMatchObject({
+					status: "admitted",
+					authorizationRevision: identity.authorizationRevision,
+					authorityContext,
+				});
+				expect(
+					await admission.authorize({ ...preview, actorId: "bob" }),
+				).toMatchObject({ status: "rejected" });
+			},
+		);
+		expect(readVersionedAuthority).not.toHaveBeenCalled();
+		for (const [method, pathname] of [
+			["GET", "/api/v2/agent-applications/model-candidates"],
+			["POST", "/api/v2/agent-applications/model-candidates/other"],
+			["PUT", "/api/v2/agents/unpersisted-preview-id/configuration"],
+		]) {
+			await scope.requestScope(
+				new Request(`https://platform.test${pathname}`, { method }),
+				async () => {
+					expect(await admission.authorize(preview)).toMatchObject({
+						status: "rejected",
+					});
+				},
+			);
+		}
+		expect(readVersionedAuthority).toHaveBeenCalledTimes(3);
+	});
+
 	it("admits initial creation only for the authenticated user's allocated ID", async () => {
 		const readVersionedAuthority = vi
 			.fn()

@@ -1275,7 +1275,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			input: unknown,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const value = desired(input);
-			if (isMultiService(value)) return multiService.apply(value);
+			if (isMultiService(value)) {
+				const applied = await multiService.apply(value);
+				if (applied === "pending" || applied === null) return applied;
+				return { uid: applied.uid, generation: applied.generation as number };
+			}
 			if (options.connectionConsumerControl && value.replicas !== 0)
 				throw new WorkloadKubernetesError("policy");
 			if (
