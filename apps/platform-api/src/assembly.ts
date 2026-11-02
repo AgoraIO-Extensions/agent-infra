@@ -72,6 +72,7 @@ import {
 	PostgresScopedPlatformAuditQueryV1,
 	PostgresSkillHubAgentBindingAdmissionV1,
 	PostgresTaskAuthorizationStoreV1,
+	PostgresWorkspaceSnapshotUploadStoreV1,
 } from "@agent-infra/platform-store";
 import {
 	createWecomChannelAdmissionV1,
@@ -106,6 +107,7 @@ import type { NativeMetadataRoutesDependenciesV1 } from "./http/native-metadata-
 import type { SkillHubAgentBindingRoutesDependenciesV1 } from "./http/skill-hub-agent-binding-routes.js";
 import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
 import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
+import type { WorkspaceSnapshotRouteDependenciesV1 } from "./http/workspace-snapshot-routes.js";
 import { createNativeCapabilityMetadataRevalidationV1 } from "./native-capability-metadata.js";
 import {
 	createPlatformProjectionReaders,
@@ -135,6 +137,11 @@ import {
 	assembleWecomSetupApiV1,
 	type WecomBotQrConfigurationV1,
 } from "./wecom-setup-assembly.js";
+import {
+	createWorkspaceSnapshotServiceV1,
+	type WorkspaceSnapshotServiceOptionsV1,
+} from "./workspace-snapshot-service.js";
+import { createWorkspaceSnapshotFileSpoolV1 } from "./workspace-snapshot-spool.js";
 
 type Admissions = Omit<AgentConfigurationUseCaseDependenciesV1, "transaction">;
 
@@ -143,6 +150,20 @@ interface AssemblyQueries {
 }
 
 export interface PlatformApiAssemblyInput {
+	/**
+	 * Optional fail-closed deployment boundary. The deployment must supply the
+	 * credential resolver, archive validator, object storage transaction, quota,
+	 * owner authorization and audit implementation; assembly never invents them.
+	 */
+	readonly workspaceSnapshots?: WorkspaceSnapshotRouteDependenciesV1;
+	/** Deployment-owned object storage/spool/store/quota; absent keeps snapshot routes disabled. */
+	readonly workspaceSnapshotDeployment?: Omit<
+		WorkspaceSnapshotServiceOptionsV1,
+		"credentials" | "store" | "quota"
+	> &
+		Partial<
+			Pick<WorkspaceSnapshotServiceOptionsV1, "credentials" | "store" | "quota">
+		>;
 	readonly sessionSandboxReserves?: import("@agent-infra/platform-core").SessionSandboxReserveConfigurationV1;
 	readonly connectionInstallation?: {
 		readonly publicOrigin: string;
@@ -555,6 +576,47 @@ export function assemblePlatformApi(
 		transaction: personalApiCredentialStore,
 		userDirectory,
 	});
+	const snapshotStore = input.workspaceSnapshotDeployment
+		? new PostgresWorkspaceSnapshotUploadStoreV1(input.databaseUrl)
+		: undefined;
+	const snapshotSpool = input.workspaceSnapshotDeployment
+		? (input.workspaceSnapshotDeployment.spool ??
+			createWorkspaceSnapshotFileSpoolV1())
+		: undefined;
+	function snapshotServiceFor(
+		material: string,
+		metadata?: { requestId: string; traceId: string },
+	) {
+		const deployment = input.workspaceSnapshotDeployment;
+		if (!deployment || !snapshotStore)
+			throw new Error("Snapshot deployment unavailable");
+		const bound = snapshotStore.forCredential(
+			material,
+			userDirectory,
+			metadata,
+		);
+		return createWorkspaceSnapshotServiceV1({
+			...deployment,
+			spool: snapshotSpool,
+			credentials: deployment.credentials ?? bound.credentials,
+			store: deployment.store ?? bound.store,
+			quota: deployment.quota ?? bound.quota,
+		});
+	}
+	const workspaceSnapshotService:
+		| WorkspaceSnapshotRouteDependenciesV1
+		| undefined = input.workspaceSnapshotDeployment
+		? {
+				upload: (request) =>
+					snapshotServiceFor(request.material, request).upload(request),
+				list: (material, metadata) =>
+					snapshotServiceFor(material, metadata).list(material),
+				get: (material, id, metadata) =>
+					snapshotServiceFor(material, metadata).get(material, id),
+				remove: (material, id, metadata) =>
+					snapshotServiceFor(material, metadata).remove(material, id),
+			}
+		: undefined;
 	const conversationTransaction =
 		new PostgresConversationExecutionTransactionV1({
 			sessionSandboxReserves: input.sessionSandboxReserves,
@@ -1103,6 +1165,12 @@ export function assemblePlatformApi(
 		: undefined;
 	readFileLimits = files?.readLimits;
 	const dependencies: PlatformAppDependencies = {
+		...(input.workspaceSnapshots || workspaceSnapshotService
+			? {
+					workspaceSnapshots:
+						input.workspaceSnapshots ?? workspaceSnapshotService,
+				}
+			: {}),
 		...(installationStore &&
 		installationCallbackConfiguration &&
 		input.connectionInstallation
@@ -1451,6 +1519,7 @@ export function assemblePlatformApi(
 			: {}),
 	};
 	const adapters = [
+		...(snapshotStore ? [snapshotStore] : []),
 		...(wecomReceipts ? [wecomReceipts] : []),
 		...(wecomSetup ? [wecomSetup] : []),
 		...(wecom ? [wecom] : []),

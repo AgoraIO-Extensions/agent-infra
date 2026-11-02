@@ -214,6 +214,45 @@ describe("Platform API production assembly", () => {
 			},
 		};
 		const assembly = assemblePlatformApi(baseInput);
+		// The snapshot surface is fail-closed: no deployment boundary means no route dependency.
+		expect(assembly.dependencies.workspaceSnapshots).toBeUndefined();
+		const snapshotBoundary = {
+			upload: vi.fn(),
+			list: vi.fn(),
+			get: vi.fn(),
+			remove: vi.fn(),
+		};
+		const configured = assemblePlatformApi({
+			...baseInput,
+			workspaceSnapshots: snapshotBoundary,
+		});
+		expect(configured.dependencies.workspaceSnapshots).toBe(snapshotBoundary);
+		await configured.close();
+		const deploymentBoundary = {
+			credentials: {
+				resolve: vi.fn().mockResolvedValue({
+					kind: "user",
+					id: "user-1",
+					scopes: ["agent:create", "agent:read", "agent:manage"],
+				}),
+			},
+			spool: { spool: vi.fn() },
+			storage: { upload: vi.fn(), remove: vi.fn() },
+			store: {
+				findIdempotency: vi.fn(),
+				create: vi.fn(),
+				list: vi.fn(),
+				get: vi.fn(),
+				remove: vi.fn(),
+			},
+			quota: { read: vi.fn() },
+		};
+		const deployed = assemblePlatformApi({
+			...baseInput,
+			workspaceSnapshotDeployment: deploymentBoundary,
+		});
+		expect(deployed.dependencies.workspaceSnapshots).toBeDefined();
+		await deployed.close();
 		expect(assembly.dependencies.conversation.modelSelection).toBe(
 			modelSelection,
 		);
