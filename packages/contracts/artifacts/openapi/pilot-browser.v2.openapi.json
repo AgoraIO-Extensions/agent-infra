@@ -234,24 +234,7 @@
                       },
                       "workspaceSnapshots": {
                         "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "name": {
-                              "maxLength": 63,
-                              "minLength": 1,
-                              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                              "type": "string"
-                            },
-                            "snapshotId": {
-                              "minLength": 1,
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "snapshotId",
-                            "name"
-                          ],
-                          "type": "object"
+                          "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
                         },
                         "maxItems": 4,
                         "type": "array"
@@ -1010,24 +993,7 @@
                   },
                   "workspaceSnapshots": {
                     "items": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "name": {
-                          "maxLength": 63,
-                          "minLength": 1,
-                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                          "type": "string"
-                        },
-                        "snapshotId": {
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "snapshotId",
-                        "name"
-                      ],
-                      "type": "object"
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
                     },
                     "maxItems": 4,
                     "type": "array"
@@ -1468,24 +1434,7 @@
                   },
                   "workspaceSnapshots": {
                     "items": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "name": {
-                          "maxLength": 63,
-                          "minLength": 1,
-                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                          "type": "string"
-                        },
-                        "snapshotId": {
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "snapshotId",
-                        "name"
-                      ],
-                      "type": "object"
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
                     },
                     "maxItems": 4,
                     "type": "array"
@@ -1872,24 +1821,7 @@
                   },
                   "workspaceSnapshots": {
                     "items": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "name": {
-                          "maxLength": 63,
-                          "minLength": 1,
-                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                          "type": "string"
-                        },
-                        "snapshotId": {
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "snapshotId",
-                        "name"
-                      ],
-                      "type": "object"
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
                     },
                     "maxItems": 4,
                     "type": "array"
@@ -3209,24 +3141,7 @@
                   },
                   "workspaceSnapshots": {
                     "items": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "name": {
-                          "maxLength": 63,
-                          "minLength": 1,
-                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                          "type": "string"
-                        },
-                        "snapshotId": {
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "snapshotId",
-                        "name"
-                      ],
-                      "type": "object"
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
                     },
                     "maxItems": 4,
                     "type": "array"
@@ -3941,24 +3856,7 @@
                   },
                   "workspaceSnapshots": {
                     "items": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "name": {
-                          "maxLength": 63,
-                          "minLength": 1,
-                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-                          "type": "string"
-                        },
-                        "snapshotId": {
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "snapshotId",
-                        "name"
-                      ],
-                      "type": "object"
+                      "$ref": "#/components/schemas/WorkspaceSnapshotBindingV1"
                     },
                     "maxItems": 4,
                     "type": "array"

@@ -48,18 +48,10 @@ export type AgentApplicationCreateRequestV1 = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -69,10 +61,6 @@ export type AgentApplicationCreateRequestV1 = {
             entry: boolean;
             name: string;
             resourceProfileRef: string;
-        }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
         }>;
     };
 };
@@ -102,18 +90,10 @@ export type AgentApplicationProjectionV1 = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -123,10 +103,6 @@ export type AgentApplicationProjectionV1 = {
             entry: boolean;
             name: string;
             resourceProfileRef: string;
-        }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
         }>;
     };
     status: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
@@ -172,18 +148,10 @@ export type AgentApplicationUpdateRequestV1 = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -193,10 +161,6 @@ export type AgentApplicationUpdateRequestV1 = {
             entry: boolean;
             name: string;
             resourceProfileRef: string;
-        }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
         }>;
     };
 };
@@ -359,18 +323,10 @@ export type AgentProjectionV1 = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -380,10 +336,6 @@ export type AgentProjectionV1 = {
             entry: boolean;
             name: string;
             resourceProfileRef: string;
-        }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
         }>;
     };
 };
@@ -1643,18 +1595,10 @@ export type AgentApplicationCreateRequestV1Writable = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -1664,10 +1608,6 @@ export type AgentApplicationCreateRequestV1Writable = {
             entry: boolean;
             name: string;
             resourceProfileRef: string;
-        }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
         }>;
     };
 };
@@ -1712,18 +1652,10 @@ export type AgentApplicationUpdateRequestV1Writable = {
         imageReference: string;
         interactionMode: 'self-managed';
         kind: 'custom';
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
     } | {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
     } | {
         identityResponsibility: 'self-managed';
         interactionMode: 'self-managed';
@@ -1733,10 +1665,6 @@ export type AgentApplicationUpdateRequestV1Writable = {
             entry: boolean;
             name: string;
             resourceProfileRef: string;
-        }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
         }>;
     };
 };

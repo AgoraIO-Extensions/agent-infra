@@ -18,27 +18,7 @@ it.each(["v1", "v2"] as const)(
 				"utf8",
 			),
 		);
-		const removeSnapshots = (value: unknown): void => {
-			if (!value || typeof value !== "object") return;
-			if (Array.isArray(value)) {
-				for (const item of value) removeSnapshots(item);
-				return;
-			}
-			const object = value as Record<string, unknown>;
-			delete object.workspaceSnapshots;
-			for (const child of Object.values(object)) removeSnapshots(child);
-		};
-		removeSnapshots(current);
 		const previous = await readEvaluationBaseline(version);
-		delete current.paths["/api/v2/workspace-snapshots"];
-		delete current.paths["/api/v2/workspace-snapshots/{snapshotId}"];
-		for (const schema of [
-			"WorkspaceSnapshotBindingV1",
-			"WorkspaceSnapshotMetadataV1",
-			"WorkspaceSnapshotSourceV1",
-			"WorkspaceSnapshotUploadRequestV1",
-		])
-			delete current.components.schemas[schema];
 		for (const path of Object.keys(previous.paths))
 			if (path.startsWith("/api/v2/evaluation/")) delete previous.paths[path];
 		for (const name of Object.keys(previous.components.schemas))

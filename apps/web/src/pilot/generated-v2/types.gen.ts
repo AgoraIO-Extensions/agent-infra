@@ -44,10 +44,7 @@ export type AgentApiCreationRequestV1 = {
             name: string;
             resourceProfileRef: string;
         }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 } | {
     availability: Array<{
@@ -178,10 +175,7 @@ export type AgentApplicationCreateRequestV2 = {
             name: string;
             resourceProfileRef: string;
         }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 };
 
@@ -260,10 +254,7 @@ export type AgentApplicationProjectionV2 = {
             name: string;
             resourceProfileRef: string;
         }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
     status: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
     submittedAt: string;
@@ -326,10 +317,7 @@ export type AgentApplicationUpdateRequestV2 = {
             name: string;
             resourceProfileRef: string;
         }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 };
 
@@ -545,10 +533,7 @@ export type AgentDetailProjectionV1 = {
             name: string;
             resourceProfileRef: string;
         }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 };
 
@@ -668,10 +653,7 @@ export type AgentProjectionV2 = {
             name: string;
             resourceProfileRef: string;
         }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 };
 
@@ -2876,10 +2858,7 @@ export type AgentApiCreationRequestV1Writable = {
             name: string;
             resourceProfileRef: string;
         }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 } | {
     availability: Array<{
@@ -2975,10 +2954,7 @@ export type AgentApplicationCreateRequestV2Writable = {
             name: string;
             resourceProfileRef: string;
         }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 };
 
@@ -3046,10 +3022,7 @@ export type AgentApplicationUpdateRequestV2Writable = {
             name: string;
             resourceProfileRef: string;
         }>;
-        workspaceSnapshots?: Array<{
-            name: string;
-            snapshotId: string;
-        }>;
+        workspaceSnapshots?: Array<WorkspaceSnapshotBindingV1>;
     };
 };
 
