@@ -47,7 +47,6 @@ export { FakeRuntimeDriver } from './packages/agent-runtime/src/fake-runtime-dri
 export { createRuntimeExecutionGrantVerifierV2 } from './packages/agent-runtime/src/grant-v2.ts';
 export { createRuntimeExecutionGrantValidatorV4 } from './packages/agent-runtime/src/grant-v4.ts';
 export { createWorkerRuntimeGrantSignerV4 } from './apps/platform-worker/src/runtime-grant-signer-v4.ts';
-export { createWorkerRuntimeGrantSignerV2 } from './apps/platform-worker/src/runtime-grant-signer.ts';
 `);
 const keys = generateKeyPairSync("ed25519");
 
@@ -203,7 +202,6 @@ test("real Host rejects the expired execution lease then accepts after V3 renewa
 		now: () => clock,
 	};
 	const signerV4 = hostRuntime.createWorkerRuntimeGrantSignerV4(signing);
-	const signerV2 = hostRuntime.createWorkerRuntimeGrantSignerV2(signing);
 	const publicKeys = new Map([["fixture", keys.publicKey]]);
 	const validation = {
 		expectedIssuer: signing.issuer,
@@ -358,29 +356,25 @@ test("real Host rejects the expired execution lease then accepts after V3 renewa
 		),
 		(error) => error.diagnostic === "event-authority-expired",
 	);
-	const renewBody = {
-		schemaVersion: 3,
-		requestId: "real-renew",
-		traceId: request.traceId,
-		principal: request.principal,
-		channelId: request.channelId,
-		agentId: request.agentId,
-		conversationId: request.conversationId,
-		executionId: request.executionId,
-		turnId: request.turnId,
-		sessionGeneration: 1,
+	const renew = createTemplateExecutionRenewal({
+		request,
 		hostSessionRef: accepted.hostSessionRef,
-		operation: request.operation,
-	};
-	const renewGrant = signerV2(
-		renewBody,
-		{ purpose: "business", authorizationRecordId: "real-authorization" },
-		"execution.renew",
-	);
-	await host.renewAuthorizationV3(
-		{ ...renewBody, grant: renewGrant },
-		hostRuntime.createRuntimeExecutionGrantVerifierV2(publicKeys)(renewGrant),
-	);
+		authorizationRecordId: "real-authorization",
+		initialExpiresAt: claims.expiresAt,
+		signing,
+		signal: new AbortController().signal,
+		waitForHostGrant: async () => {},
+		post: async (path, body) => {
+			assert.equal(path, "/internal/runtime/v3/authorizations/renew");
+			return host.renewAuthorizationV3(
+				body,
+				hostRuntime.createRuntimeExecutionGrantVerifierV2(publicKeys)(
+					body.grant,
+				),
+			);
+		},
+	});
+	await renew();
 	const recovered = await eventGrant();
 	assert.equal(
 		(
