@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+	assertWorkspaceSnapshotBindingQuotaV1,
 	normalizeWorkspaceSnapshotBindingsV1,
 	validateWorkspaceSnapshotDigestV1,
+	WorkspaceSnapshotBindingErrorV1,
 	WorkspaceSnapshotErrorV1,
 } from "./workspace-snapshot.js";
 
@@ -43,5 +45,22 @@ describe("workspace snapshot core rules", () => {
 				`sha256:${"0".repeat(64)}`,
 			),
 		).toThrow(WorkspaceSnapshotErrorV1);
+	});
+
+	it("bounds configuration-revision binding aggregation", () => {
+		expect(() =>
+			assertWorkspaceSnapshotBindingQuotaV1({
+				existingCount: 4,
+				existingBytes: 0,
+				nextBytes: 1,
+			}),
+		).toThrow(WorkspaceSnapshotBindingErrorV1);
+		expect(() =>
+			assertWorkspaceSnapshotBindingQuotaV1({
+				existingCount: 1,
+				existingBytes: 2 * 1024 ** 3,
+				nextBytes: 1,
+			}),
+		).toThrow(WorkspaceSnapshotBindingErrorV1);
 	});
 });
