@@ -35,6 +35,7 @@ it("admits only the approved V2 snapshot addition and preserves its published au
 		"AgentApplicationProjectionV2",
 		"AgentProjectionV2",
 		"AgentDetailProjectionV1",
+		"AgentConfigurationUpdateRequestV2",
 	])
 		for (const option of previous.components.schemas[name].properties.source
 			.anyOf)
@@ -42,6 +43,8 @@ it("admits only the approved V2 snapshot addition and preserves its published au
 	for (const option of previous.components.schemas.AgentApiCreationRequestV1
 		.anyOf[0].properties.source.anyOf)
 		delete option.properties.workspaceSnapshots;
+	delete previous.components.schemas.AgentConfigurationUpdateRequestV2
+		.properties.source;
 	const directory = await mkdtemp(join(tmpdir(), "snapshot-compatibility-"));
 	const before = join(directory, "before.json");
 	const after = join(directory, "after.json");
