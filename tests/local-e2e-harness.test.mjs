@@ -673,6 +673,7 @@ const image = {Id:id,Os:"linux",Architecture:process.env.TEST_IMAGE_ARCH ?? "arm
 if(args[0] === "info") console.log("aarch64");
 else if(args[0] === "image" && args[1] === "inspect") { if(!images[args[2]]) process.exit(1); console.log(JSON.stringify([images[args[2]]])); }
 else if(args[0] === "build") {
+  if (args.includes("--network") && (fs.statSync(args[args.indexOf("--file")+1]).mode & 0o777) !== 0o644) process.exit(46);
   const output = args[args.indexOf("--output")+1];
   const archive = output?.match(/"dest=([^"]+)"/)?.[1];
   if (!archive || !args.includes("SOURCE_DATE_EPOCH=0") || !args.includes("--provenance=false") || !output.includes("rewrite-timestamp=true")) process.exit(45);
@@ -709,10 +710,20 @@ fs.writeFileSync(statePath, JSON.stringify(images));
 			overrides = {},
 			entrypoint = "deploy/local/e2e-harness.mjs",
 		) =>
-			execFileAsync(process.execPath, [entrypoint, action], {
-				cwd: repository,
-				env: { ...env, ...overrides },
-			});
+			execFileAsync(
+				process.execPath,
+				[
+					"--input-type=module",
+					"-e",
+					"process.umask(0o077); await import((await import('node:url')).pathToFileURL(process.argv[1]).href);",
+					entrypoint,
+					action,
+				],
+				{
+					cwd: repository,
+					env: { ...env, ...overrides },
+				},
+			);
 		await cli("sync");
 		await cli("build");
 		const first = JSON.parse(

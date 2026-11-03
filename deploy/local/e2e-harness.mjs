@@ -244,13 +244,14 @@ async function cleanContext(sha) {
 	const directory = await mkdtemp(join(stateRoot, "context-"));
 	const archive = join(directory, "source.tar");
 	const bytes = command(process.env.GIT_BIN ?? "git", [
+		"-c", "tar.umask=0022",
 		"archive",
 		"--format=tar",
 		`--output=${archive}`,
 		sha,
 	]);
 	void bytes;
-	command(process.env.TAR_BIN ?? "tar", ["-xf", archive, "-C", directory]);
+	command(process.env.TAR_BIN ?? "tar", ["-xpf", archive, "-C", directory]);
 	await rm(archive, { force: true });
 	return directory;
 }
@@ -566,6 +567,7 @@ async function overlayInputs(directory, prefix = "") {
 }
 
 const componentImageBuildPolicy = Object.freeze({
+	sourcePermissions: "git-archive-0022",
 	sourceDateEpoch: 0,
 	exporter: "oci",
 	rewriteTimestamp: true,
