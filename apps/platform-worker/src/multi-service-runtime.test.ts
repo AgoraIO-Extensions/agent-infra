@@ -567,6 +567,7 @@ describe("multi-service resource policy", () => {
 					dnsPolicy: "ClusterFirst",
 					restartPolicy: "Always",
 					schedulerName: "default-scheduler",
+					serviceAccount: pod.serviceAccountName,
 					terminationGracePeriodSeconds: 30,
 				});
 				for (const container of pod.containers) {
@@ -588,6 +589,15 @@ describe("multi-service resource policy", () => {
 			recorded.calls.length = 0;
 			await operations.apply(value);
 			expect(recorded.calls).not.toContain(`replace Deployment/${name}`);
+			// A conflicting alias is real identity drift, not API defaulting.
+			if (defaults) {
+				if (!current.spec?.template.spec) throw new Error("missing pod spec");
+				current.spec.template.spec.serviceAccount = "unexpected-account";
+				recorded.calls.length = 0;
+				await operations.apply(value);
+				expect(recorded.calls).toContain(`replace Deployment/${name}`);
+				current = fake.resources.get(`Deployment/${name}`) as V1Deployment;
+			}
 			// Drift in an owned field must still be repaired.
 			if (!current.spec) throw new Error("missing workload spec");
 			current.spec.replicas = 0;
@@ -1477,4 +1487,43 @@ describe("multi-service runtime operations", () => {
 			),
 		).toBe(false);
 	});
+});
+
+it("returns the server generation after writing the member snapshot", async () => {
+	const fake = fakeClient();
+	const replace = fake.client.replace.bind(fake.client);
+	const client: WorkerKubernetesClientV1 = {
+		...fake.client,
+		async replace(object) {
+			const current = fake.resources.get(
+				`${object.kind}/${object.metadata?.name}`,
+			);
+			return replace({
+				...object,
+				metadata: {
+					...object.metadata,
+					generation: (current?.metadata?.generation ?? 0) + 1,
+				},
+			});
+		},
+	};
+	const operations = createMultiServiceRuntimeOperations({
+		client,
+		policy: basePolicy,
+	});
+	const value = desired();
+	if (!isMultiService(value)) throw new Error("invalid fixture");
+	const identity = await operations.apply(value);
+	markWorkloadsReady(fake);
+	const live = fake.resources.get(
+		`Deployment/${workloadResourceNameV1("agent-a")}-web`,
+	);
+	expect(identity).toEqual({
+		uid: live?.metadata?.uid,
+		generation: live?.metadata?.generation,
+	});
+	await expect(operations.observe(value, identity)).resolves.toBe("healthy");
+	const repeated = await operations.apply(value);
+	expect(repeated).toEqual(identity);
+	await expect(operations.observe(value, repeated)).resolves.toBe("healthy");
 });

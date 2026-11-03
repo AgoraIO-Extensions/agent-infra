@@ -486,6 +486,8 @@ function normalizedWorkloadSpec(workload: V1Deployment | V1StatefulSet) {
 				schedulerName: "default-scheduler",
 				terminationGracePeriodSeconds: 30,
 				...pod,
+				// API servers mirror serviceAccountName into the deprecated alias.
+				serviceAccount: pod.serviceAccount ?? pod.serviceAccountName,
 				containers: pod.containers.map(container),
 				initContainers: (pod.initContainers ?? []).map(container),
 				volumes: (pod.volumes ?? []).map((volume) => ({
@@ -1466,7 +1468,7 @@ export function createMultiServiceRuntimeOperations(options: {
 				memberSnapshot
 			)
 				return { uid: current.metadata.uid, generation: generation as number };
-			await replaceWorkloadWithConflictRetry(
+			const updated = await replaceWorkloadWithConflictRetry(
 				{
 					...current,
 					metadata: {
@@ -1482,7 +1484,15 @@ export function createMultiServiceRuntimeOperations(options: {
 				current,
 				value,
 			);
-			return { uid: current.metadata.uid, generation: generation as number };
+			const updatedGeneration = updated.metadata?.generation;
+			if (
+				updated.metadata?.uid !== current.metadata.uid ||
+				typeof updatedGeneration !== "number" ||
+				!Number.isSafeInteger(updatedGeneration) ||
+				updatedGeneration < 1
+			)
+				throw new Error("multi-service entry update identity unavailable");
+			return { uid: updated.metadata.uid, generation: updatedGeneration };
 		},
 		async observe(
 			value: MultiServiceDesired,
