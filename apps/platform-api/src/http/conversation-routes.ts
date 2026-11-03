@@ -444,18 +444,29 @@ async function readRuntimeModelSelection(
 }
 
 async function assertCurrentRuntimeSelection(
-	reader: ConversationModelSelectionReaderV1 | undefined,
+	dependencies: ConversationRoutesDependencies,
 	identity: IdentityContext,
 	conversationId: string,
 	useCase: ReturnType<ConversationRoutesDependencies["commands"]>,
 	traceId: string,
 ): Promise<void> {
+	const reader = dependencies.modelSelection;
 	if (!reader) return;
-	const effective = await effectiveConversation(
-		useCase,
+	const decision = await useCase.readConversation({
+		schemaVersion: 1,
 		conversationId,
-		traceId,
-	);
+	});
+	if (decision.outcome !== "found") {
+		// Preserve the HTTP distinction between revoked and unavailable identity.
+		await authorize(
+			dependencies,
+			identity,
+			{ schemaVersion: 1, operation: "conversation.read", conversationId },
+			traceId,
+		);
+		return fail("RESOURCE_UNAVAILABLE", traceId);
+	}
+	const effective = decision.result;
 	// A newly created conversation has no selected model yet. Runtime directory
 	// lookup is only meaningful once a selection exists; forcing it before the
 	// first message creates a reader -> active Execution dependency cycle.
@@ -1363,7 +1374,7 @@ export function registerConversationRoutes(
 			}
 			const useCase = dependencies.commands(identity);
 			await assertCurrentRuntimeSelection(
-				dependencies.modelSelection,
+				dependencies,
 				identity,
 				context.req.param("conversationId"),
 				useCase,

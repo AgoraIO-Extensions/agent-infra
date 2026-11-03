@@ -1,9 +1,144 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	createConversationModelSelectionReaderV1,
 	createRuntimeModelSelectionReaderFromDispatchV1,
 	createRuntimeModelSelectionReaderFromStoreV1,
 	createRuntimeModelSelectionReaderV1,
 } from "./runtime-model-selection-reader.js";
+
+describe("Conversation model authority routing", () => {
+	const configuration = {
+		agentId: "agent-1",
+		source: {
+			kind: "standard" as const,
+			templateId: "codex",
+			connectionEnabled: false,
+		},
+		modelOptions: [
+			{
+				optionId: "saved-option",
+				endpointId: "relay",
+				modelId: "saved-model",
+				reasoningLevels: ["medium"],
+			},
+		],
+		defaultModelOptionId: "saved-option",
+		defaultReasoningLevel: "medium",
+	};
+	const custom = {
+		...configuration,
+		source: {
+			kind: "custom" as const,
+			interactionMode: "platform-adapter" as const,
+			connectionEnabled: false,
+		},
+	};
+	it("reads standard defaults without an active Execution or Runtime directory", async () => {
+		const runtimeReader = {
+			read: vi.fn().mockRejectedValue(new Error("No active execution")),
+		};
+		const reader = createConversationModelSelectionReaderV1({
+			runtimeReader,
+			readTarget: async () => ({
+				configuration,
+				modelSelectionSupported: true,
+			}),
+		});
+		expect(await reader.read(identity, "conversation-1")).toEqual({
+			agentId: "agent-1",
+			source: "standard",
+			available: true,
+			options: [
+				{
+					optionId: "saved-option",
+					modelId: "saved-model",
+					displayName: "saved-model",
+					reasoningLevels: ["medium"],
+				},
+			],
+			currentModelOptionId: "saved-option",
+			currentReasoningLevel: "medium",
+		});
+		expect(runtimeReader.read).not.toHaveBeenCalled();
+	});
+	it("does not query custom images whose verified capability disables model selection", async () => {
+		const runtimeReader = { read: vi.fn() };
+		const reader = createConversationModelSelectionReaderV1({
+			runtimeReader,
+			readTarget: async () => ({
+				configuration: custom,
+				modelSelectionSupported: false,
+			}),
+		});
+		expect(await reader.read(identity, "conversation-1")).toMatchObject({
+			source: "custom-platform-adapter",
+			available: false,
+			options: [],
+			currentModelOptionId: null,
+		});
+		expect(runtimeReader.read).not.toHaveBeenCalled();
+	});
+	it("uses only live Runtime options for supported custom images and never falls back", async () => {
+		const live = {
+			agentId: "agent-1",
+			source: "custom-platform-adapter" as const,
+			available: true,
+			options: [
+				{
+					optionId: "native",
+					modelId: "native",
+					displayName: "Native",
+					reasoningLevels: ["high"],
+				},
+			],
+			currentModelOptionId: "native",
+			currentReasoningLevel: "high",
+		};
+		const runtimeReader = { read: vi.fn().mockResolvedValue(live) };
+		const reader = createConversationModelSelectionReaderV1({
+			runtimeReader,
+			readTarget: async () => ({
+				configuration: custom,
+				modelSelectionSupported: true,
+			}),
+		});
+		expect(await reader.read(identity, "conversation-1")).toEqual(live);
+		expect(runtimeReader.read).toHaveBeenCalledWith(identity, "conversation-1");
+		runtimeReader.read.mockResolvedValueOnce(null);
+		expect(await reader.read(identity, "conversation-1")).toBeNull();
+		runtimeReader.read.mockRejectedValueOnce(new Error("Unavailable"));
+		await expect(reader.read(identity, "conversation-1")).rejects.toThrow(
+			"Unavailable",
+		);
+		runtimeReader.read.mockResolvedValueOnce({
+			...live,
+			agentId: "other-agent",
+		});
+		expect(await reader.read(identity, "conversation-1")).toBeNull();
+		runtimeReader.read.mockResolvedValueOnce({ ...live, source: "standard" });
+		expect(await reader.read(identity, "conversation-1")).toBeNull();
+	});
+	it("does not expose a directory for an unauthorized target", async () => {
+		const runtimeReader = { read: vi.fn() };
+		const reader = createConversationModelSelectionReaderV1({
+			runtimeReader,
+			readTarget: async () => null,
+		});
+		expect(await reader.read(identity, "conversation-1")).toBeNull();
+		expect(runtimeReader.read).not.toHaveBeenCalled();
+	});
+	it("keeps supported custom selection unavailable when its transport is missing", async () => {
+		const reader = createConversationModelSelectionReaderV1({
+			readTarget: async () => ({
+				configuration: custom,
+				modelSelectionSupported: true,
+			}),
+		});
+		await expect(reader.read(identity, "conversation-1")).rejects.toThrow(
+			"unavailable",
+		);
+	});
+});
 
 const identity = {
 	schemaVersion: 1 as const,
