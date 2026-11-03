@@ -24,13 +24,29 @@
 
 ## 当前交付回执
 
-source `3c1f0660bdc4018d7279e0d55868c6cb94c10885` 的独立私有候选已完成 auth 声明移植；
-API 40、Worker 39 项非 auth 声明逐字不变，139 项冻结输入未变。30 个受控场景通过，
-含缺失、unknown、异常、timeout 的拒绝，原行为红灯及两项语法检查保留。
-这些测试抽取身份函数，不加载完整私有模块；`liveAdopted=false`，没有真实授权写入。
-公开 LDAP 与 Directory authority 基线分别为 25/25、4/4。
-[脱敏交付回执](https://github.com/AgoraIO-Extensions/agent-infra/issues/3783#issuecomment-6596527840)
-包含候选和验证摘要 hash；原模块与完整证据留在仓库外。
+source `3c1f0660bdc4018d7279e0d55868c6cb94c10885` 的独立私有候选完成 auth 声明移植。
+精确 diff、完整源文件和冻结输入清单保存在仓库外私有包；下列摘要绑定具体对象，声明数量不作为安全证明。
+
+| 交付对象 | SHA-256 |
+| --- | --- |
+| API candidate | `f8de45cc0068f5a58bc619c162a42e1f77e78f7b69d1c87e105e93cacac2943c` |
+| Worker candidate | `922cafe8e678974b78fded1d534abdcad582ceba41dc3ee5f91c6a824e968c5f` |
+| api.auth-only.patch | `8334bc95b3ed8607f26b2a1e162d4968f261e9a9191eac43c92aa04459222332` |
+| worker.auth-only.patch | `3cff4104c138a70621ed24dcab25b7c344d2ec690c29f801d1f6954acbb7d899` |
+| verify-offline.mjs | `b3e6c7d582cfc5d1f9a59b399fdc3b52b455dfb5a8d4a87c42c80f3cb8577ac8` |
+| verification-receipt.json | `deae6ed6a052c16fde2033dfb1a477ce5cc49acdcc86e916fc33ef0b7c744b98` |
+
+在有权访问的私有包根目录，用 Node 24 执行测试入口：
+
+```bash
+node verify-offline.mjs --read-only
+```
+
+30 个受控场景通过，含缺失、unknown、异常、timeout 的拒绝；原行为红灯和两项语法检查
+另有回执。测试仅抽取身份函数，**不证明完整私有 API/Worker 已接入当前状态 reader，
+也不证明 live adoption**。没有真实授权写入。公开 LDAP 与 Directory authority 基线分别为
+25/25、4/4。[脱敏交付回执](https://github.com/AgoraIO-Extensions/agent-infra/issues/3783#issuecomment-6596527840)
+与测试回执共同保存；完整模块、diff 和凭据不进入 Git。
 
 ## 谁提供什么
 
