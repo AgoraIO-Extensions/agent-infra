@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({ collect: vi.fn(), close: vi.fn() }));
 vi.mock("@agent-infra/platform-store", () => ({
 	PostgresWorkspaceSnapshotStoreV1: class {
 		collectExpired = mocks.collect;
+		readGcMetrics = async () => ({ storedBytes: 0, oldestEligibleDelayMs: 0 });
 		close = mocks.close;
 	},
 }));
@@ -50,6 +51,8 @@ it("uses exact object versions, avoids overlap, and drains before closing", asyn
 		failed: 0,
 		outcome: "completed",
 		durationMs: 5000,
+		storedBytes: 0,
+		oldestEligibleDelayMs: 0,
 	});
 	await vi.advanceTimersByTimeAsync(10000);
 	expect(mocks.collect).toHaveBeenCalledTimes(1);

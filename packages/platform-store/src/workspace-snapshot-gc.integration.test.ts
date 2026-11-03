@@ -148,3 +148,17 @@ it("holds the publication lock during object deletion", async () => {
 	expect(publication).toBeDefined();
 	expect(await publication).toMatchObject({ code: "conflict" });
 });
+
+it("reports retained bytes and eligible GC delay instead of masking unknown as zero", async () => {
+	const before = await store.readGcMetrics({ now, retentionMs: 86400000 });
+	const a = snapshot();
+	await store.create(a);
+	const after = await store.readGcMetrics({ now, retentionMs: 86400000 });
+	expect(after.storedBytes).toBe(before.storedBytes + a.sizeBytes);
+	expect(after.oldestEligibleDelayMs).toBeGreaterThanOrEqual(
+		now.getTime() - Date.parse(a.createdAt) - 86400000,
+	);
+	await expect(
+		store.readGcMetrics({ now: new Date("invalid"), retentionMs: 86400000 }),
+	).rejects.toMatchObject({ code: "invalid_input" });
+});
