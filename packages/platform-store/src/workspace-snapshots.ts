@@ -1,12 +1,19 @@
+import { randomUUID } from "node:crypto";
 import {
 	WorkspaceSnapshotErrorV1,
+	type WorkspaceSnapshotGcResultV1,
+	type WorkspaceSnapshotObjectVersionDeleterV1,
 	type WorkspaceSnapshotRecordV1,
 	type WorkspaceSnapshotStoreV1,
 } from "@agent-infra/platform-core";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, lt, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
-import { workspaceSnapshotBindings, workspaceSnapshots } from "./schema.js";
+import {
+	auditEvents,
+	workspaceSnapshotBindings,
+	workspaceSnapshots,
+} from "./schema.js";
 
 type Owner = { ownerType: "user" | "application"; ownerId: string };
 type Row = typeof workspaceSnapshots.$inferSelect;
@@ -157,6 +164,99 @@ export class PostgresWorkspaceSnapshotStoreV1
 			if (!deleted) throw new WorkspaceSnapshotErrorV1("invalid_name");
 			return record(deleted);
 		});
+	}
+	/**
+	 * Deletes only expired, unbound immutable objects. Row state is fenced in a
+	 * transaction before object I/O and rechecked in a second transaction after
+	 * exact-version deletion, so a concurrent bind cannot be silently lost.
+	 */
+	async collectExpired(input: {
+		readonly now: Date;
+		readonly retentionMs: number;
+		readonly deleter: WorkspaceSnapshotObjectVersionDeleterV1;
+	}): Promise<WorkspaceSnapshotGcResultV1> {
+		if (!Number.isSafeInteger(input.retentionMs) || input.retentionMs < 0)
+			throw new WorkspaceSnapshotErrorV1("invalid_input");
+		const cutoff = new Date(input.now.getTime() - input.retentionMs);
+		const candidates = await this.#database.transaction(async (transaction) => {
+			const rows = await transaction
+				.select({
+					id: workspaceSnapshots.id,
+					ownerType: workspaceSnapshots.ownerType,
+					ownerId: workspaceSnapshots.ownerId,
+					objectRef: workspaceSnapshots.objectRef,
+					objectVersion: workspaceSnapshots.objectVersion,
+				})
+				.from(workspaceSnapshots)
+				.where(
+					and(
+						eq(workspaceSnapshots.status, "ready"),
+						lt(workspaceSnapshots.createdAt, cutoff),
+						isNull(workspaceSnapshots.deletedAt),
+						sql`not exists (select 1 from ${workspaceSnapshotBindings} b where b.snapshot_id = ${workspaceSnapshots.id})`,
+					),
+				)
+				.for("update", { skipLocked: true });
+			for (const row of rows) {
+				await transaction
+					.update(workspaceSnapshots)
+					.set({ status: "deleting" })
+					.where(eq(workspaceSnapshots.id, row.id));
+				await transaction.insert(auditEvents).values({
+					id: randomUUID(),
+					traceId: randomUUID(),
+					actorType: "system",
+					actorId: "workspace-snapshot-gc",
+					action: "workspace.snapshot.gc.deletion_requested",
+					targetType: "workspace_snapshot",
+					targetId: row.id,
+					outcome: "succeeded",
+					details: { objectVersion: row.objectVersion },
+				});
+			}
+			return rows;
+		});
+		let deleted = 0;
+		let failed = 0;
+		for (const candidate of candidates) {
+			try {
+				await input.deleter.deleteObjectVersion(candidate);
+				await this.#database.transaction(async (transaction) => {
+					const [row] = await transaction
+						.select({ status: workspaceSnapshots.status })
+						.from(workspaceSnapshots)
+						.where(eq(workspaceSnapshots.id, candidate.id))
+						.for("update")
+						.limit(1);
+					if (row?.status !== "deleting") return;
+					const [binding] = await transaction
+						.select({ snapshotId: workspaceSnapshotBindings.snapshotId })
+						.from(workspaceSnapshotBindings)
+						.where(eq(workspaceSnapshotBindings.snapshotId, candidate.id))
+						.limit(1);
+					if (binding) return;
+					await transaction
+						.update(workspaceSnapshots)
+						.set({ status: "deleted", deletedAt: input.now })
+						.where(eq(workspaceSnapshots.id, candidate.id));
+					await transaction.insert(auditEvents).values({
+						id: randomUUID(),
+						traceId: randomUUID(),
+						actorType: "system",
+						actorId: "workspace-snapshot-gc",
+						action: "workspace.snapshot.gc.deleted",
+						targetType: "workspace_snapshot",
+						targetId: candidate.id,
+						outcome: "succeeded",
+						details: { objectVersion: candidate.objectVersion },
+					});
+				});
+				deleted++;
+			} catch {
+				failed++;
+			}
+		}
+		return { scanned: candidates.length, deleted, failed };
 	}
 	async close() {
 		await this.#client.end();

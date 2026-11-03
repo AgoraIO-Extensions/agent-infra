@@ -349,6 +349,7 @@ describe("platform-core package surface", () => {
 			"planSessionSandboxUpgradeTransitionV1",
 			"planTaskSystemControlV1",
 			"planTimedOutUnknownStopResolutionV1",
+			"planWorkspaceSnapshotGcV1",
 			"platformAuditDisplayNamePolicyV1",
 			"platformAuditQueryActionsV1",
 			"platformAuditQueryDenialReasonsV1",
