@@ -5,6 +5,23 @@
 这份记录对应 2026-10-27 至 2026-10-30 的 ACK 重部署演练。所有地址、账号、Token、Cookie、镜像 digest、
 Agent ID、Secret 名和会话正文都保存在仓库外的私有 receipt；本文只记录可复用的因果关系。
 
+## 2026-11-03 收尾边界
+
+[#3829](https://github.com/AgoraIO-Extensions/agent-infra/issues/3829) 的同源、同 seed 两轮
+空状态功能验收已关闭；失败 attempts 分别保留，不能据此宣称部署永不失败。后续收尾不启动新重建。
+自有入口曾在 DNS `ENOTFOUND` 重试耗尽后失败，稍后同次探针恢复并不改变该次失败结果。
+跨用户浏览器检查的原始回执只定位到阶段，未记录具体断言；后续同源完整检查通过不能反推原根因。
+
+[#3779](https://github.com/AgoraIO-Extensions/agent-infra/issues/3779) 按用户的
+[确认回执](https://github.com/AgoraIO-Extensions/agent-infra/issues/3779#issuecomment-6596410755)
+关闭数据与方案交付，live reserve 隔离、耗尽及清理缺口仍未签收，性能口径继续引用
+[既有报告](ACK-PERFORMANCE-REPORT.md)。
+
+Directory 成员存在、LDAP 搜索命中和既往登录成功不能代替当前账号资格。公开平台的 fail-closed
+reader 存在，不等于私有 API/Worker 使用了它；移植时必须移除所有 Directory-only authority fallback，
+并分别测试 picker、Core target authority、Worker/default/legacy/sender。具体责任、所需外部信息及
+定向验收见 [一页接入交接](ACK-IDENTITY-ADOPTION.md)。
+
 ## 已成功的链路
 
 - 从 clean source checkout 固定源码 SHA，Platform、Worker、Runtime 和配置输入能在部署前绑定到同一来源。

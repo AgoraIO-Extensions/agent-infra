@@ -11,6 +11,17 @@ API Agent 创建和入口验收入口；每次真实运行仍必须以当前 sou
 
 入口脚本是 [`redeploy.sh`](./redeploy.sh)。它只接受 immutable image reference，渲染结果仍包含占位值时直接失败；每次运行把脱敏 receipt 写到外部 `ACK_EVIDENCE_DIR`，不会把会话正文或凭证写入仓库。
 
+## 收尾与定向变更
+
+完成既定 clean rebuild 验收后保留冻结输入、成功及失败 attempt 回执；进入收尾不再执行
+`all`、`destroy` 或重新生成验收 seed。后续私有身份 adapter 的最小修复按
+[Directory 身份接入交接](ACK-IDENTITY-ADOPTION.md) 做独立候选和定向 adoption，
+不以重建成功代替当前 LDAP 权限检查。
+
+性能数据交付与 live reserve 验收分开记录。用户签收“数据 + 已知缺口 + bounded plan”时，
+保留原始确认链接与样本口径；不能勾选未执行的隔离、耗尽或 UID 清理检查。问题单先回读
+实际状态再收口，诊断成功不能回填失败 attempt，未定位的根因明确保留 unknown。
+
 ## 搬迁私有输入包
 
 在另一台机器检出已发布镜像对应的源码 commit，保持 checkout 干净，并安装 Node 24、pnpm、
