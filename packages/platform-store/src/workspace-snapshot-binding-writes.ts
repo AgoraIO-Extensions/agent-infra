@@ -111,7 +111,7 @@ export async function insertWorkspaceSnapshotBindingsV1(
 				outcome: "succeeded",
 				details: {
 					agentId: row.agentId,
-					configurationRevision: input.configurationRevision,
+					configurationRevision: row.configurationRevision,
 					name: row.name,
 					digest: row.digest,
 				},
@@ -200,7 +200,7 @@ export async function insertWorkspaceSnapshotBindingsV1(
 			outcome: "succeeded",
 			details: {
 				agentId: row.agentId,
-				configurationRevision: input.configurationRevision,
+				configurationRevision: row.configurationRevision,
 				name: row.name,
 				digest: row.digest,
 			},
