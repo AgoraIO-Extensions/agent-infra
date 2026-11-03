@@ -22,6 +22,20 @@ export function planWorkspaceSnapshotGcV1(input: {
 }): readonly WorkspaceSnapshotGcPlanV1[] {
 	if (!Number.isSafeInteger(input.retentionMs) || input.retentionMs < 0)
 		throw new Error("workspace snapshot retention is invalid");
+	const protectedObjects = new Set(
+		input.candidates
+			.filter(
+				(candidate) =>
+					!isWorkspaceSnapshotGcEligibleV1({
+						candidate,
+						now: input.now,
+						retentionMs: input.retentionMs,
+					}),
+			)
+			.map(({ objectRef, objectVersion }) =>
+				JSON.stringify([objectRef, objectVersion]),
+			),
+	);
 	return input.candidates
 		.filter((candidate) =>
 			isWorkspaceSnapshotGcEligibleV1({
@@ -29,6 +43,10 @@ export function planWorkspaceSnapshotGcV1(input: {
 				now: input.now,
 				retentionMs: input.retentionMs,
 			}),
+		)
+		.filter(
+			({ objectRef, objectVersion }) =>
+				!protectedObjects.has(JSON.stringify([objectRef, objectVersion])),
 		)
 		.map(({ snapshotId, objectRef, objectVersion }) => ({
 			snapshotId,

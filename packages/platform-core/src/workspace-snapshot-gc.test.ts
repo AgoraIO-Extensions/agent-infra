@@ -17,7 +17,12 @@ describe("workspace snapshot GC plan", () => {
 			planWorkspaceSnapshotGcV1({
 				candidates: [
 					candidate,
-					{ ...candidate, snapshotId: "snap-bound", bindings: ["agent"] },
+					{
+						...candidate,
+						snapshotId: "snap-bound",
+						objectRef: "bound-object-ref",
+						bindings: ["agent"],
+					},
 					{
 						...candidate,
 						snapshotId: "snap-new",
@@ -45,6 +50,19 @@ describe("workspace snapshot GC plan", () => {
 				candidates: [{ ...candidate, status: "deleting" }],
 				now,
 				retentionMs: 0,
+			}),
+		).toEqual([]);
+	});
+
+	it("protects an object reused by an ineligible record", () => {
+		expect(
+			planWorkspaceSnapshotGcV1({
+				candidates: [
+					candidate,
+					{ ...candidate, snapshotId: "snap-bound", bindings: ["agent"] },
+				],
+				now,
+				retentionMs: 7 * 24 * 60 * 60 * 1000,
 			}),
 		).toEqual([]);
 	});
