@@ -195,7 +195,6 @@ export class PostgresWorkspaceSnapshotStoreV1
 						lt(workspaceSnapshots.createdAt, cutoff),
 						isNull(workspaceSnapshots.deletedAt),
 						sql`not exists (select 1 from ${workspaceSnapshotBindings} b where b.snapshot_id = ${workspaceSnapshots.id})`,
-						sql`not exists (select 1 from ${workspaceSnapshots} other where other.id <> ${workspaceSnapshots.id} and other.object_ref = ${workspaceSnapshots.objectRef} and other.object_version = ${workspaceSnapshots.objectVersion} and other.status <> 'deleted')`,
 					),
 				)
 				.for("update", { skipLocked: true });
@@ -243,7 +242,7 @@ export class PostgresWorkspaceSnapshotStoreV1
 						.select({ id: workspaceSnapshots.id })
 						.from(workspaceSnapshots)
 						.where(
-							sql`${workspaceSnapshots.id} <> ${candidate.id} and ${workspaceSnapshots.objectRef} = ${candidate.objectRef} and ${workspaceSnapshots.objectVersion} = ${candidate.objectVersion} and ${workspaceSnapshots.status} <> 'deleted'`,
+							sql`${workspaceSnapshots.id} <> ${candidate.id} and ${workspaceSnapshots.objectRef} = ${candidate.objectRef} and ${workspaceSnapshots.objectVersion} = ${candidate.objectVersion} and ${workspaceSnapshots.status} = 'ready'`,
 						)
 						.limit(1);
 					if (shared) return;
