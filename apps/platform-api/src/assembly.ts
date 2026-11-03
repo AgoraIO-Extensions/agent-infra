@@ -138,6 +138,10 @@ import {
 	type WecomBotQrConfigurationV1,
 } from "./wecom-setup-assembly.js";
 import {
+	startWorkspaceSnapshotGcV1,
+	type WorkspaceSnapshotGcDeploymentV1,
+} from "./workspace-snapshot-gc.js";
+import {
 	createWorkspaceSnapshotServiceV1,
 	type WorkspaceSnapshotServiceOptionsV1,
 } from "./workspace-snapshot-service.js";
@@ -163,7 +167,7 @@ export interface PlatformApiAssemblyInput {
 	> &
 		Partial<
 			Pick<WorkspaceSnapshotServiceOptionsV1, "credentials" | "store" | "quota">
-		>;
+		> & { readonly gc?: WorkspaceSnapshotGcDeploymentV1 };
 	readonly sessionSandboxReserves?: import("@agent-infra/platform-core").SessionSandboxReserveConfigurationV1;
 	readonly connectionInstallation?: {
 		readonly publicOrigin: string;
@@ -1570,6 +1574,15 @@ export function assemblePlatformApi(
 		...(input.userGovernance ? [input.userGovernance] : []),
 		...(agentDefaultRelayKeyStore ? [agentDefaultRelayKeyStore] : []),
 	];
+	const snapshotDeployment = input.workspaceSnapshotDeployment;
+	const snapshotGc = snapshotDeployment?.gc
+		? startWorkspaceSnapshotGcV1({
+				databaseUrl: input.databaseUrl,
+				storage: snapshotDeployment.storage,
+				policy: snapshotDeployment.gc,
+			})
+		: undefined;
+	if (snapshotGc) adapters.push(snapshotGc);
 	return {
 		dependencies,
 		readResourceSnapshot: (signal) =>
