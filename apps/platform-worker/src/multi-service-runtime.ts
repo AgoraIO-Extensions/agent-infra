@@ -1811,16 +1811,18 @@ export function createMultiServiceRuntimeOperations(options: {
 				currentEntryAfter,
 				value,
 			);
+			const updatedMetadata = updatedEntry.metadata;
 			if (
-				updatedEntry.metadata?.uid !== expectedEntryIdentity.uid ||
-				typeof updatedEntry.metadata.generation !== "number" ||
-				!Number.isSafeInteger(updatedEntry.metadata.generation) ||
-				updatedEntry.metadata.generation < 1
+				!updatedMetadata ||
+				updatedMetadata.uid !== expectedEntryIdentity.uid ||
+				typeof updatedMetadata.generation !== "number" ||
+				!Number.isSafeInteger(updatedMetadata.generation) ||
+				updatedMetadata.generation < 1
 			)
 				throw new Error("multi-service entry update identity unavailable");
 			return {
-				uid: updatedEntry.metadata.uid,
-				generation: updatedEntry.metadata.generation,
+				uid: updatedMetadata.uid,
+				generation: updatedMetadata.generation,
 			};
 		},
 		async observeSecretFence(

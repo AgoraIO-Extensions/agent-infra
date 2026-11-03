@@ -2039,7 +2039,7 @@ export function createWorkloadRuntimeV1(
 					throw new Error("multi-service workload unavailable");
 				return multiWorkload;
 			};
-			const identity = state.identity;
+			let identity = state.identity;
 			const activation = createSecretActivationUseCaseV1({
 				store: input.secrets.store,
 				decryptor: options.decryptor,
@@ -2059,7 +2059,7 @@ export function createWorkloadRuntimeV1(
 									candidate.plaintext,
 								);
 						let updatedIdentity = identity;
-						if (multiServiceRuntime)
+						if (multiServiceRuntime) {
 							updatedIdentity = await multiServiceRuntime.bindSecretFence(
 								requireMultiWorkload(),
 								identity,
@@ -2067,7 +2067,8 @@ export function createWorkloadRuntimeV1(
 								candidate.fence,
 								secretUid,
 							);
-						else
+							identity = updatedIdentity;
+						} else
 							await adapter.bindSecretFence(
 								workload,
 								identity,
