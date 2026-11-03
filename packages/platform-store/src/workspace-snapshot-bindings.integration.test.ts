@@ -417,6 +417,20 @@ describe("workspace snapshot bindings on real configuration transactions", () =>
 			expect((await current(result.agentId)).source).toMatchObject({
 				workspaceSnapshots: [{ snapshotId: value.id, name: "repo" }],
 			});
+			expect(
+				await db`select action, details from platform.audit_events where target_id=${value.id} and action='workspace.snapshot.bound'`,
+			).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						action: "workspace.snapshot.bound",
+						details: expect.objectContaining({
+							agentId: result.agentId,
+							name: "repo",
+							digest: value.digest,
+						}),
+					}),
+				]),
+			);
 			expect(await rows(result.agentId)).toHaveLength(2);
 			expect((await rows(result.agentId)).map((row) => row.digest)).toEqual([
 				value.digest,
