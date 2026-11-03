@@ -641,7 +641,10 @@ function deployment(
 						(container) => ({
 							...container,
 							env: [
-								...(container.env ?? []),
+								...(container.env ?? []).filter(
+									({ name }) =>
+										name !== "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER",
+								),
 								...modelCredentialEnvironment(value),
 							],
 							envFrom: environmentSecrets(value),
@@ -750,7 +753,10 @@ function statefulSet(
 						(container) => ({
 							...container,
 							env: [
-								...(container.env ?? []),
+								...(container.env ?? []).filter(
+									({ name }) =>
+										name !== "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_OWNER",
+								),
 								...modelCredentialEnvironment(value),
 							],
 							envFrom: environmentSecrets(value),
@@ -875,10 +881,7 @@ function migrationJob(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
-							env: [
-								...(container.env ?? []),
-								...modelCredentialEnvironment(value),
-							],
+							env: container.env,
 							envFrom: environmentSecrets(value),
 							image: imageReference(policy, container.image),
 							resources: profile.resources,
