@@ -1,5 +1,7 @@
 # 第一方 LDAP 身份 Adapter
 
+> LDAP 是当前临时身份方案，后续可由 OIDC adapter 替换。替换时必须保留当前状态复核、unknown/异常/超时 fail-closed、稳定身份键和不恢复 Directory-only fallback 的边界；本说明不把 LDAP 绑定为长期产品协议。
+
 产品行为见 [Agent 平台 M1 PRD](../../docs/prd/PRD-agent-platform-M1.md)，身份边界与部署要求见 [M1 工程架构 Spec](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md)。#388 验证真实 LDAP 的 bind、停用传播与已有会话行为；专用 active-state 字段不是前置条件。
 
 `createLdapIdentityDirectory` 的部署输入包括受信 LDAPS 地址、issuer、员工条目/稳定 UID/邮箱属性、管理员 UID 集合和 `identityIds`。新登录搜索唯一条目、完成用户密码 bind，并复核 UID/邮箱后才创建身份映射；用户 bind 拒绝即拒绝登录。LDAP search 条目存在不能证明已有会话仍有效。配置错误、查询歧义、身份映射故障都会抛出 `LDAP_IDENTITY_UNAVAILABLE`。

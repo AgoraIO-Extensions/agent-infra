@@ -1,8 +1,6 @@
 # ACK Directory 身份 fail-closed 接入交接
 
-本页对应 [#3783](https://github.com/AgoraIO-Extensions/agent-infra/issues/3783)，
-由 B lane 负责私有候选、脱敏回执和发布准备；企业身份系统负责人提供当前账号状态的权威契约。
-既有 clean rebuild 结果不证明私有身份 adapter 安全接线；本项采用定向验证，不重新清空环境。
+本页对应已关闭的 [#3783](https://github.com/AgoraIO-Extensions/agent-infra/issues/3783)。LDAP 只是临时身份方案，后续迁移 OIDC；本页归档 B lane 的私有候选、脱敏回执和发布准备。用户已明确跳过 live login、TLS adoption 与有效账号正向回归，因此不再等待企业身份负责人、测试账号或当前 LDAP 契约。既有 clean rebuild 结果不证明私有身份 adapter 安全接线；本页仅记录 fail-closed 边界和未来 OIDC 迁移验收要求。
 
 ## 最终路径
 
@@ -48,16 +46,11 @@ node verify-offline.mjs --read-only
 25/25、4/4。[脱敏交付回执](https://github.com/AgoraIO-Extensions/agent-infra/issues/3783#issuecomment-6596527840)
 与测试回执共同保存；完整模块、diff 和凭据不进入 Git。
 
-## 谁提供什么
+## 后续 OIDC 迁移责任
 
-| 责任人 | 交付 |
-| --- | --- |
-| B lane（部署 adapter 实施者） | 从当前配置生成独立候选；保存原始 SHA、精确 diff、source/image 绑定及 Secret UID/RV；补负向测试、定向 rollout/rollback 计划和脱敏回执。不得修改已验收 seed |
-| 企业 LDAP/SSO 身份系统负责人（由用户指定联系人） | 当前账号资格的可信 reader/接口与身份键映射；disabled/revoked/unknown 的语义、时效和超时行为；一个允许和一个已失效账号的受控验证方法。凭据沿用私有通道，不贴 issue |
-| 环境 owner（B lane） | 核查无活跃执行窗口、配置 CAS、回滚来源、TLS 与业务回归；窗口与对象可从已有权限查询，不要求用户重发本地已有 artifacts 或 Secret 元数据 |
+LDAP→OIDC 迁移的 owner 需要在未来 OIDC 方案中提供等价的 current-account reader、身份键映射、active/disabled/unknown 语义、时效/超时与异常拒绝合同，并补 linked 正向、TLS/登录态和 picker/authority 回归。B lane 已有 artifacts、候选 hash、CAS/rollback 和 deny-only 测试归档，不要求用户重发。
 
-用户真正需要补充的是：**指定企业身份负责人，以及其认可的当前账号状态机制**。
-在取得该契约前，可以完成离线 fail-closed 候选与负向测试；不得声称有效账号保持可用或 live adoption 已完成。
+当前用户决定跳过的 live checks 不由本票代签；归档中的 `liveAdopted=false` 保持事实。无论 LDAP 临时方案还是 OIDC，私有 adapter 都不得恢复 Directory-only fallback，历史记录不恢复有效性。
 
 ## 如何验收
 
@@ -70,8 +63,7 @@ node verify-offline.mjs --read-only
    核对 Secret UID/RV/SHA 与 source，遇到并发变更即停止。回滚恢复精确原配置，不重建 namespace。
 4. TLS 真实登录/session、只读 picker/authority 和 Worker 身份解析验证有效/无权账号；核对历史
    Owner 救援、旧会话和存量数据仍可回读。失败保留原始回执，不用事后单项成功回填。
-5. 缺少契约或定向验证未通过时，#3783 保持 needs-info。若必须拆交付，先交 API picker/authority，
-   再交 Worker 当前账号/sender；两步分别验证，不能把半套 adapter 标记为完成。
+5. 本票已按用户决定关闭；未来 OIDC 迁移另行验证上述契约和 linked 正向，不重开本票、不重建 namespace。
 
 公开 [LDAP 负向测试](../../packages/identity/src/ldap.test.ts) 和
 [Directory authority 测试](../../apps/platform-api/src/directory-authority.test.ts) 是复用基线；
