@@ -56,7 +56,7 @@ ARG SOURCE_DATE_EPOCH=0
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 LABEL org.opencontainers.image.source="https://github.com/AgoraIO-Extensions/agent-infra"
 LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"platform-adapter","protocol":"acp","service":{"port":3003},"health":{"path":"/healthz"},"capabilities":{"modelSelection":true,"attachments":true,"resultFiles":true,"connection":false,"supplementaryInstruction":false}}'
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates util-linux tini ripgrep \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates bubblewrap util-linux tini ripgrep \
 	&& rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache \
 	&& npm install --global npm@11.19.1 --logs-max=0 \
 	&& rm -rf /root/.npm /tmp/node-compile-cache \
@@ -107,7 +107,9 @@ RUN printf 'Acquire::Retries "3";\n' > /tmp/chromium-apt.conf \
 COPY --from=isolation-tools /bin/setpriv /usr/bin/setpriv
 COPY --from=isolation-tools /lib/ld-musl-*.so.1 /usr/lib/
 COPY --from=isolation-tools /usr/lib/libcap-ng.so.0* /usr/lib/libeconf.so.0* /usr/lib/
-RUN setpriv --version | grep -Fx 'setpriv from util-linux 2.42.3' \
+RUN command -v bwrap \
+    && bwrap --version \
+    && setpriv --version | grep -Fx 'setpriv from util-linux 2.42.3' \
     && setpriv --help | grep -q -- '--landlock-access'
 COPY --from=builder /app/deploy/runtime/browser-launch-probe.mjs ./browser-launch-probe.mjs
 COPY --from=builder --chown=node:node /app/apps/agent-runtime-host/start-runtime-host.sh ./start-runtime-host.sh
